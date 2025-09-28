@@ -2,11 +2,11 @@
   "sp": {
     "entityId": "l3tracker-sp",
     "assertionConsumerService": {
-      "url": "https://hgchoik.duckdns.org:8443/saml/acs",
+      "url": "https://hgchoik.duckdns.org/saml/acs",
       "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
     },
     "singleLogoutService": {
-      "url": "https://hgchoik.duckdns.org:8443/saml/sls",
+      "url": "https://hgchoik.duckdns.org/saml/sls",
       "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
     },
     "NameIDFormat": "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified"

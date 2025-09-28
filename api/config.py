@@ -43,6 +43,7 @@ DEFAULT_WORKERS = int(os.getenv("WORKERS", str(_default_workers())))
 
 # ===== HTTPS 설정 =====
 SSL_ENABLED = os.getenv("SSL_ENABLED", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
-HTTPS_PORT = int(os.getenv("HTTPS_PORT", "8443"))
+# 기본 포트를 443으로 전환 (사용자가 요청)
+HTTPS_PORT = int(os.getenv("HTTPS_PORT", "443"))
 SSL_CERTFILE = os.getenv("SSL_CERTFILE", "cert/fullchain.pem")
 SSL_KEYFILE = os.getenv("SSL_KEYFILE", "cert/server.key")

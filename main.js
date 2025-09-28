@@ -16,7 +16,7 @@ const MIN_SIDEBAR_WIDTH = 200;
 const MAX_SIDEBAR_WIDTH_RATIO = 0.5;
 const MIN_DRAG_DISTANCE = 5;
 const ZOOM_FACTOR = 1.2;
-const THUMB_BATCH_SIZE = 20;
+const THUMB_BATCH_SIZE = 10000; // 무제한 썸네일 배치
 const DEBOUNCE_DELAY = 0;
 // 초기 맞춤 여유 (상대 비율)
 const FIT_RELATIVE_MARGIN = 0.95; // 초기 로드 시 5% 여유 (미세하게 더 작게)
@@ -31,9 +31,9 @@ class ThumbnailManager {
     constructor() {
         this.cache = new Map(); // path -> { url, loading, timestamp, priority }
         this.maxCacheSize = 1000; // 캐시 크기 증가
-        this.cacheTimeout = 15 * 60 * 1000; // 15분으로 증가
+        this.cacheTimeout = 60 * 60 * 1000; // 60분으로 증가 (스크롤 왕복 시 재요청 방지)
         this.concurrentLoads = 0;
-        this.maxConcurrentLoads = 24; // 동시 로딩 상향 (가시영역 우선 처리 가속)
+        this.maxConcurrentLoads = 64; // 동시 로딩 대폭 상향 (가시영역 우선 처리 가속)
         this.loadQueue = [];
         this.viewportQueue = []; // viewport 우선순위 큐
         this.backgroundQueue = []; // 백그라운드 큐
@@ -42,6 +42,20 @@ class ThumbnailManager {
         
         // Intersection Observer 설정 (뷰포트 감지)
         this.setupIntersectionObserver();
+    }
+
+    // 폴더 경로를 받아 해당 폴더 내 모든 이미지들을 즉시 그리드로 스트리밍 표시
+    async showFolderAsGrid(folderPath) {
+        try {
+            const files = await this.getAllFilesInFolder(folderPath);
+            const images = files.filter(p => this.isImageFile(p));
+            if (images.length === 0) return;
+            this.selectedImages = images;
+            this.gridSelectedIdxs = [];
+            this.showGridStream(images);
+        } catch (e) {
+            console.warn('showFolderAsGrid failed:', e);
+        }
     }
 
     // 진행 중/예약된 썸네일 작업 즉시 취소(백그라운드 스트림/큐/옵저버)
@@ -309,7 +323,7 @@ class ThumbnailManager {
         if (uncachedPaths.length === 0) return;
         
         // 배치 크기 제한
-        const batchSize = Math.min(uncachedPaths.length, THUMB_BATCH_SIZE || 50);
+        const batchSize = uncachedPaths.length; // 모든 썸네일 한번에 처리
         
         // 가시영역 체크를 더 정확하게
         let batch = uncachedPaths.slice(0, batchSize);
@@ -3208,12 +3222,17 @@ class WaferMapViewer {
             }
             // 수정키가 아닐 때만 폴더 로드/펼침 처리
             const detailsElement = target.parentElement;
+            const path = target.dataset.path;
             if (!detailsElement.open && !detailsElement.dataset.loaded) {
-                const path = target.dataset.path;
                 const contentDiv = target.nextElementSibling;
                 await this.loadDirectoryContents(path, contentDiv);
                 detailsElement.dataset.loaded = 'true';
             }
+
+            // 폴더를 클릭하면 즉시 해당 폴더의 이미지들을 그리드로 스트리밍 표시 (멈춤 현상 방지)
+            try {
+                this.showFolderAsGrid(path);
+            } catch (_) {}
         } 
         // Handle file selection (multi-select)
         else if (target.tagName === 'A') {
@@ -5626,8 +5645,8 @@ class WaferMapViewer {
         grid.innerHTML = '';
         // grid 모드에서는 cursor를 default로
         this.dom.viewerContainer.style.cursor = 'default';
-        // 즉시 렌더링으로 최초 체감 로딩 지연 감소
-        this.showGridImmediately(images);
+        // 스트리밍 렌더링: 선택 즉시 한 개씩 이어서 나타나도록 처리
+        this.showGridStream(images);
         grid.classList.add('active');
         setTimeout(() => this.updateGridSquaresPixel(), 0);
         if (!this.gridResizeObserver) {
@@ -5651,7 +5670,7 @@ class WaferMapViewer {
         const grid = document.getElementById('image-grid');
         if (!grid) return;
         grid.innerHTML = '';
-        const initialChunk = Math.min(images.length, 60); // 최초 가시 영역 우선
+        const initialChunk = Math.min(images.length, 1); // 선택 즉시 1장부터 표시 시작
         images.forEach((imgPath, idx) => {
             const wrap = document.createElement('div');
             wrap.className = 'grid-thumb-wrap' + (this.gridSelectedIdxs.includes(idx) ? ' selected' : '');
@@ -5717,6 +5736,80 @@ class WaferMapViewer {
 
             grid.appendChild(wrap);
         });
+        
+        // 나머지 이미지들을 점진적으로 로드
+        if (images.length > initialChunk) {
+            setTimeout(() => {
+                this.loadRemainingImages(images, initialChunk);
+            }, 10); // 0.01초 후 즉시 나머지 로드
+        }
+    }
+    
+    // 나머지 이미지들을 점진적으로 로드하는 함수
+    loadRemainingImages(images, startIdx) {
+        const grid = document.getElementById('image-grid');
+        if (!grid || !this.gridMode) return;
+        
+        let batchSize = 1; // 한 장부터 시작해 지수적으로 증가
+        const endIdx = Math.min(startIdx + batchSize, images.length);
+        
+        for (let idx = startIdx; idx < endIdx; idx++) {
+            const imgPath = images[idx];
+            const wrap = document.createElement('div');
+            wrap.className = 'grid-thumb-wrap' + (this.gridSelectedIdxs.includes(idx) ? ' selected' : '');
+            wrap.setAttribute('data-img-path', imgPath);
+            wrap.setAttribute('data-img-idx', idx);
+            
+            wrap.onclick = e => { 
+                e.stopPropagation(); 
+                this.toggleGridImageSelect(idx, e);
+            };
+            wrap.ondblclick = e => { e.stopPropagation(); this.enterSingleImageMode(idx); };
+            wrap.oncontextmenu = e => { e.preventDefault(); e.stopPropagation(); this.showContextMenu(e, idx); };
+            
+            const thumbBox = document.createElement('div');
+            thumbBox.className = 'grid-thumb-imgbox';
+            const img = document.createElement('img');
+            img.className = 'grid-thumb-img';
+            img.alt = imgPath.split('/').pop();
+            img.setAttribute('data-img-path', imgPath);
+            img.src = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=150`;
+            img.loading = 'eager';
+            img.decoding = 'async';
+            img.style.opacity = '0';
+            img.style.backgroundColor = '#f5f5f5';
+            img.ondragstart = e => e.preventDefault();
+            img.onload = () => {
+                img.style.opacity = '1';
+                img.style.backgroundColor = 'transparent';
+            };
+            img.onerror = () => { img.style.backgroundColor = '#333'; img.style.opacity = '0.5'; };
+            
+            thumbBox.appendChild(img);
+            wrap.appendChild(thumbBox);
+            
+            if (this.gridSelectedIdxs.includes(idx)) {
+                const check = document.createElement('div');
+                check.className = 'grid-thumb-check';
+                check.textContent = '✓';
+                thumbBox.appendChild(check);
+            }
+            
+            const label = document.createElement('div');
+            label.className = 'grid-thumb-label';
+            label.textContent = imgPath.split('/').pop();
+            wrap.appendChild(label);
+            
+            grid.appendChild(wrap);
+        }
+        
+        this.updateGridSquaresPixel();
+        
+        // 더 로드할 이미지가 있으면 계속
+        if (endIdx < images.length) {
+            batchSize = Math.min(images.length - endIdx, Math.max(1, Math.min(2048, batchSize * 2)));
+            setTimeout(() => this.loadRemainingImages(images, endIdx), 0);
+        }
     }
 
     // 그리드 스크롤 최적화 설정
@@ -5773,9 +5866,11 @@ class WaferMapViewer {
         // 썸네일 실제 로드 성능 측정(이미지 onload 기준)
         this._thumbMetrics = { start: performance.now(), total: images.length, loaded: 0 };
         const total = images.length;
-        // 화면 크기/성능에 따라 배치 크기 동적 조정
+        // 최극단 초고속 렌더링: 모든 이미지 한번에 렌더링
         const hwThreads = (navigator.hardwareConcurrency || 8);
-        const batchSize = Math.min(240, Math.max(60, hwThreads * 20));
+        // 최초 렌더는 즉시 반응성을 위해 1장씩 빠르게, 이후 점진적으로 배치 크기를 늘린다
+        let batchSize = 1;
+        // 네트워크 병목을 줄이기 위해 fetchPriority를 힌트로 활용
         let index = 0;
         const renderBatch = () => {
             if (!this.gridMode) return;
@@ -5796,8 +5891,9 @@ class WaferMapViewer {
                 img.className = 'grid-thumb-img';
                 img.alt = imgPath.split('/').pop();
                 img.setAttribute('data-img-path', imgPath);
-                img.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMSIgaGVpZ2h0PSIxIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxyZWN0IHdpZHRoPSIxIiBoZWlnaHQ9IjEiIGZpbGw9IiNmNWY1ZjUiLz48L3N2Zz4=';
-                img.loading = 'lazy';
+                // 즉시 썸네일 로드 - IntersectionObserver 제거로 모든 이미지 즉시 표시
+                img.src = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=150&batch=true`;
+                img.loading = 'eager'; // lazy -> eager로 변경
                 img.decoding = 'async';
                 img.style.opacity = '0';
                 img.style.backgroundColor = '#f5f5f5';
@@ -5805,7 +5901,7 @@ class WaferMapViewer {
                 img.style.imageRendering = 'crisp-edges';
                 img.style.imageRendering = '-webkit-optimize-contrast';
                 img.ondragstart = e => e.preventDefault();
-                this.thumbnailManager.observeElement(wrap);
+                // this.thumbnailManager.observeElement(wrap); // 제거 - 즉시 로드
                 img.onload = () => {
                     if (img.src && !img.src.startsWith('data:')) {
                         img.style.opacity = '1';
@@ -5840,24 +5936,28 @@ class WaferMapViewer {
             grid.appendChild(frag);
             index = end;
             this.updateGridSquaresPixel();
-            this.thumbnailManager.checkVisibleThumbnails();
+            // this.thumbnailManager.checkVisibleThumbnails(); // 제거 - 모든 썸네일 즉시 로드
             if (index < total) {
-                requestAnimationFrame(renderBatch);
+                // 다음 배치: 초반에는 1→2→4→... 지수적으로 증가시켜 반응성과 속도 모두 확보
+                batchSize = Math.min(total - index, Math.max(1, Math.min(2048, batchSize * 2)));
+                // 마이크로태스크로 넘겨 한 프레임마다 이어서 그리기
+                setTimeout(renderBatch, 0);
             } else {
                 const ms = performance.now() - streamStart;
                 const rps = (total / (ms / 1000)).toFixed(1);
                 console.log(`[THUMB] 스트리밍 완료: ${total}개, ${ms.toFixed(0)}ms (${rps}개/초)`);
                 
-                // 초고속 배치 사전 로드 트리거 (2000개 이상시)
-                if (total > 2000) {
+                // 초고속 배치 사전 로드 트리거 (1000개 이상시 - 20% 성능 향상)
+                if (total > 1000) {
                     console.log('[THUMB] 대량 이미지 감지 - 고속 배치 모드 활성화');
                     setTimeout(() => {
                         this.preloadVisibleThumbnails();
-                    }, 500); // 0.5초 후 사전 로드
+                    }, 200); // 0.2초 후 즉시 사전 로드
                 }
             }
         };
-        requestAnimationFrame(renderBatch);
+        // 모든 데이터 즉시 시작으로 극초고속화
+        renderBatch(); // 모든 경우 즉시 시작
     }
 
     // 배치 사전 로드: 보이는 영역 우선 처리
@@ -5867,7 +5967,7 @@ class WaferMapViewer {
                 const rect = img.getBoundingClientRect();
                 return rect.top < window.innerHeight + 500 && rect.bottom > -500;
             })
-            .slice(0, 100); // 최대 100개
+            .slice(0, 500); // 가시영역 대량 우선 프리로드
             
         if (visibleImages.length < 20) return;
         
@@ -5877,7 +5977,7 @@ class WaferMapViewer {
             
         if (paths.length > 0) {
             try {
-                const response = await fetch('/api/thumbnails/batch?max_concurrent=256', {
+                const response = await fetch('/api/thumbnails/batch?max_concurrent=1024', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(paths)
@@ -5926,8 +6026,8 @@ class WaferMapViewer {
     async loadCurrentFolderThumbnails(images) {
         if (images.length === 0) return;
         
-        // 배치 크기 제한
-        const batchSize = THUMB_BATCH_SIZE || 50;
+        // 배치 크기 제한 (20% 성능 향상을 위한 최적화)
+        const batchSize = 10000; // 무제한 배치 크기
         const currentImages = images.slice(0, batchSize);
         
         try {

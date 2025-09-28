@@ -605,7 +605,7 @@ export class LabelManager {
 
             // 이미지 목록 조회
             try {
-                const res = await fetch(`/api/classes/${encodeURIComponent(className)}/images?limit=1000`);
+                const res = await fetch(`/api/classes/${encodeURIComponent(className)}/images?limit=1000000`);
                 if (!res.ok) throw new Error('이미지 조회 실패');
                 const data = await res.json();
                 const images = data.results || [];

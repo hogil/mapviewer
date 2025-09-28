@@ -23,7 +23,20 @@
       "Bash(dir:*)",
       "Bash(del:*)",
       "Bash(find:*)",
-      "Bash($env:PATH = \"C:\\vips-dev-8.17\\bin;$env:PATH\")"
+      "Bash($env:PATH = \"C:\\vips-dev-8.17\\bin;$env:PATH\")",
+      "Bash(HTTPS_PORT=8447 python -m api.main)",
+      "Bash(start chrome https://localhost:8447/stats)",
+      "Bash(time curl:*)",
+      "Bash(HTTPS_PORT=8448 python -m api.main)",
+      "Bash(start chrome https://localhost:8448/)",
+      "Bash(HTTPS_PORT=8449 python -m api.main)",
+      "Bash(start chrome https://localhost:8449/)",
+      "Bash(HTTPS_PORT=8450 python -m api.main)",
+      "Bash(start chrome https://localhost:8450/)",
+      "Bash(SSL_ENABLED=0 HTTPS_PORT=8451 python -m api.main)",
+      "Bash(start chrome http://localhost:8451/)",
+      "Bash(start chrome https://localhost:8443/)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []

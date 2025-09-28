@@ -283,6 +283,11 @@ THUMBNAIL_PERF = {
     "total_time": 0.0
 }
 
+# ===== 3e5c8b: 프로젝트 루트 폴더 스캔 시스템 (절대 보존) =====
+# 빠른 제품 폴더 접근을 위한 캐시
+ROOT_FOLDERS: List[Dict[str, str]] = []  # [{"name": "folder_name", "path": "full_path"}]
+ROOT_FOLDERS_READY = False
+
 USER_ACTIVITY_FLAG = False
 BACKGROUND_TASKS_PAUSED = False
 INDEX_BUILDING = False
@@ -1041,7 +1046,7 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
 
     if _VIPS_AVAILABLE:
         try:
-            # 9000/s 돌파 최종 설정: 최소한의 기능만 사용
+            # 대용량 이미지 초고속 처리: shrink-on-load + 메모리 최적화
             vimg = pyvips.Image.thumbnail(
                 str(image_path), width,
                 size=pyvips.enums.Size.DOWN,  # DOWN으로 단순화 (BOTH보다 빠름)
@@ -1051,7 +1056,9 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
                 crop=pyvips.enums.Interesting.NONE,  # 크롭 비활성화
                 import_profile=False, # 프로필 로드 방지
                 fail_on_warn=False,   # 경고에서 실패 방지
-                access=pyvips.enums.Access.SEQUENTIAL  # 순차 액세스
+                access=pyvips.enums.Access.SEQUENTIAL,  # 순차 액세스
+                # 대용량 이미지 최적화: 메모리 절약 + 더 빠른 처리
+                option_string="shrink-on-load"  # 로드시 즉시 축소 (메모리 절약)
             )
                 
             if fmt == "WEBP":
@@ -1452,7 +1459,7 @@ async def generate_thumbnails_batch(
 
 @app.get("/api/search")
 async def search_files(q: str = Query(..., description="파일명 검색(대소문자 무시, 부분일치)"),
-                       limit: int = Query(500, ge=1, le=5000),
+                       limit: int = Query(1000000, ge=1, le=2000000),
                        offset: int = Query(0, ge=0)):
     try:
         query = (q or "").strip().lower()
@@ -1614,7 +1621,7 @@ async def delete_classes(req: DeleteClassesReq, _=Depends(labels_classes_sync_de
 
 @app.get("/api/classes/{class_name}/images")
 async def class_images(class_name: str = PathParam(..., min_length=1, max_length=128),
-                       limit: int = Query(500, ge=1, le=5000),
+                       limit: int = Query(1000000, ge=1, le=2000000),
                        offset: int = Query(0, ge=0),
                        _=Depends(labels_classes_sync_dep)):
     try:
@@ -2147,6 +2154,48 @@ async def browse_folders(path: Optional[str] = None):
         raise HTTPException(status_code=500, detail=f"폴더 브라우징 실패: {str(e)}")
 
 # ======================== Lifecycle ========================
+# ===== 3e5c8b: 프로젝트 루트 폴더 스캔 함수 (절대 보존) =====
+async def init_root_folders_scan():
+    """프로젝트 루트 폴더들을 즉시 스캔하여 제품 폴더 빠른 접근 제공"""
+    global ROOT_FOLDERS, ROOT_FOLDERS_READY
+    try:
+        # 1단계: 루트 폴더들 먼저 스캔 (즉시 UI에서 사용 가능)
+        root_folders = []
+        for item in os.listdir(ROOT_DIR):
+            item_path = ROOT_DIR / item
+            if item_path.is_dir() and item not in SKIP_DIRS:
+                root_folders.append({
+                    "name": item,
+                    "path": str(item_path)
+                })
+        
+        ROOT_FOLDERS = root_folders
+        ROOT_FOLDERS_READY = True
+        
+        logger.info(f"제품 폴더 스캔 완료: {len(root_folders)}개")
+        
+    except Exception as e:
+        logger.error(f"루트 폴더 스캔 실패: {e}")
+        ROOT_FOLDERS = []
+        ROOT_FOLDERS_READY = False
+
+@app.get("/api/root-folders")
+async def get_root_folders():
+    """3e5c8b: 빠른 제품 폴더 리스트 조회 (절대 보존)"""
+    try:
+        if not ROOT_FOLDERS_READY:
+            # 아직 준비되지 않았으면 즉시 스캔
+            await init_root_folders_scan()
+        
+        return {
+            "success": True, 
+            "folders": ROOT_FOLDERS,
+            "count": len(ROOT_FOLDERS)
+        }
+    except Exception as e:
+        logger.exception(f"루트 폴더 조회 실패: {e}")
+        return {"success": False, "error": str(e), "folders": []}
+
 @app.on_event("startup")
 async def startup_event():
     bootlog = logging.getLogger("uvicorn.error")
@@ -2181,6 +2230,9 @@ async def startup_event():
     _labels_load()
     global CLASSES_MTIME
     CLASSES_MTIME = _classes_stat_mtime()
+    
+    # ===== 3e5c8b: 프로젝트 루트 폴더 스캔 초기화 (절대 보존) =====
+    asyncio.create_task(init_root_folders_scan())
     asyncio.create_task(build_file_index_background())
 
 @app.on_event("shutdown")
