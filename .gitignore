@@ -16,118 +16,67 @@ parts/
 sdist/
 var/
 wheels/
+pip-wheel-metadata/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
-.pytest_cache/
-.coverage
-*.cover
-.hypothesis/
 
 # Virtual Environment
 venv/
-ENV/
 env/
-.venv/
+ENV/
+
+# Environment Variables
+.env.local
+.env.*.local
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
-.DS_Store
 
-# Project specific
-logs/
-*.log
+# OS
+.DS_Store
+Thumbs.db
+
+# Thumbnails cache
 thumbnails/
+.thumbnails/
+
+# Classification data (사용자가 추가할 데이터)
 classification/
-labels/
-*.db
-*.sqlite
-*.sqlite3
-config.json
-settings.json
+
+# Large image files
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.gif
+*.tiff
+*.webp
+
+# Logs
+*.log
+logs/
 
 # Temporary files
-*.tmp
-*.bak
-*.backup
-.temp/
 tmp/
+temp/
+nul
 
-# Images (large files)
-images/
-*.tif
-*.tiff
-*.bmp
-large_images/
+# Commit history files
+recent_*_commits*.txt
+recent_commits_*.txt
+commit_history*.txt 
 
-# Model files
-*.h5
-*.pkl
-*.pth
-*.onnx
-models/
 
-# Cache
-.cache/
-cache/
-__pycache__/
-
-# Documentation build
-docs/_build/
-docs/.doctrees/
-
-# Test coverage
-htmlcov/
-.tox/
-.coverage
-.coverage.*
-nosetests.xml
-coverage.xml
-*.cover
-
-# Jupyter Notebook
-.ipynb_checkpoints
-*.ipynb
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# SSL Certificates
+# cert saml (보안 파일 제외)
 cert/
-*.pem
-*.key
-*.crt
-*.csr
+saml/
 
-# Node (if using)
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# OS Files
-Thumbs.db
-Desktop.ini
-
-# Backup files
-*.orig
-*.rej
-
-# Archives
-*.zip
-*.tar.gz
-*.rar
-*.7z
-
-# Custom
-private/
-confidential/
-data/
-dataset/
+# Claude AI files
+.claude/
+agents.md
