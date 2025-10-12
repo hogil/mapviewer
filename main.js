@@ -13225,6 +13225,16 @@ class WaferMapViewer {
             const isSelected = this.gridSelectedIdxs.includes(idx);
             wrap.className = 'grid-thumb-wrap' + (isSelected ? ' selected' : '');
         });
+
+        // 🔥 Wafer Map Explorer에서 이미지 선택 시 savedViewState 업데이트
+        if (this.gridMode && this.selectedImages && this.selectedImages.length > 0) {
+            this.savedViewState = {
+                type: 'grid',
+                images: [...this.selectedImages],
+                scrollTop: grid ? grid.scrollTop : 0
+            };
+            console.log('💾 [AUTO-SAVE] Grid 선택 변경 시 savedViewState 업데이트:', this.selectedImages.length, '개 이미지');
+        }
     }
 
     scheduleGridSelectionFlush() {
@@ -13402,6 +13412,17 @@ class WaferMapViewer {
 
 
     enterSingleImageMode(idx) {
+
+        // 🔥 그리드에서 단일 이미지 모드로 전환 시 savedViewState 업데이트
+        const grid = document.getElementById('image-grid');
+        if (this.selectedImages && this.selectedImages.length > 0) {
+            this.savedViewState = {
+                type: 'grid',
+                images: [...this.selectedImages],
+                scrollTop: grid ? grid.scrollTop : 0
+            };
+            console.log('💾 [AUTO-SAVE] 단일 이미지 모드 진입 시 savedViewState 업데이트:', this.selectedImages.length, '개 이미지');
+        }
 
         this.hideGrid();
 
