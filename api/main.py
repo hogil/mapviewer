@@ -278,6 +278,10 @@ BACKGROUND_TASKS_PAUSED = False
 INDEX_BUILDING = False
 INDEX_READY = False
 
+# 🔍 디버그용 썸네일 요청 카운터
+THUMBNAIL_REQUEST_COUNTER = 0
+THUMBNAIL_COUNTER_LOCK = RLock()
+
 FILE_INDEX: Dict[str, Dict[str, Any]] = {}
 FILE_INDEX_LOCK = RLock()
 
@@ -1386,7 +1390,14 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
 
 @app.get("/api/thumbnail")
 async def get_thumbnail(request: Request, path: str, size: int = THUMBNAIL_SIZE_DEFAULT):
+    global THUMBNAIL_REQUEST_COUNTER
+    
     try:
+        # 🔍 첫 번째 요청 추적
+        with THUMBNAIL_COUNTER_LOCK:
+            THUMBNAIL_REQUEST_COUNTER += 1
+            is_first_request = (THUMBNAIL_REQUEST_COUNTER == 1)
+        
         # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
         if Path(path).is_absolute():
             # 절대 경로인 경우
@@ -1407,11 +1418,22 @@ async def get_thumbnail(request: Request, path: str, size: int = THUMBNAIL_SIZE_
                 logger.warning(f"ROOT_DIR 외부 경로 접근 시도: {path}")
                 raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
         
-        # 🔍 썸네일 요청 로그
-        logger.info(f"🔍 [THUMBNAIL DEBUG] 요청 경로: {path}")
-        logger.info(f"🔍 [THUMBNAIL DEBUG] 해석된 경로: {image_path}")
-        logger.info(f"🔍 [THUMBNAIL DEBUG] ROOT_DIR: {ROOT_DIR}")
-        logger.info(f"🔍 [THUMBNAIL DEBUG] 크기: {size}")
+        # 🔍 첫 번째 요청만 상세 로그
+        if is_first_request:
+            logger.info(f"=" * 80)
+            logger.info(f"🎯 [첫 번째 썸네일 요청]")
+            logger.info(f"🔍 [THUMBNAIL #1] 요청 경로: {path}")
+            logger.info(f"🔍 [THUMBNAIL #1] 해석된 절대 경로: {image_path}")
+            logger.info(f"🔍 [THUMBNAIL #1] ROOT_DIR: {ROOT_DIR}")
+            logger.info(f"🔍 [THUMBNAIL #1] 크기: {size}")
+            logger.info(f"🔍 [THUMBNAIL #1] 파일 존재: {image_path.exists()}")
+            if image_path.exists():
+                try:
+                    rel_path = image_path.resolve().relative_to(ROOT_DIR.resolve())
+                    logger.info(f"🔍 [THUMBNAIL #1] ROOT_DIR 기준 상대 경로: {rel_path}")
+                except ValueError:
+                    logger.info(f"🔍 [THUMBNAIL #1] ROOT_DIR 기준 상대 경로: 변환 실패 (ROOT_DIR 외부)")
+            logger.info(f"=" * 80)
         
         # 파일 존재 확인
         if not image_path.exists() or not image_path.is_file():
@@ -1526,6 +1548,12 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
         # 🔥 썸네일 캐시 초기화 (매 검색마다)
         THUMB_STAT_CACHE.clear()
         logger.info("🔍 [SEARCH DEBUG] 썸네일 캐시 초기화 완료")
+        
+        # 🔍 썸네일 요청 카운터 리셋 (새로운 검색)
+        global THUMBNAIL_REQUEST_COUNTER
+        with THUMBNAIL_COUNTER_LOCK:
+            THUMBNAIL_REQUEST_COUNTER = 0
+        logger.info("🔍 [SEARCH DEBUG] 썸네일 요청 카운터 리셋")
 
         # 🔥 current_folder가 ROOT_DIR과 다른 경우에만 필터링 적용
         if current_folder.resolve() != ROOT_DIR.resolve():
@@ -2225,7 +2253,13 @@ async def change_folder(request: Request):
         # 썸네일과 라벨은 원래 ROOT_DIR 기준으로 관리
 
         DIRLIST_CACHE.clear();  THUMB_STAT_CACHE.clear()
-        global INDEX_READY, INDEX_BUILDING
+        
+        # 🔍 썸네일 요청 카운터 리셋 (새로운 폴더)
+        global INDEX_READY, INDEX_BUILDING, THUMBNAIL_REQUEST_COUNTER
+        with THUMBNAIL_COUNTER_LOCK:
+            THUMBNAIL_REQUEST_COUNTER = 0
+        logger.info("🔍 [CHANGE_FOLDER DEBUG] 썸네일 요청 카운터 리셋")
+        
         INDEX_READY = False; INDEX_BUILDING = False
 
         classification_dir = _classification_dir()
