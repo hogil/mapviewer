@@ -1190,8 +1190,8 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
             resized = image.resize(level, kernel='lanczos3')
             logger.info(f"🚀 [HIGH QUALITY] Level {level} - Lanczos3")
 
-        # 🚀 고품질 JPEG 저장 (Q=100)
-        resized.write_to_file(str(pyramid_path), Q=100)
+        # 🚀 최적화된 JPEG 저장 (Q=85, 시각적 품질 유지하며 속도/용량 개선)
+        resized.write_to_file(str(pyramid_path), Q=85, optimize_coding=True, strip=True)
 
         logger.info(f"🚀 [SPEED SAVE] {pyramid_path} ({new_w}×{new_h})")
 
@@ -1218,8 +1218,8 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
             # 리사이즈 (LANCZOS: 최고 품질)
             resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
-            # JPEG로 저장 (Q=100, 최고 품질)
-            resized.save(pyramid_path, format="JPEG", quality=100, optimize=False)
+            # 최적화된 JPEG 저장 (Q=85, 시각적 품질 유지하며 속도/용량 개선)
+            resized.save(pyramid_path, format="JPEG", quality=85, optimize=True)
 
             logger.info(f"🚀 [PILLOW SAVE] {pyramid_path} ({new_w}×{new_h})")
 
