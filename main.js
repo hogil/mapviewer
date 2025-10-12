@@ -4079,16 +4079,16 @@ class WaferMapViewer {
 
         for (const node of nodes) {
 
-            // 🔥 current_folder 기준 상대 경로 생성 (하위 폴더 포함)
-            const relativePath = parentPath ? `${parentPath}/${node.name}` : node.name;
+            // 🔥 ROOT_DIR 기준 절대 경로 사용 (모든 depth 지원)
+            const fullPath = node.root_relative || (parentPath ? `${parentPath}/${node.name}` : node.name);
 
             if (node.type === 'directory') {
 
-                html += `<li><details><summary data-path="${relativePath}" class="folder">📁 ${node.name}</summary><div class="folder-content" style="padding-left: 1rem;"></div></details></li>`;
+                html += `<li><details><summary data-path="${fullPath}" class="folder">📁 ${node.name}</summary><div class="folder-content" style="padding-left: 1rem;"></div></details></li>`;
 
             } else if (node.type === 'file') {
 
-                html += `<li><a href="#" data-path="${relativePath}">📄 ${node.name}</a></li>`;
+                html += `<li><a href="#" data-path="${fullPath}">📄 ${node.name}</a></li>`;
 
             }
 
@@ -4366,7 +4366,26 @@ class WaferMapViewer {
 
                     if (data && data.success && Array.isArray(data.results)) {
 
-                        matchedImages = data.results;
+                        // 🔥 절대 경로를 ROOT_DIR 기준 상대 경로로 변환 (서버 재시작 전 호환)
+                        matchedImages = data.results.map(path => {
+                            // Windows 경로를 슬래시로 통일
+                            const normalizedPath = path.replace(/\\/g, '/');
+                            
+                            // 절대 경로인 경우 (예: D:/project/data/wm-811k/performance_test/wafer.png)
+                            if (normalizedPath.includes(':/')) {
+                                // ROOT_DIR 부분을 제거하여 상대 경로로 변환
+                                const parts = normalizedPath.split('/');
+                                // wm-811k 이후 경로만 추출 (ROOT_DIR 이후)
+                                const rootDirIndex = parts.indexOf('wm-811k');
+                                if (rootDirIndex >= 0 && rootDirIndex + 1 < parts.length) {
+                                    return parts.slice(rootDirIndex + 1).join('/');
+                                }
+                            }
+                            // 이미 상대 경로면 그대로 반환
+                            return normalizedPath;
+                        });
+                        
+                        console.info('🔍 [SEARCH DEBUG] 변환된 첫 번째 결과:', matchedImages[0]);
 
                     }
 
@@ -5838,42 +5857,18 @@ class WaferMapViewer {
 
 
 
-    async getAllFilesInFolder(folderPath, relativePath = '') {
+    async getAllFilesInFolder(folderPath) {
 
-        const allFiles = [];
-
-        
-        
+        // 🔥 재귀 API 사용 - 백엔드에서 os.walk로 모든 파일 한 번에 조회
         try {
 
-            const response = await fetch(`/api/files?path=${encodeURIComponent(folderPath)}`);
+            const response = await fetch(`/api/files/recursive?path=${encodeURIComponent(folderPath)}`);
 
             const data = await response.json();
 
-            const items = Array.isArray(data.items) ? data.items : [];
-
-            
-            
-            for (const item of items) {
-
-                // 🔥 current_folder 기준 상대 경로 유지 (하위 폴더 포함)
-                const itemRelativePath = relativePath ? `${relativePath}/${item.name}` : item.name;
-
-                
-                
-                if (item.type === 'file') {
-
-                    allFiles.push(itemRelativePath);
-
-                } else if (item.type === 'directory') {
-
-                    // 재귀적으로 하위 폴더 탐색
-                    const subFiles = await this.getAllFilesInFolder(item.path, itemRelativePath);
-
-                    allFiles.push(...subFiles);
-
-                }
-
+            if (data && data.success && Array.isArray(data.files)) {
+                // ROOT_DIR 기준 절대 경로 배열 반환
+                return data.files;
             }
 
         } catch (error) {
@@ -5884,7 +5879,7 @@ class WaferMapViewer {
 
         
         
-        return allFiles;
+        return [];
 
     }
 
@@ -7056,11 +7051,8 @@ class WaferMapViewer {
 
         try {
 
-            // 🔥 모든 경로에 currentFolderPrefix 추가 (이미 포함되어 있으면 중복 방지)
-            let fullPath = path;
-            if (!path.startsWith(this.currentFolderPrefix)) {
-                fullPath = this.currentFolderPrefix + path;
-            }
+            // 🔥 path는 이미 ROOT_DIR 기준 절대 경로 (모든 depth 포함)
+            const fullPath = path;
 
             // 🔥 이전 상태 저장 (Label Explorer에서 호출되지 않은 경우에만)
 
@@ -12789,15 +12781,11 @@ class WaferMapViewer {
             };
             
             // 고화질 썸네일로 시작 (빠른 로딩)
-            // 🔥 currentFolderPrefix 추가 (이미 포함되어 있으면 중복 방지)
-            let fullImgPath = imgPath;
-            if (!imgPath.startsWith(this.currentFolderPrefix)) {
-                fullImgPath = this.currentFolderPrefix + imgPath;
-            }
+            // 🔥 imgPath는 이미 ROOT_DIR 기준 절대 경로
             
             img.onerror = (e) => {
                 console.error(`❌ [THUMBNAIL ERROR] 썸네일 로드 실패:`, {
-                    경로: fullImgPath,
+                    경로: imgPath,
                     URL: img.src,
                     에러타입: e.type,
                     인덱스: idx
@@ -12810,18 +12798,16 @@ class WaferMapViewer {
                 // 실패 후에도 썸네일 시도 (서버에서 썸네일이 생성되었을 수 있음)
                 setTimeout(() => {
                     if (img.parentElement) {
-                        this.replaceWithThumbnail(img, fullImgPath);  // 🔥 fullImgPath 전달
+                        this.replaceWithThumbnail(img, imgPath);
                     }
                 }, 500);
             };
             
-            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(fullImgPath)}&size=512&t=${Date.now()}`;
+            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512&t=${Date.now()}`;
             if (idx === 0) {
                 console.log(`🔍 [GRID FIRST] 첫번째 이미지 썸네일 로드:`, { 
                     인덱스: idx,
-                    원본경로: imgPath,
-                    prefix: this.currentFolderPrefix,
-                    전체경로: fullImgPath,
+                    경로: imgPath,
                     URL: thumbnailUrl 
                 });
             }
@@ -12868,13 +12854,8 @@ class WaferMapViewer {
         
         try {
 
-            // 🔥 currentFolderPrefix 추가 (이미 포함되어 있으면 중복 방지)
-            let fullImgPath = imgPath;
-            if (!imgPath.startsWith(this.currentFolderPrefix)) {
-                fullImgPath = this.currentFolderPrefix + imgPath;
-            }
-
-            const thumbnailUrl = await this.thumbnailManager.loadThumbnail(fullImgPath);
+            // 🔥 imgPath는 이미 ROOT_DIR 기준 절대 경로
+            const thumbnailUrl = await this.thumbnailManager.loadThumbnail(imgPath);
 
             if (thumbnailUrl && img.parentElement && !img.dataset.thumbnailUrl) {
 

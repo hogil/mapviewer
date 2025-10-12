@@ -946,7 +946,21 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
                 if name.startswith('.') or name == '__pycache__' or name in SKIP_DIRS or name in ['classification', 'thumbnails']: 
                     continue
                 typ = "directory" if entry.is_dir(follow_symlinks=False) else "file"
-                items.append({"name": name, "type": typ, "path": str(entry.path).replace('\\', '/')})
+                
+                # 🔥 ROOT_DIR 기준 절대 경로 계산
+                try:
+                    abs_path = Path(entry.path).resolve()
+                    rel_to_root = abs_path.relative_to(ROOT_DIR.resolve())
+                    root_relative = str(rel_to_root).replace('\\', '/')
+                except ValueError:
+                    root_relative = name
+                
+                items.append({
+                    "name": name, 
+                    "type": typ, 
+                    "path": str(entry.path).replace('\\', '/'),
+                    "root_relative": root_relative  # ROOT_DIR 기준 절대 경로
+                })
         directories = [x for x in items if x["type"] == "directory"]
         files = [x for x in items if x["type"] == "file"]
         directories.sort(key=lambda x: x["name"].lower(), reverse=True)
@@ -1559,13 +1573,13 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
                         low = fn.lower()
                         if query not in low: continue
                         full = Path(root) / fn
-                        # 🔥 current_folder 기준 상대 경로로 변환
+                        # 🔥 ROOT_DIR 기준 절대 경로로 변환
                         try:
-                            rel_to_current = full.relative_to(current_folder)
-                            relative_path = str(rel_to_current).replace("\\", "/")
-                            bucket.append(relative_path)
+                            rel_to_root = full.relative_to(ROOT_DIR)
+                            root_relative_path = str(rel_to_root).replace("\\", "/")
+                            bucket.append(root_relative_path)
                         except ValueError:
-                            # current_folder 밖의 파일이면 건너뛰기
+                            # ROOT_DIR 밖의 파일이면 건너뛰기
                             continue
                         if len(bucket) >= goal: break
                     if len(bucket) >= goal: break
@@ -1642,6 +1656,42 @@ async def get_all_files():
         return {"success": True, "files": keys}
     except Exception as e:
         logger.exception(f"전체 파일 목록 조회 실패: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/files/recursive")
+async def get_files_recursive(path: str):
+    """폴더 내 모든 파일을 재귀적으로 가져오기 (ROOT_DIR 기준 절대 경로)"""
+    try:
+        target = safe_resolve_path(path)
+        if not target.exists() or not target.is_dir():
+            raise HTTPException(status_code=404, detail="폴더를 찾을 수 없습니다")
+        
+        files = []
+        for root, dirs, filenames in os.walk(target):
+            # SKIP_DIRS 제외
+            for skip in list(SKIP_DIRS):
+                if skip in dirs:
+                    dirs.remove(skip)
+            # classification, thumbnails 제외
+            dirs[:] = [d for d in dirs if d not in ['classification', 'thumbnails']]
+            
+            for fn in filenames:
+                ext = os.path.splitext(fn)[1].lower()
+                if ext not in SUPPORTED_EXTENSIONS:
+                    continue
+                
+                full_path = Path(root) / fn
+                try:
+                    # ROOT_DIR 기준 절대 경로
+                    rel_to_root = full_path.relative_to(ROOT_DIR)
+                    root_relative = str(rel_to_root).replace('\\', '/')
+                    files.append(root_relative)
+                except ValueError:
+                    continue
+        
+        return {"success": True, "files": files}
+    except Exception as e:
+        logger.exception(f"재귀 파일 조회 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ---------------- Classes ----------------
