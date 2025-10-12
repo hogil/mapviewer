@@ -1362,12 +1362,30 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
 @app.get("/api/thumbnail")
 async def get_thumbnail(request: Request, path: str, size: int = THUMBNAIL_SIZE_DEFAULT):
     try:
-        # 🔥 절대 경로를 직접 사용
-        image_path = Path(path).resolve()
+        # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
+        if Path(path).is_absolute():
+            # 절대 경로인 경우
+            image_path = Path(path)
+            # ROOT_DIR 내 경로인지 보안 검증
+            try:
+                image_path.resolve().relative_to(ROOT_DIR.resolve())
+            except ValueError:
+                logger.warning(f"ROOT_DIR 외부 경로 접근 시도: {path}")
+                raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
+        else:
+            # 상대 경로인 경우 ROOT_DIR 기준으로 해석
+            image_path = ROOT_DIR / path
+            # 보안 검증: ROOT_DIR 내에 있는지 확인
+            try:
+                image_path.resolve().relative_to(ROOT_DIR.resolve())
+            except ValueError:
+                logger.warning(f"ROOT_DIR 외부 경로 접근 시도: {path}")
+                raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
         
         # 🔍 썸네일 요청 로그
         logger.info(f"🔍 [THUMBNAIL DEBUG] 요청 경로: {path}")
-        logger.info(f"🔍 [THUMBNAIL DEBUG] 절대 경로: {image_path}")
+        logger.info(f"🔍 [THUMBNAIL DEBUG] 해석된 경로: {image_path}")
+        logger.info(f"🔍 [THUMBNAIL DEBUG] ROOT_DIR: {ROOT_DIR}")
         logger.info(f"🔍 [THUMBNAIL DEBUG] 크기: {size}")
         
         # 파일 존재 확인
