@@ -1238,19 +1238,30 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
 @app.get("/api/image")
 async def get_image(request: Request, path: str, level: Optional[float] = None):
     try:
-        # 🔥 절대 경로를 직접 사용 (ROOT_DIR 내 경로)
-        image_path = Path(path)
-        
-        # ROOT_DIR 내 경로인지 보안 검증
-        try:
-            image_path.resolve().relative_to(ROOT_DIR.resolve())
-        except ValueError:
-            raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
+        # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
+        if Path(path).is_absolute():
+            # 절대 경로인 경우
+            image_path = Path(path)
+            # ROOT_DIR 내 경로인지 보안 검증
+            try:
+                image_path.resolve().relative_to(ROOT_DIR.resolve())
+            except ValueError:
+                raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
+        else:
+            # 상대 경로인 경우 ROOT_DIR 기준으로 해석
+            image_path = ROOT_DIR / path
+            # 보안 검증: ROOT_DIR 내에 있는지 확인
+            try:
+                image_path.resolve().relative_to(ROOT_DIR.resolve())
+            except ValueError:
+                raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
         
         if not image_path.exists() or not image_path.is_file():
             raise HTTPException(status_code=404, detail="Image not found")
 
         logger.info(f"🚀 [IMAGE API] 요청: path={path}, level={level}")
+        logger.info(f"🚀 [IMAGE API] 해석된 경로: {image_path}")
+        logger.info(f"🚀 [IMAGE API] ROOT_DIR: {ROOT_DIR}")
 
         # 🎯 피라미드 레벨이 요청된 경우
         if level is not None:
