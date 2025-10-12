@@ -7149,11 +7149,11 @@ class WaferMapViewer {
         const tStart = performance.now();
         console.log(`⏱️ [LOAD START] ${fullPath} - 시작`);
 
-        // 🚀 기본 zoom(1.0)으로 적절한 피라미드 레벨 계산하여 한 번에 로드
-        const initialZoom = 1.0;  // 기본 줌
-        const initialLevel = this.getBestPyramidLevel(initialZoom);
+        // 🚀 resetView 후 예상 zoom(0.1)으로 적절한 피라미드 레벨 계산
+        const expectedZoomAfterReset = 0.1;  // resetView 후 예상 zoom (fit to screen)
+        const initialLevel = this.getBestPyramidLevel(expectedZoomAfterReset);
         
-        console.log(`🚀 [LOAD] 기본 줌 ${initialZoom}에 맞는 Level ${initialLevel} 로드`);
+        console.log(`🚀 [LOAD] 예상 줌 ${expectedZoomAfterReset}에 맞는 Level ${initialLevel} 로드`);
 
         
         
