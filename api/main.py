@@ -1075,19 +1075,179 @@ def _lookup_original_relpath_from_classification_path(path_str: str) -> Optional
     except Exception:
         return None
 
+def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
+    """🚀 피라미드 레벨 이미지 생성 (속도 극대화)"""
+
+    # 디렉토리 생성
+    pyramid_path.parent.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"🚀 [SPEED PYRAMID] 시작: {image_path.name} → level={level}")
+
+    try:
+        # PyVips로 초고속 처리 시도
+        import pyvips
+
+        # 🚀 단순화된 옵션으로 이미지 로드 (속도 우선)
+        image = pyvips.Image.new_from_file(str(image_path))
+
+        orig_w, orig_h = image.width, image.height
+        new_w = int(orig_w * level)
+        new_h = int(orig_h * level)
+
+        logger.info(f"🚀 [SPEED SIZE] 원본={orig_w}×{orig_h} → 새크기={new_w}×{new_h}")
+
+        # 🚀 고품질 리사이즈: Lanczos3 (최고 품질)
+        if level >= 1.0:
+            # Level 1.0: 원본 복사
+            resized = image
+            logger.info(f"🚀 [ORIGINAL COPY] Level 1.0 - 원본 복사")
+        else:
+            # 모든 레벨: Lanczos3 (최고 품질)
+            resized = image.resize(level, kernel='lanczos3')
+            logger.info(f"🚀 [HIGH QUALITY] Level {level} - Lanczos3")
+
+        # 🚀 고품질 JPEG 저장 (Q=100)
+        resized.write_to_file(str(pyramid_path), Q=100)
+
+        logger.info(f"🚀 [SPEED SAVE] {pyramid_path} ({new_w}×{new_h})")
+
+        # 파일 확인
+        if pyramid_path.exists():
+            file_size = pyramid_path.stat().st_size
+            logger.info(f"✅ [SPEED SUCCESS] 파일크기: {file_size} bytes")
+        else:
+            logger.error(f"❌ [SPEED FAILED] 파일 생성 실패")
+
+    except ImportError:
+        # PyVips가 없으면 Pillow 사용
+        logger.info(f"🚀 [PILLOW FALLBACK] PyVips 없음 - Pillow 사용")
+
+        from PIL import Image
+
+        with Image.open(image_path) as img:
+            orig_w, orig_h = img.size
+            new_w = int(orig_w * level)
+            new_h = int(orig_h * level)
+
+            logger.info(f"🚀 [PILLOW SIZE] 원본={orig_w}×{orig_h} → 새크기={new_w}×{new_h}")
+
+            # 리사이즈 (LANCZOS: 최고 품질)
+            resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+            # JPEG로 저장 (Q=100, 최고 품질)
+            resized.save(pyramid_path, format="JPEG", quality=100, optimize=False)
+
+            logger.info(f"🚀 [PILLOW SAVE] {pyramid_path} ({new_w}×{new_h})")
+
+    except Exception as e:
+        logger.exception(f"🚀 [SPEED ERROR] 피라미드 생성 실패: {e}")
+
+        # 실패 시 원본 복사
+        try:
+            import shutil
+            shutil.copy2(image_path, pyramid_path)
+            logger.info(f"🚀 [SPEED FALLBACK] 원본 복사: {pyramid_path}")
+        except Exception as copy_error:
+            logger.exception(f"🚀 [SPEED COPY FAILED] {copy_error}")
+            raise
+
 @app.get("/api/image")
-async def get_image(request: Request, path: str):
+async def get_image(request: Request, path: str, level: Optional[float] = None):
     try:
         image_path = safe_resolve_path(path)
         if not image_path.exists() or not image_path.is_file():
             raise HTTPException(status_code=404, detail="Image not found")
-        st = image_path.stat()
-        resp_304 = maybe_304(request, st)
-        if resp_304: return resp_304
-        headers = {"Cache-Control": "public, max-age=86400, immutable", "ETag": compute_etag(st)}
-        return FileResponse(image_path, headers=headers)
+
+        logger.info(f"🚀 [IMAGE API] 요청: path={path}, level={level}")
+
+        # 🎯 피라미드 레벨이 요청된 경우
+        if level is not None:
+            logger.info(f"🎯 [PYRAMID MODE] 활성화됨")
+
+            # 레벨 검증
+            if level not in config.PYRAMID_LEVELS:
+                level = min(config.PYRAMID_LEVELS, key=lambda x: abs(x - level))
+                logger.info(f"🎯 [LEVEL FIXED] {level}")
+
+            # 🚀 Level 1.0은 원본 파일 직접 반환 (최고속)
+            if level >= 1.0:
+                logger.info(f"🚀 [ORIGINAL DIRECT] Level 1.0 - 원본 파일 직접 반환")
+                st = image_path.stat()
+                headers = {
+                    "Cache-Control": "public, max-age=31536000, immutable",  # 1년 캐시
+                    "ETag": compute_etag(st),
+                    "X-Pyramid-Level": "1.0",
+                    "X-Cache-Status": "ORIGINAL"
+                }
+                return FileResponse(image_path, headers=headers)
+
+            # 피라미드 디렉토리 생성
+            pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
+            pyramid_dir.mkdir(parents=True, exist_ok=True)
+
+            # 피라미드 파일 경로
+            rel_path = image_path.relative_to(config.ROOT_DIR)
+            safe_filename = str(rel_path).replace("/", "_").replace("\\", "_")
+
+            # 비어있거나 잘못된 파일명 방지
+            if not safe_filename.strip():
+                safe_filename = "unknown_image"
+
+            # Windows 예약 파일명 필터링
+            stem = Path(safe_filename).stem
+            stem_lower = stem.lower()
+            WINDOWS_RESERVED = {'nul', 'con', 'prn', 'aux', 'nul.', 'con.', 'prn.', 'aux.'}
+            if stem_lower in WINDOWS_RESERVED or any(stem_lower.startswith(f'{dev}') for dev in ['com', 'lpt']):
+                stem = f"file_{stem}"
+
+            pyramid_path = pyramid_dir / f"{stem}_L{int(level*100)}.jpg"
+            logger.info(f"🎯 [PYRAMID PATH] {pyramid_path}")
+
+            # 🚀 캐시 확인: 이미 존재하고 최신이면 즉시 반환
+            image_mtime = image_path.stat().st_mtime
+            if pyramid_path.exists() and pyramid_path.stat().st_size > 0:
+                if pyramid_path.stat().st_mtime >= image_mtime:
+                    logger.info(f"✅ [CACHE HIT] 캐시된 피라미드 사용: {pyramid_path}")
+                    st = pyramid_path.stat()
+                    headers = {
+                        "Cache-Control": "public, max-age=31536000, immutable",
+                        "Content-Type": "image/jpeg",
+                        "ETag": compute_etag(st),
+                        "X-Pyramid-Level": str(level),
+                        "X-Cache-Status": "HIT"
+                    }
+                    return FileResponse(pyramid_path, headers=headers)
+
+            # 캐시 미스: 피라미드 이미지 생성
+            logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}")
+            _generate_pyramid_sync(image_path, pyramid_path, level)
+            logger.info(f"🎯 [GENERATE COMPLETE] {pyramid_path}")
+
+            # 생성된 파일 확인 및 반환
+            if pyramid_path.exists():
+                st = pyramid_path.stat()
+                logger.info(f"✅ [PYRAMID SUCCESS] {pyramid_path} ({st.st_size} bytes)")
+
+                headers = {
+                    "Cache-Control": "public, max-age=31536000, immutable",
+                    "Content-Type": "image/jpeg",
+                    "ETag": compute_etag(st),
+                    "X-Pyramid-Level": str(level),
+                    "X-Cache-Status": "MISS"
+                }
+                return FileResponse(pyramid_path, headers=headers)
+            else:
+                logger.error(f"❌ [GENERATION FAILED] {pyramid_path}")
+                raise HTTPException(status_code=500, detail="Pyramid generation failed")
+        else:
+            # 원본 이미지 반환
+            logger.info(f"🎯 [ORIGINAL MODE] {image_path}")
+            st = image_path.stat()
+            headers = {"Cache-Control": "public, max-age=86400", "ETag": compute_etag(st)}
+            return FileResponse(image_path, headers=headers)
+
     except Exception as e:
-        logger.exception(f"이미지 제공 실패: {e}")
+        logger.exception(f"❌ [IMAGE API ERROR] {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/thumbnail")
