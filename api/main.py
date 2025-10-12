@@ -938,9 +938,23 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
         with os.scandir(target) as it:
             for entry in it:
                 name = entry.name
-                if name.startswith('.') or name == '__pycache__' or name in SKIP_DIRS: continue
+                # 🔥 classification, thumbnails 폴더 제외
+                if name.startswith('.') or name == '__pycache__' or name in SKIP_DIRS or name in ['classification', 'thumbnails']: 
+                    continue
                 typ = "directory" if entry.is_dir(follow_symlinks=False) else "file"
-                items.append({"name": name, "type": typ, "path": str(entry.path).replace('\\', '/')})
+                # 🔥 ROOT_DIR 기준 상대 경로 추가
+                try:
+                    abs_path = Path(entry.path).resolve()
+                    rel_path = str(abs_path.relative_to(ROOT_DIR.resolve())).replace('\\', '/')
+                except ValueError:
+                    # ROOT_DIR 밖이면 절대 경로 그대로
+                    rel_path = str(entry.path).replace('\\', '/')
+                items.append({
+                    "name": name, 
+                    "type": typ, 
+                    "path": str(entry.path).replace('\\', '/'),
+                    "rel_path": rel_path  # ROOT_DIR 기준 상대 경로
+                })
         directories = [x for x in items if x["type"] == "directory"]
         files = [x for x in items if x["type"] == "file"]
         directories.sort(key=lambda x: x["name"].lower(), reverse=True)
@@ -2246,7 +2260,8 @@ async def browse_folders(path: Optional[str] = None):
         try:
             with os.scandir(target_path) as it:
                 for entry in it:
-                    if entry.is_dir(follow_symlinks=False) and not entry.name.startswith('.'):
+                    # 🔥 classification, thumbnails 폴더 제외
+                    if entry.is_dir(follow_symlinks=False) and not entry.name.startswith('.') and entry.name not in ['classification', 'thumbnails']:
                         # 1depth 폴더 추가
                         folders.append({"name": entry.name, "path": str(entry.path), "type": "folder", "depth": 1})
                         
@@ -2254,7 +2269,8 @@ async def browse_folders(path: Optional[str] = None):
                         try:
                             with os.scandir(entry.path) as sub_it:
                                 for sub_entry in sub_it:
-                                    if sub_entry.is_dir(follow_symlinks=False) and not sub_entry.name.startswith('.'):
+                                    # 🔥 classification, thumbnails 폴더 제외
+                                    if sub_entry.is_dir(follow_symlinks=False) and not sub_entry.name.startswith('.') and sub_entry.name not in ['classification', 'thumbnails']:
                                         subfolders.append({
                                             "name": f"{entry.name} / {sub_entry.name}", 
                                             "path": str(sub_entry.path), 

@@ -5831,19 +5831,21 @@ class WaferMapViewer {
             
             for (const item of items) {
 
-                const itemPath = `${folderPath}/${item.name}`;
+                // 🔥 ROOT_DIR 기준 상대 경로 사용 (rel_path가 있으면 사용, 없으면 기존 방식)
+                const itemPath = item.rel_path || `${folderPath}/${item.name}`;
 
                 
                 
                 if (item.type === 'file') {
 
+                    console.log(`🔍 [GET ALL FILES] 파일 추가: ${itemPath}`);
                     allFiles.push(itemPath);
 
                 } else if (item.type === 'directory') {
 
                     // 재귀적으로 하위 폴더 탐색
-
-                    const subFiles = await this.getAllFilesInFolder(itemPath);
+                    // 🔥 절대 경로를 전달하여 올바른 탐색
+                    const subFiles = await this.getAllFilesInFolder(item.path);
 
                     allFiles.push(...subFiles);
 
