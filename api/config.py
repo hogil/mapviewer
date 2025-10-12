@@ -45,3 +45,6 @@ SSL_ENABLED = os.getenv("SSL_ENABLED", "1").strip().lower() in {"1", "true", "ye
 HTTPS_PORT = int(os.getenv("HTTPS_PORT", "8443"))
 SSL_CERTFILE = os.getenv("SSL_CERTFILE", "cert/fullchain.pem")
 SSL_KEYFILE = os.getenv("SSL_KEYFILE", "cert/server.key")
+
+# ===== 이미지 피라미드 설정 =====
+PYRAMID_LEVELS = [0.2, 0.4, 0.7, 1.0]  # 피라미드 레벨 (0.2=20%, 0.4=40%, 0.7=70%, 1.0=100%) - 고품질 Q=100, Lanczos3
