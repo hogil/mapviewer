@@ -6603,6 +6603,7 @@ class WaferMapViewer {
     // 🔥 Label Explorer 진입 전 현재 상태 저장 (Wafer Map Explorer에서만)
 
     saveCurrentViewStateForLabelExplorer() {
+        console.log('💾 [SAVE] saveCurrentViewStateForLabelExplorer 호출');
 
         // 이미 저장된 상태가 있으면 덮어쓰지 않음 (Label Explorer 내 이동 시)
 
@@ -6616,9 +6617,10 @@ class WaferMapViewer {
 
         const shouldSkip = hasSavedViewState && hasType && (isGridWithImages || isSingle);
 
-        
-        
+
+
         if (shouldSkip) {
+            console.log('💾 [SAVE] 이미 저장된 상태 있음 → 건너뛰기:', this.savedViewState);
 
             return;
 
@@ -6641,6 +6643,7 @@ class WaferMapViewer {
                 scrollTop: grid ? grid.scrollTop : 0
 
             };
+            console.log('💾 [SAVE] Grid 모드 저장:', this.savedViewState.images.length, '개 이미지, scrollTop:', this.savedViewState.scrollTop);
 
         } else if (!this.gridMode && this.currentImage && this.selectedImagePath) {
 
@@ -6659,6 +6662,7 @@ class WaferMapViewer {
                 offsetY: this.offsetY
 
             };
+            console.log('💾 [SAVE] 단일 이미지 모드 저장:', this.savedViewState.imagePath);
 
         } else {
 
@@ -6673,6 +6677,7 @@ class WaferMapViewer {
                 scrollTop: 0
 
             };
+            console.log('💾 [SAVE] 초기 상태 저장 (빈 그리드)');
 
         }
 
@@ -10031,17 +10036,25 @@ class WaferMapViewer {
 
         // --- 우클릭으로 Label Explorer만 선택 해제 ---
         container.oncontextmenu = (e) => {
+            console.log('🔴 [DEBUG] Label Explorer 우클릭 발생!');
             e.preventDefault();
             e.stopPropagation(); // 🚀 이벤트 버블링 방지 (Wafer Map Explorer 우클릭 방해 방지)
 
             // Label Explorer 선택 해제 및 이전 상태 복원
             if (this.labelSelection) {
+                console.log('🔴 [DEBUG] Label Explorer 선택 해제:', {
+                    selected: this.labelSelection.selected,
+                    selectedClasses: this.labelSelection.selectedClasses
+                });
                 this.labelSelection.selected = [];
                 this.labelSelection.selectedClasses = [];
             }
 
+            console.log('🔴 [DEBUG] savedViewState 확인:', this.savedViewState);
+
             // savedViewState로 복원
             if (this.savedViewState && this.savedViewState.type === 'grid' && this.savedViewState.images.length > 0) {
+                console.log('🔴 [DEBUG] Grid 모드로 복원:', this.savedViewState.images.length, '개 이미지');
                 this.selectedImages = [...this.savedViewState.images];
                 this.showGrid(this.savedViewState.images);
                 // 스크롤 위치 복원
@@ -10054,6 +10067,7 @@ class WaferMapViewer {
                     }, 100);
                 }
             } else if (this.savedViewState && this.savedViewState.type === 'single') {
+                console.log('🔴 [DEBUG] 단일 이미지 모드로 복원:', this.savedViewState.imagePath);
                 this.loadImage(this.savedViewState.imagePath).then(() => {
                     this.zoom = this.savedViewState.zoom;
                     this.offsetX = this.savedViewState.offsetX;
@@ -10061,6 +10075,7 @@ class WaferMapViewer {
                     this.render();
                 });
             } else {
+                console.log('🔴 [DEBUG] savedViewState 없음 → 초기 화면으로');
                 this.hideGrid();
                 this.hideImage();
                 this.selectedImages = [];
@@ -10071,6 +10086,7 @@ class WaferMapViewer {
             }
 
             this.updateLabelExplorerSelection();
+            console.log('🔴 [DEBUG] 우클릭 처리 완료');
         };
 
         
@@ -10088,28 +10104,42 @@ class WaferMapViewer {
             frame.setAttribute('data-click-bound', 'true');
 
             frame.onclick = (e) => {
+                console.log('🟢 [DEBUG] Label Explorer 프레임 클릭!', {
+                    target: e.target,
+                    frame: frame,
+                    isFrame: e.target === frame,
+                    ctrlKey: e.ctrlKey,
+                    shiftKey: e.shiftKey
+                });
 
                 // 프레임 자체를 클릭하고, Ctrl/Shift가 없을 때만 Label Explorer만 선택 해제
 
                 if (e.target === frame && !e.ctrlKey && !e.shiftKey) {
+                    console.log('🟢 [DEBUG] 프레임 클릭 조건 만족 → 복원 시작');
 
                     // 🔥 직접 복원 로직 처리 (clearLabelExplorerSelection 사용 안함)
 
                     // Label Explorer 선택 해제 및 이전 상태 복원
 
                     if (this.labelSelection) {
-
+                        console.log('🟢 [DEBUG] Label Explorer 선택 해제:', {
+                            selected: this.labelSelection.selected,
+                            selectedClasses: this.labelSelection.selectedClasses
+                        });
                         this.labelSelection.selected = [];
 
                         this.labelSelection.selectedClasses = [];
 
                     }
 
-                    
-                    
+
+
+                    console.log('🟢 [DEBUG] savedViewState 확인:', this.savedViewState);
+
                     // savedViewState로 복원
 
                     if (this.savedViewState && this.savedViewState.type === 'grid' && this.savedViewState.images.length > 0) {
+                        console.log('🟢 [DEBUG] Grid 모드로 복원:', this.savedViewState.images.length, '개 이미지');
 
                         this.selectedImages = [...this.savedViewState.images];
 
@@ -10126,6 +10156,7 @@ class WaferMapViewer {
                         }
 
                     } else if (this.savedViewState && this.savedViewState.type === 'single') {
+                        console.log('🟢 [DEBUG] 단일 이미지 모드로 복원:', this.savedViewState.imagePath);
 
                         this.loadImage(this.savedViewState.imagePath).then(() => {
 
@@ -10140,6 +10171,7 @@ class WaferMapViewer {
                         });
 
                     } else {
+                        console.log('🟢 [DEBUG] savedViewState 없음 → 초기 화면으로');
 
                         this.hideGrid();
 
@@ -10160,6 +10192,7 @@ class WaferMapViewer {
                     
                     
                     this.updateLabelExplorerSelection();
+                    console.log('🟢 [DEBUG] 프레임 클릭 처리 완료');
 
                 }
 
