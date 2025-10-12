@@ -6190,6 +6190,60 @@ class WaferMapViewer {
 
             }
 
+            
+
+            // 🔥 폴더 클릭 시에도 이전 선택 해제 (Ctrl/Shift가 아닐 때)
+
+            if (!e.ctrlKey && !e.shiftKey) {
+
+                // 이전 선택된 모든 항목들의 시각적 표시 해제
+
+                const allLinks = Array.from(this.dom.fileExplorer.querySelectorAll('a[data-path]'));
+
+                allLinks.forEach(link => {
+
+                    link.classList.remove('selected');
+
+                });
+
+                
+
+                // 이전 선택된 폴더들의 시각적 표시 해제
+
+                const allFolders = Array.from(this.dom.fileExplorer.querySelectorAll('summary.folder'));
+
+                allFolders.forEach(folder => {
+
+                    if (folder !== target) {
+
+                        folder.classList.remove('selected');
+
+                    }
+
+                });
+
+                
+
+                // 새로 클릭된 폴더 시각적 표시
+
+                target.classList.add('selected');
+
+                
+
+                // 🔥 Label Explorer 선택도 해제
+
+                if (this.labelSelection) {
+
+                    this.labelSelection.selected = [];
+
+                    this.labelSelection.selectedClasses = [];
+
+                    this.updateLabelExplorerSelection();
+
+                }
+
+            }
+
         } 
 
         // Handle file selection (multi-select)
@@ -6264,14 +6318,58 @@ class WaferMapViewer {
 
             } else {
 
-                // 단일 클릭 - 이미지 파일이면 자세히보기 모드
+                // 단일 클릭 - 이전 선택 모두 해제 후 새 항목 선택
+
+                // 🔥 이전 선택된 모든 항목들의 시각적 표시 해제
+
+                const allLinks = Array.from(this.dom.fileExplorer.querySelectorAll('a[data-path]'));
+
+                allLinks.forEach(link => {
+
+                    link.classList.remove('selected');
+
+                });
+
+                
+
+                // 🔥 이전 선택된 폴더들의 시각적 표시 해제
+
+                const allFolders = Array.from(this.dom.fileExplorer.querySelectorAll('summary.folder'));
+
+                allFolders.forEach(folder => {
+
+                    folder.classList.remove('selected');
+
+                });
+
+                
 
                 this.selectedImages = [path];
 
                 this.selectedImagePath = path;
 
                 
+
+                // 새로 선택된 항목 시각적 표시
+
+                target.classList.add('selected');
+
                 
+
+                // 🔥 Label Explorer 선택도 해제
+
+                if (this.labelSelection) {
+
+                    this.labelSelection.selected = [];
+
+                    this.labelSelection.selectedClasses = [];
+
+                    this.updateLabelExplorerSelection();
+
+                }
+
+                
+
                 // 이미지 파일인지 확인
 
                 if (this.isImageFile(path)) {
