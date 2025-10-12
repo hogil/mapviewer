@@ -10064,6 +10064,11 @@ class WaferMapViewer {
                 console.log('🔴 [DEBUG] Grid 모드로 복원:', this.savedViewState.images.length, '개 이미지');
                 this.selectedImages = [...this.savedViewState.images];
                 this.showGrid(this.savedViewState.images);
+
+                // 파일명 패널 숨기기 (Label Explorer에서 돌아왔으므로)
+                if (this.dom.fileNameDisplay) {
+                    this.dom.fileNameDisplay.style.display = 'none';
+                }
                 // 스크롤 위치 복원
                 if (this.savedViewState.scrollTop !== undefined) {
                     setTimeout(() => {
@@ -10151,6 +10156,11 @@ class WaferMapViewer {
                         this.selectedImages = [...this.savedViewState.images];
 
                         this.showGrid(this.savedViewState.images);
+
+                        // 파일명 패널 숨기기 (Label Explorer에서 돌아왔으므로)
+                        if (this.dom.fileNameDisplay) {
+                            this.dom.fileNameDisplay.style.display = 'none';
+                        }
 
                         // 스크롤 위치 복원
                         if (this.savedViewState.scrollTop !== undefined) {
