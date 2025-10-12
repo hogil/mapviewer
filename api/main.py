@@ -2222,18 +2222,12 @@ async def change_folder(request: Request):
 @app.get("/api/browse-folders")
 async def browse_folders(path: Optional[str] = None):
     try:
-        if not path:
-            import string
-            drives = []
-            for letter in string.ascii_uppercase:
-                drive_path = f"{letter}:\\"
-                if Path(drive_path).exists():
-                    drives.append({"name": f"{letter}: 드라이브", "path": drive_path, "type": "drive"})
-            return {"folders": drives}
-
-        target_path = Path(path).resolve()
+        # 🔥 항상 ROOT_DIR 기준으로 폴더 목록 반환
+        target_path = ROOT_DIR
+        logger.info(f"🔍 [BROWSE FOLDERS] ROOT_DIR 기준 폴더 목록 조회: {target_path}")
+        
         if not target_path.exists() or not target_path.is_dir():
-            raise HTTPException(status_code=404, detail="폴더를 찾을 수 없습니다")
+            raise HTTPException(status_code=404, detail="ROOT_DIR을 찾을 수 없습니다")
 
         folders = []
         subfolders = []  # 2depth 폴더들
