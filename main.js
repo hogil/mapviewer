@@ -4079,18 +4079,16 @@ class WaferMapViewer {
 
         for (const node of nodes) {
 
-            // 🔥 currentFolderPrefix + node.name으로 ROOT_DIR 기준 경로 생성
-            const fullPath = this.currentFolderPrefix + node.name;
-            
-            console.log(`🔍 [FILE TREE] 노드: ${node.name}, prefix: ${this.currentFolderPrefix}, fullPath: ${fullPath}`);
+            // 🔥 current_folder 기준 상대 경로 생성 (하위 폴더 포함)
+            const relativePath = parentPath ? `${parentPath}/${node.name}` : node.name;
 
             if (node.type === 'directory') {
 
-                html += `<li><details><summary data-path="${fullPath}" class="folder">📁 ${node.name}</summary><div class="folder-content" style="padding-left: 1rem;"></div></details></li>`;
+                html += `<li><details><summary data-path="${relativePath}" class="folder">📁 ${node.name}</summary><div class="folder-content" style="padding-left: 1rem;"></div></details></li>`;
 
             } else if (node.type === 'file') {
 
-                html += `<li><a href="#" data-path="${fullPath}">📄 ${node.name}</a></li>`;
+                html += `<li><a href="#" data-path="${relativePath}">📄 ${node.name}</a></li>`;
 
             }
 
@@ -5840,7 +5838,7 @@ class WaferMapViewer {
 
 
 
-    async getAllFilesInFolder(folderPath) {
+    async getAllFilesInFolder(folderPath, relativePath = '') {
 
         const allFiles = [];
 
@@ -5848,41 +5846,35 @@ class WaferMapViewer {
         
         try {
 
-            console.log(`🔍 [GET ALL FILES] 폴더 스캔 시작: ${folderPath}, prefix: ${this.currentFolderPrefix}`);
             const response = await fetch(`/api/files?path=${encodeURIComponent(folderPath)}`);
 
             const data = await response.json();
 
             const items = Array.isArray(data.items) ? data.items : [];
-            console.log(`🔍 [GET ALL FILES] API 응답: ${items.length}개 항목`);
 
             
             
             for (const item of items) {
 
-                // 🔥 currentFolderPrefix + name으로 ROOT_DIR 기준 경로 생성
-                const itemPath = this.currentFolderPrefix + item.name;
+                // 🔥 current_folder 기준 상대 경로 유지 (하위 폴더 포함)
+                const itemRelativePath = relativePath ? `${relativePath}/${item.name}` : item.name;
 
                 
                 
                 if (item.type === 'file') {
 
-                    console.log(`🔍 [GET ALL FILES] 파일 추가: ${itemPath} (prefix: ${this.currentFolderPrefix}, name: ${item.name})`);
-                    allFiles.push(itemPath);
+                    allFiles.push(itemRelativePath);
 
                 } else if (item.type === 'directory') {
 
                     // 재귀적으로 하위 폴더 탐색
-                    // 🔥 절대 경로를 전달하여 올바른 탐색
-                    const subFiles = await this.getAllFilesInFolder(item.path);
+                    const subFiles = await this.getAllFilesInFolder(item.path, itemRelativePath);
 
                     allFiles.push(...subFiles);
 
                 }
 
             }
-            
-            console.log(`🔍 [GET ALL FILES] 폴더 스캔 완료: ${allFiles.length}개 파일`);
 
         } catch (error) {
 
@@ -7064,19 +7056,10 @@ class WaferMapViewer {
 
         try {
 
-            // 🔥 currentFolderPrefix 추가 (classification/ 경로가 아닌 경우에만)
+            // 🔥 모든 경로에 currentFolderPrefix 추가 (이미 포함되어 있으면 중복 방지)
             let fullPath = path;
-            if (!path.startsWith('classification/')) {
+            if (!path.startsWith(this.currentFolderPrefix)) {
                 fullPath = this.currentFolderPrefix + path;
-                console.log(`🔍 [LOAD IMAGE] 원본 경로: ${path}`);
-                console.log(`🔍 [LOAD IMAGE] prefix 추가: ${this.currentFolderPrefix}`);
-                console.log(`🔍 [LOAD IMAGE] 최종 경로: ${fullPath}`);
-            } else {
-                // classification 경로는 currentFolderPrefix 추가
-                fullPath = this.currentFolderPrefix + path;
-                console.log(`🔍 [LOAD IMAGE] classification 경로: ${path}`);
-                console.log(`🔍 [LOAD IMAGE] prefix 추가: ${this.currentFolderPrefix}`);
-                console.log(`🔍 [LOAD IMAGE] 최종 경로: ${fullPath}`);
             }
 
             // 🔥 이전 상태 저장 (Label Explorer에서 호출되지 않은 경우에만)
@@ -12842,11 +12825,19 @@ class WaferMapViewer {
             };
             
             // 고화질 썸네일로 시작 (빠른 로딩)
-            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512&t=${Date.now()}`;
+            // 🔥 currentFolderPrefix 추가 (이미 포함되어 있으면 중복 방지)
+            let fullImgPath = imgPath;
+            if (!imgPath.startsWith(this.currentFolderPrefix)) {
+                fullImgPath = this.currentFolderPrefix + imgPath;
+            }
+            
+            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(fullImgPath)}&size=512&t=${Date.now()}`;
             if (idx === 0) {
                 console.log(`🔍 [GRID FIRST] 첫번째 이미지 썸네일 로드:`, { 
                     인덱스: idx,
-                    경로: imgPath, 
+                    원본경로: imgPath,
+                    prefix: this.currentFolderPrefix,
+                    전체경로: fullImgPath,
                     URL: thumbnailUrl 
                 });
             }
@@ -12893,7 +12884,13 @@ class WaferMapViewer {
         
         try {
 
-            const thumbnailUrl = await this.thumbnailManager.loadThumbnail(imgPath);
+            // 🔥 currentFolderPrefix 추가 (이미 포함되어 있으면 중복 방지)
+            let fullImgPath = imgPath;
+            if (!imgPath.startsWith(this.currentFolderPrefix)) {
+                fullImgPath = this.currentFolderPrefix + imgPath;
+            }
+
+            const thumbnailUrl = await this.thumbnailManager.loadThumbnail(fullImgPath);
 
             if (thumbnailUrl && img.parentElement && !img.dataset.thumbnailUrl) {
 

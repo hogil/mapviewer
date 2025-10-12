@@ -1559,13 +1559,13 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
                         low = fn.lower()
                         if query not in low: continue
                         full = Path(root) / fn
-                        # 🔥 ROOT_DIR 기준 절대 경로로 변환
+                        # 🔥 current_folder 기준 상대 경로로 변환
                         try:
-                            rel_path = full.relative_to(ROOT_DIR)
-                            abs_path = str(ROOT_DIR / rel_path).replace("\\", "/")
-                            bucket.append(abs_path)
+                            rel_to_current = full.relative_to(current_folder)
+                            relative_path = str(rel_to_current).replace("\\", "/")
+                            bucket.append(relative_path)
                         except ValueError:
-                            # ROOT_DIR 밖의 파일이면 건너뛰기
+                            # current_folder 밖의 파일이면 건너뛰기
                             continue
                         if len(bucket) >= goal: break
                     if len(bucket) >= goal: break
@@ -1579,10 +1579,9 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
             if items:
                 for rel, meta in items:
                     if query in meta["name_lower"]:
-                        file_path = ROOT_DIR / rel
-                        # 🔥 ROOT_DIR 기준 절대 경로 반환
-                        abs_path = str(file_path.resolve()).replace("\\", "/")
-                        bucket.append(abs_path)
+                        # 🔥 current_folder 기준 상대 경로로 변환
+                        # rel은 ROOT_DIR 기준이므로, current_folder가 ROOT_DIR이면 그대로 사용
+                        bucket.append(rel)
                         if len(bucket) >= goal: break
 
             # 인덱스로 부족하면 파일 시스템 스캔으로 보완
@@ -1601,13 +1600,12 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
                             if query not in low: continue
                             full = Path(root) / fn
                             try: 
-                                # 🔥 ROOT_DIR 기준 절대 경로 반환
+                                # 🔥 ROOT_DIR 기준 상대 경로 (current_folder가 ROOT_DIR이면 그대로 사용)
                                 rel = str(full.relative_to(ROOT_DIR)).replace("\\", "/")
-                                abs_path = str(ROOT_DIR / rel).replace("\\", "/")
                             except Exception: continue
                             if rel in seen: continue
                             seen.add(rel)
-                            bucket.append(abs_path)
+                            bucket.append(rel)
                             try:
                                 st = full.stat()
                                 rec = {"name_lower": low, "size": st.st_size, "modified": st.st_mtime}
