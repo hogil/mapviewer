@@ -4055,7 +4055,10 @@ class WaferMapViewer {
 
         for (const node of nodes) {
 
-            const fullPath = parentPath ? `${parentPath}/${node.name}` : node.name;
+            // 🔥 ROOT_DIR 기준 상대 경로 사용 (rel_path 우선)
+            const fullPath = node.rel_path || (parentPath ? `${parentPath}/${node.name}` : node.name);
+            
+            console.log(`🔍 [FILE TREE] 노드: ${node.name}, rel_path: ${node.rel_path}, fullPath: ${fullPath}`);
 
             if (node.type === 'directory') {
 

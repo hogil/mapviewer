@@ -1422,17 +1422,19 @@ async def get_thumbnail(request: Request, path: str, size: int = THUMBNAIL_SIZE_
         if is_first_request:
             logger.info(f"=" * 80)
             logger.info(f"🎯 [첫 번째 썸네일 요청]")
-            logger.info(f"🔍 [THUMBNAIL #1] 요청 경로: {path}")
-            logger.info(f"🔍 [THUMBNAIL #1] 해석된 절대 경로: {image_path}")
+            logger.info(f"🔍 [THUMBNAIL #1] 프론트엔드 요청 경로: {path}")
             logger.info(f"🔍 [THUMBNAIL #1] ROOT_DIR: {ROOT_DIR}")
-            logger.info(f"🔍 [THUMBNAIL #1] 크기: {size}")
+            logger.info(f"🔍 [THUMBNAIL #1] ROOT_DIR 기준 절대 경로: {image_path}")
             logger.info(f"🔍 [THUMBNAIL #1] 파일 존재: {image_path.exists()}")
+            logger.info(f"🔍 [THUMBNAIL #1] 크기: {size}")
             if image_path.exists():
                 try:
                     rel_path = image_path.resolve().relative_to(ROOT_DIR.resolve())
                     logger.info(f"🔍 [THUMBNAIL #1] ROOT_DIR 기준 상대 경로: {rel_path}")
                 except ValueError:
-                    logger.info(f"🔍 [THUMBNAIL #1] ROOT_DIR 기준 상대 경로: 변환 실패 (ROOT_DIR 외부)")
+                    logger.info(f"🔍 [THUMBNAIL #1] ⚠️ ROOT_DIR 외부 파일!")
+            else:
+                logger.info(f"🔍 [THUMBNAIL #1] ❌ 파일이 존재하지 않습니다!")
             logger.info(f"=" * 80)
         
         # 파일 존재 확인
