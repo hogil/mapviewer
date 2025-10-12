@@ -11283,6 +11283,10 @@ class WaferMapViewer {
                     imgBtn.style.marginRight = '4px';
 
                     imgBtn.style.fontSize = '13px';
+                    
+                    // 🔥 ROOT_DIR 기준 절대 경로를 data 속성에 저장
+                    const imagePath = img.rel_path || `classification/${cls}/${img.name}`;
+                    imgBtn.dataset.imagePath = imagePath;
 
                     imgBtn.onclick = (e) => {
 
@@ -11290,6 +11294,8 @@ class WaferMapViewer {
 
                         const isShift = e.shiftKey;
 
+                        // 🔥 data 속성에서 전체 경로 가져오기
+                        const imagePath = imgBtn.dataset.imagePath;
                         const key = `${cls}/${img.name}`;
 
                         
@@ -11297,6 +11303,8 @@ class WaferMapViewer {
                         this.debugLog('🔷 [DEBUG] Label Explorer 이미지 클릭 시작:', {
 
                             key: key,
+                            imagePath: imagePath,
+                            rel_path: img.rel_path,
 
                             gridMode: this.gridMode,
 
@@ -11474,7 +11482,8 @@ class WaferMapViewer {
 
                                 
                                 
-                                this.loadImage(`classification/${selectedKey}`);
+                                // 🔥 ROOT_DIR 기준 절대 경로 사용
+                                this.loadImage(imagePath);
 
                             } else {
 
@@ -11500,7 +11509,18 @@ class WaferMapViewer {
 
                                 
                                 
-                                this.showGridFromLabelExplorer(labelSelection.selected);
+                                // 🔥 선택된 key들을 실제 이미지 경로로 변환
+                                const selectedImagePaths = labelSelection.selected.map(key => {
+                                    const [className, fileName] = key.split('/');
+                                    // classToImgList에서 해당 이미지 찾기
+                                    const imgList = classToImgList[className] || [];
+                                    const imgItem = imgList.find(item => item.name === fileName);
+                                    // rel_path가 있으면 사용, 없으면 기본 경로
+                                    return imgItem?.rel_path || `classification/${key}`;
+                                });
+                                
+                                console.log(`🔍 [LABEL GRID] 다중 선택 경로 변환:`, selectedImagePaths);
+                                this.showGridFromLabelExplorer(selectedImagePaths);
 
                             }
 
@@ -11639,12 +11659,19 @@ class WaferMapViewer {
                             imgBtn.style.marginRight = '4px';
 
                             imgBtn.style.fontSize = '13px';
+                            
+                            // 🔥 ROOT_DIR 기준 절대 경로를 data 속성에 저장
+                            const imagePath = img.rel_path || `classification/${cls}/${img.name}`;
+                            imgBtn.dataset.imagePath = imagePath;
 
                             imgBtn.onclick = (e) => {
 
                                 const isCtrl = e.ctrlKey || e.metaKey;
 
                                 const isShift = e.shiftKey;
+                                
+                                // 🔥 data 속성에서 전체 경로 가져오기
+                                const imagePath = imgBtn.dataset.imagePath;
 
                                 const key = `${cls}/${img.name}`;
 
@@ -11818,7 +11845,13 @@ class WaferMapViewer {
 
                                         
                                         
-                                        this.loadImage(`classification/${selectedKey}`);
+                                        // 🔥 selectedKey에서 이미지 경로 찾기
+                                        const [className, fileName] = selectedKey.split('/');
+                                        const imgList = classToImgList[className] || [];
+                                        const imgItem = imgList.find(item => item.name === fileName);
+                                        const fullImagePath = imgItem?.rel_path || `classification/${selectedKey}`;
+                                        
+                                        this.loadImage(fullImagePath);
 
                                     } else {
 
@@ -11828,7 +11861,15 @@ class WaferMapViewer {
 
                                         
                                         
-                                        this.showGridFromLabelExplorer(labelSelection.selected);
+                                        // 🔥 선택된 key들을 실제 이미지 경로로 변환
+                                        const selectedImagePaths = labelSelection.selected.map(key => {
+                                            const [className, fileName] = key.split('/');
+                                            const imgList = classToImgList[className] || [];
+                                            const imgItem = imgList.find(item => item.name === fileName);
+                                            return imgItem?.rel_path || `classification/${key}`;
+                                        });
+                                        
+                                        this.showGridFromLabelExplorer(selectedImagePaths);
 
                                     }
 
@@ -14098,13 +14139,9 @@ class WaferMapViewer {
 
 
 
-        // classification/ 접두사를 가진 경로들을 실제 이미지 경로로 변환
-
-        const actualPaths = imagePaths.map(path => {
-
-            return path.startsWith('classification/') ? path : `classification/${path}`;
-
-        });
+        // 🔥 imagePaths는 이미 ROOT_DIR 기준 절대 경로이므로 그대로 사용
+        // (예: performance_test4/classification/a/966_origin.png)
+        const actualPaths = imagePaths;
 
 
 
