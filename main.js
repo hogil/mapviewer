@@ -7141,11 +7141,10 @@ class WaferMapViewer {
         const tStart = performance.now();
         console.log(`⏱️ [LOAD START] ${fullPath} - 시작`);
 
-        // 🚀 resetView 후 예상 zoom(0.1)으로 적절한 피라미드 레벨 계산
-        const expectedZoomAfterReset = 0.1;  // resetView 후 예상 zoom (fit to screen)
-        const initialLevel = this.getBestPyramidLevel(expectedZoomAfterReset);
+        // 🚀 항상 level 1.0 (원본)으로 로드 → resetView 후 적절한 level로 교체
+        const initialLevel = 1.0;
         
-        console.log(`🚀 [LOAD] 예상 줌 ${expectedZoomAfterReset}에 맞는 Level ${initialLevel} 로드`);
+        console.log(`🚀 [LOAD] Level ${initialLevel} (원본) 로드 - resetView 후 적절한 level로 자동 교체됨`);
 
         
         
@@ -7266,6 +7265,12 @@ class WaferMapViewer {
             
             
             this.resetView(false);
+            
+            // 🎯 resetView 완료 후 적절한 피라미드 레벨로 교체
+            setTimeout(() => {
+                console.log(`🔍 [POST RESET] resetView 완료 - zoom: ${this.transform.scale.toFixed(3)} → 적절한 level로 교체`);
+                this.updatePyramidLevel();
+            }, 50);
 
             this.dom.minimapContainer.style.display = 'block';
 
