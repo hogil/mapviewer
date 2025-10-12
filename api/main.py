@@ -938,6 +938,11 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
             return cached
 
     items: List[Dict[str, str]] = []
+    
+    # 🚀 ROOT_DIR 미리 계산 (성능 최적화)
+    root_dir_str = str(ROOT_DIR.resolve())
+    root_dir_len = len(root_dir_str)
+    
     try:
         with os.scandir(target) as it:
             for entry in it:
@@ -947,18 +952,18 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
                     continue
                 typ = "directory" if entry.is_dir(follow_symlinks=False) else "file"
                 
-                # 🔥 ROOT_DIR 기준 절대 경로 계산
-                try:
-                    abs_path = Path(entry.path).resolve()
-                    rel_to_root = abs_path.relative_to(ROOT_DIR.resolve())
-                    root_relative = str(rel_to_root).replace('\\', '/')
-                except ValueError:
+                # 🚀 빠른 경로 계산: 문자열 조작으로 ROOT_DIR 제거
+                entry_path_str = str(entry.path).replace('\\', '/')
+                # ROOT_DIR 부분을 제거하여 상대 경로 생성
+                if entry_path_str.startswith(root_dir_str.replace('\\', '/')):
+                    root_relative = entry_path_str[root_dir_len:].lstrip('/')
+                else:
                     root_relative = name
                 
                 items.append({
                     "name": name, 
                     "type": typ, 
-                    "path": str(entry.path).replace('\\', '/'),
+                    "path": entry_path_str,
                     "root_relative": root_relative  # ROOT_DIR 기준 절대 경로
                 })
         directories = [x for x in items if x["type"] == "directory"]
