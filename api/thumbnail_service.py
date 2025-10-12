@@ -328,6 +328,32 @@ class ThumbnailService:
             "average_generation_time": avg_generation_time
         }
 
+    def clear_cache(self) -> Dict[str, Any]:
+        """썸네일 캐시 완전 삭제"""
+        try:
+            # 캐시 매니저에서 썸네일 관련 캐시 삭제
+            cache_manager.clear_thumbnail_cache()
+            
+            # 성능 메트릭 초기화
+            self.generation_count = 0
+            self.cache_hits = 0
+            self.total_generation_time = 0.0
+            
+            return {
+                "success": True,
+                "message": "썸네일 캐시가 완전히 삭제되었습니다",
+                "cleared": {
+                    "cache_manager": True,
+                    "metrics": True
+                }
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "cleared": {}
+            }
+
 
 # 시스템 정보 API 추가
 def get_system_username() -> Dict[str, Any]:

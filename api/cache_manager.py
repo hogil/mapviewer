@@ -249,6 +249,10 @@ class CacheManager:
         self.thumb_cache.clear()
         self.file_cache.clear()
     
+    def clear_thumbnail_cache(self) -> None:
+        """썸네일 캐시만 초기화"""
+        self.thumb_cache.clear()
+    
     def get_global_stats(self) -> Dict[str, Any]:
         """전체 캐시 통계"""
         uptime = time.time() - self._start_time

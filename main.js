@@ -854,7 +854,7 @@ class WaferMapViewer {
 
         this.gridThumbSize = DEFAULT_THUMB_SIZE;
 
-        this.currentFolderPath = '';
+        this.currentFolderPath = null;  // 🔥 ROOT_DIR로 초기화 (init에서 설정)
 
         this.selectedFolderForBrowser = '';
 
@@ -1506,6 +1506,10 @@ class WaferMapViewer {
 
             if (result.success) {
 
+                // 🔥 current_folder 업데이트 (검색 제한용)
+                this.currentFolderPath = result.current_folder;
+                console.info('🔍 [CHANGE_FOLDER DEBUG] currentFolderPath:', this.currentFolderPath);
+
                 // 폴더 변경 시 선택된 이미지들과 그리드 상태 초기화
 
                 this.selectedImages = [];
@@ -1526,11 +1530,23 @@ class WaferMapViewer {
 
                 
                 
-                // 단일 이미지 모드만 숨기기 (그리드는 유지)
+                // 🔥 그리드 화면 완전 초기화 (제품 선택 시, 상단 패널 유지)
 
-                // this.hideGrid(); // 제품 선택 시 그리드 숨기지 않음
+                this.hideGrid(false);
 
                 this.hideImage();
+
+                
+                
+                // 🔥 썸네일 캐시 완전 삭제 (404/500 오류 방지)
+
+                if (this.thumbnailManager) {
+
+                    this.thumbnailManager.cache.clear();
+
+                    this.thumbnailManager.abortAll();
+
+                }
 
                 
                 
@@ -4080,6 +4096,48 @@ class WaferMapViewer {
 
             
             
+            // 🔥 검색 전 모든 썸네일 캐시 강력 초기화 (404/500 오류 방지)
+
+            if (this.thumbnailManager) {
+
+                this.thumbnailManager.cache.clear();
+
+                this.thumbnailManager.abortAll();
+
+            }
+
+            
+            
+            // 🔥 그리드 썸네일 DOM 요소들도 초기화 (이전 검색 결과 완전 제거)
+
+            const grid = document.getElementById('image-grid');
+
+            if (grid) {
+
+                // 모든 이미지 URL 해제 (메모리 누수 방지)
+
+                const images = grid.querySelectorAll('.grid-thumb-img');
+
+                images.forEach(img => {
+
+                    if (img.src && img.src.startsWith('blob:')) {
+
+                        URL.revokeObjectURL(img.src);
+
+                    }
+
+                    img.src = ''; // 빈 URL로 설정
+
+                });
+
+                // 그리드 내용 완전 초기화
+
+                grid.innerHTML = '';
+
+            }
+
+            
+            
             // 전역 인덱스 미로딩 시 즉시 로드하여 사용자 요청 우선
 
             if (!this.allFilesIndexLoaded) {
@@ -4095,12 +4153,20 @@ class WaferMapViewer {
             let matchedImages = [];
 
             try {
+                // 🔥 검색은 서버의 current_folder 기준으로 수행 (folder 파라미터 불필요)
+                console.info('🔍 [SEARCH DEBUG] currentFolderPath:', this.currentFolderPath);
+                console.info('🔍 [SEARCH DEBUG] 검색어:', fileQuery);
+                const searchUrl = `/api/search?q=${encodeURIComponent(fileQuery)}`;
 
-                const res = await fetch(`/api/search?q=${encodeURIComponent(fileQuery)}`);
+                const res = await fetch(searchUrl);
 
                 if (res.ok) {
 
                     const data = await res.json();
+                    console.info('🔍 [SEARCH DEBUG] 검색 결과 수:', data.results?.length || 0);
+                    if (data.results?.length > 0) {
+                        console.info('🔍 [SEARCH DEBUG] 첫 번째 결과:', data.results[0]);
+                    }
 
                     if (data && data.success && Array.isArray(data.results)) {
 
@@ -6885,13 +6951,13 @@ class WaferMapViewer {
 
 
 
-        // 🚀 1단계: 가장 작은 피라미드 레벨(0.2)부터 로드 (빠른 초기 표시)
+        // 🚀 1단계: 현재 줌 레벨에 맞는 적정 피라미드 레벨로 로드
 
-        const initialLevel = 0.2;  // 가장 작은 레벨부터 시작
+        const initialLevel = this.getBestPyramidLevel(this.zoom);  // 실제 줌 값 사용
 
 
 
-        console.log(`🚀 [FAST LOAD] Level ${initialLevel} 로드 시작 - 원본 크기 조회 없이 즉시 표시`);
+        console.log(`🚀 [FAST LOAD] Level ${initialLevel} 로드 시작 (줌: ${(this.zoom * 100).toFixed(0)}%) - 원본 크기 조회 없이 즉시 표시`);
 
         
         
@@ -7829,7 +7895,10 @@ class WaferMapViewer {
         
         
         // 폴더 관련 이벤트 리스너
-        // subfolderSelect는 더 이상 존재하지 않음 (product-search-input으로 대체됨)
+        // subfolder-select 이벤트 추가 (제품 선택)
+        if (this.dom.subfolderSelect) {
+            this.dom.subfolderSelect.addEventListener('change', (e) => this.onSubfolderSelect(e));
+        }
         
         if (this.dom.productSearchInput) {
             this.dom.productSearchInput.addEventListener('focus', () => this.showProductSearchDropdown());
@@ -12683,7 +12752,7 @@ class WaferMapViewer {
 
 
 
-    hideGrid() {
+    hideGrid(hideControls = true) {
 
         this.debugLog('🔷 [DEBUG] hideGrid() 호출됨');
 
@@ -12764,15 +12833,19 @@ class WaferMapViewer {
 
 
 
-        // 컨트롤 전환
+        // 컨트롤 전환 (hideControls가 true일 때만)
 
-        const gridControls = document.getElementById('grid-controls');
+        if (hideControls) {
 
-        if (gridControls) gridControls.style.display = 'none';
+            const gridControls = document.getElementById('grid-controls');
 
-        const viewControls = document.querySelector('.view-controls');
+            if (gridControls) gridControls.style.display = 'none';
 
-        if (viewControls) viewControls.style.display = 'flex';
+            const viewControls = document.querySelector('.view-controls');
+
+            if (viewControls) viewControls.style.display = 'flex';
+
+        }
 
 
 
@@ -12817,27 +12890,30 @@ class WaferMapViewer {
         try {
             this.debugLog('🧹 PAR 캐시 초기화 시작...');
     
-            // 서버 캐시 초기화
-            const response = await fetch('/api/cache', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
-            });
-    
-            if (!response.ok) {
-                const errorText = await response.text();
-                console.error('❌ PAR 캐시 초기화 실패:', response.status, errorText);
-                return false;
-            }
-    
-            const result = await response.json();
-            this.debugLog('✅ 서버 PAR 캐시 초기화 완료:', result);
-    
-            // 🔥 프론트엔드 캐시 초기화
+            // 🔥 프론트엔드 캐시 먼저 초기화 (서버 오류와 무관하게)
             this.classToImgListCache = {};
     
             if (this.thumbnailManager) {
                 this.thumbnailManager.cache.clear();
                 this.thumbnailManager.abortAll();
+            }
+    
+            // 서버 캐시 초기화 (실패해도 계속 진행)
+            try {
+                const response = await fetch('/api/cache', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+        
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.warn('⚠️ 서버 캐시 초기화 실패 (프론트엔드 캐시는 삭제됨):', response.status, errorText);
+                } else {
+                    const result = await response.json();
+                    this.debugLog('✅ 서버 PAR 캐시 초기화 완료:', result);
+                }
+            } catch (serverError) {
+                console.warn('⚠️ 서버 캐시 초기화 중 오류 (프론트엔드 캐시는 삭제됨):', serverError);
             }
     
             // 🔥 UI 새로고침
@@ -12861,9 +12937,9 @@ class WaferMapViewer {
 
         try {
 
-            this.debugLog('🧹 서버 캐시 초기화 시작...');
+            this.debugLog('🧹 전체 캐시 초기화 시작...');
 
-            const response = await fetch('/api/cache', {
+            const response = await fetch('/api/cache/all', {
 
                 method: 'POST',
 
@@ -12877,7 +12953,7 @@ class WaferMapViewer {
 
                 const errorText = await response.text();
 
-                console.error('❌ 캐시 초기화 실패:', response.status, errorText);
+                console.error('❌ 전체 캐시 초기화 실패:', response.status, errorText);
 
                 alert(`캐시 초기화 실패: ${response.status} ${response.statusText}\n${errorText}`);
 
@@ -12889,9 +12965,16 @@ class WaferMapViewer {
             
             const result = await response.json();
 
-            this.debugLog('✅ 서버 캐시 초기화 완료:', result);
+            this.debugLog('✅ 전체 캐시 초기화 완료:', result);
 
             
+            
+            // 🔥 삭제 전 항목 개수 미리 계산
+            const dirCacheCount = this.classToImgListCache ? Object.keys(this.classToImgListCache).length : 0;
+            const thumbnailCacheCount = this.thumbnailManager ? this.thumbnailManager.cache.size : 0;
+            const pyramidCacheCount = this.pyramidLevels ? Object.keys(this.pyramidLevels).length : 0;
+            
+            const totalDeletedItems = dirCacheCount + thumbnailCacheCount + pyramidCacheCount;
             
             // 🔥 프론트엔드 캐시도 초기화
 
@@ -12915,7 +12998,7 @@ class WaferMapViewer {
 
             
             
-            // 🔥 추가: 파일 인덱스 재구축 요청
+            // 🔥 파일 인덱스 재구축 요청
 
             try {
 
@@ -12931,7 +13014,7 @@ class WaferMapViewer {
 
             
             
-            alert(`캐시 초기화 완료!\n\n초기화된 캐시:\n${result.cleared_caches.join('\n')}`);
+            alert(`전체 캐시 초기화 완료!\n\n🗑️ 삭제된 항목: ${totalDeletedItems}개\n• 클래스-이미지 캐시: ${dirCacheCount}개\n• 썸네일 캐시: ${thumbnailCacheCount}개\n• 피라미드 캐시: ${pyramidCacheCount}개\n\n초기화된 캐시:\n${result.cleared_caches.join('\n')}`);
 
             return true;
             

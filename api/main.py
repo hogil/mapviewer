@@ -3,7 +3,7 @@ L3Tracker - Wafer Map Viewer API (HTTPS, Pretty Table Logs, Noise-free)
 """
 
 # ======================== Imports ========================
-import os, re, sys, json, time, shutil, asyncio, logging, logging.config
+import os, re, sys, json, time, shutil, asyncio, logging, logging.config, hashlib
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
 from collections import OrderedDict
@@ -25,6 +25,7 @@ import http.client
 import urllib.parse
 
 from .access_logger import logger_instance
+from .thumbnail_service import ThumbnailService
 
 # SAML
 try:
@@ -241,9 +242,20 @@ ROOT_DIR = config.ROOT_DIR
 THUMBNAIL_DIR = config.THUMBNAIL_DIR
 SUPPORTED_EXTENSIONS = set(ext.lower() for ext in config.SUPPORTED_EXTS)
 
+# 🔥 현재 폴더 변수 (검색 제한용)
+current_folder = ROOT_DIR
+
 THUMBNAIL_FORMAT = config.THUMBNAIL_FORMAT
 THUMBNAIL_QUALITY = config.THUMBNAIL_QUALITY
 THUMBNAIL_SIZE_DEFAULT = config.THUMBNAIL_SIZE_DEFAULT
+
+# ======================== Service Instances ========================
+thumbnail_service = ThumbnailService(
+    root_dir=ROOT_DIR,
+    thumbnail_dir=THUMBNAIL_DIR,
+    thumbnail_format=THUMBNAIL_FORMAT,
+    thumbnail_quality=THUMBNAIL_QUALITY
+)
 
 IO_THREADS = config.IO_THREADS
 THUMBNAIL_SEM_SIZE = config.THUMBNAIL_SEM
@@ -776,9 +788,10 @@ def is_supported_image(path: Path) -> bool:
     return path.suffix.lower() in SUPPORTED_EXTENSIONS
 
 def get_thumbnail_path(image_path: Path, size: Tuple[int, int]) -> Path:
-    relative_path = image_path.relative_to(ROOT_DIR)
-    thumbnail_name = f"{relative_path.stem}_{size[0]}x{size[1]}.{THUMBNAIL_FORMAT.lower()}"
-    return THUMBNAIL_DIR / relative_path.parent / thumbnail_name
+    # 🔥 절대 경로를 해시로 변환하여 썸네일 경로 생성
+    path_hash = hashlib.md5(str(image_path.resolve()).encode()).hexdigest()[:16]
+    thumbnail_name = f"{path_hash}_{size[0]}x{size[1]}.{THUMBNAIL_FORMAT.lower()}"
+    return THUMBNAIL_DIR / thumbnail_name
 
 def safe_resolve_path(path: Optional[str]) -> Path:
     if not path: return ROOT_DIR
@@ -974,37 +987,97 @@ async def build_file_index_background():
 
 # ======================== Thumbnails / Common ========================
 def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple[int, int]):
-    thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
-    with Image.open(image_path) as img:
-        img.thumbnail(size, Image.Resampling.LANCZOS)
-        img.save(thumbnail_path, THUMBNAIL_FORMAT.upper(), quality=THUMBNAIL_QUALITY, optimize=True)
+    try:
+        # 썸네일 디렉토리 생성
+        thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # 이미지 열기 및 썸네일 생성
+        with Image.open(image_path) as img:
+            # 원본 이미지가 이미 작으면 복사만
+            if img.width <= size[0] and img.height <= size[1]:
+                img.save(
+                    thumbnail_path, 
+                    THUMBNAIL_FORMAT.upper(), 
+                    quality=THUMBNAIL_QUALITY, 
+                    optimize=True
+                )
+            else:
+                # 썸네일 생성 (고품질 리샘플링)
+                img.thumbnail(size, Image.Resampling.LANCZOS)
+                img.save(
+                    thumbnail_path, 
+                    THUMBNAIL_FORMAT.upper(), 
+                    quality=THUMBNAIL_QUALITY, 
+                    optimize=True
+                )
+    except Exception as e:
+        logger.error(f"동기 썸네일 생성 실패: {image_path} -> {thumbnail_path}, 오류: {e}")
+        raise
 
-async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Path:
-    thumb = get_thumbnail_path(image_path, size)
-    key = f"{thumb}|{size[0]}x{size[1]}"
+async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optional[Path]:
+    try:
+        thumb = get_thumbnail_path(image_path, size)
+        key = f"{thumb}|{size[0]}x{size[1]}"
 
-    if not image_path.exists():
-        raise FileNotFoundError(f"원본 이미지 파일이 존재하지 않습니다: {image_path}")
+        if not image_path.exists():
+            logger.warning(f"원본 이미지 파일이 존재하지 않습니다: {image_path}")
+            return None
 
-    image_mtime = image_path.stat().st_mtime
+        try:
+            image_mtime = image_path.stat().st_mtime
+        except Exception as e:
+            logger.warning(f"이미지 파일 정보 읽기 실패: {image_path}, 오류: {e}")
+            return None
 
-    cached = False
-    if thumb.exists() and thumb.stat().st_size > 0:
-        if thumb.stat().st_mtime >= image_mtime:    cached = THUMB_STAT_CACHE.get(key)
-    if cached:
-        THUMB_STAT_CACHE.set(key, True);  return thumb
+        # 캐시 확인
+        cached = False
+        if thumb.exists() and thumb.stat().st_size > 0:
+            try:
+                if thumb.stat().st_mtime >= image_mtime:
+                    cached = THUMB_STAT_CACHE.get(key)
+            except Exception:
+                cached = False
+        if cached:
+            THUMB_STAT_CACHE.set(key, True)
+            return thumb
 
-    async with THUMBNAIL_SEM:
-        if thumb.exists() and thumb.stat().st_size > 0 and thumb.stat().st_mtime >= image_mtime:
-            THUMB_STAT_CACHE.set(key, True);  return thumb
-        if thumb.exists():
-            try: thumb.unlink()
-            except Exception as e: logger.warning(f"기존 썸네일 삭제 실패: {thumb}, 오류: {e}")
-        await asyncio.get_running_loop().run_in_executor(
-            ThreadPoolExecutor(max_workers=1), _generate_thumbnail_sync, image_path, thumb, size
-        )
-        THUMB_STAT_CACHE.set(key, True)
-        return thumb
+        async with THUMBNAIL_SEM:
+            # 다시 한번 확인 (레이스 컨디션 방지)
+            if thumb.exists() and thumb.stat().st_size > 0:
+                try:
+                    if thumb.stat().st_mtime >= image_mtime:
+                        THUMB_STAT_CACHE.set(key, True)
+                        return thumb
+                except Exception:
+                    pass
+            
+            # 기존 썸네일 삭제 (구버전인 경우)
+            if thumb.exists():
+                try:
+                    thumb.unlink()
+                except Exception as e:
+                    logger.warning(f"기존 썸네일 삭제 실패: {thumb}, 오류: {e}")
+            
+            # 새 썸네일 생성
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    ThreadPoolExecutor(max_workers=1), _generate_thumbnail_sync, image_path, thumb, size
+                )
+                
+                # 생성된 썸네일 확인
+                if thumb.exists() and thumb.stat().st_size > 0:
+                    THUMB_STAT_CACHE.set(key, True)
+                    return thumb
+                else:
+                    logger.warning(f"썸네일 생성 후 파일이 존재하지 않거나 크기가 0: {thumb}")
+                    return None
+            except Exception as e:
+                logger.error(f"썸네일 생성 실패: {image_path}, 오류: {e}")
+                return None
+                
+    except Exception as e:
+        logger.error(f"썸네일 생성 중 예외 발생: {image_path}, 오류: {e}")
+        return None
 
 def maybe_304(request: Request, st) -> Optional[Response]:
     etag = compute_etag(st)
@@ -1165,7 +1238,15 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
 @app.get("/api/image")
 async def get_image(request: Request, path: str, level: Optional[float] = None):
     try:
-        image_path = safe_resolve_path(path)
+        # 🔥 절대 경로를 직접 사용 (ROOT_DIR 내 경로)
+        image_path = Path(path)
+        
+        # ROOT_DIR 내 경로인지 보안 검증
+        try:
+            image_path.resolve().relative_to(ROOT_DIR.resolve())
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
+        
         if not image_path.exists() or not image_path.is_file():
             raise HTTPException(status_code=404, detail="Image not found")
 
@@ -1264,21 +1345,100 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
 @app.get("/api/thumbnail")
 async def get_thumbnail(request: Request, path: str, size: int = THUMBNAIL_SIZE_DEFAULT):
     try:
-        image_path = safe_resolve_path(path)
+        # 🔥 절대 경로를 직접 사용
+        image_path = Path(path).resolve()
+        
+        # 🔍 썸네일 요청 로그
+        logger.info(f"🔍 [THUMBNAIL DEBUG] 요청 경로: {path}")
+        logger.info(f"🔍 [THUMBNAIL DEBUG] 절대 경로: {image_path}")
+        logger.info(f"🔍 [THUMBNAIL DEBUG] 크기: {size}")
+        
+        # 파일 존재 확인
         if not image_path.exists() or not image_path.is_file():
+            logger.warning(f"이미지 파일이 존재하지 않습니다: {image_path}")
             raise HTTPException(status_code=404, detail="Image not found")
-        # 이미지가 아니면 원본 파일을 썸네일로 제공하지 않음. 단, 확장자 오인으로 200을 주지 않도록 415 처리
+        
+        # 이미지 형식 확인
         if not is_supported_image(image_path):
+            logger.warning(f"지원하지 않는 이미지 형식: {image_path}")
             raise HTTPException(status_code=415, detail="Unsupported image format")
-        thumb = await generate_thumbnail(image_path, (size, size))
-        st = thumb.stat()
-        resp_304 = maybe_304(request, st)
-        if resp_304: return resp_304
-        headers = {"Cache-Control": "public, max-age=604800, immutable", "ETag": compute_etag(st)}
-        return FileResponse(thumb, headers=headers)
+        
+        try:
+            # 썸네일 생성 시도
+            thumb = await generate_thumbnail(image_path, (size, size))
+            if thumb and thumb.exists():
+                st = thumb.stat()
+                resp_304 = maybe_304(request, st)
+                if resp_304: return resp_304
+                headers = {"Cache-Control": "public, max-age=604800, immutable", "ETag": compute_etag(st)}
+                return FileResponse(thumb, headers=headers)
+            else:
+                # 썸네일 생성 실패 시 원본 이미지 제공
+                logger.warning(f"썸네일 생성 실패, 원본 이미지 제공: {image_path}")
+                return await get_image(request, path)
+        except Exception as thumb_error:
+            logger.warning(f"썸네일 생성 실패, 원본 이미지 제공: {thumb_error}")
+            return await get_image(request, path)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"썸네일 제공 실패: {e}")
-        return await get_image(request, path)
+        raise HTTPException(status_code=500, detail=f"Thumbnail generation failed: {str(e)}")
+
+class PreloadRequest(BaseModel):
+    paths: List[str] = Field(..., description="썸네일을 미리 생성할 이미지 경로 목록")
+    size: int = Field(THUMBNAIL_SIZE_DEFAULT, description="썸네일 크기")
+
+@app.post("/api/thumbnail/preload")
+async def preload_thumbnails(request: Request, preload_req: PreloadRequest):
+    """썸네일 배치 미리 생성"""
+    try:
+        valid_paths = []
+        for path_str in preload_req.paths:
+            try:
+                image_path = Path(path_str)
+                # ROOT_DIR 내 경로인지 보안 검증
+                try:
+                    image_path.resolve().relative_to(ROOT_DIR.resolve())
+                except ValueError:
+                    continue
+                
+                if image_path.exists() and image_path.is_file() and is_supported_image(image_path):
+                    valid_paths.append(path_str)
+            except Exception:
+                continue
+        
+        if not valid_paths:
+            return {"success": True, "results": [], "message": "유효한 이미지 경로가 없습니다"}
+        
+        # 배치 썸네일 생성
+        results = []
+        for path_str in valid_paths[:20]:  # 최대 20개로 제한
+            try:
+                image_path = Path(path_str)
+                thumb = await generate_thumbnail(image_path, (preload_req.size, preload_req.size))
+                results.append({
+                    "path": path_str,
+                    "success": thumb is not None and thumb.exists(),
+                    "thumbnail": str(thumb) if thumb else None
+                })
+            except Exception as e:
+                results.append({
+                    "path": path_str,
+                    "success": False,
+                    "error": str(e)
+                })
+        
+        return {
+            "success": True,
+            "results": results,
+            "total_requested": len(preload_req.paths),
+            "valid_paths": len(valid_paths),
+            "processed": len(results)
+        }
+    except Exception as e:
+        logger.exception(f"썸네일 preload 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"Preload failed: {str(e)}")
 
 @app.get("/api/search")
 async def search_files(q: str = Query(..., description="파일명 검색(대소문자 무시, 부분일치)"),
@@ -1291,19 +1451,28 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
         goal = offset + limit
         bucket: List[str] = []
 
-        with FILE_INDEX_LOCK:
-            items = list(FILE_INDEX.items())
-        if items:
-            for rel, meta in items:
-                if query in meta["name_lower"]:
-                    bucket.append(rel)
-                    if len(bucket) >= goal: break
+        # 🔥 current_folder 전역 변수 사용
+        global current_folder
+        search_root = current_folder
+        
+        # 🔍 디버그: 검색 폴더 확인
+        logger.info(f"🔍 [SEARCH DEBUG] current_folder: {current_folder}")
+        logger.info(f"🔍 [SEARCH DEBUG] search_root: {search_root}")
+        logger.info(f"🔍 [SEARCH DEBUG] ROOT_DIR: {ROOT_DIR}")
+        logger.info(f"🔍 [SEARCH DEBUG] 검색어: {query}")
+        logger.info(f"🔍 [SEARCH DEBUG] current_folder == ROOT_DIR: {current_folder.resolve() == ROOT_DIR.resolve()}")
+        logger.info(f"🔍 [SEARCH DEBUG] limit: {limit}, offset: {offset}")
 
-        if len(bucket) < goal:
-            seen = set(bucket); need = goal - len(bucket)
-            def _scan():
-                nonlocal need
-                for root, dirs, files in os.walk(ROOT_DIR):
+        # 🔥 썸네일 캐시 초기화 (매 검색마다)
+        THUMB_STAT_CACHE.clear()
+        logger.info("🔍 [SEARCH DEBUG] 썸네일 캐시 초기화 완료")
+
+        # 🔥 current_folder가 ROOT_DIR과 다른 경우에만 필터링 적용
+        if current_folder.resolve() != ROOT_DIR.resolve():
+            # 하위 폴더에서 검색하는 경우 - 직접 파일 시스템 스캔 (더 빠름)
+            logger.info(f"🔍 [SEARCH DEBUG] 하위 폴더 검색: {search_root}")
+            try:
+                for root, dirs, files in os.walk(search_root):
                     for skip in list(SKIP_DIRS):
                         if skip in dirs: dirs.remove(skip)
                     for fn in files:
@@ -1312,24 +1481,77 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
                         low = fn.lower()
                         if query not in low: continue
                         full = Path(root) / fn
-                        try: rel = str(full.relative_to(ROOT_DIR)).replace("\\", "/")
-                        except Exception: continue
-                        if rel in seen: continue
-                        seen.add(rel); bucket.append(rel)
+                        # 🔥 ROOT_DIR 기준 절대 경로로 변환
                         try:
-                            st = full.stat()
-                            rec = {"name_lower": low, "size": st.st_size, "modified": st.st_mtime}
-                            with FILE_INDEX_LOCK: FILE_INDEX[rel] = rec
-                        except Exception:
-                            pass
-                        need -= 1
-                        if need <= 0: return
-                    time.sleep(0.001)
-            if need > 0:
-                await asyncio.get_running_loop().run_in_executor(ThreadPoolExecutor(max_workers=1), _scan)
+                            rel_path = full.relative_to(ROOT_DIR)
+                            abs_path = str(ROOT_DIR / rel_path).replace("\\", "/")
+                            bucket.append(abs_path)
+                        except ValueError:
+                            # ROOT_DIR 밖의 파일이면 건너뛰기
+                            continue
+                        if len(bucket) >= goal: break
+                    if len(bucket) >= goal: break
+            except Exception as e:
+                logger.error(f"하위 폴더 검색 실패: {e}")
+        else:
+            # ROOT_DIR에서 검색하는 경우 - 인덱스 사용
+            logger.info(f"🔍 [SEARCH DEBUG] ROOT_DIR 전체 검색")
+            with FILE_INDEX_LOCK:
+                items = list(FILE_INDEX.items())
+            if items:
+                for rel, meta in items:
+                    if query in meta["name_lower"]:
+                        file_path = ROOT_DIR / rel
+                        # 🔥 ROOT_DIR 기준 절대 경로 반환
+                        abs_path = str(file_path.resolve()).replace("\\", "/")
+                        bucket.append(abs_path)
+                        if len(bucket) >= goal: break
+
+            # 인덱스로 부족하면 파일 시스템 스캔으로 보완
+            if len(bucket) < goal:
+                seen = set(bucket)
+                need = goal - len(bucket)
+                def _scan():
+                    nonlocal need
+                    for root, dirs, files in os.walk(ROOT_DIR):
+                        for skip in list(SKIP_DIRS):
+                            if skip in dirs: dirs.remove(skip)
+                        for fn in files:
+                            ext = os.path.splitext(fn)[1].lower()
+                            if ext not in SUPPORTED_EXTENSIONS: continue
+                            low = fn.lower()
+                            if query not in low: continue
+                            full = Path(root) / fn
+                            try: 
+                                # 🔥 ROOT_DIR 기준 절대 경로 반환
+                                rel = str(full.relative_to(ROOT_DIR)).replace("\\", "/")
+                                abs_path = str(ROOT_DIR / rel).replace("\\", "/")
+                            except Exception: continue
+                            if rel in seen: continue
+                            seen.add(rel)
+                            bucket.append(abs_path)
+                            try:
+                                st = full.stat()
+                                rec = {"name_lower": low, "size": st.st_size, "modified": st.st_mtime}
+                                with FILE_INDEX_LOCK: FILE_INDEX[rel] = rec
+                            except Exception:
+                                pass
+                            need -= 1
+                            if need <= 0: return
+                if need > 0:
+                    await asyncio.get_running_loop().run_in_executor(ThreadPoolExecutor(max_workers=1), _scan)
 
         results = bucket[offset: offset + limit]
-        return {"success": True, "results": results, "offset": offset, "limit": limit}
+        
+        # 🔍 디버그: 검색 결과 확인
+        logger.info(f"🔍 [SEARCH DEBUG] 검색 결과 수: {len(bucket)}")
+        logger.info(f"🔍 [SEARCH DEBUG] 반환되는 파일 수: {len(results)}")
+        if bucket:
+            logger.info(f"🔍 [SEARCH DEBUG] 첫 번째 결과: {bucket[0]}")
+            if len(bucket) > 1:
+                logger.info(f"🔍 [SEARCH DEBUG] 마지막 결과: {bucket[-1]}")
+        
+        return {"success": True, "results": results, "offset": offset, "limit": limit, "total": len(bucket)}
     except Exception as e:
         logger.exception(f"검색 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1861,12 +2083,62 @@ async def get_main_js():
 
 # ---------------- Folder / Lifecycle ----------------
 @app.get("/api/current-folder")
-async def get_current_folder(): return {"current_folder": str(ROOT_DIR)}
+async def get_current_folder(): 
+    global current_folder
+    return {"current_folder": str(current_folder)}
 
 @app.get("/api/root-folder")
 async def get_root_folder():
     from .config import ROOT_DIR as ORIGINAL_ROOT_DIR
     return {"root_folder": str(ORIGINAL_ROOT_DIR)}
+
+@app.post("/api/cache")
+async def clear_cache(request: Request):
+    """캐시 삭제 (file index 제외)"""
+    try:
+        # PAR 캐시 초기화 (썸네일, 디렉토리 리스트)
+        DIRLIST_CACHE.clear()
+        THUMB_STAT_CACHE.clear()
+        
+        # 🔥 썸네일 서비스 캐시도 삭제
+        thumbnail_result = thumbnail_service.clear_cache()
+        
+        # 전역 인덱스는 유지 (file index 제외)
+        log_access_row(tag="INFO", note="PAR 캐시 초기화 완료 (파일 인덱스 유지)")
+        
+        return {
+            "success": True, 
+            "message": "캐시가 초기화되었습니다 (파일 인덱스 유지)",
+            "cleared_caches": ["디렉토리 리스트 캐시", "썸네일 통계 캐시", "썸네일 서비스 캐시"],
+            "thumbnail_service": thumbnail_result
+        }
+    except Exception as e:
+        logger.error(f"캐시 초기화 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"캐시 초기화 실패: {str(e)}")
+
+@app.post("/api/cache/all")
+async def clear_all_cache(request: Request):
+    """전체 캐시 삭제 (file index 포함)"""
+    try:
+        # 모든 캐시 초기화
+        DIRLIST_CACHE.clear()
+        THUMB_STAT_CACHE.clear()
+        
+        # 전역 인덱스도 초기화
+        global INDEX_READY, INDEX_BUILDING
+        INDEX_READY = False
+        INDEX_BUILDING = False
+        
+        log_access_row(tag="INFO", note="전체 캐시 초기화 완료 (파일 인덱스 포함)")
+        
+        return {
+            "success": True, 
+            "message": "모든 캐시가 초기화되었습니다",
+            "cleared_caches": ["디렉토리 리스트 캐시", "썸네일 통계 캐시", "파일 인덱스"]
+        }
+    except Exception as e:
+        logger.error(f"전체 캐시 초기화 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"전체 캐시 초기화 실패: {str(e)}")
 
 @app.post("/api/change-folder")
 async def change_folder(request: Request):
@@ -1878,11 +2150,19 @@ async def change_folder(request: Request):
         if not new_path_obj.exists(): raise HTTPException(status_code=404, detail="폴더가 존재하지 않습니다")
         if not new_path_obj.is_dir(): raise HTTPException(status_code=400, detail="유효한 폴더가 아닙니다")
 
-        global ROOT_DIR, THUMBNAIL_DIR, LABELS_DIR, LABELS_FILE
-        ROOT_DIR = new_path_obj
-        THUMBNAIL_DIR = ROOT_DIR / "thumbnails"
-        LABELS_DIR = ROOT_DIR / "classification"
-        LABELS_FILE = LABELS_DIR / "labels.json"
+        # 🔥 ROOT_DIR은 절대 변경하지 않음! current_folder만 변경
+        global current_folder
+        current_folder = new_path_obj
+        
+        # 🔍 디버그: 폴더 변경 확인
+        logger.info(f"🔍 [CHANGE_FOLDER DEBUG] ROOT_DIR (변경 안됨): {ROOT_DIR}")
+        logger.info(f"🔍 [CHANGE_FOLDER DEBUG] 새 current_folder: {current_folder}")
+        logger.info(f"🔍 [CHANGE_FOLDER DEBUG] THUMBNAIL_DIR (변경 안됨): {THUMBNAIL_DIR}")
+        logger.info(f"🔍 [CHANGE_FOLDER DEBUG] 변경 전 경로: {new_path}")
+        logger.info(f"🔍 [CHANGE_FOLDER DEBUG] 변경 후 절대 경로: {new_path_obj}")
+        
+        # 🔥 ROOT_DIR과 THUMBNAIL_DIR은 절대 변경하지 않음
+        # 썸네일과 라벨은 원래 ROOT_DIR 기준으로 관리
 
         DIRLIST_CACHE.clear();  THUMB_STAT_CACHE.clear()
         global INDEX_READY, INDEX_BUILDING
@@ -1894,7 +2174,12 @@ async def change_folder(request: Request):
             log_access_row(tag="INFO", note=f"새 폴더의 classification 폴더 생성: {classification_dir}")
 
         _labels_load()
-        return {"success": True, "message": f"폴더가 '{new_path}'로 변경되었습니다", "new_path": str(ROOT_DIR)}
+        return {
+            "success": True, 
+            "message": f"검색 폴더가 '{new_path}'로 변경되었습니다", 
+            "root_dir": str(ROOT_DIR),
+            "current_folder": str(current_folder)
+        }
     except Exception as e:
         logger.error(f"폴더 변경 실패: {e}")
         raise HTTPException(status_code=500, detail=f"폴더 변경 실패: {str(e)}")
@@ -1941,6 +2226,11 @@ async def startup_event():
     bootlog.info(f"🔌 포트: {port_to_log} ({scheme})")
     bootlog.info(f"📁 ROOT_DIR: {config.ROOT_DIR}")
     bootlog.info(f"🔧 PROJECT_ROOT: {os.getenv('PROJECT_ROOT', 'NOT SET')}")
+    
+    # 🔍 서버 시작 시 current_folder 정보 출력
+    bootlog.info(f"🔍 [STARTUP] current_folder: {current_folder}")
+    bootlog.info(f"🔍 [STARTUP] THUMBNAIL_DIR: {THUMBNAIL_DIR}")
+    
     bootlog.info("=" * 50)
     print_access_header_once()
 
@@ -1990,6 +2280,11 @@ if __name__ == "__main__":
     logger.info(f"[SSL] HTTPS 모드 활성화: 포트 {config.HTTPS_PORT}")
     logger.info(f"[SSL] CERTFILE={cert_path}")
     logger.info(f"[SSL] KEYFILE={key_path}")
+    
+    # 🔍 서버 시작 시 current_folder 정보 출력
+    logger.info(f"🔍 [SERVER START] ROOT_DIR: {ROOT_DIR}")
+    logger.info(f"🔍 [SERVER START] current_folder: {current_folder}")
+    logger.info(f"🔍 [SERVER START] THUMBNAIL_DIR: {THUMBNAIL_DIR}")
 
     # 워커 수 결정 로직
     # - 환경변수 UVICORN_WORKERS가 있으면 그대로 사용
