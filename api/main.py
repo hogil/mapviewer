@@ -688,12 +688,23 @@ async def no_store_for_labels_and_classes(request: Request, call_next):
 # ---- 액세스 테이블 로그 ----
 class AccessTrackingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # 자동 로그인 강제: 세션 쿠키가 없고 HTML 페이지 접근 시 SAML 로그인으로 리다이렉트
+        # 자동 로그인 강제: 세션 쿠키가 없고 HTML 페이지 접근 시 IdP SSO로 직접 리다이렉트
         if AUTO_LOGIN:
             path = request.url.path
             # 정적/JS/API 는 제외하고, 루트/페이지 접근만 리다이렉트
             if not path.startswith(('/api/', '/js/', '/static/', '/saml/')):
                 if not request.cookies.get('session_user'):
+                    # settings.json에서 IdP SSO URL 읽기
+                    try:
+                        base_settings, _ = _load_saml_files()
+                        idp_sso_url = base_settings.get('idp', {}).get('singleSignOnService', {}).get('url', '')
+                        if idp_sso_url:
+                            logger.info(f"🔐 [AUTO LOGIN] 세션 없음 → IdP SSO로 리다이렉트: {idp_sso_url}")
+                            return RedirectResponse(idp_sso_url, status_code=302)
+                    except Exception as e:
+                        logger.warning(f"⚠️ [AUTO LOGIN] IdP SSO URL 로드 실패, /saml/login으로 폴백: {e}")
+
+                    # 폴백: /saml/login으로 리다이렉트
                     login_url = '/saml/login'
                     if DEFAULT_ORG_URL:
                         login_url += f"?org_url={DEFAULT_ORG_URL}"
