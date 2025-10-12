@@ -4074,8 +4074,6 @@ class WaferMapViewer {
 
             // 🔥 ROOT_DIR 기준 상대 경로 사용 (rel_path 우선)
             const fullPath = node.rel_path || (parentPath ? `${parentPath}/${node.name}` : node.name);
-            
-            console.log(`🔍 [FILE TREE] 노드: ${node.name}, rel_path: ${node.rel_path}, fullPath: ${fullPath}`);
 
             if (node.type === 'directory') {
 
@@ -5841,13 +5839,11 @@ class WaferMapViewer {
         
         try {
 
-            console.log(`🔍 [GET ALL FILES] 폴더 스캔 시작: ${folderPath}`);
             const response = await fetch(`/api/files?path=${encodeURIComponent(folderPath)}`);
 
             const data = await response.json();
 
             const items = Array.isArray(data.items) ? data.items : [];
-            console.log(`🔍 [GET ALL FILES] API 응답: ${items.length}개 항목`);
 
             
             
@@ -5860,7 +5856,6 @@ class WaferMapViewer {
                 
                 if (item.type === 'file') {
 
-                    console.log(`🔍 [GET ALL FILES] 파일 추가: ${itemPath} (rel_path: ${item.rel_path}, name: ${item.name})`);
                     allFiles.push(itemPath);
 
                 } else if (item.type === 'directory') {
@@ -5874,8 +5869,6 @@ class WaferMapViewer {
                 }
 
             }
-            
-            console.log(`🔍 [GET ALL FILES] 폴더 스캔 완료: ${allFiles.length}개 파일`);
 
         } catch (error) {
 
