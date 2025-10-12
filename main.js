@@ -6780,100 +6780,37 @@ class WaferMapViewer {
 
 
 
-        // 🔥 완전히 새로 작성: 줌 기준 동적 레벨 계산
+        // 🚀 빠른 피라미드 로드: 작은 레벨(0.2)부터 먼저 로드하여 즉시 표시
 
         const tStart = performance.now();
+        console.log(`⏱️ [LOAD START] ${path} - 시작`);
 
-        
-        
-        // 🚀 1단계: 원본 이미지 크기 먼저 조회
 
-        const originalResponse = await fetch(`/api/image?path=${encodeURIComponent(path)}`, {
-            signal: this.globalAbortController?.signal
-        });
 
-        
-        
-        // 🔥 서버 에러 체크
+        // 🚀 1단계: 가장 작은 피라미드 레벨(0.2)부터 로드 (빠른 초기 표시)
 
-        if (!originalResponse.ok) {
+        const initialLevel = 0.2;  // 가장 작은 레벨부터 시작
 
-            const errorText = await originalResponse.text();
 
-            console.error(`❌ 이미지 로드 실패: ${path}`, {
 
-                status: originalResponse.status,
-
-                statusText: originalResponse.statusText,
-
-                error: errorText
-
-            });
-
-            
-            
-            // 에러 메시지 표시
-
-            alert(`이미지를 로드할 수 없습니다.\n경로: ${path}\n상태: ${originalResponse.status} ${originalResponse.statusText}\n\n서버 로그를 확인해주세요.`);
-
-            throw new Error(`Failed to load image: ${originalResponse.status} ${originalResponse.statusText}`);
-
-        }
-
-        
-        
-        const originalBlob = await originalResponse.blob();
-
-        const originalBitmap = await createImageBitmap(originalBlob);
-
-        
-        
-        this.originalWidth = originalBitmap.width;
-
-        this.originalHeight = originalBitmap.height;
-
-        
-        
-        // 🚀 2단계: 컨테이너 크기 기반으로 초기 줌 계산
-
-        const containerRect = this.dom.viewerContainer.getBoundingClientRect();
-
-        const containerWidth = containerRect.width - 40; // 여백 고려
-
-        const containerHeight = containerRect.height - 40;
-
-        
-        
-        const scaleX = containerWidth / this.originalWidth;
-
-        const scaleY = containerHeight / this.originalHeight;
-
-        const fitScale = Math.min(scaleX, scaleY, 1.0); // 1.0 이상으로 확대하지 않음
-
-        
-        
-        // 🚀 3단계: 줌에 따른 최적 피라미드 레벨 선택
-
-        const initialLevel = this.getBestPyramidLevel(fitScale);
-
-        
-        
-        this.debugLog(`🔥 [NEW LOAD] 시작: 줌=${(fitScale * 100).toFixed(1)}%, level=${initialLevel}`);
+        console.log(`🚀 [FAST LOAD] Level ${initialLevel} 로드 시작 - 원본 크기 조회 없이 즉시 표시`);
 
         
         
         const url = `/api/image?path=${encodeURIComponent(path)}&level=${initialLevel}`;
+        const tFetchStart = performance.now();
 
-        this.debugLog(`🔥 [URL] ${url}`);
+        console.log(`⏱️ [FETCH START] ${url}`);
 
-        
-        
+
+
         const response = await fetch(url);
+        const tFetchEnd = performance.now();
 
-        this.debugLog(`🔥 [RESPONSE] status=${response.status}, headers=${JSON.stringify([...response.headers.entries()])}`);
+        console.log(`⏱️ [FETCH END] ${(tFetchEnd - tFetchStart).toFixed(1)}ms - status=${response.status}`);
 
-        
-        
+
+
         // 🔥 서버 에러 체크
 
         if (!response.ok) {
@@ -6896,15 +6833,21 @@ class WaferMapViewer {
 
         }
 
-        
-        
+
+
+        const tBlobStart = performance.now();
         const blob = await response.blob();
+        const tBlobEnd = performance.now();
 
-        this.debugLog(`🔥 [BLOB] size=${blob.size} bytes, type=${blob.type}`);
+        console.log(`⏱️ [BLOB] ${(tBlobEnd - tBlobStart).toFixed(1)}ms - size=${blob.size} bytes, type=${blob.type}`);
 
-        
-        
+
+
+        const tBitmapStart = performance.now();
         const bitmap = await createImageBitmap(blob);
+        const tBitmapEnd = performance.now();
+
+        console.log(`⏱️ [BITMAP] ${(tBitmapEnd - tBitmapStart).toFixed(1)}ms - ${bitmap.width}×${bitmap.height}`);
 
         const elapsed = performance.now() - tStart;
 
@@ -6918,7 +6861,7 @@ class WaferMapViewer {
 
         
         
-        // 🎯 상세 로그 출력 (줌 정보 포함)
+        // 🎯 상세 로그 출력
 
         const originalPixels = this.originalWidth * this.originalHeight;
 
@@ -6926,11 +6869,9 @@ class WaferMapViewer {
 
         const expectedPixels = originalPixels * (initialLevel * initialLevel);
 
-        const currentZoom = (fitScale * 100).toFixed(1);
 
-        
-        
-        this.debugLog(`🔥 [NEW INIT] 줌: ${currentZoom}% | Level: ${initialLevel} | Original: ${this.originalWidth}×${this.originalHeight} (${originalPixels.toLocaleString()}px) | Actual: ${bitmap.width}×${bitmap.height} (${actualCurrentPixels.toLocaleString()}px) | Expected: ${expectedPixels.toLocaleString()}px | Compression: ${(originalPixels/actualCurrentPixels).toFixed(1)}x | Size: ${blob.size} bytes | Load Time: ${elapsed.toFixed(1)}ms`);
+
+        console.log(`⏱️ [FAST INIT] ✅ TOTAL: ${elapsed.toFixed(1)}ms | Level: ${initialLevel} | Original: ${this.originalWidth}×${this.originalHeight} (${originalPixels.toLocaleString()}px) | Actual: ${bitmap.width}×${bitmap.height} (${actualCurrentPixels.toLocaleString()}px) | Compression: ${(originalPixels/actualCurrentPixels).toFixed(1)}x | Size: ${blob.size.toLocaleString()} bytes`);
 
 
 
