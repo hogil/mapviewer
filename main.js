@@ -1510,34 +1510,51 @@ class WaferMapViewer {
         const dropdown = this.dom.subfolderDropdown;
         if (!dropdown) return;
 
-        const items = dropdown.querySelectorAll('.subfolder-item');
+        // 🔥 보이는 항목만 선택 (필터링된 상태 고려)
+        const allItems = Array.from(dropdown.querySelectorAll('.subfolder-item'));
+        const visibleItems = allItems.filter(item => item.style.display !== 'none');
+        
+        if (visibleItems.length === 0) return;
+
         const currentActive = dropdown.querySelector('.subfolder-item.active');
-        let activeIndex = currentActive ? Array.from(items).indexOf(currentActive) : -1;
+        let activeIndex = currentActive ? visibleItems.indexOf(currentActive) : -1;
 
         switch (event.key) {
             case 'ArrowDown':
                 event.preventDefault();
-                activeIndex = Math.min(activeIndex + 1, items.length - 1);
+                // 활성 항목이 없으면 첫 번째 항목 선택
+                if (activeIndex === -1) {
+                    activeIndex = 0;
+                } else {
+                    activeIndex = Math.min(activeIndex + 1, visibleItems.length - 1);
+                }
                 break;
             case 'ArrowUp':
                 event.preventDefault();
-                activeIndex = Math.max(activeIndex - 1, 0);
+                if (activeIndex === -1) {
+                    activeIndex = visibleItems.length - 1; // 맨 아래부터
+                } else {
+                    activeIndex = Math.max(activeIndex - 1, 0);
+                }
                 break;
             case 'Enter':
                 event.preventDefault();
-                if (currentActive) {
+                if (currentActive && visibleItems.includes(currentActive)) {
                     currentActive.click();
                 }
                 return;
             case 'Escape':
+                event.preventDefault();
                 this.hideSubfolderDropdown();
                 return;
         }
 
         // 활성 항목 업데이트
-        items.forEach(item => item.classList.remove('active'));
-        if (items[activeIndex]) {
-            items[activeIndex].classList.add('active');
+        allItems.forEach(item => item.classList.remove('active'));
+        if (visibleItems[activeIndex]) {
+            visibleItems[activeIndex].classList.add('active');
+            // 스크롤하여 활성 항목이 보이도록
+            visibleItems[activeIndex].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
         }
     }
 
