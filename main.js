@@ -7146,28 +7146,18 @@ class WaferMapViewer {
 
 
 
-        // 🚀 빠른 피라미드 로드: 작은 레벨(0.2)부터 먼저 로드하여 즉시 표시
-
         const tStart = performance.now();
-        console.log(`⏱️ [LOAD START] ${fullPath} - 시작`);  // 🔥 fullPath 로그
+        console.log(`⏱️ [LOAD START] ${fullPath} - 시작`);
 
-
-
-        // 🚀 1단계: 현재 줌 레벨에 맞는 적정 피라미드 레벨로 로드
-
-        console.log(`🔍 [LOAD DEBUG] this.zoom: ${this.zoom} (${(this.zoom * 100).toFixed(1)}%)`);
-        console.log(`🔍 [LOAD DEBUG] this.transform.scale: ${this.transform.scale} (${(this.transform.scale * 100).toFixed(1)}%)`);
-
-        // 🚀 초기 로드: 고정된 레벨로 빠른 표시 (resetView 후 적절한 레벨로 교체)
-        const initialLevel = 0.2;  // 고정된 초기 레벨 (빠른 초기 표시용)
-
-
-
-        console.log(`🚀 [FAST LOAD] Level ${initialLevel} 로드 시작 - 빠른 초기 표시용 (resetView 후 적절한 레벨로 교체됨)`);
+        // 🚀 기본 zoom(1.0)으로 적절한 피라미드 레벨 계산하여 한 번에 로드
+        const initialZoom = 1.0;  // 기본 줌
+        const initialLevel = this.getBestPyramidLevel(initialZoom);
+        
+        console.log(`🚀 [LOAD] 기본 줌 ${initialZoom}에 맞는 Level ${initialLevel} 로드`);
 
         
         
-        const url = `/api/image?path=${encodeURIComponent(fullPath)}&level=${initialLevel}`;  // 🔥 fullPath 사용
+        const url = `/api/image?path=${encodeURIComponent(fullPath)}&level=${initialLevel}`;
         const tFetchStart = performance.now();
 
         console.log(`⏱️ [FETCH START] ${url}`);
@@ -7284,12 +7274,6 @@ class WaferMapViewer {
             
             
             this.resetView(false);
-
-            // 🎯 resetView 완료 후 적절한 피라미드 레벨 계산 및 로드
-            setTimeout(() => {
-                console.log(`🔍 [POST RESET] resetView 완료 후 피라미드 레벨 재계산`);
-                this.updatePyramidLevel();
-            }, 50);  // 짧은 지연으로 resetView 완료 보장
 
             this.dom.minimapContainer.style.display = 'block';
 
@@ -12804,9 +12788,16 @@ class WaferMapViewer {
                 // 원본 이미지 유지 - 썸네일로 교체하지 않음
             };
             
+            // 고화질 썸네일로 시작 (빠른 로딩)
+            // 🔥 currentFolderPrefix 추가 (이미 포함되어 있으면 중복 방지)
+            let fullImgPath = imgPath;
+            if (!imgPath.startsWith(this.currentFolderPrefix)) {
+                fullImgPath = this.currentFolderPrefix + imgPath;
+            }
+            
             img.onerror = (e) => {
                 console.error(`❌ [THUMBNAIL ERROR] 썸네일 로드 실패:`, {
-                    경로: imgPath,
+                    경로: fullImgPath,
                     URL: img.src,
                     에러타입: e.type,
                     인덱스: idx
@@ -12819,17 +12810,10 @@ class WaferMapViewer {
                 // 실패 후에도 썸네일 시도 (서버에서 썸네일이 생성되었을 수 있음)
                 setTimeout(() => {
                     if (img.parentElement) {
-                        this.replaceWithThumbnail(img, imgPath);
+                        this.replaceWithThumbnail(img, fullImgPath);  // 🔥 fullImgPath 전달
                     }
                 }, 500);
             };
-            
-            // 고화질 썸네일로 시작 (빠른 로딩)
-            // 🔥 currentFolderPrefix 추가 (이미 포함되어 있으면 중복 방지)
-            let fullImgPath = imgPath;
-            if (!imgPath.startsWith(this.currentFolderPrefix)) {
-                fullImgPath = this.currentFolderPrefix + imgPath;
-            }
             
             const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(fullImgPath)}&size=512&t=${Date.now()}`;
             if (idx === 0) {
