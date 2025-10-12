@@ -938,11 +938,6 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
             return cached
 
     items: List[Dict[str, str]] = []
-    
-    # 🚀 성능 최적화: ROOT_DIR 문자열 한 번만 계산
-    root_str = str(ROOT_DIR.resolve()).replace('\\', '/')
-    root_len = len(root_str)
-    
     try:
         with os.scandir(target) as it:
             for entry in it:
@@ -951,22 +946,7 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
                 if name.startswith('.') or name == '__pycache__' or name in SKIP_DIRS or name in ['classification', 'thumbnails']: 
                     continue
                 typ = "directory" if entry.is_dir(follow_symlinks=False) else "file"
-                
-                # 🚀 빠른 문자열 처리로 상대 경로 계산
-                entry_path_str = str(entry.path).replace('\\', '/')
-                if entry_path_str.startswith(root_str):
-                    # ROOT_DIR 기준 상대 경로 (문자열 슬라이싱)
-                    rel_path = entry_path_str[root_len:].lstrip('/')
-                else:
-                    # ROOT_DIR 밖이면 절대 경로 그대로
-                    rel_path = entry_path_str
-                    
-                items.append({
-                    "name": name, 
-                    "type": typ, 
-                    "path": entry_path_str,
-                    "rel_path": rel_path  # ROOT_DIR 기준 상대 경로
-                })
+                items.append({"name": name, "type": typ, "path": str(entry.path).replace('\\', '/')})
         directories = [x for x in items if x["type"] == "directory"]
         files = [x for x in items if x["type"] == "file"]
         directories.sort(key=lambda x: x["name"].lower(), reverse=True)

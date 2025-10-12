@@ -862,6 +862,7 @@ class WaferMapViewer {
         this.gridThumbSize = DEFAULT_THUMB_SIZE;
 
         this.currentFolderPath = null;  // 🔥 ROOT_DIR로 초기화 (init에서 설정)
+        this.cachedRootDir = null;  // 🚀 ROOT_DIR 경로 캐시 (성능 최적화)
 
         this.selectedFolderForBrowser = '';
 
@@ -3824,6 +3825,14 @@ class WaferMapViewer {
 
         // 사용자 정보 로드
         this.loadUserInfo();
+        
+        // 🚀 ROOT_DIR 경로 캐시 초기화 (성능 최적화)
+        fetch('/api/root-folder').then(response => response.json()).then(data => {
+            this.cachedRootDir = data.root_folder.replace(/\\/g, '/');
+            console.log(`🚀 [INIT] ROOT_DIR 캐시됨: ${this.cachedRootDir}`);
+        }).catch(err => {
+            console.error('ROOT_DIR 캐시 실패:', err);
+        });
 
         // 먼저 이미지 폴더 최상위로 이동
 
@@ -4072,8 +4081,8 @@ class WaferMapViewer {
 
         for (const node of nodes) {
 
-            // 🔥 ROOT_DIR 기준 상대 경로 사용 (rel_path 우선)
-            const fullPath = node.rel_path || (parentPath ? `${parentPath}/${node.name}` : node.name);
+            // 경로 구성 (parentPath가 있으면 조합)
+            const fullPath = parentPath ? `${parentPath}/${node.name}` : node.name;
 
             if (node.type === 'directory') {
 
@@ -5831,6 +5840,29 @@ class WaferMapViewer {
 
 
 
+    // classification 경로를 ROOT_DIR 기준 상대 경로로 변환
+    getImagePathFromClassification(absPath, className, fileName) {
+        // absPath: D:/project/data/wm-811k/performance_test4/classification/a/966_origin.png
+        // ROOT_DIR: D:/project/data/wm-811k
+        // 반환: performance_test4/classification/a/966_origin.png
+        
+        if (!this.cachedRootDir) {
+            // ROOT_DIR을 모르면 기본 경로 반환
+            return `classification/${className}/${fileName}`;
+        }
+        
+        const normalizedPath = absPath.replace(/\\/g, '/');
+        const rootDir = this.cachedRootDir;
+        
+        if (normalizedPath.startsWith(rootDir)) {
+            // ROOT_DIR 기준 상대 경로 반환
+            return normalizedPath.substring(rootDir.length + 1);
+        }
+        
+        // 변환 실패 시 기본 경로
+        return `classification/${className}/${fileName}`;
+    }
+
     async getAllFilesInFolder(folderPath) {
 
         const allFiles = [];
@@ -5847,21 +5879,33 @@ class WaferMapViewer {
 
             
             
+            // 🚀 ROOT_DIR 경로를 한 번만 가져오기 (성능 최적화)
+            if (!this.cachedRootDir) {
+                const rootResponse = await fetch('/api/root-folder');
+                if (rootResponse.ok) {
+                    const rootData = await rootResponse.json();
+                    this.cachedRootDir = rootData.root_folder.replace(/\\/g, '/');
+                }
+            }
+            
             for (const item of items) {
 
-                // 🔥 ROOT_DIR 기준 상대 경로 사용 (rel_path가 있으면 사용, 없으면 기존 방식)
-                const itemPath = item.rel_path || `${folderPath}/${item.name}`;
-
-                
+                let itemPath;
                 
                 if (item.type === 'file') {
-
+                    // 🚀 절대 경로를 ROOT_DIR 기준 상대 경로로 변환
+                    const absPath = item.path.replace(/\\/g, '/');
+                    if (this.cachedRootDir && absPath.startsWith(this.cachedRootDir)) {
+                        itemPath = absPath.substring(this.cachedRootDir.length + 1);
+                    } else {
+                        itemPath = `${folderPath}/${item.name}`;
+                    }
+                    
                     allFiles.push(itemPath);
 
                 } else if (item.type === 'directory') {
 
                     // 재귀적으로 하위 폴더 탐색
-                    // 🔥 절대 경로를 전달하여 올바른 탐색
                     const subFiles = await this.getAllFilesInFolder(item.path);
 
                     allFiles.push(...subFiles);
@@ -11277,8 +11321,8 @@ class WaferMapViewer {
 
                     imgBtn.style.fontSize = '13px';
                     
-                    // 🔥 ROOT_DIR 기준 절대 경로를 data 속성에 저장
-                    const imagePath = img.rel_path || `classification/${cls}/${img.name}`;
+                    // 🔥 ROOT_DIR 기준 절대 경로 계산 (item.path에서 파일명만 추출하여 조합)
+                    const imagePath = this.getImagePathFromClassification(img.path, cls, img.name);
                     imgBtn.dataset.imagePath = imagePath;
 
                     imgBtn.onclick = (e) => {
@@ -11508,11 +11552,10 @@ class WaferMapViewer {
                                     // classToImgList에서 해당 이미지 찾기
                                     const imgList = classToImgList[className] || [];
                                     const imgItem = imgList.find(item => item.name === fileName);
-                                    // rel_path가 있으면 사용, 없으면 기본 경로
-                                    return imgItem?.rel_path || `classification/${key}`;
+                                    // path에서 ROOT_DIR 기준 상대 경로 계산
+                                    return imgItem ? this.getImagePathFromClassification(imgItem.path, className, fileName) : `classification/${key}`;
                                 });
                                 
-                                console.log(`🔍 [LABEL GRID] 다중 선택 경로 변환:`, selectedImagePaths);
                                 this.showGridFromLabelExplorer(selectedImagePaths);
 
                             }
@@ -11653,8 +11696,8 @@ class WaferMapViewer {
 
                             imgBtn.style.fontSize = '13px';
                             
-                            // 🔥 ROOT_DIR 기준 절대 경로를 data 속성에 저장
-                            const imagePath = img.rel_path || `classification/${cls}/${img.name}`;
+                            // 🔥 ROOT_DIR 기준 절대 경로 계산
+                            const imagePath = this.getImagePathFromClassification(img.path, cls, img.name);
                             imgBtn.dataset.imagePath = imagePath;
 
                             imgBtn.onclick = (e) => {
@@ -11842,7 +11885,7 @@ class WaferMapViewer {
                                         const [className, fileName] = selectedKey.split('/');
                                         const imgList = classToImgList[className] || [];
                                         const imgItem = imgList.find(item => item.name === fileName);
-                                        const fullImagePath = imgItem?.rel_path || `classification/${selectedKey}`;
+                                        const fullImagePath = imgItem ? this.getImagePathFromClassification(imgItem.path, className, fileName) : `classification/${selectedKey}`;
                                         
                                         this.loadImage(fullImagePath);
 
@@ -11859,7 +11902,7 @@ class WaferMapViewer {
                                             const [className, fileName] = key.split('/');
                                             const imgList = classToImgList[className] || [];
                                             const imgItem = imgList.find(item => item.name === fileName);
-                                            return imgItem?.rel_path || `classification/${key}`;
+                                            return imgItem ? this.getImagePathFromClassification(imgItem.path, className, fileName) : `classification/${key}`;
                                         });
                                         
                                         this.showGridFromLabelExplorer(selectedImagePaths);
