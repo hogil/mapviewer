@@ -9183,6 +9183,19 @@ class WaferMapViewer {
 
     async openAddLabelModal() {
 
+        // 🔥 라벨 추가 모달 열기 전에 Wafer Map Explorer 상태 저장
+        const grid = document.getElementById('image-grid');
+        if (this.gridMode && this.selectedImages && this.selectedImages.length > 0) {
+            this.savedViewState = {
+                type: 'grid',
+                images: [...this.selectedImages],
+                scrollTop: grid ? grid.scrollTop : 0
+            };
+            console.log('💾 [LABEL-SAVE] 라벨 모달 열기 전 savedViewState 저장:', this.selectedImages.length, '개 이미지, scrollTop:', grid?.scrollTop);
+        } else {
+            console.warn('⚠️ [LABEL-SAVE] 라벨 모달 열기: savedViewState 저장 조건 미충족');
+        }
+
         const modal = document.getElementById('add-label-modal');
 
         const classSelect = document.getElementById('modal-class-select');
@@ -9193,8 +9206,8 @@ class WaferMapViewer {
 
         const existingLabelsList = document.getElementById('existing-labels-list');
 
-        
-        
+
+
         // 선택된 이미지들 정보 표시
 
         const selectedImages = this.getSelectedImagesForModal();
@@ -10071,6 +10084,16 @@ class WaferMapViewer {
                 this.selectedImages = [...this.savedViewState.images];
                 this.showGrid(this.savedViewState.images);
 
+                // 복원 직후 상태 확인
+                setTimeout(() => {
+                    console.log('✅ [RESTORE-CHECK] showGrid 호출 후 상태:', {
+                        gridMode: this.gridMode,
+                        selectedImages: this.selectedImages?.length || 0,
+                        gridDisplay: document.getElementById('image-grid')?.style.display,
+                        gridChildren: document.getElementById('image-grid')?.children.length || 0
+                    });
+                }, 50);
+
                 // 파일명 패널 숨기기 (Label Explorer에서 돌아왔으므로)
                 if (this.dom.fileNameDisplay) {
                     this.dom.fileNameDisplay.style.display = 'none';
@@ -10081,6 +10104,7 @@ class WaferMapViewer {
                         const grid = document.getElementById('image-grid');
                         if (grid) {
                             grid.scrollTop = this.savedViewState.scrollTop;
+                            console.log('✅ [RESTORE-CHECK] 스크롤 복원 완료:', grid.scrollTop);
                         }
                     }, 100);
                 }
@@ -10163,6 +10187,16 @@ class WaferMapViewer {
 
                         this.showGrid(this.savedViewState.images);
 
+                        // 복원 직후 상태 확인
+                        setTimeout(() => {
+                            console.log('✅ [RESTORE-CHECK] showGrid 호출 후 상태:', {
+                                gridMode: this.gridMode,
+                                selectedImages: this.selectedImages?.length || 0,
+                                gridDisplay: document.getElementById('image-grid')?.style.display,
+                                gridChildren: document.getElementById('image-grid')?.children.length || 0
+                            });
+                        }, 50);
+
                         // 파일명 패널 숨기기 (Label Explorer에서 돌아왔으므로)
                         if (this.dom.fileNameDisplay) {
                             this.dom.fileNameDisplay.style.display = 'none';
@@ -10174,6 +10208,7 @@ class WaferMapViewer {
                                 const grid = document.getElementById('image-grid');
                                 if (grid) {
                                     grid.scrollTop = this.savedViewState.scrollTop;
+                                    console.log('✅ [RESTORE-CHECK] 스크롤 복원 완료:', grid.scrollTop);
                                 }
                             }, 100);
                         }
