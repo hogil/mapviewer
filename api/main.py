@@ -1171,8 +1171,8 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
         # PyVips로 초고속 처리 시도
         import pyvips
 
-        # 🚀 단순화된 옵션으로 이미지 로드 (속도 우선)
-        image = pyvips.Image.new_from_file(str(image_path))
+        # 🚀 순차 접근 모드로 이미지 로드 (메모리 효율 & 속도 최적화)
+        image = pyvips.Image.new_from_file(str(image_path), access='sequential')
 
         orig_w, orig_h = image.width, image.height
         new_w = int(orig_w * level)
@@ -1190,8 +1190,14 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
             resized = image.resize(level, kernel='lanczos3')
             logger.info(f"🚀 [HIGH QUALITY] Level {level} - Lanczos3")
 
-        # 🚀 최적화된 JPEG 저장 (Q=85, 시각적 품질 유지하며 속도/용량 개선)
-        resized.write_to_file(str(pyramid_path), Q=85, optimize_coding=True, strip=True)
+        # 🚀 고품질 JPEG 저장 (Q=100, 빠른 저장 우선)
+        resized.write_to_file(
+            str(pyramid_path), 
+            Q=100,
+            strip=False,           # 메타데이터 유지 (처리 시간 단축)
+            interlace=False,       # Progressive JPEG 비활성화 (속도 향상)
+            optimize_coding=False  # Huffman 최적화 비활성화 (속도 우선)
+        )
 
         logger.info(f"🚀 [SPEED SAVE] {pyramid_path} ({new_w}×{new_h})")
 
@@ -1218,8 +1224,8 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
             # 리사이즈 (LANCZOS: 최고 품질)
             resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
-            # 최적화된 JPEG 저장 (Q=85, 시각적 품질 유지하며 속도/용량 개선)
-            resized.save(pyramid_path, format="JPEG", quality=85, optimize=True)
+            # JPEG로 저장 (Q=100, 최고 품질)
+            resized.save(pyramid_path, format="JPEG", quality=100, optimize=False)
 
             logger.info(f"🚀 [PILLOW SAVE] {pyramid_path} ({new_w}×{new_h})")
 
