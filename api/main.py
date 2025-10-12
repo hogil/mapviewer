@@ -2034,59 +2034,6 @@ async def classify_images_batch(request: BatchClassifyRequest, _=Depends(labels_
         logger.exception(f"배치 이미지 분류 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/classify")
-async def classify_images(request: ClassifyRequest, _=Depends(labels_classes_sync_dep)):
-    """이미지를 클래스로 분류하고 classification 디렉토리에 복사/링크"""
-    try:
-        rel_path = relkey_from_any_path(request.image_path)
-        abs_path = ROOT_DIR / rel_path
-        
-        if not abs_path.exists():
-            raise HTTPException(status_code=404, detail="Image file not found")
-        
-        class_name = request.class_name.strip()
-        if not class_name or not _CLASS_NAME_RE.match(class_name):
-            raise HTTPException(status_code=400, detail="Invalid class name")
-        
-        # 클래스 디렉토리 생성
-        class_dir = _classification_dir() / class_name
-        class_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 대상 파일 경로
-        target_file = class_dir / abs_path.name
-        
-        # 파일이 이미 존재하면 스킵
-        if target_file.exists():
-            logger.info(f"파일이 이미 존재함: {target_file}")
-        else:
-            # 하드링크 시도, 실패하면 복사
-            try:
-                if abs_path.drive.lower() == target_file.drive.lower():
-                    os.link(str(abs_path), str(target_file))
-                    logger.info(f"하드링크 생성: {abs_path} -> {target_file}")
-                else:
-                    import shutil
-                    shutil.copy2(str(abs_path), str(target_file))
-                    logger.info(f"파일 복사: {abs_path} -> {target_file}")
-            except Exception as e:
-                import shutil
-                shutil.copy2(str(abs_path), str(target_file))
-                logger.info(f"하드링크 실패, 복사로 대체: {abs_path} -> {target_file}")
-        
-        # 라벨 추가
-        with LABELS_LOCK:
-            if rel_path not in LABELS:
-                LABELS[rel_path] = []
-            if class_name not in LABELS[rel_path]:
-                LABELS[rel_path].append(class_name)
-                _labels_save()
-        
-        return {"success": True, "message": f"Image classified as '{class_name}'"}
-        
-    except Exception as e:
-        logger.exception(f"이미지 분류 실패: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 @app.delete("/api/classify")
 async def delete_classification(request: ClassifyDeleteRequest, _=Depends(labels_classes_sync_dep)):
     """classification 디렉토리에서 이미지 제거"""

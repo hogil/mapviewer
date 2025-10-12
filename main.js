@@ -7296,7 +7296,7 @@ class WaferMapViewer {
 
         } catch (err) {
 
-            console.error(`Failed to load image: ${fullPath}`, err);  // 🔥 fullPath 사용
+            console.error(`Failed to load image: ${path}`, err);
 
             this.dom.minimapContainer.style.display = 'none';
 
@@ -11460,7 +11460,12 @@ class WaferMapViewer {
 
                                 
                                 
-                                this.loadImage(`classification/${selectedKey}`);
+                                // 🔥 root_relative 사용 (ROOT_DIR 기준 절대 경로)
+                                const fileName = selectedKey.split('/')[1];
+                                const imgList = this.classToImgListCache?.[cls] || [];
+                                const selectedImg = imgList.find(item => item.name === fileName);
+                                const imagePath = selectedImg?.root_relative || `classification/${selectedKey}`;
+                                this.loadImage(imagePath);
 
                             } else {
 
@@ -14063,9 +14068,9 @@ class WaferMapViewer {
 
     // Label Explorer에서 그리드 모드 전환
 
-    showGridFromLabelExplorer(imagePaths) {
+    showGridFromLabelExplorer(imageKeys) {
 
-        if (!imagePaths || imagePaths.length === 0) return;
+        if (!imageKeys || imageKeys.length === 0) return;
 
 
 
@@ -14087,12 +14092,12 @@ class WaferMapViewer {
 
 
 
-        // classification/ 접두사를 가진 경로들을 실제 이미지 경로로 변환
-
-        const actualPaths = imagePaths.map(path => {
-
-            return path.startsWith('classification/') ? path : `classification/${path}`;
-
+        // 🔥 key (className/fileName)에서 root_relative 경로 찾기
+        const actualPaths = imageKeys.map(key => {
+            const [className, fileName] = key.split('/');
+            const imgList = this.classToImgListCache?.[className] || [];
+            const imgItem = imgList.find(item => item.name === fileName);
+            return imgItem?.root_relative || `classification/${key}`;
         });
 
 
