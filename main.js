@@ -6630,7 +6630,14 @@ class WaferMapViewer {
 
         const grid = document.getElementById('image-grid');
 
-        if (this.currentGridImages && this.currentGridImages.length > 0) {
+        // currentGridImages 또는 selectedImages 중 하나라도 있으면 Grid 모드로 저장
+        const gridImages = (this.currentGridImages && this.currentGridImages.length > 0)
+            ? this.currentGridImages
+            : (this.selectedImages && this.selectedImages.length > 0)
+                ? this.selectedImages
+                : null;
+
+        if (gridImages && gridImages.length > 0) {
 
             // Grid 모드 상태 저장
 
@@ -6638,12 +6645,12 @@ class WaferMapViewer {
 
                 type: 'grid',
 
-                images: [...this.currentGridImages],
+                images: [...gridImages],
 
                 scrollTop: grid ? grid.scrollTop : 0
 
             };
-            console.log('💾 [SAVE] Grid 모드 저장:', this.savedViewState.images.length, '개 이미지, scrollTop:', this.savedViewState.scrollTop);
+            console.log('💾 [SAVE] Grid 모드 저장:', this.savedViewState.images.length, '개 이미지, scrollTop:', this.savedViewState.scrollTop, 'source:', (this.currentGridImages && this.currentGridImages.length > 0) ? 'currentGridImages' : 'selectedImages');
 
         } else if (!this.gridMode && this.currentImage && this.selectedImagePath) {
 
