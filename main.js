@@ -10060,6 +10060,12 @@ class WaferMapViewer {
             e.preventDefault();
             e.stopPropagation(); // 🚀 이벤트 버블링 방지 (Wafer Map Explorer 우클릭 방해 방지)
 
+            // 🔥 무조건 이미지 정보 패널 숨기기
+            if (this.dom.fileNameDisplay) {
+                this.dom.fileNameDisplay.style.display = 'none';
+                console.log('🔴 [HIDE-PANEL] 우클릭 시 파일명 패널 숨김');
+            }
+
             // Label Explorer 선택 해제 및 이전 상태 복원
             if (this.labelSelection) {
                 console.log('🔴 [DEBUG] Label Explorer 선택 해제:', {
@@ -10158,6 +10164,12 @@ class WaferMapViewer {
 
                 if (e.target === frame && !e.ctrlKey && !e.shiftKey) {
                     console.log('🟢 [DEBUG] 프레임 클릭 조건 만족 → 복원 시작');
+
+                    // 🔥 무조건 이미지 정보 패널 숨기기
+                    if (this.dom.fileNameDisplay) {
+                        this.dom.fileNameDisplay.style.display = 'none';
+                        console.log('🟢 [HIDE-PANEL] 프레임 클릭 시 파일명 패널 숨김');
+                    }
 
                     // 🔥 직접 복원 로직 처리 (clearLabelExplorerSelection 사용 안함)
 
@@ -12329,7 +12341,13 @@ class WaferMapViewer {
             console.log('🔥 [SHOWGRID] 그리드 display 설정:', grid.style.display);
         }
 
-        // 파일명 패널은 유지 (제품 변경 시 상단 패널 사라짐 방지)
+        // 🔥 그리드 모드에서는 파일명 패널 숨기기 (Label Explorer에서 복원 시 필요)
+        if (this.dom.fileNameDisplay) {
+            this.dom.fileNameDisplay.style.display = 'none';
+            console.log('🔥 [SHOWGRID] 파일명 패널 숨김');
+        }
+
+        // 파일명 패널은 유지 (제품 변경 시 상단 패널 사라짐 방지) - 주석 유지
 
         const viewControls = document.querySelector('.view-controls');
         if (viewControls) viewControls.style.display = 'none';
@@ -12899,6 +12917,12 @@ class WaferMapViewer {
     restoreSavedViewState() {
 
         this.debugLog('🔷 [RESTORE] 저장된 뷰 상태 복원 시작', this.savedViewState);
+
+        // 🔥 무조건 이미지 정보 패널 숨기기 (Delete Label에서 호출될 때)
+        if (this.dom.fileNameDisplay) {
+            this.dom.fileNameDisplay.style.display = 'none';
+            this.debugLog('🔷 [HIDE-PANEL] restoreSavedViewState 시 파일명 패널 숨김');
+        }
 
 
 
