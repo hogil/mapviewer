@@ -1015,6 +1015,7 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
         raise
 
 async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optional[Path]:
+    start_time = time.time()
     try:
         thumb = get_thumbnail_path(image_path, size)
         key = f"{thumb}|{size[0]}x{size[1]}"
@@ -1039,6 +1040,8 @@ async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optiona
                 cached = False
         if cached:
             THUMB_STAT_CACHE.set(key, True)
+            elapsed = time.time() - start_time
+            logger.info(f"⚡ [THUMB CACHE HIT] {image_path.name} - {elapsed*1000:.1f}ms")
             return thumb
 
         async with THUMBNAIL_SEM:
@@ -1047,6 +1050,8 @@ async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optiona
                 try:
                     if thumb.stat().st_mtime >= image_mtime:
                         THUMB_STAT_CACHE.set(key, True)
+                        elapsed = time.time() - start_time
+                        logger.info(f"⚡ [THUMB CACHE HIT2] {image_path.name} - {elapsed*1000:.1f}ms")
                         return thumb
                 except Exception:
                     pass
@@ -1059,20 +1064,26 @@ async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optiona
                     logger.warning(f"기존 썸네일 삭제 실패: {thumb}, 오류: {e}")
             
             # 새 썸네일 생성
+            gen_start = time.time()
+            logger.info(f"🔨 [THUMB GEN START] {image_path.name} - 썸네일 생성 시작")
             try:
                 await asyncio.get_running_loop().run_in_executor(
                     ThreadPoolExecutor(max_workers=1), _generate_thumbnail_sync, image_path, thumb, size
                 )
+                gen_elapsed = time.time() - gen_start
                 
                 # 생성된 썸네일 확인
                 if thumb.exists() and thumb.stat().st_size > 0:
                     THUMB_STAT_CACHE.set(key, True)
+                    elapsed = time.time() - start_time
+                    logger.info(f"✅ [THUMB GEN DONE] {image_path.name} - 생성: {gen_elapsed*1000:.1f}ms, 전체: {elapsed*1000:.1f}ms")
                     return thumb
                 else:
                     logger.warning(f"썸네일 생성 후 파일이 존재하지 않거나 크기가 0: {thumb}")
                     return None
             except Exception as e:
-                logger.error(f"썸네일 생성 실패: {image_path}, 오류: {e}")
+                gen_elapsed = time.time() - gen_start
+                logger.error(f"❌ [THUMB GEN FAIL] {image_path.name} - {gen_elapsed*1000:.1f}ms, 오류: {e}")
                 return None
                 
     except Exception as e:

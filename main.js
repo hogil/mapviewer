@@ -259,6 +259,10 @@ class ThumbnailManager {
             // timestamp를 추가하여 브라우저 캐싱 활용하면서도 새로고침 가능
             const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512`;
             
+            // 🔍 디버그: 썸네일 URL 로그
+            console.log(`🔍 [THUMBNAIL] 요청 경로: ${imgPath}`);
+            console.log(`🔍 [THUMBNAIL] URL: ${thumbnailUrl}`);
+            
             // 서버 URL을 직접 반환 (브라우저가 자동으로 로드)
             return thumbnailUrl;
 
@@ -12769,7 +12773,14 @@ class WaferMapViewer {
                 // 원본 이미지 유지 - 썸네일로 교체하지 않음
             };
             
-            img.onerror = () => {
+            img.onerror = (e) => {
+                console.error(`❌ [THUMBNAIL ERROR] 썸네일 로드 실패:`, {
+                    경로: imgPath,
+                    URL: img.src,
+                    에러타입: e.type,
+                    인덱스: idx
+                });
+                
                 // 실패시 기본 스타일 적용
                 img.style.backgroundColor = '#333';
                 img.style.opacity = '0.5';
@@ -12783,7 +12794,15 @@ class WaferMapViewer {
             };
             
             // 고화질 썸네일로 시작 (빠른 로딩)
-            img.src = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512&t=${Date.now()}`;
+            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512&t=${Date.now()}`;
+            if (idx === 0) {
+                console.log(`🔍 [GRID FIRST] 첫번째 이미지 썸네일 로드:`, { 
+                    인덱스: idx,
+                    경로: imgPath, 
+                    URL: thumbnailUrl 
+                });
+            }
+            img.src = thumbnailUrl;
             thumbBox.appendChild(img);
             wrap.appendChild(thumbBox);
             // Checkmark
