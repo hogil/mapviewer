@@ -10057,11 +10057,17 @@ class WaferMapViewer {
                 this.labelSelection.selectedClasses = [];
             }
 
-            console.log('🔴 [DEBUG] savedViewState 확인:', this.savedViewState);
+            console.log('🔴 [DEBUG] savedViewState 확인:', {
+                exists: !!this.savedViewState,
+                type: this.savedViewState?.type,
+                imagesCount: this.savedViewState?.images?.length || 0,
+                scrollTop: this.savedViewState?.scrollTop,
+                fullState: this.savedViewState
+            });
 
             // savedViewState로 복원
             if (this.savedViewState && this.savedViewState.type === 'grid' && this.savedViewState.images.length > 0) {
-                console.log('🔴 [DEBUG] Grid 모드로 복원:', this.savedViewState.images.length, '개 이미지');
+                console.log('🔴 [DEBUG] Grid 모드로 복원:', this.savedViewState.images.length, '개 이미지, scrollTop:', this.savedViewState.scrollTop);
                 this.selectedImages = [...this.savedViewState.images];
                 this.showGrid(this.savedViewState.images);
 
@@ -13227,13 +13233,26 @@ class WaferMapViewer {
         });
 
         // 🔥 Wafer Map Explorer에서 이미지 선택 시 savedViewState 업데이트
+        console.log('🔍 [DEBUG] updateGridSelection 호출됨:', {
+            gridMode: this.gridMode,
+            selectedImages: this.selectedImages?.length || 0,
+            gridSelectedIdxs: this.gridSelectedIdxs?.length || 0,
+            currentSavedViewState: this.savedViewState
+        });
+
         if (this.gridMode && this.selectedImages && this.selectedImages.length > 0) {
             this.savedViewState = {
                 type: 'grid',
                 images: [...this.selectedImages],
                 scrollTop: grid ? grid.scrollTop : 0
             };
-            console.log('💾 [AUTO-SAVE] Grid 선택 변경 시 savedViewState 업데이트:', this.selectedImages.length, '개 이미지');
+            console.log('💾 [AUTO-SAVE] Grid 선택 변경 시 savedViewState 업데이트:', this.selectedImages.length, '개 이미지, scrollTop:', grid?.scrollTop);
+        } else {
+            console.warn('⚠️ [AUTO-SAVE] savedViewState 저장 조건 미충족:', {
+                gridMode: this.gridMode,
+                hasSelectedImages: !!this.selectedImages,
+                selectedImagesLength: this.selectedImages?.length || 0
+            });
         }
     }
 
@@ -13415,13 +13434,21 @@ class WaferMapViewer {
 
         // 🔥 그리드에서 단일 이미지 모드로 전환 시 savedViewState 업데이트
         const grid = document.getElementById('image-grid');
+        console.log('🔍 [DEBUG] enterSingleImageMode 호출됨:', {
+            idx: idx,
+            selectedImages: this.selectedImages?.length || 0,
+            currentSavedViewState: this.savedViewState
+        });
+
         if (this.selectedImages && this.selectedImages.length > 0) {
             this.savedViewState = {
                 type: 'grid',
                 images: [...this.selectedImages],
                 scrollTop: grid ? grid.scrollTop : 0
             };
-            console.log('💾 [AUTO-SAVE] 단일 이미지 모드 진입 시 savedViewState 업데이트:', this.selectedImages.length, '개 이미지');
+            console.log('💾 [AUTO-SAVE] 단일 이미지 모드 진입 시 savedViewState 업데이트:', this.selectedImages.length, '개 이미지, scrollTop:', grid?.scrollTop);
+        } else {
+            console.warn('⚠️ [AUTO-SAVE] enterSingleImageMode: savedViewState 저장 실패 - selectedImages 없음');
         }
 
         this.hideGrid();
