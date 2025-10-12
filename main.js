@@ -12322,19 +12322,25 @@ class WaferMapViewer {
             gridColsRange.value = this.gridCols;
             document.documentElement.style.setProperty('--grid-cols', this.gridCols);
         }
-        
+
+        // 🔥 그리드를 명시적으로 표시 (display: none에서 복원)
+        if (grid) {
+            grid.style.display = 'grid';
+            console.log('🔥 [SHOWGRID] 그리드 display 설정:', grid.style.display);
+        }
+
         // 파일명 패널은 유지 (제품 변경 시 상단 패널 사라짐 방지)
-        
+
         const viewControls = document.querySelector('.view-controls');
         if (viewControls) viewControls.style.display = 'none';
-        
+
         // 그리드 모드 클래스 추가 및 요소들 숨기기
         this.dom.viewerContainer.classList.add('grid-mode');
         this.dom.viewerContainer.classList.remove('single-image-mode');
         this.dom.minimapContainer.style.display = 'none';
         this.dom.imageCanvas.style.display = 'none';
         this.dom.overlayCanvas.style.display = 'none';
-        
+
         grid.innerHTML = '';
         // grid 모드에서는 cursor를 default로
         this.dom.viewerContainer.style.cursor = 'default';
