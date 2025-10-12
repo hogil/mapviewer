@@ -2163,7 +2163,19 @@ async def get_main_js():
 @app.get("/api/current-folder")
 async def get_current_folder(): 
     global current_folder
-    return {"current_folder": str(current_folder)}
+    # 🔥 ROOT_DIR 기준 상대 경로 계산
+    try:
+        rel_path = str(current_folder.resolve().relative_to(ROOT_DIR.resolve())).replace('\\', '/')
+        # 상대 경로가 있으면 뒤에 / 추가
+        current_folder_prefix = rel_path + '/' if rel_path and rel_path != '.' else ''
+    except ValueError:
+        # ROOT_DIR 외부이면 빈 값
+        current_folder_prefix = ''
+    
+    return {
+        "current_folder": str(current_folder),
+        "current_folder_prefix": current_folder_prefix  # 파일 경로 앞에 붙일 접두사
+    }
 
 @app.get("/api/root-folder")
 async def get_root_folder():
@@ -2258,11 +2270,20 @@ async def change_folder(request: Request):
             log_access_row(tag="INFO", note=f"새 폴더의 classification 폴더 생성: {classification_dir}")
 
         _labels_load()
+        
+        # 🔥 ROOT_DIR 기준 상대 경로 계산 (파일 경로 접두사)
+        try:
+            rel_path = str(current_folder.resolve().relative_to(ROOT_DIR.resolve())).replace('\\', '/')
+            current_folder_prefix = rel_path + '/' if rel_path and rel_path != '.' else ''
+        except ValueError:
+            current_folder_prefix = ''
+        
         return {
             "success": True, 
             "message": f"검색 폴더가 '{new_path}'로 변경되었습니다", 
             "root_dir": str(ROOT_DIR),
-            "current_folder": str(current_folder)
+            "current_folder": str(current_folder),
+            "current_folder_prefix": current_folder_prefix
         }
     except Exception as e:
         logger.error(f"폴더 변경 실패: {e}")
