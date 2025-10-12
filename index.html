@@ -769,6 +769,10 @@
         .subfolder-dropdown-item:last-child {
             border-bottom: none;
         }
+
+        .subfolder-item.active {
+            background-color: #007acc !important;
+        }
     </style>
 </head>
 <body>
@@ -787,11 +791,11 @@
                 <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
                     <div style="position: relative; flex: 1;">
                         <!-- 기존 select 요소 (기본 모드) -->
-                        <select id="subfolder-select" style="width: 100%; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; padding: 6px 8px; font-size: 14px; font-weight: 500;">
+                        <select id="subfolder-select" style="display: none; width: 100%; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; padding: 6px 8px; font-size: 14px; font-weight: 500;">
                             <option value="">제품 선택</option>
                         </select>
                         <!-- 검색 입력 필드 (검색 모드) -->
-                        <input type="text" id="subfolder-search" placeholder="제품 검색..." style="display: none; width: 100%; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; padding: 6px 8px; font-size: 14px; font-weight: 500;" autocomplete="off">
+                        <input type="text" id="subfolder-search" placeholder="제품 검색..." style="width: 100%; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; padding: 6px 8px; font-size: 14px; font-weight: 500;" autocomplete="off">
                         <!-- 검색 결과 드롭다운 -->
                         <div id="subfolder-dropdown" style="position: absolute; top: 100%; left: 0; right: 0; background: #333; border: 1px solid #555; border-top: none; border-radius: 0 0 4px 4px; max-height: 200px; overflow-y: auto; display: none; z-index: 1000;">
                         </div>

@@ -754,6 +754,8 @@ class WaferMapViewer {
             filePathText: document.getElementById('file-path-text'),
 
             subfolderSelect: document.getElementById('subfolder-select'),
+            subfolderSearch: document.getElementById('subfolder-search'),
+            subfolderDropdown: document.getElementById('subfolder-dropdown'),
 
             refreshBtn: document.getElementById('refresh-btn'),
 
@@ -820,6 +822,7 @@ class WaferMapViewer {
         this.imageCtx.imageSmoothingQuality = 'high';
 
         this.transform = { scale: 1, dx: 0, dy: 0 };
+        this.zoom = 1; // 🎯 zoom 값 초기화
 
         this.isPanning = false;
 
@@ -1477,6 +1480,161 @@ class WaferMapViewer {
 
     }
 
+    // 제품 검색 입력 처리
+    handleSubfolderSearch(event) {
+        const query = event.target.value.toLowerCase().trim();
+        this.filterSubfolderOptions(query);
+    }
+
+    // 제품 검색 드롭다운 표시
+    showSubfolderDropdown() {
+        if (this.dom.subfolderDropdown) {
+            this.dom.subfolderDropdown.style.display = 'block';
+            this.populateSubfolderDropdown();
+        }
+    }
+
+    // 제품 검색 드롭다운 숨기기
+    hideSubfolderDropdown() {
+        if (this.dom.subfolderDropdown) {
+            this.dom.subfolderDropdown.style.display = 'none';
+        }
+    }
+
+    // 제품 검색 키보드 처리
+    handleSubfolderKeydown(event) {
+        const dropdown = this.dom.subfolderDropdown;
+        if (!dropdown) return;
+
+        const items = dropdown.querySelectorAll('.subfolder-item');
+        const currentActive = dropdown.querySelector('.subfolder-item.active');
+        let activeIndex = currentActive ? Array.from(items).indexOf(currentActive) : -1;
+
+        switch (event.key) {
+            case 'ArrowDown':
+                event.preventDefault();
+                activeIndex = Math.min(activeIndex + 1, items.length - 1);
+                break;
+            case 'ArrowUp':
+                event.preventDefault();
+                activeIndex = Math.max(activeIndex - 1, 0);
+                break;
+            case 'Enter':
+                event.preventDefault();
+                if (currentActive) {
+                    currentActive.click();
+                }
+                return;
+            case 'Escape':
+                this.hideSubfolderDropdown();
+                return;
+        }
+
+        // 활성 항목 업데이트
+        items.forEach(item => item.classList.remove('active'));
+        if (items[activeIndex]) {
+            items[activeIndex].classList.add('active');
+        }
+    }
+
+    // 제품 검색 드롭다운 채우기
+    async populateSubfolderDropdown() {
+        if (!this.dom.subfolderDropdown) return;
+
+        try {
+            const response = await fetch('/api/browse-folders?path=' + encodeURIComponent(this.currentFolderPath || ''));
+            const data = await response.json();
+
+            if (data.folders) {
+                this.renderSubfolderDropdown(data.folders);
+            }
+        } catch (error) {
+            console.error('제품 목록 로드 실패:', error);
+            this.dom.subfolderDropdown.innerHTML = '<div style="padding: 8px; color: #ff5555;">로드 실패</div>';
+        }
+    }
+
+    // 제품 검색 드롭다운 렌더링
+    renderSubfolderDropdown(folders) {
+        if (!this.dom.subfolderDropdown) return;
+
+        let html = '';
+
+        // 최상위 폴더 옵션
+        html += `
+            <div class="subfolder-item" data-path="" data-name="최상위 폴더" style="padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #444;">
+                <span style="margin-right: 8px;">🏠</span>최상위 폴더
+            </div>
+        `;
+
+        // 구분선
+        html += '<div style="height: 1px; background: #444; margin: 4px 0;"></div>';
+
+        // 폴더 목록
+        folders.forEach(folder => {
+            const displayName = folder.name;
+            html += `
+                <div class="subfolder-item" data-path="${folder.path}" data-name="${displayName}" style="padding: 8px 12px; cursor: pointer; border-bottom: 1px solid #444;">
+                    ${displayName}
+                </div>
+            `;
+        });
+
+        this.dom.subfolderDropdown.innerHTML = html;
+
+        // 클릭 이벤트 추가
+        this.dom.subfolderDropdown.querySelectorAll('.subfolder-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const path = item.dataset.path;
+                const name = item.dataset.name;
+                this.selectSubfolderFromDropdown(path, name);
+            });
+
+            // 호버 효과
+            item.addEventListener('mouseenter', () => {
+                item.style.backgroundColor = '#444';
+            });
+            item.addEventListener('mouseleave', () => {
+                item.style.backgroundColor = '';
+            });
+        });
+    }
+
+    // 드롭다운에서 제품 선택
+    async selectSubfolderFromDropdown(path, name) {
+        try {
+            if (path) {
+                await this.changeFolder(path);
+            } else {
+                await this.goToRootFolder();
+            }
+            
+            // 검색 입력 필드에 선택된 이름 표시
+            if (this.dom.subfolderSearch) {
+                this.dom.subfolderSearch.value = name;
+            }
+            
+            this.hideSubfolderDropdown();
+        } catch (error) {
+            console.error('제품 선택 실패:', error);
+        }
+    }
+
+    // 제품 검색 필터링
+    filterSubfolderOptions(query) {
+        if (!this.dom.subfolderDropdown) return;
+
+        const items = this.dom.subfolderDropdown.querySelectorAll('.subfolder-item');
+        items.forEach(item => {
+            const name = item.dataset.name.toLowerCase();
+            if (name.includes(query) || query === '') {
+                item.style.display = 'block';
+            } else {
+                item.style.display = 'none';
+            }
+        });
+    }
+
 
 
     // 폴더 변경
@@ -1952,24 +2110,33 @@ class WaferMapViewer {
             this.hideGrid();
             this.hideImage();
             
-            // 현재 경로를 최상위로 설정
-            this.currentFolderPath = null;
-            
-            // API를 통해 ROOT_DIR을 원래대로 복원
+            // API를 통해 ROOT_DIR로 복원
             try {
-                        const response = await fetch('/api/change-folder', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify({ path: null }),
-                            signal: this.globalAbortController?.signal
-                        });
-                
-                if (response.ok) {
-                    this.debugLog('🏠 [DEBUG] ROOT_DIR 복원 완료');
+                // 먼저 ROOT_DIR 경로를 가져옴
+                const rootResponse = await fetch('/api/root-folder');
+                if (rootResponse.ok) {
+                    const rootData = await rootResponse.json();
+                    const rootPath = rootData.root_folder;
+                    
+                    // currentFolderPath 설정
+                    this.currentFolderPath = rootPath;
+                    
+                    const response = await fetch('/api/change-folder', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ path: rootPath }),
+                        signal: this.globalAbortController?.signal
+                    });
+                    
+                    if (response.ok) {
+                        this.debugLog('🏠 [DEBUG] ROOT_DIR 복원 완료');
+                    } else {
+                        console.warn('🏠 [DEBUG] ROOT_DIR 복원 실패, 계속 진행');
+                    }
                 } else {
-                    console.warn('🏠 [DEBUG] ROOT_DIR 복원 실패, 계속 진행');
+                    console.warn('🏠 [DEBUG] ROOT_DIR 경로 조회 실패');
                 }
             } catch (error) {
                 console.warn('🏠 [DEBUG] ROOT_DIR 복원 중 오류:', error);
@@ -6953,11 +7120,15 @@ class WaferMapViewer {
 
         // 🚀 1단계: 현재 줌 레벨에 맞는 적정 피라미드 레벨로 로드
 
-        const initialLevel = this.getBestPyramidLevel(this.zoom);  // 실제 줌 값 사용
+        console.log(`🔍 [LOAD DEBUG] this.zoom: ${this.zoom} (${(this.zoom * 100).toFixed(1)}%)`);
+        console.log(`🔍 [LOAD DEBUG] this.transform.scale: ${this.transform.scale} (${(this.transform.scale * 100).toFixed(1)}%)`);
+
+        // 🚀 초기 로드: 고정된 레벨로 빠른 표시 (resetView 후 적절한 레벨로 교체)
+        const initialLevel = 0.2;  // 고정된 초기 레벨 (빠른 초기 표시용)
 
 
 
-        console.log(`🚀 [FAST LOAD] Level ${initialLevel} 로드 시작 (줌: ${(this.zoom * 100).toFixed(0)}%) - 원본 크기 조회 없이 즉시 표시`);
+        console.log(`🚀 [FAST LOAD] Level ${initialLevel} 로드 시작 - 빠른 초기 표시용 (resetView 후 적절한 레벨로 교체됨)`);
 
         
         
@@ -7079,6 +7250,12 @@ class WaferMapViewer {
             
             this.resetView(false);
 
+            // 🎯 resetView 완료 후 적절한 피라미드 레벨 계산 및 로드
+            setTimeout(() => {
+                console.log(`🔍 [POST RESET] resetView 완료 후 피라미드 레벨 재계산`);
+                this.updatePyramidLevel();
+            }, 50);  // 짧은 지연으로 resetView 완료 보장
+
             this.dom.minimapContainer.style.display = 'block';
 
             this.dom.imageCanvas.style.display = 'block';
@@ -7101,14 +7278,6 @@ class WaferMapViewer {
 
             this.scheduleDraw();
 
-
-
-            // 레이아웃 안정화
-
-            setTimeout(() => this.resetView(true), 0);
-
-            setTimeout(() => this.resetView(true), 50);
-
         } catch (err) {
 
             console.error(`Failed to load image: ${path}`, err);
@@ -7123,7 +7292,7 @@ class WaferMapViewer {
 
     async loadPyramidLevel(level) {
 
-        this.debugLog(`🔥 [NEW PYRAMID LOAD] 시작: level=${level}`);
+        console.log(`🔍 [LOAD PYRAMID LEVEL] 시작: level=${level}, 현재 줌: ${this.transform.scale} (${(this.transform.scale * 100).toFixed(1)}%)`);
 
         
         
@@ -7131,7 +7300,7 @@ class WaferMapViewer {
 
         if (this.pyramidLevels[level]) {
 
-            this.debugLog(`🔥 [SKIP] 이미 로드됨: level=${level}`);
+            console.log(`🔍 [LOAD PYRAMID LEVEL] ✅ 스킵: Level ${level} 이미 로드됨`);
 
             return;
 
@@ -7147,13 +7316,11 @@ class WaferMapViewer {
 
             
             
-            this.debugLog(`🔥 [URL] ${url}`);
-
-            
+            console.log(`🔍 [LOAD PYRAMID LEVEL] URL: ${url}`);
             
             const response = await fetch(url);
 
-            this.debugLog(`🔥 [RESPONSE] status=${response.status}`);
+            console.log(`🔍 [LOAD PYRAMID LEVEL] 응답: status=${response.status}`);
 
             
             
@@ -7191,9 +7358,7 @@ class WaferMapViewer {
 
 
 
-        this.debugLog(`🔥 [NEW LOAD] 줌: ${currentZoom}% | Level: ${level} | Original: ${this.originalWidth}×${this.originalHeight} (${originalPixels.toLocaleString()}px) | Actual: ${bitmap.width}×${bitmap.height} (${actualCurrentPixels.toLocaleString()}px) | Expected: ${expectedPixels.toLocaleString()}px | Compression: ${compression}x | Size: ${blob.size} bytes | Load Time: ${elapsed.toFixed(1)}ms`);
-
-
+        console.log(`🔍 [LOAD PYRAMID LEVEL] ✅ 완료: 줌 ${currentZoom}% | Level: ${level} | Original: ${this.originalWidth}×${this.originalHeight} | Actual: ${bitmap.width}×${bitmap.height} | Compression: ${compression}x | Time: ${elapsed.toFixed(1)}ms`);
 
             this.pyramidLevels[level] = bitmap;
 
@@ -7201,7 +7366,7 @@ class WaferMapViewer {
 
             // 현재 줌에 적합하면 즉시 교체
 
-            const bestLevel = this.getBestPyramidLevel(this.transform.scale);
+            const bestLevel = this.getBestPyramidLevel(this.zoom);
 
             if (bestLevel === level) {
 
@@ -7235,13 +7400,39 @@ class WaferMapViewer {
 
            // scale >= 0.85: level 1.0 (85% 이상 - 원본, 최고속)
 
-           if (scale <= 0.25) return 0.2;
+           console.log(`🔍 [PYRAMID DEBUG] 입력 scale (transform.scale): ${scale} (${(scale * 100).toFixed(1)}%)`);
 
-           if (scale < 0.55) return 0.4;
+           let level;
 
-           if (scale < 0.85) return 0.7;
+           if (scale <= 0.25) {
 
-           return 1.0;
+               level = 0.2;
+
+               console.log(`🔍 [PYRAMID DEBUG] scale <= 0.25 → Level 0.2`);
+
+           } else if (scale < 0.55) {
+
+               level = 0.4;
+
+               console.log(`🔍 [PYRAMID DEBUG] scale < 0.55 → Level 0.4`);
+
+           } else if (scale < 0.85) {
+
+               level = 0.7;
+
+               console.log(`🔍 [PYRAMID DEBUG] scale < 0.85 → Level 0.7`);
+
+           } else {
+
+               level = 1.0;
+
+               console.log(`🔍 [PYRAMID DEBUG] scale >= 0.85 → Level 1.0`);
+
+           }
+
+           console.log(`🔍 [PYRAMID DEBUG] 최종 선택: Level ${level} (줌 패널 기준)`);
+
+           return level;
 
        }
 
@@ -7251,19 +7442,29 @@ class WaferMapViewer {
 
         // 줌 변경 시 호출 - 적절한 레벨로 교체
 
-        if (!this.pyramidLevels) return;
+        console.log(`🔍 [UPDATE PYRAMID] 호출됨 - 현재 줌: ${this.zoom} (${(this.zoom * 100).toFixed(1)}%), transform.scale: ${this.transform.scale} (${(this.transform.scale * 100).toFixed(1)}%)`);
 
+        if (!this.pyramidLevels) {
+            console.log(`🔍 [UPDATE PYRAMID] pyramidLevels 없음, 종료`);
+            return;
+        }
 
+        console.log(`🔍 [UPDATE PYRAMID] 현재 레벨: ${this.currentPyramidLevel}`);
 
         const bestLevel = this.getBestPyramidLevel(this.transform.scale);
 
+        console.log(`🔍 [UPDATE PYRAMID] 계산된 최적 레벨: ${bestLevel}`);
         
         
         // 현재 레벨과 다르면 교체
 
         if (bestLevel !== this.currentPyramidLevel) {
 
+            console.log(`🔍 [UPDATE PYRAMID] 레벨 변경 필요: ${this.currentPyramidLevel} → ${bestLevel}`);
+
             if (this.pyramidLevels[bestLevel]) {
+
+                console.log(`🔍 [UPDATE PYRAMID] ✅ 즉시 교체: Level ${bestLevel} 이미 로드됨`);
 
                 // 이미 로드된 레벨이면 즉시 교체
 
@@ -7427,6 +7628,13 @@ class WaferMapViewer {
 
         if (!this.currentImage) return;
 
+        // 🔥 중복 호출 방지: 이미 리셋 중이면 스킵
+        if (this._isResetting) {
+            console.log(`🔍 [RESET VIEW] 중복 호출 방지 - 이미 리셋 중`);
+            return;
+        }
+        this._isResetting = true;
+
         const containerRect = this.dom.viewerContainer.getBoundingClientRect();
 
         // 컨테이너 경계선/스크롤 영향으로 인한 미세 클리핑 방지용 보정치(2px)
@@ -7461,10 +7669,15 @@ class WaferMapViewer {
         
         // 이미지 크기를 조정 (파일명 패널과 겹치지 않도록)
 
-        this.transform.scale = fitScale * FIT_RELATIVE_MARGIN * 0.96; // 99%로 조정
+        const newScale = fitScale * FIT_RELATIVE_MARGIN * 0.96; // 99%로 조정
+        
+        console.log(`🔍 [RESET VIEW] 줌 리셋: ${this.transform.scale} → ${newScale} (${(newScale * 100).toFixed(1)}%)`);
+        
+        this.transform.scale = newScale;
+        this.zoom = this.transform.scale; // 🎯 zoom 값 동기화
 
-        
-        
+        console.log(`🔍 [RESET VIEW] 동기화 완료: zoom=${this.zoom}, transform.scale=${this.transform.scale}`);
+
         // 🎯 실제 센터링도 원본 이미지 크기 기준으로 적용
 
         this.transform.dx = (containerRect.width - this.originalWidth * this.transform.scale) / 2;
@@ -7476,6 +7689,11 @@ class WaferMapViewer {
         this.updateZoomDisplay();
 
         if (shouldDraw) this.scheduleDraw();
+
+        // 🔥 리셋 플래그 해제 (다음 프레임에서)
+        setTimeout(() => {
+            this._isResetting = false;
+        }, 0);
 
     }
 
@@ -7605,9 +7823,12 @@ class WaferMapViewer {
 
         this.transform.dy = y - (y - this.transform.dy) * scale;
 
+        console.log(`🔍 [ZOOM AT POINT] 줌 변경: ${this.transform.scale} → ${newScale} (${(newScale * 100).toFixed(1)}%)`);
+        
         this.transform.scale = newScale;
+        this.zoom = newScale; // 🎯 zoom 값 동기화
 
-
+        console.log(`🔍 [ZOOM AT POINT] 동기화 완료: zoom=${this.zoom}, transform.scale=${this.transform.scale}`);
 
         this.updateZoomDisplay();
 
@@ -7631,11 +7852,15 @@ class WaferMapViewer {
 
     setZoom(level) {
 
+        console.log(`🔍 [SET ZOOM] 호출됨: level=${level} (${(level * 100).toFixed(1)}%)`);
+        
         const scale = level;
 
         const currentScale = this.transform.scale;
 
         const factor = scale / currentScale;
+
+        console.log(`🔍 [SET ZOOM] 계산: currentScale=${currentScale}, factor=${factor.toFixed(3)}`);
 
         this.zoomAtCenter(factor);
 
@@ -7691,8 +7916,12 @@ class WaferMapViewer {
 
         this.transform.dy = (containerRect.height - this.originalHeight * this.transform.scale) / 2 + (filenameBarHeight * 0.4);
 
-        
-        
+        console.log(`🔍 [RESET VIEW ABSOLUTE] 줌 설정: ${this.transform.scale} (${(this.transform.scale * 100).toFixed(1)}%)`);
+
+        this.zoom = this.transform.scale; // 🎯 zoom 값 동기화
+
+        console.log(`🔍 [RESET VIEW ABSOLUTE] 동기화 완료: zoom=${this.zoom}, transform.scale=${this.transform.scale}`);
+
         this.updateZoomDisplay();
 
         this.updatePyramidLevel(); // 🎯 피라미드 레벨 업데이트
@@ -7705,7 +7934,10 @@ class WaferMapViewer {
     
     updateZoomDisplay() {
 
-        this.dom.zoomLevelInput.value = `${Math.round(this.transform.scale * 100)}%`;
+        const displayValue = `${Math.round(this.transform.scale * 100)}%`;
+        this.dom.zoomLevelInput.value = displayValue;
+        
+        console.log(`🔍 [ZOOM DISPLAY] 표시값: ${displayValue} (this.transform.scale: ${this.transform.scale}, this.zoom: ${this.zoom})`);
 
     }
 
@@ -7899,6 +8131,20 @@ class WaferMapViewer {
         if (this.dom.subfolderSelect) {
             this.dom.subfolderSelect.addEventListener('change', (e) => this.onSubfolderSelect(e));
         }
+
+        // 제품 검색 기능 이벤트 리스너
+        if (this.dom.subfolderSearch) {
+            this.dom.subfolderSearch.addEventListener('input', (e) => this.handleSubfolderSearch(e));
+            this.dom.subfolderSearch.addEventListener('focus', () => this.showSubfolderDropdown());
+            this.dom.subfolderSearch.addEventListener('keydown', (e) => this.handleSubfolderKeydown(e));
+        }
+
+        // 검색 드롭다운 외부 클릭 시 숨기기
+        document.addEventListener('click', (e) => {
+            if (!this.dom.subfolderSearch?.contains(e.target) && !this.dom.subfolderDropdown?.contains(e.target)) {
+                this.hideSubfolderDropdown();
+            }
+        });
         
         if (this.dom.productSearchInput) {
             this.dom.productSearchInput.addEventListener('focus', () => this.showProductSearchDropdown());

@@ -794,10 +794,10 @@ def get_thumbnail_path(image_path: Path, size: Tuple[int, int]) -> Path:
     return THUMBNAIL_DIR / thumbnail_name
 
 def safe_resolve_path(path: Optional[str]) -> Path:
-    if not path: return ROOT_DIR
+    if not path: return current_folder
     try:
         normalized = os.path.normpath(str(path).lstrip("/\\"))
-        target = (ROOT_DIR / normalized).resolve()
+        target = (current_folder / normalized).resolve()
         if not str(target).startswith(str(ROOT_DIR)):
             raise HTTPException(status_code=400, detail="Invalid path")
         return target
@@ -815,7 +815,7 @@ def relkey_from_any_path(any_path: str) -> str:
     return str(abs_path.relative_to(ROOT_DIR)).replace("\\", "/")
 
 def _classification_dir() -> Path:
-    return ROOT_DIR / "classification"
+    return current_folder / "classification"
 
 def _classes_stat_mtime() -> float:
     try: return _classification_dir().stat().st_mtime
@@ -2201,16 +2201,39 @@ async def browse_folders(path: Optional[str] = None):
             raise HTTPException(status_code=404, detail="폴더를 찾을 수 없습니다")
 
         folders = []
+        subfolders = []  # 2depth 폴더들
+        
         try:
             with os.scandir(target_path) as it:
                 for entry in it:
                     if entry.is_dir(follow_symlinks=False) and not entry.name.startswith('.'):
-                        folders.append({"name": entry.name, "path": str(entry.path), "type": "folder"})
+                        # 1depth 폴더 추가
+                        folders.append({"name": entry.name, "path": str(entry.path), "type": "folder", "depth": 1})
+                        
+                        # 2depth 폴더들도 추가
+                        try:
+                            with os.scandir(entry.path) as sub_it:
+                                for sub_entry in sub_it:
+                                    if sub_entry.is_dir(follow_symlinks=False) and not sub_entry.name.startswith('.'):
+                                        subfolders.append({
+                                            "name": f"{entry.name} / {sub_entry.name}", 
+                                            "path": str(sub_entry.path), 
+                                            "type": "folder", 
+                                            "depth": 2,
+                                            "parent": entry.name
+                                        })
+                        except PermissionError:
+                            # 하위 폴더 접근 권한이 없으면 무시
+                            continue
+                            
         except PermissionError:
             raise HTTPException(status_code=403, detail="폴더 접근 권한이 없습니다")
 
-        folders.sort(key=lambda x: x["name"].lower(), reverse=True)
-        return {"folders": folders}
+        # 1depth와 2depth 폴더를 합치고 정렬
+        all_folders = folders + subfolders
+        all_folders.sort(key=lambda x: (x["depth"], x["name"].lower()), reverse=False)
+        
+        return {"folders": all_folders}
     except Exception as e:
         logger.error(f"폴더 브라우징 실패: {e}")
         raise HTTPException(status_code=500, detail=f"폴더 브라우징 실패: {str(e)}")
