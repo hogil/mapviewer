@@ -11464,8 +11464,7 @@ class WaferMapViewer {
                                 const fileName = selectedKey.split('/')[1];
                                 const imgList = this.classToImgListCache?.[cls] || [];
                                 const selectedImg = imgList.find(item => item.name === fileName);
-                                const imagePath = selectedImg?.root_relative || `classification/${selectedKey}`;
-                                this.loadImage(imagePath);
+                                this.loadImage(selectedImg.root_relative);  // 무조건 root_relative 사용
 
                             } else {
 
@@ -14097,7 +14096,7 @@ class WaferMapViewer {
             const [className, fileName] = key.split('/');
             const imgList = this.classToImgListCache?.[className] || [];
             const imgItem = imgList.find(item => item.name === fileName);
-            return imgItem?.root_relative || `classification/${key}`;
+            return imgItem.root_relative;  // 무조건 root_relative 사용
         });
 
 
