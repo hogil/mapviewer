@@ -789,12 +789,13 @@ async def saml_acs(request: Request):
             
             # detail_access.csv에 상세 기록
             try:
-                detail_access_logger.log_saml_access(meta, client_ip)
-                bootlog.info(f"✅ [DETAIL ACCESS] CSV 기록 완료")
+                bootlog.info(f"🔄 [DETAIL ACCESS] CSV 기록 시작 - meta: {meta}")
+                result = detail_access_logger.log_saml_access(meta, client_ip)
+                bootlog.info(f"✅ [DETAIL ACCESS] CSV 기록 완료 - 결과: {result}")
             except Exception as e:
                 bootlog.error(f"❌ [DETAIL ACCESS] CSV 기록 실패: {e}")
                 import traceback
-                bootlog.error(f"❌ [DETAIL ACCESS] 상세 에러: {traceback.format_exc()}")
+                bootlog.error(f"❌ [DETAIL ACCESS] 에러 상세: {traceback.format_exc()}")
     except Exception as e:
         bootlog.warning(f"⚠️ [SAML LOG] SAML 로그 기록 실패: {e}")
     

@@ -91,14 +91,14 @@ def log_user_access(user_data: Dict[str, Any], ip_address: str = '127.0.0.1'):
     
     csv_file = 'logs/detail_access.csv'
     headers = [
-        '접속시간',
-        '사용자ID', 
-        '이메일',
-        '이름',
-        '부서',
-        '직급',
-        '권한',
-        'IP주소'
+        '접속일시',
+        'Username',
+        'LoginId', 
+        'Sabun',
+        'DeptName',
+        'x-ms-forwarded-client-ip',
+        'GrdName_EN',
+        'GrdName'
     ]
     
     # 현재 시간
@@ -141,14 +141,14 @@ def create_sample_detail_access_csv():
     
     csv_file = 'logs/detail_access.csv'
     headers = [
-        '접속시간',
-        '사용자ID', 
-        '이메일',
-        '이름',
-        '부서',
-        '직급',
-        '권한',
-        'IP주소'
+        '접속일시',
+        'Username',
+        'LoginId', 
+        'Sabun',
+        'DeptName',
+        'x-ms-forwarded-client-ip',
+        'GrdName_EN',
+        'GrdName'
     ]
     
     # 샘플 데이터

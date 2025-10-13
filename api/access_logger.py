@@ -790,8 +790,10 @@ class AccessLogger:
     # 통계 API 메서드들
     def get_daily_stats(self) -> Dict[str, Any]:
         """일별 통계 조회 - 실시간 활성 사용자 포함"""
+        # 실시간으로 최신 stats.json 데이터 로드
+        current_stats = self._load_stats()
         today = datetime.now().strftime('%Y-%m-%d')
-        today_data = self.stats_data["daily_stats"].get(today, {
+        today_data = current_stats["daily_stats"].get(today, {
             "active_users": [],
             "new_users": [],
             "total_requests": 0
@@ -856,8 +858,10 @@ class AccessLogger:
     
     def get_users_stats(self) -> Dict[str, Any]:
         """사용자 통계 - 세션 정보 포함 (접속일수 기준 내림차순 정렬)"""
+        # 실시간으로 최신 stats.json 데이터 로드
+        current_stats = self._load_stats()
         users = []
-        for user_id, data in self.stats_data["users"].items():
+        for user_id, data in current_stats["users"].items():
             # localhost IP 제외
             if user_id in ['127.0.0.1', '::1', 'localhost']:
                 continue
@@ -897,10 +901,12 @@ class AccessLogger:
     
     def get_recent_users(self) -> Dict[str, Any]:
         """최근 접속 사용자 (LoginId 기준)"""
+        # 실시간으로 최신 stats.json 데이터 로드
+        current_stats = self._load_stats()
         today = datetime.now().strftime('%Y-%m-%d')
         
         recent_users = []
-        for user_id, data in self.stats_data["users"].items():
+        for user_id, data in current_stats["users"].items():
             # localhost IP 제외
             if user_id in ['127.0.0.1', '::1', 'localhost']:
                 continue
