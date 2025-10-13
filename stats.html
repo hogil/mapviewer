@@ -650,8 +650,8 @@
                 const newUsers = deptData?.new_users_30d || 0;
                 
                 html += `
-                    <div style="display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #333; font-size: 0.9em; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
-                        <div style="color: #4CAF50; font-weight: bold;">${dept.name}</div>
+                    <div class="clickable" onclick="showDepartmentDetail('${dept.key}')" style="display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #333; font-size: 0.9em; transition: background-color 0.2s; cursor: pointer;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
+                        <div style="color: #4CAF50; font-weight: bold;">📁 ${dept.name}</div>
                         <div style="text-align: center; color: #2196F3; font-weight: bold;">${dept.userCount}명</div>
                         <div style="text-align: center; color: #FF9800; font-weight: bold;">${dept.totalRequests.toLocaleString()}</div>
                         <div style="text-align: center; color: #9C27B0; font-weight: bold;">${newUsers}명</div>
@@ -1029,6 +1029,88 @@
             } catch (error) {
                 console.error('사용자 상세 정보 로드 실패:', error);
                 alert('사용자 상세 정보를 불러올 수 없습니다.');
+            }
+        }
+        
+        async function showDepartmentDetail(deptKey) {
+            try {
+                const deptData = departmentData.departments[deptKey];
+                
+                if (!deptData) {
+                    alert('부서 데이터를 찾을 수 없습니다.');
+                    return;
+                }
+                
+                document.getElementById('modalTitle').textContent = `🏢 ${deptData.name} - 사용자 목록`;
+                
+                const modalBody = document.getElementById('modalBody');
+                
+                // 부서 요약 정보
+                let html = `
+                    <div class="detail-grid" style="margin-bottom: 20px;">
+                        <div class="detail-card">
+                            <div class="detail-title">총 사용자 수</div>
+                            <div class="detail-value">${deptData.user_count}명</div>
+                        </div>
+                        <div class="detail-card">
+                            <div class="detail-title">총 요청 수</div>
+                            <div class="detail-value">${deptData.total_requests.toLocaleString()}회</div>
+                        </div>
+                        <div class="detail-card">
+                            <div class="detail-title">30일 내 신규</div>
+                            <div class="detail-value">${deptData.new_users_30d}명</div>
+                        </div>
+                        <div class="detail-card">
+                            <div class="detail-title">평균 요청 수</div>
+                            <div class="detail-value">${Math.round(deptData.total_requests / deptData.user_count)}회/인</div>
+                        </div>
+                    </div>
+                    
+                    <h3 style="margin: 20px 0 10px 0; color: #4CAF50;">👥 사용자 목록</h3>
+                `;
+                
+                // 사용자 목록 테이블 헤더
+                html += `
+                    <div style="max-height: 400px; overflow-y: auto;">
+                        <div style="display: grid; grid-template-columns: 150px 100px 100px 150px; gap: 8px; padding: 8px 12px; background: #333; font-weight: bold; font-size: 0.9em; border-radius: 4px; margin-bottom: 4px; position: sticky; top: 0;">
+                            <div>ID</div>
+                            <div style="text-align: center;">이름</div>
+                            <div style="text-align: center;">직급</div>
+                            <div style="text-align: center;">첫 접속</div>
+                        </div>
+                `;
+                
+                // 사용자 목록 (첫 접속일 기준 최신순 정렬)
+                const sortedUsers = (deptData.users || []).sort((a, b) => {
+                    return (b.first_seen || '').localeCompare(a.first_seen || '');
+                });
+                
+                sortedUsers.forEach(user => {
+                    const profile = user.profile || {};
+                    const displayName = profile.Username || user.user_id;
+                    const position = profile.GrdName_EN || '-';
+                    const firstSeen = formatDate(user.first_seen || '-');
+                    const userId = user.user_id.includes('@') ? user.user_id.split('@')[0] : user.user_id;
+                    const shortId = userId.length > 18 ? userId.substring(0, 18) + '...' : userId;
+                    
+                    html += `
+                        <div class="clickable" onclick="closeModal(); setTimeout(() => showUserDetail('${user.user_id}'), 100);" style="display: grid; grid-template-columns: 150px 100px 100px 150px; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #333; font-size: 0.9em; transition: background-color 0.2s; cursor: pointer;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
+                            <div style="color: #64B5F6; overflow: hidden;" title="${userId}">${shortId}</div>
+                            <div style="text-align: center; color: #81C784; overflow: hidden;" title="${displayName}">${displayName}</div>
+                            <div style="text-align: center; color: #FFB74D; overflow: hidden;" title="${position}">${position}</div>
+                            <div style="text-align: center; color: #4DB6AC;">${firstSeen}</div>
+                        </div>
+                    `;
+                });
+                
+                html += `</div>`;
+                
+                modalBody.innerHTML = html;
+                document.getElementById('userModal').style.display = 'block';
+                
+            } catch (error) {
+                console.error('부서 상세 정보 표시 실패:', error);
+                alert('부서 상세 정보를 표시할 수 없습니다.');
             }
         }
         

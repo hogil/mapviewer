@@ -89,8 +89,13 @@ def fix_all_ip_users():
             # user_type 설정
             data["user_type"] = "ip"
         else:
-            # SAML 사용자
+            # SAML 사용자 - 빈 필드는 공백으로 처리
             data["user_type"] = "saml"
+            
+            # 필수 필드가 비어있으면 빈 문자열로 설정 (Guest 등 기본값 사용 안 함)
+            for field in SAML_FIELDS:
+                if field not in profile or profile[field] is None:
+                    profile[field] = ""
         
         # 3. 7개 필드만 남기고 나머지 삭제
         allowed_keys = set(SAML_FIELDS)
