@@ -1174,7 +1174,11 @@ def _labels_load():
         except Exception:
             LABELS_MTIME = time.time()
 
-        log_access_row(tag="INFO", note=f"라벨 로드: {len(LABELS)}개 이미지 (mtime={LABELS_MTIME:.5f})")
+        # 메인 워커에서만 로그 출력
+        import multiprocessing
+        worker_id = multiprocessing.current_process()._identity
+        if not worker_id or worker_id == (0,) or worker_id == ():
+            log_access_row(tag="INFO", note=f"라벨 로드: {len(LABELS)}개 이미지 (mtime={LABELS_MTIME:.5f})")
     except Exception as e:
         logger.error(f"라벨 로드 실패: {e}")
 
@@ -1253,7 +1257,12 @@ async def build_file_index_background():
     global INDEX_BUILDING, INDEX_READY
     if INDEX_BUILDING: return
     INDEX_BUILDING, INDEX_READY = True, False
-    log_access_row(tag="INFO", note="백그라운드 인덱스 구축 시작")
+    
+    # 메인 워커에서만 로그 출력
+    import multiprocessing
+    worker_id = multiprocessing.current_process()._identity
+    if not worker_id or worker_id == (0,) or worker_id == ():
+        log_access_row(tag="INFO", note="백그라운드 인덱스 구축 시작")
 
     def _walk_and_index():
         global INDEX_READY
@@ -2664,21 +2673,27 @@ async def browse_folders(path: Optional[str] = None):
 # ======================== Lifecycle ========================
 @app.on_event("startup")
 async def startup_event():
+    # 🔥 워커별로 중복 로그 방지: 메인 워커(또는 단일 프로세스)에서만 시작 로그 출력
+    import multiprocessing
+    worker_id = multiprocessing.current_process()._identity
+    is_main_worker = not worker_id or worker_id == (0,) or worker_id == ()
+    
     bootlog = logging.getLogger("uvicorn.error")
-    bootlog.info("🚀 L3Tracker 서버 시작 (테이블 로그 시스템)")
-    scheme = "HTTPS" if config.SSL_ENABLED else "HTTP"
-    port_to_log = config.HTTPS_PORT if config.SSL_ENABLED else config.DEFAULT_PORT
-    bootlog.info(f"📍 호스트: {config.DEFAULT_HOST}")
-    bootlog.info(f"🔌 포트: {port_to_log} ({scheme})")
-    bootlog.info(f"📁 ROOT_DIR: {config.ROOT_DIR}")
-    bootlog.info(f"🔧 PROJECT_ROOT: {os.getenv('PROJECT_ROOT', 'NOT SET')}")
-    
-    # 🔍 서버 시작 시 current_folder 정보 출력
-    bootlog.info(f"🔍 [STARTUP] current_folder: {current_folder}")
-    bootlog.info(f"🔍 [STARTUP] THUMBNAIL_DIR: {THUMBNAIL_DIR}")
-    
-    bootlog.info("=" * 50)
-    print_access_header_once()
+    if is_main_worker:
+        bootlog.info("🚀 L3Tracker 서버 시작 (테이블 로그 시스템)")
+        scheme = "HTTPS" if config.SSL_ENABLED else "HTTP"
+        port_to_log = config.HTTPS_PORT if config.SSL_ENABLED else config.DEFAULT_PORT
+        bootlog.info(f"📍 호스트: {config.DEFAULT_HOST}")
+        bootlog.info(f"🔌 포트: {port_to_log} ({scheme})")
+        bootlog.info(f"📁 ROOT_DIR: {config.ROOT_DIR}")
+        bootlog.info(f"🔧 PROJECT_ROOT: {os.getenv('PROJECT_ROOT', 'NOT SET')}")
+        
+        # 🔍 서버 시작 시 current_folder 정보 출력
+        bootlog.info(f"🔍 [STARTUP] current_folder: {current_folder}")
+        bootlog.info(f"🔍 [STARTUP] THUMBNAIL_DIR: {THUMBNAIL_DIR}")
+        
+        bootlog.info("=" * 50)
+        print_access_header_once()
 
     # asyncio 소음 예외 억제(10054 등)
     try:
