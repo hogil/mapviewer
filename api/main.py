@@ -545,7 +545,12 @@ async def saml_login(request: Request):
         resp = RedirectResponse(idp_login_url)
         # 쿠키 사용 안 함 - org_url은 SAML 응답에서 처리
         
+        # User-Agent 로그 추가 (Edge 브라우저 디버깅)
+        user_agent = request.headers.get("user-agent", "")
         logger.info(f"✅ [SAML LOGIN] 리다이렉트 응답 반환")
+        logger.info(f"🌐 [USER AGENT] {user_agent}")
+        logger.info(f"🔗 [IDP URL] {idp_login_url}")
+        
         return resp
     except Exception as e:
         logger.exception(f"❌ [SAML LOGIN ERROR] 로그인 처리 실패: {e}")
@@ -1008,10 +1013,21 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
 
         client_ip = logger_instance.get_client_ip(request)
         
-        # 🚀 캐시를 사용한 빠른 사용자 조회 (매 요청마다 전체 순회 방지)
-        user_id, meta_dict = logger_instance.get_user_by_ip(client_ip)
+        # AUTO_LOGIN 활성화 시: 메모리 세션에서만 사용자 정보 가져오기 (stats.json 무시)
+        if AUTO_LOGIN:
+            # 메모리 세션에서 사용자 정보 가져오기
+            session_user = getattr(request.state, "session_user", None)
+            session_meta = getattr(request.state, "session_meta", {})
+            
+            user_id = session_user or ""
+            meta_dict = session_meta or {}
+            
+            logger.info(f"💾 [AUTO_LOGIN] 메모리 세션 사용: user_id={user_id}, meta={list(meta_dict.keys())}")
+        else:
+            # AUTO_LOGIN 비활성화 시: stats.json에서 사용자 정보 조회
+            user_id, meta_dict = logger_instance.get_user_by_ip(client_ip)
         
-        # 표시: 계정 이름 부서 IP (stats.json에서 가져온 정보 사용)
+        # 표시: 계정 이름 부서 IP
         display_user = client_ip
         if meta_dict:
             name = meta_dict.get('Username')
