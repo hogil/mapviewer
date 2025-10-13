@@ -977,9 +977,15 @@ def safe_resolve_path(path: Optional[str]) -> Path:
     if not path: return current_folder
     try:
         normalized = os.path.normpath(str(path).lstrip("/\\"))
-        target = (current_folder / normalized).resolve()
+        
+        # 🔥 ROOT_DIR 기준으로 경로 해석 (current_folder 무시)
+        # 프론트엔드에서 전달하는 path는 이미 ROOT_DIR 기준 상대경로
+        target = (ROOT_DIR / normalized).resolve()
+        
         if not str(target).startswith(str(ROOT_DIR)):
             raise HTTPException(status_code=400, detail="Invalid path")
+        
+        logger.info(f"🔍 [safe_resolve_path] input: {path}, normalized: {normalized}, target: {target}")
         return target
     except HTTPException:
         raise
