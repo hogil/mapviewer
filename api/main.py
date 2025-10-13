@@ -913,8 +913,9 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
                     login_url = '/saml/login'
                     if DEFAULT_ORG_URL:
                         login_url += f"?org_url={DEFAULT_ORG_URL}"
-                    logger.info(f"🔐 [AUTO LOGIN] 세션 없음 → /saml/login으로 리다이렉트 (로그 스킵)")
+                    logger.info(f"🔐 [AUTO LOGIN] 세션 없음 → /saml/login으로 리다이렉트 (로그 완전 스킵)")
                     skip_logging = True  # IP 로그인 기록 방지
+                    # 즉시 리다이렉트 반환 (call_next 호출 전)
                     return RedirectResponse(login_url, status_code=302)
         
         response = await call_next(request)

@@ -465,8 +465,12 @@
                 // 부서 데이터가 없는 경우 빈 객체로 처리
                 try {
                     departmentData = await departmentResponse.json();
+                    console.log('✅ [부서 데이터] 로드 성공:', {
+                        부서수: Object.keys(departmentData.departments || {}).length,
+                        부서목록: Object.keys(departmentData.departments || {})
+                    });
                 } catch (e) {
-                    console.warn('부서 데이터 로드 실패:', e);
+                    console.error('❌ [부서 데이터] 로드 실패:', e);
                     departmentData = { departments: {}, activity: {} };
                 }
                 
