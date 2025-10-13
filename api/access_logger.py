@@ -441,6 +441,18 @@ class AccessLogger:
         
         print(f"✅ [LOG] SAML 로그 기록: user_id={user_id}, ip={ip}, endpoint={endpoint}, profile={list(profile_meta.keys())}")
         
+        # 🔥 detail_access.csv에 기록 (SAML 로그인 시마다)
+        if endpoint == "/saml/acs" and profile_meta:
+            try:
+                from .detail_access_logger import detail_access_logger
+                print(f"🔄 [CSV 기록] detail_access.csv 기록 시작 - user_id: {user_id}")
+                result = detail_access_logger.log_saml_access(profile_meta, ip)
+                print(f"✅ [CSV 기록] detail_access.csv 기록 완료 - 결과: {result}")
+            except Exception as e:
+                print(f"❌ [CSV 기록] detail_access.csv 기록 실패: {e}")
+                import traceback
+                traceback.print_exc()
+        
         # 중복 요청 체크 (IP→LoginId 전환 시 중복 방지)
         # 같은 IP에서 5초 이내에 이미 로그가 있으면 스킵 (SAML 로그인 직후 중복 방지)
         recent_key = f"{ip}_{endpoint}"
