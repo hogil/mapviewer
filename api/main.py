@@ -696,22 +696,15 @@ async def saml_dev_login(request: Request):
             user = f"{account}@{pc or 'unknown'}"
         else:
             user = "dev-user"
-    # 메타데이터를 별도 쿠키에 JSON으로 저장
+    # 메타데이터를 별도 쿠키에 JSON으로 저장 (원본 SAML claim 이름 사용)
     meta = {
-        "company": company,
-        "department": department or dept_name,
-        "team": team,
-        "title": title or grd_name or grd_name_en,
-        "account": account,
-        "pc": pc,
-        # 사내 보존 필드들
-        "login_id": login_id or account,
-        "department_id": dept_id,
-        "employee_id": sabun,
-        "department_name": dept_name,
-        "grade": grd_name,
-        "grade_en": grd_name_en,
-        "username": username,
+        "LoginId": login_id or account,
+        "Username": username,
+        "Sabun": sabun,
+        "DeptName": dept_name or department,
+        "DeptId": dept_id,
+        "GrdName": grd_name or title,
+        "GrdName_EN": grd_name_en,
     }
     # None 제거
     meta = {k: v for k, v in meta.items() if v}
@@ -755,22 +748,8 @@ async def api_whoami(request: Request):
     authenticated = bool(user)
     logger.info(f"✅ [API /auth/user] authenticated: {authenticated}, user: {user}")
     
-    # 프론트엔드 호환: meta를 metadata로도 제공 (필드명 매핑은 최소화)
-    metadata = {}
-    if meta:
-        # 주요 필드만 snake_case 변환 추가 (성능 최적화)
-        metadata = dict(meta)  # 원본 유지
-        if "LoginId" in meta:
-            metadata["login_id"] = meta["LoginId"]
-            metadata["LginId"] = meta["LoginId"]  # 오타 호환
-        if "Username" in meta:
-            metadata["name"] = meta["Username"]
-            metadata["username"] = meta["Username"]
-        if "DeptName" in meta:
-            metadata["department_name"] = meta["DeptName"]
-            metadata["department"] = meta["DeptName"]
-        if "Sabun" in meta:
-            metadata["employee_id"] = meta["Sabun"]
+    # 프론트엔드 호환: 원본 SAML claim 이름 그대로 사용
+    metadata = dict(meta) if meta else {}
     
     return {
         "authenticated": authenticated,
@@ -870,11 +849,11 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
                 meta_dict = json.loads(meta_cookie)
             except Exception:
                 meta_dict = None
-        # 표시: 계정 이름 부서 IP
+        # 표시: 계정 이름 부서 IP (원본 SAML claim 이름 사용)
         display_user = user_cookie or client_ip
         if meta_dict:
-            name = meta_dict.get('Username') or meta_dict.get('username')
-            dept = meta_dict.get('DeptName') or meta_dict.get('department')
+            name = meta_dict.get('Username')
+            dept = meta_dict.get('DeptName')
             parts = []
             if user_cookie: parts.append(user_cookie)
             if name: parts.append(name)
@@ -904,12 +883,10 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         # 내부 log_access 호출은 try/except로 무시되므로, 테이블 출력은 아래 한 번만 수행
 
         note = _note_from_request(request, endpoint)
-        # NOTE 칼럼에 부서/팀/회사 간단 표기 (있을 때만)
+        # NOTE 칼럼에 부서 간단 표기 (있을 때만)
         if meta_dict:
             bits = []
-            if meta_dict.get("company"): bits.append(meta_dict.get("company"))
-            if meta_dict.get("department"): bits.append(meta_dict.get("department"))
-            if meta_dict.get("team"): bits.append(meta_dict.get("team"))
+            if meta_dict.get("DeptName"): bits.append(meta_dict.get("DeptName"))
             if bits:
                 note = (note + " ").strip() + f"[{ ' / '.join(bits) }]"
         # IP 칼럼에 계정(username@hostname) 우선 표시
