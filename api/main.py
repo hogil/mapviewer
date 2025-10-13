@@ -1330,11 +1330,14 @@ class ClassifyDeleteBatchReq(BaseModel):
 async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
     try:
         target = safe_resolve_path(path)
+        logger.info(f"📁 [/api/files] path: {path}, target: {target}")
         if not target.exists() or not target.is_dir():
+            logger.warning(f"⚠️ [/api/files] 폴더 없음: {target}")
             return JSONResponse({"success": False, "error": "Not found"}, status_code=404)
         if any(x in str(target).replace('\\', '/') for x in ['classification', 'images', 'labels']):
             _dircache_invalidate(target)
         items = list_dir_fast(target)
+        logger.info(f"📁 [/api/files] 반환 항목 수: {len(items)} (폴더: {sum(1 for x in items if x['type']=='directory')}, 파일: {sum(1 for x in items if x['type']=='file')})")
         # prefer 폴더명을 최상단에
         if prefer:
             try:
