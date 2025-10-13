@@ -8,8 +8,7 @@ $env:PYTHONIOENCODING = "utf-8"
 chcp 65001 | Out-Null
 
 # 환경변수 설정
-$env:AUTO_LOGIN="0"      # 1=자동SAML로그인강제, 0=비활성화
-$env:SAML_ENABLED="0"    # 1=SAML활성화, 0=SAML비활성화
+$env:AUTO_LOGIN="1"      # 1=자동SAML로그인강제, 0=비활성화
 $env:HOST="0.0.0.0"
 $env:PORT="8080"
 $env:SSL_ENABLED="1"
