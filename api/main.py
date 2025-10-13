@@ -706,9 +706,11 @@ async def saml_acs(request: Request):
     bootlog.info("=" * 100)
     
     # detail_access.csv에 상세 기록 (SAML 속성 추출 직후)
+    bootlog.info("🚨🚨🚨 [CSV 기록 블록 진입] 이 로그가 보이면 코드 실행됨 🚨🚨🚨")
     try:
         client_ip = logger_instance.get_client_ip(request)
-        bootlog.info(f"🔄 [DETAIL ACCESS] CSV 기록 시작 - meta: {meta}")
+        bootlog.info(f"🔄 [DETAIL ACCESS] CSV 기록 시작 - client_ip: {client_ip}")
+        bootlog.info(f"🔄 [DETAIL ACCESS] meta 내용: {meta}")
         result = detail_access_logger.log_saml_access(meta, client_ip)
         bootlog.info(f"✅ [DETAIL ACCESS] CSV 기록 완료 - 결과: {result}")
     except Exception as e:
