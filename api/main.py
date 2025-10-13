@@ -902,6 +902,8 @@ async def no_store_for_labels_and_classes(request: Request, call_next):
 class AccessTrackingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # 자동 로그인 강제: 세션 쿠키가 없고 HTML 페이지 접근 시 /saml/login으로 리다이렉트
+        skip_logging = False  # 로그 스킵 플래그
+        
         if AUTO_LOGIN:
             path = request.url.path
             # 정적/JS/API 는 제외하고, 루트/페이지 접근만 리다이렉트
@@ -911,9 +913,15 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
                     login_url = '/saml/login'
                     if DEFAULT_ORG_URL:
                         login_url += f"?org_url={DEFAULT_ORG_URL}"
-                    logger.info(f"🔐 [AUTO LOGIN] 세션 없음 → /saml/login으로 리다이렉트")
+                    logger.info(f"🔐 [AUTO LOGIN] 세션 없음 → /saml/login으로 리다이렉트 (로그 스킵)")
+                    skip_logging = True  # IP 로그인 기록 방지
                     return RedirectResponse(login_url, status_code=302)
+        
         response = await call_next(request)
+        
+        # SAML 리다이렉트로 인한 요청은 로그 스킵
+        if skip_logging:
+            return response
 
         client_ip = logger_instance.get_client_ip(request)
         user_cookie = request.cookies.get("session_user") or None
