@@ -381,8 +381,8 @@ class AccessLogger:
         # 사내 SAML claim 7개 필드만 사용
         SAML_FIELDS = ["Username", "LoginId", "Sabun", "DeptName", "GrdName_EN", "GrdName", "x-ms-forwarded-client-ip"]
         
+        # 🔥 1. meta에서 LoginId 추출 시도
         if meta and isinstance(meta, dict):
-            # SAML 로그인 정보가 있으면 LoginId 사용
             login_id = meta.get("LoginId")
             if login_id:
                 user_id = login_id
@@ -391,20 +391,26 @@ class AccessLogger:
                     value = meta.get(field)
                     if value:
                         profile_meta[field] = value
-            else:
-                # SAML 로그인 정보가 없으면 스킵 (IP 로그 방지)
-                return
-        else:
-            # meta가 없으면 스킵 (IP 로그 방지)
-            return
         
-        # user_id_override가 있으면 우선 사용 (백워드 호환성)
-        if user_id_override:
+        # 🔥 2. meta가 없으면 user_id_override 사용 (쿠키에서 온 LoginId)
+        if not user_id and user_id_override:
             user_id = user_id_override
+            # stats.json에서 기존 profile 정보 가져오기
+            existing_user = self.stats_data.get("users", {}).get(user_id, {})
+            if existing_user:
+                profile_meta = existing_user.get("profile", {})
         
-        # 🔥 LoginId가 없으면 로그 기록 안 함 (IP 로그 완전 차단)
+        # 🔥 3. 여전히 user_id가 없거나 IP와 같으면 완전 차단
         if not user_id or user_id == ip:
+            # IP만 있고 LoginId가 없음 → IP 로그 차단
             return
+        
+        # 🔥 4. LoginId가 있지만 profile이 비어있으면 차단 (SAML 미인증)
+        if not profile_meta or len(profile_meta) == 0:
+            # profile이 없음 → SAML 미인증 사용자 → 차단
+            return
+        
+        print(f"✅ [LOG] SAML 로그 기록: user_id={user_id}, ip={ip}, endpoint={endpoint}")
         
         # 중복 요청 체크 (IP→LoginId 전환 시 중복 방지)
         # 같은 IP에서 5초 이내에 이미 로그가 있으면 스킵 (SAML 로그인 직후 중복 방지)

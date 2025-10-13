@@ -946,33 +946,37 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
             return response
 
         client_ip = logger_instance.get_client_ip(request)
-        user_cookie = request.cookies.get("session_user") or None
-        # 세션 메타(JSON) 파싱 시도
-        meta_cookie = request.cookies.get("session_meta")
+        
+        # 🔥 쿠키 사용 안 함! stats.json에서 IP로 사용자 찾기
+        # IP 기반으로 stats.json에서 기존 사용자 정보 조회
+        existing_users = logger_instance.stats_data.get("users", {})
+        user_id = None
         meta_dict = None
-        if meta_cookie:
-            try:
-                import base64
-                # base64 디코딩 시도 (새 방식)
-                try:
-                    decoded = base64.b64decode(meta_cookie).decode('utf-8')
-                    meta_dict = json.loads(decoded)
-                except Exception:
-                    # 이전 방식 (JSON 직접) 호환성
-                    meta_dict = json.loads(meta_cookie)
-            except Exception:
-                meta_dict = None
-        # 표시: 계정 이름 부서 IP (원본 SAML claim 이름 사용)
-        display_user = user_cookie or client_ip
+        
+        # IP로 등록된 사용자 찾기 (ip_addresses에 포함된 사용자)
+        for uid, udata in existing_users.items():
+            ip_addresses = udata.get("ip_addresses", [])
+            if client_ip in ip_addresses:
+                # 이 IP를 사용하는 사용자 발견
+                profile = udata.get("profile", {})
+                if profile and profile.get("LoginId"):
+                    # SAML 사용자
+                    user_id = uid
+                    meta_dict = profile  # profile을 meta로 사용
+                    break
+        
+        # 표시: 계정 이름 부서 IP (stats.json에서 가져온 정보 사용)
+        display_user = client_ip
         if meta_dict:
             name = meta_dict.get('Username')
             dept = meta_dict.get('DeptName')
             parts = []
-            if user_cookie: parts.append(user_cookie)
+            if user_id: parts.append(user_id)
             if name: parts.append(name)
             if dept: parts.append(dept)
             parts.append(client_ip)
             display_user = " | ".join(parts)
+        
         method = request.method
         status = response.status_code
 
@@ -984,8 +988,8 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
             tag = "API"
 
         try:
-            # 계정 쿠키(session_user)가 있으면 해당 사용자 기준으로 통계 집계 + 부서/팀/회사 메타
-            logger_instance._update_stats(client_ip, endpoint, method, user_id_override=user_cookie, meta=meta_dict)
+            # stats.json 기반으로 통계 업데이트 (쿠키 사용 안 함)
+            logger_instance._update_stats(client_ip, endpoint, method, user_id_override=user_id, meta=meta_dict)
         except Exception:
             pass
         # 내부 log_access 호출은 try/except로 무시되므로, 테이블 출력은 아래 한 번만 수행
