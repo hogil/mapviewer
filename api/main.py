@@ -923,6 +923,13 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         if skip_logging:
             return response
 
+        endpoint = str(request.url.path)
+        
+        # 🔥 로그 스킵 대상 엔드포인트 체크 (통계 업데이트 전에 먼저 체크)
+        skip_prefix = ["/favicon.ico", "/static/", "/js/", "/api/files/all", "/api/stats", "/api/stats/", "/stats", "/saml/login", "/saml/acs", "/saml/metadata", "/saml/sls"]
+        if any(endpoint.startswith(p) for p in skip_prefix):
+            return response
+
         client_ip = logger_instance.get_client_ip(request)
         user_cookie = request.cookies.get("session_user") or None
         # 세션 메타(JSON) 파싱 시도
@@ -951,13 +958,8 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
             if dept: parts.append(dept)
             parts.append(client_ip)
             display_user = " | ".join(parts)
-        endpoint = str(request.url.path)
         method = request.method
         status = response.status_code
-
-        skip_prefix = ["/favicon.ico", "/static/", "/js/", "/api/files/all", "/api/stats", "/api/stats/", "/stats"]
-        if any(endpoint.startswith(p) for p in skip_prefix):
-            return response
 
         if endpoint.startswith(("/api/thumbnail", "/api/image")):
             tag = "IMAGE"

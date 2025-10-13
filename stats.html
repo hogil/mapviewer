@@ -641,8 +641,9 @@
             `;
             
             departments.forEach(dept => {
-                // 한달간 신규사용자 수 계산 (더미 데이터)
-                const newUsers = Math.floor(dept.userCount * 0.1) + Math.floor(Math.random() * 3);
+                // 실제 30일 내 신규사용자 수 사용
+                const deptData = departmentData.departments[dept.key];
+                const newUsers = deptData?.new_users_30d || 0;
                 
                 html += `
                     <div style="display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #333; font-size: 0.9em; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">

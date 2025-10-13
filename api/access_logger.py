@@ -773,7 +773,7 @@ class AccessLogger:
         return trend_data
     
     def get_users_stats(self) -> Dict[str, Any]:
-        """사용자 통계 - 세션 정보 포함"""
+        """사용자 통계 - 세션 정보 포함 (접속일수 기준 내림차순 정렬)"""
         users = []
         for user_id, data in self.stats_data["users"].items():
             # localhost IP 제외
@@ -805,8 +805,8 @@ class AccessLogger:
                 "user_type": data.get("user_type", "unknown")  # 사용자 타입 추가
             })
         
-        # 총 요청 수로 정렬
-        users.sort(key=lambda x: x["total_requests"], reverse=True)
+        # 접속일수 기준 내림차순 정렬 (동일하면 총 요청 수로 2차 정렬)
+        users.sort(key=lambda x: (x["unique_days"], x["total_requests"]), reverse=True)
         
         return {
             "total_users": len(users),
@@ -855,8 +855,11 @@ class AccessLogger:
         return self.stats_data["users"][user_id]
     
     def get_department_stats(self) -> Dict[str, Any]:
-        """부서별 사용자 분포 및 활동량 통계 - LoginId 기준"""
+        """부서별 사용자 분포 및 활동량 통계 - LoginId 기준 (30일 내 신규 사용자 포함)"""
         departments = {}
+        
+        # 30일 전 날짜 계산
+        thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
         
         for user_id, data in self.stats_data["users"].items():
             # localhost IP 제외
@@ -878,11 +881,17 @@ class AccessLogger:
                     "name": dept_name,
                     "user_count": 0,
                     "total_requests": 0,
+                    "new_users_30d": 0,  # 30일 내 신규 사용자
                     "users": []
                 }
             
             # 사용자 수 증가
             departments[dept_name]["user_count"] += 1
+            
+            # 30일 내 신규 사용자 체크
+            first_seen = data.get("first_seen", "")
+            if first_seen >= thirty_days_ago:
+                departments[dept_name]["new_users_30d"] += 1
             
             # 총 요청 수 계산
             total_requests = 0
@@ -894,7 +903,8 @@ class AccessLogger:
             # 사용자 정보 저장
             departments[dept_name]["users"].append({
                 "user_id": user_id,
-                "profile": profile
+                "profile": profile,
+                "first_seen": first_seen
             })
         
         return {
