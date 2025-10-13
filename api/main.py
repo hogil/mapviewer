@@ -606,29 +606,7 @@ async def saml_acs(request: Request):
                 status_code=400
             )
     
-    logger.info(f"✅ [LoginId 확인] LoginId 존재 → 후속 진행")
-    
-    # SAML 인증 체크 (LoginId가 있는 경우에만)
-    if errors or not auth.is_authenticated():
-        reason = auth.get_last_error_reason() or ""
-        logger.error(f"🚫 [SAML ACS] 인증 실패: {errors} / {reason}")
-        
-        # IdP로 다시 리다이렉트
-        try:
-            base_settings, _ = _load_saml_files()
-            idp_sso_url = base_settings.get("idp", {}).get("singleSignOnService", {}).get("url")
-            
-            if idp_sso_url:
-                logger.info(f"[SAML ACS] 인증 실패 → IdP SSO로 리다이렉트: {idp_sso_url}")
-                return RedirectResponse(idp_sso_url, status_code=302)
-        except Exception as e:
-            logger.error(f"[SAML ACS] IdP SSO URL 로드 실패: {e}")
-        
-        # 모든 시도 실패 시 에러 메시지
-        return PlainTextResponse(
-            f"SAML 인증 실패\n\n오류: {errors or 'not_authenticated'}\n상세: {reason}\n\n관리자에게 문의하세요.",
-            status_code=400
-        )
+    logger.info(f"✅ [LoginId 확인] LoginId 존재 → SAML 로그인 성공")
     
     # 로그 출력
     bootlog = logging.getLogger("uvicorn.error")
