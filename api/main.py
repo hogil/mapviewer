@@ -492,12 +492,23 @@ async def saml_login(request: Request):
             try:
                 prev_meta = request.cookies.get("session_meta")
                 if prev_meta:
-                    cur = json.loads(prev_meta)
+                    import base64
+                    try:
+                        decoded = base64.b64decode(prev_meta).decode('utf-8')
+                        cur = json.loads(decoded)
+                    except Exception:
+                        cur = json.loads(prev_meta)
                     cur.update(meta)
                     meta = cur
             except Exception:
                 pass
-            resp.set_cookie("session_meta", json.dumps(meta, ensure_ascii=False), max_age=7*24*3600, secure=True, httponly=False, samesite="Lax")
+            
+            # base64 인코딩
+            import base64
+            is_https = request.url.scheme == "https"
+            meta_json = json.dumps(meta, ensure_ascii=False)
+            meta_b64 = base64.b64encode(meta_json.encode('utf-8')).decode('ascii')
+            resp.set_cookie("session_meta", meta_b64, max_age=7*24*3600, secure=is_https, httponly=False, samesite="Lax", path="/")
         
         logger.info(f"✅ [SAML LOGIN] 리다이렉트 응답 반환")
         return resp
@@ -563,7 +574,8 @@ async def saml_acs(request: Request):
                    request.query_params.get("LoginId") or request.query_params.get("user") or
                    request.query_params.get("email") or "dev-user")
             resp = RedirectResponse("/", status_code=302)
-            resp.set_cookie("session_user", user, max_age=7*24*3600, secure=True, httponly=True, samesite="Lax")
+            is_https = request.url.scheme == "https"
+            resp.set_cookie("session_user", user, max_age=7*24*3600, secure=is_https, httponly=True, samesite="Lax", path="/")
             log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"DEV SAML(예외) 로그인: {user}")
             return resp
         return PlainTextResponse("ACS error: exception during processing", status_code=400)
@@ -590,7 +602,8 @@ async def saml_acs(request: Request):
                    request.query_params.get("email") or "dev-user")
             
             resp = RedirectResponse("/", status_code=302)
-            resp.set_cookie("session_user", user, max_age=7*24*3600, secure=True, httponly=True, samesite="Lax")
+            is_https = request.url.scheme == "https"
+            resp.set_cookie("session_user", user, max_age=7*24*3600, secure=is_https, httponly=True, samesite="Lax", path="/")
             log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"DEV SAML 폴백 로그인: {user}")
             return resp
         
@@ -631,17 +644,15 @@ async def saml_acs(request: Request):
             meta[field] = val
     
     # NameID 결정: LoginId → nameid → fallback (디버그 로그 추가)
-    login_id = meta.get("LoginId")
-    auth_nameid = auth.get_nameid()
-    nameid = login_id or auth_nameid or "saml-user"
+    nameid = meta.get("LoginId") or auth.get_nameid() or "saml-user"
     
     # 로그 출력
     bootlog = logging.getLogger("uvicorn.error")
     bootlog.info("=" * 100)
     bootlog.info("[SAML LOGIN SUCCESS] 로그인 성공")
     bootlog.info("-" * 100)
-    bootlog.info(f"🔍 [DEBUG] meta.get('LoginId'): {login_id}")
-    bootlog.info(f"🔍 [DEBUG] auth.get_nameid(): {auth_nameid}")
+    bootlog.info(f"🔍 [DEBUG] meta.get('LoginId'): {meta.get('LoginId')}")
+    bootlog.info(f"🔍 [DEBUG] auth.get_nameid(): {auth.get_nameid()}")
     bootlog.info(f"✅ [FINAL] NameID: {nameid}")
     bootlog.info("-" * 100)
     bootlog.info("[SAML ATTRIBUTES] 수신된 속성 (Key → Value):")
@@ -668,22 +679,59 @@ async def saml_acs(request: Request):
     resp = RedirectResponse("/", status_code=302)
     
     # 쿠키 설정 (디버그 로그 추가)
+    # HTTPS 여부 확인
+    is_https = request.url.scheme == "https"
+    bootlog.info(f"🔍 [COOKIE DEBUG] Request scheme: {request.url.scheme}, is_https: {is_https}")
     bootlog.info(f"🍪 [COOKIE] session_user 설정: {nameid}")
-    resp.set_cookie("session_user", nameid, max_age=7*24*3600, secure=True, httponly=True, samesite="Lax")
+    
+    # secure는 HTTPS에서만 True, HTTP에서는 False
+    resp.set_cookie(
+        "session_user", 
+        nameid, 
+        max_age=7*24*3600, 
+        secure=is_https,  # HTTPS에서만 secure=True
+        httponly=True, 
+        samesite="Lax",
+        path="/"
+    )
     
     if meta:
         bootlog.info(f"🍪 [COOKIE] session_meta 설정: {list(meta.keys())}")
         try:
             prev = request.cookies.get("session_meta")
             if prev:
-                cur = json.loads(prev)
+                import base64
+                try:
+                    # base64 디코딩 시도
+                    decoded = base64.b64decode(prev).decode('utf-8')
+                    cur = json.loads(decoded)
+                except Exception:
+                    # 이전 방식 (JSON 직접) 호환성
+                    cur = json.loads(prev)
                 cur.update(meta)
                 meta = cur
         except Exception:
             pass
-        resp.set_cookie("session_meta", json.dumps(meta, ensure_ascii=False), max_age=7*24*3600, secure=True, httponly=False, samesite="Lax")
+        
+        # 한글 포함 가능하므로 base64 인코딩
+        import base64
+        meta_json = json.dumps(meta, ensure_ascii=False)
+        meta_b64 = base64.b64encode(meta_json.encode('utf-8')).decode('ascii')
+        
+        resp.set_cookie(
+            "session_meta", 
+            meta_b64, 
+            max_age=7*24*3600, 
+            secure=is_https,
+            httponly=False, 
+            samesite="Lax",
+            path="/"
+        )
+        bootlog.info(f"🍪 [COOKIE] session_meta base64 인코딩 완료")
     else:
         bootlog.warning(f"⚠️ [COOKIE] session_meta가 비어있음!")
+    
+    bootlog.info(f"✅ [COOKIE] 쿠키 설정 완료 - Redirect to: /")
     
     log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"SAML 로그인: {nameid}")
     return resp
@@ -699,35 +747,24 @@ async def saml_dev_login(request: Request):
     user = request.query_params.get("user") or request.query_params.get("email")
     account = request.query_params.get("account")
     pc = request.query_params.get("pc")
-    company = request.query_params.get("company") or request.query_params.get("corp")
-    department = request.query_params.get("department") or request.query_params.get("dept") or request.query_params.get("DeptName")
-    team = request.query_params.get("team")
-    title = request.query_params.get("title")
-    # 사내 속성들 (정확한 필드명 사용)
-    login_id = request.query_params.get("LoginId")  # LoginId (오타 수정됨)
-    dept_id = request.query_params.get("DeptId")
-    sabun = request.query_params.get("Sabun")
-    dept_name = request.query_params.get("DeptName")
-    grd_name = request.query_params.get("GrdName")
-    grd_name_en = request.query_params.get("GrdName_EN")
-    username = request.query_params.get("Username")
 
     if not user:
         if account:
             user = f"{account}@{pc or 'unknown'}"
         else:
             user = "dev-user"
-    # 메타데이터를 별도 쿠키에 JSON으로 저장 (원본 SAML claim 이름 사용)
+    
+    # 메타데이터를 별도 쿠키에 JSON으로 저장 (원본 SAML claim 이름 직접 사용)
     meta = {
-        "LoginId": login_id or account,
-        "Username": username,
-        "Sabun": sabun,
-        "DeptName": dept_name or department,
-        "DeptId": dept_id,
-        "GrdName": grd_name or title,
-        "GrdName_EN": grd_name_en,
-        "company": company,
-        "team": team,
+        "LoginId": request.query_params.get("LoginId") or account,
+        "Username": request.query_params.get("Username"),
+        "Sabun": request.query_params.get("Sabun"),
+        "DeptName": request.query_params.get("DeptName") or request.query_params.get("department") or request.query_params.get("dept"),
+        "DeptId": request.query_params.get("DeptId"),
+        "GrdName": request.query_params.get("GrdName") or request.query_params.get("title"),
+        "GrdName_EN": request.query_params.get("GrdName_EN"),
+        "company": request.query_params.get("company") or request.query_params.get("corp"),
+        "team": request.query_params.get("team"),
         "account": account,
         "pc": pc,
     }
@@ -736,9 +773,14 @@ async def saml_dev_login(request: Request):
 
     resp = FastAPIResponse(status_code=302)
     resp.headers["Location"] = "/"
-    resp.set_cookie("session_user", user, max_age=7*24*3600, secure=True, httponly=True, samesite="Lax")
+    is_https = request.url.scheme == "https"
+    resp.set_cookie("session_user", user, max_age=7*24*3600, secure=is_https, httponly=True, samesite="Lax", path="/")
     if meta:
-        resp.set_cookie("session_meta", json.dumps(meta, ensure_ascii=False), max_age=7*24*3600, secure=True, httponly=False, samesite="Lax")
+        # 한글 포함 가능하므로 base64 인코딩
+        import base64
+        meta_json = json.dumps(meta, ensure_ascii=False)
+        meta_b64 = base64.b64encode(meta_json.encode('utf-8')).decode('ascii')
+        resp.set_cookie("session_meta", meta_b64, max_age=7*24*3600, secure=is_https, httponly=False, samesite="Lax", path="/")
     log_access_row(tag="INFO", path="/saml/dev-login", method="GET", status=302, note=f"DEV 로그인: {user}")
     return resp
 
@@ -758,8 +800,16 @@ async def api_whoami(request: Request):
     
     if meta_cookie:
         try:
-            meta = json.loads(meta_cookie)
-            logger.info(f"🔍 [API /auth/user] meta 파싱 성공: {list(meta.keys())}")
+            import base64
+            # base64 디코딩 시도 (새 방식)
+            try:
+                decoded = base64.b64decode(meta_cookie).decode('utf-8')
+                meta = json.loads(decoded)
+                logger.info(f"🔍 [API /auth/user] meta 파싱 성공 (base64): {list(meta.keys())}")
+            except Exception:
+                # 이전 방식 (JSON 직접) 호환성
+                meta = json.loads(meta_cookie)
+                logger.info(f"🔍 [API /auth/user] meta 파싱 성공 (직접): {list(meta.keys())}")
         except Exception as e:
             logger.warning(f"⚠️ [API /auth/user] meta 파싱 실패: {e}")
             meta = {}
@@ -869,7 +919,14 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         meta_dict = None
         if meta_cookie:
             try:
-                meta_dict = json.loads(meta_cookie)
+                import base64
+                # base64 디코딩 시도 (새 방식)
+                try:
+                    decoded = base64.b64decode(meta_cookie).decode('utf-8')
+                    meta_dict = json.loads(decoded)
+                except Exception:
+                    # 이전 방식 (JSON 직접) 호환성
+                    meta_dict = json.loads(meta_cookie)
             except Exception:
                 meta_dict = None
         # 표시: 계정 이름 부서 IP (원본 SAML claim 이름 사용)
