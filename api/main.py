@@ -190,24 +190,36 @@ def _setup_logging():
 _setup_logging()
 logger = logging.getLogger("l3tracker")
 
-# ======================== Memory Session Manager ========================
+# ======================== File-based Session Manager ========================
+SESSION_DIR = Path("logs/sessions")
+SESSION_DIR.mkdir(exist_ok=True)
+
 class SessionManager:
-    """메모리 기반 세션 관리 (쿠키 대신 사용)"""
+    """파일 기반 세션 관리 (모든 worker가 공유 가능)"""
     def __init__(self, session_timeout: int = 7*24*3600):
-        self.sessions: Dict[str, Dict[str, Any]] = {}
         self.session_timeout = session_timeout
         self.lock = RLock()
+    
+    def _session_file(self, session_id: str) -> Path:
+        """세션 파일 경로"""
+        return SESSION_DIR / f"{session_id}.json"
     
     def create_session(self, user_id: str, meta: Optional[Dict[str, Any]] = None) -> str:
         """새 세션 생성"""
         with self.lock:
             session_id = str(uuid.uuid4())
-            self.sessions[session_id] = {
+            session_data = {
                 "user_id": user_id,
                 "meta": meta or {},
                 "created_at": time.time(),
                 "last_accessed": time.time()
             }
+            
+            # 파일에 저장
+            session_file = self._session_file(session_id)
+            with open(session_file, 'w', encoding='utf-8') as f:
+                json.dump(session_data, f, ensure_ascii=False, indent=2)
+            
             logger.info(f"✅ [SESSION] 생성: {session_id[:8]}... (user: {user_id})")
             return session_id
     
@@ -217,61 +229,94 @@ class SessionManager:
             return None
         
         with self.lock:
-            session = self.sessions.get(session_id)
-            if not session:
+            session_file = self._session_file(session_id)
+            if not session_file.exists():
                 return None
             
-            # 타임아웃 체크
-            if time.time() - session["last_accessed"] > self.session_timeout:
-                del self.sessions[session_id]
-                logger.info(f"⏱️ [SESSION] 만료: {session_id[:8]}...")
+            try:
+                with open(session_file, 'r', encoding='utf-8') as f:
+                    session = json.load(f)
+                
+                # 타임아웃 체크
+                if time.time() - session["last_accessed"] > self.session_timeout:
+                    session_file.unlink()
+                    logger.info(f"⏱️ [SESSION] 만료: {session_id[:8]}...")
+                    return None
+                
+                # 마지막 접근 시간 갱신
+                session["last_accessed"] = time.time()
+                with open(session_file, 'w', encoding='utf-8') as f:
+                    json.dump(session, f, ensure_ascii=False, indent=2)
+                
+                return session
+            except Exception as e:
+                logger.error(f"❌ [SESSION] 읽기 실패: {e}")
                 return None
-            
-            # 마지막 접근 시간 갱신
-            session["last_accessed"] = time.time()
-            return session
     
     def update_session(self, session_id: str, meta: Dict[str, Any]) -> bool:
         """세션 메타데이터 업데이트"""
         with self.lock:
-            session = self.sessions.get(session_id)
-            if not session:
+            session_file = self._session_file(session_id)
+            if not session_file.exists():
                 return False
             
-            session["meta"].update(meta)
-            session["last_accessed"] = time.time()
-            return True
+            try:
+                with open(session_file, 'r', encoding='utf-8') as f:
+                    session = json.load(f)
+                
+                session["meta"].update(meta)
+                session["last_accessed"] = time.time()
+                
+                with open(session_file, 'w', encoding='utf-8') as f:
+                    json.dump(session, f, ensure_ascii=False, indent=2)
+                
+                return True
+            except Exception as e:
+                logger.error(f"❌ [SESSION] 업데이트 실패: {e}")
+                return False
     
     def delete_session(self, session_id: str) -> bool:
         """세션 삭제"""
         with self.lock:
-            if session_id in self.sessions:
-                user_id = self.sessions[session_id].get("user_id", "unknown")
-                del self.sessions[session_id]
-                logger.info(f"🗑️ [SESSION] 삭제: {session_id[:8]}... (user: {user_id})")
-                return True
+            session_file = self._session_file(session_id)
+            if session_file.exists():
+                try:
+                    with open(session_file, 'r', encoding='utf-8') as f:
+                        session = json.load(f)
+                    user_id = session.get("user_id", "unknown")
+                    session_file.unlink()
+                    logger.info(f"🗑️ [SESSION] 삭제: {session_id[:8]}... (user: {user_id})")
+                    return True
+                except Exception as e:
+                    logger.error(f"❌ [SESSION] 삭제 실패: {e}")
             return False
     
     def cleanup_expired_sessions(self):
         """만료된 세션 정리"""
         with self.lock:
             now = time.time()
-            expired = [
-                sid for sid, sess in self.sessions.items()
-                if now - sess["last_accessed"] > self.session_timeout
-            ]
-            for sid in expired:
-                user_id = self.sessions[sid].get("user_id", "unknown")
-                del self.sessions[sid]
-                logger.info(f"🧹 [SESSION] 자동 정리: {sid[:8]}... (user: {user_id})")
+            expired_count = 0
             
-            if expired:
-                logger.info(f"🧹 [SESSION] 총 {len(expired)}개 세션 정리됨")
+            for session_file in SESSION_DIR.glob("*.json"):
+                try:
+                    with open(session_file, 'r', encoding='utf-8') as f:
+                        session = json.load(f)
+                    
+                    if now - session["last_accessed"] > self.session_timeout:
+                        user_id = session.get("user_id", "unknown")
+                        session_file.unlink()
+                        logger.info(f"🧹 [SESSION] 자동 정리: {session_file.stem[:8]}... (user: {user_id})")
+                        expired_count += 1
+                except Exception as e:
+                    logger.error(f"❌ [SESSION] 정리 실패: {e}")
+            
+            if expired_count > 0:
+                logger.info(f"🧹 [SESSION] 총 {expired_count}개 세션 정리됨")
     
     def get_session_count(self) -> int:
         """현재 활성 세션 수"""
         with self.lock:
-            return len(self.sessions)
+            return len(list(SESSION_DIR.glob("*.json")))
 
 # 전역 세션 매니저
 session_manager = SessionManager()

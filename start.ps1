@@ -25,7 +25,7 @@ $env:PYVIPS_CONCURRENCY="1024"
 $env:PYVIPS_CACHE_SIZE="4095"
 $env:PYVIPS_MEMORY_ALIGN="64"
 $env:STATS_LOG_ENABLED="0"
-$env:WORKERS="1"  # 메모리 세션 사용 시 worker 1개로 고정 (세션 공유 문제 해결)
+$env:WORKERS="6"  # 파일 기반 세션 사용으로 worker 증가 가능
 $env:RELOAD="1"
 
 # 서버 시작

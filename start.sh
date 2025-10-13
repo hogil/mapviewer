@@ -27,8 +27,8 @@ export PYVIPS_MEMORY_ALIGN="64"          # 64 유지
 # 통계 로깅
 export STATS_LOG_ENABLED="1"             # 1=통계 수집 활성화
 
-# Uvicorn 설정 (메모리 세션 사용으로 worker 1개 고정)
-export WORKERS="1"                       # 메모리 세션 공유 문제로 1개로 고정
+# Uvicorn 설정 (파일 기반 세션 사용으로 worker 증가 가능)
+export WORKERS="32"                      # 파일 세션 공유로 worker 증가 가능
 export RELOAD="0"                        # 운영 환경에서는 0
 
 # 서버 시작
