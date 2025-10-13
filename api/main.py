@@ -754,19 +754,15 @@ async def saml_dev_login(request: Request):
         else:
             user = "dev-user"
     
-    # 메타데이터를 별도 쿠키에 JSON으로 저장 (원본 SAML claim 이름 직접 사용)
+    # 메타데이터를 별도 쿠키에 JSON으로 저장 (7개 허용 필드만 사용)
     meta = {
         "LoginId": request.query_params.get("LoginId") or account,
         "Username": request.query_params.get("Username"),
         "Sabun": request.query_params.get("Sabun"),
         "DeptName": request.query_params.get("DeptName") or request.query_params.get("department") or request.query_params.get("dept"),
-        "DeptId": request.query_params.get("DeptId"),
         "GrdName": request.query_params.get("GrdName") or request.query_params.get("title"),
         "GrdName_EN": request.query_params.get("GrdName_EN"),
-        "company": request.query_params.get("company") or request.query_params.get("corp"),
-        "team": request.query_params.get("team"),
-        "account": account,
-        "pc": pc,
+        "x-ms-forwarded-client-ip": request.headers.get("x-ms-forwarded-client-ip") or request.headers.get("x-forwarded-for"),
     }
     # None 제거
     meta = {k: v for k, v in meta.items() if v}
@@ -963,14 +959,11 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         # 내부 log_access 호출은 try/except로 무시되므로, 테이블 출력은 아래 한 번만 수행
 
         note = _note_from_request(request, endpoint)
-        # NOTE 칼럼에 부서/팀/회사 간단 표기 (있을 때만)
+        # NOTE 칼럼에 부서 간단 표기 (있을 때만)
         if meta_dict:
-            bits = []
-            if meta_dict.get("company"): bits.append(meta_dict.get("company"))
-            if meta_dict.get("department"): bits.append(meta_dict.get("department"))
-            if meta_dict.get("team"): bits.append(meta_dict.get("team"))
-            if bits:
-                note = (note + " ").strip() + f"[{ ' / '.join(bits) }]"
+            dept = meta_dict.get("DeptName")
+            if dept:
+                note = (note + " ").strip() + f"[{dept}]"
         # IP 칼럼에 계정(username@hostname) 우선 표시
         log_access_row(tag=tag, ip=display_user, method=method, status=status, path=endpoint, note=note)
         return response
