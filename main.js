@@ -14100,12 +14100,14 @@ class WaferMapViewer {
 
 
 
-        // 🔥 key (className/fileName)에서 root_relative 경로 찾기
+        // 🔥 key (className/fileName)에서 현재 제품 폴더 기준 경로 생성
         const actualPaths = imageKeys.map(key => {
             const [className, fileName] = key.split('/');
-            const imgList = this.classToImgListCache?.[className] || [];
-            const imgItem = imgList.find(item => item.name === fileName);
-            return imgItem.root_relative;  // 무조건 root_relative 사용
+            // 현재 제품 폴더 내의 classification 경로 사용
+            const currentPath = this.currentFolderPrefix ? 
+                `${this.currentFolderPrefix}classification/${className}/${fileName}` : 
+                `classification/${className}/${fileName}`;
+            return currentPath;
         });
 
 
@@ -14250,7 +14252,12 @@ class WaferMapViewer {
 
                 .filter(item => item.type === 'file' && this.isImageFile(item.name))
 
-                .map(item => `classification/${className}/${item.name}`);
+                .map(item => {
+                    // 현재 제품 폴더 내의 classification 경로 사용
+                    return this.currentFolderPrefix ? 
+                        `${this.currentFolderPrefix}classification/${className}/${item.name}` : 
+                        `classification/${className}/${item.name}`;
+                });
 
 
 
@@ -14372,7 +14379,12 @@ class WaferMapViewer {
 
                         .filter(item => item.type === 'file' && this.isImageFile(item.name))
 
-                        .map(item => `classification/${className}/${item.name}`);
+                        .map(item => {
+                            // 현재 제품 폴더 내의 classification 경로 사용
+                            return this.currentFolderPrefix ? 
+                                `${this.currentFolderPrefix}classification/${className}/${item.name}` : 
+                                `classification/${className}/${item.name}`;
+                        });
 
 
 
