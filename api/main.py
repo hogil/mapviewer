@@ -1497,6 +1497,40 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
             logger.exception(f"🚀 [SPEED COPY FAILED] {copy_error}")
             raise
 
+@app.get("/api/image/size")
+async def get_image_size(path: str):
+    """이미지 크기만 빠르게 조회 (메타데이터만)"""
+    try:
+        # 경로 해석
+        if Path(path).is_absolute():
+            image_path = Path(path)
+            try:
+                image_path.resolve().relative_to(ROOT_DIR.resolve())
+            except ValueError:
+                raise HTTPException(status_code=403, detail="Access denied")
+        else:
+            image_path = ROOT_DIR / path
+            try:
+                image_path.resolve().relative_to(ROOT_DIR.resolve())
+            except ValueError:
+                raise HTTPException(status_code=403, detail="Access denied")
+        
+        if not image_path.exists() or not image_path.is_file():
+            raise HTTPException(status_code=404, detail="Image not found")
+        
+        # pyvips로 빠르게 크기만 조회
+        import pyvips
+        img = pyvips.Image.new_from_file(str(image_path), access='sequential')
+        
+        return {
+            "width": img.width,
+            "height": img.height,
+            "path": path
+        }
+    except Exception as e:
+        logger.error(f"이미지 크기 조회 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get image size: {str(e)}")
+
 @app.get("/api/image")
 async def get_image(request: Request, path: str, level: Optional[float] = None):
     try:

@@ -7124,10 +7124,41 @@ class WaferMapViewer {
         const tStart = performance.now();
         console.log(`⏱️ [LOAD START] ${fullPath} - 시작`);
 
-        // 🚀 작은 level로 시작 (0.4) → resetView 후 적절한 level로 교체
-        const initialLevel = 0.4;  // 원본(1.0) 대신 0.4로 시작
+        // 🚀 1단계: 이미지 크기만 먼저 조회
+        const tSizeStart = performance.now();
+        const sizeResponse = await fetch(`/api/image/size?path=${encodeURIComponent(fullPath)}`);
+        if (!sizeResponse.ok) {
+            throw new Error(`Failed to get image size: ${sizeResponse.status}`);
+        }
+        const sizeData = await sizeResponse.json();
+        const tSizeEnd = performance.now();
         
-        console.log(`🚀 [FAST LOAD] Level ${initialLevel} 로드 - resetView 후 적절한 level로 자동 교체됨`);
+        console.log(`⏱️ [SIZE] ${(tSizeEnd - tSizeStart).toFixed(1)}ms - ${sizeData.width}×${sizeData.height}`);
+        
+        // 원본 크기 저장
+        this.originalWidth = sizeData.width;
+        this.originalHeight = sizeData.height;
+        
+        // 🚀 2단계: 캔버스 크기 기준으로 최적 level 계산
+        const canvasWidth = this.dom.imageCanvas.width;
+        const canvasHeight = this.dom.imageCanvas.height;
+        
+        const fitScale = Math.min(
+            (canvasWidth * FIT_RELATIVE_MARGIN) / this.originalWidth,
+            (canvasHeight * FIT_RELATIVE_MARGIN) / this.originalHeight
+        );
+        
+        // level 선택 (0.2, 0.4, 0.7, 1.0)
+        let initialLevel = 1.0;
+        if (fitScale <= 0.25) {
+            initialLevel = 0.2;
+        } else if (fitScale < 0.55) {
+            initialLevel = 0.4;
+        } else if (fitScale < 0.85) {
+            initialLevel = 0.7;
+        }
+        
+        console.log(`🚀 [SMART LOAD] 최적 Level ${initialLevel} 직접 로드 (fitScale: ${(fitScale * 100).toFixed(1)}%, 원본: ${this.originalWidth}×${this.originalHeight})`);
 
         
         
@@ -7185,13 +7216,10 @@ class WaferMapViewer {
 
         const elapsed = performance.now() - tStart;
 
+        
 
-
-        // 🔥 실제 크기로 원본 업데이트
-
-        this.originalWidth = bitmap.width / initialLevel;
-
-        this.originalHeight = bitmap.height / initialLevel;
+        // 🔥 원본 크기는 이미 /api/image/size에서 조회했으므로 업데이트 불필요
+        // this.originalWidth와 this.originalHeight는 이미 설정됨
 
         
         
