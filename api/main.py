@@ -1150,8 +1150,12 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
                 })
         directories = [x for x in items if x["type"] == "directory"]
         files = [x for x in items if x["type"] == "file"]
+        
+        # 🔥 폴더 정렬: 이름 내림차순 (Z→A), depth 무관
         directories.sort(key=lambda x: x["name"].lower(), reverse=True)
         files.sort(key=lambda x: x["name"].lower(), reverse=True)
+        
+        # 폴더 먼저, 파일 나중에
         items = directories + files
         if should_cache: DIRLIST_CACHE.set(key, items)
     except FileNotFoundError:
@@ -1340,7 +1344,8 @@ async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
         if not target.exists() or not target.is_dir():
             logger.warning(f"⚠️ [/api/files] 폴더 없음: {target}")
             return JSONResponse({"success": False, "error": "Not found"}, status_code=404)
-        if any(x in str(target).replace('\\', '/') for x in ['classification', 'images', 'labels']):
+        # 🔥 라벨 썸네일 캐시는 유지하고, classification 폴더만 무효화
+        if 'classification' in str(target).replace('\\', '/'):
             _dircache_invalidate(target)
         items = list_dir_fast(target)
         logger.info(f"📁 [/api/files] 반환 항목 수: {len(items)} (폴더: {sum(1 for x in items if x['type']=='directory')}, 파일: {sum(1 for x in items if x['type']=='file')})")
