@@ -834,6 +834,7 @@ class AccessLogger:
                 "display_name": user_id,
                 "primary_ip": data.get("primary_ip", ""),
                 "profile": data.get("profile", {}),  # profile 정보 추가
+                "user_type": data.get("user_type", "unknown"),  # 사용자 타입 추가
                 "total_requests": data.get("daily_requests", {}).get(today, 0),
                 "unique_days": unique_days,
                 "last_access": last_access

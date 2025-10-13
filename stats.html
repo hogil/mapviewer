@@ -868,10 +868,13 @@
             `;
             
             users.forEach(user => {
-                // profile 정보를 우선적으로 사용
-                const displayName = user.profile?.Username || user.profile?.username || user.display_name || "Anonymous";
-                const position = user.profile?.GrdName_EN || '-';  // 직급
-                const department = user.profile?.DeptName || user.profile?.Department || user.profile?.department || '-';
+                // IP 사용자 체크
+                const isIpUser = user.user_type === 'ip' || (!user.profile || Object.keys(user.profile).length === 0);
+                
+                // profile 정보를 우선적으로 사용 (IP 사용자는 "IP" / "Guest" / "외부")
+                const displayName = isIpUser ? 'IP' : (user.profile?.Username || user.profile?.username || user.display_name || "Anonymous");
+                const position = isIpUser ? 'Guest' : (user.profile?.GrdName_EN || '-');  // 직급
+                const department = isIpUser ? '외부' : (user.profile?.DeptName || user.profile?.Department || user.profile?.department || '-');
                 
                 // 사용자 ID 추출 (IP 주소 또는 실제 ID)
                 const userId = user.user_id.includes('@') ? user.user_id.split('@')[0] : user.user_id;
@@ -915,10 +918,13 @@
             `;
             
             recentUsers.forEach(user => {
-                // profile 정보를 우선적으로 사용
-                const displayName = user.profile?.Username || user.profile?.username || user.display_name || user.user_id;
-                const position = user.profile?.GrdName_EN || '-';  // 직급
-                const department = user.profile?.DeptName || user.profile?.Department || user.profile?.department || '-';
+                // IP 사용자 체크
+                const isIpUser = user.user_type === 'ip' || (!user.profile || Object.keys(user.profile).length === 0);
+                
+                // profile 정보를 우선적으로 사용 (IP 사용자는 "IP" / "Guest" / "외부")
+                const displayName = isIpUser ? 'IP' : (user.profile?.Username || user.profile?.username || user.display_name || user.user_id);
+                const position = isIpUser ? 'Guest' : (user.profile?.GrdName_EN || '-');  // 직급
+                const department = isIpUser ? '외부' : (user.profile?.DeptName || user.profile?.Department || user.profile?.department || '-');
                 
                 // 사용자 ID 추출 (IP 주소 또는 실제 ID)
                 const userId = user.user_id.includes('@') ? user.user_id.split('@')[0] : user.user_id;
