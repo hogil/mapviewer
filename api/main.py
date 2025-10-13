@@ -943,6 +943,26 @@ async def saml_dev_login(request: Request):
     log_access_row(tag="INFO", path="/saml/dev-login", method="GET", status=302, note=f"DEV 로그인: {user}")
     return resp
 
+# ===== 로그아웃 API =====
+@app.get("/api/logout")
+@app.post("/api/logout")
+async def api_logout(request: Request):
+    """로그아웃: 세션 삭제 및 모든 쿠키 정리"""
+    session_id = request.cookies.get("session_id")
+    
+    # 메모리 세션 삭제
+    if session_id:
+        session_manager.delete_session(session_id)
+        logger.info(f"🚪 [LOGOUT] 세션 삭제됨: {session_id[:8]}...")
+    
+    # 모든 쿠키 삭제 (기존 쿠키 포함)
+    resp = RedirectResponse("/", status_code=302)
+    resp.delete_cookie("session_id", path="/")
+    resp.delete_cookie("session_user", path="/")  # 기존 쿠키 삭제
+    resp.delete_cookie("session_meta", path="/")  # 기존 쿠키 삭제
+    
+    return resp
+
 # ===== 계정 확인용 간단 API =====
 @app.get("/api/whoami")
 @app.get("/api/auth/user")  # 프론트엔드 호환성
