@@ -104,7 +104,7 @@ LOGGING_CONFIG = {
     "root": {"level": "INFO", "handlers": ["console"]},
     "loggers": {
         "uvicorn":        {"handlers": ["console"], "level": "INFO",    "propagate": False},
-        "uvicorn.error":  {"handlers": ["console"], "level": "WARNING", "propagate": False},
+        "uvicorn.error":  {"handlers": ["console"], "level": "INFO",    "propagate": False},  # WARNING → INFO로 변경
         "uvicorn.access": {"handlers": [],          "level": "CRITICAL","propagate": False},
         "l3tracker":      {"handlers": ["console"], "level": "INFO",    "propagate": False},
         "access":         {"handlers": ["console"], "level": "INFO",    "propagate": False},
