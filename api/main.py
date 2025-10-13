@@ -600,7 +600,7 @@ async def saml_acs(request: Request):
             meta[field] = val
     
     # 🔥 기본: 무조건 IdP로 리다이렉트 (예외: LoginId가 있으면 리다이렉트 안함)
-    login_id = meta.get("LoginId") or auth.get_nameid() or "saml-user"
+    login_id = meta.get("LoginId")
     
     logger.info("=" * 100)
     logger.info(f"🔐 [3단계: LoginId 체크] 기본 리다이렉트, 예외: LoginId가 있으면 리다이렉트 안함")
@@ -679,8 +679,6 @@ async def saml_acs(request: Request):
     bootlog.info("=" * 100)
     bootlog.info("[SAML LOGIN SUCCESS] 로그인 성공")
     bootlog.info("-" * 100)
-    bootlog.info(f"🔍 [DEBUG] meta.get('LoginId'): {meta.get('LoginId')}")
-    bootlog.info(f"🔍 [DEBUG] auth.get_nameid(): {auth.get_nameid()}")
     bootlog.info(f"✅ [FINAL] LoginId: {login_id}")
     bootlog.info("-" * 100)
     bootlog.info("[SAML ATTRIBUTES] 수신된 속성 (Key → Value):")
