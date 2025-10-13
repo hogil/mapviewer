@@ -600,11 +600,11 @@ async def saml_acs(request: Request):
             meta[field] = val
     
     # 🔥 기본: 무조건 IdP로 리다이렉트 (예외: LoginId가 있으면 리다이렉트 안함)
-    login_id = meta.get("LoginId")
+    LoginId = meta.get("LoginId")
     
     logger.info("=" * 100)
     logger.info(f"🔐 [3단계: LoginId 체크] 기본 리다이렉트, 예외: LoginId가 있으면 리다이렉트 안함")
-    logger.info(f"  - login_id: {login_id}")
+    logger.info(f"  - LoginId: {LoginId}")
     logger.info(f"  - meta: {meta}")
     logger.info("=" * 100)
     
@@ -614,21 +614,21 @@ async def saml_acs(request: Request):
         
         if idp_sso_url:
             # 예외: LoginId가 있으면 리다이렉트 안함
-            if not login_id:
+            if not LoginId:
                 logger.info(f"  → LoginId 없음 → IdP SSO로 리다이렉트: {idp_sso_url}")
                 return RedirectResponse(idp_sso_url, status_code=302)
             else:
                 logger.info(f"  → LoginId 있음 → 리다이렉트 안함, 접속 허용")
         else:
             logger.error(f"[SAML ACS] IdP SSO URL을 찾을 수 없음")
-            if not login_id:
+            if not LoginId:
                 return PlainTextResponse(
                     f"SAML 인증 실패\n\n오류: LoginId not found\n상세: SAML 응답에 LoginId attribute가 없습니다.\n\n관리자에게 문의하세요.",
                     status_code=400
                 )
     except Exception as e:
         logger.error(f"[SAML ACS] IdP SSO URL 로드 실패: {e}")
-        if not login_id:
+        if not LoginId:
             return PlainTextResponse(
                 f"SAML 인증 실패\n\n오류: LoginId not found\n상세: SAML 응답에 LoginId attribute가 없습니다.\n\n관리자에게 문의하세요.",
                 status_code=400
@@ -679,7 +679,7 @@ async def saml_acs(request: Request):
     bootlog.info("=" * 100)
     bootlog.info("[SAML LOGIN SUCCESS] 로그인 성공")
     bootlog.info("-" * 100)
-    bootlog.info(f"✅ [FINAL] LoginId: {login_id}")
+    bootlog.info(f"✅ [FINAL] LoginId: {LoginId}")
     bootlog.info("-" * 100)
     bootlog.info("[SAML ATTRIBUTES] 수신된 속성 (Key → Value):")
     
@@ -721,16 +721,16 @@ async def saml_acs(request: Request):
     # 🔥 SAML 로그인 성공 시 IP로 로그인한 기록 삭제 및 SAML 로그 직접 기록 (LoginId 기준)
     try:
         client_ip = logger_instance.get_client_ip(request)
-        login_id = meta.get("LoginId")
+        LoginId = meta.get("LoginId")
         
-        if client_ip and login_id:
+        if client_ip and LoginId:
             # ① LoginId 기준으로 IP 기록 정리 및 삭제
-            removed = logger_instance.remove_ip_login_record(client_ip, login_id)
+            removed = logger_instance.remove_ip_login_record(client_ip, LoginId)
             if removed:
-                bootlog.info(f"🗑️ [IP CLEANUP] IP 로그인 기록 삭제됨: {client_ip} → LoginId: {login_id}")
+                bootlog.info(f"🗑️ [IP CLEANUP] IP 로그인 기록 삭제됨: {client_ip} → LoginId: {LoginId}")
             
             # ② SAML 로그인 정보로 직접 통계 업데이트 (중복 방지)
-            bootlog.info(f"🔄 [SAML LOG] SAML 로그인 직접 기록: {login_id}")
+            bootlog.info(f"🔄 [SAML LOG] SAML 로그인 직접 기록: {LoginId}")
             bootlog.info(f"🔍 [SAML LOG DEBUG] meta 내용: {meta}")
             bootlog.info(f"🔍 [SAML LOG DEBUG] client_ip: {client_ip}")
             
@@ -738,14 +738,14 @@ async def saml_acs(request: Request):
                 ip=client_ip,
                 endpoint="/saml/acs",  # SAML ACS로 기록 (리다이렉트 후 / 중복 방지)
                 method="POST",
-                user_id_override=login_id,  # LoginId 사용
+                user_id_override=LoginId,  # LoginId 사용
                 meta=meta  # SAML 메타 정보 전달
             )
             bootlog.info(f"✅ [SAML LOG] SAML 로그 기록 완료")
     except Exception as e:
         bootlog.warning(f"⚠️ [SAML LOG] SAML 로그 기록 실패: {e}")
     
-    log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"SAML 로그인: {login_id}")
+    log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"SAML 로그인: {LoginId}")
     return resp
 
 @app.get("/saml/dev-login")
@@ -813,8 +813,12 @@ async def api_whoami(request: Request):
         return {
             "authenticated": True,
             "user": user_id,
-            "account": meta_dict.get("Username", ""),
-            "pc": "",
+            "Username": meta_dict.get("Username", ""),
+            "LoginId": meta_dict.get("LoginId", ""),
+            "Sabun": meta_dict.get("Sabun", ""),
+            "DeptName": meta_dict.get("DeptName", ""),
+            "GrdName_EN": meta_dict.get("GrdName_EN", ""),
+            "GrdName": meta_dict.get("GrdName", ""),
             "metadata": meta_dict
         }
     else:
@@ -822,8 +826,12 @@ async def api_whoami(request: Request):
         return {
             "authenticated": False,
             "user": "",
-            "account": "",
-            "pc": "",
+            "Username": "",
+            "LoginId": "",
+            "Sabun": "",
+            "DeptName": "",
+            "GrdName_EN": "",
+            "GrdName": "",
             "metadata": {}
         }
 

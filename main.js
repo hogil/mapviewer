@@ -3923,13 +3923,13 @@ class WaferMapViewer {
             const meta = data.metadata || {};
             console.log('[DEBUG] metadata:', JSON.stringify(meta, null, 2));
 
-            // UI 업데이트: LoginId(Username) 형식 - 원본 SAML claim 이름 직접 사용
+            // UI 업데이트: SAML claim 원본 이름 그대로 사용
             const userInfoEl = document.getElementById('user-info');
             if (userInfoEl) {
-                const line1 = meta.Username ? `${meta.LoginId || data.user}(${meta.Username})` : (meta.LoginId || data.user);
-                console.log('[DEBUG] UI 업데이트 - line1:', line1);
+                const LoginId = meta.LoginId || data.user;
+                console.log('[DEBUG] UI 업데이트 - LoginId:', LoginId);
                 userInfoEl.innerHTML = `
-                    <div style="font-weight: 600;">${line1}</div>
+                    <div style="font-weight: 600;">${LoginId}</div>
                     <div style="font-size: 10px; color: #666;">${meta.DeptName || ''}</div>
                 `;
             }
