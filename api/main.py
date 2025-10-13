@@ -903,6 +903,7 @@ async def saml_acs(request: Request):
     bootlog.info(f"🎯 [SESSION] 메모리 세션 생성 시작: user={nameid}")
     session_id = session_manager.create_session(nameid, meta)
     bootlog.info(f"✅ [SESSION] 세션 생성 완료: {session_id[:8]}... (user: {nameid})")
+    bootlog.info(f"🔍 [SESSION] 현재 활성 세션 수: {session_manager.get_session_count()}")
     
     # 세션 ID만 쿠키에 저장 (httponly, secure)
     is_https = request.url.scheme == "https"
@@ -915,7 +916,7 @@ async def saml_acs(request: Request):
         samesite="Lax",
         path="/"
     )
-    bootlog.info(f"🍪 [COOKIE] session_id 쿠키 설정 완료 (세션 데이터는 메모리에 저장됨)")
+    bootlog.info(f"🍪 [COOKIE] session_id 쿠키 설정 완료: {session_id[:16]}... (secure={is_https})")
     
     # 🔥 SAML 로그인 성공 시 IP로 로그인한 기록 삭제 및 SAML 로그 직접 기록 (LoginId 기준)
     try:
@@ -1026,6 +1027,8 @@ async def api_whoami(request: Request):
     # 메모리 세션에서 사용자 정보 조회
     session_id = request.cookies.get("session_id")
     logger.info(f"🔍 [API /auth/user] session_id 쿠키: {session_id[:8] if session_id else 'None'}...")
+    logger.info(f"🔍 [API /auth/user] 전체 쿠키: {list(request.cookies.keys())}")
+    logger.info(f"🔍 [API /auth/user] 현재 활성 세션 수: {session_manager.get_session_count()}")
     
     user = ""
     account = ""
@@ -1041,7 +1044,7 @@ async def api_whoami(request: Request):
             authenticated = True
             logger.info(f"✅ [API /auth/user] 세션 조회 성공: user={user}, meta keys={list(meta.keys())}")
         else:
-            logger.warning(f"⚠️ [API /auth/user] 세션 없음 또는 만료됨")
+            logger.warning(f"⚠️ [API /auth/user] 세션 없음 또는 만료됨 - session_id: {session_id[:16]}...")
     else:
         logger.warning(f"⚠️ [API /auth/user] session_id 쿠키 없음")
     
