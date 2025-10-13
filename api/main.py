@@ -453,8 +453,11 @@ async def saml_login(request: Request):
         
         # IdP SSO URL 생성
         idp_login_url = auth.login()
-        logger.info(f"✅ [SAML LOGIN] IdP 리다이렉트 URL 생성:")
-        logger.info(f"  {idp_login_url}")
+        logger.info("=" * 100)
+        logger.info(f"🔐 [2단계: SAML LOGIN] /saml/login 완료 시 무조건 IdP SSO로 리다이렉트")
+        logger.info(f"  - IdP SSO URL: {idp_login_url}")
+        logger.info(f"  - org_url: {org_url}")
+        logger.info("=" * 100)
         
         # SAMLRequest 파라미터 추출 및 디코딩
         try:
@@ -608,6 +611,12 @@ async def saml_acs(request: Request):
     # 🔥 기본: 무조건 IdP로 리다이렉트 (예외: LoginId가 있으면 리다이렉트 안함)
     login_id = meta.get("LoginId") or auth.get_nameid()
     
+    logger.info("=" * 100)
+    logger.info(f"🔐 [3단계: LoginId 체크] 기본 리다이렉트, 예외: LoginId가 있으면 리다이렉트 안함")
+    logger.info(f"  - login_id: {login_id}")
+    logger.info(f"  - meta: {meta}")
+    logger.info("=" * 100)
+    
     try:
         base_settings, _ = _load_saml_files()
         idp_sso_url = base_settings.get("idp", {}).get("singleSignOnService", {}).get("url")
@@ -615,10 +624,10 @@ async def saml_acs(request: Request):
         if idp_sso_url:
             # 예외: LoginId가 있으면 리다이렉트 안함
             if not login_id:
-                logger.info(f"[SAML ACS] LoginId 없음 → IdP SSO로 리다이렉트: {idp_sso_url}")
+                logger.info(f"  → LoginId 없음 → IdP SSO로 리다이렉트: {idp_sso_url}")
                 return RedirectResponse(idp_sso_url, status_code=302)
             else:
-                logger.info(f"[SAML ACS] LoginId 있음 → 리다이렉트 안함, 접속 허용")
+                logger.info(f"  → LoginId 있음 → 리다이렉트 안함, 접속 허용")
         else:
             logger.error(f"[SAML ACS] IdP SSO URL을 찾을 수 없음")
             if not login_id:
@@ -909,7 +918,13 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
                 login_url = '/saml/login'
                 if DEFAULT_ORG_URL:
                     login_url += f"?org_url={DEFAULT_ORG_URL}"
-                logger.info(f"🔐 [AUTO LOGIN] 무조건 /saml/login으로 리다이렉트 (쿠키 사용 안 함)")
+                logger.info("=" * 100)
+                logger.info(f"🔐 [1단계: AUTO LOGIN] 접속 시 무조건 /saml/login으로 리다이렉트")
+                logger.info(f"  - Path: {path}")
+                logger.info(f"  - Redirect URL: {login_url}")
+                logger.info(f"  - AUTO_LOGIN: {AUTO_LOGIN}")
+                logger.info(f"  - DEFAULT_ORG_URL: {DEFAULT_ORG_URL}")
+                logger.info("=" * 100)
                 skip_logging = True  # IP 로그인 기록 방지
                 # 즉시 리다이렉트 반환 (call_next 호출 전)
                 return RedirectResponse(login_url, status_code=302)
