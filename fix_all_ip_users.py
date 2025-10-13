@@ -4,6 +4,7 @@
 import json
 import shutil
 from pathlib import Path
+from datetime import datetime, timedelta
 import sys
 
 # Windows 콘솔 인코딩 설정
@@ -143,6 +144,65 @@ def fix_all_ip_users():
     # users 교체
     stats_data["users"] = new_users
     
+    # ========== 부서별 통계 집계 ==========
+    print(f"\n📊 부서별 통계 집계 중...")
+    
+    department_stats = {}
+    thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+    
+    for user_id, data in new_users.items():
+        # localhost IP 제외
+        if user_id in ['127.0.0.1', '::1', 'localhost']:
+            continue
+        
+        profile = data.get("profile", {})
+        user_type = data.get("user_type", "unknown")
+        
+        # 부서명 추출
+        if user_type == "saml":
+            dept_name = profile.get("DeptName") or "부서미지정"
+        else:
+            dept_name = "외부"
+        
+        # 부서별 통계 초기화
+        if dept_name not in department_stats:
+            department_stats[dept_name] = {
+                "name": dept_name,
+                "user_count": 0,
+                "total_requests": 0,
+                "new_users_30d": 0,
+                "users": []
+            }
+        
+        # 사용자 수 증가
+        department_stats[dept_name]["user_count"] += 1
+        
+        # 30일 내 신규 사용자 체크
+        first_seen = data.get("first_seen", "")
+        if first_seen >= thirty_days_ago:
+            department_stats[dept_name]["new_users_30d"] += 1
+        
+        # 총 요청 수 계산
+        total_requests = 0
+        daily_requests = data.get("daily_requests", {})
+        for date, count in daily_requests.items():
+            total_requests += count
+        department_stats[dept_name]["total_requests"] += total_requests
+        
+        # 사용자 정보 저장
+        department_stats[dept_name]["users"].append({
+            "user_id": user_id,
+            "profile": profile,
+            "first_seen": first_seen
+        })
+    
+    # department_stats를 stats.json에 추가
+    stats_data["department_stats"] = department_stats
+    
+    print(f"✅ 부서별 통계 집계 완료: {len(department_stats)}개 부서")
+    for dept_name, dept_data in sorted(department_stats.items(), key=lambda x: x[1]["user_count"], reverse=True):
+        print(f"   - {dept_name}: {dept_data['user_count']}명, {dept_data['total_requests']}회 요청, 신규 {dept_data['new_users_30d']}명")
+    
     # stats.json 저장
     with open(stats_file, 'w', encoding='utf-8') as f:
         json.dump(stats_data, f, ensure_ascii=False, indent=2)
@@ -152,6 +212,7 @@ def fix_all_ip_users():
     print(f"   - 사용자 Key 교체: {key_replaced_count}명")
     print(f"   - Profile 수정: {profile_fixed_count}명")
     print(f"   - 최종 사용자 수: {len(new_users)}")
+    print(f"   - 부서 수: {len(department_stats)}")
     print(f"\n💾 원본 백업: {backup_file}")
     print(f"\n⚠️  서버를 재시작해야 변경사항이 적용됩니다!")
 

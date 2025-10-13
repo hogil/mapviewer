@@ -50,7 +50,8 @@ class AccessLogger:
         return {
             "users": {},
             "daily_stats": {},
-            "monthly_stats": {}
+            "monthly_stats": {},
+            "department_stats": {}  # 부서별 통계 추가
         }
     
     def _save_stats(self):
@@ -60,6 +61,42 @@ class AccessLogger:
                 json.dump(self.stats_data, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"통계 저장 실패: {e}")
+    
+    def _update_department_stats(self, user_id: str, dept_name: str, is_new_user: bool = False):
+        """부서별 통계 증분 업데이트"""
+        # department_stats 초기화 (없으면 생성)
+        if "department_stats" not in self.stats_data:
+            self.stats_data["department_stats"] = {}
+        
+        dept_stats = self.stats_data["department_stats"]
+        
+        # 부서 통계 초기화
+        if dept_name not in dept_stats:
+            dept_stats[dept_name] = {
+                "name": dept_name,
+                "user_count": 0,
+                "total_requests": 0,
+                "new_users_30d": 0,
+                "users": []
+            }
+        
+        # 사용자가 이 부서에 처음 추가되는 경우
+        user_exists = any(u["user_id"] == user_id for u in dept_stats[dept_name]["users"])
+        if not user_exists:
+            dept_stats[dept_name]["user_count"] += 1
+            user_data = self.stats_data["users"].get(user_id, {})
+            dept_stats[dept_name]["users"].append({
+                "user_id": user_id,
+                "profile": user_data.get("profile", {}),
+                "first_seen": user_data.get("first_seen", "")
+            })
+            
+            # 30일 내 신규 사용자인 경우
+            if is_new_user:
+                dept_stats[dept_name]["new_users_30d"] += 1
+        
+        # 요청 수 증가
+        dept_stats[dept_name]["total_requests"] += 1
     
     def remove_ip_login_record(self, client_ip: str, login_id: str = None):
         """SAML 로그인 성공 시 IP로 로그인한 기록을 삭제 (LoginId 기준)"""
@@ -505,18 +542,23 @@ class AccessLogger:
                 monthly["new_users"].append(user_id)
         # 부서 카운트 (profile.DeptName 사용)
         profile = user_data.get("profile", {})
-        dept = profile.get("DeptName")  # 7개 필드 중 DeptName 사용
-        if dept:
-            daily["by_department"][dept] = daily["by_department"].get(dept, 0) + 1
-            monthly["by_department"][dept] = monthly["by_department"].get(dept, 0) + 1
+        user_type = user_data.get("user_type", "unknown")
         
-        # team과 company는 사용하지 않음 (7개 필드에 없음)
-        org_url = profile.get("org_url")
-        if org_url:
-            daily.setdefault("by_org_url", {})
-            monthly.setdefault("by_org_url", {})
-            daily["by_org_url"][org_url] = daily["by_org_url"].get(org_url, 0) + 1
-            monthly["by_org_url"][org_url] = monthly["by_org_url"].get(org_url, 0) + 1
+        # 부서명 결정
+        if user_type == "saml":
+            dept_name = profile.get("DeptName") or "부서미지정"
+        else:
+            dept_name = "외부"
+        
+        # 일별/월별 통계 업데이트
+        if dept_name:
+            daily["by_department"][dept_name] = daily["by_department"].get(dept_name, 0) + 1
+            monthly["by_department"][dept_name] = monthly["by_department"].get(dept_name, 0) + 1
+        
+        # 부서별 통계 증분 업데이트 (새로운 방식)
+        thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        is_new_user = user_data.get("first_seen", "") >= thirty_days_ago
+        self._update_department_stats(user_id, dept_name, is_new_user)
         
         # 통계 저장
         self._save_stats()
@@ -851,61 +893,13 @@ class AccessLogger:
         return self.stats_data["users"][user_id]
     
     def get_department_stats(self) -> Dict[str, Any]:
-        """부서별 사용자 분포 및 활동량 통계 - LoginId 기준 (30일 내 신규 사용자 포함)"""
-        departments = {}
-        
-        # 30일 전 날짜 계산
-        thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-        
-        for user_id, data in self.stats_data["users"].items():
-            # localhost IP 제외
-            if user_id in ['127.0.0.1', '::1', 'localhost']:
-                continue
-                
-            profile = data.get("profile", {})
-            user_type = data.get("user_type", "unknown")
-            
-            # 부서명 추출 (SAML 사용자는 DeptName, IP 사용자는 "외부")
-            if user_type == "saml":
-                dept_name = profile.get("DeptName") or "부서미지정"
-            else:
-                dept_name = "외부"  # IP 로그인 사용자
-            
-            # 부서별 통계 집계
-            if dept_name not in departments:
-                departments[dept_name] = {
-                    "name": dept_name,
-                    "user_count": 0,
-                    "total_requests": 0,
-                    "new_users_30d": 0,  # 30일 내 신규 사용자
-                    "users": []
-                }
-            
-            # 사용자 수 증가
-            departments[dept_name]["user_count"] += 1
-            
-            # 30일 내 신규 사용자 체크
-            first_seen = data.get("first_seen", "")
-            if first_seen >= thirty_days_ago:
-                departments[dept_name]["new_users_30d"] += 1
-            
-            # 총 요청 수 계산
-            total_requests = 0
-            daily_requests = data.get("daily_requests", {})
-            for date, count in daily_requests.items():
-                total_requests += count
-            departments[dept_name]["total_requests"] += total_requests
-            
-            # 사용자 정보 저장
-            departments[dept_name]["users"].append({
-                "user_id": user_id,
-                "profile": profile,
-                "first_seen": first_seen
-            })
+        """부서별 사용자 분포 및 활동량 통계 - 캐시된 통계 반환 (빠름!)"""
+        # department_stats가 없으면 빈 딕셔너리 반환
+        department_stats = self.stats_data.get("department_stats", {})
         
         return {
-            "departments": departments,
-            "activity": departments  # activity와 departments 동일하게 사용
+            "departments": department_stats,
+            "activity": department_stats  # activity와 departments 동일하게 사용
         }
 
 # 전역 인스턴스
