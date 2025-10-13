@@ -734,37 +734,29 @@ async def api_whoami(request: Request):
     # authenticated 필드 추가 (프론트엔드에서 체크)
     authenticated = bool(user)
     
-    # 프론트엔드 호환: meta 필드명 정규화
+    # 프론트엔드 호환: meta를 metadata로도 제공 (필드명 매핑은 최소화)
     metadata = {}
     if meta:
-        # 프론트엔드가 기대하는 필드명으로 매핑
-        metadata = {
-            "name": meta.get("Username", ""),
-            "Username": meta.get("Username", ""),
-            "login_id": meta.get("LoginId", ""),
-            "LoginId": meta.get("LoginId", ""),  # 정확한 필드명
-            "LginId": meta.get("LoginId", ""),  # 오타 호환성
-            "username": meta.get("Username", ""),
-            "employee_id": meta.get("Sabun", ""),
-            "Sabun": meta.get("Sabun", ""),
-            "department_name": meta.get("DeptName", ""),
-            "DeptName": meta.get("DeptName", ""),
-            "department": meta.get("DeptName", ""),
-            "grade": meta.get("GrdName", ""),
-            "GrdName": meta.get("GrdName", ""),
-            "grade_en": meta.get("GrdName_EN", ""),
-            "GrdName_EN": meta.get("GrdName_EN", ""),
-        }
-        # 빈 값 제거
-        metadata = {k: v for k, v in metadata.items() if v}
+        # 주요 필드만 snake_case 변환 추가 (성능 최적화)
+        metadata = dict(meta)  # 원본 유지
+        if "LoginId" in meta:
+            metadata["login_id"] = meta["LoginId"]
+            metadata["LginId"] = meta["LoginId"]  # 오타 호환
+        if "Username" in meta:
+            metadata["name"] = meta["Username"]
+            metadata["username"] = meta["Username"]
+        if "DeptName" in meta:
+            metadata["department_name"] = meta["DeptName"]
+            metadata["department"] = meta["DeptName"]
+        if "Sabun" in meta:
+            metadata["employee_id"] = meta["Sabun"]
     
     return {
         "authenticated": authenticated,
         "user": user,
         "account": account,
         "pc": pc,
-        "metadata": metadata,  # 프론트엔드가 기대하는 필드명
-        "meta": metadata  # 하위 호환성
+        "metadata": metadata
     }
 
 
