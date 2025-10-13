@@ -548,25 +548,8 @@ async def saml_acs(request: Request):
         auth.process_response()
         errors = auth.get_errors()
     except Exception as e:
-        logger.warning(f"SAML ACS 처리 예외: {e}")
-        # AUTO_LOGIN=0일 때: 예외 발생 시 IP 기반 더미 attribute 생성
-        if not AUTO_LOGIN:
-            client_ip = logger_instance.get_client_ip(request)
-            # IP 기반 더미 attribute 생성
-            dev_meta = {
-                'Username': 'IP',
-                'LoginId': client_ip,
-                'Sabun': '-',
-                'DeptName': '외부',
-                'GrdName_EN': '-',
-                'GrdName': '-'
-            }
-            
-            # detail_access.csv에 IP 기반 기록
-            detail_access_logger.log_saml_access(dev_meta, client_ip)
-            
-            logger.info(f"✅ [IP 기반 로그인] AUTO_LOGIN=0, IP: {client_ip}")
-            return RedirectResponse("/", status_code=302)
+        logger.warning(f"🚫 [SAML ACS] 처리 예외: {e}")
+        # 예외 발생 시 바로 차단
         return PlainTextResponse("ACS error: exception during processing", status_code=400)
 
     # SAML 속성 추출 - 원본 claim 이름 유지 (인증 체크 전에 먼저 추출)
@@ -599,74 +582,47 @@ async def saml_acs(request: Request):
         if val:
             meta[field] = val
     
-    # 🔥 기본: 무조건 IdP로 리다이렉트 (예외: LoginId가 있으면 리다이렉트 안함)
+    # 🔥 LoginId 추출 및 즉시 체크
     LoginId = meta.get("LoginId")
     
     logger.info("=" * 100)
-    logger.info(f"🔐 [3단계: LoginId 체크] 기본 리다이렉트, 예외: LoginId가 있으면 리다이렉트 안함")
+    logger.info(f"🔐 [LoginId 체크] LoginId 추출 및 즉시 체크")
     logger.info(f"  - LoginId: {LoginId}")
     logger.info(f"  - meta: {meta}")
     logger.info("=" * 100)
     
-    try:
+    # LoginId 없으면 바로 차단
+    if not LoginId:
+        logger.error(f"🚫 [ACCESS DENIED] LoginId 없음 → 접속 차단")
         base_settings, _ = _load_saml_files()
         idp_sso_url = base_settings.get("idp", {}).get("singleSignOnService", {}).get("url")
         
         if idp_sso_url:
-            # 예외: LoginId가 있으면 리다이렉트 안함
-            if not LoginId:
-                logger.info(f"  → LoginId 없음 → IdP SSO로 리다이렉트: {idp_sso_url}")
-                return RedirectResponse(idp_sso_url, status_code=302)
-            else:
-                logger.info(f"  → LoginId 있음 → 리다이렉트 안함, 접속 허용")
+            logger.info(f"  → IdP SSO로 리다이렉트: {idp_sso_url}")
+            return RedirectResponse(idp_sso_url, status_code=302)
         else:
-            logger.error(f"[SAML ACS] IdP SSO URL을 찾을 수 없음")
-            if not LoginId:
-                return PlainTextResponse(
-                    f"SAML 인증 실패\n\n오류: LoginId not found\n상세: SAML 응답에 LoginId attribute가 없습니다.\n\n관리자에게 문의하세요.",
-                    status_code=400
-                )
-    except Exception as e:
-        logger.error(f"[SAML ACS] IdP SSO URL 로드 실패: {e}")
-        if not LoginId:
             return PlainTextResponse(
                 f"SAML 인증 실패\n\n오류: LoginId not found\n상세: SAML 응답에 LoginId attribute가 없습니다.\n\n관리자에게 문의하세요.",
                 status_code=400
             )
     
+    logger.info(f"✅ [LoginId 확인] LoginId 존재 → 후속 진행")
+    
     # SAML 인증 체크 (LoginId가 있는 경우에만)
     if errors or not auth.is_authenticated():
         reason = auth.get_last_error_reason() or ""
-        logger.error(f"[SAML ACS] 인증 실패: {errors} / {reason}")
+        logger.error(f"🚫 [SAML ACS] 인증 실패: {errors} / {reason}")
         
-        # AUTO_LOGIN=1일 때: IdP로 다시 리다이렉트
-        if AUTO_LOGIN:
-            try:
-                base_settings, _ = _load_saml_files()
-                idp_sso_url = base_settings.get("idp", {}).get("singleSignOnService", {}).get("url")
-                
-                if idp_sso_url:
-                    logger.info(f"[SAML ACS] 인증 실패 → IdP SSO로 리다이렉트: {idp_sso_url}")
-                    return RedirectResponse(idp_sso_url, status_code=302)
-            except Exception as e:
-                logger.error(f"[SAML ACS] IdP SSO URL 로드 실패: {e}")
-        else:
-            # AUTO_LOGIN=0일 때: IP 기반 더미 attribute 생성
-            client_ip = logger_instance.get_client_ip(request)
-            dev_meta = {
-                'Username': 'IP',
-                'LoginId': client_ip,
-                'Sabun': '-',
-                'DeptName': '외부',
-                'GrdName_EN': '-',
-                'GrdName': '-'
-            }
+        # IdP로 다시 리다이렉트
+        try:
+            base_settings, _ = _load_saml_files()
+            idp_sso_url = base_settings.get("idp", {}).get("singleSignOnService", {}).get("url")
             
-            # detail_access.csv에 IP 기반 기록
-            detail_access_logger.log_saml_access(dev_meta, client_ip)
-            
-            logger.info(f"✅ [IP 기반 로그인] AUTO_LOGIN=0, IP: {client_ip}")
-            return RedirectResponse("/", status_code=302)
+            if idp_sso_url:
+                logger.info(f"[SAML ACS] 인증 실패 → IdP SSO로 리다이렉트: {idp_sso_url}")
+                return RedirectResponse(idp_sso_url, status_code=302)
+        except Exception as e:
+            logger.error(f"[SAML ACS] IdP SSO URL 로드 실패: {e}")
         
         # 모든 시도 실패 시 에러 메시지
         return PlainTextResponse(
