@@ -439,7 +439,13 @@ class AccessLogger:
         self._update_session(ip, now_unix, endpoint)
         
         # 사용자별 통계 (LoginId 기준)
+        # 🔥 profile이 있는 경우만 사용자 생성 (IP 사용자 생성 차단)
         if user_id not in self.stats_data["users"]:
+            if not profile_meta or len(profile_meta) == 0:
+                # profile이 없으면 사용자 생성 안 함 (IP 로그 차단)
+                print(f"⚠️ [SKIP CREATE] profile 없어서 사용자 생성 안 함: user_id={user_id}, ip={ip}")
+                return
+            
             self.stats_data["users"][user_id] = {
                 "primary_ip": ip,
                 "ip_addresses": [ip],
@@ -455,9 +461,10 @@ class AccessLogger:
                 "daily_requests": {},
                 "endpoints": {},
                 "sessions": [],  # 세션 히스토리
-                "profile": {},
-                "user_type": "saml" if meta and meta.get("LoginId") else "ip"  # 사용자 타입 구분
+                "profile": profile_meta,  # 🔥 profile 직접 저장
+                "user_type": "saml"  # 🔥 profile이 있으면 무조건 SAML 사용자
             }
+            print(f"✅ [CREATE] SAML 사용자 생성: user_id={user_id}, profile={list(profile_meta.keys())}")
         
         user_data = self.stats_data["users"][user_id]
         
@@ -645,28 +652,20 @@ class AccessLogger:
                 "session_id": f"{ip}_{int(now_unix)}"
             }
             
-            # 사용자 데이터에 새 세션 기록 (사용자가 없으면 생성)
-            if ip not in self.stats_data["users"]:
-                # 새 사용자 생성
-                today = datetime.now().strftime('%Y-%m-%d')
-                now_timestamp = datetime.fromtimestamp(now_unix).strftime('%Y-%m-%d %H:%M:%S')
-                self.stats_data["users"][ip] = {
-                    "primary_ip": ip,
-                    "ip_addresses": [ip],
-                    "total_requests": 0,
-                    "unique_days": [],
-                    "first_seen": today,
-                    "last_seen": today,
-                    "last_access_time": now_timestamp,
-                    "session_count": 0,
-                    "total_session_time": 0,
-                    "current_session_start": now_timestamp,
-                    "daily_requests": {},
-                    "endpoints": {},
-                    "sessions": []
-                }
+            # 🔥 사용자 데이터에 새 세션 기록 (IP 키로 사용자 생성하지 않음!)
+            # stats.json에 LoginId로 등록된 사용자만 세션 관리
+            found_user_id = None
+            for uid, udata in self.stats_data["users"].items():
+                if ip in udata.get("ip_addresses", []):
+                    found_user_id = uid
+                    break
             
-            user_data = self.stats_data["users"][ip]
+            if not found_user_id:
+                # stats.json에 없는 IP → 세션 관리 안 함 (IP 로그 차단)
+                print(f"⚠️ [SKIP SESSION] IP가 stats.json에 없음: {ip}, endpoint={endpoint}")
+                return
+            
+            user_data = self.stats_data["users"][found_user_id]
             user_data["session_count"] += 1
             user_data["current_session_start"] = datetime.fromtimestamp(now_unix).strftime('%Y-%m-%d %H:%M:%S')
             user_data["current_session_duration"] = 0
