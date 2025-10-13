@@ -677,7 +677,6 @@ async def saml_acs(request: Request):
     # 🔥 SAML 로그인 성공 시 IP로 로그인한 기록 삭제 및 SAML 로그 직접 기록 (LoginId 기준)
     try:
         client_ip = logger_instance.get_client_ip(request)
-        LoginId = meta.get("LoginId")
         
         if client_ip and LoginId:
             # ① LoginId 기준으로 IP 기록 정리 및 삭제
