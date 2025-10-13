@@ -3725,6 +3725,14 @@ class WaferMapViewer {
 
         
         
+        // 🔥 초기화 버튼 클릭 이벤트
+        const resetExplorerBtn = document.getElementById('reset-explorer-btn');
+        if (resetExplorerBtn) {
+            resetExplorerBtn.onclick = () => {
+                this.resetExplorer();
+            };
+        }
+
         // 🔥 캐시 초기화 버튼
 
         const clearCacheBtn = document.getElementById('clear-cache-btn');
@@ -3732,13 +3740,7 @@ class WaferMapViewer {
         if (clearCacheBtn) {
 
             clearCacheBtn.onclick = () => {
-
-                if (confirm('모든 캐시를 초기화하시겠습니까?\n\n이 작업은 서버와 클라이언트의 모든 캐시를 삭제합니다.')) {
-
-                    this.clearAllCache();
-
-                }
-
+                this.clearAllCache();
             };
 
         }
@@ -13279,6 +13281,20 @@ class WaferMapViewer {
 
     // 🔥 모든 캐시 초기화
 
+    async resetExplorer() {
+        try {
+            console.log('🔄 [RESET EXPLORER] 초기화면으로 복원...');
+            
+            // 페이지 리로드로 간단하게 초기화
+            window.location.reload();
+            
+            return true;
+        } catch (error) {
+            console.error('❌ [RESET EXPLORER] 초기화 실패:', error);
+            return false;
+        }
+    }
+
     async clearAllCache() {
 
         try {
@@ -13301,7 +13317,7 @@ class WaferMapViewer {
 
                 console.error('❌ 전체 캐시 초기화 실패:', response.status, errorText);
 
-                alert(`캐시 초기화 실패: ${response.status} ${response.statusText}\n${errorText}`);
+                console.error('캐시 초기화 실패:', response.status, response.statusText, errorText);
 
                 return false;
 
@@ -13360,7 +13376,7 @@ class WaferMapViewer {
 
             
             
-            alert(`전체 캐시 초기화 완료!\n\n🗑️ 삭제된 항목: ${totalDeletedItems}개\n• 클래스-이미지 캐시: ${dirCacheCount}개\n• 썸네일 캐시: ${thumbnailCacheCount}개\n• 피라미드 캐시: ${pyramidCacheCount}개\n\n초기화된 캐시:\n${result.cleared_caches.join('\n')}`);
+            console.log(`전체 캐시 초기화 완료! 삭제된 항목: ${totalDeletedItems}개`);
 
             return true;
             
