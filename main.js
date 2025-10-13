@@ -1487,10 +1487,15 @@ class WaferMapViewer {
 
     }
 
-    // 제품 검색 입력 처리
+    // 제품 검색 입력 처리 (디바운싱 적용)
     handleSubfolderSearch(event) {
         const query = event.target.value.toLowerCase().trim();
-        this.filterSubfolderOptions(query);
+        
+        // 🔥 디바운싱: 타이핑 중간에 검색하지 않고 마지막 입력 후 100ms 후에 검색
+        clearTimeout(this.searchTimeout);
+        this.searchTimeout = setTimeout(() => {
+            this.filterSubfolderOptions(query);
+        }, 100);
     }
 
     // 제품 검색 드롭다운 표시
@@ -1649,9 +1654,20 @@ class WaferMapViewer {
         if (!this.dom.subfolderDropdown) return;
 
         const items = this.dom.subfolderDropdown.querySelectorAll('.subfolder-item');
+        
+        // 🔥 빠른 필터링: query가 비어있으면 모든 항목 표시
+        if (query === '') {
+            items.forEach(item => {
+                item.style.display = 'block';
+            });
+            return;
+        }
+
+        // 🔥 최적화된 필터링
         items.forEach(item => {
             const name = item.dataset.name.toLowerCase();
-            if (name.includes(query) || query === '') {
+            // startsWith 우선 검사 (더 빠름)
+            if (name.startsWith(query) || name.includes(query)) {
                 item.style.display = 'block';
             } else {
                 item.style.display = 'none';
