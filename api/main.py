@@ -2887,6 +2887,10 @@ if __name__ == "__main__":
             "default": {
                 "format": "%(levelname)s: %(asctime)s     %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S"
+            },
+            "access": {
+                "format": "%(levelname)s: %(asctime)s     %(message)s",
+                "datefmt": "%Y-%m-%d %H:%M:%S"
             }
         },
         "handlers": {
