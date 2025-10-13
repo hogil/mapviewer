@@ -6960,27 +6960,8 @@ class WaferMapViewer {
     saveCurrentViewStateForLabelExplorer() {
         console.log('💾 [SAVE] saveCurrentViewStateForLabelExplorer 호출');
 
-        // 🔥 이미 저장된 상태가 있으면 덮어쓰지 않음
-        // → Wafer Map Explorer → Label Explorer 첫 진입 시에만 저장
-        // → Label Explorer 내 이동 시에는 저장 안 함
-        const hasSavedViewState = !!this.savedViewState;
-
-        const hasType = this.savedViewState?.type;
-
-        const isGridWithImages = this.savedViewState?.type === 'grid' && this.savedViewState?.images && this.savedViewState?.images.length > 0;
-
-        const isSingle = this.savedViewState?.type === 'single';
-
-        const shouldSkip = hasSavedViewState && hasType && (isGridWithImages || isSingle);
-
-
-
-        if (shouldSkip) {
-            console.log('💾 [SAVE] 이미 저장된 상태 있음 → 건너뛰기 (Label Explorer 내 이동):', this.savedViewState);
-
-            return;
-
-        }
+        // 🔥 항상 현재 Wafer Map Explorer 상태를 저장/업데이트
+        // (Label Explorer 내 이동이든, 첫 진입이든 항상 최신 상태 저장)
 
 
 
