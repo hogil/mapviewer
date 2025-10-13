@@ -1561,7 +1561,7 @@ class CreateClassReq(BaseModel):
 
 class LabelAddReq(BaseModel):
     image_path: str = Field(..., description="ROOT 기준 상대경로 또는 절대경로도 허용")
-    labels: List[str] = Field(..., min_items=1)
+    labels: List[str] = Field(..., min_length=1)
 
 class LabelDelReq(BaseModel):
     image_path: str
@@ -2238,7 +2238,7 @@ async def delete_class(class_name: str = PathParam(..., min_length=1, max_length
         raise HTTPException(status_code=500, detail=str(e))
 
 class DeleteClassesReq(BaseModel):
-    names: List[str] = Field(..., min_items=1)
+    names: List[str] = Field(..., min_length=1)
 
 @app.post("/api/classes/delete")
 async def delete_classes(req: DeleteClassesReq, _=Depends(labels_classes_sync_dep)):
@@ -2911,33 +2911,8 @@ if __name__ == "__main__":
         except Exception:
             workers_env = 2
     # reload 사용 시 workers=1 고정. reload 비사용 시 환경변수로 워커 수 제어
-    # 커스텀 로깅 설정 (uvicorn 기본 로거 완전 비활성화)
-    log_config = {
-        "version": 1,
-        "disable_existing_loggers": False,
-        "formatters": {
-            "default": {
-                "format": "%(levelname)s: %(asctime)s     %(message)s",
-                "datefmt": "%Y-%m-%d %H:%M:%S"
-            },
-            "access": {
-                "format": "%(levelname)s: %(asctime)s     %(message)s",
-                "datefmt": "%Y-%m-%d %H:%M:%S"
-            }
-        },
-        "handlers": {
-            "default": {
-                "formatter": "default",
-                "class": "logging.StreamHandler",
-                "stream": "ext://sys.stdout"
-            }
-        },
-        "loggers": {
-            "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
-            "uvicorn.error": {"handlers": ["default"], "level": "WARNING", "propagate": False},
-            "uvicorn.access": {"handlers": [], "level": "CRITICAL", "propagate": False}
-        }
-    }
+    # log_config=None으로 설정하여 uvicorn의 기본 로거 비활성화
+    # 우리가 _setup_logging()에서 직접 설정한 로거만 사용
     
     uvicorn.run(
         "api.main:app",
@@ -2948,7 +2923,7 @@ if __name__ == "__main__":
         log_level="info",
         access_log=False,                   # 커스텀 테이블 로그 사용
         use_colors=False,                   # 색상 비활성화로 로그 중복 방지
-        log_config=log_config,              # 커스텀 로깅 설정 사용
+        log_config=None,                    # uvicorn 로거 비활성화 (우리가 직접 설정한 로거 사용)
         ssl_certfile=str(cert_path),
         ssl_keyfile=str(key_path),
     )
