@@ -14138,7 +14138,7 @@ class WaferMapViewer {
 
         this.debugLog('Label Explorer → Grid Mode:', {
 
-            originalPaths: imagePaths,
+            originalPaths: imageKeys,
 
             actualPaths: actualPaths,
 
@@ -14234,7 +14234,11 @@ class WaferMapViewer {
 
 
 
-            const response = await fetch(`/api/files?path=classification/${encodeURIComponent(className)}`);
+            // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
+            const labelPath = this.currentFolderPrefix ? 
+                `${this.currentFolderPrefix}classification/${encodeURIComponent(className)}` : 
+                `classification/${encodeURIComponent(className)}`;
+            const response = await fetch(`/api/files?path=${labelPath}`);
 
             const data = await response.json();
 
@@ -14352,7 +14356,11 @@ class WaferMapViewer {
 
                 try {
 
-                    const response = await fetch(`/api/files?path=classification/${encodeURIComponent(className)}`);
+                    // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
+                    const labelPath = this.currentFolderPrefix ? 
+                        `${this.currentFolderPrefix}classification/${encodeURIComponent(className)}` : 
+                        `classification/${encodeURIComponent(className)}`;
+                    const response = await fetch(`/api/files?path=${labelPath}`);
 
                     const data = await response.json();
 
