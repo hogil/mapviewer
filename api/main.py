@@ -600,7 +600,7 @@ async def saml_acs(request: Request):
             meta[field] = val
     
     # 🔥 기본: 무조건 IdP로 리다이렉트 (예외: LoginId가 있으면 리다이렉트 안함)
-    login_id = meta.get("LoginId") or auth.get_nameid()
+    login_id = meta.get("LoginId") or auth.get_nameid() or "saml-user"
     
     logger.info("=" * 100)
     logger.info(f"🔐 [3단계: LoginId 체크] 기본 리다이렉트, 예외: LoginId가 있으면 리다이렉트 안함")
@@ -674,9 +674,6 @@ async def saml_acs(request: Request):
             status_code=400
         )
     
-    # NameID 결정: LoginId → nameid → fallback (디버그 로그 추가)
-    nameid = meta.get("LoginId") or auth.get_nameid() or "saml-user"
-    
     # 로그 출력
     bootlog = logging.getLogger("uvicorn.error")
     bootlog.info("=" * 100)
@@ -684,7 +681,7 @@ async def saml_acs(request: Request):
     bootlog.info("-" * 100)
     bootlog.info(f"🔍 [DEBUG] meta.get('LoginId'): {meta.get('LoginId')}")
     bootlog.info(f"🔍 [DEBUG] auth.get_nameid(): {auth.get_nameid()}")
-    bootlog.info(f"✅ [FINAL] NameID: {nameid}")
+    bootlog.info(f"✅ [FINAL] LoginId: {login_id}")
     bootlog.info("-" * 100)
     bootlog.info("[SAML ATTRIBUTES] 수신된 속성 (Key → Value):")
     
@@ -750,7 +747,7 @@ async def saml_acs(request: Request):
     except Exception as e:
         bootlog.warning(f"⚠️ [SAML LOG] SAML 로그 기록 실패: {e}")
     
-    log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"SAML 로그인: {nameid}")
+    log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"SAML 로그인: {login_id}")
     return resp
 
 @app.get("/saml/dev-login")
