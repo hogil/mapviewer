@@ -61,6 +61,26 @@ class AccessLogger:
         except Exception as e:
             print(f"통계 저장 실패: {e}")
     
+    def remove_ip_login_record(self, client_ip: str):
+        """SAML 로그인 성공 시 IP로 로그인한 기록을 삭제"""
+        try:
+            # users 딕셔너리에서 해당 IP 키 삭제
+            if client_ip in self.stats_data.get("users", {}):
+                del self.stats_data["users"][client_ip]
+                print(f"IP 로그인 기록 삭제됨: {client_ip}")
+                
+                # 통계 데이터 저장
+                self._save_stats()
+                
+                # active_sessions에서도 해당 IP 세션 제거
+                if client_ip in self.active_sessions:
+                    del self.active_sessions[client_ip]
+                    
+                return True
+        except Exception as e:
+            print(f"IP 로그인 기록 삭제 실패: {e}")
+        return False
+    
     def log_access(self, request: Request, endpoint: str, status_code: int = 200):
         """테이블 형식 접속 로그 기록"""
         # stats 관련 요청은 로깅하지 않음
