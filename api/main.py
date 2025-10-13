@@ -616,15 +616,19 @@ async def saml_acs(request: Request):
         if val:
             meta[field] = val
     
-    # NameID 결정: LoginId → nameid → fallback
-    nameid = meta.get("LoginId") or auth.get_nameid() or "saml-user"
+    # NameID 결정: LoginId → nameid → fallback (디버그 로그 추가)
+    login_id = meta.get("LoginId")
+    auth_nameid = auth.get_nameid()
+    nameid = login_id or auth_nameid or "saml-user"
     
     # 로그 출력
     bootlog = logging.getLogger("uvicorn.error")
     bootlog.info("=" * 100)
     bootlog.info("[SAML LOGIN SUCCESS] 로그인 성공")
     bootlog.info("-" * 100)
-    bootlog.info(f"NameID: {nameid}")
+    bootlog.info(f"🔍 [DEBUG] meta.get('LoginId'): {login_id}")
+    bootlog.info(f"🔍 [DEBUG] auth.get_nameid(): {auth_nameid}")
+    bootlog.info(f"✅ [FINAL] NameID: {nameid}")
     bootlog.info("-" * 100)
     bootlog.info("[SAML ATTRIBUTES] 수신된 속성 (Key → Value):")
     
@@ -641,8 +645,13 @@ async def saml_acs(request: Request):
     bootlog.info("=" * 100)
 
     resp = RedirectResponse("/", status_code=302)
+    
+    # 쿠키 설정 (디버그 로그 추가)
+    bootlog.info(f"🍪 [COOKIE] session_user 설정: {nameid}")
     resp.set_cookie("session_user", nameid, max_age=7*24*3600, secure=True, httponly=True, samesite="Lax")
+    
     if meta:
+        bootlog.info(f"🍪 [COOKIE] session_meta 설정: {list(meta.keys())}")
         try:
             prev = request.cookies.get("session_meta")
             if prev:
@@ -652,6 +661,9 @@ async def saml_acs(request: Request):
         except Exception:
             pass
         resp.set_cookie("session_meta", json.dumps(meta, ensure_ascii=False), max_age=7*24*3600, secure=True, httponly=False, samesite="Lax")
+    else:
+        bootlog.warning(f"⚠️ [COOKIE] session_meta가 비어있음!")
+    
     log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"SAML 로그인: {nameid}")
     return resp
 
@@ -721,11 +733,19 @@ async def api_whoami(request: Request):
     pc = ""
     meta = {}
     meta_cookie = request.cookies.get("session_meta")
+    
+    # 디버그 로그
+    logger.info(f"🔍 [API /auth/user] session_user 쿠키: {user}")
+    logger.info(f"🔍 [API /auth/user] session_meta 쿠키 존재: {bool(meta_cookie)}")
+    
     if meta_cookie:
         try:
             meta = json.loads(meta_cookie)
-        except Exception:
+            logger.info(f"🔍 [API /auth/user] meta 파싱 성공: {list(meta.keys())}")
+        except Exception as e:
+            logger.warning(f"⚠️ [API /auth/user] meta 파싱 실패: {e}")
             meta = {}
+    
     if user and "@" in user:
         parts = user.split("@", 1)
         account = parts[0]
@@ -733,6 +753,7 @@ async def api_whoami(request: Request):
     
     # authenticated 필드 추가 (프론트엔드에서 체크)
     authenticated = bool(user)
+    logger.info(f"✅ [API /auth/user] authenticated: {authenticated}, user: {user}")
     
     # 프론트엔드 호환: meta를 metadata로도 제공 (필드명 매핑은 최소화)
     metadata = {}
