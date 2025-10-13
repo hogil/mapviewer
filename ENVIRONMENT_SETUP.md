@@ -1,224 +1,209 @@
-# 환경변수 설정 가이드
+# 환경 변수 설정 가이드
 
-## 개요
-L3Tracker 웨이퍼맵 뷰어의 환경변수 설정 방법을 Windows 11과 Ubuntu 24에서 설명합니다.
+## 🖥️ 사내 Ubuntu 24 서버 (운영 환경 - SAML 자동 로그인)
 
-## 필수 환경변수
-
-### 1. UVICORN_WORKERS (서버 워커 수)
-서버의 동시 처리 워커 수를 설정합니다.
-
-#### Ubuntu 24
+### 필수 환경변수
 ```bash
-# 시스템 전체 설정
-echo 'export UVICORN_WORKERS=16' | sudo tee -a /etc/environment
+# SAML 자동 로그인 활성화
+export AUTO_LOGIN="1"
 
-# 사용자 설정
-echo 'export UVICORN_WORKERS=16' >> ~/.bashrc
-source ~/.bashrc
+# 서버 설정
+export HOST="0.0.0.0"
+export PORT="8080"
 
-# 현재 세션에서만
-export UVICORN_WORKERS=16
+# SSL/TLS 설정 (필수)
+export SSL_ENABLED="1"
+export HTTPS_PORT="443"
+export SSL_CERTFILE="cert/fullchain.pem"
+export SSL_KEYFILE="cert/server.key"
 
-# 환경변수 확인
-echo $UVICORN_WORKERS
+# 성능 최적화 (고성능 서버)
+export IO_THREADS="128"
+export THUMBNAIL_SEM="256"
+export PYVIPS_CONCURRENCY="1024"
+export PYVIPS_CACHE_SIZE="4095"
+export PYVIPS_MEMORY_ALIGN="64"
+export WORKERS="8"  # CPU 코어 수에 맞게 조정
+
+# 썸네일 설정
+export THUMBNAIL_SIZE="512"
+export THUMBNAIL_FORMAT="WEBP"
+export THUMBNAIL_QUALITY="100"
+
+# 통계 로그 (선택)
+export STATS_LOG_ENABLED="1"
+
+# 개발 모드 비활성화 (자동)
+export RELOAD="0"
 ```
 
-#### Windows 11
-```powershell
-# 시스템 환경변수 (영구)
-[Environment]::SetEnvironmentVariable("UVICORN_WORKERS", "16", "Machine")
-
-# 사용자 환경변수 (영구)
-[Environment]::SetEnvironmentVariable("UVICORN_WORKERS", "16", "User")
-
-# 현재 세션에서만
-$env:UVICORN_WORKERS = "16"
-
-# 환경변수 확인
-echo $env:UVICORN_WORKERS
-```
-
-### 2. PROJECT_ROOT (이미지 루트 디렉토리)
-웨이퍼맵 이미지가 저장된 루트 디렉토리를 설정합니다.
-
-#### Ubuntu 24
+### 실행 방법
 ```bash
-echo 'export PROJECT_ROOT="/home/user/wafer_images"' >> ~/.bashrc
-source ~/.bashrc
+# 1. 환경변수 설정
+source /path/to/env_production.sh
+
+# 2. 가상환경 활성화
+source .venv/bin/activate
+
+# 3. 서버 실행
+python -m api.main
+
+# 또는 uvicorn으로 실행 (워커 여러 개)
+uvicorn api.main:app --host 0.0.0.0 --port 8080 --workers 8 \
+  --ssl-keyfile cert/server.key \
+  --ssl-certfile cert/fullchain.pem
 ```
 
-#### Windows 11
+---
+
+## 💻 Windows 11 개발 환경 (로컬 개발 - SAML 테스트)
+
+### start.ps1 설정
 ```powershell
-[Environment]::SetEnvironmentVariable("PROJECT_ROOT", "D:\\wafer_images", "User")
-```
+# 환경변수 설정
+$env:AUTO_LOGIN="0"      # 0=자동로그인 비활성화 (개발용)
+$env:HOST="0.0.0.0"
+$env:PORT="8080"
+$env:SSL_ENABLED="1"
+$env:HTTPS_PORT="443"
+$env:SSL_CERTFILE="cert/fullchain.pem"
+$env:SSL_KEYFILE="cert/server.key"
+$env:THUMBNAIL_SIZE="512"
+$env:THUMBNAIL_FORMAT="WEBP"
+$env:THUMBNAIL_QUALITY="100"
+$env:IO_THREADS="32"     # Windows는 낮춤
+$env:THUMBNAIL_SEM="64"  # Windows는 낮춤
+$env:PYVIPS_CONCURRENCY="256"
+$env:PYVIPS_CACHE_SIZE="1024"
+$env:PYVIPS_MEMORY_ALIGN="64"
+$env:STATS_LOG_ENABLED="0"
+$env:WORKERS="1"         # Windows 개발 시 1개
+$env:RELOAD="1"          # 개발 시 핫 리로드
 
-### 3. HOST, PORT (서버 주소/포트)
-서버가 바인딩할 주소와 포트를 설정합니다.
-
-#### Ubuntu 24
-```bash
-echo 'export HOST="0.0.0.0"' >> ~/.bashrc
-echo 'export PORT="8080"' >> ~/.bashrc
-source ~/.bashrc
-```
-
-#### Windows 11
-```powershell
-[Environment]::SetEnvironmentVariable("HOST", "0.0.0.0", "User")
-[Environment]::SetEnvironmentVariable("PORT", "8080", "User")
-```
-
-### 4. HTTPS 설정
-HTTPS 사용 여부와 인증서 경로를 설정합니다.
-
-#### Ubuntu 24
-```bash
-echo 'export SSL_ENABLED="1"' >> ~/.bashrc
-echo 'export HTTPS_PORT="8443"' >> ~/.bashrc
-echo 'export SSL_CERTFILE="cert/fullchain.pem"' >> ~/.bashrc
-echo 'export SSL_KEYFILE="cert/server.key"' >> ~/.bashrc
-source ~/.bashrc
-```
-
-#### Windows 11
-```powershell
-[Environment]::SetEnvironmentVariable("SSL_ENABLED", "1", "User")
-[Environment]::SetEnvironmentVariable("HTTPS_PORT", "8443", "User")
-[Environment]::SetEnvironmentVariable("SSL_CERTFILE", "cert/fullchain.pem", "User")
-[Environment]::SetEnvironmentVariable("SSL_KEYFILE", "cert/server.key", "User")
-```
-
-## SAML / 자동 로그인 관련 환경변수
-
-#### Ubuntu 24
-```bash
-# 개발 모드 SAML 허용(없으면 0)
-echo 'export DEV_SAML=1' >> ~/.bashrc
-# 자동 로그인 강제 (세션 없으면 /saml/login으로 리다이렉트)
-echo 'export AUTO_LOGIN=1' >> ~/.bashrc
-# 사내 org_url 기본값(필요 시)
-echo 'export DEFAULT_ORG_URL="stsds.secsso.net"' >> ~/.bashrc
-source ~/.bashrc
-```
-
-#### Windows 11
-```powershell
-[Environment]::SetEnvironmentVariable("DEV_SAML","1","User")
-[Environment]::SetEnvironmentVariable("AUTO_LOGIN","1","User")
-[Environment]::SetEnvironmentVariable("DEFAULT_ORG_URL","stsds.secsso.net","User")
-```
-
-## 선택적 환경변수
-
-### 5. 썸네일 설정
-
-#### Ubuntu 24
-```bash
-echo 'export THUMBNAIL_SIZE="512"' >> ~/.bashrc
-echo 'export THUMBNAIL_FORMAT="WEBP"' >> ~/.bashrc
-echo 'export THUMBNAIL_QUALITY="100"' >> ~/.bashrc
-```
-
-#### Windows 11
-```powershell
-[Environment]::SetEnvironmentVariable("THUMBNAIL_SIZE", "512", "User")
-[Environment]::SetEnvironmentVariable("THUMBNAIL_FORMAT", "WEBP", "User")
-[Environment]::SetEnvironmentVariable("THUMBNAIL_QUALITY", "100", "User")
-```
-
-### 6. 성능 튜닝
-
-#### Ubuntu 24
-```bash
-echo 'export IO_THREADS="16"' >> ~/.bashrc
-echo 'export THUMBNAIL_SEM="32"' >> ~/.bashrc
-echo 'export DIRLIST_CACHE_SIZE="1024"' >> ~/.bashrc
-```
-
-#### Windows 11
-```powershell
-[Environment]::SetEnvironmentVariable("IO_THREADS", "16", "User")
-[Environment]::SetEnvironmentVariable("THUMBNAIL_SEM", "32", "User")
-[Environment]::SetEnvironmentVariable("DIRLIST_CACHE_SIZE", "1024", "User")
-```
-
-### 7. 디버그/개발 설정
-
-#### Ubuntu 24
-```bash
-echo 'export RELOAD="0"' >> ~/.bashrc  # 개발 시 1로 설정
-```
-
-#### Windows 11
-```powershell
-[Environment]::SetEnvironmentVariable("RELOAD", "0", "User")  # 개발 시 1로 설정
-```
-
-## 환경변수 확인
-
-### Windows 11
-```powershell
-# 모든 환경변수 확인
-Get-ChildItem Env: | Where-Object Name -like "*UVICORN*"
-Get-ChildItem Env: | Where-Object Name -like "*PROJECT*"
-Get-ChildItem Env: | Where-Object Name -like "*SSL*"
-Get-ChildItem Env: | Where-Object Name -like "*SAML*"
-```
-
-### Ubuntu 24
-```bash
-# 모든 환경변수 확인
-env | grep -E "(UVICORN|PROJECT|SSL|HOST|PORT|SAML|AUTO_LOGIN|DEFAULT_ORG_URL)"
-```
-
-## 권장 설정값
-
-### 개발 환경
-- `UVICORN_WORKERS=4`
-- `RELOAD=1`
-- `SSL_ENABLED=0` (HTTP만 사용)
-
-### 프로덕션 환경
-- `UVICORN_WORKERS=16` (CPU 코어 수의 50-75%)
-- `RELOAD=0`
-- `SSL_ENABLED=1`
-- `PROJECT_ROOT=/path/to/wafer/images`
-
-## 서버 시작
-
-### Windows 11
-```powershell
-cd D:\project\l3tracker
+# 서버 시작
 python -m api.main
 ```
 
-### Ubuntu 24
-```bash
-cd /path/to/l3tracker
+### 실행 방법
+```powershell
+# PowerShell에서 실행
+.\start.ps1
+
+# 또는 직접 실행
+.venv\Scripts\Activate.ps1
 python -m api.main
 ```
 
-## 문제 해결
+---
 
-### 1. 서버가 시작되지 않는 경우
-- Python 경로 확인: `python --version`
-- 의존성 설치: `pip install -r requirements.txt`
-- 포트 사용 중 확인: `netstat -an | findstr :8443` (Windows) / `netstat -tulpn | grep :8443` (Ubuntu)
+## 🔧 SAML 설정 (saml/settings.json)
 
-### 2. HTTPS 인증서 오류
-- 인증서 파일 존재 확인
-- 파일 권한 확인 (Ubuntu: `chmod 600 cert/*.pem`)
-- 인증서 유효성 확인: `openssl x509 -in cert/fullchain.pem -text -noout`
+### 사내 Ubuntu 서버용
+```json
+{
+  "sp": {
+    "entityId": "l3tracker-sp",
+    "assertionConsumerService": {
+      "url": "https://실제서버주소.회사도메인.com/saml/acs",
+      "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+    },
+    "singleLogoutService": {
+      "url": "https://실제서버주소.회사도메인.com/saml/sls",
+      "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+    },
+    "NameIDFormat": "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified"
+  },
+  "idp": {
+    "entityId": "https://사내IdP주소/adfs/services/trust",
+    "singleSignOnService": {
+      "url": "https://사내IdP주소/adfs/ls",
+      "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+    },
+    "singleLogoutService": {
+      "url": "https://사내IdP주소/adfs/ls/?wa=wsignoutcleanup1.0",
+      "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+    },
+    "x509cert": "-----BEGIN CERTIFICATE-----\n실제인증서내용\n-----END CERTIFICATE-----"
+  }
+}
+```
 
-### 3. 이미지 로드 실패
-- `PROJECT_ROOT` 경로 확인
-- 이미지 파일 권한 확인
-- 지원되는 파일 형식 확인 (jpg, png, tiff 등)
+### Windows 개발용 (localhost)
+```json
+{
+  "sp": {
+    "entityId": "l3tracker-sp",
+    "assertionConsumerService": {
+      "url": "https://localhost/saml/acs",
+      "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+    },
+    "singleLogoutService": {
+      "url": "https://localhost/saml/sls",
+      "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+    },
+    "NameIDFormat": "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified"
+  },
+  "idp": {
+    "entityId": "https://your-idp.example.com/adfs/services/trust",
+    "singleSignOnService": {
+      "url": "https://your-idp.example.com/adfs/ls",
+      "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+    },
+    "singleLogoutService": {
+      "url": "https://your-idp.example.com/adfs/ls/?wa=wsignoutcleanup1.0",
+      "binding": "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+    },
+    "x509cert": ""
+  }
+}
+```
 
-## 참고사항
+---
 
-- 환경변수 변경 후 서버 재시작 필요
-- Windows에서는 관리자 권한으로 실행해야 시스템 환경변수 설정 가능
-- Ubuntu에서는 `sudo` 권한으로 시스템 전체 설정 가능
-- 개발 시에는 `.env` 파일 사용도 가능 (python-dotenv 패키지 필요)
+## ⚙️ DEV_SAML 설정 (코드 내 고정)
+
+**api/main.py**에서 고정값으로 설정:
+```python
+DEV_SAML = 0  # 0=개발모드폴백허용, 1=SAML필수(운영)
+```
+
+- **사내 Ubuntu 운영 환경**: `DEV_SAML = 1` (SAML 필수)
+- **Windows 개발 환경**: `DEV_SAML = 0` (개발 모드 폴백)
+
+---
+
+## 📊 환경변수 요약표
+
+| 환경변수 | Ubuntu 운영 | Windows 개발 | 설명 |
+|---------|------------|--------------|------|
+| AUTO_LOGIN | 1 | 0 | SAML 자동 로그인 강제 |
+| HOST | 0.0.0.0 | 0.0.0.0 | 바인드 주소 |
+| PORT | 8080 | 8080 | HTTP 포트 |
+| SSL_ENABLED | 1 | 1 | HTTPS 활성화 |
+| HTTPS_PORT | 443 | 443 | HTTPS 포트 |
+| IO_THREADS | 128 | 32 | I/O 스레드 수 |
+| THUMBNAIL_SEM | 256 | 64 | 썸네일 동시 생성 수 |
+| PYVIPS_CONCURRENCY | 1024 | 256 | PyVips 동시성 |
+| WORKERS | 8 | 1 | Uvicorn 워커 수 |
+| RELOAD | 0 | 1 | 핫 리로드 (개발 전용) |
+| STATS_LOG_ENABLED | 1 | 0 | 통계 로그 활성화 |
+
+---
+
+## 🔍 문제 해결
+
+### "saml-user"로 표시되는 문제
+서버 로그에서 다음을 확인:
+```
+🔍 [DEBUG] meta.get('LoginId'): None 또는 실제값
+🔍 [DEBUG] auth.get_nameid(): None 또는 실제값
+```
+
+둘 다 None이면 → SAML attributes에서 LoginId를 못 찾는 것
+→ 백엔드 로그의 `[SAML ATTRIBUTES]`에서 실제 필드명 확인
+
+### 쿠키가 업데이트 안 되는 문제
+브라우저에서:
+1. F12 → Application → Cookies → `https://서버주소`
+2. `session_user`, `session_meta` 쿠키 삭제
+3. 페이지 새로고침 (Ctrl+Shift+R)
