@@ -603,28 +603,26 @@ async def saml_acs(request: Request):
     # SAML 속성 추출 - 원본 claim 이름 유지
     attrs = auth.get_attributes() or {}
     
-    # URL 형식의 key를 짧은 이름으로 변환 (예: http://schemas.../LoginId -> LoginId)
-    normalized_attrs = {}
-    bootlog = logging.getLogger("uvicorn.error")
-    bootlog.info("=" * 100)
-    bootlog.info(f"🔧 [ATTR NORMALIZE] 원본 attributes 변환 중...")
-    
-    for key, value in attrs.items():
-        # key에서 마지막 / 이후 부분만 추출
-        short_key = key.split('/')[-1] if '/' in key else key
-        normalized_attrs[short_key] = value
-        bootlog.info(f"  {key}")
-        bootlog.info(f"  ↓ {short_key}")
-    
-    bootlog.info("=" * 100)
-    
-    # 7개 허용 필드 추출
+    # 7개 허용 필드 추출 (URL prefix 제거)
     def pick_first(key):
-        # 원본 key와 normalized key 모두 확인
-        v = attrs.get(key) or normalized_attrs.get(key)
-        if isinstance(v, list):
-            return v[0] if v else None
-        return v
+        # 정확한 키로 먼저 시도
+        v = attrs.get(key)
+        if v:
+            if isinstance(v, list):
+                return v[0] if v else None
+            return v
+        
+        # URL이 붙은 경우 찾기 (예: "http://schemas.company.com/claims/LoginId")
+        for attr_key in attrs.keys():
+            # "/" 또는 "#"으로 split해서 마지막 부분이 매칭되는지 확인
+            if '/' in attr_key or '#' in attr_key:
+                last_part = attr_key.split('/')[-1].split('#')[-1]
+                if last_part == key:
+                    v = attrs[attr_key]
+                    if isinstance(v, list):
+                        return v[0] if v else None
+                    return v
+        return None
     
     meta = {}
     for field in ("Username", "LoginId", "Sabun", "DeptName", "GrdName_EN", "GrdName", "x-ms-forwarded-client-ip"):
@@ -654,10 +652,17 @@ async def saml_acs(request: Request):
             value_str = str(value)
             if len(value_str) > 100:
                 value_str = value_str[:97] + "..."
-            bootlog.info(f"  {key:30s} → {value_str}")
+            
+            # URL prefix 제거하고 짧게 표시
+            display_key = key
+            if '/' in key or '#' in key:
+                display_key = key.split('/')[-1].split('#')[-1]
+            
+            bootlog.info(f"  {display_key:30s} → {value_str}")
     else:
         bootlog.info("  (속성 없음)")
     
+    bootlog.info(f"🔍 [EXTRACTED META] 추출된 필드: {list(meta.keys())}")
     bootlog.info("=" * 100)
 
     resp = RedirectResponse("/", status_code=302)
