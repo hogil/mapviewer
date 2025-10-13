@@ -12694,7 +12694,7 @@ class WaferMapViewer {
 
     // 2. Grid rendering
 
-    showGrid(images) {
+    showGrid(images, skipSaveState = false) {
         this.gridMode = true;
         this.selectedImages = images;
         this.currentGridImages = images;  // 🔥 currentGridImages 업데이트
@@ -12708,13 +12708,17 @@ class WaferMapViewer {
             document.documentElement.style.setProperty('--grid-cols', this.gridCols);
         }
 
-        // 🔥 Wafer Map Explorer Grid 상태 저장 (Label Explorer 복귀용)
-        this.savedViewState = {
-            type: 'grid',
-            images: [...images],
-            scrollTop: 0
-        };
-        console.log('💾 [SAVE] showGrid - Grid 상태 저장:', images.length, '개');
+        // 🔥 Wafer Map Explorer에서만 Grid 상태 저장 (Label Explorer에서는 저장하지 않음)
+        if (!skipSaveState) {
+            this.savedViewState = {
+                type: 'grid',
+                images: [...images],
+                scrollTop: 0
+            };
+        }
+        if (!skipSaveState) {
+            console.log('💾 [SAVE] showGrid - Grid 상태 저장:', images.length, '개');
+        }
 
         // 🔥 그리드를 명시적으로 표시 (display: none에서 복원)
         if (grid) {
@@ -14174,7 +14178,7 @@ class WaferMapViewer {
 
         
         
-        this.showGrid(actualPaths);
+        this.showGrid(actualPaths, true);  // 🔥 라벨 Explorer에서 호출 시 상태 저장 건너뛰기
 
     }
 
@@ -14282,7 +14286,7 @@ class WaferMapViewer {
 
             this.selectedImages = imageFiles;
 
-            this.showGrid(imageFiles);
+            this.showGrid(imageFiles, true);  // 🔥 라벨 Explorer에서 호출 시 상태 저장 건너뛰기
 
 
 
@@ -14436,7 +14440,7 @@ class WaferMapViewer {
 
             this.debugLog(`🚀 다중 클래스 그리드 표시 시작: ${allImageFiles.length}개 이미지`);
 
-            this.showGrid(allImageFiles);
+            this.showGrid(allImageFiles, true);  // 🔥 라벨 Explorer에서 호출 시 상태 저장 건너뛰기
 
             this.debugLog(`✅ 다중 클래스 그리드 표시 완료`);
 
