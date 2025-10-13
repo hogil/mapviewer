@@ -20,14 +20,14 @@ def create_detail_access_csv():
     
     # CSV 헤더 정의 (7개 SAML attribute + 접속시간 = 8개 컬럼)
     headers = [
-        '접속시간',           # timestamp
-        '사용자ID',           # user_id (username)
-        '이메일',             # email
-        '이름',               # name (display_name)
-        '부서',               # department
-        '직급',               # title
-        '권한',               # roles
-        'IP주소'              # ip_address
+        '접속일시',
+        'Username',
+        'LoginId', 
+        'Sabun',
+        'DeptName',
+        'x-ms-forwarded-client-ip',
+        'GrdName_EN',
+        'GrdName'
     ]
     
     # 기존 stats.json에서 데이터 읽기

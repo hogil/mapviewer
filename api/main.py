@@ -843,6 +843,18 @@ async def saml_dev_login(request: Request):
         meta_json = json.dumps(meta, ensure_ascii=False)
         meta_b64 = base64.b64encode(meta_json.encode('utf-8')).decode('ascii')
         resp.set_cookie("session_meta", meta_b64, max_age=7*24*3600, secure=is_https, httponly=False, samesite="Lax", path="/")
+        
+        # detail_access.csv에도 개발 모드 로그인 기록
+        try:
+            client_ip = request.client.host
+            bootlog.info(f"🔄 [DEV DETAIL ACCESS] CSV 기록 시작 - meta: {meta}")
+            result = detail_access_logger.log_saml_access(meta, client_ip)
+            bootlog.info(f"✅ [DEV DETAIL ACCESS] CSV 기록 완료 - 결과: {result}")
+        except Exception as e:
+            bootlog.error(f"❌ [DEV DETAIL ACCESS] CSV 기록 실패: {e}")
+            import traceback
+            bootlog.error(f"❌ [DEV DETAIL ACCESS] 에러 상세: {traceback.format_exc()}")
+    
     log_access_row(tag="INFO", path="/saml/dev-login", method="GET", status=302, note=f"DEV 로그인: {user}")
     return resp
 
