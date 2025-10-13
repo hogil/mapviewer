@@ -856,10 +856,11 @@
             }
             
             let html = `
-                <div style="display: grid; grid-template-columns: 100px 80px 200px 170px 80px 140px; gap: 8px; padding: 8px 12px; background: #333; font-weight: bold; font-size: 0.85em; border-radius: 4px; margin-bottom: 4px;">
+                <div style="display: grid; grid-template-columns: 100px 80px 150px 120px 150px 80px 140px; gap: 8px; padding: 8px 12px; background: #333; font-weight: bold; font-size: 0.9em; border-radius: 4px; margin-bottom: 4px;">
                     <div>ID</div>
                     <div>이름</div>
                     <div style="text-align: center;">직급</div>
+                    <div style="text-align: center;">담당업무</div>
                     <div style="text-align: center;">부서</div>
                     <div style="text-align: center;">접속일수</div>
                     <div style="text-align: center;">마지막 접속</div>
@@ -869,7 +870,8 @@
             users.forEach(user => {
                 // profile 정보를 우선적으로 사용
                 const displayName = user.profile?.Username || user.profile?.username || user.display_name || "Anonymous";
-                const position = user.profile?.Position || user.profile?.JobTitle || user.profile?.position || user.profile?.GrdName || '-';
+                const position = user.profile?.GrdName_EN || '-';  // 직급
+                const job = user.profile?.GrdName || '-';  // 담당업무
                 const department = user.profile?.DeptName || user.profile?.Department || user.profile?.department || '-';
                 
                 // 사용자 ID 추출 (IP 주소 또는 실제 ID)
@@ -880,13 +882,14 @@
                 const lastAccess = user.last_access_time ? formatDateTime(user.last_access_time) : '-';
                 
                 html += `
-                    <div class="clickable" ondblclick="showUserDetail('${user.user_id}')" style="display: grid; grid-template-columns: 100px 80px 200px 170px 80px 140px; gap: 8px; padding: 6px 12px; border-bottom: 1px solid #333; font-size: 0.85em; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
-                        <div style="color: #2196F3; font-family: monospace; font-size: 0.9em; overflow: hidden;" title="${userId}">${shortId}</div>
+                    <div class="clickable" ondblclick="showUserDetail('${user.user_id}')" style="display: grid; grid-template-columns: 100px 80px 150px 120px 150px 80px 140px; gap: 8px; padding: 6px 12px; border-bottom: 1px solid #333; font-size: 0.9em; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
+                        <div style="color: #2196F3; font-family: monospace; overflow: hidden;" title="${userId}">${shortId}</div>
                         <div style="color: #4CAF50; font-weight: bold; overflow: hidden;" title="${displayName}">${displayName}</div>
-                        <div style="text-align: center; font-size: 0.8em; color: #81C784; overflow: hidden;" title="${position}">${position}</div>
-                        <div style="text-align: center; font-size: 0.8em; color: #FFC107; overflow: hidden;" title="${department}">${department}</div>
+                        <div style="text-align: center; color: #81C784; overflow: hidden;" title="${position}">${position}</div>
+                        <div style="text-align: center; color: #9C27B0; overflow: hidden;" title="${job}">${job}</div>
+                        <div style="text-align: center; color: #FFC107; overflow: hidden;" title="${department}">${department}</div>
                         <div style="text-align: center; color: #2196F3; font-weight: bold;">${user.unique_days}일</div>
-                        <div style="text-align: center; font-size: 0.8em; color: #FF9800; overflow: hidden;" title="${lastAccess}">${lastAccess}</div>
+                        <div style="text-align: center; color: #FF9800; overflow: hidden;" title="${lastAccess}">${lastAccess}</div>
                     </div>
                 `;
             });
@@ -903,10 +906,11 @@
             }
             
             let html = `
-                <div style="display: grid; grid-template-columns: 100px 80px 200px 170px 80px 140px; gap: 8px; padding: 8px 12px; background: #333; font-weight: bold; font-size: 0.85em; border-radius: 4px; margin-bottom: 4px;">
+                <div style="display: grid; grid-template-columns: 100px 80px 150px 120px 150px 80px 140px; gap: 8px; padding: 8px 12px; background: #333; font-weight: bold; font-size: 0.9em; border-radius: 4px; margin-bottom: 4px;">
                     <div>ID</div>
                     <div>이름</div>
                     <div style="text-align: center;">직급</div>
+                    <div style="text-align: center;">담당업무</div>
                     <div style="text-align: center;">부서</div>
                     <div style="text-align: center;">접속일수</div>
                     <div style="text-align: center;">마지막 접속</div>
@@ -916,7 +920,8 @@
             recentUsers.forEach(user => {
                 // profile 정보를 우선적으로 사용
                 const displayName = user.profile?.Username || user.profile?.username || user.display_name || user.user_id;
-                const position = user.profile?.Position || user.profile?.JobTitle || user.profile?.position || user.profile?.GrdName || '-';
+                const position = user.profile?.GrdName_EN || '-';  // 직급
+                const job = user.profile?.GrdName || '-';  // 담당업무
                 const department = user.profile?.DeptName || user.profile?.Department || user.profile?.department || '-';
                 
                 // 사용자 ID 추출 (IP 주소 또는 실제 ID)
@@ -927,13 +932,14 @@
                 const lastAccess = user.last_access ? formatDateTime(user.last_access) : '-';
                 
                 html += `
-                    <div class="clickable" ondblclick="showUserDetail('${user.user_id}')" style="display: grid; grid-template-columns: 100px 80px 200px 170px 80px 140px; gap: 8px; padding: 6px 12px; border-bottom: 1px solid #333; font-size: 0.85em; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
-                        <div style="color: #2196F3; font-family: monospace; font-size: 0.9em; overflow: hidden;" title="${userId}">${shortId}</div>
+                    <div class="clickable" ondblclick="showUserDetail('${user.user_id}')" style="display: grid; grid-template-columns: 100px 80px 150px 120px 150px 80px 140px; gap: 8px; padding: 6px 12px; border-bottom: 1px solid #333; font-size: 0.9em; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
+                        <div style="color: #2196F3; font-family: monospace; overflow: hidden;" title="${userId}">${shortId}</div>
                         <div style="color: #4CAF50; font-weight: bold; overflow: hidden;" title="${displayName}">${displayName}</div>
-                        <div style="text-align: center; font-size: 0.8em; color: #81C784; overflow: hidden;" title="${position}">${position}</div>
-                        <div style="text-align: center; font-size: 0.8em; color: #FFC107; overflow: hidden;" title="${department}">${department}</div>
+                        <div style="text-align: center; color: #81C784; overflow: hidden;" title="${position}">${position}</div>
+                        <div style="text-align: center; color: #9C27B0; overflow: hidden;" title="${job}">${job}</div>
+                        <div style="text-align: center; color: #FFC107; overflow: hidden;" title="${department}">${department}</div>
                         <div style="text-align: center; color: #2196F3; font-weight: bold;">${user.unique_days || 0}일</div>
-                        <div style="text-align: center; font-size: 0.8em; color: #FF9800; overflow: hidden;" title="${lastAccess}">${lastAccess}</div>
+                        <div style="text-align: center; color: #FF9800; overflow: hidden;" title="${lastAccess}">${lastAccess}</div>
                     </div>
                 `;
             });
