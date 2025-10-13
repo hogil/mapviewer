@@ -559,8 +559,8 @@ async def saml_acs(request: Request):
         # 운영 모드: 예외 발생 시 에러 반환
         if not DEV_SAML:
             # 개발 모드 폴백
-            user = (form.get("LginId") or form.get("user") or form.get("email") or
-                   request.query_params.get("LginId") or request.query_params.get("user") or
+            user = (form.get("LoginId") or form.get("user") or form.get("email") or
+                   request.query_params.get("LoginId") or request.query_params.get("user") or
                    request.query_params.get("email") or "dev-user")
             resp = RedirectResponse("/", status_code=302)
             resp.set_cookie("session_user", user, max_age=7*24*3600, secure=True, httponly=True, samesite="Lax")
@@ -585,8 +585,8 @@ async def saml_acs(request: Request):
                 logger.error(f"[SAML ACS] IdP SSO URL 로드 실패: {e}")
         else:
             # 개발 모드: 폴백 허용
-            user = (form.get("LginId") or form.get("user") or form.get("email") or
-                   request.query_params.get("LginId") or request.query_params.get("user") or
+            user = (form.get("LoginId") or form.get("user") or form.get("email") or
+                   request.query_params.get("LoginId") or request.query_params.get("user") or
                    request.query_params.get("email") or "dev-user")
             
             resp = RedirectResponse("/", status_code=302)
@@ -611,13 +611,13 @@ async def saml_acs(request: Request):
         return v
     
     meta = {}
-    for field in ("Username", "LginId", "Sabun", "DeptName", "GrdName_EN", "GrdName", "x-ms-forwarded-client-ip"):
+    for field in ("Username", "LoginId", "Sabun", "DeptName", "GrdName_EN", "GrdName", "x-ms-forwarded-client-ip"):
         val = pick_first(field)
         if val:
             meta[field] = val
     
-    # NameID 결정: LginId → nameid → fallback
-    nameid = meta.get("LginId") or auth.get_nameid() or "saml-user"
+    # NameID 결정: LoginId → nameid → fallback
+    nameid = meta.get("LoginId") or auth.get_nameid() or "saml-user"
     
     # 로그 출력
     bootlog = logging.getLogger("uvicorn.error")
@@ -670,8 +670,8 @@ async def saml_dev_login(request: Request):
     department = request.query_params.get("department") or request.query_params.get("dept") or request.query_params.get("DeptName")
     team = request.query_params.get("team")
     title = request.query_params.get("title")
-    # 사내 속성들
-    login_id = request.query_params.get("LoginId")
+    # 사내 속성들 (정확한 필드명 사용)
+    login_id = request.query_params.get("LoginId")  # LoginId (오타 수정됨)
     dept_id = request.query_params.get("DeptId")
     sabun = request.query_params.get("Sabun")
     dept_name = request.query_params.get("DeptName")
@@ -714,6 +714,7 @@ async def saml_dev_login(request: Request):
 
 # ===== 계정 확인용 간단 API =====
 @app.get("/api/whoami")
+@app.get("/api/auth/user")  # 프론트엔드 호환성
 async def api_whoami(request: Request):
     user = request.cookies.get("session_user") or ""
     account = ""
