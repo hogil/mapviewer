@@ -3896,30 +3896,19 @@ class WaferMapViewer {
             }
 
             const meta = data.metadata || {};
-            const username = meta.Username || '';
-            const loginId = meta.LoginId || data.user;
-            const deptName = meta.DeptName || '';
 
-            // UI 업데이트: user_125(김영수) 형식
+            // UI 업데이트: LoginId(Username) 형식 - 원본 SAML claim 이름 직접 사용
             const userInfoEl = document.getElementById('user-info');
             if (userInfoEl) {
-                const line1 = username ? `${loginId}(${username})` : loginId;
+                const line1 = meta.Username ? `${meta.LoginId || data.user}(${meta.Username})` : (meta.LoginId || data.user);
                 userInfoEl.innerHTML = `
                     <div style="font-weight: 600;">${line1}</div>
-                    <div style="font-size: 10px; color: #666;">${deptName}</div>
+                    <div style="font-size: 10px; color: #666;">${meta.DeptName || ''}</div>
                 `;
             }
 
             // 전역 변수로 저장 (로그용) - 원본 SAML claim 이름 사용
-            this.currentUser = {
-                Username: username,
-                LoginId: loginId,
-                Sabun: meta.Sabun || '',
-                DeptName: deptName,
-                'x-ms-forwarded-client-ip': meta['x-ms-forwarded-client-ip'] || '',
-                GrdName: meta.GrdName || '',
-                GrdName_EN: meta.GrdName_EN || ''
-            };
+            this.currentUser = meta;
 
             this.debugLog('[AUTH] 사용자 정보:', this.currentUser);
         } catch (error) {
