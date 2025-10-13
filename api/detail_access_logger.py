@@ -20,13 +20,13 @@ class DetailAccessLogger:
         self.csv_file = 'logs/detail_access.csv'
         self.headers = [
             '접속일시',
-            'Username(이름)',
-            'LoginId(계정)', 
-            'Sabun(사번)',
-            'DeptName(부서명)',
-            'x-ms-forwarded-client-ip(사용자IP)',
-            'GrdName_EN(직급)',
-            'GrdName(담당업무)'
+            'Username',
+            'LoginId', 
+            'Sabun',
+            'DeptName',
+            'x-ms-forwarded-client-ip',
+            'GrdName_EN',
+            'GrdName'
         ]
         self._ensure_csv_exists()
     
@@ -43,6 +43,7 @@ class DetailAccessLogger:
     def log_saml_access(self, saml_attributes: Dict[str, Any], client_ip: str) -> bool:
         """SAML 로그인 성공 시 접속 기록"""
         try:
+            logger.info(f"[DETAIL ACCESS] 로그인 시도 - IP: {client_ip}, Attributes: {saml_attributes}")
             # 현재 시간
             access_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
@@ -54,10 +55,7 @@ class DetailAccessLogger:
             grade_en = saml_attributes.get('GrdName_EN', '').strip()
             grade = saml_attributes.get('GrdName', '').strip()
             
-            # 동일한 LoginId가 같은 날짜에 이미 기록되어 있는지 확인
-            if self._is_duplicate_login_today(login_id, access_time[:10]):  # YYYY-MM-DD 부분만 추출
-                logger.info(f"동일한 LoginId({login_id})가 오늘 이미 기록됨, 스킵")
-                return True
+            # 하루 한 개 제한 제거 - 모든 로그인 기록
             
             # 접속 기록 생성
             access_record = [
@@ -83,29 +81,6 @@ class DetailAccessLogger:
             logger.error(f"SAML 접속 기록 실패: {e}")
             return False
     
-    def _is_duplicate_login_today(self, login_id: str, date_str: str) -> bool:
-        """동일한 LoginId가 오늘 이미 기록되어 있는지 확인"""
-        if not os.path.exists(self.csv_file):
-            return False
-        
-        try:
-            with open(self.csv_file, 'r', encoding='utf-8-sig') as f:
-                reader = csv.reader(f)
-                headers = next(reader, None)  # 헤더 스킵
-                
-                for row in reader:
-                    if len(row) >= 3:  # 최소 필요한 컬럼 수 확인
-                        record_date = row[0][:10]  # 접속일시에서 날짜 부분만 추출
-                        record_login_id = row[2]   # LoginId(계정) 컬럼
-                        
-                        if record_date == date_str and record_login_id == login_id:
-                            return True
-            
-            return False
-            
-        except Exception as e:
-            logger.error(f"중복 확인 실패: {e}")
-            return False
     
     def get_recent_records(self, limit: int = 10) -> list:
         """최근 기록 조회 (테스트용)"""
