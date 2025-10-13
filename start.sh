@@ -17,18 +17,18 @@ export SSL_KEYFILE="cert/server.key"
 # 초고속 성능 설정 (Ubuntu 운영 서버)
 export THUMBNAIL_SIZE="512"
 export THUMBNAIL_FORMAT="WEBP"
-export THUMBNAIL_QUALITY="100"
-export IO_THREADS="256"                  # 256 (Windows: 128)
-export THUMBNAIL_SEM="512"               # 512 (Windows: 256)
-export PYVIPS_CONCURRENCY="4096"         # ⚡⚡ 초고속: 4096
-export PYVIPS_CACHE_SIZE="16383"         # ⚡⚡ 초고속: 16383
-export PYVIPS_MEMORY_ALIGN="64"          # 64
+export THUMBNAIL_QUALITY="85"            # 100 → 85 (품질 약간 낮춰서 속도 향상)
+export IO_THREADS="512"                  # 256 → 512 (I/O 스레드 증가)
+export THUMBNAIL_SEM="1024"              # 512 → 1024 (동시 썸네일 생성 증가)
+export PYVIPS_CONCURRENCY="8192"         # 4096 → 8192 (vips 동시성 증가)
+export PYVIPS_CACHE_SIZE="32767"         # 16383 → 32767 (캐시 크기 2배)
+export PYVIPS_MEMORY_ALIGN="64"          # 64 유지
 
 # 통계 로깅
 export STATS_LOG_ENABLED="1"             # 1=통계 수집 활성화
 
 # Uvicorn 설정 (초고속)
-export WORKERS="24"                      # ⚡⚡ 초고속: 24 workers
+export WORKERS="32"                      # 24 → 32 (워커 증가)
 export RELOAD="0"                        # 운영 환경에서는 0
 
 # 서버 시작
