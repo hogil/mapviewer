@@ -1000,23 +1000,58 @@
             document.getElementById('userModal').style.display = 'none';
         }
         
-        function exportStats() {
-            const data = {
-                daily: window.dailyData,
-                trend: trendData,
-                monthly: monthlyData,
-                department: departmentData,
-                users: window.usersData,
-                exported_at: new Date().toISOString()
-            };
-            
-            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `wafer_viewer_stats_${new Date().toISOString().split('T')[0]}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
+        async function exportStats() {
+            try {
+                // 사용자 데이터를 다시 가져와서 최신 정보로 CSV 생성
+                const usersResponse = await fetch('/api/stats/users');
+                const usersData = await usersResponse.json();
+                
+                // CSV 헤더 (BOM 추가로 한글 깨짐 방지)
+                const csvHeader = '\uFEFFID,이름,직급,부서,접속시간,요청수,접속일수,최근접속\n';
+                
+                // CSV 데이터 생성
+                let csvContent = csvHeader;
+                
+                usersData.users.forEach(user => {
+                    const userId = user.user_id.includes('@') ? user.user_id.split('@')[0] : user.user_id;
+                    const displayName = user.display_name || user.profile?.Username || "Anonymous";
+                    const position = user.profile?.Position || user.profile?.JobTitle || '-';
+                    const department = user.profile?.DeptName || user.profile?.Department || '-';
+                    const accessTime = user.profile?.LoginTime || user.profile?.LastLoginTime || '-';
+                    const totalRequests = user.total_requests || 0;
+                    const uniqueDays = user.unique_days || 0;
+                    const lastAccess = user.last_access_time ? formatDateTime(user.last_access_time) : '-';
+                    
+                    // CSV 행 생성 (쉼표와 줄바꿈 이스케이프 처리)
+                    const row = [
+                        `"${userId.replace(/"/g, '""')}"`,
+                        `"${displayName.replace(/"/g, '""')}"`,
+                        `"${position.replace(/"/g, '""')}"`,
+                        `"${department.replace(/"/g, '""')}"`,
+                        `"${accessTime.replace(/"/g, '""')}"`,
+                        totalRequests,
+                        uniqueDays,
+                        `"${lastAccess.replace(/"/g, '""')}"`
+                    ].join(',') + '\n';
+                    
+                    csvContent += row;
+                });
+                
+                // CSV 파일 다운로드
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `detail_access_${new Date().toISOString().split('T')[0]}.csv`;
+                a.click();
+                URL.revokeObjectURL(url);
+                
+                console.log('CSV 파일이 성공적으로 내보내졌습니다.');
+                
+            } catch (error) {
+                console.error('CSV 내보내기 실패:', error);
+                alert('CSV 내보내기에 실패했습니다.');
+            }
         }
         
         function formatDate(dateStr) {
