@@ -947,23 +947,8 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
 
         client_ip = logger_instance.get_client_ip(request)
         
-        # 🔥 쿠키 사용 안 함! stats.json에서 IP로 사용자 찾기
-        # IP 기반으로 stats.json에서 기존 사용자 정보 조회
-        existing_users = logger_instance.stats_data.get("users", {})
-        user_id = None
-        meta_dict = None
-        
-        # IP로 등록된 사용자 찾기 (ip_addresses에 포함된 사용자)
-        for uid, udata in existing_users.items():
-            ip_addresses = udata.get("ip_addresses", [])
-            if client_ip in ip_addresses:
-                # 이 IP를 사용하는 사용자 발견
-                profile = udata.get("profile", {})
-                if profile and profile.get("LoginId"):
-                    # SAML 사용자
-                    user_id = uid
-                    meta_dict = profile  # profile을 meta로 사용
-                    break
+        # 🚀 캐시를 사용한 빠른 사용자 조회 (매 요청마다 전체 순회 방지)
+        user_id, meta_dict = logger_instance.get_user_by_ip(client_ip)
         
         # 표시: 계정 이름 부서 IP (stats.json에서 가져온 정보 사용)
         display_user = client_ip

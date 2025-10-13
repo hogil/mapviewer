@@ -38,6 +38,7 @@ class AccessLogger:
         self.recent_api_calls: Dict[str, float] = {}  # IP+endpoint -> timestamp 매핑
         self.active_sessions: Dict[str, Dict[str, Any]] = {}  # IP -> 세션 정보
         self.session_timeout = 300  # 5분 (초) - 테스트용으로 짧게 설정
+        self.ip_to_userid_cache: Dict[str, str] = {}  # IP → user_id 캐시 (성능 최적화)
     
     def _load_stats(self) -> Dict[str, Any]:
         """통계 데이터 로드"""
@@ -61,6 +62,28 @@ class AccessLogger:
                 json.dump(self.stats_data, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"통계 저장 실패: {e}")
+    
+    def get_user_by_ip(self, ip: str) -> tuple:
+        """IP로 사용자 찾기 (캐시 사용) - 성능 최적화"""
+        # 캐시에 있으면 즉시 반환
+        if ip in self.ip_to_userid_cache:
+            cached_user_id = self.ip_to_userid_cache[ip]
+            if cached_user_id in self.stats_data.get("users", {}):
+                user_data = self.stats_data["users"][cached_user_id]
+                profile = user_data.get("profile", {})
+                return (cached_user_id, profile)
+        
+        # 캐시에 없으면 검색
+        for uid, udata in self.stats_data.get("users", {}).items():
+            ip_addresses = udata.get("ip_addresses", [])
+            if ip in ip_addresses:
+                profile = udata.get("profile", {})
+                if profile and profile.get("LoginId"):
+                    # 캐시에 저장
+                    self.ip_to_userid_cache[ip] = uid
+                    return (uid, profile)
+        
+        return (None, None)
     
     def _update_department_stats(self, user_id: str, dept_name: str, is_new_user: bool = False):
         """부서별 통계 증분 업데이트"""
@@ -464,13 +487,17 @@ class AccessLogger:
                 "profile": profile_meta,  # 🔥 profile 직접 저장
                 "user_type": "saml"  # 🔥 profile이 있으면 무조건 SAML 사용자
             }
+            # 캐시 업데이트
+            self.ip_to_userid_cache[ip] = user_id
             print(f"✅ [CREATE] SAML 사용자 생성: user_id={user_id}, profile={list(profile_meta.keys())}")
         
         user_data = self.stats_data["users"][user_id]
         
-        # IP 주소 업데이트 (새로운 IP면 추가)
+        # IP 주소 업데이트 (새로운 IP면 추가 + 캐시 업데이트)
         if ip not in user_data.get("ip_addresses", []):
             user_data["ip_addresses"].append(ip)
+            # 캐시 업데이트
+            self.ip_to_userid_cache[ip] = user_id
         
         # Profile 정보 업데이트
         if "profile" not in user_data:
