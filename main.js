@@ -3926,7 +3926,7 @@ class WaferMapViewer {
             // UI 업데이트: SAML claim 원본 이름 그대로 사용
             const userInfoEl = document.getElementById('user-info');
             if (userInfoEl) {
-                const LoginId = meta.LoginId || data.user;
+                const LoginId = meta.LoginId || data.LoginId;
                 console.log('[DEBUG] UI 업데이트 - LoginId:', LoginId);
                 userInfoEl.innerHTML = `
                     <div style="font-weight: 600;">${LoginId}</div>

@@ -805,16 +805,15 @@ async def saml_dev_login(request: Request):
 async def api_whoami(request: Request):
     # IP 기반으로 사용자 정보 조회
     client_ip = logger_instance.get_client_ip(request)
-    user_id, meta_dict = logger_instance.get_user_by_ip(client_ip)
+    LoginId, meta_dict = logger_instance.get_user_by_ip(client_ip)
     
     # 사용자 정보가 있으면 인증된 것으로 처리
-    if user_id and meta_dict:
-        logger.info(f"🔍 [API /auth/user] 사용자 정보 조회 성공: {user_id}")
+    if LoginId and meta_dict:
+        logger.info(f"🔍 [API /auth/user] 사용자 정보 조회 성공: {LoginId}")
         return {
             "authenticated": True,
-            "user": user_id,
-            "Username": meta_dict.get("Username", ""),
             "LoginId": meta_dict.get("LoginId", ""),
+            "Username": meta_dict.get("Username", ""),
             "Sabun": meta_dict.get("Sabun", ""),
             "DeptName": meta_dict.get("DeptName", ""),
             "GrdName_EN": meta_dict.get("GrdName_EN", ""),
@@ -825,9 +824,8 @@ async def api_whoami(request: Request):
         logger.info(f"🔍 [API /auth/user] 사용자 정보 없음 - Guest")
         return {
             "authenticated": False,
-            "user": "",
-            "Username": "",
             "LoginId": "",
+            "Username": "",
             "Sabun": "",
             "DeptName": "",
             "GrdName_EN": "",
@@ -939,21 +937,21 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         client_ip = logger_instance.get_client_ip(request)
         
         # 🚀 캐시를 사용한 빠른 사용자 조회 (매 요청마다 전체 순회 방지)
-        user_id, meta_dict = logger_instance.get_user_by_ip(client_ip)
+        LoginId, meta_dict = logger_instance.get_user_by_ip(client_ip)
         
-        # 🔥 실제 접속 제어: user_id가 없으면 접속 차단
+        # 🔥 실제 접속 제어: LoginId가 없으면 접속 차단
         if AUTO_LOGIN:
             # SAML 로그인 관련 엔드포인트는 제외
             if not endpoint.startswith(('/saml/', '/api/auth/user', '/api/whoami')):
-                if not user_id or user_id == client_ip:
-                    logger.warning(f"🚫 [ACCESS DENIED] user_id 없음 또는 IP와 동일: user_id={user_id}, ip={client_ip}, endpoint={endpoint}")
+                if not LoginId or LoginId == client_ip:
+                    logger.warning(f"🚫 [ACCESS DENIED] LoginId 없음 또는 IP와 동일: LoginId={LoginId}, ip={client_ip}, endpoint={endpoint}")
                     return PlainTextResponse(
                         f"접속이 차단되었습니다.\n\n사유: 사용자 인증 정보가 없습니다.\n\nSAML 로그인이 필요합니다.",
                         status_code=403
                     )
         
         # 표시: SAML claim LoginId 그대로 사용
-        display_user = user_id if user_id else client_ip
+        display_user = LoginId if LoginId else client_ip
         
         method = request.method
         status = response.status_code
@@ -967,7 +965,7 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
 
         try:
             # stats.json 기반으로 통계 업데이트
-            logger_instance._update_stats(client_ip, endpoint, method, user_id_override=user_id, meta=meta_dict)
+            logger_instance._update_stats(client_ip, endpoint, method, user_id_override=LoginId, meta=meta_dict)
         except Exception:
             pass
         # 내부 log_access 호출은 try/except로 무시되므로, 테이블 출력은 아래 한 번만 수행

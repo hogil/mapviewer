@@ -399,7 +399,7 @@ class AccessLogger:
         now_unix = time.time()
         
         # LoginId 기준으로 사용자 식별
-        user_id = None
+        LoginId = None
         profile_meta: Dict[str, Any] = {}
         
         # 사내 SAML claim 7개 필드만 사용
@@ -407,46 +407,45 @@ class AccessLogger:
         
         # 🔥 1. meta에서 LoginId 추출 시도
         if meta and isinstance(meta, dict):
-            login_id = meta.get("LoginId")
-            if login_id:
-                user_id = login_id
+            LoginId = meta.get("LoginId")
+            if LoginId:
                 # SAML profile 정보 저장 (7개 필드만)
                 for field in SAML_FIELDS:
                     value = meta.get(field)
                     if value:
                         profile_meta[field] = value
-                print(f"🔍 [UPDATE_STATS] meta에서 LoginId 추출: {user_id}, profile_meta: {list(profile_meta.keys())}")
+                print(f"🔍 [UPDATE_STATS] meta에서 LoginId 추출: {LoginId}, profile_meta: {list(profile_meta.keys())}")
             else:
                 print(f"⚠️ [UPDATE_STATS] meta에 LoginId 없음: {list(meta.keys())}")
         
         # 🔥 2. meta가 없으면 user_id_override 사용 (쿠키에서 온 LoginId)
-        if not user_id and user_id_override:
-            user_id = user_id_override
+        if not LoginId and user_id_override:
+            LoginId = user_id_override
             # stats.json에서 기존 profile 정보 가져오기
-            existing_user = self.stats_data.get("users", {}).get(user_id, {})
+            existing_user = self.stats_data.get("users", {}).get(LoginId, {})
             if existing_user:
                 profile_meta = existing_user.get("profile", {})
-                print(f"🔍 [UPDATE_STATS] user_id_override 사용: {user_id}, 기존 profile: {list(profile_meta.keys())}")
+                print(f"🔍 [UPDATE_STATS] user_id_override 사용: {LoginId}, 기존 profile: {list(profile_meta.keys())}")
         
-        # 🔥 3. 여전히 user_id가 없거나 IP와 같으면 완전 차단
-        if not user_id or user_id == ip:
+        # 🔥 3. 여전히 LoginId가 없거나 IP와 같으면 완전 차단
+        if not LoginId or LoginId == ip:
             # IP만 있고 LoginId가 없음 → IP 로그 차단
-            print(f"⚠️ [SKIP] user_id 없음 또는 IP와 동일: user_id={user_id}, ip={ip}")
+            print(f"⚠️ [SKIP] LoginId 없음 또는 IP와 동일: LoginId={LoginId}, ip={ip}")
             return
         
         # 🔥 4. LoginId가 있지만 profile이 비어있으면 차단 (SAML 미인증)
         if not profile_meta or len(profile_meta) == 0:
             # profile이 없음 → SAML 미인증 사용자 → 차단
-            print(f"⚠️ [SKIP] profile 비어있음: user_id={user_id}, ip={ip}, endpoint={endpoint}")
+            print(f"⚠️ [SKIP] profile 비어있음: LoginId={LoginId}, ip={ip}, endpoint={endpoint}")
             return
         
-        print(f"✅ [LOG] SAML 로그 기록: user_id={user_id}, ip={ip}, endpoint={endpoint}, profile={list(profile_meta.keys())}")
+        print(f"✅ [LOG] SAML 로그 기록: LoginId={LoginId}, ip={ip}, endpoint={endpoint}, profile={list(profile_meta.keys())}")
         
         # 🔥 detail_access.csv에 기록 (SAML 로그인 시마다)
         if endpoint == "/saml/acs" and profile_meta:
             try:
                 from .detail_access_logger import detail_access_logger
-                print(f"🔄 [CSV 기록] detail_access.csv 기록 시작 - user_id: {user_id}")
+                print(f"🔄 [CSV 기록] detail_access.csv 기록 시작 - LoginId: {LoginId}")
                 result = detail_access_logger.log_saml_access(profile_meta, ip)
                 print(f"✅ [CSV 기록] detail_access.csv 기록 완료 - 결과: {result}")
             except Exception as e:
@@ -482,13 +481,13 @@ class AccessLogger:
         
         # 사용자별 통계 (LoginId 기준)
         # 🔥 profile이 있는 경우만 사용자 생성 (IP 사용자 생성 차단)
-        if user_id not in self.stats_data["users"]:
+        if LoginId not in self.stats_data["users"]:
             if not profile_meta or len(profile_meta) == 0:
                 # profile이 없으면 사용자 생성 안 함 (IP 로그 차단)
-                print(f"⚠️ [SKIP CREATE] profile 없어서 사용자 생성 안 함: user_id={user_id}, ip={ip}")
+                print(f"⚠️ [SKIP CREATE] profile 없어서 사용자 생성 안 함: LoginId={LoginId}, ip={ip}")
                 return
             
-            self.stats_data["users"][user_id] = {
+            self.stats_data["users"][LoginId] = {
                 "primary_ip": ip,
                 "ip_addresses": [ip],
                 "total_requests": 0,
@@ -507,16 +506,16 @@ class AccessLogger:
                 "user_type": "saml"  # 🔥 profile이 있으면 무조건 SAML 사용자
             }
             # 캐시 업데이트
-            self.ip_to_userid_cache[ip] = user_id
-            print(f"✅ [CREATE] SAML 사용자 생성: user_id={user_id}, profile={list(profile_meta.keys())}")
+            self.ip_to_userid_cache[ip] = LoginId
+            print(f"✅ [CREATE] SAML 사용자 생성: LoginId={LoginId}, profile={list(profile_meta.keys())}")
         
-        user_data = self.stats_data["users"][user_id]
+        user_data = self.stats_data["users"][LoginId]
         
         # IP 주소 업데이트 (새로운 IP면 추가 + 캐시 업데이트)
         if ip not in user_data.get("ip_addresses", []):
             user_data["ip_addresses"].append(ip)
             # 캐시 업데이트
-            self.ip_to_userid_cache[ip] = user_id
+            self.ip_to_userid_cache[ip] = LoginId
         
         # Profile 정보 업데이트
         if "profile" not in user_data:
@@ -573,14 +572,14 @@ class AccessLogger:
         daily = self.stats_data["daily_stats"][today]
         
         # 중복 제거하며 추가
-        if user_id not in daily["active_users"]:
-            daily["active_users"].append(user_id)
+        if LoginId not in daily["active_users"]:
+            daily["active_users"].append(LoginId)
         daily["total_requests"] += 1
         
         # 신규 사용자 체크
         if user_data["first_seen"] == today:
-            if user_id not in daily["new_users"]:
-                daily["new_users"].append(user_id)
+            if LoginId not in daily["new_users"]:
+                daily["new_users"].append(LoginId)
         
         # 월별 통계
         month = today[:7]  # YYYY-MM
@@ -599,13 +598,13 @@ class AccessLogger:
         monthly = self.stats_data["monthly_stats"][month]
         
         # 중복 제거하며 추가
-        if user_id not in monthly["active_users"]:
-            monthly["active_users"].append(user_id)
+        if LoginId not in monthly["active_users"]:
+            monthly["active_users"].append(LoginId)
         monthly["total_requests"] += 1
         
         if user_data["first_seen"].startswith(month):
-            if user_id not in monthly["new_users"]:
-                monthly["new_users"].append(user_id)
+            if LoginId not in monthly["new_users"]:
+                monthly["new_users"].append(LoginId)
         # 부서 카운트 (profile.DeptName 사용)
         profile = user_data.get("profile", {})
         user_type = user_data.get("user_type", "unknown")
@@ -624,7 +623,7 @@ class AccessLogger:
         # 부서별 통계 증분 업데이트 (새로운 방식)
         thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
         is_new_user = user_data.get("first_seen", "") >= thirty_days_ago
-        self._update_department_stats(user_id, dept_name, is_new_user)
+        self._update_department_stats(LoginId, dept_name, is_new_user)
         
         # 통계 저장
         self._save_stats()
