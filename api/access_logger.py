@@ -365,7 +365,7 @@ class AccessLogger:
         return False
     
     def _update_stats(self, ip: str, endpoint: str, method: str, user_id_override: Optional[str] = None, meta: Optional[Dict[str, Any]] = None):
-        """통계 업데이트 - 세션 관리 포함 (LoginId 기준)"""
+        """통계 업데이트 - 세션 관리 포함 (LoginId 기준, SAML 인증된 경우만 기록)"""
         # localhost IP 제외
         if ip in ['127.0.0.1', '::1', 'localhost']:
             return
@@ -392,35 +392,42 @@ class AccessLogger:
                     if value:
                         profile_meta[field] = value
             else:
-                # SAML 로그인 정보가 없으면 IP 사용
-                user_id = ip
+                # SAML 로그인 정보가 없으면 스킵 (IP 로그 방지)
+                return
         else:
-            # meta가 없으면 IP 사용
-            user_id = ip
+            # meta가 없으면 스킵 (IP 로그 방지)
+            return
         
         # user_id_override가 있으면 우선 사용 (백워드 호환성)
         if user_id_override:
             user_id = user_id_override
         
-        # 초 단위 중복 요청 체크 (같은 시분초에 같은 IP면 제외)
-        second_timestamp = int(now_unix)  # 초 단위로 그룹핑
-        second_key = f"{ip}_{second_timestamp}"  # 엔드포인트 제외, IP와 초만 사용
-        
-        # 초 단위 캐시 초기화
-        if not hasattr(self, '_second_requests'):
-            self._second_requests = {}
-            self._last_cache_cleanup = now_unix
-        
-        # 1분마다 초 단위 캐시 정리
-        if now_unix - self._last_cache_cleanup > 60:
-            self._second_requests.clear()
-            self._last_cache_cleanup = now_unix
-        
-        # 같은 초에 같은 IP 요청이면 무시
-        if second_key in self._second_requests:
+        # 🔥 LoginId가 없으면 로그 기록 안 함 (IP 로그 완전 차단)
+        if not user_id or user_id == ip:
             return
         
-        self._second_requests[second_key] = now_unix
+        # 중복 요청 체크 (IP→LoginId 전환 시 중복 방지)
+        # 같은 IP에서 5초 이내에 이미 로그가 있으면 스킵 (SAML 로그인 직후 중복 방지)
+        recent_key = f"{ip}_{endpoint}"
+        
+        if not hasattr(self, '_recent_requests'):
+            self._recent_requests = {}
+            self._last_cache_cleanup = now_unix
+        
+        # 1분마다 캐시 정리
+        if now_unix - self._last_cache_cleanup > 60:
+            # 10초 이상 된 기록 삭제
+            cutoff = now_unix - 10
+            self._recent_requests = {k: v for k, v in self._recent_requests.items() if v > cutoff}
+            self._last_cache_cleanup = now_unix
+        
+        # 같은 IP에서 5초 이내 같은 endpoint 요청이면 중복으로 간주하고 스킵
+        last_request_time = self._recent_requests.get(recent_key, 0)
+        if now_unix - last_request_time < 5.0:
+            # 5초 이내 중복 요청 → 스킵
+            return
+        
+        self._recent_requests[recent_key] = now_unix
         
         # 세션 관리
         self._update_session(ip, now_unix, endpoint)

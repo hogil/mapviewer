@@ -14,7 +14,10 @@ if sys.platform == 'win32':
 
 def fix_all_ip_users():
     stats_file = Path("logs/stats.json")
-    backup_file = Path("logs/stats.json.backup_fix_all_ip")
+    
+    # 타임스탬프를 포함한 백업 파일명 생성 (덮어쓰기 방지)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    backup_file = Path(f"logs/stats.json.backup_{timestamp}")
     
     # 백업 생성
     if stats_file.exists():
