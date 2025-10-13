@@ -780,8 +780,7 @@ class AccessLogger:
         }
     
     def get_recent_users(self) -> Dict[str, Any]:
-        """최근 24시간 활성 사용자"""
-        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+        """최근 접속 사용자 (24시간 제한 해제)"""
         today = datetime.now().strftime('%Y-%m-%d')
         
         recent_users = []
@@ -789,17 +788,18 @@ class AccessLogger:
             # localhost IP 제외
             if user_id in ['127.0.0.1', '::1', 'localhost']:
                 continue
-            if data["last_seen"] >= yesterday:
-                # 실제 저장된 마지막 접속 시간 사용
-                last_access = data.get("last_access_time", data["last_seen"])
-                
-                recent_users.append({
-                    "user_id": user_id,
-                    "display_name": user_id,
-                    "primary_ip": data["primary_ip"],
-                    "total_requests": data.get("daily_requests", {}).get(today, 0),
-                    "last_access": last_access
-                })
+            
+            # 실제 저장된 마지막 접속 시간 사용
+            last_access = data.get("last_access_time", data["last_seen"])
+            
+            recent_users.append({
+                "user_id": user_id,
+                "display_name": user_id,
+                "primary_ip": data["primary_ip"],
+                "profile": data.get("profile", {}),  # profile 정보 추가
+                "total_requests": data.get("daily_requests", {}).get(today, 0),
+                "last_access": last_access
+            })
         
         # 마지막 접속 시간으로 정렬 (최신 순)
         recent_users.sort(key=lambda x: x["last_access"], reverse=True)
