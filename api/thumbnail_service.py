@@ -14,6 +14,7 @@ import time
 
 from .utils import FileUtils, Constants
 from .cache_manager import cache_manager
+from . import config
 
 
 class ThumbnailService:
@@ -25,12 +26,15 @@ class ThumbnailService:
         thumbnail_dir: Path, 
         thumbnail_format: str = "WEBP",
         thumbnail_quality: int = 90,
-        max_concurrent: int = 16
+        max_concurrent: int = None
     ):
         self.root_dir = root_dir
         self.thumbnail_dir = thumbnail_dir
         self.thumbnail_format = thumbnail_format
         self.thumbnail_quality = thumbnail_quality
+        # max_concurrent가 None이면 config에서 가져오기
+        if max_concurrent is None:
+            max_concurrent = config.THUMBNAIL_SEM
         self.semaphore = asyncio.Semaphore(max_concurrent)
         
         # 성능 메트릭
@@ -197,7 +201,7 @@ class ThumbnailService:
             except Exception:
                 paths_to_generate.append((path_str, image_path))
         
-        # 배치 생성
+        # 배치 생성 - 병렬 처리로 성능 개선
         start_time = time.time()
         tasks = []
         
@@ -205,22 +209,30 @@ class ThumbnailService:
             task = self.generate_thumbnail(image_path, size, executor)
             tasks.append((path_str, task))
         
-        # 결과 수집
+        # 결과 수집 - asyncio.gather로 병렬 처리
         results = []
-        for path_str, task in tasks:
-            try:
-                thumbnail_path = await task
-                results.append({
-                    "path": path_str,
-                    "success": thumbnail_path is not None,
-                    "thumbnail": str(thumbnail_path) if thumbnail_path else None
-                })
-            except Exception as e:
-                results.append({
-                    "path": path_str,
-                    "success": False,
-                    "error": str(e)
-                })
+        if tasks:
+            task_results = await asyncio.gather(*[task for _, task in tasks], return_exceptions=True)
+            for (path_str, _), result in zip(tasks, task_results):
+                try:
+                    if isinstance(result, Exception):
+                        results.append({
+                            "path": path_str,
+                            "success": False,
+                            "error": str(result)
+                        })
+                    else:
+                        results.append({
+                            "path": path_str,
+                            "success": result is not None,
+                            "thumbnail": str(result) if result else None
+                        })
+                except Exception as e:
+                    results.append({
+                        "path": path_str,
+                        "success": False,
+                        "error": str(e)
+                    })
         
         # 기존 썸네일도 결과에 포함
         for path_str in existing_thumbnails:
