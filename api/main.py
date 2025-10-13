@@ -874,19 +874,7 @@ async def saml_dev_login(request: Request):
 @app.get("/api/whoami")
 @app.get("/api/auth/user")  # 프론트엔드 호환성
 async def api_whoami(request: Request):
-    # AUTO_LOGIN 활성화 시: 메모리 세션 사용 안 함 (무조건 SAML 로그인으로 정보 가져옴)
-    if AUTO_LOGIN:
-        # AUTO_LOGIN 활성화 시: 항상 SAML 로그인으로 정보를 가져오므로 여기서는 사용자 정보 없음
-        logger.info(f"🔐 [API /auth/user] AUTO_LOGIN 활성화 - SAML 로그인으로 정보 가져옴")
-        return {
-            "authenticated": False,
-            "user": "",
-            "account": "",
-            "pc": "",
-            "metadata": {}
-        }
-    
-    # AUTO_LOGIN 비활성화 시: 메모리 세션에서 사용자 정보 조회
+    # 메모리 세션에서 사용자 정보 조회
     session_id = get_session_id(request)
     session = session_store.get_session(session_id)
     
@@ -981,34 +969,32 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         # AUTO_LOGIN 활성화 시: 세션 무시하고 무조건 /saml/login으로 리다이렉트
         skip_logging = False  # 로그 스킵 플래그
         
+        # 메모리 세션에서 사용자 정보 가져와서 request.state에 설정
+        session_id = get_session_id(request)
+        session = session_store.get_session(session_id)
+        if session:
+            request.state.session_user = session.get("user", "")
+            request.state.session_meta = session.get("metadata", {})
+        else:
+            request.state.session_user = None
+            request.state.session_meta = {}
+        
+        # AUTO_LOGIN 활성화 시: 메모리 세션이 없으면 /saml/login으로 리다이렉트
         if AUTO_LOGIN:
             path = request.url.path
             # 정적/JS/API 는 제외하고, 루트/페이지 접근만 리다이렉트
             if not path.startswith(('/api/', '/js/', '/static/', '/saml/')):
-                # 세션 쿠키 확인 없이 무조건 /saml/login으로 리다이렉트
-                login_url = '/saml/login'
-                if DEFAULT_ORG_URL:
-                    login_url += f"?org_url={DEFAULT_ORG_URL}"
-                logger.info(f"🔐 [AUTO LOGIN] 세션 무시하고 무조건 /saml/login으로 리다이렉트")
-                skip_logging = True  # IP 로그인 기록 방지
-                # 즉시 리다이렉트 반환 (call_next 호출 전)
-                return RedirectResponse(login_url, status_code=302)
-        
-        # AUTO_LOGIN 비활성화 시에만 메모리 세션 사용
-        if not AUTO_LOGIN:
-            # 메모리 세션에서 사용자 정보 가져와서 request.state에 설정
-            session_id = get_session_id(request)
-            session = session_store.get_session(session_id)
-            if session:
-                request.state.session_user = session.get("user", "")
-                request.state.session_meta = session.get("metadata", {})
-            else:
-                request.state.session_user = None
-                request.state.session_meta = {}
-        else:
-            # AUTO_LOGIN 활성화 시: 메모리 세션 사용 안 함 (무조건 SAML 로그인으로 정보 가져옴)
-            request.state.session_user = None
-            request.state.session_meta = {}
+                # 메모리 세션이 없으면 /saml/login으로 리다이렉트
+                if not session:
+                    login_url = '/saml/login'
+                    if DEFAULT_ORG_URL:
+                        login_url += f"?org_url={DEFAULT_ORG_URL}"
+                    logger.info(f"🔐 [AUTO LOGIN] 메모리 세션 없음 → /saml/login으로 리다이렉트")
+                    skip_logging = True  # IP 로그인 기록 방지
+                    # 즉시 리다이렉트 반환 (call_next 호출 전)
+                    return RedirectResponse(login_url, status_code=302)
+                else:
+                    logger.info(f"✅ [AUTO LOGIN] 메모리 세션 있음 → 정상 접근 허용 (user: {session.get('user', '')})")
         
         response = await call_next(request)
         
@@ -1031,12 +1017,15 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
 
         client_ip = logger_instance.get_client_ip(request)
         
-        # AUTO_LOGIN 활성화 시: SAML 로그인으로 정보를 가져오므로 여기서는 사용자 정보 없음
-        if AUTO_LOGIN:
-            # AUTO_LOGIN 활성화 시: 메모리 세션 사용 안 함 (무조건 SAML 로그인으로 정보 가져옴)
-            user_id = ""
-            meta_dict = {}
-            logger.info(f"🔐 [AUTO_LOGIN] SAML 로그인으로 정보 가져옴 (메모리 세션 사용 안 함)")
+        # 메모리 세션에서 사용자 정보 가져오기
+        session_user = getattr(request.state, "session_user", None)
+        session_meta = getattr(request.state, "session_meta", {})
+        
+        if session_user:
+            # 메모리 세션에서 사용자 정보 가져오기
+            user_id = session_user
+            meta_dict = session_meta
+            logger.info(f"💾 [AUTO_LOGIN] 메모리 세션에서 사용자 정보 가져옴: {user_id}")
         else:
             # AUTO_LOGIN 비활성화 시: stats.json에서 사용자 정보 조회
             user_id, meta_dict = logger_instance.get_user_by_ip(client_ip)
