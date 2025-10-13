@@ -554,12 +554,12 @@ async def saml_acs(request: Request):
             client_ip = logger_instance.get_client_ip(request)
             # IP 기반 더미 attribute 생성
             dev_meta = {
-                'Username': f'User-{client_ip}',
-                'LoginId': f'user-{client_ip}',
-                'Sabun': f'IP{client_ip.replace(".", "")[:6]}',
-                'DeptName': 'IP기반접속',
-                'GrdName_EN': 'IP User',
-                'GrdName': 'IP사용자'
+                'Username': 'IP',
+                'LoginId': client_ip,
+                'Sabun': '-',
+                'DeptName': '외부',
+                'GrdName_EN': '-',
+                'GrdName': '-'
             }
             
             # detail_access.csv에 IP 기반 기록
@@ -654,12 +654,12 @@ async def saml_acs(request: Request):
             # AUTO_LOGIN=0일 때: IP 기반 더미 attribute 생성
             client_ip = logger_instance.get_client_ip(request)
             dev_meta = {
-                'Username': f'User-{client_ip}',
-                'LoginId': f'user-{client_ip}',
-                'Sabun': f'IP{client_ip.replace(".", "")[:6]}',
-                'DeptName': 'IP기반접속',
-                'GrdName_EN': 'IP User',
-                'GrdName': 'IP사용자'
+                'Username': 'IP',
+                'LoginId': client_ip,
+                'Sabun': '-',
+                'DeptName': '외부',
+                'GrdName_EN': '-',
+                'GrdName': '-'
             }
             
             # detail_access.csv에 IP 기반 기록
