@@ -103,8 +103,14 @@ def _setup_logging():
         lgr.filters.clear()
         lgr.propagate = False
     
-    # 단일 핸들러 생성 (재사용)
+    # 단일 핸들러 생성 (재사용) - UTF-8 인코딩 설정
     console_handler = logging.StreamHandler(sys.stdout)
+    # Windows 콘솔 인코딩 문제 해결
+    if hasattr(console_handler.stream, 'reconfigure'):
+        try:
+            console_handler.stream.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
     console_handler.setFormatter(logging.Formatter(
         "%(levelname)s: %(asctime)s     %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
@@ -124,6 +130,11 @@ def _setup_logging():
     uvicorn_logger.propagate = False
     if not uvicorn_logger.handlers:
         handler = logging.StreamHandler(sys.stdout)
+        if hasattr(handler.stream, 'reconfigure'):
+            try:
+                handler.stream.reconfigure(encoding='utf-8', errors='replace')
+            except Exception:
+                pass
         handler.setFormatter(console_handler.formatter)
         handler.addFilter(noise_filter)
         uvicorn_logger.addHandler(handler)
@@ -133,6 +144,11 @@ def _setup_logging():
     uvicorn_error_logger.propagate = False
     if not uvicorn_error_logger.handlers:
         handler = logging.StreamHandler(sys.stdout)
+        if hasattr(handler.stream, 'reconfigure'):
+            try:
+                handler.stream.reconfigure(encoding='utf-8', errors='replace')
+            except Exception:
+                pass
         handler.setFormatter(console_handler.formatter)
         handler.addFilter(noise_filter)
         uvicorn_error_logger.addHandler(handler)
@@ -147,6 +163,11 @@ def _setup_logging():
     l3tracker_logger.propagate = False
     if not l3tracker_logger.handlers:
         handler = logging.StreamHandler(sys.stdout)
+        if hasattr(handler.stream, 'reconfigure'):
+            try:
+                handler.stream.reconfigure(encoding='utf-8', errors='replace')
+            except Exception:
+                pass
         handler.setFormatter(console_handler.formatter)
         l3tracker_logger.addHandler(handler)
     
@@ -156,6 +177,11 @@ def _setup_logging():
     asyncio_logger.propagate = False
     if not asyncio_logger.handlers:
         handler = logging.StreamHandler(sys.stdout)
+        if hasattr(handler.stream, 'reconfigure'):
+            try:
+                handler.stream.reconfigure(encoding='utf-8', errors='replace')
+            except Exception:
+                pass
         handler.setFormatter(console_handler.formatter)
         handler.addFilter(noise_filter)
         asyncio_logger.addHandler(handler)
@@ -285,6 +311,12 @@ _access_table_logger = logging.getLogger("access.table")
 for handler in _access_table_logger.handlers[:]:
     _access_table_logger.removeHandler(handler)
 _h = logging.StreamHandler(sys.stdout)
+# Windows 콘솔 인코딩 문제 해결
+if hasattr(_h.stream, 'reconfigure'):
+    try:
+        _h.stream.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 _h.setFormatter(logging.Formatter("%(message)s"))
 _access_table_logger.addHandler(_h)
 _access_table_logger.setLevel(logging.INFO)
