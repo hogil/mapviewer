@@ -341,25 +341,25 @@ class AccessLogger:
         user_id = None
         profile_meta: Dict[str, Any] = {}
         
+        # 사내 SAML claim 7개 필드만 사용
+        SAML_FIELDS = ["Username", "LoginId", "Sabun", "DeptName", "GrdName_EN", "GrdName", "x-ms-forwarded-client-ip"]
+        
         if meta and isinstance(meta, dict):
             # SAML 로그인 정보가 있으면 LoginId 사용
             login_id = meta.get("LoginId")
             if login_id:
                 user_id = login_id
-                # SAML profile 정보 저장
-                saml_fields = ["Username", "LoginId", "Sabun", "DeptName", "GrdName_EN", "GrdName", "x-ms-forwarded-client-ip"]
-                for field in saml_fields:
+                # SAML profile 정보 저장 (7개 필드만)
+                for field in SAML_FIELDS:
                     value = meta.get(field)
                     if value:
                         profile_meta[field] = value
             else:
                 # SAML 로그인 정보가 없으면 IP 사용
                 user_id = ip
-                profile_meta["ip_address"] = ip
         else:
             # meta가 없으면 IP 사용
             user_id = ip
-            profile_meta["ip_address"] = ip
         
         # user_id_override가 있으면 우선 사용 (백워드 호환성)
         if user_id_override:
