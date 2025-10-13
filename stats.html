@@ -856,12 +856,13 @@
             }
             
             let html = `
-                <div style="display: grid; grid-template-columns: 100px 80px 200px 170px 80px; gap: 8px; padding: 8px 12px; background: #333; font-weight: bold; font-size: 0.85em; border-radius: 4px; margin-bottom: 4px;">
+                <div style="display: grid; grid-template-columns: 100px 80px 200px 170px 80px 140px; gap: 8px; padding: 8px 12px; background: #333; font-weight: bold; font-size: 0.85em; border-radius: 4px; margin-bottom: 4px;">
                     <div>ID</div>
                     <div>이름</div>
                     <div style="text-align: center;">직급</div>
                     <div style="text-align: center;">부서</div>
                     <div style="text-align: center;">접속일수</div>
+                    <div style="text-align: center;">마지막 접속</div>
                 </div>
             `;
             
@@ -875,13 +876,17 @@
                 const userId = user.user_id.includes('@') ? user.user_id.split('@')[0] : user.user_id;
                 const shortId = userId.length > 12 ? userId.substring(0, 12) + '...' : userId;
                 
+                // 마지막 접속 시간 포맷팅
+                const lastAccess = user.last_access_time ? formatDateTime(user.last_access_time) : '-';
+                
                 html += `
-                    <div class="clickable" ondblclick="showUserDetail('${user.user_id}')" style="display: grid; grid-template-columns: 100px 80px 200px 170px 80px; gap: 8px; padding: 6px 12px; border-bottom: 1px solid #333; font-size: 0.85em; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
+                    <div class="clickable" ondblclick="showUserDetail('${user.user_id}')" style="display: grid; grid-template-columns: 100px 80px 200px 170px 80px 140px; gap: 8px; padding: 6px 12px; border-bottom: 1px solid #333; font-size: 0.85em; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
                         <div style="color: #2196F3; font-family: monospace; font-size: 0.9em; overflow: hidden;" title="${userId}">${shortId}</div>
                         <div style="color: #4CAF50; font-weight: bold; overflow: hidden;" title="${displayName}">${displayName}</div>
                         <div style="text-align: center; font-size: 0.8em; color: #81C784; overflow: hidden;" title="${position}">${position}</div>
                         <div style="text-align: center; font-size: 0.8em; color: #FFC107; overflow: hidden;" title="${department}">${department}</div>
                         <div style="text-align: center; color: #2196F3; font-weight: bold;">${user.unique_days}일</div>
+                        <div style="text-align: center; font-size: 0.8em; color: #FF9800; overflow: hidden;" title="${lastAccess}">${lastAccess}</div>
                     </div>
                 `;
             });
@@ -898,12 +903,13 @@
             }
             
             let html = `
-                <div style="display: grid; grid-template-columns: 100px 80px 200px 170px 80px; gap: 8px; padding: 8px 12px; background: #333; font-weight: bold; font-size: 0.85em; border-radius: 4px; margin-bottom: 4px;">
+                <div style="display: grid; grid-template-columns: 100px 80px 200px 170px 80px 140px; gap: 8px; padding: 8px 12px; background: #333; font-weight: bold; font-size: 0.85em; border-radius: 4px; margin-bottom: 4px;">
                     <div>ID</div>
                     <div>이름</div>
                     <div style="text-align: center;">직급</div>
                     <div style="text-align: center;">부서</div>
                     <div style="text-align: center;">접속일수</div>
+                    <div style="text-align: center;">마지막 접속</div>
                 </div>
             `;
             
@@ -917,13 +923,17 @@
                 const userId = user.user_id.includes('@') ? user.user_id.split('@')[0] : user.user_id;
                 const shortId = userId.length > 12 ? userId.substring(0, 12) + '...' : userId;
                 
+                // 마지막 접속 시간 포맷팅
+                const lastAccess = user.last_access ? formatDateTime(user.last_access) : '-';
+                
                 html += `
-                    <div class="clickable" ondblclick="showUserDetail('${user.user_id}')" style="display: grid; grid-template-columns: 100px 80px 200px 170px 80px; gap: 8px; padding: 6px 12px; border-bottom: 1px solid #333; font-size: 0.85em; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
+                    <div class="clickable" ondblclick="showUserDetail('${user.user_id}')" style="display: grid; grid-template-columns: 100px 80px 200px 170px 80px 140px; gap: 8px; padding: 6px 12px; border-bottom: 1px solid #333; font-size: 0.85em; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
                         <div style="color: #2196F3; font-family: monospace; font-size: 0.9em; overflow: hidden;" title="${userId}">${shortId}</div>
                         <div style="color: #4CAF50; font-weight: bold; overflow: hidden;" title="${displayName}">${displayName}</div>
                         <div style="text-align: center; font-size: 0.8em; color: #81C784; overflow: hidden;" title="${position}">${position}</div>
                         <div style="text-align: center; font-size: 0.8em; color: #FFC107; overflow: hidden;" title="${department}">${department}</div>
                         <div style="text-align: center; color: #2196F3; font-weight: bold;">${user.unique_days || 0}일</div>
+                        <div style="text-align: center; font-size: 0.8em; color: #FF9800; overflow: hidden;" title="${lastAccess}">${lastAccess}</div>
                     </div>
                 `;
             });

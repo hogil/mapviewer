@@ -733,13 +733,19 @@ async def saml_acs(request: Request):
     
     bootlog.info(f"✅ [COOKIE] 쿠키 설정 완료 - Redirect to: /")
     
-    # 🔥 SAML 로그인 성공 시 IP로 로그인한 기록 삭제
+    # 🔥 SAML 로그인 성공 시 IP로 로그인한 기록 삭제 (LoginId 기준)
     try:
         client_ip = logger_instance.get_client_ip(request)
-        if client_ip:
-            removed = logger_instance.remove_ip_login_record(client_ip)
+        login_id = meta.get("LoginId")
+        
+        if client_ip and login_id:
+            # LoginId 기준으로 IP 기록 정리 및 삭제
+            removed = logger_instance.remove_ip_login_record(client_ip, login_id)
             if removed:
-                bootlog.info(f"🗑️ [IP CLEANUP] IP 로그인 기록 삭제됨: {client_ip}")
+                bootlog.info(f"🗑️ [IP CLEANUP] IP 로그인 기록 삭제됨: {client_ip} → LoginId: {login_id}")
+            
+            # SAML 로그인으로 사용자 정보 업데이트
+            bootlog.info(f"🔄 [SAML UPDATE] LoginId 기준으로 사용자 정보 업데이트: {login_id}")
     except Exception as e:
         bootlog.warning(f"⚠️ [IP CLEANUP] IP 로그인 기록 삭제 실패: {e}")
     

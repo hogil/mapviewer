@@ -61,10 +61,21 @@ class AccessLogger:
         except Exception as e:
             print(f"통계 저장 실패: {e}")
     
-    def remove_ip_login_record(self, client_ip: str):
-        """SAML 로그인 성공 시 IP로 로그인한 기록을 삭제"""
+    def remove_ip_login_record(self, client_ip: str, login_id: str = None):
+        """SAML 로그인 성공 시 IP로 로그인한 기록을 삭제 (LoginId 기준)"""
         try:
-            # users 딕셔너리에서 해당 IP 키 삭제
+            # LoginId가 제공되면 해당 사용자의 IP 기록을 정리
+            if login_id and login_id in self.stats_data.get("users", {}):
+                user_data = self.stats_data["users"][login_id]
+                # IP 주소 목록에서 해당 IP 제거
+                if client_ip in user_data.get("ip_addresses", []):
+                    user_data["ip_addresses"].remove(client_ip)
+                    # primary_ip가 삭제된 IP와 같으면 다른 IP로 변경
+                    if user_data.get("primary_ip") == client_ip and user_data.get("ip_addresses"):
+                        user_data["primary_ip"] = user_data["ip_addresses"][0]
+                    print(f"LoginId {login_id}의 IP {client_ip} 기록 정리됨")
+            
+            # IP 키로 된 사용자 기록이 있으면 삭제
             if client_ip in self.stats_data.get("users", {}):
                 del self.stats_data["users"][client_ip]
                 print(f"IP 로그인 기록 삭제됨: {client_ip}")
@@ -317,7 +328,7 @@ class AccessLogger:
         return False
     
     def _update_stats(self, ip: str, endpoint: str, method: str, user_id_override: Optional[str] = None, meta: Optional[Dict[str, Any]] = None):
-        """통계 업데이트 - 세션 관리 포함"""
+        """통계 업데이트 - 세션 관리 포함 (LoginId 기준)"""
         # localhost IP 제외
         if ip in ['127.0.0.1', '::1', 'localhost']:
             return
@@ -325,21 +336,34 @@ class AccessLogger:
         today = datetime.now().strftime('%Y-%m-%d')
         now_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         now_unix = time.time()
-        # 계정 기반 사용자 식별: override 우선, 없으면 IP
-        user_id = (user_id_override or ip)
+        
+        # LoginId 기준으로 사용자 식별
+        user_id = None
         profile_meta: Dict[str, Any] = {}
-        if user_id and '@' in user_id:
-            try:
-                account, pc = user_id.split('@', 1)
-                profile_meta["account"] = account
-                profile_meta["pc"] = pc
-            except Exception:
-                pass
+        
         if meta and isinstance(meta, dict):
-            for k in ("company", "department", "team", "title", "email", "account", "pc"):
-                v = meta.get(k)
-                if v:
-                    profile_meta[k] = v
+            # SAML 로그인 정보가 있으면 LoginId 사용
+            login_id = meta.get("LoginId")
+            if login_id:
+                user_id = login_id
+                # SAML profile 정보 저장
+                saml_fields = ["Username", "LoginId", "Sabun", "DeptName", "GrdName_EN", "GrdName", "x-ms-forwarded-client-ip"]
+                for field in saml_fields:
+                    value = meta.get(field)
+                    if value:
+                        profile_meta[field] = value
+            else:
+                # SAML 로그인 정보가 없으면 IP 사용
+                user_id = ip
+                profile_meta["ip_address"] = ip
+        else:
+            # meta가 없으면 IP 사용
+            user_id = ip
+            profile_meta["ip_address"] = ip
+        
+        # user_id_override가 있으면 우선 사용 (백워드 호환성)
+        if user_id_override:
+            user_id = user_id_override
         
         # 초 단위 중복 요청 체크 (같은 시분초에 같은 IP면 제외)
         second_timestamp = int(now_unix)  # 초 단위로 그룹핑
@@ -364,7 +388,7 @@ class AccessLogger:
         # 세션 관리
         self._update_session(ip, now_unix, endpoint)
         
-        # 사용자별 통계
+        # 사용자별 통계 (LoginId 기준)
         if user_id not in self.stats_data["users"]:
             self.stats_data["users"][user_id] = {
                 "primary_ip": ip,
@@ -381,16 +405,24 @@ class AccessLogger:
                 "daily_requests": {},
                 "endpoints": {},
                 "sessions": [],  # 세션 히스토리
-                "profile": {}
+                "profile": {},
+                "user_type": "saml" if meta and meta.get("LoginId") else "ip"  # 사용자 타입 구분
             }
         
         user_data = self.stats_data["users"][user_id]
+        
+        # IP 주소 업데이트 (새로운 IP면 추가)
+        if ip not in user_data.get("ip_addresses", []):
+            user_data["ip_addresses"].append(ip)
+        
+        # Profile 정보 업데이트
         if "profile" not in user_data:
             user_data["profile"] = {}
         if profile_meta:
             for k, v in profile_meta.items():
                 if v:
                     user_data["profile"][k] = v
+        
         # 기존 사용자에 최초 접속 시간이 없다면 보정
         if "first_access_time" not in user_data:
             user_data["first_access_time"] = now_timestamp
@@ -758,7 +790,7 @@ class AccessLogger:
             users.append({
                 "user_id": user_id,
                 "display_name": user_id,
-                "primary_ip": data["primary_ip"],
+                "primary_ip": data.get("primary_ip", ""),
                 "total_requests": data["total_requests"],
                 "unique_days": len(data["unique_days"]),
                 "last_seen": data["last_seen"],
@@ -768,7 +800,9 @@ class AccessLogger:
                 "avg_session_time": round(data.get("total_session_time", 0) / max(data.get("session_count", 1), 1), 1),
                 "is_active": is_active,
                 "current_session_duration": current_session_duration,
-                "current_session_start": data.get("current_session_start", "Unknown")
+                "current_session_start": data.get("current_session_start", "Unknown"),
+                "profile": data.get("profile", {}),  # profile 정보 추가
+                "user_type": data.get("user_type", "unknown")  # 사용자 타입 추가
             })
         
         # 총 요청 수로 정렬
@@ -780,7 +814,7 @@ class AccessLogger:
         }
     
     def get_recent_users(self) -> Dict[str, Any]:
-        """최근 접속 사용자 (24시간 제한 해제)"""
+        """최근 접속 사용자 (LoginId 기준)"""
         today = datetime.now().strftime('%Y-%m-%d')
         
         recent_users = []
@@ -792,12 +826,16 @@ class AccessLogger:
             # 실제 저장된 마지막 접속 시간 사용
             last_access = data.get("last_access_time", data["last_seen"])
             
+            # unique_days 계산
+            unique_days = len(data.get("unique_days", []))
+            
             recent_users.append({
                 "user_id": user_id,
                 "display_name": user_id,
-                "primary_ip": data["primary_ip"],
+                "primary_ip": data.get("primary_ip", ""),
                 "profile": data.get("profile", {}),  # profile 정보 추가
                 "total_requests": data.get("daily_requests", {}).get(today, 0),
+                "unique_days": unique_days,
                 "last_access": last_access
             })
         
@@ -817,7 +855,7 @@ class AccessLogger:
         return self.stats_data["users"][user_id]
     
     def get_department_stats(self) -> Dict[str, Any]:
-        """부서별 사용자 분포 및 활동량 통계 - 실제 stats.json 데이터 사용"""
+        """부서별 사용자 분포 및 활동량 통계 - LoginId 기준"""
         departments = {}
         
         for user_id, data in self.stats_data["users"].items():
@@ -826,12 +864,13 @@ class AccessLogger:
                 continue
                 
             profile = data.get("profile", {})
+            user_type = data.get("user_type", "unknown")
             
-            # 부서명 추출 (여러 필드에서 시도)
-            dept_name = (profile.get("DeptName") or 
-                        profile.get("Department") or 
-                        profile.get("department") or 
-                        "외부" if user_id.count('.') == 3 else "기타")  # IP인 경우 "외부"
+            # 부서명 추출 (SAML 사용자는 DeptName, IP 사용자는 "외부")
+            if user_type == "saml":
+                dept_name = profile.get("DeptName") or "부서미지정"
+            else:
+                dept_name = "외부"  # IP 로그인 사용자
             
             # 부서별 통계 집계
             if dept_name not in departments:
