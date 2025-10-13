@@ -6955,15 +6955,13 @@ class WaferMapViewer {
 
     
     
-    // 🔥 Label Explorer 진입 전 현재 상태 저장 (Wafer Map Explorer에서만)
+    // 🔥 Label Explorer 진입 전 현재 상태 저장 (더 이상 필요 없음 - showGrid/loadImage에서 자동 저장)
 
     saveCurrentViewStateForLabelExplorer() {
-        console.log('💾 [SAVE] saveCurrentViewStateForLabelExplorer 호출');
-
-        // 🔥 항상 현재 Wafer Map Explorer 상태를 저장/업데이트
-        // (Label Explorer 내 이동이든, 첫 진입이든 항상 최신 상태 저장)
-
-
+        // 🔥 Wafer Map Explorer에서 이미 showGrid 또는 loadImage에서 저장했으므로
+        // 여기서는 아무것도 안 함
+        console.log('💾 [SAVE] saveCurrentViewStateForLabelExplorer - 이미 저장됨, 스킵');
+        return;
 
         const grid = document.getElementById('image-grid');
 
@@ -7036,17 +7034,15 @@ class WaferMapViewer {
             // 🔥 path는 이미 ROOT_DIR 기준 절대 경로 (모든 depth 포함)
             const fullPath = path;
 
-            // 🔥 이전 상태 저장 (Label Explorer에서 호출되지 않은 경우에만)
+            // 🔥 Wafer Map Explorer에서만 상태 저장 (classification 경로 제외)
 
-            // Label Explorer에서 호출된 경우는 이미 saveCurrentViewStateForLabelExplorer에서 저장됨
-
-            if (!this.savedViewState && !path.startsWith('classification/')) {
+            if (!path.startsWith('classification/')) {
 
                 const grid = document.getElementById('image-grid');
 
                 if (this.gridMode && this.currentGridImages && this.currentGridImages.length > 0) {
 
-                    // Grid 모드에서 온 경우
+                    // Grid 모드에서 온 경우 - 항상 저장
 
                     this.savedViewState = {
 
@@ -7062,7 +7058,7 @@ class WaferMapViewer {
 
                 } else if (!this.gridMode && this.currentImage && this.selectedImagePath) {
 
-                    // 단일 이미지 모드에서 온 경우
+                    // 단일 이미지 모드에서 온 경우 - 항상 저장
 
                     this.savedViewState = {
 
@@ -12681,6 +12677,7 @@ class WaferMapViewer {
     showGrid(images) {
         this.gridMode = true;
         this.selectedImages = images;
+        this.currentGridImages = images;  // 🔥 currentGridImages 업데이트
         if (!this.gridSelectedIdxs) this.gridSelectedIdxs = [];
         const grid = document.getElementById('image-grid');
         const gridControls = document.getElementById('grid-controls');
@@ -12691,16 +12688,22 @@ class WaferMapViewer {
             document.documentElement.style.setProperty('--grid-cols', this.gridCols);
         }
 
+        // 🔥 Wafer Map Explorer Grid 상태 저장 (Label Explorer 복귀용)
+        this.savedViewState = {
+            type: 'grid',
+            images: [...images],
+            scrollTop: 0
+        };
+        console.log('💾 [SAVE] showGrid - Grid 상태 저장:', images.length, '개');
+
         // 🔥 그리드를 명시적으로 표시 (display: none에서 복원)
         if (grid) {
             grid.style.display = 'grid';
-            console.log('🔥 [SHOWGRID] 그리드 display 설정:', grid.style.display);
         }
 
         // 🔥 그리드 모드에서는 파일명 패널 숨기기 (Label Explorer에서 복원 시 필요)
         if (this.dom.fileNameDisplay) {
             this.dom.fileNameDisplay.style.display = 'none';
-            console.log('🔥 [SHOWGRID] 파일명 패널 숨김');
         }
 
         // 파일명 패널은 유지 (제품 변경 시 상단 패널 사라짐 방지) - 주석 유지
