@@ -938,6 +938,17 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         # 🚀 캐시를 사용한 빠른 사용자 조회 (매 요청마다 전체 순회 방지)
         user_id, meta_dict = logger_instance.get_user_by_ip(client_ip)
         
+        # 🔥 실제 접속 제어: user_id가 없으면 접속 차단
+        if AUTO_LOGIN:
+            # SAML 로그인 관련 엔드포인트는 제외
+            if not endpoint.startswith(('/saml/', '/api/auth/user', '/api/whoami')):
+                if not user_id or user_id == client_ip:
+                    logger.warning(f"🚫 [ACCESS DENIED] user_id 없음 또는 IP와 동일: user_id={user_id}, ip={client_ip}, endpoint={endpoint}")
+                    return PlainTextResponse(
+                        f"접속이 차단되었습니다.\n\n사유: 사용자 인증 정보가 없습니다.\n\nSAML 로그인이 필요합니다.",
+                        status_code=403
+                    )
+        
         # 표시: 계정 이름 부서 IP
         display_user = client_ip
         if meta_dict:
