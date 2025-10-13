@@ -159,8 +159,9 @@ class AccessLogger:
             return
             
         client_ip = self.get_client_ip(request)
-        user_cookie = request.cookies.get("session_user") or None
-        display_user = user_cookie or client_ip
+        # 메모리 세션에서 사용자 정보 가져오기 (request.state에 저장됨)
+        session_user = getattr(request.state, "session_user", None)
+        display_user = session_user or client_ip
         method = request.method
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
@@ -171,7 +172,7 @@ class AccessLogger:
         self._log_table_format(timestamp, display_user, method, endpoint, status_code, extra_info)
         
         # 통계 업데이트 (계정 기준 우선)
-        self._update_stats(client_ip, endpoint, method, user_id_override=user_cookie)
+        self._update_stats(client_ip, endpoint, method, user_id_override=session_user)
     
     def _extract_extra_info(self, request: Request, endpoint: str, method: str) -> str:
         """요청에서 파일명, 클래스명 등 추가 정보 추출"""

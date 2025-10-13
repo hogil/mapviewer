@@ -3,13 +3,13 @@ L3Tracker - Wafer Map Viewer API (HTTPS, Pretty Table Logs, Noise-free)
 """
 
 # ======================== Imports ========================
-import os, re, sys, json, time, shutil, asyncio, logging, logging.config, hashlib
+import os, re, sys, json, time, shutil, asyncio, logging, logging.config, hashlib, uuid
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
 from collections import OrderedDict
 from threading import RLock
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs
 
 from fastapi import FastAPI, HTTPException, Query, Request, Path as PathParam, Depends
@@ -92,30 +92,146 @@ class _SuppressNoise(logging.Filter):
             return False
         return True
 
-LOGGING_CONFIG = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "simple": {"format": "%(levelname)s: %(asctime)s     %(message)s", "datefmt": "%Y-%m-%d %H:%M:%S"}
-    },
-    "handlers": {
-        "console": {"class": "logging.StreamHandler", "formatter": "simple", "stream": "ext://sys.stdout"},
-    },
-    "root": {"level": "INFO", "handlers": ["console"]},
-    "loggers": {
-        "uvicorn":        {"handlers": ["console"], "level": "INFO",    "propagate": False},
-        "uvicorn.error":  {"handlers": ["console"], "level": "WARNING", "propagate": False},
-        "uvicorn.access": {"handlers": [],          "level": "CRITICAL","propagate": False},
-        "l3tracker":      {"handlers": ["console"], "level": "INFO",    "propagate": False},
-        "access":         {"handlers": ["console"], "level": "INFO",    "propagate": False},
-        "asyncio":        {"handlers": ["console"], "level": "ERROR",   "propagate": False},
-    },
-}
-logging.config.dictConfig(LOGGING_CONFIG)
-# 실행 후 필터 부착(딕트 설정만으로는 content-based filter 넣기 번거로움)
-for name in ("uvicorn", "uvicorn.error", "asyncio", ""):
-    logging.getLogger(name).addFilter(_SuppressNoise())
+# 로거 중복 초기화 방지 (Ubuntu multiprocessing worker 환경 대응)
+_logging_initialized = False
+
+def _setup_logging():
+    """로깅 설정을 한 번만 초기화 (worker 프로세스마다 핸들러 중복 추가 방지)"""
+    global _logging_initialized
+    if _logging_initialized:
+        return
+    
+    LOGGING_CONFIG = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "simple": {"format": "%(levelname)s: %(asctime)s     %(message)s", "datefmt": "%Y-%m-%d %H:%M:%S"}
+        },
+        "handlers": {
+            "console": {"class": "logging.StreamHandler", "formatter": "simple", "stream": "ext://sys.stdout"},
+        },
+        "root": {"level": "INFO", "handlers": ["console"]},
+        "loggers": {
+            "uvicorn":        {"handlers": ["console"], "level": "INFO",    "propagate": False},
+            "uvicorn.error":  {"handlers": ["console"], "level": "WARNING", "propagate": False},
+            "uvicorn.access": {"handlers": [],          "level": "CRITICAL","propagate": False},
+            "l3tracker":      {"handlers": ["console"], "level": "INFO",    "propagate": False},
+            "access":         {"handlers": [],          "level": "CRITICAL","propagate": False},  # access.table만 사용
+            "asyncio":        {"handlers": ["console"], "level": "ERROR",   "propagate": False},
+        },
+    }
+    
+    # 기존 핸들러 제거 (중복 방지)
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    logging.config.dictConfig(LOGGING_CONFIG)
+    
+    # 실행 후 필터 부착(딕트 설정만으로는 content-based filter 넣기 번거로움)
+    for name in ("uvicorn", "uvicorn.error", "asyncio", ""):
+        lgr = logging.getLogger(name)
+        # 필터 중복 방지
+        if not any(isinstance(f, _SuppressNoise) for f in lgr.filters):
+            lgr.addFilter(_SuppressNoise())
+    
+    _logging_initialized = True
+
+_setup_logging()
 logger = logging.getLogger("l3tracker")
+
+# ======================== Memory Session Manager ========================
+class SessionManager:
+    """메모리 기반 세션 관리 (쿠키 대신 사용)"""
+    def __init__(self, session_timeout: int = 7*24*3600):
+        self.sessions: Dict[str, Dict[str, Any]] = {}
+        self.session_timeout = session_timeout
+        self.lock = RLock()
+    
+    def create_session(self, user_id: str, meta: Optional[Dict[str, Any]] = None) -> str:
+        """새 세션 생성"""
+        with self.lock:
+            session_id = str(uuid.uuid4())
+            self.sessions[session_id] = {
+                "user_id": user_id,
+                "meta": meta or {},
+                "created_at": time.time(),
+                "last_accessed": time.time()
+            }
+            logger.info(f"✅ [SESSION] 생성: {session_id[:8]}... (user: {user_id})")
+            return session_id
+    
+    def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """세션 조회 (타임아웃 체크)"""
+        if not session_id:
+            return None
+        
+        with self.lock:
+            session = self.sessions.get(session_id)
+            if not session:
+                return None
+            
+            # 타임아웃 체크
+            if time.time() - session["last_accessed"] > self.session_timeout:
+                del self.sessions[session_id]
+                logger.info(f"⏱️ [SESSION] 만료: {session_id[:8]}...")
+                return None
+            
+            # 마지막 접근 시간 갱신
+            session["last_accessed"] = time.time()
+            return session
+    
+    def update_session(self, session_id: str, meta: Dict[str, Any]) -> bool:
+        """세션 메타데이터 업데이트"""
+        with self.lock:
+            session = self.sessions.get(session_id)
+            if not session:
+                return False
+            
+            session["meta"].update(meta)
+            session["last_accessed"] = time.time()
+            return True
+    
+    def delete_session(self, session_id: str) -> bool:
+        """세션 삭제"""
+        with self.lock:
+            if session_id in self.sessions:
+                user_id = self.sessions[session_id].get("user_id", "unknown")
+                del self.sessions[session_id]
+                logger.info(f"🗑️ [SESSION] 삭제: {session_id[:8]}... (user: {user_id})")
+                return True
+            return False
+    
+    def cleanup_expired_sessions(self):
+        """만료된 세션 정리"""
+        with self.lock:
+            now = time.time()
+            expired = [
+                sid for sid, sess in self.sessions.items()
+                if now - sess["last_accessed"] > self.session_timeout
+            ]
+            for sid in expired:
+                user_id = self.sessions[sid].get("user_id", "unknown")
+                del self.sessions[sid]
+                logger.info(f"🧹 [SESSION] 자동 정리: {sid[:8]}... (user: {user_id})")
+            
+            if expired:
+                logger.info(f"🧹 [SESSION] 총 {len(expired)}개 세션 정리됨")
+    
+    def get_session_count(self) -> int:
+        """현재 활성 세션 수"""
+        with self.lock:
+            return len(self.sessions)
+
+# 전역 세션 매니저
+session_manager = SessionManager()
+
+# 주기적으로 만료된 세션 정리 (백그라운드 태스크)
+async def cleanup_sessions_periodically():
+    """1시간마다 만료된 세션 정리"""
+    while True:
+        await asyncio.sleep(3600)  # 1시간
+        session_manager.cleanup_expired_sessions()
 
 # ================= Pretty Access Table Logger =================
 ACCESS_TABLE_COLOR = os.getenv("ACCESS_TABLE_COLOR", "1") != "0"  # 0이면 색 끔
@@ -141,12 +257,14 @@ ACCESS_TABLE_HEADER = _border_line("┌", "┬", "┐", "─") + "\n" + \
 ACCESS_TABLE_FOOTER = _border_line("└", "┴", "┘", "─")
 
 _access_table_logger = logging.getLogger("access.table")
-if not _access_table_logger.handlers:
-    _h = logging.StreamHandler(sys.stdout)
-    _h.setFormatter(logging.Formatter("%(message)s"))
-    _access_table_logger.addHandler(_h)
-    _access_table_logger.setLevel(logging.INFO)
-    _access_table_logger.propagate = False
+# 핸들러 중복 방지: 기존 핸들러가 있으면 제거 후 재설정
+for handler in _access_table_logger.handlers[:]:
+    _access_table_logger.removeHandler(handler)
+_h = logging.StreamHandler(sys.stdout)
+_h.setFormatter(logging.Formatter("%(message)s"))
+_access_table_logger.addHandler(_h)
+_access_table_logger.setLevel(logging.INFO)
+_access_table_logger.propagate = False
 
 _access_table_header_printed = False
 _access_count = 0
@@ -574,9 +692,6 @@ async def saml_acs(request: Request):
             user = (form.get("LoginId") or form.get("user") or form.get("email") or
                    request.query_params.get("LoginId") or request.query_params.get("user") or
                    request.query_params.get("email") or "dev-user")
-            resp = RedirectResponse("/", status_code=302)
-            is_https = request.url.scheme == "https"
-            resp.set_cookie("session_user", user, max_age=7*24*3600, secure=is_https, httponly=True, samesite="Lax", path="/")
             
             # 개발 모드용 SAML 속성 생성
             dev_meta = {
@@ -589,7 +704,14 @@ async def saml_acs(request: Request):
             }
             
             # detail_access.csv에 개발 모드 기록
+            client_ip = logger_instance.get_client_ip(request)
             detail_access_logger.log_saml_access(dev_meta, client_ip)
+            
+            # 메모리 세션 생성
+            session_id = session_manager.create_session(user, dev_meta)
+            resp = RedirectResponse("/", status_code=302)
+            is_https = request.url.scheme == "https"
+            resp.set_cookie("session_id", session_id, max_age=7*24*3600, secure=is_https, httponly=True, samesite="Lax", path="/")
             
             log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"DEV SAML(예외) 로그인: {user}")
             return resp
@@ -616,10 +738,6 @@ async def saml_acs(request: Request):
                    request.query_params.get("LoginId") or request.query_params.get("user") or
                    request.query_params.get("email") or "dev-user")
             
-            resp = RedirectResponse("/", status_code=302)
-            is_https = request.url.scheme == "https"
-            resp.set_cookie("session_user", user, max_age=7*24*3600, secure=is_https, httponly=True, samesite="Lax", path="/")
-            
             # 개발 모드용 SAML 속성 생성
             dev_meta = {
                 'Username': user,
@@ -631,7 +749,14 @@ async def saml_acs(request: Request):
             }
             
             # detail_access.csv에 개발 모드 기록
+            client_ip = logger_instance.get_client_ip(request)
             detail_access_logger.log_saml_access(dev_meta, client_ip)
+            
+            # 메모리 세션 생성
+            session_id = session_manager.create_session(user, dev_meta)
+            resp = RedirectResponse("/", status_code=302)
+            is_https = request.url.scheme == "https"
+            resp.set_cookie("session_id", session_id, max_age=7*24*3600, secure=is_https, httponly=True, samesite="Lax", path="/")
             
             log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"DEV SAML 폴백 로그인: {user}")
             return resp
@@ -718,60 +843,23 @@ async def saml_acs(request: Request):
 
     resp = RedirectResponse("/", status_code=302)
     
-    # 쿠키 설정 (디버그 로그 추가)
-    # HTTPS 여부 확인
-    is_https = request.url.scheme == "https"
-    bootlog.info(f"🔍 [COOKIE DEBUG] Request scheme: {request.url.scheme}, is_https: {is_https}")
-    bootlog.info(f"🍪 [COOKIE] session_user 설정: {nameid}")
+    # 메모리 세션 생성 (쿠키 대신 사용)
+    bootlog.info(f"🎯 [SESSION] 메모리 세션 생성 시작: user={nameid}")
+    session_id = session_manager.create_session(nameid, meta)
+    bootlog.info(f"✅ [SESSION] 세션 생성 완료: {session_id[:8]}... (user: {nameid})")
     
-    # secure는 HTTPS에서만 True, HTTP에서는 False
+    # 세션 ID만 쿠키에 저장 (httponly, secure)
+    is_https = request.url.scheme == "https"
     resp.set_cookie(
-        "session_user", 
-        nameid, 
+        "session_id", 
+        session_id, 
         max_age=7*24*3600, 
-        secure=is_https,  # HTTPS에서만 secure=True
+        secure=is_https,
         httponly=True, 
         samesite="Lax",
         path="/"
     )
-    
-    if meta:
-        bootlog.info(f"🍪 [COOKIE] session_meta 설정: {list(meta.keys())}")
-        try:
-            prev = request.cookies.get("session_meta")
-            if prev:
-                import base64
-                try:
-                    # base64 디코딩 시도
-                    decoded = base64.b64decode(prev).decode('utf-8')
-                    cur = json.loads(decoded)
-                except Exception:
-                    # 이전 방식 (JSON 직접) 호환성
-                    cur = json.loads(prev)
-                cur.update(meta)
-                meta = cur
-        except Exception:
-            pass
-        
-        # 한글 포함 가능하므로 base64 인코딩
-        import base64
-        meta_json = json.dumps(meta, ensure_ascii=False)
-        meta_b64 = base64.b64encode(meta_json.encode('utf-8')).decode('ascii')
-        
-        resp.set_cookie(
-            "session_meta", 
-            meta_b64, 
-            max_age=7*24*3600, 
-            secure=is_https,
-            httponly=False, 
-            samesite="Lax",
-            path="/"
-        )
-        bootlog.info(f"🍪 [COOKIE] session_meta base64 인코딩 완료")
-    else:
-        bootlog.warning(f"⚠️ [COOKIE] session_meta가 비어있음!")
-    
-    bootlog.info(f"✅ [COOKIE] 쿠키 설정 완료 - Redirect to: /")
+    bootlog.info(f"🍪 [COOKIE] session_id 쿠키 설정 완료 (세션 데이터는 메모리에 저장됨)")
     
     # 🔥 SAML 로그인 성공 시 IP로 로그인한 기록 삭제 및 SAML 로그 직접 기록 (LoginId 기준)
     try:
@@ -834,27 +922,23 @@ async def saml_dev_login(request: Request):
     # None 제거
     meta = {k: v for k, v in meta.items() if v}
 
-    resp = FastAPIResponse(status_code=302)
-    resp.headers["Location"] = "/"
-    is_https = request.url.scheme == "https"
-    resp.set_cookie("session_user", user, max_age=7*24*3600, secure=is_https, httponly=True, samesite="Lax", path="/")
+    # detail_access.csv에도 개발 모드 로그인 기록
     if meta:
-        # 한글 포함 가능하므로 base64 인코딩
-        import base64
-        meta_json = json.dumps(meta, ensure_ascii=False)
-        meta_b64 = base64.b64encode(meta_json.encode('utf-8')).decode('ascii')
-        resp.set_cookie("session_meta", meta_b64, max_age=7*24*3600, secure=is_https, httponly=False, samesite="Lax", path="/")
-        
-        # detail_access.csv에도 개발 모드 로그인 기록
         try:
-            client_ip = request.client.host
+            client_ip = request.client.host if request.client else "unknown"
+            bootlog = logging.getLogger("uvicorn.error")
             bootlog.info(f"🔄 [DEV DETAIL ACCESS] CSV 기록 시작 - meta: {meta}")
             result = detail_access_logger.log_saml_access(meta, client_ip)
             bootlog.info(f"✅ [DEV DETAIL ACCESS] CSV 기록 완료 - 결과: {result}")
         except Exception as e:
             bootlog.error(f"❌ [DEV DETAIL ACCESS] CSV 기록 실패: {e}")
-            import traceback
-            bootlog.error(f"❌ [DEV DETAIL ACCESS] 에러 상세: {traceback.format_exc()}")
+    
+    # 메모리 세션 생성
+    session_id = session_manager.create_session(user, meta)
+    resp = FastAPIResponse(status_code=302)
+    resp.headers["Location"] = "/"
+    is_https = request.url.scheme == "https"
+    resp.set_cookie("session_id", session_id, max_age=7*24*3600, secure=is_https, httponly=True, samesite="Lax", path="/")
     
     log_access_row(tag="INFO", path="/saml/dev-login", method="GET", status=302, note=f"DEV 로그인: {user}")
     return resp
@@ -863,41 +947,32 @@ async def saml_dev_login(request: Request):
 @app.get("/api/whoami")
 @app.get("/api/auth/user")  # 프론트엔드 호환성
 async def api_whoami(request: Request):
-    user = request.cookies.get("session_user") or ""
+    # 메모리 세션에서 사용자 정보 조회
+    session_id = request.cookies.get("session_id")
+    logger.info(f"🔍 [API /auth/user] session_id 쿠키: {session_id[:8] if session_id else 'None'}...")
+    
+    user = ""
     account = ""
     pc = ""
     meta = {}
-    meta_cookie = request.cookies.get("session_meta")
+    authenticated = False
     
-    # 디버그 로그
-    logger.info(f"🔍 [API /auth/user] session_user 쿠키: {user}")
-    logger.info(f"🔍 [API /auth/user] session_meta 쿠키 존재: {bool(meta_cookie)}")
-    
-    if meta_cookie:
-        try:
-            import base64
-            # base64 디코딩 시도 (새 방식)
-            try:
-                decoded = base64.b64decode(meta_cookie).decode('utf-8')
-                meta = json.loads(decoded)
-                logger.info(f"🔍 [API /auth/user] meta 파싱 성공 (base64): {list(meta.keys())}")
-            except Exception:
-                # 이전 방식 (JSON 직접) 호환성
-                meta = json.loads(meta_cookie)
-                logger.info(f"🔍 [API /auth/user] meta 파싱 성공 (직접): {list(meta.keys())}")
-        except Exception as e:
-            logger.warning(f"⚠️ [API /auth/user] meta 파싱 실패: {e}")
-            meta = {}
+    if session_id:
+        session = session_manager.get_session(session_id)
+        if session:
+            user = session.get("user_id", "")
+            meta = session.get("meta", {})
+            authenticated = True
+            logger.info(f"✅ [API /auth/user] 세션 조회 성공: user={user}, meta keys={list(meta.keys())}")
+        else:
+            logger.warning(f"⚠️ [API /auth/user] 세션 없음 또는 만료됨")
+    else:
+        logger.warning(f"⚠️ [API /auth/user] session_id 쿠키 없음")
     
     if user and "@" in user:
         parts = user.split("@", 1)
         account = parts[0]
         pc = parts[1]
-    
-    # authenticated 필드 추가 (프론트엔드에서 체크)
-    authenticated = bool(user)
-    logger.info(f"✅ [API /auth/user] authenticated: {authenticated}, user: {user}")
-    logger.info(f"✅ [API /auth/user] meta keys: {list(meta.keys()) if meta else []}")
     
     return {
         "authenticated": authenticated,
@@ -967,11 +1042,21 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         # 자동 로그인 강제: 세션 쿠키가 없고 HTML 페이지 접근 시 /saml/login으로 리다이렉트
         skip_logging = False  # 로그 스킵 플래그
         
+        # 세션 정보를 request.state에 저장 (access_logger가 사용)
+        session_id = request.cookies.get('session_id')
+        session = session_manager.get_session(session_id) if session_id else None
+        if session:
+            request.state.session_user = session.get("user_id")
+            request.state.session_meta = session.get("meta", {})
+        else:
+            request.state.session_user = None
+            request.state.session_meta = {}
+        
         if AUTO_LOGIN:
             path = request.url.path
             # 정적/JS/API 는 제외하고, 루트/페이지 접근만 리다이렉트
             if not path.startswith(('/api/', '/js/', '/static/', '/saml/')):
-                if not request.cookies.get('session_user'):
+                if not session:
                     # /saml/login으로 리다이렉트 (SAMLRequest 생성을 위해)
                     login_url = '/saml/login'
                     if DEFAULT_ORG_URL:
@@ -2674,6 +2759,10 @@ async def startup_event():
     # 🔍 서버 시작 시 current_folder 정보 출력
     bootlog.info(f"🔍 [STARTUP] current_folder: {current_folder}")
     bootlog.info(f"🔍 [STARTUP] THUMBNAIL_DIR: {THUMBNAIL_DIR}")
+    
+    # 메모리 세션 정리 백그라운드 태스크 시작
+    asyncio.create_task(cleanup_sessions_periodically())
+    bootlog.info("🧹 [SESSION] 세션 정리 백그라운드 태스크 시작 (1시간마다)")
     
     bootlog.info("=" * 50)
     print_access_header_once()
