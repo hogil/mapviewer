@@ -47,26 +47,24 @@ class DetailAccessLogger:
             # 현재 시간
             access_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
-            # SAML 속성에서 데이터 추출
-            username = saml_attributes.get('Username', '').strip()
-            login_id = saml_attributes.get('LoginId', '').strip()
-            sabun = saml_attributes.get('Sabun', '').strip()
-            dept_name = saml_attributes.get('DeptName', '').strip()
-            grade_en = saml_attributes.get('GrdName_EN', '').strip()
-            grade = saml_attributes.get('GrdName', '').strip()
-            
-            # 하루 한 개 제한 제거 - 모든 로그인 기록
+            # SAML 속성에서 데이터 추출 (원본 claim 이름 그대로 사용)
+            Username = saml_attributes.get('Username', '').strip()
+            LoginId = saml_attributes.get('LoginId', '').strip()
+            Sabun = saml_attributes.get('Sabun', '').strip()
+            DeptName = saml_attributes.get('DeptName', '').strip()
+            GrdName_EN = saml_attributes.get('GrdName_EN', '').strip()
+            GrdName = saml_attributes.get('GrdName', '').strip()
             
             # 접속 기록 생성
             access_record = [
                 access_time,                    # 접속일시
-                username,                       # Username(이름)
-                login_id,                       # LoginId(계정)
-                sabun,                          # Sabun(사번)
-                dept_name,                      # DeptName(부서명)
+                Username,                       # Username(이름)
+                LoginId,                        # LoginId(계정)
+                Sabun,                          # Sabun(사번)
+                DeptName,                       # DeptName(부서명)
                 client_ip,                      # x-ms-forwarded-client-ip(사용자IP)
-                grade_en,                       # GrdName_EN(직급)
-                grade                           # GrdName(담당업무)
+                GrdName_EN,                     # GrdName_EN(직급)
+                GrdName                         # GrdName(담당업무)
             ]
             
             # CSV 파일에 추가 기록
@@ -74,7 +72,7 @@ class DetailAccessLogger:
                 writer = csv.writer(f)
                 writer.writerow(access_record)
             
-            logger.info(f"SAML 접속 기록 추가: {login_id} ({username}) - {access_time}")
+            logger.info(f"SAML 접속 기록 추가: {LoginId} ({Username}) - {access_time}")
             return True
             
         except Exception as e:

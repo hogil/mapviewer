@@ -704,6 +704,17 @@ async def saml_acs(request: Request):
     
     bootlog.info(f"🔍 [EXTRACTED META] 추출된 필드: {list(meta.keys())}")
     bootlog.info("=" * 100)
+    
+    # detail_access.csv에 상세 기록 (SAML 속성 추출 직후)
+    try:
+        client_ip = logger_instance.get_client_ip(request)
+        bootlog.info(f"🔄 [DETAIL ACCESS] CSV 기록 시작 - meta: {meta}")
+        result = detail_access_logger.log_saml_access(meta, client_ip)
+        bootlog.info(f"✅ [DETAIL ACCESS] CSV 기록 완료 - 결과: {result}")
+    except Exception as e:
+        bootlog.error(f"❌ [DETAIL ACCESS] CSV 기록 실패: {e}")
+        import traceback
+        bootlog.error(f"❌ [DETAIL ACCESS] 에러 상세: {traceback.format_exc()}")
 
     resp = RedirectResponse("/", status_code=302)
     
@@ -786,16 +797,6 @@ async def saml_acs(request: Request):
                 meta=meta  # SAML 메타 정보 전달
             )
             bootlog.info(f"✅ [SAML LOG] SAML 로그 기록 완료")
-            
-            # detail_access.csv에 상세 기록
-            try:
-                bootlog.info(f"🔄 [DETAIL ACCESS] CSV 기록 시작 - meta: {meta}")
-                result = detail_access_logger.log_saml_access(meta, client_ip)
-                bootlog.info(f"✅ [DETAIL ACCESS] CSV 기록 완료 - 결과: {result}")
-            except Exception as e:
-                bootlog.error(f"❌ [DETAIL ACCESS] CSV 기록 실패: {e}")
-                import traceback
-                bootlog.error(f"❌ [DETAIL ACCESS] 에러 상세: {traceback.format_exc()}")
     except Exception as e:
         bootlog.warning(f"⚠️ [SAML LOG] SAML 로그 기록 실패: {e}")
     
