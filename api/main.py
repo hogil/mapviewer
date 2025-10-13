@@ -910,6 +910,9 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         # 자동 로그인 강제: 세션 쿠키가 없고 HTML 페이지 접근 시 /saml/login으로 리다이렉트
         skip_logging = False  # 로그 스킵 플래그
         
+        # AUTO_LOGIN 변수값 출력
+        logger.info(f"🔍 [AUTO_LOGIN 변수값] AUTO_LOGIN={AUTO_LOGIN}")
+        
         if AUTO_LOGIN:
             path = request.url.path
             # 정적/JS/API 는 제외하고, 루트/페이지 접근만 리다이렉트
