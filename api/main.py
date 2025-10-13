@@ -944,17 +944,8 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
                         status_code=403
                     )
         
-        # 표시: 계정 이름 부서 IP
-        display_user = client_ip
-        if meta_dict:
-            name = meta_dict.get('Username')
-            dept = meta_dict.get('DeptName')
-            parts = []
-            if user_id: parts.append(user_id)
-            if name: parts.append(name)
-            if dept: parts.append(dept)
-            parts.append(client_ip)
-            display_user = " | ".join(parts)
+        # 표시: SAML claim LoginId 그대로 사용
+        display_user = user_id if user_id else client_ip
         
         method = request.method
         status = response.status_code
@@ -974,12 +965,7 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         # 내부 log_access 호출은 try/except로 무시되므로, 테이블 출력은 아래 한 번만 수행
 
         note = _note_from_request(request, endpoint)
-        # NOTE 칼럼에 부서 간단 표기 (있을 때만)
-        if meta_dict:
-            dept = meta_dict.get("DeptName")
-            if dept:
-                note = (note + " ").strip() + f"[{dept}]"
-        # IP 칼럼에 계정(username@hostname) 우선 표시
+        # IP 칼럼에 SAML claim LoginId 그대로 표시
         log_access_row(tag=tag, ip=display_user, method=method, status=status, path=endpoint, note=note)
         return response
 
