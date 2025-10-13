@@ -7139,14 +7139,20 @@ class WaferMapViewer {
         this.originalWidth = sizeData.width;
         this.originalHeight = sizeData.height;
         
-        // 🚀 2단계: resetView에서 사용할 zoom 계산 (실제 resetView 로직과 동일)
-        const canvasWidth = this.dom.imageCanvas.width;
-        const canvasHeight = this.dom.imageCanvas.height;
+        // 🚀 2단계: resetView에서 사용할 zoom 계산 (실제 resetView 로직과 완전 동일)
+        const containerRect = this.dom.viewerContainer.getBoundingClientRect();
+        const effectiveW = Math.max(0, containerRect.width - 2);
+        const effectiveH = Math.max(0, containerRect.height - 2);
         
-        // resetView와 동일한 계산
-        const scaleX = (canvasWidth * FIT_RELATIVE_MARGIN) / this.originalWidth;
-        const scaleY = (canvasHeight * FIT_RELATIVE_MARGIN) / this.originalHeight;
-        const calculatedZoom = Math.min(scaleX, scaleY);
+        // resetView와 완전 동일한 계산
+        const imgRatio = this.originalWidth / this.originalHeight;
+        const containerRatio = effectiveW / effectiveH;
+        const fitScale = (imgRatio > containerRatio)
+            ? effectiveW / this.originalWidth
+            : effectiveH / this.originalHeight;
+        
+        // resetView Line 7702와 동일: fitScale * FIT_RELATIVE_MARGIN * 0.96
+        const calculatedZoom = fitScale * FIT_RELATIVE_MARGIN * 0.96;
         
         // 🚀 3단계: zoom 기준으로 최적 level 계산 (updatePyramidLevel 로직과 동일)
         let initialLevel = 1.0;
