@@ -874,7 +874,19 @@ async def saml_dev_login(request: Request):
 @app.get("/api/whoami")
 @app.get("/api/auth/user")  # 프론트엔드 호환성
 async def api_whoami(request: Request):
-    # 메모리 세션에서 사용자 정보 조회
+    # AUTO_LOGIN 활성화 시: 메모리 세션 사용 안 함 (무조건 SAML 로그인으로 정보 가져옴)
+    if AUTO_LOGIN:
+        # AUTO_LOGIN 활성화 시: 항상 SAML 로그인으로 정보를 가져오므로 여기서는 사용자 정보 없음
+        logger.info(f"🔐 [API /auth/user] AUTO_LOGIN 활성화 - SAML 로그인으로 정보 가져옴")
+        return {
+            "authenticated": False,
+            "user": "",
+            "account": "",
+            "pc": "",
+            "metadata": {}
+        }
+    
+    # AUTO_LOGIN 비활성화 시: 메모리 세션에서 사용자 정보 조회
     session_id = get_session_id(request)
     session = session_store.get_session(session_id)
     
@@ -982,13 +994,19 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
                 # 즉시 리다이렉트 반환 (call_next 호출 전)
                 return RedirectResponse(login_url, status_code=302)
         
-        # 메모리 세션에서 사용자 정보 가져와서 request.state에 설정
-        session_id = get_session_id(request)
-        session = session_store.get_session(session_id)
-        if session:
-            request.state.session_user = session.get("user", "")
-            request.state.session_meta = session.get("metadata", {})
+        # AUTO_LOGIN 비활성화 시에만 메모리 세션 사용
+        if not AUTO_LOGIN:
+            # 메모리 세션에서 사용자 정보 가져와서 request.state에 설정
+            session_id = get_session_id(request)
+            session = session_store.get_session(session_id)
+            if session:
+                request.state.session_user = session.get("user", "")
+                request.state.session_meta = session.get("metadata", {})
+            else:
+                request.state.session_user = None
+                request.state.session_meta = {}
         else:
+            # AUTO_LOGIN 활성화 시: 메모리 세션 사용 안 함 (무조건 SAML 로그인으로 정보 가져옴)
             request.state.session_user = None
             request.state.session_meta = {}
         
@@ -1013,16 +1031,12 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
 
         client_ip = logger_instance.get_client_ip(request)
         
-        # AUTO_LOGIN 활성화 시: 메모리 세션에서만 사용자 정보 가져오기 (stats.json 무시)
+        # AUTO_LOGIN 활성화 시: SAML 로그인으로 정보를 가져오므로 여기서는 사용자 정보 없음
         if AUTO_LOGIN:
-            # 메모리 세션에서 사용자 정보 가져오기
-            session_user = getattr(request.state, "session_user", None)
-            session_meta = getattr(request.state, "session_meta", {})
-            
-            user_id = session_user or ""
-            meta_dict = session_meta or {}
-            
-            logger.info(f"💾 [AUTO_LOGIN] 메모리 세션 사용: user_id={user_id}, meta={list(meta_dict.keys())}")
+            # AUTO_LOGIN 활성화 시: 메모리 세션 사용 안 함 (무조건 SAML 로그인으로 정보 가져옴)
+            user_id = ""
+            meta_dict = {}
+            logger.info(f"🔐 [AUTO_LOGIN] SAML 로그인으로 정보 가져옴 (메모리 세션 사용 안 함)")
         else:
             # AUTO_LOGIN 비활성화 시: stats.json에서 사용자 정보 조회
             user_id, meta_dict = logger_instance.get_user_by_ip(client_ip)
