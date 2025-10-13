@@ -603,9 +603,25 @@ async def saml_acs(request: Request):
     # SAML 속성 추출 - 원본 claim 이름 유지
     attrs = auth.get_attributes() or {}
     
+    # URL 형식의 key를 짧은 이름으로 변환 (예: http://schemas.../LoginId -> LoginId)
+    normalized_attrs = {}
+    bootlog = logging.getLogger("uvicorn.error")
+    bootlog.info("=" * 100)
+    bootlog.info(f"🔧 [ATTR NORMALIZE] 원본 attributes 변환 중...")
+    
+    for key, value in attrs.items():
+        # key에서 마지막 / 이후 부분만 추출
+        short_key = key.split('/')[-1] if '/' in key else key
+        normalized_attrs[short_key] = value
+        bootlog.info(f"  {key}")
+        bootlog.info(f"  ↓ {short_key}")
+    
+    bootlog.info("=" * 100)
+    
     # 7개 허용 필드 추출
     def pick_first(key):
-        v = attrs.get(key)
+        # 원본 key와 normalized key 모두 확인
+        v = attrs.get(key) or normalized_attrs.get(key)
         if isinstance(v, list):
             return v[0] if v else None
         return v
