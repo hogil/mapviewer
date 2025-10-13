@@ -25,6 +25,7 @@ import http.client
 import urllib.parse
 
 from .access_logger import logger_instance
+from .detail_access_logger import detail_access_logger
 from .thumbnail_service import ThumbnailService
 
 # SAML
@@ -576,6 +577,20 @@ async def saml_acs(request: Request):
             resp = RedirectResponse("/", status_code=302)
             is_https = request.url.scheme == "https"
             resp.set_cookie("session_user", user, max_age=7*24*3600, secure=is_https, httponly=True, samesite="Lax", path="/")
+            
+            # 개발 모드용 SAML 속성 생성
+            dev_meta = {
+                'Username': user,
+                'LoginId': user,
+                'Sabun': f'DEV{user[:3]}',
+                'DeptName': '개발팀',
+                'GrdName_EN': 'Developer',
+                'GrdName': '개발자'
+            }
+            
+            # detail_access.csv에 개발 모드 기록
+            detail_access_logger.log_saml_access(dev_meta, client_ip)
+            
             log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"DEV SAML(예외) 로그인: {user}")
             return resp
         return PlainTextResponse("ACS error: exception during processing", status_code=400)
@@ -604,6 +619,20 @@ async def saml_acs(request: Request):
             resp = RedirectResponse("/", status_code=302)
             is_https = request.url.scheme == "https"
             resp.set_cookie("session_user", user, max_age=7*24*3600, secure=is_https, httponly=True, samesite="Lax", path="/")
+            
+            # 개발 모드용 SAML 속성 생성
+            dev_meta = {
+                'Username': user,
+                'LoginId': user,
+                'Sabun': f'DEV{user[:3]}',
+                'DeptName': '개발팀',
+                'GrdName_EN': 'Developer',
+                'GrdName': '개발자'
+            }
+            
+            # detail_access.csv에 개발 모드 기록
+            detail_access_logger.log_saml_access(dev_meta, client_ip)
+            
             log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"DEV SAML 폴백 로그인: {user}")
             return resp
         
@@ -757,6 +786,10 @@ async def saml_acs(request: Request):
                 meta=meta  # SAML 메타 정보 전달
             )
             bootlog.info(f"✅ [SAML LOG] SAML 로그 기록 완료")
+            
+            # detail_access.csv에 상세 기록
+            detail_access_logger.log_saml_access(meta, client_ip)
+            bootlog.info(f"✅ [DETAIL ACCESS] CSV 기록 완료")
     except Exception as e:
         bootlog.warning(f"⚠️ [SAML LOG] SAML 로그 기록 실패: {e}")
     
