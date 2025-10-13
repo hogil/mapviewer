@@ -833,12 +833,12 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
             path = request.url.path
             # 정적/JS/API 는 제외하고, 루트/페이지 접근만 리다이렉트
             if not path.startswith(('/api/', '/js/', '/static/', '/saml/')):
-                # 무조건 /saml/login으로 리다이렉트 (쿠키 사용 안 함)
+                # 무조건 /saml/login으로 리다이렉트
                 login_url = '/saml/login'
                 if DEFAULT_ORG_URL:
                     login_url += f"?org_url={DEFAULT_ORG_URL}"
                 logger.info("=" * 100)
-                logger.info(f"🔐 [1단계: AUTO LOGIN] 접속 시 무조건 /saml/login으로 리다이렉트")
+                logger.info(f"🔐 [AUTO LOGIN] 접속 시 /saml/login으로 리다이렉트")
                 logger.info(f"  - Path: {path}")
                 logger.info(f"  - Redirect URL: {login_url}")
                 logger.info(f"  - AUTO_LOGIN: {AUTO_LOGIN}")
