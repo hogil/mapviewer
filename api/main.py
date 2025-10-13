@@ -720,60 +720,8 @@ async def saml_acs(request: Request):
 
     resp = RedirectResponse("/", status_code=302)
     
-    # 쿠키 설정 (디버그 로그 추가)
-    # HTTPS 여부 확인
-    is_https = request.url.scheme == "https"
-    bootlog.info(f"🔍 [COOKIE DEBUG] Request scheme: {request.url.scheme}, is_https: {is_https}")
-    bootlog.info(f"🍪 [COOKIE] session_user 설정: {nameid}")
-    
-    # secure는 HTTPS에서만 True, HTTP에서는 False
-    resp.set_cookie(
-        "session_user", 
-        nameid, 
-        max_age=7*24*3600, 
-        secure=is_https,  # HTTPS에서만 secure=True
-        httponly=True, 
-        samesite="Lax",
-        path="/"
-    )
-    
-    if meta:
-        bootlog.info(f"🍪 [COOKIE] session_meta 설정: {list(meta.keys())}")
-        try:
-            prev = request.cookies.get("session_meta")
-            if prev:
-                import base64
-                try:
-                    # base64 디코딩 시도
-                    decoded = base64.b64decode(prev).decode('utf-8')
-                    cur = json.loads(decoded)
-                except Exception:
-                    # 이전 방식 (JSON 직접) 호환성
-                    cur = json.loads(prev)
-                cur.update(meta)
-                meta = cur
-        except Exception:
-            pass
-        
-        # 한글 포함 가능하므로 base64 인코딩
-        import base64
-        meta_json = json.dumps(meta, ensure_ascii=False)
-        meta_b64 = base64.b64encode(meta_json.encode('utf-8')).decode('ascii')
-        
-        resp.set_cookie(
-            "session_meta", 
-            meta_b64, 
-            max_age=7*24*3600, 
-            secure=is_https,
-            httponly=False, 
-            samesite="Lax",
-            path="/"
-        )
-        bootlog.info(f"🍪 [COOKIE] session_meta base64 인코딩 완료")
-    else:
-        bootlog.warning(f"⚠️ [COOKIE] session_meta가 비어있음!")
-    
-    bootlog.info(f"✅ [COOKIE] 쿠키 설정 완료 - Redirect to: /")
+    # 🔥 쿠키 설정 완전 제거: SAML 인증만으로 접근 제어
+    bootlog.info(f"✅ [NO COOKIE] 쿠키 없이 리다이렉트 - Redirect to: /")
     
     # 🔥 SAML 로그인 성공 시 IP로 로그인한 기록 삭제 및 SAML 로그 직접 기록 (LoginId 기준)
     try:
@@ -901,12 +849,13 @@ async def api_whoami(request: Request):
     logger.info(f"✅ [API /auth/user] authenticated: {authenticated}, user: {user}")
     logger.info(f"✅ [API /auth/user] meta keys: {list(meta.keys()) if meta else []}")
     
+    # 🔥 쿠키 없이 항상 비인증 상태 반환 (AUTO_LOGIN=1이면 매번 SAML 리다이렉트)
     return {
-        "authenticated": authenticated,
-        "user": user,
-        "account": account,
-        "pc": pc,
-        "metadata": meta  # 원본 SAML claim 이름 그대로 사용
+        "authenticated": False,
+        "user": "",
+        "account": "",
+        "pc": "",
+        "metadata": {}
     }
 
 
@@ -972,16 +921,16 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         if AUTO_LOGIN:
             path = request.url.path
             # 정적/JS/API 는 제외하고, 루트/페이지 접근만 리다이렉트
+            # 🔥 쿠키 체크 제거: 매번 /saml/login으로 리다이렉트
             if not path.startswith(('/api/', '/js/', '/static/', '/saml/')):
-                if not request.cookies.get('session_user'):
-                    # /saml/login으로 리다이렉트 (SAMLRequest 생성을 위해)
-                    login_url = '/saml/login'
-                    if DEFAULT_ORG_URL:
-                        login_url += f"?org_url={DEFAULT_ORG_URL}"
-                    logger.info(f"🔐 [AUTO LOGIN] 세션 없음 → /saml/login으로 리다이렉트 (로그 완전 스킵)")
-                    skip_logging = True  # IP 로그인 기록 방지
-                    # 즉시 리다이렉트 반환 (call_next 호출 전)
-                    return RedirectResponse(login_url, status_code=302)
+                # /saml/login으로 리다이렉트 (SAMLRequest 생성을 위해)
+                login_url = '/saml/login'
+                if DEFAULT_ORG_URL:
+                    login_url += f"?org_url={DEFAULT_ORG_URL}"
+                logger.info(f"🔐 [AUTO LOGIN] /saml/login으로 리다이렉트 (쿠키 체크 없음)")
+                skip_logging = True  # IP 로그인 기록 방지
+                # 즉시 리다이렉트 반환 (call_next 호출 전)
+                return RedirectResponse(login_url, status_code=302)
         
         response = await call_next(request)
         
