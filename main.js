@@ -9680,7 +9680,11 @@ class WaferMapViewer {
 
                     try {
 
-                        const filesRes = await fetch(`/api/files?path=classification/${encodeURIComponent(cls)}`);
+                        // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
+                        const labelPath = this.currentFolderPrefix ? 
+                            `${this.currentFolderPrefix}classification/${encodeURIComponent(cls)}` : 
+                            `classification/${encodeURIComponent(cls)}`;
+                        const filesRes = await fetch(`/api/files?path=${labelPath}`);
 
                         const filesData = await filesRes.json();
 
@@ -9954,7 +9958,11 @@ class WaferMapViewer {
 
                 try {
 
-                    const filesRes = await fetch(`/api/files?path=classification/${encodeURIComponent(finalClassName)}`);
+                    // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
+                    const labelPath = this.currentFolderPrefix ? 
+                        `${this.currentFolderPrefix}classification/${encodeURIComponent(finalClassName)}` : 
+                        `classification/${encodeURIComponent(finalClassName)}`;
+                    const filesRes = await fetch(`/api/files?path=${labelPath}`);
 
                     const filesData = await filesRes.json();
 
@@ -10018,7 +10026,11 @@ class WaferMapViewer {
                     
                     try {
 
-                        const filesRes = await fetch(`/api/files?path=classification/${encodeURIComponent(cls)}`);
+                        // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
+                        const labelPath = this.currentFolderPrefix ? 
+                            `${this.currentFolderPrefix}classification/${encodeURIComponent(cls)}` : 
+                            `classification/${encodeURIComponent(cls)}`;
+                        const filesRes = await fetch(`/api/files?path=${labelPath}`);
 
                         const filesData = await filesRes.json();
 
@@ -10324,7 +10336,11 @@ class WaferMapViewer {
 
                 try {
 
-                    const response = await fetch(`/api/files?path=classification/${encodeURIComponent(cls)}`, {
+                    // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
+                    const labelPath = this.currentFolderPrefix ? 
+                        `${this.currentFolderPrefix}classification/${encodeURIComponent(cls)}` : 
+                        `classification/${encodeURIComponent(cls)}`;
+                    const response = await fetch(`/api/files?path=${labelPath}`, {
                         signal: this.globalAbortController?.signal
                     });
 
@@ -10680,7 +10696,11 @@ class WaferMapViewer {
 
                 for (const cls of labelSelection.selectedClasses) {
 
-                    const imgRes = await fetch(`/api/files?path=classification/${encodeURIComponent(cls)}`);
+                    // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
+                    const labelPath = this.currentFolderPrefix ? 
+                        `${this.currentFolderPrefix}classification/${encodeURIComponent(cls)}` : 
+                        `classification/${encodeURIComponent(cls)}`;
+                    const imgRes = await fetch(`/api/files?path=${labelPath}`);
 
                     const imgData = await imgRes.json();
 
@@ -10998,7 +11018,11 @@ class WaferMapViewer {
 
                         this.debugLog(`🚀 폴더 열기: '${cls}' - 이미지 로드 중...`);
 
-                        fetch(`/api/files?path=classification/${encodeURIComponent(cls)}`)
+                        // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
+                        const labelPath = this.currentFolderPrefix ? 
+                            `${this.currentFolderPrefix}classification/${encodeURIComponent(cls)}` : 
+                            `classification/${encodeURIComponent(cls)}`;
+                        fetch(`/api/files?path=${labelPath}`)
 
                             .then(res => res.json())
 
@@ -11552,7 +11576,11 @@ class WaferMapViewer {
 
                         // 해당 클래스의 이미지 리스트만 다시 fetch해서 ul만 갱신
 
-                        const imgRes = await fetch(`/api/files?path=classification/${encodeURIComponent(cls)}`);
+                        // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
+                    const labelPath = this.currentFolderPrefix ? 
+                        `${this.currentFolderPrefix}classification/${encodeURIComponent(cls)}` : 
+                        `classification/${encodeURIComponent(cls)}`;
+                    const imgRes = await fetch(`/api/files?path=${labelPath}`);
 
                         const imgData = await imgRes.json();
 
