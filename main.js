@@ -7124,27 +7124,10 @@ class WaferMapViewer {
         const tStart = performance.now();
         console.log(`⏱️ [LOAD START] ${fullPath} - 시작`);
 
-        // 🚀 최적 level 미리 계산 (원본 로드 건너뛰기)
-        // 캔버스 크기 기준으로 필요한 level 계산
-        const canvasWidth = this.dom.imageCanvas.width;
-        const canvasHeight = this.dom.imageCanvas.height;
-        const assumedOriginalSize = 1024; // 대부분의 웨이퍼맵은 1024x1024
+        // 🚀 작은 level로 시작 (0.4) → resetView 후 적절한 level로 교체
+        const initialLevel = 0.4;  // 원본(1.0) 대신 0.4로 시작
         
-        // 화면에 맞는 최적 level 계산 (FIT_RELATIVE_MARGIN 고려)
-        const fitScale = Math.min(
-            (canvasWidth * FIT_RELATIVE_MARGIN) / assumedOriginalSize,
-            (canvasHeight * FIT_RELATIVE_MARGIN) / assumedOriginalSize
-        );
-        
-        // level 선택 (0.4, 0.7, 1.0)
-        let initialLevel = 1.0;
-        if (fitScale < 0.55) {
-            initialLevel = 0.4;
-        } else if (fitScale < 0.85) {
-            initialLevel = 0.7;
-        }
-        
-        console.log(`🚀 [SMART LOAD] 최적 Level ${initialLevel} 직접 로드 (원본 건너뛰기, 예상 fitScale: ${(fitScale * 100).toFixed(1)}%)`);
+        console.log(`🚀 [FAST LOAD] Level ${initialLevel} 로드 - resetView 후 적절한 level로 자동 교체됨`);
 
         
         
