@@ -7139,26 +7139,29 @@ class WaferMapViewer {
         this.originalWidth = sizeData.width;
         this.originalHeight = sizeData.height;
         
-        // 🚀 2단계: 캔버스 크기 기준으로 최적 level 계산
+        // 🚀 2단계: resetView에서 사용할 zoom 계산 (실제 resetView 로직과 동일)
         const canvasWidth = this.dom.imageCanvas.width;
         const canvasHeight = this.dom.imageCanvas.height;
         
-        const fitScale = Math.min(
-            (canvasWidth * FIT_RELATIVE_MARGIN) / this.originalWidth,
-            (canvasHeight * FIT_RELATIVE_MARGIN) / this.originalHeight
-        );
+        // resetView와 동일한 계산
+        const scaleX = (canvasWidth * FIT_RELATIVE_MARGIN) / this.originalWidth;
+        const scaleY = (canvasHeight * FIT_RELATIVE_MARGIN) / this.originalHeight;
+        const calculatedZoom = Math.min(scaleX, scaleY);
         
-        // level 선택 (0.2, 0.4, 0.7, 1.0)
+        // 🚀 3단계: zoom 기준으로 최적 level 계산 (updatePyramidLevel 로직과 동일)
         let initialLevel = 1.0;
-        if (fitScale <= 0.25) {
+        
+        if (calculatedZoom <= 0.25) {
             initialLevel = 0.2;
-        } else if (fitScale < 0.55) {
+        } else if (calculatedZoom < 0.55) {
             initialLevel = 0.4;
-        } else if (fitScale < 0.85) {
+        } else if (calculatedZoom < 0.85) {
             initialLevel = 0.7;
+        } else {
+            initialLevel = 1.0;
         }
         
-        console.log(`🚀 [SMART LOAD] 최적 Level ${initialLevel} 직접 로드 (fitScale: ${(fitScale * 100).toFixed(1)}%, 원본: ${this.originalWidth}×${this.originalHeight})`);
+        console.log(`🚀 [SMART LOAD] 크기 조회 → zoom: ${(calculatedZoom * 100).toFixed(1)}% → Level ${initialLevel} 직접 로드 (원본: ${this.originalWidth}×${this.originalHeight})`);
 
         
         
