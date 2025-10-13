@@ -45,10 +45,10 @@
         
         .controls {
             display: flex;
+            flex-direction: column;
             gap: 10px;
             margin-bottom: 25px;
-            justify-content: center;
-            flex-wrap: wrap;
+            width: 200px;
         }
         
         .btn {
@@ -74,18 +74,6 @@
         
         .btn.secondary:hover {
             background: #1976D2;
-        }
-        
-        .btn.chart-toggle {
-            background: #FF9800;
-        }
-        
-        .btn.chart-toggle:hover {
-            background: #F57C00;
-        }
-        
-        .btn.chart-toggle.active {
-            background: #4CAF50;
         }
         
         .stats-section {
@@ -151,12 +139,6 @@
             background: #0f0f23;
             border-radius: 8px;
             padding: 20px;
-        }
-        
-        .chart-tabs {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
         }
         
         .user-table {
@@ -316,6 +298,27 @@
         .activity-item:last-child {
             border-bottom: none;
         }
+        
+        .main-layout {
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+        
+        .users-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .department-charts {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
     </style>
 </head>
 <body>
@@ -325,39 +328,42 @@
             <p>실시간 사용자 접속 현황 및 시각적 트렌드 분석</p>
         </div>
         
-        <div class="controls">
-            <button class="btn" onclick="loadStats()">🔄 새로고침</button>
-            <button class="btn secondary" onclick="exportStats()">📥 통계 내보내기</button>
-        </div>
-        
-        <!-- 상단 섹션: 오늘 요약 + 사용자 목록 -->
-        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-bottom: 30px; align-items: stretch;">
-            <div class="stats-section">
-                <h2 class="section-title">📋 오늘 요약</h2>
-                <div class="stats-grid" id="dailyStats" style="grid-template-columns: repeat(2, 1fr); height: 300px; align-content: start;">
-                    <div class="loading">통계 로딩 중...</div>
-                </div>
+        <!-- 메인 레이아웃: 왼쪽 컨트롤 + 오른쪽 오늘 요약 -->
+        <div class="main-layout">
+            <div class="controls">
+                <button class="btn" onclick="loadStats()">🔄 새로고침</button>
+                <button class="btn secondary" onclick="exportStats()">📥 통계 내보내기</button>
             </div>
             
             <div class="stats-section">
+                <h2 class="section-title">📋 오늘 요약</h2>
+                <div class="stats-grid" id="dailyStats" style="grid-template-columns: repeat(4, 1fr);">
+                    <div class="loading">통계 로딩 중...</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 사용자 섹션: 사용자 목록 + 최근 사용자 -->
+        <div class="users-section">
+            <div class="stats-section">
                 <h2 class="section-title">👥 사용자 목록 (활동량 순)</h2>
-                <div class="user-table" style="height: 300px; display: flex; flex-direction: column;">
+                <div class="user-table">
                     <div class="table-header" style="flex-shrink: 0; padding: 8px 12px; background: #333; font-size: 0.9em; border-radius: 4px; margin-bottom: 8px;">
                         총 사용자: <span id="totalUsers" style="color: #4CAF50; font-weight: bold;">-</span>명
                     </div>
-                    <div class="table-content" id="userTable" style="flex: 1; overflow-y: auto;">
+                    <div class="table-content" id="userTable">
                         <div class="loading">사용자 데이터 로딩 중...</div>
                     </div>
                 </div>
             </div>
             
             <div class="stats-section">
-                <h2 class="section-title">🕐 최근 사용자 (24시간)</h2>
-                <div class="user-table" style="height: 300px; display: flex; flex-direction: column;">
+                <h2 class="section-title">🕐 최근 사용자</h2>
+                <div class="user-table">
                     <div class="table-header" style="flex-shrink: 0; padding: 8px 12px; background: #333; font-size: 0.9em; border-radius: 4px; margin-bottom: 8px;">
                         최근 활동: <span id="recentUsersCount" style="color: #FF9800; font-weight: bold;">-</span>명
                     </div>
-                    <div class="table-content" id="recentUserTable" style="flex: 1; overflow-y: auto;">
+                    <div class="table-content" id="recentUserTable">
                         <div class="loading">최근 사용자 로딩 중...</div>
                     </div>
                 </div>
@@ -384,6 +390,27 @@
                 </div>
             </div>
         </div>
+        
+        <!-- 부서 분석 차트 섹션 -->
+        <div class="department-charts">
+            <div class="stats-section">
+                <h2 class="section-title">🏢 부서별 사용자 분포</h2>
+                <div class="chart-container" style="margin-bottom: 0;">
+                    <div class="chart-wrapper" style="height: 300px;">
+                        <canvas id="departmentChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="stats-section">
+                <h2 class="section-title">📊 부서별 접속 활동량</h2>
+                <div class="chart-container" style="margin-bottom: 0;">
+                    <div class="chart-wrapper" style="height: 300px;">
+                        <canvas id="departmentActivityChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- 사용자 상세 정보 모달 -->
@@ -402,18 +429,22 @@
     <script>
         let dailyChart = null;
         let monthlyChart = null;
+        let departmentChart = null;
+        let departmentActivityChart = null;
         let trendData = null;
         let monthlyData = null;
+        let departmentData = null;
         
         async function loadStats() {
             try {
                 // 병렬로 모든 데이터 로드
-                const [dailyResponse, trendResponse, monthlyResponse, usersResponse, recentUsersResponse] = await Promise.all([
+                const [dailyResponse, trendResponse, monthlyResponse, usersResponse, recentUsersResponse, departmentResponse] = await Promise.all([
                     fetch('/api/stats/daily'),
                     fetch('/api/stats/trend?days=14'),
                     fetch('/api/stats/monthly?months=6'),
                     fetch('/api/stats/users'),
-                    fetch('/api/stats/recent-users')
+                    fetch('/api/stats/recent-users'),
+                    fetch('/api/stats/department')
                 ]);
                 
                 const dailyData = await dailyResponse.json();
@@ -422,13 +453,22 @@
                 const usersData = await usersResponse.json();
                 const recentUsersData = await recentUsersResponse.json();
                 
+                // 부서 데이터가 없는 경우 빈 객체로 처리
+                try {
+                    departmentData = await departmentResponse.json();
+                } catch (e) {
+                    departmentData = { departments: {}, activity: {} };
+                }
+                
                 renderDailyStats(dailyData);
                 renderUserTable(usersData.users);
                 renderRecentUserTable(recentUsersData.recent_users);
                 
-                // 두 차트 모두 렌더링
+                // 모든 차트 렌더링
                 renderDailyChart();
                 renderMonthlyChart();
+                renderDepartmentChart();
+                renderDepartmentActivityChart();
                 
                 document.getElementById('totalUsers').textContent = usersData.total_users;
                 document.getElementById('recentUsersCount').textContent = recentUsersData.total_recent;
@@ -563,6 +603,149 @@
             });
         }
         
+        function renderDepartmentChart() {
+            if (!departmentData || !departmentData.departments) return;
+            
+            const ctx = document.getElementById('departmentChart');
+            
+            // 기존 차트 삭제
+            if (departmentChart) {
+                departmentChart.destroy();
+            }
+            
+            // 부서별 사용자 수 데이터 준비
+            const departments = Object.keys(departmentData.departments);
+            const userCounts = departments.map(dept => departmentData.departments[dept].user_count);
+            const labels = departments.map(dept => departmentData.departments[dept].name || dept);
+            
+            departmentChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        data: userCounts,
+                        backgroundColor: [
+                            '#4CAF50',
+                            '#2196F3',
+                            '#FF9800',
+                            '#9C27B0',
+                            '#F44336',
+                            '#00BCD4',
+                            '#8BC34A',
+                            '#FFC107'
+                        ],
+                        borderColor: '#1a1a2e',
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                color: '#ffffff',
+                                font: {
+                                    size: 11
+                                }
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(26, 26, 46, 0.9)',
+                            titleColor: '#4CAF50',
+                            bodyColor: '#ffffff',
+                            borderColor: '#4CAF50',
+                            borderWidth: 1
+                        }
+                    }
+                }
+            });
+        }
+        
+        function renderDepartmentActivityChart() {
+            if (!departmentData || !departmentData.activity) return;
+            
+            const ctx = document.getElementById('departmentActivityChart');
+            
+            // 기존 차트 삭제
+            if (departmentActivityChart) {
+                departmentActivityChart.destroy();
+            }
+            
+            // 부서별 활동량 데이터 준비
+            const departments = Object.keys(departmentData.activity);
+            const activityCounts = departments.map(dept => departmentData.activity[dept].total_requests);
+            const labels = departments.map(dept => departmentData.activity[dept].name || dept);
+            
+            departmentActivityChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '총 요청 수',
+                        data: activityCounts,
+                        backgroundColor: 'rgba(76, 175, 80, 0.8)',
+                        borderColor: '#4CAF50',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: '#ffffff',
+                                font: {
+                                    size: 11
+                                }
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(26, 26, 46, 0.9)',
+                            titleColor: '#4CAF50',
+                            bodyColor: '#ffffff',
+                            borderColor: '#4CAF50',
+                            borderWidth: 1
+                        }
+                    },
+                    scales: {
+                        x: {
+                            ticks: {
+                                color: '#aaaaaa',
+                                font: {
+                                    size: 10
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.1)'
+                            }
+                        },
+                        y: {
+                            ticks: {
+                                color: '#aaaaaa',
+                                font: {
+                                    size: 10
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.1)'
+                            },
+                            title: {
+                                display: true,
+                                text: '요청 수',
+                                color: '#4CAF50',
+                                font: {
+                                    size: 11
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
         function getChartOptions(type) {
             return {
                 responsive: true,
@@ -660,26 +843,30 @@
             }
             
             let html = `
-                <div style="display: grid; grid-template-columns: 1fr 80px 60px 80px; gap: 8px; padding: 8px 12px; background: #333; font-weight: bold; font-size: 0.85em; border-radius: 4px; margin-bottom: 4px;">
+                <div style="display: grid; grid-template-columns: 1fr 80px 80px 80px 120px; gap: 8px; padding: 8px 12px; background: #333; font-weight: bold; font-size: 0.85em; border-radius: 4px; margin-bottom: 4px;">
                     <div>사용자 (ID/IP)</div>
                     <div style="text-align: center;">요청수</div>
                     <div style="text-align: center;">접속일</div>
-                    <div style="text-align: center;">최근접속</div>
+                    <div style="text-align: center;">직급</div>
+                    <div style="text-align: center;">부서</div>
                 </div>
             `;
             
             users.forEach(user => {
-                const displayName = user.display_name || "Anonymous";
+                const displayName = user.display_name || user.profile?.Username || "Anonymous";
+                const position = user.profile?.Position || user.profile?.JobTitle || '-';
+                const department = user.profile?.DeptName || user.profile?.Department || '-';
                 
                 html += `
-                    <div class="clickable" ondblclick="showUserDetail('${user.user_id}')" style="display: grid; grid-template-columns: 1fr 80px 60px 80px; gap: 8px; padding: 6px 12px; border-bottom: 1px solid #333; font-size: 0.85em; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
+                    <div class="clickable" ondblclick="showUserDetail('${user.user_id}')" style="display: grid; grid-template-columns: 1fr 80px 80px 80px 120px; gap: 8px; padding: 6px 12px; border-bottom: 1px solid #333; font-size: 0.85em; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
                         <div style="overflow: hidden;">
                             <span style="color: #4CAF50; font-weight: bold;">${displayName}</span>
                             <span style="color: #888; margin-left: 8px; font-size: 0.8em;">${user.primary_ip}</span>
                         </div>
                         <div style="text-align: center; color: #FF9800; font-weight: bold;">${user.total_requests}</div>
                         <div style="text-align: center; color: #2196F3;">${user.unique_days}일</div>
-                        <div style="text-align: center; font-size: 0.8em; color: #ccc;">${formatDateTime(user.last_access_time)}</div>
+                        <div style="text-align: center; font-size: 0.8em; color: #81C784;">${position}</div>
+                        <div style="text-align: center; font-size: 0.8em; color: #FFC107;">${department}</div>
                     </div>
                 `;
             });
@@ -691,32 +878,33 @@
             const container = document.getElementById('recentUserTable');
             
             if (recentUsers.length === 0) {
-                container.innerHTML = '<div class="loading">최근 24시간 내 활동한 사용자가 없습니다.</div>';
+                container.innerHTML = '<div class="loading">최근 활동한 사용자가 없습니다.</div>';
                 return;
             }
             
             let html = `
-                <div style="display: grid; grid-template-columns: 1fr 60px 100px; gap: 8px; padding: 8px 12px; background: #333; font-weight: bold; font-size: 0.85em; border-radius: 4px; margin-bottom: 4px;">
+                <div style="display: grid; grid-template-columns: 1fr 60px 80px 120px; gap: 8px; padding: 8px 12px; background: #333; font-weight: bold; font-size: 0.85em; border-radius: 4px; margin-bottom: 4px;">
                     <div>사용자 (ID/IP)</div>
                     <div style="text-align: center;">요청수</div>
-                    <div style="text-align: center;">마지막 접속</div>
+                    <div style="text-align: center;">직급</div>
+                    <div style="text-align: center;">부서</div>
                 </div>
             `;
             
             recentUsers.forEach(user => {
-                const displayName = user.display_name || user.user_id;
-                
-                // last_access가 날짜만 있는 경우와 타임스탬프가 있는 경우 구분
-                const lastAccess = formatDateTime(user.last_access);
+                const displayName = user.display_name || user.profile?.Username || user.user_id;
+                const position = user.profile?.Position || user.profile?.JobTitle || '-';
+                const department = user.profile?.DeptName || user.profile?.Department || '-';
                 
                 html += `
-                    <div class="clickable" ondblclick="showUserDetail('${user.user_id}')" style="display: grid; grid-template-columns: 1fr 60px 100px; gap: 8px; padding: 6px 12px; border-bottom: 1px solid #333; font-size: 0.85em; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
+                    <div class="clickable" ondblclick="showUserDetail('${user.user_id}')" style="display: grid; grid-template-columns: 1fr 60px 80px 120px; gap: 8px; padding: 6px 12px; border-bottom: 1px solid #333; font-size: 0.85em; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
                         <div style="overflow: hidden;">
                             <span style="color: #4CAF50; font-weight: bold;">${displayName}</span>
                             <span style="color: #888; margin-left: 8px; font-size: 0.8em;">${user.primary_ip}</span>
                         </div>
                         <div style="text-align: center; color: #FFA726; font-weight: bold;">${user.total_requests}</div>
-                        <div style="text-align: center; font-size: 0.8em; color: #81C784;">${lastAccess}</div>
+                        <div style="text-align: center; font-size: 0.8em; color: #81C784;">${position}</div>
+                        <div style="text-align: center; font-size: 0.8em; color: #FFC107;">${department}</div>
                     </div>
                 `;
             });
@@ -760,8 +948,12 @@
                             <div class="detail-value">${userData.profile.Username || '-'}</div>
                         </div>
                         <div class="detail-card">
+                            <div class="detail-title">직급</div>
+                            <div class="detail-value">${userData.profile.Position || userData.profile.JobTitle || '-'}</div>
+                        </div>
+                        <div class="detail-card">
                             <div class="detail-title">부서</div>
-                            <div class="detail-value">${userData.profile.DeptName || userData.profile.department || '-'}</div>
+                            <div class="detail-value">${userData.profile.DeptName || userData.profile.Department || '-'}</div>
                         </div>` : ''}
                         <div class="detail-card">
                             <div class="detail-title">사용 IP</div>
@@ -809,6 +1001,7 @@
                 daily: window.dailyData,
                 trend: trendData,
                 monthly: monthlyData,
+                department: departmentData,
                 users: window.usersData,
                 exported_at: new Date().toISOString()
             };
