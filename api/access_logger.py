@@ -39,6 +39,11 @@ class AccessLogger:
         self.active_sessions: Dict[str, Dict[str, Any]] = {}  # IP -> 세션 정보
         self.session_timeout = 300  # 5분 (초) - 테스트용으로 짧게 설정
         self.ip_to_userid_cache: Dict[str, str] = {}  # IP → user_id 캐시 (성능 최적화)
+        
+        # stats.json 저장 최적화
+        self._stats_dirty = False  # stats.json이 변경되었는지 플래그
+        self._last_save_time = time.time()  # 마지막 저장 시간
+        self._save_interval = 10.0  # 10초마다 자동 저장
     
     def _load_stats(self) -> Dict[str, Any]:
         """통계 데이터 로드"""
@@ -55,11 +60,22 @@ class AccessLogger:
             "department_stats": {}  # 부서별 통계 추가
         }
     
-    def _save_stats(self):
-        """통계 데이터 저장"""
+    def _save_stats(self, force: bool = False):
+        """통계 데이터 저장 - 배치 처리로 성능 최적화"""
+        current_time = time.time()
+        
+        # force가 아니고, 변경사항이 없거나 아직 저장 간격이 안 되었으면 스킵
+        if not force:
+            if not self._stats_dirty:
+                return
+            if current_time - self._last_save_time < self._save_interval:
+                return
+        
         try:
             with open(STATS_LOG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self.stats_data, f, ensure_ascii=False, indent=2)
+            self._stats_dirty = False
+            self._last_save_time = current_time
         except Exception as e:
             print(f"통계 저장 실패: {e}")
     
@@ -140,7 +156,8 @@ class AccessLogger:
                 del self.stats_data["users"][client_ip]
                 print(f"IP 로그인 기록 삭제됨: {client_ip}")
                 
-                # 통계 데이터 저장
+                # 통계 데이터 저장 (배치 처리)
+                self._stats_dirty = True
                 self._save_stats()
                 
                 # active_sessions에서도 해당 IP 세션 제거
@@ -625,7 +642,8 @@ class AccessLogger:
         is_new_user = user_data.get("first_seen", "") >= thirty_days_ago
         self._update_department_stats(LoginId, dept_name, is_new_user)
         
-        # 통계 저장
+        # 통계 저장 (배치 처리 - 10초마다 자동 저장)
+        self._stats_dirty = True
         self._save_stats()
     
     def get_client_ip(self, request: Request) -> str:
