@@ -504,6 +504,10 @@ async def saml_acs(request: Request):
         return PlainTextResponse("ACS error: exception during processing", status_code=400)
 
     if errors or not auth.is_authenticated():
+        # 🔥 SAML 인증 실패 로그
+        reason = auth.get_last_error_reason() or ""
+        logger.error(f"❌ [SAML AUTH FAIL] 인증 실패 - errors: {errors}, reason: {reason}")
+        
         if DEV_SAML:
             # 개발 모드 폴백: 쿼리/폼에서 사용자 식별자 수용
             user = (form.get("user") or form.get("email") or request.query_params.get("user")
@@ -515,16 +519,42 @@ async def saml_acs(request: Request):
             resp = FastAPIResponse(status_code=302)
             resp.headers["Location"] = "/"
             resp.set_cookie("session_user", user, max_age=7*24*3600, secure=True, httponly=True, samesite="Lax")
+            logger.info(f"🔓 [DEV SAML] 인증 실패 → 폴백 로그인: {user}")
             log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"DEV SAML 로그인: {user}")
             return resp
-        reason = auth.get_last_error_reason() or ""
+        
+        # 실패 시 IdP SSO로 다시 리다이렉트
+        logger.warning(f"⚠️ [SAML AUTH FAIL] IdP SSO로 재시도")
+        try:
+            base_settings, _ = _load_saml_files()
+            idp_sso_url = base_settings.get('idp', {}).get('singleSignOnService', {}).get('url', '')
+            if idp_sso_url:
+                logger.info(f"🔐 [SAML RETRY] IdP SSO로 리다이렉트: {idp_sso_url}")
+                return RedirectResponse(idp_sso_url, status_code=302)
+        except Exception as retry_error:
+            logger.error(f"❌ [SAML RETRY] IdP SSO URL 로드 실패: {retry_error}")
+        
         return PlainTextResponse(f"ACS error: {errors or 'not_authenticated'}\n{reason}", status_code=400)
 
     nameid = auth.get_nameid() or "saml-user"
+    
+    # 🔥 SAML 인증 성공 로그
+    logger.info(f"✅ [SAML AUTH SUCCESS] NameID: {nameid}")
+    
     # SAML Attributes에서 메타 추출 시도 (사내 호환: org_url/samlUserdata 등)
     meta = {}
     try:
         attrs = auth.get_attributes() or {}
+        
+        # 🔥 모든 Attribute 로그 출력
+        logger.info(f"=" * 80)
+        logger.info(f"🔑 [SAML ATTRIBUTES] 총 {len(attrs)}개 속성")
+        for key, value in attrs.items():
+            # 리스트면 첫 번째 값만 표시
+            display_value = value[0] if isinstance(value, list) and value else value
+            logger.info(f"  - {key}: {display_value}")
+        logger.info(f"=" * 80)
+        
         # 예시 매핑 - 실제 사내 속성명에 맞춰 추가 확장 가능
         def pick(*keys):
             for k in keys:
@@ -553,8 +583,19 @@ async def saml_acs(request: Request):
             "username": pick("Username"),
         }
         meta = {k: v for k, v in meta_candidates.items() if v}
-    except Exception:
+        
+        # 🔥 매핑된 메타 정보 로그
+        if meta:
+            logger.info(f"📋 [SAML META] 매핑된 정보: {len(meta)}개")
+            for key, value in meta.items():
+                logger.info(f"  - {key}: {value}")
+        else:
+            logger.warning(f"⚠️ [SAML META] 매핑된 정보 없음")
+            
+    except Exception as e:
+        logger.error(f"❌ [SAML ATTR ERROR] Attribute 처리 실패: {e}")
         meta = {}
+        
     resp = FastAPIResponse(status_code=302)
     resp.headers["Location"] = "/"
     resp.set_cookie("session_user", nameid, max_age=7*24*3600, secure=True, httponly=True, samesite="Lax")
@@ -568,6 +609,8 @@ async def saml_acs(request: Request):
         except Exception:
             pass
         resp.set_cookie("session_meta", json.dumps(meta, ensure_ascii=False), max_age=7*24*3600, secure=True, httponly=False, samesite="Lax")
+    
+    logger.info(f"✅ [SAML LOGIN SUCCESS] {nameid} - 메인 페이지로 리다이렉트")
     log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"SAML 로그인: {nameid}")
     return resp
 
