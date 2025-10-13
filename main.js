@@ -8118,7 +8118,10 @@ class WaferMapViewer {
         // 제품 검색 기능 이벤트 리스너
         if (this.dom.subfolderSearch) {
             this.dom.subfolderSearch.addEventListener('input', (e) => this.handleSubfolderSearch(e));
-            this.dom.subfolderSearch.addEventListener('focus', () => this.showSubfolderDropdown());
+            this.dom.subfolderSearch.addEventListener('focus', () => {
+                this.dom.subfolderSearch.select();  // 텍스트 자동 선택
+                this.showSubfolderDropdown();
+            });
             this.dom.subfolderSearch.addEventListener('keydown', (e) => this.handleSubfolderKeydown(e));
         }
 
