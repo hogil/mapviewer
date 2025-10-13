@@ -730,7 +730,42 @@ async def api_whoami(request: Request):
         parts = user.split("@", 1)
         account = parts[0]
         pc = parts[1]
-    return {"user": user, "account": account, "pc": pc, **({"meta": meta} if meta else {})}
+    
+    # authenticated 필드 추가 (프론트엔드에서 체크)
+    authenticated = bool(user)
+    
+    # 프론트엔드 호환: meta 필드명 정규화
+    metadata = {}
+    if meta:
+        # 프론트엔드가 기대하는 필드명으로 매핑
+        metadata = {
+            "name": meta.get("Username", ""),
+            "Username": meta.get("Username", ""),
+            "login_id": meta.get("LoginId", ""),
+            "LoginId": meta.get("LoginId", ""),  # 정확한 필드명
+            "LginId": meta.get("LoginId", ""),  # 오타 호환성
+            "username": meta.get("Username", ""),
+            "employee_id": meta.get("Sabun", ""),
+            "Sabun": meta.get("Sabun", ""),
+            "department_name": meta.get("DeptName", ""),
+            "DeptName": meta.get("DeptName", ""),
+            "department": meta.get("DeptName", ""),
+            "grade": meta.get("GrdName", ""),
+            "GrdName": meta.get("GrdName", ""),
+            "grade_en": meta.get("GrdName_EN", ""),
+            "GrdName_EN": meta.get("GrdName_EN", ""),
+        }
+        # 빈 값 제거
+        metadata = {k: v for k, v in metadata.items() if v}
+    
+    return {
+        "authenticated": authenticated,
+        "user": user,
+        "account": account,
+        "pc": pc,
+        "metadata": metadata,  # 프론트엔드가 기대하는 필드명
+        "meta": metadata  # 하위 호환성
+    }
 
 
 # ===== 사내 ADFS/STS 헬스 체크 (핑) =====
