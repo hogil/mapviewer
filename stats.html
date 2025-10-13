@@ -57,17 +57,17 @@
             background: #4CAF50;
             color: white;
             border: none;
-            padding: 20px;
+            padding: 15px 20px;
             border-radius: 8px;
             cursor: pointer;
-            font-size: 1rem;
+            font-size: 1.1rem;
+            font-weight: bold;
             transition: all 0.3s ease;
             box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3);
-            flex: 1;
             display: flex;
             align-items: center;
             justify-content: center;
-            min-height: 60px;
+            height: 60px;
         }
         
         .btn:hover {
@@ -398,19 +398,19 @@
             </div>
         </div>
         
-        <!-- 부서 분석 차트 섹션 -->
+        <!-- 부서 분석 섹션 -->
         <div class="department-charts">
             <div class="stats-section">
                 <h2 class="section-title">🏢 부서별 사용자 분포</h2>
-                <div class="chart-container" style="margin-bottom: 0;">
-                    <div class="chart-wrapper" style="height: 300px;">
-                        <canvas id="departmentChart"></canvas>
+                <div class="user-table" style="margin-bottom: 0;">
+                    <div class="table-content" id="departmentTable" style="max-height: 400px;">
+                        <div class="loading">부서 데이터 로딩 중...</div>
                     </div>
                 </div>
             </div>
             
             <div class="stats-section">
-                <h2 class="section-title">📊 부서별 접속 활동량</h2>
+                <h2 class="section-title">📊 부서별 접속 활동량 (Top 10)</h2>
                 <div class="chart-container" style="margin-bottom: 0;">
                     <div class="chart-wrapper" style="height: 300px;">
                         <canvas id="departmentActivityChart"></canvas>
@@ -464,6 +464,7 @@
                 try {
                     departmentData = await departmentResponse.json();
                 } catch (e) {
+                    console.warn('부서 데이터 로드 실패:', e);
                     departmentData = { departments: {}, activity: {} };
                 }
                 
@@ -474,7 +475,7 @@
                 // 모든 차트 렌더링
                 renderDailyChart();
                 renderMonthlyChart();
-                renderDepartmentChart();
+                renderDepartmentTable();
                 renderDepartmentActivityChart();
                 
                 document.getElementById('totalUsers').textContent = usersData.total_users;
@@ -610,88 +611,83 @@
             });
         }
         
-        function renderDepartmentChart() {
-            if (!departmentData || !departmentData.departments) return;
+        function renderDepartmentTable() {
+            const container = document.getElementById('departmentTable');
             
-            const ctx = document.getElementById('departmentChart');
-            
-            // 기존 차트 삭제
-            if (departmentChart) {
-                departmentChart.destroy();
+            if (!departmentData || !departmentData.departments || Object.keys(departmentData.departments).length === 0) {
+                container.innerHTML = '<div class="loading">부서 데이터가 없습니다.</div>';
+                return;
             }
             
-            // 부서별 사용자 수 데이터 준비
-            const departments = Object.keys(departmentData.departments);
-            const userCounts = departments.map(dept => departmentData.departments[dept].user_count);
-            const labels = departments.map(dept => departmentData.departments[dept].name || dept);
+            // 부서 데이터를 사용자 수 기준으로 정렬
+            const departments = Object.keys(departmentData.departments)
+                .map(dept => ({
+                    key: dept,
+                    name: departmentData.departments[dept].name || dept,
+                    userCount: departmentData.departments[dept].user_count || 0,
+                    totalRequests: departmentData.departments[dept].total_requests || 0
+                }))
+                .sort((a, b) => b.userCount - a.userCount);
             
-            departmentChart = new Chart(ctx, {
-                type: 'doughnut',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        data: userCounts,
-                        backgroundColor: [
-                            '#4CAF50',
-                            '#2196F3',
-                            '#FF9800',
-                            '#9C27B0',
-                            '#F44336',
-                            '#00BCD4',
-                            '#8BC34A',
-                            '#FFC107'
-                        ],
-                        borderColor: '#1a1a2e',
-                        borderWidth: 2
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            position: 'bottom',
-                            labels: {
-                                color: '#ffffff',
-                                font: {
-                                    size: 11
-                                }
-                            }
-                        },
-                        tooltip: {
-                            backgroundColor: 'rgba(26, 26, 46, 0.9)',
-                            titleColor: '#4CAF50',
-                            bodyColor: '#ffffff',
-                            borderColor: '#4CAF50',
-                            borderWidth: 1
-                        }
-                    }
-                }
+            let html = `
+                <div style="display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; padding: 8px 12px; background: #333; font-weight: bold; font-size: 0.9em; border-radius: 4px; margin-bottom: 4px;">
+                    <div>부서명</div>
+                    <div style="text-align: center;">사용자 수</div>
+                    <div style="text-align: center;">총 요청 수</div>
+                </div>
+            `;
+            
+            departments.forEach(dept => {
+                html += `
+                    <div style="display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #333; font-size: 0.9em; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
+                        <div style="color: #4CAF50; font-weight: bold;">${dept.name}</div>
+                        <div style="text-align: center; color: #2196F3; font-weight: bold;">${dept.userCount}명</div>
+                        <div style="text-align: center; color: #FF9800; font-weight: bold;">${dept.totalRequests.toLocaleString()}</div>
+                    </div>
+                `;
             });
+            
+            container.innerHTML = html;
         }
         
         function renderDepartmentActivityChart() {
-            if (!departmentData || !departmentData.activity) return;
-            
             const ctx = document.getElementById('departmentActivityChart');
+            
+            if (!departmentData || !departmentData.departments || Object.keys(departmentData.departments).length === 0) {
+                // 차트 영역에 메시지 표시
+                ctx.parentElement.innerHTML = '<div class="loading">부서 활동 데이터가 없습니다.</div>';
+                return;
+            }
             
             // 기존 차트 삭제
             if (departmentActivityChart) {
                 departmentActivityChart.destroy();
             }
             
-            // 부서별 활동량 데이터 준비
-            const departments = Object.keys(departmentData.activity);
-            const activityCounts = departments.map(dept => departmentData.activity[dept].total_requests);
-            const labels = departments.map(dept => departmentData.activity[dept].name || dept);
+            // 부서별 인원수 기준으로 Top 10 정렬
+            const departments = Object.keys(departmentData.departments)
+                .map(dept => ({
+                    name: departmentData.departments[dept].name || dept,
+                    userCount: departmentData.departments[dept].user_count || 0
+                }))
+                .sort((a, b) => b.userCount - a.userCount)
+                .slice(0, 10); // Top 10만 선택
+            
+            if (departments.length === 0) {
+                ctx.parentElement.innerHTML = '<div class="loading">표시할 부서 데이터가 없습니다.</div>';
+                return;
+            }
+            
+            const labels = departments.map(dept => dept.name);
+            const userCounts = departments.map(dept => dept.userCount);
             
             departmentActivityChart = new Chart(ctx, {
                 type: 'bar',
                 data: {
                     labels: labels,
                     datasets: [{
-                        label: '총 요청 수',
-                        data: activityCounts,
+                        label: '인원 수',
+                        data: userCounts,
                         backgroundColor: 'rgba(76, 175, 80, 0.8)',
                         borderColor: '#4CAF50',
                         borderWidth: 1
@@ -700,6 +696,7 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    indexAxis: 'y', // 가로 막대 차트
                     plugins: {
                         legend: {
                             labels: {
@@ -727,6 +724,14 @@
                             },
                             grid: {
                                 color: 'rgba(255, 255, 255, 0.1)'
+                            },
+                            title: {
+                                display: true,
+                                text: '인원 수',
+                                color: '#4CAF50',
+                                font: {
+                                    size: 11
+                                }
                             }
                         },
                         y: {
@@ -738,14 +743,6 @@
                             },
                             grid: {
                                 color: 'rgba(255, 255, 255, 0.1)'
-                            },
-                            title: {
-                                display: true,
-                                text: '요청 수',
-                                color: '#4CAF50',
-                                font: {
-                                    size: 11
-                                }
                             }
                         }
                     }
