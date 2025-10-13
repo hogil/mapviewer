@@ -3884,10 +3884,14 @@ class WaferMapViewer {
 
     // 사용자 정보 로드 및 표시
     async loadUserInfo() {
+        console.log('[DEBUG] loadUserInfo() 시작');
         try {
+            console.log('[DEBUG] /api/auth/user 요청 시작');
             const response = await fetch('/api/auth/user');
+            console.log('[DEBUG] /api/auth/user 응답:', response.status, response.statusText);
+            
             if (!response.ok) {
-                console.warn('사용자 정보 로드 실패');
+                console.warn('[DEBUG] 사용자 정보 로드 실패 - response.ok = false');
                 // 인증 실패 시 Guest로 표시
                 const userInfoEl = document.getElementById('user-info');
                 if (userInfoEl) {
@@ -3900,9 +3904,11 @@ class WaferMapViewer {
             }
 
             const data = await response.json();
+            console.log('[DEBUG] /api/auth/user 응답 데이터:', JSON.stringify(data, null, 2));
 
             // 인증되지 않았을 때도 Guest로 표시
             if (!data.authenticated) {
+                console.log('[DEBUG] data.authenticated = false → Guest 표시');
                 const userInfoEl = document.getElementById('user-info');
                 if (userInfoEl) {
                     userInfoEl.innerHTML = `
@@ -3913,12 +3919,15 @@ class WaferMapViewer {
                 return;
             }
 
+            console.log('[DEBUG] data.authenticated = true → 사용자 정보 표시');
             const meta = data.metadata || {};
+            console.log('[DEBUG] metadata:', JSON.stringify(meta, null, 2));
 
             // UI 업데이트: LoginId(Username) 형식 - 원본 SAML claim 이름 직접 사용
             const userInfoEl = document.getElementById('user-info');
             if (userInfoEl) {
                 const line1 = meta.Username ? `${meta.LoginId || data.user}(${meta.Username})` : (meta.LoginId || data.user);
+                console.log('[DEBUG] UI 업데이트 - line1:', line1);
                 userInfoEl.innerHTML = `
                     <div style="font-weight: 600;">${line1}</div>
                     <div style="font-size: 10px; color: #666;">${meta.DeptName || ''}</div>
@@ -3928,9 +3937,10 @@ class WaferMapViewer {
             // 전역 변수로 저장 (로그용) - 원본 SAML claim 이름 사용
             this.currentUser = meta;
 
+            console.log('[DEBUG] currentUser 설정 완료:', this.currentUser);
             this.debugLog('[AUTH] 사용자 정보:', this.currentUser);
         } catch (error) {
-            console.error('사용자 정보 로드 오류:', error);
+            console.error('[DEBUG] 사용자 정보 로드 오류:', error);
             // 오류 발생 시에도 Guest로 표시
             const userInfoEl = document.getElementById('user-info');
             if (userInfoEl) {

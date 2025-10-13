@@ -817,16 +817,29 @@ async def saml_dev_login(request: Request):
 @app.get("/api/whoami")
 @app.get("/api/auth/user")  # 프론트엔드 호환성
 async def api_whoami(request: Request):
-    # 쿠키 사용 안 함 - 항상 인증되지 않은 상태로 반환
-    logger.info(f"🔍 [API /auth/user] 쿠키 사용 안 함 - 항상 인증되지 않은 상태")
+    # IP 기반으로 사용자 정보 조회
+    client_ip = logger_instance.get_client_ip(request)
+    user_id, meta_dict = logger_instance.get_user_by_ip(client_ip)
     
-    return {
-        "authenticated": False,
-        "user": "",
-        "account": "",
-        "pc": "",
-        "metadata": {}
-    }
+    # 사용자 정보가 있으면 인증된 것으로 처리
+    if user_id and meta_dict:
+        logger.info(f"🔍 [API /auth/user] 사용자 정보 조회 성공: {user_id}")
+        return {
+            "authenticated": True,
+            "user": user_id,
+            "account": meta_dict.get("Username", ""),
+            "pc": "",
+            "metadata": meta_dict
+        }
+    else:
+        logger.info(f"🔍 [API /auth/user] 사용자 정보 없음 - Guest")
+        return {
+            "authenticated": False,
+            "user": "",
+            "account": "",
+            "pc": "",
+            "metadata": {}
+        }
 
 
 # ===== 사내 ADFS/STS 헬스 체크 (핑) =====
