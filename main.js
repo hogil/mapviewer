@@ -6960,8 +6960,18 @@ class WaferMapViewer {
     saveCurrentViewStateForLabelExplorer() {
         console.log('💾 [SAVE] saveCurrentViewStateForLabelExplorer 호출');
 
-        // 이미 저장된 상태가 있으면 덮어쓰지 않음 (Label Explorer 내 이동 시)
+        // 🔥 Label Explorer에서 이미 단일 이미지를 보고 있는 경우
+        // → 현재 이미지 정보를 업데이트 (이전 화면으로 복귀할 수 있도록)
+        if (this.savedViewState?.type === 'single' && this.selectedImagePath) {
+            this.savedViewState.imagePath = this.selectedImagePath;
+            this.savedViewState.zoom = this.zoom;
+            this.savedViewState.offsetX = this.offsetX;
+            this.savedViewState.offsetY = this.offsetY;
+            console.log('💾 [SAVE] Label Explorer 내 단일 이미지 상태 업데이트:', this.selectedImagePath);
+            return;
+        }
 
+        // 이미 저장된 상태가 있으면 덮어쓰지 않음 (최초 진입 시에만 저장)
         const hasSavedViewState = !!this.savedViewState;
 
         const hasType = this.savedViewState?.type;
