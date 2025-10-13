@@ -344,7 +344,6 @@ app = FastAPI(title="L3Tracker API", version="2.6.0")
 
 # ======================== SAML SSO (OneLogin python3-saml) ========================
 SAML_DIR = Path("saml")
-DEV_SAML = 0  # 0=개발모드폴백허용, 1=SAML필수(운영) - 고정값
 AUTO_LOGIN = os.getenv("AUTO_LOGIN", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
 DEFAULT_ORG_URL = os.getenv("DEFAULT_ORG_URL", "")
 
@@ -550,32 +549,24 @@ async def saml_acs(request: Request):
         errors = auth.get_errors()
     except Exception as e:
         logger.warning(f"SAML ACS 처리 예외: {e}")
-        # 운영 모드: 예외 발생 시 에러 반환
-        if not DEV_SAML:
-            # 개발 모드 폴백
-            user = (form.get("LoginId") or form.get("user") or form.get("email") or
-                   request.query_params.get("LoginId") or request.query_params.get("user") or
-                   request.query_params.get("email") or "dev-user")
-            resp = RedirectResponse("/", status_code=302)
-            
-            # 쿠키 사용 안 함 - 개발 모드 로그인 정보는 메모리에 저장
-            logger.info(f"✅ [DEV SAML(예외)] 개발 모드 로그인 성공 - Redirect to: /")
-            
-            # 개발 모드용 SAML 속성 생성
+        # AUTO_LOGIN=0일 때: 예외 발생 시 IP 기반 더미 attribute 생성
+        if not AUTO_LOGIN:
+            client_ip = logger_instance.get_client_ip(request)
+            # IP 기반 더미 attribute 생성
             dev_meta = {
-                'Username': user,
-                'LoginId': user,
-                'Sabun': f'DEV{user[:3]}',
-                'DeptName': '개발팀',
-                'GrdName_EN': 'Developer',
-                'GrdName': '개발자'
+                'Username': f'User-{client_ip}',
+                'LoginId': f'user-{client_ip}',
+                'Sabun': f'IP{client_ip.replace(".", "")[:6]}',
+                'DeptName': 'IP기반접속',
+                'GrdName_EN': 'IP User',
+                'GrdName': 'IP사용자'
             }
             
-            # detail_access.csv에 개발 모드 기록
+            # detail_access.csv에 IP 기반 기록
             detail_access_logger.log_saml_access(dev_meta, client_ip)
             
-            log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"DEV SAML(예외) 로그인: {user}")
-            return resp
+            logger.info(f"✅ [IP 기반 로그인] AUTO_LOGIN=0, IP: {client_ip}")
+            return RedirectResponse("/", status_code=302)
         return PlainTextResponse("ACS error: exception during processing", status_code=400)
 
     # SAML 속성 추출 - 원본 claim 이름 유지 (인증 체크 전에 먼저 추출)
@@ -648,8 +639,8 @@ async def saml_acs(request: Request):
         reason = auth.get_last_error_reason() or ""
         logger.error(f"[SAML ACS] 인증 실패: {errors} / {reason}")
         
-        # 운영 모드: IdP로 다시 리다이렉트
-        if DEV_SAML:
+        # AUTO_LOGIN=1일 때: IdP로 다시 리다이렉트
+        if AUTO_LOGIN:
             try:
                 base_settings, _ = _load_saml_files()
                 idp_sso_url = base_settings.get("idp", {}).get("singleSignOnService", {}).get("url")
@@ -660,31 +651,22 @@ async def saml_acs(request: Request):
             except Exception as e:
                 logger.error(f"[SAML ACS] IdP SSO URL 로드 실패: {e}")
         else:
-            # 개발 모드: 폴백 허용
-            user = (form.get("LoginId") or form.get("user") or form.get("email") or
-                   request.query_params.get("LoginId") or request.query_params.get("user") or
-                   request.query_params.get("email") or "dev-user")
-            
-            resp = RedirectResponse("/", status_code=302)
-            
-            # 쿠키 사용 안 함 - 개발 모드 로그인 정보는 메모리에 저장
-            logger.info(f"✅ [DEV SAML 폴백] 개발 모드 로그인 성공 - Redirect to: /")
-            
-            # 개발 모드용 SAML 속성 생성
+            # AUTO_LOGIN=0일 때: IP 기반 더미 attribute 생성
+            client_ip = logger_instance.get_client_ip(request)
             dev_meta = {
-                'Username': user,
-                'LoginId': user,
-                'Sabun': f'DEV{user[:3]}',
-                'DeptName': '개발팀',
-                'GrdName_EN': 'Developer',
-                'GrdName': '개발자'
+                'Username': f'User-{client_ip}',
+                'LoginId': f'user-{client_ip}',
+                'Sabun': f'IP{client_ip.replace(".", "")[:6]}',
+                'DeptName': 'IP기반접속',
+                'GrdName_EN': 'IP User',
+                'GrdName': 'IP사용자'
             }
             
-            # detail_access.csv에 개발 모드 기록
+            # detail_access.csv에 IP 기반 기록
             detail_access_logger.log_saml_access(dev_meta, client_ip)
             
-            log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"DEV SAML 폴백 로그인: {user}")
-            return resp
+            logger.info(f"✅ [IP 기반 로그인] AUTO_LOGIN=0, IP: {client_ip}")
+            return RedirectResponse("/", status_code=302)
         
         # 모든 시도 실패 시 에러 메시지
         return PlainTextResponse(
@@ -774,10 +756,10 @@ async def saml_acs(request: Request):
 @app.get("/saml/dev-login")
 async def saml_dev_login(request: Request):
     """개발 모드 간편 로그인: ?user=이메일(또는 임의값)
-    DEV_SAML=1일 때만 허용.
+    AUTO_LOGIN=0일 때만 허용.
     """
-    if not DEV_SAML:
-        return PlainTextResponse("DEV_SAML 비활성화", status_code=403)
+    if AUTO_LOGIN:
+        return PlainTextResponse("AUTO_LOGIN 활성화 - SAML 로그인 필요", status_code=403)
     # 우선순위: user → (account@pc) → dev-user
     user = request.query_params.get("user") or request.query_params.get("email")
     account = request.query_params.get("account")
