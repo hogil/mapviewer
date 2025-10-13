@@ -889,11 +889,26 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         else:
             tag = "API"
 
-        try:
-            # stats.json 기반으로 통계 업데이트
-            logger_instance._update_stats(client_ip, endpoint, method, user_id_override=LoginId, meta=meta_dict)
-        except Exception:
-            pass
+        # 🔥 마우스 클릭(사용자 액션)과 관련된 엔드포인트만 stats.json 업데이트
+        user_action_endpoints = [
+            "/api/files",
+            "/api/files/recursive",
+            "/api/change-folder",
+            "/api/search",
+            "/api/classify",
+            "/api/labels",
+            "/api/classes",
+            "/saml/acs"
+        ]
+        
+        is_user_action = any(endpoint.startswith(ep) for ep in user_action_endpoints)
+        
+        if is_user_action:
+            try:
+                # stats.json 기반으로 통계 업데이트 (마우스 클릭 시에만)
+                logger_instance._update_stats(client_ip, endpoint, method, user_id_override=LoginId, meta=meta_dict)
+            except Exception:
+                pass
         # 내부 log_access 호출은 try/except로 무시되므로, 테이블 출력은 아래 한 번만 수행
 
         note = _note_from_request(request, endpoint)
