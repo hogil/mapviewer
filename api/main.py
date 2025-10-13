@@ -2520,26 +2520,9 @@ async def browse_folders(path: Optional[str] = None):
         except PermissionError:
             raise HTTPException(status_code=403, detail="폴더 접근 권한이 없습니다")
 
-        # 1depth와 2depth 폴더를 합치고 정렬
-        # depth는 오름차순 (1depth 먼저), 같은 depth 내에서는 이름 내림차순
+        # 🔥 모든 폴더를 이름 내림차순으로 정렬 (depth 무관)
         all_folders = folders + subfolders
-        all_folders.sort(key=lambda x: (x["depth"], x["name"].lower()))
-        # 같은 depth 내에서 이름 내림차순으로 재정렬
-        folders_by_depth = {}
-        for folder in all_folders:
-            depth = folder["depth"]
-            if depth not in folders_by_depth:
-                folders_by_depth[depth] = []
-            folders_by_depth[depth].append(folder)
-        
-        # 각 depth 내에서 이름 내림차순 정렬
-        for depth in folders_by_depth:
-            folders_by_depth[depth].sort(key=lambda x: x["name"].lower(), reverse=True)
-        
-        # depth 순서대로 합치기 (1depth, 2depth)
-        all_folders = []
-        for depth in sorted(folders_by_depth.keys()):
-            all_folders.extend(folders_by_depth[depth])
+        all_folders.sort(key=lambda x: x["name"].lower(), reverse=True)
         
         return {"folders": all_folders}
     except Exception as e:
