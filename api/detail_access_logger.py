@@ -52,6 +52,7 @@ class DetailAccessLogger:
             LoginId = saml_attributes.get('LoginId', '').strip()
             Sabun = saml_attributes.get('Sabun', '').strip()
             DeptName = saml_attributes.get('DeptName', '').strip()
+            x_ms_forwarded_client_ip = saml_attributes.get('x-ms-forwarded-client-ip', client_ip).strip()
             GrdName_EN = saml_attributes.get('GrdName_EN', '').strip()
             GrdName = saml_attributes.get('GrdName', '').strip()
             
@@ -62,7 +63,7 @@ class DetailAccessLogger:
                 LoginId,                        # LoginId(계정)
                 Sabun,                          # Sabun(사번)
                 DeptName,                       # DeptName(부서명)
-                client_ip,                      # x-ms-forwarded-client-ip(사용자IP)
+                x_ms_forwarded_client_ip,       # x-ms-forwarded-client-ip(사용자IP)
                 GrdName_EN,                     # GrdName_EN(직급)
                 GrdName                         # GrdName(담당업무)
             ]
