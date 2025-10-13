@@ -503,20 +503,15 @@ class AccessLogger:
         if user_data["first_seen"].startswith(month):
             if user_id not in monthly["new_users"]:
                 monthly["new_users"].append(user_id)
-        # 부서/팀/회사 카운트
-        dept = user_data.get("profile", {}).get("department")
-        team = user_data.get("profile", {}).get("team")
-        company = user_data.get("profile", {}).get("company")
+        # 부서 카운트 (profile.DeptName 사용)
+        profile = user_data.get("profile", {})
+        dept = profile.get("DeptName")  # 7개 필드 중 DeptName 사용
         if dept:
             daily["by_department"][dept] = daily["by_department"].get(dept, 0) + 1
             monthly["by_department"][dept] = monthly["by_department"].get(dept, 0) + 1
-        if team:
-            daily["by_team"][team] = daily["by_team"].get(team, 0) + 1
-            monthly["by_team"][team] = monthly["by_team"].get(team, 0) + 1
-        if company:
-            daily["by_company"][company] = daily["by_company"].get(company, 0) + 1
-            monthly["by_company"][company] = monthly["by_company"].get(company, 0) + 1
-        org_url = user_data.get("profile", {}).get("org_url")
+        
+        # team과 company는 사용하지 않음 (7개 필드에 없음)
+        org_url = profile.get("org_url")
         if org_url:
             daily.setdefault("by_org_url", {})
             monthly.setdefault("by_org_url", {})
