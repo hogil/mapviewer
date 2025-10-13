@@ -705,6 +705,10 @@ async def saml_dev_login(request: Request):
         "DeptId": dept_id,
         "GrdName": grd_name or title,
         "GrdName_EN": grd_name_en,
+        "company": company,
+        "team": team,
+        "account": account,
+        "pc": pc,
     }
     # None 제거
     meta = {k: v for k, v in meta.items() if v}
@@ -747,16 +751,14 @@ async def api_whoami(request: Request):
     # authenticated 필드 추가 (프론트엔드에서 체크)
     authenticated = bool(user)
     logger.info(f"✅ [API /auth/user] authenticated: {authenticated}, user: {user}")
-    
-    # 프론트엔드 호환: 원본 SAML claim 이름 그대로 사용
-    metadata = dict(meta) if meta else {}
+    logger.info(f"✅ [API /auth/user] meta keys: {list(meta.keys()) if meta else []}")
     
     return {
         "authenticated": authenticated,
         "user": user,
         "account": account,
         "pc": pc,
-        "metadata": metadata
+        "metadata": meta  # 원본 SAML claim 이름 그대로 사용
     }
 
 
@@ -883,10 +885,12 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         # 내부 log_access 호출은 try/except로 무시되므로, 테이블 출력은 아래 한 번만 수행
 
         note = _note_from_request(request, endpoint)
-        # NOTE 칼럼에 부서 간단 표기 (있을 때만)
+        # NOTE 칼럼에 부서/팀/회사 간단 표기 (있을 때만)
         if meta_dict:
             bits = []
-            if meta_dict.get("DeptName"): bits.append(meta_dict.get("DeptName"))
+            if meta_dict.get("company"): bits.append(meta_dict.get("company"))
+            if meta_dict.get("department"): bits.append(meta_dict.get("department"))
+            if meta_dict.get("team"): bits.append(meta_dict.get("team"))
             if bits:
                 note = (note + " ").strip() + f"[{ ' / '.join(bits) }]"
         # IP 칼럼에 계정(username@hostname) 우선 표시
