@@ -93,50 +93,74 @@ class _SuppressNoise(logging.Filter):
         return True
 
 # 로거 중복 초기화 방지 (Ubuntu multiprocessing worker 환경 대응)
-_logging_initialized = False
-
 def _setup_logging():
-    """로깅 설정을 한 번만 초기화 (worker 프로세스마다 핸들러 중복 추가 방지)"""
-    global _logging_initialized
-    if _logging_initialized:
-        return
+    """로깅 설정 - 핸들러 중복 완전 방지"""
     
-    LOGGING_CONFIG = {
-        "version": 1,
-        "disable_existing_loggers": False,
-        "formatters": {
-            "simple": {"format": "%(levelname)s: %(asctime)s     %(message)s", "datefmt": "%Y-%m-%d %H:%M:%S"}
-        },
-        "handlers": {
-            "console": {"class": "logging.StreamHandler", "formatter": "simple", "stream": "ext://sys.stdout"},
-        },
-        "root": {"level": "INFO", "handlers": ["console"]},
-        "loggers": {
-            "uvicorn":        {"handlers": ["console"], "level": "INFO",    "propagate": False},
-            "uvicorn.error":  {"handlers": ["console"], "level": "WARNING", "propagate": False},
-            "uvicorn.access": {"handlers": [],          "level": "CRITICAL","propagate": False},
-            "l3tracker":      {"handlers": ["console"], "level": "INFO",    "propagate": False},
-            "access":         {"handlers": [],          "level": "CRITICAL","propagate": False},  # access.table만 사용
-            "asyncio":        {"handlers": ["console"], "level": "ERROR",   "propagate": False},
-        },
-    }
+    # 모든 로거의 핸들러 완전 제거 (중복 방지)
+    for logger_name in ["", "uvicorn", "uvicorn.error", "uvicorn.access", "l3tracker", "access", "asyncio"]:
+        lgr = logging.getLogger(logger_name)
+        lgr.handlers.clear()
+        lgr.filters.clear()
+        lgr.propagate = False
     
-    # 기존 핸들러 제거 (중복 방지)
+    # 단일 핸들러 생성 (재사용)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(logging.Formatter(
+        "%(levelname)s: %(asctime)s     %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    ))
+    
+    # 필터 추가
+    noise_filter = _SuppressNoise()
+    
+    # Root 로거 설정
     root_logger = logging.getLogger()
-    for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(console_handler)
     
-    logging.config.dictConfig(LOGGING_CONFIG)
+    # 개별 로거 설정 (핸들러는 공유하지 않음 - 중복 방지)
+    uvicorn_logger = logging.getLogger("uvicorn")
+    uvicorn_logger.setLevel(logging.INFO)
+    uvicorn_logger.propagate = False
+    if not uvicorn_logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(console_handler.formatter)
+        handler.addFilter(noise_filter)
+        uvicorn_logger.addHandler(handler)
     
-    # 실행 후 필터 부착(딕트 설정만으로는 content-based filter 넣기 번거로움)
-    for name in ("uvicorn", "uvicorn.error", "asyncio", ""):
-        lgr = logging.getLogger(name)
-        # 필터 중복 방지
-        if not any(isinstance(f, _SuppressNoise) for f in lgr.filters):
-            lgr.addFilter(_SuppressNoise())
+    uvicorn_error_logger = logging.getLogger("uvicorn.error")
+    uvicorn_error_logger.setLevel(logging.WARNING)
+    uvicorn_error_logger.propagate = False
+    if not uvicorn_error_logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(console_handler.formatter)
+        handler.addFilter(noise_filter)
+        uvicorn_error_logger.addHandler(handler)
     
-    _logging_initialized = True
+    # uvicorn.access는 완전 비활성화
+    logging.getLogger("uvicorn.access").setLevel(logging.CRITICAL)
+    logging.getLogger("uvicorn.access").propagate = False
+    
+    # l3tracker 로거
+    l3tracker_logger = logging.getLogger("l3tracker")
+    l3tracker_logger.setLevel(logging.INFO)
+    l3tracker_logger.propagate = False
+    if not l3tracker_logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(console_handler.formatter)
+        l3tracker_logger.addHandler(handler)
+    
+    # asyncio 로거
+    asyncio_logger = logging.getLogger("asyncio")
+    asyncio_logger.setLevel(logging.ERROR)
+    asyncio_logger.propagate = False
+    if not asyncio_logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(console_handler.formatter)
+        handler.addFilter(noise_filter)
+        asyncio_logger.addHandler(handler)
 
+# 모듈 로드 시 한 번만 실행 (각 worker에서 실행되지만 핸들러 중복은 방지됨)
 _setup_logging()
 logger = logging.getLogger("l3tracker")
 
@@ -2855,6 +2879,30 @@ if __name__ == "__main__":
         except Exception:
             workers_env = 2
     # reload 사용 시 workers=1 고정. reload 비사용 시 환경변수로 워커 수 제어
+    # 커스텀 로깅 설정 (uvicorn 기본 로거 완전 비활성화)
+    log_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "default": {
+                "format": "%(levelname)s: %(asctime)s     %(message)s",
+                "datefmt": "%Y-%m-%d %H:%M:%S"
+            }
+        },
+        "handlers": {
+            "default": {
+                "formatter": "default",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout"
+            }
+        },
+        "loggers": {
+            "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+            "uvicorn.error": {"handlers": ["default"], "level": "WARNING", "propagate": False},
+            "uvicorn.access": {"handlers": [], "level": "CRITICAL", "propagate": False}
+        }
+    }
+    
     uvicorn.run(
         "api.main:app",
         host="0.0.0.0",
@@ -2863,8 +2911,8 @@ if __name__ == "__main__":
         workers=(1 if reload_flag else max(1, workers_env)),
         log_level="info",
         access_log=False,                   # 커스텀 테이블 로그 사용
-        use_colors=True,
-        log_config=None,
+        use_colors=False,                   # 색상 비활성화로 로그 중복 방지
+        log_config=log_config,              # 커스텀 로깅 설정 사용
         ssl_certfile=str(cert_path),
         ssl_keyfile=str(key_path),
     )
