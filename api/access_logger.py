@@ -815,6 +815,53 @@ class AccessLogger:
             return None
         
         return self.stats_data["users"][user_id]
+    
+    def get_department_stats(self) -> Dict[str, Any]:
+        """부서별 사용자 분포 및 활동량 통계 - 실제 stats.json 데이터 사용"""
+        departments = {}
+        
+        for user_id, data in self.stats_data["users"].items():
+            # localhost IP 제외
+            if user_id in ['127.0.0.1', '::1', 'localhost']:
+                continue
+                
+            profile = data.get("profile", {})
+            
+            # 부서명 추출 (여러 필드에서 시도)
+            dept_name = (profile.get("DeptName") or 
+                        profile.get("Department") or 
+                        profile.get("department") or 
+                        "외부" if user_id.count('.') == 3 else "기타")  # IP인 경우 "외부"
+            
+            # 부서별 통계 집계
+            if dept_name not in departments:
+                departments[dept_name] = {
+                    "name": dept_name,
+                    "user_count": 0,
+                    "total_requests": 0,
+                    "users": []
+                }
+            
+            # 사용자 수 증가
+            departments[dept_name]["user_count"] += 1
+            
+            # 총 요청 수 계산
+            total_requests = 0
+            daily_requests = data.get("daily_requests", {})
+            for date, count in daily_requests.items():
+                total_requests += count
+            departments[dept_name]["total_requests"] += total_requests
+            
+            # 사용자 정보 저장
+            departments[dept_name]["users"].append({
+                "user_id": user_id,
+                "profile": profile
+            })
+        
+        return {
+            "departments": departments,
+            "activity": departments  # activity와 departments 동일하게 사용
+        }
 
 # 전역 인스턴스
 logger_instance = AccessLogger()

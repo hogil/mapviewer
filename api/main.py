@@ -2086,85 +2086,10 @@ async def get_active_users(): return logger_instance.get_active_users()
 
 @app.get("/api/stats/department")
 async def get_department_stats():
-    """부서별 사용자 분포 및 활동량 통계"""
+    """부서별 사용자 분포 및 활동량 통계 - 실제 stats.json 데이터 사용"""
     try:
-        # 더미 데이터 생성 (실제 구현 시 logger_instance에서 데이터 추출)
-        department_data = {
-            "departments": {
-                "dev": {
-                    "name": "개발팀",
-                    "user_count": 15,
-                    "total_requests": 2847
-                },
-                "qa": {
-                    "name": "QA팀", 
-                    "user_count": 8,
-                    "total_requests": 1234
-                },
-                "design": {
-                    "name": "디자인팀",
-                    "user_count": 6,
-                    "total_requests": 892
-                },
-                "marketing": {
-                    "name": "마케팅팀",
-                    "user_count": 12,
-                    "total_requests": 1567
-                },
-                "sales": {
-                    "name": "영업팀",
-                    "user_count": 20,
-                    "total_requests": 2103
-                },
-                "hr": {
-                    "name": "인사팀",
-                    "user_count": 5,
-                    "total_requests": 445
-                },
-                "finance": {
-                    "name": "재무팀",
-                    "user_count": 7,
-                    "total_requests": 678
-                }
-            },
-            "activity": {
-                "dev": {
-                    "name": "개발팀",
-                    "total_requests": 2847,
-                    "active_users": 15
-                },
-                "qa": {
-                    "name": "QA팀",
-                    "total_requests": 1234,
-                    "active_users": 8
-                },
-                "design": {
-                    "name": "디자인팀",
-                    "total_requests": 892,
-                    "active_users": 6
-                },
-                "marketing": {
-                    "name": "마케팅팀",
-                    "total_requests": 1567,
-                    "active_users": 12
-                },
-                "sales": {
-                    "name": "영업팀",
-                    "total_requests": 2103,
-                    "active_users": 20
-                },
-                "hr": {
-                    "name": "인사팀",
-                    "total_requests": 445,
-                    "active_users": 5
-                },
-                "finance": {
-                    "name": "재무팀",
-                    "total_requests": 678,
-                    "active_users": 7
-                }
-            }
-        }
+        # 실제 stats.json 데이터에서 부서별 통계 생성
+        department_data = logger_instance.get_department_stats()
         return department_data
     except Exception as e:
         logger.error(f"부서 통계 생성 실패: {e}")
