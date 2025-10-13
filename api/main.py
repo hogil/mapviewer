@@ -733,21 +733,29 @@ async def saml_acs(request: Request):
     
     bootlog.info(f"✅ [COOKIE] 쿠키 설정 완료 - Redirect to: /")
     
-    # 🔥 SAML 로그인 성공 시 IP로 로그인한 기록 삭제 (LoginId 기준)
+    # 🔥 SAML 로그인 성공 시 IP로 로그인한 기록 삭제 및 SAML 로그 직접 기록 (LoginId 기준)
     try:
         client_ip = logger_instance.get_client_ip(request)
         login_id = meta.get("LoginId")
         
         if client_ip and login_id:
-            # LoginId 기준으로 IP 기록 정리 및 삭제
+            # ① LoginId 기준으로 IP 기록 정리 및 삭제
             removed = logger_instance.remove_ip_login_record(client_ip, login_id)
             if removed:
                 bootlog.info(f"🗑️ [IP CLEANUP] IP 로그인 기록 삭제됨: {client_ip} → LoginId: {login_id}")
             
-            # SAML 로그인으로 사용자 정보 업데이트
-            bootlog.info(f"🔄 [SAML UPDATE] LoginId 기준으로 사용자 정보 업데이트: {login_id}")
+            # ② SAML 로그인 정보로 직접 통계 업데이트 (중복 방지)
+            bootlog.info(f"🔄 [SAML LOG] SAML 로그인 직접 기록: {login_id}")
+            logger_instance._update_stats(
+                ip=client_ip,
+                endpoint="/saml/acs",  # SAML ACS로 기록 (리다이렉트 후 / 중복 방지)
+                method="POST",
+                user_id_override=login_id,  # LoginId 사용
+                meta=meta  # SAML 메타 정보 전달
+            )
+            bootlog.info(f"✅ [SAML LOG] SAML 로그 기록 완료")
     except Exception as e:
-        bootlog.warning(f"⚠️ [IP CLEANUP] IP 로그인 기록 삭제 실패: {e}")
+        bootlog.warning(f"⚠️ [SAML LOG] SAML 로그 기록 실패: {e}")
     
     log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"SAML 로그인: {nameid}")
     return resp
@@ -928,6 +936,12 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         
         # 🔥 로그 스킵 대상 엔드포인트 체크 (통계 업데이트 전에 먼저 체크)
         skip_prefix = ["/favicon.ico", "/static/", "/js/", "/api/files/all", "/api/stats", "/api/stats/", "/stats", "/saml/login", "/saml/acs", "/saml/metadata", "/saml/sls"]
+        
+        # 루트(/) 페이지는 SAML 로그인 시에만 직접 기록하므로 미들웨어에서 스킵
+        skip_endpoints = ["/", "/index.html"]
+        if endpoint in skip_endpoints:
+            return response
+        
         if any(endpoint.startswith(p) for p in skip_prefix):
             return response
 
