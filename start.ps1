@@ -8,8 +8,8 @@ $env:PYTHONIOENCODING = "utf-8"
 chcp 65001 | Out-Null
 
 # 환경변수 설정
-$env:AUTO_LOGIN="1"      # 1=자동 로그인 (domain 접속 시 자동 리다이렉트)
-                         # 0=수동 로그인 (/saml/login 직접 호출)
+$env:AUTO_LOGIN="0"      # 0=수동 로그인 (/saml/login 직접 호출)
+                         # 1=자동 로그인 (domain 접속 시 자동 리다이렉트) - Ubuntu 사내 서버용
 $env:HOST="0.0.0.0"
 $env:PORT="8080"
 $env:SSL_ENABLED="1"
@@ -25,7 +25,7 @@ $env:PYVIPS_CONCURRENCY="1024"
 $env:PYVIPS_CACHE_SIZE="4095"
 $env:PYVIPS_MEMORY_ALIGN="64"
 $env:STATS_LOG_ENABLED="0"
-$env:WORKERS="6"  # 파일 기반 세션 사용으로 worker 증가 가능
+$env:WORKERS="6"
 $env:RELOAD="1"
 
 # 서버 시작

@@ -575,6 +575,66 @@ async def saml_acs(request: Request):
             return resp
         return PlainTextResponse("ACS error: exception during processing", status_code=400)
 
+    # SAML 속성 추출 - 원본 claim 이름 유지 (인증 체크 전에 먼저 추출)
+    attrs = auth.get_attributes() or {}
+    
+    # 7개 허용 필드 추출 (URL prefix 제거)
+    def pick_first(key):
+        # 정확한 키로 먼저 시도
+        v = attrs.get(key)
+        if v:
+            if isinstance(v, list):
+                return v[0] if v else None
+            return v
+        
+        # URL이 붙은 경우 찾기 (예: "http://schemas.company.com/claims/LoginId")
+        for attr_key in attrs.keys():
+            # "/" 또는 "#"으로 split해서 마지막 부분이 매칭되는지 확인
+            if '/' in attr_key or '#' in attr_key:
+                last_part = attr_key.split('/')[-1].split('#')[-1]
+                if last_part == key:
+                    v = attrs[attr_key]
+                    if isinstance(v, list):
+                        return v[0] if v else None
+                    return v
+        return None
+    
+    meta = {}
+    for field in ("Username", "LoginId", "Sabun", "DeptName", "GrdName_EN", "GrdName", "x-ms-forwarded-client-ip"):
+        val = pick_first(field)
+        if val:
+            meta[field] = val
+    
+    # 🔥 기본: 무조건 IdP로 리다이렉트 (예외: LoginId가 있으면 리다이렉트 안함)
+    login_id = meta.get("LoginId") or auth.get_nameid()
+    
+    try:
+        base_settings, _ = _load_saml_files()
+        idp_sso_url = base_settings.get("idp", {}).get("singleSignOnService", {}).get("url")
+        
+        if idp_sso_url:
+            # 예외: LoginId가 있으면 리다이렉트 안함
+            if not login_id:
+                logger.info(f"[SAML ACS] LoginId 없음 → IdP SSO로 리다이렉트: {idp_sso_url}")
+                return RedirectResponse(idp_sso_url, status_code=302)
+            else:
+                logger.info(f"[SAML ACS] LoginId 있음 → 리다이렉트 안함, 접속 허용")
+        else:
+            logger.error(f"[SAML ACS] IdP SSO URL을 찾을 수 없음")
+            if not login_id:
+                return PlainTextResponse(
+                    f"SAML 인증 실패\n\n오류: LoginId not found\n상세: SAML 응답에 LoginId attribute가 없습니다.\n\n관리자에게 문의하세요.",
+                    status_code=400
+                )
+    except Exception as e:
+        logger.error(f"[SAML ACS] IdP SSO URL 로드 실패: {e}")
+        if not login_id:
+            return PlainTextResponse(
+                f"SAML 인증 실패\n\n오류: LoginId not found\n상세: SAML 응답에 LoginId attribute가 없습니다.\n\n관리자에게 문의하세요.",
+                status_code=400
+            )
+    
+    # SAML 인증 체크 (LoginId가 있는 경우에만)
     if errors or not auth.is_authenticated():
         reason = auth.get_last_error_reason() or ""
         logger.error(f"[SAML ACS] 인증 실패: {errors} / {reason}")
@@ -622,36 +682,6 @@ async def saml_acs(request: Request):
             f"SAML 인증 실패\n\n오류: {errors or 'not_authenticated'}\n상세: {reason}\n\n관리자에게 문의하세요.",
             status_code=400
         )
-
-    # SAML 속성 추출 - 원본 claim 이름 유지
-    attrs = auth.get_attributes() or {}
-    
-    # 7개 허용 필드 추출 (URL prefix 제거)
-    def pick_first(key):
-        # 정확한 키로 먼저 시도
-        v = attrs.get(key)
-        if v:
-            if isinstance(v, list):
-                return v[0] if v else None
-            return v
-        
-        # URL이 붙은 경우 찾기 (예: "http://schemas.company.com/claims/LoginId")
-        for attr_key in attrs.keys():
-            # "/" 또는 "#"으로 split해서 마지막 부분이 매칭되는지 확인
-            if '/' in attr_key or '#' in attr_key:
-                last_part = attr_key.split('/')[-1].split('#')[-1]
-                if last_part == key:
-                    v = attrs[attr_key]
-                    if isinstance(v, list):
-                        return v[0] if v else None
-                    return v
-        return None
-    
-    meta = {}
-    for field in ("Username", "LoginId", "Sabun", "DeptName", "GrdName_EN", "GrdName", "x-ms-forwarded-client-ip"):
-        val = pick_first(field)
-        if val:
-            meta[field] = val
     
     # NameID 결정: LoginId → nameid → fallback (디버그 로그 추가)
     nameid = meta.get("LoginId") or auth.get_nameid() or "saml-user"
