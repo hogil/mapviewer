@@ -2661,11 +2661,13 @@ async def startup_event():
     except Exception:
         pass
 
+    # 🔥 라벨 로드와 인덱스 구축은 메인 워커에서만 실행
     _classification_dir().mkdir(parents=True, exist_ok=True)
-    _labels_load()
-    global CLASSES_MTIME
-    CLASSES_MTIME = _classes_stat_mtime()
-    asyncio.create_task(build_file_index_background())
+    if is_main_worker:
+        _labels_load()
+        global CLASSES_MTIME
+        CLASSES_MTIME = _classes_stat_mtime()
+        asyncio.create_task(build_file_index_background())
 
 @app.on_event("shutdown")
 async def shutdown_event():
