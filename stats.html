@@ -881,12 +881,12 @@
                 
                 html += `
                     <div class="clickable" ondblclick="showUserDetail('${user.user_id}')" style="display: grid; grid-template-columns: 100px 70px 130px 160px 70px 130px; gap: 4px; padding: 4px 8px; border-bottom: 1px solid #333; font-size: 0.9em; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
-                        <div style="color: #2196F3; font-family: monospace; overflow: hidden;" title="${userId}">${shortId}</div>
-                        <div style="color: #4CAF50; font-weight: bold; overflow: hidden;" title="${displayName}">${displayName}</div>
-                        <div style="text-align: center; color: #81C784; overflow: hidden;" title="${position}">${position}</div>
-                        <div style="text-align: center; color: #FFC107; overflow: hidden;" title="${department}">${department}</div>
-                        <div style="text-align: center; color: #2196F3; font-weight: bold;">${user.unique_days}일</div>
-                        <div style="text-align: center; color: #FF9800; overflow: hidden;" title="${lastAccess}">${lastAccess}</div>
+                        <div style="color: #64B5F6; font-weight: normal; overflow: hidden;" title="${userId}">${shortId}</div>
+                        <div style="color: #81C784; font-weight: normal; overflow: hidden;" title="${displayName}">${displayName}</div>
+                        <div style="text-align: center; color: #FFB74D; overflow: hidden;" title="${position}">${position}</div>
+                        <div style="text-align: center; color: #F06292; overflow: hidden;" title="${department}">${department}</div>
+                        <div style="text-align: center; color: #9575CD; font-weight: bold;">${user.unique_days}일</div>
+                        <div style="text-align: center; color: #4DB6AC; overflow: hidden;" title="${lastAccess}">${lastAccess}</div>
                     </div>
                 `;
             });
@@ -928,12 +928,12 @@
                 
                 html += `
                     <div class="clickable" ondblclick="showUserDetail('${user.user_id}')" style="display: grid; grid-template-columns: 100px 70px 130px 160px 70px 130px; gap: 4px; padding: 4px 8px; border-bottom: 1px solid #333; font-size: 0.9em; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2a2a2a'" onmouseout="this.style.backgroundColor='transparent'">
-                        <div style="color: #2196F3; font-family: monospace; overflow: hidden;" title="${userId}">${shortId}</div>
-                        <div style="color: #4CAF50; font-weight: bold; overflow: hidden;" title="${displayName}">${displayName}</div>
-                        <div style="text-align: center; color: #81C784; overflow: hidden;" title="${position}">${position}</div>
-                        <div style="text-align: center; color: #FFC107; overflow: hidden;" title="${department}">${department}</div>
-                        <div style="text-align: center; color: #2196F3; font-weight: bold;">${user.unique_days || 0}일</div>
-                        <div style="text-align: center; color: #FF9800; overflow: hidden;" title="${lastAccess}">${lastAccess}</div>
+                        <div style="color: #64B5F6; font-weight: normal; overflow: hidden;" title="${userId}">${shortId}</div>
+                        <div style="color: #81C784; font-weight: normal; overflow: hidden;" title="${displayName}">${displayName}</div>
+                        <div style="text-align: center; color: #FFB74D; overflow: hidden;" title="${position}">${position}</div>
+                        <div style="text-align: center; color: #F06292; overflow: hidden;" title="${department}">${department}</div>
+                        <div style="text-align: center; color: #9575CD; font-weight: bold;">${user.unique_days || 0}일</div>
+                        <div style="text-align: center; color: #4DB6AC; overflow: hidden;" title="${lastAccess}">${lastAccess}</div>
                     </div>
                 `;
             });
