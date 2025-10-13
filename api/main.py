@@ -746,6 +746,9 @@ async def saml_acs(request: Request):
             
             # ② SAML 로그인 정보로 직접 통계 업데이트 (중복 방지)
             bootlog.info(f"🔄 [SAML LOG] SAML 로그인 직접 기록: {login_id}")
+            bootlog.info(f"🔍 [SAML LOG DEBUG] meta 내용: {meta}")
+            bootlog.info(f"🔍 [SAML LOG DEBUG] client_ip: {client_ip}")
+            
             logger_instance._update_stats(
                 ip=client_ip,
                 endpoint="/saml/acs",  # SAML ACS로 기록 (리다이렉트 후 / 중복 방지)
