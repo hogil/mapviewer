@@ -105,16 +105,31 @@ class ThumbnailService:
                         optimize_coding=True  # 코딩 최적화
                     )
             except ImportError:
-                # pyvips가 없으면 Pillow 사용 (폴백)
+                # pyvips가 없으면 Pillow 사용 (폴백) - 고속 최적화
                 with Image.open(image_path) as img:
+                    # RGB 변환 최적화
                     if img.mode not in ('RGB', 'RGBA'):
                         img = img.convert('RGB')
                     
+                    # 원본이 작으면 복사만
                     if img.width <= size[0] and img.height <= size[1]:
-                        img.save(thumbnail_path, self.thumbnail_format.upper(), quality=self.thumbnail_quality, optimize=True, method=6)
+                        img.save(
+                            thumbnail_path, 
+                            self.thumbnail_format.upper(), 
+                            quality=self.thumbnail_quality, 
+                            optimize=False,  # 최적화 비활성화 (속도 우선)
+                            method=6
+                        )
                     else:
+                        # 썸네일 생성 (고속)
                         img.thumbnail(size, Image.Resampling.LANCZOS)
-                        img.save(thumbnail_path, self.thumbnail_format.upper(), quality=self.thumbnail_quality, optimize=True, method=6)
+                        img.save(
+                            thumbnail_path, 
+                            self.thumbnail_format.upper(), 
+                            quality=self.thumbnail_quality, 
+                            optimize=False,  # 최적화 비활성화 (속도 우선)
+                            method=6
+                        )
             
             generation_time = time.time() - start_time
             self.total_generation_time += generation_time
