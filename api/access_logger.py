@@ -46,18 +46,13 @@ class AccessLogger:
         self._save_interval = 10.0  # 10초마다 자동 저장
     
     def _load_stats(self) -> Dict[str, Any]:
-        """통계 데이터 로드"""
-        if STATS_LOG_FILE.exists():
-            try:
-                with open(STATS_LOG_FILE, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception:
-                pass
+        """통계 데이터 로드 - 🔥 stats.json을 읽지 않음 (쓰기만 함)"""
+        # stats.json을 읽지 않고 빈 딕셔너리 반환
         return {
             "users": {},
             "daily_stats": {},
             "monthly_stats": {},
-            "department_stats": {}  # 부서별 통계 추가
+            "department_stats": {}
         }
     
     def _save_stats(self, force: bool = False):
@@ -80,48 +75,8 @@ class AccessLogger:
             print(f"통계 저장 실패: {e}")
     
     def get_user_by_ip(self, ip: str) -> tuple:
-        """IP로 사용자 찾기 (캐시 사용) - 성능 최적화 + SAML 인증 시간 체크"""
-        import time
-        
-        # SAML 인증 유효 시간 (24시간)
-        SAML_AUTH_VALID_HOURS = 24
-        current_time = time.time()
-        
-        # 캐시에 있으면 즉시 반환 (단, SAML 인증 시간 체크)
-        if ip in self.ip_to_userid_cache:
-            cached_user_id = self.ip_to_userid_cache[ip]
-            if cached_user_id in self.stats_data.get("users", {}):
-                user_data = self.stats_data["users"][cached_user_id]
-                profile = user_data.get("profile", {})
-                
-                # 🔥 SAML 인증 시간 체크
-                last_saml_auth_time = profile.get("last_saml_auth_time", 0)
-                if last_saml_auth_time > 0:
-                    hours_since_auth = (current_time - last_saml_auth_time) / 3600
-                    if hours_since_auth > SAML_AUTH_VALID_HOURS:
-                        # 24시간이 지났으면 LoginId 무효화
-                        return (None, None)
-                
-                return (cached_user_id, profile)
-        
-        # 캐시에 없으면 검색
-        for uid, udata in self.stats_data.get("users", {}).items():
-            ip_addresses = udata.get("ip_addresses", [])
-            if ip in ip_addresses:
-                profile = udata.get("profile", {})
-                if profile and profile.get("LoginId"):
-                    # 🔥 SAML 인증 시간 체크
-                    last_saml_auth_time = profile.get("last_saml_auth_time", 0)
-                    if last_saml_auth_time > 0:
-                        hours_since_auth = (current_time - last_saml_auth_time) / 3600
-                        if hours_since_auth > SAML_AUTH_VALID_HOURS:
-                            # 24시간이 지났으면 LoginId 무효화
-                            continue
-                    
-                    # 캐시에 저장
-                    self.ip_to_userid_cache[ip] = uid
-                    return (uid, profile)
-        
+        """IP로 사용자 찾기 - 🔥 stats.json을 읽지 않음 (쓰기만 함)"""
+        # stats.json을 읽지 않고 항상 None 반환
         return (None, None)
     
     def _update_department_stats(self, user_id: str, dept_name: str, is_new_user: bool = False):
@@ -516,39 +471,40 @@ class AccessLogger:
         
         self._recent_requests[recent_key] = now_unix
         
-        # 세션 관리
-        self._update_session(ip, now_unix, endpoint)
+        # 🔥 세션 관리는 하지 않음 - stats.json 읽지 않음
         
         # 사용자별 통계 (LoginId 기준)
         # 🔥 profile이 있는 경우만 사용자 생성 (IP 사용자 생성 차단)
-        if LoginId not in self.stats_data["users"]:
-            if not profile_meta or len(profile_meta) == 0:
-                # profile이 없으면 사용자 생성 안 함 (IP 로그 차단)
-                print(f"⚠️ [SKIP CREATE] profile 없어서 사용자 생성 안 함: LoginId={LoginId}, ip={ip}")
-                return
-            
-            self.stats_data["users"][LoginId] = {
-                "primary_ip": ip,
-                "ip_addresses": [ip],
-                "total_requests": 0,
-                "unique_days": [],
-                "first_seen": today,
-                "last_seen": today,
-                "last_access_time": now_timestamp,
-                "first_access_time": now_timestamp,
-                "session_count": 0,  # 총 세션 수
-                "total_session_time": 0,  # 총 세션 시간 (초)
-                "current_session_start": now_timestamp,  # 현재 세션 시작 시간
-                "daily_requests": {},
-                "endpoints": {},
-                "sessions": [],  # 세션 히스토리
-                "profile": profile_meta,  # 🔥 profile 직접 저장
-                "user_type": "saml"  # 🔥 profile이 있으면 무조건 SAML 사용자
-            }
-            # 캐시 업데이트
-            self.ip_to_userid_cache[ip] = LoginId
-            print(f"✅ [CREATE] SAML 사용자 생성: LoginId={LoginId}, profile={list(profile_meta.keys())}")
+        # 🔥 stats.json을 읽지 않고 항상 새로운 사용자로 기록 (덮어쓰기)
+        if not profile_meta or len(profile_meta) == 0:
+            # profile이 없으면 사용자 생성 안 함 (IP 로그 차단)
+            print(f"⚠️ [SKIP CREATE] profile 없어서 사용자 생성 안 함: LoginId={LoginId}, ip={ip}")
+            return
         
+        # 🔥 stats.json을 읽지 않고 항상 새로운 사용자로 기록 (덮어쓰기)
+        self.stats_data["users"][LoginId] = {
+            "primary_ip": ip,
+            "ip_addresses": [ip],
+            "total_requests": 0,
+            "unique_days": [],
+            "first_seen": today,
+            "last_seen": today,
+            "last_access_time": now_timestamp,
+            "first_access_time": now_timestamp,
+            "session_count": 0,  # 총 세션 수
+            "total_session_time": 0,  # 총 세션 시간 (초)
+            "current_session_start": now_timestamp,  # 현재 세션 시작 시간
+            "daily_requests": {},
+            "endpoints": {},
+            "sessions": [],  # 세션 히스토리
+            "profile": profile_meta,  # 🔥 profile 직접 저장
+            "user_type": "saml"  # 🔥 profile이 있으면 무조건 SAML 사용자
+        }
+        # 캐시 업데이트
+        self.ip_to_userid_cache[ip] = LoginId
+        print(f"✅ [CREATE] SAML 사용자 생성: LoginId={LoginId}, profile={list(profile_meta.keys())}")
+        
+        # 🔥 stats.json을 읽지 않고 항상 새로운 사용자 데이터 사용
         user_data = self.stats_data["users"][LoginId]
         
         # IP 주소 업데이트 (새로운 IP면 추가 + 캐시 업데이트)
@@ -704,76 +660,9 @@ class AccessLogger:
     
     def _update_session(self, ip: str, now_unix: float, endpoint: str):
         """세션 업데이트 - 접속/재접속/세션 종료 관리"""
-        # localhost IP 제외
-        if ip in ['127.0.0.1', '::1', 'localhost']:
-            return
-            
-        # 세션 타임아웃된 사용자 정리
-        self._cleanup_expired_sessions(now_unix)
-        
-        # 현재 사용자 세션 확인
-        if ip in self.active_sessions:
-            # 기존 세션 업데이트
-            session = self.active_sessions[ip]
-            session["last_activity"] = now_unix
-            session["request_count"] += 1
-            session["last_endpoint"] = endpoint
-            
-            # 사용자 데이터의 현재 세션 시간 업데이트
-            if ip in self.stats_data["users"]:
-                user_data = self.stats_data["users"][ip]
-                session_duration = now_unix - session["start_time"]
-                user_data["current_session_duration"] = int(session_duration)
-                
-                # 세션 관련 정보만 업데이트 (통계는 _update_stats에서 처리)
-                user_data["last_seen"] = datetime.now().strftime('%Y-%m-%d')
-                user_data["last_access_time"] = datetime.fromtimestamp(now_unix).strftime('%Y-%m-%d %H:%M:%S')
-        else:
-            # 새 세션 시작
-            self.active_sessions[ip] = {
-                "start_time": now_unix,
-                "last_activity": now_unix,
-                "request_count": 1,
-                "last_endpoint": endpoint,
-                "session_id": f"{ip}_{int(now_unix)}"
-            }
-            
-            # 🔥 사용자 데이터에 새 세션 기록 (IP 키로 사용자 생성하지 않음!)
-            # stats.json에 LoginId로 등록된 사용자만 세션 관리
-            found_user_id = None
-            for uid, udata in self.stats_data["users"].items():
-                if ip in udata.get("ip_addresses", []):
-                    found_user_id = uid
-                    break
-            
-            if not found_user_id:
-                # stats.json에 없는 IP → 세션 관리 안 함 (IP 로그 차단)
-                print(f"⚠️ [SKIP SESSION] IP가 stats.json에 없음: {ip}, endpoint={endpoint}")
-                return
-            
-            user_data = self.stats_data["users"][found_user_id]
-            user_data["session_count"] += 1
-            user_data["current_session_start"] = datetime.fromtimestamp(now_unix).strftime('%Y-%m-%d %H:%M:%S')
-            user_data["current_session_duration"] = 0
-            
-            # 세션 관련 정보만 업데이트 (통계는 _update_stats에서 처리)
-            user_data["last_seen"] = datetime.now().strftime('%Y-%m-%d')
-            user_data["last_access_time"] = datetime.fromtimestamp(now_unix).strftime('%Y-%m-%d %H:%M:%S')
-            
-            # 세션 히스토리에 추가
-            session_info = {
-                "session_id": f"{ip}_{int(now_unix)}",
-                "start_time": datetime.fromtimestamp(now_unix).strftime('%Y-%m-%d %H:%M:%S'),
-                "end_time": None,  # 아직 진행 중
-                "duration": 0,
-                "request_count": 1,
-                "last_endpoint": endpoint
-            }
-            user_data["sessions"].append(session_info)
-            
-            # 최근 100개 세션만 유지
-            if len(user_data["sessions"]) > 100:
-                user_data["sessions"] = user_data["sessions"][-100:]
+        # 🔥 stats.json을 읽지 않음 - SAML 로그인은 /saml/acs에서만 처리
+        # middleware에서는 세션 관리를 하지 않음
+        return
     
     def _cleanup_expired_sessions(self, now_unix: float):
         """만료된 세션 정리 및 세션 종료 기록"""

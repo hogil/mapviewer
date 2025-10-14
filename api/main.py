@@ -846,24 +846,10 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
 
         client_ip = logger_instance.get_client_ip(request)
         
-        # 🔥 stats.json에서 LoginId를 읽지 않음 (SAML 인증을 통해서만 LoginId 사용)
-        # SAML 인증 후 stats.json에 저장되지만, 여기서는 읽지 않고 IP만 표시
-        LoginId = None
-        meta_dict = {}
+        # 🔥 stats.json을 읽지 않음 - SAML 로그인은 /saml/acs에서만 처리
+        # middleware에서는 접속 제어를 하지 않음
         
-        # 🔥 실제 접속 제어: SAML 인증 없으면 접속 차단
-        if AUTO_LOGIN:
-            # SAML 로그인 관련 엔드포인트 및 정적 파일은 제외
-            # /js/ 폴더, /static/, /main.js, /index.html 등 정적 파일 제외
-            if not endpoint.startswith(('/saml/', '/api/config', '/js/', '/static/')) and endpoint not in ['/', '/index.html', '/main.js']:
-                # stats.json을 읽지 않으므로 항상 접속 차단
-                logger.warning(f"🚫 [ACCESS DENIED] SAML 인증 없음: ip={client_ip}, endpoint={endpoint}")
-                return PlainTextResponse(
-                    f"접속이 차단되었습니다.\n\n사유: 사용자 인증 정보가 없습니다.\n\nSAML 로그인이 필요합니다.",
-                    status_code=403
-                )
-        
-        # 표시: IP만 표시 (LoginId는 SAML 인증 후에만 사용)
+        # 표시: IP만 표시
         display_user = client_ip
         
         method = request.method
