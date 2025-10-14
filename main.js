@@ -934,7 +934,21 @@ class WaferMapViewer {
         this.bindMinimapEvents();
 
         this.bindGridControlEvents();
+        
+        // 🔥 ESC 키로 그리드 모드 복귀
+        this.bindKeyboardEvents();
 
+    }
+    
+    // 🔥 키보드 이벤트 바인딩
+    bindKeyboardEvents() {
+        document.addEventListener('keydown', (e) => {
+            // ESC 키로 이미지 상세 보기 모드에서 그리드 모드로 복귀
+            if (e.key === 'Escape' && this.detailMode) {
+                e.preventDefault();
+                this.returnToGrid();
+            }
+        });
     }
 
 
@@ -9792,7 +9806,22 @@ class WaferMapViewer {
         
         
         this.hideRemoveLabelButton();
-
+        
+        // 🔥 그리드 스크롤 위치 복원
+        this.restoreGridScrollPosition();
+    }
+    
+    // 🔥 그리드 스크롤 위치 복원 헬퍼 함수
+    restoreGridScrollPosition() {
+        if (this.savedViewState && this.savedViewState.scrollTop !== undefined) {
+            setTimeout(() => {
+                const grid = document.getElementById('image-grid');
+                if (grid) {
+                    grid.scrollTop = this.savedViewState.scrollTop;
+                    console.log('✅ [RESTORE] 그리드 스크롤 복원 완료:', grid.scrollTop);
+                }
+            }, 100);
+        }
     }
 
     
@@ -13083,6 +13112,13 @@ class WaferMapViewer {
     viewSingleImage(imagePath) {
         console.log('🖼️ [VIEW] 단일 이미지 상세 보기:', imagePath);
         
+        // 그리드 스크롤 위치 저장
+        const grid = document.getElementById('image-grid');
+        if (grid && this.savedViewState) {
+            this.savedViewState.scrollTop = grid.scrollTop;
+            console.log('💾 [SAVE] 그리드 스크롤 위치 저장:', grid.scrollTop);
+        }
+        
         // 그리드 모드 해제
         this.hideGrid(false);
         
@@ -13092,6 +13128,45 @@ class WaferMapViewer {
         // 상세 보기 모드 활성화
         this.detailMode = true;
         this.detailImagePath = imagePath;
+    }
+    
+    // 🔥 그리드 모드로 복귀 (ESC 키로 호출)
+    returnToGrid() {
+        if (!this.detailMode || !this.savedViewState) {
+            console.log('⚠️ [RETURN] 복귀할 그리드 상태가 없습니다.');
+            return;
+        }
+        
+        console.log('🔄 [RETURN] 그리드 모드로 복귀');
+        
+        // 그리드 모드 활성화
+        const grid = document.getElementById('image-grid');
+        if (grid) {
+            grid.style.display = 'grid';
+        }
+        
+        this.gridMode = true;
+        this.detailMode = false;
+        
+        // 그리드 컨트롤 표시
+        const gridControls = document.getElementById('grid-controls');
+        if (gridControls) gridControls.style.display = '';
+        
+        this.dom.viewerContainer.classList.add('grid-mode');
+        this.dom.viewerContainer.classList.remove('single-image-mode');
+        this.dom.minimapContainer.style.display = 'none';
+        this.dom.imageCanvas.style.display = 'none';
+        this.dom.overlayCanvas.style.display = 'none';
+        
+        // 스크롤 위치 복원
+        if (this.savedViewState.scrollTop !== undefined) {
+            setTimeout(() => {
+                if (grid) {
+                    grid.scrollTop = this.savedViewState.scrollTop;
+                    console.log('✅ [RESTORE] 스크롤 복원 완료:', grid.scrollTop);
+                }
+            }, 100);
+        }
     }
 
     // 🔥 Label Explorer 이전 Grid 상태로 복귀
