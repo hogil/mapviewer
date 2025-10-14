@@ -472,8 +472,8 @@ async def saml_login(request: Request):
                     decoded = base64.b64decode(saml_request_encoded)
                     decompressed = zlib.decompress(decoded, -zlib.MAX_WBITS)
                     xml_content = decompressed.decode('utf-8')
-                    logger.info(f"🔑 [SAML REQUEST] Decoded XML:")
-                    for line in xml_content.split('\n')[:20]:  # 처음 20줄만
+                    logger.info(f"🔑 [SAML REQUEST] Decoded XML (전체):")
+                    for line in xml_content.split('\n'):
                         logger.info(f"  {line}")
                 except Exception as decode_err:
                     logger.warning(f"⚠️ [SAML REQUEST] 디코딩 실패: {decode_err}")
@@ -526,8 +526,8 @@ async def saml_acs(request: Request):
             # Base64 디코딩
             decoded = base64.b64decode(saml_response_encoded)
             xml_content = decoded.decode('utf-8')
-            logger.info(f"🔑 [SAML RESPONSE] Decoded XML (처음 30줄):")
-            for line in xml_content.split('\n')[:30]:
+            logger.info(f"🔑 [SAML RESPONSE] Decoded XML (전체):")
+            for line in xml_content.split('\n'):
                 logger.info(f"  {line}")
         except Exception as e:
             logger.warning(f"⚠️ [SAML RESPONSE] 디코딩 실패: {e}")
