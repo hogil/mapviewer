@@ -445,11 +445,17 @@ async def saml_login(request: Request):
         org_url = request.query_params.get("org_url")
         
         # 🔥 RelayState를 명시적으로 '/'로 설정 (어제 코드와 동일)
-        idp_login_url = auth.login(return_to='/')
         logger.info("=" * 100)
-        logger.info(f"🔐 [SAML LOGIN] IdP SSO로 리다이렉트")
-        logger.info(f"  - IdP SSO URL: {idp_login_url}")
+        logger.info(f"🔐 [SAML LOGIN] OneLogin auth.login() 호출 시작")
+        logger.info(f"  - return_to: /")
         logger.info(f"  - org_url: {org_url}")
+        logger.info("=" * 100)
+        
+        idp_login_url = auth.login(return_to='/')
+        
+        logger.info("=" * 100)
+        logger.info(f"🔐 [SAML LOGIN] OneLogin auth.login() 호출 완료")
+        logger.info(f"  - IdP SSO URL: {idp_login_url}")
         logger.info(f"  - RelayState: / (명시적 설정)")
         logger.info("=" * 100)
         
@@ -675,7 +681,11 @@ async def saml_acs(request: Request):
         bootlog.warning(f"⚠️ [SAML LOG] SAML 로그 기록 실패: {e}")
     
     # 🔥 SAML 로그인 성공 - 단순히 /로 리다이렉트
+    bootlog.info("=" * 100)
     bootlog.info(f"✅ [SAML LOGIN] 로그인 성공 - Redirect to: /")
+    bootlog.info(f"  - LoginId: {LoginId}")
+    bootlog.info(f"  - Redirect URL: /")
+    bootlog.info("=" * 100)
     
     log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"SAML 로그인: {LoginId}")
     return RedirectResponse("/", status_code=302)
