@@ -743,20 +743,24 @@ async def api_config():
 @app.get("/api/whoami")
 @app.get("/api/auth/user")  # 프론트엔드 호환성
 async def api_whoami(request: Request):
-    # 🔥 SAML 인증을 통해서만 LoginId를 가져옴 (stats.json에서 읽지 않음)
-    # SAML 인증 후 stats.json에 저장되지만, 여기서는 읽지 않고 항상 Guest 반환
-    # 프론트엔드에서 SAML 인증 후 LoginId를 직접 사용하도록 변경 필요
-    logger.info(f"🔍 [API /auth/user] SAML 인증 없음 - Guest")
-    return {
-        "authenticated": False,
-        "LoginId": "",
-        "Username": "",
-        "Sabun": "",
-        "DeptName": "",
-        "GrdName_EN": "",
-        "GrdName": "",
-        "metadata": {}
-    }
+    # 🔥 AUTO_LOGIN=False일 때만 이 엔드포인트 작동
+    # AUTO_LOGIN=True일 때는 이 엔드포인트가 호출되지 않음
+    if not AUTO_LOGIN:
+        logger.info(f"🔍 [API /auth/user] AUTO_LOGIN=False - stats.json 읽지 않음 - Guest")
+        return {
+            "authenticated": False,
+            "LoginId": "",
+            "Username": "",
+            "Sabun": "",
+            "DeptName": "",
+            "GrdName_EN": "",
+            "GrdName": "",
+            "metadata": {}
+        }
+    
+    # AUTO_LOGIN=True일 때는 이 엔드포인트가 호출되지 않음 (404 반환)
+    logger.warning(f"⚠️ [API /auth/user] AUTO_LOGIN=True - 이 엔드포인트는 사용하지 않음")
+    raise HTTPException(status_code=404, detail="AUTO_LOGIN=True일 때는 이 엔드포인트를 사용하지 않습니다")
 
 
 # ===== 사내 ADFS/STS 헬스 체크 (핑) =====
@@ -851,8 +855,8 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         if AUTO_LOGIN:
             # SAML 로그인 관련 엔드포인트 및 정적 파일은 제외
             # /js/ 폴더, /static/, /main.js, /index.html 등 정적 파일 제외
-            if not endpoint.startswith(('/saml/', '/api/auth/user', '/api/whoami', '/api/config', '/js/', '/static/')) and endpoint not in ['/', '/index.html', '/main.js']:
-                # stats.json에서 LoginId를 읽지 않으므로 항상 접속 차단
+            if not endpoint.startswith(('/saml/', '/api/config', '/js/', '/static/')) and endpoint not in ['/', '/index.html', '/main.js']:
+                # stats.json을 읽지 않으므로 항상 접속 차단
                 logger.warning(f"🚫 [ACCESS DENIED] SAML 인증 없음: ip={client_ip}, endpoint={endpoint}")
                 return PlainTextResponse(
                     f"접속이 차단되었습니다.\n\n사유: 사용자 인증 정보가 없습니다.\n\nSAML 로그인이 필요합니다.",
@@ -872,30 +876,11 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         else:
             tag = "API"
 
-        # 🔥 마우스 클릭(사용자 액션)과 관련된 엔드포인트만 stats.json 업데이트
-        user_action_endpoints = [
-            "/api/files",
-            "/api/files/recursive",
-            "/api/change-folder",
-            "/api/search",
-            "/api/classify",
-            "/api/labels",
-            "/api/classes",
-            "/saml/acs"
-        ]
+        # 🔥 stats.json 업데이트는 /saml/acs에서만 수행 (쓰기만 함, 읽지 않음)
+        # middleware에서는 stats.json을 읽거나 업데이트하지 않음
         
-        is_user_action = any(endpoint.startswith(ep) for ep in user_action_endpoints)
-        
-        if is_user_action:
-            try:
-                # stats.json 기반으로 통계 업데이트 (마우스 클릭 시에만)
-                logger_instance._update_stats(client_ip, endpoint, method, user_id_override=LoginId, meta=meta_dict)
-            except Exception:
-                pass
-        # 내부 log_access 호출은 try/except로 무시되므로, 테이블 출력은 아래 한 번만 수행
-
         note = _note_from_request(request, endpoint)
-        # IP 칼럼에 SAML claim LoginId 그대로 표시
+        # IP 칼럼에 IP만 표시 (stats.json 읽지 않음)
         log_access_row(tag=tag, ip=display_user, method=method, status=status, path=endpoint, note=note)
         return response
 

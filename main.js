@@ -3876,11 +3876,18 @@ class WaferMapViewer {
 
     // 사용자 정보 로드 및 표시
     async loadUserInfo() {
-                try {
-                        const response = await fetch('/api/auth/user');
-                        if (!response.ok) {
-                console.warn('[DEBUG] 사용자 정보 로드 실패 - response.ok = false');
-                // 인증 실패 시 Guest로 표시
+        try {
+            // 서버 설정 확인
+            const configResponse = await fetch('/api/config');
+            const config = await configResponse.json();
+            
+            // 🔥 AUTO_LOGIN=False일 때만 /api/whoami 호출
+            if (!config.AUTO_LOGIN) {
+                // AUTO_LOGIN=False일 때만 /api/whoami 호출 (하지만 항상 Guest 반환)
+                const response = await fetch('/api/auth/user');
+                const data = await response.json();
+                
+                // 항상 Guest로 표시
                 const userInfoEl = document.getElementById('user-info');
                 if (userInfoEl) {
                     userInfoEl.innerHTML = `
@@ -3890,37 +3897,15 @@ class WaferMapViewer {
                 }
                 return;
             }
-
-            const data = await response.json();
-
-            // 인증되지 않았을 때도 Guest로 표시
-            if (!data.authenticated) {
-                                const userInfoEl = document.getElementById('user-info');
-                if (userInfoEl) {
-                    userInfoEl.innerHTML = `
-                        <div style="font-weight: 600;">Guest</div>
-                        <div style="font-size: 10px; color: #666;">Anonymous</div>
-                    `;
-                }
-                return;
-            }
-
-                        const meta = data.metadata || {};
-
-            // UI 업데이트: SAML claim 원본 이름 그대로 사용
+            
+            // AUTO_LOGIN=True일 때는 /api/whoami를 호출하지 않고 바로 Guest로 표시
             const userInfoEl = document.getElementById('user-info');
             if (userInfoEl) {
-                const LoginId = meta.LoginId || data.LoginId;
-                                userInfoEl.innerHTML = `
-                    <div style="font-weight: 600;">${LoginId}</div>
-                    <div style="font-size: 10px; color: #666;">${meta.DeptName || ''}</div>
+                userInfoEl.innerHTML = `
+                    <div style="font-weight: 600;">Guest</div>
+                    <div style="font-size: 10px; color: #666;">Anonymous</div>
                 `;
             }
-
-            // 전역 변수로 저장 (로그용) - 원본 SAML claim 이름 사용
-            this.currentUser = meta;
-
-                        this.debugLog('[AUTH] 사용자 정보:', this.currentUser);
         } catch (error) {
             console.error('[DEBUG] 사용자 정보 로드 오류:', error);
             // 오류 발생 시에도 Guest로 표시
