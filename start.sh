@@ -18,26 +18,21 @@ export SSL_KEYFILE="cert/server.key"
 export THUMBNAIL_SIZE="512"
 export THUMBNAIL_FORMAT="WEBP"
 export THUMBNAIL_QUALITY="100"           # 최고 품질 (Q=100)
-export IO_THREADS="128"                  # 32코어 * 4 (I/O 스레드 증가)
-export THUMBNAIL_SEM="256"               # 32코어 * 8 (동시 썸네일 생성 대폭 증가)
+export IO_THREADS="64"                   # 32코어 * 2 (I/O 스레드)
+export THUMBNAIL_SEM="128"               # 32코어 * 4 (동시 썸네일 생성)
 
 # libvips 최적화 (pyvips - Pillow보다 10-100배 빠름)
 export VIPS_CONCURRENCY="32"             # 32코어 활용
-export VIPS_DISC_THRESHOLD="10000m"      # 10GB 임계값 (메모리 충분)
-export VIPS_MAX_CACHE="10000"            # 최대 캐시 10000개 (10배 증가)
-export VIPS_MAX_CACHE_MEM="10000m"       # 최대 캐시 메모리 10GB (10배 증가)
-export G_MESSAGES_DEBUG=""               # VIPS 로그 완전 억제
-
-# 캐시 최적화 (로드 속도 개선)
-export DIRLIST_CACHE_SIZE="8192"         # 디렉토리 리스트 캐시 8배 증가
-export THUMB_STAT_TTL_SECONDS="10"       # 캐시 유지 시간 2배 증가
-export THUMB_STAT_CACHE_CAPACITY="32768" # 썸네일 통계 캐시 4배 증가
+export VIPS_DISC_THRESHOLD="1000m"       # 1GB 임계값
+export VIPS_MAX_CACHE="1000"             # 최대 캐시 1000개
+export VIPS_MAX_CACHE_MEM="1000m"        # 최대 캐시 메모리 1GB
+export G_MESSAGES_DEBUG=""               # VIPS 로그 완전 억제 (성능 향상)
 
 # 통계 로깅
 export STATS_LOG_ENABLED="1"             # 1=통계 수집 활성화
 
 # Uvicorn 설정 (파일 기반 세션 사용으로 worker 증가 가능)
-export WORKERS="28"                      # 32코어 * 0.875 (87.5% 활용)
+export WORKERS="24"                      # 32코어 * 0.75 (안정적)
 export RELOAD="0"                        # 운영 환경에서는 0
 
 # 서버 시작
