@@ -64,72 +64,32 @@ class ThumbnailService:
             # pyvips 사용 (Pillow보다 10-100배 빠름)
             try:
                 import pyvips
-                # VIPS 로그 억제 (버전 호환성 처리)
+                # VIPS 로그 억제 (set_log_handler는 일부 버전에서만 지원)
                 try:
                     pyvips.set_log_handler(lambda domain, level, msg: None)
                 except AttributeError:
-                    # 구버전 pyvips는 set_log_handler가 없음 (무시)
+                    # set_log_handler가 없는 버전은 무시
                     pass
-                
-                # 성능 최적화: sequential 모드로 메모리 효율성 향상
-                image = pyvips.Image.new_from_file(
-                    str(image_path),
-                    access='sequential'  # 순차적 접근 모드 (메모리 효율)
-                    # fail=True 파라미터 제거 (deprecated)
-                )
+                image = pyvips.Image.new_from_file(str(image_path))
                 
                 # 원본 이미지가 이미 작으면 복사만
                 if image.width <= size[0] and image.height <= size[1]:
-                    image.write_to_file(
-                        str(thumbnail_path), 
-                        Q=self.thumbnail_quality, 
-                        strip=True,
-                        interlace=False,  # 인터레이스 비활성화 (속도 향상)
-                        optimize_coding=True  # 코딩 최적화
-                    )
+                    image.write_to_file(str(thumbnail_path), Q=self.thumbnail_quality, strip=True)
                 else:
                     # 썸네일 생성 (고품질 리샘플링)
-                    # Ubuntu 24 VIPS 호환: width와 height를 명시적으로 지정
-                    # kernel='lanczos3' - 고품질 리샘플링
-                    image = image.thumbnail_image(
-                        size[0], 
-                        height=size[1], 
-                        crop=False,
-                        kernel='lanczos3'  # Lanczos3 필터 (고품질)
-                    )
-                    image.write_to_file(
-                        str(thumbnail_path), 
-                        Q=self.thumbnail_quality, 
-                        strip=True,
-                        interlace=False,  # 인터레이스 비활성화
-                        optimize_coding=True  # 코딩 최적화
-                    )
+                    image = image.thumbnail_image(size[0], height=size[1], crop=False)
+                    image.write_to_file(str(thumbnail_path), Q=self.thumbnail_quality, strip=True)
             except ImportError:
-                # pyvips가 없으면 Pillow 사용 (폴백) - 고속 최적화
+                # pyvips가 없으면 Pillow 사용 (폴백)
                 with Image.open(image_path) as img:
-                    # RGB 변환 최적화
                     if img.mode not in ('RGB', 'RGBA'):
                         img = img.convert('RGB')
                     
-                    # 원본이 작으면 복사만
                     if img.width <= size[0] and img.height <= size[1]:
-                        img.save(
-                            thumbnail_path, 
-                            self.thumbnail_format.upper(), 
-                            quality=self.thumbnail_quality, 
-                            optimize=False,  # 최적화 비활성화 (속도 우선)
-                            method=6
-                        )
+                        img.save(thumbnail_path, self.thumbnail_format.upper(), quality=self.thumbnail_quality, optimize=True, method=6)
                     else:
-                        # 썸네일 생성 (고속)
                         img.thumbnail(size, Image.Resampling.LANCZOS)
-                        img.save(
-                            thumbnail_path, 
-                            self.thumbnail_format.upper(), 
-                            quality=self.thumbnail_quality, 
-                            optimize=False,  # 최적화 비활성화 (속도 우선)
-                            method=6
-                        )
+                        img.save(thumbnail_path, self.thumbnail_format.upper(), quality=self.thumbnail_quality, optimize=True, method=6)
             
             generation_time = time.time() - start_time
             self.total_generation_time += generation_time
@@ -137,8 +97,8 @@ class ThumbnailService:
             
             return True
             
-        except Exception:
-            # 로그 출력 제거 (성능 최적화)
+        except Exception as e:
+            print(f"썸네일 생성 실패 {image_path}: {e}")
             return False
     
     async def generate_thumbnail(
@@ -151,37 +111,38 @@ class ThumbnailService:
         thumbnail_path = self.get_thumbnail_path(image_path, size)
         cache_key = f"thumb:{thumbnail_path}|{size[0]}x{size[1]}"
         
-        # 원본 파일 존재 확인 (최적화: 한 번만 확인)
+        # 원본 파일 존재 확인
+        if not image_path.exists():
+            return None
+        
         try:
-            if not image_path.exists():
-                return None
             image_mtime = image_path.stat().st_mtime
         except Exception:
             return None
         
-        # 썸네일이 존재하고 최신인지 확인 (최적화: 한 번만 stat 호출)
-        try:
-            if thumbnail_path.exists():
-                thumb_stat = thumbnail_path.stat()
-                if thumb_stat.st_size > 0 and thumb_stat.st_mtime >= image_mtime:
+        # 썸네일이 존재하고 최신인지 확인
+        if thumbnail_path.exists() and thumbnail_path.stat().st_size > 0:
+            try:
+                thumb_mtime = thumbnail_path.stat().st_mtime
+                if thumb_mtime >= image_mtime:
                     # 캐시에 기록
                     cache_manager.thumb_cache.set(cache_key, True)
                     self.cache_hits += 1
                     return thumbnail_path
-        except Exception:
-            pass
+            except Exception:
+                pass
         
         # 동시 생성 수 제한
         async with self.semaphore:
-            # 다시 한번 확인 (레이스 컨디션 방지) - 최적화: 한 번만 stat 호출
-            try:
-                if thumbnail_path.exists():
-                    thumb_stat = thumbnail_path.stat()
-                    if thumb_stat.st_size > 0 and thumb_stat.st_mtime >= image_mtime:
+            # 다시 한번 확인 (레이스 컨디션 방지)
+            if thumbnail_path.exists() and thumbnail_path.stat().st_size > 0:
+                try:
+                    thumb_mtime = thumbnail_path.stat().st_mtime
+                    if thumb_mtime >= image_mtime:
                         cache_manager.thumb_cache.set(cache_key, True)
                         return thumbnail_path
-            except Exception:
-                pass
+                except Exception:
+                    pass
             
             # 기존 썸네일 삭제 (구버전인 경우)
             if thumbnail_path.exists():
@@ -241,13 +202,10 @@ class ThumbnailService:
             try:
                 image_mtime = image_path.stat().st_mtime
                 
-                # 최적화: 한 번만 stat 호출
-                if thumbnail_path.exists():
-                    thumb_stat = thumbnail_path.stat()
-                    if thumb_stat.st_size > 0 and thumb_stat.st_mtime >= image_mtime:
-                        existing_thumbnails.append(path_str)
-                    else:
-                        paths_to_generate.append((path_str, image_path))
+                if (thumbnail_path.exists() and 
+                    thumbnail_path.stat().st_size > 0 and 
+                    thumbnail_path.stat().st_mtime >= image_mtime):
+                    existing_thumbnails.append(path_str)
                 else:
                     paths_to_generate.append((path_str, image_path))
             except Exception:

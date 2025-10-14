@@ -856,8 +856,7 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         endpoint = str(request.url.path)
         
         # 🔥 로그 스킵 대상 엔드포인트 체크 (통계 업데이트 전에 먼저 체크)
-        # 썸네일, 이미지, 파일 목록 등은 로그에서 제외 (성능 최적화)
-        skip_prefix = ["/favicon.ico", "/static/", "/js/", "/api/files/all", "/api/stats", "/api/stats/", "/stats", "/saml/login", "/saml/acs", "/saml/metadata", "/saml/sls", "/api/thumbnail", "/api/image", "/api/files"]
+        skip_prefix = ["/favicon.ico", "/static/", "/js/", "/api/files/all", "/api/stats", "/api/stats/", "/stats", "/saml/login", "/saml/acs", "/saml/metadata", "/saml/sls", "/api/thumbnail", "/api/image"]
         
         # 루트(/) 페이지는 SAML 로그인 시에만 직접 기록하므로 미들웨어에서 스킵
         skip_endpoints = ["/", "/index.html"]
@@ -865,11 +864,6 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
             return response
         
         if any(endpoint.startswith(p) for p in skip_prefix):
-            return response
-
-        # 🔥 마우스 클릭(분류 작업)만 로그에 기록
-        # 나머지 API 요청은 로그에서 제외 (성능 최적화)
-        if not endpoint.startswith("/api/classify"):
             return response
 
         client_ip = logger_instance.get_client_ip(request)
@@ -883,8 +877,12 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         method = request.method
         status = response.status_code
 
-        # 분류 작업만 ACTION 태그로 기록
-        tag = "ACTION"
+        if endpoint.startswith(("/api/thumbnail", "/api/image")):
+            tag = "IMAGE"
+        elif endpoint.startswith("/api/classify"):
+            tag = "ACTION"
+        else:
+            tag = "API"
 
         # 🔥 stats.json 업데이트는 /saml/acs에서만 수행 (쓰기만 함, 읽지 않음)
         # middleware에서는 stats.json을 읽거나 업데이트하지 않음
@@ -920,7 +918,7 @@ def safe_resolve_path(path: Optional[str]) -> Path:
         if not str(target).startswith(str(ROOT_DIR)):
             raise HTTPException(status_code=400, detail="Invalid path")
         
-        # 로그 제거 (성능 최적화)
+        logger.info(f"🔍 [safe_resolve_path] input: {path}, normalized: {normalized}, target: {target}")
         return target
     except HTTPException:
         raise
@@ -1137,71 +1135,37 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
         # 썸네일 디렉토리 생성
         thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # pyvips 사용 (Pillow보다 10-100배 빠름) - 고속 최적화
+        # pyvips 사용 (Pillow보다 10-100배 빠름)
         try:
             import pyvips
-            # VIPS 로그 억제 (버전 호환성 처리)
+            # VIPS 로그 억제 (set_log_handler는 일부 버전에서만 지원)
             try:
                 pyvips.set_log_handler(lambda domain, level, msg: None)
             except AttributeError:
+                # set_log_handler가 없는 버전은 무시
                 pass
-            
-            # Sequential 모드로 고속 로드
-            image = pyvips.Image.new_from_file(
-                str(image_path),
-                access='sequential'
-                # fail=True 파라미터 제거 (deprecated)
-            )
+            image = pyvips.Image.new_from_file(str(image_path))
             
             # 원본 이미지가 이미 작으면 복사만
             if image.width <= size[0] and image.height <= size[1]:
-                image.write_to_file(
-                    str(thumbnail_path), 
-                    Q=THUMBNAIL_QUALITY, 
-                    strip=True,
-                    interlace=False,
-                    optimize_coding=True
-                )
+                image.write_to_file(str(thumbnail_path), Q=THUMBNAIL_QUALITY, strip=True)
             else:
                 # 썸네일 생성 (고품질 리샘플링)
-                image = image.thumbnail_image(
-                    size[0], 
-                    height=size[1], 
-                    crop=False,
-                    kernel='lanczos3'
-                )
-                image.write_to_file(
-                    str(thumbnail_path), 
-                    Q=THUMBNAIL_QUALITY, 
-                    strip=True,
-                    interlace=False,
-                    optimize_coding=True
-                )
+                image = image.thumbnail_image(size[0], height=size[1], crop=False)
+                image.write_to_file(str(thumbnail_path), Q=THUMBNAIL_QUALITY, strip=True)
         except ImportError:
-            # pyvips가 없으면 Pillow 사용 (폴백) - 고속 최적화
+            # pyvips가 없으면 Pillow 사용 (폴백)
             with Image.open(image_path) as img:
                 if img.mode not in ('RGB', 'RGBA'):
                     img = img.convert('RGB')
                 
                 if img.width <= size[0] and img.height <= size[1]:
-                    img.save(
-                        thumbnail_path, 
-                        THUMBNAIL_FORMAT.upper(), 
-                        quality=THUMBNAIL_QUALITY, 
-                        optimize=False,  # 최적화 비활성화 (속도 우선)
-                        method=6
-                    )
+                    img.save(thumbnail_path, THUMBNAIL_FORMAT.upper(), quality=THUMBNAIL_QUALITY, optimize=True, method=6)
                 else:
                     img.thumbnail(size, Image.Resampling.LANCZOS)
-                    img.save(
-                        thumbnail_path, 
-                        THUMBNAIL_FORMAT.upper(), 
-                        quality=THUMBNAIL_QUALITY, 
-                        optimize=False,  # 최적화 비활성화 (속도 우선)
-                        method=6
-                    )
-    except Exception:
-        # 로그 제거 (성능 최적화)
+                    img.save(thumbnail_path, THUMBNAIL_FORMAT.upper(), quality=THUMBNAIL_QUALITY, optimize=True, method=6)
+    except Exception as e:
+        logger.error(f"동기 썸네일 생성 실패: {image_path} -> {thumbnail_path}, 오류: {e}")
         raise
 
 async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optional[Path]:
@@ -1246,9 +1210,8 @@ async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optiona
             if thumb.exists():
                 try:
                     thumb.unlink()
-                except Exception:
-                    # 로그 제거 (성능 최적화)
-                    pass
+                except Exception as e:
+                    logger.warning(f"기존 썸네일 삭제 실패: {thumb}, 오류: {e}")
             
             # 새 썸네일 생성
             gen_start = time.time()
@@ -1267,8 +1230,8 @@ async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optiona
             except Exception as e:
                 return None
                 
-    except Exception:
-        # 로그 제거 (성능 최적화)
+    except Exception as e:
+        logger.error(f"썸네일 생성 중 예외 발생: {image_path}, 오류: {e}")
         return None
 
 def maybe_304(request: Request, st) -> Optional[Response]:
@@ -1326,14 +1289,7 @@ async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
                 items.sort(key=lambda x: (0 if x['type']=='directory' and x['name'].lower()==prefer_low else 1, x['name'].lower()), reverse=True)
             except Exception:
                 pass
-        # 로드 속도 개선: 캐시 헤더 추가 (5초 캐시)
-        return JSONResponse(
-            {"success": True, "items": items},
-            headers={
-                "Cache-Control": "public, max-age=5, must-revalidate",
-                "X-Cache": "HIT"
-            }
-        )
+        return {"success": True, "items": items}
     except Exception as e:
         logger.exception(f"폴더 조회 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1368,37 +1324,32 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
     # 디렉토리 생성
     pyramid_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 로그 제거 (성능 최적화)
+    logger.info(f"🚀 [SPEED PYRAMID] 시작: {image_path.name} → level={level}")
 
     try:
         # PyVips로 초고속 처리 시도
         import pyvips
-        # VIPS 로그 억제 (버전 호환성 처리)
-        try:
-            pyvips.set_log_handler(lambda domain, level, msg: None)
-        except AttributeError:
-            # 구버전 pyvips는 set_log_handler가 없음 (무시)
-            pass
+        # VIPS 로그 억제 (Ubuntu 24에서 경고 메시지 방지)
+        pyvips.set_log_handler(lambda domain, level, msg: None)
 
         # 🚀 순차 접근 모드로 이미지 로드 (메모리 효율 & 속도 최적화)
         image = pyvips.Image.new_from_file(str(image_path), access='sequential')
-        # fail=True 파라미터 제거 (deprecated)
 
         orig_w, orig_h = image.width, image.height
         new_w = int(orig_w * level)
         new_h = int(orig_h * level)
 
-        # 로그 제거 (성능 최적화)
+        logger.info(f"🚀 [SPEED SIZE] 원본={orig_w}×{orig_h} → 새크기={new_w}×{new_h}")
 
         # 🚀 고품질 리사이즈: Lanczos3 (최고 품질)
         if level >= 1.0:
             # Level 1.0: 원본 복사
             resized = image
-            # 로그 제거 (성능 최적화)
+            logger.info(f"🚀 [ORIGINAL COPY] Level 1.0 - 원본 복사")
         else:
             # 모든 레벨: Lanczos3 (최고 품질)
             resized = image.resize(level, kernel='lanczos3')
-            # 로그 제거 (성능 최적화)
+            logger.info(f"🚀 [HIGH QUALITY] Level {level} - Lanczos3")
 
         # 🚀 고품질 JPEG 저장 (Q=100, 빠른 저장 우선)
         resized.write_to_file(
@@ -1409,19 +1360,18 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
             optimize_coding=False  # Huffman 최적화 비활성화 (속도 우선)
         )
 
-        # 로그 제거 (성능 최적화)
+        logger.info(f"🚀 [SPEED SAVE] {pyramid_path} ({new_w}×{new_h})")
 
         # 파일 확인
         if pyramid_path.exists():
-            # 로그 제거 (성능 최적화)
-            pass
+            file_size = pyramid_path.stat().st_size
+            logger.info(f"✅ [SPEED SUCCESS] 파일크기: {file_size} bytes")
         else:
-            # 로그 제거 (성능 최적화)
-            pass
+            logger.error(f"❌ [SPEED FAILED] 파일 생성 실패")
 
     except ImportError:
         # PyVips가 없으면 Pillow 사용
-        # 로그 제거 (성능 최적화)
+        logger.info(f"🚀 [PILLOW FALLBACK] PyVips 없음 - Pillow 사용")
 
         from PIL import Image
 
@@ -1430,7 +1380,7 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
             new_w = int(orig_w * level)
             new_h = int(orig_h * level)
 
-            # 로그 제거 (성능 최적화)
+            logger.info(f"🚀 [PILLOW SIZE] 원본={orig_w}×{orig_h} → 새크기={new_w}×{new_h}")
 
             # 리사이즈 (LANCZOS: 최고 품질)
             resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
@@ -1438,19 +1388,18 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
             # JPEG로 저장 (Q=100, 최고 품질)
             resized.save(pyramid_path, format="JPEG", quality=100, optimize=False)
 
-            # 로그 제거 (성능 최적화)
+            logger.info(f"🚀 [PILLOW SAVE] {pyramid_path} ({new_w}×{new_h})")
 
-    except Exception:
-        # 로그 제거 (성능 최적화)
+    except Exception as e:
+        logger.exception(f"🚀 [SPEED ERROR] 피라미드 생성 실패: {e}")
 
         # 실패 시 원본 복사
         try:
             import shutil
             shutil.copy2(image_path, pyramid_path)
-            # 로그 제거 (성능 최적화)
-        except Exception:
-            # 로그 제거 (성능 최적화)
-            pass
+            logger.info(f"🚀 [SPEED FALLBACK] 원본 복사: {pyramid_path}")
+        except Exception as copy_error:
+            logger.exception(f"🚀 [SPEED COPY FAILED] {copy_error}")
             raise
 
 @app.get("/api/image/size")
@@ -1513,20 +1462,22 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
         if not image_path.exists() or not image_path.is_file():
             raise HTTPException(status_code=404, detail="Image not found")
 
-        # 로그 제거 (성능 최적화)
+        logger.info(f"🚀 [IMAGE API] 요청: path={path}, level={level}")
+        logger.info(f"🚀 [IMAGE API] 해석된 경로: {image_path}")
+        logger.info(f"🚀 [IMAGE API] ROOT_DIR: {ROOT_DIR}")
 
         # 🎯 피라미드 레벨이 요청된 경우
         if level is not None:
-            # 로그 제거 (성능 최적화)
+            logger.info(f"🎯 [PYRAMID MODE] 활성화됨")
 
             # 레벨 검증
             if level not in config.PYRAMID_LEVELS:
                 level = min(config.PYRAMID_LEVELS, key=lambda x: abs(x - level))
-                # 로그 제거 (성능 최적화)
+                logger.info(f"🎯 [LEVEL FIXED] {level}")
 
             # 🚀 Level 1.0은 원본 파일 직접 반환 (최고속)
             if level >= 1.0:
-                # 로그 제거 (성능 최적화)
+                logger.info(f"🚀 [ORIGINAL DIRECT] Level 1.0 - 원본 파일 직접 반환")
                 st = image_path.stat()
                 headers = {
                     "Cache-Control": "public, max-age=31536000, immutable",  # 1년 캐시
@@ -1556,13 +1507,13 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
                 stem = f"file_{stem}"
 
             pyramid_path = pyramid_dir / f"{stem}_L{int(level*100)}.jpg"
-            # 로그 제거 (성능 최적화)
+            logger.info(f"🎯 [PYRAMID PATH] {pyramid_path}")
 
             # 🚀 캐시 확인: 이미 존재하고 최신이면 즉시 반환
             image_mtime = image_path.stat().st_mtime
             if pyramid_path.exists() and pyramid_path.stat().st_size > 0:
                 if pyramid_path.stat().st_mtime >= image_mtime:
-                    # 로그 제거 (성능 최적화)
+                    logger.info(f"✅ [CACHE HIT] 캐시된 피라미드 사용: {pyramid_path}")
                     st = pyramid_path.stat()
                     headers = {
                         "Cache-Control": "public, max-age=31536000, immutable",
@@ -1574,14 +1525,14 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
                     return FileResponse(pyramid_path, headers=headers)
 
             # 캐시 미스: 피라미드 이미지 생성
-            # 로그 제거 (성능 최적화)
+            logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}")
             _generate_pyramid_sync(image_path, pyramid_path, level)
-            # 로그 제거 (성능 최적화)
+            logger.info(f"🎯 [GENERATE COMPLETE] {pyramid_path}")
 
             # 생성된 파일 확인 및 반환
             if pyramid_path.exists():
                 st = pyramid_path.stat()
-                # 로그 제거 (성능 최적화)
+                logger.info(f"✅ [PYRAMID SUCCESS] {pyramid_path} ({st.st_size} bytes)")
 
                 headers = {
                     "Cache-Control": "public, max-age=31536000, immutable",
@@ -1592,18 +1543,18 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
                 }
                 return FileResponse(pyramid_path, headers=headers)
             else:
-                # 로그 제거 (성능 최적화)
+                logger.error(f"❌ [GENERATION FAILED] {pyramid_path}")
                 raise HTTPException(status_code=500, detail="Pyramid generation failed")
         else:
             # 원본 이미지 반환
-            # 로그 제거 (성능 최적화)
+            logger.info(f"🎯 [ORIGINAL MODE] {image_path}")
             st = image_path.stat()
             headers = {"Cache-Control": "public, max-age=86400", "ETag": compute_etag(st)}
             return FileResponse(image_path, headers=headers)
 
-    except Exception:
-        # 로그 제거 (성능 최적화)
-        raise HTTPException(status_code=500, detail="Image API error")
+    except Exception as e:
+        logger.exception(f"❌ [IMAGE API ERROR] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/thumbnail")
 async def get_thumbnail(request: Request, path: str, size: int = THUMBNAIL_SIZE_DEFAULT):
@@ -1648,18 +1599,17 @@ async def get_thumbnail(request: Request, path: str, size: int = THUMBNAIL_SIZE_
                 headers = {"Cache-Control": "public, max-age=604800, immutable", "ETag": compute_etag(st)}
                 return FileResponse(thumb, headers=headers)
             else:
-                # 썸네일 생성 실패 - 원본 이미지 제공
-                print(f"⚠️ 썸네일 생성 실패: {image_path} -> 원본 제공")
+                # 썸네일 생성 실패 시 원본 이미지 제공
+                logger.warning(f"썸네일 생성 실패, 원본 이미지 제공: {image_path}")
                 return await get_image(request, path)
-        except Exception as e:
-            # 썸네일 생성 실패 - 원본 이미지 제공
-            print(f"⚠️ 썸네일 생성 예외: {image_path} -> {e} -> 원본 제공")
+        except Exception as thumb_error:
+            logger.warning(f"썸네일 생성 실패, 원본 이미지 제공: {thumb_error}")
             return await get_image(request, path)
     except HTTPException:
         raise
-    except Exception:
-        # 로그 제거 (성능 최적화)
-        raise HTTPException(status_code=500, detail="Thumbnail generation failed")
+    except Exception as e:
+        logger.exception(f"썸네일 제공 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"Thumbnail generation failed: {str(e)}")
 
 class PreloadRequest(BaseModel):
     paths: List[str] = Field(..., description="썸네일을 미리 생성할 이미지 경로 목록")
@@ -1712,9 +1662,9 @@ async def preload_thumbnails(request: Request, preload_req: PreloadRequest):
             "valid_paths": len(valid_paths),
             "processed": len(results)
         }
-    except Exception:
-        # 로그 제거 (성능 최적화)
-        raise HTTPException(status_code=500, detail="Preload failed")
+    except Exception as e:
+        logger.exception(f"썸네일 preload 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"Preload failed: {str(e)}")
 
 @app.get("/api/search")
 async def search_files(q: str = Query(..., description="파일명 검색(대소문자 무시, 부분일치)"),
@@ -1741,7 +1691,10 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
 
         # 🔥 썸네일 캐시 초기화 (매 검색마다)
         THUMB_STAT_CACHE.clear()
-        # 로그 제거 (성능 최적화)
+        logger.info("🔍 [SEARCH DEBUG] 썸네일 캐시 초기화 완료")
+        
+        # 🔍 썸네일 요청 카운터 리셋 (새로운 검색)
+        logger.info("🔍 [SEARCH DEBUG] 썸네일 요청 카운터 리셋")
 
         # 🔥 current_folder가 ROOT_DIR과 다른 경우에만 필터링 적용
         if current_folder.resolve() != ROOT_DIR.resolve():
@@ -2450,7 +2403,7 @@ async def change_folder(request: Request):
         
         # 🔍 썸네일 요청 카운터 리셋 (새로운 폴더)
         global INDEX_READY, INDEX_BUILDING
-        # 로그 제거 (성능 최적화)
+        logger.info("🔍 [CHANGE_FOLDER DEBUG] 썸네일 요청 카운터 리셋")
         
         INDEX_READY = False; INDEX_BUILDING = False
 
