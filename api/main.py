@@ -444,13 +444,17 @@ async def saml_login(request: Request):
         auth = _saml_auth(request)
         org_url = request.query_params.get("org_url")
         
-        # 🔥 RelayState를 설정하지 않으면 기본값 사용 (도메인/saml/login)
-        idp_login_url = auth.login()
+        # 🔥 RelayState를 현재 요청 URL로 설정 (무한 루프 방지)
+        current_url = str(request.url.path)
+        if request.url.query:
+            current_url += f"?{request.url.query}"
+        
+        idp_login_url = auth.login(return_to=current_url)
         logger.info("=" * 100)
         logger.info(f"🔐 [SAML LOGIN] IdP SSO로 리다이렉트")
         logger.info(f"  - IdP SSO URL: {idp_login_url}")
         logger.info(f"  - org_url: {org_url}")
-        logger.info(f"  - RelayState: 기본값 사용 (도메인/saml/login)")
+        logger.info(f"  - RelayState: {current_url} (현재 요청 URL)")
         logger.info("=" * 100)
         
         # SAMLRequest 파라미터 추출 및 디코딩
@@ -674,11 +678,20 @@ async def saml_acs(request: Request):
     except Exception as e:
         bootlog.warning(f"⚠️ [SAML LOG] SAML 로그 기록 실패: {e}")
     
-    # 쿠키 사용 안 함 - SAML 로그인 정보는 메모리에 저장
-    bootlog.info(f"✅ [SAML LOGIN] 로그인 성공 - Redirect to: /")
+    # 🔥 RelayState 확인하여 리다이렉트 (무한 루프 방지)
+    relay_state = form.get('RelayState', '/')
+    if relay_state == '/saml/login':
+        # /saml/login으로 돌아오면 무한 루프 방지를 위해 /로 리다이렉트
+        relay_state = '/'
+    
+    # 🔥 무한 루프 방지: SAML 로그인 성공 플래그 추가
+    if relay_state == '/':
+        relay_state = '/?saml_success=true'
+    
+    bootlog.info(f"✅ [SAML LOGIN] 로그인 성공 - Redirect to: {relay_state}")
     
     log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"SAML 로그인: {LoginId}")
-    return RedirectResponse("/", status_code=302)
+    return RedirectResponse(relay_state, status_code=302)
 
 @app.get("/saml/dev-login")
 async def saml_dev_login(request: Request):

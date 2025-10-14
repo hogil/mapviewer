@@ -14566,6 +14566,15 @@ if (document.readyState === 'loading') {
 // AUTO_LOGIN 체크 함수
 async function checkAutoLogin() {
     try {
+        // 🔥 URL 파라미터 확인: SAML 로그인 성공 후에는 재시도 안 함
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('saml_success') === 'true') {
+            console.log('SAML 로그인 성공 - 재시도 안 함');
+            // URL 파라미터 제거
+            window.history.replaceState({}, '', '/');
+            return;
+        }
+        
         // 서버 설정 확인
         const configResponse = await fetch('/api/config');
         const config = await configResponse.json();
