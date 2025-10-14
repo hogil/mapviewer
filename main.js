@@ -12636,11 +12636,11 @@ class WaferMapViewer {
             this.savedViewState = {
                 type: 'grid',
                 images: [...images],
-                scrollTop: 0
+                scrollTop: grid ? grid.scrollTop : 0
             };
         }
         if (!skipSaveState) {
-            console.log('💾 [SAVE] showGrid - Grid 상태 저장:', images.length, '개');
+            console.log('💾 [SAVE] showGrid - Grid 상태 저장:', images.length, '개, scrollTop:', grid?.scrollTop);
         }
 
         // 🔥 그리드를 명시적으로 표시 (display: none에서 복원)
@@ -13105,6 +13105,21 @@ class WaferMapViewer {
         
         if (grid) {
             grid.style.display = 'grid';
+            
+            // 🔥 그리드 스크롤 이벤트 리스너 추가 (Wafer Map Explorer에서만)
+            if (!this._gridScrollListenerAdded) {
+                grid.addEventListener('scroll', () => {
+                    // Label Explorer가 열려있지 않을 때만 스크롤 저장
+                    const labelModal = document.getElementById('add-label-modal');
+                    if (!labelModal || labelModal.style.display === 'none') {
+                        if (this.savedViewState) {
+                            this.savedViewState.scrollTop = grid.scrollTop;
+                            console.log('💾 [SCROLL-AUTO-SAVE] 스크롤 위치 저장:', grid.scrollTop);
+                        }
+                    }
+                });
+                this._gridScrollListenerAdded = true;
+            }
         }
     }
 
@@ -13728,13 +13743,20 @@ class WaferMapViewer {
         });
 
         // 🔥 Wafer Map Explorer에서 이미지 선택 시 savedViewState 업데이트
-                if (this.gridMode && this.selectedImages && this.selectedImages.length > 0) {
-            this.savedViewState = {
-                type: 'grid',
-                images: [...this.selectedImages],
-                scrollTop: grid ? grid.scrollTop : 0
-            };
-            console.log('💾 [AUTO-SAVE] Grid 선택 변경 시 savedViewState 업데이트:', this.selectedImages.length, '개 이미지, scrollTop:', grid?.scrollTop);
+        if (this.gridMode && this.selectedImages && this.selectedImages.length > 0) {
+            const grid = document.getElementById('image-grid');
+            const labelModal = document.getElementById('add-label-modal');
+            const isLabelModalOpen = labelModal && labelModal.style.display !== 'none';
+            
+            // Label Explorer가 열려있지 않을 때만 스크롤 저장
+            if (!isLabelModalOpen) {
+                this.savedViewState = {
+                    type: 'grid',
+                    images: [...this.selectedImages],
+                    scrollTop: grid ? grid.scrollTop : 0
+                };
+                console.log('💾 [AUTO-SAVE] Grid 선택 변경 시 savedViewState 업데이트:', this.selectedImages.length, '개 이미지, scrollTop:', grid?.scrollTop);
+            }
         } else {
             console.warn('⚠️ [AUTO-SAVE] savedViewState 저장 조건 미충족:', {
                 gridMode: this.gridMode,
@@ -13928,13 +13950,19 @@ class WaferMapViewer {
 
         // 🔥 그리드에서 단일 이미지 모드로 전환 시 savedViewState 업데이트
         const grid = document.getElementById('image-grid');
-                if (this.selectedImages && this.selectedImages.length > 0) {
-            this.savedViewState = {
-                type: 'grid',
-                images: [...this.selectedImages],
-                scrollTop: grid ? grid.scrollTop : 0
-            };
-            console.log('💾 [AUTO-SAVE] 단일 이미지 모드 진입 시 savedViewState 업데이트:', this.selectedImages.length, '개 이미지, scrollTop:', grid?.scrollTop);
+        const labelModal = document.getElementById('add-label-modal');
+        const isLabelModalOpen = labelModal && labelModal.style.display !== 'none';
+        
+        if (this.selectedImages && this.selectedImages.length > 0) {
+            // Label Explorer가 열려있지 않을 때만 스크롤 저장
+            if (!isLabelModalOpen) {
+                this.savedViewState = {
+                    type: 'grid',
+                    images: [...this.selectedImages],
+                    scrollTop: grid ? grid.scrollTop : 0
+                };
+                console.log('💾 [AUTO-SAVE] 단일 이미지 모드 진입 시 savedViewState 업데이트:', this.selectedImages.length, '개 이미지, scrollTop:', grid?.scrollTop);
+            }
         } else {
             console.warn('⚠️ [AUTO-SAVE] enterSingleImageMode: savedViewState 저장 실패 - selectedImages 없음');
         }
