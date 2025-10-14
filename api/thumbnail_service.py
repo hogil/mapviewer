@@ -54,31 +54,37 @@ class ThumbnailService:
         thumbnail_path: Path, 
         size: Tuple[int, int]
     ) -> bool:
-        """동기 썸네일 생성"""
+        """동기 썸네일 생성 (최적화)"""
         try:
             start_time = time.time()
             
             # 썸네일 디렉토리 생성
             thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
             
-            # 이미지 열기 및 썸네일 생성
+            # 이미지 열기 및 썸네일 생성 (최적화 옵션)
             with Image.open(image_path) as img:
+                # RGB 모드로 변환 (성능 향상)
+                if img.mode not in ('RGB', 'RGBA'):
+                    img = img.convert('RGB')
+                
                 # 원본 이미지가 이미 작으면 복사만
                 if img.width <= size[0] and img.height <= size[1]:
                     img.save(
                         thumbnail_path, 
                         self.thumbnail_format.upper(), 
                         quality=self.thumbnail_quality, 
-                        optimize=True
+                        optimize=True,
+                        method=6  # 최고 압축 메서드
                     )
                 else:
-                    # 썸네일 생성 (고품질 리샘플링)
+                    # 썸네일 생성 (고품질 리샘플링 + 최적화)
                     img.thumbnail(size, Image.Resampling.LANCZOS)
                     img.save(
                         thumbnail_path, 
                         self.thumbnail_format.upper(), 
                         quality=self.thumbnail_quality, 
-                        optimize=True
+                        optimize=True,
+                        method=6  # 최고 압축 메서드
                     )
             
             generation_time = time.time() - start_time
