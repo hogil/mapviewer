@@ -20,9 +20,12 @@ export THUMBNAIL_FORMAT="WEBP"
 export THUMBNAIL_QUALITY="90"            # 품질과 속도 균형
 export IO_THREADS="64"                   # 32코어 * 2 (I/O 스레드)
 export THUMBNAIL_SEM="128"               # 32코어 * 4 (동시 썸네일 생성)
-export PYVIPS_CONCURRENCY="8192"         # vips 동시성
-export PYVIPS_CACHE_SIZE="32767"         # 캐시 크기
-export PYVIPS_MEMORY_ALIGN="64"          # 메모리 정렬
+
+# libvips 최적화 (pyvips - Pillow보다 10-100배 빠름)
+export VIPS_CONCURRENCY="32"             # 32코어 활용
+export VIPS_DISC_THRESHOLD="1000m"       # 1GB 임계값
+export VIPS_MAX_CACHE="1000"             # 최대 캐시 1000개
+export VIPS_MAX_CACHE_MEM="1000m"        # 최대 캐시 메모리 1GB
 
 # 통계 로깅
 export STATS_LOG_ENABLED="1"             # 1=통계 수집 활성화

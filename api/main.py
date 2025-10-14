@@ -1159,31 +1159,29 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
         # 썸네일 디렉토리 생성
         thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # 이미지 열기 및 썸네일 생성 (최적화 옵션)
-        with Image.open(image_path) as img:
-            # RGB 모드로 변환 (성능 향상)
-            if img.mode not in ('RGB', 'RGBA'):
-                img = img.convert('RGB')
+        # pyvips 사용 (Pillow보다 10-100배 빠름)
+        try:
+            import pyvips
+            image = pyvips.Image.new_from_file(str(image_path))
             
             # 원본 이미지가 이미 작으면 복사만
-            if img.width <= size[0] and img.height <= size[1]:
-                img.save(
-                    thumbnail_path, 
-                    THUMBNAIL_FORMAT.upper(), 
-                    quality=THUMBNAIL_QUALITY, 
-                    optimize=True,
-                    method=6  # 최고 압축 메서드
-                )
+            if image.width <= size[0] and image.height <= size[1]:
+                image.write_to_file(str(thumbnail_path), Q=THUMBNAIL_QUALITY, strip=True)
             else:
-                # 썸네일 생성 (고품질 리샘플링 + 최적화)
-                img.thumbnail(size, Image.Resampling.LANCZOS)
-                img.save(
-                    thumbnail_path, 
-                    THUMBNAIL_FORMAT.upper(), 
-                    quality=THUMBNAIL_QUALITY, 
-                    optimize=True,
-                    method=6  # 최고 압축 메서드
-                )
+                # 썸네일 생성 (고품질 리샘플링)
+                image = image.thumbnail_image(size[0], size=size[0], height=size[1], crop=False)
+                image.write_to_file(str(thumbnail_path), Q=THUMBNAIL_QUALITY, strip=True)
+        except ImportError:
+            # pyvips가 없으면 Pillow 사용 (폴백)
+            with Image.open(image_path) as img:
+                if img.mode not in ('RGB', 'RGBA'):
+                    img = img.convert('RGB')
+                
+                if img.width <= size[0] and img.height <= size[1]:
+                    img.save(thumbnail_path, THUMBNAIL_FORMAT.upper(), quality=THUMBNAIL_QUALITY, optimize=True, method=6)
+                else:
+                    img.thumbnail(size, Image.Resampling.LANCZOS)
+                    img.save(thumbnail_path, THUMBNAIL_FORMAT.upper(), quality=THUMBNAIL_QUALITY, optimize=True, method=6)
     except Exception as e:
         logger.error(f"동기 썸네일 생성 실패: {image_path} -> {thumbnail_path}, 오류: {e}")
         raise
