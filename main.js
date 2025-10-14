@@ -14591,7 +14591,8 @@ async function checkAutoLogin() {
             const loginUrl = config.DEFAULT_ORG_URL 
                 ? `/saml/login?org_url=${config.DEFAULT_ORG_URL}` 
                 : '/saml/login';
-            window.location.href = loginUrl;
+            // 🔥 페이지를 완전히 새로고침하여 이전 JavaScript 상태를 제거
+            window.location.replace(loginUrl);
         }
     } catch (error) {
         console.error('AUTO_LOGIN 체크 실패:', error);
