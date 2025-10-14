@@ -26,6 +26,7 @@ export VIPS_CONCURRENCY="32"             # 32코어 활용
 export VIPS_DISC_THRESHOLD="10000m"      # 10GB 임계값 (메모리 충분)
 export VIPS_MAX_CACHE="10000"            # 최대 캐시 10000개 (10배 증가)
 export VIPS_MAX_CACHE_MEM="10000m"       # 최대 캐시 메모리 10GB (10배 증가)
+export G_MESSAGES_DEBUG=""               # VIPS 로그 완전 억제
 
 # 캐시 최적화 (로드 속도 개선)
 export DIRLIST_CACHE_SIZE="8192"         # 디렉토리 리스트 캐시 8배 증가

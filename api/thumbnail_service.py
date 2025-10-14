@@ -74,8 +74,8 @@ class ThumbnailService:
                 # 성능 최적화: sequential 모드로 메모리 효율성 향상
                 image = pyvips.Image.new_from_file(
                     str(image_path),
-                    access='sequential',  # 순차적 접근 모드 (메모리 효율)
-                    fail=True  # 실패 시 빠른 처리
+                    access='sequential'  # 순차적 접근 모드 (메모리 효율)
+                    # fail=True 파라미터 제거 (deprecated)
                 )
                 
                 # 원본 이미지가 이미 작으면 복사만

@@ -1149,8 +1149,8 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
             # Sequential 모드로 고속 로드
             image = pyvips.Image.new_from_file(
                 str(image_path),
-                access='sequential',
-                fail=True
+                access='sequential'
+                # fail=True 파라미터 제거 (deprecated)
             )
             
             # 원본 이미지가 이미 작으면 복사만
@@ -1382,6 +1382,7 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
 
         # 🚀 순차 접근 모드로 이미지 로드 (메모리 효율 & 속도 최적화)
         image = pyvips.Image.new_from_file(str(image_path), access='sequential')
+        # fail=True 파라미터 제거 (deprecated)
 
         orig_w, orig_h = image.width, image.height
         new_w = int(orig_w * level)
@@ -1647,10 +1648,12 @@ async def get_thumbnail(request: Request, path: str, size: int = THUMBNAIL_SIZE_
                 headers = {"Cache-Control": "public, max-age=604800, immutable", "ETag": compute_etag(st)}
                 return FileResponse(thumb, headers=headers)
             else:
-                # 썸네일 생성 실패 시 원본 이미지 제공 (로그 제거)
+                # 썸네일 생성 실패 - 원본 이미지 제공
+                print(f"⚠️ 썸네일 생성 실패: {image_path} -> 원본 제공")
                 return await get_image(request, path)
-        except Exception:
-            # 썸네일 생성 실패 시 원본 이미지 제공 (로그 제거)
+        except Exception as e:
+            # 썸네일 생성 실패 - 원본 이미지 제공
+            print(f"⚠️ 썸네일 생성 예외: {image_path} -> {e} -> 원본 제공")
             return await get_image(request, path)
     except HTTPException:
         raise
