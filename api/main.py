@@ -444,8 +444,9 @@ async def saml_login(request: Request):
         auth = _saml_auth(request)
         org_url = request.query_params.get("org_url")
         
-        # IdP SSO URL 생성
-        idp_login_url = auth.login()
+        # IdP SSO URL 생성 (RelayState를 /saml/acs로 설정)
+        # 🔥 return_to를 명시적으로 /saml/acs로 설정하여 RelayState 문제 해결
+        idp_login_url = auth.login(return_to='/saml/acs')
         logger.info("=" * 100)
         logger.info(f"🔐 [SAML LOGIN] IdP SSO로 리다이렉트")
         logger.info(f"  - IdP SSO URL: {idp_login_url}")
