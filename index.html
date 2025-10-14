@@ -4,6 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Wafer Map Viewer</title>
+    
+    <!-- 리소스 프리로드 (로딩 속도 개선) -->
+    <link rel="preload" href="/js/semiconductor-renderer.js" as="script">
+    <link rel="preload" href="/main.js" as="script">
+    
     <style>
         :root {
             --bg-color: #1a1a1a;

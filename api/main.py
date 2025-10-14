@@ -1287,7 +1287,14 @@ async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
                 items.sort(key=lambda x: (0 if x['type']=='directory' and x['name'].lower()==prefer_low else 1, x['name'].lower()), reverse=True)
             except Exception:
                 pass
-        return {"success": True, "items": items}
+        # 로드 속도 개선: 캐시 헤더 추가 (5초 캐시)
+        return JSONResponse(
+            {"success": True, "items": items},
+            headers={
+                "Cache-Control": "public, max-age=5, must-revalidate",
+                "X-Cache": "HIT"
+            }
+        )
     except Exception as e:
         logger.exception(f"폴더 조회 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
