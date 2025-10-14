@@ -449,15 +449,27 @@ async def saml_login(request: Request):
         logger.info(f"🔐 [SAML LOGIN] OneLogin auth.login() 호출 시작")
         logger.info(f"  - return_to: /")
         logger.info(f"  - org_url: {org_url}")
+        logger.info(f"  - request.url: {request.url}")
+        logger.info(f"  - request.url.port: {request.url.port}")
+        logger.info(f"  - request.url.hostname: {request.url.hostname}")
         logger.info("=" * 100)
         
-        idp_login_url = auth.login(return_to='/')
-        
-        logger.info("=" * 100)
-        logger.info(f"🔐 [SAML LOGIN] OneLogin auth.login() 호출 완료")
-        logger.info(f"  - IdP SSO URL: {idp_login_url}")
-        logger.info(f"  - RelayState: / (명시적 설정)")
-        logger.info("=" * 100)
+        try:
+            idp_login_url = auth.login(return_to='/')
+            logger.info("=" * 100)
+            logger.info(f"🔐 [SAML LOGIN] OneLogin auth.login() 호출 완료")
+            logger.info(f"  - IdP SSO URL: {idp_login_url}")
+            logger.info(f"  - RelayState: / (명시적 설정)")
+            logger.info("=" * 100)
+        except Exception as e:
+            logger.error("=" * 100)
+            logger.error(f"❌ [SAML LOGIN] OneLogin auth.login() 호출 실패")
+            logger.error(f"  - Error: {e}")
+            logger.error(f"  - Error type: {type(e)}")
+            import traceback
+            logger.error(f"  - Traceback: {traceback.format_exc()}")
+            logger.error("=" * 100)
+            raise
         
         # SAMLRequest 파라미터 추출 및 디코딩
         try:
