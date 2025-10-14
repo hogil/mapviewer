@@ -644,6 +644,7 @@ async def saml_acs(request: Request):
     # 🔥 SAML 로그인 성공 시 IP로 로그인한 기록 삭제 및 SAML 로그 직접 기록 (LoginId 기준)
     # ⚠️ 중요: stats.json 업데이트는 SAML 인증 확인 후에만 수행
     try:
+        import time
         client_ip = logger_instance.get_client_ip(request)
         
         if client_ip and LoginId:
@@ -652,17 +653,21 @@ async def saml_acs(request: Request):
             if removed:
                 bootlog.info(f"🗑️ [IP CLEANUP] IP 로그인 기록 삭제됨: {client_ip} → LoginId: {LoginId}")
             
-            # ② SAML 로그인 정보로 직접 통계 업데이트 (중복 방지)
+            # ② SAML 인증 시간 추가
+            meta["last_saml_auth_time"] = time.time()
+            
+            # ③ SAML 로그인 정보로 직접 통계 업데이트 (중복 방지)
             bootlog.info(f"🔄 [SAML LOG] SAML 로그인 직접 기록: {LoginId}")
             bootlog.info(f"🔍 [SAML LOG DEBUG] meta 내용: {meta}")
             bootlog.info(f"🔍 [SAML LOG DEBUG] client_ip: {client_ip}")
+            bootlog.info(f"🔍 [SAML LOG DEBUG] last_saml_auth_time: {meta['last_saml_auth_time']}")
             
             logger_instance._update_stats(
                 ip=client_ip,
                 endpoint="/saml/acs",  # SAML ACS로 기록 (리다이렉트 후 / 중복 방지)
                 method="POST",
                 user_id_override=LoginId,  # LoginId 사용 (SAML claim에서만)
-                meta=meta  # SAML 메타 정보 전달
+                meta=meta  # SAML 메타 정보 전달 (last_saml_auth_time 포함)
             )
             bootlog.info(f"✅ [SAML LOG] SAML 로그 기록 완료")
     except Exception as e:

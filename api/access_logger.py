@@ -80,13 +80,28 @@ class AccessLogger:
             print(f"통계 저장 실패: {e}")
     
     def get_user_by_ip(self, ip: str) -> tuple:
-        """IP로 사용자 찾기 (캐시 사용) - 성능 최적화"""
-        # 캐시에 있으면 즉시 반환
+        """IP로 사용자 찾기 (캐시 사용) - 성능 최적화 + SAML 인증 시간 체크"""
+        import time
+        
+        # SAML 인증 유효 시간 (24시간)
+        SAML_AUTH_VALID_HOURS = 24
+        current_time = time.time()
+        
+        # 캐시에 있으면 즉시 반환 (단, SAML 인증 시간 체크)
         if ip in self.ip_to_userid_cache:
             cached_user_id = self.ip_to_userid_cache[ip]
             if cached_user_id in self.stats_data.get("users", {}):
                 user_data = self.stats_data["users"][cached_user_id]
                 profile = user_data.get("profile", {})
+                
+                # 🔥 SAML 인증 시간 체크
+                last_saml_auth_time = profile.get("last_saml_auth_time", 0)
+                if last_saml_auth_time > 0:
+                    hours_since_auth = (current_time - last_saml_auth_time) / 3600
+                    if hours_since_auth > SAML_AUTH_VALID_HOURS:
+                        # 24시간이 지났으면 LoginId 무효화
+                        return (None, None)
+                
                 return (cached_user_id, profile)
         
         # 캐시에 없으면 검색
@@ -95,6 +110,14 @@ class AccessLogger:
             if ip in ip_addresses:
                 profile = udata.get("profile", {})
                 if profile and profile.get("LoginId"):
+                    # 🔥 SAML 인증 시간 체크
+                    last_saml_auth_time = profile.get("last_saml_auth_time", 0)
+                    if last_saml_auth_time > 0:
+                        hours_since_auth = (current_time - last_saml_auth_time) / 3600
+                        if hours_since_auth > SAML_AUTH_VALID_HOURS:
+                            # 24시간이 지났으면 LoginId 무효화
+                            continue
+                    
                     # 캐시에 저장
                     self.ip_to_userid_cache[ip] = uid
                     return (uid, profile)
