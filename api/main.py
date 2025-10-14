@@ -742,35 +742,20 @@ async def api_config():
 @app.get("/api/whoami")
 @app.get("/api/auth/user")  # 프론트엔드 호환성
 async def api_whoami(request: Request):
-    # IP 기반으로 사용자 정보 조회
-    client_ip = logger_instance.get_client_ip(request)
-    LoginId, meta_dict = logger_instance.get_user_by_ip(client_ip)
-    
-    # 사용자 정보가 있으면 인증된 것으로 처리
-    if LoginId and meta_dict:
-        logger.info(f"🔍 [API /auth/user] 사용자 정보 조회 성공: {LoginId}")
-        return {
-            "authenticated": True,
-            "LoginId": meta_dict.get("LoginId", ""),
-            "Username": meta_dict.get("Username", ""),
-            "Sabun": meta_dict.get("Sabun", ""),
-            "DeptName": meta_dict.get("DeptName", ""),
-            "GrdName_EN": meta_dict.get("GrdName_EN", ""),
-            "GrdName": meta_dict.get("GrdName", ""),
-            "metadata": meta_dict
-        }
-    else:
-        logger.info(f"🔍 [API /auth/user] 사용자 정보 없음 - Guest")
-        return {
-            "authenticated": False,
-            "LoginId": "",
-            "Username": "",
-            "Sabun": "",
-            "DeptName": "",
-            "GrdName_EN": "",
-            "GrdName": "",
-            "metadata": {}
-        }
+    # 🔥 SAML 인증을 통해서만 LoginId를 가져옴 (stats.json에서 읽지 않음)
+    # SAML 인증 후 stats.json에 저장되지만, 여기서는 읽지 않고 항상 Guest 반환
+    # 프론트엔드에서 SAML 인증 후 LoginId를 직접 사용하도록 변경 필요
+    logger.info(f"🔍 [API /auth/user] SAML 인증 없음 - Guest")
+    return {
+        "authenticated": False,
+        "LoginId": "",
+        "Username": "",
+        "Sabun": "",
+        "DeptName": "",
+        "GrdName_EN": "",
+        "GrdName": "",
+        "metadata": {}
+    }
 
 
 # ===== 사내 ADFS/STS 헬스 체크 (핑) =====
@@ -856,22 +841,24 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
 
         client_ip = logger_instance.get_client_ip(request)
         
-        # 🚀 캐시를 사용한 빠른 사용자 조회 (매 요청마다 전체 순회 방지)
-        LoginId, meta_dict = logger_instance.get_user_by_ip(client_ip)
+        # 🔥 stats.json에서 LoginId를 읽지 않음 (SAML 인증을 통해서만 LoginId 사용)
+        # SAML 인증 후 stats.json에 저장되지만, 여기서는 읽지 않고 IP만 표시
+        LoginId = None
+        meta_dict = {}
         
-        # 🔥 실제 접속 제어: LoginId가 없으면 접속 차단
+        # 🔥 실제 접속 제어: SAML 인증 없으면 접속 차단
         if AUTO_LOGIN:
             # SAML 로그인 관련 엔드포인트는 제외
             if not endpoint.startswith(('/saml/', '/api/auth/user', '/api/whoami', '/api/config')):
-                if not LoginId or LoginId == client_ip:
-                    logger.warning(f"🚫 [ACCESS DENIED] LoginId 없음 또는 IP와 동일: LoginId={LoginId}, ip={client_ip}, endpoint={endpoint}")
-                    return PlainTextResponse(
-                        f"접속이 차단되었습니다.\n\n사유: 사용자 인증 정보가 없습니다.\n\nSAML 로그인이 필요합니다.",
-                        status_code=403
-                    )
+                # stats.json에서 LoginId를 읽지 않으므로 항상 접속 차단
+                logger.warning(f"🚫 [ACCESS DENIED] SAML 인증 없음: ip={client_ip}, endpoint={endpoint}")
+                return PlainTextResponse(
+                    f"접속이 차단되었습니다.\n\n사유: 사용자 인증 정보가 없습니다.\n\nSAML 로그인이 필요합니다.",
+                    status_code=403
+                )
         
-        # 표시: SAML claim LoginId 그대로 사용
-        display_user = LoginId if LoginId else client_ip
+        # 표시: IP만 표시 (LoginId는 SAML 인증 후에만 사용)
+        display_user = client_ip
         
         method = request.method
         status = response.status_code
