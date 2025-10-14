@@ -1208,8 +1208,6 @@ async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optiona
                 cached = False
         if cached:
             THUMB_STAT_CACHE.set(key, True)
-            elapsed = time.time() - start_time
-            logger.info(f"⚡ [THUMB CACHE HIT] {image_path.name} - {elapsed*1000:.1f}ms")
             return thumb
 
         async with THUMBNAIL_SEM:
@@ -1218,8 +1216,6 @@ async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optiona
                 try:
                     if thumb.stat().st_mtime >= image_mtime:
                         THUMB_STAT_CACHE.set(key, True)
-                        elapsed = time.time() - start_time
-                        logger.info(f"⚡ [THUMB CACHE HIT2] {image_path.name} - {elapsed*1000:.1f}ms")
                         return thumb
                 except Exception:
                     pass
@@ -1233,7 +1229,6 @@ async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optiona
             
             # 새 썸네일 생성
             gen_start = time.time()
-            logger.info(f"🔨 [THUMB GEN START] {image_path.name} - 썸네일 생성 시작")
             try:
                 await asyncio.get_running_loop().run_in_executor(
                     ThreadPoolExecutor(max_workers=1), _generate_thumbnail_sync, image_path, thumb, size
@@ -1243,15 +1238,10 @@ async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optiona
                 # 생성된 썸네일 확인
                 if thumb.exists() and thumb.stat().st_size > 0:
                     THUMB_STAT_CACHE.set(key, True)
-                    elapsed = time.time() - start_time
-                    logger.info(f"✅ [THUMB GEN DONE] {image_path.name} - 생성: {gen_elapsed*1000:.1f}ms, 전체: {elapsed*1000:.1f}ms")
                     return thumb
                 else:
-                    logger.warning(f"썸네일 생성 후 파일이 존재하지 않거나 크기가 0: {thumb}")
                     return None
             except Exception as e:
-                gen_elapsed = time.time() - gen_start
-                logger.error(f"❌ [THUMB GEN FAIL] {image_path.name} - {gen_elapsed*1000:.1f}ms, 오류: {e}")
                 return None
                 
     except Exception as e:
