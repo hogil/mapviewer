@@ -846,6 +846,9 @@ class WaferMapViewer {
         this.detailMode = false;
         this.detailImagePath = null;
         this.gridThumbWraps = [];
+        
+        // Label Explorer에서 선택한 grid인지 구분하는 플래그
+        this.isLabelExplorerGrid = false;
         this.invalidateGridGeometry();
         this.gridThumbRectCache = null;
         this.gridLayoutCache = null;
@@ -9807,6 +9810,9 @@ class WaferMapViewer {
         
         this.hideRemoveLabelButton();
         
+        // 🔥 Label Explorer 모달 닫을 때 플래그 해제
+        this.isLabelExplorerGrid = false;
+        
         // 🔥 그리드 스크롤 위치 복원
         this.restoreGridScrollPosition();
     }
@@ -12622,6 +12628,10 @@ class WaferMapViewer {
         this.selectedImages = images;
         this.currentGridImages = images;  // 🔥 currentGridImages 업데이트
         if (!this.gridSelectedIdxs) this.gridSelectedIdxs = [];
+        
+        // 🔥 Wafer Map Explorer의 grid로 플래그 설정
+        this.isLabelExplorerGrid = false;
+        
         const grid = document.getElementById('image-grid');
         const gridControls = document.getElementById('grid-controls');
         if (gridControls) gridControls.style.display = '';
@@ -12971,6 +12981,9 @@ class WaferMapViewer {
         this.debugLog('🔷 [DEBUG] hideGrid() 호출됨');
 
         this.gridMode = false;
+        
+        // 🔥 grid 모드 해제 시 플래그도 해제
+        this.isLabelExplorerGrid = false;
 
         const grid = document.getElementById('image-grid');
 
@@ -13109,13 +13122,10 @@ class WaferMapViewer {
             // 🔥 그리드 스크롤 이벤트 리스너 추가 (Wafer Map Explorer에서만)
             if (!this._gridScrollListenerAdded) {
                 grid.addEventListener('scroll', () => {
-                    // Label Explorer가 열려있지 않을 때만 스크롤 저장
-                    const labelModal = document.getElementById('add-label-modal');
-                    if (!labelModal || labelModal.style.display === 'none') {
-                        if (this.savedViewState) {
-                            this.savedViewState.scrollTop = grid.scrollTop;
-                            console.log('💾 [SCROLL-AUTO-SAVE] 스크롤 위치 저장:', grid.scrollTop);
-                        }
+                    // Wafer Map Explorer의 grid일 때만 스크롤 저장
+                    if (!this.isLabelExplorerGrid && this.savedViewState) {
+                        this.savedViewState.scrollTop = grid.scrollTop;
+                        console.log('💾 [SCROLL-AUTO-SAVE] 스크롤 위치 저장:', grid.scrollTop);
                     }
                 });
                 this._gridScrollListenerAdded = true;
@@ -13745,11 +13755,9 @@ class WaferMapViewer {
         // 🔥 Wafer Map Explorer에서 이미지 선택 시 savedViewState 업데이트
         if (this.gridMode && this.selectedImages && this.selectedImages.length > 0) {
             const grid = document.getElementById('image-grid');
-            const labelModal = document.getElementById('add-label-modal');
-            const isLabelModalOpen = labelModal && labelModal.style.display !== 'none';
             
-            // Label Explorer가 열려있지 않을 때만 스크롤 저장
-            if (!isLabelModalOpen) {
+            // Wafer Map Explorer의 grid일 때만 스크롤 저장
+            if (!this.isLabelExplorerGrid) {
                 this.savedViewState = {
                     type: 'grid',
                     images: [...this.selectedImages],
@@ -13950,12 +13958,10 @@ class WaferMapViewer {
 
         // 🔥 그리드에서 단일 이미지 모드로 전환 시 savedViewState 업데이트
         const grid = document.getElementById('image-grid');
-        const labelModal = document.getElementById('add-label-modal');
-        const isLabelModalOpen = labelModal && labelModal.style.display !== 'none';
         
         if (this.selectedImages && this.selectedImages.length > 0) {
-            // Label Explorer가 열려있지 않을 때만 스크롤 저장
-            if (!isLabelModalOpen) {
+            // Wafer Map Explorer의 grid일 때만 스크롤 저장
+            if (!this.isLabelExplorerGrid) {
                 this.savedViewState = {
                     type: 'grid',
                     images: [...this.selectedImages],
@@ -14116,7 +14122,8 @@ class WaferMapViewer {
 
         if (!imageKeys || imageKeys.length === 0) return;
 
-
+        // 🔥 Label Explorer에서 선택한 grid로 플래그 설정
+        this.isLabelExplorerGrid = true;
 
         // 🔥 이전 상태 저장 (한 번만 저장)
 
