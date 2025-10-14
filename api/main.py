@@ -850,7 +850,8 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         # 🔥 실제 접속 제어: SAML 인증 없으면 접속 차단
         if AUTO_LOGIN:
             # SAML 로그인 관련 엔드포인트 및 정적 파일은 제외
-            if not endpoint.startswith(('/saml/', '/api/auth/user', '/api/whoami', '/api/config', '/js/', '/static/')):
+            # /js/ 폴더, /static/, /main.js, /index.html 등 정적 파일 제외
+            if not endpoint.startswith(('/saml/', '/api/auth/user', '/api/whoami', '/api/config', '/js/', '/static/')) and endpoint not in ['/', '/index.html', '/main.js']:
                 # stats.json에서 LoginId를 읽지 않으므로 항상 접속 차단
                 logger.warning(f"🚫 [ACCESS DENIED] SAML 인증 없음: ip={client_ip}, endpoint={endpoint}")
                 return PlainTextResponse(
