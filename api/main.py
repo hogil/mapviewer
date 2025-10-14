@@ -585,9 +585,9 @@ async def saml_acs(request: Request):
     logger.info(f"  - meta: {meta}")
     logger.info("=" * 100)
     
-    # LoginId 없으면 바로 차단
+    # LoginId 없으면 IdP SSO로 리다이렉트 (재시도)
     if not LoginId:
-        logger.error(f"🚫 [ACCESS DENIED] LoginId 없음 → 접속 차단")
+        logger.error(f"🚫 [SAML FAIL] LoginId 없음 → IdP SSO로 리다이렉트")
         base_settings, _ = _load_saml_files()
         idp_sso_url = base_settings.get("idp", {}).get("singleSignOnService", {}).get("url")
         
@@ -727,6 +727,14 @@ async def saml_dev_login(request: Request):
     return resp
 
 # ===== 계정 확인용 간단 API =====
+@app.get("/api/config")
+async def api_config():
+    """프론트엔드 설정 API (AUTO_LOGIN 등)"""
+    return {
+        "AUTO_LOGIN": AUTO_LOGIN,
+        "DEFAULT_ORG_URL": DEFAULT_ORG_URL
+    }
+
 @app.get("/api/whoami")
 @app.get("/api/auth/user")  # 프론트엔드 호환성
 async def api_whoami(request: Request):
@@ -2272,34 +2280,10 @@ app.mount("/js", StaticFiles(directory="js"), name="js")
 app.mount("/static", StaticFiles(directory="."), name="static")
 
 @app.get("/")
-async def read_root(request: Request):
+async def read_root():
     try:
-        # AUTO_LOGIN=True일 때만 자동 리다이렉트 (수동 접속과 동일)
-        if AUTO_LOGIN:
-            # 이미 인증된 사용자인지 확인 (IP 기반)
-            client_ip = logger_instance.get_client_ip(request)
-            LoginId, meta_dict = logger_instance.get_user_by_ip(client_ip)
-            
-            # 이미 인증된 사용자면 index.html 로드
-            if LoginId and meta_dict and LoginId != client_ip:
-                logger.info(f"✅ [AUTO LOGIN] 이미 인증된 사용자: {LoginId}")
-                html_path = Path("index.html")
-                return FileResponse(html_path) if html_path.exists() else {"message": "index.html not found"}
-            
-            # 인증되지 않은 사용자만 /saml/login으로 리다이렉트
-            login_url = '/saml/login'
-            if DEFAULT_ORG_URL:
-                login_url += f"?org_url={DEFAULT_ORG_URL}"
-            logger.info("=" * 100)
-            logger.info(f"🔐 [AUTO LOGIN] 미인증 사용자 → /saml/login으로 리다이렉트")
-            logger.info(f"  - Client IP: {client_ip}")
-            logger.info(f"  - Redirect URL: {login_url}")
-            logger.info(f"  - AUTO_LOGIN: {AUTO_LOGIN}")
-            logger.info(f"  - DEFAULT_ORG_URL: {DEFAULT_ORG_URL}")
-            logger.info("=" * 100)
-            return RedirectResponse(login_url, status_code=302)
-        
-        # AUTO_LOGIN=False일 때는 정상적으로 index.html 로드
+        # AUTO_LOGIN=True/False 모두 동일하게 index.html 로드
+        # 프론트엔드에서 AUTO_LOGIN 여부를 확인하고 자동으로 /saml/login 호출
         html_path = Path("index.html")
         return FileResponse(html_path) if html_path.exists() else {"message": "index.html not found"}
     except Exception as e:

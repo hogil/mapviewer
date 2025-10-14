@@ -14564,12 +14564,38 @@ window.addEventListener('wheel', function(e) {
 
 if (document.readyState === 'loading') {
 
-    document.addEventListener('DOMContentLoaded', () => { window.viewer = new WaferMapViewer(); });
+    document.addEventListener('DOMContentLoaded', () => { 
+        window.viewer = new WaferMapViewer(); 
+        // AUTO_LOGIN 체크 및 자동 SAML 로그인
+        checkAutoLogin();
+    });
 
 } else {
 
     window.viewer = new WaferMapViewer();
+    // AUTO_LOGIN 체크 및 자동 SAML 로그인
+    checkAutoLogin();
 
+}
+
+// AUTO_LOGIN 체크 함수
+async function checkAutoLogin() {
+    try {
+        // 서버 설정 확인
+        const configResponse = await fetch('/api/config');
+        const config = await configResponse.json();
+        
+        // AUTO_LOGIN이 활성화되어 있으면 자동으로 /saml/login 호출
+        if (config.AUTO_LOGIN) {
+            console.log('AUTO_LOGIN 활성화 - 자동 SAML 로그인 시작');
+            const loginUrl = config.DEFAULT_ORG_URL 
+                ? `/saml/login?org_url=${config.DEFAULT_ORG_URL}` 
+                : '/saml/login';
+            window.location.href = loginUrl;
+        }
+    } catch (error) {
+        console.error('AUTO_LOGIN 체크 실패:', error);
+    }
 }
 
 
