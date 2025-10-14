@@ -585,14 +585,14 @@ async def saml_acs(request: Request):
     logger.info(f"  - meta: {meta}")
     logger.info("=" * 100)
     
-    # LoginId 없으면 IdP SSO로 리다이렉트 (재시도)
+    # LoginId 없으면 IdP SSO로 리다이렉트 (접속 차단)
     if not LoginId:
-        logger.error(f"🚫 [SAML FAIL] LoginId 없음 → IdP SSO로 리다이렉트")
+        logger.error(f"🚫 [SAML FAIL] LoginId 없음 → IdP SSO로 리다이렉트 (접속 차단)")
         base_settings, _ = _load_saml_files()
         idp_sso_url = base_settings.get("idp", {}).get("singleSignOnService", {}).get("url")
         
         if idp_sso_url:
-            logger.info(f"  → IdP SSO로 리다이렉트: {idp_sso_url}")
+            logger.info(f"  → IdP SSO로 리다이렉트 (접속 차단): {idp_sso_url}")
             return RedirectResponse(idp_sso_url, status_code=302)
         else:
             return PlainTextResponse(
