@@ -680,15 +680,15 @@ async def saml_acs(request: Request):
     except Exception as e:
         bootlog.warning(f"⚠️ [SAML LOG] SAML 로그 기록 실패: {e}")
     
-    # 🔥 SAML 로그인 성공 - 단순히 /로 리다이렉트
+    # 🔥 SAML 로그인 성공 - 무한 루프 방지를 위해 URL 파라미터 추가
     bootlog.info("=" * 100)
-    bootlog.info(f"✅ [SAML LOGIN] 로그인 성공 - Redirect to: /")
+    bootlog.info(f"✅ [SAML LOGIN] 로그인 성공 - Redirect to: /?saml_success=true")
     bootlog.info(f"  - LoginId: {LoginId}")
-    bootlog.info(f"  - Redirect URL: /")
+    bootlog.info(f"  - Redirect URL: /?saml_success=true")
     bootlog.info("=" * 100)
     
     log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"SAML 로그인: {LoginId}")
-    return RedirectResponse("/", status_code=302)
+    return RedirectResponse("/?saml_success=true", status_code=302)
 
 @app.get("/saml/dev-login")
 async def saml_dev_login(request: Request):
