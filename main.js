@@ -841,6 +841,10 @@ class WaferMapViewer {
         this.gridSelectedSet = new Set();
         this._prevGridSelectedIdxs = new Set();
         this.gridLastClickedIdx = undefined;
+        
+        // 이미지 상세 보기 모드
+        this.detailMode = false;
+        this.detailImagePath = null;
         this.gridThumbWraps = [];
         this.invalidateGridGeometry();
         this.gridThumbRectCache = null;
@@ -13055,6 +13059,40 @@ class WaferMapViewer {
     }
 
 
+
+    // 🔥 그리드 모드 활성화 (GridManager에서 호출)
+    showGridMode() {
+        this.gridMode = true;
+        const grid = document.getElementById('image-grid');
+        const gridControls = document.getElementById('grid-controls');
+        if (gridControls) gridControls.style.display = '';
+        
+        // 그리드 컨트롤 표시
+        this.dom.viewerContainer.classList.add('grid-mode');
+        this.dom.viewerContainer.classList.remove('single-image-mode');
+        this.dom.minimapContainer.style.display = 'none';
+        this.dom.imageCanvas.style.display = 'none';
+        this.dom.overlayCanvas.style.display = 'none';
+        
+        if (grid) {
+            grid.style.display = 'grid';
+        }
+    }
+
+    // 🔥 단일 이미지 상세 보기
+    viewSingleImage(imagePath) {
+        console.log('🖼️ [VIEW] 단일 이미지 상세 보기:', imagePath);
+        
+        // 그리드 모드 해제
+        this.hideGrid(false);
+        
+        // 이미지 로드
+        this.loadImage(imagePath);
+        
+        // 상세 보기 모드 활성화
+        this.detailMode = true;
+        this.detailImagePath = imagePath;
+    }
 
     // 🔥 Label Explorer 이전 Grid 상태로 복귀
 

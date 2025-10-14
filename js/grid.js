@@ -67,15 +67,6 @@ export class GridManager {
             }
         });
         
-        // 스크롤 시 보이는 영역의 썸네일 로드 (디바운싱)
-        let scrollTimeout;
-        this.container.addEventListener('scroll', () => {
-            clearTimeout(scrollTimeout);
-            scrollTimeout = setTimeout(() => {
-                this.loadVisibleThumbnails();
-            }, 100);
-        });
-        
         // 키보드 이벤트
         document.addEventListener('keydown', (e) => this.handleKeyDown(e));
     }
@@ -119,31 +110,6 @@ export class GridManager {
                 this.observer.observe(item);
             });
         }
-        
-        // 보이는 영역의 썸네일을 즉시 로드 (우선순위)
-        this.loadVisibleThumbnails();
-    }
-    
-    /**
-     * 보이는 영역의 썸네일을 우선적으로 로드
-     */
-    loadVisibleThumbnails() {
-        const items = this.container.querySelectorAll('.grid-item');
-        const containerRect = this.container.getBoundingClientRect();
-        
-        // 보이는 영역의 아이템만 필터링
-        const visibleItems = Array.from(items).filter(item => {
-            const rect = item.getBoundingClientRect();
-            return rect.top < containerRect.bottom + 200 && rect.bottom > containerRect.top - 200;
-        });
-        
-        // 보이는 아이템의 썸네일을 즉시 로드
-        visibleItems.forEach(item => {
-            const index = parseInt(item.dataset.index);
-            if (!this.loadingThumbnails.has(index)) {
-                this.loadThumbnail(item);
-            }
-        });
     }
     
     /**
@@ -190,18 +156,14 @@ export class GridManager {
     handleIntersection(entries) {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
-                const index = parseInt(entry.target.dataset.index);
-                // 이미 로딩 중이거나 로드된 경우 스킵
-                if (!this.loadingThumbnails.has(index) && !entry.target.classList.contains('loaded')) {
-                    this.loadThumbnail(entry.target);
-                }
+                this.loadThumbnail(entry.target);
                 this.observer.unobserve(entry.target);
             }
         });
     }
     
     /**
-     * 썸네일 로드 (고속 최적화)
+     * 썸네일 로드
      * @param {HTMLElement} gridItem 그리드 아이템
      */
     async loadThumbnail(gridItem) {
@@ -216,19 +178,21 @@ export class GridManager {
             const img = gridItem.querySelector('.grid-thumbnail');
             if (!img) return;
             
-            // 직접 로드 (프리로드 제거로 속도 향상)
-            img.onload = () => {
+            // 이미지 프리로드
+            const preloadImg = new Image();
+            preloadImg.onload = () => {
+                img.src = src;
                 gridItem.classList.add('loaded');
-                this.loadingThumbnails.delete(index);
             };
-            img.onerror = () => {
+            preloadImg.onerror = () => {
                 img.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iIzMzMyIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmaWxsPSIjZjAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkeT0iMC4zZW0iPkVycm9yPC90ZXh0Pjwvc3ZnPg==';
                 gridItem.classList.add('error');
-                this.loadingThumbnails.delete(index);
             };
-            img.src = src;
+            preloadImg.src = src;
             
         } catch (error) {
+            console.error('썸네일 로드 오류:', error);
+        } finally {
             this.loadingThumbnails.delete(index);
         }
     }
@@ -360,6 +324,16 @@ export class GridManager {
                 break;
             case 'Escape':
                 this.clearSelection();
+                break;
+            case 'Enter':
+                // 단일 이미지 선택 시 상세 보기
+                if (this.selectedIndices.length === 1) {
+                    event.preventDefault();
+                    const imagePath = this.currentImages[this.selectedIndices[0]];
+                    if (imagePath) {
+                        this.viewer.viewSingleImage(imagePath);
+                    }
+                }
                 break;
         }
     }
