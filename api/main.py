@@ -1162,8 +1162,8 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
                 else:
                     img.thumbnail(size, Image.Resampling.LANCZOS)
                     img.save(thumbnail_path, THUMBNAIL_FORMAT.upper(), quality=THUMBNAIL_QUALITY, optimize=True, method=6)
-    except Exception as e:
-        logger.error(f"동기 썸네일 생성 실패: {image_path} -> {thumbnail_path}, 오류: {e}")
+    except Exception:
+        # 로그 제거 (성능 최적화)
         raise
 
 async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optional[Path]:
@@ -1208,8 +1208,9 @@ async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optiona
             if thumb.exists():
                 try:
                     thumb.unlink()
-                except Exception as e:
-                    logger.warning(f"기존 썸네일 삭제 실패: {thumb}, 오류: {e}")
+                except Exception:
+                    # 로그 제거 (성능 최적화)
+                    pass
             
             # 새 썸네일 생성
             gen_start = time.time()
@@ -1228,8 +1229,8 @@ async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optiona
             except Exception as e:
                 return None
                 
-    except Exception as e:
-        logger.error(f"썸네일 생성 중 예외 발생: {image_path}, 오류: {e}")
+    except Exception:
+        # 로그 제거 (성능 최적화)
         return None
 
 def maybe_304(request: Request, st) -> Optional[Response]:
@@ -1604,17 +1605,16 @@ async def get_thumbnail(request: Request, path: str, size: int = THUMBNAIL_SIZE_
                 headers = {"Cache-Control": "public, max-age=604800, immutable", "ETag": compute_etag(st)}
                 return FileResponse(thumb, headers=headers)
             else:
-                # 썸네일 생성 실패 시 원본 이미지 제공
-                logger.warning(f"썸네일 생성 실패, 원본 이미지 제공: {image_path}")
+                # 썸네일 생성 실패 시 원본 이미지 제공 (로그 제거)
                 return await get_image(request, path)
-        except Exception as thumb_error:
-            logger.warning(f"썸네일 생성 실패, 원본 이미지 제공: {thumb_error}")
+        except Exception:
+            # 썸네일 생성 실패 시 원본 이미지 제공 (로그 제거)
             return await get_image(request, path)
     except HTTPException:
         raise
-    except Exception as e:
-        logger.exception(f"썸네일 제공 실패: {e}")
-        raise HTTPException(status_code=500, detail=f"Thumbnail generation failed: {str(e)}")
+    except Exception:
+        # 로그 제거 (성능 최적화)
+        raise HTTPException(status_code=500, detail="Thumbnail generation failed")
 
 class PreloadRequest(BaseModel):
     paths: List[str] = Field(..., description="썸네일을 미리 생성할 이미지 경로 목록")
@@ -1667,9 +1667,9 @@ async def preload_thumbnails(request: Request, preload_req: PreloadRequest):
             "valid_paths": len(valid_paths),
             "processed": len(results)
         }
-    except Exception as e:
-        logger.exception(f"썸네일 preload 실패: {e}")
-        raise HTTPException(status_code=500, detail=f"Preload failed: {str(e)}")
+    except Exception:
+        # 로그 제거 (성능 최적화)
+        raise HTTPException(status_code=500, detail="Preload failed")
 
 @app.get("/api/search")
 async def search_files(q: str = Query(..., description="파일명 검색(대소문자 무시, 부분일치)"),
@@ -1696,10 +1696,7 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
 
         # 🔥 썸네일 캐시 초기화 (매 검색마다)
         THUMB_STAT_CACHE.clear()
-        logger.info("🔍 [SEARCH DEBUG] 썸네일 캐시 초기화 완료")
-        
-        # 🔍 썸네일 요청 카운터 리셋 (새로운 검색)
-        logger.info("🔍 [SEARCH DEBUG] 썸네일 요청 카운터 리셋")
+        # 로그 제거 (성능 최적화)
 
         # 🔥 current_folder가 ROOT_DIR과 다른 경우에만 필터링 적용
         if current_folder.resolve() != ROOT_DIR.resolve():
@@ -2408,7 +2405,7 @@ async def change_folder(request: Request):
         
         # 🔍 썸네일 요청 카운터 리셋 (새로운 폴더)
         global INDEX_READY, INDEX_BUILDING
-        logger.info("🔍 [CHANGE_FOLDER DEBUG] 썸네일 요청 카운터 리셋")
+        # 로그 제거 (성능 최적화)
         
         INDEX_READY = False; INDEX_BUILDING = False
 

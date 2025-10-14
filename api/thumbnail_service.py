@@ -64,8 +64,12 @@ class ThumbnailService:
             # pyvips 사용 (Pillow보다 10-100배 빠름)
             try:
                 import pyvips
-                # VIPS 로그 억제 (Ubuntu 24에서 경고 메시지 방지)
-                pyvips.set_log_handler(lambda domain, level, msg: None)
+                # VIPS 로그 억제 (버전 호환성 처리)
+                try:
+                    pyvips.set_log_handler(lambda domain, level, msg: None)
+                except AttributeError:
+                    # 구버전 pyvips는 set_log_handler가 없음 (무시)
+                    pass
                 
                 # 성능 최적화: sequential 모드로 메모리 효율성 향상
                 image = pyvips.Image.new_from_file(
@@ -118,9 +122,8 @@ class ThumbnailService:
             
             return True
             
-        except Exception as e:
+        except Exception:
             # 로그 출력 제거 (성능 최적화)
-            # print(f"썸네일 생성 실패 {image_path}: {e}")
             return False
     
     async def generate_thumbnail(

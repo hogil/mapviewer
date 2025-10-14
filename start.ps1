@@ -19,13 +19,24 @@ $env:SSL_KEYFILE="cert/server.key"
 $env:THUMBNAIL_SIZE="512"
 $env:THUMBNAIL_FORMAT="WEBP"
 $env:THUMBNAIL_QUALITY="100"
-$env:IO_THREADS="128"
-$env:THUMBNAIL_SEM="256"
-$env:PYVIPS_CONCURRENCY="1024"
-$env:PYVIPS_CACHE_SIZE="4095"
-$env:PYVIPS_MEMORY_ALIGN="64"
+
+# Windows 11 최적화 (CPU 16코어 기준)
+$env:IO_THREADS="64"                    # 16코어 * 4 (I/O 스레드)
+$env:THUMBNAIL_SEM="128"                # 16코어 * 8 (동시 썸네일 생성)
+$env:PYVIPS_CONCURRENCY="16"            # 16코어 활용
+$env:PYVIPS_CACHE_SIZE="4095"           # 최대 캐시 4095개
+$env:PYVIPS_MEMORY_ALIGN="64"           # 메모리 정렬
+$env:VIPS_DISC_THRESHOLD="2000m"        # 2GB 임계값
+$env:VIPS_MAX_CACHE="5000"              # 최대 캐시 5000개
+$env:VIPS_MAX_CACHE_MEM="2000m"         # 최대 캐시 메모리 2GB
+
+# 캐시 최적화 (로드 속도 개선)
+$env:DIRLIST_CACHE_SIZE="4096"          # 디렉토리 리스트 캐시
+$env:THUMB_STAT_TTL_SECONDS="10"        # 캐시 유지 시간
+$env:THUMB_STAT_CACHE_CAPACITY="16384"  # 썸네일 통계 캐시
+
 $env:STATS_LOG_ENABLED="0"
-$env:WORKERS="6"
+$env:WORKERS="14"                       # 16코어 * 0.875 (87.5% 활용)
 $env:RELOAD="1"
 
 # 서버 시작
