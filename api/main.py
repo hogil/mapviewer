@@ -857,7 +857,7 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         # 🔥 실제 접속 제어: LoginId가 없으면 접속 차단
         if AUTO_LOGIN:
             # SAML 로그인 관련 엔드포인트는 제외
-            if not endpoint.startswith(('/saml/', '/api/auth/user', '/api/whoami')):
+            if not endpoint.startswith(('/saml/', '/api/auth/user', '/api/whoami', '/api/config')):
                 if not LoginId or LoginId == client_ip:
                     logger.warning(f"🚫 [ACCESS DENIED] LoginId 없음 또는 IP와 동일: LoginId={LoginId}, ip={client_ip}, endpoint={endpoint}")
                     return PlainTextResponse(
