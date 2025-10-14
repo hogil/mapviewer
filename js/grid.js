@@ -33,7 +33,6 @@ export class GridManager {
             console.error('그리드 컨테이너를 찾을 수 없습니다.');
             return;
         }
-        
         this.bindEvents();
     }
     
@@ -65,15 +64,6 @@ export class GridManager {
             if (gridItem) {
                 const index = parseInt(gridItem.dataset.index);
                 this.handleItemClick(index, e);
-            }
-        });
-        
-        // 컨텍스트 메뉴 이벤트
-        this.container.addEventListener('contextmenu', (e) => {
-            const gridItem = e.target.closest('.grid-item');
-            if (gridItem) {
-                const index = parseInt(gridItem.dataset.index);
-                this.viewer.contextMenuManager?.show(e, index);
             }
         });
         
@@ -225,7 +215,8 @@ export class GridManager {
         }
         
         this.updateSelectionUI();
-        this.viewer.updateGridSelectedIndices(this.selectedIndices);
+        // viewer의 gridSelectedIdxs 동기화
+        this.viewer.gridSelectedIdxs = [...this.selectedIndices];
     }
     
     /**
@@ -275,7 +266,7 @@ export class GridManager {
     selectAll() {
         this.selectedIndices = this.currentImages.map((_, index) => index);
         this.updateSelectionUI();
-        this.viewer.updateGridSelectedIndices(this.selectedIndices);
+        this.viewer.gridSelectedIdxs = [...this.selectedIndices];
     }
     
     /**
@@ -284,7 +275,7 @@ export class GridManager {
     clearSelection() {
         this.selectedIndices = [];
         this.updateSelectionUI();
-        this.viewer.updateGridSelectedIndices(this.selectedIndices);
+        this.viewer.gridSelectedIdxs = [];
     }
     
     /**

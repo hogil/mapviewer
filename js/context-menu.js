@@ -90,11 +90,7 @@ export class ContextMenuManager {
     show(event, clickedIdx) {
         event.preventDefault();
         
-        // 클릭된 이미지가 선택되지 않았으면 해당 이미지만 선택
-        if (!this.viewer.gridSelectedIdxs.includes(clickedIdx)) {
-            this.viewer.gridSelectedIdxs = [clickedIdx];
-            this.viewer.updateGridSelection();
-        }
+        // 컨텍스트 메뉴 표시 시 선택 상태를 변경하지 않음 (기존 선택 유지)
         
         // 메뉴 위치 설정
         this.menu.style.left = event.pageX + 'px';

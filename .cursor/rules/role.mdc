@@ -1,0 +1,4 @@
+---
+alwaysApply: true
+지금 cursor를 실행하는 환경은 windows11 이지만 실제 사용 및 test는 ubuntu24다 환경변수를 통해서 같은 코드지만 각각 환경에 맞게 사용하도록 하는거고 saml login은 사내 ubuntu24 에서만 가능하다 saml 폴더의 settings.json값은 간이 값이고 사내에서 제대로 된 값을 넣어서 saml login 한다 saml 관련 문의는 전부 현재 환경에서 평가하는게 아니고 ubuntu24 사내에서 내가 알아서 평가하는거고 물으면 에러만 수정해주면 된다
+---

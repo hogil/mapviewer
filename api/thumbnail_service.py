@@ -64,6 +64,8 @@ class ThumbnailService:
             # pyvips 사용 (Pillow보다 10-100배 빠름)
             try:
                 import pyvips
+                # VIPS 로그 억제 (Ubuntu 24에서 경고 메시지 방지)
+                pyvips.set_log_handler(lambda domain, level, msg: None)
                 image = pyvips.Image.new_from_file(str(image_path))
                 
                 # 원본 이미지가 이미 작으면 복사만

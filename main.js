@@ -639,6 +639,9 @@ class WaferMapViewer {
         // 제품 검색 드롭다운 키보드 탐색용
         this.highlightedIndex = -1;
         
+        // contextmenu 이벤트 발생 플래그 (다음 click 이벤트 무시용)
+        this.contextMenuJustShown = false;
+        
         // 전역 AbortController 초기화 (모든 API 요청 중단용)
         this.globalAbortController = new AbortController();
         
@@ -3198,7 +3201,7 @@ class WaferMapViewer {
                 
                 
                 const currentCoords = getScrollAdjustedCoords(e.clientX, e.clientY);
-                if (!currentCoords) {
+                if (!currentCoords || !dragData.start || dragData.start.x === undefined || dragData.start.y === undefined) {
                     return;
                 }
 
@@ -4865,32 +4868,14 @@ class WaferMapViewer {
 
 
     showContextMenu(event, clickedIdx) {
-
-        // 클릭된 항목이 이미 선택된 경우 선택 취소
-        if (this.gridSelectedIdxs.includes(clickedIdx)) {
-            this.gridSelectedIdxs = this.gridSelectedIdxs.filter(idx => idx !== clickedIdx);
-            this.updateGridSelection();
-            return; // 메뉴 표시하지 않고 종료
-        }
-
-        // 클릭된 항목이 선택되지 않은 경우 해당 항목만 선택
-        this.gridSelectedIdxs = [clickedIdx];
-        this.updateGridSelection();
-
-
-
+        // 선택 상태를 변경하지 않고 컨텍스트 메뉴만 표시
         const contextMenu = document.getElementById('grid-context-menu');
 
         if (!contextMenu) return;
 
-
-
         // 메뉴 위치 설정
-
         contextMenu.style.display = 'block';
-
         contextMenu.style.left = event.pageX + 'px';
-
         contextMenu.style.top = event.pageY + 'px';
 
 
@@ -5194,17 +5179,16 @@ class WaferMapViewer {
                     
                     
                     if (hasPermission && navigator.clipboard && navigator.clipboard.write) {
-
-                        const item = new ClipboardItem({ 'image/png': blob });
-
-                        await navigator.clipboard.write([item]);
-
-                        this.showToast(`${selectedCount}개 이미지 클립보드 복사 완료 (${cols}x${rows})`);
-
+                        try {
+                            const item = new ClipboardItem({ 'image/png': blob });
+                            await navigator.clipboard.write([item]);
+                            this.showToast(`${selectedCount}개 이미지 클립보드 복사 완료 (${cols}x${rows})`);
+                        } catch (clipError) {
+                            // Document is not focused 오류 처리
+                            throw new Error('클립보드 복사 실패: ' + clipError.message);
+                        }
                     } else {
-
                         throw new Error('클립보드 권한이 없거나 API를 지원하지 않습니다.');
-
                     }
 
                 } catch (error) {
@@ -5498,17 +5482,16 @@ class WaferMapViewer {
                     const hasPermission = await this.ensureClipboardPermission();
 
                     if (hasPermission && navigator.clipboard && navigator.clipboard.write) {
-
-                        const item = new ClipboardItem({ 'image/png': out });
-
-                        await navigator.clipboard.write([item]);
-
-                        this.showToast('이미지 클립보드 복사 완료');
-
+                        try {
+                            const item = new ClipboardItem({ 'image/png': out });
+                            await navigator.clipboard.write([item]);
+                            this.showToast('이미지 클립보드 복사 완료');
+                        } catch (clipError) {
+                            // Document is not focused 오류 처리
+                            throw new Error('no clipboard');
+                        }
                     } else {
-
                         throw new Error('no clipboard');
-
                     }
 
                 } catch (err) {
@@ -12679,6 +12662,9 @@ class WaferMapViewer {
             wrap.oncontextmenu = e => {
                 e.preventDefault();
                 e.stopPropagation();
+                // contextmenu 이벤트 발생 플래그 설정 (다음 click 이벤트 무시)
+                this.contextMenuJustShown = true;
+                // 선택 상태를 변경하지 않고 컨텍스트 메뉴만 표시
                 this.showContextMenu(e, idx);
             };
             // 썸네일 이미지 컨테이너
@@ -13787,6 +13773,12 @@ class WaferMapViewer {
     }
 
     toggleGridImageSelect(idx, e) {
+        // contextmenu 이벤트가 방금 발생했다면 click 이벤트 무시
+        if (this.contextMenuJustShown) {
+            this.contextMenuJustShown = false;
+            return;
+        }
+        
         if (!this.gridSelectedIdxs) this.gridSelectedIdxs = [];
         
         const isCtrl = e && (e.ctrlKey || e.metaKey);
@@ -14024,21 +14016,13 @@ class WaferMapViewer {
             gridElement.setAttribute('data-label-explorer-grid', 'true');
 
             gridElement.oncontextmenu = (e) => {
-
                 // Grid item이 아닌 Grid 자체를 클릭한 경우에만
-
                 if (e.target === gridElement || e.target.classList.contains('grid-thumb-wrap')) {
-
                     e.preventDefault();
-
                     e.stopPropagation();
-
                     this.clearLabelExplorerSelection();
-
                     this.debugLog('🔷 Label Explorer Grid: 우클릭으로 선택 해제');
-
                 }
-
             };
 
         }
@@ -14208,21 +14192,16 @@ class WaferMapViewer {
 
                 gridElement.setAttribute('data-label-explorer-grid', 'true');
 
-                gridElement.oncontextmenu = (e) => {
-
-                    if (e.target === gridElement || e.target.classList.contains('grid-thumb-wrap')) {
-
-                        e.preventDefault();
-
-                        e.stopPropagation();
-
-                        this.clearLabelExplorerSelection();
-
-                        this.debugLog('🔷 Label Explorer Grid: 우클릭으로 선택 해제');
-
-                    }
-
-                };
+                // grid.js의 GridManager가 contextmenu 이벤트를 처리하도록 함
+                // gridElement.oncontextmenu 핸들러를 제거
+                // gridElement.oncontextmenu = (e) => {
+                //     if (e.target === gridElement || e.target.classList.contains('grid-thumb-wrap')) {
+                //         e.preventDefault();
+                //         e.stopPropagation();
+                //         this.clearLabelExplorerSelection();
+                //         this.debugLog('🔷 Label Explorer Grid: 우클릭으로 선택 해제');
+                //     }
+                // };
 
             }
 
@@ -14369,21 +14348,16 @@ class WaferMapViewer {
 
                 gridElement.setAttribute('data-label-explorer-grid', 'true');
 
-                gridElement.oncontextmenu = (e) => {
-
-                    if (e.target === gridElement || e.target.classList.contains('grid-thumb-wrap')) {
-
-                        e.preventDefault();
-
-                        e.stopPropagation();
-
-                        this.clearLabelExplorerSelection();
-
-                        this.debugLog('🔷 Label Explorer Grid: 우클릭으로 선택 해제');
-
-                    }
-
-                };
+                // grid.js의 GridManager가 contextmenu 이벤트를 처리하도록 함
+                // gridElement.oncontextmenu 핸들러를 제거
+                // gridElement.oncontextmenu = (e) => {
+                //     if (e.target === gridElement || e.target.classList.contains('grid-thumb-wrap')) {
+                //         e.preventDefault();
+                //         e.stopPropagation();
+                //         this.clearLabelExplorerSelection();
+                //         this.debugLog('🔷 Label Explorer Grid: 우클릭으로 선택 해제');
+                //     }
+                // };
 
             }
 
