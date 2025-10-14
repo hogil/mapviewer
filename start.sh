@@ -31,7 +31,7 @@ export VIPS_MAX_CACHE_MEM="1000m"        # 최대 캐시 메모리 1GB
 export STATS_LOG_ENABLED="1"             # 1=통계 수집 활성화
 
 # Uvicorn 설정 (파일 기반 세션 사용으로 worker 증가 가능)
-export WORKERS="32"                      # 파일 세션 공유로 worker 증가 가능
+export WORKERS="24"                      # 32코어 * 0.75 (안정적)
 export RELOAD="0"                        # 운영 환경에서는 0
 
 # 서버 시작
