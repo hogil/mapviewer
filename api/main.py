@@ -444,13 +444,13 @@ async def saml_login(request: Request):
         auth = _saml_auth(request)
         org_url = request.query_params.get("org_url")
         
-        # 🔥 RelayState를 명시적으로 '/'로 설정 (수동/자동 로그인 모두 동일하게)
-        idp_login_url = auth.login(return_to='/')
+        # 🔥 RelayState를 설정하지 않으면 기본값 사용 (도메인/saml/login)
+        idp_login_url = auth.login()
         logger.info("=" * 100)
         logger.info(f"🔐 [SAML LOGIN] IdP SSO로 리다이렉트")
         logger.info(f"  - IdP SSO URL: {idp_login_url}")
         logger.info(f"  - org_url: {org_url}")
-        logger.info(f"  - RelayState: / (명시적 설정)")
+        logger.info(f"  - RelayState: 기본값 사용 (도메인/saml/login)")
         logger.info("=" * 100)
         
         # SAMLRequest 파라미터 추출 및 디코딩
