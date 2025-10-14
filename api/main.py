@@ -641,12 +641,8 @@ async def saml_acs(request: Request):
         import traceback
         bootlog.error(f"❌ [DETAIL ACCESS] 에러 상세: {traceback.format_exc()}")
 
-    resp = RedirectResponse("/", status_code=302)
-    
-    # 쿠키 사용 안 함 - SAML 로그인 정보는 메모리에 저장
-    bootlog.info(f"✅ [SAML LOGIN] 로그인 성공 - Redirect to: /")
-    
     # 🔥 SAML 로그인 성공 시 IP로 로그인한 기록 삭제 및 SAML 로그 직접 기록 (LoginId 기준)
+    # ⚠️ 중요: stats.json 업데이트는 SAML 인증 확인 후에만 수행
     try:
         client_ip = logger_instance.get_client_ip(request)
         
@@ -665,15 +661,18 @@ async def saml_acs(request: Request):
                 ip=client_ip,
                 endpoint="/saml/acs",  # SAML ACS로 기록 (리다이렉트 후 / 중복 방지)
                 method="POST",
-                user_id_override=LoginId,  # LoginId 사용
+                user_id_override=LoginId,  # LoginId 사용 (SAML claim에서만)
                 meta=meta  # SAML 메타 정보 전달
             )
             bootlog.info(f"✅ [SAML LOG] SAML 로그 기록 완료")
     except Exception as e:
         bootlog.warning(f"⚠️ [SAML LOG] SAML 로그 기록 실패: {e}")
     
+    # 쿠키 사용 안 함 - SAML 로그인 정보는 메모리에 저장
+    bootlog.info(f"✅ [SAML LOGIN] 로그인 성공 - Redirect to: /")
+    
     log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"SAML 로그인: {LoginId}")
-    return resp
+    return RedirectResponse("/", status_code=302)
 
 @app.get("/saml/dev-login")
 async def saml_dev_login(request: Request):
