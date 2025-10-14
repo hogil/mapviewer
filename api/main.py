@@ -427,7 +427,7 @@ async def saml_metadata():
 
 @app.get("/saml/login")
 async def saml_login(request: Request):
-    """SAML 로그인 시작"""
+    """SAML 로그인 시작 (AUTO_LOGIN=True일 때 자동 리다이렉트)"""
     try:
         logger.info("=" * 100)
         logger.info(f"🔐 [SAML LOGIN] 요청 시작")
@@ -438,9 +438,7 @@ async def saml_login(request: Request):
         logger.info(f"  - Path: {request.url.path}")
         logger.info(f"  - Method: {request.method}")
         logger.info(f"  - Client: {request.client}")
-        logger.info(f"  - Headers:")
-        for key, value in request.headers.items():
-            logger.info(f"    {key}: {value}")
+        logger.info(f"  - AUTO_LOGIN: {AUTO_LOGIN}")
         logger.info("=" * 100)
         
         auth = _saml_auth(request)
@@ -449,7 +447,7 @@ async def saml_login(request: Request):
         # IdP SSO URL 생성
         idp_login_url = auth.login()
         logger.info("=" * 100)
-        logger.info(f"🔐 [2단계: SAML LOGIN] /saml/login 완료 시 무조건 IdP SSO로 리다이렉트")
+        logger.info(f"🔐 [SAML LOGIN] IdP SSO로 리다이렉트")
         logger.info(f"  - IdP SSO URL: {idp_login_url}")
         logger.info(f"  - org_url: {org_url}")
         logger.info("=" * 100)
@@ -822,24 +820,8 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         # 자동 로그인 강제: 세션 쿠키가 없고 HTML 페이지 접근 시 /saml/login으로 리다이렉트
         skip_logging = False  # 로그 스킵 플래그
         
-        if AUTO_LOGIN:
-            path = request.url.path
-            # 정적/JS/API 는 제외하고, 루트/페이지 접근만 리다이렉트
-            if not path.startswith(('/api/', '/js/', '/static/', '/saml/')):
-                # 무조건 /saml/login으로 리다이렉트
-                login_url = '/saml/login'
-                if DEFAULT_ORG_URL:
-                    login_url += f"?org_url={DEFAULT_ORG_URL}"
-                logger.info("=" * 100)
-                logger.info(f"🔐 [AUTO LOGIN] 접속 시 /saml/login으로 리다이렉트")
-                logger.info(f"  - Path: {path}")
-                logger.info(f"  - Redirect URL: {login_url}")
-                logger.info(f"  - AUTO_LOGIN: {AUTO_LOGIN}")
-                logger.info(f"  - DEFAULT_ORG_URL: {DEFAULT_ORG_URL}")
-                logger.info("=" * 100)
-                skip_logging = True  # IP 로그인 기록 방지
-                # 즉시 리다이렉트 반환 (call_next 호출 전)
-                return RedirectResponse(login_url, status_code=302)
+        # AUTO_LOGIN은 /saml/login 엔드포인트에서 처리 (수동 접속과 동일)
+        # 미들웨어에서는 리다이렉트하지 않음
         
         response = await call_next(request)
         
@@ -2290,8 +2272,34 @@ app.mount("/js", StaticFiles(directory="js"), name="js")
 app.mount("/static", StaticFiles(directory="."), name="static")
 
 @app.get("/")
-async def read_root():
+async def read_root(request: Request):
     try:
+        # AUTO_LOGIN=True일 때만 자동 리다이렉트 (수동 접속과 동일)
+        if AUTO_LOGIN:
+            # 이미 인증된 사용자인지 확인 (IP 기반)
+            client_ip = logger_instance.get_client_ip(request)
+            LoginId, meta_dict = logger_instance.get_user_by_ip(client_ip)
+            
+            # 이미 인증된 사용자면 index.html 로드
+            if LoginId and meta_dict and LoginId != client_ip:
+                logger.info(f"✅ [AUTO LOGIN] 이미 인증된 사용자: {LoginId}")
+                html_path = Path("index.html")
+                return FileResponse(html_path) if html_path.exists() else {"message": "index.html not found"}
+            
+            # 인증되지 않은 사용자만 /saml/login으로 리다이렉트
+            login_url = '/saml/login'
+            if DEFAULT_ORG_URL:
+                login_url += f"?org_url={DEFAULT_ORG_URL}"
+            logger.info("=" * 100)
+            logger.info(f"🔐 [AUTO LOGIN] 미인증 사용자 → /saml/login으로 리다이렉트")
+            logger.info(f"  - Client IP: {client_ip}")
+            logger.info(f"  - Redirect URL: {login_url}")
+            logger.info(f"  - AUTO_LOGIN: {AUTO_LOGIN}")
+            logger.info(f"  - DEFAULT_ORG_URL: {DEFAULT_ORG_URL}")
+            logger.info("=" * 100)
+            return RedirectResponse(login_url, status_code=302)
+        
+        # AUTO_LOGIN=False일 때는 정상적으로 index.html 로드
         html_path = Path("index.html")
         return FileResponse(html_path) if html_path.exists() else {"message": "index.html not found"}
     except Exception as e:
