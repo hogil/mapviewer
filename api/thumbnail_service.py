@@ -73,7 +73,8 @@ class ThumbnailService:
                     image.write_to_file(str(thumbnail_path), Q=self.thumbnail_quality, strip=True)
                 else:
                     # 썸네일 생성 (고품질 리샘플링)
-                    image = image.thumbnail_image(size[0], size=size[0], height=size[1], crop=False)
+                    # Ubuntu 24 VIPS 호환: width와 height를 명시적으로 지정
+                    image = image.thumbnail_image(size[0], height=size[1], crop=False)
                     image.write_to_file(str(thumbnail_path), Q=self.thumbnail_quality, strip=True)
             except ImportError:
                 # pyvips가 없으면 Pillow 사용 (폴백)
@@ -94,7 +95,8 @@ class ThumbnailService:
             return True
             
         except Exception as e:
-            print(f"썸네일 생성 실패 {image_path}: {e}")
+            # 로그 출력 제거 (성능 최적화)
+            # print(f"썸네일 생성 실패 {image_path}: {e}")
             return False
     
     async def generate_thumbnail(

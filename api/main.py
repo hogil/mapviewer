@@ -856,7 +856,8 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         endpoint = str(request.url.path)
         
         # 🔥 로그 스킵 대상 엔드포인트 체크 (통계 업데이트 전에 먼저 체크)
-        skip_prefix = ["/favicon.ico", "/static/", "/js/", "/api/files/all", "/api/stats", "/api/stats/", "/stats", "/saml/login", "/saml/acs", "/saml/metadata", "/saml/sls", "/api/thumbnail", "/api/image"]
+        # 썸네일, 이미지, 파일 목록 등은 로그에서 제외 (성능 최적화)
+        skip_prefix = ["/favicon.ico", "/static/", "/js/", "/api/files/all", "/api/stats", "/api/stats/", "/stats", "/saml/login", "/saml/acs", "/saml/metadata", "/saml/sls", "/api/thumbnail", "/api/image", "/api/files"]
         
         # 루트(/) 페이지는 SAML 로그인 시에만 직접 기록하므로 미들웨어에서 스킵
         skip_endpoints = ["/", "/index.html"]
@@ -864,6 +865,11 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
             return response
         
         if any(endpoint.startswith(p) for p in skip_prefix):
+            return response
+
+        # 🔥 마우스 클릭(분류 작업)만 로그에 기록
+        # 나머지 API 요청은 로그에서 제외 (성능 최적화)
+        if not endpoint.startswith("/api/classify"):
             return response
 
         client_ip = logger_instance.get_client_ip(request)
@@ -877,12 +883,8 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         method = request.method
         status = response.status_code
 
-        if endpoint.startswith(("/api/thumbnail", "/api/image")):
-            tag = "IMAGE"
-        elif endpoint.startswith("/api/classify"):
-            tag = "ACTION"
-        else:
-            tag = "API"
+        # 분류 작업만 ACTION 태그로 기록
+        tag = "ACTION"
 
         # 🔥 stats.json 업데이트는 /saml/acs에서만 수행 (쓰기만 함, 읽지 않음)
         # middleware에서는 stats.json을 읽거나 업데이트하지 않음
