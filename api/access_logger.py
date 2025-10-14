@@ -46,8 +46,13 @@ class AccessLogger:
         self._save_interval = 10.0  # 10초마다 자동 저장
     
     def _load_stats(self) -> Dict[str, Any]:
-        """통계 데이터 로드 - 🔥 stats.json을 읽지 않음 (쓰기만 함)"""
-        # stats.json을 읽지 않고 빈 딕셔너리 반환
+        """통계 데이터 로드 - 🔥 이전 기록을 누적하기 위해서만 읽음 (접속 제어 안 함)"""
+        if STATS_LOG_FILE.exists():
+            try:
+                with open(STATS_LOG_FILE, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception:
+                pass
         return {
             "users": {},
             "daily_stats": {},
@@ -75,8 +80,26 @@ class AccessLogger:
             print(f"통계 저장 실패: {e}")
     
     def get_user_by_ip(self, ip: str) -> tuple:
-        """IP로 사용자 찾기 - 🔥 stats.json을 읽지 않음 (쓰기만 함)"""
-        # stats.json을 읽지 않고 항상 None 반환
+        """IP로 사용자 찾기 - 🔥 접속 제어용이 아니라 통계 누적용으로만 사용"""
+        # 통계 누적을 위해서만 stats.json 읽음 (접속 제어 안 함)
+        # 캐시에 있으면 즉시 반환
+        if ip in self.ip_to_userid_cache:
+            cached_user_id = self.ip_to_userid_cache[ip]
+            if cached_user_id in self.stats_data.get("users", {}):
+                user_data = self.stats_data["users"][cached_user_id]
+                profile = user_data.get("profile", {})
+                return (cached_user_id, profile)
+        
+        # 캐시에 없으면 검색
+        for uid, udata in self.stats_data.get("users", {}).items():
+            ip_addresses = udata.get("ip_addresses", [])
+            if ip in ip_addresses:
+                profile = udata.get("profile", {})
+                if profile and profile.get("LoginId"):
+                    # 캐시에 저장
+                    self.ip_to_userid_cache[ip] = uid
+                    return (uid, profile)
+        
         return (None, None)
     
     def _update_department_stats(self, user_id: str, dept_name: str, is_new_user: bool = False):
@@ -475,36 +498,37 @@ class AccessLogger:
         
         # 사용자별 통계 (LoginId 기준)
         # 🔥 profile이 있는 경우만 사용자 생성 (IP 사용자 생성 차단)
-        # 🔥 stats.json을 읽지 않고 항상 새로운 사용자로 기록 (덮어쓰기)
         if not profile_meta or len(profile_meta) == 0:
             # profile이 없으면 사용자 생성 안 함 (IP 로그 차단)
             print(f"⚠️ [SKIP CREATE] profile 없어서 사용자 생성 안 함: LoginId={LoginId}, ip={ip}")
             return
         
-        # 🔥 stats.json을 읽지 않고 항상 새로운 사용자로 기록 (덮어쓰기)
-        self.stats_data["users"][LoginId] = {
-            "primary_ip": ip,
-            "ip_addresses": [ip],
-            "total_requests": 0,
-            "unique_days": [],
-            "first_seen": today,
-            "last_seen": today,
-            "last_access_time": now_timestamp,
-            "first_access_time": now_timestamp,
-            "session_count": 0,  # 총 세션 수
-            "total_session_time": 0,  # 총 세션 시간 (초)
-            "current_session_start": now_timestamp,  # 현재 세션 시작 시간
-            "daily_requests": {},
-            "endpoints": {},
-            "sessions": [],  # 세션 히스토리
-            "profile": profile_meta,  # 🔥 profile 직접 저장
-            "user_type": "saml"  # 🔥 profile이 있으면 무조건 SAML 사용자
-        }
-        # 캐시 업데이트
-        self.ip_to_userid_cache[ip] = LoginId
-        print(f"✅ [CREATE] SAML 사용자 생성: LoginId={LoginId}, profile={list(profile_meta.keys())}")
+        # 🔥 stats.json을 읽어서 이전 기록을 누적 (덮어쓰기가 아님)
+        if LoginId not in self.stats_data["users"]:
+            # 새로운 사용자 생성
+            self.stats_data["users"][LoginId] = {
+                "primary_ip": ip,
+                "ip_addresses": [ip],
+                "total_requests": 0,
+                "unique_days": [],
+                "first_seen": today,
+                "last_seen": today,
+                "last_access_time": now_timestamp,
+                "first_access_time": now_timestamp,
+                "session_count": 0,
+                "total_session_time": 0,
+                "current_session_start": now_timestamp,
+                "daily_requests": {},
+                "endpoints": {},
+                "sessions": [],
+                "profile": profile_meta,
+                "user_type": "saml"
+            }
+            # 캐시 업데이트
+            self.ip_to_userid_cache[ip] = LoginId
+            print(f"✅ [CREATE] SAML 사용자 생성: LoginId={LoginId}, profile={list(profile_meta.keys())}")
         
-        # 🔥 stats.json을 읽지 않고 항상 새로운 사용자 데이터 사용
+        # 🔥 이전 기록을 가져와서 누적
         user_data = self.stats_data["users"][LoginId]
         
         # IP 주소 업데이트 (새로운 IP면 추가 + 캐시 업데이트)
@@ -660,8 +684,8 @@ class AccessLogger:
     
     def _update_session(self, ip: str, now_unix: float, endpoint: str):
         """세션 업데이트 - 접속/재접속/세션 종료 관리"""
-        # 🔥 stats.json을 읽지 않음 - SAML 로그인은 /saml/acs에서만 처리
-        # middleware에서는 세션 관리를 하지 않음
+        # 🔥 세션 관리는 하지 않음 - 쿠키/세션 사용 안 함
+        # SAML 로그인은 /saml/acs에서만 처리
         return
     
     def _cleanup_expired_sessions(self, now_unix: float):
