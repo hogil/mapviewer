@@ -1329,8 +1329,12 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
     try:
         # PyVips로 초고속 처리 시도
         import pyvips
-        # VIPS 로그 억제 (Ubuntu 24에서 경고 메시지 방지)
-        pyvips.set_log_handler(lambda domain, level, msg: None)
+        # VIPS 로그 억제 (set_log_handler는 일부 버전에서만 지원)
+        try:
+            pyvips.set_log_handler(lambda domain, level, msg: None)
+        except AttributeError:
+            # set_log_handler가 없는 버전은 무시
+            pass
 
         # 🚀 순차 접근 모드로 이미지 로드 (메모리 효율 & 속도 최적화)
         image = pyvips.Image.new_from_file(str(image_path), access='sequential')
@@ -1425,8 +1429,12 @@ async def get_image_size(path: str):
         
         # pyvips로 빠르게 크기만 조회
         import pyvips
-        # VIPS 로그 억제 (Ubuntu 24에서 경고 메시지 방지)
-        pyvips.set_log_handler(lambda domain, level, msg: None)
+        # VIPS 로그 억제 (set_log_handler는 일부 버전에서만 지원)
+        try:
+            pyvips.set_log_handler(lambda domain, level, msg: None)
+        except AttributeError:
+            # set_log_handler가 없는 버전은 무시
+            pass
         img = pyvips.Image.new_from_file(str(image_path), access='sequential')
         
         return {
