@@ -17,7 +17,7 @@ export SSL_KEYFILE="cert/server.key"
 # 초고속 성능 설정 (Ubuntu 24, 32코어, 198GB RAM)
 export THUMBNAIL_SIZE="512"
 export THUMBNAIL_FORMAT="WEBP"
-export THUMBNAIL_QUALITY="90"            # 품질과 속도 균형
+export THUMBNAIL_QUALITY="100"           # 최고 품질 (Q=100)
 export IO_THREADS="64"                   # 32코어 * 2 (I/O 스레드)
 export THUMBNAIL_SEM="128"               # 32코어 * 4 (동시 썸네일 생성)
 
