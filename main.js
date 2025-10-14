@@ -260,10 +260,7 @@ class ThumbnailManager {
             const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512`;
             
             // 🔍 디버그: 썸네일 URL 로그
-            console.log(`🔍 [THUMBNAIL] 요청 경로: ${imgPath}`);
-            console.log(`🔍 [THUMBNAIL] URL: ${thumbnailUrl}`);
-            
-            // 서버 URL을 직접 반환 (브라우저가 자동으로 로드)
+                                    // 서버 URL을 직접 반환 (브라우저가 자동으로 로드)
             return thumbnailUrl;
 
         } finally {
@@ -1262,10 +1259,7 @@ class WaferMapViewer {
             this.currentFolderPath = data.current_folder;
             this.currentFolderPrefix = data.current_folder_prefix || '';  // 🔥 파일 경로 접두사 저장
 
-            console.log(`🔍 [UPDATE PATH] currentFolderPath: ${this.currentFolderPath}`);
-            console.log(`🔍 [UPDATE PATH] currentFolderPrefix: ${this.currentFolderPrefix}`);
-            
-            // 하위폴더 목록 업데이트
+                                    // 하위폴더 목록 업데이트
 
             await this.updateSubfolderList();
 
@@ -2163,9 +2157,7 @@ class WaferMapViewer {
                     // currentFolderPath 설정
                     this.currentFolderPath = rootPath;
                     this.currentFolderPrefix = '';  // 🔥 최상위 폴더는 빈 접두사
-                    console.log(`🔍 [GO TO ROOT] currentFolderPrefix 리셋: ''`);
-                    
-                    const response = await fetch('/api/change-folder', {
+                                        const response = await fetch('/api/change-folder', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
@@ -3884,13 +3876,9 @@ class WaferMapViewer {
 
     // 사용자 정보 로드 및 표시
     async loadUserInfo() {
-        console.log('[DEBUG] loadUserInfo() 시작');
-        try {
-            console.log('[DEBUG] /api/auth/user 요청 시작');
-            const response = await fetch('/api/auth/user');
-            console.log('[DEBUG] /api/auth/user 응답:', response.status, response.statusText);
-            
-            if (!response.ok) {
+                try {
+                        const response = await fetch('/api/auth/user');
+                        if (!response.ok) {
                 console.warn('[DEBUG] 사용자 정보 로드 실패 - response.ok = false');
                 // 인증 실패 시 Guest로 표시
                 const userInfoEl = document.getElementById('user-info');
@@ -3904,12 +3892,10 @@ class WaferMapViewer {
             }
 
             const data = await response.json();
-            console.log('[DEBUG] /api/auth/user 응답 데이터:', JSON.stringify(data, null, 2));
 
             // 인증되지 않았을 때도 Guest로 표시
             if (!data.authenticated) {
-                console.log('[DEBUG] data.authenticated = false → Guest 표시');
-                const userInfoEl = document.getElementById('user-info');
+                                const userInfoEl = document.getElementById('user-info');
                 if (userInfoEl) {
                     userInfoEl.innerHTML = `
                         <div style="font-weight: 600;">Guest</div>
@@ -3919,16 +3905,13 @@ class WaferMapViewer {
                 return;
             }
 
-            console.log('[DEBUG] data.authenticated = true → 사용자 정보 표시');
-            const meta = data.metadata || {};
-            console.log('[DEBUG] metadata:', JSON.stringify(meta, null, 2));
+                        const meta = data.metadata || {};
 
             // UI 업데이트: SAML claim 원본 이름 그대로 사용
             const userInfoEl = document.getElementById('user-info');
             if (userInfoEl) {
                 const LoginId = meta.LoginId || data.LoginId;
-                console.log('[DEBUG] UI 업데이트 - LoginId:', LoginId);
-                userInfoEl.innerHTML = `
+                                userInfoEl.innerHTML = `
                     <div style="font-weight: 600;">${LoginId}</div>
                     <div style="font-size: 10px; color: #666;">${meta.DeptName || ''}</div>
                 `;
@@ -3937,8 +3920,7 @@ class WaferMapViewer {
             // 전역 변수로 저장 (로그용) - 원본 SAML claim 이름 사용
             this.currentUser = meta;
 
-            console.log('[DEBUG] currentUser 설정 완료:', this.currentUser);
-            this.debugLog('[AUTH] 사용자 정보:', this.currentUser);
+                        this.debugLog('[AUTH] 사용자 정보:', this.currentUser);
         } catch (error) {
             console.error('[DEBUG] 사용자 정보 로드 오류:', error);
             // 오류 발생 시에도 Guest로 표시
@@ -7134,9 +7116,7 @@ class WaferMapViewer {
 
 
         const tStart = performance.now();
-        console.log(`⏱️ [LOAD START] ${fullPath} - 시작`);
-
-        // 🚀 1단계: 이미지 크기만 먼저 조회
+                // 🚀 1단계: 이미지 크기만 먼저 조회
         const tSizeStart = performance.now();
         const sizeResponse = await fetch(`/api/image/size?path=${encodeURIComponent(fullPath)}`);
         if (!sizeResponse.ok) {
@@ -7145,9 +7125,7 @@ class WaferMapViewer {
         const sizeData = await sizeResponse.json();
         const tSizeEnd = performance.now();
         
-        console.log(`⏱️ [SIZE] ${(tSizeEnd - tSizeStart).toFixed(1)}ms - ${sizeData.width}×${sizeData.height}`);
-        
-        // 원본 크기 저장
+                // 원본 크기 저장
         this.originalWidth = sizeData.width;
         this.originalHeight = sizeData.height;
         
@@ -7179,25 +7157,13 @@ class WaferMapViewer {
             initialLevel = 1.0;
         }
         
-        console.log(`🚀 [SMART LOAD] 크기 조회 → zoom: ${(calculatedZoom * 100).toFixed(1)}% → Level ${initialLevel} 직접 로드 (원본: ${this.originalWidth}×${this.originalHeight})`);
-
-        
-        
-        const url = `/api/image?path=${encodeURIComponent(fullPath)}&level=${initialLevel}`;
+                const url = `/api/image?path=${encodeURIComponent(fullPath)}&level=${initialLevel}`;
         const tFetchStart = performance.now();
 
-        console.log(`⏱️ [FETCH START] ${url}`);
-
-
-
-        const response = await fetch(url);
+                const response = await fetch(url);
         const tFetchEnd = performance.now();
 
-        console.log(`⏱️ [FETCH END] ${(tFetchEnd - tFetchStart).toFixed(1)}ms - status=${response.status}`);
-
-
-
-        // 🔥 서버 에러 체크
+                // 🔥 서버 에러 체크
 
         if (!response.ok) {
 
@@ -7225,17 +7191,11 @@ class WaferMapViewer {
         const blob = await response.blob();
         const tBlobEnd = performance.now();
 
-        console.log(`⏱️ [BLOB] ${(tBlobEnd - tBlobStart).toFixed(1)}ms - size=${blob.size} bytes, type=${blob.type}`);
-
-
-
-        const tBitmapStart = performance.now();
+                const tBitmapStart = performance.now();
         const bitmap = await createImageBitmap(blob);
         const tBitmapEnd = performance.now();
 
-        console.log(`⏱️ [BITMAP] ${(tBitmapEnd - tBitmapStart).toFixed(1)}ms - ${bitmap.width}×${bitmap.height}`);
-
-        const elapsed = performance.now() - tStart;
+                const elapsed = performance.now() - tStart;
 
         
 
@@ -7254,11 +7214,7 @@ class WaferMapViewer {
 
 
 
-        console.log(`⏱️ [FAST INIT] ✅ TOTAL: ${elapsed.toFixed(1)}ms | Level: ${initialLevel} | Original: ${this.originalWidth}×${this.originalHeight} (${originalPixels.toLocaleString()}px) | Actual: ${bitmap.width}×${bitmap.height} (${actualCurrentPixels.toLocaleString()}px) | Compression: ${(originalPixels/actualCurrentPixels).toFixed(1)}x | Size: ${blob.size.toLocaleString()} bytes`);
-
-
-
-            // 캐시 저장
+                    // 캐시 저장
 
             this.pyramidLevels[initialLevel] = bitmap;
 
@@ -7300,8 +7256,7 @@ class WaferMapViewer {
             
             // 🎯 resetView 완료 후 적절한 피라미드 레벨로 교체
             setTimeout(() => {
-                console.log(`🔍 [POST RESET] resetView 완료 - zoom: ${this.transform.scale.toFixed(3)} → 적절한 level로 교체`);
-                this.updatePyramidLevel();
+                                this.updatePyramidLevel();
             }, 50);
 
             this.dom.minimapContainer.style.display = 'block';
@@ -7340,17 +7295,11 @@ class WaferMapViewer {
 
     async loadPyramidLevel(level) {
 
-        console.log(`🔍 [LOAD PYRAMID LEVEL] 시작: level=${level}, 현재 줌: ${this.transform.scale} (${(this.transform.scale * 100).toFixed(1)}%)`);
-
-        
-        
-        // 이미 로드되었으면 스킵
+                // 이미 로드되었으면 스킵
 
         if (this.pyramidLevels[level]) {
 
-            console.log(`🔍 [LOAD PYRAMID LEVEL] ✅ 스킵: Level ${level} 이미 로드됨`);
-
-            return;
+                        return;
 
         }
 
@@ -7364,15 +7313,9 @@ class WaferMapViewer {
 
             
             
-            console.log(`🔍 [LOAD PYRAMID LEVEL] URL: ${url}`);
-            
-            const response = await fetch(url);
+                        const response = await fetch(url);
 
-            console.log(`🔍 [LOAD PYRAMID LEVEL] 응답: status=${response.status}`);
-
-            
-            
-            if (!response.ok) {
+                        if (!response.ok) {
 
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 
@@ -7406,9 +7349,7 @@ class WaferMapViewer {
 
 
 
-        console.log(`🔍 [LOAD PYRAMID LEVEL] ✅ 완료: 줌 ${currentZoom}% | Level: ${level} | Original: ${this.originalWidth}×${this.originalHeight} | Actual: ${bitmap.width}×${bitmap.height} | Compression: ${compression}x | Time: ${elapsed.toFixed(1)}ms`);
-
-            this.pyramidLevels[level] = bitmap;
+                    this.pyramidLevels[level] = bitmap;
 
 
 
@@ -7448,39 +7389,27 @@ class WaferMapViewer {
 
            // scale >= 0.85: level 1.0 (85% 이상 - 원본, 최고속)
 
-           console.log(`🔍 [PYRAMID DEBUG] 입력 scale (transform.scale): ${scale} (${(scale * 100).toFixed(1)}%)`);
-
-           let level;
+                      let level;
 
            if (scale <= 0.25) {
 
                level = 0.2;
 
-               console.log(`🔍 [PYRAMID DEBUG] scale <= 0.25 → Level 0.2`);
-
-           } else if (scale < 0.55) {
+                          } else if (scale < 0.55) {
 
                level = 0.4;
 
-               console.log(`🔍 [PYRAMID DEBUG] scale < 0.55 → Level 0.4`);
-
-           } else if (scale < 0.85) {
+                          } else if (scale < 0.85) {
 
                level = 0.7;
 
-               console.log(`🔍 [PYRAMID DEBUG] scale < 0.85 → Level 0.7`);
-
-           } else {
+                          } else {
 
                level = 1.0;
 
-               console.log(`🔍 [PYRAMID DEBUG] scale >= 0.85 → Level 1.0`);
+                          }
 
-           }
-
-           console.log(`🔍 [PYRAMID DEBUG] 최종 선택: Level ${level} (줌 패널 기준)`);
-
-           return level;
+                      return level;
 
        }
 
@@ -7490,31 +7419,19 @@ class WaferMapViewer {
 
         // 줌 변경 시 호출 - 적절한 레벨로 교체
 
-        console.log(`🔍 [UPDATE PYRAMID] 호출됨 - 현재 줌: ${this.zoom} (${(this.zoom * 100).toFixed(1)}%), transform.scale: ${this.transform.scale} (${(this.transform.scale * 100).toFixed(1)}%)`);
-
-        if (!this.pyramidLevels) {
-            console.log(`🔍 [UPDATE PYRAMID] pyramidLevels 없음, 종료`);
-            return;
+                if (!this.pyramidLevels) {
+                        return;
         }
 
-        console.log(`🔍 [UPDATE PYRAMID] 현재 레벨: ${this.currentPyramidLevel}`);
+                const bestLevel = this.getBestPyramidLevel(this.transform.scale);
 
-        const bestLevel = this.getBestPyramidLevel(this.transform.scale);
-
-        console.log(`🔍 [UPDATE PYRAMID] 계산된 최적 레벨: ${bestLevel}`);
-        
-        
-        // 현재 레벨과 다르면 교체
+                // 현재 레벨과 다르면 교체
 
         if (bestLevel !== this.currentPyramidLevel) {
 
-            console.log(`🔍 [UPDATE PYRAMID] 레벨 변경 필요: ${this.currentPyramidLevel} → ${bestLevel}`);
+                        if (this.pyramidLevels[bestLevel]) {
 
-            if (this.pyramidLevels[bestLevel]) {
-
-                console.log(`🔍 [UPDATE PYRAMID] ✅ 즉시 교체: Level ${bestLevel} 이미 로드됨`);
-
-                // 이미 로드된 레벨이면 즉시 교체
+                                // 이미 로드된 레벨이면 즉시 교체
 
                 this.currentImage = this.pyramidLevels[bestLevel];
 
@@ -7678,8 +7595,7 @@ class WaferMapViewer {
 
         // 🔥 중복 호출 방지: 이미 리셋 중이면 스킵
         if (this._isResetting) {
-            console.log(`🔍 [RESET VIEW] 중복 호출 방지 - 이미 리셋 중`);
-            return;
+                        return;
         }
         this._isResetting = true;
 
@@ -7719,14 +7635,10 @@ class WaferMapViewer {
 
         const newScale = fitScale * FIT_RELATIVE_MARGIN * 0.96; // 99%로 조정
         
-        console.log(`🔍 [RESET VIEW] 줌 리셋: ${this.transform.scale} → ${newScale} (${(newScale * 100).toFixed(1)}%)`);
-        
-        this.transform.scale = newScale;
+                this.transform.scale = newScale;
         this.zoom = this.transform.scale; // 🎯 zoom 값 동기화
 
-        console.log(`🔍 [RESET VIEW] 동기화 완료: zoom=${this.zoom}, transform.scale=${this.transform.scale}`);
-
-        // 🎯 실제 센터링도 원본 이미지 크기 기준으로 적용
+                // 🎯 실제 센터링도 원본 이미지 크기 기준으로 적용
 
         this.transform.dx = (containerRect.width - this.originalWidth * this.transform.scale) / 2;
 
@@ -7871,14 +7783,10 @@ class WaferMapViewer {
 
         this.transform.dy = y - (y - this.transform.dy) * scale;
 
-        console.log(`🔍 [ZOOM AT POINT] 줌 변경: ${this.transform.scale} → ${newScale} (${(newScale * 100).toFixed(1)}%)`);
-        
-        this.transform.scale = newScale;
+                this.transform.scale = newScale;
         this.zoom = newScale; // 🎯 zoom 값 동기화
 
-        console.log(`🔍 [ZOOM AT POINT] 동기화 완료: zoom=${this.zoom}, transform.scale=${this.transform.scale}`);
-
-        this.updateZoomDisplay();
+                this.updateZoomDisplay();
 
         this.updatePyramidLevel(); // 🎯 피라미드 레벨 업데이트
 
@@ -7900,17 +7808,13 @@ class WaferMapViewer {
 
     setZoom(level) {
 
-        console.log(`🔍 [SET ZOOM] 호출됨: level=${level} (${(level * 100).toFixed(1)}%)`);
-        
-        const scale = level;
+                const scale = level;
 
         const currentScale = this.transform.scale;
 
         const factor = scale / currentScale;
 
-        console.log(`🔍 [SET ZOOM] 계산: currentScale=${currentScale}, factor=${factor.toFixed(3)}`);
-
-        this.zoomAtCenter(factor);
+                this.zoomAtCenter(factor);
 
     }
 
@@ -7964,13 +7868,9 @@ class WaferMapViewer {
 
         this.transform.dy = (containerRect.height - this.originalHeight * this.transform.scale) / 2 + (filenameBarHeight * 0.4);
 
-        console.log(`🔍 [RESET VIEW ABSOLUTE] 줌 설정: ${this.transform.scale} (${(this.transform.scale * 100).toFixed(1)}%)`);
+                this.zoom = this.transform.scale; // 🎯 zoom 값 동기화
 
-        this.zoom = this.transform.scale; // 🎯 zoom 값 동기화
-
-        console.log(`🔍 [RESET VIEW ABSOLUTE] 동기화 완료: zoom=${this.zoom}, transform.scale=${this.transform.scale}`);
-
-        this.updateZoomDisplay();
+                this.updateZoomDisplay();
 
         this.updatePyramidLevel(); // 🎯 피라미드 레벨 업데이트
 
@@ -7985,9 +7885,7 @@ class WaferMapViewer {
         const displayValue = `${Math.round(this.transform.scale * 100)}%`;
         this.dom.zoomLevelInput.value = displayValue;
         
-        console.log(`🔍 [ZOOM DISPLAY] 표시값: ${displayValue} (this.transform.scale: ${this.transform.scale}, this.zoom: ${this.zoom})`);
-
-    }
+            }
 
 
 
@@ -10477,8 +10375,7 @@ class WaferMapViewer {
 
         // --- 우클릭으로 Label Explorer만 선택 해제 ---
         container.oncontextmenu = (e) => {
-            console.log('🔴 [DEBUG] Label Explorer 우클릭 발생!');
-            e.preventDefault();
+                        e.preventDefault();
             e.stopPropagation(); // 🚀 이벤트 버블링 방지 (Wafer Map Explorer 우클릭 방해 방지)
 
             // 🔥 무조건 이미지 정보 패널 숨기기
@@ -10489,26 +10386,13 @@ class WaferMapViewer {
 
             // Label Explorer 선택 해제 및 이전 상태 복원
             if (this.labelSelection) {
-                console.log('🔴 [DEBUG] Label Explorer 선택 해제:', {
-                    selected: this.labelSelection.selected,
-                    selectedClasses: this.labelSelection.selectedClasses
-                });
-                this.labelSelection.selected = [];
+                                this.labelSelection.selected = [];
                 this.labelSelection.selectedClasses = [];
             }
 
-            console.log('🔴 [DEBUG] savedViewState 확인:', {
-                exists: !!this.savedViewState,
-                type: this.savedViewState?.type,
-                imagesCount: this.savedViewState?.images?.length || 0,
-                scrollTop: this.savedViewState?.scrollTop,
-                fullState: this.savedViewState
-            });
-
-            // savedViewState로 복원
+                        // savedViewState로 복원
             if (this.savedViewState && this.savedViewState.type === 'grid' && this.savedViewState.images.length > 0) {
-                console.log('🔴 [DEBUG] Grid 모드로 복원:', this.savedViewState.images.length, '개 이미지, scrollTop:', this.savedViewState.scrollTop);
-                this.selectedImages = [...this.savedViewState.images];
+                                this.selectedImages = [...this.savedViewState.images];
                 this.showGrid(this.savedViewState.images);
 
                 // 복원 직후 상태 확인
@@ -10536,16 +10420,14 @@ class WaferMapViewer {
                     }, 100);
                 }
             } else if (this.savedViewState && this.savedViewState.type === 'single') {
-                console.log('🔴 [DEBUG] 단일 이미지 모드로 복원:', this.savedViewState.imagePath);
-                this.loadImage(this.savedViewState.imagePath).then(() => {
+                                this.loadImage(this.savedViewState.imagePath).then(() => {
                     this.zoom = this.savedViewState.zoom;
                     this.offsetX = this.savedViewState.offsetX;
                     this.offsetY = this.savedViewState.offsetY;
                     this.render();
                 });
             } else {
-                console.log('🔴 [DEBUG] savedViewState 없음 → 초기 화면으로');
-                this.hideGrid();
+                                this.hideGrid();
                 this.hideImage();
                 this.selectedImages = [];
                 this.currentImage = null;
@@ -10555,8 +10437,7 @@ class WaferMapViewer {
             }
 
             this.updateLabelExplorerSelection();
-            console.log('🔴 [DEBUG] 우클릭 처리 완료');
-        };
+                    };
 
         
         
@@ -10573,20 +10454,10 @@ class WaferMapViewer {
             frame.setAttribute('data-click-bound', 'true');
 
             frame.onclick = (e) => {
-                console.log('🟢 [DEBUG] Label Explorer 프레임 클릭!', {
-                    target: e.target,
-                    frame: frame,
-                    isFrame: e.target === frame,
-                    ctrlKey: e.ctrlKey,
-                    shiftKey: e.shiftKey
-                });
-
-                // 프레임 자체를 클릭하고, Ctrl/Shift가 없을 때만 Label Explorer만 선택 해제
+                                // 프레임 자체를 클릭하고, Ctrl/Shift가 없을 때만 Label Explorer만 선택 해제
 
                 if (e.target === frame && !e.ctrlKey && !e.shiftKey) {
-                    console.log('🟢 [DEBUG] 프레임 클릭 조건 만족 → 복원 시작');
-
-                    // 🔥 무조건 이미지 정보 패널 숨기기
+                                        // 🔥 무조건 이미지 정보 패널 숨기기
                     if (this.dom.fileNameDisplay) {
                         this.dom.fileNameDisplay.style.display = 'none';
                         console.log('🟢 [HIDE-PANEL] 프레임 클릭 시 파일명 패널 숨김');
@@ -10597,11 +10468,7 @@ class WaferMapViewer {
                     // Label Explorer 선택 해제 및 이전 상태 복원
 
                     if (this.labelSelection) {
-                        console.log('🟢 [DEBUG] Label Explorer 선택 해제:', {
-                            selected: this.labelSelection.selected,
-                            selectedClasses: this.labelSelection.selectedClasses
-                        });
-                        this.labelSelection.selected = [];
+                                                this.labelSelection.selected = [];
 
                         this.labelSelection.selectedClasses = [];
 
@@ -10609,14 +10476,10 @@ class WaferMapViewer {
 
 
 
-                    console.log('🟢 [DEBUG] savedViewState 확인:', this.savedViewState);
-
-                    // savedViewState로 복원
+                                        // savedViewState로 복원
 
                     if (this.savedViewState && this.savedViewState.type === 'grid' && this.savedViewState.images.length > 0) {
-                        console.log('🟢 [DEBUG] Grid 모드로 복원:', this.savedViewState.images.length, '개 이미지');
-
-                        this.selectedImages = [...this.savedViewState.images];
+                                                this.selectedImages = [...this.savedViewState.images];
 
                         this.showGrid(this.savedViewState.images);
 
@@ -10647,9 +10510,7 @@ class WaferMapViewer {
                         }
 
                     } else if (this.savedViewState && this.savedViewState.type === 'single') {
-                        console.log('🟢 [DEBUG] 단일 이미지 모드로 복원:', this.savedViewState.imagePath);
-
-                        this.loadImage(this.savedViewState.imagePath).then(() => {
+                                                this.loadImage(this.savedViewState.imagePath).then(() => {
 
                             this.zoom = this.savedViewState.zoom;
 
@@ -10662,9 +10523,7 @@ class WaferMapViewer {
                         });
 
                     } else {
-                        console.log('🟢 [DEBUG] savedViewState 없음 → 초기 화면으로');
-
-                        this.hideGrid();
+                                                this.hideGrid();
 
                         this.hideImage();
 
@@ -10683,9 +10542,7 @@ class WaferMapViewer {
                     
                     
                     this.updateLabelExplorerSelection();
-                    console.log('🟢 [DEBUG] 프레임 클릭 처리 완료');
-
-                }
+                                    }
 
             };
 
@@ -12888,12 +12745,7 @@ class WaferMapViewer {
             
             const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512&t=${Date.now()}`;
             if (idx === 0) {
-                console.log(`🔍 [GRID FIRST] 첫번째 이미지 썸네일 로드:`, { 
-                    인덱스: idx,
-                    경로: imgPath,
-                    URL: thumbnailUrl 
-                });
-            }
+                            }
             img.src = thumbnailUrl;
             thumbBox.appendChild(img);
             wrap.appendChild(thumbBox);
@@ -13792,14 +13644,7 @@ class WaferMapViewer {
         });
 
         // 🔥 Wafer Map Explorer에서 이미지 선택 시 savedViewState 업데이트
-        console.log('🔍 [DEBUG] updateGridSelection 호출됨:', {
-            gridMode: this.gridMode,
-            selectedImages: this.selectedImages?.length || 0,
-            gridSelectedIdxs: this.gridSelectedIdxs?.length || 0,
-            currentSavedViewState: this.savedViewState
-        });
-
-        if (this.gridMode && this.selectedImages && this.selectedImages.length > 0) {
+                if (this.gridMode && this.selectedImages && this.selectedImages.length > 0) {
             this.savedViewState = {
                 type: 'grid',
                 images: [...this.selectedImages],
@@ -13993,13 +13838,7 @@ class WaferMapViewer {
 
         // 🔥 그리드에서 단일 이미지 모드로 전환 시 savedViewState 업데이트
         const grid = document.getElementById('image-grid');
-        console.log('🔍 [DEBUG] enterSingleImageMode 호출됨:', {
-            idx: idx,
-            selectedImages: this.selectedImages?.length || 0,
-            currentSavedViewState: this.savedViewState
-        });
-
-        if (this.selectedImages && this.selectedImages.length > 0) {
+                if (this.selectedImages && this.selectedImages.length > 0) {
             this.savedViewState = {
                 type: 'grid',
                 images: [...this.selectedImages],
@@ -14839,5 +14678,4 @@ if (window.location.hash === '#debug') {
 
 
 
-console.log('🎉 WaferMapViewer 최적화 완료!');
-console.log('성능 모니터링: URL에 #debug 추가');
+// WaferMapViewer 최적화 완료
