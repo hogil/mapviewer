@@ -695,12 +695,15 @@ async def saml_acs(request: Request):
     except Exception as e:
         bootlog.warning(f"⚠️ [SAML LOG] SAML 로그 기록 실패: {e}")
     
-    # 🔥 SAML 로그인 성공 - 서버 메모리에 사용자 정보 저장
+    # 🔥 SAML 로그인 성공 - 서버 메모리에 사용자 정보 저장 (SAML 속성 포함)
     try:
         client_ip = logger_instance.get_client_ip(request)
+        # SAML 속성들을 metadata에 포함하여 저장
+        meta["saml_attributes"] = attrs
         SAML_USER_SESSIONS[client_ip] = meta
         bootlog.info(f"💾 [SAML SESSION] 서버 메모리에 사용자 정보 저장 - IP: {client_ip}")
         bootlog.info(f"💾 [SAML SESSION] 저장된 정보: {meta}")
+        bootlog.info(f"💾 [SAML SESSION] SAML 속성 수: {len(attrs)}")
     except Exception as e:
         bootlog.error(f"❌ [SAML SESSION] 사용자 정보 저장 실패: {e}")
     
@@ -752,6 +755,19 @@ async def saml_dev_login(request: Request):
     }
     # None 제거
     meta = {k: v for k, v in meta.items() if v}
+    
+    # 개발 모드용 SAML 속성 시뮬레이션
+    meta["saml_attributes"] = {
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name": user,
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress": user,
+        "http://schemas.microsoft.com/ws/2008/06/identity/claims/role": "User",
+        "LoginId": meta.get("LoginId", ""),
+        "Username": meta.get("Username", ""),
+        "DeptName": meta.get("DeptName", ""),
+        "GrdName": meta.get("GrdName", ""),
+        "GrdName_EN": meta.get("GrdName_EN", ""),
+        "Sabun": meta.get("Sabun", ""),
+    }
 
     resp = FastAPIResponse(status_code=302)
     resp.headers["Location"] = "/"
@@ -818,6 +834,11 @@ async def api_whoami(request: Request):
         if client_ip in SAML_USER_SESSIONS:
             user_info = SAML_USER_SESSIONS[client_ip]
             logger.info(f"✅ [API /auth/user] SAML 로그인 사용자 정보 발견 - {user_info}")
+            
+            # SAML 속성들을 프론트엔드로 전달
+            saml_attributes = user_info.get("saml_attributes", {})
+            logger.info(f"🔍 [API /auth/user] SAML 속성 수: {len(saml_attributes)}")
+            
             return {
                 "authenticated": True,
                 "LoginId": user_info.get("LoginId", ""),
@@ -826,7 +847,8 @@ async def api_whoami(request: Request):
                 "DeptName": user_info.get("DeptName", ""),
                 "GrdName_EN": user_info.get("GrdName_EN", ""),
                 "GrdName": user_info.get("GrdName", ""),
-                "metadata": user_info.get("metadata", {})
+                "metadata": user_info.get("metadata", {}),
+                "saml_attributes": saml_attributes  # 🔥 SAML 속성들을 프론트엔드로 전달
             }
         else:
             logger.info(f"🔍 [API /auth/user] SAML 로그인 정보 없음 - Guest 반환")

@@ -3898,41 +3898,44 @@ class WaferMapViewer {
     // 사용자 정보 로드 및 표시
     async loadUserInfo() {
         try {
-            // SAML 로그인 정보 확인 (AUTO_LOGIN 설정과 무관)
+            // SAML 로그인 정보 확인 (AUTO_LOGIN 설정과 무관하게)
             const response = await fetch('/api/auth/user');
             const data = await response.json();
             
-            // 🔍 F12 개발자 도구에서 확인 가능한 로그
+            // F12 콘솔에서 확인할 수 있도록 로그 출력
             console.log('🔍 [API /auth/user] 응답 데이터:', data);
             console.log('🔍 [API /auth/user] authenticated:', data.authenticated);
             console.log('🔍 [API /auth/user] LoginId:', data.LoginId);
             console.log('🔍 [API /auth/user] Username:', data.Username);
             console.log('🔍 [API /auth/user] DeptName:', data.DeptName);
             
+            // SAML 속성들 출력
+            if (data.saml_attributes) {
+                console.log('🔍 [SAML ATTRIBUTES] 수신된 속성 (Key → Value):');
+                for (const [key, value] of Object.entries(data.saml_attributes)) {
+                    console.log(`  ${key}: ${value}`);
+                }
+                console.log(`🔍 [SAML ATTRIBUTES] 총 ${Object.keys(data.saml_attributes).length}개 속성`);
+            } else {
+                console.log('🔍 [SAML ATTRIBUTES] SAML 속성 없음');
+            }
+            
             const userInfoEl = document.getElementById('user-info');
             if (userInfoEl) {
-                if (data.authenticated && data.Username) {
-                    // SAML 로그인된 사용자 정보 표시
-                    const displayName = data.LoginId && data.Username 
-                        ? `${data.LoginId}(${data.Username})` 
-                        : data.Username || data.LoginId || 'User';
-                    const deptName = data.DeptName || '';
-                    
-                    // 🔍 F12 개발자 도구에서 확인 가능한 로그
-                    console.log('🔍 [DISPLAY] displayName:', displayName);
-                    console.log('🔍 [DISPLAY] deptName:', deptName);
-                    
+                if (data.authenticated && data.LoginId && data.Username) {
+                    // SAML 로그인 정보가 있는 경우: LoginId(Username) 형식으로 표시
                     userInfoEl.innerHTML = `
-                        <div style="font-weight: 600;">${displayName}</div>
-                        <div style="font-size: 10px; color: #666;">${deptName || 'SAML User'}</div>
+                        <div style="font-weight: 600;">${data.LoginId}(${data.Username})</div>
+                        <div style="font-size: 10px; color: #666;">${data.DeptName || 'Anonymous'}</div>
                     `;
+                    console.log('✅ 사용자 정보 표시됨:', `${data.LoginId}(${data.Username})`);
                 } else {
-                    // 로그인 정보 없음 - Guest 표시
-                    console.log('🔍 [DISPLAY] Guest 사용자 - authenticated:', data.authenticated, 'Username:', data.Username);
+                    // SAML 로그인 정보가 없는 경우: Guest 표시
                     userInfoEl.innerHTML = `
                         <div style="font-weight: 600;">Guest</div>
                         <div style="font-size: 10px; color: #666;">Anonymous</div>
                     `;
+                    console.log('❌ Guest로 표시됨 - SAML 로그인 정보 없음');
                 }
             }
         } catch (error) {
@@ -14923,67 +14926,7 @@ async function checkAutoLogin() {
         // 🔥 URL 파라미터 확인: SAML 로그인 성공 후에는 재시도 안 함
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('saml_success') === 'true') {
-            console.log('SAML 로그인 성공 - URL 파라미터에서 사용자 정보 추출');
-            
-            // URL 파라미터에서 사용자 정보 추출
-            const userInfo = {
-                authenticated: true,
-                LoginId: urlParams.get('loginId') || '',
-                Username: urlParams.get('username') || '',
-                DeptName: urlParams.get('deptName') || '',
-                Sabun: urlParams.get('sabun') || ''
-            };
-            
-            console.log('🔍 [URL PARAMS] 추출된 사용자 정보:', userInfo);
-            
-            // 사용자 정보 표시
-            const userInfoEl = document.getElementById('user-info');
-            if (userInfoEl) {
-                const displayName = userInfo.LoginId && userInfo.Username 
-                    ? `${userInfo.LoginId}(${userInfo.Username})` 
-                    : userInfo.Username || userInfo.LoginId || 'User';
-                const deptName = userInfo.DeptName || '';
-                
-                userInfoEl.innerHTML = `
-                    <div style="font-weight: 600;">${displayName}</div>
-                    <div style="font-size: 10px; color: #666;">${deptName || 'SAML User'}</div>
-                `;
-            }
-            
-            // URL 파라미터 제거
-            window.history.replaceState({}, '', '/');
-            return;
-        }
-        
-        // 🔥 개발 모드 로그인 확인
-        if (urlParams.get('dev_success') === 'true') {
-            console.log('개발 모드 로그인 성공 - URL 파라미터에서 사용자 정보 추출');
-            
-            // URL 파라미터에서 사용자 정보 추출
-            const userInfo = {
-                authenticated: true,
-                LoginId: urlParams.get('loginId') || '',
-                Username: urlParams.get('username') || '',
-                DeptName: urlParams.get('deptName') || '',
-                Sabun: urlParams.get('sabun') || ''
-            };
-            
-            console.log('🔍 [URL PARAMS] 추출된 사용자 정보:', userInfo);
-            
-            // 사용자 정보 표시
-            const userInfoEl = document.getElementById('user-info');
-            if (userInfoEl) {
-                const displayName = userInfo.LoginId && userInfo.Username 
-                    ? `${userInfo.LoginId}(${userInfo.Username})` 
-                    : userInfo.Username || userInfo.LoginId || 'User';
-                const deptName = userInfo.DeptName || '';
-                
-                userInfoEl.innerHTML = `
-                    <div style="font-weight: 600;">${displayName}</div>
-                    <div style="font-size: 10px; color: #666;">${deptName || 'DEV User'}</div>
-                `;
-            }
-            
+            console.log('SAML 로그인 성공 - 재시도 안 함');
             // URL 파라미터 제거
             window.history.replaceState({}, '', '/');
             return;
