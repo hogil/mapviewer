@@ -17,7 +17,7 @@ SKIP_DIRS = set(os.getenv("SKIP_DIRS", "classification,thumbnails").split(","))
 # ===== 동시성 / 성능 =====
 CPU_COUNT = os.cpu_count() or 8
 IO_THREADS = int(os.getenv("IO_THREADS", "0")) or max(8, CPU_COUNT)   # 디코딩/파일 I/O 풀
-THUMBNAIL_SEM = int(os.getenv("THUMBNAIL_SEM", "32"))                 # 썸네일 동시 생성 제한
+THUMBNAIL_SEM = int(os.getenv("THUMBNAIL_SEM", "64"))                 # 썸네일 동시 생성 제한 (32→64로 증가)
 
 # 캐시 크기/TTL
 DIRLIST_CACHE_SIZE = int(os.getenv("DIRLIST_CACHE_SIZE", "1024"))

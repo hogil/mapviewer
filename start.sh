@@ -2,7 +2,7 @@
 # Ubuntu 24 사내 운영 서버 시작 스크립트 (SAML Auto Login + 초고속 성능)
 
 # SAML 설정
-export AUTO_LOGIN="1"                    # 1=자동SAML로그인강제
+export AUTO_LOGIN=True                    # 1=자동SAML로그인강제
 
 # 서버 설정
 export HOST="0.0.0.0"
@@ -26,7 +26,6 @@ export VIPS_CONCURRENCY="32"             # 32코어 활용
 export VIPS_DISC_THRESHOLD="1000m"       # 1GB 임계값
 export VIPS_MAX_CACHE="1000"             # 최대 캐시 1000개
 export VIPS_MAX_CACHE_MEM="1000m"        # 최대 캐시 메모리 1GB
-export G_MESSAGES_DEBUG=""               # VIPS 로그 완전 억제 (성능 향상)
 
 # 통계 로깅
 export STATS_LOG_ENABLED="1"             # 1=통계 수집 활성화

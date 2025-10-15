@@ -64,21 +64,32 @@ class ThumbnailService:
             # pyvips 사용 (Pillow보다 10-100배 빠름)
             try:
                 import pyvips
-                # VIPS 로그 억제 (set_log_handler는 일부 버전에서만 지원)
-                try:
-                    pyvips.set_log_handler(lambda domain, level, msg: None)
-                except AttributeError:
-                    # set_log_handler가 없는 버전은 무시
-                    pass
-                image = pyvips.Image.new_from_file(str(image_path))
+                # sequential=True: 메모리 효율적, 대용량 이미지에 유리
+                image = pyvips.Image.new_from_file(str(image_path), access='sequential')
                 
                 # 원본 이미지가 이미 작으면 복사만
                 if image.width <= size[0] and image.height <= size[1]:
-                    image.write_to_file(str(thumbnail_path), Q=self.thumbnail_quality, strip=True)
+                    image.write_to_file(
+                        str(thumbnail_path), 
+                        Q=self.thumbnail_quality, 
+                        strip=True, 
+                        optimize=True, 
+                        effort=6, 
+                        interlace=False,  # False로 변경: 속도 개선
+                        sequential=True  # 메모리 효율적
+                    )
                 else:
-                    # 썸네일 생성 (고품질 리샘플링)
-                    image = image.thumbnail_image(size[0], height=size[1], crop=False)
-                    image.write_to_file(str(thumbnail_path), Q=self.thumbnail_quality, strip=True)
+                    # 썸네일 생성 (고품질 리샘플링 - lanczos3 유지)
+                    image = image.thumbnail_image(size[0], height=size[1], crop=False, kernel='lanczos3')
+                    image.write_to_file(
+                        str(thumbnail_path), 
+                        Q=self.thumbnail_quality, 
+                        strip=True, 
+                        optimize=True, 
+                        effort=6, 
+                        interlace=False,  # False로 변경: 속도 개선
+                        sequential=True  # 메모리 효율적
+                    )
             except ImportError:
                 # pyvips가 없으면 Pillow 사용 (폴백)
                 with Image.open(image_path) as img:

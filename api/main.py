@@ -24,6 +24,9 @@ from PIL import Image
 import http.client
 import urllib.parse
 
+# ================= pyvips 로그 억제 =================
+logging.getLogger('pyvips').setLevel(logging.WARNING)
+
 from .access_logger import logger_instance
 from .detail_access_logger import detail_access_logger
 from .thumbnail_service import ThumbnailService
