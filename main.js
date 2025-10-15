@@ -7162,6 +7162,9 @@ class WaferMapViewer {
 
             this.currentPyramidLevel = initialLevel;
 
+            // 🎯 초기 이미지 로드 로그
+            this.debugLog(`🎯 [INITIAL LOAD] Level: ${initialLevel} | Original: ${this.originalWidth}×${this.originalHeight} (${originalPixels.toLocaleString()}px) | Loaded: ${bitmap.width}×${bitmap.height} (${actualCurrentPixels.toLocaleString()}px) | Expected: ${expectedPixels.toLocaleString()}px | Compression: ${(originalPixels/actualCurrentPixels).toFixed(1)}x`);
+
 
 
             // UI 초기화
@@ -7417,21 +7420,13 @@ class WaferMapViewer {
      * - 브라우저의 다음 프레임에 draw() 실행
      */
     scheduleDraw() {
-        console.log('🎨 [SCHEDULE DRAW] 화면 그리기 예약:', {
-            drawScheduled: this._drawScheduled,
-            gridMode: this.gridMode,
-            currentImage: this.currentImage ? '있음' : '없음'
-        });
-
         if (this._drawScheduled) {
-            console.log('⚠️ [SCHEDULE DRAW] 이미 예약됨, 스킵');
             return;
         }
 
         this._drawScheduled = true;
 
         requestAnimationFrame(() => {
-            console.log('🎨 [DRAW] 실제 화면 그리기 시작');
             this._drawScheduled = false;
             this.draw();
         });
@@ -7702,71 +7697,35 @@ class WaferMapViewer {
      *    - Grid 모드는 브라우저가 알아서 처리
      */
     handleWheel(e) {
-        console.log('🖱️ [WHEEL] 마우스 휠 이벤트 발생:', {
-            ctrlKey: e.ctrlKey,
-            shiftKey: e.shiftKey,
-            deltaY: e.deltaY,
-            clientX: e.clientX,
-            clientY: e.clientY,
-            gridMode: this.gridMode
-        });
-
         // grid 모드에서는 뷰어 컨테이너 휠 이벤트 비활성화
         if (this.gridMode) {
-            console.log('⚠️ [WHEEL] Grid 모드에서는 휠 이벤트 비활성화');
-            console.log('📜 [GRID SCROLL] Grid 모드에서는 브라우저 기본 스크롤 사용');
-            console.log('📜 [GRID SCROLL] .grid-scroll-wrapper 또는 #image-grid 요소의 scrollTop 변경');
-            console.log('📜 [GRID SCROLL] 브라우저가 자동으로 처리하므로 이 함수는 호출되지 않음');
             return;
         }
 
         // 🔥 상세 보기 모드에서 ESC 키로 빠져나가기
         if (this.detailMode && e.key === 'Escape') {
-            console.log('🚪 [ESC] 상세 보기 모드 종료');
             this.exitDetailMode();
             return;
         }
 
         if (e.ctrlKey) {
-            console.log('🔍 [WHEEL] Ctrl+휠: 줌 (scaleAmount 계산)');
             e.preventDefault();
 
             const scaleAmount = 1 - e.deltaY * 0.001;
-            console.log('🔍 [WHEEL] 줌 적용:', {
-                beforeScale: this.transform.scale,
-                scaleAmount: scaleAmount,
-                afterScale: this.transform.scale * scaleAmount,
-                clientX: e.clientX,
-                clientY: e.clientY
-            });
 
             this.zoomAtPoint(scaleAmount, e.clientX, e.clientY);
             this.scheduleDraw();
 
         } else if (e.shiftKey) {
-            console.log('↔️ [WHEEL] Shift+휠: 수평 이동 (panX 변경)');
             // allow native scroll as well as pan
-            const beforeDx = this.transform.dx;
             this.transform.dx -= e.deltaY; // move horizontally
-            console.log('↔️ [WHEEL] 수평 이동:', {
-                beforeDx: beforeDx,
-                deltaY: e.deltaY,
-                afterDx: this.transform.dx
-            });
 
             this.scheduleDraw();
             // do not preventDefault
 
         } else {
-            console.log('↕️ [WHEEL] 일반 휠: 수직 이동 (panY 변경)');
             // allow native scroll as well as pan
-            const beforeDy = this.transform.dy;
             this.transform.dy -= e.deltaY; // move vertically
-            console.log('↕️ [WHEEL] 수직 이동:', {
-                beforeDy: beforeDy,
-                deltaY: e.deltaY,
-                afterDy: this.transform.dy
-            });
 
             this.scheduleDraw();
             // do not preventDefault
@@ -7801,26 +7760,11 @@ class WaferMapViewer {
      * - 브라우저 스크롤바는 사용하지 않음 (pan 방식)
      */
     zoomAtPoint(scale, clientX, clientY) {
-        console.log('🔍 [ZOOM] zoomAtPoint 호출:', {
-            scale: scale,
-            clientX: clientX,
-            clientY: clientY,
-            beforeScale: this.transform.scale,
-            beforeDx: this.transform.dx,
-            beforeDy: this.transform.dy
-        });
-
         const viewerRect = this.dom.viewerContainer.getBoundingClientRect();
 
         const x = clientX - viewerRect.left;
 
         const y = clientY - viewerRect.top;
-
-        console.log('🔍 [ZOOM] 뷰어 내부 좌표:', {
-            x: x,
-            y: y,
-            viewerRect: viewerRect
-        });
 
         const newScale = this.transform.scale * scale;
 
@@ -7830,13 +7774,6 @@ class WaferMapViewer {
 
         this.transform.scale = newScale;
         this.zoom = newScale; // 🎯 zoom 값 동기화
-
-        console.log('🔍 [ZOOM] 변환 행렬 업데이트:', {
-            afterScale: this.transform.scale,
-            afterDx: this.transform.dx,
-            afterDy: this.transform.dy,
-            zoom: this.zoom
-        });
 
         this.updateZoomDisplay();
 
