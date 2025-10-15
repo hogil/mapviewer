@@ -193,8 +193,8 @@ export class ContextMenuManager {
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
             
-            // 각 이미지의 크기 (정사각형으로 통일)
-            const cellSize = 200;
+            // 각 이미지의 크기 (썸네일 크기로 통일)
+            const cellSize = 150;
             canvas.width = cols * cellSize;
             canvas.height = rows * cellSize;
             
