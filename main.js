@@ -5405,6 +5405,10 @@ class WaferMapViewer {
 
                 <div id="single-copy" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📋 이미지 클립보드 복사</div>
 
+                <div class="context-menu-item" style="padding:8px 12px; border-top:1px solid #555; margin-top:4px;"></div>
+
+                <div id="single-clear-state" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">🔄 복원 상태 초기화</div>
+
             `;
 
             document.body.appendChild(menu);
@@ -5420,6 +5424,16 @@ class WaferMapViewer {
             menu.querySelector('#single-copy').addEventListener('click', async () => {
 
                 await this.copyCurrentImageToClipboard();
+
+                this.hideSingleContextMenu();
+
+            });
+
+            menu.querySelector('#single-clear-state').addEventListener('click', () => {
+
+                this.savedViewState = null;
+
+                alert('복원 상태가 초기화되었습니다.');
 
                 this.hideSingleContextMenu();
 
