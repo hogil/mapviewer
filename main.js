@@ -1743,6 +1743,11 @@ class WaferMapViewer {
                 // Label 캐시 초기화 (제품 선택 시마다)
                 this.clearParCache();
 
+                // 🔥 Label Explorer와 Class Manager 새로고침 (제품 선택 시)
+                if (this.labelManager) {
+                    this.labelManager.refreshAll();
+                }
+
                 
                 
                 // 🔥 그리드 화면 완전 초기화 (제품 선택 시, 상단 패널 유지)
@@ -3906,9 +3911,7 @@ class WaferMapViewer {
             const apiUrl = LoginId ? `/api/auth/user?LoginId=${LoginId}` : '/api/auth/user';
             const response = await fetch(apiUrl);
             const data = await response.json();
-            
-            // F12 콘솔에서 확인할 수 있도록 로그 출력
-            console.log('🔍 [API /auth/user] 응답 데이터:', data);
+
             
             const userInfoEl = document.getElementById('user-info');
             if (userInfoEl) {
