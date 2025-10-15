@@ -16,8 +16,8 @@ SKIP_DIRS = set(os.getenv("SKIP_DIRS", "classification,thumbnails").split(","))
 
 # ===== 동시성 / 성능 =====
 CPU_COUNT = os.cpu_count() or 8
-IO_THREADS = int(os.getenv("IO_THREADS", "0")) or max(8, CPU_COUNT)   # 디코딩/파일 I/O 풀
-THUMBNAIL_SEM = int(os.getenv("THUMBNAIL_SEM", "64"))                 # 썸네일 동시 생성 제한 (32→64로 증가)
+IO_THREADS = int(os.getenv("IO_THREADS", "0")) or max(16, CPU_COUNT * 2)   # Ubuntu 24 최적화: CPU * 2
+THUMBNAIL_SEM = int(os.getenv("THUMBNAIL_SEM", "128"))                     # Ubuntu 24 최적화: 128로 증가
 
 # 캐시 크기/TTL
 DIRLIST_CACHE_SIZE = int(os.getenv("DIRLIST_CACHE_SIZE", "1024"))
@@ -47,4 +47,4 @@ SSL_CERTFILE = os.getenv("SSL_CERTFILE", "cert/fullchain.pem")
 SSL_KEYFILE = os.getenv("SSL_KEYFILE", "cert/server.key")
 
 # ===== 이미지 피라미드 설정 =====
-PYRAMID_LEVELS = [0.2, 0.4, 0.7, 1.0]  # 피라미드 레벨 (0.2=20%, 0.4=40%, 0.7=70%, 1.0=100%) - 고품질 Q=100, Lanczos3
+PYRAMID_LEVELS = [0.25, 0.5, 0.75, 1.0]  # 피라미드 레벨 (0.25=25%, 0.5=50%, 0.75=75%, 1.0=100%) - 최적화된 레벨, Q=95

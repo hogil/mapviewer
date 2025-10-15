@@ -1406,11 +1406,13 @@ def _lookup_original_relpath_from_classification_path(path_str: str) -> Optional
 
 def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
     """🚀 피라미드 레벨 이미지 생성 (속도 극대화)"""
+    import time
+    start_time = time.time()
 
     # 디렉토리 생성
     pyramid_path.parent.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"🚀 [SPEED PYRAMID] 시작: {image_path.name} → level={level}")
+    logger.info(f"🚀 [PYRAMID] 시작: level={level}")
 
     try:
         # PyVips로 초고속 처리 시도
@@ -1429,39 +1431,37 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
         new_w = int(orig_w * level)
         new_h = int(orig_h * level)
 
-        logger.info(f"🚀 [SPEED SIZE] 원본={orig_w}×{orig_h} → 새크기={new_w}×{new_h}")
-
         # 🚀 고품질 리사이즈: Lanczos3 (최고 품질)
         if level >= 1.0:
             # Level 1.0: 원본 복사
             resized = image
-            logger.info(f"🚀 [ORIGINAL COPY] Level 1.0 - 원본 복사")
         else:
             # 모든 레벨: Lanczos3 (최고 품질)
             resized = image.resize(level, kernel='lanczos3')
-            logger.info(f"🚀 [HIGH QUALITY] Level {level} - Lanczos3")
+            
+        # 메모리 정리
+        del image
 
-        # 🚀 고품질 JPEG 저장 (Q=100, 빠른 저장 우선)
+        # 🚀 고품질 JPEG 저장 (Q=95, 속도와 품질 균형)
         resized.write_to_file(
             str(pyramid_path), 
-            Q=100,
-            strip=False,           # 메타데이터 유지 (처리 시간 단축)
-            interlace=False,       # Progressive JPEG 비활성화 (속도 향상)
+            Q=95,                # 품질을 95로 낮춰서 속도 향상
+            strip=True,          # 메타데이터 제거 (속도 향상)
+            interlace=False,     # Progressive JPEG 비활성화 (속도 향상)
             optimize_coding=False  # Huffman 최적화 비활성화 (속도 우선)
         )
 
-        logger.info(f"🚀 [SPEED SAVE] {pyramid_path} ({new_w}×{new_h})")
-
-        # 파일 확인
+        # 시간 측정 및 로그
+        elapsed = time.time() - start_time
         if pyramid_path.exists():
             file_size = pyramid_path.stat().st_size
-            logger.info(f"✅ [SPEED SUCCESS] 파일크기: {file_size} bytes")
+            logger.info(f"✅ [PYRAMID] 완료: {new_w}×{new_h} ({file_size:,} bytes) - {elapsed:.2f}초")
         else:
-            logger.error(f"❌ [SPEED FAILED] 파일 생성 실패")
+            logger.error(f"❌ [PYRAMID] 파일 생성 실패 - {elapsed:.2f}초")
 
     except ImportError:
         # PyVips가 없으면 Pillow 사용
-        logger.info(f"🚀 [PILLOW FALLBACK] PyVips 없음 - Pillow 사용")
+        logger.info(f"🚀 [PILLOW] PyVips 없음 - Pillow 사용")
 
         from PIL import Image
 
@@ -1470,18 +1470,23 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
             new_w = int(orig_w * level)
             new_h = int(orig_h * level)
 
-            logger.info(f"🚀 [PILLOW SIZE] 원본={orig_w}×{orig_h} → 새크기={new_w}×{new_h}")
-
             # 리사이즈 (LANCZOS: 최고 품질)
             resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
-            # JPEG로 저장 (Q=100, 최고 품질)
-            resized.save(pyramid_path, format="JPEG", quality=100, optimize=False)
+            # JPEG로 저장 (Q=95, 속도와 품질 균형)
+            resized.save(pyramid_path, format="JPEG", quality=95, optimize=False)
 
-            logger.info(f"🚀 [PILLOW SAVE] {pyramid_path} ({new_w}×{new_h})")
+            # 시간 측정 및 로그
+            elapsed = time.time() - start_time
+            if pyramid_path.exists():
+                file_size = pyramid_path.stat().st_size
+                logger.info(f"✅ [PYRAMID] 완료: {new_w}×{new_h} ({file_size:,} bytes) - {elapsed:.2f}초")
+            else:
+                logger.error(f"❌ [PYRAMID] 파일 생성 실패 - {elapsed:.2f}초")
 
     except Exception as e:
-        logger.exception(f"🚀 [SPEED ERROR] 피라미드 생성 실패: {e}")
+        elapsed = time.time() - start_time
+        logger.error(f"❌ [PYRAMID] 오류: {e} - {elapsed:.2f}초")
 
         # 실패 시 원본 복사
         try:
@@ -1621,12 +1626,11 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
             # 캐시 미스: 피라미드 이미지 생성
             logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}")
             _generate_pyramid_sync(image_path, pyramid_path, level)
-            logger.info(f"🎯 [GENERATE COMPLETE] {pyramid_path}")
 
             # 생성된 파일 확인 및 반환
             if pyramid_path.exists():
                 st = pyramid_path.stat()
-                logger.info(f"✅ [PYRAMID SUCCESS] {pyramid_path} ({st.st_size} bytes)")
+                logger.info(f"✅ [PYRAMID SUCCESS] 파일크기: {st.st_size:,} bytes")
 
                 headers = {
                     "Cache-Control": "public, max-age=31536000, immutable",
