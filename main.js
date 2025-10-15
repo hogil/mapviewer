@@ -8154,8 +8154,8 @@ class WaferMapViewer {
 
         const scrollTop = container ? container.scrollTop : 0;
 
-        // 현재 폴더가 있으면 해당 폴더의 클래스만 조회
-        const currentFolder = this.currentFolderPath;
+        // 🔥 ROOT_DIR 기준 상대 경로 사용 (절대 경로 아님!)
+        const currentFolder = this.currentFolderPrefix;
         const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
 
         const res = await fetch(apiUrl, {
@@ -10232,8 +10232,8 @@ class WaferMapViewer {
 
         try {
 
-            // 현재 폴더가 있으면 해당 폴더의 클래스만 조회
-            const currentFolder = this.currentFolderPath;
+            // 🔥 ROOT_DIR 기준 상대 경로 사용 (절대 경로 아님!)
+            const currentFolder = this.currentFolderPrefix;
             const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
 
             const res = await fetch(apiUrl, {
