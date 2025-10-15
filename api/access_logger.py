@@ -43,7 +43,7 @@ class AccessLogger:
         # stats.json 저장 최적화
         self._stats_dirty = False  # stats.json이 변경되었는지 플래그
         self._last_save_time = time.time()  # 마지막 저장 시간
-        self._save_interval = 10.0  # 10초마다 자동 저장
+        self._save_interval = 60.0  # 🔥 최적화: 60초마다 자동 저장 (대량 썸네일 로드 시 성능 향상)
     
     def _load_stats(self) -> Dict[str, Any]:
         """통계 데이터 로드 - 🔥 이전 기록을 누적하기 위해서만 읽음 (접속 제어 안 함)"""
@@ -175,20 +175,25 @@ class AccessLogger:
         # stats 관련 요청은 로깅하지 않음
         if '/api/stats' in endpoint or endpoint == '/stats' or endpoint.endswith('/stats.html'):
             return
-            
+
+        # 🔥 최적화: 이미지/썸네일 요청은 콘솔 로그 생략 (대량 요청 시 성능 향상)
+        skip_console_log = endpoint.startswith('/api/image') or endpoint.startswith('/api/thumbnail')
+
         client_ip = self.get_client_ip(request)
         # 메모리 세션에서 사용자 정보 가져오기 (request.state에 저장됨)
         session_user = getattr(request.state, "session_user", None)
         display_user = session_user or client_ip
         method = request.method
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        
+
         # 추가 정보 추출
         extra_info = self._extract_extra_info(request, endpoint, method)
-        
-        # 테이블 형식 로그 생성 (계정 우선 표시)
-        self._log_table_format(timestamp, display_user, method, endpoint, status_code, extra_info)
-        
+
+        # 🔥 최적화: 이미지/썸네일 제외하고만 테이블 로그 출력
+        if not skip_console_log:
+            # 테이블 형식 로그 생성 (계정 우선 표시)
+            self._log_table_format(timestamp, display_user, method, endpoint, status_code, extra_info)
+
         # 통계 업데이트 (계정 기준 우선)
         self._update_stats(client_ip, endpoint, method, user_id_override=session_user)
     
@@ -432,10 +437,7 @@ class AccessLogger:
                     value = meta.get(field)
                     if value:
                         profile_meta[field] = value
-                print(f"🔍 [UPDATE_STATS] meta에서 LoginId 추출: {LoginId}, profile_meta: {list(profile_meta.keys())}")
-            else:
-                print(f"⚠️ [UPDATE_STATS] meta에 LoginId 없음: {list(meta.keys())}")
-        
+
         # 🔥 2. meta가 없으면 user_id_override 사용 (쿠키에서 온 LoginId)
         if not LoginId and user_id_override:
             LoginId = user_id_override
@@ -443,31 +445,24 @@ class AccessLogger:
             existing_user = self.stats_data.get("users", {}).get(LoginId, {})
             if existing_user:
                 profile_meta = existing_user.get("profile", {})
-                print(f"🔍 [UPDATE_STATS] user_id_override 사용: {LoginId}, 기존 profile: {list(profile_meta.keys())}")
-        
+
         # 🔥 3. 여전히 LoginId가 없거나 IP와 같으면 완전 차단
         if not LoginId or LoginId == ip:
             # IP만 있고 LoginId가 없음 → IP 로그 차단
-            print(f"⚠️ [SKIP] LoginId 없음 또는 IP와 동일: LoginId={LoginId}, ip={ip}")
             return
-        
+
         # 🔥 4. LoginId가 있지만 profile이 비어있으면 차단 (SAML 미인증)
         if not profile_meta or len(profile_meta) == 0:
             # profile이 없음 → SAML 미인증 사용자 → 차단
-            print(f"⚠️ [SKIP] profile 비어있음: LoginId={LoginId}, ip={ip}, endpoint={endpoint}")
             return
-        
-        print(f"✅ [LOG] SAML 로그 기록: LoginId={LoginId}, ip={ip}, endpoint={endpoint}, profile={list(profile_meta.keys())}")
         
         # 🔥 detail_access.csv에 기록 (SAML 로그인 시마다)
         if endpoint == "/saml/acs" and profile_meta:
             try:
                 from .detail_access_logger import detail_access_logger
-                print(f"🔄 [CSV 기록] detail_access.csv 기록 시작 - LoginId: {LoginId}")
-                result = detail_access_logger.log_saml_access(profile_meta, ip)
-                print(f"✅ [CSV 기록] detail_access.csv 기록 완료 - 결과: {result}")
+                detail_access_logger.log_saml_access(profile_meta, ip)
             except Exception as e:
-                print(f"❌ [CSV 기록] detail_access.csv 기록 실패: {e}")
+                # 🔥 최적화: 오류만 로그 (정상 동작 시 조용함)
                 import traceback
                 traceback.print_exc()
         
@@ -500,7 +495,6 @@ class AccessLogger:
         # 🔥 profile이 있는 경우만 사용자 생성 (IP 사용자 생성 차단)
         if not profile_meta or len(profile_meta) == 0:
             # profile이 없으면 사용자 생성 안 함 (IP 로그 차단)
-            print(f"⚠️ [SKIP CREATE] profile 없어서 사용자 생성 안 함: LoginId={LoginId}, ip={ip}")
             return
         
         # 🔥 stats.json을 읽어서 이전 기록을 누적 (덮어쓰기가 아님)
@@ -526,7 +520,6 @@ class AccessLogger:
             }
             # 캐시 업데이트
             self.ip_to_userid_cache[ip] = LoginId
-            print(f"✅ [CREATE] SAML 사용자 생성: LoginId={LoginId}, profile={list(profile_meta.keys())}")
         
         # 🔥 이전 기록을 가져와서 누적
         user_data = self.stats_data["users"][LoginId]

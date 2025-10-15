@@ -1750,7 +1750,7 @@ class WaferMapViewer {
 
                 // 🔥 Label Explorer와 Class Manager 새로고침 (제품 선택 시)
                 if (this.labelManager) {
-                    this.labelManager.refreshAll();
+                    await this.labelManager.refreshAll();
                 }
 
                 
@@ -1779,12 +1779,8 @@ class WaferMapViewer {
 
                 this.loadDirectoryContents(null, this.dom.fileExplorer);
 
-                await this.refreshClassList();
-
-                await this.refreshLabelExplorer();
-
                 // 🔥 Wafer Map Explorer 업데이트 (제품 선택 시)
-                this.loadFolderBrowser(this.currentFolderPath);
+                await this.loadFolderBrowser(this.currentFolderPath);
 
                 // 폴더 변경 메시지 제거
 
@@ -3878,22 +3874,27 @@ class WaferMapViewer {
 
         // 먼저 이미지 폴더 최상위로 이동
 
-        this.resetToImageFolder().then(() => {
+        this.resetToImageFolder().then(async () => {
 
             this.loadDirectoryContents(null, this.dom.fileExplorer);
 
-            this.initClassification();
+            await this.initClassification();
 
-            this.refreshLabelExplorer();
+            await this.refreshLabelExplorer();
 
             
             
             // 현재 경로 업데이트
 
-            this.updateCurrentPath();
+            await this.updateCurrentPath();
 
-            
-            
+
+
+            // Wafer Map Explorer 초기 로드
+            await this.loadFolderBrowser(this.currentFolderPath || '');
+
+
+
             // 초기 실행 시 안내 메시지 표시
 
             this.showInitialState();

@@ -940,15 +940,19 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
             return response
 
         endpoint = str(request.url.path)
-        
+
+        # 🔥 최적화: 이미지/썸네일 요청은 완전히 스킵 (대량 요청 시 성능 향상)
+        if endpoint.startswith("/api/thumbnail") or endpoint.startswith("/api/image"):
+            return response
+
         # 🔥 로그 스킵 대상 엔드포인트 체크 (통계 업데이트 전에 먼저 체크)
-        skip_prefix = ["/favicon.ico", "/static/", "/js/", "/api/files/all", "/api/stats", "/api/stats/", "/stats", "/saml/login", "/saml/acs", "/saml/metadata", "/saml/sls", "/api/thumbnail", "/api/image"]
-        
+        skip_prefix = ["/favicon.ico", "/static/", "/js/", "/api/files/all", "/api/stats", "/api/stats/", "/stats", "/saml/login", "/saml/acs", "/saml/metadata", "/saml/sls"]
+
         # 루트(/) 페이지는 SAML 로그인 시에만 직접 기록하므로 미들웨어에서 스킵
         skip_endpoints = ["/", "/index.html"]
         if endpoint in skip_endpoints:
             return response
-        
+
         if any(endpoint.startswith(p) for p in skip_prefix):
             return response
 
@@ -963,9 +967,8 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         method = request.method
         status = response.status_code
 
-        if endpoint.startswith(("/api/thumbnail", "/api/image")):
-            tag = "IMAGE"
-        elif endpoint.startswith("/api/classify"):
+        # 🔥 최적화: 이미지/썸네일은 이미 위에서 return했으므로 여기는 도달 불가
+        if endpoint.startswith("/api/classify"):
             tag = "ACTION"
         else:
             tag = "API"
@@ -1558,9 +1561,7 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
         if not image_path.exists() or not image_path.is_file():
             raise HTTPException(status_code=404, detail="Image not found")
 
-        logger.info(f"🚀 [IMAGE API] 요청: path={path}, level={level}")
-        logger.info(f"🚀 [IMAGE API] 해석된 경로: {image_path}")
-        logger.info(f"🚀 [IMAGE API] ROOT_DIR: {ROOT_DIR}")
+        # 🔥 최적화: 디버그 로그 제거 (대량 이미지 로드 시 성능 저하 방지)
 
         # 🎯 피라미드 레벨이 요청된 경우
         if level is not None:

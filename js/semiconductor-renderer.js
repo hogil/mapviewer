@@ -149,20 +149,26 @@ class SemiconductorRenderer {
         }
 
         this.isGeneratingPyramid = true;
-        this.log('이미지 피라미드 생성 시작... (비동기)');
-        
+        this.log('이미지 피라미드 생성 시작... (비동기, 병렬 처리)');
+
         try {
             // 원본은 즉시 사용 (ImageBitmap 보장 필요 없음)
             // 버전이 바뀌었으면 중단
             if (version !== this.imageVersion) return;
             this.imagePyramid['1'] = image;
 
-            // 1/2, 1/5 레벨을 백그라운드 생성 (toDataURL 미사용, ImageBitmap로 바로 생성)
-            const schedule = (key, scale) => {
-                if (this.generatingLevels.has(key) || this.imagePyramid[key]) return;
+            // 🔥 최적화: 1/2, 1/5 레벨을 병렬로 동시 생성 (더 빠름)
+            const levels = [
+                { key: '0.5', scale: 0.5 },
+                { key: '0.2', scale: 0.2 }
+            ];
+
+            // 병렬 생성 시작
+            const tasks = levels.map(({ key, scale }) => {
+                if (this.generatingLevels.has(key) || this.imagePyramid[key]) return null;
                 this.generatingLevels.add(key);
-                // 유휴 시간에 작업 (fallback: 즉시)
-                const runner = async () => {
+
+                return (async () => {
                     try {
                         const bmp = await this.createResizedBitmap(image, scale);
                         // 최신 이미지인지 확인 후 반영
@@ -176,16 +182,16 @@ class SemiconductorRenderer {
                     } finally {
                         this.generatingLevels.delete(key);
                     }
-                };
-                if (typeof requestIdleCallback === 'function') {
-                    requestIdleCallback(() => runner());
-                } else {
-                    setTimeout(() => runner(), 0);
-                }
-            };
+                })();
+            }).filter(t => t !== null);
 
-            schedule('0.5', 0.5);
-            schedule('0.2', 0.2);
+            // 유휴 시간에 병렬 실행
+            if (typeof requestIdleCallback === 'function') {
+                requestIdleCallback(() => Promise.all(tasks));
+            } else {
+                // 폴백: 즉시 실행
+                Promise.all(tasks);
+            }
         } catch (error) {
             console.error('이미지 피라미드 생성 실패:', error);
         } finally {
@@ -194,25 +200,40 @@ class SemiconductorRenderer {
     }
     
     /**
-     * Lanczos3 알고리즘을 사용한 고품질 다운스케일링
+     * 고품질 다운스케일링 (브라우저 네이티브 최적화)
      * @param {HTMLImageElement} srcImage - 원본 이미지
      * @param {number} scale - 축소 비율 (0 < scale <= 1)
-     * @returns {Promise<HTMLImageElement>}
+     * @returns {Promise<ImageBitmap>}
      */
     async createResizedBitmap(srcImage, scale) {
         const dstWidth = Math.max(1, Math.floor(srcImage.width * scale));
         const dstHeight = Math.max(1, Math.floor(srcImage.height * scale));
+
+        // 🔥 최적화: createImageBitmap 직접 사용 (가장 빠름)
+        // 브라우저 네이티브 리샘플링 사용 (GPU 가속)
+        if (typeof createImageBitmap === 'function') {
+            try {
+                return await createImageBitmap(srcImage, {
+                    resizeWidth: dstWidth,
+                    resizeHeight: dstHeight,
+                    resizeQuality: 'high'  // 고품질 리샘플링
+                });
+            } catch (e) {
+                // 폴백: 캔버스 사용
+            }
+        }
+
+        // 폴백: OffscreenCanvas 또는 일반 Canvas 사용
         const hasOffscreen = typeof OffscreenCanvas !== 'undefined';
         const canvas = hasOffscreen ? new OffscreenCanvas(dstWidth, dstHeight) : document.createElement('canvas');
         if (!hasOffscreen) {
             canvas.width = dstWidth;
             canvas.height = dstHeight;
         }
-        const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+        const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true, willReadFrequently: false });
         // 다운스케일 품질 우선
         ctx.imageSmoothingEnabled = true;
         if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
-        ctx.clearRect(0, 0, dstWidth, dstHeight);
         ctx.drawImage(srcImage, 0, 0, dstWidth, dstHeight);
 
         if (hasOffscreen) {
@@ -310,8 +331,8 @@ class SemiconductorRenderer {
     _ensureImmediateLevelForScale() {
         if (!this.currentImage || !this.options.usePyramid) return;
         const now = Date.now();
-        // 50ms 이내 재호출 방지 (휠 잦은 이벤트 스로틀)
-        if (now - this._lastEnsureAt < 50) return;
+        // 🔥 최적화: 30ms로 축소 (더 빠른 응답)
+        if (now - this._lastEnsureAt < 30) return;
         this._lastEnsureAt = now;
 
         const needFifth = this.scale <= 0.25;
@@ -320,24 +341,26 @@ class SemiconductorRenderer {
         if (key === '1') return; // 원본이면 즉시 보장 불필요
         if (this.imagePyramid[key]) return; // 이미 준비됨
 
-        // 즉시(동기) 캔버스 생성으로 첫 프레임 화질 반영
+        // 🔥 최적화: 즉시(동기) 캔버스 생성으로 첫 프레임 화질 반영
         const scale = key === '0.2' ? 0.2 : 0.5;
         const w = Math.max(1, Math.floor(this.currentImage.width * scale));
         const h = Math.max(1, Math.floor(this.currentImage.height * scale));
         const c = document.createElement('canvas');
-        c.width = w; c.height = h;
-        const cx = c.getContext('2d', { alpha: false, desynchronized: true });
+        c.width = w;
+        c.height = h;
+        const cx = c.getContext('2d', { alpha: false, desynchronized: true, willReadFrequently: false });
         cx.imageSmoothingEnabled = true;
         if ('imageSmoothingQuality' in cx) cx.imageSmoothingQuality = 'high';
         cx.drawImage(this.currentImage, 0, 0, w, h);
         this.imagePyramid[key] = c; // 캔버스도 drawImage 대상 가능
 
-        // 고품질 ImageBitmap으로 비동기 교체
+        // 🔥 최적화: 고품질 ImageBitmap으로 비동기 교체 (우선순위 높음)
         this.createResizedBitmap(this.currentImage, scale).then(bmp => {
             // 최신 이미지인지 확인
             if (this.imageVersion === this.pyramidVersion || this.pyramidVersion === 0) {
                 this.imagePyramid[key] = bmp;
                 this.pyramidVersion = this.imageVersion;
+                this.log(`즉시 레벨 업그레이드 완료: ${key}`);
             }
         }).catch(() => {});
     }

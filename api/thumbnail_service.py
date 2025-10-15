@@ -49,53 +49,66 @@ class ThumbnailService:
         return self.thumbnail_dir / relative_path.parent / thumbnail_name
     
     def _generate_thumbnail_sync(
-        self, 
-        image_path: Path, 
-        thumbnail_path: Path, 
+        self,
+        image_path: Path,
+        thumbnail_path: Path,
         size: Tuple[int, int]
     ) -> bool:
-        """동기 썸네일 생성 (pyvips 최적화)"""
+        """동기 썸네일 생성 (pyvips 최적화 - 최고 속도)"""
         try:
             start_time = time.time()
-            
+
             # 썸네일 디렉토리 생성
             thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
-            
+
             # pyvips 사용 (Pillow보다 10-100배 빠름)
             try:
                 import pyvips
-                # sequential=True: 메모리 효율적, 대용량 이미지에 유리
-                image = pyvips.Image.new_from_file(str(image_path), access='sequential')
-                
+                # 🔥 최적화: sequential + fail_on=none으로 최고 속도
+                image = pyvips.Image.new_from_file(
+                    str(image_path),
+                    access='sequential',
+                    fail_on='none'  # 경고 무시하고 최대 속도
+                )
+
                 # 원본 이미지가 이미 작으면 복사만
                 if image.width <= size[0] and image.height <= size[1]:
+                    # 🔥 최적화: effort=4, lossless=False로 속도 우선
                     image.write_to_file(
-                        str(thumbnail_path), 
-                        Q=self.thumbnail_quality, 
-                        strip=True, 
-                        optimize=True, 
-                        effort=6, 
-                        interlace=False,  # False로 변경: 속도 개선
-                        sequential=True  # 메모리 효율적
+                        str(thumbnail_path),
+                        Q=self.thumbnail_quality,
+                        strip=True,
+                        lossless=False,    # 무손실 비활성화 (속도 우선)
+                        effort=4,          # 6→4로 변경 (속도 2배)
+                        interlace=False,
+                        sequential=True
                     )
                 else:
-                    # 썸네일 생성 (고품질 리샘플링 - lanczos3 유지)
-                    image = image.thumbnail_image(size[0], height=size[1], crop=False, kernel='lanczos3')
+                    # 🔥 썸네일 생성 (lanczos3 유지 - 최고품질)
+                    image = image.thumbnail_image(
+                        size[0],
+                        height=size[1],
+                        size='down',       # 축소만 (속도 개선)
+                        crop='none',       # 크롭 없음
+                        linear=False,      # sRGB 유지 (속도 개선)
+                        kernel='lanczos3'  # 최고품질 유지
+                    )
+                    # 🔥 최적화: effort=4, lossless=False로 속도 우선
                     image.write_to_file(
-                        str(thumbnail_path), 
-                        Q=self.thumbnail_quality, 
-                        strip=True, 
-                        optimize=True, 
-                        effort=6, 
-                        interlace=False,  # False로 변경: 속도 개선
-                        sequential=True  # 메모리 효율적
+                        str(thumbnail_path),
+                        Q=self.thumbnail_quality,
+                        strip=True,
+                        lossless=False,    # 무손실 비활성화 (속도 우선)
+                        effort=4,          # 6→4로 변경 (속도 2배)
+                        interlace=False,
+                        sequential=True
                     )
             except ImportError:
                 # pyvips가 없으면 Pillow 사용 (폴백)
                 with Image.open(image_path) as img:
                     if img.mode not in ('RGB', 'RGBA'):
                         img = img.convert('RGB')
-                    
+
                     if img.width <= size[0] and img.height <= size[1]:
                         img.save(thumbnail_path, self.thumbnail_format.upper(), quality=self.thumbnail_quality, optimize=True, method=6)
                     else:
