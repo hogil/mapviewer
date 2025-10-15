@@ -3738,11 +3738,11 @@ class WaferMapViewer {
 
         
         
-        // 🔥 Explorer 전환 버튼 클릭 이벤트 (Wafer Map ↔ Label Explorer)
+        // 🔥 Wafer Map Explorer 버튼 클릭 이벤트 (하드 새로고침 + 캐시 삭제)
         const resetExplorerBtn = document.getElementById('reset-explorer-btn');
         if (resetExplorerBtn) {
             resetExplorerBtn.onclick = () => {
-                this.toggleExplorer();
+                this.hardRefreshWithCacheClear();
             };
         }
 
@@ -13342,6 +13342,24 @@ class WaferMapViewer {
 
     // 🔥 모든 캐시 초기화
 
+    // 🔥 하드 새로고침 + 캐시 삭제 (Wafer Map Explorer 버튼)
+    async hardRefreshWithCacheClear() {
+        try {
+            console.log('🔄 [HARD REFRESH] 하드 새로고침 + 캐시 삭제 시작...');
+            
+            // 1. 전체 캐시 삭제 (비동기로 실행, 완료를 기다리지 않음)
+            this.clearAllCache();
+            
+            // 2. 즉시 하드 새로고침 (Ctrl+Shift+R과 동일)
+            window.location.reload(true);
+            
+        } catch (error) {
+            console.error('❌ [HARD REFRESH] 하드 새로고침 실패:', error);
+            // 오류가 발생해도 새로고침은 실행
+            window.location.reload(true);
+        }
+    }
+
     // 🔥 Explorer 전환 (Wafer Map ↔ Label Explorer)
     toggleExplorer() {
         const resetExplorerBtn = document.getElementById('reset-explorer-btn');
@@ -13545,7 +13563,7 @@ class WaferMapViewer {
 
             console.error('❌ 캐시 초기화 오류:', error);
 
-            alert(`캐시 초기화 오류: ${error.message}`);
+            // 오류 알림창 제거 (조용한 실행)
 
             return false;
 
