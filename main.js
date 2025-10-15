@@ -3898,34 +3898,29 @@ class WaferMapViewer {
     // 사용자 정보 로드 및 표시
     async loadUserInfo() {
         try {
-            // 서버 설정 확인
-            const configResponse = await fetch('/api/config');
-            const config = await configResponse.json();
+            // SAML 로그인 정보 확인 (AUTO_LOGIN 설정과 무관)
+            const response = await fetch('/api/auth/user');
+            const data = await response.json();
             
-            // 🔥 AUTO_LOGIN=False일 때만 /api/whoami 호출
-            if (!config.AUTO_LOGIN) {
-                // AUTO_LOGIN=False일 때만 /api/whoami 호출 (하지만 항상 Guest 반환)
-                const response = await fetch('/api/auth/user');
-                const data = await response.json();
-                
-                // 항상 Guest로 표시
-                const userInfoEl = document.getElementById('user-info');
-                if (userInfoEl) {
+            const userInfoEl = document.getElementById('user-info');
+            if (userInfoEl) {
+                if (data.authenticated && data.Username) {
+                    // SAML 로그인된 사용자 정보 표시
+                    const displayName = data.LoginId && data.Username 
+                        ? `${data.LoginId}(${data.Username})` 
+                        : data.Username || data.LoginId || 'User';
+                    const deptName = data.DeptName || '';
+                    userInfoEl.innerHTML = `
+                        <div style="font-weight: 600;">${displayName}</div>
+                        <div style="font-size: 10px; color: #666;">${deptName || 'SAML User'}</div>
+                    `;
+                } else {
+                    // 로그인 정보 없음 - Guest 표시
                     userInfoEl.innerHTML = `
                         <div style="font-weight: 600;">Guest</div>
                         <div style="font-size: 10px; color: #666;">Anonymous</div>
                     `;
                 }
-                return;
-            }
-            
-            // AUTO_LOGIN=True일 때는 /api/whoami를 호출하지 않고 바로 Guest로 표시
-            const userInfoEl = document.getElementById('user-info');
-            if (userInfoEl) {
-                userInfoEl.innerHTML = `
-                    <div style="font-weight: 600;">Guest</div>
-                    <div style="font-size: 10px; color: #666;">Anonymous</div>
-                `;
             }
         } catch (error) {
             console.error('[DEBUG] 사용자 정보 로드 오류:', error);

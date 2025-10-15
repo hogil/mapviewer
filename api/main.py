@@ -768,10 +768,78 @@ async def api_config():
 @app.get("/api/whoami")
 @app.get("/api/auth/user")  # 프론트엔드 호환성
 async def api_whoami(request: Request):
-    # 🔥 AUTO_LOGIN=False일 때만 이 엔드포인트 작동
-    # AUTO_LOGIN=True일 때는 이 엔드포인트가 호출되지 않음
-    if not AUTO_LOGIN:
-        logger.info(f"🔍 [API /auth/user] AUTO_LOGIN=False - stats.json 읽지 않음 - Guest")
+    """현재 사용자 정보 반환 - SAML 로그인 정보 확인"""
+    try:
+        client_ip = logger_instance.get_client_ip(request)
+        logger.info(f"🔍 [API /auth/user] 사용자 정보 요청 - IP: {client_ip}")
+        
+        # stats.json에서 현재 사용자 정보 확인
+        stats_data = logger_instance.get_stats_data()
+        if not stats_data or "users" not in stats_data:
+            logger.info(f"🔍 [API /auth/user] stats.json 없음 - Guest 반환")
+            return {
+                "authenticated": False,
+                "LoginId": "",
+                "Username": "",
+                "Sabun": "",
+                "DeptName": "",
+                "GrdName_EN": "",
+                "GrdName": "",
+                "metadata": {}
+            }
+        
+        # 현재 IP로 로그인된 사용자 정보 찾기
+        current_user = None
+        for user_id, user_data in stats_data["users"].items():
+            if user_data.get("primary_ip") == client_ip:
+                current_user = user_data
+                break
+        
+        if not current_user:
+            logger.info(f"🔍 [API /auth/user] 사용자 정보 없음 - Guest 반환")
+            return {
+                "authenticated": False,
+                "LoginId": "",
+                "Username": "",
+                "Sabun": "",
+                "DeptName": "",
+                "GrdName_EN": "",
+                "GrdName": "",
+                "metadata": {}
+            }
+        
+        # SAML 로그인 정보 확인 (Username이 "IP"가 아닌 경우)
+        username = current_user.get("Username", "")
+        if username == "IP":
+            # IP 기반 로그인 (Guest)
+            logger.info(f"🔍 [API /auth/user] IP 기반 로그인 - Guest 반환")
+            return {
+                "authenticated": False,
+                "LoginId": "",
+                "Username": "",
+                "Sabun": "",
+                "DeptName": "",
+                "GrdName_EN": "",
+                "GrdName": "",
+                "metadata": {}
+            }
+        
+        # SAML 로그인된 사용자 정보 반환
+        logger.info(f"✅ [API /auth/user] SAML 로그인 사용자 정보 반환 - {username}")
+        return {
+            "authenticated": True,
+            "LoginId": current_user.get("LoginId", ""),
+            "Username": current_user.get("Username", ""),
+            "Sabun": current_user.get("Sabun", ""),
+            "DeptName": current_user.get("DeptName", ""),
+            "GrdName_EN": current_user.get("GrdName_EN", ""),
+            "GrdName": current_user.get("GrdName", ""),
+            "metadata": current_user.get("metadata", {})
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ [API /auth/user] 오류 발생: {e}")
+        # 오류 발생 시 Guest 반환
         return {
             "authenticated": False,
             "LoginId": "",
@@ -782,10 +850,6 @@ async def api_whoami(request: Request):
             "GrdName": "",
             "metadata": {}
         }
-    
-    # AUTO_LOGIN=True일 때는 이 엔드포인트가 호출되지 않음 (404 반환)
-    logger.warning(f"⚠️ [API /auth/user] AUTO_LOGIN=True - 이 엔드포인트는 사용하지 않음")
-    raise HTTPException(status_code=404, detail="AUTO_LOGIN=True일 때는 이 엔드포인트를 사용하지 않습니다")
 
 
 # ===== 사내 ADFS/STS 헬스 체크 (핑) =====
