@@ -3902,6 +3902,13 @@ class WaferMapViewer {
             const response = await fetch('/api/auth/user');
             const data = await response.json();
             
+            // 🔍 F12 개발자 도구에서 확인 가능한 로그
+            console.log('🔍 [API /auth/user] 응답 데이터:', data);
+            console.log('🔍 [API /auth/user] authenticated:', data.authenticated);
+            console.log('🔍 [API /auth/user] LoginId:', data.LoginId);
+            console.log('🔍 [API /auth/user] Username:', data.Username);
+            console.log('🔍 [API /auth/user] DeptName:', data.DeptName);
+            
             const userInfoEl = document.getElementById('user-info');
             if (userInfoEl) {
                 if (data.authenticated && data.Username) {
@@ -3910,12 +3917,18 @@ class WaferMapViewer {
                         ? `${data.LoginId}(${data.Username})` 
                         : data.Username || data.LoginId || 'User';
                     const deptName = data.DeptName || '';
+                    
+                    // 🔍 F12 개발자 도구에서 확인 가능한 로그
+                    console.log('🔍 [DISPLAY] displayName:', displayName);
+                    console.log('🔍 [DISPLAY] deptName:', deptName);
+                    
                     userInfoEl.innerHTML = `
                         <div style="font-weight: 600;">${displayName}</div>
                         <div style="font-size: 10px; color: #666;">${deptName || 'SAML User'}</div>
                     `;
                 } else {
                     // 로그인 정보 없음 - Guest 표시
+                    console.log('🔍 [DISPLAY] Guest 사용자 - authenticated:', data.authenticated, 'Username:', data.Username);
                     userInfoEl.innerHTML = `
                         <div style="font-weight: 600;">Guest</div>
                         <div style="font-size: 10px; color: #666;">Anonymous</div>
