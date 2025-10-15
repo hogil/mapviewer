@@ -1185,7 +1185,6 @@ async def build_file_index_background():
     global INDEX_BUILDING, INDEX_READY
     if INDEX_BUILDING: return
     INDEX_BUILDING, INDEX_READY = True, False
-    log_access_row(tag="INFO", note="백그라운드 인덱스 구축 시작")
 
     def _walk_and_index():
         global INDEX_READY
@@ -1207,8 +1206,6 @@ async def build_file_index_background():
                     continue
             time.sleep(0.001)
         INDEX_READY = True
-        elapsed = time.time() - start
-        log_access_row(tag="INFO", note=f"인덱스 구축 완료: {len(FILE_INDEX)}개, {elapsed:.1f}s")
 
     try:
         await asyncio.get_running_loop().run_in_executor(ThreadPoolExecutor(max_workers=1), _walk_and_index)

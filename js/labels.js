@@ -331,16 +331,20 @@ export class LabelManager {
      */
     async refreshClassList() {
         try {
-            const response = await fetch('/api/classes');
+            // 현재 폴더가 있으면 해당 폴더의 클래스만 조회
+            const currentFolder = this.viewer?.currentFolderPath;
+            const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
+
+            const response = await fetch(apiUrl);
             if (!response.ok) {
                 throw new Error('클래스 목록 조회 실패');
             }
-            
+
             const data = await response.json();
             this.classes = data.classes || [];
-            
+
             this.renderClassList();
-            
+
         } catch (error) {
             console.error('클래스 목록 새로고침 오류:', error);
             if (this.elements.classList) {

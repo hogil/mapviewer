@@ -1773,8 +1773,8 @@ class WaferMapViewer {
 
                 }
 
-                
-                
+
+
                 await this.updateCurrentPath();
 
                 this.loadDirectoryContents(null, this.dom.fileExplorer);
@@ -1782,6 +1782,9 @@ class WaferMapViewer {
                 await this.refreshClassList();
 
                 await this.refreshLabelExplorer();
+
+                // 🔥 Wafer Map Explorer 업데이트 (제품 선택 시)
+                this.loadFolderBrowser(this.currentFolderPath);
 
                 // 폴더 변경 메시지 제거
 
@@ -8151,7 +8154,11 @@ class WaferMapViewer {
 
         const scrollTop = container ? container.scrollTop : 0;
 
-        const res = await fetch('/api/classes', {
+        // 현재 폴더가 있으면 해당 폴더의 클래스만 조회
+        const currentFolder = this.currentFolderPath;
+        const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
+
+        const res = await fetch(apiUrl, {
             signal: this.globalAbortController?.signal
         });
 
@@ -10221,11 +10228,15 @@ class WaferMapViewer {
 
         const batchDeleteBtn = document.getElementById('label-explorer-batch-delete-btn');
 
-        
-        
+
+
         try {
 
-            const res = await fetch('/api/classes', {
+            // 현재 폴더가 있으면 해당 폴더의 클래스만 조회
+            const currentFolder = this.currentFolderPath;
+            const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
+
+            const res = await fetch(apiUrl, {
                 signal: this.globalAbortController?.signal
             });
 
