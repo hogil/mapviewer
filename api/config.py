@@ -47,4 +47,4 @@ SSL_CERTFILE = os.getenv("SSL_CERTFILE", "cert/fullchain.pem")
 SSL_KEYFILE = os.getenv("SSL_KEYFILE", "cert/server.key")
 
 # ===== 이미지 피라미드 설정 =====
-PYRAMID_LEVELS = [0.25, 0.5, 0.75, 1.0]  # 피라미드 레벨 (0.25=25%, 0.5=50%, 0.75=75%, 1.0=100%) - 최적화된 레벨, Q=95
+PYRAMID_LEVELS = [0.25, 0.5, 0.75, 1.0]  # 피라미드 레벨 (0.25=25%, 0.5=50%, 0.75=75%, 1.0=100%) - 최고품질 Q=100, Lanczos3

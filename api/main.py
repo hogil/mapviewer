@@ -1442,10 +1442,10 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
         # 메모리 정리
         del image
 
-        # 🚀 고품질 JPEG 저장 (Q=95, 속도와 품질 균형)
+        # 🚀 최고품질 JPEG 저장 (Q=100, Lanczos3 유지)
         resized.write_to_file(
             str(pyramid_path), 
-            Q=95,                # 품질을 95로 낮춰서 속도 향상
+            Q=100,               # 최고 품질 유지
             strip=True,          # 메타데이터 제거 (속도 향상)
             interlace=False,     # Progressive JPEG 비활성화 (속도 향상)
             optimize_coding=False  # Huffman 최적화 비활성화 (속도 우선)
@@ -1473,8 +1473,8 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
             # 리사이즈 (LANCZOS: 최고 품질)
             resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
-            # JPEG로 저장 (Q=95, 속도와 품질 균형)
-            resized.save(pyramid_path, format="JPEG", quality=95, optimize=False)
+            # JPEG로 저장 (Q=100, 최고 품질 유지)
+            resized.save(pyramid_path, format="JPEG", quality=100, optimize=False)
 
             # 시간 측정 및 로그
             elapsed = time.time() - start_time
