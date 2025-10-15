@@ -14923,7 +14923,67 @@ async function checkAutoLogin() {
         // 🔥 URL 파라미터 확인: SAML 로그인 성공 후에는 재시도 안 함
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('saml_success') === 'true') {
-            console.log('SAML 로그인 성공 - 재시도 안 함');
+            console.log('SAML 로그인 성공 - URL 파라미터에서 사용자 정보 추출');
+            
+            // URL 파라미터에서 사용자 정보 추출
+            const userInfo = {
+                authenticated: true,
+                LoginId: urlParams.get('loginId') || '',
+                Username: urlParams.get('username') || '',
+                DeptName: urlParams.get('deptName') || '',
+                Sabun: urlParams.get('sabun') || ''
+            };
+            
+            console.log('🔍 [URL PARAMS] 추출된 사용자 정보:', userInfo);
+            
+            // 사용자 정보 표시
+            const userInfoEl = document.getElementById('user-info');
+            if (userInfoEl) {
+                const displayName = userInfo.LoginId && userInfo.Username 
+                    ? `${userInfo.LoginId}(${userInfo.Username})` 
+                    : userInfo.Username || userInfo.LoginId || 'User';
+                const deptName = userInfo.DeptName || '';
+                
+                userInfoEl.innerHTML = `
+                    <div style="font-weight: 600;">${displayName}</div>
+                    <div style="font-size: 10px; color: #666;">${deptName || 'SAML User'}</div>
+                `;
+            }
+            
+            // URL 파라미터 제거
+            window.history.replaceState({}, '', '/');
+            return;
+        }
+        
+        // 🔥 개발 모드 로그인 확인
+        if (urlParams.get('dev_success') === 'true') {
+            console.log('개발 모드 로그인 성공 - URL 파라미터에서 사용자 정보 추출');
+            
+            // URL 파라미터에서 사용자 정보 추출
+            const userInfo = {
+                authenticated: true,
+                LoginId: urlParams.get('loginId') || '',
+                Username: urlParams.get('username') || '',
+                DeptName: urlParams.get('deptName') || '',
+                Sabun: urlParams.get('sabun') || ''
+            };
+            
+            console.log('🔍 [URL PARAMS] 추출된 사용자 정보:', userInfo);
+            
+            // 사용자 정보 표시
+            const userInfoEl = document.getElementById('user-info');
+            if (userInfoEl) {
+                const displayName = userInfo.LoginId && userInfo.Username 
+                    ? `${userInfo.LoginId}(${userInfo.Username})` 
+                    : userInfo.Username || userInfo.LoginId || 'User';
+                const deptName = userInfo.DeptName || '';
+                
+                userInfoEl.innerHTML = `
+                    <div style="font-weight: 600;">${displayName}</div>
+                    <div style="font-size: 10px; color: #666;">${deptName || 'DEV User'}</div>
+                `;
+            }
+            
             // URL 파라미터 제거
             window.history.replaceState({}, '', '/');
             return;
