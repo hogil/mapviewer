@@ -1749,9 +1749,8 @@ class WaferMapViewer {
                 this.clearParCache();
 
                 // 🔥 Label Explorer와 Class Manager 새로고침 (제품 선택 시)
-                if (this.labelManager) {
-                    await this.labelManager.refreshAll();
-                }
+                await this.refreshClassList();
+                await this.refreshLabelExplorer();
 
                 
                 
