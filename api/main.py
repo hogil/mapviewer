@@ -695,31 +695,31 @@ async def saml_acs(request: Request):
     except Exception as e:
         bootlog.warning(f"⚠️ [SAML LOG] SAML 로그 기록 실패: {e}")
     
-    # 🔥 SAML 로그인 성공 - 서버 메모리에 사용자 정보 저장 (SAML 속성 포함)
+    # 🔥 SAML 로그인 성공 - 서버 메모리에 사용자 정보 저장 (LoginId 기준)
     try:
-        client_ip = logger_instance.get_client_ip(request)
         # SAML 속성들을 metadata에 포함하여 저장
         meta["saml_attributes"] = attrs
-        SAML_USER_SESSIONS[client_ip] = meta
-        bootlog.info(f"💾 [SAML SESSION] 서버 메모리에 사용자 정보 저장 - IP: {client_ip}")
+        # LoginId 기준으로 저장
+        SAML_USER_SESSIONS[LoginId] = meta
+        bootlog.info(f"💾 [SAML SESSION] 서버 메모리에 사용자 정보 저장 - LoginId: {LoginId}")
         bootlog.info(f"💾 [SAML SESSION] 저장된 정보: {meta}")
         bootlog.info(f"💾 [SAML SESSION] SAML 속성 수: {len(attrs)}")
     except Exception as e:
         bootlog.error(f"❌ [SAML SESSION] 사용자 정보 저장 실패: {e}")
     
     # 🔥 SAML 로그인 성공 - URL 파라미터로 사용자 정보 전달
-    username = meta.get("Username", "")
-    dept_name = meta.get("DeptName", "")
-    sabun = meta.get("Sabun", "")
+    Username = meta.get("Username", "")
+    DeptName = meta.get("DeptName", "")
+    Sabun = meta.get("Sabun", "")
     
     # URL 파라미터로 사용자 정보 전달
-    redirect_url = f"/?saml_success=true&loginId={LoginId}&username={username}&deptName={dept_name}&sabun={sabun}"
+    redirect_url = f"/?saml_success=true&LoginId={LoginId}&Username={Username}&DeptName={DeptName}&Sabun={Sabun}"
     
     bootlog.info("=" * 100)
     bootlog.info(f"✅ [SAML LOGIN] 로그인 성공 - Redirect to: {redirect_url}")
     bootlog.info(f"  - LoginId: {LoginId}")
-    bootlog.info(f"  - Username: {username}")
-    bootlog.info(f"  - DeptName: {dept_name}")
+    bootlog.info(f"  - Username: {Username}")
+    bootlog.info(f"  - DeptName: {DeptName}")
     bootlog.info("=" * 100)
     
     log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"SAML 로그인: {LoginId}")
@@ -772,29 +772,33 @@ async def saml_dev_login(request: Request):
     resp = FastAPIResponse(status_code=302)
     resp.headers["Location"] = "/"
     
-    # 🔥 개발 모드 로그인 - 서버 메모리에 사용자 정보 저장
+    # 🔥 개발 모드 로그인 - 서버 메모리에 사용자 정보 저장 (LoginId 기준)
     try:
-        client_ip = request.client.host
-        SAML_USER_SESSIONS[client_ip] = meta
-        logger.info(f"💾 [DEV SESSION] 서버 메모리에 사용자 정보 저장 - IP: {client_ip}")
-        logger.info(f"💾 [DEV SESSION] 저장된 정보: {meta}")
+        LoginId = meta.get("LoginId", "")
+        if LoginId:
+            # LoginId 기준으로 저장
+            SAML_USER_SESSIONS[LoginId] = meta
+            logger.info(f"💾 [DEV SESSION] 서버 메모리에 사용자 정보 저장 - LoginId: {LoginId}")
+            logger.info(f"💾 [DEV SESSION] 저장된 정보: {meta}")
+        else:
+            logger.warning(f"⚠️ [DEV SESSION] LoginId가 없어서 저장하지 않음")
     except Exception as e:
         logger.error(f"❌ [DEV SESSION] 사용자 정보 저장 실패: {e}")
     
     # 🔥 개발 모드 로그인 - URL 파라미터로 사용자 정보 전달
-    login_id = meta.get("LoginId", "")
-    username = meta.get("Username", "")
-    dept_name = meta.get("DeptName", "")
-    sabun = meta.get("Sabun", "")
+    LoginId = meta.get("LoginId", "")
+    Username = meta.get("Username", "")
+    DeptName = meta.get("DeptName", "")
+    Sabun = meta.get("Sabun", "")
     
     # URL 파라미터로 사용자 정보 전달
-    redirect_url = f"/?dev_success=true&loginId={login_id}&username={username}&deptName={dept_name}&sabun={sabun}"
+    redirect_url = f"/?dev_success=true&LoginId={LoginId}&Username={Username}&DeptName={DeptName}&Sabun={Sabun}"
     resp.headers["Location"] = redirect_url
     
     logger.info(f"✅ [DEV LOGIN] 개발 모드 로그인 성공 - Redirect to: {redirect_url}")
-    logger.info(f"  - LoginId: {login_id}")
-    logger.info(f"  - Username: {username}")
-    logger.info(f"  - DeptName: {dept_name}")
+    logger.info(f"  - LoginId: {LoginId}")
+    logger.info(f"  - Username: {Username}")
+    logger.info(f"  - DeptName: {DeptName}")
     
     # detail_access.csv에도 개발 모드 로그인 기록
     try:
@@ -819,21 +823,19 @@ async def api_config():
     }
 
 # 🔥 서버 메모리에 SAML 로그인 정보 저장
-SAML_USER_SESSIONS = {}  # {client_ip: user_info}
+SAML_USER_SESSIONS = {}  # {LoginId: user_info}
 
-@app.get("/api/whoami")
-@app.get("/api/auth/user")  # 프론트엔드 호환성
-async def api_whoami(request: Request):
+@app.get("/api/auth/user")
+async def api_auth_user(request: Request, LoginId: Optional[str] = None):
     """현재 사용자 정보 반환 - 서버 메모리에서 SAML 로그인 정보 확인"""
     try:
-        client_ip = logger_instance.get_client_ip(request)
-        logger.info(f"🔍 [API /auth/user] 사용자 정보 요청 - IP: {client_ip}")
+        logger.info(f"🔍 [API /auth/user] 사용자 정보 요청 - LoginId: {LoginId}")
         logger.info(f"🔍 [API /auth/user] 현재 메모리 세션: {list(SAML_USER_SESSIONS.keys())}")
         
-        # 서버 메모리에서 현재 IP의 SAML 로그인 정보 확인
-        if client_ip in SAML_USER_SESSIONS:
-            user_info = SAML_USER_SESSIONS[client_ip]
-            logger.info(f"✅ [API /auth/user] SAML 로그인 사용자 정보 발견 - {user_info}")
+        # LoginId가 제공된 경우 해당 사용자 정보 조회
+        if LoginId and LoginId in SAML_USER_SESSIONS:
+            user_info = SAML_USER_SESSIONS[LoginId]
+            logger.info(f"✅ [API /auth/user] SAML 로그인 사용자 정보 발견 - LoginId: {LoginId}")
             
             # SAML 속성들을 프론트엔드로 전달
             saml_attributes = user_info.get("saml_attributes", {})
@@ -850,18 +852,19 @@ async def api_whoami(request: Request):
                 "metadata": user_info.get("metadata", {}),
                 "saml_attributes": saml_attributes  # 🔥 SAML 속성들을 프론트엔드로 전달
             }
-        else:
-            logger.info(f"🔍 [API /auth/user] SAML 로그인 정보 없음 - Guest 반환")
-            return {
-                "authenticated": False,
-                "LoginId": "",
-                "Username": "",
-                "Sabun": "",
-                "DeptName": "",
-                "GrdName_EN": "",
-                "GrdName": "",
-                "metadata": {}
-            }
+        
+        logger.info(f"🔍 [API /auth/user] SAML 로그인 정보 없음 - Guest 반환")
+        return {
+            "authenticated": False,
+            "LoginId": "",
+            "Username": "",
+            "Sabun": "",
+            "DeptName": "",
+            "GrdName_EN": "",
+            "GrdName": "",
+            "metadata": {},
+            "saml_attributes": {}
+        }
         
     except Exception as e:
         logger.error(f"❌ [API /auth/user] 오류 발생: {e}")
@@ -874,7 +877,8 @@ async def api_whoami(request: Request):
             "DeptName": "",
             "GrdName_EN": "",
             "GrdName": "",
-            "metadata": {}
+            "metadata": {},
+            "saml_attributes": {}
         }
 
 

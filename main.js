@@ -3898,8 +3898,13 @@ class WaferMapViewer {
     // 사용자 정보 로드 및 표시
     async loadUserInfo() {
         try {
-            // SAML 로그인 정보 확인 (AUTO_LOGIN 설정과 무관하게)
-            const response = await fetch('/api/auth/user');
+            // URL 파라미터에서 LoginId 추출
+            const urlParams = new URLSearchParams(window.location.search);
+            const LoginId = urlParams.get('LoginId');
+            
+            // SAML 로그인 정보 확인 (LoginId 파라미터로)
+            const apiUrl = LoginId ? `/api/auth/user?LoginId=${LoginId}` : '/api/auth/user';
+            const response = await fetch(apiUrl);
             const data = await response.json();
             
             // F12 콘솔에서 확인할 수 있도록 로그 출력

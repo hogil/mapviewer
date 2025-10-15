@@ -138,19 +138,19 @@ class AccessLogger:
         # 요청 수 증가
         dept_stats[dept_name]["total_requests"] += 1
     
-    def remove_ip_login_record(self, client_ip: str, login_id: str = None):
+    def remove_ip_login_record(self, client_ip: str, LoginId: str = None):
         """SAML 로그인 성공 시 IP로 로그인한 기록을 삭제 (LoginId 기준)"""
         try:
             # LoginId가 제공되면 해당 사용자의 IP 기록을 정리
-            if login_id and login_id in self.stats_data.get("users", {}):
-                user_data = self.stats_data["users"][login_id]
+            if LoginId and LoginId in self.stats_data.get("users", {}):
+                user_data = self.stats_data["users"][LoginId]
                 # IP 주소 목록에서 해당 IP 제거
                 if client_ip in user_data.get("ip_addresses", []):
                     user_data["ip_addresses"].remove(client_ip)
                     # primary_ip가 삭제된 IP와 같으면 다른 IP로 변경
                     if user_data.get("primary_ip") == client_ip and user_data.get("ip_addresses"):
                         user_data["primary_ip"] = user_data["ip_addresses"][0]
-                    print(f"LoginId {login_id}의 IP {client_ip} 기록 정리됨")
+                    print(f"LoginId {LoginId}의 IP {client_ip} 기록 정리됨")
             
             # IP 키로 된 사용자 기록이 있으면 삭제
             if client_ip in self.stats_data.get("users", {}):
