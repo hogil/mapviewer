@@ -490,7 +490,13 @@ export class LabelManager {
         if (!this.elements.classImagesSection || !this.elements.classImagesList) return;
         
         try {
-            const response = await fetch(`/api/classes/${encodeURIComponent(className)}/images`);
+            // 현재 폴더가 있으면 해당 폴더의 클래스 이미지만 조회
+            const currentFolder = this.viewer?.currentFolderPath;
+            const apiUrl = currentFolder 
+                ? `/api/classes/${encodeURIComponent(className)}/images?folder=${encodeURIComponent(currentFolder)}`
+                : `/api/classes/${encodeURIComponent(className)}/images`;
+                
+            const response = await fetch(apiUrl);
             if (!response.ok) {
                 throw new Error('클래스 이미지 조회 실패');
             }
@@ -576,10 +582,14 @@ export class LabelManager {
         const container = this.elements.labelExplorerList;
         if (!container) return;
 
-        // 클래스 목록 불러오기
+        // 현재 폴더의 클래스 목록 불러오기
         let classes = [];
         try {
-            const res = await fetch('/api/classes');
+            // 현재 폴더가 있으면 해당 폴더의 클래스만 조회
+            const currentFolder = this.viewer?.currentFolderPath;
+            const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
+            
+            const res = await fetch(apiUrl);
             if (!res.ok) throw new Error('클래스 목록 조회 실패');
             const data = await res.json();
             classes = data.classes || [];

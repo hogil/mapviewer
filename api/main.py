@@ -1927,9 +1927,16 @@ async def get_files_recursive(path: str):
 
 # ---------------- Classes ----------------
 @app.get("/api/classes")
-async def get_classes(_=Depends(labels_classes_sync_dep)):
+async def get_classes(folder: Optional[str] = Query(None, description="특정 폴더의 클래스만 조회"), 
+                     _=Depends(labels_classes_sync_dep)):
     try:
-        classification_dir = _classification_dir()
+        # 폴더가 지정된 경우 해당 폴더의 classification 디렉토리 사용
+        if folder:
+            target_folder = safe_resolve_path(folder)
+            classification_dir = target_folder / "classification"
+        else:
+            classification_dir = _classification_dir()
+            
         _dircache_invalidate(classification_dir)
         if not classification_dir.exists():
             classification_dir.mkdir(parents=True, exist_ok=True)
@@ -2025,10 +2032,17 @@ async def delete_classes(req: DeleteClassesReq, _=Depends(labels_classes_sync_de
 async def class_images(class_name: str = PathParam(..., min_length=1, max_length=128),
                        limit: int = Query(500, ge=1, le=5000),
                        offset: int = Query(0, ge=0),
+                       folder: Optional[str] = Query(None, description="특정 폴더의 클래스 이미지만 조회"),
                        _=Depends(labels_classes_sync_dep)):
     try:
         if not _CLASS_NAME_RE.match(class_name): raise HTTPException(status_code=400, detail="Invalid class_name")
-        class_dir = _classification_dir() / class_name
+        
+        # 폴더가 지정된 경우 해당 폴더의 classification 디렉토리 사용
+        if folder:
+            target_folder = safe_resolve_path(folder)
+            class_dir = target_folder / "classification" / class_name
+        else:
+            class_dir = _classification_dir() / class_name
         if not class_dir.exists() or not class_dir.is_dir(): raise HTTPException(status_code=404, detail="Class not found")
         found: List[str] = []; goal = offset + limit
         for p in class_dir.rglob("*"):
