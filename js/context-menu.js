@@ -181,9 +181,9 @@ export class ContextMenuManager {
         try {
             console.log(`${selectedFiles.length}개 이미지 합성 시작`);
             
-            // 이미지들 로드
+            // 이미지들 로드 (썸네일 사용)
             const images = await Promise.all(
-                selectedFiles.map(filePath => this.loadImageForCanvas(filePath))
+                selectedFiles.map(filePath => this.loadThumbnailForCanvas(filePath))
             );
             
             // 그리드 크기 계산
@@ -193,8 +193,8 @@ export class ContextMenuManager {
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
             
-            // 각 이미지의 크기 (썸네일 크기로 통일)
-            const cellSize = 150;
+            // 썸네일 크기 사용 (512x512)
+            const cellSize = 512;
             canvas.width = cols * cellSize;
             canvas.height = rows * cellSize;
             
@@ -202,7 +202,7 @@ export class ContextMenuManager {
             ctx.fillStyle = '#000000';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
-            // 이미지들을 그리드에 배치
+            // 이미지들을 그리드에 배치 (크기 조절 없이 그대로)
             images.forEach((img, index) => {
                 const row = Math.floor(index / cols);
                 const col = index % cols;
@@ -210,7 +210,7 @@ export class ContextMenuManager {
                 const x = col * cellSize;
                 const y = row * cellSize;
                 
-                // 이미지를 셀 크기에 맞게 조정하여 그리기
+                // 썸네일을 그대로 복사 (크기 조절 없음)
                 this.drawImageToFit(ctx, img, x, y, cellSize, cellSize);
             });
             
@@ -220,8 +220,7 @@ export class ContextMenuManager {
                     await navigator.clipboard.write([
                         new ClipboardItem({ 'image/png': blob })
                     ]);
-                    console.log('합성된 이미지가 클립보드에 복사되었습니다.');
-                    alert('합성된 이미지가 클립보드에 복사되었습니다.');
+                    alert(`${selectedFiles.length}개 이미지가 클립보드에 복사되었습니다.`);
                 } catch (error) {
                     console.error('클립보드 복사 실패:', error);
                     alert('클립보드 복사에 실패했습니다.');
@@ -248,6 +247,23 @@ export class ContextMenuManager {
             img.onerror = (error) => reject(error);
             
             img.src = `/api/image?path=${encodeURIComponent(filePath)}`;
+        });
+    }
+    
+    /**
+     * 캔버스용 썸네일 로드
+     * @param {string} filePath 파일 경로
+     * @returns {Promise<HTMLImageElement>} 로드된 썸네일
+     */
+    loadThumbnailForCanvas(filePath) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            
+            img.onload = () => resolve(img);
+            img.onerror = (error) => reject(error);
+            
+            img.src = `/api/thumbnail?path=${encodeURIComponent(filePath)}`;
         });
     }
     
