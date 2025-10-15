@@ -202,7 +202,7 @@ export class ContextMenuManager {
             ctx.fillStyle = '#000000';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
-            // 이미지들을 그리드에 배치 (크기 조절 없이 그대로)
+            // 이미지들을 그리드에 배치 (정식으로 리사이징된 썸네일을 그대로 복사)
             images.forEach((img, index) => {
                 const row = Math.floor(index / cols);
                 const col = index % cols;
@@ -210,8 +210,8 @@ export class ContextMenuManager {
                 const x = col * cellSize;
                 const y = row * cellSize;
                 
-                // 썸네일을 그대로 복사 (크기 조절 없음)
-                this.drawImageToFit(ctx, img, x, y, cellSize, cellSize);
+                // 정식으로 512x512로 리사이징된 썸네일을 그대로 복사 (크기 조절 없음)
+                ctx.drawImage(img, x, y, cellSize, cellSize);
             });
             
             // 캔버스를 Blob으로 변환하여 클립보드에 복사
@@ -263,7 +263,8 @@ export class ContextMenuManager {
             img.onload = () => resolve(img);
             img.onerror = (error) => reject(error);
             
-            img.src = `/api/thumbnail?path=${encodeURIComponent(filePath)}`;
+            // 정확히 512x512로 리사이징된 썸네일 요청
+            img.src = `/api/thumbnail?path=${encodeURIComponent(filePath)}&size=512`;
         });
     }
     
