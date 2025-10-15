@@ -4843,6 +4843,16 @@ class WaferMapViewer {
 
             this.showToast(`${selectedImagePaths.length}개 파일 다운로드 시작`, 1800);
 
+            
+
+            // 다운로드 완료 알림 (마지막 파일 다운로드 후)
+
+            setTimeout(() => {
+
+                alert(`${selectedImagePaths.length}개 파일 다운로드가 완료되었습니다.`);
+
+            }, selectedImagePaths.length * 150 + 1000);
+
         } catch (error) {
 
             console.error('선택된 이미지 다운로드 실패:', error);
@@ -5116,9 +5126,9 @@ class WaferMapViewer {
 
             
             
-            // 배경을 검은색으로 설정
+            // 배경을 흰색으로 설정
 
-            ctx.fillStyle = '#000000';
+            ctx.fillStyle = '#FFFFFF';
 
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -5200,7 +5210,7 @@ class WaferMapViewer {
                         try {
                             const item = new ClipboardItem({ 'image/png': blob });
                             await navigator.clipboard.write([item]);
-                            this.showToast(`${selectedCount}개 이미지 클립보드 복사 완료 (${cols}x${rows})`);
+                            alert(`${selectedCount}개 이미지 클립보드 복사 완료 (${cols}x${rows})`);
                         } catch (clipError) {
                             // Document is not focused 오류 처리
                             throw new Error('클립보드 복사 실패: ' + clipError.message);
@@ -5295,7 +5305,7 @@ class WaferMapViewer {
 
             canvas.height = rows * imageSize;
 
-            ctx.fillStyle = '#000000';
+            ctx.fillStyle = '#FFFFFF';
 
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 

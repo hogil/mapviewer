@@ -14,24 +14,24 @@ export HTTPS_PORT="443"
 export SSL_CERTFILE="cert/fullchain.pem"
 export SSL_KEYFILE="cert/server.key"
 
-# 초고속 성능 설정 (Ubuntu 24, 32코어, 198GB RAM)
+# 초고속 성능 설정 (Ubuntu 24, 32코어, 198GB RAM) - 웹서버 최적화
 export THUMBNAIL_SIZE="512"
 export THUMBNAIL_FORMAT="WEBP"
-export THUMBNAIL_QUALITY="100"           # 최고 품질 (Q=100)
+export THUMBNAIL_QUALITY="100"           # 무손실 유지 (lossless mode)
 export IO_THREADS="64"                   # 32코어 * 2 (I/O 스레드)
-export THUMBNAIL_SEM="128"               # 32코어 * 4 (동시 썸네일 생성)
+export THUMBNAIL_SEM="32"                # 물리 코어 수와 동일 (32개)
 
-# libvips 최적화 (pyvips - Pillow보다 10-100배 빠름)
-export VIPS_CONCURRENCY="32"             # 32코어 활용
-export VIPS_DISC_THRESHOLD="1000m"       # 1GB 임계값
-export VIPS_MAX_CACHE="1000"             # 최대 캐시 1000개
-export VIPS_MAX_CACHE_MEM="1000m"        # 최대 캐시 메모리 1GB
+# libvips 최적화 (웹서버 환경 - 핵심 변경사항)
+export VIPS_CONCURRENCY="1"              # ⚠️ 32→1로 변경 필수 (웹서버 성능 최적화)
+export VIPS_DISC_THRESHOLD="3000m"       # 3GB (198GB RAM 활용)
+export VIPS_MAX_CACHE="3000"             # 캐시 3000개로 증가
+export VIPS_MAX_CACHE_MEM="6000m"        # 6GB로 대폭 증가
 
 # 통계 로깅
 export STATS_LOG_ENABLED="1"             # 1=통계 수집 활성화
 
-# Uvicorn 설정 (파일 기반 세션 사용으로 worker 증가 가능)
-export WORKERS="24"                      # 32코어 * 0.75 (안정적)
+# Uvicorn 설정 (자동 프로세스 고려하여 워커 수 조정)
+export WORKERS="24"                      # 32코어 * 0.75 (자동 프로세스 고려하여 안정적)
 export RELOAD="0"                        # 운영 환경에서는 0
 
 # 서버 시작

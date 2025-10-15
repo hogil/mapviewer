@@ -139,6 +139,7 @@ export class ContextMenuManager {
         }
         
         console.log('모든 파일 다운로드 완료');
+        alert(`${selectedFiles.length}개 파일 다운로드가 완료되었습니다.`);
     }
     
     /**
@@ -198,8 +199,8 @@ export class ContextMenuManager {
             canvas.width = cols * cellSize;
             canvas.height = rows * cellSize;
             
-            // 배경을 검은색으로 채우기
-            ctx.fillStyle = '#000000';
+            // 배경을 흰색으로 채우기
+            ctx.fillStyle = '#FFFFFF';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
             // 이미지들을 그리드에 배치 (정식으로 리사이징된 썸네일을 그대로 복사)
