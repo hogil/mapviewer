@@ -3909,21 +3909,6 @@ class WaferMapViewer {
             
             // F12 콘솔에서 확인할 수 있도록 로그 출력
             console.log('🔍 [API /auth/user] 응답 데이터:', data);
-            console.log('🔍 [API /auth/user] authenticated:', data.authenticated);
-            console.log('🔍 [API /auth/user] LoginId:', data.LoginId);
-            console.log('🔍 [API /auth/user] Username:', data.Username);
-            console.log('🔍 [API /auth/user] DeptName:', data.DeptName);
-            
-            // SAML 속성들 출력
-            if (data.saml_attributes) {
-                console.log('🔍 [SAML ATTRIBUTES] 수신된 속성 (Key → Value):');
-                for (const [key, value] of Object.entries(data.saml_attributes)) {
-                    console.log(`  ${key}: ${value}`);
-                }
-                console.log(`🔍 [SAML ATTRIBUTES] 총 ${Object.keys(data.saml_attributes).length}개 속성`);
-            } else {
-                console.log('🔍 [SAML ATTRIBUTES] SAML 속성 없음');
-            }
             
             const userInfoEl = document.getElementById('user-info');
             if (userInfoEl) {
@@ -3933,14 +3918,12 @@ class WaferMapViewer {
                         <div style="font-weight: 600;">${data.LoginId}(${data.Username})</div>
                         <div style="font-size: 10px; color: #666;">${data.DeptName || 'Anonymous'}</div>
                     `;
-                    console.log('✅ 사용자 정보 표시됨:', `${data.LoginId}(${data.Username})`);
                 } else {
                     // SAML 로그인 정보가 없는 경우: Guest 표시
                     userInfoEl.innerHTML = `
                         <div style="font-weight: 600;">Guest</div>
                         <div style="font-size: 10px; color: #666;">Anonymous</div>
                     `;
-                    console.log('❌ Guest로 표시됨 - SAML 로그인 정보 없음');
                 }
             }
         } catch (error) {

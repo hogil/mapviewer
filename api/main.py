@@ -701,9 +701,6 @@ async def saml_acs(request: Request):
         meta["saml_attributes"] = attrs
         # LoginId 기준으로 저장
         SAML_USER_SESSIONS[LoginId] = meta
-        bootlog.info(f"💾 [SAML SESSION] 서버 메모리에 사용자 정보 저장 - LoginId: {LoginId}")
-        bootlog.info(f"💾 [SAML SESSION] 저장된 정보: {meta}")
-        bootlog.info(f"💾 [SAML SESSION] SAML 속성 수: {len(attrs)}")
     except Exception as e:
         bootlog.error(f"❌ [SAML SESSION] 사용자 정보 저장 실패: {e}")
     
@@ -778,8 +775,6 @@ async def saml_dev_login(request: Request):
         if LoginId:
             # LoginId 기준으로 저장
             SAML_USER_SESSIONS[LoginId] = meta
-            logger.info(f"💾 [DEV SESSION] 서버 메모리에 사용자 정보 저장 - LoginId: {LoginId}")
-            logger.info(f"💾 [DEV SESSION] 저장된 정보: {meta}")
         else:
             logger.warning(f"⚠️ [DEV SESSION] LoginId가 없어서 저장하지 않음")
     except Exception as e:
@@ -829,17 +824,12 @@ SAML_USER_SESSIONS = {}  # {LoginId: user_info}
 async def api_auth_user(request: Request, LoginId: Optional[str] = None):
     """현재 사용자 정보 반환 - 서버 메모리에서 SAML 로그인 정보 확인"""
     try:
-        logger.info(f"🔍 [API /auth/user] 사용자 정보 요청 - LoginId: {LoginId}")
-        logger.info(f"🔍 [API /auth/user] 현재 메모리 세션: {list(SAML_USER_SESSIONS.keys())}")
-        
         # LoginId가 제공된 경우 해당 사용자 정보 조회
         if LoginId and LoginId in SAML_USER_SESSIONS:
             user_info = SAML_USER_SESSIONS[LoginId]
-            logger.info(f"✅ [API /auth/user] SAML 로그인 사용자 정보 발견 - LoginId: {LoginId}")
             
             # SAML 속성들을 프론트엔드로 전달
             saml_attributes = user_info.get("saml_attributes", {})
-            logger.info(f"🔍 [API /auth/user] SAML 속성 수: {len(saml_attributes)}")
             
             return {
                 "authenticated": True,
@@ -853,7 +843,6 @@ async def api_auth_user(request: Request, LoginId: Optional[str] = None):
                 "saml_attributes": saml_attributes  # 🔥 SAML 속성들을 프론트엔드로 전달
             }
         
-        logger.info(f"🔍 [API /auth/user] SAML 로그인 정보 없음 - Guest 반환")
         return {
             "authenticated": False,
             "LoginId": "",
