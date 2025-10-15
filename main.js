@@ -1107,6 +1107,11 @@ class WaferMapViewer {
 
         this.lastExplorerClickedIdx = undefined;
 
+        // 🔥 저장된 상태 변수들 초기화
+        this.savedViewState = null;
+        this.waferMapExplorerState = null;
+        this.labelExplorerState = null;
+
         
         
         // 모든 선택 해제
@@ -13380,8 +13385,6 @@ class WaferMapViewer {
             // Label Explorer → Wafer Map Explorer
             console.log('🔄 [TOGGLE] Label Explorer → Wafer Map Explorer');
             
-            // 🔥 Label Explorer 상태 저장
-            this.saveLabelExplorerState();
             
             // Label Explorer 숨기기
             labelExplorerFrame.style.display = 'none';
@@ -13399,8 +13402,6 @@ class WaferMapViewer {
             // Wafer Map Explorer → Label Explorer
             console.log('🔄 [TOGGLE] Wafer Map Explorer → Label Explorer');
             
-            // 🔥 Wafer Map Explorer 상태 저장
-            this.saveWaferMapExplorerState();
             
             // Wafer Map Explorer 숨기기
             fileExplorer.style.display = 'none';
