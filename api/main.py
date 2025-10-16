@@ -2026,8 +2026,19 @@ class DeleteClassesReq(BaseModel):
     names: List[str] = Field(..., min_items=1)
 
 @app.post("/api/classes/delete")
-async def delete_classes(req: DeleteClassesReq, _=Depends(labels_classes_sync_dep)):
+async def delete_classes(req: DeleteClassesReq,
+                         folder: Optional[str] = Query(None, description="현재 폴더 경로"),
+                         _=Depends(labels_classes_sync_dep)):
     try:
+        # 🔥 folder 파라미터가 있으면 current_folder 설정
+        global current_folder
+        if folder:
+            current_folder = ROOT_DIR / folder
+            logger.info(f"🔍 [DELETE_CLASS] folder 파라미터: {folder}, current_folder: {current_folder}")
+        else:
+            current_folder = ROOT_DIR
+            logger.info(f"🔍 [DELETE_CLASS] folder 파라미터 없음, current_folder: {current_folder}")
+
         if not req.names: raise HTTPException(status_code=400, detail="클래스명 목록이 비어있습니다")
         deleted, failed, total_cleaned = [], [], 0
         for class_name in req.names:
@@ -2035,6 +2046,7 @@ async def delete_classes(req: DeleteClassesReq, _=Depends(labels_classes_sync_de
                 class_name = class_name.strip()
                 if not _CLASS_NAME_RE.match(class_name): raise ValueError("Invalid class name")
                 class_dir = _classification_dir() / class_name
+                logger.info(f"🔍 [DELETE_CLASS] class_dir: {class_dir}, exists: {class_dir.exists()}")
                 if not class_dir.exists() or not class_dir.is_dir(): raise FileNotFoundError("Class not found")
                 shutil.rmtree(class_dir); deleted.append(class_name)
                 total_cleaned += _remove_label_from_all_images(class_name)
