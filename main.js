@@ -8488,7 +8488,10 @@ class WaferMapViewer {
 
 
 
-                    const response = await fetch('/api/classify/batch', {
+                    // 🔥 현재 폴더 파라미터 추가
+                    const currentFolder = this.currentFolderPrefix;
+                    const apiUrl = currentFolder ? `/api/classify/batch?folder=${encodeURIComponent(currentFolder)}` : '/api/classify/batch';
+                    const response = await fetch(apiUrl, {
 
                         method: 'POST',
 
@@ -9004,7 +9007,10 @@ class WaferMapViewer {
 
             const imagePaths = this.gridSelectedIdxs.map(idx => this.selectedImages[idx]);
 
-            await fetch('/api/classify/batch', {
+            // 🔥 현재 폴더 파라미터 추가
+            const currentFolder = this.currentFolderPrefix;
+            const apiUrl = currentFolder ? `/api/classify/batch?folder=${encodeURIComponent(currentFolder)}` : '/api/classify/batch';
+            await fetch(apiUrl, {
 
                 method: 'POST',
 
@@ -9024,9 +9030,12 @@ class WaferMapViewer {
 
             this.debugLog('단일 이미지 분류 요청 전송:', requestBody);
 
-            
-            
-            const res = await fetch('/api/classify', {
+
+
+            // 🔥 현재 폴더 파라미터 추가
+            const currentFolder = this.currentFolderPrefix;
+            const apiUrl = currentFolder ? `/api/classify?folder=${encodeURIComponent(currentFolder)}` : '/api/classify';
+            const res = await fetch(apiUrl, {
 
                 method: 'POST',
 
@@ -9432,17 +9441,21 @@ class WaferMapViewer {
 
             // 선택된 라벨들 제거
 
+            // 🔥 현재 폴더 파라미터 추가
+            const currentFolder = this.currentFolderPrefix;
+            const apiUrl = currentFolder ? `/api/classify?folder=${encodeURIComponent(currentFolder)}` : '/api/classify';
+
             for (const labelGroup of this.selectedLabelsForRemoval) {
 
                 for (const fileName of labelGroup.fileNames) {
 
-                    await fetch('/api/classify', {
+                    await fetch(apiUrl, {
 
                         method: 'DELETE',
 
                         headers: { 'Content-Type': 'application/json' },
 
-                        body: JSON.stringify({ 
+                        body: JSON.stringify({
 
                             class_name: labelGroup.className, 
 
@@ -9556,7 +9569,10 @@ class WaferMapViewer {
 
         try {
 
-            const res = await fetch('/api/classes');
+            // 🔥 현재 폴더의 클래스 목록 가져오기
+            const currentFolder = this.currentFolderPrefix;
+            const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
+            const res = await fetch(apiUrl);
 
             const data = await res.json();
 
@@ -9628,7 +9644,10 @@ class WaferMapViewer {
 
             // 모든 클래스에서 선택된 이미지들의 라벨 찾기
 
-            const res = await fetch('/api/classes');
+            // 🔥 현재 폴더의 클래스 목록 가져오기
+            const currentFolder = this.currentFolderPrefix;
+            const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
+            const res = await fetch(apiUrl);
 
             const data = await res.json();
 
@@ -9982,25 +10001,31 @@ class WaferMapViewer {
                 
                 // 먼저 모든 클래스에서 선택된 이미지들의 기존 라벨 제거
 
-                const res = await fetch('/api/classes');
+                // 🔥 현재 폴더의 클래스 목록 가져오기
+                const currentFolder = this.currentFolderPrefix;
+                const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
+                const res = await fetch(apiUrl);
 
                 const data = await res.json();
 
                 const allClasses = (data.classes || []).sort();
 
-                
-                
+
+
+                // 🔥 현재 폴더 파라미터로 삭제 API URL 생성
+                const deleteApiUrl = currentFolder ? `/api/classify?folder=${encodeURIComponent(currentFolder)}` : '/api/classify';
+
                 for (const cls of allClasses) {
 
                     if (cls === finalClassName) continue; // 추가할 클래스는 제외
 
-                    
-                    
+
+
                     try {
 
                         // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
-                        const labelPath = this.currentFolderPrefix ? 
-                            `${this.currentFolderPrefix}classification/${encodeURIComponent(cls)}` : 
+                        const labelPath = this.currentFolderPrefix ?
+                            `${this.currentFolderPrefix}classification/${encodeURIComponent(cls)}` :
                             `classification/${encodeURIComponent(cls)}`;
                         const filesRes = await fetch(`/api/files?path=${labelPath}`);
 
@@ -10008,25 +10033,25 @@ class WaferMapViewer {
 
                         const files = filesData.items || [];
 
-                        
-                        
+
+
                         for (const imagePath of selectedImages) {
 
                             const fileName = imagePath.split('/').pop();
 
                             if (files.some(file => file.name === fileName)) {
 
-                                await fetch('/api/classify', {
+                                await fetch(deleteApiUrl, {
 
                                     method: 'DELETE',
 
                                     headers: { 'Content-Type': 'application/json' },
 
-                                    body: JSON.stringify({ 
+                                    body: JSON.stringify({
 
-                                        class_name: cls, 
+                                        class_name: cls,
 
-                                        image_name: fileName 
+                                        image_name: fileName
 
                                     })
 
@@ -10054,15 +10079,19 @@ class WaferMapViewer {
             
             // 처리할 이미지들에 라벨 추가
 
+            // 🔥 현재 폴더 파라미터 추가
+            const currentFolder = this.currentFolderPrefix;
+            const apiUrl = currentFolder ? `/api/classify?folder=${encodeURIComponent(currentFolder)}` : '/api/classify';
+
             const promises = imagesToProcess.map(imagePath => {
 
                 const requestBody = { class_name: finalClassName, image_path: imagePath };
 
                 this.debugLog('모달에서 라벨 추가 요청 전송:', requestBody);
 
-                
-                
-                return fetch('/api/classify', {
+
+
+                return fetch(apiUrl, {
 
                     method: 'POST',
 
@@ -10693,11 +10722,15 @@ class WaferMapViewer {
 
             // 🔥 클래스별 배치 DELETE 요청 병렬 처리
 
+            // 🔥 현재 폴더 파라미터 추가
+            const currentFolder = this.currentFolderPrefix;
+            const deleteApiUrl = currentFolder ? `/api/classify/delete?folder=${encodeURIComponent(currentFolder)}` : '/api/classify/delete';
+
             const batchPromises = Object.entries(classToDel).map(async ([cls, images]) => {
 
                 this.debugLog(`🗑️ DELETE 요청: class=${cls}, images=${images.length}개`, images);
 
-                const response = await fetch('/api/classify/delete', {
+                const response = await fetch(deleteApiUrl, {
 
                     method: 'POST',
 
@@ -11494,11 +11527,15 @@ class WaferMapViewer {
 
                         }
 
+                        // 🔥 현재 폴더 파라미터 추가
+                        const currentFolder = this.currentFolderPrefix;
+                        const deleteApiUrl = currentFolder ? `/api/classify?folder=${encodeURIComponent(currentFolder)}` : '/api/classify';
+
                         for (const key of toDelete) {
 
                             const [delCls, delImg] = key.split('/');
 
-                            await fetch('/api/classify', {
+                            await fetch(deleteApiUrl, {
 
                                 method: 'DELETE',
 
@@ -11826,11 +11863,15 @@ class WaferMapViewer {
 
                                 }
 
+                                // 🔥 현재 폴더 파라미터 추가
+                                const currentFolder = this.currentFolderPrefix;
+                                const deleteApiUrl = currentFolder ? `/api/classify?folder=${encodeURIComponent(currentFolder)}` : '/api/classify';
+
                                 for (const key of toDelete) {
 
                                     const [delCls, delImg] = key.split('/');
 
-                                    await fetch('/api/classify', {
+                                    await fetch(deleteApiUrl, {
 
                                         method: 'DELETE',
 
@@ -11974,13 +12015,9 @@ class WaferMapViewer {
 
         this.refreshClassList().then(async () => {
 
-            // 🔥 API에서 직접 클래스 목록 가져오기
+            // 🔥 refreshClassList()에서 캐시된 클래스 목록 사용 (중복 API 호출 제거)
 
-            const res = await fetch('/api/classes');
-
-            const data = await res.json();
-
-            const classes = Array.isArray(data.classes) ? data.classes.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())) : [];
+            const classes = Array.isArray(this.cachedClassList) ? this.cachedClassList.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())) : [];
 
             const labelSelection = this.labelSelection;
 
