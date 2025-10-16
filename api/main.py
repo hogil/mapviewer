@@ -707,16 +707,14 @@ async def saml_acs(request: Request):
     # 🔥 SAML 로그인 성공 - URL 파라미터로 사용자 정보 전달
     Username = meta.get("Username", "")
     DeptName = meta.get("DeptName", "")
-    Sabun = meta.get("Sabun", "")
-    
-    # URL 파라미터로 사용자 정보 전달
-    redirect_url = f"/?saml_success=true&LoginId={LoginId}&Username={Username}&DeptName={DeptName}&Sabun={Sabun}"
-    
+    Sabun = meta.get("Sabun", "")  # 로그용으로만 사용
+
+    # 🔥 보안: Sabun은 URL에 노출하지 않음 (프론트엔드에서 미사용)
+    redirect_url = f"/?saml_success=true&LoginId={LoginId}&Username={Username}&DeptName={DeptName}"
+
     bootlog.info("=" * 100)
-    bootlog.info(f"✅ [SAML LOGIN] 로그인 성공 - Redirect to: {redirect_url}")
-    bootlog.info(f"  - LoginId: {LoginId}")
-    bootlog.info(f"  - Username: {Username}")
-    bootlog.info(f"  - DeptName: {DeptName}")
+    bootlog.info(f"✅ [SAML LOGIN] 로그인 성공 - LoginId={LoginId}, Username={Username}, Sabun={Sabun}, DeptName={DeptName}")
+    bootlog.info(f"✅ [SAML LOGIN] Redirect to: {redirect_url}")
     bootlog.info("=" * 100)
     
     log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"SAML 로그인: {LoginId}")
@@ -784,16 +782,14 @@ async def saml_dev_login(request: Request):
     LoginId = meta.get("LoginId", "")
     Username = meta.get("Username", "")
     DeptName = meta.get("DeptName", "")
-    Sabun = meta.get("Sabun", "")
-    
-    # URL 파라미터로 사용자 정보 전달
-    redirect_url = f"/?dev_success=true&LoginId={LoginId}&Username={Username}&DeptName={DeptName}&Sabun={Sabun}"
+    Sabun = meta.get("Sabun", "")  # 로그용으로만 사용
+
+    # 🔥 보안: Sabun은 URL에 노출하지 않음 (프론트엔드에서 미사용)
+    redirect_url = f"/?dev_success=true&LoginId={LoginId}&Username={Username}&DeptName={DeptName}"
     resp.headers["Location"] = redirect_url
-    
-    logger.info(f"✅ [DEV LOGIN] 개발 모드 로그인 성공 - Redirect to: {redirect_url}")
-    logger.info(f"  - LoginId: {LoginId}")
-    logger.info(f"  - Username: {Username}")
-    logger.info(f"  - DeptName: {DeptName}")
+
+    logger.info(f"✅ [DEV LOGIN] 개발 모드 로그인 성공 - LoginId={LoginId}, Username={Username}, Sabun={Sabun}, DeptName={DeptName}")
+    logger.info(f"✅ [DEV LOGIN] Redirect to: {redirect_url}")
     
     # detail_access.csv에도 개발 모드 로그인 기록
     try:
@@ -831,23 +827,22 @@ async def api_auth_user(request: Request, LoginId: Optional[str] = None):
             # SAML 속성들을 프론트엔드로 전달
             saml_attributes = user_info.get("saml_attributes", {})
             
+            # 🔥 보안: Sabun은 프론트엔드로 전달하지 않음 (미사용 필드)
             return {
                 "authenticated": True,
                 "LoginId": user_info.get("LoginId", ""),
                 "Username": user_info.get("Username", ""),
-                "Sabun": user_info.get("Sabun", ""),
                 "DeptName": user_info.get("DeptName", ""),
                 "GrdName_EN": user_info.get("GrdName_EN", ""),
                 "GrdName": user_info.get("GrdName", ""),
                 "metadata": user_info.get("metadata", {}),
                 "saml_attributes": saml_attributes  # 🔥 SAML 속성들을 프론트엔드로 전달
             }
-        
+
         return {
             "authenticated": False,
             "LoginId": "",
             "Username": "",
-            "Sabun": "",
             "DeptName": "",
             "GrdName_EN": "",
             "GrdName": "",
@@ -862,7 +857,6 @@ async def api_auth_user(request: Request, LoginId: Optional[str] = None):
             "authenticated": False,
             "LoginId": "",
             "Username": "",
-            "Sabun": "",
             "DeptName": "",
             "GrdName_EN": "",
             "GrdName": "",
