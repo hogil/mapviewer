@@ -1749,6 +1749,8 @@ class WaferMapViewer {
                 this.clearParCache();
 
                 // 🔥 Label Explorer와 Class Manager 새로고침 (제품 선택 시)
+                console.log('🔍 [FOLDER_CHANGE_DEBUG] 폴더 변경 후 Label Explorer 새로고침 시작');
+                console.log('🔍 [FOLDER_CHANGE_DEBUG] currentFolderPath:', this.currentFolderPath);
                 await this.refreshClassList();
                 await this.refreshLabelExplorer();
 

@@ -591,7 +591,11 @@ export class LabelManager {
         try {
             // 현재 폴더가 있으면 해당 폴더의 클래스만 조회
             const currentFolder = this.viewer?.currentFolderPath;
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] refreshLabelExplorer 호출됨');
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] this.viewer:', this.viewer);
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] currentFolder:', currentFolder);
             const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] apiUrl:', apiUrl);
             
             const res = await fetch(apiUrl);
             if (!res.ok) throw new Error('클래스 목록 조회 실패');
@@ -619,7 +623,12 @@ export class LabelManager {
 
             // 이미지 목록 조회
             try {
-                const res = await fetch(`/api/classes/${encodeURIComponent(className)}/images?limit=1000`);
+                const currentFolder = this.viewer?.currentFolderPath;
+                const imageApiUrl = currentFolder 
+                    ? `/api/classes/${encodeURIComponent(className)}/images?folder=${encodeURIComponent(currentFolder)}&limit=1000`
+                    : `/api/classes/${encodeURIComponent(className)}/images?limit=1000`;
+                console.log('🔍 [LABEL_EXPLORER_DEBUG] 이미지 조회 API URL:', imageApiUrl);
+                const res = await fetch(imageApiUrl);
                 if (!res.ok) throw new Error('이미지 조회 실패');
                 const data = await res.json();
                 const images = data.results || [];
