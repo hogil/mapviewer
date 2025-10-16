@@ -671,7 +671,10 @@ export class LabelManager {
             console.log('🔍 [LABEL_EXPLORER_DEBUG] 캐시 없음 - API 호출');
             try {
                 const currentFolder = this.viewer?.currentFolderPrefix;
-                const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
+                // 🔥 빈 문자열('')도 폴더 파라미터로 전달 (루트 폴더 의미)
+                const apiUrl = (currentFolder !== undefined && currentFolder !== null)
+                    ? `/api/classes?folder=${encodeURIComponent(currentFolder)}`
+                    : '/api/classes';
 
                 const res = await fetch(apiUrl);
                 if (!res.ok) {
