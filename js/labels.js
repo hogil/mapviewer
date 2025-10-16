@@ -363,8 +363,8 @@ export class LabelManager {
         console.log('🔍 [CACHE_DEBUG] classes 배열 삭제 완료');
         
         try {
-            // 현재 폴더가 있으면 해당 폴더의 클래스만 조회
-            const currentFolder = this.viewer?.currentFolderPath;
+            // 🔥 ROOT_DIR 기준 상대 경로 사용 (절대 경로 아님!)
+            const currentFolder = this.viewer?.currentFolderPrefix;
             const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
 
             const response = await fetch(apiUrl);
@@ -547,12 +547,12 @@ export class LabelManager {
         }
         
         try {
-            // 현재 폴더가 있으면 해당 폴더의 클래스 이미지만 조회
-            const currentFolder = this.viewer?.currentFolderPath;
+            // 🔥 ROOT_DIR 기준 상대 경로 사용 (절대 경로 아님!)
+            const currentFolder = this.viewer?.currentFolderPrefix;
             console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] currentFolder:', currentFolder);
             console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] currentFolder 타입:', typeof currentFolder);
-            
-            const apiUrl = currentFolder 
+
+            const apiUrl = currentFolder
                 ? `/api/classes/${encodeURIComponent(className)}/images?folder=${encodeURIComponent(currentFolder)}`
                 : `/api/classes/${encodeURIComponent(className)}/images`;
                 
@@ -663,8 +663,8 @@ export class LabelManager {
         // 현재 폴더의 클래스 목록 불러오기
         let classes = [];
         try {
-            // 현재 폴더가 있으면 해당 폴더의 클래스만 조회
-            const currentFolder = this.viewer?.currentFolderPath;
+            // 🔥 ROOT_DIR 기준 상대 경로 사용 (절대 경로 아님!)
+            const currentFolder = this.viewer?.currentFolderPrefix;
             console.log('🔍 [LABEL_EXPLORER_DEBUG] refreshLabelExplorer 호출됨');
             console.log('🔍 [LABEL_EXPLORER_DEBUG] this.viewer:', this.viewer);
             console.log('🔍 [LABEL_EXPLORER_DEBUG] currentFolder:', currentFolder);
@@ -731,8 +731,9 @@ export class LabelManager {
 
             // 이미지 목록 조회
             try {
-                const currentFolder = this.viewer?.currentFolderPath;
-                const imageApiUrl = currentFolder 
+                // 🔥 ROOT_DIR 기준 상대 경로 사용 (절대 경로 아님!)
+                const currentFolder = this.viewer?.currentFolderPrefix;
+                const imageApiUrl = currentFolder
                     ? `/api/classes/${encodeURIComponent(className)}/images?folder=${encodeURIComponent(currentFolder)}&limit=1000`
                     : `/api/classes/${encodeURIComponent(className)}/images?limit=1000`;
                 console.log('🔍 [LABEL_EXPLORER_DEBUG] 이미지 조회 API URL:', imageApiUrl);

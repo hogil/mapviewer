@@ -1074,8 +1074,13 @@ def _sync_labels_if_classes_changed():
             logger.info(f"[SYNC] classes 변경 감지 → 라벨 {cleaned}개 이미지에서 정리됨")
 
 async def labels_classes_sync_dep():
+    """
+    ⚠️ DEPRECATED: 이 함수는 사용하지 마세요!
+    - 조회 API: _labels_reload_if_stale()만 호출
+    - 쓰기 API: 수동으로 _sync_labels_if_classes_changed() 호출
+    """
     _labels_reload_if_stale()
-    _sync_labels_if_classes_changed()
+    # _sync_labels_if_classes_changed()  # ⚠️ 제거: current_folder 기준으로만 동작하여 문제 발생
 
 def _remove_label_from_all_images(label_name: str) -> int:
     removed = 0
@@ -1930,7 +1935,6 @@ async def get_files_recursive(path: str):
 # ---------------- Classes ----------------
 @app.get("/api/classes")
 async def get_classes(folder: Optional[str] = Query(None, description="특정 폴더의 클래스만 조회"),
-                     _=Depends(labels_classes_sync_dep),
                      request: Request = None):
     try:
         # 🔍 디버그: 입력 파라미터
@@ -2056,8 +2060,7 @@ async def delete_classes(req: DeleteClassesReq, _=Depends(labels_classes_sync_de
 async def class_images(class_name: str = PathParam(..., min_length=1, max_length=128),
                        limit: int = Query(500, ge=1, le=5000),
                        offset: int = Query(0, ge=0),
-                       folder: Optional[str] = Query(None, description="특정 폴더의 클래스 이미지만 조회"),
-                       _=Depends(labels_classes_sync_dep)):
+                       folder: Optional[str] = Query(None, description="특정 폴더의 클래스 이미지만 조회")):
     try:
         # 🔍 디버그: 입력 파라미터
         logger.info(f"🔍 [/api/classes/{{class_name}}/images] class_name: {class_name}")
@@ -2141,8 +2144,9 @@ async def delete_labels_post(req: LabelDelReq, _=Depends(labels_classes_sync_dep
     return await delete_labels(req)
 
 @app.get("/api/labels/{image_path:path}")
-async def get_labels(image_path: str, _=Depends(labels_classes_sync_dep)):
+async def get_labels(image_path: str):
     try:
+        _labels_reload_if_stale()  # 📖 조회 API: labels.json 파일만 리로드
         rel = relkey_from_any_path(image_path)
         with LABELS_LOCK: labels = list(LABELS.get(rel, []))
         return {"success": True, "image": rel, "labels": labels}
