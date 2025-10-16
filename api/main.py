@@ -1977,8 +1977,17 @@ async def get_classes(folder: Optional[str] = Query(None, description="특정 �
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/classes")
-async def create_class(req: CreateClassReq, _=Depends(labels_classes_sync_dep)):
+async def create_class(req: CreateClassReq,
+                      folder: Optional[str] = Query(None, description="현재 폴더 경로"),
+                      _=Depends(labels_classes_sync_dep)):
     try:
+        # 🔥 folder 파라미터가 있으면 current_folder 설정
+        global current_folder
+        if folder:
+            current_folder = ROOT_DIR / folder
+        else:
+            current_folder = ROOT_DIR
+
         name = req.name.strip()
         if not name or name.isspace(): raise HTTPException(status_code=400, detail="클래스명이 비어있습니다")
         if any(ord(c) < 32 or ord(c) > 126 for c in name):
@@ -2000,8 +2009,16 @@ async def create_class(req: CreateClassReq, _=Depends(labels_classes_sync_dep)):
 @app.delete("/api/classes/{class_name}")
 async def delete_class(class_name: str = PathParam(..., min_length=1, max_length=128),
                        force: bool = Query(False, description="True면 내용 포함 통째 삭제"),
+                       folder: Optional[str] = Query(None, description="현재 폴더 경로"),
                        _=Depends(labels_classes_sync_dep)):
     try:
+        # 🔥 folder 파라미터가 있으면 current_folder 설정
+        global current_folder
+        if folder:
+            current_folder = ROOT_DIR / folder
+        else:
+            current_folder = ROOT_DIR
+
         if not _CLASS_NAME_RE.match(class_name): raise HTTPException(status_code=400, detail="Invalid class_name")
         class_dir = _classification_dir() / class_name
         if not class_dir.exists() or not class_dir.is_dir(): raise HTTPException(status_code=404, detail="Class not found")
@@ -2205,9 +2222,18 @@ async def get_breakdown():
 
 # ---------------- Classification ----------------
 @app.post("/api/classify")
-async def classify_images(request: ClassifyRequest, _=Depends(labels_classes_sync_dep)):
+async def classify_images(request: ClassifyRequest,
+                         folder: Optional[str] = Query(None, description="현재 폴더 경로"),
+                         _=Depends(labels_classes_sync_dep)):
     """이미지를 클래스로 분류하고 classification 디렉토리에 복사/링크"""
     try:
+        # 🔥 folder 파라미터가 있으면 current_folder 설정
+        global current_folder
+        if folder:
+            current_folder = ROOT_DIR / folder
+        else:
+            current_folder = ROOT_DIR
+
         # classification 경로가 들어오면 원본 상대경로로 역매핑 시도
         rel_path = _lookup_original_relpath_from_classification_path(request.image_path) or relkey_from_any_path(request.image_path)
         abs_path = ROOT_DIR / rel_path
@@ -2265,13 +2291,22 @@ class BatchClassifyRequest(BaseModel):
     class_name: str
 
 @app.post("/api/classify/batch")
-async def classify_images_batch(request: BatchClassifyRequest, _=Depends(labels_classes_sync_dep)):
+async def classify_images_batch(request: BatchClassifyRequest,
+                                folder: Optional[str] = Query(None, description="현재 폴더 경로"),
+                                _=Depends(labels_classes_sync_dep)):
     """배치 이미지 분류"""
     try:
+        # 🔥 folder 파라미터가 있으면 current_folder 설정
+        global current_folder
+        if folder:
+            current_folder = ROOT_DIR / folder
+        else:
+            current_folder = ROOT_DIR
+
         class_name = request.class_name.strip()
         if not class_name or not _CLASS_NAME_RE.match(class_name):
             raise HTTPException(status_code=400, detail="Invalid class name")
-            
+
         # 클래스 디렉토리 생성
         class_dir = _classification_dir() / class_name
         class_dir.mkdir(parents=True, exist_ok=True)
@@ -2341,9 +2376,18 @@ async def classify_images_batch(request: BatchClassifyRequest, _=Depends(labels_
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/classify")
-async def delete_classification(request: ClassifyDeleteRequest, _=Depends(labels_classes_sync_dep)):
+async def delete_classification(request: ClassifyDeleteRequest,
+                                folder: Optional[str] = Query(None, description="현재 폴더 경로"),
+                                _=Depends(labels_classes_sync_dep)):
     """classification 디렉토리에서 이미지 제거"""
     try:
+        # 🔥 folder 파라미터가 있으면 current_folder 설정
+        global current_folder
+        if folder:
+            current_folder = ROOT_DIR / folder
+        else:
+            current_folder = ROOT_DIR
+
         class_name = request.class_name.strip()
         if not class_name or not _CLASS_NAME_RE.match(class_name):
             raise HTTPException(status_code=400, detail="Invalid class name")
@@ -2398,8 +2442,17 @@ async def delete_classification(request: ClassifyDeleteRequest, _=Depends(labels
 
 # 프런트엔드가 사용하는 엔드포인트: POST /api/classify/delete
 @app.post("/api/classify/delete")
-async def classify_delete_batch(request: ClassifyDeleteBatchReq, _=Depends(labels_classes_sync_dep)):
+async def classify_delete_batch(request: ClassifyDeleteBatchReq,
+                                folder: Optional[str] = Query(None, description="현재 폴더 경로"),
+                                _=Depends(labels_classes_sync_dep)):
     try:
+        # 🔥 folder 파라미터가 있으면 current_folder 설정
+        global current_folder
+        if folder:
+            current_folder = ROOT_DIR / folder
+        else:
+            current_folder = ROOT_DIR
+
         class_name = request.class_.strip()
         if not class_name or not _CLASS_NAME_RE.match(class_name):
             raise HTTPException(status_code=400, detail="Invalid class name")
