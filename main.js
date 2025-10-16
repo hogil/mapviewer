@@ -8865,7 +8865,12 @@ class WaferMapViewer {
 
                 try {
 
-                    const response = await fetch('/api/classes', {
+                    // 🔥 현재 폴더 파라미터 추가
+                    const currentFolder = this.currentFolderPrefix;
+                    const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
+                    console.log(`🔍 [ADD_CLASS] currentFolder: "${currentFolder}", apiUrl: ${apiUrl}`);
+
+                    const response = await fetch(apiUrl, {
 
                         method: 'POST',
 
@@ -9923,7 +9928,12 @@ class WaferMapViewer {
 
             if (newClassName) {
 
-                await fetch('/api/classes', {
+                // 🔥 현재 폴더 파라미터 추가
+                const currentFolder = this.currentFolderPrefix;
+                const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
+                console.log(`🔍 [ADD_CLASS_NEW] currentFolder: "${currentFolder}", apiUrl: ${apiUrl}`);
+
+                await fetch(apiUrl, {
 
                     method: 'POST',
 

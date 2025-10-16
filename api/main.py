@@ -1988,7 +1988,8 @@ async def create_class(req: CreateClassReq,
         else:
             current_folder = ROOT_DIR
 
-        logger.info(f"🔍 [CREATE_CLASS] folder 파라미터: {folder}")
+        logger.info(f"🔍 [CREATE_CLASS] folder 파라미터: '{folder}'")
+        logger.info(f"🔍 [CREATE_CLASS] ROOT_DIR: {ROOT_DIR}")
         logger.info(f"🔍 [CREATE_CLASS] current_folder: {current_folder}")
         logger.info(f"🔍 [CREATE_CLASS] _classification_dir(): {_classification_dir()}")
 
@@ -2013,8 +2014,10 @@ async def create_class(req: CreateClassReq,
         if class_dir.exists(): raise HTTPException(status_code=409, detail="Class already exists")
 
         logger.info(f"🔍 [CREATE_CLASS] 클래스 디렉토리 생성 시작: {class_dir}")
+        logger.info(f"🔍 [CREATE_CLASS] 절대 경로: {class_dir.resolve()}")
         class_dir.mkdir(parents=True, exist_ok=False)
         logger.info(f"🔍 [CREATE_CLASS] 클래스 디렉토리 생성 완료: {class_dir}, exists: {class_dir.exists()}")
+        logger.info(f"🔍 [CREATE_CLASS] 생성된 절대 경로: {class_dir.resolve()}")
         _sync_labels_if_classes_changed()
         for p in (_classification_dir(), class_dir, ROOT_DIR): _dircache_invalidate(p)
         DIRLIST_CACHE.clear()
@@ -2037,8 +2040,14 @@ async def delete_class(class_name: str = PathParam(..., min_length=1, max_length
         else:
             current_folder = ROOT_DIR
 
+        logger.info(f"🔍 [DELETE_CLASS] folder 파라미터: '{folder}'")
+        logger.info(f"🔍 [DELETE_CLASS] ROOT_DIR: {ROOT_DIR}")
+        logger.info(f"🔍 [DELETE_CLASS] current_folder: {current_folder}")
+        logger.info(f"🔍 [DELETE_CLASS] _classification_dir(): {_classification_dir()}")
+
         if not _CLASS_NAME_RE.match(class_name): raise HTTPException(status_code=400, detail="Invalid class_name")
         class_dir = _classification_dir() / class_name
+        logger.info(f"🔍 [DELETE_CLASS] class_dir: {class_dir}, 절대 경로: {class_dir.resolve()}")
         if not class_dir.exists() or not class_dir.is_dir(): raise HTTPException(status_code=404, detail="Class not found")
         if force:
             shutil.rmtree(class_dir)
