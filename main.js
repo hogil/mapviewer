@@ -10147,7 +10147,15 @@ class WaferMapViewer {
     // --- LABEL EXPLORER ---
 
     async refreshLabelExplorer() {
-        console.log('🔍 [MAIN_DEBUG] refreshLabelExplorer 호출됨');
+        // 🔥 최적화: main.js의 Label Explorer 새로고침 비활성화
+        // → js/labels.js의 LabelManager.refreshLabelExplorer()만 사용
+        // → refreshClassList()만 호출하면 캐시된 클래스 목록을 LabelManager가 사용
+        // → API 중복 호출 방지 (classes?folder=... 2번 → 1번)
+        console.log('🔍 [MAIN_DEBUG] refreshLabelExplorer 호출됨 (비활성화됨 - LabelManager 사용)');
+        return;
+
+        // 🔥 아래 코드는 비활성화됨 - 절대 실행되지 않음
+        /* eslint-disable-next-line no-unreachable */
         console.log('🔍 [MAIN_DEBUG] currentFolderPath:', this.currentFolderPath);
         console.log('🔍 [MAIN_DEBUG] currentFolderPrefix:', this.currentFolderPrefix);
 
@@ -10156,7 +10164,7 @@ class WaferMapViewer {
             console.log('🔍 [MAIN_DEBUG] Label Explorer 이미 새로고침 중 - 건너뜀');
             return;
         }
-        
+
         this._isRefreshingLabelExplorer = true;
 
         try {
@@ -10257,11 +10265,10 @@ class WaferMapViewer {
             }
         }
 
-        try {
+        // 🔥 try 제거 - 이미 Line 10162에서 시작된 try 블록 안에 있음
+        if (!this.labelSelection) this.labelSelection = { selected: [], lastClicked: null, openFolders: {}, selectedClasses: [] };
 
-            if (!this.labelSelection) this.labelSelection = { selected: [], lastClicked: null, openFolders: {}, selectedClasses: [] };
-
-            const labelSelection = this.labelSelection;
+        const labelSelection = this.labelSelection;
         
         
 
