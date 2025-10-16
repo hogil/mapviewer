@@ -9123,9 +9123,13 @@ class WaferMapViewer {
         
         this.debugLog(`Deleting classes: ${names.join(', ')}`);
 
-        
-        
-        const response = await fetch('/api/classes/delete', {
+
+
+        // 🔥 현재 폴더 파라미터 추가
+        const currentFolder = this.currentFolderPrefix;
+        const apiUrl = currentFolder ? `/api/classes/delete?folder=${encodeURIComponent(currentFolder)}` : '/api/classes/delete';
+
+        const response = await fetch(apiUrl, {
 
             method: 'POST',
 
@@ -10634,6 +10638,11 @@ class WaferMapViewer {
 
         batchDeleteBtn.onclick = async () => {
 
+            console.log('🔍 [DELETE_DEBUG] Delete Label 버튼 클릭됨');
+            console.log('🔍 [DELETE_DEBUG] selectedClasses:', labelSelection.selectedClasses);
+            console.log('🔍 [DELETE_DEBUG] selected:', labelSelection.selected);
+            console.log('🔍 [DELETE_DEBUG] currentFolderPrefix:', this.currentFolderPrefix);
+
             const t0 = performance.now();
 
             if (labelSelection.selectedClasses.length === 0 && labelSelection.selected.length === 0) {
@@ -10708,9 +10717,18 @@ class WaferMapViewer {
 
 
 
-            if (totalToDelete === 0) return;
+            if (totalToDelete === 0) {
+                console.log('🔍 [DELETE_DEBUG] totalToDelete가 0입니다 - 삭제할 항목 없음');
+                return;
+            }
 
-            if (!confirm(`Delete ${totalToDelete} labels?`)) return;
+            console.log('🔍 [DELETE_DEBUG] totalToDelete:', totalToDelete);
+            console.log('🔍 [DELETE_DEBUG] classToDel:', classToDel);
+
+            if (!confirm(`Delete ${totalToDelete} labels?`)) {
+                console.log('🔍 [DELETE_DEBUG] 사용자가 confirm을 취소함');
+                return;
+            }
 
 
 
@@ -10726,9 +10744,12 @@ class WaferMapViewer {
             const currentFolder = this.currentFolderPrefix;
             const deleteApiUrl = currentFolder ? `/api/classify/delete?folder=${encodeURIComponent(currentFolder)}` : '/api/classify/delete';
 
+            console.log('🔍 [DELETE_DEBUG] DELETE API URL:', deleteApiUrl);
+
             const batchPromises = Object.entries(classToDel).map(async ([cls, images]) => {
 
                 this.debugLog(`🗑️ DELETE 요청: class=${cls}, images=${images.length}개`, images);
+                console.log('🔍 [DELETE_DEBUG] 요청 전송: class=', cls, 'images=', images);
 
                 const response = await fetch(deleteApiUrl, {
 
