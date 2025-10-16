@@ -1788,6 +1788,13 @@ class WaferMapViewer {
                 
                 console.log('🔍 [CACHE_DEBUG] 제품 선택 시 모든 캐시 삭제 완료');
 
+                // 🔥 상태 변수 초기화 (제품 선택 시)
+                console.log('🔍 [STATE_DEBUG] 제품 선택 시 상태 초기화 시작');
+                this.savedViewState = null;
+                this.waferMapExplorerState = null;
+                this.labelExplorerState = null;
+                console.log('🔍 [STATE_DEBUG] 제품 선택 시 상태 초기화 완료');
+
                 // 🔥 currentFolderPath 업데이트 완료 후 잠시 대기 (동기화 보장)
                 await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -13442,11 +13449,17 @@ class WaferMapViewer {
     async hardRefreshWithCacheClear() {
         try {
             console.log('🔄 [HARD REFRESH] 하드 새로고침 + 캐시 삭제 시작...');
-            
+
             // 1. 전체 캐시 삭제 (비동기로 실행, 완료를 기다리지 않음)
             this.clearAllCache();
-            
-            // 2. 즉시 하드 새로고침 (Ctrl+Shift+R과 동일)
+
+            // 2. 상태 변수 초기화 (Wafer Map Explorer 버튼)
+            console.log('🔍 [STATE_DEBUG] Wafer Map Explorer 버튼 - 상태 초기화');
+            this.savedViewState = null;
+            this.waferMapExplorerState = null;
+            this.labelExplorerState = null;
+
+            // 3. 즉시 하드 새로고침 (Ctrl+Shift+R과 동일)
             window.location.reload(true);
             
         } catch (error) {
