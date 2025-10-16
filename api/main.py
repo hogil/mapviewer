@@ -1929,27 +1929,42 @@ async def get_files_recursive(path: str):
 
 # ---------------- Classes ----------------
 @app.get("/api/classes")
-async def get_classes(folder: Optional[str] = Query(None, description="특정 폴더의 클래스만 조회"), 
+async def get_classes(folder: Optional[str] = Query(None, description="특정 폴더의 클래스만 조회"),
                      _=Depends(labels_classes_sync_dep)):
     try:
+        # 🔍 디버그: 입력 파라미터
+        logger.info(f"🔍 [/api/classes] folder 파라미터: {folder}")
+        logger.info(f"🔍 [/api/classes] ROOT_DIR: {ROOT_DIR}")
+
         # 폴더가 지정된 경우 해당 폴더의 classification 디렉토리 사용
         if folder:
             target_folder = safe_resolve_path(folder)
             classification_dir = target_folder / "classification"
+            logger.info(f"🔍 [/api/classes] folder 지정됨 - target_folder: {target_folder}")
         else:
             classification_dir = _classification_dir()
-            
+            logger.info(f"🔍 [/api/classes] folder 미지정 - current_folder: {current_folder}")
+
+        # 🔍 디버그: 최종 classification 경로
+        logger.info(f"✅ [/api/classes] 최종 classification_dir: {classification_dir}")
+        logger.info(f"🔍 [/api/classes] classification_dir.exists(): {classification_dir.exists()}")
+
         _dircache_invalidate(classification_dir)
         if not classification_dir.exists():
+            logger.warning(f"⚠️ [/api/classes] classification 폴더 없음 - 생성 시작: {classification_dir}")
             classification_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"✅ [/api/classes] classification 폴더 생성 완료: {classification_dir}")
             log_access_row(tag="INFO", note=f"classification 폴더 생성: {classification_dir}")
             return {"success": True, "classes": []}
+
         classes = []
         try:
             with os.scandir(classification_dir) as it:
                 for entry in it:
                     if entry.is_dir(follow_symlinks=False): classes.append(entry.name)
+            logger.info(f"✅ [/api/classes] 클래스 조회 완료: {len(classes)}개 ({classes})")
         except FileNotFoundError:
+            logger.warning(f"⚠️ [/api/classes] FileNotFoundError - classification_dir: {classification_dir}")
             pass
         return {"success": True, "classes": sorted(classes, key=str.lower)}
     except Exception as e:
@@ -2037,22 +2052,43 @@ async def class_images(class_name: str = PathParam(..., min_length=1, max_length
                        folder: Optional[str] = Query(None, description="특정 폴더의 클래스 이미지만 조회"),
                        _=Depends(labels_classes_sync_dep)):
     try:
+        # 🔍 디버그: 입력 파라미터
+        logger.info(f"🔍 [/api/classes/{{class_name}}/images] class_name: {class_name}")
+        logger.info(f"🔍 [/api/classes/{{class_name}}/images] folder 파라미터: {folder}")
+        logger.info(f"🔍 [/api/classes/{{class_name}}/images] current_folder: {current_folder}")
+        logger.info(f"🔍 [/api/classes/{{class_name}}/images] ROOT_DIR: {ROOT_DIR}")
+
         if not _CLASS_NAME_RE.match(class_name): raise HTTPException(status_code=400, detail="Invalid class_name")
-        
+
         # 폴더가 지정된 경우 해당 폴더의 classification 디렉토리 사용
         if folder:
             target_folder = safe_resolve_path(folder)
             class_dir = target_folder / "classification" / class_name
+            logger.info(f"🔍 [/api/classes/{{class_name}}/images] folder 지정됨 - target_folder: {target_folder}")
         else:
-            class_dir = _classification_dir() / class_name
-        if not class_dir.exists() or not class_dir.is_dir(): raise HTTPException(status_code=404, detail="Class not found")
+            classification_base = _classification_dir()
+            class_dir = classification_base / class_name
+            logger.info(f"🔍 [/api/classes/{{class_name}}/images] folder 미지정 - classification_base: {classification_base}")
+
+        # 🔍 디버그: 최종 class_dir 경로
+        logger.info(f"✅ [/api/classes/{{class_name}}/images] 최종 class_dir: {class_dir}")
+        logger.info(f"🔍 [/api/classes/{{class_name}}/images] class_dir.exists(): {class_dir.exists()}")
+
+        if not class_dir.exists() or not class_dir.is_dir():
+            logger.warning(f"⚠️ [/api/classes/{{class_name}}/images] class_dir 없음 또는 디렉토리 아님: {class_dir}")
+            raise HTTPException(status_code=404, detail="Class not found")
+
         found: List[str] = []; goal = offset + limit
         for p in class_dir.rglob("*"):
             if p.is_file() and is_supported_image(p):
                 rel = str(p.relative_to(ROOT_DIR)).replace("\\", "/")
                 found.append(rel)
                 if len(found) >= goal: break
+
+        logger.info(f"✅ [/api/classes/{{class_name}}/images] 이미지 조회 완료: {len(found)}개 (offset={offset}, limit={limit})")
         return {"success": True, "class": class_name, "results": found[offset: offset + limit], "offset": offset, "limit": limit}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"클래스 이미지 조회 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
