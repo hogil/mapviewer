@@ -849,6 +849,7 @@ class WaferMapViewer {
         // 🔥 상태 저장 (Grid/Label Explorer 전환용)
         this.waferMapExplorerState = null;  // Wafer Map Explorer 상태 저장
         this.labelExplorerState = null;     // Label Explorer 상태 저장
+        this.cachedProductFolders = null;   // 제품 폴더 캐시 (초기 로딩 속도 개선)
         this.gridThumbWraps = [];
         this.invalidateGridGeometry();
         this.gridThumbRectCache = null;
@@ -1593,28 +1594,56 @@ class WaferMapViewer {
         }
     }
 
+    // 🔥 제품 폴더 목록 미리 로드 (초기화 시 백그라운드에서 실행)
+    async preloadProductFolders() {
+        console.log('🔍 [PRODUCT_PRELOAD] 제품 폴더 미리 로드 시작');
+        try {
+            const apiUrl = '/api/browse-folders?path=&force_root=true';
+            const response = await fetch(apiUrl);
+            const data = await response.json();
+
+            if (data.folders) {
+                this.cachedProductFolders = data.folders;
+                console.log('🔍 [PRODUCT_PRELOAD] 제품 폴더 미리 로드 완료:', data.folders.length, '개');
+            } else {
+                console.warn('🔍 [PRODUCT_PRELOAD] data.folders가 없음');
+            }
+        } catch (error) {
+            console.error('🔍 [PRODUCT_PRELOAD] 제품 폴더 미리 로드 실패:', error);
+        }
+    }
+
     // 제품 검색 드롭다운 채우기
     async populateSubfolderDropdown() {
         console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] populateSubfolderDropdown 호출됨');
-        
+
         if (!this.dom.subfolderDropdown) {
             console.warn('🔍 [PRODUCT_DROPDOWN_DEBUG] subfolderDropdown 요소가 없음');
             return;
         }
 
+        // 🔥 캐시된 폴더 목록이 있으면 즉시 표시
+        if (this.cachedProductFolders && this.cachedProductFolders.length > 0) {
+            console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] 캐시된 폴더 목록 사용:', this.cachedProductFolders.length, '개');
+            this.renderSubfolderDropdown(this.cachedProductFolders);
+            return;
+        }
+
         try {
-            const apiUrl = '/api/browse-folders?path=' + encodeURIComponent(this.currentFolderPath || '');
+            // 🔥 force_root=true로 항상 루트 폴더의 1depth/2depth 폴더 가져오기
+            const apiUrl = '/api/browse-folders?path=&force_root=true';
             console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] API URL:', apiUrl);
-            console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] currentFolderPath:', this.currentFolderPath);
-            
+
             const response = await fetch(apiUrl);
             console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] API 응답 상태:', response.status);
-            
+
             const data = await response.json();
             console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] API 응답 데이터:', data);
 
             if (data.folders) {
                 console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] 폴더 수:', data.folders.length);
+                // 🔥 폴더 목록 캐시
+                this.cachedProductFolders = data.folders;
                 this.renderSubfolderDropdown(data.folders);
             } else {
                 console.warn('🔍 [PRODUCT_DROPDOWN_DEBUG] data.folders가 없음');
@@ -3956,7 +3985,8 @@ class WaferMapViewer {
 
             await this.updateCurrentPath();
 
-
+            // 🔥 제품 폴더 목록 미리 로드 (파일 인덱스와 독립적으로 빠르게 로드)
+            this.preloadProductFolders();
 
             // Wafer Map Explorer 초기 로드
             await this.loadFolderBrowser(this.currentFolderPath || '');
@@ -3969,9 +3999,9 @@ class WaferMapViewer {
 
 
 
-            // 전역 파일 인덱스 비동기 로드 (폴더 오픈 없이 검색 가능하도록)
-
-            this.loadAllFilesIndex();
+            // 🔥 전역 파일 인덱스 로딩 제거 (검색 시점에 필요할 때만 로드)
+            // 초기 로딩 속도 개선을 위해 주석 처리
+            // this.loadAllFilesIndex();
 
         });
 
