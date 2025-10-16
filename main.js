@@ -10830,6 +10830,9 @@ class WaferMapViewer {
 
             }
 
+        } finally {
+            // 🔥 중복 호출 방지 플래그 해제
+            this._isRefreshingLabelExplorer = false;
         }
 
     }
