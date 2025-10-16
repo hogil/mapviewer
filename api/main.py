@@ -1930,12 +1930,16 @@ async def get_files_recursive(path: str):
 # ---------------- Classes ----------------
 @app.get("/api/classes")
 async def get_classes(folder: Optional[str] = Query(None, description="특정 폴더의 클래스만 조회"),
-                     _=Depends(labels_classes_sync_dep)):
+                     _=Depends(labels_classes_sync_dep),
+                     request: Request = None):
     try:
         # 🔍 디버그: 입력 파라미터
+        logger.info(f"🔍 [/api/classes] ===== API 요청 받음 =====")
         logger.info(f"🔍 [/api/classes] folder 파라미터: {folder}")
         logger.info(f"🔍 [/api/classes] folder 파라미터 타입: {type(folder)}")
         logger.info(f"🔍 [/api/classes] folder 파라미터 길이: {len(folder) if folder else 0}")
+        logger.info(f"🔍 [/api/classes] 전체 URL: {request.url if request else 'N/A'}")
+        logger.info(f"🔍 [/api/classes] 쿼리 파라미터: {request.query_params if request else 'N/A'}")
         logger.info(f"🔍 [/api/classes] ROOT_DIR: {ROOT_DIR}")
         logger.info(f"🔍 [/api/classes] current_folder: {current_folder}")
 

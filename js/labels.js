@@ -422,8 +422,13 @@ export class LabelManager {
         // 클릭 이벤트
         button.addEventListener('click', async (e) => {
             const className = cls.name;
-            console.log('🔍 [LABEL_EXPLORER_DEBUG] 클래스 버튼 클릭됨:', className);
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] ===== 클래스 버튼 클릭 시작 =====');
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 클래스명:', className);
             console.log('🔍 [LABEL_EXPLORER_DEBUG] 현재 폴더:', this.viewer?.currentFolderPath);
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 현재 폴더 타입:', typeof this.viewer?.currentFolderPath);
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 현재 폴더 길이:', this.viewer?.currentFolderPath?.length);
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 이벤트 타겟:', e.target);
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 이벤트 타입:', e.type);
             
             const selected = (this.viewer && typeof this.viewer.getSelectedImagesForModal === 'function')
                 ? this.viewer.getSelectedImagesForModal()
@@ -551,9 +556,14 @@ export class LabelManager {
                 ? `/api/classes/${encodeURIComponent(className)}/images?folder=${encodeURIComponent(currentFolder)}`
                 : `/api/classes/${encodeURIComponent(className)}/images`;
                 
-            console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] API URL:', apiUrl);
+            console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] ===== API 요청 준비 =====');
+            console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] currentFolder 원본:', currentFolder);
+            console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] encodeURIComponent 결과:', currentFolder ? encodeURIComponent(currentFolder) : 'null');
+            console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] 최종 API URL:', apiUrl);
+            console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] URL 길이:', apiUrl.length);
                 
             const response = await fetch(apiUrl);
+            console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] API 응답 상태:', response.status);
             if (!response.ok) {
                 throw new Error('클래스 이미지 조회 실패');
             }
@@ -661,8 +671,12 @@ export class LabelManager {
             console.log('🔍 [LABEL_EXPLORER_DEBUG] currentFolder 타입:', typeof currentFolder);
             console.log('🔍 [LABEL_EXPLORER_DEBUG] currentFolder 길이:', currentFolder?.length);
             const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
-            console.log('🔍 [LABEL_EXPLORER_DEBUG] apiUrl:', apiUrl);
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] ===== API 요청 준비 =====');
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] currentFolder 원본:', currentFolder);
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] currentFolder 인코딩 전:', currentFolder);
             console.log('🔍 [LABEL_EXPLORER_DEBUG] encodeURIComponent 결과:', currentFolder ? encodeURIComponent(currentFolder) : 'null');
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 최종 apiUrl:', apiUrl);
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] URL 길이:', apiUrl.length);
             
             // 재시도 로직 추가
             let res;
