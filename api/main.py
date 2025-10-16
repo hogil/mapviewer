@@ -1934,7 +1934,10 @@ async def get_classes(folder: Optional[str] = Query(None, description="특정 �
     try:
         # 🔍 디버그: 입력 파라미터
         logger.info(f"🔍 [/api/classes] folder 파라미터: {folder}")
+        logger.info(f"🔍 [/api/classes] folder 파라미터 타입: {type(folder)}")
+        logger.info(f"🔍 [/api/classes] folder 파라미터 길이: {len(folder) if folder else 0}")
         logger.info(f"🔍 [/api/classes] ROOT_DIR: {ROOT_DIR}")
+        logger.info(f"🔍 [/api/classes] current_folder: {current_folder}")
 
         # 폴더가 지정된 경우 해당 폴더의 classification 디렉토리 사용
         if folder:

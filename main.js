@@ -870,6 +870,7 @@ class WaferMapViewer {
         this.gridThumbSize = DEFAULT_THUMB_SIZE;
 
         this.currentFolderPath = null;  // 🔥 ROOT_DIR로 초기화 (init에서 설정)
+        console.log('🔍 [STATE_DEBUG] currentFolderPath 초기화: null');
         this.currentFolderPrefix = '';  // 🔥 파일 경로 앞에 붙일 접두사 (예: "performance_test4/")
 
         this.selectedFolderForBrowser = '';
@@ -1283,6 +1284,7 @@ class WaferMapViewer {
             const data = await response.json();
 
             this.currentFolderPath = data.current_folder;
+            console.log('🔍 [STATE_DEBUG] currentFolderPath 업데이트 (init):', this.currentFolderPath);
             this.currentFolderPrefix = data.current_folder_prefix || '';  // 🔥 파일 경로 접두사 저장
 
                                     // 하위폴더 목록 업데이트
@@ -1745,8 +1747,10 @@ class WaferMapViewer {
             if (result.success) {
 
                 // 🔥 current_folder 업데이트 (검색 제한용)
+                console.log('🔍 [STATE_DEBUG] currentFolderPath 변경 전:', this.currentFolderPath);
                 this.currentFolderPath = result.current_folder;
                 this.currentFolderPrefix = result.current_folder_prefix || '';
+                console.log('🔍 [STATE_DEBUG] currentFolderPath 변경 후 (changeFolder):', this.currentFolderPath);
                 console.info('🔍 [CHANGE_FOLDER DEBUG] currentFolderPath:', this.currentFolderPath);
                 console.info('🔍 [CHANGE_FOLDER DEBUG] currentFolderPrefix:', this.currentFolderPrefix);
 
@@ -2231,8 +2235,10 @@ class WaferMapViewer {
                     const rootPath = rootData.root_folder;
                     
                     // currentFolderPath 설정
+                    console.log('🔍 [STATE_DEBUG] currentFolderPath 변경 전 (goToRootFolder):', this.currentFolderPath);
                     this.currentFolderPath = rootPath;
                     this.currentFolderPrefix = '';  // 🔥 최상위 폴더는 빈 접두사
+                    console.log('🔍 [STATE_DEBUG] currentFolderPath 변경 후 (goToRootFolder):', this.currentFolderPath);
                                         const response = await fetch('/api/change-folder', {
                         method: 'POST',
                         headers: {

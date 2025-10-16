@@ -459,7 +459,9 @@ export class LabelManager {
                         throw new Error(err.detail || err.error || `분류 추가 실패 (${res.status})`);
                     }
                     // UI 갱신
+                    console.log('🔍 [CLASS_CLICK_DEBUG] 라벨 추가 후 refreshAll 호출 전 currentFolderPath:', this.viewer?.currentFolderPath);
                     await this.refreshAll();
+                    console.log('🔍 [CLASS_CLICK_DEBUG] refreshAll 완료 후 currentFolderPath:', this.viewer?.currentFolderPath);
                 } catch (err) {
                     console.error('라벨 추가 오류:', err);
                     alert(`라벨 추가 실패: ${err.message || err}`);
@@ -468,12 +470,18 @@ export class LabelManager {
             }
 
             // 이미지 선택이 없으면 선택/토글 동작
+            console.log('🔍 [CLASS_CLICK_DEBUG] 클래스 선택/토글 동작 시작');
+            console.log('🔍 [CLASS_CLICK_DEBUG] ctrlKey:', e.ctrlKey);
+            console.log('🔍 [CLASS_CLICK_DEBUG] 현재 폴더 (선택 전):', this.viewer?.currentFolderPath);
+            
             if (e.ctrlKey) {
                 this.toggleClassSelection(className);
             } else {
                 this.selectClass(className);
             }
             this.updateClassButtonStates();
+            
+            console.log('🔍 [CLASS_CLICK_DEBUG] 클래스 선택/토글 완료 후 currentFolderPath:', this.viewer?.currentFolderPath);
         });
         
         return button;
@@ -526,14 +534,24 @@ export class LabelManager {
      * @param {string} className 클래스명
      */
     async showClassImages(className) {
-        if (!this.elements.classImagesSection || !this.elements.classImagesList) return;
+        console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] showClassImages 호출됨:', className);
+        
+        if (!this.elements.classImagesSection || !this.elements.classImagesList) {
+            console.warn('🔍 [SHOW_CLASS_IMAGES_DEBUG] 필요한 DOM 요소가 없음');
+            return;
+        }
         
         try {
             // 현재 폴더가 있으면 해당 폴더의 클래스 이미지만 조회
             const currentFolder = this.viewer?.currentFolderPath;
+            console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] currentFolder:', currentFolder);
+            console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] currentFolder 타입:', typeof currentFolder);
+            
             const apiUrl = currentFolder 
                 ? `/api/classes/${encodeURIComponent(className)}/images?folder=${encodeURIComponent(currentFolder)}`
                 : `/api/classes/${encodeURIComponent(className)}/images`;
+                
+            console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] API URL:', apiUrl);
                 
             const response = await fetch(apiUrl);
             if (!response.ok) {
@@ -640,8 +658,11 @@ export class LabelManager {
             console.log('🔍 [LABEL_EXPLORER_DEBUG] refreshLabelExplorer 호출됨');
             console.log('🔍 [LABEL_EXPLORER_DEBUG] this.viewer:', this.viewer);
             console.log('🔍 [LABEL_EXPLORER_DEBUG] currentFolder:', currentFolder);
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] currentFolder 타입:', typeof currentFolder);
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] currentFolder 길이:', currentFolder?.length);
             const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
             console.log('🔍 [LABEL_EXPLORER_DEBUG] apiUrl:', apiUrl);
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] encodeURIComponent 결과:', currentFolder ? encodeURIComponent(currentFolder) : 'null');
             
             // 재시도 로직 추가
             let res;
