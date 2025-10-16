@@ -617,10 +617,37 @@ export class LabelManager {
             const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
             console.log('🔍 [LABEL_EXPLORER_DEBUG] apiUrl:', apiUrl);
             
-            const res = await fetch(apiUrl);
-            if (!res.ok) throw new Error('클래스 목록 조회 실패');
+            // 재시도 로직 추가
+            let res;
+            let retryCount = 0;
+            const maxRetries = 3;
+            
+            while (retryCount < maxRetries) {
+                try {
+                    res = await fetch(apiUrl);
+                    if (res.ok) break;
+                    
+                    console.warn(`🔍 [LABEL_EXPLORER_DEBUG] API 요청 실패 (시도 ${retryCount + 1}/${maxRetries}):`, res.status);
+                    retryCount++;
+                    if (retryCount < maxRetries) {
+                        await new Promise(resolve => setTimeout(resolve, 200 * retryCount));
+                    }
+                } catch (error) {
+                    console.warn(`🔍 [LABEL_EXPLORER_DEBUG] API 요청 에러 (시도 ${retryCount + 1}/${maxRetries}):`, error);
+                    retryCount++;
+                    if (retryCount < maxRetries) {
+                        await new Promise(resolve => setTimeout(resolve, 200 * retryCount));
+                    }
+                }
+            }
+            
+            if (!res || !res.ok) {
+                throw new Error(`클래스 목록 조회 실패 (${retryCount}회 시도 후)`);
+            }
+            
             const data = await res.json();
             classes = data.classes || [];
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 클래스 목록 조회 성공:', classes.length, '개');
         } catch (e) {
             console.error('Label Explorer 클래스 조회 오류:', e);
             container.innerHTML = '<p style="color:#f00;">클래스를 불러올 수 없습니다.</p>';
@@ -648,10 +675,38 @@ export class LabelManager {
                     ? `/api/classes/${encodeURIComponent(className)}/images?folder=${encodeURIComponent(currentFolder)}&limit=1000`
                     : `/api/classes/${encodeURIComponent(className)}/images?limit=1000`;
                 console.log('🔍 [LABEL_EXPLORER_DEBUG] 이미지 조회 API URL:', imageApiUrl);
-                const res = await fetch(imageApiUrl);
-                if (!res.ok) throw new Error('이미지 조회 실패');
+                
+                // 재시도 로직 추가
+                let res;
+                let retryCount = 0;
+                const maxRetries = 3;
+                
+                while (retryCount < maxRetries) {
+                    try {
+                        res = await fetch(imageApiUrl);
+                        if (res.ok) break;
+                        
+                        console.warn(`🔍 [LABEL_EXPLORER_DEBUG] 이미지 API 요청 실패 (시도 ${retryCount + 1}/${maxRetries}):`, res.status);
+                        retryCount++;
+                        if (retryCount < maxRetries) {
+                            await new Promise(resolve => setTimeout(resolve, 200 * retryCount));
+                        }
+                    } catch (error) {
+                        console.warn(`🔍 [LABEL_EXPLORER_DEBUG] 이미지 API 요청 에러 (시도 ${retryCount + 1}/${maxRetries}):`, error);
+                        retryCount++;
+                        if (retryCount < maxRetries) {
+                            await new Promise(resolve => setTimeout(resolve, 200 * retryCount));
+                        }
+                    }
+                }
+                
+                if (!res || !res.ok) {
+                    throw new Error(`이미지 조회 실패 (${retryCount}회 시도 후)`);
+                }
+                
                 const data = await res.json();
                 const images = data.results || [];
+                console.log('🔍 [LABEL_EXPLORER_DEBUG] 이미지 조회 성공:', images.length, '개');
 
                 if (images.length === 0) {
                     const empty = document.createElement('div');

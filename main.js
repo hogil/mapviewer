@@ -1746,13 +1746,22 @@ class WaferMapViewer {
                 
                 
                 // Label 캐시 초기화 (제품 선택 시마다)
-                this.clearParCache();
+                await this.clearParCache();
+
+                // 🔥 currentFolderPath 업데이트 완료 후 잠시 대기 (동기화 보장)
+                await new Promise(resolve => setTimeout(resolve, 50));
 
                 // 🔥 Label Explorer와 Class Manager 새로고침 (제품 선택 시)
                 console.log('🔍 [FOLDER_CHANGE_DEBUG] 폴더 변경 후 Label Explorer 새로고침 시작');
                 console.log('🔍 [FOLDER_CHANGE_DEBUG] currentFolderPath:', this.currentFolderPath);
-                await this.refreshClassList();
-                await this.refreshLabelExplorer();
+                
+                try {
+                    await this.refreshClassList();
+                    await this.refreshLabelExplorer();
+                    console.log('🔍 [FOLDER_CHANGE_DEBUG] Label Explorer 새로고침 완료');
+                } catch (error) {
+                    console.error('🔍 [FOLDER_CHANGE_DEBUG] Label Explorer 새로고침 실패:', error);
+                }
 
                 
                 
