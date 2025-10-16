@@ -1520,9 +1520,14 @@ class WaferMapViewer {
 
     // 제품 검색 드롭다운 표시
     showSubfolderDropdown() {
+        console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] showSubfolderDropdown 호출됨');
+        
         if (this.dom.subfolderDropdown) {
+            console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] 드롭다운 표시 중');
             this.dom.subfolderDropdown.style.display = 'block';
             this.populateSubfolderDropdown();
+        } else {
+            console.warn('🔍 [PRODUCT_DROPDOWN_DEBUG] subfolderDropdown 요소가 없음');
         }
     }
 
@@ -1588,17 +1593,32 @@ class WaferMapViewer {
 
     // 제품 검색 드롭다운 채우기
     async populateSubfolderDropdown() {
-        if (!this.dom.subfolderDropdown) return;
+        console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] populateSubfolderDropdown 호출됨');
+        
+        if (!this.dom.subfolderDropdown) {
+            console.warn('🔍 [PRODUCT_DROPDOWN_DEBUG] subfolderDropdown 요소가 없음');
+            return;
+        }
 
         try {
-            const response = await fetch('/api/browse-folders?path=' + encodeURIComponent(this.currentFolderPath || ''));
+            const apiUrl = '/api/browse-folders?path=' + encodeURIComponent(this.currentFolderPath || '');
+            console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] API URL:', apiUrl);
+            console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] currentFolderPath:', this.currentFolderPath);
+            
+            const response = await fetch(apiUrl);
+            console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] API 응답 상태:', response.status);
+            
             const data = await response.json();
+            console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] API 응답 데이터:', data);
 
             if (data.folders) {
+                console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] 폴더 수:', data.folders.length);
                 this.renderSubfolderDropdown(data.folders);
+            } else {
+                console.warn('🔍 [PRODUCT_DROPDOWN_DEBUG] data.folders가 없음');
             }
         } catch (error) {
-            console.error('제품 목록 로드 실패:', error);
+            console.error('🔍 [PRODUCT_DROPDOWN_DEBUG] 제품 목록 로드 실패:', error);
             this.dom.subfolderDropdown.innerHTML = '<div style="padding: 8px; color: #ff5555;">로드 실패</div>';
         }
     }

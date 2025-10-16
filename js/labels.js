@@ -285,7 +285,12 @@ export class LabelManager {
      * 선택된 클래스들 삭제
      */
     async deleteSelectedClasses() {
+        console.log('🔍 [CLASS_DELETE_DEBUG] deleteSelectedClasses 호출됨');
+        
         const selectedClasses = this.getSelectedClasses();
+        console.log('🔍 [CLASS_DELETE_DEBUG] 선택된 클래스:', selectedClasses);
+        console.log('🔍 [CLASS_DELETE_DEBUG] 현재 폴더:', this.viewer?.currentFolderPath);
+        
         if (selectedClasses.length === 0) {
             alert('삭제할 클래스를 선택해주세요.');
             return;
@@ -304,11 +309,16 @@ export class LabelManager {
         }
         
         try {
-            const deletePromises = selectedClasses.map(cls =>
-                fetch(`/api/classes/${encodeURIComponent(cls.name)}`, {
+            console.log('🔍 [CLASS_DELETE_DEBUG] 클래스 삭제 API 호출 시작');
+            
+            const deletePromises = selectedClasses.map(cls => {
+                const apiUrl = `/api/classes/${encodeURIComponent(cls.name)}`;
+                console.log('🔍 [CLASS_DELETE_DEBUG] 삭제 API URL:', apiUrl);
+                
+                return fetch(apiUrl, {
                     method: 'DELETE'
-                })
-            );
+                });
+            });
             
             const responses = await Promise.all(deletePromises);
             const errors = [];
@@ -845,13 +855,18 @@ export class LabelManager {
      * 선택된 라벨들 삭제
      */
     async deleteSelectedLabels() {
+        console.log('🔍 [LABEL_DELETE_DEBUG] deleteSelectedLabels 호출됨');
+        console.log('🔍 [LABEL_DELETE_DEBUG] 현재 폴더:', this.viewer?.currentFolderPath);
+        console.log('🔍 [LABEL_DELETE_DEBUG] 선택된 클래스:', this.labelSelection.selectedClasses);
+        console.log('🔍 [LABEL_DELETE_DEBUG] 선택된 라벨:', this.labelSelection.selected);
+        
         if (this.labelSelection.selectedClasses.length === 0 && this.labelSelection.selected.length === 0) {
             alert('삭제할 라벨을 선택해주세요.');
             return;
         }
         
         // 삭제 로직 구현
-        console.log('선택된 라벨 삭제:', this.labelSelection);
+        console.log('🔍 [LABEL_DELETE_DEBUG] 라벨 삭제 로직 실행:', this.labelSelection);
     }
     
     /**
