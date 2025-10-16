@@ -1745,8 +1745,24 @@ class WaferMapViewer {
 
                 
                 
-                // Label 캐시 초기화 (제품 선택 시마다)
+                // 🔥 모든 캐시 초기화 (제품 선택 시마다)
+                console.log('🔍 [CACHE_DEBUG] 제품 선택 시 모든 캐시 삭제 시작');
                 await this.clearParCache();
+                
+                // 추가 캐시 삭제
+                if (this.thumbnailManager) {
+                    console.log('🔍 [CACHE_DEBUG] 제품 선택 시 썸네일 캐시 삭제:', this.thumbnailManager.cache.size, '개');
+                    this.thumbnailManager.cache.clear();
+                    this.thumbnailManager.abortAll();
+                }
+                
+                // 클래스 캐시 삭제
+                if (this.classToImgListCache) {
+                    console.log('🔍 [CACHE_DEBUG] 제품 선택 시 classToImgListCache 삭제:', Object.keys(this.classToImgListCache).length, '개');
+                    this.classToImgListCache = {};
+                }
+                
+                console.log('🔍 [CACHE_DEBUG] 제품 선택 시 모든 캐시 삭제 완료');
 
                 // 🔥 currentFolderPath 업데이트 완료 후 잠시 대기 (동기화 보장)
                 await new Promise(resolve => setTimeout(resolve, 50));
@@ -2451,6 +2467,15 @@ class WaferMapViewer {
     // 폴더 브라우저 로드
 
     async loadFolderBrowser(path = '') {
+        console.log('🔍 [CACHE_DEBUG] Wafer Map Explorer 새로고침 시작 - 썸네일 캐시 삭제');
+        
+        // 썸네일 캐시 삭제
+        if (this.thumbnailManager) {
+            console.log('🔍 [CACHE_DEBUG] 썸네일 캐시 삭제 전:', this.thumbnailManager.cache.size, '개');
+            this.thumbnailManager.cache.clear();
+            this.thumbnailManager.abortAll();
+            console.log('🔍 [CACHE_DEBUG] 썸네일 캐시 삭제 완료');
+        }
 
         try {
 
@@ -13329,14 +13354,19 @@ class WaferMapViewer {
     // 🔥 Label 캐시만 초기화 (제품 선택 시 사용)
     async clearParCache() {
         try {
+            console.log('🔍 [CACHE_DEBUG] clearParCache 시작');
             this.debugLog('🧹 PAR 캐시 초기화 시작...');
     
             // 🔥 프론트엔드 캐시 먼저 초기화 (서버 오류와 무관하게)
+            console.log('🔍 [CACHE_DEBUG] classToImgListCache 삭제 전:', Object.keys(this.classToImgListCache || {}).length, '개');
             this.classToImgListCache = {};
+            console.log('🔍 [CACHE_DEBUG] classToImgListCache 삭제 완료');
     
             if (this.thumbnailManager) {
+                console.log('🔍 [CACHE_DEBUG] 썸네일 캐시 삭제 전:', this.thumbnailManager.cache.size, '개');
                 this.thumbnailManager.cache.clear();
                 this.thumbnailManager.abortAll();
+                console.log('🔍 [CACHE_DEBUG] 썸네일 캐시 삭제 완료');
             }
     
             // 서버 캐시 초기화 (실패해도 계속 진행)

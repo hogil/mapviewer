@@ -345,6 +345,13 @@ export class LabelManager {
      * 클래스 목록 새로고침
      */
     async refreshClassList() {
+        console.log('🔍 [CACHE_DEBUG] Class Manager 새로고침 시작 - 캐시 삭제');
+        
+        // Class cache 삭제 (classes 배열 초기화)
+        console.log('🔍 [CACHE_DEBUG] classes 배열 삭제 전:', this.classes.length, '개');
+        this.classes = [];
+        console.log('🔍 [CACHE_DEBUG] classes 배열 삭제 완료');
+        
         try {
             // 현재 폴더가 있으면 해당 폴더의 클래스만 조회
             const currentFolder = this.viewer?.currentFolderPath;
@@ -603,6 +610,15 @@ export class LabelManager {
      * Label Explorer 새로고침
      */
     async refreshLabelExplorer() {
+        console.log('🔍 [CACHE_DEBUG] Label Explorer 새로고침 시작 - 캐시 삭제');
+        
+        // Label cache 삭제
+        if (this.viewer && this.viewer.classToImgListCache) {
+            console.log('🔍 [CACHE_DEBUG] classToImgListCache 삭제 전:', Object.keys(this.viewer.classToImgListCache).length, '개');
+            this.viewer.classToImgListCache = {};
+            console.log('🔍 [CACHE_DEBUG] classToImgListCache 삭제 완료');
+        }
+        
         const container = this.elements.labelExplorerList;
         if (!container) return;
 
