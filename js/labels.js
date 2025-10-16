@@ -47,20 +47,29 @@ export class LabelManager {
      * 이벤트 바인딩
      */
     bindEvents() {
+        console.log('🔍 [LABEL_EXPLORER_DEBUG] bindEvents 호출됨');
+        
         // 클래스 추가 버튼
         if (this.elements.addClassBtn) {
-            this.elements.addClassBtn.addEventListener('click', () => this.addClass());
+            this.elements.addClassBtn.addEventListener('click', () => {
+                console.log('🔍 [LABEL_EXPLORER_DEBUG] 클래스 추가 버튼 클릭됨');
+                this.addClass();
+            });
         }
         
         // 클래스 삭제 버튼
         if (this.elements.deleteClassBtn) {
-            this.elements.deleteClassBtn.addEventListener('click', () => this.deleteSelectedClasses());
+            this.elements.deleteClassBtn.addEventListener('click', () => {
+                console.log('🔍 [LABEL_EXPLORER_DEBUG] 클래스 삭제 버튼 클릭됨');
+                this.deleteSelectedClasses();
+            });
         }
         
         // 새 클래스 입력 필드에서 Enter 키
         if (this.elements.newClassInput) {
             this.elements.newClassInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
+                    console.log('🔍 [LABEL_EXPLORER_DEBUG] 클래스 입력 필드에서 Enter 키 입력됨');
                     e.preventDefault();
                     this.addClass();
                 }
@@ -69,12 +78,18 @@ export class LabelManager {
         
         // 배치 라벨 추가 버튼
         if (this.elements.batchLabelBtn) {
-            this.elements.batchLabelBtn.addEventListener('click', () => this.openAddLabelModal());
+            this.elements.batchLabelBtn.addEventListener('click', () => {
+                console.log('🔍 [LABEL_EXPLORER_DEBUG] 배치 라벨 추가 버튼 클릭됨');
+                this.openAddLabelModal();
+            });
         }
         
         // 배치 라벨 삭제 버튼
         if (this.elements.batchDeleteBtn) {
-            this.elements.batchDeleteBtn.addEventListener('click', () => this.deleteSelectedLabels());
+            this.elements.batchDeleteBtn.addEventListener('click', () => {
+                console.log('🔍 [LABEL_EXPLORER_DEBUG] 배치 라벨 삭제 버튼 클릭됨');
+                this.deleteSelectedLabels();
+            });
         }
         
         // 모달 이벤트 바인딩
@@ -390,6 +405,9 @@ export class LabelManager {
         // 클릭 이벤트
         button.addEventListener('click', async (e) => {
             const className = cls.name;
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 클래스 버튼 클릭됨:', className);
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 현재 폴더:', this.viewer?.currentFolderPath);
+            
             const selected = (this.viewer && typeof this.viewer.getSelectedImagesForModal === 'function')
                 ? this.viewer.getSelectedImagesForModal()
                 : [];
@@ -573,6 +591,8 @@ export class LabelManager {
         
         // 클릭 시 해당 이미지 표시
         item.addEventListener('click', () => {
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 이미지 아이템 클릭됨:', imagePath);
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 현재 폴더:', this.viewer?.currentFolderPath);
             this.viewer.loadImage(imagePath);
         });
         
@@ -655,6 +675,10 @@ export class LabelManager {
                     del.className = 'label-explorer-del';
                     del.textContent = '삭제';
                     del.addEventListener('click', async () => {
+                        console.log('🔍 [LABEL_EXPLORER_DEBUG] 이미지 삭제 버튼 클릭됨:', imagePath);
+                        console.log('🔍 [LABEL_EXPLORER_DEBUG] 클래스:', className);
+                        console.log('🔍 [LABEL_EXPLORER_DEBUG] 현재 폴더:', this.viewer?.currentFolderPath);
+                        
                         if (!confirm(`"${className}" 클래스에서 "${imagePath.split('/').pop()}" 이미지를 제거하시겠습니까?`)) {
                             return;
                         }
@@ -773,6 +797,9 @@ export class LabelManager {
      * 모든 UI 새로고침
      */
     async refreshAll() {
+        console.log('🔍 [LABEL_EXPLORER_DEBUG] refreshAll 호출됨');
+        console.log('🔍 [LABEL_EXPLORER_DEBUG] 현재 폴더:', this.viewer?.currentFolderPath);
+        
         await Promise.all([
             this.refreshClassList(),
             this.refreshLabelExplorer()

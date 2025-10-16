@@ -10167,6 +10167,9 @@ class WaferMapViewer {
     // --- LABEL EXPLORER ---
 
     async refreshLabelExplorer() {
+        console.log('🔍 [MAIN_DEBUG] refreshLabelExplorer 호출됨');
+        console.log('🔍 [MAIN_DEBUG] currentFolderPath:', this.currentFolderPath);
+        console.log('🔍 [MAIN_DEBUG] currentFolderPrefix:', this.currentFolderPrefix);
 
         const container = document.getElementById('label-explorer-list');
 
