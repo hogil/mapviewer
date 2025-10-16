@@ -10147,14 +10147,8 @@ class WaferMapViewer {
     // --- LABEL EXPLORER ---
 
     async refreshLabelExplorer() {
-        // 🔥 최적화: main.js의 Label Explorer 새로고침 비활성화
-        // → js/labels.js의 LabelManager.refreshLabelExplorer()만 사용
-        // → refreshClassList()만 호출하면 캐시된 클래스 목록을 LabelManager가 사용
-        // → API 중복 호출 방지 (classes?folder=... 2번 → 1번)
-        console.log('🔍 [MAIN_DEBUG] refreshLabelExplorer 호출됨 (비활성화됨 - LabelManager 사용)');
-        return;
-
-        // 🔥 아래 코드는 비활성화됨 - 절대 실행되지 않음
+        // 🔥 Label Explorer 새로고침 활성화
+        console.log('🔍 [MAIN_DEBUG] refreshLabelExplorer 호출됨');
         /* eslint-disable-next-line no-unreachable */
         console.log('🔍 [MAIN_DEBUG] currentFolderPath:', this.currentFolderPath);
         console.log('🔍 [MAIN_DEBUG] currentFolderPrefix:', this.currentFolderPrefix);
