@@ -20,6 +20,12 @@ export class LabelManager {
         // 디바운싱된 새로고침 함수
         this.debouncedRefresh = debounce(() => this.refreshAll(), 300);
         
+        // 🔥 중복 API 호출 방지
+        this.isRefreshing = false;
+        this.pendingRefresh = false;
+        this.lastRefreshTime = 0;
+        this.refreshCooldown = 100; // 100ms 쿨다운
+        
         this.initElements();
         this.bindEvents();
     }
@@ -365,7 +371,14 @@ export class LabelManager {
         try {
             // 🔥 ROOT_DIR 기준 상대 경로 사용 (절대 경로 아님!)
             const currentFolder = this.viewer?.currentFolderPrefix;
-            const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
+            console.log('🔍 [CLASS_DEBUG] refreshClassList - currentFolderPrefix:', currentFolder);
+            
+            // 🔥 빈 문자열('')도 폴더 파라미터로 전달 (루트 폴더 의미)
+            const apiUrl = (currentFolder !== undefined && currentFolder !== null)
+                ? `/api/classes?folder=${encodeURIComponent(currentFolder)}`
+                : '/api/classes';
+                
+            console.log('🔍 [CLASS_DEBUG] API URL:', apiUrl);
 
             const response = await fetch(apiUrl);
             if (!response.ok) {
@@ -898,10 +911,40 @@ export class LabelManager {
         console.log('🔍 [LABEL_EXPLORER_DEBUG] refreshAll 호출됨');
         console.log('🔍 [LABEL_EXPLORER_DEBUG] 현재 폴더:', this.viewer?.currentFolderPath);
         
-        await Promise.all([
-            this.refreshClassList(),
-            this.refreshLabelExplorer()
-        ]);
+        // 🔥 중복 호출 방지
+        const now = Date.now();
+        if (this.isRefreshing) {
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 이미 새로고침 중 - 대기열에 추가');
+            this.pendingRefresh = true;
+            return;
+        }
+        
+        if (now - this.lastRefreshTime < this.refreshCooldown) {
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 쿨다운 중 - 대기열에 추가');
+            this.pendingRefresh = true;
+            return;
+        }
+        
+        this.isRefreshing = true;
+        this.lastRefreshTime = now;
+        
+        try {
+            await Promise.all([
+                this.refreshClassList(),
+                this.refreshLabelExplorer()
+            ]);
+            
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] refreshAll 완료');
+        } finally {
+            this.isRefreshing = false;
+            
+            // 대기 중인 새로고침이 있으면 실행
+            if (this.pendingRefresh) {
+                console.log('🔍 [LABEL_EXPLORER_DEBUG] 대기 중인 새로고침 실행');
+                this.pendingRefresh = false;
+                setTimeout(() => this.refreshAll(), 50);
+            }
+        }
     }
     
     /**

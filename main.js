@@ -10151,7 +10151,16 @@ class WaferMapViewer {
         console.log('🔍 [MAIN_DEBUG] currentFolderPath:', this.currentFolderPath);
         console.log('🔍 [MAIN_DEBUG] currentFolderPrefix:', this.currentFolderPrefix);
 
-        const container = document.getElementById('label-explorer-list');
+        // 🔥 중복 호출 방지
+        if (this._isRefreshingLabelExplorer) {
+            console.log('🔍 [MAIN_DEBUG] Label Explorer 이미 새로고침 중 - 건너뜀');
+            return;
+        }
+        
+        this._isRefreshingLabelExplorer = true;
+
+        try {
+            const container = document.getElementById('label-explorer-list');
 
         if (!container) {
 
