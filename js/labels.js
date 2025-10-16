@@ -649,70 +649,43 @@ export class LabelManager {
      */
     async refreshLabelExplorer() {
         console.log('🔍 [CACHE_DEBUG] Label Explorer 새로고침 시작 - 캐시 삭제');
-        
+
         // Label cache 삭제
         if (this.viewer && this.viewer.classToImgListCache) {
             console.log('🔍 [CACHE_DEBUG] classToImgListCache 삭제 전:', Object.keys(this.viewer.classToImgListCache).length, '개');
             this.viewer.classToImgListCache = {};
             console.log('🔍 [CACHE_DEBUG] classToImgListCache 삭제 완료');
         }
-        
+
         const container = this.elements.labelExplorerList;
         if (!container) return;
 
-        // 현재 폴더의 클래스 목록 불러오기
+        // 🔥 최적화: refreshClassList()에서 이미 가져온 클래스 목록 재사용
         let classes = [];
-        try {
-            // 🔥 ROOT_DIR 기준 상대 경로 사용 (절대 경로 아님!)
-            const currentFolder = this.viewer?.currentFolderPrefix;
-            console.log('🔍 [LABEL_EXPLORER_DEBUG] refreshLabelExplorer 호출됨');
-            console.log('🔍 [LABEL_EXPLORER_DEBUG] this.viewer:', this.viewer);
-            console.log('🔍 [LABEL_EXPLORER_DEBUG] currentFolder:', currentFolder);
-            console.log('🔍 [LABEL_EXPLORER_DEBUG] currentFolder 타입:', typeof currentFolder);
-            console.log('🔍 [LABEL_EXPLORER_DEBUG] currentFolder 길이:', currentFolder?.length);
-            const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
-            console.log('🔍 [LABEL_EXPLORER_DEBUG] ===== API 요청 준비 =====');
-            console.log('🔍 [LABEL_EXPLORER_DEBUG] currentFolder 원본:', currentFolder);
-            console.log('🔍 [LABEL_EXPLORER_DEBUG] currentFolder 인코딩 전:', currentFolder);
-            console.log('🔍 [LABEL_EXPLORER_DEBUG] encodeURIComponent 결과:', currentFolder ? encodeURIComponent(currentFolder) : 'null');
-            console.log('🔍 [LABEL_EXPLORER_DEBUG] 최종 apiUrl:', apiUrl);
-            console.log('🔍 [LABEL_EXPLORER_DEBUG] URL 길이:', apiUrl.length);
-            
-            // 재시도 로직 추가
-            let res;
-            let retryCount = 0;
-            const maxRetries = 3;
-            
-            while (retryCount < maxRetries) {
-                try {
-                    res = await fetch(apiUrl);
-                    if (res.ok) break;
-                    
-                    console.warn(`🔍 [LABEL_EXPLORER_DEBUG] API 요청 실패 (시도 ${retryCount + 1}/${maxRetries}):`, res.status);
-                    retryCount++;
-                    if (retryCount < maxRetries) {
-                        await new Promise(resolve => setTimeout(resolve, 200 * retryCount));
-                    }
-                } catch (error) {
-                    console.warn(`🔍 [LABEL_EXPLORER_DEBUG] API 요청 에러 (시도 ${retryCount + 1}/${maxRetries}):`, error);
-                    retryCount++;
-                    if (retryCount < maxRetries) {
-                        await new Promise(resolve => setTimeout(resolve, 200 * retryCount));
-                    }
+        if (this.classes && this.classes.length > 0) {
+            // 캐시된 클래스 목록 사용 (API 호출 생략!)
+            classes = this.classes.map(cls => typeof cls === 'string' ? cls : cls.name);
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 캐시된 클래스 목록 사용:', classes.length, '개');
+        } else {
+            // 캐시가 없으면 API 호출 (refreshAll이 아닌 직접 호출 시)
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 캐시 없음 - API 호출');
+            try {
+                const currentFolder = this.viewer?.currentFolderPrefix;
+                const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
+
+                const res = await fetch(apiUrl);
+                if (!res.ok) {
+                    throw new Error(`클래스 목록 조회 실패 (${res.status})`);
                 }
+
+                const data = await res.json();
+                classes = data.classes || [];
+                console.log('🔍 [LABEL_EXPLORER_DEBUG] 클래스 목록 조회 성공:', classes.length, '개');
+            } catch (e) {
+                console.error('Label Explorer 클래스 조회 오류:', e);
+                container.innerHTML = '<p style="color:#f00;">클래스를 불러올 수 없습니다.</p>';
+                return;
             }
-            
-            if (!res || !res.ok) {
-                throw new Error(`클래스 목록 조회 실패 (${retryCount}회 시도 후)`);
-            }
-            
-            const data = await res.json();
-            classes = data.classes || [];
-            console.log('🔍 [LABEL_EXPLORER_DEBUG] 클래스 목록 조회 성공:', classes.length, '개');
-        } catch (e) {
-            console.error('Label Explorer 클래스 조회 오류:', e);
-            container.innerHTML = '<p style="color:#f00;">클래스를 불러올 수 없습니다.</p>';
-            return;
         }
 
         const frag = document.createDocumentFragment();

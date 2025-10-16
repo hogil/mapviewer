@@ -8920,49 +8920,13 @@ class WaferMapViewer {
 
             }
 
-            
-            
+
+
             this.dom.newClassInput.value = '';
 
+            // 🔥 최적화: 1번만 새로고침 (중복 제거)
             await this.refreshClassList();
-
             await this.refreshLabelExplorer();
-
-            
-            
-            // Label Explorer 강제 새로고침 (클래스 생성 후)
-
-            setTimeout(() => {
-
-                this.debugLog('클래스 생성 후 Label Explorer 강제 새로고침');
-
-                this.refreshLabelExplorer();
-
-            }, 100);
-
-            
-            
-            // 추가 지연 새로고침 (500ms)
-
-            setTimeout(() => {
-
-                this.debugLog('클래스 생성 후 Label Explorer 추가 새로고침 (500ms)');
-
-                this.refreshLabelExplorer();
-
-            }, 500);
-
-            
-            
-            // 최종 확인 새로고침 (1000ms)
-
-            setTimeout(() => {
-
-                this.debugLog('클래스 생성 후 Label Explorer 최종 확인 새로고침 (1000ms)');
-
-                this.refreshLabelExplorer();
-
-            }, 1000);
 
             
             
@@ -9184,67 +9148,21 @@ class WaferMapViewer {
 
         if (result.refresh_required) {
 
-            this.debugLog('클래스 삭제 완료 - Label Explorer 즉시 강제 새로고침');
-
-            await this.refreshLabelExplorer();
-
+            this.debugLog('클래스 삭제 완료');
         }
 
-        
-        
+
         // 텍스트박스도 클리어
-
         this.dom.newClassInput.value = '';
-
         this.selectedClass = null;
-
         this.classSelection.selected = [];
-
         this.classSelection.lastClicked = null;
 
-        
-        
+
+        // 🔥 최적화: 1번만 새로고침 (중복 제거)
         await this.refreshClassList();
-
         await this.refreshLabelExplorer();
-
         this.loadDirectoryContents(null, this.dom.fileExplorer);
-
-        
-        
-        // Label Explorer 강제 새로고침 (클래스 삭제 후)
-
-        setTimeout(() => {
-
-            this.debugLog('클래스 삭제 후 Label Explorer 강제 새로고침');
-
-            this.refreshLabelExplorer();
-
-        }, 100);
-
-        
-        
-        // 추가 지연 새로고침 (500ms)
-
-        setTimeout(() => {
-
-            this.debugLog('클래스 삭제 후 Label Explorer 추가 새로고침 (500ms)');
-
-            this.refreshLabelExplorer();
-
-        }, 500);
-
-        
-        
-        // 최종 확인 새로고침 (1000ms)
-
-        setTimeout(() => {
-
-            this.debugLog('클래스 삭제 후 Label Explorer 최종 확인 새로고침 (1000ms)');
-
-            this.refreshLabelExplorer();
-
-        }, 1000);
 
         
         
