@@ -8227,8 +8227,10 @@ class WaferMapViewer {
         const data = await res.json();
 
         // 이름 순으로 정렬 (대소문자 구분 없이)
-
         const classes = Array.isArray(data.classes) ? data.classes.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())) : [];
+
+        // 🔥 최적화: 클래스 목록 캐싱 (refreshLabelExplorer에서 재사용)
+        this.cachedClassList = classes;
 
         
         
@@ -10213,33 +10215,40 @@ class WaferMapViewer {
 
 
 
-        try {
+        // 🔥 최적화: refreshClassList()에서 받은 캐시 사용 (API 호출 생략)
+        let classes = [];
 
-            // 🔥 ROOT_DIR 기준 상대 경로 사용 (절대 경로 아님!)
-            const currentFolder = this.currentFolderPrefix;
-            const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
+        if (this.cachedClassList && this.cachedClassList.length >= 0) {
+            // 캐시된 클래스 목록 사용
+            classes = this.cachedClassList;
+            console.log('🔍 [MAIN_DEBUG] 캐시된 클래스 목록 사용:', classes.length, '개');
+        } else {
+            // 캐시 없으면 API 호출 (refreshLabelExplorer만 단독 호출된 경우)
+            console.log('🔍 [MAIN_DEBUG] 캐시 없음 - API 호출');
+            try {
+                const currentFolder = this.currentFolderPrefix;
+                const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
 
-            const res = await fetch(apiUrl, {
-                signal: this.globalAbortController?.signal
-            });
+                const res = await fetch(apiUrl, {
+                    signal: this.globalAbortController?.signal
+                });
 
-            const data = await res.json();
+                const data = await res.json();
 
-            
-            
-            if (!data.success) {
+                if (!data.success) {
+                    console.error('클래스 목록 조회 실패:', data);
+                    return;
+                }
 
-                console.error('클래스 목록 조회 실패:', data);
-
+                classes = Array.isArray(data.classes) ? data.classes.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())) : [];
+                this.cachedClassList = classes;
+            } catch (error) {
+                console.error('Label Explorer 클래스 조회 오류:', error);
                 return;
-
             }
+        }
 
-            
-            
-            // 이름 순으로 정렬 (대소문자 구분 없이)
-
-            const classes = Array.isArray(data.classes) ? data.classes.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())) : [];
+        try {
 
             if (!this.labelSelection) this.labelSelection = { selected: [], lastClicked: null, openFolders: {}, selectedClasses: [] };
 
