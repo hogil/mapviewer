@@ -1988,15 +1988,33 @@ async def create_class(req: CreateClassReq,
         else:
             current_folder = ROOT_DIR
 
+        logger.info(f"🔍 [CREATE_CLASS] folder 파라미터: {folder}")
+        logger.info(f"🔍 [CREATE_CLASS] current_folder: {current_folder}")
+        logger.info(f"🔍 [CREATE_CLASS] _classification_dir(): {_classification_dir()}")
+
         name = req.name.strip()
         if not name or name.isspace(): raise HTTPException(status_code=400, detail="클래스명이 비어있습니다")
         if any(ord(c) < 32 or ord(c) > 126 for c in name):
             raise HTTPException(status_code=400, detail="클래스명에 특수문자/한글 자모 사용 불가 (A-Z,a-z,0-9,_,-)")
         if not _CLASS_NAME_RE.match(name): raise HTTPException(status_code=400, detail="클래스명 형식 오류")
         if len(name) > 50: raise HTTPException(status_code=400, detail="클래스명이 너무 깁니다 (최대 50자)")
-        class_dir = _classification_dir() / name
+
+        classification_dir = _classification_dir()
+        logger.info(f"🔍 [CREATE_CLASS] classification_dir: {classification_dir}, exists: {classification_dir.exists()}")
+
+        # classification 디렉토리가 없으면 생성
+        if not classification_dir.exists():
+            logger.info(f"🔍 [CREATE_CLASS] classification 디렉토리 생성: {classification_dir}")
+            classification_dir.mkdir(parents=True, exist_ok=True)
+
+        class_dir = classification_dir / name
+        logger.info(f"🔍 [CREATE_CLASS] class_dir: {class_dir}, exists: {class_dir.exists()}")
+
         if class_dir.exists(): raise HTTPException(status_code=409, detail="Class already exists")
+
+        logger.info(f"🔍 [CREATE_CLASS] 클래스 디렉토리 생성 시작: {class_dir}")
         class_dir.mkdir(parents=True, exist_ok=False)
+        logger.info(f"🔍 [CREATE_CLASS] 클래스 디렉토리 생성 완료: {class_dir}, exists: {class_dir.exists()}")
         _sync_labels_if_classes_changed()
         for p in (_classification_dir(), class_dir, ROOT_DIR): _dircache_invalidate(p)
         DIRLIST_CACHE.clear()
