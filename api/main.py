@@ -1443,35 +1443,31 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
             logger.info(f"⏱️ [DEBUG] 파일 복사: {(time.time()-t2)*1000:.0f}ms")
             logger.info(f"✅ [COPY] Level 1.0 - 원본 복사")
         else:
-            # thumbnail() 정적 메서드 사용 (JPEG shrink-on-load 활용, 6배 빠름!)
+            # pyvips로 이미지 로드 후 resize() 사용 (Lanczos3 지원)
             t2 = time.time()
-            resized = pyvips.Image.thumbnail(
-                str(image_path),
-                new_w,
-                height=new_h,
-                size='force',      # 정확한 크기 강제
-                linear=False,      # sRGB 유지 (빠름)
-                no_rotate=True     # EXIF 회전 스킵 (빠름)
-                # kernel 파라미터는 thumbnail()에서 지원 안 함
-            )
-            logger.info(f"⏱️ [DEBUG] thumbnail() 리사이즈: {(time.time()-t2)*1000:.0f}ms")
+            img = pyvips.Image.new_from_file(str(image_path), access='sequential')
 
-            # 🚀 최적화된 JPEG 저장 (2-3배 빠름)
-            # Q=85: 파일 크기 70% 감소, 품질 차이 거의 없음, 인코딩/디코딩 모두 빠름
+            # Lanczos3 커널로 리사이즈
+            scale_w = new_w / orig_w
+            scale_h = new_h / orig_h
+            resized = img.resize(scale_w, vscale=scale_h, kernel='lanczos3')
+            logger.info(f"⏱️ [DEBUG] resize(lanczos3) 리사이즈: {(time.time()-t2)*1000:.0f}ms")
+
+            # Q=100, Lanczos3으로 최고 품질 저장
             t3 = time.time()
             resized.jpegsave(
                 str(pyramid_path),
-                Q=85,                     # 품질 85 (최적 균형: 속도 vs 품질)
-                strip=True,               # 메타데이터 제거 (5-10% 빠름)
-                optimize_coding=False,    # Huffman 최적화 스킵 (20-30% 빠름)
-                interlace=False,          # Progressive 스킵 (빠름)
-                trellis_quant=False,      # Trellis quant 스킵 (빠름)
+                Q=100,                    # 최고 품질
+                strip=True,               # 메타데이터 제거
+                optimize_coding=False,    # 빠른 인코딩
+                interlace=False,          # Progressive 스킵
+                trellis_quant=False,
                 overshoot_deringing=False,
                 optimize_scans=False,
                 subsample_mode='auto'
             )
             t4 = time.time()
-            logger.info(f"⏱️ [DEBUG] jpegsave() 저장: {(t4-t3)*1000:.0f}ms")
+            logger.info(f"⏱️ [DEBUG] jpegsave(Q=100) 저장: {(t4-t3)*1000:.0f}ms")
 
         # 시간 측정 및 로그
         elapsed = time.time() - start_time
