@@ -5281,15 +5281,16 @@ class WaferMapViewer {
 
                         ctx.drawImage(img, x + offsetX, y + offsetY, scaledWidth, scaledHeight);
 
-                        // 🔥 파일명 표시 (확장자 제거, 폴더명 포함)
+                        // 🔥 파일명 표시 (확장자 제거, 2depth 폴더명 포함)
                         const pathParts = imagePath.split('/');
                         const filename = pathParts.pop();
-                        const folderName = pathParts.length > 0 ? pathParts[pathParts.length - 1] : '';
-                        
+                        // 2depth 폴더명 가져오기 (index 1) - 3depth 이상일 때만 존재
+                        const folderName = pathParts.length >= 2 ? pathParts[1] : '';
+
                         // 확장자 제거
                         const nameWithoutExt = filename.substring(0, filename.lastIndexOf('.'));
-                        
-                        // 폴더명과 파일명을 한 줄로 결합
+
+                        // 2depth 폴더명과 파일명을 한 줄로 결합
                         let displayName = folderName ? `${folderName}/${nameWithoutExt}` : nameWithoutExt;
                         
                         ctx.fillStyle = '#000000';
@@ -5487,15 +5488,16 @@ class WaferMapViewer {
 
                         ctx.drawImage(img, x + offsetX, y + offsetY, scaledWidth, scaledHeight);
 
-                        // 🔥 파일명 표시 (확장자 제거, 폴더명 포함)
+                        // 🔥 파일명 표시 (확장자 제거, 2depth 폴더명 포함)
                         const pathParts = imagePath.split('/');
                         const filename = pathParts.pop();
-                        const folderName = pathParts.length > 0 ? pathParts[pathParts.length - 1] : '';
-                        
+                        // 2depth 폴더명 가져오기 (index 1) - 3depth 이상일 때만 존재
+                        const folderName = pathParts.length >= 2 ? pathParts[1] : '';
+
                         // 확장자 제거
                         const nameWithoutExt = filename.substring(0, filename.lastIndexOf('.'));
-                        
-                        // 폴더명과 파일명을 한 줄로 결합
+
+                        // 2depth 폴더명과 파일명을 한 줄로 결합
                         let displayName = folderName ? `${folderName}/${nameWithoutExt}` : nameWithoutExt;
                         
                         ctx.fillStyle = '#000000';
