@@ -5224,10 +5224,12 @@ class WaferMapViewer {
             // 각 이미지 크기 (512px로 설정)
 
             const imageSize = 512;
+            const filenameHeight = 32; // 파일명 표시 영역
+            const cellHeight = imageSize + filenameHeight;
 
             canvas.width = cols * imageSize;
 
-            canvas.height = rows * imageSize;
+            canvas.height = rows * cellHeight;
 
             
             
@@ -5260,7 +5262,7 @@ class WaferMapViewer {
 
                         const x = col * imageSize;
 
-                        const y = row * imageSize;
+                        const y = row * cellHeight;
 
 
 
@@ -5279,6 +5281,29 @@ class WaferMapViewer {
 
 
                         ctx.drawImage(img, x + offsetX, y + offsetY, scaledWidth, scaledHeight);
+
+                        // 🔥 파일명 표시
+                        const filename = imagePath.split('/').pop();
+                        ctx.fillStyle = '#000000';
+                        ctx.font = '14px Arial';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+
+                        // 파일명이 너무 길면 잘라내기
+                        let displayName = filename;
+                        const maxWidth = imageSize - 10;
+                        let metrics = ctx.measureText(displayName);
+                        if (metrics.width > maxWidth) {
+                            // 파일명 축약
+                            const ext = displayName.substring(displayName.lastIndexOf('.'));
+                            let baseName = displayName.substring(0, displayName.lastIndexOf('.'));
+                            while (baseName.length > 0 && ctx.measureText(baseName + '...' + ext).width > maxWidth) {
+                                baseName = baseName.substring(0, baseName.length - 1);
+                            }
+                            displayName = baseName + '...' + ext;
+                        }
+
+                        ctx.fillText(displayName, x + imageSize / 2, y + imageSize + filenameHeight / 2);
 
                         resolve();
 
@@ -5404,10 +5429,12 @@ class WaferMapViewer {
 
 
             const imageSize = 512;
+            const filenameHeight = 32; // 파일명 표시 영역
+            const cellHeight = imageSize + filenameHeight;
 
             canvas.width = cols * imageSize;
 
-            canvas.height = rows * imageSize;
+            canvas.height = rows * cellHeight;
 
             ctx.fillStyle = '#FFFFFF';
 
@@ -5434,7 +5461,7 @@ class WaferMapViewer {
 
                         const x = col * imageSize;
 
-                        const y = row * imageSize;
+                        const y = row * cellHeight;
 
                         const scale = Math.min(imageSize / img.width, imageSize / img.height);
 
@@ -5447,6 +5474,29 @@ class WaferMapViewer {
                         const offsetY = (imageSize - scaledHeight) / 2;
 
                         ctx.drawImage(img, x + offsetX, y + offsetY, scaledWidth, scaledHeight);
+
+                        // 🔥 파일명 표시
+                        const filename = imagePath.split('/').pop();
+                        ctx.fillStyle = '#000000';
+                        ctx.font = '14px Arial';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+
+                        // 파일명이 너무 길면 잘라내기
+                        let displayName = filename;
+                        const maxWidth = imageSize - 10;
+                        let metrics = ctx.measureText(displayName);
+                        if (metrics.width > maxWidth) {
+                            // 파일명 축약
+                            const ext = displayName.substring(displayName.lastIndexOf('.'));
+                            let baseName = displayName.substring(0, displayName.lastIndexOf('.'));
+                            while (baseName.length > 0 && ctx.measureText(baseName + '...' + ext).width > maxWidth) {
+                                baseName = baseName.substring(0, baseName.length - 1);
+                            }
+                            displayName = baseName + '...' + ext;
+                        }
+
+                        ctx.fillText(displayName, x + imageSize / 2, y + imageSize + filenameHeight / 2);
 
                         resolve();
 
