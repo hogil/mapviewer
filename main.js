@@ -5225,7 +5225,8 @@ class WaferMapViewer {
 
             const imageSize = 512;
             const filenameHeight = 32; // 파일명 표시 영역
-            const cellHeight = imageSize + filenameHeight;
+            const rowPadding = 20; // 파일명과 다음 이미지 사이 여백
+            const cellHeight = imageSize + filenameHeight + rowPadding;
 
             canvas.width = cols * imageSize;
 
@@ -5441,7 +5442,8 @@ class WaferMapViewer {
 
             const imageSize = 512;
             const filenameHeight = 32; // 파일명 표시 영역
-            const cellHeight = imageSize + filenameHeight;
+            const rowPadding = 20; // 파일명과 다음 이미지 사이 여백
+            const cellHeight = imageSize + filenameHeight + rowPadding;
 
             canvas.width = cols * imageSize;
 
