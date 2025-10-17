@@ -226,7 +226,7 @@ export class ContextMenuManager {
                         
                         ctx.drawImage(img, x + offsetX, y + offsetY, scaledWidth, scaledHeight);
                         
-                        // 🔥 파일명 표시 (확장자 제거)
+                        // 🔥 파일명 표시 (확장자 제거, 폴더명 포함)
                         const pathParts = imagePath.split('/');
                         const filename = pathParts.pop();
                         const folderName = pathParts.length > 0 ? pathParts[pathParts.length - 1] : '';
@@ -234,13 +234,15 @@ export class ContextMenuManager {
                         // 확장자 제거
                         const nameWithoutExt = filename.substring(0, filename.lastIndexOf('.'));
                         
+                        // 폴더명과 파일명을 한 줄로 결합
+                        let displayName = folderName ? `${folderName}/${nameWithoutExt}` : nameWithoutExt;
+                        
                         ctx.fillStyle = '#000000';
                         ctx.font = '28px Arial';
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'middle';
-                        
+
                         // 파일명이 너무 길면 잘라내기
-                        let displayName = nameWithoutExt;
                         const maxWidth = imageSize - 10;
                         let metrics = ctx.measureText(displayName);
                         if (metrics.width > maxWidth) {
@@ -249,16 +251,9 @@ export class ContextMenuManager {
                             }
                             displayName = displayName + '...';
                         }
-                        
+
                         // 파일명 표시
                         ctx.fillText(displayName, x + imageSize / 2, y + imageSize + filenameHeight / 2);
-                        
-                        // 상위 폴더명 표시 (있는 경우에만)
-                        if (folderName) {
-                            ctx.font = '20px Arial';
-                            ctx.fillStyle = '#666666';
-                            ctx.fillText(folderName, x + imageSize / 2, y + imageSize + filenameHeight / 2 - 20);
-                        }
                         
                         // 🔥 테두리 그리기 (이미지 + 파일명 포함)
                         ctx.strokeStyle = '#CCCCCC';
