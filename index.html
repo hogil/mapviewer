@@ -297,15 +297,17 @@
             border-radius: 6px;
             border: 1px solid transparent;
             cursor: pointer;
-            contain: layout style;
+            transition: border 0.1s, box-shadow 0.1s;
+            contain: layout style paint;
+            will-change: transform;
         }
         
         .grid-thumb-wrap.selected {
-            border: 3px solid #09f;
-            box-shadow: 0 0 0 1px #09f3;
+            border: 4px solid #09f;
+            box-shadow: 0 0 0 3px #09f3;
         }
         
-        .grid-thumb-wrap:hover:not(.selected) {
+        .grid-thumb-wrap:hover {
             border: 1px solid #007acc;
         }
         
