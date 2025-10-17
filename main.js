@@ -5312,10 +5312,10 @@ class WaferMapViewer {
                         // 파일명 표시
                         ctx.fillText(displayName, x + imageSize / 2, y + imageSize + filenameHeight / 2);
 
-                        // 🔥 테두리 그리기 (이미지 + 파일명 포함)
+                        // 🔥 테두리 그리기 (이미지 영역만)
                         ctx.strokeStyle = '#CCCCCC';
                         ctx.lineWidth = 4;
-                        ctx.strokeRect(x, y, imageSize, cellHeight);
+                        ctx.strokeRect(x, y, imageSize, imageSize);
 
                         resolve();
 
@@ -5517,10 +5517,10 @@ class WaferMapViewer {
                         // 파일명 표시
                         ctx.fillText(displayName, x + imageSize / 2, y + imageSize + filenameHeight / 2);
 
-                        // 🔥 테두리 그리기 (이미지 + 파일명 포함)
+                        // 🔥 테두리 그리기 (이미지 영역만)
                         ctx.strokeStyle = '#CCCCCC';
                         ctx.lineWidth = 4;
-                        ctx.strokeRect(x, y, imageSize, cellHeight);
+                        ctx.strokeRect(x, y, imageSize, imageSize);
 
                         resolve();
 
