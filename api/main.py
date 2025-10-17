@@ -2066,6 +2066,65 @@ async def delete_class(class_name: str = PathParam(..., min_length=1, max_length
         logger.exception(f"클래스 삭제 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+class RenameClassReq(BaseModel):
+    old_name: str = Field(..., min_length=1, max_length=128)
+    new_name: str = Field(..., min_length=1, max_length=128)
+
+@app.post("/api/classes/rename")
+async def rename_class(req: RenameClassReq,
+                       folder: Optional[str] = Query(None, description="현재 폴더 경로"),
+                       _=Depends(labels_classes_sync_dep)):
+    try:
+        # 🔥 folder 파라미터가 있으면 current_folder 설정
+        global current_folder
+        if folder:
+            current_folder = ROOT_DIR / folder
+        else:
+            current_folder = ROOT_DIR
+
+        old_name = req.old_name.strip()
+        new_name = req.new_name.strip()
+
+        # 검증
+        if not _CLASS_NAME_RE.match(old_name): raise HTTPException(status_code=400, detail="Invalid old class name")
+        if not _CLASS_NAME_RE.match(new_name): raise HTTPException(status_code=400, detail="Invalid new class name")
+        if old_name == new_name: raise HTTPException(status_code=400, detail="Old and new names are the same")
+
+        classification_dir = _classification_dir()
+        old_class_dir = classification_dir / old_name
+        new_class_dir = classification_dir / new_name
+
+        # 존재 확인
+        if not old_class_dir.exists() or not old_class_dir.is_dir():
+            raise HTTPException(status_code=404, detail="Old class not found")
+        if new_class_dir.exists():
+            raise HTTPException(status_code=409, detail="New class name already exists")
+
+        # 폴더 이름 변경
+        old_class_dir.rename(new_class_dir)
+
+        # labels.json에서 라벨 이름 변경
+        renamed_count = 0
+        with LABELS_LOCK:
+            for img_path, labels in list(LABELS.items()):
+                if old_name in labels:
+                    labels = [new_name if lbl == old_name else lbl for lbl in labels]
+                    LABELS[img_path] = labels
+                    renamed_count += 1
+
+        _labels_save()
+        _labels_load()
+
+        # 캐시 무효화
+        for p in (_classification_dir(), old_class_dir, new_class_dir, ROOT_DIR): _dircache_invalidate(p)
+        DIRLIST_CACHE.clear()
+
+        log_access_row(tag="INFO", note=f"클래스 '{old_name}' → '{new_name}' 이름 변경 완료 ({renamed_count}개 이미지)")
+        return {"success": True, "old_name": old_name, "new_name": new_name, "renamed_count": renamed_count, "refresh_required": True}
+    except Exception as e:
+        logger.exception(f"클래스 이름 변경 실패: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 class DeleteClassesReq(BaseModel):
     names: List[str] = Field(..., min_items=1)
 

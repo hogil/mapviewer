@@ -773,6 +773,8 @@ class WaferMapViewer {
 
             deleteClassBtn: document.getElementById('delete-class-btn'),
 
+            renameClassBtn: document.getElementById('rename-class-btn'),
+
             fileSearch: document.getElementById('file-search'),
 
             searchBtn: document.getElementById('search-btn'),
@@ -8169,10 +8171,15 @@ class WaferMapViewer {
         this.dom.labelStatus = document.getElementById('label-status');
 
         this.dom.deleteClassBtn = document.getElementById('delete-class-btn');
+        this.dom.renameClassBtn = document.getElementById('rename-class-btn');
 
         // DOM 요소가 존재할 때만 이벤트 리스너 추가
         if (this.dom.deleteClassBtn) {
             this.dom.deleteClassBtn.addEventListener('click', () => this.deleteSelectedClasses());
+        }
+
+        if (this.dom.renameClassBtn) {
+            this.dom.renameClassBtn.addEventListener('click', () => this.renameSelectedClass());
         }
 
         if (this.dom.addClassBtn) {
@@ -8356,6 +8363,7 @@ class WaferMapViewer {
                     this.selectedClass = null;
 
                     this.dom.deleteClassBtn.disabled = true;
+                    if (this.dom.renameClassBtn) this.dom.renameClassBtn.disabled = true;
 
                     this.updateClassListSelection();
 
@@ -8735,6 +8743,8 @@ class WaferMapViewer {
                     this.selectedClass = this.classSelection.selected.length === 1 ? this.classSelection.selected[0] : null;
 
                     this.dom.deleteClassBtn.disabled = this.classSelection.selected.length === 0;
+                    // Rename은 정확히 1개 선택되었을 때만 활성화
+                    if (this.dom.renameClassBtn) this.dom.renameClassBtn.disabled = this.classSelection.selected.length !== 1;
 
                     this.updateClassListSelection();
 
@@ -9112,6 +9122,80 @@ class WaferMapViewer {
     }
 
 
+
+    async renameSelectedClass() {
+        // 선택된 클래스가 정확히 1개여야 함
+        const selectedClasses = this.classSelection.selected;
+
+        if (selectedClasses.length === 0) {
+            alert('Please select a class to rename');
+            return;
+        }
+
+        if (selectedClasses.length > 1) {
+            alert('Please select only one class to rename');
+            return;
+        }
+
+        const oldName = selectedClasses[0];
+        const newName = prompt(`Rename class "${oldName}" to:`, oldName);
+
+        if (!newName || newName.trim() === '') {
+            return; // 취소 또는 빈 입력
+        }
+
+        const trimmedNewName = newName.trim();
+
+        if (trimmedNewName === oldName) {
+            alert('New name is the same as old name');
+            return;
+        }
+
+        try {
+            // 🔥 현재 폴더 파라미터 추가
+            const currentFolder = this.currentFolderPrefix;
+            const apiUrl = currentFolder ? `/api/classes/rename?folder=${encodeURIComponent(currentFolder)}` : '/api/classes/rename';
+
+            const response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    old_name: oldName,
+                    new_name: trimmedNewName
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || 'Failed to rename class');
+            }
+
+            const data = await response.json();
+
+            if (data.success) {
+                alert(`Class "${oldName}" renamed to "${trimmedNewName}" (${data.renamed_count} images updated)`);
+
+                // Class Manager와 Label Explorer 새로고침
+                await this.refreshClassList();
+                await this.refreshLabelExplorer();
+
+                // 입력 필드 초기화
+                this.dom.newClassInput.value = '';
+
+                // 선택 해제
+                this.classSelection.selected = [];
+                this.selectedClass = null;
+                if (this.dom.deleteClassBtn) this.dom.deleteClassBtn.disabled = true;
+                if (this.dom.renameClassBtn) this.dom.renameClassBtn.disabled = true;
+                this.updateClassListSelection();
+            } else {
+                throw new Error('Rename failed');
+            }
+        } catch (error) {
+            console.error('Class rename error:', error);
+            alert(`Failed to rename class: ${error.message}`);
+        }
+    }
 
     async deleteSelectedClasses() {
 
