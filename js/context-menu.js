@@ -182,40 +182,87 @@ export class ContextMenuManager {
         try {
             console.log(`${selectedFiles.length}개 이미지 합성 시작`);
             
-            // 이미지들 로드 (썸네일 사용)
-            const images = await Promise.all(
-                selectedFiles.map(filePath => this.loadThumbnailForCanvas(filePath))
-            );
-            
             // 그리드 크기 계산
-            const { cols, rows } = calculateGridSize(images.length);
+            const cols = Math.ceil(Math.sqrt(selectedFiles.length));
+            const rows = Math.ceil(selectedFiles.length / cols);
             
             // 캔버스 생성
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
             
-            // 썸네일 크기 사용 (512x512)
-            const cellSize = 512;
-            canvas.width = cols * cellSize;
-            canvas.height = rows * cellSize;
+            // 🔥 고품질 이미지 리샘플링 활성화
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            
+            const imageSize = 512;
+            const filenameHeight = 32; // 파일명 표시 영역
+            const cellHeight = imageSize + filenameHeight;
+            
+            canvas.width = cols * imageSize;
+            canvas.height = rows * cellHeight;
             
             // 배경을 흰색으로 채우기
             ctx.fillStyle = '#FFFFFF';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
-            // 이미지들을 그리드에 배치 (정식으로 리사이징된 썸네일을 그대로 복사)
-            images.forEach((img, index) => {
-                const row = Math.floor(index / cols);
-                const col = index % cols;
+            // 이미지들을 그리드에 배치
+            const imagePromises = selectedFiles.map(async (imagePath, index) => {
+                const thumbnailUrl = await this.loadThumbnailForCanvas(imagePath);
+                const img = new Image();
                 
-                const x = col * cellSize;
-                const y = row * cellSize;
-                
-                // 정식으로 512x512로 리사이징된 썸네일을 그대로 복사 (크기 조절 없음)
-                ctx.drawImage(img, x, y, cellSize, cellSize);
+                return new Promise((resolve, reject) => {
+                    img.onload = () => {
+                        const row = Math.floor(index / cols);
+                        const col = index % cols;
+                        const x = col * imageSize;
+                        const y = row * cellHeight;
+                        
+                        // 비율 유지하며 512x512 안에 맞춤
+                        const scale = Math.min(imageSize / img.width, imageSize / img.height);
+                        const scaledWidth = img.width * scale;
+                        const scaledHeight = img.height * scale;
+                        const offsetX = (imageSize - scaledWidth) / 2;
+                        const offsetY = (imageSize - scaledHeight) / 2;
+                        
+                        ctx.drawImage(img, x + offsetX, y + offsetY, scaledWidth, scaledHeight);
+                        
+                        // 🔥 파일명 표시
+                        const filename = imagePath.split('/').pop();
+                        ctx.fillStyle = '#000000';
+                        ctx.font = '28px Arial';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        
+                        // 파일명이 너무 길면 잘라내기
+                        let displayName = filename;
+                        const maxWidth = imageSize - 10;
+                        let metrics = ctx.measureText(displayName);
+                        if (metrics.width > maxWidth) {
+                            const ext = displayName.substring(displayName.lastIndexOf('.'));
+                            let baseName = displayName.substring(0, displayName.lastIndexOf('.'));
+                            while (baseName.length > 0 && ctx.measureText(baseName + '...' + ext).width > maxWidth) {
+                                baseName = baseName.substring(0, baseName.length - 1);
+                            }
+                            displayName = baseName + '...' + ext;
+                        }
+                        
+                        ctx.fillText(displayName, x + imageSize / 2, y + imageSize + filenameHeight / 2);
+                        
+                        // 🔥 테두리 그리기 (이미지 + 파일명 포함)
+                        ctx.strokeStyle = '#CCCCCC';
+                        ctx.lineWidth = 4;
+                        ctx.strokeRect(x, y, imageSize, cellHeight);
+                        
+                        resolve();
+                    };
+                    img.onerror = reject;
+                    img.src = thumbnailUrl;
+                });
             });
             
-            // 캔버스를 Blob으로 변환하여 클립보드에 복사
+            await Promise.all(imagePromises);
+            
+            // 🔥 초고품질 PNG로 클립보드에 복사
             canvas.toBlob(async (blob) => {
                 try {
                     await navigator.clipboard.write([
