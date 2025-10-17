@@ -5285,7 +5285,7 @@ class WaferMapViewer {
                         // 🔥 파일명 표시
                         const filename = imagePath.split('/').pop();
                         ctx.fillStyle = '#000000';
-                        ctx.font = 'bold 18px Arial';
+                        ctx.font = 'bold 32px Arial';
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'middle';
 
@@ -5478,7 +5478,7 @@ class WaferMapViewer {
                         // 🔥 파일명 표시
                         const filename = imagePath.split('/').pop();
                         ctx.fillStyle = '#000000';
-                        ctx.font = 'bold 18px Arial';
+                        ctx.font = 'bold 32px Arial';
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'middle';
 
