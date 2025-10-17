@@ -5367,7 +5367,7 @@ class WaferMapViewer {
 
                     a.href = url;
 
-                    a.download = `merged_images_${cols}x${rows}.png`;
+                    a.download = `merged_images_${cols}x${rows}`;
 
                     document.body.appendChild(a);
 
@@ -5537,7 +5537,7 @@ class WaferMapViewer {
 
                 a.href = url;
 
-                a.download = `merged_images_${cols}x${rows}.png`;
+                a.download = `merged_images_${cols}x${rows}`;
 
                 document.body.appendChild(a);
 
