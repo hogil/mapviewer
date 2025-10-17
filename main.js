@@ -3139,11 +3139,7 @@ class WaferMapViewer {
 
                 document.documentElement.style.setProperty('--grid-cols', newCols.toString());
 
-                if (this.selectedImages && this.selectedImages.length > 1) {
-
-                    this.scheduleShowGrid();
-
-                }
+                // CSS만 변경하므로 재렌더링 불필요 (드래그 이벤트 유지)
 
             } else if (e.shiftKey) {
 
@@ -3868,11 +3864,7 @@ class WaferMapViewer {
 
                 document.documentElement.style.setProperty('--grid-cols', this.gridCols);
 
-                if (this.selectedImages && this.selectedImages.length > 1) {
-
-                    this.scheduleShowGrid();
-
-                }
+                // CSS만 변경하므로 재렌더링 불필요 (드래그 이벤트 유지)
 
             });
 
@@ -3892,11 +3884,7 @@ class WaferMapViewer {
 
                 document.documentElement.style.setProperty('--grid-cols', this.gridCols);
 
-                if (this.selectedImages && this.selectedImages.length > 1) {
-
-                    this.scheduleShowGrid();
-
-                }
+                // CSS만 변경하므로 재렌더링 불필요 (드래그 이벤트 유지)
 
             };
 
@@ -3912,11 +3900,7 @@ class WaferMapViewer {
 
                 document.documentElement.style.setProperty('--grid-cols', this.gridCols);
 
-                if (this.selectedImages && this.selectedImages.length > 1) {
-
-                    this.scheduleShowGrid();
-
-                }
+                // CSS만 변경하므로 재렌더링 불필요 (드래그 이벤트 유지)
 
             };
 
