@@ -7346,28 +7346,18 @@ class WaferMapViewer {
 
         
         
-        // 🎯 상세 로그 출력
+        // 캐시 저장
+        this.pyramidLevels[initialLevel] = bitmap;
+        this.currentImageBitmap = bitmap;
+        this.currentImage = bitmap;
+        this.currentPyramidLevel = initialLevel;
 
-        const originalPixels = this.originalWidth * this.originalHeight;
-
-        const actualCurrentPixels = bitmap.width * bitmap.height;
-
-        const expectedPixels = originalPixels * (initialLevel * initialLevel);
-
-
-
-                    // 캐시 저장
-
-            this.pyramidLevels[initialLevel] = bitmap;
-
-            this.currentImageBitmap = bitmap;
-
-            this.currentImage = bitmap;
-
-            this.currentPyramidLevel = initialLevel;
-
-            // 🎯 초기 이미지 로드 로그
-            this.debugLog(`🎯 [INITIAL LOAD] Level: ${initialLevel} | Original: ${this.originalWidth}×${this.originalHeight} (${originalPixels.toLocaleString()}px) | Loaded: ${bitmap.width}×${bitmap.height} (${actualCurrentPixels.toLocaleString()}px) | Expected: ${expectedPixels.toLocaleString()}px | Compression: ${(originalPixels/actualCurrentPixels).toFixed(1)}x`);
+        // 📊 초기 로드 로그
+        const fetchTime = (tFetchEnd - tFetchStart).toFixed(0);
+        const blobTime = (tBlobEnd - tBlobStart).toFixed(0);
+        const bitmapTime = (tBitmapEnd - tBitmapStart).toFixed(0);
+        const totalTime = elapsed.toFixed(0);
+        console.log(`📸 [INIT] Lv${initialLevel} | ${this.originalWidth}×${this.originalHeight} → ${bitmap.width}×${bitmap.height} | Fetch:${fetchTime}ms Blob:${blobTime}ms Bitmap:${bitmapTime}ms | Total:${totalTime}ms`);
 
 
 
@@ -7439,83 +7429,51 @@ class WaferMapViewer {
 
 
     async loadPyramidLevel(level) {
-
-                // 이미 로드되었으면 스킵
-
+        // 이미 로드되었으면 스킵
         if (this.pyramidLevels[level]) {
-
-                        return;
-
+            return;
         }
 
-
-
         try {
-
             const tStart = performance.now();
-
+            const tFetchStart = performance.now();
             const url = `/api/image?path=${encodeURIComponent(this.selectedImagePath)}&level=${level}`;
 
-            
-            
-                        const response = await fetch(url);
+            const response = await fetch(url);
+            const tFetchEnd = performance.now();
 
-                        if (!response.ok) {
-
+            if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-
             }
 
-            
-            
+            const tBlobStart = performance.now();
             const blob = await response.blob();
+            const tBlobEnd = performance.now();
 
-            this.debugLog(`🔥 [BLOB] size=${blob.size} bytes, type=${blob.type}`);
-
-            
-            
+            const tBitmapStart = performance.now();
             const bitmap = await createImageBitmap(blob);
+            const tBitmapEnd = performance.now();
 
-            const elapsed = performance.now() - tStart;
-
-
-
-        // 🎯 상세 로그 출력 (줌 정보 포함)
-
-        const originalPixels = this.originalWidth * this.originalHeight;
-
-        const actualCurrentPixels = bitmap.width * bitmap.height;
-
-        const expectedPixels = originalPixels * (level * level);
-
-        const compression = (originalPixels / actualCurrentPixels).toFixed(1);
-
-        const currentZoom = (this.transform.scale * 100).toFixed(1);
-
-
-
-                    this.pyramidLevels[level] = bitmap;
-
-
+            this.pyramidLevels[level] = bitmap;
 
             // 현재 줌에 적합하면 즉시 교체
-
-            const bestLevel = this.getBestPyramidLevel(this.zoom);
+            const bestLevel = this.getBestPyramidLevel(this.transform.scale);
 
             if (bestLevel === level) {
-
                 this.currentImage = bitmap;
-
                 this.currentPyramidLevel = level;
-
                 this.scheduleDraw();
 
+                // 📊 비동기 로드 로그
+                const fetchTime = (tFetchEnd - tFetchStart).toFixed(0);
+                const blobTime = (tBlobEnd - tBlobStart).toFixed(0);
+                const bitmapTime = (tBitmapEnd - tBitmapStart).toFixed(0);
+                const totalTime = (performance.now() - tStart).toFixed(0);
+                console.log(`🔄 [ASYNC] Lv${level} | ${this.originalWidth}×${this.originalHeight} → ${bitmap.width}×${bitmap.height} | Fetch:${fetchTime}ms Blob:${blobTime}ms Bitmap:${bitmapTime}ms | Total:${totalTime}ms`);
             }
 
         } catch (err) {
-
-            console.error(`🔥 [ERROR] 피라미드 로드 실패 level=${level}:`, err);
-
+            console.error(`❌ [ERROR] 피라미드 로드 실패 level=${level}:`, err);
         }
 
     }
@@ -7584,21 +7542,8 @@ class WaferMapViewer {
 
                 this.scheduleDraw();
 
-                
-                
-                   // 🎯 상세 로그 출력 (실제 픽셀 계산)
-
-                   const originalPixels = this.originalWidth * this.originalHeight;
-
-                   const actualCurrentPixels = this.currentImage.width * this.currentImage.height;
-
-                   const expectedPixels = originalPixels * (bestLevel * bestLevel); // 레벨의 제곱 (면적 비율)
-
-                   const zoomPercent = Math.round(this.transform.scale * 100);
-
-
-
-                   this.debugLog(`🎯 [PYRAMID SWITCH] 줌: ${(this.transform.scale * 100).toFixed(1)}% | Level: ${bestLevel} | Original: ${this.originalWidth}×${this.originalHeight} (${originalPixels.toLocaleString()}px) | Actual: ${this.currentImage.width}×${this.currentImage.height} (${actualCurrentPixels.toLocaleString()}px) | Expected: ${expectedPixels.toLocaleString()}px | Compression: ${(originalPixels/actualCurrentPixels).toFixed(1)}x`);
+                // 📊 레벨 전환 로그
+                console.log(`🎯 [SWITCH] Lv${bestLevel} | ${this.originalWidth}×${this.originalHeight} → ${this.currentImage.width}×${this.currentImage.height}`);
 
             } else {
 
