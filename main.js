@@ -12936,6 +12936,8 @@ class WaferMapViewer {
         this.dom.overlayCanvas.style.display = 'none';
 
         grid.innerHTML = '';
+        // 🔥 DOM 재생성 시 캐시 초기화 (드래그 선택 정상 작동 위해 필수)
+        this.gridThumbWraps = [];
         // grid 모드에서는 cursor를 default로
         this.dom.viewerContainer.style.cursor = 'default';
         this.showGridImmediately(images);
@@ -12948,6 +12950,9 @@ class WaferMapViewer {
             this.gridResizeObserver = new ResizeObserver(() => this.updateGridSquaresPixel());
             this.gridResizeObserver.observe(grid);
         }
+
+        // 🔥 그리드 재생성 후 레이아웃 캐시 무효화 (드래그 영역 재계산용)
+        this.invalidateGridGeometry();
     }
 
 
