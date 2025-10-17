@@ -7434,6 +7434,15 @@ class WaferMapViewer {
             return;
         }
 
+        // 🔥 이미 로딩 중이면 스킵 (중복 요청 방지)
+        if (!this._pyramidLoading) {
+            this._pyramidLoading = new Set();
+        }
+        if (this._pyramidLoading.has(level)) {
+            return;
+        }
+        this._pyramidLoading.add(level);
+
         try {
             const tStart = performance.now();
             const tFetchStart = performance.now();
@@ -7455,6 +7464,7 @@ class WaferMapViewer {
             const tBitmapEnd = performance.now();
 
             this.pyramidLevels[level] = bitmap;
+            this._pyramidLoading.delete(level);  // 🔥 로딩 완료
 
             // 현재 줌에 적합하면 즉시 교체
             const bestLevel = this.getBestPyramidLevel(this.transform.scale);
@@ -7474,6 +7484,7 @@ class WaferMapViewer {
 
         } catch (err) {
             console.error(`❌ [ERROR] 피라미드 로드 실패 level=${level}:`, err);
+            this._pyramidLoading.delete(level);  // 🔥 에러 시에도 제거
         }
 
     }
@@ -7481,39 +7492,16 @@ class WaferMapViewer {
 
 
        getBestPyramidLevel(scale) {
+           // 🚀 줌 레벨에 따라 최적 피라미드 레벨 결정
+           // scale <= 0.25: level 0.25 (25% 이하)
+           // scale < 0.55: level 0.5 (25%~55%)
+           // scale < 0.85: level 0.75 (55%~85%)
+           // scale >= 0.85: level 1.0 (85% 이상 - 원본)
 
-           // 🚀 줌 레벨에 따라 최적 피라미드 레벨 결정 (개선된 로직)
-
-           // scale <= 0.25: level 0.2 (25% 이하 - 고화질)
-
-           // scale < 0.55: level 0.4 (25%~55% - 고속)
-
-           // scale < 0.85: level 0.7 (55%~85% - 고속)
-
-           // scale >= 0.85: level 1.0 (85% 이상 - 원본, 최고속)
-
-                      let level;
-
-           if (scale <= 0.25) {
-
-               level = 0.2;
-
-                          } else if (scale < 0.55) {
-
-               level = 0.4;
-
-                          } else if (scale < 0.85) {
-
-               level = 0.7;
-
-                          } else {
-
-               level = 1.0;
-
-                          }
-
-                      return level;
-
+           if (scale <= 0.25) return 0.25;
+           if (scale < 0.55) return 0.5;
+           if (scale < 0.85) return 0.75;
+           return 1.0;
        }
 
 

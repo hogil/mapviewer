@@ -1430,24 +1430,22 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
         new_w = int(orig_w * level)
         new_h = int(orig_h * level)
 
-        # 🚀 고품질 리사이즈: Lanczos3 (최고 품질)
+        # 🚀 썸네일 방식 사용 (resize보다 훨씬 빠름)
         if level >= 1.0:
-            # Level 1.0: 원본 복사
+            # Level 1.0: 원본 그대로
             resized = image
         else:
-            # 모든 레벨: Lanczos3 (최고 품질)
-            resized = image.resize(level, kernel='lanczos3')
-            
+            # thumbnail_image 사용 (resize보다 최적화됨)
+            resized = image.thumbnail_image(new_w, height=new_h, crop=False)
+
         # 메모리 정리
         del image
 
-        # 🚀 최고품질 JPEG 저장 (Q=100, Lanczos3 유지)
+        # 🚀 WebP 빠른 저장 (썸네일과 동일한 설정)
         resized.write_to_file(
-            str(pyramid_path), 
-            Q=100,               # 최고 품질 유지
-            strip=True,          # 메타데이터 제거 (속도 향상)
-            interlace=False,     # Progressive JPEG 비활성화 (속도 향상)
-            optimize_coding=False  # Huffman 최적화 비활성화 (속도 우선)
+            str(pyramid_path),
+            Q=90,        # 품질 90 (속도 우선, 썸네일 수준)
+            strip=True   # 메타데이터 제거
         )
 
         # 시간 측정 및 로그
@@ -1602,7 +1600,7 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
             if stem_lower in WINDOWS_RESERVED or any(stem_lower.startswith(f'{dev}') for dev in ['com', 'lpt']):
                 stem = f"file_{stem}"
 
-            pyramid_path = pyramid_dir / f"{stem}_L{int(level*100)}.jpg"
+            pyramid_path = pyramid_dir / f"{stem}_L{int(level*100)}.webp"
             logger.info(f"🎯 [PYRAMID PATH] {pyramid_path}")
 
             # 🚀 캐시 확인: 이미 존재하고 최신이면 즉시 반환
@@ -1613,7 +1611,7 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
                     st = pyramid_path.stat()
                     headers = {
                         "Cache-Control": "public, max-age=31536000, immutable",
-                        "Content-Type": "image/jpeg",
+                        "Content-Type": "image/webp",
                         "ETag": compute_etag(st),
                         "X-Pyramid-Level": str(level),
                         "X-Cache-Status": "HIT"
@@ -1631,7 +1629,7 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
 
                 headers = {
                     "Cache-Control": "public, max-age=31536000, immutable",
-                    "Content-Type": "image/jpeg",
+                    "Content-Type": "image/webp",
                     "ETag": compute_etag(st),
                     "X-Pyramid-Level": str(level),
                     "X-Cache-Status": "MISS"
