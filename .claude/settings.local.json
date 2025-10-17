@@ -12,7 +12,8 @@
       "Bash(set HTTPS_PORT=8443)",
       "Bash(set HTTPS_PORT=8445)",
       "Bash(HTTPS_PORT=8443 python -m api.main)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(node:*)"
     ],
     "deny": [],
     "ask": []

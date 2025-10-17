@@ -10,7 +10,7 @@ export PORT="8080"
 
 # SSL/TLS 설정
 export SSL_ENABLED="1"
-export HTTPS_PORT="443"
+export HTTPS_PORT="8443"
 export SSL_CERTFILE="cert/fullchain.pem"
 export SSL_KEYFILE="cert/server.key"
 
