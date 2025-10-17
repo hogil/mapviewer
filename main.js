@@ -5282,28 +5282,39 @@ class WaferMapViewer {
 
                         ctx.drawImage(img, x + offsetX, y + offsetY, scaledWidth, scaledHeight);
 
-                        // 🔥 파일명 표시
-                        const filename = imagePath.split('/').pop();
+                        // 🔥 파일명 표시 (확장자 제거)
+                        const pathParts = imagePath.split('/');
+                        const filename = pathParts.pop();
+                        const folderName = pathParts.length > 0 ? pathParts[pathParts.length - 1] : '';
+                        
+                        // 확장자 제거
+                        const nameWithoutExt = filename.substring(0, filename.lastIndexOf('.'));
+                        
                         ctx.fillStyle = '#000000';
                         ctx.font = '28px Arial';
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'middle';
 
                         // 파일명이 너무 길면 잘라내기
-                        let displayName = filename;
+                        let displayName = nameWithoutExt;
                         const maxWidth = imageSize - 10;
                         let metrics = ctx.measureText(displayName);
                         if (metrics.width > maxWidth) {
-                            // 파일명 축약
-                            const ext = displayName.substring(displayName.lastIndexOf('.'));
-                            let baseName = displayName.substring(0, displayName.lastIndexOf('.'));
-                            while (baseName.length > 0 && ctx.measureText(baseName + '...' + ext).width > maxWidth) {
-                                baseName = baseName.substring(0, baseName.length - 1);
+                            while (displayName.length > 0 && ctx.measureText(displayName + '...').width > maxWidth) {
+                                displayName = displayName.substring(0, displayName.length - 1);
                             }
-                            displayName = baseName + '...' + ext;
+                            displayName = displayName + '...';
                         }
 
-                        ctx.fillText(displayName, x + imageSize / 2, y + imageSize + imagePadding + filenameHeight / 2);
+                        // 파일명 표시
+                        ctx.fillText(displayName, x + imageSize / 2, y + imageSize + filenameHeight / 2);
+                        
+                        // 상위 폴더명 표시 (있는 경우에만)
+                        if (folderName) {
+                            ctx.font = '20px Arial';
+                            ctx.fillStyle = '#666666';
+                            ctx.fillText(folderName, x + imageSize / 2, y + imageSize + filenameHeight / 2 - 20);
+                        }
 
                         // 🔥 테두리 그리기 (이미지 + 파일명 포함)
                         ctx.strokeStyle = '#CCCCCC';
@@ -5434,10 +5445,8 @@ class WaferMapViewer {
 
 
             const imageSize = 512;
-            const imagePadding = 20; // 이미지와 파일명 사이 여백
             const filenameHeight = 32; // 파일명 표시 영역
-            const rowPadding = 30; // 각 행 사이 여백
-            const cellHeight = imageSize + imagePadding + filenameHeight + rowPadding;
+            const cellHeight = imageSize + filenameHeight;
 
             canvas.width = cols * imageSize;
 
@@ -5482,28 +5491,39 @@ class WaferMapViewer {
 
                         ctx.drawImage(img, x + offsetX, y + offsetY, scaledWidth, scaledHeight);
 
-                        // 🔥 파일명 표시
-                        const filename = imagePath.split('/').pop();
+                        // 🔥 파일명 표시 (확장자 제거)
+                        const pathParts = imagePath.split('/');
+                        const filename = pathParts.pop();
+                        const folderName = pathParts.length > 0 ? pathParts[pathParts.length - 1] : '';
+                        
+                        // 확장자 제거
+                        const nameWithoutExt = filename.substring(0, filename.lastIndexOf('.'));
+                        
                         ctx.fillStyle = '#000000';
                         ctx.font = '28px Arial';
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'middle';
 
                         // 파일명이 너무 길면 잘라내기
-                        let displayName = filename;
+                        let displayName = nameWithoutExt;
                         const maxWidth = imageSize - 10;
                         let metrics = ctx.measureText(displayName);
                         if (metrics.width > maxWidth) {
-                            // 파일명 축약
-                            const ext = displayName.substring(displayName.lastIndexOf('.'));
-                            let baseName = displayName.substring(0, displayName.lastIndexOf('.'));
-                            while (baseName.length > 0 && ctx.measureText(baseName + '...' + ext).width > maxWidth) {
-                                baseName = baseName.substring(0, baseName.length - 1);
+                            while (displayName.length > 0 && ctx.measureText(displayName + '...').width > maxWidth) {
+                                displayName = displayName.substring(0, displayName.length - 1);
                             }
-                            displayName = baseName + '...' + ext;
+                            displayName = displayName + '...';
                         }
 
-                        ctx.fillText(displayName, x + imageSize / 2, y + imageSize + imagePadding + filenameHeight / 2);
+                        // 파일명 표시
+                        ctx.fillText(displayName, x + imageSize / 2, y + imageSize + filenameHeight / 2);
+                        
+                        // 상위 폴더명 표시 (있는 경우에만)
+                        if (folderName) {
+                            ctx.font = '20px Arial';
+                            ctx.fillStyle = '#666666';
+                            ctx.fillText(folderName, x + imageSize / 2, y + imageSize + filenameHeight / 2 - 20);
+                        }
 
                         // 🔥 테두리 그리기 (이미지 + 파일명 포함)
                         ctx.strokeStyle = '#CCCCCC';
