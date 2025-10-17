@@ -7493,14 +7493,14 @@ class WaferMapViewer {
 
        getBestPyramidLevel(scale) {
            // 🚀 줌 레벨에 따라 최적 피라미드 레벨 결정
-           // scale <= 0.25: level 0.25 (25% 이하)
-           // scale < 0.55: level 0.5 (25%~55%)
-           // scale < 0.85: level 0.75 (55%~85%)
-           // scale >= 0.85: level 1.0 (85% 이상 - 원본)
+           // scale <= 0.2: level 0.2 (20% 이하)
+           // scale < 0.5: level 0.4 (20%~50%)
+           // scale < 0.8: level 0.7 (50%~80%)
+           // scale >= 0.8: level 1.0 (80% 이상 - 원본)
 
-           if (scale <= 0.25) return 0.25;
-           if (scale < 0.55) return 0.5;
-           if (scale < 0.85) return 0.75;
+           if (scale <= 0.2) return 0.2;
+           if (scale < 0.5) return 0.4;
+           if (scale < 0.8) return 0.7;
            return 1.0;
        }
 
