@@ -5303,11 +5303,11 @@ class WaferMapViewer {
                             displayName = baseName + '...' + ext;
                         }
 
-                        ctx.fillText(displayName, x + imageSize / 2, y + imageSize + filenameHeight / 2);
+                        ctx.fillText(displayName, x + imageSize / 2, y + imageSize + imagePadding + filenameHeight / 2);
 
                         // 🔥 테두리 그리기 (이미지 + 파일명 포함)
                         ctx.strokeStyle = '#CCCCCC';
-                        ctx.lineWidth = 2;
+                        ctx.lineWidth = 4;
                         ctx.strokeRect(x, y, imageSize, cellHeight);
 
                         resolve();
@@ -5434,8 +5434,10 @@ class WaferMapViewer {
 
 
             const imageSize = 512;
+            const imagePadding = 20; // 이미지와 파일명 사이 여백
             const filenameHeight = 32; // 파일명 표시 영역
-            const cellHeight = imageSize + filenameHeight;
+            const rowPadding = 30; // 각 행 사이 여백
+            const cellHeight = imageSize + imagePadding + filenameHeight + rowPadding;
 
             canvas.width = cols * imageSize;
 
@@ -5501,11 +5503,11 @@ class WaferMapViewer {
                             displayName = baseName + '...' + ext;
                         }
 
-                        ctx.fillText(displayName, x + imageSize / 2, y + imageSize + filenameHeight / 2);
+                        ctx.fillText(displayName, x + imageSize / 2, y + imageSize + imagePadding + filenameHeight / 2);
 
                         // 🔥 테두리 그리기 (이미지 + 파일명 포함)
                         ctx.strokeStyle = '#CCCCCC';
-                        ctx.lineWidth = 2;
+                        ctx.lineWidth = 4;
                         ctx.strokeRect(x, y, imageSize, cellHeight);
 
                         resolve();
