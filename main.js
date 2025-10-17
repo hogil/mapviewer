@@ -14247,15 +14247,51 @@ class WaferMapViewer {
     }
 
     clearGridSelection() {
+        // 🔥 최적화: 선택된 요소만 찾아서 클래스 제거 (전체 순회 방지)
+        const grid = document.getElementById('image-grid');
+        if (grid) {
+            const selectedWraps = grid.querySelectorAll('.grid-thumb-wrap.selected');
+            selectedWraps.forEach(wrap => {
+                wrap.classList.remove('selected');
+            });
+        }
+
         this.gridSelectedIdxs = [];
         this.gridLastClickedIdx = undefined;
-        this.updateGridSelection();
+
+        // savedViewState 업데이트 (updateGridSelection 호출 불필요)
+        if (this.gridMode && this.selectedImages && this.selectedImages.length > 0) {
+            const scrollWrapper = grid?.parentElement;
+            this.savedViewState = {
+                type: 'grid',
+                images: [...this.selectedImages],
+                scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0
+            };
+        }
     }
 
     selectAllGridImages() {
         if (this.selectedImages) {
+            // 🔥 최적화: 모든 요소에 selected 클래스 추가
+            const grid = document.getElementById('image-grid');
+            if (grid) {
+                const wraps = grid.querySelectorAll('.grid-thumb-wrap');
+                wraps.forEach(wrap => {
+                    wrap.classList.add('selected');
+                });
+            }
+
             this.gridSelectedIdxs = this.selectedImages.map((_, i) => i);
-            this.updateGridSelection();
+
+            // savedViewState 업데이트 (updateGridSelection 호출 불필요)
+            if (this.gridMode && this.selectedImages.length > 0) {
+                const scrollWrapper = grid?.parentElement;
+                this.savedViewState = {
+                    type: 'grid',
+                    images: [...this.selectedImages],
+                    scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0
+                };
+            }
         }
     }
 
