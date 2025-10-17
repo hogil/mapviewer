@@ -13030,13 +13030,6 @@ class WaferMapViewer {
             img.src = thumbnailUrl;
             thumbBox.appendChild(img);
             wrap.appendChild(thumbBox);
-            // Checkmark
-            if (this.gridSelectedIdxs.includes(idx)) {
-                const check = document.createElement('div');
-                check.className = 'grid-thumb-check';
-                check.textContent = '✔';
-                thumbBox.appendChild(check);
-            }
             // 파일명
             const label = document.createElement('div');
             label.className = 'grid-thumb-label';
