@@ -3618,9 +3618,8 @@ class WaferMapViewer {
                         this.insertIndexSorted(this.gridSelectedIdxs, idx);
                     }
                 });
-                if (added.length || removed.length) {
-                    this.updateGridSelection(added, removed);
-                }
+                // 항상 UI 업데이트 호출 (드래그 선택 후 즉시 반영)
+                this.updateGridSelection();
             } else {
                 const prevSet = this.gridSelectedSet ? new Set(this.gridSelectedSet) : new Set();
                 const newSet = new Set(newIdxs);
@@ -3638,9 +3637,8 @@ class WaferMapViewer {
                 });
                 this.gridSelectedSet = newSet;
                 this.gridSelectedIdxs = Array.from(newSet).sort((a, b) => a - b);
-                if (added.length || removed.length) {
-                    this.updateGridSelection(added, removed);
-                }
+                // 항상 UI 업데이트 호출 (드래그 선택 후 즉시 반영)
+                this.updateGridSelection();
             }
             if (newIdxs.length > 0) {
                 this.gridLastClickedIdx = newIdxs[newIdxs.length - 1];
