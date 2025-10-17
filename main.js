@@ -5213,14 +5213,14 @@ class WaferMapViewer {
 
             const ctx = canvas.getContext('2d');
 
-            
-            
-            // 픽셀 완벽한 렌더링을 위해 이미지 스무딩 비활성화
 
-            setPixelPerfectRendering(ctx);
 
-            
-            
+            // 🔥 고품질 이미지 리샘플링 활성화 (이미지 스무딩 ON)
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+
+
+
             // 각 이미지 크기 (512px로 설정)
 
             const imageSize = 512;
@@ -5243,14 +5243,13 @@ class WaferMapViewer {
 
                 const imagePath = this.selectedImages[idx];
 
-                const response = await fetch(`/api/image?path=${encodeURIComponent(imagePath)}`);
-
-                const blob = await response.blob();
+                // 🔥 썸네일 사용 (고품질, 이미 최적화된 이미지)
+                const thumbnailUrl = await this.thumbnailManager.loadThumbnail(imagePath);
 
                 const img = new Image();
 
-                
-                
+
+
                 return new Promise((resolve, reject) => {
 
                     img.onload = () => {
@@ -5263,8 +5262,8 @@ class WaferMapViewer {
 
                         const y = row * imageSize;
 
-                        
-                        
+
+
                         // 이미지를 비율 유지하며 중앙 정렬로 그리기
 
                         const scale = Math.min(imageSize / img.width, imageSize / img.height);
@@ -5277,8 +5276,8 @@ class WaferMapViewer {
 
                         const offsetY = (imageSize - scaledHeight) / 2;
 
-                        
-                        
+
+
                         ctx.drawImage(img, x + offsetX, y + offsetY, scaledWidth, scaledHeight);
 
                         resolve();
@@ -5287,7 +5286,7 @@ class WaferMapViewer {
 
                     img.onerror = reject;
 
-                    img.src = URL.createObjectURL(blob);
+                    img.src = thumbnailUrl;
 
                 });
 
@@ -5396,14 +5395,14 @@ class WaferMapViewer {
 
             const ctx = canvas.getContext('2d');
 
-            
-            
-            // 픽셀 완벽한 렌더링을 위해 이미지 스무딩 비활성화
 
-            setPixelPerfectRendering(ctx);
 
-            
-            
+            // 🔥 고품질 이미지 리샘플링 활성화 (이미지 스무딩 ON)
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+
+
+
             const imageSize = 512;
 
             canvas.width = cols * imageSize;
@@ -5420,9 +5419,8 @@ class WaferMapViewer {
 
                 const imagePath = this.selectedImages[idx];
 
-                const response = await fetch(`/api/image?path=${encodeURIComponent(imagePath)}`);
-
-                const blob = await response.blob();
+                // 🔥 썸네일 사용 (고품질, 이미 최적화된 이미지)
+                const thumbnailUrl = await this.thumbnailManager.loadThumbnail(imagePath);
 
                 const img = new Image();
 
@@ -5456,7 +5454,7 @@ class WaferMapViewer {
 
                     img.onerror = reject;
 
-                    img.src = URL.createObjectURL(blob);
+                    img.src = thumbnailUrl;
 
                 });
 
