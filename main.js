@@ -3506,15 +3506,9 @@ class WaferMapViewer {
         const handleTapSelection = (event) => {
             const thumbWrap = event.target.closest('.grid-thumb-wrap');
             if (thumbWrap) {
-                const cells = (Array.isArray(this.gridThumbWraps) && this.gridThumbWraps.length > 0)
-                    ? this.gridThumbWraps
-                    : Array.from(grid.querySelectorAll('.grid-thumb-wrap'));
-                if (!Array.isArray(this.gridThumbWraps) || this.gridThumbWraps.length === 0) {
-                    this.gridThumbWraps = cells;
-                    this.gridThumbRectCache = null;
-                }
-                const idx = cells.indexOf(thumbWrap);
-                if (idx !== -1) {
+                // 🔥 성능 최적화: data-index 사용 (indexOf 제거)
+                const idx = parseInt(thumbWrap.dataset.index, 10);
+                if (!isNaN(idx)) {
                     this.toggleGridImageSelect(idx, event);
                 }
             } else if (!event.ctrlKey && !event.metaKey) {
@@ -12808,6 +12802,8 @@ class WaferMapViewer {
         images.forEach((imgPath, idx) => {
             const wrap = document.createElement('div');
             wrap.className = 'grid-thumb-wrap' + (this.gridSelectedIdxs.includes(idx) ? ' selected' : '');
+            // 🔥 성능 최적화: data-index 추가 (indexOf 대신 O(1) 룩업)
+            wrap.dataset.index = idx;
             // 클릭 이벤트는 onMouseUp에서 처리하므로 여기서는 제거
             // wrap.onclick = e => { e.stopPropagation(); this.toggleGridImageSelect(idx, e); };
             wrap.ondblclick = e => { e.stopPropagation(); this.enterSingleImageMode(idx); };
@@ -14247,27 +14243,29 @@ class WaferMapViewer {
     }
 
     clearGridSelection() {
+        console.time('🔍 clearGridSelection');
+
         // 🔥 최적화: 선택된 요소만 찾아서 클래스 제거 (전체 순회 방지)
         const grid = document.getElementById('image-grid');
         if (grid) {
+            console.time('🔍 querySelectorAll');
             const selectedWraps = grid.querySelectorAll('.grid-thumb-wrap.selected');
+            console.timeEnd('🔍 querySelectorAll');
+
+            console.time('🔍 removeClass');
             selectedWraps.forEach(wrap => {
                 wrap.classList.remove('selected');
             });
+            console.timeEnd('🔍 removeClass');
         }
 
         this.gridSelectedIdxs = [];
         this.gridLastClickedIdx = undefined;
 
-        // savedViewState 업데이트 (updateGridSelection 호출 불필요)
-        if (this.gridMode && this.selectedImages && this.selectedImages.length > 0) {
-            const scrollWrapper = grid?.parentElement;
-            this.savedViewState = {
-                type: 'grid',
-                images: [...this.selectedImages],
-                scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0
-            };
-        }
+        // 🔥 savedViewState 업데이트 제거 (배열 복사가 느림)
+        // 전체 해제 시에는 상태 업데이트 불필요
+
+        console.timeEnd('🔍 clearGridSelection');
     }
 
     selectAllGridImages() {
