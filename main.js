@@ -3139,7 +3139,9 @@ class WaferMapViewer {
 
                 document.documentElement.style.setProperty('--grid-cols', newCols.toString());
 
-                // CSS만 변경하므로 재렌더링 불필요 (드래그 이벤트 유지)
+                // 레이아웃 캐시 무효화 및 선택 상태 업데이트
+                this.invalidateGridGeometry();
+                this.updateGridSelectionAfterResize();
 
             } else if (e.shiftKey) {
 
@@ -3864,7 +3866,9 @@ class WaferMapViewer {
 
                 document.documentElement.style.setProperty('--grid-cols', this.gridCols);
 
-                // CSS만 변경하므로 재렌더링 불필요 (드래그 이벤트 유지)
+                // 레이아웃 캐시 무효화 및 선택 상태 업데이트
+                this.invalidateGridGeometry();
+                this.updateGridSelectionAfterResize();
 
             });
 
@@ -3884,7 +3888,9 @@ class WaferMapViewer {
 
                 document.documentElement.style.setProperty('--grid-cols', this.gridCols);
 
-                // CSS만 변경하므로 재렌더링 불필요 (드래그 이벤트 유지)
+                // 레이아웃 캐시 무효화 및 선택 상태 업데이트
+                this.invalidateGridGeometry();
+                this.updateGridSelectionAfterResize();
 
             };
 
@@ -3900,7 +3906,9 @@ class WaferMapViewer {
 
                 document.documentElement.style.setProperty('--grid-cols', this.gridCols);
 
-                // CSS만 변경하므로 재렌더링 불필요 (드래그 이벤트 유지)
+                // 레이아웃 캐시 무효화 및 선택 상태 업데이트
+                this.invalidateGridGeometry();
+                this.updateGridSelectionAfterResize();
 
             };
 
@@ -14251,6 +14259,33 @@ class WaferMapViewer {
                 selectedImagesLength: this.selectedImages?.length || 0
             });
         }
+    }
+
+    updateGridSelectionAfterResize() {
+        // 그리드 리사이즈 후 체크마크 재생성
+        const grid = document.getElementById('image-grid');
+        if (!grid) return;
+
+        // 모든 기존 체크마크 제거
+        const checks = grid.querySelectorAll('.grid-thumb-check');
+        checks.forEach(check => check.remove());
+
+        // 선택된 항목에만 체크마크 추가
+        const wraps = grid.querySelectorAll('.grid-thumb-wrap');
+        wraps.forEach((wrap, idx) => {
+            const isSelected = this.gridSelectedIdxs && this.gridSelectedIdxs.includes(idx);
+            wrap.className = 'grid-thumb-wrap' + (isSelected ? ' selected' : '');
+
+            if (isSelected) {
+                const thumbBox = wrap.querySelector('.grid-thumb-imgbox');
+                if (thumbBox && !thumbBox.querySelector('.grid-thumb-check')) {
+                    const check = document.createElement('div');
+                    check.className = 'grid-thumb-check';
+                    check.textContent = '✔';
+                    thumbBox.appendChild(check);
+                }
+            }
+        });
     }
 
     scheduleGridSelectionFlush() {
