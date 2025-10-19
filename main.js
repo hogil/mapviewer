@@ -7288,12 +7288,12 @@ class WaferMapViewer {
         
         // 🚀 3단계: zoom 기준으로 최적 level 계산 (updatePyramidLevel 로직과 동일)
         let initialLevel = 1.0;
-        
+
         if (calculatedZoom <= 0.25) {
             initialLevel = 0.2;
-        } else if (calculatedZoom < 0.55) {
-            initialLevel = 0.4;
-        } else if (calculatedZoom < 0.85) {
+        } else if (calculatedZoom <= 0.5) {
+            initialLevel = 0.5;
+        } else if (calculatedZoom <= 0.75) {
             initialLevel = 0.7;
         } else {
             initialLevel = 1.0;
@@ -7357,7 +7357,7 @@ class WaferMapViewer {
         const blobTime = (tBlobEnd - tBlobStart).toFixed(0);
         const bitmapTime = (tBitmapEnd - tBitmapStart).toFixed(0);
         const totalTime = elapsed.toFixed(0);
-        console.log(`📸 [INIT] Lv${initialLevel} | ${this.originalWidth}×${this.originalHeight} → ${bitmap.width}×${bitmap.height} | Fetch:${fetchTime}ms Blob:${blobTime}ms Bitmap:${bitmapTime}ms | Total:${totalTime}ms`);
+        console.log(`📸 [INIT] Lv${initialLevel} | ${this.originalWidth}×${this.originalHeight} → ${bitmap.width}×${bitmap.height} | Zoom:${calculatedZoom.toFixed(2)} | Fetch:${fetchTime}ms Blob:${blobTime}ms Bitmap:${bitmapTime}ms | Total:${totalTime}ms`);
 
 
 
@@ -7479,7 +7479,7 @@ class WaferMapViewer {
                 const blobTime = (tBlobEnd - tBlobStart).toFixed(0);
                 const bitmapTime = (tBitmapEnd - tBitmapStart).toFixed(0);
                 const totalTime = (performance.now() - tStart).toFixed(0);
-                console.log(`🔄 [ASYNC] Lv${level} | ${this.originalWidth}×${this.originalHeight} → ${bitmap.width}×${bitmap.height} | Fetch:${fetchTime}ms Blob:${blobTime}ms Bitmap:${bitmapTime}ms | Total:${totalTime}ms`);
+                console.log(`🔄 [ASYNC] Lv${level} | ${this.originalWidth}×${this.originalHeight} → ${bitmap.width}×${bitmap.height} | Zoom:${this.transform.scale.toFixed(2)} | Fetch:${fetchTime}ms Blob:${blobTime}ms Bitmap:${bitmapTime}ms | Total:${totalTime}ms`);
             }
 
         } catch (err) {
@@ -7493,14 +7493,14 @@ class WaferMapViewer {
 
        getBestPyramidLevel(scale) {
            // 🚀 줌 레벨에 따라 최적 피라미드 레벨 결정
-           // scale <= 0.2: level 0.2 (20% 이하)
-           // scale < 0.5: level 0.4 (20%~50%)
-           // scale < 0.8: level 0.7 (50%~80%)
-           // scale >= 0.8: level 1.0 (80% 이상 - 원본)
+           // scale <= 0.25: level 0.2 (25% 이하)
+           // scale <= 0.5: level 0.5 (25%~50%)
+           // scale <= 0.75: level 0.7 (50%~75%)
+           // scale > 0.75: level 1.0 (75% 이상 - 원본)
 
-           if (scale <= 0.2) return 0.2;
-           if (scale < 0.5) return 0.4;
-           if (scale < 0.8) return 0.7;
+           if (scale <= 0.25) return 0.2;
+           if (scale <= 0.5) return 0.5;
+           if (scale <= 0.75) return 0.7;
            return 1.0;
        }
 
@@ -7531,7 +7531,7 @@ class WaferMapViewer {
                 this.scheduleDraw();
 
                 // 📊 레벨 전환 로그
-                console.log(`🎯 [SWITCH] Lv${bestLevel} | ${this.originalWidth}×${this.originalHeight} → ${this.currentImage.width}×${this.currentImage.height}`);
+                console.log(`🎯 [SWITCH] Lv${bestLevel} | ${this.originalWidth}×${this.originalHeight} → ${this.currentImage.width}×${this.currentImage.height} | Zoom:${this.transform.scale.toFixed(2)}`);
 
             } else {
 
