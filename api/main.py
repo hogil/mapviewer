@@ -810,7 +810,8 @@ async def api_config():
     """프론트엔드 설정 API (AUTO_LOGIN 등)"""
     return {
         "AUTO_LOGIN": AUTO_LOGIN,
-        "DEFAULT_ORG_URL": DEFAULT_ORG_URL
+        "DEFAULT_ORG_URL": DEFAULT_ORG_URL,
+        "PYRAMID_LEVELS": config.PYRAMID_LEVELS
     }
 
 # 🔥 서버 메모리에 SAML 로그인 정보 저장

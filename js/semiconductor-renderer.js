@@ -157,8 +157,9 @@ class SemiconductorRenderer {
             if (version !== this.imageVersion) return;
             this.imagePyramid['1'] = image;
 
-            // 🔥 최적화: 1/2, 1/5 레벨을 병렬로 동시 생성 (더 빠름)
+            // 🔥 최적화: 0.2, 0.5, 0.7 레벨을 병렬로 동시 생성 (더 빠름)
             const levels = [
+                { key: '0.7', scale: 0.7 },
                 { key: '0.5', scale: 0.5 },
                 { key: '0.2', scale: 0.2 }
             ];
@@ -299,22 +300,27 @@ class SemiconductorRenderer {
 
         if (this.options.usePyramid) {
             // 필요한 레벨 사전 보장 (비동기 생성 트리거)
-            const needFifth = this.scale <= 0.25;
-            const needHalf = !needFifth && this.scale <= 0.75;
-            if (needFifth) {
+            // zoom ≤ 0.25 → 0.2, 0.25 < zoom ≤ 0.5 → 0.5, 0.5 < zoom ≤ 0.75 → 0.7, zoom > 0.75 → 1.0
+            if (this.scale <= 0.25) {
                 if (!this.imagePyramid['0.2']) {
-                    // 트리거만, 즉시 반환
                     this.generateImagePyramid(this.currentImage, this.imageVersion).catch(() => {});
                 } else {
                     selected = this.imagePyramid['0.2'];
                     this._lastLevelKey = '0.2';
                 }
-            } else if (needHalf) {
+            } else if (this.scale <= 0.5) {
                 if (!this.imagePyramid['0.5']) {
                     this.generateImagePyramid(this.currentImage, this.imageVersion).catch(() => {});
                 } else {
                     selected = this.imagePyramid['0.5'];
                     this._lastLevelKey = '0.5';
+                }
+            } else if (this.scale <= 0.75) {
+                if (!this.imagePyramid['0.7']) {
+                    this.generateImagePyramid(this.currentImage, this.imageVersion).catch(() => {});
+                } else {
+                    selected = this.imagePyramid['0.7'];
+                    this._lastLevelKey = '0.7';
                 }
             } else {
                 // 원본 유지
@@ -335,14 +341,23 @@ class SemiconductorRenderer {
         if (now - this._lastEnsureAt < 30) return;
         this._lastEnsureAt = now;
 
-        const needFifth = this.scale <= 0.25;
-        const needHalf = !needFifth && this.scale <= 0.75;
-        const key = needFifth ? '0.2' : (needHalf ? '0.5' : '1');
-        if (key === '1') return; // 원본이면 즉시 보장 불필요
+        let key, scale;
+        if (this.scale <= 0.25) {
+            key = '0.2';
+            scale = 0.2;
+        } else if (this.scale <= 0.5) {
+            key = '0.5';
+            scale = 0.5;
+        } else if (this.scale <= 0.75) {
+            key = '0.7';
+            scale = 0.7;
+        } else {
+            return; // 원본이면 즉시 보장 불필요
+        }
+
         if (this.imagePyramid[key]) return; // 이미 준비됨
 
         // 🔥 최적화: 즉시(동기) 캔버스 생성으로 첫 프레임 화질 반영
-        const scale = key === '0.2' ? 0.2 : 0.5;
         const w = Math.max(1, Math.floor(this.currentImage.width * scale));
         const h = Math.max(1, Math.floor(this.currentImage.height * scale));
         const c = document.createElement('canvas');
@@ -413,11 +428,14 @@ class SemiconductorRenderer {
         
         if (this.options.usePyramid && Object.keys(this.imagePyramid).length > 0) {
             if (this.scale <= 0.25) {
-                pyramidLevel = '1/5 크기 (초고속)';
+                pyramidLevel = '0.2x 크기 (초고속)';
                 pixelReduction = '20%';
-            } else if (this.scale <= 0.75) {
-                pyramidLevel = '1/2 크기 (균형)';
+            } else if (this.scale <= 0.5) {
+                pyramidLevel = '0.5x 크기 (균형)';
                 pixelReduction = '50%';
+            } else if (this.scale <= 0.75) {
+                pyramidLevel = '0.7x 크기 (고품질)';
+                pixelReduction = '70%';
             }
         }
         
