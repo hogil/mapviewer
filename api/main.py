@@ -811,7 +811,8 @@ async def api_config():
     return {
         "AUTO_LOGIN": AUTO_LOGIN,
         "DEFAULT_ORG_URL": DEFAULT_ORG_URL,
-        "PYRAMID_LEVELS": config.PYRAMID_LEVELS
+        "PYRAMID_LEVELS": config.PYRAMID_LEVELS,
+        "PYRAMID_ZOOM_THRESHOLDS": config.PYRAMID_ZOOM_THRESHOLDS
     }
 
 # 🔥 서버 메모리에 SAML 로그인 정보 저장

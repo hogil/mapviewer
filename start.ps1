@@ -29,5 +29,9 @@ $env:STATS_LOG_ENABLED="0"
 $env:WORKERS="6"
 $env:RELOAD="1"
 
+# 이미지 피라미드 설정
+$env:PYRAMID_LEVELS="0.2,0.5,0.7,1.0"           # 피라미드 레벨 (최고품질 Q=100, Lanczos3)
+$env:PYRAMID_ZOOM_THRESHOLDS="0.25,0.5,0.75"   # zoom 기준 (≤0.25→0.2, ≤0.5→0.5, ≤0.75→0.7, >0.75→1.0)
+
 # 서버 시작
 python -m api.main

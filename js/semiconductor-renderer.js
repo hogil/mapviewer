@@ -157,12 +157,13 @@ class SemiconductorRenderer {
             if (version !== this.imageVersion) return;
             this.imagePyramid['1'] = image;
 
-            // 🔥 최적화: 0.2, 0.5, 0.7 레벨을 병렬로 동시 생성 (더 빠름)
-            const levels = [
-                { key: '0.7', scale: 0.7 },
-                { key: '0.5', scale: 0.5 },
-                { key: '0.2', scale: 0.2 }
-            ];
+            // 🔥 서버 설정에서 pyramid levels 가져오기
+            const pyramidLevels = (window.SERVER_CONFIG && window.SERVER_CONFIG.PYRAMID_LEVELS) || [0.2, 0.5, 0.7, 1.0];
+            // 1.0은 제외하고 나머지 레벨만 생성 (1.0은 원본)
+            const levels = pyramidLevels.filter(l => l < 1.0).map(scale => ({
+                key: scale.toString(),
+                scale: scale
+            }));
 
             // 병렬 생성 시작
             const tasks = levels.map(({ key, scale }) => {
@@ -299,28 +300,33 @@ class SemiconductorRenderer {
         let selected = this.currentImage;
 
         if (this.options.usePyramid) {
-            // 필요한 레벨 사전 보장 (비동기 생성 트리거)
-            // zoom ≤ 0.25 → 0.2, 0.25 < zoom ≤ 0.5 → 0.5, 0.5 < zoom ≤ 0.75 → 0.7, zoom > 0.75 → 1.0
-            if (this.scale <= 0.25) {
-                if (!this.imagePyramid['0.2']) {
+            // 🔥 서버 설정에서 thresholds와 levels 가져오기
+            const thresholds = (window.SERVER_CONFIG && window.SERVER_CONFIG.PYRAMID_ZOOM_THRESHOLDS) || [0.25, 0.5, 0.75];
+            const levels = (window.SERVER_CONFIG && window.SERVER_CONFIG.PYRAMID_LEVELS) || [0.2, 0.5, 0.7, 1.0];
+
+            // threshold에 따라 최적 레벨 선택
+            let targetLevel, targetKey;
+            if (this.scale < thresholds[0]) {
+                targetLevel = levels[0];
+                targetKey = targetLevel.toString();
+            } else if (this.scale < thresholds[1]) {
+                targetLevel = levels[1];
+                targetKey = targetLevel.toString();
+            } else if (this.scale < thresholds[2]) {
+                targetLevel = levels[2];
+                targetKey = targetLevel.toString();
+            } else {
+                targetLevel = levels[3];
+                targetKey = '1';
+            }
+
+            // 레벨이 1.0(원본)이 아니면 피라미드 이미지 사용
+            if (targetLevel < 1.0) {
+                if (!this.imagePyramid[targetKey]) {
                     this.generateImagePyramid(this.currentImage, this.imageVersion).catch(() => {});
                 } else {
-                    selected = this.imagePyramid['0.2'];
-                    this._lastLevelKey = '0.2';
-                }
-            } else if (this.scale <= 0.5) {
-                if (!this.imagePyramid['0.5']) {
-                    this.generateImagePyramid(this.currentImage, this.imageVersion).catch(() => {});
-                } else {
-                    selected = this.imagePyramid['0.5'];
-                    this._lastLevelKey = '0.5';
-                }
-            } else if (this.scale <= 0.75) {
-                if (!this.imagePyramid['0.7']) {
-                    this.generateImagePyramid(this.currentImage, this.imageVersion).catch(() => {});
-                } else {
-                    selected = this.imagePyramid['0.7'];
-                    this._lastLevelKey = '0.7';
+                    selected = this.imagePyramid[targetKey];
+                    this._lastLevelKey = targetKey;
                 }
             } else {
                 // 원본 유지
@@ -341,16 +347,20 @@ class SemiconductorRenderer {
         if (now - this._lastEnsureAt < 30) return;
         this._lastEnsureAt = now;
 
+        // 🔥 서버 설정에서 thresholds와 levels 가져오기
+        const thresholds = (window.SERVER_CONFIG && window.SERVER_CONFIG.PYRAMID_ZOOM_THRESHOLDS) || [0.25, 0.5, 0.75];
+        const levels = (window.SERVER_CONFIG && window.SERVER_CONFIG.PYRAMID_LEVELS) || [0.2, 0.5, 0.7, 1.0];
+
         let key, scale;
-        if (this.scale <= 0.25) {
-            key = '0.2';
-            scale = 0.2;
-        } else if (this.scale <= 0.5) {
-            key = '0.5';
-            scale = 0.5;
-        } else if (this.scale <= 0.75) {
-            key = '0.7';
-            scale = 0.7;
+        if (this.scale < thresholds[0]) {
+            scale = levels[0];
+            key = scale.toString();
+        } else if (this.scale < thresholds[1]) {
+            scale = levels[1];
+            key = scale.toString();
+        } else if (this.scale < thresholds[2]) {
+            scale = levels[2];
+            key = scale.toString();
         } else {
             return; // 원본이면 즉시 보장 불필요
         }
@@ -425,17 +435,21 @@ class SemiconductorRenderer {
         
         let pyramidLevel = '원본 (고품질)';
         let pixelReduction = '100%';
-        
+
         if (this.options.usePyramid && Object.keys(this.imagePyramid).length > 0) {
-            if (this.scale <= 0.25) {
-                pyramidLevel = '0.2x 크기 (초고속)';
-                pixelReduction = '20%';
-            } else if (this.scale <= 0.5) {
-                pyramidLevel = '0.5x 크기 (균형)';
-                pixelReduction = '50%';
-            } else if (this.scale <= 0.75) {
-                pyramidLevel = '0.7x 크기 (고품질)';
-                pixelReduction = '70%';
+            // 🔥 서버 설정에서 thresholds와 levels 가져오기
+            const thresholds = (window.SERVER_CONFIG && window.SERVER_CONFIG.PYRAMID_ZOOM_THRESHOLDS) || [0.25, 0.5, 0.75];
+            const levels = (window.SERVER_CONFIG && window.SERVER_CONFIG.PYRAMID_LEVELS) || [0.2, 0.5, 0.7, 1.0];
+
+            if (this.scale < thresholds[0]) {
+                pyramidLevel = `${levels[0]}x 크기 (초고속)`;
+                pixelReduction = `${Math.round(levels[0] * 100)}%`;
+            } else if (this.scale < thresholds[1]) {
+                pyramidLevel = `${levels[1]}x 크기 (균형)`;
+                pixelReduction = `${Math.round(levels[1] * 100)}%`;
+            } else if (this.scale < thresholds[2]) {
+                pyramidLevel = `${levels[2]}x 크기 (고품질)`;
+                pixelReduction = `${Math.round(levels[2] * 100)}%`;
             }
         }
         

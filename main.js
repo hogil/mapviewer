@@ -47,6 +47,12 @@ const FIT_RELATIVE_MARGIN = 0.96; // 초기 로드 시 4% 여유 (2% 더 작게)
 
 const RESET_ABSOLUTE_PERCENT_OFFSET = -0.02;
 
+// 🔥 서버 설정 (페이지 로드시 한번만 가져옴)
+let SERVER_CONFIG = {
+    PYRAMID_LEVELS: [0.2, 0.5, 0.7, 1.0],  // 기본값
+    PYRAMID_ZOOM_THRESHOLDS: [0.25, 0.5, 0.75]  // 기본값
+};
+
 
 
 /**
@@ -3960,6 +3966,9 @@ class WaferMapViewer {
 
         this._drawScheduled = false; // draw() 스케줄링 플래그
 
+        // 🔥 서버 설정 로드 (피라미드 레벨, zoom 기준 등)
+        this.loadServerConfig();
+
         // 사용자 정보 로드
         this.loadUserInfo();
 
@@ -3999,6 +4008,30 @@ class WaferMapViewer {
 
         });
 
+    }
+
+    // 🔥 서버 설정 로드 (피라미드 레벨, zoom 기준 등)
+    async loadServerConfig() {
+        try {
+            const response = await fetch('/api/config');
+            if (!response.ok) {
+                console.warn('[CONFIG] 서버 설정 로드 실패, 기본값 사용');
+                return;
+            }
+            const config = await response.json();
+
+            // 서버에서 받은 설정으로 업데이트
+            if (config.PYRAMID_LEVELS && Array.isArray(config.PYRAMID_LEVELS)) {
+                SERVER_CONFIG.PYRAMID_LEVELS = config.PYRAMID_LEVELS;
+            }
+            if (config.PYRAMID_ZOOM_THRESHOLDS && Array.isArray(config.PYRAMID_ZOOM_THRESHOLDS)) {
+                SERVER_CONFIG.PYRAMID_ZOOM_THRESHOLDS = config.PYRAMID_ZOOM_THRESHOLDS;
+            }
+
+            console.log('[CONFIG] 서버 설정 로드 완료:', SERVER_CONFIG);
+        } catch (error) {
+            console.warn('[CONFIG] 서버 설정 로드 오류, 기본값 사용:', error);
+        }
     }
 
     // 사용자 정보 로드 및 표시
@@ -7289,14 +7322,18 @@ class WaferMapViewer {
         // 🚀 3단계: zoom 기준으로 최적 level 계산 (updatePyramidLevel 로직과 동일)
         let initialLevel = 1.0;
 
-        if (calculatedZoom <= 0.25) {
-            initialLevel = 0.2;
-        } else if (calculatedZoom <= 0.5) {
-            initialLevel = 0.5;
-        } else if (calculatedZoom <= 0.75) {
-            initialLevel = 0.7;
+        // 🔥 서버 설정에서 threshold와 level 가져오기
+        const thresholds = SERVER_CONFIG.PYRAMID_ZOOM_THRESHOLDS;
+        const levels = SERVER_CONFIG.PYRAMID_LEVELS;
+
+        if (calculatedZoom < thresholds[0]) {
+            initialLevel = levels[0];
+        } else if (calculatedZoom < thresholds[1]) {
+            initialLevel = levels[1];
+        } else if (calculatedZoom < thresholds[2]) {
+            initialLevel = levels[2];
         } else {
-            initialLevel = 1.0;
+            initialLevel = levels[3];
         }
         
                 const url = `/api/image?path=${encodeURIComponent(fullPath)}&level=${initialLevel}`;
@@ -7495,13 +7532,14 @@ class WaferMapViewer {
            // 🚀 줌 레벨에 따라 최적 피라미드 레벨 결정
            // scale <= 0.25: level 0.2 (25% 이하)
            // scale <= 0.5: level 0.5 (25%~50%)
-           // scale <= 0.75: level 0.7 (50%~75%)
-           // scale > 0.75: level 1.0 (75% 이상 - 원본)
+           // 🔥 서버 설정에서 threshold와 level 가져오기
+           const thresholds = SERVER_CONFIG.PYRAMID_ZOOM_THRESHOLDS;
+           const levels = SERVER_CONFIG.PYRAMID_LEVELS;
 
-           if (scale <= 0.25) return 0.2;
-           if (scale <= 0.5) return 0.5;
-           if (scale <= 0.75) return 0.7;
-           return 1.0;
+           if (scale < thresholds[0]) return levels[0];
+           if (scale < thresholds[1]) return levels[1];
+           if (scale < thresholds[2]) return levels[2];
+           return levels[3];
        }
 
 

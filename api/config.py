@@ -47,4 +47,7 @@ SSL_CERTFILE = os.getenv("SSL_CERTFILE", "cert/fullchain.pem")
 SSL_KEYFILE = os.getenv("SSL_KEYFILE", "cert/server.key")
 
 # ===== 이미지 피라미드 설정 =====
-PYRAMID_LEVELS = [0.2, 0.5, 0.7, 1.0]  # 피라미드 레벨 (0.2=20%, 0.5=50%, 0.7=70%, 1.0=100%) - 최고품질 Q=100, Lanczos3
+# 피라미드 레벨 (쉼표로 구분, 기본: 0.2,0.5,0.7,1.0)
+PYRAMID_LEVELS = [float(x) for x in os.getenv("PYRAMID_LEVELS", "0.2,0.5,0.7,1.0").split(",")]
+# zoom 기준 (쉼표로 구분, 기본: 0.25,0.5,0.75) - ≤0.25→0.2, ≤0.5→0.5, ≤0.75→0.7, >0.75→1.0
+PYRAMID_ZOOM_THRESHOLDS = [float(x) for x in os.getenv("PYRAMID_ZOOM_THRESHOLDS", "0.25,0.5,0.75").split(",")]
