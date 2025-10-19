@@ -12961,7 +12961,7 @@ class WaferMapViewer {
                 }, 500);
             };
             
-            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512&t=${Date.now()}`;
+            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512`;
             if (idx === 0) {
                             }
             img.src = thumbnailUrl;
