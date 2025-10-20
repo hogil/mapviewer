@@ -1455,21 +1455,18 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
             resized = img.resize(scale_w, vscale=scale_h, kernel='lanczos3')
             logger.info(f"⏱️ [DEBUG] resize(lanczos3) 리사이즈: {(time.time()-t2)*1000:.0f}ms")
 
-            # Q=100, Lanczos3으로 최고 품질 저장
+            # Q=100, Lanczos3으로 최고 품질 저장 (WebP)
             t3 = time.time()
-            resized.jpegsave(
+            resized.webpsave(
                 str(pyramid_path),
                 Q=100,                    # 최고 품질
                 strip=True,               # 메타데이터 제거
-                optimize_coding=False,    # 빠른 인코딩
-                interlace=False,          # Progressive 스킵
-                trellis_quant=False,
-                overshoot_deringing=False,
-                optimize_scans=False,
-                subsample_mode='auto'
+                lossless=False,           # 손실 압축 (더 작은 파일)
+                effort=1,                 # 빠른 인코딩 (0-6, 낮을수록 빠름)
+                smart_subsample=False     # 빠른 인코딩
             )
             t4 = time.time()
-            logger.info(f"⏱️ [DEBUG] jpegsave(Q=100) 저장: {(t4-t3)*1000:.0f}ms")
+            logger.info(f"⏱️ [DEBUG] webpsave(Q=100) 저장: {(t4-t3)*1000:.0f}ms")
 
         # 시간 측정 및 로그
         elapsed = time.time() - start_time
@@ -1493,8 +1490,8 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
             # 리사이즈 (LANCZOS: 최고 품질)
             resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
-            # JPEG로 저장 (Q=100, 최고 품질 유지)
-            resized.save(pyramid_path, format="JPEG", quality=100, optimize=False)
+            # WebP로 저장 (Q=100, 최고 품질 유지)
+            resized.save(pyramid_path, format="WEBP", quality=100, lossless=False, method=1)
 
             # 시간 측정 및 로그
             elapsed = time.time() - start_time
@@ -1516,6 +1513,69 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
         except Exception as copy_error:
             logger.exception(f"🚀 [SPEED COPY FAILED] {copy_error}")
             raise
+
+
+# 🔥 Background 피라미드 생성 (동시 생성 제한)
+_pyramid_bg_executor = ThreadPoolExecutor(max_workers=4)  # 최대 4개 동시 생성
+_pyramid_bg_generating = set()  # 현재 생성 중인 파일 경로
+
+async def _generate_other_levels_background(image_path: Path, current_level: float, stem: str):
+    """다른 피라미드 레벨들을 background에서 생성"""
+    try:
+        # 생성할 레벨 목록 (현재 레벨 제외)
+        other_levels = [l for l in config.PYRAMID_LEVELS if l != current_level]
+
+        for other_level in other_levels:
+            # 피라미드 경로 생성
+            pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{int(other_level*100)}"
+            pyramid_path = pyramid_dir / f"{stem}_L{int(other_level*100)}.webp"
+
+            # 🔥 이미 존재하거나 생성 중이면 스킵
+            path_key = str(pyramid_path)
+
+            # 1. 이미 파일이 존재하고 최신인지 확인
+            if pyramid_path.exists():
+                try:
+                    image_mtime = image_path.stat().st_mtime
+                    if pyramid_path.stat().st_mtime >= image_mtime:
+                        logger.info(f"⏭️  [BG SKIP] 이미 존재: level={other_level}")
+                        continue  # 최신 파일이면 스킵
+                except Exception:
+                    pass
+
+            # 2. 이미 생성 중인지 확인
+            if path_key in _pyramid_bg_generating:
+                logger.info(f"⏭️  [BG SKIP] 이미 생성 중: level={other_level}")
+                continue
+
+            _pyramid_bg_generating.add(path_key)
+
+            # Background에서 생성 (ThreadPoolExecutor 사용)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                _pyramid_bg_executor,
+                _generate_pyramid_bg_worker,
+                image_path,
+                pyramid_path,
+                other_level,
+                path_key
+            )
+
+    except Exception as e:
+        logger.warning(f"⚠️ [BG PYRAMID] Background 생성 오류: {e}")
+
+
+def _generate_pyramid_bg_worker(image_path: Path, pyramid_path: Path, level: float, path_key: str):
+    """Background 워커 (ThreadPoolExecutor에서 실행)"""
+    try:
+        logger.info(f"🔄 [BG START] Background 피라미드 생성: level={level}, path={image_path.name}")
+        _generate_pyramid_sync(image_path, pyramid_path, level)
+        logger.info(f"✅ [BG DONE] Background 피라미드 완료: level={level}")
+    except Exception as e:
+        logger.warning(f"⚠️ [BG ERROR] Background 생성 실패: {e}")
+    finally:
+        _pyramid_bg_generating.discard(path_key)
+
 
 @app.get("/api/image/size")
 async def get_image_size(path: str):
@@ -1557,9 +1617,12 @@ async def get_image_size(path: str):
         logger.error(f"이미지 크기 조회 실패: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get image size: {str(e)}")
 
+@app.head("/api/image")
 @app.get("/api/image")
 async def get_image(request: Request, path: str, level: Optional[float] = None):
     try:
+        is_head = request.method == "HEAD"
+
         # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
         if Path(path).is_absolute():
             # 절대 경로인 경우
@@ -1585,16 +1648,19 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
 
         # 🎯 피라미드 레벨이 요청된 경우
         if level is not None:
-            logger.info(f"🎯 [PYRAMID MODE] 활성화됨")
+            if not is_head:
+                logger.info(f"🎯 [PYRAMID MODE] 활성화됨")
 
             # 레벨 검증
             if level not in config.PYRAMID_LEVELS:
                 level = min(config.PYRAMID_LEVELS, key=lambda x: abs(x - level))
-                logger.info(f"🎯 [LEVEL FIXED] {level}")
+                if not is_head:
+                    logger.info(f"🎯 [LEVEL FIXED] {level}")
 
             # 🚀 Level 1.0은 원본 파일 직접 반환 (최고속)
             if level >= 1.0:
-                logger.info(f"🚀 [ORIGINAL DIRECT] Level 1.0 - 원본 파일 직접 반환")
+                if not is_head:
+                    logger.info(f"🚀 [ORIGINAL DIRECT] Level 1.0 - 원본 파일 직접 반환")
                 st = image_path.stat()
                 headers = {
                     "Cache-Control": "public, max-age=31536000, immutable",  # 1년 캐시
@@ -1623,8 +1689,9 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
             if stem_lower in WINDOWS_RESERVED or any(stem_lower.startswith(f'{dev}') for dev in ['com', 'lpt']):
                 stem = f"file_{stem}"
 
-            pyramid_path = pyramid_dir / f"{stem}_L{int(level*100)}.jpg"
-            logger.info(f"🎯 [PYRAMID PATH] {pyramid_path}")
+            pyramid_path = pyramid_dir / f"{stem}_L{int(level*100)}.webp"
+            if not is_head:
+                logger.info(f"🎯 [PYRAMID PATH] {pyramid_path}")
 
             # 🚀 캐시 확인: 이미 존재하고 최신이면 즉시 반환
             import time
@@ -1634,50 +1701,60 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
                 if pyramid_path.stat().st_mtime >= image_mtime:
                     st = pyramid_path.stat()
                     file_size_mb = st.st_size / (1024*1024)
-                    logger.info(f"✅ [CACHE HIT] 파일: {file_size_mb:.1f}MB")
+                    if not is_head:
+                        logger.info(f"✅ [CACHE HIT] 파일: {file_size_mb:.1f}MB")
 
                     t_resp_start = time.time()
                     headers = {
                         "Cache-Control": "public, max-age=31536000, immutable",
-                        "Content-Type": "image/jpeg",
+                        "Content-Type": "image/webp",
                         "ETag": compute_etag(st),
                         "X-Pyramid-Level": str(level),
                         "X-Cache-Status": "HIT",
                         "X-File-Size": str(st.st_size)
                     }
                     response = FileResponse(pyramid_path, headers=headers)
-                    logger.info(f"⏱️ [DEBUG] FileResponse 생성: {(time.time()-t_resp_start)*1000:.0f}ms")
-                    logger.info(f"⏱️ [DEBUG] 캐시 전체 시간: {(time.time()-t_cache_start)*1000:.0f}ms")
+                    if not is_head:
+                        logger.info(f"⏱️ [DEBUG] FileResponse 생성: {(time.time()-t_resp_start)*1000:.0f}ms")
+                        logger.info(f"⏱️ [DEBUG] 캐시 전체 시간: {(time.time()-t_cache_start)*1000:.0f}ms")
                     return response
 
             # 캐시 미스: 피라미드 이미지 생성
-            logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}")
+            if not is_head:
+                logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}")
             _generate_pyramid_sync(image_path, pyramid_path, level)
+
+            # 🔥 Background에서 다른 레벨들도 생성 시작 (사용자 대기 없음)
+            asyncio.create_task(_generate_other_levels_background(image_path, level, stem))
 
             # 생성된 파일 확인 및 반환
             if pyramid_path.exists():
                 st = pyramid_path.stat()
                 file_size_mb = st.st_size / (1024*1024)
-                logger.info(f"✅ [PYRAMID SUCCESS] 파일: {file_size_mb:.1f}MB ({st.st_size:,} bytes)")
+                if not is_head:
+                    logger.info(f"✅ [PYRAMID SUCCESS] 파일: {file_size_mb:.1f}MB ({st.st_size:,} bytes)")
 
                 t_resp_start = time.time()
                 headers = {
                     "Cache-Control": "public, max-age=31536000, immutable",
-                    "Content-Type": "image/jpeg",
+                    "Content-Type": "image/webp",
                     "ETag": compute_etag(st),
                     "X-Pyramid-Level": str(level),
                     "X-Cache-Status": "MISS",
                     "X-File-Size": str(st.st_size)
                 }
                 response = FileResponse(pyramid_path, headers=headers)
-                logger.info(f"⏱️ [DEBUG] FileResponse 생성: {(time.time()-t_resp_start)*1000:.0f}ms")
+                if not is_head:
+                    logger.info(f"⏱️ [DEBUG] FileResponse 생성: {(time.time()-t_resp_start)*1000:.0f}ms")
                 return response
             else:
-                logger.error(f"❌ [GENERATION FAILED] {pyramid_path}")
+                if not is_head:
+                    logger.error(f"❌ [GENERATION FAILED] {pyramid_path}")
                 raise HTTPException(status_code=500, detail="Pyramid generation failed")
         else:
             # 원본 이미지 반환
-            logger.info(f"🎯 [ORIGINAL MODE] {image_path}")
+            if not is_head:
+                logger.info(f"🎯 [ORIGINAL MODE] {image_path}")
             st = image_path.stat()
             headers = {"Cache-Control": "public, max-age=86400", "ETag": compute_etag(st)}
             return FileResponse(image_path, headers=headers)

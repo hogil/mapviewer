@@ -73,13 +73,13 @@ class ThumbnailService:
 
                 # 원본 이미지가 이미 작으면 복사만
                 if image.width <= size[0] and image.height <= size[1]:
-                    # 🔥 최적화: effort=4, lossless=False로 속도 우선
+                    # 🔥 초고속 최적화: effort=1, lossless=False
                     image.write_to_file(
                         str(thumbnail_path),
                         Q=self.thumbnail_quality,
                         strip=True,
                         lossless=False,    # 무손실 비활성화 (속도 우선)
-                        effort=4,          # 6→4로 변경 (속도 2배)
+                        effort=1,          # 4→1로 변경 (초고속)
                         interlace=False,
                         sequential=True
                     )
@@ -93,13 +93,13 @@ class ThumbnailService:
                         linear=False,      # sRGB 유지 (속도 개선)
                         kernel='lanczos3'  # 최고품질 유지
                     )
-                    # 🔥 최적화: effort=4, lossless=False로 속도 우선
+                    # 🔥 초고속 최적화: effort=1, lossless=False
                     image.write_to_file(
                         str(thumbnail_path),
                         Q=self.thumbnail_quality,
                         strip=True,
                         lossless=False,    # 무손실 비활성화 (속도 우선)
-                        effort=4,          # 6→4로 변경 (속도 2배)
+                        effort=1,          # 4→1로 변경 (초고속)
                         interlace=False,
                         sequential=True
                     )

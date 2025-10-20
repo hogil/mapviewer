@@ -433,7 +433,7 @@ class SemiconductorRenderer {
             };
         }
         
-        let pyramidLevel = '원본 (고품질)';
+        let pyramidLevel = '원본';
         let pixelReduction = '100%';
 
         if (this.options.usePyramid && Object.keys(this.imagePyramid).length > 0) {
@@ -442,13 +442,13 @@ class SemiconductorRenderer {
             const levels = (window.SERVER_CONFIG && window.SERVER_CONFIG.PYRAMID_LEVELS) || [0.2, 0.5, 0.7, 1.0];
 
             if (this.scale < thresholds[0]) {
-                pyramidLevel = `${levels[0]}x 크기 (초고속)`;
+                pyramidLevel = `${levels[0]}x`;
                 pixelReduction = `${Math.round(levels[0] * 100)}%`;
             } else if (this.scale < thresholds[1]) {
-                pyramidLevel = `${levels[1]}x 크기 (균형)`;
+                pyramidLevel = `${levels[1]}x`;
                 pixelReduction = `${Math.round(levels[1] * 100)}%`;
             } else if (this.scale < thresholds[2]) {
-                pyramidLevel = `${levels[2]}x 크기 (고품질)`;
+                pyramidLevel = `${levels[2]}x`;
                 pixelReduction = `${Math.round(levels[2] * 100)}%`;
             }
         }
