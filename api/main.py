@@ -841,7 +841,9 @@ async def api_config():
         "AUTO_LOGIN": AUTO_LOGIN,
         "DEFAULT_ORG_URL": DEFAULT_ORG_URL,
         "PYRAMID_LEVELS": config.PYRAMID_LEVELS,
-        "PYRAMID_ZOOM_THRESHOLDS": config.PYRAMID_ZOOM_THRESHOLDS
+        "PYRAMID_ZOOM_THRESHOLDS": config.PYRAMID_ZOOM_THRESHOLDS,
+        "THUMB_BATCH_SIZE": config.THUMB_PREFETCH_BATCH,
+        "THUMB_MAX_CONCURRENCY": config.THUMB_CLIENT_MAX_CONCURRENCY
     }
 
 # 🔥 서버 메모리에 SAML 로그인 정보 저장
@@ -2073,7 +2075,7 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
                             return
 
             if need > 0:
-                await asyncio.get_running_loop().run_in_executor(ThreadPoolExecutor(max_workers=1), _scan)
+                await loop.run_in_executor(IO_POOL, _scan)
 
         results = bucket[offset: offset + limit]
 

@@ -19,11 +19,13 @@ export THUMBNAIL_SIZE="512"
 export THUMBNAIL_FORMAT="PNG"
 export THUMBNAIL_QUALITY="100"           # PNG 무손실, Q=100 유지
 export PNG_COMPRESSION_LEVEL="3"
-export IO_THREADS="128"                  # 32코어 * 4 (I/O 집약적 워크로드)
-export THUMBNAIL_SEM="256"               # 동시 썸네일 생성 (충분한 RAM 활용)
+export IO_THREADS="256"                  # 32코어 * 8 (I/O 집약적 워크로드)
+export THUMBNAIL_SEM="512"               # 동시 썸네일 생성 (충분한 RAM 활용)
+export THUMB_PREFETCH_BATCH="64"
+export THUMB_CLIENT_MAX_CONCURRENCY="12"
 
 # libvips 최적화 (웹서버 환경 - 핵심 변경사항)
-export VIPS_CONCURRENCY="16"             # 고코어 서버용 병렬 처리
+export VIPS_CONCURRENCY="24"             # 고코어 서버용 병렬 처리
 export VIPS_DISC_THRESHOLD="10000m"      # 10GB (198GB RAM 활용)
 export VIPS_MAX_CACHE="10000"            # 캐시 10000개로 대폭 증가
 export VIPS_MAX_CACHE_MEM="20000m"       # 20GB 메모리 캐시 (초고속)

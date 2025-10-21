@@ -34,7 +34,7 @@ const MIN_DRAG_DISTANCE = 5;
 
 const ZOOM_FACTOR = 1.2;
 
-const THUMB_BATCH_SIZE = 48;
+let THUMB_BATCH_SIZE = 24;
 
 const DEBOUNCE_DELAY = 0;
 const GRID_DRAG_CLICK_THRESHOLD = 14;
@@ -50,7 +50,9 @@ const RESET_ABSOLUTE_PERCENT_OFFSET = -0.02;
 // 🔥 서버 설정 (페이지 로드시 한번만 가져옴)
 let SERVER_CONFIG = {
     PYRAMID_LEVELS: [0.2, 0.5, 0.7, 1.0],  // 기본값
-    PYRAMID_ZOOM_THRESHOLDS: [0.25, 0.5, 0.75]  // 기본값
+    PYRAMID_ZOOM_THRESHOLDS: [0.25, 0.5, 0.75],  // 기본값
+    THUMB_BATCH_SIZE: 24,
+    THUMB_MAX_CONCURRENCY: 12
 };
 
 
@@ -75,7 +77,7 @@ class ThumbnailManager {
 
         this.concurrentLoads = 0;
 
-        this.maxConcurrentLoads = 16;
+        this.maxConcurrentLoads = SERVER_CONFIG.THUMB_MAX_CONCURRENCY ?? 12;
 
         this.loadQueue = [];
 
@@ -145,6 +147,13 @@ class ThumbnailManager {
     }
 
 
+
+    setMaxConcurrentLoads(value) {
+        const numeric = Number(value);
+        if (Number.isFinite(numeric) && numeric > 0) {
+            this.maxConcurrentLoads = Math.max(1, Math.floor(numeric));
+        }
+    }
 
     async loadThumbnail(imgPath) {
 
@@ -303,7 +312,7 @@ class ThumbnailManager {
         
         // 배치 크기 제한
 
-        const batchSize = Math.min(uncachedPaths.length, THUMB_BATCH_SIZE || 50);
+        const batchSize = Math.min(uncachedPaths.length, THUMB_BATCH_SIZE || 24);
 
         const batch = uncachedPaths.slice(0, batchSize);
 
@@ -4028,6 +4037,16 @@ class WaferMapViewer {
             }
             if (config.PYRAMID_ZOOM_THRESHOLDS && Array.isArray(config.PYRAMID_ZOOM_THRESHOLDS)) {
                 SERVER_CONFIG.PYRAMID_ZOOM_THRESHOLDS = config.PYRAMID_ZOOM_THRESHOLDS;
+            }
+            if (typeof config.THUMB_BATCH_SIZE === "number") {
+                THUMB_BATCH_SIZE = Math.max(1, Math.floor(config.THUMB_BATCH_SIZE));
+                SERVER_CONFIG.THUMB_BATCH_SIZE = THUMB_BATCH_SIZE;
+            }
+            if (typeof config.THUMB_MAX_CONCURRENCY === "number") {
+                SERVER_CONFIG.THUMB_MAX_CONCURRENCY = Math.max(1, Math.floor(config.THUMB_MAX_CONCURRENCY));
+                if (this.thumbnailManager) {
+                    this.thumbnailManager.setMaxConcurrentLoads(SERVER_CONFIG.THUMB_MAX_CONCURRENCY);
+                }
             }
 
             console.log('[CONFIG] 서버 설정 로드 완료:', SERVER_CONFIG);
@@ -13181,7 +13200,7 @@ class WaferMapViewer {
         
         // 배치 크기 제한
 
-        const batchSize = THUMB_BATCH_SIZE || 50;
+        const batchSize = THUMB_BATCH_SIZE || 24;
 
         const currentImages = images.slice(0, batchSize);
 
