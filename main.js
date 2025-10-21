@@ -664,6 +664,7 @@ class WaferMapViewer {
 
         this.semiconductorRenderer = null;
         this.usingGpuRenderer = false;
+        this.minimapPreview = null;
 
         this.initSemiconductorRenderer();
 
@@ -7292,12 +7293,17 @@ class WaferMapViewer {
             }
 
             
-            
+
             this.selectedImagePath = fullPath;  // 🔥 fullPath 사용 (prefix 포함)
 
             this.pyramidLevels = {}; // 레벨별 캐시 초기화
 
             this.pyramidLoadingLevels = new Set(); // 로딩 중인 레벨 추적
+
+            if (this.minimapPreview && typeof this.minimapPreview.close === 'function') {
+                try { this.minimapPreview.close(); } catch (e) { /* noop */ }
+            }
+            this.minimapPreview = null;
 
             
             
@@ -7418,6 +7424,11 @@ class WaferMapViewer {
         this.currentImageBitmap = bitmap;
         this.currentImage = bitmap;
         this.currentPyramidLevel = initialLevel;
+        this.prepareMinimapPreview(bitmap).then(() => {
+            if (this.dom?.minimapContainer?.offsetWidth) {
+                requestAnimationFrame(() => this.updateMinimap());
+            }
+        }).catch(() => {});
 
         // 📊 초기 로드 로그
         const fetchTime = (tFetchEnd - tFetchStart).toFixed(0);
@@ -7582,6 +7593,11 @@ class WaferMapViewer {
                 if (this.semiconductorRenderer?.isGpuAvailable()) {
                     this.semiconductorRenderer.setActiveLevel(level);
                 }
+                this.prepareMinimapPreview(bitmap).then(() => {
+                    if (this.dom?.minimapContainer?.offsetWidth) {
+                        requestAnimationFrame(() => this.updateMinimap());
+                    }
+                }).catch(() => {});
                 this.scheduleDraw();
 
                 // 📊 로드 로그
@@ -8153,6 +8169,136 @@ class WaferMapViewer {
 
     // --- MINIMAP ---
 
+    async prepareMinimapPreview(imageBitmap) {
+
+        try {
+
+            if (!imageBitmap || !imageBitmap.width || !imageBitmap.height) {
+
+                return;
+
+            }
+
+
+
+            const MAX_DIMENSION = 256;
+
+            const srcW = imageBitmap.width;
+
+            const srcH = imageBitmap.height;
+
+            const scale = Math.min(1, MAX_DIMENSION / Math.max(srcW, srcH));
+
+            const targetW = Math.max(1, Math.round(srcW * scale));
+
+            const targetH = Math.max(1, Math.round(srcH * scale));
+
+
+
+            let previewBitmap = null;
+
+
+
+            if (typeof OffscreenCanvas !== 'undefined') {
+
+                try {
+
+                    const offscreen = new OffscreenCanvas(targetW, targetH);
+
+                    const ctx = offscreen.getContext('2d', { alpha: false });
+
+                    if (ctx) {
+
+                        ctx.imageSmoothingEnabled = true;
+
+                        if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
+
+                        ctx.drawImage(imageBitmap, 0, 0, targetW, targetH);
+
+                        if (typeof offscreen.convertToBlob === 'function') {
+
+                            const blob = await offscreen.convertToBlob({ type: 'image/jpeg', quality: 1.0 });
+
+                            previewBitmap = await createImageBitmap(blob);
+
+                        } else {
+
+                            previewBitmap = await createImageBitmap(offscreen);
+
+                        }
+
+                    }
+
+                } catch (error) {
+
+                    console.warn('⚠️ [MINIMAP] OffscreenCanvas preview 실패', error);
+
+                }
+
+            }
+
+
+
+            if (!previewBitmap) {
+
+                const canvas = document.createElement('canvas');
+
+                canvas.width = targetW;
+
+                canvas.height = targetH;
+
+                const ctx = canvas.getContext('2d', { alpha: false });
+
+                if (!ctx) return;
+
+                ctx.imageSmoothingEnabled = true;
+
+                if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
+
+                ctx.drawImage(imageBitmap, 0, 0, targetW, targetH);
+
+                let blob = null;
+
+                if (typeof canvas.toBlob === 'function') {
+
+                    blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 1.0));
+
+                }
+
+                if (blob) {
+
+                    previewBitmap = await createImageBitmap(blob);
+
+                } else {
+
+                    previewBitmap = await createImageBitmap(canvas);
+
+                }
+
+            }
+
+
+
+            if (this.minimapPreview && typeof this.minimapPreview.close === 'function') {
+
+                try { this.minimapPreview.close(); } catch (e) { /* noop */ }
+
+            }
+
+
+
+            this.minimapPreview = previewBitmap;
+
+        } catch (err) {
+
+            console.warn('⚠️ [MINIMAP] preview 생성 실패', err);
+
+            this.minimapPreview = null;
+
+        }
+
+    }
+
     updateMinimap() {
 
         if (!this.currentImage) return;
@@ -8185,31 +8331,43 @@ class WaferMapViewer {
 
         
         
-        // 픽셀 완벽한 렌더링을 위해 이미지 스무딩 비활성화
+        if (this.minimapPreview) {
 
-        setPixelPerfectRendering(this.minimapCtx);
+            this.minimapCtx.imageSmoothingEnabled = true;
 
-        
-        
-        // 🎯 피라미드 이미지를 원본 크기로 확대해서 미니맵에 그리기
+            if ('imageSmoothingQuality' in this.minimapCtx) {
 
-        if (this.pyramidLevels && this.currentPyramidLevel) {
+                this.minimapCtx.imageSmoothingQuality = 'high';
 
-            const pyramidImage = this.currentImage;
-
-            this.minimapCtx.drawImage(
-
-                pyramidImage,
-
-                0, 0, pyramidImage.width, pyramidImage.height,  // 소스 영역
-
-                padX, padY, imgW * scale, imgH * scale          // 대상 영역 (원본 크기 기준)
-
-            );
+            }
 
         } else {
 
-            this.minimapCtx.drawImage(this.currentImage, padX, padY, imgW * scale, imgH * scale);
+            setPixelPerfectRendering(this.minimapCtx);
+
+        }
+
+        
+        
+        const sourceImage = this.minimapPreview || this.currentImage;
+
+        const srcWidth = (sourceImage && sourceImage.width) ? sourceImage.width : this.currentImage.width;
+
+        const srcHeight = (sourceImage && sourceImage.height) ? sourceImage.height : this.currentImage.height;
+
+
+
+        if (sourceImage) {
+
+            this.minimapCtx.drawImage(
+
+                sourceImage,
+
+                0, 0, srcWidth, srcHeight,
+
+                padX, padY, imgW * scale, imgH * scale
+
+            );
 
         }
 
@@ -12512,7 +12670,7 @@ class WaferMapViewer {
 
         const mapW = rect.width, mapH = rect.height;
 
-        const imgW = this.currentImage.width, imgH = this.currentImage.height;
+        const imgW = this.originalWidth, imgH = this.originalHeight;
 
         const scale = Math.min(mapW / imgW, mapH / imgH);
 
@@ -12702,9 +12860,9 @@ class WaferMapViewer {
 
         const mapH = rect.height;
 
-        const imgW = this.currentImage.width;
+        const imgW = this.originalWidth;
 
-        const imgH = this.currentImage.height;
+        const imgH = this.originalHeight;
 
         const scale = Math.min(mapW / imgW, mapH / imgH);
 
@@ -12848,9 +13006,9 @@ class WaferMapViewer {
 
         
         
-        const imgW = this.currentImage.width;
+        const imgW = this.originalWidth;
 
-        const imgH = this.currentImage.height;
+        const imgH = this.originalHeight;
 
         
         
