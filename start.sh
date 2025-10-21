@@ -14,7 +14,13 @@ export HTTPS_PORT="8443"
 export SSL_CERTFILE="cert/fullchain.pem"
 export SSL_KEYFILE="cert/server.key"
 
-# 초고속 성능 설정 (Ubuntu 24, 32코어, 198GB RAM)
+# 초고속 성능 설정 (Ubuntu 24, 32코어, 192GB RAM)
+# - 서버 스펙이 더 높다면 아래 값들을 올려도 됩니다.
+#   * IO_THREADS: 코어 수에 맞춰 8배까지 확장 가능 (예: 32C → 256)
+#   * THUMBNAIL_SEM: 동시에 생성할 썸네일 개수, 충분한 RAM이 있다면 512 이상도 가능
+#   * THUMB_PREFETCH_BATCH / THUMB_CLIENT_MAX_CONCURRENCY: 프론트 프리패치 배치/동시수
+#   * VIPS_CONCURRENCY: pyvips 내부 워커 수, CPU 사용량에 맞춰 조정
+# - 조정 후에는 반드시 `/api/config` 응답과 프런트 콘솔 로그를 확인해 적용 여부를 점검하세요.
 export THUMBNAIL_SIZE="512"
 export THUMBNAIL_FORMAT="PNG"
 export THUMBNAIL_QUALITY="100"           # PNG 무손실, Q=100 유지

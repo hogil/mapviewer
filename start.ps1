@@ -20,16 +20,16 @@ $env:THUMBNAIL_SIZE="512"
 $env:THUMBNAIL_FORMAT="PNG"
 $env:THUMBNAIL_QUALITY="100"
 $env:PNG_COMPRESSION_LEVEL="3"
-$env:IO_THREADS="32"                     # 개발환경에 적합한 I/O 스레드
-$env:THUMBNAIL_SEM="24"
-$env:THUMB_PREFETCH_BATCH="24"
-$env:THUMB_CLIENT_MAX_CONCURRENCY="8"
-$env:VIPS_CONCURRENCY="4"               # 웹서버 최적화 (pyvips 환경변수명 통일)
+$env:IO_THREADS="32"                     # 개발환경에 적합한 I/O 스레드 (필요시 증설)
+$env:THUMBNAIL_SEM="24"                 # 동시 썸네일 생성 수
+$env:THUMB_PREFETCH_BATCH="24"          # 프리패치 배치 크기 (클라이언트에도 동일 반영)
+$env:THUMB_CLIENT_MAX_CONCURRENCY="8"   # 프론트 썸네일 동시 로드 수
+$env:VIPS_CONCURRENCY="4"               # pyvips 내부 워커 수
 $env:VIPS_DISC_THRESHOLD="500m"         # 개발환경에 적합한 임계값
 $env:VIPS_MAX_CACHE="500"               # 개발환경에 적합한 캐시 수
 $env:VIPS_MAX_CACHE_MEM="1000m"         # 개발환경에 적합한 캐시 메모리
 $env:STATS_LOG_ENABLED="0"
-$env:WORKERS="6"
+$env:WORKERS="6"                        # 8C 기준 적정 값
 $env:RELOAD="1"
 
 # 이미지 피라미드 설정

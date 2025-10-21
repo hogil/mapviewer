@@ -1,4 +1,4 @@
-# L3 Tracker - 반도체 웨이퍼맵 불량 분석 시스템
+# L3 Tracker – Wafer Map Viewer & Analyzer
 
 <div align="center">
   <img src="https://img.shields.io/badge/version-2.0.0-blue.svg" />
@@ -7,212 +7,110 @@
   <img src="https://img.shields.io/badge/license-MIT-purple.svg" />
 </div>
 
-## 📋 개요
+## Overview
 
-L3 Tracker는 반도체 웨이퍼맵의 불량 패턴을 분석하고 관리하는 전문 시스템입니다. 대용량 고해상도 이미지(4000x4000 픽셀)를 왜곡 없이 처리하며, 머신러닝 기반 자동 분류 기능을 제공합니다.
+L3 Tracker는 대규모 반도체 웨이퍼 이미지를 실시간으로 탐색·분석할 수 있도록 설계된 웹 애플리케이션입니다. 수천만 픽셀의 웨이퍼를 자동으로 피라미드화하여 빠르게 조회하고, GPU 가속 렌더러와 AI 분류 모델을 동시에 활용할 수 있습니다.
 
 ### 주요 특징
 
-- **🔍 고성능 이미지 렌더링**: 이미지 피라미드 기술로 대용량 이미지 빠른 처리
-- **🤖 AI 자동 분류**: ResNet50 기반 불량 패턴 자동 분류 (정확도 95%+)
-- **📊 배치 처리**: 수천 개 이미지 동시 처리 및 관리
-- **🎯 픽셀 완벽 렌더링**: 반도체 불량 패턴의 세밀한 부분까지 보존
-- **💾 효율적인 캐싱**: 썸네일 및 이미지 데이터 스마트 캐싱
+- **PNG level-3 + cubic 리샘플 피라미드** – pyvips 기반, 품질과 속도를 모두 확보
+- **썸네일/프리패치 파이프라인** – 서버·클라이언트 동시 병렬 처리, 환경변수로 튜닝 가능
+- **폴더 범위 제한 검색** – 정렬 인덱스와 비동기 스캔으로 현재 선택 폴더만 즉시 검색
+- **AI 자동 분류(옵션)** – ResNet50 기반 웨이퍼 패턴 분류 (정확도 95% 이상)
+- **풍부한 캐시 계층** – 썸네일/피라미드/인덱스 캐시를 통한 재 방문 속도 향상
 
-## 🚀 빠른 시작
+## Project Structure
 
-### 시스템 요구사항
-
-- Python 3.8 이상
-- Node.js 14 이상 (선택사항)
-- 최소 8GB RAM
-- GPU (CUDA 지원 권장)
-
-### 설치
-
-1. **저장소 클론**
-```bash
-git clone https://github.com/yourusername/l3tracker.git
-cd l3tracker
+```
+├─ api/                   # FastAPI backend
+│  ├─ main.py             # 라우팅, 검색, 피라미드, 구성 로직
+│  ├─ config.py           # 모든 환경변수 → 앱 설정
+│  ├─ thumbnail_service.py
+│  └─ optimized_thumbnail.py (실험 코드)
+├─ js/                    # 프론트엔드 ES6 코드
+│  ├─ main.js             # UI & 데이터 흐름
+│  └─ semiconductor-renderer.js  # GPU 렌더러
+├─ index.html             # SPA 진입점
+├─ start.ps1              # Windows 11 개발 환경 스타터
+├─ start.sh               # Ubuntu 24 운영 환경 스타터
+├─ ARCHITECTURE.md        # 시스템 구성 설명
+├─ PERFORMANCE_ANALYSIS.md# 성능 측정 및 가이드
+├─ CHANGELOG.md           # 버전별 변경 사항
+└─ README.md
 ```
 
-2. **Python 종속성 설치**
-```bash
-pip install -r requirements.txt
-```
+## Environment & Deployment
 
-3. **초기 설정**
-```bash
-python setup.py
-```
+| 구분               | CPU/RAM        | 실행 스크립트 | 주요 환경 변수                                       |
+|-------------------|---------------|---------------|------------------------------------------------------|
+| **개발 (Windows)**| 8C / 64 GB     | `./start.ps1` | `THUMB_PREFETCH_BATCH=24`, `THUMB_CLIENT_MAX_CONCURRENCY=8`, `VIPS_CONCURRENCY=4` |
+| **운영 (Ubuntu)** | 32C / 192 GB   | `./start.sh`  | `THUMB_PREFETCH_BATCH=64`, `THUMB_CLIENT_MAX_CONCURRENCY=12`, `VIPS_CONCURRENCY=24` |
+| **클라이언트**    | 6C / 32 GB     | 웹 브라우저   | `/api/config` 로 전달된 값 적용 (기본 24/12)         |
 
-### 실행
+> 운영 서버의 코어·RAM이 더 높다면 `start.sh` 상단의 주석에 따라 `IO_THREADS`, `THUMBNAIL_SEM`, `VIPS_CONCURRENCY` 등을 확장한 뒤 `/api/config` 응답을 확인하세요.
 
-#### Windows
-```cmd
-# 관리자 권한으로 실행
-python main.py
-```
+### 설치 및 실행
 
-#### Linux/Mac
-```bash
-sudo python main.py
-```
+1. 저장소 클론
+   ```bash
+   git clone https://github.com/yourusername/l3tracker.git
+   cd l3tracker
+   ```
+2. Python 의존성 설치
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. (선택) 추가 도구 설치  
+   GPU 또는 AI 기능을 사용할 경우 `ENVIRONMENT_SETUP.md` 참고
+4. 개발 환경 실행
+   ```powershell
+   ./start.ps1
+   ```
+5. 운영 환경 실행
+   ```bash
+   ./start.sh
+   ```
+6. 브라우저에서 접속  
+   기본 주소는 `http://localhost:8080`
 
-브라우저에서 `http://localhost:5000` 접속
+## System Flow
 
-## 🏗️ 시스템 아키텍처
+- API와 썸네일/피라미드 처리 흐름: `ARCHITECTURE.md`
+- pyvips, PNG level-3, 검색 인덱스 병렬화 등 성능 수치: `PERFORMANCE_ANALYSIS.md`
 
-### 프론트엔드 구조
-```
-frontend/
-├── index.html          # 메인 UI
-├── js/
-│   ├── main.js        # 핵심 애플리케이션 로직
-│   ├── semiconductor-renderer.js  # 이미지 렌더링 엔진
-│   ├── grid.js        # 그리드 뷰 관리
-│   └── labels.js      # 라벨링 시스템
-└── css/
-    └── styles.css     # 스타일시트
-```
+## History
 
-### 백엔드 구조
-```
-api/
-├── app.py             # Flask 애플리케이션
-├── classifier.py      # AI 분류 엔진
-├── image_handler.py   # 이미지 처리
-└── thumbnail.py       # 썸네일 생성
-```
+- 모든 변경 사항은 [CHANGELOG.md](CHANGELOG.md) 참조
+- 최근 핵심 업데이트
+  - 검색 인덱스 정렬 및 비동기 병렬화 → 현재 폴더만 빠르게 검색
+  - 썸네일/피라미드 PNG level-3 + cubic 리샘플 통일
+  - Windows/Ubuntu 각각에 맞춘 스타트 스크립트와 환경변수 노출
 
-## 📚 핵심 기능
+## API Snapshot
 
-### 1. 이미지 피라미드 렌더링
+| Method | Path              | 설명                    |
+|--------|-------------------|-------------------------|
+| GET    | `/api/files`      | 현재 폴더 목록          |
+| GET    | `/api/image`      | 원본/피라미드 이미지    |
+| GET    | `/api/thumbnail`  | 썸네일 생성/제공        |
+| POST   | `/api/thumbnail/preload` | 썸네일 배치 프리패치 |
+| GET    | `/api/config`     | 프론트 설정 정보        |
+| GET    | `/api/search`     | 현재 폴더 범위 검색     |
+| POST   | `/api/classify`   | AI 분류 (옵션)          |
 
-반도체 웨이퍼맵의 대용량 이미지를 효율적으로 처리하기 위한 다단계 해상도 시스템:
+## Contributing
 
-```javascript
-// 사용 예시
-const renderer = new SemiconductorRenderer(canvas, {
-    usePyramid: true,      // 이미지 피라미드 활성화
-    enhanceDefects: true,  // 불량 패턴 강조
-    debug: false           // 디버그 모드
-});
+1. Fork the project  
+2. Feature 브랜치 생성 `git checkout -b feat/my-feature`
+3. 변경 사항 커밋 `git commit -m 'feat: add my feature'`
+4. 원격 브랜치 푸시 `git push origin feat/my-feature`  
+5. Pull Request 생성
 
-await renderer.loadImage(image);
-renderer.fitToContainer(width, height);
-```
+## License
 
-**피라미드 레벨:**
-- **원본 (1x)**: 100% 이상 확대 시 사용
-- **1/2 크기 (0.5x)**: 50-100% 표시 시 사용  
-- **1/4 크기 (0.25x)**: 25-50% 표시 시 사용
+MIT License – 자세한 내용은 [LICENSE](LICENSE) 참고
 
-### 2. AI 자동 분류
+## Support
 
-ResNet50 기반 딥러닝 모델로 불량 패턴 자동 분류:
-
-```python
-# 분류 카테고리
-- Center: 중앙 불량
-- Donut: 도넛 패턴
-- Edge-Ring: 가장자리 링
-- Edge-Loc: 가장자리 국부
-- Loc: 국부 불량
-- Near-full: 거의 전체 불량
-- Random: 랜덤 불량
-- Scratch: 스크래치
-- none: 불량 없음
-```
-
-### 3. 배치 처리
-
-여러 이미지를 동시에 처리하고 분석:
-
-- 드래그 앤 드롭 멀티 선택
-- Ctrl+A 전체 선택
-- Shift+클릭 범위 선택
-- 선택된 이미지 일괄 다운로드/분류/라벨링
-
-### 4. 검색 기능
-
-고급 검색 문법 지원:
-```
-# AND 연산
-wafer and defect
-
-# OR 연산  
-center or edge
-
-# NOT 연산
-not scratch
-
-# 복합 검색
-(wafer or chip) and not random
-```
-
-## 🛠️ API 엔드포인트
-
-| 엔드포인트 | 메소드 | 설명 |
-|----------|--------|------|
-| `/api/files` | GET | 파일 목록 조회 |
-| `/api/image` | GET | 이미지 데이터 반환 |
-| `/api/thumbnail` | GET | 썸네일 생성/반환 |
-| `/api/classify` | POST | AI 분류 실행 |
-| `/api/labels` | GET/POST | 라벨 관리 |
-| `/api/search` | GET | 파일 검색 |
-
-## 📈 성능 최적화
-
-### 메모리 관리
-- 이미지 피라미드로 메모리 사용량 75% 감소
-- 스마트 캐싱으로 반복 로딩 방지
-- 주기적인 가비지 컬렉션
-
-### 렌더링 최적화
-- GPU 가속 활용
-- 픽셀 완벽 렌더링으로 안티앨리어싱 제거
-- 비동기 이미지 로딩
-
-## 🧪 테스트
-
-### 단위 테스트 실행
-```bash
-python -m pytest tests/
-```
-
-### 이미지 피라미드 테스트
-브라우저에서 `test-pyramid.html` 파일 열기
-
-## 📝 변경 이력
-
-최신 변경사항은 [CHANGELOG.md](CHANGELOG.md) 참조
-
-## 🤝 기여하기
-
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 📄 라이선스
-
-MIT License - 자세한 내용은 [LICENSE](LICENSE) 파일 참조
-
-## 👥 개발팀
-
-- **프로젝트 리드**: L3 Tracker Team
-- **이메일**: support@l3tracker.com
-
-## 🙏 감사의 글
-
-- TensorFlow/Keras 팀
-- Flask 커뮤니티
-- 오픈소스 기여자들
-
----
-
-<div align="center">
-  Made with ❤️ for Semiconductor Industry
-</div>
+- 프로젝트 문의: support@l3tracker.com
+- 버그/기능 제안: GitHub Issues 활용
