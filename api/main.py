@@ -276,6 +276,8 @@ LABELS_FILE = config.LABELS_FILE
 # ======================== Pools / State / Caches ========================
 IO_POOL = ThreadPoolExecutor(max_workers=IO_THREADS)
 THUMBNAIL_SEM = asyncio.Semaphore(THUMBNAIL_SEM_SIZE)
+_THUMBNAIL_EXECUTOR_WORKERS = max(4, min(THUMBNAIL_SEM_SIZE, (os.cpu_count() or 4) * 2))
+THUMBNAIL_EXECUTOR = ThreadPoolExecutor(max_workers=_THUMBNAIL_EXECUTOR_WORKERS)
 
 USER_ACTIVITY_FLAG = False
 BACKGROUND_TASKS_PAUSED = False
@@ -1219,40 +1221,80 @@ async def build_file_index_background():
 # ======================== Thumbnails / Common ========================
 def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple[int, int]):
     try:
-        # 썸네일 디렉토리 생성
         thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # pyvips 사용 (Pillow보다 10-100배 빠름)
+
+        fmt = THUMBNAIL_FORMAT.upper()
+
         try:
             import pyvips
-            # VIPS 로그 억제 (set_log_handler는 일부 버전에서만 지원)
             try:
                 pyvips.set_log_handler(lambda domain, level, msg: None)
             except AttributeError:
-                # set_log_handler가 없는 버전은 무시
                 pass
-            image = pyvips.Image.new_from_file(str(image_path))
-            
-            # 원본 이미지가 이미 작으면 복사만
-            if image.width <= size[0] and image.height <= size[1]:
-                image.write_to_file(str(thumbnail_path), Q=THUMBNAIL_QUALITY, strip=True)
-            else:
-                # 썸네일 생성 (고품질 리샘플링)
-                image = image.thumbnail_image(size[0], height=size[1], crop=False)
-                image.write_to_file(str(thumbnail_path), Q=THUMBNAIL_QUALITY, strip=True)
-        except ImportError:
-            # pyvips가 없으면 Pillow 사용 (폴백)
-            with Image.open(image_path) as img:
-                if img.mode not in ('RGB', 'RGBA'):
-                    img = img.convert('RGB')
-                
-                if img.width <= size[0] and img.height <= size[1]:
-                    img.save(thumbnail_path, THUMBNAIL_FORMAT.upper(), quality=THUMBNAIL_QUALITY, optimize=True, method=6)
+
+            vips_image = pyvips.Image.new_from_file(str(image_path), access='sequential', fail_on='none')
+
+            def _write(vips_obj):
+                if fmt == "PNG":
+                    vips_obj.write_to_file(
+                        str(thumbnail_path),
+                        compression=config.PNG_COMPRESSION_LEVEL,
+                        strip=True,
+                        interlace=False
+                    )
+                elif fmt == "WEBP":
+                    vips_obj.webpsave(
+                        str(thumbnail_path),
+                        Q=THUMBNAIL_QUALITY,
+                        lossless=False,
+                        effort=1,
+                        strip=True,
+                        smart_subsample=False
+                    )
                 else:
-                    img.thumbnail(size, Image.Resampling.LANCZOS)
-                    img.save(thumbnail_path, THUMBNAIL_FORMAT.upper(), quality=THUMBNAIL_QUALITY, optimize=True, method=6)
+                    vips_obj.write_to_file(
+                        str(thumbnail_path),
+                        Q=THUMBNAIL_QUALITY,
+                        strip=True
+                    )
+
+            target_w, target_h = size
+            if vips_image.width <= target_w and vips_image.height <= target_h:
+                _write(vips_image)
+            else:
+                scale = min(target_w / vips_image.width, target_h / vips_image.height)
+                scale = max(scale, 1.0 / max(vips_image.width, vips_image.height))  # avoid zero
+                resized = vips_image.resize(
+                    scale,
+                    vscale=scale,
+                    kernel=config.PYRAMID_KERNEL or 'cubic'
+                )
+                _write(resized)
+            return
+        except ImportError:
+            pass
+
+        with Image.open(image_path) as img:
+            if img.mode not in ('RGB', 'RGBA'):
+                img = img.convert('RGB')
+
+            target_w, target_h = size
+            if img.width <= target_w and img.height <= target_h:
+                resized = img.copy()
+            else:
+                resized = img.copy()
+                resized.thumbnail((target_w, target_h), Image.Resampling.BICUBIC)
+
+            save_kwargs: Dict[str, Any] = {"optimize": True}
+            if fmt == "PNG":
+                save_kwargs["compress_level"] = config.PNG_COMPRESSION_LEVEL
+            else:
+                save_kwargs["quality"] = THUMBNAIL_QUALITY
+                save_kwargs["method"] = 6
+
+            resized.save(thumbnail_path, fmt, **save_kwargs)
     except Exception as e:
-        logger.error(f"동기 썸네일 생성 실패: {image_path} -> {thumbnail_path}, 오류: {e}")
+        logger.error(f"썸네일 생성 중 오류: {image_path} -> {thumbnail_path}, 오류: {e}")
         raise
 
 async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optional[Path]:
@@ -1304,7 +1346,7 @@ async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optiona
             gen_start = time.time()
             try:
                 await asyncio.get_running_loop().run_in_executor(
-                    ThreadPoolExecutor(max_workers=1), _generate_thumbnail_sync, image_path, thumb, size
+                    THUMBNAIL_EXECUTOR, _generate_thumbnail_sync, image_path, thumb, size
                 )
                 gen_elapsed = time.time() - gen_start
                 
@@ -1872,24 +1914,31 @@ async def preload_thumbnails(request: Request, preload_req: PreloadRequest):
         if not valid_paths:
             return {"success": True, "results": [], "message": "유효한 이미지 경로가 없습니다"}
         
-        # 배치 썸네일 생성
-        results = []
-        for path_str in valid_paths[:20]:  # 최대 20개로 제한
+        # Batch thumbnail generation (async fan-out)
+        max_batch = min(len(valid_paths), 64)
+        targets = valid_paths[:max_batch]
+
+        async def _generate(path_str: str) -> Dict[str, Any]:
             try:
                 image_path = Path(path_str)
                 thumb = await generate_thumbnail(image_path, (preload_req.size, preload_req.size))
-                results.append({
+                return {
                     "path": path_str,
                     "success": thumb is not None and thumb.exists(),
                     "thumbnail": str(thumb) if thumb else None
-                })
+                }
             except Exception as e:
-                results.append({
+                return {
                     "path": path_str,
                     "success": False,
                     "error": str(e)
-                })
-        
+                }
+
+        if not targets:
+            results: List[Dict[str, Any]] = []
+        else:
+            results = await asyncio.gather(*(_generate(path_str) for path_str in targets))
+
         return {
             "success": True,
             "results": results,
@@ -2969,6 +3018,11 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     logging.getLogger("uvicorn.error").info("🛑 L3Tracker 서버 종료")
+
+    try:
+        THUMBNAIL_EXECUTOR.shutdown(wait=False, cancel_futures=False)
+    except Exception:
+        pass
 
 # ======================== __main__ ========================
 if __name__ == "__main__":

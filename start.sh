@@ -16,13 +16,14 @@ export SSL_KEYFILE="cert/server.key"
 
 # 초고속 성능 설정 (Ubuntu 24, 32코어, 198GB RAM)
 export THUMBNAIL_SIZE="512"
-export THUMBNAIL_FORMAT="WEBP"
-export THUMBNAIL_QUALITY="100"           # 최고품질 (Q=100, Lanczos3)
+export THUMBNAIL_FORMAT="PNG"
+export THUMBNAIL_QUALITY="100"           # PNG 무손실, Q=100 유지
+export PNG_COMPRESSION_LEVEL="3"
 export IO_THREADS="128"                  # 32코어 * 4 (I/O 집약적 워크로드)
 export THUMBNAIL_SEM="256"               # 동시 썸네일 생성 (충분한 RAM 활용)
 
 # libvips 최적화 (웹서버 환경 - 핵심 변경사항)
-export VIPS_CONCURRENCY="1"              # ⚠️ 웹서버 성능 최적화 (멀티프로세스 환경)
+export VIPS_CONCURRENCY="16"             # 고코어 서버용 병렬 처리
 export VIPS_DISC_THRESHOLD="10000m"      # 10GB (198GB RAM 활용)
 export VIPS_MAX_CACHE="10000"            # 캐시 10000개로 대폭 증가
 export VIPS_MAX_CACHE_MEM="20000m"       # 20GB 메모리 캐시 (초고속)
@@ -45,6 +46,9 @@ export THUMB_STAT_CACHE_CAPACITY="32768" # 썸네일 stat 캐시 증가
 # 이미지 피라미드 설정
 export PYRAMID_LEVELS="0.2,0.5,0.7,1.0"      # 피라미드 레벨 (최고품질 Q=100, Lanczos3)
 export PYRAMID_ZOOM_THRESHOLDS="0.25,0.5,0.75"  # zoom 기준 (≤0.25→0.2, ≤0.5→0.5, ≤0.75→0.7, >0.75→1.0)
+export PYRAMID_FORMAT="PNG"
+export PYRAMID_PNG_COMPRESSION="3"
+export PYRAMID_KERNEL="cubic"
 
 # 서버 시작
 python3 -m api.main

@@ -71,8 +71,8 @@ class ThumbnailService:
                     fail_on='none'
                 )
 
-                # 원본 이미지가 이미 작으면 복사만
-                if image.width <= size[0] and image.height <= size[1]:
+                target_w, target_h = size
+                if image.width <= target_w and image.height <= target_h:
                     image.write_to_file(
                         str(thumbnail_path),
                         Q=self.thumbnail_quality,
@@ -82,16 +82,14 @@ class ThumbnailService:
                         sequential=True
                     )
                 else:
-                    # 🔥 썸네일 생성 (cubic 커널 고정)
-                    image = image.thumbnail_image(
-                        size[0],
-                        height=size[1],
-                        size='down',
-                        crop='none',
-                        linear=False,
+                    scale = min(target_w / image.width, target_h / image.height)
+                    scale = max(scale, 1.0 / max(image.width, image.height))
+                    resized = image.resize(
+                        scale,
+                        vscale=scale,
                         kernel=config.PYRAMID_KERNEL or 'cubic'
                     )
-                    image.write_to_file(
+                    resized.write_to_file(
                         str(thumbnail_path),
                         Q=self.thumbnail_quality,
                         strip=True,
@@ -107,11 +105,13 @@ class ThumbnailService:
 
                     save_kwargs = self._build_pillow_save_kwargs()
 
-                    if img.width <= size[0] and img.height <= size[1]:
-                        img.save(thumbnail_path, self.thumbnail_format, **save_kwargs)
+                    target_w, target_h = size
+                    if img.width <= target_w and img.height <= target_h:
+                        resized = img.copy()
                     else:
-                        img.thumbnail(size, Image.Resampling.BICUBIC)
-                        img.save(thumbnail_path, self.thumbnail_format, **save_kwargs)
+                        resized = img.copy()
+                        resized.thumbnail((target_w, target_h), Image.Resampling.BICUBIC)
+                    resized.save(thumbnail_path, self.thumbnail_format, **save_kwargs)
             
             generation_time = time.time() - start_time
             self.total_generation_time += generation_time

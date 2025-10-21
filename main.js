@@ -34,7 +34,7 @@ const MIN_DRAG_DISTANCE = 5;
 
 const ZOOM_FACTOR = 1.2;
 
-const THUMB_BATCH_SIZE = 20;
+const THUMB_BATCH_SIZE = 48;
 
 const DEBOUNCE_DELAY = 0;
 const GRID_DRAG_CLICK_THRESHOLD = 14;
@@ -75,7 +75,7 @@ class ThumbnailManager {
 
         this.concurrentLoads = 0;
 
-        this.maxConcurrentLoads = 8;
+        this.maxConcurrentLoads = 16;
 
         this.loadQueue = [];
 
@@ -7526,22 +7526,11 @@ class WaferMapViewer {
         }
         this._pyramidLoading.add(level);
 
+        const url = `/api/image?path=${encodeURIComponent(this.selectedImagePath)}&level=${level}`;
+        let cacheStatus = 'MISS';
+
         try {
             const tStart = performance.now();
-            const url = `/api/image?path=${encodeURIComponent(this.selectedImagePath)}&level=${level}`;
-
-            // 🚀 1️⃣ HEAD 요청으로 파일 존재 여부 먼저 확인
-            const tHeadStart = performance.now();
-            const headResponse = await fetch(url, { method: 'HEAD' });
-            const tHeadEnd = performance.now();
-
-            // 파일이 없으면 (404 or 500) 스킵
-            if (!headResponse.ok) {
-                this._pyramidLoading.delete(level);
-                return;
-            }
-
-            // 🚀 2️⃣ 파일이 존재하면 즉시 다운로드
             const tFetchStart = performance.now();
             const response = await fetch(url);
             const tFetchEnd = performance.now();
@@ -7549,6 +7538,8 @@ class WaferMapViewer {
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
+
+            cacheStatus = response.headers.get('X-Cache-Status') || 'MISS';
 
             const tBlobStart = performance.now();
             const blob = await response.blob();
@@ -7562,7 +7553,6 @@ class WaferMapViewer {
             if (this.semiconductorRenderer?.isGpuAvailable()) {
                 this.semiconductorRenderer.uploadLevelBitmap(level, bitmap);
             }
-            this._pyramidLoading.delete(level);  // 🔥 로딩 완료
 
             // 현재 줌에 적합하면 즉시 교체
             const bestLevel = this.getBestPyramidLevel(this.transform.scale);
@@ -7576,33 +7566,25 @@ class WaferMapViewer {
                 this.scheduleDraw();
 
                 // 📊 로드 로그
-                const headTime = (tHeadEnd - tHeadStart).toFixed(0);
                 const fetchTime = (tFetchEnd - tFetchStart).toFixed(0);
                 const blobTime = (tBlobEnd - tBlobStart).toFixed(0);
                 const bitmapTime = (tBitmapEnd - tBitmapStart).toFixed(0);
                 const totalTime = (performance.now() - tStart).toFixed(0);
 
-                // 🔥 파일이 이미 존재했는지 확인 (HEAD 응답 헤더)
-                const cacheStatus = headResponse.headers.get('X-Cache-Status');
-                const isAlreadyExist = cacheStatus === 'HIT';
-
-                if (isAlreadyExist) {
-                    // 파일이 이미 존재 → SWITCH로 표시
-                    console.log(`🎯 [SWITCH] Lv${level} | ${this.originalWidth}×${this.originalHeight} → ${bitmap.width}×${bitmap.height} | Zoom:${this.transform.scale.toFixed(2)} | Head:${headTime}ms Fetch:${fetchTime}ms Total:${totalTime}ms`);
+                if (cacheStatus === 'HIT' || cacheStatus === 'ORIGINAL') {
+                    console.log(`🎯 [SWITCH] Lv${level} | ${this.originalWidth}×${this.originalHeight} → ${bitmap.width}×${bitmap.height} | Zoom:${this.transform.scale.toFixed(2)} | Fetch:${fetchTime}ms Total:${totalTime}ms`);
                 } else {
-                    // 파일 새로 생성 → ASYNC로 표시
-                    console.log(`🔄 [ASYNC] Lv${level} | ${this.originalWidth}×${this.originalHeight} → ${bitmap.width}×${bitmap.height} | Zoom:${this.transform.scale.toFixed(2)} | Head:${headTime}ms Fetch:${fetchTime}ms Blob:${blobTime}ms Bitmap:${bitmapTime}ms | Total:${totalTime}ms`);
+                    console.log(`🔄 [ASYNC] Lv${level} | ${this.originalWidth}×${this.originalHeight} → ${bitmap.width}×${bitmap.height} | Zoom:${this.transform.scale.toFixed(2)} | Fetch:${fetchTime}ms Blob:${blobTime}ms Bitmap:${bitmapTime}ms | Total:${totalTime}ms`);
                 }
             } else if (silent) {
-                // 🔥 Background prefetch 완료 (조용히 로드)
-                const cacheStatus = headResponse.headers.get('X-Cache-Status');
                 const totalTime = (performance.now() - tStart).toFixed(0);
                 console.log(`✅ [PREFETCH] Lv${level} 다운로드 완료 (${bitmap.width}×${bitmap.height}) | Cache:${cacheStatus} | ${totalTime}ms`);
             }
 
         } catch (err) {
             console.error(`❌ [ERROR] 피라미드 로드 실패 level=${level}:`, err);
-            this._pyramidLoading.delete(level);  // 🔥 에러 시에도 제거
+        } finally {
+            this._pyramidLoading.delete(level);
         }
 
     }
