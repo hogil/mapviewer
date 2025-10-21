@@ -34,6 +34,16 @@ class SemiconductorRenderer {
             desynchronized: true,
             willReadFrequently: false
         });
+        this.gl = null;
+        this.gpuProgram = null;
+        this.positionBuffer = null;
+        this.texCoordBuffer = null;
+        this.uniformLocations = {};
+        this.attributeLocations = {};
+        this.levelTextures = new Map();
+        this.imageSize = { width: 1, height: 1 };
+        this.viewportSize = { width: 0, height: 0 };
+        this._gpuReady = false;
         
         // 기본 옵션 설정
         this.options = {
@@ -107,6 +117,267 @@ class SemiconductorRenderer {
         });
     }
     
+    _initWebGL() {
+        if (this._gpuReady) {
+            return;
+        }
+
+        const attributes = {
+            alpha: false,
+            antialias: false,
+            depth: false,
+            preserveDrawingBuffer: false,
+            premultipliedAlpha: false
+        };
+
+        try {
+            const gl = this.canvas.getContext('webgl2', attributes) || this.canvas.getContext('webgl', attributes);
+            if (!gl) {
+                this._gpuReady = false;
+                return;
+            }
+
+            this.gl = gl;
+            const vertexSrc = `
+attribute vec2 a_position;
+attribute vec2 a_texCoord;
+uniform vec2 u_viewportSize;
+uniform float u_scale;
+uniform vec2 u_translate;
+varying vec2 v_texCoord;
+
+void main() {
+    vec2 scaled = (a_position * u_scale) + u_translate;
+    vec2 clip = vec2(
+        (scaled.x / u_viewportSize.x) * 2.0 - 1.0,
+        1.0 - (scaled.y / u_viewportSize.y) * 2.0
+    );
+    gl_Position = vec4(clip, 0.0, 1.0);
+    v_texCoord = a_texCoord;
+}
+`;
+            const fragmentSrc = `
+precision highp float;
+
+uniform sampler2D u_texture;
+uniform vec2 u_textureSize;
+varying vec2 v_texCoord;
+
+float cubic(float v) {
+    v = abs(v);
+    if (v <= 1.0) {
+        return (1.5 * v - 2.5) * v * v + 1.0;
+    } else if (v < 2.0) {
+        return ((-0.5 * v + 2.5) * v - 4.0) * v + 2.0;
+    }
+    return 0.0;
+}
+
+vec4 textureBicubic(sampler2D tex, vec2 uv) {
+    vec2 texSize = u_textureSize;
+    vec2 coord = uv * texSize - 0.5;
+    vec2 f = fract(coord);
+    vec2 base = floor(coord) - 1.0;
+    vec4 color = vec4(0.0);
+    for (int j = 0; j < 4; ++j) {
+        float wy = cubic(float(j) - 1.0 - f.y);
+        for (int i = 0; i < 4; ++i) {
+            float wx = cubic(float(i) - 1.0 - f.x);
+            vec2 sampleCoord = (base + vec2(float(i), float(j)) + 0.5) / texSize;
+            sampleCoord = clamp(sampleCoord, vec2(0.0), vec2(1.0));
+            color += texture2D(tex, sampleCoord) * wx * wy;
+        }
+    }
+    return color;
+}
+
+void main() {
+    gl_FragColor = textureBicubic(u_texture, v_texCoord);
+}
+`;
+
+            const vertexShader = this._compileShader(gl.VERTEX_SHADER, vertexSrc);
+            const fragmentShader = this._compileShader(gl.FRAGMENT_SHADER, fragmentSrc);
+            if (!vertexShader || !fragmentShader) {
+                this._gpuReady = false;
+                return;
+            }
+
+            this.gpuProgram = this._createProgram(vertexShader, fragmentShader);
+            if (!this.gpuProgram) {
+                this._gpuReady = false;
+                return;
+            }
+
+            gl.useProgram(this.gpuProgram);
+            this.attributeLocations = {
+                position: gl.getAttribLocation(this.gpuProgram, 'a_position'),
+                texCoord: gl.getAttribLocation(this.gpuProgram, 'a_texCoord')
+            };
+            this.uniformLocations = {
+                viewportSize: gl.getUniformLocation(this.gpuProgram, 'u_viewportSize'),
+                scale: gl.getUniformLocation(this.gpuProgram, 'u_scale'),
+                translate: gl.getUniformLocation(this.gpuProgram, 'u_translate'),
+                textureSize: gl.getUniformLocation(this.gpuProgram, 'u_textureSize'),
+                texture: gl.getUniformLocation(this.gpuProgram, 'u_texture')
+            };
+
+            this.positionBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                0, 0,
+                this.imageSize.width, 0,
+                0, this.imageSize.height,
+                this.imageSize.width, this.imageSize.height
+            ]), gl.DYNAMIC_DRAW);
+
+            this.texCoordBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                0, 0,
+                1, 0,
+                0, 1,
+                1, 1
+            ]), gl.STATIC_DRAW);
+
+            gl.disable(gl.DEPTH_TEST);
+            gl.clearColor(0, 0, 0, 1);
+
+            this._gpuReady = true;
+        } catch (error) {
+            console.warn('[SemiconductorRenderer] WebGL 초기화 실패, 2D 경로 사용', error);
+            this.gl = null;
+            this.gpuProgram = null;
+            this._gpuReady = false;
+        }
+    }
+
+    _compileShader(type, source) {
+        if (!this.gl) return null;
+        const shader = this.gl.createShader(type);
+        this.gl.shaderSource(shader, source);
+        this.gl.compileShader(shader);
+        if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
+            console.warn('[SemiconductorRenderer] Shader compile error:', this.gl.getShaderInfoLog(shader));
+            this.gl.deleteShader(shader);
+            return null;
+        }
+        return shader;
+    }
+
+    _createProgram(vertexShader, fragmentShader) {
+        if (!this.gl) return null;
+        const program = this.gl.createProgram();
+        this.gl.attachShader(program, vertexShader);
+        this.gl.attachShader(program, fragmentShader);
+        this.gl.linkProgram(program);
+        if (!this.gl.getProgramParameter(program, this.gl.LINK_STATUS)) {
+            console.warn('[SemiconductorRenderer] Program link error:', this.gl.getProgramInfoLog(program));
+            this.gl.deleteProgram(program);
+            return null;
+        }
+        this.gl.deleteShader(vertexShader);
+        this.gl.deleteShader(fragmentShader);
+        return program;
+    }
+
+    isGpuAvailable() {
+        return this._gpuReady && !!this.gl && !!this.gpuProgram;
+    }
+
+    resetTextures() {
+        if (this.gl) {
+            for (const info of this.levelTextures.values()) {
+                this.gl.deleteTexture(info.texture);
+            }
+        }
+        this.levelTextures.clear();
+    }
+
+    setImageSize(width, height) {
+        this.imageSize = { width, height };
+        if (!this.gl || !this.positionBuffer) {
+            return;
+        }
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer);
+        this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array([
+            0, 0,
+            width, 0,
+            0, height,
+            width, height
+        ]), this.gl.DYNAMIC_DRAW);
+    }
+
+    uploadLevelBitmap(level, bitmap) {
+        if (!this.isGpuAvailable()) {
+            return;
+        }
+        const existing = this.levelTextures.get(level);
+        if (existing) {
+            this.gl.deleteTexture(existing.texture);
+        }
+
+        const texture = this.gl.createTexture();
+        this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+        this.gl.pixelStorei(this.gl.UNPACK_FLIP_Y_WEBGL, false);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.NEAREST);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.NEAREST);
+        this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, bitmap);
+
+        this.levelTextures.set(level, {
+            texture,
+            width: bitmap.width,
+            height: bitmap.height
+        });
+    }
+
+    setActiveLevel(level) {
+        this._lastLevelKey = String(level);
+    }
+
+    drawGpu({ level, viewportWidth, viewportHeight, scale, translateX, translateY }) {
+        if (!this.isGpuAvailable()) {
+            return false;
+        }
+        const info = this.levelTextures.get(level) || this.levelTextures.get(Number(this._lastLevelKey)) || null;
+        if (!info) {
+            return false;
+        }
+        this._lastLevelKey = String(level);
+
+        if (this.canvas.width !== viewportWidth || this.canvas.height !== viewportHeight) {
+            this.canvas.width = viewportWidth;
+            this.canvas.height = viewportHeight;
+        }
+
+        const gl = this.gl;
+        gl.viewport(0, 0, viewportWidth, viewportHeight);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.useProgram(this.gpuProgram);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
+        gl.enableVertexAttribArray(this.attributeLocations.position);
+        gl.vertexAttribPointer(this.attributeLocations.position, 2, gl.FLOAT, false, 0, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordBuffer);
+        gl.enableVertexAttribArray(this.attributeLocations.texCoord);
+        gl.vertexAttribPointer(this.attributeLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
+
+        gl.uniform2f(this.uniformLocations.viewportSize, viewportWidth, viewportHeight);
+        gl.uniform1f(this.uniformLocations.scale, scale);
+        gl.uniform2f(this.uniformLocations.translate, translateX, translateY);
+        gl.uniform2f(this.uniformLocations.textureSize, info.width, info.height);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, info.texture);
+        gl.uniform1i(this.uniformLocations.texture, 0);
+
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        return true;
+    }
+    
     /**
      * 이미지 로드 및 피라미드 생성
      * @param {HTMLImageElement} image - 로드할 이미지
@@ -127,6 +398,15 @@ class SemiconductorRenderer {
         this.pyramidVersion = version;
         this.generatingLevels.clear();
         this.isGeneratingPyramid = false;
+
+        if (this.isGpuAvailable()) {
+            this.resetTextures();
+            if (image.width && image.height) {
+                this.setImageSize(image.width, image.height);
+            }
+            this.uploadLevelBitmap(1, image);
+            this.setActiveLevel(1);
+        }
         
         // 이미지 피라미드 "비차단" 생성 (백그라운드)
         if (this.options.usePyramid) {
@@ -176,6 +456,9 @@ class SemiconductorRenderer {
                         // 최신 이미지인지 확인 후 반영
                         if (version === this.imageVersion) {
                             this.imagePyramid[key] = bmp;
+                            if (this.isGpuAvailable()) {
+                                this.uploadLevelBitmap(parseFloat(key), bmp);
+                            }
                             this.pyramidVersion = version;
                             this.log(`피라미드 레벨 준비 완료: ${key} (${bmp.width}x${bmp.height})`);
                         }
@@ -485,6 +768,7 @@ class SemiconductorRenderer {
         // 이미지 피라미드 정리
         this.imagePyramid = {};
         this.currentImage = null;
+        this.resetTextures();
         
         // 캔버스 정리
         if (this.ctx) {

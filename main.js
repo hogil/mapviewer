@@ -618,6 +618,9 @@ function setPixelPerfectRendering(ctx) {
     }
 
 }
+
+
+
 class WaferMapViewer {
 
     constructor() {
@@ -651,6 +654,7 @@ class WaferMapViewer {
         // 반도체 특화 렌더러 초기화
 
         this.semiconductorRenderer = null;
+        this.usingGpuRenderer = false;
 
         this.initSemiconductorRenderer();
 
@@ -694,6 +698,7 @@ class WaferMapViewer {
 
             });
 
+            this.usingGpuRenderer = this.semiconductorRenderer.isGpuAvailable();
             this.debugLog('반도체 특화 렌더러 초기화 완료');
 
         } else {
@@ -1324,6 +1329,9 @@ class WaferMapViewer {
         }
 
     }
+
+
+
     // 파일 탐색기에서 하위 폴더 목록 로드 (항상 이미지 폴더 최상위 기준)
 
     async loadSubfoldersFromFileExplorer() {
@@ -2048,6 +2056,7 @@ class WaferMapViewer {
             console.error('제품 목록 로드 실패:', error);
         }
     }
+
     // 제품 검색 드롭다운 표시
     displayProductSearchDropdown(folders) {
         this.debugLog('🔍 [DEBUG] displayProductSearchDropdown 호출됨, 폴더 수:', folders.length);
@@ -2741,6 +2750,9 @@ class WaferMapViewer {
         }
 
     }
+
+
+
     // 폴더들을 아이콘 방식으로 표시
 
     displayFoldersAsIcons(folders) {
@@ -3052,6 +3064,9 @@ class WaferMapViewer {
         this.debugLog('🔷 초기 상태 표시 완료 - 미니맵 숨김');
 
     }
+
+
+
     bindGridEvents() {
 
         const grid = document.getElementById('image-grid');
@@ -3782,6 +3797,9 @@ class WaferMapViewer {
         this.boundHandleViewportDragEnd = this.handleViewportDragEnd.bind(this);
 
     }
+
+
+
     bindGridControlEvents() {
 
         const gridZoom = document.getElementById('grid-zoom-range');
@@ -4372,6 +4390,9 @@ class WaferMapViewer {
         }
 
     }
+
+
+
     async performSearch() {
 
         try {
@@ -5092,6 +5113,9 @@ class WaferMapViewer {
         }
 
     }
+
+
+
     initializeContextMenu() {
 
         const downloadItem = document.getElementById('context-download');
@@ -5856,6 +5880,9 @@ class WaferMapViewer {
         }
 
     }
+
+
+
     async requestClipboardPermission() {
 
         try {
@@ -6497,6 +6524,9 @@ class WaferMapViewer {
         };
 
     }
+
+
+
     async handleFileClick(e) {
 
         const target = e.target;
@@ -7166,6 +7196,9 @@ class WaferMapViewer {
             };
         }
     }
+
+    
+    
     async loadImage(path) {
 
         try {
@@ -7272,6 +7305,10 @@ class WaferMapViewer {
                 // 원본 크기 저장
         this.originalWidth = sizeData.width;
         this.originalHeight = sizeData.height;
+        if (this.semiconductorRenderer?.isGpuAvailable()) {
+            this.semiconductorRenderer.setImageSize(this.originalWidth, this.originalHeight);
+            this.usingGpuRenderer = true;
+        }
         
         // 🚀 2단계: resetView에서 사용할 zoom 계산 (실제 resetView 로직과 완전 동일)
         const containerRect = this.dom.viewerContainer.getBoundingClientRect();
@@ -7354,6 +7391,11 @@ class WaferMapViewer {
         
         // 캐시 저장
         this.pyramidLevels[initialLevel] = bitmap;
+        if (this.semiconductorRenderer?.isGpuAvailable()) {
+            this.semiconductorRenderer.uploadLevelBitmap(initialLevel, bitmap);
+            this.semiconductorRenderer.setActiveLevel(initialLevel);
+            this.usingGpuRenderer = true;
+        }
         this.currentImageBitmap = bitmap;
         this.currentImage = bitmap;
         this.currentPyramidLevel = initialLevel;
@@ -7517,6 +7559,9 @@ class WaferMapViewer {
             const tBitmapEnd = performance.now();
 
             this.pyramidLevels[level] = bitmap;
+            if (this.semiconductorRenderer?.isGpuAvailable()) {
+                this.semiconductorRenderer.uploadLevelBitmap(level, bitmap);
+            }
             this._pyramidLoading.delete(level);  // 🔥 로딩 완료
 
             // 현재 줌에 적합하면 즉시 교체
@@ -7525,6 +7570,9 @@ class WaferMapViewer {
             if (bestLevel === level && !silent) {
                 this.currentImage = bitmap;
                 this.currentPyramidLevel = level;
+                if (this.semiconductorRenderer?.isGpuAvailable()) {
+                    this.semiconductorRenderer.setActiveLevel(level);
+                }
                 this.scheduleDraw();
 
                 // 📊 로드 로그
@@ -7533,11 +7581,6 @@ class WaferMapViewer {
                 const blobTime = (tBlobEnd - tBlobStart).toFixed(0);
                 const bitmapTime = (tBitmapEnd - tBitmapStart).toFixed(0);
                 const totalTime = (performance.now() - tStart).toFixed(0);
-
-                // 📸 INIT 요약 로그 (요청 형식)
-                const initNewW = Math.round(this.originalWidth * level);
-                const initNewH = Math.round(this.originalHeight * level);
-                console.log(`📸 [INIT] Lv${level} | ${this.originalWidth}×${this.originalHeight} → ${initNewW}×${initNewH} | Zoom:${this.transform.scale.toFixed(2)} | Fetch:${fetchTime}ms Blob:${blobTime}ms Bitmap:${bitmapTime}ms | Total:${totalTime}ms`);
 
                 // 🔥 파일이 이미 존재했는지 확인 (HEAD 응답 헤더)
                 const cacheStatus = headResponse.headers.get('X-Cache-Status');
@@ -7554,24 +7597,7 @@ class WaferMapViewer {
                 // 🔥 Background prefetch 완료 (조용히 로드)
                 const cacheStatus = headResponse.headers.get('X-Cache-Status');
                 const totalTime = (performance.now() - tStart).toFixed(0);
-                console.log(`✅ [PREFETCH] Lv${level} 다운로드 완료 (${bitmap.width}×${bitmap.height}) | Cache:${cacheStatus}`);
-                // 상세 타이밍 및 병목 표시
-                const headTime = (tHeadEnd - tHeadStart);
-                const fetchTime = (tFetchEnd - tFetchStart);
-                const blobTime = (tBlobEnd - tBlobStart);
-                const bitmapTime = (tBitmapEnd - tBitmapStart);
-                console.log(`📊 [TIMING] Head:${headTime.toFixed(0)}ms (Req:${headTime.toFixed(0)}ms Parse:0ms) | Fetch:${fetchTime.toFixed(0)}ms (Req:${fetchTime.toFixed(0)}ms Parse:0ms) | Blob:${blobTime.toFixed(0)}ms (Read:${blobTime.toFixed(0)}ms) | Bitmap:${bitmapTime.toFixed(0)}ms | Total:${totalTime}ms`);
-                console.log(`🔍 [DETAILS] Head=파일 존재 확인 | Fetch=실제 다운로드 | Blob=메모리 변환 | Bitmap=GPU 텍스처 생성`);
-                const parts = [
-                    { name: 'HEADREQUEST', time: headTime },
-                    { name: 'FETCHREQUEST', time: fetchTime },
-                    { name: 'BLOBREAD', time: blobTime },
-                    { name: 'BITMAP', time: bitmapTime }
-                ];
-                const max = Math.max(...parts.map(p => p.time));
-                const bottleneck = parts.find(p => p.time === max);
-                const pct = ((max / parseFloat(totalTime)) * 100).toFixed(1);
-                console.log(`🎯 [BOTTLENECK] ${bottleneck.name} (${max.toFixed(0)}ms, ${pct}%)`);
+                console.log(`✅ [PREFETCH] Lv${level} 다운로드 완료 (${bitmap.width}×${bitmap.height}) | Cache:${cacheStatus} | ${totalTime}ms`);
             }
 
         } catch (err) {
@@ -7620,6 +7646,9 @@ class WaferMapViewer {
                 this.currentImage = this.pyramidLevels[bestLevel];
 
                 this.currentPyramidLevel = bestLevel;
+                if (this.semiconductorRenderer?.isGpuAvailable()) {
+                    this.semiconductorRenderer.setActiveLevel(bestLevel);
+                }
 
                 this.scheduleDraw();
 
@@ -7696,6 +7725,19 @@ class WaferMapViewer {
 
         this.dom.viewerContainer.style.position = 'relative';
 
+        let usedGpu = false;
+        if (this.semiconductorRenderer && this.usingGpuRenderer) {
+            usedGpu = this.semiconductorRenderer.drawGpu({
+                level: this.currentPyramidLevel,
+                viewportWidth: width,
+                viewportHeight: height,
+                scale: this.transform.scale,
+                translateX: this.transform.dx,
+                translateY: this.transform.dy
+            });
+        }
+
+        if (!usedGpu) {
         // Set canvas background to black
 
         this.imageCtx.save();
@@ -7757,6 +7799,7 @@ class WaferMapViewer {
         
         
         this.imageCtx.restore();
+        }
 
         this.updateMinimap();
 
@@ -7961,6 +8004,9 @@ class WaferMapViewer {
             // do not preventDefault
         }
     }
+
+
+
     /**
      * 🖱️ [SCROLL SYSTEM] 마우스 휠 이벤트 처리 흐름
      * 
@@ -8343,6 +8389,9 @@ class WaferMapViewer {
         this.setupFolderBrowserEvents();
 
     }
+
+
+
     async refreshClassList() {
 
         const container = this.dom.classList;
@@ -9135,6 +9184,9 @@ class WaferMapViewer {
         }
 
     }
+
+
+
     async labelImage() {
 
         const container = document.getElementById('label-explorer-list');
@@ -9841,6 +9893,9 @@ class WaferMapViewer {
         modal.style.display = 'flex';
 
     }
+
+    
+    
     async loadExistingLabels(container, selectedImages) {
 
         if (!selectedImages || selectedImages.length === 0) {
@@ -10388,6 +10443,9 @@ class WaferMapViewer {
         }
 
     }
+
+
+
     // --- LABEL EXPLORER ---
 
     async refreshLabelExplorer() {
@@ -11102,6 +11160,9 @@ class WaferMapViewer {
         }
 
     }
+
+
+
     renderLabelExplorerContent(container, classes, classToImgList, labelSelection) {
 
         container.innerHTML = '';
@@ -11425,6 +11486,7 @@ class WaferMapViewer {
                     }
 
                 }, true); // capture phase로 등록
+
                 const imgList = classToImgList[cls] || [];
 
                 for (let i = 0; i < imgList.length; ++i) {
@@ -12222,6 +12284,9 @@ class WaferMapViewer {
         }
 
     }
+
+
+
     updateLabelExplorerContent() {
 
         // 🔥 폴더 열기/닫기 시 전체 내용 다시 렌더링
@@ -12962,6 +13027,9 @@ class WaferMapViewer {
         // 🔥 그리드 재생성 후 레이아웃 캐시 무효화 (드래그 영역 재계산용)
         this.invalidateGridGeometry();
     }
+
+
+
     showGridImmediately(images) {
         const grid = document.getElementById('image-grid');
         images.forEach((imgPath, idx) => {
@@ -13760,6 +13828,7 @@ class WaferMapViewer {
             return false;
         }
     }
+
     async clearAllCache() {
 
         try {
@@ -14560,6 +14629,9 @@ class WaferMapViewer {
         this.dom.imageCanvas.ondblclick = null;
 
     }
+
+
+
     updateGridSquaresPixel() {
 
         const grid = document.getElementById('image-grid');
@@ -15279,6 +15351,9 @@ async function fetchJson(url, options = {}) {
     return res.json();
 
 } 
+
+
+
 // 성능 모니터링 및 디버그 도구 (개발자용)
 
 if (window.location.hash === '#debug') {

@@ -24,13 +24,13 @@ class ThumbnailService:
         self, 
         root_dir: Path, 
         thumbnail_dir: Path, 
-        thumbnail_format: str = "WEBP",
+        thumbnail_format: str = None,
         thumbnail_quality: int = 90,
         max_concurrent: int = None
     ):
         self.root_dir = root_dir
         self.thumbnail_dir = thumbnail_dir
-        self.thumbnail_format = thumbnail_format
+        self.thumbnail_format = (thumbnail_format or config.THUMBNAIL_FORMAT).upper()
         self.thumbnail_quality = thumbnail_quality
         # max_concurrent가 None이면 config에서 가져오기
         if max_concurrent is None:
@@ -68,38 +68,34 @@ class ThumbnailService:
                 image = pyvips.Image.new_from_file(
                     str(image_path),
                     access='sequential',
-                    fail_on='none'  # 경고 무시하고 최대 속도
+                    fail_on='none'
                 )
 
                 # 원본 이미지가 이미 작으면 복사만
                 if image.width <= size[0] and image.height <= size[1]:
-                    # 🔥 초고속 최적화: effort=1, lossless=False
                     image.write_to_file(
                         str(thumbnail_path),
                         Q=self.thumbnail_quality,
                         strip=True,
-                        lossless=False,    # 무손실 비활성화 (속도 우선)
-                        effort=1,          # 4→1로 변경 (초고속)
+                        compression=config.PNG_COMPRESSION_LEVEL,
                         interlace=False,
                         sequential=True
                     )
                 else:
-                    # 🔥 썸네일 생성 (lanczos3 유지 - 최고품질)
+                    # 🔥 썸네일 생성 (cubic 커널 고정)
                     image = image.thumbnail_image(
                         size[0],
                         height=size[1],
-                        size='down',       # 축소만 (속도 개선)
-                        crop='none',       # 크롭 없음
-                        linear=False,      # sRGB 유지 (속도 개선)
-                        kernel='lanczos3'  # 최고품질 유지
+                        size='down',
+                        crop='none',
+                        linear=False,
+                        kernel=config.PYRAMID_KERNEL or 'cubic'
                     )
-                    # 🔥 초고속 최적화: effort=1, lossless=False
                     image.write_to_file(
                         str(thumbnail_path),
                         Q=self.thumbnail_quality,
                         strip=True,
-                        lossless=False,    # 무손실 비활성화 (속도 우선)
-                        effort=1,          # 4→1로 변경 (초고속)
+                        compression=config.PNG_COMPRESSION_LEVEL,
                         interlace=False,
                         sequential=True
                     )
@@ -109,11 +105,13 @@ class ThumbnailService:
                     if img.mode not in ('RGB', 'RGBA'):
                         img = img.convert('RGB')
 
+                    save_kwargs = self._build_pillow_save_kwargs()
+
                     if img.width <= size[0] and img.height <= size[1]:
-                        img.save(thumbnail_path, self.thumbnail_format.upper(), quality=self.thumbnail_quality, optimize=True, method=6)
+                        img.save(thumbnail_path, self.thumbnail_format, **save_kwargs)
                     else:
-                        img.thumbnail(size, Image.Resampling.LANCZOS)
-                        img.save(thumbnail_path, self.thumbnail_format.upper(), quality=self.thumbnail_quality, optimize=True, method=6)
+                        img.thumbnail(size, Image.Resampling.BICUBIC)
+                        img.save(thumbnail_path, self.thumbnail_format, **save_kwargs)
             
             generation_time = time.time() - start_time
             self.total_generation_time += generation_time
@@ -124,6 +122,20 @@ class ThumbnailService:
         except Exception as e:
             print(f"썸네일 생성 실패 {image_path}: {e}")
             return False
+
+    def _build_pillow_save_kwargs(self) -> Dict[str, Any]:
+        """Pillow 저장시 포맷별 옵션"""
+        fmt = self.thumbnail_format.upper()
+        if fmt == "PNG":
+            return {
+                "compress_level": config.PNG_COMPRESSION_LEVEL,
+                "optimize": True
+            }
+        return {
+            "quality": self.thumbnail_quality,
+            "optimize": True,
+            "method": 6
+        }
     
     async def generate_thumbnail(
         self, 

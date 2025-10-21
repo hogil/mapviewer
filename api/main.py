@@ -1415,6 +1415,9 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
 
     logger.info(f"🚀 [PYRAMID] 시작: level={level}")
 
+    target_format = config.PYRAMID_FORMAT.upper()
+    is_png = target_format == "PNG"
+
     try:
         # PyVips로 초고속 처리 시도
         import pyvips
@@ -1429,44 +1432,55 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
 
         # 🚀 크기 계산 (원본 정보만 먼저 로드)
         t1 = time.time()
-        image_info = pyvips.Image.new_from_file(str(image_path), access='sequential')
-        orig_w, orig_h = image_info.width, image_info.height
-        new_w = int(orig_w * level)
-        new_h = int(orig_h * level)
-        del image_info
+        image = pyvips.Image.new_from_file(str(image_path), access='sequential')
+        orig_w, orig_h = image.width, image.height
+        new_w = max(1, int(orig_w * level))
+        new_h = max(1, int(orig_h * level))
         logger.info(f"⏱️ [DEBUG] 크기 계산 ({orig_w}x{orig_h} → {new_w}x{new_h}): {(time.time()-t1)*1000:.0f}ms")
+
+        save_kwargs: Dict[str, Any] = {}
+        save_method = "write_to_file"
+        if is_png:
+            save_kwargs = {
+                "compression": config.PYRAMID_PNG_COMPRESSION,
+                "strip": True,
+                "interlace": False
+            }
+        elif target_format == "WEBP":
+            save_method = "webpsave"
+            save_kwargs = {
+                "Q": config.PYRAMID_Q,
+                "lossless": False,
+                "effort": 1,
+                "strip": True,
+                "smart_subsample": False
+            }
+        else:
+            save_kwargs = {
+                "Q": config.PYRAMID_Q,
+                "strip": True
+            }
 
         # 🚀 핵심 최적화: thumbnail() 사용 (JPEG shrink-on-load 활용, 6배 빠름!)
         if level >= 1.0:
-            # Level 1.0: 원본 파일 복사 (재인코딩 방지, 56배 빠름!)
+            # Level 1.0: 포맷에 맞춰 그대로 저장 (PNG 레벨3)
             t2 = time.time()
-            import shutil
-            shutil.copy2(image_path, pyramid_path)
-            logger.info(f"⏱️ [DEBUG] 파일 복사: {(time.time()-t2)*1000:.0f}ms")
-            logger.info(f"✅ [COPY] Level 1.0 - 원본 복사")
+            getattr(image, save_method)(str(pyramid_path), **save_kwargs)
+            logger.info(f"⏱️ [DEBUG] 전체 해상도 저장: {(time.time()-t2)*1000:.0f}ms")
+            logger.info(f"✅ [COPY] Level 1.0 - {target_format} 재인코딩")
         else:
-            # pyvips로 이미지 로드 후 resize() 사용 (Lanczos3 지원)
+            # pyvips로 이미지 리사이즈 (cubic 커널 강제)
             t2 = time.time()
-            img = pyvips.Image.new_from_file(str(image_path), access='sequential')
-
-            # Lanczos3 커널로 리사이즈
             scale_w = new_w / orig_w
             scale_h = new_h / orig_h
-            resized = img.resize(scale_w, vscale=scale_h, kernel='lanczos3')
-            logger.info(f"⏱️ [DEBUG] resize(lanczos3) 리사이즈: {(time.time()-t2)*1000:.0f}ms")
+            resized = image.resize(scale_w, vscale=scale_h, kernel=config.PYRAMID_KERNEL or 'cubic')
+            logger.info(f"⏱️ [DEBUG] resize({config.PYRAMID_KERNEL or 'cubic'}) 리사이즈: {(time.time()-t2)*1000:.0f}ms")
 
-            # Q=100, Lanczos3으로 최고 품질 저장 (WebP)
+            # 지정 포맷으로 저장
             t3 = time.time()
-            resized.webpsave(
-                str(pyramid_path),
-                Q=100,                    # 최고 품질
-                strip=True,               # 메타데이터 제거
-                lossless=False,           # 손실 압축 (더 작은 파일)
-                effort=1,                 # 빠른 인코딩 (0-6, 낮을수록 빠름)
-                smart_subsample=False     # 빠른 인코딩
-            )
+            getattr(resized, save_method)(str(pyramid_path), **save_kwargs)
             t4 = time.time()
-            logger.info(f"⏱️ [DEBUG] webpsave(Q=100) 저장: {(t4-t3)*1000:.0f}ms")
+            logger.info(f"⏱️ [DEBUG] 저장 완료: {(t4-t3)*1000:.0f}ms ({target_format})")
 
         # 시간 측정 및 로그
         elapsed = time.time() - start_time
@@ -1484,14 +1498,25 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
 
         with Image.open(image_path) as img:
             orig_w, orig_h = img.size
-            new_w = int(orig_w * level)
-            new_h = int(orig_h * level)
+            new_w = max(1, int(orig_w * level))
+            new_h = max(1, int(orig_h * level))
 
-            # 리사이즈 (LANCZOS: 최고 품질)
-            resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            if img.mode not in ("RGB", "RGBA"):
+                img = img.convert("RGB")
 
-            # WebP로 저장 (Q=100, 최고 품질 유지)
-            resized.save(pyramid_path, format="WEBP", quality=100, lossless=False, method=1)
+            if level >= 1.0:
+                resized = img
+            else:
+                resized = img.resize((new_w, new_h), Image.Resampling.BICUBIC)
+
+            pillow_kwargs: Dict[str, Any] = {"optimize": True}
+            if is_png:
+                pillow_kwargs["compress_level"] = config.PYRAMID_PNG_COMPRESSION
+            else:
+                pillow_kwargs["quality"] = config.PYRAMID_Q
+                pillow_kwargs["method"] = 1
+
+            resized.save(pyramid_path, format=target_format, **pillow_kwargs)
 
             # 시간 측정 및 로그
             elapsed = time.time() - start_time
@@ -1521,6 +1546,7 @@ _pyramid_bg_generating = set()  # 현재 생성 중인 파일 경로
 
 async def _generate_other_levels_background(image_path: Path, current_level: float, stem: str):
     """다른 피라미드 레벨들을 background에서 생성"""
+    format_ext = config.PYRAMID_FORMAT.lower()
     try:
         # 생성할 레벨 목록 (현재 레벨 제외)
         other_levels = [l for l in config.PYRAMID_LEVELS if l != current_level]
@@ -1528,7 +1554,7 @@ async def _generate_other_levels_background(image_path: Path, current_level: flo
         for other_level in other_levels:
             # 피라미드 경로 생성
             pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{int(other_level*100)}"
-            pyramid_path = pyramid_dir / f"{stem}_L{int(other_level*100)}.webp"
+            pyramid_path = pyramid_dir / f"{stem}_L{int(other_level*100)}.{format_ext}"
 
             # 🔥 이미 존재하거나 생성 중이면 스킵
             path_key = str(pyramid_path)
@@ -1648,6 +1674,8 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
 
         # 🎯 피라미드 레벨이 요청된 경우
         if level is not None:
+            format_ext = config.PYRAMID_FORMAT.lower()
+            content_type = f"image/{format_ext}"
             if not is_head:
                 logger.info(f"🎯 [PYRAMID MODE] 활성화됨")
 
@@ -1689,7 +1717,7 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
             if stem_lower in WINDOWS_RESERVED or any(stem_lower.startswith(f'{dev}') for dev in ['com', 'lpt']):
                 stem = f"file_{stem}"
 
-            pyramid_path = pyramid_dir / f"{stem}_L{int(level*100)}.webp"
+            pyramid_path = pyramid_dir / f"{stem}_L{int(level*100)}.{format_ext}"
             if not is_head:
                 logger.info(f"🎯 [PYRAMID PATH] {pyramid_path}")
 
@@ -1707,7 +1735,7 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
                     t_resp_start = time.time()
                     headers = {
                         "Cache-Control": "public, max-age=31536000, immutable",
-                        "Content-Type": "image/webp",
+                        "Content-Type": content_type,
                         "ETag": compute_etag(st),
                         "X-Pyramid-Level": str(level),
                         "X-Cache-Status": "HIT",
@@ -1737,7 +1765,7 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
                 t_resp_start = time.time()
                 headers = {
                     "Cache-Control": "public, max-age=31536000, immutable",
-                    "Content-Type": "image/webp",
+                    "Content-Type": content_type,
                     "ETag": compute_etag(st),
                     "X-Pyramid-Level": str(level),
                     "X-Cache-Status": "MISS",

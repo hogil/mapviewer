@@ -7,8 +7,9 @@ ROOT_DIR = Path(os.getenv("PROJECT_ROOT", "/appdata/appuser/images")).resolve()
 THUMBNAIL_DIR = ROOT_DIR / "thumbnails"
 
 THUMBNAIL_SIZE_DEFAULT = int(os.getenv("THUMBNAIL_SIZE", "512"))
-THUMBNAIL_FORMAT = os.getenv("THUMBNAIL_FORMAT", "WEBP")
+THUMBNAIL_FORMAT = os.getenv("THUMBNAIL_FORMAT", "PNG")
 THUMBNAIL_QUALITY = int(os.getenv("THUMBNAIL_QUALITY", "100"))
+PNG_COMPRESSION_LEVEL = int(os.getenv("PNG_COMPRESSION_LEVEL", "3"))
 
 SUPPORTED_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp', '.gif'}
 # 검색/인덱싱에서 건너뛸 폴더(쉼표로 구분)
@@ -51,3 +52,7 @@ SSL_KEYFILE = os.getenv("SSL_KEYFILE", "cert/server.key")
 PYRAMID_LEVELS = [float(x) for x in os.getenv("PYRAMID_LEVELS", "0.2,0.5,0.7,1.0").split(",")]
 # zoom 기준 (쉼표로 구분, 기본: 0.25,0.5,0.75) - ≤0.25→0.2, ≤0.5→0.5, ≤0.75→0.7, >0.75→1.0
 PYRAMID_ZOOM_THRESHOLDS = [float(x) for x in os.getenv("PYRAMID_ZOOM_THRESHOLDS", "0.25,0.5,0.75").split(",")]
+PYRAMID_FORMAT = os.getenv("PYRAMID_FORMAT", "PNG").upper()
+PYRAMID_Q = int(os.getenv("PYRAMID_Q", "100"))
+PYRAMID_PNG_COMPRESSION = int(os.getenv("PYRAMID_PNG_COMPRESSION", "3"))
+PYRAMID_KERNEL = os.getenv("PYRAMID_KERNEL", "cubic").lower()
