@@ -7,6 +7,7 @@ import os, re, sys, json, time, shutil, asyncio, logging, logging.config, hashli
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
 from collections import OrderedDict
+from bisect import bisect_left, bisect_right
 from threading import RLock
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -286,6 +287,32 @@ INDEX_READY = False
 
 FILE_INDEX: Dict[str, Dict[str, Any]] = {}
 FILE_INDEX_LOCK = RLock()
+FILE_INDEX_KEYS: List[str] = []
+
+def _file_index_clear() -> None:
+    with FILE_INDEX_LOCK:
+        FILE_INDEX.clear()
+        FILE_INDEX_KEYS.clear()
+
+def file_index_set(path: str, meta: Dict[str, Any]) -> None:
+    with FILE_INDEX_LOCK:
+        FILE_INDEX[path] = meta
+        idx = bisect_left(FILE_INDEX_KEYS, path)
+        if idx == len(FILE_INDEX_KEYS) or FILE_INDEX_KEYS[idx] != path:
+            FILE_INDEX_KEYS.insert(idx, path)
+
+def _search_index_slice(keys: List[str], query: str, goal: int) -> List[str]:
+    results: List[str] = []
+    for rel in keys:
+        try:
+            meta = FILE_INDEX[rel]
+        except KeyError:
+            continue
+        if query in meta["name_lower"]:
+            results.append(rel)
+            if len(results) >= goal:
+                break
+    return results
 
 LABELS: Dict[str, List[str]] = {}
 LABELS_LOCK = RLock()
@@ -1195,6 +1222,7 @@ async def build_file_index_background():
     def _walk_and_index():
         global INDEX_READY
         start = time.time()
+        _file_index_clear()
         for root, dirs, files in os.walk(ROOT_DIR):
             if BACKGROUND_TASKS_PAUSED or USER_ACTIVITY_FLAG: time.sleep(0.1)
             for skip in list(SKIP_DIRS):
@@ -1207,7 +1235,7 @@ async def build_file_index_background():
                 try:
                     st = full.stat()
                     rec = {"name_lower": fn.lower(), "size": st.st_size, "modified": st.st_mtime}
-                    with FILE_INDEX_LOCK: FILE_INDEX[rel] = rec
+                    file_index_set(rel, rec)
                 except Exception:
                     continue
             time.sleep(0.001)
@@ -1433,9 +1461,10 @@ def _lookup_original_relpath_from_classification_path(path_str: str) -> Optional
         filename = Path(p).name
         # FILE_INDEX 키는 ROOT 기준 상대경로
         with FILE_INDEX_LOCK:
-            for rel, _rec in FILE_INDEX.items():
-                if Path(rel).name == filename:
-                    return rel
+            keys_snapshot = list(FILE_INDEX_KEYS)
+        for rel in keys_snapshot:
+            if Path(rel).name == filename:
+                return rel
         # 인덱스가 아직 없으면 폴백: ROOT_DIR에서 탐색(최초 1회 비용)
         for root, _dirs, files in os.walk(ROOT_DIR):
             if filename in files:
@@ -1958,14 +1987,17 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
         query = (q or "").strip().lower()
         if not query:
             return {"success": True, "results": [], "offset": offset, "limit": limit}
+
         goal = offset + limit
         bucket: List[str] = []
 
-        # 🔥 current_folder 전역 변수 사용
+        # 🔍 current_folder 기준 루트 계산
         global current_folder
-        search_root = current_folder
-        
-        # 🔍 디버그: 검색 폴더 확인
+        search_root = current_folder.resolve()
+        if not search_root.exists():
+            search_root = ROOT_DIR
+            current_folder = ROOT_DIR
+
         logger.info(f"🔍 [SEARCH DEBUG] current_folder: {current_folder}")
         logger.info(f"🔍 [SEARCH DEBUG] search_root: {search_root}")
         logger.info(f"🔍 [SEARCH DEBUG] ROOT_DIR: {ROOT_DIR}")
@@ -1973,105 +2005,94 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
         logger.info(f"🔍 [SEARCH DEBUG] current_folder == ROOT_DIR: {current_folder.resolve() == ROOT_DIR.resolve()}")
         logger.info(f"🔍 [SEARCH DEBUG] limit: {limit}, offset: {offset}")
 
-        # 🔥 썸네일 캐시 초기화 (매 검색마다)
+        # 🔄 썸네일 캐시 초기화 (검색 시 즉시 반영)
         THUMB_STAT_CACHE.clear()
         logger.info("🔍 [SEARCH DEBUG] 썸네일 캐시 초기화 완료")
-        
-        # 🔍 썸네일 요청 카운터 리셋 (새로운 검색)
-        logger.info("🔍 [SEARCH DEBUG] 썸네일 요청 카운터 리셋")
 
-        # 🔥 current_folder가 ROOT_DIR과 다른 경우에만 필터링 적용
-        if current_folder.resolve() != ROOT_DIR.resolve():
-            # 하위 폴더에서 검색하는 경우 - 직접 파일 시스템 스캔 (더 빠름)
-            logger.info(f"🔍 [SEARCH DEBUG] 하위 폴더 검색: {search_root}")
-            try:
+        # 📁 current_folder 기준 prefix 계산
+        try:
+            prefix = str(search_root.relative_to(ROOT_DIR)).replace('\\', '/')
+        except ValueError:
+            prefix = ""
+        if prefix == '.':
+            prefix = ''
+        prefix_with_sep = prefix.rstrip('/') + '/' if prefix else ""
+
+        # 📚 인덱스 기반 1차 검색
+        with FILE_INDEX_LOCK:
+            if prefix:
+                start_key = prefix_with_sep
+                end_key = prefix_with_sep + '\uffff'
+                start_idx = bisect_left(FILE_INDEX_KEYS, start_key)
+                end_idx = bisect_right(FILE_INDEX_KEYS, end_key)
+                keys_slice = FILE_INDEX_KEYS[start_idx:end_idx]
+            else:
+                keys_slice = list(FILE_INDEX_KEYS)
+
+        loop = asyncio.get_running_loop()
+        index_hits = await loop.run_in_executor(IO_POOL, _search_index_slice, keys_slice, query, goal)
+        bucket.extend(index_hits)
+
+        # 🗂️ 인덱스로 부족하면 현재 폴더 직접 스캔
+        if len(bucket) < goal:
+            seen = set(bucket)
+            need = goal - len(bucket)
+
+            def _scan():
+                nonlocal need
                 for root, dirs, files in os.walk(search_root):
                     for skip in list(SKIP_DIRS):
                         if skip in dirs: dirs.remove(skip)
                     for fn in files:
                         ext = os.path.splitext(fn)[1].lower()
-                        if ext not in SUPPORTED_EXTENSIONS: continue
-                        low = fn.lower()
-                        if query not in low: continue
-                        full = Path(root) / fn
-                        # 🔥 ROOT_DIR 기준 절대 경로로 변환
-                        try:
-                            rel_to_root = full.relative_to(ROOT_DIR)
-                            root_relative_path = str(rel_to_root).replace("\\", "/")
-                            bucket.append(root_relative_path)
-                        except ValueError:
-                            # ROOT_DIR 밖의 파일이면 건너뛰기
+                        if ext not in SUPPORTED_EXTENSIONS:
                             continue
-                        if len(bucket) >= goal: break
-                    if len(bucket) >= goal: break
-            except Exception as e:
-                logger.error(f"하위 폴더 검색 실패: {e}")
-        else:
-            # ROOT_DIR에서 검색하는 경우 - 인덱스 사용
-            logger.info(f"🔍 [SEARCH DEBUG] ROOT_DIR 전체 검색")
-            with FILE_INDEX_LOCK:
-                items = list(FILE_INDEX.items())
-            if items:
-                for rel, meta in items:
-                    if query in meta["name_lower"]:
-                        # 🔥 current_folder 기준 상대 경로로 변환
-                        # rel은 ROOT_DIR 기준이므로, current_folder가 ROOT_DIR이면 그대로 사용
-                        bucket.append(rel)
-                        if len(bucket) >= goal: break
+                        low = fn.lower()
+                        if query not in low:
+                            continue
+                        full = Path(root) / fn
+                        try:
+                            rel_to_root = str(full.relative_to(ROOT_DIR)).replace('\\', '/')
+                        except Exception:
+                            continue
+                        if rel_to_root in seen:
+                            continue
+                        seen.add(rel_to_root)
+                        bucket.append(rel_to_root)
+                        try:
+                            st = full.stat()
+                            file_index_set(rel_to_root, {
+                                "name_lower": low,
+                                "size": st.st_size,
+                                "modified": st.st_mtime
+                            })
+                        except Exception:
+                            pass
+                        need -= 1
+                        if need <= 0:
+                            return
 
-            # 인덱스로 부족하면 파일 시스템 스캔으로 보완
-            if len(bucket) < goal:
-                seen = set(bucket)
-                need = goal - len(bucket)
-                def _scan():
-                    nonlocal need
-                    for root, dirs, files in os.walk(ROOT_DIR):
-                        for skip in list(SKIP_DIRS):
-                            if skip in dirs: dirs.remove(skip)
-                        for fn in files:
-                            ext = os.path.splitext(fn)[1].lower()
-                            if ext not in SUPPORTED_EXTENSIONS: continue
-                            low = fn.lower()
-                            if query not in low: continue
-                            full = Path(root) / fn
-                            try: 
-                                # 🔥 ROOT_DIR 기준 상대 경로 (current_folder가 ROOT_DIR이면 그대로 사용)
-                                rel = str(full.relative_to(ROOT_DIR)).replace("\\", "/")
-                            except Exception: continue
-                            if rel in seen: continue
-                            seen.add(rel)
-                            bucket.append(rel)
-                            try:
-                                st = full.stat()
-                                rec = {"name_lower": low, "size": st.st_size, "modified": st.st_mtime}
-                                with FILE_INDEX_LOCK: FILE_INDEX[rel] = rec
-                            except Exception:
-                                pass
-                            need -= 1
-                            if need <= 0: return
-                if need > 0:
-                    await asyncio.get_running_loop().run_in_executor(ThreadPoolExecutor(max_workers=1), _scan)
+            if need > 0:
+                await asyncio.get_running_loop().run_in_executor(ThreadPoolExecutor(max_workers=1), _scan)
 
         results = bucket[offset: offset + limit]
-        
-        # 🔍 디버그: 검색 결과 확인
-        logger.info(f"🔍 [SEARCH DEBUG] 검색 결과 수: {len(bucket)}")
-        logger.info(f"🔍 [SEARCH DEBUG] 반환되는 파일 수: {len(results)}")
+
+        logger.info(f"🔍 [SEARCH DEBUG] 검색결과수: {len(bucket)}")
+        logger.info(f"🔍 [SEARCH DEBUG] 반환되는파일수: {len(results)}")
         if bucket:
-            logger.info(f"🔍 [SEARCH DEBUG] 첫 번째 결과: {bucket[0]}")
+            logger.info(f"🔍 [SEARCH DEBUG] 첫 결과: {bucket[0]}")
             if len(bucket) > 1:
                 logger.info(f"🔍 [SEARCH DEBUG] 마지막 결과: {bucket[-1]}")
-        
+
         return {"success": True, "results": results, "offset": offset, "limit": limit, "total": len(bucket)}
     except Exception as e:
-        logger.exception(f"검색 실패: {e}")
+        logger.exception(f"검색 중 오류: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 @app.get("/api/files/all")
 async def get_all_files():
     try:
         with FILE_INDEX_LOCK:
-            keys = list(FILE_INDEX.keys())
+            keys = list(FILE_INDEX_KEYS)
         if not keys and not INDEX_BUILDING:
             asyncio.create_task(build_file_index_background())
         return {"success": True, "files": keys}
