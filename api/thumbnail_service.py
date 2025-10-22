@@ -16,6 +16,14 @@ from .utils import FileUtils, Constants
 from .cache_manager import cache_manager
 from . import config
 
+# TurboJPEG import (optional)
+try:
+    from turbojpeg import TurboJPEG
+    TURBOJPEG_AVAILABLE = True
+except ImportError:
+    TURBOJPEG_AVAILABLE = False
+    TurboJPEG = None
+
 
 class ThumbnailService:
     """썸네일 생성 및 관리 서비스"""
@@ -37,6 +45,17 @@ class ThumbnailService:
             max_concurrent = config.THUMBNAIL_SEM
         self.semaphore = asyncio.Semaphore(max_concurrent)
         
+        # TurboJPEG 초기화
+        self.turbojpeg = None
+        if TURBOJPEG_AVAILABLE and getattr(config, "USE_TURBOJPEG", False):
+            try:
+                lib_path = getattr(config, "TURBOJPEG_PATH", "") or None
+                self.turbojpeg = TurboJPEG(lib_path=lib_path) if lib_path else TurboJPEG()
+                print(f"🚀 [ThumbnailService] TurboJPEG 활성화 (lib={lib_path or 'auto'})")
+            except Exception as e:
+                print(f"⚠️ [ThumbnailService] TurboJPEG 초기화 실패: {e}")
+                self.turbojpeg = None
+        
         # 성능 메트릭
         self.generation_count = 0
         self.cache_hits = 0
@@ -47,6 +66,41 @@ class ThumbnailService:
         relative_path = image_path.relative_to(self.root_dir)
         thumbnail_name = f"{relative_path.stem}_{size[0]}x{size[1]}.{self.thumbnail_format.lower()}"
         return self.thumbnail_dir / relative_path.parent / thumbnail_name
+    
+    def _save_with_turbojpeg(self, work_image, dest: str, quality: int) -> bool:
+        """TurboJPEG를 사용한 고속 JPEG 저장"""
+        if not self.turbojpeg:
+            return False
+        
+        try:
+            import numpy as np
+            
+            # 이미지 전처리
+            image = work_image
+            if image.bands > 3:
+                image = image.extract_band(0, n=3)
+            elif image.bands == 2:
+                image = image.extract_band(0, n=1)
+            
+            if image.interpretation not in ("srgb", "rgb"):
+                try:
+                    image = image.colourspace("srgb")
+                except Exception:
+                    pass
+            
+            # numpy 배열로 변환
+            image_array = image.write_to_memory()
+            image_array = np.frombuffer(image_array, dtype=np.uint8)
+            image_array = image_array.reshape((image.height, image.width, image.bands))
+            
+            # TurboJPEG로 인코딩
+            buffer = self.turbojpeg.encode(image_array, quality=quality, jpeg_subsample=2)
+            Path(dest).write_bytes(buffer)
+            return True
+            
+        except Exception as e:
+            print(f"⚠️ [ThumbnailService] TurboJPEG 인코딩 실패: {e}")
+            return False
     
     def _generate_thumbnail_sync(
         self,
@@ -73,14 +127,27 @@ class ThumbnailService:
 
                 target_w, target_h = size
                 if image.width <= target_w and image.height <= target_h:
-                    image.write_to_file(
-                        str(thumbnail_path),
-                        Q=self.thumbnail_quality,
-                        strip=True,
-                        compression=config.PNG_COMPRESSION_LEVEL,
-                        interlace=False,
-                        sequential=True
-                    )
+                    # TurboJPEG 우선 시도 (JPEG 포맷인 경우)
+                    if self.thumbnail_format == "JPEG" and self.turbojpeg:
+                        used_turbo = self._save_with_turbojpeg(image, str(thumbnail_path), self.thumbnail_quality)
+                        if not used_turbo:
+                            image.write_to_file(
+                                str(thumbnail_path),
+                                Q=self.thumbnail_quality,
+                                strip=True,
+                                compression=config.PNG_COMPRESSION_LEVEL,
+                                interlace=False,
+                                sequential=True
+                            )
+                    else:
+                        image.write_to_file(
+                            str(thumbnail_path),
+                            Q=self.thumbnail_quality,
+                            strip=True,
+                            compression=config.PNG_COMPRESSION_LEVEL,
+                            interlace=False,
+                            sequential=True
+                        )
                 else:
                     scale = min(target_w / image.width, target_h / image.height)
                     scale = max(scale, 1.0 / max(image.width, image.height))
@@ -89,14 +156,28 @@ class ThumbnailService:
                         vscale=scale,
                         kernel=config.PYRAMID_KERNEL or 'cubic'
                     )
-                    resized.write_to_file(
-                        str(thumbnail_path),
-                        Q=self.thumbnail_quality,
-                        strip=True,
-                        compression=config.PNG_COMPRESSION_LEVEL,
-                        interlace=False,
-                        sequential=True
-                    )
+                    
+                    # TurboJPEG 우선 시도 (JPEG 포맷인 경우)
+                    if self.thumbnail_format == "JPEG" and self.turbojpeg:
+                        used_turbo = self._save_with_turbojpeg(resized, str(thumbnail_path), self.thumbnail_quality)
+                        if not used_turbo:
+                            resized.write_to_file(
+                                str(thumbnail_path),
+                                Q=self.thumbnail_quality,
+                                strip=True,
+                                compression=config.PNG_COMPRESSION_LEVEL,
+                                interlace=False,
+                                sequential=True
+                            )
+                    else:
+                        resized.write_to_file(
+                            str(thumbnail_path),
+                            Q=self.thumbnail_quality,
+                            strip=True,
+                            compression=config.PNG_COMPRESSION_LEVEL,
+                            interlace=False,
+                            sequential=True
+                        )
             except ImportError:
                 # pyvips가 없으면 Pillow 사용 (폴백)
                 with Image.open(image_path) as img:

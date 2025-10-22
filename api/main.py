@@ -1294,11 +1294,21 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
                         smart_subsample=False
                     )
                 else:
-                    vips_obj.write_to_file(
-                        str(thumbnail_path),
-                        Q=THUMBNAIL_QUALITY,
-                        strip=True
-                    )
+                    # TurboJPEG 우선 시도 (JPEG 포맷인 경우)
+                    if fmt == "JPEG":
+                        used_turbo = _save_with_turbojpeg(vips_obj, str(thumbnail_path), THUMBNAIL_QUALITY)
+                        if not used_turbo:
+                            vips_obj.write_to_file(
+                                str(thumbnail_path),
+                                Q=THUMBNAIL_QUALITY,
+                                strip=True
+                            )
+                    else:
+                        vips_obj.write_to_file(
+                            str(thumbnail_path),
+                            Q=THUMBNAIL_QUALITY,
+                            strip=True
+                        )
 
             target_w, target_h = size
             if vips_image.width <= target_w and vips_image.height <= target_h:
