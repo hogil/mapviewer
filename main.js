@@ -39,6 +39,26 @@ let THUMB_BATCH_SIZE = 24;
 const DEBOUNCE_DELAY = 0;
 const GRID_DRAG_CLICK_THRESHOLD = 14;
 
+async function decodeBitmapSmart(source, options) {
+    const decodeSource = source;
+    if (window.BitmapLoader && typeof window.BitmapLoader.decode === 'function') {
+        try {
+            return await window.BitmapLoader.decode(decodeSource, options);
+        } catch (error) {
+            console.warn('[BitmapLoader] decode fallback:', error);
+        }
+    }
+    if (typeof createImageBitmap === 'function') {
+        if (decodeSource && typeof decodeSource === 'object' && 'buffer' in decodeSource && decodeSource.buffer) {
+            const type = decodeSource.type || 'image/jpeg';
+            const blob = new Blob([decodeSource.buffer], { type });
+            return await createImageBitmap(blob, options || undefined);
+        }
+        return await createImageBitmap(decodeSource, options || undefined);
+    }
+    throw new Error('ImageBitmap decoding not supported');
+}
+
 // 초기 맞춤 여유 (상대 비율)
 
 const FIT_RELATIVE_MARGIN = 0.96; // 초기 로드 시 4% 여유 (2% 더 작게)
@@ -5732,7 +5752,7 @@ class WaferMapViewer {
 
             const blob = await res.blob();
 
-            const img = await createImageBitmap(blob);
+            const img = await decodeBitmapSmart(blob);
 
             const canvas = document.createElement('canvas');
 
@@ -7317,43 +7337,43 @@ class WaferMapViewer {
 
 
 
-        const tStart = performance.now();
-                // 🚀 1단계: 이미지 크기만 먼저 조회
+        const timeline = {
+            click: performance.now()
+        };
+        // [STEP 1] 이미지 크기 먼저 조회
         const tSizeStart = performance.now();
+        timeline.sizeFetchStart = tSizeStart;
         const sizeResponse = await fetch(`/api/image/size?path=${encodeURIComponent(fullPath)}`);
         if (!sizeResponse.ok) {
             throw new Error(`Failed to get image size: ${sizeResponse.status}`);
         }
         const sizeData = await sizeResponse.json();
         const tSizeEnd = performance.now();
-        
-                // 원본 크기 저장
+        timeline.sizeFetchEnd = tSizeEnd;
+
         this.originalWidth = sizeData.width;
         this.originalHeight = sizeData.height;
         if (this.semiconductorRenderer?.isGpuAvailable()) {
             this.semiconductorRenderer.setImageSize(this.originalWidth, this.originalHeight);
             this.usingGpuRenderer = true;
         }
-        
-        // 🚀 2단계: resetView에서 사용할 zoom 계산 (실제 resetView 로직과 완전 동일)
+
+        // [STEP 2] resetView와 동일한 로직으로 초기 확대 비율 계산
         const containerRect = this.dom.viewerContainer.getBoundingClientRect();
         const effectiveW = Math.max(0, containerRect.width - 2);
         const effectiveH = Math.max(0, containerRect.height - 2);
-        
-        // resetView와 완전 동일한 계산
+
         const imgRatio = this.originalWidth / this.originalHeight;
         const containerRatio = effectiveW / effectiveH;
         const fitScale = (imgRatio > containerRatio)
             ? effectiveW / this.originalWidth
             : effectiveH / this.originalHeight;
-        
-        // resetView Line 7702와 동일: fitScale * FIT_RELATIVE_MARGIN * 0.96
+
         const calculatedZoom = fitScale * FIT_RELATIVE_MARGIN * 0.96;
-        
-        // 🚀 3단계: zoom 기준으로 최적 level 계산 (updatePyramidLevel 로직과 동일)
+
+        // [STEP 3] 확대 기준으로 첫 피라미드 레벨 결정
         let initialLevel = 1.0;
 
-        // 🔥 서버 설정에서 threshold와 level 가져오기
         const thresholds = SERVER_CONFIG.PYRAMID_ZOOM_THRESHOLDS;
         const levels = SERVER_CONFIG.PYRAMID_LEVELS;
 
@@ -7366,55 +7386,70 @@ class WaferMapViewer {
         } else {
             initialLevel = levels[3];
         }
-        
-                const url = `/api/image?path=${encodeURIComponent(fullPath)}&level=${initialLevel}`;
+
+        const url = `/api/image?path=${encodeURIComponent(fullPath)}&level=${initialLevel}`;
         const tFetchStart = performance.now();
+        timeline.imageFetchStart = tFetchStart;
 
-                const response = await fetch(url);
+        const response = await fetch(url);
         const tFetchEnd = performance.now();
-
-                // 🔥 서버 에러 체크
+        timeline.imageFetchEnd = tFetchEnd;
 
         if (!response.ok) {
-
             const errorText = await response.text();
-
-            console.error(`❌ 피라미드 이미지 로드 실패: ${fullPath}`, {  // 🔥 fullPath 사용
-
+            console.error(`[ERROR] 피라미드 이미지 로드 실패: ${fullPath}`, {
                 level: initialLevel,
-
                 status: response.status,
-
                 statusText: response.statusText,
-
                 error: errorText
-
             });
-
             throw new Error(`Failed to load pyramid image: ${response.status} ${response.statusText}`);
-
         }
 
-
-
-        const tBlobStart = performance.now();
-        const blob = await response.blob();
-        const tBlobEnd = performance.now();
+        const contentType = response.headers.get('Content-Type') || 'image/jpeg';
+        const tBufferStart = performance.now();
+        timeline.bufferStart = tBufferStart;
+        
+        let bitmap;
+        // ImageDecoder 스트리밍 시도 (브라우저 호환성 체크)
+        if (typeof ImageDecoder !== 'undefined' && response.body) {
+            try {
+                const decoder = new ImageDecoder({ data: response.body, type: contentType });
+                const { image } = await decoder.decode({ completeFramesOnly: true });
+                const tBufferEnd = performance.now();
+                timeline.bufferEnd = tBufferEnd;
 
                 const tBitmapStart = performance.now();
-        const bitmap = await createImageBitmap(blob);
-        const tBitmapEnd = performance.now();
+                timeline.bitmapStart = tBitmapStart;
+                bitmap = await createImageBitmap(image);
+                const tBitmapEnd = performance.now();
+                timeline.bitmapEnd = tBitmapEnd;
+            } catch (e) {
+                console.warn('[STREAMING] ImageDecoder 실패, 폴백 사용:', e);
+                // 폴백: ArrayBuffer 사용
+                const arrayBuffer = await response.arrayBuffer();
+                const tBufferEnd = performance.now();
+                timeline.bufferEnd = tBufferEnd;
 
-                const elapsed = performance.now() - tStart;
+                const tBitmapStart = performance.now();
+                timeline.bitmapStart = tBitmapStart;
+                bitmap = await decodeBitmapSmart({ buffer: arrayBuffer, type: contentType });
+                const tBitmapEnd = performance.now();
+                timeline.bitmapEnd = tBitmapEnd;
+            }
+        } else {
+            // 폴백: ArrayBuffer 사용
+            const arrayBuffer = await response.arrayBuffer();
+            const tBufferEnd = performance.now();
+            timeline.bufferEnd = tBufferEnd;
 
-        
+            const tBitmapStart = performance.now();
+            timeline.bitmapStart = tBitmapStart;
+            bitmap = await decodeBitmapSmart({ buffer: arrayBuffer, type: contentType });
+            const tBitmapEnd = performance.now();
+            timeline.bitmapEnd = tBitmapEnd;
+        }
 
-        // 🔥 원본 크기는 이미 /api/image/size에서 조회했으므로 업데이트 불필요
-        // this.originalWidth와 this.originalHeight는 이미 설정됨
-
-        
-        
-        // 캐시 저장
         this.pyramidLevels[initialLevel] = bitmap;
         if (this.semiconductorRenderer?.isGpuAvailable()) {
             this.semiconductorRenderer.uploadLevelBitmap(initialLevel, bitmap);
@@ -7430,42 +7465,20 @@ class WaferMapViewer {
             }
         }).catch(() => {});
 
-        // 📊 초기 로드 로그
-        const fetchTime = (tFetchEnd - tFetchStart).toFixed(0);
-        const blobTime = (tBlobEnd - tBlobStart).toFixed(0);
-        const bitmapTime = (tBitmapEnd - tBitmapStart).toFixed(0);
-        const totalTime = elapsed.toFixed(0);
-        console.log(`📸 [INIT] Lv${initialLevel} | ${this.originalWidth}×${this.originalHeight} → ${bitmap.width}×${bitmap.height} | Zoom:${calculatedZoom.toFixed(2)} | Fetch:${fetchTime}ms Blob:${blobTime}ms Bitmap:${bitmapTime}ms | Total:${totalTime}ms`);
+        const clickToSizeFetch = Math.max(0, timeline.sizeFetchStart - timeline.click);
+        const sizeFetch = Math.max(0, timeline.sizeFetchEnd - timeline.sizeFetchStart);
+        const prepareTime = Math.max(0, timeline.imageFetchStart - timeline.sizeFetchEnd);
+        const fetchTime = Math.max(0, timeline.imageFetchEnd - timeline.imageFetchStart);
+        const bufferTime = Math.max(0, timeline.bufferEnd - timeline.bufferStart);
+        const bitmapTime = Math.max(0, timeline.bitmapEnd - timeline.bitmapStart);
+        const totalTime = Math.max(0, timeline.bitmapEnd - timeline.click);
+        console.log(
+            `[INIT] Lv${initialLevel} | ${this.originalWidth}×${this.originalHeight} → ${bitmap.width}×${bitmap.height} | Zoom:${calculatedZoom.toFixed(2)} | ` +
+            `Click->SizeReq:${Math.round(clickToSizeFetch)}ms SizeFetch:${Math.round(sizeFetch)}ms Prep:${Math.round(prepareTime)}ms ` +
+            `Fetch:${Math.round(fetchTime)}ms Buffer:${Math.round(bufferTime)}ms Bitmap:${Math.round(bitmapTime)}ms Total:${Math.round(totalTime)}ms`
+        );
 
-
-
-            // UI 초기화
-
-            // 🔥 단일 이미지 모드로 전환 (이미지 표시를 위해 필요)
-
-            if (this.dom.viewerContainer) {
-
-                this.dom.viewerContainer.classList.remove('grid-mode');
-
-                this.dom.viewerContainer.classList.add('single-image-mode');
-
-            }
-
-            
-            
-            // 🔥 그리드 숨기기 (이미지 표시를 위해 필요)
-
-            const grid = document.getElementById('image-grid');
-
-            if (grid) {
-
-                grid.style.display = 'none';
-
-            }
-
-            
-            
-            this.resetView(false);
+        this.resetView(false);
 
             // 🎯 resetView 완료 후 적절한 피라미드 레벨로 교체
             setTimeout(() => {
@@ -7521,23 +7534,37 @@ class WaferMapViewer {
         const levels = SERVER_CONFIG.PYRAMID_LEVELS;
         const currentLevel = this.currentPyramidLevel;
 
-        // 현재 레벨 제외하고 낮은 순으로 정렬
+        const currentLevelKey = currentLevel != null ? String(currentLevel) : null;
         const remainingLevels = levels
-            .filter(level => level !== currentLevel)
-            .sort((a, b) => a - b);  // 오름차순 정렬
+            .map(level => (typeof level === 'number' ? level : parseFloat(level)))
+            .filter(level => !Number.isNaN(level))
+            .filter(level => currentLevelKey === null ? true : String(level) !== currentLevelKey);
+        const priorityOrder = Array.from(new Set(remainingLevels))
+            .filter(level => level < 1)
+            .sort((a, b) => a - b); // 낮은 레벨부터 순서대로
 
-        console.log(`🚀 [PREFETCH] Background 순차 다운로드 시작: [${remainingLevels.join(', ')}]`);
-
-        // 낮은 레벨부터 순차 다운로드 (await로 순서 보장)
-        for (const level of remainingLevels) {
-            try {
-                await this.loadPyramidLevel(level, true);  // 순차 실행
-            } catch (err) {
-                console.warn(`⚠️ [PREFETCH] Lv${level} 다운로드 실패, 건너뜀`);
-            }
+        if (priorityOrder.length === 0) {
+            return;
         }
 
-        console.log(`✅ [PREFETCH] 모든 레벨 다운로드 완료`);
+        console.log(`[PREFETCH] Background 순차 다운로드 시작: [${priorityOrder.join(', ')}]`);
+
+        const prefetchStart = performance.now();
+        let successCount = 0;
+        
+        // 순차 다운로드로 네트워크 대역폭 경쟁 방지
+        for (const level of priorityOrder) {
+            try {
+                await this.loadPyramidLevel(level, true);
+                successCount++;
+                console.log(`[PREFETCH] Lv${level} 완료`);
+            } catch (err) {
+                console.warn(`[PREFETCH] Lv${level} 다운로드 실패, 건너뜀`, err);
+            }
+        }
+        
+        const elapsed = Math.round(performance.now() - prefetchStart);
+        console.log(`[PREFETCH] 모든 레벨 다운로드 완료 | 성공:${successCount}/${priorityOrder.length} | Total:${elapsed}ms`);
     }
 
 
@@ -7547,7 +7574,15 @@ class WaferMapViewer {
             return;
         }
 
-        // 🔥 이미 로딩 중이면 스킵 (중복 요청 방지)
+        // Level 1.0은 원본 이미지를 그대로 사용
+        if (level >= 1) {
+            if (this.currentImage) {
+                this.pyramidLevels[level] = this.currentImage;
+            }
+            return;
+        }
+
+        // 이미 로딩 중이면 스킵 (중복 요청 방지)
         if (!this._pyramidLoading) {
             this._pyramidLoading = new Set();
         }
@@ -7561,23 +7596,81 @@ class WaferMapViewer {
 
         try {
             const tStart = performance.now();
-            const tFetchStart = performance.now();
-            const response = await fetch(url);
-            const tFetchEnd = performance.now();
+            let tFetchStart = 0;
+            let tFetchEnd = 0;
+            let tBufferStart = 0;
+            let tBufferEnd = 0;
+            let tBitmapStart = 0;
+            let tBitmapEnd = 0;
+            const formatTimingSummary = timings => {
+                const segments = [];
+                if (timings.queue >= 1) {
+                    segments.push(`Wait:${Math.round(timings.queue)}ms`);
+                }
+                segments.push(`Fetch:${Math.round(timings.fetch)}ms`);
+                if (timings.buffer >= 0) {
+                    segments.push(`Buffer:${Math.round(timings.buffer)}ms`);
+                }
+                segments.push(`Bitmap:${Math.round(timings.bitmap)}ms`);
+                segments.push(`Total:${Math.round(timings.total)}ms`);
+                return segments.join(' ');
+            };
+
+            const fetchOptions = {
+                priority: 'high',
+                cache: 'force-cache',
+                headers: {
+                    Accept: 'image/png,image/apng,image/*;q=0.8'
+                }
+            };
+            let response;
+            tFetchStart = performance.now();
+            try {
+                response = await fetch(url, fetchOptions);
+            } catch (fetchErr) {
+                response = await fetch(url);
+            }
+            tFetchEnd = performance.now();
 
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
+            };
 
             cacheStatus = response.headers.get('X-Cache-Status') || 'MISS';
 
-            const tBlobStart = performance.now();
-            const blob = await response.blob();
-            const tBlobEnd = performance.now();
-
-            const tBitmapStart = performance.now();
-            const bitmap = await createImageBitmap(blob);
-            const tBitmapEnd = performance.now();
+            const contentType = response.headers.get('Content-Type') || 'image/jpeg';
+            tBufferStart = performance.now();
+            
+            let bitmap;
+            // ImageDecoder 스트리밍 시도 (브라우저 호환성 체크)
+            if (typeof ImageDecoder !== 'undefined' && response.body) {
+                try {
+                    const decoder = new ImageDecoder({ data: response.body, type: contentType });
+                    const { image } = await decoder.decode({ completeFramesOnly: true });
+                    tBufferEnd = performance.now();
+                    
+                    tBitmapStart = performance.now();
+                    bitmap = await createImageBitmap(image);
+                    tBitmapEnd = performance.now();
+                } catch (e) {
+                    console.warn('[STREAMING] ImageDecoder 실패, 폴백 사용:', e);
+                    // 폴백: ArrayBuffer 사용
+                    const arrayBuffer = await response.arrayBuffer();
+                    tBufferEnd = performance.now();
+                    
+                    tBitmapStart = performance.now();
+                    bitmap = await decodeBitmapSmart({ buffer: arrayBuffer, type: contentType });
+                    tBitmapEnd = performance.now();
+                }
+            } else {
+                // 폴백: ArrayBuffer 사용
+                const arrayBuffer = await response.arrayBuffer();
+                tBufferEnd = performance.now();
+                
+                tBitmapStart = performance.now();
+                bitmap = await decodeBitmapSmart({ buffer: arrayBuffer, type: contentType });
+                tBitmapEnd = performance.now();
+            }
 
             this.pyramidLevels[level] = bitmap;
             if (this.semiconductorRenderer?.isGpuAvailable()) {
@@ -7586,6 +7679,17 @@ class WaferMapViewer {
 
             // 현재 줌에 적합하면 즉시 교체
             const bestLevel = this.getBestPyramidLevel(this.transform.scale);
+            const timings = (() => {
+                const tEnd = performance.now();
+                return {
+                    queue: Math.max(0, tFetchStart - tStart),
+                    fetch: tFetchEnd - tFetchStart,
+                    buffer: tBufferEnd - tBufferStart,
+                    bitmap: tBitmapEnd - tBitmapStart,
+                    total: tEnd - tStart
+                };
+            })();
+            const timingSummary = formatTimingSummary(timings);
 
             if (bestLevel === level && !silent) {
                 this.currentImage = bitmap;
@@ -7600,24 +7704,15 @@ class WaferMapViewer {
                 }).catch(() => {});
                 this.scheduleDraw();
 
-                // 📊 로드 로그
-                const fetchTime = (tFetchEnd - tFetchStart).toFixed(0);
-                const blobTime = (tBlobEnd - tBlobStart).toFixed(0);
-                const bitmapTime = (tBitmapEnd - tBitmapStart).toFixed(0);
-                const totalTime = (performance.now() - tStart).toFixed(0);
-
-                if (cacheStatus === 'HIT' || cacheStatus === 'ORIGINAL') {
-                    console.log(`🎯 [SWITCH] Lv${level} | ${this.originalWidth}×${this.originalHeight} → ${bitmap.width}×${bitmap.height} | Zoom:${this.transform.scale.toFixed(2)} | Fetch:${fetchTime}ms Total:${totalTime}ms`);
-                } else {
-                    console.log(`🔄 [ASYNC] Lv${level} | ${this.originalWidth}×${this.originalHeight} → ${bitmap.width}×${bitmap.height} | Zoom:${this.transform.scale.toFixed(2)} | Fetch:${fetchTime}ms Blob:${blobTime}ms Bitmap:${bitmapTime}ms | Total:${totalTime}ms`);
-                }
+                const isCacheHit = cacheStatus === 'HIT' || cacheStatus === 'ORIGINAL';
+                const prefix = isCacheHit ? '[SWITCH]' : '[ASYNC]';
+                console.log(`${prefix} Lv${level} | ${this.originalWidth}×${this.originalHeight} → ${bitmap.width}×${bitmap.height} | Zoom:${this.transform.scale.toFixed(2)} | Cache:${cacheStatus} | ${timingSummary}`);
             } else if (silent) {
-                const totalTime = (performance.now() - tStart).toFixed(0);
-                console.log(`✅ [PREFETCH] Lv${level} 다운로드 완료 (${bitmap.width}×${bitmap.height}) | Cache:${cacheStatus} | ${totalTime}ms`);
+                console.log(`[PREFETCH] Lv${level} 다운로드완료 (${bitmap.width}×${bitmap.height}) | Cache:${cacheStatus} | ${timingSummary}`);
             }
 
         } catch (err) {
-            console.error(`❌ [ERROR] 피라미드 로드 실패 level=${level}:`, err);
+            console.error(`[ERROR] 피라미드 로드 실패 level=${level}:`, err);
         } finally {
             this._pyramidLoading.delete(level);
         }
@@ -7670,7 +7765,7 @@ class WaferMapViewer {
                 this.scheduleDraw();
 
                 // 📊 레벨 전환 로그
-                console.log(`🎯 [SWITCH] Lv${bestLevel} | ${this.originalWidth}×${this.originalHeight} → ${this.currentImage.width}×${this.currentImage.height} | Zoom:${this.transform.scale.toFixed(2)}`);
+                console.log(`[SWITCH] Lv${bestLevel} | ${this.originalWidth}×${this.originalHeight} → ${this.currentImage.width}×${this.currentImage.height} | Zoom:${this.transform.scale.toFixed(2)}`);
 
             } else {
 
@@ -8219,11 +8314,11 @@ class WaferMapViewer {
 
                             const blob = await offscreen.convertToBlob({ type: 'image/jpeg', quality: 1.0 });
 
-                            previewBitmap = await createImageBitmap(blob);
+                            previewBitmap = await decodeBitmapSmart(blob);
 
                         } else {
 
-                            previewBitmap = await createImageBitmap(offscreen);
+                            previewBitmap = await decodeBitmapSmart(offscreen);
 
                         }
 
@@ -8267,11 +8362,11 @@ class WaferMapViewer {
 
                 if (blob) {
 
-                    previewBitmap = await createImageBitmap(blob);
+                    previewBitmap = await decodeBitmapSmart(blob);
 
                 } else {
 
-                    previewBitmap = await createImageBitmap(canvas);
+                    previewBitmap = await decodeBitmapSmart(canvas);
 
                 }
 

@@ -17,13 +17,29 @@ $env:HTTPS_PORT="443"
 $env:SSL_CERTFILE="cert/fullchain.pem"
 $env:SSL_KEYFILE="cert/server.key"
 $env:THUMBNAIL_SIZE="512"
-$env:THUMBNAIL_FORMAT="PNG"
-$env:THUMBNAIL_QUALITY="100"
+$env:THUMBNAIL_FORMAT="JPEG"
+$env:THUMBNAIL_QUALITY="95"
 $env:PNG_COMPRESSION_LEVEL="3"
 $env:IO_THREADS="40"                     # Dev box (8C/64GB)
 $env:THUMBNAIL_SEM="32"                 # Concurrent thumbnail jobs
 $env:THUMB_PREFETCH_BATCH="32"          # Prefetch batch size
 $env:THUMB_CLIENT_MAX_CONCURRENCY="10"  # Frontend concurrent loads
-$env:VIPS_CONCURRENCY="6"               # pyvips worker count
+$env:VIPS_CONCURRENCY="12"              # pyvips worker count (동시 PNG 압축 가속)
+$env:VIPS_MAX_CACHE="2000"              # libvips 연산 캐시 개수
+$env:VIPS_MAX_CACHE_MEM="536870912"     # libvips 캐시 메모리 (512MB)
+$env:VIPS_MAX_CACHE_FILES="200"         # 열린 파일 캐시
+$env:VIPS_DISC_THRESHOLD="500m"         # 디스크 스필 기준 (RAM 디스크/SSD 사용 시 안전치)
+
+# 이미지 피라미드 설정
+$env:PYRAMID_LEVELS="0.2,0.5,0.7,1.0"
+$env:PYRAMID_ZOOM_THRESHOLDS="0.25,0.5,0.75"
+$env:PYRAMID_FORMAT="JPEG"
+$env:PYRAMID_Q="95"                   # JPEG/WEBP 품질 (PNG일 땐 무시)
+$env:PYRAMID_PNG_COMPRESSION="3"       # 무손실 유지, 네트워크 전송량과 생성시간 밸런스
+$env:PYRAMID_PNG_EFFORT="1"            # PNG effort (1=가장 빠름)
+$env:PYRAMID_KERNEL="cubic"
+$env:PYRAMID_LOADER_MODE="seq_early_copy"
+$env:USE_TURBOJPEG="1"
+$env:TURBOJPEG_PATH = "C:\libjpeg-turbo64\bin\turbojpeg.dll"
 
 python -m api.main

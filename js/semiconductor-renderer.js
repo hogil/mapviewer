@@ -17,6 +17,23 @@
  * @since 2025-01-10
  */
 
+async function decodeBitmapHelper(source, options) {
+    if (typeof window !== 'undefined' && window.BitmapLoader && typeof window.BitmapLoader.decode === 'function') {
+        try {
+            return await window.BitmapLoader.decode(source, options);
+        } catch (error) {
+            console.warn('[BitmapLoader] renderer fallback', error);
+        }
+    }
+    if (typeof createImageBitmap === 'function') {
+        return await createImageBitmap(source, options || undefined);
+    }
+    if (source instanceof OffscreenCanvas && typeof source.transferToImageBitmap === 'function') {
+        return source.transferToImageBitmap();
+    }
+    throw new Error('ImageBitmap decoding not supported');
+}
+
 class SemiconductorRenderer {
     /**
      * 렌더러 생성자
@@ -496,16 +513,14 @@ void main() {
 
         // 🔥 최적화: createImageBitmap 직접 사용 (가장 빠름)
         // 브라우저 네이티브 리샘플링 사용 (GPU 가속)
-        if (typeof createImageBitmap === 'function') {
-            try {
-                return await createImageBitmap(srcImage, {
-                    resizeWidth: dstWidth,
-                    resizeHeight: dstHeight,
-                    resizeQuality: 'high'  // 고품질 리샘플링
-                });
-            } catch (e) {
-                // 폴백: 캔버스 사용
-            }
+        try {
+            return await decodeBitmapHelper(srcImage, {
+                resizeWidth: dstWidth,
+                resizeHeight: dstHeight,
+                resizeQuality: 'high'
+            });
+        } catch (e) {
+            // 폴백: 캔버스 사용
         }
 
         // 폴백: OffscreenCanvas 또는 일반 Canvas 사용
@@ -524,7 +539,7 @@ void main() {
         if (hasOffscreen) {
             return canvas.transferToImageBitmap();
         }
-        return await createImageBitmap(canvas);
+        return await decodeBitmapHelper(canvas);
     }
     
     /**

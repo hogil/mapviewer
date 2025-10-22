@@ -15,8 +15,12 @@ Pyramid Format Probe
    - 목적: 서비스 전역 설정을 담당하며, 피라미드 썸네일 포맷/품질도 이 파일에서 제어합니다.
    - 관련 항목:
      - `PYRAMID_FORMAT`: `PNG`, `JPEG`, `WEBP` 중 하나. (기본값: `PNG`)
-     - `PYRAMID_Q`: 손실 압축 포맷(JPEG/WEBP)의 품질 값. 0~100 숫자.
-     - `PYRAMID_PNG_COMPRESSION`: PNG 저장 시 compress level(0~9).
+    - `PYRAMID_Q`: 손실 압축 포맷(JPEG/WEBP)의 품질 값. 0~100 숫자.
+    - `PYRAMID_PNG_COMPRESSION`: PNG 저장 시 compress level(0~9).
+    - `PYRAMID_PNG_EFFORT`: PNG 압축 효율/속도 조절 (1=가장 빠름, 10=가장 느림).
+    - `PYRAMID_LOADER_MODE`: `random_late_copy`(기본) 또는 `seq_early_copy`.
+    - `USE_TURBOJPEG`: `1`이면 TurboJPEG로 JPEG 저장을 시도합니다.
+    - `TURBOJPEG_PATH`: TurboJPEG DLL/so 경로(미지정 시 자동 검색).
    - FastAPI가 부팅될 때 `.env` 또는 환경 변수에서 값을 읽습니다. 환경 변수를 사용하지 않는다면 이 파일의 기본값을 직접 수정해도 됩니다.
 
 적용 절차
@@ -37,5 +41,5 @@ Pyramid Format Probe
 
 참고 사항
 ---------
-- `api/main.py`의 `_generate_pyramid_sync` 함수에서 `config.PYRAMID_FORMAT`, `config.PYRAMID_Q`, `config.PYRAMID_PNG_COMPRESSION`을 읽어 실제 인코더를 선택합니다.
+- `api/main.py`의 `_generate_pyramid_sync` 함수에서 `config.PYRAMID_FORMAT`, `config.PYRAMID_Q`, `config.PYRAMID_PNG_COMPRESSION`, `config.PYRAMID_PNG_EFFORT`을 읽어 실제 인코더를 선택합니다.
 - 설정 변경 후 기존 피라미드 파일이 이미 생성된 상태라면, 동일 포맷/품질로 재생성하려면 캐시된 파일을 삭제하거나 캐시 무효화 전략을 고려하세요.

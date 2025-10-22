@@ -5,10 +5,11 @@ L3Tracker - Wafer Map Viewer API (HTTPS, Pretty Table Logs, Noise-free)
 # ======================== Imports ========================
 import os, re, sys, json, time, shutil, asyncio, logging, logging.config, hashlib
 from pathlib import Path
+from contextlib import contextmanager
 from typing import List, Optional, Dict, Any, Tuple
 from collections import OrderedDict
 from bisect import bisect_left, bisect_right
-from threading import RLock
+from threading import RLock, Lock
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
@@ -22,6 +23,17 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field
 from PIL import Image
+try:
+    from turbojpeg import TurboJPEG, TJPF_RGB, TJSAMP_420  # type: ignore
+    try:
+        from turbojpeg import TJFLAG_FASTDCT  # type: ignore
+    except Exception:
+        TJFLAG_FASTDCT = None  # type: ignore
+except Exception:  # pragma: no cover
+    TurboJPEG = None  # type: ignore
+    TJPF_RGB = None  # type: ignore
+    TJSAMP_420 = None  # type: ignore
+    TJFLAG_FASTDCT = None  # type: ignore
 import http.client
 import urllib.parse
 
@@ -1478,139 +1490,358 @@ def _lookup_original_relpath_from_classification_path(path_str: str) -> Optional
     except Exception:
         return None
 
+_pyramid_lock_guard = Lock()
+_pyramid_generation_locks: Dict[str, Lock] = {}
+
+_turbojpeg_lock = Lock()
+_turbojpeg_encoder = None  # type: ignore
+_turbojpeg_subsampling_lock = Lock()
+_turbojpeg_subsampling_key: Optional[str] = None  # None: unknown, "": unsupported
+
+
+def _get_turbojpeg_encoder():
+    if not getattr(config, "USE_TURBOJPEG", False):
+        return None
+    if TurboJPEG is None:
+        return None
+    global _turbojpeg_encoder
+    with _turbojpeg_lock:
+        if _turbojpeg_encoder is None:
+            try:
+                lib_path = getattr(config, "TURBOJPEG_PATH", "") or None
+                _turbojpeg_encoder = TurboJPEG(lib_path=lib_path) if lib_path else TurboJPEG()
+                logging.getLogger("l3tracker").info(
+                    "🚀 [TurboJPEG] encoder 활성화 (lib=%s)", lib_path or "auto"
+                )
+            except Exception as exc:  # pragma: no cover
+                logging.getLogger("l3tracker").warning(
+                    "⚠️ [TurboJPEG] 초기화 실패: %s", exc
+                )
+                _turbojpeg_encoder = False
+        if _turbojpeg_encoder is False:
+            return None
+        return _turbojpeg_encoder
+
+
+def _turbojpeg_encode_compat(turbo, image_array, base_kwargs, subsampling_value):
+    """
+    Invoke TurboJPEG.encode while adapting to API differences between releases.
+    Some builds use `chroma_subsampling`, older ones keep `jpeg_subsample` or have no keyword.
+    """
+    global _turbojpeg_subsampling_key
+    if subsampling_value is None:
+        return turbo.encode(image_array, **base_kwargs)
+
+    key = _turbojpeg_subsampling_key
+    if key is None:
+        with _turbojpeg_subsampling_lock:
+            key = _turbojpeg_subsampling_key
+            if key is None:
+                last_error: Optional[Exception] = None
+                for candidate in ("chroma_subsampling", "jpeg_subsample", "subsampling", ""):
+                    attempt_kwargs = dict(base_kwargs)
+                    if candidate:
+                        attempt_kwargs[candidate] = subsampling_value
+                    try:
+                        result = turbo.encode(image_array, **attempt_kwargs)
+                        _turbojpeg_subsampling_key = candidate
+                        if candidate == "":
+                            logging.getLogger("l3tracker").info(
+                                "[TurboJPEG] chroma_subsampling keyword unsupported; falling back to default API"
+                            )
+                        elif candidate != "chroma_subsampling":
+                            logging.getLogger("l3tracker").info(
+                                "[TurboJPEG] using '%s' instead of 'chroma_subsampling' for compatibility",
+                                candidate,
+                            )
+                        return result
+                    except TypeError as exc:
+                        last_error = exc
+                        continue
+                # Nothing worked; re-raise the last error for upstream handling.
+                if last_error is not None:
+                    raise last_error
+                raise RuntimeError("TurboJPEG.encode failed without raising TypeError")
+        key = _turbojpeg_subsampling_key
+
+    encode_kwargs = dict(base_kwargs)
+    if key:
+        encode_kwargs[key] = subsampling_value
+    return turbo.encode(image_array, **encode_kwargs)
+
+
+def _save_with_turbojpeg(work_image, dest: str, quality: int) -> bool:
+    turbo = _get_turbojpeg_encoder()
+    if not turbo:
+        return False
+    try:
+        import numpy as np  # local import to avoid hard dependency at startup
+        import time
+        image = work_image
+        if image.bands > 3:
+            image = image.extract_band(0, n=3)
+        elif image.bands == 2:
+            image = image.extract_band(0, n=1)
+        if image.interpretation not in ("srgb", "rgb"):
+            try:
+                image = image.colourspace("srgb")
+            except Exception:
+                pass
+        if image.format != "uchar":
+            image = image.cast("uchar")
+
+        t_start = time.perf_counter()
+        mem = image.write_to_memory()
+        t_after_write = time.perf_counter()
+        array = np.frombuffer(mem, dtype=np.uint8).reshape(image.height, image.width, image.bands)
+        if array.shape[2] == 1:
+            array = np.repeat(array, 3, axis=2)
+        elif array.shape[2] > 3:
+            array = array[:, :, :3]
+        t_after_reshape = time.perf_counter()
+
+        encode_kwargs = {"quality": int(quality)}
+        if TJPF_RGB is not None:
+            encode_kwargs["pixel_format"] = TJPF_RGB
+        if TJFLAG_FASTDCT is not None:
+            encode_kwargs["flags"] = TJFLAG_FASTDCT
+        subsampling_value = TJSAMP_420 if TJSAMP_420 is not None else None
+        buffer = _turbojpeg_encode_compat(turbo, array, encode_kwargs, subsampling_value)
+        t_after_encode = time.perf_counter()
+        Path(dest).write_bytes(buffer)
+        t_end = time.perf_counter()
+        logging.getLogger("l3tracker").info(
+            "[TurboJPEG] timings: write_mem=%.1fms reshape=%.1fms encode=%.1fms write=%.1fms size=%d",
+            (t_after_write - t_start) * 1000.0,
+            (t_after_reshape - t_after_write) * 1000.0,
+            (t_after_encode - t_after_reshape) * 1000.0,
+            (t_end - t_after_encode) * 1000.0,
+            len(buffer),
+        )
+        return True
+    except Exception as exc:  # pragma: no cover
+        logging.getLogger("l3tracker").warning("⚠️ [TurboJPEG] 인코딩 실패: %s", exc)
+        return False
+
+
+@contextmanager
+def _pyramid_path_lock(path: Path):
+    """Ensure single-writer semantics per pyramid output path."""
+    key = str(path)
+    with _pyramid_lock_guard:
+        lock = _pyramid_generation_locks.get(key)
+        if lock is None:
+            lock = Lock()
+            _pyramid_generation_locks[key] = lock
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
     """🚀 피라미드 레벨 이미지 생성 (속도 극대화)"""
     import time
     start_time = time.time()
 
-    # 디렉토리 생성
-    pyramid_path.parent.mkdir(parents=True, exist_ok=True)
-
     logger.info(f"🚀 [PYRAMID] 시작: level={level}")
 
     target_format = config.PYRAMID_FORMAT.upper()
-    is_png = target_format == "PNG"
+    quality = max(1, min(100, int(config.PYRAMID_Q)))
+    png_compression = max(0, min(9, int(config.PYRAMID_PNG_COMPRESSION)))
+    png_effort = max(1, min(10, int(config.PYRAMID_PNG_EFFORT)))
+    kernel_name = (config.PYRAMID_KERNEL or "cubic").lower()
+    loader_mode = getattr(config, "PYRAMID_LOADER_MODE", "random_late_copy").strip().lower()
 
-    try:
-        # PyVips로 초고속 처리 시도
-        import pyvips
-        t0 = time.time()
-        logger.info(f"⏱️ [DEBUG] pyvips import: {(time.time()-t0)*1000:.0f}ms")
-
-        # VIPS 로그 억제 (set_log_handler는 일부 버전에서만 지원)
-        try:
-            pyvips.set_log_handler(lambda domain, level, msg: None)
-        except AttributeError:
-            pass
-
-        # 🚀 크기 계산 (원본 정보만 먼저 로드)
-        t1 = time.time()
-        image = pyvips.Image.new_from_file(str(image_path), access='sequential')
-        orig_w, orig_h = image.width, image.height
-        new_w = max(1, int(orig_w * level))
-        new_h = max(1, int(orig_h * level))
-        logger.info(f"⏱️ [DEBUG] 크기 계산 ({orig_w}x{orig_h} → {new_w}x{new_h}): {(time.time()-t1)*1000:.0f}ms")
-
-        save_kwargs: Dict[str, Any] = {}
-        save_method = "write_to_file"
-        if is_png:
-            save_kwargs = {
-                "compression": config.PYRAMID_PNG_COMPRESSION,
-                "strip": True,
-                "interlace": False
-            }
-        elif target_format == "WEBP":
-            save_method = "webpsave"
-            save_kwargs = {
-                "Q": config.PYRAMID_Q,
-                "lossless": False,
-                "effort": 1,
-                "strip": True,
-                "smart_subsample": False
-            }
-        else:
-            save_kwargs = {
-                "Q": config.PYRAMID_Q,
-                "strip": True
-            }
-
-        # 🚀 핵심 최적화: thumbnail() 사용 (JPEG shrink-on-load 활용, 6배 빠름!)
-        if level >= 1.0:
-            # Level 1.0: 포맷에 맞춰 그대로 저장 (PNG 레벨3)
-            t2 = time.time()
-            getattr(image, save_method)(str(pyramid_path), **save_kwargs)
-            logger.info(f"⏱️ [DEBUG] 전체 해상도 저장: {(time.time()-t2)*1000:.0f}ms")
-            logger.info(f"✅ [COPY] Level 1.0 - {target_format} 재인코딩")
-        else:
-            # pyvips로 이미지 리사이즈 (cubic 커널 강제)
-            t2 = time.time()
-            scale_w = new_w / orig_w
-            scale_h = new_h / orig_h
-            resized = image.resize(scale_w, vscale=scale_h, kernel=config.PYRAMID_KERNEL or 'cubic')
-            logger.info(f"⏱️ [DEBUG] resize({config.PYRAMID_KERNEL or 'cubic'}) 리사이즈: {(time.time()-t2)*1000:.0f}ms")
-
-            # 지정 포맷으로 저장
-            t3 = time.time()
-            getattr(resized, save_method)(str(pyramid_path), **save_kwargs)
-            t4 = time.time()
-            logger.info(f"⏱️ [DEBUG] 저장 완료: {(t4-t3)*1000:.0f}ms ({target_format})")
-
-        # 시간 측정 및 로그
+    def _log_completion(width: int, height: int) -> None:
         elapsed = time.time() - start_time
         if pyramid_path.exists():
             file_size = pyramid_path.stat().st_size
-            logger.info(f"✅ [PYRAMID] 완료: {new_w}×{new_h} ({file_size:,} bytes) - {elapsed:.2f}초")
+            logger.info(f"✅ [PYRAMID] 완료: {width}×{height} ({file_size:,} bytes) - {elapsed:.2f}초")
         else:
             logger.error(f"❌ [PYRAMID] 파일 생성 실패 - {elapsed:.2f}초")
 
-    except ImportError:
-        # PyVips가 없으면 Pillow 사용
-        logger.info(f"🚀 [PILLOW] PyVips 없음 - Pillow 사용")
-
-        from PIL import Image
-
-        with Image.open(image_path) as img:
-            orig_w, orig_h = img.size
-            new_w = max(1, int(orig_w * level))
-            new_h = max(1, int(orig_h * level))
-
-            if img.mode not in ("RGB", "RGBA"):
-                img = img.convert("RGB")
-
-            if level >= 1.0:
-                resized = img
-            else:
-                resized = img.resize((new_w, new_h), Image.Resampling.BICUBIC)
-
-            pillow_kwargs: Dict[str, Any] = {"optimize": True}
-            if is_png:
-                pillow_kwargs["compress_level"] = config.PYRAMID_PNG_COMPRESSION
-            else:
-                pillow_kwargs["quality"] = config.PYRAMID_Q
-                pillow_kwargs["method"] = 1
-
-            resized.save(pyramid_path, format=target_format, **pillow_kwargs)
-
-            # 시간 측정 및 로그
-            elapsed = time.time() - start_time
-            if pyramid_path.exists():
-                file_size = pyramid_path.stat().st_size
-                logger.info(f"✅ [PYRAMID] 완료: {new_w}×{new_h} ({file_size:,} bytes) - {elapsed:.2f}초")
-            else:
-                logger.error(f"❌ [PYRAMID] 파일 생성 실패 - {elapsed:.2f}초")
-
-    except Exception as e:
-        elapsed = time.time() - start_time
-        logger.error(f"❌ [PYRAMID] 오류: {e} - {elapsed:.2f}초")
-
-        # 실패 시 원본 복사
+    def _safe_unlink(path: Path) -> None:
         try:
-            import shutil
-            shutil.copy2(image_path, pyramid_path)
-            logger.info(f"🚀 [SPEED FALLBACK] 원본 복사: {pyramid_path}")
-        except Exception as copy_error:
-            logger.exception(f"🚀 [SPEED COPY FAILED] {copy_error}")
-            raise
+            path.unlink()
+        except FileNotFoundError:
+            return
+        except Exception as unlink_err:
+            logger.debug(f"⚠️ [PYRAMID] 임시 파일 삭제 실패: {unlink_err}")
+
+    def _atomic_replace(src: Path, dest: Path) -> None:
+        try:
+            src.replace(dest)
+        except PermissionError:
+            try:
+                dest.unlink()
+            except FileNotFoundError:
+                pass
+            src.replace(dest)
+
+    with _pyramid_path_lock(pyramid_path):
+        pyramid_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = pyramid_path.with_name(pyramid_path.name + ".tmp")
+        _safe_unlink(temp_path)
+        expected_w: Optional[int] = None
+        expected_h: Optional[int] = None
+
+        try:
+            try:
+                import pyvips  # type: ignore
+            except ImportError:
+                pyvips = None  # type: ignore[assignment]
+                logger.info("🚀 [PILLOW] PyVips 없음 - Pillow 사용")
+            else:
+                try:
+                    try:
+                        pyvips.set_log_handler(lambda domain, lvl, msg: None)
+                    except AttributeError:
+                        pass
+
+                    access_mode = "random" if loader_mode == "random_late_copy" else "sequential"
+                    image = pyvips.Image.new_from_file(str(image_path), access=access_mode)
+                    orig_w, orig_h = image.width, image.height
+                    expected_w = max(1, int(orig_w * level))
+                    expected_h = max(1, int(orig_h * level))
+                    logger.info(f"⏱️ [DEBUG] 크기 계산 ({orig_w}x{orig_h} → {expected_w}x{expected_h})")
+
+                    work_image = image.copy_memory() if loader_mode == "seq_early_copy" else image
+                    if level < 1.0:
+                        shrink_ratio = min(orig_w / expected_w, orig_h / expected_h)
+                        shrink_factor = max(int(shrink_ratio), 1)
+                        if shrink_factor > 1:
+                            t_shrink = time.time()
+                            work_image = work_image.shrink(shrink_factor, shrink_factor)
+                            logger.info(f"⏱️ [DEBUG] shrink x{shrink_factor}: {(time.time()-t_shrink)*1000:.0f}ms")
+
+                        current_w, current_h = work_image.width, work_image.height
+                        residual_w = min(expected_w / current_w, 1.0)
+                        residual_h = min(expected_h / current_h, 1.0)
+                        if residual_w < 0.999 or residual_h < 0.999:
+                            t_resize = time.time()
+                            work_image = work_image.resize(residual_w, vscale=residual_h, kernel=kernel_name)
+                            logger.info(f"⏱️ [DEBUG] resize({kernel_name}): {(time.time()-t_resize)*1000:.0f}ms")
+                    else:
+                        logger.info("⏱️ [DEBUG] Level 1.0 - 원본 해상도 유지")
+
+                    if loader_mode == "random_late_copy":
+                        work_image = work_image.copy_memory()
+
+                    final_w, final_h = work_image.width, work_image.height
+                    t_save = time.time()
+                    temp_target = str(temp_path)
+                    if target_format == "PNG":
+                        work_image.pngsave(
+                            temp_target,
+                            compression=png_compression,
+                            interlace=False,
+                            strip=True,
+                            effort=png_effort,
+                            keep=pyvips.enums.ForeignKeep.NONE,
+                        )
+                    elif target_format == "WEBP":
+                        work_image.webpsave(
+                            temp_target,
+                            Q=quality,
+                            lossless=False,
+                            effort=1,
+                            strip=True,
+                            smart_subsample=False,
+                        )
+                    else:
+                        used_turbo = _save_with_turbojpeg(work_image, temp_target, quality)
+                        if not used_turbo:
+                            work_image.jpegsave(
+                                temp_target,
+                                Q=quality,
+                                strip=True,
+                                optimize_coding=True,
+                                subsample_mode="auto",
+                            )
+                        logger.info(
+                            "⏱️ [DEBUG] 저장 완료: %.0fms (%s)",
+                            (time.time() - t_save) * 1000.0,
+                            "TurboJPEG" if used_turbo else target_format,
+                        )
+                    _atomic_replace(temp_path, pyramid_path)
+                    _log_completion(final_w, final_h)
+                    return
+                except pyvips.Error as vips_err:  # type: ignore[attr-defined]
+                    logger.warning(f"⚠️ [PYVIPS] 오류 - Pillow 폴백 진행: {vips_err}")
+                except Exception as vips_generic:
+                    logger.exception(f"⚠️ [PYVIPS] 예기치 않은 오류 - Pillow 폴백: {vips_generic}")
+
+            from PIL import Image
+
+            with Image.open(image_path) as img:
+                orig_w, orig_h = img.size
+                expected_w = max(1, int(orig_w * level))
+                expected_h = max(1, int(orig_h * level))
+                logger.info(f"⏱️ [DEBUG] Pillow 크기 계산 ({orig_w}x{orig_h} → {expected_w}x{expected_h})")
+
+                resample_map = {
+                    "nearest": Image.Resampling.NEAREST,
+                    "linear": Image.Resampling.BILINEAR,
+                    "bilinear": Image.Resampling.BILINEAR,
+                    "cubic": Image.Resampling.BICUBIC,
+                    "bicubic": Image.Resampling.BICUBIC,
+                    "lanczos": Image.Resampling.LANCZOS,
+                    "lanczos2": Image.Resampling.LANCZOS,
+                    "lanczos3": Image.Resampling.LANCZOS,
+                }
+                resample = resample_map.get(kernel_name, Image.Resampling.BICUBIC)
+
+                if level < 1.0:
+                    resized = img.resize((expected_w, expected_h), resample=resample)
+                else:
+                    resized = img.copy()
+
+                if target_format in {"JPEG", "WEBP", "JPG"} and resized.mode not in ("RGB", "L"):
+                    resized = resized.convert("RGB")
+                elif target_format == "PNG" and resized.mode == "P" and "transparency" in resized.info:
+                    resized = resized.convert("RGBA")
+
+                pillow_kwargs: Dict[str, Any] = {}
+                if target_format == "PNG":
+                    pillow_kwargs["compress_level"] = png_compression
+                elif target_format == "WEBP":
+                    pillow_kwargs["quality"] = quality
+                    pillow_kwargs["method"] = 1
+                    pillow_kwargs["lossless"] = False
+                else:
+                    pillow_kwargs["quality"] = quality
+                    pillow_kwargs["optimize"] = True
+                    pillow_kwargs["progressive"] = True
+
+                resized.save(str(temp_path), format=target_format, **pillow_kwargs)
+                _atomic_replace(temp_path, pyramid_path)
+                _log_completion(resized.width, resized.height)
+                return
+
+        except Exception as e:
+            elapsed = time.time() - start_time
+            logger.error(f"❌ [PYRAMID] 오류: {e} - {elapsed:.2f}초")
+
+            try:
+                shutil.copy2(image_path, str(temp_path))
+                _atomic_replace(temp_path, pyramid_path)
+                logger.info(f"🚑 [SPEED FALLBACK] 원본 복사: {pyramid_path}")
+                try:
+                    from PIL import Image as _ImageForFallback
+                    with _ImageForFallback.open(image_path) as orig_img:
+                        _log_completion(orig_img.width, orig_img.height)
+                except Exception as size_err:
+                    logger.debug(f"⚠️ [PYRAMID] 원본 크기 확인 실패: {size_err}")
+                    elapsed = time.time() - start_time
+                    logger.info(f"✅ [PYRAMID] 완료(원본 복사): {pyramid_path} - {elapsed:.2f}초")
+                return
+            except Exception as copy_error:
+                logger.exception(f"🚑 [SPEED COPY FAILED] {copy_error}")
+                raise
+        finally:
+            _safe_unlink(temp_path)
 
 
 # 🔥 Background 피라미드 생성 (동시 생성 제한)
@@ -1618,47 +1849,40 @@ _pyramid_bg_executor = ThreadPoolExecutor(max_workers=4)  # 최대 4개 동시 �
 _pyramid_bg_generating = set()  # 현재 생성 중인 파일 경로
 
 async def _generate_other_levels_background(image_path: Path, current_level: float, stem: str):
-    """다른 피라미드 레벨들을 background에서 생성"""
+    """다른 피라미드 레벨들을 background에서 생성 (원본 재사용 파이프라인)"""
     format_ext = config.PYRAMID_FORMAT.lower()
     try:
-        # 생성할 레벨 목록 (현재 레벨 제외)
-        other_levels = [l for l in config.PYRAMID_LEVELS if l != current_level]
+        # 생성할 레벨 목록 (현재 레벨 제외, 1.0 제외)
+        other_levels = [l for l in config.PYRAMID_LEVELS if l != current_level and l < 1.0]
+        
+        if not other_levels:
+            logger.info("⏭️ [BG SKIP] 생성할 레벨이 없음")
+            return
 
-        for other_level in other_levels:
-            # 피라미드 경로 생성
-            pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{int(other_level*100)}"
-            pyramid_path = pyramid_dir / f"{stem}_L{int(other_level*100)}.{format_ext}"
-
-            # 🔥 이미 존재하거나 생성 중이면 스킵
-            path_key = str(pyramid_path)
-
-            # 1. 이미 파일이 존재하고 최신인지 확인
-            if pyramid_path.exists():
-                try:
-                    image_mtime = image_path.stat().st_mtime
-                    if pyramid_path.stat().st_mtime >= image_mtime:
-                        logger.info(f"⏭️  [BG SKIP] 이미 존재: level={other_level}")
-                        continue  # 최신 파일이면 스킵
-                except Exception:
-                    pass
-
-            # 2. 이미 생성 중인지 확인
-            if path_key in _pyramid_bg_generating:
-                logger.info(f"⏭️  [BG SKIP] 이미 생성 중: level={other_level}")
-                continue
-
-            _pyramid_bg_generating.add(path_key)
-
-            # Background에서 생성 (ThreadPoolExecutor 사용)
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                _pyramid_bg_executor,
-                _generate_pyramid_bg_worker,
-                image_path,
-                pyramid_path,
-                other_level,
-                path_key
-            )
+        # 레벨을 크기 순으로 정렬 (큰 레벨부터)
+        other_levels.sort(reverse=True)
+        
+        logger.info(f"🚀 [BG PIPELINE] Background 파이프라인 시작: levels={other_levels}")
+        
+        # 파이프라인 실행 (ThreadPoolExecutor 사용)
+        loop = asyncio.get_running_loop()
+        results = await loop.run_in_executor(
+            _pyramid_bg_executor,
+            _generate_pyramid_pipeline,
+            image_path,
+            other_levels,
+            stem,
+            format_ext
+        )
+        
+        # 결과 로깅
+        success_count = sum(1 for _, success, _ in results if success)
+        total_count = len(results)
+        logger.info(f"✅ [BG PIPELINE] 완료: {success_count}/{total_count} 성공")
+        
+        for level, success, status in results:
+            if not success and status != "EXISTS":
+                logger.warning(f"⚠️ [BG PIPELINE] Level {level} 실패: {status}")
 
     except Exception as e:
         logger.warning(f"⚠️ [BG PYRAMID] Background 생성 오류: {e}")
@@ -1674,6 +1898,110 @@ def _generate_pyramid_bg_worker(image_path: Path, pyramid_path: Path, level: flo
         logger.warning(f"⚠️ [BG ERROR] Background 생성 실패: {e}")
     finally:
         _pyramid_bg_generating.discard(path_key)
+
+
+def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format_ext: str):
+    """원본 이미지를 한 번만 읽고 여러 레벨을 연속 생성하는 파이프라인"""
+    import pyvips
+    import time
+    
+    try:
+        # 원본 이미지를 한 번만 읽기
+        t_read_start = time.time()
+        original_image = pyvips.Image.new_from_file(str(image_path))
+        t_read_end = time.time()
+        logger.info(f"⏱️ [PIPELINE] 원본 읽기: {(t_read_end - t_read_start)*1000:.0f}ms")
+        
+        results = []
+        
+        for level in levels:
+            try:
+                # 피라미드 경로 생성
+                pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
+                pyramid_path = pyramid_dir / f"{stem}_L{int(level*100)}.{format_ext}"
+                
+                # 이미 존재하면 스킵
+                if pyramid_path.exists():
+                    try:
+                        image_mtime = image_path.stat().st_mtime
+                        if pyramid_path.stat().st_mtime >= image_mtime:
+                            logger.info(f"⏭️ [PIPELINE SKIP] 이미 존재: level={level}")
+                            results.append((level, True, "EXISTS"))
+                            continue
+                    except Exception:
+                        pass
+                
+                # 레벨 생성
+                t_level_start = time.time()
+                work_image = original_image
+                
+                # 레벨에 따른 리사이즈
+                if level < 1.0:
+                    scale = level
+                    new_width = int(original_image.width * scale)
+                    new_height = int(original_image.height * scale)
+                    
+                    # 리사이즈 커널 선택
+                    if scale < 0.5:
+                        kernel = pyvips.enums.Kernel.MITCHELL
+                    else:
+                        kernel = pyvips.enums.Kernel.LANCZOS3
+                    
+                    work_image = work_image.resize(scale, kernel=kernel)
+                    logger.info(f"⏱️ [PIPELINE] resize({kernel}): {(time.time()-t_level_start)*1000:.0f}ms")
+                else:
+                    logger.info("⏱️ [PIPELINE] Level 1.0 - 원본 해상도 유지")
+                
+                # 저장
+                t_save_start = time.time()
+                temp_path = pyramid_path.with_suffix('.tmp')
+                
+                # 포맷별 저장
+                if format_ext == "png":
+                    work_image.pngsave(
+                        str(temp_path),
+                        compression=6,
+                        interlace=False,
+                        strip=True,
+                        effort=1,
+                        keep=pyvips.enums.ForeignKeep.NONE,
+                    )
+                elif format_ext == "webp":
+                    work_image.webpsave(
+                        str(temp_path),
+                        Q=85,
+                        lossless=False,
+                        effort=1,
+                        strip=True,
+                        smart_subsample=False,
+                    )
+                else:  # jpeg
+                    used_turbo = _save_with_turbojpeg(work_image, str(temp_path), 85)
+                    if not used_turbo:
+                        work_image.jpegsave(
+                            str(temp_path),
+                            Q=85,
+                            strip=True,
+                            optimize_coding=True,
+                            subsample_mode="auto",
+                        )
+                
+                # 임시 파일을 최종 파일로 이동
+                temp_path.replace(pyramid_path)
+                t_save_end = time.time()
+                
+                logger.info(f"✅ [PIPELINE] Level {level} 완료: {(t_save_end - t_save_start)*1000:.0f}ms")
+                results.append((level, True, "SUCCESS"))
+                
+            except Exception as e:
+                logger.warning(f"⚠️ [PIPELINE ERROR] Level {level} 생성 실패: {e}")
+                results.append((level, False, str(e)))
+        
+        return results
+        
+    except Exception as e:
+        logger.error(f"❌ [PIPELINE ERROR] 파이프라인 실패: {e}")
+        return [(level, False, str(e)) for level in levels]
 
 
 @app.get("/api/image/size")

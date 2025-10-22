@@ -54,9 +54,14 @@ export THUMB_STAT_CACHE_CAPACITY="32768" # 썸네일 stat 캐시 증가
 # 이미지 피라미드 설정
 export PYRAMID_LEVELS="0.2,0.5,0.7,1.0"      # 피라미드 레벨 (최고품질 Q=100, Lanczos3)
 export PYRAMID_ZOOM_THRESHOLDS="0.25,0.5,0.75"  # zoom 기준 (≤0.25→0.2, ≤0.5→0.5, ≤0.75→0.7, >0.75→1.0)
-export PYRAMID_FORMAT="PNG"
-export PYRAMID_PNG_COMPRESSION="3"
-export PYRAMID_KERNEL="cubic"
+export PYRAMID_FORMAT="${PYRAMID_FORMAT:-JPEG}"
+export PYRAMID_Q="${PYRAMID_Q:-95}"
+export PYRAMID_PNG_COMPRESSION="${PYRAMID_PNG_COMPRESSION:-3}"
+export PYRAMID_PNG_EFFORT="${PYRAMID_PNG_EFFORT:-1}"
+export PYRAMID_KERNEL="${PYRAMID_KERNEL:-cubic}"
+export PYRAMID_LOADER_MODE="${PYRAMID_LOADER_MODE:-seq_early_copy}"
+export USE_TURBOJPEG="${USE_TURBOJPEG:-1}"
+export TURBOJPEG_PATH="${TURBOJPEG_PATH:-/usr/lib/x86_64-linux-gnu/libturbojpeg.so}"
 
 # 서버 시작
 python3 -m api.main

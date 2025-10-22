@@ -4,6 +4,20 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.0.0/)를 따르며,
 버전 관리는 [Semantic Versioning](https://semver.org/lang/ko/)을 준수합니다.
 
+## [Unreleased]
+
+### 🚀 변경
+- 피라미드 타일 생성 경로 최적화: PyVips 단계에서 빠른 shrink/resize 조합 적용, JPEG/WEBP 품질·PNG 압축 환경변수 적용 보정, Pillow 폴백 안정성 향상.
+- start.sh, start.ps1에 PYRAMID_Q 등 피라미드 관련 환경 변수를 포함해 운영/개발 환경에서 동일한 품질 설정 유지.
+- PNG 저장 속도를 높이기 위한 `PYRAMID_PNG_EFFORT` 환경 변수 추가(기본 1, 화질 변화 없이 CPU 부담 감소).
+- 프론트 디코딩 경로를 Web Worker/OffscreenCanvas 기반으로 이관하고 이미지 fetch 우선순위를 높여 메인 스레드 블로킹 최소화.
+- 배경 피라미드 생성에서 레벨별 실행을 병렬화하여 0.5/0.7/1.0 생성 총시간이 개별 시간의 최댓값으로 줄어듦.
+- `scripts/level07_speedtest.py` 스크립트 추가로 단일 이미지/레벨 기준 인코딩 전략과 포맷별 속도를 빠르게 비교 가능.
+- TurboJPEG 기반 JPEG 저장 경로 도입 (`USE_TURBOJPEG`, `TURBOJPEG_PATH`, `PYRAMID_LOADER_MODE` 지원)으로 JPEG 피라미드 생성 시간 약 3~5배 단축.
+- 기본 로더 모드를 `seq_early_copy`로 전환해 단건 지연과 안정성을 높임.
+
+---
+
 ## [2.1.0] - 2025-09-23
 
 ### ✨ 추가/변경
@@ -138,3 +152,4 @@
 - **정식 릴리즈**: 분기별 (3개월)
 - **패치 릴리즈**: 필요시 수시
 - **핫픽스**: 긴급 버그 발견 시 즉시
+
