@@ -1294,15 +1294,17 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
                         smart_subsample=False
                     )
                 else:
-                    # TurboJPEG 우선 시도 (JPEG 포맷인 경우)
+                    # pyvips만 사용 (TurboJPEG 제거)
                     if fmt == "JPEG":
-                        used_turbo = _save_with_turbojpeg(vips_obj, str(thumbnail_path), THUMBNAIL_QUALITY)
-                        if not used_turbo:
-                            vips_obj.write_to_file(
-                                str(thumbnail_path),
-                                Q=THUMBNAIL_QUALITY,
-                                strip=True
-                            )
+                        vips_obj.jpegsave(
+                            str(thumbnail_path),
+                            Q=THUMBNAIL_QUALITY,
+                            strip=True,
+                            optimize_coding=False,     # 속도 우선
+                            subsample_mode=1,          # 4:2:0 (가장 빠름)
+                            interlace=False,           # 인터레이스 비활성화
+                            trellis_quant=False        # 트렐리스 양자화 비활성화
+                        )
                     else:
                         vips_obj.write_to_file(
                             str(thumbnail_path),
@@ -1580,58 +1582,13 @@ def _turbojpeg_encode_compat(turbo, image_array, base_kwargs, subsampling_value)
     return turbo.encode(image_array, **encode_kwargs)
 
 
-def _save_with_turbojpeg(work_image, dest: str, quality: int) -> bool:
-    turbo = _get_turbojpeg_encoder()
-    if not turbo:
-        return False
-    try:
-        import numpy as np  # local import to avoid hard dependency at startup
-        import time
-        image = work_image
-        if image.bands > 3:
-            image = image.extract_band(0, n=3)
-        elif image.bands == 2:
-            image = image.extract_band(0, n=1)
-        if image.interpretation not in ("srgb", "rgb"):
-            try:
-                image = image.colourspace("srgb")
-            except Exception:
-                pass
-        if image.format != "uchar":
-            image = image.cast("uchar")
+# TurboJPEG 함수 제거 - pyvips만 사용
+def _save_with_turbojpeg_disabled(work_image, dest: str, quality: int) -> bool:
+    # TurboJPEG 완전 비활성화 - 항상 False 반환
+    return False
 
-        t_start = time.perf_counter()
-        mem = image.write_to_memory()
-        t_after_write = time.perf_counter()
-        array = np.frombuffer(mem, dtype=np.uint8).reshape(image.height, image.width, image.bands)
-        if array.shape[2] == 1:
-            array = np.repeat(array, 3, axis=2)
-        elif array.shape[2] > 3:
-            array = array[:, :, :3]
-        t_after_reshape = time.perf_counter()
-
-        encode_kwargs = {"quality": int(quality)}
-        if TJPF_RGB is not None:
-            encode_kwargs["pixel_format"] = TJPF_RGB
-        if TJFLAG_FASTDCT is not None:
-            encode_kwargs["flags"] = TJFLAG_FASTDCT
-        subsampling_value = TJSAMP_420 if TJSAMP_420 is not None else None
-        buffer = _turbojpeg_encode_compat(turbo, array, encode_kwargs, subsampling_value)
-        t_after_encode = time.perf_counter()
-        Path(dest).write_bytes(buffer)
-        t_end = time.perf_counter()
-        logging.getLogger("l3tracker").info(
-            "[TurboJPEG] timings: write_mem=%.1fms reshape=%.1fms encode=%.1fms write=%.1fms size=%d",
-            (t_after_write - t_start) * 1000.0,
-            (t_after_reshape - t_after_write) * 1000.0,
-            (t_after_encode - t_after_reshape) * 1000.0,
-            (t_end - t_after_encode) * 1000.0,
-            len(buffer),
-        )
-        return True
-    except Exception as exc:  # pragma: no cover
-        logging.getLogger("l3tracker").warning("⚠️ [TurboJPEG] 인코딩 실패: %s", exc)
-        return False
+# 함수 이름 매핑
+_save_with_turbojpeg = _save_with_turbojpeg_disabled
 
 
 @contextmanager
@@ -1761,19 +1718,19 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
                             smart_subsample=False,
                         )
                     else:
-                        used_turbo = _save_with_turbojpeg(work_image, temp_target, quality)
-                        if not used_turbo:
-                            work_image.jpegsave(
-                                temp_target,
-                                Q=quality,
-                                strip=True,
-                                optimize_coding=True,
-                                subsample_mode="auto",
-                            )
+                        # pyvips만 사용 (TurboJPEG 제거)
+                        work_image.jpegsave(
+                            temp_target,
+                            Q=quality,
+                            strip=True,
+                            optimize_coding=False,     # 속도 우선
+                            subsample_mode=1,          # 4:2:0 (가장 빠름)
+                            interlace=False,           # 인터레이스 비활성화
+                            trellis_quant=False        # 트렐리스 양자화 비활성화
+                        )
                         logger.info(
-                            "⏱️ [DEBUG] 저장 완료: %.0fms (%s)",
+                            "⏱️ [DEBUG] 저장 완료: %.0fms (pyvips)",
                             (time.time() - t_save) * 1000.0,
-                            "TurboJPEG" if used_turbo else target_format,
                         )
                     _atomic_replace(temp_path, pyramid_path)
                     _log_completion(final_w, final_h)
@@ -1986,15 +1943,16 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                         smart_subsample=False,
                     )
                 else:  # jpeg
-                    used_turbo = _save_with_turbojpeg(work_image, str(temp_path), 85)
-                    if not used_turbo:
-                        work_image.jpegsave(
-                            str(temp_path),
-                            Q=85,
-                            strip=True,
-                            optimize_coding=True,
-                            subsample_mode="auto",
-                        )
+                    # pyvips만 사용 (TurboJPEG 제거)
+                    work_image.jpegsave(
+                        str(temp_path),
+                        Q=85,
+                        strip=True,
+                        optimize_coding=False,     # 속도 우선
+                        subsample_mode=1,          # 4:2:0 (가장 빠름)
+                        interlace=False,           # 인터레이스 비활성화
+                        trellis_quant=False        # 트렐리스 양자화 비활성화
+                    )
                 
                 # 임시 파일을 최종 파일로 이동
                 temp_path.replace(pyramid_path)
