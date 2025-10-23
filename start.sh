@@ -22,8 +22,8 @@ export SSL_KEYFILE="cert/server.key"
 #   * VIPS_CONCURRENCY: pyvips 내부 워커 수, CPU 사용량에 맞춰 조정
 # - 조정 후에는 반드시 `/api/config` 응답과 프런트 콘솔 로그를 확인해 적용 여부를 점검하세요.
 export THUMBNAIL_SIZE="512"
-export THUMBNAIL_FORMAT="PNG"
-export THUMBNAIL_QUALITY="100"           # PNG 무손실, Q=100 유지
+export THUMBNAIL_FORMAT="JPEG"           # JPEG가 PNG보다 훨씬 빠름 (139ms vs 수백ms)
+export THUMBNAIL_QUALITY="100"           # Q=100 최고 품질
 export PNG_COMPRESSION_LEVEL="3"
 export IO_THREADS="256"                  # 32코어 * 8 (I/O 집약적 워크로드)
 export THUMBNAIL_SEM="512"               # 동시 썸네일 생성 (충분한 RAM 활용)
