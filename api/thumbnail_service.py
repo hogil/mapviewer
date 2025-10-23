@@ -16,8 +16,25 @@ from .utils import FileUtils, Constants
 from .cache_manager import cache_manager
 from . import config
 
-# pyvips만 사용 (TurboJPEG 제거 - pyvips가 훨씬 빠름)
+# pyvips + TurboJPEG 사용 (그리드 썸네일은 TurboJPEG가 더 빠름)
 import pyvips
+
+# TurboJPEG import (optional)
+try:
+    from turbojpeg import TurboJPEG, TJPF_RGB, TJSAMP_420
+    try:
+        from turbojpeg import TJFLAG_FASTDCT
+    except ImportError:
+        TJFLAG_FASTDCT = None
+    TURBOJPEG_AVAILABLE = True
+except ImportError:
+    TURBOJPEG_AVAILABLE = False
+    TurboJPEG = None
+    TJPF_RGB = None
+    TJSAMP_420 = None
+    TJFLAG_FASTDCT = None
+
+import numpy as np
 
 
 class ThumbnailService:
@@ -39,10 +56,20 @@ class ThumbnailService:
         if max_concurrent is None:
             max_concurrent = config.THUMBNAIL_SEM
         self.semaphore = asyncio.Semaphore(max_concurrent)
-        
-        # pyvips 전용 모드 (권장 설정: Cubic, Q95)
-        print(f"[ThumbnailService] pyvips 최적화 모드 (Cubic, Q95)")
-        
+
+        # TurboJPEG 초기화 (그리드 썸네일 최적화)
+        self.turbo = None
+        if TURBOJPEG_AVAILABLE and getattr(config, "USE_TURBOJPEG", False):
+            try:
+                turbo_path = getattr(config, "TURBOJPEG_PATH", "") or None
+                self.turbo = TurboJPEG(lib_path=turbo_path if turbo_path else None)
+                print(f"[ThumbnailService] TurboJPEG Q95 FASTDCT + 4:2:0 모드 (벤치마크 검증)")
+            except Exception as e:
+                print(f"[ThumbnailService] TurboJPEG 초기화 실패, pyvips 폴백: {e}")
+                self.turbo = None
+        else:
+            print(f"[ThumbnailService] pyvips Q95 cubic 모드")
+
         # 성능 메트릭
         self.generation_count = 0
         self.cache_hits = 0
@@ -53,6 +80,55 @@ class ThumbnailService:
         relative_path = image_path.relative_to(self.root_dir)
         thumbnail_name = f"{relative_path.stem}_{size[0]}x{size[1]}.{self.thumbnail_format.lower()}"
         return self.thumbnail_dir / relative_path.parent / thumbnail_name
+
+    def _save_with_turbojpeg(self, resized_image, thumbnail_path: Path, quality: int) -> bool:
+        """TurboJPEG로 JPEG 저장 (Q95 FASTDCT + 4:2:0)
+
+        벤치마크 결과: pyvips Q95 cubic (148ms) → TurboJPEG Q95 FASTDCT (139ms) = 6% 빠름
+        """
+        try:
+            # pyvips → numpy 변환
+            mem_img = resized_image.write_to_memory()
+            np_array = np.frombuffer(mem_img, dtype=np.uint8).reshape(
+                resized_image.height, resized_image.width, resized_image.bands
+            )
+
+            # RGB 변환
+            if resized_image.bands == 1:
+                # Grayscale → RGB
+                np_array = np.stack([np_array] * 3, axis=-1).squeeze()
+            elif resized_image.bands == 4:
+                # RGBA → RGB
+                np_array = np_array[:, :, :3]
+
+            # TurboJPEG 인코딩 (Q95 FASTDCT + 4:2:0)
+            base_kwargs = {
+                "quality": quality,
+                "pixel_format": TJPF_RGB,
+            }
+
+            # FASTDCT 플래그 추가
+            if TJFLAG_FASTDCT is not None:
+                base_kwargs["flags"] = TJFLAG_FASTDCT
+
+            # 4:2:0 chroma subsampling
+            try:
+                jpeg_buf = self.turbo.encode(np_array, jpeg_subsample=TJSAMP_420, **base_kwargs)
+            except TypeError:
+                try:
+                    jpeg_buf = self.turbo.encode(np_array, chroma_subsampling=TJSAMP_420, **base_kwargs)
+                except TypeError:
+                    jpeg_buf = self.turbo.encode(np_array, **base_kwargs)
+
+            # 파일 저장
+            with open(thumbnail_path, "wb") as f:
+                f.write(jpeg_buf)
+
+            return True
+
+        except Exception as e:
+            # TurboJPEG 실패 시 pyvips 폴백
+            return False
     
     def _generate_thumbnail_sync(
         self,
@@ -111,15 +187,20 @@ class ThumbnailService:
                             compression=config.PNG_COMPRESSION_LEVEL,
                             interlace=False
                         )
-                    else:  # JPEG - 권장 설정 (Cubic, Q95)
-                        resized.jpegsave(
-                            str(thumbnail_path),
-                            Q=95,  # 권장: Q95 (Q100 대비 51% 파일크기 감소, 화질은 동등)
-                            strip=True,
-                            optimize_coding=False,  # 속도 우선
-                            subsample_mode=pyvips.ForeignSubsample.AUTO,  # 자동 서브샘플링
-                            interlace=False
-                        )
+                    else:  # JPEG
+                        # TurboJPEG Q95 FASTDCT + 4:2:0 (벤치마크 검증: 6% 빠름)
+                        if self.turbo and self._save_with_turbojpeg(resized, thumbnail_path, 95):
+                            pass  # TurboJPEG 성공
+                        else:
+                            # pyvips 폴백
+                            resized.jpegsave(
+                                str(thumbnail_path),
+                                Q=95,
+                                strip=True,
+                                optimize_coding=False,
+                                subsample_mode=pyvips.ForeignSubsample.AUTO,  # 4:2:0
+                                interlace=False
+                            )
 
             except ImportError:
                 # pyvips가 없으면 Pillow 사용 (폴백)

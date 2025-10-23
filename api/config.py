@@ -62,3 +62,7 @@ PYRAMID_PNG_EFFORT = int(os.getenv("PYRAMID_PNG_EFFORT", "1"))
 PYRAMID_KERNEL = os.getenv("PYRAMID_KERNEL", "cubic").lower()
 VIPS_CONCURRENCY = int(os.getenv("VIPS_CONCURRENCY", "6"))
 PYRAMID_LOADER_MODE = os.getenv("PYRAMID_LOADER_MODE", "seq_early_copy").strip().lower()
+
+# ===== TurboJPEG 설정 (그리드 썸네일 전용) =====
+USE_TURBOJPEG = os.getenv("USE_TURBOJPEG", "1").strip().lower() in {"1", "true", "yes", "on"}
+TURBOJPEG_PATH = os.getenv("TURBOJPEG_PATH", "").strip()

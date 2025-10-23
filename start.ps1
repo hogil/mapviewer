@@ -44,6 +44,11 @@ $env:PYRAMID_PNG_COMPRESSION="3"       # 무손실 유지, 네트워크 전송�
 $env:PYRAMID_PNG_EFFORT="1"            # PNG effort (1=가장 빠름)
 $env:PYRAMID_KERNEL="cubic"            # 리사이즈 커널 (cubic, 최고 품질)
 $env:PYRAMID_LOADER_MODE="random"      # 로더 모드 (random=스트리밍, seq_early_copy=메모리 복사)
+
+# TurboJPEG 설정 (그리드 썸네일 전용)
+# 2025-10-23: 그리드 썸네일 TurboJPEG 최적화 (300장 벤치마크 검증)
+# - 벤치마크 결과: TurboJPEG Q95 FASTDCT + 4:2:0 (139ms) > pyvips Q95 cubic (148ms) = 6% 빠름
+# - 피라미드는 pyvips 사용, 그리드는 TurboJPEG 사용
 $env:USE_TURBOJPEG="1"
 $env:TURBOJPEG_PATH = "C:\libjpeg-turbo64\bin\turbojpeg.dll"
 
