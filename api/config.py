@@ -19,6 +19,7 @@ SKIP_DIRS = set(os.getenv("SKIP_DIRS", "classification,thumbnails").split(","))
 CPU_COUNT = os.cpu_count() or 8
 IO_THREADS = int(os.getenv("IO_THREADS", "0")) or max(16, CPU_COUNT * 2)   # Ubuntu 24 최적화: CPU * 2
 THUMBNAIL_SEM = int(os.getenv("THUMBNAIL_SEM", "128"))                     # Ubuntu 24 최적화: 128로 증가
+SEARCH_WORKERS = int(os.getenv("SEARCH_WORKERS", "4"))                     # 검색 병렬 워커 수 (기본: 4)
 
 # 캐시 크기/TTL
 DIRLIST_CACHE_SIZE = int(os.getenv("DIRLIST_CACHE_SIZE", "1024"))

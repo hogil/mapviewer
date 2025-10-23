@@ -314,6 +314,7 @@ def file_index_set(path: str, meta: Dict[str, Any]) -> None:
             FILE_INDEX_KEYS.insert(idx, path)
 
 def _search_index_slice(keys: List[str], query: str, goal: int) -> List[str]:
+    """단일 청크 검색 (병렬 처리의 작업 단위)"""
     results: List[str] = []
     for rel in keys:
         try:
@@ -325,6 +326,59 @@ def _search_index_slice(keys: List[str], query: str, goal: int) -> List[str]:
             if len(results) >= goal:
                 break
     return results
+
+def _search_index_slice_parallel(keys: List[str], query: str, goal: int, num_chunks: int = 4) -> List[str]:
+    """병렬 검색 (멀티청크)
+
+    Args:
+        keys: 검색할 키 목록
+        query: 검색어 (소문자)
+        goal: 목표 결과 개수
+        num_chunks: 청크 개수 (기본 4, 권장 범위: 4~8)
+
+    Returns:
+        검색 결과 리스트 (최대 goal개)
+    """
+    if not keys:
+        return []
+
+    # 청크가 너무 작으면 단일 스레드가 더 효율적
+    if len(keys) < num_chunks * 10:
+        return _search_index_slice(keys, query, goal)
+
+    # 청크 분할
+    chunk_size = len(keys) // num_chunks
+    chunks = []
+    for i in range(num_chunks):
+        start = i * chunk_size
+        end = start + chunk_size if i < num_chunks - 1 else len(keys)
+        chunks.append(keys[start:end])
+
+    # 병렬 실행
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    results = []
+
+    with ThreadPoolExecutor(max_workers=num_chunks) as executor:
+        # 각 청크마다 goal만큼 검색 (오버 페칭)
+        futures = [
+            executor.submit(_search_index_slice, chunk, query, goal)
+            for chunk in chunks
+        ]
+
+        # 결과 수집 (완료되는 대로)
+        for future in as_completed(futures):
+            try:
+                chunk_results = future.result()
+                results.extend(chunk_results)
+                # Early termination: 목표 도달 시 중단
+                if len(results) >= goal:
+                    break
+            except Exception as e:
+                logger.error(f"청크 검색 실패: {e}")
+                continue
+
+    # goal만큼만 반환
+    return results[:goal]
 
 LABELS: Dict[str, List[str]] = {}
 LABELS_LOCK = RLock()
@@ -2474,7 +2528,15 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
                 keys_slice = list(FILE_INDEX_KEYS)
 
         loop = asyncio.get_running_loop()
-        index_hits = await loop.run_in_executor(IO_POOL, _search_index_slice, keys_slice, query, goal)
+        # 병렬 검색 사용 (환경변수 SEARCH_WORKERS로 조정 가능, 기본: 4)
+        index_hits = await loop.run_in_executor(
+            IO_POOL,
+            _search_index_slice_parallel,
+            keys_slice,
+            query,
+            goal,
+            config.SEARCH_WORKERS
+        )
         bucket.extend(index_hits)
 
         # 🗂️ 인덱스로 부족하면 현재 폴더 직접 스캔

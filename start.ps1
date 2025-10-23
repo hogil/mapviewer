@@ -21,6 +21,7 @@ $env:THUMBNAIL_FORMAT="JPEG"
 $env:THUMBNAIL_QUALITY="100"
 $env:PNG_COMPRESSION_LEVEL="3"
 $env:IO_THREADS="40"                     # Dev box (8C/64GB)
+$env:SEARCH_WORKERS="4"                  # 검색 병렬 워커 수 (4~8 권장)
 $env:THUMBNAIL_SEM="32"                 # Concurrent thumbnail jobs
 $env:THUMB_PREFETCH_BATCH="32"          # Prefetch batch size
 $env:THUMB_CLIENT_MAX_CONCURRENCY="10"  # Frontend concurrent loads
@@ -38,7 +39,7 @@ $env:VIPS_DISC_THRESHOLD="500m"         # 디스크 스필 기준 (RAM 디스크
 $env:PYRAMID_LEVELS="0.2,0.5,0.7,1.0"
 $env:PYRAMID_ZOOM_THRESHOLDS="0.25,0.5,0.75"
 $env:PYRAMID_FORMAT="JPEG"
-$env:PYRAMID_Q="95"                   # JPEG/WEBP 품질 (Q=100, 최고 품질)
+$env:PYRAMID_Q="100"                   # JPEG/WEBP 품질 (Q=100, 최고 품질)
 $env:PYRAMID_PNG_COMPRESSION="3"       # 무손실 유지, 네트워크 전송량과 생성시간 밸런스
 $env:PYRAMID_PNG_EFFORT="1"            # PNG effort (1=가장 빠름)
 $env:PYRAMID_KERNEL="cubic"            # 리사이즈 커널 (cubic, 최고 품질)
