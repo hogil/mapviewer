@@ -54,7 +54,9 @@ from .thumbnail_service import ThumbnailService
 try:
     from onelogin.saml2.auth import OneLogin_Saml2_Auth
     from onelogin.saml2.settings import OneLogin_Saml2_Settings
-except Exception:
+except Exception as e:
+    print(f"⚠️ [SAML IMPORT ERROR] python3-saml import 실패: {e}")
+    print(f"⚠️ [SAML IMPORT ERROR] 상세: {type(e).__name__}: {str(e)}")
     OneLogin_Saml2_Auth = None
     OneLogin_Saml2_Settings = None
 from . import config
