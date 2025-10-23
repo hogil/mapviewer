@@ -17,7 +17,12 @@ from .cache_manager import cache_manager
 from . import config
 
 # pyvips + TurboJPEG 사용 (그리드 썸네일은 TurboJPEG가 더 빠름)
-import pyvips
+try:
+    import pyvips
+    PYVIPS_AVAILABLE = True
+except ImportError:
+    pyvips = None
+    PYVIPS_AVAILABLE = False
 
 # TurboJPEG import (optional)
 try:
