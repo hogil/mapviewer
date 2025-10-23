@@ -7243,6 +7243,30 @@ class WaferMapViewer {
 
         try {
 
+            // 🔥 그리드 배치 로딩 중단 (단일 이미지 로드 시)
+            if (this.gridLoadingBatch) {
+                console.log('🛑 [GRID] loadImage - 배치 로딩 중단 (단일 이미지 전환)');
+                this.gridLoadingBatch = null;
+            }
+
+            // 🔥 그리드 모드에서 로딩 중인 이미지 중단
+            if (this.gridMode) {
+                const grid = document.getElementById('image-grid');
+                if (grid) {
+                    const loadingImages = grid.querySelectorAll('.grid-thumb-img');
+                    let canceledCount = 0;
+                    loadingImages.forEach(img => {
+                        if (!img.complete) {
+                            img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+                            canceledCount++;
+                        }
+                    });
+                    if (canceledCount > 0) {
+                        console.log(`🛑 [GRID] loadImage - ${canceledCount}개 네트워크 요청 중단`);
+                    }
+                }
+            }
+
             // 🔥 path는 이미 ROOT_DIR 기준 절대 경로 (모든 depth 포함)
             const fullPath = path;
 
@@ -13567,11 +13591,30 @@ class WaferMapViewer {
 
         this.debugLog('🔷 [DEBUG] hideGrid() 호출됨');
 
-        this.gridMode = false;
+        // 🔥 1단계: 배치 로딩 즉시 중단
+        if (this.gridLoadingBatch) {
+            console.log('🛑 [GRID] hideGrid - 배치 로딩 중단');
+            this.gridLoadingBatch = null;
+        }
 
         const grid = document.getElementById('image-grid');
 
+        // 🔥 2단계: DOM의 모든 로딩 중인 이미지 src 중단 (네트워크 요청 취소)
+        if (grid) {
+            const oldImages = grid.querySelectorAll('.grid-thumb-img');
+            let canceledCount = 0;
+            oldImages.forEach(img => {
+                if (!img.complete) {  // 로딩 중인 이미지만
+                    img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+                    canceledCount++;
+                }
+            });
+            if (canceledCount > 0) {
+                console.log(`🛑 [GRID] hideGrid - ${canceledCount}개 네트워크 요청 중단`);
+            }
+        }
 
+        this.gridMode = false;
 
         // 그리드 상태 초기화
 

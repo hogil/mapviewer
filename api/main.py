@@ -1307,25 +1307,24 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
                         smart_subsample=False
                     )
                 else:
-                    # 최적화 2: JPEG 저장 파라미터 최적화
-                    # - Q=100: 최고 품질
-                    # - optimize_coding=False: 속도 우선
-                    # - subsample_mode=1: 4:2:0 크로마 서브샘플링 (가장 빠름)
-                    # - trellis_quant=False: 트렐리스 양자화 비활성화
-                    # - quant_table=0: 기본 양자화 테이블
-                    # - background=255: 배경색 흰색
+                    # 최적화 2: JPEG 저장 - TurboJPEG 우선, pyvips 폴백
                     if fmt == "JPEG":
-                        vips_obj.jpegsave(
-                            str(thumbnail_path),
-                            Q=THUMBNAIL_QUALITY,       # Q=100 (최고 품질)
-                            strip=True,                # 메타데이터 제거
-                            optimize_coding=False,     # 속도 우선
-                            subsample_mode=1,          # 4:2:0 (가장 빠름)
-                            interlace=False,           # 인터레이스 비활성화
-                            trellis_quant=False,       # 트렐리스 양자화 비활성화
-                            quant_table=0,             # 기본 양자화 테이블
-                            background=255             # 배경색 설정
-                        )
+                        # TurboJPEG 시도
+                        saved_with_turbo = _save_with_turbojpeg(vips_obj, str(thumbnail_path), THUMBNAIL_QUALITY)
+                        
+                        if not saved_with_turbo:
+                            # pyvips 폴백
+                            vips_obj.jpegsave(
+                                str(thumbnail_path),
+                                Q=THUMBNAIL_QUALITY,       # Q=100 (최고 품질)
+                                strip=True,                # 메타데이터 제거
+                                optimize_coding=False,     # 속도 우선
+                                subsample_mode=1,          # 4:2:0 (가장 빠름)
+                                interlace=False,           # 인터레이스 비활성화
+                                trellis_quant=False,       # 트렐리스 양자화 비활성화
+                                quant_table=0,             # 기본 양자화 테이블
+                                background=255             # 배경색 설정
+                            )
                     else:
                         vips_obj.write_to_file(
                             str(thumbnail_path),
@@ -1634,13 +1633,67 @@ def _turbojpeg_encode_compat(turbo, image_array, base_kwargs, subsampling_value)
     return turbo.encode(image_array, **encode_kwargs)
 
 
-# TurboJPEG 함수 제거 - pyvips만 사용
-def _save_with_turbojpeg_disabled(work_image, dest: str, quality: int) -> bool:
-    # TurboJPEG 완전 비활성화 - 항상 False 반환
-    return False
-
-# 함수 이름 매핑
-_save_with_turbojpeg = _save_with_turbojpeg_disabled
+# TurboJPEG 함수 활성화 - 최적화 버전 (2025-10-23)
+def _save_with_turbojpeg(work_image, dest: str, quality: int) -> bool:
+    """
+    TurboJPEG를 사용하여 pyvips 이미지를 JPEG로 저장 (최적화 버전)
+    
+    최적화:
+    - TJFLAG_FASTDCT: 빠른 DCT 알고리즘 사용
+    - TJSAMP_420: 4:2:0 크로마 서브샘플링 (pyvips와 동일)
+    - flags 파라미터: 속도 최적화 플래그
+    
+    Args:
+        work_image: pyvips.Image 객체
+        dest: 저장 경로
+        quality: JPEG 품질 (1-100)
+    
+    Returns:
+        True if saved successfully, False otherwise
+    """
+    turbo = _get_turbojpeg_encoder()
+    if turbo is None:
+        return False
+    
+    try:
+        import numpy as np
+        
+        # pyvips → numpy 배열 변환
+        # write_to_memory는 raw 픽셀 데이터를 반환
+        mem_img = work_image.write_to_memory()
+        np_array = np.frombuffer(mem_img, dtype=np.uint8).reshape(
+            work_image.height, work_image.width, work_image.bands
+        )
+        
+        # RGB 변환 (필요시)
+        if work_image.bands == 1:
+            # Grayscale → RGB
+            np_array = np.stack([np_array] * 3, axis=-1).squeeze()
+        elif work_image.bands == 4:
+            # RGBA → RGB
+            np_array = np_array[:, :, :3]
+        
+        # TurboJPEG 인코딩 (최적화 파라미터)
+        base_kwargs = {
+            "quality": quality,
+            "pixel_format": TJPF_RGB,
+        }
+        
+        # FASTDCT 플래그 추가 (사용 가능한 경우)
+        if TJFLAG_FASTDCT is not None:
+            base_kwargs["flags"] = TJFLAG_FASTDCT
+        
+        jpeg_buf = _turbojpeg_encode_compat(turbo, np_array, base_kwargs, TJSAMP_420)
+        
+        # 파일 저장
+        with open(dest, "wb") as f:
+            f.write(jpeg_buf)
+        
+        return True
+        
+    except Exception as e:
+        logger.debug(f"⚠️ [TurboJPEG] 저장 실패, pyvips 폴백: {e}")
+        return False
 
 
 @contextmanager
@@ -1798,28 +1851,33 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
                             smart_subsample=False,
                         )
                     else:
-                        # 최적화 4: JPEG 저장 파라미터 최적화 (그리드 썸네일과 동일)
-                        # - Q=100: 최고 품질 (기존 Q=95에서 향상)
-                        # - optimize_coding=False: 속도 우선 (파일 크기 약간 증가)
-                        # - subsample_mode=1: 4:2:0 크로마 서브샘플링 (가장 빠른 모드)
-                        # - trellis_quant=False: 트렐리스 양자화 비활성화 (속도 우선)
-                        # - quant_table=0: 기본 양자화 테이블 사용
-                        # - background=255: 배경색 흰색 설정
-                        work_image.jpegsave(
-                            temp_target,
-                            Q=quality,                 # Q=100 (최고 품질)
-                            strip=True,                # 메타데이터 제거
-                            optimize_coding=False,     # 속도 우선
-                            subsample_mode=1,          # 4:2:0 (가장 빠름)
-                            interlace=False,           # 인터레이스 비활성화
-                            trellis_quant=False,       # 트렐리스 양자화 비활성화
-                            quant_table=0,             # 기본 양자화 테이블
-                            background=255             # 배경색 설정
-                        )
-                        logger.info(
-                            "⏱️ [DEBUG] 저장 완료: %.0fms (pyvips)",
-                            (time.time() - t_save) * 1000.0,
-                        )
+                        # 최적화 4: JPEG 저장 - TurboJPEG 우선, pyvips 폴백
+                        # TurboJPEG: 고속 JPEG 인코더 (하드웨어 가속)
+                        # pyvips: 품질 우선 JPEG 인코더
+                        saved_with_turbo = _save_with_turbojpeg(work_image, temp_target, quality)
+                        
+                        if not saved_with_turbo:
+                            # pyvips 폴백
+                            work_image.jpegsave(
+                                temp_target,
+                                Q=quality,                 # Q=100 (최고 품질)
+                                strip=True,                # 메타데이터 제거
+                                optimize_coding=False,     # 속도 우선
+                                subsample_mode=1,          # 4:2:0 (가장 빠름)
+                                interlace=False,           # 인터레이스 비활성화
+                                trellis_quant=False,       # 트렐리스 양자화 비활성화
+                                quant_table=0,             # 기본 양자화 테이블
+                                background=255             # 배경색 설정
+                            )
+                            logger.info(
+                                "⏱️ [DEBUG] 저장 완료: %.0fms (pyvips)",
+                                (time.time() - t_save) * 1000.0,
+                            )
+                        else:
+                            logger.info(
+                                "⏱️ [DEBUG] 저장 완료: %.0fms (TurboJPEG)",
+                                (time.time() - t_save) * 1000.0,
+                            )
                     _atomic_replace(temp_path, pyramid_path)
                     _log_completion(final_w, final_h)
                     return

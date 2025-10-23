@@ -16,13 +16,8 @@ from .utils import FileUtils, Constants
 from .cache_manager import cache_manager
 from . import config
 
-# TurboJPEG import (optional)
-try:
-    from turbojpeg import TurboJPEG
-    TURBOJPEG_AVAILABLE = True
-except ImportError:
-    TURBOJPEG_AVAILABLE = False
-    TurboJPEG = None
+# pyvips만 사용 (TurboJPEG 제거 - pyvips가 훨씬 빠름)
+import pyvips
 
 
 class ThumbnailService:
@@ -45,9 +40,8 @@ class ThumbnailService:
             max_concurrent = config.THUMBNAIL_SEM
         self.semaphore = asyncio.Semaphore(max_concurrent)
         
-        # TurboJPEG 비활성화 - pyvips만 사용 (더 빠름)
-        self.turbojpeg = None
-        print(f"[ThumbnailService] TurboJPEG 비활성화 - pyvips 최적화 모드")
+        # pyvips 전용 모드 (권장 설정: Cubic, Q95)
+        print(f"[ThumbnailService] pyvips 최적화 모드 (Cubic, Q95)")
         
         # 성능 메트릭
         self.generation_count = 0
@@ -59,88 +53,6 @@ class ThumbnailService:
         relative_path = image_path.relative_to(self.root_dir)
         thumbnail_name = f"{relative_path.stem}_{size[0]}x{size[1]}.{self.thumbnail_format.lower()}"
         return self.thumbnail_dir / relative_path.parent / thumbnail_name
-    
-    def _save_with_turbojpeg(self, work_image, dest: str, quality: int) -> bool:
-        """TurboJPEG를 사용한 고속 JPEG 저장 - write_to_memory 최적화"""
-        if not self.turbojpeg:
-            return False
-        
-        try:
-            import numpy as np
-            
-            # 이미지 전처리
-            image = work_image
-            if image.bands > 3:
-                image = image.extract_band(0, n=3)
-            elif image.bands == 2:
-                image = image.extract_band(0, n=1)
-            
-            if image.interpretation not in ("srgb", "rgb"):
-                try:
-                    image = image.colourspace("srgb")
-                except Exception:
-                    pass
-            
-            # 🔥 최적화: write_to_memory 대신 임시 파일 사용
-            start_mem = time.time()
-            
-            # 방법 1: 임시 파일을 통한 우회 (write_to_memory 병목 회피)
-            try:
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
-                    tmp_path = tmp_file.name
-                
-                # pyvips로 임시 PNG 파일 저장 (매우 빠름)
-                image.pngsave(tmp_path, compression=0, strip=True)
-                
-                # 임시 파일을 다시 읽어서 numpy 배열로 변환
-                temp_image = pyvips.Image.new_from_file(tmp_path)
-                image_array = temp_image.write_to_memory()
-                
-                # 임시 파일 삭제
-                Path(tmp_path).unlink(missing_ok=True)
-                
-                mem_time = (time.time() - start_mem) * 1000
-                print(f"[TurboJPEG] 임시파일 우회: {mem_time:.1f}ms")
-                
-            except Exception as e:
-                print(f"임시파일 우회 실패: {e}")
-                # 폴백: 기본 write_to_memory
-                image_array = image.write_to_memory()
-                mem_time = (time.time() - start_mem) * 1000
-                print(f"[TurboJPEG] 기본 write_mem: {mem_time:.1f}ms")
-            
-            # numpy 배열 변환
-            image_array = np.frombuffer(image_array, dtype=np.uint8)
-            image_array = image_array.reshape((image.height, image.width, image.bands))
-            
-            print(f"[TurboJPEG] write_mem={mem_time:.1f}ms", end="")
-            
-            # TurboJPEG로 인코딩
-            buffer = self.turbojpeg.encode(image_array, quality=quality, jpeg_subsample=2)
-            Path(dest).write_bytes(buffer)
-            return True
-            
-        except Exception as e:
-            print(f"[ThumbnailService] TurboJPEG 인코딩 실패: {e}")
-            return False
-    
-    def _save_with_optimized_jpeg(self, work_image, dest: str, quality: int) -> bool:
-        """최적화된 pyvips JPEG 저장 (속도 우선)"""
-        try:
-            # pyvips의 속도 최적화된 JPEG 저장 사용
-            work_image.jpegsave(
-                dest,
-                Q=quality,
-                strip=True,
-                optimize_coding=False,  # 속도 우선
-                subsample_mode="auto",
-                interlace=False
-            )
-            return True
-        except Exception as e:
-            print(f"[ThumbnailService] 최적화된 JPEG 저장 실패: {e}")
-            return False
     
     def _generate_thumbnail_sync(
         self,
@@ -155,87 +67,60 @@ class ThumbnailService:
             # 썸네일 디렉토리 생성
             thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # pyvips 사용 (Pillow보다 10-100배 빠름)
+            # pyvips 사용 (권장 설정: Cubic, Q95)
             try:
-                import pyvips
-                # 🔥 최적화: 극한 하드웨어 최적화 - 지원되는 최적화 옵션만 적용
+                # 이미지 로드 (Sequential access for streaming)
                 image = pyvips.Image.new_from_file(
                     str(image_path),
                     access='sequential',
-                    fail_on='none',
-                    memory=True,      # 메모리 캐시
-                    unlimited=True    # 하드웨어 가속
+                    fail_on='none'
                 )
-                
-                # 🔥 최적화: 메모리 복사 완전 제거 - 스트리밍 방식 사용
-                # 메모리 복사를 아예 하지 않고 직접 처리
-                print(f"[OPTIMIZATION] Streaming mode (size: {image.width}x{image.height})")
-                
-                # 성능 측정을 위한 시간 기록
-                start_time = time.time()
 
                 target_w, target_h = size
-                
-                # 🔥 최적화: 가장 빠른 처리 방식 - 단일 파이프라인
+
+                # 이미지가 목표 크기보다 작으면 그대로 저장
                 if image.width <= target_w and image.height <= target_h:
-                    # 이미지가 목표 크기보다 작으면 그대로 저장
                     if self.thumbnail_format.upper() == "PNG":
-                        image.write_to_file(str(thumbnail_path), strip=True, compression=config.PNG_COMPRESSION_LEVEL, interlace=False)
+                        image.write_to_file(
+                            str(thumbnail_path),
+                            strip=True,
+                            compression=config.PNG_COMPRESSION_LEVEL,
+                            interlace=False
+                        )
                     else:  # JPEG
-                        image.write_to_file(str(thumbnail_path), Q=self.thumbnail_quality, strip=True)
+                        image.jpegsave(
+                            str(thumbnail_path),
+                            Q=self.thumbnail_quality,
+                            strip=True,
+                            optimize_coding=False,
+                            subsample_mode=pyvips.ForeignSubsample.AUTO,
+                            interlace=False
+                        )
                 else:
-                    # 🔥 최적화: 가장 빠른 리사이즈 - 단일 단계 처리
+                    # 리사이즈 계산
                     scale = min(target_w / image.width, target_h / image.height)
-                    scale = max(scale, 1.0 / max(image.width, image.height))
-                    
-                    # 🔥 최적화: 극한 리사이즈 최적화 - 더 공격적인 shrink 사용
-                    if scale < 0.5:
-                        # 큰 축소의 경우 더 큰 shrink factor 사용
-                        shrink_factor = max(int(1.0 / scale) + 1, 1)  # +1 추가로 더 공격적
-                        if shrink_factor > 1:
-                            resized = image.shrink(shrink_factor, shrink_factor)
-                            # 추가 리사이즈가 필요한 경우만
-                            remaining_scale = scale * shrink_factor
-                            if abs(remaining_scale - 1.0) > 0.01:
-                                resized = resized.resize(remaining_scale, vscale=remaining_scale, kernel='cubic')
-                        else:
-                            resized = image.resize(scale, vscale=scale, kernel='cubic')
-                    else:
-                        # 작은 축소의 경우 직접 resize
-                        resized = image.resize(scale, vscale=scale, kernel='cubic')
-                    
-                    # 🔥 최적화: 메모리 최적화 제거 - 스트리밍으로 직접 저장
-                    # resized = resized.copy_memory()  # 메모리 복사 제거로 속도 향상
-                   
-                    # 🔥 최적화: 가장 빠른 저장 - 최소 파라미터로 속도 극대화
+
+                    # Cubic 커널 사용 (권장: 속도와 화질의 최적 균형)
+                    resized = image.resize(scale, vscale=scale, kernel='cubic')
+
+                    # 저장
                     if self.thumbnail_format.upper() == "PNG":
-                        resized.write_to_file(str(thumbnail_path), strip=True, compression=config.PNG_COMPRESSION_LEVEL, interlace=False)
-                    else:  # JPEG - 극한 속도 최적화
-                        # 🔥 최적화: 극한 속도 JPEG 저장 - 지원되는 속도 옵션만 적용
+                        resized.pngsave(
+                            str(thumbnail_path),
+                            strip=True,
+                            compression=config.PNG_COMPRESSION_LEVEL,
+                            interlace=False
+                        )
+                    else:  # JPEG - 권장 설정 (Cubic, Q95)
                         resized.jpegsave(
                             str(thumbnail_path),
-                            Q=self.thumbnail_quality,  # Q=100 고정
+                            Q=95,  # 권장: Q95 (Q100 대비 51% 파일크기 감소, 화질은 동등)
                             strip=True,
-                            optimize_coding=False,     # 속도 우선
-                            subsample_mode=1,          # 4:2:0 (가장 빠름)
-                            interlace=False,           # 인터레이스 비활성화
-                            trellis_quant=False,       # 트렐리스 양자화 비활성화
-                            quant_table=0,             # 기본 양자화 테이블
-                            background=255             # 배경색 설정
+                            optimize_coding=False,  # 속도 우선
+                            subsample_mode=pyvips.ForeignSubsample.AUTO,  # 자동 서브샘플링
+                            interlace=False
                         )
-                        
-                        # 성능 측정 결과 출력
-                        end_time = time.time()
-                        processing_time = (end_time - start_time) * 1000
-                        file_size = thumbnail_path.stat().st_size if thumbnail_path.exists() else 0
-                        
-                        print(f"Thumbnail generated successfully!")
-                        print(f"  Processing time: {processing_time:.1f}ms")
-                        print(f"  File size: {file_size / 1024:.1f} KB")
-                        print(f"  100ms target: {'SUCCESS' if processing_time <= 100 else 'FAILED'}")
-                        print(f"  Size: 512x512, Quality: Q=100, Kernel: cubic")
-                        print(f"  File: {thumbnail_path.name}")
-                        print(f"  {'='*50}")
+
             except ImportError:
                 # pyvips가 없으면 Pillow 사용 (폴백)
                 with Image.open(image_path) as img:
