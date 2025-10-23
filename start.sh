@@ -61,7 +61,7 @@ export PYRAMID_PNG_EFFORT="${PYRAMID_PNG_EFFORT:-1}"
 export PYRAMID_KERNEL="${PYRAMID_KERNEL:-cubic}"
 export PYRAMID_LOADER_MODE="${PYRAMID_LOADER_MODE:-seq_early_copy}"
 export USE_TURBOJPEG="${USE_TURBOJPEG:-1}"
-export TURBOJPEG_PATH="${TURBOJPEG_PATH:-/usr/lib/x86_64-linux-gnu/libturbojpeg.so}"
+export TURBOJPEG_PATH="${TURBOJPEG_PATH:-/usr/lib/x86_64-linux-gnu/libturbojpeg.so.0}"
 
 # 서버 시작
 python3 -m api.main

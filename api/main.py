@@ -48,17 +48,16 @@ except ImportError:
 
 from .access_logger import logger_instance
 from .detail_access_logger import detail_access_logger
-from .thumbnail_service import ThumbnailService
 
-# SAML
+# SAML (thumbnail_service보다 먼저 import - SAML은 필수, thumbnail은 optional)
 try:
     from onelogin.saml2.auth import OneLogin_Saml2_Auth
     from onelogin.saml2.settings import OneLogin_Saml2_Settings
-except Exception as e:
-    print(f"⚠️ [SAML IMPORT ERROR] python3-saml import 실패: {e}")
-    print(f"⚠️ [SAML IMPORT ERROR] 상세: {type(e).__name__}: {str(e)}")
+except Exception:
     OneLogin_Saml2_Auth = None
     OneLogin_Saml2_Settings = None
+
+from .thumbnail_service import ThumbnailService
 from . import config
 
 # ================= Windows ANSI 색상 호환 =================
