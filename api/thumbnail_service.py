@@ -26,6 +26,7 @@ try:
         from turbojpeg import TJFLAG_FASTDCT
     except ImportError:
         TJFLAG_FASTDCT = None
+    import numpy as np
     TURBOJPEG_AVAILABLE = True
 except ImportError:
     TURBOJPEG_AVAILABLE = False
@@ -33,8 +34,7 @@ except ImportError:
     TJPF_RGB = None
     TJSAMP_420 = None
     TJFLAG_FASTDCT = None
-
-import numpy as np
+    np = None
 
 
 class ThumbnailService:
