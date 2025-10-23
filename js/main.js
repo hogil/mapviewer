@@ -5638,14 +5638,6 @@ class WaferMapViewer {
             return;
         }
 
-        // Level 1.0은 원본 이미지를 그대로 사용
-        if (level >= 1) {
-            if (this.currentImage) {
-                this.pyramidLevels[level] = this.currentImage;
-            }
-            return;
-        }
-
         // 이미 로딩 중이면 스킵 (중복 요청 방지)
         if (!this._pyramidLoading) {
             this._pyramidLoading = new Set();
