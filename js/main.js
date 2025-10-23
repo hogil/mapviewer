@@ -5605,7 +5605,7 @@ class WaferMapViewer {
             .filter(level => !Number.isNaN(level))
             .filter(level => currentLevelKey === null ? true : String(level) !== currentLevelKey);
         const priorityOrder = Array.from(new Set(remainingLevels))
-            .filter(level => level < 1)
+            .filter(level => level < 1.0)  // Level 1.0 미만만 prefetch (1.0은 온디맨드)
             .sort((a, b) => a - b); // 낮은 레벨부터 순서대로
 
         if (priorityOrder.length === 0) {
