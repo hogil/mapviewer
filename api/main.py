@@ -23,17 +23,6 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field
 from PIL import Image
-try:
-    from turbojpeg import TurboJPEG, TJPF_RGB, TJSAMP_420  # type: ignore
-    try:
-        from turbojpeg import TJFLAG_FASTDCT  # type: ignore
-    except Exception:
-        TJFLAG_FASTDCT = None  # type: ignore
-except Exception:  # pragma: no cover
-    TurboJPEG = None  # type: ignore
-    TJPF_RGB = None  # type: ignore
-    TJSAMP_420 = None  # type: ignore
-    TJFLAG_FASTDCT = None  # type: ignore
 import http.client
 import urllib.parse
 
@@ -1610,145 +1599,6 @@ def _lookup_original_relpath_from_classification_path(path_str: str) -> Optional
 _pyramid_lock_guard = Lock()
 _pyramid_generation_locks: Dict[str, Lock] = {}
 
-_turbojpeg_lock = Lock()
-_turbojpeg_encoder = None  # type: ignore
-_turbojpeg_subsampling_lock = Lock()
-_turbojpeg_subsampling_key: Optional[str] = None  # None: unknown, "": unsupported
-
-
-def _get_turbojpeg_encoder():
-    if not getattr(config, "USE_TURBOJPEG", False):
-        return None
-    if TurboJPEG is None:
-        return None
-    global _turbojpeg_encoder
-    with _turbojpeg_lock:
-        if _turbojpeg_encoder is None:
-            try:
-                lib_path = getattr(config, "TURBOJPEG_PATH", "") or None
-                _turbojpeg_encoder = TurboJPEG(lib_path=lib_path) if lib_path else TurboJPEG()
-                logging.getLogger("l3tracker").info(
-                    "🚀 [TurboJPEG] encoder 활성화 (lib=%s)", lib_path or "auto"
-                )
-            except Exception as exc:  # pragma: no cover
-                logging.getLogger("l3tracker").warning(
-                    "⚠️ [TurboJPEG] 초기화 실패: %s", exc
-                )
-                _turbojpeg_encoder = False
-        if _turbojpeg_encoder is False:
-            return None
-        return _turbojpeg_encoder
-
-
-def _turbojpeg_encode_compat(turbo, image_array, base_kwargs, subsampling_value):
-    """
-    Invoke TurboJPEG.encode while adapting to API differences between releases.
-    Some builds use `chroma_subsampling`, older ones keep `jpeg_subsample` or have no keyword.
-    """
-    global _turbojpeg_subsampling_key
-    if subsampling_value is None:
-        return turbo.encode(image_array, **base_kwargs)
-
-    key = _turbojpeg_subsampling_key
-    if key is None:
-        with _turbojpeg_subsampling_lock:
-            key = _turbojpeg_subsampling_key
-            if key is None:
-                last_error: Optional[Exception] = None
-                for candidate in ("chroma_subsampling", "jpeg_subsample", "subsampling", ""):
-                    attempt_kwargs = dict(base_kwargs)
-                    if candidate:
-                        attempt_kwargs[candidate] = subsampling_value
-                    try:
-                        result = turbo.encode(image_array, **attempt_kwargs)
-                        _turbojpeg_subsampling_key = candidate
-                        if candidate == "":
-                            logging.getLogger("l3tracker").info(
-                                "[TurboJPEG] chroma_subsampling keyword unsupported; falling back to default API"
-                            )
-                        elif candidate != "chroma_subsampling":
-                            logging.getLogger("l3tracker").info(
-                                "[TurboJPEG] using '%s' instead of 'chroma_subsampling' for compatibility",
-                                candidate,
-                            )
-                        return result
-                    except TypeError as exc:
-                        last_error = exc
-                        continue
-                # Nothing worked; re-raise the last error for upstream handling.
-                if last_error is not None:
-                    raise last_error
-                raise RuntimeError("TurboJPEG.encode failed without raising TypeError")
-        key = _turbojpeg_subsampling_key
-
-    encode_kwargs = dict(base_kwargs)
-    if key:
-        encode_kwargs[key] = subsampling_value
-    return turbo.encode(image_array, **encode_kwargs)
-
-
-# TurboJPEG 함수 활성화 - 최적화 버전 (2025-10-23)
-def _save_with_turbojpeg(work_image, dest: str, quality: int) -> bool:
-    """
-    TurboJPEG를 사용하여 pyvips 이미지를 JPEG로 저장 (최적화 버전)
-    
-    최적화:
-    - TJFLAG_FASTDCT: 빠른 DCT 알고리즘 사용
-    - TJSAMP_420: 4:2:0 크로마 서브샘플링 (pyvips와 동일)
-    - flags 파라미터: 속도 최적화 플래그
-    
-    Args:
-        work_image: pyvips.Image 객체
-        dest: 저장 경로
-        quality: JPEG 품질 (1-100)
-    
-    Returns:
-        True if saved successfully, False otherwise
-    """
-    turbo = _get_turbojpeg_encoder()
-    if turbo is None:
-        return False
-    
-    try:
-        import numpy as np
-        
-        # pyvips → numpy 배열 변환
-        # write_to_memory는 raw 픽셀 데이터를 반환
-        mem_img = work_image.write_to_memory()
-        np_array = np.frombuffer(mem_img, dtype=np.uint8).reshape(
-            work_image.height, work_image.width, work_image.bands
-        )
-        
-        # RGB 변환 (필요시)
-        if work_image.bands == 1:
-            # Grayscale → RGB
-            np_array = np.stack([np_array] * 3, axis=-1).squeeze()
-        elif work_image.bands == 4:
-            # RGBA → RGB
-            np_array = np_array[:, :, :3]
-        
-        # TurboJPEG 인코딩 (최적화 파라미터)
-        base_kwargs = {
-            "quality": quality,
-            "pixel_format": TJPF_RGB,
-        }
-        
-        # FASTDCT 플래그 추가 (사용 가능한 경우)
-        if TJFLAG_FASTDCT is not None:
-            base_kwargs["flags"] = TJFLAG_FASTDCT
-        
-        jpeg_buf = _turbojpeg_encode_compat(turbo, np_array, base_kwargs, TJSAMP_420)
-        
-        # 파일 저장
-        with open(dest, "wb") as f:
-            f.write(jpeg_buf)
-        
-        return True
-        
-    except Exception as e:
-        logger.debug(f"⚠️ [TurboJPEG] 저장 실패, pyvips 폴백: {e}")
-        return False
-
 
 @contextmanager
 def _pyramid_path_lock(path: Path):
@@ -1905,33 +1755,22 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
                             smart_subsample=False,
                         )
                     else:
-                        # 최적화 4: JPEG 저장 - TurboJPEG 우선, pyvips 폴백
-                        # TurboJPEG: 고속 JPEG 인코더 (하드웨어 가속)
-                        # pyvips: 품질 우선 JPEG 인코더
-                        saved_with_turbo = _save_with_turbojpeg(work_image, temp_target, quality)
-                        
-                        if not saved_with_turbo:
-                            # pyvips 폴백
-                            work_image.jpegsave(
-                                temp_target,
-                                Q=quality,                 # Q=100 (최고 품질)
-                                strip=True,                # 메타데이터 제거
-                                optimize_coding=False,     # 속도 우선
-                                subsample_mode=1,          # 4:2:0 (가장 빠름)
-                                interlace=False,           # 인터레이스 비활성화
-                                trellis_quant=False,       # 트렐리스 양자화 비활성화
-                                quant_table=0,             # 기본 양자화 테이블
-                                background=255             # 배경색 설정
-                            )
-                            logger.info(
-                                "⏱️ [DEBUG] 저장 완료: %.0fms (pyvips)",
-                                (time.time() - t_save) * 1000.0,
-                            )
-                        else:
-                            logger.info(
-                                "⏱️ [DEBUG] 저장 완료: %.0fms (TurboJPEG)",
-                                (time.time() - t_save) * 1000.0,
-                            )
+                        # JPEG 저장 (pyvips Q95 - 벤치마크 검증 완료)
+                        # 벤치마크 결과: pyvips Q95 > TurboJPEG (24% 빠름, 58% 작음)
+                        # - pyvips Q95: 321ms, 8.4MB
+                        # - TurboJPEG Q100: 420ms, 20.2MB
+                        work_image.jpegsave(
+                            temp_target,
+                            Q=95,                      # Q=95 (그리드 썸네일과 동일, 벤치마크 최적화)
+                            strip=True,                # 메타데이터 제거
+                            optimize_coding=False,     # 속도 우선
+                            subsample_mode=1,          # 4:2:0 (가장 빠름)
+                            interlace=False            # 인터레이스 비활성화
+                        )
+                        logger.info(
+                            "⏱️ [DEBUG] 저장 완료: %.0fms (pyvips Q95)",
+                            (time.time() - t_save) * 1000.0,
+                        )
                     _atomic_replace(temp_path, pyramid_path)
                     _log_completion(final_w, final_h)
                     return
