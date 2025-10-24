@@ -29,6 +29,14 @@ import urllib.parse
 # ================= pyvips 로그 억제 =================
 logging.getLogger('pyvips').setLevel(logging.WARNING)
 
+# numpy import (required for TurboJPEG)
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    np = None
+    HAS_NUMPY = False
+
 # TurboJPEG import (optional)
 try:
     from turbojpeg import TurboJPEG, TJPF_RGB, TJSAMP_420, TJSAMP_422
@@ -36,8 +44,7 @@ try:
         from turbojpeg import TJFLAG_FASTDCT
     except ImportError:
         TJFLAG_FASTDCT = None
-    import numpy as np
-    TURBOJPEG_AVAILABLE = True
+    TURBOJPEG_AVAILABLE = HAS_NUMPY  # TurboJPEG requires numpy
 except ImportError:
     TURBOJPEG_AVAILABLE = False
     TurboJPEG = None
