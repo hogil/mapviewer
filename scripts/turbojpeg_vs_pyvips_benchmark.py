@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-TurboJPEG vs pyvips 종합 성능 비교 벤치마크
-300개 이미지를 다양한 조건으로 테스트
+TurboJPEG vs pyvips 종합 성능 비교 벤치마크 (폴더 입력)
+실제 그리드 썸네일 방식으로 300개 이미지 테스트
 """
 
 import time
 import os
 import sys
+import argparse
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any
@@ -25,8 +26,15 @@ except ImportError:
     print("ERROR: pyvips not available")
     sys.exit(1)
 
+# numpy import
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    np = None
+    HAS_NUMPY = False
+
 # TurboJPEG import
-HAS_TURBOJPEG = False
 TURBO_JPEG = None
 TJPF_RGB = None
 TJSAMP_420 = None
@@ -34,63 +42,62 @@ TJSAMP_422 = None
 TJSAMP_444 = None
 TJFLAG_FASTDCT = None
 
-try:
-    from turbojpeg import TurboJPEG, TJPF_RGB, TJSAMP_420, TJSAMP_422, TJSAMP_444
+if HAS_NUMPY:
     try:
-        from turbojpeg import TJFLAG_FASTDCT
-    except ImportError:
-        TJFLAG_FASTDCT = None
-    import numpy as np
-    
-    # TurboJPEG 초기화
-    turbo_paths = [
-        r"C:\libjpeg-turbo64\bin\turbojpeg.dll",  # Windows
-        "/usr/lib/x86_64-linux-gnu/libturbojpeg.so.0",  # Ubuntu
-        "/usr/local/lib/libturbojpeg.dylib",  # macOS
-    ]
-    
-    for path in turbo_paths:
-        if os.path.exists(path):
-            try:
-                TURBO_JPEG = TurboJPEG(path)
-                HAS_TURBOJPEG = True
-                print(f"TurboJPEG loaded: {path}")
-                break
-            except Exception as e:
-                continue
-    
-    if not TURBO_JPEG:
+        from turbojpeg import TurboJPEG, TJPF_RGB, TJSAMP_420, TJSAMP_422, TJSAMP_444
         try:
-            TURBO_JPEG = TurboJPEG()
-            HAS_TURBOJPEG = True
-            print("TurboJPEG loaded: default library")
-        except Exception:
-            pass
-            
-except ImportError:
-    pass
+            from turbojpeg import TJFLAG_FASTDCT
+        except ImportError:
+            TJFLAG_FASTDCT = None
+        
+        # TurboJPEG 초기화
+        turbo_paths = [
+            r"C:\libjpeg-turbo64\bin\turbojpeg.dll",  # Windows
+            "/usr/lib/x86_64-linux-gnu/libturbojpeg.so.0",  # Ubuntu
+            "/usr/local/lib/libturbojpeg.dylib",  # macOS
+        ]
+        
+        turbo_path = os.getenv("TURBOJPEG_PATH", "")
+        if turbo_path and os.path.exists(turbo_path):
+            try:
+                TURBO_JPEG = TurboJPEG(turbo_path)
+            except Exception:
+                pass
+        
+        if not TURBO_JPEG:
+            for path in turbo_paths:
+                if os.path.exists(path):
+                    try:
+                        TURBO_JPEG = TurboJPEG(path)
+                        break
+                    except Exception:
+                        continue
+        
+        if not TURBO_JPEG:
+            try:
+                TURBO_JPEG = TurboJPEG()
+            except Exception:
+                pass
+                
+    except ImportError:
+        pass
 
-if not HAS_TURBOJPEG:
-    print("WARNING: TurboJPEG not available - will only test pyvips")
+if TURBO_JPEG:
+    print(f"TurboJPEG: Available")
+else:
+    print("TurboJPEG: Not available - will only test pyvips")
 
 # 설정
-INPUT_IMAGE = Path("input.png")
-OUTPUT_BASE = Path("_bench_turbo_vs_pyvips")
 TARGET_SIZE = (512, 512)
-NUM_IMAGES = 300
 MAX_WORKERS = 16
 
 # 테스트 조건
 TEST_CONDITIONS = [
     # TurboJPEG 조건
-    {"name": "TurboJPEG_Q95_420_FASTDCT", "method": "turbojpeg", "quality": 95, "subsample": TJSAMP_420, "fastdct": True},
     {"name": "TurboJPEG_Q100_420_FASTDCT", "method": "turbojpeg", "quality": 100, "subsample": TJSAMP_420, "fastdct": True},
     {"name": "TurboJPEG_Q100_420_NoFlags", "method": "turbojpeg", "quality": 100, "subsample": TJSAMP_420, "fastdct": False},
-    {"name": "TurboJPEG_Q100_422_FASTDCT", "method": "turbojpeg", "quality": 100, "subsample": TJSAMP_422, "fastdct": True},
-    {"name": "TurboJPEG_Q100_444_FASTDCT", "method": "turbojpeg", "quality": 100, "subsample": TJSAMP_444, "fastdct": True},
     
     # pyvips 조건
-    {"name": "pyvips_Q95_subsample1", "method": "pyvips", "quality": 95, "subsample_mode": 1, "optimize": False},
     {"name": "pyvips_Q100_subsample1", "method": "pyvips", "quality": 100, "subsample_mode": 1, "optimize": False},
     {"name": "pyvips_Q100_subsample1_opt", "method": "pyvips", "quality": 100, "subsample_mode": 1, "optimize": True},
     {"name": "pyvips_Q100_subsample2", "method": "pyvips", "quality": 100, "subsample_mode": 2, "optimize": False},
@@ -98,13 +105,13 @@ TEST_CONDITIONS = [
 
 
 def generate_thumbnail_turbojpeg(input_path: Path, output_path: Path, quality: int, subsample, fastdct: bool) -> float:
-    """TurboJPEG로 썸네일 생성"""
-    if not HAS_TURBOJPEG:
+    """TurboJPEG로 썸네일 생성 (그리드 썸네일 방식)"""
+    if not TURBO_JPEG or not HAS_NUMPY:
         return -1.0
     
     start = time.time()
     
-    # pyvips로 로드 및 리사이즈
+    # pyvips로 로드 및 리사이즈 (그리드 썸네일과 동일)
     vips_image = pyvips.Image.new_from_file(
         str(input_path),
         access='sequential',
@@ -113,13 +120,14 @@ def generate_thumbnail_turbojpeg(input_path: Path, output_path: Path, quality: i
         unlimited=True
     )
     
-    # 최적화된 shrink + resize
+    # 그리드 썸네일과 동일한 리사이즈 로직
     target_w, target_h = TARGET_SIZE
     scale_w = target_w / vips_image.width
     scale_h = target_h / vips_image.height
     scale = min(scale_w, scale_h)
     
     if scale < 1.0:
+        # 최적화된 shrink + resize
         if scale < 0.5:
             shrink_factor = max(int(1.0 / scale) + 1, 1)
         else:
@@ -159,7 +167,7 @@ def generate_thumbnail_turbojpeg(input_path: Path, output_path: Path, quality: i
 
 
 def generate_thumbnail_pyvips(input_path: Path, output_path: Path, quality: int, subsample_mode: int, optimize: bool) -> float:
-    """pyvips로 썸네일 생성"""
+    """pyvips로 썸네일 생성 (그리드 썸네일 방식)"""
     start = time.time()
     
     vips_image = pyvips.Image.new_from_file(
@@ -170,13 +178,14 @@ def generate_thumbnail_pyvips(input_path: Path, output_path: Path, quality: int,
         unlimited=True
     )
     
-    # 최적화된 shrink + resize
+    # 그리드 썸네일과 동일한 리사이즈 로직
     target_w, target_h = TARGET_SIZE
     scale_w = target_w / vips_image.width
     scale_h = target_h / vips_image.height
     scale = min(scale_w, scale_h)
     
     if scale < 1.0:
+        # 최적화된 shrink + resize
         if scale < 0.5:
             shrink_factor = max(int(1.0 / scale) + 1, 1)
         else:
@@ -188,7 +197,7 @@ def generate_thumbnail_pyvips(input_path: Path, output_path: Path, quality: int,
         
         vips_image = vips_image.resize(scale, vscale=scale, kernel='cubic')
     
-    # pyvips JPEG 저장
+    # pyvips JPEG 저장 (그리드 썸네일과 동일)
     vips_image.jpegsave(
         str(output_path),
         Q=quality,
@@ -204,7 +213,20 @@ def generate_thumbnail_pyvips(input_path: Path, output_path: Path, quality: int,
     return time.time() - start
 
 
-def run_benchmark(condition: Dict[str, Any]) -> Dict[str, Any]:
+def collect_images(input_dir: Path, limit: int = 300) -> List[Path]:
+    """폴더에서 이미지 파일 수집"""
+    extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp'}
+    images = []
+    
+    for ext in extensions:
+        images.extend(input_dir.glob(f"*{ext}"))
+        images.extend(input_dir.glob(f"*{ext.upper()}"))
+    
+    images = sorted(images)[:limit]
+    return images
+
+
+def run_benchmark(condition: Dict[str, Any], input_images: List[Path], output_base: Path) -> Dict[str, Any]:
     """단일 조건 벤치마크 실행"""
     name = condition["name"]
     method = condition["method"]
@@ -214,27 +236,31 @@ def run_benchmark(condition: Dict[str, Any]) -> Dict[str, Any]:
     print(f"{'='*80}")
     
     # 출력 디렉토리 생성
-    output_dir = OUTPUT_BASE / name
+    output_dir = output_base / name
     if output_dir.exists():
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True)
     
-    # 300개 이미지 생성 (병렬)
+    # 이미지 개수 확인
+    num_images = len(input_images)
+    print(f"Images: {num_images}")
+    
     times = []
     
-    def process_single(i: int) -> float:
-        output_path = output_dir / f"thumb_{i:04d}.jpg"
+    def process_single(idx_and_path) -> float:
+        i, input_path = idx_and_path
+        output_path = output_dir / f"{input_path.stem}_{i:04d}.jpg"
         
         if method == "turbojpeg":
             return generate_thumbnail_turbojpeg(
-                INPUT_IMAGE, output_path,
+                input_path, output_path,
                 condition["quality"],
                 condition["subsample"],
                 condition["fastdct"]
             )
         else:
             return generate_thumbnail_pyvips(
-                INPUT_IMAGE, output_path,
+                input_path, output_path,
                 condition["quality"],
                 condition["subsample_mode"],
                 condition["optimize"]
@@ -243,12 +269,15 @@ def run_benchmark(condition: Dict[str, Any]) -> Dict[str, Any]:
     total_start = time.time()
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(process_single, i) for i in range(NUM_IMAGES)]
+        futures = [executor.submit(process_single, (i, img)) for i, img in enumerate(input_images)]
         
         for future in as_completed(futures):
-            t = future.result()
-            if t > 0:
-                times.append(t)
+            try:
+                t = future.result()
+                if t > 0:
+                    times.append(t)
+            except Exception as e:
+                print(f"  Error: {e}")
     
     total_time = time.time() - total_start
     
@@ -271,7 +300,8 @@ def run_benchmark(condition: Dict[str, Any]) -> Dict[str, Any]:
         "min_time_ms": min_time,
         "max_time_ms": max_time,
         "avg_size_kb": avg_size / 1024,
-        "throughput": NUM_IMAGES / total_time
+        "throughput": num_images / total_time,
+        "num_images": num_images
     }
     
     print(f"Total Time: {result['total_time_ms']:.0f}ms")
@@ -283,38 +313,65 @@ def run_benchmark(condition: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def main():
-    if not INPUT_IMAGE.exists():
-        print(f"ERROR: {INPUT_IMAGE} not found")
+    parser = argparse.ArgumentParser(description='TurboJPEG vs pyvips 벤치마크 (폴더 입력)')
+    parser.add_argument('input_dir', type=str, help='입력 이미지 폴더 경로')
+    parser.add_argument('--limit', type=int, default=300, help='테스트할 이미지 개수 (기본: 300)')
+    parser.add_argument('--output', type=str, default='_bench_turbo_vs_pyvips', help='출력 폴더 (기본: _bench_turbo_vs_pyvips)')
+    parser.add_argument('--workers', type=int, default=16, help='병렬 워커 수 (기본: 16)')
+    
+    args = parser.parse_args()
+    
+    input_dir = Path(args.input_dir)
+    if not input_dir.exists():
+        print(f"ERROR: Input directory not found: {input_dir}")
         sys.exit(1)
     
+    global MAX_WORKERS
+    MAX_WORKERS = args.workers
+    
+    output_base = Path(args.output)
+    
     print("="*80)
-    print("TurboJPEG vs pyvips Benchmark")
+    print("TurboJPEG vs pyvips Benchmark (Grid Thumbnail Mode)")
     print("="*80)
-    print(f"Input:       {INPUT_IMAGE}")
+    print(f"Input Dir:   {input_dir}")
+    print(f"Output Dir:  {output_base}")
     print(f"Target Size: {TARGET_SIZE}")
-    print(f"Num Images:  {NUM_IMAGES}")
+    print(f"Max Images:  {args.limit}")
     print(f"Workers:     {MAX_WORKERS}")
-    print(f"TurboJPEG:   {'Available' if HAS_TURBOJPEG else 'Not Available'}")
+    print(f"TurboJPEG:   {'Available' if TURBO_JPEG else 'Not Available'}")
     print("="*80)
+    
+    # 이미지 수집
+    print(f"\nCollecting images from {input_dir}...")
+    input_images = collect_images(input_dir, args.limit)
+    
+    if not input_images:
+        print(f"ERROR: No images found in {input_dir}")
+        sys.exit(1)
+    
+    print(f"Found {len(input_images)} images")
     
     results = []
     
     for condition in TEST_CONDITIONS:
         # TurboJPEG 테스트는 라이브러리가 있을 때만
-        if condition["method"] == "turbojpeg" and not HAS_TURBOJPEG:
+        if condition["method"] == "turbojpeg" and not TURBO_JPEG:
             print(f"\nSkipping {condition['name']} (TurboJPEG not available)")
             continue
         
         try:
-            result = run_benchmark(condition)
+            result = run_benchmark(condition, input_images, output_base)
             results.append(result)
         except Exception as e:
             print(f"ERROR: {condition['name']} failed - {e}")
+            import traceback
+            traceback.print_exc()
             continue
     
     # 결과 요약
     print("\n" + "="*80)
-    print("SUMMARY RESULTS (300 images, 512x512, cubic)")
+    print(f"SUMMARY RESULTS ({len(input_images)} images, 512x512, cubic)")
     print("="*80)
     print(f"{'Method':<35} {'Total':<10} {'Avg':<10} {'Size':<10} {'Throughput':<15}")
     print("-"*80)
@@ -339,8 +396,8 @@ def main():
         print(f"  Total Time: {fastest['total_time_ms']:.0f}ms")
         print(f"  Avg Time:   {fastest['avg_time_ms']:.2f}ms")
         print(f"  Throughput: {fastest['throughput']:.1f} images/sec")
+        print(f"  Images:     {fastest['num_images']}")
 
 
 if __name__ == "__main__":
     main()
-
