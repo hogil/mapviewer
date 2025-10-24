@@ -117,10 +117,17 @@ GET  /api/whoami            # Check session (session_user, session_meta)
 The frontend uses vanilla JavaScript with ES6 modules and no build step.
 
 **Core JavaScript Modules:**
-- [main.js](main.js): Main application controller, file explorer, and UI state management
+- [js/main.js](js/main.js): Main application controller (`WaferMapViewer` class)
+  - File explorer and directory navigation
+  - Grid mode and single image mode management
+  - Label Explorer UI and state management
+  - View state preservation (grid ↔ single image transitions)
+- [js/labels.js](js/labels.js): `LabelManager` class for classification
+  - Class creation/deletion in Class Manager
+  - Label assignment/removal operations
+  - Label Explorer rendering and refresh logic
 - [js/semiconductor-renderer.js](js/semiconductor-renderer.js): High-performance image rendering with pyramid technique
 - [js/grid.js](js/grid.js): Grid view for batch image display
-- [js/labels.js](js/labels.js): Labeling system for classification
 - [js/search.js](js/search.js): Advanced search with boolean operators
 - [js/context-menu.js](js/context-menu.js): Right-click context menu
 - [js/utils.js](js/utils.js): Utility functions
@@ -188,6 +195,40 @@ chore: Build/tooling changes
 3. **Pyramid Levels:** The configuration `PYRAMID_LEVELS = [0.25, 0.5, 0.75, 1.0]` in [api/config.py](api/config.py#L50) defines available pyramid levels
 4. **Logging:** The system uses custom pretty-table access logging with ANSI colors - avoid polluting logs with verbose output
 5. **HTTPS Only:** Production deployment requires HTTPS; HTTP is disabled by default
+
+### Critical UI State Management Patterns
+
+**Label Explorer State Preservation:**
+- When modifying Label Explorer (adding/removing labels), avoid calling `refreshLabelExplorer()` which resets folder open/closed states
+- Instead, use DOM manipulation to add/remove individual items:
+  ```javascript
+  // Good: Preserve folder state
+  row.remove();
+  await this.refreshClassList(); // Only update counts
+
+  // Bad: Loses folder state
+  await this.refreshLabelExplorer(); // Resets everything
+  ```
+- Cache management: `classToImgListCache` must be kept in sync with DOM changes
+- Folder state tracking: `labelSelection.openFolders` object tracks which class folders are expanded
+
+**Grid ↔ Single Image Mode Transitions:**
+- When calling `loadImage()`, grid mode must be explicitly disabled and UI elements hidden:
+  ```javascript
+  this.gridMode = false;
+  grid.style.display = 'none';
+  gridControls.style.display = 'none';
+  this.dom.viewerContainer.classList.remove('grid-mode');
+  this.dom.viewerContainer.classList.add('single-image-mode');
+  ```
+- The `savedViewState` object preserves previous mode state for "Back" navigation
+- Always clear `labelSelection.selectedClasses` when loading a new image to prevent lingering selection UI
+
+**Class Manager vs Label Explorer:**
+- `js/labels.js` (`LabelManager`) manages Class Manager panel and some Label Explorer operations
+- `js/main.js` (`WaferMapViewer`) manages Label Explorer UI rendering and batch operations
+- Both share the same `labelSelection` state object but update different UI panels
+- When updating labels, coordinate between both managers to keep UI in sync
 
 ## Testing
 

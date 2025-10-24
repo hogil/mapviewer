@@ -25,16 +25,19 @@ L3 Tracker는 대규모 반도체 웨이퍼 이미지를 실시간으로 탐색�
 ├─ api/                   # FastAPI backend
 │  ├─ main.py             # 라우팅, 검색, 피라미드, 구성 로직
 │  ├─ config.py           # 모든 환경변수 → 앱 설정
-│  ├─ thumbnail_service.py
-│  └─ optimized_thumbnail.py (실험 코드)
+│  └─ thumbnail_service.py
 ├─ js/                    # 프론트엔드 ES6 코드
-│  ├─ main.js             # UI & 데이터 흐름
+│  ├─ main.js             # UI & 데이터 흐름 (WaferMapViewer)
+│  ├─ labels.js           # 라벨 관리 (LabelManager)
 │  └─ semiconductor-renderer.js  # GPU 렌더러
 ├─ index.html             # SPA 진입점
 ├─ start.ps1              # Windows 11 개발 환경 스타터
 ├─ start.sh               # Ubuntu 24 운영 환경 스타터
+├─ scripts/               # 벤치마크 및 유틸리티 스크립트
+├─ docs/archive/          # 성능 분석 및 벤치마크 결과 아카이브
 ├─ ARCHITECTURE.md        # 시스템 구성 설명
-├─ PERFORMANCE_ANALYSIS.md# 성능 측정 및 가이드
+├─ ENVIRONMENT_SETUP.md   # 환경 변수 설정 가이드
+├─ CLAUDE.md              # Claude Code 작업 가이드
 ├─ CHANGELOG.md           # 버전별 변경 사항
 └─ README.md
 ```
@@ -73,10 +76,12 @@ L3 Tracker는 대규모 반도체 웨이퍼 이미지를 실시간으로 탐색�
 6. 브라우저에서 접속  
    기본 주소는 `http://localhost:8080`
 
-## System Flow
+## Documentation
 
-- API와 썸네일/피라미드 처리 흐름: `ARCHITECTURE.md`
-- pyvips, PNG level-3, 검색 인덱스 병렬화 등 성능 수치: `PERFORMANCE_ANALYSIS.md`
+- **시스템 구성**: `ARCHITECTURE.md` - API와 썸네일/피라미드 처리 흐름
+- **환경 설정**: `ENVIRONMENT_SETUP.md` - 환경 변수 및 성능 튜닝 가이드
+- **개발 가이드**: `CLAUDE.md` - Claude Code 작업 시 참고 문서
+- **성능 분석**: `docs/archive/` - 벤치마크 결과 및 최적화 히스토리
 
 ## History
 
