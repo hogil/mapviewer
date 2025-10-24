@@ -29,22 +29,61 @@ import urllib.parse
 # ================= pyvips 로그 억제 =================
 logging.getLogger('pyvips').setLevel(logging.WARNING)
 
-# TurboJPEG import (optional)
+# numpy import (TurboJPEG용, 별도 import)
 try:
-    from turbojpeg import TurboJPEG, TJPF_RGB, TJSAMP_420
-    try:
-        from turbojpeg import TJFLAG_FASTDCT
-    except ImportError:
-        TJFLAG_FASTDCT = None
     import numpy as np
-    TURBOJPEG_AVAILABLE = True
+    HAS_NUMPY = True
 except ImportError:
-    TURBOJPEG_AVAILABLE = False
-    TurboJPEG = None
-    TJPF_RGB = None
-    TJSAMP_420 = None
-    TJFLAG_FASTDCT = None
     np = None
+    HAS_NUMPY = False
+
+# TurboJPEG import (optional, numpy 필요)
+TURBO_JPEG = None
+TJPF_RGB = None
+TJSAMP_420 = None
+TJSAMP_422 = None
+TJSAMP_444 = None
+TJFLAG_FASTDCT = None
+
+if HAS_NUMPY:
+    try:
+        from turbojpeg import TurboJPEG, TJPF_RGB, TJSAMP_420, TJSAMP_422, TJSAMP_444
+        try:
+            from turbojpeg import TJFLAG_FASTDCT
+        except ImportError:
+            TJFLAG_FASTDCT = None
+        
+        # TurboJPEG 인스턴스 초기화
+        turbo_paths = [
+            r"C:\libjpeg-turbo64\bin\turbojpeg.dll",  # Windows
+            "/usr/lib/x86_64-linux-gnu/libturbojpeg.so.0",  # Ubuntu
+            "/usr/local/lib/libturbojpeg.dylib",  # macOS
+        ]
+        
+        turbo_path = os.getenv("TURBOJPEG_PATH", "")
+        if turbo_path and os.path.exists(turbo_path):
+            try:
+                TURBO_JPEG = TurboJPEG(turbo_path)
+            except Exception:
+                pass
+        
+        if not TURBO_JPEG:
+            for path in turbo_paths:
+                if os.path.exists(path):
+                    try:
+                        TURBO_JPEG = TurboJPEG(path)
+                        break
+                    except Exception:
+                        continue
+        
+        if not TURBO_JPEG:
+            try:
+                TURBO_JPEG = TurboJPEG()
+            except Exception:
+                pass
+                
+    except ImportError:
+        pass
 
 from .access_logger import logger_instance
 from .detail_access_logger import detail_access_logger
@@ -273,16 +312,7 @@ THUMBNAIL_FORMAT = config.THUMBNAIL_FORMAT
 THUMBNAIL_QUALITY = config.THUMBNAIL_QUALITY
 THUMBNAIL_SIZE_DEFAULT = config.THUMBNAIL_SIZE_DEFAULT
 
-# TurboJPEG 인스턴스 (그리드 썸네일 최적화)
-TURBO_JPEG = None
-if TURBOJPEG_AVAILABLE and getattr(config, "USE_TURBOJPEG", False):
-    try:
-        turbo_path = getattr(config, "TURBOJPEG_PATH", "") or None
-        TURBO_JPEG = TurboJPEG(lib_path=turbo_path if turbo_path else None)
-        print(f"[main.py] TurboJPEG Q95 FASTDCT + 4:2:0 초기화 완료")
-    except Exception as e:
-        print(f"[main.py] TurboJPEG 초기화 실패, pyvips 폴백: {e}")
-        TURBO_JPEG = None
+# TurboJPEG는 상단에서 이미 초기화됨 (Line 40-86)
 
 # ======================== Service Instances ========================
 thumbnail_service = ThumbnailService(
@@ -1334,63 +1364,11 @@ async def build_file_index_background():
 
 # ======================== Thumbnails / Common ========================
 def _save_with_turbojpeg(vips_image, thumbnail_path: str, quality: int) -> bool:
-    """TurboJPEG로 JPEG 저장 (Q95 FASTDCT + 4:2:0)
-
-    벤치마크 결과: pyvips Q95 cubic (148ms) → TurboJPEG Q95 FASTDCT (139ms) = 6% 빠름
-    """
-    if not TURBO_JPEG:
-        return False
-
-    try:
-        # pyvips → numpy 변환
-        mem_img = vips_image.write_to_memory()
-        np_array = np.frombuffer(mem_img, dtype=np.uint8).reshape(
-            vips_image.height, vips_image.width, vips_image.bands
-        )
-
-        # RGB 변환
-        if vips_image.bands == 1:
-            # Grayscale → RGB
-            np_array = np.stack([np_array] * 3, axis=-1).squeeze()
-        elif vips_image.bands == 4:
-            # RGBA → RGB
-            np_array = np_array[:, :, :3]
-
-        # TurboJPEG 인코딩 (Q95 FASTDCT + 4:2:0)
-        base_kwargs = {
-            "quality": quality,
-            "pixel_format": TJPF_RGB,
-        }
-
-        # FASTDCT 플래그 추가
-        if TJFLAG_FASTDCT is not None:
-            base_kwargs["flags"] = TJFLAG_FASTDCT
-
-        # 4:2:0 chroma subsampling
-        try:
-            jpeg_buf = TURBO_JPEG.encode(np_array, jpeg_subsample=TJSAMP_420, **base_kwargs)
-        except TypeError:
-            try:
-                jpeg_buf = TURBO_JPEG.encode(np_array, chroma_subsampling=TJSAMP_420, **base_kwargs)
-            except TypeError:
-                jpeg_buf = TURBO_JPEG.encode(np_array, **base_kwargs)
-
-        # 파일 저장
-        with open(thumbnail_path, "wb") as f:
-            f.write(jpeg_buf)
-
-        return True
-
-    except Exception as e:
-        # TurboJPEG 실패 시 pyvips 폴백
-        return False
-
-def _save_with_turbojpeg(vips_image, thumbnail_path: str, quality: int) -> bool:
     """TurboJPEG로 JPEG 저장 (FASTDCT + 4:2:0)
     
     TurboJPEG는 pyvips보다 빠를 수 있지만, write_to_memory 오버헤드가 있음
     """
-    if not TURBO_JPEG:
+    if not TURBO_JPEG or not HAS_NUMPY:
         return False
     
     try:
