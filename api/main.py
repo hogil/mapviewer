@@ -3241,10 +3241,21 @@ app.mount("/js", StaticFiles(directory="js"), name="js")
 app.mount("/static", StaticFiles(directory="."), name="static")
 
 @app.get("/")
-async def read_root():
+async def read_root(request: Request):
     try:
-        # AUTO_LOGIN=True/False 모두 동일하게 index.html 로드
-        # 프론트엔드에서 AUTO_LOGIN 여부를 확인하고 자동으로 /saml/login 호출
+        # AUTO_LOGIN=True일 때: SAML 인증 완료 후가 아니면 무조건 /saml/login으로 리다이렉트
+        # 이렇게 하면 index.html 로드 전에 인증이 완료되어 Guest가 절대 나오지 않음
+        if AUTO_LOGIN:
+            # saml_success 파라미터가 없으면 무조건 SAML 로그인으로 리다이렉트
+            # (SAML 인증 완료 후에는 saml_success=true와 함께 리다이렉트됨)
+            if not request.query_params.get("saml_success"):
+                logger.info("🔐 [AUTO_LOGIN] SAML 인증 미완료 → /saml/login으로 리다이렉트")
+                return RedirectResponse("/saml/login", status_code=302)
+
+            # SAML 인증 완료 후 → index.html 제공
+            logger.info(f"✅ [AUTO_LOGIN] SAML 인증 완료 → index.html 제공")
+
+        # AUTO_LOGIN=False 또는 SAML 인증 완료 → index.html 제공
         html_path = Path("index.html")
         return FileResponse(html_path) if html_path.exists() else {"message": "index.html not found"}
     except Exception as e:
