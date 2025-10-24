@@ -39,16 +39,17 @@ $env:VIPS_DISC_THRESHOLD="500m"         # 디스크 스필 기준 (RAM 디스크
 $env:PYRAMID_LEVELS="0.2,0.5,0.7,1.0"
 $env:PYRAMID_ZOOM_THRESHOLDS="0.25,0.5,0.75"
 $env:PYRAMID_FORMAT="JPEG"
-$env:PYRAMID_Q="95"                   # JPEG/WEBP 품질 (Q=100, 최고 품질)
+$env:PYRAMID_Q="100"                  # JPEG 품질 Q=100 (최고 품질)
 $env:PYRAMID_PNG_COMPRESSION="3"       # 무손실 유지, 네트워크 전송량과 생성시간 밸런스
 $env:PYRAMID_PNG_EFFORT="1"            # PNG effort (1=가장 빠름)
 $env:PYRAMID_KERNEL="cubic"            # 리사이즈 커널 (cubic, 최고 품질)
 $env:PYRAMID_LOADER_MODE="random"      # 로더 모드 (random=스트리밍, seq_early_copy=메모리 복사)
 
 # TurboJPEG 설정 (그리드 썸네일 전용)
-# 2025-10-23: 그리드 썸네일 TurboJPEG 최적화 (300장 벤치마크 검증)
-# - 벤치마크 결과: TurboJPEG Q95 FASTDCT + 4:2:0 (139ms) > pyvips Q95 cubic (148ms) = 6% 빠름
-# - 피라미드는 pyvips 사용, 그리드는 TurboJPEG 사용
+# 2025-10-24: 그리드 썸네일 TurboJPEG 4:2:2 적용
+# - 벤치마크 결과 (300개): TurboJPEG Q100 422 FASTDCT (12,593ms) > pyvips (13,016ms) = 3.4% 빠름
+# - 4:2:2 선택 이유: 세로 방향 색상 경계 보존, 속도는 4:2:0과 유사
+# - 피라미드는 pyvips 사용, 그리드는 TurboJPEG 422 사용
 $env:USE_TURBOJPEG="1"
 $env:TURBOJPEG_PATH = "C:\libjpeg-turbo64\bin\turbojpeg.dll"
 

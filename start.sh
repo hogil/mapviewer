@@ -52,16 +52,26 @@ export DIRLIST_CACHE_SIZE="8192"         # 디렉토리 캐시 대폭 증가
 export THUMB_STAT_CACHE_CAPACITY="32768" # 썸네일 stat 캐시 증가
 
 # 이미지 피라미드 설정
-export PYRAMID_LEVELS="0.2,0.5,0.7,1.0"      # 피라미드 레벨 (최고품질 Q=100, Lanczos3)
+# 2025-10-24: 피라미드 썸네일 품질 및 속도 최적화
+# - PYRAMID_Q: 95→100 (그리드 썸네일과 동일한 최고 품질)
+# - PYRAMID_LOADER_MODE: seq_early_copy→random (copy_memory() 오버헤드 제거)
+# 원복 시점: commit dce1bb2 (2025-10-23)
+export PYRAMID_LEVELS="0.2,0.5,0.7,1.0"      # 피라미드 레벨
 export PYRAMID_ZOOM_THRESHOLDS="0.25,0.5,0.75"  # zoom 기준 (≤0.25→0.2, ≤0.5→0.5, ≤0.75→0.7, >0.75→1.0)
-export PYRAMID_FORMAT="${PYRAMID_FORMAT:-JPEG}"
-export PYRAMID_Q="${PYRAMID_Q:-95}"
-export PYRAMID_PNG_COMPRESSION="${PYRAMID_PNG_COMPRESSION:-3}"
-export PYRAMID_PNG_EFFORT="${PYRAMID_PNG_EFFORT:-1}"
-export PYRAMID_KERNEL="${PYRAMID_KERNEL:-cubic}"
-export PYRAMID_LOADER_MODE="${PYRAMID_LOADER_MODE:-seq_early_copy}"
-export USE_TURBOJPEG="${USE_TURBOJPEG:-1}"
-export TURBOJPEG_PATH="${TURBOJPEG_PATH:-/usr/lib/x86_64-linux-gnu/libturbojpeg.so.0}"
+export PYRAMID_FORMAT="JPEG"                 # JPEG 포맷
+export PYRAMID_Q="100"                       # JPEG 품질 Q=100 (최고 품질)
+export PYRAMID_PNG_COMPRESSION="3"           # PNG 압축 레벨
+export PYRAMID_PNG_EFFORT="1"                # PNG effort (1=가장 빠름)
+export PYRAMID_KERNEL="cubic"                # 리사이즈 커널 (cubic, 최고 품질)
+export PYRAMID_LOADER_MODE="random"          # 로더 모드 (random=스트리밍, copy_memory 오버헤드 없음)
+
+# TurboJPEG 설정 (그리드 썸네일 전용)
+# 2025-10-24: 그리드 썸네일 TurboJPEG 4:2:2 적용
+# - 벤치마크 결과 (300개): TurboJPEG Q100 422 FASTDCT (12,593ms) > pyvips (13,016ms) = 3.4% 빠름
+# - 4:2:2 선택 이유: 세로 방향 색상 경계 보존, 속도는 4:2:0과 유사
+# - 피라미드는 pyvips 사용, 그리드는 TurboJPEG 422 사용
+export USE_TURBOJPEG="1"
+export TURBOJPEG_PATH="/usr/lib/x86_64-linux-gnu/libturbojpeg.so.0"
 
 # 서버 시작
 python3 -m api.main
