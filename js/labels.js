@@ -784,7 +784,7 @@ export class LabelManager {
                         console.log('🔍 [LABEL_EXPLORER_DEBUG] 이미지 삭제 버튼 클릭됨:', imagePath);
                         console.log('🔍 [LABEL_EXPLORER_DEBUG] 클래스:', className);
                         console.log('🔍 [LABEL_EXPLORER_DEBUG] 현재 폴더:', this.viewer?.currentFolderPath);
-                        
+
                         if (!confirm(`"${className}" 클래스에서 "${imagePath.split('/').pop()}" 이미지를 제거하시겠습니까?`)) {
                             return;
                         }
@@ -793,16 +793,30 @@ export class LabelManager {
                             const res = await fetch('/api/classify', {
                                 method: 'DELETE',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ 
-                                    image_path: imagePath, 
-                                    class_name: className 
+                                body: JSON.stringify({
+                                    image_path: imagePath,
+                                    class_name: className
                                 })
                             });
                             if (!res.ok) {
                                 const err = await res.json().catch(() => ({}));
                                 throw new Error(err.detail || err.error || `삭제 실패(${res.status})`);
                             }
-                            await this.refreshAll();
+
+                            // 해당 row만 DOM에서 제거
+                            row.remove();
+
+                            // 리스트가 비어있으면 "라벨된 이미지 없음" 메시지 표시
+                            const remainingItems = list.querySelectorAll('.label-explorer-item');
+                            if (remainingItems.length === 0) {
+                                const empty = document.createElement('div');
+                                empty.className = 'label-explorer-empty';
+                                empty.textContent = '라벨된 이미지 없음';
+                                list.appendChild(empty);
+                            }
+
+                            // Class Manager 카운트만 업데이트 (전체 새로고침 없이)
+                            await this.refreshClassList();
                         } catch (err) {
                             console.error('분류 삭제 오류:', err);
                             alert(`분류 삭제 실패: ${err.message || err}`);

@@ -8414,31 +8414,58 @@ class WaferMapViewer {
 
             labelSelection.lastSelectedKey = null;
 
-            // 🔥 열린 폴더 상태 저장
+            // 🔥 DOM에서 직접 제거 (새로고침 없이)
+            Object.entries(classToDel).forEach(([cls, images]) => {
+                images.forEach(imgName => {
+                    // Label Explorer에서 해당 항목 찾기
+                    const container = document.getElementById('label-explorer-list');
+                    if (container) {
+                        const buttons = container.querySelectorAll('button.label-img-name');
+                        buttons.forEach(btn => {
+                            if (btn.textContent === imgName) {
+                                const li = btn.closest('li');
+                                const classLi = li?.parentElement?.closest('li');
+                                if (classLi) {
+                                    const folderSummary = classLi.querySelector('div');
+                                    const folderCls = folderSummary?.textContent.replace(/[▾▸]/g, '').trim();
+                                    if (folderCls === cls) {
+                                        // 해당 li 제거
+                                        li.remove();
+                                    }
+                                }
+                            }
+                        });
 
-            const openFolders = Object.keys(labelSelection.openFolders || {}).filter(k => labelSelection.openFolders[k]);
+                        // 해당 클래스 폴더의 ul 찾기
+                        const allClassFolders = container.querySelectorAll('li > div');
+                        allClassFolders.forEach(folderDiv => {
+                            const folderCls = folderDiv.textContent.replace(/[▾▸]/g, '').trim();
+                            if (folderCls === cls) {
+                                const ul = folderDiv.nextElementSibling;
+                                if (ul && ul.tagName === 'UL') {
+                                    // ul 안에 li가 없으면 "라벨된 이미지 없음" 메시지 표시
+                                    const remainingItems = ul.querySelectorAll('li');
+                                    if (remainingItems.length === 0) {
+                                        ul.innerHTML = '<li style="color:#888;padding:4px 12px;">라벨된 이미지 없음</li>';
+                                    }
+                                }
+                            }
+                        });
+                    }
 
-            // 🔥 캐시 완전 초기화
-
-            this.classToImgListCache = {};
-
-            // 🔥 열린 폴더 상태 복원
-
-            openFolders.forEach(cls => {
-                if (labelSelection.openFolders) {
-                    labelSelection.openFolders[cls] = true;
-                }
+                    // 캐시에서도 제거
+                    if (this.classToImgListCache[cls]) {
+                        const idx = this.classToImgListCache[cls].findIndex(img => img.name === imgName);
+                        if (idx > -1) {
+                            this.classToImgListCache[cls].splice(idx, 1);
+                        }
+                    }
+                });
             });
 
-            // 🔥 저장된 뷰 상태로 복귀
-
-            this.restoreSavedViewState();
-
+            // Class Manager 업데이트만 수행
             const tRefresh = performance.now();
-
-            // 🔥 Label Explorer 완전 새로고침
-
-            await this.refreshLabelExplorer();
+            await this.refreshClassList();
 
             this.debugLog(`⏱ Label Explorer 새로고침: ${(performance.now()-tRefresh).toFixed(1)}ms`);
 
