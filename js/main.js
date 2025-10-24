@@ -5508,56 +5508,16 @@ class WaferMapViewer {
             // 🔥 path는 이미 ROOT_DIR 기준 절대 경로 (모든 depth 포함)
             const fullPath = path;
 
-            // 🔥 Wafer Map Explorer에서만 상태 저장 (classification 경로 제외)
-
-            if (!path.startsWith('classification/')) {
+            // 🔥 Grid 모드에서 단일 이미지로 전환 시 Grid 상태 저장 (classification 경로 제외)
+            if (!path.startsWith('classification/') && this.gridMode && this.currentGridImages && this.currentGridImages.length > 0) {
                 const grid = document.getElementById('image-grid');
                 const scrollWrapper = grid?.parentElement;
-
-                if (this.gridMode && this.currentGridImages && this.currentGridImages.length > 0) {
-                    // Grid 모드에서 온 경우 - 항상 저장
-
-                    this.savedViewState = {
-                        type: 'grid',
-
-                        images: [...this.currentGridImages],
-
-                        scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0
-                    };
-
-                    this.debugLog('🔄 [SAVE] loadImage - Grid 상태 저장:', this.savedViewState.images.length, '개');
-                } else if (!this.gridMode && this.currentImage && this.selectedImagePath) {
-                    // 단일 이미지 모드에서 온 경우 - 항상 저장
-
-                    this.savedViewState = {
-                        type: 'single',
-
-                        imagePath: this.selectedImagePath,
-
-                        zoom: this.zoom,
-
-                        offsetX: this.offsetX,
-
-                        offsetY: this.offsetY
-                    };
-
-                    this.debugLog('🔄 [SAVE] loadImage - 단일 이미지 상태 저장:', this.savedViewState.imagePath);
-                } else {
-                    // 🔥 초기 상태에서 온 경우 - 이미 savedViewState가 있으면 덮어쓰지 않음
-                    if (!this.savedViewState) {
-                        this.savedViewState = {
-                            type: 'grid',
-
-                            images: [],
-
-                            scrollTop: 0
-                        };
-
-                        this.debugLog('🔄 [SAVE] loadImage - 빈 그리드 상태 저장');
-                    } else {
-                        this.debugLog('🔄 [SKIP SAVE] loadImage - 기존 savedViewState 유지:', this.savedViewState);
-                    }
-                }
+                
+                this.savedViewState = {
+                    type: 'grid',
+                    images: [...this.currentGridImages],
+                    scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0
+                };
             }
 
             this.selectedImagePath = fullPath;  // 🔥 fullPath 사용 (prefix 포함)
@@ -5747,6 +5707,17 @@ class WaferMapViewer {
             }
 
             this.scheduleDraw();
+            
+            // 🔥 Wafer Map Explorer에서 단일 이미지 로드 완료 후 savedViewState 업데이트
+            if (!path.startsWith('classification/')) {
+                this.savedViewState = {
+                    type: 'single',
+                    imagePath: fullPath,
+                    zoom: this.zoom,
+                    offsetX: this.offsetX,
+                    offsetY: this.offsetY
+                };
+            }
         } catch (err) {
             console.error(`Failed to load image: ${path}`, err);
 
