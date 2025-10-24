@@ -1385,6 +1385,59 @@ def _save_with_turbojpeg(vips_image, thumbnail_path: str, quality: int) -> bool:
         # TurboJPEG 실패 시 pyvips 폴백
         return False
 
+def _save_with_turbojpeg(vips_image, thumbnail_path: str, quality: int) -> bool:
+    """TurboJPEG로 JPEG 저장 (FASTDCT + 4:2:0)
+    
+    TurboJPEG는 pyvips보다 빠를 수 있지만, write_to_memory 오버헤드가 있음
+    """
+    if not TURBO_JPEG:
+        return False
+    
+    try:
+        # pyvips → numpy 변환
+        mem_img = vips_image.write_to_memory()
+        np_array = np.frombuffer(mem_img, dtype=np.uint8).reshape(
+            vips_image.height, vips_image.width, vips_image.bands
+        )
+        
+        # RGB 변환
+        if vips_image.bands == 1:
+            # Grayscale → RGB
+            np_array = np.stack([np_array] * 3, axis=-1).squeeze()
+        elif vips_image.bands == 4:
+            # RGBA → RGB
+            np_array = np_array[:, :, :3]
+        
+        # TurboJPEG 인코딩 (FASTDCT + 4:2:0)
+        base_kwargs = {
+            "quality": quality,
+            "pixel_format": TJPF_RGB,
+        }
+        
+        # FASTDCT 플래그 추가
+        if TJFLAG_FASTDCT is not None:
+            base_kwargs["flags"] = TJFLAG_FASTDCT
+        
+        # 4:2:0 chroma subsampling
+        try:
+            jpeg_buf = TURBO_JPEG.encode(np_array, jpeg_subsample=TJSAMP_420, **base_kwargs)
+        except TypeError:
+            try:
+                jpeg_buf = TURBO_JPEG.encode(np_array, chroma_subsampling=TJSAMP_420, **base_kwargs)
+            except TypeError:
+                jpeg_buf = TURBO_JPEG.encode(np_array, **base_kwargs)
+        
+        # 파일 저장
+        with open(thumbnail_path, "wb") as f:
+            f.write(jpeg_buf)
+        
+        return True
+    
+    except Exception as e:
+        # TurboJPEG 실패 시 pyvips 폴백
+        return False
+
+
 def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple[int, int]):
     try:
         thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1431,19 +1484,24 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
                         smart_subsample=False
                     )
                 else:
-                    # 최적화 2: JPEG 저장 - pyvips 직접 저장 (최고 성능)
+                    # 최적화 2: JPEG 저장 - TurboJPEG 우선, pyvips 폴백
                     if fmt == "JPEG":
-                        vips_obj.jpegsave(
-                            str(thumbnail_path),
-                            Q=THUMBNAIL_QUALITY,       # Q=100 (최고 품질)
-                            strip=True,                # 메타데이터 제거
-                            optimize_coding=False,     # 속도 우선
-                            subsample_mode=1,          # 4:2:0 (가장 빠름)
-                            interlace=False,           # 인터레이스 비활성화
-                            trellis_quant=False,       # 트렐리스 양자화 비활성화
-                            quant_table=0,             # 기본 양자화 테이블
-                            background=255             # 배경색 설정
-                        )
+                        # TurboJPEG 시도 (더 빠를 수 있음)
+                        saved_with_turbo = _save_with_turbojpeg(vips_obj, str(thumbnail_path), THUMBNAIL_QUALITY)
+                        
+                        if not saved_with_turbo:
+                            # pyvips 폴백 (TurboJPEG 실패 시)
+                            vips_obj.jpegsave(
+                                str(thumbnail_path),
+                                Q=THUMBNAIL_QUALITY,       # Q=100 (최고 품질)
+                                strip=True,                # 메타데이터 제거
+                                optimize_coding=False,     # 속도 우선
+                                subsample_mode=1,          # 4:2:0 (가장 빠름)
+                                interlace=False,           # 인터레이스 비활성화
+                                trellis_quant=False,       # 트렐리스 양자화 비활성화
+                                quant_table=0,             # 기본 양자화 테이블
+                                background=255             # 배경색 설정
+                            )
                     else:
                         vips_obj.write_to_file(
                             str(thumbnail_path),
