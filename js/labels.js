@@ -907,9 +907,110 @@ export class LabelManager {
                 }
 
                 for (const imagePath of images) {
-                    // 🔥 createClassImageItem() 사용하여 통일된 구조 생성
-                    const imageItem = this.createClassImageItem(imagePath);
-                    list.appendChild(imageItem);
+                    const row = document.createElement('div');
+                    row.className = 'label-explorer-item';
+                    row.dataset.imagePath = imagePath;
+
+                    const name = document.createElement('span');
+                    name.className = 'label-explorer-name';
+                    name.textContent = imagePath.split('/').pop();
+                    name.title = imagePath;
+                    row.appendChild(name);
+
+                    // 🔥 드래그 선택 이벤트
+                    row.addEventListener('mousedown', (e) => {
+                        if (e.button !== 0) return; // 왼쪽 버튼만
+                        
+                        this.dragSelection.isDragging = true;
+                        this.dragSelection.startElement = row;
+                        
+                        // Ctrl 키 없으면 기존 선택 해제
+                        if (!e.ctrlKey) {
+                            document.querySelectorAll('.label-explorer-item.selected').forEach(item => {
+                                item.classList.remove('selected');
+                            });
+                        }
+                        
+                        row.classList.add('selected');
+                        e.preventDefault();
+                    });
+                    
+                    row.addEventListener('mouseenter', () => {
+                        if (!this.dragSelection.isDragging) return;
+                        
+                        // 시작 요소와 현재 요소 사이의 모든 아이템 선택
+                        const parent = row.closest('.label-explorer-list');
+                        const startParent = this.dragSelection.startElement?.closest('.label-explorer-list');
+                        
+                        if (parent === startParent) {
+                            const allItems = Array.from(parent.querySelectorAll('.label-explorer-item'));
+                            const startIdx = allItems.indexOf(this.dragSelection.startElement);
+                            const endIdx = allItems.indexOf(row);
+                            
+                            if (startIdx !== -1 && endIdx !== -1) {
+                                const minIdx = Math.min(startIdx, endIdx);
+                                const maxIdx = Math.max(startIdx, endIdx);
+                                
+                                for (let i = minIdx; i <= maxIdx; i++) {
+                                    allItems[i].classList.add('selected');
+                                }
+                            }
+                        }
+                    });
+                    
+                    // 🔥 클릭 시 이미지 로드
+                    row.addEventListener('click', (e) => {
+                        if (this.dragSelection.isDragging) return;
+                        
+                        if (!e.ctrlKey) {
+                            // 일반 클릭: 모든 선택 해제 후 현재만 선택
+                            document.querySelectorAll('.label-explorer-item.selected').forEach(item => {
+                                item.classList.remove('selected');
+                            });
+                            row.classList.add('selected');
+                        } else {
+                            // Ctrl 클릭: 토글
+                            row.classList.toggle('selected');
+                        }
+                        
+                        this.viewer.loadImage(imagePath);
+                    });
+
+                    const del = document.createElement('button');
+                    del.className = 'label-explorer-del';
+                    del.textContent = '삭제';
+                    del.addEventListener('click', async (e) => {
+                        e.stopPropagation(); // 부모 클릭 이벤트 방지
+                        
+                        console.log('🔍 [LABEL_EXPLORER_DEBUG] 이미지 삭제 버튼 클릭됨:', imagePath);
+                        console.log('🔍 [LABEL_EXPLORER_DEBUG] 클래스:', className);
+                        
+                        if (!confirm(`"${className}" 클래스에서 "${imagePath.split('/').pop()}" 이미지를 제거하시겠습니까?`)) {
+                            return;
+                        }
+                        try {
+                            const res = await fetch('/api/classify', {
+                                method: 'DELETE',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ 
+                                    image_path: imagePath, 
+                                    class_name: className 
+                                })
+                            });
+                            if (!res.ok) {
+                                const err = await res.json().catch(() => ({}));
+                                throw new Error(err.detail || err.error || `삭제 실패(${res.status})`);
+                            }
+                            // 폴더 상태 유지하며 새로고침
+                            await this.refreshLabelExplorer();
+                        } catch (err) {
+                            console.error('분류 삭제 오류:', err);
+                            alert(`분류 삭제 실패: ${err.message || err}`);
+                        }
+                    });
+                    row.appendChild(del);
+
+                    list.appendChild(row);
                 }
 
             } catch (e) {
@@ -982,8 +1083,8 @@ export class LabelManager {
     async deleteSelectedLabels() {
         console.log('🔍 [LABEL_DELETE_DEBUG] deleteSelectedLabels 호출됨');
         
-        // 선택된 이미지들 가져오기
-        const selectedImages = document.querySelectorAll('.class-image-item.selected');
+        // 선택된 이미지들 가져오기 (label-explorer-item 구조)
+        const selectedImages = document.querySelectorAll('.label-explorer-item.selected');
         if (selectedImages.length === 0) {
             alert('삭제할 라벨 이미지를 선택해주세요.');
             return;
@@ -1049,7 +1150,9 @@ export class LabelManager {
             console.log(`${labelData.length}개 라벨 삭제 완료`);
             
             // 선택 해제
-            this.clearAllImageSelections();
+            document.querySelectorAll('.label-explorer-item.selected').forEach(item => {
+                item.classList.remove('selected');
+            });
             
             // UI 새로고침 (폴더 상태 유지)
             await this.refreshLabelExplorer();
