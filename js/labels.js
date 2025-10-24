@@ -648,9 +648,25 @@ export class LabelManager {
         item.appendChild(fileName);
         
         // 클릭 시 해당 이미지 표시
-        item.addEventListener('click', () => {
+        item.addEventListener('click', (e) => {
             console.log('🔍 [LABEL_EXPLORER_DEBUG] 이미지 아이템 클릭됨:', imagePath);
             console.log('🔍 [LABEL_EXPLORER_DEBUG] 현재 폴더:', this.viewer?.currentFolderPath);
+
+            // 🔥 일반 클릭(Ctrl 없이)일 때 모든 선택 해제
+            if (!e.ctrlKey) {
+                // Class Images Section의 클래스 선택 해제
+                this.labelSelection.selectedClasses = [];
+                this.updateClassButtonStates();
+
+                // Label Explorer의 이미지 선택도 해제
+                this.labelSelection.selected = [];
+
+                // 시각적 업데이트 (파란색 표시 제거)
+                if (this.viewer && typeof this.viewer.updateLabelExplorerSelection === 'function') {
+                    this.viewer.updateLabelExplorerSelection();
+                }
+            }
+
             this.viewer.loadImage(imagePath);
         });
         

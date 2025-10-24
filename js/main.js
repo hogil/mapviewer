@@ -4932,14 +4932,15 @@ class WaferMapViewer {
                 const allFolders = Array.from(this.dom.fileExplorer.querySelectorAll('summary.folder'));
 
                 allFolders.forEach(folder => {
-                    if (folder !== target) {
-                        folder.classList.remove('selected');
-                    }
+                    folder.classList.remove('selected');
                 });
 
-                // 새로 클릭된 폴더 시각적 표시
+                // 🔥 일반 클릭으로 폴더 열 때는 선택 표시 없음 (Ctrl/Shift 클릭만 선택 표시)
+                // target.classList.add('selected'); ← 제거됨
 
-                target.classList.add('selected');
+                // 선택 상태 초기화
+                this.selectedFolders = new Set();
+                this.lastSelectedFolder = null;
 
                 // 🔥 Label Explorer 선택도 해제
 
@@ -5294,6 +5295,182 @@ class WaferMapViewer {
 
         document.addEventListener('mousemove', onMouseMove, { passive: true });
 
+        document.addEventListener('mouseup', onMouseUp);
+    }
+
+    // Label Explorer 드래그 멀티 선택
+    setupLabelExplorerDragSelect() {
+        const container = document.getElementById('label-explorer-list');
+
+        if (!container) return;
+
+        // 오버레이 준비
+        container.style.position = container.style.position || 'relative';
+
+        let overlay = document.getElementById('label-explorer-drag-select');
+
+        if (!overlay) {
+            overlay = document.createElement('div');
+
+            overlay.id = 'label-explorer-drag-select';
+
+            overlay.style.cssText = `
+                position:absolute; left:0; top:0; width:0; height:0;
+                border:2px solid #09f; background:rgba(0,153,255,0.15);
+                border-radius:2px; pointer-events:none; display:none; z-index:1000;`;
+
+            container.appendChild(overlay);
+        }
+
+        const getScrollAdjusted = (clientX, clientY) => {
+            const rect = container.getBoundingClientRect();
+
+            return {
+                x: clientX - rect.left + container.scrollLeft,
+                y: clientY - rect.top + container.scrollTop
+            };
+        };
+
+        let dragging = false;
+        let start = null;
+
+        const onMouseDown = (e) => {
+            // 이미지 버튼이나 삭제 버튼 위에서는 드래그 시작 안 함
+            if (e.target.classList.contains('label-img-name') ||
+                e.target.classList.contains('label-explorer-del')) {
+                return;
+            }
+
+            if (e.button !== 0) return;
+
+            dragging = true;
+
+            start = getScrollAdjusted(e.clientX, e.clientY);
+
+            overlay.style.left = start.x + 'px';
+
+            overlay.style.top = start.y + 'px';
+
+            overlay.style.width = '0px';
+
+            overlay.style.height = '0px';
+
+            overlay.style.display = 'block';
+
+            e.preventDefault();
+        };
+
+        const onMouseMove = (e) => {
+            if (!dragging || !start) return;
+
+            const curr = getScrollAdjusted(e.clientX, e.clientY);
+            const left = Math.min(start.x, curr.x);
+            const top = Math.min(start.y, curr.y);
+            const width = Math.abs(curr.x - start.x);
+            const height = Math.abs(curr.y - start.y);
+
+            overlay.style.left = left + 'px';
+
+            overlay.style.top = top + 'px';
+
+            overlay.style.width = width + 'px';
+
+            overlay.style.height = height + 'px';
+        };
+
+        const intersects = (el, dragLeft, dragTop, dragRight, dragBottom) => {
+            const elRect = el.getBoundingClientRect();
+            const contRect = container.getBoundingClientRect();
+            const left = elRect.left - contRect.left + container.scrollLeft;
+            const top = elRect.top - contRect.top + container.scrollTop;
+            const right = left + elRect.width;
+            const bottom = top + elRect.height;
+
+            return (
+                dragRight >= left && dragLeft <= right && dragBottom >= top && dragTop <= bottom
+            );
+        };
+
+        const onMouseUp = (e) => {
+            if (!dragging) return;
+
+            dragging = false;
+
+            overlay.style.display = 'none';
+
+            const end = getScrollAdjusted(e.clientX, e.clientY);
+
+            if (!start) return;
+
+            const dragLeft = Math.min(start.x, end.x);
+            const dragTop = Math.min(start.y, end.y);
+            const dragRight = Math.max(start.x, end.x);
+            const dragBottom = Math.max(start.y, end.y);
+
+            // 최소 이동은 클릭으로 간주 → 기본 동작 유지
+            if (Math.abs(end.x - start.x) + Math.abs(end.y - start.y) < 6) {
+                start = null;
+                return;
+            }
+
+            // 교차하는 이미지 버튼들 수집
+            const imgButtons = Array.from(container.querySelectorAll('button.label-img-name'));
+            const hitButtons = imgButtons.filter(btn => intersects(btn, dragLeft, dragTop, dragRight, dragBottom));
+
+            // 각 버튼에서 key (className/imageName) 추출
+            const hitKeys = hitButtons.map(btn => {
+                const li = btn.closest('li');
+                const classLi = li?.parentElement?.closest('li');
+                if (!classLi) return null;
+
+                const folderSummary = classLi.querySelector('div');
+                if (!folderSummary) return null;
+
+                const cls = folderSummary.textContent.replace(/[▾▸]/g, '').trim();
+                const imgName = btn.textContent;
+                return `${cls}/${imgName}`;
+            }).filter(k => k !== null);
+
+            // Ctrl이면 토글, 아니면 교체
+            if (e.ctrlKey) {
+                // 토글 선택
+                const current = new Set(this.labelSelection.selected || []);
+
+                for (const key of hitKeys) {
+                    if (current.has(key)) {
+                        current.delete(key);
+                    } else {
+                        current.add(key);
+                    }
+                }
+
+                this.labelSelection.selected = Array.from(current);
+            } else {
+                // 교체 선택
+                this.labelSelection.selected = hitKeys;
+
+                // 클래스 선택도 해제
+                this.labelSelection.selectedClasses = [];
+            }
+
+            // UI 업데이트
+            this.updateLabelExplorerSelection();
+
+            start = null;
+        };
+
+        // 기존 이벤트 제거 (중복 방지)
+        container.removeEventListener('mousedown', container._labelDragMouseDown);
+        document.removeEventListener('mousemove', container._labelDragMouseMove);
+        document.removeEventListener('mouseup', container._labelDragMouseUp);
+
+        // 이벤트 등록
+        container._labelDragMouseDown = onMouseDown;
+        container._labelDragMouseMove = onMouseMove;
+        container._labelDragMouseUp = onMouseUp;
+
+        container.addEventListener('mousedown', onMouseDown);
+        document.addEventListener('mousemove', onMouseMove, { passive: true });
         document.addEventListener('mouseup', onMouseUp);
     }
 
@@ -9214,6 +9391,9 @@ class WaferMapViewer {
         }
 
         container.appendChild(ul);
+
+        // 🔥 드래그 선택 기능 설정
+        this.setupLabelExplorerDragSelect();
     }
 
     /**
