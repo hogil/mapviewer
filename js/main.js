@@ -5148,11 +5148,10 @@ class WaferMapViewer {
         const onMouseDown = (e) => {
             if (e.button !== 0) return;
 
-            // 🔥 draggable 파일 링크 위에서는 박스 선택을 시작하지 않음 (드래그 범위 선택 우선)
+            // draggable 파일 링크 위에서는 박스 선택을 시작하지 않음
             const target = e.target;
             if (target.tagName === 'A' && target.hasAttribute('data-path') && target.draggable) {
-                console.log('🔷 [DRAG_SELECT] draggable 파일 링크 감지 - 박스 선택 스킵');
-                return; // 드래그 범위 선택이 작동하도록 함
+                return; // 드래그 범위 선택 우선
             }
 
             dragging = true;
@@ -5337,26 +5336,20 @@ class WaferMapViewer {
             if (target.tagName === 'A' && target.hasAttribute('data-path')) {
                 const path = target.dataset.path;
                 
-                console.log('🔷 [WAFER_DRAG] ==================== 드래그 시작 ====================');
-                console.log('🔷 [WAFER_DRAG] 드래그 시작 파일:', path);
-                
                 dragStartPath = path;
                 dragStartElement = target;
                 
                 e.dataTransfer.effectAllowed = 'all';
                 e.dataTransfer.setData('text/plain', path);
                 
-                // 🔥 드래그 이미지 숨기기 (투명한 1x1 픽셀 이미지)
+                // 드래그 이미지 숨기기
                 const emptyImg = document.createElement('img');
                 emptyImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
                 e.dataTransfer.setDragImage(emptyImg, 0, 0);
                 
-                // 🔥 드래그 중 시각적 피드백 (크기 변화 없이 배경색만 변경)
-                target.style.removeProperty('background'); // 기존 스타일 완전히 제거
+                // 드래그 중 시각적 피드백
+                target.style.removeProperty('background');
                 target.style.setProperty('background', '#06b', 'important');
-                console.log('🔷 [WAFER_DRAG] 배경색 변경 완료:', target.style.background);
-                
-                console.log('🔷 [WAFER_DRAG] 드래그 시작점 저장 완료');
             }
         }, false);
 
@@ -5400,10 +5393,6 @@ class WaferMapViewer {
             if (target.tagName === 'A' && target.hasAttribute('data-path') && dragStartPath) {
                 const endPath = target.dataset.path;
                 
-                console.log('🔷 [WAFER_DRAG] ==================== 드래그 종료 (드롭) ====================');
-                console.log('🔷 [WAFER_DRAG] 드래그 종료 파일:', endPath);
-                console.log('🔷 [WAFER_DRAG] 시작 파일:', dragStartPath);
-                
                 // 모든 파일 링크 가져오기 (이미지 파일만)
                 const allLinks = Array.from(container.querySelectorAll('a[data-path]'));
                 const imagePaths = allLinks
@@ -5413,38 +5402,24 @@ class WaferMapViewer {
                 const startIdx = imagePaths.indexOf(dragStartPath);
                 const endIdx = imagePaths.indexOf(endPath);
                 
-                console.log('🔷 [WAFER_DRAG] 시작 인덱스:', startIdx);
-                console.log('🔷 [WAFER_DRAG] 종료 인덱스:', endIdx);
-                
                 if (startIdx !== -1 && endIdx !== -1) {
                     const [from, to] = [startIdx, endIdx].sort((a, b) => a - b);
                     const range = imagePaths.slice(from, to + 1);
                     
-                    console.log('🔷 [WAFER_DRAG] 선택 범위:', from, '~', to, '(', range.length, '개)');
-                    console.log('🔷 [WAFER_DRAG] 선택된 파일들:', range);
-                    
                     // 기존 선택에 추가
                     this.selectedImages = Array.from(new Set([...(this.selectedImages || []), ...range]));
                     
-                    console.log('🔷 [WAFER_DRAG] 최종 선택 상태:', this.selectedImages);
-                    
-                    // UI 업데이트 (updateFileExplorerSelection이 배경색도 모두 업데이트함)
+                    // UI 업데이트
                     this.updateFileExplorerSelection();
                     
                     // 그리드 모드로 전환
                     if (range.length > 1) {
-                        console.log('🔷 [WAFER_DRAG] ▶▶▶ Grid 모드로 전환:', range.length, '개 이미지');
                         this.hideGrid();
                         this.showGrid(this.selectedImages);
                     } else if (range.length === 1) {
-                        console.log('🔷 [WAFER_DRAG] ▶▶▶ 단일 이미지 모드로 전환');
                         this.loadImage(range[0]);
                     }
-                } else {
-                    console.warn('🔷 [WAFER_DRAG] 시작 또는 종료 인덱스를 찾을 수 없습니다');
                 }
-                
-                console.log('🔷 [WAFER_DRAG] ==================== 드래그 완료 ====================');
             }
             
             // 드래그 상태 초기화
@@ -5456,15 +5431,8 @@ class WaferMapViewer {
         container.addEventListener('dragend', (e) => {
             const target = e.target;
             if (target.tagName === 'A' && target.hasAttribute('data-path')) {
-                const path = target.dataset.path;
-                
-                console.log('🔷 [WAFER_DRAG] ==================== 드래그 종료 (캔슬) ====================');
-                console.log('🔷 [WAFER_DRAG] 파일:', path);
-                
-                // 🔥 UI 전체 업데이트로 배경색 복원 (개별 설정 대신)
+                // UI 전체 업데이트로 배경색 복원
                 this.updateFileExplorerSelection();
-                
-                console.log('🔷 [WAFER_DRAG] 드래그 종료 완료');
             }
             
             // 드래그 상태 초기화
@@ -8972,31 +8940,24 @@ class WaferMapViewer {
                     };
 
                     imgBtn.ondragstart = (e) => {
-                        console.log('🔷 [LABEL_DRAG] ==================== 드래그 시작 ====================');
-                        console.log('🔷 [LABEL_DRAG] 드래그 시작 이미지:', img.name);
-                        console.log('🔷 [LABEL_DRAG] 클래스:', cls);
-                        
                         const key = `${cls}/${img.name}`;
-                        console.log('🔷 [LABEL_DRAG] 시작 이미지 키:', key);
                         
                         // 드래그 시작점 저장
                         this.dragStartKey = key;
                         this.dragStartClass = cls;
-                        console.log('🔷 [LABEL_DRAG] 드래그 시작점 저장 완료');
                         
-                        // DataTransfer 설정 (필수)
+                        // DataTransfer 설정
                         e.dataTransfer.effectAllowed = 'all';
                         e.dataTransfer.setData('text/plain', key);
                         
-                        // 🔥 드래그 이미지 숨기기 (투명한 1x1 픽셀 이미지)
+                        // 드래그 이미지 숨기기
                         const emptyImg = document.createElement('img');
                         emptyImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
                         e.dataTransfer.setDragImage(emptyImg, 0, 0);
                         
-                        // 🔥 드래그 중 시각적 피드백 (크기 변화 없이 배경색만 변경)
-                        imgBtn.style.removeProperty('background'); // 기존 스타일 완전히 제거
+                        // 드래그 중 시각적 피드백
+                        imgBtn.style.removeProperty('background');
                         imgBtn.style.setProperty('background', '#07d', 'important');
-                        console.log('🔷 [LABEL_DRAG] 배경색 변경 완료:', imgBtn.style.background);
                     };
 
                     imgBtn.ondragover = (e) => {
@@ -9025,13 +8986,7 @@ class WaferMapViewer {
                         e.preventDefault();
                         e.stopPropagation();
                         
-                        console.log('🔷 [LABEL_DRAG] ==================== 드래그 종료 (드롭) ====================');
-                        console.log('🔷 [LABEL_DRAG] 드래그 종료 이미지:', img.name);
-                        console.log('🔷 [LABEL_DRAG] 클래스:', cls);
-                        
                         const endKey = `${cls}/${img.name}`;
-                        console.log('🔷 [LABEL_DRAG] 종료 이미지 키:', endKey);
-                        console.log('🔷 [LABEL_DRAG] 시작 이미지 키:', this.dragStartKey);
                         
                         // 같은 클래스 내에서만 범위 선택
                         if (this.dragStartKey && this.dragStartClass === cls) {
@@ -9042,31 +8997,21 @@ class WaferMapViewer {
                             const startIdx = allKeys.indexOf(this.dragStartKey);
                             const endIdx = allKeys.indexOf(endKey);
                             
-                            console.log('🔷 [LABEL_DRAG] 시작 인덱스:', startIdx);
-                            console.log('🔷 [LABEL_DRAG] 종료 인덱스:', endIdx);
-                            
                             if (startIdx !== -1 && endIdx !== -1) {
                                 const [from, to] = [startIdx, endIdx].sort((a, b) => a - b);
                                 const range = allKeys.slice(from, to + 1);
                                 
-                                console.log('🔷 [LABEL_DRAG] 선택 범위:', from, '~', to, '(', range.length, '개)');
-                                console.log('🔷 [LABEL_DRAG] 선택된 이미지들:', range);
-                                
-                                // 기존 선택에 추가 (Ctrl+드래그처럼 동작)
+                                // 기존 선택에 추가
                                 labelSelection.selected = Array.from(new Set([...labelSelection.selected, ...range]));
-                                
-                                console.log('🔷 [LABEL_DRAG] 최종 선택 상태:', labelSelection.selected);
                                 
                                 // 선택 상태 업데이트
                                 this.updateLabelExplorerContent();
                                 this.updateLabelExplorerSelection();
                                 
-                                // 🔥 다중 선택된 경우 Grid 모드로 전환
+                                // 다중 선택된 경우 Grid 모드로 전환
                                 if (range.length > 1) {
-                                    console.log('🔷 [LABEL_DRAG] ▶▶▶ Grid 모드로 전환:', range.length, '개 이미지');
                                     this.showGridFromLabelExplorer(labelSelection.selected);
                                 } else if (range.length === 1) {
-                                    console.log('🔷 [LABEL_DRAG] ▶▶▶ 단일 이미지 모드로 전환');
                                     // 단일 이미지는 클릭과 동일하게 처리
                                     const selectedKey = range[0];
                                     const fileName = selectedKey.split('/')[1];
@@ -9080,11 +9025,7 @@ class WaferMapViewer {
                                         this.loadImage(selectedImg.root_relative);
                                     }
                                 }
-                            } else {
-                                console.warn('🔷 [LABEL_DRAG] 시작 또는 종료 인덱스를 찾을 수 없습니다');
                             }
-                        } else if (this.dragStartClass !== cls) {
-                            console.log('🔷 [LABEL_DRAG] 다른 클래스로 드래그 - 무시');
                         }
                         
                         // 드래그 상태 초기화
@@ -9095,15 +9036,9 @@ class WaferMapViewer {
                         const isSelected = labelSelection.selected.includes(endKey);
                         imgBtn.style.removeProperty('background');
                         imgBtn.style.background = isSelected ? '#06c' : '#222';
-                        
-                        console.log('🔷 [LABEL_DRAG] ==================== 드래그 완료 ====================');
                     };
 
                     imgBtn.ondragend = (e) => {
-                        console.log('🔷 [LABEL_DRAG] ==================== 드래그 종료 (캔슬) ====================');
-                        console.log('🔷 [LABEL_DRAG] 이미지:', img.name);
-                        console.log('🔷 [LABEL_DRAG] 현재 배경색:', imgBtn.style.background);
-                        
                         // 드래그 상태 초기화
                         this.dragStartKey = null;
                         this.dragStartClass = null;
@@ -9113,9 +9048,6 @@ class WaferMapViewer {
                         const isSelected = labelSelection.selected.includes(key);
                         imgBtn.style.removeProperty('background');
                         imgBtn.style.background = isSelected ? '#06c' : '#222';
-                        
-                        console.log('🔷 [LABEL_DRAG] 복원된 배경색:', imgBtn.style.background);
-                        console.log('🔷 [LABEL_DRAG] 드래그 종료 완료');
                     };
 
                     imgBtn.onclick = (e) => {
@@ -9447,31 +9379,24 @@ class WaferMapViewer {
                             };
 
                             imgBtn.ondragstart = (e) => {
-                                console.log('🔷 [LABEL_DRAG_DYN] ==================== 드래그 시작 (동적) ====================');
-                                console.log('🔷 [LABEL_DRAG_DYN] 드래그 시작 이미지:', img.name);
-                                console.log('🔷 [LABEL_DRAG_DYN] 클래스:', cls);
-                                
                                 const key = `${cls}/${img.name}`;
-                                console.log('🔷 [LABEL_DRAG_DYN] 시작 이미지 키:', key);
                                 
                                 // 드래그 시작점 저장
                                 this.dragStartKey = key;
                                 this.dragStartClass = cls;
-                                console.log('🔷 [LABEL_DRAG_DYN] 드래그 시작점 저장 완료');
                                 
-                                // DataTransfer 설정 (필수)
+                                // DataTransfer 설정
                                 e.dataTransfer.effectAllowed = 'all';
                                 e.dataTransfer.setData('text/plain', key);
                                 
-                                // 🔥 드래그 이미지 숨기기 (투명한 1x1 픽셀 이미지)
+                                // 드래그 이미지 숨기기
                                 const emptyImg = document.createElement('img');
                                 emptyImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
                                 e.dataTransfer.setDragImage(emptyImg, 0, 0);
                                 
-                                // 🔥 드래그 중 시각적 피드백 (크기 변화 없이 배경색만 변경)
-                                imgBtn.style.removeProperty('background'); // 기존 스타일 완전히 제거
+                                // 드래그 중 시각적 피드백
+                                imgBtn.style.removeProperty('background');
                                 imgBtn.style.setProperty('background', '#07d', 'important');
-                                console.log('🔷 [LABEL_DRAG_DYN] 배경색 변경 완료:', imgBtn.style.background);
                             };
 
                             imgBtn.ondragover = (e) => {
@@ -9500,47 +9425,31 @@ class WaferMapViewer {
                                 e.preventDefault();
                                 e.stopPropagation();
                                 
-                                console.log('🔷 [LABEL_DRAG_DYN] ==================== 드래그 종료 (드롭) ====================');
-                                console.log('🔷 [LABEL_DRAG_DYN] 드래그 종료 이미지:', img.name);
-                                console.log('🔷 [LABEL_DRAG_DYN] 클래스:', cls);
-                                
                                 const endKey = `${cls}/${img.name}`;
-                                console.log('🔷 [LABEL_DRAG_DYN] 종료 이미지 키:', endKey);
-                                console.log('🔷 [LABEL_DRAG_DYN] 시작 이미지 키:', this.dragStartKey);
                                 
                                 // 같은 클래스 내에서만 범위 선택
                                 if (this.dragStartKey && this.dragStartClass === cls) {
-                                    // 현재 클래스의 이미지 리스트 (동적)
+                                    // 현재 클래스의 이미지 리스트
                                     const allKeys = imgList.filter(f => f.type === 'file').map(f => `${cls}/${f.name}`);
                                     
                                     const startIdx = allKeys.indexOf(this.dragStartKey);
                                     const endIdx = allKeys.indexOf(endKey);
                                     
-                                    console.log('🔷 [LABEL_DRAG_DYN] 시작 인덱스:', startIdx);
-                                    console.log('🔷 [LABEL_DRAG_DYN] 종료 인덱스:', endIdx);
-                                    
                                     if (startIdx !== -1 && endIdx !== -1) {
                                         const [from, to] = [startIdx, endIdx].sort((a, b) => a - b);
                                         const range = allKeys.slice(from, to + 1);
                                         
-                                        console.log('🔷 [LABEL_DRAG_DYN] 선택 범위:', from, '~', to, '(', range.length, '개)');
-                                        console.log('🔷 [LABEL_DRAG_DYN] 선택된 이미지들:', range);
-                                        
-                                        // 기존 선택에 추가 (Ctrl+드래그처럼 동작)
+                                        // 기존 선택에 추가
                                         labelSelection.selected = Array.from(new Set([...labelSelection.selected, ...range]));
-                                        
-                                        console.log('🔷 [LABEL_DRAG_DYN] 최종 선택 상태:', labelSelection.selected);
                                         
                                         // 선택 상태 업데이트
                                         this.updateLabelExplorerContent();
                                         this.updateLabelExplorerSelection();
                                         
-                                        // 🔥 다중 선택된 경우 Grid 모드로 전환
+                                        // 다중 선택된 경우 Grid 모드로 전환
                                         if (range.length > 1) {
-                                            console.log('🔷 [LABEL_DRAG_DYN] ▶▶▶ Grid 모드로 전환:', range.length, '개 이미지');
                                             this.showGridFromLabelExplorer(labelSelection.selected);
                                         } else if (range.length === 1) {
-                                            console.log('🔷 [LABEL_DRAG_DYN] ▶▶▶ 단일 이미지 모드로 전환');
                                             // 단일 이미지는 클릭과 동일하게 처리
                                             const selectedKey = range[0];
                                             const fileName = selectedKey.split('/')[1];
@@ -9554,11 +9463,7 @@ class WaferMapViewer {
                                                 this.loadImage(selectedImg.root_relative);
                                             }
                                         }
-                                    } else {
-                                        console.warn('🔷 [LABEL_DRAG_DYN] 시작 또는 종료 인덱스를 찾을 수 없습니다');
                                     }
-                                } else if (this.dragStartClass !== cls) {
-                                    console.log('🔷 [LABEL_DRAG_DYN] 다른 클래스로 드래그 - 무시');
                                 }
                                 
                                 // 드래그 상태 초기화
@@ -9569,15 +9474,9 @@ class WaferMapViewer {
                                 const isSelected = labelSelection.selected.includes(endKey);
                                 imgBtn.style.removeProperty('background');
                                 imgBtn.style.background = isSelected ? '#06c' : '#222';
-                                
-                                console.log('🔷 [LABEL_DRAG_DYN] ==================== 드래그 완료 ====================');
                             };
 
                             imgBtn.ondragend = (e) => {
-                                console.log('🔷 [LABEL_DRAG_DYN] ==================== 드래그 종료 (캔슬) ====================');
-                                console.log('🔷 [LABEL_DRAG_DYN] 이미지:', img.name);
-                                console.log('🔷 [LABEL_DRAG_DYN] 현재 배경색:', imgBtn.style.background);
-                                
                                 // 드래그 상태 초기화
                                 this.dragStartKey = null;
                                 this.dragStartClass = null;
@@ -9587,9 +9486,6 @@ class WaferMapViewer {
                                 const isSelected = labelSelection.selected.includes(key);
                                 imgBtn.style.removeProperty('background');
                                 imgBtn.style.background = isSelected ? '#06c' : '#222';
-                                
-                                console.log('🔷 [LABEL_DRAG_DYN] 복원된 배경색:', imgBtn.style.background);
-                                console.log('🔷 [LABEL_DRAG_DYN] 드래그 종료 완료');
                             };
 
                             imgBtn.onclick = (e) => {
