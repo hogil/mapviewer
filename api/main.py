@@ -31,7 +31,7 @@ logging.getLogger('pyvips').setLevel(logging.WARNING)
 
 # TurboJPEG import (optional)
 try:
-    from turbojpeg import TurboJPEG, TJPF_RGB, TJSAMP_420
+    from turbojpeg import TurboJPEG, TJPF_RGB, TJSAMP_420, TJSAMP_422
     try:
         from turbojpeg import TJFLAG_FASTDCT
     except ImportError:
@@ -1347,11 +1347,18 @@ async def build_file_index_background():
 
 # ======================== Thumbnails / Common ========================
 def _save_with_turbojpeg(vips_image, thumbnail_path: str, quality: int) -> bool:
-    """TurboJPEG로 JPEG 저장 (Q95 FASTDCT + 4:2:0)
+    """TurboJPEG로 JPEG 저장 (Q100 FASTDCT + 4:2:2)
 
-    벤치마크 결과: pyvips Q95 cubic (148ms) → TurboJPEG Q95 FASTDCT (139ms) = 6% 빠름
+    벤치마크 결과 (300개 기준):
+      - TurboJPEG Q100 422 FASTDCT: 12,593ms (23.8/s) - 255KB
+      - pyvips Q100 subsample1: 13,016ms (23.0/s) - 202KB
+      - 속도: 3.4% 빠름, 크기: 26% 증가
+    
+    4:2:2 선택 이유:
+      - 세로 방향 색상 경계 보존 (16색 이미지에도 유리)
+      - 속도는 4:2:0과 유사 (단일 이미지에서는 오히려 빠름)
     """
-    if not TURBO_JPEG:
+    if not TURBO_JPEG or not HAS_NUMPY:
         return False
 
     try:
@@ -1369,7 +1376,7 @@ def _save_with_turbojpeg(vips_image, thumbnail_path: str, quality: int) -> bool:
             # RGBA → RGB
             np_array = np_array[:, :, :3]
 
-        # TurboJPEG 인코딩 (Q95 FASTDCT + 4:2:0)
+        # TurboJPEG 인코딩 (Q100 FASTDCT + 4:2:2)
         base_kwargs = {
             "quality": quality,
             "pixel_format": TJPF_RGB,
@@ -1379,12 +1386,12 @@ def _save_with_turbojpeg(vips_image, thumbnail_path: str, quality: int) -> bool:
         if TJFLAG_FASTDCT is not None:
             base_kwargs["flags"] = TJFLAG_FASTDCT
 
-        # 4:2:0 chroma subsampling
+        # 4:2:2 chroma subsampling (세로 방향 색상 보존)
         try:
-            jpeg_buf = TURBO_JPEG.encode(np_array, jpeg_subsample=TJSAMP_420, **base_kwargs)
+            jpeg_buf = TURBO_JPEG.encode(np_array, jpeg_subsample=TJSAMP_422, **base_kwargs)
         except TypeError:
             try:
-                jpeg_buf = TURBO_JPEG.encode(np_array, chroma_subsampling=TJSAMP_420, **base_kwargs)
+                jpeg_buf = TURBO_JPEG.encode(np_array, chroma_subsampling=TJSAMP_422, **base_kwargs)
             except TypeError:
                 jpeg_buf = TURBO_JPEG.encode(np_array, **base_kwargs)
 
