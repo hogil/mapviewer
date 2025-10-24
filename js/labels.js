@@ -907,50 +907,11 @@ export class LabelManager {
                 }
 
                 for (const imagePath of images) {
-                    const row = document.createElement('div');
-                    row.className = 'label-explorer-item';
-
-                    const name = document.createElement('span');
-                    name.className = 'label-explorer-name';
-                    name.textContent = imagePath.split('/').pop();
-                    name.title = imagePath;
-                    row.appendChild(name);
-
-                    const del = document.createElement('button');
-                    del.className = 'label-explorer-del';
-                    del.textContent = '삭제';
-                    del.addEventListener('click', async () => {
-                        console.log('🔍 [LABEL_EXPLORER_DEBUG] 이미지 삭제 버튼 클릭됨:', imagePath);
-                        console.log('🔍 [LABEL_EXPLORER_DEBUG] 클래스:', className);
-                        console.log('🔍 [LABEL_EXPLORER_DEBUG] 현재 폴더:', this.viewer?.currentFolderPath);
-                        
-                        if (!confirm(`"${className}" 클래스에서 "${imagePath.split('/').pop()}" 이미지를 제거하시겠습니까?`)) {
-                            return;
-                        }
-                        try {
-                            // classification 디렉토리에서 파일 제거와 라벨 제거를 모두 수행
-                            const res = await fetch('/api/classify', {
-                                method: 'DELETE',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ 
-                                    image_path: imagePath, 
-                                    class_name: className 
-                                })
-                            });
-                            if (!res.ok) {
-                                const err = await res.json().catch(() => ({}));
-                                throw new Error(err.detail || err.error || `삭제 실패(${res.status})`);
-                            }
-                            await this.refreshAll();
-                        } catch (err) {
-                            console.error('분류 삭제 오류:', err);
-                            alert(`분류 삭제 실패: ${err.message || err}`);
-                        }
-                    });
-                    row.appendChild(del);
-
-                    list.appendChild(row);
+                    // 🔥 createClassImageItem() 사용하여 통일된 구조 생성
+                    const imageItem = this.createClassImageItem(imagePath);
+                    list.appendChild(imageItem);
                 }
+
             } catch (e) {
                 console.error('Label Explorer 이미지 조회 오류:', e);
                 const err = document.createElement('div');
@@ -1020,17 +981,85 @@ export class LabelManager {
      */
     async deleteSelectedLabels() {
         console.log('🔍 [LABEL_DELETE_DEBUG] deleteSelectedLabels 호출됨');
-        console.log('🔍 [LABEL_DELETE_DEBUG] 현재 폴더:', this.viewer?.currentFolderPath);
-        console.log('🔍 [LABEL_DELETE_DEBUG] 선택된 클래스:', this.labelSelection.selectedClasses);
-        console.log('🔍 [LABEL_DELETE_DEBUG] 선택된 라벨:', this.labelSelection.selected);
         
-        if (this.labelSelection.selectedClasses.length === 0 && this.labelSelection.selected.length === 0) {
-            alert('삭제할 라벨을 선택해주세요.');
+        // 선택된 이미지들 가져오기
+        const selectedImages = document.querySelectorAll('.class-image-item.selected');
+        if (selectedImages.length === 0) {
+            alert('삭제할 라벨 이미지를 선택해주세요.');
             return;
         }
         
-        // 삭제 로직 구현
-        console.log('🔍 [LABEL_DELETE_DEBUG] 라벨 삭제 로직 실행:', this.labelSelection);
+        // 이미지 경로와 클래스 정보 추출
+        const labelData = [];
+        selectedImages.forEach(item => {
+            const imagePath = item.dataset.imagePath;
+            if (!imagePath) return;
+            
+            // 클래스 헤더 찾기: 부모(.label-explorer-list)의 이전 sibling
+            const parent = item.closest('.label-explorer-list');
+            if (parent && parent.previousElementSibling) {
+                const header = parent.previousElementSibling;
+                if (header.classList.contains('label-explorer-class')) {
+                    const className = header.textContent.trim();
+                    labelData.push({ imagePath, className });
+                }
+            }
+        });
+        
+        if (labelData.length === 0) {
+            alert('삭제할 라벨 정보를 찾을 수 없습니다.');
+            return;
+        }
+        
+        const confirmMsg = `${labelData.length}개의 라벨을 삭제하시겠습니까?`;
+        if (!confirm(confirmMsg)) {
+            return;
+        }
+        
+        try {
+            console.log('🔍 [LABEL_DELETE_DEBUG] 삭제 시작:', labelData);
+            
+            // 각 라벨 삭제 API 호출
+            const promises = labelData.map(({ imagePath, className }) => 
+                fetch(`/api/classify`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        image_path: imagePath,
+                        class_name: className
+                    })
+                })
+            );
+            
+            const responses = await Promise.all(promises);
+            
+            // 실패한 요청 확인
+            const errors = [];
+            for (let i = 0; i < responses.length; i++) {
+                if (!responses[i].ok) {
+                    const errorData = await responses[i].json();
+                    errors.push(`${labelData[i].imagePath}: ${errorData.error || errorData.detail}`);
+                }
+            }
+            
+            if (errors.length > 0) {
+                throw new Error(`일부 라벨 삭제 실패:\n${errors.join('\n')}`);
+            }
+            
+            console.log(`${labelData.length}개 라벨 삭제 완료`);
+            
+            // 선택 해제
+            this.clearAllImageSelections();
+            
+            // UI 새로고침 (폴더 상태 유지)
+            await this.refreshLabelExplorer();
+            
+            alert(`${labelData.length}개 라벨이 성공적으로 삭제되었습니다.`);
+            
+        } catch (error) {
+            console.error('라벨 삭제 오류:', error);
+            alert(`라벨 삭제 실패: ${error.message}`);
+        }
     }
     
     /**
