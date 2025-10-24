@@ -803,12 +803,9 @@ async def saml_acs(request: Request):
         client_ip = logger_instance.get_client_ip(request)
         
         if client_ip and LoginId:
-            # ① LoginId 기준으로 IP 기록 정리 및 삭제
-            removed = logger_instance.remove_ip_login_record(client_ip, LoginId)
-            if removed:
-                bootlog.info(f"🗑️ [IP CLEANUP] IP 로그인 기록 삭제됨: {client_ip} → LoginId: {LoginId}")
-            
-            # ② SAML 인증 시간 추가
+            # 🔥 IP 기록 삭제 제거: 멀티워커 환경에서 유저 정보 보존을 위해 삭제하지 않음
+
+            # ① SAML 인증 시간 추가
             meta["last_saml_auth_time"] = time.time()
             
             # ③ SAML 로그인 정보로 직접 통계 업데이트 (중복 방지)

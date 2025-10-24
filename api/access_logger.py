@@ -61,19 +61,95 @@ class AccessLogger:
         }
     
     def _save_stats(self, force: bool = False):
-        """통계 데이터 저장 - 배치 처리로 성능 최적화"""
+        """통계 데이터 저장 - 배치 처리로 성능 최적화 + 멀티워커 병합"""
         current_time = time.time()
-        
+
         # force가 아니고, 변경사항이 없거나 아직 저장 간격이 안 되었으면 스킵
         if not force:
             if not self._stats_dirty:
                 return
             if current_time - self._last_save_time < self._save_interval:
                 return
-        
+
         try:
+            # 🔥 멀티워커 환경: 저장 전에 파일에서 최신 데이터를 읽어와서 병합
+            # 다른 워커가 추가한 유저 정보도 보존됨!
+            file_data = self._load_stats()
+
+            # users 병합: 파일의 유저와 메모리의 유저를 모두 유지
+            for user_id, user_data in self.stats_data.get("users", {}).items():
+                if user_id in file_data.get("users", {}):
+                    # 기존 유저: 병합 (더 최신 정보 우선)
+                    file_user = file_data["users"][user_id]
+
+                    # 요청 수는 더 큰 값 사용
+                    if user_data.get("total_requests", 0) > file_user.get("total_requests", 0):
+                        file_user["total_requests"] = user_data["total_requests"]
+
+                    # IP 주소 병합 (중복 제거)
+                    file_ips = set(file_user.get("ip_addresses", []))
+                    memory_ips = set(user_data.get("ip_addresses", []))
+                    file_user["ip_addresses"] = list(file_ips | memory_ips)
+
+                    # 날짜 병합 (중복 제거)
+                    file_days = set(file_user.get("unique_days", []))
+                    memory_days = set(user_data.get("unique_days", []))
+                    file_user["unique_days"] = sorted(list(file_days | memory_days))
+
+                    # 최신 정보 우선
+                    if user_data.get("last_seen", "") > file_user.get("last_seen", ""):
+                        file_user["last_seen"] = user_data["last_seen"]
+                        file_user["last_access_time"] = user_data.get("last_access_time", user_data["last_seen"])
+
+                    # daily_requests 병합
+                    for day, count in user_data.get("daily_requests", {}).items():
+                        if day in file_user.get("daily_requests", {}):
+                            file_user["daily_requests"][day] = max(file_user["daily_requests"][day], count)
+                        else:
+                            if "daily_requests" not in file_user:
+                                file_user["daily_requests"] = {}
+                            file_user["daily_requests"][day] = count
+
+                    # endpoints 병합
+                    for endpoint, count in user_data.get("endpoints", {}).items():
+                        if endpoint in file_user.get("endpoints", {}):
+                            file_user["endpoints"][endpoint] = max(file_user["endpoints"][endpoint], count)
+                        else:
+                            if "endpoints" not in file_user:
+                                file_user["endpoints"] = {}
+                            file_user["endpoints"][endpoint] = count
+
+                    # profile 정보 업데이트 (더 많은 정보 우선)
+                    memory_profile = user_data.get("profile", {})
+                    if memory_profile:
+                        if "profile" not in file_user:
+                            file_user["profile"] = {}
+                        for k, v in memory_profile.items():
+                            if v:
+                                file_user["profile"][k] = v
+                else:
+                    # 새로운 유저: 추가
+                    file_data["users"][user_id] = user_data
+
+            # daily_stats, monthly_stats, department_stats도 병합
+            for stat_key in ["daily_stats", "monthly_stats", "department_stats"]:
+                if stat_key in self.stats_data:
+                    if stat_key not in file_data:
+                        file_data[stat_key] = {}
+                    for key, value in self.stats_data[stat_key].items():
+                        if key not in file_data[stat_key]:
+                            file_data[stat_key][key] = value
+                        else:
+                            # 병합 로직 (간단하게 덮어쓰기)
+                            file_data[stat_key][key] = value
+
+            # 병합된 데이터 저장
             with open(STATS_LOG_FILE, 'w', encoding='utf-8') as f:
-                json.dump(self.stats_data, f, ensure_ascii=False, indent=2)
+                json.dump(file_data, f, ensure_ascii=False, indent=2)
+
+            # 🔥 중요: 메모리 데이터도 병합된 데이터로 업데이트 (동기화)
+            self.stats_data = file_data
+
             self._stats_dirty = False
             self._last_save_time = current_time
         except Exception as e:
