@@ -813,6 +813,9 @@ class WaferMapViewer {
             // 드래그 멀티 선택 초기화
 
             this.setupFileExplorerDragSelect();
+            
+            // 🔥 드래그 시각적 피드백 초기화 (Label Explorer와 동일)
+            this.setupFileExplorerDragVisualFeedback();
         }
     }
 
@@ -3274,7 +3277,8 @@ class WaferMapViewer {
             if (node.type === 'directory') {
                 html += `<li><details><summary data-path="${fullPath}" class="folder">📁 ${node.name}</summary><div class="folder-content" style="padding-left: 1rem;"></div></details></li>`;
             } else if (node.type === 'file') {
-                html += `<li><a href="#" data-path="${fullPath}">📄 ${node.name}</a></li>`;
+                const draggableAttr = 'draggable="true"';
+                html += `<li><a href="#" data-path="${fullPath}" ${draggableAttr}>📄 ${node.name}</a></li>`;
             }
         }
 
@@ -4539,12 +4543,22 @@ class WaferMapViewer {
         // 시각적 선택 상태 업데이트
 
         this.dom.fileExplorer.querySelectorAll('a.selected').forEach(a => a.classList.remove('selected'));
+        
+        // 🔥 모든 파일 링크의 inline background style 초기화
+        this.dom.fileExplorer.querySelectorAll('a[data-path]').forEach(link => {
+            link.style.removeProperty('background');
+            link.style.background = ''; // 기본 배경색으로 복원
+        });
 
         if (this.selectedImages) {
             this.selectedImages.forEach(selPath => {
                 const a = this.dom.fileExplorer.querySelector(`a[data-path="${selPath.replace(/"/g, '\\"')}"]`);
 
-                if (a) a.classList.add('selected');
+                if (a) {
+                    a.classList.add('selected');
+                    // 🔥 선택된 파일의 배경색 설정
+                    a.style.background = '#05b';
+                }
             });
         }
 
@@ -4598,6 +4612,12 @@ class WaferMapViewer {
             if (this.dom && this.dom.fileExplorer) {
                 this.dom.fileExplorer.querySelectorAll('.selected').forEach(el => {
                     el.classList.remove('selected');
+                });
+                
+                // 🔥 모든 파일 링크의 inline background style 초기화
+                this.dom.fileExplorer.querySelectorAll('a[data-path]').forEach(link => {
+                    link.style.removeProperty('background');
+                    link.style.background = ''; // 기본 배경색으로 복원
                 });
             }
 
@@ -5128,7 +5148,12 @@ class WaferMapViewer {
         const onMouseDown = (e) => {
             if (e.button !== 0) return;
 
-            // 파일/폴더 링크 위에서도 드래그 시작 허용
+            // 🔥 draggable 파일 링크 위에서는 박스 선택을 시작하지 않음 (드래그 범위 선택 우선)
+            const target = e.target;
+            if (target.tagName === 'A' && target.hasAttribute('data-path') && target.draggable) {
+                console.log('🔷 [DRAG_SELECT] draggable 파일 링크 감지 - 박스 선택 스킵');
+                return; // 드래그 범위 선택이 작동하도록 함
+            }
 
             dragging = true;
 
@@ -5295,6 +5320,157 @@ class WaferMapViewer {
         document.addEventListener('mousemove', onMouseMove, { passive: true });
 
         document.addEventListener('mouseup', onMouseUp);
+    }
+    
+    // 🔥 Wafer Map Explorer 드래그 시각적 피드백 (Label Explorer와 동일)
+    setupFileExplorerDragVisualFeedback() {
+        const container = this.dom.fileExplorer;
+        if (!container) return;
+
+        // 드래그 상태 변수
+        let dragStartPath = null;
+        let dragStartElement = null;
+
+        // dragstart: 드래그 시작 시 배경색 변경
+        container.addEventListener('dragstart', (e) => {
+            const target = e.target;
+            if (target.tagName === 'A' && target.hasAttribute('data-path')) {
+                const path = target.dataset.path;
+                
+                console.log('🔷 [WAFER_DRAG] ==================== 드래그 시작 ====================');
+                console.log('🔷 [WAFER_DRAG] 드래그 시작 파일:', path);
+                
+                dragStartPath = path;
+                dragStartElement = target;
+                
+                e.dataTransfer.effectAllowed = 'all';
+                e.dataTransfer.setData('text/plain', path);
+                
+                // 🔥 드래그 이미지 숨기기 (투명한 1x1 픽셀 이미지)
+                const emptyImg = document.createElement('img');
+                emptyImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+                e.dataTransfer.setDragImage(emptyImg, 0, 0);
+                
+                // 🔥 드래그 중 시각적 피드백 (크기 변화 없이 배경색만 변경)
+                target.style.removeProperty('background'); // 기존 스타일 완전히 제거
+                target.style.setProperty('background', '#06b', 'important');
+                console.log('🔷 [WAFER_DRAG] 배경색 변경 완료:', target.style.background);
+                
+                console.log('🔷 [WAFER_DRAG] 드래그 시작점 저장 완료');
+            }
+        }, false);
+
+        // dragover: 드래그 중간에 호버되는 파일 배경색 변경
+        container.addEventListener('dragover', (e) => {
+            const target = e.target;
+            if (target.tagName === 'A' && target.hasAttribute('data-path') && target !== dragStartElement) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                
+                const path = target.dataset.path;
+                const isSelected = this.selectedImages && this.selectedImages.includes(path);
+                
+                // 🔥 이미 선택된 파일이 아니면 호버 색상으로 변경
+                if (!isSelected && target.style.background !== 'rgb(0, 102, 187)' && target.style.background !== '#06b') {
+                    target.style.background = '#04a';
+                }
+            }
+        }, false);
+
+        // dragleave: 호버 해제 시 원래 색으로 복원
+        container.addEventListener('dragleave', (e) => {
+            const target = e.target;
+            if (target.tagName === 'A' && target.hasAttribute('data-path') && target !== dragStartElement) {
+                const path = target.dataset.path;
+                const isSelected = this.selectedImages && this.selectedImages.includes(path);
+                
+                // 🔥 호버 색상(#04a)인 경우만 원래 색으로 복원
+                if (target.style.background === 'rgb(0, 68, 170)' || target.style.background === '#04a') {
+                    target.style.background = isSelected ? '#05b' : '';
+                }
+            }
+        }, false);
+
+        // drop: 드롭 시 범위 선택
+        container.addEventListener('drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            const target = e.target;
+            if (target.tagName === 'A' && target.hasAttribute('data-path') && dragStartPath) {
+                const endPath = target.dataset.path;
+                
+                console.log('🔷 [WAFER_DRAG] ==================== 드래그 종료 (드롭) ====================');
+                console.log('🔷 [WAFER_DRAG] 드래그 종료 파일:', endPath);
+                console.log('🔷 [WAFER_DRAG] 시작 파일:', dragStartPath);
+                
+                // 모든 파일 링크 가져오기 (이미지 파일만)
+                const allLinks = Array.from(container.querySelectorAll('a[data-path]'));
+                const imagePaths = allLinks
+                    .map(link => link.dataset.path)
+                    .filter(path => this.isImageFile(path));
+                
+                const startIdx = imagePaths.indexOf(dragStartPath);
+                const endIdx = imagePaths.indexOf(endPath);
+                
+                console.log('🔷 [WAFER_DRAG] 시작 인덱스:', startIdx);
+                console.log('🔷 [WAFER_DRAG] 종료 인덱스:', endIdx);
+                
+                if (startIdx !== -1 && endIdx !== -1) {
+                    const [from, to] = [startIdx, endIdx].sort((a, b) => a - b);
+                    const range = imagePaths.slice(from, to + 1);
+                    
+                    console.log('🔷 [WAFER_DRAG] 선택 범위:', from, '~', to, '(', range.length, '개)');
+                    console.log('🔷 [WAFER_DRAG] 선택된 파일들:', range);
+                    
+                    // 기존 선택에 추가
+                    this.selectedImages = Array.from(new Set([...(this.selectedImages || []), ...range]));
+                    
+                    console.log('🔷 [WAFER_DRAG] 최종 선택 상태:', this.selectedImages);
+                    
+                    // UI 업데이트 (updateFileExplorerSelection이 배경색도 모두 업데이트함)
+                    this.updateFileExplorerSelection();
+                    
+                    // 그리드 모드로 전환
+                    if (range.length > 1) {
+                        console.log('🔷 [WAFER_DRAG] ▶▶▶ Grid 모드로 전환:', range.length, '개 이미지');
+                        this.hideGrid();
+                        this.showGrid(this.selectedImages);
+                    } else if (range.length === 1) {
+                        console.log('🔷 [WAFER_DRAG] ▶▶▶ 단일 이미지 모드로 전환');
+                        this.loadImage(range[0]);
+                    }
+                } else {
+                    console.warn('🔷 [WAFER_DRAG] 시작 또는 종료 인덱스를 찾을 수 없습니다');
+                }
+                
+                console.log('🔷 [WAFER_DRAG] ==================== 드래그 완료 ====================');
+            }
+            
+            // 드래그 상태 초기화
+            dragStartPath = null;
+            dragStartElement = null;
+        }, false);
+
+        // dragend: 드래그 종료 (캔슬) 시 원래 색으로 복원
+        container.addEventListener('dragend', (e) => {
+            const target = e.target;
+            if (target.tagName === 'A' && target.hasAttribute('data-path')) {
+                const path = target.dataset.path;
+                
+                console.log('🔷 [WAFER_DRAG] ==================== 드래그 종료 (캔슬) ====================');
+                console.log('🔷 [WAFER_DRAG] 파일:', path);
+                
+                // 🔥 UI 전체 업데이트로 배경색 복원 (개별 설정 대신)
+                this.updateFileExplorerSelection();
+                
+                console.log('🔷 [WAFER_DRAG] 드래그 종료 완료');
+            }
+            
+            // 드래그 상태 초기화
+            dragStartPath = null;
+            dragStartElement = null;
+        }, false);
     }
 
     // --- IMAGE LOADING ---
@@ -6620,6 +6796,8 @@ class WaferMapViewer {
 
                 return false;
             };
+
+            // 🔥 드롭 이벤트 제거 (드래그는 이제 범위 선택용으로만 사용)
 
             btn.onclick = async (e) => {
                 const isCtrl = e.ctrlKey || e.metaKey;
@@ -8761,11 +8939,11 @@ class WaferMapViewer {
 
                     imgBtn.style.padding = '4px 12px';
 
-                    imgBtn.style.background = labelSelection.selected.includes(`${cls}/${img.name}`) ? '#09f' : '#222';
+                    imgBtn.style.background = labelSelection.selected.includes(`${cls}/${img.name}`) ? '#06c' : '#222';
 
                     imgBtn.style.color = '#fff';
 
-                    imgBtn.style.border = labelSelection.selected.includes(`${cls}/${img.name}`) ? '2px solid #09f' : '1px solid #444';
+                    imgBtn.style.border = '1px solid #444';
 
                     imgBtn.style.borderRadius = '6px';
 
@@ -8773,10 +8951,189 @@ class WaferMapViewer {
 
                     imgBtn.style.fontSize = '13px';
 
+                    // 🔥 Drag 범위 선택 이벤트 추가
+                    imgBtn.draggable = true;
+
+                    // 🔥 마우스 hover 효과 추가
+                    imgBtn.onmouseover = (e) => {
+                        const key = `${cls}/${img.name}`;
+                        const isSelected = labelSelection.selected.includes(key);
+                        if (!isSelected && !this.dragStartKey) {
+                            imgBtn.style.background = '#08e'; // hover 색상
+                        }
+                    };
+                    
+                    imgBtn.onmouseout = (e) => {
+                        const key = `${cls}/${img.name}`;
+                        const isSelected = labelSelection.selected.includes(key);
+                        if (!this.dragStartKey) {
+                            imgBtn.style.background = isSelected ? '#06c' : '#222';
+                        }
+                    };
+
+                    imgBtn.ondragstart = (e) => {
+                        console.log('🔷 [LABEL_DRAG] ==================== 드래그 시작 ====================');
+                        console.log('🔷 [LABEL_DRAG] 드래그 시작 이미지:', img.name);
+                        console.log('🔷 [LABEL_DRAG] 클래스:', cls);
+                        
+                        const key = `${cls}/${img.name}`;
+                        console.log('🔷 [LABEL_DRAG] 시작 이미지 키:', key);
+                        
+                        // 드래그 시작점 저장
+                        this.dragStartKey = key;
+                        this.dragStartClass = cls;
+                        console.log('🔷 [LABEL_DRAG] 드래그 시작점 저장 완료');
+                        
+                        // DataTransfer 설정 (필수)
+                        e.dataTransfer.effectAllowed = 'all';
+                        e.dataTransfer.setData('text/plain', key);
+                        
+                        // 🔥 드래그 이미지 숨기기 (투명한 1x1 픽셀 이미지)
+                        const emptyImg = document.createElement('img');
+                        emptyImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+                        e.dataTransfer.setDragImage(emptyImg, 0, 0);
+                        
+                        // 🔥 드래그 중 시각적 피드백 (크기 변화 없이 배경색만 변경)
+                        imgBtn.style.removeProperty('background'); // 기존 스타일 완전히 제거
+                        imgBtn.style.setProperty('background', '#07d', 'important');
+                        console.log('🔷 [LABEL_DRAG] 배경색 변경 완료:', imgBtn.style.background);
+                    };
+
+                    imgBtn.ondragover = (e) => {
+                        e.preventDefault();
+                        
+                        // 드래그 중인 요소 위로 마우스가 왔을 때
+                        if (this.dragStartKey) {
+                            const key = `${cls}/${img.name}`;
+                            
+                            // 같은 클래스 내에서만 범위 선택
+                            if (this.dragStartClass === cls) {
+                                // 호버 피드백
+                                imgBtn.style.background = '#05b';
+                            }
+                        }
+                    };
+
+                    imgBtn.ondragleave = (e) => {
+                        // 호버 피드백 제거
+                        const key = `${cls}/${img.name}`;
+                        const isSelected = labelSelection.selected.includes(key);
+                        imgBtn.style.background = isSelected ? '#06c' : '#222';
+                    };
+
+                    imgBtn.ondrop = (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        
+                        console.log('🔷 [LABEL_DRAG] ==================== 드래그 종료 (드롭) ====================');
+                        console.log('🔷 [LABEL_DRAG] 드래그 종료 이미지:', img.name);
+                        console.log('🔷 [LABEL_DRAG] 클래스:', cls);
+                        
+                        const endKey = `${cls}/${img.name}`;
+                        console.log('🔷 [LABEL_DRAG] 종료 이미지 키:', endKey);
+                        console.log('🔷 [LABEL_DRAG] 시작 이미지 키:', this.dragStartKey);
+                        
+                        // 같은 클래스 내에서만 범위 선택
+                        if (this.dragStartKey && this.dragStartClass === cls) {
+                            // 평평한 이미지 리스트에서 시작과 끝 인덱스 찾기
+                            const imgList = classToImgList[cls] || [];
+                            const allKeys = imgList.filter(f => f.type === 'file').map(f => `${cls}/${f.name}`);
+                            
+                            const startIdx = allKeys.indexOf(this.dragStartKey);
+                            const endIdx = allKeys.indexOf(endKey);
+                            
+                            console.log('🔷 [LABEL_DRAG] 시작 인덱스:', startIdx);
+                            console.log('🔷 [LABEL_DRAG] 종료 인덱스:', endIdx);
+                            
+                            if (startIdx !== -1 && endIdx !== -1) {
+                                const [from, to] = [startIdx, endIdx].sort((a, b) => a - b);
+                                const range = allKeys.slice(from, to + 1);
+                                
+                                console.log('🔷 [LABEL_DRAG] 선택 범위:', from, '~', to, '(', range.length, '개)');
+                                console.log('🔷 [LABEL_DRAG] 선택된 이미지들:', range);
+                                
+                                // 기존 선택에 추가 (Ctrl+드래그처럼 동작)
+                                labelSelection.selected = Array.from(new Set([...labelSelection.selected, ...range]));
+                                
+                                console.log('🔷 [LABEL_DRAG] 최종 선택 상태:', labelSelection.selected);
+                                
+                                // 선택 상태 업데이트
+                                this.updateLabelExplorerContent();
+                                this.updateLabelExplorerSelection();
+                                
+                                // 🔥 다중 선택된 경우 Grid 모드로 전환
+                                if (range.length > 1) {
+                                    console.log('🔷 [LABEL_DRAG] ▶▶▶ Grid 모드로 전환:', range.length, '개 이미지');
+                                    this.showGridFromLabelExplorer(labelSelection.selected);
+                                } else if (range.length === 1) {
+                                    console.log('🔷 [LABEL_DRAG] ▶▶▶ 단일 이미지 모드로 전환');
+                                    // 단일 이미지는 클릭과 동일하게 처리
+                                    const selectedKey = range[0];
+                                    const fileName = selectedKey.split('/')[1];
+                                    const imgList = this.classToImgListCache?.[cls] || [];
+                                    const selectedImg = imgList.find(item => item.name === fileName);
+                                    if (selectedImg?.root_relative) {
+                                        this.saveCurrentViewStateForLabelExplorer();
+                                        if (this.gridMode) {
+                                            this.hideGrid();
+                                        }
+                                        this.loadImage(selectedImg.root_relative);
+                                    }
+                                }
+                            } else {
+                                console.warn('🔷 [LABEL_DRAG] 시작 또는 종료 인덱스를 찾을 수 없습니다');
+                            }
+                        } else if (this.dragStartClass !== cls) {
+                            console.log('🔷 [LABEL_DRAG] 다른 클래스로 드래그 - 무시');
+                        }
+                        
+                        // 드래그 상태 초기화
+                        this.dragStartKey = null;
+                        this.dragStartClass = null;
+                        
+                        // 시각적 피드백 복원
+                        const isSelected = labelSelection.selected.includes(endKey);
+                        imgBtn.style.removeProperty('background');
+                        imgBtn.style.background = isSelected ? '#06c' : '#222';
+                        
+                        console.log('🔷 [LABEL_DRAG] ==================== 드래그 완료 ====================');
+                    };
+
+                    imgBtn.ondragend = (e) => {
+                        console.log('🔷 [LABEL_DRAG] ==================== 드래그 종료 (캔슬) ====================');
+                        console.log('🔷 [LABEL_DRAG] 이미지:', img.name);
+                        console.log('🔷 [LABEL_DRAG] 현재 배경색:', imgBtn.style.background);
+                        
+                        // 드래그 상태 초기화
+                        this.dragStartKey = null;
+                        this.dragStartClass = null;
+                        
+                        // 시각적 피드백 복원
+                        const key = `${cls}/${img.name}`;
+                        const isSelected = labelSelection.selected.includes(key);
+                        imgBtn.style.removeProperty('background');
+                        imgBtn.style.background = isSelected ? '#06c' : '#222';
+                        
+                        console.log('🔷 [LABEL_DRAG] 복원된 배경색:', imgBtn.style.background);
+                        console.log('🔷 [LABEL_DRAG] 드래그 종료 완료');
+                    };
+
                     imgBtn.onclick = (e) => {
+                        console.log('🎯 [LABEL_EXPLORER] ==================== 이미지 클릭 이벤트 시작 ====================');
+                        console.log('🎯 [LABEL_EXPLORER] 클릭된 이미지:', img.name);
+                        console.log('🎯 [LABEL_EXPLORER] 클래스:', cls);
+                        console.log('🎯 [LABEL_EXPLORER] Ctrl 키:', e.ctrlKey || e.metaKey);
+                        console.log('🎯 [LABEL_EXPLORER] Shift 키:', e.shiftKey);
+                        
                         const isCtrl = e.ctrlKey || e.metaKey;
                         const isShift = e.shiftKey;
                         const key = `${cls}/${img.name}`;
+
+                        console.log('🎯 [LABEL_EXPLORER] 이미지 키:', key);
+                        console.log('🎯 [LABEL_EXPLORER] 현재 선택된 이미지:', labelSelection.selected);
+                        console.log('🎯 [LABEL_EXPLORER] 현재 Grid 모드:', this.gridMode);
+                        console.log('🎯 [LABEL_EXPLORER] Grid 선택 인덱스:', this.gridSelectedIdxs);
+                        console.log('🎯 [LABEL_EXPLORER] 현재 Grid 이미지 개수:', this.currentGridImages?.length);
 
                         this.debugLog('🔷 [DEBUG] Label Explorer 이미지 클릭 시작:', {
                             key: key,
@@ -8857,12 +9214,15 @@ class WaferMapViewer {
                         }
 
                         // 선택된 이미지에 따라 단일/그리드 모드 결정
+                        console.log('🎯 [LABEL_EXPLORER] 선택된 이미지 개수:', labelSelection.selected.length);
 
                         if (labelSelection.selected.length > 0) {
                             if (labelSelection.selected.length === 1) {
                                 // 단일 선택: 단일 이미지 모드
+                                console.log('🎯 [LABEL_EXPLORER] ▶▶▶ 단일 이미지 모드로 전환 시작');
 
                                 const selectedKey = labelSelection.selected[0];
+                                console.log('🎯 [LABEL_EXPLORER] 선택된 키:', selectedKey);
 
                                 this.debugLog(`Label Explorer: 단일 이미지 모드 - ${selectedKey}`);
 
@@ -8906,9 +9266,16 @@ class WaferMapViewer {
                                 const fileName = selectedKey.split('/')[1];
                                 const imgList = this.classToImgListCache?.[cls] || [];
                                 const selectedImg = imgList.find(item => item.name === fileName);
+                                console.log('🎯 [LABEL_EXPLORER] 이미지 파일 이름:', fileName);
+                                console.log('🎯 [LABEL_EXPLORER] 선택된 이미지 객체:', selectedImg);
+                                console.log('🎯 [LABEL_EXPLORER] 로드할 경로 (root_relative):', selectedImg?.root_relative);
+                                console.log('🎯 [LABEL_EXPLORER] ▶▶▶ loadImage() 함수 호출');
                                 this.loadImage(selectedImg.root_relative);  // 무조건 root_relative 사용
+                                console.log('🎯 [LABEL_EXPLORER] ==================== 이미지 클릭 이벤트 종료 (단일 모드) ====================');
                             } else {
                                 // 다수 선택: 그리드 모드
+                                console.log('🎯 [LABEL_EXPLORER] ▶▶▶ 그리드 모드로 전환 시작');
+                                console.log('🎯 [LABEL_EXPLORER] 선택된 이미지 리스트:', labelSelection.selected);
 
                                 this.debugLog(`Label Explorer: 그리드 모드 - ${labelSelection.selected.length}개 이미지`);
 
@@ -8926,29 +9293,42 @@ class WaferMapViewer {
                                     currentGridImagesLength: this.currentGridImages?.length
                                 });
 
+                                console.log('🎯 [LABEL_EXPLORER] ▶▶▶ showGridFromLabelExplorer() 함수 호출');
                                 this.showGridFromLabelExplorer(labelSelection.selected);
+                                console.log('🎯 [LABEL_EXPLORER] ==================== 이미지 클릭 이벤트 종료 (그리드 모드) ====================');
                             }
                         } else {
                             // 선택 없음: 이전 Grid 상태로 복귀 또는 이미지 숨기기
+                            console.log('🎯 [LABEL_EXPLORER] ▶▶▶ 선택 해제됨');
 
                             if (this.gridMode) {
+                                console.log('🎯 [LABEL_EXPLORER] 이전 Grid 상태로 복귀');
                                 this.debugLog('Label Explorer: 선택 해제 → 이전 Grid 상태로 복귀');
 
                                 this.restorePreviousGridState();
                             } else {
                                 // 단일 이미지 모드에서도 이미지 숨기기
-
+                                console.log('🎯 [LABEL_EXPLORER] 이미지 숨기기');
                                 this.debugLog('Label Explorer: 선택 해제 → 이미지 숨기기');
 
                                 this.restorePreviousGridState(); // 이전 Grid 상태가 없으면 hideImage() 포함
                             }
+                            console.log('🎯 [LABEL_EXPLORER] ==================== 이미지 클릭 이벤트 종료 (선택 해제) ====================');
                         }
 
                         // 강제로 업데이트 (약간의 지연 후)
+                        console.log('🎯 [LABEL_EXPLORER] 10ms 후 updateLabelExplorerSelection() 예약');
 
                         setTimeout(() => {
+                            console.log('🎯 [LABEL_EXPLORER] updateLabelExplorerSelection() 호출');
                             this.updateLabelExplorerSelection();
                         }, 10);
+
+                        console.log('🎯 [LABEL_EXPLORER] 최종 선택 상태:', {
+                            selected: labelSelection.selected,
+                            selectedClasses: labelSelection.selectedClasses,
+                            lastClicked: labelSelection.lastClicked
+                        });
 
                         this.debugLog('Label Explorer 선택 후 상태:', {
                             selected: labelSelection.selected,
@@ -9034,17 +9414,183 @@ class WaferMapViewer {
 
                             imgBtn.style.padding = '4px 12px';
 
-                            imgBtn.style.background = labelSelection.selected.includes(labelKey) ? '#09f' : '#222';
+                            imgBtn.style.background = labelSelection.selected.includes(labelKey) ? '#06c' : '#222';
 
                             imgBtn.style.color = '#fff';
 
-                            imgBtn.style.border = labelSelection.selected.includes(labelKey) ? '2px solid #09f' : '1px solid #444';
+                            imgBtn.style.border = '1px solid #444';
 
                             imgBtn.style.borderRadius = '6px';
 
                             imgBtn.style.marginRight = '4px';
 
                             imgBtn.style.fontSize = '13px';
+
+                            // 🔥 Drag 범위 선택 이벤트 추가 (동적 생성된 버튼)
+                            imgBtn.draggable = true;
+
+                            // 🔥 마우스 hover 효과 추가
+                            imgBtn.onmouseover = (e) => {
+                                const key = `${cls}/${img.name}`;
+                                const isSelected = labelSelection.selected.includes(key);
+                                if (!isSelected && !this.dragStartKey) {
+                                    imgBtn.style.background = '#08e'; // hover 색상
+                                }
+                            };
+                            
+                            imgBtn.onmouseout = (e) => {
+                                const key = `${cls}/${img.name}`;
+                                const isSelected = labelSelection.selected.includes(key);
+                                if (!this.dragStartKey) {
+                                    imgBtn.style.background = isSelected ? '#06c' : '#222';
+                                }
+                            };
+
+                            imgBtn.ondragstart = (e) => {
+                                console.log('🔷 [LABEL_DRAG_DYN] ==================== 드래그 시작 (동적) ====================');
+                                console.log('🔷 [LABEL_DRAG_DYN] 드래그 시작 이미지:', img.name);
+                                console.log('🔷 [LABEL_DRAG_DYN] 클래스:', cls);
+                                
+                                const key = `${cls}/${img.name}`;
+                                console.log('🔷 [LABEL_DRAG_DYN] 시작 이미지 키:', key);
+                                
+                                // 드래그 시작점 저장
+                                this.dragStartKey = key;
+                                this.dragStartClass = cls;
+                                console.log('🔷 [LABEL_DRAG_DYN] 드래그 시작점 저장 완료');
+                                
+                                // DataTransfer 설정 (필수)
+                                e.dataTransfer.effectAllowed = 'all';
+                                e.dataTransfer.setData('text/plain', key);
+                                
+                                // 🔥 드래그 이미지 숨기기 (투명한 1x1 픽셀 이미지)
+                                const emptyImg = document.createElement('img');
+                                emptyImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+                                e.dataTransfer.setDragImage(emptyImg, 0, 0);
+                                
+                                // 🔥 드래그 중 시각적 피드백 (크기 변화 없이 배경색만 변경)
+                                imgBtn.style.removeProperty('background'); // 기존 스타일 완전히 제거
+                                imgBtn.style.setProperty('background', '#07d', 'important');
+                                console.log('🔷 [LABEL_DRAG_DYN] 배경색 변경 완료:', imgBtn.style.background);
+                            };
+
+                            imgBtn.ondragover = (e) => {
+                                e.preventDefault();
+                                
+                                // 드래그 중인 요소 위로 마우스가 왔을 때
+                                if (this.dragStartKey) {
+                                    const key = `${cls}/${img.name}`;
+                                    
+                                    // 같은 클래스 내에서만 범위 선택
+                                    if (this.dragStartClass === cls) {
+                                        // 호버 피드백
+                                        imgBtn.style.background = '#05b';
+                                    }
+                                }
+                            };
+
+                            imgBtn.ondragleave = (e) => {
+                                // 호버 피드백 제거
+                                const key = `${cls}/${img.name}`;
+                                const isSelected = labelSelection.selected.includes(key);
+                                imgBtn.style.background = isSelected ? '#06c' : '#222';
+                            };
+
+                            imgBtn.ondrop = (e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                
+                                console.log('🔷 [LABEL_DRAG_DYN] ==================== 드래그 종료 (드롭) ====================');
+                                console.log('🔷 [LABEL_DRAG_DYN] 드래그 종료 이미지:', img.name);
+                                console.log('🔷 [LABEL_DRAG_DYN] 클래스:', cls);
+                                
+                                const endKey = `${cls}/${img.name}`;
+                                console.log('🔷 [LABEL_DRAG_DYN] 종료 이미지 키:', endKey);
+                                console.log('🔷 [LABEL_DRAG_DYN] 시작 이미지 키:', this.dragStartKey);
+                                
+                                // 같은 클래스 내에서만 범위 선택
+                                if (this.dragStartKey && this.dragStartClass === cls) {
+                                    // 현재 클래스의 이미지 리스트 (동적)
+                                    const allKeys = imgList.filter(f => f.type === 'file').map(f => `${cls}/${f.name}`);
+                                    
+                                    const startIdx = allKeys.indexOf(this.dragStartKey);
+                                    const endIdx = allKeys.indexOf(endKey);
+                                    
+                                    console.log('🔷 [LABEL_DRAG_DYN] 시작 인덱스:', startIdx);
+                                    console.log('🔷 [LABEL_DRAG_DYN] 종료 인덱스:', endIdx);
+                                    
+                                    if (startIdx !== -1 && endIdx !== -1) {
+                                        const [from, to] = [startIdx, endIdx].sort((a, b) => a - b);
+                                        const range = allKeys.slice(from, to + 1);
+                                        
+                                        console.log('🔷 [LABEL_DRAG_DYN] 선택 범위:', from, '~', to, '(', range.length, '개)');
+                                        console.log('🔷 [LABEL_DRAG_DYN] 선택된 이미지들:', range);
+                                        
+                                        // 기존 선택에 추가 (Ctrl+드래그처럼 동작)
+                                        labelSelection.selected = Array.from(new Set([...labelSelection.selected, ...range]));
+                                        
+                                        console.log('🔷 [LABEL_DRAG_DYN] 최종 선택 상태:', labelSelection.selected);
+                                        
+                                        // 선택 상태 업데이트
+                                        this.updateLabelExplorerContent();
+                                        this.updateLabelExplorerSelection();
+                                        
+                                        // 🔥 다중 선택된 경우 Grid 모드로 전환
+                                        if (range.length > 1) {
+                                            console.log('🔷 [LABEL_DRAG_DYN] ▶▶▶ Grid 모드로 전환:', range.length, '개 이미지');
+                                            this.showGridFromLabelExplorer(labelSelection.selected);
+                                        } else if (range.length === 1) {
+                                            console.log('🔷 [LABEL_DRAG_DYN] ▶▶▶ 단일 이미지 모드로 전환');
+                                            // 단일 이미지는 클릭과 동일하게 처리
+                                            const selectedKey = range[0];
+                                            const fileName = selectedKey.split('/')[1];
+                                            const imgList = this.classToImgListCache?.[cls] || [];
+                                            const selectedImg = imgList.find(item => item.name === fileName);
+                                            if (selectedImg?.root_relative) {
+                                                this.saveCurrentViewStateForLabelExplorer();
+                                                if (this.gridMode) {
+                                                    this.hideGrid();
+                                                }
+                                                this.loadImage(selectedImg.root_relative);
+                                            }
+                                        }
+                                    } else {
+                                        console.warn('🔷 [LABEL_DRAG_DYN] 시작 또는 종료 인덱스를 찾을 수 없습니다');
+                                    }
+                                } else if (this.dragStartClass !== cls) {
+                                    console.log('🔷 [LABEL_DRAG_DYN] 다른 클래스로 드래그 - 무시');
+                                }
+                                
+                                // 드래그 상태 초기화
+                                this.dragStartKey = null;
+                                this.dragStartClass = null;
+                                
+                                // 시각적 피드백 복원
+                                const isSelected = labelSelection.selected.includes(endKey);
+                                imgBtn.style.removeProperty('background');
+                                imgBtn.style.background = isSelected ? '#06c' : '#222';
+                                
+                                console.log('🔷 [LABEL_DRAG_DYN] ==================== 드래그 완료 ====================');
+                            };
+
+                            imgBtn.ondragend = (e) => {
+                                console.log('🔷 [LABEL_DRAG_DYN] ==================== 드래그 종료 (캔슬) ====================');
+                                console.log('🔷 [LABEL_DRAG_DYN] 이미지:', img.name);
+                                console.log('🔷 [LABEL_DRAG_DYN] 현재 배경색:', imgBtn.style.background);
+                                
+                                // 드래그 상태 초기화
+                                this.dragStartKey = null;
+                                this.dragStartClass = null;
+                                
+                                // 시각적 피드백 복원
+                                const key = `${cls}/${img.name}`;
+                                const isSelected = labelSelection.selected.includes(key);
+                                imgBtn.style.removeProperty('background');
+                                imgBtn.style.background = isSelected ? '#06c' : '#222';
+                                
+                                console.log('🔷 [LABEL_DRAG_DYN] 복원된 배경색:', imgBtn.style.background);
+                                console.log('🔷 [LABEL_DRAG_DYN] 드래그 종료 완료');
+                            };
 
                             imgBtn.onclick = (e) => {
                                 const isCtrl = e.ctrlKey || e.metaKey;
