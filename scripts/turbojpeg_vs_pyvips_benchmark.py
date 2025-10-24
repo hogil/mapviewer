@@ -91,16 +91,43 @@ else:
 TARGET_SIZE = (512, 512)
 MAX_WORKERS = 16
 
-# 테스트 조건
+# 테스트 조건 (확장)
 TEST_CONDITIONS = [
-    # TurboJPEG 조건
+    # ========== TurboJPEG 조건 ==========
+    # Q=95
+    {"name": "TurboJPEG_Q95_420_FASTDCT", "method": "turbojpeg", "quality": 95, "subsample": TJSAMP_420, "fastdct": True},
+    {"name": "TurboJPEG_Q95_420_NoFlags", "method": "turbojpeg", "quality": 95, "subsample": TJSAMP_420, "fastdct": False},
+    
+    # Q=100, 4:2:0
     {"name": "TurboJPEG_Q100_420_FASTDCT", "method": "turbojpeg", "quality": 100, "subsample": TJSAMP_420, "fastdct": True},
     {"name": "TurboJPEG_Q100_420_NoFlags", "method": "turbojpeg", "quality": 100, "subsample": TJSAMP_420, "fastdct": False},
     
-    # pyvips 조건
-    {"name": "pyvips_Q100_subsample1", "method": "pyvips", "quality": 100, "subsample_mode": 1, "optimize": False},
-    {"name": "pyvips_Q100_subsample1_opt", "method": "pyvips", "quality": 100, "subsample_mode": 1, "optimize": True},
-    {"name": "pyvips_Q100_subsample2", "method": "pyvips", "quality": 100, "subsample_mode": 2, "optimize": False},
+    # Q=100, 4:2:2
+    {"name": "TurboJPEG_Q100_422_FASTDCT", "method": "turbojpeg", "quality": 100, "subsample": TJSAMP_422, "fastdct": True},
+    {"name": "TurboJPEG_Q100_422_NoFlags", "method": "turbojpeg", "quality": 100, "subsample": TJSAMP_422, "fastdct": False},
+    
+    # Q=100, 4:4:4
+    {"name": "TurboJPEG_Q100_444_FASTDCT", "method": "turbojpeg", "quality": 100, "subsample": TJSAMP_444, "fastdct": True},
+    {"name": "TurboJPEG_Q100_444_NoFlags", "method": "turbojpeg", "quality": 100, "subsample": TJSAMP_444, "fastdct": False},
+    
+    # ========== pyvips 조건 ==========
+    # Q=95
+    {"name": "pyvips_Q95_subsample1", "method": "pyvips", "quality": 95, "subsample_mode": 1, "optimize": False, "trellis": False},
+    {"name": "pyvips_Q95_subsample1_opt", "method": "pyvips", "quality": 95, "subsample_mode": 1, "optimize": True, "trellis": False},
+    
+    # Q=100, subsample 1 (4:2:0)
+    {"name": "pyvips_Q100_subsample1", "method": "pyvips", "quality": 100, "subsample_mode": 1, "optimize": False, "trellis": False},
+    {"name": "pyvips_Q100_subsample1_opt", "method": "pyvips", "quality": 100, "subsample_mode": 1, "optimize": True, "trellis": False},
+    {"name": "pyvips_Q100_subsample1_trellis", "method": "pyvips", "quality": 100, "subsample_mode": 1, "optimize": False, "trellis": True},
+    {"name": "pyvips_Q100_subsample1_opt_trellis", "method": "pyvips", "quality": 100, "subsample_mode": 1, "optimize": True, "trellis": True},
+    
+    # Q=100, subsample 2 (4:2:2)
+    {"name": "pyvips_Q100_subsample2", "method": "pyvips", "quality": 100, "subsample_mode": 2, "optimize": False, "trellis": False},
+    {"name": "pyvips_Q100_subsample2_opt", "method": "pyvips", "quality": 100, "subsample_mode": 2, "optimize": True, "trellis": False},
+    
+    # Q=100, subsample 0 (no subsampling, 4:4:4)
+    {"name": "pyvips_Q100_subsample0", "method": "pyvips", "quality": 100, "subsample_mode": 0, "optimize": False, "trellis": False},
+    {"name": "pyvips_Q100_subsample0_opt", "method": "pyvips", "quality": 100, "subsample_mode": 0, "optimize": True, "trellis": False},
 ]
 
 
@@ -166,7 +193,7 @@ def generate_thumbnail_turbojpeg(input_path: Path, output_path: Path, quality: i
     return time.time() - start
 
 
-def generate_thumbnail_pyvips(input_path: Path, output_path: Path, quality: int, subsample_mode: int, optimize: bool) -> float:
+def generate_thumbnail_pyvips(input_path: Path, output_path: Path, quality: int, subsample_mode: int, optimize: bool, trellis: bool) -> float:
     """pyvips로 썸네일 생성 (그리드 썸네일 방식)"""
     start = time.time()
     
@@ -197,7 +224,7 @@ def generate_thumbnail_pyvips(input_path: Path, output_path: Path, quality: int,
         
         vips_image = vips_image.resize(scale, vscale=scale, kernel='cubic')
     
-    # pyvips JPEG 저장 (그리드 썸네일과 동일)
+    # pyvips JPEG 저장
     vips_image.jpegsave(
         str(output_path),
         Q=quality,
@@ -205,7 +232,7 @@ def generate_thumbnail_pyvips(input_path: Path, output_path: Path, quality: int,
         optimize_coding=optimize,
         subsample_mode=subsample_mode,
         interlace=False,
-        trellis_quant=False,
+        trellis_quant=trellis,
         quant_table=0,
         background=255
     )
@@ -263,7 +290,8 @@ def run_benchmark(condition: Dict[str, Any], input_images: List[Path], output_ba
                 input_path, output_path,
                 condition["quality"],
                 condition["subsample_mode"],
-                condition["optimize"]
+                condition["optimize"],
+                condition["trellis"]
             )
     
     total_start = time.time()
