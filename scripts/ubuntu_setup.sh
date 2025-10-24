@@ -9,7 +9,19 @@ echo "==================================================================="
 # 1. Python SAML 라이브러리 설치
 echo ""
 echo "[1/5] Python SAML 라이브러리 설치..."
+
+# 시스템 패키지 먼저 설치 (python3-saml 의존성)
+echo "  - 시스템 패키지 설치 (libxml2, libxslt)..."
+sudo apt update
+sudo apt install -y libxml2-dev libxslt1-dev python3-dev pkg-config
+
+# python3-saml 설치
+echo "  - python3-saml 설치..."
 pip3 install python3-saml
+
+# 설치 확인
+echo "  - 설치 확인..."
+python3 -c "from onelogin.saml2.auth import OneLogin_Saml2_Auth; print('    ✓ python3-saml 정상 설치')" 2>/dev/null || echo "    ✗ python3-saml 설치 실패!"
 
 # 2. libvips 최신 버전 확인
 echo ""
