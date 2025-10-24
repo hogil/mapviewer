@@ -5446,7 +5446,7 @@ class WaferMapViewer {
             ? effectiveW / this.originalWidth
             : effectiveH / this.originalHeight;
 
-        const calculatedZoom = fitScale * FIT_RELATIVE_MARGIN * 0.92;
+        const calculatedZoom = fitScale * FIT_RELATIVE_MARGIN * 0.88;
 
         // [STEP 3] 확대 기준으로 첫 피라미드 레벨 결정
         let initialLevel = 1.0;
@@ -5978,7 +5978,7 @@ class WaferMapViewer {
 
         // 이미지 크기를 조정 (줌 패널과 겹치지 않도록 여유 확보)
 
-        const newScale = fitScale * FIT_RELATIVE_MARGIN * 0.92; // 92%로 조정 (줌 패널 고려)
+        const newScale = fitScale * FIT_RELATIVE_MARGIN * 0.88; // 88%로 조정 (줌 패널 고려)
 
                 this.transform.scale = newScale;
         this.zoom = this.transform.scale; // 🎯 zoom 값 동기화
@@ -5989,7 +5989,7 @@ class WaferMapViewer {
 
         // 파일명 패널과 줌 패널 사이 중앙 정렬 (filenameBarHeight 약간만 오프셋)
 
-        this.transform.dy = (containerRect.height - this.originalHeight * this.transform.scale) / 2 + (filenameBarHeight * 0.48);
+        this.transform.dy = (containerRect.height - this.originalHeight * this.transform.scale) / 2 + (filenameBarHeight * 0.56);
 
         this.updateZoomDisplay();
 
@@ -6195,7 +6195,7 @@ class WaferMapViewer {
 
         // 이미지 크기를 조정 (�ם 패널과 겹치지 않도록) - 초기 로드와 동일
 
-        this.transform.scale = fitScale * FIT_RELATIVE_MARGIN * 0.92;
+        this.transform.scale = fitScale * FIT_RELATIVE_MARGIN * 0.88;
 
         // 🎯 실제 센터링도 원본 이미지 크기 기준으로 적용
 
@@ -6203,7 +6203,7 @@ class WaferMapViewer {
 
         // 파일명 패널과 줌 패널 사이 중앙 정렬 - 초기 로드와 동일
 
-        this.transform.dy = (containerRect.height - this.originalHeight * this.transform.scale) / 2 + (filenameBarHeight * 0.48);
+        this.transform.dy = (containerRect.height - this.originalHeight * this.transform.scale) / 2 + (filenameBarHeight * 0.56);
 
                 this.zoom = this.transform.scale; // 🎯 zoom 값 동기화
 
