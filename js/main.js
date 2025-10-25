@@ -6738,7 +6738,7 @@ class WaferMapViewer {
 
             // 🔥 드롭 이벤트 제거 (드래그는 이제 범위 선택용으로만 사용)
 
-            btn.onclick = async (e) => {
+            btn.onclick = (e) => {
                 const isCtrl = e.ctrlKey || e.metaKey;
                 const isShift = e.shiftKey;
 
@@ -6781,7 +6781,7 @@ class WaferMapViewer {
                         btn.style.transition = originalTransition;
                     }, 500);
 
-                    // 🔥 백그라운드에서 API 처리 (await 제거 - 비동기)
+                    // 🔥 백그라운드에서 API 처리 (완전 비동기)
                     const currentFolder = this.currentFolderPrefix;
                     const apiUrl = currentFolder ? `/api/classify/batch?folder=${encodeURIComponent(currentFolder)}` : '/api/classify/batch';
 
