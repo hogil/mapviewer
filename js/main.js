@@ -6743,22 +6743,7 @@ class WaferMapViewer {
                 const isShift = e.shiftKey;
 
                 if (!isCtrl && !isShift) {
-                    this.debugLog('🔷 [DEBUG] Class Manager 버튼 클릭 시작:', {
-                        class: cls,
-
-                        gridMode: this.gridMode,
-
-                        gridSelectedIdxs: this.gridSelectedIdxs,
-
-                        selectedImages: this.selectedImages,
-
-                        selectedImagesLength: this.selectedImages?.length,
-
-                        currentGridImages: this.currentGridImages,
-
-                        currentGridImagesLength: this.currentGridImages?.length
-                    });
-
+                    // 🔥 성능 최적화: 디버그 로그 최소화
                     this.selectedClass = cls;
 
                     if (this.dom.labelStatus) this.dom.labelStatus.textContent = '';
@@ -6766,205 +6751,104 @@ class WaferMapViewer {
                     let imagePaths = [];
 
                     // 🔥 Grid 모드: 체크된 이미지들 라벨링
-
                     if (this.gridMode && this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0) {
-                        this.debugLog('🔷 [DEBUG] Grid 모드 라벨링 시작:', {
-                            gridMode: this.gridMode,
-
-                            gridSelectedIdxs: this.gridSelectedIdxs,
-
-                            gridSelectedIdxsLength: this.gridSelectedIdxs.length,
-
-                            selectedImages: this.selectedImages,
-
-                            selectedImagesLength: this.selectedImages?.length,
-
-                            currentGridImages: this.currentGridImages,
-
-                            currentGridImagesLength: this.currentGridImages?.length,
-
-                            class: cls
-                        });
-
-                        // 🔥 체크된 인덱스별로 이미지 경로 추출 (selectedImages가 비어있으면 currentGridImages 사용)
-
+                        // 체크된 인덱스별로 이미지 경로 추출 (selectedImages가 비어있으면 currentGridImages 사용)
                         const sourceImages = this.selectedImages.length > 0 ? this.selectedImages : this.currentGridImages;
 
-                        this.debugLog('🔷 [DEBUG] 이미지 소스 선택:', {
-                            selectedImagesLength: this.selectedImages.length,
-
-                            currentGridImagesLength: this.currentGridImages.length,
-
-                            usingSource: this.selectedImages.length > 0 ? 'selectedImages' : 'currentGridImages'
-                        });
-
                         imagePaths = this.gridSelectedIdxs
-
-                            .map(idx => {
-                                const path = sourceImages[idx];
-
-                                this.debugLog(`🔷 [DEBUG] 인덱스 ${idx} → 경로: ${path}`);
-
-                                return path;
-                            })
-
+                            .map(idx => sourceImages[idx])
                             .filter(path => path && path.trim() !== '');
-                        
-                        this.debugLog('🔷 [DEBUG] Grid 모드 - 최종 추출된 imagePaths:', {
-                            count: imagePaths.length,
-
-                            paths: imagePaths
-                        });
                     }
-
                     // 🔥 단일 이미지 모드: 현재 이미지 라벨링
-
                     else if (!this.gridMode && this.selectedImagePath) {
                         imagePaths = [this.selectedImagePath];
                     }
 
                     if (imagePaths.length === 0) {
                         console.warn('라벨링할 이미지가 선택되지 않았습니다.');
-
-                        this.debugLog('🔷 [DEBUG] 라벨링 실패 - 상태 확인:', {
-                            gridMode: this.gridMode,
-
-                            gridSelectedIdxs: this.gridSelectedIdxs,
-
-                            selectedImages: this.selectedImages,
-
-                            selectedImagesLength: this.selectedImages?.length,
-
-                            currentGridImages: this.currentGridImages,
-
-                            currentGridImagesLength: this.currentGridImages?.length,
-
-                            class: cls
-                        });
-
                         return;
                     }
 
-                    this.debugLog(`라벨 추가: ${imagePaths.length}개 → ${cls}`);
-
-                    this.debugLog(`🔍 전송할 이미지 경로들:`, imagePaths);
-
-                    const t0 = performance.now();
+                    // 🔥 즉시 시각적 피드백 (반응성 향상)
+                    const originalBg = btn.style.background;
+                    const originalTransition = btn.style.transition;
+                    btn.style.transition = 'all 0.2s ease';
+                    btn.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'; // 세련된 보라색 그라데이션
 
                     // 🔥 현재 폴더 파라미터 추가
                     const currentFolder = this.currentFolderPrefix;
                     const apiUrl = currentFolder ? `/api/classify/batch?folder=${encodeURIComponent(currentFolder)}` : '/api/classify/batch';
-                    const response = await fetch(apiUrl, {
-                        method: 'POST',
 
-                        headers: { 'Content-Type': 'application/json' },
+                    try {
+                        const response = await fetch(apiUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ class_name: cls, images: imagePaths })
+                        });
 
-                        body: JSON.stringify({ class_name: cls, images: imagePaths })
-                    });
+                        if (!response.ok) {
+                            const errorText = await response.text();
+                            console.error('❌ 라벨 추가 실패:', response.status, errorText);
+                            alert(`라벨 추가 실패: ${response.status} ${response.statusText}\n${errorText}`);
+                            btn.style.background = originalBg;
+                            btn.style.transition = originalTransition;
+                            return;
+                        }
 
-                    if (!response.ok) {
-                        const errorText = await response.text();
-
-                        console.error('❌ 라벨 추가 실패:', response.status, errorText);
-
-                        alert(`라벨 추가 실패: ${response.status} ${response.statusText}\n${errorText}`);
-
-                        return;
-                    } else {
                         const result = await response.json();
 
-                        this.debugLog(`✅ 라벨 추가 완료: ${(performance.now()-t0).toFixed(1)}ms (${imagePaths.length}개)`, result);
-
-                        // 🔥 서버 응답에서 실제 처리된 파일 수 확인
-
-                        if (result.success && result.processed !== undefined) {
-                            this.debugLog(`📊 서버에서 실제 처리된 파일: ${result.processed}개`);
-
-                            // 🔥 처리된 파일이 0개면 경고
-
-                            if (result.processed === 0) {
-                                console.warn('⚠️ 경고: 서버에서 실제로 처리된 파일이 0개입니다!');
-
-                                if (result.error_details && result.error_details.length > 0) {
-                                    console.error('❌ 에러 상세:', result.error_details);
-
-                                    alert(`라벨 추가 실패!\n\n에러 상세:\n${result.error_details.join('\n')}`);
-
-                                    return;
-                                }
-                            }
-                        }
-
-                        // 🔥 에러가 있으면 표시
-
-                        if (result.errors && result.errors > 0) {
-                            console.warn(`⚠️ ${result.errors}개 파일 처리 실패`);
-
+                        // 🔥 에러 체크
+                        if (result.success && result.processed === 0) {
+                            console.warn('⚠️ 경고: 서버에서 실제로 처리된 파일이 0개입니다!');
                             if (result.error_details && result.error_details.length > 0) {
                                 console.error('❌ 에러 상세:', result.error_details);
+                                alert(`라벨 추가 실패!\n\n에러 상세:\n${result.error_details.join('\n')}`);
+                                btn.style.background = originalBg;
+                                btn.style.transition = originalTransition;
+                                return;
                             }
                         }
-                    }
 
-                    // 버튼 색상 피드백
+                        if (result.errors && result.errors > 0 && result.error_details && result.error_details.length > 0) {
+                            console.warn(`⚠️ ${result.errors}개 파일 처리 실패`);
+                            console.error('❌ 에러 상세:', result.error_details);
+                        }
 
-                    const originalBg = btn.style.background;
+                        // 성공 피드백 - 세련된 녹색 그라데이션
+                        btn.style.background = 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)';
 
-                    btn.style.background = '#2ecc40';
-
-                    setTimeout(() => {
-                        btn.style.background = originalBg;
-
-                        // 🔥 단일 이미지 모드와 Grid 모드 모두 동일한 처리
-
+                        // 🔥 UI 업데이트를 먼저 수행 (색상 복원과 분리)
                         if (!this.gridMode && this.selectedImagePath) {
                             // 단일 이미지 모드: 캐시 완전 초기화 + 강제 새로고침
-
                             this.classToImgListCache = {};
-
                             this.refreshLabelExplorer();
-
                             setTimeout(() => {
                                 this.classToImgListCache = {};
-
                                 this.refreshLabelExplorer();
                             }, 200);
                         } else if (this.gridMode && this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0) {
-                            // 🔥 Grid 모드: 즉시 새로고침 (지연 없음)
-
-                            this.debugLog('🔷 [DEBUG] Grid 모드 라벨링 후 즉시 새로고침');
-
-                            // 🔥 열린 폴더 상태 미리 저장
-
-                            const openFolders = Object.keys(this.labelSelection?.openFolders || {}).filter(k => this.labelSelection.openFolders[k]);
-
-                            this.classToImgListCache = {};
-
-                            this.refreshLabelExplorer();
-
-                            // 🔥 빠른 재렌더링을 위한 추가 처리
-
-                            setTimeout(() => {
-                                if (this.labelSelection) {
-                                    openFolders.forEach(cls => {
-                                        this.labelSelection.openFolders[cls] = true;
-                                    });
-                                }
-
-                                this.updateLabelExplorerContent();
-                            }, 50);
+                            // 🔥 Grid 모드: 아무것도 안함 (Label Explorer 업데이트 불필요)
                         } else {
                             // 기타 경우: 기본 새로고침
-
                             this.refreshLabelExplorer();
-
                             setTimeout(() => {
                                 this.classToImgListCache = {};
-
                                 this.refreshLabelExplorer();
                             }, 100);
                         }
-                    }, 200);
+
+                        // 🔥 색상 복원만 빠르게 처리 (100ms)
+                        setTimeout(() => {
+                            btn.style.background = originalBg;
+                            btn.style.transition = originalTransition;
+                        }, 100);
+
+                    } catch (error) {
+                        console.error('❌ 라벨 추가 중 오류:', error);
+                        btn.style.background = originalBg;
+                        btn.style.transition = originalTransition;
+                        alert('라벨 추가 중 오류가 발생했습니다.');
+                    }
 
                     return;
                 }
@@ -7221,9 +7105,8 @@ class WaferMapViewer {
                 body: JSON.stringify({ class_name: this.selectedClass, images: imagePaths })
             });
 
-            this.refreshLabelExplorer();
-
-            this.refreshClassList();
+            // 🔥 Grid 모드: 캐시만 무효화 (refreshClassList 호출 안함 - 재귀 방지)
+            this.classToImgListCache = {};
         } else if (this.selectedClass && this.selectedImagePath) {
             const requestBody = { class_name: this.selectedClass, image_path: this.selectedImagePath };
 
@@ -8586,6 +8469,11 @@ class WaferMapViewer {
 
             this.debugLog(`⏱ Label Explorer 새로고침: ${(performance.now()-tRefresh).toFixed(1)}ms`);
 
+            // 🔥 Delete Label 후 savedViewState로 복원
+            if (this.savedViewState) {
+                this.restoreSavedViewState();
+            }
+
             this.debugLog(`⏱ Delete Label 전체: ${(performance.now()-t0).toFixed(1)}ms`);
         };
 
@@ -9656,13 +9544,22 @@ class WaferMapViewer {
                                 this.updateLabelExplorerContent();
 
                                 // 클래스 매니저 버튼 상태 업데이트
-
                                 this.updateClassManagerButtons();
+
+                                // 🔥 개별 Delete 후 savedViewState로 복원
+                                if (this.savedViewState) {
+                                    this.restoreSavedViewState();
+                                }
                             };
 
                             imgLi.appendChild(delBtn);
 
                             imgUl.appendChild(imgLi);
+                        }
+
+                        // 🔥 개별 Delete 후 savedViewState로 복원
+                        if (this.savedViewState) {
+                            this.restoreSavedViewState();
                         }
                     };
 
@@ -9834,12 +9731,6 @@ class WaferMapViewer {
         if (batchDeleteBtn) {
             batchDeleteBtn.disabled = false;
         }
-
-        this.debugLog('Label Explorer 선택 상태 업데이트:', {
-            selected: this.labelSelection.selected,
-
-            selectedClasses: this.labelSelection.selectedClasses
-        });
     }
 
     handleRightDown(e) {
@@ -11328,8 +11219,9 @@ class WaferMapViewer {
             wrap.className = 'grid-thumb-wrap' + (isSelected ? ' selected' : '');
         });
 
-        // 🔥 Wafer Map Explorer에서 이미지 선택 시 savedViewState 업데이트
-                if (this.gridMode && this.selectedImages && this.selectedImages.length > 0) {
+        // 🔥 Wafer Map Explorer에서만 savedViewState 업데이트 (Label Explorer 제외)
+        const isLabelExplorerGrid = grid && grid.hasAttribute('data-label-explorer-grid');
+        if (!isLabelExplorerGrid && this.gridMode && this.selectedImages && this.selectedImages.length > 0) {
             const scrollWrapper = grid?.parentElement;
             this.savedViewState = {
                 type: 'grid',
@@ -11337,12 +11229,6 @@ class WaferMapViewer {
                 scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0
             };
             console.log('💾 [AUTO-SAVE] Grid 선택 변경 시 savedViewState 업데이트:', this.selectedImages.length, '개 이미지, scrollTop:', scrollWrapper?.scrollTop);
-        } else {
-            console.warn('⚠️ [AUTO-SAVE] savedViewState 저장 조건 미충족:', {
-                gridMode: this.gridMode,
-                hasSelectedImages: !!this.selectedImages,
-                selectedImagesLength: this.selectedImages?.length || 0
-            });
         }
     }
 
