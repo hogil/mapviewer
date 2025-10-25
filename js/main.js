@@ -1796,6 +1796,14 @@ class WaferMapViewer {
                 this.dom.productSearchInput.value = '';
             }
             
+            // 🔥 검색창 텍스트 초기화 (최상위 폴더로 이동 시)
+            if (this.dom.fileSearch) {
+                this.dom.fileSearch.value = '';
+            }
+            if (this.dom.subfolderSearch) {
+                this.dom.subfolderSearch.value = '';
+            }
+            
             // 선택된 이미지들과 그리드 상태 초기화
             this.selectedImages = [];
             this.gridSelectedIdxs = [];
