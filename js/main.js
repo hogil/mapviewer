@@ -8945,21 +8945,9 @@ class WaferMapViewer {
                     };
 
                     imgBtn.onclick = (e) => {
-                        console.log('🎯 [LABEL_EXPLORER] ==================== 이미지 클릭 이벤트 시작 ====================');
-                        console.log('🎯 [LABEL_EXPLORER] 클릭된 이미지:', img.name);
-                        console.log('🎯 [LABEL_EXPLORER] 클래스:', cls);
-                        console.log('🎯 [LABEL_EXPLORER] Ctrl 키:', e.ctrlKey || e.metaKey);
-                        console.log('🎯 [LABEL_EXPLORER] Shift 키:', e.shiftKey);
-                        
                         const isCtrl = e.ctrlKey || e.metaKey;
                         const isShift = e.shiftKey;
                         const key = `${cls}/${img.name}`;
-
-                        console.log('🎯 [LABEL_EXPLORER] 이미지 키:', key);
-                        console.log('🎯 [LABEL_EXPLORER] 현재 선택된 이미지:', labelSelection.selected);
-                        console.log('🎯 [LABEL_EXPLORER] 현재 Grid 모드:', this.gridMode);
-                        console.log('🎯 [LABEL_EXPLORER] Grid 선택 인덱스:', this.gridSelectedIdxs);
-                        console.log('🎯 [LABEL_EXPLORER] 현재 Grid 이미지 개수:', this.currentGridImages?.length);
 
                         this.debugLog('🔷 [DEBUG] Label Explorer 이미지 클릭 시작:', {
                             key: key,
@@ -9040,15 +9028,10 @@ class WaferMapViewer {
                         }
 
                         // 선택된 이미지에 따라 단일/그리드 모드 결정
-                        console.log('🎯 [LABEL_EXPLORER] 선택된 이미지 개수:', labelSelection.selected.length);
-
                         if (labelSelection.selected.length > 0) {
                             if (labelSelection.selected.length === 1) {
                                 // 단일 선택: 단일 이미지 모드
-                                console.log('🎯 [LABEL_EXPLORER] ▶▶▶ 단일 이미지 모드로 전환 시작');
-
                                 const selectedKey = labelSelection.selected[0];
-                                console.log('🎯 [LABEL_EXPLORER] 선택된 키:', selectedKey);
 
                                 this.debugLog(`Label Explorer: 단일 이미지 모드 - ${selectedKey}`);
 
@@ -9092,16 +9075,9 @@ class WaferMapViewer {
                                 const fileName = selectedKey.split('/')[1];
                                 const imgList = this.classToImgListCache?.[cls] || [];
                                 const selectedImg = imgList.find(item => item.name === fileName);
-                                console.log('🎯 [LABEL_EXPLORER] 이미지 파일 이름:', fileName);
-                                console.log('🎯 [LABEL_EXPLORER] 선택된 이미지 객체:', selectedImg);
-                                console.log('🎯 [LABEL_EXPLORER] 로드할 경로 (root_relative):', selectedImg?.root_relative);
-                                console.log('🎯 [LABEL_EXPLORER] ▶▶▶ loadImage() 함수 호출 (fromLabelExplorer=true)');
                                 this.loadImage(selectedImg.root_relative, true);  // 🔥 Label Explorer에서 호출 시 저장 안 함
-                                console.log('🎯 [LABEL_EXPLORER] ==================== 이미지 클릭 이벤트 종료 (단일 모드) ====================');
                             } else {
                                 // 다수 선택: 그리드 모드
-                                console.log('🎯 [LABEL_EXPLORER] ▶▶▶ 그리드 모드로 전환 시작');
-                                console.log('🎯 [LABEL_EXPLORER] 선택된 이미지 리스트:', labelSelection.selected);
 
                                 this.debugLog(`Label Explorer: 그리드 모드 - ${labelSelection.selected.length}개 이미지`);
 
@@ -9119,42 +9095,27 @@ class WaferMapViewer {
                                     currentGridImagesLength: this.currentGridImages?.length
                                 });
 
-                                console.log('🎯 [LABEL_EXPLORER] ▶▶▶ showGridFromLabelExplorer() 함수 호출');
                                 this.showGridFromLabelExplorer(labelSelection.selected);
-                                console.log('🎯 [LABEL_EXPLORER] ==================== 이미지 클릭 이벤트 종료 (그리드 모드) ====================');
                             }
                         } else {
                             // 선택 없음: 이전 Grid 상태로 복귀 또는 이미지 숨기기
-                            console.log('🎯 [LABEL_EXPLORER] ▶▶▶ 선택 해제됨');
 
                             if (this.gridMode) {
-                                console.log('🎯 [LABEL_EXPLORER] 이전 Grid 상태로 복귀');
                                 this.debugLog('Label Explorer: 선택 해제 → 이전 Grid 상태로 복귀');
 
                                 this.restorePreviousGridState();
                             } else {
                                 // 단일 이미지 모드에서도 이미지 숨기기
-                                console.log('🎯 [LABEL_EXPLORER] 이미지 숨기기');
                                 this.debugLog('Label Explorer: 선택 해제 → 이미지 숨기기');
 
                                 this.restorePreviousGridState(); // 이전 Grid 상태가 없으면 hideImage() 포함
                             }
-                            console.log('🎯 [LABEL_EXPLORER] ==================== 이미지 클릭 이벤트 종료 (선택 해제) ====================');
                         }
 
                         // 강제로 업데이트 (약간의 지연 후)
-                        console.log('🎯 [LABEL_EXPLORER] 10ms 후 updateLabelExplorerSelection() 예약');
-
                         setTimeout(() => {
-                            console.log('🎯 [LABEL_EXPLORER] updateLabelExplorerSelection() 호출');
                             this.updateLabelExplorerSelection();
                         }, 10);
-
-                        console.log('🎯 [LABEL_EXPLORER] 최종 선택 상태:', {
-                            selected: labelSelection.selected,
-                            selectedClasses: labelSelection.selectedClasses,
-                            lastClicked: labelSelection.lastClicked
-                        });
 
                         this.debugLog('Label Explorer 선택 후 상태:', {
                             selected: labelSelection.selected,

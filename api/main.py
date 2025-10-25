@@ -1135,7 +1135,6 @@ def safe_resolve_path(path: Optional[str]) -> Path:
         if not str(target).startswith(str(ROOT_DIR)):
             raise HTTPException(status_code=400, detail="Invalid path")
         
-        logger.info(f"🔍 [safe_resolve_path] input: {path}, normalized: {normalized}, target: {target}")
         return target
     except HTTPException:
         raise
@@ -2459,16 +2458,8 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
             search_root = ROOT_DIR
             current_folder = ROOT_DIR
 
-        logger.info(f"🔍 [SEARCH DEBUG] current_folder: {current_folder}")
-        logger.info(f"🔍 [SEARCH DEBUG] search_root: {search_root}")
-        logger.info(f"🔍 [SEARCH DEBUG] ROOT_DIR: {ROOT_DIR}")
-        logger.info(f"🔍 [SEARCH DEBUG] 검색어: {query}")
-        logger.info(f"🔍 [SEARCH DEBUG] current_folder == ROOT_DIR: {current_folder.resolve() == ROOT_DIR.resolve()}")
-        logger.info(f"🔍 [SEARCH DEBUG] limit: {limit}, offset: {offset}")
-
         # 🔄 썸네일 캐시 초기화 (검색 시 즉시 반영)
         THUMB_STAT_CACHE.clear()
-        logger.info("🔍 [SEARCH DEBUG] 썸네일 캐시 초기화 완료")
 
         # 📁 current_folder 기준 prefix 계산
         try:
@@ -2546,13 +2537,6 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
 
         results = bucket[offset: offset + limit]
 
-        logger.info(f"🔍 [SEARCH DEBUG] 검색결과수: {len(bucket)}")
-        logger.info(f"🔍 [SEARCH DEBUG] 반환되는파일수: {len(results)}")
-        if bucket:
-            logger.info(f"🔍 [SEARCH DEBUG] 첫 결과: {bucket[0]}")
-            if len(bucket) > 1:
-                logger.info(f"🔍 [SEARCH DEBUG] 마지막 결과: {bucket[-1]}")
-
         return {"success": True, "results": results, "offset": offset, "limit": limit, "total": len(bucket)}
     except Exception as e:
         logger.exception(f"검색 중 오류: {e}")
@@ -2610,34 +2594,16 @@ async def get_files_recursive(path: str):
 async def get_classes(folder: Optional[str] = Query(None, description="특정 폴더의 클래스만 조회"),
                      request: Request = None):
     try:
-        # 🔍 디버그: 입력 파라미터
-        logger.info(f"🔍 [/api/classes] ===== API 요청 받음 =====")
-        logger.info(f"🔍 [/api/classes] folder 파라미터: {folder}")
-        logger.info(f"🔍 [/api/classes] folder 파라미터 타입: {type(folder)}")
-        logger.info(f"🔍 [/api/classes] folder 파라미터 길이: {len(folder) if folder else 0}")
-        logger.info(f"🔍 [/api/classes] 전체 URL: {request.url if request else 'N/A'}")
-        logger.info(f"🔍 [/api/classes] 쿼리 파라미터: {request.query_params if request else 'N/A'}")
-        logger.info(f"🔍 [/api/classes] ROOT_DIR: {ROOT_DIR}")
-        logger.info(f"🔍 [/api/classes] current_folder: {current_folder}")
-
         # 폴더가 지정된 경우 해당 폴더의 classification 디렉토리 사용
         if folder:
             target_folder = safe_resolve_path(folder)
             classification_dir = target_folder / "classification"
-            logger.info(f"🔍 [/api/classes] folder 지정됨 - target_folder: {target_folder}")
         else:
             classification_dir = _classification_dir()
-            logger.info(f"🔍 [/api/classes] folder 미지정 - current_folder: {current_folder}")
-
-        # 🔍 디버그: 최종 classification 경로
-        logger.info(f"✅ [/api/classes] 최종 classification_dir: {classification_dir}")
-        logger.info(f"🔍 [/api/classes] classification_dir.exists(): {classification_dir.exists()}")
 
         _dircache_invalidate(classification_dir)
         if not classification_dir.exists():
-            logger.warning(f"⚠️ [/api/classes] classification 폴더 없음 - 생성 시작: {classification_dir}")
             classification_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"✅ [/api/classes] classification 폴더 생성 완료: {classification_dir}")
             log_access_row(tag="INFO", note=f"classification 폴더 생성: {classification_dir}")
             return {"success": True, "classes": []}
 
@@ -2667,11 +2633,6 @@ async def create_class(req: CreateClassReq,
         else:
             current_folder = ROOT_DIR
 
-        logger.info(f"🔍 [CREATE_CLASS] folder 파라미터: '{folder}'")
-        logger.info(f"🔍 [CREATE_CLASS] ROOT_DIR: {ROOT_DIR}")
-        logger.info(f"🔍 [CREATE_CLASS] current_folder: {current_folder}")
-        logger.info(f"🔍 [CREATE_CLASS] _classification_dir(): {_classification_dir()}")
-
         name = req.name.strip()
         if not name or name.isspace(): raise HTTPException(status_code=400, detail="클래스명이 비어있습니다")
         if any(ord(c) < 32 or ord(c) > 126 for c in name):
@@ -2680,23 +2641,16 @@ async def create_class(req: CreateClassReq,
         if len(name) > 50: raise HTTPException(status_code=400, detail="클래스명이 너무 깁니다 (최대 50자)")
 
         classification_dir = _classification_dir()
-        logger.info(f"🔍 [CREATE_CLASS] classification_dir: {classification_dir}, exists: {classification_dir.exists()}")
 
         # classification 디렉토리가 없으면 생성
         if not classification_dir.exists():
-            logger.info(f"🔍 [CREATE_CLASS] classification 디렉토리 생성: {classification_dir}")
             classification_dir.mkdir(parents=True, exist_ok=True)
 
         class_dir = classification_dir / name
-        logger.info(f"🔍 [CREATE_CLASS] class_dir: {class_dir}, exists: {class_dir.exists()}")
 
         if class_dir.exists(): raise HTTPException(status_code=409, detail="Class already exists")
 
-        logger.info(f"🔍 [CREATE_CLASS] 클래스 디렉토리 생성 시작: {class_dir}")
-        logger.info(f"🔍 [CREATE_CLASS] 절대 경로: {class_dir.resolve()}")
         class_dir.mkdir(parents=True, exist_ok=False)
-        logger.info(f"🔍 [CREATE_CLASS] 클래스 디렉토리 생성 완료: {class_dir}, exists: {class_dir.exists()}")
-        logger.info(f"🔍 [CREATE_CLASS] 생성된 절대 경로: {class_dir.resolve()}")
         _sync_labels_if_classes_changed()
         for p in (_classification_dir(), class_dir, ROOT_DIR): _dircache_invalidate(p)
         DIRLIST_CACHE.clear()
@@ -2719,14 +2673,8 @@ async def delete_class(class_name: str = PathParam(..., min_length=1, max_length
         else:
             current_folder = ROOT_DIR
 
-        logger.info(f"🔍 [DELETE_CLASS] folder 파라미터: '{folder}'")
-        logger.info(f"🔍 [DELETE_CLASS] ROOT_DIR: {ROOT_DIR}")
-        logger.info(f"🔍 [DELETE_CLASS] current_folder: {current_folder}")
-        logger.info(f"🔍 [DELETE_CLASS] _classification_dir(): {_classification_dir()}")
-
         if not _CLASS_NAME_RE.match(class_name): raise HTTPException(status_code=400, detail="Invalid class_name")
         class_dir = _classification_dir() / class_name
-        logger.info(f"🔍 [DELETE_CLASS] class_dir: {class_dir}, 절대 경로: {class_dir.resolve()}")
         if not class_dir.exists() or not class_dir.is_dir(): raise HTTPException(status_code=404, detail="Class not found")
         if force:
             shutil.rmtree(class_dir)
@@ -3420,21 +3368,13 @@ async def change_folder(request: Request):
         global current_folder
         current_folder = new_path_obj
         
-        # 🔍 디버그: 폴더 변경 확인
-        logger.info(f"🔍 [CHANGE_FOLDER DEBUG] ROOT_DIR (변경 안됨): {ROOT_DIR}")
-        logger.info(f"🔍 [CHANGE_FOLDER DEBUG] 새 current_folder: {current_folder}")
-        logger.info(f"🔍 [CHANGE_FOLDER DEBUG] THUMBNAIL_DIR (변경 안됨): {THUMBNAIL_DIR}")
-        logger.info(f"🔍 [CHANGE_FOLDER DEBUG] 변경 전 경로: {new_path}")
-        logger.info(f"🔍 [CHANGE_FOLDER DEBUG] 변경 후 절대 경로: {new_path_obj}")
-        
         # 🔥 ROOT_DIR과 THUMBNAIL_DIR은 절대 변경하지 않음
         # 썸네일과 라벨은 원래 ROOT_DIR 기준으로 관리
 
         DIRLIST_CACHE.clear();  THUMB_STAT_CACHE.clear()
         
-        # 🔍 썸네일 요청 카운터 리셋 (새로운 폴더)
+        # 썸네일 요청 카운터 리셋 (새로운 폴더)
         global INDEX_READY, INDEX_BUILDING
-        logger.info("🔍 [CHANGE_FOLDER DEBUG] 썸네일 요청 카운터 리셋")
         
         INDEX_READY = False; INDEX_BUILDING = False
 
