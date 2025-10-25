@@ -8431,8 +8431,18 @@ class WaferMapViewer {
 
             this.debugLog(`⏱ Label Explorer 새로고침: ${(performance.now()-tRefresh).toFixed(1)}ms`);
 
-            // 🔥 Delete Label 후 savedViewState로 복원
-            if (this.savedViewState) {
+            // 🔥 Delete Label 후 복원 처리
+            const grid = document.getElementById('image-grid');
+            const isLabelExplorerGrid = grid && grid.hasAttribute('data-label-explorer-grid');
+
+            if (isLabelExplorerGrid) {
+                // Label Explorer Grid인 경우: savedViewState 무시하고 초기 화면으로
+                console.log('🔍 [DELETE_DEBUG] Label Explorer Grid 감지 - 초기 화면으로');
+                this.savedViewState = null; // savedViewState 무효화
+                this.clearLabelExplorerSelection();
+            } else if (this.savedViewState) {
+                // Wafer Map Explorer인 경우: savedViewState로 복원
+                console.log('🔍 [DELETE_DEBUG] Wafer Map Explorer - savedViewState로 복원');
                 this.restoreSavedViewState();
             }
 
@@ -9508,8 +9518,16 @@ class WaferMapViewer {
                                 // 클래스 매니저 버튼 상태 업데이트
                                 this.updateClassManagerButtons();
 
-                                // 🔥 개별 Delete 후 savedViewState로 복원
-                                if (this.savedViewState) {
+                                // 🔥 개별 Delete 후 복원 처리
+                                const grid = document.getElementById('image-grid');
+                                const isLabelExplorerGrid = grid && grid.hasAttribute('data-label-explorer-grid');
+
+                                if (isLabelExplorerGrid) {
+                                    // Label Explorer Grid인 경우: savedViewState 무시하고 초기 화면으로
+                                    this.savedViewState = null;
+                                    this.clearLabelExplorerSelection();
+                                } else if (this.savedViewState) {
+                                    // Wafer Map Explorer인 경우: savedViewState로 복원
                                     this.restoreSavedViewState();
                                 }
                             };
@@ -9519,8 +9537,16 @@ class WaferMapViewer {
                             imgUl.appendChild(imgLi);
                         }
 
-                        // 🔥 개별 Delete 후 savedViewState로 복원
-                        if (this.savedViewState) {
+                        // 🔥 개별 Delete 후 복원 처리
+                        const grid = document.getElementById('image-grid');
+                        const isLabelExplorerGrid = grid && grid.hasAttribute('data-label-explorer-grid');
+
+                        if (isLabelExplorerGrid) {
+                            // Label Explorer Grid인 경우: savedViewState 무시하고 초기 화면으로
+                            this.savedViewState = null;
+                            this.clearLabelExplorerSelection();
+                        } else if (this.savedViewState) {
+                            // Wafer Map Explorer인 경우: savedViewState로 복원
                             this.restoreSavedViewState();
                         }
                     };
