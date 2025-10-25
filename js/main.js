@@ -8799,7 +8799,7 @@ class WaferMapViewer {
 
                     imgBtn.style.padding = '4px 12px';
 
-                    imgBtn.style.background = labelSelection.selected.includes(`${cls}/${img.name}`) ? '#06c' : '#222';
+                    imgBtn.style.background = labelSelection.selected.includes(`${cls}/${img.name}`) ? '#08e' : '#222';
 
                     imgBtn.style.color = '#fff';
 
@@ -8814,10 +8814,11 @@ class WaferMapViewer {
                     // 🔥 Drag 범위 선택 이벤트 추가
                     imgBtn.draggable = true;
 
-                    // 🔥 마우스 hover 효과 추가
+                    // 🔥 마우스 hover 효과 추가 (선택된 아이템 제외)
                     imgBtn.onmouseover = (e) => {
                         const key = `${cls}/${img.name}`;
                         const isSelected = labelSelection.selected.includes(key);
+                        // 선택된 항목에는 hover 효과 없음
                         if (!isSelected && !this.dragStartKey) {
                             imgBtn.style.background = '#08e'; // hover 색상
                         }
@@ -8826,8 +8827,9 @@ class WaferMapViewer {
                     imgBtn.onmouseout = (e) => {
                         const key = `${cls}/${img.name}`;
                         const isSelected = labelSelection.selected.includes(key);
-                        if (!this.dragStartKey) {
-                            imgBtn.style.background = isSelected ? '#06c' : '#222';
+                        // 선택되지 않은 항목만 원래 색으로 복원
+                        if (!isSelected && !this.dragStartKey) {
+                            imgBtn.style.background = '#222';
                         }
                     };
 
