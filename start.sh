@@ -14,23 +14,23 @@ export HTTPS_PORT="8443"
 export SSL_CERTFILE="cert/fullchain.pem"
 export SSL_KEYFILE="cert/server.key"
 
-# 최적화된 성능 설정 (Ubuntu 24, 32코어, 192GB RAM)
-# - 과도한 병렬화는 오히려 성능 저하 (컨텍스트 스위칭, 메모리 경합)
-# - "More is not always better" - 코어 수에 맞춘 적절한 병렬화
+# 성능 설정 (Ubuntu 24, 32코어, 192GB RAM)
+# - 벤치마크 기반 중간값 (원본 고성능 vs 보수적 최적화 사이)
+# - 실제 워크로드에 따라 조정 권장
 export THUMBNAIL_SIZE="512"
 export THUMBNAIL_FORMAT="JPEG"           # JPEG가 PNG보다 훨씬 빠름 (139ms vs 수백ms)
 export THUMBNAIL_QUALITY="100"           # Q=100 최고 품질
 export PNG_COMPRESSION_LEVEL="3"
-export IO_THREADS="64"                   # 32코어 * 2 (적절한 I/O 병렬화)
-export THUMBNAIL_SEM="64"                # 동시 썸네일 생성 (메모리 경합 방지)
+export IO_THREADS="160"                  # 중간값 (256→64→160) - I/O 병렬화
+export THUMBNAIL_SEM="288"               # 중간값 (512→64→288) - 동시 썸네일 생성
 export THUMB_PREFETCH_BATCH="64"
 export THUMB_CLIENT_MAX_CONCURRENCY="12"
 
-# libvips 최적화 (웹서버 환경 - 적절한 병렬화)
-export VIPS_CONCURRENCY="16"             # 32코어의 50% (과도한 병렬화 방지)
-export VIPS_DISC_THRESHOLD="1000m"       # 1GB (적절한 메모리 사용)
-export VIPS_MAX_CACHE="4000"             # 캐시 4000개 (관리 오버헤드 감소)
-export VIPS_MAX_CACHE_MEM="2048m"        # 2GB 메모리 캐시 (효율적 사용)
+# libvips 최적화 (웹서버 환경)
+export VIPS_CONCURRENCY="20"             # 중간값 (24→16→20) - 병렬 처리
+export VIPS_DISC_THRESHOLD="5500m"       # 중간값 (10000m→1000m→5500m) - 디스크 사용 기준
+export VIPS_MAX_CACHE="7000"             # 중간값 (10000→4000→7000) - 캐시 항목 수
+export VIPS_MAX_CACHE_MEM="11024m"       # 중간값 (20000m→2048m→11024m) - 메모리 캐시
 
 # Python/시스템 최적화
 export PYTHONUNBUFFERED="1"              # 실시간 로그 출력
@@ -39,8 +39,8 @@ export MALLOC_ARENA_MAX="4"              # 메모리 fragmentation 방지
 # 통계 로깅
 export STATS_LOG_ENABLED="1"             # 1=통계 수집 활성화
 
-# Uvicorn 설정 (최적 성능)
-export WORKERS="16"                      # 32코어의 50% (프로세스 간 통신 오버헤드 감소)
+# Uvicorn 설정
+export WORKERS="22"                      # 중간값 (28→16→22) - 워커 프로세스 수
 export RELOAD="0"                        # 운영 환경에서는 0
 
 # 캐시 설정
