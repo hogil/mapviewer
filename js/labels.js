@@ -447,42 +447,124 @@ export class LabelManager {
                 ? this.viewer.getSelectedImagesForModal()
                 : [];
 
+            console.log('🔍 [CLASS_CLICK_DEBUG] 선택된 이미지들:', selected);
+
             // 이미지가 선택되어 있으면 즉시 분류 추가
             if (selected && selected.length > 0) {
-                try {
-                    let res;
-                    if (selected.length === 1) {
-                        // 단일 이미지
-                        res = await fetch('/api/classify', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ 
-                                image_path: selected[0], 
-                                class_name: className 
-                            })
-                        });
-                    } else {
-                        // 다중 이미지
-                        res = await fetch('/api/classify/batch', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ 
-                                images: selected, 
-                                class_name: className 
-                            })
-                        });
+                // 🔥 classification/ 경로를 제거하여 원본 경로로 변환
+                const currentFolderPrefix = this.viewer?.currentFolderPrefix || '';
+                console.log('🔍 [CLASS_CLICK_DEBUG] currentFolderPrefix:', currentFolderPrefix);
+                
+                const cleanPaths = selected.map(path => {
+                    console.log('🔍 [CLASS_CLICK_DEBUG] 원본 경로:', path);
+                    
+                    // prefix/classification/ClassName/image.png -> prefix/image.png
+                    // classification/ClassName/image.png -> image.png
+                    
+                    let cleanPath = path;
+                    
+                    // currentFolderPrefix가 있으면 제거
+                    if (currentFolderPrefix && cleanPath.startsWith(currentFolderPrefix)) {
+                        cleanPath = cleanPath.substring(currentFolderPrefix.length);
+                        console.log('🔍 [CLASS_CLICK_DEBUG] prefix 제거 후:', cleanPath);
                     }
+                    
+                    // classification/ClassName/ 제거
+                    if (cleanPath.includes('/classification/')) {
+                        // prefix/classification/ClassName/image.png 형식
+                        const classificationIndex = cleanPath.indexOf('/classification/');
+                        const beforeClassification = cleanPath.substring(0, classificationIndex);
+                        const afterClassification = cleanPath.substring(classificationIndex + '/classification/'.length);
+                        const parts = afterClassification.split('/');
+                        cleanPath = beforeClassification + (beforeClassification ? '/' : '') + parts.slice(1).join('/');
+                        console.log('🔍 [CLASS_CLICK_DEBUG] classification 폴더 제거 후:', cleanPath);
+                    } else if (cleanPath.startsWith('classification/')) {
+                        // classification/ClassName/image.png 형식
+                        const parts = cleanPath.split('/');
+                        cleanPath = parts.slice(2).join('/');
+                        console.log('🔍 [CLASS_CLICK_DEBUG] classification/ 제거 후:', cleanPath);
+                    }
+                    
+                    // currentFolderPrefix 다시 추가
+                    if (currentFolderPrefix) {
+                        cleanPath = currentFolderPrefix + cleanPath;
+                        console.log('🔍 [CLASS_CLICK_DEBUG] prefix 재추가 후:', cleanPath);
+                    }
+                    
+                    console.log('🔍 [CLASS_CLICK_DEBUG] 최종 정리된 경로:', cleanPath);
+                    return cleanPath;
+                });
+                
+                console.log('🔍 [CLASS_CLICK_DEBUG] 모든 정리된 경로들:', cleanPaths);
+                
+                try {
+                    // 🔥 타임아웃 설정 (30초)
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 30000);
+                    
+                    let res;
+                    try {
+                        if (cleanPaths.length === 1) {
+                            // 단일 이미지
+                            console.log('🔍 [CLASS_CLICK_DEBUG] 단일 이미지 라벨 추가 API 호출:', {
+                                image_path: cleanPaths[0],
+                                class_name: className
+                            });
+                            res = await fetch('/api/classify', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ 
+                                    image_path: cleanPaths[0], 
+                                    class_name: className 
+                                }),
+                                signal: controller.signal
+                            });
+                        } else {
+                            // 다중 이미지
+                            console.log('🔍 [CLASS_CLICK_DEBUG] 다중 이미지 라벨 추가 API 호출:', {
+                                images: cleanPaths,
+                                class_name: className
+                            });
+                            res = await fetch('/api/classify/batch', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ 
+                                    images: cleanPaths, 
+                                    class_name: className 
+                                }),
+                                signal: controller.signal
+                            });
+                        }
+                    } finally {
+                        clearTimeout(timeoutId);
+                    }
+                    
+                    console.log('🔍 [CLASS_CLICK_DEBUG] API 응답 상태:', res.status);
+                    
                     if (!res.ok) {
                         const err = await res.json().catch(() => ({}));
+                        console.error('🔍 [CLASS_CLICK_DEBUG] API 오류 응답:', err);
                         throw new Error(err.detail || err.error || `분류 추가 실패 (${res.status})`);
                     }
+                    
+                    const result = await res.json();
+                    console.log('🔍 [CLASS_CLICK_DEBUG] API 성공 응답:', result);
+                    
                     // UI 갱신
                     console.log('🔍 [CLASS_CLICK_DEBUG] 라벨 추가 후 refreshAll 호출 전 currentFolderPath:', this.viewer?.currentFolderPath);
                     await this.refreshAll();
                     console.log('🔍 [CLASS_CLICK_DEBUG] refreshAll 완료 후 currentFolderPath:', this.viewer?.currentFolderPath);
                 } catch (err) {
-                    console.error('라벨 추가 오류:', err);
-                    alert(`라벨 추가 실패: ${err.message || err}`);
+                    console.error('🔍 [CLASS_CLICK_DEBUG] 라벨 추가 오류:', err);
+                    console.error('🔍 [CLASS_CLICK_DEBUG] 오류 타입:', err.name);
+                    console.error('🔍 [CLASS_CLICK_DEBUG] 오류 메시지:', err.message);
+                    console.error('🔍 [CLASS_CLICK_DEBUG] 오류 스택:', err.stack);
+                    
+                    if (err.name === 'AbortError') {
+                        alert(`라벨 추가 시간 초과 (30초)\n\n서버가 응답하지 않습니다.\n네트워크 연결을 확인하거나 나중에 다시 시도해주세요.`);
+                    } else {
+                        alert(`라벨 추가 실패: ${err.message || err}`);
+                    }
                 }
                 return;
             }
@@ -817,6 +899,12 @@ export class LabelManager {
 
                             // Class Manager 카운트만 업데이트 (전체 새로고침 없이)
                             await this.refreshClassList();
+                            
+                            // 🔥 저장된 Wafer Map Explorer 화면으로 복원 (삭제 후)
+                            if (this.viewer && typeof this.viewer.restoreSavedViewState === 'function') {
+                                console.log('🔍 [LABEL_EXPLORER_DEBUG] 삭제 후 savedViewState 복원 호출');
+                                this.viewer.restoreSavedViewState();
+                            }
                         } catch (err) {
                             console.error('분류 삭제 오류:', err);
                             alert(`분류 삭제 실패: ${err.message || err}`);
@@ -943,12 +1031,22 @@ export class LabelManager {
         this.lastRefreshTime = now;
         
         try {
-            await Promise.all([
+            // 🔥 타임아웃 추가 (20초)
+            const refreshPromise = Promise.all([
                 this.refreshClassList(),
                 this.refreshLabelExplorer()
             ]);
             
+            const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('refreshAll 타임아웃 (20초)')), 20000)
+            );
+            
+            await Promise.race([refreshPromise, timeoutPromise]);
+            
             console.log('🔍 [LABEL_EXPLORER_DEBUG] refreshAll 완료');
+        } catch (error) {
+            console.error('🔍 [LABEL_EXPLORER_DEBUG] refreshAll 오류:', error);
+            alert(`UI 새로고침 실패: ${error.message}`);
         } finally {
             this.isRefreshing = false;
             

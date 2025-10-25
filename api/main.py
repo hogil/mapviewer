@@ -1315,6 +1315,7 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
         if should_cache: DIRLIST_CACHE.set(key, items)
     except FileNotFoundError:
         pass
+    
     return items
 
 async def build_file_index_background():
@@ -1684,20 +1685,38 @@ def _lookup_original_relpath_from_classification_path(path_str: str) -> Optional
         if "/classification/" not in p and not p.startswith("classification/"):
             return None
         filename = Path(p).name
-        # FILE_INDEX 키는 ROOT 기준 상대경로
-        with FILE_INDEX_LOCK:
-            keys_snapshot = list(FILE_INDEX_KEYS)
-        for rel in keys_snapshot:
-            if Path(rel).name == filename:
-                return rel
-        # 인덱스가 아직 없으면 폴백: ROOT_DIR에서 탐색(최초 1회 비용)
-        for root, _dirs, files in os.walk(ROOT_DIR):
-            if filename in files:
-                abs_match = Path(root) / filename
-                try:
-                    return str(abs_match.relative_to(ROOT_DIR)).replace("\\", "/")
-                except Exception:
-                    return None
+        
+        # 🔥 최적화: FILE_INDEX_BY_NAME 캐시 사용 (빠른 O(1) 룩업)
+        if not hasattr(_lookup_original_relpath_from_classification_path, '_name_cache'):
+            _lookup_original_relpath_from_classification_path._name_cache = {}
+            _lookup_original_relpath_from_classification_path._cache_timestamp = 0
+        
+        # 🔥 캐시 갱신 주기 확인 (30초마다 갱신)
+        current_time = time.time()
+        if current_time - _lookup_original_relpath_from_classification_path._cache_timestamp > 30:
+            with FILE_INDEX_LOCK:
+                keys_snapshot = list(FILE_INDEX_KEYS)
+            
+            # 파일명 → 경로 매핑 생성 (같은 파일명이 여러 개 있을 수 있으므로 리스트로)
+            name_cache = {}
+            for rel in keys_snapshot:
+                fname = Path(rel).name
+                if fname not in name_cache:
+                    name_cache[fname] = []
+                name_cache[fname].append(rel)
+            
+            _lookup_original_relpath_from_classification_path._name_cache = name_cache
+            _lookup_original_relpath_from_classification_path._cache_timestamp = current_time
+        
+        # 🔥 캐시에서 빠른 조회
+        candidates = _lookup_original_relpath_from_classification_path._name_cache.get(filename, [])
+        if candidates:
+            # 첫 번째 매칭 반환 (같은 파일명이 여러 개면 첫 번째 사용)
+            return candidates[0]
+        
+        # 🔥 캐시에 없으면 NULL 반환 (os.walk 건너뛰기 - 너무 느림)
+        # relkey_from_any_path()가 폴백으로 처리할 것임
+        return None
     except Exception:
         return None
 
@@ -3041,6 +3060,7 @@ async def classify_images_batch(request: BatchClassifyRequest,
                                 folder: Optional[str] = Query(None, description="현재 폴더 경로"),
                                 _=Depends(labels_classes_sync_dep)):
     """배치 이미지 분류"""
+    batch_start_time = time.perf_counter()
     try:
         # 🔥 folder 파라미터가 있으면 current_folder 설정
         global current_folder
@@ -3057,54 +3077,92 @@ async def classify_images_batch(request: BatchClassifyRequest,
         class_dir = _classification_dir() / class_name
         class_dir.mkdir(parents=True, exist_ok=True)
         
+        # 🔥 성능 최적화: 드라이브 체크는 한 번만 수행
+        class_dir_dev = class_dir.stat().st_dev
+        
         results = []
         errors = []
+        labels_batch_update = {}  # 🔥 배치 업데이트용 딕셔너리
+        
+        lookup_time = 0
+        file_check_time = 0
+        link_time = 0
         
         for image_path in request.images:
             try:
+                # 🔥 경로 조회 최적화
+                lookup_start = time.perf_counter()
                 rel_path = _lookup_original_relpath_from_classification_path(image_path) or relkey_from_any_path(image_path)
+                lookup_time += time.perf_counter() - lookup_start
+                
                 abs_path = ROOT_DIR / rel_path
                 
+                # 🔥 파일 체크 최적화
+                check_start = time.perf_counter()
                 if not abs_path.exists() or not abs_path.is_file():
                     errors.append(f"{rel_path}: 파일 없음")
+                    file_check_time += time.perf_counter() - check_start
                     continue
                     
                 if not is_supported_image(abs_path):
                     errors.append(f"{rel_path}: 지원하지 않는 형식")
+                    file_check_time += time.perf_counter() - check_start
                     continue
+                file_check_time += time.perf_counter() - check_start
                 
                 # 대상 파일 경로
                 target_file = class_dir / abs_path.name
                 
-                # 파일 복사 또는 하드링크 생성
-                try:
-                    if abs_path.stat().st_dev == class_dir.stat().st_dev:
-                        # 같은 드라이브면 하드링크 시도
-                        if not target_file.exists():
+                # 🔥 파일 복사/하드링크 최적화 - 이미 존재하면 스킵
+                link_start = time.perf_counter()
+                if not target_file.exists():
+                    try:
+                        # 드라이브 체크는 이미 위에서 한 번만 수행
+                        if abs_path.stat().st_dev == class_dir_dev:
+                            # 같은 드라이브면 하드링크 시도
                             os.link(str(abs_path), str(target_file))
-                    else:
-                        # 다른 드라이브면 복사
-                        if not target_file.exists():
+                        else:
+                            # 다른 드라이브면 복사
                             shutil.copy2(abs_path, target_file)
-                except (OSError, PermissionError):
-                    # 하드링크 실패시 복사로 폴백
-                    if not target_file.exists():
+                    except (OSError, PermissionError):
+                        # 하드링크 실패시 복사로 폴백
                         shutil.copy2(abs_path, target_file)
+                link_time += time.perf_counter() - link_start
                 
-                # 라벨도 추가
-                with LABELS_LOCK:
-                    cur_labels = set(LABELS.get(rel_path, []))
-                    cur_labels.add(class_name)
-                    LABELS[rel_path] = sorted(cur_labels)
-                
+                # 🔥 라벨 배치 업데이트 (락 없이 임시 저장)
+                labels_batch_update[rel_path] = class_name
                 results.append(rel_path)
                 
             except Exception as e:
-                errors.append(f"{rel_path}: {str(e)}")
+                errors.append(f"{image_path}: {str(e)}")
         
+        # 🔥 라벨 배치 업데이트 (락 한 번만 획득)
+        label_update_start = time.perf_counter()
+        if labels_batch_update:
+            with LABELS_LOCK:
+                for rel_path, cls_name in labels_batch_update.items():
+                    cur_labels = set(LABELS.get(rel_path, []))
+                    cur_labels.add(cls_name)
+                    LABELS[rel_path] = sorted(cur_labels)
+        label_update_time = time.perf_counter() - label_update_start
+        
+        # 🔥 파일 저장 및 캐시 무효화
+        save_start = time.perf_counter()
         if results:
             _labels_save()
             _dircache_invalidate(class_dir)
+        save_time = time.perf_counter() - save_start
+        
+        batch_total_time = time.perf_counter() - batch_start_time
+        
+        # 🔥 성능 로그
+        logger.info(f"⚡ [BATCH_PERF] 총 {len(request.images)}개 처리 - "
+                   f"총 시간: {batch_total_time*1000:.1f}ms, "
+                   f"경로조회: {lookup_time*1000:.1f}ms, "
+                   f"파일체크: {file_check_time*1000:.1f}ms, "
+                   f"링크생성: {link_time*1000:.1f}ms, "
+                   f"라벨업데이트: {label_update_time*1000:.1f}ms, "
+                   f"저장: {save_time*1000:.1f}ms")
         
         log_access_row(tag="ACTION", note=f"배치 분류: {len(results)}개 성공, {len(errors)}개 실패 -> {class_name}")
         
