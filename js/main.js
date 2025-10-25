@@ -6769,86 +6769,48 @@ class WaferMapViewer {
                         return;
                     }
 
-                    // 🔥 즉시 시각적 피드백 (반응성 향상)
+                    // 🔥 즉시 성공 피드백 (연두색)
                     const originalBg = btn.style.background;
                     const originalTransition = btn.style.transition;
                     btn.style.transition = 'all 0.2s ease';
-                    btn.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'; // 세련된 보라색 그라데이션
+                    btn.style.background = 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)';
 
-                    // 🔥 현재 폴더 파라미터 추가
+                    // 🔥 색상 복원 (500ms 후)
+                    setTimeout(() => {
+                        btn.style.background = originalBg;
+                        btn.style.transition = originalTransition;
+                    }, 500);
+
+                    // 🔥 백그라운드에서 API 처리 (await 제거 - 비동기)
                     const currentFolder = this.currentFolderPrefix;
                     const apiUrl = currentFolder ? `/api/classify/batch?folder=${encodeURIComponent(currentFolder)}` : '/api/classify/batch';
 
-                    try {
-                        const response = await fetch(apiUrl, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ class_name: cls, images: imagePaths })
-                        });
-
+                    fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ class_name: cls, images: imagePaths })
+                    }).then(response => {
                         if (!response.ok) {
-                            const errorText = await response.text();
-                            console.error('❌ 라벨 추가 실패:', response.status, errorText);
-                            alert(`라벨 추가 실패: ${response.status} ${response.statusText}\n${errorText}`);
-                            btn.style.background = originalBg;
-                            btn.style.transition = originalTransition;
-                            return;
+                            return response.text().then(errorText => {
+                                console.error('❌ 라벨 추가 실패:', response.status, errorText);
+                            });
                         }
-
-                        const result = await response.json();
-
-                        // 🔥 에러 체크
-                        if (result.success && result.processed === 0) {
-                            console.warn('⚠️ 경고: 서버에서 실제로 처리된 파일이 0개입니다!');
-                            if (result.error_details && result.error_details.length > 0) {
-                                console.error('❌ 에러 상세:', result.error_details);
-                                alert(`라벨 추가 실패!\n\n에러 상세:\n${result.error_details.join('\n')}`);
-                                btn.style.background = originalBg;
-                                btn.style.transition = originalTransition;
-                                return;
-                            }
-                        }
-
-                        if (result.errors && result.errors > 0 && result.error_details && result.error_details.length > 0) {
+                        return response.json();
+                    }).then(result => {
+                        if (result && result.errors && result.errors > 0) {
                             console.warn(`⚠️ ${result.errors}개 파일 처리 실패`);
-                            console.error('❌ 에러 상세:', result.error_details);
                         }
 
-                        // 성공 피드백 - 세련된 녹색 그라데이션
-                        btn.style.background = 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)';
-
-                        // 🔥 UI 업데이트를 먼저 수행 (색상 복원과 분리)
+                        // 단일 이미지 모드: 백그라운드 업데이트
                         if (!this.gridMode && this.selectedImagePath) {
-                            // 단일 이미지 모드: 캐시 완전 초기화 + 강제 새로고침
-                            this.classToImgListCache = {};
-                            this.refreshLabelExplorer();
                             setTimeout(() => {
                                 this.classToImgListCache = {};
                                 this.refreshLabelExplorer();
-                            }, 200);
-                        } else if (this.gridMode && this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0) {
-                            // 🔥 Grid 모드: 아무것도 안함 (Label Explorer 업데이트 불필요)
-                        } else {
-                            // 기타 경우: 기본 새로고침
-                            this.refreshLabelExplorer();
-                            setTimeout(() => {
-                                this.classToImgListCache = {};
-                                this.refreshLabelExplorer();
-                            }, 100);
+                            }, 0);
                         }
-
-                        // 🔥 색상 복원만 빠르게 처리 (100ms)
-                        setTimeout(() => {
-                            btn.style.background = originalBg;
-                            btn.style.transition = originalTransition;
-                        }, 100);
-
-                    } catch (error) {
+                    }).catch(error => {
                         console.error('❌ 라벨 추가 중 오류:', error);
-                        btn.style.background = originalBg;
-                        btn.style.transition = originalTransition;
-                        alert('라벨 추가 중 오류가 발생했습니다.');
-                    }
+                    });
 
                     return;
                 }
