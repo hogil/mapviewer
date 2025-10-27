@@ -3157,12 +3157,6 @@ class WaferMapViewer {
             const userInfoEl = document.getElementById('user-info');
             if (!userInfoEl) return;
             
-            // 🔥 이미 표시된 사용자 정보가 있으면 업데이트하지 않음 (공백 값 덮어쓰기 방지)
-            if (userInfoEl.innerHTML.trim()) {
-                console.log('[DEBUG] 사용자 정보 이미 표시됨 - 업데이트 스킵');
-                return;
-            }
-            
             // URL 파라미터에서 사용자 정보 직접 추출 (멀티워커 세션 격리 문제 해결)
             const urlParams = new URLSearchParams(window.location.search);
             const LoginId = urlParams.get('LoginId');
@@ -3172,10 +3166,14 @@ class WaferMapViewer {
             
             // SAML 인증 성공 정보가 URL에 있으면 직접 표시 (API 호출 불필요)
             if (samlSuccess === 'true' && LoginId && Username) {
-                userInfoEl.innerHTML = `
-                    <div style="font-weight: 600;">${LoginId}(${Username})</div>
-                    <div style="font-size: 10px; color: #666;">${DeptName || 'Anonymous'}</div>
-                `;
+                const newInfo = `${LoginId}(${Username})`;
+                // 🔥 이미 표시된 사용자 정보와 같으면 스킵 (공백 값 덮어쓰기 방지)
+                if (!userInfoEl.innerHTML.includes(newInfo)) {
+                    userInfoEl.innerHTML = `
+                        <div style="font-weight: 600;">${LoginId}(${Username})</div>
+                        <div style="font-size: 10px; color: #666;">${DeptName || 'Anonymous'}</div>
+                    `;
+                }
                 return;
             }
 
@@ -3186,10 +3184,14 @@ class WaferMapViewer {
 
             // API로부터 인증 정보를 받은 경우에만 표시 (공백이 아닐 때만)
             if (data.authenticated && data.LoginId && data.Username) {
-                userInfoEl.innerHTML = `
-                    <div style="font-weight: 600;">${data.LoginId}(${data.Username})</div>
-                    <div style="font-size: 10px; color: #666;">${data.DeptName || 'Anonymous'}</div>
-                `;
+                const newInfo = `${data.LoginId}(${data.Username})`;
+                // 🔥 이미 표시된 사용자 정보와 같으면 스킵 (공백 값 덮어쓰기 방지)
+                if (!userInfoEl.innerHTML.includes(newInfo)) {
+                    userInfoEl.innerHTML = `
+                        <div style="font-weight: 600;">${data.LoginId}(${data.Username})</div>
+                        <div style="font-size: 10px; color: #666;">${data.DeptName || 'Anonymous'}</div>
+                    `;
+                }
             }
             // 인증 정보가 없으면 아무것도 표시하지 않음 (Guest fallback 제거)
         } catch (error) {
