@@ -506,6 +506,7 @@ class AccessLogger:
         
         # 🔥 1. meta에서 LoginId 추출 시도
         if meta and isinstance(meta, dict):
+            print(f"[STATS DEBUG] meta 수신됨: {meta}")
             LoginId = meta.get("LoginId")
             if LoginId:
                 # SAML profile 정보 저장 (7개 필드만)
@@ -513,6 +514,7 @@ class AccessLogger:
                     value = meta.get(field)
                     if value:
                         profile_meta[field] = value
+                print(f"[STATS DEBUG] profile_meta 추출됨: {profile_meta}")
 
         # 🔥 2. meta가 없으면 user_id_override 사용 (쿠키에서 온 LoginId)
         if not LoginId and user_id_override:
