@@ -2835,32 +2835,20 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
 
         loop = asyncio.get_running_loop()
         is_complex = _is_complex_query(query)
-        if is_complex:
-            logical_start = time.perf_counter()
-            logical_hits = await loop.run_in_executor(
-                IO_POOL,
-                _evaluate_logical_query,
-                keys_slice,
-                query,
-                goal
-            )
-            bucket.extend(logical_hits)
-            timings["logical_eval_ms"] = round((time.perf_counter() - logical_start) * 1000, 3)
-            timings["index_executor_ms"] = 0.0
-            timings["index_hit_count"] = len(logical_hits)
-        else:
-            search_start = time.perf_counter()
-            index_hits = await loop.run_in_executor(
-                IO_POOL,
-                _search_index_slice_parallel,
-                keys_slice,
-                query,
-                goal,
-                config.SEARCH_WORKERS
-            )
-            bucket.extend(index_hits)
-            timings["index_executor_ms"] = round((time.perf_counter() - search_start) * 1000, 3)
-            timings["index_hit_count"] = len(index_hits)
+        search_start = time.perf_counter()
+        index_hits = await loop.run_in_executor(
+            IO_POOL,
+            _search_index_slice_parallel,
+            keys_slice,
+            query,
+            goal,
+            config.SEARCH_WORKERS
+        )
+        elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
+        bucket.extend(index_hits)
+        timings["index_executor_ms"] = elapsed_ms
+        timings["index_hit_count"] = len(index_hits)
+        timings["logical_eval_ms"] = elapsed_ms if is_complex else 0.0
         timings["search_workers"] = config.SEARCH_WORKERS
         timings["fallback_invoked"] = False
         timings["fallback_goal"] = 0

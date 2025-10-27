@@ -25,6 +25,7 @@ export IO_THREADS="160"                  # 중간값 (256→64→160) - I/O 병�
 export THUMBNAIL_SEM="288"               # 중간값 (512→64→288) - 동시 썸네일 생성
 export THUMB_PREFETCH_BATCH="64"
 export THUMB_CLIENT_MAX_CONCURRENCY="12"
+export SEARCH_WORKERS="16"               # 검색 병렬 워커 수 (32코어 기준, 논리 검색 가속)
 
 # libvips 최적화 (웹서버 환경)
 export VIPS_CONCURRENCY="20"             # 중간값 (24→16→20) - 병렬 처리
