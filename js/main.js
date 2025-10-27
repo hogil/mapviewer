@@ -3154,18 +3154,31 @@ class WaferMapViewer {
     // 사용자 정보 로드 및 표시
     async loadUserInfo() {
         try {
-            // URL 파라미터에서 LoginId 추출
+            // URL 파라미터에서 사용자 정보 직접 추출 (멀티워커 세션 격리 문제 해결)
             const urlParams = new URLSearchParams(window.location.search);
             const LoginId = urlParams.get('LoginId');
+            const Username = urlParams.get('Username');
+            const DeptName = urlParams.get('DeptName');
+            const samlSuccess = urlParams.get('saml_success');
 
-            // SAML 로그인 정보 확인 (LoginId 파라미터로)
+            const userInfoEl = document.getElementById('user-info');
+            
+            // SAML 인증 성공 정보가 URL에 있으면 직접 표시 (API 호출 불필요)
+            if (userInfoEl && samlSuccess === 'true' && LoginId && Username) {
+                userInfoEl.innerHTML = `
+                    <div style="font-weight: 600;">${LoginId}(${Username})</div>
+                    <div style="font-size: 10px; color: #666;">${DeptName || 'Anonymous'}</div>
+                `;
+                return;
+            }
+
+            // URL에 정보가 없으면 기존 API 방식 사용 (자동 로그인이나 세션 유지 시)
             const apiUrl = LoginId ? `/api/auth/user?LoginId=${LoginId}` : '/api/auth/user';
             const response = await fetch(apiUrl);
             const data = await response.json();
 
-            const userInfoEl = document.getElementById('user-info');
             if (userInfoEl && data.authenticated && data.LoginId && data.Username) {
-                // SAML 로그인 정보가 있는 경우에만 표시
+                // API로부터 인증 정보를 받은 경우에만 표시
                 userInfoEl.innerHTML = `
                     <div style="font-weight: 600;">${data.LoginId}(${data.Username})</div>
                     <div style="font-size: 10px; color: #666;">${data.DeptName || 'Anonymous'}</div>
