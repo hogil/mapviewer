@@ -2933,6 +2933,20 @@ async def get_breakdown():
     except Exception as e:
         return {"error": str(e), "daily": daily}
 
+# ---------------- Test ----------------
+@app.get("/api/test/dummy-user")
+async def test_dummy_user():
+    """더미 사용자 추가 테스트"""
+    try:
+        from .access_logger import test_add_dummy_user
+        test_add_dummy_user()
+        return {"status": "success", "message": "더미 사용자가 추가되었습니다. stats.json을 확인하세요."}
+    except Exception as e:
+        logger.error(f"테스트 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": str(e)}
+
 # ---------------- Classification ----------------
 @app.post("/api/classify")
 async def classify_images(request: ClassifyRequest,
