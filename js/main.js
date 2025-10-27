@@ -11992,8 +11992,8 @@ async function checkAutoLogin() {
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('saml_success') === 'true') {
             console.log('SAML 로그인 성공 - 재시도 안 함');
-            // URL 파라미터 제거
-            window.history.replaceState({}, '', '/');
+            // URL 파라미터 유지 (새로고침 시에도 사용자 정보 표시를 위해)
+            // window.history.replaceState({}, '', '/');  // 주석 처리
             return;
         }
         
