@@ -990,39 +990,3 @@ class AccessLogger:
 
 # 전역 인스턴스
 logger_instance = AccessLogger()
-
-# 테스트 함수
-def test_add_dummy_user():
-    """더미 사용자 추가 테스트"""
-    dummy_meta = {
-        "LoginId": "test.user@example.com",
-        "Username": "테스트 사용자",
-        "DeptName": "개발팀",
-        "Sabun": "12345",
-        "GrdName_EN": "Developer",
-        "GrdName": "개발자"
-    }
-    
-    # _update_stats를 직접 호출
-    logger_instance._update_stats(
-        ip="192.168.1.100",
-        endpoint="/saml/acs",
-        method="POST",
-        user_id_override=None,
-        meta=dummy_meta
-    )
-    
-    # stats.json에 추가되었는지 확인
-    print(f"\n[TEST] stats.json 확인:")
-    print(f"  - Total users: {len(logger_instance.stats_data['users'])}")
-    print(f"  - Test user exists: {'test.user@example.com' in logger_instance.stats_data['users']}")
-    
-    if "test.user@example.com" in logger_instance.stats_data["users"]:
-        user_data = logger_instance.stats_data["users"]["test.user@example.com"]
-        print(f"  - Profile: {user_data.get('profile', {})}")
-        print(f"  - First seen: {user_data.get('first_seen', 'N/A')}")
-        print(f"  - Total requests: {user_data.get('total_requests', 0)}")
-    
-    # 강제 저장
-    logger_instance._save_stats(force=True)
-    print(f"  - stats.json 저장 완료\n")
