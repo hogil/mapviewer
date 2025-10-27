@@ -542,9 +542,9 @@ class AccessLogger:
                 import traceback
                 traceback.print_exc()
         
-        # 중복 요청 체크 (IP→LoginId 전환 시 중복 방지)
-        # 같은 IP에서 5초 이내에 이미 로그가 있으면 스킵 (SAML 로그인 직후 중복 방지)
-        recent_key = f"{ip}_{endpoint}"
+        # 중복 요청 체크 (LoginId 기준으로 변경 - IP는 공유될 수 있음)
+        # 같은 LoginId에서 5초 이내 같은 endpoint 요청이면 중복으로 간주하고 스킵
+        recent_key = f"{LoginId}_{endpoint}"
         
         if not hasattr(self, '_recent_requests'):
             self._recent_requests = {}
@@ -557,7 +557,7 @@ class AccessLogger:
             self._recent_requests = {k: v for k, v in self._recent_requests.items() if v > cutoff}
             self._last_cache_cleanup = now_unix
         
-        # 같은 IP에서 5초 이내 같은 endpoint 요청이면 중복으로 간주하고 스킵
+        # 같은 LoginId에서 5초 이내 같은 endpoint 요청이면 중복으로 간주하고 스킵
         last_request_time = self._recent_requests.get(recent_key, 0)
         if now_unix - last_request_time < 5.0:
             # 5초 이내 중복 요청 → 스킵
@@ -566,12 +566,6 @@ class AccessLogger:
         self._recent_requests[recent_key] = now_unix
         
         # 🔥 세션 관리는 하지 않음 - stats.json 읽지 않음
-        
-        # 사용자별 통계 (LoginId 기준)
-        # 🔥 profile이 있는 경우만 사용자 생성 (IP 사용자 생성 차단)
-        if not profile_meta or len(profile_meta) == 0:
-            # profile이 없으면 사용자 생성 안 함 (IP 로그 차단)
-            return
         
         # 🔥 stats.json을 읽어서 이전 기록을 누적 (덮어쓰기가 아님)
         if LoginId not in self.stats_data["users"]:
