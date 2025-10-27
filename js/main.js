@@ -3167,12 +3167,17 @@ class WaferMapViewer {
             // SAML 인증 성공 정보가 URL에 있으면 직접 표시 (API 호출 불필요)
             if (samlSuccess === 'true' && LoginId && Username) {
                 const newInfo = `${LoginId}(${Username})`;
+                console.log('[DEBUG] SAML 정보:', { LoginId, Username, DeptName, currentHTML: userInfoEl.innerHTML });
+                
                 // 🔥 이미 표시된 사용자 정보와 같으면 스킵 (공백 값 덮어쓰기 방지)
                 if (!userInfoEl.innerHTML.includes(newInfo)) {
+                    console.log('[DEBUG] 사용자 정보 업데이트:', newInfo);
                     userInfoEl.innerHTML = `
                         <div style="font-weight: 600;">${LoginId}(${Username})</div>
                         <div style="font-size: 10px; color: #666;">${DeptName || 'Anonymous'}</div>
                     `;
+                } else {
+                    console.log('[DEBUG] 사용자 정보 이미 표시됨, 스킵');
                 }
                 return;
             }
