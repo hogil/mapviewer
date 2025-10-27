@@ -326,6 +326,13 @@ FILE_INDEX: Dict[str, Dict[str, Any]] = {}
 FILE_INDEX_LOCK = RLock()
 FILE_INDEX_KEYS: List[str] = []
 
+# 검색 연산자 정규식 패턴 캐싱 (재컴파일 방지로 성능 향상)
+_OPERATOR_PATTERNS = {
+    'and': re.compile(r'\band\b', re.IGNORECASE),
+    'or': re.compile(r'\bor\b', re.IGNORECASE),
+    'not': re.compile(r'\bnot\b', re.IGNORECASE),
+}
+
 def _file_index_clear() -> None:
     with FILE_INDEX_LOCK:
         FILE_INDEX.clear()
@@ -338,18 +345,114 @@ def file_index_set(path: str, meta: Dict[str, Any]) -> None:
         if idx == len(FILE_INDEX_KEYS) or FILE_INDEX_KEYS[idx] != path:
             FILE_INDEX_KEYS.insert(idx, path)
 
+def _matches_search_query(filename_lower: str, query: str) -> bool:
+    """검색 쿼리와 파일명 매칭 (AND/OR/NOT 지원)
+
+    Args:
+        filename_lower: 소문자 파일명
+        query: 검색 쿼리 (소문자, 공백 제거됨)
+
+    Returns:
+        매칭 여부
+    """
+    if not query:
+        return True
+
+    try:
+        return _evaluate_expression(filename_lower, query)
+    except Exception:
+        # 오류 시 기본 포함 검색으로 폴백
+        return query in filename_lower
+
+def _evaluate_expression(filename: str, expression: str) -> bool:
+    """표현식 평가 (괄호, OR 연산자 처리)"""
+    # 괄호 처리 (재귀)
+    while '(' in expression:
+        start = expression.rfind('(')
+        end = expression.find(')', start)
+        if end == -1:
+            break
+
+        sub_expr = expression[start + 1:end]
+        result = _evaluate_expression(filename, sub_expr)
+        expression = expression[:start] + ('1' if result else '0') + expression[end + 1:]
+
+    # OR 연산자로 분할
+    or_terms = _split_by_operator(expression, 'or')
+    if len(or_terms) > 1:
+        return any(_evaluate_and_expression(filename, term.strip()) for term in or_terms)
+
+    return _evaluate_and_expression(filename, expression)
+
+def _evaluate_and_expression(filename: str, expression: str) -> bool:
+    """AND 표현식 평가 (early termination 최적화)"""
+    and_terms = _split_by_operator(expression, 'and')
+    # all()의 short-circuit 평가 활용 (첫 False 발견 시 즉시 중단)
+    for term in and_terms:
+        if not _evaluate_not_expression(filename, term.strip()):
+            return False
+    return True
+
+def _evaluate_not_expression(filename: str, expression: str) -> bool:
+    """NOT 표현식 평가"""
+    if expression.startswith('not '):
+        term = expression[4:].strip()
+        return not _evaluate_basic_term(filename, term)
+    return _evaluate_basic_term(filename, expression)
+
+def _evaluate_basic_term(filename: str, term: str) -> bool:
+    """기본 용어 평가 (포함 검사)"""
+    if not term or term in ('0', '1'):
+        return term == '1'
+    return term in filename
+
+def _split_by_operator(text: str, operator: str) -> List[str]:
+    """연산자로 문자열 분할 (단어 경계 고려)
+
+    최적화: 정규식 사전 컴파일로 성능 향상
+    """
+    pattern = _OPERATOR_PATTERNS.get(operator)
+    if not pattern:
+        # 미리 정의되지 않은 연산자는 런타임 컴파일
+        pattern = re.compile(r'\b' + operator + r'\b', re.IGNORECASE)
+    parts = pattern.split(text)
+    return [p for p in parts if p.strip()]
+
 def _search_index_slice(keys: List[str], query: str, goal: int) -> List[str]:
-    """단일 청크 검색 (병렬 처리의 작업 단위)"""
+    """단일 청크 검색 (병렬 처리의 작업 단위)
+
+    Args:
+        keys: 검색할 키 목록
+        query: 검색 쿼리 (소문자, AND/OR/NOT 지원)
+        goal: 목표 결과 개수
+
+    Returns:
+        매칭된 파일 경로 리스트
+    """
     results: List[str] = []
+
+    # 단순 쿼리 최적화: AND/OR/NOT 없으면 빠른 경로 사용
+    is_simple_query = not any(op in query for op in (' and ', ' or ', ' not ', '(', ')'))
+
     for rel in keys:
         try:
             meta = FILE_INDEX[rel]
         except KeyError:
             continue
-        if query in meta["name_lower"]:
-            results.append(rel)
-            if len(results) >= goal:
-                break
+
+        # 빠른 경로: 단순 포함 검색
+        if is_simple_query:
+            if query in meta["name_lower"]:
+                results.append(rel)
+                if len(results) >= goal:
+                    break
+        # 느린 경로: 표현식 평가
+        else:
+            if _matches_search_query(meta["name_lower"], query):
+                results.append(rel)
+                if len(results) >= goal:
+                    break
+
     return results
 
 def _search_index_slice_parallel(keys: List[str], query: str, goal: int, num_chunks: int = 4) -> List[str]:
@@ -2932,20 +3035,6 @@ async def get_breakdown():
         return {"daily": daily, "monthly": monthly}
     except Exception as e:
         return {"error": str(e), "daily": daily}
-
-# ---------------- Test ----------------
-@app.get("/api/test/dummy-user")
-async def test_dummy_user():
-    """더미 사용자 추가 테스트"""
-    try:
-        from .access_logger import test_add_dummy_user
-        test_add_dummy_user()
-        return {"status": "success", "message": "더미 사용자가 추가되었습니다. stats.json을 확인하세요."}
-    except Exception as e:
-        logger.error(f"테스트 실패: {e}")
-        import traceback
-        traceback.print_exc()
-        return {"status": "error", "message": str(e)}
 
 # ---------------- Classification ----------------
 @app.post("/api/classify")
