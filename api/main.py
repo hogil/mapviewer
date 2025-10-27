@@ -1064,21 +1064,30 @@ async def saml_acs(request: Request):
     except Exception as e:
         bootlog.error(f"❌ [SAML SESSION] 사용자 정보 저장 실패: {e}")
     
-    # 🔥 SAML 로그인 성공 - URL 파라미터로 사용자 정보 전달
+    # 🔥 SAML 로그인 성공 - 사용자 정보 로깅 및 세션 쿠키 설정
     Username = meta.get("Username", "")
     DeptName = meta.get("DeptName", "")
     Sabun = meta.get("Sabun", "")  # 로그용으로만 사용
 
-    # 🔥 보안: Sabun은 URL에 노출하지 않음 (프론트엔드에서 미사용)
-    redirect_url = f"/?saml_success=true&LoginId={LoginId}&Username={Username}&DeptName={DeptName}"
-
     bootlog.info("=" * 100)
     bootlog.info(f"✅ [SAML LOGIN] 로그인 성공 - LoginId={LoginId}, Username={Username}, Sabun={Sabun}, DeptName={DeptName}")
-    bootlog.info(f"✅ [SAML LOGIN] Redirect to: {redirect_url}")
+    bootlog.info(f"✅ [SAML LOGIN] Redirect to: /")
     bootlog.info("=" * 100)
     
     log_access_row(tag="INFO", path="/saml/acs", method="POST", status=302, note=f"SAML 로그인: {LoginId}")
-    return RedirectResponse(redirect_url, status_code=302)
+    response = RedirectResponse("/", status_code=302)
+    try:
+        response.set_cookie(
+            SAML_SESSION_COOKIE_NAME,
+            LoginId,
+            max_age=60 * 60 * 12,  # 12시간
+            httponly=True,
+            secure=config.SSL_ENABLED,
+            samesite="Lax"
+        )
+    except Exception as cookie_err:
+        bootlog.warning(f"⚠️ [SAML LOGIN] 세션 쿠키 설정 실패: {cookie_err}")
+    return response
 
 @app.get("/saml/dev-login")
 async def saml_dev_login(request: Request):
@@ -1098,6 +1107,8 @@ async def saml_dev_login(request: Request):
         else:
             user = "dev-user"
     
+    client_ip = logger_instance.get_client_ip(request)
+
     # 메타데이터를 별도 쿠키에 JSON으로 저장 (7개 허용 필드만 사용)
     meta = {
         "LoginId": request.query_params.get("LoginId") or account,
@@ -1124,8 +1135,7 @@ async def saml_dev_login(request: Request):
         "Sabun": meta.get("Sabun", ""),
     }
 
-    resp = FastAPIResponse(status_code=302)
-    resp.headers["Location"] = "/"
+    resp = RedirectResponse("/", status_code=302)
     
     # 🔥 개발 모드 로그인 - 서버 메모리에 사용자 정보 저장 (LoginId 기준)
     try:
@@ -1144,12 +1154,20 @@ async def saml_dev_login(request: Request):
     DeptName = meta.get("DeptName", "")
     Sabun = meta.get("Sabun", "")  # 로그용으로만 사용
 
-    # 🔥 보안: Sabun은 URL에 노출하지 않음 (프론트엔드에서 미사용)
-    redirect_url = f"/?dev_success=true&LoginId={LoginId}&Username={Username}&DeptName={DeptName}"
-    resp.headers["Location"] = redirect_url
-
     logger.info(f"✅ [DEV LOGIN] 개발 모드 로그인 성공 - LoginId={LoginId}, Username={Username}, Sabun={Sabun}, DeptName={DeptName}")
-    logger.info(f"✅ [DEV LOGIN] Redirect to: {redirect_url}")
+    logger.info(f"✅ [DEV LOGIN] Redirect to: /")
+    if LoginId:
+        try:
+            resp.set_cookie(
+                SAML_SESSION_COOKIE_NAME,
+                LoginId,
+                max_age=60 * 60 * 12,  # 12시간
+                httponly=True,
+                secure=config.SSL_ENABLED,
+                samesite="Lax"
+            )
+        except Exception as cookie_err:
+            logger.warning(f"⚠️ [DEV LOGIN] 세션 쿠키 설정 실패: {cookie_err}")
     
     # detail_access.csv에도 개발 모드 로그인 기록
     try:
@@ -1179,14 +1197,18 @@ async def api_config():
 
 # 🔥 서버 메모리에 SAML 로그인 정보 저장
 SAML_USER_SESSIONS = {}  # {LoginId: user_info}
+SAML_SESSION_COOKIE_NAME = "saml_login_id"
 
 @app.get("/api/auth/user")
 async def api_auth_user(request: Request, LoginId: Optional[str] = None):
     """현재 사용자 정보 반환 - 서버 메모리에서 SAML 로그인 정보 확인"""
     try:
+        cookie_login_id = request.cookies.get(SAML_SESSION_COOKIE_NAME)
+        candidate_login_id = LoginId or cookie_login_id
+
         # LoginId가 제공된 경우 해당 사용자 정보 조회
-        if LoginId and LoginId in SAML_USER_SESSIONS:
-            user_info = SAML_USER_SESSIONS[LoginId]
+        if candidate_login_id and candidate_login_id in SAML_USER_SESSIONS:
+            user_info = SAML_USER_SESSIONS[candidate_login_id]
             
             # SAML 속성들을 프론트엔드로 전달
             saml_attributes = user_info.get("saml_attributes", {})
@@ -2832,7 +2854,8 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
                 end_idx = bisect_right(FILE_INDEX_KEYS, end_key)
                 keys_slice = FILE_INDEX_KEYS[start_idx:end_idx]
             else:
-                keys_slice = list(FILE_INDEX_KEYS)
+                # 인덱스 재구축 중에는 복사본 사용, 평상시에는 원본 리스트를 직접 참조해 오버헤드 최소화
+                keys_slice = list(FILE_INDEX_KEYS) if INDEX_BUILDING else FILE_INDEX_KEYS
 
         timings["prepare_keys_ms"] = round((time.perf_counter() - prepare_start) * 1000, 3)
         timings["keys_considered"] = len(keys_slice)
@@ -3608,14 +3631,17 @@ async def read_root(request: Request):
         # AUTO_LOGIN=True일 때: SAML 인증 완료 후가 아니면 무조건 /saml/login으로 리다이렉트
         # 이렇게 하면 index.html 로드 전에 인증이 완료됨
         if AUTO_LOGIN:
-            # saml_success 파라미터가 없으면 무조건 SAML 로그인으로 리다이렉트
-            # (SAML 인증 완료 후에는 saml_success=true와 함께 리다이렉트됨)
-            if not request.query_params.get("saml_success"):
+            session_login_id = request.cookies.get(SAML_SESSION_COOKIE_NAME)
+            authenticated = bool(session_login_id and session_login_id in SAML_USER_SESSIONS)
+            if not authenticated:
                 logger.info("🔐 [AUTO_LOGIN] SAML 인증 미완료 → /saml/login으로 리다이렉트")
-                return RedirectResponse("/saml/login", status_code=302)
+                redirect = RedirectResponse("/saml/login", status_code=302)
+                if session_login_id and session_login_id not in SAML_USER_SESSIONS:
+                    redirect.delete_cookie(SAML_SESSION_COOKIE_NAME)
+                return redirect
 
             # SAML 인증 완료 후 → index.html 제공
-            logger.info(f"✅ [AUTO_LOGIN] SAML 인증 완료 → index.html 제공")
+            logger.info(f"✅ [AUTO_LOGIN] SAML 인증 완료 → index.html 제공 (LoginId={session_login_id})")
 
         # AUTO_LOGIN=False 또는 SAML 인증 완료 → index.html 제공
         html_path = Path("index.html")

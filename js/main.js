@@ -3159,31 +3159,32 @@ class WaferMapViewer {
             
             // URL 파라미터에서 사용자 정보 직접 추출 (멀티워커 세션 격리 문제 해결)
             const urlParams = new URLSearchParams(window.location.search);
-            const LoginId = urlParams.get('LoginId');
-            const Username = urlParams.get('Username');
-            const DeptName = urlParams.get('DeptName');
+            const loginIdFromUrl = urlParams.get('LoginId');
+            const usernameFromUrl = urlParams.get('Username');
+            const deptNameFromUrl = urlParams.get('DeptName');
             const samlSuccess = urlParams.get('saml_success');
-            
-            // SAML 인증 성공 정보가 URL에 있으면 직접 표시 (API 호출 불필요)
-            if (samlSuccess === 'true' && LoginId && Username) {
-                const newInfo = `${LoginId}(${Username})`;
-                console.log('[DEBUG] SAML 정보:', { LoginId, Username, DeptName, currentHTML: userInfoEl.innerHTML });
-                
-                // 🔥 이미 표시된 사용자 정보와 같으면 스킵 (공백 값 덮어쓰기 방지)
-                if (!userInfoEl.innerHTML.includes(newInfo)) {
-                    console.log('[DEBUG] 사용자 정보 업데이트:', newInfo);
-                    userInfoEl.innerHTML = `
-                        <div style="font-weight: 600;">${LoginId}(${Username})</div>
-                        <div style="font-size: 10px; color: #666;">${DeptName || 'Anonymous'}</div>
-                    `;
-                } else {
-                    console.log('[DEBUG] 사용자 정보 이미 표시됨, 스킵');
-                }
-                return;
+            const devSuccess = urlParams.get('dev_success');
+
+            // 과거 URL 파라미터 방식 호환을 위해 표시하되, 주소창은 정리
+            if ((samlSuccess === 'true' || devSuccess === 'true') && window.history?.replaceState) {
+                window.history.replaceState({}, '', window.location.pathname);
             }
 
-            // URL에 정보가 없으면 기존 API 방식 사용 (자동 로그인이나 세션 유지 시)
-            const apiUrl = LoginId ? `/api/auth/user?LoginId=${LoginId}` : '/api/auth/user';
+            if (samlSuccess === 'true' && loginIdFromUrl && usernameFromUrl) {
+                const newInfo = `${loginIdFromUrl}(${usernameFromUrl})`;
+                console.log('[DEBUG] SAML 정보:', { loginIdFromUrl, usernameFromUrl, deptNameFromUrl, currentHTML: userInfoEl.innerHTML });
+                
+                if (!userInfoEl.innerHTML.includes(newInfo)) {
+                    console.log('[DEBUG] 사용자 정보 업데이트 (URL fallback):', newInfo);
+                    userInfoEl.innerHTML = `
+                        <div style="font-weight: 600;">${loginIdFromUrl}(${usernameFromUrl})</div>
+                        <div style="font-size: 10px; color: #666;">${deptNameFromUrl || 'Anonymous'}</div>
+                    `;
+                }
+            }
+
+            // 서버 세션 기반 사용자 정보 조회
+            const apiUrl = loginIdFromUrl ? `/api/auth/user?LoginId=${encodeURIComponent(loginIdFromUrl)}` : '/api/auth/user';
             const response = await fetch(apiUrl);
             const data = await response.json();
 
@@ -12002,28 +12003,29 @@ if (document.readyState === 'loading') {
 // AUTO_LOGIN 체크 함수
 async function checkAutoLogin() {
     try {
-        // 🔥 URL 파라미터 확인: SAML 로그인 성공 후에는 재시도 안 함
-        const urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.get('saml_success') === 'true') {
-            console.log('SAML 로그인 성공 - 재시도 안 함');
-            // URL 파라미터 유지 (새로고침 시에도 사용자 정보 표시를 위해)
-            // window.history.replaceState({}, '', '/');  // 주석 처리
-            return;
-        }
-        
         // 서버 설정 확인
         const configResponse = await fetch('/api/config');
         const config = await configResponse.json();
+
+        if (!config.AUTO_LOGIN) {
+            return;
+        }
+
+        // 이미 인증된 세션이 있는지 확인
+        const authResponse = await fetch('/api/auth/user');
+        const authData = await authResponse.json();
+        if (authData.authenticated) {
+            console.log('AUTO_LOGIN 활성화 - 기존 SAML 세션 감지, 재로그인 건너뜀');
+            return;
+        }
         
         // AUTO_LOGIN이 활성화되어 있으면 자동으로 /saml/login 호출
-        if (config.AUTO_LOGIN) {
-            console.log('AUTO_LOGIN 활성화 - 자동 SAML 로그인 시작');
-            const loginUrl = config.DEFAULT_ORG_URL 
-                ? `/saml/login?org_url=${config.DEFAULT_ORG_URL}` 
-                : '/saml/login';
-            // 🔥 페이지를 완전히 새로고침하여 이전 JavaScript 상태를 제거
-            window.location.replace(loginUrl);
-        }
+        console.log('AUTO_LOGIN 활성화 - 자동 SAML 로그인 시작');
+        const loginUrl = config.DEFAULT_ORG_URL 
+            ? `/saml/login?org_url=${config.DEFAULT_ORG_URL}` 
+            : '/saml/login';
+        // 🔥 페이지를 완전히 새로고침하여 이전 JavaScript 상태를 제거
+        window.location.replace(loginUrl);
     } catch (error) {
         console.error('AUTO_LOGIN 체크 실패:', error);
     }
