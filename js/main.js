@@ -3157,38 +3157,24 @@ class WaferMapViewer {
             // URL 파라미터에서 LoginId 추출
             const urlParams = new URLSearchParams(window.location.search);
             const LoginId = urlParams.get('LoginId');
-            
+
             // SAML 로그인 정보 확인 (LoginId 파라미터로)
             const apiUrl = LoginId ? `/api/auth/user?LoginId=${LoginId}` : '/api/auth/user';
             const response = await fetch(apiUrl);
             const data = await response.json();
 
             const userInfoEl = document.getElementById('user-info');
-            if (userInfoEl) {
-                if (data.authenticated && data.LoginId && data.Username) {
-                    // SAML 로그인 정보가 있는 경우: LoginId(Username) 형식으로 표시
-                    userInfoEl.innerHTML = `
-                        <div style="font-weight: 600;">${data.LoginId}(${data.Username})</div>
-                        <div style="font-size: 10px; color: #666;">${data.DeptName || 'Anonymous'}</div>
-                    `;
-                } else {
-                    // SAML 로그인 정보가 없는 경우: Guest 표시
-                    userInfoEl.innerHTML = `
-                        <div style="font-weight: 600;">Guest</div>
-                        <div style="font-size: 10px; color: #666;">Anonymous</div>
-                    `;
-                }
-            }
-        } catch (error) {
-            console.error('[DEBUG] 사용자 정보 로드 오류:', error);
-            // 오류 발생 시에도 Guest로 표시
-            const userInfoEl = document.getElementById('user-info');
-            if (userInfoEl) {
+            if (userInfoEl && data.authenticated && data.LoginId && data.Username) {
+                // SAML 로그인 정보가 있는 경우에만 표시
                 userInfoEl.innerHTML = `
-                    <div style="font-weight: 600;">Guest</div>
-                    <div style="font-size: 10px; color: #666;">Anonymous</div>
+                    <div style="font-weight: 600;">${data.LoginId}(${data.Username})</div>
+                    <div style="font-size: 10px; color: #666;">${data.DeptName || 'Anonymous'}</div>
                 `;
             }
+            // 인증 정보가 없으면 아무것도 표시하지 않음 (Guest fallback 제거)
+        } catch (error) {
+            console.error('[DEBUG] 사용자 정보 로드 오류:', error);
+            // 오류 발생 시에도 아무것도 표시하지 않음
         }
     }
 
@@ -11431,30 +11417,37 @@ class WaferMapViewer {
             this.contextMenuJustShown = false;
             return;
         }
-        
+
         if (!this.gridSelectedIdxs) this.gridSelectedIdxs = [];
-        
+        if (!this.gridSelectedSet) this.gridSelectedSet = new Set();
+
         const isCtrl = e && (e.ctrlKey || e.metaKey);
         const isShift = e && e.shiftKey;
-        
+
         if (isShift && this.gridLastClickedIdx !== undefined) {
             // Shift+클릭: 범위 선택
             const [from, to] = [this.gridLastClickedIdx, idx].sort((a, b) => a - b);
             const range = [];
-            for (let i = from; i <= to; ++i) range.push(i);
+            for (let i = from; i <= to; ++i) {
+                range.push(i);
+                this.gridSelectedSet.add(i);
+            }
             this.gridSelectedIdxs = Array.from(new Set([...this.gridSelectedIdxs, ...range]));
         } else if (isCtrl) {
             // Ctrl/Cmd+클릭: 토글 선택 (추가/제거)
             if (this.gridSelectedIdxs.includes(idx)) {
                 this.gridSelectedIdxs = this.gridSelectedIdxs.filter(i => i !== idx);
+                this.gridSelectedSet.delete(idx);
             } else {
                 this.gridSelectedIdxs.push(idx);
+                this.gridSelectedSet.add(idx);
             }
         } else {
             // 단일 클릭: 기존 선택 해제하고 현재 항목만 선택
             this.gridSelectedIdxs = [idx];
+            this.gridSelectedSet = new Set([idx]);
         }
-        
+
         this.gridLastClickedIdx = idx;
         this.updateGridSelection();
     }

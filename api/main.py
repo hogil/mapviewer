@@ -986,7 +986,7 @@ async def api_auth_user(request: Request, LoginId: Optional[str] = None):
         
     except Exception as e:
         logger.error(f"❌ [API /auth/user] 오류 발생: {e}")
-        # 오류 발생 시 Guest 반환
+        # 오류 발생 시 빈 인증 정보 반환
         return {
             "authenticated": False,
             "LoginId": "",
@@ -3247,7 +3247,7 @@ app.mount("/static", StaticFiles(directory="."), name="static")
 async def read_root(request: Request):
     try:
         # AUTO_LOGIN=True일 때: SAML 인증 완료 후가 아니면 무조건 /saml/login으로 리다이렉트
-        # 이렇게 하면 index.html 로드 전에 인증이 완료되어 Guest가 절대 나오지 않음
+        # 이렇게 하면 index.html 로드 전에 인증이 완료됨
         if AUTO_LOGIN:
             # saml_success 파라미터가 없으면 무조건 SAML 로그인으로 리다이렉트
             # (SAML 인증 완료 후에는 saml_success=true와 함께 리다이렉트됨)
