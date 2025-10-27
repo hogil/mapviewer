@@ -31,6 +31,15 @@ $env:VIPS_MAX_CACHE_MEM="536870912"     # libvips 캐시 메모리 (512MB)
 $env:VIPS_MAX_CACHE_FILES="200"         # 열린 파일 캐시
 $env:VIPS_DISC_THRESHOLD="500m"         # 디스크 스필 기준 (RAM 디스크/SSD 사용 시 안전치)
 
+# 검색 폴백 비활성화 (인덱스 결과만 사용)
+$env:SEARCH_FALLBACK_LIMIT="0"          # 0=폴백 결과 제한 없음(실제로 폴백 비활성화)
+$env:SEARCH_FALLBACK_MAX_FILES="0"      # 0=폴백 탐색 비활성화
+$env:SEARCH_FALLBACK_TIMEOUT_MS="0"     # 0=시간 제한 없음
+
+# 인덱스 구축 워커 수 (병렬 디렉터리 스캔 가속)
+$env:INDEX_WORKERS="32"                # CPU/디스크 상황에 맞게 조정 (예: 16~48)
+$env:INDEX_REFRESH_INTERVAL_MINUTES="30" # 파일 인덱스 자동 재빌드 간격(분)
+
 # 이미지 피라미드 설정
 # 2025-10-23: 피라미드 썸네일 품질 및 속도 최적화
 # - PYRAMID_Q: 95→100 (그리드 썸네일과 동일한 최고 품질)

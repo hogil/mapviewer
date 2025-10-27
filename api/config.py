@@ -20,6 +20,11 @@ CPU_COUNT = os.cpu_count() or 8
 IO_THREADS = int(os.getenv("IO_THREADS", "0")) or max(16, CPU_COUNT * 2)   # Ubuntu 24 최적화: CPU * 2
 THUMBNAIL_SEM = int(os.getenv("THUMBNAIL_SEM", "128"))                     # Ubuntu 24 최적화: 128로 증가
 SEARCH_WORKERS = int(os.getenv("SEARCH_WORKERS", "4"))                     # 검색 병렬 워커 수 (기본: 4)
+SEARCH_FALLBACK_LIMIT = int(os.getenv("SEARCH_FALLBACK_LIMIT", "2000"))    # 폴백 시 최대 반환 대상 수
+SEARCH_FALLBACK_MAX_FILES = int(os.getenv("SEARCH_FALLBACK_MAX_FILES", "200000"))  # 폴백에서 스캔할 최대 파일 수
+SEARCH_FALLBACK_TIMEOUT_MS = int(os.getenv("SEARCH_FALLBACK_TIMEOUT_MS", "4000"))  # 폴백 타임아웃(ms)
+INDEX_WORKERS = int(os.getenv("INDEX_WORKERS", str(max(4, (os.cpu_count() or 8) // 2))))  # 파일 인덱싱 병렬 워커 수
+INDEX_REFRESH_INTERVAL_MINUTES = int(os.getenv("INDEX_REFRESH_INTERVAL_MINUTES", "30"))   # 인덱스 자동 재빌드 주기(분). 0이면 비활성화
 
 # 캐시 크기/TTL
 DIRLIST_CACHE_SIZE = int(os.getenv("DIRLIST_CACHE_SIZE", "1024"))

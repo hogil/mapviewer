@@ -3,10 +3,10 @@ L3Tracker - Wafer Map Viewer API (HTTPS, Pretty Table Logs, Noise-free)
 """
 
 # ======================== Imports ========================
-import os, re, sys, json, time, shutil, asyncio, logging, logging.config, hashlib
+import os, re, sys, json, time, shutil, asyncio, logging, logging.config, hashlib, queue, threading
 from pathlib import Path
 from contextlib import contextmanager
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Set
 from collections import OrderedDict
 from bisect import bisect_left, bisect_right
 from threading import RLock, Lock
@@ -305,6 +305,7 @@ THUMBNAIL_SEM_SIZE = config.THUMBNAIL_SEM
 DIRLIST_CACHE_SIZE = config.DIRLIST_CACHE_SIZE
 THUMB_STAT_TTL_SECONDS = config.THUMB_STAT_TTL_SECONDS
 THUMB_STAT_CACHE_CAPACITY = config.THUMB_STAT_CACHE_CAPACITY
+INDEX_REFRESH_INTERVAL_SECONDS = max(0, config.INDEX_REFRESH_INTERVAL_MINUTES) * 60
 
 SKIP_DIRS = {d.strip() for d in config.SKIP_DIRS if d.strip()}
 
@@ -321,10 +322,16 @@ USER_ACTIVITY_FLAG = False
 BACKGROUND_TASKS_PAUSED = False
 INDEX_BUILDING = False
 INDEX_READY = False
+INDEX_REFRESH_TASK: Optional[asyncio.Task] = None
 
 FILE_INDEX: Dict[str, Dict[str, Any]] = {}
 FILE_INDEX_LOCK = RLock()
 FILE_INDEX_KEYS: List[str] = []
+INDEX_TOTAL_FILES = 0
+INDEX_TOTAL_DIRS = 0
+INDEX_COMPLETED_DIRS = 0
+INDEX_BUILD_STARTED_AT = 0.0
+INDEX_BUILD_COMPLETED_AT = 0.0
 
 # 검색 연산자 정규식 패턴 캐싱 (재컴파일 방지로 성능 향상)
 _OPERATOR_PATTERNS = {
@@ -332,6 +339,9 @@ _OPERATOR_PATTERNS = {
     'or': re.compile(r'\bor\b', re.IGNORECASE),
     'not': re.compile(r'\bnot\b', re.IGNORECASE),
 }
+
+_LOGICAL_OPERATORS = {"and", "or", "not"}
+_LOGICAL_PRECEDENCE = {"or": 1, "and": 2, "not": 3}
 
 def _file_index_clear() -> None:
     with FILE_INDEX_LOCK:
@@ -363,6 +373,123 @@ def _matches_search_query(filename_lower: str, query: str) -> bool:
     except Exception:
         # 오류 시 기본 포함 검색으로 폴백
         return query in filename_lower
+
+
+def _tokenize_logical_query(query: str) -> List[str]:
+    tokens: List[str] = []
+    i = 0
+    length = len(query)
+    while i < length:
+        ch = query[i]
+        if ch in ("(", ")"):
+            tokens.append(ch)
+            i += 1
+            continue
+        if ch.isspace():
+            i += 1
+            continue
+        j = i
+        while j < length and query[j] not in ("(", ")") and not query[j].isspace():
+            j += 1
+        token = query[i:j].strip().lower()
+        if token:
+            tokens.append(token)
+        i = j
+    return tokens
+
+
+def _is_complex_query(query: str) -> bool:
+    tokens = _tokenize_logical_query(query)
+    return any(tok in _LOGICAL_OPERATORS or tok in ("(", ")") for tok in tokens)
+
+
+def _logical_to_postfix(tokens: List[str]) -> List[str]:
+    output: List[str] = []
+    stack: List[str] = []
+    for token in tokens:
+        if token == "(":
+            stack.append(token)
+        elif token == ")":
+            while stack and stack[-1] != "(":
+                output.append(stack.pop())
+            if stack and stack[-1] == "(":
+                stack.pop()
+        elif token in _LOGICAL_OPERATORS:
+            while stack and stack[-1] in _LOGICAL_OPERATORS:
+                top = stack[-1]
+                if token == "not":
+                    if _LOGICAL_PRECEDENCE[top] > _LOGICAL_PRECEDENCE[token]:
+                        output.append(stack.pop())
+                    else:
+                        break
+                else:
+                    if _LOGICAL_PRECEDENCE[top] >= _LOGICAL_PRECEDENCE[token]:
+                        output.append(stack.pop())
+                    else:
+                        break
+            stack.append(token)
+        else:
+            output.append(token)
+    while stack:
+        output.append(stack.pop())
+    return output
+
+
+def _collect_term_hits(keys_slice: List[str], tokens: List[str]) -> Dict[str, Set[str]]:
+    unique_terms = [
+        token for token in tokens
+        if token and token not in _LOGICAL_OPERATORS and token not in ("(", ")")
+    ]
+    unique_terms = list(dict.fromkeys(unique_terms))
+    term_hits: Dict[str, Set[str]] = {term: set() for term in unique_terms}
+    if not term_hits:
+        return term_hits
+    for rel in keys_slice:
+        try:
+            meta = FILE_INDEX.get(rel) or {}
+            name_lower = meta.get("name_lower")
+            if not name_lower:
+                name_lower = Path(rel).name.lower()
+        except Exception:
+            name_lower = rel.lower()
+        for term in unique_terms:
+            if term in name_lower:
+                term_hits[term].add(rel)
+    return term_hits
+
+
+def _evaluate_logical_query(keys_slice: List[str], query: str, limit: int) -> List[str]:
+    tokens = _tokenize_logical_query(query)
+    postfix = _logical_to_postfix(tokens)
+    term_hits = _collect_term_hits(keys_slice, tokens)
+    universe: Optional[Set[str]] = None
+    if "not" in postfix:
+        universe = set(keys_slice)
+    stack: List[Set[str]] = []
+    for token in postfix:
+        if token in _LOGICAL_OPERATORS:
+            if token == "not":
+                operand = stack.pop() if stack else set()
+                if universe is None:
+                    universe = set(keys_slice)
+                stack.append(universe - operand)
+            else:
+                right = stack.pop() if stack else set()
+                left = stack.pop() if stack else set()
+                if token == "and":
+                    stack.append(left & right)
+                else:
+                    stack.append(left | right)
+        else:
+            stack.append(set(term_hits.get(token, set())))
+    result_set = stack.pop() if stack else set()
+    ordered_hits: List[str] = []
+    for rel in keys_slice:
+        if rel in result_set:
+            ordered_hits.append(rel)
+            if limit and len(ordered_hits) >= limit:
+                break
+    return ordered_hits
 
 def _evaluate_expression(filename: str, expression: str) -> bool:
     """표현식 평가 (괄호, OR 연산자 처리)"""
@@ -1426,31 +1553,120 @@ async def build_file_index_background():
     INDEX_BUILDING, INDEX_READY = True, False
 
     def _walk_and_index():
-        global INDEX_READY
+        global INDEX_READY, INDEX_TOTAL_FILES, INDEX_TOTAL_DIRS, INDEX_COMPLETED_DIRS, INDEX_BUILD_STARTED_AT, INDEX_BUILD_COMPLETED_AT
+
         start = time.time()
+        INDEX_BUILD_STARTED_AT = start
+        INDEX_BUILD_COMPLETED_AT = 0.0
+        INDEX_COMPLETED_DIRS = 0
+        INDEX_TOTAL_FILES = 0
+        INDEX_TOTAL_DIRS = 1  # ROOT_DIR 포함
         _file_index_clear()
-        for root, dirs, files in os.walk(ROOT_DIR):
-            if BACKGROUND_TASKS_PAUSED or USER_ACTIVITY_FLAG: time.sleep(0.1)
-            for skip in list(SKIP_DIRS):
-                if skip in dirs: dirs.remove(skip)
-            for fn in files:
-                if os.path.splitext(fn)[1].lower() not in SUPPORTED_EXTENSIONS: continue
-                full = Path(root) / fn
-                try: rel = str(full.relative_to(ROOT_DIR)).replace("\\", "/")
-                except Exception: continue
+
+        root_path = str(ROOT_DIR.resolve())
+        task_queue: "queue.Queue[str]" = queue.Queue()
+        task_queue.put(root_path)
+        seen_dirs = {root_path}
+        skip_dirs = set(SKIP_DIRS)
+        stats_lock = Lock()
+
+        def enqueue_dir(path: str) -> None:
+            global INDEX_TOTAL_DIRS
+            with stats_lock:
+                if path not in seen_dirs:
+                    seen_dirs.add(path)
+                    INDEX_TOTAL_DIRS += 1
+                    task_queue.put(path)
+
+        def worker() -> None:
+            global INDEX_COMPLETED_DIRS
+            while True:
                 try:
-                    st = full.stat()
-                    rec = {"name_lower": fn.lower(), "size": st.st_size, "modified": st.st_mtime}
-                    file_index_set(rel, rec)
-                except Exception:
-                    continue
-            time.sleep(0.001)
+                    current_dir = task_queue.get(timeout=0.1)
+                except queue.Empty:
+                    return
+
+                if BACKGROUND_TASKS_PAUSED or USER_ACTIVITY_FLAG:
+                    time.sleep(0.05)
+
+                try:
+                    with os.scandir(current_dir) as it:
+                        for entry in it:
+                            try:
+                                if entry.is_dir(follow_symlinks=False):
+                                    if entry.name in skip_dirs:
+                                        continue
+                                    enqueue_dir(entry.path)
+                                    continue
+
+                                if not entry.is_file(follow_symlinks=False):
+                                    continue
+
+                                rel_path = os.path.relpath(entry.path, ROOT_DIR)
+                                rel_path = rel_path.replace("\\", "/")
+                                name_lower = entry.name.lower()
+
+                                try:
+                                    st = entry.stat(follow_symlinks=False)
+                                    meta = {
+                                        "name_lower": name_lower,
+                                        "size": st.st_size,
+                                        "modified": st.st_mtime,
+                                    }
+                                except Exception:
+                                    meta = {"name_lower": name_lower}
+
+                                file_index_set(rel_path, meta)
+                            except Exception:
+                                continue
+                except Exception as exc:
+                    logger.debug(f"[INDEX] 디렉터리 스캔 중 오류: {exc}")
+                finally:
+                    with stats_lock:
+                        INDEX_COMPLETED_DIRS += 1
+                    task_queue.task_done()
+
+        workers = max(4, config.INDEX_WORKERS)
+        threads = [threading.Thread(target=worker, daemon=True) for _ in range(workers)]
+        for t in threads:
+            t.start()
+
+        task_queue.join()
+
+        for t in threads:
+            t.join(timeout=0.1)
+
+        INDEX_TOTAL_FILES = len(FILE_INDEX_KEYS)
         INDEX_READY = True
+        INDEX_BUILD_COMPLETED_AT = time.time()
 
     try:
         await asyncio.get_running_loop().run_in_executor(ThreadPoolExecutor(max_workers=1), _walk_and_index)
     finally:
         INDEX_BUILDING = False
+
+async def _index_refresh_loop(interval_seconds: int) -> None:
+    global INDEX_REFRESH_TASK
+    try:
+        while True:
+            await asyncio.sleep(interval_seconds)
+            while BACKGROUND_TASKS_PAUSED or USER_ACTIVITY_FLAG:
+                await asyncio.sleep(1)
+            if INDEX_BUILDING:
+                logger.debug("[INDEX] 자동 재빌드 건너뜀 (이미 실행 중)")
+                continue
+            logger.info("🔁 [INDEX] 자동 재빌드 시작")
+            try:
+                await build_file_index_background()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("[INDEX] 자동 재빌드 실패: %s", exc)
+    except asyncio.CancelledError:
+        logger.info("🛑 [INDEX] 자동 재빌드 루프 종료")
+        raise
+    finally:
+        INDEX_REFRESH_TASK = None
 
 # ======================== Thumbnails / Common ========================
 def _save_with_turbojpeg(vips_image, thumbnail_path: str, quality: int) -> bool:
@@ -2542,16 +2758,49 @@ async def preload_thumbnails(request: Request, preload_req: PreloadRequest):
         logger.exception(f"썸네일 preload 실패: {e}")
         raise HTTPException(status_code=500, detail=f"Preload failed: {str(e)}")
 
+
+@app.get("/api/index/status")
+async def get_index_status():
+    with FILE_INDEX_LOCK:
+        indexed = len(FILE_INDEX_KEYS)
+    percent = None
+    if INDEX_TOTAL_DIRS:
+        percent = round((INDEX_COMPLETED_DIRS / INDEX_TOTAL_DIRS) * 100, 2)
+    duration = None
+    if INDEX_BUILD_COMPLETED_AT and INDEX_BUILD_STARTED_AT:
+        duration = INDEX_BUILD_COMPLETED_AT - INDEX_BUILD_STARTED_AT
+    return {
+        "indexed_files": indexed,
+        "index_ready": INDEX_READY,
+        "index_building": INDEX_BUILDING,
+        "indexed_directories": INDEX_COMPLETED_DIRS,
+        "total_directories": INDEX_TOTAL_DIRS,
+        "progress_percent": percent,
+        "build_duration_sec": duration,
+        "build_started_at": INDEX_BUILD_STARTED_AT,
+        "build_completed_at": INDEX_BUILD_COMPLETED_AT,
+        "timestamp": time.time()
+    }
+
 @app.get("/api/search")
 async def search_files(q: str = Query(..., description="파일명 검색(대소문자 무시, 부분일치)"),
                        limit: int = Query(500, ge=1, le=5000),
                        offset: int = Query(0, ge=0)):
     try:
+        total_start = time.perf_counter()
+        timings: Dict[str, Any] = {}
+
         query = (q or "").strip().lower()
         if not query:
-            return {"success": True, "results": [], "offset": offset, "limit": limit}
+            timings["total_ms"] = round((time.perf_counter() - total_start) * 1000, 3)
+            timings["early_exit"] = True
+            return {"success": True, "results": [], "offset": offset, "limit": limit, "timings": timings}
 
         goal = offset + limit
+        fallback_enabled = config.SEARCH_FALLBACK_LIMIT > 0
+        fallback_goal = goal
+        if fallback_enabled:
+            fallback_goal = min(goal, offset + config.SEARCH_FALLBACK_LIMIT)
         bucket: List[str] = []
 
         # 🔍 current_folder 기준 루트 계산
@@ -2574,6 +2823,7 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
         prefix_with_sep = prefix.rstrip('/') + '/' if prefix else ""
 
         # 📚 인덱스 기반 1차 검색
+        prepare_start = time.perf_counter()
         with FILE_INDEX_LOCK:
             if prefix:
                 start_key = prefix_with_sep
@@ -2584,63 +2834,69 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
             else:
                 keys_slice = list(FILE_INDEX_KEYS)
 
+        timings["prepare_keys_ms"] = round((time.perf_counter() - prepare_start) * 1000, 3)
+        timings["keys_considered"] = len(keys_slice)
+
         loop = asyncio.get_running_loop()
-        # 병렬 검색 사용 (환경변수 SEARCH_WORKERS로 조정 가능, 기본: 4)
-        index_hits = await loop.run_in_executor(
-            IO_POOL,
-            _search_index_slice_parallel,
-            keys_slice,
-            query,
-            goal,
-            config.SEARCH_WORKERS
-        )
-        bucket.extend(index_hits)
-
-        # 🗂️ 인덱스로 부족하면 현재 폴더 직접 스캔
-        if len(bucket) < goal:
-            seen = set(bucket)
-            need = goal - len(bucket)
-
-            def _scan():
-                nonlocal need
-                for root, dirs, files in os.walk(search_root):
-                    for skip in list(SKIP_DIRS):
-                        if skip in dirs: dirs.remove(skip)
-                    for fn in files:
-                        ext = os.path.splitext(fn)[1].lower()
-                        if ext not in SUPPORTED_EXTENSIONS:
-                            continue
-                        low = fn.lower()
-                        if query not in low:
-                            continue
-                        full = Path(root) / fn
-                        try:
-                            rel_to_root = str(full.relative_to(ROOT_DIR)).replace('\\', '/')
-                        except Exception:
-                            continue
-                        if rel_to_root in seen:
-                            continue
-                        seen.add(rel_to_root)
-                        bucket.append(rel_to_root)
-                        try:
-                            st = full.stat()
-                            file_index_set(rel_to_root, {
-                                "name_lower": low,
-                                "size": st.st_size,
-                                "modified": st.st_mtime
-                            })
-                        except Exception:
-                            pass
-                        need -= 1
-                        if need <= 0:
-                            return
-
-            if need > 0:
-                await loop.run_in_executor(IO_POOL, _scan)
-
+        is_complex = _is_complex_query(query)
+        if is_complex:
+            logical_start = time.perf_counter()
+            logical_hits = await loop.run_in_executor(
+                IO_POOL,
+                _evaluate_logical_query,
+                keys_slice,
+                query,
+                goal
+            )
+            bucket.extend(logical_hits)
+            timings["logical_eval_ms"] = round((time.perf_counter() - logical_start) * 1000, 3)
+            timings["index_executor_ms"] = 0.0
+            timings["index_hit_count"] = len(logical_hits)
+        else:
+            search_start = time.perf_counter()
+            index_hits = await loop.run_in_executor(
+                IO_POOL,
+                _search_index_slice_parallel,
+                keys_slice,
+                query,
+                goal,
+                config.SEARCH_WORKERS
+            )
+            bucket.extend(index_hits)
+            timings["index_executor_ms"] = round((time.perf_counter() - search_start) * 1000, 3)
+            timings["index_hit_count"] = len(index_hits)
+        timings["search_workers"] = config.SEARCH_WORKERS
+        timings["fallback_invoked"] = False
+        timings["fallback_goal"] = 0
+        timings["fallback_scan_ms"] = 0.0
+        timings["fallback_files_scanned"] = 0
+        timings["fallback_dirs_scanned"] = 0
+        timings["fallback_new_hits"] = 0
+        timings["fallback_truncated"] = False
+        timings["fallback_max_files"] = 0
+        timings["fallback_timeout_ms"] = 0
+        timings["fallback_remaining_need"] = 0
+        timings["index_rebuild_triggered"] = False
         results = bucket[offset: offset + limit]
 
-        return {"success": True, "results": results, "offset": offset, "limit": limit, "total": len(bucket)}
+        timings["total_candidates"] = len(bucket)
+        timings["results_count"] = len(results)
+        timings["total_ms"] = round((time.perf_counter() - total_start) * 1000, 3)
+
+        logger.info(
+            "SEARCH_TIMING %s",
+            json.dumps(
+                {
+                    "query": query,
+                    "offset": offset,
+                    "limit": limit,
+                    "timings": timings
+                },
+                ensure_ascii=False
+            )
+        )
+
+        return {"success": True, "results": results, "offset": offset, "limit": limit, "total": len(bucket), "timings": timings}
     except Exception as e:
         logger.exception(f"검색 중 오류: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -3559,6 +3815,7 @@ async def browse_folders(path: Optional[str] = None):
 # ======================== Lifecycle ========================
 @app.on_event("startup")
 async def startup_event():
+    global INDEX_REFRESH_TASK
     bootlog = logging.getLogger("uvicorn.error")
     bootlog.info("🚀 L3Tracker 서버 시작 (테이블 로그 시스템)")
     scheme = "HTTPS" if config.SSL_ENABLED else "HTTP"
@@ -3597,10 +3854,23 @@ async def startup_event():
     global CLASSES_MTIME
     CLASSES_MTIME = _classes_stat_mtime()
     asyncio.create_task(build_file_index_background())
+    if INDEX_REFRESH_INTERVAL_SECONDS > 0 and INDEX_REFRESH_TASK is None:
+        interval_minutes = INDEX_REFRESH_INTERVAL_SECONDS // 60 or 1
+        bootlog.info(f"🔁 [INDEX] 자동 재빌드 주기: {interval_minutes}분")
+        INDEX_REFRESH_TASK = asyncio.create_task(_index_refresh_loop(INDEX_REFRESH_INTERVAL_SECONDS))
 
 @app.on_event("shutdown")
 async def shutdown_event():
     logging.getLogger("uvicorn.error").info("🛑 L3Tracker 서버 종료")
+
+    global INDEX_REFRESH_TASK
+    if INDEX_REFRESH_TASK:
+        INDEX_REFRESH_TASK.cancel()
+        try:
+            await INDEX_REFRESH_TASK
+        except asyncio.CancelledError:
+            pass
+        INDEX_REFRESH_TASK = None
 
     try:
         THUMBNAIL_EXECUTOR.shutdown(wait=False, cancel_futures=False)

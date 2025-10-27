@@ -32,6 +32,15 @@ export VIPS_DISC_THRESHOLD="5500m"       # 중간값 (10000m→1000m→5500m) - 
 export VIPS_MAX_CACHE="7000"             # 중간값 (10000→4000→7000) - 캐시 항목 수
 export VIPS_MAX_CACHE_MEM="11024m"       # 중간값 (20000m→2048m→11024m) - 메모리 캐시
 
+# 검색 폴백 비활성화 (인덱스 결과만 활용)
+export SEARCH_FALLBACK_LIMIT="0"          # 0=폴백 결과 제한 없음 → 폴백 비활성화
+export SEARCH_FALLBACK_MAX_FILES="0"      # 0=폴백 탐색 비활성화
+export SEARCH_FALLBACK_TIMEOUT_MS="0"     # 0=시간 제한 없음
+
+# 인덱스 구축 워커 수 (병렬 디렉터리 스캔 가속)
+export INDEX_WORKERS="48"                 # 서버 사양에 맞게 조정 (예: 32~64)
+export INDEX_REFRESH_INTERVAL_MINUTES="30" # 파일 인덱스 자동 재빌드 간격(분)
+
 # Python/시스템 최적화
 export PYTHONUNBUFFERED="1"              # 실시간 로그 출력
 export MALLOC_ARENA_MAX="4"              # 메모리 fragmentation 방지
