@@ -1556,7 +1556,9 @@ async def build_file_index_background():
         INDEX_COMPLETED_DIRS = 0
         INDEX_TOTAL_FILES = 0
         INDEX_TOTAL_DIRS = 1  # ROOT_DIR 포함
-        _file_index_clear()
+
+        new_index: Dict[str, Dict[str, Any]] = {}
+        index_lock = Lock()
 
         root_path = str(ROOT_DIR.resolve())
         task_queue: "queue.Queue[str]" = queue.Queue()
@@ -1601,17 +1603,9 @@ async def build_file_index_background():
                                 rel_path = rel_path.replace("\\", "/")
                                 name_lower = entry.name.lower()
 
-                                try:
-                                    st = entry.stat(follow_symlinks=False)
-                                    meta = {
-                                        "name_lower": name_lower,
-                                        "size": st.st_size,
-                                        "modified": st.st_mtime,
-                                    }
-                                except Exception:
-                                    meta = {"name_lower": name_lower}
-
-                                file_index_set(rel_path, meta)
+                                meta = {"name_lower": name_lower}
+                                with index_lock:
+                                    new_index[rel_path] = meta
                             except Exception:
                                 continue
                 except Exception as exc:
@@ -1631,7 +1625,14 @@ async def build_file_index_background():
         for t in threads:
             t.join(timeout=0.1)
 
-        INDEX_TOTAL_FILES = len(FILE_INDEX_KEYS)
+        sorted_keys = sorted(new_index.keys())
+        with FILE_INDEX_LOCK:
+            FILE_INDEX.clear()
+            FILE_INDEX.update(new_index)
+            FILE_INDEX_KEYS.clear()
+            FILE_INDEX_KEYS.extend(sorted_keys)
+
+        INDEX_TOTAL_FILES = len(sorted_keys)
         INDEX_READY = True
         INDEX_BUILD_COMPLETED_AT = time.time()
 
@@ -2779,7 +2780,7 @@ async def get_index_status():
 
 @app.get("/api/search")
 async def search_files(q: str = Query(..., description="파일명 검색(대소문자 무시, 부분일치)"),
-                       limit: int = Query(500, ge=1, le=5000),
+                       limit: int = Query(2000, ge=1, le=5000),
                        offset: int = Query(0, ge=0)):
     try:
         total_start = time.perf_counter()
