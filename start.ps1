@@ -12,6 +12,8 @@ $env:AUTO_LOGIN="0"      # 0=수동 로그인 (/saml/login 직접 호출)
                          # 1=자동 로그인 (domain 접속 시 자동 리다이렉트) - Ubuntu 사내 서버용
 $env:HOST="0.0.0.0"
 $env:PORT="8080"
+$env:RELOAD="0"          # PowerShell 스크립트 실행 시 uvicorn reload 비활성화 (이중 실행 방지)
+$env:UVICORN_WORKERS="1" # 개발 환경: 단일 워커 (중복 인덱스 방지)
 $env:SSL_ENABLED="1"
 $env:HTTPS_PORT="443"
 $env:SSL_CERTFILE="cert/fullchain.pem"
@@ -20,9 +22,9 @@ $env:THUMBNAIL_SIZE="512"
 $env:THUMBNAIL_FORMAT="JPEG"
 $env:THUMBNAIL_QUALITY="100"
 $env:PNG_COMPRESSION_LEVEL="3"
-$env:IO_THREADS="40"                     # Dev box (8C/64GB)
-$env:SEARCH_WORKERS="4"                  # 검색 병렬 워커 수 (4~8 권장)
-$env:THUMBNAIL_SEM="32"                 # Concurrent thumbnail jobs
+$env:IO_THREADS="80"                     # Dev box (8C/64GB) - I/O 병렬화 2배
+$env:SEARCH_WORKERS="8"                  # 검색 병렬 워커 수 (AND/OR 최적화)
+$env:THUMBNAIL_SEM="48"                 # Concurrent thumbnail jobs
 $env:THUMB_PREFETCH_BATCH="32"          # Prefetch batch size
 $env:THUMB_CLIENT_MAX_CONCURRENCY="10"  # Frontend concurrent loads
 $env:VIPS_CONCURRENCY="12"              # pyvips worker count (동시 PNG 압축 가속)
@@ -37,7 +39,11 @@ $env:SEARCH_FALLBACK_MAX_FILES="0"      # 0=폴백 탐색 비활성화
 $env:SEARCH_FALLBACK_TIMEOUT_MS="0"     # 0=시간 제한 없음
 
 # 인덱스 구축 워커 수 (병렬 디렉터리 스캔 가속)
-$env:INDEX_WORKERS="32"                # CPU/디스크 상황에 맞게 조정 (예: 16~48)
+$cpuCount = [Environment]::ProcessorCount
+$indexWorkers = [Math]::Min(64, [Math]::Max(8, $cpuCount * 2))
+$env:INDEX_WORKERS = $indexWorkers.ToString()  # CPU 수 대비 2배, 최대 64
+$processWorkers = [Math]::Min(16, [Math]::Max(2, [Math]::Floor($cpuCount / 2)))
+$env:INDEX_PROCESS_WORKERS = $processWorkers.ToString()
 $env:INDEX_REFRESH_INTERVAL_MINUTES="30" # 파일 인덱스 자동 재빌드 간격(분)
 
 # 이미지 피라미드 설정

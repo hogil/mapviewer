@@ -7,6 +7,7 @@ export AUTO_LOGIN=True                    # 1=자동SAML로그인강제
 # 서버 설정
 export HOST="0.0.0.0"
 export PORT="8080"
+export UVICORN_WORKERS="1"              # 메인 워커 1개 (인덱스/캐시 공유)
 
 # SSL/TLS 설정
 export SSL_ENABLED="1"
@@ -26,6 +27,7 @@ export THUMBNAIL_SEM="288"               # 중간값 (512→64→288) - 동시 �
 export THUMB_PREFETCH_BATCH="64"
 export THUMB_CLIENT_MAX_CONCURRENCY="12"
 export SEARCH_WORKERS="16"               # 검색 병렬 워커 수 (32코어 기준, 논리 검색 가속)
+export INDEX_PROCESS_WORKERS="16"        # 인덱스 구축 프로세스 풀 워커 수
 
 # libvips 최적화 (웹서버 환경)
 export VIPS_CONCURRENCY="20"             # 중간값 (24→16→20) - 병렬 처리

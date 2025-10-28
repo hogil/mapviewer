@@ -66,6 +66,8 @@ logs/
 tmp/
 temp/
 nul
+.file_index_cache.txt
+.file_index_cache.lock
 
 # Commit history files
 recent_*_commits*.txt
