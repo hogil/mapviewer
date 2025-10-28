@@ -327,6 +327,7 @@ INDEX_REFRESH_TASK: Optional[asyncio.Task] = None
 FILE_INDEX: Dict[str, Dict[str, Any]] = {}
 FILE_INDEX_LOCK = RLock()
 FILE_INDEX_KEYS: List[str] = []
+FILE_INDEX_NAMES: List[str] = []
 INDEX_TOTAL_FILES = 0
 INDEX_TOTAL_DIRS = 0
 INDEX_COMPLETED_DIRS = 0
@@ -467,10 +468,12 @@ def _load_index_cache(log: bool = True) -> bool:
     with FILE_INDEX_LOCK:
         FILE_INDEX.clear()
         FILE_INDEX_KEYS.clear()
+        FILE_INDEX_NAMES.clear()
         for rel in keys:
             file_name = rel.rsplit("/", 1)[-1].lower()
             FILE_INDEX[rel] = {"name_lower": file_name}
             FILE_INDEX_KEYS.append(rel)
+            FILE_INDEX_NAMES.append(file_name)
     global INDEX_TOTAL_FILES, INDEX_READY, INDEX_BUILD_COMPLETED_AT, INDEX_BUILD_STARTED_AT, INDEX_COMPLETED_DIRS, INDEX_TOTAL_DIRS
     INDEX_TOTAL_FILES = len(keys)
     INDEX_TOTAL_DIRS = 0
@@ -500,13 +503,23 @@ def _file_index_clear() -> None:
     with FILE_INDEX_LOCK:
         FILE_INDEX.clear()
         FILE_INDEX_KEYS.clear()
+        FILE_INDEX_NAMES.clear()
 
 def file_index_set(path: str, meta: Dict[str, Any]) -> None:
     with FILE_INDEX_LOCK:
         FILE_INDEX[path] = meta
+        name_lower = meta.get("name_lower")
+        if not name_lower:
+            try:
+                name_lower = Path(path).name.lower()
+            except Exception:
+                name_lower = path.lower()
         idx = bisect_left(FILE_INDEX_KEYS, path)
         if idx == len(FILE_INDEX_KEYS) or FILE_INDEX_KEYS[idx] != path:
             FILE_INDEX_KEYS.insert(idx, path)
+            FILE_INDEX_NAMES.insert(idx, name_lower)
+        else:
+            FILE_INDEX_NAMES[idx] = name_lower
 
 def _matches_search_query(filename_lower: str, query: str) -> bool:
     """검색 쿼리와 파일명 매칭 (AND/OR/NOT 지원)
@@ -588,7 +601,7 @@ def _logical_to_postfix(tokens: List[str]) -> List[str]:
     return output
 
 
-def _collect_term_hits(keys_slice: List[str], tokens: List[str]) -> Dict[str, Set[str]]:
+def _collect_term_hits(keys_slice: List[str], names_slice: List[str], tokens: List[str]) -> Dict[str, Set[str]]:
     unique_terms = [
         token for token in tokens
         if token and token not in _LOGICAL_OPERATORS and token not in ("(", ")")
@@ -601,14 +614,7 @@ def _collect_term_hits(keys_slice: List[str], tokens: List[str]) -> Dict[str, Se
         hits: Set[str] = set()
         if not term:
             return term, hits
-        for rel in keys_slice:
-            meta = FILE_INDEX.get(rel) or {}
-            name_lower = meta.get("name_lower")
-            if not name_lower:
-                try:
-                    name_lower = Path(rel).name.lower()
-                except Exception:
-                    name_lower = rel.lower()
+        for rel, name_lower in zip(keys_slice, names_slice):
             if term in name_lower:
                 hits.add(rel)
         return term, hits
@@ -631,10 +637,10 @@ def _collect_term_hits(keys_slice: List[str], tokens: List[str]) -> Dict[str, Se
     return term_hits
 
 
-def _evaluate_logical_query(keys_slice: List[str], query: str, limit: int) -> List[str]:
+def _evaluate_logical_query(keys_slice: List[str], names_slice: List[str], query: str, limit: int) -> List[str]:
     tokens = _tokenize_logical_query(query)
     postfix = _logical_to_postfix(tokens)
-    term_hits = _collect_term_hits(keys_slice, tokens)
+    term_hits = _collect_term_hits(keys_slice, names_slice, tokens)
     universe: Optional[Set[str]] = None
     if "not" in postfix:
         universe = set(keys_slice)
@@ -718,21 +724,13 @@ def _split_by_operator(text: str, operator: str) -> List[str]:
     parts = pattern.split(text)
     return [p for p in parts if p.strip()]
 
-def _search_index_slice(keys: List[str], query: str, goal: int) -> List[str]:
+def _search_index_slice(keys: List[str], names: List[str], query: str, goal: int) -> List[str]:
     """단일 청크 단순 검색 (AND/OR 없는 경우 전용)."""
     results: List[str] = []
     if not query:
         return results
 
-    for rel in keys:
-        meta = FILE_INDEX.get(rel) or {}
-        name_lower = meta.get("name_lower")
-        if not name_lower:
-            try:
-                name_lower = Path(rel).name.lower()
-            except Exception:
-                name_lower = rel.lower()
-
+    for rel, name_lower in zip(keys, names):
         if query in name_lower:
             results.append(rel)
             if len(results) >= goal:
@@ -740,7 +738,7 @@ def _search_index_slice(keys: List[str], query: str, goal: int) -> List[str]:
 
     return results
 
-def _search_index_slice_parallel(keys: List[str], query: str, goal: int, num_chunks: int = 4) -> List[str]:
+def _search_index_slice_parallel(keys: List[str], names: List[str], query: str, goal: int, num_chunks: int = 4) -> List[str]:
     """병렬 검색 (멀티청크, 단순 쿼리 전용)."""
     if not keys:
         return []
@@ -748,20 +746,22 @@ def _search_index_slice_parallel(keys: List[str], query: str, goal: int, num_chu
     num_chunks = max(1, num_chunks)
 
     if len(keys) < num_chunks * 10:
-        return _search_index_slice(keys, query, goal)
+        return _search_index_slice(keys, names, query, goal)
 
     chunk_size = len(keys) // num_chunks
-    chunks: List[List[str]] = []
+    key_chunks: List[List[str]] = []
+    name_chunks: List[List[str]] = []
     for i in range(num_chunks):
         start = i * chunk_size
         end = start + chunk_size if i < num_chunks - 1 else len(keys)
-        chunks.append(keys[start:end])
+        key_chunks.append(keys[start:end])
+        name_chunks.append(names[start:end])
 
     results: List[str] = []
     with ThreadPoolExecutor(max_workers=num_chunks) as executor:
         futures = [
-            executor.submit(_search_index_slice, chunk, query, goal)
-            for chunk in chunks
+            executor.submit(_search_index_slice, key_chunk, name_chunk, query, goal)
+            for key_chunk, name_chunk in zip(key_chunks, name_chunks)
         ]
         for future in as_completed(futures):
             try:
@@ -775,11 +775,11 @@ def _search_index_slice_parallel(keys: List[str], query: str, goal: int, num_chu
 
     return results[:goal]
 
-def _search_index_logical(keys: List[str], query: str, goal: int) -> List[str]:
+def _search_index_logical(keys: List[str], names: List[str], query: str, goal: int) -> List[str]:
     """AND/OR/NOT 표현식을 위한 고급 검색."""
     if not keys or not query:
         return []
-    return _evaluate_logical_query(keys, query, goal)
+    return _evaluate_logical_query(keys, names, query, goal)
 
 LABELS: Dict[str, List[str]] = {}
 LABELS_LOCK = RLock()
@@ -1809,6 +1809,8 @@ async def build_file_index_background(force: bool = False):
             FILE_INDEX.update(new_index)
             FILE_INDEX_KEYS.clear()
             FILE_INDEX_KEYS.extend(sorted_keys)
+            FILE_INDEX_NAMES.clear()
+            FILE_INDEX_NAMES.extend(new_index[key]["name_lower"] for key in sorted_keys)
 
         _save_index_cache(sorted_keys)
 
@@ -3050,9 +3052,15 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
                 start_idx = bisect_left(FILE_INDEX_KEYS, start_key)
                 end_idx = bisect_right(FILE_INDEX_KEYS, end_key)
                 keys_slice = FILE_INDEX_KEYS[start_idx:end_idx]
+                names_slice = FILE_INDEX_NAMES[start_idx:end_idx]
             else:
                 # 인덱스 재구축 중에는 복사본 사용, 평상시에는 원본 리스트를 직접 참조해 오버헤드 최소화
-                keys_slice = list(FILE_INDEX_KEYS) if INDEX_BUILDING else FILE_INDEX_KEYS
+                if INDEX_BUILDING:
+                    keys_slice = list(FILE_INDEX_KEYS)
+                    names_slice = list(FILE_INDEX_NAMES)
+                else:
+                    keys_slice = FILE_INDEX_KEYS
+                    names_slice = FILE_INDEX_NAMES
 
         timings["prepare_keys_ms"] = round((time.perf_counter() - prepare_start) * 1000, 3)
         timings["keys_considered"] = len(keys_slice)
@@ -3079,6 +3087,7 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
                 IO_POOL,
                 _search_index_logical,
                 keys_slice,
+                names_slice,
                 query,
                 goal
             )
@@ -3089,6 +3098,7 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
                 IO_POOL,
                 _search_index_slice_parallel,
                 keys_slice,
+                names_slice,
                 query,
                 goal,
                 worker_chunks
