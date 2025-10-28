@@ -2850,6 +2850,7 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
         timings["index_hit_count"] = len(index_hits)
         timings["logical_eval_ms"] = elapsed_ms if is_complex else 0.0
         timings["search_workers"] = config.SEARCH_WORKERS
+        timings["index_workers"] = config.INDEX_WORKERS
         timings["fallback_invoked"] = False
         timings["fallback_goal"] = 0
         timings["fallback_scan_ms"] = 0.0
