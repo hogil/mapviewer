@@ -311,8 +311,8 @@ CRITICAL: 심각한 오류
 
 ### 3. 헬스/워커
 - 실행: `python -m api.main` (HTTPS 전용)
-- 워커: `UVICORN_WORKERS` 미설정 시 논리코어 50%를 기본값(최소2, 최대32). reload=1이면 워커=1 고정.
-- 예) Windows: `setx UVICORN_WORKERS 16`, Ubuntu: `export UVICORN_WORKERS=16`
+- 워커: FastAPI는 단일 워커로 고정 (`UVICORN_WORKERS=1`). 여러 워커는 인덱스/캐시 중복을 유발함.
+- 예) Windows: `setx UVICORN_WORKERS 1`, Ubuntu: `export UVICORN_WORKERS=1`
 
 ## 개발 가이드라인
 

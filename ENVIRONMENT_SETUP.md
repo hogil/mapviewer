@@ -6,19 +6,19 @@ L3Tracker 웨이퍼맵 뷰어의 환경변수 설정 방법을 Windows 11과 Ubu
 ## 필수 환경변수
 
 ### 1. UVICORN_WORKERS (서버 워커 수)
-서버의 동시 처리 워커 수를 설정합니다.
+FastAPI는 단일 워커로 고정해야 합니다. 여러 워커를 사용하면 인덱스와 캐시가 중복 빌드되므로 항상 `1`로 설정하세요.
 
 #### Ubuntu 24
 ```bash
 # 시스템 전체 설정
-echo 'export UVICORN_WORKERS=16' | sudo tee -a /etc/environment
+echo 'export UVICORN_WORKERS=1' | sudo tee -a /etc/environment
 
 # 사용자 설정
-echo 'export UVICORN_WORKERS=16' >> ~/.bashrc
+echo 'export UVICORN_WORKERS=1' >> ~/.bashrc
 source ~/.bashrc
 
 # 현재 세션에서만
-export UVICORN_WORKERS=16
+export UVICORN_WORKERS=1
 
 # 환경변수 확인
 echo $UVICORN_WORKERS
@@ -27,13 +27,13 @@ echo $UVICORN_WORKERS
 #### Windows 11
 ```powershell
 # 시스템 환경변수 (영구)
-[Environment]::SetEnvironmentVariable("UVICORN_WORKERS", "16", "Machine")
+[Environment]::SetEnvironmentVariable("UVICORN_WORKERS", "1", "Machine")
 
 # 사용자 환경변수 (영구)
-[Environment]::SetEnvironmentVariable("UVICORN_WORKERS", "16", "User")
+[Environment]::SetEnvironmentVariable("UVICORN_WORKERS", "1", "User")
 
 # 현재 세션에서만
-$env:UVICORN_WORKERS = "16"
+$env:UVICORN_WORKERS = "1"
 
 # 환경변수 확인
 echo $env:UVICORN_WORKERS
@@ -175,12 +175,12 @@ env | grep -E "(UVICORN|PROJECT|SSL|HOST|PORT|SAML|AUTO_LOGIN|DEFAULT_ORG_URL)"
 ## 권장 설정값
 
 ### 개발 환경
-- `UVICORN_WORKERS=4`
+- `UVICORN_WORKERS=1`
 - `RELOAD=1`
 - `SSL_ENABLED=0` (HTTP만 사용)
 
 ### 프로덕션 환경
-- `UVICORN_WORKERS=16` (CPU 코어 수의 50-75%)
+- `UVICORN_WORKERS=1` (단일 워커 고정)
 - `RELOAD=0`
 - `SSL_ENABLED=1`
 - `PROJECT_ROOT=/path/to/wafer/images`

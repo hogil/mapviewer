@@ -672,12 +672,6 @@ class WaferMapViewer {
 
         this.selectedFolderForBrowser = '';
 
-        // 전역 파일 인덱스 (폴더를 열지 않아도 검색 가능)
-
-        this.allFilesIndex = null; // string[] (ROOT 기준 상대경로, posix)
-
-        this.allFilesIndexLoaded = false;
-
         // 클래스 선택 상태 초기화 (Label Explorer와 Class Manager가 공유)
 
         this.classSelection = { selected: [], lastClicked: null };
@@ -3117,10 +3111,6 @@ class WaferMapViewer {
             // 초기 실행 시 안내 메시지 표시
 
             this.showInitialState();
-
-            // 🔥 전역 파일 인덱스 로딩 제거 (검색 시점에 필요할 때만 로드)
-            // 초기 로딩 속도 개선을 위해 주석 처리
-            // this.loadAllFilesIndex();
         });
     }
 
@@ -3255,38 +3245,6 @@ class WaferMapViewer {
             }
         } catch (error) {
             console.error('이미지 폴더 초기화 실패:', error);
-        }
-    }
-
-    // =====================
-
-    // 파일 탐색기/그리드/이미지 로딩/뷰어/라벨링 등 주요 함수
-
-    // =====================
-
-    async loadAllFilesIndex() {
-        try {
-            const res = await fetch('/api/files/all');
-
-            if (!res.ok) throw new Error('HTTP ' + res.status);
-
-            const data = await res.json();
-
-            if (data && data.success && Array.isArray(data.files)) {
-                this.allFilesIndex = data.files;
-
-                this.allFilesIndexLoaded = true;
-
-                // 콘솔 로그로 파일 수만 표시 (과도한 로그 방지)
-
-                this.debugLog(`전역 파일 인덱스 로드 완료: ${this.allFilesIndex.length}개`);
-            } else {
-                console.warn('전역 파일 인덱스 응답 형식이 올바르지 않음');
-            }
-        } catch (error) {
-            console.warn('전역 파일 인덱스 로드 실패:', error);
-
-            this.allFilesIndexLoaded = false;
         }
     }
 
@@ -3481,69 +3439,42 @@ class WaferMapViewer {
                 grid.innerHTML = '';
             }
 
-            // 전역 인덱스 미로딩 시 즉시 로드하여 사용자 요청 우선
+            // 서버 검색 API 사용: 프런트는 결과만 표시
+            console.info('🔍 [SEARCH DEBUG] currentFolderPath:', this.currentFolderPath);
+            console.info('🔍 [SEARCH DEBUG] 검색어:', fileQuery);
 
-            if (!this.allFilesIndexLoaded) {
-                await this.loadAllFilesIndex();
+            const searchUrl = `/api/search?q=${encodeURIComponent(fileQuery)}`;
+            const res = await fetch(searchUrl);
+            if (!res.ok) {
+                throw new Error(`검색 API 응답 오류: ${res.status}`);
             }
 
-            // 서버 검색 API 사용 (빠름) → 실패 시 인덱스/DOM 폴백
-
-            let matchedImages = [];
-
-            try {
-                // 🔥 검색은 서버의 current_folder 기준으로 수행 (folder 파라미터 불필요)
-                console.info('🔍 [SEARCH DEBUG] currentFolderPath:', this.currentFolderPath);
-                console.info('🔍 [SEARCH DEBUG] 검색어:', fileQuery);
-                const searchUrl = `/api/search?q=${encodeURIComponent(fileQuery)}`;
-                const res = await fetch(searchUrl);
-
-                if (res.ok) {
-                    const data = await res.json();
-                    console.info('🔍 [SEARCH DEBUG] 검색 결과 수:', data.results?.length || 0);
-                    if (data.results?.length > 0) {
-                        console.info('🔍 [SEARCH DEBUG] 첫 번째 결과:', data.results[0]);
-                    }
-
-                    if (data && data.success && Array.isArray(data.results)) {
-                        // 🔥 절대 경로를 ROOT_DIR 기준 상대 경로로 변환 (서버 재시작 전 호환)
-                        matchedImages = data.results.map(path => {
-                            // Windows 경로를 슬래시로 통일
-                            const normalizedPath = path.replace(/\\/g, '/');
-                            
-                            // 절대 경로인 경우 (예: D:/project/data/wm-811k/performance_test/wafer.png)
-                            if (normalizedPath.includes(':/')) {
-                                // ROOT_DIR 부분을 제거하여 상대 경로로 변환
-                                const parts = normalizedPath.split('/');
-                                // wm-811k 이후 경로만 추출 (ROOT_DIR 이후)
-                                const rootDirIndex = parts.indexOf('wm-811k');
-                                if (rootDirIndex >= 0 && rootDirIndex + 1 < parts.length) {
-                                    return parts.slice(rootDirIndex + 1).join('/');
-                                }
-                            }
-                            // 이미 상대 경로면 그대로 반환
-                            return normalizedPath;
-                        });
-                        
-                        console.info('🔍 [SEARCH DEBUG] 변환된 첫 번째 결과:', matchedImages[0]);
-                    }
-                }
-            } catch (e) {
-                // ignore and fallback
+            const data = await res.json();
+            console.info('🔍 [SEARCH DEBUG] 검색 결과 수:', data.results?.length || 0);
+            if (!data || !data.success || !Array.isArray(data.results)) {
+                throw new Error('검색 응답 형식이 올바르지 않습니다.');
             }
 
-            if (matchedImages.length === 0) {
-                if (this.allFilesIndexLoaded && Array.isArray(this.allFilesIndex)) {
-                    const q = fileQuery.toLowerCase();
-
-                    matchedImages = this.allFilesIndex.filter(p => {
-                        const name = p.split('/').pop().toLowerCase();
-
-                        return this.matchesSearchQuery(name, q);
-                    });
-                } else {
-                    matchedImages = this.fastFileNameSearch(fileQuery);
+            const normalizeResultPath = (rawPath) => {
+                if (typeof rawPath !== 'string') return null;
+                const normalizedPath = rawPath.replace(/\\/g, '/');
+                if (!normalizedPath.includes(':/')) {
+                    return normalizedPath;
                 }
+                const parts = normalizedPath.split('/');
+                const markerIdx = parts.indexOf('wm-811k');
+                if (markerIdx >= 0 && markerIdx + 1 < parts.length) {
+                    return parts.slice(markerIdx + 1).join('/');
+                }
+                return normalizedPath;
+            };
+
+            const matchedImages = data.results
+                .map(normalizeResultPath)
+                .filter(path => typeof path === 'string' && path.length > 0);
+
+            if (matchedImages.length > 0) {
+                console.info('🔍 [SEARCH DEBUG] 변환된 첫 번째 결과:', matchedImages[0]);
             }
 
             const endTime = performance.now();
@@ -3596,153 +3527,6 @@ class WaferMapViewer {
 
             alert('검색 중 오류가 발생했습니다.');
         }
-    }
-
-    // 빠른 파일명 검색 - DOM에서 직접 검색 (OR/AND 연산자 지원)
-
-    fastFileNameSearch(fileQuery) {
-        const results = [];
-
-        // 현재 DOM에 로드된 모든 파일 링크 검색
-
-        const fileElements = this.dom.fileExplorer.querySelectorAll('a[data-path]');
-
-        for (const element of fileElements) {
-            const filePath = element.dataset.path;
-            const fileName = element.textContent.trim().toLowerCase();
-
-            // 이미지 파일인지 확인
-
-            if (!this.isImageFile(filePath)) continue;
-
-            // 고급 검색 로직 적용
-
-            if (this.matchesSearchQuery(fileName, fileQuery)) {
-                results.push(filePath);
-            }
-        }
-
-        return results;
-    }
-
-    // 고급 검색 매칭 로직 (OR/AND/NOT/괄호 지원)
-
-    matchesSearchQuery(fileName, query) {
-        try {
-            const normalizedQuery = query.toLowerCase().trim();
-
-            return this.evaluateExpression(fileName, normalizedQuery);
-        } catch (error) {
-            console.warn('검색 표현식 오류, 기본 검색으로 전환:', error.message);
-
-            // 오류 시 기본 포함 검색으로 폴백
-
-            return fileName.includes(query.toLowerCase().trim());
-        }
-    }
-
-    // 표현식 평가 (괄호, OR, AND, NOT 지원)
-
-    evaluateExpression(fileName, expression) {
-        // 괄호 처리
-
-        while (expression.includes('(')) {
-            const lastOpenParen = expression.lastIndexOf('(');
-            const closeParen = expression.indexOf(')', lastOpenParen);
-
-            if (closeParen === -1) {
-                throw new Error('괄호가 닫히지 않음');
-            }
-
-            const innerExpression = expression.substring(lastOpenParen + 1, closeParen);
-            const result = this.evaluateExpression(fileName, innerExpression);
-
-            // 괄호 부분을 결과로 교체 (임시 토큰 사용)
-
-            const token = `__RESULT_${result}__`;
-
-            expression = expression.substring(0, lastOpenParen) + token + expression.substring(closeParen + 1);
-        }
-
-        // OR 연산자 처리 (가장 낮은 우선순위)
-
-        if (expression.includes(' or ')) {
-            const orTerms = this.splitByOperator(expression, ' or ');
-
-            return orTerms.some(term => this.evaluateAndExpression(fileName, term.trim()));
-        }
-
-        return this.evaluateAndExpression(fileName, expression);
-    }
-
-    // AND 표현식 평가
-
-    evaluateAndExpression(fileName, expression) {
-        // AND 연산자 처리
-
-        const andTerms = this.splitByOperator(expression, ' and ');
-
-        return andTerms.every(term => this.evaluateNotExpression(fileName, term.trim()));
-    }
-
-    // NOT 표현식 평가
-
-    evaluateNotExpression(fileName, expression) {
-        // 결과 토큰 처리
-
-        if (expression.startsWith('__RESULT_')) {
-            return expression === '__RESULT_true__';
-        }
-
-        // NOT 연산자 처리
-
-        if (expression.startsWith('not ')) {
-            const term = expression.substring(4).trim();
-
-            return !this.evaluateBasicTerm(fileName, term);
-        }
-
-        return this.evaluateBasicTerm(fileName, expression);
-    }
-
-    // 기본 용어 평가
-
-    evaluateBasicTerm(fileName, term) {
-        if (term.startsWith('__RESULT_')) {
-            return term === '__RESULT_true__';
-        }
-
-        // 공백으로 분리된 여러 단어는 모두 포함되어야 함
-
-        const words = term.split(/\s+/).filter(word => word.length > 0);
-
-        return words.every(word => fileName.includes(word));
-    }
-
-    // 연산자로 분할 (괄호 결과 토큰 고려)
-
-    splitByOperator(expression, operator) {
-        const parts = [];
-        let current = '';
-        let i = 0;
-
-        while (i < expression.length) {
-            if (expression.substring(i, i + operator.length) === operator) {
-                parts.push(current);
-
-                current = '';
-
-                i += operator.length;
-            } else {
-                current += expression[i];
-
-                i++;
-            }
-        }
-
-        parts.push(current);
-
-        return parts.filter(part => part.trim().length > 0);
     }
 
     downloadImage(imagePath) {

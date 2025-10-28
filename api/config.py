@@ -1,6 +1,5 @@
 import os
 from pathlib import Path
-from math import floor
 
 # ===== 경로 / 포맷 =====
 ROOT_DIR = Path(os.getenv("PROJECT_ROOT", "/appdata/appuser/images")).resolve()
@@ -47,11 +46,16 @@ DEFAULT_PORT = int(os.getenv("PORT", "8080"))
 # reload 기본은 OFF (RELOAD=1이면 ON)
 DEFAULT_RELOAD = os.getenv("RELOAD", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
 
-# 워커 기본: CPU의 75%에서 최소 24개
-def _default_workers():
-    return max(24, floor((os.cpu_count() or 8) * 0.75))
+# 워커 기본: 단일 프로세스로 고정
+def _default_workers() -> int:
+    return 1
 
-DEFAULT_WORKERS = int(os.getenv("WORKERS", str(_default_workers())))
+try:
+    DEFAULT_WORKERS = int(os.getenv("WORKERS", str(_default_workers())))
+except Exception:
+    DEFAULT_WORKERS = 1
+if DEFAULT_WORKERS < 1:
+    DEFAULT_WORKERS = 1
 
 # ===== HTTPS 설정 =====
 SSL_ENABLED = os.getenv("SSL_ENABLED", "1").strip().lower() in {"1", "true", "yes", "y", "on"}

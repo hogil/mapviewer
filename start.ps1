@@ -14,6 +14,7 @@ $env:HOST="0.0.0.0"
 $env:PORT="8080"
 $env:RELOAD="0"          # PowerShell 스크립트 실행 시 uvicorn reload 비활성화 (이중 실행 방지)
 $env:UVICORN_WORKERS="1" # 개발 환경: 단일 워커 (중복 인덱스 방지)
+$env:WORKERS="1"         # FastAPI 워커 단일 고정
 $env:SSL_ENABLED="1"
 $env:HTTPS_PORT="443"
 $env:SSL_CERTFILE="cert/fullchain.pem"
@@ -57,6 +58,7 @@ $env:PYRAMID_PNG_COMPRESSION="3"       # 무손실 유지, 네트워크 전송�
 $env:PYRAMID_PNG_EFFORT="1"            # PNG effort (1=가장 빠름)
 $env:PYRAMID_KERNEL="cubic"            # 리사이즈 커널 (cubic, 최고 품질)
 $env:PYRAMID_LOADER_MODE="random"      # 로더 모드 (random=스트리밍, seq_early_copy=메모리 복사)
+$env:PYRAMID_BG_WORKERS="2"            # 개발 환경 백그라운드 피라미드 워커
 
 # TurboJPEG 설정 (그리드 썸네일 전용)
 # 2025-10-24: 그리드 썸네일 TurboJPEG 4:2:2 적용

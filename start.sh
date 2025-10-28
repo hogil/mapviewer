@@ -51,7 +51,8 @@ export MALLOC_ARENA_MAX="4"              # 메모리 fragmentation 방지
 export STATS_LOG_ENABLED="1"             # 1=통계 수집 활성화
 
 # Uvicorn 설정
-export WORKERS="22"                      # 중간값 (28→16→22) - 워커 프로세스 수
+# FastAPI는 단일 워커 고정 (인덱스/캐시 공유)
+export WORKERS="1"
 export RELOAD="0"                        # 운영 환경에서는 0
 
 # 캐시 설정
@@ -71,6 +72,7 @@ export PYRAMID_PNG_COMPRESSION="3"           # PNG 압축 레벨
 export PYRAMID_PNG_EFFORT="1"                # PNG effort (1=가장 빠름)
 export PYRAMID_KERNEL="cubic"                # 리사이즈 커널 (cubic, 최고 품질)
 export PYRAMID_LOADER_MODE="random"          # 로더 모드 (random=스트리밍, copy_memory 오버헤드 없음)
+export PYRAMID_BG_WORKERS="4"                # 백그라운드 피라미드 워커
 
 # TurboJPEG 설정 (그리드 썸네일 전용)
 # 2025-10-24: 그리드 썸네일 TurboJPEG 4:2:2 적용

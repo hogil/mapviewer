@@ -10,7 +10,7 @@ from typing import List, Optional, Dict, Any, Tuple, Set
 from collections import OrderedDict
 from bisect import bisect_left, bisect_right
 from threading import RLock, Lock
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 
@@ -594,20 +594,40 @@ def _collect_term_hits(keys_slice: List[str], tokens: List[str]) -> Dict[str, Se
         if token and token not in _LOGICAL_OPERATORS and token not in ("(", ")")
     ]
     unique_terms = list(dict.fromkeys(unique_terms))
-    term_hits: Dict[str, Set[str]] = {term: set() for term in unique_terms}
-    if not term_hits:
-        return term_hits
-    for rel in keys_slice:
-        try:
+    if not unique_terms:
+        return {}
+
+    def _scan_term(term: str) -> Tuple[str, Set[str]]:
+        hits: Set[str] = set()
+        if not term:
+            return term, hits
+        for rel in keys_slice:
             meta = FILE_INDEX.get(rel) or {}
             name_lower = meta.get("name_lower")
             if not name_lower:
-                name_lower = Path(rel).name.lower()
-        except Exception:
-            name_lower = rel.lower()
-        for term in unique_terms:
+                try:
+                    name_lower = Path(rel).name.lower()
+                except Exception:
+                    name_lower = rel.lower()
             if term in name_lower:
-                term_hits[term].add(rel)
+                hits.add(rel)
+        return term, hits
+
+    max_workers = config.SEARCH_WORKERS or 1
+    max_workers = max(1, min(len(unique_terms), max_workers))
+    term_hits: Dict[str, Set[str]] = {}
+
+    if max_workers == 1 or len(unique_terms) == 1:
+        for term in unique_terms:
+            t, hits = _scan_term(term)
+            term_hits[t] = hits
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_scan_term, term) for term in unique_terms]
+            for future in as_completed(futures):
+                term, hits = future.result()
+                term_hits[term] = hits
+
     return term_hits
 
 
@@ -699,94 +719,67 @@ def _split_by_operator(text: str, operator: str) -> List[str]:
     return [p for p in parts if p.strip()]
 
 def _search_index_slice(keys: List[str], query: str, goal: int) -> List[str]:
-    """단일 청크 검색 (병렬 처리의 작업 단위)
-
-    Args:
-        keys: 검색할 키 목록
-        query: 검색 쿼리 (소문자, AND/OR/NOT 지원)
-        goal: 목표 결과 개수
-
-    Returns:
-        매칭된 파일 경로 리스트
-    """
+    """단일 청크 단순 검색 (AND/OR 없는 경우 전용)."""
     results: List[str] = []
-
-    # 단순 쿼리 최적화: AND/OR/NOT 없으면 빠른 경로 사용
-    is_simple_query = not any(op in query for op in (' and ', ' or ', ' not ', '(', ')'))
+    if not query:
+        return results
 
     for rel in keys:
-        try:
-            meta = FILE_INDEX[rel]
-        except KeyError:
-            continue
+        meta = FILE_INDEX.get(rel) or {}
+        name_lower = meta.get("name_lower")
+        if not name_lower:
+            try:
+                name_lower = Path(rel).name.lower()
+            except Exception:
+                name_lower = rel.lower()
 
-        # 빠른 경로: 단순 포함 검색
-        if is_simple_query:
-            if query in meta["name_lower"]:
-                results.append(rel)
-                if len(results) >= goal:
-                    break
-        # 느린 경로: 표현식 평가
-        else:
-            if _matches_search_query(meta["name_lower"], query):
-                results.append(rel)
-                if len(results) >= goal:
-                    break
+        if query in name_lower:
+            results.append(rel)
+            if len(results) >= goal:
+                break
 
     return results
 
 def _search_index_slice_parallel(keys: List[str], query: str, goal: int, num_chunks: int = 4) -> List[str]:
-    """병렬 검색 (멀티청크)
-
-    Args:
-        keys: 검색할 키 목록
-        query: 검색어 (소문자)
-        goal: 목표 결과 개수
-        num_chunks: 청크 개수 (기본 4, 권장 범위: 4~8)
-
-    Returns:
-        검색 결과 리스트 (최대 goal개)
-    """
+    """병렬 검색 (멀티청크, 단순 쿼리 전용)."""
     if not keys:
         return []
 
-    # 청크가 너무 작으면 단일 스레드가 더 효율적
+    num_chunks = max(1, num_chunks)
+
     if len(keys) < num_chunks * 10:
         return _search_index_slice(keys, query, goal)
 
-    # 청크 분할
     chunk_size = len(keys) // num_chunks
-    chunks = []
+    chunks: List[List[str]] = []
     for i in range(num_chunks):
         start = i * chunk_size
         end = start + chunk_size if i < num_chunks - 1 else len(keys)
         chunks.append(keys[start:end])
 
-    # 병렬 실행
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    results = []
-
+    results: List[str] = []
     with ThreadPoolExecutor(max_workers=num_chunks) as executor:
-        # 각 청크마다 goal만큼 검색 (오버 페칭)
         futures = [
             executor.submit(_search_index_slice, chunk, query, goal)
             for chunk in chunks
         ]
-
-        # 결과 수집 (완료되는 대로)
         for future in as_completed(futures):
             try:
                 chunk_results = future.result()
                 results.extend(chunk_results)
-                # Early termination: 목표 도달 시 중단
                 if len(results) >= goal:
                     break
-            except Exception as e:
-                logger.error(f"청크 검색 실패: {e}")
+            except Exception as exc:
+                logger.error(f"청크 검색 실패: {exc}")
                 continue
 
-    # goal만큼만 반환
     return results[:goal]
+
+def _search_index_logical(keys: List[str], query: str, goal: int) -> List[str]:
+    """AND/OR/NOT 표현식을 위한 고급 검색."""
+    if not keys or not query:
+        return []
+    return _evaluate_logical_query(keys, query, goal)
 
 LABELS: Dict[str, List[str]] = {}
 LABELS_LOCK = RLock()
@@ -2206,7 +2199,8 @@ async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
         # 🔥 라벨 썸네일 캐시는 유지하고, classification 폴더만 무효화
         if 'classification' in str(target).replace('\\', '/'):
             _dircache_invalidate(target)
-        items = list_dir_fast(target)
+        loop = asyncio.get_running_loop()
+        items = await loop.run_in_executor(IO_POOL, list_dir_fast, target)
         logger.info(f"📁 [/api/files] 반환 항목 수: {len(items)} (폴더: {sum(1 for x in items if x['type']=='directory')}, 파일: {sum(1 for x in items if x['type']=='file')})")
         # prefer 폴더명을 최상단에
         if prefer:
@@ -3065,21 +3059,48 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
 
         loop = asyncio.get_running_loop()
         is_complex = _is_complex_query(query)
+        logical_terms: List[str] = []
+        effective_workers = 0
+        if is_complex:
+            raw_tokens = _tokenize_logical_query(query)
+            logical_terms = [
+                token for token in raw_tokens
+                if token and token not in _LOGICAL_OPERATORS and token not in ("(", ")")
+            ]
+            logical_terms = list(dict.fromkeys(logical_terms))
+            if not logical_terms:
+                is_complex = False
+            else:
+                effective_workers = max(1, min(config.SEARCH_WORKERS or 1, len(logical_terms)))
+
         search_start = time.perf_counter()
-        index_hits = await loop.run_in_executor(
-            IO_POOL,
-            _search_index_slice_parallel,
-            keys_slice,
-            query,
-            goal,
-            config.SEARCH_WORKERS
-        )
+        if is_complex:
+            index_hits = await loop.run_in_executor(
+                IO_POOL,
+                _search_index_logical,
+                keys_slice,
+                query,
+                goal
+            )
+        else:
+            worker_chunks = max(1, config.SEARCH_WORKERS)
+            effective_workers = worker_chunks
+            index_hits = await loop.run_in_executor(
+                IO_POOL,
+                _search_index_slice_parallel,
+                keys_slice,
+                query,
+                goal,
+                worker_chunks
+            )
         elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
         bucket.extend(index_hits)
         timings["index_executor_ms"] = elapsed_ms
         timings["index_hit_count"] = len(index_hits)
         timings["logical_eval_ms"] = elapsed_ms if is_complex else 0.0
-        timings["search_workers"] = config.SEARCH_WORKERS
+        timings["search_workers"] = effective_workers
+        timings["logical_term_count"] = len(logical_terms)
+        timings["search_mode"] = "logical" if is_complex else "simple"
         timings["index_workers"] = config.INDEX_WORKERS
         timings["fallback_invoked"] = False
         timings["fallback_goal"] = 0
@@ -4068,11 +4089,10 @@ async def startup_event():
     CLASSES_MTIME = _classes_stat_mtime()
     cache_loaded = _load_index_cache()
     if cache_loaded:
-        logger.info("ℹ️ [INDEX] 캐시 사용, 백그라운드 리프레시는 주기 작업에 의해 처리됩니다.")
-        logger.info("🚧 [INDEX] 캐시 기반 full rebuild 스케줄링")
-        asyncio.create_task(build_file_index_background(force=True))
+        logger.info("ℹ️ [INDEX] 캐시 로드 완료 → 즉시 재생성 예약")
     else:
-        asyncio.create_task(build_file_index_background())
+        logger.info("ℹ️ [INDEX] 캐시 없음 → 전체 인덱스 생성 예약")
+    asyncio.create_task(build_file_index_background(force=True))
     if INDEX_REFRESH_INTERVAL_SECONDS > 0 and INDEX_REFRESH_TASK is None:
         interval_minutes = INDEX_REFRESH_INTERVAL_SECONDS // 60 or 1
         bootlog.info(f"🔁 [INDEX] 자동 재빌드 주기: {interval_minutes}분")
@@ -4099,7 +4119,6 @@ async def shutdown_event():
 # ======================== __main__ ========================
 if __name__ == "__main__":
     import uvicorn
-    import multiprocessing
 
     if not config.SSL_ENABLED:
         logger.error("[SSL] SSL_ENABLED=0 입니다. 이 실행파일은 HTTPS만 지원합니다.")
@@ -4121,28 +4140,16 @@ if __name__ == "__main__":
     logger.info(f"🔍 [SERVER START] current_folder: {current_folder}")
     logger.info(f"🔍 [SERVER START] THUMBNAIL_DIR: {THUMBNAIL_DIR}")
 
-    # 워커 수 결정 로직
-    # - 환경변수 UVICORN_WORKERS가 있으면 그대로 사용
-    # - 없으면 CPU 논리 코어의 50%를 기본값으로 사용 (최소 2, 최대 32)
-    env_val = os.getenv("UVICORN_WORKERS")
-    if env_val is not None and env_val.strip() != "":
-        try:
-            workers_env = int(env_val)
-        except Exception:
-            workers_env = 1
-    else:
-        try:
-            cpu_cnt = max(1, multiprocessing.cpu_count())
-            workers_env = max(2, min(32, int(cpu_cnt * 0.5)))
-        except Exception:
-            workers_env = 2
-    # reload 사용 시 workers=1 고정. reload 비사용 시 환경변수로 워커 수 제어
+    requested_workers = os.getenv("UVICORN_WORKERS") or os.getenv("WORKERS")
+    if requested_workers and requested_workers.strip() not in {"", "1"}:
+        logger.warning(f"⚠️ [WORKERS] FastAPI는 단일 워커로 고정됩니다. 요청된 워커 수({requested_workers})는 무시됩니다.")
+
     uvicorn.run(
         "api.main:app",
         host="0.0.0.0",
         port=int(config.HTTPS_PORT),        # 기본 8443
         reload=reload_flag,                 # 개발 편의
-        workers=(1 if reload_flag else max(1, workers_env)),
+        workers=1,
         log_level="info",
         access_log=False,                   # 커스텀 테이블 로그 사용
         use_colors=True,

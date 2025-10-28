@@ -54,7 +54,7 @@ Open browser and navigate to: `https://localhost:8443`
 - `SSL_KEYFILE`: Path to SSL private key (default: `cert/server.key`)
 
 ### Performance Tuning
-- `UVICORN_WORKERS`: Number of worker processes (default: 75% of CPU cores, minimum 24, **recommended: 28 for 32-core servers**)
+- `UVICORN_WORKERS`: FastAPI worker count (must stay at 1 to avoid duplicate indexing)
 - `IO_THREADS`: I/O thread pool size (default: CPU count * 2, minimum 16, **recommended: 128 for high-load servers**)
 - `THUMBNAIL_SEM`: Thumbnail generation concurrency limit (default: 128, **recommended: 256 for 32-core servers**)
 - `DIRLIST_CACHE_SIZE`: Directory listing cache size (default: 1024, **recommended: 8192 for production**)
