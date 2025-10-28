@@ -30,12 +30,6 @@ def _default_index_workers() -> int:
     return max(8, min(64, target))
 
 INDEX_WORKERS = int(os.getenv("INDEX_WORKERS", str(_default_index_workers())))  # 파일 인덱싱 병렬 워커 수
-INDEX_PROCESS_WORKERS = int(
-    os.getenv(
-        "INDEX_PROCESS_WORKERS",
-        str(max(2, min(16, (CPU_COUNT or 8) // 2)))
-    )
-)  # 인덱스 구축 시 멀티프로세스 워커 수
 INDEX_REFRESH_INTERVAL_MINUTES = int(os.getenv("INDEX_REFRESH_INTERVAL_MINUTES", "30"))   # 인덱스 자동 재빌드 주기(분). 0이면 비활성화
 
 # 캐시 크기/TTL

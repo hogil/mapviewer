@@ -67,8 +67,15 @@ class ThumbnailService:
         if TURBOJPEG_AVAILABLE and getattr(config, "USE_TURBOJPEG", False):
             try:
                 turbo_path = getattr(config, "TURBOJPEG_PATH", "") or None
-                self.turbo = TurboJPEG(lib_path=turbo_path if turbo_path else None)
-                print(f"[ThumbnailService] TurboJPEG Q95 FASTDCT + 4:2:0 모드 (벤치마크 검증)")
+                global _THUMBNAIL_TURBO_INSTANCE, _THUMBNAIL_TURBO_LOGGED
+                _THUMBNAIL_TURBO_INSTANCE = globals().get("_THUMBNAIL_TURBO_INSTANCE")
+                if _THUMBNAIL_TURBO_INSTANCE is None:
+                    _THUMBNAIL_TURBO_INSTANCE = TurboJPEG(lib_path=turbo_path if turbo_path else None)
+                    globals()["_THUMBNAIL_TURBO_INSTANCE"] = _THUMBNAIL_TURBO_INSTANCE
+                self.turbo = _THUMBNAIL_TURBO_INSTANCE
+                if not globals().get("_THUMBNAIL_TURBO_LOGGED"):
+                    print("[ThumbnailService] TurboJPEG Q95 FASTDCT + 4:2:0 모드 (벤치마크 검증)")
+                    globals()["_THUMBNAIL_TURBO_LOGGED"] = True
             except Exception as e:
                 print(f"[ThumbnailService] TurboJPEG 초기화 실패, pyvips 폴백: {e}")
                 self.turbo = None

@@ -42,8 +42,6 @@ $env:SEARCH_FALLBACK_TIMEOUT_MS="0"     # 0=시간 제한 없음
 $cpuCount = [Environment]::ProcessorCount
 $indexWorkers = [Math]::Min(64, [Math]::Max(8, $cpuCount * 2))
 $env:INDEX_WORKERS = $indexWorkers.ToString()  # CPU 수 대비 2배, 최대 64
-$processWorkers = [Math]::Min(16, [Math]::Max(2, [Math]::Floor($cpuCount / 2)))
-$env:INDEX_PROCESS_WORKERS = $processWorkers.ToString()
 $env:INDEX_REFRESH_INTERVAL_MINUTES="30" # 파일 인덱스 자동 재빌드 간격(분)
 
 # 이미지 피라미드 설정

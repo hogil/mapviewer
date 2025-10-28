@@ -3,14 +3,14 @@ L3Tracker - Wafer Map Viewer API (HTTPS, Pretty Table Logs, Noise-free)
 """
 
 # ======================== Imports ========================
-import os, re, sys, json, time, shutil, asyncio, logging, logging.config, hashlib
+import os, re, sys, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading
 from pathlib import Path
 from contextlib import contextmanager
 from typing import List, Optional, Dict, Any, Tuple, Set
 from collections import OrderedDict
 from bisect import bisect_left, bisect_right
 from threading import RLock, Lock
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 
@@ -281,12 +281,13 @@ THUMBNAIL_QUALITY = config.THUMBNAIL_QUALITY
 THUMBNAIL_SIZE_DEFAULT = config.THUMBNAIL_SIZE_DEFAULT
 
 # TurboJPEG 인스턴스 (그리드 썸네일 최적화)
-TURBO_JPEG = None
-if TURBOJPEG_AVAILABLE and getattr(config, "USE_TURBOJPEG", False):
+TURBO_JPEG = globals().get("TURBO_JPEG")
+if TURBO_JPEG is None and TURBOJPEG_AVAILABLE and getattr(config, "USE_TURBOJPEG", False):
     try:
         turbo_path = getattr(config, "TURBOJPEG_PATH", "") or None
         TURBO_JPEG = TurboJPEG(lib_path=turbo_path if turbo_path else None)
-        print(f"[main.py] TurboJPEG Q95 FASTDCT + 4:2:0 초기화 완료")
+        globals()["TURBO_JPEG"] = TURBO_JPEG
+        print("[main.py] TurboJPEG Q95 FASTDCT + 4:2:0 초기화 완료")
     except Exception as e:
         print(f"[main.py] TurboJPEG 초기화 실패, pyvips 폴백: {e}")
         TURBO_JPEG = None
@@ -347,31 +348,59 @@ _OPERATOR_PATTERNS = {
 _LOGICAL_OPERATORS = {"and", "or", "not"}
 _LOGICAL_PRECEDENCE = {"or": 1, "and": 2, "not": 3}
 
-def _scan_directory_tree(args: Tuple[str, str, Tuple[str, ...]]) -> Tuple[List[Tuple[str, str]], int]:
-    base_root, start_dir, skip_dirs = args
-    files: List[Tuple[str, str]] = []
-    dirs_count = 0
-    for root, dirnames, filenames in os.walk(start_dir):
-        dirs_count += 1
-        if skip_dirs:
-            dirnames[:] = [d for d in dirnames if d not in skip_dirs]
-        for fn in filenames:
-            try:
-                full_path = os.path.join(root, fn)
-                rel_path = os.path.relpath(full_path, base_root).replace("\\", "/")
-                files.append((rel_path, fn.lower()))
-            except Exception:
-                continue
-    return files, dirs_count
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError as exc:
+        if exc.errno == errno.ESRCH:
+            return False
+        if exc.errno == errno.EPERM:
+            return True
+        return False
+    except Exception:
+        return False
+    return True
+
+
+def _lock_file_stale() -> bool:
+    if not INDEX_LOCK_FILE.exists():
+        return False
+    try:
+        with INDEX_LOCK_FILE.open("r", encoding="utf-8") as f:
+            content = f.read().strip()
+        pid = int(content) if content else -1
+    except Exception:
+        try:
+            INDEX_LOCK_FILE.unlink()
+        except Exception:
+            pass
+        return True
+
+    if not _pid_alive(pid):
+        try:
+            INDEX_LOCK_FILE.unlink()
+            logger.info("🧹 [INDEX] 잠금 파일이 고아 상태여서 제거했습니다 (pid=%s)", pid)
+        except Exception as exc:
+            logger.warning(f"⚠️ [INDEX] 고아 잠금 파일 제거 실패: {exc}")
+        return True
+    return False
 
 def _acquire_index_lock(timeout: int = INDEX_LOCK_WAIT_SECONDS) -> Optional[int]:
     deadline = time.time() + max(1, timeout)
+    wait_logged = False
     while True:
         try:
             fd = os.open(str(INDEX_LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             os.write(fd, str(os.getpid()).encode("utf-8", "ignore"))
             return fd
         except FileExistsError:
+            if _lock_file_stale():
+                continue
+            if not wait_logged:
+                logger.info("🕒 [INDEX] 잠금 대기 중 (다른 프로세스가 빌드 중)")
+                wait_logged = True
             if time.time() >= deadline:
                 return None
             time.sleep(0.5)
@@ -1669,9 +1698,17 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
 
 async def build_file_index_background(force: bool = False):
     global INDEX_BUILDING, INDEX_READY
+    logger.info(
+        "🟡 [INDEX] 빌드 요청 수신 | force=%s | ready=%s | building=%s",
+        force,
+        INDEX_READY,
+        INDEX_BUILDING,
+    )
     if INDEX_BUILDING:
+        logger.info("🟡 [INDEX] 이미 빌드 중이어서 요청 무시")
         return
     if INDEX_READY and not force:
+        logger.info("🟡 [INDEX] 이미 준비 완료 상태이므로 건너뜀 (force=False)")
         return
     INDEX_BUILDING, INDEX_READY = True, False
 
@@ -1683,11 +1720,10 @@ async def build_file_index_background(force: bool = False):
         INDEX_BUILD_COMPLETED_AT = 0.0
         INDEX_COMPLETED_DIRS = 0
         INDEX_TOTAL_FILES = 0
-        INDEX_TOTAL_DIRS = 1  # ROOT_DIR 포함
+        INDEX_TOTAL_DIRS = 0
         logger.info(
-            "🚧 [INDEX] 빌드 시작 | force=%s | process_workers=%d | thread_workers=%d",
+            "🚧 [INDEX] 빌드 시작 | force=%s | thread_workers=%d",
             force,
-            config.INDEX_PROCESS_WORKERS,
             config.INDEX_WORKERS,
         )
 
@@ -1695,61 +1731,84 @@ async def build_file_index_background(force: bool = False):
         base_root = str(ROOT_DIR.resolve())
         skip_dirs = {d for d in SKIP_DIRS if d}
 
-        dir_tasks: List[str] = []
-        try:
-            with os.scandir(base_root) as it:
-                for entry in it:
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            if entry.name in skip_dirs:
+        task_queue: "queue.Queue[Optional[str]]" = queue.Queue()
+        seen_dirs: Set[str] = set()
+        stats_lock = Lock()
+        index_lock = Lock()
+        base_root_slash = base_root.replace("\\", "/")
+        base_root_len = len(base_root_slash)
+
+        def enqueue_dir(path: str) -> None:
+            nonlocal seen_dirs
+            global INDEX_TOTAL_DIRS
+            with stats_lock:
+                if path not in seen_dirs:
+                    seen_dirs.add(path)
+                    INDEX_TOTAL_DIRS += 1
+                    task_queue.put(path)
+
+        def worker() -> None:
+            nonlocal new_index
+            global INDEX_COMPLETED_DIRS
+            while True:
+                try:
+                    current_dir = task_queue.get()
+                except Exception:
+                    return
+                if current_dir is None:
+                    task_queue.task_done()
+                    return
+
+                if BACKGROUND_TASKS_PAUSED or USER_ACTIVITY_FLAG:
+                    time.sleep(0.01)
+
+                try:
+                    with os.scandir(current_dir) as it:
+                        for entry in it:
+                            try:
+                                if entry.is_dir(follow_symlinks=False):
+                                    if entry.name in skip_dirs:
+                                        continue
+                                    enqueue_dir(str(entry.path))
+                                    continue
+
+                                if not entry.is_file(follow_symlinks=False):
+                                    continue
+
+                                entry_path = str(entry.path).replace("\\", "/")
+                                if entry_path.startswith(base_root_slash):
+                                    rel_path = entry_path[base_root_len:].lstrip("/")
+                                else:
+                                    rel_path = entry_path
+                                name_lower = entry.name.lower()
+
+                                with index_lock:
+                                    new_index[rel_path] = {"name_lower": name_lower}
+                            except Exception:
                                 continue
-                            dir_tasks.append(entry.path)
-                            continue
-                        if entry.is_file(follow_symlinks=False):
-                            rel_path = os.path.relpath(entry.path, base_root).replace("\\", "/")
-                            new_index[rel_path] = {"name_lower": entry.name.lower()}
-                    except Exception:
-                        continue
-        except Exception as exc:
-            logger.warning(f"⚠️ [INDEX] 루트 스캔 실패: {exc}")
+                except Exception as exc:
+                    logger.debug(f"[INDEX] 디렉터리 스캔 중 오류: {exc}")
+                finally:
+                    with stats_lock:
+                        INDEX_COMPLETED_DIRS += 1
+                    task_queue.task_done()
 
-        total_dirs = 1  # ROOT_DIR 포함
+        enqueue_dir(base_root)
+        workers = max(4, config.INDEX_WORKERS)
+        threads = [threading.Thread(target=worker, daemon=True) for _ in range(workers)]
+        for t in threads:
+            t.start()
 
-        process_workers = max(1, min(len(dir_tasks), config.INDEX_PROCESS_WORKERS))
-        skip_dirs_tuple = tuple(skip_dirs)
+        task_queue.join()
 
-        if dir_tasks:
-            if process_workers > 1:
-                with ProcessPoolExecutor(max_workers=process_workers) as executor:
-                    futures = [
-                        executor.submit(
-                            _scan_directory_tree,
-                            (base_root, path, skip_dirs_tuple)
-                        )
-                        for path in dir_tasks
-                    ]
-                    for future in as_completed(futures):
-                        try:
-                            files_list, dirs_scanned = future.result()
-                        except Exception as exc:
-                            logger.warning(f"⚠️ [INDEX] 하위 디렉터리 스캔 실패: {exc}")
-                            continue
-                        total_dirs += dirs_scanned
-                        for rel_path, name_lower in files_list:
-                            new_index[rel_path] = {"name_lower": name_lower}
-            else:
-                for path in dir_tasks:
-                    try:
-                        files_list, dirs_scanned = _scan_directory_tree((base_root, path, skip_dirs_tuple))
-                    except Exception as exc:
-                        logger.warning(f"⚠️ [INDEX] 하위 디렉터리 스캔 실패: {exc}")
-                        continue
-                    total_dirs += dirs_scanned
-                    for rel_path, name_lower in files_list:
-                        new_index[rel_path] = {"name_lower": name_lower}
+        for _ in threads:
+            task_queue.put(None)
 
-        INDEX_TOTAL_DIRS = total_dirs
-        INDEX_COMPLETED_DIRS = total_dirs
+        for t in threads:
+            t.join(timeout=0.1)
+
+        INDEX_TOTAL_DIRS = len(seen_dirs)
+        INDEX_COMPLETED_DIRS = INDEX_TOTAL_DIRS
 
         sorted_keys = sorted(new_index.keys())
         with FILE_INDEX_LOCK:
@@ -1779,6 +1838,8 @@ async def build_file_index_background(force: bool = False):
             logger.error("❌ [INDEX] 강제 재빌드 잠금 획득 실패")
             INDEX_BUILDING = False
             return
+        else:
+            logger.info("🔒 [INDEX] 강제 재빌드 잠금 획득 성공")
     else:
         lock_fd = _try_acquire_index_lock_once()
         if lock_fd is None:
@@ -1793,13 +1854,15 @@ async def build_file_index_background(force: bool = False):
                     logger.error("❌ [INDEX] 잠금 획득 실패로 빌드 중단")
                     INDEX_BUILDING = False
                     return
+                logger.info("🔒 [INDEX] 잠금 획득 성공 (대기 후)")
+        else:
+            logger.info("🔒 [INDEX] 잠금 선점 성공 (즉시)")
 
     loop = asyncio.get_running_loop()
     try:
         logger.info(
-            "🚧 [INDEX] 빌드 작업 제출 | force=%s | process_workers=%d | thread_workers=%d",
+            "🚧 [INDEX] 빌드 작업 제출 | force=%s | thread_workers=%d",
             force,
-            config.INDEX_PROCESS_WORKERS,
             config.INDEX_WORKERS,
         )
         await loop.run_in_executor(None, _walk_and_index)
@@ -4006,6 +4069,7 @@ async def startup_event():
     cache_loaded = _load_index_cache()
     if cache_loaded:
         logger.info("ℹ️ [INDEX] 캐시 사용, 백그라운드 리프레시는 주기 작업에 의해 처리됩니다.")
+        logger.info("🚧 [INDEX] 캐시 기반 full rebuild 스케줄링")
         asyncio.create_task(build_file_index_background(force=True))
     else:
         asyncio.create_task(build_file_index_background())
