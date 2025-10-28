@@ -314,6 +314,7 @@ LABELS_FILE = config.LABELS_FILE
 
 # ======================== Pools / State / Caches ========================
 IO_POOL = ThreadPoolExecutor(max_workers=IO_THREADS)
+DIRLIST_EXECUTOR = ThreadPoolExecutor(max_workers=max(4, min(16, (os.cpu_count() or 8))))
 THUMBNAIL_SEM = asyncio.Semaphore(THUMBNAIL_SEM_SIZE)
 _THUMBNAIL_EXECUTOR_WORKERS = max(4, min(THUMBNAIL_SEM_SIZE, (os.cpu_count() or 4) * 2))
 THUMBNAIL_EXECUTOR = ThreadPoolExecutor(max_workers=_THUMBNAIL_EXECUTOR_WORKERS)
@@ -1720,7 +1721,7 @@ async def build_file_index_background(force: bool = False):
             config.INDEX_WORKERS,
         )
 
-        new_index: Dict[str, Dict[str, Any]] = {}
+        collected_entries: List[Tuple[str, str]] = []
         base_root = str(ROOT_DIR.resolve())
         skip_dirs = {d for d in SKIP_DIRS if d}
 
@@ -1740,16 +1741,25 @@ async def build_file_index_background(force: bool = False):
                     INDEX_TOTAL_DIRS += 1
                     task_queue.put(path)
 
+        def _flush_local(entries: List[Tuple[str, str]]) -> None:
+            if not entries:
+                return
+            with index_lock:
+                collected_entries.extend(entries)
+            entries.clear()
+
         def worker() -> None:
-            nonlocal new_index
             global INDEX_COMPLETED_DIRS
+            local_buffer: List[Tuple[str, str]] = []
             while True:
                 try:
                     current_dir = task_queue.get()
                 except Exception:
+                    _flush_local(local_buffer)
                     return
                 if current_dir is None:
                     task_queue.task_done()
+                    _flush_local(local_buffer)
                     return
 
                 if BACKGROUND_TASKS_PAUSED or USER_ACTIVITY_FLAG:
@@ -1775,8 +1785,9 @@ async def build_file_index_background(force: bool = False):
                                     rel_path = entry_path
                                 name_lower = entry.name.lower()
 
-                                with index_lock:
-                                    new_index[rel_path] = {"name_lower": name_lower}
+                                local_buffer.append((rel_path, name_lower))
+                                if len(local_buffer) >= 16384:
+                                    _flush_local(local_buffer)
                             except Exception:
                                 continue
                 except Exception as exc:
@@ -1785,6 +1796,7 @@ async def build_file_index_background(force: bool = False):
                     with stats_lock:
                         INDEX_COMPLETED_DIRS += 1
                     task_queue.task_done()
+            _flush_local(local_buffer)
 
         enqueue_dir(base_root)
         workers = max(4, config.INDEX_WORKERS)
@@ -1803,14 +1815,23 @@ async def build_file_index_background(force: bool = False):
         INDEX_TOTAL_DIRS = len(seen_dirs)
         INDEX_COMPLETED_DIRS = INDEX_TOTAL_DIRS
 
-        sorted_keys = sorted(new_index.keys())
+        sorted_entries = sorted(collected_entries, key=lambda item: item[0])
+        sorted_keys: List[str] = []
+        sorted_names: List[str] = []
+        last_key: Optional[str] = None
+        for rel_path, name_lower in sorted_entries:
+            if rel_path == last_key:
+                continue
+            sorted_keys.append(rel_path)
+            sorted_names.append(name_lower)
+            last_key = rel_path
         with FILE_INDEX_LOCK:
             FILE_INDEX.clear()
-            FILE_INDEX.update(new_index)
+            FILE_INDEX.update((key, {"name_lower": name}) for key, name in zip(sorted_keys, sorted_names))
             FILE_INDEX_KEYS.clear()
             FILE_INDEX_KEYS.extend(sorted_keys)
             FILE_INDEX_NAMES.clear()
-            FILE_INDEX_NAMES.extend(new_index[key]["name_lower"] for key in sorted_keys)
+            FILE_INDEX_NAMES.extend(sorted_names)
 
         _save_index_cache(sorted_keys)
 
@@ -2202,7 +2223,7 @@ async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
         if 'classification' in str(target).replace('\\', '/'):
             _dircache_invalidate(target)
         loop = asyncio.get_running_loop()
-        items = await loop.run_in_executor(IO_POOL, list_dir_fast, target)
+        items = await loop.run_in_executor(DIRLIST_EXECUTOR, list_dir_fast, target)
         logger.info(f"📁 [/api/files] 반환 항목 수: {len(items)} (폴더: {sum(1 for x in items if x['type']=='directory')}, 파일: {sum(1 for x in items if x['type']=='file')})")
         # prefer 폴더명을 최상단에
         if prefer:
@@ -4123,6 +4144,10 @@ async def shutdown_event():
 
     try:
         THUMBNAIL_EXECUTOR.shutdown(wait=False, cancel_futures=False)
+    except Exception:
+        pass
+    try:
+        DIRLIST_EXECUTOR.shutdown(wait=False, cancel_futures=False)
     except Exception:
         pass
 

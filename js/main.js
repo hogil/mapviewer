@@ -1204,6 +1204,9 @@ class WaferMapViewer {
 
     // 🔥 제품 폴더 목록 미리 로드 (초기화 시 백그라운드에서 실행)
     async preloadProductFolders() {
+        if (this.cachedProductFolders && this.cachedProductFolders.length > 0) {
+            return;
+        }
         console.log('🔍 [PRODUCT_PRELOAD] 제품 폴더 미리 로드 시작');
         try {
             const apiUrl = '/api/browse-folders?path=&force_root=true';
@@ -2063,6 +2066,7 @@ class WaferMapViewer {
 
                         .sort((a, b) => b.name.toLowerCase().localeCompare(a.name.toLowerCase()));
                     
+                    this.cachedProductFolders = folders;
                     this.displayFoldersAsIcons(folders);
 
                     // 루트 경로 표시 (이미지 폴더명)
@@ -2101,6 +2105,7 @@ class WaferMapViewer {
 
                         .sort((a, b) => b.name.toLowerCase().localeCompare(a.name.toLowerCase()));
                     
+                    this.cachedProductFolders = folders;
                     this.displayFoldersAsIcons(folders);
 
                     // 루트 경로 표시 (폴백)
@@ -3080,7 +3085,7 @@ class WaferMapViewer {
      * Initial application entry point.
      */
 
-    init() {
+    async init() {
         this._drawScheduled = false; // draw() 스케줄링 플래그
 
         // 🔥 서버 설정 로드 (피라미드 레벨, zoom 기준 등)
@@ -3091,27 +3096,34 @@ class WaferMapViewer {
 
         // 먼저 이미지 폴더 최상위로 이동
 
-        this.resetToImageFolder().then(async () => {
-            this.loadDirectoryContents(null, this.dom.fileExplorer);
+        try {
+            await this.resetToImageFolder();
 
-            await this.initClassification();
+            const initialTasks = [
+                this.loadFolderBrowser(this.currentFolderPath || '')
+            ];
+            if (this.dom.fileExplorer) {
+                initialTasks.push(this.loadDirectoryContents(null, this.dom.fileExplorer));
+            }
 
-            await this.refreshLabelExplorer();
+            await Promise.all(initialTasks);
 
-            // 현재 경로 업데이트
-
-            await this.updateCurrentPath();
-
-            // 🔥 제품 폴더 목록 미리 로드 (파일 인덱스와 독립적으로 빠르게 로드)
-            this.preloadProductFolders();
-
-            // Wafer Map Explorer 초기 로드
-            await this.loadFolderBrowser(this.currentFolderPath || '');
-
-            // 초기 실행 시 안내 메시지 표시
+            if (!this.cachedProductFolders || this.cachedProductFolders.length === 0) {
+                await this.preloadProductFolders();
+            }
 
             this.showInitialState();
-        });
+        } catch (error) {
+            console.error('[INIT] Explorer preload failed:', error);
+        }
+
+        await this.initClassification();
+
+        await this.refreshLabelExplorer();
+
+        // 현재 경로 업데이트
+
+        await this.updateCurrentPath();
     }
 
     // 🔥 서버 설정 로드 (피라미드 레벨, zoom 기준 등)
