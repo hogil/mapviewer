@@ -1470,8 +1470,16 @@ class WaferMapViewer {
 
                 // 🔥 /api/current-folder 호출하여 서버 상태 업데이트
                 try {
-                    await this.updateCurrentPath();
+                    const response = await fetch('/api/current-folder');
+                    const data = await response.json();
+                    this.currentFolderPath = data.current_folder;
+                    this.currentFolderPrefix = data.current_folder_prefix || '';
                     console.log('🔍 [FOLDER_CHANGE_DEBUG] /api/current-folder 업데이트 완료');
+                    
+                    // 🔥 폴더 변경 시 클래스 캐시 무효화 (새 폴더의 클래스를 가져오기 위해)
+                    this.cachedClassList = null;
+                    this.classListPromise = null;
+                    console.log('🔍 [FOLDER_CHANGE_DEBUG] 클래스 캐시 무효화');
                 } catch (error) {
                     console.error('🔍 [FOLDER_CHANGE_DEBUG] /api/current-folder 업데이트 실패:', error);
                 }
@@ -1501,8 +1509,6 @@ class WaferMapViewer {
 
                     this.thumbnailManager.abortAll();
                 }
-
-                await this.updateCurrentPath();
 
                 this.loadDirectoryContents(null, this.dom.fileExplorer);
 
@@ -3086,8 +3092,50 @@ class WaferMapViewer {
             // 🔥 resetToImageFolder는 이미 ROOT_DIR이므로 불필요한 API 호출 스킵
             // await this.resetToImageFolder();
 
-            // 🔥 1순위: Wafer Map Explorer 폴더 목록과 제품 선택 폴더 최우선 로딩
-            await this.loadFolderBrowser(this.currentFolderPath || '');
+            // 🔥 초기화 작업들을 병렬로 실행 (UI 블로킹 최소화)
+            const [serverData, folderBrowserResult] = await Promise.all([
+                // loadFolderBrowser와 current-folder를 병렬로 처리
+                (async () => {
+                    const response = await fetch('/api/current-folder');
+                    return await response.json();
+                })(),
+                // 1순위: Wafer Map Explorer 폴더 목록과 제품 선택 폴더 최우선 로딩
+                // 🔥 초기화 시에는 빈 문자열로 ROOT_DIR의 하위 폴더만 가져오기 (force_root=true 사용)
+                this.loadFolderBrowser('')
+            ]);
+
+            // 🔥 current folder 확인 및 ROOT_DIR로 강제 변경
+            try {
+                const serverCurrentPath = serverData.current_folder;
+                
+                // 🔥 서버의 현재 폴더가 ROOT_DIR과 다르면 강제로 ROOT_DIR로 변경
+                if (rootPath && serverCurrentPath !== rootPath) {
+                    console.log('🔍 [INIT] 서버가 ROOT_DIR이 아닌 폴더에 있음. ROOT_DIR로 강제 변경:', serverCurrentPath, '->', rootPath);
+                    
+                    const changeFolderResponse = await fetch('/api/change-folder', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path: rootPath })
+                    });
+                    
+                    if (changeFolderResponse.ok) {
+                        console.log('🔍 [INIT] ROOT_DIR로 강제 변경 완료');
+                        this.currentFolderPath = rootPath;
+                        this.currentFolderPrefix = '';
+                    } else {
+                        console.warn('🔍 [INIT] ROOT_DIR로 강제 변경 실패, 서버 상태 유지');
+                        this.currentFolderPath = serverCurrentPath;
+                        this.currentFolderPrefix = serverData.current_folder_prefix || '';
+                    }
+                } else {
+                    this.currentFolderPath = serverCurrentPath;
+                    this.currentFolderPrefix = serverData.current_folder_prefix || '';
+                }
+                
+                console.log('🔍 [INIT] currentFolderPath 최종:', this.currentFolderPath);
+            } catch (error) {
+                console.error('🔍 [INIT] current folder 확인 실패:', error);
+            }
 
             this.showInitialState();
 
@@ -3105,12 +3153,14 @@ class WaferMapViewer {
         // loadFolderBrowser 이후에 백그라운드로 실행되어 UI 블로킹 없음
         const initTasks = [
             this.initClassification().catch(err => console.error('[INIT] Classification 초기화 실패:', err)),
-            this.refreshLabelExplorer().catch(err => console.error('[INIT] Label Explorer 초기화 실패:', err)),
-            this.updateSubfolderList().catch(err => console.error('[INIT] Subfolder 업데이트 실패:', err))
+            this.refreshLabelExplorer().catch(err => console.error('[INIT] Label Explorer 초기화 실패:', err))
         ];
         
         // 모두 병렬로 실행하되 에러 발생 시에도 다른 작업은 계속 진행
         Promise.allSettled(initTasks);
+        
+        // 🔥 updateSubfolderList는 loadFolderBrowser 이후에 캐시가 설정되었으므로 백그라운드로 실행
+        this.updateSubfolderList().catch(err => console.error('[INIT] Subfolder 업데이트 실패:', err));
     }
 
     // 🔥 서버 설정 로드 (피라미드 레벨, zoom 기준 등)
@@ -7711,26 +7761,24 @@ class WaferMapViewer {
 
             // selectedAction === 'add-all'인 경우는 모든 이미지에 추가 (기본 동작)
 
-            // 처리할 이미지들에 라벨 추가
+            // 처리할 이미지들에 라벨 추가 - 🔥 배치 API 사용 (성능 최적화)
 
             // 🔥 현재 폴더 파라미터 추가
             const currentFolder = this.currentFolderPrefix;
-            const apiUrl = currentFolder ? `/api/classify?folder=${encodeURIComponent(currentFolder)}` : '/api/classify';
-            const promises = imagesToProcess.map(imagePath => {
-                const requestBody = { class_name: finalClassName, image_path: imagePath };
+            const apiUrl = currentFolder ? `/api/classify/batch?folder=${encodeURIComponent(currentFolder)}` : '/api/classify/batch';
 
-                this.debugLog('모달에서 라벨 추가 요청 전송:', requestBody);
+            // 🔥 배치 API로 한 번의 호출로 모든 이미지 처리
+            this.debugLog('배치 API로 라벨 추가:', { class: finalClassName, images: imagesToProcess.length });
 
-                return fetch(apiUrl, {
+            const response = await fetch(apiUrl, {
                     method: 'POST',
-
                     headers: { 'Content-Type': 'application/json' },
-
-                    body: JSON.stringify(requestBody)
-                });
+                body: JSON.stringify({ class_name: finalClassName, images: imagesToProcess })
             });
 
-            await Promise.all(promises);
+            if (!response.ok) {
+                throw new Error(`Batch labeling failed: ${response.status}`);
+            }
 
             // 성공 메시지
 
@@ -7864,15 +7912,12 @@ class WaferMapViewer {
         if ((!this.gridMode && this.selectedImagePath) || (this.gridMode && this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0)) {
             this.debugLog('🔷 [DEBUG] 라벨링 후 열린 폴더 강제 새로고침');
 
-            // 🔥 열린 폴더의 이미지 목록을 서버에서 가져오기 (최대 3개씩 병렬)
+            // 🔥 열린 폴더의 이미지 목록을 서버에서 가져오기 (병렬 처리 최적화)
 
             const openFolders = classes.filter(cls => labelSelection.openFolders[cls]);
             
-            // 🔥 최대 3개씩 병렬로 처리 (브라우저 연결 풀 고갈 방지)
-            const batchSize = 3;
-            for (let i = 0; i < openFolders.length; i += batchSize) {
-                const batch = openFolders.slice(i, i + batchSize);
-                const batchPromises = batch.map(async (cls) => {
+            // 🔥 모든 폴더를 병렬로 처리 (배치 제한 제거)
+            const folderPromises = openFolders.map(async (cls) => {
                     try {
                         // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
                         const labelPath = this.currentFolderPrefix ? 
@@ -7895,8 +7940,7 @@ class WaferMapViewer {
                     }
                 });
                 
-                await Promise.all(batchPromises);
-            }
+            await Promise.all(folderPromises);
         }
 
         this.debugLog(`🚀 Label Explorer: ${classes.length}개 클래스 초기화 완료 (열린 폴더: ${Object.keys(labelSelection.openFolders).filter(k => labelSelection.openFolders[k]).length}개)`);

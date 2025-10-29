@@ -1649,32 +1649,59 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
     items: List[Dict[str, str]] = []
     
     # 🚀 ROOT_DIR 미리 계산 (성능 최적화)
-    root_dir_str = str(ROOT_DIR.resolve())
+    root_dir_str = str(ROOT_DIR.resolve()).replace('\\', '/')
     root_dir_len = len(root_dir_str)
     
     try:
+        # 🔥 처리할 항목들을 먼저 수집
+        entries_to_process = []
         with os.scandir(target) as it:
             for entry in it:
                 name = entry.name
                 # 🔥 classification, thumbnails 폴더 제외
                 if name.startswith('.') or name == '__pycache__' or name in SKIP_DIRS or name in ['classification', 'thumbnails']: 
                     continue
+                entries_to_process.append(entry)
+        
+        # 🔥 대량 파일 처리 시에만 병렬 처리 (오버헤드 최소화)
+        if len(entries_to_process) > 100:
+            def process_entry(entry):
                 typ = "directory" if entry.is_dir(follow_symlinks=False) else "file"
-                
-                # 🚀 빠른 경로 계산: 문자열 조작으로 ROOT_DIR 제거
                 entry_path_str = str(entry.path).replace('\\', '/')
                 # ROOT_DIR 부분을 제거하여 상대 경로 생성
-                if entry_path_str.startswith(root_dir_str.replace('\\', '/')):
+                if entry_path_str.startswith(root_dir_str):
                     root_relative = entry_path_str[root_dir_len:].lstrip('/')
                 else:
-                    root_relative = name
+                    root_relative = entry.name
+                
+                return {
+                    "name": entry.name, 
+                    "type": typ, 
+                    "path": entry_path_str,
+                    "root_relative": root_relative  # ROOT_DIR 기준 절대 경로
+                }
+            
+            # 🔥 병렬 처리 (대량 파일 처리 시 성능 향상, SEARCH_WORKERS 사용)
+            with ThreadPoolExecutor(max_workers=config.SEARCH_WORKERS) as executor:
+                items = list(executor.map(process_entry, entries_to_process))
+        else:
+            # 🔥 소량 파일은 순차 처리 (오버헤드 방지)
+            for entry in entries_to_process:
+                typ = "directory" if entry.is_dir(follow_symlinks=False) else "file"
+                entry_path_str = str(entry.path).replace('\\', '/')
+                # ROOT_DIR 부분을 제거하여 상대 경로 생성
+                if entry_path_str.startswith(root_dir_str):
+                    root_relative = entry_path_str[root_dir_len:].lstrip('/')
+                else:
+                    root_relative = entry.name
                 
                 items.append({
-                    "name": name, 
+                    "name": entry.name, 
                     "type": typ, 
                     "path": entry_path_str,
                     "root_relative": root_relative  # ROOT_DIR 기준 절대 경로
                 })
+        
         directories = [x for x in items if x["type"] == "directory"]
         files = [x for x in items if x["type"] == "file"]
         
@@ -2222,9 +2249,13 @@ async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
         # 🔥 라벨 썸네일 캐시는 유지하고, classification 폴더만 무효화
         if 'classification' in str(target).replace('\\', '/'):
             _dircache_invalidate(target)
+        
+        # 🔥 ThreadPoolExecutor로 병렬 처리 (고성능)
         loop = asyncio.get_running_loop()
         items = await loop.run_in_executor(DIRLIST_EXECUTOR, list_dir_fast, target)
+        
         logger.info(f"📁 [/api/files] 반환 항목 수: {len(items)} (폴더: {sum(1 for x in items if x['type']=='directory')}, 파일: {sum(1 for x in items if x['type']=='file')})")
+        
         # prefer 폴더명을 최상단에
         if prefer:
             try:
@@ -2304,8 +2335,6 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
     """🚀 피라미드 레벨 이미지 생성 (속도 극대화)"""
     import time
     start_time = time.time()
-
-    logger.info(f"🚀 [PYRAMID] 시작: level={level}")
 
     target_format = config.PYRAMID_FORMAT.upper()
     quality = max(1, min(100, int(config.PYRAMID_Q)))
@@ -2622,7 +2651,6 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                         pass
                 
                 # 레벨 생성
-                t_level_start = time.time()
                 work_image = original_image
                 
                 # 레벨에 따른 리사이즈
@@ -2638,9 +2666,6 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                         kernel = pyvips.enums.Kernel.LANCZOS3
                     
                     work_image = work_image.resize(scale, kernel=kernel)
-                    logger.info(f"⏱️ [PIPELINE] resize({kernel}): {(time.time()-t_level_start)*1000:.0f}ms")
-                else:
-                    logger.info("⏱️ [PIPELINE] Level 1.0 - 원본 해상도 유지")
                 
                 # 저장
                 t_save_start = time.time()
@@ -2677,14 +2702,43 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                         trellis_quant=False        # 트렐리스 양자화 비활성화
                     )
                 
-                # 임시 파일을 최종 파일로 이동
-                temp_path.replace(pyramid_path)
-                t_save_end = time.time()
+                # 임시 파일을 최종 파일로 안전하게 이동
+                # 이미 파일이 존재하면 스킵 (백그라운드에서 동시 생성 방지)
+                if pyramid_path.exists():
+                    # 임시 파일만 삭제
+                    try:
+                        temp_path.unlink()
+                    except:
+                        pass
+                    results.append((level, True, "EXISTS_OTHER"))
+                    continue
                 
-                logger.info(f"✅ [PIPELINE] Level {level} 완료: {(t_save_end - t_save_start)*1000:.0f}ms")
-                results.append((level, True, "SUCCESS"))
+                # 안전한 파일 이동 (원자적 교체)
+                try:
+                    temp_path.replace(pyramid_path)
+                except (PermissionError, OSError) as err:
+                    # 권한 오류 시 임시 파일 삭제만 (다른 프로세스가 사용 중일 수 있음)
+                    try:
+                        temp_path.unlink()
+                    except:
+                        pass
+                    # 파일이 생성 중이거나 사용 중이면 스킵
+                    if pyramid_path.exists():
+                        results.append((level, True, "EXISTS_LOCKED"))
+                    else:
+                        raise Exception(f"파일 이동 실패: {err}")
+                else:
+                    t_save_end = time.time()
+                    logger.info(f"⏱️ [DEBUG] 저장 완료: {(t_save_end - t_save_start)*1000:.0f}ms")
+                    results.append((level, True, "SUCCESS"))
                 
             except Exception as e:
+                # temp 파일이 남아있으면 정리
+                if 'temp_path' in locals() and temp_path.exists():
+                    try:
+                        temp_path.unlink()
+                    except:
+                        pass
                 logger.warning(f"⚠️ [PIPELINE ERROR] Level {level} 생성 실패: {e}")
                 results.append((level, False, str(e)))
         
@@ -2810,8 +2864,6 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
                 stem = f"file_{stem}"
 
             pyramid_path = pyramid_dir / f"{stem}_L{int(level*100)}.{format_ext}"
-            if not is_head:
-                logger.info(f"🎯 [PYRAMID PATH] {pyramid_path}")
 
             # 🚀 캐시 확인: 이미 존재하고 최신이면 즉시 반환
             import time
@@ -2841,7 +2893,7 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
 
             # 캐시 미스: 피라미드 이미지 생성
             if not is_head:
-                logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}")
+                logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}, path={pyramid_path}")
             _generate_pyramid_sync(image_path, pyramid_path, level)
 
             # 🔥 Background에서 다른 레벨들도 생성 시작 (사용자 대기 없음)
@@ -3664,9 +3716,11 @@ async def classify_images_batch(request: BatchClassifyRequest,
         
         for image_path in request.images:
             try:
-                # 🔥 경로 조회 최적화
+                # 🔥 경로 조회 최적화 - 분류 작업은 classification 경로 조회 불필요 (너무 느림)
                 lookup_start = time.perf_counter()
-                rel_path = _lookup_original_relpath_from_classification_path(image_path) or relkey_from_any_path(image_path)
+                # _lookup_original_relpath_from_classification_path는 FILE_INDEX 전체 순회로 매우 느림
+                # 분류 작업은 이미 원본 파일 경로이므로 relkey_from_any_path만 사용
+                rel_path = relkey_from_any_path(image_path)
                 lookup_time += time.perf_counter() - lookup_start
                 
                 abs_path = ROOT_DIR / rel_path
@@ -3687,19 +3741,19 @@ async def classify_images_batch(request: BatchClassifyRequest,
                 # 대상 파일 경로
                 target_file = class_dir / abs_path.name
                 
-                # 🔥 파일 복사/하드링크 최적화 - 이미 존재하면 스킵
+                # 🔥 파일 복사/하드링크 최적화 - 간결한 로직
                 link_start = time.perf_counter()
-                if not target_file.exists():
+                # 이미 존재하면 스킵 (stat 체크 제거)
+                if target_file.exists():
+                    pass  # 파일이 이미 있으면 아무 작업 안 함
+                else:
                     try:
-                        # 드라이브 체크는 이미 위에서 한 번만 수행
+                        # 같은 드라이브면 하드링크, 아니면 복사
                         if abs_path.stat().st_dev == class_dir_dev:
-                            # 같은 드라이브면 하드링크 시도
                             os.link(str(abs_path), str(target_file))
                         else:
-                            # 다른 드라이브면 복사
                             shutil.copy2(abs_path, target_file)
                     except (OSError, PermissionError):
-                        # 하드링크 실패시 복사로 폴백
                         shutil.copy2(abs_path, target_file)
                 link_time += time.perf_counter() - link_start
                 
@@ -3720,7 +3774,7 @@ async def classify_images_batch(request: BatchClassifyRequest,
                     LABELS[rel_path] = sorted(cur_labels)
         label_update_time = time.perf_counter() - label_update_start
         
-        # 🔥 파일 저장 및 캐시 무효화
+        # 🔥 파일 저장 및 캐시 무효화 (간결한 로직)
         save_start = time.perf_counter()
         if results:
             _labels_save()
@@ -4040,33 +4094,53 @@ async def browse_folders(path: Optional[str] = None):
         folders = []
         subfolders = []  # 2depth 폴더들
         
+        # 🔥 1depth 폴더 수집
         try:
             with os.scandir(target_path) as it:
                 for entry in it:
                     # 🔥 classification, thumbnails 폴더 제외
                     if entry.is_dir(follow_symlinks=False) and not entry.name.startswith('.') and entry.name not in ['classification', 'thumbnails']:
-                        # 1depth 폴더 추가
-                        folders.append({"name": entry.name, "path": str(entry.path), "type": "folder", "depth": 1})
-                        
-                        # 2depth 폴더들도 추가
-                        try:
-                            with os.scandir(entry.path) as sub_it:
-                                for sub_entry in sub_it:
-                                    # 🔥 classification, thumbnails 폴더 제외
-                                    if sub_entry.is_dir(follow_symlinks=False) and not sub_entry.name.startswith('.') and sub_entry.name not in ['classification', 'thumbnails']:
-                                        subfolders.append({
-                                            "name": f"{entry.name} / {sub_entry.name}", 
-                                            "path": str(sub_entry.path), 
-                                            "type": "folder", 
-                                            "depth": 2,
-                                            "parent": entry.name
-                                        })
-                        except PermissionError:
-                            # 하위 폴더 접근 권한이 없으면 무시
-                            continue
-                            
+                        folders.append({
+                            "name": entry.name, 
+                            "path": str(entry.path), 
+                            "type": "folder", 
+                            "depth": 1,
+                            "entry": entry  # 2depth 스캔을 위해 entry 전달
+                        })
         except PermissionError:
             raise HTTPException(status_code=403, detail="폴더 접근 권한이 없습니다")
+        
+        # 🔥 2depth 폴더 병렬 처리 (워커 여러 개 사용)
+        def scan_2depth(entry_info):
+            try:
+                subfolders_list = []
+                with os.scandir(entry_info["path"]) as sub_it:
+                    for sub_entry in sub_it:
+                        # 🔥 classification, thumbnails 폴더 제외
+                        if sub_entry.is_dir(follow_symlinks=False) and not sub_entry.name.startswith('.') and sub_entry.name not in ['classification', 'thumbnails']:
+                            subfolders_list.append({
+                                "name": f"{entry_info['name']} / {sub_entry.name}", 
+                                "path": str(sub_entry.path), 
+                                "type": "folder", 
+                                "depth": 2,
+                                "parent": entry_info['name']
+                            })
+                return subfolders_list
+            except PermissionError:
+                return []  # 하위 폴더 접근 권한이 없으면 빈 리스트 반환
+            except Exception as e:
+                logger.debug(f"2depth 스캔 오류 ({entry_info['name']}): {e}")
+                return []
+        
+        # 🔥 ThreadPoolExecutor로 병렬 처리 (SEARCH_WORKERS 사용)
+        with ThreadPoolExecutor(max_workers=config.SEARCH_WORKERS) as executor:
+            results = executor.map(scan_2depth, folders)
+            for subfolder_list in results:
+                subfolders.extend(subfolder_list)
+        
+        # 🔥 1depth 폴더에서 entry 제거 (반환 시 불필요)
+        for folder in folders:
+            folder.pop("entry", None)
 
         # 🔥 모든 폴더를 이름 내림차순으로 정렬 (depth 무관)
         all_folders = folders + subfolders
