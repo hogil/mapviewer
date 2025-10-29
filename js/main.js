@@ -477,6 +477,9 @@ class WaferMapViewer {
         // 전역 AbortController 초기화 (모든 API 요청 중단용)
         this.globalAbortController = new AbortController();
         
+        // 🔥 ROOT_DIR 캐시 (중복 API 호출 방지)
+        this.cachedRootPath = null;
+        
         // 반도체 특화 렌더러 초기화
 
         this.semiconductorRenderer = null;
@@ -993,20 +996,36 @@ class WaferMapViewer {
         }
     }
 
+    // 🔥 ROOT_DIR 경로 가져오기 (캐시 활용)
+    async getRootPath() {
+        if (this.cachedRootPath) {
+            return this.cachedRootPath;
+        }
+        
+        try {
+            const response = await fetch('/api/root-folder');
+            if (!response.ok) {
+                throw new Error(`Failed to get root folder: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            this.cachedRootPath = data.root_folder;
+            return this.cachedRootPath;
+        } catch (error) {
+            console.error('ROOT_DIR 가져오기 실패:', error);
+            return null;
+        }
+    }
+
     // 파일 탐색기에서 하위 폴더 목록 로드 (항상 이미지 폴더 최상위 기준)
 
     async loadSubfoldersFromFileExplorer() {
         try {
-            // 설정된 루트 이미지 폴더 경로를 API에서 가져오기
-
-            const rootResponse = await fetch('/api/root-folder');
-
-            if (!rootResponse.ok) {
-                throw new Error(`Failed to get root folder: ${rootResponse.status}`);
+            // 🔥 캐시된 ROOT_DIR 경로 사용
+            const imageRootPath = await this.getRootPath();
+            if (!imageRootPath) {
+                throw new Error('ROOT_DIR을 가져올 수 없습니다');
             }
-
-            const rootData = await rootResponse.json();
-            const imageRootPath = rootData.root_folder;
 
             const response = await fetch(`/api/browse-folders?path=${encodeURIComponent(imageRootPath)}`);
 
@@ -1506,11 +1525,12 @@ class WaferMapViewer {
 
     async getRelativePath(absolutePath) {
         try {
-            const rootResponse = await fetch('/api/root-folder');
-
-            if (rootResponse.ok) {
-                const rootData = await rootResponse.json();
-                const imageRoot = rootData.root_folder.replace(/\\/g, '/');
+            const imageRootPath = await this.getRootPath();
+            if (!imageRootPath) {
+                return absolutePath.split(/[/\\]/).pop() || 'root';
+            }
+            
+            const imageRoot = imageRootPath.replace(/\\/g, '/');
                 const currentPath = absolutePath.replace(/\\/g, '/');
 
                 // 이미지 폴더명 추출
@@ -1546,13 +1566,9 @@ class WaferMapViewer {
         modal.style.display = 'flex';
 
         try {
-            // 설정된 루트 폴더에서 시작
-
-            const rootResponse = await fetch('/api/root-folder');
-
-            if (rootResponse.ok) {
-                const rootData = await rootResponse.json();
-                const imageRoot = rootData.root_folder;
+            // 🔥 캐시된 ROOT_DIR 경로 사용
+            const imageRoot = await this.getRootPath();
+            if (imageRoot) {
                 const input = modal.querySelector('#folder-path-input');
 
                 if (input) {
@@ -1851,11 +1867,9 @@ class WaferMapViewer {
             
             // API를 통해 ROOT_DIR로 복원
             try {
-                // 먼저 ROOT_DIR 경로를 가져옴
-                const rootResponse = await fetch('/api/root-folder');
-                if (rootResponse.ok) {
-                    const rootData = await rootResponse.json();
-                    const rootPath = rootData.root_folder;
+                // 🔥 캐시된 ROOT_DIR 경로 사용
+                const rootPath = await this.getRootPath();
+                if (rootPath) {
                     
                     // currentFolderPath 설정
                     console.log('🔍 [STATE_DEBUG] currentFolderPath 변경 전 (goToRootFolder):', this.currentFolderPath);
@@ -1950,13 +1964,9 @@ class WaferMapViewer {
         if (rootBtn) {
             rootBtn.addEventListener('click', async () => {
                 try {
-                    // 설정된 루트 폴더 경로 가져오기
-
-                    const rootResponse = await fetch('/api/root-folder');
-
-                    if (rootResponse.ok) {
-                        const rootData = await rootResponse.json();
-                        const imageRoot = rootData.root_folder;
+                    // 🔥 캐시된 ROOT_DIR 경로 사용
+                    const imageRoot = await this.getRootPath();
+                    if (imageRoot) {
 
                         this.loadFolderBrowser(imageRoot);
 
@@ -1981,18 +1991,14 @@ class WaferMapViewer {
         if (upBtn) {
             upBtn.addEventListener('click', async () => {
                 try {
-                    // 설정된 루트 폴더 경로 가져오기
-
-                    const rootResponse = await fetch('/api/root-folder');
-
-                    if (!rootResponse.ok) {
+                    // 🔥 캐시된 ROOT_DIR 경로 사용
+                    const imageRootPath = await this.getRootPath();
+                    if (!imageRootPath) {
                         console.error('루트 폴더 정보를 가져올 수 없습니다');
-
                         return;
                     }
-
-                    const rootData = await rootResponse.json();
-                    const imageRoot = rootData.root_folder.replace(/\\/g, '/');
+                    
+                    const imageRoot = imageRootPath.replace(/\\/g, '/');
 
                     const currentPath = this.currentBrowserPath || '';
                     const current = currentPath.replace(/\\/g, '/');
@@ -2110,13 +2116,10 @@ class WaferMapViewer {
             const currentFolderText = document.getElementById('current-folder-text');
 
             if (currentFolderText) {
-                // 설정된 루트 폴더 경로 가져오기
-
-                const rootResponse = await fetch('/api/root-folder');
-
-                if (rootResponse.ok) {
-                    const rootData = await rootResponse.json();
-                    const imageRoot = rootData.root_folder.replace(/\\/g, '/');
+                // 🔥 캐시된 ROOT_DIR 경로 사용
+                const imageRootPath = await this.getRootPath();
+                if (imageRootPath) {
+                    const imageRoot = imageRootPath.replace(/\\/g, '/');
                     const currentPath = path.replace(/\\/g, '/');
 
                     // 이미지 폴더명 추출 (경로의 마지막 부분)
@@ -3206,16 +3209,11 @@ class WaferMapViewer {
 
     async resetToImageFolder() {
         try {
-            // 설정된 루트 이미지 폴더 경로를 API에서 가져오기
-
-            const rootResponse = await fetch('/api/root-folder');
-
-            if (!rootResponse.ok) {
-                throw new Error(`Failed to get root folder: ${rootResponse.status}`);
+            // 🔥 캐시된 ROOT_DIR 경로 사용
+            const imageRootPath = await this.getRootPath();
+            if (!imageRootPath) {
+                throw new Error('ROOT_DIR을 가져올 수 없습니다');
             }
-
-            const rootData = await rootResponse.json();
-            const imageRootPath = rootData.root_folder;
 
             const response = await fetch('/api/change-folder', {
                 method: 'POST',
