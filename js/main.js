@@ -3339,8 +3339,7 @@ class WaferMapViewer {
             if (node.type === 'directory') {
                 html += `<li><details><summary data-path="${fullPath}" class="folder">📁 ${node.name}</summary><div class="folder-content" style="padding-left: 1rem;"></div></details></li>`;
             } else if (node.type === 'file') {
-                const draggableAttr = 'draggable="true"';
-                html += `<li><a href="#" data-path="${fullPath}" ${draggableAttr}>📄 ${node.name}</a></li>`;
+                html += `<li><a href="#" data-path="${fullPath}">📄 ${node.name}</a></li>`;
             }
         }
 
@@ -8683,8 +8682,7 @@ class WaferMapViewer {
 
                     imgBtn.style.fontSize = '13px';
 
-                    // 🔥 Drag 범위 선택 이벤트 추가
-                    imgBtn.draggable = true;
+                    // 🔥 Drag 범위 선택 이벤트 추가 (draggable 속성 제거)
 
                     // 🔥 마우스 hover 효과 추가 (선택된 아이템 제외)
                     imgBtn.onmouseover = (e) => {
@@ -9085,8 +9083,7 @@ class WaferMapViewer {
 
                             imgBtn.style.fontSize = '13px';
 
-                            // 🔥 Drag 범위 선택 이벤트 추가 (동적 생성된 버튼)
-                            imgBtn.draggable = true;
+                            // 🔥 Drag 범위 선택 이벤트 추가 (동적 생성된 버튼, draggable 속성 제거)
 
                             // 🔥 마우스 hover 효과 추가
                             imgBtn.onmouseover = (e) => {
