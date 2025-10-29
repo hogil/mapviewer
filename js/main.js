@@ -7078,6 +7078,9 @@ class WaferMapViewer {
 
             // 🔥 Label Explorer가 내부에서 getClassList()를 호출하므로 refreshClassList() 불필요
             await this.refreshLabelExplorer();
+            
+            // 🔥 추가: Fail List와 Label Explorer 즉시 업데이트
+            this.updateLabelExplorerContent();
 
             // 성공한 클래스 수 계산
 
@@ -7191,7 +7194,11 @@ class WaferMapViewer {
         }
 
         const oldName = selectedClasses[0];
+        console.log('🔍 [RENAME_DEBUG] Rename 시작:', { oldName, selectedClasses });
+        
         const newName = prompt(`Rename class "${oldName}" to:`, oldName);
+        
+        console.log('🔍 [RENAME_DEBUG] 사용자 입력:', { newName, oldName });
 
         if (!newName || newName.trim() === '') {
             return; // 취소 또는 빈 입력
@@ -7203,6 +7210,8 @@ class WaferMapViewer {
             alert('New name is the same as old name');
             return;
         }
+        
+        console.log('🔍 [RENAME_DEBUG] 최종 이름:', { oldName, trimmedNewName });
 
         try {
             // 🔥 현재 폴더 파라미터 추가
@@ -7229,6 +7238,9 @@ class WaferMapViewer {
 
                 // Label Explorer 새로고침 (내부에서 getClassList() 호출)
                 await this.refreshLabelExplorer();
+                
+                // 🔥 추가: Fail List와 Label Explorer 즉시 업데이트
+                this.updateLabelExplorerContent();
 
                 // 입력 필드 초기화
                 this.dom.newClassInput.value = '';
@@ -7312,6 +7324,10 @@ class WaferMapViewer {
 
         // 🔥 refreshLabelExplorer가 내부에서 getClassList() 호출하므로 중복 제거
         await this.refreshLabelExplorer();
+        
+        // 🔥 추가: Fail List와 Label Explorer 즉시 업데이트
+        this.updateLabelExplorerContent();
+        
         this.loadDirectoryContents(null, this.dom.fileExplorer);
 
         this.debugLog(`Successfully deleted ${names.length} classes`);
