@@ -1266,38 +1266,22 @@ class WaferMapViewer {
             return;
         }
 
-        // 🔥 캐시가 없으면 우선 비동기로 로딩
-        if (!this.cachedProductFolders || this.cachedProductFolders.length === 0) {
-            await this.preloadProductFolders();
-        }
+        // 🔥 캐시가 있으면 바로 사용 (API 호출 생략)
         if (this.cachedProductFolders && this.cachedProductFolders.length > 0) {
             console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] 캐시된 폴더 목록 사용:', this.cachedProductFolders.length, '개');
             this.renderSubfolderDropdown(this.cachedProductFolders);
             return;
         }
 
-        try {
-            // 🔥 force_root=true로 항상 루트 폴더의 1depth/2depth 폴더 가져오기
-            const apiUrl = '/api/browse-folders?path=&force_root=true';
-            console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] API URL:', apiUrl);
-
-            const response = await fetch(apiUrl);
-            console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] API 응답 상태:', response.status);
-
-            const data = await response.json();
-            console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] API 응답 데이터:', data);
-
-            if (data.folders) {
-                console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] 폴더 수:', data.folders.length);
-                // 🔥 폴더 목록 캐시
-                this.cachedProductFolders = data.folders;
-                this.renderSubfolderDropdown(data.folders);
-            } else {
-                console.warn('🔍 [PRODUCT_DROPDOWN_DEBUG] data.folders가 없음');
-            }
-        } catch (error) {
-            console.error('🔍 [PRODUCT_DROPDOWN_DEBUG] 제품 목록 로드 실패:', error);
-            this.dom.subfolderDropdown.innerHTML = '<div style="padding: 8px; color: #ff5555;">로드 실패</div>';
+        // 🔥 캐시가 없으면 preloadProductFolders 대기 (중복 API 호출 방지)
+        console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] 캐시 없음 - preloadProductFolders 대기');
+        const folders = await this.preloadProductFolders();
+        
+        if (folders && folders.length > 0) {
+            console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] preloadProductFolders 완료:', folders.length, '개');
+            this.renderSubfolderDropdown(folders);
+        } else {
+            console.warn('🔍 [PRODUCT_DROPDOWN_DEBUG] 폴더 목록을 가져올 수 없음');
         }
     }
 
