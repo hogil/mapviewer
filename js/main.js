@@ -1287,7 +1287,7 @@ class WaferMapViewer {
         if (folders && folders.length > 0) {
             console.log('🔍 [PRODUCT_DROPDOWN_DEBUG] preloadProductFolders 완료:', folders.length, '개');
             this.renderSubfolderDropdown(folders);
-        } else {
+            } else {
             console.warn('🔍 [PRODUCT_DROPDOWN_DEBUG] 폴더 목록을 가져올 수 없음');
         }
     }
@@ -1468,6 +1468,14 @@ class WaferMapViewer {
                 // 🔥 currentFolderPath 업데이트 완료 후 잠시 대기 (동기화 보장)
                 await new Promise(resolve => setTimeout(resolve, 50));
 
+                // 🔥 /api/current-folder 호출하여 서버 상태 업데이트
+                try {
+                    await this.updateCurrentPath();
+                    console.log('🔍 [FOLDER_CHANGE_DEBUG] /api/current-folder 업데이트 완료');
+                } catch (error) {
+                    console.error('🔍 [FOLDER_CHANGE_DEBUG] /api/current-folder 업데이트 실패:', error);
+                }
+
                 // 🔥 Label Explorer와 Class Manager 새로고침 (제품 선택 시)
                 console.log('🔍 [FOLDER_CHANGE_DEBUG] 폴더 변경 후 Label Explorer 새로고침 시작');
                 console.log('🔍 [FOLDER_CHANGE_DEBUG] currentFolderPath:', this.currentFolderPath);
@@ -1520,22 +1528,22 @@ class WaferMapViewer {
             if (!imageRootPath) {
                 return absolutePath.split(/[/\\]/).pop() || 'root';
             }
-            
+
             const imageRoot = imageRootPath.replace(/\\/g, '/');
-            const currentPath = absolutePath.replace(/\\/g, '/');
+                const currentPath = absolutePath.replace(/\\/g, '/');
 
-            // 이미지 폴더명 추출
+                // 이미지 폴더명 추출
 
-            const imageFolderName = imageRoot.split('/').pop() || 'root';
+                const imageFolderName = imageRoot.split('/').pop() || 'root';
 
-            if (currentPath === imageRoot) {
-                return imageFolderName;
-            } else if (currentPath.startsWith(imageRoot)) {
-                const relativePath = currentPath.substring(imageRoot.length).replace(/^\//, '');
+                if (currentPath === imageRoot) {
+                    return imageFolderName;
+                } else if (currentPath.startsWith(imageRoot)) {
+                    const relativePath = currentPath.substring(imageRoot.length).replace(/^\//, '');
 
-                return relativePath ? `${imageFolderName}/${relativePath}` : imageFolderName;
-            } else {
-                return imageFolderName;
+                    return relativePath ? `${imageFolderName}/${relativePath}` : imageFolderName;
+                } else {
+                    return imageFolderName;
             }
         } catch (error) {
             console.error('상대경로 변환 실패:', error);
@@ -1987,7 +1995,7 @@ class WaferMapViewer {
                         console.error('루트 폴더 정보를 가져올 수 없습니다');
                         return;
                     }
-                    
+
                     const imageRoot = imageRootPath.replace(/\\/g, '/');
 
                     const currentPath = this.currentBrowserPath || '';
@@ -2064,33 +2072,33 @@ class WaferMapViewer {
                 }
                 
                 const response = await fetch('/api/browse-folders?path=&force_root=true');
-                const data = await response.json();
-                const folders = (data.folders || [])
+                    const data = await response.json();
+                    const folders = (data.folders || [])
 
-                    .filter(folder => 
+                        .filter(folder => 
 
-                        folder.name !== 'classification' && 
+                            folder.name !== 'classification' && 
 
-                        folder.name !== 'thumbnails' &&
+                            folder.name !== 'thumbnails' &&
 
-                        folder.name !== 'labels'
+                            folder.name !== 'labels'
 
-                    )
+                        )
 
-                    .sort((a, b) => b.name.toLowerCase().localeCompare(a.name.toLowerCase()));
-                
-                this.cachedProductFolders = folders;
-                this.displayFoldersAsIcons(folders);
+                        .sort((a, b) => b.name.toLowerCase().localeCompare(a.name.toLowerCase()));
+                    
+                    this.cachedProductFolders = folders;
+                    this.displayFoldersAsIcons(folders);
 
                 // 루트 경로 표시
-                const currentFolderText = document.getElementById('current-folder-text');
-                if (currentFolderText) {
+                    const currentFolderText = document.getElementById('current-folder-text');
+                    if (currentFolderText) {
                     currentFolderText.textContent = 'root';
-                }
+                    }
 
-                this.currentBrowserPath = this.currentFolderPath || '';
+                    this.currentBrowserPath = this.currentFolderPath || '';
 
-                return;
+                    return;
             }
 
             const response = await fetch(`/api/browse-folders?path=${encodeURIComponent(path)}`);
@@ -3080,7 +3088,7 @@ class WaferMapViewer {
 
             // 🔥 1순위: Wafer Map Explorer 폴더 목록과 제품 선택 폴더 최우선 로딩
             await this.loadFolderBrowser(this.currentFolderPath || '');
-            
+
             this.showInitialState();
 
             // 🔥 2순위: File Explorer 로딩은 백그라운드로 실행
