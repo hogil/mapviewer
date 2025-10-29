@@ -3169,6 +3169,11 @@ class WaferMapViewer {
         try {
             await this.refreshLabelExplorer();
             console.log('🔍 [INIT_DEBUG] Label Explorer 초기화 완료');
+            
+            // 🔥 추가: fail list 표시를 위해 updateLabelExplorerContent 호출
+            console.log('🔍 [INIT_DEBUG] Label Explorer 내용 업데이트 시작');
+            this.updateLabelExplorerContent();
+            console.log('🔍 [INIT_DEBUG] Label Explorer 내용 업데이트 완료');
         } catch (err) {
             console.error('[INIT] Label Explorer 초기화 실패:', err);
         }
@@ -9515,38 +9520,44 @@ class WaferMapViewer {
 
     updateLabelExplorerContent() {
         // 🔥 폴더 열기/닫기 시 전체 내용 다시 렌더링
+        console.log('🔍 [UPDATE_CONTENT_DEBUG] updateLabelExplorerContent 시작');
 
         const container = document.getElementById('label-explorer-list');
 
-        if (!container) return;
+        if (!container) {
+            console.warn('🔍 [UPDATE_CONTENT_DEBUG] container not found');
+            return;
+        }
 
         const scrollTop = container.scrollTop;
 
         // 클래스 목록 다시 가져오기
-
+        console.log('🔍 [UPDATE_CONTENT_DEBUG] refreshClassList 호출');
         this.refreshClassList().then(async () => {
             // 🔥 refreshClassList()에서 캐시된 클래스 목록 사용 (중복 API 호출 제거)
-
             const classes = Array.isArray(this.cachedClassList) ? this.cachedClassList.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())) : [];
             const labelSelection = this.labelSelection;
+            
+            console.log('🔍 [UPDATE_CONTENT_DEBUG] 클래스 수:', classes.length);
+            console.log('🔍 [UPDATE_CONTENT_DEBUG] 클래스 목록:', classes);
 
             // classToImgList 재구성 (이미 로드된 것들만)
-
             let classToImgList = {};
 
             for (const cls of classes) {
                 classToImgList[cls] = this.classToImgListCache?.[cls] || [];
             }
+            
+            console.log('🔍 [UPDATE_CONTENT_DEBUG] classToImgList keys:', Object.keys(classToImgList));
 
             // 전체 내용 다시 렌더링
-
+            console.log('🔍 [UPDATE_CONTENT_DEBUG] renderLabelExplorerContent 호출');
             this.renderLabelExplorerContent(container, classes, classToImgList, labelSelection);
         
         // 스크롤 위치 복원
-
             container.scrollTop = scrollTop;
 
-            this.debugLog('🔷 Label Explorer 내용 업데이트 완료');
+            console.log('🔍 [UPDATE_CONTENT_DEBUG] Label Explorer 내용 업데이트 완료');
         });
     }
 
