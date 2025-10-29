@@ -3158,22 +3158,23 @@ class WaferMapViewer {
             console.error('[INIT] Explorer preload failed:', error);
         }
 
-        // 🔥 3순위: 중요한 초기화 작업들을 순차적으로 실행 (fail list 표시를 위해)
-        try {
-            await this.initClassification();
-            console.log('[INIT] Classification 초기화 완료');
-        } catch (err) {
-            console.error('[INIT] Classification 초기화 실패:', err);
-        }
+        // 🔥 3순위: 중요한 초기화 작업들을 병렬로 실행 (하지만 백그라운드)
+        // loadFolderBrowser 이후에 백그라운드로 실행되어 UI 블로킹 없음
+        const initTasks = [
+            this.initClassification().catch(err => console.error('[INIT] Classification 초기화 실패:', err))
+        ];
         
-        // 🔥 currentFolderPrefix가 설정되었는지 확인 후 Label Explorer 새로고침
-        console.log('[INIT] currentFolderPrefix 확인:', this.currentFolderPrefix);
+        // 🔥 refreshLabelExplorer는 즉시 실행하여 fail list 표시
+        console.log('🔍 [INIT_DEBUG] Label Explorer 즉시 초기화 시작');
         try {
             await this.refreshLabelExplorer();
-            console.log('[INIT] Label Explorer 초기화 완료');
+            console.log('🔍 [INIT_DEBUG] Label Explorer 초기화 완료');
         } catch (err) {
             console.error('[INIT] Label Explorer 초기화 실패:', err);
         }
+        
+        // 나머지 작업들은 병렬로 실행하되 에러 발생 시에도 다른 작업은 계속 진행
+        Promise.allSettled(initTasks);
         
         // 🔥 updateSubfolderList는 loadFolderBrowser 이후에 캐시가 설정되었으므로 백그라운드로 실행
         this.updateSubfolderList().catch(err => console.error('[INIT] Subfolder 업데이트 실패:', err));
@@ -6629,18 +6630,24 @@ class WaferMapViewer {
     }
 
     async getClassList(force = false) {
+        console.log('🔍 [GET_CLASS_LIST_DEBUG] 호출됨, force:', force);
+        console.log('🔍 [GET_CLASS_LIST_DEBUG] cachedClassList:', this.cachedClassList);
+        console.log('🔍 [GET_CLASS_LIST_DEBUG] classListPromise:', this.classListPromise);
+        
         if (!force && this.cachedClassList && this.cachedClassList.length >= 0) {
-            console.log('[getClassList] 캐시된 클래스 목록 사용:', this.cachedClassList);
+            console.log('🔍 [GET_CLASS_LIST_DEBUG] 캐시된 클래스 목록 반환:', this.cachedClassList);
             return this.cachedClassList;
         }
         if (!force && this.classListPromise) {
-            console.log('[getClassList] 진행 중인 Promise 사용');
+            console.log('🔍 [GET_CLASS_LIST_DEBUG] 진행 중인 Promise 반환');
             return this.classListPromise;
         }
 
         const currentFolder = this.currentFolderPrefix;
         const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
-        console.log('[getClassList] API 호출:', { currentFolder, apiUrl });
+        
+        console.log('🔍 [GET_CLASS_LIST_DEBUG] API 호출:', apiUrl);
+        console.log('🔍 [GET_CLASS_LIST_DEBUG] currentFolderPrefix:', currentFolder);
 
         const fetchPromise = (async () => {
             try {
@@ -6652,9 +6659,10 @@ class WaferMapViewer {
                     ? data.classes.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
                     : [];
                 this.cachedClassList = classes;
+                console.log('🔍 [GET_CLASS_LIST_DEBUG] API 응답 성공, 클래스 수:', classes.length);
                 return classes;
             } catch (error) {
-                console.error('클래스 목록 조회 실패:', error);
+                console.error('🔍 [GET_CLASS_LIST_DEBUG] 클래스 목록 조회 실패:', error);
                 if (!this.cachedClassList) {
                     this.cachedClassList = [];
                 }
@@ -7885,25 +7893,27 @@ class WaferMapViewer {
         // 🔥 Label Explorer 새로고침 활성화
         // 🔥 중복 호출 방지
         if (this._isRefreshingLabelExplorer) {
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 중복 호출 방지됨');
             return;
         }
 
         this._isRefreshingLabelExplorer = true;
+        console.log('🔍 [LABEL_EXPLORER_DEBUG] 새로고침 시작');
 
         try {
             const container = document.getElementById('label-explorer-list');
 
         if (!container) {
-            console.warn('Label Explorer container not found');
-
+            console.warn('🔍 [LABEL_EXPLORER_DEBUG] Label Explorer container not found');
             return;
         }
 
         const scrollTop = container.scrollTop;
 
         // 기존 내용을 임시로 저장하여 스크롤 위치 유지
-
         const existingContent = container.innerHTML;
+
+        console.log('🔍 [LABEL_EXPLORER_DEBUG] 기존 내용 길이:', existingContent.length);
 
         this.debugLog('Label Explorer 새로고침 시작...');
 
@@ -7927,9 +7937,7 @@ class WaferMapViewer {
         // 🔥 최적화: refreshClassList()에서 받은 캐시 사용 (API 호출 생략)
         let classes = [];
         try {
-            console.log('[refreshLabelExplorer] getClassList 호출 시작');
             classes = await this.getClassList();
-            console.log('[refreshLabelExplorer] getClassList 결과:', classes);
         } catch (error) {
             console.error('Label Explorer 클래스 조회 오류:', error);
             return;
@@ -8435,10 +8443,15 @@ class WaferMapViewer {
         } finally {
             // 🔥 중복 호출 방지 플래그 해제
             this._isRefreshingLabelExplorer = false;
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 새로고침 완료');
         }
     }
 
     renderLabelExplorerContent(container, classes, classToImgList, labelSelection) {
+        console.log('🔍 [RENDER_DEBUG] renderLabelExplorerContent 시작');
+        console.log('🔍 [RENDER_DEBUG] classes:', classes);
+        console.log('🔍 [RENDER_DEBUG] classToImgList keys:', Object.keys(classToImgList));
+        
         container.innerHTML = '';
 
         // 전체 이미지들의 평평한 리스트 생성 (shift 선택용)
