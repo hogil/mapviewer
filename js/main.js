@@ -9094,16 +9094,37 @@ class WaferMapViewer {
                         const currentFolder = this.currentFolderPrefix;
                         const deleteApiUrl = currentFolder ? `/api/classify?folder=${encodeURIComponent(currentFolder)}` : '/api/classify';
 
+                        let deleteSuccess = true;
+                        const failedDeletes = [];
+                        
                         for (const key of toDelete) {
                             const [delCls, delImg] = key.split('/');
 
-                            await fetch(deleteApiUrl, {
-                                method: 'DELETE',
-
-                                headers: { 'Content-Type': 'application/json' },
-
-                                body: JSON.stringify({ class_name: delCls, image_name: delImg })
-                            });
+                            try {
+                                const response = await fetch(deleteApiUrl, {
+                                    method: 'DELETE',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ class_name: delCls, image_name: delImg })
+                                });
+                                
+                                if (!response.ok) {
+                                    console.warn(`삭제 실패: ${delImg} (HTTP ${response.status})`);
+                                    failedDeletes.push(delImg);
+                                    deleteSuccess = false;
+                                } else {
+                                    console.log(`✅ 삭제 성공: ${delImg}`);
+                                }
+                            } catch (error) {
+                                console.error(`삭제 오류: ${delImg}`, error);
+                                failedDeletes.push(delImg);
+                                deleteSuccess = false;
+                            }
+                        }
+                        
+                        // 삭제가 실패한 경우 UI 업데이트하지 않음
+                        if (!deleteSuccess) {
+                            console.warn(`일부 파일 삭제 실패 (${failedDeletes.length}개) - UI 업데이트 건너뜀:`, failedDeletes);
+                            return;
                         }
 
                         labelSelection.selected = [];
@@ -9450,6 +9471,36 @@ class WaferMapViewer {
 
                                 labelSelection.selected = [];
 
+                                // 🔥 해당 클래스만 업데이트 (전체 새로고침 방지)
+                                const deletedClasses = [...new Set(toDelete.map(key => key.split('/')[0]))];
+                                
+                                for (const cls of deletedClasses) {
+                                    // 해당 클래스 캐시 무효화
+                                    if (this.classToImgListCache && this.classToImgListCache[cls]) {
+                                        delete this.classToImgListCache[cls];
+                                    }
+                                    
+                                    // 해당 클래스 폴더만 다시 로드
+                                    const labelPath = this.currentFolderPrefix ? 
+                                        `${this.currentFolderPrefix}classification/${encodeURIComponent(cls)}` : 
+                                        `classification/${encodeURIComponent(cls)}`;
+                                    
+                                    try {
+                                        const response = await fetch(`/api/files?path=${labelPath}`);
+                                        const data = await response.json();
+                                        const imgList = Array.isArray(data.items) ? data.items : [];
+                                        
+                                        // 캐시 업데이트
+                                        if (!this.classToImgListCache) this.classToImgListCache = {};
+                                        this.classToImgListCache[cls] = imgList;
+                                        
+                                        console.log(`🔄 클래스 '${cls}' 이미지 목록 업데이트: ${imgList.length}개`);
+                                    } catch (error) {
+                                        console.error(`클래스 '${cls}' 이미지 목록 로드 실패:`, error);
+                                    }
+                                }
+                                
+                                // 해당 클래스 섹션만 다시 렌더링
                                 this.updateLabelExplorerContent();
 
                                 // 클래스 매니저 버튼 상태 업데이트
