@@ -3152,7 +3152,8 @@ async def search_files(q: str = Query(..., description="파일명 검색(대소�
             if not logical_terms:
                 is_complex = False
             else:
-                effective_workers = max(1, min(config.SEARCH_WORKERS or 1, len(logical_terms)))
+                # 🔥 SEARCH_WORKERS를 항상 사용 (term 수 제한 제거)
+                effective_workers = config.SEARCH_WORKERS or 1
 
         search_start = time.perf_counter()
         if is_complex:
