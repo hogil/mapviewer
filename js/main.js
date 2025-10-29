@@ -3158,15 +3158,22 @@ class WaferMapViewer {
             console.error('[INIT] Explorer preload failed:', error);
         }
 
-        // 🔥 3순위: 중요한 초기화 작업들을 병렬로 실행 (하지만 백그라운드)
-        // loadFolderBrowser 이후에 백그라운드로 실행되어 UI 블로킹 없음
-        const initTasks = [
-            this.initClassification().catch(err => console.error('[INIT] Classification 초기화 실패:', err)),
-            this.refreshLabelExplorer().catch(err => console.error('[INIT] Label Explorer 초기화 실패:', err))
-        ];
+        // 🔥 3순위: 중요한 초기화 작업들을 순차적으로 실행 (fail list 표시를 위해)
+        try {
+            await this.initClassification();
+            console.log('[INIT] Classification 초기화 완료');
+        } catch (err) {
+            console.error('[INIT] Classification 초기화 실패:', err);
+        }
         
-        // 모두 병렬로 실행하되 에러 발생 시에도 다른 작업은 계속 진행
-        Promise.allSettled(initTasks);
+        // 🔥 currentFolderPrefix가 설정되었는지 확인 후 Label Explorer 새로고침
+        console.log('[INIT] currentFolderPrefix 확인:', this.currentFolderPrefix);
+        try {
+            await this.refreshLabelExplorer();
+            console.log('[INIT] Label Explorer 초기화 완료');
+        } catch (err) {
+            console.error('[INIT] Label Explorer 초기화 실패:', err);
+        }
         
         // 🔥 updateSubfolderList는 loadFolderBrowser 이후에 캐시가 설정되었으므로 백그라운드로 실행
         this.updateSubfolderList().catch(err => console.error('[INIT] Subfolder 업데이트 실패:', err));
@@ -6623,14 +6630,17 @@ class WaferMapViewer {
 
     async getClassList(force = false) {
         if (!force && this.cachedClassList && this.cachedClassList.length >= 0) {
+            console.log('[getClassList] 캐시된 클래스 목록 사용:', this.cachedClassList);
             return this.cachedClassList;
         }
         if (!force && this.classListPromise) {
+            console.log('[getClassList] 진행 중인 Promise 사용');
             return this.classListPromise;
         }
 
         const currentFolder = this.currentFolderPrefix;
         const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
+        console.log('[getClassList] API 호출:', { currentFolder, apiUrl });
 
         const fetchPromise = (async () => {
             try {
@@ -7917,7 +7927,9 @@ class WaferMapViewer {
         // 🔥 최적화: refreshClassList()에서 받은 캐시 사용 (API 호출 생략)
         let classes = [];
         try {
+            console.log('[refreshLabelExplorer] getClassList 호출 시작');
             classes = await this.getClassList();
+            console.log('[refreshLabelExplorer] getClassList 결과:', classes);
         } catch (error) {
             console.error('Label Explorer 클래스 조회 오류:', error);
             return;
