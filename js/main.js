@@ -5243,17 +5243,22 @@ class WaferMapViewer {
 
         // dragover: 드래그 중간에 호버되는 파일 배경색 변경
         container.addEventListener('dragover', (e) => {
-            e.preventDefault(); // 🔥 모든 영역에서 기본 드래그 금지 방지
+            // 🔥 모든 영역에서 기본 드래그 금지 방지
+            e.preventDefault();
+            e.stopPropagation();
             e.dataTransfer.dropEffect = 'move';
             
+            // 🔥 파일 링크에만 시각적 피드백 (공백 영역은 무시)
             const target = e.target;
-            if (target.tagName === 'A' && target.hasAttribute('data-path') && target !== dragStartElement) {
-                const path = target.dataset.path;
+            const fileLink = target.closest('a[data-path]');
+            
+            if (fileLink && fileLink !== dragStartElement) {
+                const path = fileLink.dataset.path;
                 const isSelected = this.selectedImages && this.selectedImages.includes(path);
                 
                 // 🔥 이미 선택된 파일이 아니면 호버 색상으로 변경
-                if (!isSelected && target.style.background !== 'rgb(0, 102, 187)' && target.style.background !== '#06b') {
-                    target.style.background = '#04a';
+                if (!isSelected && fileLink.style.background !== 'rgb(0, 102, 187)' && fileLink.style.background !== '#06b') {
+                    fileLink.style.background = '#04a';
                 }
             }
         }, false);
@@ -5261,13 +5266,15 @@ class WaferMapViewer {
         // dragleave: 호버 해제 시 원래 색으로 복원
         container.addEventListener('dragleave', (e) => {
             const target = e.target;
-            if (target.tagName === 'A' && target.hasAttribute('data-path') && target !== dragStartElement) {
-                const path = target.dataset.path;
+            const fileLink = target.closest('a[data-path]');
+            
+            if (fileLink && fileLink !== dragStartElement) {
+                const path = fileLink.dataset.path;
                 const isSelected = this.selectedImages && this.selectedImages.includes(path);
                 
                 // 🔥 호버 색상(#04a)인 경우만 원래 색으로 복원
-                if (target.style.background === 'rgb(0, 68, 170)' || target.style.background === '#04a') {
-                    target.style.background = isSelected ? '#05b' : '';
+                if (fileLink.style.background === 'rgb(0, 68, 170)' || fileLink.style.background === '#04a') {
+                    fileLink.style.background = isSelected ? '#05b' : '';
                 }
             }
         }, false);
@@ -5277,48 +5284,40 @@ class WaferMapViewer {
             e.preventDefault();
             e.stopPropagation();
             
-            if (!dragStartPath) return;
-            
-            const target = e.target;
-            let endPath = null;
-            
-            // 🔥 이미지 링크를 찾기
-            let fileLink = null;
-            if (target.tagName === 'A' && target.hasAttribute('data-path')) {
-                fileLink = target;
-            } else {
-                fileLink = target.closest('a[data-path]');
+            if (!dragStartPath) {
+                dragStartPath = null;
+                dragStartElement = null;
+                return;
             }
             
-            // 🔥 파일 링크를 찾지 못한 경우, 마우스 위치 기준으로 가장 가까운 이미지 찾기
-            if (!fileLink) {
-                const allLinks = Array.from(container.querySelectorAll('a[data-path]'));
-                const mouseY = e.clientY;
-                let closestLink = null;
-                let minDistance = Infinity;
+            // 🔥 마우스 좌표 기준으로 가장 가까운 이미지 찾기 (항상 수행)
+            const allLinks = Array.from(container.querySelectorAll('a[data-path]'));
+            const mouseY = e.clientY;
+            const mouseX = e.clientX;
+            let closestLink = null;
+            let minDistance = Infinity;
+            
+            for (const link of allLinks) {
+                const rect = link.getBoundingClientRect();
+                const linkCenterX = rect.left + rect.width / 2;
+                const linkCenterY = rect.top + rect.height / 2;
                 
-                for (const link of allLinks) {
-                    const rect = link.getBoundingClientRect();
-                    const linkCenterY = rect.top + rect.height / 2;
-                    const distance = Math.abs(mouseY - linkCenterY);
-                    
-                    if (distance < minDistance) {
-                        minDistance = distance;
-                        closestLink = link;
-                    }
+                // 🔥 거리 계산 (X, Y 모두 고려)
+                const dx = mouseX - linkCenterX;
+                const dy = mouseY - linkCenterY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    closestLink = link;
                 }
+            }
+            
+            if (closestLink && closestLink.dataset.path) {
+                const endPath = closestLink.dataset.path;
                 
-                fileLink = closestLink;
-            }
-            
-            if (fileLink && fileLink.dataset.path) {
-                endPath = fileLink.dataset.path;
-            }
-            
-            if (endPath) {
                 // 모든 파일 링크 가져오기 (이미지 파일만)
-                const allImageLinks = Array.from(container.querySelectorAll('a[data-path]'));
-                const imagePaths = allImageLinks
+                const imagePaths = allLinks
                     .map(link => link.dataset.path)
                     .filter(path => this.isImageFile(path));
                 
