@@ -6781,6 +6781,13 @@ class WaferMapViewer {
             btn.onclick = (e) => {
                 const isCtrl = e.ctrlKey || e.metaKey;
                 const isShift = e.shiftKey;
+                
+                console.log('🔍 [CLASS_CLICK_DEBUG] 클래스 버튼 클릭:', {
+                    className: cls,
+                    isCtrl: isCtrl,
+                    isShift: isShift,
+                    selectedCount: this.classSelection?.selected.length || 0
+                });
 
                 if (!isCtrl && !isShift) {
                     // 🔥 성능 최적화: 직접 라벨링 (즉각 반응)
@@ -6863,6 +6870,7 @@ class WaferMapViewer {
                 }
 
                 // Ctrl/Shift 클릭: 클래스 선택/해제
+                console.log('🔍 [CLASS_CLICK_DEBUG] Ctrl/Shift 클릭 감지:', { isCtrl, isShift });
 
                 if (isCtrl || isShift) {
                     if (!this.classSelection) this.classSelection = { selected: [], lastClicked: null };
@@ -6879,13 +6887,22 @@ class WaferMapViewer {
                             this.classSelection.selected = Array.from(new Set([...this.classSelection.selected, ...range]));
                         }
                     } else if (isCtrl) {
+                        console.log('🔍 [CLASS_CLICK_DEBUG] Ctrl 클릭 처리:', {
+                            className: cls,
+                            wasSelected: this.classSelection.selected.includes(cls),
+                            beforeCount: this.classSelection.selected.length
+                        });
+                        
                         if (this.classSelection.selected.includes(cls)) {
                             this.classSelection.selected = this.classSelection.selected.filter(c => c !== cls);
+                            console.log('🔍 [CLASS_CLICK_DEBUG] 클래스 선택 해제:', cls);
                         } else {
                             this.classSelection.selected.push(cls);
+                            console.log('🔍 [CLASS_CLICK_DEBUG] 클래스 선택 추가:', cls);
                         }
 
                         this.classSelection.lastClicked = cls;
+                        console.log('🔍 [CLASS_CLICK_DEBUG] 선택된 클래스 목록:', this.classSelection.selected);
                     }
 
                     this.selectedClass = this.classSelection.selected.length === 1 ? this.classSelection.selected[0] : null;
@@ -6947,6 +6964,10 @@ class WaferMapViewer {
 
     updateClassListSelection() {
         // 기존 버튼들의 선택 상태만 업데이트
+        console.log('🔍 [SELECTION_DEBUG] updateClassListSelection 시작:', {
+            selectedClasses: this.classSelection?.selected || [],
+            selectedCount: this.classSelection?.selected.length || 0
+        });
 
         const buttons = this.dom.classList.querySelectorAll('button');
 
