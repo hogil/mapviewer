@@ -3047,11 +3047,11 @@ class WaferMapViewer {
     async init() {
         this._drawScheduled = false; // draw() 스케줄링 플래그
 
-        // 🔥 서버 설정 로드 (피라미드 레벨, zoom 기준 등)
-        this.loadServerConfig();
-
-        // 사용자 정보 로드
-        this.loadUserInfo();
+        // 🔥 초기화 시 병렬 작업 시작
+        const backgroundInitTasks = [
+            this.loadServerConfig(),
+            this.loadUserInfo()
+        ];
 
         if (this.dom.fileExplorer) {
             this.dom.fileExplorer.innerHTML = '';
@@ -3068,8 +3068,10 @@ class WaferMapViewer {
                 this.debugLog('🔍 [INIT] ROOT_DIR로 초기화:', rootPath);
             }
             
-            await this.resetToImageFolder();
+            // 🔥 resetToImageFolder는 이미 ROOT_DIR이므로 불필요한 API 호출 스킵
+            // await this.resetToImageFolder();
 
+            // 🔥 독립적인 로딩 작업들을 병렬로 실행
             const initialTasks = [
                 this.loadFolderBrowser(this.currentFolderPath || '')
             ];
@@ -3089,13 +3091,15 @@ class WaferMapViewer {
             console.error('[INIT] Explorer preload failed:', error);
         }
 
-        await this.initClassification();
-
-        await this.refreshLabelExplorer();
-
-        // 🔥 새로고침 시에는 ROOT_DIR로 시작하므로 updateCurrentPath() 호출 제거
-        // 대신 하위폴더 목록만 업데이트
-        await this.updateSubfolderList();
+        // 🔥 독립적인 초기화 작업들을 병렬로 실행 (속도 향상)
+        const initTasks = [
+            this.initClassification(),
+            this.refreshLabelExplorer(),
+            this.updateSubfolderList()
+        ];
+        
+        // 모두 병렬로 실행하되 에러 발생 시에도 다른 작업은 계속 진행
+        await Promise.allSettled(initTasks);
     }
 
     // 🔥 서버 설정 로드 (피라미드 레벨, zoom 기준 등)
