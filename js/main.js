@@ -7029,6 +7029,8 @@ class WaferMapViewer {
             console.log('🔍 [ADD_CLASS_PERF] 클래스 추가 시작:', { count: names.length, names });
 
             const startTime = performance.now();
+
+            for (const name of names) {
                 try {
                     // 🔥 현재 폴더 파라미터 추가
                     const currentFolder = this.currentFolderPrefix;
