@@ -3093,9 +3093,9 @@ class WaferMapViewer {
 
         await this.refreshLabelExplorer();
 
-        // 현재 경로 업데이트
-
-        await this.updateCurrentPath();
+        // 🔥 새로고침 시에는 ROOT_DIR로 시작하므로 updateCurrentPath() 호출 제거
+        // 대신 하위폴더 목록만 업데이트
+        await this.updateSubfolderList();
     }
 
     // 🔥 서버 설정 로드 (피라미드 레벨, zoom 기준 등)
