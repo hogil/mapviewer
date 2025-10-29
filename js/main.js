@@ -988,8 +988,8 @@ class WaferMapViewer {
 
     async updateSubfolderList() {
         try {
-            // 항상 파일 탐색기에서 직접 가져오기
-
+            // 🔥 loadFolderBrowser에서 이미 cachedProductFolders를 설정했으므로
+            // loadSubfoldersFromFileExplorer 호출하여 드롭다운만 업데이트
             await this.loadSubfoldersFromFileExplorer();
         } catch (error) {
             console.error('하위 폴더 목록 업데이트 실패:', error);
@@ -1021,6 +1021,13 @@ class WaferMapViewer {
 
     async loadSubfoldersFromFileExplorer() {
         try {
+            // 🔥 이미 cachedProductFolders가 있으면 API 호출 생략하고 재사용
+            if (this.cachedProductFolders && this.cachedProductFolders.length > 0) {
+                this.debugLog('🔍 [LOAD_SUBFOLDERS] 캐시된 폴더 목록 사용:', this.cachedProductFolders.length, '개');
+                // loadFolderBrowser에서 이미 설정된 cachedProductFolders를 재사용
+                return;
+            }
+            
             // 🔥 캐시된 ROOT_DIR 경로 사용
             const imageRootPath = await this.getRootPath();
             if (!imageRootPath) {
