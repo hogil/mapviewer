@@ -4932,22 +4932,24 @@ class WaferMapViewer {
             } else {
                 // 단일 클릭 - 이전 선택 모두 해제 후 새 항목 선택
 
-                // 🔥 이전 선택된 모든 항목들의 시각적 표시 해제
-
+                // 🔥 이전 선택된 모든 항목들의 시각적 표시 해제 (인라인 스타일 포함)
                 const allLinks = Array.from(this.dom.fileExplorer.querySelectorAll('a[data-path]'));
 
                 allLinks.forEach(link => {
                     link.classList.remove('selected');
+                    // 🔥 드래그로 선택된 파일들의 인라인 배경색도 제거
+                    link.style.removeProperty('background');
+                    link.style.background = ''; // 기본 배경색으로 복원
                 });
 
                 // 🔥 이전 선택된 폴더들의 시각적 표시 해제
-
                 const allFolders = Array.from(this.dom.fileExplorer.querySelectorAll('summary.folder'));
 
                 allFolders.forEach(folder => {
                     folder.classList.remove('selected');
                 });
 
+                // 🔥 드래그 선택 초기화
                 this.selectedImages = [path];
 
                 this.selectedImagePath = path;
