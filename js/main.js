@@ -6786,13 +6786,15 @@ class WaferMapViewer {
                     className: cls,
                     isCtrl: isCtrl,
                     isShift: isShift,
-                    selectedCount: this.classSelection?.selected.length || 0,
-                    eventKeys: {
-                        ctrlKey: e.ctrlKey,
-                        metaKey: e.metaKey,
-                        shiftKey: e.shiftKey,
-                        altKey: e.altKey
-                    }
+                    selectedCount: this.classSelection?.selected.length || 0
+                });
+                console.log('🔍 [EVENT_KEYS_DEBUG] 이벤트 키 상태:', {
+                    ctrlKey: e.ctrlKey,
+                    metaKey: e.metaKey,
+                    shiftKey: e.shiftKey,
+                    altKey: e.altKey,
+                    type: e.type,
+                    target: e.target.tagName
                 });
 
                 if (!isCtrl && !isShift) {
