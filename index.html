@@ -112,12 +112,7 @@
             display: block;
             padding: 4px 8px;
             border-radius: 3px;
-            /* 🔥 드래그 관련 스타일 */
-            -webkit-user-drag: none;
-            -khtml-user-drag: none;
-            -moz-user-drag: none;
-            -o-user-drag: none;
-            user-drag: none;
+            cursor: grab;
         }
         
         #file-explorer a:hover {
@@ -126,6 +121,10 @@
         
         #file-explorer a.selected {
             background: var(--selected-color) !important;
+        }
+        
+        #file-explorer a[draggable="true"]:active {
+            cursor: grabbing;
         }
         
         summary.folder.selected {

@@ -3339,7 +3339,8 @@ class WaferMapViewer {
             if (node.type === 'directory') {
                 html += `<li><details><summary data-path="${fullPath}" class="folder">📁 ${node.name}</summary><div class="folder-content" style="padding-left: 1rem;"></div></details></li>`;
             } else if (node.type === 'file') {
-                html += `<li><a href="#" data-path="${fullPath}">📄 ${node.name}</a></li>`;
+                const draggableAttr = 'draggable="true"';
+                html += `<li><a href="#" data-path="${fullPath}" ${draggableAttr}>📄 ${node.name}</a></li>`;
             }
         }
 
@@ -5234,6 +5235,9 @@ class WaferMapViewer {
                 emptyImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
                 e.dataTransfer.setDragImage(emptyImg, 0, 0);
                 
+                // 🔥 드래그 중 커서를 grabbing으로 변경
+                document.body.style.cursor = 'grabbing';
+                
                 // 드래그 중 시각적 피드백
                 target.style.removeProperty('background');
                 target.style.setProperty('background', '#06b', 'important');
@@ -5243,10 +5247,10 @@ class WaferMapViewer {
         // dragover: 드래그 중간에 호버되는 파일 배경색 변경
         container.addEventListener('dragover', (e) => {
             // 🔥 모든 영역에서 기본 드래그 금지 방지
-            e.preventDefault();
+                e.preventDefault();
             e.stopPropagation();
-            e.dataTransfer.dropEffect = 'move';
-            
+                e.dataTransfer.dropEffect = 'move';
+                
             // 🔥 파일 링크에만 시각적 피드백 (공백 영역은 무시)
             const target = e.target;
             const fileLink = target.closest('a[data-path]');
@@ -5290,7 +5294,7 @@ class WaferMapViewer {
             }
             
             // 🔥 마우스 좌표 기준으로 가장 가까운 이미지 찾기 (항상 수행)
-            const allLinks = Array.from(container.querySelectorAll('a[data-path]'));
+                const allLinks = Array.from(container.querySelectorAll('a[data-path]'));
             const mouseY = e.clientY;
             const mouseX = e.clientX;
             let closestLink = null;
@@ -5346,6 +5350,9 @@ class WaferMapViewer {
             // 드래그 상태 초기화
             dragStartPath = null;
             dragStartElement = null;
+            
+            // 🔥 커서를 원래대로 복원
+            document.body.style.cursor = '';
         }, false);
 
         // dragend: 드래그 종료 (캔슬) 시 원래 색으로 복원
@@ -5355,6 +5362,9 @@ class WaferMapViewer {
                 // UI 전체 업데이트로 배경색 복원
                 this.updateFileExplorerSelection();
             }
+            
+            // 🔥 커서를 원래대로 복원
+            document.body.style.cursor = '';
             
             // 드래그 상태 초기화
             dragStartPath = null;
@@ -8682,7 +8692,8 @@ class WaferMapViewer {
 
                     imgBtn.style.fontSize = '13px';
 
-                    // 🔥 Drag 범위 선택 이벤트 추가 (draggable 속성 제거)
+                    // 🔥 Drag 범위 선택 이벤트 추가
+                    imgBtn.draggable = true;
 
                     // 🔥 마우스 hover 효과 추가 (선택된 아이템 제외)
                     imgBtn.onmouseover = (e) => {
@@ -9083,7 +9094,8 @@ class WaferMapViewer {
 
                             imgBtn.style.fontSize = '13px';
 
-                            // 🔥 Drag 범위 선택 이벤트 추가 (동적 생성된 버튼, draggable 속성 제거)
+                            // 🔥 Drag 범위 선택 이벤트 추가 (동적 생성된 버튼)
+                            imgBtn.draggable = true;
 
                             // 🔥 마우스 hover 효과 추가
                             imgBtn.onmouseover = (e) => {
