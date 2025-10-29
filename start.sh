@@ -26,7 +26,7 @@ export IO_THREADS="160"                  # 중간값 (256→64→160) - I/O 병�
 export THUMBNAIL_SEM="288"               # 중간값 (512→64→288) - 동시 썸네일 생성
 export THUMB_PREFETCH_BATCH="64"
 export THUMB_CLIENT_MAX_CONCURRENCY="12"
-export SEARCH_WORKERS="16"               # 검색 병렬 워커 수 (32코어 기준, 논리 검색 가속)
+export SEARCH_WORKERS="24"               # 검색 병렬 워커 수 (32코어 기준, 논리 검색 가속)
 
 # libvips 최적화 (웹서버 환경)
 export VIPS_CONCURRENCY="20"             # 중간값 (24→16→20) - 병렬 처리
@@ -40,7 +40,7 @@ export SEARCH_FALLBACK_MAX_FILES="0"      # 0=폴백 탐색 비활성화
 export SEARCH_FALLBACK_TIMEOUT_MS="0"     # 0=시간 제한 없음
 
 # 인덱스 구축 워커 수 (병렬 디렉터리 스캔 가속)
-export INDEX_WORKERS="48"                 # 서버 사양에 맞게 조정 (예: 32~64)
+export INDEX_WORKERS="32"                 # 서버 사양에 맞게 조정 (예: 32~64)
 export INDEX_REFRESH_INTERVAL_MINUTES="30" # 파일 인덱스 자동 재빌드 간격(분)
 
 # Python/시스템 최적화
@@ -72,7 +72,7 @@ export PYRAMID_PNG_COMPRESSION="3"           # PNG 압축 레벨
 export PYRAMID_PNG_EFFORT="1"                # PNG effort (1=가장 빠름)
 export PYRAMID_KERNEL="cubic"                # 리사이즈 커널 (cubic, 최고 품질)
 export PYRAMID_LOADER_MODE="random"          # 로더 모드 (random=스트리밍, copy_memory 오버헤드 없음)
-export PYRAMID_BG_WORKERS="4"                # 백그라운드 피라미드 워커
+export PYRAMID_BG_WORKERS="24"                # 백그라운드 피라미드 워커
 
 # TurboJPEG 설정 (그리드 썸네일 전용)
 # 2025-10-24: 그리드 썸네일 TurboJPEG 4:2:2 적용

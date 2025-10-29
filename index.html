@@ -4,6 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Wafer Map Viewer</title>
+    
+    <!-- 🚀 리소스 사전 로딩 -->
+    <link rel="preload" href="/js/main.js" as="script">
+    <link rel="preload" href="/js/utils.js" as="script">
+    <link rel="preload" href="/js/semiconductor-renderer.js" as="script">
+    <link rel="preload" href="/js/fetch-optimizer.js" as="script">
+    <link rel="modulepreload" href="/js/fetch-optimizer.js">
+    <link rel="dns-prefetch" href="//api">
     <style>
         :root {
             --bg-color: #1a1a1a;
@@ -1052,8 +1060,8 @@
     <script defer src="/js/bitmap-loader.js"></script>
     <script defer src="/js/semiconductor-renderer.js"></script>
     
-    <!-- 기존 방식으로 임시 롤백 -->
-    <script defer src="/js/main.js"></script>
+    <!-- 🚀 ES6 모듈로 로드 (최적화) -->
+    <script type="module" src="/js/main.js"></script>
     
     <!-- 리팩토링된 모듈 방식 (디버깅 후 다시 활성화 예정) -->
     <!-- <script type="module" src="/js/main-refactored.js"></script> -->

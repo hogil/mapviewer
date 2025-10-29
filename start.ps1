@@ -15,6 +15,8 @@ $env:PORT="8080"
 $env:RELOAD="0"          # PowerShell 스크립트 실행 시 uvicorn reload 비활성화 (이중 실행 방지)
 $env:UVICORN_WORKERS="1" # 개발 환경: 단일 워커 (중복 인덱스 방지)
 $env:WORKERS="1"         # FastAPI 워커 단일 고정
+$env:HTTP2="1"           # 🚀 HTTP/2 활성화 (다중 요청 병렬 처리)
+$env:KEEP_ALIVE="1"      # 🚀 Keep-Alive 연결 유지
 $env:SSL_ENABLED="1"
 $env:HTTPS_PORT="443"
 $env:SSL_CERTFILE="cert/fullchain.pem"
@@ -24,25 +26,23 @@ $env:THUMBNAIL_FORMAT="JPEG"
 $env:THUMBNAIL_QUALITY="100"
 $env:PNG_COMPRESSION_LEVEL="3"
 $env:IO_THREADS="80"                     # Dev box (8C/64GB) - I/O 병렬화 2배
-$env:SEARCH_WORKERS="8"                  # 검색 병렬 워커 수 (AND/OR 최적화)
 $env:THUMBNAIL_SEM="48"                 # Concurrent thumbnail jobs
 $env:THUMB_PREFETCH_BATCH="32"          # Prefetch batch size
 $env:THUMB_CLIENT_MAX_CONCURRENCY="10"  # Frontend concurrent loads
-$env:VIPS_CONCURRENCY="12"              # pyvips worker count (동시 PNG 압축 가속)
+$env:VIPS_CONCURRENCY="16"              # pyvips worker count (동시 PNG 압축 가속)
 $env:VIPS_MAX_CACHE="2000"              # libvips 연산 캐시 개수
 $env:VIPS_MAX_CACHE_MEM="536870912"     # libvips 캐시 메모리 (512MB)
 $env:VIPS_MAX_CACHE_FILES="200"         # 열린 파일 캐시
 $env:VIPS_DISC_THRESHOLD="500m"         # 디스크 스필 기준 (RAM 디스크/SSD 사용 시 안전치)
 
 # 검색 폴백 비활성화 (인덱스 결과만 사용)
+$env:SEARCH_WORKERS="4"                  # 검색 병렬 워커 수 (AND/OR 최적화)
 $env:SEARCH_FALLBACK_LIMIT="0"          # 0=폴백 결과 제한 없음(실제로 폴백 비활성화)
 $env:SEARCH_FALLBACK_MAX_FILES="0"      # 0=폴백 탐색 비활성화
 $env:SEARCH_FALLBACK_TIMEOUT_MS="0"     # 0=시간 제한 없음
 
 # 인덱스 구축 워커 수 (병렬 디렉터리 스캔 가속)
-$cpuCount = [Environment]::ProcessorCount
-$indexWorkers = [Math]::Min(64, [Math]::Max(8, $cpuCount * 2))
-$env:INDEX_WORKERS = $indexWorkers.ToString()  # CPU 수 대비 2배, 최대 64
+$env:INDEX_WORKERS = "4" # CPU 수 대비 2배, 최대 64
 $env:INDEX_REFRESH_INTERVAL_MINUTES="30" # 파일 인덱스 자동 재빌드 간격(분)
 
 # 이미지 피라미드 설정
@@ -58,7 +58,7 @@ $env:PYRAMID_PNG_COMPRESSION="3"       # 무손실 유지, 네트워크 전송�
 $env:PYRAMID_PNG_EFFORT="1"            # PNG effort (1=가장 빠름)
 $env:PYRAMID_KERNEL="cubic"            # 리사이즈 커널 (cubic, 최고 품질)
 $env:PYRAMID_LOADER_MODE="random"      # 로더 모드 (random=스트리밍, seq_early_copy=메모리 복사)
-$env:PYRAMID_BG_WORKERS="2"            # 개발 환경 백그라운드 피라미드 워커
+$env:PYRAMID_BG_WORKERS="4"            # 개발 환경 백그라운드 피라미드 워커
 
 # TurboJPEG 설정 (그리드 썸네일 전용)
 # 2025-10-24: 그리드 썸네일 TurboJPEG 4:2:2 적용

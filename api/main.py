@@ -21,6 +21,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
+try:
+    from starlette.middleware.brotli import BrotliMiddleware
+    HAS_BROTLI = True
+except ImportError:
+    BrotliMiddleware = None
+    HAS_BROTLI = False
 from pydantic import BaseModel, Field
 from PIL import Image
 import http.client
@@ -1483,7 +1489,12 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
         return response
 
 app.add_middleware(AccessTrackingMiddleware)
-app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+# 🚀 압축 미들웨어: Brotli > GZip 순서 (Brotli가 더 효율적)
+if HAS_BROTLI:
+    app.add_middleware(BrotliMiddleware, quality=4, minimum_size=512)
+app.add_middleware(GZipMiddleware, minimum_size=512, compresslevel=6)
+
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 
 # ======================== Utilities & Sync ========================
@@ -3939,7 +3950,14 @@ async def read_root(request: Request):
 
         # AUTO_LOGIN=False 또는 SAML 인증 완료 → index.html 제공
         html_path = Path("index.html")
-        return FileResponse(html_path) if html_path.exists() else {"message": "index.html not found"}
+        if html_path.exists():
+            # 🚀 HTML에 캐시 및 사전 로딩 헤더 추가
+            headers = {
+                "Cache-Control": "public, max-age=3600",
+                "Link": "</js/main.js>; rel=preload; as=script, </js/utils.js>; rel=preload; as=script, </js/semiconductor-renderer.js>; rel=modulepreload"
+            }
+            return FileResponse(html_path, headers=headers)
+        return {"message": "index.html not found"}
     except Exception as e:
         logger.exception(f"루트 페이지 로드 실패: {e}")
         return {"error": "Failed to load main page"}

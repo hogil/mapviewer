@@ -8,3 +8,5 @@ python-multipart>=0.0.6
 requests>=2.31.0
 aiofiles>=23.0.0
 python3-saml>=1.16.0
+brotli>=1.1.0
+brotlipy>=0.7.0

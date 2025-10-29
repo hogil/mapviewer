@@ -22,7 +22,7 @@ THUMBNAIL_SEM = int(os.getenv("THUMBNAIL_SEM", "128"))                     # Ubu
 
 # SEARCH_WORKERS: CPU 코어수의 2배 (I/O 바운드 작업에 최적)
 # 최소 4개, 최대 CPU_COUNT * 2개
-SEARCH_WORKERS = int(os.getenv("SEARCH_WORKERS", str(max(4, CPU_COUNT * 2))))
+SEARCH_WORKERS = int(os.getenv("SEARCH_WORKERS", "16"))
 SEARCH_FALLBACK_LIMIT = int(os.getenv("SEARCH_FALLBACK_LIMIT", "2000"))    # 폴백 시 최대 반환 대상 수
 SEARCH_FALLBACK_MAX_FILES = int(os.getenv("SEARCH_FALLBACK_MAX_FILES", "200000"))  # 폴백에서 스캔할 최대 파일 수
 SEARCH_FALLBACK_TIMEOUT_MS = int(os.getenv("SEARCH_FALLBACK_TIMEOUT_MS", "4000"))  # 폴백 타임아웃(ms)

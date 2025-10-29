@@ -9,6 +9,9 @@
  * - Sidebar resizing
  */
 
+// 🚀 Fetch 최적화 import
+import { optimizedFetch, fetchOptimizer } from './fetch-optimizer.js';
+
 // Constants
 
 const DEFAULT_GRID_COLS = 3;

@@ -1,6 +1,7 @@
 (() => {
     const WORKER_PATH = '/js/bitmap-worker.js';
-    const MAX_WORKERS = Math.min(4, (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4);
+    // 🚀 하드웨어 병렬성 최대 활용 (최대 8개 워커)
+    const MAX_WORKERS = Math.min(8, (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) ? navigator.hardwareConcurrency : 4);
     const workers = [];
     let workerIndex = 0;
     let requestId = 0;
