@@ -9500,8 +9500,74 @@ class WaferMapViewer {
                                     }
                                 }
                                 
-                                // 해당 클래스 섹션만 다시 렌더링
-                                this.updateLabelExplorerContent();
+                                // 🔥 해당 클래스 섹션만 직접 업데이트 (전체 새로고침 방지)
+                                // updateLabelExplorerContent() 대신 해당 클래스 섹션만 찾아서 업데이트
+                                for (const cls of deletedClasses) {
+                                    const container = document.getElementById('label-explorer-list');
+                                    if (!container) continue;
+                                    
+                                    // 해당 클래스의 ul 요소 찾기
+                                    const classSection = container.querySelector(`[data-class="${cls}"]`);
+                                    if (!classSection) continue;
+                                    
+                                    const imgUl = classSection.querySelector('ul');
+                                    if (!imgUl) continue;
+                                    
+                                    // 새로운 이미지 목록으로 ul 내용 교체
+                                    const imgList = this.classToImgListCache?.[cls] || [];
+                                    imgUl.innerHTML = '';
+                                    
+                                    for (let i = 0; i < imgList.length; ++i) {
+                                        const img = imgList[i];
+                                        if (img.type !== 'file') continue;
+                                        
+                                        const labelKey = `${cls}/${img.name}`;
+                                        const imgLi = document.createElement('li');
+                                        imgLi.style.display = 'flex';
+                                        imgLi.style.alignItems = 'center';
+                                        imgLi.style.margin = '2px 0';
+                                        
+                                        const imgBtn = document.createElement('button');
+                                        imgBtn.textContent = img.name;
+                                        imgBtn.className = 'label-img-name';
+                                        imgBtn.style.cursor = 'pointer';
+                                        imgBtn.style.padding = '4px 12px';
+                                        imgBtn.style.background = '#222';
+                                        imgBtn.style.color = '#fff';
+                                        imgBtn.style.border = '1px solid #444';
+                                        imgBtn.style.borderRadius = '6px';
+                                        imgBtn.style.marginRight = '4px';
+                                        
+                                        // 삭제 버튼 이벤트
+                                        imgBtn.oncontextmenu = async (e) => {
+                                            e.preventDefault();
+                                            const [delCls, delImg] = labelKey.split('/');
+                                            
+                                            try {
+                                                const response = await fetch(deleteApiUrl, {
+                                                    method: 'DELETE',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({ class_name: delCls, image_name: delImg })
+                                                });
+                                                
+                                                if (response.ok) {
+                                                    console.log(`✅ 삭제 성공: ${delImg}`);
+                                                    // 해당 이미지만 즉시 제거
+                                                    imgLi.remove();
+                                                } else {
+                                                    console.warn(`삭제 실패: ${delImg} (HTTP ${response.status})`);
+                                                }
+                                            } catch (error) {
+                                                console.error(`삭제 오류: ${delImg}`, error);
+                                            }
+                                        };
+                                        
+                                        imgLi.appendChild(imgBtn);
+                                        imgUl.appendChild(imgLi);
+                                    }
+                                    
+                                    console.log(`⚡ 클래스 '${cls}' 섹션 직접 업데이트 완료: ${imgList.length}개`);
+                                }
 
                                 // 클래스 매니저 버튼 상태 업데이트
                                 this.updateClassManagerButtons();
