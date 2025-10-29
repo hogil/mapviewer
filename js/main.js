@@ -2044,100 +2044,50 @@ class WaferMapViewer {
     // 폴더 브라우저 로드
 
     async loadFolderBrowser(path = '') {
-        console.log('🔍 [CACHE_DEBUG] Wafer Map Explorer 새로고침 시작 - 썸네일 캐시 삭제');
-        
         // 썸네일 캐시 삭제
         if (this.thumbnailManager) {
-            console.log('🔍 [CACHE_DEBUG] 썸네일 캐시 삭제 전:', this.thumbnailManager.cache.size, '개');
             this.thumbnailManager.cache.clear();
             this.thumbnailManager.abortAll();
-            console.log('🔍 [CACHE_DEBUG] 썸네일 캐시 삭제 완료');
         }
 
         try {
             // path가 없으면 설정된 루트 이미지폴더의 하위폴더들을 가져오기
-
             if (!path) {
-                // 설정된 루트 폴더 사용
-
-                const rootResponse = await fetch('/api/root-folder');
-
-                if (rootResponse.ok) {
-                    const rootData = await rootResponse.json();
-                    const imageRoot = rootData.root_folder;
-
-                    const response = await fetch(`/api/browse-folders?path=${encodeURIComponent(imageRoot)}`);
-                    const data = await response.json();
-                    const folders = (data.folders || [])
-
-                        .filter(folder => 
-
-                            folder.name !== 'classification' && 
-
-                            folder.name !== 'thumbnails' &&
-
-                            folder.name !== 'labels'
-
-                        )
-
-                        .sort((a, b) => b.name.toLowerCase().localeCompare(a.name.toLowerCase()));
-                    
-                    this.cachedProductFolders = folders;
-                    this.displayFoldersAsIcons(folders);
-
-                    // 루트 경로 표시 (이미지 폴더명)
-
-                    const currentFolderText = document.getElementById('current-folder-text');
-
-                    if (currentFolderText) {
-                        const imageFolderName = imageRoot.split('/').pop() || 'root';
-
-                        currentFolderText.textContent = imageFolderName;
-                    }
-
-                    this.currentBrowserPath = imageRoot;
-
-                    return;
-                } else {
-                    // 폴백: 기존 방식
-
-                    const response = await fetch('/api/files');
-                    const data = await response.json();
-                    const items = data.items || [];
-
-                    const folders = items
-
-                        .filter(item => item.type === 'directory')
-
-                        .filter(folder => 
-
-                            folder.name !== 'classification' && 
-
-                            folder.name !== 'thumbnails' &&
-
-                            folder.name !== 'labels'
-
-                        )
-
-                        .sort((a, b) => b.name.toLowerCase().localeCompare(a.name.toLowerCase()));
-                    
-                    this.cachedProductFolders = folders;
-                    this.displayFoldersAsIcons(folders);
-
-                    // 루트 경로 표시 (폴백)
-
-                    const currentFolderText = document.getElementById('current-folder-text');
-
-                    if (currentFolderText) {
-                        const folderName = (this.currentFolderPath || '').replace(/\\/g, '/').split('/').pop() || 'root';
-
-                        currentFolderText.textContent = folderName;
-                    }
-
-                    this.currentBrowserPath = this.currentFolderPath || '';
-
+                // 🚀 최적화: /api/root-folder 대신 /api/browse-folders?path=&force_root=true 사용
+                // 이미 cachedProductFolders에 있으면 재사용
+                if (this.cachedProductFolders && this.cachedProductFolders.length > 0) {
+                    this.displayFoldersAsIcons(this.cachedProductFolders);
                     return;
                 }
+                
+                const response = await fetch('/api/browse-folders?path=&force_root=true');
+                const data = await response.json();
+                const folders = (data.folders || [])
+
+                    .filter(folder => 
+
+                        folder.name !== 'classification' && 
+
+                        folder.name !== 'thumbnails' &&
+
+                        folder.name !== 'labels'
+
+                    )
+
+                    .sort((a, b) => b.name.toLowerCase().localeCompare(a.name.toLowerCase()));
+                
+                this.cachedProductFolders = folders;
+                this.displayFoldersAsIcons(folders);
+
+                // 루트 경로 표시
+                const currentFolderText = document.getElementById('current-folder-text');
+                if (currentFolderText) {
+                    currentFolderText.textContent = 'root';
+                }
+
+                this.currentBrowserPath = this.currentFolderPath || '';
+
+                return;
             }
 
             const response = await fetch(`/api/browse-folders?path=${encodeURIComponent(path)}`);
