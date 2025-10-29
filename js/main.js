@@ -1602,8 +1602,14 @@ class WaferMapViewer {
     async showProductSearchDropdown() {
         this.debugLog('🔍 [DEBUG] showProductSearchDropdown 호출됨');
         try {
-            // 원래 root_dir의 1depth와 2depth 폴더를 가져와서 드롭다운에 표시
-            // force_root=true로 항상 원래 ROOT_DIR에서 검색
+            // 🔥 캐시된 폴더 목록이 있으면 재사용
+            if (this.cachedProductFolders && this.cachedProductFolders.length > 0) {
+                this.debugLog('🔍 [DEBUG] 캐시된 폴더 목록 사용:', this.cachedProductFolders.length, '개');
+                this.displayProductSearchDropdown(this.cachedProductFolders);
+                return;
+            }
+            
+            // 캐시가 없으면 API 호출
             const response = await fetch('/api/browse-folders?path=&force_root=true', {
                 signal: this.globalAbortController?.signal
             });
@@ -1612,6 +1618,7 @@ class WaferMapViewer {
             this.debugLog('🔍 [DEBUG] API 응답:', data.folders?.length, '개 폴더');
             
             if (data.folders && data.folders.length > 0) {
+                this.cachedProductFolders = data.folders; // 캐시에 저장
                 this.displayProductSearchDropdown(data.folders);
             }
         } catch (error) {
@@ -3078,9 +3085,10 @@ class WaferMapViewer {
 
             await Promise.all(initialTasks);
 
-            if (!this.cachedProductFolders || this.cachedProductFolders.length === 0) {
-                await this.preloadProductFolders();
-            }
+            // 🔥 loadFolderBrowser에서 이미 cachedProductFolders를 설정했으므로 중복 호출 제거
+            // if (!this.cachedProductFolders || this.cachedProductFolders.length === 0) {
+            //     await this.preloadProductFolders();
+            // }
 
             this.showInitialState();
         } catch (error) {
