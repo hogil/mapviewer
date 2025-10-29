@@ -9471,24 +9471,36 @@ class WaferMapViewer {
 
                                 labelSelection.selected = [];
 
-                                // 🔥 즉시 UI 업데이트 (서버 호출 없이)
+                                // 🔥 해당 클래스만 업데이트 (전체 새로고침 방지)
                                 const deletedClasses = [...new Set(toDelete.map(key => key.split('/')[0]))];
                                 
                                 for (const cls of deletedClasses) {
-                                    // 해당 클래스 캐시에서 삭제된 이미지들 제거
+                                    // 해당 클래스 캐시 무효화
                                     if (this.classToImgListCache && this.classToImgListCache[cls]) {
-                                        const deletedImages = toDelete
-                                            .filter(key => key.startsWith(cls + '/'))
-                                            .map(key => key.split('/')[1]);
+                                        delete this.classToImgListCache[cls];
+                                    }
+                                    
+                                    // 해당 클래스 폴더만 다시 로드
+                                    const labelPath = this.currentFolderPrefix ? 
+                                        `${this.currentFolderPrefix}classification/${encodeURIComponent(cls)}` : 
+                                        `classification/${encodeURIComponent(cls)}`;
+                                    
+                                    try {
+                                        const response = await fetch(`/api/files?path=${labelPath}`);
+                                        const data = await response.json();
+                                        const imgList = Array.isArray(data.items) ? data.items : [];
                                         
-                                        this.classToImgListCache[cls] = this.classToImgListCache[cls]
-                                            .filter(img => !deletedImages.includes(img.name));
+                                        // 캐시 업데이트
+                                        if (!this.classToImgListCache) this.classToImgListCache = {};
+                                        this.classToImgListCache[cls] = imgList;
                                         
-                                        console.log(`⚡ 클래스 '${cls}' 캐시에서 즉시 제거: ${deletedImages.length}개`);
+                                        console.log(`🔄 클래스 '${cls}' 이미지 목록 업데이트: ${imgList.length}개`);
+                                    } catch (error) {
+                                        console.error(`클래스 '${cls}' 이미지 목록 로드 실패:`, error);
                                     }
                                 }
                                 
-                                // 해당 클래스 섹션만 다시 렌더링 (캐시 사용)
+                                // 해당 클래스 섹션만 다시 렌더링
                                 this.updateLabelExplorerContent();
 
                                 // 클래스 매니저 버튼 상태 업데이트
@@ -9589,15 +9601,13 @@ class WaferMapViewer {
 
         const scrollTop = container.scrollTop;
 
-        // 클래스 목록 다시 가져오기 (캐시 우선 사용)
+        // 클래스 목록 다시 가져오기
         console.log('🔍 [UPDATE_CONTENT_DEBUG] refreshClassList 호출');
-        
-        // 🔥 캐시된 클래스 목록이 있으면 API 호출 생략
-        if (this.cachedClassList && this.cachedClassList.length > 0) {
-            console.log('🔍 [UPDATE_CONTENT_DEBUG] 캐시된 클래스 목록 사용 (API 호출 생략)');
-            const classes = this.cachedClassList.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+        this.refreshClassList().then(async () => {
+            // 🔥 refreshClassList()에서 캐시된 클래스 목록 사용 (중복 API 호출 제거)
+            const classes = Array.isArray(this.cachedClassList) ? this.cachedClassList.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())) : [];
             const labelSelection = this.labelSelection;
-            
+
             console.log('🔍 [UPDATE_CONTENT_DEBUG] 클래스 수:', classes.length);
             console.log('🔍 [UPDATE_CONTENT_DEBUG] 클래스 목록:', classes);
 
@@ -9607,7 +9617,7 @@ class WaferMapViewer {
             for (const cls of classes) {
                 classToImgList[cls] = this.classToImgListCache?.[cls] || [];
             }
-            
+
             console.log('🔍 [UPDATE_CONTENT_DEBUG] classToImgList keys:', Object.keys(classToImgList));
 
             // 전체 내용 다시 렌더링
@@ -9618,35 +9628,7 @@ class WaferMapViewer {
             container.scrollTop = scrollTop;
 
             console.log('🔍 [UPDATE_CONTENT_DEBUG] Label Explorer 내용 업데이트 완료');
-        } else {
-            // 캐시가 없을 때만 API 호출
-            this.refreshClassList().then(async () => {
-                // 🔥 refreshClassList()에서 캐시된 클래스 목록 사용 (중복 API 호출 제거)
-                const classes = Array.isArray(this.cachedClassList) ? this.cachedClassList.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())) : [];
-                const labelSelection = this.labelSelection;
-                
-                console.log('🔍 [UPDATE_CONTENT_DEBUG] 클래스 수:', classes.length);
-                console.log('🔍 [UPDATE_CONTENT_DEBUG] 클래스 목록:', classes);
-
-                // classToImgList 재구성 (이미 로드된 것들만)
-                let classToImgList = {};
-
-                for (const cls of classes) {
-                    classToImgList[cls] = this.classToImgListCache?.[cls] || [];
-                }
-                
-                console.log('🔍 [UPDATE_CONTENT_DEBUG] classToImgList keys:', Object.keys(classToImgList));
-
-                // 전체 내용 다시 렌더링
-                console.log('🔍 [UPDATE_CONTENT_DEBUG] renderLabelExplorerContent 호출');
-                this.renderLabelExplorerContent(container, classes, classToImgList, labelSelection);
-            
-            // 스크롤 위치 복원
-                container.scrollTop = scrollTop;
-
-                console.log('🔍 [UPDATE_CONTENT_DEBUG] Label Explorer 내용 업데이트 완료');
-            });
-        }
+        });
     }
 
     updateLabelExplorerSelection() {
