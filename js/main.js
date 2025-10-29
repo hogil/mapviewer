@@ -2600,7 +2600,7 @@ class WaferMapViewer {
 
                     // 🔥 그리드 드래그 선택 시에만 crosshair 커서 사용
                     if (!document.body.style.cursor || document.body.style.cursor === '') {
-                        document.body.style.cursor = 'crosshair';
+                    document.body.style.cursor = 'crosshair';
                     }
 
                     // 드래그 박스 초기 표시
@@ -2779,7 +2779,7 @@ class WaferMapViewer {
 
             // 🔥 그리드 드래그 선택이 끝날 때만 커서 복원 (다른 드래그가 활성화되어 있지 않은 경우)
             if (document.body.style.cursor === 'crosshair') {
-                document.body.style.cursor = '';
+            document.body.style.cursor = '';
             }
 
             dragOverlay.style.display = 'none';
@@ -9096,16 +9096,16 @@ class WaferMapViewer {
 
                         let deleteSuccess = true;
                         const failedDeletes = [];
-                        
+
                         for (const key of toDelete) {
                             const [delCls, delImg] = key.split('/');
 
                             try {
                                 const response = await fetch(deleteApiUrl, {
-                                    method: 'DELETE',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ class_name: delCls, image_name: delImg })
-                                });
+                                method: 'DELETE',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ class_name: delCls, image_name: delImg })
+                            });
                                 
                                 if (!response.ok) {
                                     console.warn(`삭제 실패: ${delImg} (HTTP ${response.status})`);
@@ -9471,103 +9471,25 @@ class WaferMapViewer {
 
                                 labelSelection.selected = [];
 
-                                // 🔥 해당 클래스만 업데이트 (전체 새로고침 방지)
+                                // 🔥 즉시 UI 업데이트 (서버 호출 없이)
                                 const deletedClasses = [...new Set(toDelete.map(key => key.split('/')[0]))];
                                 
                                 for (const cls of deletedClasses) {
-                                    // 해당 클래스 캐시 무효화
+                                    // 해당 클래스 캐시에서 삭제된 이미지들 제거
                                     if (this.classToImgListCache && this.classToImgListCache[cls]) {
-                                        delete this.classToImgListCache[cls];
-                                    }
-                                    
-                                    // 해당 클래스 폴더만 다시 로드
-                                    const labelPath = this.currentFolderPrefix ? 
-                                        `${this.currentFolderPrefix}classification/${encodeURIComponent(cls)}` : 
-                                        `classification/${encodeURIComponent(cls)}`;
-                                    
-                                    try {
-                                        const response = await fetch(`/api/files?path=${labelPath}`);
-                                        const data = await response.json();
-                                        const imgList = Array.isArray(data.items) ? data.items : [];
+                                        const deletedImages = toDelete
+                                            .filter(key => key.startsWith(cls + '/'))
+                                            .map(key => key.split('/')[1]);
                                         
-                                        // 캐시 업데이트
-                                        if (!this.classToImgListCache) this.classToImgListCache = {};
-                                        this.classToImgListCache[cls] = imgList;
+                                        this.classToImgListCache[cls] = this.classToImgListCache[cls]
+                                            .filter(img => !deletedImages.includes(img.name));
                                         
-                                        console.log(`🔄 클래스 '${cls}' 이미지 목록 업데이트: ${imgList.length}개`);
-                                    } catch (error) {
-                                        console.error(`클래스 '${cls}' 이미지 목록 로드 실패:`, error);
+                                        console.log(`⚡ 클래스 '${cls}' 캐시에서 즉시 제거: ${deletedImages.length}개`);
                                     }
                                 }
                                 
-                                // 🔥 해당 클래스 섹션만 직접 업데이트 (전체 새로고침 방지)
-                                // updateLabelExplorerContent() 대신 해당 클래스 섹션만 찾아서 업데이트
-                                for (const cls of deletedClasses) {
-                                    const container = document.getElementById('label-explorer-list');
-                                    if (!container) continue;
-                                    
-                                    // 해당 클래스의 ul 요소 찾기
-                                    const classSection = container.querySelector(`[data-class="${cls}"]`);
-                                    if (!classSection) continue;
-                                    
-                                    const imgUl = classSection.querySelector('ul');
-                                    if (!imgUl) continue;
-                                    
-                                    // 새로운 이미지 목록으로 ul 내용 교체
-                                    const imgList = this.classToImgListCache?.[cls] || [];
-                                    imgUl.innerHTML = '';
-                                    
-                                    for (let i = 0; i < imgList.length; ++i) {
-                                        const img = imgList[i];
-                                        if (img.type !== 'file') continue;
-                                        
-                                        const labelKey = `${cls}/${img.name}`;
-                                        const imgLi = document.createElement('li');
-                                        imgLi.style.display = 'flex';
-                                        imgLi.style.alignItems = 'center';
-                                        imgLi.style.margin = '2px 0';
-                                        
-                                        const imgBtn = document.createElement('button');
-                                        imgBtn.textContent = img.name;
-                                        imgBtn.className = 'label-img-name';
-                                        imgBtn.style.cursor = 'pointer';
-                                        imgBtn.style.padding = '4px 12px';
-                                        imgBtn.style.background = '#222';
-                                        imgBtn.style.color = '#fff';
-                                        imgBtn.style.border = '1px solid #444';
-                                        imgBtn.style.borderRadius = '6px';
-                                        imgBtn.style.marginRight = '4px';
-                                        
-                                        // 삭제 버튼 이벤트
-                                        imgBtn.oncontextmenu = async (e) => {
-                                            e.preventDefault();
-                                            const [delCls, delImg] = labelKey.split('/');
-                                            
-                                            try {
-                                                const response = await fetch(deleteApiUrl, {
-                                                    method: 'DELETE',
-                                                    headers: { 'Content-Type': 'application/json' },
-                                                    body: JSON.stringify({ class_name: delCls, image_name: delImg })
-                                                });
-                                                
-                                                if (response.ok) {
-                                                    console.log(`✅ 삭제 성공: ${delImg}`);
-                                                    // 해당 이미지만 즉시 제거
-                                                    imgLi.remove();
-                                                } else {
-                                                    console.warn(`삭제 실패: ${delImg} (HTTP ${response.status})`);
-                                                }
-                                            } catch (error) {
-                                                console.error(`삭제 오류: ${delImg}`, error);
-                                            }
-                                        };
-                                        
-                                        imgLi.appendChild(imgBtn);
-                                        imgUl.appendChild(imgLi);
-                                    }
-                                    
-                                    console.log(`⚡ 클래스 '${cls}' 섹션 직접 업데이트 완료: ${imgList.length}개`);
-                                }
+                                // 해당 클래스 섹션만 다시 렌더링 (캐시 사용)
+                                this.updateLabelExplorerContent();
 
                                 // 클래스 매니저 버튼 상태 업데이트
                                 this.updateClassManagerButtons();
@@ -9667,11 +9589,13 @@ class WaferMapViewer {
 
         const scrollTop = container.scrollTop;
 
-        // 클래스 목록 다시 가져오기
+        // 클래스 목록 다시 가져오기 (캐시 우선 사용)
         console.log('🔍 [UPDATE_CONTENT_DEBUG] refreshClassList 호출');
-        this.refreshClassList().then(async () => {
-            // 🔥 refreshClassList()에서 캐시된 클래스 목록 사용 (중복 API 호출 제거)
-            const classes = Array.isArray(this.cachedClassList) ? this.cachedClassList.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())) : [];
+        
+        // 🔥 캐시된 클래스 목록이 있으면 API 호출 생략
+        if (this.cachedClassList && this.cachedClassList.length > 0) {
+            console.log('🔍 [UPDATE_CONTENT_DEBUG] 캐시된 클래스 목록 사용 (API 호출 생략)');
+            const classes = this.cachedClassList.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
             const labelSelection = this.labelSelection;
             
             console.log('🔍 [UPDATE_CONTENT_DEBUG] 클래스 수:', classes.length);
@@ -9694,7 +9618,35 @@ class WaferMapViewer {
             container.scrollTop = scrollTop;
 
             console.log('🔍 [UPDATE_CONTENT_DEBUG] Label Explorer 내용 업데이트 완료');
-        });
+        } else {
+            // 캐시가 없을 때만 API 호출
+            this.refreshClassList().then(async () => {
+                // 🔥 refreshClassList()에서 캐시된 클래스 목록 사용 (중복 API 호출 제거)
+                const classes = Array.isArray(this.cachedClassList) ? this.cachedClassList.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())) : [];
+                const labelSelection = this.labelSelection;
+                
+                console.log('🔍 [UPDATE_CONTENT_DEBUG] 클래스 수:', classes.length);
+                console.log('🔍 [UPDATE_CONTENT_DEBUG] 클래스 목록:', classes);
+
+                // classToImgList 재구성 (이미 로드된 것들만)
+                let classToImgList = {};
+
+                for (const cls of classes) {
+                    classToImgList[cls] = this.classToImgListCache?.[cls] || [];
+                }
+                
+                console.log('🔍 [UPDATE_CONTENT_DEBUG] classToImgList keys:', Object.keys(classToImgList));
+
+                // 전체 내용 다시 렌더링
+                console.log('🔍 [UPDATE_CONTENT_DEBUG] renderLabelExplorerContent 호출');
+                this.renderLabelExplorerContent(container, classes, classToImgList, labelSelection);
+            
+            // 스크롤 위치 복원
+                container.scrollTop = scrollTop;
+
+                console.log('🔍 [UPDATE_CONTENT_DEBUG] Label Explorer 내용 업데이트 완료');
+            });
+        }
     }
 
     updateLabelExplorerSelection() {
