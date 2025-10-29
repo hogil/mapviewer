@@ -5243,11 +5243,11 @@ class WaferMapViewer {
 
         // dragover: 드래그 중간에 호버되는 파일 배경색 변경
         container.addEventListener('dragover', (e) => {
+            e.preventDefault(); // 🔥 모든 영역에서 기본 드래그 금지 방지
+            e.dataTransfer.dropEffect = 'move';
+            
             const target = e.target;
             if (target.tagName === 'A' && target.hasAttribute('data-path') && target !== dragStartElement) {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = 'move';
-                
                 const path = target.dataset.path;
                 const isSelected = this.selectedImages && this.selectedImages.includes(path);
                 
@@ -5277,13 +5277,48 @@ class WaferMapViewer {
             e.preventDefault();
             e.stopPropagation();
             
+            if (!dragStartPath) return;
+            
             const target = e.target;
-            if (target.tagName === 'A' && target.hasAttribute('data-path') && dragStartPath) {
-                const endPath = target.dataset.path;
-                
-                // 모든 파일 링크 가져오기 (이미지 파일만)
+            let endPath = null;
+            
+            // 🔥 이미지 링크를 찾기
+            let fileLink = null;
+            if (target.tagName === 'A' && target.hasAttribute('data-path')) {
+                fileLink = target;
+            } else {
+                fileLink = target.closest('a[data-path]');
+            }
+            
+            // 🔥 파일 링크를 찾지 못한 경우, 마우스 위치 기준으로 가장 가까운 이미지 찾기
+            if (!fileLink) {
                 const allLinks = Array.from(container.querySelectorAll('a[data-path]'));
-                const imagePaths = allLinks
+                const mouseY = e.clientY;
+                let closestLink = null;
+                let minDistance = Infinity;
+                
+                for (const link of allLinks) {
+                    const rect = link.getBoundingClientRect();
+                    const linkCenterY = rect.top + rect.height / 2;
+                    const distance = Math.abs(mouseY - linkCenterY);
+                    
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        closestLink = link;
+                    }
+                }
+                
+                fileLink = closestLink;
+            }
+            
+            if (fileLink && fileLink.dataset.path) {
+                endPath = fileLink.dataset.path;
+            }
+            
+            if (endPath) {
+                // 모든 파일 링크 가져오기 (이미지 파일만)
+                const allImageLinks = Array.from(container.querySelectorAll('a[data-path]'));
+                const imagePaths = allImageLinks
                     .map(link => link.dataset.path)
                     .filter(path => this.isImageFile(path));
                 
