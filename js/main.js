@@ -3065,6 +3065,7 @@ class WaferMapViewer {
             if (rootPath) {
                 this.currentFolderPath = rootPath;
                 this.currentFolderPrefix = '';
+                this.debugLog('🔍 [INIT] ROOT_DIR로 초기화:', rootPath);
             }
             
             await this.resetToImageFolder();
@@ -11476,7 +11477,14 @@ class WaferMapViewer {
             const labelPath = this.currentFolderPrefix ? 
                 `${this.currentFolderPrefix}classification/${encodeURIComponent(className)}` : 
                 `classification/${encodeURIComponent(className)}`;
+            
+            // 🔥 경로 존재 여부 확인
             const response = await fetch(`/api/files?path=${labelPath}`);
+            if (!response.ok) {
+                this.debugLog(`클래스 '${className}' 폴더가 존재하지 않습니다.`);
+                return;
+            }
+            
             const data = await response.json();
             const imageFiles = (data.items || [])
 
@@ -11560,7 +11568,14 @@ class WaferMapViewer {
                     const labelPath = this.currentFolderPrefix ? 
                         `${this.currentFolderPrefix}classification/${encodeURIComponent(className)}` : 
                         `classification/${encodeURIComponent(className)}`;
+                    
+                    // 🔥 경로 존재 여부 확인
                     const response = await fetch(`/api/files?path=${labelPath}`);
+                    if (!response.ok) {
+                        console.error(`클래스 '${className}' 폴더가 존재하지 않습니다.`);
+                        return { className, images: [] };
+                    }
+                    
                     const data = await response.json();
                     const imageFiles = (data.items || [])
 
