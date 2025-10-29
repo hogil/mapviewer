@@ -3071,35 +3071,31 @@ class WaferMapViewer {
             // 🔥 resetToImageFolder는 이미 ROOT_DIR이므로 불필요한 API 호출 스킵
             // await this.resetToImageFolder();
 
-            // 🔥 독립적인 로딩 작업들을 병렬로 실행
-            const initialTasks = [
-                this.loadFolderBrowser(this.currentFolderPath || '')
-            ];
-            if (this.dom.fileExplorer) {
-                initialTasks.push(this.loadDirectoryContents(null, this.dom.fileExplorer));
-            }
-
-            await Promise.all(initialTasks);
-
-            // 🔥 loadFolderBrowser에서 이미 cachedProductFolders를 설정했으므로 중복 호출 제거
-            // if (!this.cachedProductFolders || this.cachedProductFolders.length === 0) {
-            //     await this.preloadProductFolders();
-            // }
-
+            // 🔥 1순위: Wafer Map Explorer 폴더 목록과 제품 선택 폴더 최우선 로딩
+            await this.loadFolderBrowser(this.currentFolderPath || '');
+            
             this.showInitialState();
+
+            // 🔥 2순위: File Explorer 로딩은 백그라운드로 실행
+            if (this.dom.fileExplorer) {
+                this.loadDirectoryContents(null, this.dom.fileExplorer).catch(err => {
+                    console.error('[INIT] File Explorer 로딩 실패:', err);
+                });
+            }
         } catch (error) {
             console.error('[INIT] Explorer preload failed:', error);
         }
 
-        // 🔥 독립적인 초기화 작업들을 병렬로 실행 (속도 향상)
+        // 🔥 3순위: 중요한 초기화 작업들을 병렬로 실행 (하지만 백그라운드)
+        // loadFolderBrowser 이후에 백그라운드로 실행되어 UI 블로킹 없음
         const initTasks = [
-            this.initClassification(),
-            this.refreshLabelExplorer(),
-            this.updateSubfolderList()
+            this.initClassification().catch(err => console.error('[INIT] Classification 초기화 실패:', err)),
+            this.refreshLabelExplorer().catch(err => console.error('[INIT] Label Explorer 초기화 실패:', err)),
+            this.updateSubfolderList().catch(err => console.error('[INIT] Subfolder 업데이트 실패:', err))
         ];
         
         // 모두 병렬로 실행하되 에러 발생 시에도 다른 작업은 계속 진행
-        await Promise.allSettled(initTasks);
+        Promise.allSettled(initTasks);
     }
 
     // 🔥 서버 설정 로드 (피라미드 레벨, zoom 기준 등)
