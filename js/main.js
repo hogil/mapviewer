@@ -2595,7 +2595,10 @@ class WaferMapViewer {
                 if (!dragData.active && dragDistance > MIN_DRAG_DISTANCE) {
                     dragData.active = true;
 
-                    document.body.style.cursor = 'crosshair';
+                    // 🔥 그리드 드래그 선택 시에만 crosshair 커서 사용
+                    if (!document.body.style.cursor || document.body.style.cursor === '') {
+                        document.body.style.cursor = 'crosshair';
+                    }
 
                     // 드래그 박스 초기 표시
 
@@ -2771,7 +2774,10 @@ class WaferMapViewer {
 
             document.body.style.userSelect = '';
 
-            document.body.style.cursor = '';
+            // 🔥 그리드 드래그 선택이 끝날 때만 커서 복원 (다른 드래그가 활성화되어 있지 않은 경우)
+            if (document.body.style.cursor === 'crosshair') {
+                document.body.style.cursor = '';
+            }
 
             dragOverlay.style.display = 'none';
 
@@ -5235,8 +5241,10 @@ class WaferMapViewer {
                 emptyImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
                 e.dataTransfer.setDragImage(emptyImg, 0, 0);
                 
-                // 🔥 드래그 중 커서를 grabbing으로 변경
-                document.body.style.cursor = 'grabbing';
+                // 🔥 드래그 중 커서를 grabbing으로 변경 (다른 드래그가 없을 때만)
+                if (!document.body.style.cursor || document.body.style.cursor === '') {
+                    document.body.style.cursor = 'grabbing';
+                }
                 
                 // 드래그 중 시각적 피드백
                 target.style.removeProperty('background');
@@ -5351,8 +5359,10 @@ class WaferMapViewer {
             dragStartPath = null;
             dragStartElement = null;
             
-            // 🔥 커서를 원래대로 복원
-            document.body.style.cursor = '';
+            // 🔥 커서를 원래대로 복원 (grabbing 커서인 경우만)
+            if (document.body.style.cursor === 'grabbing') {
+                document.body.style.cursor = '';
+            }
         }, false);
 
         // dragend: 드래그 종료 (캔슬) 시 원래 색으로 복원
@@ -5363,8 +5373,10 @@ class WaferMapViewer {
                 this.updateFileExplorerSelection();
             }
             
-            // 🔥 커서를 원래대로 복원
-            document.body.style.cursor = '';
+            // 🔥 커서를 원래대로 복원 (grabbing 커서인 경우만)
+            if (document.body.style.cursor === 'grabbing') {
+                document.body.style.cursor = '';
+            }
             
             // 드래그 상태 초기화
             dragStartPath = null;
