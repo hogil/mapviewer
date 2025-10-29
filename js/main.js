@@ -7026,8 +7026,9 @@ class WaferMapViewer {
 
         try {
             this.debugLog(`Adding classes: ${names.join(', ')}`);
+            console.log('🔍 [ADD_CLASS_PERF] 클래스 추가 시작:', { count: names.length, names });
 
-            for (const name of names) {
+            const startTime = performance.now();
                 try {
                     // 🔥 현재 폴더 파라미터 추가
                     const currentFolder = this.currentFolderPrefix;
@@ -7060,13 +7061,11 @@ class WaferMapViewer {
 
                     successfulClasses.push(name); // 성공한 클래스 추가
 
-                    // API 응답에서 refresh_required 확인 후 즉시 Label Explorer 강제 새로고침
-
-                    if (result.refresh_required) {
-                        this.debugLog(`클래스 '${name}' 생성 완료 - Label Explorer 즉시 강제 새로고침`);
-
-                        await this.refreshLabelExplorer();
-                    }
+                    // 🔥 개별 새로고침 제거 - 마지막에 한 번만 실행
+                    // if (result.refresh_required) {
+                    //     this.debugLog(`클래스 '${name}' 생성 완료 - Label Explorer 즉시 강제 새로고침`);
+                    //     await this.refreshLabelExplorer();
+                    // }
                 } catch (error) {
                     console.error(`클래스 '${name}' 추가 중 오류 발생:`, error);
 
@@ -7076,11 +7075,23 @@ class WaferMapViewer {
 
             this.dom.newClassInput.value = '';
 
+            // 🔥 클래스 캐시 무효화하여 최신 데이터 가져오기
+            this.cachedClassList = null;
+            this.classListPromise = null;
+
             // 🔥 Label Explorer가 내부에서 getClassList()를 호출하므로 refreshClassList() 불필요
             await this.refreshLabelExplorer();
             
             // 🔥 추가: Fail List와 Label Explorer 즉시 업데이트
             this.updateLabelExplorerContent();
+
+            // 성능 측정 완료
+            const endTime = performance.now();
+            console.log('🔍 [ADD_CLASS_PERF] 클래스 추가 완료:', { 
+                totalTime: `${(endTime - startTime).toFixed(1)}ms`,
+                successCount: successfulClasses.length,
+                requestedCount: names.length
+            });
 
             // 성공한 클래스 수 계산
 
