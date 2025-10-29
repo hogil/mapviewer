@@ -3077,6 +3077,13 @@ class WaferMapViewer {
         // 먼저 이미지 폴더 최상위로 이동
 
         try {
+            // 🔥 초기화 시 currentFolderPath를 ROOT_DIR로 설정
+            const rootPath = await this.getRootPath();
+            if (rootPath) {
+                this.currentFolderPath = rootPath;
+                this.currentFolderPrefix = '';
+            }
+            
             await this.resetToImageFolder();
 
             const initialTasks = [
@@ -3213,6 +3220,12 @@ class WaferMapViewer {
             const imageRootPath = await this.getRootPath();
             if (!imageRootPath) {
                 throw new Error('ROOT_DIR을 가져올 수 없습니다');
+            }
+
+            // 🔥 이미 ROOT_DIR이면 불필요한 API 호출 생략
+            if (this.currentFolderPath === imageRootPath) {
+                this.debugLog('이미 ROOT_DIR 상태 - API 호출 생략');
+                return;
             }
 
             const response = await fetch('/api/change-folder', {
