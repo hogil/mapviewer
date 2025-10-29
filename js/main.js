@@ -1531,21 +1531,20 @@ class WaferMapViewer {
             }
             
             const imageRoot = imageRootPath.replace(/\\/g, '/');
-                const currentPath = absolutePath.replace(/\\/g, '/');
+            const currentPath = absolutePath.replace(/\\/g, '/');
 
-                // 이미지 폴더명 추출
+            // 이미지 폴더명 추출
 
-                const imageFolderName = imageRoot.split('/').pop() || 'root';
+            const imageFolderName = imageRoot.split('/').pop() || 'root';
 
-                if (currentPath === imageRoot) {
-                    return imageFolderName;
-                } else if (currentPath.startsWith(imageRoot)) {
-                    const relativePath = currentPath.substring(imageRoot.length).replace(/^\//, '');
+            if (currentPath === imageRoot) {
+                return imageFolderName;
+            } else if (currentPath.startsWith(imageRoot)) {
+                const relativePath = currentPath.substring(imageRoot.length).replace(/^\//, '');
 
-                    return relativePath ? `${imageFolderName}/${relativePath}` : imageFolderName;
-                } else {
-                    return imageFolderName;
-                }
+                return relativePath ? `${imageFolderName}/${relativePath}` : imageFolderName;
+            } else {
+                return imageFolderName;
             }
         } catch (error) {
             console.error('상대경로 변환 실패:', error);
