@@ -3165,15 +3165,10 @@ class WaferMapViewer {
         ];
         
         // 🔥 refreshLabelExplorer는 즉시 실행하여 fail list 표시
-        console.log('🔍 [INIT_DEBUG] Label Explorer 즉시 초기화 시작');
         try {
             await this.refreshLabelExplorer();
-            console.log('🔍 [INIT_DEBUG] Label Explorer 초기화 완료');
-            
             // 🔥 추가: fail list 표시를 위해 updateLabelExplorerContent 호출
-            console.log('🔍 [INIT_DEBUG] Label Explorer 내용 업데이트 시작');
             this.updateLabelExplorerContent();
-            console.log('🔍 [INIT_DEBUG] Label Explorer 내용 업데이트 완료');
         } catch (err) {
             console.error('[INIT] Label Explorer 초기화 실패:', err);
         }
@@ -6782,20 +6777,7 @@ class WaferMapViewer {
                 const isCtrl = e.ctrlKey || e.metaKey;
                 const isShift = e.shiftKey;
                 
-                console.log('🔍 [CLASS_CLICK_DEBUG] 클래스 버튼 클릭:', {
-                    className: cls,
-                    isCtrl: isCtrl,
-                    isShift: isShift,
-                    selectedCount: this.classSelection?.selected.length || 0
-                });
-                console.log('🔍 [EVENT_KEYS_DEBUG] 이벤트 키 상태:', {
-                    ctrlKey: e.ctrlKey,
-                    metaKey: e.metaKey,
-                    shiftKey: e.shiftKey,
-                    altKey: e.altKey,
-                    type: e.type,
-                    target: e.target.tagName
-                });
+                // 디버그 로그 간소화 (성능 최적화)
 
                 if (!isCtrl && !isShift) {
                     // 🔥 성능 최적화: 직접 라벨링 (즉각 반응)
@@ -6878,7 +6860,6 @@ class WaferMapViewer {
                 }
 
                 // Ctrl/Shift 클릭: 클래스 선택/해제
-                console.log('🔍 [CLASS_CLICK_DEBUG] Ctrl/Shift 클릭 감지:', { isCtrl, isShift });
 
                 if (isCtrl || isShift) {
                     if (!this.classSelection) this.classSelection = { selected: [], lastClicked: null };
@@ -6895,22 +6876,13 @@ class WaferMapViewer {
                             this.classSelection.selected = Array.from(new Set([...this.classSelection.selected, ...range]));
                         }
                     } else if (isCtrl) {
-                        console.log('🔍 [CLASS_CLICK_DEBUG] Ctrl 클릭 처리:', {
-                            className: cls,
-                            wasSelected: this.classSelection.selected.includes(cls),
-                            beforeCount: this.classSelection.selected.length
-                        });
-                        
                         if (this.classSelection.selected.includes(cls)) {
                             this.classSelection.selected = this.classSelection.selected.filter(c => c !== cls);
-                            console.log('🔍 [CLASS_CLICK_DEBUG] 클래스 선택 해제:', cls);
                         } else {
                             this.classSelection.selected.push(cls);
-                            console.log('🔍 [CLASS_CLICK_DEBUG] 클래스 선택 추가:', cls);
                         }
 
                         this.classSelection.lastClicked = cls;
-                        console.log('🔍 [CLASS_CLICK_DEBUG] 선택된 클래스 목록:', this.classSelection.selected);
                     }
 
                     this.selectedClass = this.classSelection.selected.length === 1 ? this.classSelection.selected[0] : null;
@@ -6972,11 +6944,6 @@ class WaferMapViewer {
 
     updateClassListSelection() {
         // 기존 버튼들의 선택 상태만 업데이트
-        console.log('🔍 [SELECTION_DEBUG] updateClassListSelection 시작:', {
-            selectedClasses: this.classSelection?.selected || [],
-            selectedCount: this.classSelection?.selected.length || 0
-        });
-
         const buttons = this.dom.classList.querySelectorAll('button');
 
         buttons.forEach(btn => {
@@ -7207,11 +7174,7 @@ class WaferMapViewer {
         }
 
         const oldName = selectedClasses[0];
-        console.log('🔍 [RENAME_DEBUG] Rename 시작:', { oldName, selectedClasses });
-        
         const newName = prompt(`Rename class "${oldName}" to:`, oldName);
-        
-        console.log('🔍 [RENAME_DEBUG] 사용자 입력:', { newName, oldName });
 
         if (!newName || newName.trim() === '') {
             return; // 취소 또는 빈 입력
@@ -7223,8 +7186,6 @@ class WaferMapViewer {
             alert('New name is the same as old name');
             return;
         }
-        
-        console.log('🔍 [RENAME_DEBUG] 최종 이름:', { oldName, trimmedNewName });
 
         try {
             // 🔥 현재 폴더 파라미터 추가
