@@ -576,7 +576,7 @@ class WaferMapViewer {
             subfolderSelect: document.getElementById('subfolder-select'),
             subfolderSearch: document.getElementById('subfolder-search'),
             subfolderDropdown: document.getElementById('subfolder-dropdown'),
-            filterTestCheckbox: document.getElementById('filter-test-checkbox'),
+            filterTestSelect: document.getElementById('filter-test-select'),
 
             refreshBtn: document.getElementById('refresh-btn'),
 
@@ -682,8 +682,8 @@ class WaferMapViewer {
 
         this.selectedFolderForBrowser = '';
 
-        // 파일 필터 상태 (기본값: true - 체크됨)
-        this.filterTestEnabled = true;
+        // 파일 필터 상태 (기본값: 'remove' - Test 제거)
+        this.filterTestMode = 'remove';
 
         // 클래스 선택 상태 초기화 (Label Explorer와 Class Manager가 공유)
 
@@ -3099,9 +3099,9 @@ class WaferMapViewer {
     }
 
     bindFilterEvents() {
-        if (this.dom.filterTestCheckbox) {
-            this.dom.filterTestCheckbox.addEventListener('change', async (e) => {
-                this.filterTestEnabled = e.target.checked;
+        if (this.dom.filterTestSelect) {
+            this.dom.filterTestSelect.addEventListener('change', async (e) => {
+                this.filterTestMode = e.target.value;
                 // 필터 상태가 변경되면 파일 탐색기 다시 로드
                 await this.loadDirectoryContents(this.currentFolderPrefix || null, this.dom.fileExplorer);
             });
@@ -3394,15 +3394,24 @@ class WaferMapViewer {
             if (node.type === 'directory') {
                 html += `<li><details><summary data-path="${fullPath}" class="folder">📁 ${node.name}</summary><div class="folder-content" style="padding-left: 1rem;"></div></details></li>`;
             } else if (node.type === 'file') {
-                // 필터 적용: 7번째나 8번째 중 하나라도 _가 있으면 남김
-                if (this.filterTestEnabled) {
+                // 필터 적용
+                if (this.filterTestMode !== 'all') {
                     const fileName = node.name;
                     if (fileName.length > 7) {
                         const seventhChar = fileName.charAt(6);
                         const eighthChar = fileName.charAt(7);
-                        // 둘 다 _가 아니면 제외 (하나라도 _면 남김)
-                        if (seventhChar !== '_' && eighthChar !== '_') {
-                            continue;
+                        const hasUnderscore = seventhChar === '_' || eighthChar === '_';
+
+                        if (this.filterTestMode === 'remove') {
+                            // Test 제거: 둘 다 _가 아니면 제외 (하나라도 _면 남김)
+                            if (!hasUnderscore) {
+                                continue;
+                            }
+                        } else if (this.filterTestMode === 'only') {
+                            // Test 만: 하나라도 _가 있으면 제외 (둘 다 _가 아니어야 남김)
+                            if (hasUnderscore) {
+                                continue;
+                            }
                         }
                     }
                 }
@@ -3430,14 +3439,23 @@ class WaferMapViewer {
                 if (!this.isImageFile(path)) return false;
 
                 // Test 필터 적용
-                if (this.filterTestEnabled) {
+                if (this.filterTestMode !== 'all') {
                     const fileName = path.split('/').pop() || path.split('\\').pop() || path;
                     if (fileName.length > 7) {
                         const seventhChar = fileName.charAt(6);
                         const eighthChar = fileName.charAt(7);
-                        // 둘 다 _가 아니면 제외
-                        if (seventhChar !== '_' && eighthChar !== '_') {
-                            return false;
+                        const hasUnderscore = seventhChar === '_' || eighthChar === '_';
+
+                        if (this.filterTestMode === 'remove') {
+                            // Test 제거: 둘 다 _가 아니면 제외
+                            if (!hasUnderscore) {
+                                return false;
+                            }
+                        } else if (this.filterTestMode === 'only') {
+                            // Test 만: 하나라도 _가 있으면 제외
+                            if (hasUnderscore) {
+                                return false;
+                            }
                         }
                     }
                 }
@@ -3468,14 +3486,23 @@ class WaferMapViewer {
                 if (!this.isImageFile(path)) return false;
 
                 // Test 필터 적용
-                if (this.filterTestEnabled) {
+                if (this.filterTestMode !== 'all') {
                     const fileName = path.split('/').pop() || path.split('\\').pop() || path;
                     if (fileName.length > 7) {
                         const seventhChar = fileName.charAt(6);
                         const eighthChar = fileName.charAt(7);
-                        // 둘 다 _가 아니면 제외
-                        if (seventhChar !== '_' && eighthChar !== '_') {
-                            return false;
+                        const hasUnderscore = seventhChar === '_' || eighthChar === '_';
+
+                        if (this.filterTestMode === 'remove') {
+                            // Test 제거: 둘 다 _가 아니면 제외
+                            if (!hasUnderscore) {
+                                return false;
+                            }
+                        } else if (this.filterTestMode === 'only') {
+                            // Test 만: 하나라도 _가 있으면 제외
+                            if (hasUnderscore) {
+                                return false;
+                            }
                         }
                     }
                 }
@@ -3986,12 +4013,6 @@ class WaferMapViewer {
                         // 파일명 표시
                         ctx.fillText(displayName, x + imageSize / 2, y + imageSize + filenameHeight / 2);
 
-                        // 🔥 테두리 그리기 (이미지 영역만, 안쪽으로 그려지도록 조정)
-                        ctx.strokeStyle = '#CCCCCC';
-                        ctx.lineWidth = 4;
-                        const borderOffset = ctx.lineWidth / 2;
-                        ctx.strokeRect(x + borderOffset, y + borderOffset, imageSize - ctx.lineWidth, imageSize - ctx.lineWidth);
-
                         resolve();
                     };
 
@@ -4134,12 +4155,6 @@ class WaferMapViewer {
 
                         // 파일명 표시
                         ctx.fillText(displayName, x + imageSize / 2, y + imageSize + filenameHeight / 2);
-
-                        // 🔥 테두리 그리기 (이미지 영역만, 안쪽으로 그려지도록 조정)
-                        ctx.strokeStyle = '#CCCCCC';
-                        ctx.lineWidth = 4;
-                        const borderOffset = ctx.lineWidth / 2;
-                        ctx.strokeRect(x + borderOffset, y + borderOffset, imageSize - ctx.lineWidth, imageSize - ctx.lineWidth);
 
                         resolve();
                     };
@@ -10309,10 +10324,11 @@ class WaferMapViewer {
             img.src = thumbnailUrl;
             thumbBox.appendChild(img);
             wrap.appendChild(thumbBox);
-            // 파일명
+            // 파일명 (확장자 제거)
             const label = document.createElement('div');
             label.className = 'grid-thumb-label';
-            label.textContent = imgPath.split('/').pop();
+            const fileName = imgPath.split('/').pop();
+            label.textContent = fileName.replace(/\.[^.]+$/, '');
             wrap.appendChild(label);
             grid.appendChild(wrap);
         });

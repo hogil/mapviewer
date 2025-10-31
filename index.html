@@ -478,8 +478,8 @@
             position: absolute;
             top: calc(var(--filename-bar-height) - 5px);
             left: 10px;
-            width: 260px;
-            height: 180px;
+            width: 220px;
+            height: 150px;
             border: 1px solid var(--border-color);
             background-color: rgba(37, 37, 38, 0.8);
             z-index: 20;
@@ -816,12 +816,14 @@
                     </div>
                     <!-- 제거: 돋보기 아이콘 버튼 -->
                 </div>
-                <!-- 파일 필터 체크박스 -->
-                <div style="margin-top: 8px; padding: 4px 0;">
-                    <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; color: #bbb;">
-                        <input type="checkbox" id="filter-test-checkbox" style="cursor: pointer;" checked>
-                        <span>Test 제거</span>
-                    </label>
+                <!-- 파일 필터 선택 -->
+                <div style="margin-top: 8px; padding: 4px 0; display: flex; gap: 6px; align-items: center;">
+                    <select id="filter-test-select" style="width: 33%; background: #333; color: #fff; border: 1px solid #555; border-radius: 3px; padding: 4px 6px; font-size: 12px; cursor: pointer;">
+                        <option value="all">전체</option>
+                        <option value="remove" selected>Test 제거</option>
+                        <option value="only">Test만</option>
+                    </select>
+                    <!-- 추가 필터용 공간 -->
                 </div>
             </div>
             
