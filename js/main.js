@@ -1530,6 +1530,10 @@ class WaferMapViewer {
                     // refreshLabelExplorer가 내부에서 getClassList() 호출하므로 중복 제거
                     await this.refreshLabelExplorer();
                     console.log('🔍 [FOLDER_CHANGE_DEBUG] Label Explorer 새로고침 완료');
+
+                    // 🔥 Fail List 갱신 (제품 선택 시)
+                    this.updateLabelExplorerContent();
+                    console.log('🔍 [FOLDER_CHANGE_DEBUG] Fail List 갱신 완료');
                 } catch (error) {
                     console.error('🔍 [FOLDER_CHANGE_DEBUG] Label Explorer 새로고침 실패:', error);
                 }

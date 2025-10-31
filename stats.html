@@ -1121,10 +1121,21 @@
         async function exportStats() {
             try {
                 // 서버의 detail_access.csv 파일 다운로드
+                const response = await fetch('/api/stats/export-csv');
+
+                if (!response.ok) {
+                    throw new Error('CSV 파일을 가져올 수 없습니다.');
+                }
+
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
-                a.href = '/api/stats/export-csv';
+                a.href = url;
                 a.download = 'detail_access.csv';
+                document.body.appendChild(a);
                 a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
 
                 console.log('CSV 파일이 성공적으로 내보내졌습니다.');
 
