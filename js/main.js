@@ -576,6 +576,7 @@ class WaferMapViewer {
             subfolderSelect: document.getElementById('subfolder-select'),
             subfolderSearch: document.getElementById('subfolder-search'),
             subfolderDropdown: document.getElementById('subfolder-dropdown'),
+            filterTestCheckbox: document.getElementById('filter-test-checkbox'),
 
             refreshBtn: document.getElementById('refresh-btn'),
 
@@ -681,6 +682,9 @@ class WaferMapViewer {
 
         this.selectedFolderForBrowser = '';
 
+        // 파일 필터 상태 (기본값: true - 체크됨)
+        this.filterTestEnabled = true;
+
         // 클래스 선택 상태 초기화 (Label Explorer와 Class Manager가 공유)
 
         this.classSelection = { selected: [], lastClicked: null };
@@ -726,6 +730,8 @@ class WaferMapViewer {
         this.bindMinimapEvents();
 
         this.bindGridControlEvents();
+
+        this.bindFilterEvents();
     }
 
     bindViewerEvents() {
@@ -3067,7 +3073,17 @@ class WaferMapViewer {
                 if (e.key === 'Enter') this.performSearch();
             });
         }
-        
+
+    }
+
+    bindFilterEvents() {
+        if (this.dom.filterTestCheckbox) {
+            this.dom.filterTestCheckbox.addEventListener('change', async (e) => {
+                this.filterTestEnabled = e.target.checked;
+                // 필터 상태가 변경되면 파일 탐색기 다시 로드
+                await this.loadDirectoryContents(this.currentFolderPrefix || null, this.dom.fileExplorer);
+            });
+        }
     }
 
     /**
@@ -3356,6 +3372,19 @@ class WaferMapViewer {
             if (node.type === 'directory') {
                 html += `<li><details><summary data-path="${fullPath}" class="folder">📁 ${node.name}</summary><div class="folder-content" style="padding-left: 1rem;"></div></details></li>`;
             } else if (node.type === 'file') {
+                // 필터 적용: 파일명의 7번째 문자가 알파벳(a-z, A-Z)이면 제외
+                // 숫자, 언더스코어(_), 기타 특수기호는 모두 포함
+                if (this.filterTestEnabled) {
+                    const fileName = node.name;
+                    if (fileName.length > 6) {
+                        const seventhChar = fileName.charAt(6);
+                        // 알파벳만 제외 (숫자, _, 특수기호는 모두 남김)
+                        if (/[a-zA-Z]/.test(seventhChar)) {
+                            continue;
+                        }
+                    }
+                }
+
                 const draggableAttr = 'draggable="true"';
                 html += `<li><a href="#" data-path="${fullPath}" ${draggableAttr}>📄 ${node.name}</a></li>`;
             }

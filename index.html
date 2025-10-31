@@ -8,7 +8,11 @@
     <!-- Favicon 추가 -->
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     
-    <!-- 🚀 리소스 사전 로딩 완전 제거 (경고 해결) -->
+    <!-- 🚀 리소스 사전 로딩 제거 (경고 해결) -->
+    <!-- <link rel="preload" href="/js/main.js" as="script" crossorigin>
+    <link rel="preload" href="/js/utils.js" as="script" crossorigin>
+    <link rel="preload" href="/js/semiconductor-renderer.js" as="script" crossorigin>
+    <link rel="preload" href="/js/fetch-optimizer.js" as="script" crossorigin> -->
     <link rel="dns-prefetch" href="//api">
     <style>
         :root {
@@ -811,6 +815,13 @@
                         </div>
                     </div>
                     <!-- 제거: 돋보기 아이콘 버튼 -->
+                </div>
+                <!-- 파일 필터 체크박스 -->
+                <div style="margin-top: 8px; padding: 4px 0;">
+                    <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; color: #bbb;">
+                        <input type="checkbox" id="filter-test-checkbox" style="cursor: pointer;" checked>
+                        <span>Test 제거</span>
+                    </label>
                 </div>
             </div>
             
