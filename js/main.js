@@ -933,19 +933,41 @@ class WaferMapViewer {
     showFileName(path) {
         if (this.dom.fileNameDisplay && this.dom.fileNameText && this.dom.filePathText) {
             const fileName = path.split('/').pop() || path.split('\\').pop() || path;
+            // 파일명에서 확장자 제거
+            const fileNameWithoutExt = fileName.replace(/\.[^.]+$/, '');
 
-            this.dom.fileNameText.textContent = fileName;
+            this.dom.fileNameText.textContent = fileNameWithoutExt;
 
-            // 이미지폴더 root부터 상대경로로 표시
+            // 상위의 상위 폴더 표시
+            const parentFolder = this.getParentFolder(path);
 
-            const relativePath = this.getRelativePathFromImageFolder(path);
+            this.dom.filePathText.textContent = parentFolder;
 
-            this.dom.filePathText.textContent = relativePath;
+            // 구분자 표시/숨김 처리
+            const separator = document.getElementById('separator-text');
+            if (separator) {
+                separator.style.display = parentFolder ? 'inline' : 'none';
+            }
 
             this.dom.fileNameDisplay.style.display = 'block';
 
             // 상단 바가 보이도록 캔버스 높이는 CSS 변수로 이미 확보됨
         }
+    }
+
+    // 상위의 상위 폴더명 추출 + 확장자 제거
+    getParentFolder(fullPath) {
+        const parts = fullPath.replace(/\\/g, '/').split('/');
+        // 파일명 제거
+        const fileName = parts.pop();
+        // 파일명에서 확장자 제거
+        const fileNameWithoutExt = fileName ? fileName.replace(/\.[^.]+$/, '') : '';
+
+        // 상위의 상위 폴더명 반환 (없으면 빈 문자열)
+        if (parts.length >= 2) {
+            return parts[parts.length - 2];  // 상위의 상위 폴더
+        }
+        return '';
     }
 
     // 이미지폴더 root부터 상대경로 계산
@@ -3372,14 +3394,14 @@ class WaferMapViewer {
             if (node.type === 'directory') {
                 html += `<li><details><summary data-path="${fullPath}" class="folder">📁 ${node.name}</summary><div class="folder-content" style="padding-left: 1rem;"></div></details></li>`;
             } else if (node.type === 'file') {
-                // 필터 적용: 파일명의 7번째 문자가 알파벳(a-z, A-Z)이면 제외
-                // 숫자, 언더스코어(_), 기타 특수기호는 모두 포함
+                // 필터 적용: 7번째나 8번째 중 하나라도 _가 있으면 남김
                 if (this.filterTestEnabled) {
                     const fileName = node.name;
-                    if (fileName.length > 6) {
+                    if (fileName.length > 7) {
                         const seventhChar = fileName.charAt(6);
-                        // 알파벳만 제외 (숫자, _, 특수기호는 모두 남김)
-                        if (/[a-zA-Z]/.test(seventhChar)) {
+                        const eighthChar = fileName.charAt(7);
+                        // 둘 다 _가 아니면 제외 (하나라도 _면 남김)
+                        if (seventhChar !== '_' && eighthChar !== '_') {
                             continue;
                         }
                     }
@@ -3403,9 +3425,25 @@ class WaferMapViewer {
 
             if (!this.selectedImages) this.selectedImages = [];
 
-            // 이미지 파일만 필터링하고 중복 제거
+            // 이미지 파일만 필터링하고 test 필터 적용
+            const imageFiles = allFiles.filter(path => {
+                if (!this.isImageFile(path)) return false;
 
-            const imageFiles = allFiles.filter(path => this.isImageFile(path));
+                // Test 필터 적용
+                if (this.filterTestEnabled) {
+                    const fileName = path.split('/').pop() || path.split('\\').pop() || path;
+                    if (fileName.length > 7) {
+                        const seventhChar = fileName.charAt(6);
+                        const eighthChar = fileName.charAt(7);
+                        // 둘 다 _가 아니면 제외
+                        if (seventhChar !== '_' && eighthChar !== '_') {
+                            return false;
+                        }
+                    }
+                }
+
+                return true;
+            });
 
             this.selectedImages = Array.from(new Set([...this.selectedImages, ...imageFiles]));
 
@@ -3425,9 +3463,25 @@ class WaferMapViewer {
 
             if (!this.selectedImages) this.selectedImages = [];
 
-            // 해당 폴더의 파일들을 선택에서 제거
+            // 해당 폴더의 파일들을 선택에서 제거 (test 필터 적용)
+            const imageFiles = allFiles.filter(path => {
+                if (!this.isImageFile(path)) return false;
 
-            const imageFiles = allFiles.filter(path => this.isImageFile(path));
+                // Test 필터 적용
+                if (this.filterTestEnabled) {
+                    const fileName = path.split('/').pop() || path.split('\\').pop() || path;
+                    if (fileName.length > 7) {
+                        const seventhChar = fileName.charAt(6);
+                        const eighthChar = fileName.charAt(7);
+                        // 둘 다 _가 아니면 제외
+                        if (seventhChar !== '_' && eighthChar !== '_') {
+                            return false;
+                        }
+                    }
+                }
+
+                return true;
+            });
 
             this.selectedImages = this.selectedImages.filter(p => !imageFiles.includes(p));
 
