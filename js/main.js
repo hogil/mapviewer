@@ -578,6 +578,9 @@ class WaferMapViewer {
             subfolderDropdown: document.getElementById('subfolder-dropdown'),
             filterTestSelect: document.getElementById('filter-test-select'),
 
+            colorLegendTop: document.getElementById('color-legend-top'),
+            colorLegendBottom: document.getElementById('color-legend-bottom'),
+
             refreshBtn: document.getElementById('refresh-btn'),
 
             addClassBtn: document.getElementById('add-class-btn'),
@@ -684,6 +687,10 @@ class WaferMapViewer {
 
         // 파일 필터 상태 (기본값: 'remove' - Test 제거)
         this.filterTestMode = 'remove';
+
+        // Color Legends 데이터
+        this.colorLegends = null;
+        this.currentUser = 'default';
 
         // 클래스 선택 상태 초기화 (Label Explorer와 Class Manager가 공유)
 
@@ -3118,7 +3125,8 @@ class WaferMapViewer {
         // 🔥 초기화 시 병렬 작업 시작
         const backgroundInitTasks = [
             this.loadServerConfig(),
-            this.loadUserInfo()
+            this.loadUserInfo(),
+            this.loadColorLegends()
         ];
 
         if (this.dom.fileExplorer) {
@@ -3216,6 +3224,11 @@ class WaferMapViewer {
         
         // 🔥 updateSubfolderList는 loadFolderBrowser 이후에 캐시가 설정되었으므로 백그라운드로 실행
         this.updateSubfolderList().catch(err => console.error('[INIT] Subfolder 업데이트 실패:', err));
+
+        // 🎨 Color Legends 초기 렌더링 (백그라운드 작업 완료 대기)
+        await Promise.allSettled(backgroundInitTasks);
+        this.renderColorLegends();
+        console.log('🎨 [INIT] Color legends rendered');
     }
 
     // 🔥 서버 설정 로드 (피라미드 레벨, zoom 기준 등)
@@ -5793,7 +5806,7 @@ class WaferMapViewer {
             // 🔥 Wafer Map Explorer에서 단일 이미지 로드 완료 후 savedViewState 업데이트
             // classification 경로 체크 개선 (제품 폴더 고려)
             const isClassificationPathEnd = path.includes('/classification/') || path.startsWith('classification/');
-            
+
             if (!isClassificationPathEnd && !fromLabelExplorer) {
                 this.savedViewState = {
                     type: 'single',
@@ -5803,10 +5816,15 @@ class WaferMapViewer {
                     offsetY: this.offsetY
                 };
             }
+
+            // 🎨 Color Legends 표시 (Single Image Mode)
+            this.renderColorLegends();
+            this.showColorLegends();
         } catch (err) {
             console.error(`Failed to load image: ${path}`, err);
 
             this.dom.minimapContainer.style.display = 'none';
+            this.hideColorLegends();
         }
     }
 
@@ -10187,6 +10205,9 @@ class WaferMapViewer {
         const viewControls = document.querySelector('.view-controls');
         if (viewControls) viewControls.style.display = 'none';
 
+        // 🎨 Color Legends 숨기기 (Grid Mode)
+        this.hideColorLegends();
+
         // 그리드 모드 클래스 추가 및 요소들 숨기기
         this.dom.viewerContainer.classList.add('grid-mode');
         this.dom.viewerContainer.classList.remove('single-image-mode');
@@ -12056,6 +12077,93 @@ class WaferMapViewer {
             
         } catch (error) {
             console.warn('정리 중 오류:', error);
+        }
+    }
+
+    // --- COLOR LEGENDS ---
+
+    /**
+     * Load color legends from JSON file
+     */
+    async loadColorLegends() {
+        try {
+            const response = await fetch('/logs/color-legends.json');
+            if (!response.ok) {
+                throw new Error('Failed to load color legends');
+            }
+            this.colorLegends = await response.json();
+            console.log('✅ Color legends loaded:', this.colorLegends);
+        } catch (error) {
+            console.warn('⚠️ Failed to load color legends:', error);
+            this.colorLegends = null;
+        }
+    }
+
+    /**
+     * Render color legends for the current user
+     */
+    renderColorLegends() {
+        console.log('🎨 [LEGEND] renderColorLegends called');
+        console.log('🎨 [LEGEND] colorLegends:', this.colorLegends);
+        console.log('🎨 [LEGEND] DOM elements:', this.dom.colorLegendTop, this.dom.colorLegendBottom);
+
+        if (!this.colorLegends || !this.dom.colorLegendTop || !this.dom.colorLegendBottom) {
+            console.warn('⚠️ [LEGEND] Missing data or DOM elements');
+            return;
+        }
+
+        const userData = this.colorLegends[this.currentUser];
+        console.log('🎨 [LEGEND] User data for', this.currentUser, ':', userData);
+
+        if (!userData) {
+            console.warn(`⚠️ No color legend data for user: ${this.currentUser}`);
+            return;
+        }
+
+        // Render top legend
+        if (userData.top && userData.top.length > 0) {
+            this.dom.colorLegendTop.innerHTML = userData.top.map(item => `
+                <div class="legend-item">
+                    <span class="legend-label">${item.label}</span>
+                    <div class="legend-color-bar" style="background-color: ${item.color};"></div>
+                </div>
+            `).join('');
+            console.log('✅ [LEGEND] Top legend rendered:', userData.top.length, 'items');
+        }
+
+        // Render bottom legend
+        if (userData.bottom && userData.bottom.length > 0) {
+            this.dom.colorLegendBottom.innerHTML = userData.bottom.map(item => `
+                <div class="legend-item">
+                    <span class="legend-label">${item.label}</span>
+                    <div class="legend-color-bar" style="background-color: ${item.color};"></div>
+                </div>
+            `).join('');
+            console.log('✅ [LEGEND] Bottom legend rendered:', userData.bottom.length, 'items');
+        }
+    }
+
+    /**
+     * Show color legends (Single Image Mode only)
+     */
+    showColorLegends() {
+        console.log('🎨 [LEGEND] showColorLegends called, gridMode:', this.gridMode);
+        if (!this.gridMode && this.dom.colorLegendTop && this.dom.colorLegendBottom) {
+            this.dom.colorLegendTop.style.display = 'block';
+            this.dom.colorLegendBottom.style.display = 'block';
+            console.log('✅ [LEGEND] Legends shown (display: block)');
+        } else {
+            console.log('⚠️ [LEGEND] Not showing legends - gridMode:', this.gridMode);
+        }
+    }
+
+    /**
+     * Hide color legends
+     */
+    hideColorLegends() {
+        if (this.dom.colorLegendTop && this.dom.colorLegendBottom) {
+            this.dom.colorLegendTop.style.display = 'none';
+            this.dom.colorLegendBottom.style.display = 'none';
         }
     }
 }

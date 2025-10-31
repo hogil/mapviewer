@@ -3610,6 +3610,21 @@ async def get_department_stats():
         logger.error(f"부서 통계 생성 실패: {e}")
         return {"departments": {}, "activity": {}}
 
+@app.get("/api/stats/export-csv")
+async def export_detail_access_csv():
+    """detail_access.csv 파일 다운로드"""
+    csv_path = Path("logs/detail_access.csv")
+    if not csv_path.exists():
+        raise HTTPException(status_code=404, detail="CSV file not found")
+    return FileResponse(
+        path=str(csv_path),
+        media_type="text/csv; charset=utf-8",
+        filename="detail_access.csv",
+        headers={
+            "Content-Disposition": "attachment; filename=detail_access.csv"
+        }
+    )
+
 # 상세 브레이크다운 제공 (회사/부서/팀/org_url)
 @app.get("/api/stats/breakdown")
 async def get_breakdown():
@@ -3933,6 +3948,7 @@ async def classify_delete_batch(request: ClassifyDeleteBatchReq,
 
 # ---------------- Static / Pages ----------------
 app.mount("/js", StaticFiles(directory="js"), name="js")
+app.mount("/logs", StaticFiles(directory="logs"), name="logs")
 app.mount("/static", StaticFiles(directory="."), name="static")
 
 @app.get("/")

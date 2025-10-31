@@ -499,7 +499,53 @@
             background-color: rgba(0, 153, 255, 0.2);
             cursor: grab;
         }
-        
+
+        /* Color Legends */
+        .color-legend {
+            position: absolute;
+            right: 10px;
+            z-index: 20;
+            background-color: rgba(37, 37, 38, 0.9);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 8px 10px;
+            display: none;
+            width: 115px;
+        }
+
+        #color-legend-top {
+            top: calc(var(--filename-bar-height) + 45px);
+        }
+
+        #color-legend-bottom {
+            bottom: 10px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 4px;
+            font-size: 11px;
+        }
+
+        .legend-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .legend-label {
+            color: var(--text-color);
+            margin-right: 4px;
+            font-weight: 500;
+        }
+
+        .legend-color-bar {
+            width: 40px;
+            height: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 2px;
+        }
+
         /* Right Panel */
         .wrapper-right {
             width: 390px;
@@ -921,6 +967,10 @@
                     <button id="zoom-300-btn" aria-label="300% 확대">300%</button>
                     <button id="reset-view-btn" style="margin-left: 10px;" aria-label="뷰 리셋">Reset</button>
                 </div>
+
+                <!-- Color Legends -->
+                <div id="color-legend-top" class="color-legend" aria-label="상단 컬러 범례"></div>
+                <div id="color-legend-bottom" class="color-legend" aria-label="하단 컬러 범례"></div>
             </section>
         </section>
         

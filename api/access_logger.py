@@ -930,10 +930,10 @@ class AccessLogger:
         
         # 접속일수 기준 내림차순 정렬 (동일하면 총 요청 수로 2차 정렬)
         users.sort(key=lambda x: (x["unique_days"], x["total_requests"]), reverse=True)
-        
+
         return {
             "total_users": len(users),
-            "users": users[:50]  # 상위 50명
+            "users": users  # 모든 사용자 표시
         }
     
     def get_recent_users(self) -> Dict[str, Any]:
@@ -967,10 +967,10 @@ class AccessLogger:
         
         # 마지막 접속 시간으로 정렬 (최신 순)
         recent_users.sort(key=lambda x: x["last_access"], reverse=True)
-        
+
         return {
             "total_recent": len(recent_users),
-            "recent_users": recent_users[:20]  # 상위 20명
+            "recent_users": recent_users  # 모든 최근 사용자 표시
         }
     
     def get_user_detail(self, user_id: str) -> Optional[Dict[str, Any]]:
