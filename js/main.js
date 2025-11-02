@@ -577,6 +577,7 @@ class WaferMapViewer {
             subfolderSearch: document.getElementById('subfolder-search'),
             subfolderDropdown: document.getElementById('subfolder-dropdown'),
             filterTestSelect: document.getElementById('filter-test-select'),
+            personalizedColorCheckbox: document.getElementById('personalized-color-checkbox'),
 
             colorLegendTop: document.getElementById('color-legend-top'),
             colorLegendBottom: document.getElementById('color-legend-bottom'),
@@ -687,6 +688,9 @@ class WaferMapViewer {
 
         // 파일 필터 상태 (기본값: 'remove' - Test 제거)
         this.filterTestMode = 'remove';
+
+        // 개인색 설정 상태 (기본값: false)
+        this.personalizedColorEnabled = false;
 
         // Color Legends 데이터
         this.colorLegends = null;
@@ -3117,6 +3121,15 @@ class WaferMapViewer {
                 await this.loadDirectoryContents(this.currentFolderPrefix || null, this.dom.fileExplorer);
             });
         }
+
+        // 개인색 설정 체크박스 이벤트
+        if (this.dom.personalizedColorCheckbox) {
+            this.dom.personalizedColorCheckbox.addEventListener('change', (e) => {
+                this.personalizedColorEnabled = e.target.checked;
+                console.log('개인색 설정:', this.personalizedColorEnabled ? '활성화' : '비활성화');
+                // TODO: 개인색 설정 적용 로직 (향후 구현)
+            });
+        }
     }
 
     /**
@@ -3663,9 +3676,25 @@ class WaferMapViewer {
                 return normalizedPath;
             };
 
-            const matchedImages = data.results
+            let matchedImages = data.results
                 .map(normalizeResultPath)
                 .filter(path => typeof path === 'string' && path.length > 0);
+
+            // test 필터 적용
+            if (this.filterTestMode !== 'all') {
+                const lowerQuery = 'test';
+                matchedImages = matchedImages.filter(path => {
+                    const basename = path.toLowerCase();
+                    const hasTest = basename.includes(lowerQuery);
+
+                    if (this.filterTestMode === 'remove') {
+                        return !hasTest;  // test 제거
+                    } else if (this.filterTestMode === 'only') {
+                        return hasTest;   // test만
+                    }
+                    return true;
+                });
+            }
 
             if (matchedImages.length > 0) {
                 console.info('🔍 [SEARCH DEBUG] 변환된 첫 번째 결과:', matchedImages[0]);
@@ -10163,8 +10192,17 @@ class WaferMapViewer {
 
     showGrid(images, skipSaveState = false) {
         this.gridMode = true;
-        this.selectedImages = images;
-        this.currentGridImages = images;  // 🔥 currentGridImages 업데이트
+
+        // 🔥 이미지를 이름 순으로 오름차순 정렬
+        const sortedImages = [...images].sort((a, b) => {
+            // 파일명만 추출 (경로 제거)
+            const nameA = a.split('/').pop().toLowerCase();
+            const nameB = b.split('/').pop().toLowerCase();
+            return nameA.localeCompare(nameB);
+        });
+
+        this.selectedImages = sortedImages;
+        this.currentGridImages = sortedImages;  // 🔥 currentGridImages 업데이트
         if (!this.gridSelectedIdxs) this.gridSelectedIdxs = [];
         const grid = document.getElementById('image-grid');
         const gridControls = document.getElementById('grid-controls');
