@@ -1341,26 +1341,32 @@ async def api_auth_user(request: Request, LoginId: Optional[str] = None):
             saml_attributes = user_info.get("saml_attributes", {})
             
             # 🔥 보안: Sabun은 프론트엔드로 전달하지 않음 (미사용 필드)
+            login_id = user_info.get("LoginId", "")
+            # 개인색 설정을 위한 color scheme 결정
+            color_scheme = get_user_color_scheme(login_id) if login_id else None
+
             return {
                 "authenticated": True,
-                "LoginId": user_info.get("LoginId", ""),
+                "LoginId": login_id,
                 "Username": user_info.get("Username", ""),
                 "DeptName": user_info.get("DeptName", ""),
                 "GrdName_EN": user_info.get("GrdName_EN", ""),
                 "GrdName": user_info.get("GrdName", ""),
                 "metadata": user_info.get("metadata", {}),
-                "saml_attributes": saml_attributes  # 🔥 SAML 속성들을 프론트엔드로 전달
+                "saml_attributes": saml_attributes,  # 🔥 SAML 속성들을 프론트엔드로 전달
+                "colorScheme": color_scheme  # 🎨 개인색 scheme
             }
 
         return {
             "authenticated": False,
-            "LoginId": "",
+            "LoginId": None,
             "Username": "",
             "DeptName": "",
             "GrdName_EN": "",
             "GrdName": "",
             "metadata": {},
-            "saml_attributes": {}
+            "saml_attributes": {},
+            "colorScheme": "default"  # 🎨 익명 사용자는 default scheme
         }
         
     except Exception as e:
@@ -1368,13 +1374,14 @@ async def api_auth_user(request: Request, LoginId: Optional[str] = None):
         # 오류 발생 시 빈 인증 정보 반환
         return {
             "authenticated": False,
-            "LoginId": "",
+            "LoginId": None,
             "Username": "",
             "DeptName": "",
             "GrdName_EN": "",
             "GrdName": "",
             "metadata": {},
-            "saml_attributes": {}
+            "saml_attributes": {},
+            "colorScheme": "default"  # 🎨 익명 사용자는 default scheme
         }
 
 
@@ -1532,6 +1539,84 @@ def compute_etag(st) -> str:
 def relkey_from_any_path(any_path: str) -> str:
     abs_path = safe_resolve_path(any_path)
     return str(abs_path.relative_to(ROOT_DIR)).replace("\\", "/")
+
+# Color Legends 로드
+COLOR_LEGENDS_PATH = Path(__file__).parent.parent / "logs" / "color-legends.json"
+_color_legends_cache = None
+_color_legends_mtime = 0.0
+
+def load_color_legends() -> Dict[str, Any]:
+    """color-legends.json 로드 (캐싱)"""
+    global _color_legends_cache, _color_legends_mtime
+
+    try:
+        if not COLOR_LEGENDS_PATH.exists():
+            return {}
+
+        current_mtime = COLOR_LEGENDS_PATH.stat().st_mtime
+
+        # 캐시가 최신이면 반환
+        if _color_legends_cache is not None and current_mtime == _color_legends_mtime:
+            return _color_legends_cache
+
+        # 파일 로드
+        with open(COLOR_LEGENDS_PATH, 'r', encoding='utf-8') as f:
+            _color_legends_cache = json.load(f)
+            _color_legends_mtime = current_mtime
+            return _color_legends_cache
+
+    except Exception as e:
+        logger.warning(f"color-legends.json 로드 실패: {e}")
+        return {}
+
+def save_color_legends(legends: Dict[str, Any]) -> bool:
+    """color-legends.json 저장"""
+    global _color_legends_cache, _color_legends_mtime
+
+    try:
+        COLOR_LEGENDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = COLOR_LEGENDS_PATH.with_suffix('.json.tmp')
+
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(legends, f, ensure_ascii=False, indent=2)
+
+        os.replace(tmp_path, COLOR_LEGENDS_PATH)
+
+        # 캐시 업데이트
+        _color_legends_cache = legends
+        _color_legends_mtime = COLOR_LEGENDS_PATH.stat().st_mtime
+
+        return True
+    except Exception as e:
+        logger.error(f"color-legends.json 저장 실패: {e}")
+        return False
+
+def get_user_color_scheme(login_id: Optional[str]) -> str:
+    """
+    LoginId 기반 color scheme 결정
+    - LoginId가 None이면 'change' 사용
+    - LoginId가 있으면 해당 key 확인, 없으면 'default'로부터 복사하여 생성
+    """
+    # LoginId가 없으면 'change' 사용
+    if not login_id:
+        return 'change'
+
+    legends = load_color_legends()
+
+    # 이미 존재하면 해당 scheme 사용
+    if login_id in legends:
+        return login_id
+
+    # 존재하지 않으면 'default'로부터 복사하여 생성
+    if 'default' in legends:
+        legends[login_id] = legends['default'].copy()
+        save_color_legends(legends)
+        logger.info(f"새 color scheme 생성: {login_id} (from default)")
+        return login_id
+
+    # default도 없으면 'change' 폴백
+    logger.warning(f"default scheme 없음, change로 폴백: LoginId={login_id}")
+    return 'change'
 
 def _classification_dir() -> Path:
     return current_folder / "classification"
@@ -2802,9 +2887,19 @@ async def get_image_size(path: str):
 
 @app.head("/api/image")
 @app.get("/api/image")
-async def get_image(request: Request, path: str, level: Optional[float] = None):
+async def get_image(
+    request: Request,
+    path: str,
+    level: Optional[float] = None,
+    personalized: bool = False,
+    scheme: Optional[str] = None
+):
     try:
         is_head = request.method == "HEAD"
+
+        # 🎨 디버깅: 개인색 설정 파라미터 로그
+        if personalized or scheme:
+            logger.info(f"🎨 [DEBUG] get_image called - personalized={personalized}, scheme={scheme}, path={path}")
 
         # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
         if Path(path).is_absolute():
@@ -2823,7 +2918,7 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
                 image_path.resolve().relative_to(ROOT_DIR.resolve())
             except ValueError:
                 raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
-        
+
         if not image_path.exists() or not image_path.is_file():
             raise HTTPException(status_code=404, detail="Image not found")
 
@@ -2842,8 +2937,113 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
                 if not is_head:
                     logger.info(f"🎯 [LEVEL FIXED] {level}")
 
-            # 🚀 Level 1.0은 원본 파일 직접 반환 (최고속)
-            if level >= 1.0:
+            # 🎨 개인색 설정이 활성화되고 scheme이 지정된 경우 (PNG만 지원)
+            if personalized and scheme and image_path.suffix.lower() == '.png':
+                if not is_head:
+                    logger.info(f"🎨 [PERSONALIZED MODE] scheme={scheme}")
+
+                # 개인색 피라미드 디렉토리: thumbnails/pyramid_{scheme}_{level}/
+                pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{scheme}_{int(level*100)}"
+                pyramid_dir.mkdir(parents=True, exist_ok=True)
+
+                rel_path = image_path.relative_to(config.ROOT_DIR)
+                safe_filename = str(rel_path).replace("/", "_").replace("\\", "_")
+                if not safe_filename.strip():
+                    safe_filename = "unknown_image"
+
+                stem = Path(safe_filename).stem
+                stem_lower = stem.lower()
+                WINDOWS_RESERVED = {'nul', 'con', 'prn', 'aux', 'nul.', 'con.', 'prn.', 'aux.'}
+                if stem_lower in WINDOWS_RESERVED or any(stem_lower.startswith(f'{dev}') for dev in ['com', 'lpt']):
+                    stem = f"file_{stem}"
+
+                pyramid_path = pyramid_dir / f"{stem}_L{int(level*100)}.jpg"
+
+                # 캐시 확인
+                image_mtime = image_path.stat().st_mtime
+                if pyramid_path.exists() and pyramid_path.stat().st_size > 0:
+                    if pyramid_path.stat().st_mtime >= image_mtime:
+                        st = pyramid_path.stat()
+                        if not is_head:
+                            logger.info(f"✅ [PERSONALIZED CACHE HIT] {pyramid_path.name}")
+                        headers = {
+                            "Cache-Control": "public, max-age=31536000, immutable",
+                            "Content-Type": "image/jpeg",
+                            "ETag": compute_etag(st),
+                            "X-Pyramid-Level": str(level),
+                            "X-Cache-Status": "HIT",
+                            "X-Personalized": "true"
+                        }
+                        return FileResponse(pyramid_path, headers=headers)
+
+                # 캐시 미스: 방식 2로 생성 (change scheme -> BICUBIC)
+                try:
+                    from PIL import Image as PILImage
+
+                    legends = load_color_legends()
+                    if scheme in legends:
+                        scheme_data = legends[scheme]
+
+                        # 원본 로드
+                        img = PILImage.open(image_path)
+
+                        if img.mode == 'P':
+                            # 팔레트 생성 (원본과 동일한 32색 구조)
+                            new_palette = []
+                            # 인덱스 0-7: top (Grade0-7)
+                            top_colors = scheme_data.get('top', {})
+                            for grade in ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7']:
+                                color = top_colors.get(grade, '#FFFFFF').lstrip('#')
+                                new_palette.extend([int(color[i:i+2], 16) for i in (0, 2, 4)])
+
+                            # 인덱스 8-13: bottom (Normal, Invalid, B285-B288)
+                            bottom_colors = scheme_data.get('bottom', {})
+                            for label in ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288']:
+                                color = bottom_colors.get(label, '#000000').lstrip('#')
+                                new_palette.extend([int(color[i:i+2], 16) for i in (0, 2, 4)])
+
+                            # 인덱스 14: background (배경색)
+                            bg_color = scheme_data.get('background', '#FEFEFE').lstrip('#')
+                            new_palette.extend([int(bg_color[i:i+2], 16) for i in (0, 2, 4)])
+
+                            # 인덱스 15-31: 검은색으로 채움 (원본과 동일하게 32색까지만)
+                            new_palette.extend([0, 0, 0] * (32 - 15))
+
+                            # change scheme 적용
+                            img.putpalette(new_palette)
+
+                            # RGB 변환
+                            img_rgb = img.convert('RGB')
+
+                            # BICUBIC 리샘플링 (level 적용)
+                            new_w = max(1, int(img_rgb.width * level))
+                            new_h = max(1, int(img_rgb.height * level))
+                            pyramid_img = img_rgb.resize((new_w, new_h), PILImage.Resampling.BICUBIC)
+
+                            # JPEG 저장 (Q=95, 피라미드는 95 사용)
+                            pyramid_img.save(pyramid_path, 'JPEG', quality=95)
+
+                            if not is_head:
+                                logger.info(f"✅ [PERSONALIZED PYRAMID SUCCESS] {pyramid_path.name}")
+
+                            st = pyramid_path.stat()
+                            headers = {
+                                "Cache-Control": "public, max-age=31536000, immutable",
+                                "Content-Type": "image/jpeg",
+                                "ETag": compute_etag(st),
+                                "X-Pyramid-Level": str(level),
+                                "X-Cache-Status": "MISS",
+                                "X-Personalized": "true"
+                            }
+                            return FileResponse(pyramid_path, headers=headers)
+
+                except Exception as e:
+                    if not is_head:
+                        logger.warning(f"개인색 피라미드 생성 실패: {e}")
+                    # 실패 시 기본 피라미드로 폴백 (아래 로직 계속 진행)
+
+            # 🚀 Level 1.0은 원본 파일 직접 반환 (최고속) - 단, 개인색이 아닌 경우만
+            if level >= 1.0 and not (personalized and scheme and image_path.suffix.lower() == '.png'):
                 if not is_head:
                     logger.info(f"🚀 [ORIGINAL DIRECT] Level 1.0 - 원본 파일 직접 반환")
                 st = image_path.stat()
@@ -2947,8 +3147,18 @@ async def get_image(request: Request, path: str, level: Optional[float] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/thumbnail")
-async def get_thumbnail(request: Request, path: str, size: int = THUMBNAIL_SIZE_DEFAULT):
+async def get_thumbnail(
+    request: Request,
+    path: str,
+    size: int = THUMBNAIL_SIZE_DEFAULT,
+    personalized: bool = False,
+    scheme: Optional[str] = None
+):
     try:
+        # 🎨 디버깅: 개인색 설정 파라미터 로그
+        if personalized or scheme:
+            logger.info(f"🎨 [DEBUG] get_thumbnail called - personalized={personalized}, scheme={scheme}, path={path}")
+
         # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
         if Path(path).is_absolute():
             # 절대 경로인 경우
@@ -2968,19 +3178,95 @@ async def get_thumbnail(request: Request, path: str, size: int = THUMBNAIL_SIZE_
             except ValueError:
                 logger.warning(f"ROOT_DIR 외부 경로 접근 시도: {path}")
                 raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
-        
+
         # 파일 존재 확인
         if not image_path.exists() or not image_path.is_file():
             logger.warning(f"이미지 파일이 존재하지 않습니다: {image_path}")
             raise HTTPException(status_code=404, detail="Image not found")
-        
+
         # 이미지 형식 확인
         if not is_supported_image(image_path):
             logger.warning(f"지원하지 않는 이미지 형식: {image_path}")
             raise HTTPException(status_code=415, detail="Unsupported image format")
-        
+
         try:
-            # 썸네일 생성 시도
+            # 개인색 설정이 활성화되고 scheme이 지정된 경우 (PNG만 지원)
+            if personalized and scheme and image_path.suffix.lower() == '.png':
+                relative_path = image_path.relative_to(ROOT_DIR)
+                scheme_thumb_dir = THUMBNAIL_DIR / scheme / relative_path.parent
+                scheme_thumb_path = scheme_thumb_dir / f"{relative_path.stem}_{size}x{size}.jpg"
+
+                # 캐시 확인
+                if scheme_thumb_path.exists() and scheme_thumb_path.stat().st_size > 0:
+                    st = scheme_thumb_path.stat()
+                    resp_304 = maybe_304(request, st)
+                    if resp_304: return resp_304
+                    return FileResponse(
+                        scheme_thumb_path,
+                        media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=604800, immutable", "ETag": compute_etag(st)}
+                    )
+
+                # 캐시 없음: 방식 2로 생성 (change scheme -> BICUBIC)
+                try:
+                    from PIL import Image as PILImage
+
+                    legends = load_color_legends()
+                    if scheme in legends:
+                        scheme_data = legends[scheme]
+
+                        # 원본 로드
+                        img = PILImage.open(image_path)
+
+                        if img.mode == 'P':
+                            # 팔레트 생성 (원본과 동일한 32색 구조)
+                            new_palette = []
+                            # 인덱스 0-7: top (Grade0-7)
+                            top_colors = scheme_data.get('top', {})
+                            for grade in ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7']:
+                                color = top_colors.get(grade, '#FFFFFF').lstrip('#')
+                                new_palette.extend([int(color[i:i+2], 16) for i in (0, 2, 4)])
+
+                            # 인덱스 8-13: bottom (Normal, Invalid, B285-B288)
+                            bottom_colors = scheme_data.get('bottom', {})
+                            for label in ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288']:
+                                color = bottom_colors.get(label, '#000000').lstrip('#')
+                                new_palette.extend([int(color[i:i+2], 16) for i in (0, 2, 4)])
+
+                            # 인덱스 14: background (배경색)
+                            bg_color = scheme_data.get('background', '#FEFEFE').lstrip('#')
+                            new_palette.extend([int(bg_color[i:i+2], 16) for i in (0, 2, 4)])
+
+                            # 인덱스 15-31: 검은색으로 채움 (원본과 동일하게 32색까지만)
+                            new_palette.extend([0, 0, 0] * (32 - 15))
+
+                            # change scheme 적용
+                            img.putpalette(new_palette)
+
+                            # RGB 변환
+                            img_rgb = img.convert('RGB')
+
+                            # BICUBIC 리샘플링
+                            w = int(img_rgb.width * size / max(img_rgb.width, img_rgb.height))
+                            h = int(img_rgb.height * size / max(img_rgb.width, img_rgb.height))
+                            thumb = img_rgb.resize((w, h), PILImage.Resampling.BICUBIC)
+
+                            # 저장
+                            scheme_thumb_dir.mkdir(parents=True, exist_ok=True)
+                            thumb.save(scheme_thumb_path, 'JPEG', quality=100)
+
+                            st = scheme_thumb_path.stat()
+                            return FileResponse(
+                                scheme_thumb_path,
+                                media_type="image/jpeg",
+                                headers={"Cache-Control": "public, max-age=604800, immutable", "ETag": compute_etag(st)}
+                            )
+
+                except Exception as e:
+                    logger.warning(f"개인색 썸네일 생성 실패: {e}")
+                    # 실패 시 기본 썸네일로 폴백
+
+            # 기본 썸네일 생성
             thumb = await generate_thumbnail(image_path, (size, size))
             if thumb and thumb.exists():
                 st = thumb.stat()

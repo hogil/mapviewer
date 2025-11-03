@@ -73,7 +73,8 @@ let SERVER_CONFIG = {
  */
 
 class ThumbnailManager {
-    constructor() {
+    constructor(viewer = null) {
+        this.viewer = viewer; // WaferMapViewer 참조
         this.cache = new Map(); // path -> { url, loading, timestamp }
 
         this.maxCacheSize = 500;
@@ -214,8 +215,9 @@ class ThumbnailManager {
         try {
             // 🔥 blob URL 대신 서버 URL 직접 사용 (CORS, GC 문제 해결)
             // timestamp를 추가하여 브라우저 캐싱 활용하면서도 새로고침 가능
-            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512`;
-            
+            const personalizedParams = this.viewer ? this.viewer.getPersonalizedParams() : '';
+            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}`;
+
             // 🔍 디버그: 썸네일 URL 로그
                                     // 서버 URL을 직접 반환 (브라우저가 자동으로 로드)
             return thumbnailUrl;
@@ -469,7 +471,7 @@ class WaferMapViewer {
 
         // 썸네일 매니저
 
-        this.thumbnailManager = new ThumbnailManager();
+        this.thumbnailManager = new ThumbnailManager(this);
 
         // 제품 검색 드롭다운 키보드 탐색용
         this.highlightedIndex = -1;
@@ -3124,12 +3126,60 @@ class WaferMapViewer {
 
         // 개인색 설정 체크박스 이벤트
         if (this.dom.personalizedColorCheckbox) {
-            this.dom.personalizedColorCheckbox.addEventListener('change', (e) => {
+            this.dom.personalizedColorCheckbox.addEventListener('change', async (e) => {
                 this.personalizedColorEnabled = e.target.checked;
                 console.log('개인색 설정:', this.personalizedColorEnabled ? '활성화' : '비활성화');
-                // TODO: 개인색 설정 적용 로직 (향후 구현)
+                console.log('🔍 [DEBUG] gridMode:', this.gridMode, '| selectedImagePath:', this.selectedImagePath);
+
+                // Legend UI 즉시 업데이트
+                this.renderColorLegends();
+
+                // 현재 화면 새로고침
+                if (this.gridMode) {
+                    // 그리드 모드인 경우: 그리드 다시 로드
+                    console.log('🔄 [RELOAD] Grid mode - reloading grid');
+                    const currentImages = Array.from(document.querySelectorAll('.grid-item')).map(item => item.dataset.path).filter(Boolean);
+                    console.log('🔍 [DEBUG] currentImages count:', currentImages.length);
+                    if (currentImages.length > 0) {
+                        await this.showGrid(currentImages);
+                    } else {
+                        console.warn('⚠️ No images found in grid');
+                    }
+                } else {
+                    // 단일 이미지 모드인 경우: 이미지 다시 로드
+                    // selectedImagePath가 null이면 currentImage의 src에서 경로 추출
+                    let imagePath = this.selectedImagePath;
+                    if (!imagePath && this.currentImage) {
+                        // currentImage.src에서 경로 추출: /api/image?path=...&level=...
+                        const urlParams = new URLSearchParams(this.currentImage.src.split('?')[1]);
+                        imagePath = urlParams.get('path');
+                        console.log('🔍 [DEBUG] Extracted path from currentImage.src:', imagePath);
+                    }
+
+                    if (imagePath) {
+                        console.log('🔄 [RELOAD] Single image mode - reloading:', imagePath);
+                        await this.loadImage(imagePath);
+                    } else {
+                        console.warn('⚠️ No reload action: no image path found');
+                    }
+                }
             });
         }
+    }
+
+    /**
+     * 개인색 설정을 위한 URL 파라미터 생성
+     * @returns {string} URL 쿼리 파라미터 (예: "&personalized=true&scheme=john")
+     */
+    getPersonalizedParams() {
+        if (!this.personalizedColorEnabled) {
+            return '';
+        }
+        // currentUser (LoginId)를 scheme으로 전달, 없으면 'change'
+        const scheme = this.currentUser || 'change';
+        const params = `&personalized=true&scheme=${encodeURIComponent(scheme)}`;
+        console.log('🎨 [PARAMS] getPersonalizedParams:', params, '| currentUser:', this.currentUser, '| enabled:', this.personalizedColorEnabled);
+        return params;
     }
 
     /**
@@ -3284,6 +3334,11 @@ class WaferMapViewer {
 
     // 사용자 정보 로드 및 표시
     async loadUserInfo() {
+        console.log('🔍 [USER INFO] loadUserInfo called');
+        console.log('🔍 [USER INFO] initialLoginIdFromUrl:', initialLoginIdFromUrl);
+        console.log('🔍 [USER INFO] initialSamlSuccess:', initialSamlSuccess);
+        console.log('🔍 [USER INFO] initialDevSuccess:', initialDevSuccess);
+
         try {
             const userInfoEl = document.getElementById('user-info');
             if (!userInfoEl) return;
@@ -3299,6 +3354,10 @@ class WaferMapViewer {
                     currentHTML: userInfoEl.innerHTML
                 });
 
+                // currentUser 설정 (개인색 scheme용)
+                this.currentUser = initialLoginIdFromUrl;
+                console.log('✅ [USER INFO SAML] currentUser set to:', this.currentUser);
+
                 if (!userInfoEl.innerHTML.includes(newInfo)) {
                     userInfoEl.innerHTML = `
                         <div style="font-weight: 600;">${initialLoginIdFromUrl}(${initialUsernameFromUrl})</div>
@@ -3308,6 +3367,11 @@ class WaferMapViewer {
                 displayed = true;
             } else if (initialDevSuccess && initialLoginIdFromUrl && initialUsernameFromUrl) {
                 const newInfo = `${initialLoginIdFromUrl}(${initialUsernameFromUrl})`;
+
+                // currentUser 설정 (개인색 scheme용)
+                this.currentUser = initialLoginIdFromUrl;
+                console.log('✅ [USER INFO DEV] currentUser set to:', this.currentUser);
+
                 if (!userInfoEl.innerHTML.includes(newInfo)) {
                     userInfoEl.innerHTML = `
                         <div style="font-weight: 600;">${initialLoginIdFromUrl}(${initialUsernameFromUrl})</div>
@@ -3330,6 +3394,17 @@ class WaferMapViewer {
                 : '/api/auth/user';
             const response = await fetch(apiUrl);
             const data = await response.json();
+
+            console.log('🔍 [USER INFO API] Response:', data);
+
+            // colorScheme 설정
+            if (data.colorScheme) {
+                this.currentUser = data.colorScheme;
+                console.log('✅ [USER INFO API] currentUser set to:', this.currentUser);
+            } else if (data.LoginId) {
+                this.currentUser = data.LoginId;
+                console.log('✅ [USER INFO API] currentUser set to LoginId:', this.currentUser);
+            }
 
             if (data.authenticated && data.LoginId && data.Username) {
                 const newInfo = `${data.LoginId}(${data.Username})`;
@@ -5713,7 +5788,9 @@ class WaferMapViewer {
             initialLevel = levels[3];
         }
 
-        const url = `/api/image?path=${encodeURIComponent(fullPath)}&level=${initialLevel}`;
+        const personalizedParams = this.getPersonalizedParams();
+        const url = `/api/image?path=${encodeURIComponent(fullPath)}&level=${initialLevel}${personalizedParams}`;
+        console.log('🌐 [REQUEST] Fetching image:', url);
         const tFetchStart = performance.now();
         timeline.imageFetchStart = tFetchStart;
 
@@ -5922,7 +5999,8 @@ class WaferMapViewer {
         }
         this._pyramidLoading.add(level);
 
-        const url = `/api/image?path=${encodeURIComponent(this.selectedImagePath)}&level=${level}`;
+        const personalizedParams = this.getPersonalizedParams();
+        const url = `/api/image?path=${encodeURIComponent(this.selectedImagePath)}&level=${level}${personalizedParams}`;
         let cacheStatus = 'MISS';
 
         try {
@@ -10226,7 +10304,7 @@ class WaferMapViewer {
             
             this.savedViewState = {
                 type: 'grid',
-                images: [...images],
+                images: [...sortedImages],  // 🔥 정렬된 이미지를 저장
                 scrollTop: currentScrollTop
             };
         }
@@ -10262,9 +10340,9 @@ class WaferMapViewer {
         this.gridThumbWraps = [];
         // grid 모드에서는 cursor를 default로
         this.dom.viewerContainer.style.cursor = 'default';
-        this.showGridImmediately(images);
+        this.showGridImmediately(sortedImages);
         setTimeout(() => {
-            this.loadCurrentFolderThumbnails(images);
+            this.loadCurrentFolderThumbnails(sortedImages);
         }, 100);
         grid.classList.add('active');
         setTimeout(() => this.updateGridSquaresPixel(), 0);
@@ -10380,10 +10458,12 @@ class WaferMapViewer {
                     }
                 }
             };
-            
-            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512`;
+
+            const personalizedParams = this.getPersonalizedParams();
+            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}`;
             if (idx === 0) {
-                            }
+                console.log('🌐 [REQUEST] Loading thumbnail:', thumbnailUrl);
+            }
             img.src = thumbnailUrl;
             thumbBox.appendChild(img);
             wrap.appendChild(thumbBox);
@@ -12154,34 +12234,48 @@ class WaferMapViewer {
             return;
         }
 
-        const userData = this.colorLegends[this.currentUser];
-        console.log('🎨 [LEGEND] User data for', this.currentUser, ':', userData);
+        // 🎨 Scheme 결정 로직
+        console.log('🎨 [LEGEND DEBUG] personalizedColorEnabled:', this.personalizedColorEnabled);
+        console.log('🎨 [LEGEND DEBUG] currentUser:', this.currentUser);
+
+        let schemeToUse;
+        if (this.personalizedColorEnabled) {
+            // 개인색 설정 활성화: LoginId 사용, 없으면 'change'
+            schemeToUse = this.currentUser || 'change';
+        } else {
+            // 개인색 설정 비활성화: currentUser 사용, 없으면 'default'
+            schemeToUse = this.currentUser || 'default';
+        }
+
+        console.log('🎨 [LEGEND DEBUG] Final schemeToUse:', schemeToUse);
+        const userData = this.colorLegends[schemeToUse];
+        console.log('🎨 [LEGEND] User data for', schemeToUse, ':', userData);
 
         if (!userData) {
-            console.warn(`⚠️ No color legend data for user: ${this.currentUser}`);
+            console.warn(`⚠️ No color legend data for scheme: ${schemeToUse}`);
             return;
         }
 
         // Render top legend
-        if (userData.top && userData.top.length > 0) {
-            this.dom.colorLegendTop.innerHTML = userData.top.map(item => `
+        if (userData.top && typeof userData.top === 'object') {
+            this.dom.colorLegendTop.innerHTML = Object.entries(userData.top).map(([label, color]) => `
                 <div class="legend-item">
-                    <span class="legend-label">${item.label}</span>
-                    <div class="legend-color-bar" style="background-color: ${item.color};"></div>
+                    <span class="legend-label">${label}</span>
+                    <div class="legend-color-bar" style="background-color: ${color};"></div>
                 </div>
             `).join('');
-            console.log('✅ [LEGEND] Top legend rendered:', userData.top.length, 'items');
+            console.log('✅ [LEGEND] Top legend rendered:', Object.keys(userData.top).length, 'items');
         }
 
         // Render bottom legend
-        if (userData.bottom && userData.bottom.length > 0) {
-            this.dom.colorLegendBottom.innerHTML = userData.bottom.map(item => `
+        if (userData.bottom && typeof userData.bottom === 'object') {
+            this.dom.colorLegendBottom.innerHTML = Object.entries(userData.bottom).map(([label, color]) => `
                 <div class="legend-item">
-                    <span class="legend-label">${item.label}</span>
-                    <div class="legend-color-bar" style="background-color: ${item.color};"></div>
+                    <span class="legend-label">${label}</span>
+                    <div class="legend-color-bar" style="background-color: ${color};"></div>
                 </div>
             `).join('');
-            console.log('✅ [LEGEND] Bottom legend rendered:', userData.bottom.length, 'items');
+            console.log('✅ [LEGEND] Bottom legend rendered:', Object.keys(userData.bottom).length, 'items');
         }
     }
 

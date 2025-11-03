@@ -197,20 +197,33 @@ class AccessLogger:
             }
         
         # 사용자가 이 부서에 처음 추가되는 경우
-        user_exists = any(u["user_id"] == user_id for u in dept_stats[dept_name]["users"])
-        if not user_exists:
+        user_exists_idx = None
+        for idx, u in enumerate(dept_stats[dept_name]["users"]):
+            if u["user_id"] == user_id:
+                user_exists_idx = idx
+                break
+
+        user_data = self.stats_data["users"].get(user_id, {})
+
+        if user_exists_idx is None:
+            # 새로운 사용자 추가
             dept_stats[dept_name]["user_count"] += 1
-            user_data = self.stats_data["users"].get(user_id, {})
             dept_stats[dept_name]["users"].append({
                 "user_id": user_id,
                 "profile": user_data.get("profile", {}),
-                "first_seen": user_data.get("first_seen", "")
+                "first_seen": user_data.get("first_seen", ""),
+                "last_seen": user_data.get("last_seen", ""),
+                "last_access_time": user_data.get("last_access_time", "")
             })
-            
+
             # 30일 내 신규 사용자인 경우
             if is_new_user:
                 dept_stats[dept_name]["new_users_30d"] += 1
-        
+        else:
+            # 기존 사용자 업데이트 - last_seen과 last_access_time 갱신
+            dept_stats[dept_name]["users"][user_exists_idx]["last_seen"] = user_data.get("last_seen", "")
+            dept_stats[dept_name]["users"][user_exists_idx]["last_access_time"] = user_data.get("last_access_time", "")
+
         # 요청 수 증가
         dept_stats[dept_name]["total_requests"] += 1
     
@@ -620,6 +633,7 @@ class AccessLogger:
 
         user_data["total_requests"] += 1
         user_data["last_seen"] = today
+        # 🔥 중요: 마지막 접속 시간을 항상 최신으로 업데이트 (오늘 여러 번 접속해도 가장 마지막 시간으로 갱신)
         user_data["last_access_time"] = now_timestamp
         
         # 기존 사용자에게 새로운 필드 추가
