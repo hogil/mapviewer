@@ -3568,20 +3568,7 @@ class WaferMapViewer {
                 return true;
             });
 
-            console.log(`🔍 [CLIENT SORT DEBUG] 필터링 후 이미지 파일 개수: ${imageFiles.length}`);
-            if (imageFiles.length > 0) {
-                const first10 = imageFiles.slice(0, 10).map(f => f.split('/').pop());
-                console.log(`🔍 [CLIENT SORT DEBUG] 필터링 후 첫 10개 파일명:`, first10);
-            }
-
-            console.log(`🔍 [CLIENT SORT DEBUG] selectedImages 병합 전 개수: ${this.selectedImages.length}`);
             this.selectedImages = Array.from(new Set([...this.selectedImages, ...imageFiles]));
-            console.log(`🔍 [CLIENT SORT DEBUG] selectedImages 병합 후 개수: ${this.selectedImages.length}`);
-
-            if (this.selectedImages.length > 0) {
-                const first10 = this.selectedImages.slice(0, 10).map(f => f.split('/').pop());
-                console.log(`🔍 [CLIENT SORT DEBUG] 병합 후 selectedImages 첫 10개:`, first10);
-            }
 
             this.debugLog(`폴더 ${folderPath}에서 ${imageFiles.length}개 이미지 선택됨`);
         } catch (error) {
@@ -4649,16 +4636,10 @@ class WaferMapViewer {
     async getAllFilesInFolder(folderPath) {
         // 🔥 재귀 API 사용 - 백엔드에서 os.walk로 모든 파일 한 번에 조회
         try {
-            console.log(`🔍 [CLIENT SORT DEBUG] getAllFilesInFolder 호출: ${folderPath}`);
             const response = await fetch(`/api/files/recursive?path=${encodeURIComponent(folderPath)}`);
             const data = await response.json();
 
             if (data && data.success && Array.isArray(data.files)) {
-                console.log(`🔍 [CLIENT SORT DEBUG] 서버에서 받은 파일 개수: ${data.files.length}`);
-                if (data.files.length > 0) {
-                    const first10 = data.files.slice(0, 10).map(f => f.split('/').pop());
-                    console.log(`🔍 [CLIENT SORT DEBUG] 서버에서 받은 첫 10개 파일명:`, first10);
-                }
                 // ROOT_DIR 기준 절대 경로 배열 반환
                 return data.files;
             }
@@ -10290,12 +10271,6 @@ class WaferMapViewer {
     showGrid(images, skipSaveState = false) {
         this.gridMode = true;
 
-        console.log(`🔍 [CLIENT SORT DEBUG] showGrid 호출 - 입력 이미지 개수: ${images.length}`);
-        if (images.length > 0) {
-            const first10 = images.slice(0, 10).map(f => f.split('/').pop());
-            console.log(`🔍 [CLIENT SORT DEBUG] showGrid 정렬 전 첫 10개:`, first10);
-        }
-
         // 🔥 이미지를 이름 순으로 오름차순 정렬
         const sortedImages = [...images].sort((a, b) => {
             // 파일명만 추출 (경로 제거)
@@ -10303,11 +10278,6 @@ class WaferMapViewer {
             const nameB = b.split('/').pop().toLowerCase();
             return nameA.localeCompare(nameB);
         });
-
-        if (sortedImages.length > 0) {
-            const first10 = sortedImages.slice(0, 10).map(f => f.split('/').pop());
-            console.log(`🔍 [CLIENT SORT DEBUG] showGrid 정렬 후 첫 10개:`, first10);
-        }
 
         this.selectedImages = sortedImages;
         this.currentGridImages = sortedImages;  // 🔥 currentGridImages 업데이트

@@ -3561,26 +3561,7 @@ async def get_files_recursive(path: str):
                     continue
 
         # 🔥 파일명 기준 정렬 (대소문자 구분 없이)
-        logger.info(f"[SORT DEBUG] 정렬 전 파일 개수: {len(files)}")
-        if files:
-            first_10_before = [f.split('/')[-1] for f in files[:10]]
-            logger.info(f"[SORT DEBUG] 정렬 전 첫 10개: {first_10_before}")
-
-            # 🔥 실제 폴더 내용 확인 (처음 30개 파일명만)
-            logger.info(f"[SORT DEBUG] 정렬 전 처음 30개 전체:")
-            for i, f in enumerate(files[:30]):
-                logger.info(f"  [{i}] {f.split('/')[-1]}")
-
         files.sort(key=lambda x: x.split('/')[-1].lower())
-
-        if files:
-            first_10_after = [f.split('/')[-1] for f in files[:10]]
-            logger.info(f"[SORT DEBUG] 정렬 후 첫 10개: {first_10_after}")
-
-            # 🔥 정렬 후 처음 30개 파일명 확인
-            logger.info(f"[SORT DEBUG] 정렬 후 처음 30개 전체:")
-            for i, f in enumerate(files[:30]):
-                logger.info(f"  [{i}] {f.split('/')[-1]}")
 
         return {"success": True, "files": files}
     except Exception as e:
