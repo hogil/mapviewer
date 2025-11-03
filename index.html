@@ -8,11 +8,7 @@
     <!-- Favicon 추가 -->
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     
-    <!-- 🚀 리소스 사전 로딩 제거 (경고 해결) -->
-    <!-- <link rel="preload" href="/js/main.js" as="script" crossorigin>
-    <link rel="preload" href="/js/utils.js" as="script" crossorigin>
-    <link rel="preload" href="/js/semiconductor-renderer.js" as="script" crossorigin>
-    <link rel="preload" href="/js/fetch-optimizer.js" as="script" crossorigin> -->
+    <!-- DNS prefetch만 사용 (preload 제거로 경고 해결) -->
     <link rel="dns-prefetch" href="//api">
     <style>
         :root {

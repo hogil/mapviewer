@@ -1,9 +1,9 @@
 """
-Wafer 이미지 파일을 랜덤 비복원 추출로 3000개 복사하는 스크립트
+특정 Wafer 이미지 파일을 3000번 복사하는 스크립트 (랜덤 파일명)
 
-- 원본 폴더: D:\project\data\wm-811k\palette_5mb
+- 원본 파일: D:\project\data\wm-811k\palette_5mb\wafer_palette_5mb.png
 - 목표 폴더: D:\project\data\wm-811k\palette_copies_3k
-- 3000개 파일을 랜덤 비복원 추출로 복사
+- 3000개 파일을 랜덤 파일명으로 복사
 """
 import random
 import shutil
@@ -27,85 +27,50 @@ def main():
     print("Wafer 이미지 파일 랜덤 복사 (3000개)")
     print("="*80)
     
-    # 원본 폴더
-    source_dir = Path("D:/project/data/wm-811k/palette_5mb")
-    if not source_dir.exists():
-        print(f"[ERROR] 원본 폴더를 찾을 수 없습니다: {source_dir}")
+    # 원본 파일
+    source_file = Path("D:/project/data/wm-811k/palette_5mb/wafer_palette_5mb.png")
+    if not source_file.exists():
+        print(f"[ERROR] 원본 파일을 찾을 수 없습니다: {source_file}")
         return
     
     # 목표 폴더
     target_dir = Path("D:/project/data/wm-811k/palette_copies_3k")
     target_dir.mkdir(parents=True, exist_ok=True)
     
-    # 원본 파일 수집
-    source_files = list(source_dir.glob("*.png"))
-    if not source_files:
-        print(f"[ERROR] 원본 폴더에 PNG 파일이 없습니다: {source_dir}")
-        return
-    
-    print(f"\n[INFO] 원본 폴더: {source_dir}")
+    # 원본 파일 정보 출력
+    size_mb = source_file.stat().st_size / (1024 * 1024)
+    print(f"\n[INFO] 원본 파일: {source_file}")
+    print(f"  크기: {size_mb:.2f}MB")
     print(f"[INFO] 목표 폴더: {target_dir}")
-    print(f"[INFO] 원본 파일 수: {len(source_files)}개")
-    for i, f in enumerate(source_files, 1):
-        size_mb = f.stat().st_size / (1024 * 1024)
-        print(f"  {i}. {f.name} ({size_mb:.2f}MB)")
     
-    # 3000개 생성 (비복원 추출: 원본 파일들을 반복 사용하되 랜덤 순서로)
+    # 3000개 생성 (0~2999 범위의 숫자를 순서 상관없이 1개씩 사용)
     target_count = 3000
     print(f"\n[INFO] 목표 파일 수: {target_count}개")
-    print(f"[INFO] 복사 방식: 비복원 추출로 랜덤 순서 복사")
+    print(f"[INFO] 파일명: 0~2999 범위의 숫자를 순서 상관없이 1개씩 사용")
     
-    # 원본 파일을 충분히 반복해서 리스트 생성
-    # 각 원본 파일을 약 target_count / len(source_files) 번 사용
-    file_pool = []
-    files_per_source = target_count // len(source_files)
-    remainder = target_count % len(source_files)
+    # 0~2999 범위의 숫자 리스트 생성
+    number_list = list(range(target_count))
     
-    for source_file in source_files:
-        # 기본 반복 횟수
-        count = files_per_source
-        # 나머지 분배
-        if remainder > 0:
-            count += 1
-            remainder -= 1
-        file_pool.extend([source_file] * count)
+    # 랜덤 시드 설정 (매번 다르게)
+    import time
+    random.seed(int(time.time() * 1000000) % (2**32))
     
-    # 비복원 추출로 랜덤하게 섞기
-    random.shuffle(file_pool)
+    # 랜덤하게 섞기
+    random.shuffle(number_list)
     
-    # 정확히 3000개만 사용
-    file_pool = file_pool[:target_count]
-    
-    print(f"[INFO] 파일 풀 생성 완료: {len(file_pool)}개")
-    
-    # 파일명 생성 (0~2999가 아닌 랜덤 숫자 사용)
-    # 중복 방지를 위해 set 사용
-    used_numbers = set()
-    max_attempts = 100000
+    # 파일명 생성 (섞인 순서대로)
     file_tasks = []
+    for num in number_list:
+        dst_filename = f"wafer_{num:04d}.png"
+        dst_path = target_dir / dst_filename
+        file_tasks.append((source_file, dst_path))
     
-    for source_file in file_pool:
-        # 랜덤 숫자 생성 (0~999999 범위에서 충분히 큰 범위 사용)
-        attempts = 0
-        while attempts < max_attempts:
-            random_num = random.randint(0, 999999)
-            if random_num not in used_numbers:
-                used_numbers.add(random_num)
-                dst_filename = f"wafer_{random_num:06d}.png"
-                dst_path = target_dir / dst_filename
-                file_tasks.append((source_file, dst_path))
-                break
-            attempts += 1
-        
-        if attempts >= max_attempts:
-            print(f"[WARN] 파일명 생성 실패 (너무 많은 시도), 순차 번호 사용")
-            # 순차 번호 사용 (fallback)
-            fallback_num = len(file_tasks)
-            dst_filename = f"wafer_{fallback_num:06d}.png"
-            dst_path = target_dir / dst_filename
-            file_tasks.append((source_file, dst_path))
+    # 생성된 파일명 순서 확인 (처음 10개만 출력)
+    print(f"\n[파일명 생성 순서] 처음 10개:")
+    for i, (_, dst_path) in enumerate(file_tasks[:10], 1):
+        print(f"  {i}. {dst_path.name}")
     
-    print(f"[INFO] 파일명 생성 완료: {len(file_tasks)}개")
+    print(f"\n[INFO] 파일명 생성 완료: {len(file_tasks)}개 (0~{target_count-1} 범위, 랜덤 순서)")
     
     # 병렬 복사 시작
     max_workers = 8

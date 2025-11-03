@@ -3531,12 +3531,12 @@ async def get_all_files():
 
 @app.get("/api/files/recursive")
 async def get_files_recursive(path: str):
-    """폴더 내 모든 파일을 재귀적으로 가져오기 (ROOT_DIR 기준 절대 경로)"""
+    """폴더 내 모든 파일을 재귀적으로 가져오기 (ROOT_DIR 기준 절대 경로, 파일명 정렬)"""
     try:
         target = safe_resolve_path(path)
         if not target.exists() or not target.is_dir():
             raise HTTPException(status_code=404, detail="폴더를 찾을 수 없습니다")
-        
+
         files = []
         for root, dirs, filenames in os.walk(target):
             # SKIP_DIRS 제외
@@ -3545,12 +3545,12 @@ async def get_files_recursive(path: str):
                     dirs.remove(skip)
             # classification, thumbnails 제외
             dirs[:] = [d for d in dirs if d not in ['classification', 'thumbnails']]
-            
+
             for fn in filenames:
                 ext = os.path.splitext(fn)[1].lower()
                 if ext not in SUPPORTED_EXTENSIONS:
                     continue
-                
+
                 full_path = Path(root) / fn
                 try:
                     # ROOT_DIR 기준 절대 경로
@@ -3559,7 +3559,29 @@ async def get_files_recursive(path: str):
                     files.append(root_relative)
                 except ValueError:
                     continue
-        
+
+        # 🔥 파일명 기준 정렬 (대소문자 구분 없이)
+        logger.info(f"[SORT DEBUG] 정렬 전 파일 개수: {len(files)}")
+        if files:
+            first_10_before = [f.split('/')[-1] for f in files[:10]]
+            logger.info(f"[SORT DEBUG] 정렬 전 첫 10개: {first_10_before}")
+
+            # 🔥 실제 폴더 내용 확인 (처음 30개 파일명만)
+            logger.info(f"[SORT DEBUG] 정렬 전 처음 30개 전체:")
+            for i, f in enumerate(files[:30]):
+                logger.info(f"  [{i}] {f.split('/')[-1]}")
+
+        files.sort(key=lambda x: x.split('/')[-1].lower())
+
+        if files:
+            first_10_after = [f.split('/')[-1] for f in files[:10]]
+            logger.info(f"[SORT DEBUG] 정렬 후 첫 10개: {first_10_after}")
+
+            # 🔥 정렬 후 처음 30개 파일명 확인
+            logger.info(f"[SORT DEBUG] 정렬 후 처음 30개 전체:")
+            for i, f in enumerate(files[:30]):
+                logger.info(f"  [{i}] {f.split('/')[-1]}")
+
         return {"success": True, "files": files}
     except Exception as e:
         logger.exception(f"재귀 파일 조회 실패: {e}")
@@ -4253,10 +4275,9 @@ async def read_root(request: Request):
         # AUTO_LOGIN=False 또는 SAML 인증 완료 → index.html 제공
         html_path = Path("index.html")
         if html_path.exists():
-            # 🚀 HTML에 캐시 및 사전 로딩 헤더 추가
+            # HTML에 캐시 헤더만 추가 (preload 제거로 경고 해결)
             headers = {
-                "Cache-Control": "public, max-age=3600",
-                "Link": "</js/main.js>; rel=preload; as=script, </js/utils.js>; rel=preload; as=script, </js/semiconductor-renderer.js>; rel=modulepreload"
+                "Cache-Control": "public, max-age=3600"
             }
             return FileResponse(html_path, headers=headers)
         return {"message": "index.html not found"}
