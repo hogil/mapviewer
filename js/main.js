@@ -11,6 +11,7 @@
 
 // 🚀 Fetch 최적화 import
 import { optimizedFetch, fetchOptimizer } from './fetch-optimizer.js';
+import { ColorSchemeEditor } from './color-editor.js';
 
 // Constants
 
@@ -460,6 +461,8 @@ class WaferMapViewer {
 
         this.initState();
 
+        this.colorEditor = new ColorSchemeEditor(this);
+
         this.bindEvents();
 
         this.init();
@@ -579,6 +582,7 @@ class WaferMapViewer {
             subfolderSearch: document.getElementById('subfolder-search'),
             subfolderDropdown: document.getElementById('subfolder-dropdown'),
             filterTestSelect: document.getElementById('filter-test-select'),
+            personalizedColorButton: document.getElementById('personalized-color-button'),
             personalizedColorCheckbox: document.getElementById('personalized-color-checkbox'),
 
             colorLegendTop: document.getElementById('color-legend-top'),
@@ -696,7 +700,7 @@ class WaferMapViewer {
 
         // Color Legends 데이터
         this.colorLegends = null;
-        this.currentUser = 'default';
+        this.currentUser = 'change';
 
         // 클래스 선택 상태 초기화 (Label Explorer와 Class Manager가 공유)
 
@@ -3124,6 +3128,12 @@ class WaferMapViewer {
             });
         }
 
+        if (this.dom.personalizedColorButton) {
+            this.dom.personalizedColorButton.addEventListener('click', () => {
+                this.onPersonalColorButtonClick();
+            });
+        }
+
         // 개인색 설정 체크박스 이벤트
         if (this.dom.personalizedColorCheckbox) {
             this.dom.personalizedColorCheckbox.addEventListener('change', async (e) => {
@@ -3132,6 +3142,7 @@ class WaferMapViewer {
                 console.log('🔍 [DEBUG] gridMode:', this.gridMode, '| selectedImagePath:', this.selectedImagePath);
 
                 // Legend UI 즉시 업데이트
+                this.currentUser = this.currentUser || 'change';
                 this.renderColorLegends();
 
                 // 현재 화면 새로고침
@@ -3167,6 +3178,14 @@ class WaferMapViewer {
         }
     }
 
+    onPersonalColorButtonClick() {
+        if (!this.colorEditor) {
+            this.showToast?.('색상 편집기를 초기화하지 못했습니다.', 1800);
+            return;
+        }
+        this.colorEditor.open();
+    }
+
     /**
      * 개인색 설정을 위한 URL 파라미터 생성
      * @returns {string} URL 쿼리 파라미터 (예: "&personalized=true&scheme=john")
@@ -3175,10 +3194,17 @@ class WaferMapViewer {
         if (!this.personalizedColorEnabled) {
             return '';
         }
-        // currentUser (LoginId)를 scheme으로 전달, 없으면 'change'
-        const scheme = this.currentUser || 'change';
+        let scheme = this.currentUser || 'change';
+        if (this.colorLegends && !this.colorLegends[scheme]) {
+            if (this.colorLegends.change) {
+                scheme = 'change';
+            } else {
+                const firstKey = Object.keys(this.colorLegends)[0];
+                scheme = firstKey || 'change';
+            }
+        }
         const params = `&personalized=true&scheme=${encodeURIComponent(scheme)}`;
-        console.log('🎨 [PARAMS] getPersonalizedParams:', params, '| currentUser:', this.currentUser, '| enabled:', this.personalizedColorEnabled);
+        console.log('🎨 [PARAMS] getPersonalizedParams:', params, '| resolvedScheme:', scheme, '| currentUser:', this.currentUser, '| enabled:', this.personalizedColorEnabled);
         return params;
     }
 
@@ -3386,6 +3412,8 @@ class WaferMapViewer {
             }
 
             if (displayed) {
+                this.currentUser = this.currentUser || 'change';
+                this.renderColorLegends();
                 return;
             }
 
@@ -3419,6 +3447,9 @@ class WaferMapViewer {
             console.error('[DEBUG] 사용자 정보 로드 오류:', error);
             // 오류 발생 시에도 아무것도 표시하지 않음
         }
+
+        this.currentUser = this.currentUser || 'change';
+        this.renderColorLegends();
     }
 
     // 이미지 폴더 최상위로 리셋
@@ -12238,16 +12269,22 @@ class WaferMapViewer {
         console.log('🎨 [LEGEND DEBUG] personalizedColorEnabled:', this.personalizedColorEnabled);
         console.log('🎨 [LEGEND DEBUG] currentUser:', this.currentUser);
 
-        let schemeToUse;
-        if (this.personalizedColorEnabled) {
-            // 개인색 설정 활성화: LoginId 사용, 없으면 'change'
-            schemeToUse = this.currentUser || 'change';
-        } else {
-            // 개인색 설정 비활성화: currentUser 사용, 없으면 'default'
-            schemeToUse = this.currentUser || 'default';
+        let schemeToUse = this.currentUser || 'change';
+        if (!this.colorLegends[schemeToUse]) {
+            if (this.colorLegends.change) {
+                schemeToUse = 'change';
+            } else {
+                const firstKey = Object.keys(this.colorLegends)[0];
+                schemeToUse = firstKey || null;
+            }
         }
 
         console.log('🎨 [LEGEND DEBUG] Final schemeToUse:', schemeToUse);
+        if (!schemeToUse) {
+            console.warn('⚠️ [LEGEND] 유효한 color scheme을 찾을 수 없습니다.');
+            return;
+        }
+
         const userData = this.colorLegends[schemeToUse];
         console.log('🎨 [LEGEND] User data for', schemeToUse, ':', userData);
 

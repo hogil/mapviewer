@@ -72,6 +72,12 @@ except Exception:
 
 from .thumbnail_service import ThumbnailService
 from . import config
+from .personal_colors import (
+    load_color_legends,
+    save_color_legends,
+    get_user_color_scheme,
+    prepare_personalized_image,
+)
 
 # ================= Windows ANSI 색상 호환 =================
 try:
@@ -1540,84 +1546,6 @@ def relkey_from_any_path(any_path: str) -> str:
     abs_path = safe_resolve_path(any_path)
     return str(abs_path.relative_to(ROOT_DIR)).replace("\\", "/")
 
-# Color Legends 로드
-COLOR_LEGENDS_PATH = Path(__file__).parent.parent / "logs" / "color-legends.json"
-_color_legends_cache = None
-_color_legends_mtime = 0.0
-
-def load_color_legends() -> Dict[str, Any]:
-    """color-legends.json 로드 (캐싱)"""
-    global _color_legends_cache, _color_legends_mtime
-
-    try:
-        if not COLOR_LEGENDS_PATH.exists():
-            return {}
-
-        current_mtime = COLOR_LEGENDS_PATH.stat().st_mtime
-
-        # 캐시가 최신이면 반환
-        if _color_legends_cache is not None and current_mtime == _color_legends_mtime:
-            return _color_legends_cache
-
-        # 파일 로드
-        with open(COLOR_LEGENDS_PATH, 'r', encoding='utf-8') as f:
-            _color_legends_cache = json.load(f)
-            _color_legends_mtime = current_mtime
-            return _color_legends_cache
-
-    except Exception as e:
-        logger.warning(f"color-legends.json 로드 실패: {e}")
-        return {}
-
-def save_color_legends(legends: Dict[str, Any]) -> bool:
-    """color-legends.json 저장"""
-    global _color_legends_cache, _color_legends_mtime
-
-    try:
-        COLOR_LEGENDS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = COLOR_LEGENDS_PATH.with_suffix('.json.tmp')
-
-        with open(tmp_path, 'w', encoding='utf-8') as f:
-            json.dump(legends, f, ensure_ascii=False, indent=2)
-
-        os.replace(tmp_path, COLOR_LEGENDS_PATH)
-
-        # 캐시 업데이트
-        _color_legends_cache = legends
-        _color_legends_mtime = COLOR_LEGENDS_PATH.stat().st_mtime
-
-        return True
-    except Exception as e:
-        logger.error(f"color-legends.json 저장 실패: {e}")
-        return False
-
-def get_user_color_scheme(login_id: Optional[str]) -> str:
-    """
-    LoginId 기반 color scheme 결정
-    - LoginId가 None이면 'change' 사용
-    - LoginId가 있으면 해당 key 확인, 없으면 'default'로부터 복사하여 생성
-    """
-    # LoginId가 없으면 'change' 사용
-    if not login_id:
-        return 'change'
-
-    legends = load_color_legends()
-
-    # 이미 존재하면 해당 scheme 사용
-    if login_id in legends:
-        return login_id
-
-    # 존재하지 않으면 'default'로부터 복사하여 생성
-    if 'default' in legends:
-        legends[login_id] = legends['default'].copy()
-        save_color_legends(legends)
-        logger.info(f"새 color scheme 생성: {login_id} (from default)")
-        return login_id
-
-    # default도 없으면 'change' 폴백
-    logger.warning(f"default scheme 없음, change로 폴백: LoginId={login_id}")
-    return 'change'
-
 def _classification_dir() -> Path:
     return current_folder / "classification"
 
@@ -2978,64 +2906,47 @@ async def get_image(
 
                 # 캐시 미스: 방식 2로 생성 (change scheme -> BICUBIC)
                 try:
-                    from PIL import Image as PILImage
-
                     legends = load_color_legends()
-                    if scheme in legends:
-                        scheme_data = legends[scheme]
+                    personalized_img = prepare_personalized_image(image_path, scheme, legends)
 
-                        # 원본 로드
-                        img = PILImage.open(image_path)
-
-                        if img.mode == 'P':
-                            # 팔레트 생성 (원본과 동일한 32색 구조)
-                            new_palette = []
-                            # 인덱스 0-7: top (Grade0-7)
-                            top_colors = scheme_data.get('top', {})
-                            for grade in ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7']:
-                                color = top_colors.get(grade, '#FFFFFF').lstrip('#')
-                                new_palette.extend([int(color[i:i+2], 16) for i in (0, 2, 4)])
-
-                            # 인덱스 8-13: bottom (Normal, Invalid, B285-B288)
-                            bottom_colors = scheme_data.get('bottom', {})
-                            for label in ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288']:
-                                color = bottom_colors.get(label, '#000000').lstrip('#')
-                                new_palette.extend([int(color[i:i+2], 16) for i in (0, 2, 4)])
-
-                            # 인덱스 14: background (배경색)
-                            bg_color = scheme_data.get('background', '#FEFEFE').lstrip('#')
-                            new_palette.extend([int(bg_color[i:i+2], 16) for i in (0, 2, 4)])
-
-                            # 인덱스 15-31: 검은색으로 채움 (원본과 동일하게 32색까지만)
-                            new_palette.extend([0, 0, 0] * (32 - 15))
-
-                            # change scheme 적용
-                            img.putpalette(new_palette)
-
-                            # RGB 변환
-                            img_rgb = img.convert('RGB')
-
-                            # BICUBIC 리샘플링 (level 적용)
+                    if personalized_img:
+                        img_rgb = None
+                        pyramid_img = None
+                        try:
+                            img_rgb = personalized_img.convert('RGB')
                             new_w = max(1, int(img_rgb.width * level))
                             new_h = max(1, int(img_rgb.height * level))
-                            pyramid_img = img_rgb.resize((new_w, new_h), PILImage.Resampling.BICUBIC)
-
-                            # JPEG 저장 (Q=95, 피라미드는 95 사용)
+                            pyramid_img = img_rgb.resize((new_w, new_h), Image.Resampling.BICUBIC)
                             pyramid_img.save(pyramid_path, 'JPEG', quality=95)
+                        finally:
+                            try:
+                                personalized_img.close()
+                            except Exception:
+                                pass
+                            if img_rgb:
+                                try:
+                                    img_rgb.close()
+                                except Exception:
+                                    pass
+                            if pyramid_img:
+                                try:
+                                    pyramid_img.close()
+                                except Exception:
+                                    pass
 
-                            if not is_head:
-                                logger.info(f"✅ [PERSONALIZED PYRAMID SUCCESS] {pyramid_path.name}")
+                        if not is_head:
+                            logger.info(f"✅ [PERSONALIZED PYRAMID SUCCESS] {pyramid_path.name}")
 
-                            st = pyramid_path.stat()
-                            headers = {
-                                "Cache-Control": "public, max-age=31536000, immutable",
-                                "Content-Type": "image/jpeg",
-                                "ETag": compute_etag(st),
-                                "X-Pyramid-Level": str(level),
-                                "X-Cache-Status": "MISS",
-                                "X-Personalized": "true"
-                            }
-                            return FileResponse(pyramid_path, headers=headers)
+                        st = pyramid_path.stat()
+                        headers = {
+                            "Cache-Control": "public, max-age=31536000, immutable",
+                            "Content-Type": "image/jpeg",
+                            "ETag": compute_etag(st),
+                            "X-Pyramid-Level": str(level),
+                            "X-Cache-Status": "MISS",
+                            "X-Personalized": "true"
+                        }
+                        return FileResponse(pyramid_path, headers=headers)
 
                 except Exception as e:
                     if not is_head:
@@ -3209,59 +3120,43 @@ async def get_thumbnail(
 
                 # 캐시 없음: 방식 2로 생성 (change scheme -> BICUBIC)
                 try:
-                    from PIL import Image as PILImage
-
                     legends = load_color_legends()
-                    if scheme in legends:
-                        scheme_data = legends[scheme]
+                    personalized_img = prepare_personalized_image(image_path, scheme, legends)
 
-                        # 원본 로드
-                        img = PILImage.open(image_path)
+                    if personalized_img:
+                        img_rgb = None
+                        thumb = None
+                        try:
+                            img_rgb = personalized_img.convert('RGB')
+                            longest = max(img_rgb.width, img_rgb.height) or 1
+                            w = max(1, int(img_rgb.width * size / longest))
+                            h = max(1, int(img_rgb.height * size / longest))
+                            thumb = img_rgb.resize((w, h), Image.Resampling.BICUBIC)
 
-                        if img.mode == 'P':
-                            # 팔레트 생성 (원본과 동일한 32색 구조)
-                            new_palette = []
-                            # 인덱스 0-7: top (Grade0-7)
-                            top_colors = scheme_data.get('top', {})
-                            for grade in ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7']:
-                                color = top_colors.get(grade, '#FFFFFF').lstrip('#')
-                                new_palette.extend([int(color[i:i+2], 16) for i in (0, 2, 4)])
-
-                            # 인덱스 8-13: bottom (Normal, Invalid, B285-B288)
-                            bottom_colors = scheme_data.get('bottom', {})
-                            for label in ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288']:
-                                color = bottom_colors.get(label, '#000000').lstrip('#')
-                                new_palette.extend([int(color[i:i+2], 16) for i in (0, 2, 4)])
-
-                            # 인덱스 14: background (배경색)
-                            bg_color = scheme_data.get('background', '#FEFEFE').lstrip('#')
-                            new_palette.extend([int(bg_color[i:i+2], 16) for i in (0, 2, 4)])
-
-                            # 인덱스 15-31: 검은색으로 채움 (원본과 동일하게 32색까지만)
-                            new_palette.extend([0, 0, 0] * (32 - 15))
-
-                            # change scheme 적용
-                            img.putpalette(new_palette)
-
-                            # RGB 변환
-                            img_rgb = img.convert('RGB')
-
-                            # BICUBIC 리샘플링
-                            w = int(img_rgb.width * size / max(img_rgb.width, img_rgb.height))
-                            h = int(img_rgb.height * size / max(img_rgb.width, img_rgb.height))
-                            thumb = img_rgb.resize((w, h), PILImage.Resampling.BICUBIC)
-
-                            # 저장
                             scheme_thumb_dir.mkdir(parents=True, exist_ok=True)
                             thumb.save(scheme_thumb_path, 'JPEG', quality=100)
+                        finally:
+                            try:
+                                personalized_img.close()
+                            except Exception:
+                                pass
+                            if img_rgb:
+                                try:
+                                    img_rgb.close()
+                                except Exception:
+                                    pass
+                            if thumb:
+                                try:
+                                    thumb.close()
+                                except Exception:
+                                    pass
 
-                            st = scheme_thumb_path.stat()
-                            return FileResponse(
-                                scheme_thumb_path,
-                                media_type="image/jpeg",
-                                headers={"Cache-Control": "public, max-age=604800, immutable", "ETag": compute_etag(st)}
-                            )
-
+                        st = scheme_thumb_path.stat()
+                        return FileResponse(
+                            scheme_thumb_path,
+                            media_type="image/jpeg",
+                            headers={"Cache-Control": "public, max-age=604800, immutable", "ETag": compute_etag(st)}
+                        )
                 except Exception as e:
                     logger.warning(f"개인색 썸네일 생성 실패: {e}")
                     # 실패 시 기본 썸네일로 폴백
