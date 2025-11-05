@@ -1,3 +1,4 @@
+
 """
 L3Tracker - Wafer Map Viewer API (HTTPS, Pretty Table Logs, Noise-free)
 """
@@ -847,6 +848,55 @@ class TTLCache:
 
 THUMB_STAT_CACHE = TTLCache(THUMB_STAT_TTL_SECONDS, THUMB_STAT_CACHE_CAPACITY)
 
+# 🔥 팔레트 캐시 (원본 PNG 파일의 팔레트 정보 캐싱 - 파일 읽기 최소화)
+_PALETTE_CACHE: Dict[str, Tuple[float, List[int]]] = {}  # {image_path: (mtime, palette)}
+_PALETTE_CACHE_LOCK = RLock()
+_PALETTE_CACHE_MAX_SIZE = 500  # 최대 500개 파일의 팔레트 캐싱
+
+def _get_cached_palette(image_path: Path) -> Optional[List[int]]:
+    """원본 PNG 파일의 팔레트 정보를 캐시에서 가져오거나 읽기"""
+    path_str = str(image_path)
+    
+    with _PALETTE_CACHE_LOCK:
+        # 캐시 확인
+        if path_str in _PALETTE_CACHE:
+            cached_mtime, cached_palette = _PALETTE_CACHE[path_str]
+            try:
+                current_mtime = image_path.stat().st_mtime
+                if current_mtime == cached_mtime:
+                    return cached_palette
+            except Exception:
+                pass
+        
+        # 캐시에 없거나 파일이 변경된 경우 읽기
+        try:
+            from PIL import Image as PILImage
+            with PILImage.open(image_path) as pil_original:
+                if pil_original.mode != 'P':
+                    pil_original = pil_original.convert('P')
+                
+                palette = pil_original.getpalette()
+                if palette:
+                    # 캐시에 저장
+                    try:
+                        mtime = image_path.stat().st_mtime
+                        
+                        # 캐시 크기 제한
+                        if len(_PALETTE_CACHE) >= _PALETTE_CACHE_MAX_SIZE:
+                            # 가장 오래된 항목 제거 (FIFO)
+                            oldest_key = next(iter(_PALETTE_CACHE))
+                            del _PALETTE_CACHE[oldest_key]
+                        
+                        _PALETTE_CACHE[path_str] = (mtime, palette)
+                    except Exception:
+                        pass
+                    
+                    return palette
+        except Exception:
+            pass
+        
+        return None
+
 # ======================== FastAPI & Middleware ========================
 app = FastAPI(title="L3Tracker API", version="2.6.0")
 
@@ -1363,6 +1413,7 @@ async def api_auth_user(request: Request, LoginId: Optional[str] = None):
                 "colorScheme": color_scheme  # 🎨 개인색 scheme
             }
 
+        # LoginId가 없으면 'change' scheme 반환
         return {
             "authenticated": False,
             "LoginId": None,
@@ -1372,12 +1423,12 @@ async def api_auth_user(request: Request, LoginId: Optional[str] = None):
             "GrdName": "",
             "metadata": {},
             "saml_attributes": {},
-            "colorScheme": "default"  # 🎨 익명 사용자는 default scheme
+            "colorScheme": "change"  # 🎨 LoginId가 없으면 change scheme
         }
         
     except Exception as e:
         logger.error(f"❌ [API /auth/user] 오류 발생: {e}")
-        # 오류 발생 시 빈 인증 정보 반환
+        # 오류 발생 시 빈 인증 정보 반환 (LoginId 없으면 change scheme)
         return {
             "authenticated": False,
             "LoginId": None,
@@ -1387,8 +1438,42 @@ async def api_auth_user(request: Request, LoginId: Optional[str] = None):
             "GrdName": "",
             "metadata": {},
             "saml_attributes": {},
-            "colorScheme": "default"  # 🎨 익명 사용자는 default scheme
+            "colorScheme": "change"  # 🎨 LoginId가 없으면 change scheme
         }
+
+
+# ===== 색상 스킴 저장 API =====
+@app.post("/api/color-scheme")
+async def save_color_scheme(request: Request):
+    """색상 스킴 저장"""
+    try:
+        data = await request.json()
+        scheme_name = data.get('schemeName')
+        scheme_data = data.get('schemeData')
+        
+        if not scheme_name:
+            raise HTTPException(status_code=400, detail="schemeName이 필요합니다")
+        if not scheme_data:
+            raise HTTPException(status_code=400, detail="schemeData가 필요합니다")
+        
+        # 기존 legends 로드
+        legends = load_color_legends()
+        
+        # 새로운 스킴 데이터 저장
+        legends[scheme_name] = scheme_data
+        
+        # 파일에 저장
+        if save_color_legends(legends):
+            logger.info(f"✅ Color scheme saved: {scheme_name}")
+            return {"success": True, "schemeName": scheme_name}
+        else:
+            raise HTTPException(status_code=500, detail="색상 스킴 저장 실패")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [API /api/color-scheme] 오류 발생: {e}")
+        raise HTTPException(status_code=500, detail=f"색상 스킴 저장 중 오류: {str(e)}")
 
 
 # ===== 사내 ADFS/STS 헬스 체크 (핑) =====
@@ -2020,7 +2105,7 @@ def _save_with_turbojpeg(vips_image, thumbnail_path: str, quality: int) -> bool:
         # TurboJPEG 실패 시 pyvips 폴백
         return False
 
-def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple[int, int]):
+def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple[int, int], personalized: bool = False, scheme: Optional[str] = None, force_jpeg_encoder: Optional[str] = None):
     try:
         thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -2034,19 +2119,47 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
                 pass
 
             # =============================================================
-            # 그리드 썸네일 생성 최적화 (2025-10-23)
-            # 원복 시점: commit dce1bb2
+            # 그리드 썸네일 생성 - 개인색 설정 적용
             # =============================================================
-            # 최적화 1: 하드웨어 가속 및 메모리 캐시 활성화
-            # - memory=True: libvips 내부 캐시 활성화
-            # - unlimited=True: 하드웨어 가속 기능 활성화 (SIMD, 멀티코어)
-            vips_image = pyvips.Image.new_from_file(
-                str(image_path),
-                access='sequential',
-                fail_on='none',
-                memory=True,      # 메모리 캐시 활성화
-                unlimited=True    # 하드웨어 가속 활성화
-            )
+            # 🔥 초고속 방식에 PLTE 패치만 추가:
+            # 1. 원본 PNG 파일 읽기 및 PLTE 패치 (최우선!)
+            # 2. 패치된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
+            # 3. pyvips로 리사이즈 (기존 초고속 방식)
+            # 4. 저장 (요청된 형식으로)
+            if personalized and scheme and image_path.suffix.lower() == '.png':
+                logger.info(f"🎨 [THUMBNAIL] 개인색 설정 적용: personalized={personalized}, scheme={scheme}, path={image_path.name}, fmt={fmt}")
+                try:
+                    from .personal_colors import plte_inplace_patch_memory
+                    
+                    # 1. 원본 PNG 파일 읽기 및 PLTE 패치 (최우선!)
+                    with open(image_path, 'rb') as f:
+                        png_data = bytearray(f.read())
+                    
+                    png_data = plte_inplace_patch_memory(png_data, scheme)
+                    
+                    # 2. 패치된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
+                    vips_image = pyvips.Image.new_from_buffer(bytes(png_data), "", access='sequential', fail_on='none', memory=True, unlimited=True)
+                    
+                    logger.info(f"✅ [PLTE PATCH] 색 변경 완료, 리사이즈 시작: {thumbnail_path.name}")
+                except Exception as e:
+                    logger.warning(f"⚠️ [PLTE PATCH] 개인색 팔레트 적용 실패: {e}", exc_info=True)
+                    # 실패 시 기존 pyvips 로직 사용 (개인색 미적용)
+                    vips_image = pyvips.Image.new_from_file(
+                        str(image_path),
+                        access='sequential',
+                        fail_on='none',
+                        memory=True,
+                        unlimited=True
+                    )
+            else:
+                # 개인색 설정 미적용: 기존 pyvips 로직 사용
+                vips_image = pyvips.Image.new_from_file(
+                    str(image_path),
+                    access='sequential',
+                    fail_on='none',
+                    memory=True,      # 메모리 캐시 활성화
+                    unlimited=True    # 하드웨어 가속 활성화
+                )
 
             def _write(vips_obj):
                 if fmt == "PNG":
@@ -2068,11 +2181,14 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
                 else:
                     # 최적화 2: JPEG 저장 - TurboJPEG 우선, pyvips 폴백
                     if fmt == "JPEG":
-                        # TurboJPEG 시도
-                        saved_with_turbo = _save_with_turbojpeg(vips_obj, str(thumbnail_path), THUMBNAIL_QUALITY)
-                        
-                        if not saved_with_turbo:
-                            # pyvips 폴백
+                        # force_jpeg_encoder 파라미터로 인코더 강제 선택 (벤치마크용)
+                        if force_jpeg_encoder == 'turbojpeg':
+                            # TurboJPEG 강제 사용
+                            saved_with_turbo = _save_with_turbojpeg(vips_obj, str(thumbnail_path), THUMBNAIL_QUALITY)
+                            if not saved_with_turbo:
+                                raise RuntimeError("TurboJPEG 저장 실패 (force_jpeg_encoder='turbojpeg')")
+                        elif force_jpeg_encoder == 'pyvips':
+                            # pyvips 강제 사용
                             vips_obj.jpegsave(
                                 str(thumbnail_path),
                                 Q=THUMBNAIL_QUALITY,       # Q=100 (최고 품질)
@@ -2080,10 +2196,27 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
                                 optimize_coding=False,     # 속도 우선
                                 subsample_mode=1,          # 4:2:0 (가장 빠름)
                                 interlace=False,           # 인터레이스 비활성화
-                                trellis_quant=False,       # 트렐리스 양자화 비활성화
+                                trellis_quant=False,      # 트렐리스 양자화 비활성화
                                 quant_table=0,             # 기본 양자화 테이블
                                 background=255             # 배경색 설정
                             )
+                        else:
+                            # 기본 동작: TurboJPEG 시도 → 실패 시 pyvips 폴백
+                            saved_with_turbo = _save_with_turbojpeg(vips_obj, str(thumbnail_path), THUMBNAIL_QUALITY)
+                            
+                            if not saved_with_turbo:
+                                # pyvips 폴백
+                                vips_obj.jpegsave(
+                                    str(thumbnail_path),
+                                    Q=THUMBNAIL_QUALITY,       # Q=100 (최고 품질)
+                                    strip=True,                # 메타데이터 제거
+                                    optimize_coding=False,     # 속도 우선
+                                    subsample_mode=1,          # 4:2:0 (가장 빠름)
+                                    interlace=False,           # 인터레이스 비활성화
+                                    trellis_quant=False,       # 트렐리스 양자화 비활성화
+                                    quant_table=0,             # 기본 양자화 테이블
+                                    background=255             # 배경색 설정
+                                )
                     else:
                         vips_obj.write_to_file(
                             str(thumbnail_path),
@@ -2091,6 +2224,7 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
                             strip=True
                         )
 
+            # 🔥 리사이즈 로직 (개인색 설정 여부와 관계없이 동일한 방식)
             target_w, target_h = size
             if vips_image.width <= target_w and vips_image.height <= target_h:
                 _write(vips_image)
@@ -2118,20 +2252,20 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
                             resized = resized.resize(
                                 remaining_scale,
                                 vscale=remaining_scale,
-                                kernel=config.PYRAMID_KERNEL or 'cubic'
+                                kernel='cubic'
                             )
                     else:
                         resized = vips_image.resize(
                             scale,
                             vscale=scale,
-                            kernel=config.PYRAMID_KERNEL or 'cubic'
+                            kernel='cubic'
                         )
                 else:
                     # 작은 축소: resize만 사용
                     resized = vips_image.resize(
                         scale,
                         vscale=scale,
-                        kernel=config.PYRAMID_KERNEL or 'cubic'
+                        kernel='cubic'
                     )
                 _write(resized)
             return
@@ -2161,10 +2295,16 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
         logger.error(f"썸네일 생성 중 오류: {image_path} -> {thumbnail_path}, 오류: {e}")
         raise
 
-async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optional[Path]:
+async def generate_thumbnail(image_path: Path, size: Tuple[int, int], personalized: bool = False, scheme: Optional[str] = None) -> Optional[Path]:
     start_time = time.time()
     try:
-        thumb = get_thumbnail_path(image_path, size)
+        # 개인색 설정인 경우 썸네일 경로에 scheme 포함
+        if personalized and scheme:
+            relative_path = image_path.relative_to(ROOT_DIR)
+            scheme_thumb_dir = THUMBNAIL_DIR / scheme / relative_path.parent
+            thumb = scheme_thumb_dir / f"{relative_path.stem}_{size[0]}x{size[1]}.jpg"
+        else:
+            thumb = get_thumbnail_path(image_path, size)
         key = f"{thumb}|{size[0]}x{size[1]}"
 
         if not image_path.exists():
@@ -2210,7 +2350,7 @@ async def generate_thumbnail(image_path: Path, size: Tuple[int, int]) -> Optiona
             gen_start = time.time()
             try:
                 await asyncio.get_running_loop().run_in_executor(
-                    THUMBNAIL_EXECUTOR, _generate_thumbnail_sync, image_path, thumb, size
+                    THUMBNAIL_EXECUTOR, _generate_thumbnail_sync, image_path, thumb, size, personalized, scheme
                 )
                 gen_elapsed = time.time() - gen_start
                 
@@ -2355,7 +2495,7 @@ def _pyramid_path_lock(path: Path):
         lock.release()
 
 
-def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
+def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, personalized: bool = False, scheme: Optional[str] = None):
     """🚀 피라미드 레벨 이미지 생성 (속도 극대화)"""
     import time
     start_time = time.time()
@@ -2364,7 +2504,8 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
     quality = max(1, min(100, int(config.PYRAMID_Q)))
     png_compression = max(0, min(9, int(config.PYRAMID_PNG_COMPRESSION)))
     png_effort = max(1, min(10, int(config.PYRAMID_PNG_EFFORT)))
-    kernel_name = (config.PYRAMID_KERNEL or "cubic").lower()
+    # 고품질 리사이즈를 위해 BICUBIC 강제 사용 (LANCZOS 사용 금지)
+    kernel_name = 'cubic'
     loader_mode = getattr(config, "PYRAMID_LOADER_MODE", "random_late_copy").strip().lower()
 
     def _log_completion(width: int, height: int) -> None:
@@ -2394,7 +2535,19 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
             src.replace(dest)
 
     with _pyramid_path_lock(pyramid_path):
-        pyramid_path.parent.mkdir(parents=True, exist_ok=True)
+        # 🔥 디렉토리 생성 안전성 강화
+        try:
+            pyramid_path.parent.mkdir(parents=True, exist_ok=True)
+            # 디렉토리가 실제로 생성되었는지 확인
+            if not pyramid_path.parent.exists():
+                raise OSError(f"디렉토리 생성 실패: {pyramid_path.parent}")
+        except OSError as dir_err:
+            logger.error(f"❌ [PYRAMID] 디렉토리 생성 실패: {pyramid_path.parent}, 오류: {dir_err}")
+            raise
+        except Exception as dir_err:
+            logger.error(f"❌ [PYRAMID] 디렉토리 생성 예외: {pyramid_path.parent}, 오류: {dir_err}")
+            raise
+        
         temp_path = pyramid_path.with_name(pyramid_path.name + ".tmp")
         _safe_unlink(temp_path)
         expected_w: Optional[int] = None
@@ -2407,114 +2560,162 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
                 pyvips = None  # type: ignore[assignment]
                 logger.info("🚀 [PILLOW] PyVips 없음 - Pillow 사용")
             else:
-                try:
+                # ============================================================
+                # 🔥 피라미드 생성 워크플로우:
+                # 1. 원본 PNG 파일 읽기 및 PLTE 패치 (최우선!)
+                # 2. 패치된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
+                # 3. pyvips로 리사이즈 (기존 초고속 방식)
+                # 4. 저장
+                # ============================================================
+                image = None
+                
+                # [1단계] 원본 이미지 로드
+                # 🔥 초고속 방식에 PLTE 패치만 추가
+                if personalized and scheme and image_path.suffix.lower() == '.png' and target_format == "PNG":
+                    logger.info(f"🎨 [PYRAMID] 개인색 설정 적용: personalized={personalized}, scheme={scheme}, path={image_path.name}, target_format={target_format}")
                     try:
-                        pyvips.set_log_handler(lambda domain, lvl, msg: None)
-                    except AttributeError:
-                        pass
+                        from .personal_colors import plte_inplace_patch_memory
+                        
+                        # 1. 원본 PNG 파일 읽기 및 PLTE 패치 (최우선!)
+                        with open(image_path, 'rb') as f:
+                            png_data = bytearray(f.read())
+                        
+                        png_data = plte_inplace_patch_memory(png_data, scheme)
+                        
+                        # 2. 패치된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
+                        image = pyvips.Image.new_from_buffer(bytes(png_data), "", access='sequential', fail_on='none', memory=True, unlimited=True)
+                        
+                        logger.info(f"✅ [PYRAMID PLTE PATCH] 색 변경 완료, 리사이즈 시작: {pyramid_path.name}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ [PYRAMID PLTE] PLTE 인-place 실패, 폴백: {e}", exc_info=True)
+                        # 폴백: 기존 방식 사용
+                        image = None
+                else:
+                    # 개인색 설정이 없거나 PNG가 아닌 경우: pyvips로 바로 로드 (빠름)
+                    try:
+                        try:
+                            pyvips.set_log_handler(lambda domain, lvl, msg: None)
+                        except AttributeError:
+                            pass
 
-                    # =============================================================
-                    # 피라미드 썸네일 생성 최적화 (2025-10-23)
-                    # 원복 시점: commit dce1bb2
-                    # =============================================================
-                    # 최적화 1: 하드웨어 가속 및 메모리 캐시 활성화
-                    # - memory=True: libvips 내부 캐시 활성화로 반복 접근 속도 향상
-                    # - unlimited=True: 하드웨어 가속 기능 활성화 (SIMD, 멀티코어)
-                    # - 그리드 썸네일과 동일한 로딩 최적화 적용
-                    image = pyvips.Image.new_from_file(
-                        str(image_path),
-                        access='sequential',
-                        fail_on='none',
-                        memory=True,      # 메모리 캐시 활성화
-                        unlimited=True    # 하드웨어 가속 활성화
-                    )
-                    orig_w, orig_h = image.width, image.height
-                    expected_w = max(1, int(orig_w * level))
-                    expected_h = max(1, int(orig_h * level))
-                    logger.info(f"⏱️ [DEBUG] 크기 계산 ({orig_w}x{orig_h} → {expected_w}x{expected_h})")
+                        # =============================================================
+                        # 피라미드 썸네일 생성 최적화 (2025-10-23)
+                        # 원복 시점: commit dce1bb2
+                        # =============================================================
+                        # 최적화 1: 하드웨어 가속 및 메모리 캐시 활성화
+                        # - memory=True: libvips 내부 캐시 활성화로 반복 접근 속도 향상
+                        # - unlimited=True: 하드웨어 가속 기능 활성화 (SIMD, 멀티코어)
+                        # - 그리드 썸네일과 동일한 로딩 최적화 적용
+                        image = pyvips.Image.new_from_file(
+                            str(image_path),
+                            access='sequential',
+                            fail_on='none',
+                            memory=True,      # 메모리 캐시 활성화
+                            unlimited=True    # 하드웨어 가속 활성화
+                        )
+                        logger.info(f"✅ [STEP1] 원본 이미지 로드 완료 - {image.width}x{image.height}")
+                    except pyvips.Error as vips_err:  # type: ignore[attr-defined]
+                        logger.warning(f"⚠️ [PYVIPS] 오류 - Pillow 폴백 진행: {vips_err}")
+                        image = None
+                    except Exception as vips_generic:
+                        logger.exception(f"⚠️ [PYVIPS] 예기치 않은 오류 - Pillow 폴백: {vips_generic}")
+                        image = None
+                
+                # [3단계] level별 생성 (개인색 설정 여부와 관계없이 동일한 방식)
+                if image is not None:
+                    try:
+                        orig_w, orig_h = image.width, image.height
+                        expected_w = max(1, int(orig_w * level))
+                        expected_h = max(1, int(orig_h * level))
 
-                    # 최적화 2: copy_memory() 완전 제거 - 스트리밍 방식 사용
-                    # - 기존: seq_early_copy 모드에서 image.copy_memory() 호출
-                    # - 문제: 메모리 복사 오버헤드로 30-40% 속도 저하
-                    # - 개선: 스트리밍 방식으로 처리하여 메모리 복사 제거
-                    work_image = image
-                    if level < 1.0:
-                        # 최적화 3: 공격적인 shrink 로직 적용 (그리드 썸네일과 동일)
-                        # - 큰 축소(scale < 0.5)의 경우 shrink + resize 조합 사용
-                        # - shrink: 정수 배율 고속 축소 (HW 가속)
-                        # - resize: 나머지 scale 조정 (cubic 커널)
-                        scale = level
-                        if scale < 0.5:
-                            # 큰 축소의 경우 더 공격적인 shrink 사용
-                            shrink_factor = max(int(1.0 / scale) + 1, 1)
-                            if shrink_factor > 1:
-                                t_shrink = time.time()
-                                work_image = work_image.shrink(shrink_factor, shrink_factor)
-                                logger.info(f"⏱️ [DEBUG] shrink x{shrink_factor}: {(time.time()-t_shrink)*1000:.0f}ms")
-                                
-                                # 추가 리사이즈가 필요한 경우만
-                                remaining_scale = scale * shrink_factor
-                                if abs(remaining_scale - 1.0) > 0.01:
-                                    t_resize = time.time()
-                                    work_image = work_image.resize(remaining_scale, vscale=remaining_scale, kernel=kernel_name)
-                                    logger.info(f"⏱️ [DEBUG] resize({kernel_name}): {(time.time()-t_resize)*1000:.0f}ms")
+                        # 최적화 2: copy_memory() 완전 제거 - 스트리밍 방식 사용
+                        # - 기존: seq_early_copy 모드에서 image.copy_memory() 호출
+                        # - 문제: 메모리 복사 오버헤드로 30-40% 속도 저하
+                        # - 개선: 스트리밍 방식으로 처리하여 메모리 복사 제거
+                        work_image = image
+                        if level < 1.0:
+                            # 최적화 3: 공격적인 shrink 로직 적용 (그리드 썸네일과 동일)
+                            # - 큰 축소(scale < 0.5)의 경우 shrink + resize 조합 사용
+                            # - shrink: 정수 배율 고속 축소 (HW 가속)
+                            # - resize: 나머지 scale 조정 (cubic 커널)
+                            scale = level
+                            if scale < 0.5:
+                                # 큰 축소의 경우 더 공격적인 shrink 사용
+                                shrink_factor = max(int(1.0 / scale) + 1, 1)
+                                if shrink_factor > 1:
+                                    work_image = work_image.shrink(shrink_factor, shrink_factor)
+                                    
+                                    # 추가 리사이즈가 필요한 경우만
+                                    remaining_scale = scale * shrink_factor
+                                    if abs(remaining_scale - 1.0) > 0.01:
+                                        work_image = work_image.resize(remaining_scale, vscale=remaining_scale, kernel=kernel_name)
+                                else:
+                                    work_image = work_image.resize(scale, vscale=scale, kernel=kernel_name)
                             else:
-                                t_resize = time.time()
+                                # 작은 축소의 경우 직접 resize
                                 work_image = work_image.resize(scale, vscale=scale, kernel=kernel_name)
-                                logger.info(f"⏱️ [DEBUG] resize({kernel_name}): {(time.time()-t_resize)*1000:.0f}ms")
-                        else:
-                            # 작은 축소의 경우 직접 resize
-                            t_resize = time.time()
-                            work_image = work_image.resize(scale, vscale=scale, kernel=kernel_name)
-                            logger.info(f"⏱️ [DEBUG] resize({kernel_name}): {(time.time()-t_resize)*1000:.0f}ms")
-                    else:
-                        logger.info("⏱️ [DEBUG] Level 1.0 - 원본 해상도 유지")
 
-                    final_w, final_h = work_image.width, work_image.height
-                    t_save = time.time()
-                    temp_target = str(temp_path)
-                    if target_format == "PNG":
-                        work_image.pngsave(
-                            temp_target,
-                            compression=png_compression,
-                            interlace=False,
-                            strip=True,
-                            effort=png_effort,
-                            keep=pyvips.enums.ForeignKeep.NONE,
-                        )
-                    elif target_format == "WEBP":
-                        work_image.webpsave(
-                            temp_target,
-                            Q=quality,
-                            lossless=False,
-                            effort=1,
-                            strip=True,
-                            smart_subsample=False,
-                        )
-                    else:
-                        # JPEG 저장 (pyvips Q95 - 벤치마크 검증 완료)
-                        # 벤치마크 결과: pyvips Q95 > TurboJPEG (24% 빠름, 58% 작음)
-                        # - pyvips Q95: 321ms, 8.4MB
-                        # - TurboJPEG Q100: 420ms, 20.2MB
-                        work_image.jpegsave(
-                            temp_target,
-                            Q=95,                      # Q=95 (그리드 썸네일과 동일, 벤치마크 최적화)
-                            strip=True,                # 메타데이터 제거
-                            optimize_coding=False,     # 속도 우선
-                            subsample_mode=1,          # 4:2:0 (가장 빠름)
-                            interlace=False            # 인터레이스 비활성화
-                        )
-                        logger.info(
-                            "⏱️ [DEBUG] 저장 완료: %.0fms (pyvips Q95)",
-                            (time.time() - t_save) * 1000.0,
-                        )
-                    _atomic_replace(temp_path, pyramid_path)
-                    _log_completion(final_w, final_h)
-                    return
-                except pyvips.Error as vips_err:  # type: ignore[attr-defined]
-                    logger.warning(f"⚠️ [PYVIPS] 오류 - Pillow 폴백 진행: {vips_err}")
-                except Exception as vips_generic:
-                    logger.exception(f"⚠️ [PYVIPS] 예기치 않은 오류 - Pillow 폴백: {vips_generic}")
+                        final_w, final_h = work_image.width, work_image.height
+                        temp_target = str(temp_path)
+                        if target_format == "PNG":
+                            work_image.pngsave(
+                                temp_target,
+                                compression=png_compression,
+                                interlace=False,
+                                strip=True,
+                                effort=png_effort,
+                                keep=pyvips.enums.ForeignKeep.NONE,
+                            )
+                        elif target_format == "WEBP":
+                            work_image.webpsave(
+                                temp_target,
+                                Q=quality,
+                                lossless=False,
+                                effort=1,
+                                strip=True,
+                                smart_subsample=False,
+                            )
+                        else:
+                            # JPEG 저장 (pyvips Q95 - 벤치마크 검증 완료)
+                            # 벤치마크 결과: pyvips Q95 > TurboJPEG (24% 빠름, 58% 작음)
+                            # - pyvips Q95: 321ms, 8.4MB
+                            # - TurboJPEG Q100: 420ms, 20.2MB
+                            try:
+                                work_image.jpegsave(
+                                    temp_target,
+                                    Q=95,                      # Q=95 (그리드 썸네일과 동일, 벤치마크 최적화)
+                                    strip=True,                # 메타데이터 제거
+                                    optimize_coding=False,     # 속도 우선
+                                    subsample_mode=1,          # 4:2:0 (가장 빠름)
+                                    interlace=False            # 인터레이스 비활성화
+                                )
+                            except pyvips.Error as jpeg_err:
+                                logger.error(f"❌ [JPEG SAVE] 저장 실패: {temp_target}, 오류: {jpeg_err}")
+                                # 디렉토리 다시 확인
+                                if not temp_path.parent.exists():
+                                    logger.error(f"❌ [JPEG SAVE] 디렉토리 없음: {temp_path.parent}")
+                                    try:
+                                        temp_path.parent.mkdir(parents=True, exist_ok=True)
+                                        work_image.jpegsave(
+                                            temp_target,
+                                            Q=95,
+                                            strip=True,
+                                            optimize_coding=False,
+                                            subsample_mode=1,
+                                            interlace=False
+                                        )
+                                    except Exception as retry_err:
+                                        logger.error(f"❌ [JPEG SAVE] 재시도 실패: {retry_err}")
+                                        raise
+                                else:
+                                    raise
+                        _atomic_replace(temp_path, pyramid_path)
+                        _log_completion(final_w, final_h)
+                        return
+                    except pyvips.Error as vips_err:  # type: ignore[attr-defined]
+                        logger.warning(f"⚠️ [PYVIPS] 오류 - Pillow 폴백 진행: {vips_err}")
+                    except Exception as vips_generic:
+                        logger.exception(f"⚠️ [PYVIPS] 예기치 않은 오류 - Pillow 폴백: {vips_generic}")
 
             from PIL import Image
 
@@ -2522,7 +2723,6 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
                 orig_w, orig_h = img.size
                 expected_w = max(1, int(orig_w * level))
                 expected_h = max(1, int(orig_h * level))
-                logger.info(f"⏱️ [DEBUG] Pillow 크기 계산 ({orig_w}x{orig_h} → {expected_w}x{expected_h})")
 
                 resample_map = {
                     "nearest": Image.Resampling.NEAREST,
@@ -2591,7 +2791,7 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float):
 _pyramid_bg_executor = ThreadPoolExecutor(max_workers=config.PYRAMID_BG_WORKERS)
 _pyramid_bg_generating = set()  # 현재 생성 중인 파일 경로
 
-async def _generate_other_levels_background(image_path: Path, current_level: float, stem: str):
+async def _generate_other_levels_background(image_path: Path, current_level: float, stem: str, personalized: bool = False, scheme: Optional[str] = None):
     """다른 피라미드 레벨들을 background에서 생성 (원본 재사용 파이프라인)"""
     format_ext = config.PYRAMID_FORMAT.lower()
     try:
@@ -2605,7 +2805,7 @@ async def _generate_other_levels_background(image_path: Path, current_level: flo
         # 레벨을 크기 순으로 정렬 (큰 레벨부터)
         other_levels.sort(reverse=True)
         
-        logger.info(f"🚀 [BG PIPELINE] Background 파이프라인 시작: levels={other_levels}")
+        logger.info(f"🚀 [BG PIPELINE] Background 파이프라인 시작: levels={other_levels}, personalized={personalized}, scheme={scheme}")
         
         # 파이프라인 실행 (ThreadPoolExecutor 사용)
         loop = asyncio.get_running_loop()
@@ -2615,7 +2815,9 @@ async def _generate_other_levels_background(image_path: Path, current_level: flo
             image_path,
             other_levels,
             stem,
-            format_ext
+            format_ext,
+            personalized,
+            scheme
         )
         
         # 결과 로깅
@@ -2635,7 +2837,7 @@ def _generate_pyramid_bg_worker(image_path: Path, pyramid_path: Path, level: flo
     """Background 워커 (ThreadPoolExecutor에서 실행)"""
     try:
         logger.info(f"🔄 [BG START] Background 피라미드 생성: level={level}, path={image_path.name}")
-        _generate_pyramid_sync(image_path, pyramid_path, level)
+        _generate_pyramid_sync(image_path, pyramid_path, level, personalized=False, scheme=None)
         logger.info(f"✅ [BG DONE] Background 피라미드 완료: level={level}")
     except Exception as e:
         logger.warning(f"⚠️ [BG ERROR] Background 생성 실패: {e}")
@@ -2643,24 +2845,82 @@ def _generate_pyramid_bg_worker(image_path: Path, pyramid_path: Path, level: flo
         _pyramid_bg_generating.discard(path_key)
 
 
-def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format_ext: str):
+def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format_ext: str, personalized: bool = False, scheme: Optional[str] = None):
     """원본 이미지를 한 번만 읽고 여러 레벨을 연속 생성하는 파이프라인"""
     import pyvips
     import time
     
     try:
-        # 원본 이미지를 한 번만 읽기
-        t_read_start = time.time()
-        original_image = pyvips.Image.new_from_file(str(image_path))
-        t_read_end = time.time()
-        logger.info(f"⏱️ [PIPELINE] 원본 읽기: {(t_read_end - t_read_start)*1000:.0f}ms")
+        # 개인색 설정 적용 (PNG인 경우에만)
+        original_image = None
+        if personalized and scheme and image_path.suffix.lower() == '.png':
+            try:
+                from PIL import Image as PILImage
+                with PILImage.open(image_path) as pil_original:
+                    if pil_original.mode != 'P':
+                        pil_original = pil_original.convert('P')
+                    
+                    legends = load_color_legends()
+                    scheme_data = legends.get(scheme)
+                    if scheme_data:
+                        from .personal_colors import get_palette_for_scheme, swap_first16_colors
+                        palette_bytes = get_palette_for_scheme(scheme_data)
+                        pil_img = swap_first16_colors(pil_original, palette_bytes)
+                        
+                        if pil_img and HAS_NUMPY:
+                            # 🔥 최적화: PIL 이미지를 RGB로 변환 후 numpy 배열로 직접 변환하여 pyvips로 전달
+                            # PNG 저장/로드 과정 제거로 속도 향상 (RGB 변환은 필요하지만 PNG I/O 제거)
+                            import numpy as np
+                            
+                            # PIL 이미지를 RGB로 변환 (팔레트가 적용된 상태)
+                            pil_rgb = pil_img.convert('RGB')
+                            
+                            # numpy 배열로 변환
+                            rgb_array = np.array(pil_rgb, dtype=np.uint8)
+                            height, width, bands = rgb_array.shape
+                            
+                            # pyvips Image로 직접 변환 (PNG 저장/로드 과정 제거)
+                            original_image = pyvips.Image.new_from_memory(
+                                rgb_array.tobytes(),
+                                width,
+                                height,
+                                bands,
+                                'uchar'
+                            )
+                            logger.info(f"🎨 [PIPELINE] 개인색 적용 완료: scheme={scheme}")
+                            
+                            try:
+                                pil_img.close()
+                                pil_rgb.close()
+                            except Exception:
+                                pass
+            except Exception as e:
+                logger.warning(f"⚠️ [PIPELINE] 개인색 적용 실패, 원본 사용: {e}")
+        
+        # 개인색 적용 실패 시 원본 로드
+        if original_image is None:
+            original_image = pyvips.Image.new_from_file(str(image_path))
         
         results = []
         
         for level in levels:
             try:
-                # 피라미드 경로 생성
-                pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
+                # 피라미드 경로 생성 (개인색 설정인 경우 scheme 포함)
+                if personalized and scheme:
+                    pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{scheme}_{int(level*100)}"
+                else:
+                    pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
+                
+                # 🔥 디렉토리 생성 안전성 강화
+                try:
+                    pyramid_dir.mkdir(parents=True, exist_ok=True)
+                    if not pyramid_dir.exists():
+                        raise OSError(f"디렉토리 생성 실패: {pyramid_dir}")
+                except OSError as dir_err:
+                    logger.error(f"❌ [PIPELINE] 디렉토리 생성 실패: {pyramid_dir}, 오류: {dir_err}")
+                    results.append((level, False, f"DIR_ERROR: {dir_err}"))
+                    continue
+                
                 pyramid_path = pyramid_dir / f"{stem}_L{int(level*100)}.{format_ext}"
                 
                 # 이미 존재하면 스킵
@@ -2683,16 +2943,12 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                     new_width = int(original_image.width * scale)
                     new_height = int(original_image.height * scale)
                     
-                    # 리사이즈 커널 선택
-                    if scale < 0.5:
-                        kernel = pyvips.enums.Kernel.MITCHELL
-                    else:
-                        kernel = pyvips.enums.Kernel.LANCZOS3
+                    # 리사이즈 커널 선택 (BICUBIC 고품질 강제)
+                    kernel = pyvips.enums.Kernel.CUBIC
                     
                     work_image = work_image.resize(scale, kernel=kernel)
                 
                 # 저장
-                t_save_start = time.time()
                 temp_path = pyramid_path.with_suffix('.tmp')
                 
                 # 포맷별 저장
@@ -2716,15 +2972,39 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                     )
                 else:  # jpeg
                     # pyvips만 사용 (TurboJPEG 제거)
-                    work_image.jpegsave(
-                        str(temp_path),
-                        Q=85,
-                        strip=True,
-                        optimize_coding=False,     # 속도 우선
-                        subsample_mode=1,          # 4:2:0 (가장 빠름)
-                        interlace=False,           # 인터레이스 비활성화
-                        trellis_quant=False        # 트렐리스 양자화 비활성화
-                    )
+                    try:
+                        work_image.jpegsave(
+                            str(temp_path),
+                            Q=85,
+                            strip=True,
+                            optimize_coding=False,     # 속도 우선
+                            subsample_mode=1,          # 4:2:0 (가장 빠름)
+                            interlace=False,           # 인터레이스 비활성화
+                            trellis_quant=False        # 트렐리스 양자화 비활성화
+                        )
+                    except pyvips.Error as jpeg_err:
+                        logger.error(f"❌ [PIPELINE JPEG] 저장 실패: {temp_path}, 오류: {jpeg_err}")
+                        # 디렉토리 다시 확인
+                        if not temp_path.parent.exists():
+                            logger.error(f"❌ [PIPELINE JPEG] 디렉토리 없음: {temp_path.parent}")
+                            try:
+                                temp_path.parent.mkdir(parents=True, exist_ok=True)
+                                work_image.jpegsave(
+                                    str(temp_path),
+                                    Q=85,
+                                    strip=True,
+                                    optimize_coding=False,
+                                    subsample_mode=1,
+                                    interlace=False,
+                                    trellis_quant=False
+                                )
+                            except Exception as retry_err:
+                                logger.error(f"❌ [PIPELINE JPEG] 재시도 실패: {retry_err}")
+                                results.append((level, False, f"JPEG_SAVE_ERROR: {retry_err}"))
+                                continue
+                        else:
+                            results.append((level, False, f"JPEG_SAVE_ERROR: {jpeg_err}"))
+                            continue
                 
                 # 임시 파일을 최종 파일로 안전하게 이동
                 # 이미 파일이 존재하면 스킵 (백그라운드에서 동시 생성 방지)
@@ -2752,8 +3032,6 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                     else:
                         raise Exception(f"파일 이동 실패: {err}")
                 else:
-                    t_save_end = time.time()
-                    logger.info(f"⏱️ [DEBUG] 저장 완료: {(t_save_end - t_save_start)*1000:.0f}ms")
                     results.append((level, True, "SUCCESS"))
                 
             except Exception as e:
@@ -2824,10 +3102,10 @@ async def get_image(
 ):
     try:
         is_head = request.method == "HEAD"
-
-        # 🎨 디버깅: 개인색 설정 파라미터 로그
-        if personalized or scheme:
-            logger.info(f"🎨 [DEBUG] get_image called - personalized={personalized}, scheme={scheme}, path={path}")
+        
+        # 🔥 개인색 설정이 활성화되었지만 scheme이 없으면 'change'로 기본값 설정
+        if personalized and not scheme:
+            scheme = 'change'
 
         # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
         if Path(path).is_absolute():
@@ -2857,7 +3135,7 @@ async def get_image(
             format_ext = config.PYRAMID_FORMAT.lower()
             content_type = f"image/{format_ext}"
             if not is_head:
-                logger.info(f"🎯 [PYRAMID MODE] 활성화됨")
+                logger.info(f"🎯 [PYRAMID MODE] 활성화됨 - personalized={personalized}, scheme={scheme}")
 
             # 레벨 검증
             if level not in config.PYRAMID_LEVELS:
@@ -2865,109 +3143,11 @@ async def get_image(
                 if not is_head:
                     logger.info(f"🎯 [LEVEL FIXED] {level}")
 
-            # 🎨 개인색 설정이 활성화되고 scheme이 지정된 경우 (PNG만 지원)
-            if personalized and scheme and image_path.suffix.lower() == '.png':
-                if not is_head:
-                    logger.info(f"🎨 [PERSONALIZED MODE] scheme={scheme}")
-
-                # 개인색 피라미드 디렉토리: thumbnails/pyramid_{scheme}_{level}/
+            # 피라미드 디렉토리 생성 (개인색 설정인 경우 scheme 포함)
+            if personalized and scheme:
                 pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{scheme}_{int(level*100)}"
-                pyramid_dir.mkdir(parents=True, exist_ok=True)
-
-                rel_path = image_path.relative_to(config.ROOT_DIR)
-                safe_filename = str(rel_path).replace("/", "_").replace("\\", "_")
-                if not safe_filename.strip():
-                    safe_filename = "unknown_image"
-
-                stem = Path(safe_filename).stem
-                stem_lower = stem.lower()
-                WINDOWS_RESERVED = {'nul', 'con', 'prn', 'aux', 'nul.', 'con.', 'prn.', 'aux.'}
-                if stem_lower in WINDOWS_RESERVED or any(stem_lower.startswith(f'{dev}') for dev in ['com', 'lpt']):
-                    stem = f"file_{stem}"
-
-                pyramid_path = pyramid_dir / f"{stem}_L{int(level*100)}.jpg"
-
-                # 캐시 확인
-                image_mtime = image_path.stat().st_mtime
-                if pyramid_path.exists() and pyramid_path.stat().st_size > 0:
-                    if pyramid_path.stat().st_mtime >= image_mtime:
-                        st = pyramid_path.stat()
-                        if not is_head:
-                            logger.info(f"✅ [PERSONALIZED CACHE HIT] {pyramid_path.name}")
-                        headers = {
-                            "Cache-Control": "public, max-age=31536000, immutable",
-                            "Content-Type": "image/jpeg",
-                            "ETag": compute_etag(st),
-                            "X-Pyramid-Level": str(level),
-                            "X-Cache-Status": "HIT",
-                            "X-Personalized": "true"
-                        }
-                        return FileResponse(pyramid_path, headers=headers)
-
-                # 캐시 미스: 방식 2로 생성 (change scheme -> BICUBIC)
-                try:
-                    legends = load_color_legends()
-                    personalized_img = prepare_personalized_image(image_path, scheme, legends)
-
-                    if personalized_img:
-                        img_rgb = None
-                        pyramid_img = None
-                        try:
-                            img_rgb = personalized_img.convert('RGB')
-                            new_w = max(1, int(img_rgb.width * level))
-                            new_h = max(1, int(img_rgb.height * level))
-                            pyramid_img = img_rgb.resize((new_w, new_h), Image.Resampling.BICUBIC)
-                            pyramid_img.save(pyramid_path, 'JPEG', quality=95)
-                        finally:
-                            try:
-                                personalized_img.close()
-                            except Exception:
-                                pass
-                            if img_rgb:
-                                try:
-                                    img_rgb.close()
-                                except Exception:
-                                    pass
-                            if pyramid_img:
-                                try:
-                                    pyramid_img.close()
-                                except Exception:
-                                    pass
-
-                        if not is_head:
-                            logger.info(f"✅ [PERSONALIZED PYRAMID SUCCESS] {pyramid_path.name}")
-
-                        st = pyramid_path.stat()
-                        headers = {
-                            "Cache-Control": "public, max-age=31536000, immutable",
-                            "Content-Type": "image/jpeg",
-                            "ETag": compute_etag(st),
-                            "X-Pyramid-Level": str(level),
-                            "X-Cache-Status": "MISS",
-                            "X-Personalized": "true"
-                        }
-                        return FileResponse(pyramid_path, headers=headers)
-
-                except Exception as e:
-                    if not is_head:
-                        logger.warning(f"개인색 피라미드 생성 실패: {e}")
-                    # 실패 시 기본 피라미드로 폴백 (아래 로직 계속 진행)
-
-            # 🚀 Level 1.0은 원본 파일 직접 반환 (최고속) - 단, 개인색이 아닌 경우만
-            if level >= 1.0 and not (personalized and scheme and image_path.suffix.lower() == '.png'):
-                if not is_head:
-                    logger.info(f"🚀 [ORIGINAL DIRECT] Level 1.0 - 원본 파일 직접 반환")
-                st = image_path.stat()
-                headers = {
-                    "Cache-Control": "public, max-age=31536000, immutable",  # 1년 캐시
-                    "ETag": compute_etag(st),
-                    "X-Pyramid-Level": "1.0",
-                    "X-Cache-Status": "ORIGINAL"
-                }
-                return FileResponse(image_path, headers=headers)
-
-            # 피라미드 디렉토리 생성
-            pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
+            else:
+                pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
             pyramid_dir.mkdir(parents=True, exist_ok=True)
 
             # 피라미드 파일 경로
@@ -2987,18 +3167,33 @@ async def get_image(
 
             pyramid_path = pyramid_dir / f"{stem}_L{int(level*100)}.{format_ext}"
 
-            # 🚀 캐시 확인: 이미 존재하고 최신이면 즉시 반환
-            import time
-            t_cache_start = time.time()
+            # 🚀 캐시 확인: 이미 존재하고 최신이면 즉시 반환 (개인색 설정 경로 확인)
             image_mtime = image_path.stat().st_mtime
+            
+            # 🔥 개인색 설정이 활성화된 경우, 비개인색 캐시는 절대 사용하지 않음
+            # 개인색 설정이 활성화되어 있으면 반드시 개인색 경로의 파일만 확인
+            if personalized and scheme:
+                if not is_head:
+                    logger.info(f"🎨 [PERSONALIZED] 개인색 설정 활성화 - scheme={scheme}, level={level}")
+                # 🔥 비개인색 경로 확인 (존재하더라도 무시)
+                non_personalized_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
+                non_personalized_path = non_personalized_dir / f"{stem}_L{int(level*100)}.{format_ext}"
+                if non_personalized_path.exists():
+                    logger.debug(f"🔍 [CACHE] 비개인색 피라미드 존재하지만 무시: {non_personalized_path}")
+            
+            # 🔥 개인색 설정이 비활성화된 경우, 개인색 경로의 파일은 무시
+            if not personalized or not scheme:
+                # 개인색 경로 확인 (존재하더라도 무시하고 비개인색 경로만 사용)
+                if not is_head:
+                    logger.debug(f"🎨 [NON-PERSONALIZED] 개인색 설정 비활성화 - 기본 피라미드 사용")
+            
             if pyramid_path.exists() and pyramid_path.stat().st_size > 0:
                 if pyramid_path.stat().st_mtime >= image_mtime:
                     st = pyramid_path.stat()
                     file_size_mb = st.st_size / (1024*1024)
                     if not is_head:
-                        logger.info(f"✅ [CACHE HIT] 파일: {file_size_mb:.1f}MB")
+                        logger.info(f"✅ [CACHE HIT] 파일: {file_size_mb:.1f}MB (personalized={personalized}, scheme={scheme})")
 
-                    t_resp_start = time.time()
                     headers = {
                         "Cache-Control": "public, max-age=31536000, immutable",
                         "Content-Type": content_type,
@@ -3008,18 +3203,54 @@ async def get_image(
                         "X-File-Size": str(st.st_size)
                     }
                     response = FileResponse(pyramid_path, headers=headers)
-                    if not is_head:
-                        logger.info(f"⏱️ [DEBUG] FileResponse 생성: {(time.time()-t_resp_start)*1000:.0f}ms")
-                        logger.info(f"⏱️ [DEBUG] 캐시 전체 시간: {(time.time()-t_cache_start)*1000:.0f}ms")
                     return response
 
             # 캐시 미스: 피라미드 이미지 생성
-            if not is_head:
-                logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}, path={pyramid_path}")
-            _generate_pyramid_sync(image_path, pyramid_path, level)
+            # 🔥 중요: 원본 이미지에 PLTE 패치를 적용한 임시 파일을 만들어서 피라미드 생성
+            if personalized and scheme and image_path.suffix.lower() == '.png':
+                if not is_head:
+                    logger.info(f"🎨 [PYRAMID] 원본 이미지에 PLTE 패치 적용 후 피라미드 생성: level={level}, path={pyramid_path}")
+                
+                import tempfile
+                import os
+                from .personal_colors import plte_inplace_patch_memory
+                
+                # 원본 이미지에 PLTE 패치 적용
+                with open(image_path, 'rb') as f:
+                    png_data = bytearray(f.read())
+                
+                png_data = plte_inplace_patch_memory(png_data, scheme)
+                
+                # 임시 파일 생성 (색상 변경된 원본)
+                temp_dir = tempfile.gettempdir()
+                temp_file = tempfile.NamedTemporaryFile(
+                    suffix='.png',
+                    dir=temp_dir,
+                    delete=False
+                )
+                temp_original_path = Path(temp_file.name)
+                temp_file.write(png_data)
+                temp_file.close()
+                
+                try:
+                    # 변경된 원본으로 피라미드 생성
+                    _generate_pyramid_sync(temp_original_path, pyramid_path, level, personalized=False, scheme=None)
+                finally:
+                    # 임시 파일 삭제
+                    try:
+                        if temp_original_path.exists():
+                            os.unlink(temp_original_path)
+                    except Exception:
+                        pass
+            else:
+                # 개인색 설정이 없으면 기존 방식대로 원본으로 피라미드 생성
+                if not is_head:
+                    logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}, path={pyramid_path}, personalized={personalized}, scheme={scheme}")
+                _generate_pyramid_sync(image_path, pyramid_path, level, personalized=personalized, scheme=scheme)
 
             # 🔥 Background에서 다른 레벨들도 생성 시작 (사용자 대기 없음)
-            asyncio.create_task(_generate_other_levels_background(image_path, level, stem))
+            # 개인별 설정이 활성화된 경우 background에서도 동일한 설정으로 생성
+            asyncio.create_task(_generate_other_levels_background(image_path, level, stem, personalized=personalized, scheme=scheme))
 
             # 생성된 파일 확인 및 반환
             if pyramid_path.exists():
@@ -3028,7 +3259,6 @@ async def get_image(
                 if not is_head:
                     logger.info(f"✅ [PYRAMID SUCCESS] 파일: {file_size_mb:.1f}MB ({st.st_size:,} bytes)")
 
-                t_resp_start = time.time()
                 headers = {
                     "Cache-Control": "public, max-age=31536000, immutable",
                     "Content-Type": content_type,
@@ -3038,19 +3268,51 @@ async def get_image(
                     "X-File-Size": str(st.st_size)
                 }
                 response = FileResponse(pyramid_path, headers=headers)
-                if not is_head:
-                    logger.info(f"⏱️ [DEBUG] FileResponse 생성: {(time.time()-t_resp_start)*1000:.0f}ms")
                 return response
             else:
                 if not is_head:
                     logger.error(f"❌ [GENERATION FAILED] {pyramid_path}")
                 raise HTTPException(status_code=500, detail="Pyramid generation failed")
         else:
-            # 원본 이미지 반환
+            # 원본 이미지 반환 (개인색 설정 적용)
             if not is_head:
-                logger.info(f"🎯 [ORIGINAL MODE] {image_path}")
+                logger.info(f"🎯 [ORIGINAL MODE] {image_path} - personalized={personalized}, scheme={scheme}")
+            
+            # 🔥 개인색 설정이 활성화되고 PNG인 경우 PLTE 패치 적용
+            if personalized and scheme and image_path.suffix.lower() == '.png':
+                try:
+                    from .personal_colors import plte_inplace_patch_memory
+                    
+                    # 원본 이미지 파일 읽기 및 PLTE 패치
+                    with open(image_path, 'rb') as f:
+                        png_data = bytearray(f.read())
+                    
+                    png_data = plte_inplace_patch_memory(png_data, scheme)
+                    
+                    # 메모리에서 직접 반환
+                    headers = {
+                        "Cache-Control": "public, max-age=3600",
+                        "Content-Type": "image/png",
+                        "X-Personalized": "true",
+                        "X-Scheme": scheme
+                    }
+                    
+                    if not is_head:
+                        logger.info(f"✅ [ORIGINAL PLTE] 색 변경 완료: {image_path.name}")
+                    
+                    return Response(content=bytes(png_data), headers=headers, media_type="image/png")
+                except Exception as e:
+                    logger.warning(f"⚠️ [ORIGINAL PLTE] PLTE 패치 실패, 원본 반환: {e}", exc_info=True)
+                    # 폴백: 원본 이미지 반환
+            
+            # 일반 원본 이미지 반환
             st = image_path.stat()
-            headers = {"Cache-Control": "public, max-age=86400", "ETag": compute_etag(st)}
+            resp_304 = maybe_304(request, st)
+            if resp_304: return resp_304
+            headers = {
+                "Cache-Control": "public, max-age=3600",
+                "ETag": compute_etag(st)
+            }
             return FileResponse(image_path, headers=headers)
 
     except Exception as e:
@@ -3066,10 +3328,10 @@ async def get_thumbnail(
     scheme: Optional[str] = None
 ):
     try:
-        # 🎨 디버깅: 개인색 설정 파라미터 로그
-        if personalized or scheme:
-            logger.info(f"🎨 [DEBUG] get_thumbnail called - personalized={personalized}, scheme={scheme}, path={path}")
-
+        # 🔥 개인색 설정이 활성화되었지만 scheme이 없으면 'change'로 기본값 설정
+        if personalized and not scheme:
+            scheme = 'change'
+            logger.info(f"🎨 [THUMBNAIL] scheme이 null이므로 'change'로 기본값 설정")
         # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
         if Path(path).is_absolute():
             # 절대 경로인 경우
@@ -3100,69 +3362,19 @@ async def get_thumbnail(
             logger.warning(f"지원하지 않는 이미지 형식: {image_path}")
             raise HTTPException(status_code=415, detail="Unsupported image format")
 
-        try:
-            # 개인색 설정이 활성화되고 scheme이 지정된 경우 (PNG만 지원)
-            if personalized and scheme and image_path.suffix.lower() == '.png':
+        # 🎨 디버깅: 개인색 설정 파라미터 및 썸네일 경로 로그
+        if personalized or scheme:
+            # 개인색 설정인 경우 썸네일 경로에 scheme 포함 여부 확인
+            if personalized and scheme:
                 relative_path = image_path.relative_to(ROOT_DIR)
                 scheme_thumb_dir = THUMBNAIL_DIR / scheme / relative_path.parent
                 scheme_thumb_path = scheme_thumb_dir / f"{relative_path.stem}_{size}x{size}.jpg"
+            else:
+                thumb_path = get_thumbnail_path(image_path, (size, size))
 
-                # 캐시 확인
-                if scheme_thumb_path.exists() and scheme_thumb_path.stat().st_size > 0:
-                    st = scheme_thumb_path.stat()
-                    resp_304 = maybe_304(request, st)
-                    if resp_304: return resp_304
-                    return FileResponse(
-                        scheme_thumb_path,
-                        media_type="image/jpeg",
-                        headers={"Cache-Control": "public, max-age=604800, immutable", "ETag": compute_etag(st)}
-                    )
-
-                # 캐시 없음: 방식 2로 생성 (change scheme -> BICUBIC)
-                try:
-                    legends = load_color_legends()
-                    personalized_img = prepare_personalized_image(image_path, scheme, legends)
-
-                    if personalized_img:
-                        img_rgb = None
-                        thumb = None
-                        try:
-                            img_rgb = personalized_img.convert('RGB')
-                            longest = max(img_rgb.width, img_rgb.height) or 1
-                            w = max(1, int(img_rgb.width * size / longest))
-                            h = max(1, int(img_rgb.height * size / longest))
-                            thumb = img_rgb.resize((w, h), Image.Resampling.BICUBIC)
-
-                            scheme_thumb_dir.mkdir(parents=True, exist_ok=True)
-                            thumb.save(scheme_thumb_path, 'JPEG', quality=100)
-                        finally:
-                            try:
-                                personalized_img.close()
-                            except Exception:
-                                pass
-                            if img_rgb:
-                                try:
-                                    img_rgb.close()
-                                except Exception:
-                                    pass
-                            if thumb:
-                                try:
-                                    thumb.close()
-                                except Exception:
-                                    pass
-
-                        st = scheme_thumb_path.stat()
-                        return FileResponse(
-                            scheme_thumb_path,
-                            media_type="image/jpeg",
-                            headers={"Cache-Control": "public, max-age=604800, immutable", "ETag": compute_etag(st)}
-                        )
-                except Exception as e:
-                    logger.warning(f"개인색 썸네일 생성 실패: {e}")
-                    # 실패 시 기본 썸네일로 폴백
-
-            # 기본 썸네일 생성
-            thumb = await generate_thumbnail(image_path, (size, size))
+        try:
+            # 기본 썸네일 생성 (개인색 설정 포함)
+            thumb = await generate_thumbnail(image_path, (size, size), personalized=personalized, scheme=scheme)
             if thumb and thumb.exists():
                 st = thumb.stat()
                 resp_304 = maybe_304(request, st)

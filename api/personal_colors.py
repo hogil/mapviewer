@@ -5,11 +5,16 @@ import copy
 import hashlib
 import json
 import logging
+import struct
+import zlib
 from pathlib import Path
 from threading import RLock
 from typing import Any, Dict, List, Optional, Tuple
 
 from PIL import Image
+
+# PIL DecompressionBombWarning 제한 해제 (큰 이미지 로드 허용)
+Image.MAX_IMAGE_PIXELS = None  # 제한 없음
 
 logger = logging.getLogger(__name__)
 
@@ -107,18 +112,32 @@ def _hex_to_rgb_triple(hex_value: str) -> Tuple[int, int, int]:
 
 
 def _scheme_to_palette_bytes(scheme: Dict[str, Any]) -> bytes:
+    """
+    Convert color scheme to palette bytes.
+    
+    change scheme의 색상을 순서대로 인덱스 0~15에 매핑:
+    - top의 색상들 순서대로 (Grade0~7)
+    - bottom의 색상들 순서대로 (Normal, Invalid, B285~8)
+    - background
+    - 총 16개 색상 (48 bytes = 16 * 3 RGB)
+    """
     palette: List[int] = []
     top = scheme.get('top', {})
     bottom = scheme.get('bottom', {})
     background = scheme.get('background', '#000000')
 
+    # top의 색상들 순서대로 (Grade0~7)
     for key in TOP_KEYS:
         palette.extend(_hex_to_rgb_triple(top.get(key, '#000000')))
+    
+    # bottom의 색상들 순서대로 (Normal, Invalid, B285~8)
     for key in BOTTOM_KEYS:
         palette.extend(_hex_to_rgb_triple(bottom.get(key, '#000000')))
+    
+    # background
     palette.extend(_hex_to_rgb_triple(background))
-
-    # fill the remaining 16th slot if needed
+    
+    # 총 16개가 되도록 채움 (8 + 6 + 1 = 15, 하나 더 필요)
     if len(palette) < 16 * 3:
         palette.extend(_hex_to_rgb_triple(background))
 
@@ -146,13 +165,24 @@ def get_palette_for_scheme(scheme_data: Dict[str, Any]) -> bytes:
 
 
 def swap_first16_colors(img: Image.Image, palette_bytes: bytes) -> Optional[Image.Image]:
-    """Swap first 16 palette slots with provided RGB bytes."""
+    """
+    Swap first 16 palette slots with provided RGB bytes.
+    
+    기존 팔레트의 처음 48바이트(인덱스 0~15의 RGB 값)를
+    scheme에서 생성한 palette_bytes로 무조건 덮어씁니다.
+    
+    이미지의 픽셀 데이터는 변경하지 않고 팔레트만 교체하므로
+    빠르고 메모리 효율적입니다.
+    
+    주의: 기존 팔레트 인덱스의 의미와 관계없이 무조건 덮어씁니다.
+    """
     if img.mode != 'P':
         return None
     palette = img.getpalette()
     if not palette:
         return None
     new_palette = palette[:]
+    # 무조건 처음 48바이트(인덱스 0~15)를 새로운 RGB 값으로 덮어쓰기
     new_palette[: len(palette_bytes)] = list(palette_bytes)
     out = img.copy()
     out.putpalette(new_palette)
@@ -185,6 +215,72 @@ def prepare_personalized_image(image_path: Path, scheme: str, legends: Dict[str,
         return None
 
 
+def plte_inplace_patch_memory(png_data: bytearray, scheme: str) -> bytearray:
+    """
+    메모리 상태에서 PLTE 인-place 패치 (O(1) 팔레트 변경).
+    
+    PNG 파일의 PLTE 청크만 수정하여 색상을 변경합니다.
+    IDAT는 재압축하지 않으므로 매우 빠릅니다.
+    
+    Args:
+        png_data: PNG 파일의 바이트 데이터 (bytearray)
+        scheme: 색상 스킴 이름 (예: 'change', 'default')
+    
+    Returns:
+        수정된 PNG 바이트 데이터 (bytearray)
+    """
+    legends = load_color_legends()
+    scheme_data = legends.get(scheme)
+    if not scheme_data:
+        scheme_data = list(legends.values())[0] if legends else None
+        if not scheme_data:
+            raise ValueError(f"scheme 데이터 없음: {scheme}")
+    
+    palette_bytes = get_palette_for_scheme(scheme_data)
+    new_palette = list(palette_bytes)
+    
+    # PNG 청크 찾기
+    pos = 8  # PNG 시그니처 건너뛰기
+    
+    while pos < len(png_data):
+        if pos + 4 > len(png_data):
+            break
+        chunk_length = struct.unpack('>I', png_data[pos:pos+4])[0]
+        pos += 4
+        
+        if pos + 4 > len(png_data):
+            break
+        chunk_type = png_data[pos:pos+4]
+        pos += 4
+        
+        if chunk_type == b'PLTE':
+            # PLTE 데이터 수정
+            plte_start = pos
+            plte_end = pos + chunk_length
+            
+            # 기존 PLTE 데이터 읽기
+            current_plte = list(png_data[plte_start:plte_end])
+            
+            # 인덱스 0~15의 RGB 값 교체 (48바이트)
+            new_plte = current_plte[:]
+            new_plte[:48] = new_palette[:48]  # ← 여기서 색상 교체
+            
+            # PLTE 데이터 교체
+            png_data[plte_start:plte_end] = new_plte
+            
+            # CRC 재계산 및 수정
+            crc_data = chunk_type + bytes(new_plte)
+            crc = zlib.crc32(crc_data) & 0xffffffff
+            
+            if plte_end + 4 <= len(png_data):
+                png_data[plte_end:plte_end+4] = struct.pack('>I', crc)
+            break
+        
+        pos += chunk_length + 4
+    
+    return png_data
+
+
 __all__ = [
     "load_color_legends",
     "save_color_legends",
@@ -192,4 +288,5 @@ __all__ = [
     "prepare_personalized_image",
     "apply_personalized_palette",
     "swap_first16_colors",
+    "plte_inplace_patch_memory",
 ]
