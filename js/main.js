@@ -5409,7 +5409,7 @@ class WaferMapViewer {
 
             start = getScrollAdjusted(e.clientX, e.clientY);
 
-            // 🔥 드래그 시작 시 기존 선택 초기화 (Ctrl 키가 아닐 때만)
+            // 🔥 드래그 시작 시 즉시 기존 선택 초기화 (Ctrl 키가 아닐 때만)
             if (!e.ctrlKey && !e.shiftKey) {
                 // 기존 선택 해제
                 this.selectedImages = [];
@@ -5422,6 +5422,9 @@ class WaferMapViewer {
                 container.querySelectorAll('summary.folder.selected').forEach(s => {
                     s.classList.remove('selected');
                 });
+                
+                // 🔥 즉시 UI 업데이트하여 선택 해제 상태를 반영
+                this.updateFileExplorerSelection();
             }
 
             overlay.style.left = start.x + 'px';
