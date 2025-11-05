@@ -1270,6 +1270,15 @@ async def saml_acs(request: Request):
         meta["saml_attributes"] = attrs
         # LoginId 기준으로 저장
         SAML_USER_SESSIONS[LoginId] = meta
+        
+        # 🔥 SAML 로그인 직후 color scheme 생성 (LoginId, Username, DeptName)
+        try:
+            username = meta.get("Username", "")
+            dept_name = meta.get("DeptName", "")
+            get_user_color_scheme(LoginId, username if username else None, dept_name if dept_name else None)
+            bootlog.info(f"✅ [SAML LOGIN] Color scheme 생성 완료: LoginId={LoginId}, Username={username}, DeptName={dept_name}")
+        except Exception as e:
+            bootlog.warning(f"⚠️ [SAML LOGIN] Color scheme 생성 실패: {e}")
     except Exception as e:
         bootlog.error(f"❌ [SAML SESSION] 사용자 정보 저장 실패: {e}")
     
@@ -1340,6 +1349,15 @@ async def saml_dev_login(request: Request):
         if LoginId:
             # LoginId 기준으로 저장
             SAML_USER_SESSIONS[LoginId] = meta
+            
+            # 🔥 개발 모드 로그인 직후 color scheme 생성 (LoginId, Username, DeptName)
+            try:
+                username = meta.get("Username", "")
+                dept_name = meta.get("DeptName", "")
+                get_user_color_scheme(LoginId, username if username else None, dept_name if dept_name else None)
+                logger.info(f"✅ [DEV LOGIN] Color scheme 생성 완료: LoginId={LoginId}, Username={username}, DeptName={dept_name}")
+            except Exception as e:
+                logger.warning(f"⚠️ [DEV LOGIN] Color scheme 생성 실패: {e}")
         else:
             logger.warning(f"⚠️ [DEV SESSION] LoginId가 없어서 저장하지 않음")
     except Exception as e:

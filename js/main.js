@@ -12461,13 +12461,31 @@ class WaferMapViewer {
         // Render top legend first, then bottom legend
         let html = '';
         
+        // 레이블 축약 함수
+        const shortenLabel = (label) => {
+            // Grade0, Grade1 등 → G0, G1
+            if (label.startsWith('Grade')) {
+                return label.replace('Grade', 'G');
+            }
+            // Normal → nor
+            if (label === 'Normal') {
+                return 'nor';
+            }
+            // Invalid → inv
+            if (label === 'Invalid') {
+                return 'inv';
+            }
+            // 나머지는 그대로
+            return label;
+        };
+        
         // Top legend 그룹 (좌측 정렬)
         html += '<div class="legend-group-top">';
         if (userData.top && typeof userData.top === 'object') {
             const topHtml = Object.entries(userData.top).map(([label, color]) => `
                 <div class="legend-item-grid">
                     <div class="legend-color-bar-grid" style="background-color: ${color};"></div>
-                    <span class="legend-label-grid">${label}</span>
+                    <span class="legend-label-grid">${shortenLabel(label)}</span>
                 </div>
             `).join('');
             html += topHtml;
@@ -12480,7 +12498,7 @@ class WaferMapViewer {
             const bottomHtml = Object.entries(userData.bottom).map(([label, color]) => `
                 <div class="legend-item-grid">
                     <div class="legend-color-bar-grid" style="background-color: ${color};"></div>
-                    <span class="legend-label-grid">${label}</span>
+                    <span class="legend-label-grid">${shortenLabel(label)}</span>
                 </div>
             `).join('');
             html += bottomHtml;
