@@ -139,35 +139,32 @@ def _scheme_to_palette_bytes(scheme: Dict[str, Any]) -> bytes:
     """
     Convert color scheme to palette bytes.
     
-    change scheme의 색상을 순서대로 인덱스 0~15에 매핑:
-    - top의 색상들 순서대로 (Grade0~7)
-    - bottom의 색상들 순서대로 (Normal, Invalid, B285~8)
-    - background
+    scheme의 색상을 순서대로 인덱스 0~15에 매핑:
+    - top의 색상들 순서대로 (Grade0~7) → 인덱스 0~7
+    - bottom의 색상들 순서대로 (Normal, Invalid, B285~8) → 인덱스 8~13
+    - background → 인덱스 14
+    - text → 인덱스 15
     - 총 16개 색상 (48 bytes = 16 * 3 RGB)
     """
     palette: List[int] = []
     top = scheme.get('top', {})
     bottom = scheme.get('bottom', {})
     background = scheme.get('background', '#000000')
+    text = scheme.get('text', '#000001')
 
-    # top의 색상들 순서대로 (Grade0~7)
+    # top의 색상들 순서대로 (Grade0~7) → 인덱스 0~7
     for key in TOP_KEYS:
         palette.extend(_hex_to_rgb_triple(top.get(key, '#000000')))
     
-    # bottom의 색상들 순서대로 (Normal, Invalid, B285~8)
+    # bottom의 색상들 순서대로 (Normal, Invalid, B285~8) → 인덱스 8~13
     for key in BOTTOM_KEYS:
         palette.extend(_hex_to_rgb_triple(bottom.get(key, '#000000')))
     
-    # background
+    # background → 인덱스 14
     palette.extend(_hex_to_rgb_triple(background))
     
-    # 총 16개가 되도록 채움 (8 + 6 + 1 = 15, 하나 더 필요)
-    if len(palette) < 16 * 3:
-        palette.extend(_hex_to_rgb_triple(background))
-
-    # ensure total length covers first 16 palette entries (16 * 3)
-    if len(palette) < 16 * 3:
-        palette.extend([0, 0, 0] * (16 - len(palette) // 3))
+    # text → 인덱스 15
+    palette.extend(_hex_to_rgb_triple(text))
 
     return bytes(palette[: 16 * 3])
 
