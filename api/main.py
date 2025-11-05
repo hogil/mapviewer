@@ -3331,7 +3331,7 @@ async def get_thumbnail(
         # 🔥 개인색 설정이 활성화되었지만 scheme이 없으면 'change'로 기본값 설정
         if personalized and not scheme:
             scheme = 'change'
-            logger.info(f"🎨 [THUMBNAIL] scheme이 null이므로 'change'로 기본값 설정")
+
         # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
         if Path(path).is_absolute():
             # 절대 경로인 경우
@@ -3361,16 +3361,6 @@ async def get_thumbnail(
         if not is_supported_image(image_path):
             logger.warning(f"지원하지 않는 이미지 형식: {image_path}")
             raise HTTPException(status_code=415, detail="Unsupported image format")
-
-        # 🎨 디버깅: 개인색 설정 파라미터 및 썸네일 경로 로그
-        if personalized or scheme:
-            # 개인색 설정인 경우 썸네일 경로에 scheme 포함 여부 확인
-            if personalized and scheme:
-                relative_path = image_path.relative_to(ROOT_DIR)
-                scheme_thumb_dir = THUMBNAIL_DIR / scheme / relative_path.parent
-                scheme_thumb_path = scheme_thumb_dir / f"{relative_path.stem}_{size}x{size}.jpg"
-            else:
-                thumb_path = get_thumbnail_path(image_path, (size, size))
 
         try:
             # 기본 썸네일 생성 (개인색 설정 포함)
