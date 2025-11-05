@@ -96,15 +96,14 @@ def get_user_color_scheme(login_id: Optional[str], username: Optional[str] = Non
         dept_name: 사용자 DeptName (선택)
     
     Returns:
-        scheme key (LoginId, Username, DeptName 또는 'change')
+        scheme key (LoginId 또는 'change')
     """
     if not login_id:
         return 'change'
 
     legends = load_color_legends()
-    needs_save = False
     
-    # LoginId가 이미 있으면 반환
+    # LoginId가 이미 있으면 반환 (이미 존재하면 생성하지 않음)
     if login_id in legends:
         return login_id
     
@@ -113,35 +112,20 @@ def get_user_color_scheme(login_id: Optional[str], username: Optional[str] = Non
         logger.warning("default scheme 없음, change로 대체: LoginId=%s", login_id)
         return 'change'
     
-    # LoginId scheme 생성
+    # LoginId scheme만 생성 (존재하지 않을 때만)
+    # default의 top, bottom, background, text value를 복사
     legends[login_id] = copy.deepcopy(legends['default'])
-    needs_save = True
-    logger.info("새 color scheme 생성: %s (from default)", login_id)
     
-    # Username이 있고 scheme에 없으면 생성
-    if username and username not in legends:
-        legends[username] = copy.deepcopy(legends['default'])
-        legends[username]['Username'] = username
-        needs_save = True
-        logger.info("새 color scheme 생성: %s (from default)", username)
-    
-    # DeptName이 있고 scheme에 없으면 생성
-    if dept_name and dept_name not in legends:
-        legends[dept_name] = copy.deepcopy(legends['default'])
-        legends[dept_name]['DeptName'] = dept_name
-        needs_save = True
-        logger.info("새 color scheme 생성: %s (from default)", dept_name)
-    
-    # LoginId scheme에도 Username과 DeptName 메타데이터 추가
+    # LoginId scheme에 Username과 DeptName 메타데이터 추가
     if username:
         legends[login_id]['Username'] = username
     if dept_name:
         legends[login_id]['DeptName'] = dept_name
     
     # 변경사항 저장
-    if needs_save:
-        save_color_legends(legends)
-        logger.info("color-legends.json 저장 완료: LoginId=%s, Username=%s, DeptName=%s", login_id, username, dept_name)
+    save_color_legends(legends)
+    logger.info("새 color scheme 생성: %s (from default, Username=%s, DeptName=%s)", 
+                login_id, username or 'None', dept_name or 'None')
     
     return login_id
 
