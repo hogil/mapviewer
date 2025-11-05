@@ -87,15 +87,39 @@ def normalize_hex_color(value: str) -> str:
     return normalized
 
 
-def get_user_color_scheme(login_id: Optional[str]) -> str:
-    """Resolve scheme key for a user. Anonymous users default to 'change'."""
+def get_user_color_scheme(login_id: Optional[str], username: Optional[str] = None, dept_name: Optional[str] = None) -> str:
+    """Resolve scheme key for a user. Anonymous users default to 'change'.
+    
+    Args:
+        login_id: 사용자 LoginId
+        username: 사용자 Username (선택)
+        dept_name: 사용자 DeptName (선택)
+    
+    Returns:
+        scheme key (LoginId, Username, DeptName 또는 'change')
+    """
     if not login_id:
         return 'change'
 
     legends = load_color_legends()
+    
+    # LoginId가 이미 있으면 반환
     if login_id in legends:
         return login_id
-
+    
+    # Username이 있고 scheme에 없으면 생성
+    if username and username not in legends:
+        if 'default' in legends:
+            legends[username] = copy.deepcopy(legends['default'])
+            logger.info("새 color scheme 생성: %s (from default)", username)
+    
+    # DeptName이 있고 scheme에 없으면 생성
+    if dept_name and dept_name not in legends:
+        if 'default' in legends:
+            legends[dept_name] = copy.deepcopy(legends['default'])
+            logger.info("새 color scheme 생성: %s (from default)", dept_name)
+    
+    # LoginId scheme 생성
     if 'default' in legends:
         legends[login_id] = copy.deepcopy(legends['default'])
         save_color_legends(legends)

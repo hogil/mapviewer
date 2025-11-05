@@ -1398,8 +1398,10 @@ async def api_auth_user(request: Request, LoginId: Optional[str] = None):
             
             # 🔥 보안: Sabun은 프론트엔드로 전달하지 않음 (미사용 필드)
             login_id = user_info.get("LoginId", "")
-            # 개인색 설정을 위한 color scheme 결정
-            color_scheme = get_user_color_scheme(login_id) if login_id else None
+            username = user_info.get("Username", "")
+            dept_name = user_info.get("DeptName", "")
+            # 개인색 설정을 위한 color scheme 결정 (LoginId, Username, DeptName 모두 scheme 생성)
+            color_scheme = get_user_color_scheme(login_id, username, dept_name) if login_id else None
 
             return {
                 "authenticated": True,
@@ -1460,7 +1462,14 @@ async def save_color_scheme(request: Request):
         legends = load_color_legends()
         
         # 새로운 스킴 데이터 저장
-        legends[scheme_name] = scheme_data
+        # 색상 편집에는 top, bottom, background, text만 사용 (다른 필드 제거)
+        filtered_scheme_data = {
+            'top': scheme_data.get('top', {}),
+            'bottom': scheme_data.get('bottom', {}),
+            'background': scheme_data.get('background', '#FEFEFE'),
+            'text': scheme_data.get('text', '#000001')
+        }
+        legends[scheme_name] = filtered_scheme_data
         
         # 파일에 저장
         if save_color_legends(legends):

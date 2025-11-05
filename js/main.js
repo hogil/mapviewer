@@ -582,11 +582,12 @@ class WaferMapViewer {
             subfolderSearch: document.getElementById('subfolder-search'),
             subfolderDropdown: document.getElementById('subfolder-dropdown'),
             filterTestSelect: document.getElementById('filter-test-select'),
-            personalizedColorButton: document.getElementById('personalized-color-editor-btn'),
+            personalizedColorButton: document.getElementById('personalized-color-button'),
             personalizedColorCheckbox: document.getElementById('personalized-color-checkbox'),
 
             colorLegendTop: document.getElementById('color-legend-top'),
             colorLegendBottom: document.getElementById('color-legend-bottom'),
+            gridColorLegendBottom: document.getElementById('grid-color-legend-bottom'),
 
             refreshBtn: document.getElementById('refresh-btn'),
 
@@ -3140,7 +3141,7 @@ class WaferMapViewer {
             console.warn('⚠️ [DEBUG] personalizedColorButton을 찾을 수 없습니다.');
             // 나중에 다시 시도
             setTimeout(() => {
-                const btn = document.getElementById('personalized-color-editor-btn');
+                const btn = document.getElementById('personalized-color-button');
                 if (btn) {
                     console.log('✅ [DEBUG] 지연 로딩으로 버튼 발견됨');
                     this.dom.personalizedColorButton = btn;
@@ -3405,7 +3406,6 @@ class WaferMapViewer {
         // 🎨 Color Legends 초기 렌더링 (백그라운드 작업 완료 대기)
         await Promise.allSettled(backgroundInitTasks);
         this.renderColorLegends();
-        console.log('🎨 [INIT] Color legends rendered');
     }
 
     // 🔥 서버 설정 로드 (피라미드 레벨, zoom 기준 등)
@@ -3466,6 +3466,9 @@ class WaferMapViewer {
 
                 // currentUser 설정 (개인색 scheme용)
                 this.currentUser = initialLoginIdFromUrl;
+                // 사용자 정보 저장 (색상 편집 검색용)
+                this.username = initialUsernameFromUrl;
+                this.deptName = initialDeptNameFromUrl;
                 console.log('✅ [USER INFO SAML] currentUser set to:', this.currentUser);
 
                 if (!userInfoEl.innerHTML.includes(newInfo)) {
@@ -3480,6 +3483,9 @@ class WaferMapViewer {
 
                 // currentUser 설정 (개인색 scheme용)
                 this.currentUser = initialLoginIdFromUrl;
+                // 사용자 정보 저장 (색상 편집 검색용)
+                this.username = initialUsernameFromUrl;
+                this.deptName = initialDeptNameFromUrl;
                 console.log('✅ [USER INFO DEV] currentUser set to:', this.currentUser);
 
                 if (!userInfoEl.innerHTML.includes(newInfo)) {
@@ -3526,6 +3532,9 @@ class WaferMapViewer {
                         <div style="font-size: 10px; color: #666;">${data.DeptName || 'Anonymous'}</div>
                     `;
                 }
+                // 사용자 정보 저장 (색상 편집 검색용)
+                this.username = data.Username;
+                this.deptName = data.DeptName;
             }
         } catch (error) {
             console.error('[DEBUG] 사용자 정보 로드 오류:', error);
@@ -3837,9 +3846,6 @@ class WaferMapViewer {
             }
 
             // 서버 검색 API 사용: 프런트는 결과만 표시
-            console.info('🔍 [SEARCH DEBUG] currentFolderPath:', this.currentFolderPath);
-            console.info('🔍 [SEARCH DEBUG] 검색어:', fileQuery);
-
             const searchUrl = `/api/search?q=${encodeURIComponent(fileQuery)}`;
             const res = await fetch(searchUrl);
             if (!res.ok) {
@@ -3847,7 +3853,6 @@ class WaferMapViewer {
             }
 
             const data = await res.json();
-            console.info('🔍 [SEARCH DEBUG] 검색 결과 수:', data.results?.length || 0);
             if (!data || !data.success || !Array.isArray(data.results)) {
                 throw new Error('검색 응답 형식이 올바르지 않습니다.');
             }
@@ -3884,10 +3889,6 @@ class WaferMapViewer {
                     }
                     return true;
                 });
-            }
-
-            if (matchedImages.length > 0) {
-                console.info('🔍 [SEARCH DEBUG] 변환된 첫 번째 결과:', matchedImages[0]);
             }
 
             const endTime = performance.now();
@@ -5409,24 +5410,6 @@ class WaferMapViewer {
 
             start = getScrollAdjusted(e.clientX, e.clientY);
 
-            // 🔥 드래그 시작 시 즉시 기존 선택 초기화 (Ctrl 키가 아닐 때만)
-            if (!e.ctrlKey && !e.shiftKey) {
-                // 기존 선택 해제
-                this.selectedImages = [];
-                this.selectedFolders = new Set();
-                
-                // UI에서 선택 표시 제거
-                container.querySelectorAll('a[data-path].selected').forEach(a => {
-                    a.classList.remove('selected');
-                });
-                container.querySelectorAll('summary.folder.selected').forEach(s => {
-                    s.classList.remove('selected');
-                });
-                
-                // 🔥 즉시 UI 업데이트하여 선택 해제 상태를 반영
-                this.updateFileExplorerSelection();
-            }
-
             overlay.style.left = start.x + 'px';
 
             overlay.style.top = start.y + 'px';
@@ -5458,6 +5441,21 @@ class WaferMapViewer {
             overlay.style.height = height + 'px';
         };
 
+        const intersects = (el, dragLeft, dragTop, dragRight, dragBottom) => {
+            const elRect = el.getBoundingClientRect();
+            const contRect = container.getBoundingClientRect();
+            const left = elRect.left - contRect.left + container.scrollLeft;
+            const top = elRect.top - contRect.top + container.scrollTop;
+            const right = left + elRect.width;
+            const bottom = top + elRect.height;
+
+            return (
+
+                dragRight >= left && dragLeft <= right && dragBottom >= top && dragTop <= bottom
+
+            );
+        };
+
         const onMouseUp = async (e) => {
             if (!dragging) return;
 
@@ -5483,31 +5481,11 @@ class WaferMapViewer {
             }
 
             // 교차 요소 수집
+
             const fileLinks = Array.from(container.querySelectorAll('a[data-path]'));
             const folderSummaries = Array.from(container.querySelectorAll('summary.folder'));
-            
-            // 🔥 드래그 박스와 교차하는 요소만 선택 (폴더 내부도 포함)
-            const hitFiles = fileLinks.filter(a => {
-                const rect = a.getBoundingClientRect();
-                const contRect = container.getBoundingClientRect();
-                const left = rect.left - contRect.left + container.scrollLeft;
-                const top = rect.top - contRect.top + container.scrollTop;
-                const right = left + rect.width;
-                const bottom = top + rect.height;
-                
-                return dragRight >= left && dragLeft <= right && dragBottom >= top && dragTop <= bottom;
-            }).map(a => a.dataset.path);
-            
-            const hitFolders = folderSummaries.filter(s => {
-                const rect = s.getBoundingClientRect();
-                const contRect = container.getBoundingClientRect();
-                const left = rect.left - contRect.left + container.scrollLeft;
-                const top = rect.top - contRect.top + container.scrollTop;
-                const right = left + rect.width;
-                const bottom = top + rect.height;
-                
-                return dragRight >= left && dragLeft <= right && dragBottom >= top && dragTop <= bottom;
-            });
+            const hitFiles = fileLinks.filter(a => intersects(a, dragLeft, dragTop, dragRight, dragBottom)).map(a => a.dataset.path);
+            const hitFolders = folderSummaries.filter(s => intersects(s, dragLeft, dragTop, dragRight, dragBottom));
 
             // 🔥 Label Explorer 선택만 해제 (savedViewState는 유지)
 
@@ -5554,30 +5532,30 @@ class WaferMapViewer {
                     }
                 }
             } else {
-                // 🔥 Ctrl 키가 아닐 때: 기존 선택 완전히 해제하고 드래그 범위만 선택
-                // 모든 파일 선택 클래스 초기화
-                container.querySelectorAll('a[data-path].selected').forEach(a => {
-                    a.classList.remove('selected');
-                });
+                // 교체 선택
 
-                // 모든 폴더 선택 클래스 초기화
-                container.querySelectorAll('summary.folder.selected').forEach(s => {
-                    s.classList.remove('selected');
-                });
-
-                // 파일 선택 교체 (드래그 범위 내 파일만)
                 this.selectedImages = hitFiles;
 
-                // 폴더 선택 교체 (드래그 선택에서는 폴더 전체를 선택하지 않음)
+                // 폴더 선택 교체
+
                 this.selectedFolders = new Set();
 
-                // 🔥 드래그 범위 내 파일만 선택 표시 (폴더는 선택하지 않음)
-                hitFiles.forEach(path => {
-                    const fileLink = fileLinks.find(a => a.dataset.path === path);
-                    if (fileLink) {
-                        fileLink.classList.add('selected');
-                    }
-                });
+                // 요약 선택 클래스 초기화
+
+                container.querySelectorAll('summary.folder.selected').forEach(s => s.classList.remove('selected'));
+
+                // 폴더 파일 추가 선택
+
+                for (const s of hitFolders) {
+                    const path = s.dataset.path;
+
+                    s.classList.add('selected');
+
+                    this.selectedFolders.add(path);
+
+                    await this.selectAllFolderFiles(path);
+
+                }
             }
 
             // UI 업데이트 및 그리드/이미지 표시 갱신
@@ -5940,8 +5918,6 @@ class WaferMapViewer {
 
         const personalizedParams = this.getPersonalizedParams();
         const url = `/api/image?path=${encodeURIComponent(fullPath)}&level=${initialLevel}${personalizedParams}`;
-        console.log('🌐 [REQUEST] Fetching image:', url);
-        console.log('🎨 [IMAGE LOAD] personalizedParams:', personalizedParams, '| enabled:', this.personalizedColorEnabled, '| currentUser:', this.currentUser);
         const tFetchStart = performance.now();
         timeline.imageFetchStart = tFetchStart;
 
@@ -7031,24 +7007,15 @@ class WaferMapViewer {
     }
 
     async getClassList(force = false) {
-        console.log('🔍 [GET_CLASS_LIST_DEBUG] 호출됨, force:', force);
-        console.log('🔍 [GET_CLASS_LIST_DEBUG] cachedClassList:', this.cachedClassList);
-        console.log('🔍 [GET_CLASS_LIST_DEBUG] classListPromise:', this.classListPromise);
-        
         if (!force && this.cachedClassList && this.cachedClassList.length >= 0) {
-            console.log('🔍 [GET_CLASS_LIST_DEBUG] 캐시된 클래스 목록 반환:', this.cachedClassList);
             return this.cachedClassList;
         }
         if (!force && this.classListPromise) {
-            console.log('🔍 [GET_CLASS_LIST_DEBUG] 진행 중인 Promise 반환');
             return this.classListPromise;
         }
 
         const currentFolder = this.currentFolderPrefix;
         const apiUrl = currentFolder ? `/api/classes?folder=${encodeURIComponent(currentFolder)}` : '/api/classes';
-        
-        console.log('🔍 [GET_CLASS_LIST_DEBUG] API 호출:', apiUrl);
-        console.log('🔍 [GET_CLASS_LIST_DEBUG] currentFolderPrefix:', currentFolder);
 
         const fetchPromise = (async () => {
             try {
@@ -7060,10 +7027,9 @@ class WaferMapViewer {
                     ? data.classes.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
                     : [];
                 this.cachedClassList = classes;
-                console.log('🔍 [GET_CLASS_LIST_DEBUG] API 응답 성공, 클래스 수:', classes.length);
                 return classes;
             } catch (error) {
-                console.error('🔍 [GET_CLASS_LIST_DEBUG] 클래스 목록 조회 실패:', error);
+                console.error('클래스 목록 조회 실패:', error);
                 if (!this.cachedClassList) {
                     this.cachedClassList = [];
                 }
@@ -8322,18 +8288,15 @@ class WaferMapViewer {
         // 🔥 Label Explorer 새로고침 활성화
         // 🔥 중복 호출 방지
         if (this._isRefreshingLabelExplorer) {
-            console.log('🔍 [LABEL_EXPLORER_DEBUG] 중복 호출 방지됨');
             return;
         }
 
         this._isRefreshingLabelExplorer = true;
-        console.log('🔍 [LABEL_EXPLORER_DEBUG] 새로고침 시작');
 
         try {
             const container = document.getElementById('label-explorer-list');
 
         if (!container) {
-            console.warn('🔍 [LABEL_EXPLORER_DEBUG] Label Explorer container not found');
             return;
         }
 
@@ -8341,8 +8304,6 @@ class WaferMapViewer {
 
         // 기존 내용을 임시로 저장하여 스크롤 위치 유지
         const existingContent = container.innerHTML;
-
-        console.log('🔍 [LABEL_EXPLORER_DEBUG] 기존 내용 길이:', existingContent.length);
 
         this.debugLog('Label Explorer 새로고침 시작...');
 
@@ -8872,15 +8833,10 @@ class WaferMapViewer {
         } finally {
             // 🔥 중복 호출 방지 플래그 해제
             this._isRefreshingLabelExplorer = false;
-            console.log('🔍 [LABEL_EXPLORER_DEBUG] 새로고침 완료');
         }
     }
 
     renderLabelExplorerContent(container, classes, classToImgList, labelSelection) {
-        console.log('🔍 [RENDER_DEBUG] renderLabelExplorerContent 시작');
-        console.log('🔍 [RENDER_DEBUG] classes:', classes);
-        console.log('🔍 [RENDER_DEBUG] classToImgList keys:', Object.keys(classToImgList));
-        
         container.innerHTML = '';
 
         // 전체 이미지들의 평평한 리스트 생성 (shift 선택용)
@@ -9995,26 +9951,19 @@ class WaferMapViewer {
 
     updateLabelExplorerContent() {
         // 🔥 폴더 열기/닫기 시 전체 내용 다시 렌더링
-        console.log('🔍 [UPDATE_CONTENT_DEBUG] updateLabelExplorerContent 시작');
-
         const container = document.getElementById('label-explorer-list');
 
         if (!container) {
-            console.warn('🔍 [UPDATE_CONTENT_DEBUG] container not found');
             return;
         }
 
         const scrollTop = container.scrollTop;
 
         // 클래스 목록 다시 가져오기
-        console.log('🔍 [UPDATE_CONTENT_DEBUG] refreshClassList 호출');
         this.refreshClassList().then(async () => {
             // 🔥 refreshClassList()에서 캐시된 클래스 목록 사용 (중복 API 호출 제거)
             const classes = Array.isArray(this.cachedClassList) ? this.cachedClassList.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())) : [];
             const labelSelection = this.labelSelection;
-
-            console.log('🔍 [UPDATE_CONTENT_DEBUG] 클래스 수:', classes.length);
-            console.log('🔍 [UPDATE_CONTENT_DEBUG] 클래스 목록:', classes);
 
             // classToImgList 재구성 (이미 로드된 것들만)
             let classToImgList = {};
@@ -10023,16 +9972,11 @@ class WaferMapViewer {
                 classToImgList[cls] = this.classToImgListCache?.[cls] || [];
             }
 
-            console.log('🔍 [UPDATE_CONTENT_DEBUG] classToImgList keys:', Object.keys(classToImgList));
-
             // 전체 내용 다시 렌더링
-            console.log('🔍 [UPDATE_CONTENT_DEBUG] renderLabelExplorerContent 호출');
             this.renderLabelExplorerContent(container, classes, classToImgList, labelSelection);
         
         // 스크롤 위치 복원
             container.scrollTop = scrollTop;
-
-            console.log('🔍 [UPDATE_CONTENT_DEBUG] Label Explorer 내용 업데이트 완료');
         });
     }
 
@@ -10501,8 +10445,8 @@ class WaferMapViewer {
         const viewControls = document.querySelector('.view-controls');
         if (viewControls) viewControls.style.display = 'none';
 
-        // 🎨 Color Legends 숨기기 (Grid Mode)
-        this.hideColorLegends();
+        // 🎨 Color Legends 업데이트 (Grid Mode)
+        this.showColorLegends();
 
         // 그리드 모드 클래스 추가 및 요소들 숨기기
         this.dom.viewerContainer.classList.add('grid-mode');
@@ -10639,9 +10583,6 @@ class WaferMapViewer {
 
             const personalizedParams = this.getPersonalizedParams();
             const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}`;
-            if (idx === 0) {
-                console.log('🌐 [REQUEST] Loading thumbnail:', thumbnailUrl);
-            }
             img.src = thumbnailUrl;
             thumbBox.appendChild(img);
             wrap.appendChild(thumbBox);
@@ -11790,20 +11731,13 @@ class WaferMapViewer {
     }
 
     clearGridSelection() {
-        console.time('🔍 clearGridSelection');
-
         // 🔥 최적화: 선택된 요소만 찾아서 클래스 제거 (전체 순회 방지)
         const grid = document.getElementById('image-grid');
         if (grid) {
-            console.time('🔍 querySelectorAll');
             const selectedWraps = grid.querySelectorAll('.grid-thumb-wrap.selected');
-            console.timeEnd('🔍 querySelectorAll');
-
-            console.time('🔍 removeClass');
             selectedWraps.forEach(wrap => {
                 wrap.classList.remove('selected');
             });
-            console.timeEnd('🔍 removeClass');
         }
 
         this.gridSelectedIdxs = [];
@@ -11811,8 +11745,6 @@ class WaferMapViewer {
 
         // 🔥 savedViewState 업데이트 제거 (배열 복사가 느림)
         // 전체 해제 시에는 상태 업데이트 불필요
-
-        console.timeEnd('🔍 clearGridSelection');
     }
 
     selectAllGridImages() {
@@ -12403,13 +12335,20 @@ class WaferMapViewer {
      * Render color legends for the current user
      */
     renderColorLegends() {
-        console.log('🎨 [LEGEND] renderColorLegends called');
-        console.log('🎨 [LEGEND] personalizedColorEnabled:', this.personalizedColorEnabled);
-        console.log('🎨 [LEGEND] currentUser:', this.currentUser);
-        console.log('🎨 [LEGEND] colorLegends:', this.colorLegends);
-
-        if (!this.colorLegends || !this.dom.colorLegendTop || !this.dom.colorLegendBottom) {
-            console.warn('⚠️ [LEGEND] Missing data or DOM elements');
+        if (!this.colorLegends) {
+            return;
+        }
+        
+        // 그리드 모드일 때는 grid legend만 렌더링
+        if (this.gridMode) {
+            if (this.dom.gridColorLegendBottom) {
+                this.renderGridColorLegend();
+            }
+            return;
+        }
+        
+        // 단일 이미지 모드일 때는 기존 legend 렌더링
+        if (!this.dom.colorLegendTop || !this.dom.colorLegendBottom) {
             return;
         }
 
@@ -12419,16 +12358,13 @@ class WaferMapViewer {
         if (this.personalizedColorEnabled) {
             // 개인색 설정이 활성화되어 있으면: LoginId가 있으면 LoginId 사용, 없으면 'change' 사용
             schemeToUse = this.currentUser || 'change';
-            console.log('🎨 [LEGEND] 개인색 활성화 - scheme:', schemeToUse);
         } else {
             // 개인색 설정이 비활성화되어 있으면 항상 'default' 사용
             schemeToUse = 'default';
-            console.log('🎨 [LEGEND] 개인색 비활성화 - 기본 scheme 사용: default');
         }
         
         // Scheme이 존재하는지 확인하고 없으면 fallback
         if (!this.colorLegends[schemeToUse]) {
-            console.warn(`⚠️ [LEGEND] Scheme '${schemeToUse}' 없음, fallback 시도`);
             // 개인색 설정이 비활성화되었을 때 'default'가 없으면 'change' 사용
             if (!this.personalizedColorEnabled && this.colorLegends.change) {
                 schemeToUse = 'change';
@@ -12441,16 +12377,12 @@ class WaferMapViewer {
                 schemeToUse = firstKey || 'default';
             }
         }
-
-        console.log('🎨 [LEGEND DEBUG] Final schemeToUse:', schemeToUse, '| personalizedEnabled:', this.personalizedColorEnabled);
         
         if (!schemeToUse) {
-            console.warn('⚠️ [LEGEND] 유효한 color scheme을 찾을 수 없습니다.');
             return;
         }
 
         const userData = this.colorLegends[schemeToUse];
-        console.log('🎨 [LEGEND] User data for', schemeToUse, ':', userData);
 
         if (!userData) {
             console.warn(`⚠️ No color legend data for scheme: ${schemeToUse}`);
@@ -12466,10 +12398,8 @@ class WaferMapViewer {
                 </div>
             `).join('');
             this.dom.colorLegendTop.innerHTML = topHtml;
-            console.log('✅ [LEGEND] Top legend rendered:', Object.keys(userData.top).length, 'items');
         } else {
             this.dom.colorLegendTop.innerHTML = '';
-            console.warn('⚠️ [LEGEND] Top legend data 없음');
         }
 
         // Render bottom legend
@@ -12481,26 +12411,110 @@ class WaferMapViewer {
                 </div>
             `).join('');
             this.dom.colorLegendBottom.innerHTML = bottomHtml;
-            console.log('✅ [LEGEND] Bottom legend rendered:', Object.keys(userData.bottom).length, 'items');
         } else {
             this.dom.colorLegendBottom.innerHTML = '';
-            console.warn('⚠️ [LEGEND] Bottom legend data 없음');
+        }
+    }
+    
+    /**
+     * Render color legend for grid mode (horizontal layout)
+     */
+    renderGridColorLegend() {
+        if (!this.colorLegends || !this.dom.gridColorLegendBottom) {
+            return;
         }
         
-        console.log('✅ [LEGEND] renderColorLegends 완료');
+        // 🎨 Scheme 결정 로직 (개인색 설정 활성화 여부에 따라)
+        let schemeToUse = 'default';
+        
+        if (this.personalizedColorEnabled) {
+            schemeToUse = this.currentUser || 'change';
+        } else {
+            schemeToUse = 'default';
+        }
+        
+        // Scheme이 존재하는지 확인하고 없으면 fallback
+        if (!this.colorLegends[schemeToUse]) {
+            if (!this.personalizedColorEnabled && this.colorLegends.change) {
+                schemeToUse = 'change';
+            } else if (this.colorLegends.default) {
+                schemeToUse = 'default';
+            } else if (this.colorLegends.change) {
+                schemeToUse = 'change';
+            } else {
+                const firstKey = Object.keys(this.colorLegends)[0];
+                schemeToUse = firstKey || 'default';
+            }
+        }
+        
+        if (!schemeToUse) {
+            return;
+        }
+        
+        const userData = this.colorLegends[schemeToUse];
+        
+        if (!userData) {
+            console.warn(`⚠️ No color legend data for scheme: ${schemeToUse}`);
+            return;
+        }
+        
+        // Render top legend first, then bottom legend
+        let html = '';
+        
+        // Top legend 그룹 (좌측 정렬)
+        html += '<div class="legend-group-top">';
+        if (userData.top && typeof userData.top === 'object') {
+            const topHtml = Object.entries(userData.top).map(([label, color]) => `
+                <div class="legend-item-grid">
+                    <div class="legend-color-bar-grid" style="background-color: ${color};"></div>
+                    <span class="legend-label-grid">${label}</span>
+                </div>
+            `).join('');
+            html += topHtml;
+        }
+        html += '</div>';
+        
+        // Bottom legend 그룹 (우측 정렬)
+        html += '<div class="legend-group-bottom">';
+        if (userData.bottom && typeof userData.bottom === 'object') {
+            const bottomHtml = Object.entries(userData.bottom).map(([label, color]) => `
+                <div class="legend-item-grid">
+                    <div class="legend-color-bar-grid" style="background-color: ${color};"></div>
+                    <span class="legend-label-grid">${label}</span>
+                </div>
+            `).join('');
+            html += bottomHtml;
+        }
+        html += '</div>';
+        
+        this.dom.gridColorLegendBottom.innerHTML = html;
     }
 
     /**
      * Show color legends (Single Image Mode only)
      */
     showColorLegends() {
-        console.log('🎨 [LEGEND] showColorLegends called, gridMode:', this.gridMode);
-        if (!this.gridMode && this.dom.colorLegendTop && this.dom.colorLegendBottom) {
-            this.dom.colorLegendTop.style.display = 'block';
-            this.dom.colorLegendBottom.style.display = 'block';
-            console.log('✅ [LEGEND] Legends shown (display: block)');
+        if (this.gridMode) {
+            // 그리드 모드일 때는 grid legend 표시
+            if (this.dom.gridColorLegendBottom) {
+                this.renderGridColorLegend();
+                this.dom.gridColorLegendBottom.style.display = 'flex';
+            }
+            // 그리드 모드에서는 기존 legend 확실히 숨기기
+            if (this.dom.colorLegendTop && this.dom.colorLegendBottom) {
+                this.dom.colorLegendTop.style.display = 'none';
+                this.dom.colorLegendBottom.style.display = 'none';
+            }
         } else {
-            console.log('⚠️ [LEGEND] Not showing legends - gridMode:', this.gridMode);
+            // 단일 이미지 모드일 때는 기존 legend 표시
+            if (this.dom.colorLegendTop && this.dom.colorLegendBottom) {
+                this.dom.colorLegendTop.style.display = 'block';
+                this.dom.colorLegendBottom.style.display = 'block';
+            }
+            // 그리드 legend 숨기기
+            if (this.dom.gridColorLegendBottom) {
+                this.dom.gridColorLegendBottom.style.display = 'none';
+            }
         }
     }
 
@@ -12511,6 +12525,9 @@ class WaferMapViewer {
         if (this.dom.colorLegendTop && this.dom.colorLegendBottom) {
             this.dom.colorLegendTop.style.display = 'none';
             this.dom.colorLegendBottom.style.display = 'none';
+        }
+        if (this.dom.gridColorLegendBottom) {
+            this.dom.gridColorLegendBottom.style.display = 'none';
         }
     }
 }

@@ -276,7 +276,7 @@
             background: #252525;
             border: 1px solid #333;
             border-radius: 4px;
-            max-height: 220px;
+            max-height: 500px;
             overflow-y: auto;
             box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
             display: none;
@@ -285,6 +285,21 @@
 
         .color-editor-modal-dropdown.is-open {
             display: block;
+        }
+
+        .color-editor-scheme-item {
+            padding: 10px 12px;
+            cursor: pointer;
+            border-bottom: 1px solid #444;
+            transition: background-color 0.15s;
+        }
+
+        .color-editor-scheme-item:hover {
+            background-color: #444;
+        }
+
+        .color-editor-scheme-item:last-child {
+            border-bottom: none;
         }
 
         .color-editor-dropdown-item {
@@ -449,6 +464,71 @@
             border-bottom: 1px solid #222;
             box-sizing: border-box;
             position: static;
+        }
+        
+        /* Grid Mode Color Legend */
+        .color-legend-grid {
+            display: none;
+            gap: 4px;
+            padding: 8px 12px;
+            background: rgba(30, 30, 30, 0.96);
+            border-radius: 4px;
+            backdrop-filter: blur(4px);
+            font-size: 11px;
+            color: #eee;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            margin: 0;
+            width: 100%;
+            box-sizing: border-box;
+            flex-wrap: nowrap;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .legend-group-top {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .legend-group-bottom {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-left: auto;
+        }
+        
+        .viewer-container.grid-mode ~ #grid-color-legend-bottom,
+        .main-content:has(.viewer-container.grid-mode) #grid-color-legend-bottom {
+            display: flex;
+        }
+        
+        .legend-item-grid {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-right: 8px;
+            font-size: 11px;
+            flex-shrink: 0;
+        }
+        
+        .legend-item-grid:last-child {
+            margin-right: 0;
+        }
+        
+        .legend-color-bar-grid {
+            width: 18px;
+            height: 14px;
+            border: 1px solid #444;
+            border-radius: 2px;
+            flex-shrink: 0;
+        }
+        
+        .legend-label-grid {
+            color: #eee;
+            white-space: nowrap;
         }
         
         .control-group {
@@ -789,6 +869,14 @@
             padding: 8px 10px;
             display: none;
             width: 115px;
+        }
+
+        /* 그리드 모드에서는 기존 legend 숨기기 */
+        .viewer-container.grid-mode ~ #color-legend-top,
+        .viewer-container.grid-mode ~ #color-legend-bottom,
+        .main-content:has(.viewer-container.grid-mode) #color-legend-top,
+        .main-content:has(.viewer-container.grid-mode) #color-legend-bottom {
+            display: none !important;
         }
 
         #color-legend-top {
@@ -1190,6 +1278,9 @@
                 </div>
             </div>
             
+            <!-- Grid Mode Color Legend -->
+            <div id="grid-color-legend-bottom" class="color-legend-grid" aria-label="그리드 모드 하단 컬러 범례"></div>
+            
             <!-- Viewer Container -->
             <section id="viewer-container" class="viewer-container" aria-label="이미지 뷰어">
                 <!-- Grid Mode -->
@@ -1416,7 +1507,7 @@
                     <label for="color-editor-scheme-search">다른 팔레트 불러오기</label>
                     <div class="color-editor-scheme-search-row">
                         <input type="text" id="color-editor-scheme-search" placeholder="스킴 이름 검색..." autocomplete="off">
-                        <button type="button" id="color-editor-scheme-load-btn" class="color-editor-btn">불러오기</button>
+                        <button type="button" id="color-editor-scheme-load-btn" class="color-editor-btn">검색</button>
                     </div>
                     <div id="color-editor-scheme-dropdown" class="color-editor-modal-dropdown" role="listbox" aria-expanded="false"></div>
                 </div>
@@ -1434,6 +1525,7 @@
                 </table>
             </div>
             <div class="color-editor-footer">
+                <button type="button" id="color-editor-reset-btn">초기화</button>
                 <button type="button" id="color-editor-cancel-btn">취소</button>
                 <button type="button" id="color-editor-apply-btn" disabled>적용</button>
             </div>
