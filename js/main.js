@@ -5562,21 +5562,13 @@ class WaferMapViewer {
                     s.classList.remove('selected');
                 });
 
-                // 파일 선택 교체
+                // 파일 선택 교체 (드래그 범위 내 파일만)
                 this.selectedImages = hitFiles;
 
-                // 폴더 선택 교체
+                // 폴더 선택 교체 (드래그 선택에서는 폴더 전체를 선택하지 않음)
                 this.selectedFolders = new Set();
 
-                // 드래그 범위 내 폴더만 선택
-                for (const s of hitFolders) {
-                    const path = s.dataset.path;
-                    s.classList.add('selected');
-                    this.selectedFolders.add(path);
-                    await this.selectAllFolderFiles(path);
-                }
-
-                // 드래그 범위 내 파일만 선택 표시
+                // 🔥 드래그 범위 내 파일만 선택 표시 (폴더는 선택하지 않음)
                 hitFiles.forEach(path => {
                     const fileLink = fileLinks.find(a => a.dataset.path === path);
                     if (fileLink) {
