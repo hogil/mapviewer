@@ -5551,29 +5551,38 @@ class WaferMapViewer {
                     }
                 }
             } else {
-                // 교체 선택
+                // 🔥 Ctrl 키가 아닐 때: 기존 선택 완전히 해제하고 드래그 범위만 선택
+                // 모든 파일 선택 클래스 초기화
+                container.querySelectorAll('a[data-path].selected').forEach(a => {
+                    a.classList.remove('selected');
+                });
 
+                // 모든 폴더 선택 클래스 초기화
+                container.querySelectorAll('summary.folder.selected').forEach(s => {
+                    s.classList.remove('selected');
+                });
+
+                // 파일 선택 교체
                 this.selectedImages = hitFiles;
 
                 // 폴더 선택 교체
-
                 this.selectedFolders = new Set();
 
-                // 요약 선택 클래스 초기화
-
-                container.querySelectorAll('summary.folder.selected').forEach(s => s.classList.remove('selected'));
-
-                // 폴더 파일 추가 선택
-
+                // 드래그 범위 내 폴더만 선택
                 for (const s of hitFolders) {
                     const path = s.dataset.path;
-
                     s.classList.add('selected');
-
                     this.selectedFolders.add(path);
-
                     await this.selectAllFolderFiles(path);
                 }
+
+                // 드래그 범위 내 파일만 선택 표시
+                hitFiles.forEach(path => {
+                    const fileLink = fileLinks.find(a => a.dataset.path === path);
+                    if (fileLink) {
+                        fileLink.classList.add('selected');
+                    }
+                });
             }
 
             // UI 업데이트 및 그리드/이미지 표시 갱신
@@ -12655,4 +12664,5 @@ if (window.location.hash === '#debug') {
 }
 
 // WaferMapViewer 최적화 완료
+
 
