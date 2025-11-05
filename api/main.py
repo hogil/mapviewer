@@ -2127,7 +2127,7 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
             # 3. pyvips로 리사이즈 (기존 초고속 방식)
             # 4. 저장 (요청된 형식으로)
             if personalized and scheme and image_path.suffix.lower() == '.png':
-                logger.info(f"🎨 [THUMBNAIL] 개인색 설정 적용: personalized={personalized}, scheme={scheme}, path={image_path.name}, fmt={fmt}")
+                logger.debug(f"🎨 [THUMBNAIL] 개인색 설정 적용: personalized={personalized}, scheme={scheme}, path={image_path.name}, fmt={fmt}")
                 try:
                     from .personal_colors import plte_inplace_patch_memory
                     
@@ -2140,7 +2140,7 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
                     # 2. 패치된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
                     vips_image = pyvips.Image.new_from_buffer(bytes(png_data), "", access='sequential', fail_on='none', memory=True, unlimited=True)
                     
-                    logger.info(f"✅ [PLTE PATCH] 색 변경 완료, 리사이즈 시작: {thumbnail_path.name}")
+                    logger.debug(f"✅ [PLTE PATCH] 색 변경 완료, 리사이즈 시작: {thumbnail_path.name}")
                 except Exception as e:
                     logger.warning(f"⚠️ [PLTE PATCH] 개인색 팔레트 적용 실패: {e}", exc_info=True)
                     # 실패 시 기존 pyvips 로직 사용 (개인색 미적용)
@@ -2585,7 +2585,7 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                         # 2. 패치된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
                         image = pyvips.Image.new_from_buffer(bytes(png_data), "", access='sequential', fail_on='none', memory=True, unlimited=True)
                         
-                        logger.info(f"✅ [PYRAMID PLTE PATCH] 색 변경 완료, 리사이즈 시작: {pyramid_path.name}")
+                        logger.debug(f"✅ [PYRAMID PLTE PATCH] 색 변경 완료, 리사이즈 시작: {pyramid_path.name}")
                     except Exception as e:
                         logger.warning(f"⚠️ [PYRAMID PLTE] PLTE 인-place 실패, 폴백: {e}", exc_info=True)
                         # 폴백: 기존 방식 사용
@@ -3134,8 +3134,7 @@ async def get_image(
         if level is not None:
             format_ext = config.PYRAMID_FORMAT.lower()
             content_type = f"image/{format_ext}"
-            if not is_head:
-                logger.info(f"🎯 [PYRAMID MODE] 활성화됨 - personalized={personalized}, scheme={scheme}")
+            # 🔥 캐시 히트 시에는 로그 생략 (대량 요청 시 로그 폭주 방지)
 
             # 레벨 검증
             if level not in config.PYRAMID_LEVELS:
@@ -3173,8 +3172,6 @@ async def get_image(
             # 🔥 개인색 설정이 활성화된 경우, 비개인색 캐시는 절대 사용하지 않음
             # 개인색 설정이 활성화되어 있으면 반드시 개인색 경로의 파일만 확인
             if personalized and scheme:
-                if not is_head:
-                    logger.info(f"🎨 [PERSONALIZED] 개인색 설정 활성화 - scheme={scheme}, level={level}")
                 # 🔥 비개인색 경로 확인 (존재하더라도 무시)
                 non_personalized_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
                 non_personalized_path = non_personalized_dir / f"{stem}_L{int(level*100)}.{format_ext}"
@@ -3190,9 +3187,9 @@ async def get_image(
             if pyramid_path.exists() and pyramid_path.stat().st_size > 0:
                 if pyramid_path.stat().st_mtime >= image_mtime:
                     st = pyramid_path.stat()
-                    file_size_mb = st.st_size / (1024*1024)
+                    # 🔥 캐시 히트는 debug 레벨로 (대량 요청 시 로그 폭주 방지)
                     if not is_head:
-                        logger.info(f"✅ [CACHE HIT] 파일: {file_size_mb:.1f}MB (personalized={personalized}, scheme={scheme})")
+                        logger.debug(f"✅ [CACHE HIT] 파일: {st.st_size/(1024*1024):.1f}MB (personalized={personalized}, scheme={scheme})")
 
                     headers = {
                         "Cache-Control": "public, max-age=31536000, immutable",
