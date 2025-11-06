@@ -707,11 +707,11 @@ class WaferMapViewer {
 
         this.selectedFolderForBrowser = '';
 
-        // 파일 필터 상태 (기본값: 'remove' - Test 제거)
-        this.filterTestMode = 'remove';
+        // 파일 필터 상태 (기본값: '' - Lot Type, 필터 적용 안 함)
+        this.filterTestMode = '';
 
         // 개인색 설정 상태 (기본값: false)
-        this.personalizedColorEnabled = false;
+        this.personalizedColorEnabled = true; // 🔥 기본값: 개인색 설정 활성화
 
         // Color Legends 데이터
         this.colorLegends = null;
@@ -3141,7 +3141,7 @@ class WaferMapViewer {
     bindFilterEvents() {
         if (this.dom.filterTestSelect) {
             this.dom.filterTestSelect.addEventListener('change', async (e) => {
-                this.filterTestMode = e.target.value;
+                this.filterTestMode = e.target.value || ''; // 빈 문자열은 'Lot Type' (필터 적용 안 함)
                 // 필터 상태가 변경되면 파일 탐색기 다시 로드
                 await this.loadDirectoryContents(this.currentFolderPrefix || null, this.dom.fileExplorer);
             });
@@ -3173,8 +3173,11 @@ class WaferMapViewer {
             }, 100);
         }
 
-        // 개인색 설정 체크박스 이벤트
+        // 🔥 개인색 설정은 항상 활성화되므로 체크박스 이벤트는 유지하되 UI에서 숨김
+        // 체크박스가 없어도 내부적으로는 항상 활성화 상태로 동작
         if (this.dom.personalizedColorCheckbox) {
+            // 체크박스를 숨김 (UI에서 제거되었지만 DOM에는 남아있을 수 있음)
+            this.dom.personalizedColorCheckbox.style.display = 'none';
             this.dom.personalizedColorCheckbox.addEventListener('change', async (e) => {
                 const wasEnabled = this.personalizedColorEnabled;
                 this.personalizedColorEnabled = e.target.checked;
@@ -3483,6 +3486,14 @@ class WaferMapViewer {
 
         // 🎨 Color Legends 초기 렌더링 (백그라운드 작업 완료 대기)
         await Promise.allSettled(backgroundInitTasks);
+        
+        // 🔥 개인색 설정은 항상 활성화 (UI 체크박스 제거됨)
+        this.personalizedColorEnabled = true;
+        if (this.dom.personalizedColorCheckbox) {
+            this.dom.personalizedColorCheckbox.checked = true;
+            this.dom.personalizedColorCheckbox.style.display = 'none';
+        }
+        
         this.renderColorLegends();
         // 초기 화면에서도 상단 패널에 legend 표시
         this.showColorLegends();
@@ -3704,7 +3715,7 @@ class WaferMapViewer {
                 html += `<li><details><summary data-path="${fullPath}" class="folder">📁 ${node.name}</summary><div class="folder-content" style="padding-left: 1rem;"></div></details></li>`;
             } else if (node.type === 'file') {
                 // 필터 적용
-                if (this.filterTestMode !== 'all') {
+                if (this.filterTestMode && this.filterTestMode !== 'all') {
                     const fileName = node.name;
                     if (fileName.length > 7) {
                         const seventhChar = fileName.charAt(6);
@@ -3748,7 +3759,7 @@ class WaferMapViewer {
                 if (!this.isImageFile(path)) return false;
 
                 // Test 필터 적용
-                if (this.filterTestMode !== 'all') {
+                if (this.filterTestMode && this.filterTestMode !== 'all') {
                     const fileName = path.split('/').pop() || path.split('\\').pop() || path;
                     if (fileName.length > 7) {
                         const seventhChar = fileName.charAt(6);
@@ -3795,7 +3806,7 @@ class WaferMapViewer {
                 if (!this.isImageFile(path)) return false;
 
                 // Test 필터 적용
-                if (this.filterTestMode !== 'all') {
+                if (this.filterTestMode && this.filterTestMode !== 'all') {
                     const fileName = path.split('/').pop() || path.split('\\').pop() || path;
                     if (fileName.length > 7) {
                         const seventhChar = fileName.charAt(6);
@@ -3956,7 +3967,7 @@ class WaferMapViewer {
                 .filter(path => typeof path === 'string' && path.length > 0);
 
             // test 필터 적용
-            if (this.filterTestMode !== 'all') {
+            if (this.filterTestMode && this.filterTestMode !== 'all') {
                 const lowerQuery = 'test';
                 matchedImages = matchedImages.filter(path => {
                     const basename = path.toLowerCase();

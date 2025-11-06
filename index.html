@@ -1234,15 +1234,14 @@
                 <!-- 파일 필터 선택 -->
                 <div style="margin-top: 8px; padding: 4px 0; display: flex; gap: 6px; align-items: center;">
                     <select id="filter-test-select" style="width: 33%; background: #333; color: #fff; border: 1px solid #555; border-radius: 3px; padding: 4px 6px; font-size: 12px; cursor: pointer;">
+                        <option value="" selected>Lot Type</option>
+                        <option disabled>────────</option>
                         <option value="all">전체</option>
-                        <option value="remove" selected>Test 제거</option>
+                        <option value="remove">Test 제거</option>
                         <option value="only">Test만</option>
                     </select>
                     <div class="personalized-color-actions">
-                        <label style="display: flex; align-items: center; gap: 4px; color: #ccc; font-size: 12px; cursor: pointer; user-select: none;">
-                            <input type="checkbox" id="personalized-color-checkbox" style="cursor: pointer;">
-                            <span>개인색 설정</span>
-                        </label>
+                        <!-- 🔥 개인색 설정은 항상 활성화되므로 체크박스 제거 -->
                         <button type="button" id="personalized-color-button" class="color-editor-btn">색상 편집</button>
                     </div>
                 </div>
@@ -1357,8 +1356,12 @@
         <!-- Right Panel -->
         <aside class="wrapper-right" aria-label="클래스 및 라벨 관리">
             <section class="classification-frame">
-                <h3>Class Manager</h3>
-                <div style="height:16px;"></div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                    <h3 style="margin: 0;">Class Manager</h3>
+                    <div style="font-size: 11px; color: #999; text-align: right; line-height: 1.3;">
+                        <div style="font-weight: 600;">최호길(ho.choi)</div>
+                    </div>
+                </div>
                 <div style="margin-bottom: 10px; display: flex; justify-content: flex-start;">
                     <input type="text" id="new-class-input" placeholder="" style="width: 240px; min-width: 120px; max-width: 320px;" aria-label="새 클래스 입력" />
                 </div>
