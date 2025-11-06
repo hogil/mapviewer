@@ -134,6 +134,9 @@ def get_user_color_scheme(login_id: Optional[str], username: Optional[str] = Non
     if dept_name:
         legends[login_id]['DeptName'] = dept_name
     
+    # 처음 생성 시 modified: false 설정
+    legends[login_id]['modified'] = False
+    
     # 변경사항 저장 (마지막 수정 시간 추가)
     save_color_legends(legends, updated_scheme_name=login_id)
     logger.info("새 color scheme 생성: %s (from default, Username=%s, DeptName=%s)", 

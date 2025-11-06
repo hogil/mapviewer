@@ -521,10 +521,11 @@ export class ColorSchemeEditor {
                 const content = document.createElement('div');
                 content.style.cssText = 'display: flex; align-items: center; gap: 12px; flex-wrap: nowrap;';
                 
-                // Scheme명 (굵게)
+                // Scheme명 (굵게) + (default) 표시
                 const schemeNameEl = document.createElement('span');
                 schemeNameEl.style.cssText = 'font-weight: 600; font-size: 14px; color: #fff; min-width: 80px; flex-shrink: 0;';
-                schemeNameEl.textContent = name;
+                const isModified = schemeData.modified === false; // modified가 false면 default와 동일
+                schemeNameEl.textContent = name + (isModified ? ' (default)' : '');
                 content.appendChild(schemeNameEl);
                 
                 // Username과 DeptName (가로로 나란히)

@@ -1487,6 +1487,69 @@ async def save_color_scheme(request: Request):
             'background': scheme_data.get('background', '#FEFEFE'),
             'text': scheme_data.get('text', '#000001')
         }
+        
+        # 기존 scheme의 메타데이터 유지 (Username, DeptName, lastModified 등)
+        existing_scheme = legends.get(scheme_name, {})
+        if 'Username' in existing_scheme:
+            filtered_scheme_data['Username'] = existing_scheme['Username']
+        if 'DeptName' in existing_scheme:
+            filtered_scheme_data['DeptName'] = existing_scheme['DeptName']
+        
+        # default scheme과 비교하여 modified 설정
+        # 색상 값 정규화 후 비교 (대소문자 무시)
+        from .personal_colors import normalize_hex_color
+        
+        default_scheme = legends.get('default', {})
+        
+        def normalize_color_dict(color_dict):
+            """색상 딕셔너리의 모든 색상 값을 정규화"""
+            if not color_dict or not isinstance(color_dict, dict):
+                return color_dict
+            normalized = {}
+            for key, value in color_dict.items():
+                if isinstance(value, str) and value.startswith('#'):
+                    try:
+                        normalized[key] = normalize_hex_color(value)
+                    except (ValueError, AttributeError):
+                        normalized[key] = value.upper() if value else value
+                else:
+                    normalized[key] = value
+            return normalized
+        
+        def normalize_single_color(color):
+            """단일 색상 값 정규화"""
+            if isinstance(color, str) and color.startswith('#'):
+                try:
+                    return normalize_hex_color(color)
+                except (ValueError, AttributeError):
+                    return color.upper() if color else color
+            return color
+        
+        # 색상 값 정규화 후 비교
+        normalized_scheme = {
+            'top': normalize_color_dict(filtered_scheme_data.get('top')),
+            'bottom': normalize_color_dict(filtered_scheme_data.get('bottom')),
+            'background': normalize_single_color(filtered_scheme_data.get('background')),
+            'text': normalize_single_color(filtered_scheme_data.get('text'))
+        }
+        
+        normalized_default = {
+            'top': normalize_color_dict(default_scheme.get('top')),
+            'bottom': normalize_color_dict(default_scheme.get('bottom')),
+            'background': normalize_single_color(default_scheme.get('background')),
+            'text': normalize_single_color(default_scheme.get('text'))
+        }
+        
+        is_same_as_default = (
+            normalized_scheme.get('top') == normalized_default.get('top') and
+            normalized_scheme.get('bottom') == normalized_default.get('bottom') and
+            normalized_scheme.get('background') == normalized_default.get('background') and
+            normalized_scheme.get('text') == normalized_default.get('text')
+        )
+        
+        # default와 같으면 modified: false, 다르면 modified: true
+        filtered_scheme_data['modified'] = not is_same_as_default
+        
         legends[scheme_name] = filtered_scheme_data
         
         # 파일에 저장 (마지막 수정 시간 추가)
@@ -1499,21 +1562,26 @@ async def save_color_scheme(request: Request):
                 deleted_count = 0
                 import shutil
                 
-                # 1. scheme 폴더 전체 삭제 (scheme 또는 scheme_timestamp로 시작하는 폴더)
-                scheme_patterns = [
-                    f"{scheme_name}_*",  # scheme_timestamp 폴더
-                    scheme_name  # scheme만 있는 폴더 (하위 호환성)
-                ]
+                # 1. scheme 폴더 전체 삭제 (thumbnail/{scheme}/ 형태)
+                scheme_dir = THUMBNAIL_DIR / scheme_name
+                if scheme_dir.exists() and scheme_dir.is_dir():
+                    try:
+                        shutil.rmtree(scheme_dir)
+                        deleted_count += 1
+                        logger.info(f"✅ scheme 폴더 삭제: {scheme_dir}")
+                    except Exception as e:
+                        logger.warning(f"scheme 폴더 삭제 실패: {scheme_dir}, 오류: {e}")
                 
-                for pattern in scheme_patterns:
-                    for scheme_dir in THUMBNAIL_DIR.glob(pattern):
-                        if scheme_dir.is_dir():
-                            try:
-                                shutil.rmtree(scheme_dir)
-                                deleted_count += 1
-                                logger.info(f"✅ scheme 폴더 삭제: {scheme_dir}")
-                            except Exception as e:
-                                logger.warning(f"scheme 폴더 삭제 실패: {scheme_dir}, 오류: {e}")
+                # 하위 호환성: 기존 scheme_timestamp 형태도 삭제
+                old_pattern = f"{scheme_name}_*"
+                for old_dir in THUMBNAIL_DIR.glob(old_pattern):
+                    if old_dir.is_dir():
+                        try:
+                            shutil.rmtree(old_dir)
+                            deleted_count += 1
+                            logger.info(f"✅ 기존 scheme 폴더 삭제: {old_dir}")
+                        except Exception as e:
+                            logger.warning(f"기존 scheme 폴더 삭제 실패: {old_dir}, 오류: {e}")
                 
                 # 2. 기존 방식 썸네일 파일 삭제 (하위 호환성: scheme 이름이 파일명에 포함된 경우)
                 scheme_pattern = f"*_{scheme_name}_*.{THUMBNAIL_FORMAT.lower()}"
@@ -1690,7 +1758,7 @@ def get_thumbnail_path(image_path: Path, size: Tuple[int, int], scheme: Optional
     # 썸네일 파일명
     thumbnail_name = f"{path_hash}_{size[0]}x{size[1]}.{THUMBNAIL_FORMAT.lower()}"
     
-    # scheme이 있으면 scheme별 폴더 사용 (예: thumbnail/LoginId_251106_091612/)
+    # scheme이 있으면 scheme별 폴더 사용 (예: thumbnail/LoginId/251106_091612/)
     if scheme:
         from .personal_colors import load_color_legends
         legends = load_color_legends()
@@ -1698,14 +1766,13 @@ def get_thumbnail_path(image_path: Path, size: Tuple[int, int], scheme: Optional
         timestamp = scheme_data.get('lastModified')
         
         if timestamp:
-            # lastModified가 있으면 scheme_timestamp 폴더 사용
-            scheme_folder = f"{scheme}_{timestamp}"
+            # scheme 폴더 아래 timestamp 폴더 사용
+            scheme_dir = THUMBNAIL_DIR / scheme / timestamp
         else:
             # lastModified가 없으면 scheme만 사용 (하위 호환성)
-            scheme_folder = scheme
+            scheme_dir = THUMBNAIL_DIR / scheme
         
         # scheme 폴더 생성
-        scheme_dir = THUMBNAIL_DIR / scheme_folder
         scheme_dir.mkdir(parents=True, exist_ok=True)
         return scheme_dir / thumbnail_name
     
@@ -3017,9 +3084,8 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                     timestamp = scheme_data.get('lastModified')
                     
                     if timestamp:
-                        # scheme_timestamp 폴더 안에 pyramid_{level} 폴더 생성
-                        scheme_folder = f"{scheme}_{timestamp}"
-                        pyramid_dir = config.THUMBNAIL_DIR / scheme_folder / f"pyramid_{int(level*100)}"
+                        # scheme/timestamp 폴더 안에 pyramid_{level} 폴더 생성
+                        pyramid_dir = config.THUMBNAIL_DIR / scheme / timestamp / f"pyramid_{int(level*100)}"
                     else:
                         # lastModified가 없으면 기존 방식 (하위 호환성)
                         pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{scheme}_{int(level*100)}"
@@ -3265,9 +3331,8 @@ async def get_image(
                 timestamp = scheme_data.get('lastModified')
                 
                 if timestamp:
-                    # scheme_timestamp 폴더 안에 pyramid_{level} 폴더 생성
-                    scheme_folder = f"{scheme}_{timestamp}"
-                    pyramid_dir = config.THUMBNAIL_DIR / scheme_folder / f"pyramid_{int(level*100)}"
+                    # scheme/timestamp 폴더 안에 pyramid_{level} 폴더 생성
+                    pyramid_dir = config.THUMBNAIL_DIR / scheme / timestamp / f"pyramid_{int(level*100)}"
                 else:
                     # lastModified가 없으면 기존 방식 (하위 호환성)
                     pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{scheme}_{int(level*100)}"
