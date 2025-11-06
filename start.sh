@@ -82,6 +82,13 @@ export PYRAMID_BG_WORKERS="24"                # 백그라운드 피라미드 워
 export USE_TURBOJPEG="1"
 export TURBOJPEG_PATH="/usr/lib/x86_64-linux-gnu/libturbojpeg.so.0"
 
+# 🧹 Python 캐시 정리 (서버 시작 전)
+echo "🧹 Python 캐시 정리 중..."
+find . -type d -name "__pycache__" -exec rm -r {} + 2>/dev/null
+find . -type f -name "*.pyc" -delete 2>/dev/null
+echo "✅ 캐시 정리 완료"
+echo ""
+
 # 서버 시작
 python3 -m api.main
 

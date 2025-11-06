@@ -68,4 +68,11 @@ $env:PYRAMID_BG_WORKERS="4"            # 개발 환경 백그라운드 피라미
 $env:USE_TURBOJPEG="1"
 $env:TURBOJPEG_PATH = "C:\libjpeg-turbo64\bin\turbojpeg.dll"
 
+# 🧹 Python 캐시 정리 (서버 시작 전)
+Write-Host "🧹 Python 캐시 정리 중..." -ForegroundColor Yellow
+Get-ChildItem -Path . -Include __pycache__ -Recurse -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+Get-ChildItem -Path . -Include *.pyc -Recurse -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+Write-Host "✅ 캐시 정리 완료" -ForegroundColor Green
+Write-Host ""
+
 python -m api.main

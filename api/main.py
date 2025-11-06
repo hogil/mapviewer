@@ -4763,6 +4763,43 @@ async def browse_folders(path: Optional[str] = None):
 @app.on_event("startup")
 async def startup_event():
     global INDEX_REFRESH_TASK
+    
+    # 🧹 Python 캐시 정리 (서버 시작 시)
+    try:
+        import glob
+        cache_dirs = []
+        cache_files = []
+        for root, dirs, files in os.walk(Path(__file__).parent.parent):
+            # __pycache__ 디렉토리 찾기
+            if '__pycache__' in dirs:
+                cache_dirs.append(os.path.join(root, '__pycache__'))
+            # .pyc 파일 찾기
+            for file in files:
+                if file.endswith('.pyc'):
+                    cache_files.append(os.path.join(root, file))
+        
+        # 캐시 삭제
+        deleted_count = 0
+        for cache_dir in cache_dirs:
+            try:
+                shutil.rmtree(cache_dir)
+                deleted_count += 1
+            except Exception:
+                pass
+        for cache_file in cache_files:
+            try:
+                os.remove(cache_file)
+                deleted_count += 1
+            except Exception:
+                pass
+        
+        if deleted_count > 0:
+            bootlog = logging.getLogger("uvicorn.error")
+            bootlog.info(f"🧹 Python 캐시 정리 완료: {deleted_count}개 항목 삭제")
+    except Exception:
+        # 캐시 정리 실패해도 서버는 계속 실행
+        pass
+    
     bootlog = logging.getLogger("uvicorn.error")
     bootlog.info("🚀 L3Tracker 서버 시작 (테이블 로그 시스템)")
     scheme = "HTTPS" if config.SSL_ENABLED else "HTTP"
