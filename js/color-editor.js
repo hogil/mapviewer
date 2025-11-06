@@ -243,20 +243,32 @@ export class ColorSchemeEditor {
             hexInput.addEventListener('change', () => {
                 this.syncFromHex(row);
                 this.checkForChanges();
+                this.updatePreviewRealtime();
             });
-            hexInput.addEventListener('input', () => this.clearError());
+            hexInput.addEventListener('input', () => {
+                this.clearError();
+                this.updatePreviewRealtime();
+            });
             hexInput.addEventListener('paste', (e) => this.handleHexPaste(e, row));
             rgbInputs.forEach((input, idx) => {
                 input.addEventListener('change', () => {
                     this.syncFromRgb(row);
                     this.checkForChanges();
+                    this.updatePreviewRealtime();
                 });
-                input.addEventListener('input', () => this.clearError());
+                input.addEventListener('input', () => {
+                    this.clearError();
+                    this.updatePreviewRealtime();
+                });
                 input.addEventListener('paste', (e) => this.handleRgbPaste(e, row, idx));
             });
             colorInput.addEventListener('input', () => {
                 this.syncFromPicker(row);
                 this.checkForChanges();
+                this.updatePreviewRealtime();
+            });
+            colorInput.addEventListener('change', () => {
+                this.updatePreviewRealtime();
             });
             rows.push(row);
         };
@@ -766,6 +778,87 @@ export class ColorSchemeEditor {
         this.updateApplyButtonState(hasChanges);
     }
 
+    /**
+     * 실시간 미리보기 업데이트 (단일 이미지 모드에서만)
+     */
+    updatePreviewRealtime() {
+        if (!this.viewer || this.viewer.gridMode || !this.viewer.selectedImagePath) {
+            return;
+        }
+
+        // 디바운싱: 너무 자주 호출되지 않도록 (500ms 지연)
+        if (this._realtimeUpdateTimeout) {
+            clearTimeout(this._realtimeUpdateTimeout);
+        }
+
+        this._realtimeUpdateTimeout = setTimeout(async () => {
+            try {
+                // 현재 색상 스킴을 임시로 적용
+                const schemeData = this.getCurrentSchemeData();
+                const schemeName = this.currentSchemeName;
+                
+                if (schemeName && schemeData) {
+                    // 프론트엔드 캐시에 임시로 저장 (실시간 미리보기용)
+                    if (!this.viewer.colorLegends) {
+                        this.viewer.colorLegends = {};
+                    }
+                    this.viewer.colorLegends[schemeName] = schemeData;
+                    
+                    // 🔥 임시 색상 스킴을 서버에 전달하여 실시간 미리보기
+                    // 서버에 POST 요청으로 임시 스킴 저장 (실시간 미리보기용)
+                    const tempSchemeName = `_preview_${schemeName}`;
+                    try {
+                        await fetch('/api/color-scheme', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                schemeName: tempSchemeName,
+                                schemeData: schemeData,
+                            }),
+                        });
+                    } catch (e) {
+                        console.warn('[ColorEditor] 임시 스킴 저장 실패 (무시 가능):', e);
+                    }
+                    
+                    // 캐시 버스팅을 위한 타임스탬프 추가
+                    this.viewer._personalizedColorCacheBuster = Date.now();
+                    
+                    // 이미지 다시 로드 (임시 스킴 사용)
+                    const originalEnabled = this.viewer.personalizedColorEnabled;
+                    const originalUser = this.viewer.currentUser;
+                    this.viewer.personalizedColorEnabled = true;
+                    this.viewer.currentUser = tempSchemeName; // 임시 스킴 사용
+                    
+                    // 피라미드 레벨 캐시 초기화
+                    this.viewer.pyramidLevels = {};
+                    if (this.viewer._pyramidLoading) {
+                        this.viewer._pyramidLoading = new Set();
+                    }
+                    if (this.viewer.pyramidLoadingLevels) {
+                        this.viewer.pyramidLoadingLevels.clear();
+                    }
+                    if (this.viewer.semiconductorRenderer) {
+                        this.viewer.semiconductorRenderer.imagePyramid = {};
+                        this.viewer.semiconductorRenderer.levelTextures.clear();
+                    }
+                    
+                    await this.viewer.loadImage(this.viewer.selectedImagePath);
+                    
+                    // Legend도 업데이트
+                    this.viewer.renderColorLegends();
+                    
+                    // 원래 상태로 복원
+                    this.viewer.personalizedColorEnabled = originalEnabled;
+                    this.viewer.currentUser = originalUser;
+                }
+            } catch (error) {
+                console.error('[ColorEditor] 실시간 업데이트 오류:', error);
+            }
+        }, 500); // 500ms 디바운싱
+    }
+
     updateApplyButtonState(enabled) {
         if (!this.applyBtn) return;
         if (enabled) {
@@ -838,11 +931,16 @@ export class ColorSchemeEditor {
                     
                     // UI 새로고침
                     this.viewer.renderColorLegends();
+                    this.viewer.showColorLegends();
                     
                     // 🎨 색상 스킴 저장 후에는 항상 해당 scheme으로 썸네일을 재생성해야 함
                     // personalizedColorEnabled가 false여도 저장된 scheme으로 썸네일을 재생성하도록
                     // 임시로 personalizedColorEnabled를 true로 설정하고, 그리드/이미지를 다시 로드
+                    // 🔥 적용 전 체크박스 상태 저장 (체크박스 상태 유지용)
                     const originalPersonalizedEnabled = this.viewer.personalizedColorEnabled;
+                    const originalCheckboxState = this.viewer.dom.personalizedColorCheckbox 
+                        ? this.viewer.dom.personalizedColorCheckbox.checked 
+                        : originalPersonalizedEnabled;
                     const shouldUsePersonalized = true; // 색상 변경 후에는 항상 personalized 사용
                     
                     try {
@@ -889,10 +987,22 @@ export class ColorSchemeEditor {
                             await this.viewer.loadImage(this.viewer.selectedImagePath);
                             // 🔥 Legend 다시 렌더링
                             this.viewer.renderColorLegends();
+                            this.viewer.showColorLegends();
                         }
                     } finally {
-                        // 원래 상태로 복원 (사용자가 체크박스를 해제했으면 그대로 유지)
-                        this.viewer.personalizedColorEnabled = originalPersonalizedEnabled;
+                        // 🔥 legend를 먼저 렌더링 (저장된 scheme을 사용)
+                        // currentUser는 이미 저장된 schemeName으로 설정되어 있음
+                        this.viewer.renderColorLegends();
+                        this.viewer.showColorLegends();
+                        
+                        // 🔥 원래 상태로 복원 (체크박스 상태 포함)
+                        // 적용 전 체크박스 상태를 그대로 유지
+                        this.viewer.personalizedColorEnabled = originalCheckboxState;
+                        // 체크박스 상태도 원래대로 복원
+                        if (this.viewer.dom.personalizedColorCheckbox) {
+                            this.viewer.dom.personalizedColorCheckbox.checked = originalCheckboxState;
+                        }
+                        // currentUser는 이미 저장된 schemeName으로 설정되어 있으므로 유지
                     }
                 }
                 

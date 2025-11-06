@@ -141,7 +141,11 @@ class ThumbnailManager {
     }
 
     async loadThumbnail(imgPath) {
-        const cached = this.cache.get(imgPath);
+        // 썸네일 캐시 키에 scheme 정보 포함
+        const personalizedParams = this.viewer ? this.viewer.getPersonalizedParams() : '';
+        const cacheKey = `${imgPath}${personalizedParams}`;
+        
+        const cached = this.cache.get(cacheKey);
 
         // 유효한 캐시가 있으면 반환
 
@@ -159,7 +163,7 @@ class ThumbnailManager {
 
         const loadingPromise = this.fetchThumbnail(imgPath);
 
-        this.cache.set(imgPath, { 
+        this.cache.set(cacheKey, { 
             loading: loadingPromise, 
 
             timestamp: Date.now() 
@@ -167,8 +171,12 @@ class ThumbnailManager {
 
         try {
             const url = await loadingPromise;
+            
+            // 썸네일 캐시 키에 scheme 정보 포함
+            const personalizedParams = this.viewer ? this.viewer.getPersonalizedParams() : '';
+            const cacheKey = `${imgPath}${personalizedParams}`;
 
-            this.cache.set(imgPath, { 
+            this.cache.set(cacheKey, { 
                 url, 
 
                 timestamp: Date.now() 
@@ -183,8 +191,12 @@ class ThumbnailManager {
             if (error.name === 'AbortError') {
                 return null;
             }
+            
+            // 썸네일 캐시 키에 scheme 정보 포함
+            const personalizedParams = this.viewer ? this.viewer.getPersonalizedParams() : '';
+            const cacheKey = `${imgPath}${personalizedParams}`;
 
-            this.cache.delete(imgPath);
+            this.cache.delete(cacheKey);
 
             // console.warn(`썸네일 로드 실패: ${imgPath}`, error);
 
@@ -217,7 +229,9 @@ class ThumbnailManager {
             // 🔥 blob URL 대신 서버 URL 직접 사용 (CORS, GC 문제 해결)
             // timestamp를 추가하여 브라우저 캐싱 활용하면서도 새로고침 가능
             const personalizedParams = this.viewer ? this.viewer.getPersonalizedParams() : '';
-            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}`;
+            // 썸네일 캐시 버스팅을 위한 timestamp 추가 (scheme 변경 시 새로운 썸네일 요청)
+            const cacheBuster = this.viewer?._personalizedColorCacheBuster || Date.now();
+            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}&_t=${cacheBuster}`;
 
             // 🔍 디버그: 썸네일 URL 로그
                                     // 서버 URL을 직접 반환 (브라우저가 자동으로 로드)
@@ -2392,12 +2406,16 @@ class WaferMapViewer {
         }
 
         // 뷰어 컨테이너를 그리드 모드로 설정하되 빈 상태
+        this.gridMode = true; // 🔥 초기 화면도 gridMode로 설정 (상단 legend 표시용)
 
         if (this.dom.viewerContainer) {
             this.dom.viewerContainer.classList.add('grid-mode');
 
             this.dom.viewerContainer.classList.remove('single-image-mode');
         }
+        
+        // 🔥 초기 화면에서 상단 legend 표시
+        this.showColorLegends();
 
         // 빈 그리드 표시 (검색 안내 메시지)
 
@@ -3171,10 +3189,16 @@ class WaferMapViewer {
 
                 // 🔥 캐시 무효화를 위해 타임스탬프 추가 (체크박스 변경 시 항상)
                 this._personalizedColorCacheBuster = Date.now();
+                
+                // 🔥 개인색 설정 변경 시 썸네일 캐시 완전 초기화 (다른 scheme의 썸네일 무시)
+                if (this.thumbnailManager) {
+                    this.thumbnailManager.cache.clear();
+                }
 
                 // 🔥 Legend 즉시 업데이트 (체크박스 변경 시 항상)
                 console.log('🎨 [CHECKBOX] Legend 즉시 업데이트 시작');
                 this.renderColorLegends();
+                this.showColorLegends();
                 console.log('🎨 [CHECKBOX] Legend 업데이트 완료');
 
                 // 현재 화면 새로고침
@@ -3246,6 +3270,7 @@ class WaferMapViewer {
                         
                         // 🔥 Legend 다시 렌더링 (이미지 로드 후 최종 확인)
                         this.renderColorLegends();
+                        this.showColorLegends();
                         console.log('🎨 [CHECKBOX] 이미지 재로드 및 Legend 업데이트 완료');
                     } else {
                         console.warn('⚠️ No reload action: no image path found');
@@ -3406,6 +3431,8 @@ class WaferMapViewer {
         // 🎨 Color Legends 초기 렌더링 (백그라운드 작업 완료 대기)
         await Promise.allSettled(backgroundInitTasks);
         this.renderColorLegends();
+        // 초기 화면에서도 상단 패널에 legend 표시
+        this.showColorLegends();
     }
 
     // 🔥 서버 설정 로드 (피라미드 레벨, zoom 기준 등)
@@ -12351,7 +12378,7 @@ class WaferMapViewer {
         if (!this.dom.colorLegendTop || !this.dom.colorLegendBottom) {
             return;
         }
-
+        
         // 🎨 Scheme 결정 로직 (개인색 설정 활성화 여부에 따라)
         let schemeToUse = 'default'; // 기본값 (개인색 설정 off일 때)
         
@@ -12359,8 +12386,13 @@ class WaferMapViewer {
             // 개인색 설정이 활성화되어 있으면: LoginId가 있으면 LoginId 사용, 없으면 'change' 사용
             schemeToUse = this.currentUser || 'change';
         } else {
-            // 개인색 설정이 비활성화되어 있으면 항상 'default' 사용
-            schemeToUse = 'default';
+            // 개인색 설정이 비활성화되어 있으면:
+            // currentUser가 설정되어 있고 해당 scheme이 존재하면 그것을 사용 (색상 편집 후 legend 표시용)
+            if (this.currentUser && this.colorLegends[this.currentUser]) {
+                schemeToUse = this.currentUser;
+            } else {
+                schemeToUse = 'default';
+            }
         }
         
         // Scheme이 존재하는지 확인하고 없으면 fallback
@@ -12513,23 +12545,23 @@ class WaferMapViewer {
      */
     showColorLegends() {
         if (this.gridMode) {
-            // 그리드 모드일 때는 grid legend 표시
+            // 그리드 모드일 때는 상단 패널 legend 표시
             if (this.dom.gridColorLegendBottom) {
                 this.renderGridColorLegend();
                 this.dom.gridColorLegendBottom.style.display = 'flex';
             }
-            // 그리드 모드에서는 기존 legend 확실히 숨기기
+            // 그리드 모드에서는 우측 legend 숨기기
             if (this.dom.colorLegendTop && this.dom.colorLegendBottom) {
                 this.dom.colorLegendTop.style.display = 'none';
                 this.dom.colorLegendBottom.style.display = 'none';
             }
         } else {
-            // 단일 이미지 모드일 때는 기존 legend 표시
+            // 그리드 모드가 아닐 때 (단일 이미지 모드)
+            // 단일 이미지 모드일 때: 우측 legend만 표시 (상단 패널 legend 숨김)
             if (this.dom.colorLegendTop && this.dom.colorLegendBottom) {
                 this.dom.colorLegendTop.style.display = 'block';
                 this.dom.colorLegendBottom.style.display = 'block';
             }
-            // 그리드 legend 숨기기
             if (this.dom.gridColorLegendBottom) {
                 this.dom.gridColorLegendBottom.style.display = 'none';
             }

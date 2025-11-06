@@ -1492,6 +1492,46 @@ async def save_color_scheme(request: Request):
         # 파일에 저장
         if save_color_legends(legends):
             logger.info(f"✅ Color scheme saved: {scheme_name}")
+            
+            # 🔥 색상 편집 저장 후 해당 scheme의 썸네일 및 피라미드 캐시 무효화
+            try:
+                deleted_count = 0
+                
+                # 1. 썸네일 파일 삭제 (scheme 이름이 포함된 썸네일)
+                scheme_pattern = f"*_{scheme_name}_*.{THUMBNAIL_FORMAT.lower()}"
+                for thumb_file in THUMBNAIL_DIR.glob(scheme_pattern):
+                    try:
+                        thumb_file.unlink()
+                        deleted_count += 1
+                    except Exception as e:
+                        logger.warning(f"썸네일 삭제 실패: {thumb_file}, 오류: {e}")
+                
+                # 2. 피라미드 디렉토리 삭제 (scheme 이름이 포함된 피라미드)
+                pyramid_pattern = f"pyramid_{scheme_name}_*"
+                for pyramid_dir in THUMBNAIL_DIR.glob(pyramid_pattern):
+                    if pyramid_dir.is_dir():
+                        try:
+                            import shutil
+                            shutil.rmtree(pyramid_dir)
+                            deleted_count += 1
+                            logger.debug(f"피라미드 디렉토리 삭제: {pyramid_dir}")
+                        except Exception as e:
+                            logger.warning(f"피라미드 디렉토리 삭제 실패: {pyramid_dir}, 오류: {e}")
+                
+                # 3. 메모리 캐시 초기화 (cache_manager가 있으면 사용)
+                try:
+                    from .cache_manager import cache_manager
+                    cache_manager.clear_thumbnail_cache()
+                except ImportError:
+                    # cache_manager가 없으면 무시 (선택적 기능)
+                    pass
+                except Exception as e:
+                    logger.warning(f"메모리 캐시 초기화 실패: {e}")
+                
+                logger.info(f"✅ 캐시 무효화 완료: {scheme_name} ({deleted_count}개 항목 삭제)")
+            except Exception as e:
+                logger.warning(f"⚠️ 캐시 무효화 실패: {e}")
+            
             return {"success": True, "schemeName": scheme_name}
         else:
             raise HTTPException(status_code=500, detail="색상 스킴 저장 실패")
@@ -1626,10 +1666,16 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
 def is_supported_image(path: Path) -> bool:
     return path.suffix.lower() in SUPPORTED_EXTENSIONS
 
-def get_thumbnail_path(image_path: Path, size: Tuple[int, int]) -> Path:
+def get_thumbnail_path(image_path: Path, size: Tuple[int, int], scheme: Optional[str] = None) -> Path:
     # 🔥 절대 경로를 해시로 변환하여 썸네일 경로 생성
     path_hash = hashlib.md5(str(image_path.resolve()).encode()).hexdigest()[:16]
-    thumbnail_name = f"{path_hash}_{size[0]}x{size[1]}.{THUMBNAIL_FORMAT.lower()}"
+    
+    # scheme이 있으면 경로에 scheme 포함
+    if scheme:
+        thumbnail_name = f"{path_hash}_{scheme}_{size[0]}x{size[1]}.{THUMBNAIL_FORMAT.lower()}"
+    else:
+        thumbnail_name = f"{path_hash}_{size[0]}x{size[1]}.{THUMBNAIL_FORMAT.lower()}"
+    
     return THUMBNAIL_DIR / thumbnail_name
 
 def safe_resolve_path(path: Optional[str]) -> Path:
@@ -2325,13 +2371,11 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
 async def generate_thumbnail(image_path: Path, size: Tuple[int, int], personalized: bool = False, scheme: Optional[str] = None) -> Optional[Path]:
     start_time = time.time()
     try:
-        # 개인색 설정인 경우 썸네일 경로에 scheme 포함
+        # 썸네일 경로 생성 (scheme 포함)
         if personalized and scheme:
-            relative_path = image_path.relative_to(ROOT_DIR)
-            scheme_thumb_dir = THUMBNAIL_DIR / scheme / relative_path.parent
-            thumb = scheme_thumb_dir / f"{relative_path.stem}_{size[0]}x{size[1]}.jpg"
+            thumb = get_thumbnail_path(image_path, size, scheme=scheme)
         else:
-            thumb = get_thumbnail_path(image_path, size)
+            thumb = get_thumbnail_path(image_path, size, scheme=None)
         key = f"{thumb}|{size[0]}x{size[1]}"
 
         if not image_path.exists():

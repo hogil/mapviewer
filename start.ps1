@@ -29,7 +29,7 @@ $env:IO_THREADS="80"                     # Dev box (8C/64GB) - I/O 병렬화 2�
 $env:THUMBNAIL_SEM="48"                 # Concurrent thumbnail jobs
 $env:THUMB_PREFETCH_BATCH="32"          # Prefetch batch size
 $env:THUMB_CLIENT_MAX_CONCURRENCY="10"  # Frontend concurrent loads
-$env:VIPS_CONCURRENCY="16"              # pyvips worker count (동시 PNG 압축 가속)
+$env:VIPS_CONCURRENCY="4"               # pyvips 내부 스레드 (최적화됨, 벤치마크 기준 최고 성능)
 $env:VIPS_MAX_CACHE="2000"              # libvips 연산 캐시 개수
 $env:VIPS_MAX_CACHE_MEM="536870912"     # libvips 캐시 메모리 (512MB)
 $env:VIPS_MAX_CACHE_FILES="200"         # 열린 파일 캐시
@@ -43,7 +43,7 @@ $env:SEARCH_FALLBACK_TIMEOUT_MS="0"     # 0=시간 제한 없음
 
 # 인덱스 구축 워커 수 (병렬 디렉터리 스캔 가속)
 $env:INDEX_WORKERS = "4" # CPU 수 대비 2배, 최대 64
-$env:INDEX_REFRESH_INTERVAL_MINUTES="30" # 파일 인덱스 자동 재빌드 간격(분)
+$env:INDEX_REFRESH_ERVAL_MINUTES="30" # 파일 인덱스 자동 재빌드 간격(분)
 
 # 이미지 피라미드 설정
 # 2025-10-23: 피라미드 썸네일 품질 및 속도 최적화
