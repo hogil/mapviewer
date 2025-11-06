@@ -1,26 +1,23 @@
 const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
 const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288'];
-const DEFAULT_SCHEME = {
-    top: {
-        Grade0: '#FF1493',
-        Grade1: '#00CED1',
-        Grade2: '#FFD700',
-        Grade3: '#8A2BE2',
-        Grade4: '#FFD700',
-        Grade5: '#FF4500',
-        Grade6: '#32CD32',
-        Grade7: '#4B0082',
-    },
-    bottom: {
-        Normal: '#2F4F4F',
-        Invalid: '#8B4513',
-        B285: '#FF69B4',
-        B286: '#00FA9A',
-        B287: '#FF6347',
-        B288: '#4169E1',
-    },
-    background: '#FEFEFE',
-};
+
+/**
+ * 서버에서 로드한 color-legends.json의 default scheme을 가져옴
+ * @param {Object} legends - colorLegends 객체
+ * @returns {Object} default scheme 또는 빈 객체
+ */
+function getDefaultScheme(legends) {
+    if (!legends || !legends.default) {
+        console.warn('⚠️ [ColorEditor] default scheme을 찾을 수 없습니다. color-legends.json을 확인하세요.');
+        return {
+            top: {},
+            bottom: {},
+            background: '#FEFEFE',
+            text: '#000001'
+        };
+    }
+    return legends.default;
+}
 
 function normalizeHex(value) {
     if (value == null) return null;
@@ -350,7 +347,7 @@ export class ColorSchemeEditor {
             }
         }
         this.currentSchemeName = schemeName;
-        const schemeData = legends[schemeName] || DEFAULT_SCHEME;
+        const schemeData = legends[schemeName] || getDefaultScheme(legends);
         // 초기 상태 저장 (깊은 복사)
         this.originalSchemeData = JSON.parse(JSON.stringify(schemeData));
         
@@ -580,11 +577,12 @@ export class ColorSchemeEditor {
         const sourceSchemeData = legends[target];
         
         // 현재 scheme의 색상만 업데이트 (top, bottom, background, text)
+        const defaultScheme = getDefaultScheme(legends);
         const updatedSchemeData = {
             top: sourceSchemeData.top || {},
             bottom: sourceSchemeData.bottom || {},
-            background: sourceSchemeData.background || DEFAULT_SCHEME.background,
-            text: sourceSchemeData.text || DEFAULT_SCHEME.text
+            background: sourceSchemeData.background || defaultScheme.background || '#FEFEFE',
+            text: sourceSchemeData.text || defaultScheme.text || '#000001'
         };
         
         // 현재 scheme에 적용
@@ -708,10 +706,12 @@ export class ColorSchemeEditor {
     }
 
     applySchemeToRows(scheme) {
-        const top = scheme.top || DEFAULT_SCHEME.top;
-        const bottom = scheme.bottom || DEFAULT_SCHEME.bottom;
-        const background = scheme.background || DEFAULT_SCHEME.background;
-        const text = scheme.text || DEFAULT_SCHEME.text;
+        const legends = this.viewer?.colorLegends || {};
+        const defaultScheme = getDefaultScheme(legends);
+        const top = scheme.top || defaultScheme.top || {};
+        const bottom = scheme.bottom || defaultScheme.bottom || {};
+        const background = scheme.background || defaultScheme.background || '#FEFEFE';
+        const text = scheme.text || defaultScheme.text || '#000001';
 
         this.rows.forEach((row) => {
             let hex;
@@ -880,11 +880,13 @@ export class ColorSchemeEditor {
 
     getCurrentSchemeData() {
         // 색상 편집에는 top, bottom, background, text만 사용
+        const legends = this.viewer?.colorLegends || {};
+        const defaultScheme = getDefaultScheme(legends);
         const data = {
             top: {},
             bottom: {},
-            background: DEFAULT_SCHEME.background,
-            text: DEFAULT_SCHEME.text,
+            background: defaultScheme.background || '#FEFEFE',
+            text: defaultScheme.text || '#000001',
         };
 
         this.rows.forEach((row) => {
@@ -1157,8 +1159,8 @@ export class ColorSchemeEditor {
     handleReset() {
         // 기본값(default)으로 초기화
         const legends = this.viewer?.colorLegends || {};
-        // default scheme이 없으면 DEFAULT_SCHEME 사용
-        const defaultScheme = legends.default || DEFAULT_SCHEME;
+        // 서버에서 로드한 default scheme 사용
+        const defaultScheme = getDefaultScheme(legends);
         
         // 스킴 이름은 현재 스킴 이름 유지 (예: 'change')
         // 색상 값만 default scheme의 값으로 변경
@@ -1211,11 +1213,12 @@ export class ColorSchemeEditor {
             }
             
             // 저장된 scheme의 색상 값만 가져와서 현재 scheme에 적용
+            const defaultScheme = getDefaultScheme(legends);
             const restoredSchemeData = {
                 top: savedSchemeData.top || {},
                 bottom: savedSchemeData.bottom || {},
-                background: savedSchemeData.background || DEFAULT_SCHEME.background,
-                text: savedSchemeData.text || DEFAULT_SCHEME.text
+                background: savedSchemeData.background || defaultScheme.background || '#FEFEFE',
+                text: savedSchemeData.text || defaultScheme.text || '#000001'
             };
             
             // 저장된 scheme으로 적용

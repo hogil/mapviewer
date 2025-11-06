@@ -2742,7 +2742,8 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                 
                 # [1단계] 원본 이미지 로드
                 # 🔥 초고속 방식에 PLTE 패치만 추가
-                if personalized and scheme and image_path.suffix.lower() == '.png' and target_format == "PNG":
+                # 원본 이미지가 PNG이면 개인색 적용 (저장 포맷과 무관 - JPEG로 저장해도 개인색 적용)
+                if personalized and scheme and image_path.suffix.lower() == '.png':
                     logger.info(f"🎨 [PYRAMID] 개인색 설정 적용: personalized={personalized}, scheme={scheme}, path={image_path.name}, target_format={target_format}")
                     try:
                         from .personal_colors import plte_inplace_patch_memory
@@ -2976,7 +2977,12 @@ async def _generate_other_levels_background(image_path: Path, current_level: flo
         # 레벨을 크기 순으로 정렬 (큰 레벨부터)
         other_levels.sort(reverse=True)
         
+        # 🔥 개인색 설정 확인 및 로깅
         logger.info(f"🚀 [BG PIPELINE] Background 파이프라인 시작: levels={other_levels}, personalized={personalized}, scheme={scheme}")
+        if personalized and scheme:
+            logger.info(f"🎨 [BG PIPELINE] 개인색 설정 활성화: scheme={scheme}, levels={other_levels}")
+        else:
+            logger.info(f"⚪ [BG PIPELINE] 개인색 설정 비활성화: personalized={personalized}, scheme={scheme}")
         
         # 파이프라인 실행 (ThreadPoolExecutor 사용)
         loop = asyncio.get_running_loop()
@@ -3017,60 +3023,51 @@ def _generate_pyramid_bg_worker(image_path: Path, pyramid_path: Path, level: flo
 
 
 def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format_ext: str, personalized: bool = False, scheme: Optional[str] = None):
-    """원본 이미지를 한 번만 읽고 여러 레벨을 연속 생성하는 파이프라인"""
+    """원본 이미지를 한 번만 읽고 여러 레벨을 연속 생성하는 파이프라인
+    🔥 개인색 설정이 있으면 원본을 먼저 메모리에서 개인색으로 변경하고, 
+    그 변경된 이미지로 모든 레벨을 생성"""
     import pyvips
     import time
     
+    # 🔥 파이프라인 시작 시 개인색 설정 확인 및 로깅
+    logger.info(f"🎯 [PIPELINE START] levels={levels}, personalized={personalized}, scheme={scheme}, path={image_path.name}")
+    
     try:
-        # 개인색 설정 적용 (PNG인 경우에만)
+        # 🔥 Step 1: 원본 이미지를 먼저 개인색으로 변경 (메모리에서)
         original_image = None
         if personalized and scheme and image_path.suffix.lower() == '.png':
             try:
-                from PIL import Image as PILImage
-                with PILImage.open(image_path) as pil_original:
-                    if pil_original.mode != 'P':
-                        pil_original = pil_original.convert('P')
-                    
-                    legends = load_color_legends()
-                    scheme_data = legends.get(scheme)
-                    if scheme_data:
-                        from .personal_colors import get_palette_for_scheme, swap_first16_colors
-                        palette_bytes = get_palette_for_scheme(scheme_data)
-                        pil_img = swap_first16_colors(pil_original, palette_bytes)
-                        
-                        if pil_img and HAS_NUMPY:
-                            # 🔥 최적화: PIL 이미지를 RGB로 변환 후 numpy 배열로 직접 변환하여 pyvips로 전달
-                            # PNG 저장/로드 과정 제거로 속도 향상 (RGB 변환은 필요하지만 PNG I/O 제거)
-                            import numpy as np
-                            
-                            # PIL 이미지를 RGB로 변환 (팔레트가 적용된 상태)
-                            pil_rgb = pil_img.convert('RGB')
-                            
-                            # numpy 배열로 변환
-                            rgb_array = np.array(pil_rgb, dtype=np.uint8)
-                            height, width, bands = rgb_array.shape
-                            
-                            # pyvips Image로 직접 변환 (PNG 저장/로드 과정 제거)
-                            original_image = pyvips.Image.new_from_memory(
-                                rgb_array.tobytes(),
-                                width,
-                                height,
-                                bands,
-                                'uchar'
-                            )
-                            logger.info(f"🎨 [PIPELINE] 개인색 적용 완료: scheme={scheme}")
-                            
-                            try:
-                                pil_img.close()
-                                pil_rgb.close()
-                            except Exception:
-                                pass
+                from .personal_colors import plte_inplace_patch_memory
+                
+                # 원본 PNG 파일 읽기 및 PLTE 패치 (메모리에서)
+                with open(image_path, 'rb') as f:
+                    png_data = bytearray(f.read())
+                
+                # 메모리에서 PLTE 패치 적용
+                png_data = plte_inplace_patch_memory(png_data, scheme)
+                
+                # 패치된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
+                original_image = pyvips.Image.new_from_buffer(
+                    bytes(png_data), 
+                    "", 
+                    access='sequential', 
+                    fail_on='none', 
+                    memory=True, 
+                    unlimited=True
+                )
+                logger.info(f"🎨 [PIPELINE] 원본 이미지를 메모리에서 개인색으로 변경 완료: scheme={scheme}, size={original_image.width}x{original_image.height}")
             except Exception as e:
-                logger.warning(f"⚠️ [PIPELINE] 개인색 적용 실패, 원본 사용: {e}")
+                logger.warning(f"⚠️ [PIPELINE] 개인색 적용 실패, 원본 사용: {e}", exc_info=True)
         
         # 개인색 적용 실패 시 원본 로드
         if original_image is None:
-            original_image = pyvips.Image.new_from_file(str(image_path))
+            original_image = pyvips.Image.new_from_file(
+                str(image_path),
+                access='sequential',
+                fail_on='none',
+                memory=True,
+                unlimited=True
+            )
         
         results = []
         
@@ -3104,16 +3101,50 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                 
                 pyramid_path = pyramid_dir / f"{stem}_L{int(level*100)}.{format_ext}"
                 
-                # 이미 존재하면 스킵
-                if pyramid_path.exists():
-                    try:
-                        image_mtime = image_path.stat().st_mtime
-                        if pyramid_path.stat().st_mtime >= image_mtime:
-                            logger.info(f"⏭️ [PIPELINE SKIP] 이미 존재: level={level}")
-                            results.append((level, True, "EXISTS"))
-                            continue
-                    except Exception:
-                        pass
+                # 🔥 개인색 설정이 있으면 캐시 무시하고 항상 재생성
+                # (개인색 설정이 바뀌었을 수 있으므로 캐시된 파일을 사용하지 않음)
+                if personalized and scheme:
+                    # 🔥 개인색 설정이 있으면 비개인색 경로의 캐시 파일 확인 및 삭제
+                    non_personalized_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
+                    non_personalized_path = non_personalized_dir / f"{stem}_L{int(level*100)}.{format_ext}"
+                    if non_personalized_path.exists():
+                        try:
+                            non_personalized_path.unlink()
+                            logger.debug(f"🗑️ [PIPELINE] 비개인색 캐시 파일 삭제: level={level}, path={non_personalized_path}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ [PIPELINE] 비개인색 캐시 파일 삭제 실패: {e}")
+                    
+                    # 🔥 개인색 경로의 파일이 있더라도 확인 후 재생성 여부 결정
+                    # (타임스탬프가 최신이고 파일이 유효하면 사용, 아니면 재생성)
+                    if pyramid_path.exists():
+                        try:
+                            image_mtime = image_path.stat().st_mtime
+                            if pyramid_path.stat().st_mtime >= image_mtime and pyramid_path.stat().st_size > 0:
+                                logger.info(f"✅ [PIPELINE] 개인색 캐시 사용: level={level}, scheme={scheme}")
+                                results.append((level, True, "EXISTS"))
+                                continue
+                            else:
+                                # 캐시가 오래되었거나 손상된 경우 재생성
+                                logger.debug(f"🔄 [PIPELINE] 개인색 캐시 무효 - 재생성: level={level}, scheme={scheme}")
+                                try:
+                                    pyramid_path.unlink()
+                                except Exception:
+                                    pass
+                        except Exception as e:
+                            logger.debug(f"🔄 [PIPELINE] 개인색 캐시 확인 실패 - 재생성: {e}")
+                    else:
+                        logger.debug(f"🔄 [PIPELINE] 개인색 캐시 없음 - 재생성: level={level}, scheme={scheme}")
+                else:
+                    # 개인색 설정이 없을 때만 캐시 확인
+                    if pyramid_path.exists():
+                        try:
+                            image_mtime = image_path.stat().st_mtime
+                            if pyramid_path.stat().st_mtime >= image_mtime:
+                                logger.info(f"⏭️ [PIPELINE SKIP] 이미 존재: level={level}")
+                                results.append((level, True, "EXISTS"))
+                                continue
+                        except Exception:
+                            pass
                 
                 # 레벨 생성
                 work_image = original_image
@@ -3363,11 +3394,17 @@ async def get_image(
             # 🔥 개인색 설정이 활성화된 경우, 비개인색 캐시는 절대 사용하지 않음
             # 개인색 설정이 활성화되어 있으면 반드시 개인색 경로의 파일만 확인
             if personalized and scheme:
-                # 🔥 비개인색 경로 확인 (존재하더라도 무시)
+                # 🔥 비개인색 경로 확인 (존재하더라도 무시하고 삭제)
                 non_personalized_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
                 non_personalized_path = non_personalized_dir / f"{stem}_L{int(level*100)}.{format_ext}"
                 if non_personalized_path.exists():
                     logger.debug(f"🔍 [CACHE] 비개인색 피라미드 존재하지만 무시: {non_personalized_path}")
+                    # 🔥 비개인색 캐시 파일 삭제 (혼동 방지)
+                    try:
+                        non_personalized_path.unlink()
+                        logger.debug(f"🗑️ [CACHE] 비개인색 캐시 파일 삭제: {non_personalized_path}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ [CACHE] 비개인색 캐시 파일 삭제 실패: {e}")
             
             # 🔥 개인색 설정이 비활성화된 경우, 개인색 경로의 파일은 무시
             if not personalized or not scheme:
@@ -3375,8 +3412,15 @@ async def get_image(
                 if not is_head:
                     logger.debug(f"🎨 [NON-PERSONALIZED] 개인색 설정 비활성화 - 기본 피라미드 사용")
             
-            if pyramid_path.exists() and pyramid_path.stat().st_size > 0:
-                if pyramid_path.stat().st_mtime >= image_mtime:
+            # 🔥 개인색 설정이 활성화된 경우, 반드시 개인색 경로의 파일만 확인
+            # 비개인색 경로의 파일이 있어도 절대 사용하지 않음
+            if personalized and scheme:
+                # 개인색 경로의 파일만 확인
+                if not pyramid_path.exists():
+                    # 🔥 개인색 경로에 파일이 없으면 강제로 재생성 (비개인색 캐시 사용 안 함)
+                    if not is_head:
+                        logger.info(f"🔄 [CACHE] 개인색 경로에 캐시 없음 - 재생성: level={level}, scheme={scheme}")
+                elif pyramid_path.stat().st_size > 0 and pyramid_path.stat().st_mtime >= image_mtime:
                     st = pyramid_path.stat()
                     # 🔥 캐시 히트는 debug 레벨로 (대량 요청 시 로그 폭주 방지)
                     if not is_head:
@@ -3392,49 +3436,32 @@ async def get_image(
                     }
                     response = FileResponse(pyramid_path, headers=headers)
                     return response
+            else:
+                # 비개인색 설정인 경우: 기존 로직 유지
+                if pyramid_path.exists() and pyramid_path.stat().st_size > 0:
+                    if pyramid_path.stat().st_mtime >= image_mtime:
+                        st = pyramid_path.stat()
+                        # 🔥 캐시 히트는 debug 레벨로 (대량 요청 시 로그 폭주 방지)
+                        if not is_head:
+                            logger.debug(f"✅ [CACHE HIT] 파일: {st.st_size/(1024*1024):.1f}MB (personalized={personalized}, scheme={scheme})")
+
+                        headers = {
+                            "Cache-Control": "public, max-age=31536000, immutable",
+                            "Content-Type": content_type,
+                            "ETag": compute_etag(st),
+                            "X-Pyramid-Level": str(level),
+                            "X-Cache-Status": "HIT",
+                            "X-File-Size": str(st.st_size)
+                        }
+                        response = FileResponse(pyramid_path, headers=headers)
+                        return response
 
             # 캐시 미스: 피라미드 이미지 생성
-            # 🔥 중요: 원본 이미지에 PLTE 패치를 적용한 임시 파일을 만들어서 피라미드 생성
-            if personalized and scheme and image_path.suffix.lower() == '.png':
-                if not is_head:
-                    logger.info(f"🎨 [PYRAMID] 원본 이미지에 PLTE 패치 적용 후 피라미드 생성: level={level}, path={pyramid_path}")
-                
-                import tempfile
-                import os
-                from .personal_colors import plte_inplace_patch_memory
-                
-                # 원본 이미지에 PLTE 패치 적용
-                with open(image_path, 'rb') as f:
-                    png_data = bytearray(f.read())
-                
-                png_data = plte_inplace_patch_memory(png_data, scheme)
-                
-                # 임시 파일 생성 (색상 변경된 원본)
-                temp_dir = tempfile.gettempdir()
-                temp_file = tempfile.NamedTemporaryFile(
-                    suffix='.png',
-                    dir=temp_dir,
-                    delete=False
-                )
-                temp_original_path = Path(temp_file.name)
-                temp_file.write(png_data)
-                temp_file.close()
-                
-                try:
-                    # 변경된 원본으로 피라미드 생성
-                    _generate_pyramid_sync(temp_original_path, pyramid_path, level, personalized=False, scheme=None)
-                finally:
-                    # 임시 파일 삭제
-                    try:
-                        if temp_original_path.exists():
-                            os.unlink(temp_original_path)
-                    except Exception:
-                        pass
-            else:
-                # 개인색 설정이 없으면 기존 방식대로 원본으로 피라미드 생성
-                if not is_head:
-                    logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}, path={pyramid_path}, personalized={personalized}, scheme={scheme}")
-                _generate_pyramid_sync(image_path, pyramid_path, level, personalized=personalized, scheme=scheme)
+            # 🔥 개인색 설정이 있으면 _generate_pyramid_sync에서 메모리에서 직접 처리
+            # (임시 파일 생성 제거, 메모리에서 직접 PLTE 패치 후 pyvips로 로드)
+            if not is_head:
+                logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}, path={pyramid_path}, personalized={personalized}, scheme={scheme}")
+            _generate_pyramid_sync(image_path, pyramid_path, level, personalized=personalized, scheme=scheme)
 
             # 🔥 Background에서 다른 레벨들도 생성 시작 (사용자 대기 없음)
             # 개인별 설정이 활성화된 경우 background에서도 동일한 설정으로 생성

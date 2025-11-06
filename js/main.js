@@ -12380,19 +12380,15 @@ class WaferMapViewer {
         }
         
         // 🎨 Scheme 결정 로직 (개인색 설정 활성화 여부에 따라)
-        let schemeToUse = 'default'; // 기본값 (개인색 설정 off일 때)
+        // 개인색 설정이 체크되지 않으면 항상 'default' 사용
+        let schemeToUse = 'default'; // 기본값
         
         if (this.personalizedColorEnabled) {
             // 개인색 설정이 활성화되어 있으면: LoginId가 있으면 LoginId 사용, 없으면 'change' 사용
             schemeToUse = this.currentUser || 'change';
         } else {
-            // 개인색 설정이 비활성화되어 있으면:
-            // currentUser가 설정되어 있고 해당 scheme이 존재하면 그것을 사용 (색상 편집 후 legend 표시용)
-            if (this.currentUser && this.colorLegends[this.currentUser]) {
-                schemeToUse = this.currentUser;
-            } else {
-                schemeToUse = 'default';
-            }
+            // 개인색 설정이 비활성화되어 있으면 항상 'default' 사용
+            schemeToUse = 'default';
         }
         
         // Scheme이 존재하는지 확인하고 없으면 fallback
@@ -12422,26 +12418,50 @@ class WaferMapViewer {
         }
 
         // Render top legend
+        // 🔥 TOP_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
         if (userData.top && typeof userData.top === 'object') {
-            const topHtml = Object.entries(userData.top).map(([label, color]) => `
-                <div class="legend-item" data-section="top" data-key="${label}" style="cursor: pointer;">
-                    <span class="legend-label">${label}</span>
-                    <div class="legend-color-bar" data-section="top" data-key="${label}" style="background-color: ${color}; cursor: pointer;"></div>
-                </div>
-            `).join('');
+            const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
+            const topHtml = TOP_KEYS.map((label) => {
+                const color = userData.top[label];
+                if (color) {
+                    return `
+                        <div class="legend-item" data-section="top" data-key="${label}" style="cursor: pointer;">
+                            <span class="legend-label">${label}</span>
+                            <div class="legend-color-bar" data-section="top" data-key="${label}" style="background-color: ${color}; cursor: pointer;"></div>
+                        </div>
+                    `;
+                }
+                return '';
+            }).filter(html => html).join('');
             this.dom.colorLegendTop.innerHTML = topHtml;
         } else {
             this.dom.colorLegendTop.innerHTML = '';
         }
 
         // Render bottom legend
+        // 🔥 BOTTOM_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
         if (userData.bottom && typeof userData.bottom === 'object') {
-            const bottomHtml = Object.entries(userData.bottom).map(([label, color]) => `
-                <div class="legend-item" data-section="bottom" data-key="${label}" style="cursor: pointer;">
-                    <span class="legend-label">${label}</span>
-                    <div class="legend-color-bar" data-section="bottom" data-key="${label}" style="background-color: ${color}; cursor: pointer;"></div>
-                </div>
-            `).join('');
+            const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288'];
+            const bottomHtml = BOTTOM_KEYS.map((label) => {
+                // 🔥 "Border" 키가 있는 경우 "Normal"로 매핑 (Ubuntu 서버 호환성)
+                let actualLabel = label;
+                if (label === 'Normal' && !userData.bottom[label] && userData.bottom['Border']) {
+                    actualLabel = 'Border';
+                }
+                
+                const color = userData.bottom[actualLabel];
+                if (color) {
+                    // 🔥 "Border"를 "Normal"로 표시 및 data-key도 "Normal"로 설정
+                    const displayLabel = actualLabel === 'Border' ? 'Normal' : label;
+                    return `
+                        <div class="legend-item" data-section="bottom" data-key="${displayLabel}" style="cursor: pointer;">
+                            <span class="legend-label">${displayLabel}</span>
+                            <div class="legend-color-bar" data-section="bottom" data-key="${displayLabel}" style="background-color: ${color}; cursor: pointer;"></div>
+                        </div>
+                    `;
+                }
+                return '';
+            }).filter(html => html).join('');
             this.dom.colorLegendBottom.innerHTML = bottomHtml;
         } else {
             this.dom.colorLegendBottom.innerHTML = '';
@@ -12457,11 +12477,14 @@ class WaferMapViewer {
         }
         
         // 🎨 Scheme 결정 로직 (개인색 설정 활성화 여부에 따라)
-        let schemeToUse = 'default';
+        // 개인색 설정이 체크되지 않으면 항상 'default' 사용
+        let schemeToUse = 'default'; // 기본값
         
         if (this.personalizedColorEnabled) {
+            // 개인색 설정이 활성화되어 있으면: LoginId가 있으면 LoginId 사용, 없으면 'change' 사용
             schemeToUse = this.currentUser || 'change';
         } else {
+            // 개인색 설정이 비활성화되어 있으면 항상 'default' 사용
             schemeToUse = 'default';
         }
         
@@ -12512,27 +12535,51 @@ class WaferMapViewer {
         };
         
         // Top legend 그룹 (좌측 정렬)
+        // 🔥 TOP_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
         html += '<div class="legend-group-top">';
         if (userData.top && typeof userData.top === 'object') {
-            const topHtml = Object.entries(userData.top).map(([label, color]) => `
-                <div class="legend-item-grid">
-                    <div class="legend-color-bar-grid" style="background-color: ${color};"></div>
-                    <span class="legend-label-grid">${shortenLabel(label)}</span>
-                </div>
-            `).join('');
+            const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
+            const topHtml = TOP_KEYS.map((label) => {
+                const color = userData.top[label];
+                if (color) {
+                    return `
+                        <div class="legend-item-grid">
+                            <div class="legend-color-bar-grid" style="background-color: ${color};"></div>
+                            <span class="legend-label-grid">${shortenLabel(label)}</span>
+                        </div>
+                    `;
+                }
+                return '';
+            }).filter(html => html).join('');
             html += topHtml;
         }
         html += '</div>';
         
         // Bottom legend 그룹 (우측 정렬)
+        // 🔥 BOTTOM_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
         html += '<div class="legend-group-bottom">';
         if (userData.bottom && typeof userData.bottom === 'object') {
-            const bottomHtml = Object.entries(userData.bottom).map(([label, color]) => `
-                <div class="legend-item-grid">
-                    <div class="legend-color-bar-grid" style="background-color: ${color};"></div>
-                    <span class="legend-label-grid">${shortenLabel(label)}</span>
-                </div>
-            `).join('');
+            const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288'];
+            const bottomHtml = BOTTOM_KEYS.map((label) => {
+                // 🔥 "Border" 키가 있는 경우 "Normal"로 매핑 (Ubuntu 서버 호환성)
+                let actualLabel = label;
+                if (label === 'Normal' && !userData.bottom[label] && userData.bottom['Border']) {
+                    actualLabel = 'Border';
+                }
+                
+                const color = userData.bottom[actualLabel];
+                if (color) {
+                    // 🔥 "Border"를 "Normal"로 표시 (shortenLabel에서 "nor"로 변환)
+                    const displayLabel = actualLabel === 'Border' ? 'Normal' : label;
+                    return `
+                        <div class="legend-item-grid">
+                            <div class="legend-color-bar-grid" style="background-color: ${color};"></div>
+                            <span class="legend-label-grid">${shortenLabel(displayLabel)}</span>
+                        </div>
+                    `;
+                }
+                return '';
+            }).filter(html => html).join('');
             html += bottomHtml;
         }
         html += '</div>';
