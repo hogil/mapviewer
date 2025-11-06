@@ -69,6 +69,7 @@ export class ColorSchemeEditor {
         this.cancelBtn = this.modal ? this.modal.querySelector('#color-editor-cancel-btn') : null;
         this.applyBtn = this.modal ? this.modal.querySelector('#color-editor-apply-btn') : null;
         this.resetBtn = this.modal ? this.modal.querySelector('#color-editor-reset-btn') : null;
+        this.restoreBtn = this.modal ? this.modal.querySelector('#color-editor-restore-btn') : null;
         this.errorEl = this.modal ? this.modal.querySelector('#color-editor-error') : null;
         this.schemeLabel = this.modal ? this.modal.querySelector('#color-editor-scheme-label') : null;
         this.schemeSearchInput = this.modal ? this.modal.querySelector('#color-editor-scheme-search') : null;
@@ -81,6 +82,7 @@ export class ColorSchemeEditor {
         this.originalSchemeData = null;
         this._setupDone = false;
         this.selectedSchemeIndex = -1; // 키보드 네비게이션용
+        this.originalCheckboxState = null; // 모달 열 때 체크박스 상태 저장용
         this.setup();
         if (this.modal) {
             this._setupDone = true;
@@ -103,13 +105,18 @@ export class ColorSchemeEditor {
         if (this.resetBtn) {
             this.resetBtn.addEventListener('click', () => this.handleReset());
         }
-        if (this.modal) {
-            this.modal.addEventListener('click', (event) => {
-                if (event.target === this.modal) {
-                    this.close();
-                }
-            });
+        if (this.restoreBtn) {
+            this.restoreBtn.addEventListener('click', () => this.handleRestore());
         }
+        // 🔥 모달 배경 클릭으로 닫기 비활성화 (취소/적용 버튼으로만 닫기)
+        // 모달 배경 클릭 시 닫지 않음
+        // if (this.modal) {
+        //     this.modal.addEventListener('click', (event) => {
+        //         if (event.target === this.modal) {
+        //             this.close();
+        //         }
+        //     });
+        // }
         if (this.schemeLoadBtn) {
             // 검색 버튼 클릭 시 리스트 표시
             this.schemeLoadBtn.addEventListener('click', () => {
@@ -128,6 +135,15 @@ export class ColorSchemeEditor {
             // 엔터 입력 시 리스트 표시
             this.schemeSearchInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
+                    // 🔥 드롭다운이 열려있으면 검색 입력창의 Enter 처리를 하지 않음
+                    // (document의 handleKeyDown에서 드롭다운 선택을 처리하도록 함)
+                    if (this.schemeDropdown?.classList.contains('is-open')) {
+                        // 드롭다운이 열려있으면 이벤트를 전파하여 handleKeyDown에서 처리하도록 함
+                        // preventDefault는 호출하지 않아서 이벤트가 document까지 전파됨
+                        return;
+                    }
+                    
+                    // 드롭다운이 닫혀있을 때만 리스트 표시
                     e.preventDefault();
                     this.populateSchemeOptions(true);
                     // 첫 번째 항목 선택
@@ -298,6 +314,7 @@ export class ColorSchemeEditor {
             this.cancelBtn = this.modal.querySelector('#color-editor-cancel-btn');
             this.applyBtn = this.modal.querySelector('#color-editor-apply-btn');
             this.resetBtn = this.modal.querySelector('#color-editor-reset-btn');
+            this.restoreBtn = this.modal.querySelector('#color-editor-restore-btn');
             this.errorEl = this.modal.querySelector('#color-editor-error');
             this.schemeLabel = this.modal.querySelector('#color-editor-scheme-label');
             this.schemeSearchInput = this.modal.querySelector('#color-editor-scheme-search');
@@ -336,6 +353,14 @@ export class ColorSchemeEditor {
         const schemeData = legends[schemeName] || DEFAULT_SCHEME;
         // 초기 상태 저장 (깊은 복사)
         this.originalSchemeData = JSON.parse(JSON.stringify(schemeData));
+        
+        // 🔥 모달 열 때 체크박스 상태 저장 (취소 시 복원용)
+        if (this.viewer?.dom?.personalizedColorCheckbox) {
+            this.originalCheckboxState = this.viewer.dom.personalizedColorCheckbox.checked;
+        } else {
+            this.originalCheckboxState = this.viewer?.personalizedColorEnabled || false;
+        }
+        
         this.populateSchemeOptions();
         this.applySchemeToRows(schemeData);
         this.updateSchemeLabel(schemeName);
@@ -352,8 +377,82 @@ export class ColorSchemeEditor {
         });
     }
 
-    close() {
+    async close() {
         if (!this.modal) return;
+        
+        // 🔥 취소 시 원래 색상으로 되돌리기
+        if (this.viewer && !this.viewer.gridMode && this.viewer.selectedImagePath) {
+            // 실시간 미리보기 타임아웃 취소
+            if (this._realtimeUpdateTimeout) {
+                clearTimeout(this._realtimeUpdateTimeout);
+                this._realtimeUpdateTimeout = null;
+            }
+            
+            // 원래 색상으로 되돌리기
+            try {
+                // 원래 색상 스킴으로 이미지 다시 로드
+                if (this.originalSchemeData && this.currentSchemeName) {
+                    // 원래 색상 스킴을 프론트엔드 캐시에 복원
+                    if (this.viewer.colorLegends) {
+                        this.viewer.colorLegends[this.currentSchemeName] = JSON.parse(JSON.stringify(this.originalSchemeData));
+                    }
+                    
+                    // 원래 색상 스킴을 서버에 복원 (임시 preview 스킴 대신 원래 스킴 사용)
+                    try {
+                        await fetch('/api/color-scheme', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                schemeName: this.currentSchemeName,
+                                schemeData: JSON.parse(JSON.stringify(this.originalSchemeData)),
+                            }),
+                        });
+                    } catch (e) {
+                        console.warn('[ColorEditor] 원래 색상 스킴 복원 실패 (무시 가능):', e);
+                    }
+                    
+                    // 피라미드 레벨 캐시 초기화
+                    this.viewer.pyramidLevels = {};
+                    if (this.viewer._pyramidLoading) {
+                        this.viewer._pyramidLoading = new Set();
+                    }
+                    if (this.viewer.pyramidLoadingLevels) {
+                        this.viewer.pyramidLoadingLevels.clear();
+                    }
+                    if (this.viewer.semiconductorRenderer) {
+                        this.viewer.semiconductorRenderer.imagePyramid = {};
+                        this.viewer.semiconductorRenderer.levelTextures.clear();
+                    }
+                    
+                    // 캐시 버스터 추가하여 강제 새로고침
+                    this.viewer._personalizedColorCacheBuster = Date.now();
+                    
+                    // 원래 설정으로 이미지 다시 로드 (체크박스 상태도 복원)
+                    const originalUser = this.viewer.currentUser;
+                    
+                    // 🔥 체크박스 상태 복원 (모달 열 때 저장한 상태로)
+                    if (this.originalCheckboxState !== null && this.viewer.dom?.personalizedColorCheckbox) {
+                        this.viewer.dom.personalizedColorCheckbox.checked = this.originalCheckboxState;
+                    }
+                    this.viewer.personalizedColorEnabled = this.originalCheckboxState !== null ? this.originalCheckboxState : this.viewer.personalizedColorEnabled;
+                    
+                    // 원래 색상 스킴으로 이미지 로드
+                    this.viewer.currentUser = originalUser;
+                    
+                    // 이미지 다시 로드 (원래 색상)
+                    await this.viewer.loadImage(this.viewer.selectedImagePath);
+                    
+                    // Legend도 업데이트
+                    this.viewer.renderColorLegends();
+                    this.viewer.showColorLegends();
+                }
+            } catch (error) {
+                console.error('[ColorEditor] 취소 시 원래 색상으로 되돌리기 실패:', error);
+            }
+        }
+        
         this.modal.classList.remove('is-open');
         this.modal.setAttribute('aria-hidden', 'true');
         document.removeEventListener('keydown', this.boundKeyHandler);
@@ -362,48 +461,78 @@ export class ColorSchemeEditor {
     }
 
     handleKeyDown(event) {
-        // 검색 입력창에서 엔터 처리 (드롭다운이 열려있지 않을 때)
-        if (event.target === this.schemeSearchInput && event.key === 'Enter') {
-            // populateSchemeOptions에서 이미 처리되므로 여기서는 아무것도 하지 않음
-            return;
-        }
-        
-        // 드롭다운이 열려있을 때 키보드 네비게이션 처리
+        // 드롭다운이 열려있을 때 키보드 네비게이션 처리 (최우선)
         if (this.schemeDropdown?.classList.contains('is-open')) {
             const items = Array.from(this.schemeDropdown.querySelectorAll('.color-editor-scheme-item'));
-            if (items.length === 0) return;
-            
-            if (event.key === 'ArrowDown') {
-                event.preventDefault();
-                this.selectedSchemeIndex = Math.min(this.selectedSchemeIndex + 1, items.length - 1);
-                this.updateSchemeSelection(items);
-                return;
-            } else if (event.key === 'ArrowUp') {
-                event.preventDefault();
-                this.selectedSchemeIndex = Math.max(this.selectedSchemeIndex - 1, -1);
-                this.updateSchemeSelection(items);
-                return;
-            } else if (event.key === 'Enter') {
-                event.preventDefault();
-                if (this.selectedSchemeIndex >= 0 && this.selectedSchemeIndex < items.length) {
-                    const selectedItem = items[this.selectedSchemeIndex];
-                    const schemeName = selectedItem.dataset.name;
-                    if (schemeName) {
-                        this.handleSchemeLoad(schemeName);
+            if (items.length > 0) {
+                if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    this.selectedSchemeIndex = Math.min(this.selectedSchemeIndex + 1, items.length - 1);
+                    this.updateSchemeSelection(items);
+                    return;
+                } else if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    this.selectedSchemeIndex = Math.max(this.selectedSchemeIndex - 1, -1);
+                    this.updateSchemeSelection(items);
+                    return;
+                } else if (event.key === 'Enter') {
+                    event.preventDefault();
+                    // 🔥 드롭다운이 열려있을 때 Enter: 선택된 항목 로드
+                    if (this.selectedSchemeIndex >= 0 && this.selectedSchemeIndex < items.length) {
+                        const selectedItem = items[this.selectedSchemeIndex];
+                        const schemeName = selectedItem.dataset.name;
+                        if (schemeName) {
+                            this.handleSchemeLoad(schemeName);
+                        }
+                    } else if (this.selectedSchemeIndex === -1 && items.length > 0) {
+                        // 선택된 항목이 없으면 첫 번째 항목 선택
+                        this.selectedSchemeIndex = 0;
+                        this.updateSchemeSelection(items);
+                        const firstItem = items[0];
+                        const schemeName = firstItem.dataset.name;
+                        if (schemeName) {
+                            this.handleSchemeLoad(schemeName);
+                        }
                     }
+                    return;
+                } else if (event.key === 'Escape') {
+                    event.preventDefault();
+                    this.hideDropdown();
+                    this.selectedSchemeIndex = -1;
+                    return;
                 }
-                return;
-            } else if (event.key === 'Escape') {
-                event.preventDefault();
-                this.hideDropdown();
-                this.selectedSchemeIndex = -1;
-                return;
             }
         }
         
-        // 모달 닫기 (Escape)
+        // 검색 입력창에서 Enter 처리: 검색 리스트 표시 (드롭다운이 닫혀있을 때만)
+        if (event.target === this.schemeSearchInput && event.key === 'Enter') {
+            // 드롭다운이 열려있으면 위에서 이미 처리됨
+            // 드롭다운이 닫혀있으면 schemeSearchInput의 이벤트 리스너에서 처리됨
+            return;
+        }
+        
+        // 🔥 ESC 키: 취소 버튼과 동일하게 동작
         if (event.key === 'Escape') {
-            this.close();
+            event.preventDefault();
+            this.close(); // 취소 버튼과 동일
+            return;
+        }
+        
+        // 🔥 Enter 키: 적용 버튼과 동일하게 동작 (검색 입력창이나 드롭다운이 아닐 때만)
+        if (event.key === 'Enter') {
+            // 검색 입력창이나 드롭다운이 활성화되어 있으면 적용 버튼 동작 안 함
+            const activeElement = document.activeElement;
+            const isSearchInput = activeElement === this.schemeSearchInput;
+            const isDropdownOpen = this.schemeDropdown?.classList.contains('is-open');
+            
+            // 검색 입력창이나 드롭다운이 활성화되어 있지 않을 때만 적용
+            if (!isSearchInput && !isDropdownOpen) {
+                event.preventDefault();
+                if (this.applyBtn && !this.applyBtn.disabled) {
+                    this.handleApply();
+                }
+                return;
+            }
         }
     }
     
@@ -430,10 +559,11 @@ export class ColorSchemeEditor {
                 return;
             }
         }
-        // 다이얼로그 외부 클릭 시 모달 닫기
-        if (!this.dialog.contains(event.target)) {
-            this.close();
-        }
+        // 🔥 외부 클릭으로 모달 닫기 비활성화 (취소/적용 버튼으로만 닫기)
+        // 모달 외부 클릭 시 닫지 않음
+        // if (!this.dialog.contains(event.target)) {
+        //     this.close();
+        // }
     }
 
     handleSchemeLoad(name) {
@@ -465,7 +595,11 @@ export class ColorSchemeEditor {
         
         // 변경사항 있으므로 적용 버튼 활성화
         this.updateApplyButtonState(true);
+        this.clearError();
         this.hideDropdown();
+        
+        // 🔥 미리보기에 적용
+        this.updatePreviewRealtime();
     }
 
     populateSchemeOptions(shouldOpen = false) {
@@ -1021,6 +1155,7 @@ export class ColorSchemeEditor {
 
 
     handleReset() {
+        // 기본값(default)으로 초기화
         const legends = this.viewer?.colorLegends || {};
         // default scheme이 없으면 DEFAULT_SCHEME 사용
         const defaultScheme = legends.default || DEFAULT_SCHEME;
@@ -1048,6 +1183,61 @@ export class ColorSchemeEditor {
         this.updateApplyButtonState(true);
         this.clearError();
         this.hideDropdown();
+        
+        // 🔥 미리보기에 적용
+        this.updatePreviewRealtime();
+    }
+    
+    async handleRestore() {
+        // color-legends.json에 저장된 scheme 값으로 복원 (서버에서 다시 로드)
+        try {
+            // 서버에서 color-legends.json 다시 로드
+            const response = await fetch('/logs/color-legends.json');
+            if (!response.ok) {
+                throw new Error('색상 스킴 로드 실패');
+            }
+            const legends = await response.json();
+            
+            // 프론트엔드 캐시 업데이트
+            if (this.viewer) {
+                this.viewer.colorLegends = legends;
+            }
+            
+            const savedSchemeData = legends[this.currentSchemeName];
+            
+            if (!savedSchemeData) {
+                this.showError('저장된 스킴 데이터를 찾을 수 없습니다.');
+                return;
+            }
+            
+            // 저장된 scheme의 색상 값만 가져와서 현재 scheme에 적용
+            const restoredSchemeData = {
+                top: savedSchemeData.top || {},
+                bottom: savedSchemeData.bottom || {},
+                background: savedSchemeData.background || DEFAULT_SCHEME.background,
+                text: savedSchemeData.text || DEFAULT_SCHEME.text
+            };
+            
+            // 저장된 scheme으로 적용
+            this.applySchemeToRows(restoredSchemeData);
+            
+            // 원래 스킴 데이터를 현재 저장된 값으로 업데이트 (변경사항 감지용)
+            this.originalSchemeData = JSON.parse(JSON.stringify(restoredSchemeData));
+            
+            // 스킴 이름은 변경하지 않음 (현재 스킴 이름 유지)
+            this.updateSchemeLabel(this.currentSchemeName);
+            
+            // 저장된 값으로 복원했으므로 변경사항 없음 (적용 버튼 비활성화)
+            this.updateApplyButtonState(false);
+            this.clearError();
+            this.hideDropdown();
+            
+            // 🔥 미리보기에 적용
+            this.updatePreviewRealtime();
+        } catch (error) {
+            console.error('[ColorEditor] 저장된 스킴 복원 실패:', error);
+            this.showError('저장된 스킴을 불러오는 중 오류가 발생했습니다.');
+        }
     }
 
     updateSchemeLabel(name) {
