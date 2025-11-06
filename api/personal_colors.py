@@ -51,13 +51,25 @@ def load_color_legends() -> Dict[str, Any]:
             return _color_legends_cache or {}
 
 
-def save_color_legends(legends: Dict[str, Any]) -> bool:
-    """Persist legends to disk."""
+def save_color_legends(legends: Dict[str, Any], updated_scheme_name: Optional[str] = None) -> bool:
+    """Persist legends to disk.
+    
+    Args:
+        legends: 저장할 color legends 데이터
+        updated_scheme_name: 업데이트된 scheme 이름 (마지막 수정 시간 추가용)
+    """
     global _color_legends_cache, _color_legends_mtime
 
     with COLOR_LEGENDS_LOCK:
         try:
             COLOR_LEGENDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            
+            # 업데이트된 scheme에 마지막 수정 시간 추가
+            if updated_scheme_name and updated_scheme_name in legends:
+                from datetime import datetime
+                timestamp = datetime.now().strftime('%y%m%d_%H%M%S')
+                legends[updated_scheme_name]['lastModified'] = timestamp
+            
             tmp_path = COLOR_LEGENDS_PATH.with_suffix('.json.tmp')
 
             with tmp_path.open('w', encoding='utf-8') as fh:
@@ -122,8 +134,8 @@ def get_user_color_scheme(login_id: Optional[str], username: Optional[str] = Non
     if dept_name:
         legends[login_id]['DeptName'] = dept_name
     
-    # 변경사항 저장
-    save_color_legends(legends)
+    # 변경사항 저장 (마지막 수정 시간 추가)
+    save_color_legends(legends, updated_scheme_name=login_id)
     logger.info("새 color scheme 생성: %s (from default, Username=%s, DeptName=%s)", 
                 login_id, username or 'None', dept_name or 'None')
     

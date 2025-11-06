@@ -1489,15 +1489,33 @@ async def save_color_scheme(request: Request):
         }
         legends[scheme_name] = filtered_scheme_data
         
-        # 파일에 저장
-        if save_color_legends(legends):
+        # 파일에 저장 (마지막 수정 시간 추가)
+        if save_color_legends(legends, updated_scheme_name=scheme_name):
             logger.info(f"✅ Color scheme saved: {scheme_name}")
             
             # 🔥 색상 편집 저장 후 해당 scheme의 썸네일 및 피라미드 캐시 무효화
+            # scheme별 폴더 전체 삭제 (예: thumbnail/LoginId_251106_091612/)
             try:
                 deleted_count = 0
+                import shutil
                 
-                # 1. 썸네일 파일 삭제 (scheme 이름이 포함된 썸네일)
+                # 1. scheme 폴더 전체 삭제 (scheme 또는 scheme_timestamp로 시작하는 폴더)
+                scheme_patterns = [
+                    f"{scheme_name}_*",  # scheme_timestamp 폴더
+                    scheme_name  # scheme만 있는 폴더 (하위 호환성)
+                ]
+                
+                for pattern in scheme_patterns:
+                    for scheme_dir in THUMBNAIL_DIR.glob(pattern):
+                        if scheme_dir.is_dir():
+                            try:
+                                shutil.rmtree(scheme_dir)
+                                deleted_count += 1
+                                logger.info(f"✅ scheme 폴더 삭제: {scheme_dir}")
+                            except Exception as e:
+                                logger.warning(f"scheme 폴더 삭제 실패: {scheme_dir}, 오류: {e}")
+                
+                # 2. 기존 방식 썸네일 파일 삭제 (하위 호환성: scheme 이름이 파일명에 포함된 경우)
                 scheme_pattern = f"*_{scheme_name}_*.{THUMBNAIL_FORMAT.lower()}"
                 for thumb_file in THUMBNAIL_DIR.glob(scheme_pattern):
                     try:
@@ -1506,19 +1524,18 @@ async def save_color_scheme(request: Request):
                     except Exception as e:
                         logger.warning(f"썸네일 삭제 실패: {thumb_file}, 오류: {e}")
                 
-                # 2. 피라미드 디렉토리 삭제 (scheme 이름이 포함된 피라미드)
+                # 3. 기존 방식 피라미드 디렉토리 삭제 (하위 호환성)
                 pyramid_pattern = f"pyramid_{scheme_name}_*"
                 for pyramid_dir in THUMBNAIL_DIR.glob(pyramid_pattern):
                     if pyramid_dir.is_dir():
                         try:
-                            import shutil
                             shutil.rmtree(pyramid_dir)
                             deleted_count += 1
                             logger.debug(f"피라미드 디렉토리 삭제: {pyramid_dir}")
                         except Exception as e:
                             logger.warning(f"피라미드 디렉토리 삭제 실패: {pyramid_dir}, 오류: {e}")
                 
-                # 3. 메모리 캐시 초기화 (cache_manager가 있으면 사용)
+                # 4. 메모리 캐시 초기화 (cache_manager가 있으면 사용)
                 try:
                     from .cache_manager import cache_manager
                     cache_manager.clear_thumbnail_cache()
@@ -1670,11 +1687,27 @@ def get_thumbnail_path(image_path: Path, size: Tuple[int, int], scheme: Optional
     # 🔥 절대 경로를 해시로 변환하여 썸네일 경로 생성
     path_hash = hashlib.md5(str(image_path.resolve()).encode()).hexdigest()[:16]
     
-    # scheme이 있으면 경로에 scheme 포함
+    # 썸네일 파일명
+    thumbnail_name = f"{path_hash}_{size[0]}x{size[1]}.{THUMBNAIL_FORMAT.lower()}"
+    
+    # scheme이 있으면 scheme별 폴더 사용 (예: thumbnail/LoginId_251106_091612/)
     if scheme:
-        thumbnail_name = f"{path_hash}_{scheme}_{size[0]}x{size[1]}.{THUMBNAIL_FORMAT.lower()}"
-    else:
-        thumbnail_name = f"{path_hash}_{size[0]}x{size[1]}.{THUMBNAIL_FORMAT.lower()}"
+        from .personal_colors import load_color_legends
+        legends = load_color_legends()
+        scheme_data = legends.get(scheme, {})
+        timestamp = scheme_data.get('lastModified')
+        
+        if timestamp:
+            # lastModified가 있으면 scheme_timestamp 폴더 사용
+            scheme_folder = f"{scheme}_{timestamp}"
+        else:
+            # lastModified가 없으면 scheme만 사용 (하위 호환성)
+            scheme_folder = scheme
+        
+        # scheme 폴더 생성
+        scheme_dir = THUMBNAIL_DIR / scheme_folder
+        scheme_dir.mkdir(parents=True, exist_ok=True)
+        return scheme_dir / thumbnail_name
     
     return THUMBNAIL_DIR / thumbnail_name
 
@@ -2976,9 +3009,20 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
         
         for level in levels:
             try:
-                # 피라미드 경로 생성 (개인색 설정인 경우 scheme 포함)
+                # 피라미드 경로 생성 (개인색 설정인 경우 scheme별 폴더 사용)
                 if personalized and scheme:
-                    pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{scheme}_{int(level*100)}"
+                    from .personal_colors import load_color_legends
+                    legends = load_color_legends()
+                    scheme_data = legends.get(scheme, {})
+                    timestamp = scheme_data.get('lastModified')
+                    
+                    if timestamp:
+                        # scheme_timestamp 폴더 안에 pyramid_{level} 폴더 생성
+                        scheme_folder = f"{scheme}_{timestamp}"
+                        pyramid_dir = config.THUMBNAIL_DIR / scheme_folder / f"pyramid_{int(level*100)}"
+                    else:
+                        # lastModified가 없으면 기존 방식 (하위 호환성)
+                        pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{scheme}_{int(level*100)}"
                 else:
                     pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
                 
@@ -3213,9 +3257,20 @@ async def get_image(
                 if not is_head:
                     logger.info(f"🎯 [LEVEL FIXED] {level}")
 
-            # 피라미드 디렉토리 생성 (개인색 설정인 경우 scheme 포함)
+            # 피라미드 디렉토리 생성 (개인색 설정인 경우 scheme별 폴더 사용)
             if personalized and scheme:
-                pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{scheme}_{int(level*100)}"
+                from .personal_colors import load_color_legends
+                legends = load_color_legends()
+                scheme_data = legends.get(scheme, {})
+                timestamp = scheme_data.get('lastModified')
+                
+                if timestamp:
+                    # scheme_timestamp 폴더 안에 pyramid_{level} 폴더 생성
+                    scheme_folder = f"{scheme}_{timestamp}"
+                    pyramid_dir = config.THUMBNAIL_DIR / scheme_folder / f"pyramid_{int(level*100)}"
+                else:
+                    # lastModified가 없으면 기존 방식 (하위 호환성)
+                    pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{scheme}_{int(level*100)}"
             else:
                 pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
             pyramid_dir.mkdir(parents=True, exist_ok=True)
