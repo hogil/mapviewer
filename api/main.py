@@ -3032,12 +3032,19 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
     # 🔥 파이프라인 시작 시 개인색 설정 확인 및 로깅
     logger.info(f"🎯 [PIPELINE START] levels={levels}, personalized={personalized}, scheme={scheme}, path={image_path.name}")
     
+    # 🔥 개인색 설정 검증 (디버깅용)
+    if personalized and not scheme:
+        logger.warning(f"⚠️ [PIPELINE] personalized=True인데 scheme이 None입니다! path={image_path.name}, levels={levels}")
+        personalized = False  # scheme이 없으면 개인색 비활성화
+    
     try:
         # 🔥 Step 1: 원본 이미지를 먼저 개인색으로 변경 (메모리에서)
         original_image = None
         if personalized and scheme and image_path.suffix.lower() == '.png':
             try:
                 from .personal_colors import plte_inplace_patch_memory
+                
+                logger.info(f"🎨 [PIPELINE] 개인색 적용 시작: scheme={scheme}, levels={levels}, path={image_path.name}")
                 
                 # 원본 PNG 파일 읽기 및 PLTE 패치 (메모리에서)
                 with open(image_path, 'rb') as f:
@@ -3055,12 +3062,16 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                     memory=True, 
                     unlimited=True
                 )
-                logger.info(f"🎨 [PIPELINE] 원본 이미지를 메모리에서 개인색으로 변경 완료: scheme={scheme}, size={original_image.width}x{original_image.height}")
+                logger.info(f"✅ [PIPELINE] 원본 이미지를 메모리에서 개인색으로 변경 완료: scheme={scheme}, size={original_image.width}x{original_image.height}, levels={levels}")
             except Exception as e:
-                logger.warning(f"⚠️ [PIPELINE] 개인색 적용 실패, 원본 사용: {e}", exc_info=True)
+                logger.error(f"❌ [PIPELINE] 개인색 적용 실패: scheme={scheme}, levels={levels}, error={e}", exc_info=True)
+                # 개인색 적용 실패 시 원본 로드 (fallback)
+                original_image = None
         
-        # 개인색 적용 실패 시 원본 로드
+        # 개인색 적용 실패 시 또는 개인색 설정이 없는 경우 원본 로드
         if original_image is None:
+            if personalized and scheme:
+                logger.warning(f"⚠️ [PIPELINE] 개인색 적용 실패로 원본 이미지 사용: scheme={scheme}, levels={levels}")
             original_image = pyvips.Image.new_from_file(
                 str(image_path),
                 access='sequential',
@@ -3074,6 +3085,7 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
         for level in levels:
             try:
                 # 피라미드 경로 생성 (개인색 설정인 경우 scheme별 폴더 사용)
+                # 🔥 개인색 설정이 활성화되어 있으면 반드시 개인색 경로 사용
                 if personalized and scheme:
                     from .personal_colors import load_color_legends
                     legends = load_color_legends()
@@ -3086,8 +3098,14 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                     else:
                         # lastModified가 없으면 기존 방식 (하위 호환성)
                         pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{scheme}_{int(level*100)}"
+                    
+                    # 🔥 개인색 설정이 활성화된 경우 비개인색 경로는 절대 사용하지 않음
+                    logger.debug(f"🎨 [PIPELINE] level={level}: 개인색 경로 사용, scheme={scheme}, dir={pyramid_dir.name}")
                 else:
+                    # 🔥 개인색 설정이 비활성화된 경우에만 비개인색 경로 사용
                     pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
+                    if personalized and not scheme:
+                        logger.warning(f"⚠️ [PIPELINE] level={level}: personalized=True인데 scheme이 None! 비개인색 경로 사용: {pyramid_dir.name}")
                 
                 # 🔥 디렉토리 생성 안전성 강화
                 try:

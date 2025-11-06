@@ -1156,38 +1156,54 @@ export class ColorSchemeEditor {
     }
 
 
-    handleReset() {
-        // 기본값(default)으로 초기화
-        const legends = this.viewer?.colorLegends || {};
-        // 서버에서 로드한 default scheme 사용
-        const defaultScheme = getDefaultScheme(legends);
-        
-        // 스킴 이름은 현재 스킴 이름 유지 (예: 'change')
-        // 색상 값만 default scheme의 값으로 변경
-        const schemeData = JSON.parse(JSON.stringify(defaultScheme));
-        
-        // 원래 스킴 데이터를 현재 스킴 이름으로 유지 (변경사항 감지용)
-        // 초기화는 변경사항이므로 원래 데이터와 다르게 설정
-        const currentOriginalScheme = this.viewer?.colorLegends?.[this.currentSchemeName];
-        if (currentOriginalScheme) {
-            // 원래 스킴 데이터를 유지 (변경사항 감지용)
-            this.originalSchemeData = JSON.parse(JSON.stringify(currentOriginalScheme));
-        } else {
-            // 원래 스킴이 없으면 현재 default scheme을 원본으로 설정
-            this.originalSchemeData = JSON.parse(JSON.stringify(defaultScheme));
+    async handleReset() {
+        // 기본값(default)으로 초기화 - 서버에서 최신 color-legends.json 로드
+        try {
+            // 서버에서 color-legends.json 다시 로드
+            const response = await fetch('/logs/color-legends.json');
+            if (!response.ok) {
+                throw new Error('색상 스킴 로드 실패');
+            }
+            const legends = await response.json();
+            
+            // 프론트엔드 캐시 업데이트
+            if (this.viewer) {
+                this.viewer.colorLegends = legends;
+            }
+            
+            // 서버에서 로드한 default scheme 사용
+            const defaultScheme = getDefaultScheme(legends);
+            
+            // 스킴 이름은 현재 스킴 이름 유지 (예: 'change')
+            // 색상 값만 default scheme의 값으로 변경
+            const schemeData = JSON.parse(JSON.stringify(defaultScheme));
+            
+            // 원래 스킴 데이터를 현재 스킴 이름으로 유지 (변경사항 감지용)
+            // 초기화는 변경사항이므로 원래 데이터와 다르게 설정
+            const currentOriginalScheme = legends[this.currentSchemeName];
+            if (currentOriginalScheme) {
+                // 원래 스킴 데이터를 유지 (변경사항 감지용)
+                this.originalSchemeData = JSON.parse(JSON.stringify(currentOriginalScheme));
+            } else {
+                // 원래 스킴이 없으면 현재 default scheme을 원본으로 설정
+                this.originalSchemeData = JSON.parse(JSON.stringify(defaultScheme));
+            }
+            
+            // 색상 값만 default scheme으로 적용
+            this.applySchemeToRows(schemeData);
+            // 스킴 이름은 변경하지 않음 (현재 스킴 이름 유지)
+            this.updateSchemeLabel(this.currentSchemeName);
+            // 초기화는 변경사항이므로 적용 버튼 활성화
+            this.updateApplyButtonState(true);
+            this.clearError();
+            this.hideDropdown();
+            
+            // 🔥 미리보기에 적용
+            this.updatePreviewRealtime();
+        } catch (error) {
+            console.error('[ColorEditor] default scheme 로드 실패:', error);
+            this.showError('기본 스킴을 불러오는 중 오류가 발생했습니다.');
         }
-        
-        // 색상 값만 default scheme으로 적용
-        this.applySchemeToRows(schemeData);
-        // 스킴 이름은 변경하지 않음 (현재 스킴 이름 유지)
-        this.updateSchemeLabel(this.currentSchemeName);
-        // 초기화는 변경사항이므로 적용 버튼 활성화
-        this.updateApplyButtonState(true);
-        this.clearError();
-        this.hideDropdown();
-        
-        // 🔥 미리보기에 적용
-        this.updatePreviewRealtime();
     }
     
     async handleRestore() {

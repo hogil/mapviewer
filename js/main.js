@@ -12445,11 +12445,19 @@ class WaferMapViewer {
             const bottomHtml = BOTTOM_KEYS.map((label) => {
                 // 🔥 "Border" 키가 있는 경우 "Normal"로 매핑 (Ubuntu 서버 호환성)
                 let actualLabel = label;
-                if (label === 'Normal' && !userData.bottom[label] && userData.bottom['Border']) {
-                    actualLabel = 'Border';
+                let color = userData.bottom[label];
+                
+                // "Normal" 키가 없으면 "Border" 키 확인
+                if (label === 'Normal' && !color) {
+                    if (userData.bottom['Border']) {
+                        actualLabel = 'Border';
+                        color = userData.bottom['Border'];
+                    } else {
+                        // "Normal"도 없고 "Border"도 없으면 fallback 색상 사용 (기본 회색)
+                        color = '#BEBEBE';
+                    }
                 }
                 
-                const color = userData.bottom[actualLabel];
                 if (color) {
                     // 🔥 "Border"를 "Normal"로 표시 및 data-key도 "Normal"로 설정
                     const displayLabel = actualLabel === 'Border' ? 'Normal' : label;
@@ -12563,11 +12571,19 @@ class WaferMapViewer {
             const bottomHtml = BOTTOM_KEYS.map((label) => {
                 // 🔥 "Border" 키가 있는 경우 "Normal"로 매핑 (Ubuntu 서버 호환성)
                 let actualLabel = label;
-                if (label === 'Normal' && !userData.bottom[label] && userData.bottom['Border']) {
-                    actualLabel = 'Border';
+                let color = userData.bottom[label];
+                
+                // "Normal" 키가 없으면 "Border" 키 확인
+                if (label === 'Normal' && !color) {
+                    if (userData.bottom['Border']) {
+                        actualLabel = 'Border';
+                        color = userData.bottom['Border'];
+                    } else {
+                        // "Normal"도 없고 "Border"도 없으면 fallback 색상 사용 (기본 회색)
+                        color = '#BEBEBE';
+                    }
                 }
                 
-                const color = userData.bottom[actualLabel];
                 if (color) {
                     // 🔥 "Border"를 "Normal"로 표시 (shortenLabel에서 "nor"로 변환)
                     const displayLabel = actualLabel === 'Border' ? 'Normal' : label;
