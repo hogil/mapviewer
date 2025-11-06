@@ -3253,6 +3253,13 @@ class WaferMapViewer {
                     if (imagePath) {
                         console.log('🔄 [RELOAD] Single image mode - reloading:', imagePath, '| enabled:', this.personalizedColorEnabled);
                         
+                        // 🔥 현재 줌/스케일/위치 저장 (체크박스 변경 시 유지)
+                        const savedZoom = this.zoom;
+                        const savedScale = this.transform.scale;
+                        const savedDx = this.transform.dx;
+                        const savedDy = this.transform.dy;
+                        const savedCurrentPyramidLevel = this.currentPyramidLevel;
+                        
                         // 🔥 피라미드 레벨 캐시 완전 초기화 (개인색 변경 시 모든 레벨 재로드 필요)
                         this.pyramidLevels = {};
                         this._pyramidLoading = new Set();
@@ -3267,6 +3274,52 @@ class WaferMapViewer {
                         
                         // 🔥 이미지 다시 로드 (개인색 파라미터 포함/미포함)
                         await this.loadImage(imagePath);
+                        
+                        // 🔥 체크박스 변경 시에는 줌/스케일/위치 복원 (이미지 크기 유지)
+                        if (this.currentImage && this.originalWidth && this.originalHeight) {
+                            // 줌/스케일 복원
+                            this.zoom = savedZoom;
+                            this.transform.scale = savedScale;
+                            
+                            // 위치 복원
+                            this.transform.dx = savedDx;
+                            this.transform.dy = savedDy;
+                            
+                            // 줌 표시 업데이트
+                            this.updateZoomDisplay();
+                            
+                            // 렌더링
+                            this.scheduleDraw();
+                            
+                            // 피라미드 레벨 복원 (약간의 지연 후, 레벨이 로드될 때까지 대기)
+                            setTimeout(async () => {
+                                if (savedCurrentPyramidLevel) {
+                                    // 저장된 레벨이 아직 로드되지 않았으면 다시 로드
+                                    if (!this.pyramidLevels[savedCurrentPyramidLevel]) {
+                                        console.log(`🔄 [CHECKBOX] 피라미드 레벨 ${savedCurrentPyramidLevel} 재로드 중...`);
+                                        await this.updatePyramidLevel();
+                                    } else {
+                                        // 레벨이 이미 로드되어 있으면 활성화
+                                        this.currentPyramidLevel = savedCurrentPyramidLevel;
+                                        if (this.semiconductorRenderer?.isGpuAvailable()) {
+                                            this.semiconductorRenderer.setActiveLevel(savedCurrentPyramidLevel);
+                                        }
+                                        this.scheduleDraw();
+                                    }
+                                } else {
+                                    // 저장된 레벨이 없으면 현재 줌에 맞는 레벨로 업데이트
+                                    this.updatePyramidLevel();
+                                }
+                            }, 100);
+                            
+                            console.log('🎨 [CHECKBOX] 줌/스케일 복원 완료:', {
+                                zoom: savedZoom,
+                                scale: savedScale,
+                                dx: savedDx,
+                                dy: savedDy,
+                                level: savedCurrentPyramidLevel
+                            });
+                        }
                         
                         // 🔥 Legend 다시 렌더링 (이미지 로드 후 최종 확인)
                         this.renderColorLegends();
