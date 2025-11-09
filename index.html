@@ -915,15 +915,44 @@
             border-radius: 2px;
         }
 
-        .chip-info-container {
+        #chip-info-container {
             position: absolute;
-            bottom: 12px;
             left: 12px;
+            bottom: 12px;
             display: flex;
             flex-direction: column;
-            gap: 10px;
             align-items: flex-start;
+            gap: 8px;
             z-index: 20;
+        }
+
+        #chip-coordinate-box {
+            position: relative;
+            background-color: rgba(37, 37, 38, 0.9);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 8px 10px;
+            width: 145px;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 11px;
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+        }
+
+        #chip-coordinate-box .coord-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+
+        #chip-coordinate-box .coord-row:last-child {
+            margin-bottom: 0;
+        }
+
+        #chip-coordinate-box .coord-label,
+        #chip-coordinate-box .coord-value {
+            color: var(--text-color);
+            font-weight: 500;
         }
 
         .chip-label-legend {
@@ -932,11 +961,11 @@
             max-height: 250px;
             display: none;
             flex-direction: column;
-            gap: 6px;
-            background: rgba(37, 37, 38, 0.92);
-            border: 1px solid rgba(255, 255, 255, 0.16);
-            padding: 12px 14px;
-            border-radius: 8px;
+            gap: 8px;
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            background-color: rgba(24, 24, 24, 0.92);
             overflow-y: auto;
             box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
         }
@@ -1007,7 +1036,7 @@
             padding: 6px 0;
         }
 
-        .main-content:has(.viewer-container.grid-mode) #chip-label-legend {
+        .main-content:has(.viewer-container.grid-mode) #chip-info-container {
             display: none !important;
         }
 
@@ -1445,28 +1474,18 @@
                 <div id="color-legend-top" class="color-legend" aria-label="상단 컬러 범례"></div>
                 <div id="color-legend-bottom" class="color-legend" aria-label="하단 컬러 범례"></div>
 
-                <!-- Chip Info (bottom-left) -->
-                <div id="chip-info-container" class="chip-info-container">
-                    <div id="chip-coordinate-box" style="
-                        background-color: rgba(37, 37, 38, 0.9);
-                        border: 1px solid var(--border-color);
-                        border-radius: 4px;
-                        padding: 8px 10px;
-                        display: block;
-                        width: 145px;
-                        font-family: 'Consolas', 'Courier New', monospace;
-                        font-size: 11px;
-                    ">
-                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
-                            <span style="color: var(--text-color); font-weight: 500;">Chip(Abs)</span>
-                            <span id="coord-chip-abs" style="color: var(--text-color); font-weight: 500;">-</span>
+                <!-- Chip Info (Bottom Left) -->
+                <div id="chip-info-container">
+                    <div id="chip-coordinate-box">
+                        <div class="coord-row">
+                            <span class="coord-label">Chip(Abs)</span>
+                            <span id="coord-chip-abs" class="coord-value">-</span>
                         </div>
-                        <div style="display: flex; align-items: center; justify-content: space-between;">
-                            <span style="color: var(--text-color); font-weight: 500;">Chip(Rel)</span>
-                            <span id="coord-chip-rel" style="color: var(--text-color); font-weight: 500;">-</span>
+                        <div class="coord-row">
+                            <span class="coord-label">Chip(Rel)</span>
+                            <span id="coord-chip-rel" class="coord-value">-</span>
                         </div>
                     </div>
-
                     <div id="chip-label-legend" class="chip-label-legend" aria-label="Chip label filters">
                         <div class="chip-label-legend__title">Chip Labels</div>
                         <div class="chip-label-empty">No chip labels</div>
@@ -1538,9 +1557,6 @@
                         ❌ 취소
                     </div>
                 </div>
-
-                <!-- Chip Label Legend -->
-                <!-- This div is now moved into the main-content section -->
 
     <!-- Folder Browser Modal -->
     <!-- 제거: 폴더 브라우저 모달 시작

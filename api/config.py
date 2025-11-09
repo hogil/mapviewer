@@ -3,8 +3,24 @@ from pathlib import Path
 from math import floor
 
 # ===== 경로 / 포맷 =====
-ROOT_DIR = Path(os.getenv("PROJECT_ROOT", "/appdata/appuser/images")).resolve()
-THUMBNAIL_DIR = ROOT_DIR / "thumbnails"
+# Windows 개발환경과 Ubuntu 운영환경 모두 지원
+_images_root_default = "D:/project/data/wm-811k" if os.name == "nt" else "/appdata/appuser/images"
+IMAGES_ROOT = Path(os.getenv("IMAGES_ROOT", _images_root_default)).resolve()
+ROOT_DIR = IMAGES_ROOT
+
+# Positions는 별도 경로로 관리 (이미지와 분리)
+_positions_root_default = "D:/project/data/position" if os.name == "nt" else "/appdata/appuser/position"
+POSITIONS_ROOT = Path(os.getenv("POSITIONS_ROOT", _positions_root_default)).resolve()
+
+# IMAGES_ROOT 하위 경로
+THUMBNAIL_DIR = IMAGES_ROOT / "thumbnails"
+LABELS_DIR = IMAGES_ROOT / "classification"              # Wafer 모드
+CHIP_LABELS_DIR = IMAGES_ROOT / "classification_chips"   # Chip 모드
+LABELS_FILE = LABELS_DIR / "labels.json"
+CHIP_LABELS_FILE = CHIP_LABELS_DIR / "labels.json"
+CHIP_ANNOTATIONS_ROOT = IMAGES_ROOT / "chip_annotations"
+CHIP_IMAGES_ROOT = IMAGES_ROOT / "chip_images"
+YOLO_EXPORT_ROOT = IMAGES_ROOT / "yolo_datasets"
 
 THUMBNAIL_SIZE_DEFAULT = int(os.getenv("THUMBNAIL_SIZE", "512"))
 THUMBNAIL_FORMAT = os.getenv("THUMBNAIL_FORMAT", "PNG")
@@ -12,8 +28,8 @@ THUMBNAIL_QUALITY = int(os.getenv("THUMBNAIL_QUALITY", "100"))
 PNG_COMPRESSION_LEVEL = int(os.getenv("PNG_COMPRESSION_LEVEL", "3"))
 
 SUPPORTED_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp', '.gif'}
-# 검색/인덱싱에서 건너뛸 폴더(쉼표로 구분)
-SKIP_DIRS = set(os.getenv("SKIP_DIRS", "classification,thumbnails").split(","))
+# 검색/인덱싱에서 건너뛸 폴더 (모두 IMAGES_ROOT 하위, 원본 이미지가 아닌 파생 데이터)
+SKIP_DIRS = set(os.getenv("SKIP_DIRS", "classification,classification_chips,thumbnails,chip_annotations,chip_images,yolo_datasets").split(","))
 
 # ===== 동시성 / 성능 =====
 CPU_COUNT = os.cpu_count() or 8
@@ -35,9 +51,7 @@ DIRLIST_CACHE_SIZE = int(os.getenv("DIRLIST_CACHE_SIZE", "1024"))
 THUMB_STAT_TTL_SECONDS = float(os.getenv("THUMB_STAT_TTL_SECONDS", "5"))
 THUMB_STAT_CACHE_CAPACITY = int(os.getenv("THUMB_STAT_CACHE_CAPACITY", "8192"))
 
-# ===== 라벨 저장 =====
-LABELS_DIR = ROOT_DIR / "classification"
-LABELS_FILE = LABELS_DIR / "labels.json"
+# 위에서 이미 정의됨 (중복 제거)
 
 # ===== 서버 기본값 =====
 DEFAULT_HOST = os.getenv("HOST", "0.0.0.0")
