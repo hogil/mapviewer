@@ -7,7 +7,7 @@ L3Tracker - Wafer Map Viewer API (HTTPS, Pretty Table Logs, Noise-free)
 import os, re, sys, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading
 from pathlib import Path
 from contextlib import contextmanager
-from typing import List, Optional, Dict, Any, Tuple, Set
+from typing import List, Optional, Dict, Any, Tuple, Set, Literal, Iterable
 from collections import OrderedDict
 from bisect import bisect_left, bisect_right
 from threading import RLock, Lock
@@ -283,11 +283,12 @@ def log_access_row(*, tag: str, ip: str = "-", method: str = "-", status: str = 
 
 # ======================== Config Bindings ========================
 ROOT_DIR = config.ROOT_DIR
+IMAGES_ROOT = config.IMAGES_ROOT
 THUMBNAIL_DIR = config.THUMBNAIL_DIR
 SUPPORTED_EXTENSIONS = set(ext.lower() for ext in config.SUPPORTED_EXTS)
 
 # 🔥 현재 폴더 변수 (검색 제한용)
-current_folder = ROOT_DIR
+current_folder = IMAGES_ROOT
 
 THUMBNAIL_FORMAT = config.THUMBNAIL_FORMAT
 THUMBNAIL_QUALITY = config.THUMBNAIL_QUALITY
@@ -1804,8 +1805,36 @@ def relkey_from_any_path(any_path: str) -> str:
     abs_path = safe_resolve_path(any_path)
     return str(abs_path.relative_to(ROOT_DIR)).replace("\\", "/")
 
-def _classification_dir() -> Path:
+def _chip_classification_root(base_folder: Optional[Path] = None) -> Path:
+    """
+    Chip 모드에서 사용할 분류 루트.
+    current_folder(또는 지정된 base_folder)의 첫 컴포넌트를 제거한 뒤
+    classification_chips/<trimmed-path> 경로를 반환한다.
+    """
+    target_base = base_folder or current_folder
+    try:
+        rel = target_base.relative_to(ROOT_DIR)
+    except ValueError:
+        rel = Path()
+    trimmed = _trim_leading_component(rel)
+    chip_root = config.CHIP_LABELS_DIR
+    trimmed_parts = [p for p in trimmed.parts if p not in ("", ".")]
+    if trimmed_parts:
+        chip_root = chip_root.joinpath(*trimmed_parts)
+    chip_root.mkdir(parents=True, exist_ok=True)
+    return chip_root
+
+def _classification_dir(mode: str = "wafer") -> Path:
+    """
+    Classification 폴더 경로 반환
+    mode: "wafer" -> {current_folder}/classification/
+          "chip"  -> {current_folder}/classification_chips/
+    """
+    global current_folder
+    if mode == "chip":
+        return current_folder / "classification_chips"
     return current_folder / "classification"
+
 
 def _classes_stat_mtime() -> float:
     try: return _classification_dir().stat().st_mtime
@@ -1940,8 +1969,8 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
         with os.scandir(target) as it:
             for entry in it:
                 name = entry.name
-                # 🔥 classification, thumbnails 폴더 제외
-                if name.startswith('.') or name == '__pycache__' or name in SKIP_DIRS or name in ['classification', 'thumbnails']: 
+                # 🔥 classification, classification_chips, thumbnails 폴더 제외
+                if name.startswith('.') or name == '__pycache__' or name in SKIP_DIRS or name in ['classification', 'classification_chips', 'thumbnails', 'labels']:
                     continue
                 entries_to_process.append(entry)
         
@@ -2561,26 +2590,40 @@ class LabelDelReq(BaseModel):
 class ClassifyRequest(BaseModel):
     image_path: str
     class_name: str
+    mode: Literal["wafer", "chip"] = "wafer"
 
 class ClassifyDeleteRequest(BaseModel):
     image_path: Optional[str] = None
     image_name: Optional[str] = None
     class_name: str
+    mode: Literal["wafer", "chip"] = "wafer"
 
 # 프런트 호환: 배치 삭제용 요청 스키마 (POST /api/classify/delete)
 class ClassifyDeleteBatchReq(BaseModel):
     images: List[str]
     class_: str = Field(alias="class")
+    mode: Literal["wafer", "chip"] = "wafer"
 
 # ======================== Endpoints ========================
 @app.get("/api/files")
 async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
+    global current_folder
     try:
         target = safe_resolve_path(path)
         logger.info(f"📁 [/api/files] path: {path}, target: {target}")
         if not target.exists() or not target.is_dir():
             logger.warning(f"⚠️ [/api/files] 폴더 없음: {target}")
             return JSONResponse({"success": False, "error": "Not found"}, status_code=404)
+
+        # 🔥 current_folder 업데이트 (단, classification 폴더는 제외)
+        # classification 폴더 내부를 탐색하는 것은 current_folder를 변경하지 않음
+        target_str = str(target).replace('\\', '/')
+        is_classification = '/classification' in target_str or '/classification_chips' in target_str
+        if not is_classification:
+            current_folder = target
+            logger.info(f"🔥 [/api/files] current_folder 업데이트: {current_folder}")
+        else:
+            logger.info(f"⏭️ [/api/files] classification 폴더이므로 current_folder 유지: {current_folder}")
         # 🔥 라벨 썸네일 캐시는 유지하고, classification 폴더만 무효화
         if 'classification' in str(target).replace('\\', '/'):
             _dircache_invalidate(target)
@@ -2608,7 +2651,8 @@ def _lookup_original_relpath_from_classification_path(path_str: str) -> Optional
     """classification/<class>/<filename> 형식이 오면 ROOT_DIR 내 원본 상대경로를 추정한다."""
     try:
         p = Path(path_str).as_posix()
-        if "/classification/" not in p and not p.startswith("classification/"):
+        if ("/classification/" not in p and not p.startswith("classification/") and
+                "/classification_chips/" not in p and not p.startswith("classification_chips/")):
             return None
         filename = Path(p).name
         
@@ -3900,15 +3944,10 @@ async def get_files_recursive(path: str):
 
 # ---------------- Classes ----------------
 @app.get("/api/classes")
-async def get_classes(folder: Optional[str] = Query(None, description="특정 폴더의 클래스만 조회"),
-                     request: Request = None):
+async def get_classes(mode: str = Query("wafer", pattern="^(wafer|chip)$", description="wafer 또는 chip 모드")):
     try:
-        # 폴더가 지정된 경우 해당 폴더의 classification 디렉토리 사용
-        if folder:
-            target_folder = safe_resolve_path(folder)
-            classification_dir = target_folder / "classification"
-        else:
-            classification_dir = _classification_dir()
+        classification_dir = _classification_dir(mode=mode)
+        logger.info(f"🔍 [/api/classes] mode={mode}, current_folder={current_folder}, classification_dir={classification_dir}")
 
         _dircache_invalidate(classification_dir)
         if not classification_dir.exists():
@@ -3932,16 +3971,9 @@ async def get_classes(folder: Optional[str] = Query(None, description="특정 �
 
 @app.post("/api/classes")
 async def create_class(req: CreateClassReq,
-                      folder: Optional[str] = Query(None, description="현재 폴더 경로"),
+                      mode: str = Query("wafer", regex="^(wafer|chip)$", description="wafer 또는 chip 모드"),
                       _=Depends(labels_classes_sync_dep)):
     try:
-        # 🔥 folder 파라미터가 있으면 current_folder 설정
-        global current_folder
-        if folder:
-            current_folder = ROOT_DIR / folder
-        else:
-            current_folder = ROOT_DIR
-
         name = req.name.strip()
         if not name or name.isspace(): raise HTTPException(status_code=400, detail="클래스명이 비어있습니다")
         if any(ord(c) < 32 or ord(c) > 126 for c in name):
@@ -3949,7 +3981,7 @@ async def create_class(req: CreateClassReq,
         if not _CLASS_NAME_RE.match(name): raise HTTPException(status_code=400, detail="클래스명 형식 오류")
         if len(name) > 50: raise HTTPException(status_code=400, detail="클래스명이 너무 깁니다 (최대 50자)")
 
-        classification_dir = _classification_dir()
+        classification_dir = _classification_dir(mode=mode)
 
         # classification 디렉토리가 없으면 생성
         if not classification_dir.exists():
@@ -3961,7 +3993,7 @@ async def create_class(req: CreateClassReq,
 
         class_dir.mkdir(parents=True, exist_ok=False)
         _sync_labels_if_classes_changed()
-        for p in (_classification_dir(), class_dir, ROOT_DIR): _dircache_invalidate(p)
+        for p in (classification_dir, class_dir, ROOT_DIR): _dircache_invalidate(p)
         DIRLIST_CACHE.clear()
         log_access_row(tag="INFO", note=f"클래스 '{name}' 생성 완료")
         return {"success": True, "class": name, "refresh_required": True, "message": f"클래스 '{name}' 생성됨"}
@@ -3972,18 +4004,12 @@ async def create_class(req: CreateClassReq,
 @app.delete("/api/classes/{class_name}")
 async def delete_class(class_name: str = PathParam(..., min_length=1, max_length=128),
                        force: bool = Query(False, description="True면 내용 포함 통째 삭제"),
-                       folder: Optional[str] = Query(None, description="현재 폴더 경로"),
+                       mode: str = Query("wafer", regex="^(wafer|chip)$", description="wafer 또는 chip 모드"),
                        _=Depends(labels_classes_sync_dep)):
     try:
-        # 🔥 folder 파라미터가 있으면 current_folder 설정
-        global current_folder
-        if folder:
-            current_folder = ROOT_DIR / folder
-        else:
-            current_folder = ROOT_DIR
-
         if not _CLASS_NAME_RE.match(class_name): raise HTTPException(status_code=400, detail="Invalid class_name")
-        class_dir = _classification_dir() / class_name
+        classification_dir = _classification_dir(mode=mode)
+        class_dir = classification_dir / class_name
         if not class_dir.exists() or not class_dir.is_dir(): raise HTTPException(status_code=404, detail="Class not found")
         if force:
             shutil.rmtree(class_dir)
@@ -3994,7 +4020,7 @@ async def delete_class(class_name: str = PathParam(..., min_length=1, max_length
             log_access_row(tag="INFO", note=f"클래스 삭제: {class_name}")
         removed_cnt = _remove_label_from_all_images(class_name)
         _labels_load()
-        for p in (_classification_dir(), class_dir, ROOT_DIR): _dircache_invalidate(p)
+        for p in (classification_dir, class_dir, ROOT_DIR): _dircache_invalidate(p)
         DIRLIST_CACHE.clear()
         log_access_row(tag="INFO", note=f"클래스 '{class_name}' 삭제 완료")
         return {"success": True, "deleted": class_name, "force": force, "labels_cleaned": removed_cnt, "refresh_required": True}
@@ -4008,16 +4034,9 @@ class RenameClassReq(BaseModel):
 
 @app.post("/api/classes/rename")
 async def rename_class(req: RenameClassReq,
-                       folder: Optional[str] = Query(None, description="현재 폴더 경로"),
+                       mode: str = Query("wafer", regex="^(wafer|chip)$", description="wafer 또는 chip 모드"),
                        _=Depends(labels_classes_sync_dep)):
     try:
-        # 🔥 folder 파라미터가 있으면 current_folder 설정
-        global current_folder
-        if folder:
-            current_folder = ROOT_DIR / folder
-        else:
-            current_folder = ROOT_DIR
-
         old_name = req.old_name.strip()
         new_name = req.new_name.strip()
 
@@ -4026,7 +4045,7 @@ async def rename_class(req: RenameClassReq,
         if not _CLASS_NAME_RE.match(new_name): raise HTTPException(status_code=400, detail="Invalid new class name")
         if old_name == new_name: raise HTTPException(status_code=400, detail="Old and new names are the same")
 
-        classification_dir = _classification_dir()
+        classification_dir = _classification_dir(mode=mode)
         old_class_dir = classification_dir / old_name
         new_class_dir = classification_dir / new_name
 
@@ -4052,7 +4071,7 @@ async def rename_class(req: RenameClassReq,
         _labels_load()
 
         # 캐시 무효화
-        for p in (_classification_dir(), old_class_dir, new_class_dir, ROOT_DIR): _dircache_invalidate(p)
+        for p in (classification_dir, old_class_dir, new_class_dir, ROOT_DIR): _dircache_invalidate(p)
         DIRLIST_CACHE.clear()
 
         log_access_row(tag="INFO", note=f"클래스 '{old_name}' → '{new_name}' 이름 변경 완료 ({renamed_count}개 이미지)")
@@ -4066,25 +4085,17 @@ class DeleteClassesReq(BaseModel):
 
 @app.post("/api/classes/delete")
 async def delete_classes(req: DeleteClassesReq,
-                         folder: Optional[str] = Query(None, description="현재 폴더 경로"),
+                         mode: str = Query("wafer", regex="^(wafer|chip)$", description="wafer 또는 chip 모드"),
                          _=Depends(labels_classes_sync_dep)):
     try:
-        # 🔥 folder 파라미터가 있으면 current_folder 설정
-        global current_folder
-        if folder:
-            current_folder = ROOT_DIR / folder
-            logger.info(f"🔍 [DELETE_CLASS] folder 파라미터: {folder}, current_folder: {current_folder}")
-        else:
-            current_folder = ROOT_DIR
-            logger.info(f"🔍 [DELETE_CLASS] folder 파라미터 없음, current_folder: {current_folder}")
-
         if not req.names: raise HTTPException(status_code=400, detail="클래스명 목록이 비어있습니다")
+        classification_dir = _classification_dir(mode=mode)
         deleted, failed, total_cleaned = [], [], 0
         for class_name in req.names:
             try:
                 class_name = class_name.strip()
                 if not _CLASS_NAME_RE.match(class_name): raise ValueError("Invalid class name")
-                class_dir = _classification_dir() / class_name
+                class_dir = classification_dir / class_name
                 logger.info(f"🔍 [DELETE_CLASS] class_dir: {class_dir}, exists: {class_dir.exists()}")
                 if not class_dir.exists() or not class_dir.is_dir(): raise FileNotFoundError("Class not found")
                 shutil.rmtree(class_dir); deleted.append(class_name)
@@ -4093,7 +4104,7 @@ async def delete_classes(req: DeleteClassesReq,
                 failed.append({"class": class_name, "error": str(e)})
                 logger.exception(f"클래스 {class_name} 삭제 실패: {e}")
         if total_cleaned > 0: _labels_load()
-        _dircache_invalidate(_classification_dir())
+        _dircache_invalidate(classification_dir)
         log_access_row(tag="INFO", note="배치 클래스 삭제 완료 - Label Explorer 새로고침 필요")
         return {"success": True, "deleted": deleted, "failed": failed, "labels_cleaned": total_cleaned,
                 "refresh_required": True, "message": f"{len(deleted)}개 삭제, {len(failed)}개 실패"}
@@ -4105,25 +4116,16 @@ async def delete_classes(req: DeleteClassesReq,
 async def class_images(class_name: str = PathParam(..., min_length=1, max_length=128),
                        limit: int = Query(500, ge=1, le=5000),
                        offset: int = Query(0, ge=0),
-                       folder: Optional[str] = Query(None, description="특정 폴더의 클래스 이미지만 조회")):
+                       mode: str = Query("wafer", regex="^(wafer|chip)$", description="wafer 또는 chip 모드")):
     try:
         # 🔍 디버그: 입력 파라미터
         logger.info(f"🔍 [/api/classes/{{class_name}}/images] class_name: {class_name}")
-        logger.info(f"🔍 [/api/classes/{{class_name}}/images] folder 파라미터: {folder}")
-        logger.info(f"🔍 [/api/classes/{{class_name}}/images] current_folder: {current_folder}")
-        logger.info(f"🔍 [/api/classes/{{class_name}}/images] ROOT_DIR: {ROOT_DIR}")
 
         if not _CLASS_NAME_RE.match(class_name): raise HTTPException(status_code=400, detail="Invalid class_name")
 
-        # 폴더가 지정된 경우 해당 폴더의 classification 디렉토리 사용
-        if folder:
-            target_folder = safe_resolve_path(folder)
-            class_dir = target_folder / "classification" / class_name
-            logger.info(f"🔍 [/api/classes/{{class_name}}/images] folder 지정됨 - target_folder: {target_folder}")
-        else:
-            classification_base = _classification_dir()
-            class_dir = classification_base / class_name
-            logger.info(f"🔍 [/api/classes/{{class_name}}/images] folder 미지정 - classification_base: {classification_base}")
+        classification_base = _classification_dir(mode=mode)
+        class_dir = classification_base / class_name
+        logger.info(f"🔍 [/api/classes/{{class_name}}/images] classification_base: {classification_base}")
 
         # 🔍 디버그: 최종 class_dir 경로
         logger.info(f"✅ [/api/classes/{{class_name}}/images] 최종 class_dir: {class_dir}")
@@ -4260,16 +4262,10 @@ async def get_breakdown():
 # ---------------- Classification ----------------
 @app.post("/api/classify")
 async def classify_images(request: ClassifyRequest,
-                         folder: Optional[str] = Query(None, description="현재 폴더 경로"),
                          _=Depends(labels_classes_sync_dep)):
     """이미지를 클래스로 분류하고 classification 디렉토리에 복사/링크"""
     try:
-        # 🔥 folder 파라미터가 있으면 current_folder 설정
-        global current_folder
-        if folder:
-            current_folder = ROOT_DIR / folder
-        else:
-            current_folder = ROOT_DIR
+        mode = request.mode
 
         # classification 경로가 들어오면 원본 상대경로로 역매핑 시도
         rel_path = _lookup_original_relpath_from_classification_path(request.image_path) or relkey_from_any_path(request.image_path)
@@ -4284,7 +4280,8 @@ async def classify_images(request: ClassifyRequest,
             raise HTTPException(status_code=400, detail="Invalid class name")
             
         # 클래스 디렉토리 생성
-        class_dir = _classification_dir() / class_name
+        classification_dir = _classification_dir(mode=mode)
+        class_dir = classification_dir / class_name
         class_dir.mkdir(parents=True, exist_ok=True)
         
         # 대상 파일 경로
@@ -4326,27 +4323,33 @@ async def classify_images(request: ClassifyRequest,
 class BatchClassifyRequest(BaseModel):
     images: List[str]
     class_name: str
+    mode: Literal["wafer", "chip"] = "wafer"
+
+class ChipCoord(BaseModel):
+    x_abs: int
+    y_abs: int
+
+class ChipClassifyRequest(BaseModel):
+    class_name: str
+    image_path: str
+    chip_coords: List[ChipCoord]
+    folder_prefix: Optional[str] = None
 
 @app.post("/api/classify/batch")
 async def classify_images_batch(request: BatchClassifyRequest,
-                                folder: Optional[str] = Query(None, description="현재 폴더 경로"),
                                 _=Depends(labels_classes_sync_dep)):
     """배치 이미지 분류"""
     batch_start_time = time.perf_counter()
     try:
-        # 🔥 folder 파라미터가 있으면 current_folder 설정
-        global current_folder
-        if folder:
-            current_folder = ROOT_DIR / folder
-        else:
-            current_folder = ROOT_DIR
+        mode = request.mode
 
         class_name = request.class_name.strip()
         if not class_name or not _CLASS_NAME_RE.match(class_name):
             raise HTTPException(status_code=400, detail="Invalid class name")
 
         # 클래스 디렉토리 생성
-        class_dir = _classification_dir() / class_name
+        classification_dir = _classification_dir(mode=mode)
+        class_dir = classification_dir / class_name
         class_dir.mkdir(parents=True, exist_ok=True)
         
         # 🔥 성능 최적화: 드라이브 체크는 한 번만 수행
@@ -4439,7 +4442,7 @@ async def classify_images_batch(request: BatchClassifyRequest,
                    f"저장: {save_time*1000:.1f}ms")
         
         log_access_row(tag="ACTION", note=f"배치 분류: {len(results)}개 성공, {len(errors)}개 실패 -> {class_name}")
-        
+
         return {
             "success": True,
             "class": class_name,
@@ -4448,29 +4451,201 @@ async def classify_images_batch(request: BatchClassifyRequest,
             "results": results,
             "error_details": errors
         }
-        
+
     except Exception as e:
         logger.exception(f"배치 이미지 분류 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/classify/chips")
+async def classify_chips(request: ChipClassifyRequest,
+                         req: Request,
+                         _=Depends(labels_classes_sync_dep)):
+    """Chip 크롭 및 분류"""
+    chip_start_time = time.perf_counter()
+    try:
+        username = _current_username(req, default="system")
+
+        class_name = request.class_name.strip()
+        if not class_name or not _CLASS_NAME_RE.match(class_name):
+            raise HTTPException(status_code=400, detail="Invalid class name")
+
+        # 🔥 Chip classification 폴더 사용
+        class_dir = _classification_dir(mode="chip") / class_name
+        class_dir.mkdir(parents=True, exist_ok=True)
+
+        # 원본 이미지 경로
+        rel_path = relkey_from_any_path(request.image_path)
+        wafer_path = ROOT_DIR / rel_path
+        rel_path_obj = Path(rel_path)
+        folder_key = _chip_annotation_folder_key(rel_path_obj, folder_prefix=request.folder_prefix)
+
+        if not wafer_path.exists() or not wafer_path.is_file():
+            raise HTTPException(status_code=404, detail="Wafer image not found")
+
+        # positions.json 파일 찾기
+        wafer_stem = wafer_path.stem
+        positions_path = _resolve_positions_path(rel_path_obj)
+
+        if not positions_path.exists():
+            raise HTTPException(status_code=404, detail="Positions file not found")
+
+        # positions.json 로드
+        with open(positions_path, 'r', encoding='utf-8') as f:
+            positions_data = json.load(f)
+
+        chips = positions_data.get('chips', [])
+
+        # Wafer 이미지 로드
+        wafer_img = Image.open(wafer_path)
+
+        # 이미지 파일명 (확장자 제외)
+        wafer_name = wafer_path.stem
+
+        saved_count = 0
+        errors = []
+        chip_updates: List[Dict[str, Any]] = []
+
+        # 각 chip 크롭 및 저장
+        for chip_coord in request.chip_coords:
+            try:
+                # chip 좌표로 칩 찾기
+                chip = None
+                for c in chips:
+                    if c.get('x_abs') == chip_coord.x_abs and c.get('y_abs') == chip_coord.y_abs:
+                        chip = c
+                        break
+
+                if not chip:
+                    errors.append(f"Chip ({chip_coord.x_abs}, {chip_coord.y_abs}) not found in positions")
+                    continue
+
+                # rect 정보 가져오기
+                rect = chip.get('rect')
+                if not rect:
+                    errors.append(f"Chip ({chip_coord.x_abs}, {chip_coord.y_abs}) has no rect info")
+                    continue
+
+                x0, y0 = rect['x0'], rect['y0']
+                x1, y1 = rect['x1'], rect['y1']
+
+                # 칩 크롭
+                chip_img = wafer_img.crop((x0, y0, x1, y1))
+
+                # 파일명 생성: 원본파일명_x{x}_y{y}.png
+                chip_filename = f"{wafer_name}_x{abs(chip_coord.x_abs)}_y{abs(chip_coord.y_abs)}.png"
+                chip_path = class_dir / chip_filename
+
+                # 저장
+                chip_img.save(chip_path, format='PNG')
+                saved_count += 1
+                chip_updates.append({
+                    "x_abs": chip_coord.x_abs,
+                    "y_abs": chip_coord.y_abs,
+                    "class_name": class_name,
+                    "filename": chip_filename
+                })
+
+                # 🔥 라벨 추가 (chip 파일 경로는 classification 하위에만 있음)
+                chip_rel_path = str(chip_path.relative_to(ROOT_DIR)).replace("\\", "/")
+                with LABELS_LOCK:
+                    cur_labels = set(LABELS.get(chip_rel_path, []))
+                    cur_labels.add(class_name)
+                    LABELS[chip_rel_path] = sorted(cur_labels)
+
+            except Exception as e:
+                errors.append(f"Chip ({chip_coord.x_abs}, {chip_coord.y_abs}): {str(e)}")
+
+        # 라벨 저장
+        if saved_count > 0:
+            _labels_save()
+            _dircache_invalidate(class_dir)
+            _upsert_chip_annotations(rel_path_obj, folder_key, chip_updates, username=username)
+
+        chip_time = time.perf_counter() - chip_start_time
+        log_access_row(tag="ACTION", note=f"Chip 분류: {saved_count}개 성공, {len(errors)}개 실패 -> {class_name} (소요시간: {chip_time*1000:.1f}ms)")
+
+        return {
+            "success": True,
+            "class": class_name,
+            "saved_count": saved_count,
+            "errors": errors,
+            "error_count": len(errors)
+        }
+
+    except Exception as e:
+        logger.exception(f"Chip 분류 실패: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/classify/chips/{wafer_name}")
+async def get_chip_labels(
+    wafer_name: str,
+    path: Optional[str] = Query(None),
+    folder: Optional[str] = Query(None)
+):
+    """특정 wafer의 chip 라벨 조회"""
+    try:
+        if path:
+            rel_path = _get_relative_path_from_image(path)
+            rel_path_obj = Path(rel_path)
+            folder_key = _chip_annotation_folder_key(rel_path_obj, folder_prefix=folder)
+            _, _, entry = _load_annotation_entry(rel_path_obj, folder_key)
+            return {"chips": entry.get("marked_chips", [])}
+
+        # 🔥 Chip classification 폴더 사용
+        classification_dir = _classification_dir(mode="chip")
+        if not classification_dir.exists():
+            return {"chips": []}
+
+        chip_labels = []
+
+        # 모든 클래스 폴더 순회
+        for class_dir in classification_dir.iterdir():
+            if not class_dir.is_dir():
+                continue
+
+            class_name = class_dir.name
+            pattern = f"{wafer_name}_x*_y*.png"
+
+            for chip_file in class_dir.glob(pattern):
+                try:
+                    parsed = _parse_chip_filename(chip_file.stem)
+                    if not parsed:
+                        continue
+                    wafer_stem, x_abs, y_abs = parsed
+                    if wafer_stem != wafer_name:
+                        continue
+
+                    chip_labels.append({
+                        "x_abs": x_abs,
+                        "y_abs": y_abs,
+                        "class": class_name,
+                        "filename": chip_file.name
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to parse chip filename {chip_file.name}: {e}")
+                    continue
+
+        return {"chips": chip_labels}
+
+    except Exception as e:
+        logger.exception(f"Chip 라벨 조회 실패: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.delete("/api/classify")
 async def delete_classification(request: ClassifyDeleteRequest,
-                                folder: Optional[str] = Query(None, description="현재 폴더 경로"),
+                                req: Request,
                                 _=Depends(labels_classes_sync_dep)):
     """classification 디렉토리에서 이미지 제거"""
     try:
-        # 🔥 folder 파라미터가 있으면 current_folder 설정
-        global current_folder
-        if folder:
-            current_folder = ROOT_DIR / folder
-        else:
-            current_folder = ROOT_DIR
+        mode = request.mode
+        username = _current_username(req, default="system")
 
         class_name = request.class_name.strip()
         if not class_name or not _CLASS_NAME_RE.match(class_name):
             raise HTTPException(status_code=400, detail="Invalid class name")
             
-        class_dir = _classification_dir() / class_name
+        classification_dir = _classification_dir(mode=mode)
+        class_dir = classification_dir / class_name
         if not class_dir.exists():
             raise HTTPException(status_code=404, detail="Class not found")
         
@@ -4497,6 +4672,10 @@ async def delete_classification(request: ClassifyDeleteRequest,
         
         # classification 디렉토리에서 파일 삭제
         target_file.unlink()
+        try:
+            classification_rel_path = str(target_file.relative_to(ROOT_DIR)).replace("\\", "/")
+        except ValueError:
+            classification_rel_path = target_file.as_posix()
         
         # 라벨에서도 제거
         with LABELS_LOCK:
@@ -4509,6 +4688,14 @@ async def delete_classification(request: ClassifyDeleteRequest,
         
         _labels_save()
         _dircache_invalidate(class_dir)
+
+        if mode == "chip":
+            _remove_chip_annotations_from_classification_path(
+                classification_rel_path,
+                class_name=class_name,
+                filename=target_file.name,
+                username=username,
+            )
         
         log_access_row(tag="ACTION", note=f"분류 제거: {rel_path} from {class_name}")
         
@@ -4521,21 +4708,18 @@ async def delete_classification(request: ClassifyDeleteRequest,
 # 프런트엔드가 사용하는 엔드포인트: POST /api/classify/delete
 @app.post("/api/classify/delete")
 async def classify_delete_batch(request: ClassifyDeleteBatchReq,
-                                folder: Optional[str] = Query(None, description="현재 폴더 경로"),
+                                req: Request,
                                 _=Depends(labels_classes_sync_dep)):
     try:
-        # 🔥 folder 파라미터가 있으면 current_folder 설정
-        global current_folder
-        if folder:
-            current_folder = ROOT_DIR / folder
-        else:
-            current_folder = ROOT_DIR
+        mode = request.mode
+        username = _current_username(req, default="system")
 
         class_name = request.class_.strip()
         if not class_name or not _CLASS_NAME_RE.match(class_name):
             raise HTTPException(status_code=400, detail="Invalid class name")
 
-        class_dir = _classification_dir() / class_name
+        classification_dir = _classification_dir(mode=mode)
+        class_dir = classification_dir / class_name
         removed = 0
         for any_path in request.images:
             try:
@@ -4547,11 +4731,22 @@ async def classify_delete_batch(request: ClassifyDeleteBatchReq,
                         target_file.unlink()
                     except FileNotFoundError:
                         pass
+                try:
+                    classification_rel_path = str(target_file.relative_to(ROOT_DIR)).replace("\\", "/")
+                except ValueError:
+                    classification_rel_path = target_file.as_posix()
                 with LABELS_LOCK:
                     labels = set(LABELS.get(rel_path, []))
                     if class_name in labels:
                         labels.discard(class_name)
                         LABELS[rel_path] = sorted(labels) if labels else LABELS.pop(rel_path, None) or []
+                if mode == "chip":
+                    _remove_chip_annotations_from_classification_path(
+                        classification_rel_path,
+                        class_name=class_name,
+                        filename=target_file.name,
+                        username=username,
+                    )
                 removed += 1
             except Exception:
                 continue
@@ -4751,8 +4946,8 @@ async def browse_folders(path: Optional[str] = None):
         try:
             with os.scandir(target_path) as it:
                 for entry in it:
-                    # 🔥 classification, thumbnails 폴더 제외
-                    if entry.is_dir(follow_symlinks=False) and not entry.name.startswith('.') and entry.name not in ['classification', 'thumbnails']:
+                    # 🔥 classification, classification_chips, thumbnails 폴더 제외
+                    if entry.is_dir(follow_symlinks=False) and not entry.name.startswith('.') and entry.name not in ['classification', 'classification_chips', 'thumbnails', 'labels']:
                         folders.append({
                             "name": entry.name, 
                             "path": str(entry.path), 
@@ -4769,8 +4964,8 @@ async def browse_folders(path: Optional[str] = None):
                 subfolders_list = []
                 with os.scandir(entry_info["path"]) as sub_it:
                     for sub_entry in sub_it:
-                        # 🔥 classification, thumbnails 폴더 제외
-                        if sub_entry.is_dir(follow_symlinks=False) and not sub_entry.name.startswith('.') and sub_entry.name not in ['classification', 'thumbnails']:
+                        # 🔥 classification, classification_chips, thumbnails 폴더 제외
+                        if sub_entry.is_dir(follow_symlinks=False) and not sub_entry.name.startswith('.') and sub_entry.name not in ['classification', 'classification_chips', 'thumbnails', 'labels']:
                             subfolders_list.append({
                                 "name": f"{entry_info['name']} / {sub_entry.name}", 
                                 "path": str(sub_entry.path), 
@@ -4803,6 +4998,499 @@ async def browse_folders(path: Optional[str] = None):
     except Exception as e:
         logger.error(f"폴더 브라우징 실패: {e}")
         raise HTTPException(status_code=500, detail=f"폴더 브라우징 실패: {str(e)}")
+
+# ======================== Chip Annotation APIs ========================
+
+def _get_relative_path_from_image(image_path: str) -> str:
+    """이미지 경로에서 ROOT_DIR 기준 상대 경로 추출"""
+    img_path = Path(image_path)
+    try:
+        rel_path = img_path.relative_to(ROOT_DIR)
+    except ValueError:
+        # ROOT_DIR 외부 경로면 이미 상대 경로일 수 있음
+        rel_path = Path(image_path)
+    return str(rel_path).replace("\\", "/")
+
+_CHIP_ANNOTATION_VERSION = 2
+_CHIP_ANNOTATION_VERSION_KEY = "_version"
+_CHIP_ANNOTATION_DEFAULT_FOLDER = "."
+
+def _folder_key_from_prefix(folder_prefix: Optional[str]) -> Optional[str]:
+    if folder_prefix is None:
+        return None
+    cleaned = str(folder_prefix).strip()
+    cleaned = cleaned.replace("\\", "/")
+    cleaned = cleaned.strip("/")
+    if not cleaned or cleaned == ".":
+        return _CHIP_ANNOTATION_DEFAULT_FOLDER
+    candidate = Path(cleaned)
+    if ".." in candidate.parts:
+        logger.warning(f"⚠️ [CHIP] Invalid folder_prefix detected: {folder_prefix}")
+        return _CHIP_ANNOTATION_DEFAULT_FOLDER
+    return candidate.as_posix()
+
+def _chip_annotation_folder_key(
+    rel_path: Path,
+    base_folder: Optional[Path] = None,
+    folder_prefix: Optional[str] = None
+) -> str:
+    override = _folder_key_from_prefix(folder_prefix)
+    if override is not None:
+        return override
+    folder_source = base_folder or current_folder
+    try:
+        current_rel = folder_source.relative_to(ROOT_DIR)
+        current_key = current_rel.as_posix()
+    except ValueError:
+        current_key = ""
+    if current_key:
+        return current_key or _CHIP_ANNOTATION_DEFAULT_FOLDER
+    folder = rel_path.parent.as_posix()
+    return folder or _CHIP_ANNOTATION_DEFAULT_FOLDER
+
+def _empty_chip_annotation_payload() -> Dict[str, Any]:
+    return {
+        "marked_chips": [],
+        "metadata": {
+            "status": "empty",
+            "total_marked_chips": 0,
+            "created_at": None,
+            "updated_at": None,
+            "created_by": None,
+            "updated_by": None,
+            "class_distribution": {}
+        }
+    }
+
+def _load_chip_annotation_entries(annot_file: Path, legacy_key: str) -> Dict[str, Any]:
+    if not annot_file.exists():
+        return {}
+    try:
+        with annot_file.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+
+    if isinstance(data, dict) and "marked_chips" in data:
+        return {legacy_key: data}
+
+    if isinstance(data, dict):
+        return {
+            key: value for key, value in data.items()
+            if key != _CHIP_ANNOTATION_VERSION_KEY and isinstance(value, dict)
+        }
+    return {}
+
+def _write_chip_annotation_entries(annot_file: Path, entries: Dict[str, Any]) -> None:
+    annot_file.parent.mkdir(parents=True, exist_ok=True)
+    payload: Dict[str, Any] = {_CHIP_ANNOTATION_VERSION_KEY: _CHIP_ANNOTATION_VERSION}
+    payload.update(entries)
+    tmp = annot_file.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, annot_file)
+
+def _chip_annotation_file_for_relpath(rel_path: Path) -> Path:
+    rel_path = Path(rel_path)
+    return config.CHIP_ANNOTATIONS_ROOT / rel_path.parent / f"{rel_path.stem}_chips.json"
+
+def _load_annotation_entry(rel_path: Path, folder_key: str) -> Tuple[Path, Dict[str, Any], Dict[str, Any]]:
+    annot_file = _chip_annotation_file_for_relpath(rel_path)
+    entries = _load_chip_annotation_entries(annot_file, legacy_key=folder_key)
+    entry = entries.get(folder_key, _empty_chip_annotation_payload())
+    if "marked_chips" not in entry or not isinstance(entry["marked_chips"], list):
+        entry["marked_chips"] = []
+    if "metadata" not in entry or not isinstance(entry["metadata"], dict):
+        entry["metadata"] = _empty_chip_annotation_payload()["metadata"]
+    return annot_file, entries, entry
+
+def _save_annotation_entry(annot_file: Path, entries: Dict[str, Any], folder_key: str, entry: Dict[str, Any]) -> None:
+    entries[folder_key] = entry
+    _write_chip_annotation_entries(annot_file, entries)
+
+def _chip_id_from_coords(x_abs: int, y_abs: int) -> str:
+    return f"abs:{x_abs}:{y_abs}"
+
+_CHIP_COORD_RE = re.compile(r"^(?P<wafer>.+)_x(?P<x>-?\d+)_y(?P<y>-?\d+)$")
+_CHIP_CLASSIFICATION_SEGMENT = "/classification_chips"
+
+def _parse_chip_filename(stem: str) -> Optional[Tuple[str, int, int]]:
+    """
+    filename_x12_y34 → (filename, 12, 34)
+    과거 음수 좌표도 허용하기 위해 - 기호 허용
+    """
+    match = _CHIP_COORD_RE.match(stem)
+    if not match:
+        return None
+    try:
+        return (
+            match.group("wafer"),
+            int(match.group("x")),
+            int(match.group("y")),
+        )
+    except ValueError:
+        return None
+
+def _normalize_annotation_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    if "chip_id" not in record and "x_abs" in record and "y_abs" in record:
+        record["chip_id"] = _chip_id_from_coords(record["x_abs"], record["y_abs"])
+    return record
+
+def _refresh_annotation_metadata(entry: Dict[str, Any], username: str = "system") -> None:
+    metadata = entry.setdefault("metadata", {})
+    now_iso = datetime.now().isoformat()
+    if not metadata.get("created_at"):
+        metadata["created_at"] = now_iso
+        metadata["created_by"] = username
+    metadata["updated_at"] = now_iso
+    metadata["updated_by"] = username
+    marked = entry.get("marked_chips", [])
+    metadata["total_marked_chips"] = len(marked)
+    metadata["status"] = "active" if marked else "empty"
+    from collections import Counter
+    metadata["class_distribution"] = dict(Counter([chip.get("class") for chip in marked if chip.get("class")]))
+
+def _upsert_chip_annotations(rel_path: Path, folder_key: str, updates: List[Dict[str, Any]], username: str) -> None:
+    if not updates:
+        return
+    annot_file, entries, entry = _load_annotation_entry(rel_path, folder_key)
+    existing = {}
+    for chip in entry.get("marked_chips", []):
+        chip = _normalize_annotation_record(chip)
+        existing[chip.get("chip_id")] = chip
+    for update in updates:
+        x_abs = int(update["x_abs"])
+        y_abs = int(update["y_abs"])
+        chip_id = _chip_id_from_coords(x_abs, y_abs)
+        record = existing.get(chip_id, {"chip_id": chip_id})
+        record.update({
+            "x_abs": x_abs,
+            "y_abs": y_abs,
+            "class": update.get("class_name"),
+            "filename": update.get("filename"),
+            "updated_at": datetime.now().isoformat(),
+            "updated_by": username,
+        })
+        existing[chip_id] = record
+    entry["marked_chips"] = list(existing.values())
+    _refresh_annotation_metadata(entry, username=username)
+    _save_annotation_entry(annot_file, entries, folder_key, entry)
+
+def _remove_chip_annotations(
+    rel_path: Path,
+    folder_key: str,
+    coords: Optional[List[Tuple[int, int]]] = None,
+    filenames: Optional[Iterable[str]] = None,
+    class_name: Optional[str] = None,
+    username: str = "system"
+) -> None:
+    annot_file, entries, entry = _load_annotation_entry(rel_path, folder_key)
+    if not entry.get("marked_chips"):
+        return
+
+    coord_ids = set()
+    if coords:
+        for x, y in coords:
+            coord_ids.add(_chip_id_from_coords(int(x), int(y)))
+
+    filename_set = set()
+    if filenames:
+        for name in filenames:
+            if not name:
+                continue
+            filename_set.add(Path(name).name)
+
+    def should_remove(chip: Dict[str, Any]) -> bool:
+        chip = _normalize_annotation_record(chip)
+        cid = chip.get("chip_id")
+        if coord_ids:
+            if cid not in coord_ids:
+                return False
+            if class_name and chip.get("class") != class_name:
+                return False
+            return True
+        if filename_set:
+            chip_filename = Path(str(chip.get("filename") or "")).name
+            if not chip_filename or chip_filename not in filename_set:
+                return False
+            if class_name and chip.get("class") != class_name:
+                return False
+            return True
+        if class_name:
+            return chip.get("class") == class_name
+        return False
+
+    entry["marked_chips"] = [chip for chip in entry["marked_chips"] if not should_remove(chip)]
+    _refresh_annotation_metadata(entry, username=username)
+    _save_annotation_entry(annot_file, entries, folder_key, entry)
+
+def _derive_annotation_target_from_classification_path(class_rel_path: str) -> Optional[Tuple[Path, Path]]:
+    """
+    classification 경로에서 chip_annotations 상대 경로와 base 폴더를 유추한다.
+    예) wafer/product/classification_chips/class/foo_x1_y2.png →
+        (Path("wafer/product/foo.png"), ROOT_DIR/"wafer/product")
+    """
+    if not class_rel_path:
+        return None
+    normalized = class_rel_path.replace("\\", "/")
+    segment = _CHIP_CLASSIFICATION_SEGMENT
+    if segment not in normalized:
+        return None
+    prefix, remainder = normalized.split(segment, 1)
+    remainder = remainder.strip("/")
+    if not remainder:
+        return None
+    filename = Path(remainder).name
+    parsed = _parse_chip_filename(Path(filename).stem)
+    if not parsed:
+        return None
+    wafer_stem, _, _ = parsed
+    rel_parent = Path(prefix.strip("/")) if prefix.strip("/") else Path(".")
+    rel_path_obj = rel_parent / f"{wafer_stem}.png"
+    folder_base = (ROOT_DIR / rel_parent).resolve()
+    return rel_path_obj, folder_base
+
+def _remove_chip_annotations_from_classification_path(
+    classification_rel_path: str,
+    class_name: str,
+    filename: str,
+    username: str = "system"
+) -> None:
+    derived = _derive_annotation_target_from_classification_path(classification_rel_path)
+    if not derived:
+        logger.debug(f"[CHIP] 삭제 대상 경로 해석 실패: {classification_rel_path}")
+        return
+    rel_path_obj, folder_base = derived
+    folder_key = _chip_annotation_folder_key(rel_path_obj, base_folder=folder_base)
+    _remove_chip_annotations(
+        rel_path_obj,
+        folder_key,
+        filenames=[filename],
+        class_name=class_name,
+        username=username,
+    )
+
+def _trim_leading_component(path_obj: Path) -> Path:
+    parts = [p for p in path_obj.parts if p not in (".", "")]
+    if not parts:
+        return Path()
+    if len(parts) == 1:
+        return Path(parts[0])
+    return Path(*parts[1:])
+
+def _candidate_positions_paths(rel_path: Path) -> List[Path]:
+    trimmed_parent = _trim_leading_component(rel_path.parent)
+    trimmed_parts = [p for p in trimmed_parent.parts if p not in ("", ".")]
+    base_dir = config.POSITIONS_ROOT
+    paths = []
+    if trimmed_parts:
+        paths.append(base_dir.joinpath(*trimmed_parts) / f"{rel_path.stem}_positions.json")
+    else:
+        paths.append(base_dir / f"{rel_path.stem}_positions.json")
+    legacy = config.POSITIONS_ROOT / rel_path.parent / f"{rel_path.stem}_positions.json"
+    if legacy not in paths:
+        paths.append(legacy)
+    return paths
+
+def _resolve_positions_path(rel_path: Path) -> Path:
+    for candidate in _candidate_positions_paths(rel_path):
+        if candidate.exists():
+            return candidate
+    return _candidate_positions_paths(rel_path)[0]
+
+def _current_username(req: Optional[Request], default: str = "system") -> str:
+    if req is None:
+        return default
+    try:
+        session = req.session  # type: ignore[attr-defined]
+    except Exception:
+        return default
+    try:
+        session_user = session.get("session_user", {})
+    except AttributeError:
+        return default
+    if isinstance(session_user, dict):
+        return session_user.get("username") or default
+    if hasattr(session, "get"):
+        return session.get("username", default)
+    return default
+
+@app.get("/api/chip-positions")
+async def get_chip_positions(path: str):
+    """주어진 이미지 경로에 대응하는 positions.json 반환"""
+    try:
+        # 이미지 경로에서 상대 경로 추출
+        rel_path = _get_relative_path_from_image(path)
+
+        rel_path_obj = Path(rel_path)
+        positions_file = _resolve_positions_path(rel_path_obj)
+
+        logger.info(f"🔍 Chip positions requested: {path} -> {positions_file}")
+
+        if not positions_file.exists():
+            logger.warning(f"❌ Positions file not found: {positions_file}")
+            raise HTTPException(status_code=404, detail=f"Positions file not found: {positions_file}")
+
+        with open(positions_file, 'r', encoding='utf-8') as f:
+            positions_data = json.load(f)
+
+        chip_count = len(positions_data.get('chips', []))
+        logger.info(f"✅ Loaded {chip_count} chip positions from {positions_file.name}")
+
+        return JSONResponse(content=positions_data)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to load chip positions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/chip-annotations")
+async def get_chip_annotations(path: str, folder: Optional[str] = Query(None)):
+    """chip_annotations.json 반환 (없으면 빈 템플릿)"""
+    try:
+        # 이미지 경로에서 상대 경로 추출
+        rel_path = _get_relative_path_from_image(path)
+        rel_path_obj = Path(rel_path)
+        folder_key = _chip_annotation_folder_key(rel_path_obj, folder_prefix=folder)
+
+        _, _, entry = _load_annotation_entry(rel_path_obj, folder_key)
+
+        return JSONResponse(content=entry)
+
+    except Exception as e:
+        logger.exception(f"Failed to load chip annotations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ChipAnnotationRequest(BaseModel):
+    image_path: str
+    marked_chips: List[Dict[str, Any]]
+    folder_prefix: Optional[str] = None
+
+@app.post("/api/chip-annotations")
+async def save_chip_annotations(request: ChipAnnotationRequest, req: Request):
+    """사용자가 마킹한 Chip 정보 저장"""
+    try:
+        # 세션에서 사용자 정보 가져오기
+        username = _current_username(req, default="anonymous")
+
+        # 이미지 경로에서 상대 경로 추출
+        rel_path = _get_relative_path_from_image(request.image_path)
+
+        # chip_annotations 폴더 경로 생성
+        rel_path_obj = Path(rel_path)
+        folder_key = _chip_annotation_folder_key(rel_path_obj, folder_prefix=request.folder_prefix)
+
+        annot_file, entries, entry = _load_annotation_entry(rel_path_obj, folder_key)
+
+        metadata = entry.setdefault("metadata", _empty_chip_annotation_payload()["metadata"])
+        now_iso = datetime.now().isoformat()
+        if not metadata.get("created_at"):
+            metadata["created_at"] = now_iso
+            metadata["created_by"] = username
+
+        entry["marked_chips"] = request.marked_chips
+        metadata["updated_at"] = now_iso
+        metadata["updated_by"] = username
+        metadata["total_marked_chips"] = len(request.marked_chips)
+        metadata["status"] = "active" if request.marked_chips else "empty"
+
+        from collections import Counter
+        class_counts = Counter([chip.get('class') for chip in request.marked_chips if chip.get('class')])
+        metadata["class_distribution"] = dict(class_counts)
+
+        _save_annotation_entry(annot_file, entries, folder_key, entry)
+
+        log_access_row(tag="CHIP", note=f"Saved {len(request.marked_chips)} chip annotations for {rel_path}")
+
+        return {"success": True, "saved_chips": len(request.marked_chips), "file": str(annot_file)}
+
+    except Exception as e:
+        logger.exception(f"Failed to save chip annotations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ChipImageExtractRequest(BaseModel):
+    image_path: str
+    chips: List[Dict[str, Any]]
+    class_name: str
+    create_label: bool = True
+
+@app.post("/api/chip-images/extract")
+async def extract_chip_images(request: ChipImageExtractRequest):
+    """마킹된 Chip 영역을 별도 이미지로 추출"""
+    try:
+        from PIL import Image
+
+        # 이미지 경로 확인
+        rel_path = _get_relative_path_from_image(request.image_path)
+        img_path = ROOT_DIR / rel_path
+
+        if not img_path.exists():
+            raise HTTPException(status_code=404, detail=f"Image not found: {img_path}")
+
+        # 이미지 열기
+        img = Image.open(img_path)
+
+        # Chip 이미지 저장 경로
+        chip_images_dir = config.CHIP_IMAGES_ROOT / request.class_name
+        chip_images_dir.mkdir(parents=True, exist_ok=True)
+
+        extracted_chips = []
+
+        for idx, chip in enumerate(request.chips):
+            bbox = chip.get('bbox', {})
+
+            # Crop 영역 추출
+            x0, y0 = bbox.get('x0', 0), bbox.get('y0', 0)
+            x1, y1 = bbox.get('x1', 0), bbox.get('y1', 0)
+
+            chip_img = img.crop((x0, y0, x1, y1))
+
+            # 파일명 생성
+            chip_filename = f"{img_path.stem}_chip_{chip.get('x_abs')}_{chip.get('y_abs')}.png"
+            chip_path = chip_images_dir / chip_filename
+
+            # 저장
+            chip_img.save(chip_path, "PNG")
+
+            # 라벨 정보도 저장
+            if request.create_label:
+                label_filename = f"{chip_filename}.json"
+                label_path = chip_images_dir / label_filename
+
+                label_info = {
+                    "class": request.class_name,
+                    "label": chip.get('label'),
+                    "bbox": bbox,
+                    "coordinates": {
+                        "x_abs": chip.get('x_abs'),
+                        "y_abs": chip.get('y_abs')
+                    },
+                    "source_image": str(rel_path),
+                    "extracted_at": datetime.now().isoformat()
+                }
+
+                with open(label_path, 'w', encoding='utf-8') as f:
+                    json.dump(label_info, f, ensure_ascii=False, indent=2)
+
+            extracted_chips.append({
+                "chip_image": str(chip_path),
+                "coordinates": f"({chip.get('x_abs')}, {chip.get('y_abs')})"
+            })
+
+        log_access_row(tag="CHIP", note=f"Extracted {len(extracted_chips)} chip images to {request.class_name}")
+
+        return {
+            "success": True,
+            "extracted_count": len(extracted_chips),
+            "class_name": request.class_name,
+            "output_dir": str(chip_images_dir),
+            "chips": extracted_chips
+        }
+
+    except Exception as e:
+        logger.exception(f"Failed to extract chip images: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ======================== Lifecycle ========================
 @app.on_event("startup")

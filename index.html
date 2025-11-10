@@ -574,18 +574,42 @@
             font-style: italic;
         }
         
-        .grid-btn {
-            background: #232323;
-            color: #fff;
-            border: 1.5px solid #444;
-            border-radius: 6px;
-            padding: 6px 18px;
-            font-size: 15px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: background 0.15s, border 0.15s;
-            white-space: nowrap;
-        }
+.grid-btn {
+    background: #232323;
+    color: #fff;
+    border: 1.5px solid #444;
+    border-radius: 6px;
+    padding: 6px 18px;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, border 0.15s;
+    white-space: nowrap;
+}
+
+.class-btn {
+    padding: 6px 12px;
+    border-radius: 18px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-color);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+.class-btn:hover {
+    background: rgba(0, 153, 255, 0.12);
+    border-color: rgba(0, 153, 255, 0.35);
+}
+
+.class-btn.selected {
+    background: rgba(0, 153, 255, 0.25);
+    border-color: #0b84ff;
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(0, 153, 255, 0.35);
+    transform: translateY(-1px);
+}
         
         .selection-btn {
             min-width: 80px;
@@ -928,14 +952,14 @@
 
         #chip-coordinate-box {
             position: relative;
-            background-color: rgba(37, 37, 38, 0.9);
-            border: 1px solid var(--border-color);
+            background-color: rgba(37, 37, 38, 0.92);
+            border: 1px solid rgba(255, 255, 255, 0.1);
             border-radius: 4px;
             padding: 8px 10px;
-            width: 145px;
+            width: 150px;
             font-family: 'Consolas', 'Courier New', monospace;
             font-size: 11px;
-            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
         }
 
         #chip-coordinate-box .coord-row {
@@ -957,15 +981,15 @@
 
         .chip-label-legend {
             position: relative;
-            width: 230px;
+            width: 240px;
             max-height: 250px;
             display: none;
             flex-direction: column;
             gap: 8px;
             padding: 10px;
             border-radius: 6px;
-            border: 1px solid var(--border-color);
-            background-color: rgba(24, 24, 24, 0.92);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background-color: rgba(24, 24, 24, 0.9);
             overflow-y: auto;
             box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
         }
@@ -988,23 +1012,24 @@
             align-items: center;
             padding: 6px 10px;
             border-radius: 6px;
-            border: 1px solid #333;
-            background: rgba(0, 153, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(255, 255, 255, 0.04);
             color: var(--text-color);
             font-size: 13px;
             cursor: pointer;
-            transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+            transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
         }
 
         .chip-label-pill:hover {
-            background: rgba(0, 153, 255, 0.18);
-            border-color: rgba(0, 153, 255, 0.6);
+            background: rgba(0, 153, 255, 0.08);
+            border-color: rgba(0, 153, 255, 0.35);
         }
 
         .chip-label-pill.is-active {
-            background: rgba(0, 153, 255, 0.28);
+            background: rgba(0, 153, 255, 0.22);
             border-color: #09f;
             color: #fff;
+            box-shadow: 0 6px 12px rgba(0, 153, 255, 0.25);
             transform: translateY(-1px);
         }
 

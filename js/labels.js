@@ -29,6 +29,15 @@ export class LabelManager {
         this.initElements();
         this.bindEvents();
     }
+
+    getViewerApiUrl(path, extraParams = {}) {
+        if (this.viewer?.buildClassApiUrl) {
+            return this.viewer.buildClassApiUrl(path, extraParams);
+        }
+        const params = new URLSearchParams(extraParams);
+        const query = params.toString();
+        return query ? `${path}?${query}` : path;
+    }
     
     /**
      * DOM 요소 초기화
@@ -177,25 +186,30 @@ export class LabelManager {
         
         try {
             // 배치 이미지 분류 API 호출
+            const mode = this.viewer?.classMode || 'wafer';
             let response;
             if (selectedImages.length === 1) {
                 // 단일 이미지
-                response = await fetch('/api/classify', {
+                const apiUrl = this.getViewerApiUrl('/api/classify');
+                response = await fetch(apiUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         image_path: selectedImages[0],
-                        class_name: className
+                        class_name: className,
+                        mode: mode
                     })
                 });
             } else {
                 // 다중 이미지
-                response = await fetch('/api/classify/batch', {
+                const apiUrl = this.getViewerApiUrl('/api/classify/batch');
+                response = await fetch(apiUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         images: selectedImages,
-                        class_name: className
+                        class_name: className,
+                        mode: mode
                     })
                 });
             }
@@ -213,8 +227,6 @@ export class LabelManager {
             
             // UI 새로고침
             await this.refreshAll();
-            
-            alert(`라벨 "${className}"이 성공적으로 추가되었습니다.`);
             
         } catch (error) {
             console.error('라벨 추가 오류:', error);
@@ -256,10 +268,12 @@ export class LabelManager {
         setButtonLoading(button, true, originalText, '추가 중...');
         
         try {
-            const response = await fetch('/api/classes', {
+            const mode = this.viewer?.classMode || 'wafer';
+            const apiUrl = this.getViewerApiUrl('/api/classes', { mode });
+            const response = await fetch(apiUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: className })
+                body: JSON.stringify({ name: className, mode: mode })
             });
             
             if (!response.ok) {
@@ -316,11 +330,12 @@ export class LabelManager {
         
         try {
             console.log('🔍 [CLASS_DELETE_DEBUG] 클래스 삭제 API 호출 시작');
-            
+
+            const mode = this.viewer?.classMode || 'wafer';
             const deletePromises = selectedClasses.map(cls => {
-                const apiUrl = `/api/classes/${encodeURIComponent(cls.name)}`;
+                const apiUrl = this.getViewerApiUrl(`/api/classes/${encodeURIComponent(cls.name)}`, { mode });
                 console.log('🔍 [CLASS_DELETE_DEBUG] 삭제 API URL:', apiUrl);
-                
+
                 return fetch(apiUrl, {
                     method: 'DELETE'
                 });
@@ -369,15 +384,9 @@ export class LabelManager {
         console.log('🔍 [CACHE_DEBUG] classes 배열 삭제 완료');
         
         try {
-            // 🔥 ROOT_DIR 기준 상대 경로 사용 (절대 경로 아님!)
-            const currentFolder = this.viewer?.currentFolderPrefix;
-            console.log('🔍 [CLASS_DEBUG] refreshClassList - currentFolderPrefix:', currentFolder);
-            
-            // 🔥 빈 문자열('')도 폴더 파라미터로 전달 (루트 폴더 의미)
-            const apiUrl = (currentFolder !== undefined && currentFolder !== null)
-                ? `/api/classes?folder=${encodeURIComponent(currentFolder)}`
-                : '/api/classes';
-                
+            const mode = this.viewer?.classMode || 'wafer';
+            const apiUrl = this.getViewerApiUrl('/api/classes', { mode });
+
             console.log('🔍 [CLASS_DEBUG] API URL:', apiUrl);
 
             const response = await fetch(apiUrl);
@@ -501,21 +510,25 @@ export class LabelManager {
                     // 🔥 타임아웃 설정 (30초)
                     const controller = new AbortController();
                     const timeoutId = setTimeout(() => controller.abort(), 30000);
-                    
+
+                    const mode = this.viewer?.classMode || 'wafer';
                     let res;
                     try {
                         if (cleanPaths.length === 1) {
                             // 단일 이미지
                             console.log('🔍 [CLASS_CLICK_DEBUG] 단일 이미지 라벨 추가 API 호출:', {
                                 image_path: cleanPaths[0],
-                                class_name: className
+                                class_name: className,
+                                mode: mode
                             });
-                            res = await fetch('/api/classify', {
+                            const apiUrl = this.getViewerApiUrl('/api/classify');
+                            res = await fetch(apiUrl, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ 
-                                    image_path: cleanPaths[0], 
-                                    class_name: className 
+                                body: JSON.stringify({
+                                    image_path: cleanPaths[0],
+                                    class_name: className,
+                                    mode: mode
                                 }),
                                 signal: controller.signal
                             });
@@ -523,14 +536,17 @@ export class LabelManager {
                             // 다중 이미지
                             console.log('🔍 [CLASS_CLICK_DEBUG] 다중 이미지 라벨 추가 API 호출:', {
                                 images: cleanPaths,
-                                class_name: className
+                                class_name: className,
+                                mode: mode
                             });
-                            res = await fetch('/api/classify/batch', {
+                            const apiUrl = this.getViewerApiUrl('/api/classify/batch');
+                            res = await fetch(apiUrl, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ 
-                                    images: cleanPaths, 
-                                    class_name: className 
+                                body: JSON.stringify({
+                                    images: cleanPaths,
+                                    class_name: className,
+                                    mode: mode
                                 }),
                                 signal: controller.signal
                             });
@@ -642,21 +658,14 @@ export class LabelManager {
         }
         
         try {
-            // 🔥 ROOT_DIR 기준 상대 경로 사용 (절대 경로 아님!)
-            const currentFolder = this.viewer?.currentFolderPrefix;
-            console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] currentFolder:', currentFolder);
-            console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] currentFolder 타입:', typeof currentFolder);
+            const mode = this.viewer?.classMode || 'wafer';
+            const apiUrl = this.getViewerApiUrl(`/api/classes/${encodeURIComponent(className)}/images`, { mode });
 
-            const apiUrl = currentFolder
-                ? `/api/classes/${encodeURIComponent(className)}/images?folder=${encodeURIComponent(currentFolder)}`
-                : `/api/classes/${encodeURIComponent(className)}/images`;
-                
             console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] ===== API 요청 준비 =====');
-            console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] currentFolder 원본:', currentFolder);
-            console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] encodeURIComponent 결과:', currentFolder ? encodeURIComponent(currentFolder) : 'null');
+            console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] mode:', mode);
             console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] 최종 API URL:', apiUrl);
             console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] URL 길이:', apiUrl.length);
-                
+
             const response = await fetch(apiUrl);
             console.log('🔍 [SHOW_CLASS_IMAGES_DEBUG] API 응답 상태:', response.status);
             if (!response.ok) {
@@ -765,11 +774,8 @@ export class LabelManager {
             // 캐시가 없으면 API 호출 (refreshAll이 아닌 직접 호출 시)
             console.log('🔍 [LABEL_EXPLORER_DEBUG] 캐시 없음 - API 호출');
             try {
-                const currentFolder = this.viewer?.currentFolderPrefix;
-                // 🔥 빈 문자열('')도 폴더 파라미터로 전달 (루트 폴더 의미)
-                const apiUrl = (currentFolder !== undefined && currentFolder !== null)
-                    ? `/api/classes?folder=${encodeURIComponent(currentFolder)}`
-                    : '/api/classes';
+                const mode = this.viewer?.classMode || 'wafer';
+                const apiUrl = this.getViewerApiUrl('/api/classes', { mode });
 
                 const res = await fetch(apiUrl);
                 if (!res.ok) {
@@ -802,11 +808,11 @@ export class LabelManager {
 
             // 이미지 목록 조회
             try {
-                // 🔥 ROOT_DIR 기준 상대 경로 사용 (절대 경로 아님!)
-                const currentFolder = this.viewer?.currentFolderPrefix;
-                const imageApiUrl = currentFolder
-                    ? `/api/classes/${encodeURIComponent(className)}/images?folder=${encodeURIComponent(currentFolder)}&limit=1000`
-                    : `/api/classes/${encodeURIComponent(className)}/images?limit=1000`;
+                const mode = this.viewer?.classMode || 'wafer';
+                const imageApiUrl = this.getViewerApiUrl(`/api/classes/${encodeURIComponent(className)}/images`, {
+                    mode,
+                    limit: 1000
+                });
                 console.log('🔍 [LABEL_EXPLORER_DEBUG] 이미지 조회 API URL:', imageApiUrl);
                 
                 // 재시도 로직 추가
@@ -872,12 +878,15 @@ export class LabelManager {
                         }
                         try {
                             // classification 디렉토리에서 파일 제거와 라벨 제거를 모두 수행
-                            const res = await fetch('/api/classify', {
+                            const mode = this.viewer?.classMode || 'wafer';
+                            const apiUrl = this.getViewerApiUrl('/api/classify');
+                            const res = await fetch(apiUrl, {
                                 method: 'DELETE',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({
                                     image_path: imagePath,
-                                    class_name: className
+                                    class_name: className,
+                                    mode: mode
                                 })
                             });
                             if (!res.ok) {
