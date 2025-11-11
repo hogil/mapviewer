@@ -551,6 +551,7 @@
             display: flex !important;
             align-items: center;
             gap: 4px;
+            margin-right: 16px;
         }
         .grid-slider {
             display: flex;
@@ -577,7 +578,7 @@
             display: flex;
             align-items: center;
             gap: 6px;
-            margin-left: auto;
+            margin-left: 32px;
             flex: 1 1 auto;
             min-width: 0;
         }
@@ -589,9 +590,9 @@
             border-radius: 4px !important;
             font-size: 13px !important;
             padding: 4px 8px !important;
-            width: 280px !important;
-            max-width: 55% !important;
-            min-width: 200px !important;
+            width: 240px !important;
+            max-width: 50% !important;
+            min-width: 180px !important;
             transition: border-color 0.2s ease;
         }
         
@@ -874,7 +875,7 @@
         
         .selection-btn {
             min-width: 80px;
-            padding: 6px 20px;
+            padding: 4px 12px;
         }
         
         .grid-btn:hover {
@@ -1614,41 +1615,36 @@
             background-color: #007acc !important;
         }
 
-        /* Multi-search textarea with row lines and character grid */
+        /* Multi-search textarea with Excel-like cell appearance */
         .multi-search-textarea {
             width: 100%;
             resize: vertical;
-            background: #0a0a0a;
-            color: #cccccc;
-            border: 1px solid #444;
-            border-radius: 6px;
-            padding: 10px 14px;
+            background: #000000;
+            color: #ffffff;
+            border: 1px solid #404040;
+            border-radius: 0;
+            padding: 0 6px;
+            margin: 0;
             font-size: 14px;
-            font-family: 'JetBrains Mono', 'Consolas', monospace;
-            line-height: 24px;
+            font-family: 'Consolas', 'Courier New', monospace;
+            line-height: 32px;
             tab-size: 4;
             white-space: pre;
             letter-spacing: 0;
-            /* Character width will be set dynamically by JavaScript */
-            --char-width: 8.4px;
-            --grid-offset: 14px;
-            background-image:
-                /* Horizontal lines between rows */
-                linear-gradient(transparent 0%, transparent calc(100% - 1px), rgba(255, 255, 255, 0.1) calc(100% - 1px)),
-                /* Vertical lines between characters */
-                repeating-linear-gradient(
-                    to right,
-                    transparent 0,
-                    transparent calc(var(--char-width) - 0.5px),
-                    rgba(255, 255, 255, 0.08) calc(var(--char-width) - 0.5px),
-                    rgba(255, 255, 255, 0.08) var(--char-width)
-                );
-            background-size: 
-                100% 24px,  /* Horizontal lines */
-                var(--char-width) 100%;  /* Vertical lines */
-            background-position: 
-                0 0,  /* Horizontal lines */
-                var(--grid-offset, 14px) 0;  /* Vertical lines (offset by padding-left) */
+            overflow-x: auto;
+            overflow-y: auto;
+            box-sizing: border-box;
+            /* Excel-like cell borders - each row is exactly 32px high with 1px border between cells (1.5x larger) */
+            background-image: repeating-linear-gradient(
+                to bottom,
+                #000000 0,
+                #000000 31px,
+                #404040 31px,
+                #404040 32px
+            );
+            background-size: 100% 32px;
+            background-position: 0 0;
+            background-repeat: repeat-y;
         }
 
         .multi-search-textarea:focus {
@@ -1917,7 +1913,7 @@
                     <div class="personalized-color-actions">
                         <!-- 🔥 개인색 설정은 항상 활성화되므로 체크박스 제거 -->
                         <button type="button" id="personalized-color-button" class="color-editor-btn">색상 편집</button>
-                        <button type="button" id="permission-editor-button" class="color-editor-btn secondary">권한 편집</button>
+                        <button type="button" id="permission-editor-button" class="color-editor-btn">권한 편집</button>
                     </div>
                 </div>
             </div>
@@ -1948,7 +1944,7 @@
                 
                 <!-- Search Controls -->
                 <div class="search-controls">
-                    <input type="text" id="file-search" placeholder="파일명 입력 (AND, OR, NOT, () 사용 가능)">
+                    <input type="text" id="file-search" placeholder="AND, OR, NOT, () 사용 가능">
                     <button id="search-btn" class="grid-btn" aria-label="검색">검색</button>
                     <button type="button" id="multi-search-btn" class="grid-btn" aria-label="LOT 다중 검색">다중검색</button>
                     <button id="clear-cache-btn" class="grid-btn" aria-label="캐시 삭제">캐시 삭제</button>

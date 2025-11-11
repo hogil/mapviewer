@@ -3318,7 +3318,8 @@ class WaferMapViewer {
                     this.closeMultiSearchModal();
                     return;
                 }
-                if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey) {
+                // Enter → 검색 실행 (Shift+Enter, Ctrl+Enter는 기본 동작으로 다음 행 이동)
+                if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
                     e.preventDefault();
                     this.handleMultiSearchApply();
                     return;
@@ -4352,10 +4353,7 @@ class WaferMapViewer {
             if (!this.dom.multiSearchInput.value) {
                 this.dom.multiSearchInput.value = '';
             }
-            // 모달이 렌더링된 후 문자 폭 측정하여 그리드 라인 설정
-            requestAnimationFrame(() => {
-                this.setupCharacterGrid(this.dom.multiSearchInput);
-            });
+            // 🔥 엑셀 셀 스타일이므로 그리드 라인 설정 불필요 (제거)
             setTimeout(() => this.dom.multiSearchInput?.focus(), 0);
         }
         this.setMultiSearchError('');
@@ -4917,7 +4915,65 @@ class WaferMapViewer {
             return;
         }
 
+        // 🔥 로딩 오버레이 표시
+        let loadingOverlay = null;
         try {
+            // 🔥 로딩 오버레이 생성
+            loadingOverlay = document.createElement('div');
+            loadingOverlay.id = 'composite-loading-overlay';
+            loadingOverlay.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.7);
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                z-index: 20000;
+                color: #fff;
+                font-size: 16px;
+            `;
+            
+            // 🔥 스피너와 메시지
+            const spinner = document.createElement('div');
+            spinner.style.cssText = `
+                width: 50px;
+                height: 50px;
+                border: 4px solid rgba(255, 255, 255, 0.3);
+                border-top-color: #007acc;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+                margin-bottom: 20px;
+            `;
+            
+            const message = document.createElement('div');
+            message.textContent = `Composite Map 생성 중... (${selected.length}개 이미지 처리 중)`;
+            message.style.cssText = `
+                font-size: 16px;
+                font-weight: 500;
+                text-align: center;
+            `;
+            
+            // 🔥 CSS 애니메이션 추가 (이미 있으면 추가하지 않음)
+            if (!document.getElementById('composite-loading-spinner-style')) {
+                const style = document.createElement('style');
+                style.id = 'composite-loading-spinner-style';
+                style.textContent = `
+                    @keyframes spin {
+                        0% { transform: rotate(0deg); }
+                        100% { transform: rotate(360deg); }
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+            
+            loadingOverlay.appendChild(spinner);
+            loadingOverlay.appendChild(message);
+            document.body.appendChild(loadingOverlay);
+
             // 🔥 1단계: 현재 Grid 세션 저장
             this.saveCurrentGridSession();
 
@@ -4935,11 +4991,25 @@ class WaferMapViewer {
             const result = await res.json();
             console.log('✅ Composite Map 생성 완료:', result);
 
+            // 🔥 로딩 오버레이 제거
+            if (loadingOverlay && loadingOverlay.parentNode) {
+                loadingOverlay.parentNode.removeChild(loadingOverlay);
+            }
+
             // 🔥 3단계: Grid를 Composite Grid로 교체
             await this.switchToCompositeGrid(result);
 
+            // 🔥 완료 메시지
+            this.showToast?.('Composite Map 생성 완료!', 2000);
+
         } catch (error) {
             console.error('❌ Composite Map 생성 실패:', error);
+            
+            // 🔥 로딩 오버레이 제거
+            if (loadingOverlay && loadingOverlay.parentNode) {
+                loadingOverlay.parentNode.removeChild(loadingOverlay);
+            }
+            
             alert('Composite Map 생성에 실패했습니다.');
 
             // 세션 스택에서 저장한 상태 제거 (롤백)
@@ -5023,9 +5093,14 @@ class WaferMapViewer {
             const searchParams = new URLSearchParams();
             searchParams.set('q', fileQuery || '');
             if (normalizedLots.length) {
-                searchParams.set('lot_multi', normalizedLots.join(','));
+                // 🔥 여러 LOT를 쉼표로 구분하여 전달
+                const lotMultiValue = normalizedLots.join(',');
+                console.log(`[SEARCH] LOT 목록 전달: ${normalizedLots.length}개 -`, normalizedLots);
+                console.log(`[SEARCH] lot_multi 파라미터 값:`, lotMultiValue);
+                searchParams.set('lot_multi', lotMultiValue);
             }
             const searchUrl = `/api/search?${searchParams.toString()}`;
+            console.log(`[SEARCH] 검색 URL:`, searchUrl);
             const res = await fetch(searchUrl);
             if (!res.ok) {
                 throw new Error(`검색 API 응답 오류: ${res.status}`);

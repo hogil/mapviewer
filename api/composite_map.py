@@ -67,13 +67,17 @@ def create_composite_heatmaps(
     if indices is None:
         indices = list(range(8))  # 기본값
 
-    # 3. 인덱스별 마스크 배열 초기화 (바이너리)
-    masks = {idx: np.zeros((height, width), dtype=np.bool_)
-             for idx in indices}
+    # 3. 인덱스별 카운트 배열 초기화 (카운트 기반)
+    counts = {idx: np.zeros((height, width), dtype=np.uint16)
+              for idx in indices}
+    
+    # 🔥 인덱스 8 이상 픽셀 누적 (모든 이미지에서 OR 연산으로 합치기, 원본 색상 표시용)
+    high_indices_combined = np.zeros((height, width), dtype=np.uint8)  # 최종 인덱스 값
+    high_mask_combined = np.zeros((height, width), dtype=bool)  # 인덱스 8 이상 픽셀 마스크
 
     all_indices_list = [] if create_sum else None
 
-    # 🔥 4. 단일 패스로 모든 이미지 처리
+    # 🔥 4. 단일 패스로 모든 이미지 처리 (카운트 누적, 벡터화 최적화)
     processed_count = 0
     for img_path in image_paths:
         try:
@@ -81,21 +85,34 @@ def create_composite_heatmaps(
             if not full_path.exists():
                 continue
 
+            # 🔥 빠른 이미지 로딩 (PIL 최적화)
             img = Image.open(full_path)
-
-            # 크기가 다르면 리샘플링
+            # 🔥 이미지 데이터를 빠르게 NumPy 배열로 변환
             if img.size != (width, height):
                 img = img.resize((width, height), Image.NEAREST)
 
-            # 팔레트 이미지 처리
+            # 🔥 팔레트 이미지 처리 (최적화: NumPy 배열 직접 변환)
             if img.mode == 'P':
-                pixel_indices = np.array(img)
+                # 팔레트 모드: NumPy 배열로 빠르게 변환
+                pixel_indices = np.array(img, dtype=np.uint8)
             else:
-                pixel_indices = np.array(img.convert('L'))
+                # L 모드로 빠르게 변환
+                img_l = img.convert('L')
+                pixels = np.array(img_l, dtype=np.uint8)
+                pixel_indices = pixels // 32  # 0~255 → 0~7 매핑
 
-            # 인덱스별 마스크 누적 (OR 연산)
+            # 🔥 인덱스 8 이상 픽셀 누적 (OR 연산으로 합치기, 원본 색상 유지)
+            high_mask = (pixel_indices >= 8)
+            high_mask_combined |= high_mask
+            # 인덱스 8 이상인 위치에 최신 인덱스 값 저장 (겹치는 경우 마지막 값 사용)
+            high_indices_combined = np.where(high_mask, pixel_indices, high_indices_combined)
+
+            # 🔥 벡터화된 카운트 누적 (인덱스 0~7만 카운트)
             for idx in indices:
-                masks[idx] |= (pixel_indices == idx)
+                if idx < 8:  # 인덱스 0~7만 처리
+                    # 벡터화된 마스크 연산 (빠름)
+                    mask = (pixel_indices == idx)
+                    counts[idx] += mask.astype(np.uint16)
 
             # Sum Map용 인덱스 배열 수집
             if create_sum:
@@ -108,27 +125,76 @@ def create_composite_heatmaps(
             print(f"⚠️ 이미지 처리 실패: {img_path}, {e}")
             continue
 
-    # 5. 인덱스별 히트맵 생성 (원본 팔레트 적용)
+    # 5. 인덱스별 히트맵 생성 (카운트 기반, 원본 팔레트 색상 사용, 인덱스 8 이상 원본 색상)
     heatmaps = []
+    
+    # 🔥 전체 이미지 개수 (정규화 기준)
+    max_count = processed_count
+    
+    # 🔥 팔레트 RGB 배열 사전 계산 (속도 최적화)
+    palette_rgb = None
+    if source_palette:
+        palette_rgb = np.zeros((256, 3), dtype=np.uint8)
+        for i in range(256):
+            palette_idx = i * 3
+            if palette_idx + 2 < len(source_palette):
+                palette_rgb[i] = [
+                    source_palette[palette_idx],
+                    source_palette[palette_idx + 1],
+                    source_palette[palette_idx + 2]
+                ]
+            else:
+                palette_rgb[i] = [128, 128, 128]  # 기본 색상
+    else:
+        palette_rgb = np.full((256, 3), 128, dtype=np.uint8)  # 기본 회색
 
     for idx in indices:
+        if idx >= 8:
+            continue  # 인덱스 8 이상은 히트맵 생성하지 않음 (원본 색상으로만 표시)
+            
         heatmap_path = output_dir / f"index_{idx}.png"
-
-        # 🔥 마스크를 팔레트 이미지로 변환
-        heatmap_indices = np.where(masks[idx], idx, 255).astype(np.uint8)  # 255 = 투명/배경
-        heatmap_img = Image.fromarray(heatmap_indices, mode='P')
-
-        # 🔥 원본 팔레트 적용
-        if source_palette:
-            heatmap_img.putpalette(source_palette)
-
-        heatmap_img.save(heatmap_path, format='PNG')
+        
+        # 🔥 카운트 배열 가져오기
+        count_array = counts[idx]
+        
+        # 🔥 원본 팔레트에서 해당 인덱스의 색상 추출 (사전 계산된 배열 사용)
+        orig_r, orig_g, orig_b = palette_rgb[idx]
+        
+        # 🔥 카운트를 0~1로 정규화 (벡터화 연산, 빠름)
+        if max_count > 0:
+            normalized = (count_array.astype(np.float32) / max_count).clip(0.0, 1.0)
+        else:
+            normalized = np.zeros((height, width), dtype=np.float32)
+        
+        # 🔥 흰색 → 원본 팔레트 색상으로 그라데이션 (벡터화 연산)
+        # normalized=0 → 흰색, normalized=1 → 원본 색상
+        r_array = (255.0 - (255.0 - orig_r) * normalized).astype(np.uint8)
+        g_array = (255.0 - (255.0 - orig_g) * normalized).astype(np.uint8)
+        b_array = (255.0 - (255.0 - orig_b) * normalized).astype(np.uint8)
+        
+        # 🔥 인덱스 8 이상 픽셀을 원본 색상으로 추가 (원본 색상 그대로 표시)
+        # 모든 이미지에서 누적된 인덱스 8 이상 픽셀을 한 번에 처리 (벡터화, 빠름)
+        if np.any(high_mask_combined):
+            # 인덱스 8 이상 픽셀의 원본 팔레트 색상 적용 (벡터화)
+            high_rgb = palette_rgb[high_indices_combined]  # (height, width, 3)
+            # 마스크가 True인 위치에만 원본 색상 적용 (기존 그라데이션 위에 덮어쓰기)
+            r_array = np.where(high_mask_combined, high_rgb[:, :, 0], r_array)
+            g_array = np.where(high_mask_combined, high_rgb[:, :, 1], g_array)
+            b_array = np.where(high_mask_combined, high_rgb[:, :, 2], b_array)
+        
+        # 🔥 RGB 이미지 생성 (벡터화된 연산)
+        rgb_array = np.stack([r_array, g_array, b_array], axis=2)
+        heatmap_img = Image.fromarray(rgb_array, mode='RGB')
+        
+        # 🔥 PNG로 저장 (최적화: 빠른 압축 레벨)
+        heatmap_img.save(heatmap_path, format='PNG', optimize=False, compress_level=1)
 
         # 상대 경로
         rel_path = heatmap_path.relative_to(IMAGES_ROOT).as_posix()
 
-        # 통계 계산
-        pixel_count = int(np.sum(masks[idx]))
+        # 통계 계산 (카운트 기반)
+        pixel_count = int(np.sum(count_array > 0))  # 카운트가 0보다 큰 픽셀 개수
+        max_pixel_count = int(np.max(count_array))  # 최대 카운트
         total_pixels = width * height
         percentage = round(pixel_count / total_pixels * 100, 2) if total_pixels > 0 else 0.0
 
@@ -136,10 +202,11 @@ def create_composite_heatmaps(
             "index": idx,
             "path": rel_path,
             "pixel_count": pixel_count,
+            "max_count": max_pixel_count,
             "percentage": percentage
         })
 
-    # 6. Sum Map 생성 (원본 팔레트 적용)
+    # 6. Sum Map 생성 (원본 팔레트 적용, 빈 부분은 흰색)
     sum_map_rel_path = None
     if create_sum and all_indices_list:
         # 3차원 배열로 스택 (N, height, width)
@@ -147,15 +214,37 @@ def create_composite_heatmaps(
 
         # 각 픽셀 위치에서 median 계산
         sum_map_indices = np.median(all_indices, axis=0).astype(np.uint8)
-
-        # Sum Map 저장 (원본 팔레트 적용)
-        sum_map_path = output_dir / "sum_map.png"
-        sum_map_img = Image.fromarray(sum_map_indices, mode='P')
-
-        # 🔥 원본 팔레트 적용
+        
+        # 🔥 모든 이미지에서 해당 위치가 0인 경우 (빈 부분) 감지
+        # 모든 이미지에서 값이 0인 픽셀을 찾기 위해 합계 계산
+        all_zero_mask = np.all(all_indices == 0, axis=0)
+        
+        # 🔥 빈 부분은 흰색(255, 255, 255)으로, 나머지는 원본 팔레트 적용
+        # RGB 모드로 변환하여 빈 부분을 흰색으로 표시 (벡터화 연산)
         if source_palette:
-            sum_map_img.putpalette(source_palette)
+            # 🔥 팔레트를 RGB 배열로 변환 (벡터화를 위한 사전 계산)
+            palette_rgb = np.array([
+                [
+                    source_palette[i * 3] if i * 3 < len(source_palette) else 255,
+                    source_palette[i * 3 + 1] if i * 3 + 1 < len(source_palette) else 255,
+                    source_palette[i * 3 + 2] if i * 3 + 2 < len(source_palette) else 255
+                ]
+                for i in range(256)
+            ], dtype=np.uint8)
+            
+            # 🔥 인덱스별 RGB 값 추출 (벡터화)
+            rgb_array = palette_rgb[sum_map_indices]  # (height, width, 3)
+            
+            # 🔥 빈 부분은 흰색으로 설정 (벡터화)
+            rgb_array[all_zero_mask] = [255, 255, 255]
+            
+            sum_map_img = Image.fromarray(rgb_array, mode='RGB')
+        else:
+            # 팔레트가 없으면 그레이스케일로 처리 (빈 부분은 흰색)
+            sum_map_gray = np.where(all_zero_mask, 255, sum_map_indices)
+            sum_map_img = Image.fromarray(sum_map_gray, mode='L')
 
+        sum_map_path = output_dir / "sum_map.png"
         sum_map_img.save(sum_map_path, format='PNG')
 
         sum_map_rel_path = sum_map_path.relative_to(IMAGES_ROOT).as_posix()

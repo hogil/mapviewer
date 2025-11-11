@@ -807,7 +807,7 @@ def _collect_term_hits(keys_slice: List[str], names_slice: List[str], tokens: Li
     return term_hits
 
 
-def _evaluate_logical_query(keys_slice: List[str], names_slice: List[str], query: str, limit: int) -> List[str]:
+def _evaluate_logical_query(keys_slice: List[str], names_slice: List[str], query: str, limit: Optional[int] = None) -> List[str]:
     tokens = _tokenize_logical_query(query)
     postfix = _logical_to_postfix(tokens)
     term_hits = _collect_term_hits(keys_slice, names_slice, tokens)
@@ -833,10 +833,11 @@ def _evaluate_logical_query(keys_slice: List[str], names_slice: List[str], query
             stack.append(set(term_hits.get(token, set())))
     result_set = stack.pop() if stack else set()
     ordered_hits: List[str] = []
+    # 🔥 limit이 None이면 제한 없이 모든 매칭 파일 검색
     for rel in keys_slice:
         if rel in result_set:
             ordered_hits.append(rel)
-            if limit and len(ordered_hits) >= limit:
+            if limit is not None and len(ordered_hits) >= limit:
                 break
     return ordered_hits
 
@@ -894,21 +895,22 @@ def _split_by_operator(text: str, operator: str) -> List[str]:
     parts = pattern.split(text)
     return [p for p in parts if p.strip()]
 
-def _search_index_slice(keys: List[str], names: List[str], query: str, goal: int) -> List[str]:
+def _search_index_slice(keys: List[str], names: List[str], query: str, goal: Optional[int] = None) -> List[str]:
     """단일 청크 단순 검색 (AND/OR 없는 경우 전용)."""
     results: List[str] = []
     if not query:
         return results
 
+    # 🔥 goal이 None이면 제한 없이 모든 매칭 파일 검색
     for rel, name_lower in zip(keys, names):
         if query in name_lower:
             results.append(rel)
-            if len(results) >= goal:
+            if goal is not None and len(results) >= goal:
                 break
 
     return results
 
-def _search_index_slice_parallel(keys: List[str], names: List[str], query: str, goal: int, num_chunks: int = 4) -> List[str]:
+def _search_index_slice_parallel(keys: List[str], names: List[str], query: str, goal: Optional[int] = None, num_chunks: int = 4) -> List[str]:
     """병렬 검색 (멀티청크, 단순 쿼리 전용)."""
     if not keys:
         return []
@@ -937,15 +939,17 @@ def _search_index_slice_parallel(keys: List[str], names: List[str], query: str, 
             try:
                 chunk_results = future.result()
                 results.extend(chunk_results)
-                if len(results) >= goal:
+                # 🔥 goal이 None이면 제한 없이 모든 결과 수집
+                if goal is not None and len(results) >= goal:
                     break
             except Exception as exc:
                 logger.error(f"청크 검색 실패: {exc}")
                 continue
 
-    return results[:goal]
+    # 🔥 goal이 None이면 모든 결과 반환, 있으면 goal개만 반환
+    return results[:goal] if goal is not None else results
 
-def _search_index_logical(keys: List[str], names: List[str], query: str, goal: int) -> List[str]:
+def _search_index_logical(keys: List[str], names: List[str], query: str, goal: Optional[int] = None) -> List[str]:
     """AND/OR/NOT 표현식을 위한 고급 검색."""
     if not keys or not query:
         return []
@@ -3914,17 +3918,19 @@ async def search_files(q: str = Query("", description="파일명 검색(대소�
         query = (q or "").strip().lower()
         lot_filter_values = _parse_lot_filter(lot_multi)
         lot_filter = set(lot_filter_values) if lot_filter_values else None
+        # 🔥 디버깅: LOT 필터 파싱 결과 확인
+        if lot_multi:
+            logger.info(f"LOT_MULTI 원본: {lot_multi}, 파싱 결과: {lot_filter_values}, 개수: {len(lot_filter_values)}")
+            if lot_filter:
+                logger.info(f"LOT 필터 세트: {sorted(lot_filter)}")
         if not query and not lot_filter:
             timings["total_ms"] = round((time.perf_counter() - total_start) * 1000, 3)
             timings["early_exit"] = True
             timings["lot_filter_count"] = 0
             return {"success": True, "results": [], "offset": offset, "limit": limit, "timings": timings}
 
-        goal = offset + limit
-        fallback_enabled = config.SEARCH_FALLBACK_LIMIT > 0
-        fallback_goal = goal
-        if fallback_enabled:
-            fallback_goal = min(goal, offset + config.SEARCH_FALLBACK_LIMIT)
+        # 🔥 검색은 제한 없이 모든 파일 검색, 결과만 limit으로 제한
+        # goal 제한 제거: 검색은 current_folder의 모든 하위 파일 대상
         bucket: List[str] = []
 
         # 🔍 current_folder 기준 루트 계산
@@ -3946,17 +3952,20 @@ async def search_files(q: str = Query("", description="파일명 검색(대소�
             prefix = ''
         prefix_with_sep = prefix.rstrip('/') + '/' if prefix else ""
 
-        # 📚 인덱스 기반 1차 검색
+        # 📚 인덱스 기반 1차 검색: current_folder의 모든 하위 폴더 검색
         prepare_start = time.perf_counter()
         with FILE_INDEX_LOCK:
             if prefix:
-                start_key = prefix_with_sep
-                end_key = prefix_with_sep + '\uffff'
+                # 🔥 current_folder로 시작하는 모든 경로 검색 (모든 하위 폴더 포함)
+                start_key = prefix_with_sep  # 예: "folder/" 또는 "folder/subfolder/"
+                end_key = prefix_with_sep + '\uffff'  # 예: "folder/\uffff" (모든 하위 항목 포함)
                 start_idx = bisect_left(FILE_INDEX_KEYS, start_key)
                 end_idx = bisect_right(FILE_INDEX_KEYS, end_key)
                 keys_slice = FILE_INDEX_KEYS[start_idx:end_idx]
                 names_slice = FILE_INDEX_NAMES[start_idx:end_idx]
+                logger.info(f"검색 범위: prefix={prefix}, start_key={start_key}, end_key={end_key[:50]}..., 파일 수={len(keys_slice)}")
             else:
+                # 🔥 prefix가 없으면 전체 인덱스 검색 (ROOT_DIR 전체)
                 # 인덱스 재구축 중에는 복사본 사용, 평상시에는 원본 리스트를 직접 참조해 오버헤드 최소화
                 if INDEX_BUILDING:
                     keys_slice = list(FILE_INDEX_KEYS)
@@ -3964,31 +3973,25 @@ async def search_files(q: str = Query("", description="파일명 검색(대소�
                 else:
                     keys_slice = FILE_INDEX_KEYS
                     names_slice = FILE_INDEX_NAMES
+                logger.info(f"검색 범위: 전체 (prefix 없음), 파일 수={len(keys_slice)}")
 
         timings["prepare_keys_ms"] = round((time.perf_counter() - prepare_start) * 1000, 3)
         timings["keys_considered"] = len(keys_slice)
+        timings["search_prefix"] = prefix  # 🔥 검색 prefix 로깅
+        timings["total_indexed_files"] = len(FILE_INDEX_KEYS)  # 🔥 전체 인덱스 파일 수
 
-        if lot_filter:
-            filtered_keys: List[str] = []
-            filtered_names: List[str] = []
-            for rel, name_lower in zip(keys_slice, names_slice):
-                lot_token = name_lower.split("_", 1)[0]
-                if lot_token in lot_filter:
-                    filtered_keys.append(rel)
-                    filtered_names.append(name_lower)
-            keys_slice = filtered_keys
-            names_slice = filtered_names
-            timings["lot_filter_applied"] = True
-        else:
-            timings["lot_filter_applied"] = False
+        # 🔥 LOT 검색: 파일명의 첫 부분(_로 split)이 LOT 목록에 포함되면 검색 결과로 선택
         timings["lot_filter_count"] = len(lot_filter) if lot_filter else 0
-        timings["lot_candidates"] = len(keys_slice)
 
         loop = asyncio.get_running_loop()
         logical_terms: List[str] = []
         effective_workers = 0
         bucket: List[str] = []
-        if query:
+        
+        # 🔥 검색 로직: query가 있으면 일반 검색, lot_filter가 있으면 LOT 검색
+        if query and lot_filter:
+            # 둘 다 있는 경우: 일반 검색 후 LOT 필터링
+            search_start = time.perf_counter()
             is_complex = _is_complex_query(query)
             if is_complex:
                 raw_tokens = _tokenize_logical_query(query)
@@ -3999,7 +4002,6 @@ async def search_files(q: str = Query("", description="파일명 검색(대소�
                 logical_terms = list(dict.fromkeys(logical_terms))
                 if not logical_terms:
                     is_complex = False
-            search_start = time.perf_counter()
             if is_complex:
                 index_hits = await loop.run_in_executor(
                     IO_POOL,
@@ -4022,16 +4024,148 @@ async def search_files(q: str = Query("", description="파일명 검색(대소�
                     goal,
                     worker_chunks
                 )
+            # 일반 검색 결과에서 LOT 검색 적용 (파일명의 첫 부분이 LOT 목록에 포함되면 선택)
+            filtered_hits = []
+            matched_lots = set()  # 🔥 매칭된 LOT 추적
+            # index_hits는 검색된 경로 리스트이므로, FILE_INDEX에서 직접 파일명 가져오기
+            with FILE_INDEX_LOCK:
+                for rel in index_hits:
+                    # FILE_INDEX에서 파일명 가져오기
+                    meta = FILE_INDEX.get(rel)
+                    if meta:
+                        name_lower = meta.get("name_lower")
+                        if not name_lower:
+                            name_lower = Path(rel).name.lower()
+                    else:
+                        # 인덱스에 없으면 경로에서 파일명 추출
+                        name_lower = Path(rel).name.lower()
+                    
+                    lot_token = name_lower.split("_", 1)[0]  # 파일명의 첫 부분(LOT ID) 추출
+                    if lot_token in lot_filter:  # LOT 목록에 포함되면 검색 결과에 추가
+                        filtered_hits.append(rel)
+                        matched_lots.add(lot_token)  # 🔥 매칭된 LOT 기록
+            index_hits = filtered_hits
+            logger.info(f"LOT+Query 검색: 요청 LOT {len(lot_filter)}개, 매칭된 LOT {len(matched_lots)}개, 파일 {len(index_hits)}개")
+            if len(matched_lots) < len(lot_filter):
+                missing_lots = sorted(lot_filter - matched_lots)
+                logger.warning(f"매칭되지 않은 LOT: {missing_lots}")
+            elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
+            bucket.extend(index_hits)
+            timings["logical_eval_ms"] = elapsed_ms if is_complex else 0.0
+            timings["search_mode"] = "query+lot"
+        elif query:
+            is_complex = _is_complex_query(query)
+            if is_complex:
+                raw_tokens = _tokenize_logical_query(query)
+                logical_terms = [
+                    token for token in raw_tokens
+                    if token and token not in _LOGICAL_OPERATORS and token not in ("(", ")")
+                ]
+                logical_terms = list(dict.fromkeys(logical_terms))
+                if not logical_terms:
+                    is_complex = False
+            search_start = time.perf_counter()
+            if is_complex:
+                # 🔥 goal 제한 제거: 모든 매칭 파일 검색 (current_folder의 모든 하위 파일)
+                index_hits = await loop.run_in_executor(
+                    IO_POOL,
+                    _search_index_logical,
+                    keys_slice,
+                    names_slice,
+                    query,
+                    None  # goal 제한 없음 (모든 파일 검색)
+                )
+                effective_workers = config.SEARCH_WORKERS or 1
+            else:
+                worker_chunks = max(1, config.SEARCH_WORKERS)
+                effective_workers = worker_chunks
+                # 🔥 goal 제한 제거: 모든 매칭 파일 검색 (current_folder의 모든 하위 파일)
+                index_hits = await loop.run_in_executor(
+                    IO_POOL,
+                    _search_index_slice_parallel,
+                    keys_slice,
+                    names_slice,
+                    query,
+                    None,  # goal 제한 없음 (모든 파일 검색)
+                    worker_chunks
+                )
             elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
             bucket.extend(index_hits)
             timings["logical_eval_ms"] = elapsed_ms if is_complex else 0.0
             timings["search_mode"] = "logical" if is_complex else "simple"
-        else:
-            index_hits = list(keys_slice[:goal])
-            elapsed_ms = 0.0
+        elif lot_filter:
+            # 🔥 LOT 검색만 수행: 파일명을 _로 split한 첫 번째 부분이 LOT 목록에 포함되면 선택
+            # 🔥 검색 제한 없음: keys_slice의 모든 파일 검색 (current_folder의 모든 하위 파일)
+            search_start = time.perf_counter()
+            all_matching_hits = []  # 🔥 모든 매칭 파일 수집 (검색 제한 없이)
+            matched_lots = set()  # 🔥 매칭된 LOT 추적
+            lot_file_counts = {}  # 🔥 LOT별 파일 개수 추적
+            
+            logger.info(f"LOT 검색 시작: keys_slice={len(keys_slice)}개 파일 검색 대상, 요청 LOT={sorted(lot_filter)}")
+            
+            # 🔥 디버깅: "near" 관련 파일명 모두 로깅
+            near_files = []
+            all_lot_tokens = set()  # 🔥 모든 추출된 lot_token 추적
+            
+            # 🔥 keys_slice의 모든 파일 검색 (제한 없음)
+            for rel, name_lower in zip(keys_slice, names_slice):
+                lot_token = name_lower.split("_", 1)[0]  # 파일명의 첫 부분(LOT ID) 추출
+                all_lot_tokens.add(lot_token)  # 🔥 모든 lot_token 수집
+                
+                # 🔥 "near" 관련 파일 디버깅
+                if "near" in name_lower.lower():
+                    near_files.append({
+                        "path": rel,
+                        "filename": name_lower,
+                        "lot_token": lot_token,
+                        "matched": lot_token in lot_filter
+                    })
+                
+                if lot_token in lot_filter:  # LOT 목록에 포함되면 검색 결과에 추가
+                    all_matching_hits.append(rel)
+                    matched_lots.add(lot_token)  # 🔥 매칭된 LOT 기록
+                    lot_file_counts[lot_token] = lot_file_counts.get(lot_token, 0) + 1
+            
+            # 🔥 디버깅 로그
+            if near_files:
+                logger.info(f"🔍 [NEAR 디버깅] 'near' 포함 파일 {len(near_files)}개:")
+                for f in near_files:
+                    logger.info(f"  - 경로: {f['path']}")
+                    logger.info(f"    파일명: {f['filename']}")
+                    logger.info(f"    추출된 LOT: {f['lot_token']}")
+                    logger.info(f"    매칭 여부: {f['matched']}")
+            else:
+                logger.info(f"🔍 [NEAR 디버깅] 'near' 포함 파일 없음")
+            
+            # 🔥 모든 추출된 lot_token 로깅 (요청 LOT와 비교)
+            missing_lot_tokens = lot_filter - all_lot_tokens
+            if missing_lot_tokens:
+                logger.warning(f"🔍 [LOT 디버깅] 추출된 lot_token에 없는 요청 LOT: {sorted(missing_lot_tokens)}")
+                logger.info(f"🔍 [LOT 디버깅] keys_slice에서 추출된 모든 lot_token (상위 50개): {sorted(list(all_lot_tokens))[:50]}")
+            
+            # 🔥 검색 제한 없음: 모든 매칭 파일 수집 (current_folder의 모든 하위 파일 검색)
+            index_hits = all_matching_hits  # 모든 파일 검색 (제한 없음)
+            elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
             bucket = list(index_hits)
-            timings["logical_eval_ms"] = 0.0
+            timings["logical_eval_ms"] = elapsed_ms
             timings["search_mode"] = "lot-only"
+            timings["matched_lots"] = sorted(matched_lots)  # 🔥 매칭된 LOT 목록
+            timings["matched_lot_count"] = len(matched_lots)  # 🔥 매칭된 LOT 개수
+            timings["total_matching_files"] = len(all_matching_hits)  # 🔥 전체 매칭 파일 수 (검색 제한 없음)
+            timings["lot_file_counts"] = lot_file_counts  # 🔥 LOT별 파일 개수
+            effective_workers = 1
+            logger.info(f"LOT 검색 완료: 요청 LOT {len(lot_filter)}개, 매칭된 LOT {len(matched_lots)}개, 전체 파일 {len(all_matching_hits)}개 (검색 제한 없음, keys_slice={len(keys_slice)}개 검색)")
+            logger.info(f"LOT별 파일 개수: {lot_file_counts}")
+            if len(matched_lots) < len(lot_filter):
+                missing_lots = sorted(lot_filter - matched_lots)
+                logger.warning(f"매칭되지 않은 LOT: {missing_lots} (파일명에 해당 LOT로 시작하는 파일이 없음)")
+        else:
+            # query도 없고 lot_filter도 없으면 빈 결과
+            index_hits = []
+            elapsed_ms = 0.0
+            bucket = []
+            timings["logical_eval_ms"] = 0.0
+            timings["search_mode"] = "none"
 
         timings["index_executor_ms"] = elapsed_ms
         timings["index_hit_count"] = len(index_hits)
