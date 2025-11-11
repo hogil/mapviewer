@@ -610,6 +610,24 @@ class WaferMapViewer {
             filterTestSelect: document.getElementById('filter-test-select'),
             personalizedColorButton: document.getElementById('personalized-color-button'),
             personalizedColorCheckbox: document.getElementById('personalized-color-checkbox'),
+            permissionEditorButton: document.getElementById('permission-editor-button'),
+            permissionModal: document.getElementById('permission-editor-modal'),
+            permissionEditorClose: document.getElementById('permission-editor-close'),
+            permissionRefreshBtn: document.getElementById('permission-refresh-btn'),
+            permissionNewBtn: document.getElementById('permission-new-btn'),
+            permissionSearchInput: document.getElementById('permission-search-input'),
+            permissionSearchBtn: document.getElementById('permission-search-btn'),
+            permissionSearchResults: document.getElementById('permission-search-results'),
+            permissionUserList: document.getElementById('permission-user-list'),
+            permissionLoginInput: document.getElementById('permission-login-input'),
+            permissionUsernameInput: document.getElementById('permission-username-input'),
+            permissionDeptInput: document.getElementById('permission-dept-input'),
+            permissionRoleSelect: document.getElementById('permission-role-select'),
+            permissionAddFolderBtn: document.getElementById('permission-add-folder-btn'),
+            permissionFolderList: document.getElementById('permission-folder-list'),
+            permissionDeleteBtn: document.getElementById('permission-delete-btn'),
+            permissionCancelBtn: document.getElementById('permission-cancel-btn'),
+            permissionSaveBtn: document.getElementById('permission-save-btn'),
 
             colorLegendTop: document.getElementById('color-legend-top'),
             colorLegendBottom: document.getElementById('color-legend-bottom'),
@@ -635,6 +653,18 @@ class WaferMapViewer {
             fileSearch: document.getElementById('file-search'),
 
             searchBtn: document.getElementById('search-btn'),
+            multiSearchBtn: document.getElementById('multi-search-btn'),
+            multiSearchModal: document.getElementById('multi-search-modal'),
+            multiSearchInput: document.getElementById('multi-search-input'),
+            multiSearchApply: document.getElementById('multi-search-apply'),
+            multiSearchCancel: document.getElementById('multi-search-cancel'),
+            multiSearchError: document.getElementById('multi-search-error'),
+            compositeBtn: document.getElementById('composite-btn'),
+            compositeOverlay: document.getElementById('composite-overlay'),
+            compositeHeatmapGrid: document.getElementById('composite-heatmap-grid'),
+            compositeInfoText: document.getElementById('composite-info-text'),
+            compositeCountLabel: document.getElementById('composite-count-label'),
+            compositeCloseBtn: document.getElementById('composite-close-btn'),
 
             productSearchInput: document.getElementById('product-search-input'),
         };
@@ -660,6 +690,7 @@ class WaferMapViewer {
 
             this.dom.minimapCanvas.style.transform = 'translateZ(0)';
         }
+
     }
 
     /**
@@ -667,6 +698,19 @@ class WaferMapViewer {
      */
 
     initState() {
+        this.isMultiSearchOpen = false;
+        this.permissionUsers = [];
+        this.permissionSelectedUser = null;
+        this.permissionEditorFolders = [];
+        this.permissionStatsUsers = null;
+
+        // 🔥 Composite Map 세션 관리
+        this.isCompositeMode = false;
+        this.sessionStack = [];  // Grid 세션 스택
+        this.compositeSession = null;  // 현재 Composite 세션 정보
+
+        this.updateContextMenuState();
+
         this.imageCtx.imageSmoothingQuality = 'high';
 
         this.transform = { scale: 1, dx: 0, dy: 0 };
@@ -3246,6 +3290,82 @@ class WaferMapViewer {
             });
         }
 
+        if (this.dom.multiSearchBtn) {
+            this.dom.multiSearchBtn.addEventListener('click', () => this.openMultiSearchModal());
+        }
+        if (this.dom.multiSearchCancel) {
+            this.dom.multiSearchCancel.addEventListener('click', () => this.closeMultiSearchModal());
+        }
+        if (this.dom.multiSearchApply) {
+            this.dom.multiSearchApply.addEventListener('click', () => this.handleMultiSearchApply());
+        }
+        if (this.dom.multiSearchInput) {
+            this.dom.multiSearchInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.closeMultiSearchModal();
+                    return;
+                }
+                if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey) {
+                    e.preventDefault();
+                    this.handleMultiSearchApply();
+                    return;
+                }
+                if (e.key === 'Enter' && (e.shiftKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    const textarea = e.currentTarget;
+                    const start = textarea.selectionStart;
+                    const end = textarea.selectionEnd;
+                    const value = textarea.value;
+                    textarea.value = `${value.slice(0, start)}\n${value.slice(end)}`;
+                    textarea.selectionStart = textarea.selectionEnd = start + 1;
+                }
+            });
+        }
+
+        if (this.dom.permissionEditorButton) {
+            this.dom.permissionEditorButton.addEventListener('click', () => this.openPermissionEditorModal());
+        }
+        if (this.dom.permissionEditorClose) {
+            this.dom.permissionEditorClose.addEventListener('click', () => this.closePermissionEditorModal());
+        }
+        if (this.dom.permissionCancelBtn) {
+            this.dom.permissionCancelBtn.addEventListener('click', () => this.closePermissionEditorModal());
+        }
+        if (this.dom.permissionRefreshBtn) {
+            this.dom.permissionRefreshBtn.addEventListener('click', () => this.reloadPermissionUsers());
+        }
+        if (this.dom.permissionNewBtn) {
+            this.dom.permissionNewBtn.addEventListener('click', () => this.createEmptyPermissionEntry());
+        }
+        if (this.dom.permissionSearchBtn) {
+            this.dom.permissionSearchBtn.addEventListener('click', () => this.handlePermissionSearch());
+        }
+        if (this.dom.permissionSearchInput) {
+            this.dom.permissionSearchInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    this.handlePermissionSearch();
+                }
+            });
+        }
+        if (this.dom.permissionSaveBtn) {
+            this.dom.permissionSaveBtn.addEventListener('click', () => this.handlePermissionSave());
+        }
+        if (this.dom.permissionDeleteBtn) {
+            this.dom.permissionDeleteBtn.addEventListener('click', () => this.handlePermissionDelete());
+        }
+        if (this.dom.permissionAddFolderBtn) {
+            this.dom.permissionAddFolderBtn.addEventListener('click', () => this.addPermissionFolderRow());
+        }
+        if (this.dom.compositeCloseBtn) {
+            this.dom.compositeCloseBtn.addEventListener('click', () => this.exitCompositeMode());
+        }
+        if (this.dom.compositeBtn) {
+            this.dom.compositeBtn.addEventListener('click', () => this.handleCompositeCreate());
+        }
+
     }
 
     bindFilterEvents() {
@@ -4207,13 +4327,680 @@ class WaferMapViewer {
         }
     }
 
-    async performSearch() {
+    isMultiSearchModalOpen() {
+        return !!this.isMultiSearchOpen;
+    }
+
+    setMultiSearchError(message = '') {
+        if (this.dom?.multiSearchError) {
+            this.dom.multiSearchError.textContent = message;
+        }
+    }
+
+    openMultiSearchModal() {
+        if (!this.dom?.multiSearchModal) return;
+        this.dom.multiSearchModal.style.display = 'flex';
+        if (this.dom.multiSearchInput) {
+            if (!this.dom.multiSearchInput.value) {
+                this.dom.multiSearchInput.value = '';
+            }
+            // 모달이 렌더링된 후 문자 폭 측정하여 그리드 라인 설정
+            requestAnimationFrame(() => {
+                this.setupCharacterGrid(this.dom.multiSearchInput);
+            });
+            setTimeout(() => this.dom.multiSearchInput?.focus(), 0);
+        }
+        this.setMultiSearchError('');
+        this.isMultiSearchOpen = true;
+        
+        // 모달이 열려있을 때 ESC 키로 닫기 (전역 핸들러)
+        this.multiSearchModalEscapeHandler = (e) => {
+            if (e.key === 'Escape' && this.isMultiSearchOpen) {
+                e.preventDefault();
+                e.stopPropagation();
+                this.closeMultiSearchModal();
+            }
+        };
+        document.addEventListener('keydown', this.multiSearchModalEscapeHandler, true);
+    }
+
+    setupCharacterGrid(textarea) {
+        if (!textarea) return;
+        
+        // 캔버스를 사용하여 실제 문자 폭 측정
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const computedStyle = window.getComputedStyle(textarea);
+        
+        // textarea의 폰트 스타일 적용
+        ctx.font = `${computedStyle.fontSize} ${computedStyle.fontFamily}`;
+        
+        // 문자 'M'의 폭 측정 (monospace이므로 모든 문자가 동일한 폭)
+        const charWidth = ctx.measureText('M').width;
+        
+        // CSS 변수로 문자 폭 설정
+        textarea.style.setProperty('--char-width', `${charWidth}px`);
+        
+        // padding-left를 고려한 시작 위치 설정
+        const paddingLeft = parseFloat(computedStyle.paddingLeft) || 14;
+        textarea.style.setProperty('--grid-offset', `${paddingLeft}px`);
+    }
+
+    closeMultiSearchModal() {
+        if (!this.dom?.multiSearchModal) return;
+        this.dom.multiSearchModal.style.display = 'none';
+        this.setMultiSearchError('');
+        this.isMultiSearchOpen = false;
+        
+        // 전역 ESC 키 핸들러 제거
+        if (this.multiSearchModalEscapeHandler) {
+            document.removeEventListener('keydown', this.multiSearchModalEscapeHandler, true);
+            this.multiSearchModalEscapeHandler = null;
+        }
+    }
+
+    parseMultiSearchInput() {
+        if (!this.dom?.multiSearchInput) {
+            return { lots: [], error: 'LOT 입력 영역을 찾을 수 없습니다.' };
+        }
+        const raw = this.dom.multiSearchInput.value || '';
+        const segments = raw.split(/[\n\r,;\t/]+/);
+        const seen = new Set();
+        const lots = [];
+        const MAX = 100;
+        for (const segment of segments) {
+            const trimmed = segment.trim();
+            if (!trimmed) continue;
+            const key = trimmed.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            if (lots.length >= MAX) {
+                return { lots: [], error: `LOT는 최대 ${MAX}개까지 입력할 수 있습니다. (현재 ${seen.size}개)` };
+            }
+            lots.push(trimmed);
+        }
+        if (!lots.length) {
+            return { lots: [], error: 'LOT ID를 한 개 이상 입력하세요.' };
+        }
+        return { lots };
+    }
+
+    async handleMultiSearchApply() {
+        const parsed = this.parseMultiSearchInput();
+        if (parsed.error) {
+            this.setMultiSearchError(parsed.error);
+            return;
+        }
+        const lotList = parsed.lots;
+        this.setMultiSearchError('');
+        try {
+            await this.performSearch({ multiLotList: [...lotList] });
+            this.closeMultiSearchModal();
+        } catch (error) {
+            console.error('다중 LOT 검색 실패:', error);
+            this.setMultiSearchError('검색 중 오류가 발생했습니다.');
+        }
+    }
+
+    async openPermissionEditorModal() {
+        if (!this.dom.permissionModal) return;
+        await this.reloadPermissionUsers();
+        if (this.permissionUsers.length > 0) {
+            this.selectPermissionUser(this.permissionUsers[0].loginId);
+        } else {
+            this.createEmptyPermissionEntry();
+        }
+        this.dom.permissionModal.style.display = 'flex';
+    }
+
+    closePermissionEditorModal() {
+        if (this.dom.permissionModal) {
+            this.dom.permissionModal.style.display = 'none';
+        }
+        this.permissionSelectedUser = null;
+    }
+
+    async reloadPermissionUsers() {
+        try {
+            const currentId = this.permissionSelectedUser?.loginId || this.dom.permissionLoginInput?.value.trim();
+            const res = await fetch('/api/roles/users');
+            if (!res.ok) {
+                throw new Error(await res.text());
+            }
+            const data = await res.json();
+        this.permissionUsers = Array.isArray(data.users) ? [...data.users] : [];
+        this.permissionUsers.sort((a, b) => {
+            const nameA = ((a.username || '') + a.loginId).toLowerCase();
+            const nameB = ((b.username || '') + b.loginId).toLowerCase();
+            if (nameA < nameB) return -1;
+            if (nameA > nameB) return 1;
+            return 0;
+        });
+            this.renderPermissionUserList();
+            if (currentId) {
+                this.selectPermissionUser(currentId);
+            }
+        } catch (error) {
+            console.error('권한 목록 조회 실패:', error);
+            this.showToast?.('권한 목록을 불러올 수 없습니다.', 2000);
+        }
+    }
+
+    async ensureStatsUsersLoaded() {
+        if (Array.isArray(this.permissionStatsUsers)) {
+            return;
+        }
+        try {
+            const res = await fetch('/api/stats/users');
+            if (!res.ok) {
+                throw new Error(await res.text());
+            }
+            const data = await res.json();
+            const statsUsers = Array.isArray(data.users) ? data.users : [];
+            this.permissionStatsUsers = statsUsers
+                .map((user) => {
+                    const profile = user.profile || {};
+                    const loginId = profile.LoginId || profile.loginId || '';
+                    const username = profile.Username || profile.username || '';
+                    const dept = profile.DeptName || profile.deptName || '';
+                    if (!loginId) return null;
+                    return {
+                        loginId,
+                        username,
+                        deptName: dept,
+                        profile
+                    };
+                })
+                .filter(Boolean);
+        } catch (error) {
+            console.error('stats 사용자 목록 조회 실패:', error);
+            this.permissionStatsUsers = [];
+            throw error;
+        }
+    }
+
+    async handlePermissionSearch() {
+        if (!this.dom.permissionSearchResults) return;
+        const keywordRaw = this.dom.permissionSearchInput?.value?.trim() || '';
+        const keyword = keywordRaw.toLowerCase();
+        this.dom.permissionSearchResults.innerHTML = '';
+        if (!keyword) {
+            this.dom.permissionSearchResults.innerHTML = '<div style="padding:8px; color:#9aa0a6;">검색어를 입력하세요.</div>';
+            return;
+        }
+        try {
+            await this.ensureStatsUsersLoaded();
+        } catch {
+            this.dom.permissionSearchResults.innerHTML = '<div style="padding:8px; color:#ff7b7b;">stats 정보를 불러올 수 없습니다.</div>';
+            return;
+        }
+        const entries = (this.permissionStatsUsers || []).filter((entry) => {
+            const nameMatch = (entry.username || '').toLowerCase().includes(keyword);
+            const idMatch = (entry.loginId || '').toLowerCase().includes(keyword);
+            return nameMatch || idMatch;
+        }).slice(0, 20);
+        if (!entries.length) {
+            this.dom.permissionSearchResults.innerHTML = '<div style="padding:8px; color:#9aa0a6;">검색 결과가 없습니다.</div>';
+            return;
+        }
+        this.dom.permissionSearchResults.innerHTML = entries.map(entry => `
+            <div class="permission-search-row" data-login-id="${entry.loginId}">
+                <div>
+                    <div style="font-weight:600;">${entry.username || '(이름없음)'} <span style="color:#9aa0a6;">(${entry.loginId})</span></div>
+                    <div style="color:#9aa0a6;">${entry.deptName || ''}</div>
+                </div>
+                <button type="button" class="grid-btn" data-login-id="${entry.loginId}">불러오기</button>
+            </div>
+        `).join('');
+        this.dom.permissionSearchResults.querySelectorAll('button').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const loginId = e.currentTarget.dataset.loginId;
+                const match = (this.permissionStatsUsers || []).find(item => item.loginId === loginId);
+                if (match) {
+                    this.applyStatsUserToForm(match);
+                }
+            });
+        });
+    }
+
+    applyStatsUserToForm(entry) {
+        if (this.dom.permissionLoginInput) this.dom.permissionLoginInput.value = entry.loginId || '';
+        if (this.dom.permissionUsernameInput) this.dom.permissionUsernameInput.value = entry.username || '';
+        if (this.dom.permissionDeptInput) this.dom.permissionDeptInput.value = entry.deptName || '';
+        if (this.dom.permissionRoleSelect) this.dom.permissionRoleSelect.value = 'ROLE_USER';
+        this.permissionSelectedUser = null;
+        this.permissionEditorFolders = [{
+            path: '*',
+            allow_label: true,
+            allow_class: true
+        }];
+        this.renderPermissionFolders();
+        if (this.dom.permissionSearchResults) {
+            this.dom.permissionSearchResults.innerHTML = '<div style="padding:8px; color:#8ab4ff;">조회된 정보를 폼에 적용했습니다.</div>';
+        }
+    }
+
+    renderPermissionUserList() {
+        if (!this.dom.permissionUserList) return;
+        const container = this.dom.permissionUserList;
+        container.innerHTML = '';
+        if (!Array.isArray(this.permissionUsers) || this.permissionUsers.length === 0) {
+            container.innerHTML = '<div style="padding:12px; color:#999;">등록된 사용자가 없습니다.</div>';
+            return;
+        }
+        this.permissionUsers.forEach((user) => {
+            const row = document.createElement('div');
+            row.className = 'permission-user-row';
+            row.dataset.loginId = user.loginId;
+            row.innerHTML = `
+                <div>
+                    <div style="font-weight:600;">${user.username || '(이름없음)'} <span style="color:#9aa0a6;">(${user.loginId || ''})</span></div>
+                    <div style="font-size:12px; color:#9aa0a6;">
+                        ${user.deptName || ''} · ${user.role || 'ROLE_USER'}
+                    </div>
+                </div>
+            `;
+            row.onclick = () => this.selectPermissionUser(user.loginId);
+            if (this.permissionSelectedUser && this.permissionSelectedUser.loginId === user.loginId) {
+                row.classList.add('is-active');
+            }
+            container.appendChild(row);
+        });
+    }
+
+    createEmptyPermissionEntry() {
+        this.permissionSelectedUser = null;
+        this.permissionEditorFolders = [{
+            path: '*',
+            allow_label: true,
+            allow_class: true
+        }];
+        if (this.dom.permissionLoginInput) this.dom.permissionLoginInput.value = '';
+        if (this.dom.permissionUsernameInput) this.dom.permissionUsernameInput.value = '';
+        if (this.dom.permissionDeptInput) this.dom.permissionDeptInput.value = '';
+        if (this.dom.permissionRoleSelect) this.dom.permissionRoleSelect.value = 'ROLE_USER';
+        this.renderPermissionUserList();
+        this.renderPermissionFolders();
+    }
+
+    selectPermissionUser(loginId) {
+        const user = this.permissionUsers.find((u) => u.loginId === loginId);
+        if (!user) {
+            this.createEmptyPermissionEntry();
+            return;
+        }
+        this.permissionSelectedUser = user;
+        if (this.dom.permissionLoginInput) this.dom.permissionLoginInput.value = user.loginId || '';
+        if (this.dom.permissionUsernameInput) this.dom.permissionUsernameInput.value = user.username || '';
+        if (this.dom.permissionDeptInput) this.dom.permissionDeptInput.value = user.deptName || '';
+        if (this.dom.permissionRoleSelect) this.dom.permissionRoleSelect.value = user.role || 'ROLE_USER';
+        this.permissionEditorFolders = Array.isArray(user.folders)
+            ? user.folders.map((folder) => ({
+                path: folder.path || '',
+                allow_label: folder.allow_label !== false,
+                allow_class: folder.allow_class !== false
+            }))
+            : [];
+        this.renderPermissionUserList();
+        this.renderPermissionFolders();
+    }
+
+    addPermissionFolderRow(path = '*') {
+        this.permissionEditorFolders = this.permissionEditorFolders || [];
+        this.permissionEditorFolders.push({
+            path,
+            allow_label: true,
+            allow_class: true
+        });
+        this.renderPermissionFolders();
+    }
+
+    removePermissionFolderRow(index) {
+        if (!Array.isArray(this.permissionEditorFolders)) return;
+        this.permissionEditorFolders.splice(index, 1);
+        this.renderPermissionFolders();
+    }
+
+    renderPermissionFolders() {
+        if (!this.dom.permissionFolderList) return;
+        const container = this.dom.permissionFolderList;
+        container.innerHTML = '';
+        if (!Array.isArray(this.permissionEditorFolders) || this.permissionEditorFolders.length === 0) {
+            container.innerHTML = '<div style="padding:8px; font-size:12px; color:#9aa0a6;">폴더 권한이 없습니다.</div>';
+            return;
+        }
+        this.permissionEditorFolders.forEach((folder, index) => {
+            const row = document.createElement('div');
+            row.className = 'folder-row';
+            row.innerHTML = `
+                <input type="text" class="folder-path-input" value="${folder.path || ''}" placeholder="예) batch/batch_01 또는 *">
+                <label><input type="checkbox" class="folder-label-check" ${folder.allow_label !== false ? 'checked' : ''}> 라벨</label>
+                <label><input type="checkbox" class="folder-class-check" ${folder.allow_class !== false ? 'checked' : ''}> 클래스</label>
+                <button type="button" class="folder-remove-btn">삭제</button>
+            `;
+            row.querySelector('.folder-path-input').addEventListener('input', (e) => {
+                this.permissionEditorFolders[index].path = e.target.value;
+            });
+            row.querySelector('.folder-label-check').addEventListener('change', (e) => {
+                this.permissionEditorFolders[index].allow_label = e.target.checked;
+            });
+            row.querySelector('.folder-class-check').addEventListener('change', (e) => {
+                this.permissionEditorFolders[index].allow_class = e.target.checked;
+            });
+            row.querySelector('.folder-remove-btn').addEventListener('click', () => this.removePermissionFolderRow(index));
+            container.appendChild(row);
+        });
+    }
+
+    collectPermissionForm() {
+        const loginId = this.dom.permissionLoginInput?.value.trim();
+        if (!loginId) {
+            throw new Error('LoginId를 입력하세요.');
+        }
+        const username = this.dom.permissionUsernameInput?.value.trim() || '';
+        const deptName = this.dom.permissionDeptInput?.value.trim() || '';
+        const role = this.dom.permissionRoleSelect?.value || 'ROLE_USER';
+        const folders = (this.permissionEditorFolders || [])
+            .filter(folder => folder.path && folder.path.trim().length > 0)
+            .map(folder => ({
+                path: folder.path.trim(),
+                allow_label: folder.allow_label !== false,
+                allow_class: folder.allow_class !== false
+            }));
+        return {
+            loginId,
+            username,
+            deptName,
+            role,
+            folders
+        };
+    }
+
+    async handlePermissionSave() {
+        try {
+            const payload = this.collectPermissionForm();
+            const res = await fetch('/api/roles/users', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+                throw new Error(await res.text());
+            }
+            await this.reloadPermissionUsers();
+            this.selectPermissionUser(payload.loginId);
+            this.showToast?.('권한이 저장되었습니다.', 1600);
+        } catch (error) {
+            console.error('권한 저장 실패:', error);
+            alert(error.message || '권한을 저장할 수 없습니다.');
+        }
+    }
+
+    async handlePermissionDelete() {
+        const loginId = this.dom.permissionLoginInput?.value.trim();
+        if (!loginId) {
+            alert('삭제할 사용자를 선택하세요.');
+            return;
+        }
+        if (!confirm(`${loginId} 사용자를 삭제하시겠습니까?`)) {
+            return;
+        }
+        try {
+            const res = await fetch(`/api/roles/users/${encodeURIComponent(loginId)}`, {
+                method: 'DELETE'
+            });
+            if (!res.ok) {
+                throw new Error(await res.text());
+            }
+            await this.reloadPermissionUsers();
+            this.createEmptyPermissionEntry();
+            this.showToast?.('삭제되었습니다.', 1600);
+        } catch (error) {
+            console.error('권한 삭제 실패:', error);
+            alert(error.message || '삭제할 수 없습니다.');
+        }
+    }
+
+    updateContextMenuState() {
+        const createItem = document.getElementById('context-composite-create');
+        const returnItem = document.getElementById('context-composite-return');
+        if (!createItem || !returnItem) return;
+        if (this.isCompositeMode) {
+            createItem.style.display = 'none';
+            returnItem.style.display = 'block';
+        } else {
+            createItem.style.display = 'block';
+            returnItem.style.display = 'none';
+        }
+    }
+
+    /**
+     * 현재 Grid 세션을 저장 (Composite Map으로 전환 전)
+     */
+    saveCurrentGridSession() {
+        const grid = document.getElementById('image-grid');
+        const scrollWrapper = grid?.parentElement;  // .grid-scroll-wrapper
+
+        const session = {
+            type: 'normal-grid',
+            images: [...(this.currentGridImages || this.selectedImages || [])],
+            selectedImages: [...(this.selectedImages || [])],
+            gridSelectedIdxs: [...(this.gridSelectedIdxs || [])],
+            scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
+            timestamp: Date.now()
+        };
+
+        this.sessionStack.push(session);
+        console.log('✅ Grid 세션 저장:', session);
+    }
+
+    /**
+     * Composite Grid로 전환 (8개 히트맵 표시)
+     */
+    async switchToCompositeGrid(result) {
+        if (!result?.heatmaps || result.heatmaps.length === 0) {
+            alert('생성된 히트맵이 없습니다.');
+            return;
+        }
+
+        // 🔥 히트맵 경로 추출 (index 0~7 순서대로)
+        const heatmapPaths = result.heatmaps
+            .sort((a, b) => a.index - b.index)
+            .map(h => h.path);
+
+        // 🔥 Sum Map 추가 (9번째 이미지)
+        if (result.sum_map_path) {
+            heatmapPaths.push(result.sum_map_path);
+        }
+
+        console.log('🔄 Composite Grid로 전환 (9개 이미지):', heatmapPaths);
+
+        // 🔥 Grid를 9개 이미지로 교체 (선택 상태 초기화)
+        await this.showGrid(heatmapPaths, true);  // skipSaveState=true
+
+        // 🔥 Grid 선택 상태 완전 초기화
+        this.gridSelectedIdxs = [];
+        this.selectedImages = [];
+
+        // DOM에서도 선택 상태 제거
+        const gridItems = document.querySelectorAll('.grid-thumb-wrap');
+        gridItems.forEach(item => item.classList.remove('selected'));
+
+        // Composite 세션 정보 저장
+        this.compositeSession = {
+            sourceImageCount: result.image_count || result.source_images,
+            outputDir: result.output_dir,
+            imageSize: result.image_size,
+            processingTime: result.processing_time,
+            generatedAt: result.generated_at
+        };
+
+        // Composite 모드 활성화
+        this.isCompositeMode = true;
+
+        // Composite 배지 표시
+        this.showCompositeBadge();
+
+        this.updateContextMenuState();
+    }
+
+    /**
+     * 이전 Grid로 복귀
+     */
+    async returnToPreviousGrid() {
+        if (this.sessionStack.length === 0) {
+            console.warn('⚠️ 복귀할 세션이 없습니다.');
+            this.isCompositeMode = false;
+            this.hideCompositeBadge();
+            this.updateContextMenuState();
+            return;
+        }
+
+        const session = this.sessionStack.pop();
+        console.log('🔙 이전 Grid 복귀:', session);
+
+        // Grid 복원
+        await this.showGrid(session.images, true);  // skipSaveState=true
+
+        // 선택 상태 복원
+        this.selectedImages = session.selectedImages;
+        this.currentGridImages = session.images;
+        this.gridSelectedIdxs = session.gridSelectedIdxs;
+
+        // 스크롤 위치 복원
+        const grid = document.getElementById('image-grid');
+        const scrollWrapper = grid?.parentElement;
+        if (scrollWrapper && session.scrollTop !== undefined) {
+            setTimeout(() => {
+                scrollWrapper.scrollTop = session.scrollTop;
+            }, 50);
+        }
+
+        // Composite 모드 비활성화
+        this.isCompositeMode = false;
+        this.compositeSession = null;
+
+        // Composite 배지 숨김
+        this.hideCompositeBadge();
+
+        this.updateContextMenuState();
+    }
+
+    /**
+     * Composite 배지 표시
+     */
+    showCompositeBadge() {
+        let badge = document.getElementById('composite-mode-badge');
+        if (!badge) {
+            badge = document.createElement('div');
+            badge.id = 'composite-mode-badge';
+            badge.style.cssText = `
+                position: fixed;
+                top: 20px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 12px 20px;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: 600;
+                box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+                z-index: 9999;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            `;
+            document.body.appendChild(badge);
+        }
+
+        const info = this.compositeSession || {};
+        badge.innerHTML = `
+            <span style="font-size: 18px;">📊</span>
+            <div>
+                <div style="font-weight: 700;">Composite Mode</div>
+                <div style="font-size: 11px; opacity: 0.9;">
+                    ${info.sourceImageCount || '?'} images · ${info.processingTime || '?'}s
+                </div>
+            </div>
+        `;
+        badge.style.display = 'flex';
+    }
+
+    /**
+     * Composite 배지 숨김
+     */
+    hideCompositeBadge() {
+        const badge = document.getElementById('composite-mode-badge');
+        if (badge) {
+            badge.style.display = 'none';
+        }
+    }
+
+    /**
+     * Composite Map 생성 핸들러 (Grid 교체 방식)
+     */
+    async handleCompositeCreate() {
+        if (this.isCompositeMode) {
+            this.showToast?.('Composite 모드에서 나간 후 다시 시도하세요.', 1800);
+            return;
+        }
+
+        const selected = this.getSelectedImagesForModal();
+        if (!selected.length) {
+            alert('Composite Map을 만들 이미지를 선택하세요.');
+            return;
+        }
+
+        try {
+            // 🔥 1단계: 현재 Grid 세션 저장
+            this.saveCurrentGridSession();
+
+            // 🔥 2단계: API 호출하여 Composite Map 생성
+            const res = await fetch('/api/composite-map', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image_paths: selected })
+            });
+
+            if (!res.ok) {
+                throw new Error(await res.text());
+            }
+
+            const result = await res.json();
+            console.log('✅ Composite Map 생성 완료:', result);
+
+            // 🔥 3단계: Grid를 Composite Grid로 교체
+            await this.switchToCompositeGrid(result);
+
+        } catch (error) {
+            console.error('❌ Composite Map 생성 실패:', error);
+            alert('Composite Map 생성에 실패했습니다.');
+
+            // 세션 스택에서 저장한 상태 제거 (롤백)
+            if (this.sessionStack.length > 0) {
+                this.sessionStack.pop();
+            }
+        }
+    }
+
+    // 🔥 하위 호환성을 위해 exitCompositeMode() 유지 (returnToPreviousGrid로 리다이렉트)
+    exitCompositeMode() {
+        this.returnToPreviousGrid();
+    }
+
+    normalizeLotPayload(lots) {
+        return (lots || [])
+            .map(lot => (lot || '').trim().toLowerCase())
+            .filter(Boolean);
+    }
+
+    async performSearch(options = {}) {
         try {
             const fileQuery = this.dom.fileSearch?.value?.trim() || '';
-
-            if (!fileQuery) {
-                alert('파일명을 입력해주세요.');
-
+            const normalizedLots = this.normalizeLotPayload(options.multiLotList || []);
+            if (!fileQuery && normalizedLots.length === 0) {
+                alert('파일명을 입력하거나 LOT 다중검색을 설정해주세요.');
                 return;
             }
 
@@ -4231,6 +5018,9 @@ class WaferMapViewer {
             }
 
             this.debugLog(`파일명 검색 시작: "${fileQuery}"`);
+            if (normalizedLots.length) {
+                this.debugLog(`➡️ LOT 필터 적용: ${normalizedLots.join(', ')}`);
+            }
 
             const startTime = performance.now();
 
@@ -4265,7 +5055,12 @@ class WaferMapViewer {
             }
 
             // 서버 검색 API 사용: 프런트는 결과만 표시
-            const searchUrl = `/api/search?q=${encodeURIComponent(fileQuery)}`;
+            const searchParams = new URLSearchParams();
+            searchParams.set('q', fileQuery || '');
+            if (normalizedLots.length) {
+                searchParams.set('lot_multi', normalizedLots.join(','));
+            }
+            const searchUrl = `/api/search?${searchParams.toString()}`;
             const res = await fetch(searchUrl);
             if (!res.ok) {
                 throw new Error(`검색 API 응답 오류: ${res.status}`);
@@ -4471,6 +5266,8 @@ class WaferMapViewer {
 
         if (!contextMenu) return;
 
+        this.updateContextMenuState();
+
         // 메뉴 위치 설정
         contextMenu.style.display = 'block';
         contextMenu.style.left = event.pageX + 'px';
@@ -4528,6 +5325,22 @@ class WaferMapViewer {
         const listCopyItem = document.getElementById('context-list-copy');
         const tableCopyItem = document.getElementById('context-table-copy');
         const cancelItem = document.getElementById('context-cancel');
+        const compositeCreateItem = document.getElementById('context-composite-create');
+        const compositeReturnItem = document.getElementById('context-composite-return');
+
+        if (compositeCreateItem) {
+            compositeCreateItem.onclick = () => {
+                this.hideContextMenu();
+                this.handleCompositeCreate();
+            };
+        }
+
+        if (compositeReturnItem) {
+            compositeReturnItem.onclick = () => {
+                this.hideContextMenu();
+                this.exitCompositeMode();
+            };
+        }
 
         if (downloadItem) {
             downloadItem.onclick = () => {
@@ -4574,6 +5387,8 @@ class WaferMapViewer {
                 this.hideContextMenu();
             };
         }
+
+        this.updateContextMenuState();
     }
 
     async mergeAndCopyImages() {
@@ -6179,6 +6994,15 @@ class WaferMapViewer {
 
     async loadImage(path, fromLabelExplorer = false) {
         try {
+            // 🔥 Composite Mode 종료 (이미지 선택 시 자동 종료)
+            if (this.isCompositeMode) {
+                console.log('🔄 Composite Mode 종료 (이미지 선택됨)');
+                this.isCompositeMode = false;
+                this.compositeSession = null;
+                this.hideCompositeBadge();
+                this.updateContextMenuState();
+            }
+
             // 🔥 그리드 배치 로딩 중단 (단일 이미지 로드 시)
             if (this.gridLoadingBatch) {
                 console.log('🛑 [GRID] loadImage - 배치 로딩 중단 (단일 이미지 전환)');
@@ -6466,12 +7290,12 @@ class WaferMapViewer {
             this.showColorLegends();
             this.renderColorLegends();
 
-            // 🔬 Chip Positions 자동 로드
+            // 🔬 Chip Positions 자동 로드 (annotations도 자동으로 로드됨)
             if (this.chipAnnotator) {
                 try {
                     const loaded = await this.chipAnnotator.loadPositions(fullPath);
                     if (loaded) {
-                        console.log('✅ Chip positions loaded successfully');
+                        console.log('✅ Chip positions & annotations loaded successfully');
                     } else {
                         console.log('ℹ️ No chip positions found for this image');
                     }

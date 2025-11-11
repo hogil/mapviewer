@@ -156,6 +156,13 @@
             cursor: pointer;
             transition: background 0.2s ease;
         }
+        .color-editor-btn.secondary {
+            background: #2a2a2a;
+            border-color: #4c4c4c;
+        }
+        .color-editor-btn.secondary:hover {
+            background: #3a3a3a;
+        }
 
         .color-editor-btn:disabled {
             opacity: 0.4;
@@ -461,8 +468,8 @@
             display: flex;
             flex-direction: row;
             align-items: center;
-            gap: 24px;
-            padding: 12px 20px 8px 20px;
+            gap: 12px;
+            padding: 8px 16px 6px 16px;
             background: rgba(30, 30, 30, 0.96);
             border-bottom: 1px solid #222;
             box-sizing: border-box;
@@ -537,14 +544,17 @@
         .control-group {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
             flex-shrink: 0;
+        }
+        .control-group.control-group-columns {
+            display: none !important;
         }
         
         .search-controls {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 8px;
             margin-left: auto;
             flex: 1 1 auto;
             min-width: 0;
@@ -557,8 +567,8 @@
             border-radius: 4px !important;
             font-size: 14px !important;
             padding: 6px 12px !important;
-            width: 400px !important;
-            max-width: 60% !important;
+            width: 320px !important;
+            max-width: 55% !important;
             min-width: 250px !important;
             transition: border-color 0.2s ease;
         }
@@ -573,7 +583,230 @@
             color: #999;
             font-style: italic;
         }
-        
+        .modal-error {
+            color: #ff7b7b;
+            font-size: 12px;
+            min-height: 18px;
+            margin-top: 6px;
+        }
+        .modal-content.permission-modal {
+            max-width: 1122px !important;
+            width: 59.5vw !important;
+            min-width: 800px;
+        }
+        .permission-editor-body {
+            display: grid;
+            grid-template-columns: 8fr 7fr;
+            gap: 16px;
+            margin-top: 12px;
+        }
+        .permission-list-panel,
+        .permission-form-panel {
+            border: 1px solid #2a2a2a;
+            border-radius: 6px;
+            padding: 12px;
+            background: #101010;
+        }
+        .permission-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .permission-toolbar input {
+            flex: 1 1 200px;
+            background: #1d1d1d;
+            border: 1px solid #3a3a3a;
+            color: #fff;
+            border-radius: 4px;
+            padding: 5px 8px;
+        }
+        .permission-user-list {
+            border: 1px solid #1f1f1f;
+            border-radius: 4px;
+            max-height: 360px;
+            overflow-y: auto;
+        }
+        .permission-search-results {
+            margin-top: 10px;
+            border: 1px solid #222;
+            border-radius: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .permission-search-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 8px;
+            border-bottom: 1px solid #1a1a1a;
+            font-size: 12px;
+        }
+        .permission-search-row:last-child {
+            border-bottom: none;
+        }
+        .permission-user-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 10px;
+            border-bottom: 1px solid #1f1f1f;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .permission-user-row:last-child {
+            border-bottom: none;
+        }
+        .permission-user-row:hover {
+            background: rgba(0, 123, 204, 0.2);
+        }
+        .permission-user-row.is-active {
+            background: rgba(0, 123, 204, 0.3);
+        }
+        .permission-field {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-bottom: 10px;
+            font-size: 13px;
+            color: #bbb;
+        }
+        .permission-field input,
+        .permission-field select {
+            background: #1c1c1c;
+            border: 1px solid #3a3a3a;
+            color: #fff;
+            border-radius: 4px;
+            padding: 6px 8px;
+        }
+        .permission-folder-panel {
+            margin-top: 8px;
+        }
+        .permission-folder-panel .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .permission-folder-list {
+            border: 1px solid #1f1f1f;
+            border-radius: 4px;
+            max-height: 220px;
+            overflow-y: auto;
+        }
+        .folder-row {
+            display: grid;
+            grid-template-columns: 1fr auto auto auto;
+            gap: 8px;
+            align-items: center;
+            padding: 6px 8px;
+            border-bottom: 1px solid #1b1b1b;
+        }
+        .folder-row:last-child {
+            border-bottom: none;
+        }
+        .folder-row input[type="text"] {
+            background: #171717;
+            border: 1px solid #3a3a3a;
+            color: #fff;
+            border-radius: 4px;
+            padding: 4px 6px;
+        }
+        .folder-row label {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 12px;
+            color: #ccc;
+        }
+        .folder-row button {
+            background: transparent;
+            border: none;
+            color: #ff6b6b;
+            cursor: pointer;
+        }
+        .permission-hint {
+            font-size: 11px;
+            color: #999;
+            margin-top: 6px;
+        }
+        .grid-btn.danger {
+            background: #953333;
+            border-color: #b94444;
+        }
+        .grid-btn.danger:hover {
+            background: #b74949;
+        }
+        .composite-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(8, 8, 8, 0.85);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 12000;
+        }
+        .composite-card {
+            width: 70%;
+            max-width: 960px;
+            background: #141414;
+            border: 1px solid #333;
+            border-radius: 10px;
+            padding: 16px;
+            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+        }
+        .composite-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+        .composite-title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .composite-count {
+            margin-left: 8px;
+            font-size: 13px;
+            color: #9aa0a6;
+        }
+        .composite-body {
+            display: grid;
+            grid-template-columns: 3fr 1fr;
+            gap: 18px;
+        }
+        .composite-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+        }
+        .heatmap-card {
+            background: #0c0c0c;
+            border: 1px solid #1f1f1f;
+            border-radius: 6px;
+            padding: 8px;
+        }
+        .heatmap-card h4 {
+            margin: 0 0 6px 0;
+            font-size: 13px;
+            color: #f2f2f2;
+        }
+        .heatmap-card img {
+            width: 100%;
+            border-radius: 4px;
+            display: block;
+        }
+        .heatmap-meta {
+            font-size: 11px;
+            color: #bdbdbd;
+            margin-top: 4px;
+        }
+        .composite-info {
+            border: 1px solid #222;
+            border-radius: 6px;
+            padding: 12px;
+            font-size: 13px;
+            color: #cfcfcf;
+        }
+
 .grid-btn {
     background: #232323;
     color: #fff;
@@ -585,6 +818,12 @@
     cursor: pointer;
     transition: background 0.15s, border 0.15s;
     white-space: nowrap;
+}
+.grid-btn.is-active {
+    background: #0b5fa5;
+    border-color: #14c3ff;
+    color: #fff;
+    box-shadow: 0 0 12px rgba(20, 195, 255, 0.25);
 }
 
 .class-btn {
@@ -1352,6 +1591,269 @@
         .subfolder-item.active {
             background-color: #007acc !important;
         }
+
+        /* Multi-search textarea with row lines and character grid */
+        .multi-search-textarea {
+            width: 100%;
+            resize: vertical;
+            background: #0a0a0a;
+            color: #cccccc;
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 10px 14px;
+            font-size: 14px;
+            font-family: 'JetBrains Mono', 'Consolas', monospace;
+            line-height: 24px;
+            tab-size: 4;
+            white-space: pre;
+            letter-spacing: 0;
+            /* Character width will be set dynamically by JavaScript */
+            --char-width: 8.4px;
+            --grid-offset: 14px;
+            background-image:
+                /* Horizontal lines between rows */
+                linear-gradient(transparent 0%, transparent calc(100% - 1px), rgba(255, 255, 255, 0.1) calc(100% - 1px)),
+                /* Vertical lines between characters */
+                repeating-linear-gradient(
+                    to right,
+                    transparent 0,
+                    transparent calc(var(--char-width) - 0.5px),
+                    rgba(255, 255, 255, 0.08) calc(var(--char-width) - 0.5px),
+                    rgba(255, 255, 255, 0.08) var(--char-width)
+                );
+            background-size: 
+                100% 24px,  /* Horizontal lines */
+                var(--char-width) 100%;  /* Vertical lines */
+            background-position: 
+                0 0,  /* Horizontal lines */
+                var(--grid-offset, 14px) 0;  /* Vertical lines (offset by padding-left) */
+        }
+
+        .multi-search-textarea:focus {
+            outline: none;
+            border-color: #007acc;
+            box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.2);
+        }
+
+        .multi-search-textarea::placeholder {
+            color: #666;
+        }
+
+        /* Permission Manager Dialog Styles */
+        .pm-dialog-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.75);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 15000;
+        }
+
+        .pm-dialog {
+            background: #1f1f1f;
+            border: 1px solid #444;
+            border-radius: 8px;
+            width: 600px;
+            max-width: 90vw;
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 16px 38px rgba(0, 0, 0, 0.65);
+        }
+
+        .pm-dialog-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-bottom: 1px solid #333;
+        }
+
+        .pm-dialog-header h3 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #fff;
+            margin: 0;
+        }
+
+        .pm-dialog-close {
+            background: transparent;
+            border: none;
+            color: #bbb;
+            font-size: 24px;
+            cursor: pointer;
+            padding: 0;
+            line-height: 1;
+        }
+
+        .pm-dialog-close:hover {
+            color: #fff;
+        }
+
+        .pm-dialog-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .pm-form-group {
+            margin-bottom: 16px;
+        }
+
+        .pm-form-group label {
+            display: block;
+            font-size: 13px;
+            color: #bbb;
+            margin-bottom: 6px;
+            font-weight: 500;
+        }
+
+        .pm-input,
+        .pm-select {
+            width: 100%;
+            padding: 8px 12px;
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 4px;
+            color: #eee;
+            font-size: 14px;
+        }
+
+        .pm-input:focus,
+        .pm-select:focus {
+            outline: none;
+            border-color: #007acc;
+            box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.2);
+        }
+
+        .pm-input::placeholder {
+            color: #666;
+        }
+
+        .pm-select {
+            cursor: pointer;
+        }
+
+        .pm-search-container {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .pm-search-container .pm-input {
+            flex: 1;
+        }
+
+        .pm-search-container button {
+            flex-shrink: 0;
+        }
+
+        .pm-dropdown {
+            position: relative;
+            margin-top: 4px;
+            background: #252525;
+            border: 1px solid #333;
+            border-radius: 4px;
+            max-height: 250px;
+            overflow-y: auto;
+            box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
+            display: none;
+        }
+
+        .pm-dropdown.is-open {
+            display: block;
+        }
+
+        .pm-user-search-item {
+            padding: 10px 12px;
+            cursor: pointer;
+            border-bottom: 1px solid #333;
+            transition: background-color 0.15s;
+        }
+
+        .pm-user-search-item:hover {
+            background-color: #444;
+        }
+
+        .pm-user-search-item:last-child {
+            border-bottom: none;
+        }
+
+        .pm-user-search-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 4px;
+        }
+
+        .pm-user-search-info {
+            font-size: 12px;
+            color: #aaa;
+        }
+
+        .pm-dropdown-empty {
+            padding: 20px 12px;
+            text-align: center;
+            color: #999;
+            font-size: 13px;
+        }
+
+        .pm-hint {
+            font-size: 11px;
+            color: #999;
+            margin-top: 4px;
+            display: block;
+        }
+
+        .pm-dialog-error {
+            color: #ff7171;
+            font-size: 12px;
+            min-height: 16px;
+            margin-top: 10px;
+        }
+
+        .pm-dialog-footer {
+            padding: 14px 20px;
+            border-top: 1px solid #333;
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .pm-dialog-footer button {
+            min-width: 90px;
+            padding: 8px 16px;
+            border-radius: 4px;
+            border: 1px solid transparent;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .pm-dialog-footer .btn-secondary {
+            background: #2d2d2d;
+            color: #ddd;
+            border-color: #444;
+        }
+
+        .pm-dialog-footer .btn-secondary:hover {
+            background: #3a3a3a;
+        }
+
+        .pm-dialog-footer .btn-primary {
+            background: #007acc;
+            color: #fff;
+            border: none;
+        }
+
+        .pm-dialog-footer .btn-primary:hover {
+            background: #0a86da;
+        }
+
+        .pm-input:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -1393,6 +1895,7 @@
                     <div class="personalized-color-actions">
                         <!-- 🔥 개인색 설정은 항상 활성화되므로 체크박스 제거 -->
                         <button type="button" id="personalized-color-button" class="color-editor-btn">색상 편집</button>
+                        <button type="button" id="permission-editor-button" class="color-editor-btn secondary">권한 편집</button>
                     </div>
                 </div>
             </div>
@@ -1409,7 +1912,7 @@
             <!-- Grid Controls -->
             <div id="grid-controls" style="flex-wrap: nowrap;">
                 <!-- Column Controls Group -->
-                <div class="control-group">
+                <div class="control-group control-group-columns">
                     <span class="grid-zoom-label">Columns</span>
                     <button id="grid-cols-minus" class="grid-btn" aria-label="컬럼 감소">-</button>
                     <input type="range" id="grid-cols-range" min="1" max="10" value="3" step="1" aria-label="그리드 컬럼 수">
@@ -1425,7 +1928,9 @@
                 <!-- Search Controls -->
                 <div class="search-controls">
                     <input type="text" id="file-search" placeholder="파일명 입력 (AND, OR, NOT, () 사용 가능)">
+                    <button id="composite-btn" class="grid-btn" aria-label="Composite Map">Composite</button>
                     <button id="search-btn" class="grid-btn" aria-label="검색">검색</button>
+                    <button type="button" id="multi-search-btn" class="grid-btn" aria-label="LOT 다중 검색">다중검색</button>
                     <button id="clear-cache-btn" class="grid-btn" aria-label="캐시 삭제">캐시 삭제</button>
                 </div>
             </div>
@@ -1444,6 +1949,23 @@
                 <!-- Single Image Mode -->
                 <canvas id="image-canvas" aria-label="메인 이미지"></canvas>
                 <canvas id="overlay-canvas" aria-label="오버레이"></canvas>
+                <div id="composite-overlay" class="composite-overlay" style="display: none;">
+                    <div class="composite-card">
+                        <div class="composite-header">
+                            <div>
+                                <span class="composite-title">Composite Map</span>
+                                <span class="composite-count" id="composite-count-label"></span>
+                            </div>
+                            <button id="composite-close-btn" class="grid-btn">그리드로 돌아가기</button>
+                        </div>
+                        <div class="composite-body">
+                            <div class="composite-grid" id="composite-heatmap-grid"></div>
+                            <div class="composite-info">
+                                <p id="composite-info-text"></p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 
                 <!-- File Name Display (Top reserved bar) -->
                 <div id="file-name-display" style="
@@ -1565,6 +2087,13 @@
     
     <!-- Context Menu -->
     <div id="grid-context-menu" class="context-menu" style="display: none; position: absolute; background: #333; border: 1px solid #555; border-radius: 4px; padding: 4px 0; z-index: 10000; min-width: 180px;">
+        <div class="context-menu-item" id="context-composite-create" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">
+            🧩 Composite Map 만들기
+        </div>
+        <div class="context-menu-item" id="context-composite-return" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px; display: none;">
+            ↩ 이전 그리드로 돌아가기
+        </div>
+        <hr style="margin: 4px 0; border: none; border-top: 1px solid #555;">
         <div class="context-menu-item" id="context-download" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">
             📥 선택 파일 다운로드
         </div>
@@ -1583,8 +2112,85 @@
                     </div>
                 </div>
 
+    <!-- Multi LOT Search Modal -->
+    <div id="multi-search-modal" class="modal-overlay">
+        <div class="modal-content" style="max-width: 520px;">
+            <div class="modal-header">
+                <div class="modal-title">LOT 다중 검색</div>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 10px;">
+                <p style="color: #cccccc; margin: 0;">
+                    한 줄에 LOT ID 하나씩 입력하거나 붙여넣으세요. (최대 100개)
+                </p>
+                <textarea id="multi-search-input" class="multi-search-textarea" rows="12" wrap="off" placeholder="LOT001&#10;LOT002&#10;LOT003"></textarea>
+                <small style="color: #aaaaaa;">Enter → 검색 실행 / Shift+Enter 또는 Ctrl+Enter → 다음 행 입력</small>
+                <div id="multi-search-error" class="modal-error"></div>
+            </div>
+            <div class="modal-buttons" style="justify-content: flex-end; gap: 8px;">
+                <button id="multi-search-cancel" class="grid-btn">취소</button>
+                <button id="multi-search-apply" class="grid-btn">검색</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="permission-editor-modal" class="modal-overlay">
+        <div class="modal-content permission-modal">
+            <div class="modal-header">
+                <div class="modal-title">권한 편집</div>
+                <button class="modal-close" id="permission-editor-close">&times;</button>
+            </div>
+            <div class="permission-editor-body">
+                <div class="permission-list-panel">
+                    <div class="permission-toolbar">
+                        <input type="text" id="permission-search-input" placeholder="LoginId 또는 Username 검색">
+                        <button id="permission-search-btn" class="grid-btn" type="button">검색</button>
+                        <button id="permission-refresh-btn" class="grid-btn" type="button">새로고침</button>
+                        <button id="permission-new-btn" class="grid-btn" type="button">새 사용자</button>
+                    </div>
+                    <div id="permission-search-results" class="permission-search-results"></div>
+                    <div id="permission-user-list" class="permission-user-list"></div>
+                </div>
+                <div class="permission-form-panel">
+                    <label class="permission-field">
+                        <span>LoginId</span>
+                        <input type="text" id="permission-login-input" placeholder="예) user01">
+                    </label>
+                    <label class="permission-field">
+                        <span>Username</span>
+                        <input type="text" id="permission-username-input">
+                    </label>
+                    <label class="permission-field">
+                        <span>DeptName</span>
+                        <input type="text" id="permission-dept-input">
+                    </label>
+                    <label class="permission-field">
+                        <span>역할</span>
+                        <select id="permission-role-select">
+                            <option value="ROLE_USER">USER</option>
+                            <option value="ROLE_POWER">POWER</option>
+                            <option value="ROLE_ADMIN">ADMIN</option>
+                            <option value="ROLE_SUPER">SUPER</option>
+                        </select>
+                    </label>
+                    <div class="permission-folder-panel">
+                        <div class="panel-header">
+                            <span>제품 폴더 권한</span>
+                            <button type="button" id="permission-add-folder-btn" class="grid-btn">폴더 추가</button>
+                        </div>
+                        <div id="permission-folder-list" class="permission-folder-list"></div>
+                        <p class="permission-hint">* 폴더 경로는 상대경로이며, 모든 폴더에는 <code>*</code>을 사용하세요.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-buttons">
+                <button id="permission-delete-btn" class="grid-btn danger" type="button">삭제</button>
+                <button id="permission-cancel-btn" class="grid-btn" type="button">닫기</button>
+                <button id="permission-save-btn" class="grid-btn" type="button">저장</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Folder Browser Modal -->
-    <!-- 제거: 폴더 브라우저 모달 시작
     <div id="folder-browser-modal" class="modal-overlay">
         <div class="modal-content" style="min-width: 600px; max-width: 800px;">
             <div class="modal-header">
@@ -1613,7 +2219,6 @@
             </div>
         </div>
     </div>
-    제거 끝 -->
 
     <!-- Add Label Modal -->
     <div id="add-label-modal" class="modal-overlay">
