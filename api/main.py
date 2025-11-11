@@ -412,6 +412,12 @@ def _lock_file_stale() -> bool:
         try:
             INDEX_LOCK_FILE.unlink()
             logger.info("🧹 [INDEX] 잠금 파일이 고아 상태여서 제거했습니다 (pid=%s)", pid)
+        except OSError as exc:
+            # Windows에서 파일이 사용 중일 때 (WinError 32)는 조용히 무시
+            if hasattr(exc, 'winerror') and exc.winerror == 32:  # ERROR_SHARING_VIOLATION
+                # 파일이 사용 중이면 제거하지 않고 False 반환 (다음 시도에서 다시 확인)
+                return False
+            logger.warning(f"⚠️ [INDEX] 고아 잠금 파일 제거 실패: {exc}")
         except Exception as exc:
             logger.warning(f"⚠️ [INDEX] 고아 잠금 파일 제거 실패: {exc}")
         return True
@@ -5624,17 +5630,23 @@ def _trim_leading_component(path_obj: Path) -> Path:
     return Path(*parts[1:])
 
 def _candidate_positions_paths(rel_path: Path) -> List[Path]:
+    """positions.json 파일 경로 후보 목록 반환 (파일명.json만 사용)"""
     trimmed_parent = _trim_leading_component(rel_path.parent)
     trimmed_parts = [p for p in trimmed_parent.parts if p not in ("", ".")]
     base_dir = config.POSITIONS_ROOT
     paths = []
+    
+    # 🔥 파일명.json 형식만 사용 (우선순위 1: trimmed 경로)
     if trimmed_parts:
-        paths.append(base_dir.joinpath(*trimmed_parts) / f"{rel_path.stem}_positions.json")
+        paths.append(base_dir.joinpath(*trimmed_parts) / f"{rel_path.stem}.json")
     else:
-        paths.append(base_dir / f"{rel_path.stem}_positions.json")
-    legacy = config.POSITIONS_ROOT / rel_path.parent / f"{rel_path.stem}_positions.json"
+        paths.append(base_dir / f"{rel_path.stem}.json")
+    
+    # 🔥 우선순위 2: 레거시 경로 (파일명.json)
+    legacy = config.POSITIONS_ROOT / rel_path.parent / f"{rel_path.stem}.json"
     if legacy not in paths:
         paths.append(legacy)
+    
     return paths
 
 def _resolve_positions_path(rel_path: Path) -> Path:

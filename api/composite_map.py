@@ -3,15 +3,20 @@ Composite Map 생성 모듈
 여러 웨이퍼 맵의 인덱스별 빈도를 히트맵으로 시각화
 """
 import time
-from concurrent.futures import ThreadPoolExecutor
+import warnings
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 from PIL import Image
+from PIL.Image import DecompressionBombWarning
 
-from .config import IMAGES_ROOT, COMPOSITE_MAX_WORKERS
+from .config import IMAGES_ROOT, COMPOSITE_MAX_WORKERS, COMPOSITE_LOADER_MODE
+
+Image.MAX_IMAGE_PIXELS = None
+warnings.simplefilter("ignore", DecompressionBombWarning)
 
 # Composite 맵 저장 디렉토리
 COMPOSITE_ROOT = IMAGES_ROOT / "composite_maps"
@@ -37,33 +42,47 @@ def _load_pixel_indices(image_rel_path: str, width: int, height: int) -> Optiona
         return None
 
 
-def _iter_pixel_indices(image_paths: List[str], width: int, height: int):
+def _iter_pixel_indices(
+    image_paths: List[str],
+    width: int,
+    height: int,
+    loader_mode: str,
+    max_workers: Optional[int]
+):
     if not image_paths:
-        return
-    worker_count = min(max(1, COMPOSITE_MAX_WORKERS), len(image_paths))
+        return []
+    normalized_mode = (loader_mode or "thread").lower()
+    max_workers = max_workers or COMPOSITE_MAX_WORKERS
+    worker_count = min(max(1, max_workers), len(image_paths))
     loader = partial(_load_pixel_indices, width=width, height=height)
-    if worker_count <= 1:
+
+    if normalized_mode in {"sequential", "none"} or worker_count <= 1:
         for rel_path in image_paths:
             yield rel_path, loader(rel_path)
-    else:
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            for rel_path, result in zip(image_paths, executor.map(loader, image_paths)):
-                yield rel_path, result
+        return
+
+    executor_cls = ThreadPoolExecutor
+    if normalized_mode in {"process", "proc", "multiprocess"}:
+        executor_cls = ProcessPoolExecutor
+
+    with executor_cls(max_workers=worker_count) as executor:
+        for rel_path, result in zip(image_paths, executor.map(loader, image_paths)):
+            yield rel_path, result
 
 
 
 def create_composite_heatmaps(
     image_paths: List[str],
     indices: List[int] = None,
-    create_sum: bool = True
+    create_sum: bool = True,
+    loader_mode: Optional[str] = None,
+    max_workers: Optional[int] = None
 ) -> Dict[str, Any]:
     """
-    여러 이미지에서 인덱스별 히트맵 및 Sum Map 생성 (원본 팔레트 색상 사용)
-
     Args:
-        image_paths: 원본 이미지 경로 리스트
-        indices: 생성할 인덱스 리스트 (기본: None = 자동 감지)
-        create_sum: Sum Map도 함께 생성할지 여부 (기본: True)
+        image_paths: 처리할 이미지 경로 목록 (IMAGES_ROOT 기준 상대 경로)
+        indices: 팔레트 인덱스 목록 (None이면 최초 이미지에서 추출)
+        create_sum: Sum Map 생성 여부
 
     Returns:
         {
@@ -96,7 +115,7 @@ def create_composite_heatmaps(
             pixels = np.array(first_img)
             unique_indices = np.unique(pixels)
             indices = sorted([int(i) for i in unique_indices if i < 256])
-            print(f"📊 자동 감지된 인덱스: {indices}")
+            print(f"[INFO] 추출된 팔레트 인덱스: {indices}")
 
     first_img.close()
 
@@ -116,7 +135,13 @@ def create_composite_heatmaps(
 
     # 🔥 4. 단일 패스로 모든 이미지 처리 (카운트 누적, 벡터화 최적화)
     processed_count = 0
-    pixel_loader = _iter_pixel_indices(image_paths, width, height) or []
+    pixel_loader = _iter_pixel_indices(
+        image_paths,
+        width,
+        height,
+        loader_mode or COMPOSITE_LOADER_MODE,
+        max_workers or COMPOSITE_MAX_WORKERS
+    )
     for img_path, pixel_indices in pixel_loader:
         if pixel_indices is None:
             continue

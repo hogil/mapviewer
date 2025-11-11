@@ -1,0 +1,65 @@
+[
+  {
+    "loader": "sequential",
+    "workers": 1,
+    "run": 1,
+    "elapsed_seconds": 58.56583960005082,
+    "source_images": 5,
+    "output_dir": "composite_maps/20251112_074629",
+    "timestamp": "2025-11-12 07:47:27"
+  },
+  {
+    "loader": "thread",
+    "workers": 1,
+    "run": 1,
+    "elapsed_seconds": 57.27505689999089,
+    "source_images": 5,
+    "output_dir": "composite_maps/20251112_074727",
+    "timestamp": "2025-11-12 07:48:25"
+  },
+  {
+    "loader": "thread",
+    "workers": 4,
+    "run": 1,
+    "elapsed_seconds": 56.545609900029376,
+    "source_images": 5,
+    "output_dir": "composite_maps/20251112_074825",
+    "timestamp": "2025-11-12 07:49:21"
+  },
+  {
+    "loader": "thread",
+    "workers": 8,
+    "run": 1,
+    "elapsed_seconds": 65.02991279994603,
+    "source_images": 5,
+    "output_dir": "composite_maps/20251112_074921",
+    "timestamp": "2025-11-12 07:50:26"
+  },
+  {
+    "loader": "process",
+    "workers": 1,
+    "run": 1,
+    "elapsed_seconds": 61.618314799969085,
+    "source_images": 5,
+    "output_dir": "composite_maps/20251112_075026",
+    "timestamp": "2025-11-12 07:51:28"
+  },
+  {
+    "loader": "process",
+    "workers": 4,
+    "run": 1,
+    "elapsed_seconds": 61.567730300012045,
+    "source_images": 5,
+    "output_dir": "composite_maps/20251112_075128",
+    "timestamp": "2025-11-12 07:52:30"
+  },
+  {
+    "loader": "process",
+    "workers": 8,
+    "run": 1,
+    "elapsed_seconds": 61.103353500016965,
+    "source_images": 5,
+    "output_dir": "composite_maps/20251112_075230",
+    "timestamp": "2025-11-12 07:53:31"
+  }
+]

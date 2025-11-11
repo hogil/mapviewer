@@ -31,6 +31,7 @@ export THUMBNAIL_SEM="288"               # 중간값 (512→64→288) - 동시 �
 export THUMB_PREFETCH_BATCH="64"
 export THUMB_CLIENT_MAX_CONCURRENCY="12"
 export COMPOSITE_MAX_WORKERS="12"
+export COMPOSITE_LOADER_MODE="thread"
 export SEARCH_WORKERS="24"               # 검색 병렬 워커 수 (32코어 기준, 논리 검색 가속)
 
 # libvips 최적화 (웹서버 환경)

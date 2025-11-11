@@ -23,7 +23,7 @@ D:\project\
 ├── positions\          # Chip 좌표 정보 (POSITIONS_ROOT - 자동 생성)
 │   └── wm-811k\
 │       └── palette_5mb\
-│           └── wafer_palette_5mb_positions.json
+│           └── wafer_palette_5mb.json
 ├── chip_annotations\   # 사용자 마킹 정보 (CHIP_ANNOTATIONS_ROOT)
 │   └── wm-811k\
 │       └── palette_5mb\
@@ -51,7 +51,7 @@ python scripts/generate_positions_from_image.py D:/project/data/wm-811k/palette_
 추정 그리드: 324x324
 감지된 칩 개수: 66993
 
-✅ Positions JSON 생성 완료: D:\project\positions\wm-811k\palette_5mb\wafer_palette_5mb_positions.json
+✅ Positions JSON 생성 완료: D:\project\positions\wm-811k\palette_5mb\wafer_palette_5mb.json
    - 총 66993개 칩
    - 그리드 크기: 324x324
    - 이미지 크기: 7788x7788
@@ -157,7 +157,7 @@ await viewer.chipAnnotator.exportToYOLO('defect_dataset');
 
 ## 📊 데이터 구조
 
-### Positions JSON (`*_positions.json`)
+### Positions JSON (`*.json`)
 
 ```json
 {

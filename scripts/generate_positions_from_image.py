@@ -177,7 +177,7 @@ def main():
 
     # 출력 경로 결정 (별도 positions 폴더에 저장)
     # 이미지: D:\project\data\wm-811k\palette_5mb\wafer_palette_5mb.png
-    # 출력: D:\project\positions\wm-811k\palette_5mb\wafer_palette_5mb_positions.json
+    # 출력: D:\project\positions\wm-811k\palette_5mb\wafer_palette_5mb.json
 
     image_path_obj = Path(image_path)
     image_stem = image_path_obj.stem
@@ -198,7 +198,7 @@ def main():
     output_dir = positions_root_path / relative_path
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    output_path = output_dir / f"{image_stem}_positions.json"
+    output_path = output_dir / f"{image_stem}.json"
 
     # JSON 저장
     with open(output_path, 'w', encoding='utf-8') as f:

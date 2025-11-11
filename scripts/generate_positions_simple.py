@@ -195,7 +195,7 @@ def main():
     output_dir = positions_root_path / relative_path
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    output_path = output_dir / f"{image_stem}_positions.json"
+    output_path = output_dir / f"{image_stem}.json"
 
     # JSON 저장
     with open(output_path, 'w', encoding='utf-8') as f:

@@ -254,7 +254,7 @@ def save_positions_json(json_data: dict,
     else:
         output_dir = positions_root / rel.parent
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{image_path.stem}_positions.json"
+    output_path = output_dir / f"{image_path.stem}.json"
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(json_data, f, ensure_ascii=False, indent=2)
     return output_path
