@@ -5787,15 +5787,51 @@ async def upsert_role_user(entry: RoleUserEntry, req: Request):
     payload["role"] = _normalize_role(payload.get("role", ROLE_DEFAULT))
     folders = payload.get("folders") or []
     normalized_folders = []
-    for folder in folders:
-        path = str(folder.get("path", "")).strip()
-        if not path:
-            continue
-        normalized_folders.append({
-            "path": path,
-            "allow_label": bool(folder.get("allow_label", True)),
-            "allow_class": bool(folder.get("allow_class", True))
-        })
+    
+    # ADMIN/SUPER 역할은 자동으로 * 설정
+    role = payload.get("role", ROLE_DEFAULT)
+    if role in ["ROLE_ADMIN", "ROLE_SUPER"]:
+        normalized_folders = [{
+            "path": "*",
+            "allow_label": True,
+            "allow_class": True
+        }]
+    else:
+        for folder in folders:
+            path = str(folder.get("path", "")).strip()
+            if not path:
+                continue
+            # *이면 그대로 사용
+            if path == "*":
+                normalized_folders.append({
+                    "path": "*",
+                    "allow_label": bool(folder.get("allow_label", True)),
+                    "allow_class": bool(folder.get("allow_class", True))
+                })
+            else:
+                # 2depth 처리: positions/ASDF 형식
+                # 이미 /가 포함되어 있으면 그대로 사용, 아니면 positions/ 추가
+                if "/" not in path:
+                    # positions/ prefix 추가 (2depth)
+                    from . import config
+                    # POSITIONS_ROOT의 상대 경로로 변환
+                    # 예: ASDF → positions/ASDF
+                    # 대소문자 구별 없이 저장 (소문자로 정규화)
+                    path = f"positions/{path.lower()}"
+                else:
+                    # 이미 /가 포함되어 있으면 경로 부분은 소문자로 정규화
+                    # 예: positions/ASDF → positions/asdf
+                    path_parts = path.split('/', 1)
+                    if len(path_parts) == 2:
+                        path = f"{path_parts[0]}/{path_parts[1].lower()}"
+                    else:
+                        path = path.lower()
+                normalized_folders.append({
+                    "path": path,
+                    "allow_label": bool(folder.get("allow_label", True)),
+                    "allow_class": bool(folder.get("allow_class", True))
+                })
+    
     payload["folders"] = normalized_folders
     with ROLES_FILE_LOCK:
         data = _load_roles_data()

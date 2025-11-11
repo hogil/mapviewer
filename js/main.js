@@ -614,17 +614,12 @@ class WaferMapViewer {
             permissionModal: document.getElementById('permission-editor-modal'),
             permissionEditorClose: document.getElementById('permission-editor-close'),
             permissionRefreshBtn: document.getElementById('permission-refresh-btn'),
-            permissionNewBtn: document.getElementById('permission-new-btn'),
             permissionSearchInput: document.getElementById('permission-search-input'),
-            permissionSearchBtn: document.getElementById('permission-search-btn'),
             permissionSearchResults: document.getElementById('permission-search-results'),
             permissionUserList: document.getElementById('permission-user-list'),
-            permissionLoginInput: document.getElementById('permission-login-input'),
-            permissionUsernameInput: document.getElementById('permission-username-input'),
-            permissionDeptInput: document.getElementById('permission-dept-input'),
-            permissionRoleSelect: document.getElementById('permission-role-select'),
-            permissionAddFolderBtn: document.getElementById('permission-add-folder-btn'),
-            permissionFolderList: document.getElementById('permission-folder-list'),
+            permissionRegistrationTable: document.getElementById('permission-registration-table'),
+            permissionRegistrationTbody: document.getElementById('permission-registration-tbody'),
+            permissionAddRowBtn: document.getElementById('permission-add-row-btn'),
             permissionDeleteBtn: document.getElementById('permission-delete-btn'),
             permissionCancelBtn: document.getElementById('permission-cancel-btn'),
             permissionSaveBtn: document.getElementById('permission-save-btn'),
@@ -700,8 +695,9 @@ class WaferMapViewer {
         this.isMultiSearchOpen = false;
         this.permissionUsers = [];
         this.permissionSelectedUser = null;
-        this.permissionEditorFolders = [];
+        this.permissionFilterRole = 'ALL'; // 초기값: ALL
         this.permissionStatsUsers = null;
+        this.permissionSearchSelectedIndex = -1;
 
         // 🔥 Composite Map 세션 관리
         this.isCompositeMode = false;
@@ -3348,28 +3344,90 @@ class WaferMapViewer {
         if (this.dom.permissionRefreshBtn) {
             this.dom.permissionRefreshBtn.addEventListener('click', () => this.reloadPermissionUsers());
         }
-        if (this.dom.permissionNewBtn) {
-            this.dom.permissionNewBtn.addEventListener('click', () => this.createEmptyPermissionEntry());
+        // 역할 필터 버튼들 (이벤트 위임 사용)
+        if (this.dom.permissionModal) {
+            this.dom.permissionModal.addEventListener('click', (e) => {
+                if (e.target.classList.contains('permission-role-filter-btn')) {
+                    const role = e.target.dataset.role;
+                    this.setPermissionFilterRole(role);
+                }
+            });
         }
-        if (this.dom.permissionSearchBtn) {
-            this.dom.permissionSearchBtn.addEventListener('click', () => this.handlePermissionSearch());
-        }
+        // 검색 입력
         if (this.dom.permissionSearchInput) {
             this.dom.permissionSearchInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
                     e.preventDefault();
-                    this.handlePermissionSearch();
+                    // 검색 결과가 열려있고 선택된 항목이 있으면 적용
+                    if (this.dom.permissionSearchResults && this.dom.permissionSearchResults.classList.contains('is-open')) {
+                        const rows = Array.from(this.dom.permissionSearchResults.querySelectorAll('.permission-search-row'));
+                        if (rows.length > 0 && this.permissionSearchSelectedIndex >= 0 && this.permissionSearchSelectedIndex < rows.length) {
+                            const selectedRow = rows[this.permissionSearchSelectedIndex];
+                            const loginId = selectedRow.dataset.loginId;
+                            const match = (this.permissionStatsUsers || []).find(item => item.loginId === loginId);
+                            if (match) {
+                                this.applyStatsUserToTable(match);
+                            }
+                        } else {
+                            // 검색 결과가 없으면 검색 실행
+                            this.handlePermissionSearch();
+                        }
+                    } else {
+                        // 검색 결과가 없으면 검색 실행
+                        this.handlePermissionSearch();
+                    }
+                } else if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    this.navigateSearchResults(1);
+                } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    this.navigateSearchResults(-1);
+                } else if (e.key === 'Escape') {
+                    this.hidePermissionSearchResults();
                 }
             });
+            this.dom.permissionSearchInput.addEventListener('input', () => {
+                this.handlePermissionSearch();
+            });
         }
+        // 테이블 행 추가
+        if (this.dom.permissionAddRowBtn) {
+            this.dom.permissionAddRowBtn.addEventListener('click', () => this.addPermissionTableRow());
+        }
+        // 저장 버튼
         if (this.dom.permissionSaveBtn) {
-            this.dom.permissionSaveBtn.addEventListener('click', () => this.handlePermissionSave());
+            this.dom.permissionSaveBtn.addEventListener('click', () => this.handlePermissionBatchSave());
         }
+        // 삭제 버튼
         if (this.dom.permissionDeleteBtn) {
             this.dom.permissionDeleteBtn.addEventListener('click', () => this.handlePermissionDelete());
         }
-        if (this.dom.permissionAddFolderBtn) {
-            this.dom.permissionAddFolderBtn.addEventListener('click', () => this.addPermissionFolderRow());
+        // 등급 드롭다운 버튼들
+        document.addEventListener('click', (e) => {
+            if (e.target.classList.contains('permission-role-dropdown-btn')) {
+                const btn = e.target;
+                const role = btn.dataset.role;
+                const row = btn.closest('.permission-registration-row');
+                if (row) {
+                    const roleInput = row.querySelector('.permission-role-input');
+                    if (roleInput) {
+                        roleInput.value = role;
+                        // ADMIN/SUPER 선택 시 폴더 입력 비활성화
+                        this.updatePermissionFolderInputState(row, role);
+                    }
+                }
+            }
+        });
+        // 폴더 입력 변경 시 ADMIN/SUPER 체크
+        if (this.dom.permissionRegistrationTbody) {
+            this.dom.permissionRegistrationTbody.addEventListener('input', (e) => {
+                if (e.target.classList.contains('permission-role-input')) {
+                    const row = e.target.closest('.permission-registration-row');
+                    if (row) {
+                        this.updatePermissionFolderInputState(row, e.target.value);
+                    }
+                }
+            });
         }
         if (this.dom.compositeCloseBtn) {
             this.dom.compositeCloseBtn.addEventListener('click', () => this.exitCompositeMode());
@@ -4450,12 +4508,9 @@ class WaferMapViewer {
 
     async openPermissionEditorModal() {
         if (!this.dom.permissionModal) return;
+        this.permissionFilterRole = 'ALL'; // 초기값: ALL
+        this.updatePermissionRoleFilters();
         await this.reloadPermissionUsers();
-        if (this.permissionUsers.length > 0) {
-            this.selectPermissionUser(this.permissionUsers[0].loginId);
-        } else {
-            this.createEmptyPermissionEntry();
-        }
         this.dom.permissionModal.style.display = 'flex';
     }
 
@@ -4464,28 +4519,63 @@ class WaferMapViewer {
             this.dom.permissionModal.style.display = 'none';
         }
         this.permissionSelectedUser = null;
+        this.hidePermissionSearchResults();
+        // 테이블 초기화 (첫 번째 행만 남기고 빈 상태로)
+        if (this.dom.permissionRegistrationTbody) {
+            const rows = this.dom.permissionRegistrationTbody.querySelectorAll('.permission-registration-row');
+            rows.forEach((row, index) => {
+                if (index > 0) row.remove();
+                else {
+                    row.querySelectorAll('.permission-table-input').forEach(input => {
+                        input.value = '';
+                    });
+                    const roleInput = row.querySelector('.permission-role-input');
+                    if (roleInput) roleInput.value = 'ROLE_POWER';
+                    const folderInput = row.querySelector('.permission-folder-input');
+                    if (folderInput) {
+                        folderInput.value = '';
+                        folderInput.disabled = false;
+                        folderInput.style.backgroundColor = '';
+                        folderInput.style.color = '';
+                    }
+                }
+            });
+        }
+    }
+
+    setPermissionFilterRole(role) {
+        this.permissionFilterRole = role;
+        this.updatePermissionRoleFilters();
+        this.renderPermissionUserList();
+    }
+
+    updatePermissionRoleFilters() {
+        const filterBtns = document.querySelectorAll('.permission-role-filter-btn');
+        filterBtns.forEach(btn => {
+            if (btn.dataset.role === this.permissionFilterRole) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+        });
     }
 
     async reloadPermissionUsers() {
         try {
-            const currentId = this.permissionSelectedUser?.loginId || this.dom.permissionLoginInput?.value.trim();
             const res = await fetch('/api/roles/users');
             if (!res.ok) {
                 throw new Error(await res.text());
             }
             const data = await res.json();
-        this.permissionUsers = Array.isArray(data.users) ? [...data.users] : [];
-        this.permissionUsers.sort((a, b) => {
-            const nameA = ((a.username || '') + a.loginId).toLowerCase();
-            const nameB = ((b.username || '') + b.loginId).toLowerCase();
-            if (nameA < nameB) return -1;
-            if (nameA > nameB) return 1;
-            return 0;
-        });
+            this.permissionUsers = Array.isArray(data.users) ? [...data.users] : [];
+            this.permissionUsers.sort((a, b) => {
+                const nameA = ((a.username || '') + a.loginId).toLowerCase();
+                const nameB = ((b.username || '') + b.loginId).toLowerCase();
+                if (nameA < nameB) return -1;
+                if (nameA > nameB) return 1;
+                return 0;
+            });
             this.renderPermissionUserList();
-            if (currentId) {
-                this.selectPermissionUser(currentId);
-            }
         } catch (error) {
             console.error('권한 목록 조회 실패:', error);
             this.showToast?.('권한 목록을 불러올 수 없습니다.', 2000);
@@ -4529,60 +4619,147 @@ class WaferMapViewer {
         if (!this.dom.permissionSearchResults) return;
         const keywordRaw = this.dom.permissionSearchInput?.value?.trim() || '';
         const keyword = keywordRaw.toLowerCase();
-        this.dom.permissionSearchResults.innerHTML = '';
+        
         if (!keyword) {
-            this.dom.permissionSearchResults.innerHTML = '<div style="padding:8px; color:#9aa0a6;">검색어를 입력하세요.</div>';
+            this.hidePermissionSearchResults();
             return;
         }
+        
         try {
             await this.ensureStatsUsersLoaded();
         } catch {
             this.dom.permissionSearchResults.innerHTML = '<div style="padding:8px; color:#ff7b7b;">stats 정보를 불러올 수 없습니다.</div>';
+            this.dom.permissionSearchResults.classList.add('is-open');
             return;
         }
+        
         const entries = (this.permissionStatsUsers || []).filter((entry) => {
             const nameMatch = (entry.username || '').toLowerCase().includes(keyword);
             const idMatch = (entry.loginId || '').toLowerCase().includes(keyword);
             return nameMatch || idMatch;
-        }).slice(0, 20);
+        }).slice(0, 10);
+        
         if (!entries.length) {
             this.dom.permissionSearchResults.innerHTML = '<div style="padding:8px; color:#9aa0a6;">검색 결과가 없습니다.</div>';
+            this.dom.permissionSearchResults.classList.add('is-open');
+            this.permissionSearchSelectedIndex = -1;
             return;
         }
-        this.dom.permissionSearchResults.innerHTML = entries.map(entry => `
-            <div class="permission-search-row" data-login-id="${entry.loginId}">
+        
+        this.dom.permissionSearchResults.innerHTML = entries.map((entry, index) => `
+            <div class="permission-search-row" data-login-id="${entry.loginId}" data-index="${index}">
                 <div>
                     <div style="font-weight:600;">${entry.username || '(이름없음)'} <span style="color:#9aa0a6;">(${entry.loginId})</span></div>
                     <div style="color:#9aa0a6;">${entry.deptName || ''}</div>
                 </div>
-                <button type="button" class="grid-btn" data-login-id="${entry.loginId}">불러오기</button>
             </div>
         `).join('');
-        this.dom.permissionSearchResults.querySelectorAll('button').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const loginId = e.currentTarget.dataset.loginId;
-                const match = (this.permissionStatsUsers || []).find(item => item.loginId === loginId);
+        
+        // 클릭 이벤트
+        this.dom.permissionSearchResults.querySelectorAll('.permission-search-row').forEach((row, index) => {
+            row.addEventListener('click', () => {
+                const loginId = row.dataset.loginId;
+                const match = entries.find(item => item.loginId === loginId);
                 if (match) {
-                    this.applyStatsUserToForm(match);
+                    this.applyStatsUserToTable(match);
                 }
             });
+            row.addEventListener('mouseenter', () => {
+                this.permissionSearchSelectedIndex = index;
+                this.updatePermissionSearchSelection();
+            });
+        });
+        
+        this.dom.permissionSearchResults.classList.add('is-open');
+        this.permissionSearchSelectedIndex = 0;
+        this.updatePermissionSearchSelection();
+    }
+
+    navigateSearchResults(direction) {
+        if (!this.dom.permissionSearchResults || !this.dom.permissionSearchResults.classList.contains('is-open')) {
+            return;
+        }
+        const rows = Array.from(this.dom.permissionSearchResults.querySelectorAll('.permission-search-row'));
+        if (rows.length === 0) return;
+        
+        this.permissionSearchSelectedIndex += direction;
+        if (this.permissionSearchSelectedIndex < 0) this.permissionSearchSelectedIndex = 0;
+        if (this.permissionSearchSelectedIndex >= rows.length) this.permissionSearchSelectedIndex = rows.length - 1;
+        
+        this.updatePermissionSearchSelection();
+        
+        // 선택된 행으로 스크롤
+        const selectedRow = rows[this.permissionSearchSelectedIndex];
+        if (selectedRow) {
+            selectedRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+    }
+
+    updatePermissionSearchSelection() {
+        if (!this.dom.permissionSearchResults) return;
+        const rows = Array.from(this.dom.permissionSearchResults.querySelectorAll('.permission-search-row'));
+        rows.forEach((row, index) => {
+            if (index === this.permissionSearchSelectedIndex) {
+                row.style.backgroundColor = 'rgba(0, 123, 204, 0.3)';
+            } else {
+                row.style.backgroundColor = '';
+            }
         });
     }
 
-    applyStatsUserToForm(entry) {
-        if (this.dom.permissionLoginInput) this.dom.permissionLoginInput.value = entry.loginId || '';
-        if (this.dom.permissionUsernameInput) this.dom.permissionUsernameInput.value = entry.username || '';
-        if (this.dom.permissionDeptInput) this.dom.permissionDeptInput.value = entry.deptName || '';
-        if (this.dom.permissionRoleSelect) this.dom.permissionRoleSelect.value = 'ROLE_USER';
-        this.permissionSelectedUser = null;
-        this.permissionEditorFolders = [{
-            path: '*',
-            allow_label: true,
-            allow_class: true
-        }];
-        this.renderPermissionFolders();
+    hidePermissionSearchResults() {
         if (this.dom.permissionSearchResults) {
-            this.dom.permissionSearchResults.innerHTML = '<div style="padding:8px; color:#8ab4ff;">조회된 정보를 폼에 적용했습니다.</div>';
+            this.dom.permissionSearchResults.classList.remove('is-open');
+            this.permissionSearchSelectedIndex = -1;
+        }
+    }
+
+    applyStatsUserToTable(entry) {
+        // 첫 번째 빈 행에 적용하거나 새 행 추가
+        const tbody = this.dom.permissionRegistrationTbody;
+        if (!tbody) return;
+        
+        let targetRow = null;
+        const rows = tbody.querySelectorAll('.permission-registration-row');
+        
+        // 빈 행 찾기
+        for (const row of rows) {
+            const loginIdInput = row.querySelector('[data-field="loginId"]');
+            if (loginIdInput && !loginIdInput.value.trim()) {
+                targetRow = row;
+                break;
+            }
+        }
+        
+        // 빈 행이 없으면 새 행 추가
+        if (!targetRow) {
+            this.addPermissionTableRow();
+            const newRows = tbody.querySelectorAll('.permission-registration-row');
+            targetRow = newRows[newRows.length - 1];
+        }
+        
+        // 값 채우기
+        const loginIdInput = targetRow.querySelector('[data-field="loginId"]');
+        const usernameInput = targetRow.querySelector('[data-field="username"]');
+        const deptNameInput = targetRow.querySelector('[data-field="deptName"]');
+        const roleInput = targetRow.querySelector('[data-field="role"]');
+        const folderInput = targetRow.querySelector('[data-field="folders"]');
+        
+        if (loginIdInput) loginIdInput.value = entry.loginId || '';
+        if (usernameInput) usernameInput.value = entry.username || '';
+        if (deptNameInput) deptNameInput.value = entry.deptName || '';
+        if (roleInput) {
+            roleInput.value = 'ROLE_POWER';
+            // 등급 변경 시 폴더 입력 상태 업데이트
+            this.updatePermissionFolderInputState(targetRow, 'ROLE_POWER');
+        }
+        if (folderInput && !folderInput.disabled) {
+            folderInput.value = '*';
+        }
+        
+        this.hidePermissionSearchResults();
+        if (this.dom.permissionSearchInput) {
+            this.dom.permissionSearchInput.value = '';
         }
     }
 
@@ -4590,19 +4767,28 @@ class WaferMapViewer {
         if (!this.dom.permissionUserList) return;
         const container = this.dom.permissionUserList;
         container.innerHTML = '';
-        if (!Array.isArray(this.permissionUsers) || this.permissionUsers.length === 0) {
+        
+        // 역할 필터링
+        let filteredUsers = this.permissionUsers;
+        if (this.permissionFilterRole !== 'ALL') {
+            filteredUsers = this.permissionUsers.filter(user => user.role === this.permissionFilterRole);
+        }
+        
+        if (!Array.isArray(filteredUsers) || filteredUsers.length === 0) {
             container.innerHTML = '<div style="padding:12px; color:#999;">등록된 사용자가 없습니다.</div>';
             return;
         }
-        this.permissionUsers.forEach((user) => {
+        
+        filteredUsers.forEach((user) => {
             const row = document.createElement('div');
             row.className = 'permission-user-row';
             row.dataset.loginId = user.loginId;
+            const folders = Array.isArray(user.folders) ? user.folders.map(f => f.path).join(', ') : '';
             row.innerHTML = `
                 <div>
                     <div style="font-weight:600;">${user.username || '(이름없음)'} <span style="color:#9aa0a6;">(${user.loginId || ''})</span></div>
                     <div style="font-size:12px; color:#9aa0a6;">
-                        ${user.deptName || ''} · ${user.role || 'ROLE_USER'}
+                        ${user.deptName || ''} · ${user.role || 'ROLE_USER'}${folders ? ' · ' + folders : ''}
                     </div>
                 </div>
             `;
@@ -4614,128 +4800,170 @@ class WaferMapViewer {
         });
     }
 
-    createEmptyPermissionEntry() {
-        this.permissionSelectedUser = null;
-        this.permissionEditorFolders = [{
-            path: '*',
-            allow_label: true,
-            allow_class: true
-        }];
-        if (this.dom.permissionLoginInput) this.dom.permissionLoginInput.value = '';
-        if (this.dom.permissionUsernameInput) this.dom.permissionUsernameInput.value = '';
-        if (this.dom.permissionDeptInput) this.dom.permissionDeptInput.value = '';
-        if (this.dom.permissionRoleSelect) this.dom.permissionRoleSelect.value = 'ROLE_USER';
-        this.renderPermissionUserList();
-        this.renderPermissionFolders();
-    }
-
     selectPermissionUser(loginId) {
         const user = this.permissionUsers.find((u) => u.loginId === loginId);
         if (!user) {
-            this.createEmptyPermissionEntry();
+            this.permissionSelectedUser = null;
+            this.renderPermissionUserList();
             return;
         }
         this.permissionSelectedUser = user;
-        if (this.dom.permissionLoginInput) this.dom.permissionLoginInput.value = user.loginId || '';
-        if (this.dom.permissionUsernameInput) this.dom.permissionUsernameInput.value = user.username || '';
-        if (this.dom.permissionDeptInput) this.dom.permissionDeptInput.value = user.deptName || '';
-        if (this.dom.permissionRoleSelect) this.dom.permissionRoleSelect.value = user.role || 'ROLE_USER';
-        this.permissionEditorFolders = Array.isArray(user.folders)
-            ? user.folders.map((folder) => ({
-                path: folder.path || '',
-                allow_label: folder.allow_label !== false,
-                allow_class: folder.allow_class !== false
-            }))
-            : [];
         this.renderPermissionUserList();
-        this.renderPermissionFolders();
     }
 
-    addPermissionFolderRow(path = '*') {
-        this.permissionEditorFolders = this.permissionEditorFolders || [];
-        this.permissionEditorFolders.push({
-            path,
-            allow_label: true,
-            allow_class: true
-        });
-        this.renderPermissionFolders();
+    addPermissionTableRow() {
+        const tbody = this.dom.permissionRegistrationTbody;
+        if (!tbody) return;
+        
+        const newRow = document.createElement('tr');
+        newRow.className = 'permission-registration-row';
+        newRow.innerHTML = `
+            <td><input type="text" class="permission-table-input" data-field="loginId" placeholder=""></td>
+            <td><input type="text" class="permission-table-input" data-field="username" placeholder=""></td>
+            <td><input type="text" class="permission-table-input" data-field="deptName" placeholder=""></td>
+            <td>
+                <div class="permission-role-input-wrapper">
+                    <input type="text" class="permission-table-input permission-role-input" data-field="role" placeholder="POWER" list="permission-role-list">
+                    <button type="button" class="permission-role-dropdown-btn" data-role="ROLE_POWER">POWER</button>
+                    <button type="button" class="permission-role-dropdown-btn" data-role="ROLE_ADMIN">ADMIN</button>
+                    <button type="button" class="permission-role-dropdown-btn" data-role="ROLE_SUPER">SUPER</button>
+                </div>
+            </td>
+            <td><input type="text" class="permission-table-input permission-folder-input" data-field="folders" placeholder="ASDF,XYZ 또는 *" style="font-family: monospace;"></td>
+        `;
+        
+        // 등급 입력 변경 시 폴더 입력 상태 업데이트
+        const roleInput = newRow.querySelector('.permission-role-input');
+        if (roleInput) {
+            roleInput.addEventListener('input', (e) => {
+                this.updatePermissionFolderInputState(newRow, e.target.value);
+            });
+        }
+        
+        tbody.appendChild(newRow);
     }
 
-    removePermissionFolderRow(index) {
-        if (!Array.isArray(this.permissionEditorFolders)) return;
-        this.permissionEditorFolders.splice(index, 1);
-        this.renderPermissionFolders();
+    updatePermissionFolderInputState(row, role) {
+        const folderInput = row.querySelector('.permission-folder-input');
+        if (!folderInput) return;
+        
+        // ADMIN/SUPER 선택 시 폴더 입력 비활성화 및 *로 설정
+        if (role === 'ROLE_ADMIN' || role === 'ROLE_SUPER') {
+            folderInput.disabled = true;
+            folderInput.value = '*';
+            folderInput.style.backgroundColor = '#1a1a1a';
+            folderInput.style.color = '#666';
+        } else {
+            folderInput.disabled = false;
+            if (folderInput.value === '*') {
+                folderInput.value = '';
+            }
+            folderInput.style.backgroundColor = '';
+            folderInput.style.color = '';
+        }
     }
 
-    renderPermissionFolders() {
-        if (!this.dom.permissionFolderList) return;
-        const container = this.dom.permissionFolderList;
-        container.innerHTML = '';
-        if (!Array.isArray(this.permissionEditorFolders) || this.permissionEditorFolders.length === 0) {
-            container.innerHTML = '<div style="padding:8px; font-size:12px; color:#9aa0a6;">폴더 권한이 없습니다.</div>';
+    async handlePermissionBatchSave() {
+        const tbody = this.dom.permissionRegistrationTbody;
+        if (!tbody) return;
+        
+        const rows = tbody.querySelectorAll('.permission-registration-row');
+        const usersToSave = [];
+        const errors = [];
+        
+        for (const row of rows) {
+            const loginIdInput = row.querySelector('[data-field="loginId"]');
+            const usernameInput = row.querySelector('[data-field="username"]');
+            const deptNameInput = row.querySelector('[data-field="deptName"]');
+            const roleInput = row.querySelector('[data-field="role"]');
+            const foldersInput = row.querySelector('[data-field="folders"]');
+            
+            const loginId = loginIdInput?.value.trim();
+            if (!loginId) continue; // LoginId가 없으면 건너뛰기 (빈 행)
+            
+            const username = usernameInput?.value.trim() || '';
+            const deptName = deptNameInput?.value.trim() || '';
+            const role = roleInput?.value.trim() || 'ROLE_POWER';
+            const foldersValue = foldersInput?.value.trim() || '*';
+            
+            // 제품 폴더 권한 처리 (2depth: API에서 positions/ASDF로 처리)
+            let folders = [];
+            if (role === 'ROLE_ADMIN' || role === 'ROLE_SUPER') {
+                // ADMIN/SUPER는 API에서 자동으로 *로 처리
+                folders = [{ path: '*', allow_label: true, allow_class: true }];
+            } else if (foldersValue === '*') {
+                folders = [{ path: '*', allow_label: true, allow_class: true }];
+            } else {
+                // 쉼표로 구분된 폴더 목록 (API에서 2depth 처리)
+                // 공백 무시: 모든 공백 제거 후 쉼표로 분리
+                const cleanedValue = foldersValue.replace(/\s+/g, ''); // 모든 공백 제거
+                const folderList = cleanedValue.split(',').filter(f => f); // 빈 문자열 제거
+                folders = folderList.map(folder => {
+                    // API에서 positions/ prefix를 추가하므로 입력값 그대로 전송
+                    // 단, 이미 /가 포함되어 있으면 그대로 사용
+                    return {
+                        path: folder,
+                        allow_label: true,
+                        allow_class: true
+                    };
+                });
+                if (folders.length === 0) {
+                    folders = [{ path: '*', allow_label: true, allow_class: true }];
+                }
+            }
+            
+            usersToSave.push({
+                loginId,
+                username,
+                deptName,
+                role,
+                folders
+            });
+        }
+        
+        if (usersToSave.length === 0) {
+            alert('저장할 사용자가 없습니다. LoginId를 입력하세요.');
             return;
         }
-        this.permissionEditorFolders.forEach((folder, index) => {
-            const row = document.createElement('div');
-            row.className = 'folder-row';
-            row.innerHTML = `
-                <input type="text" class="folder-path-input" value="${folder.path || ''}" placeholder="예) batch/batch_01 또는 *">
-                <label><input type="checkbox" class="folder-label-check" ${folder.allow_label !== false ? 'checked' : ''}> 라벨</label>
-                <label><input type="checkbox" class="folder-class-check" ${folder.allow_class !== false ? 'checked' : ''}> 클래스</label>
-                <button type="button" class="folder-remove-btn">삭제</button>
-            `;
-            row.querySelector('.folder-path-input').addEventListener('input', (e) => {
-                this.permissionEditorFolders[index].path = e.target.value;
-            });
-            row.querySelector('.folder-label-check').addEventListener('change', (e) => {
-                this.permissionEditorFolders[index].allow_label = e.target.checked;
-            });
-            row.querySelector('.folder-class-check').addEventListener('change', (e) => {
-                this.permissionEditorFolders[index].allow_class = e.target.checked;
-            });
-            row.querySelector('.folder-remove-btn').addEventListener('click', () => this.removePermissionFolderRow(index));
-            container.appendChild(row);
-        });
-    }
-
-    collectPermissionForm() {
-        const loginId = this.dom.permissionLoginInput?.value.trim();
-        if (!loginId) {
-            throw new Error('LoginId를 입력하세요.');
-        }
-        const username = this.dom.permissionUsernameInput?.value.trim() || '';
-        const deptName = this.dom.permissionDeptInput?.value.trim() || '';
-        const role = this.dom.permissionRoleSelect?.value || 'ROLE_USER';
-        const folders = (this.permissionEditorFolders || [])
-            .filter(folder => folder.path && folder.path.trim().length > 0)
-            .map(folder => ({
-                path: folder.path.trim(),
-                allow_label: folder.allow_label !== false,
-                allow_class: folder.allow_class !== false
-            }));
-        return {
-            loginId,
-            username,
-            deptName,
-            role,
-            folders
-        };
-    }
-
-    async handlePermissionSave() {
+        
         try {
-            const payload = this.collectPermissionForm();
-            const res = await fetch('/api/roles/users', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            if (!res.ok) {
-                throw new Error(await res.text());
-            }
+            // 배치 저장 (각 사용자별로 API 호출)
+            const savePromises = usersToSave.map(user => 
+                fetch('/api/roles/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(user)
+                }).then(async res => {
+                    if (!res.ok) {
+                        const errorText = await res.text();
+                        throw new Error(`${user.loginId}: ${errorText}`);
+                    }
+                    return res.json();
+                })
+            );
+            
+            await Promise.all(savePromises);
             await this.reloadPermissionUsers();
-            this.selectPermissionUser(payload.loginId);
-            this.showToast?.('권한이 저장되었습니다.', 1600);
+            this.showToast?.(`${usersToSave.length}명의 사용자 권한이 저장되었습니다.`, 2000);
+            
+            // 테이블 초기화 (첫 번째 행만 남기고 빈 상태로)
+            rows.forEach((row, index) => {
+                if (index > 0) row.remove();
+                else {
+                    row.querySelectorAll('.permission-table-input').forEach(input => {
+                        input.value = '';
+                    });
+                    const roleInput = row.querySelector('.permission-role-input');
+                    if (roleInput) roleInput.value = 'ROLE_POWER';
+                    const folderInput = row.querySelector('.permission-folder-input');
+                    if (folderInput) {
+                        folderInput.value = '';
+                        folderInput.disabled = false;
+                        folderInput.style.backgroundColor = '';
+                        folderInput.style.color = '';
+                    }
+                }
+            });
         } catch (error) {
             console.error('권한 저장 실패:', error);
             alert(error.message || '권한을 저장할 수 없습니다.');
@@ -4743,11 +4971,11 @@ class WaferMapViewer {
     }
 
     async handlePermissionDelete() {
-        const loginId = this.dom.permissionLoginInput?.value.trim();
-        if (!loginId) {
+        if (!this.permissionSelectedUser || !this.permissionSelectedUser.loginId) {
             alert('삭제할 사용자를 선택하세요.');
             return;
         }
+        const loginId = this.permissionSelectedUser.loginId;
         if (!confirm(`${loginId} 사용자를 삭제하시겠습니까?`)) {
             return;
         }
@@ -4759,7 +4987,8 @@ class WaferMapViewer {
                 throw new Error(await res.text());
             }
             await this.reloadPermissionUsers();
-            this.createEmptyPermissionEntry();
+            this.permissionSelectedUser = null;
+            this.renderPermissionUserList();
             this.showToast?.('삭제되었습니다.', 1600);
         } catch (error) {
             console.error('권한 삭제 실패:', error);

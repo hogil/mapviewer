@@ -18,8 +18,10 @@ LABELS_DIR = IMAGES_ROOT / "classification"              # Wafer 모드
 CHIP_LABELS_DIR = IMAGES_ROOT / "classification_chips"   # Chip 모드
 LABELS_FILE = LABELS_DIR / "labels.json"
 CHIP_LABELS_FILE = CHIP_LABELS_DIR / "labels.json"
-CHIP_ANNOTATIONS_ROOT = IMAGES_ROOT / "chip_annotations"
-CHIP_IMAGES_ROOT = IMAGES_ROOT / "chip_images"
+_chip_annotations_default = IMAGES_ROOT / "chip_annotations"
+CHIP_ANNOTATIONS_ROOT = Path(os.getenv("CHIP_ANNOTATIONS_ROOT", str(_chip_annotations_default))).resolve()
+_chip_images_default = IMAGES_ROOT / "chip_images"
+CHIP_IMAGES_ROOT = Path(os.getenv("CHIP_IMAGES_ROOT", str(_chip_images_default))).resolve()
 YOLO_EXPORT_ROOT = IMAGES_ROOT / "yolo_datasets"
 
 THUMBNAIL_SIZE_DEFAULT = int(os.getenv("THUMBNAIL_SIZE", "512"))
@@ -35,6 +37,7 @@ SKIP_DIRS = set(os.getenv("SKIP_DIRS", "classification,classification_chips,thum
 CPU_COUNT = os.cpu_count() or 8
 IO_THREADS = int(os.getenv("IO_THREADS", "0")) or max(16, CPU_COUNT * 2)   # Ubuntu 24 최적화: CPU * 2
 THUMBNAIL_SEM = int(os.getenv("THUMBNAIL_SEM", "128"))                     # Ubuntu 24 최적화: 128로 증가
+COMPOSITE_MAX_WORKERS = int(os.getenv("COMPOSITE_MAX_WORKERS", "4"))
 
 # SEARCH_WORKERS: CPU 코어수의 2배 (I/O 바운드 작업에 최적)
 # 최소 4개, 최대 CPU_COUNT * 2개

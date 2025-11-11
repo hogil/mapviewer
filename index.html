@@ -613,15 +613,21 @@
             margin-top: 6px;
         }
         .modal-content.permission-modal {
-            max-width: 1122px !important;
-            width: 59.5vw !important;
-            min-width: 800px;
+            max-width: 1400px !important;
+            width: 90vw !important;
+            min-width: 1000px;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
         }
         .permission-editor-body {
             display: grid;
-            grid-template-columns: 8fr 7fr;
+            grid-template-columns: 1fr 1.5fr;
             gap: 16px;
             margin-top: 12px;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
         }
         .permission-list-panel,
         .permission-form-panel {
@@ -629,43 +635,47 @@
             border-radius: 6px;
             padding: 12px;
             background: #101010;
-        }
-        .permission-toolbar {
             display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin-bottom: 10px;
+            flex-direction: column;
+            min-height: 0;
+            overflow: hidden;
         }
-        .permission-toolbar input {
-            flex: 1 1 200px;
-            background: #1d1d1d;
-            border: 1px solid #3a3a3a;
+        .permission-role-filters {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+        .permission-role-filter-btn {
+            background: #2a2a2a;
+            border: 1px solid #4c4c4c;
             color: #fff;
+            font-size: 12px;
+            padding: 6px 12px;
             border-radius: 4px;
-            padding: 5px 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .permission-role-filter-btn:hover {
+            background: #3a3a3a;
+        }
+        .permission-role-filter-btn.active {
+            background: #007acc;
+            border-color: #007acc;
+        }
+        .permission-user-list-container {
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
         }
         .permission-user-list {
             border: 1px solid #1f1f1f;
             border-radius: 4px;
-            max-height: 360px;
+            flex: 1;
             overflow-y: auto;
-        }
-        .permission-search-results {
-            margin-top: 10px;
-            border: 1px solid #222;
-            border-radius: 4px;
-            max-height: 200px;
-            overflow-y: auto;
-        }
-        .permission-search-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 6px 8px;
-            border-bottom: 1px solid #1a1a1a;
-            font-size: 12px;
-        }
-        .permission-search-row:last-child {
-            border-bottom: none;
+            min-height: 0;
         }
         .permission-user-row {
             display: flex;
@@ -684,72 +694,155 @@
         .permission-user-row.is-active {
             background: rgba(0, 123, 204, 0.3);
         }
-        .permission-field {
+        .permission-registration-section {
             display: flex;
             flex-direction: column;
-            gap: 4px;
-            margin-bottom: 10px;
-            font-size: 13px;
-            color: #bbb;
+            height: 100%;
+            min-height: 0;
         }
-        .permission-field input,
-        .permission-field select {
-            background: #1c1c1c;
-            border: 1px solid #3a3a3a;
-            color: #fff;
-            border-radius: 4px;
-            padding: 6px 8px;
-        }
-        .permission-folder-panel {
-            margin-top: 8px;
-        }
-        .permission-folder-panel .panel-header {
+        .permission-registration-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 8px;
+            margin-bottom: 10px;
         }
-        .permission-folder-list {
-            border: 1px solid #1f1f1f;
-            border-radius: 4px;
-            max-height: 220px;
-            overflow-y: auto;
+        .permission-registration-header h3 {
+            margin: 0;
+            font-size: 16px;
+            color: #fff;
         }
-        .folder-row {
-            display: grid;
-            grid-template-columns: 1fr auto auto auto;
-            gap: 8px;
-            align-items: center;
-            padding: 6px 8px;
-            border-bottom: 1px solid #1b1b1b;
+        .permission-search-section {
+            margin-bottom: 10px;
+            position: relative;
         }
-        .folder-row:last-child {
-            border-bottom: none;
-        }
-        .folder-row input[type="text"] {
-            background: #171717;
+        .permission-search-section input {
+            width: 100%;
+            background: #1d1d1d;
             border: 1px solid #3a3a3a;
             color: #fff;
             border-radius: 4px;
-            padding: 4px 6px;
+            padding: 6px 8px;
+            font-size: 13px;
         }
-        .folder-row label {
+        .permission-search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: #1a1a1a;
+            border: 1px solid #3a3a3a;
+            border-radius: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 1000;
+            margin-top: 4px;
+            display: none;
+        }
+        .permission-search-results.is-open {
+            display: block;
+        }
+        .permission-search-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 10px;
+            border-bottom: 1px solid #2a2a2a;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .permission-search-row:hover {
+            background: rgba(0, 123, 204, 0.2);
+        }
+        .permission-search-row:last-child {
+            border-bottom: none;
+        }
+        .permission-registration-table-container {
+            flex: 1;
+            overflow: auto;
+            border: 1px solid #2a2a2a;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        .permission-registration-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #0a0a0a;
+            font-size: 12px;
+        }
+        .permission-registration-table thead {
+            background: #1a1a1a;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .permission-registration-table th {
+            padding: 8px 6px;
+            text-align: left;
+            border: 1px solid #2a2a2a;
+            color: #fff;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .permission-registration-table th small {
+            display: block;
+            font-weight: 400;
+            color: #999;
+            font-size: 10px;
+            margin-top: 2px;
+        }
+        .permission-registration-table td {
+            padding: 0;
+            border: 1px solid #2a2a2a;
+            background: #0a0a0a;
+        }
+        .permission-table-input {
+            width: 100%;
+            background: transparent;
+            border: none;
+            color: #fff;
+            padding: 6px 8px;
+            font-size: 12px;
+            box-sizing: border-box;
+        }
+        .permission-table-input:focus {
+            outline: 2px solid #007acc;
+            outline-offset: -2px;
+            background: #1a1a1a;
+        }
+        .permission-table-input::placeholder {
+            color: #555;
+        }
+        .permission-role-input-wrapper {
+            position: relative;
             display: flex;
             align-items: center;
             gap: 4px;
-            font-size: 12px;
-            color: #ccc;
         }
-        .folder-row button {
-            background: transparent;
-            border: none;
-            color: #ff6b6b;
+        .permission-role-input {
+            flex: 1;
+        }
+        .permission-role-dropdown-btn {
+            background: #2a2a2a;
+            border: 1px solid #4c4c4c;
+            color: #fff;
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 3px;
             cursor: pointer;
+            white-space: nowrap;
         }
-        .permission-hint {
-            font-size: 11px;
-            color: #999;
-            margin-top: 6px;
+        .permission-role-dropdown-btn:hover {
+            background: #3a3a3a;
+        }
+        .permission-folder-input {
+            font-family: monospace;
+        }
+        .permission-registration-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+        .permission-registration-row:focus-within {
+            background: rgba(0, 123, 204, 0.1);
         }
         .grid-btn.danger {
             background: #953333;
@@ -2156,52 +2249,73 @@
                 <button class="modal-close" id="permission-editor-close">&times;</button>
             </div>
             <div class="permission-editor-body">
+                <!-- 사용자 목록 패널 -->
                 <div class="permission-list-panel">
-                    <div class="permission-toolbar">
-                        <input type="text" id="permission-search-input" placeholder="LoginId 또는 Username 검색">
-                        <button id="permission-search-btn" class="grid-btn" type="button">검색</button>
-                        <button id="permission-refresh-btn" class="grid-btn" type="button">새로고침</button>
-                        <button id="permission-new-btn" class="grid-btn" type="button">새 사용자</button>
+                    <div class="permission-role-filters">
+                        <button class="permission-role-filter-btn active" data-role="ALL">ALL</button>
+                        <button class="permission-role-filter-btn" data-role="ROLE_POWER">POWER</button>
+                        <button class="permission-role-filter-btn" data-role="ROLE_ADMIN">ADMIN</button>
+                        <button class="permission-role-filter-btn" data-role="ROLE_SUPER">SUPER</button>
                     </div>
-                    <div id="permission-search-results" class="permission-search-results"></div>
-                    <div id="permission-user-list" class="permission-user-list"></div>
+                    <div class="permission-user-list-container">
+                        <div id="permission-user-list" class="permission-user-list"></div>
+                    </div>
                 </div>
+                <!-- 등록 패널 -->
                 <div class="permission-form-panel">
-                    <label class="permission-field">
-                        <span>LoginId</span>
-                        <input type="text" id="permission-login-input" placeholder="예) user01">
-                    </label>
-                    <label class="permission-field">
-                        <span>Username</span>
-                        <input type="text" id="permission-username-input">
-                    </label>
-                    <label class="permission-field">
-                        <span>DeptName</span>
-                        <input type="text" id="permission-dept-input">
-                    </label>
-                    <label class="permission-field">
-                        <span>역할</span>
-                        <select id="permission-role-select">
-                            <option value="ROLE_USER">USER</option>
-                            <option value="ROLE_POWER">POWER</option>
-                            <option value="ROLE_ADMIN">ADMIN</option>
-                            <option value="ROLE_SUPER">SUPER</option>
-                        </select>
-                    </label>
-                    <div class="permission-folder-panel">
-                        <div class="panel-header">
-                            <span>제품 폴더 권한</span>
-                            <button type="button" id="permission-add-folder-btn" class="grid-btn">폴더 추가</button>
+                    <div class="permission-registration-section">
+                        <div class="permission-registration-header">
+                            <h3>신규 등록</h3>
+                            <button id="permission-refresh-btn" class="grid-btn" type="button">새로고침</button>
                         </div>
-                        <div id="permission-folder-list" class="permission-folder-list"></div>
-                        <p class="permission-hint">* 폴더 경로는 상대경로이며, 모든 폴더에는 <code>*</code>을 사용하세요.</p>
+                        <div class="permission-search-section">
+                            <input type="text" id="permission-search-input" placeholder="LoginId 또는 Username 입력 후 Enter">
+                            <div id="permission-search-results" class="permission-search-results"></div>
+                        </div>
+                        <div class="permission-registration-table-container">
+                            <table class="permission-registration-table" id="permission-registration-table">
+                                <thead>
+                                    <tr>
+                                        <th>ID<br><small>(LoginId)</small></th>
+                                        <th>이름<br><small>(Username)</small></th>
+                                        <th>부서<br><small>(DeptName)</small></th>
+                                        <th>등급</th>
+                                        <th>제품 권한<br><small>(,로 구분)</small></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="permission-registration-tbody">
+                                    <tr class="permission-registration-row">
+                                        <td><input type="text" class="permission-table-input" data-field="loginId" placeholder=""></td>
+                                        <td><input type="text" class="permission-table-input" data-field="username" placeholder=""></td>
+                                        <td><input type="text" class="permission-table-input" data-field="deptName" placeholder=""></td>
+                                        <td>
+                                            <div class="permission-role-input-wrapper">
+                                                <input type="text" class="permission-table-input permission-role-input" data-field="role" placeholder="POWER" list="permission-role-list">
+                                                <datalist id="permission-role-list">
+                                                    <option value="ROLE_POWER">POWER</option>
+                                                    <option value="ROLE_ADMIN">ADMIN</option>
+                                                    <option value="ROLE_SUPER">SUPER</option>
+                                                </datalist>
+                                                <button type="button" class="permission-role-dropdown-btn" data-role="ROLE_POWER">POWER</button>
+                                                <button type="button" class="permission-role-dropdown-btn" data-role="ROLE_ADMIN">ADMIN</button>
+                                                <button type="button" class="permission-role-dropdown-btn" data-role="ROLE_SUPER">SUPER</button>
+                                            </div>
+                                        </td>
+                                        <td><input type="text" class="permission-table-input permission-folder-input" data-field="folders" placeholder="ASDF,XYZ 또는 *" style="font-family: monospace;"></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="permission-registration-actions">
+                            <button id="permission-add-row-btn" class="grid-btn" type="button">+ 행 추가</button>
+                            <button id="permission-save-btn" class="grid-btn" type="button">저장</button>
+                        </div>
                     </div>
                 </div>
             </div>
             <div class="modal-buttons">
                 <button id="permission-delete-btn" class="grid-btn danger" type="button">삭제</button>
                 <button id="permission-cancel-btn" class="grid-btn" type="button">닫기</button>
-                <button id="permission-save-btn" class="grid-btn" type="button">저장</button>
             </div>
         </div>
     </div>

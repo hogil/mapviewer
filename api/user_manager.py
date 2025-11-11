@@ -374,15 +374,21 @@ class PermissionChecker:
         if role in {Role.SUPER, Role.ADMIN}:
             return True
 
-        # 폴더 경로를 정규화
-        folder_normalized = folder.replace('\\', '/').rstrip('/')
+        # 폴더 경로를 정규화 (대소문자 무시: 소문자로 변환)
+        folder_normalized = folder.replace('\\', '/').rstrip('/').lower()
 
         # 부여된 권한 확인
         for grant in grants:
-            grant_folder = grant["folder"].replace('\\', '/').rstrip('/')
+            grant_folder = grant["folder"].replace('\\', '/').rstrip('/').lower()
             grant_level = Role(grant["level"])
 
-            # 해당 폴더 또는 하위 폴더인지 확인
+            # * 권한이면 모든 폴더 접근 가능
+            if grant_folder == "*":
+                if permission in ROLE_PERMISSIONS[grant_level]:
+                    return True
+                continue
+
+            # 해당 폴더 또는 하위 폴더인지 확인 (대소문자 무시)
             if folder_normalized.startswith(grant_folder):
                 # grant_level에 permission이 있는지 확인
                 if permission in ROLE_PERMISSIONS[grant_level]:
@@ -420,15 +426,15 @@ class PermissionChecker:
         base_role = Role(user["role"])
         grants = user.get("grants", [])
 
-        # 폴더 경로 정규화
-        folder_normalized = folder.replace('\\', '/').rstrip('/')
+        # 폴더 경로 정규화 (대소문자 무시: 소문자로 변환)
+        folder_normalized = folder.replace('\\', '/').rstrip('/').lower()
 
         # 가장 구체적인(긴) 폴더 매칭 우선
         matched_grant = None
         for grant in grants:
-            grant_folder = grant["folder"].replace('\\', '/').rstrip('/')
+            grant_folder = grant["folder"].replace('\\', '/').rstrip('/').lower()
             if folder_normalized.startswith(grant_folder):
-                if not matched_grant or len(grant_folder) > len(matched_grant["folder"]):
+                if not matched_grant or len(grant_folder) > len(matched_grant["folder"].replace('\\', '/').rstrip('/').lower()):
                     matched_grant = grant
 
         if matched_grant:

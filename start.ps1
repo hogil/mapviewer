@@ -21,6 +21,11 @@ $env:SSL_ENABLED="1"
 $env:HTTPS_PORT="443"
 $env:SSL_CERTFILE="cert/fullchain.pem"
 $env:SSL_KEYFILE="cert/server.key"
+
+# 경로 설정
+$env:IMAGES_ROOT="D:/project/data/wm-811k"          # 이미지 루트 경로
+$env:POSITIONS_ROOT="D:/project/data/positions"     # Positions 루트 경로
+
 $env:THUMBNAIL_SIZE="512"
 $env:THUMBNAIL_FORMAT="JPEG"
 $env:THUMBNAIL_QUALITY="100"
@@ -29,6 +34,7 @@ $env:IO_THREADS="80"                     # Dev box (8C/64GB) - I/O 병렬화 2�
 $env:THUMBNAIL_SEM="48"                 # Concurrent thumbnail jobs
 $env:THUMB_PREFETCH_BATCH="32"          # Prefetch batch size
 $env:THUMB_CLIENT_MAX_CONCURRENCY="10"  # Frontend concurrent loads
+$env:COMPOSITE_MAX_WORKERS="6"          # Composite map loaders
 $env:VIPS_CONCURRENCY="4"               # pyvips 내부 스레드 (최적화됨, 벤치마크 기준 최고 성능)
 $env:VIPS_MAX_CACHE="2000"              # libvips 연산 캐시 개수
 $env:VIPS_MAX_CACHE_MEM="536870912"     # libvips 캐시 메모리 (512MB)

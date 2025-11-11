@@ -15,6 +15,10 @@ export HTTPS_PORT="8443"
 export SSL_CERTFILE="cert/fullchain.pem"
 export SSL_KEYFILE="cert/server.key"
 
+# 경로 설정
+export IMAGES_ROOT="/appdata/appuser/images"        # 이미지 루트 경로
+export POSITIONS_ROOT="/appdata/appuser/positions"  # Positions 루트 경로
+
 # 성능 설정 (Ubuntu 24, 32코어, 192GB RAM)
 # - 벤치마크 기반 중간값 (원본 고성능 vs 보수적 최적화 사이)
 # - 실제 워크로드에 따라 조정 권장
@@ -26,6 +30,7 @@ export IO_THREADS="160"                  # 중간값 (256→64→160) - I/O 병�
 export THUMBNAIL_SEM="288"               # 중간값 (512→64→288) - 동시 썸네일 생성
 export THUMB_PREFETCH_BATCH="64"
 export THUMB_CLIENT_MAX_CONCURRENCY="12"
+export COMPOSITE_MAX_WORKERS="12"
 export SEARCH_WORKERS="24"               # 검색 병렬 워커 수 (32코어 기준, 논리 검색 가속)
 
 # libvips 최적화 (웹서버 환경)

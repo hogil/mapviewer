@@ -3,17 +3,53 @@ Composite Map 생성 모듈
 여러 웨이퍼 맵의 인덱스별 빈도를 히트맵으로 시각화
 """
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 from PIL import Image
 
-from .config import IMAGES_ROOT
+from .config import IMAGES_ROOT, COMPOSITE_MAX_WORKERS
 
 # Composite 맵 저장 디렉토리
 COMPOSITE_ROOT = IMAGES_ROOT / "composite_maps"
 COMPOSITE_ROOT.mkdir(parents=True, exist_ok=True)
+
+def _load_pixel_indices(image_rel_path: str, width: int, height: int) -> Optional[np.ndarray]:
+    full_path = IMAGES_ROOT / image_rel_path
+    if not full_path.exists():
+        return None
+    try:
+        with Image.open(full_path) as img:
+            if img.size != (width, height):
+                img = img.resize((width, height), Image.NEAREST)
+            if img.mode == 'P':
+                pixel_indices = np.array(img, dtype=np.uint8)
+            else:
+                img_l = img.convert('L')
+                pixels = np.array(img_l, dtype=np.uint8)
+                pixel_indices = pixels // 32
+            return pixel_indices
+    except Exception as exc:
+        print(f"[FAST] Composite image load failed: {image_rel_path}, {exc}")
+        return None
+
+
+def _iter_pixel_indices(image_paths: List[str], width: int, height: int):
+    if not image_paths:
+        return
+    worker_count = min(max(1, COMPOSITE_MAX_WORKERS), len(image_paths))
+    loader = partial(_load_pixel_indices, width=width, height=height)
+    if worker_count <= 1:
+        for rel_path in image_paths:
+            yield rel_path, loader(rel_path)
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            for rel_path, result in zip(image_paths, executor.map(loader, image_paths)):
+                yield rel_path, result
+
 
 
 def create_composite_heatmaps(
@@ -68,8 +104,9 @@ def create_composite_heatmaps(
         indices = list(range(8))  # 기본값
 
     # 3. 인덱스별 카운트 배열 초기화 (카운트 기반)
-    counts = {idx: np.zeros((height, width), dtype=np.uint16)
-              for idx in indices}
+    idx_array = np.array(indices, dtype=np.uint16)
+    counts = np.zeros((len(idx_array), height, width), dtype=np.uint32)
+    valid_positions = np.where(idx_array < 8)[0]
     
     # 🔥 인덱스 8 이상 픽셀 누적 (모든 이미지에서 OR 연산으로 합치기, 원본 색상 표시용)
     high_indices_combined = np.zeros((height, width), dtype=np.uint8)  # 최종 인덱스 값
@@ -79,51 +116,26 @@ def create_composite_heatmaps(
 
     # 🔥 4. 단일 패스로 모든 이미지 처리 (카운트 누적, 벡터화 최적화)
     processed_count = 0
-    for img_path in image_paths:
-        try:
-            full_path = IMAGES_ROOT / img_path
-            if not full_path.exists():
-                continue
-
-            # 🔥 빠른 이미지 로딩 (PIL 최적화)
-            img = Image.open(full_path)
-            # 🔥 이미지 데이터를 빠르게 NumPy 배열로 변환
-            if img.size != (width, height):
-                img = img.resize((width, height), Image.NEAREST)
-
-            # 🔥 팔레트 이미지 처리 (최적화: NumPy 배열 직접 변환)
-            if img.mode == 'P':
-                # 팔레트 모드: NumPy 배열로 빠르게 변환
-                pixel_indices = np.array(img, dtype=np.uint8)
-            else:
-                # L 모드로 빠르게 변환
-                img_l = img.convert('L')
-                pixels = np.array(img_l, dtype=np.uint8)
-                pixel_indices = pixels // 32  # 0~255 → 0~7 매핑
-
-            # 🔥 인덱스 8 이상 픽셀 누적 (OR 연산으로 합치기, 원본 색상 유지)
-            high_mask = (pixel_indices >= 8)
-            high_mask_combined |= high_mask
-            # 인덱스 8 이상인 위치에 최신 인덱스 값 저장 (겹치는 경우 마지막 값 사용)
-            high_indices_combined = np.where(high_mask, pixel_indices, high_indices_combined)
-
-            # 🔥 벡터화된 카운트 누적 (인덱스 0~7만 카운트)
-            for idx in indices:
-                if idx < 8:  # 인덱스 0~7만 처리
-                    # 벡터화된 마스크 연산 (빠름)
-                    mask = (pixel_indices == idx)
-                    counts[idx] += mask.astype(np.uint16)
-
-            # Sum Map용 인덱스 배열 수집
-            if create_sum:
-                all_indices_list.append(pixel_indices.astype(np.uint8))
-
-            processed_count += 1
-            img.close()
-
-        except Exception as e:
-            print(f"⚠️ 이미지 처리 실패: {img_path}, {e}")
+    pixel_loader = _iter_pixel_indices(image_paths, width, height) or []
+    for img_path, pixel_indices in pixel_loader:
+        if pixel_indices is None:
             continue
+
+        # ?? �ε��� 8 �̻� �ȼ� ���� (OR �������� ��ġ��, ���� ���� ����)
+        high_mask = (pixel_indices >= 8)
+        high_mask_combined |= high_mask
+        high_indices_combined = np.where(high_mask, pixel_indices, high_indices_combined)
+
+        # [FAST] vectorized count update
+        if valid_positions.size:
+            selected_indices = idx_array[valid_positions]
+            masks = (pixel_indices[None, :, :] == selected_indices[:, None, None])
+            counts[valid_positions] += masks.astype(np.uint32)
+
+        if create_sum:
+            all_indices_list.append(pixel_indices.astype(np.uint8))
+
+        processed_count += 1
 
     # 5. 인덱스별 히트맵 생성 (카운트 기반, 원본 팔레트 색상 사용, 인덱스 8 이상 원본 색상)
     heatmaps = []
@@ -148,14 +160,14 @@ def create_composite_heatmaps(
     else:
         palette_rgb = np.full((256, 3), 128, dtype=np.uint8)  # 기본 회색
 
-    for idx in indices:
+    for pos, idx in enumerate(indices):
         if idx >= 8:
             continue  # 인덱스 8 이상은 히트맵 생성하지 않음 (원본 색상으로만 표시)
             
         heatmap_path = output_dir / f"index_{idx}.png"
         
         # 🔥 카운트 배열 가져오기
-        count_array = counts[idx]
+        count_array = counts[pos]
         
         # 🔥 원본 팔레트에서 해당 인덱스의 색상 추출 (사전 계산된 배열 사용)
         orig_r, orig_g, orig_b = palette_rgb[idx]
@@ -403,7 +415,6 @@ def accumulate_pixel_counts(
     # 각 인덱스별 카운트 증가 (NumPy 벡터화)
     for idx in indices:
         mask = (pixel_indices == idx)
-        counts[idx] += mask.astype(np.uint16)
 
     img.close()
 
