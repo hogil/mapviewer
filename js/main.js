@@ -659,7 +659,6 @@ class WaferMapViewer {
             multiSearchApply: document.getElementById('multi-search-apply'),
             multiSearchCancel: document.getElementById('multi-search-cancel'),
             multiSearchError: document.getElementById('multi-search-error'),
-            compositeBtn: document.getElementById('composite-btn'),
             compositeOverlay: document.getElementById('composite-overlay'),
             compositeHeatmapGrid: document.getElementById('composite-heatmap-grid'),
             compositeInfoText: document.getElementById('composite-info-text'),
@@ -946,6 +945,14 @@ class WaferMapViewer {
         e.stopPropagation(); // 🚀 이벤트 버블링 방지
 
         this.debugLog('🚀 Wafer Map Explorer 오른쪽 클릭 감지됨');
+
+        // 🔥 Composite Mode 종료 (Wafer Map Explorer에서 다른 맵 선택 시)
+        if (this.isCompositeMode) {
+            console.log('🔄 Composite Mode 종료 (Wafer Map Explorer 오른쪽 클릭)');
+            this.isCompositeMode = false;
+            this.compositeSession = null;
+            this.updateContextMenuState();
+        }
 
         // 🔥 진행 중인 썸네일 로드 즉시 중단
 
@@ -3366,9 +3373,6 @@ class WaferMapViewer {
         if (this.dom.compositeCloseBtn) {
             this.dom.compositeCloseBtn.addEventListener('click', () => this.exitCompositeMode());
         }
-        if (this.dom.compositeBtn) {
-            this.dom.compositeBtn.addEventListener('click', () => this.handleCompositeCreate());
-        }
 
     }
 
@@ -4768,13 +4772,20 @@ class WaferMapViewer {
     updateContextMenuState() {
         const createItem = document.getElementById('context-composite-create');
         const returnItem = document.getElementById('context-composite-return');
-        if (!createItem || !returnItem) return;
+        if (!createItem || !returnItem) {
+            console.warn('⚠️ 컨텍스트 메뉴 항목을 찾을 수 없습니다.');
+            return;
+        }
         if (this.isCompositeMode) {
-            createItem.style.display = 'none';
-            returnItem.style.display = 'block';
+            console.log('🔄 [CONTEXT_MENU] Composite Mode 활성화 - "이전 그리드로 돌아가기" 표시');
+            // 🔥 강제로 display 속성 설정 (다른 스타일 오버라이드 방지)
+            createItem.style.setProperty('display', 'none', 'important');
+            returnItem.style.setProperty('display', 'block', 'important');
         } else {
-            createItem.style.display = 'block';
-            returnItem.style.display = 'none';
+            console.log('🔄 [CONTEXT_MENU] 일반 모드 - "Composite Map 만들기" 표시');
+            // 🔥 강제로 display 속성 설정 (다른 스타일 오버라이드 방지)
+            createItem.style.setProperty('display', 'block', 'important');
+            returnItem.style.setProperty('display', 'none', 'important');
         }
     }
 
@@ -4819,16 +4830,23 @@ class WaferMapViewer {
 
         console.log('🔄 Composite Grid로 전환 (9개 이미지):', heatmapPaths);
 
-        // 🔥 Grid를 9개 이미지로 교체 (선택 상태 초기화)
-        await this.showGrid(heatmapPaths, true);  // skipSaveState=true
-
         // 🔥 Grid 선택 상태 완전 초기화
         this.gridSelectedIdxs = [];
-        this.selectedImages = [];
+        this.selectedImages = heatmapPaths;  // 🔥 컬럼 슬라이더 작동을 위해 selectedImages 설정
+
+        // 🔥 Grid를 9개 이미지로 교체 (선택 상태 초기화)
+        await this.showGrid(heatmapPaths, true);  // skipSaveState=true
 
         // DOM에서도 선택 상태 제거
         const gridItems = document.querySelectorAll('.grid-thumb-wrap');
         gridItems.forEach(item => item.classList.remove('selected'));
+
+        // 🔥 컬럼 슬라이더가 적용되도록 보장 (showGrid 후에도 컬럼 설정 유지)
+        const gridColsRange = document.getElementById('grid-cols-range');
+        if (gridColsRange) {
+            gridColsRange.value = this.gridCols;
+            document.documentElement.style.setProperty('--grid-cols', this.gridCols);
+        }
 
         // Composite 세션 정보 저장
         this.compositeSession = {
@@ -4842,9 +4860,6 @@ class WaferMapViewer {
         // Composite 모드 활성화
         this.isCompositeMode = true;
 
-        // Composite 배지 표시
-        this.showCompositeBadge();
-
         this.updateContextMenuState();
     }
 
@@ -4855,7 +4870,6 @@ class WaferMapViewer {
         if (this.sessionStack.length === 0) {
             console.warn('⚠️ 복귀할 세션이 없습니다.');
             this.isCompositeMode = false;
-            this.hideCompositeBadge();
             this.updateContextMenuState();
             return;
         }
@@ -4884,62 +4898,9 @@ class WaferMapViewer {
         this.isCompositeMode = false;
         this.compositeSession = null;
 
-        // Composite 배지 숨김
-        this.hideCompositeBadge();
-
         this.updateContextMenuState();
     }
 
-    /**
-     * Composite 배지 표시
-     */
-    showCompositeBadge() {
-        let badge = document.getElementById('composite-mode-badge');
-        if (!badge) {
-            badge = document.createElement('div');
-            badge.id = 'composite-mode-badge';
-            badge.style.cssText = `
-                position: fixed;
-                top: 20px;
-                left: 50%;
-                transform: translateX(-50%);
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
-                padding: 12px 20px;
-                border-radius: 8px;
-                font-size: 14px;
-                font-weight: 600;
-                box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-                z-index: 9999;
-                display: flex;
-                align-items: center;
-                gap: 8px;
-            `;
-            document.body.appendChild(badge);
-        }
-
-        const info = this.compositeSession || {};
-        badge.innerHTML = `
-            <span style="font-size: 18px;">📊</span>
-            <div>
-                <div style="font-weight: 700;">Composite Mode</div>
-                <div style="font-size: 11px; opacity: 0.9;">
-                    ${info.sourceImageCount || '?'} images · ${info.processingTime || '?'}s
-                </div>
-            </div>
-        `;
-        badge.style.display = 'flex';
-    }
-
-    /**
-     * Composite 배지 숨김
-     */
-    hideCompositeBadge() {
-        const badge = document.getElementById('composite-mode-badge');
-        if (badge) {
-            badge.style.display = 'none';
-        }
-    }
 
     /**
      * Composite Map 생성 핸들러 (Grid 교체 방식)
@@ -5270,6 +5231,13 @@ class WaferMapViewer {
 
         if (!contextMenu) return;
 
+        // 메뉴 항목 이벤트 리스너 등록 (한 번만)
+        if (!this.contextMenuInitialized) {
+            this.initializeContextMenu();
+            this.contextMenuInitialized = true;
+        }
+
+        // 🔥 Composite Mode 상태에 따라 메뉴 항목 업데이트 (메뉴 표시 전에 호출)
         this.updateContextMenuState();
 
         // 메뉴 위치 설정
@@ -5278,7 +5246,6 @@ class WaferMapViewer {
         contextMenu.style.top = event.pageY + 'px';
 
         // 화면 경계 체크
-
         const rect = contextMenu.getBoundingClientRect();
 
         if (rect.right > window.innerWidth) {
@@ -5289,12 +5256,12 @@ class WaferMapViewer {
             contextMenu.style.top = (event.pageY - rect.height) + 'px';
         }
 
-        // 메뉴 항목 이벤트 리스너 등록 (한 번만)
-
-        if (!this.contextMenuInitialized) {
-            this.initializeContextMenu();
-
-            this.contextMenuInitialized = true;
+        // 🔥 메뉴 표시 후에도 상태 확인 (디버깅용)
+        console.log('🔄 [CONTEXT_MENU] showContextMenu - isCompositeMode:', this.isCompositeMode);
+        const createItem = document.getElementById('context-composite-create');
+        const returnItem = document.getElementById('context-composite-return');
+        if (createItem && returnItem) {
+            console.log('🔄 [CONTEXT_MENU] createItem.display:', createItem.style.display, 'returnItem.display:', returnItem.style.display);
         }
 
         // 외부 클릭으로 메뉴 숨기기
@@ -6999,12 +6966,14 @@ class WaferMapViewer {
     async loadImage(path, fromLabelExplorer = false) {
         try {
             // 🔥 Composite Mode 종료 (이미지 선택 시 자동 종료)
-            if (this.isCompositeMode) {
+            // 단, composite mode의 그리드에서 단일 이미지로 들어간 경우(singleImageFromGrid)는 제외
+            if (this.isCompositeMode && !this.singleImageFromGrid) {
                 console.log('🔄 Composite Mode 종료 (이미지 선택됨)');
                 this.isCompositeMode = false;
                 this.compositeSession = null;
-                this.hideCompositeBadge();
                 this.updateContextMenuState();
+            } else if (this.isCompositeMode && this.singleImageFromGrid) {
+                console.log('🔄 Composite Mode 유지 (그리드에서 단일 이미지로 진입)');
             }
 
             // 🔥 그리드 배치 로딩 중단 (단일 이미지 로드 시)
@@ -13198,14 +13167,18 @@ class WaferMapViewer {
         if (!isLabelExplorerGrid && this.selectedImages && this.selectedImages.length > 0) {
             const savedScrollTop = scrollWrapper ? scrollWrapper.scrollTop : 0;
             
+            // 🔥 Composite Mode 상태도 함께 저장
             this.savedViewState = {
                 type: 'grid',
                 images: [...this.selectedImages],
-                scrollTop: savedScrollTop
+                scrollTop: savedScrollTop,
+                isCompositeMode: this.isCompositeMode,  // 🔥 Composite Mode 상태 저장
+                compositeSession: this.compositeSession ? {...this.compositeSession} : null  // 🔥 Composite Session 저장
             };
             console.log('💾 [SAVE] Grid → 단일 이미지 (enterSingleImageMode) 시 상태 저장:', {
                 images: this.selectedImages.length,
-                scrollTop: savedScrollTop
+                scrollTop: savedScrollTop,
+                isCompositeMode: this.isCompositeMode
             });
         } else if (isLabelExplorerGrid) {
             console.log('🔍 [LABEL_EXPLORER] Label Explorer Grid에서 단일 이미지 전환 - 상태 저장 안 함');
@@ -13281,6 +13254,14 @@ class WaferMapViewer {
 
         // 🔥 skipSaveState=true로 호출 (showGrid 내부에서 스크롤 위치 복원)
         this.showGrid(imagesToShow, true);
+
+        // 🔥 Composite Mode 상태 복원 (savedViewState에서)
+        if (this.savedViewState && this.savedViewState.isCompositeMode) {
+            console.log('🔄 [EXIT] Composite Mode 상태 복원 (savedViewState에서)');
+            this.isCompositeMode = true;
+            this.compositeSession = this.savedViewState.compositeSession;
+            this.updateContextMenuState();
+        }
 
         this.singleImageFromGrid = false;
 

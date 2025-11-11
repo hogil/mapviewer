@@ -9,7 +9,7 @@ IMAGES_ROOT = Path(os.getenv("IMAGES_ROOT", _images_root_default)).resolve()
 ROOT_DIR = IMAGES_ROOT
 
 # Positions는 별도 경로로 관리 (이미지와 분리)
-_positions_root_default = "D:/project/data/position" if os.name == "nt" else "/appdata/appuser/position"
+_positions_root_default = "D:/project/data/positions" if os.name == "nt" else "/appdata/appuser/positions"
 POSITIONS_ROOT = Path(os.getenv("POSITIONS_ROOT", _positions_root_default)).resolve()
 
 # IMAGES_ROOT 하위 경로
