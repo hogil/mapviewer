@@ -468,8 +468,8 @@
             display: flex;
             flex-direction: row;
             align-items: center;
-            gap: 12px;
-            padding: 8px 16px 6px 16px;
+            gap: 6px;
+            padding: 4px 8px 4px 8px;
             background: rgba(30, 30, 30, 0.96);
             border-bottom: 1px solid #222;
             box-sizing: border-box;
@@ -544,13 +544,13 @@
         .control-group {
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 4px;
             flex-shrink: 0;
         }
         .control-group.control-group-columns {
             display: flex !important;
             align-items: center;
-            gap: 8px;
+            gap: 4px;
         }
         .grid-slider {
             display: flex;
@@ -563,10 +563,10 @@
         }
         #grid-cols-minus,
         #grid-cols-plus {
-            min-width: 28px;
-            height: 28px;
+            min-width: 24px;
+            height: 24px;
             padding: 0;
-            font-size: 16px;
+            font-size: 14px;
             font-weight: bold;
             display: flex;
             align-items: center;
@@ -576,7 +576,7 @@
         .search-controls {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
             margin-left: auto;
             flex: 1 1 auto;
             min-width: 0;
@@ -587,11 +587,11 @@
             color: #fff !important;
             border: 1px solid #555 !important;
             border-radius: 4px !important;
-            font-size: 14px !important;
-            padding: 6px 12px !important;
-            width: 320px !important;
+            font-size: 13px !important;
+            padding: 4px 8px !important;
+            width: 280px !important;
             max-width: 55% !important;
-            min-width: 250px !important;
+            min-width: 200px !important;
             transition: border-color 0.2s ease;
         }
         
@@ -833,9 +833,9 @@
     background: #232323;
     color: #fff;
     border: 1.5px solid #444;
-    border-radius: 6px;
-    padding: 6px 18px;
-    font-size: 15px;
+    border-radius: 4px;
+    padding: 4px 10px;
+    font-size: 13px;
     font-weight: 500;
     cursor: pointer;
     transition: background 0.15s, border 0.15s;
@@ -1935,7 +1935,6 @@
             <div id="grid-controls" style="flex-wrap: nowrap;">
                 <!-- Column Controls Group -->
                 <div class="control-group control-group-columns">
-                    <span class="grid-zoom-label">Columns</span>
                     <button id="grid-cols-minus" class="grid-btn" aria-label="컬럼 감소">-</button>
                     <input type="range" id="grid-cols-range" min="1" max="10" value="3" step="1" aria-label="그리드 컬럼 수">
                     <button id="grid-cols-plus" class="grid-btn" aria-label="컬럼 증가">+</button>
