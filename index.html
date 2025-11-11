@@ -548,7 +548,29 @@
             flex-shrink: 0;
         }
         .control-group.control-group-columns {
-            display: none !important;
+            display: flex !important;
+            align-items: center;
+            gap: 8px;
+        }
+        .grid-slider {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        #grid-cols-range {
+            width: 100px;
+            accent-color: #0a86da;
+        }
+        #grid-cols-minus,
+        #grid-cols-plus {
+            min-width: 28px;
+            height: 28px;
+            padding: 0;
+            font-size: 16px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
         
         .search-controls {

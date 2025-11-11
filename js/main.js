@@ -863,12 +863,16 @@ class WaferMapViewer {
                 this.showSingleContextMenu(e);
             });
 
-        // 🔥 더블클릭 이벤트: 상세 보기 모드 종료
+        // 🔥 더블클릭 이벤트: 상세 보기 모드 종료 또는 그리드로 복귀
         if (this.dom.viewerContainer) {
             this.dom.viewerContainer.addEventListener('dblclick', e => {
                 if (this.detailMode) {
                     console.log('🖱️ [DBLCLICK] 더블클릭으로 상세 보기 모드 종료');
                     this.exitDetailMode();
+                } else if (this.singleImageFromGrid) {
+                    // 🔥 그리드에서 온 단일 이미지 모드일 때 더블클릭으로 그리드 복귀
+                    console.log('🖱️ [DBLCLICK] 더블클릭으로 그리드 복귀 (viewerContainer)');
+                    this.exitSingleImageMode();
                 }
             });
         }
@@ -7274,9 +7278,10 @@ class WaferMapViewer {
             
             // 🔥 Wafer Map Explorer에서 단일 이미지 로드 완료 후 savedViewState 업데이트
             // classification 경로 체크 개선 (제품 폴더 고려)
+            // 🔥 singleImageFromGrid일 때는 덮어쓰지 않음 (그리드 상태 복원을 위해)
             const isClassificationPathEnd = this.isClassificationPath(path);
 
-            if (!isClassificationPathEnd && !fromLabelExplorer) {
+            if (!isClassificationPathEnd && !fromLabelExplorer && !this.singleImageFromGrid) {
                 this.savedViewState = {
                     type: 'single',
                     imagePath: fullPath,
@@ -11750,15 +11755,22 @@ class WaferMapViewer {
             document.documentElement.style.setProperty('--grid-cols', this.gridCols);
         }
 
-        // 🔥 skipSaveState=false면 Wafer Map Explorer, true면 Label Explorer
-        if (!skipSaveState) {
-            // Wafer Map Explorer: 항상 저장, Label Explorer 속성 제거
+        // 🔥 skipSaveState에 따라 스크롤 위치 저장/복원 결정
+        const scrollWrapper = grid?.parentElement;  // .grid-scroll-wrapper
+        let scrollTopToRestore = null;
+
+        if (skipSaveState) {
+            // 🔥 skipSaveState=true: 복원만 수행 (savedViewState에서 스크롤 위치 읽기)
+            if (this.savedViewState && this.savedViewState.scrollTop !== undefined) {
+                scrollTopToRestore = this.savedViewState.scrollTop;
+                console.log('📜 [RESTORE] showGrid에서 스크롤 위치 복원 예정:', scrollTopToRestore);
+            }
+        } else {
+            // 🔥 skipSaveState=false: Wafer Map Explorer - 현재 스크롤 위치 저장
             if (grid && grid.hasAttribute('data-label-explorer-grid')) {
                 grid.removeAttribute('data-label-explorer-grid');
             }
             
-            // 🔥 현재 스크롤 위치 가져오기
-            const scrollWrapper = grid?.parentElement;  // .grid-scroll-wrapper
             const currentScrollTop = scrollWrapper ? scrollWrapper.scrollTop : 0;
             
             this.savedViewState = {
@@ -11767,7 +11779,6 @@ class WaferMapViewer {
                 scrollTop: currentScrollTop
             };
         }
-        // Label Explorer는 skipSaveState=true이므로 여기 들어오지 않음
 
         // 🔥 그리드를 명시적으로 표시 (display: none에서 복원)
         if (grid) {
@@ -11813,8 +11824,33 @@ class WaferMapViewer {
         // 🔥 그리드 재생성 후 레이아웃 캐시 무효화 (드래그 영역 재계산용)
         this.invalidateGridGeometry();
         
+        // 🔥 스크롤 위치 복원 (skipSaveState=true일 때만)
+        if (skipSaveState && scrollTopToRestore !== null && scrollWrapper) {
+            // 그리드 렌더링 완료 후 스크롤 위치 복원
+            const restoreScroll = () => {
+                // grid가 다시 생성되었으므로 scrollWrapper 다시 찾기
+                const currentScrollWrapper = document.querySelector('.grid-scroll-wrapper');
+                if (currentScrollWrapper) {
+                    currentScrollWrapper.scrollTop = scrollTopToRestore;
+                    console.log('📜 [RESTORE] 스크롤 위치 복원 완료:', scrollTopToRestore);
+                    return true;
+                }
+                return false;
+            };
+            
+            // 여러 번 시도 (DOM 렌더링 대기)
+            requestAnimationFrame(() => {
+                if (!restoreScroll()) {
+                    setTimeout(() => {
+                        if (!restoreScroll()) {
+                            setTimeout(restoreScroll, 300);
+                        }
+                    }, 150);
+                }
+            });
+        }
+        
         // 🔥 Grid 스크롤 시 savedViewState 자동 업데이트 (Wafer Map Explorer에서만)
-        const scrollWrapper = grid?.parentElement;
         if (scrollWrapper && !skipSaveState) {
             // 기존 리스너 제거 (중복 방지)
             if (this.gridScrollHandler) {
@@ -13177,12 +13213,10 @@ class WaferMapViewer {
 
         this.hideGrid();
 
-        this.loadImage(this.selectedImages[idx]);
-
-        this.selectedImagePath = this.selectedImages[idx];
-
+        // 🔥 singleImageFromGrid 플래그를 먼저 설정 (loadImage에서 savedViewState 덮어쓰기 방지)
         this.singleImageFromGrid = true;
 
+        // 🔥 키보드 이벤트 핸들러 먼저 설정
         document.addEventListener('keydown', this.boundGridEscapeHandler = (e) => {
             // 🔥 상세 보기 모드에서 ESC 키로 빠져나가기
             if (this.detailMode && e.key === 'Escape') {
@@ -13194,34 +13228,68 @@ class WaferMapViewer {
             if (e.key === 'Escape') this.exitSingleImageMode();
         });
 
-        this.dom.imageCanvas.onclick = null;
+        // 🔥 이미지 로드 (비동기)
+        this.loadImage(this.selectedImages[idx]).then(() => {
+            // 🔥 loadImage 완료 후 imageCanvas에도 더블클릭 핸들러 설정 (이벤트 버블링 보완)
+            if (this.dom.imageCanvas) {
+                this.dom.imageCanvas.ondblclick = (e) => {
+                    e.stopPropagation();
+                    console.log('🖱️ [DBLCLICK] 이미지 캔버스 더블클릭으로 그리드 복귀');
+                    if (this.singleImageFromGrid) {
+                        this.exitSingleImageMode();
+                    }
+                };
+            }
+            console.log('✅ [SETUP] 이미지 로드 완료, 더블클릭으로 그리드 복귀 가능');
+            console.log('✅ [SETUP] singleImageFromGrid:', this.singleImageFromGrid);
+            console.log('✅ [SETUP] savedViewState:', this.savedViewState);
+        }).catch(err => {
+            console.error('❌ [ERROR] loadImage 실패:', err);
+            this.singleImageFromGrid = false;
+        });
 
-        this.dom.imageCanvas.ondblclick = () => this.exitSingleImageMode();
+        this.selectedImagePath = this.selectedImages[idx];
     }
 
     exitSingleImageMode() {
-        if (!this.singleImageFromGrid) return;
-
-        // 🔥 skipSaveState=true로 호출 (이미 저장된 scrollTop 유지)
-        this.showGrid(this.selectedImages, true);
-
-        // 🔥 저장된 스크롤 위치 복원
-        if (this.savedViewState && this.savedViewState.scrollTop !== undefined) {
-            setTimeout(() => {
-                const grid = document.getElementById('image-grid');
-                const scrollWrapper = grid?.parentElement;
-                if (scrollWrapper) {
-                    scrollWrapper.scrollTop = this.savedViewState.scrollTop;
-                }
-            }, 100);
+        if (!this.singleImageFromGrid) {
+            console.log('⚠️ [EXIT] singleImageFromGrid가 false이므로 종료하지 않음');
+            return;
         }
+
+        console.log('🔄 [EXIT] 단일 이미지 모드 종료, 그리드로 복귀');
+        console.log('💾 [DEBUG] savedViewState:', this.savedViewState);
+        console.log('💾 [DEBUG] selectedImages:', this.selectedImages?.length, '개');
+
+        // 🔥 savedViewState에서 이미지 목록 가져오기
+        let imagesToShow = this.selectedImages;
+        if (this.savedViewState && this.savedViewState.type === 'grid' && this.savedViewState.images && this.savedViewState.images.length > 0) {
+            imagesToShow = this.savedViewState.images;
+            this.selectedImages = [...this.savedViewState.images];
+            console.log('💾 [RESTORE] savedViewState에서 이미지 목록 복원:', imagesToShow.length, '개');
+            console.log('💾 [RESTORE] 저장된 스크롤 위치:', this.savedViewState.scrollTop);
+        } else {
+            console.warn('⚠️ [RESTORE] savedViewState가 없거나 유효하지 않음:', this.savedViewState);
+            // 🔥 savedViewState가 없으면 현재 selectedImages 사용
+            if (!imagesToShow || imagesToShow.length === 0) {
+                console.error('❌ [RESTORE] 복원할 이미지가 없습니다!');
+                this.singleImageFromGrid = false;
+                return;
+            }
+            console.log('💾 [RESTORE] savedViewState 없음, 현재 selectedImages 사용:', imagesToShow.length, '개');
+        }
+
+        // 🔥 skipSaveState=true로 호출 (showGrid 내부에서 스크롤 위치 복원)
+        this.showGrid(imagesToShow, true);
 
         this.singleImageFromGrid = false;
 
-        document.removeEventListener('keydown', this.boundGridEscapeHandler);
+        if (this.boundGridEscapeHandler) {
+            document.removeEventListener('keydown', this.boundGridEscapeHandler);
+            this.boundGridEscapeHandler = null;
+        }
 
         this.dom.imageCanvas.onclick = null;
-
         this.dom.imageCanvas.ondblclick = null;
     }
 
