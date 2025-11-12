@@ -516,7 +516,7 @@ export class ChipAnnotator {
         // 🔥 이미지 렌더링 방식과 동일: translate(dx, dy) 후 scale(scale, scale)
         // 이미지 픽셀 (imgX, imgY)는 캔버스 좌표 (imgX * scale + dx, imgY * scale + dy)에 그려짐
         // Y 오프셋을 추가하여 그리드도 칩 선택과 동일한 위치에 그리기
-        const Y_OFFSET = -15; // 칩 선택과 동일한 오프셋 (음수 = 위로)
+        const Y_OFFSET = -18; // 칩 선택과 동일한 오프셋 (음수 = 위로)
         const toCanvas = (imgX, imgY) => ({
             x: imgX * transform.scale + transform.dx,
             y: imgY * transform.scale + transform.dy + Y_OFFSET
@@ -556,7 +556,7 @@ export class ChipAnnotator {
         const rect = chip.rect;
 
         // 🔥 Y 오프셋: 칩 선택을 이미지 위치에 맞추기 위해 위로 올림
-        const Y_OFFSET = -15; // 픽셀 단위 오프셋 (음수 = 위로, 값이 클수록 더 위로)
+        const Y_OFFSET = -18; // 픽셀 단위 오프셋 (음수 = 위로, 값이 클수록 더 위로)
         
         // 🔥 이미지와 동일한 변환: translate 후 scale
         // 이미지: ctx.translate(dx, dy); ctx.scale(scale, scale); ctx.drawImage(img, 0, 0);
