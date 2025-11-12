@@ -1,26 +1,10 @@
 """
 Composite Map 생성 모듈
 여러 웨이퍼 맵의 인덱스별 빈도를 히트맵으로 시각화
-
-성능 최적화:
-- pyvips 사용 (이미지 로딩 2-3배 빠름)
-- 병렬 저장 (저장 시간 50% 개선)
-- PNG compress_level=0 (압축 없음, 더 빠름)
-- 배열 Contiguous 보장 (NumPy 연산 최적화)
-- as_completed 사용 (완료된 작업부터 처리, 더 빠름)
-- 벡터화된 median 계산 (apply_along_axis 대비 10배 빠름)
-- 리소스 누수 방지 (with 문 사용)
-- 🔥 비트마스크 기반 히트맵 생성 (3.44배 빠름, 93.2% 메모리 절감)
-
-추가 최적화 옵션:
-- OpenCV PNG 저장: 팔레트 모드 포기 시 저장 시간 추가 50% 개선 가능
-  ⚠️ 주의: Python 3.13에서는 pillow-simd가 지원되지 않습니다. 일반 Pillow 사용 권장.
 """
 import time
 import warnings
-import base64
-import io
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -28,22 +12,6 @@ from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 from PIL import Image
 from PIL.Image import DecompressionBombWarning
-
-# pyvips import (선택적, 더 빠른 이미지 로딩)
-try:
-    import pyvips
-    PYVIPS_AVAILABLE = True
-except ImportError:
-    pyvips = None
-    PYVIPS_AVAILABLE = False
-
-# OpenCV import (선택적, 더 빠른 이미지 저장)
-try:
-    import cv2
-    CV2_AVAILABLE = True
-except ImportError:
-    cv2 = None
-    CV2_AVAILABLE = False
 
 from .config import (
     IMAGES_ROOT,
@@ -60,54 +28,10 @@ COMPOSITE_ROOT = IMAGES_ROOT / "composite_maps"
 COMPOSITE_ROOT.mkdir(parents=True, exist_ok=True)
 
 def _load_pixel_indices(image_rel_path: str, width: int, height: int) -> Optional[np.ndarray]:
-    """
-    이미지에서 팔레트 인덱스 추출 (pyvips 우선, 없으면 PIL 사용)
-    """
     full_path = IMAGES_ROOT / image_rel_path
     if not full_path.exists():
         return None
-    
     try:
-        # 🔥 pyvips 사용 (더 빠름)
-        if PYVIPS_AVAILABLE:
-            try:
-                img = pyvips.Image.new_from_file(
-                    str(full_path),
-                    access='sequential',
-                    memory=True  # 캐시 활성화
-                )
-                
-                # 크기 확인 및 리사이즈
-                if img.width != width or img.height != height:
-                    img = img.resize(width / img.width, vscale=height / img.height, kernel='nearest')
-                
-                # 팔레트 모드면 인덱스 직접 추출
-                if img.bandfmt == 'uchar' and img.bands == 1:
-                    # 인덱스 배열로 변환
-                    pixel_indices = np.ndarray(
-                        buffer=img.write_to_memory(),
-                        dtype=np.uint8,
-                        shape=(img.height, img.width)
-                    )
-                    # 🔥 C-연속 배열로 보장 (NumPy 연산 속도 향상)
-                    return np.ascontiguousarray(pixel_indices, dtype=np.uint8)
-                else:
-                    # RGB/L 모드면 그레이스케일로 변환 후 인덱스화
-                    if img.bands > 1:
-                        img = img.colourspace('b-w')  # RGB → grayscale
-                    pixels = np.ndarray(
-                        buffer=img.write_to_memory(),
-                        dtype=np.uint8,
-                        shape=(img.height, img.width)
-                    )
-                    pixel_indices = (pixels // 32).astype(np.uint8)
-                    # 🔥 C-연속 배열로 보장 (NumPy 연산 속도 향상)
-                    return np.ascontiguousarray(pixel_indices, dtype=np.uint8)
-            except Exception as pyvips_exc:
-                # pyvips 실패 시 PIL로 fallback
-                pass
-        
-        # 🔥 PIL fallback (pyvips 없거나 실패 시)
         with Image.open(full_path) as img:
             if img.size != (width, height):
                 img = img.resize((width, height), Image.NEAREST)
@@ -117,8 +41,7 @@ def _load_pixel_indices(image_rel_path: str, width: int, height: int) -> Optiona
                 img_l = img.convert('L')
                 pixels = np.array(img_l, dtype=np.uint8)
                 pixel_indices = pixels // 32
-            # 🔥 C-연속 배열로 보장 (NumPy 연산 속도 향상)
-            return np.ascontiguousarray(pixel_indices, dtype=np.uint8)
+            return pixel_indices
     except Exception as exc:
         print(f"[FAST] Composite image load failed: {image_rel_path}, {exc}")
         return None
@@ -131,21 +54,11 @@ def _iter_pixel_indices(
     loader_mode: str,
     max_workers: Optional[int]
 ):
-    """
-    병렬로 팔레트 인덱스 추출 (Fixed: as_completed 사용으로 더 빠름)
-    """
     if not image_paths:
         return []
     normalized_mode = (loader_mode or "thread").lower()
-    # 🔥 워커 수 최적화: cpu_count * 2 (최대 16개)
-    # max_workers가 None이면 자동 최적화, 값이 있으면 그대로 사용
-    import os
-    cpu_count = os.cpu_count() or 4
-    if max_workers is None:
-        optimal_workers = min(cpu_count * 2, 16, len(image_paths))
-        worker_count = min(max(1, optimal_workers), len(image_paths))
-    else:
-        worker_count = min(max(1, max_workers), len(image_paths))
+    max_workers = max_workers or COMPOSITE_MAX_WORKERS
+    worker_count = min(max(1, max_workers), len(image_paths))
     loader = partial(_load_pixel_indices, width=width, height=height)
 
     if normalized_mode in {"sequential", "none"} or worker_count <= 1:
@@ -157,21 +70,9 @@ def _iter_pixel_indices(
     if normalized_mode in {"process", "proc", "multiprocess"}:
         executor_cls = ProcessPoolExecutor
 
-    # 🔥 Fixed: as_completed 사용 (완료된 것부터 처리, 더 빠름)
     with executor_cls(max_workers=worker_count) as executor:
-        future_to_path = {
-            executor.submit(loader, path): path
-            for path in image_paths
-        }
-        
-        for future in as_completed(future_to_path):
-            path = future_to_path[future]
-            try:
-                result = future.result()
-                yield path, result
-            except Exception as exc:
-                print(f"[ERROR] 로드 실패: {path}, {exc}")
-                yield path, None
+        for rel_path, result in zip(image_paths, executor.map(loader, image_paths)):
+            yield rel_path, result
 
 
 
@@ -181,80 +82,12 @@ def _accumulate_batch_pixels(
     idx_array: np.ndarray,
     valid_positions: np.ndarray
 ) -> None:
-    """
-    🔥 최적화: 루프 방식으로 메모리 폭발 방지
-    기존: 4D 배열 생성 (6.4GB) → 개선: 상수 메모리
-    """
     if not batch_pixels or valid_positions.size == 0:
         return
-    
-    # 🔥 루프 방식 - 메모리 상수 (기존 스택 방식 대비 5.6배 빠름)
-    for pixel_indices in batch_pixels:
-        for i, pos in enumerate(valid_positions):
-            idx = idx_array[pos]
-            mask = (pixel_indices == idx)
-            counts[pos] += mask.astype(np.uint32)
-
-
-def _save_heatmap_parallel(args):
-    """
-    히트맵 저장 (병렬 처리용) - 비트마스크 기반
-    
-    🔥 최적화: Presence 기반 히트맵 생성 (3.44배 빠름, 93.2% 메모리 절감)
-    - 동일 포인트 내에 인덱스 0-7만 있는 경우: 특정 인덱스가 있으면 그 인덱스, 없으면 31
-    - 동일 포인트 내에 인덱스 8 이상이 있으면: 인덱스 종류 중 max 값 사용
-    """
-    pos, idx, presence_map, high_mask_combined, high_indices_combined, \
-    gradient_palettes, output_dir, height, width = args
-    
-    try:
-        # 🔥 비트마스크 기반 히트맵 생성
-        result = np.zeros((height, width), dtype=np.uint8)
-        
-        # 1. 인덱스 8 이상이 있는 픽셀: max 값 사용
-        if np.any(high_mask_combined):
-            result[high_mask_combined] = high_indices_combined[high_mask_combined]
-        
-        # 2. 인덱스 0-7만 있는 픽셀 처리
-        low_only_mask = ~high_mask_combined
-        
-        if np.any(low_only_mask):
-            target_bit = 1 << idx
-            has_target = (presence_map & target_bit) != 0
-            
-            # 타겟 인덱스가 있으면 그 인덱스로
-            low_only_pixels = low_only_mask & has_target
-            result[low_only_pixels] = idx
-            
-            # 타겟 인덱스가 없으면 인덱스 31로
-            low_only_no_target = low_only_mask & ~has_target
-            result[low_only_no_target] = 31
-        
-        # 팔레트 모드 이미지 생성
-        heatmap_img = Image.fromarray(result, mode='P')
-        heatmap_img.putpalette(gradient_palettes[idx])
-        
-        # 파일 저장 (compress_level=0으로 최대 속도)
-        heatmap_path = output_dir / f"index_{idx}.png"
-        heatmap_img.save(heatmap_path, format='PNG', optimize=False, compress_level=0)
-        
-        rel_path = heatmap_path.relative_to(IMAGES_ROOT).as_posix()
-        
-        # 통계 계산 (presence 기반)
-        pixel_count = int(np.sum(result == idx))
-        total_pixels = width * height
-        percentage = round(pixel_count / total_pixels * 100, 2) if total_pixels > 0 else 0.0
-        
-        return {
-            "index": idx,
-            "path": rel_path,
-            "pixel_count": pixel_count,
-            "max_count": 1,  # Presence 기반이므로 항상 1
-            "percentage": percentage
-        }
-    except Exception as e:
-        print(f"[ERROR] 히트맵 저장 실패: index_{idx}, {e}")
-        return None
+    stack = np.stack(batch_pixels, axis=0)
+    selected = idx_array[valid_positions]
+    masks = stack[:, None, :, :] == selected[None, :, None, None]
+    counts[valid_positions] += masks.sum(axis=0, dtype=np.uint32)
 
 
 
@@ -267,13 +100,6 @@ def create_composite_heatmaps(
     max_workers: Optional[int] = None,
     batch_size: Optional[int] = None
 ) -> Dict[str, Any]:
-    """
-    Composite Map 생성 함수
-    
-    최적화 설정:
-    - max_workers=None: 자동 최적화 (cpu_count * 2, 최대 16)
-    - batch_size=None: 자동 최적화 (기본 4)
-    """
     """
     Args:
         image_paths: 처리할 이미지 경로 목록 (IMAGES_ROOT 기준 상대 경로)
@@ -298,25 +124,22 @@ def create_composite_heatmaps(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # 2. 첫 번째 이미지에서 크기 및 팔레트 추출
-    # 🔥 Fixed: with 문 사용 (리소스 누수 방지)
     first_path = IMAGES_ROOT / image_paths[0]
-    if not first_path.exists():
-        raise FileNotFoundError(f"첫 번째 이미지를 찾을 수 없습니다: {first_path}")
-    
-    with Image.open(first_path) as first_img:
-        width, height = first_img.size
-        source_palette = first_img.getpalette() if first_img.mode == 'P' else None
-        
+    first_img = Image.open(first_path)
+    width, height = first_img.size
+
+    # 🔥 원본 팔레트 추출
+    source_palette = None
+    if first_img.mode == 'P':
+        source_palette = first_img.getpalette()
         # 사용된 인덱스 자동 감지
         if indices is None:
-            try:
-                pixels = np.array(first_img)
-                unique_indices = np.unique(pixels)
-                indices = sorted([int(i) for i in unique_indices if i < 256])
-                print(f"[INFO] 자동 감지 인덱스: {indices}")
-            except Exception as e:
-                print(f"[WARNING] 인덱스 자동 감지 실패: {e}")
-                indices = list(range(8))
+            pixels = np.array(first_img)
+            unique_indices = np.unique(pixels)
+            indices = sorted([int(i) for i in unique_indices if i < 256])
+            print(f"[INFO] 추출된 팔레트 인덱스: {indices}")
+
+    first_img.close()
 
     if indices is None:
         indices = list(range(8))  # 기본값
@@ -330,47 +153,36 @@ def create_composite_heatmaps(
     counts = np.zeros((len(idx_array), height, width), dtype=np.uint32)
     valid_positions = np.where(idx_array < 8)[0]
     
-    # 🔥 인덱스 8 이상 픽셀 처리: 온라인 최댓값 계산 (메모리 절감)
-    # 기존: 모든 이미지 스택 (6.4GB) → 개선: 누적 maximum (16MB)
-    high_indices_combined = np.zeros((height, width), dtype=np.uint8)  # 온라인 최댓값
+    # 🔥 인덱스 8 이상 픽셀 처리: 각 포인트에서 모든 이미지의 인덱스 8 이상 값 중 최댓값 사용
+    # 모든 이미지의 인덱스 8 이상 값을 수집하기 위한 리스트
+    high_indices_list = []  # 각 이미지의 인덱스 8 이상 값만 저장 (마스크 적용)
     high_mask_combined = np.zeros((height, width), dtype=bool)  # 인덱스 8 이상 픽셀 마스크
 
     all_indices_list = [] if create_sum else None
 
     # 4. 모든 이미지 순회 (카운트 누적, 합성 최적화)
-    print("[INFO] 이미지 처리 중...")
-    loading_start = time.time()
-    
     processed_count = 0
-    
-    # 🔥 최적화 설정 로깅
-    import os
-    cpu_count = os.cpu_count() or 4
-    optimal_workers = min(cpu_count * 2, 16, len(image_paths))
-    effective_workers = max_workers if max_workers is not None else optimal_workers
-    effective_batch = max(1, batch_size if batch_size is not None else max(COMPOSITE_BATCH_SIZE, 4))
-    
-    print(f"[INFO] 최적화 설정: 워커={effective_workers}개 (CPU={cpu_count}), 배치={effective_batch}")
-    
     pixel_loader = _iter_pixel_indices(
         image_paths,
         width,
         height,
         loader_mode or COMPOSITE_LOADER_MODE,
-        max_workers  # None이면 자동 최적화
+        max_workers or COMPOSITE_MAX_WORKERS
     )
+    effective_batch = max(1, batch_size or COMPOSITE_BATCH_SIZE)
     batch_pixels: List[np.ndarray] = []
 
     for img_path, pixel_indices in pixel_loader:
         if pixel_indices is None:
             continue
 
-        # 🔥 인덱스 8 이상 픽셀 마스크 및 온라인 최댓값 계산 (메모리 절감)
+        # 🔥 인덱스 8 이상 픽셀 마스크 및 값 수집
         high_mask = (pixel_indices >= 8)
         high_mask_combined |= high_mask
         
-        # 🔥 온라인 maximum 계산 (스택 대신 누적)
-        high_indices_combined = np.maximum(high_indices_combined, np.where(high_mask, pixel_indices, 0))
+        # 🔥 인덱스 8 이상 값만 추출 (0으로 마스킹하여 나중에 최댓값 계산 시 무시)
+        high_values = np.where(high_mask, pixel_indices, 0)
+        high_indices_list.append(high_values)
         
         # 🔥 비트마스크 누적: 인덱스 0~7만 처리 (메모리 절감)
         low_mask = (pixel_indices < 8)
@@ -389,137 +201,164 @@ def create_composite_heatmaps(
         if len(batch_pixels) >= effective_batch:
             _accumulate_batch_pixels(batch_pixels, counts, idx_array, valid_positions)
             batch_pixels.clear()
-        
-        if processed_count % 50 == 0:
-            print(f"  처리 중... {processed_count}개")
 
-    # 남은 배치 처리
     if batch_pixels:
         _accumulate_batch_pixels(batch_pixels, counts, idx_array, valid_positions)
-    
-    loading_time = time.time() - loading_start
-    print(f"[INFO] 이미지 로딩 완료: {processed_count}개, {loading_time:.2f}초")
-    
     max_count = processed_count
     
-    # 🔥 팔레트 RGB 배열 사전 계산 (속도 최적화 - 루프 제거)
+    # 🔥 각 포인트에서 모든 이미지의 인덱스 8 이상 값 중 최댓값 계산
+    high_indices_combined = np.zeros((height, width), dtype=np.uint8)
+    if high_indices_list:
+        # 모든 이미지의 인덱스 8 이상 값을 스택 (N, height, width)
+        high_indices_stack = np.stack(high_indices_list, axis=0)
+        # 각 포인트에서 최댓값 계산 (axis=0: 이미지 차원)
+        high_indices_combined = np.max(high_indices_stack, axis=0).astype(np.uint8)
+        # 마스크가 False인 위치는 0으로 유지 (이미 0이므로 변경 불필요)
+    
+    # 🔥 팔레트 RGB 배열 사전 계산 (속도 최적화)
+    palette_rgb = None
     if source_palette:
-        # 🔥 한 줄로 완료 (기존 256번 루프 제거)
-        palette_array = np.array(source_palette, dtype=np.uint8)
-        if len(palette_array) >= 768:
-            palette_rgb = palette_array[:768].reshape(256, 3)
-        else:
-            # 부족한 경우 기본값으로 채움
-            palette_rgb = np.zeros((256, 3), dtype=np.uint8)
-            palette_rgb[:len(palette_array)//3] = palette_array[:len(palette_array)//3*3].reshape(-1, 3)
-            palette_rgb[len(palette_array)//3:] = 128  # 기본 색상
+        palette_rgb = np.zeros((256, 3), dtype=np.uint8)
+        for i in range(256):
+            palette_idx = i * 3
+            if palette_idx + 2 < len(source_palette):
+                palette_rgb[i] = [
+                    source_palette[palette_idx],
+                    source_palette[palette_idx + 1],
+                    source_palette[palette_idx + 2]
+                ]
+            else:
+                palette_rgb[i] = [128, 128, 128]  # 기본 색상
     else:
         palette_rgb = np.full((256, 3), 128, dtype=np.uint8)  # 기본 회색
 
-    # 🔥 그라데이션 팔레트 생성 함수 (흰색 → 원본 색상)
-    def _create_gradient_palette(orig_r: int, orig_g: int, orig_b: int) -> List[int]:
-        """흰색(255,255,255)에서 원본 색상(orig_r,orig_g,orig_b)으로 그라데이션 팔레트 생성"""
-        palette = []
-        for i in range(256):
-            # i=0 → 흰색(255,255,255), i=255 → 원본 색상
-            ratio = i / 255.0
-            r = int(255.0 - (255.0 - orig_r) * ratio)
-            g = int(255.0 - (255.0 - orig_g) * ratio)
-            b = int(255.0 - (255.0 - orig_b) * ratio)
-            palette.extend([r, g, b])
-        return palette
-
-    # 🔥 그라데이션 팔레트 사전 계산 (8개 인덱스마다 반복 생성 방지)
-    gradient_palettes = {}
-    for idx in indices:
-        if idx < 8:  # 인덱스 0-7만 처리
-            orig_r, orig_g, orig_b = palette_rgb[idx]
-            gradient_palettes[idx] = _create_gradient_palette(orig_r, orig_g, orig_b)
-
-    # 7. 히트맵 생성 및 저장 (병렬)
-    print("[INFO] 히트맵 생성 및 저장 중...")
-    save_start = time.time()
-    
     heatmaps: List[Dict[str, Any]] = []
-    
-    # 🔥 병렬 저장 준비 (비트마스크 기반)
-    save_args = []
+
     for pos, idx in enumerate(indices):
         if idx >= 8:
-            continue
-        save_args.append((
-            pos, idx, presence_map,  # 카운트 배열 대신 presence_map 사용
-            high_mask_combined, high_indices_combined,
-            gradient_palettes, output_dir, height, width
-        ))
-    
-    # 🔥 병렬 저장 실행 (4개 워커)
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        futures = [
-            executor.submit(_save_heatmap_parallel, args)
-            for args in save_args
-        ]
-        for future in as_completed(futures):
-            result = future.result()
-            if result:
-                heatmaps.append(result)
-    
-    # 인덱스 순서대로 정렬
-    heatmaps.sort(key=lambda x: x['index'])
+            continue  # 인덱스 8 이상은 히트맵 생성하지 않음 (원본 색상으로만 표시)
+            
+        heatmap_path = output_dir / f"index_{idx}.png"
+        
+        # 🔥 비트마스크 기반 히트맵 생성
+        # 로직:
+        # 1. 인덱스 8 이상이 있는 픽셀: max 값 사용
+        # 2. 인덱스 0-7만 있는 픽셀:
+        #    - 특정 인덱스가 있으면 그 인덱스로
+        #    - 없으면 인덱스 31로
+        # 🔥 초기값을 31로 설정 (인덱스가 없는 포인트는 모두 31)
+        result = np.full((height, width), 31, dtype=np.uint8)
+        
+        # 1. 인덱스 8 이상이 있는 픽셀: max 값 사용
+        if np.any(high_mask_combined):
+            result[high_mask_combined] = high_indices_combined[high_mask_combined]
+        
+        # 2. 인덱스 0-7만 있는 픽셀 처리
+        low_only_mask = ~high_mask_combined
+        
+        if np.any(low_only_mask):
+            target_bit = 1 << idx
+            has_target = (presence_map & target_bit) != 0
+            
+            # 타겟 인덱스가 있으면 그 인덱스로 (31에서 덮어쓰기)
+            low_only_pixels = low_only_mask & has_target
+            result[low_only_pixels] = idx
+            
+            # 타겟 인덱스가 없으면 31로 유지 (이미 31로 초기화됨)
+        
+        # 🔥 팔레트 모드 이미지 생성
+        heatmap_img = Image.fromarray(result, mode='P')
+        
+        # 🔥 그라데이션 팔레트 생성 (흰색 → 원본 색상)
+        # 인덱스 31은 흰색으로 설정 (인덱스가 없는 포인트)
+        orig_r, orig_g, orig_b = palette_rgb[idx]
+        gradient_palette = []
+        for i in range(256):
+            if i == 31:
+                # 인덱스 31: 흰색 (인덱스가 없는 포인트)
+                gradient_palette.extend([255, 255, 255])
+            else:
+                ratio = i / 255.0
+                r = int(255.0 - (255.0 - orig_r) * ratio)
+                g = int(255.0 - (255.0 - orig_g) * ratio)
+                b = int(255.0 - (255.0 - orig_b) * ratio)
+                gradient_palette.extend([r, g, b])
+        heatmap_img.putpalette(gradient_palette)
+        
+        # 🔥 PNG로 저장 (최적화: 빠른 압축 레벨)
+        heatmap_img.save(heatmap_path, format='PNG', optimize=False, compress_level=0)
 
-    # 8. Sum Map 생성 (원본 팔레트 적용, 빈 부분은 흰색)
-    # 🔥 Fixed: 벡터화된 median 계산 (apply_along_axis 대비 10배 빠름)
+        # 상대 경로
+        rel_path = heatmap_path.relative_to(IMAGES_ROOT).as_posix()
+
+        # 통계 계산 (presence 기반)
+        pixel_count = int(np.sum(result == idx))  # 해당 인덱스가 있는 픽셀 개수
+        total_pixels = width * height
+        percentage = round(pixel_count / total_pixels * 100, 2) if total_pixels > 0 else 0.0
+
+        heatmaps.append({
+            "index": idx,
+            "path": rel_path,
+            "pixel_count": pixel_count,
+            "max_count": 1,  # Presence 기반이므로 항상 1
+            "percentage": percentage
+        })
+
+    # 6. Sum Map 생성 (원본 팔레트 적용, 빈 부분은 흰색)
     sum_map_rel_path = None
     if create_sum and all_indices_list:
-        print("[INFO] Sum Map 생성 중...")
+        # 3차원 배열로 스택 (N, height, width)
         all_indices = np.stack(all_indices_list, axis=0)
-        
-        # 🔥 Fixed: np.median 직접 사용 (벡터화, 더 빠름)
-        if all_indices.shape[0] == 0:
-            sum_map_indices = np.zeros((all_indices.shape[1], all_indices.shape[2]), dtype=np.uint8)
-        else:
-            sum_map_indices = np.median(all_indices, axis=0).astype(np.uint8)
-        
-        # 🔥 팔레트 모드 이미지 생성 (메모리 1/3, 속도 3배 향상)
-        sum_map_img = Image.fromarray(sum_map_indices, mode='P')
-        
-        # 🔥 원본 팔레트 적용 (또는 기본 팔레트)
-        if source_palette:
-            sum_map_img.putpalette(source_palette)
-        else:
-            # 기본 회색 팔레트 생성
-            default_palette = []
-            for i in range(256):
-                gray = 255 - i  # 0→흰색, 255→검정
-                default_palette.extend([gray, gray, gray])
-            sum_map_img.putpalette(default_palette)
 
-        # 🔥 파일로 저장 (썸네일 생성 및 피라미드 생성을 위해)
-        # 팔레트 모드는 PIL이 최적 (OpenCV는 팔레트 미지원)
-        sum_map_path = output_dir / "sum_map.png"
-        sum_map_img.save(sum_map_path, format='PNG', optimize=False, compress_level=0)
+        # 각 픽셀 위치에서 median 계산
+        sum_map_indices = np.median(all_indices, axis=0).astype(np.uint8)
         
-        # 상대 경로
+        # 🔥 모든 이미지에서 해당 위치가 0인 경우 (빈 부분) 감지
+        # 모든 이미지에서 값이 0인 픽셀을 찾기 위해 합계 계산
+        all_zero_mask = np.all(all_indices == 0, axis=0)
+        
+        # 🔥 빈 부분은 흰색(255, 255, 255)으로, 나머지는 원본 팔레트 적용
+        # RGB 모드로 변환하여 빈 부분을 흰색으로 표시 (벡터화 연산)
+        if source_palette:
+            # 🔥 팔레트를 RGB 배열로 변환 (벡터화를 위한 사전 계산)
+            palette_rgb = np.array([
+                [
+                    source_palette[i * 3] if i * 3 < len(source_palette) else 255,
+                    source_palette[i * 3 + 1] if i * 3 + 1 < len(source_palette) else 255,
+                    source_palette[i * 3 + 2] if i * 3 + 2 < len(source_palette) else 255
+                ]
+                for i in range(256)
+            ], dtype=np.uint8)
+            
+            # 🔥 인덱스별 RGB 값 추출 (벡터화)
+            rgb_array = palette_rgb[sum_map_indices]  # (height, width, 3)
+            
+            # 🔥 빈 부분은 흰색으로 설정 (벡터화)
+            rgb_array[all_zero_mask] = [255, 255, 255]
+            
+            sum_map_img = Image.fromarray(rgb_array, mode='RGB')
+        else:
+            # 팔레트가 없으면 그레이스케일로 처리 (빈 부분은 흰색)
+            sum_map_gray = np.where(all_zero_mask, 255, sum_map_indices)
+            sum_map_img = Image.fromarray(sum_map_gray, mode='L')
+
+        sum_map_path = output_dir / "sum_map.png"
+        sum_map_img.save(sum_map_path, format='PNG')
+
         sum_map_rel_path = sum_map_path.relative_to(IMAGES_ROOT).as_posix()
-    
-    save_time = time.time() - save_start
+
     processing_time = time.time() - start_time
-    
-    print(f"[INFO] 저장 완료: {save_time:.2f}초")
-    print(f"[INFO] 전체 처리: {processing_time:.2f}초")
 
     result = {
         "output_dir": output_dir.relative_to(IMAGES_ROOT).as_posix(),
         "heatmaps": heatmaps,
         "source_images": processed_count,
         "image_size": {"width": width, "height": height},
-        "processing_time": round(processing_time, 2),
-        "loading_time": round(loading_time, 2),
-        "save_time": round(save_time, 2),
+        "processing_time": round(processing_time, 2)
     }
 
     if sum_map_rel_path:
-        result["sum_map_path"] = sum_map_rel_path  # 🔥 파일 경로 반환
+        result["sum_map_path"] = sum_map_rel_path
 
     return result
 
