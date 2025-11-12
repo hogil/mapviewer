@@ -96,7 +96,7 @@ def detect_chips_with_edges(image_path: str):
             chip_info = {
                 "x_abs": int(x_abs),
                 "y_abs": int(y_abs),
-                "b": f"B{idx:03d}",
+                "b": idx,
                 "x_cal": int(x_abs),
                 "y_cal": int(y_abs),
                 "text3": f"{idx:03d}",

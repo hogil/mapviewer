@@ -39,6 +39,7 @@ IO_THREADS = int(os.getenv("IO_THREADS", "0")) or max(16, CPU_COUNT * 2)   # Ubu
 THUMBNAIL_SEM = int(os.getenv("THUMBNAIL_SEM", "128"))                     # Ubuntu 24 최적화: 128로 증가
 COMPOSITE_MAX_WORKERS = int(os.getenv("COMPOSITE_MAX_WORKERS", "4"))
 COMPOSITE_LOADER_MODE = os.getenv("COMPOSITE_LOADER_MODE", "thread").strip().lower() or "thread"
+COMPOSITE_BATCH_SIZE = max(1, int(os.getenv("COMPOSITE_BATCH_SIZE", "2")))
 
 # SEARCH_WORKERS: CPU 코어수의 2배 (I/O 바운드 작업에 최적)
 # 최소 4개, 최대 CPU_COUNT * 2개

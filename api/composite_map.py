@@ -13,7 +13,12 @@ import numpy as np
 from PIL import Image
 from PIL.Image import DecompressionBombWarning
 
-from .config import IMAGES_ROOT, COMPOSITE_MAX_WORKERS, COMPOSITE_LOADER_MODE
+from .config import (
+    IMAGES_ROOT,
+    COMPOSITE_MAX_WORKERS,
+    COMPOSITE_LOADER_MODE,
+    COMPOSITE_BATCH_SIZE,
+)
 
 Image.MAX_IMAGE_PIXELS = None
 warnings.simplefilter("ignore", DecompressionBombWarning)
@@ -71,12 +76,29 @@ def _iter_pixel_indices(
 
 
 
+def _accumulate_batch_pixels(
+    batch_pixels: List[np.ndarray],
+    counts: np.ndarray,
+    idx_array: np.ndarray,
+    valid_positions: np.ndarray
+) -> None:
+    if not batch_pixels or valid_positions.size == 0:
+        return
+    stack = np.stack(batch_pixels, axis=0)
+    selected = idx_array[valid_positions]
+    masks = stack[:, None, :, :] == selected[None, :, None, None]
+    counts[valid_positions] += masks.sum(axis=0, dtype=np.uint32)
+
+
+
+
 def create_composite_heatmaps(
     image_paths: List[str],
     indices: List[int] = None,
     create_sum: bool = True,
     loader_mode: Optional[str] = None,
-    max_workers: Optional[int] = None
+    max_workers: Optional[int] = None,
+    batch_size: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Args:
@@ -127,13 +149,14 @@ def create_composite_heatmaps(
     counts = np.zeros((len(idx_array), height, width), dtype=np.uint32)
     valid_positions = np.where(idx_array < 8)[0]
     
-    # 🔥 인덱스 8 이상 픽셀 누적 (모든 이미지에서 OR 연산으로 합치기, 원본 색상 표시용)
-    high_indices_combined = np.zeros((height, width), dtype=np.uint8)  # 최종 인덱스 값
+    # 🔥 인덱스 8 이상 픽셀 처리: 각 포인트에서 모든 이미지의 인덱스 8 이상 값 중 최댓값 사용
+    # 모든 이미지의 인덱스 8 이상 값을 수집하기 위한 리스트
+    high_indices_list = []  # 각 이미지의 인덱스 8 이상 값만 저장 (마스크 적용)
     high_mask_combined = np.zeros((height, width), dtype=bool)  # 인덱스 8 이상 픽셀 마스크
 
     all_indices_list = [] if create_sum else None
 
-    # 🔥 4. 단일 패스로 모든 이미지 처리 (카운트 누적, 벡터화 최적화)
+    # 4. 모든 이미지 순회 (카운트 누적, 합성 최적화)
     processed_count = 0
     pixel_loader = _iter_pixel_indices(
         image_paths,
@@ -142,31 +165,44 @@ def create_composite_heatmaps(
         loader_mode or COMPOSITE_LOADER_MODE,
         max_workers or COMPOSITE_MAX_WORKERS
     )
+    effective_batch = max(1, batch_size or COMPOSITE_BATCH_SIZE)
+    batch_pixels: List[np.ndarray] = []
+
     for img_path, pixel_indices in pixel_loader:
         if pixel_indices is None:
             continue
 
-        # ?? �ε��� 8 �̻� �ȼ� ���� (OR �������� ��ġ��, ���� ���� ����)
+        # 🔥 인덱스 8 이상 픽셀 마스크 및 값 수집
         high_mask = (pixel_indices >= 8)
         high_mask_combined |= high_mask
-        high_indices_combined = np.where(high_mask, pixel_indices, high_indices_combined)
+        
+        # 🔥 인덱스 8 이상 값만 추출 (0으로 마스킹하여 나중에 최댓값 계산 시 무시)
+        high_values = np.where(high_mask, pixel_indices, 0)
+        high_indices_list.append(high_values)
 
-        # [FAST] vectorized count update
-        if valid_positions.size:
-            selected_indices = idx_array[valid_positions]
-            masks = (pixel_indices[None, :, :] == selected_indices[:, None, None])
-            counts[valid_positions] += masks.astype(np.uint32)
+        batch_pixels.append(pixel_indices)
 
         if create_sum:
             all_indices_list.append(pixel_indices.astype(np.uint8))
 
         processed_count += 1
 
-    # 5. 인덱스별 히트맵 생성 (카운트 기반, 원본 팔레트 색상 사용, 인덱스 8 이상 원본 색상)
-    heatmaps = []
-    
-    # 🔥 전체 이미지 개수 (정규화 기준)
+        if len(batch_pixels) >= effective_batch:
+            _accumulate_batch_pixels(batch_pixels, counts, idx_array, valid_positions)
+            batch_pixels.clear()
+
+    if batch_pixels:
+        _accumulate_batch_pixels(batch_pixels, counts, idx_array, valid_positions)
     max_count = processed_count
+    
+    # 🔥 각 포인트에서 모든 이미지의 인덱스 8 이상 값 중 최댓값 계산
+    high_indices_combined = np.zeros((height, width), dtype=np.uint8)
+    if high_indices_list:
+        # 모든 이미지의 인덱스 8 이상 값을 스택 (N, height, width)
+        high_indices_stack = np.stack(high_indices_list, axis=0)
+        # 각 포인트에서 최댓값 계산 (axis=0: 이미지 차원)
+        high_indices_combined = np.max(high_indices_stack, axis=0).astype(np.uint8)
+        # 마스크가 False인 위치는 0으로 유지 (이미 0이므로 변경 불필요)
     
     # 🔥 팔레트 RGB 배열 사전 계산 (속도 최적화)
     palette_rgb = None
@@ -184,6 +220,8 @@ def create_composite_heatmaps(
                 palette_rgb[i] = [128, 128, 128]  # 기본 색상
     else:
         palette_rgb = np.full((256, 3), 128, dtype=np.uint8)  # 기본 회색
+
+    heatmaps: List[Dict[str, Any]] = []
 
     for pos, idx in enumerate(indices):
         if idx >= 8:
@@ -300,6 +338,80 @@ def create_composite_heatmaps(
         result["sum_map_path"] = sum_map_rel_path
 
     return result
+
+
+def create_palette_overlay(
+    image_paths: List[str],
+    focus_index: Optional[int] = 3,
+    highlight_threshold: int = 8,
+    loader_mode: Optional[str] = None,
+    max_workers: Optional[int] = None
+) -> Dict[str, Any]:
+    """
+    지정된 팔레트 인덱스와 고인덱스만 빠르게 합성하는 경량 모드.
+    - focus_index: 관심 팔레트 인덱스 (None이면 저인덱스 무시)
+    - highlight_threshold: 이 값 이상인 인덱스는 원본 색으로 유지
+    """
+    start_time = time.time()
+    if not image_paths:
+        raise ValueError("image_paths is empty")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = COMPOSITE_ROOT / timestamp
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    first_path = IMAGES_ROOT / image_paths[0]
+    first_img = Image.open(first_path)
+    width, height = first_img.size
+    source_palette = first_img.getpalette() if first_img.mode == 'P' else None
+    first_img.close()
+
+    # 최종 결과: 각 픽셀에서 최대 인덱스만 유지
+    aggregated = np.zeros((height, width), dtype=np.uint8)
+    pixel_loader = _iter_pixel_indices(
+        image_paths,
+        width,
+        height,
+        loader_mode or COMPOSITE_LOADER_MODE,
+        max_workers or COMPOSITE_MAX_WORKERS
+    )
+
+    processed_count = 0
+    for _, pixel_indices in pixel_loader:
+        if pixel_indices is None:
+            continue
+        processed_count += 1
+        
+        # 필터링: 0~7 중 focus_index만 남기고 나머지는 0으로, 8 이상은 그대로
+        filtered = np.zeros_like(pixel_indices)
+        
+        # 8 이상 인덱스는 그대로 유지
+        high_mask = (pixel_indices >= highlight_threshold)
+        filtered[high_mask] = pixel_indices[high_mask]
+        
+        # focus_index만 남김 (0~7 범위 내)
+        if focus_index is not None and 0 <= focus_index < highlight_threshold:
+            focus_mask = (pixel_indices == focus_index)
+            filtered[focus_mask] = focus_index
+        
+        # 겹치면 max index로 (높은 인덱스 우선)
+        aggregated = np.maximum(aggregated, filtered)
+
+    overlay_img = Image.fromarray(aggregated, mode='P')
+    if source_palette:
+        overlay_img.putpalette(source_palette)
+    overlay_path = output_dir / f"palette_focus_{focus_index if focus_index is not None else 'none'}.png"
+    overlay_img.save(overlay_path)
+
+    return {
+        "mode": "palette",
+        "output_dir": overlay_path.parent.relative_to(IMAGES_ROOT).as_posix(),
+        "overlay_path": overlay_path.relative_to(IMAGES_ROOT).as_posix(),
+        "focus_index": focus_index,
+        "highlight_threshold": highlight_threshold,
+        "source_images": processed_count,
+        "processing_time": round(time.time() - start_time, 2)
+    }
 
 
 def create_sum_map(

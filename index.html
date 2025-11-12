@@ -546,6 +546,7 @@
             align-items: center;
             gap: 4px;
             flex-shrink: 0;
+            margin-right: 16px;
         }
         .control-group.control-group-columns {
             display: flex !important;
@@ -578,7 +579,7 @@
             display: flex;
             align-items: center;
             gap: 6px;
-            margin-left: 32px;
+            margin-left: 0;
             flex: 1 1 auto;
             min-width: 0;
         }
@@ -590,10 +591,14 @@
             border-radius: 4px !important;
             font-size: 13px !important;
             padding: 4px 8px !important;
-            width: 240px !important;
-            max-width: 50% !important;
-            min-width: 180px !important;
+            width: 180px !important;
+            max-width: 40% !important;
+            min-width: 150px !important;
             transition: border-color 0.2s ease;
+        }
+        
+        #clear-cache-btn {
+            margin-left: 16px;
         }
         
         #file-search:focus {
@@ -1334,6 +1339,13 @@
             font-weight: 500;
         }
 
+        #chip-coordinate-box #coord-chip-rel {
+            font-family: 'Consolas', 'Courier New', monospace;
+            text-align: right;
+            min-width: 3ch;
+            display: inline-block;
+        }
+
         .chip-label-legend {
             position: relative;
             width: 240px;
@@ -1465,6 +1477,28 @@
             width: 360px;
             min-width: 180px;
             max-width: 480px;
+        }
+        
+        #new-class-input {
+            background: #1a1a1a;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 6px 12px;
+            font-size: 14px;
+            outline: none;
+            pointer-events: auto !important;
+            user-select: text !important;
+        }
+        
+        #new-class-input:focus {
+            border-color: #09f;
+            box-shadow: 0 0 0 2px rgba(0, 153, 255, 0.2);
+        }
+        
+        #new-class-input:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
         
         .class-manager-btn-row {
@@ -2167,7 +2201,7 @@
                     <button id="class-mode-chip-btn" class="grid-btn" style="flex: 1; padding: 8px; font-size: 14px;">Chip</button>
                 </div>
                 <div style="margin-bottom: 10px; display: flex; justify-content: flex-start;">
-                    <input type="text" id="new-class-input" placeholder="" style="width: 240px; min-width: 120px; max-width: 320px;" aria-label="새 클래스 입력" />
+                    <input type="text" id="new-class-input" placeholder="클래스명 입력" style="width: 240px; min-width: 120px; max-width: 320px; background: #1a1a1a; color: #fff; border: 1px solid #555; border-radius: 4px; padding: 6px 12px; font-size: 14px;" aria-label="새 클래스 입력" autocomplete="off" />
                 </div>
                 <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
                     <button id="add-class-btn" class="grid-btn" aria-label="클래스 추가">Add Class</button>
@@ -2442,6 +2476,54 @@
                 <button type="button" id="color-editor-restore-btn">복원</button>
                 <button type="button" id="color-editor-cancel-btn">취소</button>
                 <button type="button" id="color-editor-apply-btn" disabled>적용</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Chip View Modal -->
+    <div id="chip-view-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content" style="max-width: 95vw; max-height: 95vh; width: auto; height: auto;">
+            <div class="modal-header">
+                <div class="modal-title">Chip 상세 보기</div>
+                <button class="modal-close" id="chip-view-close">&times;</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 8px; padding: 8px 12px;">
+                <div style="display: flex; gap: 12px;">
+                    <div style="flex: 1; padding: 0; display: flex; align-items: flex-start; justify-content: flex-start;">
+                        <canvas id="chip-view-canvas" style="border: 1px solid #444; background: #000;"></canvas>
+                    </div>
+                    <div style="width: 280px; display: flex; flex-direction: column; gap: 8px;">
+                        <div style="background: #2a2a2a; padding: 10px; border-radius: 4px;">
+                            <div style="font-weight: 600; margin-bottom: 8px; font-size: 15px;">Position</div>
+                            <div style="font-size: 14px; color: #ccc; line-height: 1.8;">
+                                <div style="text-align: left;">
+                                    <span style="display: inline-block; text-align: left; white-space: pre;">Abs    :</span>
+                                    <span id="chip-view-abs-coords" style="margin-left: 4px;">-</span>
+                                </div>
+                                <div style="text-align: left;">
+                                    <span style="display: inline-block; text-align: left; white-space: pre;">Rel     :</span>
+                                    <span id="chip-view-rel-coords" style="margin-left: 4px;">-</span>
+                                </div>
+                                <div style="text-align: left;">
+                                    <span style="display: inline-block; text-align: left; white-space: pre;">B        :</span>
+                                    <span id="chip-view-b-value" style="margin-left: 4px;">-</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="background: #2a2a2a; padding: 10px; border-radius: 4px;">
+                            <div style="font-weight: 600; margin-bottom: 8px; font-size: 15px;">파일 정보</div>
+                            <div style="font-size: 14px; color: #ccc; word-break: break-all;">
+                                <div id="chip-view-file-path">-</div>
+                            </div>
+                        </div>
+                        <div style="background: #2a2a2a; padding: 10px; border-radius: 4px;">
+                            <div style="font-weight: 600; margin-bottom: 8px; font-size: 15px;">Color Legend</div>
+                            <div id="chip-view-color-legend" style="display: flex; flex-direction: column; gap: 8px; font-size: 15px;">
+                                <!-- Color legend items will be inserted here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

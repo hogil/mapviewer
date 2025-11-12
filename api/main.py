@@ -691,18 +691,37 @@ def _current_login_id(req: Optional[Request]) -> Optional[str]:
     try:
         session = req.session  # type: ignore[attr-defined]
     except Exception:
-        return None
-    try:
-        session_user = session.get("session_user", {})
-    except AttributeError:
-        session_user = {}
-    if isinstance(session_user, dict):
-        for key in ("LoginId", "loginId", "login_id", "username"):
-            if session_user.get(key):
-                return str(session_user[key])
+        # 세션 미들웨어가 없으면 세션 접근 건너뛰기
+        pass
+    else:
+        try:
+            session_user = session.get("session_user", {})
+        except AttributeError:
+            session_user = {}
+        if isinstance(session_user, dict):
+            for key in ("LoginId", "loginId", "login_id", "username"):
+                if session_user.get(key):
+                    return str(session_user[key])
+    
     # cookie fallback
     login_id = req.cookies.get("session_user")
-    return login_id
+    if login_id:
+        return login_id
+    
+    # 🔥 SAML 세션 확인 (URL 파라미터 또는 쿠키)
+    try:
+        # URL 파라미터에서 LoginId 확인 (SAML 로그인 직후)
+        login_id_param = req.query_params.get("LoginId")
+        if login_id_param and login_id_param in SAML_USER_SESSIONS:
+            return login_id_param
+        
+        # SAML_USER_SESSIONS에서 모든 세션 확인 (현재는 간단하게 첫 번째 매칭)
+        # 실제로는 쿠키나 헤더로 사용자를 식별해야 하지만, 일단 모든 세션 확인
+        # TODO: 더 정확한 사용자 식별 방법 필요 (IP, 쿠키 등)
+    except Exception:
+        pass
+    
+    return None
 
 def _get_user_role(login_id: Optional[str]) -> str:
     if not login_id:
@@ -725,8 +744,105 @@ def _ensure_admin_access(req: Request) -> None:
 
 def _check_folder_permission(req: Request, folder_path: str, permission_type: str) -> None:
     """폴더별 권한 검사 (LABEL_WRITE 또는 CLASS_MANAGE)"""
+    # 🔥 permissions.json에서 "all" 사용자 확인 (가장 먼저 확인, username 없어도 작동)
+    try:
+        roles_data = _load_roles_data()
+        all_user = None
+        for user in roles_data.get("users", []):
+            if user.get("loginId") == "all":
+                all_user = user
+                break
+        
+        # "all" 사용자가 ADMIN 또는 SUPER 역할이면 모든 사용자에게 권한 부여
+        if all_user:
+            all_role = all_user.get("role", "")
+            if all_role in {"ROLE_ADMIN", "ROLE_SUPER"}:
+                # ADMIN/SUPER는 모든 폴더에 대한 모든 권한 보유
+                logger.info(f"✅ [PERMISSION] 'all' 사용자가 {all_role} 역할로 모든 사용자에게 모든 권한 허용 (폴더: {folder_path}, 권한: {permission_type})")
+                return
+    except Exception as e:
+        logger.warning(f"⚠️ [PERMISSION] permissions.json에서 'all' 사용자 확인 실패: {e}")
+    
     # 🔥 새로운 user_manager 시스템 사용
     username = get_current_user(req)
+    logger.debug(f"🔍 [PERMISSION] get_current_user 결과: {username}")
+    
+    # 🔥 username이 None인 경우 _current_login_id로 재시도 (SAML 세션 확인 포함)
+    if username is None:
+        username = _current_login_id(req)
+        logger.debug(f"🔍 [PERMISSION] _current_login_id 결과: {username}")
+    
+    # 🔥 SAML 세션에서 직접 확인 (쿠키나 헤더로 LoginId 찾기)
+    if username is None:
+        try:
+            # URL 파라미터에서 LoginId 확인 (SAML 로그인 직후)
+            login_id_param = req.query_params.get("LoginId")
+            if login_id_param and login_id_param in SAML_USER_SESSIONS:
+                username = login_id_param
+                logger.debug(f"🔍 [PERMISSION] URL 파라미터에서 LoginId 찾음: {username}")
+            else:
+                # SAML_USER_SESSIONS에서 쿠키로 사용자 찾기
+                for login_id, meta in SAML_USER_SESSIONS.items():
+                    # 쿠키에서 LoginId 확인 (간단한 방법)
+                    if req.cookies.get("saml_login_id") == login_id:
+                        username = login_id
+                        logger.debug(f"🔍 [PERMISSION] 쿠키에서 LoginId 찾음: {username}")
+                        break
+                    # Referer 헤더에서 LoginId 추출 (리다이렉트 후)
+                    referer = req.headers.get("referer", "")
+                    if f"LoginId={login_id}" in referer:
+                        username = login_id
+                        logger.debug(f"🔍 [PERMISSION] Referer 헤더에서 LoginId 찾음: {username}")
+                        break
+        except Exception as e:
+            logger.warning(f"⚠️ [PERMISSION] SAML 세션 확인 실패: {e}")
+    
+    logger.info(f"🔍 [PERMISSION] 최종 사용자 식별: {username} (폴더: {folder_path}, 권한: {permission_type})")
+    
+    # 🔥 permissions.json에서 현재 사용자 확인
+    try:
+        roles_data = _load_roles_data()
+        user_data = None
+        for user in roles_data.get("users", []):
+            if user.get("loginId") == username:
+                user_data = user
+                break
+        
+        if user_data:
+            user_role = user_data.get("role", "")
+            # ADMIN/SUPER는 모든 폴더에 대한 모든 권한 보유
+            if user_role in {"ROLE_ADMIN", "ROLE_SUPER"}:
+                logger.info(f"✅ [PERMISSION] 사용자 '{username}'이 {user_role} 역할로 모든 권한 허용")
+                return
+            
+            # 폴더별 권한 확인
+            folders = user_data.get("folders", [])
+            folder_path_lower = folder_path.lower().replace('\\', '/').rstrip('/')
+            
+            for folder in folders:
+                folder_path_from_grant = folder.get("path", "").lower().replace('\\', '/').rstrip('/')
+                
+                # * 권한이면 모든 폴더 접근 가능
+                if folder_path_from_grant == "*":
+                    if permission_type == "CLASS_MANAGE" and folder.get("allow_class", False):
+                        logger.info(f"✅ [PERMISSION] 사용자 '{username}'이 * 권한으로 {permission_type} 허용")
+                        return
+                    elif permission_type == "LABEL_WRITE" and folder.get("allow_label", False):
+                        logger.info(f"✅ [PERMISSION] 사용자 '{username}'이 * 권한으로 {permission_type} 허용")
+                        return
+                
+                # 폴더 경로 매칭 (하위 폴더 포함)
+                if folder_path_lower.startswith(folder_path_from_grant):
+                    if permission_type == "CLASS_MANAGE" and folder.get("allow_class", False):
+                        logger.info(f"✅ [PERMISSION] 사용자 '{username}'이 {folder_path_from_grant} 권한으로 {permission_type} 허용")
+                        return
+                    elif permission_type == "LABEL_WRITE" and folder.get("allow_label", False):
+                        logger.info(f"✅ [PERMISSION] 사용자 '{username}'이 {folder_path_from_grant} 권한으로 {permission_type} 허용")
+                        return
+    except Exception as e:
+        logger.warning(f"⚠️ [PERMISSION] permissions.json에서 사용자 확인 실패: {e}")
+    
+    # 🔥 user_manager 시스템도 확인 (하위 호환성)
     checker = get_permission_checker()
 
     # Permission 매핑
@@ -737,12 +853,21 @@ def _check_folder_permission(req: Request, folder_path: str, permission_type: st
     else:
         raise ValueError(f"Unknown permission type: {permission_type}")
 
-    # 권한 검사
-    if not checker.has_permission(username, required_permission, folder_path):
-        raise HTTPException(
-            status_code=403,
-            detail=f"이 폴더({folder_path})에 대한 {permission_type} 권한이 없습니다."
-        )
+    # 권한 검사 (username이 None이면 기본 권한으로 처리)
+    if checker.has_permission(username, required_permission, folder_path):
+        logger.info(f"✅ [PERMISSION] user_manager 시스템에서 사용자 '{username}' 권한 확인됨")
+        return
+    
+    # 🔥 모든 권한 검사 실패
+    logger.warning(f"❌ [PERMISSION] 사용자 '{username}'이 폴더 '{folder_path}'에 대한 {permission_type} 권한 없음")
+    
+    # 🔥 권한 타입을 한글로 변환
+    permission_name = "클래스 관리" if permission_type == "CLASS_MANAGE" else "라벨 쓰기"
+    
+    raise HTTPException(
+        status_code=403,
+        detail=f"이 폴더에 대한 {permission_name} 권한이 없습니다."
+    )
 
 
 def _logical_to_postfix(tokens: List[str]) -> List[str]:
@@ -2780,15 +2905,10 @@ async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
             logger.warning(f"⚠️ [/api/files] 폴더 없음: {target}")
             return JSONResponse({"success": False, "error": "Not found"}, status_code=404)
 
-        # 🔥 current_folder 업데이트 (단, classification 폴더는 제외)
-        # classification 폴더 내부를 탐색하는 것은 current_folder를 변경하지 않음
-        target_str = str(target).replace('\\', '/')
-        is_classification = '/classification' in target_str or '/classification_chips' in target_str
-        if not is_classification:
-            current_folder = target
-            logger.info(f"🔥 [/api/files] current_folder 업데이트: {current_folder}")
-        else:
-            logger.info(f"⏭️ [/api/files] classification 폴더이므로 current_folder 유지: {current_folder}")
+        # 🔥 current_folder 업데이트 제거: 오직 changeFolder에서만 변경됨
+        # 이미지 클릭이나 폴더 탐색 시 current_folder를 변경하지 않음
+        # current_folder는 제품 선택(changeFolder) 시에만 변경됨
+        logger.info(f"⏭️ [/api/files] current_folder 유지 (변경 안 함): {current_folder}")
         # 🔥 라벨 썸네일 캐시는 유지하고, classification 폴더만 무효화
         if 'classification' in str(target).replace('\\', '/'):
             _dircache_invalidate(target)
@@ -3529,6 +3649,66 @@ async def get_image_size(path: str):
     except Exception as e:
         logger.error(f"이미지 크기 조회 실패: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get image size: {str(e)}")
+
+@app.get("/api/image/crop")
+async def get_image_crop(
+    request: Request,
+    path: str,
+    x: int,
+    y: int,
+    width: int,
+    height: int
+):
+    """Chip 영역 이미지 crop"""
+    try:
+        # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
+        if Path(path).is_absolute():
+            image_path = Path(path)
+            try:
+                image_path.resolve().relative_to(ROOT_DIR.resolve())
+            except ValueError:
+                raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
+        else:
+            image_path = ROOT_DIR / path
+            try:
+                image_path.resolve().relative_to(ROOT_DIR.resolve())
+            except ValueError:
+                raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
+
+        if not image_path.exists() or not image_path.is_file():
+            raise HTTPException(status_code=404, detail="Image not found")
+
+        # pyvips로 이미지 crop
+        import pyvips
+        try:
+            pyvips.set_log_handler(lambda domain, level, msg: None)
+        except AttributeError:
+            pass
+
+        img = pyvips.Image.new_from_file(str(image_path), access='sequential')
+        
+        # Crop 영역 검증
+        if x < 0 or y < 0 or x + width > img.width or y + height > img.height:
+            raise HTTPException(status_code=400, detail="Crop region out of bounds")
+        
+        # Crop 수행
+        cropped = img.crop(x, y, width, height)
+        
+        # PNG로 인코딩하여 반환
+        png_buffer = cropped.pngsave_buffer(compression=6, interlace=False, strip=True)
+        
+        return Response(
+            content=bytes(png_buffer),
+            media_type="image/png",
+            headers={
+                "Cache-Control": "public, max-age=3600"
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Chip crop 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to crop image: {str(e)}")
 
 @app.head("/api/image")
 @app.get("/api/image")
@@ -5741,6 +5921,12 @@ class RoleUserEntry(BaseModel):
 
 class CompositeMapRequest(BaseModel):
     image_paths: List[str]
+    loader_mode: Optional[str] = None
+    max_workers: Optional[int] = None
+    batch_size: Optional[int] = None
+    palette_mode: bool = False
+    focus_index: Optional[int] = 3
+    highlight_threshold: int = 8
 
 @app.post("/api/chip-annotations")
 async def save_chip_annotations(request: ChipAnnotationRequest, req: Request):
@@ -5976,26 +6162,56 @@ async def create_composite_map_endpoint(payload: CompositeMapRequest):
 
     try:
         # composite_map 모듈 사용
-        from .composite_map import create_composite_heatmaps
+        from .composite_map import create_composite_heatmaps, create_palette_overlay
 
-        # 🔥 인덱스 0~7만 고정 (총 8개 + Sum Map 1개 = 9개)
-        result = create_composite_heatmaps(image_paths, indices=list(range(8)))
+        loader_mode = payload.loader_mode or config.COMPOSITE_LOADER_MODE
+        max_workers = payload.max_workers or config.COMPOSITE_MAX_WORKERS
+        batch_size = payload.batch_size or config.COMPOSITE_BATCH_SIZE
 
-        # 기존 API 응답 형식 유지하면서 새 필드 추가
-        response = {
-            "success": True,
-            "image_count": result["source_images"],
-            "output_dir": result["output_dir"],
-            "heatmaps": result["heatmaps"],
-            "width": result["image_size"]["width"],
-            "height": result["image_size"]["height"],
-            "processing_time": result["processing_time"],
-            "generated_at": result["output_dir"].split("/")[-1]
-        }
-
-        # 🔥 Sum Map 경로 추가
-        if "sum_map_path" in result:
-            response["sum_map_path"] = result["sum_map_path"]
+        if payload.palette_mode:
+            # 팔레트 오버레이 모드: 빠른 단색 합성
+            result = create_palette_overlay(
+                image_paths,
+                focus_index=payload.focus_index,
+                highlight_threshold=payload.highlight_threshold,
+                loader_mode=loader_mode,
+                max_workers=max_workers,
+            )
+            response = {
+                "success": True,
+                "mode": "palette",
+                "image_count": result["source_images"],
+                "output_dir": result["output_dir"],
+                "overlay_path": result["overlay_path"],
+                "focus_index": result["focus_index"],
+                "highlight_threshold": result["highlight_threshold"],
+                "processing_time": result["processing_time"],
+                "generated_at": result["output_dir"].split("/")[-1]
+            }
+        else:
+            # 기존 히트맵 모드: 인덱스별 그라데이션 합성
+            result = create_composite_heatmaps(
+                image_paths,
+                indices=list(range(8)),
+                loader_mode=loader_mode,
+                max_workers=max_workers,
+                batch_size=batch_size,
+            )
+            # 기존 API 응답 형식 유지하면서 새 필드 추가
+            response = {
+                "success": True,
+                "mode": "heatmap",
+                "image_count": result["source_images"],
+                "output_dir": result["output_dir"],
+                "heatmaps": result["heatmaps"],
+                "width": result["image_size"]["width"],
+                "height": result["image_size"]["height"],
+                "processing_time": result["processing_time"],
+                "generated_at": result["output_dir"].split("/")[-1]
+            }
+            # 🔥 Sum Map 경로 추가
+            if "sum_map_path" in result:
+                response["sum_map_path"] = result["sum_map_path"]
 
         return response
     except Exception as e:
@@ -6023,11 +6239,34 @@ class GrantRemoveRequest(BaseModel):
     folder: str = Field(..., min_length=1)
 
 
-def get_current_user(request: Request) -> str:
+def get_current_user(request: Request) -> Optional[str]:
     """현재 로그인한 사용자 이름 반환"""
-    session = request.session
-    username = session.get("session_user") or session.get("username") or "anonymous"
-    return username
+    # 🔥 세션 미들웨어가 없어도 안전하게 처리
+    try:
+        session = request.session  # type: ignore[attr-defined]
+        username = session.get("session_user") or session.get("username")
+        if username:
+            return str(username)
+    except Exception:
+        # 세션 미들웨어가 없거나 세션에 접근할 수 없는 경우
+        pass
+    
+    # cookie fallback
+    login_id = request.cookies.get("session_user")
+    if login_id:
+        return str(login_id)
+    
+    # SAML 세션 확인 (메모리 기반)
+    try:
+        # SAML_USER_SESSIONS에서 현재 요청의 쿠키나 헤더로 사용자 찾기
+        # 간단하게 쿠키에서 LoginId 확인
+        saml_login_id = request.cookies.get("saml_login_id")
+        if saml_login_id and saml_login_id in SAML_USER_SESSIONS:
+            return saml_login_id
+    except Exception:
+        pass
+    
+    return None
 
 
 @app.get("/api/users")

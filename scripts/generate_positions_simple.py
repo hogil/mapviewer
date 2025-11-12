@@ -92,7 +92,7 @@ def detect_chips_simple(image_path: str):
                 chip_info = {
                     "x_abs": int(x_abs),
                     "y_abs": int(y_abs),
-                    "b": f"B{chip_idx:03d}",
+                    "b": chip_idx,
                     "x_cal": int(x_abs),
                     "y_cal": int(y_abs),
                     "text3": f"{chip_idx:03d}",

@@ -764,6 +764,7 @@ class WaferMapViewer {
         this.classToImgListCache = {};
 
         this.selectedFolderForBrowser = '';
+        this.productFolderPath = null;  // 🔥 제품 폴더 경로 저장 (classification 조회용)
 
         // 파일 필터 상태 (기본값: '' - Lot Type, 필터 적용 안 함)
         this.filterTestMode = '';
@@ -857,6 +858,23 @@ class WaferMapViewer {
 
                 this.showSingleContextMenu(e);
             });
+
+        // 🔥 Overlay canvas 우클릭 이벤트: Chip context menu
+        if (this.dom.overlayCanvas) {
+            this.dom.overlayCanvas.addEventListener('contextmenu', e => {
+                if (this.gridMode) return; // 그리드 모드에서는 처리 안 함
+                if (!this.chipAnnotator || !this.chipAnnotator.positionsData) return;
+
+                e.preventDefault();
+                e.stopPropagation();
+
+                // 선택된 chip 확인
+                const selectedChips = this.chipAnnotator.getSelectedChipData();
+                if (selectedChips.length === 0) return;
+
+                this.showChipContextMenu(e, selectedChips);
+            });
+        }
 
         // 🔥 더블클릭 이벤트: 상세 보기 모드 종료 또는 그리드로 복귀
         if (this.dom.viewerContainer) {
@@ -1110,7 +1128,10 @@ class WaferMapViewer {
             const data = await response.json();
 
             this.currentFolderPath = data.current_folder;
+            // 🔥 제품 폴더 경로 저장 (classification 조회용)
+            this.productFolderPath = data.current_folder;
             console.log('🔍 [STATE_DEBUG] currentFolderPath 업데이트 (init):', this.currentFolderPath);
+            console.log('🔍 [STATE_DEBUG] productFolderPath 저장 (init):', this.productFolderPath);
             this.currentFolderPrefix = data.current_folder_prefix || '';  // 🔥 파일 경로 접두사 저장
 
                                     // 하위폴더 목록 업데이트
@@ -1550,7 +1571,10 @@ class WaferMapViewer {
                 console.log('🔍 [STATE_DEBUG] currentFolderPath 변경 전:', this.currentFolderPath);
                 this.currentFolderPath = result.current_folder;
                 this.currentFolderPrefix = result.current_folder_prefix || '';
+                // 🔥 제품 폴더 경로 저장 (classification 조회용)
+                this.productFolderPath = result.current_folder;
                 console.log('🔍 [STATE_DEBUG] currentFolderPath 변경 후 (changeFolder):', this.currentFolderPath);
+                console.log('🔍 [STATE_DEBUG] productFolderPath 저장:', this.productFolderPath);
                 console.info('🔍 [CHANGE_FOLDER DEBUG] currentFolderPath:', this.currentFolderPath);
                 console.info('🔍 [CHANGE_FOLDER DEBUG] currentFolderPrefix:', this.currentFolderPrefix);
 
@@ -3658,19 +3682,57 @@ class WaferMapViewer {
         this.updateClassModeButtons();
         this.resetClassModeState();
 
-        if (this.labelManager && typeof this.labelManager.refreshAll === 'function') {
-            this.labelManager.refreshAll()
-                .then(() => console.log(`🔍 [CLASS_MODE] LabelManager 새로고침 완료 (mode=${normalized})`))
-                .catch((error) => console.error('LabelManager refresh 실패:', error));
+        // 🔥 모드 변경 시 labelManager 상태 초기화
+        if (this.labelManager) {
+            // 🔥 this.classes는 초기화하지 않음! refreshClassList()가 백업할 수 있도록 유지
+            // 🔥 refreshClassList()에서 backupClasses = [...this.classes]를 하므로
+            // 🔥 여기서 초기화하면 백업할 클래스가 없어짐
+            this.labelManager.isRefreshing = false;
+            this.labelManager.pendingRefresh = false;
+            
+            // 🔥 DOM은 refreshAll() 완료 후에 자동으로 업데이트되므로 여기서 비우지 않음
+            // 🔥 이렇게 하면 refreshAll()이 실패해도 이전 모드의 클래스가 유지됨
         }
 
-        this.refreshLabelExplorer()
-            .then(() => {
-                console.log(`🔍 [CLASS_MODE] Label Explorer 새로고침 완료 (mode=${normalized})`);
-                this.updateLabelExplorerContent();
-                console.log(`🔍 [CLASS_MODE] Fail List 갱신 완료 (mode=${normalized})`);
-            })
-            .catch(err => console.error('Label Explorer 새로고침 실패:', err));
+        // 🔥 current_folder 복원 제거: 오직 changeFolder에서만 current_folder 변경 가능
+        // 🔥 setClassMode는 changeFolder로 설정된 current_folder를 그대로 사용
+
+        // 🔥 refreshAll()이 refreshClassList()와 refreshLabelExplorer()를 모두 호출하므로
+        // 🔥 refreshLabelExplorer()를 별도로 호출하지 않음 (중복 API 호출 방지)
+        if (this.labelManager && typeof this.labelManager.refreshAll === 'function') {
+            this.labelManager.refreshAll()
+                .then(() => {
+                    console.log(`🔍 [CLASS_MODE] LabelManager 새로고침 완료 (mode=${normalized})`);
+                    this.updateLabelExplorerContent();
+                    console.log(`🔍 [CLASS_MODE] Fail List 갱신 완료 (mode=${normalized})`);
+                })
+                .catch((error) => {
+                    console.error('❌ [CLASS_MODE] LabelManager refresh 실패:', error);
+                    // 에러 발생 시에도 기본 상태는 유지하도록 시도
+                    try {
+                        this.updateLabelExplorerContent();
+                    } catch (updateErr) {
+                        console.error('❌ [CLASS_MODE] Fail List 갱신도 실패:', updateErr);
+                    }
+                });
+        } else {
+            // 🔥 labelManager가 없으면 refreshLabelExplorer만 호출
+            this.refreshLabelExplorer()
+                .then(() => {
+                    console.log(`🔍 [CLASS_MODE] Label Explorer 새로고침 완료 (mode=${normalized})`);
+                    this.updateLabelExplorerContent();
+                    console.log(`🔍 [CLASS_MODE] Fail List 갱신 완료 (mode=${normalized})`);
+                })
+                .catch(err => {
+                    console.error('❌ [CLASS_MODE] Label Explorer 새로고침 실패:', err);
+                    // 에러 발생 시에도 기본 상태는 유지하도록 시도
+                    try {
+                        this.updateLabelExplorerContent();
+                    } catch (updateErr) {
+                        console.error('❌ [CLASS_MODE] Fail List 갱신도 실패:', updateErr);
+                    }
+                });
+        }
     }
 
     resetClassModeState() {
@@ -3752,17 +3814,24 @@ class WaferMapViewer {
             .filter(Boolean);
 
         // 🔥 Wafer 모드와 Chip 모드 모두 동일한 순서: {제품경로}/classification{_chips}/{클래스}
-        if (includePrefix && this.currentFolderPrefix) {
-            const prefixParts = normalizePath(this.currentFolderPrefix);
-            if (prefixParts.length) {
-                segments.push(...prefixParts);
+        // 🔥 오직 changeFolder에서 설정된 current_folder만 사용 (productFolderPath 사용 안 함)
+        if (includePrefix) {
+            // 🔥 currentFolderPrefix만 사용 (changeFolder에서 설정됨)
+            if (this.currentFolderPrefix) {
+                const prefixParts = normalizePath(this.currentFolderPrefix);
+                if (prefixParts.length) {
+                    segments.push(...prefixParts);
+                }
             }
         }
 
         segments.push(dirName);
 
         if (subPath) {
-            segments.push(...normalizePath(subPath));
+            const subPathParts = normalizePath(subPath);
+            if (subPathParts.length) {
+                segments.push(...subPathParts);
+            }
         }
 
         return segments.filter(Boolean).join('/');
@@ -4192,13 +4261,36 @@ class WaferMapViewer {
             });
 
             const files = Array.isArray(data.items) ? data.items : [];
+            
+            // 🔥 Wafer Map Explorer: 폴더는 내림차순, 파일은 오름차순 정렬 (폴더 우선)
+            // 🔥 최상위 폴더와 하위폴더 모두 동일하게 적용
+            // 🔥 숫자 자연 정렬 적용 (예: 5가 10보다 앞에 옴)
+            const sortedFiles = [...files].sort((a, b) => {
+                const isAFolder = a.type === 'directory';
+                const isBFolder = b.type === 'directory';
+                
+                // 🔥 폴더가 파일보다 먼저 나오도록
+                if (isAFolder && !isBFolder) return -1;
+                if (!isAFolder && isBFolder) return 1;
+                
+                const nameA = a.name || '';
+                const nameB = b.name || '';
+                
+                // 🔥 폴더는 내림차순 (Z → A), 숫자 자연 정렬
+                if (isAFolder && isBFolder) {
+                    return nameB.localeCompare(nameA, undefined, { numeric: true, sensitivity: 'base' });
+                }
+                
+                // 🔥 파일은 오름차순 (A → Z), 숫자 자연 정렬
+                return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+            });
 
             // 제품 폴더 선택 시 label 캐시 초기화
             if (path) {
                 this.clearParCache();
             }
 
-            containerElement.innerHTML = this.createFileTreeHtml(files, path || '');
+            containerElement.innerHTML = this.createFileTreeHtml(sortedFiles, path || '');
 
             // classification 폴더 자동 확장 제거 (항상 닫힘)
         } catch (error) {
@@ -8491,6 +8583,12 @@ class WaferMapViewer {
         }
 
         if (this.dom.newClassInput) {
+            // 🔥 입력 필드 활성화 보장
+            this.dom.newClassInput.disabled = false;
+            this.dom.newClassInput.readOnly = false;
+            this.dom.newClassInput.style.pointerEvents = 'auto';
+            this.dom.newClassInput.style.userSelect = 'text';
+            
             this.dom.newClassInput.addEventListener('keydown', e => {
                 if (e.key === 'Enter') this.addClass();
             });
@@ -8912,27 +9010,36 @@ class WaferMapViewer {
                 try {
                     // 🔥 현재 폴더 및 모드 파라미터 추가
                     const apiUrl = this.buildClassApiUrl('/api/classes');
-                    console.log(`🔍 [ADD_CLASS] classMode: ${this.classMode}, apiUrl: ${apiUrl}`);
+                    console.log(`🔍 [ADD_CLASS] classMode: ${this.classMode}, apiUrl: ${apiUrl}, className: ${name}`);
 
                     const response = await fetch(apiUrl, {
                         method: 'POST',
-
                         headers: { 'Content-Type': 'application/json' },
-
                         body: JSON.stringify({ name })
                     });
+                    
+                    console.log(`🔍 [ADD_CLASS] Response status: ${response.status}, ok: ${response.ok}`);
 
                     if (!response.ok) {
-                        console.error(`클래스 '${name}' 추가 실패: HTTP ${response.status}`);
-
+                        const errorText = await response.text();
+                        let errorDetail = '';
+                        try {
+                            const errorJson = JSON.parse(errorText);
+                            errorDetail = errorJson.detail || errorJson.message || errorText;
+                        } catch {
+                            errorDetail = errorText;
+                        }
+                        console.error(`❌ 클래스 '${name}' 추가 실패: HTTP ${response.status}, ${errorDetail}`);
+                        alert(`클래스 '${name}' 추가 실패: ${errorDetail}`);
                         continue; // 실패한 클래스는 건너뛰고 계속 진행
                     }
 
                     const result = await response.json();
 
                     if (!result.success) {
-                        console.error(`클래스 '${name}' 추가 실패: ${result.message || 'Unknown error'}`);
-
+                        const errorMsg = result.message || result.detail || 'Unknown error';
+                        console.error(`❌ 클래스 '${name}' 추가 실패: ${errorMsg}`);
+                        alert(`클래스 '${name}' 추가 실패: ${errorMsg}`);
                         continue; // 실패한 클래스는 건너뛰고 계속 진행
                     }
 
@@ -9306,9 +9413,11 @@ class WaferMapViewer {
         // 그리드 모드에서 선택된 이미지들 반환
 
         if (this.gridMode && this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0) {
-            // 🔥 정렬된 그리드의 실제 이미지 경로 사용 (정렬된 인덱스로 정렬된 리스트에서 가져오기)
-        const gridImages = this.currentGridImages || this.selectedImages;
-        return this.gridSelectedIdxs.map(idx => gridImages[idx]).filter(Boolean);
+            // 🔥 context-menu.js의 getSelectedFiles()와 동일하게 selectedImages 사용 (정렬된 리스트 보장)
+            // currentGridImages 대신 selectedImages를 사용하여 정렬된 이미지 리스트 보장
+            return this.gridSelectedIdxs
+                .map(idx => this.selectedImages[idx])
+                .filter(Boolean);
         }
 
         // 단일 이미지 모드에서는 현재 선택된 이미지 반환
@@ -9926,9 +10035,10 @@ class WaferMapViewer {
         try {
             const container = document.getElementById('label-explorer-list');
 
-        if (!container) {
-            return;
-        }
+            if (!container) {
+                this._isRefreshingLabelExplorer = false;
+                return;
+            }
 
         const scrollTop = container.scrollTop;
 
@@ -9954,13 +10064,22 @@ class WaferMapViewer {
         const batchLabelBtn = document.getElementById('label-explorer-batch-label-btn');
         const batchDeleteBtn = document.getElementById('label-explorer-batch-delete-btn');
 
-        // 🔥 최적화: refreshClassList()에서 받은 캐시 사용 (API 호출 생략)
+        // 🔥 최적화: labelManager.classes를 직접 사용 (API 호출 생략, 클래스 목록 유지)
         let classes = [];
-        try {
-            classes = await this.getClassList();
-        } catch (error) {
-            console.error('Label Explorer 클래스 조회 오류:', error);
-            return;
+        if (this.labelManager && this.labelManager.classes && this.labelManager.classes.length > 0) {
+            // 🔥 labelManager.classes를 직접 사용 (이미 로드된 클래스 목록 사용)
+            classes = this.labelManager.classes.map(cls => typeof cls === 'string' ? cls : cls.name);
+            console.log('🔍 [REFRESH_LABEL_EXPLORER] labelManager.classes 사용:', classes.length, '개');
+        } else {
+            // 🔥 labelManager.classes가 비어있으면 getClassList() 호출 (최초 로드 시)
+            try {
+                classes = await this.getClassList();
+                console.log('🔍 [REFRESH_LABEL_EXPLORER] getClassList() 호출:', classes.length, '개');
+            } catch (error) {
+                console.error('❌ [REFRESH_LABEL_EXPLORER] 클래스 조회 오류:', error);
+                // 에러 발생 시에도 빈 배열로 계속 진행하여 UI가 깨지지 않도록 함
+                classes = [];
+            }
         }
 
         // 🔥 try 제거 - 이미 Line 10162에서 시작된 try 블록 안에 있음
@@ -10017,11 +10136,45 @@ class WaferMapViewer {
             // 🔥 모든 폴더를 병렬로 처리 (배치 제한 제거)
             const folderPromises = openFolders.map(async (cls) => {
                     try {
+                        // 🔥 current_folder 복원 제거: buildClassificationPath가 productFolderPath를 직접 사용
+                        // 🔥 최상위 폴더에서 특정 제품 폴더의 이미지를 선택한 경우,
+                        // current_folder를 변경하지 않고 productFolderPath만 사용하여 경로 생성
+                        
                         // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
+                        // 🔥 buildClassificationPath는 productFolderPath를 우선 사용하므로 current_folder 변경 불필요
                         const labelPath = this.buildClassificationPath(cls);
+                        
+                        // 🔥 디버깅: 로드 주소와 current_folder 로그 출력
+                        console.log(`🔍 [REFRESH_LABEL_EXPLORER] 클래스 '${cls}' 폴더 로드`);
+                        console.log(`🔍 [REFRESH_LABEL_EXPLORER] 로드 주소: /api/files?path=${encodeURIComponent(labelPath)}`);
+                        console.log(`🔍 [REFRESH_LABEL_EXPLORER] labelPath: ${labelPath}`);
+                        console.log(`🔍 [REFRESH_LABEL_EXPLORER] currentFolderPath: ${this.currentFolderPath}`);
+                        console.log(`🔍 [REFRESH_LABEL_EXPLORER] currentFolderPrefix: ${this.currentFolderPrefix}`);
+                        console.log(`🔍 [REFRESH_LABEL_EXPLORER] productFolderPath: ${this.productFolderPath}`);
+                        
+                        // 🔥 current_folder 확인을 위한 API 호출 (로깅용)
+                        try {
+                            const currentFolderResponse = await fetch('/api/current-folder');
+                            const currentFolderData = await currentFolderResponse.json();
+                            console.log(`🔍 [REFRESH_LABEL_EXPLORER] 서버 current_folder: ${currentFolderData.current_folder}`);
+                            console.log(`🔍 [REFRESH_LABEL_EXPLORER] 서버 current_folder_prefix: ${currentFolderData.current_folder_prefix}`);
+                        } catch (err) {
+                            console.error('❌ [REFRESH_LABEL_EXPLORER] current_folder 조회 실패:', err);
+                        }
+                        
                         const response = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`, {
                             signal: this.globalAbortController?.signal
                         });
+                        
+                        // 🔥 로드 완료 후 current_folder 재확인
+                        try {
+                            const afterResponse = await fetch('/api/current-folder');
+                            const afterData = await afterResponse.json();
+                            console.log(`🔍 [REFRESH_LABEL_EXPLORER] 로드 후 서버 current_folder: ${afterData.current_folder}`);
+                            console.log(`🔍 [REFRESH_LABEL_EXPLORER] 로드 후 서버 current_folder_prefix: ${afterData.current_folder_prefix}`);
+                        } catch (err) {
+                            console.error('❌ [REFRESH_LABEL_EXPLORER] 로드 후 current_folder 조회 실패:', err);
+                        }
 
                         const data = await response.json();
                         const imgList = Array.isArray(data.items) ? data.items : [];
@@ -10552,6 +10705,25 @@ class WaferMapViewer {
                         // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
                         const labelPath = this.buildClassificationPath(cls);
                         
+                        // 🔥 디버깅: 로드 주소와 current_folder 로그 출력
+                        console.log(`🔍 [LABEL_EXPLORER_CLICK] 클래스 '${cls}' 폴더 클릭`);
+                        console.log(`🔍 [LABEL_EXPLORER_CLICK] 로드 주소: /api/files?path=${encodeURIComponent(labelPath)}`);
+                        console.log(`🔍 [LABEL_EXPLORER_CLICK] labelPath: ${labelPath}`);
+                        console.log(`🔍 [LABEL_EXPLORER_CLICK] currentFolderPath: ${this.currentFolderPath}`);
+                        console.log(`🔍 [LABEL_EXPLORER_CLICK] currentFolderPrefix: ${this.currentFolderPrefix}`);
+                        console.log(`🔍 [LABEL_EXPLORER_CLICK] productFolderPath: ${this.productFolderPath}`);
+                        
+                        // 🔥 current_folder 확인을 위한 API 호출 (로깅용)
+                        fetch('/api/current-folder')
+                            .then(res => res.json())
+                            .then(data => {
+                                console.log(`🔍 [LABEL_EXPLORER_CLICK] 서버 current_folder: ${data.current_folder}`);
+                                console.log(`🔍 [LABEL_EXPLORER_CLICK] 서버 current_folder_prefix: ${data.current_folder_prefix}`);
+                            })
+                            .catch(err => {
+                                console.error('❌ [LABEL_EXPLORER_CLICK] current_folder 조회 실패:', err);
+                            });
+                        
                         // 🔥 캐시 무시 - 항상 서버에서 최신 데이터 가져오기
                         fetch(`/api/files?path=${encodeURIComponent(labelPath)}`)
                             .then(res => res.json())
@@ -10563,6 +10735,17 @@ class WaferMapViewer {
                                 this.classToImgListCache[cls] = imgList;
 
                                 this.debugLog(`✅ 폴더 '${cls}' - ${imgList.length}개 이미지 로드 완료`);
+                                
+                                // 🔥 로드 완료 후 current_folder 재확인
+                                fetch('/api/current-folder')
+                                    .then(res => res.json())
+                                    .then(data => {
+                                        console.log(`🔍 [LABEL_EXPLORER_CLICK] 로드 후 서버 current_folder: ${data.current_folder}`);
+                                        console.log(`🔍 [LABEL_EXPLORER_CLICK] 로드 후 서버 current_folder_prefix: ${data.current_folder_prefix}`);
+                                    })
+                                    .catch(err => {
+                                        console.error('❌ [LABEL_EXPLORER_CLICK] 로드 후 current_folder 조회 실패:', err);
+                                    });
 
                                 // 🔥 fetch 완료 후 한 번만 업데이트
                                 this.updateLabelExplorerContent();
@@ -10704,9 +10887,19 @@ class WaferMapViewer {
                 }, true); // capture phase로 등록
 
                 const imgList = classToImgList[cls] || [];
+                
+                // 🔥 숫자를 고려한 오름차순 정렬 (5, 10, 15, 20, 25 순서)
+                const sortedImgList = [...imgList].sort((a, b) => {
+                    if (a.type !== 'file' || b.type !== 'file') {
+                        // 파일이 아닌 항목은 원래 순서 유지
+                        return 0;
+                    }
+                    // 숫자를 고려한 자연 정렬 (natural sort)
+                    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+                });
 
-                for (let i = 0; i < imgList.length; ++i) {
-                    const img = imgList[i];
+                for (let i = 0; i < sortedImgList.length; ++i) {
+                    const img = sortedImgList[i];
 
                     if (img.type !== 'file') continue;
 
@@ -11116,16 +11309,26 @@ class WaferMapViewer {
 
                         // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
                         const labelPath = this.buildClassificationPath(cls);
-                    const imgRes = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`);
+                        const imgRes = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`);
                         const imgData = await imgRes.json();
                         const imgList = Array.isArray(imgData.items) ? imgData.items : [];
+                        
+                        // 🔥 숫자를 고려한 오름차순 정렬 (5, 10, 15, 20, 25 순서)
+                        const sortedImgList = [...imgList].sort((a, b) => {
+                            if (a.type !== 'file' || b.type !== 'file') {
+                                // 파일이 아닌 항목은 원래 순서 유지
+                                return 0;
+                            }
+                            // 숫자를 고려한 자연 정렬 (natural sort)
+                            return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+                        });
 
                         // ul 내부만 갱신
 
                         imgUl.innerHTML = '';
 
-                        for (let i = 0; i < imgList.length; ++i) {
-                            const img = imgList[i];
+                        for (let i = 0; i < sortedImgList.length; ++i) {
+                            const img = sortedImgList[i];
 
                             if (img.type !== 'file') continue;
 
@@ -12008,12 +12211,13 @@ class WaferMapViewer {
     showGrid(images, skipSaveState = false) {
         this.gridMode = true;
 
-        // 🔥 이미지를 이름 순으로 오름차순 정렬
+        // 🔥 이미지를 이름 순으로 오름차순 정렬 (숫자 자연 정렬 적용)
         const sortedImages = [...images].sort((a, b) => {
             // 파일명만 추출 (경로 제거)
-            const nameA = a.split('/').pop().toLowerCase();
-            const nameB = b.split('/').pop().toLowerCase();
-            return nameA.localeCompare(nameB);
+            const nameA = a.split('/').pop();
+            const nameB = b.split('/').pop();
+            // 🔥 숫자 자연 정렬 (예: 5가 10보다 앞에 옴)
+            return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
         });
 
         this.selectedImages = sortedImages;
@@ -14427,6 +14631,349 @@ class WaferMapViewer {
         }
         if (this.dom.gridColorLegendBottom) {
             this.dom.gridColorLegendBottom.style.display = 'none';
+        }
+    }
+
+    /**
+     * Show chip context menu
+     */
+    showChipContextMenu(event, selectedChips) {
+        // 기존 context menu 제거 (있다면)
+        const existingMenu = document.getElementById('chip-context-menu');
+        if (existingMenu) {
+            existingMenu.remove();
+        }
+
+        // Context menu 생성
+        const menu = document.createElement('div');
+        menu.id = 'chip-context-menu';
+        menu.className = 'context-menu';
+        menu.style.cssText = `
+            position: fixed;
+            background: #2a2a2a;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 4px 0;
+            z-index: 10000;
+            min-width: 200px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+        `;
+
+        // Chip 1개 선택 시: Chip 보기
+        if (selectedChips.length === 1) {
+            const viewItem = document.createElement('div');
+            viewItem.className = 'context-menu-item';
+            viewItem.style.cssText = `
+                padding: 8px 16px;
+                cursor: pointer;
+                color: #fff;
+                font-size: 14px;
+            `;
+            viewItem.textContent = 'Chip 보기';
+            viewItem.onclick = () => {
+                this.showChipViewModal(selectedChips[0]);
+                menu.remove();
+            };
+            menu.appendChild(viewItem);
+        }
+
+        // Chip 여러개 선택 시: 좌표 복사 옵션
+        if (selectedChips.length > 0) {
+            const separator = document.createElement('div');
+            separator.style.cssText = 'height: 1px; background: #555; margin: 4px 0;';
+            menu.appendChild(separator);
+
+            const copyCoordsItem = document.createElement('div');
+            copyCoordsItem.className = 'context-menu-item';
+            copyCoordsItem.style.cssText = `
+                padding: 8px 16px;
+                cursor: pointer;
+                color: #fff;
+                font-size: 14px;
+            `;
+            copyCoordsItem.textContent = `Chip 좌표 클립보드 복사 (${selectedChips.length}개)`;
+            copyCoordsItem.onclick = () => {
+                this.copyChipCoordinates(selectedChips);
+                menu.remove();
+            };
+            menu.appendChild(copyCoordsItem);
+
+            const copyTableItem = document.createElement('div');
+            copyTableItem.className = 'context-menu-item';
+            copyTableItem.style.cssText = `
+                padding: 8px 16px;
+                cursor: pointer;
+                color: #fff;
+                font-size: 14px;
+            `;
+            copyTableItem.textContent = `Chip 좌표 테이블 복사 (${selectedChips.length}개)`;
+            copyTableItem.onclick = () => {
+                this.copyChipCoordinatesAsTable(selectedChips);
+                menu.remove();
+            };
+            menu.appendChild(copyTableItem);
+        }
+
+        // 메뉴 위치 설정
+        menu.style.left = event.pageX + 'px';
+        menu.style.top = event.pageY + 'px';
+        document.body.appendChild(menu);
+
+        // 외부 클릭 시 메뉴 제거
+        const closeMenu = (e) => {
+            if (!menu.contains(e.target)) {
+                menu.remove();
+                document.removeEventListener('click', closeMenu);
+            }
+        };
+        setTimeout(() => document.addEventListener('click', closeMenu), 0);
+    }
+
+    /**
+     * Show chip view modal
+     */
+    async showChipViewModal(chipData) {
+        const modal = document.getElementById('chip-view-modal');
+        const canvas = document.getElementById('chip-view-canvas');
+        const absCoords = document.getElementById('chip-view-abs-coords');
+        const relCoords = document.getElementById('chip-view-rel-coords');
+        const bValue = document.getElementById('chip-view-b-value');
+        const filePath = document.getElementById('chip-view-file-path');
+        const colorLegend = document.getElementById('chip-view-color-legend');
+        const closeBtn = document.getElementById('chip-view-close');
+
+        if (!modal || !canvas || !absCoords || !relCoords || !bValue || !filePath || !colorLegend) {
+            console.error('Chip view modal elements not found');
+            return;
+        }
+
+        // chip 객체에서 직접 데이터 가져오기
+        const chip = this.chipAnnotator.chips[chipData.index];
+        if (!chip) {
+            console.error('Chip not found at index:', chipData.index);
+            return;
+        }
+
+        // 좌표 정보 표시 (chip 객체에서 직접 가져오기)
+        // 절대 좌표: JSON 파일의 x_abs, y_abs 값 사용 (cal 값 절대 사용 안 함)
+        if (chip.x_abs !== undefined && chip.y_abs !== undefined) {
+            absCoords.textContent = `(${chip.x_abs}, ${chip.y_abs})`;
+        } else {
+            absCoords.textContent = '-';
+        }
+        
+        // 상대 좌표: JSON 파일의 x_cal, y_cal 값 사용
+        if (chip.x_cal !== undefined && chip.y_cal !== undefined) {
+            relCoords.textContent = `(${chip.x_cal}, ${chip.y_cal})`;
+        } else {
+            relCoords.textContent = '-';
+        }
+        
+        // b 값 표시 (JSON에서 숫자만 저장됨)
+        if (chip.b !== undefined && chip.b !== null) {
+            // 🔥 JSON에서 숫자만 저장되므로 그대로 표시
+            bValue.textContent = String(chip.b);
+        } else {
+            bValue.textContent = '-';
+        }
+        
+        filePath.textContent = this.selectedImagePath || '-';
+
+        // Color Legend 렌더링 (Grade0~Grade7)
+        await this.renderChipViewColorLegend(colorLegend);
+
+        // Chip 이미지 로드
+        const imageUrl = await this.chipAnnotator.getChipImageRegion(chipData.index);
+        if (imageUrl) {
+            const img = new Image();
+            img.onload = () => {
+                // Canvas 크기를 이미지 크기에 정확히 맞춤
+                const scaleFactor = 1.5;
+                let displayWidth = img.width * scaleFactor;
+                let displayHeight = img.height * scaleFactor;
+                
+                // 최대 크기 제한
+                const maxWidth = 1800;
+                const maxHeight = 1500;
+                
+                if (displayWidth > maxWidth || displayHeight > maxHeight) {
+                    const scale = Math.min(maxWidth / displayWidth, maxHeight / displayHeight);
+                    displayWidth = displayWidth * scale;
+                    displayHeight = displayHeight * scale;
+                }
+
+                // Canvas 실제 크기 설정 (이미지 크기에 맞춤)
+                canvas.width = displayWidth;
+                canvas.height = displayHeight;
+                
+                // CSS로 표시 크기 제한 (이미지 크기에 맞게)
+                canvas.style.width = `${displayWidth}px`;
+                canvas.style.height = `${displayHeight}px`;
+                canvas.style.maxWidth = 'none';
+                canvas.style.maxHeight = 'none';
+                
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, displayWidth, displayHeight);
+                
+                URL.revokeObjectURL(imageUrl);
+            };
+            img.onerror = () => {
+                console.error('Failed to load chip image');
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#fff';
+                ctx.font = '16px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('이미지 로드 실패', canvas.width / 2, canvas.height / 2);
+            };
+            img.src = imageUrl;
+        } else {
+            // 이미지 로드 실패
+            canvas.width = 800;
+            canvas.height = 600;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#fff';
+            ctx.font = '16px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('이미지 로드 실패', canvas.width / 2, canvas.height / 2);
+        }
+
+        // 모달 표시
+        modal.style.display = 'flex';
+
+        // 닫기 버튼 이벤트
+        if (closeBtn) {
+            closeBtn.onclick = () => {
+                modal.style.display = 'none';
+            };
+        }
+
+        // 모달 외부 클릭 시 닫기
+        modal.onclick = (e) => {
+            if (e.target === modal) {
+                modal.style.display = 'none';
+            }
+        };
+    }
+
+    /**
+     * Render color legend for chip view modal (Grade0~Grade7)
+     */
+    async renderChipViewColorLegend(container) {
+        if (!container) return;
+
+        try {
+            // 사용자의 color scheme 가져오기 (color-editor에서 사용하는 방식)
+            let schemeName = 'default';
+            try {
+                const userResponse = await fetch('/api/auth/user');
+                if (userResponse.ok) {
+                    const userData = await userResponse.json();
+                    if (userData.colorScheme) {
+                        schemeName = userData.colorScheme;
+                    }
+                }
+            } catch (e) {
+                console.warn('사용자 color scheme을 가져올 수 없습니다. default 사용:', e);
+            }
+
+            // color-legends.json 로드
+            const response = await fetch('/logs/color-legends.json');
+            if (!response.ok) {
+                console.warn('Color legends를 가져올 수 없습니다.');
+                container.innerHTML = '<div style="color: #999; font-size: 10px;">Color legend를 로드할 수 없습니다.</div>';
+                return;
+            }
+
+            const legends = await response.json();
+            const userScheme = legends[schemeName] || legends.default || {};
+            const topColors = userScheme.top || {};
+
+            // Grade0~Grade7 렌더링
+            const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
+            container.innerHTML = '';
+
+            TOP_KEYS.forEach((gradeKey, index) => {
+                const color = topColors[gradeKey] || '#FFFFFF';
+                const label = `G${index}`; // G0, G1, G2, ...
+
+                const item = document.createElement('div');
+                item.style.cssText = 'display: flex; align-items: center; gap: 10px; padding: 2px 0;';
+
+                const colorBar = document.createElement('div');
+                colorBar.style.cssText = `width: 48px; height: 20px; background: ${color}; border: 1px solid #444; border-radius: 2px; flex-shrink: 0;`;
+
+                const labelEl = document.createElement('span');
+                labelEl.style.cssText = 'color: #ccc; font-size: 15px; font-weight: 500;';
+                labelEl.textContent = label;
+
+                item.appendChild(colorBar);
+                item.appendChild(labelEl);
+                container.appendChild(item);
+            });
+        } catch (error) {
+            console.error('Color legend 렌더링 오류:', error);
+            container.innerHTML = '<div style="color: #999; font-size: 10px;">Color legend를 로드할 수 없습니다.</div>';
+        }
+    }
+
+    /**
+     * Copy chip coordinates to clipboard
+     */
+    async copyChipCoordinates(selectedChips) {
+        if (!selectedChips || selectedChips.length === 0) {
+            alert('복사할 chip이 없습니다.');
+            return;
+        }
+
+        const coords = selectedChips.map(chip => `(${chip.x_abs}, ${chip.y_abs})`).join('\n');
+        
+        try {
+            await navigator.clipboard.writeText(coords);
+            alert(`${selectedChips.length}개 chip 좌표가 클립보드에 복사되었습니다.`);
+        } catch (error) {
+            console.error('클립보드 복사 실패:', error);
+            alert('클립보드 복사에 실패했습니다.');
+        }
+    }
+
+    /**
+     * Copy chip coordinates as table to clipboard
+     */
+    async copyChipCoordinatesAsTable(selectedChips) {
+        if (!selectedChips || selectedChips.length === 0) {
+            alert('복사할 chip이 없습니다.');
+            return;
+        }
+
+        if (!this.selectedImagePath) {
+            alert('파일 경로를 찾을 수 없습니다.');
+            return;
+        }
+
+        // 파일명에서 확장자 제거
+        const fileName = this.selectedImagePath.split('/').pop().replace(/\.[^/.]+$/, '');
+        // 파일명을 _로 split
+        const nameParts = fileName.split('_');
+
+        // 테이블 데이터 생성
+        const tableData = selectedChips.map(chip => {
+            const row = [...nameParts, chip.x_abs, chip.y_abs];
+            return row.join('\t');
+        });
+
+        // TSV 형식으로 변환
+        const tableText = tableData.join('\n');
+
+        try {
+            await navigator.clipboard.writeText(tableText);
+            alert(`${selectedChips.length}개 chip 좌표가 테이블 형태로 클립보드에 복사되었습니다.`);
+        } catch (error) {
+            console.error('클립보드 복사 실패:', error);
+            alert('클립보드 복사에 실패했습니다.');
         }
     }
 }

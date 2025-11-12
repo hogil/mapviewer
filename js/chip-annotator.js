@@ -304,9 +304,15 @@ export class ChipAnnotator {
     findChipAtPixel(canvasX, canvasY) {
         if (!this.positionsData || !this.viewer.transform) return null;
 
+        // 🔥 Y_OFFSET 적용: chip이 그려진 위치와 동일하게 계산
+        const Y_OFFSET = -50; // _drawChipRect와 동일한 값
+        const transform = this.viewer.transform;
+
         // Convert canvas coordinates to image coordinates
-        const imgX = (canvasX - this.viewer.transform.dx) / this.viewer.transform.scale;
-        const imgY = (canvasY - this.viewer.transform.dy) / this.viewer.transform.scale;
+        // chip 위치: rect.y0 * scale + dy + Y_OFFSET
+        // 역변환: imgY = (canvasY - dy - Y_OFFSET) / scale
+        const imgX = (canvasX - transform.dx) / transform.scale;
+        const imgY = (canvasY - transform.dy - Y_OFFSET) / transform.scale;
 
         // Find chip containing this point
         for (let i = 0; i < this.chips.length; i++) {
@@ -356,6 +362,67 @@ export class ChipAnnotator {
             }
         });
         return coords;
+    }
+
+    /**
+     * Get selected chip data (for context menu and modal)
+     */
+    getSelectedChipData() {
+        const chips = [];
+        this.selectedChips.forEach(chipIdx => {
+            const chip = this.chips[chipIdx];
+            if (chip) {
+                chips.push({
+                    index: chipIdx,
+                    x_abs: chip.x_abs,
+                    y_abs: chip.y_abs,
+                    b: chip.b,  // b 값 추가
+                    rect: chip.rect
+                });
+            }
+        });
+        return chips;
+    }
+
+    /**
+     * Get chip image region (for modal display)
+     */
+    async getChipImageRegion(chipIndex) {
+        if (!this.currentImagePath || chipIndex < 0 || chipIndex >= this.chips.length) {
+            return null;
+        }
+
+        const chip = this.chips[chipIndex];
+        if (!chip || !chip.rect) {
+            return null;
+        }
+
+        const rect = chip.rect;
+        const x = Math.floor(rect.x0);
+        const y = Math.floor(rect.y0);
+        const width = Math.ceil(rect.x1 - rect.x0);
+        const height = Math.ceil(rect.y1 - rect.y0);
+
+        // API에서 chip 영역 이미지 가져오기
+        try {
+            const params = new URLSearchParams();
+            params.set('path', this.currentImagePath);
+            params.set('x', x);
+            params.set('y', y);
+            params.set('width', width);
+            params.set('height', height);
+            
+            const response = await fetch(`/api/image/crop?${params.toString()}`);
+            if (!response.ok) {
+                throw new Error(`Failed to get chip image: ${response.status}`);
+            }
+            
+            const blob = await response.blob();
+            return URL.createObjectURL(blob);
+        } catch (error) {
+            console.error('Error getting chip image region:', error);
+            return null;
+        }
     }
 
     /**
@@ -516,7 +583,7 @@ export class ChipAnnotator {
         // 🔥 이미지 렌더링 방식과 동일: translate(dx, dy) 후 scale(scale, scale)
         // 이미지 픽셀 (imgX, imgY)는 캔버스 좌표 (imgX * scale + dx, imgY * scale + dy)에 그려짐
         // Y 오프셋을 추가하여 그리드도 칩 선택과 동일한 위치에 그리기
-        const Y_OFFSET = -18; // 칩 선택과 동일한 오프셋 (음수 = 위로)
+        const Y_OFFSET = -55; // 칩 선택과 동일한 오프셋 (음수 = 위로)
         const toCanvas = (imgX, imgY) => ({
             x: imgX * transform.scale + transform.dx,
             y: imgY * transform.scale + transform.dy + Y_OFFSET
@@ -556,7 +623,7 @@ export class ChipAnnotator {
         const rect = chip.rect;
 
         // 🔥 Y 오프셋: 칩 선택을 이미지 위치에 맞추기 위해 위로 올림
-        const Y_OFFSET = -18; // 픽셀 단위 오프셋 (음수 = 위로, 값이 클수록 더 위로)
+        const Y_OFFSET = -55; // 픽셀 단위 오프셋 (음수 = 위로, 값이 클수록 더 위로)
         
         // 🔥 이미지와 동일한 변환: translate 후 scale
         // 이미지: ctx.translate(dx, dy); ctx.scale(scale, scale); ctx.drawImage(img, 0, 0);
@@ -580,17 +647,28 @@ export class ChipAnnotator {
      */
     _updateCoordinateBox(imgX, imgY, chip) {
         if (chip) {
-            // 절대 좌표
+            // 절대 좌표: JSON 파일의 x_abs, y_abs 값 사용 (cal 값 사용 안 함)
             if (this.coordChipAbs) {
-                this.coordChipAbs.textContent = `(${chip.x_abs}, ${chip.y_abs})`;
+                const x_abs = chip.x_abs;
+                const y_abs = chip.y_abs;
+                
+                if (x_abs !== undefined && y_abs !== undefined && x_abs !== null && y_abs !== null) {
+                    this.coordChipAbs.textContent = `(${x_abs}, ${y_abs})`;
+                } else {
+                    this.coordChipAbs.textContent = '-';
+                }
             }
 
-            // 상대 좌표 (chip 내부)
+            // 상대 좌표: JSON 파일의 x_cal, y_cal 값 사용
             if (this.coordChipRel) {
-                const rect = chip.rect;
-                const relX = Math.round(imgX - rect.x0);
-                const relY = Math.round(imgY - rect.y0);
-                this.coordChipRel.textContent = `(${relX}, ${relY})`;
+                const x_cal = chip.x_cal;
+                const y_cal = chip.y_cal;
+                
+                if (x_cal !== undefined && y_cal !== undefined && x_cal !== null && y_cal !== null) {
+                    this.coordChipRel.textContent = `(${x_cal}, ${y_cal})`;
+                } else {
+                    this.coordChipRel.textContent = '-';
+                }
             }
         } else {
             // Chip 위에 없으면 "-" 표시
@@ -923,14 +1001,16 @@ export class ChipAnnotator {
 
         const selected = [];
         const transform = this.viewer.transform;
+        // 🔥 Y_OFFSET 적용: chip이 그려진 위치와 동일하게 계산
+        const Y_OFFSET = -50; // _drawChipRect와 동일한 값
 
         for (let i = 0; i < this.chips.length; i++) {
             const chip = this.chips[i];
             const rect = chip.rect;
 
-            // Convert chip center to canvas coordinates
+            // Convert chip center to canvas coordinates (Y_OFFSET 적용)
             const chipCenterX = ((rect.x0 + rect.x1) / 2) * transform.scale + transform.dx;
-            const chipCenterY = ((rect.y0 + rect.y1) / 2) * transform.scale + transform.dy;
+            const chipCenterY = ((rect.y0 + rect.y1) / 2) * transform.scale + transform.dy + Y_OFFSET;
 
             // Check if chip center is in rectangle
             if (chipCenterX >= minX && chipCenterX <= maxX &&
@@ -950,14 +1030,16 @@ export class ChipAnnotator {
 
         const selected = [];
         const transform = this.viewer.transform;
+        // 🔥 Y_OFFSET 적용: chip이 그려진 위치와 동일하게 계산
+        const Y_OFFSET = -50; // _drawChipRect와 동일한 값
 
         for (let i = 0; i < this.chips.length; i++) {
             const chip = this.chips[i];
             const rect = chip.rect;
 
-            // Convert chip center to canvas coordinates
+            // Convert chip center to canvas coordinates (Y_OFFSET 적용)
             const chipCenterX = ((rect.x0 + rect.x1) / 2) * transform.scale + transform.dx;
-            const chipCenterY = ((rect.y0 + rect.y1) / 2) * transform.scale + transform.dy;
+            const chipCenterY = ((rect.y0 + rect.y1) / 2) * transform.scale + transform.dy + Y_OFFSET;
 
             // Check if chip center is inside polygon
             if (this._isPointInPolygon(chipCenterX, chipCenterY, polygon)) {

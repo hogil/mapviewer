@@ -350,18 +350,30 @@ class PermissionChecker:
 
     def has_permission(self, username: str, permission: Permission, folder: str = None) -> bool:
         """사용자가 특정 권한을 가지고 있는지 확인"""
+        # 🔥 먼저 일반 사용자 권한 확인
         user = self.user_manager.get_user(username)
-        if not user:
-            return False
+        if user:
+            role = Role(user["role"])
 
-        role = Role(user["role"])
+            # 기본 역할 권한 확인
+            if permission in ROLE_PERMISSIONS[role]:
+                # 폴더별 권한이 필요한 경우
+                if folder and permission in {Permission.LABEL, Permission.CLASS_MANAGE}:
+                    return self._check_folder_permission(user, permission, folder)
+                return True
 
-        # 기본 역할 권한 확인
-        if permission in ROLE_PERMISSIONS[role]:
-            # 폴더별 권한이 필요한 경우
-            if folder and permission in {Permission.LABEL, Permission.CLASS_MANAGE}:
-                return self._check_folder_permission(user, permission, folder)
-            return True
+        # 🔥 사용자 권한이 없으면 "all" 사용자 권한 확인
+        # "all" 사용자가 admin/super 역할을 가지면 모든 사용자에게 권한 부여
+        all_user = self.user_manager.get_user("all")
+        if all_user:
+            all_role = Role(all_user["role"])
+            # "all" 사용자가 ADMIN 또는 SUPER 역할이면 모든 사용자에게 권한 부여
+            if all_role in {Role.ADMIN, Role.SUPER}:
+                if permission in ROLE_PERMISSIONS[all_role]:
+                    # 폴더별 권한이 필요한 경우
+                    if folder and permission in {Permission.LABEL, Permission.CLASS_MANAGE}:
+                        return self._check_folder_permission(all_user, permission, folder)
+                    return True
 
         return False
 

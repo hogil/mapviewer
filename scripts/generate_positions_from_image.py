@@ -83,13 +83,11 @@ def analyze_wafer_image(image_path: str):
             x_abs = col - tiles_w // 2
             y_abs = row - tiles_h // 2
 
-            # Bin code는 일단 색상 기반으로 추정
-            bin_code = f"B{chip_idx % 100:03d}"
-
+            # Bin code는 chip_idx 숫자만 저장
             chip_info = {
                 "x_abs": int(x_abs),
                 "y_abs": int(y_abs),
-                "b": bin_code,
+                "b": chip_idx,
                 "x_cal": int(x_abs),
                 "y_cal": int(y_abs),
                 "text3": bin_code[-3:],

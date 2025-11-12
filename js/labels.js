@@ -276,12 +276,26 @@ export class LabelManager {
                 body: JSON.stringify({ name: className, mode: mode })
             });
             
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || '클래스 생성에 실패했습니다.');
+            // 🔥 response.json()을 한 번만 호출하기 위해 변수에 저장
+            let responseData;
+            try {
+                responseData = await response.json();
+            } catch (e) {
+                // JSON 파싱 실패 시 빈 객체 사용
+                responseData = {};
             }
             
-            const result = await response.json();
+            if (!response.ok) {
+                // 🔥 detail 필드 우선, 없으면 error 필드 사용
+                let errorMessage = responseData.detail || responseData.error || '권한이 없습니다.';
+                // 🔥 이상한 기호 제거 (괄호, 특수문자 정리)
+                errorMessage = errorMessage.replace(/[(){}[\]]/g, '').trim();
+                // 🔥 권한 오류는 바로 alert하고 return (중복 알림 방지)
+                alert(errorMessage);
+                return;
+            }
+            
+            const result = responseData;
             console.log('클래스 추가 성공:', result);
             
             // 입력 필드 초기화
@@ -294,7 +308,12 @@ export class LabelManager {
             
         } catch (error) {
             console.error('클래스 추가 오류:', error);
-            alert(`클래스 추가 실패: ${error.message}`);
+            // 🔥 네트워크 오류 등 예상치 못한 에러만 alert (권한 오류는 이미 처리됨)
+            if (!error.message || !error.message.includes('권한')) {
+                const errorMessage = error.message || '클래스 추가에 실패했습니다.';
+                const cleanMessage = errorMessage.replace(/[(){}[\]]/g, '').trim();
+                alert(`클래스 추가 실패: ${cleanMessage}`);
+            }
         } finally {
             // 버튼 로딩 상태 해제
             setButtonLoading(button, false, originalText);
@@ -377,11 +396,20 @@ export class LabelManager {
      */
     async refreshClassList() {
         console.log('🔍 [CACHE_DEBUG] Class Manager 새로고침 시작 - 캐시 삭제');
+        console.log('🔍 [REFRESH_CLASS_LIST_DEBUG] refreshClassList 호출 스택:', new Error().stack);
         
-        // Class cache 삭제 (classes 배열 초기화)
-        console.log('🔍 [CACHE_DEBUG] classes 배열 삭제 전:', this.classes.length, '개');
-        this.classes = [];
-        console.log('🔍 [CACHE_DEBUG] classes 배열 삭제 완료');
+        // 🔥 기존 클래스 목록 백업 (에러 시 복원용)
+        const backupClasses = [...this.classes];
+        const hadClasses = backupClasses.length > 0;
+        
+        console.log('🔍 [REFRESH_CLASS_LIST_DEBUG] 백업된 클래스 개수:', backupClasses.length);
+        console.log('🔍 [REFRESH_CLASS_LIST_DEBUG] 기존 렌더링 있음:', this.elements.classList?.children.length || 0, '개');
+        
+        // 🔥 current_folder 복원 제거: 오직 changeFolder에서만 current_folder 변경 가능
+        // 🔥 class manager와 label explorer는 changeFolder로 설정된 current_folder를 그대로 사용
+        
+        // 🔥 API 호출이 성공할 때까지 기존 클래스 목록 유지 (초기화하지 않음)
+        // this.classes = []; // ❌ 제거: API 호출 전에 초기화하지 않음
         
         try {
             const mode = this.viewer?.classMode || 'wafer';
@@ -395,14 +423,37 @@ export class LabelManager {
             }
 
             const data = await response.json();
-            this.classes = data.classes || [];
-
+            const newClasses = data.classes || [];
+            
+            console.log('🔍 [REFRESH_CLASS_LIST_DEBUG] API 응답 클래스 개수:', newClasses.length);
+            
+            // 🔥 API 호출 성공 후에만 클래스 목록 업데이트
+            // 🔥 모드 변경 시: 이전 모드의 클래스와 새 모드의 클래스가 다를 수 있으므로 무조건 업데이트
+            this.classes = newClasses;
+            // 🔥 모드 변경 시에도 새 클래스 목록으로 렌더링 (이전 모드 클래스 제거)
             this.renderClassList();
+            
+            console.log('🔍 [REFRESH_CLASS_LIST_DEBUG] refreshClassList 성공 완료');
 
         } catch (error) {
             console.error('클래스 목록 새로고침 오류:', error);
+            // 🔥 에러 발생 시 기존 클래스 목록 복원
+            this.classes = backupClasses;
             if (this.elements.classList) {
-                this.elements.classList.innerHTML = '<p style="color: #f00;">클래스 목록을 불러올 수 없습니다.</p>';
+                // 🔥 기존 렌더링이 있으면 그대로 유지 (백업된 클래스 목록으로 다시 렌더링)
+                if (this.elements.classList.children.length > 0) {
+                    console.log('🔍 [REFRESH_CLASS_LIST_DEBUG] 에러 발생 - 기존 렌더링 유지');
+                    // 기존 렌더링이 있으면 그대로 유지 (백업된 클래스 목록으로 다시 렌더링)
+                    this.renderClassList();
+                } else if (hadClasses) {
+                    // 기존 클래스가 있었는데 렌더링이 없으면 다시 렌더링
+                    console.log('🔍 [REFRESH_CLASS_LIST_DEBUG] 에러 발생 - 백업된 클래스로 다시 렌더링');
+                    this.renderClassList();
+                } else {
+                    // 처음부터 클래스가 없었으면 에러 메시지 표시
+                    console.log('🔍 [REFRESH_CLASS_LIST_DEBUG] 에러 발생 - 에러 메시지 표시');
+                    this.elements.classList.innerHTML = '<p style="color: #f00;">클래스 목록을 불러올 수 없습니다.</p>';
+                }
             }
         }
     }
@@ -411,12 +462,29 @@ export class LabelManager {
      * 클래스 목록 렌더링
      */
     renderClassList() {
-        if (!this.elements.classList) return;
+        console.log('🔍 [RENDER_CLASS_LIST_DEBUG] renderClassList 호출됨');
+        console.log('🔍 [RENDER_CLASS_LIST_DEBUG] 클래스 개수:', this.classes.length);
+        console.log('🔍 [RENDER_CLASS_LIST_DEBUG] class-list 요소:', this.elements.classList);
         
+        if (!this.elements.classList) {
+            console.warn('🔍 [RENDER_CLASS_LIST_DEBUG] class-list 요소가 없음');
+            return;
+        }
+        
+        // 🔥 클래스가 없을 때 기존 렌더링이 있으면 유지
         if (this.classes.length === 0) {
+            const existingChildren = this.elements.classList.children.length;
+            console.log('🔍 [RENDER_CLASS_LIST_DEBUG] 클래스가 없음 - 기존 children 개수:', existingChildren);
+            if (existingChildren > 0) {
+                console.log('🔍 [RENDER_CLASS_LIST_DEBUG] 기존 렌더링 유지 (클래스가 없지만 기존 버튼 유지)');
+                return; // 기존 렌더링 유지
+            }
+            console.log('🔍 [RENDER_CLASS_LIST_DEBUG] 클래스가 없어서 빈 메시지 표시');
             this.elements.classList.innerHTML = '<p style="color: #888;">클래스가 없습니다.</p>';
             return;
         }
+        
+        console.log('🔍 [RENDER_CLASS_LIST_DEBUG] 기존 children 개수:', this.elements.classList.children.length);
         
         const fragment = document.createDocumentFragment();
         
@@ -425,8 +493,15 @@ export class LabelManager {
             fragment.appendChild(classButton);
         });
         
+        console.log('🔍 [RENDER_CLASS_LIST_DEBUG] fragment에 추가된 버튼 개수:', fragment.children.length);
+        
+        // 🔥 기존 내용을 비우기 전에 로그
+        const beforeClear = this.elements.classList.children.length;
         this.elements.classList.innerHTML = '';
+        console.log('🔍 [RENDER_CLASS_LIST_DEBUG] innerHTML 초기화 전:', beforeClear, '개 → 초기화 후: 0개');
+        
         this.elements.classList.appendChild(fragment);
+        console.log('🔍 [RENDER_CLASS_LIST_DEBUG] 렌더링 완료 후 children 개수:', this.elements.classList.children.length);
     }
     
     /**
@@ -566,10 +641,14 @@ export class LabelManager {
                     const result = await res.json();
                     console.log('🔍 [CLASS_CLICK_DEBUG] API 성공 응답:', result);
                     
-                    // UI 갱신
-                    console.log('🔍 [CLASS_CLICK_DEBUG] 라벨 추가 후 refreshAll 호출 전 currentFolderPath:', this.viewer?.currentFolderPath);
-                    await this.refreshAll();
-                    console.log('🔍 [CLASS_CLICK_DEBUG] refreshAll 완료 후 currentFolderPath:', this.viewer?.currentFolderPath);
+                    // 🔥 UI 갱신: 라벨 추가 후에는 클래스 목록이 변경되지 않으므로 refreshClassList() 호출 불필요
+                    // 🔥 refreshLabelExplorer()만 호출하여 추가된 라벨을 표시
+                    console.log('🔍 [CLASS_CLICK_DEBUG] 라벨 추가 후 refreshLabelExplorer 호출 전 currentFolderPath:', this.viewer?.currentFolderPath);
+                    
+                    // 🔥 refreshLabelExplorer()만 호출 (클래스 목록은 그대로 유지)
+                    // 🔥 refreshLabelExplorer() 내부에서 current_folder 복원을 처리하므로 여기서는 호출만
+                    await this.refreshLabelExplorer();
+                    console.log('🔍 [CLASS_CLICK_DEBUG] refreshLabelExplorer 완료 후 currentFolderPath:', this.viewer?.currentFolderPath);
                 } catch (err) {
                     console.error('🔍 [CLASS_CLICK_DEBUG] 라벨 추가 오류:', err);
                     console.error('🔍 [CLASS_CLICK_DEBUG] 오류 타입:', err.name);
@@ -608,9 +687,19 @@ export class LabelManager {
      * @param {string} className 클래스명
      */
     selectClass(className) {
+        console.log('🔍 [SELECT_CLASS_DEBUG] selectClass 호출됨:', className);
+        console.log('🔍 [SELECT_CLASS_DEBUG] 현재 클래스 목록 개수:', this.classes.length);
+        console.log('🔍 [SELECT_CLASS_DEBUG] class-list 요소:', this.elements.classList);
+        console.log('🔍 [SELECT_CLASS_DEBUG] class-list children 개수:', this.elements.classList?.children.length);
+        
         // 기존 선택 해제
         this.labelSelection.selectedClasses = [className];
+        // 🔥 클래스 버튼 상태만 업데이트 (refreshAll 호출하지 않음)
+        this.updateClassButtonStates();
+        // 🔥 클래스 이미지 표시
         this.showClassImages(className);
+        
+        console.log('🔍 [SELECT_CLASS_DEBUG] selectClass 완료 후 class-list children 개수:', this.elements.classList?.children.length);
         
         // 단일 이미지 뷰에서 클래스 선택 시 라벨 추가 모달 열기
         if (this.viewer && this.viewer.isSingleImageMode && this.viewer.currentImagePath) {
@@ -754,6 +843,9 @@ export class LabelManager {
     async refreshLabelExplorer() {
         console.log('🔍 [CACHE_DEBUG] Label Explorer 새로고침 시작 - 캐시 삭제');
 
+        // 🔥 current_folder 복원 제거: 오직 changeFolder에서만 current_folder 변경 가능
+        // 🔥 label explorer는 changeFolder로 설정된 current_folder를 그대로 사용
+
         // Label cache 삭제
         if (this.viewer && this.viewer.classToImgListCache) {
             console.log('🔍 [CACHE_DEBUG] classToImgListCache 삭제 전:', Object.keys(this.viewer.classToImgListCache).length, '개');
@@ -771,24 +863,64 @@ export class LabelManager {
             classes = this.classes.map(cls => typeof cls === 'string' ? cls : cls.name);
             console.log('🔍 [LABEL_EXPLORER_DEBUG] 캐시된 클래스 목록 사용:', classes.length, '개');
         } else {
-            // 캐시가 없으면 API 호출 (refreshAll이 아닌 직접 호출 시)
-            console.log('🔍 [LABEL_EXPLORER_DEBUG] 캐시 없음 - API 호출');
-            try {
-                const mode = this.viewer?.classMode || 'wafer';
-                const apiUrl = this.getViewerApiUrl('/api/classes', { mode });
-
-                const res = await fetch(apiUrl);
-                if (!res.ok) {
-                    throw new Error(`클래스 목록 조회 실패 (${res.status})`);
+            // 🔥 캐시가 없으면 API 호출 (refreshAll이 아닌 직접 호출 시)
+            // 🔥 단, refreshAll() 중인 경우 잠시 대기하여 refreshClassList() 완료를 기다림
+            console.log('🔍 [LABEL_EXPLORER_DEBUG] 캐시 없음 - API 호출 또는 대기');
+            
+            // 🔥 refreshAll() 중인 경우 refreshClassList() 완료를 기다림
+            if (this.isRefreshing) {
+                console.log('🔍 [LABEL_EXPLORER_DEBUG] refreshAll 진행 중 - refreshClassList() 완료 대기');
+                // 🔥 최대 5초까지 대기 (refreshClassList() 완료 대기)
+                let waitCount = 0;
+                while (waitCount < 50 && (!this.classes || this.classes.length === 0)) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    waitCount++;
                 }
+                
+                // 🔥 재확인: refreshClassList()가 완료되어 this.classes가 채워졌는지 확인
+                if (this.classes && this.classes.length > 0) {
+                    classes = this.classes.map(cls => typeof cls === 'string' ? cls : cls.name);
+                    console.log('🔍 [LABEL_EXPLORER_DEBUG] 대기 후 캐시된 클래스 목록 사용:', classes.length, '개');
+                } else {
+                    // 🔥 여전히 비어있으면 API 호출 (refreshClassList()가 실패했거나 클래스가 없는 경우)
+                    console.log('🔍 [LABEL_EXPLORER_DEBUG] 대기 후에도 캐시 없음 - API 호출');
+                    try {
+                        const mode = this.viewer?.classMode || 'wafer';
+                        const apiUrl = this.getViewerApiUrl('/api/classes', { mode });
 
-                const data = await res.json();
-                classes = data.classes || [];
-                console.log('🔍 [LABEL_EXPLORER_DEBUG] 클래스 목록 조회 성공:', classes.length, '개');
-            } catch (e) {
-                console.error('Label Explorer 클래스 조회 오류:', e);
-                container.innerHTML = '<p style="color:#f00;">클래스를 불러올 수 없습니다.</p>';
-                return;
+                        const res = await fetch(apiUrl);
+                        if (!res.ok) {
+                            throw new Error(`클래스 목록 조회 실패 (${res.status})`);
+                        }
+
+                        const data = await res.json();
+                        classes = data.classes || [];
+                        console.log('🔍 [LABEL_EXPLORER_DEBUG] 클래스 목록 조회 성공:', classes.length, '개');
+                    } catch (e) {
+                        console.error('Label Explorer 클래스 조회 오류:', e);
+                        container.innerHTML = '<p style="color:#f00;">클래스를 불러올 수 없습니다.</p>';
+                        return;
+                    }
+                }
+            } else {
+                // 🔥 refreshAll()이 아닌 직접 호출 시 API 호출
+                try {
+                    const mode = this.viewer?.classMode || 'wafer';
+                    const apiUrl = this.getViewerApiUrl('/api/classes', { mode });
+
+                    const res = await fetch(apiUrl);
+                    if (!res.ok) {
+                        throw new Error(`클래스 목록 조회 실패 (${res.status})`);
+                    }
+
+                    const data = await res.json();
+                    classes = data.classes || [];
+                    console.log('🔍 [LABEL_EXPLORER_DEBUG] 클래스 목록 조회 성공:', classes.length, '개');
+                } catch (e) {
+                    console.error('Label Explorer 클래스 조회 오류:', e);
+                    container.innerHTML = '<p style="color:#f00;">클래스를 불러올 수 없습니다.</p>';
+                    return;
+                }
             }
         }
 
@@ -1040,17 +1172,23 @@ export class LabelManager {
         this.lastRefreshTime = now;
         
         try {
-            // 🔥 타임아웃 추가 (20초)
-            const refreshPromise = Promise.all([
-                this.refreshClassList(),
-                this.refreshLabelExplorer()
-            ]);
+            // 🔥 current_folder 복원 제거: 오직 changeFolder에서만 current_folder 변경 가능
+            // 🔥 refreshAll은 changeFolder로 설정된 current_folder를 그대로 사용
             
+            // 🔥 타임아웃 추가 (20초)
             const timeoutPromise = new Promise((_, reject) => 
                 setTimeout(() => reject(new Error('refreshAll 타임아웃 (20초)')), 20000)
             );
             
-            await Promise.race([refreshPromise, timeoutPromise]);
+            // 🔥 refreshClassList()를 먼저 완료한 후 refreshLabelExplorer() 호출
+            // 🔥 refreshLabelExplorer()가 this.classes를 사용하므로 순차 실행 필요 (중복 API 호출 방지)
+            await Promise.race([this.refreshClassList(), timeoutPromise]);
+            
+            // 🔥 refreshClassList() 완료 후 refreshLabelExplorer() 호출
+            // 🔥 this.classes가 채워진 상태이므로 refreshLabelExplorer()는 API를 호출하지 않음
+            // 🔥 디버깅: this.classes 상태 확인
+            console.log('🔍 [REFRESH_ALL_DEBUG] refreshClassList 완료 후 this.classes:', this.classes.length, '개');
+            await Promise.race([this.refreshLabelExplorer(), timeoutPromise]);
             
             console.log('🔍 [LABEL_EXPLORER_DEBUG] refreshAll 완료');
         } catch (error) {

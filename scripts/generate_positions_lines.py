@@ -155,7 +155,7 @@ def build_chip_entries(xs: List[int], ys: List[int],
             chips.append({
                 "x_abs": int(x_abs),
                 "y_abs": int(y_abs),
-                "b": f"B{chip_idx:04d}",
+                "b": chip_idx,
                 "x_cal": int(x_abs),
                 "y_cal": int(y_abs),
                 "text3": f"{chip_idx:04d}",
