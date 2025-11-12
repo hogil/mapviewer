@@ -2259,8 +2259,8 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
         with os.scandir(target) as it:
             for entry in it:
                 name = entry.name
-                # 🔥 classification, classification_chips, thumbnails 폴더 제외
-                if name.startswith('.') or name == '__pycache__' or name in SKIP_DIRS or name in ['classification', 'classification_chips', 'thumbnails', 'labels']:
+                # 🔥 classification, classification_chips, chip_annotations, thumbnails 폴더 제외
+                if name.startswith('.') or name == '__pycache__' or name in SKIP_DIRS or name in ['classification', 'classification_chips', 'chip_annotations', 'thumbnails', 'labels']:
                     continue
                 entries_to_process.append(entry)
         
@@ -2916,6 +2916,10 @@ async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
         # 🔥 ThreadPoolExecutor로 병렬 처리 (고성능)
         loop = asyncio.get_running_loop()
         items = await loop.run_in_executor(DIRLIST_EXECUTOR, list_dir_fast, target)
+        
+        # 🔥 특정 폴더 제외: classification, classification_chips, chip_annotations, thumbnails
+        excluded_folders = ['classification', 'classification_chips', 'chip_annotations', 'thumbnails']
+        items = [item for item in items if item['name'] not in excluded_folders]
         
         logger.info(f"📁 [/api/files] 반환 항목 수: {len(items)} (폴더: {sum(1 for x in items if x['type']=='directory')}, 파일: {sum(1 for x in items if x['type']=='file')})")
         
@@ -4373,6 +4377,20 @@ async def search_files(q: str = Query("", description="파일명 검색(대소�
         if missing_count:
             timings["missing_files_filtered"] = missing_count
 
+        # 🔥 특정 폴더 제외: classification, classification_chips, chip_annotations, thumbnails
+        excluded_folders = ['classification', 'classification_chips', 'chip_annotations', 'thumbnails']
+        original_bucket_size = len(bucket)
+        filtered_bucket = []
+        for rel in bucket:
+            # 경로에 제외할 폴더가 포함되어 있는지 확인
+            path_parts = rel.replace('\\', '/').split('/')
+            should_exclude = any(excluded in path_parts for excluded in excluded_folders)
+            if not should_exclude:
+                filtered_bucket.append(rel)
+        
+        timings["excluded_folders_filtered"] = original_bucket_size - len(filtered_bucket)
+        bucket = filtered_bucket
+
         results = bucket[offset: offset + limit]
 
         timings["total_candidates"] = len(bucket)
@@ -5622,8 +5640,15 @@ def _write_chip_annotation_entries(annot_file: Path, entries: Dict[str, Any]) ->
     os.replace(tmp, annot_file)
 
 def _chip_annotation_file_for_relpath(rel_path: Path) -> Path:
+    """
+    Chip annotation 파일 경로 생성
+    현재 폴더 기준: {current_folder}/chip_annotations/{이미지명}_chips.json
+    """
+    global current_folder
     rel_path = Path(rel_path)
-    return config.CHIP_ANNOTATIONS_ROOT / rel_path.parent / f"{rel_path.stem}_chips.json"
+    # 🔥 current_folder 내 chip_annotations 디렉토리 사용 (classification_chips와 동일한 방식)
+    chip_annotations_dir = current_folder / "chip_annotations"
+    return chip_annotations_dir / rel_path.parent / f"{rel_path.stem}_chips.json"
 
 def _load_annotation_entry(rel_path: Path, folder_key: str) -> Tuple[Path, Dict[str, Any], Dict[str, Any]]:
     annot_file = _chip_annotation_file_for_relpath(rel_path)
@@ -6165,8 +6190,10 @@ async def create_composite_map_endpoint(payload: CompositeMapRequest):
         from .composite_map import create_composite_heatmaps, create_palette_overlay
 
         loader_mode = payload.loader_mode or config.COMPOSITE_LOADER_MODE
-        max_workers = payload.max_workers or config.COMPOSITE_MAX_WORKERS
-        batch_size = payload.batch_size or config.COMPOSITE_BATCH_SIZE
+        # 🔥 최적화: None을 전달하여 composite_map.py의 자동 최적화 로직 사용
+        # (cpu_count * 2, 최대 16개로 자동 계산)
+        max_workers = payload.max_workers if payload.max_workers is not None else None
+        batch_size = payload.batch_size if payload.batch_size is not None else None
 
         if payload.palette_mode:
             # 팔레트 오버레이 모드: 빠른 단색 합성
@@ -6197,7 +6224,7 @@ async def create_composite_map_endpoint(payload: CompositeMapRequest):
                 max_workers=max_workers,
                 batch_size=batch_size,
             )
-            # 기존 API 응답 형식 유지하면서 새 필드 추가
+            # 🔥 파일 경로로 반환 (썸네일 및 피라미드 생성용)
             response = {
                 "success": True,
                 "mode": "heatmap",
