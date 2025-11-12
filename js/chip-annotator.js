@@ -58,7 +58,7 @@ export class ChipAnnotator {
         // Colors
         this.gridColor = 'rgba(0, 255, 255, 0.3)';
         this.hoverColor = 'rgba(255, 255, 255, 0.3)';
-        this.selectedColor = 'rgba(255, 255, 0, 0.5)';
+        this.selectedColor = 'rgba(255, 255, 0, 0.25)'; // 🔥 더 투명하게 (0.5 -> 0.25)
         this.markedColor = 'rgba(255, 0, 0, 0.4)';
 
         // Coordinate display elements
@@ -451,7 +451,7 @@ export class ChipAnnotator {
                 const chip = this.chips[chipIdx];
                 if (chip && !this.selectedChips.has(chipIdx)) {
                     // 🔥 이미 선택된 chip은 제외 (중복 표시 방지)
-                    this._drawChipRect(chip, 'rgba(255, 255, 0, 0.3)'); // 더 연한 색으로 미리보기
+                    this._drawChipRect(chip, 'rgba(255, 255, 0, 0.2)'); // 🔥 더 투명하게 미리보기 (0.3 -> 0.2)
                 }
             });
         }
@@ -513,9 +513,13 @@ export class ChipAnnotator {
         ctx.lineWidth = 1;
 
         // Helper to convert image coords to canvas coords
+        // 🔥 이미지 렌더링 방식과 동일: translate(dx, dy) 후 scale(scale, scale)
+        // 이미지 픽셀 (imgX, imgY)는 캔버스 좌표 (imgX * scale + dx, imgY * scale + dy)에 그려짐
+        // Y 오프셋을 추가하여 그리드도 칩 선택과 동일한 위치에 그리기
+        const Y_OFFSET = -15; // 칩 선택과 동일한 오프셋 (음수 = 위로)
         const toCanvas = (imgX, imgY) => ({
             x: imgX * transform.scale + transform.dx,
-            y: imgY * transform.scale + transform.dy
+            y: imgY * transform.scale + transform.dy + Y_OFFSET
         });
 
         // Draw vertical lines
@@ -543,15 +547,24 @@ export class ChipAnnotator {
 
     /**
      * Draw chip rectangle
+     * 🔥 이미지 렌더링 방식과 동일하게: translate(dx, dy) 후 scale(scale, scale)
+     * 이미지의 (x, y) 픽셀은 캔버스의 (dx + x * scale, dy + y * scale)에 그려짐
+     * Y 오프셋을 추가하여 칩 선택을 이미지와 정확히 맞춤
      */
     _drawChipRect(chip, color) {
         const transform = this.viewer.transform;
         const rect = chip.rect;
 
+        // 🔥 Y 오프셋: 칩 선택을 이미지 위치에 맞추기 위해 위로 올림
+        const Y_OFFSET = -15; // 픽셀 단위 오프셋 (음수 = 위로, 값이 클수록 더 위로)
+        
+        // 🔥 이미지와 동일한 변환: translate 후 scale
+        // 이미지: ctx.translate(dx, dy); ctx.scale(scale, scale); ctx.drawImage(img, 0, 0);
+        // 따라서 이미지 픽셀 (x, y)는 캔버스 좌표 (dx + x * scale, dy + y * scale)에 그려짐
         const topLeftX = rect.x0 * transform.scale + transform.dx;
-        const topLeftY = rect.y0 * transform.scale + transform.dy;
+        const topLeftY = rect.y0 * transform.scale + transform.dy + Y_OFFSET;
         const bottomRightX = rect.x1 * transform.scale + transform.dx;
-        const bottomRightY = rect.y1 * transform.scale + transform.dy;
+        const bottomRightY = rect.y1 * transform.scale + transform.dy + Y_OFFSET;
 
         this.ctx.fillStyle = color;
         this.ctx.fillRect(
@@ -595,8 +608,11 @@ export class ChipAnnotator {
      */
     _handleMouseMove(e) {
         const rect = this.canvas.getBoundingClientRect();
-        const canvasX = e.clientX - rect.left;
-        const canvasY = e.clientY - rect.top;
+        // 🔥 CSS 스케일링 고려: 실제 캔버스 픽셀 좌표로 변환
+        const scaleX = this.canvas.width / rect.width;
+        const scaleY = this.canvas.height / rect.height;
+        const canvasX = (e.clientX - rect.left) * scaleX;
+        const canvasY = (e.clientY - rect.top) * scaleY;
 
         // Store last mouse position for previews
         this.lastMousePos = { x: canvasX, y: canvasY };
@@ -620,8 +636,9 @@ export class ChipAnnotator {
                 Math.abs(canvasX - lastPoint.x) > 3 ||
                 Math.abs(canvasY - lastPoint.y) > 3) {
                 this.polygonPath.push({ x: canvasX, y: canvasY });
+                // 🔥 Alt+Drag 중에는 즉시 렌더링 (안정성 향상)
+                this.render();
             }
-            this.render();
             return;
         }
 
@@ -631,13 +648,30 @@ export class ChipAnnotator {
             this.render();
         }
 
-        // Handle Shift+Click rectangle preview
+        // Handle Shift+Drag rectangle preview
         if (this.shiftClickPos) {
+            const dragDistance = Math.sqrt(
+                Math.pow(canvasX - this.shiftClickPos.x, 2) +
+                Math.pow(canvasY - this.shiftClickPos.y, 2)
+            );
+            // 드래그가 발생했으면 미리보기 표시
+            if (dragDistance > 5) {
+                const selected = this._getChipsInCanvasRect(
+                    this.shiftClickPos.x,
+                    this.shiftClickPos.y,
+                    canvasX,
+                    canvasY
+                );
+                this._tempDragSelection = selected;
+                this.render();
+                return;
+            }
+            // 드래그가 발생하지 않았으면 아무것도 하지 않음
             this.render();
             return;
         }
 
-        // 🔥 Ctrl+클릭 중 드래그 감지 및 미리보기
+        // 🔥 Ctrl+드래그 미리보기
         if (this.ctrlClickStartPos && this.dragStartChip) {
             const dragDistance = Math.sqrt(
                 Math.pow(canvasX - this.ctrlClickStartPos.x, 2) +
@@ -655,18 +689,8 @@ export class ChipAnnotator {
             }
         }
 
-        // Handle regular drag selection (chip-to-chip)
-        // 🔥 Alt 키가 눌려있지 않고, Alt+Drag 모드가 아니고, Ctrl+클릭이 아닐 때만 일반 드래그 선택
-        // 🔥 드래그 중에는 선택 미리보기만 (최종 선택은 mouseup에서)
-        if (this.isDragging && this.dragStartChip && chip && !e.altKey && !this.isAltDrag && !this.ctrlClickStartPos) {
-            // 🔥 드래그 중에는 선택 상태를 임시로 저장 (미리보기용)
-            // 실제 선택은 mouseup에서 처리
-            // 여기서는 렌더링만 업데이트
-            const selected = this.getChipsInRect(this.dragStartChip, chip);
-            // 🔥 임시 선택 상태로 렌더링 (selectedChips는 mouseup에서만 변경)
-            this._tempDragSelection = selected;
-            this.render();
-        }
+        // 🔥 일반 드래그는 선택하지 않음 (Ctrl/Shift/Alt+드래그만 선택)
+        // 일반 드래그 중에는 아무것도 하지 않음
     }
 
     /**
@@ -676,8 +700,11 @@ export class ChipAnnotator {
         if (e.button !== 0) return; // Left click only
 
         const rect = this.canvas.getBoundingClientRect();
-        const canvasX = e.clientX - rect.left;
-        const canvasY = e.clientY - rect.top;
+        // 🔥 CSS 스케일링 고려: 실제 캔버스 픽셀 좌표로 변환
+        const scaleX = this.canvas.width / rect.width;
+        const scaleY = this.canvas.height / rect.height;
+        const canvasX = (e.clientX - rect.left) * scaleX;
+        const canvasY = (e.clientY - rect.top) * scaleY;
 
         // 🔥 Alt 키가 눌려있으면 다른 선택 로직 실행하지 않음
         if (e.altKey) {
@@ -694,44 +721,43 @@ export class ChipAnnotator {
             this.viewer.onManualChipSelection();
         }
 
-        // Shift+Click: rectangle selection (2-click mode)
-        if (e.shiftKey && !this.shiftClickPos) {
+        const chip = this.findChipAtPixel(canvasX, canvasY);
+
+        // 🔥 Shift+드래그: 범위 선택
+        if (e.shiftKey && !e.ctrlKey && !e.altKey) {
             this.shiftClickPos = { x: canvasX, y: canvasY };
+            this.isDragging = false; // 드래그 시작 전
             this.render();
             return;
         }
 
-        const chip = this.findChipAtPixel(canvasX, canvasY);
-
-        if (chip) {
-            // 🔥 Ctrl+클릭: 단순 클릭인지 드래그인지 구분
-            if (e.ctrlKey) {
-                // Ctrl+클릭 시작 위치와 시간 저장 (드래그 감지용)
+        // 🔥 Ctrl+클릭: 드래그 감지용 위치 저장
+        if (e.ctrlKey && !e.shiftKey && !e.altKey) {
+            if (chip) {
                 this.ctrlClickStartPos = { x: canvasX, y: canvasY };
                 this.ctrlClickStartTime = Date.now();
-                // 🔥 Ctrl+클릭 시 즉시 토글하지 않고, mouseup에서 처리
-                // 드래그가 발생하지 않으면 토글, 드래그가 발생하면 범위 선택 토글
-                this.isDragging = false; // Ctrl+클릭 시 드래그로 처리하지 않음
+                this.isDragging = false; // 드래그 시작 전
                 this.dragStartChip = chip;
                 this.render();
-                return;
-            }
-
-            this.isDragging = true;
-            this.dragStartChip = chip;
-
-            // Shift: add to selection (범위 선택 시작)
-            if (e.shiftKey) {
-                // Shift+Drag는 범위 선택으로 처리 (mouseup에서 완료)
-                // 여기서는 선택 유지
-            }
-            // Normal: replace selection
-            else {
+            } else {
+                // 🔥 칩이 없는 곳 Ctrl+클릭: 선택 해제
                 this.selectedChips.clear();
-                this.selectedChips.add(chip.index);
+                this.render();
             }
+            return;
+        }
 
+        // 🔥 일반 클릭 (Ctrl/Shift/Alt 없음): 선택 해제만 (절대 선택하지 않음)
+        if (!e.ctrlKey && !e.shiftKey && !e.altKey) {
+            this.selectedChips.clear();
+            // 🔥 일반 클릭은 드래그해도 선택하지 않으므로 상태만 초기화
+            this.isDragging = false;
+            this.dragStartChip = null;
+            this.ctrlClickStartPos = null;
+            this.ctrlClickStartTime = null;
+            this._tempDragSelection = null;
             this.render();
+            return;
         }
     }
 
@@ -740,8 +766,11 @@ export class ChipAnnotator {
      */
     _handleMouseUp(e) {
         const rect = this.canvas.getBoundingClientRect();
-        const canvasX = e.clientX - rect.left;
-        const canvasY = e.clientY - rect.top;
+        // 🔥 CSS 스케일링 고려: 실제 캔버스 픽셀 좌표로 변환
+        const scaleX = this.canvas.width / rect.width;
+        const scaleY = this.canvas.height / rect.height;
+        const canvasX = (e.clientX - rect.left) * scaleX;
+        const canvasY = (e.clientY - rect.top) * scaleY;
 
         // 🔥 Alt+Drag polygon selection 처리 (Alt 키가 떼어져도 isAltDrag가 true이면 처리)
         if (this.isAltDrag) {
@@ -752,20 +781,29 @@ export class ChipAnnotator {
                 // 🔥 Alt+Drag 시작 시 저장된 선택 상태를 기반으로 처리
                 // mouseup 시점의 키 상태를 우선 체크
                 if (e.shiftKey) {
-                    // Shift: add to selection (기존 선택에 추가)
-                    selected.forEach(idx => this.selectedChips.add(idx));
+                    // Shift: add to selection (기존 선택에 추가, 배치 처리로 성능 향상)
+                    const newSelections = selected.filter(idx => !this.selectedChips.has(idx));
+                    newSelections.forEach(idx => this.selectedChips.add(idx));
+                    console.log('🖱️ [ALT+SHIFT+DRAG] 범위 선택 추가:', selected.length, '개 (신규:', newSelections.length, ')');
                 } else if (e.ctrlKey) {
-                    // Ctrl: toggle (기존 선택과 토글)
+                    // Ctrl: toggle (기존 선택과 토글, 배치 처리로 성능 향상)
+                    const toRemove = new Set();
+                    const toAdd = new Set();
                     selected.forEach(idx => {
                         if (this.selectedChips.has(idx)) {
-                            this.selectedChips.delete(idx);
+                            toRemove.add(idx);
                         } else {
-                            this.selectedChips.add(idx);
+                            toAdd.add(idx);
                         }
                     });
+                    // 배치 처리
+                    toRemove.forEach(idx => this.selectedChips.delete(idx));
+                    toAdd.forEach(idx => this.selectedChips.add(idx));
+                    console.log('🖱️ [ALT+CTRL+DRAG] 범위 선택 토글:', selected.length, '개 (제거:', toRemove.size, ', 추가:', toAdd.size, ')');
                 } else {
                     // Normal: replace selection (기존 선택 교체)
                     this.selectedChips = new Set(selected);
+                    console.log('🖱️ [ALT+DRAG] 범위 선택 교체:', selected.length, '개');
                 }
             } else {
                 // 🔥 polygon path가 너무 짧으면 선택하지 않음 (원 그리기 취소)
@@ -780,41 +818,42 @@ export class ChipAnnotator {
             return;
         }
 
-        // Handle Shift+2-click rectangle selection
+        // 🔥 Shift+드래그 처리 (드래그만 허용)
         if (this.shiftClickPos) {
-            const selected = this._getChipsInCanvasRect(
-                this.shiftClickPos.x,
-                this.shiftClickPos.y,
-                canvasX,
-                canvasY
+            const dragDistance = Math.sqrt(
+                Math.pow(canvasX - this.shiftClickPos.x, 2) +
+                Math.pow(canvasY - this.shiftClickPos.y, 2)
             );
-
-            if (e.ctrlKey) {
-                // Ctrl: toggle
-                selected.forEach(idx => {
-                    if (this.selectedChips.has(idx)) {
-                        this.selectedChips.delete(idx);
-                    } else {
-                        this.selectedChips.add(idx);
-                    }
-                });
+            // 드래그가 발생했으면 범위 선택
+            if (dragDistance > 5) {
+                const selected = this._getChipsInCanvasRect(
+                    this.shiftClickPos.x,
+                    this.shiftClickPos.y,
+                    canvasX,
+                    canvasY
+                );
+                // 🔥 Shift+드래그: 범위 내 chip 추가 (기존 선택 유지, 배치 처리로 성능 향상)
+                // 이미 선택된 chip은 제외하여 중복 추가 방지
+                const newSelections = selected.filter(idx => !this.selectedChips.has(idx));
+                newSelections.forEach(idx => this.selectedChips.add(idx));
+                console.log('🖱️ [SHIFT+DRAG] 범위 선택 추가:', selected.length, '개 (신규:', newSelections.length, ')');
             } else {
-                // Normal or Shift: add to selection
-                selected.forEach(idx => this.selectedChips.add(idx));
+                // 드래그 없음: 선택 해제
+                this.selectedChips.clear();
+                console.log('🖱️ [SHIFT+CLICK] 선택 해제 (드래그 없음)');
             }
-
             this.shiftClickPos = null;
+            this._tempDragSelection = null;
             this.render();
             return;
         }
 
-        // 🔥 Ctrl+클릭 처리 (드래그 여부 확인)
+        // 🔥 Ctrl+드래그 처리 (드래그 여부 확인)
         if (this.ctrlClickStartPos && this.dragStartChip) {
             const dragDistance = Math.sqrt(
                 Math.pow(canvasX - this.ctrlClickStartPos.x, 2) +
                 Math.pow(canvasY - this.ctrlClickStartPos.y, 2)
             );
-            const dragTime = Date.now() - this.ctrlClickStartTime;
             
             // 🔥 드래그가 발생했는지 확인 (5px 이상 이동)
             if (dragDistance > 5) {
@@ -822,23 +861,21 @@ export class ChipAnnotator {
                 const chip = this.findChipAtPixel(canvasX, canvasY);
                 if (chip && chip !== this.dragStartChip) {
                     const selected = this.getChipsInRect(this.dragStartChip, chip);
-                    // Ctrl+드래그: 범위 내 chip 토글 (기존 선택 상태 유지)
+                    // 🔥 Ctrl+드래그: 범위 내 chip 토글 (배치 처리로 성능 향상)
+                    // 대량 선택 시 Set 연산 최적화
+                    const toRemove = new Set();
+                    const toAdd = new Set();
                     selected.forEach(idx => {
                         if (this.selectedChips.has(idx)) {
-                            this.selectedChips.delete(idx);
+                            toRemove.add(idx);
                         } else {
-                            this.selectedChips.add(idx);
+                            toAdd.add(idx);
                         }
                     });
-                    console.log('🖱️ [CTRL+DRAG] 범위 선택 토글:', selected.length, '개');
-                } else if (chip && chip === this.dragStartChip) {
-                    // 같은 chip에서 드래그 시작하고 끝남: 단일 chip 토글
-                    if (this.selectedChips.has(chip.index)) {
-                        this.selectedChips.delete(chip.index);
-                    } else {
-                        this.selectedChips.add(chip.index);
-                    }
-                    console.log('🖱️ [CTRL+CLICK] 단일 chip 토글');
+                    // 배치 처리
+                    toRemove.forEach(idx => this.selectedChips.delete(idx));
+                    toAdd.forEach(idx => this.selectedChips.add(idx));
+                    console.log('🖱️ [CTRL+DRAG] 범위 선택 토글:', selected.length, '개 (제거:', toRemove.size, ', 추가:', toAdd.size, ')');
                 }
             } else {
                 // 단순 클릭 (5px 이하 이동): 단일 chip 토글
@@ -857,34 +894,19 @@ export class ChipAnnotator {
             this.ctrlClickStartPos = null;
             this.ctrlClickStartTime = null;
             this.dragStartChip = null;
+            this._tempDragSelection = null;
             this.render();
             return;
         }
 
-        // 🔥 일반 드래그 선택 처리 (범위 선택)
-        if (this.isDragging && this.dragStartChip) {
-            const chip = this.findChipAtPixel(canvasX, canvasY);
-            if (chip && chip !== this.dragStartChip) {
-                // 드래그가 끝났을 때 범위 내 chip 선택
-                const selected = this.getChipsInRect(this.dragStartChip, chip);
-                
-                if (e.shiftKey) {
-                    // Shift: add to selection
-                    selected.forEach(idx => this.selectedChips.add(idx));
-                } else {
-                    // Normal: replace selection
-                    this.selectedChips = new Set(selected);
-                }
-            }
-        }
+        // 🔥 일반 클릭/드래그는 mousedown에서 이미 처리됨 (선택 해제만, 절대 선택하지 않음)
+        // 여기서는 아무것도 하지 않음
 
         // 🔥 상태 초기화
         this.isDragging = false;
         this.dragStartChip = null;
         this.isMultiSelect = false;
-        this.isAltDrag = false;
-        this.polygonPath = [];
-        this._tempDragSelection = null; // 임시 선택 상태 초기화
+        this._tempDragSelection = null;
         this.ctrlClickStartPos = null;
         this.ctrlClickStartTime = null;
         this.render();
@@ -977,13 +999,15 @@ export class ChipAnnotator {
         // Clear hover
         this.hoveredChip = null;
         
-        // 🔥 Alt+Drag 중이 아니고 Ctrl+클릭도 아니면 드래그 상태 초기화
-        // Alt+Drag 중에는 polygon path 유지 (마우스가 다시 돌아올 수 있음)
-        if (!this.isAltDrag && !this.ctrlClickStartPos) {
+        // 🔥 Alt+Drag 중이면 상태 유지 (마우스가 다시 돌아올 수 있음)
+        // 🔥 Shift+드래그나 Ctrl+드래그 중에도 상태 유지
+        if (!this.isAltDrag && !this.shiftClickPos && !this.ctrlClickStartPos) {
             this.isDragging = false;
             this.dragStartChip = null;
             this.isMultiSelect = false;
+            this._tempDragSelection = null;
         }
+        // 🔥 Alt+Drag 중이거나 드래그 중이면 hover만 제거하고 상태는 유지
         this.render();
     }
 
