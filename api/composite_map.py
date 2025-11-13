@@ -19,6 +19,7 @@ from .config import (
     COMPOSITE_LOADER_MODE,
     COMPOSITE_BATCH_SIZE,
 )
+from .personal_colors import load_color_legends, _scheme_to_palette_bytes
 
 Image.MAX_IMAGE_PIXELS = None
 warnings.simplefilter("ignore", DecompressionBombWarning)
@@ -98,7 +99,8 @@ def create_composite_heatmaps(
     create_sum: bool = True,
     loader_mode: Optional[str] = None,
     max_workers: Optional[int] = None,
-    batch_size: Optional[int] = None
+    batch_size: Optional[int] = None,
+    scheme: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Args:
@@ -321,26 +323,25 @@ def create_composite_heatmaps(
         # 모든 이미지에서 값이 0인 픽셀을 찾기 위해 합계 계산
         all_zero_mask = np.all(all_indices == 0, axis=0)
         
-        # 🔥 빈 부분은 흰색(255, 255, 255)으로, 나머지는 원본 팔레트 적용
-        # RGB 모드로 변환하여 빈 부분을 흰색으로 표시 (벡터화 연산)
-        if source_palette:
-            # 🔥 팔레트를 RGB 배열로 변환 (벡터화를 위한 사전 계산)
-            palette_rgb = np.array([
-                [
-                    source_palette[i * 3] if i * 3 < len(source_palette) else 255,
-                    source_palette[i * 3 + 1] if i * 3 + 1 < len(source_palette) else 255,
-                    source_palette[i * 3 + 2] if i * 3 + 2 < len(source_palette) else 255
-                ]
-                for i in range(256)
-            ], dtype=np.uint8)
-            
-            # 🔥 인덱스별 RGB 값 추출 (벡터화)
-            rgb_array = palette_rgb[sum_map_indices]  # (height, width, 3)
-            
-            # 🔥 빈 부분은 흰색으로 설정 (벡터화)
-            rgb_array[all_zero_mask] = [255, 255, 255]
-            
-            sum_map_img = Image.fromarray(rgb_array, mode='RGB')
+        # 🔥 개인색 팔레트 적용 (scheme이 있으면 개인색, 없으면 원본 팔레트)
+        palette_to_use = source_palette
+        if scheme:
+            legends = load_color_legends()
+            if scheme in legends:
+                scheme_data = legends[scheme]
+                palette_bytes = _scheme_to_palette_bytes(scheme_data)
+                # bytes를 list로 변환
+                palette_to_use = list(palette_bytes)
+                # 256개 인덱스까지 확장 (나머지는 기본값)
+                while len(palette_to_use) < 768:
+                    palette_to_use.extend([0, 0, 0])
+        
+        # 🔥 팔레트 모드로 저장 (개인색 팔레트 적용)
+        if palette_to_use:
+            # 빈 부분(모든 이미지에서 0인 경우)은 인덱스 0으로 유지 (흰색)
+            # sum_map_indices는 이미 median 값이므로 그대로 사용
+            sum_map_img = Image.fromarray(sum_map_indices, mode='P')
+            sum_map_img.putpalette(palette_to_use)
         else:
             # 팔레트가 없으면 그레이스케일로 처리 (빈 부분은 흰색)
             sum_map_gray = np.where(all_zero_mask, 255, sum_map_indices)

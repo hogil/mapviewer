@@ -134,7 +134,19 @@ export class GridManager {
         // 파일명 표시
         const fileName = document.createElement('div');
         fileName.className = 'grid-filename';
-        fileName.textContent = imagePath.split('/').pop();
+        let displayName = imagePath.split('/').pop();
+        // sum_map.png를 composite(median)으로 표시
+        if (displayName === 'sum_map.png' || displayName === 'sum_map') {
+            displayName = 'composite(median)';
+        }
+        // index_로 시작하는 파일명을 grade_로 변경
+        else if (displayName.startsWith('index_')) {
+            displayName = displayName.replace(/^index_/, 'grade_');
+            // 확장자 제거 후 표시
+            const nameWithoutExt = displayName.replace(/\.(png|jpg|jpeg|gif|webp)$/i, '');
+            displayName = nameWithoutExt;
+        }
+        fileName.textContent = displayName;
         fileName.title = imagePath;
         
         // 선택 체크박스

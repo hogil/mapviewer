@@ -5952,6 +5952,7 @@ class CompositeMapRequest(BaseModel):
     palette_mode: bool = False
     focus_index: Optional[int] = 3
     highlight_threshold: int = 8
+    scheme: Optional[str] = None
 
 @app.post("/api/chip-annotations")
 async def save_chip_annotations(request: ChipAnnotationRequest, req: Request):
@@ -6223,6 +6224,7 @@ async def create_composite_map_endpoint(payload: CompositeMapRequest):
                 loader_mode=loader_mode,
                 max_workers=max_workers,
                 batch_size=batch_size,
+                scheme=payload.scheme,
             )
             # 🔥 파일 경로로 반환 (썸네일 및 피라미드 생성용)
             response = {
