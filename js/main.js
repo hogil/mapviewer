@@ -213,11 +213,6 @@ class ThumbnailManager {
             throw new Error(`잘못된 이미지 경로: ${imgPath}`);
         }
 
-        // 🔥 Blob URL인 경우 직접 반환 (composite map 등)
-        if (imgPath.startsWith('blob:')) {
-            return imgPath;
-        }
-
         // 동시 로딩 수 제한
 
         if (this.concurrentLoads >= this.maxConcurrentLoads) {
@@ -2553,8 +2548,13 @@ class WaferMapViewer {
             this.dom.fileNameDisplay.style.display = 'none';
         }
 
-        // 🔥 상단 패널은 항상 표시 (이미지 1개 보기 모드에서만 숨김)
-        // viewControls는 loadImage에서만 제어 (단일 이미지 모드에서만 표시)
+        // 줌 바 숨기기 (이미지가 없을 때는 불필요)
+
+        const viewControls = document.querySelector('.view-controls');
+
+        if (viewControls) {
+            viewControls.style.display = 'none';
+        }
 
         // 현재 이미지 정리
 
@@ -2622,10 +2622,10 @@ class WaferMapViewer {
             `;
         }
 
-        // 🔥 상단 패널은 항상 표시 (이미지 1개 보기 모드에서만 숨김)
-        // viewControls는 loadImage에서만 제어 (단일 이미지 모드에서만 표시)
-        // 🔥 초기 상태에서는 zoom 패널 숨기기
+        // 줌 바 숨기기 (초기 상태에서는 불필요)
+
         const viewControls = document.querySelector('.view-controls');
+
         if (viewControls) {
             viewControls.style.display = 'none';
         }
@@ -3717,12 +3717,12 @@ class WaferMapViewer {
                 });
         } else {
             // 🔥 labelManager가 없으면 refreshLabelExplorer만 호출
-        this.refreshLabelExplorer()
-            .then(() => {
-                console.log(`🔍 [CLASS_MODE] Label Explorer 새로고침 완료 (mode=${normalized})`);
-                this.updateLabelExplorerContent();
-                console.log(`🔍 [CLASS_MODE] Fail List 갱신 완료 (mode=${normalized})`);
-            })
+            this.refreshLabelExplorer()
+                .then(() => {
+                    console.log(`🔍 [CLASS_MODE] Label Explorer 새로고침 완료 (mode=${normalized})`);
+                    this.updateLabelExplorerContent();
+                    console.log(`🔍 [CLASS_MODE] Fail List 갱신 완료 (mode=${normalized})`);
+                })
                 .catch(err => {
                     console.error('❌ [CLASS_MODE] Label Explorer 새로고침 실패:', err);
                     // 에러 발생 시에도 기본 상태는 유지하도록 시도
@@ -3818,9 +3818,9 @@ class WaferMapViewer {
         if (includePrefix) {
             // 🔥 currentFolderPrefix만 사용 (changeFolder에서 설정됨)
             if (this.currentFolderPrefix) {
-            const prefixParts = normalizePath(this.currentFolderPrefix);
-            if (prefixParts.length) {
-                segments.push(...prefixParts);
+                const prefixParts = normalizePath(this.currentFolderPrefix);
+                if (prefixParts.length) {
+                    segments.push(...prefixParts);
                 }
             }
         }
@@ -4993,7 +4993,7 @@ class WaferMapViewer {
                 folders = folderList.map(folder => {
                     // API에서 positions/ prefix를 추가하므로 입력값 그대로 전송
                     // 단, 이미 /가 포함되어 있으면 그대로 사용
-        return {
+                    return {
                         path: folder,
                         allow_label: true,
                         allow_class: true
@@ -5005,11 +5005,11 @@ class WaferMapViewer {
             }
             
             usersToSave.push({
-            loginId,
-            username,
-            deptName,
-            role,
-            folders
+                loginId,
+                username,
+                deptName,
+                role,
+                folders
             });
         }
         
@@ -5022,14 +5022,14 @@ class WaferMapViewer {
             // 배치 저장 (각 사용자별로 API 호출)
             const savePromises = usersToSave.map(user => 
                 fetch('/api/roles/users', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(user)
                 }).then(async res => {
-            if (!res.ok) {
+                    if (!res.ok) {
                         const errorText = await res.text();
                         throw new Error(`${user.loginId}: ${errorText}`);
-            }
+                    }
                     return res.json();
                 })
             );
@@ -5137,33 +5137,21 @@ class WaferMapViewer {
             return;
         }
 
-        // 🔥 파일 경로 사용 (썸네일 및 피라미드 생성용)
+        // 🔥 히트맵 경로 추출 (index 0~7 순서대로)
         const heatmapPaths = result.heatmaps
             .sort((a, b) => a.index - b.index)
-            .map(h => h.path)
-            .filter(path => path !== null);
+            .map(h => h.path);
 
         // 🔥 Sum Map 추가 (9번째 이미지)
         if (result.sum_map_path) {
             heatmapPaths.push(result.sum_map_path);
         }
 
-        console.log('🔄 Composite Grid로 전환 (9개 이미지):', heatmapPaths.length);
+        console.log('🔄 Composite Grid로 전환 (9개 이미지):', heatmapPaths);
 
         // 🔥 Grid 선택 상태 완전 초기화
         this.gridSelectedIdxs = [];
         this.selectedImages = heatmapPaths;  // 🔥 컬럼 슬라이더 작동을 위해 selectedImages 설정
-
-        // 🔥 Composite map 이미지 이름 매핑 저장 (index0, index1, ... sum)
-        this.compositeImageNames = {};
-        result.heatmaps.forEach((h, idx) => {
-            if (h.path) {
-                this.compositeImageNames[h.path] = `index${h.index}`;
-            }
-        });
-        if (result.sum_map_path) {
-            this.compositeImageNames[result.sum_map_path] = 'sum';
-        }
 
         // 🔥 Grid를 9개 이미지로 교체 (선택 상태 초기화)
         await this.showGrid(heatmapPaths, true);  // skipSaveState=true
@@ -5182,19 +5170,16 @@ class WaferMapViewer {
         // Composite 세션 정보 저장
         this.compositeSession = {
             sourceImageCount: result.image_count || result.source_images,
-            imageSize: result.image_size || { width: result.width, height: result.height },
-            processingTime: result.processing_time
+            outputDir: result.output_dir,
+            imageSize: result.image_size,
+            processingTime: result.processing_time,
+            generatedAt: result.generated_at
         };
 
         // Composite 모드 활성화
         this.isCompositeMode = true;
 
         this.updateContextMenuState();
-    }
-
-    // 🔥 Composite 모드 종료 시 이미지 이름 매핑 초기화
-    exitCompositeMode() {
-        this.returnToPreviousGrid();
     }
 
     /**
@@ -5231,8 +5216,6 @@ class WaferMapViewer {
         // Composite 모드 비활성화
         this.isCompositeMode = false;
         this.compositeSession = null;
-        // 🔥 Composite map 이미지 이름 매핑 초기화
-        this.compositeImageNames = null;
 
         this.updateContextMenuState();
     }
@@ -9034,7 +9017,7 @@ class WaferMapViewer {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ name })
                     });
-
+                    
                     console.log(`🔍 [ADD_CLASS] Response status: ${response.status}, ok: ${response.ok}`);
 
                     if (!response.ok) {
@@ -10052,10 +10035,10 @@ class WaferMapViewer {
         try {
             const container = document.getElementById('label-explorer-list');
 
-        if (!container) {
+            if (!container) {
                 this._isRefreshingLabelExplorer = false;
-            return;
-        }
+                return;
+            }
 
         const scrollTop = container.scrollTop;
 
@@ -10089,10 +10072,10 @@ class WaferMapViewer {
             console.log('🔍 [REFRESH_LABEL_EXPLORER] labelManager.classes 사용:', classes.length, '개');
         } else {
             // 🔥 labelManager.classes가 비어있으면 getClassList() 호출 (최초 로드 시)
-        try {
-            classes = await this.getClassList();
+            try {
+                classes = await this.getClassList();
                 console.log('🔍 [REFRESH_LABEL_EXPLORER] getClassList() 호출:', classes.length, '개');
-        } catch (error) {
+            } catch (error) {
                 console.error('❌ [REFRESH_LABEL_EXPLORER] 클래스 조회 오류:', error);
                 // 에러 발생 시에도 빈 배열로 계속 진행하여 UI가 깨지지 않도록 함
                 classes = [];
@@ -10904,7 +10887,7 @@ class WaferMapViewer {
                 }, true); // capture phase로 등록
 
                 const imgList = classToImgList[cls] || [];
-
+                
                 // 🔥 숫자를 고려한 오름차순 정렬 (5, 10, 15, 20, 25 순서)
                 const sortedImgList = [...imgList].sort((a, b) => {
                     if (a.type !== 'file' || b.type !== 'file') {
@@ -11326,7 +11309,7 @@ class WaferMapViewer {
 
                         // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
                         const labelPath = this.buildClassificationPath(cls);
-                    const imgRes = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`);
+                        const imgRes = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`);
                         const imgData = await imgRes.json();
                         const imgList = Array.isArray(imgData.items) ? imgData.items : [];
                         
@@ -12284,13 +12267,10 @@ class WaferMapViewer {
             this.dom.fileNameDisplay.style.display = 'none';
         }
 
-        // 🔥 상단 패널은 항상 표시 (이미지 1개 보기 모드에서만 숨김)
-        // viewControls는 loadImage에서만 제어 (단일 이미지 모드에서만 표시)
-        // 🔥 그리드 모드에서는 zoom 패널 숨기기
+        // 파일명 패널은 유지 (제품 변경 시 상단 패널 사라짐 방지) - 주석 유지
+
         const viewControls = document.querySelector('.view-controls');
-        if (viewControls) {
-            viewControls.style.display = 'none';
-        }
+        if (viewControls) viewControls.style.display = 'none';
 
         // 🎨 Color Legends 업데이트 (Grid Mode)
         this.showColorLegends();
@@ -12461,15 +12441,8 @@ class WaferMapViewer {
             // 파일명 (확장자 제거)
             const label = document.createElement('div');
             label.className = 'grid-thumb-label';
-            // 🔥 Composite map 이미지인 경우 index0, index1, sum 등으로 표시
-            let displayName;
-            if (this.compositeImageNames && this.compositeImageNames[imgPath]) {
-                displayName = this.compositeImageNames[imgPath];
-            } else {
-                const fileName = imgPath.split('/').pop();
-                displayName = fileName.replace(/\.[^.]+$/, '');
-            }
-            label.textContent = displayName;
+            const fileName = imgPath.split('/').pop();
+            label.textContent = fileName.replace(/\.[^.]+$/, '');
             wrap.appendChild(label);
             grid.appendChild(wrap);
         });
@@ -13801,7 +13774,7 @@ class WaferMapViewer {
         this.singleImageFromGrid = false;
 
         if (this.boundGridEscapeHandler) {
-        document.removeEventListener('keydown', this.boundGridEscapeHandler);
+            document.removeEventListener('keydown', this.boundGridEscapeHandler);
             this.boundGridEscapeHandler = null;
         }
 
