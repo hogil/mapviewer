@@ -52,6 +52,8 @@ export class ChipAnnotator {
         this.shiftClickPos = null; // For Shift+2-click rectangle selection
         this.altDragStartSelection = null; // Store selection state when Alt+Drag starts
         this._tempDragSelection = null; // Temporary selection during drag (preview only)
+        this.clickStartPos = null; // 🔥 일반 클릭 시작 위치 (드래그 감지용)
+        this.hasDragged = false; // 🔥 드래그 발생 여부
         this.ctrlClickStartPos = null; // Store mouse position for Ctrl+click (to detect drag)
         this.ctrlClickStartTime = null; // Store time for Ctrl+click (to detect drag)
 
@@ -177,6 +179,7 @@ export class ChipAnnotator {
             this.legendFilterClasses = new Set([className]);
         }
         this.render();
+        this.updateSelectedChipsList();
     }
 
     setLegendFilterClasses(classSet) {
@@ -190,6 +193,7 @@ export class ChipAnnotator {
             this.legendFilterClasses = null;
         }
         this.render();
+        this.updateSelectedChipsList();
     }
 
     _refreshClassColors() {
@@ -296,6 +300,7 @@ export class ChipAnnotator {
     toggleGrid() {
         this.showGrid = !this.showGrid;
         this.render();
+        this.updateSelectedChipsList();
     }
 
     /**
@@ -452,6 +457,7 @@ export class ChipAnnotator {
 
         this.selectedChips = new Set(nextSelection);
         this.render();
+        this.updateSelectedChipsList();
         return nextSelection.length;
     }
 
@@ -461,9 +467,112 @@ export class ChipAnnotator {
     clearSelection(notifyViewer = true) {
         this.selectedChips.clear();
         this.render();
+        this.updateSelectedChipsList(); // 🔥 선택 칩 리스트 업데이트
         if (notifyViewer && this.viewer && typeof this.viewer.handleChipSelectionCleared === 'function') {
             this.viewer.handleChipSelectionCleared();
         }
+    }
+
+    /**
+     * 선택된 칩 리스트 업데이트
+     */
+    updateSelectedChipsList() {
+        if (!this.viewer || !this.viewer.dom) return;
+        
+        let listContainer = document.getElementById('selected-chips-list');
+        if (!listContainer) {
+            // 리스트 컨테이너가 없으면 생성
+            const sidebar = this.viewer.dom.sidebar;
+            if (!sidebar) return;
+            
+            listContainer = document.createElement('div');
+            listContainer.id = 'selected-chips-list';
+            listContainer.style.cssText = `
+                width: 120px;
+                min-width: 120px;
+                max-width: 120px;
+                background: #232323;
+                border-right: 1px solid #333;
+                padding: 8px;
+                overflow-y: auto;
+                display: none;
+                flex-direction: column;
+                font-size: 11px;
+            `;
+            
+            const header = document.createElement('div');
+            header.textContent = '선택 칩';
+            header.style.cssText = `
+                font-weight: bold;
+                padding: 4px 0;
+                border-bottom: 1px solid #444;
+                margin-bottom: 4px;
+                font-size: 12px;
+            `;
+            listContainer.appendChild(header);
+            
+            const list = document.createElement('div');
+            list.id = 'selected-chips-list-items';
+            list.style.cssText = `
+                display: flex;
+                flex-direction: column;
+                gap: 2px;
+            `;
+            listContainer.appendChild(list);
+            
+            // sidebar 앞에 삽입
+            sidebar.parentNode.insertBefore(listContainer, sidebar);
+        }
+        
+        const listItems = document.getElementById('selected-chips-list-items');
+        if (!listItems) return;
+        
+        listItems.innerHTML = '';
+        
+        if (this.selectedChips.size === 0) {
+            listContainer.style.display = 'none';
+            return;
+        }
+        
+        listContainer.style.display = 'flex';
+        
+        // 선택된 칩들을 x, y 순서로 정렬
+        const sortedChips = Array.from(this.selectedChips)
+            .map(idx => {
+                const chip = this.chips[idx];
+                return chip ? { idx, x: chip.x_abs, y: chip.y_abs } : null;
+            })
+            .filter(Boolean)
+            .sort((a, b) => {
+                if (a.y !== b.y) return a.y - b.y;
+                return a.x - b.x;
+            });
+        
+        sortedChips.forEach(({ idx, x, y }) => {
+            const item = document.createElement('div');
+            item.style.cssText = `
+                padding: 4px 6px;
+                background: #2a2a2a;
+                border: 1px solid #444;
+                border-radius: 3px;
+                cursor: pointer;
+                display: flex;
+                gap: 4px;
+                font-size: 11px;
+            `;
+            item.textContent = `${x} ${y}`;
+            item.onclick = () => {
+                // 클릭 시 해당 칩 선택/해제 토글
+                if (this.selectedChips.has(idx)) {
+                    this.selectedChips.delete(idx);
+                } else {
+                    this.selectedChips.add(idx);
+                }
+                this.render();
+                this.updateSelectedChipsList();
+            };
+            listItems.appendChild(item);
+        });
     }
 
     /**
@@ -769,6 +878,15 @@ export class ChipAnnotator {
 
         // 🔥 일반 드래그는 선택하지 않음 (Ctrl/Shift/Alt+드래그만 선택)
         // 일반 드래그 중에는 아무것도 하지 않음
+        // 🔥 드래그 발생 여부 확인 (5px 이상 이동 시 드래그로 간주)
+        if (this.clickStartPos && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+            const dx = canvasX - this.clickStartPos.x;
+            const dy = canvasY - this.clickStartPos.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            if (distance > 5) {
+                this.hasDragged = true;
+            }
+        }
     }
 
     /**
@@ -825,16 +943,17 @@ export class ChipAnnotator {
             return;
         }
 
-        // 🔥 일반 클릭 (Ctrl/Shift/Alt 없음): 선택 해제만 (절대 선택하지 않음)
+        // 🔥 일반 클릭 (Ctrl/Shift/Alt 없음): 드래그 감지용 위치 저장
         if (!e.ctrlKey && !e.shiftKey && !e.altKey) {
-            this.selectedChips.clear();
-            // 🔥 일반 클릭은 드래그해도 선택하지 않으므로 상태만 초기화
+            // 🔥 클릭 시작 위치 저장 (드래그 감지용)
+            this.clickStartPos = { x: canvasX, y: canvasY };
+            this.hasDragged = false;
             this.isDragging = false;
             this.dragStartChip = null;
             this.ctrlClickStartPos = null;
             this.ctrlClickStartTime = null;
             this._tempDragSelection = null;
-            this.render();
+            // 🔥 드래그가 발생하지 않으면 mouseup에서 선택 해제
             return;
         }
     }
@@ -862,6 +981,7 @@ export class ChipAnnotator {
                     // Shift: add to selection (기존 선택에 추가, 배치 처리로 성능 향상)
                     const newSelections = selected.filter(idx => !this.selectedChips.has(idx));
                     newSelections.forEach(idx => this.selectedChips.add(idx));
+                    this.updateSelectedChipsList();
                     console.log('🖱️ [ALT+SHIFT+DRAG] 범위 선택 추가:', selected.length, '개 (신규:', newSelections.length, ')');
                 } else if (e.ctrlKey) {
                     // Ctrl: toggle (기존 선택과 토글, 배치 처리로 성능 향상)
@@ -877,10 +997,12 @@ export class ChipAnnotator {
                     // 배치 처리
                     toRemove.forEach(idx => this.selectedChips.delete(idx));
                     toAdd.forEach(idx => this.selectedChips.add(idx));
+                    this.updateSelectedChipsList();
                     console.log('🖱️ [ALT+CTRL+DRAG] 범위 선택 토글:', selected.length, '개 (제거:', toRemove.size, ', 추가:', toAdd.size, ')');
                 } else {
                     // Normal: replace selection (기존 선택 교체)
                     this.selectedChips = new Set(selected);
+                    this.updateSelectedChipsList();
                     console.log('🖱️ [ALT+DRAG] 범위 선택 교체:', selected.length, '개');
                 }
             } else {
@@ -914,6 +1036,7 @@ export class ChipAnnotator {
                 // 이미 선택된 chip은 제외하여 중복 추가 방지
                 const newSelections = selected.filter(idx => !this.selectedChips.has(idx));
                 newSelections.forEach(idx => this.selectedChips.add(idx));
+                this.updateSelectedChipsList();
                 console.log('🖱️ [SHIFT+DRAG] 범위 선택 추가:', selected.length, '개 (신규:', newSelections.length, ')');
             } else {
                 // 드래그 없음: 선택 해제
@@ -923,6 +1046,19 @@ export class ChipAnnotator {
             this.shiftClickPos = null;
             this._tempDragSelection = null;
             this.render();
+            return;
+        }
+
+        // 🔥 일반 클릭 (Ctrl/Shift/Alt 없음): 드래그가 없을 때만 선택 해제
+        if (!e.ctrlKey && !e.shiftKey && !e.altKey && this.clickStartPos) {
+            // 🔥 드래그가 발생하지 않았을 때만 선택 해제
+            if (!this.hasDragged) {
+                this.selectedChips.clear();
+                this.render();
+            }
+            // 상태 초기화
+            this.clickStartPos = null;
+            this.hasDragged = false;
             return;
         }
 
@@ -953,6 +1089,7 @@ export class ChipAnnotator {
                     // 배치 처리
                     toRemove.forEach(idx => this.selectedChips.delete(idx));
                     toAdd.forEach(idx => this.selectedChips.add(idx));
+                    this.updateSelectedChipsList();
                     console.log('🖱️ [CTRL+DRAG] 범위 선택 토글:', selected.length, '개 (제거:', toRemove.size, ', 추가:', toAdd.size, ')');
                 }
             } else {
@@ -965,6 +1102,7 @@ export class ChipAnnotator {
                         this.selectedChips.add(this.dragStartChip.index);
                         console.log('🖱️ [CTRL+CLICK] chip 선택 추가:', this.dragStartChip.index);
                     }
+                    this.updateSelectedChipsList();
                 }
             }
             

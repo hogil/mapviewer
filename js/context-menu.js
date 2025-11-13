@@ -35,6 +35,11 @@ export class ContextMenuManager {
         const tableCopyItem = document.getElementById('context-table-copy');
         const cancelItem = document.getElementById('context-cancel');
         
+        // 🔥 새로운 메뉴 항목들
+        const downloadOriginalItem = document.getElementById('context-download-original');
+        const copyImageItem = document.getElementById('context-copy-image');
+        const copyCanvasItem = document.getElementById('context-copy-canvas');
+        
         if (downloadItem) {
             downloadItem.onclick = () => {
                 this.hide();
@@ -66,6 +71,30 @@ export class ContextMenuManager {
         if (cancelItem) {
             cancelItem.onclick = () => {
                 this.hide();
+            };
+        }
+        
+        // 🔥 원본 다운로드
+        if (downloadOriginalItem) {
+            downloadOriginalItem.onclick = () => {
+                this.hide();
+                this.downloadOriginalImage();
+            };
+        }
+        
+        // 🔥 이미지 클립보드 복사
+        if (copyImageItem) {
+            copyImageItem.onclick = () => {
+                this.hide();
+                this.copyImageToClipboard();
+            };
+        }
+        
+        // 🔥 캔버스 전체 복사
+        if (copyCanvasItem) {
+            copyCanvasItem.onclick = () => {
+                this.hide();
+                this.copyCanvasToClipboard();
             };
         }
     }
@@ -357,7 +386,8 @@ export class ContextMenuManager {
     }
     
     /**
-     * 선택된 파일 리스트를 클립보드에 복사
+     * 선택된 파일 리스트를 클립보드에 복사 (YMS 방식)
+     * _ 로 split 해서 0번째와 2번째 인덱스만 복사 (tab 구분)
      */
     async copyFileList() {
         const selectedFiles = this.getSelectedFiles();
@@ -366,12 +396,20 @@ export class ContextMenuManager {
             return;
         }
         
-        const fileList = selectedFiles.join('\n');
-        const success = await copyToClipboard(fileList);
+        // 🔥 YMS 방식: _ 로 split 해서 0번째와 2번째만 (tab 구분)
+        const ymsList = selectedFiles.map(filePath => {
+            const fileName = filePath.split('/').pop(); // 파일명만 추출
+            const parts = fileName.split('_');
+            const part0 = parts[0] || '';
+            const part2 = parts[2] || '';
+            return `${part0}\t${part2}`;
+        }).join('\n');
+        
+        const success = await copyToClipboard(ymsList);
         
         if (success) {
-            console.log('파일 리스트가 클립보드에 복사되었습니다.');
-            alert(`${selectedFiles.length}개 파일 경로가 클립보드에 복사되었습니다.`);
+            console.log('파일 리스트가 YMS 방식으로 클립보드에 복사되었습니다.');
+            alert(`${selectedFiles.length}개 파일 정보가 클립보드에 복사되었습니다.`);
         } else {
             alert('클립보드 복사에 실패했습니다.');
         }
@@ -379,6 +417,7 @@ export class ContextMenuManager {
     
     /**
      * 선택된 파일 리스트를 테이블 형태로 클립보드에 복사
+     * _ 로 split 해서 4번째와 5번째만 (엑셀 시분초 앞자리 0 유지)
      */
     async copyFileListAsTable() {
         const selectedFiles = this.getSelectedFiles();
@@ -387,29 +426,24 @@ export class ContextMenuManager {
             return;
         }
         
-        // 테이블 데이터 생성
+        // 🔥 테이블 형식: _ 로 split 해서 4번째(날짜)와 5번째(시간)만
         const tableData = selectedFiles.map(filePath => {
-            const folder = extractFolderName(filePath);
-            const fileName = extractFileName(filePath);
-            const nameParts = splitFileName(fileName, 5);
+            const fileName = filePath.split('/').pop(); // 파일명만 추출
+            const parts = fileName.split('_');
+            const part4 = parts[4] || ''; // 날짜 (8자리)
+            const part5Raw = parts[5] || ''; // 시간 (6자리, 확장자 포함 가능)
+            // 확장자 제거
+            const part5 = part5Raw.replace(/\.(png|jpg|jpeg|gif|bmp|tiff?)$/i, '');
             
-            return {
-                folder: folder,
-                part1: nameParts[0],
-                part2: nameParts[1],
-                part3: nameParts[2],
-                part4: nameParts[3],
-                part5: nameParts[4]
-            };
+            return { part4, part5 };
         });
         
-        // TSV 형식으로 변환
-        const headers = ['Folder', 'Name_Part1', 'Name_Part2', 'Name_Part3', 'Name_Part4', 'Name_Part5'];
-        let tableText = headers.join('\t') + '\n';
-        
+        // 🔥 TSV 형식으로 변환 (시분초 앞자리 0 유지를 위해 ' 추가)
+        let tableText = '';
         tableData.forEach(row => {
-            const values = [row.folder, row.part1, row.part2, row.part3, row.part4, row.part5];
-            tableText += values.join('\t') + '\n';
+            // 🔥 시분초 앞자리 0이 사라지지 않도록 작은따옴표(') 추가
+            const time = row.part5.length === 6 ? `'${row.part5}` : row.part5;
+            tableText += `${row.part4}\t${time}\n`;
         });
         
         const success = await copyToClipboard(tableText);
@@ -419,6 +453,88 @@ export class ContextMenuManager {
             alert(`${selectedFiles.length}개 파일 정보가 테이블 형태로 클립보드에 복사되었습니다.`);
         } else {
             alert('클립보드 복사에 실패했습니다.');
+        }
+    }
+    
+    /**
+     * 원본 이미지 다운로드 (현재 보고 있는 이미지)
+     */
+    async downloadOriginalImage() {
+        if (!this.viewer.currentImagePath) {
+            alert('다운로드할 이미지가 없습니다.');
+            return;
+        }
+        
+        await this.downloadImage(this.viewer.currentImagePath);
+        alert('원본 이미지가 다운로드되었습니다.');
+    }
+    
+    /**
+     * 현재 보고 있는 이미지를 클립보드에 복사
+     */
+    async copyImageToClipboard() {
+        if (!this.viewer.currentImagePath) {
+            alert('복사할 이미지가 없습니다.');
+            return;
+        }
+        
+        try {
+            const response = await fetch(`/api/image?path=${encodeURIComponent(this.viewer.currentImagePath)}`);
+            if (!response.ok) {
+                throw new Error(`이미지 로드 실패: ${response.status}`);
+            }
+            
+            const blob = await response.blob();
+            await navigator.clipboard.write([
+                new ClipboardItem({ [blob.type]: blob })
+            ]);
+            alert('이미지가 클립보드에 복사되었습니다.');
+        } catch (error) {
+            console.error('이미지 복사 오류:', error);
+            alert('이미지 복사에 실패했습니다.');
+        }
+    }
+    
+    /**
+     * 캔버스 전체(이미지 + 오버레이)를 클립보드에 복사
+     */
+    async copyCanvasToClipboard() {
+        if (!this.viewer.dom?.imageCanvas || !this.viewer.dom?.overlayCanvas) {
+            alert('복사할 캔버스가 없습니다.');
+            return;
+        }
+        
+        try {
+            const imageCanvas = this.viewer.dom.imageCanvas;
+            const overlayCanvas = this.viewer.dom.overlayCanvas;
+            
+            // 임시 캔버스 생성
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = imageCanvas.width;
+            tempCanvas.height = imageCanvas.height;
+            const ctx = tempCanvas.getContext('2d');
+            
+            // 이미지 캔버스 복사
+            ctx.drawImage(imageCanvas, 0, 0);
+            
+            // 오버레이 캔버스 복사
+            ctx.drawImage(overlayCanvas, 0, 0);
+            
+            // 클립보드에 복사
+            tempCanvas.toBlob(async (blob) => {
+                try {
+                    await navigator.clipboard.write([
+                        new ClipboardItem({ 'image/png': blob })
+                    ]);
+                    alert('캔버스가 클립보드에 복사되었습니다.');
+                } catch (error) {
+                    console.error('클립보드 복사 실패:', error);
+                    alert('클립보드 복사에 실패했습니다.');
+                }
+            }, 'image/png');
+        } catch (error) {
+            console.error('캔버스 복사 오류:', error);
+            alert('캔버스 복사에 실패했습니다.');
         }
     }
     
