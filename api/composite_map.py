@@ -209,10 +209,14 @@ def create_composite_heatmaps(
     # 🔥 각 포인트에서 모든 이미지의 인덱스 8 이상 값 중 최댓값 계산
     high_indices_combined = np.zeros((height, width), dtype=np.uint8)
     if high_indices_list:
-        # 모든 이미지의 인덱스 8 이상 값을 스택 (N, height, width)
-        high_indices_stack = np.stack(high_indices_list, axis=0)
-        # 각 포인트에서 최댓값 계산 (axis=0: 이미지 차원)
-        high_indices_combined = np.max(high_indices_stack, axis=0).astype(np.uint8)
+        if len(high_indices_list) == 1:
+            # 이미지가 1개일 때는 스택 없이 직접 사용
+            high_indices_combined = high_indices_list[0].astype(np.uint8)
+        else:
+            # 모든 이미지의 인덱스 8 이상 값을 스택 (N, height, width)
+            high_indices_stack = np.stack(high_indices_list, axis=0)
+            # 각 포인트에서 최댓값 계산 (axis=0: 이미지 차원)
+            high_indices_combined = np.max(high_indices_stack, axis=0).astype(np.uint8)
         # 마스크가 False인 위치는 0으로 유지 (이미 0이므로 변경 불필요)
     
     # 🔥 팔레트 RGB 배열 사전 계산 (속도 최적화)

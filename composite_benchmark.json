@@ -2,64 +2,71 @@
   {
     "loader": "sequential",
     "workers": 1,
+    "batch_size": 1,
     "run": 1,
-    "elapsed_seconds": 58.56583960005082,
+    "elapsed_seconds": 79.58073049993254,
     "source_images": 5,
-    "output_dir": "composite_maps/20251112_074629",
-    "timestamp": "2025-11-12 07:47:27"
+    "output_dir": "composite_maps/20251112_081109",
+    "timestamp": "2025-11-12 08:12:28"
   },
   {
     "loader": "thread",
     "workers": 1,
+    "batch_size": 1,
     "run": 1,
-    "elapsed_seconds": 57.27505689999089,
+    "elapsed_seconds": 76.84719859994948,
     "source_images": 5,
-    "output_dir": "composite_maps/20251112_074727",
-    "timestamp": "2025-11-12 07:48:25"
+    "output_dir": "composite_maps/20251112_081228",
+    "timestamp": "2025-11-12 08:13:45"
   },
   {
     "loader": "thread",
     "workers": 4,
+    "batch_size": 1,
     "run": 1,
-    "elapsed_seconds": 56.545609900029376,
+    "elapsed_seconds": 77.90216459997464,
     "source_images": 5,
-    "output_dir": "composite_maps/20251112_074825",
-    "timestamp": "2025-11-12 07:49:21"
+    "output_dir": "composite_maps/20251112_081345",
+    "timestamp": "2025-11-12 08:15:03"
   },
   {
     "loader": "thread",
     "workers": 8,
+    "batch_size": 1,
     "run": 1,
-    "elapsed_seconds": 65.02991279994603,
+    "elapsed_seconds": 76.64506000000983,
     "source_images": 5,
-    "output_dir": "composite_maps/20251112_074921",
-    "timestamp": "2025-11-12 07:50:26"
+    "output_dir": "composite_maps/20251112_081503",
+    "timestamp": "2025-11-12 08:16:20"
   },
   {
     "loader": "process",
     "workers": 1,
+    "batch_size": 1,
     "run": 1,
-    "elapsed_seconds": 61.618314799969085,
+    "elapsed_seconds": 79.43967380002141,
     "source_images": 5,
-    "output_dir": "composite_maps/20251112_075026",
-    "timestamp": "2025-11-12 07:51:28"
+    "output_dir": "composite_maps/20251112_081620",
+    "timestamp": "2025-11-12 08:17:39"
   },
   {
     "loader": "process",
     "workers": 4,
+    "batch_size": 1,
     "run": 1,
-    "elapsed_seconds": 61.567730300012045,
+    "elapsed_seconds": 82.69604940002318,
     "source_images": 5,
-    "output_dir": "composite_maps/20251112_075128",
-    "timestamp": "2025-11-12 07:52:30"
+    "output_dir": "composite_maps/20251112_081739",
+    "timestamp": "2025-11-12 08:19:02"
   },
   {
     "loader": "process",
     "workers": 8,
+    "batch_size": 1,
     "run": 1,
-    "elapsed_seconds": 61.103353500016965,
+    "elapsed_seconds": 77.63436699996237,
     "source_images": 5,
-    "output_dir": "composite_maps/20251112_075230",
-    "timestamp": "2025-11-12 07:53:31"
+    "output_dir": "composite_maps/20251112_081902",
+    "timestamp": "2025-11-12 08:20:20"
   }
 ]

@@ -1,0 +1,503 @@
+
+>     async refreshLabelExplorer() {
+          // ?뵦 Label Explorer ?덈줈怨좎묠 ?쒖꽦??        // ?뵦 以묐났 ?몄텧 諛⑹?
+          if (this._isRefreshingLabelExplorer) {
+              return;
+          }
+  
+          this._isRefreshingLabelExplorer = true;
+  
+          try {
+              const container = document.getElementById('label-explorer-list');
+  
+          if (!container) {
+              return;
+          }
+  
+          const scrollTop = container.scrollTop;
+  
+          // 湲곗〈 ?댁슜???꾩떆濡???ν븯???ㅽ겕濡??꾩튂 ?좎?
+          const existingContent = container.innerHTML;
+  
+          this.debugLog('Label Explorer ?덈줈怨좎묠 ?쒖옉...');
+  
+          // ?뵦 ?쇰꺼留??꾩씤 寃쎌슦 罹먯떆 ?꾩쟾 珥덇린??(?⑥씪 ?대?吏 紐⑤뱶? Grid 紐⑤뱶 紐⑤몢)
+  
+          if ((!this.gridMode && this.selectedImagePath) || (this.gridMode && this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0)) {
+              this.debugLog('?뵹 [DEBUG] ?쇰꺼留???罹먯떆 ?꾩쟾 珥덇린??);
+  
+              // ?뵦 罹먯떆 ?꾩쟾 珥덇린??(?대┛ ?대뜑??紐⑤몢 ?덈줈怨좎묠)
+              this.classToImgListCache = {};
+              
+              // ?뵦 ?대┛ ?대뜑 ?곹깭???좎??섎릺, ?곗씠?곕뒗 ?ㅼ떆 媛?몄샂
+              // (?꾨옒 肄붾뱶?먯꽌 ?대┛ ?대뜑瑜??쒕쾭?먯꽌 ?ㅼ떆 媛?몄샂)
+          } else if (!this.classToImgListCache) {
+              this.classToImgListCache = {};
+          }
+  
+          const batchLabelBtn = document.getElementById('label-explorer-batch-label-btn');
+          const batchDeleteBtn = document.getElementById('label-explorer-batch-delete-btn');
+  
+          // ?뵦 理쒖쟻?? refreshClassList()?먯꽌 諛쏆? 罹먯떆 ?ъ슜 (API ?몄텧 ?앸왂)
+          let classes = [];
+          try {
+              classes = await this.getClassList();
+          } catch (error) {
+              console.error('Label Explorer ?대옒??議고쉶 ?ㅻ쪟:', error);
+              return;
+          }
+  
+          // ?뵦 try ?쒓굅 - ?대? Line 10162?먯꽌 ?쒖옉??try 釉붾줉 ?덉뿉 ?덉쓬
+          if (!this.labelSelection) this.labelSelection = { selected: [], lastClicked: null, openFolders: {}, selectedClasses: [] };
+  
+          const labelSelection = this.labelSelection;
+          
+          this.debugLog('Label Explorer 珥덇린??', {
+              labelSelection: labelSelection,
+  
+              classes: classes.length,
+  
+              gridMode: this.gridMode,
+  
+              openFolders: Object.keys(labelSelection.openFolders).filter(k => labelSelection.openFolders[k])
+          });
+  
+          // 湲곕낯: 紐⑤뱺 ?대옒???대뜑 closed (Wafer Map Explorer? ?숈씪?섍쾶)
+  
+          // ?뵦 ?대? ?대젮?덈뒗 ?대뜑???좎?
+  
+          for (const cls of classes) {
+              if (labelSelection.openFolders[cls] === undefined) labelSelection.openFolders[cls] = false;
+          }
+  
+          // --- Lazy loading: 紐⑤뱺 ?대뜑???ロ엺 ?곹깭濡??쒖옉, ?대┃ ?쒖뿉留?濡쒕뱶 ---
+  
+          let flatImageButtons = [];
+          let classToImgList = {};
+  
+          // ?뵦 紐⑤뱺 ?대옒??珥덇린??(?대젮?덈뒗 ?대뜑??罹먯떆?먯꽌 濡쒕뱶)
+  
+          for (const cls of classes) {
+              if (labelSelection.openFolders[cls] && this.classToImgListCache[cls]) {
+                  // ?대젮?덈뒗 ?대뜑??罹먯떆?먯꽌 濡쒕뱶
+  
+                  classToImgList[cls] = this.classToImgListCache[cls];
+              } else {
+                  // ?ロ??덈뒗 ?대뜑??鍮?諛곗뿴
+  
+                  classToImgList[cls] = [];
+              }
+          }
+  
+          // ?뵦 ?쇰꺼留??꾩씤 寃쎌슦 ?대┛ ?대뜑 媛뺤젣 ?덈줈怨좎묠 (?⑥씪 ?대?吏 紐⑤뱶? Grid 紐⑤뱶 紐⑤몢)
+  
+          if ((!this.gridMode && this.selectedImagePath) || (this.gridMode && this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0)) {
+              this.debugLog('?뵹 [DEBUG] ?쇰꺼留????대┛ ?대뜑 媛뺤젣 ?덈줈怨좎묠');
+  
+              // ?뵦 ?대┛ ?대뜑???대?吏 紐⑸줉???쒕쾭?먯꽌 媛?몄삤湲?(蹂묐젹 泥섎━ 理쒖쟻??
+  
+              const openFolders = classes.filter(cls => labelSelection.openFolders[cls]);
+              
+              // ?뵦 紐⑤뱺 ?대뜑瑜?蹂묐젹濡?泥섎━ (諛곗튂 ?쒗븳 ?쒓굅)
+              const folderPromises = openFolders.map(async (cls) => {
+                      try {
+                          // ?뵦 ?꾩옱 ?쒗뭹 ?대뜑瑜?怨좊젮???쇰꺼 寃쎈줈 ?앹꽦
+                          const labelPath = this.buildClassificationPath(cls);
+                          const response = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`, {
+                              signal: this.globalAbortController?.signal
+                          });
+  
+                          const data = await response.json();
+                          const imgList = Array.isArray(data.items) ? data.items : [];
+  
+                          classToImgList[cls] = imgList;
+  
+                          this.classToImgListCache[cls] = imgList;
+  
+                          this.debugLog(`?뵹 [DEBUG] ?대뜑 '${cls}' - ${imgList.length}媛??대?吏 ?덈줈怨좎묠 ?꾨즺`);
+                      } catch (error) {
+                          console.error(`?대뜑 '${cls}' ?덈줈怨좎묠 ?ㅽ뙣:`, error);
+                      }
+                  });
+                  
+              await Promise.all(folderPromises);
+          }
+  
+          this.debugLog(`?? Label Explorer: ${classes.length}媛??대옒??珥덇린???꾨즺 (?대┛ ?대뜑: ${Object.keys(labelSelection.openFolders).filter(k => labelSelection.openFolders[k]).length}媛?`);
+  
+          // --- 鍮?怨??대┃ ??Label Explorer留??좏깮 ?댁젣 (Wafer Map Explorer ?좏깮 ?좎?) ---
+  
+          container.onclick = (e) => {
+              // 鍮??곸뿭???대┃?덉쓣 ?뚮쭔 (踰꾪듉?대굹 ?ㅻⅨ ?붿냼媛 ?꾨땶)
+  
+              if (e.target === container || 
+  
+                  (e.target.tagName === 'UL' && e.target.closest('#label-explorer-list'))) {
+                  // Ctrl/Shift ?놁씠 ?대┃: Label Explorer留??좏깮 ?댁젣 (Wafer Map Explorer ?좏깮 ?좎?)
+  
+                  if (!e.ctrlKey && !e.shiftKey) {
+                      labelSelection.selected = [];
+  
+                      labelSelection.selectedClasses = [];
+  
+                      this.updateLabelExplorerSelection();
+  
+                      // Wafer Map Explorer ?좏깮? ?좎??섎룄濡?clearWaferMapExplorerSelection() ?몄텧 ?쒓굅
+  
+                      this.debugLog('Label Explorer: 鍮??곸뿭 ?대┃?쇰줈 Label Explorer留??좏깮 ?댁젣 (Wafer Map Explorer ?좏깮 ?좎?)');
+                  }
+              }
+          };
+  
+          // --- ?고겢由?쑝濡?Label Explorer留??좏깮 ?댁젣 ---
+          container.oncontextmenu = (e) => {
+                          e.preventDefault();
+              e.stopPropagation(); // ?? ?대깽??踰꾨툝留?諛⑹? (Wafer Map Explorer ?고겢由?諛⑺빐 諛⑹?)
+  
+              // ?뵦 臾댁“嫄??대?吏 ?뺣낫 ?⑤꼸 ?④린湲?            if (this.dom.fileNameDisplay) {
+                  this.dom.fileNameDisplay.style.display = 'none';
+              }
+  
+              // Label Explorer ?좏깮 ?댁젣
+              if (this.labelSelection) {
+                  this.labelSelection.selected = [];
+                  this.labelSelection.selectedClasses = [];
+              }
+  
+              // savedViewState濡?蹂듭썝
+              if (this.savedViewState) {
+                  if (this.savedViewState.type === 'grid' && this.savedViewState.images && this.savedViewState.images.length > 0) {
+                      this.selectedImages = [...this.savedViewState.images];
+                      this.showGrid(this.savedViewState.images, true);  // skipSaveState=true濡??몄텧
+  
+                      // ?뚯씪紐??⑤꼸 ?④린湲?(Label Explorer?먯꽌 ?뚯븘?붿쑝誘濡?
+                      if (this.dom.fileNameDisplay) {
+                          this.dom.fileNameDisplay.style.display = 'none';
+                      }
+                      
+                      // ?ㅽ겕濡??꾩튂 蹂듭썝
+                      if (this.savedViewState.scrollTop !== undefined) {
+                          setTimeout(() => {
+                              const grid = document.getElementById('image-grid');
+                              const scrollWrapper = grid?.parentElement;
+                              if (scrollWrapper) {
+                                  scrollWrapper.scrollTop = this.savedViewState.scrollTop;
+                              }
+                          }, 100);
+                      }
+                  } else if (this.savedViewState.type === 'single') {
+                      this.loadImage(this.savedViewState.imagePath).then(() => {
+                          this.zoom = this.savedViewState.zoom;
+                          this.offsetX = this.savedViewState.offsetX;
+                          this.offsetY = this.savedViewState.offsetY;
+                          // ?뵦 loadImage媛 ?먮룞?쇰줈 ?뚮뜑留곹븯誘濡?render() ?몄텧 遺덊븘??                    });
+                  }
+              } else {
+                  this.hideGrid();
+                  this.hideImage();
+                  this.selectedImages = [];
+                  this.currentImage = null;
+                  this.gridMode = false;
+                  this.currentGridImages = [];
+                  this.showInitialState();
+              }
+  
+              this.updateLabelExplorerSelection();
+                      };
+  
+          // --- ?ㅻ낫???⑥텞??(Label Explorer ?꾩슜) ---
+  
+          this.setupLabelExplorerKeyboardShortcuts(classes, classToImgList, labelSelection);
+  
+          // Label Explorer ?꾨젅???щ갚) ?대┃ ???꾩껜 ?좏깮 ?댁젣 (Windows ?먯깋湲??ㅽ???
+  
+          const frame = document.querySelector('.label-explorer-frame');
+  
+          if (frame && !frame.hasAttribute('data-click-bound')) {
+              frame.setAttribute('data-click-bound', 'true');
+  
+              frame.onclick = (e) => {
+                                  // ?꾨젅???먯껜瑜??대┃?섍퀬, Ctrl/Shift媛 ?놁쓣 ?뚮쭔 Label Explorer留??좏깮 ?댁젣
+  
+                  if (e.target === frame && !e.ctrlKey && !e.shiftKey) {
+                                          // ?뵦 臾댁“嫄??대?吏 ?뺣낫 ?⑤꼸 ?④린湲?                    if (this.dom.fileNameDisplay) {
+                          this.dom.fileNameDisplay.style.display = 'none';
+                          console.log('?윟 [HIDE-PANEL] ?꾨젅???대┃ ???뚯씪紐??⑤꼸 ?④?');
+                      }
+  
+                      // ?뵦 吏곸젒 蹂듭썝 濡쒖쭅 泥섎━ (clearLabelExplorerSelection ?ъ슜 ?덊븿)
+  
+                      // Label Explorer ?좏깮 ?댁젣 諛??댁쟾 ?곹깭 蹂듭썝
+  
+                      if (this.labelSelection) {
+                                                  this.labelSelection.selected = [];
+  
+                          this.labelSelection.selectedClasses = [];
+                      }
+  
+                                          // savedViewState濡?蹂듭썝
+  
+                      if (this.savedViewState && this.savedViewState.type === 'grid' && this.savedViewState.images.length > 0) {
+                                                  this.selectedImages = [...this.savedViewState.images];
+  
+                          this.showGrid(this.savedViewState.images, true);  // skipSaveState=true濡??몄텧
+  
+                          // ?뚯씪紐??⑤꼸 ?④린湲?(Label Explorer?먯꽌 ?뚯븘?붿쑝誘濡?
+                          if (this.dom.fileNameDisplay) {
+                              this.dom.fileNameDisplay.style.display = 'none';
+                          }
+  
+                          // ?ㅽ겕濡??꾩튂 蹂듭썝
+                          if (this.savedViewState.scrollTop !== undefined) {
+                              setTimeout(() => {
+                                  const grid = document.getElementById('image-grid');
+                                  const scrollWrapper = grid?.parentElement;
+                                  if (scrollWrapper) {
+                                      scrollWrapper.scrollTop = this.savedViewState.scrollTop;
+                                  }
+                              }, 100);
+                          }
+                      } else if (this.savedViewState && this.savedViewState.type === 'single') {
+                                                  this.loadImage(this.savedViewState.imagePath).then(() => {
+                              this.zoom = this.savedViewState.zoom;
+  
+                              this.offsetX = this.savedViewState.offsetX;
+  
+                              this.offsetY = this.savedViewState.offsetY;
+  
+                              // ?뵦 loadImage媛 ?먮룞?쇰줈 ?뚮뜑留곹븯誘濡?render() ?몄텧 遺덊븘??                        });
+                      } else {
+                                                  this.hideGrid();
+  
+                          this.hideImage();
+  
+                          this.selectedImages = [];
+  
+                          this.currentImage = null;
+  
+                          this.gridMode = false;
+  
+                          this.currentGridImages = [];
+  
+                          this.showInitialState();
+                      }
+  
+                      this.updateLabelExplorerSelection();
+                                      }
+              };
+  
+              // ?꾨젅???고겢由?룄 異붽? (Windows ?먯깋湲곗? ?쇨???
+  
+              frame.oncontextmenu = (e) => {
+                  if (e.target === frame) {
+                      e.preventDefault();
+  
+                      e.stopPropagation(); // ?? ?대깽??踰꾨툝留?諛⑹?
+  
+                      labelSelection.selected = [];
+  
+                      labelSelection.selectedClasses = [];
+  
+                      this.updateLabelExplorerSelection();
+  
+                      // Wafer Map Explorer ?좏깮? ?좎??섎룄濡?clearWaferMapExplorerSelection() ?몄텧 ?쒓굅
+  
+                      this.debugLog('Label Explorer ?꾨젅?? ?고겢由?쑝濡?Label Explorer留??좏깮 ?댁젣 (Wafer Map Explorer ?좏깮 ?좎?)');
+                  }
+              };
+          }
+  
+          // Add Label 踰꾪듉: 紐⑤떖 李??닿린
+  
+          batchLabelBtn.disabled = false;
+  
+          batchLabelBtn.onclick = async () => {
+              await this.openAddLabelModal();
+          };
+  
+          // Delete Label 踰꾪듉: ??긽 ?쒖꽦??
+          batchDeleteBtn.disabled = false;
+  
+          batchDeleteBtn.onclick = async () => {
+  
+              const t0 = performance.now();
+  
+              if (labelSelection.selectedClasses.length === 0 && labelSelection.selected.length === 0) {
+                  alert('??젣???쇰꺼???좏깮?댁＜?몄슂.');
+  
+                  return;
+              }
+  
+              // ?대옒?ㅻ퀎濡??대?吏 洹몃９??
+              const classToDel = {}; // { "className": ["img1.png", "img2.png", ...] }
+              let totalToDelete = 0;
+  
+              // ?대옒???좏깮: ?대떦 ?대옒???대뜑 ?덉쓽 紐⑤뱺 ?쇰꺼 ??젣 (?대옒?ㅻ뒗 ?좎?)
+  
+              if (labelSelection.selectedClasses.length) {
+                  for (const cls of labelSelection.selectedClasses) {
+                      // ?뵦 ?꾩옱 ?쒗뭹 ?대뜑瑜?怨좊젮???쇰꺼 寃쎈줈 ?앹꽦
+                      const labelPath = this.buildClassificationPath(cls);
+                      const imgRes = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`);
+                      const imgData = await imgRes.json();
+                      const imgList = Array.isArray(imgData.items) ? imgData.items : [];
+                      const files = imgList.filter(f => f.type === 'file');
+  
+                      if (files.length > 0) {
+                          classToDel[cls] = files.map(f => f.name);
+  
+                          totalToDelete += files.length;
+                      }
+                  }
+              }
+  
+              // ?대?吏 ?좏깮: ?대떦 ?쇰꺼留???젣
+  
+              if (labelSelection.selected.length) {
+                  labelSelection.selected.forEach(key => {
+                      const [delCls, delImg] = key.split('/');
+  
+                      if (!classToDel[delCls]) classToDel[delCls] = [];
+  
+                      classToDel[delCls].push(delImg);
+  
+                      totalToDelete++;
+                  });
+              }
+  
+              if (totalToDelete === 0) {
+                  return;
+              }
+  
+  
+              if (!confirm(`Delete ${totalToDelete} labels?`)) {
+                  return;
+              }
+  
+              this.debugLog(`??DELETE ?붿껌 ?쒖옉: ${totalToDelete}媛?(${Object.keys(classToDel).length}媛??대옒??`);
+  
+              const tDel = performance.now();
+  
+              // ?뵦 ?대옒?ㅻ퀎 諛곗튂 DELETE ?붿껌 蹂묐젹 泥섎━
+  
+              // ?뵦 ?꾩옱 ?대뜑 ?뚮씪誘명꽣 異붽?
+              const deleteApiUrl = this.buildClassApiUrl('/api/classify/delete');
+  
+  
+              const batchPromises = Object.entries(classToDel).map(async ([cls, images]) => {
+                  this.debugLog(`?뿊截?DELETE ?붿껌: class=${cls}, images=${images.length}媛?, images);
+  
+                  const response = await fetch(deleteApiUrl, {
+                      method: 'POST',
+  
+                      headers: { 'Content-Type': 'application/json' },
+  
+                      body: JSON.stringify({ class: cls, images: images })
+                  });
+  
+                  if (!response.ok) {
+                      const errorText = await response.text();
+  
+                      console.error(`??DELETE ?ㅽ뙣: class=${cls}`, {
+                          status: response.status,
+  
+                          statusText: response.statusText,
+  
+                          error: errorText
+                      });
+  
+                      throw new Error(`DELETE failed: ${response.status} ${response.statusText}`);
+                  }
+  
+                  const result = await response.json();
+  
+                  this.debugLog(`??DELETE ?깃났: class=${cls}, removed=${result.removed}媛?, result);
+  
+                  return result;
+              });
+  
+              const results = await Promise.all(batchPromises);
+              const totalRemoved = results.reduce((sum, r) => sum + (r.removed || 0), 0);
+  
+              this.debugLog(`??DELETE ?꾨즺: ${(performance.now()-tDel).toFixed(1)}ms (${totalRemoved}/${totalToDelete}媛???젣??`);
+  
+              // ?좏깮 ?곹깭 ?꾩쟾 珥덇린??
+              labelSelection.selectedClasses = [];
+  
+              labelSelection.selected = [];
+  
+              labelSelection.lastSelectedKey = null;
+  
+              // ?뵦 DOM?먯꽌 吏곸젒 ?쒓굅 (?덈줈怨좎묠 ?놁씠)
+              Object.entries(classToDel).forEach(([cls, images]) => {
+                  images.forEach(imgName => {
+                      // Label Explorer?먯꽌 ?대떦 ??ぉ 李얘린
+                      const container = document.getElementById('label-explorer-list');
+                      if (container) {
+                          const buttons = container.querySelectorAll('button.label-img-name');
+                          buttons.forEach(btn => {
+                              if (btn.textContent === imgName) {
+                                  const li = btn.closest('li');
+                                  const classLi = li?.parentElement?.closest('li');
+                                  if (classLi) {
+                                      const folderSummary = classLi.querySelector('div');
+                                      const folderCls = folderSummary?.textContent.replace(/[?얄뼵]/g, '').trim();
+                                      if (folderCls === cls) {
+                                          // ?대떦 li ?쒓굅
+                                          li.remove();
+                                      }
+                                  }
+                              }
+                          });
+  
+                          // ?대떦 ?대옒???대뜑??ul 李얘린
+                          const allClassFolders = container.querySelectorAll('li > div');
+                          allClassFolders.forEach(folderDiv => {
+                              const folderCls = folderDiv.textContent.replace(/[?얄뼵]/g, '').trim();
+                              if (folderCls === cls) {
+                                  const ul = folderDiv.nextElementSibling;
+                                  if (ul && ul.tagName === 'UL') {
+                                      // ul ?덉뿉 li媛 ?놁쑝硫?"?쇰꺼???대?吏 ?놁쓬" 硫붿떆吏 ?쒖떆
+                                      const remainingItems = ul.querySelectorAll('li');
+                                      if (remainingItems.length === 0) {
+                                          ul.innerHTML = '<li style="color:#888;padding:4px 12px;">?쇰꺼???대?吏 ?놁쓬</li>';
+                                      }
+                                  }
+                              }
+                          });
+                      }
+  
+                      // 罹먯떆?먯꽌???쒓굅
+                      if (this.classToImgListCache[cls]) {
+                          const idx = this.classToImgListCache[cls].findIndex(img => img.name === imgName);
+                          if (idx > -1) {
+                              this.classToImgListCache[cls].splice(idx, 1);
+                          }
+                      }
+                  });
+              });
+  
+              // ?뵦 Class Manager? Label Explorer 紐⑤몢 ?덈줈怨좎묠
+              const tRefresh = performance.now();
+              // refreshLabelExplorer媛 ?대??먯꽌 getClassList() ?몄텧?섎?濡?以묐났 ?쒓굅
+              await this.refreshLabelExplorer();
+  
+              this.debugLog(`??Label Explorer ?덈줈怨좎묠: ${(performance.now()-tRefresh).toFixed(1)}ms`);
+  
+              // ?뵦 Delete Label ???좏깮 ?댁젣
+              labelSelection.selected = [];
+              labelSelection.selectedClasses = [];
+              this.updateLabelExplorerSelection();
+  
+              // ?뵦 Delete Label ???먮룞?쇰줈 ?댁쟾 ?곹깭濡?蹂듭썝
+              // savedViewState媛 ?덉쑝硫?蹂듭썝, ?놁쑝硫?珥덇린 ?붾㈃?쇰줈
+              // (Label Explorer??savedViewState瑜??낅뜲?댄듃?섏? ?딆쑝誘濡?
+              //  savedViewState媛 ?덈떎硫?臾댁“嫄?Wafer Map Explorer???곹깭??
+              
+              if (this.savedViewState) {
+                  try {
+                      await this.restoreSavedViewState();
+                  } catch (error) {
+                      console.warn('?좑툘 [DELETE] 蹂듭썝 以??ㅻ쪟 諛쒖깮 - 珥덇린 ?붾㈃?쇰줈:', error);
+                      // ?ㅻ쪟 諛쒖깮 ??珥덇린 ?붾㈃?쇰줈
+
