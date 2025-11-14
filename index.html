@@ -1999,6 +1999,27 @@
             opacity: 0.5;
             cursor: not-allowed;
         }
+        
+        /* 방법 2: CSS 클래스 활용 - 그리드 모드에서 패널 숨기기 */
+        body.grid-mode-active [id*="file-name"],
+        body.grid-mode-active [id*="chip-selection"],
+        body.grid-mode-active [class*="file-name-panel"],
+        body.grid-mode-active [class*="chip-selection-panel"] {
+            display: none !important;
+            visibility: hidden !important;
+        }
+        
+        /* 방법 3: CSS 클래스 우선순위 처리 - 칩 선택 패널 강제 숨김 */
+        body.grid-mode-active #chip-selection-panel,
+        body.grid-mode-active #selected-chips-list,
+        body.grid-mode-active [id*="chip-selection"],
+        body.grid-mode-active [class*="chip-selection"],
+        body.grid-mode-active [id*="selected-chips"],
+        body.grid-mode-active [class*="selected-chips"] {
+            display: none !important;
+            visibility: hidden !important;
+            pointer-events: none !important;
+        }
     </style>
 </head>
 <body>

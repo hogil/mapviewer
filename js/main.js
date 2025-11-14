@@ -62,7 +62,7 @@ async function decodeBitmapSmart(source, options) {
 
 // 초기 맞춤 여유 (상대 비율)
 
-const FIT_RELATIVE_MARGIN = 0.80; // 초기 로드 시 20% 여유 (뷰포트가 2배 이상 보이도록)
+const FIT_RELATIVE_MARGIN = 0.92; // 초기 로드 시 8% 여유로 줄임 (더 크게 표시)
 
 // 리셋 시 절대 퍼센트포인트 오프셋 (예: -0.02 => 2%p 더 작게)
 
@@ -1084,11 +1084,19 @@ class WaferMapViewer {
             this.debugLog('🔷 [DEBUG] minimapContainer 숨김');
         }
 
-        // 파일명 표시 숨기기
-
-        this.hideFileName();
+        // ⭐ fileNameDisplay 직접 숨기기 (hideFileName() 호출 대신 직접 처리)
+        if (this.dom.fileNameDisplay) {
+            this.dom.fileNameDisplay.style.display = 'none';
+            this.debugLog('🔷 [DEBUG] fileNameDisplay 숨김 (hideImage)');
+        }
         
-        // ✅ currentImage를 null로 설정 (hideFileName에서 설정되지만 명시적으로 설정)
+        // ⭐ Chip Labels 숨기기
+        if (this.dom.chipLabelLegend) {
+            this.dom.chipLabelLegend.style.display = 'none';
+            this.debugLog('🔷 [DEBUG] chipLabelLegend 숨김');
+        }
+        
+        // 상태 초기화
         this.currentImage = null;
         this.currentImageBitmap = null;
         this.selectedImagePath = '';
@@ -1099,10 +1107,9 @@ class WaferMapViewer {
             this.dom.viewerContainer.classList.remove('single-image-mode');
         }
         
-        // ✅ Chip selection 패널 숨기기 (currentImage가 null이므로 updateSelectedChipsList에서 자동으로 숨김)
-        if (this.chipAnnotator && typeof this.chipAnnotator.updateSelectedChipsList === 'function') {
-            this.chipAnnotator.updateSelectedChipsList();
-        }
+        // ⭐ Chip Selection 패널 명시적으로 숨기기
+        this.closeChipSelectionPanel();
+        this.debugLog('🔷 [DEBUG] chipSelectionPanel 숨김');
     }
 
     // 파일명 표시
@@ -1129,6 +1136,12 @@ class WaferMapViewer {
             this.dom.fileNameDisplay.style.display = 'block';
 
             // 상단 바가 보이도록 캔버스 높이는 CSS 변수로 이미 확보됨
+        }
+
+        // ⭐ Chip Labels 표시 (단일 이미지 모드에서만)
+        if (this.dom.chipLabelLegend) {
+            this.dom.chipLabelLegend.style.display = 'block';
+            this.debugLog('🟢 [DEBUG] chipLabelLegend 표시');
         }
     }
 
@@ -2612,6 +2625,13 @@ class WaferMapViewer {
         // 정상적인 경우에만 숨김
         if (this.dom.fileNameDisplay) {
             this.dom.fileNameDisplay.style.display = 'none';
+            this.debugLog('🔷 [DEBUG] fileNameDisplay 숨김');
+        }
+
+        // ⭐ Chip Labels도 함께 숨기기
+        if (this.dom.chipLabelLegend) {
+            this.dom.chipLabelLegend.style.display = 'none';
+            this.debugLog('🔷 [DEBUG] chipLabelLegend 숨김');
         }
 
         // 줌 바 숨기기 (이미지가 없을 때는 불필요)
@@ -2657,6 +2677,34 @@ class WaferMapViewer {
         }
 
         // 뷰어 컨테이너를 그리드 모드로 설정하되 빈 상태
+        // ✅ 방법 1: 모든 가능한 패널 강제 숨기기
+        const selectorsToHide = [
+            '#file-name',
+            '#file-name-display', 
+            '#detail-file-name',
+            '.file-name-panel',
+            '#chip-selection',
+            '#chip-selection-panel',
+            '.chip-selection-panel',
+            '#selected-chips-list'
+        ];
+        
+        selectorsToHide.forEach(selector => {
+            try {
+                const el = document.querySelector(selector);
+                if (el) {
+                    el.style.display = 'none';
+                    el.style.removeProperty('visibility');
+                    el.style.removeProperty('opacity');
+                }
+            } catch (e) {
+                console.warn(`⚠️ [GRID] 선택자 오류: ${selector}`, e);
+            }
+        });
+        
+        // ✅ 방법 2: CSS 클래스 활용
+        document.body.classList.add('grid-mode-active');
+        
         this.gridMode = true; // 🔥 초기 화면도 gridMode로 설정 (상단 legend 표시용)
         
         // ✅ Chip Selection 패널 완전히 닫기
@@ -7708,7 +7756,13 @@ class WaferMapViewer {
 
             this.dom.overlayCanvas.style.display = 'block';
 
-            this.showFileName(fullPath);  // 🔥 fullPath 사용
+            this.showFileName(fullPath);  // 🔥 fullPath 사용 (chipLabelLegend도 자동 표시됨)
+
+            // ⭐ Chip Labels 표시 (단일 이미지 모드에서)
+            if (this.dom.chipLabelLegend) {
+                this.dom.chipLabelLegend.style.display = 'block';
+                console.log('🟢 [SHOW_IMAGE] chipLabelLegend 표시');
+            }
 
             const viewControls = document.querySelector('.view-controls');
 
@@ -12556,6 +12610,40 @@ class WaferMapViewer {
     // 2. Grid rendering
 
     showGrid(images, skipSaveState = false) {
+        // 🔥 디버깅: 그리드 모드 전환 전 상태 확인
+        console.log('🔍 [GRID] Before grid mode:');
+        console.log('  - File name display:', document.querySelector('#file-name-display')?.style.display);
+        console.log('  - Chip selection:', document.querySelector('#chip-selection-panel')?.style.display);
+        
+        // ✅ 방법 1: 모든 가능한 패널 강제 숨기기 (가장 확실)
+        const selectorsToHide = [
+            '#file-name',
+            '#file-name-display', 
+            '#detail-file-name',
+            '.file-name-panel',
+            '#chip-selection',
+            '#chip-selection-panel',
+            '.chip-selection-panel',
+            '#selected-chips-list'
+        ];
+        
+        selectorsToHide.forEach(selector => {
+            try {
+                const el = document.querySelector(selector);
+                if (el) {
+                    el.style.display = 'none';
+                    el.style.removeProperty('visibility');
+                    el.style.removeProperty('opacity');
+                    console.log(`✅ [GRID] 숨김 처리: ${selector}`);
+                }
+            } catch (e) {
+                console.warn(`⚠️ [GRID] 선택자 오류: ${selector}`, e);
+            }
+        });
+        
+        // ✅ 방법 2: CSS 클래스 활용 (body에 클래스 추가)
+        document.body.classList.add('grid-mode-active');
+        
         // ✅ 패널 닫기 추가 (맨 앞에)
         this.closeChipSelectionPanel();
         
@@ -12612,12 +12700,29 @@ class WaferMapViewer {
             grid.style.display = 'grid';
         }
 
-        // 🔥 그리드 모드에서는 파일명 패널 숨기기 (Label Explorer에서 복원 시 필요)
+        // ⭐ Grid 진입 시 단일 이미지 모드 UI 숨기기
+        if (this.dom.fileNameDisplay) {
+            this.dom.fileNameDisplay.style.display = 'none';
+            this.debugLog('🟦 [SHOW_GRID] fileNameDisplay 숨김');
+        }
+        if (this.dom.chipLabelLegend) {
+            this.dom.chipLabelLegend.style.display = 'none';
+            this.debugLog('🟦 [SHOW_GRID] chipLabelLegend 숨김');
+        }
+
+        // ⭐ 파일명 패널 숨기기 (그리드 모드에서는 불필요)
         if (this.dom.fileNameDisplay) {
             this.dom.fileNameDisplay.style.display = 'none';
         }
-
-        // 파일명 패널은 유지 (제품 변경 시 상단 패널 사라짐 방지) - 주석 유지
+        
+        // 🔷 추가: 파일명 패널 명시적으로 숨기기 (다양한 선택자로 확인)
+        const fileNamePanel = document.querySelector('[id*="file-name"]')
+                            || document.querySelector('.file-name-panel')
+                            || document.getElementById('file-name-display')
+                            || document.getElementById('detail-file-name');
+        if (fileNamePanel) {
+            fileNamePanel.style.display = 'none';
+        }
 
         const viewControls = document.querySelector('.view-controls');
         if (viewControls) viewControls.style.display = 'none';
@@ -12647,6 +12752,44 @@ class WaferMapViewer {
             this.gridResizeObserver = new ResizeObserver(() => this.updateGridSquaresPixel());
             this.gridResizeObserver.observe(grid);
         }
+        
+        // 🔥 디버깅: 그리드 모드 전환 후 상태 확인
+        setTimeout(() => {
+            console.log('🔍 [GRID] After grid mode:');
+            console.log('  - File name display:', document.querySelector('#file-name-display')?.style.display);
+            console.log('  - Chip selection:', document.querySelector('#chip-selection-panel')?.style.display);
+            
+            // ⭐ 최종 확인: 모든 칩 선택 패널 강제 숨기기 (방법 2)
+            const chipPanels = [
+                document.getElementById('chip-selection-panel'),
+                document.getElementById('selected-chips-list'),
+                ...Array.from(document.querySelectorAll('[id*="chip-selection"]')),
+                ...Array.from(document.querySelectorAll('[class*="chip-selection"]')),
+                ...Array.from(document.querySelectorAll('[id*="selected-chips"]')),
+                ...Array.from(document.querySelectorAll('[class*="selected-chips"]'))
+            ];
+            
+            chipPanels.forEach(el => {
+                if (el) {
+                    el.style.display = 'none';
+                    el.style.visibility = 'hidden';
+                    el.style.pointerEvents = 'none';
+                }
+            });
+            
+            // 🔍 디버깅: CHIP SELECTION 패널 상태 확인
+            console.log('=== CHIP SELECTION 패널 상태 확인 ===');
+            console.log('chip-selection-panel:', document.getElementById('chip-selection-panel')?.style.display);
+            console.log('selected-chips-list:', document.getElementById('selected-chips-list')?.style.display);
+            
+            // 모든 칩 관련 요소 확인
+            const chipElements = document.querySelectorAll('[id*="chip"], [class*="chip-selection"], [id*="selected-chips"], [class*="selected-chips"]');
+            chipElements.forEach(el => {
+                if (el.style.display !== 'none') {
+                    console.log('⚠️ 칩 요소 남아있음:', el.id || el.className, '→', el.style.display);
+                }
+            });
+        }, 100);
 
         // 🔥 그리드 재생성 후 레이아웃 캐시 무효화 (드래그 영역 재계산용)
         this.invalidateGridGeometry();
@@ -12943,6 +13086,9 @@ class WaferMapViewer {
         }
 
         this.gridMode = false;
+        
+        // ✅ 방법 2: CSS 클래스 제거 (body에서 클래스 제거)
+        document.body.classList.remove('grid-mode-active');
 
         // 그리드 상태 초기화
 
@@ -13049,14 +13195,39 @@ class WaferMapViewer {
             chipSelectionList.style.display = 'none';
         }
         
-        // 3. ChipAnnotator 선택 해제
+        // ✅ 추가: 모든 가능한 칩 선택 패널 강제 숨기기
+        const allChipSelectionSelectors = [
+            '#chip-selection-panel',
+            '#selected-chips-list',
+            '.chip-selection-panel',
+            '.selected-chips-list',
+            '[id*="chip-selection"]',
+            '[class*="chip-selection"]',
+            '[id*="selected-chips"]',
+            '[class*="selected-chips"]'
+        ];
+        
+        allChipSelectionSelectors.forEach(selector => {
+            try {
+                const elements = document.querySelectorAll(selector);
+                elements.forEach(el => {
+                    if (el) {
+                        el.style.display = 'none';
+                        el.style.visibility = 'hidden';
+                        el.style.pointerEvents = 'none';
+                    }
+                });
+            } catch (e) {
+                // 무시
+            }
+        });
+        
+        // 3. ChipAnnotator 선택 해제 (⚠️ 주의: updateSelectedChipsList는 호출 안 함 - 재생성 방지)
         if (this.chipAnnotator) {
             if (typeof this.chipAnnotator.clearSelection === 'function') {
                 this.chipAnnotator.clearSelection(false); // notifyViewer = false
             }
-            if (typeof this.chipAnnotator.updateSelectedChipsList === 'function') {
-                this.chipAnnotator.updateSelectedChipsList(); // 패널 업데이트
-            }
+            // ❌ updateSelectedChipsList는 호출하지 않음 (재생성 방지)
         }
         
         // 🔥 추가: overlay canvas도 숨기기 (chip 선택 시각화 제거)
@@ -13067,6 +13238,34 @@ class WaferMapViewer {
 
     // 🔥 그리드 모드 활성화 (GridManager에서 호출)
     showGridMode() {
+        // ✅ 방법 1: 모든 가능한 패널 강제 숨기기
+        const selectorsToHide = [
+            '#file-name',
+            '#file-name-display', 
+            '#detail-file-name',
+            '.file-name-panel',
+            '#chip-selection',
+            '#chip-selection-panel',
+            '.chip-selection-panel',
+            '#selected-chips-list'
+        ];
+        
+        selectorsToHide.forEach(selector => {
+            try {
+                const el = document.querySelector(selector);
+                if (el) {
+                    el.style.display = 'none';
+                    el.style.removeProperty('visibility');
+                    el.style.removeProperty('opacity');
+                }
+            } catch (e) {
+                console.warn(`⚠️ [GRID] 선택자 오류: ${selector}`, e);
+            }
+        });
+        
+        // ✅ 방법 2: CSS 클래스 활용
+        document.body.classList.add('grid-mode-active');
+        
         this.gridMode = true;
         
         // ✅ Chip Selection 패널 완전히 닫기
@@ -13082,6 +13281,32 @@ class WaferMapViewer {
         this.dom.minimapContainer.style.display = 'none';
         this.dom.imageCanvas.style.display = 'none';
         this.dom.overlayCanvas.style.display = 'none';
+        
+        // ⭐ 파일명 패널 숨기기 (다양한 선택자로 확인)
+        if (this.dom.fileNameDisplay) {
+            this.dom.fileNameDisplay.style.display = 'none';
+            console.log('🔷 [GRID] fileNameDisplay 숨김');
+        }
+        
+        // 🔷 추가: 파일명 패널 명시적으로 숨기기
+        const fileNamePanel = document.querySelector('[id*="file-name"]')
+                            || document.querySelector('.file-name-panel')
+                            || document.getElementById('file-name-display')
+                            || document.getElementById('detail-file-name');
+        if (fileNamePanel) {
+            fileNamePanel.style.display = 'none';
+        }
+        
+        // ⭐ Chip Labels 숨기기
+        if (this.dom.chipLabelLegend) {
+            this.dom.chipLabelLegend.style.display = 'none';
+            console.log('🔷 [GRID] chipLabelLegend 숨김');
+        }
+        
+        // ⭐ currentImage 초기화
+        this.currentImage = null;
+        this.currentImageBitmap = null;
+        this.selectedImagePath = '';
         
         if (grid) {
             grid.style.display = 'grid';

@@ -479,12 +479,30 @@ export class ChipAnnotator {
     updateSelectedChipsList() {
         if (!this.viewer || !this.viewer.dom) return;
         
-        // 🔥 그리드 모드에서는 표시하지 않음
+        // 🔥 그리드 모드에서는 표시하지 않음 (강제 숨김)
         if (this.viewer.gridMode) {
             const listContainer = document.getElementById('selected-chips-list');
             if (listContainer) {
                 listContainer.style.display = 'none';
+                listContainer.style.visibility = 'hidden';
+                listContainer.style.pointerEvents = 'none';
             }
+            // 모든 칩 선택 관련 요소도 숨기기
+            const allChipSelectors = [
+                '#chip-selection-panel',
+                '#selected-chips-list',
+                ...Array.from(document.querySelectorAll('[id*="chip-selection"]')),
+                ...Array.from(document.querySelectorAll('[class*="chip-selection"]')),
+                ...Array.from(document.querySelectorAll('[id*="selected-chips"]')),
+                ...Array.from(document.querySelectorAll('[class*="selected-chips"]'))
+            ];
+            allChipSelectors.forEach(el => {
+                if (el && el.style) {
+                    el.style.display = 'none';
+                    el.style.visibility = 'hidden';
+                    el.style.pointerEvents = 'none';
+                }
+            });
             return;
         }
         
