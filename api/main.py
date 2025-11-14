@@ -4416,45 +4416,39 @@ async def search_files(q: str = Query("", description="파일명 검색(대소�
             
             logger.info(f"LOT 검색 시작: keys_slice={len(keys_slice)}개 파일 검색 대상, 요청 LOT={sorted(lot_filter)}")
             
-            # 🔥 디버깅: "near" 관련 파일명 모두 로깅
-            near_files = []
             all_lot_tokens = set()  # 🔥 모든 추출된 lot_token 추적
             
             # 🔥 keys_slice의 모든 파일 검색 (제한 없음)
             for rel, name_lower in zip(keys_slice, names_slice):
                 lot_token = name_lower.split("_", 1)[0]  # 파일명의 첫 부분(LOT ID) 추출
-                all_lot_tokens.add(lot_token)  # 🔥 모든 lot_token 수집
                 
-                # 🔥 "near" 관련 파일 디버깅
-                if "near" in name_lower.lower():
-                    near_files.append({
-                        "path": rel,
-                        "filename": name_lower,
-                        "lot_token": lot_token,
-                        "matched": lot_token in lot_filter
-                    })
-                
+                # 🔥 실제 LOT 매칭은 필터링 없이 수행 (모든 토큰 허용)
                 if lot_token in lot_filter:  # LOT 목록에 포함되면 검색 결과에 추가
                     all_matching_hits.append(rel)
                     matched_lots.add(lot_token)  # 🔥 매칭된 LOT 기록
                     lot_file_counts[lot_token] = lot_file_counts.get(lot_token, 0) + 1
-            
-            # 🔥 디버깅 로그
-            if near_files:
-                logger.info(f"🔍 [NEAR 디버깅] 'near' 포함 파일 {len(near_files)}개:")
-                for f in near_files:
-                    logger.info(f"  - 경로: {f['path']}")
-                    logger.info(f"    파일명: {f['filename']}")
-                    logger.info(f"    추출된 LOT: {f['lot_token']}")
-                    logger.info(f"    매칭 여부: {f['matched']}")
-            else:
-                logger.info(f"🔍 [NEAR 디버깅] 'near' 포함 파일 없음")
+                
+                # 🔥 디버깅용 토큰 수집: 잘못된 토큰 필터링 (숫자만, .file 등 제외)
+                # 숫자만 있는 경우 (예: 0, 1, 10, 100 등) 제외
+                if lot_token.isdigit():
+                    continue
+                # .file 같은 특수 케이스 제외
+                if lot_token.startswith('.'):
+                    continue
+                # 빈 문자열 또는 너무 짧은 토큰 제외
+                if not lot_token or len(lot_token) < 2:
+                    continue
+                
+                all_lot_tokens.add(lot_token)  # 🔥 유효한 lot_token만 수집 (디버깅용)
             
             # 🔥 모든 추출된 lot_token 로깅 (요청 LOT와 비교)
             missing_lot_tokens = lot_filter - all_lot_tokens
             if missing_lot_tokens:
                 logger.warning(f"🔍 [LOT 디버깅] 추출된 lot_token에 없는 요청 LOT: {sorted(missing_lot_tokens)}")
-                logger.info(f"🔍 [LOT 디버깅] keys_slice에서 추출된 모든 lot_token (상위 50개): {sorted(list(all_lot_tokens))[:50]}")
+                # 🔥 상위 2000개 출력 (UI에 표시할 수 있는 최대 개수)
+                sorted_tokens = sorted(list(all_lot_tokens))
+                display_count = min(2000, len(sorted_tokens))
+                logger.info(f"🔍 [LOT 디버깅] keys_slice에서 추출된 모든 lot_token (상위 {display_count}개, 전체 {len(sorted_tokens)}개): {sorted_tokens[:display_count]}")
             
             # 🔥 검색 제한 없음: 모든 매칭 파일 수집 (current_folder의 모든 하위 파일 검색)
             index_hits = all_matching_hits  # 모든 파일 검색 (제한 없음)

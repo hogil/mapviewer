@@ -1084,6 +1084,14 @@ class WaferMapViewer {
         // 초기 상태로 복귀 - 검색창이 보이는 상태
 
         this.showInitialState();
+        
+        // 🔥 검색 텍스트 초기화 (일반 검색 및 다중 검색)
+        if (this.dom.fileSearch) {
+            this.dom.fileSearch.value = '';
+        }
+        if (this.dom.multiSearchInput) {
+            this.dom.multiSearchInput.value = '';
+        }
 
         this.debugLog('🚀 Wafer Map Explorer: 오른쪽 클릭으로 모든 선택 해제 및 초기 상태 복귀');
     }
@@ -4738,11 +4746,16 @@ class WaferMapViewer {
         textarea.style.setProperty('--grid-offset', `${paddingLeft}px`);
     }
 
-    closeMultiSearchModal() {
+    closeMultiSearchModal(clearText = false) {
         if (!this.dom?.multiSearchModal) return;
         this.dom.multiSearchModal.style.display = 'none';
         this.setMultiSearchError('');
         this.isMultiSearchOpen = false;
+        
+        // 🔥 검색 성공 시 텍스트 초기화
+        if (clearText && this.dom.multiSearchInput) {
+            this.dom.multiSearchInput.value = '';
+        }
         
         // 전역 ESC 키 핸들러 제거
         if (this.multiSearchModalEscapeHandler) {
@@ -4787,7 +4800,8 @@ class WaferMapViewer {
         this.setMultiSearchError('');
         try {
             await this.performSearch({ multiLotList: [...lotList] });
-            this.closeMultiSearchModal();
+            // 🔥 검색 성공 시 텍스트 초기화
+            this.closeMultiSearchModal(true);
         } catch (error) {
             console.error('다중 LOT 검색 실패:', error);
             this.setMultiSearchError('검색 중 오류가 발생했습니다.');
