@@ -6,7 +6,7 @@ L3Tracker - Wafer Map Viewer API (HTTPS, Pretty Table Logs, Noise-free)
 # ======================== Imports ========================
 import os, re, sys, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading
 from pathlib import Path
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 from typing import List, Optional, Dict, Any, Tuple, Set, Literal, Iterable
 from collections import OrderedDict
 from bisect import bisect_left, bisect_right
@@ -1188,8 +1188,120 @@ def _get_cached_palette(image_path: Path) -> Optional[List[int]]:
         
         return None
 
+# ======================== Lifecycle ========================
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    global INDEX_REFRESH_TASK
+    
+    # 🧹 Python 캐시 정리 (서버 시작 시)
+    try:
+        import glob
+        cache_dirs = []
+        cache_files = []
+        for root, dirs, files in os.walk(Path(__file__).parent.parent):
+            # __pycache__ 디렉토리 찾기
+            if '__pycache__' in dirs:
+                cache_dirs.append(os.path.join(root, '__pycache__'))
+            # .pyc 파일 찾기
+            for file in files:
+                if file.endswith('.pyc'):
+                    cache_files.append(os.path.join(root, file))
+        
+        # 캐시 삭제
+        deleted_count = 0
+        for cache_dir in cache_dirs:
+            try:
+                shutil.rmtree(cache_dir)
+                deleted_count += 1
+            except Exception:
+                pass
+        for cache_file in cache_files:
+            try:
+                os.remove(cache_file)
+                deleted_count += 1
+            except Exception:
+                pass
+        
+        if deleted_count > 0:
+            bootlog = logging.getLogger("uvicorn.error")
+            bootlog.info(f"🧹 Python 캐시 정리 완료: {deleted_count}개 항목 삭제")
+    except Exception:
+        # 캐시 정리 실패해도 서버는 계속 실행
+        pass
+    
+    bootlog = logging.getLogger("uvicorn.error")
+    bootlog.info("🚀 L3Tracker 서버 시작 (테이블 로그 시스템)")
+    scheme = "HTTPS" if config.SSL_ENABLED else "HTTP"
+    port_to_log = config.HTTPS_PORT if config.SSL_ENABLED else config.DEFAULT_PORT
+    bootlog.info(f"📍 호스트: {config.DEFAULT_HOST}")
+    bootlog.info(f"🔌 포트: {port_to_log} ({scheme})")
+    bootlog.info(f"📁 ROOT_DIR: {config.ROOT_DIR}")
+    bootlog.info(f"🔧 PROJECT_ROOT: {os.getenv('PROJECT_ROOT', 'NOT SET')}")
+    
+    # 디버그 로그 제거 (초기 로드 시에만 필요하면 주석 해제)
+    # bootlog.info(f"🔍 [STARTUP] current_folder: {current_folder}")
+    # bootlog.info(f"🔍 [STARTUP] THUMBNAIL_DIR: {THUMBNAIL_DIR}")
+    
+    bootlog.info("=" * 50)
+    print_access_header_once()
+
+    # asyncio 소음 예외 억제(10054 등)
+    try:
+        loop = asyncio.get_running_loop()
+        default_handler = loop.get_exception_handler()
+        def _silence_asyncio(loop, context):
+            exc = context.get('exception')
+            msg = str(context.get('message', ''))
+            if isinstance(exc, (ConnectionResetError,)):
+                return
+            if "WinError 10054" in msg:
+                return
+            if default_handler:
+                default_handler(loop, context)
+        loop.set_exception_handler(_silence_asyncio)
+    except Exception:
+        pass
+
+    _classification_dir().mkdir(parents=True, exist_ok=True)
+    _labels_load()
+    global CLASSES_MTIME
+    CLASSES_MTIME = _classes_stat_mtime()
+    cache_loaded = _load_index_cache()
+    if cache_loaded:
+        logger.info("ℹ️ [INDEX] 캐시 로드 완료 → 즉시 재생성 예약")
+    else:
+        logger.info("ℹ️ [INDEX] 캐시 없음 → 전체 인덱스 생성 예약")
+    asyncio.create_task(build_file_index_background(force=True))
+    if INDEX_REFRESH_INTERVAL_SECONDS > 0 and INDEX_REFRESH_TASK is None:
+        interval_minutes = INDEX_REFRESH_INTERVAL_SECONDS // 60 or 1
+        bootlog.info(f"🔁 [INDEX] 자동 재빌드 주기: {interval_minutes}분")
+        INDEX_REFRESH_TASK = asyncio.create_task(_index_refresh_loop(INDEX_REFRESH_INTERVAL_SECONDS))
+
+    yield  # 앱 실행 중
+
+    # Shutdown
+    logging.getLogger("uvicorn.error").info("🛑 L3Tracker 서버 종료")
+
+    if INDEX_REFRESH_TASK:
+        INDEX_REFRESH_TASK.cancel()
+        try:
+            await INDEX_REFRESH_TASK
+        except asyncio.CancelledError:
+            pass
+        INDEX_REFRESH_TASK = None
+
+    try:
+        THUMBNAIL_EXECUTOR.shutdown(wait=False, cancel_futures=False)
+    except Exception:
+        pass
+    try:
+        DIRLIST_EXECUTOR.shutdown(wait=False, cancel_futures=False)
+    except Exception:
+        pass
+
 # ======================== FastAPI & Middleware ========================
-app = FastAPI(title="L3Tracker API", version="2.6.0")
+app = FastAPI(title="L3Tracker API", version="2.6.0", lifespan=lifespan)
 
 # ======================== SAML SSO (OneLogin python3-saml) ========================
 SAML_DIR = Path("saml")
@@ -1845,7 +1957,8 @@ async def save_color_scheme(request: Request):
         
         # 파일에 저장 (마지막 수정 시간 추가)
         if save_color_legends(legends, updated_scheme_name=scheme_name):
-            logger.info(f"✅ Color scheme saved: {scheme_name}")
+            # 디버그 로그 제거 (너무 자주 출력됨)
+            # logger.info(f"✅ Color scheme saved: {scheme_name}")
             
             # 🔥 색상 편집 저장 후 해당 scheme의 썸네일 및 피라미드 캐시 무효화
             # scheme별 폴더 전체 삭제 (예: thumbnail/LoginId_251106_091612/)
@@ -1859,7 +1972,8 @@ async def save_color_scheme(request: Request):
                     try:
                         shutil.rmtree(scheme_dir)
                         deleted_count += 1
-                        logger.info(f"✅ scheme 폴더 삭제: {scheme_dir}")
+                        # 디버그 로그 제거
+                        # logger.info(f"✅ scheme 폴더 삭제: {scheme_dir}")
                     except Exception as e:
                         logger.warning(f"scheme 폴더 삭제 실패: {scheme_dir}, 오류: {e}")
                 
@@ -1870,7 +1984,8 @@ async def save_color_scheme(request: Request):
                         try:
                             shutil.rmtree(old_dir)
                             deleted_count += 1
-                            logger.info(f"✅ 기존 scheme 폴더 삭제: {old_dir}")
+                            # 디버그 로그 제거
+                            # logger.info(f"✅ 기존 scheme 폴더 삭제: {old_dir}")
                         except Exception as e:
                             logger.warning(f"기존 scheme 폴더 삭제 실패: {old_dir}, 오류: {e}")
                 
@@ -1904,7 +2019,8 @@ async def save_color_scheme(request: Request):
                 except Exception as e:
                     logger.warning(f"메모리 캐시 초기화 실패: {e}")
                 
-                logger.info(f"✅ 캐시 무효화 완료: {scheme_name} ({deleted_count}개 항목 삭제)")
+                # 디버그 로그 제거 (너무 자주 출력됨)
+                # logger.info(f"✅ 캐시 무효화 완료: {scheme_name} ({deleted_count}개 항목 삭제)")
             except Exception as e:
                 logger.warning(f"⚠️ 캐시 무효화 실패: {e}")
             
@@ -2792,8 +2908,10 @@ async def generate_thumbnail(image_path: Path, size: Tuple[int, int], personaliz
     try:
         # 썸네일 경로 생성 (scheme 포함)
         if personalized and scheme:
+            logger.debug(f"🎨 [GENERATE_THUMB] Using scheme: {scheme} for {image_path.name}")
             thumb = get_thumbnail_path(image_path, size, scheme=scheme)
         else:
+            logger.debug(f"🎨 [GENERATE_THUMB] No scheme (personalized={personalized}, scheme={scheme}) for {image_path.name}")
             thumb = get_thumbnail_path(image_path, size, scheme=None)
         key = f"{thumb}|{size[0]}x{size[1]}"
 
@@ -2900,7 +3018,8 @@ async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
     global current_folder
     try:
         target = safe_resolve_path(path)
-        logger.info(f"📁 [/api/files] path: {path}, target: {target}")
+        # 디버그 로그 제거 (너무 자주 출력됨)
+        # logger.info(f"📁 [/api/files] path: {path}, target: {target}")
         if not target.exists() or not target.is_dir():
             logger.warning(f"⚠️ [/api/files] 폴더 없음: {target}")
             return JSONResponse({"success": False, "error": "Not found"}, status_code=404)
@@ -2908,7 +3027,8 @@ async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
         # 🔥 current_folder 업데이트 제거: 오직 changeFolder에서만 변경됨
         # 이미지 클릭이나 폴더 탐색 시 current_folder를 변경하지 않음
         # current_folder는 제품 선택(changeFolder) 시에만 변경됨
-        logger.info(f"⏭️ [/api/files] current_folder 유지 (변경 안 함): {current_folder}")
+        # 디버그 로그 제거
+        # logger.info(f"⏭️ [/api/files] current_folder 유지 (변경 안 함): {current_folder}")
         # 🔥 라벨 썸네일 캐시는 유지하고, classification 폴더만 무효화
         if 'classification' in str(target).replace('\\', '/'):
             _dircache_invalidate(target)
@@ -2921,7 +3041,8 @@ async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
         excluded_folders = ['classification', 'classification_chips', 'chip_annotations', 'thumbnails']
         items = [item for item in items if item['name'] not in excluded_folders]
         
-        logger.info(f"📁 [/api/files] 반환 항목 수: {len(items)} (폴더: {sum(1 for x in items if x['type']=='directory')}, 파일: {sum(1 for x in items if x['type']=='file')})")
+        # 디버그 로그 제거 (너무 자주 출력됨)
+        # logger.info(f"📁 [/api/files] 반환 항목 수: {len(items)} (폴더: {sum(1 for x in items if x['type']=='directory')}, 파일: {sum(1 for x in items if x['type']=='file')})")
         
         # prefer 폴더명을 최상단에
         if prefer:
@@ -3989,6 +4110,8 @@ async def get_thumbnail(
             raise HTTPException(status_code=415, detail="Unsupported image format")
 
         try:
+            # 디버그 로그 제거 (너무 자주 출력됨)
+            # logger.info(f"🎨 [THUMBNAIL API] path={image_path.name}, size={size}, personalized={personalized}, scheme={scheme}")
             # 기본 썸네일 생성 (개인색 설정 포함)
             thumb = await generate_thumbnail(image_path, (size, size), personalized=personalized, scheme=scheme)
             if thumb and thumb.exists():
@@ -4470,7 +4593,8 @@ async def get_files_recursive(path: str):
 async def get_classes(mode: str = Query("wafer", pattern="^(wafer|chip)$", description="wafer 또는 chip 모드")):
     try:
         classification_dir = _classification_dir(mode=mode)
-        logger.info(f"🔍 [/api/classes] mode={mode}, current_folder={current_folder}, classification_dir={classification_dir}")
+        # 디버그 로그 제거 (너무 자주 출력됨)
+        # logger.info(f"🔍 [/api/classes] mode={mode}, current_folder={current_folder}, classification_dir={classification_dir}")
 
         _dircache_invalidate(classification_dir)
         if not classification_dir.exists():
@@ -4483,7 +4607,8 @@ async def get_classes(mode: str = Query("wafer", pattern="^(wafer|chip)$", descr
             with os.scandir(classification_dir) as it:
                 for entry in it:
                     if entry.is_dir(follow_symlinks=False): classes.append(entry.name)
-            logger.info(f"✅ [/api/classes] 클래스 조회 완료: {len(classes)}개 ({classes})")
+            # 디버그 로그 제거 (너무 자주 출력됨)
+            # logger.info(f"✅ [/api/classes] 클래스 조회 완료: {len(classes)}개 ({classes})")
         except FileNotFoundError:
             logger.warning(f"⚠️ [/api/classes] FileNotFoundError - classification_dir: {classification_dir}")
             pass
@@ -4495,7 +4620,7 @@ async def get_classes(mode: str = Query("wafer", pattern="^(wafer|chip)$", descr
 @app.post("/api/classes")
 async def create_class(request: Request,
                       req: CreateClassReq,
-                      mode: str = Query("wafer", regex="^(wafer|chip)$", description="wafer 또는 chip 모드"),
+                      mode: str = Query("wafer", pattern="^(wafer|chip)$", description="wafer 또는 chip 모드"),
                       _=Depends(labels_classes_sync_dep)):
     try:
         # 권한 검사: 클래스 관리 권한 필요
@@ -4532,7 +4657,7 @@ async def create_class(request: Request,
 async def delete_class(request: Request,
                        class_name: str = PathParam(..., min_length=1, max_length=128),
                        force: bool = Query(False, description="True면 내용 포함 통째 삭제"),
-                       mode: str = Query("wafer", regex="^(wafer|chip)$", description="wafer 또는 chip 모드"),
+                       mode: str = Query("wafer", pattern="^(wafer|chip)$", description="wafer 또는 chip 모드"),
                        _=Depends(labels_classes_sync_dep)):
     try:
         # 권한 검사: 클래스 관리 권한 필요
@@ -4566,7 +4691,7 @@ class RenameClassReq(BaseModel):
 @app.post("/api/classes/rename")
 async def rename_class(request: Request,
                        req: RenameClassReq,
-                       mode: str = Query("wafer", regex="^(wafer|chip)$", description="wafer 또는 chip 모드"),
+                       mode: str = Query("wafer", pattern="^(wafer|chip)$", description="wafer 또는 chip 모드"),
                        _=Depends(labels_classes_sync_dep)):
     try:
         # 권한 검사: 클래스 관리 권한 필요
@@ -4620,7 +4745,7 @@ class DeleteClassesReq(BaseModel):
 
 @app.post("/api/classes/delete")
 async def delete_classes(req: DeleteClassesReq,
-                         mode: str = Query("wafer", regex="^(wafer|chip)$", description="wafer 또는 chip 모드"),
+                         mode: str = Query("wafer", pattern="^(wafer|chip)$", description="wafer 또는 chip 모드"),
                          _=Depends(labels_classes_sync_dep)):
     try:
         if not req.names: raise HTTPException(status_code=400, detail="클래스명 목록이 비어있습니다")
@@ -4653,18 +4778,11 @@ async def class_images(class_name: str = PathParam(..., min_length=1, max_length
                        offset: int = Query(0, ge=0),
                        mode: str = Query("wafer", regex="^(wafer|chip)$", description="wafer 또는 chip 모드")):
     try:
-        # 🔍 디버그: 입력 파라미터
-        logger.info(f"🔍 [/api/classes/{{class_name}}/images] class_name: {class_name}")
-
+        # 디버그 로그 제거 (너무 자주 출력됨)
         if not _CLASS_NAME_RE.match(class_name): raise HTTPException(status_code=400, detail="Invalid class_name")
 
         classification_base = _classification_dir(mode=mode)
         class_dir = classification_base / class_name
-        logger.info(f"🔍 [/api/classes/{{class_name}}/images] classification_base: {classification_base}")
-
-        # 🔍 디버그: 최종 class_dir 경로
-        logger.info(f"✅ [/api/classes/{{class_name}}/images] 최종 class_dir: {class_dir}")
-        logger.info(f"🔍 [/api/classes/{{class_name}}/images] class_dir.exists(): {class_dir.exists()}")
 
         if not class_dir.exists() or not class_dir.is_dir():
             logger.warning(f"⚠️ [/api/classes/{{class_name}}/images] class_dir 없음 또는 디렉토리 아님: {class_dir}")
@@ -4677,7 +4795,8 @@ async def class_images(class_name: str = PathParam(..., min_length=1, max_length
                 found.append(rel)
                 if len(found) >= goal: break
 
-        logger.info(f"✅ [/api/classes/{{class_name}}/images] 이미지 조회 완료: {len(found)}개 (offset={offset}, limit={limit})")
+        # 디버그 로그 제거 (너무 자주 출력됨)
+        # logger.info(f"✅ [/api/classes/{{class_name}}/images] 이미지 조회 완료: {len(found)}개 (offset={offset}, limit={limit})")
         return {"success": True, "class": class_name, "results": found[offset: offset + limit], "offset": offset, "limit": limit}
     except HTTPException:
         raise
@@ -6604,117 +6723,6 @@ async def search_users_from_stats(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ======================== Lifecycle ========================
-@app.on_event("startup")
-async def startup_event():
-    global INDEX_REFRESH_TASK
-    
-    # 🧹 Python 캐시 정리 (서버 시작 시)
-    try:
-        import glob
-        cache_dirs = []
-        cache_files = []
-        for root, dirs, files in os.walk(Path(__file__).parent.parent):
-            # __pycache__ 디렉토리 찾기
-            if '__pycache__' in dirs:
-                cache_dirs.append(os.path.join(root, '__pycache__'))
-            # .pyc 파일 찾기
-            for file in files:
-                if file.endswith('.pyc'):
-                    cache_files.append(os.path.join(root, file))
-        
-        # 캐시 삭제
-        deleted_count = 0
-        for cache_dir in cache_dirs:
-            try:
-                shutil.rmtree(cache_dir)
-                deleted_count += 1
-            except Exception:
-                pass
-        for cache_file in cache_files:
-            try:
-                os.remove(cache_file)
-                deleted_count += 1
-            except Exception:
-                pass
-        
-        if deleted_count > 0:
-            bootlog = logging.getLogger("uvicorn.error")
-            bootlog.info(f"🧹 Python 캐시 정리 완료: {deleted_count}개 항목 삭제")
-    except Exception:
-        # 캐시 정리 실패해도 서버는 계속 실행
-        pass
-    
-    bootlog = logging.getLogger("uvicorn.error")
-    bootlog.info("🚀 L3Tracker 서버 시작 (테이블 로그 시스템)")
-    scheme = "HTTPS" if config.SSL_ENABLED else "HTTP"
-    port_to_log = config.HTTPS_PORT if config.SSL_ENABLED else config.DEFAULT_PORT
-    bootlog.info(f"📍 호스트: {config.DEFAULT_HOST}")
-    bootlog.info(f"🔌 포트: {port_to_log} ({scheme})")
-    bootlog.info(f"📁 ROOT_DIR: {config.ROOT_DIR}")
-    bootlog.info(f"🔧 PROJECT_ROOT: {os.getenv('PROJECT_ROOT', 'NOT SET')}")
-    
-    # 🔍 서버 시작 시 current_folder 정보 출력
-    bootlog.info(f"🔍 [STARTUP] current_folder: {current_folder}")
-    bootlog.info(f"🔍 [STARTUP] THUMBNAIL_DIR: {THUMBNAIL_DIR}")
-    
-    bootlog.info("=" * 50)
-    print_access_header_once()
-
-    # asyncio 소음 예외 억제(10054 등)
-    try:
-        loop = asyncio.get_running_loop()
-        default_handler = loop.get_exception_handler()
-        def _silence_asyncio(loop, context):
-            exc = context.get('exception')
-            msg = str(context.get('message', ''))
-            if isinstance(exc, (ConnectionResetError,)):
-                return
-            if "WinError 10054" in msg:
-                return
-            if default_handler:
-                default_handler(loop, context)
-        loop.set_exception_handler(_silence_asyncio)
-    except Exception:
-        pass
-
-    _classification_dir().mkdir(parents=True, exist_ok=True)
-    _labels_load()
-    global CLASSES_MTIME
-    CLASSES_MTIME = _classes_stat_mtime()
-    cache_loaded = _load_index_cache()
-    if cache_loaded:
-        logger.info("ℹ️ [INDEX] 캐시 로드 완료 → 즉시 재생성 예약")
-    else:
-        logger.info("ℹ️ [INDEX] 캐시 없음 → 전체 인덱스 생성 예약")
-    asyncio.create_task(build_file_index_background(force=True))
-    if INDEX_REFRESH_INTERVAL_SECONDS > 0 and INDEX_REFRESH_TASK is None:
-        interval_minutes = INDEX_REFRESH_INTERVAL_SECONDS // 60 or 1
-        bootlog.info(f"🔁 [INDEX] 자동 재빌드 주기: {interval_minutes}분")
-        INDEX_REFRESH_TASK = asyncio.create_task(_index_refresh_loop(INDEX_REFRESH_INTERVAL_SECONDS))
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    logging.getLogger("uvicorn.error").info("🛑 L3Tracker 서버 종료")
-
-    global INDEX_REFRESH_TASK
-    if INDEX_REFRESH_TASK:
-        INDEX_REFRESH_TASK.cancel()
-        try:
-            await INDEX_REFRESH_TASK
-        except asyncio.CancelledError:
-            pass
-        INDEX_REFRESH_TASK = None
-
-    try:
-        THUMBNAIL_EXECUTOR.shutdown(wait=False, cancel_futures=False)
-    except Exception:
-        pass
-    try:
-        DIRLIST_EXECUTOR.shutdown(wait=False, cancel_futures=False)
-    except Exception:
-        pass
-
 # ======================== __main__ ========================
 if __name__ == "__main__":
     import uvicorn
@@ -6734,10 +6742,10 @@ if __name__ == "__main__":
     logger.info(f"[SSL] CERTFILE={cert_path}")
     logger.info(f"[SSL] KEYFILE={key_path}")
     
-    # 🔍 서버 시작 시 current_folder 정보 출력
-    logger.info(f"🔍 [SERVER START] ROOT_DIR: {ROOT_DIR}")
-    logger.info(f"🔍 [SERVER START] current_folder: {current_folder}")
-    logger.info(f"🔍 [SERVER START] THUMBNAIL_DIR: {THUMBNAIL_DIR}")
+    # 디버그 로그 제거 (초기 로드 시에만 필요하면 주석 해제)
+    # logger.info(f"🔍 [SERVER START] ROOT_DIR: {ROOT_DIR}")
+    # logger.info(f"🔍 [SERVER START] current_folder: {current_folder}")
+    # logger.info(f"🔍 [SERVER START] THUMBNAIL_DIR: {THUMBNAIL_DIR}")
 
     requested_workers = os.getenv("UVICORN_WORKERS") or os.getenv("WORKERS")
     if requested_workers and requested_workers.strip() not in {"", "1"}:

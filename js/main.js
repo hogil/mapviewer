@@ -790,7 +790,7 @@ class WaferMapViewer {
 
         // Color Legends 데이터
         this.colorLegends = null;
-        this.currentUser = 'change';
+        this.currentUser = null; // ✅ 초기값: null (아직 결정 안 됨, loadUserInfo()에서 설정됨)
 
         // 클래스 선택 상태 초기화 (Label Explorer와 Class Manager가 공유)
 
@@ -3587,25 +3587,20 @@ class WaferMapViewer {
         }
 
         if (this.dom.personalizedColorButton) {
-            console.log('✅ [DEBUG] personalizedColorButton 발견됨:', this.dom.personalizedColorButton);
             this.dom.personalizedColorButton.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                console.log('🔘 [DEBUG] 개인색 설정 버튼 클릭됨');
                 this.onPersonalColorButtonClick();
             });
         } else {
-            console.warn('⚠️ [DEBUG] personalizedColorButton을 찾을 수 없습니다.');
             // 나중에 다시 시도
             setTimeout(() => {
                 const btn = document.getElementById('personalized-color-button');
                 if (btn) {
-                    console.log('✅ [DEBUG] 지연 로딩으로 버튼 발견됨');
                     this.dom.personalizedColorButton = btn;
                     btn.addEventListener('click', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        console.log('🔘 [DEBUG] 개인색 설정 버튼 클릭됨 (지연 로딩)');
                         this.onPersonalColorButtonClick();
                     });
                 }
@@ -3991,69 +3986,68 @@ class WaferMapViewer {
     }
 
     onPersonalColorButtonClick() {
-        console.log('🎨 [DEBUG] onPersonalColorButtonClick 호출됨');
         if (!this.colorEditor) {
-            console.error('❌ [DEBUG] colorEditor가 초기화되지 않았습니다.');
+            console.error('❌ colorEditor가 초기화되지 않았습니다.');
             this.showToast?.('색상 편집기를 초기화하지 못했습니다.', 1800);
             return;
         }
-        console.log('✅ [DEBUG] colorEditor.open() 호출');
         this.colorEditor.open();
     }
 
     /**
-     * 개인색 설정을 위한 URL 파라미터 생성
-     * @returns {string} URL 쿼리 파라미터 (예: "&personalized=true&scheme=john")
+     * URL에 personalized 파라미터 추가
+     * @returns {string} URL 파라미터 (예: "&personalized=true&scheme=john")
      */
     getPersonalizedParams() {
         if (!this.personalizedColorEnabled) {
-            return '';
+            console.log("PARAMS: personalizedColorEnabled=false, no scheme");
+            return "";
         }
         
-        // ✅ colorLegends 검증
+        // colorLegends가 로드되지 않았으면 빈 문자열 반환
         if (!this.colorLegends) {
-            console.warn('⚠️ [PARAMS] colorLegends가 없습니다. 빈 파라미터 반환');
-            return '';
+            console.warn("PARAMS: colorLegends not loaded.");
+            return "";
         }
         
-        // ✅ 현재 스킴 검증
-        let scheme = this.currentUser || 'change';
+        // 1. currentUser가 있고 해당 scheme이 존재하면 사용
+        let scheme = this.currentUser || "change"; // fallback to "change"
         
-        // 스킴 존재 확인 및 fallback
         if (!this.colorLegends[scheme]) {
-            console.warn(`⚠️ [PARAMS] Scheme not found: ${scheme}, falling back`);
-            
-            // fallback 우선순위: change → default → 첫 번째 키
-            if (this.colorLegends.change) {
-                scheme = 'change';
-                console.log(`✅ [PARAMS] Fallback to 'change'`);
-            } else if (this.colorLegends.default) {
-                scheme = 'default';
-                console.log(`✅ [PARAMS] Fallback to 'default'`);
+            console.warn(`PARAMS: Scheme '${scheme}' not found, falling back...`);
+            // fallback 순서: change -> default -> 첫 번째 키
+            if (this.colorLegends["change"]) {
+                scheme = "change";
+                console.log("PARAMS: Fallback to 'change'");
+            } else if (this.colorLegends["default"]) {
+                scheme = "default";
+                console.log("PARAMS: Fallback to 'default'");
             } else {
                 const keys = Object.keys(this.colorLegends);
                 if (keys.length > 0) {
                     scheme = keys[0];
-                    console.log(`✅ [PARAMS] Fallback to first key: ${scheme}`);
+                    console.log(`PARAMS: Fallback to first key '${scheme}'`);
                 } else {
-                    scheme = 'change';
-                    console.warn(`⚠️ [PARAMS] No schemes available, using 'change'`);
+                    scheme = "change";
+                    console.warn("PARAMS: No schemes available, using 'change'");
                 }
-            }
-            
-            // currentUser 복구 (잘못된 스킴이면 올바른 스킴으로 변경)
-            if (this.currentUser !== scheme) {
-                console.log(`🔄 [PARAMS] currentUser 복구: ${this.currentUser} → ${scheme}`);
-                this.currentUser = scheme;
             }
         }
         
+        // currentUser 로깅
+        if (this.currentUser !== scheme) {
+            console.log(`PARAMS: currentUser='${this.currentUser}' but using scheme='${scheme}'`);
+        }
+        
         let params = `&personalized=true&scheme=${encodeURIComponent(scheme)}`;
-        // 🔥 캐시 무효화를 위한 타임스탬프 추가 (체크박스 변경 시)
+        
+        // cacheBuster 추가
         if (this._personalizedColorCacheBuster) {
             params += `&_t=${this._personalizedColorCacheBuster}`;
         }
-        console.log('🎨 [PARAMS] getPersonalizedParams:', params, '| resolvedScheme:', scheme, '| currentUser:', this.currentUser, '| enabled:', this.personalizedColorEnabled);
+        
+        // 디버그 로그 제거 (너무 자주 출력됨)
+        // console.log(`PARAMS: Final params='${params}', scheme='${scheme}', currentUser='${this.currentUser}', enabled=${this.personalizedColorEnabled}`);
         return params;
     }
 
@@ -4219,129 +4213,120 @@ class WaferMapViewer {
 
     // 사용자 정보 로드 및 표시
     async loadUserInfo() {
-        console.log('🔍 [USER INFO] loadUserInfo called');
-        console.log('🔍 [USER INFO] initialLoginIdFromUrl:', initialLoginIdFromUrl);
-        console.log('🔍 [USER INFO] initialSamlSuccess:', initialSamlSuccess);
-        console.log('🔍 [USER INFO] initialDevSuccess:', initialDevSuccess);
-
+        // 디버그 로그 제거 (초기 로드 시에만 필요)
+        // console.log("USER INFO: loadUserInfo called");
+        // console.log("USER INFO: initialLoginIdFromUrl=", initialLoginIdFromUrl);
+        // console.log("USER INFO: initialSamlSuccess=", initialSamlSuccess);
+        // console.log("USER INFO: initialDevSuccess=", initialDevSuccess);
+        
         try {
-            const userInfoEl = document.getElementById('user-info');
+            const userInfoEl = document.getElementById("user-info");
             if (!userInfoEl) return;
-
+            
             let displayed = false;
-
+            
+            // 1. SAML 로그인 성공
             if (initialSamlSuccess && initialLoginIdFromUrl && initialUsernameFromUrl) {
                 const newInfo = `${initialLoginIdFromUrl}(${initialUsernameFromUrl})`;
-                console.log('[DEBUG] SAML 정보:', {
-                    initialLoginIdFromUrl,
-                    initialUsernameFromUrl,
-                    initialDeptNameFromUrl,
-                    currentHTML: userInfoEl.innerHTML
-                });
-
-                // ✅ SAML 로그인됨
+                console.log("DEBUG: SAML login detected:", initialLoginIdFromUrl, initialUsernameFromUrl, initialDeptNameFromUrl, "currentHTML=", userInfoEl.innerHTML);
+                
+                // SAML 로그인 시 currentUser 설정
                 this.currentUser = initialLoginIdFromUrl;
                 this.username = initialUsernameFromUrl;
                 this.deptName = initialDeptNameFromUrl;
-                console.log('✅ [USER INFO SAML] currentUser set to:', this.currentUser);
                 
-                // ✅ colorLegends가 이미 로드되었는지 확인
+                // colorLegends 확인
                 if (!this.colorLegends) {
-                    console.warn('⚠️ [USER INFO SAML] colorLegends not loaded yet, loading now...');
                     await this.loadColorLegends();
                 }
                 
-                // ✅ 스킴 검증
-                if (this.colorLegends && !this.colorLegends[this.currentUser]) {
-                    console.warn(`⚠️ [USER INFO SAML] Scheme not found: ${this.currentUser}, will use fallback in renderColorLegends`);
-                } else if (this.colorLegends && this.colorLegends[this.currentUser]) {
-                    console.log(`✅ [USER INFO SAML] Scheme found: ${this.currentUser}`);
-                }
-
+                // 디버그 로그 제거
+                // if (this.colorLegends && !this.colorLegends[this.currentUser]) {
+                //     console.warn(`USER INFO: SAML - Scheme not found: '${this.currentUser}', will use fallback in renderColorLegends`);
+                // } else if (this.colorLegends && this.colorLegends[this.currentUser]) {
+                //     console.log(`USER INFO: SAML - Scheme found: '${this.currentUser}'`);
+                // }
+                
                 if (!userInfoEl.innerHTML.includes(newInfo)) {
-                    userInfoEl.innerHTML = `
-                        <div style="font-weight: 600;">${initialLoginIdFromUrl}(${initialUsernameFromUrl})</div>
-                        <div style="font-size: 10px; color: #666;">${initialDeptNameFromUrl || 'Anonymous'}</div>
-                    `;
+                    userInfoEl.innerHTML = `<div style="font-weight:600">${initialLoginIdFromUrl}(${initialUsernameFromUrl})</div><div style="font-size:10px;color:#666">${initialDeptNameFromUrl || 'Anonymous'}</div>`;
                 }
                 displayed = true;
-            } else if (initialDevSuccess && initialLoginIdFromUrl && initialUsernameFromUrl) {
+            } 
+            // 2. DEV 로그인 성공
+            else if (initialDevSuccess && initialLoginIdFromUrl && initialUsernameFromUrl) {
                 const newInfo = `${initialLoginIdFromUrl}(${initialUsernameFromUrl})`;
-
-                // ✅ DEV 로그인됨
+                
+                // DEV 로그인 시 currentUser 설정
                 this.currentUser = initialLoginIdFromUrl;
                 this.username = initialUsernameFromUrl;
                 this.deptName = initialDeptNameFromUrl;
-                console.log('✅ [USER INFO DEV] currentUser set to:', this.currentUser);
                 
-                // ✅ colorLegends가 이미 로드되었는지 확인
+                // colorLegends 확인
                 if (!this.colorLegends) {
-                    console.warn('⚠️ [USER INFO DEV] colorLegends not loaded yet, loading now...');
                     await this.loadColorLegends();
                 }
                 
-                // ✅ 스킴 검증
-                if (this.colorLegends && !this.colorLegends[this.currentUser]) {
-                    console.warn(`⚠️ [USER INFO DEV] Scheme not found: ${this.currentUser}, will use fallback in renderColorLegends`);
-                } else if (this.colorLegends && this.colorLegends[this.currentUser]) {
-                    console.log(`✅ [USER INFO DEV] Scheme found: ${this.currentUser}`);
-                }
-
+                // 디버그 로그 제거
+                // if (this.colorLegends && !this.colorLegends[this.currentUser]) {
+                //     console.warn(`USER INFO: DEV - Scheme not found: '${this.currentUser}', will use fallback in renderColorLegends`);
+                // } else if (this.colorLegends && this.colorLegends[this.currentUser]) {
+                //     console.log(`USER INFO: DEV - Scheme found: '${this.currentUser}'`);
+                // }
+                
                 if (!userInfoEl.innerHTML.includes(newInfo)) {
-                    userInfoEl.innerHTML = `
-                        <div style="font-weight: 600;">${initialLoginIdFromUrl}(${initialUsernameFromUrl})</div>
-                        <div style="font-size: 10px; color: #666;">${initialDeptNameFromUrl || 'Anonymous'}</div>
-                    `;
+                    userInfoEl.innerHTML = `<div style="font-weight:600">${initialLoginIdFromUrl}(${initialUsernameFromUrl})</div><div style="font-size:10px;color:#666">${initialDeptNameFromUrl || 'Anonymous'}</div>`;
                 }
                 displayed = true;
             }
-
-            if ((initialSamlSuccess || initialDevSuccess) && window.history?.replaceState) {
-                window.history.replaceState({}, '', window.location.pathname);
+            
+            // URL에서 파라미터 제거
+            if (initialSamlSuccess || initialDevSuccess) {
+                if (window.history?.replaceState) {
+                    window.history.replaceState({}, "", window.location.pathname);
+                }
             }
-
+            
+            // SAML/DEV로 표시됐으면 여기서 종료
             if (displayed) {
-                this.currentUser = this.currentUser || 'change';
-                // ✅ renderColorLegends는 init()에서 호출되므로 여기서는 호출하지 않음
+                // currentUser가 없으면 "change"로 설정
+                this.currentUser = this.currentUser || "change";
+                this.renderColorLegends(); // init에서도 호출됨
                 return;
             }
-
-            const apiUrl = initialLoginIdFromUrl
+            
+            // 3. API로 사용자 정보 가져오기
+            const apiUrl = initialLoginIdFromUrl 
                 ? `/api/auth/user?LoginId=${encodeURIComponent(initialLoginIdFromUrl)}`
-                : '/api/auth/user';
+                : `/api/auth/user`;
             const response = await fetch(apiUrl);
             const data = await response.json();
-
-            console.log('🔍 [USER INFO API] Response:', data);
-
-            // colorScheme 설정
+            
+            // colorScheme이 있으면 사용
             if (data.colorScheme) {
                 this.currentUser = data.colorScheme;
-                console.log('✅ [USER INFO API] currentUser set to:', this.currentUser);
             } else if (data.LoginId) {
                 this.currentUser = data.LoginId;
-                console.log('✅ [USER INFO API] currentUser set to LoginId:', this.currentUser);
             }
-
+            // 디버그 로그 제거
+            // console.log("USER INFO: API Response=", data);
+            // console.log("USER INFO: API - currentUser set to", this.currentUser);
+            
             if (data.authenticated && data.LoginId && data.Username) {
                 const newInfo = `${data.LoginId}(${data.Username})`;
                 if (!userInfoEl.innerHTML.includes(newInfo)) {
-                    userInfoEl.innerHTML = `
-                        <div style="font-weight: 600;">${data.LoginId}(${data.Username})</div>
-                        <div style="font-size: 10px; color: #666;">${data.DeptName || 'Anonymous'}</div>
-                    `;
+                    userInfoEl.innerHTML = `<div style="font-weight:600">${data.LoginId}(${data.Username})</div><div style="font-size:10px;color:#666">${data.DeptName || 'Anonymous'}</div>`;
                 }
-                // 사용자 정보 저장 (색상 편집 검색용)
                 this.username = data.Username;
                 this.deptName = data.DeptName;
             }
+            
         } catch (error) {
-            console.error('[DEBUG] 사용자 정보 로드 오류:', error);
-            // 오류 발생 시에도 아무것도 표시하지 않음
+            console.error("DEBUG: loadUserInfo error", error);
         }
-
-        this.currentUser = this.currentUser || 'change';
-        // ✅ renderColorLegends는 init()에서 호출되므로 여기서는 호출하지 않음
+        
+        // currentUser가 없으면 "change"로 설정
+        this.currentUser = this.currentUser || "change";
+        this.renderColorLegends(); // init에서도 호출됨
     }
 
     // 이미지 폴더 최상위로 리셋
@@ -12694,11 +12679,6 @@ class WaferMapViewer {
     // 2. Grid rendering
 
     showGrid(images, skipSaveState = false) {
-        // 🔥 디버깅: 그리드 모드 전환 전 상태 확인
-        console.log('🔍 [GRID] Before grid mode:');
-        console.log('  - File name display:', document.querySelector('#file-name-display')?.style.display);
-        console.log('  - Chip selection:', document.querySelector('#chip-selection-panel')?.style.display);
-        
         // ✅ 방법 1: 모든 가능한 패널 강제 숨기기 (가장 확실)
         const selectorsToHide = [
             '#file-name',
@@ -12718,7 +12698,8 @@ class WaferMapViewer {
                     el.style.display = 'none';
                     el.style.removeProperty('visibility');
                     el.style.removeProperty('opacity');
-                    console.log(`✅ [GRID] 숨김 처리: ${selector}`);
+                    // 디버그 로그 제거
+                    // console.log(`✅ [GRID] 숨김 처리: ${selector}`);
                 }
             } catch (e) {
                 console.warn(`⚠️ [GRID] 선택자 오류: ${selector}`, e);
@@ -12837,13 +12818,8 @@ class WaferMapViewer {
             this.gridResizeObserver.observe(grid);
         }
         
-        // 🔥 디버깅: 그리드 모드 전환 후 상태 확인
+        // ⭐ 최종 확인: 모든 칩 선택 패널 강제 숨기기 (방법 2)
         setTimeout(() => {
-            console.log('🔍 [GRID] After grid mode:');
-            console.log('  - File name display:', document.querySelector('#file-name-display')?.style.display);
-            console.log('  - Chip selection:', document.querySelector('#chip-selection-panel')?.style.display);
-            
-            // ⭐ 최종 확인: 모든 칩 선택 패널 강제 숨기기 (방법 2)
             const chipPanels = [
                 document.getElementById('chip-selection-panel'),
                 document.getElementById('selected-chips-list'),
@@ -12860,19 +12836,7 @@ class WaferMapViewer {
                     el.style.pointerEvents = 'none';
                 }
             });
-            
-            // 🔍 디버깅: CHIP SELECTION 패널 상태 확인
-            console.log('=== CHIP SELECTION 패널 상태 확인 ===');
-            console.log('chip-selection-panel:', document.getElementById('chip-selection-panel')?.style.display);
-            console.log('selected-chips-list:', document.getElementById('selected-chips-list')?.style.display);
-            
-            // 모든 칩 관련 요소 확인
-            const chipElements = document.querySelectorAll('[id*="chip"], [class*="chip-selection"], [id*="selected-chips"], [class*="selected-chips"]');
-            chipElements.forEach(el => {
-                if (el.style.display !== 'none') {
-                    console.log('⚠️ 칩 요소 남아있음:', el.id || el.className, '→', el.style.display);
-                }
-            });
+            // 디버그 로그 제거 (너무 자주 출력됨)
         }, 100);
 
         // 🔥 그리드 재생성 후 레이아웃 캐시 무효화 (드래그 영역 재계산용)
@@ -13011,7 +12975,11 @@ class WaferMapViewer {
             };
 
             const personalizedParams = this.getPersonalizedParams();
-            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}`;
+            // ✅ 캐시 버스터 추가 (색상 스킴 변경 시 새로운 썸네일 요청)
+            const cacheBuster = this._personalizedColorCacheBuster || Date.now();
+            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}&_t=${cacheBuster}`;
+            // 디버그 로그 제거 (너무 자주 출력됨)
+            // console.log(`[GRID_THUMB] URL: ${thumbnailUrl}, params: ${personalizedParams}`);
             img.src = thumbnailUrl;
             thumbBox.appendChild(img);
             wrap.appendChild(thumbBox);
@@ -15036,7 +15004,8 @@ class WaferMapViewer {
                 throw new Error(`Failed to load color legends: ${response.status} ${response.statusText}`);
             }
             this.colorLegends = await response.json();
-            console.log('✅ [LOAD_COLORS] 색상 로드 완료:', Object.keys(this.colorLegends || {}).length, 'schemes');
+            // 디버그 로그 제거 (초기 로드 시에만 필요하면 주석 해제)
+            // console.log('✅ [LOAD_COLORS] 색상 로드 완료:', Object.keys(this.colorLegends || {}).length, 'schemes');
             return this.colorLegends;
         } catch (error) {
             console.warn('⚠️ [LOAD_COLORS] 색상 로드 실패:', error);
@@ -15073,24 +15042,21 @@ class WaferMapViewer {
             // ✅ 1순위: currentUser (존재하는 경우)
             if (this.currentUser && this.colorLegends[this.currentUser]) {
                 schemeToUse = this.currentUser;
-                console.log(`✅ [RENDER] Using currentUser scheme: ${this.currentUser}`);
             } 
             // ✅ 2순위: change
             else if (this.colorLegends.change) {
                 schemeToUse = 'change';
-                console.log(`✅ [RENDER] Using change scheme (currentUser not available or not found)`);
             }
             // ✅ 3순위: default
             else if (this.colorLegends.default) {
                 schemeToUse = 'default';
-                console.log(`✅ [RENDER] Using default scheme`);
             }
             // ✅ 4순위: 첫 번째 스킴
             else {
                 const firstKey = Object.keys(this.colorLegends)[0];
                 schemeToUse = firstKey || 'default';
-                console.log(`✅ [RENDER] Using first available scheme: ${schemeToUse}`);
             }
+            // 디버그 로그 제거 (너무 자주 출력됨)
         } else {
             // 개인색 설정이 비활성화되어 있으면 항상 'default' 사용
             schemeToUse = 'default';
