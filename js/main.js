@@ -12726,6 +12726,10 @@ class WaferMapViewer {
         this.selectedImages = sortedImages;
         this.currentGridImages = sortedImages;  // 🔥 currentGridImages 업데이트
         if (!this.gridSelectedIdxs) this.gridSelectedIdxs = [];
+        
+        // ✅ 그리드 모드 진입 시 선택된 웨이퍼 목록 초기화
+        this.updateSelectedGridImagesList();
+        
         const grid = document.getElementById('image-grid');
         const gridControls = document.getElementById('grid-controls');
         if (gridControls) gridControls.style.display = '';
@@ -13141,6 +13145,12 @@ class WaferMapViewer {
         
         // ✅ 방법 2: CSS 클래스 제거 (body에서 클래스 제거)
         document.body.classList.remove('grid-mode-active');
+        
+        // ✅ 선택된 웨이퍼 목록 패널 숨기기
+        const panel = document.getElementById('selected-grid-images-panel');
+        if (panel) {
+            panel.style.display = 'none';
+        }
 
         // 그리드 상태 초기화
 
@@ -14113,6 +14123,174 @@ class WaferMapViewer {
             };
             console.log('💾 [AUTO-SAVE] Grid 선택 변경 시 savedViewState 업데이트:', this.selectedImages.length, '개 이미지, scrollTop:', scrollWrapper?.scrollTop);
         }
+        
+        // ✅ 선택된 웨이퍼 목록 업데이트
+        this.updateSelectedGridImagesList();
+    }
+
+    /**
+     * 그리드 모드에서 선택된 웨이퍼 목록 업데이트
+     */
+    updateSelectedGridImagesList() {
+        const selectedList = [];
+        
+        // 선택된 인덱스들 반복
+        if (this.gridSelectedIdxs && Array.isArray(this.gridSelectedIdxs) && this.currentGridImages) {
+            for (const idx of this.gridSelectedIdxs) {
+                if (idx >= 0 && idx < this.currentGridImages.length) {
+                    const imagePath = this.currentGridImages[idx];
+                    const fileName = imagePath.split('/').pop(); // 파일명 추출
+                    
+                    // ✅ '_'로 split
+                    const parts = fileName.split('_');
+                    
+                    // ✅ 인덱스 0과 2 추출
+                    let index0 = parts[0] || '';      // wafer
+                    let index2 = parts[2] ? parts[2].replace(/\.(png|jpg|jpeg|gif)$/i, '') : ''; // 5mb
+                    
+                    if (index0 && index2) {
+                        selectedList.push({ index0, index2 });
+                    }
+                }
+            }
+        }
+        
+        this.displaySelectedGridImages(selectedList);
+    }
+
+    /**
+     * 선택된 웨이퍼 목록 표시
+     */
+    displaySelectedGridImages(selectedList) {
+        const panel = document.getElementById('selected-grid-images-panel');
+        const listDiv = document.getElementById('selected-grid-list');
+        const countBadge = document.getElementById('selected-count-badge');
+        
+        if (!panel || !listDiv) {
+            return;
+        }
+        
+        if (selectedList.length === 0) {
+            panel.style.display = 'none';
+            listDiv.innerHTML = '';
+            if (countBadge) countBadge.textContent = '0';
+            return;
+        }
+        
+        // 중복 제거 (index2 기준)
+        const unique = Array.from(
+            new Map(selectedList.map(item => [item.index2, item])).values()
+        );
+        
+        // ✅ 개수 표시
+        if (countBadge) {
+            countBadge.textContent = `${unique.length}`;
+        }
+        
+        // ✅ 최대 10개만 표시 (최근 추가된 것이 아래에 보이도록)
+        // 전체 목록은 유지하되, 화면에는 최근 10개만 표시
+        const displayItems = unique.slice(-10); // 마지막 10개
+        const startIndex = unique.length - displayItems.length; // 시작 인덱스
+        
+        // ✅ 번호 + 값 표시
+        const html = displayItems
+            .map((item, idx) => {
+                const actualIndex = startIndex + idx; // 실제 번호 (전체 목록 기준)
+                // 안전하게 이스케이프
+                const safeIndex0 = item.index0.replace(/'/g, "\\'");
+                const safeIndex2 = item.index2.replace(/'/g, "\\'");
+                
+                return `<div onclick="if(typeof viewer !== 'undefined') viewer.toggleWaferSelectionByValue('${safeIndex0}', '${safeIndex2}')" style="padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,0.04); cursor: pointer; color: #a0a0a0; font-size: 11px; font-family: 'Courier New', monospace; font-weight: 400; white-space: nowrap; transition: all 0.15s; background: rgba(30,30,30,0.5); display: flex; justify-content: space-between; align-items: center; gap: 8px;" onmouseover="this.style.background='rgba(50,100,180,0.25)'; this.style.color='#fff'" onmouseout="this.style.background='rgba(30,30,30,0.5)'; this.style.color='#a0a0a0'">
+                    <span>${actualIndex + 1}</span>
+                    <span>${item.index0} ${item.index2}</span>
+                    <span style="opacity: 0.4; font-size: 9px; margin-left: auto;">✕</span>
+                </div>`;
+            })
+            .join('');
+        
+        listDiv.innerHTML = html;
+        panel.style.display = 'block';
+        
+        // ✅ 스크롤을 맨 아래로 (최근 추가된 것이 보이도록)
+        setTimeout(() => {
+            listDiv.scrollTop = listDiv.scrollHeight;
+        }, 0);
+        
+        // ✅ 복사용 데이터 저장 (전체 목록)
+        this.selectedWafersForCopy = unique;
+    }
+
+    /**
+     * 값(index0, index2)으로 웨이퍼 선택 토글
+     * 목록에서 클릭 시 해당 웨이퍼 선택 해제
+     */
+    toggleWaferSelectionByValue(index0, index2) {
+        if (!this.gridMode || !this.currentGridImages) return;
+        
+        const indexesToRemove = [];
+        
+        this.currentGridImages.forEach((imagePath, idx) => {
+            const fileName = imagePath.split('/').pop();
+            const parts = fileName.split('_');
+            
+            if (parts[0] && parts[2]) {
+                const currentIndex0 = parts[0];
+                const currentIndex2 = parts[2].replace(/\.(png|jpg|jpeg|gif)$/i, '');
+                
+                if (currentIndex0 === index0 && currentIndex2 === index2) {
+                    indexesToRemove.push(idx);
+                }
+            }
+        });
+        
+        // 선택된 인덱스에서 제거
+        indexesToRemove.forEach(idx => {
+            if (this.gridSelectedSet) {
+                this.gridSelectedSet.delete(idx);
+            }
+            const pos = this.gridSelectedIdxs.indexOf(idx);
+            if (pos > -1) {
+                this.gridSelectedIdxs.splice(pos, 1);
+            }
+        });
+        
+        // UI 업데이트
+        this.updateGridSelection();
+        
+        console.log(`🗑️ [WAFER_SELECTION] Removed: ${index0} ${index2}, Remaining: ${this.gridSelectedIdxs.length}개`);
+    }
+
+    /**
+     * ✅ 복사 버튼: 인덱스 0과 2를 탭으로 분리해서 복사
+     */
+    copySelectedWafers(event) {
+        if (!this.selectedWafersForCopy || this.selectedWafersForCopy.length === 0) {
+            console.warn('⚠️ [COPY] No wafers selected');
+            return;
+        }
+        
+        // ✅ 인덱스 0과 2를 탭으로 분리해서 복사
+        const copyText = this.selectedWafersForCopy
+            .map(w => `${w.index0}\t${w.index2}`)
+            .join('\n');
+        
+        // 클립보드 복사
+        navigator.clipboard.writeText(copyText).then(() => {
+            console.log('✅ [COPY] Copied to clipboard:', copyText);
+            
+            // ✅ 복사 완료 메시지
+            const copyBtn = event.target;
+            const originalText = copyBtn.textContent;
+            copyBtn.textContent = '✓ 복사됨';
+            copyBtn.style.color = '#4caf50';
+            
+            setTimeout(() => {
+                copyBtn.textContent = originalText;
+                copyBtn.style.color = '#909090';
+            }, 1500);
+        }).catch(err => {
+            console.error('❌ [COPY] Copy failed:', err);
+        });
     }
 
     scheduleGridSelectionFlush() {
@@ -14256,6 +14434,9 @@ class WaferMapViewer {
         this.gridSelectedIdxs = [];
         this.gridLastClickedIdx = undefined;
 
+        // ✅ 선택된 웨이퍼 목록 업데이트 (빈 목록)
+        this.updateSelectedGridImagesList();
+
         // 🔥 savedViewState 업데이트 제거 (배열 복사가 느림)
         // 전체 해제 시에는 상태 업데이트 불필요
     }
@@ -14272,6 +14453,9 @@ class WaferMapViewer {
             }
 
             this.gridSelectedIdxs = this.selectedImages.map((_, i) => i);
+
+            // ✅ 선택된 웨이퍼 목록 업데이트
+            this.updateSelectedGridImagesList();
 
             // savedViewState 업데이트 (updateGridSelection 호출 불필요)
             if (this.gridMode && this.selectedImages.length > 0) {

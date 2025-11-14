@@ -64,6 +64,7 @@
             flex-direction: column;
             overflow: auto;
             flex-shrink: 0;
+            position: relative;
         }
         
         .panel-header {
@@ -2069,6 +2070,28 @@
             <nav id="file-explorer" aria-label="폴더 및 파일 목록">
                 <p style="padding: 10px; color: var(--text-secondary-color);">Loading files...</p>
             </nav>
+            
+            <!-- Selected Grid Images Panel (Wafer Map Explorer 우하단 - 사이드바 안쪽) -->
+            <div id="selected-grid-images-panel" style="display: none; position: absolute; bottom: 12px; right: 12px; max-height: 260px; background: rgba(30, 30, 30, 0.92); border-radius: 4px; box-shadow: 0 8px 32px rgba(0,0,0,0.4); padding: 0; z-index: 9999; border: 1px solid rgba(255,255,255,0.08); min-width: auto; width: auto; max-width: 200px;">
+                
+                <!-- 헤더: 제목, 개수, 복사 버튼 -->
+                <div style="padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center; gap: 6px;">
+                    <div style="font-size: 10px; color: #909090; font-weight: 600; letter-spacing: 0.3px;">
+                        선택됨
+                    </div>
+                    <div id="selected-count-badge" style="font-size: 10px; color: #909090; font-weight: 600;">
+                        0
+                    </div>
+                    <button onclick="if(typeof viewer !== 'undefined') viewer.copySelectedWafers(event)" style="background: none; border: none; color: #909090; cursor: pointer; font-size: 10px; padding: 2px 4px; transition: color 0.2s;" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#909090'">
+                        복사
+                    </button>
+                </div>
+                
+                <!-- 스크롤 영역 (최대 10개 표시) -->
+                <div id="selected-grid-list" style="overflow-y: auto; max-height: 220px; padding: 0; display: flex; flex-direction: column; gap: 0;">
+                    <!-- 번호 + 값만 표시됨 (최대 10개) -->
+                </div>
+            </div>
         </aside>
         
         <div class="resizer" id="resizer" aria-hidden="true"></div>
