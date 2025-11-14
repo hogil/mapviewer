@@ -1045,17 +1045,20 @@ export class ColorSchemeEditor {
 
             const result = await response.json();
             if (result.success) {
+                console.log('✅ [ColorEditor] 색상 스킴 서버 저장 성공:', schemeName);
+                
                 // 프론트엔드 캐시 갱신
                 if (this.viewer) {
-                    // colorLegends 캐시 갱신
+                    // ✅ 1단계: colorLegends 업데이트 (메모리)
                     if (!this.viewer.colorLegends) {
                         this.viewer.colorLegends = {};
                     }
                     this.viewer.colorLegends[schemeName] = schemeData;
+                    console.log('✅ [ColorEditor] colorLegends 업데이트 완료:', schemeName);
                     
-                    // 🎨 currentUser 업데이트 (색상 스킴 저장 시 현재 scheme으로 설정)
-                    // 이렇게 하면 getPersonalizedParams()에서 올바른 scheme을 사용할 수 있음
-                    this.viewer.currentUser = schemeName;
+                    // ✅ 2단계: currentUser 변경 금지 (기존 상태 유지)
+                    // currentUser는 이미 올바른 값이므로 변경하지 않음
+                    // 저장된 색상은 colorLegends에 저장되어 있으므로 getPersonalizedParams()에서 자동으로 사용됨
                     
                     // 초기 상태 업데이트 (저장된 데이터로)
                     this.originalSchemeData = JSON.parse(JSON.stringify(schemeData));
@@ -1066,81 +1069,36 @@ export class ColorSchemeEditor {
                         this.viewer.thumbnailManager.cache.clear();
                     }
                     
+                    // 🔥 피라미드 레벨 캐시 완전 초기화 (저장된 색상 적용을 위해 필수)
+                    this.viewer.pyramidLevels = {};
+                    if (this.viewer._pyramidLoading) {
+                        this.viewer._pyramidLoading = new Set();
+                    }
+                    if (this.viewer.pyramidLoadingLevels) {
+                        this.viewer.pyramidLoadingLevels.clear();
+                    }
+                    // 🔥 GPU 렌더러 캐시도 초기화
+                    if (this.viewer.semiconductorRenderer) {
+                        this.viewer.semiconductorRenderer.imagePyramid = {};
+                        this.viewer.semiconductorRenderer.levelTextures.clear();
+                    }
+                    
+                    // 캐시 버스팅을 위한 타임스탬프 추가
+                    this.viewer._personalizedColorCacheBuster = Date.now();
+                    
+                    // 🔥 저장된 색상으로 이미지 다시 로드 (페이지 새로고침 후에도 유지되도록)
+                    if (this.viewer.selectedImagePath) {
+                        console.log('🔄 [ColorEditor] 저장된 색상으로 이미지 다시 로드:', this.viewer.selectedImagePath);
+                        await this.viewer.loadImage(this.viewer.selectedImagePath);
+                    } else if (this.viewer.gridMode && this.viewer.selectedImages && this.viewer.selectedImages.length > 0) {
+                        // 그리드 모드인 경우: 그리드 다시 로드
+                        console.log('🔄 [ColorEditor] 저장된 색상으로 그리드 다시 로드');
+                        await this.viewer.showGrid(this.viewer.selectedImages, false);
+                    }
+                    
                     // UI 새로고침
                     this.viewer.renderColorLegends();
                     this.viewer.showColorLegends();
-                    
-                    // 🎨 색상 스킴 저장 후에는 항상 해당 scheme으로 썸네일을 재생성해야 함
-                    // personalizedColorEnabled가 false여도 저장된 scheme으로 썸네일을 재생성하도록
-                    // 임시로 personalizedColorEnabled를 true로 설정하고, 그리드/이미지를 다시 로드
-                    // 🔥 적용 전 체크박스 상태 저장 (체크박스 상태 유지용)
-                    const originalPersonalizedEnabled = this.viewer.personalizedColorEnabled;
-                    const originalCheckboxState = this.viewer.dom.personalizedColorCheckbox 
-                        ? this.viewer.dom.personalizedColorCheckbox.checked 
-                        : originalPersonalizedEnabled;
-                    const shouldUsePersonalized = true; // 색상 변경 후에는 항상 personalized 사용
-                    
-                    try {
-                        // 임시로 personalizedColorEnabled 활성화 (썸네일 재생성용)
-                        this.viewer.personalizedColorEnabled = shouldUsePersonalized;
-                        
-                        // 캐시 버스팅을 위한 타임스탬프 추가
-                        this.viewer._personalizedColorCacheBuster = Date.now();
-                        
-                        // 🔥 피라미드 레벨 캐시 완전 초기화 (개인색 변경 시 모든 레벨 재로드 필요)
-                        if (this.viewer.pyramidLevels) {
-                            this.viewer.pyramidLevels = {};
-                        }
-                        if (this.viewer._pyramidLoading) {
-                            this.viewer._pyramidLoading = new Set();
-                        }
-                        if (this.viewer.pyramidLoadingLevels) {
-                            this.viewer.pyramidLoadingLevels.clear();
-                        }
-                        // 🔥 GPU 렌더러 캐시도 초기화
-                        if (this.viewer.semiconductorRenderer) {
-                            this.viewer.semiconductorRenderer.imagePyramid = {};
-                            this.viewer.semiconductorRenderer.levelTextures.clear();
-                        }
-                        
-                        // 현재 화면 새로고침
-                        if (this.viewer.gridMode) {
-                            // 그리드 모드인 경우: 그리드 다시 로드
-                            const currentImages = Array.from(document.querySelectorAll('.grid-thumb-wrap'))
-                                .map(item => item.dataset.path)
-                                .filter(Boolean);
-                            if (currentImages.length === 0) {
-                                // grid-thumb-wrap이 없으면 selectedImages 사용
-                                const selectedImages = this.viewer.selectedImages || [];
-                                if (selectedImages.length > 0) {
-                                    await this.viewer.showGrid(selectedImages, false);
-                                }
-                            } else {
-                                // 캐시 버스팅을 위해 타임스탬프 추가하고 그리드 다시 로드
-                                await this.viewer.showGrid(currentImages, false);
-                            }
-                        } else if (this.viewer.selectedImagePath) {
-                            // 단일 이미지 모드인 경우: 이미지 다시 로드
-                            await this.viewer.loadImage(this.viewer.selectedImagePath);
-                            // 🔥 Legend 다시 렌더링
-                            this.viewer.renderColorLegends();
-                            this.viewer.showColorLegends();
-                        }
-                    } finally {
-                        // 🔥 legend를 먼저 렌더링 (저장된 scheme을 사용)
-                        // currentUser는 이미 저장된 schemeName으로 설정되어 있음
-                        this.viewer.renderColorLegends();
-                        this.viewer.showColorLegends();
-                        
-                        // 🔥 원래 상태로 복원 (체크박스 상태 포함)
-                        // 적용 전 체크박스 상태를 그대로 유지
-                        this.viewer.personalizedColorEnabled = originalCheckboxState;
-                        // 체크박스 상태도 원래대로 복원
-                        if (this.viewer.dom.personalizedColorCheckbox) {
-                            this.viewer.dom.personalizedColorCheckbox.checked = originalCheckboxState;
-                        }
-                        // currentUser는 이미 저장된 schemeName으로 설정되어 있으므로 유지
-                    }
                 }
                 
                 this.viewer?.showToast?.('색상 스킴이 저장되었습니다.', 1800);
