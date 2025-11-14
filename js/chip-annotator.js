@@ -56,6 +56,7 @@ export class ChipAnnotator {
         this.hasDragged = false; // 🔥 드래그 발생 여부
         this.ctrlClickStartPos = null; // Store mouse position for Ctrl+click (to detect drag)
         this.ctrlClickStartTime = null; // Store time for Ctrl+click (to detect drag)
+        this._lastChipListClickIndex = null; // 🔥 Chip Selection 패널에서 Shift 클릭 범위 선택을 위한 마지막 클릭 인덱스
 
         // Colors
         this.gridColor = 'rgba(0, 255, 255, 0.3)';
@@ -646,7 +647,8 @@ export class ChipAnnotator {
                 return a.x - b.x;
             });
         
-        sortedChips.forEach(({ idx, x, y }) => {
+        sortedChips.forEach((chipData, listIndex) => {
+            const { idx, x, y } = chipData;
             const item = document.createElement('div');
             item.style.cssText = `
                 padding: 4px 6px;
@@ -669,19 +671,31 @@ export class ChipAnnotator {
             };
             
             item.onclick = (e) => {
-                // 🔥 Shift 키로 여러개 선택 가능
-                if (e.shiftKey) {
-                    // Shift 클릭: 선택 추가/제거
+                e.stopPropagation();
+                
+                if (e.shiftKey && this._lastChipListClickIndex !== null) {
+                    // 🔥 Shift 클릭: 이전 클릭부터 현재까지 범위 내 모든 칩 제거
+                    const startIndex = Math.min(this._lastChipListClickIndex, listIndex);
+                    const endIndex = Math.max(this._lastChipListClickIndex, listIndex);
+                    
+                    for (let i = startIndex; i <= endIndex; i++) {
+                        const chipToRemove = sortedChips[i];
+                        if (chipToRemove && this.selectedChips.has(chipToRemove.idx)) {
+                            this.selectedChips.delete(chipToRemove.idx);
+                        }
+                    }
+                    console.log(`🗑️ [SHIFT+CLICK] 범위 제거: ${startIndex}~${endIndex} (${endIndex - startIndex + 1}개)`);
+                } else {
+                    // 🔥 일반 클릭: 해당 칩만 제거
                     if (this.selectedChips.has(idx)) {
                         this.selectedChips.delete(idx);
-                    } else {
-                        this.selectedChips.add(idx);
+                        console.log(`🗑️ [CLICK] 칩 제거: ${x},${y}`);
                     }
-                } else {
-                    // 일반 클릭: 해당 칩만 선택
-                    this.selectedChips.clear();
-                    this.selectedChips.add(idx);
                 }
+                
+                // 마지막 클릭 인덱스 업데이트
+                this._lastChipListClickIndex = listIndex;
+                
                 this.render();
                 this.updateSelectedChipsList();
             };

@@ -62,7 +62,7 @@ async function decodeBitmapSmart(source, options) {
 
 // 초기 맞춤 여유 (상대 비율)
 
-const FIT_RELATIVE_MARGIN = 0.92; // 초기 로드 시 8% 여유로 줄임 (더 크게 표시)
+const FIT_RELATIVE_MARGIN = 0.85; // 초기 로드 시 15% 여유 (조금 더 작게 표시)
 
 // 리셋 시 절대 퍼센트포인트 오프셋 (예: -0.02 => 2%p 더 작게)
 
@@ -850,6 +850,7 @@ class WaferMapViewer {
             this.dom.viewerContainer.addEventListener('wheel', e => {
                 if (this.gridMode) return; // grid 모드에서는 팬/줌 비활성화
 
+                e.preventDefault(); // 스크롤 방지
                 this.handleWheel(e);
             }, { passive: false });
 
@@ -7628,7 +7629,7 @@ class WaferMapViewer {
             ? effectiveW / this.originalWidth
             : effectiveH / this.originalHeight;
 
-        const calculatedZoom = fitScale * FIT_RELATIVE_MARGIN * 0.88;
+        const calculatedZoom = fitScale * FIT_RELATIVE_MARGIN;
 
         // [STEP 3] 확대 기준으로 첫 피라미드 레벨 결정
         let initialLevel = 1.0;
@@ -7740,7 +7741,10 @@ class WaferMapViewer {
             `Fetch:${Math.round(fetchTime)}ms Buffer:${Math.round(bufferTime)}ms Bitmap:${Math.round(bitmapTime)}ms Total:${Math.round(totalTime)}ms`
         );
 
+        // 🔥 FIT_RELATIVE_MARGIN 값 확인 및 resetView 호출
+        console.log(`[LOAD_IMAGE] FIT_RELATIVE_MARGIN: ${FIT_RELATIVE_MARGIN}, resetView 호출 전 scale: ${this.transform.scale?.toFixed(4) || 'N/A'}`);
         this.resetView(false);
+        console.log(`[LOAD_IMAGE] resetView 호출 후 transform.scale: ${this.transform.scale.toFixed(4)}`);
 
             // 🎯 resetView 완료 후 적절한 피라미드 레벨로 교체
             setTimeout(() => {
@@ -8290,27 +8294,22 @@ class WaferMapViewer {
             : effectiveH / this.originalHeight;
 
         // 기본은 상대 여유 적용 (초기 로드 등 일반 맞춤)
-
-        this.transform.scale = fitScale * FIT_RELATIVE_MARGIN;
+        const finalScale = fitScale * FIT_RELATIVE_MARGIN;
+        console.log(`[RESET_VIEW] FIT_RELATIVE_MARGIN: ${FIT_RELATIVE_MARGIN}, fitScale: ${fitScale.toFixed(4)}, final scale: ${finalScale.toFixed(4)}`);
+        this.transform.scale = finalScale;
 
         // 파일명 패널 높이 고려 (CSS 변수에서 가져오기)
 
         const filenameBarHeight = 56; // --filename-bar-height와 동일
-
-        // 이미지 크기를 조정 (줌 패널과 겹치지 않도록 여유 확보)
-
-        const newScale = fitScale * FIT_RELATIVE_MARGIN * 0.88; // 88%로 조정 (줌 패널 고려)
-
-                this.transform.scale = newScale;
         this.zoom = this.transform.scale; // 🎯 zoom 값 동기화
 
                 // 🎯 실제 센터링도 원본 이미지 크기 기준으로 적용
 
         this.transform.dx = (containerRect.width - this.originalWidth * this.transform.scale) / 2;
 
-        // 파일명 패널과 줌 패널 사이 중앙 정렬 (filenameBarHeight 약간만 오프셋)
+        // 파일명 패널과 줌 패널 사이 중앙 정렬 (이미지를 아래로 내리기 위해 오프셋 증가)
 
-        this.transform.dy = (containerRect.height - this.originalHeight * this.transform.scale) / 2 + (filenameBarHeight * 0.56);
+        this.transform.dy = (containerRect.height - this.originalHeight * this.transform.scale) / 2 + (filenameBarHeight * 0.6);
 
         this.updateZoomDisplay();
 
@@ -8639,15 +8638,17 @@ class WaferMapViewer {
 
         // 이미지 크기를 조정 (�ם 패널과 겹치지 않도록) - 초기 로드와 동일
 
-        this.transform.scale = fitScale * FIT_RELATIVE_MARGIN * 0.88;
+        const finalScale = fitScale * FIT_RELATIVE_MARGIN;
+        console.log(`[RESET_VIEW_WITH_OFFSET] FIT_RELATIVE_MARGIN: ${FIT_RELATIVE_MARGIN}, fitScale: ${fitScale.toFixed(4)}, final scale: ${finalScale.toFixed(4)}`);
+        this.transform.scale = finalScale;
 
         // 🎯 실제 센터링도 원본 이미지 크기 기준으로 적용
 
         this.transform.dx = (containerRect.width - this.originalWidth * this.transform.scale) / 2;
 
-        // 파일명 패널과 줌 패널 사이 중앙 정렬 - 초기 로드와 동일
+        // 파일명 패널과 줌 패널 사이 중앙 정렬 - 초기 로드와 동일 (이미지를 아래로 내리기 위해 오프셋 증가)
 
-        this.transform.dy = (containerRect.height - this.originalHeight * this.transform.scale) / 2 + (filenameBarHeight * 0.56);
+        this.transform.dy = (containerRect.height - this.originalHeight * this.transform.scale) / 2 + (filenameBarHeight * 0.6);
 
                 this.zoom = this.transform.scale; // 🎯 zoom 값 동기화
 
