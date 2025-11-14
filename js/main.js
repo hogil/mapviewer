@@ -27,6 +27,12 @@ const DEBOUNCE_DELAY = 0;
 const GRID_DRAG_CLICK_THRESHOLD = 14;
 const CLASSIFICATION_DIR_NAMES = ['classification', 'classification_chips', 'chips'];
 
+// ✅ 미니맵 뷰포트 크기 제한 상수
+const MINIMAP_VIEWPORT_MIN_SIZE = 0.05;  // 최소 5%
+const MINIMAP_VIEWPORT_MAX_SIZE = 8.0;   // 최대 800% (더 큰 확대 가능)
+const MINIMAP_ZOOM_PROTECTION_MS = 200;  // 미니맵 줌 중 패널 보호 시간(ms)
+const PANEL_MIN_DY = -20;                 // 상단 패널이 숨지 않도록 하는 최소 dy 값
+
 const initialUrlParams = new URLSearchParams(window.location.search);
 const initialSamlSuccess = initialUrlParams.get('saml_success') === 'true';
 const initialDevSuccess = initialUrlParams.get('dev_success') === 'true';
@@ -56,7 +62,7 @@ async function decodeBitmapSmart(source, options) {
 
 // 초기 맞춤 여유 (상대 비율)
 
-const FIT_RELATIVE_MARGIN = 0.96; // 초기 로드 시 4% 여유 (2% 더 작게)
+const FIT_RELATIVE_MARGIN = 0.80; // 초기 로드 시 20% 여유 (뷰포트가 2배 이상 보이도록)
 
 // 리셋 시 절대 퍼센트포인트 오프셋 (예: -0.02 => 2%p 더 작게)
 
@@ -6929,10 +6935,10 @@ class WaferMapViewer {
 
                 // Ctrl 다중 선택 시에는 항상 그리드 모드
 
+                // 🔥 폴더 선택 시 반드시 chip selection panel 닫기
+                this.closeChipSelectionPanel();  // ← 추가: 패널 강제 종료
+                this.hideImage();  // Grid 모드 진입 전에 이미지 숨기기
                 this.hideGrid();
-                
-                // ✅ Chip Selection 패널 완전히 닫기
-                this.closeChipSelectionPanel();
 
                 if (this.selectedImages.length > 0) {
                     this.showGrid(this.selectedImages);
@@ -8189,6 +8195,14 @@ class WaferMapViewer {
 
         this.updateMinimap();
 
+        // 🔥 단일 이미지 모드에서 파일명 패널 절대 보호
+        if (this.currentImage && this.dom.fileNameDisplay) {
+            if (this.dom.fileNameDisplay.style.display === 'none') {
+                this.dom.fileNameDisplay.style.display = 'block';
+                console.log('⚠️ EMERGENCY PANEL RESTORE: fileNameDisplay was hidden in draw()');
+            }
+        }
+
         // 🔥 Chip annotator 렌더링 (항상 시도)
         if (this.chipAnnotator) {
             this.chipAnnotator.render();
@@ -8350,33 +8364,44 @@ class WaferMapViewer {
             }, 100); // 100ms 동안 Ctrl 상태 유지
         }
 
+        // 🔥 절대 원칙: 단일 이미지 모드에서는 상단 패널이 절대 사라져야 함
+        if (this.currentImage && this.dom.fileNameDisplay) {
+            // Ctrl 줌 시작 전에 패널 표시 확인
+            if (e.ctrlKey && this.dom.fileNameDisplay.style.display === 'none') {
+                this.dom.fileNameDisplay.style.display = 'block';
+                console.log('🔒 PANEL RESTORE: fileNameDisplay restored before zoom');
+            }
+        }
+
         // ✅ 방법 1 & 2: Ctrl이 눌렸거나 최근에 눌렸으면 줌만 처리
         if (e.ctrlKey || this.lastCtrlKey) {
             e.preventDefault();
             e.stopPropagation();
             e.stopImmediatePropagation(); // ✅ 방법 1: 추가 방어
 
-            // ✅ 줌 시작: 패널 보호 즉시 활성화
+            // 🔥 미니맵 패널 보호 활성화
             this.panelProtected = true;
             this.zoomInProgress = true;
             
-            // ✅ 패널이 숨겨져 있으면 다시 표시
-            if (this.dom.fileNameDisplay && 
-                this.dom.fileNameDisplay.style.display === 'none' && 
-                this.selectedImagePath) {
-                this.showFileName(this.selectedImagePath);
+            if (this.dom.fileNameDisplay) {
+                this.dom.fileNameDisplay.style.display = 'block';  // 패널 보이기
             }
             
             const scaleAmount = 1 - e.deltaY * 0.001;
             this.zoomAtPoint(scaleAmount, e.clientX, e.clientY);
             
-            // ✅ 100ms 후 보호 자동 해제 (디바운스)
+            // 🔥 200ms 동안 패널 보호
             clearTimeout(this.panelProtectTimeout);
             this.panelProtectTimeout = setTimeout(() => {
                 this.panelProtected = false;
                 this.zoomInProgress = false;
-                console.log('[PANEL] 보호 해제');
-            }, 100);
+                
+                // 🔥 줌 완료 후 패널 보호 재확인
+                if (this.currentImage && this.dom.fileNameDisplay) {
+                    this.dom.fileNameDisplay.style.display = 'block';
+                    console.log('🔒 PANEL FINAL CHECK: fileNameDisplay confirmed visible');
+                }
+            }, MINIMAP_ZOOM_PROTECTION_MS);
             
             return; // ✅ 방법 1: 명시적 return - else 블록 완전 제거
         }
@@ -8448,9 +8473,9 @@ class WaferMapViewer {
             return; // ✅ resetView 호출하지 않음
         }
         
-        // ✅ 줌 레벨을 더 보수적으로 제한 (0.1 ~ 5.0)
-        const minZoom = 0.1;
-        const maxZoom = 5.0;
+        // ✅ 줌 레벨 제한 (0.05 ~ 5.0) - 최소값을 0.05로 낮춰서 더 축소 가능
+        const minZoom = 0.05;  // 5% 축소 가능 (기존 0.1에서 0.05로 변경)
+        const maxZoom = 5.0;    // 최대 500%
         const newScale = Math.max(minZoom, Math.min(maxZoom, oldScale * scale));
         
         // ✅ newScale이 이상하면 줌 취소 - resetView 호출하지 않음
@@ -8512,9 +8537,9 @@ class WaferMapViewer {
         this.panelProtected = true;
         this.zoomInProgress = true;
         
-        // ✅ 줌 레벨을 더 보수적으로 제한 (0.1 ~ 5.0)
-        const minZoom = 0.1;
-        const maxZoom = 5.0;
+        // ✅ 줌 레벨 제한 (0.05 ~ 5.0) - 최소값을 0.05로 낮춰서 더 축소 가능
+        const minZoom = 0.05;  // 5% 축소 가능 (기존 0.1에서 0.05로 변경)
+        const maxZoom = 5.0;    // 최대 500%
         const scale = Math.max(minZoom, Math.min(maxZoom, level));
         
         const currentScale = this.transform.scale;
@@ -8727,35 +8752,95 @@ class WaferMapViewer {
         const viewScale = this.transform.scale;
         const viewX = -this.transform.dx / viewScale;
         const viewY = -this.transform.dy / viewScale;
-        let vpX = padX + viewX * scale;
-        let vpY = padY + viewY * scale;
-        let vpW = viewW / viewScale * scale;
-        let vpH = viewH / viewScale * scale;
-
-        // ✅ viewport 크기 1.5배 증가
-        vpW *= 1.5;
-        vpH *= 1.5;
-
-        // ✅ viewport 크기 제한 (미니맵 크기의 5% ~ 200%)
-        const minSize = Math.min(mapW, mapH) * 0.05;
-        const maxSize = Math.max(mapW, mapH) * 2.0;
         
+        // 이미지 좌표계에서 뷰포트 크기 (픽셀)
+        const viewW_img = viewW / viewScale;
+        const viewH_img = viewH / viewScale;
+        
+        // 뷰포트 크기 (미니맵 스케일 적용)
+        // ⭐ 줌이 작을수록 (viewScale이 작을수록) 뷰포트가 커짐
+        // viewScale이 0.1이면 viewW_img는 viewW / 0.1 = viewW * 10이 됨
+        let vpW = viewW_img * scale;
+        let vpH = viewH_img * scale;
+        
+        // ⭐ 뷰포트 크기 제약 (maxSize 제한만 적용, 화면 높이 제한은 나중에)
+        const minSize = Math.min(mapW, mapH) * MINIMAP_VIEWPORT_MIN_SIZE;
+        const maxSize = Math.max(mapW, mapH) * MINIMAP_VIEWPORT_MAX_SIZE;
+        
+        // ⭐ maxSize 제한 적용 (8.0 = 800%까지 가능)
+        // 계산된 크기가 maxSize보다 크면 maxSize로 제한
+        const originalVpW = vpW;
+        const originalVpH = vpH;
         vpW = Math.max(minSize, Math.min(maxSize, vpW));
         vpH = Math.max(minSize, Math.min(maxSize, vpH));
         
-        // ✅ viewport가 maxSize에 도달했을 때 패널 보호
+        // 디버깅: 제한 전후 비교
+        if (originalVpW !== vpW || originalVpH !== vpH) {
+            console.log('[MINIMAP] Viewport size limited:', { 
+                original: { w: originalVpW.toFixed(1), h: originalVpH.toFixed(1) },
+                limited: { w: vpW.toFixed(1), h: vpH.toFixed(1) },
+                maxSize: maxSize.toFixed(1),
+                mapSize: { w: mapW.toFixed(1), h: mapH.toFixed(1) },
+                viewScale: viewScale.toFixed(3),
+                scale: scale.toFixed(4)
+            });
+        }
+        
+        // ⭐ 뷰포트 위치 - 중심 정렬 방식
+        // 메인 뷰포트가 이미지에서 차지하는 영역의 중심
+        const viewportCenterX = viewX + viewW_img / 2;
+        const viewportCenterY = viewY + viewH_img / 2;
+        
+        // 미니맵에서의 뷰포트 위치 (중심이 맞도록)
+        let vpX = padX + (viewportCenterX * scale) - vpW / 2;
+        let vpY = padY + (viewportCenterY * scale) - vpH / 2;
+        
+        // 뷰포트가 미니맵 경계 내에 있도록 제약
+        vpX = Math.max(-vpW * 0.5, Math.min(mapW - vpW * 0.5, vpX));
+        vpY = Math.max(-vpH * 0.5, Math.min(mapH - vpH * 0.5, vpY));
+        
+        // 🔥 추가: 뷰포트가 최대 크기 제한에 도달했으면 패널 보호 활성화
+        // ⭐ 화면 높이 제한은 패널 보호를 위해서만 적용 (maxSize보다 우선하지 않음)
+        // maxSize 제한이 우선이므로, 화면 높이 제한은 maxSize보다 작을 때만 적용
+        const filenameBarHeight = 56;
+        const maxViewportHeight = viewH - filenameBarHeight;
+        
+        // ⭐ 화면 높이 제한은 maxSize보다 작을 때만 적용
+        // maxSize가 화면 높이보다 크면 maxSize를 사용 (뷰포트가 더 커질 수 있음)
+        if (vpH > maxSize) {
+            // maxSize가 우선이므로 이미 위에서 제한됨 (더 큰 확대 가능)
+            // 화면 높이 제한은 적용하지 않음
+        } else if (vpH > maxViewportHeight) {
+            // maxSize 내에서 화면 높이 제한 적용 (패널 보호)
+            // 하지만 maxSize가 화면 높이보다 크면 maxSize 우선
+            if (maxSize <= maxViewportHeight) {
+                vpH = maxViewportHeight;
+                // 중심 유지하면서 높이 조정
+                const currentCenterY = vpY + vpH / 2;
+                vpY = currentCenterY - vpH / 2;
+            }
+            // maxSize > maxViewportHeight인 경우는 maxSize 사용 (제한 없음)
+        }
+        
+        // 뷰포트가 최대 크기 제한에 근접하면 패널 보호 활성화
         if (vpW >= maxSize * 0.95 || vpH >= maxSize * 0.95) {
+            console.log('🔒 MINIMAP: Viewport at max size - protecting panel');
+            
             this.panelProtected = true;
+            
+            // transform.dy 보호
+            if (this.dom.fileNameDisplay) {
+                const minDy = PANEL_MIN_DY;
+                if (this.transform.dy < minDy) {
+                    this.transform.dy = minDy;
+                }
+            }
             
             clearTimeout(this.minimapPanelProtectTimeout);
             this.minimapPanelProtectTimeout = setTimeout(() => {
                 this.panelProtected = false;
-            }, 100);
+            }, MINIMAP_ZOOM_PROTECTION_MS);
         }
-        
-        // ✅ viewport 위치 제한 (미니맵 범위 내로 제한)
-        vpX = Math.max(-vpW * 0.5, Math.min(mapW - vpW * 0.5, vpX));
-        vpY = Math.max(-vpH * 0.5, Math.min(mapH - vpH * 0.5, vpY));
         
         // ✅ 계산 결과 검증
         if (!Number.isFinite(vpW) || !Number.isFinite(vpH) ||
@@ -12952,26 +13037,31 @@ class WaferMapViewer {
 
     // ✅ Chip Selection 패널 완전히 닫기
     closeChipSelectionPanel() {
-        // ✅ 패널 전체 숨김 (추가)
+        // 1. chip-selection-panel 숨기기
         const chipSelectionPanel = document.getElementById('chip-selection-panel');
         if (chipSelectionPanel) {
             chipSelectionPanel.style.display = 'none';
         }
         
-        // ✅ 리스트도 숨김 (기존)
+        // 2. selected-chips-list 숨기기  
         const chipSelectionList = document.getElementById('selected-chips-list');
         if (chipSelectionList) {
             chipSelectionList.style.display = 'none';
         }
         
-        // ✅ Chip annotator 상태 초기화
+        // 3. ChipAnnotator 선택 해제
         if (this.chipAnnotator) {
             if (typeof this.chipAnnotator.clearSelection === 'function') {
-                this.chipAnnotator.clearSelection(false); // notifyViewer = false (무한 루프 방지)
+                this.chipAnnotator.clearSelection(false); // notifyViewer = false
             }
             if (typeof this.chipAnnotator.updateSelectedChipsList === 'function') {
-                this.chipAnnotator.updateSelectedChipsList();
+                this.chipAnnotator.updateSelectedChipsList(); // 패널 업데이트
             }
+        }
+        
+        // 🔥 추가: overlay canvas도 숨기기 (chip 선택 시각화 제거)
+        if (this.dom.overlayCanvas) {
+            this.dom.overlayCanvas.style.display = 'none';
         }
     }
 
