@@ -479,37 +479,122 @@ export class ChipAnnotator {
     updateSelectedChipsList() {
         if (!this.viewer || !this.viewer.dom) return;
         
+        // 🔥 그리드 모드에서는 표시하지 않음
+        if (this.viewer.gridMode) {
+            const listContainer = document.getElementById('selected-chips-list');
+            if (listContainer) {
+                listContainer.style.display = 'none';
+            }
+            return;
+        }
+        
+        // 🔥 이미지가 로드되지 않았을 때는 표시하지 않음
+        if (!this.viewer.currentImage) {
+            const listContainer = document.getElementById('selected-chips-list');
+            if (listContainer) {
+                listContainer.style.display = 'none';
+            }
+            return;
+        }
+        
         let listContainer = document.getElementById('selected-chips-list');
         if (!listContainer) {
-            // 리스트 컨테이너가 없으면 생성
-            const sidebar = this.viewer.dom.sidebar;
-            if (!sidebar) return;
+            // 리스트 컨테이너가 없으면 생성 - 이미지 캔버스 좌측 중앙에 배치
+            const viewerContainer = this.viewer.dom.viewerContainer;
+            if (!viewerContainer) return;
             
             listContainer = document.createElement('div');
             listContainer.id = 'selected-chips-list';
             listContainer.style.cssText = `
+                position: absolute;
+                left: 10px;
+                top: 50%;
+                transform: translateY(-50%);
                 width: 120px;
                 min-width: 120px;
                 max-width: 120px;
-                background: #232323;
-                border-right: 1px solid #333;
+                max-height: 30vh;
+                background: rgba(35, 35, 35, 0.95);
+                border: 1px solid #444;
+                border-radius: 4px;
                 padding: 8px;
                 overflow-y: auto;
-                display: none;
+                display: flex;
                 flex-direction: column;
                 font-size: 11px;
+                z-index: 100;
+                backdrop-filter: blur(4px);
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
             `;
             
+            // 🔥 스크롤 이벤트 전파 차단 (이미지 캔버스 스크롤과 분리)
+            listContainer.addEventListener('wheel', (e) => {
+                e.stopPropagation();
+            }, { passive: false, capture: true });
+            
             const header = document.createElement('div');
-            header.textContent = '선택 칩';
             header.style.cssText = `
                 font-weight: bold;
-                padding: 4px 0;
-                border-bottom: 1px solid #444;
-                margin-bottom: 4px;
+                padding: 6px 0;
+                border-bottom: 1px solid #555;
+                margin-bottom: 6px;
                 font-size: 12px;
+                color: #fff;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
             `;
+            
+            const titleSpan = document.createElement('span');
+            titleSpan.textContent = 'Chip Selection';
+            header.appendChild(titleSpan);
+            
+            const closeBtn = document.createElement('span');
+            closeBtn.textContent = '×';
+            closeBtn.style.cssText = `
+                cursor: pointer;
+                font-size: 18px;
+                color: #999;
+                padding: 0 4px;
+            `;
+            closeBtn.onclick = () => {
+                listContainer.style.display = 'none';
+            };
+            header.appendChild(closeBtn);
+            
             listContainer.appendChild(header);
+            
+            // 🔥 검색 입력 필드 추가
+            const searchContainer = document.createElement('div');
+            searchContainer.style.cssText = `
+                margin-bottom: 6px;
+            `;
+            
+            const searchInput = document.createElement('input');
+            searchInput.type = 'text';
+            searchInput.placeholder = 'x,y 또는 x,y:x,y';
+            searchInput.style.cssText = `
+                width: 100%;
+                padding: 4px 6px;
+                background: #2a2a2a;
+                border: 1px solid #555;
+                border-radius: 3px;
+                color: #fff;
+                font-size: 11px;
+                box-sizing: border-box;
+            `;
+            
+            // 🔥 Enter 키로 좌표 입력 처리
+            searchInput.onkeydown = (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    this.selectChipsByCoordinates(searchInput.value);
+                    searchInput.value = '';
+                }
+            };
+            
+            searchContainer.appendChild(searchInput);
+            listContainer.appendChild(searchContainer);
             
             const list = document.createElement('div');
             list.id = 'selected-chips-list-items';
@@ -520,21 +605,16 @@ export class ChipAnnotator {
             `;
             listContainer.appendChild(list);
             
-            // sidebar 앞에 삽입
-            sidebar.parentNode.insertBefore(listContainer, sidebar);
+            viewerContainer.appendChild(listContainer);
         }
         
         const listItems = document.getElementById('selected-chips-list-items');
         if (!listItems) return;
         
-        listItems.innerHTML = '';
-        
-        if (this.selectedChips.size === 0) {
-            listContainer.style.display = 'none';
-            return;
-        }
-        
+        // 🔥 이미지 1개 모드일 때는 기본으로 표시 (칩이 선택되지 않아도 패널은 보이게)
         listContainer.style.display = 'flex';
+        
+        listItems.innerHTML = '';
         
         // 선택된 칩들을 x, y 순서로 정렬
         const sortedChips = Array.from(this.selectedChips)
@@ -556,23 +636,151 @@ export class ChipAnnotator {
                 border: 1px solid #444;
                 border-radius: 3px;
                 cursor: pointer;
-                display: flex;
-                gap: 4px;
                 font-size: 11px;
+                color: #ccc;
+                transition: background 0.2s;
             `;
-            item.textContent = `${x} ${y}`;
-            item.onclick = () => {
-                // 클릭 시 해당 칩 선택/해제 토글
-                if (this.selectedChips.has(idx)) {
-                    this.selectedChips.delete(idx);
+            item.textContent = `${x},${y}`;
+            item.title = `X: ${x}, Y: ${y}`;
+            
+            item.onmouseenter = () => {
+                item.style.background = '#333';
+            };
+            item.onmouseleave = () => {
+                item.style.background = '#2a2a2a';
+            };
+            
+            item.onclick = (e) => {
+                // 🔥 Shift 키로 여러개 선택 가능
+                if (e.shiftKey) {
+                    // Shift 클릭: 선택 추가/제거
+                    if (this.selectedChips.has(idx)) {
+                        this.selectedChips.delete(idx);
+                    } else {
+                        this.selectedChips.add(idx);
+                    }
                 } else {
+                    // 일반 클릭: 해당 칩만 선택
+                    this.selectedChips.clear();
                     this.selectedChips.add(idx);
                 }
                 this.render();
                 this.updateSelectedChipsList();
             };
+            
             listItems.appendChild(item);
         });
+    }
+    
+    /**
+     * 좌표 문자열로 칩 선택 (검색 및 다중 입력 지원)
+     */
+    selectChipsByCoordinates(coordString) {
+        if (!coordString || !coordString.trim()) return;
+        
+        // 🔥 space, tab, 세미콜론, 줄바꿈으로 구분하여 다중 입력 처리
+        const coordPairs = coordString.split(/[\s\t;\n]+/).map(s => s.trim()).filter(Boolean);
+        
+        let selectedCount = 0;
+        
+        coordPairs.forEach(pair => {
+            // 🔥 범위 표기법 확인 (콜론 포함)
+            if (pair.includes(':')) {
+                // 범위 표기법 처리
+                const colonIdx = pair.indexOf(':');
+                const beforeColon = pair.substring(0, colonIdx).trim();
+                const afterColon = pair.substring(colonIdx + 1).trim();
+                
+                // 패턴 1: "x,y1:y2" (x는 고정, y 범위)
+                const pattern1 = /^(-?\d+),(-?\d+):(-?\d+)$/;
+                const match1 = pair.match(pattern1);
+                if (match1) {
+                    const x = parseInt(match1[1], 10);
+                    const yStart = parseInt(match1[2], 10);
+                    const yEnd = parseInt(match1[3], 10);
+                    const yMin = Math.min(yStart, yEnd);
+                    const yMax = Math.max(yStart, yEnd);
+                    
+                    for (let y = yMin; y <= yMax; y++) {
+                        const chipIdx = this.chips.findIndex(c => c && c.x_abs === x && c.y_abs === y);
+                        if (chipIdx >= 0) {
+                            this.selectedChips.add(chipIdx);
+                            selectedCount++;
+                        }
+                    }
+                    return;
+                }
+                
+                // 패턴 2: "x1:x2,y" (y는 고정, x 범위)
+                const pattern2 = /^(-?\d+):(-?\d+),(-?\d+)$/;
+                const match2 = pair.match(pattern2);
+                if (match2) {
+                    const xStart = parseInt(match2[1], 10);
+                    const xEnd = parseInt(match2[2], 10);
+                    const y = parseInt(match2[3], 10);
+                    const xMin = Math.min(xStart, xEnd);
+                    const xMax = Math.max(xStart, xEnd);
+                    
+                    for (let x = xMin; x <= xMax; x++) {
+                        const chipIdx = this.chips.findIndex(c => c && c.x_abs === x && c.y_abs === y);
+                        if (chipIdx >= 0) {
+                            this.selectedChips.add(chipIdx);
+                            selectedCount++;
+                        }
+                    }
+                    return;
+                }
+                
+                // 패턴 3: "x1,y1:x2,y2" (사각형 범위)
+                const pattern3 = /^(-?\d+),(-?\d+):(-?\d+),(-?\d+)$/;
+                const match3 = pair.match(pattern3);
+                if (match3) {
+                    const xStart = parseInt(match3[1], 10);
+                    const yStart = parseInt(match3[2], 10);
+                    const xEnd = parseInt(match3[3], 10);
+                    const yEnd = parseInt(match3[4], 10);
+                    const xMin = Math.min(xStart, xEnd);
+                    const xMax = Math.max(xStart, xEnd);
+                    const yMin = Math.min(yStart, yEnd);
+                    const yMax = Math.max(yStart, yEnd);
+                    
+                    for (let x = xMin; x <= xMax; x++) {
+                        for (let y = yMin; y <= yMax; y++) {
+                            const chipIdx = this.chips.findIndex(c => c && c.x_abs === x && c.y_abs === y);
+                            if (chipIdx >= 0) {
+                                this.selectedChips.add(chipIdx);
+                                selectedCount++;
+                            }
+                        }
+                    }
+                    return;
+                }
+            } else {
+                // 일반 좌표 쌍 처리
+                const parts = pair.split(',').map(s => s.trim()).filter(Boolean);
+                if (parts.length >= 2) {
+                    const x = parseInt(parts[0], 10);
+                    const y = parseInt(parts[1], 10);
+                    
+                    if (!isNaN(x) && !isNaN(y)) {
+                        const chipIdx = this.chips.findIndex(c => c && c.x_abs === x && c.y_abs === y);
+                        if (chipIdx >= 0) {
+                            this.selectedChips.add(chipIdx);
+                            selectedCount++;
+                        }
+                    }
+                }
+            }
+        });
+        
+        this.render();
+        this.updateSelectedChipsList();
+        
+        if (selectedCount > 0) {
+            console.log(`✅ ${selectedCount}개 칩 선택됨`);
+        } else {
+            console.warn('⚠️ 선택된 칩이 없습니다. 좌표를 확인해주세요.');
+        }
     }
 
     /**
@@ -589,6 +797,10 @@ export class ChipAnnotator {
         }
 
         const ctx = this.ctx;
+        
+        // ✅ transform 초기화 (누적 방지)
+        ctx.resetTransform();
+        
         ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
         // Draw grid if enabled
@@ -639,6 +851,9 @@ export class ChipAnnotator {
 
         // Draw Alt+Drag free-form selection polygon
         if (this.isAltDrag && this.polygonPath.length > 0) {
+            ctx.save(); // ✅ transform 누적 방지
+            ctx.resetTransform(); // ✅ 추가
+            
             ctx.strokeStyle = 'rgba(0, 255, 0, 0.8)';
             ctx.fillStyle = 'rgba(0, 255, 0, 0.15)';
             ctx.lineWidth = 2;
@@ -651,10 +866,15 @@ export class ChipAnnotator {
             ctx.closePath();
             ctx.fill();
             ctx.stroke();
+            
+            ctx.restore(); // ✅ 추가
         }
 
         // Draw Shift+Click rectangle preview
         if (this.shiftClickPos) {
+            ctx.save(); // ✅ transform 누적 방지
+            ctx.resetTransform(); // ✅ 추가
+            
             const mousePos = this.lastMousePos;
             if (mousePos) {
                 const x1 = Math.min(this.shiftClickPos.x, mousePos.x);
@@ -670,6 +890,8 @@ export class ChipAnnotator {
                 ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
                 ctx.setLineDash([]);
             }
+            
+            ctx.restore(); // ✅ 추가
         }
     }
 
@@ -680,10 +902,18 @@ export class ChipAnnotator {
         if (!this.positionsData || !this.viewer.transform) return;
 
         const ctx = this.ctx;
+        
+        // ✅ transform 초기화 (누적 방지)
+        ctx.save();
+        ctx.resetTransform();
+        
         const transform = this.viewer.transform;
         const coord = this.positionsData.coord;
 
-        if (!coord || !coord.grid_edges) return;
+        if (!coord || !coord.grid_edges) {
+            ctx.restore();
+            return;
+        }
 
         ctx.strokeStyle = this.gridColor;
         ctx.lineWidth = 1;
@@ -719,6 +949,9 @@ export class ChipAnnotator {
             ctx.lineTo(end.x, end.y);
             ctx.stroke();
         });
+        
+        // ✅ transform 복원
+        ctx.restore();
     }
 
     /**
@@ -733,6 +966,10 @@ export class ChipAnnotator {
 
         // 🔥 Y 오프셋: 칩 선택을 이미지 위치에 맞추기 위해 위로 올림
         const Y_OFFSET = -55; // 픽셀 단위 오프셋 (음수 = 위로, 값이 클수록 더 위로)
+        
+        // ✅ save/restore로 transform 누적 방지
+        this.ctx.save();
+        this.ctx.resetTransform(); // ⭐ 추가 (누적 방지)
         
         // 🔥 이미지와 동일한 변환: translate 후 scale
         // 이미지: ctx.translate(dx, dy); ctx.scale(scale, scale); ctx.drawImage(img, 0, 0);
@@ -749,6 +986,8 @@ export class ChipAnnotator {
             bottomRightX - topLeftX,
             bottomRightY - topLeftY
         );
+        
+        this.ctx.restore(); // ⭐ 추가
     }
 
     /**

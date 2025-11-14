@@ -354,7 +354,7 @@ void main() {
         this._lastLevelKey = String(level);
     }
 
-    drawGpu({ level, viewportWidth, viewportHeight, scale, translateX, translateY }) {
+    drawGpu({ level, viewportWidth, viewportHeight, scale, translateX, translateY, originalWidth, originalHeight }) {
         if (!this.isGpuAvailable()) {
             return false;
         }
@@ -382,6 +382,9 @@ void main() {
         gl.enableVertexAttribArray(this.attributeLocations.texCoord);
         gl.vertexAttribPointer(this.attributeLocations.texCoord, 2, gl.FLOAT, false, 0, 0);
 
+        // 🔥 원본 이미지 크기를 기준으로 렌더링 (피라미드 레벨과 무관)
+        // textureSize는 피라미드 이미지의 실제 크기이지만, positionBuffer는 원본 크기를 기준으로 함
+        // 이렇게 하면 피라미드 이미지가 원본 크기로 확대되어 그려짐
         gl.uniform2f(this.uniformLocations.viewportSize, viewportWidth, viewportHeight);
         gl.uniform1f(this.uniformLocations.scale, scale);
         gl.uniform2f(this.uniformLocations.translate, translateX, translateY);

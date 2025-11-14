@@ -512,6 +512,15 @@ class WaferMapViewer {
 
         this.initSemiconductorRenderer();
         this.initChipAnnotator();
+        
+        // ✅ 방법 2: Ctrl 키 상태 안정화를 위한 변수 초기화
+        this.wheelTimeout = null;
+        this.lastCtrlKey = false;
+        
+        // ✅ 패널 보호 시스템
+        this.panelProtected = false;     // 패널 보호 플래그
+        this.zoomInProgress = false;     // 줌 진행 중 플래그
+        this.panelProtectTimeout = null; // 디바운스 타이머
 
         // 주기적인 메모리 정리 (5분마다)
 
@@ -906,34 +915,61 @@ class WaferMapViewer {
     }
 
     bindZoomEvents() {
-        if (this.dom.zoomInBtn)
+        if (this.dom.zoomInBtn) {
+            this.dom.zoomInBtn.addEventListener('click', () => {
+                this.panelProtected = true;
+                this.zoomInProgress = true;
+                this.zoomAtCenter(ZOOM_FACTOR);
+            });
+        }
 
-            this.dom.zoomInBtn.addEventListener('click', () => this.zoomAtCenter(ZOOM_FACTOR));
+        if (this.dom.zoomOutBtn) {
+            this.dom.zoomOutBtn.addEventListener('click', () => {
+                this.panelProtected = true;
+                this.zoomInProgress = true;
+                this.zoomAtCenter(1 / ZOOM_FACTOR);
+            });
+        }
 
-        if (this.dom.zoomOutBtn)
+        if (this.dom.resetViewBtn) {
+            this.dom.resetViewBtn.addEventListener('click', () => {
+                this.panelProtected = true;
+                this.zoomInProgress = true;
+                this.resetViewWithAbsoluteOffset();
+            });
+        }
 
-            this.dom.zoomOutBtn.addEventListener('click', () => this.zoomAtCenter(1 / ZOOM_FACTOR));
+        if (this.dom.zoom50Btn) {
+            this.dom.zoom50Btn.addEventListener('click', () => {
+                this.panelProtected = true;
+                this.zoomInProgress = true;
+                this.setZoom(0.5);
+            });
+        }
 
-        if (this.dom.resetViewBtn)
+        if (this.dom.zoom100Btn) {
+            this.dom.zoom100Btn.addEventListener('click', () => {
+                this.panelProtected = true;
+                this.zoomInProgress = true;
+                this.setZoom(1.0);
+            });
+        }
 
-            this.dom.resetViewBtn.addEventListener('click', () => this.resetViewWithAbsoluteOffset());
+        if (this.dom.zoom200Btn) {
+            this.dom.zoom200Btn.addEventListener('click', () => {
+                this.panelProtected = true;
+                this.zoomInProgress = true;
+                this.setZoom(2.0);
+            });
+        }
 
-        if (this.dom.zoom50Btn)
-
-            this.dom.zoom50Btn.addEventListener('click', () => this.setZoom(0.5));
-
-        if (this.dom.zoom100Btn)
-
-            this.dom.zoom100Btn.addEventListener('click', () => this.setZoom(1.0));
-
-        if (this.dom.zoom200Btn)
-
-            this.dom.zoom200Btn.addEventListener('click', () => this.setZoom(2.0));
-
-        if (this.dom.zoom300Btn)
-
-            this.dom.zoom300Btn.addEventListener('click', () => this.setZoom(3.0));
-
+        if (this.dom.zoom300Btn) {
+            this.dom.zoom300Btn.addEventListener('click', () => {
+                this.panelProtected = true;
+                this.zoomInProgress = true;
+                this.setZoom(3.0);
+            });
+        }
     }
 
     bindFileExplorerEvents() {
@@ -2544,6 +2580,19 @@ class WaferMapViewer {
     // 파일명 표시 숨기기
 
     hideFileName() {
+        // ✅ 패널이 보호 중이면 절대 숨기지 않음
+        if (this.panelProtected) {
+            console.log('[PANEL] 보호 중 - 숨기기 취소');
+            return;
+        }
+        
+        // ✅ 줌 진행 중이면 절대 숨기지 않음
+        if (this.zoomInProgress) {
+            console.log('[PANEL] 줌 진행 중 - 숨기기 취소');
+            return;
+        }
+        
+        // 정상적인 경우에만 숨김
         if (this.dom.fileNameDisplay) {
             this.dom.fileNameDisplay.style.display = 'none';
         }
@@ -7856,11 +7905,23 @@ class WaferMapViewer {
             const timingSummary = formatTimingSummary(timings);
 
             if (bestLevel === level && !silent) {
+                // 🔥 피라미드 레벨 변경 시 transform은 변경하지 않음
+                // transform.dx, dy는 항상 원본 이미지 크기(originalWidth, originalHeight) 기준으로 유지
+                // draw 함수에서 피라미드 이미지를 원본 크기로 확대해서 그리므로 위치는 동일하게 유지됨
                 this.currentImage = bitmap;
                 this.currentPyramidLevel = level;
                 if (this.semiconductorRenderer?.isGpuAvailable()) {
                     this.semiconductorRenderer.setActiveLevel(level);
                 }
+                
+                // 🔥 이미지가 표시되어 있을 때는 view-controls 패널이 보이도록 보장
+                if (this.currentImage && !this.gridMode) {
+                    const viewControls = document.querySelector('.view-controls');
+                    if (viewControls) {
+                        viewControls.style.display = 'flex';
+                    }
+                }
+                
                 this.prepareMinimapPreview(bitmap).then(() => {
                     if (this.dom?.minimapContainer?.offsetWidth) {
                         requestAnimationFrame(() => this.updateMinimap());
@@ -7870,7 +7931,7 @@ class WaferMapViewer {
 
                 const isCacheHit = cacheStatus === 'HIT' || cacheStatus === 'ORIGINAL';
                 const prefix = isCacheHit ? '[SWITCH]' : '[ASYNC]';
-                console.log(`${prefix} Lv${level} | ${this.originalWidth}×${this.originalHeight} → ${bitmap.width}×${bitmap.height} | Zoom:${this.transform.scale.toFixed(2)} | Cache:${cacheStatus} | ${timingSummary}`);
+                console.log(`${prefix} Lv${level} | ${this.originalWidth}×${this.originalHeight} → ${bitmap.width}×${bitmap.height} | Zoom:${this.transform.scale.toFixed(2)} | Cache:${cacheStatus} | ${timingSummary} | Transform adjusted: dx=${this.transform.dx.toFixed(1)}, dy=${this.transform.dy.toFixed(1)}`);
             } else if (silent) {
                 console.log(`[PREFETCH] Lv${level} 다운로드완료 (${bitmap.width}×${bitmap.height}) | Cache:${cacheStatus} | ${timingSummary}`);
             }
@@ -7924,19 +7985,28 @@ class WaferMapViewer {
                         const cachedBitmap = this.pyramidLevels[cacheKey] || this.pyramidLevels[bestLevel];
                         
                         if (cachedBitmap) {
-                                // 이미 로드된 레벨이면 즉시 교체
-
-                this.currentImage = cachedBitmap;
+                                // 🔥 피라미드 레벨 변경 시 transform은 변경하지 않음
+                                // transform.dx, dy는 항상 원본 이미지 크기(originalWidth, originalHeight) 기준으로 유지
+                                // draw 함수에서 피라미드 이미지를 원본 크기로 확대해서 그리므로 위치는 동일하게 유지됨
+                                this.currentImage = cachedBitmap;
 
                 this.currentPyramidLevel = bestLevel;
                 if (this.semiconductorRenderer?.isGpuAvailable()) {
                     this.semiconductorRenderer.setActiveLevel(bestLevel);
                 }
 
+                // 🔥 이미지가 표시되어 있을 때는 view-controls 패널이 보이도록 보장
+                if (this.currentImage && !this.gridMode) {
+                    const viewControls = document.querySelector('.view-controls');
+                    if (viewControls) {
+                        viewControls.style.display = 'flex';
+                    }
+                }
+
                 this.scheduleDraw();
 
                 // 📊 레벨 전환 로그
-                console.log(`[SWITCH] Lv${bestLevel} | ${this.originalWidth}×${this.originalHeight} → ${this.currentImage.width}×${this.currentImage.height} | Zoom:${this.transform.scale.toFixed(2)} | CacheKey:${cacheKey}`);
+                console.log(`[SWITCH] Lv${bestLevel} | ${this.originalWidth}×${this.originalHeight} → ${this.currentImage.width}×${this.currentImage.height} | Zoom:${this.transform.scale.toFixed(2)} | CacheKey:${cacheKey} | Transform adjusted: dx=${this.transform.dx.toFixed(1)}, dy=${this.transform.dy.toFixed(1)}`);
             } else {
                 // 로드되지 않은 레벨이면 로드 시작
 
@@ -7969,6 +8039,19 @@ class WaferMapViewer {
 
     draw() {
         if (!this.currentImage) return;
+
+        // ✅ transform 값 검증
+        if (!Number.isFinite(this.transform.scale) || 
+            !Number.isFinite(this.transform.dx) || 
+            !Number.isFinite(this.transform.dy)) {
+            console.error('[DRAW] transform 값이 유효하지 않음, 리셋:', {
+                scale: this.transform.scale,
+                dx: this.transform.dx,
+                dy: this.transform.dy
+            });
+            this.resetViewWithAbsoluteOffset();
+            return;
+        }
 
         const { width, height } = this.dom.viewerContainer.getBoundingClientRect();
 
@@ -8014,7 +8097,9 @@ class WaferMapViewer {
                 viewportHeight: height,
                 scale: this.transform.scale,
                 translateX: this.transform.dx,
-                translateY: this.transform.dy
+                translateY: this.transform.dy,
+                originalWidth: this.originalWidth,
+                originalHeight: this.originalHeight
             });
         }
 
@@ -8036,6 +8121,9 @@ class WaferMapViewer {
         // Draw the image with pixel-perfect rendering (no interpolation)
 
         this.imageCtx.save();
+
+        // ✅ transform 초기화 (누적 방지)
+        this.imageCtx.resetTransform();
 
         // Disable image smoothing for pixel-perfect display
 
@@ -8225,32 +8313,52 @@ class WaferMapViewer {
             return;
         }
 
-        // 🔥 상세 보기 모드에서 ESC 키로 빠져나가기
-        if (this.detailMode && e.key === 'Escape') {
-            this.exitDetailMode();
-            return;
-        }
-
+        // ✅ 방법 2: Ctrl 키 상태 추적
         if (e.ctrlKey) {
-            e.preventDefault();
-
-            const scaleAmount = 1 - e.deltaY * 0.001;
-
-            this.zoomAtPoint(scaleAmount, e.clientX, e.clientY);
-            this.scheduleDraw();
-        } else if (e.shiftKey) {
-            // allow native scroll as well as pan
-            this.transform.dx -= e.deltaY; // move horizontally
-
-            this.scheduleDraw();
-            // do not preventDefault
-        } else {
-            // allow native scroll as well as pan
-            this.transform.dy -= e.deltaY; // move vertically
-
-            this.scheduleDraw();
-            // do not preventDefault
+            this.lastCtrlKey = true;
+            clearTimeout(this.wheelTimeout);
+            this.wheelTimeout = setTimeout(() => {
+                this.lastCtrlKey = false;
+            }, 100); // 100ms 동안 Ctrl 상태 유지
         }
+
+        // ✅ 방법 1 & 2: Ctrl이 눌렸거나 최근에 눌렸으면 줌만 처리
+        if (e.ctrlKey || this.lastCtrlKey) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation(); // ✅ 방법 1: 추가 방어
+
+            // ✅ 줌 시작: 패널 보호 즉시 활성화
+            this.panelProtected = true;
+            this.zoomInProgress = true;
+            
+            // ✅ 패널이 숨겨져 있으면 다시 표시
+            if (this.dom.fileNameDisplay && 
+                this.dom.fileNameDisplay.style.display === 'none' && 
+                this.selectedImagePath) {
+                this.showFileName(this.selectedImagePath);
+            }
+            
+            const scaleAmount = 1 - e.deltaY * 0.001;
+            this.zoomAtPoint(scaleAmount, e.clientX, e.clientY);
+            
+            // ✅ 100ms 후 보호 자동 해제 (디바운스)
+            clearTimeout(this.panelProtectTimeout);
+            this.panelProtectTimeout = setTimeout(() => {
+                this.panelProtected = false;
+                this.zoomInProgress = false;
+                console.log('[PANEL] 보호 해제');
+            }, 100);
+            
+            return; // ✅ 방법 1: 명시적 return - else 블록 완전 제거
+        }
+        
+        // ✅ Ctrl 없이 wheel 시 보호 해제
+        this.panelProtected = false;
+        this.zoomInProgress = false;
+
+        // ✅ 방법 1: else 블록 완전 제거
+        // Shift나 일반 wheel은 처리하지 않음 (단일 이미지 뷰에서는 불필요)
     }
 
     /**
@@ -8279,42 +8387,123 @@ class WaferMapViewer {
      * - 브라우저 스크롤바는 사용하지 않음 (pan 방식)
      */
     zoomAtPoint(scale, clientX, clientY) {
+        // ✅ 줌 시작 시 패널 보호
+        this.panelProtected = true;
+        this.zoomInProgress = true;
+        
+        if (!this.currentImage || !this.originalWidth || !this.originalHeight) return;
+        
         const viewerRect = this.dom.viewerContainer.getBoundingClientRect();
-        const x = clientX - viewerRect.left;
-        const y = clientY - viewerRect.top;
-        const newScale = this.transform.scale * scale;
-
-        this.transform.dx = x - (x - this.transform.dx) * scale;
-
-        this.transform.dy = y - (y - this.transform.dy) * scale;
-
+        const mouseX = clientX - viewerRect.left;
+        const mouseY = clientY - viewerRect.top;
+        
+        // 🔥 현재 transform 값 저장 (계산 중 변경 방지)
+        const oldDx = this.transform.dx;
+        const oldDy = this.transform.dy;
+        const oldScale = this.transform.scale;
+        
+        // ✅ oldScale 검증 강화 - 리셋하지 않고 안전한 값으로 설정
+        if (Math.abs(oldScale) < 0.0001 || !Number.isFinite(oldScale)) {
+            console.warn('[ZOOM] oldScale 무효, 안전한 값 설정:', oldScale);
+            this.transform.scale = 1.0; // 리셋 대신 기본값 설정
+            return;
+        }
+        
+        // 🔥 마우스 포인트가 가리키는 이미지 좌표 계산 (원본 이미지 크기 기준)
+        // 화면 좌표를 이미지 좌표로 변환: imgX = (screenX - dx) / scale
+        const imgX = (mouseX - oldDx) / oldScale;
+        const imgY = (mouseY - oldDy) / oldScale;
+        
+        // ✅ 계산된 이미지 좌표가 유효한지 확인 - resetView 호출하지 않음
+        if (!Number.isFinite(imgX) || !Number.isFinite(imgY)) {
+            console.warn('[ZOOM] 이미지 좌표 무효, 줌 취소:', { imgX, imgY, oldDx, oldDy, oldScale });
+            return; // ✅ resetView 호출하지 않음
+        }
+        
+        // 새로운 스케일 계산 (최소/최대 제한)
+        const newScale = Math.max(0.01, Math.min(10, oldScale * scale));
+        
+        // ✅ newScale이 이상하면 줌 취소 - resetView 호출하지 않음
+        if (!Number.isFinite(newScale) || newScale < 0.01) {
+            console.warn('[ZOOM] newScale 무효, 줌 취소:', newScale);
+            return; // ✅ resetView 호출하지 않음
+        }
+        
+        // 🔥 마우스 포인트가 가리키는 이미지 좌표가 같은 화면 위치에 오도록 transform 조정
+        // 새로운 transform: screenX = imgX * newScale + newDx
+        // 따라서: newDx = screenX - imgX * newScale
+        // 빠른 줌 변경 시에도 마우스 포인트가 고정되도록 transform을 먼저 조정
+        const newDx = mouseX - imgX * newScale;
+        const newDy = mouseY - imgY * newScale;
+        
+        // ✅ 새로운 transform 값이 유효한지 확인 - resetView 호출하지 않음
+        if (!Number.isFinite(newDx) || !Number.isFinite(newDy)) {
+            console.warn('[ZOOM] transform 무효, 줌 취소:', { newDx, newDy, imgX, imgY, newScale });
+            return; // ✅ resetView 호출하지 않음
+        }
+        
+        this.transform.dx = newDx;
+        this.transform.dy = newDy;
         this.transform.scale = newScale;
         this.zoom = newScale; // 🎯 zoom 값 동기화
 
+        // ✅ transform 업데이트 후 렌더링
         this.updateZoomDisplay();
-
-        this.updatePyramidLevel(); // 🎯 피라미드 레벨 업데이트
-
+        this.updatePyramidLevel();
         this.scheduleDraw();
+        
+        // ✅ 줌 완료 후에도 보호 유지 (타임아웃으로 해제)
+        clearTimeout(this.panelProtectTimeout);
+        this.panelProtectTimeout = setTimeout(() => {
+            this.panelProtected = false;
+            this.zoomInProgress = false;
+        }, 100);
     }
 
     zoomAtCenter(factor) {
+        // ✅ 줌 시작 시 패널 보호
+        this.panelProtected = true;
+        this.zoomInProgress = true;
+        
         const viewerRect = this.dom.viewerContainer.getBoundingClientRect();
 
         this.zoomAtPoint(factor, viewerRect.left + viewerRect.width / 2, viewerRect.top + viewerRect.height / 2);
+        
+        // ✅ 줌 완료 후에도 보호 유지 (타임아웃으로 해제)
+        clearTimeout(this.panelProtectTimeout);
+        this.panelProtectTimeout = setTimeout(() => {
+            this.panelProtected = false;
+            this.zoomInProgress = false;
+        }, 100);
     }
 
     setZoom(level) {
-                const scale = level;
+        // ✅ 줌 시작 시 패널 보호
+        this.panelProtected = true;
+        this.zoomInProgress = true;
+        
+        const scale = level;
         const currentScale = this.transform.scale;
         const factor = scale / currentScale;
 
-                this.zoomAtCenter(factor);
+        this.zoomAtCenter(factor);
+        
+        // ✅ 줌 완료 후에도 보호 유지 (타임아웃으로 해제)
+        clearTimeout(this.panelProtectTimeout);
+        this.panelProtectTimeout = setTimeout(() => {
+            this.panelProtected = false;
+            this.zoomInProgress = false;
+        }, 100);
     }
 
     // 리셋 버튼 전용: 초기 이미지 크기와 배치와 동일하게 적용
 
     resetViewWithAbsoluteOffset() {
+        // ✅ 리셋 시에도 패널 보호 (이미 bindZoomEvents에서 설정됨)
+        // 하지만 직접 호출될 수 있으므로 여기서도 보호
+        this.panelProtected = true;
+        this.zoomInProgress = true;
+        
         if (!this.currentImage) return;
 
         const containerRect = this.dom.viewerContainer.getBoundingClientRect();
@@ -8354,6 +8543,13 @@ class WaferMapViewer {
         this.updatePyramidLevel(); // 🎯 피라미드 레벨 업데이트
 
         this.scheduleDraw();
+        
+        // ✅ 리셋 완료 후에도 보호 유지 (타임아웃으로 해제)
+        clearTimeout(this.panelProtectTimeout);
+        this.panelProtectTimeout = setTimeout(() => {
+            this.panelProtected = false;
+            this.zoomInProgress = false;
+        }, 100);
     }
 
     updateZoomDisplay() {
