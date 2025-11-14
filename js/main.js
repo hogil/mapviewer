@@ -521,6 +521,7 @@ class WaferMapViewer {
         this.panelProtected = false;     // 패널 보호 플래그
         this.zoomInProgress = false;     // 줌 진행 중 플래그
         this.panelProtectTimeout = null; // 디바운스 타이머
+        this.minimapPanelProtectTimeout = null; // ✅ 미니맵 패널 보호 타이머
 
         // 주기적인 메모리 정리 (5분마다)
 
@@ -1080,11 +1081,21 @@ class WaferMapViewer {
         // 파일명 표시 숨기기
 
         this.hideFileName();
+        
+        // ✅ currentImage를 null로 설정 (hideFileName에서 설정되지만 명시적으로 설정)
+        this.currentImage = null;
+        this.currentImageBitmap = null;
+        this.selectedImagePath = '';
 
         // 뷰어 컨테이너 클래스 제거
 
         if (this.dom.viewerContainer) {
             this.dom.viewerContainer.classList.remove('single-image-mode');
+        }
+        
+        // ✅ Chip selection 패널 숨기기 (currentImage가 null이므로 updateSelectedChipsList에서 자동으로 숨김)
+        if (this.chipAnnotator && typeof this.chipAnnotator.updateSelectedChipsList === 'function') {
+            this.chipAnnotator.updateSelectedChipsList();
         }
     }
 
@@ -2641,6 +2652,9 @@ class WaferMapViewer {
 
         // 뷰어 컨테이너를 그리드 모드로 설정하되 빈 상태
         this.gridMode = true; // 🔥 초기 화면도 gridMode로 설정 (상단 legend 표시용)
+        
+        // ✅ Chip Selection 패널 완전히 닫기
+        this.closeChipSelectionPanel();
 
         if (this.dom.viewerContainer) {
             this.dom.viewerContainer.classList.add('grid-mode');
@@ -4442,6 +4456,11 @@ class WaferMapViewer {
             this.selectedImages = Array.from(new Set([...this.selectedImages, ...imageFiles]));
 
             this.debugLog(`폴더 ${folderPath}에서 ${imageFiles.length}개 이미지 선택됨`);
+            
+            // ✅ 그리드 진입 전 패널 닫기
+            if (imageFiles.length > 1) {
+                this.closeChipSelectionPanel();
+            }
         } catch (error) {
             console.error(`폴더 파일 선택 실패: ${folderPath}`, error);
         }
@@ -6892,6 +6911,9 @@ class WaferMapViewer {
                 // Shift 범위 선택 시에는 항상 그리드 모드
 
                 this.hideGrid();
+                
+                // ✅ Chip Selection 패널 완전히 닫기
+                this.closeChipSelectionPanel();
 
                 this.showGrid(this.selectedImages);
             } else if (e.ctrlKey) {
@@ -6908,6 +6930,9 @@ class WaferMapViewer {
                 // Ctrl 다중 선택 시에는 항상 그리드 모드
 
                 this.hideGrid();
+                
+                // ✅ Chip Selection 패널 완전히 닫기
+                this.closeChipSelectionPanel();
 
                 if (this.selectedImages.length > 0) {
                     this.showGrid(this.selectedImages);
@@ -6961,6 +6986,9 @@ class WaferMapViewer {
                     this.loadImage(path);
                 } else {
                     // 이미지가 아니면 그리드 모드
+                    
+                    // ✅ Chip Selection 패널 완전히 닫기
+                    this.closeChipSelectionPanel();
 
                     this.showGrid(this.selectedImages);
                 }
@@ -8420,11 +8448,13 @@ class WaferMapViewer {
             return; // ✅ resetView 호출하지 않음
         }
         
-        // 새로운 스케일 계산 (최소/최대 제한)
-        const newScale = Math.max(0.01, Math.min(10, oldScale * scale));
+        // ✅ 줌 레벨을 더 보수적으로 제한 (0.1 ~ 5.0)
+        const minZoom = 0.1;
+        const maxZoom = 5.0;
+        const newScale = Math.max(minZoom, Math.min(maxZoom, oldScale * scale));
         
         // ✅ newScale이 이상하면 줌 취소 - resetView 호출하지 않음
-        if (!Number.isFinite(newScale) || newScale < 0.01) {
+        if (!Number.isFinite(newScale) || newScale < minZoom) {
             console.warn('[ZOOM] newScale 무효, 줌 취소:', newScale);
             return; // ✅ resetView 호출하지 않음
         }
@@ -8482,7 +8512,11 @@ class WaferMapViewer {
         this.panelProtected = true;
         this.zoomInProgress = true;
         
-        const scale = level;
+        // ✅ 줌 레벨을 더 보수적으로 제한 (0.1 ~ 5.0)
+        const minZoom = 0.1;
+        const maxZoom = 5.0;
+        const scale = Math.max(minZoom, Math.min(maxZoom, level));
+        
         const currentScale = this.transform.scale;
         const factor = scale / currentScale;
 
@@ -8693,10 +8727,42 @@ class WaferMapViewer {
         const viewScale = this.transform.scale;
         const viewX = -this.transform.dx / viewScale;
         const viewY = -this.transform.dy / viewScale;
-        const vpX = padX + viewX * scale;
-        const vpY = padY + viewY * scale;
-        const vpW = viewW / viewScale * scale;
-        const vpH = viewH / viewScale * scale;
+        let vpX = padX + viewX * scale;
+        let vpY = padY + viewY * scale;
+        let vpW = viewW / viewScale * scale;
+        let vpH = viewH / viewScale * scale;
+
+        // ✅ viewport 크기 1.5배 증가
+        vpW *= 1.5;
+        vpH *= 1.5;
+
+        // ✅ viewport 크기 제한 (미니맵 크기의 5% ~ 200%)
+        const minSize = Math.min(mapW, mapH) * 0.05;
+        const maxSize = Math.max(mapW, mapH) * 2.0;
+        
+        vpW = Math.max(minSize, Math.min(maxSize, vpW));
+        vpH = Math.max(minSize, Math.min(maxSize, vpH));
+        
+        // ✅ viewport가 maxSize에 도달했을 때 패널 보호
+        if (vpW >= maxSize * 0.95 || vpH >= maxSize * 0.95) {
+            this.panelProtected = true;
+            
+            clearTimeout(this.minimapPanelProtectTimeout);
+            this.minimapPanelProtectTimeout = setTimeout(() => {
+                this.panelProtected = false;
+            }, 100);
+        }
+        
+        // ✅ viewport 위치 제한 (미니맵 범위 내로 제한)
+        vpX = Math.max(-vpW * 0.5, Math.min(mapW - vpW * 0.5, vpX));
+        vpY = Math.max(-vpH * 0.5, Math.min(mapH - vpH * 0.5, vpY));
+        
+        // ✅ 계산 결과 검증
+        if (!Number.isFinite(vpW) || !Number.isFinite(vpH) ||
+            !Number.isFinite(vpX) || !Number.isFinite(vpY)) {
+            console.warn('[MINIMAP] 계산 오류 - viewport 그리기 취소');
+            return;
+        }
 
         // 뷰포트 사각형 스타일 적용
 
@@ -12405,6 +12471,9 @@ class WaferMapViewer {
     // 2. Grid rendering
 
     showGrid(images, skipSaveState = false) {
+        // ✅ 패널 닫기 추가 (맨 앞에)
+        this.closeChipSelectionPanel();
+        
         this.gridMode = true;
 
         // 🔥 이미지를 이름 순으로 오름차순 정렬 (숫자 자연 정렬 적용)
@@ -12881,9 +12950,38 @@ class WaferMapViewer {
         }
     }
 
+    // ✅ Chip Selection 패널 완전히 닫기
+    closeChipSelectionPanel() {
+        // ✅ 패널 전체 숨김 (추가)
+        const chipSelectionPanel = document.getElementById('chip-selection-panel');
+        if (chipSelectionPanel) {
+            chipSelectionPanel.style.display = 'none';
+        }
+        
+        // ✅ 리스트도 숨김 (기존)
+        const chipSelectionList = document.getElementById('selected-chips-list');
+        if (chipSelectionList) {
+            chipSelectionList.style.display = 'none';
+        }
+        
+        // ✅ Chip annotator 상태 초기화
+        if (this.chipAnnotator) {
+            if (typeof this.chipAnnotator.clearSelection === 'function') {
+                this.chipAnnotator.clearSelection(false); // notifyViewer = false (무한 루프 방지)
+            }
+            if (typeof this.chipAnnotator.updateSelectedChipsList === 'function') {
+                this.chipAnnotator.updateSelectedChipsList();
+            }
+        }
+    }
+
     // 🔥 그리드 모드 활성화 (GridManager에서 호출)
     showGridMode() {
         this.gridMode = true;
+        
+        // ✅ Chip Selection 패널 완전히 닫기
+        this.closeChipSelectionPanel();
+        
         const grid = document.getElementById('image-grid');
         const gridControls = document.getElementById('grid-controls');
         if (gridControls) gridControls.style.display = '';

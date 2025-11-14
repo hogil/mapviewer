@@ -996,9 +996,6 @@
             width: 100%;
             position: relative;
             overflow: auto;
-            /* ✅ 방법 3: 브라우저 기본 스크롤 완전 차단 */
-            overscroll-behavior: none;
-            touch-action: none;
             cursor: grab;
             height: 100%;
             min-height: 0;
@@ -1166,8 +1163,6 @@
             background: #000 !important;
             transform-origin: 0 0;
             z-index: 1;
-            /* ✅ 방법 3: 캔버스에서도 스크롤 차단 */
-            touch-action: none;
         }
         
         #overlay-canvas {

@@ -1257,7 +1257,7 @@ export class ChipAnnotator {
             return;
         }
 
-        // 🔥 Shift+드래그 처리 (드래그만 허용)
+        // 🔥 Shift+드래그 처리: 범위 내 chip 제거
         if (this.shiftClickPos) {
             const dragDistance = Math.sqrt(
                 Math.pow(canvasX - this.shiftClickPos.x, 2) +
@@ -1271,12 +1271,11 @@ export class ChipAnnotator {
                     canvasX,
                     canvasY
                 );
-                // 🔥 Shift+드래그: 범위 내 chip 추가 (기존 선택 유지, 배치 처리로 성능 향상)
-                // 이미 선택된 chip은 제외하여 중복 추가 방지
-                const newSelections = selected.filter(idx => !this.selectedChips.has(idx));
-                newSelections.forEach(idx => this.selectedChips.add(idx));
+                // 🔥 Shift+드래그: 범위 내 chip 제거 (배치 처리로 성능 향상)
+                const toRemove = selected.filter(idx => this.selectedChips.has(idx));
+                toRemove.forEach(idx => this.selectedChips.delete(idx));
                 this.updateSelectedChipsList();
-                console.log('🖱️ [SHIFT+DRAG] 범위 선택 추가:', selected.length, '개 (신규:', newSelections.length, ')');
+                console.log('🖱️ [SHIFT+DRAG] 범위 내 chip 제거:', selected.length, '개 (제거:', toRemove.length, ')');
             } else {
                 // 드래그 없음: 선택 해제
                 this.selectedChips.clear();
@@ -1288,16 +1287,36 @@ export class ChipAnnotator {
             return;
         }
 
-        // 🔥 일반 클릭 (Ctrl/Shift/Alt 없음): 드래그가 없을 때만 선택 해제
+        // 🔥 일반 클릭/드래그 (Ctrl/Shift/Alt 없음): 클릭은 선택 해제, 드래그는 범위 내 chip 제거
         if (!e.ctrlKey && !e.shiftKey && !e.altKey && this.clickStartPos) {
-            // 🔥 드래그가 발생하지 않았을 때만 선택 해제
-            if (!this.hasDragged) {
+            const dragDistance = Math.sqrt(
+                Math.pow(canvasX - this.clickStartPos.x, 2) +
+                Math.pow(canvasY - this.clickStartPos.y, 2)
+            );
+            
+            // 🔥 드래그가 발생했으면 범위 내 chip 제거
+            if (dragDistance > 5) {
+                const chipAtStart = this.findChipAtPixel(this.clickStartPos.x, this.clickStartPos.y);
+                const chipAtEnd = this.findChipAtPixel(canvasX, canvasY);
+                
+                if (chipAtStart && chipAtEnd && chipAtStart !== chipAtEnd) {
+                    const selected = this.getChipsInRect(chipAtStart, chipAtEnd);
+                    // 🔥 일반 드래그: 범위 내 chip 제거 (배치 처리로 성능 향상)
+                    const toRemove = selected.filter(idx => this.selectedChips.has(idx));
+                    toRemove.forEach(idx => this.selectedChips.delete(idx));
+                    this.updateSelectedChipsList();
+                    console.log('🖱️ [DRAG] 범위 내 chip 제거:', selected.length, '개 (제거:', toRemove.length, ')');
+                }
+            } else {
+                // 🔥 드래그가 발생하지 않았을 때: 선택 해제
                 this.selectedChips.clear();
-                this.render();
+                console.log('🖱️ [CLICK] 선택 해제');
             }
+            
             // 상태 초기화
             this.clickStartPos = null;
             this.hasDragged = false;
+            this.render();
             return;
         }
 
