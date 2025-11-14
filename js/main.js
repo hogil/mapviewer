@@ -777,6 +777,14 @@ class WaferMapViewer {
         console.log('🔍 [STATE_DEBUG] currentFolderPath 초기화: null');
         this.currentFolderPrefix = '';  // 🔥 파일 경로 앞에 붙일 접두사 (예: "performance_test4/")
         this.classMode = 'wafer';
+        
+        // ✅ 단일 이미지 뷰 모드 상태
+        this.viewMode = null;  // 'single' (파일 탐색기), 'gridImage' (그리드), null
+        this.singleViewImageList = [];  // 파일 탐색기 모드: 같은 폴더의 모든 이미지
+        this.singleViewImageIndex = -1;  // 파일 탐색기 모드: 현재 이미지 인덱스
+        this.gridViewImageList = [];  // 그리드 모드: 선택된 이미지들
+        this.gridViewImageIndex = -1;  // 그리드 모드: 현재 이미지 인덱스
+        this.gridViewSaveState = null;  // 그리드 모드 저장 상태
         this.classToImgListCache = {};
 
         this.selectedFolderForBrowser = '';
@@ -896,13 +904,33 @@ class WaferMapViewer {
         // 🔥 더블클릭 이벤트: 상세 보기 모드 종료 또는 그리드로 복귀
         if (this.dom.viewerContainer) {
             this.dom.viewerContainer.addEventListener('dblclick', e => {
+                console.log('🖱️ [DBLCLICK] 더블클릭 감지:', {
+                    viewMode: this.viewMode,
+                    detailMode: this.detailMode,
+                    isNavigating: this._isNavigating
+                });
+                
+                // ✅ Step 1: 상세 모드 확인
                 if (this.detailMode) {
-                    console.log('🖱️ [DBLCLICK] 더블클릭으로 상세 보기 모드 종료');
+                    console.log('🖱️ [DBLCLICK] → 상세 모드 종료');
                     this.exitDetailMode();
-                } else if (this.singleImageFromGrid) {
-                    // 🔥 그리드에서 온 단일 이미지 모드일 때 더블클릭으로 그리드 복귀
-                    console.log('🖱️ [DBLCLICK] 더블클릭으로 그리드 복귀 (viewerContainer)');
-                    this.exitSingleImageMode();
+                    return;
+                }
+                
+                // ✅ Step 2: 파일탐색기 모드 (single) - 2번 이동
+                if (this.viewMode === 'single') {
+                    console.log('🖱️ [DBLCLICK] → 파일탐색기 모드: 2번 이동');
+                    e.preventDefault();
+                    this.handleDoubleClickNavigation();
+                    return;
+                }
+                
+                // ✅ Step 3: 그리드 이미지 모드 (gridImage) - 그리드 복귀
+                if (this.viewMode === 'gridImage') {
+                    console.log('🖱️ [DBLCLICK] → 그리드 이미지 모드: 그리드 복귀');
+                    e.preventDefault();
+                    this.exitSingleImageViewMode();
+                    return;
                 }
             });
         }
@@ -1111,6 +1139,11 @@ class WaferMapViewer {
         // ⭐ Chip Selection 패널 명시적으로 숨기기
         this.closeChipSelectionPanel();
         this.debugLog('🔷 [DEBUG] chipSelectionPanel 숨김');
+        
+        // ⭐ 화살표 버튼 숨기기
+        this.viewMode = null;
+        this.updateArrowButtonVisibility();
+        this.debugLog('🔷 [DEBUG] 화살표 버튼 숨김');
     }
 
     // 파일명 표시
@@ -7074,11 +7107,8 @@ class WaferMapViewer {
                 // 이미지 파일인지 확인
 
                 if (this.isImageFile(path)) {
-                    // 자세히보기 모드로 전환
-
-                    this.hideGrid();
-
-                    this.loadImage(path);
+                    // ✅ 파일 탐색기에서 클릭: enterSingleViewMode() 호출
+                    await this.enterSingleViewMode(path);
                 } else {
                     // 이미지가 아니면 그리드 모드
                     
@@ -12805,6 +12835,11 @@ class WaferMapViewer {
         this.dom.minimapContainer.style.display = 'none';
         this.dom.imageCanvas.style.display = 'none';
         this.dom.overlayCanvas.style.display = 'none';
+        
+        // ⭐ 그리드 모드에서는 화살표 버튼 숨기기
+        this.viewMode = null;
+        this.updateArrowButtonVisibility();
+        this.debugLog('🟦 [SHOW_GRID] 화살표 버튼 숨김');
 
         grid.innerHTML = '';
         // 🔥 DOM 재생성 시 캐시 초기화 (드래그 선택 정상 작동 위해 필수)
@@ -12907,7 +12942,7 @@ class WaferMapViewer {
             wrap.dataset.path = imgPath;
             // 클릭 이벤트는 onMouseUp에서 처리하므로 여기서는 제거
             // wrap.onclick = e => { e.stopPropagation(); this.toggleGridImageSelect(idx, e); };
-            wrap.ondblclick = e => { e.stopPropagation(); this.enterSingleImageMode(idx); };
+            wrap.ondblclick = e => { e.stopPropagation(); this.enterGridImageViewMode(idx); };
             
             // 우클릭 컨텍스트 메뉴 표시
             wrap.oncontextmenu = e => {
@@ -13343,6 +13378,10 @@ class WaferMapViewer {
         this.dom.minimapContainer.style.display = 'none';
         this.dom.imageCanvas.style.display = 'none';
         this.dom.overlayCanvas.style.display = 'none';
+        
+        // ⭐ 그리드 모드에서는 화살표 버튼 숨기기
+        this.viewMode = null;
+        this.updateArrowButtonVisibility();
         
         // ⭐ 파일명 패널 숨기기 (다양한 선택자로 확인)
         if (this.dom.fileNameDisplay) {
@@ -14422,23 +14461,41 @@ class WaferMapViewer {
     }
 
     clearGridSelection() {
-        // 🔥 최적화: 선택된 요소만 찾아서 클래스 제거 (전체 순회 방지)
+        // ✅ 화살표가 표시 중인지 확인
+        const wasShowingArrow = this.viewMode === 'single' || this.viewMode === 'gridImage';
+        
+        // ✅ 상태 완전 초기화
+        this.viewMode = null;
+        this.gridSelectedIdxs = [];
+        if (this.gridSelectedSet) {
+            this.gridSelectedSet.clear();
+        }
+        this.selectedImages = [];
+        this.singleImageFromGrid = false;
+        this._isNavigating = false;
+        this.gridViewImageList = [];
+        this.gridViewImageIndex = -1;
+        this.gridViewSaveState = null;
+        
+        // ✅ 화살표 숨김
+        this.updateArrowButtonVisibility();
+        
+        // ✅ UI 업데이트
         const grid = document.getElementById('image-grid');
         if (grid) {
             const selectedWraps = grid.querySelectorAll('.grid-thumb-wrap.selected');
-            selectedWraps.forEach(wrap => {
-                wrap.classList.remove('selected');
-            });
+            selectedWraps.forEach(wrap => wrap.classList.remove('selected'));
         }
 
-        this.gridSelectedIdxs = [];
         this.gridLastClickedIdx = undefined;
 
         // ✅ 선택된 웨이퍼 목록 업데이트 (빈 목록)
         this.updateSelectedGridImagesList();
-
-        // 🔥 savedViewState 업데이트 제거 (배열 복사가 느림)
-        // 전체 해제 시에는 상태 업데이트 불필요
+        
+        // ✅ 이미지 캔버스 숨김
+        this.hideImage();
+        
+        console.log('✅ [CLEAR] 선택 해제 완료', wasShowingArrow ? '(화살표 숨김)' : '(화살표 없음)');
     }
 
     selectAllGridImages() {
@@ -14510,13 +14567,201 @@ class WaferMapViewer {
         this.updateGridSelection();
     }
 
+    /**
+     * ✅ 파일 탐색기에서 단일 이미지 선택 → 단일보기 모드 진입
+     * @param {string} imagePath 클릭한 이미지 경로
+     */
+    async enterSingleViewMode(imagePath) {
+        console.log('✅ [SINGLE_VIEW] ENTER Single View Mode:', imagePath);
+        
+        // ✅ viewMode 설정
+        this.viewMode = 'single';
+        this.singleImageFromGrid = false;
+        
+        // ✅ 파일명과 경로에서 폴더 추출
+        const lastSlash = imagePath.lastIndexOf('/');
+        const folderPath = imagePath.substring(0, lastSlash);
+        const fileName = imagePath.substring(lastSlash + 1);
+        
+        console.log('✅ [SINGLE_VIEW] Folder:', folderPath, 'File:', fileName);
+        
+        // ✅ 같은 폴더의 모든 이미지 목록 가져오기
+        try {
+            const response = await fetch(`/api/files?path=${encodeURIComponent(folderPath)}`);
+            const data = await response.json();
+            
+            // 이미지 파일만 필터링
+            this.singleViewImageList = (data.items || [])
+                .filter(item => item.type === 'file' && this.isImageFile(item.name))
+                .map(item => {
+                    // 경로 정규화: path가 있으면 사용, 없으면 폴더 경로 + 파일명
+                    if (item.path) {
+                        return item.path;
+                    } else {
+                        const fullPath = folderPath ? `${folderPath}/${item.name}` : item.name;
+                        return fullPath;
+                    }
+                });
+            
+            // ✅ 정렬 (파일명순)
+            this.singleViewImageList.sort();
+            
+            // ✅ 현재 이미지의 인덱스 찾기 (경로 정규화 후 비교)
+            const normalizedImagePath = imagePath.replace(/\\/g, '/');
+            this.singleViewImageIndex = this.singleViewImageList.findIndex(f => {
+                const normalized = f.replace(/\\/g, '/');
+                return normalized === normalizedImagePath || normalized.endsWith(normalizedImagePath) || normalizedImagePath.endsWith(normalized);
+            });
+            
+            console.log('✅ [SINGLE_VIEW] Single View Images Found', {
+                totalCount: this.singleViewImageList.length,
+                currentIndex: this.singleViewImageIndex,
+                currentImage: imagePath,
+                folderPath: folderPath,
+                imageList: this.singleViewImageList.slice(0, 5) // 처음 5개만 로그
+            });
+            
+            if (this.singleViewImageIndex === -1) {
+                console.warn('⚠️ [SINGLE_VIEW] 현재 이미지를 폴더 목록에서 찾을 수 없습니다. 첫 번째 이미지로 설정합니다.');
+                // 경로가 정확히 일치하지 않으면 파일명으로 다시 찾기
+                const fileNameOnly = fileName.toLowerCase();
+                this.singleViewImageIndex = this.singleViewImageList.findIndex(f => {
+                    const fName = f.split('/').pop().toLowerCase();
+                    return fName === fileNameOnly;
+                });
+                
+                if (this.singleViewImageIndex === -1) {
+                    // 그래도 못 찾으면 현재 이미지를 목록에 추가
+                    this.singleViewImageList = [imagePath, ...this.singleViewImageList];
+                    this.singleViewImageIndex = 0;
+                }
+            }
+            
+            // 그리드 숨기기
+            this.hideGrid();
+            
+            // ✅ 화살표 버튼 표시
+            this.updateArrowButtonVisibility();
+            
+            // ✅ 키보드 이벤트 핸들러 설정 (ESC, ← →)
+            // 기존 핸들러 제거
+            if (this.boundSingleViewHandler) {
+                document.removeEventListener('keydown', this.boundSingleViewHandler);
+            }
+            
+            document.addEventListener('keydown', this.boundSingleViewHandler = (e) => {
+                if (this.detailMode && e.key === 'Escape') {
+                    this.exitDetailMode();
+                    return;
+                }
+                
+                if (e.key === 'Escape') {
+                    this.exitSingleImageViewMode();
+                } else if (e.key === 'ArrowLeft') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.navigatePrevious();
+                } else if (e.key === 'ArrowRight') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.navigateNext();
+                }
+            });
+            
+            // ✅ 이미지 로드
+            await this.loadImage(imagePath);
+            
+            // ✅ imageCanvas 더블클릭 핸들러 설정 (파일탐색기 모드)
+            if (this.dom.imageCanvas) {
+                this.dom.imageCanvas.ondblclick = (e) => {
+                    e.stopPropagation();
+                    console.log('🖱️ [DBLCLICK] 이미지 캔버스 더블클릭 (파일탐색기 모드):', {
+                        viewMode: this.viewMode
+                    });
+                    
+                    if (this.viewMode === 'single') {
+                        console.log('🖱️ [DBLCLICK] → 파일탐색기 모드: 2번 이동');
+                        this.handleDoubleClickNavigation();
+                    }
+                };
+            }
+            
+            this.selectedImagePath = imagePath;
+            
+            console.log('✅ [SINGLE_VIEW] 단일 보기 모드 설정 완료', {
+                viewMode: this.viewMode,
+                imageCount: this.singleViewImageList.length,
+                currentIndex: this.singleViewImageIndex,
+                currentImage: imagePath
+            });
+        } catch (error) {
+            console.error('❌ [SINGLE_VIEW] 폴더 목록 가져오기 실패:', error);
+            // 실패 시 현재 이미지만 로드
+            this.singleViewImageList = [imagePath];
+            this.singleViewImageIndex = 0;
+            this.viewMode = 'single';
+            this.hideGrid();
+            this.updateArrowButtonVisibility();
+            await this.loadImage(imagePath);
+        }
+    }
+
+    /**
+     * 그리드 모드에서 더블클릭 시: 선택된 이미지들로 단일 뷰 모드 진입
+     * @param {number} idx 그리드에서 더블클릭한 이미지 인덱스
+     */
+    enterGridImageViewMode(idx) {
+        // 하위 호환성을 위해 enterSingleImageMode로도 호출 가능
+        this.enterSingleImageMode(idx);
+    }
+    
     enterSingleImageMode(idx) {
         // 🔥 그리드에서 단일 이미지 모드로 전환 시 savedViewState 업데이트
         const grid = document.getElementById('image-grid');
         const isLabelExplorerGrid = grid && grid.hasAttribute('data-label-explorer-grid');
         const scrollWrapper = grid?.parentElement;  // .grid-scroll-wrapper
         
-        // 🔥 Label Explorer Grid가 아닐 때만 savedViewState 업데이트
+        // ✅ viewMode 설정
+        this.viewMode = 'gridImage';
+        this.singleImageFromGrid = true;
+        
+        // ✅ 현재 그리드의 모든 이미지를 사용
+        const currentImages = this.currentGridImages || this.selectedImages || [];
+        this.gridViewImageList = [...currentImages];
+        
+        // ✅ 현재 이미지 인덱스를 그리드 이미지 목록의 인덱스로 변환
+        const normalizedCurrent = this.normalizePath(this.selectedImages[idx]);
+        const actualGridIndex = currentImages.findIndex(img => {
+            const normalizedImg = this.normalizePath(img);
+            return normalizedImg === normalizedCurrent;
+        });
+        
+        this.gridViewImageIndex = actualGridIndex >= 0 ? actualGridIndex : idx;
+        
+        // 선택된 이미지 중에서의 인덱스 (스크롤 계산용)
+        const selectedIndices = this.gridSelectedIdxs || [];
+        const imageIndexInList = selectedIndices.indexOf(idx);
+        
+        console.log('✅ [GRID_VIEW] 그리드 이미지 뷰 모드 진입', {
+            전체그리드인덱스: idx,
+            실제그리드인덱스: this.gridViewImageIndex,
+            선택된목록인덱스: imageIndexInList,
+            선택된인덱스들: selectedIndices,
+            전체이미지수: this.gridViewImageList.length,
+            선택된이미지수: selectedIndices.length
+        });
+        
+        // ✅ 그리드 뷰 상태 저장 (선택된 인덱스들도 저장)
+        this.gridViewSaveState = {
+            type: 'grid',
+            images: [...currentImages],  // ✅ 모든 그리드 이미지
+            selectedIndices: [...selectedIndices],  // 선택된 그리드 인덱스들
+            scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
+            isCompositeMode: this.isCompositeMode,
+            compositeSession: this.compositeSession ? {...this.compositeSession} : null
+        };
+        
+        // 🔥 Label Explorer Grid가 아닐 때만 savedViewState 업데이트 (하위 호환성)
         if (!isLabelExplorerGrid && this.selectedImages && this.selectedImages.length > 0) {
             const savedScrollTop = scrollWrapper ? scrollWrapper.scrollTop : 0;
             
@@ -14538,11 +14783,11 @@ class WaferMapViewer {
         }
 
         this.hideGrid();
-
-        // 🔥 singleImageFromGrid 플래그를 먼저 설정 (loadImage에서 savedViewState 덮어쓰기 방지)
-        this.singleImageFromGrid = true;
-
-        // 🔥 키보드 이벤트 핸들러 먼저 설정
+        
+        // ✅ 화살표 버튼 표시
+        this.updateArrowButtonVisibility();
+        
+        // 🔥 키보드 이벤트 핸들러 먼저 설정 (ESC 키)
         document.addEventListener('keydown', this.boundGridEscapeHandler = (e) => {
             // 🔥 상세 보기 모드에서 ESC 키로 빠져나가기
             if (this.detailMode && e.key === 'Escape') {
@@ -14551,8 +14796,33 @@ class WaferMapViewer {
                 return;
             }
             
-            if (e.key === 'Escape') this.exitSingleImageMode();
+            if (e.key === 'Escape') {
+                this.exitSingleImageViewMode();
+            } else if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                e.stopPropagation();
+                this.navigatePrevious();
+            } else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                e.stopPropagation();
+                this.navigateNext();
+            }
         });
+
+        // ✅ 그리드 이미지 네비게이션 설정 (← → 키) - 선택된 이미지들만 순회
+        this.setupGridImageNavigation();
+
+        // ✅ 더블클릭한 이미지 하이라이트
+        if (grid) {
+            const wraps = grid.querySelectorAll('.grid-thumb-wrap');
+            wraps.forEach((wrap, index) => {
+                if (index === idx) {
+                    wrap.classList.add('highlighted'); // 더블클릭 이미지
+                } else {
+                    wrap.classList.remove('highlighted');
+                }
+            });
+        }
 
         // 🔥 이미지 로드 (비동기)
         this.loadImage(this.selectedImages[idx]).then(() => {
@@ -14560,71 +14830,678 @@ class WaferMapViewer {
             if (this.dom.imageCanvas) {
                 this.dom.imageCanvas.ondblclick = (e) => {
                     e.stopPropagation();
-                    console.log('🖱️ [DBLCLICK] 이미지 캔버스 더블클릭으로 그리드 복귀');
-                    if (this.singleImageFromGrid) {
-                        this.exitSingleImageMode();
+                    console.log('🖱️ [DBLCLICK] 이미지 캔버스 더블클릭:', {
+                        viewMode: this.viewMode
+                    });
+                    
+                    // ✅ viewMode 기준으로 처리
+                    if (this.viewMode === 'single') {
+                        // 파일탐색기 모드: 2번 이동
+                        console.log('🖱️ [DBLCLICK] → 이미지 캔버스: 파일탐색기 모드 2번 이동');
+                        this.handleDoubleClickNavigation();
+                    } else if (this.viewMode === 'gridImage') {
+                        // 그리드 이미지 모드: 그리드 복귀
+                        console.log('🖱️ [DBLCLICK] → 이미지 캔버스: 그리드 복귀');
+                        this.exitSingleImageViewMode();
                     }
                 };
             }
-            console.log('✅ [SETUP] 이미지 로드 완료, 더블클릭으로 그리드 복귀 가능');
-            console.log('✅ [SETUP] singleImageFromGrid:', this.singleImageFromGrid);
+            console.log('✅ [SETUP] 이미지 로드 완료, 더블클릭 핸들러 설정됨');
+            console.log('✅ [SETUP] viewMode:', this.viewMode);
             console.log('✅ [SETUP] savedViewState:', this.savedViewState);
         }).catch(err => {
             console.error('❌ [ERROR] loadImage 실패:', err);
-            this.singleImageFromGrid = false;
         });
 
         this.selectedImagePath = this.selectedImages[idx];
     }
 
-    exitSingleImageMode() {
-        if (!this.singleImageFromGrid) {
-            console.log('⚠️ [EXIT] singleImageFromGrid가 false이므로 종료하지 않음');
-            return;
-        }
-
-        console.log('🔄 [EXIT] 단일 이미지 모드 종료, 그리드로 복귀');
-        console.log('💾 [DEBUG] savedViewState:', this.savedViewState);
-        console.log('💾 [DEBUG] selectedImages:', this.selectedImages?.length, '개');
-
-        // 🔥 savedViewState에서 이미지 목록 가져오기
-        let imagesToShow = this.selectedImages;
-        if (this.savedViewState && this.savedViewState.type === 'grid' && this.savedViewState.images && this.savedViewState.images.length > 0) {
-            imagesToShow = this.savedViewState.images;
-            this.selectedImages = [...this.savedViewState.images];
-            console.log('💾 [RESTORE] savedViewState에서 이미지 목록 복원:', imagesToShow.length, '개');
-            console.log('💾 [RESTORE] 저장된 스크롤 위치:', this.savedViewState.scrollTop);
-        } else {
-            console.warn('⚠️ [RESTORE] savedViewState가 없거나 유효하지 않음:', this.savedViewState);
-            // 🔥 savedViewState가 없으면 현재 selectedImages 사용
-            if (!imagesToShow || imagesToShow.length === 0) {
-                console.error('❌ [RESTORE] 복원할 이미지가 없습니다!');
-                this.singleImageFromGrid = false;
+    /**
+     * 단일 이미지 뷰 모드 종료 (ESC 또는 X)
+     * viewMode에 따라 분기: 'gridImage' → 그리드 복귀, 'single' → 파일 탐색기로
+     */
+    exitSingleImageViewMode() {
+        // ✅ 하위 호환성 체크
+        if (!this.viewMode) {
+            if (!this.singleImageFromGrid) {
+                console.log('⚠️ [EXIT] viewMode와 singleImageFromGrid가 모두 없으므로 종료하지 않음');
                 return;
             }
-            console.log('💾 [RESTORE] savedViewState 없음, 현재 selectedImages 사용:', imagesToShow.length, '개');
+            this.viewMode = 'gridImage';
         }
 
-        // 🔥 skipSaveState=true로 호출 (showGrid 내부에서 스크롤 위치 복원)
-        this.showGrid(imagesToShow, true);
-
-        // 🔥 Composite Mode 상태 복원 (savedViewState에서)
-        if (this.savedViewState && this.savedViewState.isCompositeMode) {
-            console.log('🔄 [EXIT] Composite Mode 상태 복원 (savedViewState에서)');
-            this.isCompositeMode = true;
-            this.compositeSession = this.savedViewState.compositeSession;
-            this.updateContextMenuState();
-        }
-
+        console.log('🔄 [EXIT] 단일 이미지 뷰 모드 종료, viewMode:', this.viewMode, 'gridViewImageIndex:', this.gridViewImageIndex);
+        
+        // ✅ Step 1: 상태 먼저 초기화 (중요! - 화살표 버튼이 사라지도록)
+        const savedViewMode = this.viewMode;
+        this.viewMode = null;
         this.singleImageFromGrid = false;
+        this._isNavigating = false;
+        
+        // ✅ Step 2: 이미지 리스트 초기화 (복원에 필요한 값 저장)
+        this.singleViewImageList = [];
+        this.singleViewImageIndex = -1;
+        const savedGridViewImageList = this.gridViewImageList;
+        const savedGridViewImageIndex = this.gridViewImageIndex;
+        const savedGridViewSaveState = this.gridViewSaveState;
+        this.gridViewImageList = [];
+        this.gridViewImageIndex = -1;
+        this.selectedImagePath = null;
+        
+        // ✅ Step 3: 화살표 버튼 숨김 (viewMode = null이므로)
+        this.updateArrowButtonVisibility();
+        
+        // ✅ Step 4: 그리드 복귀 및 스크롤 복원
+        if (savedViewMode === 'gridImage') {
+            console.log('🔄 [EXIT] 그리드 모드로 복귀');
+            
+            let imagesToShow = savedGridViewImageList;
+            if (savedGridViewSaveState && savedGridViewSaveState.images && savedGridViewSaveState.images.length > 0) {
+                imagesToShow = savedGridViewSaveState.images;
+                this.selectedImages = [...savedGridViewSaveState.images];
+                console.log('💾 [RESTORE] gridViewSaveState에서 이미지 목록 복원:', imagesToShow.length, '개');
+            } else if (this.savedViewState && this.savedViewState.type === 'grid' && this.savedViewState.images && this.savedViewState.images.length > 0) {
+                imagesToShow = this.savedViewState.images;
+                this.selectedImages = [...this.savedViewState.images];
+                console.log('💾 [RESTORE] savedViewState에서 이미지 목록 복원:', imagesToShow.length, '개');
+            }
+            
+            if (!imagesToShow || imagesToShow.length === 0) {
+                console.error('❌ [RESTORE] 복원할 이미지가 없습니다!');
+                this.gridViewSaveState = null;
+                return;
+            }
 
+            // ✅ 그리드 복귀
+            this.showGrid(imagesToShow, true);
+            
+            // ✅ Composite Mode 상태 복원
+            const saveState = savedGridViewSaveState || this.savedViewState;
+            if (saveState && saveState.isCompositeMode) {
+                console.log('🔄 [EXIT] Composite Mode 상태 복원');
+                this.isCompositeMode = true;
+                this.compositeSession = saveState.compositeSession;
+                this.updateContextMenuState();
+            }
+            
+            // ✅ 스크롤 위치 복원 (동적 계산)
+            setTimeout(() => {
+                // savedGridViewImageIndex를 사용하여 스크롤 계산
+                const scrollTop = this._calculateGridScrollPositionWithIndex(
+                    savedGridViewImageIndex,
+                    savedGridViewSaveState?.selectedIndices || []
+                );
+                
+                const grid = document.getElementById('image-grid');
+                const scrollWrapper = grid?.parentElement;
+                if (scrollWrapper) {
+                    scrollWrapper.scrollTop = scrollTop;
+                    console.log('✅ [EXIT] 그리드 스크롤 복원:', scrollTop);
+                }
+            }, 50);
+        } else if (savedViewMode === 'single') {
+            // ✅ 파일 탐색기로 복귀
+            console.log('🔄 [EXIT] 파일 탐색기로 복귀');
+            this.hideGrid();
+        }
+        
+        // ✅ Step 5: 이벤트 리스너 정리
         if (this.boundGridEscapeHandler) {
             document.removeEventListener('keydown', this.boundGridEscapeHandler);
             this.boundGridEscapeHandler = null;
         }
 
+        if (this.boundGridNavigationHandler) {
+            document.removeEventListener('keydown', this.boundGridNavigationHandler);
+            this.boundGridNavigationHandler = null;
+        }
+
+        if (this.boundSingleViewHandler) {
+            document.removeEventListener('keydown', this.boundSingleViewHandler);
+            this.boundSingleViewHandler = null;
+        }
+
         this.dom.imageCanvas.onclick = null;
         this.dom.imageCanvas.ondblclick = null;
+        
+        // ✅ Step 6: 상태 완전 초기화
+        this.gridViewSaveState = null;
+    }
+    
+    /**
+     * 하위 호환성을 위한 별칭
+     */
+    exitSingleImageMode() {
+        this.exitSingleImageViewMode();
+    }
+
+    /**
+     * 그리드 이미지 네비게이션 설정 (← → 키)
+     */
+    setupGridImageNavigation() {
+        if (this.viewMode !== 'gridImage' && !this.singleImageFromGrid) return;
+
+        // ✅ 기존 리스너 제거 (중복 방지)
+        if (this.boundGridNavigationHandler) {
+            document.removeEventListener('keydown', this.boundGridNavigationHandler);
+            this.boundGridNavigationHandler = null;
+        }
+
+        // ← → 키보드 네비게이션
+        document.addEventListener('keydown', this.boundGridNavigationHandler = (e) => {
+            if (this.viewMode !== 'gridImage' && !this.singleImageFromGrid) return;
+
+            if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                e.stopPropagation(); // 이벤트 버블링 방지
+                this.navigateSingleImageGrid(-1);
+            } else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                e.stopPropagation(); // 이벤트 버블링 방지
+                this.navigateSingleImageGrid(1);
+            }
+        });
+    }
+
+    /**
+     * 그리드 내 이미지 네비게이션 (← → 키) - 선택된 이미지들만 순회
+     * @param {number} direction -1 (이전), 1 (다음)
+     */
+    navigateSingleImageGrid(direction) {
+        // ✅ 조건 강화
+        if (this.viewMode !== 'gridImage') {
+            console.warn('⚠️ [NAV] Not in gridImage mode, current:', this.viewMode);
+            return;
+        }
+        
+        if (!this.gridViewImageList || !Array.isArray(this.gridViewImageList)) {
+            console.warn('⚠️ [NAV] gridViewImageList not initialized');
+            return;
+        }
+        
+        if (this.gridViewImageList.length === 0) {
+            console.warn('⚠️ [NAV] gridViewImageList is empty');
+            return;
+        }
+        
+        if (this._isNavigating) {
+            console.log('⚠️ [NAV] Already navigating...');
+            return;
+        }
+        
+        this._isNavigating = true;
+        
+        // ✅ 현재 인덱스 찾기 (정규화된 경로 사용)
+        const currentIdx = this.findImageIndexInList(
+            this.selectedImagePath, 
+            this.gridViewImageList
+        );
+        
+        if (currentIdx === -1) {
+            // ✅ gridViewImageIndex 사용 (fallback)
+            const fallbackIdx = this.gridViewImageIndex >= 0 ? this.gridViewImageIndex : 0;
+            console.warn('⚠️ [NAV] Current image not found in list, using gridViewImageIndex:', fallbackIdx);
+            if (fallbackIdx >= 0 && fallbackIdx < this.gridViewImageList.length) {
+                this.gridViewImageIndex = fallbackIdx;
+                this._isNavigating = false;
+                // fallback 인덱스로 재시도
+                this.navigateSingleImageGrid(direction);
+                return;
+            } else {
+                console.warn('⚠️ [NAV] Selected:', this.selectedImagePath);
+                console.warn('⚠️ [NAV] List:', this.gridViewImageList.slice(0, 3));
+                this._isNavigating = false;
+                return;
+            }
+        }
+        
+        // ✅ 다음 인덱스 계산 및 범위 확인
+        let nextIdx = currentIdx + direction;
+        const listLength = this.gridViewImageList.length;
+        
+        if (nextIdx < 0) {
+            nextIdx = listLength - 1;
+        } else if (nextIdx >= listLength) {
+            nextIdx = 0;
+        }
+        
+        // ✅ 유효성 확인
+        if (nextIdx < 0 || nextIdx >= listLength) {
+            console.error('❌ [NAV] Invalid nextIdx:', nextIdx, 'listLength:', listLength);
+            this._isNavigating = false;
+            return;
+        }
+        
+        const nextImagePath = this.gridViewImageList[nextIdx];
+        if (!nextImagePath) {
+            console.error('❌ [NAV] nextImagePath is undefined at index:', nextIdx);
+            this._isNavigating = false;
+            return;
+        }
+        
+        // ✅ 인덱스 업데이트
+        this.gridViewImageIndex = nextIdx;
+        
+        console.log('✅ [NAV] Grid navigation', direction > 0 ? '→' : '←', 
+                    'from', currentIdx, 'to', nextIdx, 'of', listLength);
+        
+        this.loadImage(nextImagePath)
+            .then(() => {
+                console.log('✅ [NAV] Successfully loaded image at index:', nextIdx);
+                
+                // ✅ 하이라이트 업데이트
+                const grid = document.getElementById('image-grid');
+                if (grid) {
+                    const wraps = grid.querySelectorAll('.grid-thumb-wrap');
+                    wraps.forEach((wrap, index) => {
+                        if (index === nextIdx) {
+                            wrap.classList.add('highlighted');
+                        } else {
+                            wrap.classList.remove('highlighted');
+                        }
+                    });
+                }
+                
+                // ✅ 그리드 스크롤 업데이트
+                // nextIdx는 전체 그리드 인덱스이므로, selectedIndices에서 찾아서 스크롤 계산
+                if (this.gridViewSaveState && this.gridViewSaveState.selectedIndices) {
+                    const selectedIdx = this.gridViewSaveState.selectedIndices.indexOf(nextIdx);
+                    if (selectedIdx >= 0) {
+                        // 선택된 이미지 목록에 있으면 해당 인덱스로 스크롤 계산
+                        this.updateGridScrollOnNavigation(selectedIdx);
+                    } else {
+                        // 선택된 이미지 목록에 없으면 nextIdx를 직접 사용 (전체 그리드 기준)
+                        console.log('⚠️ [NAV] nextIdx not in selectedIndices, using direct scroll');
+                        const thumbHeight = 330 + 10;
+                        const colCount = this.gridCols || 3;
+                        const row = Math.floor(nextIdx / colCount);
+                        const targetScrollTop = row * thumbHeight;
+                        const grid = document.getElementById('image-grid');
+                        const scrollWrapper = grid?.parentElement;
+                        if (scrollWrapper) {
+                            scrollWrapper.scrollTo({
+                                top: targetScrollTop,
+                                behavior: 'smooth'
+                            });
+                        }
+                    }
+                }
+                
+                this._isNavigating = false;
+            })
+            .catch(err => {
+                console.error('❌ [NAV] Failed to load image:', err);
+                this._isNavigating = false;
+            });
+    }
+    
+    /**
+     * ✅ 파일 탐색기 모드 네비게이션
+     * @param {number} direction -1 (이전), 1 (다음)
+     */
+    navigateSingleImageMode(direction) {
+        if (!this.singleViewImageList || !Array.isArray(this.singleViewImageList) || this.singleViewImageList.length === 0) {
+            console.warn('⚠️ [NAV] No images in single view list');
+            return;
+        }
+        
+        if (this._isNavigating) {
+            console.log('⚠️ [NAV] Already navigating...');
+            return;
+        }
+        this._isNavigating = true;
+        
+        let nextIndex = this.singleViewImageIndex + direction;
+        
+        if (nextIndex < 0) {
+            nextIndex = this.singleViewImageList.length - 1;
+        } else if (nextIndex >= this.singleViewImageList.length) {
+            nextIndex = 0;
+        }
+        
+        this.singleViewImageIndex = nextIndex;
+        const nextImagePath = this.singleViewImageList[nextIndex];
+        
+        this.loadImage(nextImagePath)
+            .then(() => {
+                console.log('✅ [NAV] Loaded image', nextIndex, nextImagePath);
+                
+                // ✅ 파일 탐색기에서 선택 표시 업데이트
+                const allLinks = Array.from(this.dom.fileExplorer.querySelectorAll('a[data-path]'));
+                allLinks.forEach(link => link.classList.remove('selected'));
+                const targetLink = allLinks.find(a => {
+                    const linkPath = a.dataset.path;
+                    if (!linkPath) return false;
+                    return this.normalizePath(linkPath) === this.normalizePath(nextImagePath);
+                });
+                if (targetLink) {
+                    targetLink.classList.add('selected');
+                    targetLink.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+                
+                this._isNavigating = false;
+            })
+            .catch(err => {
+                console.error('❌ [NAV] Load failed', err);
+                this._isNavigating = false;
+            });
+    }
+
+    /**
+     * ✅ 이전 이미지 (← / ArrowLeft)
+     */
+    navigatePrevious() {
+        // ✅ 각 모드별로 명시적 확인
+        if (this.viewMode === 'single') {
+            this.navigateSingleImageMode(-1);
+        } else if (this.viewMode === 'gridImage') {
+            this.navigateSingleImageGrid(-1);
+        } else {
+            console.warn('⚠️ [NAV] Invalid viewMode:', this.viewMode);
+        }
+    }
+    
+    /**
+     * ✅ 다음 이미지 (→ / ArrowRight)
+     */
+    navigateNext() {
+        // ✅ 각 모드별로 명시적 확인
+        if (this.viewMode === 'single') {
+            this.navigateSingleImageMode(1);
+        } else if (this.viewMode === 'gridImage') {
+            this.navigateSingleImageGrid(1);
+        } else {
+            console.warn('⚠️ [NAV] Invalid viewMode:', this.viewMode);
+        }
+    }
+
+    /**
+     * ✅ 더블클릭 시 2번 이동 (파일탐색기 모드)
+     */
+    handleDoubleClickNavigation() {
+        // 이미 네비게이션 중이면 스킵
+        if (this._isNavigating) {
+            console.log('⚠️ [DBLCLICK_NAV] 이미 네비게이션 중입니다. 스킵합니다.');
+            return;
+        }
+        
+        // viewMode 확인
+        if (this.viewMode !== 'single') {
+            console.warn('⚠️ [DBLCLICK_NAV] single 모드가 아닙니다. viewMode:', this.viewMode);
+            return;
+        }
+        
+        console.log('🔄 [DBLCLICK_NAV] 더블클릭: 2번 이동 시작');
+        this._isNavigating = true;
+        
+        try {
+            // ✅ 첫 번째 이동
+            this.navigateNext();
+            console.log('  → [DBLCLICK_NAV] 첫 번째 이동 완료');
+            
+            // ✅ 두 번째 이동 (150ms 후)
+            setTimeout(() => {
+                if (this.viewMode === 'single') {  // 모드가 변경되지 않았는지 확인
+                    this.navigateNext();
+                    console.log('  → [DBLCLICK_NAV] 두 번째 이동 완료');
+                } else {
+                    console.log('⚠️ [DBLCLICK_NAV] 모드가 변경되어 두 번째 이동 취소');
+                }
+                this._isNavigating = false;
+            }, 150);
+        } catch (error) {
+            console.error('❌ [DBLCLICK_NAV] 더블클릭 네비게이션 실패:', error);
+            this._isNavigating = false;
+        }
+    }
+    
+    /**
+     * ✅ 경로 정규화 헬퍼 함수
+     * @param {string} path 경로
+     * @returns {string} 정규화된 경로
+     */
+    normalizePath(path) {
+        if (!path) return '';
+        return path.replace(/\\/g, '/').toLowerCase();
+    }
+
+    /**
+     * ✅ 이미지 목록에서 인덱스 찾기 (경로 정규화 사용)
+     * @param {string} imagePath 찾을 이미지 경로
+     * @param {Array<string>} imageList 이미지 목록
+     * @returns {number} 인덱스 (-1 if not found)
+     */
+    findImageIndexInList(imagePath, imageList) {
+        if (!imagePath || !imageList || !Array.isArray(imageList) || imageList.length === 0) {
+            return -1;
+        }
+        
+        const normalizedTarget = this.normalizePath(imagePath);
+        
+        return imageList.findIndex(item => 
+            this.normalizePath(item) === normalizedTarget
+        );
+    }
+
+    /**
+     * ✅ 화살표 버튼 표시/숨김
+     */
+    updateArrowButtonVisibility() {
+        const prevBtn = document.getElementById('prev-btn');
+        const nextBtn = document.getElementById('next-btn');
+        
+        if (!prevBtn || !nextBtn) return;
+        
+        // ✅ viewMode가 'single' 또는 'gridImage'이면 보임
+        const shouldShow = this.viewMode === 'single' || this.viewMode === 'gridImage';
+        
+        if (shouldShow) {
+            prevBtn.style.display = 'block';
+            nextBtn.style.display = 'block';
+            console.log('✅ [ARROW] Arrow buttons visible, viewMode:', this.viewMode);
+        } else {
+            prevBtn.style.display = 'none';
+            nextBtn.style.display = 'none';
+            console.log('❌ [ARROW] Arrow buttons hidden, viewMode:', this.viewMode);
+        }
+    }
+    
+    /**
+     * ✅ 현재 그리드의 칸수와 셀 높이를 동적으로 계산
+     * @returns {Object} { cols, cellHeight, cellWidth, wrapperHeight, gap, margin }
+     */
+    getGridDimensions() {
+        const grid = document.getElementById('image-grid');
+        if (!grid) {
+            return { cols: 3, cellHeight: 340, cellWidth: 300, wrapperHeight: 800, gap: 10, margin: 0 };
+        }
+        
+        // ✅ 그리드 컨테이너
+        const gridWrapper = grid.parentElement;
+        const wrapperWidth = gridWrapper?.clientWidth || 900;
+        const wrapperHeight = gridWrapper?.clientHeight || 800;
+        
+        // ✅ 첫 번째 아이템 크기 측정
+        const firstItem = grid.querySelector('.grid-thumb-wrap');
+        if (!firstItem) {
+            return { cols: 3, cellHeight: 340, cellWidth: 300, wrapperHeight, gap: 10, margin: 0 };
+        }
+        
+        const rect = firstItem.getBoundingClientRect();
+        const computedStyle = window.getComputedStyle(firstItem);
+        
+        // ✅ 실제 셀 크기 (padding, margin 포함)
+        const margin = parseFloat(computedStyle.margin) || 0;
+        const gap = this._getGridGap(grid);
+        
+        const cellWidth = rect.width;
+        const cellHeight = rect.height;
+        const totalCellWidth = cellWidth + 2 * margin + gap;
+        
+        // ✅ 실제 칼럼 수 계산
+        const cols = Math.max(1, Math.floor(wrapperWidth / totalCellWidth));
+        
+        return {
+            cols,
+            cellHeight: cellHeight + 2 * margin,
+            cellWidth,
+            wrapperHeight,
+            gap,
+            margin
+        };
+    }
+
+    /**
+     * ✅ 그리드의 gap 값 계산
+     * @param {HTMLElement} grid 그리드 요소
+     * @returns {number} gap 값 (px)
+     */
+    _getGridGap(grid) {
+        const style = window.getComputedStyle(grid);
+        const gap = style.gap || '0px';
+        const [gapH] = gap.split(' ');
+        return parseFloat(gapH) || 0;
+    }
+
+    /**
+     * ✅ 그리드 이미지 보기 모드에서 정확한 스크롤 계산
+     * - 네비게이션한 이미지의 인덱스를 기반으로 스크롤 위치 계산
+     * - 이미지 이동만큼 스크롤이 변함
+     */
+    updateGridScrollOnNavigation(imageIndexInList) {
+        if (this.viewMode !== 'gridImage') {
+            console.warn('⚠️ [SCROLL] Not in gridImage mode');
+            return;
+        }
+        
+        if (!this.gridViewSaveState) {
+            console.warn('⚠️ [SCROLL] gridViewSaveState not set');
+            return;
+        }
+        
+        const selectedIndices = this.gridViewSaveState.selectedIndices;
+        
+        // ✅ 검증 강화
+        if (!Array.isArray(selectedIndices)) {
+            console.warn('⚠️ [SCROLL] selectedIndices is not an array:', selectedIndices);
+            return;
+        }
+        
+        if (selectedIndices.length === 0) {
+            console.warn('⚠️ [SCROLL] selectedIndices is empty');
+            return;
+        }
+        
+        if (imageIndexInList < 0 || imageIndexInList >= selectedIndices.length) {
+            console.warn('⚠️ [SCROLL] imageIndexInList out of range:', 
+                         imageIndexInList, '/', selectedIndices.length);
+            return;
+        }
+        
+        const actualGridIndex = selectedIndices[imageIndexInList];
+        
+        // ✅ 그리드 요소 확인
+        const grid = document.getElementById('image-grid');
+        const scrollWrapper = grid?.parentElement;
+        
+        if (!grid || !scrollWrapper) {
+            console.warn('⚠️ [SCROLL] Grid or scrollWrapper not found');
+            return;
+        }
+        
+        // ✅ 동적 그리드 차원 계산
+        const { cols, cellHeight, wrapperHeight } = this.getGridDimensions();
+        
+        // ✅ 행 계산 (화살표 이동 수 // cols)
+        const row = Math.floor(actualGridIndex / cols);
+        
+        // ✅ 스크롤 위치 = 행 위치 × 셀 높이
+        const targetScrollTop = row * cellHeight;
+        
+        // ✅ 선택사항: 셀을 뷰포트 중앙에 배치
+        const centerOffset = Math.max(0, (wrapperHeight - cellHeight * 1.5) / 2);
+        const adjustedScrollTop = Math.max(0, targetScrollTop - centerOffset);
+        
+        console.log('✅ [SCROLL] Updated', {
+            imageIndexInList,
+            actualGridIndex,
+            row,
+            cols,
+            cellHeight,
+            targetScrollTop,
+            adjustedScrollTop
+        });
+        
+        // ✅ 부드러운 스크롤
+        scrollWrapper.scrollTo({
+            top: adjustedScrollTop,
+            behavior: 'smooth'
+        });
+    }
+
+    /**
+     * ✅ 그리드 복귀 시 초기 스크롤 위치 계산
+     * @param {Array<number>} selectedIndices 선택된 인덱스 배열
+     * @returns {number} 스크롤 위치 (px)
+     */
+    _calculateGridScrollPosition(selectedIndices) {
+        if (!Array.isArray(selectedIndices) || selectedIndices.length === 0) {
+            return 0;
+        }
+        
+        // ✅ 현재 보고 있는 이미지의 인덱스 (gridViewImageIndex 사용)
+        let targetIndex = 0;
+        if (this.gridViewImageIndex >= 0 && this.gridViewSaveState) {
+            // gridViewImageIndex는 전체 그리드 이미지 목록의 인덱스
+            targetIndex = this.gridViewImageIndex;
+        } else {
+            // fallback: 첫 번째 선택된 항목의 인덱스
+            targetIndex = selectedIndices[0];
+        }
+        
+        return this._calculateGridScrollPositionWithIndex(targetIndex, selectedIndices);
+    }
+
+    /**
+     * ✅ 인덱스를 받아서 스크롤 위치 계산
+     * @param {number} targetIndex 타겟 인덱스
+     * @param {Array<number>} selectedIndices 선택된 인덱스 배열 (참고용)
+     * @returns {number} 스크롤 위치 (px)
+     */
+    _calculateGridScrollPositionWithIndex(targetIndex, selectedIndices) {
+        // ✅ 동적 그리드 차원
+        const { cols, cellHeight } = this.getGridDimensions();
+        
+        // ✅ 행 계산
+        const row = Math.floor(targetIndex / cols);
+        
+        // ✅ 스크롤 위치
+        const scrollTop = row * cellHeight;
+        
+        console.log('✅ [CALC_SCROLL]', {
+            targetIndex,
+            cols,
+            row,
+            cellHeight,
+            scrollTop
+        });
+        
+        return scrollTop;
+    }
+    
+    /**
+     * 그리드에서 특정 이미지로 스크롤
+     * @param {number} idx 이미지 인덱스
+     */
+    scrollToGridImage(idx) {
+        const grid = document.getElementById('image-grid');
+        if (!grid) return;
+        
+        const wraps = Array.from(grid.querySelectorAll('.grid-thumb-wrap'));
+        if (idx >= 0 && idx < wraps.length) {
+            const targetWrap = wraps[idx];
+            targetWrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
     }
 
     updateGridSquaresPixel() {
