@@ -2691,6 +2691,23 @@ class WaferMapViewer {
         this.currentImageBitmap = null;
 
         this.selectedImagePath = '';
+
+        // ✅ Chip selection panel 숨김
+        const chipSelectionPanel = document.getElementById('chip-selection-panel');
+        if (chipSelectionPanel) {
+            chipSelectionPanel.style.display = 'none';
+        }
+        
+        const selectedChipsList = document.getElementById('selected-chips-list');
+        if (selectedChipsList) {
+            selectedChipsList.style.display = 'none';
+        }
+        
+        // ✅ Arrow buttons 숨김
+        const prevBtn = document.getElementById('prev-btn');
+        const nextBtn = document.getElementById('next-btn');
+        if (prevBtn) prevBtn.style.display = 'none';
+        if (nextBtn) nextBtn.style.display = 'none';
     }
 
     // 초기 상태 표시 (검색창과 상단 컨트롤만 보이는 상태)
@@ -2751,6 +2768,26 @@ class WaferMapViewer {
         
         // ✅ Chip Selection 패널 완전히 닫기
         this.closeChipSelectionPanel();
+
+        // ✅ Chip selection panel 명시적으로 숨김
+        const chipSelectionPanel = document.getElementById('chip-selection-panel');
+        if (chipSelectionPanel) {
+            chipSelectionPanel.style.display = 'none';
+        }
+        
+        const selectedChipsList = document.getElementById('selected-chips-list');
+        if (selectedChipsList) {
+            selectedChipsList.style.display = 'none';
+        }
+        
+        // ✅ Arrow buttons 숨김
+        const prevBtn = document.getElementById('prev-btn');
+        const nextBtn = document.getElementById('next-btn');
+        if (prevBtn) prevBtn.style.display = 'none';
+        if (nextBtn) nextBtn.style.display = 'none';
+        
+        // ✅ viewMode 초기화
+        this.viewMode = null;
 
         if (this.dom.viewerContainer) {
             this.dom.viewerContainer.classList.add('grid-mode');
@@ -7926,6 +7963,17 @@ class WaferMapViewer {
                     console.warn('Failed to load chip positions:', err);
                 }
             }
+
+            // ✅ viewMode 설정: wafer map explorer에서 호출된 경우 'single'로 설정
+            if (!this.singleImageFromGrid) {
+                // wafer map explorer나 label explorer에서 호출된 경우
+                this.viewMode = 'single';
+                this.singleViewImageList = [fullPath];
+                this.singleViewImageIndex = 0;
+            }
+
+            // ✅ Arrow button visibility 업데이트
+            this.updateArrowButtonVisibility();
         } catch (err) {
             console.error(`Failed to load image: ${path}`, err);
 
@@ -13200,6 +13248,20 @@ class WaferMapViewer {
         if (panel) {
             panel.style.display = 'none';
         }
+        
+        // ✅ 그리드 숨길 때는 chip selection을 유지 (단일 이미지 모드에서 사용)
+        // viewMode가 null이면 chip selection도 숨김
+        if (!this.viewMode || (this.viewMode !== 'single' && this.viewMode !== 'gridImage')) {
+            const chipSelectionPanel = document.getElementById('chip-selection-panel');
+            if (chipSelectionPanel) {
+                chipSelectionPanel.style.display = 'none';
+            }
+            
+            const selectedChipsList = document.getElementById('selected-chips-list');
+            if (selectedChipsList) {
+                selectedChipsList.style.display = 'none';
+            }
+        }
 
         // 그리드 상태 초기화
 
@@ -14730,144 +14792,42 @@ class WaferMapViewer {
     }
     
     enterSingleImageMode(idx) {
-        // 🔥 그리드에서 단일 이미지 모드로 전환 시 savedViewState 업데이트
-        const grid = document.getElementById('image-grid');
-        const isLabelExplorerGrid = grid && grid.hasAttribute('data-label-explorer-grid');
-        const scrollWrapper = grid?.parentElement;  // .grid-scroll-wrapper
+        console.log('[ENTER_SINGLE] Index:', idx);
         
-        // ✅ viewMode 설정
+        // viewMode를 'gridImage'로 설정
         this.viewMode = 'gridImage';
         this.singleImageFromGrid = true;
         
-        // ✅ 현재 그리드의 모든 이미지를 사용
-        const currentImages = this.currentGridImages || this.selectedImages || [];
+        const currentImages = this.currentGridImages;
+        this.selectedImages = currentImages;
         this.gridViewImageList = [...currentImages];
         
-        // ✅ 현재 이미지 인덱스를 그리드 이미지 목록의 인덱스로 변환
         const normalizedCurrent = this.normalizePath(this.selectedImages[idx]);
         const actualGridIndex = currentImages.findIndex(img => {
             const normalizedImg = this.normalizePath(img);
             return normalizedImg === normalizedCurrent;
         });
         
-        this.gridViewImageIndex = actualGridIndex >= 0 ? actualGridIndex : idx;
+        this.gridViewImageIndex = actualGridIndex !== -1 ? actualGridIndex : idx;
         
-        // 선택된 이미지 중에서의 인덱스 (스크롤 계산용)
-        const selectedIndices = this.gridSelectedIdxs || [];
-        const imageIndexInList = selectedIndices.indexOf(idx);
+        console.log('[ENTER_SINGLE] gridViewImageIndex:', this.gridViewImageIndex);
         
-        console.log('✅ [GRID_VIEW] 그리드 이미지 뷰 모드 진입', {
-            전체그리드인덱스: idx,
-            실제그리드인덱스: this.gridViewImageIndex,
-            선택된목록인덱스: imageIndexInList,
-            선택된인덱스들: selectedIndices,
-            전체이미지수: this.gridViewImageList.length,
-            선택된이미지수: selectedIndices.length
-        });
-        
-        // ✅ 그리드 뷰 상태 저장 (선택된 인덱스들도 저장)
-        this.gridViewSaveState = {
-            type: 'grid',
-            images: [...currentImages],  // ✅ 모든 그리드 이미지
-            selectedIndices: [...selectedIndices],  // 선택된 그리드 인덱스들
-            scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
-            isCompositeMode: this.isCompositeMode,
-            compositeSession: this.compositeSession ? {...this.compositeSession} : null
-        };
-        
-        // 🔥 Label Explorer Grid가 아닐 때만 savedViewState 업데이트 (하위 호환성)
-        if (!isLabelExplorerGrid && this.selectedImages && this.selectedImages.length > 0) {
-            const savedScrollTop = scrollWrapper ? scrollWrapper.scrollTop : 0;
-            
-            // 🔥 Composite Mode 상태도 함께 저장
-            this.savedViewState = {
-                type: 'grid',
-                images: [...this.selectedImages],
-                scrollTop: savedScrollTop,
-                isCompositeMode: this.isCompositeMode,  // 🔥 Composite Mode 상태 저장
-                compositeSession: this.compositeSession ? {...this.compositeSession} : null  // 🔥 Composite Session 저장
-            };
-            console.log('💾 [SAVE] Grid → 단일 이미지 (enterSingleImageMode) 시 상태 저장:', {
-                images: this.selectedImages.length,
-                scrollTop: savedScrollTop,
-                isCompositeMode: this.isCompositeMode
-            });
-        } else if (isLabelExplorerGrid) {
-            console.log('🔍 [LABEL_EXPLORER] Label Explorer Grid에서 단일 이미지 전환 - 상태 저장 안 함');
-        }
-
-        this.hideGrid();
-        
-        // ✅ 화살표 버튼 표시
+        // 1. Arrow button 표시
         this.updateArrowButtonVisibility();
         
-        // 🔥 키보드 이벤트 핸들러 먼저 설정 (ESC 키)
-        document.addEventListener('keydown', this.boundGridEscapeHandler = (e) => {
-            // 🔥 상세 보기 모드에서 ESC 키로 빠져나가기
-            if (this.detailMode && e.key === 'Escape') {
-                console.log('🚪 [ESC] 상세 보기 모드 종료');
-                this.exitDetailMode();
-                return;
-            }
-            
-            if (e.key === 'Escape') {
-                this.exitSingleImageViewMode();
-            } else if (e.key === 'ArrowLeft') {
-                e.preventDefault();
-                e.stopPropagation();
-                this.navigatePrevious();
-            } else if (e.key === 'ArrowRight') {
-                e.preventDefault();
-                e.stopPropagation();
-                this.navigateNext();
-            }
-        });
-
-        // ✅ 그리드 이미지 네비게이션 설정 (← → 키) - 선택된 이미지들만 순회
-        this.setupGridImageNavigation();
-
-        // ✅ 더블클릭한 이미지 하이라이트
-        if (grid) {
-            const wraps = grid.querySelectorAll('.grid-thumb-wrap');
-            wraps.forEach((wrap, index) => {
-                if (index === idx) {
-                    wrap.classList.add('highlighted'); // 더블클릭 이미지
-                } else {
-                    wrap.classList.remove('highlighted');
-                }
-            });
-        }
-
-        // 🔥 이미지 로드 (비동기)
+        // 2. 그리드 숨김
+        this.hideGrid(false);
+        
+        // 3. 이미지 로드
         this.loadImage(this.selectedImages[idx]).then(() => {
-            // 🔥 loadImage 완료 후 imageCanvas에도 더블클릭 핸들러 설정 (이벤트 버블링 보완)
-            if (this.dom.imageCanvas) {
-                this.dom.imageCanvas.ondblclick = (e) => {
-                    e.stopPropagation();
-                    console.log('🖱️ [DBLCLICK] 이미지 캔버스 더블클릭:', {
-                        viewMode: this.viewMode
-                    });
-                    
-                    // ✅ viewMode 기준으로 처리
-                    if (this.viewMode === 'single') {
-                        // 파일탐색기 모드: 2번 이동
-                        console.log('🖱️ [DBLCLICK] → 이미지 캔버스: 파일탐색기 모드 2번 이동');
-                        this.handleDoubleClickNavigation();
-                    } else if (this.viewMode === 'gridImage') {
-                        // 그리드 이미지 모드: 그리드 복귀
-                        console.log('🖱️ [DBLCLICK] → 이미지 캔버스: 그리드 복귀');
-                        this.exitSingleImageViewMode();
-                    }
-                };
+            // 4. Chip selection 업데이트
+            if (this.chipAnnotator) {
+                this.chipAnnotator.updateSelectedChipsList();
             }
-            console.log('✅ [SETUP] 이미지 로드 완료, 더블클릭 핸들러 설정됨');
-            console.log('✅ [SETUP] viewMode:', this.viewMode);
-            console.log('✅ [SETUP] savedViewState:', this.savedViewState);
-        }).catch(err => {
-            console.error('❌ [ERROR] loadImage 실패:', err);
+            console.log('[ENTER_SINGLE] Ready');
+        }).catch(error => {
+            console.error('[ENTER_SINGLE] Error:', error);
         });
-
-        this.selectedImagePath = this.selectedImages[idx];
     }
 
     /**
@@ -14904,6 +14864,19 @@ class WaferMapViewer {
         
         // ✅ Step 3: 화살표 버튼 숨김 (viewMode = null이므로)
         this.updateArrowButtonVisibility();
+        
+        // ✅ Chip selection 숨김
+        if (this.chipAnnotator) {
+            const selectedChipsList = document.getElementById('selected-chips-list');
+            if (selectedChipsList) {
+                selectedChipsList.style.display = 'none';
+            }
+            
+            const chipSelectionPanel = document.getElementById('chip-selection-panel');
+            if (chipSelectionPanel) {
+                chipSelectionPanel.style.display = 'none';
+            }
+        }
         
         // ✅ Step 4: 그리드 복귀 및 스크롤 복원
         if (savedViewMode === 'gridImage') {
@@ -15303,20 +15276,52 @@ class WaferMapViewer {
     updateArrowButtonVisibility() {
         const prevBtn = document.getElementById('prev-btn');
         const nextBtn = document.getElementById('next-btn');
+        const navButtons = document.getElementById('single-image-nav-buttons');
         
-        if (!prevBtn || !nextBtn) return;
+        if (!prevBtn || !nextBtn) {
+            console.warn('[Arrow] Navigation buttons not found');
+            return;
+        }
         
-        // ✅ viewMode가 'single' 또는 'gridImage'이면 보임
+        // viewMode가 'single' 또는 'gridImage'일 때 표시
         const shouldShow = this.viewMode === 'single' || this.viewMode === 'gridImage';
         
+        console.log('[Arrow] shouldShow:', shouldShow, 'viewMode:', this.viewMode);
+        
         if (shouldShow) {
-            prevBtn.style.display = 'block';
-            nextBtn.style.display = 'block';
-            console.log('✅ [ARROW] Arrow buttons visible, viewMode:', this.viewMode);
+            if (navButtons) {
+                navButtons.style.display = 'flex';
+                navButtons.style.visibility = 'visible';
+                navButtons.style.pointerEvents = 'auto';
+            }
+            if (prevBtn) {
+                prevBtn.style.display = 'flex';
+                prevBtn.style.visibility = 'visible';
+                prevBtn.style.pointerEvents = 'auto';
+            }
+            if (nextBtn) {
+                nextBtn.style.display = 'flex';
+                nextBtn.style.visibility = 'visible';
+                nextBtn.style.pointerEvents = 'auto';
+            }
+            console.log('[Arrow] Buttons visible - left and right');
         } else {
-            prevBtn.style.display = 'none';
-            nextBtn.style.display = 'none';
-            console.log('❌ [ARROW] Arrow buttons hidden, viewMode:', this.viewMode);
+            if (navButtons) {
+                navButtons.style.display = 'none';
+                navButtons.style.visibility = 'hidden';
+                navButtons.style.pointerEvents = 'none';
+            }
+            if (prevBtn) {
+                prevBtn.style.display = 'none';
+                prevBtn.style.visibility = 'hidden';
+                prevBtn.style.pointerEvents = 'none';
+            }
+            if (nextBtn) {
+                nextBtn.style.display = 'none';
+                nextBtn.style.visibility = 'hidden';
+                nextBtn.style.pointerEvents = 'none';
+            }
+            console.log('[Arrow] Buttons hidden');
         }
     }
     

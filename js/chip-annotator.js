@@ -56,7 +56,7 @@ export class ChipAnnotator {
         this.hasDragged = false; // 🔥 드래그 발생 여부
         this.ctrlClickStartPos = null; // Store mouse position for Ctrl+click (to detect drag)
         this.ctrlClickStartTime = null; // Store time for Ctrl+click (to detect drag)
-        this._lastChipListClickIndex = null; // 🔥 Chip Selection 패널에서 Shift 클릭 범위 선택을 위한 마지막 클릭 인덱스
+        this.lastChipListClickIndex = null; // 🔥 Chip Selection 패널에서 Shift 클릭 범위 선택을 위한 마지막 클릭 인덱스
 
         // Colors
         this.gridColor = 'rgba(0, 255, 255, 0.3)';
@@ -479,102 +479,113 @@ export class ChipAnnotator {
      */
     updateSelectedChipsList() {
         if (!this.viewer || !this.viewer.dom) return;
+
+        const viewer = this.viewer;
         
-        // 🔥 그리드 모드에서는 표시하지 않음 (강제 숨김)
-        if (this.viewer.gridMode) {
+        console.log('[updateSelectedChipsList] gridMode:', viewer.gridMode, 'viewMode:', viewer.viewMode, 'selectedChips:', this.selectedChips.size);
+
+        // 1. gridMode이면 모든 칩 관련 UI 숨김
+        if (viewer.gridMode) {
             const listContainer = document.getElementById('selected-chips-list');
             if (listContainer) {
                 listContainer.style.display = 'none';
                 listContainer.style.visibility = 'hidden';
                 listContainer.style.pointerEvents = 'none';
             }
-            // 모든 칩 선택 관련 요소도 숨기기
-            const allChipSelectors = [
-                '#chip-selection-panel',
-                '#selected-chips-list',
-                ...Array.from(document.querySelectorAll('[id*="chip-selection"]')),
-                ...Array.from(document.querySelectorAll('[class*="chip-selection"]')),
-                ...Array.from(document.querySelectorAll('[id*="selected-chips"]')),
-                ...Array.from(document.querySelectorAll('[class*="selected-chips"]'))
-            ];
-            allChipSelectors.forEach(el => {
-                if (el && el.style) {
-                    el.style.display = 'none';
-                    el.style.visibility = 'hidden';
-                    el.style.pointerEvents = 'none';
-                }
-            });
             return;
         }
-        
-        // 🔥 이미지가 로드되지 않았을 때는 표시하지 않음
-        if (!this.viewer.currentImage) {
+
+        // 2. viewMode가 'single' 또는 'gridImage'가 아니면 숨김
+        if (viewer.viewMode !== 'single' && viewer.viewMode !== 'gridImage') {
             const listContainer = document.getElementById('selected-chips-list');
             if (listContainer) {
                 listContainer.style.display = 'none';
             }
             return;
         }
-        
+
+        // 3. 현재 이미지가 없으면 숨김
+        if (!viewer.currentImage) {
+            const listContainer = document.getElementById('selected-chips-list');
+            if (listContainer) {
+                listContainer.style.display = 'none';
+            }
+            return;
+        }
+
+        // 4. listContainer 찾거나 생성
         let listContainer = document.getElementById('selected-chips-list');
+        
         if (!listContainer) {
-            // 리스트 컨테이너가 없으면 생성 - 이미지 캔버스 좌측 중앙에 배치
             const viewerContainer = this.viewer.dom.viewerContainer;
-            if (!viewerContainer) return;
-            
+            if (!viewerContainer) {
+                console.warn('[updateSelectedChipsList] viewerContainer not found');
+                return;
+            }
+
+            // listContainer 생성 - color-legend-bottom과 동일한 스타일
             listContainer = document.createElement('div');
             listContainer.id = 'selected-chips-list';
+            
+            // color-legend-bottom의 높이를 계산하여 그 위에 배치
+            const colorLegendBottom = document.getElementById('color-legend-bottom');
+            let bottomPosition = 10; // 기본값
+            
+            if (colorLegendBottom && colorLegendBottom.offsetHeight > 0) {
+                // color-legend-bottom의 높이 + 간격(10px)
+                bottomPosition = colorLegendBottom.offsetHeight + 10;
+            } else {
+                // color-legend-bottom이 아직 렌더링되지 않은 경우 예상 높이 사용
+                bottomPosition = 180; // 대략적인 높이 + 간격
+            }
+            
             listContainer.style.cssText = `
                 position: absolute;
-                left: 10px;
-                top: 50%;
-                transform: translateY(-50%);
-                width: 120px;
-                min-width: 120px;
-                max-width: 120px;
-                max-height: 30vh;
-                background: rgba(35, 35, 35, 0.95);
-                border: 1px solid #444;
-                border-radius: 4px;
-                padding: 8px;
-                overflow-y: auto;
-                display: flex;
+                right: 10px;    /* color-legend-bottom과 동일 */
+                width: 115px;   /* color-legend-bottom과 동일 */
+                bottom: ${bottomPosition}px;  /* color-legend-bottom의 위 */
+                
+                background-color: rgba(37, 37, 38, 0.9);  /* color-legend와 동일 */
+                border: 1px solid var(--border-color);  /* color-legend와 동일 */
+                border-radius: 4px;  /* color-legend와 동일 */
+                padding: 8px 10px;  /* color-legend와 동일 */
+                z-index: 21;
+                
+                display: none;
                 flex-direction: column;
-                font-size: 11px;
-                z-index: 100;
-                backdrop-filter: blur(4px);
-                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+                gap: 0;
+                font-size: 11px;  /* color-legend와 유사 */
+                color: #ccc;
             `;
-            
-            // 🔥 스크롤 이벤트 전파 차단 (이미지 캔버스 스크롤과 분리)
-            listContainer.addEventListener('wheel', (e) => {
-                e.stopPropagation();
-            }, { passive: false, capture: true });
-            
+
+            // Header 생성
             const header = document.createElement('div');
             header.style.cssText = `
                 font-weight: bold;
-                padding: 6px 0;
-                border-bottom: 1px solid #555;
-                margin-bottom: 6px;
-                font-size: 12px;
+                padding: 3px 0;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+                margin-bottom: 3px;
+                font-size: 11px;
                 color: #fff;
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
+                white-space: nowrap;
+                line-height: 1.2;
             `;
-            
+
             const titleSpan = document.createElement('span');
-            titleSpan.textContent = 'Chip Selection';
+            titleSpan.textContent = 'Selection';
             header.appendChild(titleSpan);
-            
+
             const closeBtn = document.createElement('span');
-            closeBtn.textContent = '×';
+            closeBtn.textContent = '✕';
             closeBtn.style.cssText = `
                 cursor: pointer;
-                font-size: 18px;
+                font-size: 14px;
                 color: #999;
-                padding: 0 4px;
+                padding: 0 2px;
+                line-height: 1;
             `;
             closeBtn.onclick = () => {
                 listContainer.style.display = 'none';
@@ -582,126 +593,227 @@ export class ChipAnnotator {
             header.appendChild(closeBtn);
             
             listContainer.appendChild(header);
-            
-            // 🔥 검색 입력 필드 추가
-            const searchContainer = document.createElement('div');
-            searchContainer.style.cssText = `
-                margin-bottom: 6px;
-            `;
-            
-            const searchInput = document.createElement('input');
-            searchInput.type = 'text';
-            searchInput.placeholder = 'x,y 또는 x,y:x,y';
-            searchInput.style.cssText = `
-                width: 100%;
-                padding: 4px 6px;
-                background: #2a2a2a;
-                border: 1px solid #555;
-                border-radius: 3px;
-                color: #fff;
-                font-size: 11px;
-                box-sizing: border-box;
-            `;
-            
-            // 🔥 Enter 키로 좌표 입력 처리
-            searchInput.onkeydown = (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    this.selectChipsByCoordinates(searchInput.value);
-                    searchInput.value = '';
-                }
-            };
-            
-            searchContainer.appendChild(searchInput);
-            listContainer.appendChild(searchContainer);
-            
+
+            // 칩 목록 컨테이너 생성 (스크롤 가능)
             const list = document.createElement('div');
             list.id = 'selected-chips-list-items';
             list.style.cssText = `
                 display: flex;
                 flex-direction: column;
                 gap: 2px;
+                overflow-y: auto;
+                max-height: 200px;  /* 10개 row가 보이도록 조정 (헤더 높이 제외) */
+                flex: 1;
+                min-height: 0;  /* flex에서 스크롤 가능하도록 */
             `;
-            listContainer.appendChild(list);
             
+            // wheel 이벤트로 스크롤 가능하도록 (이미지 캔버스 스크롤과 분리)
+            list.addEventListener('wheel', (e) => {
+                // chip selection 위에서 wheel 이벤트 발생 시 이벤트 전파 차단
+                // 스크롤은 기본 동작으로 허용
+                e.stopPropagation();
+            }, { passive: false });
+            
+            listContainer.appendChild(list);
+
+            // DOM에 추가
             viewerContainer.appendChild(listContainer);
+            
+            console.log('[updateSelectedChipsList] Container created and added to DOM');
+        } else {
+            // 이미 생성된 경우에도 listItems에 wheel 이벤트가 없으면 추가
+            const existingList = document.getElementById('selected-chips-list-items');
+            if (existingList && !existingList.hasAttribute('data-wheel-attached')) {
+                existingList.addEventListener('wheel', (e) => {
+                    // chip selection 위에서 wheel 이벤트 발생 시 이벤트 전파 차단
+                    // 스크롤은 기본 동작으로 허용
+                    e.stopPropagation();
+                }, { passive: false });
+                existingList.setAttribute('data-wheel-attached', 'true');
+            }
+        }
+
+        // 5. listItems 요소 찾기
+        const listItems = document.getElementById('selected-chips-list-items');
+        if (!listItems) {
+            console.error('[updateSelectedChipsList] Could not find selected-chips-list-items');
+            return;
         }
         
-        const listItems = document.getElementById('selected-chips-list-items');
-        if (!listItems) return;
+        // listItems에 스크롤 스타일 적용 (이미 생성된 경우에도)
+        if (listItems) {
+            listItems.style.overflowY = 'auto';
+            listItems.style.maxHeight = '200px';
+            listItems.style.flex = '1';
+            listItems.style.minHeight = '0';
+        }
         
-        // 🔥 이미지 1개 모드일 때는 기본으로 표시 (칩이 선택되지 않아도 패널은 보이게)
-        listContainer.style.display = 'flex';
-        
-        listItems.innerHTML = '';
-        
-        // 선택된 칩들을 x, y 순서로 정렬
-        const sortedChips = Array.from(this.selectedChips)
-            .map(idx => {
-                const chip = this.chips[idx];
-                return chip ? { idx, x: chip.x_abs, y: chip.y_abs } : null;
-            })
-            .filter(Boolean)
-            .sort((a, b) => {
-                if (a.y !== b.y) return a.y - b.y;
-                return a.x - b.x;
-            });
-        
-        sortedChips.forEach((chipData, listIndex) => {
-            const { idx, x, y } = chipData;
-            const item = document.createElement('div');
-            item.style.cssText = `
-                padding: 4px 6px;
-                background: #2a2a2a;
-                border: 1px solid #444;
-                border-radius: 3px;
-                cursor: pointer;
+        // 헤더가 항상 유지되도록 확인 (listItems만 초기화, 헤더는 유지)
+        // 헤더는 listItems의 이전 형제 요소로 찾기
+        let header = listItems.previousElementSibling;
+        if (!header || !header.textContent || !header.textContent.includes('Selection')) {
+            // 헤더가 없거나 잘못된 경우 다시 생성
+            if (header && header.id !== 'selected-chips-list-items') {
+                header.remove();
+            }
+            
+            const newHeader = document.createElement('div');
+            newHeader.style.cssText = `
+                font-weight: bold;
+                padding: 3px 0;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+                margin-bottom: 3px;
                 font-size: 11px;
-                color: #ccc;
-                transition: background 0.2s;
+                color: #fff;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                white-space: nowrap;
+                line-height: 1.2;
             `;
-            item.textContent = `${x},${y}`;
-            item.title = `X: ${x}, Y: ${y}`;
             
-            item.onmouseenter = () => {
-                item.style.background = '#333';
-            };
-            item.onmouseleave = () => {
-                item.style.background = '#2a2a2a';
-            };
+            const titleSpan = document.createElement('span');
+            titleSpan.textContent = 'Selection';
+            newHeader.appendChild(titleSpan);
             
-            item.onclick = (e) => {
-                e.stopPropagation();
+            const closeBtn = document.createElement('span');
+            closeBtn.textContent = '✕';
+            closeBtn.style.cssText = `
+                cursor: pointer;
+                font-size: 14px;
+                color: #999;
+                padding: 0 2px;
+                line-height: 1;
+            `;
+            closeBtn.onclick = () => {
+                listContainer.style.display = 'none';
+            };
+            newHeader.appendChild(closeBtn);
+            
+            listContainer.insertBefore(newHeader, listItems);
+        }
+
+        // 5-1. color-legend-bottom의 높이를 계산하여 위치 업데이트 (이미 생성된 경우에도)
+        const colorLegendBottom = document.getElementById('color-legend-bottom');
+        if (colorLegendBottom && listContainer) {
+            let bottomPosition = 10; // 기본값
+            
+            if (colorLegendBottom.offsetHeight > 0) {
+                // color-legend-bottom의 높이 + 간격(10px)
+                bottomPosition = colorLegendBottom.offsetHeight + 10;
+            } else {
+                // color-legend-bottom이 아직 렌더링되지 않은 경우 예상 높이 사용
+                bottomPosition = 180; // 대략적인 높이 + 간격
+            }
+            
+            // 위치 업데이트
+            listContainer.style.right = '10px';
+            listContainer.style.width = '115px';
+            listContainer.style.bottom = `${bottomPosition}px`;
+        }
+
+        // 6. 선택된 칩이 있으면 렌더링
+        if (this.selectedChips.size > 0) {
+            console.log('[updateSelectedChipsList] Rendering', this.selectedChips.size, 'selected chips');
+            
+            // 목록 초기화
+            listItems.innerHTML = '';
+
+            // 칩 데이터 정렬 및 렌더링
+            const sortedChips = Array.from(this.selectedChips)
+                .map(idx => {
+                    const chip = this.chips[idx];
+                    return chip ? { idx, x: chip.x_abs, y: chip.y_abs } : null;
+                })
+                .filter(Boolean)
+                .sort((a, b) => {
+                    if (a.y !== b.y) return a.y - b.y;
+                    return a.x - b.x;
+                });
+
+            sortedChips.forEach((chipData, listIndex) => {
+                const { idx, x, y } = chipData;
                 
-                if (e.shiftKey && this._lastChipListClickIndex !== null) {
-                    // 🔥 Shift 클릭: 이전 클릭부터 현재까지 범위 내 모든 칩 제거
-                    const startIndex = Math.min(this._lastChipListClickIndex, listIndex);
-                    const endIndex = Math.max(this._lastChipListClickIndex, listIndex);
+                const item = document.createElement('div');
+                item.style.cssText = `
+                    padding: 2px 4px;
+                    background: rgba(42, 42, 42, 0.8);
+                    border: 1px solid rgba(68, 68, 68, 0.8);
+                    border-radius: 3px;
+                    cursor: pointer;
+                    font-size: 11px;
+                    color: #ccc;
+                    transition: background 0.2s;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    min-height: 18px;
+                    line-height: 1.2;
+                `;
+                
+                item.textContent = `(${x}, ${y})`;
+                item.title = `X: ${x}, Y: ${y}`;
+
+                item.onmouseenter = () => {
+                    item.style.background = 'rgba(51, 51, 51, 0.9)';
+                };
+                item.onmouseleave = () => {
+                    item.style.background = 'rgba(42, 42, 42, 0.8)';
+                };
+
+                item.onclick = (e) => {
+                    e.stopPropagation();
                     
-                    for (let i = startIndex; i <= endIndex; i++) {
-                        const chipToRemove = sortedChips[i];
-                        if (chipToRemove && this.selectedChips.has(chipToRemove.idx)) {
-                            this.selectedChips.delete(chipToRemove.idx);
+                    if (e.shiftKey && this.lastChipListClickIndex !== null) {
+                        // Shift-click: 범위 선택/해제
+                        const startIndex = Math.min(this.lastChipListClickIndex, listIndex);
+                        const endIndex = Math.max(this.lastChipListClickIndex, listIndex);
+                        
+                        for (let i = startIndex; i <= endIndex; i++) {
+                            const chipToRemove = sortedChips[i];
+                            if (chipToRemove && this.selectedChips.has(chipToRemove.idx)) {
+                                this.selectedChips.delete(chipToRemove.idx);
+                            }
+                        }
+                        console.log('[Chip List] Shift-click deselect range');
+                    } else {
+                        // 일반 클릭: 단일 선택/해제
+                        if (this.selectedChips.has(idx)) {
+                            this.selectedChips.delete(idx);
+                            console.log('[Chip List] Click deselect:', x, y);
+                        } else {
+                            this.selectedChips.add(idx);
+                            console.log('[Chip List] Click select:', x, y);
                         }
                     }
-                    console.log(`🗑️ [SHIFT+CLICK] 범위 제거: ${startIndex}~${endIndex} (${endIndex - startIndex + 1}개)`);
-                } else {
-                    // 🔥 일반 클릭: 해당 칩만 제거
-                    if (this.selectedChips.has(idx)) {
-                        this.selectedChips.delete(idx);
-                        console.log(`🗑️ [CLICK] 칩 제거: ${x},${y}`);
-                    }
-                }
-                
-                // 마지막 클릭 인덱스 업데이트
-                this._lastChipListClickIndex = listIndex;
-                
-                this.render();
-                this.updateSelectedChipsList();
-            };
+                    
+                    this.lastChipListClickIndex = listIndex;
+                    this.render();
+                    this.updateSelectedChipsList();
+                };
+
+                listItems.appendChild(item);
+            });
+
+            // Container 표시
+            listContainer.style.display = 'flex';
+            listContainer.style.visibility = 'visible';
+            listContainer.style.pointerEvents = 'auto';
             
-            listItems.appendChild(item);
-        });
+            // 스크롤을 항상 맨 위로 이동
+            setTimeout(() => {
+                if (listItems) {
+                    listItems.scrollTop = 0;
+                }
+            }, 0);
+            
+            console.log('[updateSelectedChipsList] Container shown');
+        } else {
+            // 선택된 칩이 없으면 숨김
+            listContainer.style.display = 'none';
+            listItems.innerHTML = '';
+            console.log('[updateSelectedChipsList] No chips selected, container hidden');
+        }
     }
     
     /**

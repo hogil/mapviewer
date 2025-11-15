@@ -67,8 +67,47 @@ export class GridManager {
             }
         });
         
+        // 더블클릭 이벤트 추가
+        this.container.addEventListener('dblclick', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            const gridItem = e.target.closest('.grid-item');
+            if (!gridItem) {
+                // grid-thumb-wrap도 체크 (main.js의 그리드 구조)
+                const gridThumb = e.target.closest('.grid-thumb-wrap');
+                if (gridThumb) {
+                    const index = parseInt(gridThumb.dataset.index);
+                    if (!isNaN(index)) {
+                        this.handleDoubleClick(index);
+                    }
+                }
+                return;
+            }
+            
+            const index = parseInt(gridItem.dataset.index);
+            if (!isNaN(index)) {
+                this.handleDoubleClick(index);
+            }
+        });
+        
         // 키보드 이벤트
         document.addEventListener('keydown', (e) => this.handleKeyDown(e));
+    }
+    
+    /**
+     * 더블클릭 처리
+     * @param {number} index 더블클릭된 아이템 인덱스
+     */
+    handleDoubleClick(index) {
+        if (!this.viewer) return;
+        
+        console.log('Grid double-click at index:', index);
+        
+        // enterSingleImageMode 호출
+        if (typeof this.viewer.enterSingleImageMode === 'function') {
+            this.viewer.enterSingleImageMode(index);
+        }
     }
     
     /**

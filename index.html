@@ -2021,6 +2021,40 @@
             visibility: hidden !important;
             pointer-events: none !important;
         }
+        
+        /* selected-chips-list를 color-legend-bottom 위에 배치 */
+        #selected-chips-list {
+            position: absolute;
+            right: 10px;    /* color-legend-bottom과 동일 */
+            width: 115px;   /* color-legend-bottom과 동일 */
+            bottom: 10px;   /* color-legend-bottom의 위에 배치 (JavaScript에서 동적 계산) */
+            
+            display: none;
+            flex-direction: column;
+            gap: 0;
+            padding: 8px 10px;  /* color-legend와 동일한 padding */
+            background-color: rgba(37, 37, 38, 0.9);  /* color-legend와 동일 */
+            border: 1px solid var(--border-color);  /* color-legend와 동일 */
+            border-radius: 4px;  /* color-legend와 동일 */
+            z-index: 21;
+            font-size: 11px;  /* color-legend와 유사 */
+            color: #ccc;
+        }
+        
+        /* chip selection 내부 item 스타일 */
+        #selected-chips-list-items {
+            gap: 2px;  /* row 간격 줄임 */
+            overflow-y: auto;  /* 리스트만 스크롤 */
+            max-height: 200px;  /* 10개 row가 보이도록 조정 (헤더 높이 제외) */
+            flex: 1;
+            min-height: 0;  /* flex에서 스크롤 가능하도록 */
+        }
+        
+        #selected-chips-list-items > div {
+            padding: 2px 4px !important;  /* row 높이 줄임 */
+            min-height: 18px;  /* 최소 높이 설정 */
+            line-height: 1.2;
+        }
     </style>
 </head>
 <body>
@@ -2072,7 +2106,7 @@
             </nav>
             
             <!-- Selected Grid Images Panel (Wafer Map Explorer 우하단 - 사이드바 안쪽) -->
-            <div id="selected-grid-images-panel" style="display: none; position: absolute; bottom: 12px; right: 12px; max-height: 260px; background: rgba(30, 30, 30, 0.92); border-radius: 4px; box-shadow: 0 8px 32px rgba(0,0,0,0.4); padding: 0; z-index: 9999; border: 1px solid rgba(255,255,255,0.08); min-width: auto; width: auto; max-width: 200px;">
+            <div id="selected-grid-images-panel" style="display: none; position: absolute; bottom: 12px; right: 12px; max-height: 260px; background: rgba(50, 50, 50, 0.92); border-radius: 4px; box-shadow: 0 8px 32px rgba(0,0,0,0.4); padding: 0; z-index: 9999; border: 1px solid rgba(255,255,255,0.12); min-width: auto; width: auto; max-width: 200px;">
                 
                 <!-- 헤더: 제목, 개수, 복사 버튼 -->
                 <div style="padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.08); display: flex; justify-content: space-between; align-items: center; gap: 6px;">
@@ -2136,6 +2170,59 @@
                 <!-- Single Image Mode -->
                 <canvas id="image-canvas" aria-label="메인 이미지"></canvas>
                 <canvas id="overlay-canvas" aria-label="오버레이"></canvas>
+                
+                <!-- Single Image Mode Navigation Buttons - 좌우 버튼 동일 Y 좌표 -->
+                <div id="single-image-nav-buttons" style="
+                    position: absolute;
+                    left: 20px;
+                    right: 20px;
+                    top: 50%;
+                    transform: translateY(-50%);
+                    z-index: 25;
+                    display: none;
+                    justify-content: space-between;
+                    align-items: center;
+                    pointer-events: none;
+                ">
+                    <!-- 좌측 버튼 -->
+                    <button id="prev-btn" aria-label="Previous Image" style="
+                        min-width: 50px;
+                        min-height: 50px;
+                        background: rgba(50, 50, 50, 0.9);
+                        color: #ccc;
+                        border: 2px solid #666;
+                        border-radius: 6px;
+                        cursor: pointer;
+                        font-size: 20px;
+                        font-weight: bold;
+                        padding: 0;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        transition: all 0.2s;
+                        pointer-events: auto;
+                    ">◀</button>
+                    
+                    <!-- 우측 버튼 -->
+                    <button id="next-btn" aria-label="Next Image" style="
+                        min-width: 50px;
+                        min-height: 50px;
+                        background: rgba(50, 50, 50, 0.9);
+                        color: #ccc;
+                        border: 2px solid #666;
+                        border-radius: 6px;
+                        cursor: pointer;
+                        font-size: 20px;
+                        font-weight: bold;
+                        padding: 0;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        transition: all 0.2s;
+                        pointer-events: auto;
+                    ">▶</button>
+                </div>
+                
                 <div id="composite-overlay" class="composite-overlay" style="display: none;">
                     <div class="composite-card">
                         <div class="composite-header">
