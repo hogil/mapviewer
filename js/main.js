@@ -15272,7 +15272,7 @@ class WaferMapViewer {
      * ✅ 파일 탐색기 모드 네비게이션 - 같은 폴더 내 다음 이미지로 이동
      * @param {number} direction -1 (이전), 1 (다음)
      */
-    navigateSingleImageMode(direction) {
+    async navigateSingleImageMode(direction) {
         if (this._isNavigating) {
             console.log('⚠️ [NAV] Already navigating...');
             return;
@@ -15321,9 +15321,65 @@ class WaferMapViewer {
         
         // ✅ 다음 인덱스 계산
         let nextIndex = currentIndex + direction;
+        let needNextFolder = false;
+        
         if (nextIndex < 0) {
             nextIndex = imageLinks.length - 1;
         } else if (nextIndex >= imageLinks.length) {
+            // ✅ 현재 폴더의 마지막 이미지에서 다음으로 넘어갈 때
+            if (direction === 1) {
+                needNextFolder = true;
+                nextIndex = 0; // 다음 폴더의 첫 번째 이미지
+            } else {
+                nextIndex = imageLinks.length - 1;
+            }
+        }
+        
+        // ✅ 다음 폴더로 이동해야 하는 경우
+        if (needNextFolder && direction === 1) {
+            // 현재 폴더 경로 찾기
+            const currentDir = currentPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+            
+            // 파일 탐색기에서 모든 폴더 요소 찾기
+            const allFolders = Array.from(this.dom.fileExplorer.querySelectorAll('summary.folder'));
+            const currentFolderIndex = allFolders.findIndex(folder => {
+                const folderPath = folder.dataset.path;
+                return folderPath && this.normalizePath(folderPath) === this.normalizePath(currentDir);
+            });
+            
+            if (currentFolderIndex >= 0 && currentFolderIndex < allFolders.length - 1) {
+                // 다음 폴더 찾기
+                const nextFolder = allFolders[currentFolderIndex + 1];
+                const nextFolderPath = nextFolder.dataset.path;
+                
+                if (nextFolderPath) {
+                    // 재귀적으로 첫 번째 이미지 파일 찾기
+                    const firstImagePath = await this.findFirstImageInFolderRecursive(nextFolderPath, nextFolder);
+                    
+                    if (firstImagePath) {
+                        // 첫 번째 이미지 로드
+                        await this.loadImage(firstImagePath);
+                        
+                        // 파일 탐색기에서 선택 표시 업데이트
+                        const firstImageLink = Array.from(this.dom.fileExplorer.querySelectorAll('a[data-path]'))
+                            .find(link => {
+                                const linkPath = link.dataset.path;
+                                return linkPath && this.normalizePath(linkPath) === this.normalizePath(firstImagePath);
+                            });
+                        
+                        if (firstImageLink) {
+                            allLinks.forEach(link => link.classList.remove('selected'));
+                            firstImageLink.classList.add('selected');
+                            firstImageLink.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                        }
+                        
+                        this._isNavigating = false;
+                        return;
+                    }
+                }
+            }
+            
+            // 다음 폴더를 찾을 수 없으면 순환
             nextIndex = 0;
         }
         
@@ -15352,6 +15408,85 @@ class WaferMapViewer {
                 console.error('❌ [NAV] Load failed', err);
                 this._isNavigating = false;
             });
+    }
+
+    /**
+     * ✅ 재귀적으로 폴더 내 첫 번째 이미지 파일 찾기
+     * @param {string} folderPath 폴더 경로
+     * @param {HTMLElement} folderElement 폴더 요소 (summary.folder)
+     * @returns {Promise<string|null>} 첫 번째 이미지 파일 경로 또는 null
+     */
+    async findFirstImageInFolderRecursive(folderPath, folderElement) {
+        // 폴더 열기
+        const detailsElement = folderElement.parentElement;
+        if (!detailsElement.open) {
+            const contentDiv = folderElement.nextElementSibling;
+            await this.loadDirectoryContents(folderPath, contentDiv);
+            detailsElement.dataset.loaded = 'true';
+            detailsElement.open = true;
+            // 폴더 내용 로드 대기
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        
+        // 폴더 내용 가져오기
+        const contentDiv = folderElement.nextElementSibling;
+        if (!contentDiv) return null;
+        
+        // 폴더 내 첫 번째 항목 찾기
+        const firstItem = contentDiv.querySelector('li:first-child');
+        if (!firstItem) return null;
+        
+        // 첫 번째 항목이 폴더인지 확인
+        const firstFolder = firstItem.querySelector('summary.folder');
+        if (firstFolder) {
+            // 폴더면 재귀적으로 들어가기
+            const subFolderPath = firstFolder.dataset.path;
+            if (subFolderPath) {
+                return await this.findFirstImageInFolderRecursive(subFolderPath, firstFolder);
+            }
+        }
+        
+        // 첫 번째 항목이 파일인지 확인
+        const firstFile = firstItem.querySelector('a[data-path]');
+        if (firstFile) {
+            const filePath = firstFile.dataset.path;
+            if (filePath) {
+                // 이미지 파일인지 확인
+                const isImage = /\.(png|jpg|jpeg|gif|bmp|webp)$/i.test(filePath);
+                if (isImage) {
+                    return filePath;
+                }
+            }
+        }
+        
+        // 첫 번째 항목이 이미지가 아니면 다음 항목 찾기
+        const allItems = contentDiv.querySelectorAll('li');
+        for (const item of allItems) {
+            const fileLink = item.querySelector('a[data-path]');
+            if (fileLink) {
+                const filePath = fileLink.dataset.path;
+                if (filePath) {
+                    const isImage = /\.(png|jpg|jpeg|gif|bmp|webp)$/i.test(filePath);
+                    if (isImage) {
+                        return filePath;
+                    }
+                }
+            }
+            
+            // 파일이 아니면 폴더인지 확인하고 재귀적으로 들어가기
+            const subFolder = item.querySelector('summary.folder');
+            if (subFolder) {
+                const subFolderPath = subFolder.dataset.path;
+                if (subFolderPath) {
+                    const imagePath = await this.findFirstImageInFolderRecursive(subFolderPath, subFolder);
+                    if (imagePath) {
+                        return imagePath;
+                    }
+                }
+            }
+        }
+        
+        return null;
     }
 
     /**
