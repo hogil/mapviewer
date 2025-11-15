@@ -907,8 +907,34 @@ class WaferMapViewer {
                 console.log('🖱️ [DBLCLICK] 더블클릭 감지:', {
                     viewMode: this.viewMode,
                     detailMode: this.detailMode,
-                    isNavigating: this._isNavigating
+                    isNavigating: this._isNavigating,
+                    target: e.target
                 });
+                
+                // ✅ 버튼 영역에서 더블 클릭한 경우 버튼 2번 클릭으로 처리
+                const clickedButton = e.target.closest('#prev-btn, #next-btn');
+                
+                if (clickedButton) {
+                    console.log('🖱️ [DBLCLICK] 버튼 영역에서 더블 클릭 - 버튼 2번 클릭으로 처리');
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    // 버튼 클릭 이벤트를 2번 발생시킴
+                    if (clickedButton.id === 'prev-btn') {
+                        this.navigatePrevious();
+                        // 약간의 지연 후 두 번째 클릭 실행
+                        setTimeout(() => {
+                            this.navigatePrevious();
+                        }, 50);
+                    } else if (clickedButton.id === 'next-btn') {
+                        this.navigateNext();
+                        // 약간의 지연 후 두 번째 클릭 실행
+                        setTimeout(() => {
+                            this.navigateNext();
+                        }, 50);
+                    }
+                    return; // 버튼 영역에서는 더블 클릭 액션 무시
+                }
                 
                 // ✅ Step 1: 상세 모드 확인
                 if (this.detailMode) {
@@ -1004,6 +1030,24 @@ class WaferMapViewer {
                 this.panelProtected = true;
                 this.zoomInProgress = true;
                 this.setZoom(3.0);
+            });
+        }
+        
+        // ✅ prev/next 버튼 클릭 이벤트
+        const prevBtn = document.getElementById('prev-btn');
+        const nextBtn = document.getElementById('next-btn');
+        if (prevBtn) {
+            prevBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.navigatePrevious();
+            });
+        }
+        if (nextBtn) {
+            nextBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.navigateNext();
             });
         }
     }
@@ -13506,17 +13550,124 @@ class WaferMapViewer {
         // 상세 보기 모드 활성화
         this.detailMode = true;
         this.detailImagePath = imagePath;
+        
+        // ✅ 키보드 화살표 좌우로 prev/next 이미지 기능 추가
+        this.setupDetailModeNavigation();
     }
     
     // 🔥 상세 보기 모드 종료 (ESC/더블클릭)
     exitDetailMode() {
         console.log('🚪 [EXIT] 상세 보기 모드 종료');
         
+        // ✅ 키보드 이벤트 리스너 제거
+        if (this.boundDetailModeNavigationHandler) {
+            document.removeEventListener('keydown', this.boundDetailModeNavigationHandler);
+            this.boundDetailModeNavigationHandler = null;
+        }
+        
         this.detailMode = false;
         this.detailImagePath = null;
         
         // 🔥 저장된 상태 복원
         this.restoreWaferMapExplorerState();
+    }
+    
+    /**
+     * ✅ 상세 보기 모드에서 키보드 화살표 좌우로 prev/next 이미지 기능
+     */
+    setupDetailModeNavigation() {
+        // ✅ 기존 리스너 제거 (중복 방지)
+        if (this.boundDetailModeNavigationHandler) {
+            document.removeEventListener('keydown', this.boundDetailModeNavigationHandler);
+            this.boundDetailModeNavigationHandler = null;
+        }
+        
+        // ← → 키보드 네비게이션
+        document.addEventListener('keydown', this.boundDetailModeNavigationHandler = (e) => {
+            if (!this.detailMode) return;
+            
+            if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                e.stopPropagation();
+                this.navigateDetailModeImage(-1);
+            } else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                e.stopPropagation();
+                this.navigateDetailModeImage(1);
+            }
+        });
+    }
+    
+    /**
+     * ✅ 상세 보기 모드에서 이미지 네비게이션
+     * @param {number} direction -1 (이전), 1 (다음)
+     */
+    navigateDetailModeImage(direction) {
+        if (!this.detailMode) {
+            console.warn('⚠️ [NAV] Not in detail mode');
+            return;
+        }
+        
+        // ✅ grid 모드에서 온 경우 gridViewImageList 사용
+        if (this.gridViewImageList && this.gridViewImageList.length > 0) {
+            const currentIdx = this.findImageIndexInList(
+                this.detailImagePath,
+                this.gridViewImageList
+            );
+            
+            if (currentIdx === -1) {
+                console.warn('⚠️ [NAV] Current image not found in gridViewImageList');
+                return;
+            }
+            
+            let nextIdx = currentIdx + direction;
+            if (nextIdx < 0) {
+                nextIdx = this.gridViewImageList.length - 1;
+            } else if (nextIdx >= this.gridViewImageList.length) {
+                nextIdx = 0;
+            }
+            
+            const nextImagePath = this.gridViewImageList[nextIdx];
+            if (nextImagePath) {
+                this.gridViewImageIndex = nextIdx;
+                this.loadImage(nextImagePath).then(() => {
+                    this.detailImagePath = nextImagePath;
+                });
+            }
+            return;
+        }
+        
+        // ✅ 파일 탐색기 모드에서 온 경우 singleViewImageList 사용
+        if (this.singleViewImageList && this.singleViewImageList.length > 0) {
+            if (this.singleViewImageIndex === -1) {
+                this.singleViewImageIndex = this.singleViewImageList.findIndex(
+                    path => this.normalizePath(path) === this.normalizePath(this.detailImagePath)
+                );
+            }
+            
+            if (this.singleViewImageIndex === -1) {
+                console.warn('⚠️ [NAV] Current image not found in singleViewImageList');
+                return;
+            }
+            
+            let nextIdx = this.singleViewImageIndex + direction;
+            if (nextIdx < 0) {
+                nextIdx = this.singleViewImageList.length - 1;
+            } else if (nextIdx >= this.singleViewImageList.length) {
+                nextIdx = 0;
+            }
+            
+            const nextImagePath = this.singleViewImageList[nextIdx];
+            if (nextImagePath) {
+                this.singleViewImageIndex = nextIdx;
+                this.loadImage(nextImagePath).then(() => {
+                    this.detailImagePath = nextImagePath;
+                });
+            }
+            return;
+        }
+        
+        console.warn('⚠️ [NAV] No image list available for navigation');
     }
 
     // 🔥 Wafer Map Explorer 상태 저장 (Grid/Single Image)
@@ -14815,12 +14966,15 @@ class WaferMapViewer {
         // 1. Arrow button 표시
         this.updateArrowButtonVisibility();
         
-        // 2. 그리드 숨김
+        // 2. 키보드 좌우 키 네비게이션 설정
+        this.setupGridImageNavigation();
+        
+        // 3. 그리드 숨김
         this.hideGrid(false);
         
-        // 3. 이미지 로드
+        // 4. 이미지 로드
         this.loadImage(this.selectedImages[idx]).then(() => {
-            // 4. Chip selection 업데이트
+            // 5. Chip selection 업데이트
             if (this.chipAnnotator) {
                 this.chipAnnotator.updateSelectedChipsList();
             }
@@ -14911,19 +15065,21 @@ class WaferMapViewer {
                 this.updateContextMenuState();
             }
             
-            // ✅ 스크롤 위치 복원 (동적 계산)
+            // ✅ 현재 이미지가 화면 중앙에 오도록 스크롤 조정
             setTimeout(() => {
-                // savedGridViewImageIndex를 사용하여 스크롤 계산
-                const scrollTop = this._calculateGridScrollPositionWithIndex(
-                    savedGridViewImageIndex,
-                    savedGridViewSaveState?.selectedIndices || []
-                );
-                
                 const grid = document.getElementById('image-grid');
-                const scrollWrapper = grid?.parentElement;
-                if (scrollWrapper) {
-                    scrollWrapper.scrollTop = scrollTop;
-                    console.log('✅ [EXIT] 그리드 스크롤 복원:', scrollTop);
+                if (grid && savedGridViewImageIndex >= 0) {
+                    const wraps = grid.querySelectorAll('.grid-thumb-wrap');
+                    if (savedGridViewImageIndex < wraps.length) {
+                        const targetWrap = wraps[savedGridViewImageIndex];
+                        // 화면 중앙에 보이도록 스크롤
+                        targetWrap.scrollIntoView({ 
+                            behavior: 'smooth', 
+                            block: 'center',
+                            inline: 'center'
+                        });
+                        console.log('✅ [EXIT] 그리드 스크롤: 이미지', savedGridViewImageIndex, '를 화면 중앙에 표시');
+                    }
                 }
             }, 50);
         } else if (savedViewMode === 'single') {
@@ -15089,28 +15245,18 @@ class WaferMapViewer {
                     });
                 }
                 
-                // ✅ 그리드 스크롤 업데이트
-                // nextIdx는 전체 그리드 인덱스이므로, selectedIndices에서 찾아서 스크롤 계산
-                if (this.gridViewSaveState && this.gridViewSaveState.selectedIndices) {
-                    const selectedIdx = this.gridViewSaveState.selectedIndices.indexOf(nextIdx);
-                    if (selectedIdx >= 0) {
-                        // 선택된 이미지 목록에 있으면 해당 인덱스로 스크롤 계산
-                        this.updateGridScrollOnNavigation(selectedIdx);
-                    } else {
-                        // 선택된 이미지 목록에 없으면 nextIdx를 직접 사용 (전체 그리드 기준)
-                        console.log('⚠️ [NAV] nextIdx not in selectedIndices, using direct scroll');
-                        const thumbHeight = 330 + 10;
-                        const colCount = this.gridCols || 3;
-                        const row = Math.floor(nextIdx / colCount);
-                        const targetScrollTop = row * thumbHeight;
-                        const grid = document.getElementById('image-grid');
-                        const scrollWrapper = grid?.parentElement;
-                        if (scrollWrapper) {
-                            scrollWrapper.scrollTo({
-                                top: targetScrollTop,
-                                behavior: 'smooth'
-                            });
-                        }
+                // ✅ 현재 이미지가 그리드에서 화면 중심에 보이도록 스크롤 조정
+                if (grid) {
+                    const wraps = grid.querySelectorAll('.grid-thumb-wrap');
+                    if (nextIdx >= 0 && nextIdx < wraps.length) {
+                        const targetWrap = wraps[nextIdx];
+                        // 화면 중심에 보이도록 스크롤
+                        targetWrap.scrollIntoView({ 
+                            behavior: 'smooth', 
+                            block: 'center',
+                            inline: 'center'
+                        });
+                        console.log(`✅ [NAV] 스크롤: 이미지 ${nextIdx}를 화면 중심에 표시`);
                     }
                 }
                 
@@ -15123,48 +15269,82 @@ class WaferMapViewer {
     }
     
     /**
-     * ✅ 파일 탐색기 모드 네비게이션
+     * ✅ 파일 탐색기 모드 네비게이션 - 같은 폴더 내 다음 이미지로 이동
      * @param {number} direction -1 (이전), 1 (다음)
      */
     navigateSingleImageMode(direction) {
-        if (!this.singleViewImageList || !Array.isArray(this.singleViewImageList) || this.singleViewImageList.length === 0) {
-            console.warn('⚠️ [NAV] No images in single view list');
-            return;
-        }
-        
         if (this._isNavigating) {
             console.log('⚠️ [NAV] Already navigating...');
             return;
         }
         this._isNavigating = true;
         
-        let nextIndex = this.singleViewImageIndex + direction;
+        // ✅ 현재 이미지 경로에서 폴더 경로 추출
+        const currentPath = this.selectedImagePath || this.currentImage?.src;
+        if (!currentPath) {
+            console.warn('⚠️ [NAV] No current image path');
+            this._isNavigating = false;
+            return;
+        }
         
+        // ✅ 같은 폴더의 모든 이미지 링크 가져오기
+        const allLinks = Array.from(this.dom.fileExplorer.querySelectorAll('a[data-path]'));
+        const imageLinks = allLinks.filter(link => {
+            const linkPath = link.dataset.path;
+            if (!linkPath) return false;
+            // 이미지 파일인지 확인
+            const isImage = /\.(png|jpg|jpeg|gif|bmp|webp)$/i.test(linkPath);
+            if (!isImage) return false;
+            // 같은 폴더인지 확인
+            const currentDir = currentPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+            const linkDir = linkPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
+            return this.normalizePath(currentDir) === this.normalizePath(linkDir);
+        });
+        
+        if (imageLinks.length === 0) {
+            console.warn('⚠️ [NAV] No images in same folder');
+            this._isNavigating = false;
+            return;
+        }
+        
+        // ✅ 현재 이미지의 인덱스 찾기
+        const currentNormalized = this.normalizePath(currentPath);
+        let currentIndex = imageLinks.findIndex(link => {
+            const linkPath = link.dataset.path;
+            return linkPath && this.normalizePath(linkPath) === currentNormalized;
+        });
+        
+        if (currentIndex === -1) {
+            // 현재 이미지를 찾을 수 없으면 첫 번째 이미지로
+            currentIndex = 0;
+        }
+        
+        // ✅ 다음 인덱스 계산
+        let nextIndex = currentIndex + direction;
         if (nextIndex < 0) {
-            nextIndex = this.singleViewImageList.length - 1;
-        } else if (nextIndex >= this.singleViewImageList.length) {
+            nextIndex = imageLinks.length - 1;
+        } else if (nextIndex >= imageLinks.length) {
             nextIndex = 0;
         }
         
-        this.singleViewImageIndex = nextIndex;
-        const nextImagePath = this.singleViewImageList[nextIndex];
+        const nextLink = imageLinks[nextIndex];
+        const nextImagePath = nextLink.dataset.path;
         
+        if (!nextImagePath) {
+            console.error('❌ [NAV] Next image path is undefined');
+            this._isNavigating = false;
+            return;
+        }
+        
+        // ✅ 이미지 로드
         this.loadImage(nextImagePath)
             .then(() => {
                 console.log('✅ [NAV] Loaded image', nextIndex, nextImagePath);
                 
                 // ✅ 파일 탐색기에서 선택 표시 업데이트
-                const allLinks = Array.from(this.dom.fileExplorer.querySelectorAll('a[data-path]'));
                 allLinks.forEach(link => link.classList.remove('selected'));
-                const targetLink = allLinks.find(a => {
-                    const linkPath = a.dataset.path;
-                    if (!linkPath) return false;
-                    return this.normalizePath(linkPath) === this.normalizePath(nextImagePath);
-                });
-                if (targetLink) {
-                    targetLink.classList.add('selected');
-                    targetLink.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                }
+                nextLink.classList.add('selected');
+                nextLink.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                 
                 this._isNavigating = false;
             })
