@@ -78,6 +78,8 @@ export class ChipAnnotator {
         this._onMouseUp = this._handleMouseUp.bind(this);
         this._onMouseLeave = this._handleMouseLeave.bind(this);
         this._onKeyDown = this._handleKeyDown.bind(this);
+        this._onKeyUp = this._handleKeyUp.bind(this);
+        this._onDocumentMouseUp = this._handleDocumentMouseUp.bind(this);
 
         this._setupEventListeners();
     }
@@ -91,6 +93,8 @@ export class ChipAnnotator {
         this.canvas.addEventListener('mouseup', this._onMouseUp);
         this.canvas.addEventListener('mouseleave', this._onMouseLeave);
         document.addEventListener('keydown', this._onKeyDown);
+        document.addEventListener('keyup', this._onKeyUp);
+        document.addEventListener('mouseup', this._onDocumentMouseUp);
     }
 
     /**
@@ -1285,8 +1289,21 @@ export class ChipAnnotator {
         const canvasX = (e.clientX - rect.left) * scaleX;
         const canvasY = (e.clientY - rect.top) * scaleY;
 
+        // 🔥 이전 Alt+Drag 상태가 남아있으면 초기화
+        if (this.isAltDrag && !e.altKey) {
+            this.isAltDrag = false;
+            this.polygonPath = [];
+            this.altDragStartSelection = null;
+        }
+
         // 🔥 Alt 키가 눌려있으면 다른 선택 로직 실행하지 않음
         if (e.altKey) {
+            // 🔥 기존 Alt+Drag 상태가 있으면 먼저 초기화
+            if (this.isAltDrag) {
+                this.isAltDrag = false;
+                this.polygonPath = [];
+                this.altDragStartSelection = null;
+            }
             this.isAltDrag = true;
             this.polygonPath = [{ x: canvasX, y: canvasY }];
             // 🔥 Alt+Drag 시작 시 기존 선택 상태 저장 (Shift/Ctrl과 함께 사용할 때)
@@ -1383,10 +1400,11 @@ export class ChipAnnotator {
                     this.updateSelectedChipsList();
                     console.log('🖱️ [ALT+CTRL+DRAG] 범위 선택 토글:', selected.length, '개 (제거:', toRemove.size, ', 추가:', toAdd.size, ')');
                 } else {
-                    // Normal: replace selection (기존 선택 교체)
-                    this.selectedChips = new Set(selected);
+                    // Normal: add to selection (기존 선택에 추가, Shift처럼 동작)
+                    const newSelections = selected.filter(idx => !this.selectedChips.has(idx));
+                    newSelections.forEach(idx => this.selectedChips.add(idx));
                     this.updateSelectedChipsList();
-                    console.log('🖱️ [ALT+DRAG] 범위 선택 교체:', selected.length, '개');
+                    console.log('🖱️ [ALT+DRAG] 범위 선택 추가:', selected.length, '개 (신규:', newSelections.length, ')');
                 }
             } else {
                 // 🔥 polygon path가 너무 짧으면 선택하지 않음 (원 그리기 취소)
@@ -1401,7 +1419,7 @@ export class ChipAnnotator {
             return;
         }
 
-        // 🔥 Shift+드래그 처리: 범위 내 chip 제거
+        // 🔥 Shift+드래그 처리: 범위 내 chip 추가 선택
         if (this.shiftClickPos) {
             const dragDistance = Math.sqrt(
                 Math.pow(canvasX - this.shiftClickPos.x, 2) +
@@ -1415,11 +1433,11 @@ export class ChipAnnotator {
                     canvasX,
                     canvasY
                 );
-                // 🔥 Shift+드래그: 범위 내 chip 제거 (배치 처리로 성능 향상)
-                const toRemove = selected.filter(idx => this.selectedChips.has(idx));
-                toRemove.forEach(idx => this.selectedChips.delete(idx));
+                // 🔥 Shift+드래그: 범위 내 chip 추가 선택 (배치 처리로 성능 향상)
+                const toAdd = selected.filter(idx => !this.selectedChips.has(idx));
+                toAdd.forEach(idx => this.selectedChips.add(idx));
                 this.updateSelectedChipsList();
-                console.log('🖱️ [SHIFT+DRAG] 범위 내 chip 제거:', selected.length, '개 (제거:', toRemove.length, ')');
+                console.log('🖱️ [SHIFT+DRAG] 범위 선택 추가:', selected.length, '개 (신규:', toAdd.length, ')');
             } else {
                 // 드래그 없음: 선택 해제
                 this.selectedChips.clear();
@@ -1652,8 +1670,40 @@ export class ChipAnnotator {
                 e.preventDefault();
             }
         }
-        // 🔥 Alt 키가 떼어졌을 때도 처리하지 않음 (mouseup에서 처리)
-        // Alt 키가 떼어져도 isAltDrag는 mouseup에서만 false로 설정
+    }
+
+    /**
+     * Keyboard up handler - Alt 키가 떼어졌을 때 Alt+Drag 상태 초기화
+     */
+    _handleKeyUp(e) {
+        // 🔥 Alt 키가 떼어지면 Alt+Drag 상태 초기화
+        if (e.key === 'Alt' && this.isAltDrag) {
+            this.isAltDrag = false;
+            this.polygonPath = [];
+            this.altDragStartSelection = null;
+            this.render();
+        }
+    }
+
+    /**
+     * Document-level mouse up handler - 캔버스 밖에서 마우스를 떼는 경우 처리
+     */
+    _handleDocumentMouseUp(e) {
+        // 🔥 Alt+Drag 상태가 있고 마우스가 캔버스 밖에서 떼어진 경우 처리
+        if (this.isAltDrag) {
+            const rect = this.canvas.getBoundingClientRect();
+            const isInsideCanvas = 
+                e.clientX >= rect.left && e.clientX <= rect.right &&
+                e.clientY >= rect.top && e.clientY <= rect.bottom;
+            
+            // 캔버스 밖에서 마우스를 떼면 Alt+Drag 상태 초기화
+            if (!isInsideCanvas) {
+                this.isAltDrag = false;
+                this.polygonPath = [];
+                this.altDragStartSelection = null;
+                this.render();
+            }
+        }
     }
 
     /**
