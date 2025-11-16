@@ -8027,8 +8027,10 @@ class WaferMapViewer {
             }
 
             // ✅ viewMode 설정: wafer map explorer에서 호출된 경우 'single'로 설정
-            if (!this.singleImageFromGrid) {
-                // wafer map explorer나 label explorer에서 호출된 경우
+            // 단, 이미 viewMode가 설정되어 있으면 리스트를 덮어쓰지 않음
+            if (!this.singleImageFromGrid && !this.viewMode) {
+                // wafer map explorer나 label explorer에서 직접 호출된 경우만
+                // (enterSingleViewMode를 거치지 않은 경우)
                 this.viewMode = 'single';
                 this.singleViewImageList = [fullPath];
                 this.singleViewImageIndex = 0;
@@ -15053,20 +15055,25 @@ class WaferMapViewer {
         
         // ✅ Step 3: 화살표 버튼 숨김 (viewMode = null이므로)
         this.updateArrowButtonVisibility();
-        
+
         // ✅ Chip selection 숨김
         if (this.chipAnnotator) {
             const selectedChipsList = document.getElementById('selected-chips-list');
             if (selectedChipsList) {
                 selectedChipsList.style.display = 'none';
             }
-            
+
             const chipSelectionPanel = document.getElementById('chip-selection-panel');
             if (chipSelectionPanel) {
                 chipSelectionPanel.style.display = 'none';
             }
         }
-        
+
+        // ✅ Wafer Navigator 숨김
+        if (this.thumbnailNavigator) {
+            this.thumbnailNavigator.hide();
+        }
+
         // ✅ Step 4: 그리드 복귀 및 스크롤 복원
         if (savedViewMode === 'gridImage') {
             console.log('🔄 [EXIT] 그리드 모드로 복귀');
