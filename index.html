@@ -2058,6 +2058,7 @@
 
         /* Thumbnail Navigator */
         .thumbnail-navigator {
+            position: absolute !important;
             background: var(--panel-color);
             border: 1px solid var(--border-color);
             border-radius: 6px;
@@ -2067,20 +2068,12 @@
             min-height: 150px;
             resize: none;
             overflow: hidden;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .thumbnail-navigator:not(.is-floating) {
-            position: absolute !important;
             right: 12px !important;
             top: 50% !important;
             transform: translateY(-50%) !important;
             left: auto !important;
-        }
-
-        .thumbnail-navigator.is-floating {
-            position: fixed !important;
+            display: flex;
+            flex-direction: column;
         }
 
         .thumbnail-navigator.vertical {

@@ -923,31 +923,6 @@ class WaferMapViewer {
                     target: e.target
                 });
                 
-                // ✅ 버튼 영역에서 더블 클릭한 경우 버튼 2번 클릭으로 처리
-                const clickedButton = e.target.closest('#prev-btn, #next-btn');
-                
-                if (clickedButton) {
-                    console.log('🖱️ [DBLCLICK] 버튼 영역에서 더블 클릭 - 버튼 2번 클릭으로 처리');
-                    e.preventDefault();
-                    e.stopPropagation();
-                    
-                    // 버튼 클릭 이벤트를 2번 발생시킴
-                    if (clickedButton.id === 'prev-btn') {
-                        this.navigatePrevious();
-                        // 약간의 지연 후 두 번째 클릭 실행
-                        setTimeout(() => {
-                            this.navigatePrevious();
-                        }, 50);
-                    } else if (clickedButton.id === 'next-btn') {
-                        this.navigateNext();
-                        // 약간의 지연 후 두 번째 클릭 실행
-                        setTimeout(() => {
-                            this.navigateNext();
-                        }, 50);
-                    }
-                    return; // 버튼 영역에서는 더블 클릭 액션 무시
-                }
-                
                 // ✅ Step 1: 상세 모드 확인
                 if (this.detailMode) {
                     console.log('🖱️ [DBLCLICK] → 상세 모드 종료');
@@ -955,12 +930,15 @@ class WaferMapViewer {
                     return;
                 }
                 
-                // ✅ Step 2: 파일탐색기 모드 (single) - 2번 이동
+                // ✅ Step 2: 파일탐색기 모드 (single) - 2번 이동 (이미지 캔버스에서의 더블클릭에만 한정)
                 if (this.viewMode === 'single') {
-                    console.log('🖱️ [DBLCLICK] → 파일탐색기 모드: 2번 이동');
-                    e.preventDefault();
-                    this.handleDoubleClickNavigation();
-                    return;
+                    const isOnImageCanvas = this.dom.imageCanvas && (e.target === this.dom.imageCanvas || this.dom.imageCanvas.contains(e.target));
+                    if (isOnImageCanvas) {
+                        console.log('🖱️ [DBLCLICK] → 파일탐색기 모드: 2번 이동 (imageCanvas에서 발생)');
+                        e.preventDefault();
+                        this.handleDoubleClickNavigation();
+                        return;
+                    }
                 }
                 
                 // ✅ Step 3: 그리드 이미지 모드 (gridImage) - 그리드 복귀
@@ -4554,28 +4532,7 @@ class WaferMapViewer {
 
             const files = Array.isArray(data.items) ? data.items : [];
             
-            // 🔥 Wafer Map Explorer: 폴더는 내림차순, 파일은 오름차순 정렬 (폴더 우선)
-            // 🔥 최상위 폴더와 하위폴더 모두 동일하게 적용
-            // 🔥 숫자 자연 정렬 적용 (예: 5가 10보다 앞에 옴)
-            const sortedFiles = [...files].sort((a, b) => {
-                const isAFolder = a.type === 'directory';
-                const isBFolder = b.type === 'directory';
-                
-                // 🔥 폴더가 파일보다 먼저 나오도록
-                if (isAFolder && !isBFolder) return -1;
-                if (!isAFolder && isBFolder) return 1;
-                
-                const nameA = a.name || '';
-                const nameB = b.name || '';
-                
-                // 🔥 폴더는 내림차순 (Z → A), 숫자 자연 정렬
-                if (isAFolder && isBFolder) {
-                    return nameB.localeCompare(nameA, undefined, { numeric: true, sensitivity: 'base' });
-                }
-                
-                // 🔥 파일은 오름차순 (A → Z), 숫자 자연 정렬
-                return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
-            });
+            const sortedFiles = this.sortExplorerItems(files);
 
             // 제품 폴더 선택 시 label 캐시 초기화
             if (path) {
@@ -4589,6 +4546,481 @@ class WaferMapViewer {
             containerElement.innerHTML = `<p style=\"color: #ff5555; padding: 10px;\">Error loading files.</p>`;
 
             console.error("[DEBUG] loadDirectoryContents error:", error);
+        }
+    }
+
+    sortExplorerItems(items) {
+        return [...(items || [])].sort((a, b) => {
+            const isAFolder = a?.type === 'directory';
+            const isBFolder = b?.type === 'directory';
+
+            if (isAFolder && !isBFolder) return -1;
+            if (!isAFolder && isBFolder) return 1;
+
+            const nameA = a?.name || '';
+            const nameB = b?.name || '';
+
+            if (isAFolder && isBFolder) {
+                // 폴더는 내림차순 (Z → A)
+                return nameB.localeCompare(nameA, undefined, { numeric: true, sensitivity: 'base' });
+            }
+
+            // 파일은 오름차순 (A → Z)
+            return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+        });
+    }
+
+    buildExplorerFullPath(folderPath, name) {
+        const base = (folderPath || '').replace(/\\/g, '/').replace(/\/+$/g, '');
+        return base ? `${base}/${name}` : name;
+    }
+
+    getParentExplorerPath(path) {
+        if (path === null || path === undefined) return null;
+        const normalized = (path || '').replace(/\\/g, '/').replace(/\/+$/g, '');
+        if (!normalized) return null;
+        const lastSlash = normalized.lastIndexOf('/');
+        if (lastSlash === -1) return '';
+        return normalized.slice(0, lastSlash);
+    }
+
+    async fetchExplorerEntries(folderPath) {
+        const url = folderPath ? `/api/files?path=${encodeURIComponent(folderPath)}` : '/api/files';
+        const data = await fetchJson(url, {
+            signal: this.globalAbortController?.signal
+        });
+
+        const items = Array.isArray(data.items) ? data.items : [];
+        const sorted = this.sortExplorerItems(items);
+        const normalizedFolderPath = (folderPath || '').replace(/\\/g, '/').replace(/\/+$/g, '');
+
+        const folders = [];
+        const files = [];
+
+        sorted.forEach(item => {
+            if (!item || !item.name) return;
+            const fullPath = item.path || this.buildExplorerFullPath(normalizedFolderPath, item.name);
+
+            if (item.type === 'directory') {
+                folders.push({ type: 'folder', name: item.name, path: fullPath });
+            } else if (item.type === 'file' && this.isImageFile(item.name)) {
+                files.push({ type: 'file', name: item.name, path: fullPath });
+            }
+        });
+
+        return { folders, files };
+    }
+
+    async findFirstImageInExplorerFolder(folderPath) {
+        const { folders, files } = await this.fetchExplorerEntries(folderPath);
+        for (const folder of folders) {
+            const imagePath = await this.findFirstImageInExplorerFolder(folder.path);
+            if (imagePath) return imagePath;
+        }
+        if (files.length > 0) {
+            return files[0].path;
+        }
+        return null;
+    }
+
+    async findLastImageInExplorerFolder(folderPath) {
+        const { folders, files } = await this.fetchExplorerEntries(folderPath);
+        for (let i = files.length - 1; i >= 0; i--) {
+            const file = files[i];
+            if (file?.path) return file.path;
+        }
+        for (let i = folders.length - 1; i >= 0; i--) {
+            const folder = folders[i];
+            const imagePath = await this.findLastImageInExplorerFolder(folder.path);
+            if (imagePath) return imagePath;
+        }
+        return null;
+    }
+
+    async resolveExplorerEntryToImage(entry, direction) {
+        if (!entry) return null;
+        if (entry.type === 'file') {
+            return entry.path;
+        }
+        if (entry.type === 'folder') {
+            if (direction > 0) {
+                return await this.findFirstImageInExplorerFolder(entry.path);
+            }
+            return await this.findLastImageInExplorerFolder(entry.path);
+        }
+        return null;
+    }
+
+    async findNextImageWithinFolder(folderPath, currentImagePath) {
+        if (folderPath === null || folderPath === undefined) return null;
+        const { files } = await this.fetchExplorerEntries(folderPath);
+        if (!files || files.length === 0) return null;
+        const normalizedTarget = this.normalizePath(currentImagePath);
+        const index = files.findIndex(file => this.normalizePath(file.path) === normalizedTarget);
+        if (index !== -1 && index + 1 < files.length) {
+            return files[index + 1].path;
+        }
+        return null;
+    }
+
+    async findPreviousImageWithinFolder(folderPath, currentImagePath) {
+        if (folderPath === null || folderPath === undefined) return null;
+        const { files } = await this.fetchExplorerEntries(folderPath);
+        if (!files || files.length === 0) return null;
+        const normalizedTarget = this.normalizePath(currentImagePath);
+        const index = files.findIndex(file => this.normalizePath(file.path) === normalizedTarget);
+        if (index > 0) {
+            return files[index - 1].path;
+        }
+        return null;
+    }
+
+    async findNextExplorerImagePath(currentPath) {
+        if (!currentPath) return null;
+        const normalized = currentPath.replace(/\\/g, '/').replace(/\/+$/g, '');
+        const slashIndex = normalized.lastIndexOf('/');
+        const folderPath = slashIndex === -1 ? '' : normalized.slice(0, slashIndex);
+
+        const nextInFolder = await this.findNextImageWithinFolder(folderPath, normalized);
+        if (nextInFolder) return nextInFolder;
+
+        const parentPath = folderPath ? this.getParentExplorerPath(folderPath) : null;
+        return await this.findNextImageFromParent(parentPath, folderPath);
+    }
+
+    async findPreviousExplorerImagePath(currentPath) {
+        if (!currentPath) return null;
+        const normalized = currentPath.replace(/\\/g, '/').replace(/\/+$/g, '');
+        const slashIndex = normalized.lastIndexOf('/');
+        const folderPath = slashIndex === -1 ? '' : normalized.slice(0, slashIndex);
+
+        const prevInFolder = await this.findPreviousImageWithinFolder(folderPath, normalized);
+        if (prevInFolder) return prevInFolder;
+
+        const parentPath = folderPath ? this.getParentExplorerPath(folderPath) : null;
+        return await this.findPreviousImageFromParent(parentPath, folderPath);
+    }
+
+    async findNextImageFromParent(parentPath, childEntryPath) {
+        if (parentPath === null || parentPath === undefined) {
+            return null;
+        }
+
+        const { folders, files } = await this.fetchExplorerEntries(parentPath);
+        const entries = [...folders, ...files];
+        if (entries.length === 0) {
+            return null;
+        }
+
+        const normalizedChild = this.normalizePath(childEntryPath);
+        let index = entries.findIndex(entry => this.normalizePath(entry.path) === normalizedChild);
+        if (index === -1) {
+            index = -1;
+        }
+
+        for (let i = index + 1; i < entries.length; i++) {
+            const entry = entries[i];
+            const imagePath = await this.resolveExplorerEntryToImage(entry, 1);
+            if (imagePath) {
+                return imagePath;
+            }
+        }
+
+        const nextParent = this.getParentExplorerPath(parentPath);
+        return await this.findNextImageFromParent(nextParent, parentPath);
+    }
+
+    async findPreviousImageFromParent(parentPath, childEntryPath) {
+        if (parentPath === null || parentPath === undefined) {
+            return null;
+        }
+
+        const { folders, files } = await this.fetchExplorerEntries(parentPath);
+        const entries = [...folders, ...files];
+        if (entries.length === 0) {
+            return null;
+        }
+
+        const normalizedChild = this.normalizePath(childEntryPath);
+        let index = entries.findIndex(entry => this.normalizePath(entry.path) === normalizedChild);
+        if (index === -1) {
+            index = entries.length;
+        }
+
+        for (let i = index - 1; i >= 0; i--) {
+            const entry = entries[i];
+            const imagePath = await this.resolveExplorerEntryToImage(entry, -1);
+            if (imagePath) {
+                return imagePath;
+            }
+        }
+
+        const prevParent = this.getParentExplorerPath(parentPath);
+        return await this.findPreviousImageFromParent(prevParent, parentPath);
+    }
+
+    async navigateToExplorerImage(targetPath, directionLabel = 'next') {
+        if (!targetPath) return false;
+
+        try {
+            await this.loadFolderImageList(targetPath);
+        } catch (error) {
+            console.error('❌ [NAV_FOLDER] Failed to load folder list for path:', targetPath, error);
+            return false;
+        }
+
+        this._imageLoadVersion += 1;
+        const currentLoadVersion = this._imageLoadVersion;
+
+        this.selectedImagePath = targetPath;
+        this.showFileName(targetPath);
+        this.selectedImages = [targetPath];
+        this.updateWaferMapExplorerHighlight(targetPath);
+
+        if (this.thumbnailNavigator && this.thumbnailNavigator.isVisible) {
+            this.thumbnailNavigator.setImages(this.singleViewImageList, targetPath);
+        }
+
+        try {
+            await this.loadImage(targetPath, false, currentLoadVersion);
+            this.updatePyramidLevel();
+            console.log(`✅ [NAV_FOLDER] Moved to ${directionLabel} entry:`, targetPath);
+            return true;
+        } catch (error) {
+            console.error('❌ [NAV_FOLDER] Failed to load target image:', targetPath, error);
+            return false;
+        }
+    }
+
+    async ensureExplorerFolderOpen(folderPath) {
+        if (!this.dom.fileExplorer || !folderPath) return;
+        const normalized = folderPath.replace(/\\/g, '/').replace(/\/+$/g, '');
+        if (!normalized) return;
+        const escaped = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(normalized) : normalized.replace(/"/g, '\\"');
+        const summary = this.dom.fileExplorer.querySelector(`summary.folder[data-path="${escaped}"]`);
+        if (!summary) return;
+
+        const details = summary.closest('details');
+        if (!details) return;
+
+        const contentDiv = summary.nextElementSibling;
+        if (contentDiv && details.dataset.loaded !== 'true') {
+            try {
+                await this.loadDirectoryContents(normalized, contentDiv);
+                details.dataset.loaded = 'true';
+            } catch (error) {
+                console.warn('⚠️ [EXPLORER] Failed to load folder contents for', normalized, error);
+            }
+        }
+
+        details.open = true;
+    }
+
+    async ensureExplorerPathVisible(imagePath) {
+        if (!this.dom.fileExplorer || !imagePath) return;
+        const normalized = imagePath.replace(/\\/g, '/').replace(/\/+$/g, '');
+        const slashIndex = normalized.lastIndexOf('/');
+        if (slashIndex === -1) return;
+
+        const folderPath = normalized.slice(0, slashIndex);
+        if (!folderPath) return;
+
+        const segments = folderPath.split('/').filter(Boolean);
+        let currentPath = '';
+        for (const segment of segments) {
+            currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+            await this.ensureExplorerFolderOpen(currentPath);
+        }
+    }
+
+    applyWaferMapExplorerHighlight(imagePath) {
+        if (!this.dom.fileExplorer || !imagePath) return;
+
+        const allLinks = Array.from(this.dom.fileExplorer.querySelectorAll('a[data-path]'));
+        const normalizedTarget = this.normalizePath(imagePath);
+
+        let targetLink = allLinks.find(link => {
+            const linkPath = link.dataset.path;
+            return linkPath && this.normalizePath(linkPath) === normalizedTarget;
+        });
+
+        if (!targetLink) {
+            targetLink = allLinks.find(link => {
+                const linkNorm = this.normalizePath(link.dataset.path || '');
+                return linkNorm.endsWith(normalizedTarget) || normalizedTarget.endsWith(linkNorm);
+            });
+        }
+
+        if (targetLink) {
+            const parentDetails = targetLink.closest('details');
+            if (parentDetails && !parentDetails.open) {
+                parentDetails.open = true;
+            }
+
+            allLinks.forEach(link => {
+                link.classList.remove('selected');
+                link.style.removeProperty('background');
+            });
+
+            targetLink.classList.add('selected');
+            targetLink.style.background = '#05b';
+            targetLink.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
+    }
+
+    async findFirstImageInExplorerFolder(folderPath) {
+        const { folders, files } = await this.fetchExplorerEntries(folderPath);
+        for (const folder of folders) {
+            const imagePath = await this.findFirstImageInExplorerFolder(folder.path);
+            if (imagePath) return imagePath;
+        }
+        if (files.length > 0) {
+            return files[0].path;
+        }
+        return null;
+    }
+
+    async findLastImageInExplorerFolder(folderPath) {
+        const { folders, files } = await this.fetchExplorerEntries(folderPath);
+        for (let i = files.length - 1; i >= 0; i--) {
+            const file = files[i];
+            if (file?.path) return file.path;
+        }
+        for (let i = folders.length - 1; i >= 0; i--) {
+            const folder = folders[i];
+            const imagePath = await this.findLastImageInExplorerFolder(folder.path);
+            if (imagePath) return imagePath;
+        }
+        return null;
+    }
+
+    async resolveExplorerEntryToImage(entry, direction) {
+        if (!entry) return null;
+        if (entry.type === 'file') {
+            return entry.path;
+        }
+        if (entry.type === 'folder') {
+            if (direction > 0) {
+                return await this.findFirstImageInExplorerFolder(entry.path);
+            }
+            return await this.findLastImageInExplorerFolder(entry.path);
+        }
+        return null;
+    }
+
+    async findNextImageWithinFolder(folderPath, currentImagePath) {
+        if (folderPath === null || folderPath === undefined) return null;
+        const { files } = await this.fetchExplorerEntries(folderPath);
+        if (!files || files.length === 0) return null;
+        const normalizedTarget = this.normalizePath(currentImagePath);
+        const index = files.findIndex(file => this.normalizePath(file.path) === normalizedTarget);
+        if (index !== -1 && index + 1 < files.length) {
+            return files[index + 1].path;
+        }
+        return null;
+    }
+
+    async findPreviousImageWithinFolder(folderPath, currentImagePath) {
+        if (folderPath === null || folderPath === undefined) return null;
+        const { files } = await this.fetchExplorerEntries(folderPath);
+        if (!files || files.length === 0) return null;
+        const normalizedTarget = this.normalizePath(currentImagePath);
+        const index = files.findIndex(file => this.normalizePath(file.path) === normalizedTarget);
+        if (index > 0) {
+            return files[index - 1].path;
+        }
+        return null;
+    }
+
+    async findNextExplorerImagePath(currentPath) {
+        if (!currentPath) return null;
+        const normalized = currentPath.replace(/\\/g, '/').replace(/\/+$/g, '');
+        const slashIndex = normalized.lastIndexOf('/');
+        const folderPath = slashIndex === -1 ? '' : normalized.slice(0, slashIndex);
+
+        const nextInFolder = await this.findNextImageWithinFolder(folderPath, normalized);
+        if (nextInFolder) return nextInFolder;
+
+        const parentPath = folderPath ? this.getParentExplorerPath(folderPath) : null;
+        return await this.findNextImageFromParent(parentPath, folderPath);
+    }
+
+    async findPreviousExplorerImagePath(currentPath) {
+        if (!currentPath) return null;
+        const normalized = currentPath.replace(/\\/g, '/').replace(/\/+$/g, '');
+        const slashIndex = normalized.lastIndexOf('/');
+        const folderPath = slashIndex === -1 ? '' : normalized.slice(0, slashIndex);
+
+        const prevInFolder = await this.findPreviousImageWithinFolder(folderPath, normalized);
+        if (prevInFolder) return prevInFolder;
+
+        const parentPath = folderPath ? this.getParentExplorerPath(folderPath) : null;
+        return await this.findPreviousImageFromParent(parentPath, folderPath);
+    }
+
+    async findNextImageFromParent(parentPath, childEntryPath) {
+        if (parentPath === null || parentPath === undefined) {
+            return null;
+        }
+
+        const { folders, files } = await this.fetchExplorerEntries(parentPath);
+        const entries = [...folders, ...files];
+        if (entries.length === 0) {
+            return null;
+        }
+
+        const normalizedChild = this.normalizePath(childEntryPath);
+        let index = entries.findIndex(entry => this.normalizePath(entry.path) === normalizedChild);
+        if (index === -1) {
+            index = -1;
+        }
+
+        for (let i = index + 1; i < entries.length; i++) {
+            const entry = entries[i];
+            const imagePath = await this.resolveExplorerEntryToImage(entry, 1);
+            if (imagePath) {
+                return imagePath;
+            }
+        }
+
+        const nextParent = this.getParentExplorerPath(parentPath);
+        return await this.findNextImageFromParent(nextParent, parentPath);
+    }
+
+    async findPreviousImageFromParent(parentPath, childEntryPath) {
+        if (parentPath === null || parentPath === undefined) {
+            return null;
+        }
+
+        const { folders, files } = await this.fetchExplorerEntries(parentPath);
+        const entries = [...folders, ...files];
+        if (entries.length === 0) {
+            return null;
+        }
+
+        const normalizedChild = this.normalizePath(childEntryPath);
+        let index = entries.findIndex(entry => this.normalizePath(entry.path) === normalizedChild);
+        if (index === -1) {
+            index = entries.length;
+        }
+
+        for (let i = index - 1; i >= 0; i--) {
+            const entry = entries[i];
+            const imagePath = await this.resolveExplorerEntryToImage(entry, -1);
+            if (imagePath) {
+                return imagePath;
+            }
+        }
+
+        const prevParent = this.getParentExplorerPath(parentPath);
+        return await this.findPreviousImageFromParent(prevParent, parentPath);
+    }
+
+    processPendingNavigationQueue() {
+        if (this._pendingNavDirection) {
+            const pending = this._pendingNavDirection;
+            this._pendingNavDirection = 0;
+            setTimeout(() => this.navigateSingleImageMode(pending), 10);
         }
     }
 
@@ -8061,27 +8493,14 @@ class WaferMapViewer {
     updateWaferMapExplorerHighlight(imagePath) {
         if (!this.dom.fileExplorer || !imagePath) return;
 
-        const allLinks = Array.from(this.dom.fileExplorer.querySelectorAll('a[data-path]'));
-        const targetLink = allLinks.find(link => {
-            const linkPath = link.dataset.path;
-            return linkPath && this.normalizePath(linkPath) === this.normalizePath(imagePath);
-        });
-
-        if (targetLink) {
-            // 모든 선택 해제
-            allLinks.forEach(link => {
-                link.classList.remove('selected');
-                link.style.removeProperty('background');
+        this.ensureExplorerPathVisible(imagePath)
+            .then(() => this.applyWaferMapExplorerHighlight(imagePath))
+            .catch(error => {
+                console.warn('⚠️ [EXPLORER] Failed to ensure path visibility:', error);
+                this.applyWaferMapExplorerHighlight(imagePath);
             });
-
-            // 현재 이미지 선택 표시
-            targetLink.classList.add('selected');
-            targetLink.style.background = '#05b';
-
-            // 스크롤하여 보이도록
-            targetLink.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
     }
+
 
     /**
      * 모든 피라미드 레벨을 background에서 미리 다운로드
@@ -14856,10 +15275,11 @@ class WaferMapViewer {
         this.viewMode = 'single';
         this.singleImageFromGrid = false;
         
-        // ✅ 파일명과 경로에서 폴더 추출
-        const lastSlash = imagePath.lastIndexOf('/');
-        const folderPath = imagePath.substring(0, lastSlash);
-        const fileName = imagePath.substring(lastSlash + 1);
+        // ✅ 파일명과 경로에서 폴더 추출 (윈도우 백슬래시도 처리)
+        const normalizedImagePath = imagePath.replace(/\\/g, '/');
+        const lastSlash = Math.max(imagePath.lastIndexOf('/'), imagePath.lastIndexOf('\\'));
+        const folderPath = lastSlash >= 0 ? imagePath.substring(0, lastSlash) : '';
+        const fileName = lastSlash >= 0 ? imagePath.substring(lastSlash + 1) : imagePath;
         
         console.log('✅ [SINGLE_VIEW] Folder:', folderPath, 'File:', fileName);
         
@@ -14896,13 +15316,12 @@ class WaferMapViewer {
 
             console.log('✅ [SINGLE_VIEW] 필터링 후 이미지 리스트:', this.singleViewImageList);
 
-            // ✅ 정렬 (파일명순)
-            this.singleViewImageList.sort();
+            // ✅ 자연 정렬 (파일명 기준: 5 < 10 < 15)
+            this.naturalSortPaths(this.singleViewImageList);
 
             console.log('✅ [SINGLE_VIEW] 정렬 후 이미지 리스트:', this.singleViewImageList);
 
-            // ✅ 현재 이미지의 인덱스 찾기 (경로 정규화 후 비교)
-            const normalizedImagePath = imagePath.replace(/\\/g, '/');
+        // ✅ 현재 이미지의 인덱스 찾기 (경로 정규화 후 비교)
             console.log('✅ [SINGLE_VIEW] 찾을 이미지 경로 (normalized):', normalizedImagePath);
 
             this.singleViewImageIndex = this.singleViewImageList.findIndex(f => {
@@ -15400,7 +15819,9 @@ class WaferMapViewer {
         this.selectedImagePath = nextImagePath;  // 즉시 경로 업데이트
         this.showFileName(nextImagePath);  // 즉시 파일명 패널 업데이트
 
-        // ✅ 파일 탐색기 하이라이트 즉시 업데이트 (로딩 대기 없이)
+        // ✅ 파일 탐색기 선택 상태 동기화
+        this.selectedImages = [nextImagePath];
+        // ✅ 파일 탐색기 하이라이트 즉시 업데이트
         this.updateWaferMapExplorerHighlight(nextImagePath);
 
         // ✅ Wafer Navigator 하이라이트 즉시 업데이트
@@ -15505,20 +15926,20 @@ class WaferMapViewer {
         // ✅ 현재 인덱스 (singleViewImageIndex 사용)
         let currentIdx = this.singleViewImageIndex >= 0 ? this.singleViewImageIndex : 0;
 
-        // ✅ 다음 인덱스 계산
-        let nextIdx = currentIdx + direction;
         const listLength = this.singleViewImageList.length;
 
-        // ✅ 폴더 경계 체크: 다음 폴더로 이동해야 하는가?
-        if (nextIdx >= listLength && direction > 0) {
-            // 현재 폴더의 마지막 → 다음 폴더로
+        // ✅ 폴더 경계 체크 (인덱스 기준으로 명확 처리)
+        if (direction > 0 && currentIdx === listLength - 1) {
             await this.navigateToNextFolder();
-            return; // 다음 폴더로 이동했으므로 종료
-        } else if (nextIdx < 0 && direction < 0) {
-            // 현재 폴더의 처음 → 이전 폴더로
+            return;
+        }
+        if (direction < 0 && currentIdx === 0) {
             await this.navigateToPreviousFolder();
             return; // 이전 폴더로 이동했으므로 종료
         }
+
+        // ✅ 다음 인덱스 계산
+        let nextIdx = currentIdx + direction;
 
         // ✅ 같은 폴더 내에서 순환
         if (nextIdx < 0) {
@@ -15546,7 +15967,9 @@ class WaferMapViewer {
         this.selectedImagePath = nextImagePath;
         this.showFileName(nextImagePath);
 
-        // ✅ 파일 탐색기 하이라이트 즉시 업데이트 (로딩 대기 없이)
+        // ✅ 파일 탐색기 선택 상태 동기화
+        this.selectedImages = [nextImagePath];
+        // ✅ 파일 탐색기 하이라이트 즉시 업데이트
         this.updateWaferMapExplorerHighlight(nextImagePath);
 
         // ✅ Wafer Navigator 하이라이트 즉시 업데이트
@@ -15593,75 +16016,24 @@ class WaferMapViewer {
             const currentPath = this.selectedImagePath || this.singleViewImageList[this.singleViewImageIndex];
             if (!currentPath) {
                 console.warn('⚠️ [NAV_FOLDER] No current path');
-                this._isNavigating = false;
                 return;
             }
 
-            // 현재 폴더 경로 추출
-            const currentDir = currentPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
-
-            // 파일 탐색기에서 모든 폴더 찾기
-            const allFolders = Array.from(this.dom.fileExplorer.querySelectorAll('summary.folder'));
-            const currentFolderIndex = allFolders.findIndex(folder => {
-                const folderPath = folder.dataset.path;
-                return folderPath && this.normalizePath(folderPath) === this.normalizePath(currentDir);
-            });
-
-            if (currentFolderIndex === -1 || currentFolderIndex >= allFolders.length - 1) {
-                console.warn('⚠️ [NAV_FOLDER] No next folder found');
-                this._isNavigating = false;
+            const nextImagePath = await this.findNextExplorerImagePath(currentPath);
+            if (!nextImagePath) {
+                console.warn('⚠️ [NAV_FOLDER] No next entry found in explorer order');
                 return;
             }
 
-            // 다음 폴더 찾기
-            const nextFolder = allFolders[currentFolderIndex + 1];
-            const nextFolderPath = nextFolder.dataset.path;
-
-            if (!nextFolderPath) {
-                console.warn('⚠️ [NAV_FOLDER] Next folder has no path');
-                this._isNavigating = false;
+            const moved = await this.navigateToExplorerImage(nextImagePath, 'next');
+            if (!moved) {
                 return;
-            }
-
-            // 재귀적으로 첫 이미지 찾기
-            const firstImagePath = await this.findFirstImageInFolderRecursive(nextFolderPath, nextFolder);
-
-            if (!firstImagePath) {
-                console.warn('⚠️ [NAV_FOLDER] No image found in next folder');
-                this._isNavigating = false;
-                return;
-            }
-
-            // 새 폴더의 전체 이미지 리스트 가져오기
-            await this.loadFolderImageList(firstImagePath);
-
-            // 이미지 로드
-            this._imageLoadVersion += 1;
-            const currentLoadVersion = this._imageLoadVersion;
-
-            this.selectedImagePath = firstImagePath;
-            this.showFileName(firstImagePath);
-
-            if (this.thumbnailNavigator && this.thumbnailNavigator.isVisible) {
-                this.thumbnailNavigator.setImages(this.singleViewImageList, firstImagePath);
-            }
-
-            await this.loadImage(firstImagePath, false, currentLoadVersion);
-            this.updatePyramidLevel();
-
-            console.log('✅ [NAV_FOLDER] Moved to next folder:', firstImagePath);
-
-            this._isNavigating = false;
-
-            // 큐 처리
-            if (this._pendingNavDirection) {
-                const pending = this._pendingNavDirection;
-                this._pendingNavDirection = 0;
-                setTimeout(() => this.navigateSingleImageMode(pending), 10);
             }
         } catch (error) {
             console.error('❌ [NAV_FOLDER] Failed to navigate to next folder:', error);
+        } finally {
             this._isNavigating = false;
+            this.processPendingNavigationQueue();
         }
     }
 
@@ -15673,104 +16045,38 @@ class WaferMapViewer {
             const currentPath = this.selectedImagePath || this.singleViewImageList[this.singleViewImageIndex];
             if (!currentPath) {
                 console.warn('⚠️ [NAV_FOLDER] No current path');
-                this._isNavigating = false;
                 return;
             }
 
-            // 현재 폴더 경로 추출
-            const currentDir = currentPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
-
-            // 파일 탐색기에서 모든 폴더 찾기
-            const allFolders = Array.from(this.dom.fileExplorer.querySelectorAll('summary.folder'));
-            const currentFolderIndex = allFolders.findIndex(folder => {
-                const folderPath = folder.dataset.path;
-                return folderPath && this.normalizePath(folderPath) === this.normalizePath(currentDir);
-            });
-
-            if (currentFolderIndex <= 0) {
-                console.warn('⚠️ [NAV_FOLDER] No previous folder found');
-                this._isNavigating = false;
+            const prevImagePath = await this.findPreviousExplorerImagePath(currentPath);
+            if (!prevImagePath) {
+                console.warn('⚠️ [NAV_FOLDER] No previous entry found in explorer order');
                 return;
             }
 
-            // 이전 폴더 찾기
-            const prevFolder = allFolders[currentFolderIndex - 1];
-            const prevFolderPath = prevFolder.dataset.path;
-
-            if (!prevFolderPath) {
-                console.warn('⚠️ [NAV_FOLDER] Previous folder has no path');
-                this._isNavigating = false;
+            const moved = await this.navigateToExplorerImage(prevImagePath, 'previous');
+            if (!moved) {
                 return;
-            }
-
-            // 이전 폴더의 전체 이미지 리스트 가져오기 (마지막 이미지로 이동하기 위해)
-            const folderPath = prevFolderPath;
-            const response = await fetch(`/api/files?path=${encodeURIComponent(folderPath)}`);
-            const data = await response.json();
-
-            const imageList = (data.items || [])
-                .filter(item => item.type === 'file' && this.isImageFile(item.name))
-                .map(item => item.path || `${folderPath}/${item.name}`)
-                .sort();
-
-            if (imageList.length === 0) {
-                console.warn('⚠️ [NAV_FOLDER] No images in previous folder');
-                this._isNavigating = false;
-                return;
-            }
-
-            // 마지막 이미지 선택
-            const lastImagePath = imageList[imageList.length - 1];
-
-            this.singleViewImageList = imageList;
-            this.singleViewImageIndex = imageList.length - 1;
-            this.viewMode = 'single';
-
-            // 이미지 로드
-            this._imageLoadVersion += 1;
-            const currentLoadVersion = this._imageLoadVersion;
-
-            this.selectedImagePath = lastImagePath;
-            this.showFileName(lastImagePath);
-
-            if (this.thumbnailNavigator && this.thumbnailNavigator.isVisible) {
-                this.thumbnailNavigator.setImages(this.singleViewImageList, lastImagePath);
-            }
-
-            await this.loadImage(lastImagePath, false, currentLoadVersion);
-            this.updatePyramidLevel();
-
-            console.log('✅ [NAV_FOLDER] Moved to previous folder:', lastImagePath);
-
-            this._isNavigating = false;
-
-            // 큐 처리
-            if (this._pendingNavDirection) {
-                const pending = this._pendingNavDirection;
-                this._pendingNavDirection = 0;
-                setTimeout(() => this.navigateSingleImageMode(pending), 10);
             }
         } catch (error) {
             console.error('❌ [NAV_FOLDER] Failed to navigate to previous folder:', error);
+        } finally {
             this._isNavigating = false;
+            this.processPendingNavigationQueue();
         }
     }
 
-    /**
-     * ✅ 폴더의 전체 이미지 리스트 로드 (enterSingleViewMode 로직 재사용)
-     * @param {string} imagePath - 폴더 내 임의의 이미지 경로
-     */
     async loadFolderImageList(imagePath) {
-        const lastSlash = imagePath.lastIndexOf('/');
-        const folderPath = imagePath.substring(0, lastSlash);
+        const lastSlash = Math.max(imagePath.lastIndexOf('/'), imagePath.lastIndexOf('\\'));
+        const folderPath = lastSlash >= 0 ? imagePath.substring(0, lastSlash) : '';
 
         const response = await fetch(`/api/files?path=${encodeURIComponent(folderPath)}`);
         const data = await response.json();
 
         this.singleViewImageList = (data.items || [])
             .filter(item => item.type === 'file' && this.isImageFile(item.name))
-            .map(item => item.path || `${folderPath}/${item.name}`)
-            .sort();
+            .map(item => item.path || `${folderPath}/${item.name}`);
+        this.naturalSortPaths(this.singleViewImageList);
 
         // 현재 이미지 인덱스 찾기
         const normalizedImagePath = imagePath.replace(/\\/g, '/');
@@ -15867,6 +16173,99 @@ class WaferMapViewer {
         return null;
     }
 
+    async findLastImageInFolderRecursive(folderPath, folderElement) {
+        const detailsElement = folderElement.parentElement;
+        if (!detailsElement) return null;
+
+        if (!detailsElement.open) {
+            const contentDiv = folderElement.nextElementSibling;
+            if (!contentDiv) return null;
+            await this.loadDirectoryContents(folderPath, contentDiv);
+            detailsElement.dataset.loaded = 'true';
+            detailsElement.open = true;
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        const contentDiv = folderElement.nextElementSibling;
+        if (!contentDiv) return null;
+
+        const items = Array.from(contentDiv.querySelectorAll('li')).reverse();
+
+        for (const item of items) {
+            const subFolder = item.querySelector('summary.folder');
+            if (subFolder) {
+                const subFolderPath = subFolder.dataset.path;
+                if (subFolderPath) {
+                    const imagePath = await this.findLastImageInFolderRecursive(subFolderPath, subFolder);
+                    if (imagePath) {
+                        return imagePath;
+                    }
+                }
+            }
+
+            const fileLink = item.querySelector('a[data-path]');
+            if (fileLink) {
+                const filePath = fileLink.dataset.path;
+                if (filePath && /\.(png|jpg|jpeg|gif|bmp|webp)$/i.test(filePath)) {
+                    return filePath;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * ✅ 재귀적으로 폴더 내 마지막 이미지 파일 찾기
+     * @param {string} folderPath 폴더 경로
+     * @param {HTMLElement} folderElement 폴더 요소 (summary.folder)
+     * @returns {Promise<string|null>} 마지막 이미지 파일 경로 또는 null
+     */
+    async findLastImageInFolderRecursive(folderPath, folderElement) {
+        // 폴더 열기
+        const detailsElement = folderElement.parentElement;
+        if (!detailsElement.open) {
+            const contentDiv = folderElement.nextElementSibling;
+            await this.loadDirectoryContents(folderPath, contentDiv);
+            detailsElement.dataset.loaded = 'true';
+            detailsElement.open = true;
+            // 폴더 내용 로드 대기
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        // 폴더 내용 가져오기
+        const contentDiv = folderElement.nextElementSibling;
+        if (!contentDiv) return null;
+
+        // 항목들을 뒤에서부터 검사
+        const allItems = Array.from(contentDiv.querySelectorAll('li'));
+        for (let i = allItems.length - 1; i >= 0; i--) {
+            const item = allItems[i];
+
+            // 하위 폴더가 있다면 가장 마지막 하위 이미지까지 재귀 탐색
+            const subFolder = item.querySelector('summary.folder');
+            if (subFolder) {
+                const subFolderPath = subFolder.dataset.path;
+                if (subFolderPath) {
+                    const imagePath = await this.findLastImageInFolderRecursive(subFolderPath, subFolder);
+                    if (imagePath) {
+                        return imagePath;
+                    }
+                }
+            }
+
+            // 파일이면 이미지 여부 확인
+            const fileLink = item.querySelector('a[data-path]');
+            if (fileLink) {
+                const filePath = fileLink.dataset.path;
+                if (filePath && /\.(png|jpg|jpeg|gif|bmp|webp)$/i.test(filePath)) {
+                    return filePath;
+                }
+            }
+        }
+
+        return null;
+    }
     /**
      * ✅ 이전 이미지 (← / ArrowLeft)
      */
@@ -15943,6 +16342,37 @@ class WaferMapViewer {
     normalizePath(path) {
         if (!path) return '';
         return path.replace(/\\/g, '/').toLowerCase();
+    }
+
+    /**
+     * ✅ 파일명 기준 자연 정렬 비교 (10 > 5를 올바르게 처리)
+     */
+    getNaturalCollator() {
+        if (!this._naturalCollator) {
+            this._naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+        }
+        return this._naturalCollator;
+    }
+
+    /**
+     * 파일 경로에서 파일명만 추출
+     */
+    getFilenameOnly(path) {
+        if (!path) return '';
+        const p = path.replace(/\\/g, '/');
+        return p.substring(p.lastIndexOf('/') + 1);
+    }
+
+    /**
+     * 경로 배열을 파일명 기준 자연 정렬
+     */
+    naturalSortPaths(paths) {
+        const collator = this.getNaturalCollator();
+        return paths.sort((a, b) => {
+            const ax = this.getFilenameOnly(a);
+            const bx = this.getFilenameOnly(b);
+            return collator.compare(ax, bx);
+        });
     }
 
     /**

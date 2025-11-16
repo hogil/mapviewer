@@ -128,6 +128,11 @@ export class GridManager {
      * 그리드 렌더링
      */
     render() {
+        // ✅ 그리드 모드 진입 시 Navigator 숨기기
+        if (window.waferMapViewer && window.waferMapViewer.thumbnailNavigator) {
+            window.waferMapViewer.thumbnailNavigator.hide();
+        }
+
         if (!this.container || this.currentImages.length === 0) {
             this.container.innerHTML = '<p>표시할 이미지가 없습니다.</p>';
             return;

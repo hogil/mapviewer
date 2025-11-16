@@ -403,12 +403,25 @@ void main() {
      * @param {HTMLImageElement} image - 로드할 이미지
      * @returns {Promise<void>}
      */
+    /**
+     * 현재 진행 중인 피라미드 생성 취소
+     */
+    cancelPyramid() {
+        this.imageVersion += 1; // 버전 증가로 진행 중인 작업 무효화
+        this.isGeneratingPyramid = false;
+        this.generatingLevels.clear();
+        this.log('피라미드 생성 취소됨');
+    }
+
     async loadImage(image) {
         // HTMLImageElement 또는 ImageBitmap 허용
         const isValid = (typeof ImageBitmap !== 'undefined' && image instanceof ImageBitmap) || image instanceof HTMLImageElement;
         if (!isValid) {
             throw new Error('유효한 이미지 타입이 아닙니다. (HTMLImageElement | ImageBitmap)');
         }
+
+        // 🔥 기존 피라미드 생성 즉시 취소
+        this.cancelPyramid();
 
         // 버전 증가 및 캐시 초기화
         this.imageVersion += 1;
