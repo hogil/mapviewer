@@ -2217,6 +2217,21 @@
             opacity: 1;
         }
 
+        .thumbnail-navigator-resize-handle-right {
+            position: absolute;
+            right: 0;
+            top: 0;
+            width: 4px;
+            height: 100%;
+            cursor: ew-resize;
+            background: transparent;
+            z-index: 10;
+        }
+
+        .thumbnail-navigator-resize-handle-right:hover {
+            background: rgba(0, 122, 204, 0.3);
+        }
+
         /* Snap Zone Overlay */
         .snap-zone-overlay {
             position: fixed;
@@ -2851,6 +2866,7 @@
                 <!-- Wafer images will be rendered here -->
             </div>
         </div>
+        <div class="thumbnail-navigator-resize-handle-right"></div>
         <div class="thumbnail-navigator-resize-handle"></div>
     </div>
 

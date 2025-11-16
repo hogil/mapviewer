@@ -11,17 +11,19 @@ export class ThumbnailNavigator {
         this.closeBtn = this.container?.querySelector('.thumbnail-navigator-close');
         this.list = document.getElementById('thumbnail-navigator-list');
         this.resizeHandle = this.container?.querySelector('.thumbnail-navigator-resize-handle');
+        this.resizeHandleRight = this.container?.querySelector('.thumbnail-navigator-resize-handle-right');
         this.snapOverlay = document.getElementById('snap-zone-overlay');
 
         // 상태
         this.isVisible = false;
         this.isDragging = false;
         this.isResizing = false;
+        this.isResizingWidth = false; // 너비만 조절
         this.layout = 'horizontal'; // 'vertical' or 'horizontal' (default: horizontal)
 
-        // 위치 및 크기 (디폴트: Wafer Map Explorer 위)
+        // 위치 및 크기 (디폴트)
         this.position = { x: 10, y: 10 };
-        this.size = { width: 380, height: 130 };
+        this.size = { width: 100, height: 450 };
 
         // 스냅 존 설정
         this.snapThreshold = 20; // px
@@ -76,9 +78,14 @@ export class ThumbnailNavigator {
             this.header.addEventListener('mousedown', (e) => this.startDrag(e));
         }
 
-        // 리사이즈 이벤트
+        // 리사이즈 이벤트 (대각선 - 너비+높이)
         if (this.resizeHandle) {
             this.resizeHandle.addEventListener('mousedown', (e) => this.startResize(e));
+        }
+
+        // 리사이즈 이벤트 (우측 - 너비만)
+        if (this.resizeHandleRight) {
+            this.resizeHandleRight.addEventListener('mousedown', (e) => this.startResizeWidth(e));
         }
 
         // 전역 이벤트
@@ -111,11 +118,26 @@ export class ThumbnailNavigator {
         e.stopPropagation();
     }
 
+    startResizeWidth(e) {
+        this.isResizingWidth = true;
+        this.resizeStart = {
+            x: e.clientX,
+            y: e.clientY,
+            width: this.size.width,
+            height: this.size.height
+        };
+
+        e.preventDefault();
+        e.stopPropagation();
+    }
+
     onMouseMove(e) {
         if (this.isDragging) {
             this.handleDrag(e);
         } else if (this.isResizing) {
             this.handleResize(e);
+        } else if (this.isResizingWidth) {
+            this.handleResizeWidth(e);
         }
     }
 
@@ -143,10 +165,22 @@ export class ThumbnailNavigator {
         let newHeight = this.resizeStart.height + deltaY;
 
         // 최소/최대 크기 제한
-        newWidth = Math.max(150, Math.min(newWidth, window.innerWidth - this.position.x - 20));
+        newWidth = Math.max(80, Math.min(newWidth, window.innerWidth - this.position.x - 20));
         newHeight = Math.max(150, Math.min(newHeight, window.innerHeight - this.position.y - 20));
 
         this.size = { width: newWidth, height: newHeight };
+        this.updateSize();
+    }
+
+    handleResizeWidth(e) {
+        const deltaX = e.clientX - this.resizeStart.x;
+
+        let newWidth = this.resizeStart.width + deltaX;
+
+        // 최소/최대 너비 제한
+        newWidth = Math.max(80, Math.min(newWidth, window.innerWidth - this.position.x - 20));
+
+        this.size.width = newWidth;
         this.updateSize();
     }
 
@@ -165,8 +199,13 @@ export class ThumbnailNavigator {
             this.saveToSession();
         }
 
+        if (this.isResizingWidth) {
+            this.saveToSession();
+        }
+
         this.isDragging = false;
         this.isResizing = false;
+        this.isResizingWidth = false;
     }
 
     detectSnapZone(mouseX, mouseY) {
