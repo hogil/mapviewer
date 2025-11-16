@@ -483,7 +483,7 @@ export class ThumbnailNavigator {
             if (saved) {
                 const state = JSON.parse(saved);
                 this.position = state.position || this.position;
-                this.size = state.size || this.size;
+                // size는 복원하지 않음 - 항상 기본값(50%) 사용
                 this.layout = state.layout || this.layout;
 
                 // 레이아웃 클래스 적용
