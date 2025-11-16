@@ -14968,6 +14968,8 @@ class WaferMapViewer {
 
             // Wafer Navigator 자동 표시 및 업데이트 (폴더 목록)
             if (this.thumbnailNavigator) {
+                console.log(`[VIEW_SINGLE] singleViewImageList length: ${this.singleViewImageList.length}`);
+                console.log(`[VIEW_SINGLE] singleViewImageList:`, this.singleViewImageList);
                 this.thumbnailNavigator.show();
                 this.thumbnailNavigator.setImages(this.singleViewImageList, imagePath);
             }
@@ -15038,6 +15040,8 @@ class WaferMapViewer {
 
             // 6. Wafer Navigator 자동 표시 및 업데이트 (그리드 목록)
             if (this.thumbnailNavigator) {
+                console.log(`[ENTER_SINGLE] gridViewImageList length: ${this.gridViewImageList.length}`);
+                console.log(`[ENTER_SINGLE] gridViewImageList:`, this.gridViewImageList);
                 this.thumbnailNavigator.show();
                 this.thumbnailNavigator.setImages(this.gridViewImageList, this.selectedImages[idx]);
             }

@@ -353,6 +353,9 @@ export class ThumbnailNavigator {
         this.imageList = images || [];
         this.currentImageIndex = this.imageList.indexOf(currentImagePath);
 
+        console.log(`[WAFER_NAV] setImages called - imageList length: ${this.imageList.length}, currentIndex: ${this.currentImageIndex}`);
+        console.log(`[WAFER_NAV] imageList:`, this.imageList);
+
         if (this.isVisible) {
             this.render();
         }
