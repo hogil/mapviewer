@@ -7939,10 +7939,8 @@ class WaferMapViewer {
         this.resetView(false);
         console.log(`[LOAD_IMAGE] resetView 호출 후 transform.scale: ${this.transform.scale.toFixed(4)}`);
 
-            // 🎯 resetView 완료 후 적절한 피라미드 레벨로 교체
-            setTimeout(() => {
-                                this.updatePyramidLevel();
-            }, 50);
+            // ❌ 제거됨: setTimeout으로 updatePyramidLevel 호출
+            // pyramid level 업데이트는 네비게이션 함수에서만 호출
 
             // 🚀 모든 피라미드 레벨 background pre-fetch (사용자 대기 없음)
             this.prefetchAllPyramidLevels();
@@ -13631,6 +13629,8 @@ class WaferMapViewer {
             if (nextImagePath) {
                 this.gridViewImageIndex = nextIdx;
                 this.loadImage(nextImagePath).then(() => {
+                    // ✅ pyramid level을 즉시 동기적으로 업데이트
+                    this.updatePyramidLevel();
                     this.detailImagePath = nextImagePath;
                 });
             }
@@ -13661,6 +13661,8 @@ class WaferMapViewer {
             if (nextImagePath) {
                 this.singleViewImageIndex = nextIdx;
                 this.loadImage(nextImagePath).then(() => {
+                    // ✅ pyramid level을 즉시 동기적으로 업데이트
+                    this.updatePyramidLevel();
                     this.detailImagePath = nextImagePath;
                 });
             }
@@ -15230,6 +15232,10 @@ class WaferMapViewer {
         
         this.loadImage(nextImagePath)
             .then(() => {
+                // ✅ pyramid level을 즉시 동기적으로 업데이트
+                // resetView(false)에서 설정한 zoom 상태를 확정
+                this.updatePyramidLevel();
+                
                 console.log('✅ [NAV] Successfully loaded image at index:', nextIdx);
                 
                 // ✅ 하이라이트 업데이트
@@ -15395,6 +15401,10 @@ class WaferMapViewer {
         // ✅ 이미지 로드
         this.loadImage(nextImagePath)
             .then(() => {
+                // ✅ pyramid level을 즉시 동기적으로 업데이트
+                // resetView(false)에서 설정한 zoom 상태를 확정
+                this.updatePyramidLevel();
+                
                 console.log('✅ [NAV] Loaded image', nextIndex, nextImagePath);
                 
                 // ✅ 파일 탐색기에서 선택 표시 업데이트
