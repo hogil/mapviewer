@@ -60,15 +60,9 @@ export class ThumbnailNavigator {
     }
 
     calculateDefaultSize() {
-        const viewerContainer = document.querySelector('.viewer-container');
-        if (viewerContainer) {
-            const containerWidth = viewerContainer.offsetWidth;
-            const containerHeight = viewerContainer.offsetHeight;
-
-            // 너비: 30%, 높이: 130px (horizontal 레이아웃)
-            this.size.width = Math.floor(containerWidth * 0.3);
-            this.size.height = 130;
-        }
+        // 고정 크기: 너비 100px, 높이 450px
+        this.size.width = 100;
+        this.size.height = 450;
     }
 
     bindEvents() {
