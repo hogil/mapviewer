@@ -2058,16 +2058,29 @@
 
         /* Thumbnail Navigator */
         .thumbnail-navigator {
-            position: fixed;
             background: var(--panel-color);
             border: 1px solid var(--border-color);
             border-radius: 6px;
             box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
             z-index: 10000;
-            min-width: 150px;
+            min-width: 92px;
             min-height: 150px;
             resize: none;
             overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .thumbnail-navigator:not(.is-floating) {
+            position: absolute !important;
+            right: 12px !important;
+            top: 50% !important;
+            transform: translateY(-50%) !important;
+            left: auto !important;
+        }
+
+        .thumbnail-navigator.is-floating {
+            position: fixed !important;
         }
 
         .thumbnail-navigator.vertical {
@@ -2083,15 +2096,12 @@
             padding: 8px 12px;
             border-bottom: 1px solid var(--border-color);
             cursor: move;
+            touch-action: none;
             user-select: none;
             display: flex;
             justify-content: space-between;
             align-items: center;
             height: 32px;
-        }
-
-        .thumbnail-navigator-header:active {
-            cursor: grabbing;
         }
 
         .thumbnail-navigator-title {
@@ -2130,7 +2140,7 @@
         .thumbnail-navigator-list {
             display: flex;
             gap: 8px;
-            padding: 10px;
+            padding: 5px;
             overflow: auto;
             height: 100%;
         }
@@ -2202,34 +2212,52 @@
             box-shadow: 0 0 0 1px var(--accent-color);
         }
 
-        .thumbnail-navigator-resize-handle {
+        .thumbnail-navigator-resize-handle,
+        .thumbnail-navigator-resize-handle-right {
             position: absolute;
-            right: 0;
-            bottom: 0;
-            width: 16px;
-            height: 16px;
-            cursor: nwse-resize;
-            background: linear-gradient(135deg, transparent 50%, var(--text-secondary-color) 50%);
-            opacity: 0.5;
-        }
-
-        .thumbnail-navigator-resize-handle:hover {
-            opacity: 1;
+            background: transparent;
+            pointer-events: auto;
+            touch-action: none;
         }
 
         .thumbnail-navigator-resize-handle-right {
-            position: absolute;
+            top: 32px;
+            bottom: 0;
             right: 0;
-            top: 0;
-            width: 4px;
-            height: 100%;
+            width: 12px;
             cursor: ew-resize;
-            background: transparent;
-            z-index: 10;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            background: linear-gradient(to left, rgba(255, 255, 255, 0.08), transparent);
+            z-index: 1;
         }
 
-        .thumbnail-navigator-resize-handle-right:hover {
-            background: rgba(0, 122, 204, 0.3);
+        .thumbnail-navigator-resize-handle {
+            bottom: 0;
+            right: 0;
+            width: 18px;
+            height: 18px;
+            cursor: nwse-resize;
+            z-index: 3;
+        }
+
+        .thumbnail-navigator-resize-handle::after {
+            content: '';
+            position: absolute;
+            inset: 4px;
+            border-right: 2px solid rgba(255, 255, 255, 0.45);
+            border-bottom: 2px solid rgba(255, 255, 255, 0.45);
+            opacity: 0.7;
+            transition: opacity 0.2s ease;
+        }
+
+        .thumbnail-navigator-resize-handle-right:hover,
+        .thumbnail-navigator:hover .thumbnail-navigator-resize-handle-right {
+            opacity: 0.5;
+        }
+
+        .thumbnail-navigator-resize-handle:hover::after {
+            opacity: 1;
         }
 
         /* Snap Zone Overlay */
@@ -2858,8 +2886,8 @@
     <!-- Wafer Navigator -->
     <div id="thumbnail-navigator" class="thumbnail-navigator" style="display: none;">
         <div class="thumbnail-navigator-header">
-            <span class="thumbnail-navigator-title">Wafer Navigator</span>
-            <button class="thumbnail-navigator-close" title="Close (T)">&times;</button>
+            <span class="thumbnail-navigator-title">Navigator</span>
+            <button class="thumbnail-navigator-close" title="Close">&times;</button>
         </div>
         <div class="thumbnail-navigator-content">
             <div id="thumbnail-navigator-list" class="thumbnail-navigator-list">
