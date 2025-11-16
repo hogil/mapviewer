@@ -357,7 +357,11 @@ export class ThumbnailNavigator {
         imageContainer.className = 'thumbnail-nav-item-image';
 
         const img = document.createElement('img');
-        img.src = `/api/thumbnail?path=${encodeURIComponent(imagePath)}`;
+
+        // 개인화된 색상 스킴 파라미터 추가
+        const personalizedParams = this.viewer ? this.viewer.getPersonalizedParams() : '';
+        const cacheBuster = this.viewer?._personalizedColorCacheBuster || Date.now();
+        img.src = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}&_t=${cacheBuster}`;
         img.alt = imagePath.split('/').pop();
         img.loading = 'lazy';
 
