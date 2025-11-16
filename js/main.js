@@ -13,6 +13,7 @@
 import { optimizedFetch, fetchOptimizer } from './fetch-optimizer.js';
 import { ColorSchemeEditor } from './color-editor.js';
 import { ChipAnnotator } from './chip-annotator.js';
+import { ThumbnailNavigator } from './thumbnail-navigator.js';
 
 // Constants
 
@@ -518,7 +519,8 @@ class WaferMapViewer {
 
         this.initSemiconductorRenderer();
         this.initChipAnnotator();
-        
+        this.initThumbnailNavigator();
+
         // ✅ 방법 2: Ctrl 키 상태 안정화를 위한 변수 초기화
         this.wheelTimeout = null;
         this.lastCtrlKey = false;
@@ -568,6 +570,11 @@ class WaferMapViewer {
         } else {
             console.warn('overlayCanvas가 준비되지 않았습니다');
         }
+    }
+
+    initThumbnailNavigator() {
+        this.thumbnailNavigator = new ThumbnailNavigator(this);
+        this.debugLog('Thumbnail Navigator 초기화 완료');
     }
 
     /**
@@ -850,6 +857,19 @@ class WaferMapViewer {
 
         this.bindClassModeEvents();
         this.bindChipLegendEvents();
+
+        // T 키로 썸네일 네비게이터 토글
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 't' || e.key === 'T') {
+                // 입력 필드에서는 작동하지 않도록
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+                e.preventDefault();
+                if (this.thumbnailNavigator) {
+                    this.thumbnailNavigator.toggle();
+                }
+            }
+        });
     }
 
     bindViewerEvents() {
@@ -7656,8 +7676,13 @@ class WaferMapViewer {
         }
     }
 
-    async loadImage(path, fromLabelExplorer = false) {
+    async loadImage(path, fromLabelExplorer = false, preserveView = false) {
         try {
+            // 🔥 네비게이션 시 현재 뷰 상태 저장
+            const savedZoom = preserveView ? this.zoom : null;
+            const savedOffsetX = preserveView ? this.offsetX : null;
+            const savedOffsetY = preserveView ? this.offsetY : null;
+
             // ✅ 이미지 로드 전에 색상 scheme 재로드 (서버에서 최신 색상 가져오기)
             // colorLegends가 없거나 비어있거나, currentUser의 스킴이 없을 때 재로드
             const needsReload = !this.colorLegends || 
@@ -7934,10 +7959,34 @@ class WaferMapViewer {
             `Fetch:${Math.round(fetchTime)}ms Buffer:${Math.round(bufferTime)}ms Bitmap:${Math.round(bitmapTime)}ms Total:${Math.round(totalTime)}ms`
         );
 
-        // 🔥 FIT_RELATIVE_MARGIN 값 확인 및 resetView 호출
-        console.log(`[LOAD_IMAGE] FIT_RELATIVE_MARGIN: ${FIT_RELATIVE_MARGIN}, resetView 호출 전 scale: ${this.transform.scale?.toFixed(4) || 'N/A'}`);
-        this.resetView(false);
-        console.log(`[LOAD_IMAGE] resetView 호출 후 transform.scale: ${this.transform.scale.toFixed(4)}`);
+        // 🔥 FIT_RELATIVE_MARGIN 값 확인 및 resetView 호출 (또는 뷰 복원)
+        if (preserveView && savedZoom !== null) {
+            console.log(`[LOAD_IMAGE] 뷰 복원 모드 - 저장된 줌: ${savedZoom.toFixed(4)}`);
+            // 이미지 크기 비율 계산 (중앙 배치)
+            const containerRect = this.dom.viewerContainer.getBoundingClientRect();
+            const effectiveW = Math.max(0, containerRect.width - 2);
+            const effectiveH = Math.max(0, containerRect.height - 2);
+
+            // 복원된 줌으로 transform 설정
+            this.zoom = savedZoom;
+            this.offsetX = savedOffsetX;
+            this.offsetY = savedOffsetY;
+            this.transform.scale = savedZoom;
+            this.transform.dx = savedOffsetX;
+            this.transform.dy = savedOffsetY;
+
+            console.log(`[LOAD_IMAGE] 뷰 복원 완료 - zoom: ${this.zoom.toFixed(4)}, offset: (${this.offsetX.toFixed(2)}, ${this.offsetY.toFixed(2)})`);
+        } else {
+            console.log(`[LOAD_IMAGE] FIT_RELATIVE_MARGIN: ${FIT_RELATIVE_MARGIN}, resetView 호출 전 scale: ${this.transform.scale?.toFixed(4) || 'N/A'}`);
+            this.resetView(false);
+            console.log(`[LOAD_IMAGE] resetView 호출 후 transform.scale: ${this.transform.scale.toFixed(4)}`);
+        }
+
+        // ✅ 명시적으로 렌더링 호출 (이미지 변경 확인)
+        console.log('[LOAD_IMAGE] 이미지 렌더링 시작:', path);
+        this.scheduleDraw();
+        // 즉시 한 번 더 그리기 (preserveView일 때 화면이 업데이트 안 되는 문제 방지)
+        this.draw();
 
             // ❌ 제거됨: setTimeout으로 updatePyramidLevel 호출
             // pyramid level 업데이트는 네비게이션 함수에서만 호출
@@ -14916,7 +14965,13 @@ class WaferMapViewer {
             }
             
             this.selectedImagePath = imagePath;
-            
+
+            // Wafer Navigator 자동 표시 및 업데이트 (폴더 목록)
+            if (this.thumbnailNavigator) {
+                this.thumbnailNavigator.show();
+                this.thumbnailNavigator.setImages(this.singleViewImageList, imagePath);
+            }
+
             console.log('✅ [SINGLE_VIEW] 단일 보기 모드 설정 완료', {
                 viewMode: this.viewMode,
                 imageCount: this.singleViewImageList.length,
@@ -14980,6 +15035,13 @@ class WaferMapViewer {
             if (this.chipAnnotator) {
                 this.chipAnnotator.updateSelectedChipsList();
             }
+
+            // 6. Wafer Navigator 자동 표시 및 업데이트 (그리드 목록)
+            if (this.thumbnailNavigator) {
+                this.thumbnailNavigator.show();
+                this.thumbnailNavigator.setImages(this.gridViewImageList, this.selectedImages[idx]);
+            }
+
             console.log('[ENTER_SINGLE] Ready');
         }).catch(error => {
             console.error('[ENTER_SINGLE] Error:', error);
@@ -15227,17 +15289,17 @@ class WaferMapViewer {
         // ✅ 인덱스 업데이트
         this.gridViewImageIndex = nextIdx;
         
-        console.log('✅ [NAV] Grid navigation', direction > 0 ? '→' : '←', 
+        console.log('✅ [NAV] Grid navigation', direction > 0 ? '→' : '←',
                     'from', currentIdx, 'to', nextIdx, 'of', listLength);
-        
-        this.loadImage(nextImagePath)
+
+        console.log(`🔄 [NAV] 이미지 로드 시작: ${nextImagePath}`);
+        this.loadImage(nextImagePath, false, true)  // preserveView=true
             .then(() => {
                 // ✅ pyramid level을 즉시 동기적으로 업데이트
-                // resetView(false)에서 설정한 zoom 상태를 확정
                 this.updatePyramidLevel();
-                
-                console.log('✅ [NAV] Successfully loaded image at index:', nextIdx);
-                
+
+                console.log('✅ [NAV] 이미지 로드 완료, index:', nextIdx, 'path:', nextImagePath);
+
                 // ✅ 하이라이트 업데이트
                 const grid = document.getElementById('image-grid');
                 if (grid) {
@@ -15250,22 +15312,27 @@ class WaferMapViewer {
                         }
                     });
                 }
-                
+
                 // ✅ 현재 이미지가 그리드에서 화면 중심에 보이도록 스크롤 조정
                 if (grid) {
                     const wraps = grid.querySelectorAll('.grid-thumb-wrap');
                     if (nextIdx >= 0 && nextIdx < wraps.length) {
                         const targetWrap = wraps[nextIdx];
                         // 화면 중심에 보이도록 스크롤
-                        targetWrap.scrollIntoView({ 
-                            behavior: 'smooth', 
+                        targetWrap.scrollIntoView({
+                            behavior: 'smooth',
                             block: 'center',
                             inline: 'center'
                         });
                         console.log(`✅ [NAV] 스크롤: 이미지 ${nextIdx}를 화면 중심에 표시`);
                     }
                 }
-                
+
+                // ✅ Wafer Navigator 하이라이트 업데이트
+                if (this.thumbnailNavigator && this.thumbnailNavigator.isVisible) {
+                    this.thumbnailNavigator.updateCurrentImage(nextImagePath);
+                }
+
                 this._isNavigating = false;
             })
             .catch(err => {
@@ -15398,20 +15465,25 @@ class WaferMapViewer {
             return;
         }
         
-        // ✅ 이미지 로드
-        this.loadImage(nextImagePath)
+        // ✅ 이미지 로드 (뷰 유지)
+        console.log(`🔄 [NAV] 이미지 로드 시작: ${nextImagePath}`);
+        this.loadImage(nextImagePath, false, true)  // preserveView=true
             .then(() => {
                 // ✅ pyramid level을 즉시 동기적으로 업데이트
-                // resetView(false)에서 설정한 zoom 상태를 확정
                 this.updatePyramidLevel();
-                
-                console.log('✅ [NAV] Loaded image', nextIndex, nextImagePath);
-                
+
+                console.log('✅ [NAV] 이미지 로드 완료:', nextIndex, nextImagePath);
+
                 // ✅ 파일 탐색기에서 선택 표시 업데이트
                 allLinks.forEach(link => link.classList.remove('selected'));
                 nextLink.classList.add('selected');
                 nextLink.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                
+
+                // ✅ Wafer Navigator 하이라이트 업데이트
+                if (this.thumbnailNavigator && this.thumbnailNavigator.isVisible) {
+                    this.thumbnailNavigator.updateCurrentImage(nextImagePath);
+                }
+
                 this._isNavigating = false;
             })
             .catch(err => {
