@@ -65,8 +65,8 @@ export class ThumbnailNavigator {
             const containerWidth = viewerContainer.offsetWidth;
             const containerHeight = viewerContainer.offsetHeight;
 
-            // 너비: 50%, 높이: 130px (horizontal 레이아웃)
-            this.size.width = Math.floor(containerWidth * 0.5);
+            // 너비: 30%, 높이: 130px (horizontal 레이아웃)
+            this.size.width = Math.floor(containerWidth * 0.3);
             this.size.height = 130;
         }
     }
@@ -278,6 +278,10 @@ export class ThumbnailNavigator {
 
         this.isVisible = true;
         this.container.style.display = 'flex';
+
+        // 항상 기본 크기로 재설정
+        this.calculateDefaultSize();
+
         this.updatePosition();
         this.updateSize();
 
@@ -468,7 +472,7 @@ export class ThumbnailNavigator {
     saveToSession() {
         const state = {
             position: this.position,
-            size: this.size,
+            // size는 저장하지 않음 - 항상 기본값(30%) 사용
             layout: this.layout
         };
         sessionStorage.setItem('thumbnailNavigator', JSON.stringify(state));
