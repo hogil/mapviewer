@@ -65,8 +65,8 @@ export class ThumbnailNavigator {
             const containerWidth = viewerContainer.offsetWidth;
             const containerHeight = viewerContainer.offsetHeight;
 
-            // 너비: 70%, 높이: 130px (horizontal 레이아웃)
-            this.size.width = Math.floor(containerWidth * 0.7);
+            // 너비: 50%, 높이: 130px (horizontal 레이아웃)
+            this.size.width = Math.floor(containerWidth * 0.5);
             this.size.height = 130;
         }
     }
@@ -375,13 +375,23 @@ export class ThumbnailNavigator {
         // sum_map.png를 composite(median)으로 표시
         if (displayName === 'sum_map.png' || displayName === 'sum_map') {
             displayName = 'composite(median)';
-        }
-        // index_로 시작하는 파일명을 grade_로 변경
-        else if (displayName.startsWith('index_')) {
-            displayName = displayName.replace(/^index_/, 'grade_');
-            // 확장자 제거 후 표시
+        } else {
+            // 확장자 제거
             const nameWithoutExt = displayName.replace(/\.(png|jpg|jpeg|gif|webp)$/i, '');
-            displayName = nameWithoutExt;
+
+            // index_로 시작하는 파일명을 grade_로 변경
+            let processedName = nameWithoutExt;
+            if (nameWithoutExt.startsWith('index_')) {
+                processedName = nameWithoutExt.replace(/^index_/, 'grade_');
+            }
+
+            // _로 split해서 첫 번째와 두 번째 인덱스만 표시
+            const parts = processedName.split('_');
+            if (parts.length >= 2) {
+                displayName = `${parts[0]} ${parts[1]}`;
+            } else {
+                displayName = processedName;
+            }
         }
 
         fileName.textContent = displayName;
