@@ -14936,7 +14936,13 @@ class WaferMapViewer {
             }
             
             this.selectedImagePath = imagePath;
-            
+
+            // Wafer Navigator 자동 표시 및 업데이트 (폴더 목록)
+            if (this.thumbnailNavigator) {
+                this.thumbnailNavigator.show();
+                this.thumbnailNavigator.setImages(this.singleViewImageList, imagePath);
+            }
+
             console.log('✅ [SINGLE_VIEW] 단일 보기 모드 설정 완료', {
                 viewMode: this.viewMode,
                 imageCount: this.singleViewImageList.length,
@@ -15000,6 +15006,13 @@ class WaferMapViewer {
             if (this.chipAnnotator) {
                 this.chipAnnotator.updateSelectedChipsList();
             }
+
+            // 6. Wafer Navigator 자동 표시 및 업데이트 (그리드 목록)
+            if (this.thumbnailNavigator) {
+                this.thumbnailNavigator.show();
+                this.thumbnailNavigator.setImages(this.gridViewImageList, this.selectedImages[idx]);
+            }
+
             console.log('[ENTER_SINGLE] Ready');
         }).catch(error => {
             console.error('[ENTER_SINGLE] Error:', error);
@@ -15277,15 +15290,20 @@ class WaferMapViewer {
                     if (nextIdx >= 0 && nextIdx < wraps.length) {
                         const targetWrap = wraps[nextIdx];
                         // 화면 중심에 보이도록 스크롤
-                        targetWrap.scrollIntoView({ 
-                            behavior: 'smooth', 
+                        targetWrap.scrollIntoView({
+                            behavior: 'smooth',
                             block: 'center',
                             inline: 'center'
                         });
                         console.log(`✅ [NAV] 스크롤: 이미지 ${nextIdx}를 화면 중심에 표시`);
                     }
                 }
-                
+
+                // ✅ Wafer Navigator 하이라이트 업데이트
+                if (this.thumbnailNavigator && this.thumbnailNavigator.isVisible) {
+                    this.thumbnailNavigator.updateCurrentImage(nextImagePath);
+                }
+
                 this._isNavigating = false;
             })
             .catch(err => {
@@ -15431,7 +15449,12 @@ class WaferMapViewer {
                 allLinks.forEach(link => link.classList.remove('selected'));
                 nextLink.classList.add('selected');
                 nextLink.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                
+
+                // ✅ Wafer Navigator 하이라이트 업데이트
+                if (this.thumbnailNavigator && this.thumbnailNavigator.isVisible) {
+                    this.thumbnailNavigator.updateCurrentImage(nextImagePath);
+                }
+
                 this._isNavigating = false;
             })
             .catch(err => {

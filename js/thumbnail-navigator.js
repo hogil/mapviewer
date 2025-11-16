@@ -62,9 +62,12 @@ export class ThumbnailNavigator {
     }
 
     calculateDefaultSize() {
-        // 고정 크기: 너비 100px, 높이 450px
-        this.size.width = 100;
-        this.size.height = 450;
+        // 내부 표시 영역을 정확히 140x450(px)로 보장하기 위한 외곽 크기
+        // 내부 = 컨테이너 - 보더(2) - 헤더(32) - 패딩(상하 5*2, 좌우 5*2)
+        // width: 140 = W - 2 - 10  => W = 152
+        // height: 450 = H - 2 - 32 - 10 => H = 494
+        this.size.width = 152;
+        this.size.height = 494;
     }
 
     bindEvents() {
@@ -352,9 +355,6 @@ export class ThumbnailNavigator {
     setImages(images, currentImagePath) {
         this.imageList = images || [];
         this.currentImageIndex = this.imageList.indexOf(currentImagePath);
-
-        console.log(`[WAFER_NAV] setImages called - imageList length: ${this.imageList.length}, currentIndex: ${this.currentImageIndex}`);
-        console.log(`[WAFER_NAV] imageList:`, this.imageList);
 
         if (this.isVisible) {
             this.render();
