@@ -8476,8 +8476,10 @@ class WaferMapViewer {
             // ✅ Arrow button visibility 업데이트
             this.updateArrowButtonVisibility();
 
-            // ✅ Wafer Map Explorer 하이라이트 업데이트 (어떤 방법으로든 이미지가 로드되면 자동 업데이트)
-            this.updateWaferMapExplorerHighlight(fullPath);
+            // ✅ Wafer Map Explorer 하이라이트 업데이트 (Label Explorer에서 온 경우는 제외 - 독립적 선택)
+            if (!fromLabelExplorer) {
+                this.updateWaferMapExplorerHighlight(fullPath);
+            }
         } catch (err) {
             console.error(`Failed to load image: ${path}`, err);
 
@@ -8500,6 +8502,7 @@ class WaferMapViewer {
                 this.applyWaferMapExplorerHighlight(imagePath);
             });
     }
+
 
 
     /**
@@ -12279,7 +12282,29 @@ class WaferMapViewer {
                                 const fileName = selectedKey.split('/')[1];
                                 const imgList = this.classToImgListCache?.[cls] || [];
                                 const selectedImg = imgList.find(item => item.name === fileName);
-                                this.loadImage(selectedImg.root_relative, true);  // 🔥 Label Explorer에서 호출 시 저장 안 함
+
+                                // ✅ Label Explorer용 이미지 리스트 설정 (navigator 지원)
+                                this.singleViewImageList = imgList.map(item => item.root_relative);
+                                this.naturalSortPaths(this.singleViewImageList);
+                                const currentPath = selectedImg.root_relative;
+                                this.singleViewImageIndex = this.singleViewImageList.findIndex(p =>
+                                    this.normalizePath(p) === this.normalizePath(currentPath)
+                                );
+                                if (this.singleViewImageIndex === -1) {
+                                    this.singleViewImageIndex = 0;
+                                }
+
+                                // ✅ viewMode 설정 (네비게이션 지원)
+                                this.viewMode = 'single';
+                                this.singleImageFromGrid = false;
+
+                                this.loadImage(selectedImg.root_relative, true).then(() => {
+                                    // ✅ Navigator 표시 (Label Explorer 이미지 리스트로)
+                                    if (this.thumbnailNavigator) {
+                                        this.thumbnailNavigator.show();
+                                        this.thumbnailNavigator.setImages(this.singleViewImageList, currentPath);
+                                    }
+                                });  // 🔥 Label Explorer에서 호출 시 저장 안 함
                             } else {
                                 // 다수 선택: 그리드 모드
 
@@ -13323,7 +13348,12 @@ class WaferMapViewer {
         
         // ✅ 패널 닫기 추가 (맨 앞에)
         this.closeChipSelectionPanel();
-        
+
+        // ✅ Wafer Navigator 숨김 (그리드 모드에서는 표시하지 않음)
+        if (this.thumbnailNavigator) {
+            this.thumbnailNavigator.hide();
+        }
+
         this.gridMode = true;
 
         // 🔥 이미지를 이름 순으로 오름차순 정렬 (숫자 자연 정렬 적용)
@@ -15373,6 +15403,12 @@ class WaferMapViewer {
                 document.removeEventListener('keydown', this.boundSingleViewHandler);
             }
 
+            // ✅ 그리드 네비게이션 핸들러도 제거 (gridImage 모드가 아니므로)
+            if (this.boundGridNavigationHandler) {
+                document.removeEventListener('keydown', this.boundGridNavigationHandler);
+                this.boundGridNavigationHandler = null;
+            }
+
             document.addEventListener('keydown', this.boundSingleViewHandler = (e) => {
                 if (this.detailMode && e.key === 'Escape') {
                     this.exitDetailMode();
@@ -15501,30 +15537,33 @@ class WaferMapViewer {
         // viewMode를 'gridImage'로 설정
         this.viewMode = 'gridImage';
         this.singleImageFromGrid = true;
-        
+
         const currentImages = this.currentGridImages;
         this.selectedImages = currentImages;
         this.gridViewImageList = [...currentImages];
-        
+
         const normalizedCurrent = this.normalizePath(this.selectedImages[idx]);
         const actualGridIndex = currentImages.findIndex(img => {
             const normalizedImg = this.normalizePath(img);
             return normalizedImg === normalizedCurrent;
         });
-        
+
         this.gridViewImageIndex = actualGridIndex !== -1 ? actualGridIndex : idx;
-        
+
         console.log('[ENTER_SINGLE] gridViewImageIndex:', this.gridViewImageIndex);
-        
+
+        // ✅ 즉시 selectedImagePath 설정 (네비게이션 인덱스 계산에 필요)
+        this.selectedImagePath = this.selectedImages[idx];
+
         // 1. Arrow button 표시
         this.updateArrowButtonVisibility();
-        
+
         // 2. 키보드 좌우 키 네비게이션 설정
         this.setupGridImageNavigation();
-        
+
         // 3. 그리드 숨김
         this.hideGrid(false);
-        
+
         // 4. 이미지 로드
         this.loadImage(this.selectedImages[idx]).then(() => {
             // 5. Chip selection 업데이트
@@ -15696,6 +15735,12 @@ class WaferMapViewer {
             this.boundGridNavigationHandler = null;
         }
 
+        // ✅ singleView 핸들러도 제거 (gridImage 모드이므로)
+        if (this.boundSingleViewHandler) {
+            document.removeEventListener('keydown', this.boundSingleViewHandler);
+            this.boundSingleViewHandler = null;
+        }
+
         // ← → 키보드 네비게이션
         document.addEventListener('keydown', this.boundGridNavigationHandler = (e) => {
             if (this.viewMode !== 'gridImage' && !this.singleImageFromGrid) return;
@@ -15821,8 +15866,6 @@ class WaferMapViewer {
 
         // ✅ 파일 탐색기 선택 상태 동기화
         this.selectedImages = [nextImagePath];
-        // ✅ 파일 탐색기 하이라이트 즉시 업데이트
-        this.updateWaferMapExplorerHighlight(nextImagePath);
 
         // ✅ Wafer Navigator 하이라이트 즉시 업데이트
         if (this.thumbnailNavigator && this.thumbnailNavigator.isVisible) {
@@ -15969,8 +16012,6 @@ class WaferMapViewer {
 
         // ✅ 파일 탐색기 선택 상태 동기화
         this.selectedImages = [nextImagePath];
-        // ✅ 파일 탐색기 하이라이트 즉시 업데이트
-        this.updateWaferMapExplorerHighlight(nextImagePath);
 
         // ✅ Wafer Navigator 하이라이트 즉시 업데이트
         if (this.thumbnailNavigator && this.thumbnailNavigator.isVisible) {
