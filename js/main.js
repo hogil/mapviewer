@@ -930,6 +930,18 @@ class WaferMapViewer {
                     target: e.target
                 });
                 
+                // 🔥 Step 0: Next/Prev 버튼 위에서는 더블클릭 무시 (버튼 클릭이 우선)
+                const prevBtn = document.getElementById('prev-btn');
+                const nextBtn = document.getElementById('next-btn');
+                const isOnNavButton = (prevBtn && (e.target === prevBtn || prevBtn.contains(e.target))) ||
+                                     (nextBtn && (e.target === nextBtn || nextBtn.contains(e.target)));
+                if (isOnNavButton) {
+                    console.log('🛑 [DBLCLICK] Next/Prev 버튼 위에서 더블클릭 무시');
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                }
+                
                 // ✅ Step 1: 상세 모드 확인
                 if (this.detailMode) {
                     console.log('🖱️ [DBLCLICK] → 상세 모드 종료');
@@ -1034,16 +1046,30 @@ class WaferMapViewer {
         const prevBtn = document.getElementById('prev-btn');
         const nextBtn = document.getElementById('next-btn');
         if (prevBtn) {
+            // 🔥 더블클릭 방지: 버튼 위에서 더블클릭이 발생해도 무시
+            prevBtn.addEventListener('dblclick', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('🛑 [NAV_BTN] Prev 버튼 더블클릭 무시');
+            });
             prevBtn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                // 🔥 버튼 클릭이 다른 모든 이벤트보다 우선 처리
                 this.navigatePrevious();
             });
         }
         if (nextBtn) {
+            // 🔥 더블클릭 방지: 버튼 위에서 더블클릭이 발생해도 무시
+            nextBtn.addEventListener('dblclick', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('🛑 [NAV_BTN] Next 버튼 더블클릭 무시');
+            });
             nextBtn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                // 🔥 버튼 클릭이 다른 모든 이벤트보다 우선 처리
                 this.navigateNext();
             });
         }
