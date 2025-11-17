@@ -3309,18 +3309,14 @@ class WaferMapViewer {
 
             stopMouseTracking();
 
-            // 단순 클릭인 경우 (드래그 박스가 활성화되지 않음)
-            if (!wasActive) {
-                handleTapSelection(e);
-                dragData.start = null;
-                return;
-            }
-
             // 드래그 선택 처리
 
             if (!dragData.start) {
-                console.warn('드래그 시작점이 없습니다.');
-
+                // 드래그 시작점이 없으면 단순 클릭으로 처리
+                if (!wasActive) {
+                    handleTapSelection(e);
+                }
+                dragData.start = null;
                 return;
             }
 
@@ -3339,11 +3335,17 @@ class WaferMapViewer {
             const dragHeight = dragBottom - dragTop;
             const dragIntentThreshold = this.gridDragIntentThreshold || GRID_DRAG_CLICK_THRESHOLD;
 
+            // 🔥 드래그 거리가 임계값 이하일 때만 탭 선택 처리 (드래그 선택이 실제로 발생하지 않았을 때만)
             if (Math.max(dragWidth, dragHeight) <= dragIntentThreshold) {
-                handleTapSelection(e);
+                // 드래그 선택이 활성화되지 않았을 때만 탭 선택 처리
+                if (!wasActive) {
+                    handleTapSelection(e);
+                }
                 dragData.start = null;
                 return;
             }
+
+            // 🔥 드래그 선택이 완료된 경우 (임계값 초과) - 탭 선택 처리하지 않음
 
             // 교차하는 썸네일 찾기
 
@@ -7621,6 +7623,31 @@ class WaferMapViewer {
             const idx = allLinks.findIndex(a => a.dataset.path === path);
 
             if (e.shiftKey && this.lastExplorerClickedIdx !== undefined) {
+                // 🔥 Shift 클릭 시 모든 네트워크 요청 및 로딩 중단
+                if (this.imageLoadAbortController) {
+                    console.log('🛑 [SHIFT_CLICK] 이미지 로딩 중단');
+                    this.imageLoadAbortController.abort();
+                }
+                if (this.globalAbortController) {
+                    console.log('🛑 [SHIFT_CLICK] 모든 네트워크 요청 중단');
+                    this.globalAbortController.abort();
+                    this.globalAbortController = new AbortController();
+                }
+                // 피라미드 생성도 중단
+                if (this.semiconductorRenderer && typeof this.semiconductorRenderer.cancelPyramid === 'function') {
+                    this.semiconductorRenderer.cancelPyramid();
+                }
+                // 네비게이터 숨기기
+                if (this.thumbnailNavigator) {
+                    this.thumbnailNavigator.hide();
+                }
+                // 단일 이미지 모드 종료
+                if (this.viewMode === 'single') {
+                    this.viewMode = null;
+                    this.singleViewImageList = [];
+                    this.singleViewImageIndex = -1;
+                }
+                
                 const [from, to] = [this.lastExplorerClickedIdx, idx].sort((a, b) => a - b);
                 const range = allLinks.slice(from, to + 1).map(a => a.dataset.path);
 
