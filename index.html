@@ -2078,7 +2078,7 @@
             min-height: 150px;
             resize: none;
             overflow: hidden;
-            right: 12px !important;
+            right: 27px !important; /* 🔥 12px → 27px (15px 왼쪽으로 이동) */
             bottom: 12px !important;
             left: auto !important;
             display: flex;
@@ -2104,6 +2104,9 @@
             justify-content: space-between;
             align-items: center;
             height: 32px;
+            /* 🔥 드래그 시 완전히 독립적으로 움직이도록 */
+            position: relative;
+            z-index: 10001;
         }
 
         .thumbnail-navigator-title {
@@ -2253,6 +2256,19 @@
             z-index: 1;
         }
 
+        /* 🔥 왼쪽 리사이즈 핸들 */
+        .thumbnail-navigator-resize-handle-left {
+            top: 32px;
+            bottom: 0;
+            left: 0;
+            width: 4px;
+            cursor: ew-resize;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            background: linear-gradient(to right, rgba(255, 255, 255, 0.08), transparent);
+            z-index: 1;
+        }
+
         .thumbnail-navigator-resize-handle {
             bottom: 0;
             right: 0;
@@ -2274,6 +2290,12 @@
 
         .thumbnail-navigator-resize-handle-right:hover,
         .thumbnail-navigator:hover .thumbnail-navigator-resize-handle-right {
+            opacity: 0.5;
+        }
+
+        /* 🔥 왼쪽 리사이즈 핸들 hover */
+        .thumbnail-navigator-resize-handle-left:hover,
+        .thumbnail-navigator:hover .thumbnail-navigator-resize-handle-left {
             opacity: 0.5;
         }
 
@@ -2915,6 +2937,7 @@
                 <!-- Wafer images will be rendered here -->
             </div>
         </div>
+        <div class="thumbnail-navigator-resize-handle-left"></div><!-- 🔥 왼쪽 리사이즈 핸들 -->
         <div class="thumbnail-navigator-resize-handle-right"></div>
         <div class="thumbnail-navigator-resize-handle"></div>
     </div>

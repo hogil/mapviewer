@@ -507,7 +507,10 @@ class WaferMapViewer {
         
         // 전역 AbortController 초기화 (모든 API 요청 중단용)
         this.globalAbortController = new AbortController();
-        
+
+        // 🔥 이미지 로드 전용 AbortController (next/prev 연속 클릭 시 이전 요청 중단)
+        this.imageLoadAbortController = null;
+
         // 🔥 ROOT_DIR 캐시 (중복 API 호출 방지)
         this.cachedRootPath = null;
         
@@ -8117,6 +8120,16 @@ class WaferMapViewer {
     }
 
     async loadImage(path, fromLabelExplorer = false, loadVersion = null) {
+        // 🔥 이전 이미지 로딩 요청 즉시 중단 (next/prev 빠른 클릭 대응)
+        if (this.imageLoadAbortController) {
+            console.log('🛑 [LOAD_IMAGE] 이전 로딩 요청 중단');
+            this.imageLoadAbortController.abort();
+        }
+
+        // 🔥 새로운 AbortController 생성
+        this.imageLoadAbortController = new AbortController();
+        const signal = this.imageLoadAbortController.signal;
+
         // 🔥 버전 체크: 이미 새로운 이미지 로딩이 시작된 경우 이전 호출 무시
         if (loadVersion !== null && loadVersion !== this._imageLoadVersion) {
             console.log(`🛑 [LOAD_IMAGE] 이전 버전 로딩 무시: ${loadVersion} (현재: ${this._imageLoadVersion})`);
@@ -8134,7 +8147,8 @@ class WaferMapViewer {
             if (needsReload) {
                 console.log('🔄 [LOAD_IMAGE] 색상 scheme 재로드 시작...');
                 try {
-                    await this.loadColorLegends();
+                    // 🔥 signal 전달하여 취소 가능하도록
+                    await this.loadColorLegends(signal);
                     console.log('✅ [LOAD_IMAGE] 색상 scheme 재로드 완료, currentUser:', this.currentUser);
                     
                     // 재로드 후에도 currentUser 스킴이 없으면 경고
@@ -8143,6 +8157,10 @@ class WaferMapViewer {
                         console.warn(`⚠️ [LOAD_IMAGE] Scheme not found after reload: ${this.currentUser}, will use fallback`);
                     }
                 } catch (error) {
+                    // 🔥 AbortError는 정상 (이미지 로딩 중단 시)
+                    if (error?.name === 'AbortError') {
+                        throw error; // 상위로 전파하여 navigateSingleImageMode에서 처리
+                    }
                     console.warn('⚠️ [LOAD_IMAGE] 색상 scheme 재로드 실패:', error);
                     // 기본값 사용 계속 진행
                 }
@@ -8263,7 +8281,7 @@ class WaferMapViewer {
         // [STEP 1] 이미지 크기 먼저 조회
         const tSizeStart = performance.now();
         timeline.sizeFetchStart = tSizeStart;
-        const sizeResponse = await fetch(`/api/image/size?path=${encodeURIComponent(fullPath)}`);
+        const sizeResponse = await fetch(`/api/image/size?path=${encodeURIComponent(fullPath)}`, { signal });
         if (!sizeResponse.ok) {
             throw new Error(`Failed to get image size: ${sizeResponse.status}`);
         }
@@ -8310,7 +8328,7 @@ class WaferMapViewer {
         const tFetchStart = performance.now();
         timeline.imageFetchStart = tFetchStart;
 
-        const response = await fetch(url);
+        const response = await fetch(url, { signal });
         const tFetchEnd = performance.now();
         timeline.imageFetchEnd = tFetchEnd;
 
@@ -8493,6 +8511,12 @@ class WaferMapViewer {
                 this.updateWaferMapExplorerHighlight(fullPath);
             }
         } catch (err) {
+            // 🔥 next/prev 빠른 클릭으로 인한 중단은 정상 동작 (에러 로그 억제)
+            if (err.name === 'AbortError') {
+                console.log('🛑 [LOAD_IMAGE] 이미지 로딩 중단됨 (next/prev 클릭)');
+                return;
+            }
+
             console.error(`Failed to load image: ${path}`, err);
 
             this.dom.minimapContainer.style.display = 'none';
@@ -8619,13 +8643,19 @@ class WaferMapViewer {
                     Accept: 'image/png,image/apng,image/*;q=0.8',
                     // 🔥 캐시 무효화를 위한 헤더 추가
                     'Cache-Control': this._personalizedColorCacheBuster ? 'no-cache' : 'max-age=31536000'
-                }
+                },
+                // 🔥 이미지 로드 중단 시그널 추가 (next/prev 빠른 클릭 대응)
+                signal: this.imageLoadAbortController?.signal
             };
             let response;
             tFetchStart = performance.now();
             try {
                 response = await fetch(url, fetchOptions);
             } catch (fetchErr) {
+                // AbortError는 그대로 throw하여 상위에서 처리
+                if (fetchErr.name === 'AbortError') {
+                    throw fetchErr;
+                }
                 response = await fetch(url);
             }
             tFetchEnd = performance.now();
@@ -16007,16 +16037,12 @@ class WaferMapViewer {
      * @param {number} direction -1 (이전), 1 (다음)
      */
     async navigateSingleImageMode(direction) {
-        // ✅ 네비게이션 큐: 로딩 중이면 누적
+        // 🔥 네비게이션 중이면 이전 요청 즉시 중단 (큐잉 제거 - 항상 최신 요청만 처리)
         if (this._isNavigating) {
-            this._pendingNavDirection = (this._pendingNavDirection || 0) + direction;
-            console.log('⚠️ [NAV] Queuing navigation:', this._pendingNavDirection);
-
-            // 🔥 즉시 피라미드 생성 취소 (빠른 반응)
-            if (this.renderer && typeof this.renderer.cancelPyramid === 'function') {
-                this.renderer.cancelPyramid();
-            }
-            return;
+            console.log('🛑 [NAV] 이전 네비게이션 중단, 새 요청 시작');
+            // AbortController가 이미 loadImage에서 중단하므로 여기서는 플래그만 초기화
+            this._isNavigating = false;
+            this._pendingNavDirection = 0;
         }
 
         // ✅ singleViewImageList 검증
@@ -16033,8 +16059,8 @@ class WaferMapViewer {
         this._isNavigating = true;
 
         // 🔥 피라미드 생성 즉시 취소
-        if (this.renderer && typeof this.renderer.cancelPyramid === 'function') {
-            this.renderer.cancelPyramid();
+        if (this.semiconductorRenderer && typeof this.semiconductorRenderer.cancelPyramid === 'function') {
+            this.semiconductorRenderer.cancelPyramid();
         }
 
         // ✅ 현재 인덱스 (singleViewImageIndex 사용)
@@ -16098,25 +16124,15 @@ class WaferMapViewer {
                 console.log('✅ [NAV] Loaded image', nextIdx, nextImagePath);
 
                 this._isNavigating = false;
-
-                // ✅ 큐에 대기 중인 네비게이션 즉시 처리
-                if (this._pendingNavDirection) {
-                    const pending = this._pendingNavDirection;
-                    this._pendingNavDirection = 0;
-                    console.log('✅ [NAV] Processing queued navigation:', pending);
-                    setTimeout(() => this.navigateSingleImageMode(pending), 10);
-                }
             })
             .catch(err => {
-                console.error('❌ [NAV] Load failed', err);
-                this._isNavigating = false;
-
-                // ✅ 에러 시에도 큐 즉시 처리
-                if (this._pendingNavDirection) {
-                    const pending = this._pendingNavDirection;
-                    this._pendingNavDirection = 0;
-                    setTimeout(() => this.navigateSingleImageMode(pending), 10);
+                // 🔥 AbortError는 정상 (next/prev 연속 클릭)
+                if (err?.name === 'AbortError') {
+                    console.log('🛑 [NAV] 로딩 중단됨 (다음 요청 시작)');
+                } else {
+                    console.error('❌ [NAV] Load failed', err);
                 }
+                this._isNavigating = false;
             });
     }
 
@@ -17310,11 +17326,11 @@ class WaferMapViewer {
     /**
      * Load color legends from JSON file
      */
-    async loadColorLegends() {
+    async loadColorLegends(signal = null) {
         try {
             // ✅ 캐시 버스터 추가하여 최신 색상 데이터 가져오기
             const cacheBuster = Date.now();
-            const response = await fetch(`/logs/color-legends.json?_t=${cacheBuster}`);
+            const response = await fetch(`/logs/color-legends.json?_t=${cacheBuster}`, { signal });
             if (!response.ok) {
                 throw new Error(`Failed to load color legends: ${response.status} ${response.statusText}`);
             }
@@ -17323,6 +17339,11 @@ class WaferMapViewer {
             // console.log('✅ [LOAD_COLORS] 색상 로드 완료:', Object.keys(this.colorLegends || {}).length, 'schemes');
             return this.colorLegends;
         } catch (error) {
+            // 🔥 AbortError는 정상 (이미지 로딩 중단 시)
+            if (error?.name === 'AbortError') {
+                console.log('🛑 [LOAD_COLORS] 색상 로드 중단됨');
+                throw error; // 상위로 전파하여 loadImage에서 처리
+            }
             console.warn('⚠️ [LOAD_COLORS] 색상 로드 실패:', error);
             this.colorLegends = null;
             return null;

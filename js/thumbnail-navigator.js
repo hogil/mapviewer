@@ -26,6 +26,8 @@ export class ThumbnailNavigator {
 
         this.resizeHandleRight = this.container?.querySelector('.thumbnail-navigator-resize-handle-right');
 
+        this.resizeHandleLeft = this.container?.querySelector('.thumbnail-navigator-resize-handle-left'); // 🔥 왼쪽 리사이즈 핸들
+
         this.snapOverlay = document.getElementById('snap-zone-overlay');
 
         this.onPointerMove = this.onMouseMove.bind(this);
@@ -42,7 +44,8 @@ export class ThumbnailNavigator {
 
         this.isResizing = false;
 
-        this.isResizingWidth = false; // 너비만 조절
+        this.isResizingWidth = false; // 너비만 조절 (오른쪽 핸들)
+        this.isResizingWidthLeft = false; // 🔥 왼쪽 핸들 너비 조절
 
         this.layout = 'vertical'; // 'vertical' or 'horizontal' (default: vertical)
 
@@ -111,7 +114,6 @@ export class ThumbnailNavigator {
     init() {
 
         // Navigator를 sidebar 내부로 이동
-
         const sidebar = document.querySelector('.sidebar');
 
         if (sidebar && this.container && this.container.parentElement !== sidebar) {
@@ -286,6 +288,19 @@ export class ThumbnailNavigator {
 
         }
 
+        // 🔥 왼쪽 리사이즈 핸들 이벤트
+        if (this.resizeHandleLeft) {
+
+            this.resizeHandleLeft.addEventListener('pointerdown', (e) => {
+
+                if (e.button !== undefined && e.button !== 0) return;
+
+                this.startResizeWidthLeft(e);
+
+            });
+
+        }
+
 
 
         document.addEventListener('pointermove', this.onPointerMove);
@@ -349,6 +364,8 @@ export class ThumbnailNavigator {
 
 
         e.preventDefault();
+
+        e.stopPropagation(); // 🔥 부모 요소로 이벤트 전파 차단 (explorer 스크롤과 독립)
 
         if (e.pointerId !== undefined && typeof e.target.setPointerCapture === 'function') {
 
@@ -426,6 +443,41 @@ export class ThumbnailNavigator {
 
     }
 
+    // 🔥 왼쪽 핸들 너비 조절 시작
+    startResizeWidthLeft(e) {
+
+        this.prepareFloatingPosition();
+
+        this.isResizingWidthLeft = true;
+
+        this.resizeStart = {
+
+            x: e.clientX,
+
+            y: e.clientY,
+
+            width: this.size.width,
+
+            height: this.size.height,
+
+            positionX: this.position.x // 왼쪽 위치 저장
+
+        };
+
+
+
+        e.preventDefault();
+
+        e.stopPropagation();
+
+        if (e.pointerId !== undefined && typeof e.target.setPointerCapture === 'function') {
+
+            e.target.setPointerCapture(e.pointerId);
+
+        }
+
+    }
+
 
 
     onMouseMove(e) {
@@ -441,6 +493,10 @@ export class ThumbnailNavigator {
         } else if (this.isResizingWidth) {
 
             this.handleResizeWidth(e);
+
+        } else if (this.isResizingWidthLeft) {
+
+            this.handleResizeWidthLeft(e);
 
         }
 
@@ -544,6 +600,51 @@ export class ThumbnailNavigator {
 
     }
 
+    // 🔥 왼쪽 핸들 너비 조절 처리
+    handleResizeWidthLeft(e) {
+
+        const deltaX = e.clientX - this.resizeStart.x;
+
+
+
+        // 왼쪽에서 드래그하므로 deltaX만큼 너비 감소 (음수 방향)
+
+        let newWidth = this.resizeStart.width - deltaX;
+
+
+
+        // 최소/최대 너비 제한
+
+        newWidth = Math.max(80, Math.min(newWidth, 600));
+
+
+
+        // 너비가 변경되면 위치도 조정 (오른쪽 모서리 고정)
+
+        const widthDiff = newWidth - this.size.width;
+
+
+
+        this.size.width = newWidth;
+
+
+
+        // position이 있을 때만 위치 조정 (플로팅 모드)
+
+        if (this.isFloating && this.position.x !== undefined) {
+
+            this.position.x -= widthDiff;
+
+            this.updatePosition();
+
+        } else {
+
+            this.updateSize();
+
+        }
+
+    }
+
 
 
     onMouseUp(e) {
@@ -582,6 +683,12 @@ export class ThumbnailNavigator {
 
         }
 
+        if (this.isResizingWidthLeft) {
+
+            this.saveToSession();
+
+        }
+
 
 
         this.isDragging = false;
@@ -589,6 +696,8 @@ export class ThumbnailNavigator {
         this.isResizing = false;
 
         this.isResizingWidth = false;
+
+        this.isResizingWidthLeft = false;
 
     }
 
@@ -1065,29 +1174,31 @@ export class ThumbnailNavigator {
 
         const cacheBuster = this.viewer?._personalizedColorCacheBuster || Date.now();
 
-        img.src = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}&_t=${cacheBuster}`;
+        const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}&_t=${cacheBuster}`;
 
         img.alt = imagePath.split('/').pop();
 
+        // 🔥 현재 인덱스 주변(±30개)만 즉시 로드, 나머지는 data-src에만 저장
 
-
-        // 🔥 현재 인덱스 주변(±15개)만 즉시 로드, 나머지는 lazy loading
-
-        // 스크롤을 많이 내린 상태에서도 현재 화면의 썸네일이 먼저 나타남
+        // 빠른 next/prev 반응을 위해 범위를 넓게 설정
 
         const distance = Math.abs(index - this.currentImageIndex);
 
-        const priorityRange = 15; // 현재 이미지 기준 앞뒤 15개
+        const priorityRange = 30; // 현재 이미지 기준 앞뒤 30개 (next/prev 반응 속도 개선)
 
 
 
         if (distance <= priorityRange) {
 
-            img.loading = 'eager'; // 우선 로드
+            // 우선 로드: 즉시 src 할당
+
+            img.src = thumbnailUrl;
 
         } else {
 
-            img.loading = 'lazy'; // 지연 로드
+            // 지연 로드: data-src에만 저장 (스크롤 멈춘 후 로드)
+
+            img.dataset.src = thumbnailUrl;
 
         }
 
@@ -1233,7 +1344,7 @@ export class ThumbnailNavigator {
 
         const items = this.list.querySelectorAll('.thumbnail-nav-item');
 
-        const priorityRange = 15; // 현재 이미지 기준 앞뒤 15개
+        const priorityRange = 30; // 현재 이미지 기준 앞뒤 30개 (next/prev 반응 속도 개선)
 
 
 
@@ -1253,7 +1364,7 @@ export class ThumbnailNavigator {
 
 
 
-            // 🔥 현재 위치가 변경되면 주변 썸네일의 loading 속성도 업데이트
+            // 🔥 현재 위치가 변경되면 주변 썸네일을 즉시 로드
 
             // 새로운 위치 주변의 썸네일이 즉시 로드되도록 함
 
@@ -1265,33 +1376,19 @@ export class ThumbnailNavigator {
 
                 if (distance <= priorityRange) {
 
-                    // 우선 로드 영역: eager로 변경
+                    // 우선 로드 영역: data-src에서 src로 즉시 로드
 
-                    if (img.loading !== 'eager') {
+                    if (img.dataset.src) {
 
-                        img.loading = 'eager';
+                        img.src = img.dataset.src;
 
-                        // lazy에서 eager로 변경 시 즉시 로드 트리거
-
-                        if (!img.complete && img.dataset.needsLoad !== 'false') {
-
-                            const currentSrc = img.src;
-
-                            img.src = '';
-
-                            img.src = currentSrc;
-
-                        }
+                        delete img.dataset.src;
 
                     }
 
-                } else {
-
-                    // 멀리 있는 영역: lazy로 변경
-
-                    img.loading = 'lazy';
-
                 }
+
+                // 멀리 있는 영역은 그대로 유지 (data-src 상태로 남겨둠)
 
             }
 
@@ -1323,63 +1420,49 @@ export class ThumbnailNavigator {
 
         if (!this.list) return;
 
+        const items = this.list.querySelectorAll('.thumbnail-nav-item');
 
+        if (index < 0 || index >= items.length) return;
 
-        // DOM 렌더링 완료 후 스크롤 (타이밍 보장)
+        const targetItem = items[index];
 
-        requestAnimationFrame(() => {
+        // 🔥 즉시 스크롤 (애니메이션 제거로 반응 속도 개선)
 
-            const items = this.list.querySelectorAll('.thumbnail-nav-item');
+        const container = this.list;
 
-            if (index >= 0 && index < items.length) {
+        const containerRect = container.getBoundingClientRect();
 
-                const targetItem = items[index];
+        const itemRect = targetItem.getBoundingClientRect();
 
+        // 세로 레이아웃인 경우
 
+        if (this.layout === 'vertical') {
 
-                // 수동 스크롤로 정확한 중앙 정렬
+            const scrollOffset = (itemRect.top - containerRect.top) - (containerRect.height / 2) + (itemRect.height / 2);
 
-                const container = this.list;
+            container.scrollBy({
 
-                const containerRect = container.getBoundingClientRect();
+                top: scrollOffset,
 
-                const itemRect = targetItem.getBoundingClientRect();
+                behavior: 'instant' // 🔥 즉시 스크롤 (smooth → instant)
 
+            });
 
+        } else {
 
-                // 세로 레이아웃인 경우
+            // 가로 레이아웃인 경우
 
-                if (this.layout === 'vertical') {
+            const scrollOffset = (itemRect.left - containerRect.left) - (containerRect.width / 2) + (itemRect.width / 2);
 
-                    const scrollOffset = (itemRect.top - containerRect.top) - (containerRect.height / 2) + (itemRect.height / 2);
+            container.scrollBy({
 
-                    container.scrollBy({
+                left: scrollOffset,
 
-                        top: scrollOffset,
+                behavior: 'instant' // 🔥 즉시 스크롤 (smooth → instant)
 
-                        behavior: 'smooth'
+            });
 
-                    });
-
-                } else {
-
-                    // 가로 레이아웃인 경우
-
-                    const scrollOffset = (itemRect.left - containerRect.left) - (containerRect.width / 2) + (itemRect.width / 2);
-
-                    container.scrollBy({
-
-                        left: scrollOffset,
-
-                        behavior: 'smooth'
-
-                    });
-
-                }
-
-            }
-
-        });
+        }
 
     }
 
@@ -1589,6 +1672,16 @@ export class ThumbnailNavigator {
 
 
 
+        // 🔥 뷰포트 높이 계산 (위아래로 2배 확장)
+
+        const viewportHeight = containerRect.height;
+
+        const expandedTop = containerRect.top - (viewportHeight * 2);
+
+        const expandedBottom = containerRect.bottom + (viewportHeight * 2);
+
+
+
         items.forEach((item) => {
 
             const img = item.querySelector('img');
@@ -1601,13 +1694,13 @@ export class ThumbnailNavigator {
 
 
 
-            // 🔥 뷰포트에 보이는지 확인
+            // 🔥 뷰포트 위아래로 2배 범위 확인
 
-            const isVisible = (
+            const isInExpandedRange = (
 
-                itemRect.top < containerRect.bottom &&
+                itemRect.top < expandedBottom &&
 
-                itemRect.bottom > containerRect.top &&
+                itemRect.bottom > expandedTop &&
 
                 itemRect.left < containerRect.right &&
 
@@ -1617,27 +1710,13 @@ export class ThumbnailNavigator {
 
 
 
-            if (isVisible) {
+            if (isInExpandedRange && img.dataset.src) {
 
-                // 즉시 로드 (loading 속성을 eager로 변경)
+                // data-src에서 src로 로드 (아직 로드되지 않은 경우만)
 
-                if (img.loading !== 'eager') {
+                img.src = img.dataset.src;
 
-                    img.loading = 'eager';
-
-                    // lazy에서 eager로 변경 시 즉시 로드 트리거
-
-                    if (!img.complete) {
-
-                        const currentSrc = img.src;
-
-                        img.src = '';
-
-                        img.src = currentSrc;
-
-                    }
-
-                }
+                delete img.dataset.src; // 중복 로드 방지
 
             }
 
