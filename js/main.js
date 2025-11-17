@@ -63,7 +63,7 @@ async function decodeBitmapSmart(source, options) {
 
 // 초기 맞춤 여유 (상대 비율)
 
-const FIT_RELATIVE_MARGIN = 0.85; // 초기 로드 시 15% 여유 (조금 더 작게 표시)
+const FIT_RELATIVE_MARGIN = 1.02; // 🔥 0.85 × 1.2 = 1.02 (이미지 크기 1.2배 확대)
 
 // 리셋 시 절대 퍼센트포인트 오프셋 (예: -0.02 => 2%p 더 작게)
 
@@ -1249,21 +1249,39 @@ class WaferMapViewer {
 
     showFileName(path) {
         if (this.dom.fileNameDisplay && this.dom.fileNameText && this.dom.filePathText) {
-            const fileName = path.split('/').pop() || path.split('\\').pop() || path;
-            // 파일명에서 확장자 제거
+            // 🔥 경로 파싱
+            const parts = path.replace(/\\/g, '/').split('/');
+            const fileName = parts.pop() || path;
+
+            // 🔥 Line 1: "2depth_folder-1depth_folder" 형식
+            // parts[length-1]은 1depth (파일 바로 위 폴더), parts[length-2]는 2depth (그 위 폴더)
+            let folderInfo = '';
+            if (parts.length >= 2) {
+                const folder1depth = parts[parts.length - 1]; // 1depth (파일에 가까운 폴더)
+                const folder2depth = parts[parts.length - 2]; // 2depth (그 위 폴더)
+                folderInfo = `${folder2depth}-${folder1depth}`;
+            } else if (parts.length === 1) {
+                folderInfo = parts[0];
+            }
+            this.dom.filePathText.textContent = folderInfo;
+
+            // 🔥 Line 2: 파일명을 '_'로 split하여 "index0-index1-index2-index4" 형식
             const fileNameWithoutExt = fileName.replace(/\.[^.]+$/, '');
-
-            this.dom.fileNameText.textContent = fileNameWithoutExt;
-
-            // 상위의 상위 폴더 표시
-            const parentFolder = this.getParentFolder(path);
-
-            this.dom.filePathText.textContent = parentFolder;
+            const nameParts = fileNameWithoutExt.split('_');
+            let displayName = '';
+            if (nameParts.length >= 5) {
+                // index 0, 1, 2, 4 사용 (index 3은 건너뜀)
+                displayName = `${nameParts[0]}-${nameParts[1]}-${nameParts[2]}-${nameParts[4]}`;
+            } else {
+                // '_'로 split했을 때 부분이 5개 미만이면 원본 파일명 사용
+                displayName = fileNameWithoutExt;
+            }
+            this.dom.fileNameText.textContent = displayName;
 
             // 구분자 표시/숨김 처리
             const separator = document.getElementById('separator-text');
             if (separator) {
-                separator.style.display = parentFolder ? 'inline' : 'none';
+                separator.style.display = folderInfo ? 'inline' : 'none';
             }
 
             this.dom.fileNameDisplay.style.display = 'block';
