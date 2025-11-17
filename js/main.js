@@ -17897,58 +17897,217 @@ class WaferMapViewer {
             bValue.textContent = '-';
         }
         
-        filePath.textContent = this.selectedImagePath || '-';
+        // 🔥 파일 정보를 3줄로 표시
+        if (this.selectedImagePath) {
+            const parts = this.selectedImagePath.replace(/\\/g, '/').split('/');
+            const fileName = parts.pop() || '';
+
+            // 1번째 줄: 파일명의 2depth 상위 폴더명 (파일의 바로 위 폴더)
+            let line1 = '';
+            if (parts.length >= 1) {
+                line1 = parts[parts.length - 1]; // 1depth 폴더
+            }
+
+            // 파일명을 _로 split
+            const fileNameWithoutExt = fileName.replace(/\.[^.]+$/, '');
+            const nameParts = fileNameWithoutExt.split('_');
+
+            // 2번째 줄: 파일명 split index 0_1_2
+            let line2 = '';
+            if (nameParts.length >= 3) {
+                line2 = `${nameParts[0]}_${nameParts[1]}_${nameParts[2]}`;
+            } else {
+                line2 = nameParts.slice(0, Math.min(3, nameParts.length)).join('_');
+            }
+
+            // 3번째 줄: 파일명 split index 3_4
+            let line3 = '';
+            if (nameParts.length >= 5) {
+                line3 = `${nameParts[3]}_${nameParts[4]}`;
+            } else if (nameParts.length === 4) {
+                line3 = nameParts[3];
+            }
+
+            // HTML 구성
+            filePath.innerHTML = '';
+            if (line1) {
+                const div1 = document.createElement('div');
+                div1.textContent = line1;
+                div1.style.cssText = 'overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+                div1.title = line1;
+                filePath.appendChild(div1);
+            }
+            if (line2) {
+                const div2 = document.createElement('div');
+                div2.textContent = line2;
+                div2.style.cssText = 'overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+                div2.title = line2;
+                filePath.appendChild(div2);
+            }
+            if (line3) {
+                const div3 = document.createElement('div');
+                div3.textContent = line3;
+                div3.style.cssText = 'overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+                div3.title = line3;
+                filePath.appendChild(div3);
+            }
+        } else {
+            filePath.textContent = '-';
+        }
 
         // Color Legend 렌더링 (Grade0~Grade7)
         await this.renderChipViewColorLegend(colorLegend);
 
-        // Chip 이미지 로드
-        const imageUrl = await this.chipAnnotator.getChipImageRegion(chipData.index);
+        // Chip 이미지 로드 (🎨 개인색 설정 적용)
+        const personalized = this.personalizedColorEnabled || false;
+        const scheme = personalized ? (this.currentUser || 'change') : null;
+        const imageUrl = await this.chipAnnotator.getChipImageRegion(chipData.index, personalized, scheme);
         if (imageUrl) {
             const img = new Image();
             img.onload = () => {
-                // 🔥 고정 크기로 표시 (400px 정사각형)
-                const displaySize = 400;
+                // 🔥 고정 크기로 표시 (440px 정사각형 - 400px × 1.1 = 440px)
+                const displaySize = 440;
 
                 // Canvas 실제 크기 설정 (고정 크기)
                 canvas.width = displaySize;
                 canvas.height = displaySize;
-                
+
                 // CSS로 표시 크기 제한 (정사각형으로 꽉 차게)
                 canvas.style.width = `${displaySize}px`;
                 canvas.style.height = `${displaySize}px`;
                 canvas.style.maxWidth = 'none';
                 canvas.style.maxHeight = 'none';
-                
+
                 const ctx = canvas.getContext('2d');
                 // 🔥 픽셀 완벽 렌더링 설정
                 setPixelPerfectRendering(ctx);
-                
+
                 // 이미지를 정사각형 캔버스에 맞춰서 그리기 (비율 유지하면서 중앙 정렬)
                 const imgAspect = img.width / img.height;
-                let drawWidth = displaySize;
-                let drawHeight = displaySize;
-                let drawX = 0;
-                let drawY = 0;
-                
+                let initialDrawWidth = displaySize;
+                let initialDrawHeight = displaySize;
+                let initialDrawX = 0;
+                let initialDrawY = 0;
+
                 if (imgAspect > 1) {
                     // 가로가 더 긴 경우
-                    drawHeight = displaySize / imgAspect;
-                    drawY = (displaySize - drawHeight) / 2;
+                    initialDrawHeight = displaySize / imgAspect;
+                    initialDrawY = (displaySize - initialDrawHeight) / 2;
                 } else {
                     // 세로가 더 긴 경우
-                    drawWidth = displaySize * imgAspect;
-                    drawX = (displaySize - drawWidth) / 2;
+                    initialDrawWidth = displaySize * imgAspect;
+                    initialDrawX = (displaySize - initialDrawWidth) / 2;
                 }
-                
-                ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
-                
+
+                // 🎯 줌/팬 상태 관리
+                let chipZoom = 1.0;
+                let chipPanX = 0;
+                let chipPanY = 0;
+                let isDragging = false;
+                let lastX = 0;
+                let lastY = 0;
+
+                // 🎨 렌더링 함수
+                const renderChipImage = () => {
+                    ctx.clearRect(0, 0, displaySize, displaySize);
+                    ctx.save();
+                    ctx.translate(chipPanX, chipPanY);
+                    ctx.scale(chipZoom, chipZoom);
+                    ctx.drawImage(img, initialDrawX, initialDrawY, initialDrawWidth, initialDrawHeight);
+                    ctx.restore();
+                };
+
+                // 초기 렌더링
+                renderChipImage();
+
+                // 🔥 이전 이벤트 리스너 제거 (메모리 누수 방지)
+                const oldWheelHandler = canvas._chipWheelHandler;
+                const oldMouseDownHandler = canvas._chipMouseDownHandler;
+                const oldMouseMoveHandler = canvas._chipMouseMoveHandler;
+                const oldMouseUpHandler = canvas._chipMouseUpHandler;
+                const oldMouseLeaveHandler = canvas._chipMouseLeaveHandler;
+
+                if (oldWheelHandler) canvas.removeEventListener('wheel', oldWheelHandler);
+                if (oldMouseDownHandler) canvas.removeEventListener('mousedown', oldMouseDownHandler);
+                if (oldMouseMoveHandler) canvas.removeEventListener('mousemove', oldMouseMoveHandler);
+                if (oldMouseUpHandler) canvas.removeEventListener('mouseup', oldMouseUpHandler);
+                if (oldMouseLeaveHandler) canvas.removeEventListener('mouseleave', oldMouseLeaveHandler);
+
+                // 🎯 휠 이벤트 (줌)
+                const wheelHandler = (e) => {
+                    e.preventDefault();
+                    const rect = canvas.getBoundingClientRect();
+                    const mouseX = e.clientX - rect.left;
+                    const mouseY = e.clientY - rect.top;
+
+                    // 줌 전 마우스 위치 (이미지 좌표계)
+                    const beforeX = (mouseX - chipPanX) / chipZoom;
+                    const beforeY = (mouseY - chipPanY) / chipZoom;
+
+                    // 줌 배율 조정
+                    const zoomDelta = e.deltaY > 0 ? 0.9 : 1.1;
+                    chipZoom = Math.max(0.5, Math.min(10, chipZoom * zoomDelta));
+
+                    // 줌 후 마우스 위치 (이미지 좌표계)
+                    const afterX = (mouseX - chipPanX) / chipZoom;
+                    const afterY = (mouseY - chipPanY) / chipZoom;
+
+                    // 팬 조정 (마우스 위치 고정)
+                    chipPanX += (afterX - beforeX) * chipZoom;
+                    chipPanY += (afterY - beforeY) * chipZoom;
+
+                    renderChipImage();
+                };
+
+                // 🎯 마우스 드래그 (팬)
+                const mouseDownHandler = (e) => {
+                    isDragging = true;
+                    lastX = e.clientX;
+                    lastY = e.clientY;
+                    canvas.style.cursor = 'grabbing';
+                };
+
+                const mouseMoveHandler = (e) => {
+                    if (!isDragging) return;
+                    const dx = e.clientX - lastX;
+                    const dy = e.clientY - lastY;
+                    chipPanX += dx;
+                    chipPanY += dy;
+                    lastX = e.clientX;
+                    lastY = e.clientY;
+                    renderChipImage();
+                };
+
+                const mouseUpHandler = () => {
+                    isDragging = false;
+                    canvas.style.cursor = 'grab';
+                };
+
+                const mouseLeaveHandler = () => {
+                    isDragging = false;
+                    canvas.style.cursor = 'grab';
+                };
+
+                // 이벤트 리스너 등록
+                canvas.addEventListener('wheel', wheelHandler, { passive: false });
+                canvas.addEventListener('mousedown', mouseDownHandler);
+                canvas.addEventListener('mousemove', mouseMoveHandler);
+                canvas.addEventListener('mouseup', mouseUpHandler);
+                canvas.addEventListener('mouseleave', mouseLeaveHandler);
+
+                // 🔥 나중에 제거할 수 있도록 저장
+                canvas._chipWheelHandler = wheelHandler;
+                canvas._chipMouseDownHandler = mouseDownHandler;
+                canvas._chipMouseMoveHandler = mouseMoveHandler;
+                canvas._chipMouseUpHandler = mouseUpHandler;
+                canvas._chipMouseLeaveHandler = mouseLeaveHandler;
+
                 URL.revokeObjectURL(imageUrl);
             };
             img.onerror = () => {
                 console.error('Failed to load chip image');
-                // 🔥 고정 크기로 설정 (에러 시에도 동일)
-                const fixedSize = 400;
+                // 🔥 고정 크기로 설정 (에러 시에도 동일 - 440px)
+                const fixedSize = 440;
                 canvas.width = fixedSize;
                 canvas.height = fixedSize;
                 canvas.style.width = `${fixedSize}px`;
@@ -17964,8 +18123,8 @@ class WaferMapViewer {
             img.src = imageUrl;
         } else {
             // 이미지 로드 실패
-            // 🔥 고정 크기로 설정
-            const fixedSize = 400;
+            // 🔥 고정 크기로 설정 (440px)
+            const fixedSize = 440;
             canvas.width = fixedSize;
             canvas.height = fixedSize;
             canvas.style.width = `${fixedSize}px`;

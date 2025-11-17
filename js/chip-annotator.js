@@ -397,7 +397,7 @@ export class ChipAnnotator {
     /**
      * Get chip image region (for modal display)
      */
-    async getChipImageRegion(chipIndex) {
+    async getChipImageRegion(chipIndex, personalized = false, scheme = null) {
         if (!this.currentImagePath || chipIndex < 0 || chipIndex >= this.chips.length) {
             return null;
         }
@@ -413,7 +413,7 @@ export class ChipAnnotator {
         const width = Math.ceil(rect.x1 - rect.x0);
         const height = Math.ceil(rect.y1 - rect.y0);
 
-        // API에서 chip 영역 이미지 가져오기
+        // API에서 chip 영역 이미지 가져오기 (개인색 설정 지원)
         try {
             const params = new URLSearchParams();
             params.set('path', this.currentImagePath);
@@ -421,12 +421,18 @@ export class ChipAnnotator {
             params.set('y', y);
             params.set('width', width);
             params.set('height', height);
-            
+
+            // 🎨 개인색 설정 파라미터 추가
+            if (personalized && scheme) {
+                params.set('personalized', 'true');
+                params.set('scheme', scheme);
+            }
+
             const response = await fetch(`/api/image/crop?${params.toString()}`);
             if (!response.ok) {
                 throw new Error(`Failed to get chip image: ${response.status}`);
             }
-            
+
             const blob = await response.blob();
             return URL.createObjectURL(blob);
         } catch (error) {
@@ -804,10 +810,10 @@ export class ChipAnnotator {
             listContainer.style.visibility = 'visible';
             listContainer.style.pointerEvents = 'auto';
             
-            // 스크롤을 항상 맨 위로 이동
+            // 🔥 스크롤을 항상 맨 아래로 이동 (새로 추가된 칩이 보이도록)
             setTimeout(() => {
                 if (listItems) {
-                    listItems.scrollTop = 0;
+                    listItems.scrollTop = listItems.scrollHeight;
                 }
             }, 0);
             

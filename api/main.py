@@ -3782,10 +3782,16 @@ async def get_image_crop(
     x: int,
     y: int,
     width: int,
-    height: int
+    height: int,
+    personalized: bool = False,
+    scheme: Optional[str] = None
 ):
-    """Chip 영역 이미지 crop"""
+    """Chip 영역 이미지 crop (개인색 설정 지원)"""
     try:
+        # 🔥 개인색 설정이 활성화되었지만 scheme이 없으면 'change'로 기본값 설정
+        if personalized and not scheme:
+            scheme = 'change'
+
         # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
         if Path(path).is_absolute():
             image_path = Path(path)
@@ -3810,18 +3816,56 @@ async def get_image_crop(
         except AttributeError:
             pass
 
+        # 🎨 개인색 설정이 활성화되고 PNG인 경우 PLTE 패치 적용
+        if personalized and scheme and image_path.suffix.lower() == '.png':
+            try:
+                from .personal_colors import plte_inplace_patch_memory
+
+                # 원본 이미지 파일 읽기 및 PLTE 패치
+                with open(image_path, 'rb') as f:
+                    png_data = bytearray(f.read())
+
+                png_data = plte_inplace_patch_memory(png_data, scheme)
+
+                # PLTE 패치된 PNG를 메모리에서 pyvips로 로드
+                img = pyvips.Image.new_from_buffer(bytes(png_data), '', access='sequential')
+
+                # Crop 영역 검증
+                if x < 0 or y < 0 or x + width > img.width or y + height > img.height:
+                    raise HTTPException(status_code=400, detail="Crop region out of bounds")
+
+                # Crop 수행
+                cropped = img.crop(x, y, width, height)
+
+                # PNG로 인코딩하여 반환
+                png_buffer = cropped.pngsave_buffer(compression=6, interlace=False, strip=True)
+
+                return Response(
+                    content=bytes(png_buffer),
+                    media_type="image/png",
+                    headers={
+                        "Cache-Control": "public, max-age=3600",
+                        "X-Personalized": "true",
+                        "X-Scheme": scheme
+                    }
+                )
+            except Exception as e:
+                logger.warning(f"⚠️ [CHIP CROP PLTE] PLTE 패치 실패, 원본으로 crop: {e}")
+                # 폴백: 원본 이미지 사용
+
+        # 일반 crop (개인색 설정 없음 또는 폴백)
         img = pyvips.Image.new_from_file(str(image_path), access='sequential')
-        
+
         # Crop 영역 검증
         if x < 0 or y < 0 or x + width > img.width or y + height > img.height:
             raise HTTPException(status_code=400, detail="Crop region out of bounds")
-        
+
         # Crop 수행
         cropped = img.crop(x, y, width, height)
-        
+
         # PNG로 인코딩하여 반환
         png_buffer = cropped.pngsave_buffer(compression=6, interlace=False, strip=True)
-        
+
         return Response(
             content=bytes(png_buffer),
             media_type="image/png",
