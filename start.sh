@@ -2,7 +2,7 @@
 # Ubuntu 24 사내 운영 서버 시작 스크립트 (SAML Auto Login + 초고속 성능)
 
 # SAML 설정
-export AUTO_LOGIN=True                    # 1=자동SAML로그인강제
+export AUTO_LOGIN=False                    # 0=자동SAML로그인skip
 
 # 서버 설정
 export HOST="0.0.0.0"
