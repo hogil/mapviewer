@@ -5086,7 +5086,7 @@ class WaferMapViewer {
             const fullPath = node.root_relative || (parentPath ? `${parentPath}/${node.name}` : node.name);
 
             if (node.type === 'directory') {
-                html += `<li><details><summary data-path="${fullPath}" class="folder">📁 ${node.name}</summary><div class="folder-content" style="padding-left: 1rem;"></div></details></li>`;
+                html += `<li><details><summary data-path="${fullPath}" class="folder">📁 ${node.name}</summary><div class="folder-content" style="padding-left: 0.5rem;"></div></details></li>`;
             } else if (node.type === 'file') {
                 // 필터 적용
                 if (this.filterTestMode && this.filterTestMode !== 'all') {
