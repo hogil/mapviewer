@@ -401,7 +401,11 @@ export class ContextMenuManager {
             const fileName = filePath.split('/').pop(); // 파일명만 추출
             const parts = fileName.split('_');
             const part0 = parts[0] || '';
-            const part2 = parts[2] || '';
+            let part2 = parts[2] || '';
+            // 🔥 확장자 제거 (part2에서)
+            if (part2) {
+                part2 = part2.replace(/\.(png|jpg|jpeg|gif|bmp|tiff?)$/i, '');
+            }
             return `${part0}\t${part2}`;
         }).join('\n');
         

@@ -6939,7 +6939,19 @@ class WaferMapViewer {
             // 🔥 정렬된 그리드의 실제 이미지 경로 사용 (정렬된 인덱스로 정렬된 리스트에서 가져오기)
             const gridImages = this.currentGridImages || this.selectedImages;
             const selectedFiles = this.gridSelectedIdxs.map(idx => gridImages[idx]).filter(Boolean);
-            const fileListText = selectedFiles.join('\n');
+            
+            // 🔥 YMS 방식: _ 로 split 해서 0번째와 2번째만 (tab 구분)
+            const ymsList = selectedFiles.map(filePath => {
+                const fileName = filePath.split('/').pop(); // 파일명만 추출
+                const parts = fileName.split('_');
+                const part0 = parts[0] || '';
+                let part2 = parts[2] || '';
+                // 🔥 확장자 제거 (part2에서)
+                if (part2) {
+                    part2 = part2.replace(/\.(png|jpg|jpeg|gif|bmp|tiff?)$/i, '');
+                }
+                return `${part0}\t${part2}`;
+            }).join('\n');
 
             // 클립보드 권한 확인 및 요청
 
@@ -6947,18 +6959,18 @@ class WaferMapViewer {
 
             if (hasPermission && navigator.clipboard && navigator.clipboard.writeText) {
                 try {
-                    await navigator.clipboard.writeText(fileListText);
+                    await navigator.clipboard.writeText(ymsList);
 
-                    alert(`${selectedFiles.length}개 파일 경로가 클립보드에 복사되었습니다!`);
+                    alert(`${selectedFiles.length}개 파일 정보가 클립보드에 복사되었습니다!`);
                 } catch (error) {
                     console.error('클립보드 복사 실패:', error);
 
-                    this.fallbackCopyText(fileListText, selectedFiles.length);
+                    this.fallbackCopyText(ymsList, selectedFiles.length);
                 }
             } else {
                 // 권한이 없거나 API를 지원하지 않는 경우 폴백 사용
 
-                this.fallbackCopyText(fileListText, selectedFiles.length);
+                this.fallbackCopyText(ymsList, selectedFiles.length);
             }
         } catch (error) {
             console.error('파일 리스트 복사 실패:', error);
