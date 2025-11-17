@@ -27,7 +27,7 @@
         * {
             box-sizing: border-box;
             scrollbar-color: #333 #181818;
-            scrollbar-width: thin;
+            scrollbar-width: auto;
         }
         
         html, body {
@@ -1031,7 +1031,7 @@
             grid-template-columns: repeat(var(--grid-cols, 3), 1fr);
             gap: 8px;
             box-sizing: border-box;
-            padding: 12px;
+            padding: 12px 0 12px 12px;
             overflow-x: hidden;
             overflow-y: visible;
             background: #000 !important;
@@ -1674,7 +1674,7 @@
 
         /* Scrollbars */
         ::-webkit-scrollbar {
-            width: 8px;
+            width: 18px;
             background: transparent;
         }
         
@@ -1689,6 +1689,16 @@
         
         ::-webkit-scrollbar-track {
             background: transparent;
+        }
+        
+        /* Grid scroll wrapper specific scrollbar */
+        .grid-scroll-wrapper::-webkit-scrollbar {
+            width: 18px;
+        }
+        
+        .grid-scroll-wrapper {
+            scrollbar-width: auto;
+            scrollbar-color: #333 #181818;
         }
         
         /* Mode Specific */
@@ -2069,8 +2079,7 @@
             resize: none;
             overflow: hidden;
             right: 12px !important;
-            top: 50% !important;
-            transform: translateY(-50%) !important;
+            bottom: 12px !important;
             left: auto !important;
             display: flex;
             flex-direction: column;
@@ -2136,6 +2145,25 @@
             padding: 5px;
             overflow: auto;
             height: 100%;
+            scrollbar-width: auto;
+            scrollbar-color: #333 #181818;
+        }
+        
+        .thumbnail-navigator-list::-webkit-scrollbar {
+            width: 12px;
+        }
+        
+        .thumbnail-navigator-list::-webkit-scrollbar-thumb {
+            background: #333;
+            border-radius: 6px;
+        }
+        
+        .thumbnail-navigator-list::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        
+        .thumbnail-navigator-list::-webkit-scrollbar-track {
+            background: transparent;
         }
 
         .thumbnail-navigator.vertical .thumbnail-navigator-list {
@@ -2217,7 +2245,7 @@
             top: 32px;
             bottom: 0;
             right: 0;
-            width: 12px;
+            width: 4px;
             cursor: ew-resize;
             opacity: 0;
             transition: opacity 0.2s ease;

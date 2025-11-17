@@ -531,6 +531,10 @@ class WaferMapViewer {
         this.panelProtectTimeout = null; // 디바운스 타이머
         this.minimapPanelProtectTimeout = null; // ✅ 미니맵 패널 보호 타이머
 
+        // 🔥 그리드 스크롤 디바운스 (스크롤 멈춘 후 0.1초 후 로드)
+        this.gridScrollDebounceTimer = null;
+        this.isGridScrolling = false;
+
         // 주기적인 메모리 정리 (5분마다)
 
         this.cleanupInterval = setInterval(() => {
@@ -3373,6 +3377,9 @@ class WaferMapViewer {
         let scrollTimeoutId = null;
 
         scrollWrapper.addEventListener('scroll', () => {
+            // 🔥 썸네일 로드 디바운스
+            this.handleGridScroll();
+
             if (!dragData.active || !dragData.start || dragOverlay.style.display !== 'block') return;
 
             // 스크롤 중 임시로 투명도 감소
@@ -13634,9 +13641,13 @@ class WaferMapViewer {
             // ✅ 캐시 버스터 추가 (색상 스킴 변경 시 새로운 썸네일 요청)
             const cacheBuster = this._personalizedColorCacheBuster || Date.now();
             const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}&_t=${cacheBuster}`;
-            // 디버그 로그 제거 (너무 자주 출력됨)
-            // console.log(`[GRID_THUMB] URL: ${thumbnailUrl}, params: ${personalizedParams}`);
+
+            // 🔥 data-src에 URL 저장 (스크롤 디바운스용)
+            img.dataset.src = thumbnailUrl;
+
+            // 🔥 초기 로드: 즉시 src에 할당 (화면 뜨자마자 로드)
             img.src = thumbnailUrl;
+
             thumbBox.appendChild(img);
             wrap.appendChild(thumbBox);
             // 파일명 (확장자 제거)
@@ -13762,6 +13773,61 @@ class WaferMapViewer {
         // 워커 통계 체크 비활성화 (성능 최적화)
 
         return;
+    }
+
+    /**
+     * 🔥 그리드 스크롤 핸들러 (디바운스: 0.1초 후 실행)
+     */
+    handleGridScroll() {
+        // 스크롤 중임을 표시
+        this.isGridScrolling = true;
+
+        // 기존 타이머 클리어
+        if (this.gridScrollDebounceTimer) {
+            clearTimeout(this.gridScrollDebounceTimer);
+        }
+
+        // 0.1초 (100ms) 후 실행
+        this.gridScrollDebounceTimer = setTimeout(() => {
+            this.isGridScrolling = false;
+            // 🔥 스크롤이 멈춘 후 현재 뷰포트의 썸네일만 로드
+            this.loadVisibleGridThumbnails();
+        }, 100);
+    }
+
+    /**
+     * 🔥 현재 뷰포트에 보이는 그리드 썸네일만 즉시 로드
+     */
+    loadVisibleGridThumbnails() {
+        const grid = document.getElementById('image-grid');
+        const scrollWrapper = document.getElementById('image-grid-scroll-wrapper');
+
+        if (!grid || !scrollWrapper) return;
+
+        const thumbnails = grid.querySelectorAll('.grid-thumb-img[data-src]');
+        const scrollRect = scrollWrapper.getBoundingClientRect();
+
+        thumbnails.forEach((img) => {
+            const imgRect = img.getBoundingClientRect();
+
+            // 🔥 뷰포트에 보이는지 확인
+            const isVisible = (
+                imgRect.top < scrollRect.bottom &&
+                imgRect.bottom > scrollRect.top &&
+                imgRect.left < scrollRect.right &&
+                imgRect.right > scrollRect.left
+            );
+
+            if (isVisible && img.dataset.src) {
+                // 즉시 로드
+                const src = img.dataset.src;
+                if (img.src !== src) {
+                    img.src = src;
+                }
+                // data-src 제거 (중복 로드 방지)
+                delete img.dataset.src;
+            }
+        });
     }
 
     hideGrid(hideControls = true) {
