@@ -63,7 +63,7 @@ async function decodeBitmapSmart(source, options) {
 
 // 초기 맞춤 여유 (상대 비율)
 
-const FIT_RELATIVE_MARGIN = 1.02; // 🔥 0.85 × 1.2 = 1.02 (이미지 크기 1.2배 확대)
+const FIT_RELATIVE_MARGIN = 0.85; // 초기 이미지 맞춤 비율 (더 작게 표시)
 
 // 리셋 시 절대 퍼센트포인트 오프셋 (예: -0.02 => 2%p 더 작게)
 
