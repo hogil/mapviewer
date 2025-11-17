@@ -538,6 +538,9 @@ class WaferMapViewer {
         this.gridScrollDebounceTimer = null;
         this.isGridScrolling = false;
 
+        // 🔥 Shift 키 상태 추적 (네비게이터 표시 방지용)
+        this.isShiftPressed = false;
+
         // 주기적인 메모리 정리 (5분마다)
 
         this.cleanupInterval = setInterval(() => {
@@ -548,6 +551,22 @@ class WaferMapViewer {
 
         window.addEventListener('beforeunload', () => {
             this.cleanup();
+        });
+
+        // 🔥 Shift 키 추적 (네비게이터 표시 방지용)
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Shift') {
+                this.isShiftPressed = true;
+            }
+        });
+        window.addEventListener('keyup', (e) => {
+            if (e.key === 'Shift') {
+                this.isShiftPressed = false;
+            }
+        });
+        // 🔥 포커스 잃었을 때도 Shift 상태 초기화
+        window.addEventListener('blur', () => {
+            this.isShiftPressed = false;
         });
     }
 
@@ -15591,6 +15610,18 @@ class WaferMapViewer {
                     e.preventDefault();
                     e.stopPropagation();
                     this.navigateNext();
+                } else if (e.key === 'n' || e.key === 'N') {
+                    // 🔥 'n' 키로 네비게이터 UI 토글 (기능은 유지, UI만 숨김/표시)
+                    e.preventDefault();
+                    if (this.thumbnailNavigator) {
+                        if (this.thumbnailNavigator.isVisible) {
+                            this.thumbnailNavigator.hide();
+                            console.log('🔒 [NAV] Navigator UI 숨김 (기능은 유지)');
+                        } else {
+                            this.thumbnailNavigator.show();
+                            console.log('🔓 [NAV] Navigator UI 표시');
+                        }
+                    }
                 }
             });
 
@@ -15622,20 +15653,24 @@ class WaferMapViewer {
                 // 로드 실패해도 계속 진행
             }
 
-            // 🔥 Navigator 표시 (이미지 로드 성공 여부와 무관하게 항상 표시)
-            console.log('✅ [SINGLE_VIEW] Navigator 표시 시작');
-            if (this.thumbnailNavigator) {
-                console.log('✅ [SINGLE_VIEW] thumbnailNavigator 존재 확인');
-                try {
-                    this.thumbnailNavigator.show();
-                    console.log('✅ [SINGLE_VIEW] Navigator.show() 호출 완료');
-                    this.thumbnailNavigator.setImages(this.singleViewImageList, imagePath);
-                    console.log('✅ [NAVIGATOR] 표시 완료 - 이미지 개수:', this.singleViewImageList.length);
-                } catch (navError) {
-                    console.error('❌ [NAVIGATOR] 표시 실패:', navError);
-                }
+            // 🔥 Navigator 표시 (Shift 키가 눌려있지 않은 경우에만)
+            if (this.isShiftPressed) {
+                console.log('⏩ [SINGLE_VIEW] Shift 키 눌림 - Navigator 표시 건너뛰기');
             } else {
-                console.error('❌ [SINGLE_VIEW] thumbnailNavigator가 없습니다!');
+                console.log('✅ [SINGLE_VIEW] Navigator 표시 시작');
+                if (this.thumbnailNavigator) {
+                    console.log('✅ [SINGLE_VIEW] thumbnailNavigator 존재 확인');
+                    try {
+                        this.thumbnailNavigator.show();
+                        console.log('✅ [SINGLE_VIEW] Navigator.show() 호출 완료');
+                        this.thumbnailNavigator.setImages(this.singleViewImageList, imagePath);
+                        console.log('✅ [NAVIGATOR] 표시 완료 - 이미지 개수:', this.singleViewImageList.length);
+                    } catch (navError) {
+                        console.error('❌ [NAVIGATOR] 표시 실패:', navError);
+                    }
+                } else {
+                    console.error('❌ [SINGLE_VIEW] thumbnailNavigator가 없습니다!');
+                }
             }
 
             console.log('✅ [SINGLE_VIEW] 단일 보기 모드 설정 완료', {
