@@ -1115,6 +1115,11 @@ class WaferMapViewer {
 
         this.hideImage();
 
+        // ✅ Wafer Navigator 숨김
+        if (this.thumbnailNavigator) {
+            this.thumbnailNavigator.hide();
+        }
+
         // 초기 상태로 복귀 - 검색창이 보이는 상태
 
         this.showInitialState();
