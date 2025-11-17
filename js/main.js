@@ -17854,38 +17854,52 @@ class WaferMapViewer {
         if (imageUrl) {
             const img = new Image();
             img.onload = () => {
-                // Canvas 크기를 이미지 크기에 정확히 맞춤
-                const scaleFactor = 1.5;
-                let displayWidth = img.width * scaleFactor;
-                let displayHeight = img.height * scaleFactor;
-                
-                // 최대 크기 제한
-                const maxWidth = 1800;
-                const maxHeight = 1500;
-                
-                if (displayWidth > maxWidth || displayHeight > maxHeight) {
-                    const scale = Math.min(maxWidth / displayWidth, maxHeight / displayHeight);
-                    displayWidth = displayWidth * scale;
-                    displayHeight = displayHeight * scale;
-                }
+                // 🔥 고정 크기로 표시 (400px 정사각형)
+                const displaySize = 400;
 
-                // Canvas 실제 크기 설정 (이미지 크기에 맞춤)
-                canvas.width = displayWidth;
-                canvas.height = displayHeight;
+                // Canvas 실제 크기 설정 (고정 크기)
+                canvas.width = displaySize;
+                canvas.height = displaySize;
                 
-                // CSS로 표시 크기 제한 (이미지 크기에 맞게)
-                canvas.style.width = `${displayWidth}px`;
-                canvas.style.height = `${displayHeight}px`;
+                // CSS로 표시 크기 제한 (정사각형으로 꽉 차게)
+                canvas.style.width = `${displaySize}px`;
+                canvas.style.height = `${displaySize}px`;
                 canvas.style.maxWidth = 'none';
                 canvas.style.maxHeight = 'none';
                 
                 const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0, displayWidth, displayHeight);
+                // 🔥 픽셀 완벽 렌더링 설정
+                setPixelPerfectRendering(ctx);
+                
+                // 이미지를 정사각형 캔버스에 맞춰서 그리기 (비율 유지하면서 중앙 정렬)
+                const imgAspect = img.width / img.height;
+                let drawWidth = displaySize;
+                let drawHeight = displaySize;
+                let drawX = 0;
+                let drawY = 0;
+                
+                if (imgAspect > 1) {
+                    // 가로가 더 긴 경우
+                    drawHeight = displaySize / imgAspect;
+                    drawY = (displaySize - drawHeight) / 2;
+                } else {
+                    // 세로가 더 긴 경우
+                    drawWidth = displaySize * imgAspect;
+                    drawX = (displaySize - drawWidth) / 2;
+                }
+                
+                ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
                 
                 URL.revokeObjectURL(imageUrl);
             };
             img.onerror = () => {
                 console.error('Failed to load chip image');
+                // 🔥 고정 크기로 설정 (에러 시에도 동일)
+                const fixedSize = 400;
+                canvas.width = fixedSize;
+                canvas.height = fixedSize;
+                canvas.style.width = `${fixedSize}px`;
+                canvas.style.height = `${fixedSize}px`;
                 const ctx = canvas.getContext('2d');
                 ctx.fillStyle = '#000';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -17897,8 +17911,12 @@ class WaferMapViewer {
             img.src = imageUrl;
         } else {
             // 이미지 로드 실패
-            canvas.width = 800;
-            canvas.height = 600;
+            // 🔥 고정 크기로 설정
+            const fixedSize = 400;
+            canvas.width = fixedSize;
+            canvas.height = fixedSize;
+            canvas.style.width = `${fixedSize}px`;
+            canvas.style.height = `${fixedSize}px`;
             const ctx = canvas.getContext('2d');
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -17968,13 +17986,16 @@ class WaferMapViewer {
                 const label = `G${index}`; // G0, G1, G2, ...
 
                 const item = document.createElement('div');
-                item.style.cssText = 'display: flex; align-items: center; gap: 10px; padding: 2px 0;';
+                // 🔥 줄간격 줄이기 (gap: 10px → 4px, padding: 2px 0 → 1px 0)
+                item.style.cssText = 'display: flex; align-items: center; gap: 6px; padding: 1px 0;';
 
                 const colorBar = document.createElement('div');
-                colorBar.style.cssText = `width: 48px; height: 20px; background: ${color}; border: 1px solid #444; border-radius: 2px; flex-shrink: 0;`;
+                // 🔥 색상 바 크기 약간 줄이기
+                colorBar.style.cssText = `width: 40px; height: 16px; background: ${color}; border: 1px solid #444; border-radius: 2px; flex-shrink: 0;`;
 
                 const labelEl = document.createElement('span');
-                labelEl.style.cssText = 'color: #ccc; font-size: 15px; font-weight: 500;';
+                // 🔥 글자 크기 줄이기 (15px → 12px)
+                labelEl.style.cssText = 'color: #ccc; font-size: 12px; font-weight: 500;';
                 labelEl.textContent = label;
 
                 item.appendChild(colorBar);
