@@ -1258,13 +1258,18 @@ export class ThumbnailNavigator {
 
 
 
-            // _로 split해서 첫 번째와 두 번째 인덱스만 표시
+            // 🔥 _로 split해서 0번째와 2번째 인덱스만 표시 (YMS 방식)
+            // 구분자: `-` 사용 (하이픈, 깔끔하고 구분이 명확함)
 
             const parts = processedName.split('_');
 
-            if (parts.length >= 2) {
+            if (parts.length >= 3) {
 
-                displayName = `${parts[0]} ${parts[1]}`;
+                displayName = `${parts[0]}-${parts[2]}`;
+
+            } else if (parts.length >= 1) {
+
+                displayName = parts[0];
 
             } else {
 
