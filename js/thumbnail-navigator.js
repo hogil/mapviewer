@@ -159,8 +159,9 @@ export class ThumbnailNavigator {
         // width: 80 = W - 2 - 10  => W = 92
 
         // height: 500 = H - 2 - 32 - 10 => H = 544
+        // 🔥 기본 너비 증가: 92px → 120px (글자 영역 확대)
 
-        this.size.width = 92;
+        this.size.width = 120;
 
         this.size.height = 544;
 
@@ -559,8 +560,9 @@ export class ThumbnailNavigator {
 
 
         // 최소/최대 크기 제한
+        // 🔥 최소 너비 증가: 80px → 100px (글자 영역 확대)
 
-        newWidth = Math.max(80, Math.min(newWidth, window.innerWidth - this.position.x - 20));
+        newWidth = Math.max(100, Math.min(newWidth, window.innerWidth - this.position.x - 20));
 
         newHeight = Math.max(150, Math.min(newHeight, window.innerHeight - this.position.y - 20));
 
@@ -585,8 +587,9 @@ export class ThumbnailNavigator {
 
 
         // 최소/최대 너비 제한
+        // 🔥 최소 너비 증가: 80px → 100px (글자 영역 확대)
 
-        newWidth = Math.max(80, Math.min(newWidth, window.innerWidth - this.position.x - 20));
+        newWidth = Math.max(100, Math.min(newWidth, window.innerWidth - this.position.x - 20));
 
 
 
@@ -610,8 +613,9 @@ export class ThumbnailNavigator {
 
 
         // 최소/최대 너비 제한
+        // 🔥 최소 너비 증가: 80px → 100px (글자 영역 확대)
 
-        newWidth = Math.max(80, Math.min(newWidth, 600));
+        newWidth = Math.max(100, Math.min(newWidth, 600));
 
 
 
@@ -931,8 +935,9 @@ export class ThumbnailNavigator {
 
 
         // 기본 너비 설정 (높이는 calculateNavigatorPosition에서 설정됨)
+        // 🔥 기본 너비 증가: 92px → 120px (글자 영역 확대)
 
-        this.size.width = 92;
+        this.size.width = 120;
 
 
 
@@ -1174,6 +1179,19 @@ export class ThumbnailNavigator {
 
         img.alt = imagePath.split('/').pop();
 
+        // 🔥 이미지 로드 완료 시에만 표시 (로딩 중 표시 제거)
+        img.style.display = 'none'; // 기본적으로 숨김
+
+        img.onload = () => {
+            // 🔥 이미지 로드 완료 시에만 표시
+            img.style.display = 'block';
+        };
+
+        img.onerror = () => {
+            // 🔥 로드 실패 시에도 숨김 유지 (검은 화면)
+            img.style.display = 'none';
+        };
+
         // 🔥 현재 인덱스 주변(±30개)만 즉시 로드, 나머지는 data-src에만 저장
 
         // 빠른 next/prev 반응을 위해 범위를 넓게 설정
@@ -1376,6 +1394,8 @@ export class ThumbnailNavigator {
 
                     if (img.dataset.src) {
 
+                        // 🔥 지연 로드: data-src에서 src로 전환
+                        img.style.display = 'none'; // 로드 전에는 숨김
                         img.src = img.dataset.src;
 
                         delete img.dataset.src;
@@ -1710,6 +1730,8 @@ export class ThumbnailNavigator {
 
                 // data-src에서 src로 로드 (아직 로드되지 않은 경우만)
 
+                // 🔥 지연 로드: data-src에서 src로 전환
+                img.style.display = 'none'; // 로드 전에는 숨김
                 img.src = img.dataset.src;
 
                 delete img.dataset.src; // 중복 로드 방지
