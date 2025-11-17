@@ -230,19 +230,15 @@ export class ThumbnailNavigator {
 
     bindEvents() {
 
-        // 닫기 버튼 - 단일 이미지 모드 종료
+        // 🔥 닫기 버튼 - 네비게이터만 숨기기 (단일 이미지 모드는 유지)
 
         if (this.closeBtn) {
 
             this.closeBtn.addEventListener('click', () => {
 
-                // Navigator를 닫으면 단일 이미지 모드도 종료
+                // 🔥 네비게이터만 숨기기 (기능은 유지 - 넥스트/프리브 버튼 계속 동작)
 
-                if (this.viewer && typeof this.viewer.exitSingleImageViewMode === 'function') {
-
-                    this.viewer.exitSingleImageViewMode();
-
-                }
+                this.hide();
 
             });
 
