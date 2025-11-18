@@ -179,14 +179,13 @@ export class GridManager {
         const fileName = document.createElement('div');
         fileName.className = 'grid-filename';
         let displayName = imagePath.split('/').pop();
-        // sum_map.png를 composite(median)으로 표시
-        if (displayName === 'sum_map.png' || displayName === 'sum_map') {
-            displayName = 'composite(median)';
-        }
-        // index_로 시작하는 파일명을 grade_로 변경
-        else if (displayName.startsWith('index_')) {
-            displayName = displayName.replace(/^index_/, 'grade_');
-            // 확장자 제거 후 표시
+        const lowerName = (displayName || '').toLowerCase();
+        if (lowerName === 'square_average.png' || lowerName === 'square_average' || displayName === 'sum_map.png') {
+            displayName = 'composite(square-avg)';
+        } else if (lowerName === 'square_wieghted_average.png' || lowerName === 'square_wieghted_average' || lowerName.startsWith('sum_map_weighted')) {
+            displayName = 'composite(weighted)';
+        } else if (/^(index_|grade_)/i.test(displayName)) {
+            displayName = displayName.replace(/^(index_|grade_)/i, 'Grade_');
             const nameWithoutExt = displayName.replace(/\.(png|jpg|jpeg|gif|webp)$/i, '');
             displayName = nameWithoutExt;
         }

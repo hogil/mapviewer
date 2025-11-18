@@ -78,6 +78,13 @@ from .personal_colors import (
     save_color_legends,
     get_user_color_scheme,
     prepare_personalized_image,
+    apply_personalized_palette,
+    swap_first16_colors,
+    plte_inplace_patch_memory,
+)
+from .composite_colors import (
+    load_composite_color_settings,
+    save_composite_color_settings,
 )
 from .user_manager import (
     get_user_manager,
@@ -2036,6 +2043,35 @@ async def save_color_scheme(request: Request):
 
 
 # ===== 사내 ADFS/STS 헬스 체크 (핑) =====
+
+
+# ===== Composite 색상 편집 API =====
+@app.get("/api/composite-colors")
+async def get_composite_colors():
+    try:
+        settings = load_composite_color_settings()
+        return settings.to_dict()
+    except Exception as exc:
+        logger.error(f"❌ [/api/composite-colors] 조회 실패: {exc}")
+        raise HTTPException(status_code=500, detail="Composite 색상 정보를 불러오지 못했습니다.")
+
+
+@app.post("/api/composite-colors")
+async def save_composite_colors_endpoint(request: Request):
+    try:
+        payload = await request.json()
+        colors = payload.get("colors")
+        if not isinstance(colors, list) or not colors:
+            raise HTTPException(status_code=400, detail="colors 배열이 필요합니다.")
+        settings = save_composite_color_settings(colors)
+        return settings.to_dict()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"❌ [/api/composite-colors] 저장 실패: {exc}")
+        raise HTTPException(status_code=500, detail="Composite 색상을 저장하지 못했습니다.")
+
+
 @app.get("/api/sso/ping")
 async def sso_ping(url: str = Query(..., description="예: http://stsds.secsso.net/adfs/ls/")):
     try:
@@ -6398,6 +6434,8 @@ async def create_composite_map_endpoint(payload: CompositeMapRequest):
             # 🔥 Sum Map 경로 추가
             if "sum_map_path" in result:
                 response["sum_map_path"] = result["sum_map_path"]
+            if "sum_maps" in result:
+                response["sum_maps"] = result["sum_maps"]
 
         return response
     except Exception as e:

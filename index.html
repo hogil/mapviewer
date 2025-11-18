@@ -2634,6 +2634,9 @@
         <div class="context-menu-item" id="context-composite-return" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px; display: none;">
             ↩ 이전 그리드로 돌아가기
         </div>
+        <div class="context-menu-item" id="context-composite-colors" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px; display: none;">
+            🎨 Composite 색상
+        </div>
         <hr style="margin: 4px 0; border: none; border-top: 1px solid #555;">
         <div class="context-menu-item" id="context-download" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">
             📥 선택 파일 다운로드
@@ -2884,6 +2887,33 @@
                 <button type="button" id="color-editor-restore-btn">복원</button>
                 <button type="button" id="color-editor-cancel-btn">취소</button>
                 <button type="button" id="color-editor-apply-btn" disabled>적용</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="composite-color-modal" class="color-editor-modal" role="dialog" aria-modal="true" aria-hidden="true">
+        <div class="color-editor-dialog">
+            <div class="color-editor-header">
+                <h2 class="color-editor-title">Composite 색상 설정</h2>
+                <button type="button" id="composite-color-close-btn" class="color-editor-close-btn" aria-label="닫기">×</button>
+            </div>
+            <div class="color-editor-body">
+                <div class="color-editor-error" id="composite-color-error"></div>
+                <table class="color-editor-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 120px;">분위수</th>
+                            <th style="width: 120px;">Color</th>
+                            <th style="width: 150px;">HEX</th>
+                        </tr>
+                    </thead>
+                    <tbody id="composite-color-table-body"></tbody>
+                </table>
+            </div>
+            <div class="color-editor-footer">
+                <button type="button" id="composite-color-reset-btn">기본값</button>
+                <button type="button" id="composite-color-cancel-btn">취소</button>
+                <button type="button" id="composite-color-apply-btn" disabled>적용</button>
             </div>
         </div>
     </div>

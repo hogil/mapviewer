@@ -14,6 +14,7 @@ import { optimizedFetch, fetchOptimizer } from './fetch-optimizer.js';
 import { ColorSchemeEditor } from './color-editor.js';
 import { ChipAnnotator } from './chip-annotator.js';
 import { ThumbnailNavigator } from './thumbnail-navigator.js';
+import { CompositeColorModal } from './composite-colors.js';
 
 // Constants
 
@@ -485,6 +486,7 @@ class WaferMapViewer {
         this.initState();
 
         this.colorEditor = new ColorSchemeEditor(this);
+        this.compositeColorModal = new CompositeColorModal(this);
 
         this.bindEvents();
 
@@ -1253,30 +1255,17 @@ class WaferMapViewer {
             const parts = path.replace(/\\/g, '/').split('/');
             const fileName = parts.pop() || path;
 
-            // 🔥 Line 1: "2depth_folder-1depth_folder" 형식
-            // parts[length-1]은 1depth (파일 바로 위 폴더), parts[length-2]는 2depth (그 위 폴더)
+            // 🔥 Line 1: 2depth_folder만 표시 (2depth가 없으면 비워둠)
             let folderInfo = '';
             if (parts.length >= 2) {
-                const folder1depth = parts[parts.length - 1]; // 1depth (파일에 가까운 폴더)
                 const folder2depth = parts[parts.length - 2]; // 2depth (그 위 폴더)
-                folderInfo = `${folder2depth}-${folder1depth}`;
-            } else if (parts.length === 1) {
-                folderInfo = parts[0];
+                folderInfo = folder2depth;
             }
             this.dom.filePathText.textContent = folderInfo;
 
-            // 🔥 Line 2: 파일명을 '_'로 split하여 "index0-index1-index2-index4" 형식
+            // 🔥 Line 2: 파일명 전체 표시 (split하지 않음)
             const fileNameWithoutExt = fileName.replace(/\.[^.]+$/, '');
-            const nameParts = fileNameWithoutExt.split('_');
-            let displayName = '';
-            if (nameParts.length >= 5) {
-                // index 0, 1, 2, 4 사용 (index 3은 건너뜀)
-                displayName = `${nameParts[0]}-${nameParts[1]}-${nameParts[2]}-${nameParts[4]}`;
-            } else {
-                // '_'로 split했을 때 부분이 5개 미만이면 원본 파일명 사용
-                displayName = fileNameWithoutExt;
-            }
-            this.dom.fileNameText.textContent = displayName;
+            this.dom.fileNameText.textContent = fileNameWithoutExt;
 
             // 구분자 표시/숨김 처리
             const separator = document.getElementById('separator-text');
@@ -5906,22 +5895,39 @@ class WaferMapViewer {
     updateContextMenuState() {
         const createItem = document.getElementById('context-composite-create');
         const returnItem = document.getElementById('context-composite-return');
+        const colorItem = document.getElementById('context-composite-colors');
         if (!createItem || !returnItem) {
-            console.warn('⚠️ 컨텍스트 메뉴 항목을 찾을 수 없습니다.');
+            console.warn('?? ���ؽ�Ʈ �޴� �׸��� ã�� �� �����ϴ�.');
             return;
         }
         if (this.isCompositeMode) {
-            console.log('🔄 [CONTEXT_MENU] Composite Mode 활성화 - "이전 그리드로 돌아가기" 표시');
-            // 🔥 강제로 display 속성 설정 (다른 스타일 오버라이드 방지)
+            console.log('?? [CONTEXT_MENU] Composite Mode Ȱ��ȭ - "���� �׸���� ���ư���" ǥ��');
             createItem.style.setProperty('display', 'none', 'important');
             returnItem.style.setProperty('display', 'block', 'important');
         } else {
-            console.log('🔄 [CONTEXT_MENU] 일반 모드 - "Composite Map 만들기" 표시');
-            // 🔥 강제로 display 속성 설정 (다른 스타일 오버라이드 방지)
+            console.log('?? [CONTEXT_MENU] �Ϲ� ��� - "Composite Map �����" ǥ��');
             createItem.style.setProperty('display', 'block', 'important');
             returnItem.style.setProperty('display', 'none', 'important');
         }
+        if (colorItem) {
+            colorItem.style.setProperty('display', this.isCompositeMode ? 'block' : 'none', 'important');
+        }
     }
+
+    openCompositeColorModal(skipModeCheck = false) {
+        if (!this.compositeColorModal) {
+            this.showToast?.('Composite 색상 설정을 열 수 없습니다.', 2000);
+            return;
+        }
+        if (!skipModeCheck && !this.isCompositeMode) {
+            this.showToast?.('Composite 모드에서만 설정할 수 있습니다.', 2000);
+            return;
+        }
+        this.compositeColorModal.open();
+
+    }
+
+
 
     /**
      * 현재 Grid 세션을 저장 (Composite Map으로 전환 전)
@@ -5957,12 +5963,18 @@ class WaferMapViewer {
             .sort((a, b) => a.index - b.index)
             .map(h => h.path);
 
-        // 🔥 Sum Map 추가 (9번째 이미지)
-        if (result.sum_map_path) {
+        // 🔥 Sum Map 추가 (추가 계산 결과)
+        if (Array.isArray(result.sum_maps) && result.sum_maps.length) {
+            result.sum_maps.forEach(entry => {
+                if (entry?.path) {
+                    heatmapPaths.push(entry.path);
+                }
+            });
+        } else if (result.sum_map_path) {
             heatmapPaths.push(result.sum_map_path);
         }
 
-        console.log('🔄 Composite Grid로 전환 (9개 이미지):', heatmapPaths);
+        console.log(`🔄 Composite Grid로 전환 (${heatmapPaths.length}개 이미지):`, heatmapPaths);
 
         // 🔥 Grid 선택 상태 완전 초기화
         this.gridSelectedIdxs = [];
@@ -6117,7 +6129,8 @@ class WaferMapViewer {
             const res = await fetch('/api/composite-map', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image_paths: selected })
+                body: JSON.stringify({ image_paths: selected }),
+                cache: 'no-store'  // 캐시 사용 안 함
             });
 
             if (!res.ok) {
@@ -6126,6 +6139,9 @@ class WaferMapViewer {
 
             const result = await res.json();
             console.log('✅ Composite Map 생성 완료:', result);
+            console.log('🔍 [DEBUG API RESPONSE] heatmaps length:', result.heatmaps?.length);
+            console.log('🔍 [DEBUG API RESPONSE] sum_maps:', result.sum_maps);
+            console.log('🔍 [DEBUG API RESPONSE] sum_map_path:', result.sum_map_path);
 
             // 🔥 로딩 오버레이 제거
             if (loadingOverlay && loadingOverlay.parentNode) {
@@ -6509,6 +6525,7 @@ class WaferMapViewer {
         const cancelItem = document.getElementById('context-cancel');
         const compositeCreateItem = document.getElementById('context-composite-create');
         const compositeReturnItem = document.getElementById('context-composite-return');
+        const compositeColorItem = document.getElementById('context-composite-colors');
 
         if (compositeCreateItem) {
             compositeCreateItem.onclick = () => {
@@ -6521,6 +6538,12 @@ class WaferMapViewer {
             compositeReturnItem.onclick = () => {
                 this.hideContextMenu();
                 this.exitCompositeMode();
+            };
+        }
+        if (compositeColorItem) {
+            compositeColorItem.onclick = () => {
+                this.hideContextMenu();
+                this.openCompositeColorModal();
             };
         }
 
@@ -6855,6 +6878,11 @@ class WaferMapViewer {
     showSingleContextMenu(event) {
         let menu = document.getElementById('single-context-menu');
 
+        // Composite square 이미지인지 확인
+        const isCompositeSquare = this.selectedImagePath &&
+            (this.selectedImagePath.includes('square_average') ||
+             this.selectedImagePath.includes('square_wieghted_average'));
+
         if (!menu) {
             menu = document.createElement('div');
 
@@ -6867,6 +6895,8 @@ class WaferMapViewer {
                 <div id="single-save" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📥 원본 저장</div>
 
                 <div id="single-copy" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📋 이미지 클립보드 복사</div>
+
+                <div id="single-composite-color" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px; display:none;">🎨 Composite 색상</div>
 
             `;
 
@@ -6883,6 +6913,17 @@ class WaferMapViewer {
 
                 this.hideSingleContextMenu();
             });
+
+            menu.querySelector('#single-composite-color').addEventListener('click', () => {
+                this.hideSingleContextMenu();
+                this.openCompositeColorModal(true); // skipModeCheck=true
+            });
+        }
+
+        // Composite square 이미지일 때만 composite 색상 옵션 표시
+        const compositeColorItem = menu.querySelector('#single-composite-color');
+        if (compositeColorItem) {
+            compositeColorItem.style.display = isCompositeSquare ? 'block' : 'none';
         }
 
         menu.style.left = event.pageX + 'px';

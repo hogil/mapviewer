@@ -1229,57 +1229,32 @@ export class ThumbnailNavigator {
         fileName.className = 'thumbnail-nav-item-filename';
 
         let displayName = imagePath.split('/').pop();
+        const lowerName = (displayName || '').toLowerCase();
 
-
-
-        // sum_map.png를 composite(median)으로 표시
-
-        if (displayName === 'sum_map.png' || displayName === 'sum_map') {
-
-            displayName = 'composite(median)';
-
+        if (lowerName === 'square_average.png' || lowerName === 'square_average' || displayName === 'sum_map.png') {
+            displayName = 'composite(square-avg)';
+        } else if (lowerName === 'square_wieghted_average.png' || lowerName === 'square_wieghted_average' || lowerName.startsWith('sum_map_weighted')) {
+            displayName = 'composite(weighted)';
         } else {
-
-            // 확장자 제거
-
             const nameWithoutExt = displayName.replace(/\.(png|jpg|jpeg|gif|webp)$/i, '');
-
-
-
-            // index_로 시작하는 파일명을 grade_로 변경
-
             let processedName = nameWithoutExt;
 
-            if (nameWithoutExt.startsWith('index_')) {
-
-                processedName = nameWithoutExt.replace(/^index_/, 'grade_');
-
+            if (/^index_/i.test(nameWithoutExt)) {
+                processedName = nameWithoutExt.replace(/^index_/i, 'Grade_');
+            } else if (/^grade_/i.test(nameWithoutExt)) {
+                processedName = nameWithoutExt.replace(/^grade_/i, 'Grade_');
             }
-
-
-
-            // 🔥 _로 split해서 0번째와 2번째 인덱스만 표시 (YMS 방식)
-            // 구분자: `-` 사용 (하이픈, 깔끔하고 구분이 명확함)
 
             const parts = processedName.split('_');
 
             if (parts.length >= 3) {
-
                 displayName = `${parts[0]}-${parts[2]}`;
-
             } else if (parts.length >= 1) {
-
                 displayName = parts[0];
-
             } else {
-
                 displayName = processedName;
-
             }
-
         }
-
-
 
         fileName.textContent = displayName;
 
