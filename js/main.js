@@ -5923,8 +5923,8 @@ class WaferMapViewer {
             this.showToast?.('Composite 모드에서만 설정할 수 있습니다.', 2000);
             return;
         }
-        this.compositeColorModal.open();
-
+        const previewContext = this.isCompositeMode ? this.compositeSession : null;
+        this.compositeColorModal.open(previewContext);
     }
 
 
@@ -5964,15 +5964,31 @@ class WaferMapViewer {
             .map(h => h.path);
 
         // 🔥 Sum Map 추가 (추가 계산 결과)
-        if (Array.isArray(result.sum_maps) && result.sum_maps.length) {
-            result.sum_maps.forEach(entry => {
-                if (entry?.path) {
-                    heatmapPaths.push(entry.path);
-                }
+        console.log('🔍 [switchToCompositeGrid] result.sum_maps:', result.sum_maps);
+        console.log('🔍 [switchToCompositeGrid] result.sum_map_path:', result.sum_map_path);
+
+        const sumMapEntries = Array.isArray(result.sum_maps) && result.sum_maps.length
+            ? result.sum_maps.map(entry => ({ ...entry }))
+            : [];
+
+        console.log('🔍 [switchToCompositeGrid] sumMapEntries after sum_maps:', sumMapEntries);
+
+        if (!sumMapEntries.length && result.sum_map_path) {
+            sumMapEntries.push({
+                path: result.sum_map_path,
+                type: 'square_mean',
+                display_name: 'Composite SqMean',
+                filename: 'square_average.png',
             });
-        } else if (result.sum_map_path) {
-            heatmapPaths.push(result.sum_map_path);
         }
+
+        console.log('🔍 [switchToCompositeGrid] sumMapEntries final:', sumMapEntries);
+
+        sumMapEntries.forEach(entry => {
+            if (entry?.path) {
+                heatmapPaths.push(entry.path);
+            }
+        });
 
         console.log(`🔄 Composite Grid로 전환 (${heatmapPaths.length}개 이미지):`, heatmapPaths);
 
@@ -6000,13 +6016,172 @@ class WaferMapViewer {
             outputDir: result.output_dir,
             imageSize: result.image_size,
             processingTime: result.processing_time,
-            generatedAt: result.generated_at
+            generatedAt: result.generated_at,
+            sumMaps: sumMapEntries,
         };
+
+        console.log('🔍 [switchToCompositeGrid] compositeSession 설정됨:', this.compositeSession);
 
         // Composite 모드 활성화
         this.isCompositeMode = true;
 
         this.updateContextMenuState();
+    }
+
+    async refreshCompositeSumMaps(options = {}) {
+        console.log('[refreshCompositeSumMaps] 호출됨');
+        console.log('  isCompositeMode:', this.isCompositeMode);
+        console.log('  compositeSession:', this.compositeSession);
+        console.log('  outputDir:', this.compositeSession?.outputDir);
+
+        if (!this.isCompositeMode || !this.compositeSession?.outputDir) {
+            throw new Error('Composite 모드가 아닙니다.');
+        }
+
+        const payload = {
+            output_dir: this.compositeSession.outputDir,
+        };
+        if (Array.isArray(options.colors) && options.colors.length) {
+            payload.colors = [...options.colors];
+        }
+
+        console.log('  payload:', payload);
+
+        try {
+            const res = await fetch('/api/composite-recolor', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+                cache: 'no-store',
+            });
+            if (!res.ok) {
+                const text = await res.text();
+                let detail = text;
+                try {
+                    const parsed = JSON.parse(text);
+                    if (parsed?.detail) {
+                        detail = parsed.detail;
+                    }
+                } catch (err) {
+                    console.warn('[Composite] recolor response parse failed:', err);
+                }
+                const error = new Error(detail || 'Composite Sum Map을 갱신하지 못했습니다.');
+                error.status = res.status;
+                throw error;
+            }
+            const data = await res.json();
+            console.log('  /api/composite-recolor 응답:', data);
+            console.log('  data.sum_maps:', data.sum_maps);
+
+            if (Array.isArray(data.sum_maps) && data.sum_maps.length) {
+                console.log('  ✅ sum_maps 업데이트 및 이미지 갱신');
+                this.compositeSession.sumMaps = data.sum_maps.map(entry => ({ ...entry }));
+                this.refreshCompositeGridImages(this.compositeSession.sumMaps);
+            } else {
+                console.log('  ❌ sum_maps 없음 - 이미지 갱신 안 됨');
+            }
+            if (!options?.silent) {
+                this.showToast?.('Composite Sum Map 색상을 갱신했습니다.', 1800);
+            }
+            return data;
+        } catch (error) {
+            console.error('[Composite] Sum map refresh failed:', error);
+            if (!options?.silent) {
+                if (error?.status === 404) {
+                    this.showToast?.('Composite 원본 데이터를 찾을 수 없습니다. 새로 생성한 뒤 다시 시도하세요.', 2200);
+                } else {
+                    this.showToast?.('Composite Sum Map을 갱신하지 못했습니다.', 2000);
+                }
+            }
+            throw error;
+        }
+    }
+
+    refreshCompositeGridImages(sumMaps) {
+        console.log('[refreshCompositeGridImages] 호출됨');
+        console.log('  sumMaps:', sumMaps);
+        console.log('  gridMode:', this.gridMode);
+
+        if (!Array.isArray(sumMaps) || !sumMaps.length) {
+            console.log('  ❌ sumMaps 없음 - 종료');
+            return;
+        }
+
+        const timestamp = Date.now();
+        const pathSet = new Set();
+        sumMaps.forEach(entry => {
+            if (entry?.path) {
+                pathSet.add(entry.path);
+            }
+        });
+        if (!pathSet.size) {
+            console.log('  ❌ pathSet 없음 - 종료');
+            return;
+        }
+
+        console.log('  pathSet:', pathSet);
+
+        // 🔥 Single Image Mode: 현재 보고 있는 이미지가 square map이면 새로고침
+        if (!this.gridMode) {
+            console.log('  📍 Single Image Mode');
+            if (this.selectedImagePath && pathSet.has(this.selectedImagePath)) {
+                console.log('  ✅ 현재 이미지가 square map - 새로고침');
+                const basePath = this.selectedImagePath.startsWith('/')
+                    ? this.selectedImagePath
+                    : `/${this.selectedImagePath}`;
+                const separator = basePath.includes('?') ? '&' : '?';
+                const newSrc = `${basePath}${separator}t=${timestamp}`;
+                // 이미지 강제 새로고침
+                this.loadImage(this.selectedImagePath, true);
+            } else {
+                console.log('  ℹ️ 현재 이미지는 square map 아님');
+            }
+            return;
+        }
+
+        // 🔥 Grid Mode: Grid의 square map 이미지들 새로고침
+        console.log('  📍 Grid Mode');
+        const grid = document.getElementById('image-grid');
+        if (!grid) {
+            console.log('  ❌ grid 없음 - 종료');
+            return;
+        }
+
+        console.log('  grid.style.display:', grid.style.display);
+        console.log('  grid.children.length:', grid.children.length);
+
+        const wraps = grid.querySelectorAll('.grid-thumb-wrap');
+        console.log('  wraps.length:', wraps.length);
+
+        if (!wraps.length) {
+            console.log('  ❌ grid wraps 없음 - 종료');
+            console.log('  grid.innerHTML.substring(0, 200):', grid.innerHTML.substring(0, 200));
+            return;
+        }
+
+        let updatedCount = 0;
+        wraps.forEach(wrap => {
+            const path = wrap.dataset.path;
+            if (!path || !pathSet.has(path)) {
+                return;
+            }
+            const img = wrap.querySelector('.grid-thumb-img');
+            if (!img) return;
+            const basePath = path.startsWith('/') ? path : `/${path}`;
+            const separator = basePath.includes('?') ? '&' : '?';
+            const newSrc = `${basePath}${separator}t=${timestamp}`;
+            console.log(`    🔄 이미지 갱신: ${path}`);
+
+            // 🔥 브라우저 캐시 우회: src를 빈 문자열로 먼저 설정 후 새 URL 설정
+            img.src = '';
+            setTimeout(() => {
+                img.dataset.src = newSrc;
+                img.src = newSrc;
+            }, 10);
+            updatedCount++;
+        });
+
+        console.log(`  ✅ ${updatedCount}개 이미지 src 업데이트 완료`);
     }
 
     /**

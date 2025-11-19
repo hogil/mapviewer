@@ -19,7 +19,7 @@ from .config import (
     COMPOSITE_LOADER_MODE,
     COMPOSITE_BATCH_SIZE,
 )
-from .personal_colors import load_color_legends, _scheme_to_palette_bytes
+from .personal_colors import load_color_legends, _scheme_to_palette_bytes, normalize_hex_color
 from .composite_colors import load_composite_color_settings
 
 Image.MAX_IMAGE_PIXELS = None
@@ -28,6 +28,7 @@ warnings.simplefilter("ignore", DecompressionBombWarning)
 # Composite 맵 저장 디렉토리
 COMPOSITE_ROOT = IMAGES_ROOT / "composite_maps"
 COMPOSITE_ROOT.mkdir(parents=True, exist_ok=True)
+SQUARE_MAP_CACHE_FILENAME = "square_maps_data.npz"
 
 
 def _build_palette_list(source_palette: Optional[Sequence[int]]) -> List[int]:
@@ -166,6 +167,104 @@ def _render_sum_map_image(
     return Image.fromarray(rgb_array.astype(np.uint8), mode='RGB')
 
 
+def _persist_square_map_data(
+    output_dir: Path,
+    palette_list: Sequence[int],
+    base_indices: np.ndarray,
+    square_mean_map: np.ndarray,
+    weighted_map: np.ndarray,
+    calc_mask: np.ndarray,
+    weighted_mask: np.ndarray,
+) -> None:
+    """
+    Cache square-map arrays for fast recoloring.
+    """
+    cache_path = output_dir / SQUARE_MAP_CACHE_FILENAME
+    palette_array = np.array(palette_list, dtype=np.uint8).reshape(256, 3)
+    np.savez_compressed(
+        cache_path,
+        square_mean=square_mean_map.astype(np.float32, copy=False),
+        square_weighted=weighted_map.astype(np.float32, copy=False),
+        calc_mask=calc_mask.astype(bool, copy=False),
+        weighted_mask=weighted_mask.astype(bool, copy=False),
+        base_indices=base_indices.astype(np.uint8, copy=False),
+        palette=palette_array,
+    )
+
+
+def recolor_saved_sum_maps(
+    output_dir: Path,
+    override_colors: Optional[Sequence[str]] = None,
+) -> List[Dict[str, str]]:
+    """
+    Reload cached square-map arrays and regenerate PNGs with updated colors.
+    """
+    print(f"[recolor_saved_sum_maps] 호출됨")
+    print(f"  output_dir: {output_dir}")
+    print(f"  override_colors: {override_colors}")
+
+    cache_path = output_dir / SQUARE_MAP_CACHE_FILENAME
+    print(f"  cache_path: {cache_path}")
+    print(f"  cache_path.exists(): {cache_path.exists()}")
+
+    if not cache_path.exists():
+        raise FileNotFoundError(f"Square map cache not found: {cache_path}")
+
+    with np.load(cache_path) as data:
+        square_mean_map = data["square_mean"]
+        weighted_map = data["square_weighted"]
+        calc_mask = data["calc_mask"].astype(bool)
+        weighted_mask = data["weighted_mask"].astype(bool)
+        base_indices = data["base_indices"].astype(np.uint8)
+        palette_array = data["palette"].astype(np.uint8)
+
+    palette_list = palette_array.reshape(-1).tolist()
+    settings = load_composite_color_settings()
+    if override_colors:
+        colors_to_use: List[str] = []
+        for idx, base_color in enumerate(settings.colors):
+            candidate = override_colors[idx] if idx < len(override_colors) else None
+            if candidate:
+                try:
+                    colors_to_use.append(normalize_hex_color(candidate))
+                    continue
+                except ValueError:
+                    pass
+            colors_to_use.append(base_color)
+    else:
+        colors_to_use = settings.colors
+
+    color_stops = np.array([_hex_to_rgb_tuple(c) for c in colors_to_use], dtype=np.float32)
+
+    variants = [
+        ("square_average.png", "square_mean", "Composite SqMean", square_mean_map, calc_mask),
+        ("square_wieghted_average.png", "weighted_square_mean", "Composite Weighted SqMean", weighted_map, weighted_mask),
+    ]
+
+    outputs: List[Dict[str, str]] = []
+    for filename, variant_type, display_name, data_map, mask in variants:
+        sum_map_path = output_dir / filename
+        img = _render_sum_map_image(
+            base_indices=base_indices,
+            value_map=data_map,
+            mask=mask,
+            palette_list=palette_list,
+            quantiles=settings.quantiles,
+            color_stops=color_stops,
+        )
+        img.save(sum_map_path, format='PNG', optimize=False)
+        rel_path = sum_map_path.relative_to(IMAGES_ROOT).as_posix()
+        outputs.append({
+            "path": rel_path,
+            "type": variant_type,
+            "display_name": display_name,
+            "filename": filename,
+        })
+
+    print(f"[recolor_saved_sum_maps] outputs: {outputs}")
+    print(f"[recolor_saved_sum_maps] outputs 개수: {len(outputs)}")
+    return outputs
+
 
 
 def _save_sum_map_variants(
@@ -230,6 +329,16 @@ def _save_sum_map_variants(
     palette = _build_palette_list(palette_list)
     settings = load_composite_color_settings()
     color_stops = np.array([_hex_to_rgb_tuple(c) for c in settings.colors], dtype=np.float32)
+
+    _persist_square_map_data(
+        output_dir=output_dir,
+        palette_list=palette,
+        base_indices=base_indices,
+        square_mean_map=square_mean_map,
+        weighted_map=weighted_map,
+        calc_mask=calc_mask,
+        weighted_mask=weighted_mask,
+    )
 
     variants = [
         ("square_average.png", "square_mean", "Composite SqMean", square_mean_map, calc_mask),

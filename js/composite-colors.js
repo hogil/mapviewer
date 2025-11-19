@@ -1,4 +1,5 @@
 const QUANTILE_KEY_PATTERN = /^quantile(\d{1,3})$/;
+const LIVE_PREVIEW_DEBOUNCE = 250;
 
 const ensureHex = (value) => {
     if (!value) return null;
@@ -31,6 +32,15 @@ export class CompositeColorModal {
         this.rows = [];
         this.isOpen = false;
         this.isDirty = false;
+
+        this.originalColors = [];
+        this.sessionContext = null;
+        this.livePreviewEnabled = false;
+        this.previewTimer = null;
+        this.previewBusy = false;
+        this.previewQueued = false;
+        this.previewApplied = false;
+
         this.boundOnKey = this.handleKeyEvents.bind(this);
 
         if (this.modal) {
@@ -39,13 +49,13 @@ export class CompositeColorModal {
     }
 
     bindEvents() {
-        this.closeBtn?.addEventListener('click', () => this.close());
-        this.cancelBtn?.addEventListener('click', () => this.close());
+        this.closeBtn?.addEventListener('click', () => this.handleCancel());
+        this.cancelBtn?.addEventListener('click', () => this.handleCancel());
         this.resetBtn?.addEventListener('click', () => this.restoreDefaults());
         this.applyBtn?.addEventListener('click', () => this.handleApply());
         this.modal?.addEventListener('click', (event) => {
             if (event.target === this.modal) {
-                this.close();
+                this.handleCancel();
             }
         });
     }
@@ -53,16 +63,40 @@ export class CompositeColorModal {
     handleKeyEvents(event) {
         if (event.key === 'Escape') {
             event.preventDefault();
-            this.close();
+            this.handleCancel();
         }
     }
 
-    async open() {
+    async open(previewContext = null) {
         if (!this.modal) return;
         try {
             await this.loadConfig();
+            this.sessionContext = previewContext || (this.viewer?.isCompositeMode ? this.viewer?.compositeSession : null);
+
+            // 🔍 디버그 로그
+            console.log('[CompositeColorModal] open() debug:');
+            console.log('  isCompositeMode:', this.viewer?.isCompositeMode);
+            console.log('  sessionContext:', this.sessionContext);
+            console.log('  outputDir:', this.sessionContext?.outputDir);
+            console.log('  sumMaps:', this.sessionContext?.sumMaps);
+            console.log('  sumMaps.length:', this.sessionContext?.sumMaps?.length);
+
+            this.livePreviewEnabled = !!(
+                this.viewer?.isCompositeMode &&
+                this.sessionContext?.outputDir &&
+                Array.isArray(this.sessionContext?.sumMaps) &&
+                this.sessionContext.sumMaps.length > 0
+            );
+
+            console.log('  livePreviewEnabled:', this.livePreviewEnabled);
+
+            if (this.viewer?.isCompositeMode && !this.livePreviewEnabled) {
+                this.viewer?.showToast?.('이번 Composite Map에서는 실시간 색상 미리보기를 사용할 수 없습니다. 새로 생성하면 사용할 수 있습니다.', 2400);
+            }
             this.renderTable();
             this.updateInputs();
+            this.originalColors = [...this.colors];
+            this.previewApplied = false;
             this.show();
         } catch (error) {
             console.error('[CompositeColorModal] loadConfig failed:', error);
@@ -83,6 +117,9 @@ export class CompositeColorModal {
         this.modal.classList.remove('is-open');
         this.modal.setAttribute('aria-hidden', 'true');
         document.removeEventListener('keydown', this.boundOnKey);
+        this.clearPreviewTimer();
+        this.previewBusy = false;
+        this.previewQueued = false;
         this.isOpen = false;
         this.clearError();
         this.setDirty(false);
@@ -109,8 +146,7 @@ export class CompositeColorModal {
 
             const labelTd = document.createElement('td');
             const match = key.match(QUANTILE_KEY_PATTERN);
-            const labelValue = match ? `${match[1]}%` : key;
-            labelTd.textContent = labelValue;
+            labelTd.textContent = match ? `${match[1]}%` : key;
             tr.appendChild(labelTd);
 
             const colorTd = document.createElement('td');
@@ -141,7 +177,7 @@ export class CompositeColorModal {
             hexInput.addEventListener('change', (event) => {
                 const value = ensureHex(event.target.value);
                 if (!value) {
-                    this.showError('HEX 형식은 #RRGGBB 이어야 합니다.');
+                    this.showError('HEX 값은 #RRGGBB 형식이어야 합니다.');
                     hexInput.value = this.colors[idx] || '';
                     return;
                 }
@@ -154,14 +190,16 @@ export class CompositeColorModal {
         });
     }
 
-    updateInputs() {
+    updateInputs(resetDirty = true) {
         if (!this.rows.length) return;
         this.rows.forEach((row, idx) => {
             const value = this.colors[idx] || '#FFFFFF';
             row.colorInput.value = value;
             row.hexInput.value = value;
         });
-        this.setDirty(false);
+        if (resetDirty) {
+            this.setDirty(false);
+        }
         this.clearError();
     }
 
@@ -169,13 +207,15 @@ export class CompositeColorModal {
         if (this.colors[index] !== value) {
             this.colors[index] = value;
             this.setDirty(true);
+            this.scheduleLivePreview();
         }
     }
 
     restoreDefaults() {
         this.colors = [...this.defaultColors];
-        this.updateInputs();
+        this.updateInputs(false);
         this.setDirty(true);
+        this.scheduleLivePreview();
     }
 
     setDirty(isDirty) {
@@ -201,6 +241,69 @@ export class CompositeColorModal {
         }
     }
 
+    clearPreviewTimer() {
+        if (this.previewTimer) {
+            clearTimeout(this.previewTimer);
+            this.previewTimer = null;
+        }
+    }
+
+    scheduleLivePreview() {
+        if (!this.livePreviewEnabled || !this.viewer?.refreshCompositeSumMaps || !this.isOpen) {
+            return;
+        }
+        this.clearPreviewTimer();
+        this.previewTimer = setTimeout(() => {
+            this.previewTimer = null;
+            this.triggerLivePreview();
+        }, LIVE_PREVIEW_DEBOUNCE);
+    }
+
+    async triggerLivePreview() {
+        if (!this.livePreviewEnabled || !this.viewer?.refreshCompositeSumMaps) {
+            return;
+        }
+        if (this.previewBusy) {
+            this.previewQueued = true;
+            return;
+        }
+        this.previewBusy = true;
+        try {
+            await this.viewer.refreshCompositeSumMaps({ colors: this.colors, silent: true });
+            this.previewApplied = true;
+        } catch (error) {
+            console.error('[CompositeColorModal] triggerLivePreview failed:', error);
+            this.livePreviewEnabled = false;
+            this.viewer?.showToast?.('Composite Sum Map 원본 데이터를 찾을 수 없습니다. 새로 생성한 뒤 다시 시도하세요.', 2400);
+        } finally {
+            this.previewBusy = false;
+            if (this.previewQueued) {
+                this.previewQueued = false;
+                this.triggerLivePreview();
+            }
+        }
+    }
+
+    async handleCancel() {
+        if (!this.isOpen) {
+            return;
+        }
+        this.clearPreviewTimer();
+        const needRevert = this.previewApplied && this.livePreviewEnabled && this.viewer?.refreshCompositeSumMaps;
+        const revertColors = [...this.originalColors];
+        this.colors = revertColors;
+        this.updateInputs(false);
+        this.previewApplied = false;
+        if (needRevert) {
+            try {
+                await this.viewer.refreshCompositeSumMaps({ colors: revertColors, silent: true });
+            } catch (error) {
+                console.warn('[CompositeColorModal] handleCancel revert failed:', error);
+            }
+        }
+        this.close();
+    }
+
     async handleApply() {
         if (!this.isDirty) {
             this.close();
@@ -220,9 +323,32 @@ export class CompositeColorModal {
             const payload = await response.json();
             this.colors = payload.colors || this.colors;
             this.defaultColors = payload.defaultColors || this.defaultColors;
-            this.updateInputs();
+            this.updateInputs(true);
+            this.originalColors = [...this.colors];
+            this.previewApplied = false;
+
+            console.log('[CompositeColorModal] handleApply() - 색상 저장 완료');
+            console.log('  livePreviewEnabled:', this.livePreviewEnabled);
+            console.log('  refreshCompositeSumMaps 존재:', !!this.viewer?.refreshCompositeSumMaps);
+
             this.viewer?.showToast?.('Composite 색상을 저장했습니다.', 2000);
             this.close();
+
+            // 🔥 모달을 닫은 후에 이미지 갱신 (Grid가 다시 보이는 상태에서)
+            if (this.livePreviewEnabled && this.viewer?.refreshCompositeSumMaps) {
+                console.log('  ✅ 모달 닫힌 후 refreshCompositeSumMaps() 호출');
+                // 모달 닫기 애니메이션 완료 대기
+                await new Promise(resolve => setTimeout(resolve, 100));
+                try {
+                    await this.viewer.refreshCompositeSumMaps({ colors: this.colors, silent: true });
+                    console.log('  ✅ refreshCompositeSumMaps() 성공');
+                } catch (error) {
+                    console.error('[CompositeColorModal] refresh after apply failed:', error);
+                    this.viewer?.showToast?.('Composite 이미지가 갱신되지 않았습니다. 다시 생성해 주세요.', 2200);
+                }
+            } else {
+                console.log('  ❌ refreshCompositeSumMaps() 호출되지 않음');
+            }
         } catch (error) {
             console.error('[CompositeColorModal] handleApply failed:', error);
             this.showError('Composite 색상을 저장하지 못했습니다.');

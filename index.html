@@ -352,6 +352,7 @@
             vertical-align: middle;
         }
 
+
         .color-editor-label {
             font-weight: 500;
             color: #f1f1f1;
@@ -897,7 +898,7 @@
         }
         .composite-grid {
             display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
+            grid-template-columns: repeat(var(--grid-cols, 4), minmax(0, 1fr));
             gap: 12px;
         }
         .heatmap-card {

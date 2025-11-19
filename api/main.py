@@ -2068,8 +2068,50 @@ async def save_composite_colors_endpoint(request: Request):
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error(f"❌ [/api/composite-colors] 저장 실패: {exc}")
+        logger.error(f"? [/api/composite-colors] 저장 실패: {exc}")
         raise HTTPException(status_code=500, detail="Composite 색상을 저장하지 못했습니다.")
+
+
+@app.post("/api/composite-recolor")
+async def recolor_composite_sum_maps_endpoint(request: Request):
+    if not HAS_NUMPY:
+        raise HTTPException(status_code=500, detail="numpy가 필요합니다. 서버 설정을 확인해주세요.")
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON 본문을 파싱하지 못했습니다.")
+
+    rel_output_dir = (payload or {}).get("output_dir")
+    if not rel_output_dir:
+        raise HTTPException(status_code=400, detail="output_dir 값이 필요합니다.")
+    override_colors = payload.get("colors") if isinstance(payload, dict) else None
+    if override_colors is not None and not isinstance(override_colors, list):
+        raise HTTPException(status_code=400, detail="colors 필드는 배열이어야 합니다.")
+
+    normalized_rel = str(rel_output_dir).strip().replace("\\", "/")
+    target_path = (IMAGES_ROOT / normalized_rel).resolve()
+    composite_root = COMPOSITE_ROOT.resolve()
+    if not str(target_path).startswith(str(composite_root)):
+        raise HTTPException(status_code=400, detail="유효한 Composite 출력 디렉터리가 아닙니다.")
+    if not target_path.exists():
+        raise HTTPException(status_code=404, detail="Composite 출력 디렉터리를 찾을 수 없습니다.")
+
+    try:
+        from .composite_map import recolor_saved_sum_maps
+
+        entries = recolor_saved_sum_maps(target_path, override_colors=override_colors)
+        rel_path = target_path.relative_to(IMAGES_ROOT).as_posix()
+        response_data = {"output_dir": rel_path, "sum_maps": entries}
+        print(f"[/api/composite-recolor] 응답 데이터: {response_data}")
+        return response_data
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="재색칠을 위한 원본 데이터가 없습니다.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"? [/api/composite-recolor] 실패: {exc}")
+        raise HTTPException(status_code=500, detail="Composite Sum Map을 갱신하지 못했습니다.")
+
 
 
 @app.get("/api/sso/ping")
@@ -6436,6 +6478,10 @@ async def create_composite_map_endpoint(payload: CompositeMapRequest):
                 response["sum_map_path"] = result["sum_map_path"]
             if "sum_maps" in result:
                 response["sum_maps"] = result["sum_maps"]
+                print(f"[ENDPOINT] Added sum_maps to response: {response['sum_maps']}")
+
+            print(f"[ENDPOINT] Final response keys: {response.keys()}")
+            print(f"[ENDPOINT] 'sum_maps' in response: {'sum_maps' in response}")
 
         return response
     except Exception as e:
