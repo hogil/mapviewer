@@ -195,6 +195,7 @@ def _persist_square_map_data(
 def recolor_saved_sum_maps(
     output_dir: Path,
     override_colors: Optional[Sequence[str]] = None,
+    scheme: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """
     Reload cached square-map arrays and regenerate PNGs with updated colors.
@@ -219,7 +220,7 @@ def recolor_saved_sum_maps(
         palette_array = data["palette"].astype(np.uint8)
 
     palette_list = palette_array.reshape(-1).tolist()
-    settings = load_composite_color_settings()
+    settings = load_composite_color_settings(scheme)
     if override_colors:
         colors_to_use: List[str] = []
         for idx, base_color in enumerate(settings.colors):
@@ -238,7 +239,7 @@ def recolor_saved_sum_maps(
 
     variants = [
         ("square_average.png", "square_mean", "Composite SqMean", square_mean_map, calc_mask),
-        ("square_wieghted_average.png", "weighted_square_mean", "Composite Weighted SqMean", weighted_map, weighted_mask),
+        ("square_weighted_average.png", "weighted_square_mean", "Composite Weighted SqMean", weighted_map, weighted_mask),
     ]
 
     outputs: List[Dict[str, str]] = []
@@ -274,6 +275,7 @@ def _save_sum_map_variants(
     invalid_mask: Optional[np.ndarray] = None,
     base_indices: Optional[np.ndarray] = None,
     idx_8_mask: Optional[np.ndarray] = None,
+    scheme: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     if all_indices.ndim != 3:
         raise ValueError("all_indices must be (N, H, W)")
@@ -281,15 +283,11 @@ def _save_sum_map_variants(
         return []
 
     float_indices = all_indices.astype(np.float32)
-    valid_mask = (all_indices >= 0) & (all_indices <= 7)
+    valid_mask = (all_indices >= 0) & (all_indices <= 8)
     counts = valid_mask.sum(axis=0).astype(np.float32)
     calc_mask = counts > 0
     weighted_mask = calc_mask.copy()
 
-    # 인덱스 8 포인트와 invalid 포인트 제외
-    if idx_8_mask is not None:
-        calc_mask &= ~idx_8_mask
-        weighted_mask &= ~idx_8_mask
     if invalid_mask is not None:
         calc_mask &= ~invalid_mask
         weighted_mask &= ~invalid_mask
@@ -327,7 +325,7 @@ def _save_sum_map_variants(
         base_indices[invalid_mask] = 31
 
     palette = _build_palette_list(palette_list)
-    settings = load_composite_color_settings()
+    settings = load_composite_color_settings(scheme)
     color_stops = np.array([_hex_to_rgb_tuple(c) for c in settings.colors], dtype=np.float32)
 
     _persist_square_map_data(
@@ -342,7 +340,7 @@ def _save_sum_map_variants(
 
     variants = [
         ("square_average.png", "square_mean", "Composite SqMean", square_mean_map, calc_mask),
-        ("square_wieghted_average.png", "weighted_square_mean", "Composite Weighted SqMean", weighted_map, weighted_mask),
+        ("square_weighted_average.png", "weighted_square_mean", "Composite Weighted SqMean", weighted_map, weighted_mask),
     ]
 
     outputs: List[Dict[str, str]] = []
@@ -435,26 +433,29 @@ def create_composite_heatmaps(
     idx_8_13_mask = (stacked_raw >= 8) & (stacked_raw <= 13)  # (N, H, W)
     idx_8_13_any = idx_8_13_mask.any(axis=0)  # (H, W) - 1개라도 있으면 True
 
-    # 해당 픽셀을 모든 이미지에서 8로 변경
-    for i in range(len(raw_indices_list)):
-        raw_indices_list[i][idx_8_13_any] = 8
-
-    # 3단계: invalid mask 생성 및 clipping
-    # 인덱스 8은 유효, 9 이상만 invalid (31로)
+    # 3단계: invalid mask 생성 및 공통 규칙 적용
+    # - 8~13은 8로 고정
+    # - 13 초과는 31(흰색)로 고정
     invalid_mask = np.zeros((height, width), dtype=bool)
-    all_indices_list: List[np.ndarray] = []
+    processed_indices_list: List[np.ndarray] = []
 
     for raw_indices in raw_indices_list:
-        invalid_mask |= (raw_indices > 8)  # 9 이상만 invalid
-        clipped = np.clip(raw_indices, 0, 8).astype(np.uint8)  # 0-8 범위
-        all_indices_list.append(clipped)
+        processed = raw_indices.copy()
+        processed[idx_8_13_any] = 8
+        invalid_positions = processed > 13
+        processed[invalid_positions] = 31
+        invalid_mask |= invalid_positions
+        processed_indices_list.append(processed.astype(np.uint8))
 
-    stacked_indices = np.stack(all_indices_list, axis=0)
+    stacked_indices = np.stack(processed_indices_list, axis=0)
+
     float_indices = stacked_indices.astype(np.float32)
-    median_map = np.median(float_indices, axis=0)
-    median_indices = np.clip(np.rint(median_map), 0, 8).astype(np.uint8)  # 0-8 범위
+    float_indices[:, invalid_mask] = np.nan
+    median_map = np.nanmedian(float_indices, axis=0)
+    median_indices = np.rint(median_map)
+    median_indices = np.where(np.isnan(median_map), 31, np.clip(median_indices, 0, 8)).astype(np.uint8)
     base_indices = median_indices.copy()
-    base_indices[idx_8_13_any] = 8  # 인덱스 8-13이 한 번이라도 나온 포인트는 8로
+    base_indices[idx_8_13_any & ~invalid_mask] = 8  # 인덱스 8-13이 한 번이라도 나온 포인트는 8로
     base_indices[invalid_mask] = 31
 
     heatmaps: List[Dict[str, Any]] = []
@@ -463,10 +464,8 @@ def create_composite_heatmaps(
         if idx >= 8:
             continue
         result = np.full((height, width), 31, dtype=np.uint8)
-        valid_mask = (~invalid_mask) & (median_indices == idx)
+        valid_mask = ~invalid_mask
         result[valid_mask] = idx
-        # 인덱스 8-13이 한 번이라도 나온 포인트는 8로 설정
-        result[idx_8_13_any & ~invalid_mask] = 8
         heatmap_path = output_dir / f"Grade_{idx}.png"
         heatmap_img = Image.fromarray(result, mode='P')
         heatmap_img.putpalette(palette_bytes)
@@ -493,6 +492,7 @@ def create_composite_heatmaps(
             invalid_mask=invalid_mask,
             base_indices=base_indices,
             idx_8_mask=idx_8_13_any,
+            scheme=scheme,
         )
         print(f"[API] sum_map_entries after _save_sum_map_variants: {sum_map_entries}")
         print(f"[API] sum_map_entries length: {len(sum_map_entries)}")
@@ -590,7 +590,8 @@ def create_palette_overlay(
 
 
 def create_sum_map(
-    image_paths: List[str]
+    image_paths: List[str],
+    scheme: Optional[str] = None,
 ) -> Dict[str, Any]:
     start_time = time.time()
     if not image_paths:
@@ -638,25 +639,27 @@ def create_sum_map(
     idx_8_13_mask = (stacked_raw >= 8) & (stacked_raw <= 13)  # (N, H, W)
     idx_8_13_any = idx_8_13_mask.any(axis=0)  # (H, W) - 1개라도 있으면 True
 
-    # 해당 픽셀을 모든 이미지에서 8로 변경
-    for i in range(len(raw_indices_list)):
-        raw_indices_list[i][idx_8_13_any] = 8
-
-    # 3단계: invalid mask 생성 및 clipping
-    # 인덱스 8은 유효, 9 이상만 invalid (31로)
+    # 3단계: invalid mask 생성 및 공통 규칙 적용
+    # - 8~13은 8로 고정
+    # - 13 초과는 31(흰색)로 고정
     invalid_mask = np.zeros((height, width), dtype=bool)
     all_indices_list = []
 
     for raw_indices in raw_indices_list:
-        invalid_mask |= (raw_indices > 8)  # 9 이상만 invalid
-        clipped = np.clip(raw_indices, 0, 8).astype(np.uint8)  # 0-8 범위
-        all_indices_list.append(clipped)
+        processed = raw_indices.copy()
+        processed[idx_8_13_any] = 8
+        invalid_positions = processed > 13
+        processed[invalid_positions] = 31
+        invalid_mask |= invalid_positions
+        all_indices_list.append(processed.astype(np.uint8))
 
     stacked_indices = np.stack(all_indices_list, axis=0)
     float_indices = stacked_indices.astype(np.float32)
-    median_map = np.median(float_indices, axis=0)
-    base_indices = np.clip(np.rint(median_map), 0, 8).astype(np.uint8)  # 0-8 범위
-    base_indices[idx_8_13_any] = 8  # 인덱스 8-13이 한 번이라도 나온 포인트는 8로
+    float_indices[:, invalid_mask] = np.nan
+    median_map = np.nanmedian(float_indices, axis=0)
+    base_indices = np.rint(median_map)
+    base_indices = np.where(np.isnan(median_map), 31, np.clip(base_indices, 0, 8)).astype(np.uint8)
+    base_indices[idx_8_13_any & ~invalid_mask] = 8  # 인덱스 8-13이 한 번이라도 나온 포인트는 8로
     base_indices[invalid_mask] = 31
 
     entries = _save_sum_map_variants(
@@ -666,6 +669,7 @@ def create_sum_map(
         invalid_mask=invalid_mask,
         base_indices=base_indices,
         idx_8_mask=idx_8_13_any,
+        scheme=scheme,
     )
     if not entries:
         raise RuntimeError("Sum Map 생성을 완료하지 못했습니다.")

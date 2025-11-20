@@ -182,7 +182,11 @@ export class GridManager {
         const lowerName = (displayName || '').toLowerCase();
         if (lowerName === 'square_average.png' || lowerName === 'square_average' || displayName === 'sum_map.png') {
             displayName = 'composite(square-avg)';
-        } else if (lowerName === 'square_wieghted_average.png' || lowerName === 'square_wieghted_average' || lowerName.startsWith('sum_map_weighted')) {
+        } else if (
+            lowerName === 'square_weighted_average.png' ||
+            lowerName === 'square_weighted_average' ||
+            lowerName.startsWith('sum_map_weighted')
+        ) {
             displayName = 'composite(weighted)';
         } else if (/^(index_|grade_)/i.test(displayName)) {
             displayName = displayName.replace(/^(index_|grade_)/i, 'Grade_');

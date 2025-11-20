@@ -1233,7 +1233,11 @@ export class ThumbnailNavigator {
 
         if (lowerName === 'square_average.png' || lowerName === 'square_average' || displayName === 'sum_map.png') {
             displayName = 'composite(square-avg)';
-        } else if (lowerName === 'square_wieghted_average.png' || lowerName === 'square_wieghted_average' || lowerName.startsWith('sum_map_weighted')) {
+        } else if (
+            lowerName === 'square_weighted_average.png' ||
+            lowerName === 'square_weighted_average' ||
+            lowerName.startsWith('sum_map_weighted')
+        ) {
             displayName = 'composite(weighted)';
         } else {
             const nameWithoutExt = displayName.replace(/\.(png|jpg|jpeg|gif|webp)$/i, '');

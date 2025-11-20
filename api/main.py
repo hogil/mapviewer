@@ -2047,9 +2047,10 @@ async def save_color_scheme(request: Request):
 
 # ===== Composite 색상 편집 API =====
 @app.get("/api/composite-colors")
-async def get_composite_colors():
+async def get_composite_colors(request: Request):
     try:
-        settings = load_composite_color_settings()
+        scheme = request.query_params.get("scheme")
+        settings = load_composite_color_settings(scheme)
         return settings.to_dict()
     except Exception as exc:
         logger.error(f"❌ [/api/composite-colors] 조회 실패: {exc}")
@@ -2063,7 +2064,8 @@ async def save_composite_colors_endpoint(request: Request):
         colors = payload.get("colors")
         if not isinstance(colors, list) or not colors:
             raise HTTPException(status_code=400, detail="colors 배열이 필요합니다.")
-        settings = save_composite_color_settings(colors)
+        scheme = payload.get("scheme")
+        settings = save_composite_color_settings(colors, scheme)
         return settings.to_dict()
     except HTTPException:
         raise
@@ -2082,6 +2084,7 @@ async def recolor_composite_sum_maps_endpoint(request: Request):
         raise HTTPException(status_code=400, detail="JSON 본문을 파싱하지 못했습니다.")
 
     rel_output_dir = (payload or {}).get("output_dir")
+    scheme = (payload or {}).get("scheme")
     if not rel_output_dir:
         raise HTTPException(status_code=400, detail="output_dir 값이 필요합니다.")
     override_colors = payload.get("colors") if isinstance(payload, dict) else None
@@ -2099,7 +2102,7 @@ async def recolor_composite_sum_maps_endpoint(request: Request):
     try:
         from .composite_map import recolor_saved_sum_maps
 
-        entries = recolor_saved_sum_maps(target_path, override_colors=override_colors)
+        entries = recolor_saved_sum_maps(target_path, override_colors=override_colors, scheme=scheme)
         rel_path = target_path.relative_to(IMAGES_ROOT).as_posix()
         response_data = {"output_dir": rel_path, "sum_maps": entries}
         print(f"[/api/composite-recolor] 응답 데이터: {response_data}")
