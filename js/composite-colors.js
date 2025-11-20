@@ -14,6 +14,30 @@ const ensureHex = (value) => {
     return hex.toUpperCase();
 };
 
+const hexToRgb = (value) => {
+    const hex = ensureHex(value);
+    if (!hex) return null;
+    return {
+        r: parseInt(hex.slice(1, 3), 16),
+        g: parseInt(hex.slice(3, 5), 16),
+        b: parseInt(hex.slice(5, 7), 16),
+    };
+};
+
+const rgbToHex = (r, g, b) => {
+    const clamp = (v) => {
+        const num = Number(v);
+        if (!Number.isFinite(num)) return null;
+        return Math.min(255, Math.max(0, Math.round(num)));
+    };
+    const rr = clamp(r);
+    const gg = clamp(g);
+    const bb = clamp(b);
+    if (rr == null || gg == null || bb == null) return null;
+    const toHex = (n) => n.toString(16).padStart(2, '0').toUpperCase();
+    return `#${toHex(rr)}${toHex(gg)}${toHex(bb)}`;
+};
+
 export class CompositeColorModal {
     constructor(viewer) {
         this.viewer = viewer;
@@ -23,7 +47,10 @@ export class CompositeColorModal {
         this.cancelBtn = this.modal?.querySelector('#composite-color-cancel-btn') || null;
         this.applyBtn = this.modal?.querySelector('#composite-color-apply-btn') || null;
         this.resetBtn = this.modal?.querySelector('#composite-color-reset-btn') || null;
+        this.restoreBtn = this.modal?.querySelector('#composite-color-restore-btn') || null;
         this.errorEl = this.modal?.querySelector('#composite-color-error') || null;
+        this.schemeLabel = this.modal?.querySelector('#composite-color-scheme-label') || null;
+        this.schemeInput = this.modal?.querySelector('#composite-color-scheme-readonly') || null;
 
         this.keys = [];
         this.quantiles = [];
@@ -34,6 +61,7 @@ export class CompositeColorModal {
         this.isDirty = false;
 
         this.originalColors = [];
+        this.schemeName = 'change';
         this.sessionContext = null;
         this.livePreviewEnabled = false;
         this.previewTimer = null;
@@ -52,6 +80,7 @@ export class CompositeColorModal {
         this.closeBtn?.addEventListener('click', () => this.handleCancel());
         this.cancelBtn?.addEventListener('click', () => this.handleCancel());
         this.resetBtn?.addEventListener('click', () => this.restoreDefaults());
+        this.restoreBtn?.addEventListener('click', () => this.restoreSaved());
         this.applyBtn?.addEventListener('click', () => this.handleApply());
         this.modal?.addEventListener('click', (event) => {
             if (event.target === this.modal) {
@@ -67,35 +96,43 @@ export class CompositeColorModal {
         }
     }
 
+    resolveSchemeName() {
+        if (typeof this.viewer?.getCompositeSchemeName === 'function') {
+            return this.viewer.getCompositeSchemeName();
+        }
+        if (this.viewer?.personalizedColorEnabled) {
+            return this.viewer?.currentUser || 'change';
+        }
+        return 'change';
+    }
+
+    updateSchemeLabels() {
+        if (this.schemeLabel) {
+            this.schemeLabel.textContent = `(${this.schemeName})`;
+        }
+        if (this.schemeInput) {
+            this.schemeInput.value = this.schemeName || 'change';
+        }
+    }
+
     async open(previewContext = null) {
         if (!this.modal) return;
         try {
             await this.loadConfig();
             this.sessionContext = previewContext || (this.viewer?.isCompositeMode ? this.viewer?.compositeSession : null);
-
-            // 🔍 디버그 로그
-            console.log('[CompositeColorModal] open() debug:');
-            console.log('  isCompositeMode:', this.viewer?.isCompositeMode);
-            console.log('  sessionContext:', this.sessionContext);
-            console.log('  outputDir:', this.sessionContext?.outputDir);
-            console.log('  sumMaps:', this.sessionContext?.sumMaps);
-            console.log('  sumMaps.length:', this.sessionContext?.sumMaps?.length);
-
             this.livePreviewEnabled = !!(
                 this.viewer?.isCompositeMode &&
                 this.sessionContext?.outputDir &&
                 Array.isArray(this.sessionContext?.sumMaps) &&
                 this.sessionContext.sumMaps.length > 0
             );
-
-            console.log('  livePreviewEnabled:', this.livePreviewEnabled);
-
             if (this.viewer?.isCompositeMode && !this.livePreviewEnabled) {
                 this.viewer?.showToast?.('이번 Composite Map에서는 실시간 색상 미리보기를 사용할 수 없습니다. 새로 생성하면 사용할 수 있습니다.', 2400);
             }
             this.renderTable();
-            this.updateInputs();
             this.originalColors = [...this.colors];
+            this.updateInputs();
+            this.updateSchemeLabels();
             this.previewApplied = false;
             this.show();
         } catch (error) {
@@ -126,7 +163,9 @@ export class CompositeColorModal {
     }
 
     async loadConfig() {
-        const response = await fetch('/api/composite-colors', { cache: 'no-store' });
+        this.schemeName = this.resolveSchemeName();
+        const query = this.schemeName ? `?scheme=${encodeURIComponent(this.schemeName)}` : '';
+        const response = await fetch(`/api/composite-colors${query}`, { cache: 'no-store' });
         if (!response.ok) {
             const message = await response.text();
             throw new Error(message || 'Failed to load composite colors');
@@ -136,6 +175,9 @@ export class CompositeColorModal {
         this.quantiles = payload.quantiles || [];
         this.colors = payload.colors || [];
         this.defaultColors = payload.defaultColors || [];
+        if (payload.scheme) {
+            this.schemeName = payload.scheme;
+        }
     }
 
     renderTable() {
@@ -149,13 +191,6 @@ export class CompositeColorModal {
             labelTd.textContent = match ? `${match[1]}%` : key;
             tr.appendChild(labelTd);
 
-            const colorTd = document.createElement('td');
-            const colorInput = document.createElement('input');
-            colorInput.type = 'color';
-            colorInput.dataset.index = String(idx);
-            colorTd.appendChild(colorInput);
-            tr.appendChild(colorTd);
-
             const hexTd = document.createElement('td');
             const hexInput = document.createElement('input');
             hexInput.type = 'text';
@@ -165,12 +200,71 @@ export class CompositeColorModal {
             hexTd.appendChild(hexInput);
             tr.appendChild(hexTd);
 
+            const rgbTd = document.createElement('td');
+            const rgbContainer = document.createElement('div');
+            rgbContainer.className = 'color-editor-rgb';
+            const rgbInputs = ['R', 'G', 'B'].map((label, rgbIdx) => {
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.min = '0';
+                input.max = '255';
+                input.placeholder = label;
+                input.dataset.index = String(idx);
+                input.dataset.channel = ['r', 'g', 'b'][rgbIdx];
+                rgbContainer.appendChild(input);
+                return input;
+            });
+            rgbTd.appendChild(rgbContainer);
+            tr.appendChild(rgbTd);
+
+            const previewTd = document.createElement('td');
+            previewTd.className = 'color-editor-picker';
+            const colorPreview = document.createElement('div');
+            colorPreview.className = 'color-editor-preview';
+            colorPreview.style.width = '48px';
+            colorPreview.style.height = '24px';
+            colorPreview.style.border = '1px solid #444';
+            colorPreview.style.borderRadius = '4px';
+            colorPreview.style.flexShrink = '0';
+            colorPreview.style.cursor = 'pointer';
+
+            const colorInput = document.createElement('input');
+            colorInput.type = 'color';
+            colorInput.value = '#000000';
+            colorInput.style.position = 'absolute';
+            colorInput.style.opacity = '0';
+            colorInput.style.width = '48px';
+            colorInput.style.height = '24px';
+            colorInput.style.cursor = 'pointer';
+            colorInput.style.pointerEvents = 'auto';
+            colorInput.style.top = '0';
+            colorInput.style.left = '0';
+
+            const pickerWrapper = document.createElement('div');
+            pickerWrapper.style.position = 'relative';
+            pickerWrapper.style.display = 'inline-block';
+            pickerWrapper.appendChild(colorPreview);
+            pickerWrapper.appendChild(colorInput);
+
+            colorPreview.addEventListener('click', (e) => {
+                e.stopPropagation();
+                colorInput.click();
+            });
+
+            previewTd.appendChild(pickerWrapper);
+            tr.appendChild(previewTd);
+
             colorInput.addEventListener('input', (event) => {
                 const value = ensureHex(event.target.value);
-                if (!value) {
-                    return;
-                }
+                if (!value) return;
                 hexInput.value = value;
+                const rgb = hexToRgb(value);
+                if (rgb) {
+                    rgbInputs[0].value = rgb.r;
+                    rgbInputs[1].value = rgb.g;
+                    rgbInputs[2].value = rgb.b;
+                }
+                colorPreview.style.backgroundColor = value;
                 this.updateColor(idx, value);
             });
 
@@ -181,21 +275,54 @@ export class CompositeColorModal {
                     hexInput.value = this.colors[idx] || '';
                     return;
                 }
+                const rgb = hexToRgb(value);
+                if (rgb) {
+                    rgbInputs[0].value = rgb.r;
+                    rgbInputs[1].value = rgb.g;
+                    rgbInputs[2].value = rgb.b;
+                }
                 colorInput.value = value;
+                colorPreview.style.backgroundColor = value;
                 this.updateColor(idx, value);
             });
 
+            rgbInputs.forEach((input) => {
+                input.addEventListener('change', () => {
+                    const r = Number(rgbInputs[0].value);
+                    const g = Number(rgbInputs[1].value);
+                    const b = Number(rgbInputs[2].value);
+                    const hex = rgbToHex(r, g, b);
+                    if (!hex) {
+                        this.showError('RGB 값은 0~255 사이여야 합니다.');
+                        return;
+                    }
+                    hexInput.value = hex;
+                    colorInput.value = hex;
+                    colorPreview.style.backgroundColor = hex;
+                    this.updateColor(idx, hex);
+                });
+            });
+
             this.tableBody.appendChild(tr);
-            return { colorInput, hexInput };
+            return { colorInput, hexInput, rgbInputs, colorPreview };
         });
     }
 
     updateInputs(resetDirty = true) {
         if (!this.rows.length) return;
         this.rows.forEach((row, idx) => {
-            const value = this.colors[idx] || '#FFFFFF';
+            const value = ensureHex(this.colors[idx]) || '#FFFFFF';
+            const rgb = hexToRgb(value);
             row.colorInput.value = value;
             row.hexInput.value = value;
+            if (rgb) {
+                row.rgbInputs[0].value = rgb.r;
+                row.rgbInputs[1].value = rgb.g;
+                row.rgbInputs[2].value = rgb.b;
+            } else {
+                row.rgbInputs.forEach(input => { input.value = ''; });
+            }
+            row.colorPreview.style.backgroundColor = value;
         });
         if (resetDirty) {
             this.setDirty(false);
@@ -204,8 +331,13 @@ export class CompositeColorModal {
     }
 
     updateColor(index, value) {
-        if (this.colors[index] !== value) {
-            this.colors[index] = value;
+        const hex = ensureHex(value);
+        if (!hex) {
+            this.showError('HEX 값은 #RRGGBB 형식이어야 합니다.');
+            return;
+        }
+        if (this.colors[index] !== hex) {
+            this.colors[index] = hex;
             this.setDirty(true);
             this.scheduleLivePreview();
         }
@@ -215,6 +347,13 @@ export class CompositeColorModal {
         this.colors = [...this.defaultColors];
         this.updateInputs(false);
         this.setDirty(true);
+        this.scheduleLivePreview();
+    }
+
+    restoreSaved() {
+        this.colors = [...this.originalColors];
+        this.updateInputs(false);
+        this.setDirty(false);
         this.scheduleLivePreview();
     }
 
@@ -314,7 +453,7 @@ export class CompositeColorModal {
             const response = await fetch('/api/composite-colors', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ colors: this.colors }),
+                body: JSON.stringify({ colors: this.colors, scheme: this.schemeName }),
             });
             if (!response.ok) {
                 const message = await response.text();
@@ -323,31 +462,26 @@ export class CompositeColorModal {
             const payload = await response.json();
             this.colors = payload.colors || this.colors;
             this.defaultColors = payload.defaultColors || this.defaultColors;
+            if (payload.scheme) {
+                this.schemeName = payload.scheme;
+                this.updateSchemeLabels();
+            }
             this.updateInputs(true);
             this.originalColors = [...this.colors];
             this.previewApplied = false;
-
-            console.log('[CompositeColorModal] handleApply() - 색상 저장 완료');
-            console.log('  livePreviewEnabled:', this.livePreviewEnabled);
-            console.log('  refreshCompositeSumMaps 존재:', !!this.viewer?.refreshCompositeSumMaps);
-
             this.viewer?.showToast?.('Composite 색상을 저장했습니다.', 2000);
             this.close();
 
             // 🔥 모달을 닫은 후에 이미지 갱신 (Grid가 다시 보이는 상태에서)
             if (this.livePreviewEnabled && this.viewer?.refreshCompositeSumMaps) {
-                console.log('  ✅ 모달 닫힌 후 refreshCompositeSumMaps() 호출');
                 // 모달 닫기 애니메이션 완료 대기
                 await new Promise(resolve => setTimeout(resolve, 100));
                 try {
                     await this.viewer.refreshCompositeSumMaps({ colors: this.colors, silent: true });
-                    console.log('  ✅ refreshCompositeSumMaps() 성공');
                 } catch (error) {
                     console.error('[CompositeColorModal] refresh after apply failed:', error);
                     this.viewer?.showToast?.('Composite 이미지가 갱신되지 않았습니다. 다시 생성해 주세요.', 2200);
                 }
-            } else {
-                console.log('  ❌ refreshCompositeSumMaps() 호출되지 않음');
             }
         } catch (error) {
             console.error('[CompositeColorModal] handleApply failed:', error);

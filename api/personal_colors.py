@@ -80,9 +80,42 @@ def save_color_legends(legends: Dict[str, Any], updated_scheme_name: Optional[st
             _color_legends_mtime = COLOR_LEGENDS_PATH.stat().st_mtime
             _PALETTE_CACHE.clear()
             return True
-        except Exception as exc:
-            logger.error("color-legends.json 저장 실패: %s", exc)
-            return False
+    except Exception as exc:
+        logger.error("color-legends.json 저장 실패: %s", exc)
+        return False
+
+
+def ensure_composite_scheme_for_user(legends: Dict[str, Any], scheme_name: str) -> bool:
+    """Ensure a composite color entry exists for the given scheme."""
+    try:
+        from .composite_colors import DEFAULT_COMPOSITE_COLORS, QUANTILE_KEYS  # type: ignore
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        logger.warning("⚠️ composite color defaults를 불러오지 못했습니다: %s", exc)
+        return False
+
+    composite_section = legends.setdefault("compositeSchemes", {})
+    if scheme_name in composite_section and isinstance(composite_section[scheme_name], dict):
+        return False
+
+    # base 템플릿: change → 전역 composite → 기본값
+    template = None
+    if isinstance(composite_section.get("change"), dict):
+        template = composite_section.get("change")
+    elif isinstance(legends.get("composite"), dict):
+        template = legends.get("composite")
+
+    new_entry: Dict[str, Any] = {"modified": False}
+    for key in QUANTILE_KEYS:
+        if template and key in template:
+            try:
+                new_entry[key] = normalize_hex_color(template[key])
+            except Exception:
+                new_entry[key] = DEFAULT_COMPOSITE_COLORS[key]
+        else:
+            new_entry[key] = DEFAULT_COMPOSITE_COLORS[key]
+
+    composite_section[scheme_name] = new_entry
+    return True
 
 
 def normalize_hex_color(value: str) -> str:
@@ -110,13 +143,20 @@ def get_user_color_scheme(login_id: Optional[str], username: Optional[str] = Non
     Returns:
         scheme key (LoginId 또는 'change')
     """
-    if not login_id:
-        return 'change'
-
     legends = load_color_legends()
+    if not login_id:
+        # LoginId가 없으면 change 스킴을 보장
+        created = ensure_composite_scheme_for_user(legends, 'change')
+        if created:
+            save_color_legends(legends, updated_scheme_name='composite:change')
+        return 'change'
     
     # LoginId가 이미 있으면 반환 (이미 존재하면 생성하지 않음)
+    # 기존 LoginId 스킴이 있으면 composite 스킴을 함께 보장
     if login_id in legends:
+        created = ensure_composite_scheme_for_user(legends, login_id)
+        if created:
+            save_color_legends(legends, updated_scheme_name=f'composite:{login_id}')
         return login_id
     
     # default scheme이 없으면 생성 불가
@@ -127,6 +167,7 @@ def get_user_color_scheme(login_id: Optional[str], username: Optional[str] = Non
     # LoginId scheme만 생성 (존재하지 않을 때만)
     # default의 top, bottom, background, text value를 복사
     legends[login_id] = copy.deepcopy(legends['default'])
+    ensure_composite_scheme_for_user(legends, login_id)
     
     # LoginId scheme에 Username과 DeptName 메타데이터 추가
     if username:

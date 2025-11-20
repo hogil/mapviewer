@@ -2636,7 +2636,7 @@
             ↩ 이전 그리드로 돌아가기
         </div>
         <div class="context-menu-item" id="context-composite-colors" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px; display: none;">
-            🎨 Composite 색상
+            🎨 Composite 색상 설정
         </div>
         <hr style="margin: 4px 0; border: none; border-top: 1px solid #555;">
         <div class="context-menu-item" id="context-download" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">
@@ -2895,24 +2895,36 @@
     <div id="composite-color-modal" class="color-editor-modal" role="dialog" aria-modal="true" aria-hidden="true">
         <div class="color-editor-dialog">
             <div class="color-editor-header">
-                <h2 class="color-editor-title">Composite 색상 설정</h2>
+                <h2 class="color-editor-title">
+                    Composite 색상 설정
+                    <span id="composite-color-scheme-label" class="color-editor-scheme-name"></span>
+                </h2>
                 <button type="button" id="composite-color-close-btn" class="color-editor-close-btn" aria-label="닫기">×</button>
             </div>
             <div class="color-editor-body">
                 <div class="color-editor-error" id="composite-color-error"></div>
+                <div class="color-editor-scheme-toolbar">
+                    <label style="font-weight:600;">적용 대상 스킴</label>
+                    <div class="color-editor-scheme-search-row">
+                        <input type="text" id="composite-color-scheme-readonly" placeholder="LoginId 기반으로 자동 선택" disabled>
+                    </div>
+                    <div class="color-editor-scheme-help">로그인 ID가 없으면 change 스킴이 사용됩니다.</div>
+                </div>
                 <table class="color-editor-table">
                     <thead>
                         <tr>
                             <th style="width: 120px;">분위수</th>
-                            <th style="width: 120px;">Color</th>
-                            <th style="width: 150px;">HEX</th>
+                            <th style="width: 120px;">HEX</th>
+                            <th style="width: 170px;">RGB</th>
+                            <th style="width: 80px;">미리보기</th>
                         </tr>
                     </thead>
                     <tbody id="composite-color-table-body"></tbody>
                 </table>
             </div>
             <div class="color-editor-footer">
-                <button type="button" id="composite-color-reset-btn">기본값</button>
+                <button type="button" id="composite-color-reset-btn">초기값</button>
+                <button type="button" id="composite-color-restore-btn">복원</button>
                 <button type="button" id="composite-color-cancel-btn">취소</button>
                 <button type="button" id="composite-color-apply-btn" disabled>적용</button>
             </div>

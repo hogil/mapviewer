@@ -4233,6 +4233,16 @@ class WaferMapViewer {
     }
 
     /**
+     * Resolve the scheme name used for composite color operations.
+     */
+    getCompositeSchemeName() {
+        if (this.personalizedColorEnabled) {
+            return this.currentUser || 'change';
+        }
+        return 'change';
+    }
+
+    /**
      * Initial application entry point.
      */
 
@@ -6040,6 +6050,7 @@ class WaferMapViewer {
 
         const payload = {
             output_dir: this.compositeSession.outputDir,
+            scheme: this.getCompositeSchemeName(),
         };
         if (Array.isArray(options.colors) && options.colors.length) {
             payload.colors = [...options.colors];
@@ -6300,11 +6311,13 @@ class WaferMapViewer {
             // 🔥 1단계: 현재 Grid 세션 저장
             this.saveCurrentGridSession();
 
+            const scheme = this.getCompositeSchemeName();
+
             // 🔥 2단계: API 호출하여 Composite Map 생성
             const res = await fetch('/api/composite-map', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image_paths: selected }),
+                body: JSON.stringify({ image_paths: selected, scheme }),
                 cache: 'no-store'  // 캐시 사용 안 함
             });
 
@@ -7054,9 +7067,10 @@ class WaferMapViewer {
         let menu = document.getElementById('single-context-menu');
 
         // Composite square 이미지인지 확인
-        const isCompositeSquare = this.selectedImagePath &&
-            (this.selectedImagePath.includes('square_average') ||
-             this.selectedImagePath.includes('square_wieghted_average'));
+        const isCompositeSquare = this.selectedImagePath && (
+            this.selectedImagePath.includes('square_average') ||
+            this.selectedImagePath.includes('square_weighted_average')
+        );
 
         if (!menu) {
             menu = document.createElement('div');
@@ -7071,7 +7085,7 @@ class WaferMapViewer {
 
                 <div id="single-copy" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📋 이미지 클립보드 복사</div>
 
-                <div id="single-composite-color" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px; display:none;">🎨 Composite 색상</div>
+                <div id="single-composite-color" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px; display:none;">🎨 Composite 색상 설정</div>
 
             `;
 
