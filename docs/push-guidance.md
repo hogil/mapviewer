@@ -28,3 +28,4 @@
 - `git remote -v` 결과: 원격이 비어 있어 즉시 `git push`를 실행할 수 없습니다.
 - 외부 네트워크 접속 차단 여부는 알 수 없으므로, 원격 추가 후 `git push -u origin <브랜치>` 시 인증/네트워크 오류가 발생할 수 있습니다.
 - 번들 대안 검증: `git bundle create /tmp/mapviewer.bundle HEAD`를 실행해 내보내기가 정상 동작함을 확인했습니다. 생성된 번들을 로컬/사내 환경으로 옮긴 뒤 `git pull --ff-only /tmp/mapviewer.bundle` 또는 `git fetch /tmp/mapviewer.bundle <브랜치>`로 적용 후 푸시하세요.
+- 원격이 없는 상태에서 `git push`를 실행하면 “No configured push destination” 오류가 발생합니다. 원격 URL을 추가한 뒤 다시 푸시를 시도해야 합니다.
