@@ -15,6 +15,7 @@ import { ColorSchemeEditor } from './color-editor.js';
 import { ChipAnnotator } from './chip-annotator.js';
 import { ThumbnailNavigator } from './thumbnail-navigator.js';
 import { CompositeColorModal } from './composite-colors.js';
+import { MyLotModal } from './my-lot.js';
 
 // Constants
 
@@ -487,6 +488,8 @@ class WaferMapViewer {
 
         this.colorEditor = new ColorSchemeEditor(this);
         this.compositeColorModal = new CompositeColorModal(this);
+        this.myLotModal = new MyLotModal(this);
+        this.initRefMapWindow();
 
         this.bindEvents();
 
@@ -506,6 +509,8 @@ class WaferMapViewer {
         
         // contextmenu 이벤트 발생 플래그 (다음 click 이벤트 무시용)
         this.contextMenuJustShown = false;
+        this.contextMenuTargetIndex = null;
+        this.contextMenuTargetPath = null;
         
         // 전역 AbortController 초기화 (모든 API 요청 중단용)
         this.globalAbortController = new AbortController();
@@ -1004,6 +1009,19 @@ class WaferMapViewer {
         if (this.dom.resizerRight)
 
             this.dom.resizerRight.addEventListener('mousedown', e => this.handleRightDown(e));
+
+        const refMapButtons = document.querySelectorAll('[data-ref-map-btn]');
+        if (refMapButtons.length) {
+            refMapButtons.forEach(btn => {
+                btn.addEventListener('click', () => this.openRefMapWindow());
+            });
+        }
+        const myLotButtons = document.querySelectorAll('[data-my-lot-btn]');
+        if (myLotButtons.length) {
+            myLotButtons.forEach(btn => {
+                btn.addEventListener('click', () => this.openMyLotModal());
+            });
+        }
     }
 
     bindZoomEvents() {
@@ -1093,6 +1111,278 @@ class WaferMapViewer {
                 // 🔥 버튼 클릭이 다른 모든 이벤트보다 우선 처리
                 this.navigateNext();
             });
+        }
+    }
+
+    // ========== Ref Map 관련 메서드 ==========
+
+    setRefMap(imagePath) {
+        if (!imagePath) {
+            this.showToast?.('이미지 경로가 유효하지 않습니다.', 2000);
+            return;
+        }
+        try {
+            const normalizedPath = this.normalizeImagePath(imagePath);
+            localStorage.setItem('refMapPath', normalizedPath);
+            this.showToast?.('📌 Ref Map으로 등록했습니다.', 1500);
+            console.log('[RefMap] 등록:', normalizedPath);
+            setTimeout(() => this.openRefMapWindow(), 100);
+        } catch (error) {
+            console.error('[RefMap] 등록 실패:', error);
+            this.showToast?.('Ref Map 등록에 실패했습니다.', 2000);
+        }
+    }
+
+    openRefMapWindow() {
+        if (!this.refMapWindow) {
+            this.initRefMapWindow();
+        }
+        if (!this.refMapWindow) {
+            return;
+        }
+        const refMapPath = this.normalizeImagePath(localStorage.getItem('refMapPath'));
+        this.updateRefMapPanel(refMapPath);
+        this.refMapWindow.style.display = 'flex';
+        this.refMapWindow.classList.add('is-open');
+        this.ensureRefMapWindowBounds();
+        if (!this._refMapKeyHandler) {
+            this._refMapKeyHandler = (event) => {
+                if (event.key === 'Escape') {
+                    this.closeRefMapWindow();
+                }
+            };
+        }
+        document.addEventListener('keydown', this._refMapKeyHandler);
+    }
+
+    closeRefMapWindow() {
+        if (!this.refMapWindow) return;
+        this.refMapWindow.classList.remove('is-open');
+        this.refMapWindow.style.display = 'none';
+        if (this._refMapKeyHandler) {
+            document.removeEventListener('keydown', this._refMapKeyHandler);
+        }
+    }
+
+    clearRefMap() {
+        try {
+            localStorage.removeItem('refMapPath');
+            this.showToast?.('Ref Map을 삭제했습니다.', 2000);
+            this.updateRefMapPanel(null);
+            console.log('[RefMap] 삭제됨');
+        } catch (error) {
+            console.error('[RefMap] 삭제 실패:', error);
+            this.showToast?.('Ref Map 삭제에 실패했습니다.', 2000);
+        }
+    }
+
+    normalizeImagePath(path) {
+        if (!path) return '';
+        return path.toString().replace(/\\/g, '/').replace(/^\/+/,'');
+    }
+
+    buildAbsoluteImagePath(relPath) {
+        const normalized = this.normalizeImagePath(relPath);
+        if (!normalized) return '';
+        return `/api/image?path=${encodeURIComponent(normalized)}`;
+    }
+
+    cloneCompositeSession() {
+        if (!this.compositeSession) return null;
+        const clone = { ...this.compositeSession };
+        if (Array.isArray(clone.sumMaps)) {
+            clone.sumMaps = clone.sumMaps.map(entry => ({ ...entry }));
+        }
+        return clone;
+    }
+
+    getActiveImagePath() {
+        if (!this.gridMode && this.selectedImagePath) {
+            return this.selectedImagePath;
+        }
+        if (this.gridMode && this.currentGridImages) {
+            if (this.gridSelectedIdxs?.length) {
+                for (const idx of this.gridSelectedIdxs) {
+                    if (idx >= 0 && idx < this.currentGridImages.length) {
+                        return this.currentGridImages[idx];
+                    }
+                }
+            }
+            if (this.gridViewImageIndex >= 0 && this.gridViewImageIndex < this.currentGridImages.length) {
+                return this.currentGridImages[this.gridViewImageIndex];
+            }
+            if (this.currentGridImages.length) {
+                return this.currentGridImages[0];
+            }
+        }
+        if (this.selectedImages?.length) {
+            return this.selectedImages[0];
+        }
+        return null;
+    }
+
+    extractLotTokensFromPath(path) {
+        if (!path) {
+            return { lotValue: '', waferValue: '', filename: '' };
+        }
+        const normalized = this.normalizeImagePath(path);
+        const filenameWithExt = normalized.split('/').pop() || '';
+        const filename = filenameWithExt.replace(/\.[^.]+$/, '');
+        const parts = filename.split('_').filter(Boolean);
+        const lotValue = parts[0] || filename;
+        let waferSegment = '';
+        if (parts.length > 2) {
+            waferSegment = parts[2];
+        } else if (parts.length > 1) {
+            waferSegment = parts[1];
+        }
+        const waferValue = waferSegment ? `${lotValue}_${waferSegment}` : lotValue;
+        return { lotValue, waferValue, filename, path: normalized };
+    }
+
+    getMyLotCandidate() {
+        const path = this.getActiveImagePath();
+        if (!path) {
+            return null;
+        }
+        const tokens = this.extractLotTokensFromPath(path);
+        return { ...tokens, path };
+    }
+
+    initRefMapWindow() {
+        this.refMapWindow = document.getElementById('ref-map-window');
+        if (!this.refMapWindow) {
+            this.refMapImageEl = null;
+            return;
+        }
+        this.refMapImageEl = document.getElementById('ref-map-image');
+        this.refMapPlaceholderEl = document.getElementById('ref-map-placeholder');
+        this.refMapFilenameEl = document.getElementById('ref-map-filename');
+        this.refMapClearBtn = document.getElementById('ref-map-clear-btn');
+        this.refMapCloseBtn = document.getElementById('ref-map-close-btn');
+        this.refMapClearBtn?.addEventListener('click', () => this.clearRefMap());
+        this.refMapCloseBtn?.addEventListener('click', () => this.closeRefMapWindow());
+        this.setupRefMapDragging();
+        window.addEventListener('resize', () => this.ensureRefMapWindowBounds());
+        this.ensureRefMapWindowBounds();
+    }
+
+    setupRefMapDragging() {
+        if (!this.refMapWindow || this._refMapDragInitialized) {
+            return;
+        }
+        const header = this.refMapWindow.querySelector('.ref-map-modal-header');
+        if (!header) return;
+        let isDragging = false;
+        let startX = 0;
+        let startY = 0;
+        let startLeft = 0;
+        let startTop = 0;
+
+        const onMouseMove = (event) => {
+            if (!isDragging) return;
+            event.preventDefault();
+            const dx = event.clientX - startX;
+            const dy = event.clientY - startY;
+            const newLeft = Math.min(Math.max(0, startLeft + dx), window.innerWidth - 80);
+            const newTop = Math.min(Math.max(0, startTop + dy), window.innerHeight - 60);
+            this.refMapWindow.style.left = `${newLeft}px`;
+            this.refMapWindow.style.top = `${newTop}px`;
+            this.refMapWindow.style.right = 'auto';
+        };
+
+        const onMouseUp = () => {
+            if (!isDragging) return;
+            isDragging = false;
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        };
+
+        header.addEventListener('mousedown', (event) => {
+            if (event.button !== 0) return;
+            const rect = this.refMapWindow.getBoundingClientRect();
+            isDragging = true;
+            startX = event.clientX;
+            startY = event.clientY;
+            startLeft = rect.left;
+            startTop = rect.top;
+            this.refMapWindow.style.right = 'auto';
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+            event.preventDefault();
+        });
+
+        this._refMapDragInitialized = true;
+    }
+
+    ensureRefMapWindowBounds() {
+        if (!this.refMapWindow) {
+            return;
+        }
+        const rect = this.refMapWindow.getBoundingClientRect();
+        let left = rect.left;
+        let top = rect.top;
+        if (left + rect.width > window.innerWidth) {
+            left = Math.max(20, window.innerWidth - rect.width - 20);
+        }
+        if (top + rect.height > window.innerHeight) {
+            top = Math.max(20, window.innerHeight - rect.height - 20);
+        }
+        if (left < 0) left = 20;
+        if (top < 0) top = 20;
+        this.refMapWindow.style.left = `${left}px`;
+        this.refMapWindow.style.top = `${top}px`;
+        this.refMapWindow.style.right = 'auto';
+    }
+
+    buildRefMapImageUrl(relPath) {
+        const normalized = this.normalizeImagePath(relPath);
+        if (!normalized) return '';
+        const currentLevel = Number.isFinite(this.currentPyramidLevel) ? this.currentPyramidLevel : 0;
+        const personalizedParams = this.getPersonalizedParams();
+        return `/api/image?path=${encodeURIComponent(normalized)}&level=${currentLevel}${personalizedParams}`;
+    }
+
+    loadRefMapImage(path) {
+        if (!this.refMapImageEl || !path) {
+            return;
+        }
+        const baseUrl = this.buildRefMapImageUrl(path);
+        if (!baseUrl) {
+            this.refMapImageEl.style.display = 'none';
+            if (this.refMapPlaceholderEl) this.refMapPlaceholderEl.style.display = 'block';
+            return;
+        }
+        const bust = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+        this.refMapImageEl.style.display = 'none';
+        if (this.refMapPlaceholderEl) this.refMapPlaceholderEl.style.display = 'block';
+        this.refMapImageEl.onerror = () => {
+            this.refMapImageEl.style.display = 'none';
+            if (this.refMapPlaceholderEl) this.refMapPlaceholderEl.style.display = 'block';
+        };
+        this.refMapImageEl.onload = () => {
+            this.refMapImageEl.style.display = 'block';
+            if (this.refMapPlaceholderEl) this.refMapPlaceholderEl.style.display = 'none';
+        };
+        this.refMapImageEl.src = bust;
+    }
+
+    updateRefMapPanel(path) {
+        if (!this.refMapFilenameEl || !this.refMapPlaceholderEl) return;
+        this.currentRefMapPath = path || null;
+        if (path) {
+            const filename = path.split('/').pop();
+            this.refMapFilenameEl.textContent = `📁 ${filename}`;
+            this.refMapFilenameEl.title = path;
+            this.loadRefMapImage(path);
+        } else {
+            this.refMapFilenameEl.textContent = '등록된 Reference Map이 없습니다';
+            this.refMapFilenameEl.title = '';
+            if (this.refMapImageEl) {
+                this.refMapImageEl.style.display = 'none';
+                this.refMapImageEl.src = '';
+            }
+            this.refMapPlaceholderEl.style.display = 'block';
         }
     }
 
@@ -3555,14 +3845,6 @@ class WaferMapViewer {
 
         // 🔥 캐시 초기화 버튼
 
-        const clearCacheBtn = document.getElementById('clear-cache-btn');
-
-        if (clearCacheBtn) {
-            clearCacheBtn.onclick = () => {
-                this.clearAllCache();
-            };
-        }
-
         const gridColsRange = document.getElementById('grid-cols-range');
 
         if (gridColsRange) {
@@ -5927,6 +6209,18 @@ class WaferMapViewer {
         this.compositeColorModal.open(previewContext);
     }
 
+    openMyLotWindow() {
+        if (!this.myLotModal) {
+            this.showToast?.('MY LOT을 열 수 없습니다.', 2000);
+            return;
+        }
+        this.myLotModal.open();
+    }
+
+    openMyLotModal() {
+        this.openMyLotWindow();
+    }
+
 
 
     /**
@@ -6020,12 +6314,34 @@ class WaferMapViewer {
             sumMaps: sumMapEntries,
         };
 
+        const grid = document.getElementById('image-grid');
+        const scrollWrapper = grid?.parentElement;
+        const scrollTop = scrollWrapper ? scrollWrapper.scrollTop : 0;
+        this.savedViewState = {
+            type: 'grid',
+            images: [...heatmapPaths],
+            scrollTop,
+            isCompositeMode: true,
+            compositeSession: this.cloneCompositeSession(),
+        };
+
+
         console.log('🔍 [switchToCompositeGrid] compositeSession 설정됨:', this.compositeSession);
 
         // Composite 모드 활성화
         this.isCompositeMode = true;
 
         this.updateContextMenuState();
+    }
+
+    handleSetRefMapFromContext() {
+        this.hideContextMenu();
+        const path = this.contextMenuTargetPath || this.getActiveImagePath();
+        if (!path) {
+            this.showToast?.('Ref Map으로 등록할 이미지를 찾지 못했습니다.', 1800);
+            return;
+        }
+        this.setRefMap(path);
     }
 
     async refreshCompositeSumMaps(options = {}) {
@@ -6628,26 +6944,35 @@ class WaferMapViewer {
     }
 
     showContextMenu(event, clickedIdx) {
-        // 선택 상태를 변경하지 않고 컨텍스트 메뉴만 표시
         const contextMenu = document.getElementById('grid-context-menu');
 
         if (!contextMenu) return;
 
-        // 메뉴 항목 이벤트 리스너 등록 (한 번만)
+        this.contextMenuTargetIndex = (typeof clickedIdx === 'number') ? clickedIdx : null;
+        let targetPath = null;
+        if (typeof clickedIdx === 'number' && this.currentGridImages && this.currentGridImages[clickedIdx]) {
+            targetPath = this.currentGridImages[clickedIdx];
+        } else if (this.gridMode && this.gridSelectedIdxs?.length && this.currentGridImages) {
+            const firstIdx = this.gridSelectedIdxs.find(idx => idx >= 0 && idx < this.currentGridImages.length);
+            if (typeof firstIdx === 'number') {
+                targetPath = this.currentGridImages[firstIdx];
+            }
+        } else if (this.selectedImagePath) {
+            targetPath = this.selectedImagePath;
+        }
+        this.contextMenuTargetPath = targetPath;
+
         if (!this.contextMenuInitialized) {
             this.initializeContextMenu();
             this.contextMenuInitialized = true;
         }
 
-        // 🔥 Composite Mode 상태에 따라 메뉴 항목 업데이트 (메뉴 표시 전에 호출)
         this.updateContextMenuState();
 
-        // 메뉴 위치 설정
         contextMenu.style.display = 'block';
         contextMenu.style.left = event.pageX + 'px';
         contextMenu.style.top = event.pageY + 'px';
 
-        // 화면 경계 체크
         const rect = contextMenu.getBoundingClientRect();
 
         if (rect.right > window.innerWidth) {
@@ -6658,15 +6983,17 @@ class WaferMapViewer {
             contextMenu.style.top = (event.pageY - rect.height) + 'px';
         }
 
-        // 🔥 메뉴 표시 후에도 상태 확인 (디버깅용)
-        console.log('🔄 [CONTEXT_MENU] showContextMenu - isCompositeMode:', this.isCompositeMode);
+        console.log('?? [CONTEXT_MENU] showContextMenu - isCompositeMode:', this.isCompositeMode);
         const createItem = document.getElementById('context-composite-create');
         const returnItem = document.getElementById('context-composite-return');
+        const refItem = document.getElementById('context-set-ref-map');
         if (createItem && returnItem) {
-            console.log('🔄 [CONTEXT_MENU] createItem.display:', createItem.style.display, 'returnItem.display:', returnItem.style.display);
+            console.log('?? [CONTEXT_MENU] createItem.display:', createItem.style.display, 'returnItem.display:', returnItem.style.display);
         }
-
-        // 외부 클릭으로 메뉴 숨기기
+        if (refItem) {
+            const hasPath = !!(this.contextMenuTargetPath || this.getActiveImagePath());
+            refItem.style.display = hasPath ? 'block' : 'none';
+        }
 
         this.hideContextMenuHandler = (e) => {
             if (!contextMenu.contains(e.target)) {
@@ -6701,6 +7028,7 @@ class WaferMapViewer {
         const compositeCreateItem = document.getElementById('context-composite-create');
         const compositeReturnItem = document.getElementById('context-composite-return');
         const compositeColorItem = document.getElementById('context-composite-colors');
+        const refMapContextItem = document.getElementById('context-set-ref-map');
 
         if (compositeCreateItem) {
             compositeCreateItem.onclick = () => {
@@ -6719,6 +7047,11 @@ class WaferMapViewer {
             compositeColorItem.onclick = () => {
                 this.hideContextMenu();
                 this.openCompositeColorModal();
+            };
+        }
+        if (refMapContextItem) {
+            refMapContextItem.onclick = () => {
+                this.handleSetRefMapFromContext();
             };
         }
 
@@ -7051,12 +7384,12 @@ class WaferMapViewer {
     }
 
     showSingleContextMenu(event) {
+        this.contextMenuTargetPath = this.selectedImagePath || null;
         let menu = document.getElementById('single-context-menu');
 
-        // Composite square 이미지인지 확인
         const isCompositeSquare = this.selectedImagePath &&
             (this.selectedImagePath.includes('square_average') ||
-             this.selectedImagePath.includes('square_wieghted_average'));
+            this.selectedImagePath.includes('square_weighted_average'));
 
         if (!menu) {
             menu = document.createElement('div');
@@ -7067,9 +7400,11 @@ class WaferMapViewer {
 
             menu.innerHTML = `
 
-                <div id="single-save" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📥 원본 저장</div>
+                <div id="single-save" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">💾 원본 저장</div>
 
                 <div id="single-copy" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📋 이미지 클립보드 복사</div>
+
+                <div id="single-set-ref-map" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📌 Ref Map 등록</div>
 
                 <div id="single-composite-color" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px; display:none;">🎨 Composite 색상</div>
 
@@ -7089,16 +7424,24 @@ class WaferMapViewer {
                 this.hideSingleContextMenu();
             });
 
+            menu.querySelector('#single-set-ref-map').addEventListener('click', () => {
+                this.hideSingleContextMenu();
+                this.handleSetRefMapFromContext();
+            });
+
             menu.querySelector('#single-composite-color').addEventListener('click', () => {
                 this.hideSingleContextMenu();
                 this.openCompositeColorModal(true); // skipModeCheck=true
             });
         }
 
-        // Composite square 이미지일 때만 composite 색상 옵션 표시
         const compositeColorItem = menu.querySelector('#single-composite-color');
         if (compositeColorItem) {
             compositeColorItem.style.display = isCompositeSquare ? 'block' : 'none';
+        }
+        const refItem = menu.querySelector('#single-set-ref-map');
+        if (refItem) {
+            refItem.style.display = this.selectedImagePath ? 'block' : 'none';
         }
 
         menu.style.left = event.pageX + 'px';
@@ -15973,12 +16316,26 @@ class WaferMapViewer {
         this.viewMode = 'gridImage';
         this.singleImageFromGrid = true;
 
-        const currentImages = this.currentGridImages;
-        this.selectedImages = currentImages;
+        const currentImages = Array.isArray(this.currentGridImages) ? [...this.currentGridImages] : [];
+        this.selectedImages = [...currentImages];
         this.gridViewImageList = [...currentImages];
+        const grid = document.getElementById('image-grid');
+        const scrollWrapper = grid?.parentElement;
+        const scrollTop = scrollWrapper ? scrollWrapper.scrollTop : 0;
+        const selectedIndices = Array.isArray(this.gridSelectedIdxs) && this.gridSelectedIdxs.length
+            ? [...this.gridSelectedIdxs]
+            : currentImages.map((_, index) => index);
+        this.gridViewSaveState = {
+            images: [...currentImages],
+            selectedIndices,
+            scrollTop,
+            isCompositeMode: this.isCompositeMode,
+            compositeSession: this.isCompositeMode ? this.cloneCompositeSession() : null,
+        };
 
-        const normalizedCurrent = this.normalizePath(this.selectedImages[idx]);
-        const actualGridIndex = currentImages.findIndex(img => {
+        const currentList = this.selectedImages || currentImages;
+        const normalizedCurrent = currentList[idx] ? this.normalizePath(currentList[idx]) : null;
+        const actualGridIndex = normalizedCurrent == null ? -1 : currentImages.findIndex(img => {
             const normalizedImg = this.normalizePath(img);
             return normalizedImg === normalizedCurrent;
         });
@@ -15988,7 +16345,7 @@ class WaferMapViewer {
         console.log('[ENTER_SINGLE] gridViewImageIndex:', this.gridViewImageIndex);
 
         // ✅ 즉시 selectedImagePath 설정 (네비게이션 인덱스 계산에 필요)
-        this.selectedImagePath = this.selectedImages[idx];
+        this.selectedImagePath = currentList[idx];
 
         // 1. Arrow button 표시
         this.updateArrowButtonVisibility();

@@ -195,6 +195,7 @@ def _persist_square_map_data(
 def recolor_saved_sum_maps(
     output_dir: Path,
     override_colors: Optional[Sequence[str]] = None,
+    scheme: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """
     Reload cached square-map arrays and regenerate PNGs with updated colors.
@@ -219,7 +220,7 @@ def recolor_saved_sum_maps(
         palette_array = data["palette"].astype(np.uint8)
 
     palette_list = palette_array.reshape(-1).tolist()
-    settings = load_composite_color_settings()
+    settings = load_composite_color_settings(scheme)
     if override_colors:
         colors_to_use: List[str] = []
         for idx, base_color in enumerate(settings.colors):
@@ -238,7 +239,7 @@ def recolor_saved_sum_maps(
 
     variants = [
         ("square_average.png", "square_mean", "Composite SqMean", square_mean_map, calc_mask),
-        ("square_wieghted_average.png", "weighted_square_mean", "Composite Weighted SqMean", weighted_map, weighted_mask),
+        ("square_weighted_average.png", "weighted_square_mean", "Composite Weighted SqMean", weighted_map, weighted_mask),
     ]
 
     outputs: List[Dict[str, str]] = []
@@ -274,6 +275,7 @@ def _save_sum_map_variants(
     invalid_mask: Optional[np.ndarray] = None,
     base_indices: Optional[np.ndarray] = None,
     idx_8_mask: Optional[np.ndarray] = None,
+    scheme: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     if all_indices.ndim != 3:
         raise ValueError("all_indices must be (N, H, W)")
@@ -327,7 +329,7 @@ def _save_sum_map_variants(
         base_indices[invalid_mask] = 31
 
     palette = _build_palette_list(palette_list)
-    settings = load_composite_color_settings()
+    settings = load_composite_color_settings(scheme)
     color_stops = np.array([_hex_to_rgb_tuple(c) for c in settings.colors], dtype=np.float32)
 
     _persist_square_map_data(
@@ -342,7 +344,7 @@ def _save_sum_map_variants(
 
     variants = [
         ("square_average.png", "square_mean", "Composite SqMean", square_mean_map, calc_mask),
-        ("square_wieghted_average.png", "weighted_square_mean", "Composite Weighted SqMean", weighted_map, weighted_mask),
+        ("square_weighted_average.png", "weighted_square_mean", "Composite Weighted SqMean", weighted_map, weighted_mask),
     ]
 
     outputs: List[Dict[str, str]] = []
@@ -493,6 +495,7 @@ def create_composite_heatmaps(
             invalid_mask=invalid_mask,
             base_indices=base_indices,
             idx_8_mask=idx_8_13_any,
+            scheme=scheme,
         )
         print(f"[API] sum_map_entries after _save_sum_map_variants: {sum_map_entries}")
         print(f"[API] sum_map_entries length: {len(sum_map_entries)}")
@@ -590,7 +593,8 @@ def create_palette_overlay(
 
 
 def create_sum_map(
-    image_paths: List[str]
+    image_paths: List[str],
+    scheme: Optional[str] = None,
 ) -> Dict[str, Any]:
     start_time = time.time()
     if not image_paths:
@@ -666,6 +670,7 @@ def create_sum_map(
         invalid_mask=invalid_mask,
         base_indices=base_indices,
         idx_8_mask=idx_8_13_any,
+        scheme=scheme,
     )
     if not entries:
         raise RuntimeError("Sum Map 생성을 완료하지 못했습니다.")

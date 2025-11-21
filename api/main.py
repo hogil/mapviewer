@@ -86,6 +86,12 @@ from .composite_colors import (
     load_composite_color_settings,
     save_composite_color_settings,
 )
+from .my_lot import (
+    add_entry as my_lot_add_entry,
+    create_group as my_lot_create_group,
+    list_my_lot as my_lot_list,
+    remove_entry as my_lot_remove_entry,
+)
 from .user_manager import (
     get_user_manager,
     get_permission_checker,
@@ -2047,9 +2053,11 @@ async def save_color_scheme(request: Request):
 
 # ===== Composite 색상 편집 API =====
 @app.get("/api/composite-colors")
-async def get_composite_colors():
+async def get_composite_colors(request: Request):
     try:
-        settings = load_composite_color_settings()
+        login_id = _current_login_id(request)
+        scheme = get_user_color_scheme(login_id) if login_id else "change"
+        settings = load_composite_color_settings(scheme)
         return settings.to_dict()
     except Exception as exc:
         logger.error(f"❌ [/api/composite-colors] 조회 실패: {exc}")
@@ -2063,12 +2071,14 @@ async def save_composite_colors_endpoint(request: Request):
         colors = payload.get("colors")
         if not isinstance(colors, list) or not colors:
             raise HTTPException(status_code=400, detail="colors 배열이 필요합니다.")
-        settings = save_composite_color_settings(colors)
+        login_id = _current_login_id(request)
+        scheme = get_user_color_scheme(login_id) if login_id else "change"
+        settings = save_composite_color_settings(colors, scheme)
         return settings.to_dict()
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error(f"? [/api/composite-colors] 저장 실패: {exc}")
+        logger.error(f"❌ [/api/composite-colors] 저장 실패: {exc}")
         raise HTTPException(status_code=500, detail="Composite 색상을 저장하지 못했습니다.")
 
 
@@ -2097,9 +2107,11 @@ async def recolor_composite_sum_maps_endpoint(request: Request):
         raise HTTPException(status_code=404, detail="Composite 출력 디렉터리를 찾을 수 없습니다.")
 
     try:
+        login_id = _current_login_id(request)
+        scheme = get_user_color_scheme(login_id) if login_id else "change"
         from .composite_map import recolor_saved_sum_maps
 
-        entries = recolor_saved_sum_maps(target_path, override_colors=override_colors)
+        entries = recolor_saved_sum_maps(target_path, override_colors=override_colors, scheme=scheme)
         rel_path = target_path.relative_to(IMAGES_ROOT).as_posix()
         response_data = {"output_dir": rel_path, "sum_maps": entries}
         print(f"[/api/composite-recolor] 응답 데이터: {response_data}")
@@ -2111,6 +2123,79 @@ async def recolor_composite_sum_maps_endpoint(request: Request):
     except Exception as exc:
         logger.error(f"? [/api/composite-recolor] 실패: {exc}")
         raise HTTPException(status_code=500, detail="Composite Sum Map을 갱신하지 못했습니다.")
+
+
+# ===== MY LOT 관리 API =====
+def _resolve_my_lot_login(request: Request) -> str:
+    login_id = _current_login_id(request)
+    return login_id or "change"
+
+
+@app.get("/api/my-lot")
+async def get_my_lot_entries(request: Request):
+    login_id = _resolve_my_lot_login(request)
+    try:
+        return my_lot_list(login_id)
+    except Exception as exc:
+        logger.error(f"❌ [/api/my-lot] 조회 실패: {exc}")
+        raise HTTPException(status_code=500, detail="MY LOT 데이터를 불러오지 못했습니다.")
+
+
+@app.post("/api/my-lot/group")
+async def create_my_lot_group(request: Request):
+    login_id = _resolve_my_lot_login(request)
+    try:
+        payload = await request.json()
+        mode = payload.get("mode", "lot")
+        group = payload.get("group")
+        if not group:
+            raise HTTPException(status_code=400, detail="group 이름이 필요합니다.")
+        info = my_lot_create_group(login_id, mode, group)
+        return {"success": True, **info}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"❌ [/api/my-lot/group] 생성 실패: {exc}")
+        raise HTTPException(status_code=500, detail=f"그룹을 생성하지 못했습니다: {exc}")
+
+
+@app.post("/api/my-lot")
+async def add_my_lot_entry_endpoint(request: Request):
+    login_id = _resolve_my_lot_login(request)
+    try:
+        payload = await request.json()
+        mode = payload.get("mode", "lot")
+        group = payload.get("group")
+        value = payload.get("value")
+        path = payload.get("path")
+        if not group or not value or not path:
+            raise HTTPException(status_code=400, detail="mode, group, value, path가 필요합니다.")
+        result = my_lot_add_entry(login_id, mode, group, value, path)
+        return {"success": True, **result}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"❌ [/api/my-lot] 저장 실패: {exc}")
+        raise HTTPException(status_code=500, detail=f"MY LOT 저장에 실패했습니다: {exc}")
+
+
+@app.delete("/api/my-lot")
+async def delete_my_lot_entry_endpoint(request: Request):
+    login_id = _resolve_my_lot_login(request)
+    try:
+        payload = await request.json()
+        mode = payload.get("mode", "lot")
+        group = payload.get("group")
+        value = payload.get("value")
+        if not group or not value:
+            raise HTTPException(status_code=400, detail="group과 value가 필요합니다.")
+        removed = my_lot_remove_entry(login_id, mode, group, value)
+        return {"success": removed}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"❌ [/api/my-lot] 삭제 실패: {exc}")
+        raise HTTPException(status_code=500, detail=f"MY LOT 항목을 삭제하지 못했습니다: {exc}")
 
 
 
@@ -6402,7 +6487,7 @@ async def extract_chip_images(request: ChipImageExtractRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/composite-map")
-async def create_composite_map_endpoint(payload: CompositeMapRequest):
+async def create_composite_map_endpoint(payload: CompositeMapRequest, req: Request):
     """
     선택한 이미지들의 인덱스(0~7) 출현 빈도를 Heatmap으로 생성
 
@@ -6430,6 +6515,9 @@ async def create_composite_map_endpoint(payload: CompositeMapRequest):
         # (cpu_count * 2, 최대 16개로 자동 계산)
         max_workers = payload.max_workers if payload.max_workers is not None else None
         batch_size = payload.batch_size if payload.batch_size is not None else None
+
+        login_id = _current_login_id(req)
+        resolved_scheme = payload.scheme or (get_user_color_scheme(login_id) if login_id else "change")
 
         if payload.palette_mode:
             # 팔레트 오버레이 모드: 빠른 단색 합성
@@ -6459,7 +6547,7 @@ async def create_composite_map_endpoint(payload: CompositeMapRequest):
                 loader_mode=loader_mode,
                 max_workers=max_workers,
                 batch_size=batch_size,
-                scheme=payload.scheme,
+                scheme=resolved_scheme,
             )
             # 🔥 파일 경로로 반환 (썸네일 및 피라미드 생성용)
             response = {

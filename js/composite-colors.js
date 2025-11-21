@@ -14,6 +14,33 @@ const ensureHex = (value) => {
     return hex.toUpperCase();
 };
 
+const clampChannel = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+        return null;
+    }
+    return Math.min(255, Math.max(0, Math.round(num)));
+};
+
+const hexToRgb = (hex) => {
+    const normalized = ensureHex(hex);
+    if (!normalized) return null;
+    return {
+        r: parseInt(normalized.slice(1, 3), 16),
+        g: parseInt(normalized.slice(3, 5), 16),
+        b: parseInt(normalized.slice(5, 7), 16),
+    };
+};
+
+const rgbToHex = (r, g, b) => {
+    const rr = clampChannel(r);
+    const gg = clampChannel(g);
+    const bb = clampChannel(b);
+    if (rr == null || gg == null || bb == null) return null;
+    const toHex = (val) => val.toString(16).padStart(2, '0').toUpperCase();
+    return `#${toHex(rr)}${toHex(gg)}${toHex(bb)}`;
+};
+
 export class CompositeColorModal {
     constructor(viewer) {
         this.viewer = viewer;
@@ -23,7 +50,12 @@ export class CompositeColorModal {
         this.cancelBtn = this.modal?.querySelector('#composite-color-cancel-btn') || null;
         this.applyBtn = this.modal?.querySelector('#composite-color-apply-btn') || null;
         this.resetBtn = this.modal?.querySelector('#composite-color-reset-btn') || null;
+        this.restoreBtn = this.modal?.querySelector('#composite-color-restore-btn') || null;
         this.errorEl = this.modal?.querySelector('#composite-color-error') || null;
+        this.schemeLabel = this.modal?.querySelector('#composite-color-scheme-label') || null;
+        this.schemeSearchInput = this.modal?.querySelector('#composite-color-scheme-search') || null;
+        this.schemeLoadBtn = this.modal?.querySelector('#composite-color-scheme-load-btn') || null;
+        this.schemeDropdown = this.modal?.querySelector('#composite-color-scheme-dropdown') || null;
 
         this.keys = [];
         this.quantiles = [];
@@ -52,6 +84,7 @@ export class CompositeColorModal {
         this.closeBtn?.addEventListener('click', () => this.handleCancel());
         this.cancelBtn?.addEventListener('click', () => this.handleCancel());
         this.resetBtn?.addEventListener('click', () => this.restoreDefaults());
+        this.restoreBtn?.addEventListener('click', () => this.handleRestore());
         this.applyBtn?.addEventListener('click', () => this.handleApply());
         this.modal?.addEventListener('click', (event) => {
             if (event.target === this.modal) {
@@ -72,6 +105,11 @@ export class CompositeColorModal {
         try {
             await this.loadConfig();
             this.sessionContext = previewContext || (this.viewer?.isCompositeMode ? this.viewer?.compositeSession : null);
+            const schemeName = this.viewer?.currentUser || 'change';
+            this.schemeName = schemeName;
+            if (this.schemeLabel) {
+                this.schemeLabel.textContent = schemeName ? `- ${schemeName}` : '';
+            }
 
             // 🔍 디버그 로그
             console.log('[CompositeColorModal] open() debug:');
@@ -145,32 +183,93 @@ export class CompositeColorModal {
             const tr = document.createElement('tr');
 
             const labelTd = document.createElement('td');
+            labelTd.className = 'color-editor-label';
             const match = key.match(QUANTILE_KEY_PATTERN);
             labelTd.textContent = match ? `${match[1]}%` : key;
             tr.appendChild(labelTd);
 
-            const colorTd = document.createElement('td');
-            const colorInput = document.createElement('input');
-            colorInput.type = 'color';
-            colorInput.dataset.index = String(idx);
-            colorTd.appendChild(colorInput);
-            tr.appendChild(colorTd);
-
             const hexTd = document.createElement('td');
+            const hexContainer = document.createElement('div');
+            hexContainer.className = 'color-editor-hex';
             const hexInput = document.createElement('input');
             hexInput.type = 'text';
             hexInput.maxLength = 7;
             hexInput.placeholder = '#RRGGBB';
             hexInput.dataset.index = String(idx);
-            hexTd.appendChild(hexInput);
+            hexContainer.appendChild(hexInput);
+            hexTd.appendChild(hexContainer);
             tr.appendChild(hexTd);
+
+            const rgbTd = document.createElement('td');
+            const rgbContainer = document.createElement('div');
+            rgbContainer.className = 'color-editor-rgb';
+            const rgbInputs = ['R', 'G', 'B'].map((placeholder, rgbIdx) => {
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.min = '0';
+                input.max = '255';
+                input.placeholder = placeholder;
+                input.dataset.channel = ['r', 'g', 'b'][rgbIdx];
+                rgbContainer.appendChild(input);
+                return input;
+            });
+            rgbTd.appendChild(rgbContainer);
+            tr.appendChild(rgbTd);
+
+            const pickerTd = document.createElement('td');
+            pickerTd.className = 'color-editor-picker';
+            const colorPreview = document.createElement('div');
+            colorPreview.className = 'color-editor-preview';
+            colorPreview.style.width = '48px';
+            colorPreview.style.height = '24px';
+            colorPreview.style.backgroundColor = '#000000';
+            colorPreview.style.border = '1px solid #444';
+            colorPreview.style.borderRadius = '4px';
+            colorPreview.style.flexShrink = '0';
+            colorPreview.style.cursor = 'pointer';
+
+            const colorInput = document.createElement('input');
+            colorInput.type = 'color';
+            colorInput.value = '#000000';
+            colorInput.style.position = 'absolute';
+            colorInput.style.opacity = '0';
+            colorInput.style.width = '48px';
+            colorInput.style.height = '24px';
+            colorInput.style.cursor = 'pointer';
+            colorInput.style.pointerEvents = 'auto';
+            colorInput.style.top = '0';
+            colorInput.style.left = '0';
+            colorInput.dataset.index = String(idx);
+
+            const pickerWrapper = document.createElement('div');
+            pickerWrapper.style.position = 'relative';
+            pickerWrapper.style.display = 'inline-block';
+            pickerWrapper.appendChild(colorPreview);
+            pickerWrapper.appendChild(colorInput);
+
+            colorPreview.addEventListener('click', (event) => {
+                event.stopPropagation();
+                colorInput.click();
+            });
+
+            pickerTd.appendChild(pickerWrapper);
+            tr.appendChild(pickerTd);
+
+            this.tableBody.appendChild(tr);
+
+            const row = { colorInput, hexInput, rgbInputs, colorPreview };
+
+            const revertValue = () => {
+                const fallback = this.colors[idx] || '#FFFFFF';
+                this.applyRowColor(row, fallback);
+            };
 
             colorInput.addEventListener('input', (event) => {
                 const value = ensureHex(event.target.value);
                 if (!value) {
                     return;
                 }
-                hexInput.value = value;
+                this.applyRowColor(row, value);
                 this.updateColor(idx, value);
             });
 
@@ -178,24 +277,76 @@ export class CompositeColorModal {
                 const value = ensureHex(event.target.value);
                 if (!value) {
                     this.showError('HEX 값은 #RRGGBB 형식이어야 합니다.');
-                    hexInput.value = this.colors[idx] || '';
+                    revertValue();
                     return;
                 }
-                colorInput.value = value;
+                this.applyRowColor(row, value);
                 this.updateColor(idx, value);
             });
+            hexInput.addEventListener('input', () => {
+                this.clearError();
+            });
 
-            this.tableBody.appendChild(tr);
-            return { colorInput, hexInput };
+            rgbInputs.forEach((input) => {
+                input.addEventListener('change', () => {
+                    const values = rgbInputs.map((el) => el.value);
+                    if (values.some((val) => val === '')) {
+                        this.showError('RGB 값은 0~255 범위의 숫자여야 합니다.');
+                        input.classList.add('invalid');
+                        revertValue();
+                        return;
+                    }
+                    const hex = rgbToHex(values[0], values[1], values[2]);
+                    if (!hex) {
+                        this.showError('RGB 값은 0~255 범위의 숫자여야 합니다.');
+                        input.classList.add('invalid');
+                        revertValue();
+                        return;
+                    }
+                    rgbInputs.forEach((el) => el.classList.remove('invalid'));
+                    this.applyRowColor(row, hex);
+                    this.updateColor(idx, hex);
+                });
+                input.addEventListener('input', () => {
+                    input.classList.remove('invalid');
+                    this.clearError();
+                });
+            });
+
+            return row;
         });
+    }
+
+    applyRowColor(row, hex) {
+        const safeHex = ensureHex(hex) || '#FFFFFF';
+        if (row.hexInput) {
+            row.hexInput.value = safeHex;
+        }
+        if (row.colorInput) {
+            row.colorInput.value = safeHex;
+        }
+        if (row.colorPreview) {
+            row.colorPreview.style.backgroundColor = safeHex;
+        }
+        if (row.rgbInputs && row.rgbInputs.length === 3) {
+            const rgb = hexToRgb(safeHex);
+            if (rgb) {
+                row.rgbInputs[0].value = rgb.r;
+                row.rgbInputs[1].value = rgb.g;
+                row.rgbInputs[2].value = rgb.b;
+            } else {
+                row.rgbInputs.forEach((input) => {
+                    input.value = '';
+                });
+            }
+        }
     }
 
     updateInputs(resetDirty = true) {
         if (!this.rows.length) return;
         this.rows.forEach((row, idx) => {
             const value = this.colors[idx] || '#FFFFFF';
-            row.colorInput.value = value;
-            row.hexInput.value = value;
+            this.applyRowColor(row, value);
         });
         if (resetDirty) {
             this.setDirty(false);
@@ -215,6 +366,17 @@ export class CompositeColorModal {
         this.colors = [...this.defaultColors];
         this.updateInputs(false);
         this.setDirty(true);
+        this.scheduleLivePreview();
+    }
+
+    handleRestore() {
+        if (!this.originalColors?.length) {
+            this.viewer?.showToast?.('복원할 색상 정보가 없습니다.', 1800);
+            return;
+        }
+        this.colors = [...this.originalColors];
+        this.updateInputs(false);
+        this.setDirty(false);
         this.scheduleLivePreview();
     }
 

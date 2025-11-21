@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
@@ -444,6 +444,35 @@
             background: #0a86da;
         }
 
+        #composite-color-reset-btn,
+        #composite-color-restore-btn,
+        #composite-color-cancel-btn {
+            background: #2d2d2d;
+            color: #ddd;
+            border-color: #444;
+        }
+
+        #composite-color-reset-btn:hover,
+        #composite-color-restore-btn:hover,
+        #composite-color-cancel-btn:hover {
+            background: #3a3a3a;
+        }
+
+        #composite-color-apply-btn {
+            background: #007acc;
+            color: #fff;
+            border: none;
+        }
+
+        #composite-color-apply-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        #composite-color-apply-btn:not(:disabled):hover {
+            background: #0a86da;
+        }
+
         .color-editor-hex input.invalid,
         .color-editor-rgb input.invalid {
             border-color: #ff5c5c;
@@ -599,10 +628,6 @@
             transition: border-color 0.2s ease;
         }
         
-        #clear-cache-btn {
-            margin-left: 16px;
-        }
-        
         #file-search:focus {
             outline: none;
             border-color: #007acc !important;
@@ -618,6 +643,328 @@
             font-size: 12px;
             min-height: 18px;
             margin-top: 6px;
+        }
+        .color-editor-info {
+            font-size: 12px;
+            color: #ccc;
+            line-height: 1.5;
+        }
+
+        /* Ref Map Modal */
+        .ref-map-window {
+            position: fixed;
+            top: 90px;
+            right: 50px;
+            width: 420px;
+            min-width: 300px;
+            min-height: 260px;
+            background: #1d1d1d;
+            border: 1px solid #2f2f2f;
+            border-radius: 10px;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+            display: none;
+            flex-direction: column;
+            z-index: 25000;
+            resize: both;
+            overflow: hidden;
+        }
+
+        .ref-map-window.is-open {
+            display: flex;
+        }
+
+        .ref-map-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            cursor: move;
+            background: #242424;
+            border-bottom: 1px solid #2d2d2d;
+            user-select: none;
+        }
+
+        .ref-map-header-text {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .ref-map-modal-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .ref-map-filename {
+            font-size: 13px;
+            color: #c7c7c7;
+        }
+
+        .ref-map-modal-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .ref-map-body {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 12px 16px 18px;
+            background: #141414;
+        }
+
+        .ref-map-preview {
+            flex: 1;
+            border: 1px solid #2a2a2a;
+            border-radius: 8px;
+            background: #0f0f0f;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: auto;
+        }
+
+        .ref-map-preview img {
+            max-width: 100%;
+            max-height: 100%;
+            display: none;
+            border-radius: 4px;
+        }
+
+        .ref-map-empty {
+            color: #8c8c8c;
+            font-size: 13px;
+            text-align: center;
+        }
+
+        /* MY LOT Window */
+        .my-lot-window {
+            position: fixed;
+            top: 140px;
+            right: 60px;
+            width: 820px;
+            min-width: 420px;
+            min-height: 360px;
+            background: #171717;
+            border: 1px solid #2f2f2f;
+            border-radius: 12px;
+            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+            display: none;
+            flex-direction: column;
+            z-index: 24000;
+            resize: both;
+            overflow: hidden;
+        }
+
+        .my-lot-window.is-open {
+            display: flex;
+        }
+
+        .my-lot-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            background: #232323;
+            border-bottom: 1px solid #2f2f2f;
+            cursor: move;
+            user-select: none;
+        }
+
+        .my-lot-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .my-lot-login-label {
+            font-size: 13px;
+            color: #9baec7;
+        }
+
+        .my-lot-body {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 14px 18px 20px;
+            overflow: auto;
+        }
+
+        .my-lot-mode-tabs {
+            display: inline-flex;
+            gap: 8px;
+            border: 1px solid #2a2a2a;
+            border-radius: 999px;
+            padding: 4px;
+            background: #0f0f0f;
+            width: fit-content;
+        }
+
+        .my-lot-mode-tabs button {
+            border: none;
+            background: transparent;
+            color: #aaa;
+            font-weight: 600;
+            padding: 6px 18px;
+            border-radius: 999px;
+            cursor: pointer;
+        }
+
+        .my-lot-mode-tabs button.active {
+            background: #2f6fed;
+            color: #fff;
+        }
+
+        .my-lot-group-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .my-lot-group-row select {
+            flex: 1;
+            background: #0f0f0f;
+            color: #fff;
+            border: 1px solid #333;
+            border-radius: 6px;
+            padding: 6px 10px;
+        }
+
+        .my-lot-current {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+            background: #111;
+            border: 1px solid #2a2a2a;
+            border-radius: 8px;
+            padding: 10px 14px;
+        }
+
+        .my-lot-current-value {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .my-lot-current-value span {
+            font-size: 12px;
+            color: #9baec7;
+        }
+
+        .my-lot-current-value strong {
+            font-size: 14px;
+            color: #fff;
+        }
+
+        .my-lot-save-btn {
+            border: none;
+            background: #2f6fed;
+            color: #fff;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .my-lot-content {
+            display: flex;
+            gap: 16px;
+            min-height: 260px;
+        }
+
+        .my-lot-table {
+            flex: 1;
+            border: 1px solid #2a2a2a;
+            border-radius: 6px;
+            padding: 8px;
+            background: #0f0f0f;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            max-height: 320px;
+            overflow: auto;
+        }
+
+        .my-lot-entry-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 10px;
+            background: #1d1d1d;
+            border-radius: 6px;
+            border: 1px solid #2b2b2b;
+            gap: 10px;
+            cursor: pointer;
+        }
+
+        .my-lot-entry-row.selected {
+            border-color: #2f6fed;
+            background: rgba(47, 111, 237, 0.18);
+        }
+
+        .my-lot-entry-value {
+            font-size: 13px;
+            color: #f3f3f3;
+            word-break: break-all;
+        }
+
+        .my-lot-entry-path {
+            font-size: 11px;
+            color: #8b8b8b;
+            margin-top: 2px;
+            display: block;
+        }
+
+        .my-lot-entry-actions {
+            display: inline-flex;
+            gap: 6px;
+        }
+
+        .my-lot-entry-actions button {
+            border: none;
+            background: #333;
+            color: #ddd;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .my-lot-entry-actions button:hover {
+            background: #3e3e3e;
+        }
+
+        .my-lot-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .my-lot-preview {
+            width: 230px;
+            border: 1px solid #2a2a2a;
+            border-radius: 6px;
+            padding: 10px;
+            background: #0d0d0d;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .my-lot-preview img {
+            max-width: 100%;
+            max-height: 220px;
+            border-radius: 4px;
+            display: none;
+        }
+
+        .my-lot-preview-empty {
+            color: #777;
+            font-size: 13px;
+            text-align: center;
         }
         .modal-content.permission-modal {
             max-width: 1400px !important;
@@ -1555,6 +1902,12 @@
         .modal-overlay > * {
             pointer-events: auto; /* 🔥 모달 내용은 클릭 가능 */
         }
+        .modal-overlay.modal-center {
+            justify-content: center;
+            align-items: center;
+            background: rgba(0,0,0,0.7);
+            pointer-events: auto;
+        }
         
         .modal-content {
             background: var(--panel-color);
@@ -2420,7 +2773,10 @@
                     <input type="text" id="file-search" placeholder="AND, OR, NOT, () 사용 가능">
                     <button id="search-btn" class="grid-btn" aria-label="검색">검색</button>
                     <button type="button" id="multi-search-btn" class="grid-btn" aria-label="LOT 다중 검색">다중검색</button>
-                    <button id="clear-cache-btn" class="grid-btn" aria-label="캐시 삭제">캐시 삭제</button>
+                </div>
+                <div class="control-group" style="margin-left: auto; gap: 8px;">
+                    <button id="ref-map-btn-top" class="grid-btn" data-ref-map-btn title="Reference Map 보기">📌 Ref Map</button>
+                    <button id="my-lot-btn-top" class="grid-btn" data-my-lot-btn title="MY LOT 보기">MY LOT</button>
                 </div>
             </div>
             
@@ -2538,6 +2894,8 @@
                         <span id="file-path-text" style="font-size: 18px; color: #ccc; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></span>
                         <span id="separator-text" style="opacity: 0.6;">—</span>
                         <span id="file-name-text" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></span>
+                        <button id="ref-map-btn-filename" class="grid-btn" data-ref-map-btn style="padding: 6px 12px; font-size: 12px; background: #444; border: 1px solid #666; flex-shrink: 0;" title="Reference Map 보기">📌 Ref Map</button>
+                        <button id="my-lot-btn-filename" class="grid-btn" data-my-lot-btn style="padding: 6px 12px; font-size: 12px; background: #2f6fed; border: 1px solid #1c50b5; flex-shrink: 0;" title="MY LOT 보기">MY LOT</button>
                     </div>
                 </div>
                 
@@ -2638,6 +2996,9 @@
         <div class="context-menu-item" id="context-composite-colors" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px; display: none;">
             🎨 Composite 색상
         </div>
+        <div class="context-menu-item" id="context-set-ref-map" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">
+            📌 Ref Map 등록
+        </div>
         <hr style="margin: 4px 0; border: none; border-top: 1px solid #555;">
         <div class="context-menu-item" id="context-download" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">
             📥 선택 파일 다운로드
@@ -2668,7 +3029,7 @@
                 </div>
 
     <!-- Multi LOT Search Modal -->
-    <div id="multi-search-modal" class="modal-overlay">
+    <div id="multi-search-modal" class="modal-overlay modal-center">
         <div class="modal-content" style="max-width: 520px;">
             <div class="modal-header">
                 <div class="modal-title">LOT 다중 검색</div>
@@ -2684,6 +3045,74 @@
             <div class="modal-buttons" style="justify-content: flex-end; gap: 8px;">
                 <button id="multi-search-cancel" class="grid-btn">취소</button>
                 <button id="multi-search-apply" class="grid-btn">검색</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Ref Map Modal -->
+    <div id="ref-map-window" class="ref-map-window" style="display: none;">
+        <div class="ref-map-modal-header">
+            <div class="ref-map-header-text">
+                <div class="ref-map-modal-title">📌 Reference Map</div>
+                <div id="ref-map-filename" class="ref-map-filename">등록된 Reference Map이 없습니다</div>
+            </div>
+            <div class="ref-map-modal-actions">
+                <button id="ref-map-clear-btn" class="grid-btn" style="padding: 4px 10px; font-size: 11px; background: #b91c1c; border: 1px solid #8b1212;">삭제</button>
+                <button id="ref-map-close-btn" class="grid-btn" style="padding: 4px 10px; font-size: 11px;">닫기</button>
+            </div>
+        </div>
+        <div class="ref-map-body">
+            <div class="ref-map-preview">
+                <img id="ref-map-image" src="" alt="Reference Map">
+                <div id="ref-map-placeholder" class="ref-map-empty">Ref Map을 등록하면 이곳에 표시됩니다.</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="my-lot-window" class="my-lot-window" style="display: none;">
+        <div class="my-lot-header">
+            <div>
+                <div class="my-lot-title">MY LOT</div>
+                <div id="my-lot-login-label" class="my-lot-login-label">Login: change</div>
+            </div>
+            <div class="my-lot-header-actions">
+                <button id="my-lot-close-btn" class="grid-btn" style="padding: 4px 10px; font-size: 11px;">닫기</button>
+            </div>
+        </div>
+        <div class="my-lot-body">
+            <div class="my-lot-mode-tabs">
+                <button type="button" data-my-lot-mode="lot" class="active">LOT</button>
+                <button type="button" data-my-lot-mode="wafer">Wafer</button>
+            </div>
+            <div class="my-lot-group-row">
+                <select id="my-lot-group-select"></select>
+                <button id="my-lot-new-group-btn" class="grid-btn" style="padding: 6px 12px; font-size: 12px;">+ 새 그룹</button>
+            </div>
+            <div class="my-lot-actions">
+                <button id="my-lot-copy-lot" class="grid-btn">LOT 복사</button>
+                <button id="my-lot-copy-wafer" class="grid-btn">Wafer 복사</button>
+                <button id="my-lot-select-all" class="grid-btn">전체 선택</button>
+                <button id="my-lot-clear-selection" class="grid-btn">선택 해제</button>
+                <button id="my-lot-grid-view" class="grid-btn">선택 Grid 보기</button>
+            </div>
+            <div class="my-lot-current">
+                <div class="my-lot-current-value">
+                    <span>LOT 값</span>
+                    <strong id="my-lot-current-lot">-</strong>
+                </div>
+                <div class="my-lot-current-value">
+                    <span>Wafer 값</span>
+                    <strong id="my-lot-current-wafer">-</strong>
+                </div>
+                <button id="my-lot-save-btn" class="my-lot-save-btn">현재 이미지 저장</button>
+            </div>
+            <div class="my-lot-content">
+                <div class="my-lot-table" id="my-lot-entries"></div>
+                <div class="my-lot-preview">
+                    <div style="font-size: 13px; color: #bbb;">미리보기</div>
+                    <img id="my-lot-preview-image" src="" alt="MY LOT Preview">
+                    <div id="my-lot-preview-empty" class="my-lot-preview-empty">항목을 선택하세요.</div>
+                </div>
             </div>
         </div>
     </div>
@@ -2895,31 +3324,45 @@
     <div id="composite-color-modal" class="color-editor-modal" role="dialog" aria-modal="true" aria-hidden="true">
         <div class="color-editor-dialog">
             <div class="color-editor-header">
-                <h2 class="color-editor-title">Composite 색상 설정</h2>
+                <h2 class="color-editor-title">
+                    Composite 색상 설정
+                    <span id="composite-color-scheme-label" class="color-editor-scheme-name"></span>
+                </h2>
                 <button type="button" id="composite-color-close-btn" class="color-editor-close-btn" aria-label="닫기">×</button>
             </div>
             <div class="color-editor-body">
                 <div class="color-editor-error" id="composite-color-error"></div>
+                <div class="color-editor-scheme-toolbar">
+                    <label for="composite-color-scheme-search">그라데이션 프리셋</label>
+                    <div class="color-editor-scheme-search-row">
+                        <input type="text" id="composite-color-scheme-search" placeholder="프리셋 이름 검색..." autocomplete="off" readonly>
+                        <button type="button" id="composite-color-scheme-load-btn" class="color-editor-btn" disabled>검색</button>
+                    </div>
+                    <div id="composite-color-scheme-dropdown" class="color-editor-modal-dropdown" role="listbox" aria-expanded="false"></div>
+                    <p class="color-editor-info">
+                        0%는 흰색, 100%는 빨간색으로 이어지는 단일 그라데이션입니다. 11개 분위수(0·10·…·100%)에 색을 지정하면 Sum Map과 Composite 그리드에 실시간 반영됩니다.
+                    </p>
+                </div>
                 <table class="color-editor-table">
                     <thead>
                         <tr>
-                            <th style="width: 120px;">분위수</th>
-                            <th style="width: 120px;">Color</th>
-                            <th style="width: 150px;">HEX</th>
+                            <th style="width: 110px;">분위수</th>
+                            <th style="width: 100px;">HEX</th>
+                            <th style="width: 170px;">RGB</th>
+                            <th style="width: 70px;">미리보기</th>
                         </tr>
                     </thead>
                     <tbody id="composite-color-table-body"></tbody>
                 </table>
             </div>
             <div class="color-editor-footer">
-                <button type="button" id="composite-color-reset-btn">기본값</button>
+                <button type="button" id="composite-color-reset-btn">초기값</button>
+                <button type="button" id="composite-color-restore-btn">복원</button>
                 <button type="button" id="composite-color-cancel-btn">취소</button>
                 <button type="button" id="composite-color-apply-btn" disabled>적용</button>
             </div>
         </div>
-    </div>
-    
-    <!-- Chip View Modal -->
+    </div>    <!-- Chip View Modal -->
     <div id="chip-view-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content" style="max-width: 95vw; max-height: 95vh; width: auto; height: auto; margin-right: 10px;">
             <div class="modal-header">

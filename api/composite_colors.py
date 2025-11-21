@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Sequence
+from datetime import datetime
+from typing import Dict, List, Sequence, Tuple, Optional
 
 from .personal_colors import load_color_legends, save_color_legends, normalize_hex_color
 
@@ -29,6 +30,7 @@ class CompositeColorSettings:
     default_colors: List[str]
     modified: bool
     last_modified: str | None
+    scheme: str
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -38,6 +40,7 @@ class CompositeColorSettings:
             "defaultColors": self.default_colors,
             "modified": self.modified,
             "lastModified": self.last_modified,
+            "scheme": self.scheme,
         }
 
 
@@ -59,17 +62,45 @@ def _normalize_dict(entry: Dict[str, str] | None) -> List[str]:
     return colors
 
 
-def load_composite_color_settings() -> CompositeColorSettings:
-    legends = load_color_legends()
-    entry = legends.get("composite", {})
-    colors = (
-        _normalize_dict(entry)
-        if isinstance(entry, dict)
-        else _normalize_color_values(entry)
-    )
+def _ensure_composite_storage(legends: Dict[str, object]) -> Tuple[Dict[str, Dict[str, str]], bool]:
+    """Ensure legends['composite'] is a dict keyed by scheme name."""
+    entry = legends.get("composite")
+    mutated = False
+    if not isinstance(entry, dict):
+        entry = {}
+        legends["composite"] = entry
+        mutated = True
+    # Legacy format: direct quantile list under 'composite'
+    if entry and any(key.startswith("quantile") for key in entry.keys()):
+        entry = {"change": entry}
+        legends["composite"] = entry
+        mutated = True
+    return entry, mutated
 
-    modified = bool(entry.get("modified")) if isinstance(entry, dict) else False
-    last_modified = entry.get("lastModified") if isinstance(entry, dict) else None
+
+def _ensure_scheme_entry(storage: Dict[str, Dict[str, str]], scheme: str) -> Tuple[Dict[str, str], bool]:
+    entry = storage.get(scheme)
+    created = False
+    if not isinstance(entry, dict):
+        entry = {key: DEFAULT_COMPOSITE_COLORS[key] for key in QUANTILE_KEYS}
+        entry["modified"] = False
+        storage[scheme] = entry
+        created = True
+    return entry, created
+
+
+def load_composite_color_settings(scheme: Optional[str] = None) -> CompositeColorSettings:
+    scheme_key = (scheme or "change").strip() or "change"
+    legends = load_color_legends()
+    storage, mutated = _ensure_composite_storage(legends)
+    entry, created = _ensure_scheme_entry(storage, scheme_key)
+    colors = _normalize_dict(entry)
+
+    modified = bool(entry.get("modified"))
+    last_modified = entry.get("lastModified")
+
+    if mutated or created:
+        save_color_legends(legends)
 
     return CompositeColorSettings(
         keys=list(QUANTILE_KEYS),
@@ -78,22 +109,28 @@ def load_composite_color_settings() -> CompositeColorSettings:
         default_colors=[DEFAULT_COMPOSITE_COLORS[key] for key in QUANTILE_KEYS],
         modified=modified,
         last_modified=last_modified,
+        scheme=scheme_key,
     )
 
 
-def save_composite_color_settings(colors: Sequence[str]) -> CompositeColorSettings:
+def save_composite_color_settings(colors: Sequence[str], scheme: Optional[str] = None) -> CompositeColorSettings:
+    scheme_key = (scheme or "change").strip() or "change"
     normalized = _normalize_color_values(colors)
     legends = load_color_legends()
+    storage, _ = _ensure_composite_storage(legends)
+    entry, _ = _ensure_scheme_entry(storage, scheme_key)
+
+    for idx, key in enumerate(QUANTILE_KEYS):
+        entry[key] = normalized[idx]
+
     is_default = all(
         normalized[idx] == DEFAULT_COMPOSITE_COLORS[key]
         for idx, key in enumerate(QUANTILE_KEYS)
     )
-    legends["composite"] = {
-        key: normalized[idx] for idx, key in enumerate(QUANTILE_KEYS)
-    }
-    legends["composite"]["modified"] = not is_default
-    save_color_legends(legends, updated_scheme_name="composite")
-    return load_composite_color_settings()
+    entry["modified"] = not is_default
+    entry["lastModified"] = datetime.now().strftime("%y%m%d_%H%M%S")
+    save_color_legends(legends)
+    return load_composite_color_settings(scheme_key)
 
 
 __all__ = [
@@ -102,4 +139,5 @@ __all__ = [
     "save_composite_color_settings",
     "QUANTILE_KEYS",
     "QUANTILE_VALUES",
+    "DEFAULT_COMPOSITE_COLORS",
 ]

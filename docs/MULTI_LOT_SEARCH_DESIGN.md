@@ -50,7 +50,6 @@ LOT1 OR LOT2 OR LOT3 OR ... OR LOT50
         📋 LOT 검색
     </button>
 
-    <button id="clear-cache-btn" class="grid-btn">캐시 삭제</button>
 </div>
 ```
 
