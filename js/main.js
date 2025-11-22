@@ -4521,6 +4521,18 @@ class WaferMapViewer {
     async init() {
         this._drawScheduled = false; // draw() 스케줄링 플래그
 
+        // 🔥 Ref Map 초기화: 웹페이지 진입 시마다 localStorage에서 제거
+        try {
+            localStorage.removeItem('refMapPath');
+            this.currentRefMapPath = null;
+            if (this.refMapWindow) {
+                this.updateRefMapPanel(null);
+            }
+            console.log('[RefMap] 페이지 로드 시 초기화됨');
+        } catch (error) {
+            console.error('[RefMap] 초기화 실패:', error);
+        }
+
         // ✅ 1단계: 서버 설정 로드 (병렬 가능)
         await this.loadServerConfig();
         
