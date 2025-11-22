@@ -35,10 +35,9 @@ export class ContextMenuManager {
         const tableCopyItem = document.getElementById('context-table-copy');
         const cancelItem = document.getElementById('context-cancel');
         
-        // 🔥 새로운 메뉴 항목들
-        const downloadOriginalItem = document.getElementById('context-download-original');
-        const copyImageItem = document.getElementById('context-copy-image');
-        const copyCanvasItem = document.getElementById('context-copy-canvas');
+        // 🔥 MY LOT 추가 메뉴 항목들
+        const myLotAddItem = document.getElementById('context-my-lot-add');
+        const myLotAddSelectedItem = document.getElementById('context-my-lot-add-selected');
         
         if (downloadItem) {
             downloadItem.onclick = () => {
@@ -74,27 +73,19 @@ export class ContextMenuManager {
             };
         }
         
-        // 🔥 원본 다운로드
-        if (downloadOriginalItem) {
-            downloadOriginalItem.onclick = () => {
+        // 🔥 MY LOT에 추가 (현재 클릭한 이미지)
+        if (myLotAddItem) {
+            myLotAddItem.onclick = () => {
                 this.hide();
-                this.downloadOriginalImage();
+                this.addToMyLot();
             };
         }
         
-        // 🔥 이미지 클립보드 복사
-        if (copyImageItem) {
-            copyImageItem.onclick = () => {
+        // 🔥 선택 항목 MY LOT에 추가
+        if (myLotAddSelectedItem) {
+            myLotAddSelectedItem.onclick = () => {
                 this.hide();
-                this.copyImageToClipboard();
-            };
-        }
-        
-        // 🔥 캔버스 전체 복사
-        if (copyCanvasItem) {
-            copyCanvasItem.onclick = () => {
-                this.hide();
-                this.copyCanvasToClipboard();
+                this.addSelectedToMyLot();
             };
         }
     }
@@ -551,8 +542,73 @@ export class ContextMenuManager {
             return [];
         }
         
+        // Grid 모드에서는 currentGridImages 사용, 아니면 selectedImages 사용
+        const imageList = this.viewer.gridMode && this.viewer.currentGridImages 
+            ? this.viewer.currentGridImages 
+            : this.viewer.selectedImages;
+        
         return this.viewer.gridSelectedIdxs
-            .map(idx => this.viewer.selectedImages[idx])
+            .map(idx => imageList && imageList[idx])
             .filter(Boolean);
+    }
+    
+    /**
+     * 현재 클릭한 이미지를 MY LOT에 추가
+     */
+    async addToMyLot() {
+        const targetPath = this.viewer.contextMenuTargetPath;
+        if (!targetPath) {
+            alert('추가할 이미지를 찾을 수 없습니다.');
+            return;
+        }
+        
+        // MY LOT 모달 열기
+        if (this.viewer.myLotModal) {
+            this.viewer.myLotModal.open();
+            // 모달이 열린 후 저장할 경로 설정
+            setTimeout(() => {
+                if (this.viewer.myLotModal) {
+                    if (this.viewer.myLotModal.activeGroup) {
+                        // activeGroup이 있으면 바로 저장
+                        this.viewer.myLotModal.handleSaveFromPath(targetPath);
+                    } else {
+                        // activeGroup이 없으면 사용자에게 알림
+                        this.viewer.showToast?.('그룹을 선택한 후 저장해주세요.', 2000);
+                    }
+                }
+            }, 300);
+        } else {
+            alert('MY LOT을 열 수 없습니다.');
+        }
+    }
+    
+    /**
+     * 선택된 이미지들을 MY LOT에 추가
+     */
+    async addSelectedToMyLot() {
+        const selectedFiles = this.getSelectedFiles();
+        if (selectedFiles.length === 0) {
+            alert('추가할 이미지를 선택해주세요.');
+            return;
+        }
+        
+        // MY LOT 모달 열기
+        if (this.viewer.myLotModal) {
+            this.viewer.myLotModal.open();
+            // 모달이 열린 후 선택된 경로들 저장
+            setTimeout(() => {
+                if (this.viewer.myLotModal) {
+                    if (this.viewer.myLotModal.activeGroup) {
+                        // activeGroup이 있으면 바로 저장
+                        this.viewer.myLotModal.addMultipleEntries(selectedFiles);
+                    } else {
+                        // activeGroup이 없으면 사용자에게 알림
+                        this.viewer.showToast?.('그룹을 선택한 후 저장해주세요.', 2000);
+                    }
+                }
+            }, 300);
+        } else {
+            alert('MY LOT을 열 수 없습니다.');
+        }
     }
 }

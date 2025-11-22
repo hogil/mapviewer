@@ -6194,6 +6194,19 @@ class WaferMapViewer {
         if (colorItem) {
             colorItem.style.setProperty('display', this.isCompositeMode ? 'block' : 'none', 'important');
         }
+        
+        // Grid 모드인지 확인
+        const isGridMode = this.gridMode === true;
+        const myLotAddItem = document.getElementById('context-my-lot-add');
+        const myLotAddSelectedItem = document.getElementById('context-my-lot-add-selected');
+        
+        // MY LOT 메뉴 항목은 Grid 모드에서만 표시
+        if (myLotAddItem) {
+            myLotAddItem.style.setProperty('display', isGridMode ? 'block' : 'none', 'important');
+        }
+        if (myLotAddSelectedItem) {
+            myLotAddSelectedItem.style.setProperty('display', isGridMode ? 'block' : 'none', 'important');
+        }
     }
 
     openCompositeColorModal(skipModeCheck = false) {
@@ -7029,6 +7042,8 @@ class WaferMapViewer {
         const compositeReturnItem = document.getElementById('context-composite-return');
         const compositeColorItem = document.getElementById('context-composite-colors');
         const refMapContextItem = document.getElementById('context-set-ref-map');
+        const myLotAddItem = document.getElementById('context-my-lot-add');
+        const myLotAddSelectedItem = document.getElementById('context-my-lot-add-selected');
 
         if (compositeCreateItem) {
             compositeCreateItem.onclick = () => {
@@ -7098,6 +7113,26 @@ class WaferMapViewer {
         if (cancelItem) {
             cancelItem.onclick = () => {
                 this.hideContextMenu();
+            };
+        }
+
+        // 🔥 MY LOT에 추가 (현재 클릭한 이미지)
+        if (myLotAddItem) {
+            myLotAddItem.onclick = () => {
+                this.hideContextMenu();
+                if (this.contextMenuManager) {
+                    this.contextMenuManager.addToMyLot();
+                }
+            };
+        }
+
+        // 🔥 선택 항목 MY LOT에 추가
+        if (myLotAddSelectedItem) {
+            myLotAddSelectedItem.onclick = () => {
+                this.hideContextMenu();
+                if (this.contextMenuManager) {
+                    this.contextMenuManager.addSelectedToMyLot();
+                }
             };
         }
 
@@ -7400,6 +7435,14 @@ class WaferMapViewer {
 
             menu.innerHTML = `
 
+                <div id="single-download-original" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">💾 원본 다운로드</div>
+
+                <div id="single-copy-image" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📋 이미지 클립보드 복사</div>
+
+                <div id="single-copy-canvas" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">🎨 캔버스 전체 복사</div>
+
+                <hr style="margin: 4px 0; border: none; border-top: 1px solid #555;">
+
                 <div id="single-save" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">💾 원본 저장</div>
 
                 <div id="single-copy" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📋 이미지 클립보드 복사</div>
@@ -7411,6 +7454,30 @@ class WaferMapViewer {
             `;
 
             document.body.appendChild(menu);
+
+            // 원본 다운로드
+            menu.querySelector('#single-download-original')?.addEventListener('click', async () => {
+                this.hideSingleContextMenu();
+                if (this.contextMenuManager) {
+                    await this.contextMenuManager.downloadOriginalImage();
+                }
+            });
+
+            // 이미지 클립보드 복사
+            menu.querySelector('#single-copy-image')?.addEventListener('click', async () => {
+                this.hideSingleContextMenu();
+                if (this.contextMenuManager) {
+                    await this.contextMenuManager.copyImageToClipboard();
+                }
+            });
+
+            // 캔버스 전체 복사
+            menu.querySelector('#single-copy-canvas')?.addEventListener('click', async () => {
+                this.hideSingleContextMenu();
+                if (this.contextMenuManager) {
+                    await this.contextMenuManager.copyCanvasToClipboard();
+                }
+            });
 
             menu.querySelector('#single-save').addEventListener('click', () => {
                 if (this.selectedImagePath) this.downloadImage(this.selectedImagePath);

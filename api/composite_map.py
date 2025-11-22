@@ -282,6 +282,9 @@ def _save_sum_map_variants(
     if all_indices.shape[0] == 0:
         return []
 
+    # all_indices는 (N, H, W) 형태이므로 height와 width 추출
+    _, height, width = all_indices.shape
+
     float_indices = all_indices.astype(np.float32)
     valid_mask = (all_indices >= 0) & (all_indices <= 7)
     counts = valid_mask.sum(axis=0).astype(np.float32)
@@ -304,11 +307,20 @@ def _save_sum_map_variants(
     with np.errstate(divide='ignore', invalid='ignore'):
         square_mean_map[calc_mask] = square_sums[calc_mask] / counts[calc_mask]
 
-    weights = np.where(valid_mask, np.maximum(valid_values, 1.0), 0.0)
-    weight_sum = np.sum(weights, axis=0, dtype=np.float32)
+    # Square weighted average: 분모는 인덱스별 개수 가중치 (0=1, 1=1, 2=2, 3=3, ..., 7=7)
+    # 각 인덱스의 개수를 세고, 해당 인덱스 값으로 가중치를 곱함
+    # 예: 인덱스 0이 1개 있으면 가중치 1, 인덱스 2가 3개 있으면 가중치 2*3=6
+    weight_map = np.zeros((height, width), dtype=np.float32)
+    for idx in range(8):  # 0-7 인덱스
+        idx_mask = (all_indices == idx)  # (N, H, W)
+        idx_count = idx_mask.sum(axis=0).astype(np.float32)  # (H, W) - 각 포인트에서 idx의 개수
+        # 가중치: 인덱스 값이 0이면 1, 1이면 1, 2이면 2, ..., 7이면 7
+        weight = 1 if idx == 0 else idx
+        weight_map += idx_count * weight
+    
     weighted_map = np.zeros_like(square_sums, dtype=np.float32)
     with np.errstate(divide='ignore', invalid='ignore'):
-        weighted_map[weighted_mask] = square_sums[weighted_mask] / weight_sum[weighted_mask]
+        weighted_map[weighted_mask] = square_sums[weighted_mask] / weight_map[weighted_mask]
 
     # 디버그 로그
     print(f"[SQUARE MAP DEBUG]")
@@ -323,7 +335,7 @@ def _save_sum_map_variants(
 
     if base_indices is None:
         median_map = np.median(float_indices, axis=0)
-        base_indices = np.clip(np.rint(median_map), 0, 8).astype(np.uint8)  # 0-8 범위
+        base_indices = np.clip(np.rint(median_map), 0, 13).astype(np.uint8)  # 0-13 범위
     base_indices = base_indices.copy()
     if invalid_mask is not None:
         base_indices[invalid_mask] = 31
@@ -432,31 +444,51 @@ def create_composite_heatmaps(
     if not raw_indices_list:
         raise ValueError("처리할 이미지가 없습니다.")
 
-    # 2단계: 인덱스 8-13 처리 (1개라도 있으면 인덱스 8로 변경)
+    # 2단계: 인덱스 8-13 처리 (특정 point가 8-13만 있는 경우만 8로 변경)
     stacked_raw = np.stack(raw_indices_list, axis=0)  # (N, H, W)
     idx_8_13_mask = (stacked_raw >= 8) & (stacked_raw <= 13)  # (N, H, W)
-    idx_8_13_any = idx_8_13_mask.any(axis=0)  # (H, W) - 1개라도 있으면 True
+    idx_0_7_mask = (stacked_raw >= 0) & (stacked_raw <= 7)  # (N, H, W)
+    idx_14_plus_mask = (stacked_raw >= 14)  # (N, H, W)
+    
+    # 각 포인트에서 8-13이 있는지, 0-7이 있는지, 14 이상이 있는지 확인
+    has_8_13 = idx_8_13_mask.any(axis=0)  # (H, W)
+    has_0_7 = idx_0_7_mask.any(axis=0)  # (H, W)
+    has_14_plus = idx_14_plus_mask.any(axis=0)  # (H, W)
+    
+    # 8-13만 있고 0-7이나 14 이상이 없는 포인트
+    idx_8_13_only = has_8_13 & ~has_0_7 & ~has_14_plus  # (H, W)
 
     # 해당 픽셀을 모든 이미지에서 8로 변경
     for i in range(len(raw_indices_list)):
-        raw_indices_list[i][idx_8_13_any] = 8
+        raw_indices_list[i][idx_8_13_only] = 8
 
     # 3단계: invalid mask 생성 및 clipping
-    # 인덱스 8은 유효, 9 이상만 invalid (31로)
+    # 인덱스 14 이상만 invalid (31로)
     invalid_mask = np.zeros((height, width), dtype=bool)
     all_indices_list: List[np.ndarray] = []
 
     for raw_indices in raw_indices_list:
-        invalid_mask |= (raw_indices > 8)  # 9 이상만 invalid
-        clipped = np.clip(raw_indices, 0, 8).astype(np.uint8)  # 0-8 범위
+        invalid_mask |= (raw_indices >= 14)  # 14 이상만 invalid
+        clipped = np.clip(raw_indices, 0, 13).astype(np.uint8)  # 0-13 범위 (8-13은 유지)
         all_indices_list.append(clipped)
 
     stacked_indices = np.stack(all_indices_list, axis=0)
     float_indices = stacked_indices.astype(np.float32)
+    
+    # 1번과 2번 처리 후 남은 포인트 중 0-7만 있는 포인트 찾기
+    # (invalid_mask와 idx_8_13_only를 제외한 포인트 중 0-7만 있는 것)
+    valid_0_7_mask = (stacked_indices >= 0) & (stacked_indices <= 7)  # (N, H, W)
+    has_valid_0_7 = valid_0_7_mask.any(axis=0)  # (H, W)
+    has_8_13_after = (stacked_indices >= 8) & (stacked_indices <= 13)  # (N, H, W)
+    has_8_13_after = has_8_13_after.any(axis=0)  # (H, W)
+    
+    # 0-7만 있고 8-13이나 invalid가 없는 포인트
+    only_0_7_mask = has_valid_0_7 & ~has_8_13_after & ~invalid_mask  # (H, W)
+    
     median_map = np.median(float_indices, axis=0)
-    median_indices = np.clip(np.rint(median_map), 0, 8).astype(np.uint8)  # 0-8 범위
+    median_indices = np.clip(np.rint(median_map), 0, 13).astype(np.uint8)  # 0-13 범위
     base_indices = median_indices.copy()
-    base_indices[idx_8_13_any] = 8  # 인덱스 8-13이 한 번이라도 나온 포인트는 8로
+    base_indices[idx_8_13_only] = 8  # 인덱스 8-13만 있는 포인트는 8로
     base_indices[invalid_mask] = 31
 
     heatmaps: List[Dict[str, Any]] = []
@@ -465,10 +497,11 @@ def create_composite_heatmaps(
         if idx >= 8:
             continue
         result = np.full((height, width), 31, dtype=np.uint8)
+        # median_indices가 idx인 포인트만 해당 grade로 표시
         valid_mask = (~invalid_mask) & (median_indices == idx)
         result[valid_mask] = idx
-        # 인덱스 8-13이 한 번이라도 나온 포인트는 8로 설정
-        result[idx_8_13_any & ~invalid_mask] = 8
+        # 인덱스 8-13만 있는 포인트는 8로 설정
+        result[idx_8_13_only & ~invalid_mask] = 8
         heatmap_path = output_dir / f"Grade_{idx}.png"
         heatmap_img = Image.fromarray(result, mode='P')
         heatmap_img.putpalette(palette_bytes)
@@ -494,7 +527,7 @@ def create_composite_heatmaps(
             palette_bytes,
             invalid_mask=invalid_mask,
             base_indices=base_indices,
-            idx_8_mask=idx_8_13_any,
+            idx_8_mask=idx_8_13_only,
             scheme=scheme,
         )
         print(f"[API] sum_map_entries after _save_sum_map_variants: {sum_map_entries}")
@@ -637,30 +670,39 @@ def create_sum_map(
     if not raw_indices_list:
         raise ValueError("처리할 이미지가 없습니다.")
 
-    # 2단계: 인덱스 8-13 처리 (1개라도 있으면 인덱스 8로 변경)
+    # 2단계: 인덱스 8-13 처리 (특정 point가 8-13만 있는 경우만 8로 변경)
     stacked_raw = np.stack(raw_indices_list, axis=0)  # (N, H, W)
     idx_8_13_mask = (stacked_raw >= 8) & (stacked_raw <= 13)  # (N, H, W)
-    idx_8_13_any = idx_8_13_mask.any(axis=0)  # (H, W) - 1개라도 있으면 True
+    idx_0_7_mask = (stacked_raw >= 0) & (stacked_raw <= 7)  # (N, H, W)
+    idx_14_plus_mask = (stacked_raw >= 14)  # (N, H, W)
+    
+    # 각 포인트에서 8-13이 있는지, 0-7이 있는지, 14 이상이 있는지 확인
+    has_8_13 = idx_8_13_mask.any(axis=0)  # (H, W)
+    has_0_7 = idx_0_7_mask.any(axis=0)  # (H, W)
+    has_14_plus = idx_14_plus_mask.any(axis=0)  # (H, W)
+    
+    # 8-13만 있고 0-7이나 14 이상이 없는 포인트
+    idx_8_13_only = has_8_13 & ~has_0_7 & ~has_14_plus  # (H, W)
 
     # 해당 픽셀을 모든 이미지에서 8로 변경
     for i in range(len(raw_indices_list)):
-        raw_indices_list[i][idx_8_13_any] = 8
+        raw_indices_list[i][idx_8_13_only] = 8
 
     # 3단계: invalid mask 생성 및 clipping
-    # 인덱스 8은 유효, 9 이상만 invalid (31로)
+    # 인덱스 14 이상만 invalid (31로)
     invalid_mask = np.zeros((height, width), dtype=bool)
     all_indices_list = []
 
     for raw_indices in raw_indices_list:
-        invalid_mask |= (raw_indices > 8)  # 9 이상만 invalid
-        clipped = np.clip(raw_indices, 0, 8).astype(np.uint8)  # 0-8 범위
+        invalid_mask |= (raw_indices >= 14)  # 14 이상만 invalid
+        clipped = np.clip(raw_indices, 0, 13).astype(np.uint8)  # 0-13 범위 (8-13은 유지)
         all_indices_list.append(clipped)
 
     stacked_indices = np.stack(all_indices_list, axis=0)
     float_indices = stacked_indices.astype(np.float32)
     median_map = np.median(float_indices, axis=0)
-    base_indices = np.clip(np.rint(median_map), 0, 8).astype(np.uint8)  # 0-8 범위
-    base_indices[idx_8_13_any] = 8  # 인덱스 8-13이 한 번이라도 나온 포인트는 8로
+    base_indices = np.clip(np.rint(median_map), 0, 13).astype(np.uint8)  # 0-13 범위
+    base_indices[idx_8_13_only] = 8  # 인덱스 8-13만 있는 포인트는 8로
     base_indices[invalid_mask] = 31
 
     entries = _save_sum_map_variants(
@@ -669,7 +711,7 @@ def create_sum_map(
         palette_list,
         invalid_mask=invalid_mask,
         base_indices=base_indices,
-        idx_8_mask=idx_8_13_any,
+        idx_8_mask=idx_8_13_only,
         scheme=scheme,
     )
     if not entries:

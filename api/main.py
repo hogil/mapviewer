@@ -89,6 +89,7 @@ from .composite_colors import (
 from .my_lot import (
     add_entry as my_lot_add_entry,
     create_group as my_lot_create_group,
+    delete_group as my_lot_delete_group,
     list_my_lot as my_lot_list,
     remove_entry as my_lot_remove_entry,
 )
@@ -2159,6 +2160,26 @@ async def create_my_lot_group(request: Request):
         raise HTTPException(status_code=500, detail=f"그룹을 생성하지 못했습니다: {exc}")
 
 
+@app.delete("/api/my-lot/group")
+async def delete_my_lot_group(request: Request):
+    login_id = _resolve_my_lot_login(request)
+    try:
+        payload = await request.json()
+        mode = payload.get("mode", "lot")
+        group = payload.get("group")
+        if not group:
+            raise HTTPException(status_code=400, detail="group 이름이 필요합니다.")
+        deleted = my_lot_delete_group(login_id, mode, group)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="그룹을 찾을 수 없습니다.")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"❌ [/api/my-lot/group] 삭제 실패: {exc}")
+        raise HTTPException(status_code=500, detail=f"그룹을 삭제하지 못했습니다: {exc}")
+
+
 @app.post("/api/my-lot")
 async def add_my_lot_entry_endpoint(request: Request):
     login_id = _resolve_my_lot_login(request)
@@ -2166,10 +2187,10 @@ async def add_my_lot_entry_endpoint(request: Request):
         payload = await request.json()
         mode = payload.get("mode", "lot")
         group = payload.get("group")
-        value = payload.get("value")
+        value = payload.get("value", "")  # value는 선택적 (더 이상 사용하지 않음)
         path = payload.get("path")
-        if not group or not value or not path:
-            raise HTTPException(status_code=400, detail="mode, group, value, path가 필요합니다.")
+        if not group or not path:
+            raise HTTPException(status_code=400, detail="mode, group, path가 필요합니다.")
         result = my_lot_add_entry(login_id, mode, group, value, path)
         return {"success": True, **result}
     except HTTPException:
@@ -2186,10 +2207,10 @@ async def delete_my_lot_entry_endpoint(request: Request):
         payload = await request.json()
         mode = payload.get("mode", "lot")
         group = payload.get("group")
-        value = payload.get("value")
-        if not group or not value:
-            raise HTTPException(status_code=400, detail="group과 value가 필요합니다.")
-        removed = my_lot_remove_entry(login_id, mode, group, value)
+        filename = payload.get("value")  # value는 filename으로 처리
+        if not group or not filename:
+            raise HTTPException(status_code=400, detail="group과 filename이 필요합니다.")
+        removed = my_lot_remove_entry(login_id, mode, group, filename)
         return {"success": removed}
     except HTTPException:
         raise

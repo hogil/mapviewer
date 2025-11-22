@@ -876,31 +876,69 @@
         .my-lot-table {
             flex: 1;
             border: 1px solid #2a2a2a;
-            border-radius: 6px;
-            padding: 8px;
-            background: #0f0f0f;
+            border-radius: 4px;
+            padding: 0;
+            background: #0a0a0a;
             display: flex;
             flex-direction: column;
-            gap: 6px;
+            gap: 0;
             max-height: 320px;
             overflow: auto;
         }
+        
+        #my-lot-entries {
+            flex: 1;
+            overflow: auto;
+            border: 1px solid #2a2a2a;
+            border-radius: 4px;
+            margin-bottom: 0;
+        }
+        
+        #my-lot-entries table {
+            width: 100%;
+            table-layout: fixed;
+            border-collapse: collapse;
+            background: #0a0a0a;
+            font-size: 12px;
+        }
+        
+        #my-lot-entries thead {
+            background: #1a1a1a;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        
+        #my-lot-entries th {
+            padding: 8px 6px;
+            text-align: left;
+            border: 1px solid #2a2a2a;
+            color: #fff;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        
+        #my-lot-entries td {
+            padding: 0;
+            border: 1px solid #2a2a2a;
+            background: #0a0a0a;
+        }
 
         .my-lot-entry-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 6px 10px;
-            background: #1d1d1d;
-            border-radius: 6px;
-            border: 1px solid #2b2b2b;
-            gap: 10px;
+            /* 테이블 행이므로 display: table-row (기본값) 사용 */
             cursor: pointer;
         }
 
-        .my-lot-entry-row.selected {
-            border-color: #2f6fed;
-            background: rgba(47, 111, 237, 0.18);
+        #my-lot-entries .my-lot-entry-row:hover {
+            background-color: rgba(0, 123, 204, 0.2);
+        }
+
+        #my-lot-entries .my-lot-entry-row.selected {
+            background-color: rgba(0, 123, 204, 0.3);
+        }
+
+        #my-lot-entries .my-lot-entry-row.selected td {
+            color: #fff;
         }
 
         .my-lot-entry-value {
@@ -3013,14 +3051,11 @@
                         📊 선택 리스트 복사(테이블 형식)
                     </div>
                     <hr style="margin: 4px 0; border: none; border-top: 1px solid #555;">
-                    <div class="context-menu-item" id="context-download-original" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">
-                        💾 원본 다운로드
+                    <div class="context-menu-item" id="context-my-lot-add" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">
+                        📝 MY LOT에 추가
                     </div>
-                    <div class="context-menu-item" id="context-copy-image" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">
-                        📋 이미지 클립보드 복사
-                    </div>
-                    <div class="context-menu-item" id="context-copy-canvas" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">
-                        🎨 캔버스 전체 복사
+                    <div class="context-menu-item" id="context-my-lot-add-selected" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">
+                        📝 선택 항목 MY LOT에 추가
                     </div>
                     <hr style="margin: 4px 0; border: none; border-top: 1px solid #555;">
                     <div class="context-menu-item" id="context-cancel" style="padding: 8px 12px; color: #aaa; cursor: pointer; font-size: 14px;">
@@ -3087,6 +3122,7 @@
             <div class="my-lot-group-row">
                 <select id="my-lot-group-select"></select>
                 <button id="my-lot-new-group-btn" class="grid-btn" style="padding: 6px 12px; font-size: 12px;">+ 새 그룹</button>
+                <button id="my-lot-delete-group-btn" class="grid-btn" style="padding: 6px 12px; font-size: 12px; background: #b91c1c; border: 1px solid #8b1212;">그룹 삭제</button>
             </div>
             <div class="my-lot-actions">
                 <button id="my-lot-copy-lot" class="grid-btn">LOT 복사</button>
