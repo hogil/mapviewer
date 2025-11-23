@@ -88,10 +88,12 @@ from .composite_colors import (
 )
 from .my_lot import (
     add_entry as my_lot_add_entry,
+    add_lot_batch as my_lot_add_lot_batch,
     create_group as my_lot_create_group,
     delete_group as my_lot_delete_group,
     list_my_lot as my_lot_list,
     remove_entry as my_lot_remove_entry,
+    remove_entries_batch as my_lot_remove_entries_batch,
 )
 from .user_manager import (
     get_user_manager,
@@ -929,9 +931,14 @@ def _collect_term_hits(keys_slice: List[str], names_slice: List[str], tokens: Li
         hits: Set[str] = set()
         if not term:
             return term, hits
+
+        # 🔥 논리 검색(AND/OR/NOT)에서는 항상 전체 스캔 (in 방식)
+        # 이유: "center and 1" 검색 시 "1"이 파일명 중간에 있을 수 있음
+        # 예: center_asdf_1.png → "1"을 startswith로 찾으면 못 찾음
         for rel, name_lower in zip(keys_slice, names_slice):
             if term in name_lower:
                 hits.add(rel)
+
         return term, hits
 
     max_workers = config.SEARCH_WORKERS or 1
@@ -1046,12 +1053,25 @@ def _search_index_slice(keys: List[str], names: List[str], query: str, goal: Opt
     if not query:
         return results
 
+    # 🔥 성능 최적화: 띄어쓰기가 없는 단일 단어는 파일명 앞부분만 매칭
+    # 예: "center" 검색 시 파일명이 "center"로 시작하는지만 체크 (전체 스캔 불필요)
+    use_prefix_match = ' ' not in query and len(query) > 0
+
     # 🔥 goal이 None이면 제한 없이 모든 매칭 파일 검색
-    for rel, name_lower in zip(keys, names):
-        if query in name_lower:
-            results.append(rel)
-            if goal is not None and len(results) >= goal:
-                break
+    if use_prefix_match:
+        # 앞부분 매칭 (startswith) - 더 빠름
+        for rel, name_lower in zip(keys, names):
+            if name_lower.startswith(query):
+                results.append(rel)
+                if goal is not None and len(results) >= goal:
+                    break
+    else:
+        # 전체 포함 매칭 (in) - 기존 방식
+        for rel, name_lower in zip(keys, names):
+            if query in name_lower:
+                results.append(rel)
+                if goal is not None and len(results) >= goal:
+                    break
 
     return results
 
@@ -1321,6 +1341,7 @@ app = FastAPI(title="L3Tracker API", version="2.6.0", lifespan=lifespan)
 SAML_DIR = Path("saml")
 AUTO_LOGIN = os.getenv("AUTO_LOGIN", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
 DEFAULT_ORG_URL = os.getenv("DEFAULT_ORG_URL", "")
+# NOTE: 내부 단독 사용 전제. dev-login, /logs 노출 등은 의도적으로 유지하며 외부 공개 환경에서는 사용 금지.
 
 def _load_saml_files() -> Tuple[Dict[str, Any], Dict[str, Any]]:
     base: Dict[str, Any] = {}
@@ -1719,6 +1740,7 @@ async def saml_dev_login(request: Request):
     """개발 모드 간편 로그인: ?user=이메일(또는 임의값)
     AUTO_LOGIN=0일 때만 허용.
     """
+    # NOTE: 내부 테스트용으로 개방 유지. 외부 서비스에서는 비활성화/삭제 필요.
     if AUTO_LOGIN:
         return PlainTextResponse("AUTO_LOGIN 활성화 - SAML 로그인 필요", status_code=403)
     # 우선순위: user → (account@pc) → dev-user
@@ -1819,10 +1841,12 @@ async def api_config():
 
 # 🔥 서버 메모리에 SAML 로그인 정보 저장
 SAML_USER_SESSIONS = {}  # {LoginId: user_info}
+# NOTE: 만료/검증 없이 유지되므로 내부 전용. 외부 노출 시 TTL/서명 검증 추가 필요.
 
 @app.get("/api/auth/user")
 async def api_auth_user(request: Request, LoginId: Optional[str] = None):
     """현재 사용자 정보 반환 - 서버 메모리에서 SAML 로그인 정보 확인"""
+    # NOTE: 쿼리 파라미터/쿠키를 신뢰하는 간단한 경로. 외부 서비스에서는 세션 검증을 붙여야 함.
     try:
         # LoginId가 제공된 경우 해당 사용자 정보 조회
         if LoginId and LoginId in SAML_USER_SESSIONS:
@@ -2187,17 +2211,94 @@ async def add_my_lot_entry_endpoint(request: Request):
         payload = await request.json()
         mode = payload.get("mode", "lot")
         group = payload.get("group")
-        value = payload.get("value", "")  # value는 선택적 (더 이상 사용하지 않음)
         path = payload.get("path")
         if not group or not path:
-            raise HTTPException(status_code=400, detail="mode, group, path가 필요합니다.")
-        result = my_lot_add_entry(login_id, mode, group, value, path)
+            raise HTTPException(status_code=400, detail="group과 path가 필요합니다.")
+
+        # 상대 경로를 절대 경로로 변환
+        rel_path = relkey_from_any_path(path)
+        abs_path = ROOT_DIR / rel_path
+
+        if not abs_path.exists() or not abs_path.is_file():
+            raise HTTPException(status_code=404, detail="이미지를 찾을 수 없습니다.")
+
+        result = my_lot_add_entry(login_id, mode, group, abs_path)
         return {"success": True, **result}
     except HTTPException:
         raise
+    except ValueError as exc:
+        # 중복 등록 등의 ValueError는 400으로 처리
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.error(f"❌ [/api/my-lot] 저장 실패: {exc}")
         raise HTTPException(status_code=500, detail=f"MY LOT 저장에 실패했습니다: {exc}")
+
+
+@app.post("/api/my-lot/batch")
+async def add_my_lot_batch_endpoint(request: Request):
+    """LOT 값으로 검색하여 해당 LOT의 모든 이미지를 그룹에 일괄 추가."""
+    login_id = _resolve_my_lot_login(request)
+    try:
+        payload = await request.json()
+        mode = payload.get("mode", "lot")
+        group = payload.get("group")
+        lot_value = payload.get("lot")  # LOT 값
+        paths = payload.get("paths")  # 또는 경로 리스트
+
+        if not group:
+            raise HTTPException(status_code=400, detail="group이 필요합니다.")
+
+        # paths가 제공된 경우: 해당 경로들을 일괄 등록
+        if paths:
+            image_paths = []
+            for path in paths:
+                rel_path = relkey_from_any_path(path)
+                abs_path = ROOT_DIR / rel_path
+                if abs_path.exists() and abs_path.is_file():
+                    image_paths.append(abs_path)
+
+            result = my_lot_add_lot_batch(login_id, mode, group, image_paths)
+            return {"success": True, **result}
+
+        # lot_value가 제공된 경우: search로 해당 LOT의 모든 이미지 찾기
+        if not lot_value:
+            raise HTTPException(status_code=400, detail="lot 또는 paths가 필요합니다.")
+
+        # FILE_INDEX를 사용하여 LOT 검색
+        if not FILE_INDEX or not FILE_INDEX_NAMES:
+            raise HTTPException(status_code=503, detail="파일 인덱스가 준비되지 않았습니다.")
+
+        # LOT로 시작하는 파일들을 검색
+        lot_prefix = lot_value.strip().lower()
+        matched_paths = []
+
+        for rel_path, name_lower in zip(FILE_INDEX, FILE_INDEX_NAMES):
+            # 파일명이 LOT_로 시작하는지 확인
+            if name_lower.startswith(lot_prefix + "_") or name_lower.startswith(lot_prefix + "."):
+                abs_path = ROOT_DIR / rel_path
+                if abs_path.exists() and abs_path.is_file():
+                    matched_paths.append(abs_path)
+
+        if not matched_paths:
+            return {
+                "success": True,
+                "success_count": 0,
+                "duplicate_count": 0,
+                "error_count": 0,
+                "errors": [],
+                "message": f"LOT '{lot_value}'에 해당하는 이미지를 찾을 수 없습니다.",
+            }
+
+        result = my_lot_add_lot_batch(login_id, mode, group, matched_paths)
+        return {"success": True, **result}
+
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"❌ [/api/my-lot/batch] 일괄 등록 실패: {exc}")
+        raise HTTPException(status_code=500, detail=f"MY LOT 일괄 등록에 실패했습니다: {exc}")
 
 
 @app.delete("/api/my-lot")
@@ -2217,6 +2318,28 @@ async def delete_my_lot_entry_endpoint(request: Request):
     except Exception as exc:
         logger.error(f"❌ [/api/my-lot] 삭제 실패: {exc}")
         raise HTTPException(status_code=500, detail=f"MY LOT 항목을 삭제하지 못했습니다: {exc}")
+
+
+@app.delete("/api/my-lot/batch")
+async def delete_my_lot_batch_endpoint(request: Request):
+    """여러 MY LOT 항목을 일괄 삭제."""
+    login_id = _resolve_my_lot_login(request)
+    try:
+        payload = await request.json()
+        mode = payload.get("mode", "lot")
+        group = payload.get("group")
+        filenames = payload.get("filenames", [])
+        if not group:
+            raise HTTPException(status_code=400, detail="group이 필요합니다.")
+        if not filenames:
+            raise HTTPException(status_code=400, detail="filenames가 필요합니다.")
+        result = my_lot_remove_entries_batch(login_id, mode, group, filenames)
+        return {"success": True, **result}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"❌ [/api/my-lot/batch] 일괄 삭제 실패: {exc}")
+        raise HTTPException(status_code=500, detail=f"MY LOT 항목 일괄 삭제에 실패했습니다: {exc}")
 
 
 
@@ -4550,7 +4673,7 @@ async def search_files(q: str = Query("", description="파일명 검색(대소�
                     keys_slice,
                     names_slice,
                     query,
-                    goal
+                    None  # goal 제한 없음 (모든 파일 검색)
                 )
                 effective_workers = config.SEARCH_WORKERS or 1
             else:
@@ -4562,7 +4685,7 @@ async def search_files(q: str = Query("", description="파일명 검색(대소�
                     keys_slice,
                     names_slice,
                     query,
-                    goal,
+                    None,  # goal 제한 없음 (모든 파일 검색)
                     worker_chunks
                 )
             # 일반 검색 결과에서 LOT 검색 적용 (파일명의 첫 부분이 LOT 목록에 포함되면 선택)
@@ -5645,6 +5768,7 @@ async def classify_delete_batch(request: ClassifyDeleteBatchReq,
 app.mount("/js", StaticFiles(directory="js"), name="js")
 app.mount("/logs", StaticFiles(directory="logs"), name="logs")
 app.mount("/static", StaticFiles(directory="."), name="static")
+# NOTE: /logs, /static 노출은 내부 환경 전제. 공개 서비스에서는 제거/인증 필요.
 
 @app.get("/")
 async def read_root(request: Request):

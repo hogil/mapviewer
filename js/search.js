@@ -88,6 +88,64 @@ function evaluateBasicTerm(fileName, term) {
 }
 
 /**
+ * LOT 기반 슬래시 검색 (정확한 매칭)
+ * @param {string} filePath 파일 경로
+ * @param {string} lotQuery 슬래시로 구분된 LOT 목록 (예: "LOT001/LOT002/LOT003")
+ * @returns {boolean} 매치 여부
+ */
+export function matchesLotSlashQuery(filePath, lotQuery) {
+    if (!lotQuery || !lotQuery.trim()) return true;
+
+    // 슬래시로 분리하여 Set 생성
+    const lotSet = new Set(lotQuery.split('/').map(lot => lot.trim().toLowerCase()).filter(lot => lot));
+
+    if (lotSet.size === 0) return true;
+
+    // 파일명에서 LOT 추출
+    const fileName = filePath.split('/').pop().split('\\').pop();
+    const baseName = fileName.replace(/\.[^/.]+$/, '');
+    const parts = baseName.split('_');
+
+    if (parts.length < 1) return false;
+
+    const lotValue = parts[0].toLowerCase();
+
+    // Set에서 O(1) 조회
+    return lotSet.has(lotValue);
+}
+
+/**
+ * 여러 파일에서 LOT 기반 슬래시 검색
+ * @param {string} lotQuery 슬래시로 구분된 LOT 목록
+ * @param {Array<string>} filePaths 파일 경로 배열
+ * @returns {Array<string>} 매치된 파일 경로들
+ */
+export function searchByLotSlash(lotQuery, filePaths) {
+    if (!lotQuery || !lotQuery.trim()) return [];
+
+    const lotSet = new Set(lotQuery.split('/').map(lot => lot.trim().toLowerCase()).filter(lot => lot));
+
+    if (lotSet.size === 0) return [];
+
+    const matchedFiles = [];
+
+    for (const filePath of filePaths) {
+        const fileName = filePath.split('/').pop().split('\\').pop();
+        const baseName = fileName.replace(/\.[^/.]+$/, '');
+        const parts = baseName.split('_');
+
+        if (parts.length >= 1) {
+            const lotValue = parts[0].toLowerCase();
+            if (lotSet.has(lotValue)) {
+                matchedFiles.push(filePath);
+            }
+        }
+    }
+
+    return matchedFiles;
+}
+
+/**
  * 연산자로 문자열 분할 (대소문자 무시, 단어 경계 고려)
  * @param {string} text 텍스트
  * @param {string} operator 연산자

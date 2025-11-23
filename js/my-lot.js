@@ -40,6 +40,7 @@ export class MyLotModal {
         this.modeButtons = Array.from(this.windowEl.querySelectorAll('[data-my-lot-mode]'));
         this.groupSelect = document.getElementById('my-lot-group-select');
         this.newGroupBtn = document.getElementById('my-lot-new-group-btn');
+        this.deleteGroupBtn = document.getElementById('my-lot-delete-group-btn');
         this.saveBtn = document.getElementById('my-lot-save-btn');
         this.savePendingBtn = document.getElementById('my-lot-save-pending-btn');
         this.copyLotBtn = document.getElementById('my-lot-copy-lot');
@@ -47,6 +48,7 @@ export class MyLotModal {
         this.copyLotWaferBtn = document.getElementById('my-lot-copy-lot-wafer');
         this.selectAllBtn = document.getElementById('my-lot-select-all');
         this.clearSelectionBtn = document.getElementById('my-lot-clear-selection');
+        this.deleteSelectionBtn = document.getElementById('my-lot-delete-selection');
         this.gridViewBtn = document.getElementById('my-lot-grid-view');
         this.entriesContainer = document.getElementById('my-lot-entries');
         this.previewImage = document.getElementById('my-lot-preview-image');
@@ -105,6 +107,7 @@ export class MyLotModal {
             this.renderEntries();
         });
         this.newGroupBtn?.addEventListener('click', () => this.handleCreateGroup());
+        this.deleteGroupBtn?.addEventListener('click', () => this.handleDeleteGroup());
         this.saveBtn?.addEventListener('click', () => this.handleSave());
         this.savePendingBtn?.addEventListener('click', () => this.handleSavePending());
         this.copyLotBtn?.addEventListener('click', () => this.copySelection('lot'));
@@ -112,6 +115,7 @@ export class MyLotModal {
         this.copyLotWaferBtn?.addEventListener('click', () => this.copySelection('lot-wafer'));
         this.selectAllBtn?.addEventListener('click', () => this.selectAllEntries());
         this.clearSelectionBtn?.addEventListener('click', () => this.clearSelection());
+        this.deleteSelectionBtn?.addEventListener('click', () => this.handleDeleteSelection());
         this.gridViewBtn?.addEventListener('click', () => this.openSelectionInViewer());
 
         if (this.entriesContainer) {
@@ -643,6 +647,9 @@ export class MyLotModal {
         if (this.clearSelectionBtn) {
             this.clearSelectionBtn.disabled = !hasSelection;
         }
+        if (this.deleteSelectionBtn) {
+            this.deleteSelectionBtn.disabled = !hasSelection;
+        }
         if (this.gridViewBtn) {
             this.gridViewBtn.disabled = !hasSelection;
         }
@@ -825,7 +832,6 @@ export class MyLotModal {
                 body: JSON.stringify({
                     mode: this.activeMode,
                     group: this.activeGroup,
-                    value: filename, // 백엔드에서 path를 파싱하므로 파일명 전달
                     path: candidate.path,
                 }),
             });
@@ -876,6 +882,38 @@ export class MyLotModal {
         }
     }
 
+    async handleDeleteGroup() {
+        if (!this.activeGroup) {
+            this.viewer?.showToast?.('삭제할 그룹을 선택해주세요.', 1800);
+            return;
+        }
+        if (!confirm(`"${this.activeGroup}" 그룹과 모든 항목을 삭제할까요?`)) {
+            return;
+        }
+        try {
+            const res = await fetch('/api/my-lot/group', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: this.activeMode,
+                    group: this.activeGroup,
+                }),
+            });
+            if (!res.ok) {
+                throw new Error(await this.parseErrorResponse(res));
+            }
+            await this.refreshData();
+            this.activeGroup = null;
+            this.renderGroups();
+            this.renderEntries();
+            this.viewer?.showToast?.('그룹을 삭제했습니다.', 1600);
+        } catch (error) {
+            console.error('[MyLotModal] delete group failed:', error);
+            const message = error?.message || '그룹 삭제에 실패했습니다.';
+            this.viewer?.showToast?.(message, 2200);
+        }
+    }
+
     async handleDelete(value) {
         if (!this.activeGroup) return;
         if (!confirm('선택한 항목을 삭제할까요?')) {
@@ -901,6 +939,63 @@ export class MyLotModal {
         } catch (error) {
             console.error('[MyLotModal] delete failed:', error);
             const message = error?.message || '항목 삭제에 실패했습니다.';
+            this.viewer?.showToast?.(message, 2200);
+        }
+    }
+
+    async handleDeleteSelection() {
+        if (!this.activeGroup) {
+            this.viewer?.showToast?.('그룹을 선택해주세요.', 1800);
+            return;
+        }
+        const entries = this.getSelectedEntries();
+        if (!entries.length) {
+            this.viewer?.showToast?.('선택된 항목이 없습니다.', 1700);
+            return;
+        }
+        if (!confirm(`선택한 ${entries.length}개 항목을 삭제할까요?`)) {
+            return;
+        }
+        try {
+            // 파일명 목록 추출
+            const filenames = entries.map(entry => entry.value || entry.filename).filter(Boolean);
+            if (!filenames.length) {
+                this.viewer?.showToast?.('삭제할 파일명이 없습니다.', 1800);
+                return;
+            }
+
+            // batch delete API 호출
+            const res = await fetch('/api/my-lot/batch', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: this.activeMode,
+                    group: this.activeGroup,
+                    filenames: filenames,
+                }),
+            });
+            if (!res.ok) {
+                throw new Error(await this.parseErrorResponse(res));
+            }
+
+            const result = await res.json();
+            await this.refreshData();
+            this.clearSelection(true);
+            this.renderGroups();
+            this.renderEntries();
+
+            const messages = [];
+            if (result.success_count > 0) messages.push(`${result.success_count}개 삭제`);
+            if (result.error_count > 0) messages.push(`${result.error_count}개 실패`);
+
+            if (messages.length > 0) {
+                this.viewer?.showToast?.(messages.join(', '), 2000);
+            } else {
+                this.viewer?.showToast?.('삭제 완료', 1600);
+            }
+        } catch (error) {
+            console.error('[MyLotModal] delete selection failed:', error);
+            const message = error?.message || '선택 항목 삭제에 실패했습니다.';
             this.viewer?.showToast?.(message, 2200);
         }
     }
@@ -986,7 +1081,6 @@ export class MyLotModal {
                 body: JSON.stringify({
                     mode: this.activeMode,
                     group: this.activeGroup,
-                    value,
                     path: path,
                 }),
             });
@@ -1024,157 +1118,130 @@ export class MyLotModal {
             this.viewer?.showToast?.('먼저 그룹을 선택해주세요.', 2000);
             return;
         }
-        
-        // 먼저 현재 그룹의 기존 항목들을 가져와서 중복 체크
-        const modeData = this.getModeData();
-        const currentGroup = this.getActiveGroup();
-        const existingEntries = currentGroup?.entries || [];
-        
-        // 중복 체크를 위한 Set 생성
-        const existingKeys = new Set();
-        if (this.activeMode === 'lot') {
-            // LOT Tab: root만 체크
-            existingEntries.forEach(entry => {
-                const root = entry.root || entry.value?.split('_')[0] || '';
-                if (root) existingKeys.add(root);
-            });
-        } else {
-            // Wafer Tab: root + wafer 조합 체크
-            existingEntries.forEach(entry => {
-                const root = entry.root || entry.value?.split('_')[0] || '';
-                const wafer = entry.wafer || '';
-                if (root && wafer) {
-                    existingKeys.add(`${root}_${wafer}`);
-                }
-            });
-        }
-        
-        let successCount = 0;
-        let failCount = 0;
-        let duplicateCount = 0;
-        const duplicatePaths = [];
-        const failedPaths = []; // 실패한 경로 저장
-        
-        for (const path of paths) {
-            if (!path) continue;
-            
-            // 경로에서 LOT/Wafer 값 추출
-            const tokens = this.viewer?.extractLotTokensFromPath?.(path);
-            if (!tokens) {
-                failCount++;
-                failedPaths.push({ path, reason: '경로 파싱 실패' });
-                continue;
-            }
-            
-            const root = tokens.root || tokens.lotValue || '';
-            const wafer = tokens.wafer || '';
-            
-            // 중복 체크
-            let isDuplicate = false;
+
+        try {
+            let finalPaths = [];
+
             if (this.activeMode === 'lot') {
-                // LOT Tab: root만 체크
-                isDuplicate = existingKeys.has(root);
-            } else {
-                // Wafer Tab: root + wafer 조합 체크
-                if (root && wafer) {
-                    isDuplicate = existingKeys.has(`${root}_${wafer}`);
-                } else if (!wafer) {
-                    // Wafer 값이 없으면 실패로 처리
-                    failCount++;
-                    const filename = path.split('/').pop() || path.split('\\').pop() || path;
-                    failedPaths.push({ path: filename, reason: 'Wafer Tab에는 파일명이 LOT_STEP_WAFER 형식이어야 합니다 (현재: Wafer 값 없음)' });
-                    continue;
-                }
-            }
-            
-            if (isDuplicate) {
-                duplicateCount++;
-                duplicatePaths.push(path);
-                continue;
-            }
-            
-            // value는 백엔드에서 path를 파싱하므로 파일명 사용 (백엔드 호환성)
-            const filename = tokens.filename || path.split('/').pop() || path.split('\\').pop() || '';
-            if (!filename) {
-                failCount++;
-                failedPaths.push({ path, reason: '파일명 추출 실패' });
-                continue;
-            }
-            
-            try {
-                const res = await fetch('/api/my-lot', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        mode: this.activeMode,
-                        group: this.activeGroup,
-                        value: filename, // 백엔드에서 path를 파싱하므로 파일명 전달
-                        path: path,
-                    }),
-                });
-                if (!res.ok) {
-                    const errorText = await this.parseErrorResponse(res);
-                    if (errorText.includes('이미 등록된 항목')) {
-                        duplicateCount++;
-                        duplicatePaths.push(path);
-                    } else {
-                        failCount++;
-                        const filename = path.split('/').pop() || path.split('\\').pop() || path;
-                        failedPaths.push({ path: filename, reason: errorText || '서버 오류' });
-                    }
-                } else {
-                    successCount++;
-                    // 성공한 항목을 existingKeys에 추가 (같은 배치 내 중복 방지)
-                    if (this.activeMode === 'lot') {
-                        existingKeys.add(root);
-                    } else {
-                        existingKeys.add(`${root}_${wafer}`);
+                // LOT Tab: 검색을 통해 각 LOT의 모든 이미지 찾기
+                const lotSet = new Set();
+
+                // 선택한 이미지에서 LOT 값 추출
+                for (const path of paths) {
+                    const tokens = this.viewer?.extractLotTokensFromPath?.(path);
+                    if (tokens && tokens.lotValue) {
+                        lotSet.add(tokens.lotValue);
                     }
                 }
-            } catch (error) {
-                console.error('[MyLotModal] addMultipleEntries failed for path:', path, error);
-                failCount++;
-                const filename = path.split('/').pop() || path.split('\\').pop() || path;
-                failedPaths.push({ path: filename, reason: error?.message || '네트워크 오류' });
-            }
-        }
-        
-        // 결과 메시지 표시
-        await this.refreshData();
-        this.renderGroups();
-        this.renderEntries();
-        
-        const messages = [];
-        if (successCount > 0) messages.push(`${successCount}개 저장`);
-        if (duplicateCount > 0) {
-            const modeText = this.activeMode === 'lot' ? 'LOT' : 'LOT+Wafer';
-            messages.push(`${duplicateCount}개 중복 (${modeText} 기준)`);
-        }
-        if (failCount > 0) {
-            messages.push(`${failCount}개 실패`);
-            // Wafer Tab에서 실패한 경우 더 자세한 메시지 표시
-            if (this.activeMode === 'wafer' && failedPaths.length > 0) {
-                const waferFailures = failedPaths.filter(f => f.reason.includes('Wafer'));
-                if (waferFailures.length > 0) {
-                    console.warn('[MyLotModal] Wafer Tab 등록 실패:', waferFailures);
-                    // 첫 번째 실패 사례를 메시지에 포함
-                    const firstFailure = waferFailures[0];
-                    this.viewer?.showToast?.(`${failCount}개 실패: ${firstFailure.reason}`, 5000);
-                } else {
-                    this.viewer?.showToast?.(messages.join(', '), 3000);
+
+                if (lotSet.size === 0) {
+                    this.viewer?.showToast?.('LOT 정보를 추출할 수 없습니다.', 1800);
+                    return;
                 }
+
+                const lotList = Array.from(lotSet);
+                this.viewer?.showToast?.(`${lotList.length}개 LOT 검색 중...`, 2000);
+
+                // 서버 검색 API 호출 (lot_multi 파라미터 사용)
+                const searchParams = new URLSearchParams();
+                searchParams.set('lot_multi', lotList.join(','));
+                const searchUrl = `/api/search?${searchParams.toString()}`;
+
+                const searchRes = await fetch(searchUrl);
+                if (!searchRes.ok) {
+                    throw new Error(`검색 API 오류: ${searchRes.status}`);
+                }
+
+                const searchData = await searchRes.json();
+                if (!searchData || !searchData.success || !Array.isArray(searchData.results)) {
+                    throw new Error('검색 응답 형식이 올바르지 않습니다.');
+                }
+
+                finalPaths = searchData.results;
+
+                if (finalPaths.length === 0) {
+                    this.viewer?.showToast?.('검색된 이미지가 없습니다.', 1800);
+                    return;
+                }
+
+                console.log(`[MyLotModal] LOT 검색 완료: ${lotList.length}개 LOT, ${finalPaths.length}개 이미지`);
+
             } else {
+                // Wafer Tab: 선택한 이미지만 중복 제거하여 저장
+                const uniquePaths = [];
+                const seen = new Set();
+
+                for (const path of paths) {
+                    const tokens = this.viewer?.extractLotTokensFromPath?.(path);
+                    if (!tokens) {
+                        continue;
+                    }
+
+                    // Wafer Tab: LOT + Wafer 조합으로 중복 제거
+                    const key = `${tokens.lotValue || ''}_${tokens.waferValue || ''}`;
+
+                    if (key && !seen.has(key)) {
+                        seen.add(key);
+                        uniquePaths.push(path);
+                    }
+                }
+
+                finalPaths = uniquePaths;
+            }
+
+            if (finalPaths.length === 0) {
+                this.viewer?.showToast?.('추가할 항목이 없습니다.', 1800);
+                return;
+            }
+
+            // batch API 사용하여 일괄 등록
+            const res = await fetch('/api/my-lot/batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: this.activeMode,
+                    group: this.activeGroup,
+                    paths: finalPaths,
+                }),
+            });
+
+            if (!res.ok) {
+                const errorText = await this.parseErrorResponse(res);
+                throw new Error(errorText);
+            }
+
+            const result = await res.json();
+
+            // 결과 메시지 표시
+            await this.refreshData();
+            this.renderGroups();
+            this.renderEntries();
+
+            const messages = [];
+            if (result.success_count > 0) messages.push(`${result.success_count}개 저장`);
+            if (result.duplicate_count > 0) messages.push(`${result.duplicate_count}개 중복`);
+            if (result.error_count > 0) {
+                messages.push(`${result.error_count}개 실패`);
+                if (result.errors && result.errors.length > 0) {
+                    console.warn('[MyLotModal] 일괄 등록 오류:', result.errors);
+                }
+            }
+
+            if (messages.length > 0) {
                 this.viewer?.showToast?.(messages.join(', '), 3000);
+            } else {
+                this.viewer?.showToast?.('저장 완료', 1600);
             }
-        } else if (messages.length > 0) {
-            this.viewer?.showToast?.(messages.join(', '), 3000);
-        } else {
-            this.viewer?.showToast?.('저장 완료', 1600);
+
+        } catch (error) {
+            console.error('[MyLotModal] addMultipleEntries failed:', error);
+            const message = error?.message || 'MY LOT 일괄 등록에 실패했습니다.';
+            this.viewer?.showToast?.(message, 3000);
+        } finally {
+            // 대기 중인 경로 초기화
+            this.pendingPaths = [];
+            this.updatePendingButtonVisibility();
         }
-        
-        // 대기 중인 경로 초기화
-        this.pendingPaths = [];
-        this.updatePendingButtonVisibility();
     }
 
     /**
@@ -1199,11 +1266,47 @@ export class MyLotModal {
     updatePendingButtonVisibility() {
         if (this.savePendingBtn) {
             if (this.pendingPaths && this.pendingPaths.length > 0) {
+                // mode 기반 중복 제거 후 실제 저장될 개수 계산
+                const uniqueCount = this.calculateUniqueCount(this.pendingPaths);
                 this.savePendingBtn.style.display = 'block';
-                this.savePendingBtn.textContent = `선택 항목 저장 (${this.pendingPaths.length}개)`;
+                this.savePendingBtn.textContent = `선택 항목 저장 (${uniqueCount}개)`;
             } else {
                 this.savePendingBtn.style.display = 'none';
             }
         }
+    }
+
+    /**
+     * mode 기반 중복 제거 후 실제 개수 계산
+     * @param {Array<string>} paths 경로 배열
+     * @returns {number} 중복 제거된 개수
+     */
+    calculateUniqueCount(paths) {
+        if (!paths || paths.length === 0) {
+            return 0;
+        }
+
+        const seen = new Set();
+        for (const path of paths) {
+            const tokens = this.viewer?.extractLotTokensFromPath?.(path);
+            if (!tokens) {
+                continue;
+            }
+
+            let key;
+            if (this.activeMode === 'lot') {
+                // LOT Tab: LOT 값으로 중복 제거
+                key = tokens.lotValue || '';
+            } else {
+                // Wafer Tab: LOT + Wafer 조합으로 중복 제거
+                key = `${tokens.lotValue || ''}_${tokens.waferValue || ''}`;
+            }
+
+            if (key) {
+                seen.add(key);
+            }
+        }
+
+        return seen.size;
     }
 }

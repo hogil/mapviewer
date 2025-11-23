@@ -613,6 +613,63 @@ class WaferMapViewer {
     }
 
     /**
+     * 검색/입력 필드에 포커스가 있는지 확인
+     * @returns {boolean} true if focus is on input/textarea/search element
+     */
+    isSearchInputFocused() {
+        const activeElement = document.activeElement;
+        if (!activeElement) return false;
+
+        const tagName = activeElement.tagName.toLowerCase();
+        const isInputField = tagName === 'input' || tagName === 'textarea';
+        const isContentEditable = activeElement.contentEditable === 'true';
+
+        return isInputField || isContentEditable;
+    }
+
+    /**
+     * 키보드 단축키를 허용할지 확인
+     * 검색/입력 필드에 포커스가 있을 때는 특정 키만 허용
+     * 허용 키: Ctrl+C, Ctrl+V, Ctrl+A, Shift, Escape, Enter, Arrow keys
+     * @param {KeyboardEvent} event - 키보드 이벤트
+     * @returns {boolean} true if shortcut should be allowed
+     */
+    shouldAllowKeyboardShortcut(event) {
+        // 검색/입력 필드에 포커스가 없으면 모든 단축키 허용
+        if (!this.isSearchInputFocused()) {
+            return true;
+        }
+
+        // 검색/입력 필드에 포커스가 있을 때 허용할 키들
+        const key = event.key;
+
+        // Escape, Enter 허용
+        if (key === 'Escape' || key === 'Enter') {
+            return true;
+        }
+
+        // Arrow keys 허용
+        if (key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown') {
+            return true;
+        }
+
+        // Shift 허용 (단독 또는 조합)
+        if (key === 'Shift' || event.shiftKey) {
+            return true;
+        }
+
+        // Ctrl+C, Ctrl+V, Ctrl+A 허용
+        if (event.ctrlKey || event.metaKey) {
+            if (key === 'c' || key === 'C' || key === 'v' || key === 'V' || key === 'a' || key === 'A') {
+                return true;
+            }
+        }
+
+        // 그 외의 키는 검색/입력 필드에서 차단
+        return false;
+    }
+
+    /**
      * Cache all necessary DOM elements for fast access.
      */
 
@@ -1149,6 +1206,9 @@ class WaferMapViewer {
         this.ensureRefMapWindowBounds();
         if (!this._refMapKeyHandler) {
             this._refMapKeyHandler = (event) => {
+                // 🔥 검색/입력 필드에서 허용되지 않는 단축키는 차단 (ESC는 허용됨)
+                if (!this.shouldAllowKeyboardShortcut(event)) return;
+
                 if (event.key === 'Escape') {
                     this.closeRefMapWindow();
                 }
@@ -3781,6 +3841,9 @@ class WaferMapViewer {
         document.addEventListener('keydown', (e) => {
             if (!this.gridMode) return;
 
+            // 🔥 검색/입력 필드에서 허용되지 않는 단축키는 차단
+            if (!this.shouldAllowKeyboardShortcut(e)) return;
+
             if (e.key === 'Escape') {
                 this.clearGridSelection();
 
@@ -5608,6 +5671,9 @@ class WaferMapViewer {
         
         // 모달이 열려있을 때 ESC 키로 닫기 (전역 핸들러)
         this.multiSearchModalEscapeHandler = (e) => {
+            // 🔥 검색/입력 필드에서 허용되지 않는 단축키는 차단 (ESC는 허용됨)
+            if (!this.shouldAllowKeyboardShortcut(e)) return;
+
             if (e.key === 'Escape' && this.isMultiSearchOpen) {
                 e.preventDefault();
                 e.stopPropagation();
@@ -8021,6 +8087,9 @@ class WaferMapViewer {
             );
 
             if (!isInLabelExplorer) return;
+
+            // 🔥 검색/입력 필드에서 허용되지 않는 단축키는 차단
+            if (!this.shouldAllowKeyboardShortcut(e)) return;
 
             try {
                 if (e.key === 'Escape') {
@@ -11258,6 +11327,9 @@ class WaferMapViewer {
         // ESC 키로 모달 닫기
 
         document.addEventListener('keydown', (e) => {
+            // 🔥 검색/입력 필드에서 허용되지 않는 단축키는 차단 (ESC는 허용됨)
+            if (!this.shouldAllowKeyboardShortcut(e)) return;
+
             if (e.key === 'Escape' && modal.style.display === 'flex') {
                 this.closeAddLabelModal();
             }
@@ -14920,7 +14992,10 @@ class WaferMapViewer {
         // ← → 키보드 네비게이션
         document.addEventListener('keydown', this.boundDetailModeNavigationHandler = (e) => {
             if (!this.detailMode) return;
-            
+
+            // 🔥 검색/입력 필드에서 허용되지 않는 단축키는 차단 (Arrow keys는 허용됨)
+            if (!this.shouldAllowKeyboardShortcut(e)) return;
+
             if (e.key === 'ArrowLeft') {
                 e.preventDefault();
                 e.stopPropagation();
@@ -16239,6 +16314,9 @@ class WaferMapViewer {
             }
 
             document.addEventListener('keydown', this.boundSingleViewHandler = (e) => {
+                // 🔥 검색/입력 필드에서 허용되지 않는 단축키는 차단
+                if (!this.shouldAllowKeyboardShortcut(e)) return;
+
                 if (this.detailMode && e.key === 'Escape') {
                     this.exitDetailMode();
                     return;
@@ -16603,6 +16681,9 @@ class WaferMapViewer {
         // ← → 키보드 네비게이션
         document.addEventListener('keydown', this.boundGridNavigationHandler = (e) => {
             if (this.viewMode !== 'gridImage' && !this.singleImageFromGrid) return;
+
+            // 🔥 검색/입력 필드에서 허용되지 않는 단축키는 차단 (Arrow keys는 허용됨)
+            if (!this.shouldAllowKeyboardShortcut(e)) return;
 
             if (e.key === 'ArrowLeft') {
                 e.preventDefault();

@@ -35,64 +35,49 @@ export class ContextMenuManager {
         const tableCopyItem = document.getElementById('context-table-copy');
         const cancelItem = document.getElementById('context-cancel');
         
-        // 🔥 MY LOT 추가 메뉴 항목들
+        // 🔥 MY LOT 추가 메뉴 항목
         const myLotAddItem = document.getElementById('context-my-lot-add');
-        const myLotAddSelectedItem = document.getElementById('context-my-lot-add-selected');
-        
+
         if (downloadItem) {
             downloadItem.onclick = () => {
                 this.hide();
                 this.downloadSelectedImages();
             };
         }
-        
+
         if (mergeCopyItem) {
             mergeCopyItem.onclick = () => {
                 this.hide();
                 this.mergeAndCopyImages();
             };
         }
-        
+
         if (listCopyItem) {
             listCopyItem.onclick = () => {
                 this.hide();
                 this.copyFileList();
             };
         }
-        
+
         if (tableCopyItem) {
             tableCopyItem.onclick = () => {
                 this.hide();
                 this.copyFileListAsTable();
             };
         }
-        
+
         if (cancelItem) {
             cancelItem.onclick = () => {
                 this.hide();
             };
         }
-        
-        // 🔥 MY LOT에 추가 (현재 클릭한 이미지)
+
+        // 🔥 MY LOT에 추가 (클릭한 이미지 또는 선택된 모든 이미지)
         if (myLotAddItem) {
             myLotAddItem.onclick = () => {
                 this.hide();
                 this.addToMyLot();
             };
-        }
-        
-        // 🔥 선택 항목 MY LOT에 추가
-        if (myLotAddSelectedItem) {
-            console.log('[ContextMenu] 선택 항목 MY LOT 버튼 이벤트 리스너 등록');
-            myLotAddSelectedItem.onclick = (e) => {
-                console.log('[ContextMenu] 선택 항목 MY LOT 버튼 클릭됨');
-                e.preventDefault();
-                e.stopPropagation();
-                this.hide();
-                this.addSelectedToMyLot();
-            };
-        } else {
-            console.error('[ContextMenu] context-my-lot-add-selected 요소를 찾을 수 없습니다.');
         }
     }
     
@@ -573,53 +558,40 @@ export class ContextMenuManager {
     }
     
     /**
-     * 현재 클릭한 이미지를 MY LOT에 추가
+     * MY LOT에 추가 (클릭한 이미지 또는 선택된 모든 이미지)
+     * - 클릭한 이미지가 선택된 이미지들 중 하나면 → 선택된 모든 이미지 추가
+     * - 그렇지 않으면 → 클릭한 이미지만 추가
      */
     async addToMyLot() {
         const targetPath = this.viewer.contextMenuTargetPath;
-        if (!targetPath) {
+        const selectedFiles = this.getSelectedFiles();
+
+        let pathsToAdd = [];
+
+        // 클릭한 이미지가 선택된 이미지들 중 하나인지 확인
+        if (targetPath && selectedFiles.includes(targetPath)) {
+            // 선택된 모든 이미지 추가
+            pathsToAdd = selectedFiles;
+        } else if (targetPath) {
+            // 클릭한 이미지만 추가
+            pathsToAdd = [targetPath];
+        } else {
             this.viewer.showToast?.('추가할 이미지를 찾을 수 없습니다.', 2000);
             return;
         }
-        
-        // MY LOT 모달 열기 (사용자가 Tab과 그룹을 선택하도록)
-        if (this.viewer.myLotModal) {
-            await this.viewer.myLotModal.open([targetPath]);
-            this.viewer.showToast?.('Tab과 그룹을 선택한 후 "선택 항목 저장" 버튼을 클릭하세요.', 3000);
-        } else {
-            this.viewer.showToast?.('MY LOT을 열 수 없습니다.', 2000);
-        }
-    }
-    
-    /**
-     * 선택된 이미지들을 MY LOT에 추가
-     */
-    async addSelectedToMyLot() {
-        console.log('[ContextMenu] addSelectedToMyLot 호출됨');
-        
-        const selectedFiles = this.getSelectedFiles();
-        console.log('[ContextMenu] 선택된 파일:', selectedFiles);
-        console.log('[ContextMenu] gridMode:', this.viewer.gridMode);
-        console.log('[ContextMenu] gridSelectedIdxs:', this.viewer.gridSelectedIdxs);
-        console.log('[ContextMenu] selectedImages:', this.viewer.selectedImages);
-        console.log('[ContextMenu] currentGridImages:', this.viewer.currentGridImages);
-        
-        if (selectedFiles.length === 0) {
-            console.warn('[ContextMenu] 선택된 파일이 없습니다.');
+
+        if (pathsToAdd.length === 0) {
             this.viewer.showToast?.('추가할 이미지를 선택해주세요.', 2000);
             return;
         }
-        
+
         // MY LOT 모달 열기
         if (!this.viewer.myLotModal) {
-            console.error('[ContextMenu] myLotModal이 없습니다.');
             this.viewer.showToast?.('MY LOT을 열 수 없습니다.', 2000);
             return;
         }
-        
-        console.log('[ContextMenu] MY LOT 모달 열기');
-        // 모달을 열고 사용자가 Tab과 그룹을 선택하도록 함
-        await this.viewer.myLotModal.open(selectedFiles);
-        this.viewer.showToast?.(`${selectedFiles.length}개 항목이 대기 중입니다. Tab과 그룹을 선택한 후 "선택 항목 저장" 버튼을 클릭하세요.`, 4000);
+
+        await this.viewer.myLotModal.open(pathsToAdd);
+        this.viewer.showToast?.(`${pathsToAdd.length}개 항목이 대기 중입니다. Tab과 그룹을 선택한 후 "선택 항목 저장" 버튼을 클릭하세요.`, 4000);
     }
 }
