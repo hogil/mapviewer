@@ -16,6 +16,7 @@ import { ChipAnnotator } from './chip-annotator.js';
 import { ThumbnailNavigator } from './thumbnail-navigator.js';
 import { CompositeColorModal } from './composite-colors.js';
 import { MyLotModal } from './my-lot.js';
+import { ContextMenuManager } from './context-menu.js';
 
 // Constants
 
@@ -489,6 +490,7 @@ class WaferMapViewer {
         this.colorEditor = new ColorSchemeEditor(this);
         this.compositeColorModal = new CompositeColorModal(this);
         this.myLotModal = new MyLotModal(this);
+        this.contextMenuManager = new ContextMenuManager(this);
         this.initRefMapWindow();
 
         this.bindEvents();
@@ -1223,21 +1225,24 @@ class WaferMapViewer {
 
     extractLotTokensFromPath(path) {
         if (!path) {
-            return { lotValue: '', waferValue: '', filename: '' };
+            return { lotValue: '', waferValue: '', root: '', wafer: '', step: '', filename: '' };
         }
         const normalized = this.normalizeImagePath(path);
         const filenameWithExt = normalized.split('/').pop() || '';
         const filename = filenameWithExt.replace(/\.[^.]+$/, '');
         const parts = filename.split('_').filter(Boolean);
+        // LOT은 인덱스 0
         const lotValue = parts[0] || filename;
-        let waferSegment = '';
+        const root = parts[0] || filename; // 백엔드와 일관성 유지
+        const step = parts[1] || ''; // 백엔드와 일관성 유지
+        // Wafer는 인덱스 2 (parts.length > 2일 때만)
+        let waferValue = '';
+        let wafer = '';
         if (parts.length > 2) {
-            waferSegment = parts[2];
-        } else if (parts.length > 1) {
-            waferSegment = parts[1];
+            waferValue = parts[2];
+            wafer = parts[2];
         }
-        const waferValue = waferSegment ? `${lotValue}_${waferSegment}` : lotValue;
-        return { lotValue, waferValue, filename, path: normalized };
+        return { lotValue, waferValue, root, wafer, step, filename, path: normalized };
     }
 
     getMyLotCandidate() {
@@ -7128,25 +7133,8 @@ class WaferMapViewer {
             };
         }
 
-        // 🔥 MY LOT에 추가 (현재 클릭한 이미지)
-        if (myLotAddItem) {
-            myLotAddItem.onclick = () => {
-                this.hideContextMenu();
-                if (this.contextMenuManager) {
-                    this.contextMenuManager.addToMyLot();
-                }
-            };
-        }
-
-        // 🔥 선택 항목 MY LOT에 추가
-        if (myLotAddSelectedItem) {
-            myLotAddSelectedItem.onclick = () => {
-                this.hideContextMenu();
-                if (this.contextMenuManager) {
-                    this.contextMenuManager.addSelectedToMyLot();
-                }
-            };
-        }
+        // 🔥 MY LOT 관련 이벤트는 ContextMenuManager에서 처리
+        // (중복 등록 방지)
 
         this.updateContextMenuState();
     }

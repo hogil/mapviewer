@@ -187,10 +187,23 @@ def add_entry(login_id: str, mode: str, group: str, value: str, path: str) -> Di
     
     with _LOCK:
         entries = _load_group_entries(login_segment, mode, safe_group)
-        # 중복 체크 (파일명 기준)
-        if not any(item.get("filename") == parsed["filename"] for item in entries):
+        # 중복 체크
+        is_duplicate = False
+        if mode == "lot":
+            # LOT Tab: LOT 값(root)만 체크
+            is_duplicate = any(item.get("root") == parsed["root"] for item in entries)
+        else:
+            # Wafer Tab: LOT + Wafer 조합 체크
+            is_duplicate = any(
+                item.get("root") == parsed["root"] and item.get("wafer") == parsed["wafer"]
+                for item in entries
+            )
+        
+        if not is_duplicate:
             entries.append(entry)
             _save_group_entries(login_segment, mode, safe_group, entries)
+        else:
+            raise ValueError(f"이미 등록된 항목입니다. (LOT Tab: LOT만, Wafer Tab: LOT+Wafer 조합)")
     return {
         "login_id": login_segment,
         "mode": mode,
