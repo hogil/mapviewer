@@ -7518,13 +7518,14 @@ class WaferMapViewer {
 
         const paddingX = 20;
         const paddingY = 16;
-        const baseFontSize = 14;
+        const baseFontSize = 22; // 글자 크기 추가 증가 (20 -> 22)
         const baseItemHeight = 16;
         const baseItemWidth = 20;
         const baseGap = 20;
         const baseTextSpacing = 8;
         const baseRowHeight = 32;
-        const maxScale = 2.8;
+        const maxScale = 3.4; // 최대 스케일 추가 증가 (3.2 -> 3.4)
+        const topBottomGap = 100; // G7과 nor 사이 간격 추가 증가 (80 -> 100)
 
         const availableWidth = Math.max(80, canvasWidth - paddingX * 2);
 
@@ -7534,11 +7535,20 @@ class WaferMapViewer {
         const labelWidths = items.map((item) => ctx.measureText(item.displayLabel).width);
         ctx.restore();
 
+        // topEntries와 bottomEntries의 경계 찾기
+        const topCount = legendData.topEntries?.length || 0;
+        const bottomCount = legendData.bottomEntries?.length || 0;
+        
         let baseWidthSum = 0;
         items.forEach((_, index) => {
             baseWidthSum += baseItemWidth + baseTextSpacing + labelWidths[index];
             if (index < items.length - 1) {
-                baseWidthSum += baseGap;
+                // G7과 nor 사이에 특별 간격 추가
+                if (index === topCount - 1 && topCount > 0 && bottomCount > 0) {
+                    baseWidthSum += topBottomGap;
+                } else {
+                    baseWidthSum += baseGap;
+                }
             }
         });
 
@@ -7553,6 +7563,7 @@ class WaferMapViewer {
         const itemHeight = baseItemHeight * scale;
         const textSpacing = baseTextSpacing * scale;
         const gap = baseGap * scale;
+        const topBottomGapScaled = topBottomGap * scale;
         const fontSize = baseFontSize * scale;
         const scaledLabelWidths = labelWidths.map((width) => width * scale);
         const scaledTotalWidth = baseWidthSum * scale;
@@ -7569,10 +7580,13 @@ class WaferMapViewer {
             itemHeight,
             textSpacing,
             gap,
+            topBottomGapScaled,
             fontSize,
             startX,
             rowCenterY,
-            height
+            height,
+            topCount: legendData.topEntries?.length || 0,
+            bottomCount: legendData.bottomEntries?.length || 0
         };
     }
 
@@ -7591,10 +7605,13 @@ class WaferMapViewer {
             itemHeight,
             textSpacing,
             gap,
+            topBottomGapScaled,
             fontSize,
             startX,
             rowCenterY,
-            height
+            height,
+            topCount,
+            bottomCount
         } = legendLayout;
 
         if (!items || items.length === 0) {
@@ -7608,6 +7625,7 @@ class WaferMapViewer {
         ctx.font = `${fontSize}px Arial`;
         ctx.textBaseline = 'middle';
         ctx.textAlign = 'left';
+
 
         let currentX = startX;
         items.forEach((item, index) => {
@@ -7624,7 +7642,12 @@ class WaferMapViewer {
 
             currentX += itemWidth + textSpacing + labelWidth;
             if (index < items.length - 1) {
-                currentX += gap;
+                // G7과 nor 사이에 특별 간격 적용
+                if (index === topCount - 1 && topCount > 0 && bottomCount > 0) {
+                    currentX += topBottomGapScaled;
+                } else {
+                    currentX += gap;
+                }
             }
         });
     }
