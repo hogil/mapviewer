@@ -94,10 +94,11 @@ def _load_group_entries(login_id: str, mode: str, group: str) -> List[Dict[str, 
 
                 lot_name = lot_folder.name
 
-                # LOT 폴더 내의 첫 번째 이미지 파일 찾기 (대표 이미지)
+                # LOT 폴더 내의 모든 이미지 파일 수집
                 first_file = None
                 file_count = 0
                 latest_mtime = 0
+                all_image_paths = []  # 🔥 LOT 폴더 내 모든 이미지 경로 저장
 
                 for file_path in lot_folder.iterdir():
                     if not file_path.is_file():
@@ -108,6 +109,13 @@ def _load_group_entries(login_id: str, mode: str, group: str) -> List[Dict[str, 
                     file_count += 1
                     if first_file is None:
                         first_file = file_path
+
+                    # 🔥 모든 이미지 파일의 상대 경로 수집
+                    try:
+                        rel_path_item = file_path.relative_to(IMAGES_ROOT).as_posix()
+                        all_image_paths.append(rel_path_item)
+                    except ValueError:
+                        all_image_paths.append(file_path.as_posix())
 
                     # 최신 파일 시간 찾기
                     try:
@@ -143,6 +151,7 @@ def _load_group_entries(login_id: str, mode: str, group: str) -> List[Dict[str, 
                     "wafer": "",
                     "saved_at": saved_at,
                     "file_count": file_count,  # LOT 내 이미지 개수
+                    "all_paths": all_image_paths,  # 🔥 LOT 폴더 내 모든 이미지 경로 리스트
                 }
                 entries.append(entry)
         else:
@@ -264,26 +273,8 @@ def add_entry(login_id: str, mode: str, group: str, src_path: Path) -> Dict[str,
         group_dir = _group_dir(login_segment, mode, safe_group)
         group_dir.mkdir(parents=True, exist_ok=True)
 
-        # 기존 항목 로드하여 중복 체크
-        existing_entries = _load_group_entries(login_segment, mode, safe_group)
-
-        # mode에 따라 중복 체크
-        is_duplicate = False
-        if mode == "lot":
-            # LOT Tab: LOT 값(root)만 체크
-            is_duplicate = any(entry.get("root") == parsed["root"] for entry in existing_entries)
-        else:
-            # Wafer Tab: LOT + Wafer 조합 체크
-            is_duplicate = any(
-                entry.get("root") == parsed["root"] and entry.get("wafer") == parsed["wafer"]
-                for entry in existing_entries
-            )
-
-        if is_duplicate:
-            if mode == "lot":
-                raise ValueError(f"이미 등록된 LOT입니다: {parsed['root']}")
-            else:
-                raise ValueError(f"이미 등록된 항목입니다: LOT={parsed['root']}, Wafer={parsed['wafer']}")
+        # 🔥 기존 항목 로드하여 중복 체크 제거 (파일 존재 여부로만 체크)
+        # LOT 모드는 같은 LOT에 여러 wafer 이미지가 추가될 수 있어야 함
 
         # 대상 파일 경로: LOT 모드는 LOT별 폴더, Wafer 모드는 직접 저장
         if mode == "lot":
@@ -294,6 +285,10 @@ def add_entry(login_id: str, mode: str, group: str, src_path: Path) -> Dict[str,
         else:
             # Wafer 모드: my-lot/{LoginId}/wafer/{group}/파일명
             target_file = group_dir / src_path.name
+
+        # 🔥 파일이 이미 존재하면 에러 (중복 방지)
+        if target_file.exists():
+            raise ValueError(f"이미 등록된 파일입니다: {src_path.name}")
 
         # 하드링크 시도, 실패 시 복사 (classification과 동일)
         try:
@@ -347,7 +342,7 @@ def add_entry(login_id: str, mode: str, group: str, src_path: Path) -> Dict[str,
 
 
 def remove_entry(login_id: str, mode: str, group: str, filename: str) -> bool:
-    """파일명 기준으로 이미지 삭제."""
+    """파일명 기준으로 이미지 삭제. LOT 모드에서는 filename이 LOT 이름이므로 폴더 전체 삭제."""
     login_segment = _safe_login(login_id)
     mode = _normalize_mode(mode)
     safe_group = _SAFE_SEGMENT.sub("_", (group or "").strip()) or "default"
@@ -356,19 +351,15 @@ def remove_entry(login_id: str, mode: str, group: str, filename: str) -> bool:
         group_dir = _group_dir(login_segment, mode, safe_group)
 
         if mode == "lot":
-            # LOT 모드: 모든 LOT 폴더를 스캔해서 파일 찾기
+            # 🔥 LOT 모드: filename이 LOT 이름이므로 LOT 폴더 전체 삭제
             if group_dir.exists():
-                for lot_folder in group_dir.iterdir():
-                    if not lot_folder.is_dir():
-                        continue
-                    target_file = lot_folder / filename
-                    if target_file.exists() and target_file.is_file():
-                        try:
-                            target_file.unlink()
-                            removed = True
-                            break
-                        except Exception:
-                            pass
+                lot_folder = group_dir / filename
+                if lot_folder.exists() and lot_folder.is_dir():
+                    try:
+                        shutil.rmtree(str(lot_folder))
+                        removed = True
+                    except Exception:
+                        pass
         else:
             # Wafer 모드: 직접 파일 찾기
             target_file = group_dir / filename
@@ -383,7 +374,7 @@ def remove_entry(login_id: str, mode: str, group: str, filename: str) -> bool:
 
 def remove_entries_batch(login_id: str, mode: str, group: str, filenames: List[str]) -> Dict[str, object]:
     """
-    여러 파일을 일괄 삭제.
+    여러 파일을 일괄 삭제. LOT 모드에서는 filename이 LOT 이름이므로 폴더 전체 삭제.
 
     Returns:
         {
@@ -414,17 +405,13 @@ def remove_entries_batch(login_id: str, mode: str, group: str, filenames: List[s
             try:
                 found = False
                 if mode == "lot":
-                    # LOT 모드: 모든 LOT 폴더를 스캔해서 파일 찾기
+                    # 🔥 LOT 모드: filename이 LOT 이름이므로 LOT 폴더 전체 삭제
                     if group_dir.exists():
-                        for lot_folder in group_dir.iterdir():
-                            if not lot_folder.is_dir():
-                                continue
-                            target_file = lot_folder / filename
-                            if target_file.exists() and target_file.is_file():
-                                target_file.unlink()
-                                success_count += 1
-                                found = True
-                                break
+                        lot_folder = group_dir / filename
+                        if lot_folder.exists() and lot_folder.is_dir():
+                            shutil.rmtree(str(lot_folder))
+                            success_count += 1
+                            found = True
                 else:
                     # Wafer 모드: 직접 파일 찾기
                     target_file = group_dir / filename
@@ -503,14 +490,27 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path])
         # 기존 항목 로드하여 중복 체크용 Set 생성
         existing_entries = _load_group_entries(login_segment, mode, safe_group)
         existing_keys = set()
+        existing_files = set()  # 🔥 파일명 기준 중복 체크 (업데이트 시 타임스탬프 유지용)
 
-        # LOT Tab과 Wafer Tab 모두 root + wafer 조합으로 중복 체크
+        # 🔥 LOT Tab: LOT 값만으로 중복 체크, Wafer Tab: LOT + Wafer 조합
         for entry in existing_entries:
             root = entry.get("root")
             wafer = entry.get("wafer")
-            key = f"{root}_{wafer}"
-            if key:
-                existing_keys.add(key)
+            
+            if mode == "lot":
+                # LOT 모드: root(LOT) 값만으로 중복 체크
+                if root:
+                    existing_keys.add(root)
+            else:
+                # Wafer 모드: root + wafer 조합으로 중복 체크
+                key = f"{root}_{wafer}"
+                if key:
+                    existing_keys.add(key)
+            
+            # 파일명도 별도로 저장 (기존 파일 타임스탬프 유지용)
+            filename = entry.get("filename")
+            if filename:
+                existing_files.add(filename)
 
         # 드라이브 체크는 한 번만 수행 (성능 최적화)
         try:
@@ -528,8 +528,14 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path])
                 # 파일명 파싱
                 parsed = _parse_filename(src_path.name)
 
-                # mode에 관계없이 root + wafer 조합으로 중복 체크
-                key = f"{parsed['root']}_{parsed['wafer']}"
+                # 🔥 mode에 따라 중복 체크
+                if mode == "lot":
+                    # LOT 모드: root(LOT) 값만으로 중복 체크
+                    key = parsed['root']
+                else:
+                    # Wafer 모드: root + wafer 조합으로 중복 체크
+                    key = f"{parsed['root']}_{parsed['wafer']}"
+                
                 is_duplicate = key in existing_keys
 
                 if is_duplicate:
@@ -552,6 +558,11 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path])
                     target_file = group_dir / src_path.name
                     lot_dst_dev = dst_dev
 
+                # 🔥 파일이 이미 존재하면 skip (등록 일시 유지)
+                if target_file.exists():
+                    duplicate_count += 1
+                    continue
+
                 # 하드링크 시도, 실패 시 복사
                 try:
                     if lot_dst_dev is not None:
@@ -565,7 +576,7 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path])
                 except (OSError, AttributeError):
                     shutil.copy2(str(src_path), str(target_file))
 
-                # 파일 타임스탬프를 현재 시간으로 업데이트 (등록 시간 기록)
+                # 🔥 파일 타임스탬프를 현재 시간으로 업데이트 (최초 등록 시만)
                 try:
                     import time
                     now = time.time()
@@ -575,9 +586,12 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path])
 
                 success_count += 1
 
-                # 성공한 항목을 existing_keys에 추가 (같은 배치 내 중복 방지)
-                key = f"{parsed['root']}_{parsed['wafer']}"
-                existing_keys.add(key)
+                # 🔥 성공한 항목을 existing_keys에 추가 (같은 배치 내 중복 방지)
+                if mode == "lot":
+                    existing_keys.add(parsed['root'])
+                else:
+                    key = f"{parsed['root']}_{parsed['wafer']}"
+                    existing_keys.add(key)
 
             except Exception as exc:
                 error_count += 1

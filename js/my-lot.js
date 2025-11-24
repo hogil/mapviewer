@@ -226,6 +226,9 @@ export class MyLotModal {
                 this.pendingPaths = [...pendingPaths];
             }
 
+            // 🔥 모달 열 때마다 업데이트 상태 초기화 (매번 접속 시 새로 업데이트하도록)
+            this.updatedGroups.clear();
+
             await this.refreshData();
             this.setMode(this.activeMode || "lot");
             this.updateCurrentValues();
@@ -776,6 +779,11 @@ export class MyLotModal {
             return;
         }
         const separator = absolutePath.includes('?') ? '&' : '?';
+        
+        // 🔥 Personal Colors 및 Cache Buster 적용
+        const personalizedParams = this.viewer?.getPersonalizedParams?.() || '';
+        const cacheBuster = this.viewer?._personalizedColorCacheBuster || Date.now();
+
         this.previewImage.onload = () => {
             this.previewImage.style.display = 'block';
             this.previewEmpty.style.display = 'none';
@@ -784,7 +792,7 @@ export class MyLotModal {
             this.previewImage.style.display = 'none';
             this.previewEmpty.style.display = 'block';
         };
-        this.previewImage.src = `${absolutePath}${separator}t=${Date.now()}`;
+        this.previewImage.src = `${absolutePath}${separator}t=${cacheBuster}${personalizedParams}`;
     }
 
     updatePreviewForSelection() {
@@ -862,17 +870,42 @@ export class MyLotModal {
             this.viewer?.showToast?.('선택된 항목이 없습니다.', 1700);
             return;
         }
-        const paths = entries.map(entry => entry.path).filter(Boolean);
+        
+        let paths = [];
+
+        // 🔥 LOT 탭일 경우: 선택된 LOT 폴더 내 모든 이미지 경로를 표시 (all_paths 사용)
+        if (this.activeMode === 'lot') {
+            // 선택된 LOT entry들의 all_paths를 모두 수집
+            entries.forEach(entry => {
+                if (entry.all_paths && Array.isArray(entry.all_paths)) {
+                    // LOT 폴더 내 모든 이미지 경로 추가
+                    paths.push(...entry.all_paths);
+                } else if (entry.path) {
+                    // all_paths가 없으면 대표 이미지만 추가 (fallback)
+                    paths.push(entry.path);
+                }
+            });
+
+            console.log(`[MyLotModal] LOT Grid 보기: ${entries.length}개 LOT, 총 ${paths.length}개 이미지 표시`);
+        } else {
+            // Wafer 탭일 경우: 선택된 항목의 경로만 보여줌
+            paths = entries.map(entry => entry.path).filter(Boolean);
+        }
+
         if (!paths.length) {
-            this.viewer?.showToast?.('경로 정보가 없습니다.', 1700);
+            this.viewer?.showToast?.('표시할 이미지가 없습니다.', 1700);
             return;
         }
-        if (paths.length === 1) {
-            this.viewer?.loadImage?.(paths[0]);
-            return;
-        }
+        
+        // 1개여도 그리드로 보여달라는 요구사항 반영
         if (this.viewer?.showGrid) {
             await this.viewer.showGrid(paths);
+        } else {
+            // fallback
+             if (paths.length === 1) {
+                this.viewer?.loadImage?.(paths[0]);
+                return;
+            }
         }
     }
 
@@ -882,46 +915,107 @@ export class MyLotModal {
             this.viewer?.showToast?.('현재 이미지를 찾을 수 없습니다.', 1800);
             return;
         }
-        if (!candidate.path) {
-            this.viewer?.showToast?.('경로 정보가 없습니다.', 2000);
-            return;
-        }
         if (!this.activeGroup) {
             this.viewer?.showToast?.('먼저 그룹을 선택해주세요.', 2000);
             return;
         }
         
-        // value는 백엔드에서 path를 파싱하므로 파일명 사용
-        const filename = candidate.filename || candidate.path.split('/').pop() || candidate.path.split('\\').pop() || '';
-        if (!filename) {
-            this.viewer?.showToast?.('파일명을 추출할 수 없습니다.', 2000);
+        const lotValue = candidate.lotValue; // getMyLotCandidate에서 lotValue 반환한다고 가정 (안되면 추출)
+        let targetLot = lotValue;
+
+        if (!targetLot) {
+            // path에서 추출 시도
+            const tokens = this.viewer?.extractLotTokensFromPath?.(candidate.path);
+            if (tokens && tokens.lotValue) {
+                targetLot = tokens.lotValue;
+            }
+        }
+
+        if (!targetLot) {
+            this.viewer?.showToast?.('LOT 정보를 추출할 수 없습니다.', 2000);
             return;
         }
-        
+
         try {
-            const res = await fetch('/api/my-lot', {
+            // 1. 해당 LOT으로 전체 이미지 검색 (다중 검색 로직 활용)
+            this.viewer?.showToast?.(`'${targetLot}' 관련 이미지 검색 중...`, 1500);
+            
+            const searchParams = new URLSearchParams();
+            searchParams.set('lot_multi', targetLot);
+            const searchUrl = `/api/search?${searchParams.toString()}`;
+
+            const searchRes = await fetch(searchUrl);
+            if (!searchRes.ok) {
+                throw new Error(`검색 API 오류: ${searchRes.status}`);
+            }
+
+            const searchData = await searchRes.json();
+            if (!searchData || !searchData.success || !Array.isArray(searchData.results)) {
+                throw new Error('검색 응답 형식이 올바르지 않습니다.');
+            }
+
+            const searchResults = searchData.results;
+            
+            // 🔥 추가: 현재 이미지와 같은 폴더에 있는 이미지들도 수집 (탐색기 폴더 내 이미지 누락 방지)
+            const lastSlash = Math.max(candidate.path.lastIndexOf('/'), candidate.path.lastIndexOf('\\'));
+            if (lastSlash > 0) {
+                const folderPath = candidate.path.substring(0, lastSlash);
+                try {
+                    const filesRes = await fetch(`/api/files?path=${encodeURIComponent(folderPath)}`);
+                    if (filesRes.ok) {
+                        const filesData = await filesRes.json();
+                        if (filesData.items && Array.isArray(filesData.items)) {
+                            const folderImages = filesData.items
+                                .filter(item => item.type === 'file' && /\.(png|jpg|jpeg|gif|bmp|webp)$/i.test(item.name))
+                                .map(item => item.path || `${folderPath}/${item.name}`);
+                            
+                            if (folderImages.length > 0) {
+                                searchResults.push(...folderImages);
+                                console.log(`[MyLotModal] 같은 폴더 이미지 ${folderImages.length}개 추가`);
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[MyLotModal] 폴더 검색 실패:', e);
+                }
+            }
+            
+            if (searchResults.length === 0) {
+                // 검색 결과가 없으면 현재 페이지만이라도 저장 시도 (fallback)
+                console.warn('[MyLotModal] LOT 검색 결과 없음, 단일 이미지 저장 시도');
+                searchResults.push(candidate.path);
+            } else {
+                console.log(`[MyLotModal] LOT 검색 완료: ${searchResults.length}개 이미지 발견`);
+            }
+
+            // 2. 검색된 이미지 일괄 저장 (batch API)
+            const res = await fetch('/api/my-lot/batch', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    mode: this.activeMode,
+                    mode: this.activeMode, // 현재 탭 모드 (lot/wafer)
                     group: this.activeGroup,
-                    path: candidate.path,
+                    paths: searchResults,
                 }),
             });
+
             if (!res.ok) {
                 const errorText = await this.parseErrorResponse(res);
-                // 중복 등록 에러 메시지 처리
-                if (errorText.includes('이미 등록된 항목')) {
-                    this.viewer?.showToast?.('이미 등록된 항목입니다.', 2000);
-                } else {
-                    throw new Error(errorText);
-                }
-                return;
+                throw new Error(errorText);
             }
+            
+            const result = await res.json();
+
             await this.refreshData();
-            this.renderGroups();
             this.renderEntries();
-            this.viewer?.showToast?.('MY LOT에 저장했습니다.', 1600);
+            
+            // 결과 메시지
+            const messages = [];
+            if (result.success_count > 0) messages.push(`${result.success_count}개 저장`);
+            if (result.duplicate_count > 0) messages.push(`${result.duplicate_count}개 중복`);
+            
+            this.viewer?.showToast?.(`'${targetLot}' 저장 완료: ${messages.join(', ')}`, 2500);
+
         } catch (error) {
             console.error('[MyLotModal] save failed:', error);
             const message = error?.message || 'MY LOT 저장에 실패했습니다.';
