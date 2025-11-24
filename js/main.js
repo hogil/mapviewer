@@ -18211,23 +18211,25 @@ class WaferMapViewer {
 
     /**
      * Bottom 버튼 클릭 핸들러
-     * @param {number} bottomValue - Bottom 값 (285, 286, 287, 288)
+     * @param {number|string} bottomValue - Bottom 값 (285, 286, 287, 288)
      * @param {boolean} ctrlKey - Ctrl 키 누름 여부
      */
     async onBottomButtonClick(bottomValue, ctrlKey) {
-        const wasSelected = this.selectedBottoms.has(bottomValue);
+        // 🔥 Convert to string for consistent comparison
+        const bottomStr = String(bottomValue);
+        const wasSelected = this.selectedBottoms.has(bottomStr);
 
         if (ctrlKey) {
             // Ctrl 클릭: 다중 선택 토글
             if (wasSelected) {
-                this.selectedBottoms.delete(bottomValue);
+                this.selectedBottoms.delete(bottomStr);
             } else {
-                this.selectedBottoms.add(bottomValue);
+                this.selectedBottoms.add(bottomStr);
             }
         } else {
             // 일반 클릭: 단일 선택
             this.selectedBottoms.clear();
-            this.selectedBottoms.add(bottomValue);
+            this.selectedBottoms.add(bottomStr);
         }
 
         // 필터 적용 및 UI 업데이트
@@ -18270,10 +18272,10 @@ class WaferMapViewer {
             const key = item.getAttribute('data-key');
             if (!key || !key.startsWith('B')) return;
 
-            const bottomValue = parseInt(key.substring(1));
-            if (isNaN(bottomValue)) return;
+            // 🔥 Extract as string for comparison
+            const bottomValueStr = key.substring(1);
 
-            if (this.selectedBottoms.has(bottomValue)) {
+            if (this.selectedBottoms.has(bottomValueStr)) {
                 item.classList.add('selected');
             } else {
                 item.classList.remove('selected');

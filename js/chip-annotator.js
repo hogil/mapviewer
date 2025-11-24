@@ -209,9 +209,11 @@ export class ChipAnnotator {
      */
     setBottomFilter(filterSet) {
         if (filterSet instanceof Set) {
-            this.bottomFilterSet = new Set(filterSet);
+            // 🔥 Convert to strings for consistent comparison
+            this.bottomFilterSet = new Set(Array.from(filterSet).map(v => String(v)));
         } else if (Array.isArray(filterSet)) {
-            this.bottomFilterSet = new Set(filterSet);
+            // 🔥 Convert to strings for consistent comparison
+            this.bottomFilterSet = new Set(filterSet.map(v => String(v)));
         } else {
             this.bottomFilterSet.clear();
         }
@@ -1013,15 +1015,16 @@ export class ChipAnnotator {
 
             this.chips.forEach(chip => {
                 // If chip is NOT in the selected set, cover it with white
-                if (chip && !this.bottomFilterSet.has(chip.b)) {
+                // 🔥 Convert chip.b to string for comparison
+                if (chip && !this.bottomFilterSet.has(String(chip.b))) {
                     const rect = chip.rect;
-                    
+
                     // Calculate canvas coordinates (same as _drawChipRect)
                     const x = rect.x0 * transform.scale + transform.dx;
                     const y = rect.y0 * transform.scale + transform.dy + Y_OFFSET;
                     const w = (rect.x1 - rect.x0) * transform.scale;
                     const h = (rect.y1 - rect.y0) * transform.scale;
-                    
+
                     ctx.fillRect(x, y, w, h);
                 }
             });
