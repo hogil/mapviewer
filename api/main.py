@@ -3427,7 +3427,7 @@ def _pyramid_path_lock(path: Path):
         lock.release()
 
 
-def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, personalized: bool = False, scheme: Optional[str] = None):
+def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None):
     """🚀 피라미드 레벨 이미지 생성 (속도 극대화)"""
     import time
     start_time = time.time()
@@ -3503,21 +3503,53 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                 
                 # [1단계] 원본 이미지 로드
                 # 🔥 초고속 방식에 PLTE 패치만 추가
-                # 원본 이미지가 PNG이면 개인색 적용 (저장 포맷과 무관 - JPEG로 저장해도 개인색 적용)
-                if personalized and scheme and image_path.suffix.lower() == '.png':
+                # Grade 필터가 우선, 그 다음 개인색 설정
+                # 원본 이미지가 PNG이면 팔레트 필터링 적용 (저장 포맷과 무관 - JPEG로 저장해도 적용)
+                if grade_filter and image_path.suffix.lower() == '.png':
+                    logger.info(f"🎯 [PYRAMID] Grade 필터 적용: grade_filter={grade_filter}, path={image_path.name}, target_format={target_format}")
+                    try:
+                        from .personal_colors import plte_grade_filter_memory, plte_inplace_patch_memory
+
+                        # grade_filter 파싱: "3" 또는 "2,4,7"
+                        grade_indices = [int(g.strip()) for g in grade_filter.split(',') if g.strip().isdigit()]
+
+                        if grade_indices:
+                            # 1. 원본 PNG 파일 읽기
+                            with open(image_path, 'rb') as f:
+                                png_data = bytearray(f.read())
+
+                            # 2. 먼저 개인색 설정 적용 (Grade0-7을 인덱스 0-7로 매핑)
+                            if personalized and scheme:
+                                png_data = plte_inplace_patch_memory(png_data, scheme)
+                                logger.debug(f"🎨 [PYRAMID GRADE FILTER] 개인색 설정 먼저 적용: scheme={scheme}")
+
+                            # 3. 그 다음 Grade PLTE 필터 (인덱스 0-7 필터링)
+                            png_data = plte_grade_filter_memory(png_data, grade_indices)
+
+                            # 4. 필터링된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
+                            image = pyvips.Image.new_from_buffer(bytes(png_data), "", access='sequential', fail_on='none', memory=True, unlimited=True)
+
+                            logger.debug(f"✅ [PYRAMID GRADE FILTER] Grade {grade_filter} 필터링 완료, 리사이즈 시작: {pyramid_path.name}")
+                        else:
+                            image = None
+                    except Exception as e:
+                        logger.warning(f"⚠️ [PYRAMID GRADE FILTER] 필터링 실패, 폴백: {e}", exc_info=True)
+                        # 폴백: 기존 방식 사용
+                        image = None
+                elif personalized and scheme and image_path.suffix.lower() == '.png':
                     logger.info(f"🎨 [PYRAMID] 개인색 설정 적용: personalized={personalized}, scheme={scheme}, path={image_path.name}, target_format={target_format}")
                     try:
                         from .personal_colors import plte_inplace_patch_memory
-                        
+
                         # 1. 원본 PNG 파일 읽기 및 PLTE 패치 (최우선!)
                         with open(image_path, 'rb') as f:
                             png_data = bytearray(f.read())
-                        
+
                         png_data = plte_inplace_patch_memory(png_data, scheme)
-                        
+
                         # 2. 패치된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
                         image = pyvips.Image.new_from_buffer(bytes(png_data), "", access='sequential', fail_on='none', memory=True, unlimited=True)
-                        
+
                         logger.debug(f"✅ [PYRAMID PLTE PATCH] 색 변경 완료, 리사이즈 시작: {pyramid_path.name}")
                     except Exception as e:
                         logger.warning(f"⚠️ [PYRAMID PLTE] PLTE 인-place 실패, 폴백: {e}", exc_info=True)
@@ -3724,27 +3756,29 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
 _pyramid_bg_executor = ThreadPoolExecutor(max_workers=config.PYRAMID_BG_WORKERS)
 _pyramid_bg_generating = set()  # 현재 생성 중인 파일 경로
 
-async def _generate_other_levels_background(image_path: Path, current_level: float, stem: str, personalized: bool = False, scheme: Optional[str] = None):
+async def _generate_other_levels_background(image_path: Path, current_level: float, stem: str, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None):
     """다른 피라미드 레벨들을 background에서 생성 (원본 재사용 파이프라인)"""
     format_ext = config.PYRAMID_FORMAT.lower()
     try:
         # 생성할 레벨 목록 (현재 레벨 제외, 1.0 제외)
         other_levels = [l for l in config.PYRAMID_LEVELS if l != current_level and l < 1.0]
-        
+
         if not other_levels:
             logger.info("⏭️ [BG SKIP] 생성할 레벨이 없음")
             return
 
         # 레벨을 크기 순으로 정렬 (큰 레벨부터)
         other_levels.sort(reverse=True)
-        
-        # 🔥 개인색 설정 확인 및 로깅
-        logger.info(f"🚀 [BG PIPELINE] Background 파이프라인 시작: levels={other_levels}, personalized={personalized}, scheme={scheme}")
-        if personalized and scheme:
+
+        # 🔥 Grade 필터 또는 개인색 설정 확인 및 로깅
+        logger.info(f"🚀 [BG PIPELINE] Background 파이프라인 시작: levels={other_levels}, personalized={personalized}, scheme={scheme}, grade_filter={grade_filter}")
+        if grade_filter:
+            logger.info(f"🎯 [BG PIPELINE] Grade 필터 활성화: grade_filter={grade_filter}, levels={other_levels}")
+        elif personalized and scheme:
             logger.info(f"🎨 [BG PIPELINE] 개인색 설정 활성화: scheme={scheme}, levels={other_levels}")
         else:
             logger.info(f"⚪ [BG PIPELINE] 개인색 설정 비활성화: personalized={personalized}, scheme={scheme}")
-        
+
         # 파이프라인 실행 (ThreadPoolExecutor 사용)
         loop = asyncio.get_running_loop()
         results = await loop.run_in_executor(
@@ -3755,7 +3789,8 @@ async def _generate_other_levels_background(image_path: Path, current_level: flo
             stem,
             format_ext,
             personalized,
-            scheme
+            scheme,
+            grade_filter
         )
         
         # 결과 로깅
@@ -3783,44 +3818,81 @@ def _generate_pyramid_bg_worker(image_path: Path, pyramid_path: Path, level: flo
         _pyramid_bg_generating.discard(path_key)
 
 
-def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format_ext: str, personalized: bool = False, scheme: Optional[str] = None):
+def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format_ext: str, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None):
     """원본 이미지를 한 번만 읽고 여러 레벨을 연속 생성하는 파이프라인
-    🔥 개인색 설정이 있으면 원본을 먼저 메모리에서 개인색으로 변경하고, 
+    🔥 Grade 필터 또는 개인색 설정이 있으면 원본을 먼저 메모리에서 변경하고,
     그 변경된 이미지로 모든 레벨을 생성"""
     import pyvips
     import time
-    
-    # 🔥 파이프라인 시작 시 개인색 설정 확인 및 로깅
-    logger.info(f"🎯 [PIPELINE START] levels={levels}, personalized={personalized}, scheme={scheme}, path={image_path.name}")
-    
-    # 🔥 개인색 설정 검증 (디버깅용)
+
+    # 🔥 파이프라인 시작 시 Grade 필터 또는 개인색 설정 확인 및 로깅
+    logger.info(f"🎯 [PIPELINE START] levels={levels}, personalized={personalized}, scheme={scheme}, grade_filter={grade_filter}, path={image_path.name}")
+
+    # 🔥 Grade 필터와 개인색 설정 검증 (디버깅용)
     if personalized and not scheme:
         logger.warning(f"⚠️ [PIPELINE] personalized=True인데 scheme이 None입니다! path={image_path.name}, levels={levels}")
         personalized = False  # scheme이 없으면 개인색 비활성화
-    
+
     try:
-        # 🔥 Step 1: 원본 이미지를 먼저 개인색으로 변경 (메모리에서)
+        # 🔥 Step 1: 원본 이미지를 먼저 Grade 필터 또는 개인색으로 변경 (메모리에서)
         original_image = None
-        if personalized and scheme and image_path.suffix.lower() == '.png':
+        if grade_filter and image_path.suffix.lower() == '.png':
+            # Grade 필터 (개인색 설정 먼저 적용 후 필터링)
+            try:
+                from .personal_colors import plte_grade_filter_memory, plte_inplace_patch_memory
+
+                logger.info(f"🎯 [PIPELINE] Grade 필터 적용 시작: grade_filter={grade_filter}, levels={levels}, path={image_path.name}")
+
+                # grade_filter 파싱: "3" 또는 "2,4,7"
+                grade_indices = [int(g.strip()) for g in grade_filter.split(',') if g.strip().isdigit()]
+
+                if grade_indices:
+                    # 1. 원본 PNG 파일 읽기
+                    with open(image_path, 'rb') as f:
+                        png_data = bytearray(f.read())
+
+                    # 2. 먼저 개인색 설정 적용 (Grade0-7을 인덱스 0-7로 매핑)
+                    if personalized and scheme:
+                        png_data = plte_inplace_patch_memory(png_data, scheme)
+                        logger.debug(f"🎨 [PIPELINE] 개인색 설정 먼저 적용: scheme={scheme}")
+
+                    # 3. 메모리에서 Grade PLTE 필터 적용 (인덱스 0-7 필터링)
+                    png_data = plte_grade_filter_memory(png_data, grade_indices)
+
+                    # 4. 필터링된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
+                    original_image = pyvips.Image.new_from_buffer(
+                        bytes(png_data),
+                        "",
+                        access='sequential',
+                        fail_on='none',
+                        memory=True,
+                        unlimited=True
+                    )
+                    logger.info(f"✅ [PIPELINE] 원본 이미지를 메모리에서 Grade 필터 완료: grade_filter={grade_filter}, size={original_image.width}x{original_image.height}, levels={levels}")
+            except Exception as e:
+                logger.warning(f"⚠️ [PIPELINE] Grade 필터 실패, 폴백: {e}", exc_info=True)
+                original_image = None
+        elif personalized and scheme and image_path.suffix.lower() == '.png':
+            # 개인색 설정
             try:
                 from .personal_colors import plte_inplace_patch_memory
-                
+
                 logger.info(f"🎨 [PIPELINE] 개인색 적용 시작: scheme={scheme}, levels={levels}, path={image_path.name}")
-                
+
                 # 원본 PNG 파일 읽기 및 PLTE 패치 (메모리에서)
                 with open(image_path, 'rb') as f:
                     png_data = bytearray(f.read())
-                
+
                 # 메모리에서 PLTE 패치 적용
                 png_data = plte_inplace_patch_memory(png_data, scheme)
-                
+
                 # 패치된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
                 original_image = pyvips.Image.new_from_buffer(
-                    bytes(png_data), 
-                    "", 
-                    access='sequential', 
-                    fail_on='none', 
-                    memory=True, 
+                    bytes(png_data),
+                    "",
+                    access='sequential',
+                    fail_on='none',
+                    memory=True,
                     unlimited=True
                 )
                 logger.info(f"✅ [PIPELINE] 원본 이미지를 메모리에서 개인색으로 변경 완료: scheme={scheme}, size={original_image.width}x{original_image.height}, levels={levels}")
@@ -3845,25 +3917,31 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
         
         for level in levels:
             try:
-                # 피라미드 경로 생성 (개인색 설정인 경우 scheme별 폴더 사용)
-                # 🔥 개인색 설정이 활성화되어 있으면 반드시 개인색 경로 사용
-                if personalized and scheme:
+                # 피라미드 경로 생성 (Grade 필터 또는 개인색 설정인 경우 별도 폴더 사용)
+                # 🔥 Grade 필터가 우선순위가 높음
+                if grade_filter:
+                    # Grade 필터 전용 피라미드 디렉토리
+                    grade_suffix = grade_filter.replace(',', '_')
+                    pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_grade_{grade_suffix}_{int(level*100)}"
+                    logger.debug(f"🎯 [PIPELINE] level={level}: Grade 필터 경로 사용, grade_filter={grade_filter}, dir={pyramid_dir.name}")
+                elif personalized and scheme:
+                    # 개인색 설정 피라미드 디렉토리
                     from .personal_colors import load_color_legends
                     legends = load_color_legends()
                     scheme_data = legends.get(scheme, {})
                     timestamp = scheme_data.get('lastModified')
-                    
+
                     if timestamp:
                         # scheme/timestamp 폴더 안에 pyramid_{level} 폴더 생성
                         pyramid_dir = config.THUMBNAIL_DIR / scheme / timestamp / f"pyramid_{int(level*100)}"
                     else:
                         # lastModified가 없으면 기존 방식 (하위 호환성)
                         pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{scheme}_{int(level*100)}"
-                    
+
                     # 🔥 개인색 설정이 활성화된 경우 비개인색 경로는 절대 사용하지 않음
                     logger.debug(f"🎨 [PIPELINE] level={level}: 개인색 경로 사용, scheme={scheme}, dir={pyramid_dir.name}")
                 else:
-                    # 🔥 개인색 설정이 비활성화된 경우에만 비개인색 경로 사용
+                    # 🔥 기본 피라미드 디렉토리
                     pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
                     if personalized and not scheme:
                         logger.warning(f"⚠️ [PIPELINE] level={level}: personalized=True인데 scheme이 None! 비개인색 경로 사용: {pyramid_dir.name}")
@@ -4193,7 +4271,8 @@ async def get_image(
     path: str,
     level: Optional[float] = None,
     personalized: bool = False,
-    scheme: Optional[str] = None
+    scheme: Optional[str] = None,
+    grade_filter: Optional[str] = None
 ):
     try:
         is_head = request.method == "HEAD"
@@ -4237,13 +4316,19 @@ async def get_image(
                 if not is_head:
                     logger.info(f"🎯 [LEVEL FIXED] {level}")
 
-            # 피라미드 디렉토리 생성 (개인색 설정인 경우 scheme별 폴더 사용)
-            if personalized and scheme:
+            # 🔥 Grade 필터와 개인색 설정은 동시에 사용할 수 없음
+            # Grade 필터가 우선순위가 높음
+            if grade_filter:
+                # Grade 필터 전용 피라미드 디렉토리
+                grade_suffix = grade_filter.replace(',', '_')
+                pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_grade_{grade_suffix}_{int(level*100)}"
+            elif personalized and scheme:
+                # 개인색 설정 피라미드 디렉토리
                 from .personal_colors import load_color_legends
                 legends = load_color_legends()
                 scheme_data = legends.get(scheme, {})
                 timestamp = scheme_data.get('lastModified')
-                
+
                 if timestamp:
                     # scheme/timestamp 폴더 안에 pyramid_{level} 폴더 생성
                     pyramid_dir = config.THUMBNAIL_DIR / scheme / timestamp / f"pyramid_{int(level*100)}"
@@ -4251,6 +4336,7 @@ async def get_image(
                     # lastModified가 없으면 기존 방식 (하위 호환성)
                     pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{scheme}_{int(level*100)}"
             else:
+                # 기본 피라미드 디렉토리
                 pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
             pyramid_dir.mkdir(parents=True, exist_ok=True)
 
@@ -4340,15 +4426,15 @@ async def get_image(
                         return response
 
             # 캐시 미스: 피라미드 이미지 생성
-            # 🔥 개인색 설정이 있으면 _generate_pyramid_sync에서 메모리에서 직접 처리
+            # 🔥 개인색 설정 또는 Grade 필터가 있으면 _generate_pyramid_sync에서 메모리에서 직접 처리
             # (임시 파일 생성 제거, 메모리에서 직접 PLTE 패치 후 pyvips로 로드)
             if not is_head:
-                logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}, path={pyramid_path}, personalized={personalized}, scheme={scheme}")
-            _generate_pyramid_sync(image_path, pyramid_path, level, personalized=personalized, scheme=scheme)
+                logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}, path={pyramid_path}, personalized={personalized}, scheme={scheme}, grade_filter={grade_filter}")
+            _generate_pyramid_sync(image_path, pyramid_path, level, personalized=personalized, scheme=scheme, grade_filter=grade_filter)
 
             # 🔥 Background에서 다른 레벨들도 생성 시작 (사용자 대기 없음)
-            # 개인별 설정이 활성화된 경우 background에서도 동일한 설정으로 생성
-            asyncio.create_task(_generate_other_levels_background(image_path, level, stem, personalized=personalized, scheme=scheme))
+            # 개인별 설정 또는 Grade 필터가 활성화된 경우 background에서도 동일한 설정으로 생성
+            asyncio.create_task(_generate_other_levels_background(image_path, level, stem, personalized=personalized, scheme=scheme, grade_filter=grade_filter))
 
             # 생성된 파일 확인 및 반환
             if pyramid_path.exists():
@@ -4372,21 +4458,62 @@ async def get_image(
                     logger.error(f"❌ [GENERATION FAILED] {pyramid_path}")
                 raise HTTPException(status_code=500, detail="Pyramid generation failed")
         else:
-            # 원본 이미지 반환 (개인색 설정 적용)
+            # 원본 이미지 반환 (개인색 설정 적용 또는 Grade 필터링)
             if not is_head:
-                logger.info(f"🎯 [ORIGINAL MODE] {image_path} - personalized={personalized}, scheme={scheme}")
-            
-            # 🔥 개인색 설정이 활성화되고 PNG인 경우 PLTE 패치 적용
-            if personalized and scheme and image_path.suffix.lower() == '.png':
+                logger.info(f"🎯 [ORIGINAL MODE] {image_path} - personalized={personalized}, scheme={scheme}, grade_filter={grade_filter}")
+
+            # 🔥 Grade 필터링이 활성화되고 PNG인 경우 PLTE Grade 필터 적용
+            # 개인색 설정을 먼저 적용한 후 Grade 필터 적용
+            if grade_filter and image_path.suffix.lower() == '.png':
+                try:
+                    from .personal_colors import plte_grade_filter_memory, plte_inplace_patch_memory
+
+                    # grade_filter 파싱: "3" 또는 "2,4,7"
+                    grade_indices = [int(g.strip()) for g in grade_filter.split(',') if g.strip().isdigit()]
+
+                    if grade_indices:
+                        # 1. 원본 이미지 파일 읽기
+                        with open(image_path, 'rb') as f:
+                            png_data = bytearray(f.read())
+
+                        # 2. 먼저 개인색 설정 적용 (Grade0-7을 인덱스 0-7로 매핑)
+                        if personalized and scheme:
+                            png_data = plte_inplace_patch_memory(png_data, scheme)
+                            if not is_head:
+                                logger.info(f"🎨 [GRADE FILTER] 개인색 설정 먼저 적용: scheme={scheme}")
+
+                        # 3. 그 다음 Grade 필터 적용 (인덱스 0-7 필터링)
+                        png_data = plte_grade_filter_memory(png_data, grade_indices)
+
+                        # 메모리에서 직접 반환
+                        headers = {
+                            "Cache-Control": "public, max-age=3600",
+                            "Content-Type": "image/png",
+                            "X-Grade-Filter": grade_filter
+                        }
+                        if personalized and scheme:
+                            headers["X-Personalized"] = "true"
+                            headers["X-Scheme"] = scheme
+
+                        if not is_head:
+                            logger.info(f"✅ [GRADE FILTER] Grade {grade_filter} 필터링 완료: {image_path.name}")
+
+                        return Response(content=bytes(png_data), headers=headers, media_type="image/png")
+                except Exception as e:
+                    logger.warning(f"⚠️ [GRADE FILTER] PLTE 필터 실패, 원본 반환: {e}", exc_info=True)
+                    # 폴백: 원본 이미지 반환
+
+            # 🔥 개인색 설정이 활성화되고 PNG인 경우 PLTE 패치 적용 (grade_filter가 없을 때만)
+            elif personalized and scheme and image_path.suffix.lower() == '.png':
                 try:
                     from .personal_colors import plte_inplace_patch_memory
-                    
+
                     # 원본 이미지 파일 읽기 및 PLTE 패치
                     with open(image_path, 'rb') as f:
                         png_data = bytearray(f.read())
-                    
+
                     png_data = plte_inplace_patch_memory(png_data, scheme)
-                    
+
                     # 메모리에서 직접 반환
                     headers = {
                         "Cache-Control": "public, max-age=3600",
@@ -4394,10 +4521,10 @@ async def get_image(
                         "X-Personalized": "true",
                         "X-Scheme": scheme
                     }
-                    
+
                     if not is_head:
                         logger.info(f"✅ [ORIGINAL PLTE] 색 변경 완료: {image_path.name}")
-                    
+
                     return Response(content=bytes(png_data), headers=headers, media_type="image/png")
                 except Exception as e:
                     logger.warning(f"⚠️ [ORIGINAL PLTE] PLTE 패치 실패, 원본 반환: {e}", exc_info=True)

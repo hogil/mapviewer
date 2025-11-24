@@ -1717,10 +1717,22 @@
             justify-content: space-between;
             margin-bottom: 4px;
             font-size: 11px;
+            padding: 2px 4px;
+            border-radius: 3px;
+            transition: background-color 0.15s ease;
         }
 
         .legend-item:last-child {
             margin-bottom: 0;
+        }
+
+        .legend-item:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .legend-item.selected {
+            background-color: rgba(0, 123, 255, 0.3);
+            border: 1px solid rgba(0, 123, 255, 0.6);
         }
 
         .legend-label {

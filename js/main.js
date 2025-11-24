@@ -898,6 +898,9 @@ class WaferMapViewer {
         // 개인색 설정 상태 (기본값: false)
         this.personalizedColorEnabled = true; // 🔥 기본값: 개인색 설정 활성화
 
+        // Grade 필터링 상태
+        this.selectedGrades = new Set();  // 선택된 Grade 인덱스들
+
         // Color Legends 데이터
         this.colorLegends = null;
         this.currentUser = null; // ✅ 초기값: null (아직 결정 안 됨, loadUserInfo()에서 설정됨)
@@ -952,6 +955,8 @@ class WaferMapViewer {
 
         this.bindClassModeEvents();
         this.bindChipLegendEvents();
+
+        this.bindGradeFilterEvents();
 
         // T 키 토글 제거 - Navigator는 이미지 1개 보기 모드에서만 자동 표시됨
     }
@@ -4571,12 +4576,19 @@ class WaferMapViewer {
         }
         
         let params = `&personalized=true&scheme=${encodeURIComponent(scheme)}`;
-        
+
         // cacheBuster 추가
         if (this._personalizedColorCacheBuster) {
             params += `&_t=${this._personalizedColorCacheBuster}`;
         }
-        
+
+        // 🔥 Grade 필터 추가 (personalized와 함께 사용)
+        if (this.selectedGrades.size > 0) {
+            const gradeList = Array.from(this.selectedGrades).sort((a, b) => a - b).join(',');
+            // Grade 필터를 params에 추가 (personalized colors 먼저 적용 후 필터링)
+            params += `&grade_filter=${gradeList}`;
+        }
+
         // 디버그 로그 제거 (너무 자주 출력됨)
         // console.log(`PARAMS: Final params='${params}', scheme='${scheme}', currentUser='${this.currentUser}', enabled=${this.personalizedColorEnabled}`);
         return params;
@@ -18035,6 +18047,115 @@ class WaferMapViewer {
         this.dom.chipLabelLegend.addEventListener('click', (event) => this.handleChipLabelLegendClick(event));
     }
 
+    /**
+     * Grade 필터 이벤트 등록 (Color Legend Top 항목 클릭)
+     */
+    bindGradeFilterEvents() {
+        // Color Legend Top 클릭 이벤트
+        if (this.dom.colorLegendTop) {
+            this.dom.colorLegendTop.addEventListener('click', (e) => {
+                const legendItem = e.target.closest('.legend-item[data-section="top"]');
+                if (!legendItem) return;
+
+                const key = legendItem.getAttribute('data-key');
+                if (!key || !key.startsWith('Grade')) return;
+
+                const gradeIndex = parseInt(key.replace('Grade', ''));
+                if (isNaN(gradeIndex) || gradeIndex < 0 || gradeIndex > 7) return;
+
+                e.preventDefault();
+                this.onGradeButtonClick(gradeIndex, e.ctrlKey || e.metaKey);
+            });
+
+            // 오른쪽 클릭: 모든 선택 해제 및 기본 context menu 방지
+            this.dom.colorLegendTop.addEventListener('contextmenu', (e) => {
+                // 🔥 Color Legend Top에서는 항상 기본 context menu 방지
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+
+                const legendItem = e.target.closest('.legend-item[data-section="top"]');
+                if (!legendItem) return;
+
+                const key = legendItem.getAttribute('data-key');
+                if (!key || !key.startsWith('Grade')) return;
+
+                this.clearGradeFilter();
+            });
+        }
+    }
+
+    /**
+     * Grade 버튼 클릭 핸들러
+     * @param {number} gradeIndex - Grade 인덱스 (0-7)
+     * @param {boolean} ctrlKey - Ctrl 키 누름 여부
+     */
+    async onGradeButtonClick(gradeIndex, ctrlKey) {
+        const wasSelected = this.selectedGrades.has(gradeIndex);
+
+        if (ctrlKey) {
+            // Ctrl 클릭: 다중 선택 토글
+            if (wasSelected) {
+                this.selectedGrades.delete(gradeIndex);  // 토글 off
+            } else {
+                this.selectedGrades.add(gradeIndex);     // 토글 on
+            }
+        } else {
+            // 일반 클릭: 단일 선택
+            this.selectedGrades.clear();
+            this.selectedGrades.add(gradeIndex);
+        }
+
+        // 필터 적용 및 UI 업데이트
+        await this.applyGradeFilter();
+        this.updateGradeButtonUI();
+    }
+
+    /**
+     * Grade 필터 해제
+     */
+    async clearGradeFilter() {
+        if (this.selectedGrades.size === 0) return;
+
+        this.selectedGrades.clear();
+        await this.applyGradeFilter();
+        this.updateGradeButtonUI();
+    }
+
+    /**
+     * Grade 필터 적용 (이미지 다시 로드)
+     */
+    async applyGradeFilter() {
+        if (!this.selectedImagePath) return;
+
+        // 현재 이미지 재로드
+        await this.loadImage(this.selectedImagePath);
+    }
+
+    /**
+     * Grade 항목 UI 업데이트 (Color Legend Top)
+     */
+    updateGradeButtonUI() {
+        if (!this.dom.colorLegendTop) return;
+
+        // Color Legend Top의 모든 Grade 항목 찾기
+        const gradeItems = this.dom.colorLegendTop.querySelectorAll('.legend-item[data-section="top"]');
+
+        gradeItems.forEach(item => {
+            const key = item.getAttribute('data-key');
+            if (!key || !key.startsWith('Grade')) return;
+
+            const gradeIndex = parseInt(key.replace('Grade', ''));
+            if (isNaN(gradeIndex)) return;
+
+            if (this.selectedGrades.has(gradeIndex)) {
+                item.classList.add('selected');
+            } else {
+                item.classList.remove('selected');
+            }
+        });
+    }
+
     updateChipLabelLegend(markedChips = []) {
         const chips = Array.isArray(markedChips) ? markedChips : [];
         const counts = new Map();
@@ -18305,6 +18426,9 @@ class WaferMapViewer {
         } else {
             this.dom.colorLegendBottom.innerHTML = '';
         }
+
+        // 🔥 Grade 필터 UI 업데이트 (선택 상태 유지)
+        this.updateGradeButtonUI();
     }
     
     /**

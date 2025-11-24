@@ -317,6 +317,83 @@ def plte_inplace_patch_memory(png_data: bytearray, scheme: str) -> bytearray:
     return png_data
 
 
+def plte_grade_filter_memory(png_data: bytearray, grade_indices: List[int]) -> bytearray:
+    """
+    메모리 상태에서 PLTE Grade 필터링 (선택된 grade만 색상 유지, Grade 0-7만 필터링).
+
+    PNG 파일의 PLTE 청크를 수정하여 선택된 Grade 인덱스만 색상을 유지하고
+    선택되지 않은 Grade 인덱스(0-7)는 흰색(255, 255, 255)으로 변경합니다.
+
+    중요: 팔레트 인덱스 8 이상(Normal, Invalid, B285 등)은 그대로 유지됩니다.
+
+    Args:
+        png_data: PNG 파일의 바이트 데이터 (bytearray)
+        grade_indices: 유지할 Grade 인덱스 리스트 (예: [3, 5, 7])
+
+    Returns:
+        수정된 PNG 바이트 데이터 (bytearray)
+    """
+    # Set으로 변환하여 O(1) 조회
+    grade_set = set(grade_indices)
+    logger.info("🔍 Grade 필터 적용: grade_indices=%s", grade_indices)
+
+    # PNG 청크 찾기
+    pos = 8  # PNG 시그니처 건너뛰기
+
+    while pos < len(png_data):
+        if pos + 4 > len(png_data):
+            break
+        chunk_length = struct.unpack('>I', png_data[pos:pos+4])[0]
+        pos += 4
+
+        if pos + 4 > len(png_data):
+            break
+        chunk_type = png_data[pos:pos+4]
+        pos += 4
+
+        if chunk_type == b'PLTE':
+            # PLTE 데이터 수정
+            plte_start = pos
+            plte_end = pos + chunk_length
+
+            # 기존 PLTE 데이터 읽기
+            current_plte = list(png_data[plte_start:plte_end])
+            num_colors = len(current_plte) // 3
+            logger.info("🎨 PLTE 청크 발견: chunk_length=%d, 팔레트 색상 수=%d", chunk_length, num_colors)
+
+            # 팔레트 필터링: Grade 0-7 중 선택되지 않은 것만 흰색으로 변경
+            # 인덱스 8 이상(Normal, Invalid 등)은 그대로 유지
+            new_plte = current_plte[:]
+
+            # Grade 0-7만 필터링 (팔레트 인덱스 0-7)
+            modified_indices = []
+            for i in range(min(8, num_colors)):
+                if i not in grade_set:
+                    # 흰색으로 변경
+                    new_plte[i * 3] = 255      # R
+                    new_plte[i * 3 + 1] = 255  # G
+                    new_plte[i * 3 + 2] = 255  # B
+                    modified_indices.append(i)
+
+            logger.info("✏️  필터링된 인덱스: %s (흰색으로 변경)", modified_indices)
+            logger.info("✅ 유지된 인덱스: %s", list(grade_set))
+
+            # PLTE 데이터 교체
+            png_data[plte_start:plte_end] = new_plte
+
+            # CRC 재계산 및 수정
+            crc_data = chunk_type + bytes(new_plte)
+            crc = zlib.crc32(crc_data) & 0xffffffff
+
+            if plte_end + 4 <= len(png_data):
+                png_data[plte_end:plte_end+4] = struct.pack('>I', crc)
+            break
+
+        pos += chunk_length + 4
+
+    return png_data
+
+
 __all__ = [
     "load_color_legends",
     "save_color_legends",
@@ -325,4 +402,5 @@ __all__ = [
     "apply_personalized_palette",
     "swap_first16_colors",
     "plte_inplace_patch_memory",
+    "plte_grade_filter_memory",
 ]
