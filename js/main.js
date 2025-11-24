@@ -901,6 +901,10 @@ class WaferMapViewer {
         // Grade 필터링 상태
         this.selectedGrades = new Set();  // 선택된 Grade 인덱스들
 
+        // Bottom (Chip) 필터링 상태
+        this.selectedBottoms = new Set();  // 선택된 Bottom 값들 (285, 286, 287, 288 등)
+        this.positionsData = null;  // Positions JSON 데이터 캐시
+
         // Color Legends 데이터
         this.colorLegends = null;
         this.currentUser = null; // ✅ 초기값: null (아직 결정 안 됨, loadUserInfo()에서 설정됨)
@@ -957,6 +961,7 @@ class WaferMapViewer {
         this.bindChipLegendEvents();
 
         this.bindGradeFilterEvents();
+        this.bindBottomFilterEvents();
 
         // T 키 토글 제거 - Navigator는 이미지 1개 보기 모드에서만 자동 표시됨
     }
@@ -9067,6 +9072,13 @@ class WaferMapViewer {
             }
 
             this.selectedImagePath = fullPath;  // 🔥 fullPath 사용 (prefix 포함)
+
+            // 🔥 새로운 이미지 로드 시 Bottom 필터 상태 초기화
+            this.selectedBottoms.clear();
+            if (this.chipAnnotator) {
+                this.chipAnnotator.setBottomFilter(null);
+            }
+            this.updateBottomButtonUI();
 
             this.pyramidLevels = {}; // 레벨별 캐시 초기화
             this.pyramidLoadingLevels = new Set(); // 로딩 중인 레벨 추적
@@ -18086,6 +18098,47 @@ class WaferMapViewer {
     }
 
     /**
+     * Bottom 필터 이벤트 등록 (Color Legend Bottom 항목 클릭)
+     */
+    bindBottomFilterEvents() {
+        // Color Legend Bottom 클릭 이벤트
+        if (this.dom.colorLegendBottom) {
+            this.dom.colorLegendBottom.addEventListener('click', (e) => {
+                const legendItem = e.target.closest('.legend-item[data-section="bottom"]');
+                if (!legendItem) return;
+
+                const key = legendItem.getAttribute('data-key');
+                if (!key) return;
+
+                // B285, B286, B287, B288만 처리 (B 접두사 제거하여 숫자 추출)
+                if (key.startsWith('B')) {
+                    const bottomValue = parseInt(key.substring(1));
+                    if (isNaN(bottomValue)) return;
+
+                    e.preventDefault();
+                    this.onBottomButtonClick(bottomValue, e.ctrlKey || e.metaKey);
+                }
+                // TODO: Normal, Invalid 처리 (필요 시 추가)
+            });
+
+            // 오른쪽 클릭: 모든 선택 해제
+            this.dom.colorLegendBottom.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+
+                const legendItem = e.target.closest('.legend-item[data-section="bottom"]');
+                if (!legendItem) return;
+
+                const key = legendItem.getAttribute('data-key');
+                if (!key) return;
+
+                this.clearBottomFilter();
+            });
+        }
+    }
+
+    /**
      * Grade 버튼 클릭 핸들러
      * @param {number} gradeIndex - Grade 인덱스 (0-7)
      * @param {boolean} ctrlKey - Ctrl 키 누름 여부
@@ -18149,6 +18202,78 @@ class WaferMapViewer {
             if (isNaN(gradeIndex)) return;
 
             if (this.selectedGrades.has(gradeIndex)) {
+                item.classList.add('selected');
+            } else {
+                item.classList.remove('selected');
+            }
+        });
+    }
+
+    /**
+     * Bottom 버튼 클릭 핸들러
+     * @param {number} bottomValue - Bottom 값 (285, 286, 287, 288)
+     * @param {boolean} ctrlKey - Ctrl 키 누름 여부
+     */
+    async onBottomButtonClick(bottomValue, ctrlKey) {
+        const wasSelected = this.selectedBottoms.has(bottomValue);
+
+        if (ctrlKey) {
+            // Ctrl 클릭: 다중 선택 토글
+            if (wasSelected) {
+                this.selectedBottoms.delete(bottomValue);
+            } else {
+                this.selectedBottoms.add(bottomValue);
+            }
+        } else {
+            // 일반 클릭: 단일 선택
+            this.selectedBottoms.clear();
+            this.selectedBottoms.add(bottomValue);
+        }
+
+        // 필터 적용 및 UI 업데이트
+        await this.applyBottomFilter();
+        this.updateBottomButtonUI();
+    }
+
+    /**
+     * Bottom 필터 해제
+     */
+    async clearBottomFilter() {
+        if (this.selectedBottoms.size === 0) return;
+
+        this.selectedBottoms.clear();
+        await this.applyBottomFilter();
+        this.updateBottomButtonUI();
+    }
+
+    /**
+     * Bottom 필터 적용 (오버레이 렌더링)
+     */
+    async applyBottomFilter() {
+        if (!this.selectedImagePath) return;
+
+        if (this.chipAnnotator) {
+            this.chipAnnotator.setBottomFilter(this.selectedBottoms);
+        }
+    }
+
+    /**
+     * Bottom 항목 UI 업데이트 (Color Legend Bottom)
+     */
+    updateBottomButtonUI() {
+        if (!this.dom.colorLegendBottom) return;
+
+        // Color Legend Bottom의 모든 항목 찾기
+        const bottomItems = this.dom.colorLegendBottom.querySelectorAll('.legend-item[data-section="bottom"]');
+
+        bottomItems.forEach(item => {
+            const key = item.getAttribute('data-key');
+            if (!key || !key.startsWith('B')) return;
+
+            const bottomValue = parseInt(key.substring(1));
+            if (isNaN(bottomValue)) return;
+
+            if (this.selectedBottoms.has(bottomValue)) {
                 item.classList.add('selected');
             } else {
                 item.classList.remove('selected');
@@ -18429,8 +18554,10 @@ class WaferMapViewer {
 
         // 🔥 Grade 필터 UI 업데이트 (선택 상태 유지)
         this.updateGradeButtonUI();
+        // 🔥 Bottom 필터 UI 업데이트 (선택 상태 유지)
+        this.updateBottomButtonUI();
     }
-    
+
     /**
      * Render color legend for grid mode (horizontal layout)
      */

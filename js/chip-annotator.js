@@ -25,6 +25,7 @@ export class ChipAnnotator {
         this.selectedChips = new Set(); // Set of chip indices
         this.selectedChipsOrder = []; // 🔥 선택 순서 추적 (항상 맨 밑에 추가)
         this.legendFilterClasses = null;
+        this.bottomFilterSet = new Set(); // 🔥 Bottom Filter (Chip b-value based mask)
         this.classColors = new Map();
         this.classColorPalette = [
             [239, 83, 80],
@@ -200,6 +201,21 @@ export class ChipAnnotator {
         }
         this.render();
         this.updateSelectedChipsList();
+    }
+
+    /**
+     * Set Bottom Filter (Chip b-value based mask)
+     * @param {Set|Array} filterSet - Set of b-values to keep visible (others masked white)
+     */
+    setBottomFilter(filterSet) {
+        if (filterSet instanceof Set) {
+            this.bottomFilterSet = new Set(filterSet);
+        } else if (Array.isArray(filterSet)) {
+            this.bottomFilterSet = new Set(filterSet);
+        } else {
+            this.bottomFilterSet.clear();
+        }
+        this.render();
     }
 
     _refreshClassColors() {
@@ -987,6 +1003,29 @@ export class ChipAnnotator {
         ctx.resetTransform();
         
         ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+        // 🔥 Bottom Filter Mask: Mask ONLY unselected chips (preserve background/text)
+        if (this.bottomFilterSet.size > 0) {
+            const transform = this.viewer.transform;
+            const Y_OFFSET = -55; // Match _drawChipRect logic
+
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+
+            this.chips.forEach(chip => {
+                // If chip is NOT in the selected set, cover it with white
+                if (chip && !this.bottomFilterSet.has(chip.b)) {
+                    const rect = chip.rect;
+                    
+                    // Calculate canvas coordinates (same as _drawChipRect)
+                    const x = rect.x0 * transform.scale + transform.dx;
+                    const y = rect.y0 * transform.scale + transform.dy + Y_OFFSET;
+                    const w = (rect.x1 - rect.x0) * transform.scale;
+                    const h = (rect.y1 - rect.y0) * transform.scale;
+                    
+                    ctx.fillRect(x, y, w, h);
+                }
+            });
+        }
 
         // Draw grid if enabled
         if (this.showGrid) {
