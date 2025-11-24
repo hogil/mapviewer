@@ -350,6 +350,10 @@ export class ChipAnnotator {
 
             if (imgX >= rect.x0 && imgX <= rect.x1 &&
                 imgY >= rect.y0 && imgY <= rect.y1) {
+                // 🔥 Bottom Filter가 활성화된 경우, 가려진 칩은 선택 불가
+                if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(String(chip.b))) {
+                    return null;
+                }
                 return { ...chip, index: i };
             }
         }
@@ -372,6 +376,10 @@ export class ChipAnnotator {
             const chip = this.chips[i];
             if (chip.x_abs >= minX && chip.x_abs <= maxX &&
                 chip.y_abs >= minY && chip.y_abs <= maxY) {
+                // 🔥 Bottom Filter가 활성화된 경우, 가려진 칩은 선택 불가
+                if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(String(chip.b))) {
+                    continue;
+                }
                 selected.push(i);
             }
         }
@@ -1418,6 +1426,7 @@ export class ChipAnnotator {
                 // 🔥 칩이 없는 곳 Ctrl+클릭: 선택 해제
                 this.selectedChips.clear();
                 this.selectedChipsOrder = []; // 🔥 선택 순서도 초기화
+                this.updateSelectedChipsList(); // 🔥 Selection 패널 즉시 업데이트
                 this.render();
             }
             return;
@@ -1592,9 +1601,10 @@ export class ChipAnnotator {
                 // 🔥 드래그가 발생하지 않았을 때: 선택 해제 (칩이 있는 곳을 클릭해도 해제)
                 this.selectedChips.clear();
                 this.selectedChipsOrder = []; // 🔥 선택 순서도 초기화
+                this.updateSelectedChipsList(); // 🔥 Selection 패널 즉시 업데이트
                 console.log('🖱️ [CLICK] 선택 해제');
             }
-            
+
             // 상태 초기화
             this.clickStartPos = null;
             this.hasDragged = false;
@@ -1708,6 +1718,11 @@ export class ChipAnnotator {
             const chip = this.chips[i];
             const rect = chip.rect;
 
+            // 🔥 Bottom Filter가 활성화된 경우, 가려진 칩은 선택 불가
+            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(String(chip.b))) {
+                continue;
+            }
+
             // Convert chip center to canvas coordinates (Y_OFFSET 적용)
             const chipCenterX = ((rect.x0 + rect.x1) / 2) * transform.scale + transform.dx;
             const chipCenterY = ((rect.y0 + rect.y1) / 2) * transform.scale + transform.dy + Y_OFFSET;
@@ -1736,6 +1751,11 @@ export class ChipAnnotator {
         for (let i = 0; i < this.chips.length; i++) {
             const chip = this.chips[i];
             const rect = chip.rect;
+
+            // 🔥 Bottom Filter가 활성화된 경우, 가려진 칩은 선택 불가
+            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(String(chip.b))) {
+                continue;
+            }
 
             // Convert chip center to canvas coordinates (Y_OFFSET 적용)
             const chipCenterX = ((rect.x0 + rect.x1) / 2) * transform.scale + transform.dx;
@@ -1812,6 +1832,49 @@ export class ChipAnnotator {
                 e.preventDefault();
             }
         }
+
+        // Ctrl+A: Select all visible chips (excluding bottom-filtered chips)
+        if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+            // Only handle in single image mode (not in grid mode)
+            if (this.viewer && !this.viewer.gridMode && this.chips.length > 0) {
+                e.preventDefault();
+                this.selectAllVisibleChips();
+            }
+        }
+    }
+
+    /**
+     * Select all visible chips (excluding bottom-filtered chips)
+     */
+    selectAllVisibleChips() {
+        if (!this.chips || this.chips.length === 0) {
+            console.warn('⚠️ No chips available to select');
+            return;
+        }
+
+        const newSelections = [];
+
+        this.chips.forEach((chip, index) => {
+            // Skip chips filtered out by Bottom Legend
+            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(String(chip.b))) {
+                return;
+            }
+            newSelections.push(index);
+        });
+
+        // Clear existing selection and add all visible chips
+        this.selectedChips.clear();
+        this.selectedChipsOrder = [];
+
+        newSelections.forEach(idx => {
+            this.selectedChips.add(idx);
+            this.selectedChipsOrder.push(idx);
+        });
+
+        this.render();
+        this.updateSelectedChipsList();
+
+        console.log(`✅ [CTRL+A] Selected ${newSelections.length} visible chips (Total: ${this.chips.length}, Filtered: ${this.chips.length - newSelections.length})`);
     }
 
     /**

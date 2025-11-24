@@ -1829,9 +1829,9 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin-bottom: 4px;
+            margin-bottom: 1px;
             font-size: 11px;
-            padding: 2px 4px;
+            padding: 1px 4px;
             border-radius: 3px;
             transition: background-color 0.15s ease;
         }
@@ -1846,7 +1846,7 @@
 
         .legend-item.selected {
             background-color: rgba(0, 123, 255, 0.3);
-            border: 1px solid rgba(0, 123, 255, 0.6);
+            box-shadow: inset 0 0 0 1px rgba(0, 123, 255, 0.6);
         }
 
         .legend-label {
@@ -3096,20 +3096,20 @@
                         height: 100%;
                         display: flex;
                         align-items: center;
-                        justify-content: space-between;
-                        gap: 10px;
+                        justify-content: center;
+                        position: relative;
                         padding: 0 18px;
                         font-weight: 600;
                         font-size: 18px;
                         white-space: nowrap;
                         overflow: hidden;
                     ">
-                        <div style="display: flex; align-items: center; gap: 10px; overflow: hidden; flex: 1; min-width: 0;">
+                        <div style="display: flex; align-items: center; gap: 10px; overflow: hidden; max-width: 60%;">
                             <span id="file-path-text" style="font-size: 18px; color: #ccc; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></span>
                             <span id="separator-text" style="opacity: 0.6;">—</span>
                             <span id="file-name-text" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></span>
                         </div>
-                        <div style="display: flex; gap: 8px; flex-shrink: 0;">
+                        <div style="display: flex; gap: 8px; position: absolute; right: 18px;">
                             <button id="ref-map-btn-filename" class="grid-btn" data-ref-map-btn style="padding: 6px 12px; font-size: 12px; background: #444; border: 1px solid #666; flex-shrink: 0;" title="Reference Map 보기">📌 Ref Map</button>
                             <button id="my-lot-btn-filename" class="grid-btn" data-my-lot-btn style="padding: 6px 12px; font-size: 12px; background: #2f6fed; border: 1px solid #1c50b5; flex-shrink: 0;" title="MY LOT 보기">MY LOT</button>
                         </div>
@@ -3221,9 +3221,9 @@
             📥 선택 파일 다운로드
         </div>
         <div class="context-menu-item" id="context-merge-copy" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">
-            🖼️ 이미지 합쳐서 클립보드 복사
+            🖼️ 선택한 이미지 복사 (Legend 포함)
         </div>
-                            <div class="context-menu-item" id="context-list-copy" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">
+        <div class="context-menu-item" id="context-list-copy" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">
                         📋 선택 리스트 복사(YMS 방식)
                     </div>
                     <div class="context-menu-item" id="context-table-copy" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">
@@ -3652,7 +3652,7 @@
     <script defer src="/js/semiconductor-renderer.js"></script>
 
     <!-- 🚀 ES6 모듈로 로드 (최적화) -->
-    <script type="module" src="/js/main.js"></script>
+    <script type="module" src="/js/main.js?v=cachebust1"></script>
 
     <!-- 리팩토링된 모듈 방식 (디버깅 후 다시 활성화 예정) -->
     <!-- <script type="module" src="/js/main-refactored.js"></script> -->

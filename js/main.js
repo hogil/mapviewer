@@ -16,7 +16,7 @@ import { ChipAnnotator } from './chip-annotator.js';
 import { ThumbnailNavigator } from './thumbnail-navigator.js';
 import { CompositeColorModal } from './composite-colors.js';
 import { MyLotModal } from './my-lot.js';
-import { ContextMenuManager } from './context-menu.js';
+import { ContextMenuManager } from './context-menu.js?v=2';
 
 // Constants
 
@@ -984,19 +984,34 @@ class WaferMapViewer {
                 this.handleMouseDown(e);
             });
 
-        // 싱글 이미지 모드에서 우클릭 시 원본 파일을 바로 저장
-
-        if (this.dom.viewerContainer)
-
-            this.dom.viewerContainer.addEventListener('contextmenu', e => {
+        // 싱글 이미지 모드에서 우클릭 시 컨텍스트 메뉴 표시 (컨테이너/캔버스/오버레이 모두에서 동작)
+        const bindSingleContextMenu = (el, preferChipMenu = false) => {
+            if (!el) return;
+            el.addEventListener('contextmenu', e => {
                 if (this.gridMode) return; // 그리드 모드에서는 기존 컨텍스트 사용
-
                 if (!this.selectedImagePath) return;
-
                 e.preventDefault();
-
+                e.stopPropagation();
+                // 칩이 선택돼 있으면 칩 컨텍스트 메뉴 우선
+                if (preferChipMenu && this.chipAnnotator) {
+                    const chips = this.chipAnnotator.getSelectedChipData?.() || [];
+                    if (chips.length > 0) {
+                        this.showChipContextMenu(e, chips);
+                        return;
+                    }
+                }
                 this.showSingleContextMenu(e);
             });
+        };
+        if (this.dom.viewerContainer) {
+            bindSingleContextMenu(this.dom.viewerContainer, true);
+        }
+        if (this.dom.imageCanvas) {
+            bindSingleContextMenu(this.dom.imageCanvas, true);
+        }
+        if (this.dom.overlayCanvas) {
+            bindSingleContextMenu(this.dom.overlayCanvas, true);
+        }
 
         // 🔥 Overlay canvas 우클릭 이벤트: Chip context menu
         if (this.dom.overlayCanvas) {
@@ -7239,29 +7254,42 @@ class WaferMapViewer {
 
             // Canvas 생성
 
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
+        const canvas = document.createElement('canvas');
 
-            // 🔥 고품질 이미지 리샘플링 활성화 (이미지 스무딩 ON)
-            ctx.imageSmoothingEnabled = true;
-            ctx.imageSmoothingQuality = 'high';
+        // 각 이미지 크기 (512px로 설정)
+        const imageSize = 512;
+        const filenameHeight = 32; // 파일명 표시 영역
+        const rowPadding = 20; // 파일명과 다음 이미지 사이 여백
+        const cellHeight = imageSize + filenameHeight + rowPadding;
 
-            // 각 이미지 크기 (512px로 설정)
+        const canvasWidth = cols * imageSize;
+        canvas.width = canvasWidth;
 
-            const imageSize = 512;
-            const filenameHeight = 32; // 파일명 표시 영역
-            const rowPadding = 20; // 파일명과 다음 이미지 사이 여백
-            const cellHeight = imageSize + filenameHeight + rowPadding;
+        // ✅ legend 데이터를 준비하고 높이를 먼저 계산
+        const legendData = await this.getLegendDataForExport();
+        const measureCtx = canvas.getContext('2d');
+        const legendHeight = this.calculateLegendHeightForExport(measureCtx, legendData, canvasWidth);
 
-            canvas.width = cols * imageSize;
+        canvas.height = legendHeight + (rows * cellHeight);
 
-            canvas.height = rows * cellHeight;
+        // 높이를 갱신하면 컨텍스트 상태가 초기화되므로 다시 가져옴
+        const ctx = canvas.getContext('2d');
 
-            // 배경을 흰색으로 설정
+        // 🔥 고품질 이미지 리샘플링 활성화 (이미지 스무딩 ON)
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
 
-            ctx.fillStyle = '#FFFFFF';
+        const hasLegend = legendHeight > 0;
+        const backgroundColor = hasLegend ? '#1e1e1e' : '#FFFFFF';
+        const filenameColor = hasLegend ? '#cccccc' : '#000000';
 
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        // 배경을 상황에 맞게 채우기
+        ctx.fillStyle = backgroundColor;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        if (hasLegend) {
+            this.drawExportColorLegend(ctx, legendData, canvasWidth, legendHeight);
+        }
 
             // 🔥 정렬된 그리드의 실제 이미지 경로 사용 (정렬된 인덱스로 정렬된 리스트에서 가져오기)
             const gridImages = this.currentGridImages || this.selectedImages;
@@ -7277,7 +7305,7 @@ class WaferMapViewer {
                         const row = Math.floor(index / cols);
                         const col = index % cols;
                         const x = col * imageSize;
-                        const y = row * cellHeight;
+                        const y = legendHeight + (row * cellHeight);
 
                         // 이미지를 비율 유지하며 중앙 정렬로 그리기
 
@@ -7301,7 +7329,7 @@ class WaferMapViewer {
                         // 2depth 폴더명과 파일명을 한 줄로 결합
                         let displayName = folderName ? `${folderName}/${nameWithoutExt}` : nameWithoutExt;
                         
-                        ctx.fillStyle = '#000000';
+                        ctx.fillStyle = filenameColor;
                         ctx.font = '28px Arial';
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'middle';
@@ -7378,6 +7406,182 @@ class WaferMapViewer {
 
             alert('이미지 합치기에 실패했습니다.');
         }
+    }
+
+    /**
+     * 상단 legend를 캡처용으로 준비 (그리드 모드 기준)
+     */
+    async getLegendDataForExport() {
+        if (!this.colorLegends) {
+            try {
+                await this.loadColorLegends();
+            } catch (error) {
+                console.warn('⚠️ legend 데이터를 불러오지 못했습니다:', error);
+                return null;
+            }
+        }
+
+        if (!this.colorLegends) {
+            return null;
+        }
+
+        // grid legend와 동일한 우선순위로 scheme 결정
+        let schemeToUse = 'default';
+        if (this.personalizedColorEnabled) {
+            schemeToUse = this.currentUser || 'change';
+        }
+
+        if (!this.colorLegends[schemeToUse]) {
+            if (!this.personalizedColorEnabled && this.colorLegends.change) {
+                schemeToUse = 'change';
+            } else if (this.colorLegends.default) {
+                schemeToUse = 'default';
+            } else if (this.colorLegends.change) {
+                schemeToUse = 'change';
+            } else {
+                const firstKey = Object.keys(this.colorLegends)[0];
+                schemeToUse = firstKey || 'default';
+            }
+        }
+
+        const schemeData = this.colorLegends[schemeToUse];
+        if (!schemeData) {
+            return null;
+        }
+
+        const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
+        const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288'];
+        const bottomLabelMap = {
+            Normal: 'nor',
+            Invalid: 'inv',
+            B285: 'B285',
+            B286: 'B286',
+            B287: 'B287',
+            B288: 'B288'
+        };
+
+        const topEntries = [];
+        const bottomEntries = [];
+
+        if (schemeData.top) {
+            TOP_KEYS.forEach((key, index) => {
+                const color = schemeData.top[key];
+                if (!color) return;
+                topEntries.push({
+                    color,
+                    displayLabel: `G${index}`,
+                    key
+                });
+            });
+        }
+
+        if (schemeData.bottom) {
+            BOTTOM_KEYS.forEach((key) => {
+                let color = schemeData.bottom[key];
+                let displayKey = key;
+
+                if (key === 'Normal' && !color && schemeData.bottom.Border) {
+                    color = schemeData.bottom.Border;
+                    displayKey = 'Normal';
+                }
+
+                if (!color) return;
+
+                bottomEntries.push({
+                    color,
+                    displayLabel: bottomLabelMap[displayKey] || displayKey,
+                    key: displayKey
+                });
+            });
+        }
+
+        if (!topEntries.length && !bottomEntries.length) {
+            return null;
+        }
+
+        return { topEntries, bottomEntries };
+    }
+
+    /**
+     * Legend 높이 계산 (줄바꿈 포함)
+     */
+    calculateLegendHeightForExport(ctx, legendData, canvasWidth) {
+        if (!legendData) {
+            return 0;
+        }
+        // 단일 행 기준 높이 유지 (상단 여백 + 컬러바 높이 + 하단 여백)
+        const paddingY = 16;
+        const rowHeight = 32;
+        return paddingY * 2 + rowHeight;
+    }
+
+    /**
+     * 캡처용 캔버스에 legend를 렌더링
+     */
+    drawExportColorLegend(ctx, legendData, canvasWidth, legendHeight) {
+        if (!legendData) {
+            return;
+        }
+
+        const items = [...(legendData.topEntries || []), ...(legendData.bottomEntries || [])];
+        if (items.length === 0) {
+            return;
+        }
+
+        const paddingX = 20;
+        const paddingY = 16;
+        const baseFontSize = 14;
+        const baseItemHeight = 16;
+        const baseItemWidth = 20;
+        const baseGap = 20;
+        const baseTextSpacing = 8;
+        const availableWidth = Math.max(100, canvasWidth - paddingX * 2);
+
+        ctx.font = `${baseFontSize}px Arial`;
+        ctx.textBaseline = 'middle';
+
+        // 기본 폭 측정
+        const labelWidths = items.map((item) => ctx.measureText(item.displayLabel).width);
+        let totalWidth = 0;
+        labelWidths.forEach((labelWidth) => {
+            totalWidth += baseItemWidth + baseTextSpacing + labelWidth + baseGap;
+        });
+
+        const rawScale = totalWidth > 0 ? (availableWidth / totalWidth) : 1;
+        const scale = Math.min(1, rawScale);
+
+        const fontSize = baseFontSize * scale;
+        const itemHeight = baseItemHeight * scale;
+        const itemWidth = baseItemWidth * scale;
+        const gap = baseGap * scale;
+        const textSpacing = baseTextSpacing * scale;
+        const rowCenterY = paddingY + (legendHeight - paddingY * 2) / 2;
+
+        ctx.font = `${fontSize}px Arial`;
+
+        // legend 배경
+        ctx.fillStyle = '#141414';
+        ctx.fillRect(0, 0, canvasWidth, legendHeight);
+
+        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'left';
+
+        let currentX = paddingX;
+        items.forEach((item) => {
+            const labelWidth = ctx.measureText(item.displayLabel).width;
+            const totalWidthScaled = itemWidth + textSpacing + labelWidth + gap;
+
+            ctx.fillStyle = item.color || '#FFFFFF';
+            ctx.fillRect(currentX, rowCenterY - itemHeight / 2, itemWidth, itemHeight);
+            ctx.strokeStyle = '#555555';
+            ctx.lineWidth = Math.max(0.5, scale);
+            ctx.strokeRect(currentX, rowCenterY - itemHeight / 2, itemWidth, itemHeight);
+
+            ctx.fillStyle = '#eeeeee';
+            ctx.fillText(item.displayLabel, currentX + itemWidth + textSpacing, rowCenterY);
+
+            currentX += totalWidthScaled;
+        });
     }
 
     async mergeAndSaveImages() {
@@ -7517,23 +7721,15 @@ class WaferMapViewer {
             menu.style.cssText = 'position:absolute; display:none; background:#333; border:1px solid #555; border-radius:4px; padding:4px 0; z-index:10000; min-width:180px; color:#fff;';
 
             menu.innerHTML = `
-
                 <div id="single-download-original" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">💾 원본 다운로드</div>
-
-                <div id="single-copy-image" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📋 이미지 클립보드 복사</div>
-
+                <div id="single-copy-image" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📋 이미지 복사</div>
                 <div id="single-copy-canvas" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">🎨 캔버스 전체 복사</div>
-
+                <div id="single-my-lot-add" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📁 MY LOT 추가</div>
+                <div id="single-copy-yms" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📋 파일명복사 (YMS)</div>
+                <div id="single-copy-table" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📋 파일명복사 (Table)</div>
+                <div id="single-set-ref-map" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📌 Ret Map 등록</div>
                 <hr style="margin: 4px 0; border: none; border-top: 1px solid #555;">
-
-                <div id="single-save" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">💾 원본 저장</div>
-
-                <div id="single-copy" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📋 이미지 클립보드 복사</div>
-
-                <div id="single-set-ref-map" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📌 Ref Map 등록</div>
-
                 <div id="single-composite-color" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px; display:none;">🎨 Composite 색상</div>
-
             `;
 
             document.body.appendChild(menu);
@@ -7546,7 +7742,7 @@ class WaferMapViewer {
                 }
             });
 
-            // 이미지 클립보드 복사
+            // 이미지 복사
             menu.querySelector('#single-copy-image')?.addEventListener('click', async () => {
                 this.hideSingleContextMenu();
                 if (this.contextMenuManager) {
@@ -7562,16 +7758,70 @@ class WaferMapViewer {
                 }
             });
 
-            menu.querySelector('#single-save').addEventListener('click', () => {
-                if (this.selectedImagePath) this.downloadImage(this.selectedImagePath);
-
+            // MY LOT 추가
+            menu.querySelector('#single-my-lot-add')?.addEventListener('click', async () => {
                 this.hideSingleContextMenu();
+                if (this.contextMenuManager) {
+                    await this.contextMenuManager.addToMyLot();
+                }
             });
 
-            menu.querySelector('#single-copy').addEventListener('click', async () => {
-                await this.copyCurrentImageToClipboard();
-
+            // 파일명복사 (YMS)
+            menu.querySelector('#single-copy-yms')?.addEventListener('click', async () => {
                 this.hideSingleContextMenu();
+                const paths = this.getSelectedImagesForModal();
+                if (!paths.length && this.selectedImagePath) {
+                    paths.push(this.selectedImagePath);
+                }
+                if (!paths.length) {
+                    this.showToast?.('복사할 이미지가 없습니다.', 1800);
+                    return;
+                }
+                const ymsList = paths.map(filePath => {
+                    const cleanPath = filePath.replace(/\\/g, '/');
+                    const fileName = cleanPath.split('/').pop() || '';
+                    const parts = fileName.split('_');
+                    const part0 = parts[0] || '';
+                    let part2 = parts[2] || '';
+                    part2 = part2.replace(/\.(png|jpg|jpeg|gif|bmp|tiff?)$/i, '');
+                    // YMS 형식: LOT \t Wafer
+                    return `${part0}\t${part2}`;
+                }).join('\n');
+                try {
+                    await navigator.clipboard.writeText(ymsList);
+                    this.showToast?.(`${paths.length}개 파일명 복사 (YMS)`, 1800);
+                } catch (err) {
+                    console.error(err);
+                    this.showToast?.('클립보드 복사에 실패했습니다.', 2000);
+                }
+            });
+
+            // 파일명복사 (Table)
+            menu.querySelector('#single-copy-table')?.addEventListener('click', async () => {
+                this.hideSingleContextMenu();
+                const paths = this.getSelectedImagesForModal();
+                if (!paths.length && this.selectedImagePath) {
+                    paths.push(this.selectedImagePath);
+                }
+                if (!paths.length) {
+                    this.showToast?.('복사할 이미지가 없습니다.', 1800);
+                    return;
+                }
+                const tableText = paths.map(filePath => {
+                    const cleanPath = filePath.replace(/\\/g, '/');
+                    const partsPath = cleanPath.split('/');
+                    const folder2 = partsPath.length >= 3 ? partsPath[partsPath.length - 3] : '';
+                    const fileName = (partsPath.pop() || '').replace(/\.[^/.]+$/, ''); // 확장자 제거
+                    const tokens = fileName.split('_').join('\t'); // _ 로 split한 모든 토큰을 탭으로 연결
+                    return `${folder2}\t${tokens}`.trim();
+                }).join('\n');
+                try {
+                    await navigator.clipboard.writeText(tableText);
+                    this.showToast?.(`${paths.length}개 파일명 복사 (Table)`, 1800);
+                } catch (err) {
+                    console.error(err);
+                    this.showToast?.('클립보드 복사에 실패했습니다.', 2000);
+                }
             });
 
             menu.querySelector('#single-set-ref-map').addEventListener('click', () => {
@@ -8939,6 +9189,9 @@ class WaferMapViewer {
             console.log('🛑 [LOAD_IMAGE] 이전 로딩 요청 중단');
             this.imageLoadAbortController.abort();
         }
+
+        // 현재 이미지 경로 추적 (컨텍스트 메뉴/다운로드용)
+        this.currentImagePath = path;
 
         // 🔥 새로운 AbortController 생성
         this.imageLoadAbortController = new AbortController();
@@ -18063,6 +18316,9 @@ class WaferMapViewer {
      * Grade 필터 이벤트 등록 (Color Legend Top 항목 클릭)
      */
     bindGradeFilterEvents() {
+        // Grade 선택 상태 추적 변수
+        this.lastGradeClickIndex = null;
+
         // Color Legend Top 클릭 이벤트
         if (this.dom.colorLegendTop) {
             this.dom.colorLegendTop.addEventListener('click', (e) => {
@@ -18076,7 +18332,7 @@ class WaferMapViewer {
                 if (isNaN(gradeIndex) || gradeIndex < 0 || gradeIndex > 7) return;
 
                 e.preventDefault();
-                this.onGradeButtonClick(gradeIndex, e.ctrlKey || e.metaKey);
+                this.onGradeButtonClick(gradeIndex, e.ctrlKey || e.metaKey, e.shiftKey);
             });
 
             // 오른쪽 클릭: 모든 선택 해제 및 기본 context menu 방지
@@ -18094,6 +18350,48 @@ class WaferMapViewer {
 
                 this.clearGradeFilter();
             });
+
+            // 🔥 Color Legend Top 내에서 Drag 시작 시 이벤트 전파 방지 (이미지 패닝 방지)
+            this.dom.colorLegendTop.addEventListener('mousedown', (e) => {
+                e.stopPropagation();
+            });
+
+            // Drag & Drop 이벤트 (범위 선택)
+            this.dom.colorLegendTop.addEventListener('dragstart', (e) => {
+                const item = e.target.closest('.legend-item[data-section="top"]');
+                if (!item) return;
+                e.dataTransfer.setData('text/plain', item.getAttribute('data-index'));
+                e.dataTransfer.effectAllowed = 'copy';
+                
+                // 🔥 드래그 시 보이는 고스트 이미지 제거 (투명 이미지 설정)
+                const img = new Image();
+                img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'; // 1x1 투명 gif
+                e.dataTransfer.setDragImage(img, 0, 0);
+            });
+
+            this.dom.colorLegendTop.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
+            });
+
+            this.dom.colorLegendTop.addEventListener('drop', (e) => {
+                e.preventDefault();
+                const targetItem = e.target.closest('.legend-item[data-section="top"]');
+                if (!targetItem) return;
+
+                const startIndex = parseInt(e.dataTransfer.getData('text/plain'));
+                const endIndex = parseInt(targetItem.getAttribute('data-index'));
+
+                if (!isNaN(startIndex) && !isNaN(endIndex)) {
+                    const start = Math.min(startIndex, endIndex);
+                    const end = Math.max(startIndex, endIndex);
+                    for (let i = start; i <= end; i++) {
+                        this.selectedGrades.add(i);
+                    }
+                    this.applyGradeFilter();
+                    this.updateGradeButtonUI();
+                }
+            });
         }
     }
 
@@ -18101,6 +18399,9 @@ class WaferMapViewer {
      * Bottom 필터 이벤트 등록 (Color Legend Bottom 항목 클릭)
      */
     bindBottomFilterEvents() {
+        // Bottom 선택 상태 추적 변수
+        this.lastBottomClickValue = null;
+
         // Color Legend Bottom 클릭 이벤트
         if (this.dom.colorLegendBottom) {
             this.dom.colorLegendBottom.addEventListener('click', (e) => {
@@ -18110,15 +18411,14 @@ class WaferMapViewer {
                 const key = legendItem.getAttribute('data-key');
                 if (!key) return;
 
-                // B285, B286, B287, B288만 처리 (B 접두사 제거하여 숫자 추출)
+                let bottomValue = key;
+                // B-values: remove prefix
                 if (key.startsWith('B')) {
-                    const bottomValue = parseInt(key.substring(1));
-                    if (isNaN(bottomValue)) return;
-
-                    e.preventDefault();
-                    this.onBottomButtonClick(bottomValue, e.ctrlKey || e.metaKey);
+                    bottomValue = key.substring(1);
                 }
-                // TODO: Normal, Invalid 처리 (필요 시 추가)
+
+                e.preventDefault();
+                this.onBottomButtonClick(bottomValue, e.ctrlKey || e.metaKey, e.shiftKey);
             });
 
             // 오른쪽 클릭: 모든 선택 해제
@@ -18135,6 +18435,52 @@ class WaferMapViewer {
 
                 this.clearBottomFilter();
             });
+
+            // 🔥 Color Legend Bottom 내에서 Drag 시작 시 이벤트 전파 방지 (이미지 패닝 방지)
+            this.dom.colorLegendBottom.addEventListener('mousedown', (e) => {
+                e.stopPropagation();
+            });
+
+            // Drag & Drop 이벤트 (범위 선택)
+            this.dom.colorLegendBottom.addEventListener('dragstart', (e) => {
+                const item = e.target.closest('.legend-item[data-section="bottom"]');
+                if (!item) return;
+                e.dataTransfer.setData('text/plain', item.getAttribute('data-index'));
+                e.dataTransfer.effectAllowed = 'copy';
+
+                // 🔥 드래그 시 보이는 고스트 이미지 제거 (투명 이미지 설정)
+                const img = new Image();
+                img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'; // 1x1 투명 gif
+                e.dataTransfer.setDragImage(img, 0, 0);
+            });
+
+            this.dom.colorLegendBottom.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
+            });
+
+            this.dom.colorLegendBottom.addEventListener('drop', (e) => {
+                e.preventDefault();
+                const targetItem = e.target.closest('.legend-item[data-section="bottom"]');
+                if (!targetItem) return;
+
+                const startIndex = parseInt(e.dataTransfer.getData('text/plain'));
+                const endIndex = parseInt(targetItem.getAttribute('data-index'));
+
+                if (!isNaN(startIndex) && !isNaN(endIndex)) {
+                    const BOTTOM_VALUES = ['Normal', 'Invalid', '285', '286', '287', '288'];
+                    const start = Math.min(startIndex, endIndex);
+                    const end = Math.max(startIndex, endIndex);
+                    
+                    for (let i = start; i <= end; i++) {
+                        if (i >= 0 && i < BOTTOM_VALUES.length) {
+                            this.selectedBottoms.add(BOTTOM_VALUES[i]);
+                        }
+                    }
+                    this.applyBottomFilter();
+                    this.updateBottomButtonUI();
+                }
+            });
         }
     }
 
@@ -18142,11 +18488,20 @@ class WaferMapViewer {
      * Grade 버튼 클릭 핸들러
      * @param {number} gradeIndex - Grade 인덱스 (0-7)
      * @param {boolean} ctrlKey - Ctrl 키 누름 여부
+     * @param {boolean} shiftKey - Shift 키 누름 여부
      */
-    async onGradeButtonClick(gradeIndex, ctrlKey) {
+    async onGradeButtonClick(gradeIndex, ctrlKey, shiftKey) {
         const wasSelected = this.selectedGrades.has(gradeIndex);
 
-        if (ctrlKey) {
+        if (shiftKey && this.lastGradeClickIndex !== null) {
+            // Shift 클릭: 범위 선택 (이전 클릭과 현재 클릭 사이 모두 선택)
+            const start = Math.min(this.lastGradeClickIndex, gradeIndex);
+            const end = Math.max(this.lastGradeClickIndex, gradeIndex);
+
+            for (let i = start; i <= end; i++) {
+                this.selectedGrades.add(i);
+            }
+        } else if (ctrlKey) {
             // Ctrl 클릭: 다중 선택 토글
             if (wasSelected) {
                 this.selectedGrades.delete(gradeIndex);  // 토글 off
@@ -18158,6 +18513,9 @@ class WaferMapViewer {
             this.selectedGrades.clear();
             this.selectedGrades.add(gradeIndex);
         }
+
+        // 마지막 클릭 위치 저장
+        this.lastGradeClickIndex = gradeIndex;
 
         // 필터 적용 및 UI 업데이트
         await this.applyGradeFilter();
@@ -18213,13 +18571,29 @@ class WaferMapViewer {
      * Bottom 버튼 클릭 핸들러
      * @param {number|string} bottomValue - Bottom 값 (285, 286, 287, 288)
      * @param {boolean} ctrlKey - Ctrl 키 누름 여부
+     * @param {boolean} shiftKey - Shift 키 누름 여부
      */
-    async onBottomButtonClick(bottomValue, ctrlKey) {
+    async onBottomButtonClick(bottomValue, ctrlKey, shiftKey) {
         // 🔥 Convert to string for consistent comparison
         const bottomStr = String(bottomValue);
         const wasSelected = this.selectedBottoms.has(bottomStr);
 
-        if (ctrlKey) {
+        if (shiftKey && this.lastBottomClickValue !== null) {
+            // Shift 클릭: 범위 선택 (이전 클릭과 현재 클릭 사이 모두 선택)
+            // Normal, Invalid 포함 전체 목록
+            const bottomValues = ['Normal', 'Invalid', '285', '286', '287', '288'];
+            const lastIndex = bottomValues.indexOf(this.lastBottomClickValue);
+            const currentIndex = bottomValues.indexOf(bottomStr);
+
+            if (lastIndex !== -1 && currentIndex !== -1) {
+                const start = Math.min(lastIndex, currentIndex);
+                const end = Math.max(lastIndex, currentIndex);
+
+                for (let i = start; i <= end; i++) {
+                    this.selectedBottoms.add(bottomValues[i]);
+                }
+            }
+        } else if (ctrlKey) {
             // Ctrl 클릭: 다중 선택 토글
             if (wasSelected) {
                 this.selectedBottoms.delete(bottomStr);
@@ -18231,6 +18605,9 @@ class WaferMapViewer {
             this.selectedBottoms.clear();
             this.selectedBottoms.add(bottomStr);
         }
+
+        // 마지막 클릭 값 저장
+        this.lastBottomClickValue = bottomStr;
 
         // 필터 적용 및 UI 업데이트
         await this.applyBottomFilter();
@@ -18500,11 +18877,11 @@ class WaferMapViewer {
         // 🔥 TOP_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
         if (userData.top && typeof userData.top === 'object') {
             const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
-            const topHtml = TOP_KEYS.map((label) => {
+            const topHtml = TOP_KEYS.map((label, index) => {
                 const color = userData.top[label];
                 if (color) {
                     return `
-                        <div class="legend-item" data-section="top" data-key="${label}" style="cursor: pointer;">
+                        <div class="legend-item" data-section="top" data-key="${label}" data-index="${index}" draggable="true" style="cursor: pointer;">
                             <span class="legend-label">${label}</span>
                             <div class="legend-color-bar" data-section="top" data-key="${label}" style="background-color: ${color}; cursor: pointer;"></div>
                         </div>
@@ -18521,7 +18898,7 @@ class WaferMapViewer {
         // 🔥 BOTTOM_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
         if (userData.bottom && typeof userData.bottom === 'object') {
             const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288'];
-            const bottomHtml = BOTTOM_KEYS.map((label) => {
+            const bottomHtml = BOTTOM_KEYS.map((label, index) => {
                 // 🔥 "Border" 키가 있는 경우 "Normal"로 매핑 (Ubuntu 서버 호환성)
                 let actualLabel = label;
                 let color = userData.bottom[label];
@@ -18541,7 +18918,7 @@ class WaferMapViewer {
                     // 🔥 "Border"를 "Normal"로 표시 및 data-key도 "Normal"로 설정
                     const displayLabel = actualLabel === 'Border' ? 'Normal' : label;
                     return `
-                        <div class="legend-item" data-section="bottom" data-key="${displayLabel}" style="cursor: pointer;">
+                        <div class="legend-item" data-section="bottom" data-key="${displayLabel}" data-index="${index}" draggable="true" style="cursor: pointer;">
                             <span class="legend-label">${displayLabel}</span>
                             <div class="legend-color-bar" data-section="bottom" data-key="${displayLabel}" style="background-color: ${color}; cursor: pointer;"></div>
                         </div>
