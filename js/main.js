@@ -7254,42 +7254,43 @@ class WaferMapViewer {
 
             // Canvas 생성
 
-        const canvas = document.createElement('canvas');
+            const canvas = document.createElement('canvas');
 
-        // 각 이미지 크기 (512px로 설정)
-        const imageSize = 512;
-        const filenameHeight = 32; // 파일명 표시 영역
-        const rowPadding = 20; // 파일명과 다음 이미지 사이 여백
-        const cellHeight = imageSize + filenameHeight + rowPadding;
+            // 각 이미지 크기 (512px로 설정)
+            const imageSize = 512;
+            const filenameHeight = 32; // 파일명 표시 영역
+            const rowPadding = 20; // 파일명과 다음 이미지 사이 여백
+            const cellHeight = imageSize + filenameHeight + rowPadding;
 
-        const canvasWidth = cols * imageSize;
-        canvas.width = canvasWidth;
+            const canvasWidth = cols * imageSize;
+            canvas.width = canvasWidth;
 
-        // ✅ legend 데이터를 준비하고 높이를 먼저 계산
-        const legendData = await this.getLegendDataForExport();
-        const measureCtx = canvas.getContext('2d');
-        const legendHeight = this.calculateLegendHeightForExport(measureCtx, legendData, canvasWidth);
+            // ✅ legend 데이터를 준비하고 높이/스케일을 먼저 계산
+            const legendData = await this.getLegendDataForExport();
+            const measureCtx = canvas.getContext('2d');
+            const legendLayout = this.calculateLegendLayoutForExport(measureCtx, legendData, canvasWidth);
+            const legendHeight = legendLayout?.height || 0;
 
-        canvas.height = legendHeight + (rows * cellHeight);
+            canvas.height = legendHeight + (rows * cellHeight);
 
-        // 높이를 갱신하면 컨텍스트 상태가 초기화되므로 다시 가져옴
-        const ctx = canvas.getContext('2d');
+            // 높이를 갱신하면 컨텍스트 상태가 초기화되므로 다시 가져옴
+            const ctx = canvas.getContext('2d');
 
-        // 🔥 고품질 이미지 리샘플링 활성화 (이미지 스무딩 ON)
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
+            // 🔥 고품질 이미지 리샘플링 활성화 (이미지 스무딩 ON)
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
 
-        const hasLegend = legendHeight > 0;
-        const backgroundColor = hasLegend ? '#1e1e1e' : '#FFFFFF';
-        const filenameColor = hasLegend ? '#cccccc' : '#000000';
+            const hasLegend = !!legendLayout;
+            const backgroundColor = hasLegend ? '#1e1e1e' : '#FFFFFF';
+            const filenameColor = hasLegend ? '#cccccc' : '#000000';
 
-        // 배경을 상황에 맞게 채우기
-        ctx.fillStyle = backgroundColor;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+            // 배경을 상황에 맞게 채우기
+            ctx.fillStyle = backgroundColor;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        if (hasLegend) {
-            this.drawExportColorLegend(ctx, legendData, canvasWidth, legendHeight);
-        }
+            if (legendLayout) {
+                this.drawExportColorLegend(ctx, legendLayout, canvasWidth);
+            }
 
             // 🔥 정렬된 그리드의 실제 이미지 경로 사용 (정렬된 인덱스로 정렬된 리스트에서 가져오기)
             const gridImages = this.currentGridImages || this.selectedImages;
@@ -7503,29 +7504,16 @@ class WaferMapViewer {
     }
 
     /**
-     * Legend 높이 계산 (줄바꿈 포함)
+     * Legend 레이아웃(높이, 스케일 등) 계산
      */
-    calculateLegendHeightForExport(ctx, legendData, canvasWidth) {
+    calculateLegendLayoutForExport(ctx, legendData, canvasWidth) {
         if (!legendData) {
-            return 0;
-        }
-        // 단일 행 기준 높이 유지 (상단 여백 + 컬러바 높이 + 하단 여백)
-        const paddingY = 16;
-        const rowHeight = 32;
-        return paddingY * 2 + rowHeight;
-    }
-
-    /**
-     * 캡처용 캔버스에 legend를 렌더링
-     */
-    drawExportColorLegend(ctx, legendData, canvasWidth, legendHeight) {
-        if (!legendData) {
-            return;
+            return null;
         }
 
         const items = [...(legendData.topEntries || []), ...(legendData.bottomEntries || [])];
         if (items.length === 0) {
-            return;
+            return null;
         }
 
         const paddingX = 20;
@@ -7535,52 +7523,109 @@ class WaferMapViewer {
         const baseItemWidth = 20;
         const baseGap = 20;
         const baseTextSpacing = 8;
-        const availableWidth = Math.max(100, canvasWidth - paddingX * 2);
+        const baseRowHeight = 32;
+        const maxScale = 2.8;
 
+        const availableWidth = Math.max(80, canvasWidth - paddingX * 2);
+
+        ctx.save();
         ctx.font = `${baseFontSize}px Arial`;
         ctx.textBaseline = 'middle';
-
-        // 기본 폭 측정
         const labelWidths = items.map((item) => ctx.measureText(item.displayLabel).width);
-        let totalWidth = 0;
-        labelWidths.forEach((labelWidth) => {
-            totalWidth += baseItemWidth + baseTextSpacing + labelWidth + baseGap;
+        ctx.restore();
+
+        let baseWidthSum = 0;
+        items.forEach((_, index) => {
+            baseWidthSum += baseItemWidth + baseTextSpacing + labelWidths[index];
+            if (index < items.length - 1) {
+                baseWidthSum += baseGap;
+            }
         });
 
-        const rawScale = totalWidth > 0 ? (availableWidth / totalWidth) : 1;
-        const scale = Math.min(1, rawScale);
+        if (baseWidthSum === 0) {
+            return null;
+        }
 
-        const fontSize = baseFontSize * scale;
-        const itemHeight = baseItemHeight * scale;
+        const rawScale = availableWidth / baseWidthSum;
+        const scale = Math.min(rawScale, maxScale);
+
         const itemWidth = baseItemWidth * scale;
-        const gap = baseGap * scale;
+        const itemHeight = baseItemHeight * scale;
         const textSpacing = baseTextSpacing * scale;
-        const rowCenterY = paddingY + (legendHeight - paddingY * 2) / 2;
+        const gap = baseGap * scale;
+        const fontSize = baseFontSize * scale;
+        const scaledLabelWidths = labelWidths.map((width) => width * scale);
+        const scaledTotalWidth = baseWidthSum * scale;
+        const extraSpace = Math.max(0, availableWidth - scaledTotalWidth);
+        const startX = paddingX + extraSpace / 2;
+        const rowHeight = Math.max(baseRowHeight, baseRowHeight * scale);
+        const height = paddingY * 2 + rowHeight;
+        const rowCenterY = paddingY + rowHeight / 2;
 
-        ctx.font = `${fontSize}px Arial`;
+        return {
+            items,
+            labelWidths: scaledLabelWidths,
+            itemWidth,
+            itemHeight,
+            textSpacing,
+            gap,
+            fontSize,
+            startX,
+            rowCenterY,
+            height
+        };
+    }
+
+    /**
+     * 캡처용 캔버스에 legend를 렌더링
+     */
+    drawExportColorLegend(ctx, legendLayout, canvasWidth) {
+        if (!legendLayout) {
+            return;
+        }
+
+        const {
+            items,
+            labelWidths,
+            itemWidth,
+            itemHeight,
+            textSpacing,
+            gap,
+            fontSize,
+            startX,
+            rowCenterY,
+            height
+        } = legendLayout;
+
+        if (!items || items.length === 0) {
+            return;
+        }
 
         // legend 배경
         ctx.fillStyle = '#141414';
-        ctx.fillRect(0, 0, canvasWidth, legendHeight);
+        ctx.fillRect(0, 0, canvasWidth, height);
 
+        ctx.font = `${fontSize}px Arial`;
         ctx.textBaseline = 'middle';
         ctx.textAlign = 'left';
 
-        let currentX = paddingX;
-        items.forEach((item) => {
-            const labelWidth = ctx.measureText(item.displayLabel).width;
-            const totalWidthScaled = itemWidth + textSpacing + labelWidth + gap;
+        let currentX = startX;
+        items.forEach((item, index) => {
+            const labelWidth = labelWidths[index] || 0;
 
             ctx.fillStyle = item.color || '#FFFFFF';
             ctx.fillRect(currentX, rowCenterY - itemHeight / 2, itemWidth, itemHeight);
             ctx.strokeStyle = '#555555';
-            ctx.lineWidth = Math.max(0.5, scale);
+            ctx.lineWidth = Math.max(0.5, fontSize / 14);
             ctx.strokeRect(currentX, rowCenterY - itemHeight / 2, itemWidth, itemHeight);
 
             ctx.fillStyle = '#eeeeee';
             ctx.fillText(item.displayLabel, currentX + itemWidth + textSpacing, rowCenterY);
 
-            currentX += totalWidthScaled;
+            currentX += itemWidth + textSpacing + labelWidth;
+            if (index < items.length - 1) {
+                currentX += gap;
+            }
         });
     }
 
