@@ -513,6 +513,7 @@ class WaferMapViewer {
         this.contextMenuJustShown = false;
         this.contextMenuTargetIndex = null;
         this.contextMenuTargetPath = null;
+        this.compositeProgressOverlay = null;
         
         // 전역 AbortController 초기화 (모든 API 요청 중단용)
         this.globalAbortController = new AbortController();
@@ -819,6 +820,8 @@ class WaferMapViewer {
         this.sessionStack = [];  // Grid 세션 스택
         this.compositeSession = null;  // 현재 Composite 세션 정보
 
+        this.lastCompositeSourceImages = []; // Composite 생성 시 사용한 원본 이미지 목록
+        this.selectedGrades = new Set(); // Subset Map을 위한 선택된 grade 인덱스 (0-7)
         this.updateContextMenuState();
 
         this.imageCtx.imageSmoothingQuality = 'high';
@@ -829,6 +832,11 @@ class WaferMapViewer {
         this.isPanning = false;
 
         this.panStart = { x: 0, y: 0 };
+
+        this._pendingViewportRefit = false;
+        this._viewportRefitDeadline = 0;
+        this._lastViewerWidth = 0;
+        this._lastViewerHeight = 0;
 
         this.currentImage = null;
 
@@ -914,6 +922,15 @@ class WaferMapViewer {
         this.classSelection = { selected: [], lastClicked: null };
 
         this.labelSelection = { selected: [], lastClicked: null, openFolders: {}, selectedClasses: [] };
+
+        // Label Explorer 새로고침 동시 실행 제어
+        this._isRefreshingLabelExplorer = false;
+        this._pendingLabelExplorerRefresh = false;
+
+        // 폴더 컨텍스트 버전 (폴더 변경 시마다 증가)
+        this.currentFolderVersion = 0;
+        this.cachedClassListVersion = -1;
+        this.classListPromiseVersion = -1;
 
         // Bind 'this' for event handlers that are dynamically added/removed
 
@@ -1115,6 +1132,12 @@ class WaferMapViewer {
                 this.zoomInProgress = true;
                 this.zoomAtCenter(ZOOM_FACTOR);
             });
+            // 🔥 더블클릭 방지
+            this.dom.zoomInBtn.addEventListener('dblclick', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('🛑 [DBLCLICK] Zoom In 버튼 더블클릭 무시');
+            });
         }
 
         if (this.dom.zoomOutBtn) {
@@ -1123,6 +1146,12 @@ class WaferMapViewer {
                 this.zoomInProgress = true;
                 this.zoomAtCenter(1 / ZOOM_FACTOR);
             });
+            // 🔥 더블클릭 방지
+            this.dom.zoomOutBtn.addEventListener('dblclick', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('🛑 [DBLCLICK] Zoom Out 버튼 더블클릭 무시');
+            });
         }
 
         if (this.dom.resetViewBtn) {
@@ -1130,6 +1159,12 @@ class WaferMapViewer {
                 this.panelProtected = true;
                 this.zoomInProgress = true;
                 this.resetViewWithAbsoluteOffset();
+            });
+            // 🔥 더블클릭 방지
+            this.dom.resetViewBtn.addEventListener('dblclick', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('🛑 [DBLCLICK] Reset View 버튼 더블클릭 무시');
             });
         }
 
@@ -1280,6 +1315,9 @@ class WaferMapViewer {
         if (Array.isArray(clone.sumMaps)) {
             clone.sumMaps = clone.sumMaps.map(entry => ({ ...entry }));
         }
+        if (Array.isArray(clone.sourceImagePaths)) {
+            clone.sourceImagePaths = [...clone.sourceImagePaths];
+        }
         return clone;
     }
 
@@ -1425,12 +1463,38 @@ class WaferMapViewer {
         this.refMapWindow.style.right = 'auto';
     }
 
+    shouldUsePyramidForPath(path) {
+        if (!path) return false;
+        const normalized = path.replace(/\\/g, '/').toLowerCase();
+        if (normalized.includes('composite_map/') || normalized.startsWith('composite_map')) {
+            return false;
+        }
+        if (normalized.includes('composite_cache_v1/')) {
+            return false;
+        }
+        return true;
+    }
+
     buildRefMapImageUrl(relPath) {
         const normalized = this.normalizeImagePath(relPath);
         if (!normalized) return '';
-        const currentLevel = Number.isFinite(this.currentPyramidLevel) ? this.currentPyramidLevel : 0;
         const personalizedParams = this.getPersonalizedParams();
-        return `/api/image?path=${encodeURIComponent(normalized)}&level=${currentLevel}${personalizedParams}`;
+        if (!this.shouldUsePyramidForPath(normalized)) {
+            return `/api/image?path=${encodeURIComponent(normalized)}${personalizedParams}`;
+        }
+
+        let level = Number.isFinite(this.currentPyramidLevel) ? this.currentPyramidLevel : null;
+        if (level === null && Number.isFinite(this.transform?.scale)) {
+            level = this.getBestPyramidLevel(this.transform.scale);
+        }
+        if (level === null && Array.isArray(SERVER_CONFIG.PYRAMID_LEVELS) && SERVER_CONFIG.PYRAMID_LEVELS.length) {
+            level = SERVER_CONFIG.PYRAMID_LEVELS[0];
+        }
+        if (level === null) {
+            level = 1.0;
+        }
+
+        return `/api/image?path=${encodeURIComponent(normalized)}&level=${level}${personalizedParams}`;
     }
 
     loadRefMapImage(path) {
@@ -2159,6 +2223,7 @@ class WaferMapViewer {
                 this.currentFolderPrefix = result.current_folder_prefix || '';
                 // 🔥 제품 폴더 경로 저장 (classification 조회용)
                 this.productFolderPath = result.current_folder;
+                this.markFolderContextChanged('changeFolder');
                 console.log('🔍 [STATE_DEBUG] currentFolderPath 변경 후 (changeFolder):', this.currentFolderPath);
                 console.log('🔍 [STATE_DEBUG] productFolderPath 저장:', this.productFolderPath);
                 console.info('🔍 [CHANGE_FOLDER DEBUG] currentFolderPath:', this.currentFolderPath);
@@ -2228,6 +2293,7 @@ class WaferMapViewer {
                     const data = await response.json();
                     this.currentFolderPath = data.current_folder;
                     this.currentFolderPrefix = data.current_folder_prefix || '';
+                    this.markFolderContextChanged('changeFolder confirmation');
                     console.log('🔍 [FOLDER_CHANGE_DEBUG] /api/current-folder 업데이트 완료');
                     
                     // 🔥 폴더 변경 시 클래스 캐시 무효화 (새 폴더의 클래스를 가져오기 위해)
@@ -2686,6 +2752,7 @@ class WaferMapViewer {
                     console.log('🔍 [STATE_DEBUG] currentFolderPath 변경 전 (goToRootFolder):', this.currentFolderPath);
                     this.currentFolderPath = rootPath;
                     this.currentFolderPrefix = '';  // 🔥 최상위 폴더는 빈 접두사
+                    this.markFolderContextChanged('goToRootFolder');
                     console.log('🔍 [STATE_DEBUG] currentFolderPath 변경 후 (goToRootFolder):', this.currentFolderPath);
                                         const response = await fetch('/api/change-folder', {
                         method: 'POST',
@@ -4131,6 +4198,15 @@ class WaferMapViewer {
             this.dom.compositeCloseBtn.addEventListener('click', () => this.exitCompositeMode());
         }
 
+        // Context Menu - Subset Map 생성 이벤트 리스너
+        const subsetMapItem = document.getElementById('context-subset-map-create');
+        if (subsetMapItem) {
+            subsetMapItem.addEventListener('click', () => {
+                this.hideContextMenu();
+                this.createSubsetMap();
+            });
+        }
+
     }
 
     bindFilterEvents() {
@@ -4454,6 +4530,17 @@ class WaferMapViewer {
 
         const query = params.toString();
         return `${path}${query ? `?${query}` : ''}`;
+    }
+
+    markFolderContextChanged(reason = '') {
+        this.currentFolderVersion = (this.currentFolderVersion || 0) + 1;
+        this.cachedClassListVersion = -1;
+        this.classListPromiseVersion = -1;
+        this.cachedClassList = null;
+        this.classListPromise = null;
+        if (reason) {
+            this.debugLog(`🔥 [CTX] folder version -> ${this.currentFolderVersion} (${reason})`);
+        }
     }
 
     getClassificationDirNames() {
@@ -4938,6 +5025,7 @@ class WaferMapViewer {
                     this.debugLog('이미지 폴더 최상위로 초기화됨');
                     this.currentFolderPath = result.current_folder;
                     this.currentFolderPrefix = result.current_folder_prefix || '';
+                    this.markFolderContextChanged('resetToImageFolder');
                     this.cachedClassList = null;
                     this.classListPromise = null;
                     if (this.classToImgListCache) {
@@ -6293,6 +6381,8 @@ class WaferMapViewer {
         const createItem = document.getElementById('context-composite-create');
         const returnItem = document.getElementById('context-composite-return');
         const colorItem = document.getElementById('context-composite-colors');
+        const subsetMapItem = document.getElementById('context-subset-map-create');
+
         if (!createItem || !returnItem) {
             console.warn('?? ���ؽ�Ʈ �޴� �׸��� ã�� �� �����ϴ�.');
             return;
@@ -6308,6 +6398,15 @@ class WaferMapViewer {
         }
         if (colorItem) {
             colorItem.style.setProperty('display', this.isCompositeMode ? 'block' : 'none', 'important');
+        }
+
+        // Subset Map 항목: Composite 모드 + Grade 선택된 경우에만 표시
+        if (subsetMapItem) {
+            const showSubsetMap = this.isCompositeMode && this.selectedGrades && this.selectedGrades.size > 0;
+            subsetMapItem.style.setProperty('display', showSubsetMap ? 'block' : 'none', 'important');
+            if (showSubsetMap) {
+                subsetMapItem.textContent = '🎯 선택 Grade Composite Map';
+            }
         }
         
         // Grid 모드인지 확인
@@ -6380,6 +6479,9 @@ class WaferMapViewer {
             return;
         }
 
+        // 🔥 Grade 선택 상태 초기화 (새로운 Composite 세션 시작)
+        this.selectedGrades.clear();
+
         // 🔥 히트맵 경로 추출 (index 0~7 순서대로)
         const heatmapPaths = result.heatmaps
             .sort((a, b) => a.index - b.index)
@@ -6433,14 +6535,17 @@ class WaferMapViewer {
         }
 
         // Composite 세션 정보 저장
+        const sourceImages = result.source_image_paths || this.lastCompositeSourceImages || [];//Composite 원본들
         this.compositeSession = {
             sourceImageCount: result.image_count || result.source_images,
             outputDir: result.output_dir,
+            sourceImagePaths: sourceImages,
             imageSize: result.image_size,
             processingTime: result.processing_time,
             generatedAt: result.generated_at,
             sumMaps: sumMapEntries,
         };
+        this.lastCompositeSourceImages = sourceImages;
 
         const grid = document.getElementById('image-grid');
         const scrollWrapper = grid?.parentElement;
@@ -6491,7 +6596,16 @@ class WaferMapViewer {
 
         console.log('  payload:', payload);
 
+        const shouldShowOverlay = !options?.skipOverlay;
+        const overlayMessage = options?.overlayMessage || 'Composite 색상을 적용하는 중입니다...';
+        let overlayVisible = false;
+
         try {
+            if (shouldShowOverlay) {
+                this.showCompositeProgressOverlay(overlayMessage);
+                overlayVisible = true;
+            }
+
             const res = await fetch('/api/composite-recolor', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -6538,6 +6652,10 @@ class WaferMapViewer {
                 }
             }
             throw error;
+        } finally {
+            if (overlayVisible) {
+                this.hideCompositeProgressOverlay();
+            }
         }
     }
 
@@ -6604,6 +6722,7 @@ class WaferMapViewer {
         }
 
         let updatedCount = 0;
+        const personalizedParams = this.getPersonalizedParams ? this.getPersonalizedParams() : '';
         wraps.forEach(wrap => {
             const path = wrap.dataset.path;
             if (!path || !pathSet.has(path)) {
@@ -6611,17 +6730,17 @@ class WaferMapViewer {
             }
             const img = wrap.querySelector('.grid-thumb-img');
             if (!img) return;
-            const basePath = path.startsWith('/') ? path : `/${path}`;
-            const separator = basePath.includes('?') ? '&' : '?';
-            const newSrc = `${basePath}${separator}t=${timestamp}`;
-            console.log(`    🔄 이미지 갱신: ${path}`);
+            const newSrc = `/api/thumbnail?path=${encodeURIComponent(path)}&size=512${personalizedParams}&_t=${timestamp}`;
+            console.log(`    🔄 이미지 갱신: ${path} -> ${newSrc}`);
 
-            // 🔥 브라우저 캐시 우회: src를 빈 문자열로 먼저 설정 후 새 URL 설정
-            img.src = '';
-            setTimeout(() => {
-                img.dataset.src = newSrc;
-                img.src = newSrc;
-            }, 10);
+            img.dataset.src = newSrc;
+            img.dataset.imagePath = path;
+            img.style.opacity = '0';
+            const handleLoad = () => {
+                img.style.opacity = '1';
+            };
+            img.addEventListener('load', handleLoad, { once: true });
+            img.src = newSrc;
             updatedCount++;
         });
 
@@ -6681,6 +6800,7 @@ class WaferMapViewer {
             alert('Composite Map을 만들 이미지를 선택하세요.');
             return;
         }
+        this.lastCompositeSourceImages = [...selected];
 
         // 🔥 로딩 오버레이 표시
         let loadingOverlay = null;
@@ -6790,6 +6910,79 @@ class WaferMapViewer {
         }
     }
 
+    showCompositeProgressOverlay(message = 'Composite 작업 중입니다...') {
+        try {
+            if (this.compositeProgressOverlay) {
+                const textEl = this.compositeProgressOverlay.querySelector('.composite-progress-message');
+                if (textEl) {
+                    textEl.textContent = message;
+                }
+                return;
+            }
+            const overlay = document.createElement('div');
+            overlay.id = 'composite-progress-overlay';
+            overlay.style.cssText = `
+                position: fixed;
+                inset: 0;
+                background: rgba(0, 0, 0, 0.6);
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                z-index: 22000;
+                color: #fff;
+                font-size: 15px;
+            `;
+            const spinner = document.createElement('div');
+            spinner.style.cssText = `
+                width: 48px;
+                height: 48px;
+                border: 4px solid rgba(255,255,255,0.45);
+                border-top-color: #0af;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+                margin-bottom: 16px;
+            `;
+            const text = document.createElement('div');
+            text.className = 'composite-progress-message';
+            text.textContent = message;
+            text.style.textAlign = 'center';
+            text.style.fontWeight = '500';
+            text.style.lineHeight = '1.4';
+
+            if (!document.getElementById('composite-progress-style')) {
+                const style = document.createElement('style');
+                style.id = 'composite-progress-style';
+                style.textContent = `
+                    @keyframes spin {
+                        0% { transform: rotate(0deg); }
+                        100% { transform: rotate(360deg); }
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+
+            overlay.appendChild(spinner);
+            overlay.appendChild(text);
+            document.body.appendChild(overlay);
+            this.compositeProgressOverlay = overlay;
+        } catch (error) {
+            console.warn('[Composite] showCompositeProgressOverlay failed:', error);
+        }
+    }
+
+    hideCompositeProgressOverlay() {
+        if (this.compositeProgressOverlay) {
+            try {
+                this.compositeProgressOverlay.remove();
+            } catch (error) {
+                console.warn('[Composite] hideCompositeProgressOverlay cleanup failed:', error);
+            }
+            this.compositeProgressOverlay = null;
+        }
+    }
+
+    // 🔥 하위 호환성을 위해 exitCompositeMode() 유지 (returnToPreviousGrid로 리다이렉트)
     // 🔥 하위 호환성을 위해 exitCompositeMode() 유지 (returnToPreviousGrid로 리다이렉트)
     exitCompositeMode() {
         this.returnToPreviousGrid();
@@ -9564,9 +9757,12 @@ class WaferMapViewer {
         console.log(`[LOAD_IMAGE] FIT_RELATIVE_MARGIN: ${FIT_RELATIVE_MARGIN}, resetView 호출 전 scale: ${this.transform.scale?.toFixed(4) || 'N/A'}`);
         this.resetView(false);
         console.log(`[LOAD_IMAGE] resetView 호출 후 transform.scale: ${this.transform.scale.toFixed(4)}`);
+        this.scheduleViewportRefit();
 
-            // ❌ 제거됨: setTimeout으로 updatePyramidLevel 호출
-            // pyramid level 업데이트는 네비게이션 함수에서만 호출
+        // 🔄 초기 로드 직후에도 현재 줌과 피라미드 레벨이 일치하도록 약간의 지연 후 강제 동기화
+        setTimeout(() => {
+            this.updatePyramidLevel();
+        }, 50);
 
             // 🚀 모든 피라미드 레벨 background pre-fetch (사용자 대기 없음)
             this.prefetchAllPyramidLevels();
@@ -10188,7 +10384,37 @@ class WaferMapViewer {
         }, 0);
     }
 
+    scheduleViewportRefit() {
+        if (!this.dom?.viewerContainer) return;
+        const rect = this.dom.viewerContainer.getBoundingClientRect();
+        this._lastViewerWidth = rect.width;
+        this._lastViewerHeight = rect.height;
+        this._pendingViewportRefit = true;
+        this._viewportRefitDeadline = performance.now() + 1500;
+    }
+
     handleResize() {
+        if (this._pendingViewportRefit && this.dom?.viewerContainer) {
+            const rect = this.dom.viewerContainer.getBoundingClientRect();
+            const widthDelta = Math.abs(rect.width - (this._lastViewerWidth || 0));
+            const heightDelta = Math.abs(rect.height - (this._lastViewerHeight || 0));
+            this._lastViewerWidth = rect.width;
+            this._lastViewerHeight = rect.height;
+            const deadlineReached = performance.now() > this._viewportRefitDeadline;
+            const hasUsableSpace = rect.width > 200 && rect.height > 200;
+
+            if (hasUsableSpace && (widthDelta > 30 || heightDelta > 30 || deadlineReached)) {
+                this._pendingViewportRefit = false;
+                console.log('[RESIZE] Viewer expanded after load, auto refitting image');
+                this.resetView(false);
+                this.updatePyramidLevel();
+                return;
+            }
+
+            if (deadlineReached && !hasUsableSpace) {
+                this._pendingViewportRefit = false;
+            }
+        }
         this.scheduleDraw();
     }
 
@@ -10913,10 +11139,12 @@ class WaferMapViewer {
     }
 
     async getClassList(force = false) {
-        if (!force && this.cachedClassList && this.cachedClassList.length >= 0) {
+        const version = this.currentFolderVersion || 0;
+
+        if (!force && this.cachedClassList && this.cachedClassListVersion === version) {
             return this.cachedClassList;
         }
-        if (!force && this.classListPromise) {
+        if (!force && this.classListPromise && this.classListPromiseVersion === version) {
             return this.classListPromise;
         }
 
@@ -10931,24 +11159,40 @@ class WaferMapViewer {
                 const classes = Array.isArray(data.classes)
                     ? data.classes.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
                     : [];
+
+                if (this.currentFolderVersion !== version) {
+                    this.debugLog('⚠️ [CLASS_LIST] 컨텍스트 변경으로 결과 무시');
+                    return this.cachedClassList && this.cachedClassListVersion === this.currentFolderVersion
+                        ? this.cachedClassList
+                        : [];
+                }
+
                 this.cachedClassList = classes;
+                this.cachedClassListVersion = version;
                 return classes;
             } catch (error) {
                 console.error('클래스 목록 조회 실패:', error);
+                if (this.cachedClassList && this.cachedClassListVersion === version) {
+                    return this.cachedClassList;
+                }
                 if (!this.cachedClassList) {
                     this.cachedClassList = [];
                 }
                 throw error;
             } finally {
-                this.classListPromise = null;
+                if (this.classListPromiseVersion === version) {
+                    this.classListPromise = null;
+                    this.classListPromiseVersion = -1;
+                }
             }
         })();
 
         this.classListPromise = fetchPromise;
+        this.classListPromiseVersion = version;
         try {
             return await fetchPromise;
         } catch (error) {
-            if (!force && this.cachedClassList) {
+            if (!force && this.cachedClassList && this.cachedClassListVersion === version) {
                 return this.cachedClassList;
             }
             throw error;
@@ -12299,23 +12543,40 @@ class WaferMapViewer {
         // 🔥 Label Explorer 새로고침 활성화
         // 🔥 중복 호출 방지
         if (this._isRefreshingLabelExplorer) {
+            this._pendingLabelExplorerRefresh = true;
             return;
         }
 
         this._isRefreshingLabelExplorer = true;
+        const refreshContext = {
+            folderPath: this.currentFolderPath,
+            folderPrefix: this.currentFolderPrefix,
+            folderVersion: this.currentFolderVersion
+        };
+        const isContextChanged = () =>
+            refreshContext.folderPath !== this.currentFolderPath ||
+            refreshContext.folderPrefix !== this.currentFolderPrefix ||
+            refreshContext.folderVersion !== this.currentFolderVersion;
 
         try {
             const container = document.getElementById('label-explorer-list');
 
             if (!container) {
-                this._isRefreshingLabelExplorer = false;
                 return;
             }
 
-        const scrollTop = container.scrollTop;
+            let scrollTop = 0;
+            let existingContent = '';
 
-        // 기존 내용을 임시로 저장하여 스크롤 위치 유지
-        const existingContent = container.innerHTML;
+            if (isContextChanged()) {
+                this.debugLog('Label Explorer context changed before refresh start - skipping stale run');
+                return;
+            }
+
+            scrollTop = container.scrollTop;
+
+            // 기존 내용을 임시로 저장하여 스크롤 위치 유지
+            existingContent = container.innerHTML;
 
         this.debugLog('Label Explorer 새로고침 시작...');
 
@@ -12336,22 +12597,15 @@ class WaferMapViewer {
         const batchLabelBtn = document.getElementById('label-explorer-batch-label-btn');
         const batchDeleteBtn = document.getElementById('label-explorer-batch-delete-btn');
 
-        // 🔥 최적화: labelManager.classes를 직접 사용 (API 호출 생략, 클래스 목록 유지)
+        // 항상 현재 폴더 기준으로 클래스 목록을 가져옴 (버전 검증 포함)
         let classes = [];
-        if (this.labelManager && this.labelManager.classes && this.labelManager.classes.length > 0) {
-            // 🔥 labelManager.classes를 직접 사용 (이미 로드된 클래스 목록 사용)
-            classes = this.labelManager.classes.map(cls => typeof cls === 'string' ? cls : cls.name);
-            console.log('🔍 [REFRESH_LABEL_EXPLORER] labelManager.classes 사용:', classes.length, '개');
-        } else {
-            // 🔥 labelManager.classes가 비어있으면 getClassList() 호출 (최초 로드 시)
-            try {
-                classes = await this.getClassList();
-                console.log('🔍 [REFRESH_LABEL_EXPLORER] getClassList() 호출:', classes.length, '개');
-            } catch (error) {
-                console.error('❌ [REFRESH_LABEL_EXPLORER] 클래스 조회 오류:', error);
-                // 에러 발생 시에도 빈 배열로 계속 진행하여 UI가 깨지지 않도록 함
-                classes = [];
-            }
+        try {
+            classes = await this.getClassList();
+            console.log('🔍 [REFRESH_LABEL_EXPLORER] getClassList() 호출:', classes.length, '개');
+        } catch (error) {
+            console.error('❌ [REFRESH_LABEL_EXPLORER] 클래스 조회 오류:', error);
+            // 에러 발생 시에도 빈 배열로 계속 진행하여 UI가 깨지지 않도록 함
+            classes = [];
         }
 
         // 🔥 try 제거 - 이미 Line 10162에서 시작된 try 블록 안에 있음
@@ -12451,7 +12705,16 @@ class WaferMapViewer {
                         const data = await response.json();
                         const imgList = Array.isArray(data.items) ? data.items : [];
 
+                        if (isContextChanged()) {
+                            this.debugLog(`?? [DEBUG] 폴더 '${cls}' 업데이트 중단 (컨텍스트 변경)`);
+                            return;
+                        }
+
                         classToImgList[cls] = imgList;
+
+                        if (isContextChanged()) {
+                            return;
+                        }
 
                         this.classToImgListCache[cls] = imgList;
 
@@ -12462,6 +12725,11 @@ class WaferMapViewer {
                 });
                 
             await Promise.all(folderPromises);
+
+            if (isContextChanged()) {
+                this.debugLog('Label Explorer context changed after folder fetch - skipping stale render');
+                return;
+            }
         }
 
         this.debugLog(`🚀 Label Explorer: ${classes.length}개 클래스 초기화 완료 (열린 폴더: ${Object.keys(labelSelection.openFolders).filter(k => labelSelection.openFolders[k]).length}개)`);
@@ -12862,6 +13130,11 @@ class WaferMapViewer {
             this.debugLog(`⏱ Delete Label 전체: ${(performance.now()-t0).toFixed(1)}ms`);
         };
 
+        if (isContextChanged()) {
+            this.debugLog('Label Explorer context changed before render - skipping stale output');
+            return;
+        }
+
         // 전체 내용을 다시 렌더링하되 스크롤 위치 유지
         this.renderLabelExplorerContent(container, classes, classToImgList, labelSelection);
         
@@ -12883,6 +13156,11 @@ class WaferMapViewer {
         } finally {
             // 🔥 중복 호출 방지 플래그 해제
             this._isRefreshingLabelExplorer = false;
+
+            if (this._pendingLabelExplorerRefresh || isContextChanged()) {
+                this._pendingLabelExplorerRefresh = false;
+                return this.refreshLabelExplorer();
+            }
         }
     }
 
@@ -14076,6 +14354,10 @@ class WaferMapViewer {
         // 클래스 목록 다시 가져오기
         this.refreshClassList().then(async () => {
             // 🔥 refreshClassList()에서 캐시된 클래스 목록 사용 (중복 API 호출 제거)
+            if (this.cachedClassListVersion !== this.currentFolderVersion) {
+                this.debugLog('Label Explorer content render skipped - context changed');
+                return;
+            }
             const classes = Array.isArray(this.cachedClassList) ? this.cachedClassList.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())) : [];
             const labelSelection = this.labelSelection;
 
@@ -16503,6 +16785,17 @@ class WaferMapViewer {
         if (this.contextMenuJustShown) {
             this.contextMenuJustShown = false;
             return;
+        }
+
+        // 🔥 Composite Mode에서 Grade 이미지 클릭 시 선택 토글
+        if (this.isCompositeMode && this.selectedImages && this.selectedImages[idx]) {
+            const imagePath = this.selectedImages[idx];
+            const gradeMatch = imagePath.match(/Grade_(\d)\.png$/);
+            if (gradeMatch) {
+                const gradeIndex = parseInt(gradeMatch[1], 10);
+                this.toggleGradeSelection(gradeIndex);
+                return; // Grade 선택 모드에서는 일반 grid 선택 로직 스킵
+            }
         }
 
         if (!this.gridSelectedIdxs) this.gridSelectedIdxs = [];
@@ -19693,6 +19986,182 @@ class WaferMapViewer {
         } catch (error) {
             console.error('클립보드 복사 실패:', error);
             alert('클립보드 복사에 실패했습니다.');
+        }
+    }
+
+    /**
+     * Grade 선택 토글 (Subset Map을 위한 grade 선택)
+     * @param {number} gradeIndex - Grade 인덱스 (0-7)
+     */
+    toggleGradeSelection(gradeIndex) {
+        if (gradeIndex < 0 || gradeIndex > 7) {
+            console.warn('⚠️ Invalid grade index:', gradeIndex);
+            return;
+        }
+
+        if (this.selectedGrades.has(gradeIndex)) {
+            this.selectedGrades.delete(gradeIndex);
+        } else {
+            this.selectedGrades.add(gradeIndex);
+        }
+
+        console.log('🎯 [Grade Selection] 선택된 grades:', Array.from(this.selectedGrades).sort());
+        this.updateGradeSelectionUI();
+    }
+
+    /**
+     * Grade 선택 UI 업데이트 (선택된 Grade 이미지에 테두리 표시)
+     */
+    updateGradeSelectionUI() {
+        // 모든 Grade 이미지 타일에서 선택 표시 업데이트
+        const gridItems = document.querySelectorAll('.grid-thumb-wrap');
+        gridItems.forEach((wrap, idx) => {
+            if (this.selectedImages && this.selectedImages[idx]) {
+                const imagePath = this.selectedImages[idx];
+                const gradeMatch = imagePath.match(/Grade_(\d)\.png$/);
+                if (gradeMatch) {
+                    const gradeIndex = parseInt(gradeMatch[1], 10);
+                    if (this.selectedGrades.has(gradeIndex)) {
+                        wrap.classList.add('grade-selected');
+                    } else {
+                        wrap.classList.remove('grade-selected');
+                    }
+                }
+            }
+        });
+
+        // Context menu 상태 업데이트 (Grade 선택이 변경되면 context menu의 Subset Map 항목도 업데이트)
+        this.updateContextMenuState();
+
+        console.log('🎨 [Grade Selection UI] Updated. Selected grades:', Array.from(this.selectedGrades).sort());
+    }
+
+    /**
+     * 선택된 Grade로 Subset Map 생성
+     */
+    async createSubsetMap() {
+        if (!this.isCompositeMode || !this.compositeSession?.outputDir) {
+            this.showToast?.('Composite 모드가 아닙니다.', 2000);
+            return;
+        }
+
+        if (this.selectedGrades.size === 0) {
+            this.showToast?.('최소 1개 이상의 Grade를 선택해주세요.', 2000);
+            return;
+        }
+
+        const selectedGradeList = Array.from(this.selectedGrades).sort();
+        console.log('🚀 [Subset Map] Creating subset map with grades:', selectedGradeList);
+
+        // 🔥 로딩 오버레이 표시
+        let loadingOverlay = null;
+        try {
+            // 🔥 로딩 오버레이 생성
+            loadingOverlay = document.createElement('div');
+            loadingOverlay.id = 'subset-loading-overlay';
+            loadingOverlay.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.7);
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                z-index: 20000;
+                color: #fff;
+                font-size: 16px;
+            `;
+
+            // 🔥 스피너와 메시지
+            const spinner = document.createElement('div');
+            spinner.style.cssText = `
+                width: 50px;
+                height: 50px;
+                border: 4px solid rgba(255, 255, 255, 0.3);
+                border-top-color: #ff9500;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+                margin-bottom: 20px;
+            `;
+
+            const message = document.createElement('div');
+            message.textContent = `Grade ${selectedGradeList.join(', ')} Subset Map 생성 중...`;
+            message.style.cssText = `
+                font-size: 18px;
+                font-weight: 500;
+                text-align: center;
+            `;
+
+            loadingOverlay.appendChild(spinner);
+            loadingOverlay.appendChild(message);
+            document.body.appendChild(loadingOverlay);
+
+            const payload = {
+                output_dir: this.compositeSession.outputDir,
+                selected_grades: selectedGradeList,
+            };
+
+            const res = await fetch('/api/composite-subset', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+
+            if (!res.ok) {
+                const errorData = await res.json().catch(() => ({}));
+                throw new Error(errorData.detail || `HTTP ${res.status}`);
+            }
+
+            const result = await res.json();
+            console.log('✅ [Subset Map] Created:', result);
+
+            if (result.subset_maps && result.subset_maps.length > 0) {
+                // 새로 생성된 Subset Map을 그리드에 추가하고 정렬
+                const newImages = result.subset_maps.map(item => item.path);
+                const allImages = [...this.selectedImages, ...newImages];
+
+                // 🔥 자연 정렬 적용 (숫자 순서대로)
+                const sortedImages = allImages.sort((a, b) => {
+                    const nameA = a.split('/').pop();
+                    const nameB = b.split('/').pop();
+                    return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+                });
+
+                this.selectedImages = sortedImages;
+                this.currentGridImages = sortedImages;
+
+                // 🔥 Composite 세션의 sumMaps도 업데이트 (next/prev 작동을 위해)
+                if (this.compositeSession && this.compositeSession.sumMaps) {
+                    const newSumMapEntries = result.subset_maps.map(item => ({
+                        path: item.path,
+                        type: item.type || 'subset',
+                        display_name: item.display_name || item.filename,
+                        filename: item.filename
+                    }));
+                    this.compositeSession.sumMaps.push(...newSumMapEntries);
+                }
+
+                // 그리드 다시 표시
+                await this.showGrid(sortedImages, true);
+
+                const gradeStr = selectedGradeList.join(', ');
+                this.showToast?.(`Grade ${gradeStr} Subset Map이 생성되었습니다.`, 2500);
+
+                // 선택 초기화
+                this.selectedGrades.clear();
+                this.updateGradeSelectionUI();
+            }
+        } catch (err) {
+            console.error('❌ [Subset Map] Error:', err);
+            this.showToast?.(`Subset Map 생성 실패: ${err.message}`, 3000);
+        } finally {
+            // 🔥 로딩 오버레이 제거
+            if (loadingOverlay && loadingOverlay.parentNode) {
+                loadingOverlay.parentNode.removeChild(loadingOverlay);
+            }
         }
     }
 }
