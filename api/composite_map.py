@@ -135,6 +135,47 @@ def _load_pixel_indices_with_cache(image_rel_path: str, width: int, height: int)
         return None
 
 
+def _count_low_grade_occurrences(
+    stacked_indices: np.ndarray,
+    chunk_size: Optional[int] = None,
+) -> np.ndarray:
+    """
+    (N, H, W) 인덱스 배열에서 grade 0~7의 등장 횟수를 계산.
+    4차원 브로드캐스트 대신 np.add.at 기반 누적로직을 사용하여
+    메모리 사용량을 8배 이상 줄이고 CPU 캐시 효율을 높인다.
+    """
+    if stacked_indices.ndim != 3:
+        raise ValueError("stacked_indices must be a 3D array (N, H, W)")
+
+    total_images, height, width = stacked_indices.shape
+    if total_images == 0 or height == 0 or width == 0:
+        return np.zeros((8, height, width), dtype=np.uint16)
+
+    inferred_chunk = chunk_size or COMPOSITE_BATCH_SIZE or 8
+    chunk = max(1, min(total_images, max(4, min(64, inferred_chunk))))
+
+    flat_pixels = height * width
+    counts = np.zeros((8, flat_pixels), dtype=np.uint32)
+    base_pixels = np.arange(flat_pixels, dtype=np.int64)
+    pixel_cache: Dict[int, np.ndarray] = {}
+
+    for start in range(0, total_images, chunk):
+        chunk_arr = stacked_indices[start:start + chunk]
+        current_len = chunk_arr.shape[0]
+        flat_chunk = chunk_arr.reshape(-1)
+        valid_mask = flat_chunk < 8
+        if not valid_mask.any():
+            continue
+        if current_len not in pixel_cache:
+            pixel_cache[current_len] = np.tile(base_pixels, current_len)
+        pixel_ids = pixel_cache[current_len][valid_mask]
+        grade_ids = flat_chunk[valid_mask].astype(np.int64, copy=False)
+        np.add.at(counts, (grade_ids, pixel_ids), 1)
+
+    clipped = np.clip(counts, 0, np.iinfo(np.uint16).max).astype(np.uint16, copy=False)
+    return clipped.reshape(8, height, width)
+
+
 def _hex_to_rgb_tuple(value: str) -> Tuple[int, int, int]:
     value = value.lstrip("#")
     if len(value) != 6:
@@ -613,12 +654,7 @@ def _save_sum_map_variants(
     float_indices = all_indices.astype(np.float32, copy=False)
 
     if grade_counts is None:
-        # 벡터화된 grade 카운트 계산 (Python 루프 제거)
-        # stacked_indices[..., None]: (N, H, W, 1)
-        # np.arange(8): (8,)
-        # 비교 결과: (N, H, W, 8) -> sum(axis=0) -> (H, W, 8) -> transpose -> (8, H, W)
-        grade_counts_vec = (all_indices[..., None] == np.arange(8)).sum(axis=0)
-        grade_counts = grade_counts_vec.transpose(2, 0, 1).astype(np.uint16, copy=False)
+        grade_counts = _count_low_grade_occurrences(all_indices)
     grade_counts_float = grade_counts.astype(np.float32, copy=False)
 
     # 제곱합 계산: 각 인덱스 값을 제곱한 후 카운트와 곱함
@@ -883,10 +919,7 @@ def create_composite_heatmaps(
     float_indices = stacked_indices.astype(np.float32)
     _, height, width = stacked_indices.shape
 
-    # 벡터화된 grade 카운트 계산 (NumPy 브로드캐스팅 활용)
-    # (N, H, W, 1) == (8,) -> (N, H, W, 8) -> sum(axis=0) -> (H, W, 8) -> transpose -> (8, H, W)
-    grade_counts_vec = (stacked_indices[..., None] == np.arange(8)).sum(axis=0)
-    grade_counts = grade_counts_vec.transpose(2, 0, 1).astype(np.uint16, copy=False)
+    grade_counts = _count_low_grade_occurrences(stacked_indices)
 
     # (invalid_mask와 idx_8_13_only를 제외한 포인트 중 0-7만 있는 것)
     valid_0_7_mask = (stacked_indices >= 0) & (stacked_indices <= 7)  # (N, H, W)
@@ -915,22 +948,25 @@ def create_composite_heatmaps(
 
     heatmaps: List[Dict[str, Any]] = []
     palette_bytes = palette_list[:]
+    grade_presence = grade_counts > 0
+    invalid_mask_bool = invalid_mask.astype(bool, copy=False) if invalid_mask is not None else None
+    idx_8_overlay = idx_8_13_only & ~invalid_mask_bool if invalid_mask_bool is not None else idx_8_13_only.copy()
     for idx in indices:
         if idx >= 8:
             continue
         result = np.full((height, width), 31, dtype=np.uint8)
-        # median_indices가 idx인 포인트만 해당 grade로 표시
-        valid_mask = (~invalid_mask) & (median_indices == idx)
-        result[valid_mask] = idx
-        # 인덱스 8-13만 있는 포인트는 8로 설정
-        result[idx_8_13_only & ~invalid_mask] = 8
+        presence_mask = grade_presence[idx].copy()
+        if invalid_mask_bool is not None:
+            presence_mask &= ~invalid_mask_bool
+        result[presence_mask] = idx
+        result[idx_8_overlay] = 8
         heatmap_path = output_dir / f"Grade_{idx}.png"
         heatmap_img = Image.fromarray(result, mode='P')
         heatmap_img.putpalette(palette_bytes)
         heatmap_img.save(heatmap_path, format='PNG', optimize=False, compress_level=1)
         rel_path = heatmap_path.relative_to(IMAGES_ROOT).as_posix()
         total_pixels = width * height
-        pixel_count = int(np.sum(valid_mask))
+        pixel_count = int(np.count_nonzero(presence_mask))
         percentage = round(pixel_count / total_pixels * 100, 2) if total_pixels else 0
         heatmaps.append({
             "index": idx,
@@ -1136,10 +1172,7 @@ def create_sum_map(
     stacked_indices = np.stack(all_indices_list, axis=0)
     _, height, width = stacked_indices.shape
 
-    # 벡터화된 grade 카운트 계산 (C 레벨 연산으로 8배 빠름)
-    # Broadcasting: (N, H, W, 1) == (8,) -> (N, H, W, 8) -> sum -> (H, W, 8) -> transpose -> (8, H, W)
-    grade_counts_vec = (stacked_indices[..., None] == np.arange(8)).sum(axis=0)
-    grade_counts = grade_counts_vec.transpose(2, 0, 1).astype(np.uint16, copy=False)
+    grade_counts = _count_low_grade_occurrences(stacked_indices)
 
     valid_0_7_mask = (stacked_indices >= 0) & (stacked_indices <= 7)
     has_valid_0_7 = valid_0_7_mask.any(axis=0)

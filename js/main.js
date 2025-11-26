@@ -822,6 +822,7 @@ class WaferMapViewer {
 
         this.lastCompositeSourceImages = []; // Composite 생성 시 사용한 원본 이미지 목록
         this.selectedGrades = new Set(); // Subset Map을 위한 선택된 grade 인덱스 (0-7)
+        this._lastGradeTapSnapshot = null;
         this.updateContextMenuState();
 
         this.imageCtx.imageSmoothingQuality = 'high';
@@ -3744,6 +3745,12 @@ class WaferMapViewer {
         };
 
         const handleTapSelection = (event) => {
+            if (typeof event?.button === 'number' && event.button !== 0) {
+                return;
+            }
+            if (event?.detail && event.detail > 1) {
+                return;
+            }
             const thumbWrap = event.target.closest('.grid-thumb-wrap');
             if (thumbWrap) {
                 // 🔥 성능 최적화: data-index 사용 (indexOf 제거)
@@ -15121,7 +15128,11 @@ class WaferMapViewer {
             wrap.dataset.path = imgPath;
             // 클릭 이벤트는 onMouseUp에서 처리하므로 여기서는 제거
             // wrap.onclick = e => { e.stopPropagation(); this.toggleGridImageSelect(idx, e); };
-            wrap.ondblclick = e => { e.stopPropagation(); this.enterGridImageViewMode(idx); };
+            wrap.ondblclick = e => {
+                e.stopPropagation();
+                this.revertGradeSelectionIfNeeded(idx);
+                this.enterGridImageViewMode(idx);
+            };
             
             // 우클릭 컨텍스트 메뉴 표시
             wrap.oncontextmenu = e => {
@@ -16892,6 +16903,7 @@ class WaferMapViewer {
             const gradeMatch = imagePath.match(/Grade_(\d+)(?:\.[a-zA-Z0-9]+)?$/i);
             if (gradeMatch) {
                 const gradeIndex = parseInt(gradeMatch[1], 10);
+                this.recordGradeTapSnapshot(gradeIndex);
                 this.toggleGradeSelection(gradeIndex);
                 return; // Grade 선택 모드에서는 일반 grid 선택 로직 스킵
             }
@@ -20086,6 +20098,48 @@ class WaferMapViewer {
             console.error('클립보드 복사 실패:', error);
             alert('클립보드 복사에 실패했습니다.');
         }
+    }
+
+    recordGradeTapSnapshot(gradeIndex) {
+        if (gradeIndex < 0 || gradeIndex > 7) {
+            return;
+        }
+        if (!this.selectedGrades) {
+            this.selectedGrades = new Set();
+        }
+        this._lastGradeTapSnapshot = {
+            gradeIndex,
+            timestamp: performance.now(),
+            grades: Array.from(this.selectedGrades),
+        };
+    }
+
+    revertGradeSelectionIfNeeded(gridIndex) {
+        if (
+            !this.isCompositeMode ||
+            !this._lastGradeTapSnapshot ||
+            !Array.isArray(this.selectedImages) ||
+            !this.selectedImages[gridIndex]
+        ) {
+            return;
+        }
+        const snapshot = this._lastGradeTapSnapshot;
+        const now = performance.now();
+        if (now - snapshot.timestamp > 500) {
+            return;
+        }
+        const imagePath = this.selectedImages[gridIndex];
+        const match = imagePath.match(/Grade_(\d+)(?:\.[a-zA-Z0-9]+)?$/i);
+        if (!match) {
+            return;
+        }
+        const gradeIndex = parseInt(match[1], 10);
+        if (gradeIndex !== snapshot.gradeIndex) {
+            return;
+        }
+        this.selectedGrades = new Set(snapshot.grades);
+        this.updateGradeSelectionUI();
+        this._lastGradeTapSnapshot = null;
     }
 
     /**
