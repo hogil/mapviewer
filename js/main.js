@@ -6402,6 +6402,22 @@ class WaferMapViewer {
 
         // Subset Map 항목: Composite 모드 + Grade 선택된 경우에만 표시
         if (subsetMapItem) {
+            // 🔥 Fallback: selectedGrades가 비어있지만 그리드 선택이 있는 경우 동기화
+            if (this.isCompositeMode && (!this.selectedGrades || this.selectedGrades.size === 0)) {
+                if (this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0) {
+                    this.gridSelectedIdxs.forEach(idx => {
+                        const path = this.selectedImages && this.selectedImages[idx];
+                        if (path) {
+                            const match = path.match(/Grade_(\d+)(?:\.[a-zA-Z0-9]+)?$/i);
+                            if (match) {
+                                if (!this.selectedGrades) this.selectedGrades = new Set();
+                                this.selectedGrades.add(parseInt(match[1], 10));
+                            }
+                        }
+                    });
+                }
+            }
+
             const showSubsetMap = this.isCompositeMode && this.selectedGrades && this.selectedGrades.size > 0;
             subsetMapItem.style.setProperty('display', showSubsetMap ? 'block' : 'none', 'important');
             if (showSubsetMap) {
@@ -6864,7 +6880,7 @@ class WaferMapViewer {
             // 🔥 1단계: 현재 Grid 세션 저장
             this.saveCurrentGridSession();
 
-            // 🔥 2단계: API 호출하여 Composite Map 생성
+            // 🔥 2단계: API 호출하여 Composite Map 생성 시작 (백그라운드)
             const res = await fetch('/api/composite-map', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -6876,18 +6892,57 @@ class WaferMapViewer {
                 throw new Error(await res.text());
             }
 
-            const result = await res.json();
-            console.log('✅ Composite Map 생성 완료:', result);
-            console.log('🔍 [DEBUG API RESPONSE] heatmaps length:', result.heatmaps?.length);
-            console.log('🔍 [DEBUG API RESPONSE] sum_maps:', result.sum_maps);
-            console.log('🔍 [DEBUG API RESPONSE] sum_map_path:', result.sum_map_path);
+            const startResponse = await res.json();
+            const taskId = startResponse.task_id;
+            console.log('✅ Composite Map 작업 시작:', taskId);
+
+            // 🔥 3단계: 상태 폴링 (1초마다 확인)
+            let result = null;
+            while (true) {
+                await new Promise(resolve => setTimeout(resolve, 1000)); // 1초 대기
+
+                const statusRes = await fetch(`/api/composite-map/status/${taskId}`, {
+                    cache: 'no-store'
+                });
+
+                if (!statusRes.ok) {
+                    throw new Error('작업 상태 조회 실패');
+                }
+
+                const status = await statusRes.json();
+                console.log('📊 Composite Map 작업 상태:', status);
+
+                // 메시지 업데이트
+                if (message) {
+                    const statusText = status.status === 'processing' ? '처리 중...' :
+                                     status.status === 'queued' ? '대기 중...' :
+                                     status.status === 'completed' ? '완료!' : '실패';
+                    message.textContent = `Composite Map ${statusText} (${selected.length}개 이미지)`;
+                }
+
+                if (status.status === 'completed') {
+                    result = status.result;
+                    console.log('✅ Composite Map 생성 완료:', result);
+                    console.log('🔍 [DEBUG API RESPONSE] heatmaps length:', result.heatmaps?.length);
+                    console.log('🔍 [DEBUG API RESPONSE] sum_maps:', result.sum_maps);
+                    console.log('🔍 [DEBUG API RESPONSE] sum_map_path:', result.sum_map_path);
+                    break;
+                } else if (status.status === 'failed') {
+                    throw new Error(status.error || 'Composite Map 생성 실패');
+                }
+
+                // 진행률 표시 (있다면)
+                if (status.progress !== undefined && message) {
+                    message.textContent = `Composite Map 처리 중... ${status.progress}% (${selected.length}개 이미지)`;
+                }
+            }
 
             // 🔥 로딩 오버레이 제거
             if (loadingOverlay && loadingOverlay.parentNode) {
                 loadingOverlay.parentNode.removeChild(loadingOverlay);
             }
 
-            // 🔥 3단계: Grid를 Composite Grid로 교체
+            // 🔥 4단계: Grid를 Composite Grid로 교체
             await this.switchToCompositeGrid(result);
 
             // 🔥 완료 메시지
@@ -9658,6 +9713,48 @@ class WaferMapViewer {
             initialLevel = levels[3];
         }
 
+        // 🔥 [OPTIMIZATION] Placeholder Loading
+        // 이미지가 크거나 네트워크가 느릴 때, 썸네일을 먼저 보여주어 체감 속도 향상
+        let highResLoaded = false;
+        
+        // 비동기로 썸네일 로드 및 표시 (Main fetch와 병렬 진행)
+        // fromLabelExplorer가 true이거나 일반 로딩에서도 썸네일을 활용하여 즉각적인 피드백 제공
+        (async () => {
+            try {
+                if (signal.aborted) return;
+                
+                // Label Explorer 등에서 이미 캐시된 썸네일이 있을 가능성이 높음
+                const pParams = this.getPersonalizedParams();
+                const cBuster = this._personalizedColorCacheBuster || Date.now();
+                // size=512는 Label Explorer 썸네일 크기와 맞춤
+                const thumbUrl = `/api/thumbnail?path=${encodeURIComponent(fullPath)}&size=512${pParams}&_t=${cBuster}`;
+                
+                const thumbResp = await fetch(thumbUrl, { signal });
+                if (!thumbResp.ok) return;
+                
+                if (signal.aborted || highResLoaded) return;
+                
+                const blob = await thumbResp.blob();
+                // Blob을 Bitmap으로 변환
+                const thumbBitmap = await createImageBitmap(blob);
+                
+                if (signal.aborted || highResLoaded) {
+                    thumbBitmap.close();
+                    return;
+                }
+                
+                // 렌더러에 썸네일을 해당 레벨로 업로드 (임시)
+                if (this.semiconductorRenderer?.isGpuAvailable()) {
+                    console.log('✅ [PLACEHOLDER] 썸네일 미리보기 표시 (High-res 로딩 중)');
+                    this.semiconductorRenderer.uploadLevelBitmap(initialLevel, thumbBitmap);
+                    this.semiconductorRenderer.setActiveLevel(initialLevel);
+                    this.requestRender();
+                }
+            } catch (e) {
+                // 무시 (AbortError 등)
+            }
+        })();
+
         const personalizedParams = this.getPersonalizedParams();
         const url = `/api/image?path=${encodeURIComponent(fullPath)}&level=${initialLevel}${personalizedParams}`;
         const tFetchStart = performance.now();
@@ -9722,6 +9819,7 @@ class WaferMapViewer {
             timeline.bitmapEnd = tBitmapEnd;
         }
 
+        highResLoaded = true; // 🔥 Mark as loaded to stop placeholder
         this.pyramidLevels[initialLevel] = bitmap;
         // 🔥 캐시 키에도 저장 (개인색 설정별로 구분)
         const initialCacheKey = `${initialLevel}_${this.personalizedColorEnabled ? 'p' : 'n'}_${this.currentUser || 'change'}`;
@@ -16790,7 +16888,8 @@ class WaferMapViewer {
         // 🔥 Composite Mode에서 Grade 이미지 클릭 시 선택 토글
         if (this.isCompositeMode && this.selectedImages && this.selectedImages[idx]) {
             const imagePath = this.selectedImages[idx];
-            const gradeMatch = imagePath.match(/Grade_(\d)\.png$/);
+            // 정규식 개선: 대소문자 무시, 확장자 유연성, 숫자 1개 이상
+            const gradeMatch = imagePath.match(/Grade_(\d+)(?:\.[a-zA-Z0-9]+)?$/i);
             if (gradeMatch) {
                 const gradeIndex = parseInt(gradeMatch[1], 10);
                 this.toggleGradeSelection(gradeIndex);
@@ -20018,7 +20117,8 @@ class WaferMapViewer {
         gridItems.forEach((wrap, idx) => {
             if (this.selectedImages && this.selectedImages[idx]) {
                 const imagePath = this.selectedImages[idx];
-                const gradeMatch = imagePath.match(/Grade_(\d)\.png$/);
+                // 정규식 개선: 대소문자 무시, 확장자 유연성
+                const gradeMatch = imagePath.match(/Grade_(\d+)(?:\.[a-zA-Z0-9]+)?$/i);
                 if (gradeMatch) {
                     const gradeIndex = parseInt(gradeMatch[1], 10);
                     if (this.selectedGrades.has(gradeIndex)) {

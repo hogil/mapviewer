@@ -1,5 +1,5 @@
 #!/bin/bash
-# Ubuntu 24 사내 운영 서버 시작 스크립트 (SAML Auto Login + 초고속 성능)
+# Ubuntu 24 계열 운영 서버용 스크립트 (SAML Auto Login + 운영값) - 32C / 198GB RAM
 
 # SAML 설정
 export AUTO_LOGIN=False                    # 0=자동SAML로그인skip
@@ -19,7 +19,7 @@ export SSL_KEYFILE="cert/server.key"
 export IMAGES_ROOT="/appdata/appuser/images"        # 이미지 루트 경로
 export POSITIONS_ROOT="/appdata/appuser/positions"  # Positions 루트 경로
 
-# 성능 설정 (Ubuntu 24, 32코어, 192GB RAM)
+# 성능 설정 (Ubuntu 24, 32코어, 198GB RAM)
 # - 벤치마크 기반 중간값 (원본 고성능 vs 보수적 최적화 사이)
 # - 실제 워크로드에 따라 조정 권장
 export THUMBNAIL_SIZE="512"
@@ -30,9 +30,9 @@ export IO_THREADS="160"                  # 중간값 (256→64→160) - I/O 병�
 export THUMBNAIL_SEM="288"               # 중간값 (512→64→288) - 동시 썸네일 생성
 export THUMB_PREFETCH_BATCH="64"
 export THUMB_CLIENT_MAX_CONCURRENCY="12"
-export COMPOSITE_MAX_WORKERS="4"
+export COMPOSITE_MAX_WORKERS="24"        # 32C/198GB: loader workers
 export COMPOSITE_LOADER_MODE="thread"
-export COMPOSITE_BATCH_SIZE="4"
+export COMPOSITE_BATCH_SIZE="20"        # larger batch for vectorized accumulation
 export SEARCH_WORKERS="24"               # 검색 병렬 워커 수 (32코어 기준, 논리 검색 가속)
 
 # libvips 최적화 (웹서버 환경)

@@ -4,7 +4,7 @@ L3Tracker - Wafer Map Viewer API (HTTPS, Pretty Table Logs, Noise-free)
 """
 
 # ======================== Imports ========================
-import os, re, sys, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading
+import os, re, sys, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid
 from pathlib import Path
 from contextlib import contextmanager, asynccontextmanager
 from typing import List, Optional, Dict, Any, Tuple, Set, Literal, Iterable
@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 
-from fastapi import FastAPI, HTTPException, Query, Request, Path as PathParam, Depends
+from fastapi import FastAPI, HTTPException, Query, Request, Path as PathParam, Depends, BackgroundTasks
 from fastapi import Response as FastAPIResponse
 from fastapi.responses import JSONResponse, FileResponse, Response, RedirectResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -352,6 +352,14 @@ LABELS_FILE = config.LABELS_FILE
 IO_POOL = ThreadPoolExecutor(max_workers=IO_THREADS)
 DIRLIST_EXECUTOR = ThreadPoolExecutor(max_workers=max(4, min(16, (os.cpu_count() or 8))))
 THUMBNAIL_SEM = asyncio.Semaphore(THUMBNAIL_SEM_SIZE)
+
+# Composite map background task storage
+COMPOSITE_TASKS: Dict[str, Dict[str, Any]] = {}
+COMPOSITE_TASKS_LOCK = asyncio.Lock()
+
+# Composite map concurrency control (최대 2개 동시 실행)
+COMPOSITE_CONCURRENCY_LIMIT = 2
+COMPOSITE_SEMAPHORE: Optional[asyncio.Semaphore] = None
 _THUMBNAIL_EXECUTOR_WORKERS = max(4, min(THUMBNAIL_SEM_SIZE, (os.cpu_count() or 4) * 2))
 THUMBNAIL_EXECUTOR = ThreadPoolExecutor(max_workers=_THUMBNAIL_EXECUTOR_WORKERS)
 
@@ -379,7 +387,7 @@ ROLES_FILE.parent.mkdir(parents=True, exist_ok=True)
 ROLES_FILE_LOCK = Lock()
 ROLE_DEFAULT = "ROLE_USER"
 ROLE_HIERARCHY = ["ROLE_USER", "ROLE_POWER", "ROLE_ADMIN", "ROLE_SUPER"]
-COMPOSITE_ROOT = ROOT_DIR / "composite_maps"
+COMPOSITE_ROOT = ROOT_DIR / "composite_map"
 COMPOSITE_ROOT.mkdir(parents=True, exist_ok=True)
 INDEX_LOCK_WAIT_SECONDS = int(os.getenv("INDEX_LOCK_WAIT_SECONDS", "600"))
 INDEX_CACHE_LOADED = False
@@ -3343,9 +3351,9 @@ async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
         # 🔥 ThreadPoolExecutor로 병렬 처리 (고성능)
         loop = asyncio.get_running_loop()
         items = await loop.run_in_executor(DIRLIST_EXECUTOR, list_dir_fast, target)
-        
-        # 🔥 특정 폴더 제외: classification, classification_chips, chip_annotations, thumbnails
-        excluded_folders = ['classification', 'classification_chips', 'chip_annotations', 'thumbnails']
+
+        # 🔥 특정 폴더 제외: classification, classification_chips, chip_annotations, thumbnails, composite_map
+        excluded_folders = ['classification', 'classification_chips', 'chip_annotations', 'thumbnails', 'composite_map']
         items = [item for item in items if item['name'] not in excluded_folders]
         
         # 디버그 로그 제거 (너무 자주 출력됨)
@@ -4972,8 +4980,8 @@ async def search_files(q: str = Query("", description="파일명 검색(대소�
         if missing_count:
             timings["missing_files_filtered"] = missing_count
 
-        # 🔥 특정 폴더 제외: classification, classification_chips, chip_annotations, thumbnails
-        excluded_folders = ['classification', 'classification_chips', 'chip_annotations', 'thumbnails']
+        # 🔥 특정 폴더 제외: classification, classification_chips, chip_annotations, thumbnails, composite_map
+        excluded_folders = ['classification', 'classification_chips', 'chip_annotations', 'thumbnails', 'composite_map']
         original_bucket_size = len(bucket)
         filtered_bucket = []
         for rel in bucket:
@@ -5035,8 +5043,8 @@ async def get_files_recursive(path: str):
             for skip in list(SKIP_DIRS):
                 if skip in dirs:
                     dirs.remove(skip)
-            # classification, thumbnails 제외
-            dirs[:] = [d for d in dirs if d not in ['classification', 'thumbnails']]
+            # classification, thumbnails, composite_map 제외
+            dirs[:] = [d for d in dirs if d not in ['classification', 'thumbnails', 'composite_map']]
 
             for fn in filenames:
                 ext = os.path.splitext(fn)[1].lower()
@@ -6075,15 +6083,21 @@ async def browse_folders(path: Optional[str] = None):
         subfolders = []  # 2depth 폴더들
         
         # 🔥 1depth 폴더 수집
+        skip_dir_names = {'classification', 'classification_chips', 'thumbnails', 'labels'}
+        skip_dir_names.update(SKIP_DIRS)
+
         try:
             with os.scandir(target_path) as it:
                 for entry in it:
-                    # 🔥 classification, classification_chips, thumbnails 폴더 제외
-                    if entry.is_dir(follow_symlinks=False) and not entry.name.startswith('.') and entry.name not in ['classification', 'classification_chips', 'thumbnails', 'labels']:
+                    if (
+                        entry.is_dir(follow_symlinks=False)
+                        and not entry.name.startswith('.')
+                        and entry.name not in skip_dir_names
+                    ):
                         folders.append({
-                            "name": entry.name, 
-                            "path": str(entry.path), 
-                            "type": "folder", 
+                            "name": entry.name,
+                            "path": str(entry.path),
+                            "type": "folder",
                             "depth": 1,
                             "entry": entry  # 2depth 스캔을 위해 entry 전달
                         })
@@ -6096,8 +6110,11 @@ async def browse_folders(path: Optional[str] = None):
                 subfolders_list = []
                 with os.scandir(entry_info["path"]) as sub_it:
                     for sub_entry in sub_it:
-                        # 🔥 classification, classification_chips, thumbnails 폴더 제외
-                        if sub_entry.is_dir(follow_symlinks=False) and not sub_entry.name.startswith('.') and sub_entry.name not in ['classification', 'classification_chips', 'thumbnails', 'labels']:
+                        if (
+                            sub_entry.is_dir(follow_symlinks=False)
+                            and not sub_entry.name.startswith('.')
+                            and sub_entry.name not in skip_dir_names
+                        ):
                             subfolders_list.append({
                                 "name": f"{entry_info['name']} / {sub_entry.name}", 
                                 "path": str(sub_entry.path), 
@@ -6546,6 +6563,109 @@ class CompositeMapRequest(BaseModel):
     highlight_threshold: int = 8
     scheme: Optional[str] = None
 
+
+async def run_composite_map_task(
+    task_id: str,
+    image_paths: List[str],
+    palette_mode: bool,
+    focus_index: Optional[int],
+    highlight_threshold: int,
+    loader_mode: Optional[str],
+    max_workers: Optional[int],
+    batch_size: Optional[int],
+    scheme: str,
+    login_id: Optional[str]
+):
+    """
+    백그라운드에서 composite map 생성 실행 (동시 실행 수 제한)
+    """
+    global COMPOSITE_SEMAPHORE
+
+    # Lazy initialization of semaphore
+    if COMPOSITE_SEMAPHORE is None:
+        COMPOSITE_SEMAPHORE = asyncio.Semaphore(COMPOSITE_CONCURRENCY_LIMIT)
+
+    # Semaphore로 동시 실행 수 제한 (최대 2개)
+    async with COMPOSITE_SEMAPHORE:
+        try:
+            async with COMPOSITE_TASKS_LOCK:
+                COMPOSITE_TASKS[task_id]["status"] = "processing"
+                COMPOSITE_TASKS[task_id]["started_at"] = datetime.now().isoformat()
+
+            # 동기 함수를 executor에서 실행 (이벤트 루프 블로킹 방지)
+            from .composite_map import create_composite_heatmaps, create_palette_overlay
+
+            loop = asyncio.get_event_loop()
+
+            if palette_mode:
+                # 팔레트 오버레이 모드
+                from functools import partial
+                task_fn = partial(
+                    create_palette_overlay,
+                    image_paths=image_paths,
+                    focus_index=focus_index,
+                    highlight_threshold=highlight_threshold,
+                    loader_mode=loader_mode,
+                    max_workers=max_workers,
+                    login_id=login_id
+                )
+                result = await loop.run_in_executor(IO_POOL, task_fn)
+                response = {
+                    "success": True,
+                    "mode": "palette",
+                    "image_count": result["source_images"],
+                    "output_dir": result["output_dir"],
+                    "overlay_path": result["overlay_path"],
+                    "focus_index": result["focus_index"],
+                    "highlight_threshold": result["highlight_threshold"],
+                    "processing_time": result["processing_time"],
+                    "generated_at": result["output_dir"].split("/")[-1]
+                }
+            else:
+                # 히트맵 모드
+                from functools import partial
+                task_fn = partial(
+                    create_composite_heatmaps,
+                    image_paths=image_paths,
+                    indices=list(range(8)),
+                    create_sum=True,
+                    loader_mode=loader_mode,
+                    max_workers=max_workers,
+                    batch_size=batch_size,
+                    scheme=scheme,
+                    login_id=login_id
+                )
+                result = await loop.run_in_executor(IO_POOL, task_fn)
+                response = {
+                    "success": True,
+                    "mode": "heatmap",
+                    "image_count": result["source_images"],
+                    "output_dir": result["output_dir"],
+                    "heatmaps": result["heatmaps"],
+                    "width": result["image_size"]["width"],
+                    "height": result["image_size"]["height"],
+                    "processing_time": result["processing_time"],
+                    "generated_at": result["output_dir"].split("/")[-1]
+                }
+                if "sum_map_path" in result:
+                    response["sum_map_path"] = result["sum_map_path"]
+                if "sum_maps" in result:
+                    response["sum_maps"] = result["sum_maps"]
+
+            async with COMPOSITE_TASKS_LOCK:
+                COMPOSITE_TASKS[task_id]["status"] = "completed"
+                COMPOSITE_TASKS[task_id]["progress"] = 100
+                COMPOSITE_TASKS[task_id]["result"] = response
+                COMPOSITE_TASKS[task_id]["completed_at"] = datetime.now().isoformat()
+
+        except Exception as e:
+            logger.exception(f"Composite map task {task_id} failed: {e}")
+            async with COMPOSITE_TASKS_LOCK:
+                COMPOSITE_TASKS[task_id]["status"] = "failed"
+                COMPOSITE_TASKS[task_id]["error"] = str(e)
+                COMPOSITE_TASKS[task_id]["failed_at"] = datetime.now().isoformat()
+
+
 @app.post("/api/chip-annotations")
 async def save_chip_annotations(request: ChipAnnotationRequest, req: Request):
     """사용자가 마킹한 Chip 정보 저장"""
@@ -6759,13 +6879,16 @@ async def extract_chip_images(request: ChipImageExtractRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/composite-map")
-async def create_composite_map_endpoint(payload: CompositeMapRequest, req: Request):
+async def create_composite_map_endpoint(
+    payload: CompositeMapRequest,
+    req: Request,
+    background_tasks: BackgroundTasks
+):
     """
-    선택한 이미지들의 인덱스(0~7) 출현 빈도를 Heatmap으로 생성
+    선택한 이미지들의 인덱스(0~7) 출현 빈도를 Heatmap으로 생성 (백그라운드)
 
-    - 0개 (없음) → 흰색 RGB(255, 255, 255)
-    - 최대 개수 → 빨강 RGB(255, 0, 0)
-    - 중간 → 그라데이션
+    즉시 task_id를 반환하고 백그라운드에서 처리
+    상태 확인은 /api/composite-map/status/{task_id}로 가능
     """
     if not HAS_NUMPY:
         raise HTTPException(status_code=500, detail="numpy가 필요합니다. 서버에 numpy를 설치해주세요.")
@@ -6778,74 +6901,143 @@ async def create_composite_map_endpoint(payload: CompositeMapRequest, req: Reque
     if len(image_paths) > max_images:
         raise HTTPException(status_code=400, detail=f"최대 {max_images}개의 이미지만 지원합니다.")
 
+    # Task ID 생성
+    task_id = str(uuid.uuid4())
+
+    # 작업 상태 초기화
+    async with COMPOSITE_TASKS_LOCK:
+        COMPOSITE_TASKS[task_id] = {
+            "status": "queued",
+            "progress": 0,
+            "result": None,
+            "error": None,
+            "created_at": datetime.now().isoformat()
+        }
+
+    # 파라미터 준비
+    loader_mode = payload.loader_mode or config.COMPOSITE_LOADER_MODE
+    max_workers = payload.max_workers if payload.max_workers is not None else None
+    batch_size = payload.batch_size if payload.batch_size is not None else None
+    login_id = _current_login_id(req)
+    resolved_scheme = payload.scheme or (get_user_color_scheme(login_id) if login_id else "change")
+
+    # 백그라운드 작업 추가
+    background_tasks.add_task(
+        run_composite_map_task,
+        task_id=task_id,
+        image_paths=image_paths,
+        palette_mode=payload.palette_mode,
+        focus_index=payload.focus_index,
+        highlight_threshold=payload.highlight_threshold,
+        loader_mode=loader_mode,
+        max_workers=max_workers,
+        batch_size=batch_size,
+        scheme=resolved_scheme,
+        login_id=login_id
+    )
+
+    return {
+        "success": True,
+        "task_id": task_id,
+        "status": "processing",
+        "message": "Composite map generation started in background"
+    }
+
+
+@app.get("/api/composite-map/status/{task_id}")
+async def get_composite_map_status(task_id: str):
+    """
+    Composite map 작업 상태 조회
+    """
+    async with COMPOSITE_TASKS_LOCK:
+        if task_id not in COMPOSITE_TASKS:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return COMPOSITE_TASKS[task_id]
+
+
+class SubsetMapRequest(BaseModel):
+    output_dir: str = Field(..., description="Composite map 디렉토리 (NPZ 파일 위치)")
+    selected_grades: List[int] = Field(..., description="선택된 grade 리스트 (예: [3, 5])")
+    scheme: Optional[str] = Field(None, description="Color scheme")
+    override_colors: Optional[List[str]] = Field(None, description="색상 오버라이드")
+
+
+@app.post("/api/composite-subset")
+async def create_subset_map_endpoint(payload: SubsetMapRequest, req: Request):
+    """
+    선택된 grade만으로 Subset Map 생성
+
+    Request body:
+    {
+        "output_dir": "composite_map/user/20250125_123456",
+        "selected_grades": [3, 5],
+        "scheme": "change",
+        "override_colors": ["#ff0000", ...]
+    }
+
+    Returns:
+    {
+        "success": true,
+        "subset_maps": [
+            {
+                "path": "composite_map/.../square_average_35.png",
+                "type": "square_mean",
+                "display_name": "Composite SqMean [Grade 3, 5]",
+                "filename": "square_average_35.png",
+                "selected_grades": [3, 5]
+            },
+            {
+                "path": "composite_map/.../square_weighted_average_35.png",
+                "type": "weighted_square_mean",
+                "display_name": "Composite Weighted SqMean [Grade 3, 5]",
+                "filename": "square_weighted_average_35.png",
+                "selected_grades": [3, 5]
+            }
+        ]
+    }
+    """
+    if not HAS_NUMPY:
+        raise HTTPException(status_code=500, detail="numpy가 필요합니다.")
+
+    if not payload.selected_grades:
+        raise HTTPException(status_code=400, detail="selected_grades가 필요합니다.")
+
+    # Grade 범위 검증 (0-7만 허용)
+    for grade in payload.selected_grades:
+        if not (0 <= grade <= 7):
+            raise HTTPException(status_code=400, detail=f"Grade는 0-7 범위여야 합니다: {grade}")
+
     try:
-        # composite_map 모듈 사용
-        from .composite_map import create_composite_heatmaps, create_palette_overlay
+        from .composite_map import create_subset_map
+        from .config import IMAGES_ROOT
 
-        loader_mode = payload.loader_mode or config.COMPOSITE_LOADER_MODE
-        # 🔥 최적화: None을 전달하여 composite_map.py의 자동 최적화 로직 사용
-        # (cpu_count * 2, 최대 16개로 자동 계산)
-        max_workers = payload.max_workers if payload.max_workers is not None else None
-        batch_size = payload.batch_size if payload.batch_size is not None else None
+        # output_dir을 절대 경로로 변환
+        output_dir = IMAGES_ROOT / payload.output_dir
+        if not output_dir.exists():
+            raise HTTPException(status_code=404, detail=f"디렉토리가 존재하지 않습니다: {payload.output_dir}")
 
-        login_id = _current_login_id(req)
-        resolved_scheme = payload.scheme or (get_user_color_scheme(login_id) if login_id else "change")
+        # Subset Map 생성
+        subset_maps = create_subset_map(
+            output_dir=output_dir,
+            selected_grades=payload.selected_grades,
+            scheme=payload.scheme,
+            override_colors=payload.override_colors,
+        )
 
-        if payload.palette_mode:
-            # 팔레트 오버레이 모드: 빠른 단색 합성
-            result = create_palette_overlay(
-                image_paths,
-                focus_index=payload.focus_index,
-                highlight_threshold=payload.highlight_threshold,
-                loader_mode=loader_mode,
-                max_workers=max_workers,
-            )
-            response = {
-                "success": True,
-                "mode": "palette",
-                "image_count": result["source_images"],
-                "output_dir": result["output_dir"],
-                "overlay_path": result["overlay_path"],
-                "focus_index": result["focus_index"],
-                "highlight_threshold": result["highlight_threshold"],
-                "processing_time": result["processing_time"],
-                "generated_at": result["output_dir"].split("/")[-1]
-            }
-        else:
-            # 기존 히트맵 모드: 인덱스별 그라데이션 합성
-            result = create_composite_heatmaps(
-                image_paths,
-                indices=list(range(8)),
-                loader_mode=loader_mode,
-                max_workers=max_workers,
-                batch_size=batch_size,
-                scheme=resolved_scheme,
-            )
-            # 🔥 파일 경로로 반환 (썸네일 및 피라미드 생성용)
-            response = {
-                "success": True,
-                "mode": "heatmap",
-                "image_count": result["source_images"],
-                "output_dir": result["output_dir"],
-                "heatmaps": result["heatmaps"],
-                "width": result["image_size"]["width"],
-                "height": result["image_size"]["height"],
-                "processing_time": result["processing_time"],
-                "generated_at": result["output_dir"].split("/")[-1]
-            }
-            # 🔥 Sum Map 경로 추가
-            if "sum_map_path" in result:
-                response["sum_map_path"] = result["sum_map_path"]
-            if "sum_maps" in result:
-                response["sum_maps"] = result["sum_maps"]
-                print(f"[ENDPOINT] Added sum_maps to response: {response['sum_maps']}")
+        return {
+            "success": True,
+            "subset_maps": subset_maps,
+            "selected_grades": sorted(payload.selected_grades),
+        }
 
-            print(f"[ENDPOINT] Final response keys: {response.keys()}")
-            print(f"[ENDPOINT] 'sum_maps' in response: {'sum_maps' in response}")
-
-        return response
+    except FileNotFoundError as e:
+        logger.error(f"Subset map 생성 실패 (파일 없음): {e}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        logger.error(f"Subset map 생성 실패 (잘못된 값): {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.exception(f"Composite map 생성 실패: {e}")
+        logger.exception(f"Subset map 생성 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

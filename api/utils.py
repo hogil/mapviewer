@@ -184,7 +184,7 @@ class Constants:
     MAX_CACHE_SIZE = 1000
     
     # 파일 시스템
-    SKIP_DIRS_DEFAULT = {"classification", "thumbnails", "__pycache__", ".git"}
+    SKIP_DIRS_DEFAULT = {"classification", "thumbnails", "composite_map", "__pycache__", ".git"}
     NO_CACHE_PATHS = ["classification", "images", "labels"]
     
     # 정규표현식

@@ -1616,7 +1616,32 @@
             border: 2px solid #09f;
             box-shadow: 0 0 0 2px #09f3;
         }
-        
+
+        /* Grade 선택 스타일 (Subset Map 생성용) */
+        .grid-thumb-wrap.grade-selected {
+            border: 3px solid #ff9500;
+            box-shadow: 0 0 0 3px rgba(255, 149, 0, 0.3);
+            position: relative;
+        }
+
+        .grid-thumb-wrap.grade-selected::after {
+            content: '✓';
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: #ff9500;
+            color: white;
+            font-size: 16px;
+            font-weight: bold;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+        }
+
         .grid-thumb-wrap:hover {
             border: 2px solid #09f;
         }
@@ -3068,7 +3093,9 @@
                                 <span class="composite-title">Composite Map</span>
                                 <span class="composite-count" id="composite-count-label"></span>
                             </div>
-                            <button id="composite-close-btn" class="grid-btn">그리드로 돌아가기</button>
+                            <div style="display: flex; gap: 8px;">
+                                <button id="composite-close-btn" class="grid-btn">그리드로 돌아가기</button>
+                            </div>
                         </div>
                         <div class="composite-body">
                             <div class="composite-grid" id="composite-heatmap-grid"></div>
@@ -3212,6 +3239,9 @@
         </div>
         <div class="context-menu-item" id="context-composite-colors" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px; display: none;">
             🎨 Composite 색상
+        </div>
+        <div class="context-menu-item" id="context-subset-map-create" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px; display: none;">
+            🎯 선택 Grade로 Subset Map 생성
         </div>
         <div class="context-menu-item" id="context-set-ref-map" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">
             📌 Ref Map 등록

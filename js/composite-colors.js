@@ -431,7 +431,7 @@ export class CompositeColorModal {
         }
         this.previewBusy = true;
         try {
-            await this.viewer.refreshCompositeSumMaps({ colors: this.colors, silent: true });
+            await this.viewer.refreshCompositeSumMaps({ colors: this.colors, silent: true, skipOverlay: true });
             this.previewApplied = true;
         } catch (error) {
             console.error('[CompositeColorModal] triggerLivePreview failed:', error);
@@ -458,7 +458,7 @@ export class CompositeColorModal {
         this.previewApplied = false;
         if (needRevert) {
             try {
-                await this.viewer.refreshCompositeSumMaps({ colors: revertColors, silent: true });
+                await this.viewer.refreshCompositeSumMaps({ colors: revertColors, silent: true, skipOverlay: true });
             } catch (error) {
                 console.warn('[CompositeColorModal] handleCancel revert failed:', error);
             }
@@ -496,18 +496,24 @@ export class CompositeColorModal {
             this.viewer?.showToast?.('Composite 색상을 저장했습니다.', 2000);
             this.close();
 
-            // 🔥 모달을 닫은 후에 이미지 갱신 (Grid가 다시 보이는 상태에서)
+            // 🔥 모달을 닫은 후 비동기로 이미지 갱신 (UI 블로킹 방지)
             if (this.livePreviewEnabled && this.viewer?.refreshCompositeSumMaps) {
-                console.log('  ✅ 모달 닫힌 후 refreshCompositeSumMaps() 호출');
-                // 모달 닫기 애니메이션 완료 대기
-                await new Promise(resolve => setTimeout(resolve, 100));
-                try {
-                    await this.viewer.refreshCompositeSumMaps({ colors: this.colors, silent: true });
-                    console.log('  ✅ refreshCompositeSumMaps() 성공');
-                } catch (error) {
-                    console.error('[CompositeColorModal] refresh after apply failed:', error);
-                    this.viewer?.showToast?.('Composite 이미지가 갱신되지 않았습니다. 다시 생성해 주세요.', 2200);
-                }
+                console.log('  ✅ 모달 닫힌 후 refreshCompositeSumMaps() 비동기 호출');
+                
+                // requestAnimationFrame을 사용하여 다음 프레임에서 실행 (UI 렌더링 우선)
+                requestAnimationFrame(async () => {
+                    try {
+                        // skipOverlay: true로 오버레이 없이 백그라운드 갱신
+                        await this.viewer.refreshCompositeSumMaps({
+                            colors: this.colors,
+                            silent: true,
+                            skipOverlay: true, 
+                        });
+                        console.log('  ✅ refreshCompositeSumMaps() 성공');
+                    } catch (error) {
+                        console.error('[CompositeColorModal] refresh after apply failed:', error);
+                    }
+                });
             } else {
                 console.log('  ❌ refreshCompositeSumMaps() 호출되지 않음');
             }

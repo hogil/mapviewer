@@ -120,7 +120,7 @@ async def generate_composite_map(request: Request):
 
     Returns:
     {
-        "output_dir": "composite_maps/20250110_143022",
+        "output_dir": "composite_map/LOGIN/20250110_143022",
         "heatmaps": [
             {"index": 0, "path": "...", "max_count": 85},
             {"index": 1, "path": "...", "max_count": 92},
@@ -175,7 +175,7 @@ async def create_composite_heatmaps(image_paths: list, indices: list):
 
     # 1. 출력 디렉토리 생성
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = IMAGES_ROOT / "composite_maps" / timestamp
+    output_dir = IMAGES_ROOT / "composite_map" / login_id / timestamp
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # 2. 첫 번째 이미지에서 크기 확인
@@ -411,8 +411,9 @@ displayCompositeResults(result) {
 
 ```
 IMAGES_ROOT/
-└── composite_maps/
-    └── 20250110_143022/
+└── composite_map/
+    └── LOGIN/
+        └── 20250110_143022/
         ├── index_0.png  (인덱스 0 히트맵)
         ├── index_1.png  (인덱스 1 히트맵)
         ├── index_2.png

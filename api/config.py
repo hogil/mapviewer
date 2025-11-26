@@ -31,15 +31,21 @@ PNG_COMPRESSION_LEVEL = int(os.getenv("PNG_COMPRESSION_LEVEL", "3"))
 
 SUPPORTED_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp', '.gif'}
 # 검색/인덱싱에서 건너뛸 폴더 (모두 IMAGES_ROOT 하위, 원본 이미지가 아닌 파생 데이터)
-SKIP_DIRS = set(os.getenv("SKIP_DIRS", "classification,classification_chips,thumbnails,chip_annotations,chip_images,yolo_datasets").split(","))
+SKIP_DIRS = set(os.getenv(
+    "SKIP_DIRS",
+    "classification,classification_chips,thumbnails,chip_annotations,chip_images,yolo_datasets,composite_map,composite_cache_v1,my-lot"
+).split(","))
 
 # ===== 동시성 / 성능 =====
 CPU_COUNT = os.cpu_count() or 8
 IO_THREADS = int(os.getenv("IO_THREADS", "0")) or max(16, CPU_COUNT * 2)   # Ubuntu 24 최적화: CPU * 2
 THUMBNAIL_SEM = int(os.getenv("THUMBNAIL_SEM", "128"))                     # Ubuntu 24 최적화: 128로 증가
-COMPOSITE_MAX_WORKERS = int(os.getenv("COMPOSITE_MAX_WORKERS", "4"))
+# Composite pipeline tuning via COMPOSITE_* env (see start scripts)
+_default_composite_workers = max(4, min(32, (os.cpu_count() or 8) * 2))
+COMPOSITE_MAX_WORKERS = int(os.getenv("COMPOSITE_MAX_WORKERS", str(_default_composite_workers)))
 COMPOSITE_LOADER_MODE = os.getenv("COMPOSITE_LOADER_MODE", "thread").strip().lower() or "thread"
-COMPOSITE_BATCH_SIZE = max(1, int(os.getenv("COMPOSITE_BATCH_SIZE", "2")))
+_default_composite_batch = max(2, (os.cpu_count() or 8) // 2)
+COMPOSITE_BATCH_SIZE = max(1, int(os.getenv("COMPOSITE_BATCH_SIZE", str(_default_composite_batch))))
 
 # SEARCH_WORKERS: CPU 코어수의 2배 (I/O 바운드 작업에 최적)
 # 최소 4개, 최대 CPU_COUNT * 2개

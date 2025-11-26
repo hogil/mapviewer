@@ -831,7 +831,7 @@ export class LabelManager {
         item.addEventListener('click', () => {
             console.log('🔍 [LABEL_EXPLORER_DEBUG] 이미지 아이템 클릭됨:', imagePath);
             console.log('🔍 [LABEL_EXPLORER_DEBUG] 현재 폴더:', this.viewer?.currentFolderPath);
-            this.viewer.loadImage(imagePath);
+            this.viewer.loadImage(imagePath, true);
         });
         
         return item;
