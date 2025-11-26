@@ -14930,14 +14930,21 @@ class WaferMapViewer {
 
         this.gridMode = true;
 
-        // 🔥 이미지를 이름 순으로 오름차순 정렬 (숫자 자연 정렬 적용)
-        const sortedImages = [...images].sort((a, b) => {
-            // 파일명만 추출 (경로 제거)
-            const nameA = a.split('/').pop();
-            const nameB = b.split('/').pop();
-            // 🔥 숫자 자연 정렬 (예: 5가 10보다 앞에 옴)
-            return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
-        });
+        // 🔥 Composite 모드가 아닐 때만 이미지를 이름 순으로 오름차순 정렬 (숫자 자연 정렬 적용)
+        let sortedImages;
+        if (this.isCompositeMode) {
+            // Composite 모드: 전달된 순서 그대로 유지 (subset 추가 시 순서 보존)
+            sortedImages = [...images];
+        } else {
+            // 일반 모드: 파일명 기준 정렬
+            sortedImages = [...images].sort((a, b) => {
+                // 파일명만 추출 (경로 제거)
+                const nameA = a.split('/').pop();
+                const nameB = b.split('/').pop();
+                // 🔥 숫자 자연 정렬 (예: 5가 10보다 앞에 옴)
+                return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+            });
+        }
 
         this.selectedImages = sortedImages;
         this.currentGridImages = sortedImages;  // 🔥 currentGridImages 업데이트
@@ -20273,19 +20280,12 @@ class WaferMapViewer {
             console.log('✅ [Subset Map] Created:', result);
 
             if (result.subset_maps && result.subset_maps.length > 0) {
-                // 새로 생성된 Subset Map을 그리드에 추가하고 정렬
+                // 새로 생성된 Subset Map을 그리드에 추가 (기존 뒤에 추가)
                 const newImages = result.subset_maps.map(item => item.path);
                 const allImages = [...this.selectedImages, ...newImages];
 
-                // 🔥 자연 정렬 적용 (숫자 순서대로)
-                const sortedImages = allImages.sort((a, b) => {
-                    const nameA = a.split('/').pop();
-                    const nameB = b.split('/').pop();
-                    return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
-                });
-
-                this.selectedImages = sortedImages;
-                this.currentGridImages = sortedImages;
+                this.selectedImages = allImages;
+                this.currentGridImages = allImages;
 
                 // 🔥 Composite 세션의 sumMaps도 업데이트 (next/prev 작동을 위해)
                 if (this.compositeSession && this.compositeSession.sumMaps) {
@@ -20299,7 +20299,7 @@ class WaferMapViewer {
                 }
 
                 // 그리드 다시 표시
-                await this.showGrid(sortedImages, true);
+                await this.showGrid(allImages, true);
 
                 const gradeStr = selectedGradeList.join(', ');
                 this.showToast?.(`Grade ${gradeStr} Subset Map이 생성되었습니다.`, 2500);

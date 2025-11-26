@@ -2,6 +2,7 @@
 Composite Map 생성 모듈
 여러 웨이퍼 맵의 인덱스별 빈도를 히트맵으로 시각화
 """
+import os
 import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
@@ -18,9 +19,19 @@ from .config import (
     COMPOSITE_MAX_WORKERS,
     COMPOSITE_LOADER_MODE,
     COMPOSITE_BATCH_SIZE,
+    POSITIONS_ROOT,
 )
 from .personal_colors import load_color_legends, _scheme_to_palette_bytes, normalize_hex_color
 from .composite_colors import load_composite_color_settings
+
+try:
+    from cython_grade_counts import count_grades as _cython_count_grades
+except Exception:
+    _cython_count_grades = None
+
+if not os.environ.get("OMP_NUM_THREADS"):
+    _OMP_DEFAULT_THREADS = max(4, min(8, os.cpu_count() or 8))
+    os.environ["OMP_NUM_THREADS"] = str(_OMP_DEFAULT_THREADS)
 
 Image.MAX_IMAGE_PIXELS = None
 warnings.simplefilter("ignore", DecompressionBombWarning)
@@ -31,6 +42,122 @@ COMPOSITE_ROOT.mkdir(parents=True, exist_ok=True)
 SQUARE_MAP_CACHE_FILENAME = "square_maps_data.npz"
 COMPOSITE_CACHE_ROOT = IMAGES_ROOT / "composite_cache_v1"
 COMPOSITE_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+_GRADE_RANGE = np.arange(8, dtype=np.uint8)
+
+
+def _copy_positions_without_bin(first_image_rel_path: str, output_dir: Path, composite_images: List[str]) -> None:
+    """
+    첫 번째 이미지의 positions.json을 찾아서 bin(b) 정보를 제거한 후
+    composite map 이미지들에 대응하는 positions 파일로 복사
+
+    Args:
+        first_image_rel_path: 첫 번째 소스 이미지 상대 경로 (예: "wm-811k/1.png")
+        output_dir: Composite map 출력 디렉토리 (예: composite_map/change/20251126_140343)
+        composite_images: 생성된 composite 이미지 파일명 리스트 (예: ["Grade_0.png", "square_average.png"])
+    """
+    import json
+
+    print(f"[COMPOSITE] _copy_positions_without_bin 호출됨")
+    print(f"  first_image_rel_path: {first_image_rel_path}")
+    print(f"  output_dir: {output_dir}")
+    print(f"  composite_images count: {len(composite_images)}")
+
+    # 1. 첫 번째 이미지의 positions.json 찾기
+    first_image_path = Path(first_image_rel_path)
+    first_image_stem = first_image_path.stem
+    first_image_parent = first_image_path.parent
+
+    # positions.json 후보 경로들 (main.py의 _candidate_positions_paths와 동일 로직)
+    candidate_paths = []
+
+    # 우선순위 1: trimmed 경로 (첫 번째 경로 구성요소 제거)
+    parent_parts = [p for p in first_image_parent.parts if p not in ("", ".")]
+    print(f"  parent_parts: {parent_parts}")
+
+    if len(parent_parts) > 1:
+        trimmed_parts = parent_parts[1:]
+        candidate_paths.append(POSITIONS_ROOT.joinpath(*trimmed_parts) / f"{first_image_stem}.json")
+    elif parent_parts:
+        candidate_paths.append(POSITIONS_ROOT / f"{first_image_stem}.json")
+
+    # 우선순위 2: 레거시 경로
+    legacy_path = POSITIONS_ROOT / first_image_parent / f"{first_image_stem}.json"
+    if legacy_path not in candidate_paths:
+        candidate_paths.append(legacy_path)
+
+    print(f"  candidate_paths:")
+    for idx, path in enumerate(candidate_paths):
+        print(f"    [{idx}] {path} (exists: {path.exists()})")
+
+    # 존재하는 파일 찾기
+    source_positions_path = None
+    for candidate in candidate_paths:
+        if candidate.exists():
+            source_positions_path = candidate
+            break
+
+    if not source_positions_path:
+        print(f"[COMPOSITE] positions.json not found for: {first_image_rel_path}")
+        print(f"[COMPOSITE] POSITIONS_ROOT: {POSITIONS_ROOT}")
+        return
+
+    print(f"[COMPOSITE] Found positions.json: {source_positions_path}")
+
+    # 2. positions.json 로드 및 "b" 필드 제거
+    try:
+        with open(source_positions_path, 'r', encoding='utf-8') as f:
+            positions_data = json.load(f)
+
+        # chips 배열에서 "b" 필드 제거
+        if 'chips' in positions_data and isinstance(positions_data['chips'], list):
+            for chip in positions_data['chips']:
+                if isinstance(chip, dict) and 'b' in chip:
+                    del chip['b']
+
+            print(f"[COMPOSITE] Removed 'b' field from {len(positions_data['chips'])} chips")
+
+        # 3. composite map 출력 디렉토리에 positions 폴더 생성
+        # output_dir: IMAGES_ROOT/composite_map/change/20251126_140343
+        # positions 저장 위치: POSITIONS_ROOT/composite_map/change/20251126_140343
+        print(f"  IMAGES_ROOT: {IMAGES_ROOT}")
+        print(f"  output_dir: {output_dir}")
+
+        output_dir_rel = output_dir.relative_to(IMAGES_ROOT)
+        print(f"  output_dir_rel: {output_dir_rel}")
+
+        positions_output_dir = POSITIONS_ROOT / output_dir_rel
+        print(f"  positions_output_dir (before mkdir): {positions_output_dir}")
+
+        positions_output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[COMPOSITE] Creating positions in: {positions_output_dir}")
+        print(f"  Directory exists: {positions_output_dir.exists()}")
+
+        # 4. 각 composite 이미지마다 positions 파일 생성
+        for img_filename in composite_images:
+            img_stem = Path(img_filename).stem
+
+            # image_path 업데이트 (composite map 경로로)
+            composite_rel_path = output_dir_rel / img_filename
+            positions_data_copy = positions_data.copy()
+            positions_data_copy['image_path'] = composite_rel_path.as_posix()
+            positions_data_copy['wafer'] = img_stem
+            if 'step' in positions_data_copy:
+                positions_data_copy['step'] = img_filename
+
+            # positions 파일 저장
+            positions_file_path = positions_output_dir / f"{img_stem}.json"
+            print(f"  Saving position file: {positions_file_path}")
+
+            with open(positions_file_path, 'w', encoding='utf-8') as f:
+                json.dump(positions_data_copy, f, ensure_ascii=False, indent=2)
+
+            print(f"[COMPOSITE] Created positions: {positions_file_path.relative_to(POSITIONS_ROOT)}")
+            print(f"  File exists: {positions_file_path.exists()}")
+
+    except Exception as e:
+        print(f"[COMPOSITE] Failed to copy positions: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def _build_palette_list(source_palette: Optional[Sequence[int]]) -> List[int]:
@@ -174,6 +301,31 @@ def _count_low_grade_occurrences(
 
     clipped = np.clip(counts, 0, np.iinfo(np.uint16).max).astype(np.uint16, copy=False)
     return clipped.reshape(8, height, width)
+
+
+def _broadcast_grade_counts(stacked_indices: np.ndarray) -> np.ndarray:
+    grade_counts_vec = (stacked_indices[..., None] == _GRADE_RANGE).sum(axis=0)
+    return grade_counts_vec.transpose(2, 0, 1).astype(np.uint16, copy=False)
+
+
+def _compute_grade_counts(stacked_indices: np.ndarray) -> np.ndarray:
+    if stacked_indices.ndim != 3:
+        raise ValueError("stacked_indices must be a 3D array (N, H, W)")
+    contiguous = np.ascontiguousarray(stacked_indices, dtype=np.uint8)
+
+    if _cython_count_grades is not None:
+        try:
+            return _cython_count_grades(contiguous)
+        except Exception as exc:
+            print(f"[COMPOSITE] cython grade count failed: {exc}")
+
+    try:
+        return _broadcast_grade_counts(contiguous)
+    except MemoryError:
+        print("[COMPOSITE] broadcast counting OOM, falling back to chunk mode")
+    except Exception as exc:
+        print(f"[COMPOSITE] broadcast counting failed: {exc}, using chunk mode")
+    return _count_low_grade_occurrences(contiguous)
 
 
 def _hex_to_rgb_tuple(value: str) -> Tuple[int, int, int]:
@@ -654,7 +806,7 @@ def _save_sum_map_variants(
     float_indices = all_indices.astype(np.float32, copy=False)
 
     if grade_counts is None:
-        grade_counts = _count_low_grade_occurrences(all_indices)
+        grade_counts = _compute_grade_counts(all_indices)
     grade_counts_float = grade_counts.astype(np.float32, copy=False)
 
     # 제곱합 계산: 각 인덱스 값을 제곱한 후 카운트와 곱함
@@ -919,7 +1071,7 @@ def create_composite_heatmaps(
     float_indices = stacked_indices.astype(np.float32)
     _, height, width = stacked_indices.shape
 
-    grade_counts = _count_low_grade_occurrences(stacked_indices)
+    grade_counts = _compute_grade_counts(stacked_indices)
 
     # (invalid_mask와 idx_8_13_only를 제외한 포인트 중 0-7만 있는 것)
     valid_0_7_mask = (stacked_indices >= 0) & (stacked_indices <= 7)  # (N, H, W)
@@ -995,6 +1147,22 @@ def create_composite_heatmaps(
         print(f"[API] sum_map_entries bool: {bool(sum_map_entries)}")
         if sum_map_entries:
             sum_map_rel_path = sum_map_entries[0]["path"]
+
+    # 🔥 첫 번째 이미지의 positions.json을 복사 (bin 정보 제거)
+    composite_image_filenames = []
+    for heatmap in heatmaps:
+        filename = heatmap["path"].split("/")[-1]
+        composite_image_filenames.append(filename)
+    for entry in sum_map_entries:
+        filename = entry.get("filename") or entry["path"].split("/")[-1]
+        composite_image_filenames.append(filename)
+
+    if composite_image_filenames and image_paths:
+        _copy_positions_without_bin(
+            first_image_rel_path=image_paths[0],
+            output_dir=output_dir,
+            composite_images=composite_image_filenames
+        )
 
     processing_time = time.time() - start_time
     result = {
@@ -1172,7 +1340,7 @@ def create_sum_map(
     stacked_indices = np.stack(all_indices_list, axis=0)
     _, height, width = stacked_indices.shape
 
-    grade_counts = _count_low_grade_occurrences(stacked_indices)
+    grade_counts = _compute_grade_counts(stacked_indices)
 
     valid_0_7_mask = (stacked_indices >= 0) & (stacked_indices <= 7)
     has_valid_0_7 = valid_0_7_mask.any(axis=0)
@@ -1349,6 +1517,44 @@ def create_subset_map(
             "filename": filename,
             "selected_grades": sorted_grades,
         })
+
+    # 🔥 기존 positions 파일을 subset 파일에도 복사
+    # output_dir에 이미 생성된 Grade_0 positions 파일을 찾아서 subset 파일에도 복사
+    output_dir_rel = output_dir.relative_to(IMAGES_ROOT)
+    positions_output_dir = POSITIONS_ROOT / output_dir_rel
+
+    # Grade_0.json 파일을 찾아서 템플릿으로 사용
+    grade_0_positions = positions_output_dir / "Grade_0.json"
+    if grade_0_positions.exists():
+        try:
+            import json
+            with open(grade_0_positions, 'r', encoding='utf-8') as f:
+                positions_template = json.load(f)
+
+            # subset 파일마다 positions 파일 생성
+            for output in outputs:
+                filename = output.get("filename")
+                if not filename:
+                    continue
+
+                img_stem = Path(filename).stem
+                positions_data_copy = positions_template.copy()
+
+                # composite map 경로로 업데이트
+                composite_rel_path = output_dir_rel / filename
+                positions_data_copy['image_path'] = composite_rel_path.as_posix()
+                positions_data_copy['wafer'] = img_stem
+                if 'step' in positions_data_copy:
+                    positions_data_copy['step'] = filename
+
+                # positions 파일 저장
+                positions_file_path = positions_output_dir / f"{img_stem}.json"
+                with open(positions_file_path, 'w', encoding='utf-8') as f:
+                    json.dump(positions_data_copy, f, ensure_ascii=False, indent=2)
+
+                print(f"[SUBSET] Created positions: {positions_file_path.relative_to(POSITIONS_ROOT)}")
+        except Exception as e:
+            print(f"[SUBSET] Failed to copy positions: {e}")
 
     print(f"[create_subset_map] outputs: {outputs}")
     return outputs
