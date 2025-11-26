@@ -30,6 +30,13 @@ try:
 except Exception:
     _cython_count_grades = None
 
+try:
+    import pyvips as _vips
+    _HAS_PYVIPS = True
+except Exception:
+    _vips = None
+    _HAS_PYVIPS = False
+
 if not os.environ.get("OMP_NUM_THREADS"):
     _OMP_DEFAULT_THREADS = max(4, min(8, os.cpu_count() or 8))
     os.environ["OMP_NUM_THREADS"] = str(_OMP_DEFAULT_THREADS)
@@ -638,7 +645,7 @@ def _save_image_with_backend(img: Image.Image, path: Path) -> Tuple[Path, str]:
         if fmt == "WEBP":
             vips_img.write_to_file(str(target_path), Q=100, lossless=1)
         else:
-            vips_img.write_to_file(str(target_path), compression=1, effort=1)
+            vips_img.write_to_file(str(target_path), compression=0)
     else:
         if fmt == "WEBP":
             img.save(target_path, format="WEBP", quality=100, lossless=True, method=6)
@@ -934,8 +941,13 @@ def _save_sum_map_variants(
         print(f"  weighted_map has nan/inf: {np.isnan(weighted_map[weighted_mask]).any()} / {np.isinf(weighted_map[weighted_mask]).any()}")
 
     if base_indices is None:
-        median_map = np.median(float_indices, axis=0)
-        base_indices = np.clip(np.rint(median_map), 0, 13).astype(np.uint8)  # 0-13 범위
+        if _FAST_MEDIAN:
+            # Use mean instead of median for better performance (O(n) vs O(n log n))
+            mean_map = np.mean(float_indices, axis=0)
+            base_indices = np.clip(np.rint(mean_map), 0, 13).astype(np.uint8)  # 0-13 범위
+        else:
+            median_map = np.median(float_indices, axis=0)
+            base_indices = np.clip(np.rint(median_map), 0, 13).astype(np.uint8)  # 0-13 범위
     base_indices = base_indices.copy()
     if invalid_mask is not None:
         base_indices[invalid_mask] = 31
@@ -1496,15 +1508,20 @@ def create_sum_map(
     only_0_7_mask = has_valid_0_7 & ~has_8_13_after & ~invalid_mask
 
     float_indices = stacked_indices.astype(np.float32)
-    median_map = np.median(float_indices, axis=0)
-    median_indices = np.clip(np.rint(median_map), 0, 13).astype(np.uint8)  # 0-13 범위
-    
+    if _FAST_MEDIAN:
+        # Use mean instead of median for better performance (O(n) vs O(n log n))
+        mean_map = np.mean(float_indices, axis=0)
+        base_map_indices = np.clip(np.rint(mean_map), 0, 13).astype(np.uint8)  # 0-13 범위
+    else:
+        median_map = np.median(float_indices, axis=0)
+        base_map_indices = np.clip(np.rint(median_map), 0, 13).astype(np.uint8)  # 0-13 범위
+
     # [규칙 적용]
     # 1. 나머지 포인트는 기본적으로 31(흰색)
-    base_indices = np.full_like(median_indices, 31, dtype=np.uint8)
-    
+    base_indices = np.full_like(base_map_indices, 31, dtype=np.uint8)
+
     # 2. 0-7만 있는 곳 (Composite 계산 대상)
-    base_indices[only_0_7_mask] = median_indices[only_0_7_mask]
+    base_indices[only_0_7_mask] = base_map_indices[only_0_7_mask]
     
     # 3. 8-13만 있는 곳은 인덱스 8 색상 고정
     base_indices[idx_8_13_only] = 8  
