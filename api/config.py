@@ -43,16 +43,13 @@ THUMBNAIL_SEM = int(os.getenv("THUMBNAIL_SEM", "128"))                     # Ubu
 # Composite pipeline tuning via COMPOSITE_* env (see start scripts)
 _default_composite_workers = max(4, min(32, (os.cpu_count() or 8) * 2))
 COMPOSITE_MAX_WORKERS = int(os.getenv("COMPOSITE_MAX_WORKERS", str(_default_composite_workers)))
-COMPOSITE_LOADER_MODE = os.getenv("COMPOSITE_LOADER_MODE", "thread").strip().lower() or "thread"
+COMPOSITE_LOADER_MODE = "thread"  # Fixed: loader mode is thread-only for composite pipeline
 _default_composite_batch = max(2, (os.cpu_count() or 8) // 2)
 COMPOSITE_BATCH_SIZE = max(1, int(os.getenv("COMPOSITE_BATCH_SIZE", str(_default_composite_batch))))
 
 # SEARCH_WORKERS: CPU 코어수의 2배 (I/O 바운드 작업에 최적)
 # 최소 4개, 최대 CPU_COUNT * 2개
 SEARCH_WORKERS = int(os.getenv("SEARCH_WORKERS", "16"))
-SEARCH_FALLBACK_LIMIT = int(os.getenv("SEARCH_FALLBACK_LIMIT", "2000"))    # 폴백 시 최대 반환 대상 수
-SEARCH_FALLBACK_MAX_FILES = int(os.getenv("SEARCH_FALLBACK_MAX_FILES", "200000"))  # 폴백에서 스캔할 최대 파일 수
-SEARCH_FALLBACK_TIMEOUT_MS = int(os.getenv("SEARCH_FALLBACK_TIMEOUT_MS", "4000"))  # 폴백 타임아웃(ms)
 INDEX_WORKERS = int(os.getenv("INDEX_WORKERS", str(max(4, (os.cpu_count() or 8) // 2))))  # 파일 인덱싱 병렬 워커 수
 INDEX_REFRESH_INTERVAL_MINUTES = int(os.getenv("INDEX_REFRESH_INTERVAL_MINUTES", "30"))   # 인덱스 자동 재빌드 주기(분). 0이면 비활성화
 

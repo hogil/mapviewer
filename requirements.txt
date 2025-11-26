@@ -11,3 +11,4 @@ python3-saml>=1.16.0
 brotli>=1.1.0
 brotlipy>=0.7.0
 numpy>=1.26.0
+numba>=0.62.0

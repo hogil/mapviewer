@@ -5,6 +5,7 @@ Composite Map 생성 모듈
 import os
 import time
 import warnings
+import threading
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from datetime import datetime
 from functools import partial, lru_cache
@@ -32,6 +33,13 @@ except Exception:
 if not os.environ.get("OMP_NUM_THREADS"):
     _OMP_DEFAULT_THREADS = max(4, min(8, os.cpu_count() or 8))
     os.environ["OMP_NUM_THREADS"] = str(_OMP_DEFAULT_THREADS)
+
+# Fixed runtime tuning (only workers/batch remain configurable)
+_SAVE_BACKEND = "pil"
+_SAVE_FORMAT = "PNG"
+_FAST_MEDIAN = True
+_RENDER_WORKERS = 2
+_SAVE_WORKERS = 4
 
 Image.MAX_IMAGE_PIXELS = None
 warnings.simplefilter("ignore", DecompressionBombWarning)
@@ -313,19 +321,17 @@ def _compute_grade_counts(stacked_indices: np.ndarray) -> np.ndarray:
         raise ValueError("stacked_indices must be a 3D array (N, H, W)")
     contiguous = np.ascontiguousarray(stacked_indices, dtype=np.uint8)
 
+    def _chunk() -> np.ndarray:
+        print("[COMPOSITE] Using NumPy chunk accumulation...")
+        return _count_low_grade_occurrences(contiguous)
+
     if _cython_count_grades is not None:
         try:
+            print("[COMPOSITE] Using Cython grade counting...")
             return _cython_count_grades(contiguous)
         except Exception as exc:
-            print(f"[COMPOSITE] cython grade count failed: {exc}")
-
-    try:
-        return _broadcast_grade_counts(contiguous)
-    except MemoryError:
-        print("[COMPOSITE] broadcast counting OOM, falling back to chunk mode")
-    except Exception as exc:
-        print(f"[COMPOSITE] broadcast counting failed: {exc}, using chunk mode")
-    return _count_low_grade_occurrences(contiguous)
+            print(f"[COMPOSITE] Cython grade count failed: {exc}")
+    return _chunk()
 
 
 def _hex_to_rgb_tuple(value: str) -> Tuple[int, int, int]:
@@ -475,7 +481,9 @@ def _load_pixel_indices(image_rel_path: str, width: int, height: int) -> Optiona
                 try:
                     cache_path.parent.mkdir(parents=True, exist_ok=True)
                     tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
-                    np.save(tmp_path, pixel_indices, allow_pickle=False)
+                    # np.save appends .npy when given a path string; use a handle to keep .tmp suffix
+                    with open(tmp_path, "wb") as f:
+                        np.save(f, pixel_indices, allow_pickle=False)
                     # 원자적 이동 (Windows에서도 작동)
                     try:
                         tmp_path.replace(cache_path)
@@ -562,24 +570,83 @@ def _render_sum_map_image(
     palette_list: List[int],
     quantiles: Sequence[float],
     color_stops: np.ndarray,
+    lut_colors: Optional[np.ndarray] = None,
 ) -> Image.Image:
     rgb_palette = np.array(palette_list, dtype=np.uint8).reshape(256, 3)
-    
+
     # 1. [Base Layer] 먼저 base_indices 색상(8번, 31번 등)으로 전체를 칠함
-    rgb_array = rgb_palette[base_indices].copy()
-    calc_values = value_map[mask].astype(np.float32, copy=False)
+    # Fancy indexing already creates a copy, no need for .copy()
+    rgb_array = rgb_palette[base_indices]
 
-    if calc_values.size > 0 and len(color_stops) >= 1:
-        quantile_positions = None
-        if quantiles:
-            quantile_positions = np.asarray(quantiles, dtype=np.float32) * 100.0
-        percentiles = _percentile_ranks(calc_values)
-        colors = _interpolate_percentile_colors(percentiles, color_stops, quantile_positions)
-        
-        # 2. [Composite Layer] 계산 대상(0-7만 있는 곳)만 Composite 색상으로 덮어씀
-        rgb_array[mask] = colors
+    # Early exit if no calculation needed
+    if mask.any() and len(color_stops) >= 1:
+        calc_values = value_map[mask].astype(np.float32, copy=False)
 
-    return Image.fromarray(rgb_array.astype(np.uint8), mode='RGB')
+        if calc_values.size > 0:
+            if lut_colors is None:
+                quantile_positions = None
+                if quantiles:
+                    quantile_positions = np.asarray(quantiles, dtype=np.float32) * 100.0
+                # 0~100 범위를 256 스텝으로 미리 보간하여 LUT 생성 (대용량 배열 반복 보간 최소화)
+                lut_positions = np.linspace(0.0, 100.0, 256, dtype=np.float32)
+                lut_colors_local = _interpolate_percentile_colors(lut_positions, color_stops, quantile_positions)
+            else:
+                lut_colors_local = lut_colors
+            percentiles = _percentile_ranks(calc_values)
+            lut_idx = np.clip(np.rint(percentiles * 2.55), 0, 255).astype(np.uint8, copy=False)
+
+            # 2. [Composite Layer] 계산 대상(0-7만 있는 곳)만 Composite 색상으로 덮어씀
+            # rgb_array is already a copy from fancy indexing, no need to copy again
+            rgb_array[mask] = lut_colors_local[lut_idx]
+
+    # rgb_array is already uint8, no need for astype
+    return Image.fromarray(rgb_array, mode='RGB')
+
+
+def _trace_enabled() -> bool:
+    return os.getenv("COMPOSITE_TIMING", "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _use_sum_float16() -> bool:
+    return False  # fixed to float32
+
+
+def _resolve_save_backend() -> Tuple[str, str]:
+    return _SAVE_BACKEND, _SAVE_FORMAT
+
+
+def _save_image_with_backend(img: Image.Image, path: Path) -> Tuple[Path, str]:
+    """
+    Save image with selectable backend/format.
+    - COMPOSITE_SAVE_BACKEND: pil (default) | vips (if pyvips available)
+    - COMPOSITE_FORMAT: PNG (default) | WEBP
+    Returns: (actual_path, rel_path)
+    """
+    backend, fmt = _resolve_save_backend()
+
+    target_path = path
+    if fmt == "WEBP":
+        target_path = path.with_suffix(".webp")
+
+    if backend == "vips" and _HAS_PYVIPS:
+        arr = np.array(img, dtype=np.uint8)
+        if arr.ndim == 2:
+            # convert L to RGB for consistency
+            arr = np.stack([arr, arr, arr], axis=2)
+        h, w, c = arr.shape
+        vips_img = _vips.Image.new_from_memory(arr.tobytes(), w, h, c, format="uchar")
+        if fmt == "WEBP":
+            vips_img.write_to_file(str(target_path), Q=100, lossless=1)
+        else:
+            vips_img.write_to_file(str(target_path), compression=1, effort=1)
+    else:
+        if fmt == "WEBP":
+            img.save(target_path, format="WEBP", quality=100, lossless=True, method=6)
+        else:
+            img.save(target_path, format='PNG', optimize=False, compress_level=0)
+
+    rel_path = target_path.relative_to(IMAGES_ROOT).as_posix()
+    return target_path, rel_path
 
 
 def _persist_square_map_data(
@@ -599,12 +666,15 @@ def _persist_square_map_data(
 ) -> None:
     """
     Cache square-map arrays for fast recoloring.
+    NPZ is saved asynchronously in a daemon thread to avoid blocking the main pipeline.
     """
+    import threading
+
     cache_path = output_dir / SQUARE_MAP_CACHE_FILENAME
     palette_array = np.array(palette_list, dtype=np.uint8).reshape(256, 3)
     save_payload: Dict[str, np.ndarray] = {
-        "square_mean": square_mean_map.astype(np.float32, copy=False),
-        "square_weighted": weighted_map.astype(np.float32, copy=False),
+        "square_mean": square_mean_map.astype(square_mean_map.dtype, copy=False),
+        "square_weighted": weighted_map.astype(weighted_map.dtype, copy=False),
         "calc_mask": calc_mask.astype(bool, copy=False),
         "weighted_mask": weighted_mask.astype(bool, copy=False),
         "base_indices": base_indices.astype(np.uint8, copy=False),
@@ -623,7 +693,14 @@ def _persist_square_map_data(
     if colors:
         save_payload["colors"] = np.array(list(colors), dtype="U16")
 
-    np.savez_compressed(cache_path, **save_payload)
+    def _save_npz():
+        try:
+            np.savez_compressed(cache_path, **save_payload)
+            print(f"[SQUARE MAP] NPZ cache saved to {cache_path}")
+        except Exception as exc:
+            print(f"[SQUARE MAP] NPZ save failed: {exc}")
+
+    threading.Thread(target=_save_npz, daemon=True).start()
 
 
 def _recompute_square_maps_from_counts(
@@ -746,6 +823,11 @@ def recolor_saved_sum_maps(
         colors_to_use = base_colors
 
     color_stops = np.array([_hex_to_rgb_tuple(c) for c in colors_to_use], dtype=np.float32)
+    quantile_positions = None
+    if settings.quantiles:
+        quantile_positions = np.asarray(settings.quantiles, dtype=np.float32) * 100.0
+    lut_positions = np.linspace(0.0, 100.0, 256, dtype=np.float32)
+    shared_lut_colors = _interpolate_percentile_colors(lut_positions, color_stops, quantile_positions)
 
     variants = [
         ("square_average.png", "square_mean", "Composite SqMean", square_mean_map, calc_mask),
@@ -762,14 +844,14 @@ def recolor_saved_sum_maps(
             palette_list=palette_list,
             quantiles=settings.quantiles,
             color_stops=color_stops,
+            lut_colors=shared_lut_colors,
         )
-        img.save(sum_map_path, format='PNG', optimize=False)
-        rel_path = sum_map_path.relative_to(IMAGES_ROOT).as_posix()
+        actual_path, rel_path = _save_image_with_backend(img, sum_map_path)
         outputs.append({
             "path": rel_path,
             "type": variant_type,
             "display_name": display_name,
-            "filename": filename,
+            "filename": actual_path.name,
         })
 
     print(f"[recolor_saved_sum_maps] outputs: {outputs}")
@@ -792,6 +874,7 @@ def _save_sum_map_variants(
     only_low_mask: Optional[np.ndarray] = None,
     colors: Optional[Sequence[str]] = None,
 ) -> List[Dict[str, str]]:
+    trace = _trace_enabled()
     if all_indices.ndim != 3:
         raise ValueError("all_indices must be (N, H, W)")
     if all_indices.shape[0] == 0:
@@ -804,6 +887,8 @@ def _save_sum_map_variants(
     if image_count == 0:
         return []
     float_indices = all_indices.astype(np.float32, copy=False)
+    sum_float16 = _use_sum_float16()
+    float_dtype = np.float16 if sum_float16 else np.float32
 
     if grade_counts is None:
         grade_counts = _compute_grade_counts(all_indices)
@@ -824,18 +909,18 @@ def _save_sum_map_variants(
             calc_mask &= ~invalid_mask
 
     # square_average: 제곱합 / 이미지 개수
-    square_mean_map = np.zeros_like(square_sums, dtype=np.float32)
+    square_mean_map = np.zeros_like(square_sums, dtype=float_dtype)
     with np.errstate(divide='ignore', invalid='ignore'):
-        square_mean_map[calc_mask] = square_sums[calc_mask] / float(image_count)
+        square_mean_map[calc_mask] = (square_sums[calc_mask] / float(image_count)).astype(float_dtype, copy=False)
 
     # square_weighted_average: 제곱합 / (0개수*1 + 1개수*1 + 2개수*2 + ... + 7개수*7)
     weight_factors = np.array([1, 1, 2, 3, 4, 5, 6, 7], dtype=np.float32).reshape(8, 1, 1)
     weight_map = np.sum(grade_counts_float * weight_factors, axis=0, dtype=np.float32)
     weighted_mask = calc_mask & (weight_map > 0)
 
-    weighted_map = np.zeros_like(square_sums, dtype=np.float32)
+    weighted_map = np.zeros_like(square_sums, dtype=float_dtype)
     with np.errstate(divide='ignore', invalid='ignore'):
-        weighted_map[weighted_mask] = square_sums[weighted_mask] / weight_map[weighted_mask]
+        weighted_map[weighted_mask] = (square_sums[weighted_mask] / weight_map[weighted_mask]).astype(float_dtype, copy=False)
 
     # 디버그 로그
     print(f"[SQUARE MAP DEBUG]")
@@ -859,6 +944,11 @@ def _save_sum_map_variants(
     settings = load_composite_color_settings(scheme)
     resolved_colors = list(colors) if colors else settings.colors
     color_stops = np.array([_hex_to_rgb_tuple(c) for c in resolved_colors], dtype=np.float32)
+    quantile_positions = None
+    if settings.quantiles:
+        quantile_positions = np.asarray(settings.quantiles, dtype=np.float32) * 100.0
+    lut_positions = np.linspace(0.0, 100.0, 256, dtype=np.float32)
+    shared_lut_colors = _interpolate_percentile_colors(lut_positions, color_stops, quantile_positions)
 
     if persist_cache:
         _persist_square_map_data(
@@ -884,26 +974,75 @@ def _save_sum_map_variants(
     ]
 
     outputs: List[Dict[str, str]] = []
-    for filename, variant_type, display_name, data_map, mask in variants:
-        sum_map_path = output_dir / filename
-        print(f"[SAVE] Saving {filename}, mask points: {mask.sum()}")
-        img = _render_sum_map_image(
+    save_futures: List[Tuple] = []
+
+    render_workers = _RENDER_WORKERS
+    save_workers = _SAVE_WORKERS
+
+    def _render_task(data_map, mask_arr):
+        t0 = time.perf_counter()
+        lut_idx_time = 0.0
+        interp_time = 0.0
+        mask_points = int(mask_arr.sum())
+
+        def _render_inner():
+            nonlocal lut_idx_time, interp_time
+            t_interp_start = time.perf_counter()
+            img = _render_sum_map_image(
+                base_indices=base_indices,
+                value_map=data_map,
+                mask=mask_arr,
+                palette_list=palette,
+                quantiles=settings.quantiles,
+                color_stops=color_stops,
+                lut_colors=shared_lut_colors,
+            )
+            interp_time = time.perf_counter() - t_interp_start
+            return img
+
+        img = _render_inner()
+        total_render = time.perf_counter() - t0
+        return img, {
+            "mask_points": mask_points,
+            "render_time": total_render,
+            "interp_time": interp_time,
+        }
+        return _render_sum_map_image(
             base_indices=base_indices,
             value_map=data_map,
-            mask=mask,
+            mask=mask_arr,
             palette_list=palette,
             quantiles=settings.quantiles,
             color_stops=color_stops,
+            lut_colors=shared_lut_colors,
         )
-        img.save(sum_map_path, format='PNG', optimize=False)
-        rel_path = sum_map_path.relative_to(IMAGES_ROOT).as_posix()
-        print(f"[SAVE] Saved to: {rel_path}")
-        outputs.append({
-            "path": rel_path,
-            "type": variant_type,
-            "display_name": display_name,
-            "filename": filename,
-        })
+
+    def _save_future(render_future, target_path: Path):
+        img, render_stats = render_future.result()
+        t_save = time.perf_counter()
+        actual_path, rel_path = _save_image_with_backend(img, target_path)
+        save_time = time.perf_counter() - t_save
+        return actual_path, rel_path, render_stats, save_time
+
+    with ThreadPoolExecutor(max_workers=render_workers) as render_pool, ThreadPoolExecutor(max_workers=save_workers) as save_pool:
+        for filename, variant_type, display_name, data_map, mask in variants:
+            sum_map_path = output_dir / filename
+            print(f"[SAVE] Saving {filename}, mask points: {mask.sum()}")
+            render_future = render_pool.submit(_render_task, data_map, mask)
+            save_future = save_pool.submit(_save_future, render_future, sum_map_path)
+            save_futures.append((save_future, filename, variant_type, display_name))
+
+        for future, filename, variant_type, display_name in save_futures:
+            actual_path, rel_path, render_stats, save_time = future.result()
+            if trace:
+                print(f"[SAVE DETAIL] {filename}: mask={render_stats['mask_points']}, render={render_stats['render_time']:.3f}s, interp={render_stats['interp_time']:.3f}s, save={save_time:.3f}s")
+            print(f"[SAVE] Saved to: {rel_path}")
+            outputs.append({
+                "path": rel_path,
+                "type": variant_type,
+                "display_name": display_name,
+                "filename": actual_path.name,
+            })
 
     print(f"[SAVE] Total outputs: {len(outputs)}")
     return outputs
@@ -997,11 +1136,18 @@ def create_composite_heatmaps(
     scheme: Optional[str] = None,
     login_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    start_time = time.time()
+    start_time = time.perf_counter()
+    trace = _trace_enabled()
+    timings: Dict[str, float] = {}
+
+    def _mark(label: str, started: float):
+        timings[label] = time.perf_counter() - started
     if not image_paths:
         raise ValueError("image_paths is empty")
 
+    t = time.perf_counter()
     output_dir, timestamp = _prepare_output_dir(login_id)
+    _mark("prepare_output_dir", t)
 
     first_path = IMAGES_ROOT / image_paths[0]
     with Image.open(first_path) as first_img:
@@ -1030,6 +1176,7 @@ def create_composite_heatmaps(
     raw_indices_list: List[np.ndarray] = []
     processed_count = 0
 
+    t = time.perf_counter()
     for batch_paths in _batched_paths(image_paths, batch_size):
         for rel_path, raw_indices in _iter_pixel_indices(
             batch_paths,
@@ -1042,6 +1189,7 @@ def create_composite_heatmaps(
                 continue
             raw_indices_list.append(raw_indices.astype(np.uint8, copy=False))
             processed_count += 1
+    _mark("load_indices", t)
 
     if not raw_indices_list:
         raise ValueError("처리할 이미지가 없습니다.")
@@ -1066,43 +1214,30 @@ def create_composite_heatmaps(
     
     # 3단계: invalid mask 생성 및 clipping
     # 인덱스 14 이상만 invalid (31로)
-    invalid_mask = (stacked_raw >= 14).any(axis=0)
+    invalid_mask = has_14_plus
     stacked_indices = np.clip(stacked_raw, 0, 13, out=stacked_raw)  # 0-13 범위 (8-13만 남김)
-    float_indices = stacked_indices.astype(np.float32)
+    stacked_indices = np.ascontiguousarray(stacked_indices, dtype=np.uint8)
+    fast_median = _FAST_MEDIAN
+    float_indices = np.asarray(stacked_indices, dtype=np.float32, order="C")
     _, height, width = stacked_indices.shape
 
+    t = time.perf_counter()
     grade_counts = _compute_grade_counts(stacked_indices)
+    _mark("grade_counts", t)
 
     # (invalid_mask와 idx_8_13_only를 제외한 포인트 중 0-7만 있는 것)
-    valid_0_7_mask = (stacked_indices >= 0) & (stacked_indices <= 7)  # (N, H, W)
-    has_valid_0_7 = valid_0_7_mask.any(axis=0)  # (H, W)
-    has_8_13_after = (stacked_indices >= 8) & (stacked_indices <= 13)  # (N, H, W)
-    has_8_13_after = has_8_13_after.any(axis=0)  # (H, W)
-    
-    # 0-7만 있고 8-13이나 invalid가 없는 포인트
-    only_0_7_mask = has_valid_0_7 & ~has_8_13_after & ~invalid_mask  # (H, W)
-    
-    median_map = np.median(float_indices, axis=0)
-    median_indices = np.clip(np.rint(median_map), 0, 13).astype(np.uint8)  # 0-13 범위
-    
-    # [규칙 적용]
-    # 1. 나머지 포인트(Mixed 포함)는 기본적으로 인덱스 31(흰색)
-    base_indices = np.full_like(median_indices, 31, dtype=np.uint8)
-    
-    # 2. 0-7만 있는 곳은 일단 median 값을 넣지만, 렌더링 시 Composite 색상으로 덮어씌워짐
-    base_indices[only_0_7_mask] = median_indices[only_0_7_mask]
-    
-    # 3. 8-13만 있는 곳은 인덱스 8 색상으로 고정 (계산 대상 아님)
+    t = time.perf_counter()
+    only_0_7_mask = has_0_7 & ~has_8_13 & ~invalid_mask  # (H, W)
+    base_indices = np.full((height, width), 31, dtype=np.uint8)
     base_indices[idx_8_13_only] = 8
-    
-    # 4. Invalid 영역도 31(흰색)
-    base_indices[invalid_mask] = 31
+    _mark("mask_and_base_setup", t)
 
     heatmaps: List[Dict[str, Any]] = []
     palette_bytes = palette_list[:]
     grade_presence = grade_counts > 0
     invalid_mask_bool = invalid_mask.astype(bool, copy=False) if invalid_mask is not None else None
     idx_8_overlay = idx_8_13_only & ~invalid_mask_bool if invalid_mask_bool is not None else idx_8_13_only.copy()
+    t = time.perf_counter()
     for idx in indices:
         if idx >= 8:
             continue
@@ -1115,7 +1250,7 @@ def create_composite_heatmaps(
         heatmap_path = output_dir / f"Grade_{idx}.png"
         heatmap_img = Image.fromarray(result, mode='P')
         heatmap_img.putpalette(palette_bytes)
-        heatmap_img.save(heatmap_path, format='PNG', optimize=False, compress_level=1)
+        heatmap_img.save(heatmap_path, format='PNG', optimize=False, compress_level=0)
         rel_path = heatmap_path.relative_to(IMAGES_ROOT).as_posix()
         total_pixels = width * height
         pixel_count = int(np.count_nonzero(presence_mask))
@@ -1127,10 +1262,12 @@ def create_composite_heatmaps(
             "max_count": processed_count,
             "percentage": percentage,
         })
+    _mark("save_heatmaps", t)
 
     sum_map_entries: List[Dict[str, str]] = []
     sum_map_rel_path = None
     if create_sum:
+        t = time.perf_counter()
         sum_map_entries = _save_sum_map_variants(
             stacked_indices,
             output_dir,
@@ -1142,6 +1279,7 @@ def create_composite_heatmaps(
             grade_counts=grade_counts,
             only_low_mask=only_0_7_mask,
         )
+        _mark("save_sum_maps", t)
         print(f"[API] sum_map_entries after _save_sum_map_variants: {sum_map_entries}")
         print(f"[API] sum_map_entries length: {len(sum_map_entries)}")
         print(f"[API] sum_map_entries bool: {bool(sum_map_entries)}")
@@ -1158,20 +1296,24 @@ def create_composite_heatmaps(
         composite_image_filenames.append(filename)
 
     if composite_image_filenames and image_paths:
-        _copy_positions_without_bin(
-            first_image_rel_path=image_paths[0],
-            output_dir=output_dir,
-            composite_images=composite_image_filenames
-        )
+        t = time.perf_counter()
+        threading.Thread(
+            target=_copy_positions_without_bin,
+            args=(image_paths[0], output_dir, composite_image_filenames),
+            daemon=True,
+        ).start()
+        _mark("copy_positions_async", t)
 
-    processing_time = time.time() - start_time
+    total_time = time.perf_counter() - start_time
+    timings["total"] = total_time
     result = {
         "output_dir": output_dir.relative_to(IMAGES_ROOT).as_posix(),
         "heatmaps": heatmaps,
         "source_images": processed_count,
         "source_image_paths": image_paths,
         "image_size": {"width": width, "height": height},
-        "processing_time": round(processing_time, 2),
+        "processing_time": round(total_time, 2),
+        "timings": timings,
     }
     if sum_map_rel_path:
         result["sum_map_path"] = sum_map_rel_path
@@ -1179,6 +1321,12 @@ def create_composite_heatmaps(
         result["sum_maps"] = sum_map_entries
     print(f"[API] Final result keys: {result.keys()}")
     print(f"[API] 'sum_maps' in result: {'sum_maps' in result}")
+    if trace:
+        print("[COMPOSITE_TIMING]")
+        if fast_median:
+            print("  COMPOSITE_FAST_MEDIAN: enabled (mean-based)")
+        for k, v in timings.items():
+            print(f"  {k:20s}: {v:.3f}s")
     return result
 def create_palette_overlay(
     image_paths: List[str],
@@ -1486,6 +1634,11 @@ def create_subset_map(
         colors_to_use = base_colors
 
     color_stops = np.array([_hex_to_rgb_tuple(c) for c in colors_to_use], dtype=np.float32)
+    quantile_positions = None
+    if settings.quantiles:
+        quantile_positions = np.asarray(settings.quantiles, dtype=np.float32) * 100.0
+    lut_positions = np.linspace(0.0, 100.0, 256, dtype=np.float32)
+    shared_lut_colors = _interpolate_percentile_colors(lut_positions, color_stops, quantile_positions)
     palette_list = palette_array.reshape(-1).tolist()
 
     # Subset Map 이미지 생성
@@ -1506,15 +1659,15 @@ def create_subset_map(
             palette_list=palette_list,
             quantiles=settings.quantiles,
             color_stops=color_stops,
+            lut_colors=shared_lut_colors,
         )
-        img.save(sum_map_path, format='PNG', optimize=False)
-        rel_path = sum_map_path.relative_to(IMAGES_ROOT).as_posix()
+        actual_path, rel_path = _save_image_with_backend(img, sum_map_path)
         print(f"[SUBSET] Saved to: {rel_path}")
         outputs.append({
             "path": rel_path,
             "type": variant_type,
             "display_name": display_name,
-            "filename": filename,
+            "filename": actual_path.name,
             "selected_grades": sorted_grades,
         })
 
