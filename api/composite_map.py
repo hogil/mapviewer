@@ -927,7 +927,7 @@ def create_composite_heatmaps(
         heatmap_path = output_dir / f"Grade_{idx}.png"
         heatmap_img = Image.fromarray(result, mode='P')
         heatmap_img.putpalette(palette_bytes)
-        heatmap_img.save(heatmap_path, format='PNG', optimize=False, compress_level=0)
+        heatmap_img.save(heatmap_path, format='PNG', optimize=False, compress_level=1)
         rel_path = heatmap_path.relative_to(IMAGES_ROOT).as_posix()
         total_pixels = width * height
         pixel_count = int(np.sum(valid_mask))
