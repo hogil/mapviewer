@@ -45,8 +45,12 @@ if not os.environ.get("OMP_NUM_THREADS"):
 _SAVE_BACKEND = "pil"
 _SAVE_FORMAT = "PNG"
 _FAST_MEDIAN = True
-_RENDER_WORKERS = 2
-_SAVE_WORKERS = 4
+
+# Worker configuration (configurable via environment variables)
+# Default: 2 render + 4 save (optimized for low-end systems)
+# High-end (32-core): Set COMPOSITE_RENDER_WORKERS=16, COMPOSITE_SAVE_WORKERS=32
+_RENDER_WORKERS = int(os.environ.get("COMPOSITE_RENDER_WORKERS", "2"))
+_SAVE_WORKERS = int(os.environ.get("COMPOSITE_SAVE_WORKERS", "4"))
 
 Image.MAX_IMAGE_PIXELS = None
 warnings.simplefilter("ignore", DecompressionBombWarning)
@@ -72,10 +76,6 @@ def _copy_positions_without_bin(first_image_rel_path: str, output_dir: Path, com
     """
     import json
 
-    print(f"[COMPOSITE] _copy_positions_without_bin 호출됨")
-    print(f"  first_image_rel_path: {first_image_rel_path}")
-    print(f"  output_dir: {output_dir}")
-    print(f"  composite_images count: {len(composite_images)}")
 
     # 1. 첫 번째 이미지의 positions.json 찾기
     first_image_path = Path(first_image_rel_path)
@@ -87,7 +87,6 @@ def _copy_positions_without_bin(first_image_rel_path: str, output_dir: Path, com
 
     # 우선순위 1: trimmed 경로 (첫 번째 경로 구성요소 제거)
     parent_parts = [p for p in first_image_parent.parts if p not in ("", ".")]
-    print(f"  parent_parts: {parent_parts}")
 
     if len(parent_parts) > 1:
         trimmed_parts = parent_parts[1:]
@@ -100,10 +99,6 @@ def _copy_positions_without_bin(first_image_rel_path: str, output_dir: Path, com
     if legacy_path not in candidate_paths:
         candidate_paths.append(legacy_path)
 
-    print(f"  candidate_paths:")
-    for idx, path in enumerate(candidate_paths):
-        print(f"    [{idx}] {path} (exists: {path.exists()})")
-
     # 존재하는 파일 찾기
     source_positions_path = None
     for candidate in candidate_paths:
@@ -112,11 +107,7 @@ def _copy_positions_without_bin(first_image_rel_path: str, output_dir: Path, com
             break
 
     if not source_positions_path:
-        print(f"[COMPOSITE] positions.json not found for: {first_image_rel_path}")
-        print(f"[COMPOSITE] POSITIONS_ROOT: {POSITIONS_ROOT}")
         return
-
-    print(f"[COMPOSITE] Found positions.json: {source_positions_path}")
 
     # 2. positions.json 로드 및 "b" 필드 제거
     try:
@@ -129,23 +120,12 @@ def _copy_positions_without_bin(first_image_rel_path: str, output_dir: Path, com
                 if isinstance(chip, dict) and 'b' in chip:
                     del chip['b']
 
-            print(f"[COMPOSITE] Removed 'b' field from {len(positions_data['chips'])} chips")
-
         # 3. composite map 출력 디렉토리에 positions 폴더 생성
         # output_dir: IMAGES_ROOT/composite_map/change/20251126_140343
         # positions 저장 위치: POSITIONS_ROOT/composite_map/change/20251126_140343
-        print(f"  IMAGES_ROOT: {IMAGES_ROOT}")
-        print(f"  output_dir: {output_dir}")
-
         output_dir_rel = output_dir.relative_to(IMAGES_ROOT)
-        print(f"  output_dir_rel: {output_dir_rel}")
-
         positions_output_dir = POSITIONS_ROOT / output_dir_rel
-        print(f"  positions_output_dir (before mkdir): {positions_output_dir}")
-
         positions_output_dir.mkdir(parents=True, exist_ok=True)
-        print(f"[COMPOSITE] Creating positions in: {positions_output_dir}")
-        print(f"  Directory exists: {positions_output_dir.exists()}")
 
         # 4. 각 composite 이미지마다 positions 파일 생성
         for img_filename in composite_images:
@@ -161,18 +141,11 @@ def _copy_positions_without_bin(first_image_rel_path: str, output_dir: Path, com
 
             # positions 파일 저장
             positions_file_path = positions_output_dir / f"{img_stem}.json"
-            print(f"  Saving position file: {positions_file_path}")
-
             with open(positions_file_path, 'w', encoding='utf-8') as f:
                 json.dump(positions_data_copy, f, ensure_ascii=False, indent=2)
 
-            print(f"[COMPOSITE] Created positions: {positions_file_path.relative_to(POSITIONS_ROOT)}")
-            print(f"  File exists: {positions_file_path.exists()}")
-
-    except Exception as e:
-        print(f"[COMPOSITE] Failed to copy positions: {e}")
-        import traceback
-        traceback.print_exc()
+    except Exception:
+        pass
 
 
 def _build_palette_list(source_palette: Optional[Sequence[int]]) -> List[int]:
@@ -329,15 +302,13 @@ def _compute_grade_counts(stacked_indices: np.ndarray) -> np.ndarray:
     contiguous = np.ascontiguousarray(stacked_indices, dtype=np.uint8)
 
     def _chunk() -> np.ndarray:
-        print("[COMPOSITE] Using NumPy chunk accumulation...")
         return _count_low_grade_occurrences(contiguous)
 
     if _cython_count_grades is not None:
         try:
-            print("[COMPOSITE] Using Cython grade counting...")
             return _cython_count_grades(contiguous)
         except Exception as exc:
-            print(f"[COMPOSITE] Cython grade count failed: {exc}")
+            print(f"  [WARNING] Cython failed, falling back to NumPy: {exc}")
     return _chunk()
 
 
@@ -351,7 +322,11 @@ def _hex_to_rgb_tuple(value: str) -> Tuple[int, int, int]:
     return (r, g, b)
 
 
-def _percentile_ranks(values: np.ndarray) -> np.ndarray:
+def _percentile_ranks(
+    values: np.ndarray,
+    value_min: Optional[float] = None,
+    value_max: Optional[float] = None,
+) -> np.ndarray:
     """
     주어진 값 배열을 0~100 범위로 선형 정규화(Min-Max Scaling).
     기존 Percentile(순위) 방식 대신 값의 크기를 그대로 반영하여
@@ -360,17 +335,21 @@ def _percentile_ranks(values: np.ndarray) -> np.ndarray:
     if values.size == 0:
         return np.zeros_like(values, dtype=np.float32)
 
-    v_min = np.min(values)
-    v_max = np.max(values)
-
-    if v_min == v_max:
-        return np.zeros_like(values, dtype=np.float32)
-
     # Min-Max Scaling: (x - min) / (max - min) * 100
     # float32로 변환하여 계산
     values_f = values.astype(np.float32, copy=False)
-    
-    return (values_f - v_min) / (v_max - v_min) * 100.0
+    finite_values = values_f[np.isfinite(values_f)]
+    if finite_values.size == 0:
+        return np.zeros_like(values_f, dtype=np.float32)
+
+    v_min = float(value_min if value_min is not None else finite_values.min())
+    v_max = float(value_max if value_max is not None else finite_values.max())
+
+    if v_max <= v_min:
+        return np.zeros_like(values_f, dtype=np.float32)
+
+    scaled = (values_f - v_min) / (v_max - v_min) * 100.0
+    return np.clip(scaled, 0.0, 100.0, out=scaled)
 
 
 def _interpolate_percentile_colors(
@@ -531,6 +510,8 @@ def _iter_pixel_indices(
 
     total = len(image_paths)
     processed = 0
+    last_log_time = time.perf_counter()
+    log_interval = 0.5  # 0.5초마다 진행률 출력
 
     if normalized_mode in {"sequential", "none"} or worker_count <= 1:
         for rel_path in image_paths:
@@ -578,6 +559,9 @@ def _render_sum_map_image(
     quantiles: Sequence[float],
     color_stops: np.ndarray,
     lut_colors: Optional[np.ndarray] = None,
+    value_min: Optional[float] = None,
+    value_max: Optional[float] = None,
+    force_full_range: bool = False,
 ) -> Image.Image:
     rgb_palette = np.array(palette_list, dtype=np.uint8).reshape(256, 3)
 
@@ -599,12 +583,34 @@ def _render_sum_map_image(
                 lut_colors_local = _interpolate_percentile_colors(lut_positions, color_stops, quantile_positions)
             else:
                 lut_colors_local = lut_colors
-            percentiles = _percentile_ranks(calc_values)
-            lut_idx = np.clip(np.rint(percentiles * 2.55), 0, 255).astype(np.uint8, copy=False)
 
-            # 2. [Composite Layer] 계산 대상(0-7만 있는 곳)만 Composite 색상으로 덮어씀
-            # rgb_array is already a copy from fancy indexing, no need to copy again
-            rgb_array[mask] = lut_colors_local[lut_idx]
+            finite_values = calc_values[np.isfinite(calc_values)]
+            if finite_values.size > 0:
+                resolved_min = float(value_min if value_min is not None else finite_values.min())
+                resolved_max = float(value_max if value_max is not None else finite_values.max())
+
+                if force_full_range:
+                    denom = resolved_max - resolved_min
+                    if denom <= 0:
+                        # 단일 값인 경우 0 또는 양수 여부에 따라 맵핑 결정
+                        if resolved_max > 0:
+                            lut_idx = np.full(calc_values.shape, 255, dtype=np.uint8)
+                        else:
+                            lut_idx = np.zeros(calc_values.shape, dtype=np.uint8)
+                    else:
+                        scaled = (calc_values - resolved_min) / denom
+                        lut_idx = np.clip(np.rint(scaled * 255.0), 0, 255).astype(np.uint8, copy=False)
+                else:
+                    percentiles = _percentile_ranks(
+                        calc_values,
+                        value_min=resolved_min,
+                        value_max=resolved_max,
+                    )
+                    lut_idx = np.clip(np.rint(percentiles * 2.55), 0, 255).astype(np.uint8, copy=False)
+
+                # 2. [Composite Layer] 계산 대상(0-7만 있는 곳)만 Composite 색상으로 덮어씀
+                # rgb_array is already a copy from fancy indexing, no need to copy again
+                rgb_array[mask] = lut_colors_local[lut_idx]
 
     # rgb_array is already uint8, no need for astype
     return Image.fromarray(rgb_array, mode='RGB')
@@ -703,9 +709,8 @@ def _persist_square_map_data(
     def _save_npz():
         try:
             np.savez_compressed(cache_path, **save_payload)
-            print(f"[SQUARE MAP] NPZ cache saved to {cache_path}")
-        except Exception as exc:
-            print(f"[SQUARE MAP] NPZ save failed: {exc}")
+        except Exception:
+            pass
 
     threading.Thread(target=_save_npz, daemon=True).start()
 
@@ -754,14 +759,7 @@ def recolor_saved_sum_maps(
     """
     Reload cached square-map arrays and regenerate PNGs with updated colors.
     """
-    print(f"[recolor_saved_sum_maps] 호출됨")
-    print(f"  output_dir: {output_dir}")
-    print(f"  override_colors: {override_colors}")
-
     cache_path = output_dir / SQUARE_MAP_CACHE_FILENAME
-    print(f"  cache_path: {cache_path}")
-    print(f"  cache_path.exists(): {cache_path.exists()}")
-
     if not cache_path.exists():
         raise FileNotFoundError(f"Square map cache not found: {cache_path}")
 
@@ -798,8 +796,7 @@ def recolor_saved_sum_maps(
                 idx_8_mask=idx_8_mask_arr,
                 image_count=source_image_count,
             )
-        except Exception as exc:
-            print(f"[recolor_saved_sum_maps] Recompute from counts failed, fallback to cached values: {exc}")
+        except Exception:
             square_mean_map = cached_square_mean
             weighted_map = cached_weighted
     else:
@@ -861,8 +858,6 @@ def recolor_saved_sum_maps(
             "filename": actual_path.name,
         })
 
-    print(f"[recolor_saved_sum_maps] outputs: {outputs}")
-    print(f"[recolor_saved_sum_maps] outputs 개수: {len(outputs)}")
     return outputs
 
 
@@ -929,16 +924,6 @@ def _save_sum_map_variants(
     with np.errstate(divide='ignore', invalid='ignore'):
         weighted_map[weighted_mask] = (square_sums[weighted_mask] / weight_map[weighted_mask]).astype(float_dtype, copy=False)
 
-    # 디버그 로그
-    print(f"[SQUARE MAP DEBUG]")
-    print(f"  calc_mask points: {calc_mask.sum()}")
-    print(f"  weighted_mask points: {weighted_mask.sum()}")
-    print(f"  calc_mask == weighted_mask: {np.array_equal(calc_mask, weighted_mask)}")
-    if calc_mask.any():
-        print(f"  square_mean range: [{square_mean_map[calc_mask].min():.2f}, {square_mean_map[calc_mask].max():.2f}]")
-    if weighted_mask.any():
-        print(f"  weighted_map range: [{weighted_map[weighted_mask].min():.2f}, {weighted_map[weighted_mask].max():.2f}]")
-        print(f"  weighted_map has nan/inf: {np.isnan(weighted_map[weighted_mask]).any()} / {np.isinf(weighted_map[weighted_mask]).any()}")
 
     if base_indices is None:
         if _FAST_MEDIAN:
@@ -1039,24 +1024,22 @@ def _save_sum_map_variants(
     with ThreadPoolExecutor(max_workers=render_workers) as render_pool, ThreadPoolExecutor(max_workers=save_workers) as save_pool:
         for filename, variant_type, display_name, data_map, mask in variants:
             sum_map_path = output_dir / filename
-            print(f"[SAVE] Saving {filename}, mask points: {mask.sum()}")
             render_future = render_pool.submit(_render_task, data_map, mask)
             save_future = save_pool.submit(_save_future, render_future, sum_map_path)
             save_futures.append((save_future, filename, variant_type, display_name))
 
+        total_render_time = 0.0
+        total_save_time = 0.0
         for future, filename, variant_type, display_name in save_futures:
             actual_path, rel_path, render_stats, save_time = future.result()
-            if trace:
-                print(f"[SAVE DETAIL] {filename}: mask={render_stats['mask_points']}, render={render_stats['render_time']:.3f}s, interp={render_stats['interp_time']:.3f}s, save={save_time:.3f}s")
-            print(f"[SAVE] Saved to: {rel_path}")
+            total_render_time += render_stats['render_time']
+            total_save_time += save_time
             outputs.append({
                 "path": rel_path,
                 "type": variant_type,
                 "display_name": display_name,
                 "filename": actual_path.name,
             })
-
-    print(f"[SAVE] Total outputs: {len(outputs)}")
     return outputs
 
 
@@ -1067,69 +1050,68 @@ def _compute_maps_from_counts(
     idx_8_mask: Optional[np.ndarray],
     only_low_mask: Optional[np.ndarray] = None,
     image_count: Optional[int] = None,
+    include_unselected_in_denominator: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    grade_counts에서 선택되지 않은 Grade의 카운트를 인덱스 0으로 이동한 뒤
-    동일 수식으로 square_sum, weight_sum 계산.
-
-    예: selected_grades=[3, 5]
-    - grade 1, 2, 4, 6, 7의 카운트를 인덱스 0에 합산
-    - 인덱스 0은 제곱값이 0이므로 분자(square_sums)에 영향 없음
-    - 가중치가 1이므로 분모(weight_map)는 증가
+    선택된 grade 집합을 기준으로 square_mean / weighted_square_mean을 계산한다.
+    include_unselected_in_denominator=True이면 선택되지 않은 grade를 grade 0으로 합산해
+    분모(가중치)에만 반영하고, False이면 계산에서 완전히 제외한다.
     """
     if grade_counts.ndim != 3:
         raise ValueError("grade_counts 배열 형식이 올바르지 않습니다.")
 
-    # 1. 데이터 복사 및 비선택 Grade를 인덱스 0으로 이동
-    # float32로 변환 (계산을 위해)
+    grade_dim = grade_counts.shape[0]
+    if grade_dim == 0:
+        raise ValueError("grade_counts must include at least one grade axis")
+
+    valid_grades = [g for g in selected_grades if 0 <= g < grade_dim]
+    if not valid_grades:
+        raise ValueError("selected_grades가 비어있거나 잘못되었습니다.")
+
     counts_float = grade_counts.astype(np.float32, copy=True)
 
-    # 선택된 grade가 아닌 인덱스의 카운트를 인덱스 0에 합산
-    # 예: selected=[3, 5] -> 1, 2, 4, 6, 7의 카운트를 0에 합산
-    all_grades = set(range(8))
-    target_grades = set(selected_grades)
-    grades_to_move = list(all_grades - target_grades - {0})  # 0은 제외 (이미 0이므로)
+    all_grades = set(range(grade_dim))
+    target_grades = set(valid_grades)
+    grades_to_zero = list(all_grades - target_grades)
 
-    if grades_to_move:
-        for grade_idx in grades_to_move:
-            counts_float[0, :, :] += counts_float[grade_idx, :, :]  # ⭐ 인덱스 0에 합산
-            counts_float[grade_idx, :, :] = 0.0  # 원래 위치는 0으로
+    if include_unselected_in_denominator and grades_to_zero:
+        for grade_idx in grades_to_zero:
+            if grade_idx == 0:
+                continue
+            counts_float[0, :, :] += counts_float[grade_idx, :, :]
 
-    # 2. Full Map과 동일한 방식(벡터화)으로 계산
-    # 제곱 가중치: [0, 1, 4, 9, 16, 25, 36, 49]
-    square_weights = (np.arange(8, dtype=np.float32) ** 2).reshape(8, 1, 1)
+    for grade_idx in grades_to_zero:
+        counts_float[grade_idx, :, :] = 0.0
+
+    square_weights = (np.arange(grade_dim, dtype=np.float32) ** 2).reshape(grade_dim, 1, 1)
     square_sums = np.sum(counts_float * square_weights, axis=0, dtype=np.float32)
 
-    # 가중치: [1, 1, 2, 3, 4, 5, 6, 7]
-    weight_factors = np.array([1, 1, 2, 3, 4, 5, 6, 7], dtype=np.float32).reshape(8, 1, 1)
+    base_weight_factors = np.array([1, 1, 2, 3, 4, 5, 6, 7], dtype=np.float32)
+    weight_factors = np.ones((grade_dim,), dtype=np.float32)
+    limit = min(grade_dim, base_weight_factors.size)
+    weight_factors[:limit] = base_weight_factors[:limit]
+    weight_factors = weight_factors.reshape(grade_dim, 1, 1)
     weight_map_sum = np.sum(counts_float * weight_factors, axis=0, dtype=np.float32)
 
-    # 3. 마스크 설정
+    selected_presence = counts_float.sum(axis=0) > 0
+    calc_mask = selected_presence.copy()
     if only_low_mask is not None:
-        calc_mask = only_low_mask.astype(bool, copy=False).copy()
-    else:
-        # zero 처리된 counts_float 기준으로 마스크 생성 (선택된 grade가 하나라도 있는 포인트만 포함)
-        calc_mask = counts_float.sum(axis=0) > 0
-        if idx_8_mask is not None:
-            calc_mask &= ~idx_8_mask
-        if invalid_mask is not None:
-            calc_mask &= ~invalid_mask
+        calc_mask &= only_low_mask.astype(bool, copy=False)
+    if idx_8_mask is not None:
+        calc_mask &= ~idx_8_mask
+    if invalid_mask is not None:
+        calc_mask &= ~invalid_mask
 
     if image_count is None or image_count <= 0:
-        # 이미지 개수 추정 (원본 데이터 기준)
-        raw_counts_float = grade_counts.astype(np.float32, copy=False)
-        inferred = raw_counts_float.sum(axis=0).max()
+        inferred = counts_float.sum(axis=0).max()
         image_count_value = float(inferred if inferred > 0 else 1.0)
     else:
         image_count_value = float(image_count)
 
-    # 4. 최종 맵 계산
-    # Square Average: 제곱합 / 전체 이미지 개수
     square_mean_map = np.zeros_like(square_sums, dtype=np.float32)
     with np.errstate(divide='ignore', invalid='ignore'):
         square_mean_map[calc_mask] = square_sums[calc_mask] / image_count_value
 
-    # Square Weighted Average: 제곱합 / 가중치 합
     weighted_mask = calc_mask & (weight_map_sum > 0)
     weighted_map = np.zeros_like(square_sums, dtype=np.float32)
     with np.errstate(divide='ignore', invalid='ignore'):
@@ -1201,29 +1183,31 @@ def create_composite_heatmaps(
                 continue
             raw_indices_list.append(raw_indices.astype(np.uint8, copy=False))
             processed_count += 1
+    load_time = time.perf_counter() - t
     _mark("load_indices", t)
 
     if not raw_indices_list:
         raise ValueError("처리할 이미지가 없습니다.")
 
     # 2단계: 인덱스 8-13 처리 (특정 point가 8-13만 있는 경우만 8로 변경)
+    t = time.perf_counter()
     stacked_raw = np.stack(raw_indices_list, axis=0)  # (N, H, W)
     raw_indices_list.clear()
     idx_8_13_mask = (stacked_raw >= 8) & (stacked_raw <= 13)  # (N, H, W)
     idx_0_7_mask = (stacked_raw >= 0) & (stacked_raw <= 7)  # (N, H, W)
     idx_14_plus_mask = (stacked_raw >= 14)  # (N, H, W)
-    
+
     # 각 포인트에서 8-13이 있는지, 0-7이 있는지, 14 이상이 있는지 확인
     has_8_13 = idx_8_13_mask.any(axis=0)  # (H, W)
     has_0_7 = idx_0_7_mask.any(axis=0)  # (H, W)
     has_14_plus = idx_14_plus_mask.any(axis=0)  # (H, W)
-    
+
     # 8-13만 있고 0-7이나 14 이상이 없는 포인트
     idx_8_13_only = has_8_13 & ~has_0_7 & ~has_14_plus  # (H, W)
 
     # 해당 픽셀을 모든 이미지에서 8로 변경
     stacked_raw[:, idx_8_13_only] = 8
-    
+
     # 3단계: invalid mask 생성 및 clipping
     # 인덱스 14 이상만 invalid (31로)
     invalid_mask = has_14_plus
@@ -1232,9 +1216,11 @@ def create_composite_heatmaps(
     fast_median = _FAST_MEDIAN
     float_indices = np.asarray(stacked_indices, dtype=np.float32, order="C")
     _, height, width = stacked_indices.shape
+    mask_time = time.perf_counter() - t
 
     t = time.perf_counter()
     grade_counts = _compute_grade_counts(stacked_indices)
+    grade_time = time.perf_counter() - t
     _mark("grade_counts", t)
 
     # (invalid_mask와 idx_8_13_only를 제외한 포인트 중 0-7만 있는 것)
@@ -1249,10 +1235,13 @@ def create_composite_heatmaps(
     grade_presence = grade_counts > 0
     invalid_mask_bool = invalid_mask.astype(bool, copy=False) if invalid_mask is not None else None
     idx_8_overlay = idx_8_13_only & ~invalid_mask_bool if invalid_mask_bool is not None else idx_8_13_only.copy()
+
     t = time.perf_counter()
+    heatmap_times = []
     for idx in indices:
         if idx >= 8:
             continue
+        t_hm = time.perf_counter()
         result = np.full((height, width), 31, dtype=np.uint8)
         presence_mask = grade_presence[idx].copy()
         if invalid_mask_bool is not None:
@@ -1267,6 +1256,8 @@ def create_composite_heatmaps(
         total_pixels = width * height
         pixel_count = int(np.count_nonzero(presence_mask))
         percentage = round(pixel_count / total_pixels * 100, 2) if total_pixels else 0
+        heatmap_time = time.perf_counter() - t_hm
+        heatmap_times.append(heatmap_time)
         heatmaps.append({
             "index": idx,
             "path": rel_path,
@@ -1274,6 +1265,7 @@ def create_composite_heatmaps(
             "max_count": processed_count,
             "percentage": percentage,
         })
+    total_heatmap_time = time.perf_counter() - t
     _mark("save_heatmaps", t)
 
     sum_map_entries: List[Dict[str, str]] = []
@@ -1291,10 +1283,8 @@ def create_composite_heatmaps(
             grade_counts=grade_counts,
             only_low_mask=only_0_7_mask,
         )
+        sum_map_time = time.perf_counter() - t
         _mark("save_sum_maps", t)
-        print(f"[API] sum_map_entries after _save_sum_map_variants: {sum_map_entries}")
-        print(f"[API] sum_map_entries length: {len(sum_map_entries)}")
-        print(f"[API] sum_map_entries bool: {bool(sum_map_entries)}")
         if sum_map_entries:
             sum_map_rel_path = sum_map_entries[0]["path"]
 
@@ -1318,6 +1308,10 @@ def create_composite_heatmaps(
 
     total_time = time.perf_counter() - start_time
     timings["total"] = total_time
+
+    # 최종 실행 시간만 출력
+    print(f"[COMPOSITE] Completed in {total_time:.3f}s")
+
     result = {
         "output_dir": output_dir.relative_to(IMAGES_ROOT).as_posix(),
         "heatmaps": heatmaps,
@@ -1331,14 +1325,6 @@ def create_composite_heatmaps(
         result["sum_map_path"] = sum_map_rel_path
     if sum_map_entries:
         result["sum_maps"] = sum_map_entries
-    print(f"[API] Final result keys: {result.keys()}")
-    print(f"[API] 'sum_maps' in result: {'sum_maps' in result}")
-    if trace:
-        print("[COMPOSITE_TIMING]")
-        if fast_median:
-            print("  COMPOSITE_FAST_MEDIAN: enabled (mean-based)")
-        for k, v in timings.items():
-            print(f"  {k:20s}: {v:.3f}s")
     return result
 def create_palette_overlay(
     image_paths: List[str],
@@ -1570,10 +1556,6 @@ def create_subset_map(
     Returns:
         생성된 Subset Map 정보 리스트
     """
-    print(f"[create_subset_map] 호출됨")
-    print(f"  output_dir: {output_dir}")
-    print(f"  selected_grades: {selected_grades}")
-
     if not selected_grades:
         raise ValueError("선택된 grade가 없습니다.")
 
@@ -1614,6 +1596,7 @@ def create_subset_map(
         idx_8_mask=idx_8_mask_arr,
         only_low_mask=only_low_mask_arr,
         image_count=source_image_count,
+        include_unselected_in_denominator=False,
     )
 
     # 색상 설정
@@ -1658,6 +1641,20 @@ def create_subset_map(
     shared_lut_colors = _interpolate_percentile_colors(lut_positions, color_stops, quantile_positions)
     palette_list = palette_array.reshape(-1).tolist()
 
+    def _value_range_for_subset(map_data: np.ndarray, mask_arr: np.ndarray) -> Tuple[Optional[float], Optional[float]]:
+        if map_data is None or mask_arr is None:
+            return None, None
+        mask_bool = np.asarray(mask_arr, dtype=bool)
+        values = map_data[mask_bool]
+        if values.size == 0:
+            return None, None
+        finite = values[np.isfinite(values)]
+        if finite.size == 0:
+            return None, None
+        v_min = float(finite.min())
+        v_max = float(finite.max())
+        return v_min, v_max
+
     # Subset Map 이미지 생성
     grade_str = "".join(str(g) for g in sorted_grades)
     variants = [
@@ -1668,7 +1665,7 @@ def create_subset_map(
     outputs: List[Dict[str, str]] = []
     for filename, variant_type, display_name, data_map, mask in variants:
         sum_map_path = output_dir / filename
-        print(f"[SUBSET] Saving {filename}, mask points: {mask.sum()}")
+        value_min, value_max = _value_range_for_subset(data_map, mask)
         img = _render_sum_map_image(
             base_indices=base_indices,
             value_map=data_map,
@@ -1677,9 +1674,11 @@ def create_subset_map(
             quantiles=settings.quantiles,
             color_stops=color_stops,
             lut_colors=shared_lut_colors,
+            value_min=value_min,
+            value_max=value_max,
+            force_full_range=True,
         )
         actual_path, rel_path = _save_image_with_backend(img, sum_map_path)
-        print(f"[SUBSET] Saved to: {rel_path}")
         outputs.append({
             "path": rel_path,
             "type": variant_type,
@@ -1721,12 +1720,9 @@ def create_subset_map(
                 positions_file_path = positions_output_dir / f"{img_stem}.json"
                 with open(positions_file_path, 'w', encoding='utf-8') as f:
                     json.dump(positions_data_copy, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
-                print(f"[SUBSET] Created positions: {positions_file_path.relative_to(POSITIONS_ROOT)}")
-        except Exception as e:
-            print(f"[SUBSET] Failed to copy positions: {e}")
-
-    print(f"[create_subset_map] outputs: {outputs}")
     return outputs
 
 

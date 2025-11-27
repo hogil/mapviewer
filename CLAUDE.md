@@ -301,9 +301,83 @@ HTTPS settings are in [api/config.py](api/config.py#L43-L47). Certificate files 
 - Check that `saml/settings.json` has proper configuration
 - Review server logs for SAML assertion errors
 
+## Composite Map Features
+
+### Overview
+
+Composite Map is a powerful feature that aggregates multiple wafer maps into a single heatmap showing defect patterns across many wafers.
+
+**Key Concepts:**
+- **Full Composite Map**: Shows all defect grades (0-7) aggregated across selected wafers
+- **Subset Composite Map**: Shows only selected defect grades for focused analysis
+- **Grade Counts**: NumPy arrays tracking how many wafers have each grade at each position
+- **NPZ Caching**: Composite data cached in `.npz` files for fast recoloring
+- **Recolor**: Fast color scheme changes without recalculating composite values
+
+### Main Functions
+
+**Creating Composite Maps** (api/composite_map.py):
+- `create_full_composite_maps()` - Generate Full Composite Map from multiple wafers
+- `create_subset_map()` - Generate Subset Composite Map for specific grades
+- `recolor_saved_sum_maps()` - Fast recolor using cached composite data
+
+**Color Management** (api/composite_colors.py):
+- `load_composite_color_settings()` - Load color scheme from `logs/color-legends.json`
+- `save_composite_color_settings()` - Save custom color schemes
+- 11-point gradient: Blue (0%) → Cyan → Green → Yellow → Orange → Red (100%)
+
+### Key Technical Details
+
+**Calculation:**
+- Uses square weighting: `grade²` for severity
+- Two metrics: `square_mean` (simple average) and `square_weighted` (weighted average)
+- Min-Max scaling to percentiles (0-100%) for color mapping
+- 2-layer rendering: Base layer (wafer shape) + Composite layer (gradient)
+
+**Subset Map Behavior:**
+- Non-selected grades are moved to grade 0 (which has 0² = 0 weight)
+- Same `calc_mask` as Full Map to maintain wafer shape
+- Values are typically much smaller than Full Map
+- Same position shows different colors due to different value ranges
+
+**Common Pitfalls:**
+- Always pass `only_low_mask=None` to subset functions to force recalculation
+- Don't reuse Full Map's `calc_mask` - let subset recalculate from `grade_counts`
+- Subset colors appear lighter/different due to narrower value range (this is expected)
+
+See [FULL_VS_SUBSET_COMPARISON.md](FULL_VS_SUBSET_COMPARISON.md) for detailed technical comparison.
+
+## Development Guidelines (from AGENTS.md)
+
+### Project Structure & Module Organization
+
+The FastAPI backend lives in `api/` (`main.py` entrypoint plus config, caching, and logging helpers). Frontend ES6 modules are in `js/` and loaded directly by `index.html`, so keep code browser-ready without a bundler. Operational scripts live in `scripts/`, long-form docs in `docs/`, sample wafers in `wafer/`, and TLS placeholders in `cert/`. Leave large datasets and private configuration outside version control.
+
+### Build, Test, and Development Commands
+
+Install dependencies with `pip install -r requirements.txt`. Launch the service via `python -m api.main`; use `./start.ps1` (Windows) or `./start.sh` (Ubuntu) when you need the tuned environment variables. Enable local hot reload by exporting `RELOAD=1` and setting `UVICORN_WORKERS=1`. Benchmarks double as smoke tests: `python scripts/benchmark_complete.py wafer` exercises the end-to-end flow, while `python scripts/turbojpeg_vs_pyvips_benchmark.py wafer --limit 100` profiles image codecs. Confirm `PROJECT_ROOT` points to your wafer directory before running any command.
+
+### Coding Style & Naming Conventions
+
+Python modules use 4-space indentation, `snake_case` for functions, and `CamelCase` for services or Pydantic models. Reuse helpers such as `thumbnail_service` and the shared loggers instead of reimplementing filesystem or caching logic, and keep structured logging intact. JavaScript stays as native ES6 modules with `camelCase` APIs and hyphenated filenames (`context-menu.js`, `semiconductor-renderer.js`). Guard long-running I/O with the existing async patterns and locks.
+
+### Testing Guidelines
+
+Add new automated checks under `api/tests/test_<feature>.py` using pytest-style naming. Capture performance baselines with the benchmark scripts above and paste the command plus summary table into reviews. When modifying authentication or configuration, hit `/api/config`, `/saml/login`, and `/api/thumbnail` with curl or HTTPie, noting response codes and payload differences.
+
+### Commit & Pull Request Guidelines
+
+Commits follow the conventional prefixes already in history (`feat:`, `perf:`, `debug:`, `test:`) and use short, imperative subjects. Branch names reflect scope (`feat/<topic>`). Pull requests should include a concise summary, linked issue, verification notes for any commands you ran, and screenshots or timings for UI or benchmark changes. Call out environment-variable or certificate adjustments so reviewers can mirror them.
+
+### Security & Configuration Tips
+
+Never commit real secrets; `cert/` holds placeholders only. Use `ENVIRONMENT_SETUP.md` when adjusting SAML or HTTPS variables and explain overrides in your PR. Before leaving shared machines, reset aggressive concurrency knobs (`VIPS_CONCURRENCY`, `THUMBNAIL_SEM`, `IO_THREADS`) and re-check that HTTPS still terminates correctly after SSL changes.
+
 ## Additional Documentation
 
 - [README.md](README.md): Project overview and quick start
 - [ARCHITECTURE.md](ARCHITECTURE.md): Detailed system architecture
 - [ENVIRONMENT_SETUP.md](ENVIRONMENT_SETUP.md): Complete environment variable guide
 - [CHANGELOG.md](CHANGELOG.md): Version history and changes
+- [FULL_VS_SUBSET_COMPARISON.md](FULL_VS_SUBSET_COMPARISON.md): Composite Map technical deep-dive
+- [CHIP_ANNOTATION.md](CHIP_ANNOTATION.md): Chip-level defect annotation system

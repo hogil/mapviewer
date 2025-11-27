@@ -521,8 +521,6 @@ export class ChipAnnotator {
         if (!this.viewer || !this.viewer.dom) return;
 
         const viewer = this.viewer;
-        
-        console.log('[updateSelectedChipsList] gridMode:', viewer.gridMode, 'viewMode:', viewer.viewMode, 'selectedChips:', this.selectedChips.size);
 
         // 1. gridMode이면 모든 칩 관련 UI 숨김
         if (viewer.gridMode) {
@@ -659,7 +657,6 @@ export class ChipAnnotator {
             // DOM에 추가
             viewerContainer.appendChild(listContainer);
             
-            console.log('[updateSelectedChipsList] Container created and added to DOM');
         } else {
             // 이미 생성된 경우에도 listItems에 wheel 이벤트가 없으면 추가
             const existingList = document.getElementById('selected-chips-list-items');
@@ -754,7 +751,6 @@ export class ChipAnnotator {
 
         // 6. 선택된 칩이 있으면 렌더링
         if (this.selectedChips.size > 0) {
-            console.log('[updateSelectedChipsList] Rendering', this.selectedChips.size, 'selected chips');
             
             // 목록 초기화
             listItems.innerHTML = '';
@@ -858,12 +854,10 @@ export class ChipAnnotator {
                 }
             }, 0);
             
-            console.log('[updateSelectedChipsList] Container shown');
         } else {
             // 선택된 칩이 없으면 숨김
             listContainer.style.display = 'none';
             listItems.innerHTML = '';
-            console.log('[updateSelectedChipsList] No chips selected, container hidden');
         }
     }
     
