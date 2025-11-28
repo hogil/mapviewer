@@ -374,11 +374,26 @@
             background: #252525;
             color: #eee;
             font-size: 13px;
+            transition: border-color 0.15s, background-color 0.15s;
         }
 
         .color-editor-rgb input {
             width: 58px;
             text-align: center;
+        }
+
+        .color-editor-hex input.cell-selected,
+        .color-editor-rgb input.cell-selected {
+            border-color: #007acc;
+            background: rgba(0, 122, 204, 0.15);
+            box-shadow: 0 0 0 1px rgba(0, 122, 204, 0.3);
+        }
+
+        .color-editor-hex input.cell-selected:focus,
+        .color-editor-rgb input.cell-selected:focus {
+            border-color: #0a86da;
+            background: rgba(0, 122, 204, 0.2);
+            box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.4);
         }
 
         .color-editor-preview {
@@ -1484,8 +1499,8 @@
     color: #fff;
     border: 1.5px solid #444;
     border-radius: 4px;
-    padding: 4px 10px;
-    font-size: 13px;
+    padding: 3px 8px;
+    font-size: 12px;
     font-weight: 500;
     cursor: pointer;
     transition: background 0.15s, border 0.15s;
@@ -1499,12 +1514,12 @@
 }
 
 .class-btn {
-    padding: 6px 12px;
+    padding: 3px 8px;
     border-radius: 18px;
     border: 1px solid rgba(255, 255, 255, 0.15);
     background: rgba(255, 255, 255, 0.05);
     color: var(--text-color);
-    font-size: 13px;
+    font-size: 12px;
     cursor: pointer;
     transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
 }
@@ -1523,8 +1538,8 @@
 }
         
         .selection-btn {
-            min-width: 80px;
-            padding: 4px 12px;
+            min-width: 70px;
+            padding: 3px 8px;
         }
         
         .grid-btn:hover {
@@ -2242,7 +2257,8 @@
         
         /* Smaller button text */
         .grid-btn {
-            font-size: 13px;
+            font-size: 12px;
+            padding: 3px 8px;
         }
 
         /* Scrollbars */
@@ -2988,8 +3004,9 @@
                     <button id="search-btn" class="grid-btn" aria-label="검색">검색</button>
                     <button type="button" id="multi-search-btn" class="grid-btn" aria-label="LOT 다중 검색">다중검색</button>
                 </div>
-                <div class="control-group" style="margin-left: auto; gap: 8px;">
-                    <button id="ref-map-btn-top" class="grid-btn" data-ref-map-btn title="Reference Map 보기">📌 Ref Map</button>
+                <div class="control-group" style="margin-left: auto; margin-right: 8px; gap: 8px;">
+                    <button id="composite-btn-top" class="grid-btn" data-composite-btn title="Composite Map 만들기">Composite</button>
+                    <button id="ref-map-btn-top" class="grid-btn" data-ref-map-btn title="Reference Map 보기">Ref Map</button>
                     <button id="my-lot-btn-top" class="grid-btn" data-my-lot-btn title="MY LOT 보기">MY LOT</button>
                 </div>
             </div>
@@ -3112,7 +3129,7 @@
                             <span id="file-name-text" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></span>
                         </div>
                         <div style="display: flex; gap: 8px; position: absolute; right: 18px;">
-                            <button id="ref-map-btn-filename" class="grid-btn" data-ref-map-btn style="padding: 6px 12px; font-size: 12px; background: #444; border: 1px solid #666; flex-shrink: 0;" title="Reference Map 보기">📌 Ref Map</button>
+                            <button id="ref-map-btn-filename" class="grid-btn" data-ref-map-btn style="padding: 6px 12px; font-size: 12px; background: #444; border: 1px solid #666; flex-shrink: 0;" title="Reference Map 보기">Ref Map</button>
                             <button id="my-lot-btn-filename" class="grid-btn" data-my-lot-btn style="padding: 6px 12px; font-size: 12px; background: #2f6fed; border: 1px solid #1c50b5; flex-shrink: 0;" title="MY LOT 보기">MY LOT</button>
                         </div>
                     </div>
@@ -3185,7 +3202,7 @@
                     <button id="delete-class-btn" class="grid-btn" aria-label="클래스 삭제">Delete Class</button>
                 </div>
                 <h3>Fail List</h3>
-                <div id="class-list" style="display: flex; flex-wrap: wrap; gap: 12px 12px; margin-bottom: 12px;"></div>
+                <div id="class-list" style="display: flex; flex-wrap: wrap; gap: 6px 6px; margin-bottom: 12px;"></div>
                 <div id="label-status"></div>
                 <div id="class-images-section">
                     <h4 id="class-images-title" style="display:none;">Labeled Images</h4>

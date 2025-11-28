@@ -81,6 +81,19 @@ export class ColorSchemeEditor {
         this.selectedSchemeIndex = -1; // 키보드 네비게이션용
         this.originalCheckboxState = null; // 모달 열 때 체크박스 상태 저장용
         this.realtimeUpdateTimeout = null; // 실시간 미리보기 디바운스 타이머
+        // 셀 선택 기능
+        this.selectedCells = new Set(); // 선택된 셀들 (cellId 문자열)
+        this.dragStartCell = null; // 드래그 시작 셀
+        this.isDragging = false; // 드래그 중인지
+        this.cellIdCounter = 0; // 셀 ID 카운터
+        this.lastSelectedCell = null; // Shift 선택을 위한 마지막 선택된 셀 정보
+        this.boundCellMouseDown = this.handleCellMouseDown.bind(this);
+        this.boundCellMouseMove = this.handleCellMouseMove.bind(this);
+        this.boundCellMouseUp = this.handleCellMouseUp.bind(this);
+        this.boundCellKeyDown = this.handleCellKeyDown.bind(this);
+        this.contextMenu = null;
+        this.boundHideContextMenu = () => this.hideContextMenu();
+        this._contextMenuBound = false;
         this.setup();
         if (this.modal) {
             this._setupDone = true;
@@ -180,6 +193,10 @@ export class ColorSchemeEditor {
             hexInput.type = 'text';
             hexInput.maxLength = 7;
             hexInput.placeholder = '#RRGGBB';
+            const hexCellId = `hex-${this.cellIdCounter++}`;
+            hexInput.dataset.cellId = hexCellId;
+            hexInput.dataset.cellType = 'hex';
+            hexInput.dataset.rowIndex = String(rows.length);
             hexContainer.appendChild(hexInput);
             hexTd.appendChild(hexContainer);
 
@@ -193,6 +210,11 @@ export class ColorSchemeEditor {
                 input.max = '255';
                 input.dataset.channel = ['r', 'g', 'b'][idx];
                 input.placeholder = label;
+                const rgbCellId = `rgb-${this.cellIdCounter++}`;
+                input.dataset.cellId = rgbCellId;
+                input.dataset.cellType = 'rgb';
+                input.dataset.channelIndex = String(idx);
+                input.dataset.rowIndex = String(rows.length);
                 rgbContainer.appendChild(input);
                 return input;
             });
@@ -264,6 +286,10 @@ export class ColorSchemeEditor {
                 this.updatePreviewRealtime();
             });
             hexInput.addEventListener('paste', (e) => this.handleHexPaste(e, row));
+            // 셀 선택 이벤트
+            hexInput.addEventListener('mousedown', (e) => this.handleCellMouseDown(e, hexCellId, 'hex'));
+            // 키보드 이벤트 (복사/붙여넣기) - capture phase에서 처리
+            hexInput.addEventListener('keydown', (e) => this.handleInputKeyDown(e, hexCellId, 'hex'), true);
             rgbInputs.forEach((input, idx) => {
                 input.addEventListener('change', () => {
                     this.syncFromRgb(row);
@@ -275,6 +301,10 @@ export class ColorSchemeEditor {
                     this.updatePreviewRealtime();
                 });
                 input.addEventListener('paste', (e) => this.handleRgbPaste(e, row, idx));
+                // 셀 선택 이벤트
+                input.addEventListener('mousedown', (e) => this.handleCellMouseDown(e, input.dataset.cellId, 'rgb'));
+                // 키보드 이벤트 (복사/붙여넣기) - capture phase에서 처리
+                input.addEventListener('keydown', (e) => this.handleInputKeyDown(e, input.dataset.cellId, 'rgb'), true);
             });
             colorInput.addEventListener('input', () => {
                 this.syncFromPicker(row);
@@ -293,6 +323,22 @@ export class ColorSchemeEditor {
         buildRow('text', 'Text');
 
         this.rows = rows;
+        
+        // 전역 이벤트 리스너 추가 (모달 내부에서만 동작하도록)
+        if (this.modal) {
+            this.modal.addEventListener('mousemove', this.boundCellMouseMove);
+            this.modal.addEventListener('mouseup', this.boundCellMouseUp);
+            this.modal.addEventListener('keydown', this.boundCellKeyDown);
+            // 모달 전체에 컨텍스트 메뉴 이벤트 추가 (capture phase)
+            if (!this._contextMenuBound) {
+                this.modal.addEventListener('contextmenu', (e) => this.handleContextMenu(e), true);
+                this._contextMenuBound = true;
+            }
+        }
+        if (this.tableBody && !this._contextMenuBound) {
+            this.tableBody.addEventListener('contextmenu', (e) => this.handleContextMenu(e), true);
+            this._contextMenuBound = true;
+        }
     }
 
     open() {
@@ -362,6 +408,17 @@ export class ColorSchemeEditor {
         this.updateSchemeLabel(schemeName);
         this.clearError();
         this.updateApplyButtonState(false);
+        
+        // tableBody가 다시 찾아졌을 경우 컨텍스트 메뉴 이벤트 리스너 재등록
+        if (this.modal && !this._contextMenuBound) {
+            this.modal.addEventListener('contextmenu', (e) => this.handleContextMenu(e), true);
+            this._contextMenuBound = true;
+        }
+        if (this.tableBody && !this._contextMenuBound) {
+            this.tableBody.addEventListener('contextmenu', (e) => this.handleContextMenu(e), true);
+            this._contextMenuBound = true;
+        }
+        
         this.modal.classList.add('is-open');
         this.modal.setAttribute('aria-hidden', 'false');
         document.addEventListener('keydown', this.boundKeyHandler);
@@ -461,6 +518,14 @@ export class ColorSchemeEditor {
         this.modal.setAttribute('aria-hidden', 'true');
         document.removeEventListener('keydown', this.boundKeyHandler);
         document.removeEventListener('mousedown', this.boundOutsideClick);
+        if (this.modal) {
+            this.modal.removeEventListener('mousemove', this.boundCellMouseMove);
+            this.modal.removeEventListener('mouseup', this.boundCellMouseUp);
+            this.modal.removeEventListener('keydown', this.boundCellKeyDown);
+        }
+        this.selectedCells.clear();
+        this.updateCellSelection();
+        this.hideContextMenu();
         this.clearError();
     }
 
@@ -1288,6 +1353,548 @@ export class ColorSchemeEditor {
     clearError() {
         if (this.errorEl) {
             this.errorEl.textContent = '';
+        }
+    }
+
+    // 셀 선택 관련 메서드들
+    handleCellMouseDown(e, cellId, cellType) {
+        if (!e) return;
+        
+        // 🔥 우클릭 버튼(button === 2)인 경우 셀 선택 변경하지 않음
+        if (e.button === 2) {
+            return;
+        }
+        
+        const isCtrl = e.ctrlKey || e.metaKey;
+        const isShift = e.shiftKey;
+        const rowIndex = parseInt(e.target.dataset.rowIndex || '0');
+        const channelIndex = cellType === 'rgb' ? parseInt(e.target.dataset.channelIndex || '0') : null;
+        
+        if (isShift && this.lastSelectedCell) {
+            // Shift 키: 마지막 선택된 셀부터 현재 셀까지 범위 선택
+            const startRowIndex = this.lastSelectedCell.rowIndex;
+            const endRowIndex = rowIndex;
+            const startCellType = this.lastSelectedCell.cellType;
+            const startChannelIndex = this.lastSelectedCell.channelIndex;
+            
+            // 같은 타입의 셀만 선택 (hex끼리, rgb끼리)
+            if (startCellType === cellType) {
+                const minRow = Math.min(startRowIndex, endRowIndex);
+                const maxRow = Math.max(startRowIndex, endRowIndex);
+                
+                // 범위의 모든 셀 선택
+                this.selectedCells.clear();
+                for (let i = minRow; i <= maxRow; i++) {
+                    if (i >= 0 && i < this.rows.length) {
+                        if (cellType === 'hex') {
+                            const hexInput = this.rows[i].hexInput;
+                            if (hexInput && hexInput.dataset.cellId) {
+                                this.selectedCells.add(hexInput.dataset.cellId);
+                            }
+                        } else if (cellType === 'rgb') {
+                            // RGB: 시작 column과 끝 column 사이의 모든 column 선택
+                            // 예: R(0)에서 B(2)까지 선택하면 R, G, B 모두 선택
+                            // 예: R(0)에서 R(0)까지 선택하면 R만 선택
+                            const minChannel = Math.min(startChannelIndex, channelIndex);
+                            const maxChannel = Math.max(startChannelIndex, channelIndex);
+                            const rgbInputs = this.rows[i].rgbInputs;
+                            if (rgbInputs) {
+                                for (let ch = minChannel; ch <= maxChannel; ch++) {
+                                    if (rgbInputs[ch] && rgbInputs[ch].dataset.cellId) {
+                                        this.selectedCells.add(rgbInputs[ch].dataset.cellId);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                this.updateCellSelection();
+            }
+        } else if (!isCtrl && !isShift) {
+            // 일반 클릭: 선택 초기화
+            this.selectedCells.clear();
+            this.updateCellSelection();
+        }
+        
+        if (!isShift) {
+            // Shift가 아닐 때만 단일 셀 선택/추가
+            this.selectCell(cellId, isCtrl);
+        }
+
+        // 마지막 선택된 셀 업데이트
+        this.lastSelectedCell = { cellId, cellType, rowIndex, channelIndex };
+
+        this.dragStartCell = { cellId, cellType, rowIndex, channelIndex };
+        this.isDragging = true;
+        // 포커스를 강제 이동시켜 Ctrl+C/V 키 이벤트가 모달에서 처리되도록 함
+        if (e.target && typeof e.target.focus === 'function') {
+            e.target.focus();
+        }
+        e.preventDefault();
+    }
+
+    handleCellMouseMove(e) {
+        if (!this.isDragging || !this.dragStartCell) return;
+        
+        // 마우스 위치에서 가장 가까운 셀 찾기
+        const target = document.elementFromPoint(e.clientX, e.clientY);
+        if (!target) return;
+        
+        // input 요소 또는 그 부모 요소에서 cellId 찾기
+        let cellElement = target;
+        while (cellElement && !cellElement.dataset?.cellId) {
+            cellElement = cellElement.parentElement;
+        }
+        if (!cellElement || !cellElement.dataset.cellId) return;
+        
+        const startRowIndex = this.dragStartCell.rowIndex;
+        const endRowIndex = parseInt(cellElement.dataset.rowIndex || '0');
+        const startCellType = this.dragStartCell.cellType;
+        const endCellType = cellElement.dataset.cellType;
+        const startChannelIndex = this.dragStartCell.channelIndex;
+        const endChannelIndex = endCellType === 'rgb' ? parseInt(cellElement.dataset.channelIndex || '0') : null;
+        
+        // 같은 타입의 셀만 선택 (hex끼리, rgb끼리)
+        if (startCellType !== endCellType) return;
+        
+        const minRow = Math.min(startRowIndex, endRowIndex);
+        const maxRow = Math.max(startRowIndex, endRowIndex);
+        
+        // 드래그 범위의 모든 셀 선택
+        this.selectedCells.clear();
+        for (let i = minRow; i <= maxRow; i++) {
+            if (i >= 0 && i < this.rows.length) {
+                if (startCellType === 'hex') {
+                    const hexInput = this.rows[i].hexInput;
+                    if (hexInput && hexInput.dataset.cellId) {
+                        this.selectedCells.add(hexInput.dataset.cellId);
+                    }
+                } else if (startCellType === 'rgb') {
+                    // RGB: 시작 column과 끝 column 사이의 모든 column 선택
+                    // 예: R(0)에서 B(2)까지 선택하면 R, G, B 모두 선택
+                    // 예: R(0)에서 R(0)까지 선택하면 R만 선택
+                    const minChannel = Math.min(startChannelIndex, endChannelIndex);
+                    const maxChannel = Math.max(startChannelIndex, endChannelIndex);
+                    const rgbInputs = this.rows[i].rgbInputs;
+                    if (rgbInputs) {
+                        for (let ch = minChannel; ch <= maxChannel; ch++) {
+                            if (rgbInputs[ch] && rgbInputs[ch].dataset.cellId) {
+                                this.selectedCells.add(rgbInputs[ch].dataset.cellId);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        this.updateCellSelection();
+    }
+
+    handleCellMouseUp(e) {
+        if (this.isDragging) {
+            this.isDragging = false;
+            this.dragStartCell = null;
+        }
+    }
+
+    handleContextMenu(e) {
+        // 모달 내부에서만 처리
+        if (!this.modal || !this.modal.contains(e.target)) {
+            return;
+        }
+        
+        // 브라우저 기본 컨텍스트 메뉴 방지
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        
+        // 🔥 우클릭 시 셀 선택 변경하지 않음 (현재 선택 유지)
+        // 셀 선택을 변경하는 코드 없음
+        
+        console.log('[ColorEditor] 컨텍스트 메뉴 표시:', e.clientX, e.clientY, e.target);
+        this.showContextMenu(e.clientX, e.clientY);
+    }
+
+    ensureContextMenu() {
+        if (this.contextMenu) {
+            // 메뉴 항목이 이미 있으면 그대로 반환
+            return this.contextMenu;
+        }
+        
+        const menu = document.createElement('div');
+        menu.className = 'color-editor-context-menu';
+        menu.style.cssText = `
+            position: fixed;
+            z-index: 20000;
+            background: #222;
+            color: #fff;
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 6px 0;
+            min-width: 160px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.35);
+            display: none;
+            pointer-events: auto;
+        `;
+        
+        // 복사하기 항목
+        const copyItem = document.createElement('div');
+        copyItem.className = 'context-menu-item';
+        copyItem.textContent = '복사하기';
+        copyItem.style.cssText = `
+            padding: 8px 14px;
+            cursor: pointer;
+            font-size: 13px;
+            user-select: none;
+            transition: background-color 0.15s;
+        `;
+        copyItem.addEventListener('mouseenter', () => {
+            copyItem.style.backgroundColor = '#333';
+        });
+        copyItem.addEventListener('mouseleave', () => {
+            copyItem.style.backgroundColor = 'transparent';
+        });
+        copyItem.addEventListener('click', () => {
+            this.hideContextMenu();
+            if (this.selectedCells.size > 0) {
+                this.copySelectedCells();
+            } else {
+                this.viewer?.showToast?.('복사할 셀이 선택되지 않았습니다.', 1500);
+            }
+        });
+        menu.appendChild(copyItem);
+        
+        // 구분선
+        const separator = document.createElement('div');
+        separator.style.cssText = `
+            height: 1px;
+            background: #444;
+            margin: 4px 0;
+        `;
+        menu.appendChild(separator);
+        
+        // 붙여넣기 항목
+        const pasteItem = document.createElement('div');
+        pasteItem.className = 'context-menu-item';
+        pasteItem.textContent = '붙여넣기';
+        pasteItem.style.cssText = `
+            padding: 8px 14px;
+            cursor: pointer;
+            font-size: 13px;
+            user-select: none;
+            transition: background-color 0.15s;
+        `;
+        pasteItem.addEventListener('mouseenter', () => {
+            pasteItem.style.backgroundColor = '#333';
+        });
+        pasteItem.addEventListener('mouseleave', () => {
+            pasteItem.style.backgroundColor = 'transparent';
+        });
+        pasteItem.addEventListener('click', async () => {
+            this.hideContextMenu();
+            if (this.selectedCells.size > 0) {
+                try {
+                    const text = await navigator.clipboard.readText();
+                    this.pasteToSelectedCells(text);
+                } catch (err) {
+                    // Fallback
+                    const textarea = document.createElement('textarea');
+                    document.body.appendChild(textarea);
+                    textarea.focus();
+                    document.execCommand('paste');
+                    const text = textarea.value;
+                    document.body.removeChild(textarea);
+                    if (text) {
+                        this.pasteToSelectedCells(text);
+                    } else {
+                        this.viewer?.showToast?.('클립보드에서 텍스트를 읽을 수 없습니다.', 1500);
+                    }
+                }
+            } else {
+                this.viewer?.showToast?.('붙여넣을 셀이 선택되지 않았습니다.', 1500);
+            }
+        });
+        menu.appendChild(pasteItem);
+        
+        document.body.appendChild(menu);
+        this.contextMenu = menu;
+        return menu;
+    }
+
+    showContextMenu(x, y) {
+        const menu = this.ensureContextMenu();
+        menu.style.left = `${x}px`;
+        menu.style.top = `${y}px`;
+        menu.style.display = 'block';
+        console.log('[ColorEditor] 컨텍스트 메뉴 표시됨:', menu.style.display, menu.style.left, menu.style.top);
+        setTimeout(() => {
+            document.addEventListener('click', this.boundHideContextMenu, { once: true });
+            document.addEventListener('contextmenu', this.boundHideContextMenu, { once: true });
+        }, 0);
+    }
+
+    hideContextMenu() {
+        if (this.contextMenu) {
+            this.contextMenu.style.display = 'none';
+        }
+    }
+
+    selectCell(cellId, addToSelection = false) {
+        if (!addToSelection) {
+            this.selectedCells.clear();
+        }
+        if (cellId) {
+            this.selectedCells.add(cellId);
+            // 마지막 선택된 셀 업데이트
+            const input = this.tableBody?.querySelector(`input[data-cell-id="${cellId}"]`);
+            if (input) {
+                this.lastSelectedCell = {
+                    cellId,
+                    cellType: input.dataset.cellType,
+                    rowIndex: parseInt(input.dataset.rowIndex || '0')
+                };
+            }
+        }
+        this.updateCellSelection();
+    }
+
+    updateCellSelection() {
+        // 모든 셀에서 선택 클래스 제거
+        const allInputs = this.tableBody?.querySelectorAll('input[data-cell-id]') || [];
+        allInputs.forEach(input => {
+            input.classList.remove('cell-selected');
+        });
+        
+        // 선택된 셀에 클래스 추가
+        this.selectedCells.forEach(cellId => {
+            const input = this.tableBody?.querySelector(`input[data-cell-id="${cellId}"]`);
+            if (input) {
+                input.classList.add('cell-selected');
+            }
+        });
+    }
+
+    handleInputKeyDown(e, cellId, cellType) {
+        // 입력 필드에서 Ctrl+C: 선택된 셀 복사
+        if ((e.ctrlKey || e.metaKey) && e.key === 'c' && this.selectedCells.size > 0) {
+            // 입력 필드의 텍스트 선택 취소
+            if (e.target.setSelectionRange) {
+                e.target.setSelectionRange(0, 0);
+            }
+            // 선택된 셀의 값 복사
+            this.copySelectedCells();
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            return false;
+        }
+        
+        // 입력 필드에서 Ctrl+V: 선택된 셀에 붙여넣기
+        if ((e.ctrlKey || e.metaKey) && e.key === 'v' && this.selectedCells.size > 0) {
+            setTimeout(() => {
+                navigator.clipboard.readText().then(text => {
+                    this.pasteToSelectedCells(text);
+                }).catch(() => {
+                    const textarea = document.createElement('textarea');
+                    document.body.appendChild(textarea);
+                    textarea.focus();
+                    document.execCommand('paste');
+                    const text = textarea.value;
+                    document.body.removeChild(textarea);
+                    if (text) {
+                        this.pasteToSelectedCells(text);
+                    }
+                });
+            }, 0);
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            return false;
+        }
+    }
+
+    handleCellKeyDown(e) {
+        // 모달 내부에서 Ctrl+C/V 처리 (입력 필드가 아닌 경우)
+        const activeElement = document.activeElement;
+        const isInputField = activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA');
+        const isCellInput = isInputField && activeElement.dataset?.cellId;
+        
+        // 입력 필드가 아닐 때만 처리 (입력 필드는 handleInputKeyDown에서 처리)
+        if (isCellInput) {
+            return;
+        }
+        
+        // Ctrl+C: 복사 (선택된 셀이 있을 때만)
+        if ((e.ctrlKey || e.metaKey) && e.key === 'c' && this.selectedCells.size > 0) {
+            this.copySelectedCells();
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
+        
+        // Ctrl+V: 붙여넣기 (선택된 셀이 있을 때만)
+        if ((e.ctrlKey || e.metaKey) && e.key === 'v' && this.selectedCells.size > 0) {
+            setTimeout(() => {
+                navigator.clipboard.readText().then(text => {
+                    this.pasteToSelectedCells(text);
+                }).catch(() => {
+                    const textarea = document.createElement('textarea');
+                    document.body.appendChild(textarea);
+                    textarea.focus();
+                    document.execCommand('paste');
+                    const text = textarea.value;
+                    document.body.removeChild(textarea);
+                    if (text) {
+                        this.pasteToSelectedCells(text);
+                    }
+                });
+            }, 0);
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
+    }
+
+    copySelectedCells() {
+        if (this.selectedCells.size === 0) {
+            console.log('[ColorEditor] 복사할 셀이 선택되지 않았습니다.');
+            return;
+        }
+        
+        const sortedCells = Array.from(this.selectedCells).sort((a, b) => {
+            const inputA = this.tableBody?.querySelector(`input[data-cell-id="${a}"]`);
+            const inputB = this.tableBody?.querySelector(`input[data-cell-id="${b}"]`);
+            if (!inputA || !inputB) return 0;
+            const rowA = parseInt(inputA.dataset.rowIndex || '0');
+            const rowB = parseInt(inputB.dataset.rowIndex || '0');
+            if (rowA !== rowB) return rowA - rowB;
+            // 같은 행이면 hex가 먼저
+            if (inputA.dataset.cellType === 'hex') return -1;
+            if (inputB.dataset.cellType === 'hex') return 1;
+            return 0;
+        });
+        
+        const values = sortedCells.map(cellId => {
+            const input = this.tableBody?.querySelector(`input[data-cell-id="${cellId}"]`);
+            if (!input) return '';
+            
+            if (input.dataset.cellType === 'hex') {
+                return input.value || '';
+            } else if (input.dataset.cellType === 'rgb') {
+                const rowIndex = parseInt(input.dataset.rowIndex || '0');
+                const row = this.rows[rowIndex];
+                if (row && row.rgbInputs) {
+                    const r = row.rgbInputs[0]?.value || '';
+                    const g = row.rgbInputs[1]?.value || '';
+                    const b = row.rgbInputs[2]?.value || '';
+                    return `${r},${g},${b}`;
+                }
+            }
+            return '';
+        }).filter(v => v);
+        
+        if (values.length > 0) {
+            const text = values.join('\n');
+            console.log('[ColorEditor] 복사할 값:', text);
+            navigator.clipboard.writeText(text).then(() => {
+                console.log('[ColorEditor] 클립보드에 복사 완료');
+                this.viewer?.showToast?.(`${values.length}개 셀 복사됨`, 1500);
+            }).catch((err) => {
+                console.error('[ColorEditor] 클립보드 복사 실패:', err);
+                // Fallback
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                try {
+                    document.execCommand('copy');
+                    this.viewer?.showToast?.(`${values.length}개 셀 복사됨`, 1500);
+                } catch (e) {
+                    console.error('[ColorEditor] execCommand 복사 실패:', e);
+                }
+                document.body.removeChild(textarea);
+            });
+        } else {
+            console.log('[ColorEditor] 복사할 값이 없습니다.');
+        }
+    }
+
+    pasteToSelectedCells(pastedText) {
+        if (!pastedText || !pastedText.trim()) return;
+        
+        const lines = pastedText.split(/\r?\n/).map(line => line.trim()).filter(line => line);
+        if (lines.length === 0) return;
+
+        const sortedCells = Array.from(this.selectedCells).sort((a, b) => {
+            const inputA = this.tableBody?.querySelector(`input[data-cell-id="${a}"]`);
+            const inputB = this.tableBody?.querySelector(`input[data-cell-id="${b}"]`);
+            if (!inputA || !inputB) return 0;
+            const rowA = parseInt(inputA.dataset.rowIndex || '0');
+            const rowB = parseInt(inputB.dataset.rowIndex || '0');
+            if (rowA !== rowB) return rowA - rowB;
+            if (inputA.dataset.cellType === 'hex') return -1;
+            if (inputB.dataset.cellType === 'hex') return 1;
+            return 0;
+        });
+        const anchorInput = this.tableBody?.querySelector(`input[data-cell-id="${sortedCells[0]}"]`);
+        if (!anchorInput) return;
+        const anchorType = anchorInput.dataset.cellType;
+        const anchorRowIndex = parseInt(anchorInput.dataset.rowIndex || '0');
+
+        // 선택 타입이 다른 셀은 무시
+        const filteredCells = sortedCells.map(cellId => this.tableBody?.querySelector(`input[data-cell-id="${cellId}"]`))
+            .filter(input => input && input.dataset.cellType === anchorType);
+
+        const getTargetInput = (offset) => {
+            if (offset < filteredCells.length) {
+                return filteredCells[offset];
+            }
+            const targetRowIndex = anchorRowIndex + offset;
+            const row = this.rows[targetRowIndex];
+            if (!row) return null;
+            if (anchorType === 'hex') return row.hexInput;
+            if (anchorType === 'rgb') return row.rgbInputs?.[0];
+            return null;
+        };
+
+        let successCount = 0;
+        lines.forEach((line, idx) => {
+            const input = getTargetInput(idx);
+            if (!input) return;
+
+            const rowIndex = parseInt(input.dataset.rowIndex || '0');
+            const row = this.rows[rowIndex];
+            if (!row) return;
+            
+            if (input.dataset.cellType === 'hex') {
+                const hex = normalizeHex(line);
+                if (hex) {
+                    this.setRowHex(row, hex);
+                    successCount++;
+                }
+            } else if (input.dataset.cellType === 'rgb') {
+                const values = line.split(/[,\s\t]+/).map(v => v.trim()).filter(v => v);
+                if (values.length >= 3) {
+                    const r = Number(values[0]);
+                    const g = Number(values[1]);
+                    const b = Number(values[2]);
+                    if (Number.isFinite(r) && r >= 0 && r <= 255 &&
+                        Number.isFinite(g) && g >= 0 && g <= 255 &&
+                        Number.isFinite(b) && b >= 0 && b <= 255) {
+                        row.rgbInputs[0].value = Math.round(r);
+                        row.rgbInputs[1].value = Math.round(g);
+                        row.rgbInputs[2].value = Math.round(b);
+                        this.syncFromRgb(row);
+                        successCount++;
+                    }
+                }
+            }
+        });
+        
+        if (successCount > 0) {
+            this.checkForChanges();
+            this.updatePreviewRealtime();
         }
     }
 }

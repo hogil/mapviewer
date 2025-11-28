@@ -11,6 +11,7 @@ from datetime import datetime
 from functools import partial, lru_cache
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional, Sequence, Callable
+import re
 import numpy as np
 from PIL import Image
 from PIL.Image import DecompressionBombWarning
@@ -42,8 +43,18 @@ if not os.environ.get("OMP_NUM_THREADS"):
     os.environ["OMP_NUM_THREADS"] = str(_OMP_DEFAULT_THREADS)
 
 # Fixed runtime tuning (only workers/batch remain configurable)
-_SAVE_BACKEND = "pil"
-_SAVE_FORMAT = "PNG"
+_HAS_TURBOJPEG = False
+try:
+    from turbojpeg import TurboJPEG, TJPF_RGB, TJSAMP_444
+
+    _TURBOJPEG = TurboJPEG()
+    _HAS_TURBOJPEG = True
+except Exception:
+    _TURBOJPEG = None
+
+_SAVE_BACKEND = os.getenv("COMPOSITE_SAVE_BACKEND", "turbo" if _HAS_TURBOJPEG else "pil").lower()
+_SAVE_FORMAT = os.getenv("COMPOSITE_FORMAT", "JPEG" if _HAS_TURBOJPEG else "PNG").upper()
+_JPEG_QUALITY = int(os.getenv("COMPOSITE_JPEG_QUALITY", "95"))
 _FAST_MEDIAN = True
 
 # Worker configuration (configurable via environment variables)
@@ -59,9 +70,12 @@ warnings.simplefilter("ignore", DecompressionBombWarning)
 COMPOSITE_ROOT = IMAGES_ROOT / "composite_map"
 COMPOSITE_ROOT.mkdir(parents=True, exist_ok=True)
 SQUARE_MAP_CACHE_FILENAME = "square_maps_data.npz"
-COMPOSITE_CACHE_ROOT = IMAGES_ROOT / "composite_cache_v1"
-COMPOSITE_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+# composite_cache_v1은 선택적 사용 (환경변수로 제어)
+# 같은 이미지를 여러 composite map에 재사용할 때만 유용
+USE_COMPOSITE_IMAGE_CACHE = os.getenv("USE_COMPOSITE_IMAGE_CACHE", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
+COMPOSITE_CACHE_ROOT = IMAGES_ROOT / "composite_cache_v1" if USE_COMPOSITE_IMAGE_CACHE else None
 _GRADE_RANGE = np.arange(8, dtype=np.uint8)
+_SUBSET_NAME_RE = re.compile(r"^square_(weighted_)?average_([0-7]+)\.(png|jpg|jpeg|webp)$", re.IGNORECASE)
 
 
 def _copy_positions_without_bin(first_image_rel_path: str, output_dir: Path, composite_images: List[str]) -> None:
@@ -184,6 +198,24 @@ def _prepare_output_dir(login_id: Optional[str]) -> Tuple[Path, str]:
     return output_dir, timestamp
 
 
+def _extract_subset_grades(filename: str) -> Optional[List[int]]:
+    """
+    square_average_17.png -> [1, 7]
+    square_weighted_average_35.png -> [3, 5]
+    """
+    match = _SUBSET_NAME_RE.match(filename)
+    if not match:
+        return None
+    digits = match.group(2)
+    if not digits:
+        return None
+    try:
+        grades = sorted(set(int(ch) for ch in digits if ch.isdigit()))
+    except Exception:
+        return None
+    return grades if grades else None
+
+
 def _summarize_map(values: np.ndarray, mask: Optional[np.ndarray]) -> Dict[str, float]:
     if mask is None:
         return {}
@@ -198,10 +230,16 @@ def _summarize_map(values: np.ndarray, mask: Optional[np.ndarray]) -> Dict[str, 
     }
 
 
-def _cache_path_for_image(rel_path: str, width: int, height: int) -> Path:
+def _cache_path_for_image(rel_path: str, width: int, height: int) -> Optional[Path]:
+    """이미지 캐시 경로 반환 (캐시가 비활성화되어 있으면 None)"""
+    if not USE_COMPOSITE_IMAGE_CACHE or COMPOSITE_CACHE_ROOT is None:
+        return None
     sanitized = rel_path.strip("/\\")
     cache_rel = Path(sanitized).with_suffix(f".{width}x{height}.npy")
-    return COMPOSITE_CACHE_ROOT / cache_rel
+    cache_path = COMPOSITE_CACHE_ROOT / cache_rel
+    # 캐시 경로를 반환하기 전에 부모 디렉토리만 생성 (필요할 때만)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    return cache_path
 
 
 # 메모리 캐시 (LRU): 최근 256개 이미지를 메모리에 캐싱
@@ -350,6 +388,28 @@ def _percentile_ranks(
 
     scaled = (values_f - v_min) / (v_max - v_min) * 100.0
     return np.clip(scaled, 0.0, 100.0, out=scaled)
+
+
+def _value_range_for_map(
+    map_data: Optional[np.ndarray],
+    mask_arr: Optional[np.ndarray],
+    clamp_min_to_zero: bool = False,
+) -> Tuple[Optional[float], Optional[float]]:
+    """
+    계산된 맵과 마스크에서 유효한 최소/최대값을 추출한다.
+    """
+    if map_data is None or mask_arr is None:
+        return None, None
+    mask_bool = np.asarray(mask_arr, dtype=bool)
+    values = map_data[mask_bool]
+    if values.size == 0:
+        return None, None
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return None, None
+    v_min = 0.0 if clamp_min_to_zero else float(finite.min())
+    v_max = float(finite.max())
+    return v_min, v_max
 
 
 def _interpolate_percentile_colors(
@@ -627,12 +687,20 @@ def _use_sum_float16() -> bool:
 def _resolve_save_backend() -> Tuple[str, str]:
     return _SAVE_BACKEND, _SAVE_FORMAT
 
+def _image_ext() -> str:
+    fmt = _SAVE_FORMAT
+    if fmt == "WEBP":
+        return ".webp"
+    if fmt == "JPEG":
+        return ".jpg"
+    return ".png"
+
 
 def _save_image_with_backend(img: Image.Image, path: Path) -> Tuple[Path, str]:
     """
     Save image with selectable backend/format.
     - COMPOSITE_SAVE_BACKEND: pil (default) | vips (if pyvips available)
-    - COMPOSITE_FORMAT: PNG (default) | WEBP
+    - COMPOSITE_FORMAT: PNG (default) | WEBP | JPEG
     Returns: (actual_path, rel_path)
     """
     backend, fmt = _resolve_save_backend()
@@ -640,9 +708,18 @@ def _save_image_with_backend(img: Image.Image, path: Path) -> Tuple[Path, str]:
     target_path = path
     if fmt == "WEBP":
         target_path = path.with_suffix(".webp")
+    elif fmt == "JPEG":
+        target_path = path.with_suffix(".jpg")
+
+    # JPEG는 팔레트/투명도를 허용하지 않으므로 RGB로 변환
+    save_img = img
+    if fmt == "JPEG" and img.mode != "RGB":
+        save_img = img.convert("RGB")
+    elif fmt != "JPEG":
+        save_img = img
 
     if backend == "vips" and _HAS_PYVIPS:
-        arr = np.array(img, dtype=np.uint8)
+        arr = np.array(save_img, dtype=np.uint8)
         if arr.ndim == 2:
             # convert L to RGB for consistency
             arr = np.stack([arr, arr, arr], axis=2)
@@ -650,13 +727,23 @@ def _save_image_with_backend(img: Image.Image, path: Path) -> Tuple[Path, str]:
         vips_img = _vips.Image.new_from_memory(arr.tobytes(), w, h, c, format="uchar")
         if fmt == "WEBP":
             vips_img.write_to_file(str(target_path), Q=100, lossless=1)
+        elif fmt == "JPEG":
+            vips_img.write_to_file(str(target_path), Q=_JPEG_QUALITY, strip=True, optimize_coding=True)
         else:
             vips_img.write_to_file(str(target_path), compression=0)
+    elif backend == "turbo" and _HAS_TURBOJPEG and fmt == "JPEG":
+        arr = np.array(save_img, dtype=np.uint8)
+        if arr.ndim == 2:
+            arr = np.stack([arr, arr, arr], axis=2)
+        encoded = _TURBOJPEG.encode(arr, quality=_JPEG_QUALITY, jpeg_subsample=TJSAMP_444, pixel_format=TJPF_RGB)
+        target_path.write_bytes(encoded)
     else:
         if fmt == "WEBP":
-            img.save(target_path, format="WEBP", quality=100, lossless=True, method=6)
+            save_img.save(target_path, format="WEBP", quality=100, lossless=True, method=6)
+        elif fmt == "JPEG":
+            save_img.save(target_path, format="JPEG", quality=_JPEG_QUALITY, subsampling=0, optimize=True)
         else:
-            img.save(target_path, format='PNG', optimize=False, compress_level=0)
+            save_img.save(target_path, format='PNG', optimize=False, compress_level=0)
 
     rel_path = target_path.relative_to(IMAGES_ROOT).as_posix()
     return target_path, rel_path
@@ -676,10 +763,11 @@ def _persist_square_map_data(
     image_count: Optional[int] = None,
     color_scheme: Optional[str] = None,
     colors: Optional[Sequence[str]] = None,
+    blocking: bool = False,
 ) -> None:
     """
     Cache square-map arrays for fast recoloring.
-    NPZ is saved asynchronously in a daemon thread to avoid blocking the main pipeline.
+    If blocking=True, save synchronously to avoid partial writes (e.g., during recolor).
     """
     import threading
 
@@ -712,7 +800,10 @@ def _persist_square_map_data(
         except Exception:
             pass
 
-    threading.Thread(target=_save_npz, daemon=True).start()
+    if blocking:
+        _save_npz()
+    else:
+        threading.Thread(target=_save_npz, daemon=True).start()
 
 
 def _recompute_square_maps_from_counts(
@@ -833,14 +924,29 @@ def recolor_saved_sum_maps(
     lut_positions = np.linspace(0.0, 100.0, 256, dtype=np.float32)
     shared_lut_colors = _interpolate_percentile_colors(lut_positions, color_stops, quantile_positions)
 
+    ext = _image_ext()
     variants = [
-        ("square_average.png", "square_mean", "Composite SqMean", square_mean_map, calc_mask),
-        ("square_weighted_average.png", "weighted_square_mean", "Composite Weighted SqMean", weighted_map, weighted_mask),
+        (f"square_average{ext}", "square_mean", "Composite SqMean", square_mean_map, calc_mask),
+        (f"square_weighted_average{ext}", "weighted_square_mean", "Composite Weighted SqMean", weighted_map, weighted_mask),
     ]
 
     outputs: List[Dict[str, str]] = []
+    subset_outputs: List[Dict[str, str]] = []
     for filename, variant_type, display_name, data_map, mask in variants:
         sum_map_path = output_dir / filename
+
+        # min=0, max=실제최대값 계산
+        values = data_map[mask]
+        if values.size > 0:
+            finite = values[np.isfinite(values)]
+            if finite.size > 0:
+                v_min = 0.0  # 🔥 항상 0을 min으로 사용
+                v_max = float(finite.max())
+            else:
+                v_min, v_max = None, None
+        else:
+            v_min, v_max = None, None
+
         img = _render_sum_map_image(
             base_indices=base_indices,
             value_map=data_map,
@@ -849,6 +955,9 @@ def recolor_saved_sum_maps(
             quantiles=settings.quantiles,
             color_stops=color_stops,
             lut_colors=shared_lut_colors,
+            value_min=v_min,
+            value_max=v_max,
+            force_full_range=True,  # 🔥 0~max 전체 범위 사용
         )
         actual_path, rel_path = _save_image_with_backend(img, sum_map_path)
         outputs.append({
@@ -858,7 +967,126 @@ def recolor_saved_sum_maps(
             "filename": actual_path.name,
         })
 
-    return outputs
+    # 최신 색상/스킴으로 NPZ 캐시도 갱신하여 추후 subset 생성 시 일관되게 사용
+    try:
+        _persist_square_map_data(
+            output_dir=output_dir,
+            palette_list=palette_list,
+            base_indices=base_indices,
+            square_mean_map=square_mean_map,
+            weighted_map=weighted_map,
+            calc_mask=calc_mask,
+            weighted_mask=weighted_mask,
+            grade_counts=grade_counts_arr,
+            invalid_mask=invalid_mask_arr,
+            idx_8_mask=idx_8_mask_arr,
+            image_count=source_image_count,
+            color_scheme=settings.scheme,
+            colors=colors_to_use,
+            blocking=True,
+        )
+    except Exception as exc:
+        print(f"[recolor_saved_sum_maps] Failed to persist updated NPZ: {exc}")
+
+    # Subset PNG들도 같은 색상 설정으로 재렌더링 (grade_counts가 있을 때만 가능)
+    if grade_counts_arr is not None:
+        subset_map_targets: Dict[Tuple[int, ...], Dict[str, str]] = {}
+        for candidate in output_dir.glob("square_*average_*.*"):
+            grades = _extract_subset_grades(candidate.name)
+            if not grades:
+                continue
+            key = tuple(grades)
+            bucket = subset_map_targets.setdefault(key, {})
+            if "weighted" in candidate.name.lower():
+                bucket["weighted"] = candidate.name
+            else:
+                bucket["mean"] = candidate.name
+
+        if subset_map_targets:
+            print(f"[recolor_saved_sum_maps] Re-rendering subset maps: {subset_map_targets}")
+
+        for grade_tuple, name_map in subset_map_targets.items():
+            try:
+                sub_square_mean, sub_weighted, sub_calc_mask, sub_weighted_mask = _compute_maps_from_counts(
+                    grade_counts=grade_counts_arr,
+                    selected_grades=list(grade_tuple),
+                    invalid_mask=invalid_mask_arr,
+                    idx_8_mask=idx_8_mask_arr,
+                    only_low_mask=None,
+                    image_count=source_image_count,
+                    include_unselected_in_denominator=False,
+                )
+            except Exception as exc:
+                print(f"[recolor_saved_sum_maps] Failed subset recompute for grades {grade_tuple}: {exc}")
+                continue
+
+            grade_label = ", ".join(map(str, grade_tuple))
+
+            if "mean" in name_map:
+                target = output_dir / name_map["mean"]
+                render_map = sub_square_mean
+                vmin, vmax = _value_range_for_map(render_map, sub_calc_mask, clamp_min_to_zero=True)
+                img = _render_sum_map_image(
+                    base_indices=base_indices,
+                    value_map=render_map,
+                    mask=sub_calc_mask,
+                    palette_list=palette_list,
+                    quantiles=settings.quantiles,
+                    color_stops=color_stops,
+                    lut_colors=shared_lut_colors,
+                    value_min=vmin,
+                    value_max=vmax,
+                    force_full_range=True,
+                )
+                actual_path, rel_path = _save_image_with_backend(img, target)
+                outputs.append({
+                    "path": rel_path,
+                    "type": "square_mean",
+                    "display_name": f"Composite SqMean [Grade {grade_label}]",
+                    "filename": actual_path.name,
+                    "selected_grades": list(grade_tuple),
+                })
+                subset_outputs.append({
+                    "path": rel_path,
+                    "type": "square_mean",
+                    "display_name": f"Composite SqMean [Grade {grade_label}]",
+                    "filename": actual_path.name,
+                    "selected_grades": list(grade_tuple),
+                })
+
+            if "weighted" in name_map:
+                target = output_dir / name_map["weighted"]
+                render_map = sub_weighted
+                vmin, vmax = _value_range_for_map(render_map, sub_weighted_mask, clamp_min_to_zero=True)
+                img = _render_sum_map_image(
+                    base_indices=base_indices,
+                    value_map=render_map,
+                    mask=sub_weighted_mask,
+                    palette_list=palette_list,
+                    quantiles=settings.quantiles,
+                    color_stops=color_stops,
+                    lut_colors=shared_lut_colors,
+                    value_min=vmin,
+                    value_max=vmax,
+                    force_full_range=True,
+                )
+                actual_path, rel_path = _save_image_with_backend(img, target)
+                outputs.append({
+                    "path": rel_path,
+                    "type": "weighted_square_mean",
+                    "display_name": f"Composite Weighted SqMean [Grade {grade_label}]",
+                    "filename": actual_path.name,
+                    "selected_grades": list(grade_tuple),
+                })
+                subset_outputs.append({
+                    "path": rel_path,
+                    "type": "weighted_square_mean",
+                    "display_name": f"Composite Weighted SqMean [Grade {grade_label}]",
+                    "filename": actual_path.name,
+                    "selected_grades": list(grade_tuple),
+                })
+
+    return outputs + subset_outputs
 
 
 
@@ -962,12 +1190,14 @@ def _save_sum_map_variants(
             image_count=image_count,
             color_scheme=settings.scheme,
             colors=resolved_colors,
+            blocking=True,
         )
 
     display_suffix = f" [{name_suffix.lstrip('_')}]" if name_suffix else ""
+    ext = _image_ext()
     variants = [
-        (f"square_average{name_suffix}.png", "square_mean", f"Composite SqMean{display_suffix}", square_mean_map, calc_mask),
-        (f"square_weighted_average{name_suffix}.png", "weighted_square_mean", f"Composite Weighted SqMean{display_suffix}", weighted_map, weighted_mask),
+        (f"square_average{name_suffix}{ext}", "square_mean", f"Composite SqMean{display_suffix}", square_mean_map, calc_mask),
+        (f"square_weighted_average{name_suffix}{ext}", "weighted_square_mean", f"Composite Weighted SqMean{display_suffix}", weighted_map, weighted_mask),
     ]
 
     outputs: List[Dict[str, str]] = []
@@ -982,6 +1212,18 @@ def _save_sum_map_variants(
         interp_time = 0.0
         mask_points = int(mask_arr.sum())
 
+        # min=0, max=실제최대값 계산
+        values = data_map[mask_arr]
+        if values.size > 0:
+            finite = values[np.isfinite(values)]
+            if finite.size > 0:
+                v_min = 0.0  # 🔥 항상 0을 min으로 사용
+                v_max = float(finite.max())
+            else:
+                v_min, v_max = None, None
+        else:
+            v_min, v_max = None, None
+
         def _render_inner():
             nonlocal lut_idx_time, interp_time
             t_interp_start = time.perf_counter()
@@ -993,6 +1235,9 @@ def _save_sum_map_variants(
                 quantiles=settings.quantiles,
                 color_stops=color_stops,
                 lut_colors=shared_lut_colors,
+                value_min=v_min,
+                value_max=v_max,
+                force_full_range=True,  # 🔥 0~max 전체 범위 사용
             )
             interp_time = time.perf_counter() - t_interp_start
             return img
@@ -1004,15 +1249,6 @@ def _save_sum_map_variants(
             "render_time": total_render,
             "interp_time": interp_time,
         }
-        return _render_sum_map_image(
-            base_indices=base_indices,
-            value_map=data_map,
-            mask=mask_arr,
-            palette_list=palette,
-            quantiles=settings.quantiles,
-            color_stops=color_stops,
-            lut_colors=shared_lut_colors,
-        )
 
     def _save_future(render_future, target_path: Path):
         img, render_stats = render_future.result()
@@ -1248,11 +1484,10 @@ def create_composite_heatmaps(
             presence_mask &= ~invalid_mask_bool
         result[presence_mask] = idx
         result[idx_8_overlay] = 8
-        heatmap_path = output_dir / f"Grade_{idx}.png"
+        heatmap_path = output_dir / f"Grade_{idx}{_image_ext()}"
         heatmap_img = Image.fromarray(result, mode='P')
         heatmap_img.putpalette(palette_bytes)
-        heatmap_img.save(heatmap_path, format='PNG', optimize=False, compress_level=0)
-        rel_path = heatmap_path.relative_to(IMAGES_ROOT).as_posix()
+        actual_path, rel_path = _save_image_with_backend(heatmap_img.convert("RGB"), heatmap_path)
         total_pixels = width * height
         pixel_count = int(np.count_nonzero(presence_mask))
         percentage = round(pixel_count / total_pixels * 100, 2) if total_pixels else 0
@@ -1385,8 +1620,8 @@ def create_palette_overlay(
     overlay_img = Image.fromarray(aggregated, mode='P')
     if source_palette:
         overlay_img.putpalette(source_palette)
-    overlay_path = output_dir / f"palette_focus_{focus_index if focus_index is not None else 'none'}.png"
-    overlay_img.save(overlay_path)
+    overlay_path = output_dir / f"palette_focus_{focus_index if focus_index is not None else 'none'}{_image_ext()}"
+    _save_image_with_backend(overlay_img.convert("RGB"), overlay_path)
 
     return {
         "mode": "palette",
@@ -1588,13 +1823,13 @@ def create_subset_map(
     idx_8_mask_arr = idx_8_mask.astype(bool, copy=False) if idx_8_mask is not None else None
     only_low_mask_arr = only_low_mask.astype(bool, copy=False) if only_low_mask is not None else None
 
-    # Subset Map 계산
+    # Subset Map 계산 (only_low_mask=None으로 subset만의 calc_mask 재계산)
     square_mean_map, weighted_map, calc_mask, weighted_mask = _compute_maps_from_counts(
         grade_counts=grade_counts_arr,
         selected_grades=selected_grades,
         invalid_mask=invalid_mask_arr,
         idx_8_mask=idx_8_mask_arr,
-        only_low_mask=only_low_mask_arr,
+        only_low_mask=None,  # 🔥 None으로 전달하여 선택된 grade만으로 calc_mask 재계산
         image_count=source_image_count,
         include_unselected_in_denominator=False,
     )
@@ -1641,34 +1876,25 @@ def create_subset_map(
     shared_lut_colors = _interpolate_percentile_colors(lut_positions, color_stops, quantile_positions)
     palette_list = palette_array.reshape(-1).tolist()
 
-    def _value_range_for_subset(map_data: np.ndarray, mask_arr: np.ndarray) -> Tuple[Optional[float], Optional[float]]:
-        if map_data is None or mask_arr is None:
-            return None, None
-        mask_bool = np.asarray(mask_arr, dtype=bool)
-        values = map_data[mask_bool]
-        if values.size == 0:
-            return None, None
-        finite = values[np.isfinite(values)]
-        if finite.size == 0:
-            return None, None
-        v_min = float(finite.min())
-        v_max = float(finite.max())
-        return v_min, v_max
-
-    # Subset Map 이미지 생성
+    # Subset Map 이미지 생성 (독립적인 min→0%, max→100% 매핑)
     grade_str = "".join(str(g) for g in sorted_grades)
+    ext = _image_ext()
     variants = [
-        (f"square_average_{grade_str}.png", "square_mean", f"Composite SqMean [Grade {', '.join(map(str, sorted_grades))}]", square_mean_map, calc_mask),
-        (f"square_weighted_average_{grade_str}.png", "weighted_square_mean", f"Composite Weighted SqMean [Grade {', '.join(map(str, sorted_grades))}]", weighted_map, weighted_mask),
+        (f"square_average_{grade_str}{ext}", "square_mean", f"Composite SqMean [Grade {', '.join(map(str, sorted_grades))}]", square_mean_map, calc_mask),
+        (f"square_weighted_average_{grade_str}{ext}", "weighted_square_mean", f"Composite Weighted SqMean [Grade {', '.join(map(str, sorted_grades))}]", weighted_map, weighted_mask),
     ]
 
     outputs: List[Dict[str, str]] = []
     for filename, variant_type, display_name, data_map, mask in variants:
         sum_map_path = output_dir / filename
-        value_min, value_max = _value_range_for_subset(data_map, mask)
+        # Subset의 실제 min/max를 계산하여 0%~100% 전체 범위로 매핑
+        render_map = data_map
+
+        value_min, value_max = _value_range_for_map(render_map, mask, clamp_min_to_zero=True)
+
         img = _render_sum_map_image(
             base_indices=base_indices,
-            value_map=data_map,
+            value_map=render_map,
             mask=mask,
             palette_list=palette_list,
             quantiles=settings.quantiles,

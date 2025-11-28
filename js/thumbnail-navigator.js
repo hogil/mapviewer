@@ -1230,13 +1230,13 @@ export class ThumbnailNavigator {
 
         let displayName = imagePath.split('/').pop();
         const lowerName = (displayName || '').toLowerCase();
+        const nameWithoutExt = (displayName || '').replace(/\.(png|jpg|jpeg|gif|webp)$/i, '');
 
-        if (lowerName === 'square_average.png' || lowerName === 'square_average' || displayName === 'sum_map.png') {
+        if (nameWithoutExt.toLowerCase() === 'square_average' || displayName === 'sum_map.png') {
             displayName = 'composite(square-avg)';
-        } else if (lowerName === 'square_weighted_average.png' || lowerName === 'square_weighted_average' || lowerName.startsWith('sum_map_weighted')) {
+        } else if (nameWithoutExt.toLowerCase() === 'square_weighted_average' || lowerName.startsWith('sum_map_weighted')) {
             displayName = 'composite(weighted)';
         } else {
-            const nameWithoutExt = displayName.replace(/\.(png|jpg|jpeg|gif|webp)$/i, '');
             let processedName = nameWithoutExt;
 
             if (/^index_/i.test(nameWithoutExt)) {

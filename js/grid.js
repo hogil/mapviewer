@@ -180,14 +180,13 @@ export class GridManager {
         fileName.className = 'grid-filename';
         let displayName = imagePath.split('/').pop();
         const lowerName = (displayName || '').toLowerCase();
-        if (lowerName === 'square_average.png' || lowerName === 'square_average' || displayName === 'sum_map.png') {
+        const nameWithoutExt = (displayName || '').replace(/\.(png|jpg|jpeg|gif|webp)$/i, '');
+        if (nameWithoutExt.toLowerCase() === 'square_average' || displayName === 'sum_map.png') {
             displayName = 'composite(square-avg)';
-        } else if (lowerName === 'square_weighted_average.png' || lowerName === 'square_weighted_average' || lowerName.startsWith('sum_map_weighted')) {
+        } else if (nameWithoutExt.toLowerCase() === 'square_weighted_average' || lowerName.startsWith('sum_map_weighted')) {
             displayName = 'composite(weighted)';
         } else if (/^(index_|grade_)/i.test(displayName)) {
-            displayName = displayName.replace(/^(index_|grade_)/i, 'Grade_');
-            const nameWithoutExt = displayName.replace(/\.(png|jpg|jpeg|gif|webp)$/i, '');
-            displayName = nameWithoutExt;
+            displayName = nameWithoutExt.replace(/^(index_|grade_)/i, 'Grade_');
         }
         fileName.textContent = displayName;
         fileName.title = imagePath;

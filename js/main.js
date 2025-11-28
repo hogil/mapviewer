@@ -1112,6 +1112,12 @@ class WaferMapViewer {
 
             this.dom.resizerRight.addEventListener('mousedown', e => this.handleRightDown(e));
 
+        const compositeButtons = document.querySelectorAll('[data-composite-btn]');
+        if (compositeButtons.length) {
+            compositeButtons.forEach(btn => {
+                btn.addEventListener('click', () => this.handleCompositeCreate());
+            });
+        }
         const refMapButtons = document.querySelectorAll('[data-ref-map-btn]');
         if (refMapButtons.length) {
             refMapButtons.forEach(btn => {
@@ -5899,11 +5905,13 @@ class WaferMapViewer {
         this.permissionFilterRole = 'ALL'; // 초기값: ALL
         this.updatePermissionRoleFilters();
         await this.reloadPermissionUsers();
+        this.dom.permissionModal.classList.add('modal-center');
         this.dom.permissionModal.style.display = 'flex';
     }
 
     closePermissionEditorModal() {
         if (this.dom.permissionModal) {
+            this.dom.permissionModal.classList.remove('modal-center');
             this.dom.permissionModal.style.display = 'none';
         }
         this.permissionSelectedUser = null;
@@ -6499,11 +6507,12 @@ class WaferMapViewer {
             : [];
 
         if (!sumMapEntries.length && result.sum_map_path) {
+            const derivedName = result.sum_map_path.split('/').pop() || 'square_average.jpg';
             sumMapEntries.push({
                 path: result.sum_map_path,
                 type: 'square_mean',
                 display_name: 'Composite SqMean',
-                filename: 'square_average.png',
+                filename: derivedName,
             });
         }
 
@@ -6596,6 +6605,7 @@ class WaferMapViewer {
         const shouldShowOverlay = !options?.skipOverlay;
         const overlayMessage = options?.overlayMessage || 'Composite 색상을 적용하는 중입니다...';
         let overlayVisible = false;
+        const fetchSignal = options?.signal;
 
         try {
             if (shouldShowOverlay) {
@@ -6608,6 +6618,7 @@ class WaferMapViewer {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
                 cache: 'no-store',
+                signal: fetchSignal,
             });
             if (!res.ok) {
                 const text = await res.text();
@@ -6640,6 +6651,10 @@ class WaferMapViewer {
             }
             return data;
         } catch (error) {
+            if (error?.name === 'AbortError') {
+                console.warn('[Composite] Sum map refresh aborted');
+                return null;
+            }
             console.error('[Composite] Sum map refresh failed:', error);
             if (!options?.silent) {
                 if (error?.status === 404) {
@@ -6732,9 +6747,11 @@ class WaferMapViewer {
 
             img.dataset.src = newSrc;
             img.dataset.imagePath = path;
-            img.style.opacity = '0';
+            // 기존 이미지를 유지하면서 새 이미지 로드
+            // opacity를 0으로 만들지 않고 그대로 유지
             const handleLoad = () => {
-                img.style.opacity = '1';
+                // 새 이미지가 로드되면 자연스럽게 교체됨
+                console.log(`    ✅ 이미지 로드 완료: ${path}`);
             };
             img.addEventListener('load', handleLoad, { once: true });
             img.src = newSrc;
@@ -9471,6 +9488,24 @@ class WaferMapViewer {
     }
 
     async loadImage(path, fromLabelExplorer = false, loadVersion = null) {
+        // 이미 같은 이미지를 보고 있고 비트맵이 준비된 경우, 네트워크 로딩 없이 UI만 전환
+        if (!fromLabelExplorer && path === this.selectedImagePath && this.currentImageBitmap) {
+            const gridEl = document.getElementById('image-grid');
+            if (gridEl) {
+                gridEl.style.display = 'none';
+            }
+            const gridControls = document.getElementById('grid-controls');
+            if (gridControls) {
+                gridControls.style.display = 'none';
+            }
+            if (this.dom.viewerContainer) {
+                this.dom.viewerContainer.classList.remove('grid-mode');
+                this.dom.viewerContainer.classList.add('single-image-mode');
+            }
+            this.gridMode = false;
+            this.updateContextMenuState();
+            return;
+        }
         // 🔥 이전 이미지 로딩 요청 즉시 중단 (next/prev 빠른 클릭 대응)
         if (this.imageLoadAbortController) {
             console.log('🛑 [LOAD_IMAGE] 이전 로딩 요청 중단');
@@ -10584,7 +10619,6 @@ class WaferMapViewer {
             // Ctrl 줌 시작 전에 패널 표시 확인
             if (e.ctrlKey && this.dom.fileNameDisplay.style.display === 'none') {
                 this.dom.fileNameDisplay.style.display = 'block';
-                console.log('🔒 PANEL RESTORE: fileNameDisplay restored before zoom');
             }
         }
 
@@ -10611,10 +10645,8 @@ class WaferMapViewer {
                 this.panelProtected = false;
                 this.zoomInProgress = false;
                 
-                // 🔥 줌 완료 후 패널 보호 재확인
                 if (this.currentImage && this.dom.fileNameDisplay) {
                     this.dom.fileNameDisplay.style.display = 'block';
-                    console.log('🔒 PANEL FINAL CHECK: fileNameDisplay confirmed visible');
                 }
             }, MINIMAP_ZOOM_PROTECTION_MS);
             
@@ -11313,7 +11345,7 @@ class WaferMapViewer {
 
             btn.className = 'class-btn' + (this.selectedClass === cls ? ' selected' : '');
 
-            btn.style.padding = '4px 14px';
+            btn.style.padding = '3px 8px';
 
             btn.style.background = this.classSelection?.selected.includes(cls) ? '#09f' : '#222';
 
@@ -13232,7 +13264,7 @@ class WaferMapViewer {
         for (const cls of classes) {
             const li = document.createElement('li');
 
-            li.style.marginBottom = '4px';
+            li.style.marginBottom = '2px';
 
             // 폴더 summary
 
@@ -16971,12 +17003,7 @@ class WaferMapViewer {
             if (this.dom.imageCanvas) {
                 this.dom.imageCanvas.ondblclick = (e) => {
                     e.stopPropagation();
-                    console.log('🖱️ [DBLCLICK] 이미지 캔버스 더블클릭 (파일탐색기 모드):', {
-                        viewMode: this.viewMode
-                    });
-
                     if (this.viewMode === 'single') {
-                        console.log('🖱️ [DBLCLICK] → 파일탐색기 모드: 2번 이동');
                         this.handleDoubleClickNavigation();
                     }
                 };
@@ -16984,12 +17011,9 @@ class WaferMapViewer {
 
             this.selectedImagePath = imagePath;
 
-            console.log('✅ [SINGLE_VIEW] 이미지 로드 시작:', imagePath);
-
             // ✅ 이미지 로드 (try-catch로 감싸서 에러 처리)
             try {
                 await this.loadImage(imagePath);
-                console.log('✅ [SINGLE_VIEW] 이미지 로드 완료');
             } catch (loadError) {
                 console.error('❌ [SINGLE_VIEW] 이미지 로드 실패:', loadError);
                 // 로드 실패해도 계속 진행
@@ -16997,30 +17021,17 @@ class WaferMapViewer {
 
             // 🔥 Navigator 표시 (Shift 키가 눌려있지 않은 경우에만)
             if (this.isShiftPressed) {
-                console.log('⏩ [SINGLE_VIEW] Shift 키 눌림 - Navigator 표시 건너뛰기');
             } else {
-                console.log('✅ [SINGLE_VIEW] Navigator 표시 시작');
                 if (this.thumbnailNavigator) {
-                    console.log('✅ [SINGLE_VIEW] thumbnailNavigator 존재 확인');
                     try {
                         this.thumbnailNavigator.show();
-                        console.log('✅ [SINGLE_VIEW] Navigator.show() 호출 완료');
                         this.thumbnailNavigator.setImages(this.singleViewImageList, imagePath);
-                        console.log('✅ [NAVIGATOR] 표시 완료 - 이미지 개수:', this.singleViewImageList.length);
                     } catch (navError) {
                         console.error('❌ [NAVIGATOR] 표시 실패:', navError);
                     }
-                } else {
-                    console.error('❌ [SINGLE_VIEW] thumbnailNavigator가 없습니다!');
                 }
             }
 
-            console.log('✅ [SINGLE_VIEW] 단일 보기 모드 설정 완료', {
-                viewMode: this.viewMode,
-                imageCount: this.singleViewImageList.length,
-                currentIndex: this.singleViewImageIndex,
-                currentImage: imagePath
-            });
         } catch (error) {
             console.error('❌ [SINGLE_VIEW] 폴더 목록 가져오기 실패:', error);
             console.error('❌ [SINGLE_VIEW] Error stack:', error.stack);
@@ -17885,31 +17896,24 @@ class WaferMapViewer {
     handleDoubleClickNavigation() {
         // 이미 네비게이션 중이면 스킵
         if (this._isNavigating) {
-            console.log('⚠️ [DBLCLICK_NAV] 이미 네비게이션 중입니다. 스킵합니다.');
             return;
         }
         
         // viewMode 확인
         if (this.viewMode !== 'single') {
-            console.warn('⚠️ [DBLCLICK_NAV] single 모드가 아닙니다. viewMode:', this.viewMode);
             return;
         }
-        
-        console.log('🔄 [DBLCLICK_NAV] 더블클릭: 2번 이동 시작');
+
         this._isNavigating = true;
         
         try {
             // ✅ 첫 번째 이동
             this.navigateNext();
-            console.log('  → [DBLCLICK_NAV] 첫 번째 이동 완료');
-            
+
             // ✅ 두 번째 이동 (150ms 후)
             setTimeout(() => {
                 if (this.viewMode === 'single') {  // 모드가 변경되지 않았는지 확인
                     this.navigateNext();
-                    console.log('  → [DBLCLICK_NAV] 두 번째 이동 완료');
-                } else {
-                    console.log('⚠️ [DBLCLICK_NAV] 모드가 변경되어 두 번째 이동 취소');
                 }
                 this._isNavigating = false;
             }, 150);
@@ -20155,7 +20159,12 @@ class WaferMapViewer {
             if (result.subset_maps && result.subset_maps.length > 0) {
                 // 새로 생성된 Subset Map을 그리드에 추가 (기존 뒤에 추가)
                 const newImages = result.subset_maps.map(item => item.path);
-                const allImages = [...this.selectedImages, ...newImages];
+                const baseImages = Array.isArray(this.currentGridImages) && this.currentGridImages.length
+                    ? [...this.currentGridImages]
+                    : (Array.isArray(this.selectedImages) ? [...this.selectedImages] : []);
+                const seen = new Set(baseImages);
+                newImages.forEach(p => { if (!seen.has(p)) { seen.add(p); baseImages.push(p); } });
+                const allImages = baseImages;
 
                 this.selectedImages = allImages;
                 this.currentGridImages = allImages;
