@@ -134,6 +134,12 @@ export class MyLotModal {
         }
     }
 
+    ensureMyLotPage() {
+        if (this.viewer?.ensurePageForRole) {
+            this.viewer.ensurePageForRole('mylot');
+        }
+    }
+
     setupDragging() {
         if (!this.windowEl || this._dragInitialized) {
             return;
@@ -519,6 +525,7 @@ export class MyLotModal {
         const entry = this.currentEntries[index];
         if (!entry) return;
         const action = actionBtn.dataset.action;
+        this.ensureMyLotPage();
         if (action === 'preview') {
             // 보기 버튼: Wafer Map Explorer에서 이미지 선택과 동일하게 동작
             if (entry.path) {
@@ -566,6 +573,7 @@ export class MyLotModal {
         const index = Number(row.dataset.index);
         const entry = this.currentEntries[index];
         if (!entry?.path) return;
+        this.ensureMyLotPage();
         // Wafer Map Explorer와 동일하게 selectedImages 설정
         if (this.viewer) {
             this.viewer.selectedImages = [entry.path];
@@ -870,6 +878,7 @@ export class MyLotModal {
             this.viewer?.showToast?.('선택된 항목이 없습니다.', 1700);
             return;
         }
+        this.ensureMyLotPage();
         
         let paths = [];
 

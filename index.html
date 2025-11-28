@@ -22,6 +22,7 @@
             --hover-color: #0099ff;
             --selected-color: #08e;
             --filename-bar-height: 56px;
+            --tab-bar-height: 32px;
         }
         
         * {
@@ -48,6 +49,112 @@
             width: 100vw;
             min-width: 0;
             min-height: 0;
+        }
+
+        /* Page Tabs */
+        .page-tab-bar {
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 12px;
+            height: var(--tab-bar-height);
+            background: #0f0f0f;
+            border-top: 1px solid #2c2c2c;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 4px 10px;
+            z-index: 5000;
+            box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.35);
+        }
+        .page-tab-scroll {
+            flex: 1;
+            min-width: 0;
+            overflow-x: auto;
+            overflow-y: hidden;
+        }
+        .page-tabs {
+            display: flex;
+            gap: 6px;
+            min-width: max-content;
+            align-items: center;
+        }
+        .page-tab {
+            position: relative;
+            background: #1b1b1b;
+            border: 1px solid #2e2e2e;
+            color: #a6a6a6;
+            padding: 0 20px 0 8px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+            white-space: nowrap;
+            opacity: 0.6;
+            min-width: 70px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+            text-align: center;
+        }
+        .page-tab-text {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            width: 100%;
+            height: 100%;
+        }
+        .page-tab[data-role="wafer"] { border-color: #0b84ff; }
+        .page-tab[data-role="label"] { border-color: #e085ff; }
+        .page-tab[data-role="mylot"] { border-color: #5ce0a4; }
+        .page-tab[data-role="composite"] { border-color: #f59e0b; }
+        .page-tab.active {
+            background: linear-gradient(135deg, #2b2b2b, #1f1f1f);
+            color: #fff;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+            opacity: 1;
+        }
+        .page-tab:not(.active):hover {
+            background: #1b1b1b;
+            color: #8c8c8c;
+            border-color: #2e2e2e;
+        }
+        .page-tab.active:hover {
+            background: linear-gradient(135deg, #323232, #202020);
+        }
+        .page-tab-close {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 12px;
+            opacity: 0.6;
+            pointer-events: auto;
+        }
+        .page-tab-close:hover {
+            opacity: 1;
+        }
+        .page-add-btn {
+            width: 32px;
+            height: 24px;
+            border-radius: 8px;
+            border: 1px solid #3a3a3a;
+            background: #1f1f1f;
+            color: #fff;
+            font-size: 18px;
+            cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+        }
+        .page-add-btn:hover {
+            background: #2a2a2a;
+            border-color: #4a4a4a;
         }
         
         /* Sidebar */
@@ -504,6 +611,8 @@
             margin: 10px 0;
             border-radius: 8px;
             overflow: hidden;
+            position: relative;
+            padding-bottom: var(--tab-bar-height);
         }
         
         /* Grid Controls */
@@ -3175,6 +3284,13 @@
                     </div>
                 </div>
             </section>
+
+            <div id="page-tab-bar" class="page-tab-bar" aria-label="페이지 탭">
+                <div class="page-tab-scroll">
+                    <div id="page-tabs" class="page-tabs"></div>
+                </div>
+                <button id="page-add-btn" class="page-add-btn" type="button" aria-label="새 페이지 추가">+</button>
+            </div>
         </section>
         
         <div class="resizer" id="resizer-right" aria-hidden="true"></div>
@@ -3220,7 +3336,6 @@
             </section>
         </aside>
     </main>
-    
     <!-- Context Menu -->
     <div id="grid-context-menu" class="context-menu" style="display: none; position: absolute; background: #333; border: 1px solid #555; border-radius: 4px; padding: 4px 0; z-index: 10000; min-width: 180px;">
         <div class="context-menu-item" id="context-composite-create" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">

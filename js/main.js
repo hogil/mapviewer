@@ -16,6 +16,7 @@ import { ChipAnnotator } from './chip-annotator.js';
 import { ThumbnailNavigator } from './thumbnail-navigator.js';
 import { CompositeColorModal } from './composite-colors.js';
 import { MyLotModal } from './my-lot.js';
+import { PageManager } from './page-manager.js';
 import { ContextMenuManager } from './context-menu.js?v=2';
 
 // Constants
@@ -486,6 +487,7 @@ class WaferMapViewer {
         this.cacheDom();
 
         this.initState();
+        this.initPageManager();
 
         this.colorEditor = new ColorSchemeEditor(this);
         this.compositeColorModal = new CompositeColorModal(this);
@@ -613,6 +615,20 @@ class WaferMapViewer {
         this.debugLog('Thumbnail Navigator 초기화 완료');
     }
 
+    initPageManager() {
+        this.pageManager = new PageManager({
+            tabListEl: this.dom?.pageTabs || document.getElementById('page-tabs'),
+            addBtn: this.dom?.pageAddBtn || document.getElementById('page-add-btn'),
+            onRequestState: () => this.captureActivePageState(),
+            onPageActivated: (page) => this.applyPageState(page),
+            shouldSkipShortcut: (event) => !this.shouldAllowKeyboardShortcut(event),
+        });
+
+        if (!this.pageManager.getActivePage()) {
+            this.pageManager.createPage('blank', null, { activate: true, skipPersist: true });
+        }
+    }
+
     /**
      * 검색/입력 필드에 포커스가 있는지 확인
      * @returns {boolean} true if focus is on input/textarea/search element
@@ -693,6 +709,9 @@ class WaferMapViewer {
             minimapCanvas: document.getElementById('minimap-canvas'),
 
             minimapViewport: document.getElementById('minimap-viewport'),
+            pageTabBar: document.getElementById('page-tab-bar'),
+            pageTabs: document.getElementById('page-tabs'),
+            pageAddBtn: document.getElementById('page-add-btn'),
 
             zoomInBtn: document.getElementById('zoom-in-btn'),
 
@@ -814,6 +833,8 @@ class WaferMapViewer {
         this.permissionFilterRole = 'ALL'; // 초기값: ALL
         this.permissionStatsUsers = null;
         this.permissionSearchSelectedIndex = -1;
+        this.pageManager = null;
+        this.activePageRole = 'blank';
 
         // 🔥 Composite Map 세션 관리
         this.isCompositeMode = false;
@@ -1351,6 +1372,137 @@ class WaferMapViewer {
             return this.selectedImages[0];
         }
         return null;
+    }
+
+    deepCloneSimple(value) {
+        if (value === null || value === undefined) return value;
+        if (typeof structuredClone === 'function') {
+            try {
+                return structuredClone(value);
+            } catch (error) {
+                // fallback
+            }
+        }
+        try {
+            return JSON.parse(JSON.stringify(value));
+        } catch (error) {
+            return value;
+        }
+    }
+
+    buildSavedViewSnapshot() {
+        if (this.savedViewState) return this.savedViewState;
+        if (this.gridMode && Array.isArray(this.currentGridImages) && this.currentGridImages.length > 0) {
+            const grid = document.getElementById('image-grid');
+            const scrollWrapper = grid?.parentElement;
+            return {
+                type: 'grid',
+                images: [...this.currentGridImages],
+                scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
+                isCompositeMode: this.isCompositeMode,
+                compositeSession: this.isCompositeMode ? this.cloneCompositeSession() : null,
+            };
+        }
+        if (this.viewMode === 'single' && this.selectedImagePath) {
+            return {
+                type: 'single',
+                imagePath: this.selectedImagePath,
+                zoom: this.zoom,
+                offsetX: this.offsetX,
+                offsetY: this.offsetY,
+            };
+        }
+        return null;
+    }
+
+    captureActivePageState() {
+        const savedViewSnapshot = this.deepCloneSimple(this.buildSavedViewSnapshot());
+        return {
+            savedViewState: savedViewSnapshot,
+            waferMapExplorerState: this.deepCloneSimple(this.waferMapExplorerState),
+            labelExplorerState: this.deepCloneSimple(this.labelExplorerState),
+            currentFolderPath: this.currentFolderPath,
+            currentFolderPrefix: this.currentFolderPrefix,
+            filterTestMode: this.filterTestMode,
+            personalizedColorEnabled: this.personalizedColorEnabled,
+            classMode: this.classMode,
+            gridMode: this.gridMode,
+            viewMode: this.viewMode,
+            singleImageFromGrid: this.singleImageFromGrid,
+            selectedImages: this.selectedImages ? [...this.selectedImages] : [],
+            selectedImagePath: this.selectedImagePath || null,
+            currentGridImages: this.currentGridImages ? [...this.currentGridImages] : [],
+            gridSelectedIdxs: this.gridSelectedIdxs ? [...this.gridSelectedIdxs] : [],
+            gridViewSaveState: this.deepCloneSimple(this.gridViewSaveState),
+            gridViewImageList: this.gridViewImageList ? [...this.gridViewImageList] : [],
+            gridViewImageIndex: typeof this.gridViewImageIndex === 'number' ? this.gridViewImageIndex : -1,
+            isCompositeMode: this.isCompositeMode,
+            compositeSession: this.isCompositeMode ? this.cloneCompositeSession() : null,
+            lastCompositeSourceImages: this.lastCompositeSourceImages ? [...this.lastCompositeSourceImages] : [],
+            sessionStack: Array.isArray(this.sessionStack) ? this.deepCloneSimple(this.sessionStack) : [],
+            gridCols: this.gridCols,
+            gridThumbSize: this.gridThumbSize,
+        };
+    }
+
+    persistActivePageState(stateOverride) {
+        if (!this.pageManager) return;
+        this.pageManager.persistActivePage(stateOverride ?? this.captureActivePageState());
+    }
+
+    async applyPageState(page) {
+        if (!page) return;
+        const state = page.state || {};
+        this.activePageRole = page.role || 'blank';
+        this.savedViewState = state.savedViewState ? this.deepCloneSimple(state.savedViewState) : null;
+        this.waferMapExplorerState = state.waferMapExplorerState ? this.deepCloneSimple(state.waferMapExplorerState) : null;
+        this.labelExplorerState = state.labelExplorerState ? this.deepCloneSimple(state.labelExplorerState) : null;
+        this.currentFolderPath = state.currentFolderPath ?? this.currentFolderPath;
+        this.currentFolderPrefix = state.currentFolderPrefix ?? this.currentFolderPrefix;
+        this.filterTestMode = state.filterTestMode ?? this.filterTestMode;
+        this.personalizedColorEnabled = state.personalizedColorEnabled ?? this.personalizedColorEnabled;
+        this.classMode = state.classMode || this.classMode;
+        this.gridMode = !!state.gridMode && !!this.savedViewState && this.savedViewState.type === 'grid';
+        this.viewMode = state.viewMode || null;
+        this.singleImageFromGrid = state.singleImageFromGrid || false;
+        this.selectedImages = state.selectedImages ? [...state.selectedImages] : [];
+        this.selectedImagePath = state.selectedImagePath || null;
+        this.currentGridImages = state.currentGridImages ? [...state.currentGridImages] : [];
+        this.gridSelectedIdxs = state.gridSelectedIdxs ? [...state.gridSelectedIdxs] : [];
+        this.gridSelectedSet = new Set(this.gridSelectedIdxs || []);
+        this.gridViewSaveState = state.gridViewSaveState ? this.deepCloneSimple(state.gridViewSaveState) : null;
+        this.gridViewImageList = state.gridViewImageList ? [...state.gridViewImageList] : [];
+        this.gridViewImageIndex = typeof state.gridViewImageIndex === 'number' ? state.gridViewImageIndex : -1;
+        this.isCompositeMode = !!state.isCompositeMode;
+        this.compositeSession = state.compositeSession ? this.deepCloneSimple(state.compositeSession) : null;
+        this.lastCompositeSourceImages = state.lastCompositeSourceImages ? [...state.lastCompositeSourceImages] : [];
+        this.sessionStack = Array.isArray(state.sessionStack) ? this.deepCloneSimple(state.sessionStack) : [];
+        if (typeof state.gridCols === 'number') {
+            this.gridCols = state.gridCols;
+            document.documentElement.style.setProperty('--grid-cols', this.gridCols);
+            const gridColsRange = document.getElementById('grid-cols-range');
+            if (gridColsRange) {
+                gridColsRange.value = this.gridCols;
+            }
+        }
+        if (typeof state.gridThumbSize === 'number') {
+            this.gridThumbSize = state.gridThumbSize;
+        }
+        if (this.dom?.filterTestSelect && this.filterTestMode !== undefined) {
+            this.dom.filterTestSelect.value = this.filterTestMode || '';
+        }
+        await this.restoreSavedViewState();
+        this.restoreWaferMapExplorerState();
+        this.restoreLabelExplorerState();
+        this.updateContextMenuState();
+    }
+
+    ensurePageForRole(role, options = {}) {
+        if (!this.pageManager) return null;
+        this.persistActivePageState();
+        const target = this.pageManager.ensurePageForRole(role, options);
+        this.activePageRole = target?.role || role || 'blank';
+        return target;
     }
 
     extractLotTokensFromPath(path) {
@@ -3438,6 +3590,7 @@ class WaferMapViewer {
         grid.addEventListener('wheel', e => {
             if (!this.gridMode) return;
 
+            // Ctrl+휠: grid 갯수 조절
             if (e.ctrlKey) {
                 e.preventDefault();
 
@@ -3457,10 +3610,11 @@ class WaferMapViewer {
                     this.scheduleShowGrid();
                 }
             } else if (e.shiftKey) {
+                // Shift+휠: 가로 스크롤
                 e.preventDefault();
-
                 scrollWrapper.scrollLeft += e.deltaY;
             }
+            // 그냥 휠: 기본 스크롤 동작 (preventDefault 없음)
         }, { passive: false });
 
         // 드래그 상태 변수
@@ -6809,6 +6963,7 @@ class WaferMapViewer {
             return;
         }
 
+        const previousPageState = this.captureActivePageState();
         const selected = this.getSelectedImagesForModal();
         if (!selected.length) {
             alert('Composite Map을 만들 이미지를 선택하세요.');
@@ -6934,8 +7089,16 @@ class WaferMapViewer {
                 loadingOverlay.parentNode.removeChild(loadingOverlay);
             }
 
-            // 🔥 4단계: Grid를 Composite Grid로 교체
+            // 🔥 4단계: Grid를 Composite Grid로 교체 (새로운 Composite 페이지로 이동)
+            if (this.pageManager) {
+                this.persistActivePageState(previousPageState);
+                this.ensurePageForRole('composite', { forceNew: true, skipPersist: true });
+                this.sessionStack = [];
+                this.gridViewSaveState = null;
+                this.savedViewState = null;
+            }
             await this.switchToCompositeGrid(result);
+            this.persistActivePageState();
 
             // 🔥 완료 메시지
             this.showToast?.('Composite Map 생성 완료!', 2000);
@@ -8908,7 +9071,8 @@ class WaferMapViewer {
         // Handle file selection (multi-select)
 
         else if (target.tagName === 'A') {
-        e.preventDefault();
+            this.ensurePageForRole('wafer');
+            e.preventDefault();
 
             const path = target.dataset.path;
 
@@ -17077,8 +17241,38 @@ class WaferMapViewer {
      * @param {number} idx 그리드에서 더블클릭한 이미지 인덱스
      */
     enterGridImageViewMode(idx) {
-        // 하위 호환성을 위해 enterSingleImageMode로도 호출 가능
+        const gridImages = Array.isArray(this.currentGridImages) ? [...this.currentGridImages] : [];
+        const gridSelectedIdxs = Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : [];
+        const savedSnapshot = this.captureActivePageState();
+
+        if (this.pageManager) {
+            this.persistActivePageState(savedSnapshot);
+            this.ensurePageForRole('wafer', { forceNew: true, skipPersist: true });
+        }
+
+        if (gridImages.length) {
+            const grid = document.getElementById('image-grid');
+            const scrollWrapper = grid?.parentElement;
+            this.currentGridImages = gridImages;
+            this.selectedImages = [...gridImages];
+            this.gridSelectedIdxs = gridSelectedIdxs;
+            this.gridSelectedSet = new Set(gridSelectedIdxs);
+            if (!this.savedViewState || this.savedViewState.type !== 'grid') {
+                this.savedViewState = {
+                    type: 'grid',
+                    images: [...gridImages],
+                    scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
+                    isCompositeMode: this.isCompositeMode,
+                    compositeSession: this.isCompositeMode ? this.cloneCompositeSession() : null,
+                };
+            }
+            if (savedSnapshot?.gridViewSaveState) {
+                this.gridViewSaveState = this.deepCloneSimple(savedSnapshot.gridViewSaveState);
+            }
+        }
+
         this.enterSingleImageMode(idx);
+        this.persistActivePageState();
     }
     
     enterSingleImageMode(idx) {
@@ -18310,6 +18504,7 @@ class WaferMapViewer {
 
     showGridFromLabelExplorer(imageKeys) {
         if (!imageKeys || imageKeys.length === 0) return;
+        this.ensurePageForRole('label');
 
         // 🔥 savedViewState 백업 (Label Explorer Grid가 덮어쓰지 않도록)
         const savedViewStateBackup = this.savedViewState;
