@@ -520,6 +520,9 @@ class WaferMapViewer {
         this.compositePageTasks = new Map(); // composite 생성/대기 상태를 페이지별로 추적
         this.compositeInlineStatusEl = null;
         this.compositeInlineStatusOwner = null;
+        this.subsetStatusEl = null;
+        this.subsetStatusOwner = null;
+        this.subsetPageUpdates = new Map(); // subset 결과를 원래 페이지에 적용하기 위한 대기열
         
         // 전역 AbortController 초기화 (모든 API 요청 중단용)
         this.globalAbortController = new AbortController();
@@ -1550,26 +1553,29 @@ class WaferMapViewer {
             wrap.id = 'composite-inline-status';
             wrap.style.cssText = `
                 position: absolute;
-                left: 0;
-                right: 0;
-                top: 0;
-                /* 페이지 탭 영역이 살짝 잘리는 것을 막기 위해 약간 여유를 둔다 */
-                bottom: 40px;
-                display: flex;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                display: inline-flex;
                 align-items: center;
                 justify-content: center;
                 gap: 12px;
-                background: #050505;
+                padding: 14px 18px;
+                background: rgba(5, 5, 5, 0.85);
                 color: #f4f4f4;
                 z-index: 15000;
                 pointer-events: none;
+                border-radius: 12px;
+                box-shadow: 0 10px 28px rgba(0,0,0,0.3);
+                min-width: 240px;
+                text-align: center;
             `;
             const spinner = document.createElement('div');
             spinner.className = 'composite-inline-spinner';
             spinner.style.cssText = `
-                width: 40px;
-                height: 40px;
-                border: 5px solid rgba(255,255,255,0.35);
+                width: 26px;
+                height: 26px;
+                border: 4px solid rgba(255,255,255,0.35);
                 border-top-color: #3ec7ff;
                 border-radius: 50%;
                 animation: composite-inline-spin 1s linear infinite;
@@ -1578,10 +1584,10 @@ class WaferMapViewer {
             const text = document.createElement('div');
             text.className = 'composite-inline-text';
             text.style.cssText = `
-                font-size: 17px;
+                font-size: 15px;
                 font-weight: 700;
                 line-height: 1.5;
-                white-space: nowrap;
+                text-align: center;
             `;
             wrap.appendChild(spinner);
             wrap.appendChild(text);
@@ -1673,7 +1679,18 @@ class WaferMapViewer {
         this.restoreLabelExplorerState();
         this.updateContextMenuState();
         this.syncCompositeInlineStatus(page?.id);
+        this.syncSubsetStatus(page?.id);
         await this.syncExplorerSelectionForPage(page);
+
+        // 대기 중인 subset 결과가 있으면 원래 페이지에서 적용
+        if (page?.id && this.subsetPageUpdates.has(page.id)) {
+            const pending = this.subsetPageUpdates.get(page.id);
+            this.subsetPageUpdates.delete(page.id);
+            if (Array.isArray(pending?.images) && pending.images.length) {
+                await this.showGrid(pending.images, true);
+                this.persistActivePageState();
+            }
+        }
     }
 
     handlePageClosed(page) {
@@ -7670,7 +7687,7 @@ class WaferMapViewer {
         } catch {}
     }
 
-    showCompositeDoneMessage(message, duration = 2000) {
+    showCenteredToast(message, duration = 2000) {
         try {
             const toast = document.createElement('div');
             toast.textContent = message;
@@ -7679,20 +7696,113 @@ class WaferMapViewer {
                 top: 50%;
                 left: 50%;
                 transform: translate(-50%, -50%);
-                background: rgba(0, 0, 0, 0.92);
+                background: rgba(0, 0, 0, 0.88);
                 color: #fff;
-                padding: 18px 28px;
-                border-radius: 14px;
-                z-index: 20000;
-                font-size: 26px;
-                font-weight: 800;
-                box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+                padding: 14px 20px;
+                border-radius: 12px;
+                z-index: 26000;
+                font-size: 17px;
+                font-weight: 700;
+                box-shadow: 0 10px 24px rgba(0,0,0,0.25);
                 text-align: center;
                 pointer-events: none;
             `;
             document.body.appendChild(toast);
             setTimeout(() => toast.remove(), duration);
         } catch {}
+    }
+
+    showCompositeDoneMessage(message, duration = 2000) {
+        this.showCenteredToast(message, duration);
+    }
+
+    showSubsetDoneMessage(message, duration = 2000) {
+        this.showCenteredToast(message, duration);
+    }
+
+    showSubsetStatus(message = 'Subset Map 생성 중...', ownerPageId = null) {
+        try {
+            if (!document.getElementById('subset-status-style')) {
+                const style = document.createElement('style');
+                style.id = 'subset-status-style';
+                style.textContent = `
+                    @keyframes subset-spin {
+                        0% { transform: rotate(0deg); }
+                        100% { transform: rotate(360deg); }
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+
+            if (!this.subsetStatusEl) {
+                const wrap = document.createElement('div');
+                wrap.id = 'subset-status-toast';
+                wrap.style.cssText = `
+                    position: fixed;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 10px;
+                    padding: 14px 18px;
+                    background: rgba(0, 0, 0, 0.82);
+                    color: #fff;
+                    border-radius: 14px;
+                    box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+                    z-index: 25000;
+                    pointer-events: none;
+                    font-size: 15px;
+                    font-weight: 600;
+                    min-width: 240px;
+                    text-align: center;
+                `;
+                const spinner = document.createElement('div');
+                spinner.style.cssText = `
+                    width: 18px;
+                    height: 18px;
+                    border: 3px solid rgba(255,255,255,0.35);
+                    border-top-color: #ff9500;
+                    border-radius: 50%;
+                    animation: subset-spin 1s linear infinite;
+                    flex-shrink: 0;
+                `;
+                const text = document.createElement('div');
+                text.className = 'subset-status-text';
+                wrap.appendChild(spinner);
+                wrap.appendChild(text);
+                document.body.appendChild(wrap);
+                this.subsetStatusEl = wrap;
+            }
+            const textEl = this.subsetStatusEl.querySelector('.subset-status-text');
+            if (textEl) {
+                textEl.textContent = message;
+            }
+            this.subsetStatusOwner = ownerPageId ?? (this.pageManager?.activePageId || null);
+            const activeId = this.pageManager?.activePageId;
+            if (this.subsetStatusOwner && activeId && this.subsetStatusOwner !== activeId) {
+                this.subsetStatusEl.style.display = 'none';
+            } else {
+                this.subsetStatusEl.style.display = 'inline-flex';
+            }
+        } catch {}
+    }
+
+    hideSubsetStatus() {
+        if (this.subsetStatusEl) {
+            this.subsetStatusEl.style.display = 'none';
+        }
+        this.subsetStatusOwner = null;
+    }
+
+    syncSubsetStatus(activePageId) {
+        if (!this.subsetStatusOwner || !activePageId || this.subsetStatusOwner !== activePageId) {
+            this.hideSubsetStatus();
+            return;
+        }
+        if (this.subsetStatusEl) {
+            this.subsetStatusEl.style.display = 'inline-flex';
+        }
     }
 
     showContextMenu(event, clickedIdx) {
@@ -20596,6 +20706,8 @@ class WaferMapViewer {
         }
 
         const selectedGradeList = Array.from(this.getSelectedGradesFromGrid()).sort((a, b) => a - b);
+        const originPageId = this.pageManager?.activePageId || null;
+        const originImages = this.currentGridImages ? [...this.currentGridImages] : (this.selectedImages ? [...this.selectedImages] : []);
 
         if (selectedGradeList.length === 0) {
             this.showToast?.('최소 1개 이상의 Grade를 선택해주세요.', 2000);
@@ -20604,51 +20716,9 @@ class WaferMapViewer {
 
         console.log('🚀 [Subset Map] Creating subset map with grades:', selectedGradeList);
 
-        // 🔥 로딩 오버레이 표시
-        let loadingOverlay = null;
         try {
-            // 🔥 로딩 오버레이 생성
-            loadingOverlay = document.createElement('div');
-            loadingOverlay.id = 'subset-loading-overlay';
-            loadingOverlay.style.cssText = `
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background: rgba(0, 0, 0, 0.7);
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-                z-index: 20000;
-                color: #fff;
-                font-size: 16px;
-            `;
-
-            // 🔥 스피너와 메시지
-            const spinner = document.createElement('div');
-            spinner.style.cssText = `
-                width: 50px;
-                height: 50px;
-                border: 4px solid rgba(255, 255, 255, 0.3);
-                border-top-color: #ff9500;
-                border-radius: 50%;
-                animation: spin 1s linear infinite;
-                margin-bottom: 20px;
-            `;
-
-            const message = document.createElement('div');
-            message.textContent = `Grade ${selectedGradeList.join(', ')} Subset Map 생성 중...`;
-            message.style.cssText = `
-                font-size: 18px;
-                font-weight: 500;
-                text-align: center;
-            `;
-
-            loadingOverlay.appendChild(spinner);
-            loadingOverlay.appendChild(message);
-            document.body.appendChild(loadingOverlay);
+            // 🔥 비블로킹 상태 표시 (다른 페이지 선택 가능)
+            this.showSubsetStatus(`Grade ${selectedGradeList.join(', ')} Subset Map 생성 중...`, originPageId);
 
             const payload = {
                 output_dir: this.compositeSession.outputDir,
@@ -20672,41 +20742,46 @@ class WaferMapViewer {
             if (result.subset_maps && result.subset_maps.length > 0) {
                 // 새로 생성된 Subset Map을 그리드에 추가 (기존 뒤에 추가)
                 const newImages = result.subset_maps.map(item => item.path);
-                const baseImages = Array.isArray(this.currentGridImages) && this.currentGridImages.length
-                    ? [...this.currentGridImages]
+                const baseImages = originImages.length
+                    ? [...originImages]
                     : (Array.isArray(this.selectedImages) ? [...this.selectedImages] : []);
                 const seen = new Set(baseImages);
                 newImages.forEach(p => { if (!seen.has(p)) { seen.add(p); baseImages.push(p); } });
                 const allImages = baseImages;
 
-                this.selectedImages = allImages;
-                this.currentGridImages = allImages;
-
-                // 🔥 Composite 세션의 sumMaps도 업데이트 (next/prev 작동을 위해)
-                if (this.compositeSession && this.compositeSession.sumMaps) {
-                    const newSumMapEntries = result.subset_maps.map(item => ({
-                        path: item.path,
-                        type: item.type || 'subset',
-                        display_name: item.display_name || item.filename,
-                        filename: item.filename
-                    }));
-                    this.compositeSession.sumMaps.push(...newSumMapEntries);
-                }
-
-                // 그리드 다시 표시
-                await this.showGrid(allImages, true);
-
                 const gradeStr = selectedGradeList.join(', ');
-                this.showToast?.(`Grade ${gradeStr} Subset Map이 생성되었습니다.`, 2500);
+
+                const applyToActivePage = originPageId && this.pageManager?.activePageId === originPageId;
+                if (applyToActivePage) {
+                    this.selectedImages = allImages;
+                    this.currentGridImages = allImages;
+
+                    if (this.compositeSession && this.compositeSession.sumMaps) {
+                        const newSumMapEntries = result.subset_maps.map(item => ({
+                            path: item.path,
+                            type: item.type || 'subset',
+                            display_name: item.display_name || item.filename,
+                            filename: item.filename
+                        }));
+                        this.compositeSession.sumMaps.push(...newSumMapEntries);
+                    }
+
+                    this.hideSubsetStatus();
+                    await this.showGrid(allImages, true);
+                    this.persistActivePageState();
+                    this.showSubsetDoneMessage(`Grade ${gradeStr} Subset Map 완료!`, 2200);
+                } else if (originPageId) {
+                    // 다른 페이지로 이동한 경우: 결과를 원래 페이지에만 적용하도록 큐에 저장
+                    this.subsetPageUpdates.set(originPageId, { images: allImages });
+                    this.hideSubsetStatus();
+                    this.showSubsetDoneMessage(`Grade ${gradeStr} Subset Map 준비 완료`, 2400);
+                }
             }
         } catch (err) {
             console.error('❌ [Subset Map] Error:', err);
             this.showToast?.(`Subset Map 생성 실패: ${err.message}`, 3000);
         } finally {
-            // 🔥 로딩 오버레이 제거
-            if (loadingOverlay && loadingOverlay.parentNode) {
-                loadingOverlay.parentNode.removeChild(loadingOverlay);
-            }
+            this.hideSubsetStatus();
         }
     }
 }
