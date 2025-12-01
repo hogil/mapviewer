@@ -487,6 +487,12 @@ class WaferMapViewer {
     constructor() {
         this.cacheDom();
 
+        // 🔥 initPageManager() 전에 초기화 필요 (페이지 생성 시 setCompositePageTask 호출)
+        this.compositePageTasks = new Map(); // composite 생성/대기 상태를 페이지별로 추적
+        this.gridDetailPageMap = new Map();
+        this.gridDetailOriginMap = new Map();
+        this.subsetPageUpdates = new Map(); // subset 결과를 원래 페이지에 적용하기 위한 대기열
+
         this.initState();
         this.initPageManager();
 
@@ -517,12 +523,10 @@ class WaferMapViewer {
         this.contextMenuTargetIndex = null;
         this.contextMenuTargetPath = null;
         this.compositeProgressOverlay = null;
-        this.compositePageTasks = new Map(); // composite 생성/대기 상태를 페이지별로 추적
         this.compositeInlineStatusEl = null;
         this.compositeInlineStatusOwner = null;
         this.subsetStatusEl = null;
-        this.subsetStatusOwner = null;
-        this.subsetPageUpdates = new Map(); // subset 결과를 원래 페이지에 적용하기 위한 대기열
+        this.subsetStatusOwner = null
         
         // 전역 AbortController 초기화 (모든 API 요청 중단용)
         this.globalAbortController = new AbortController();
@@ -843,8 +847,7 @@ class WaferMapViewer {
         this.permissionSearchSelectedIndex = -1;
         this.pageManager = null;
         this.activePageRole = 'blank';
-        this.gridDetailPageMap = new Map();
-        this.gridDetailOriginMap = new Map();
+        // gridDetailPageMap, gridDetailOriginMap은 생성자에서 이미 초기화됨
         this.lastGridOriginPageId = null;
 
         // 🔥 Composite Map 세션 관리
@@ -9301,6 +9304,9 @@ class WaferMapViewer {
 
                     if (!this.selectedFolders) this.selectedFolders = new Set();
 
+                    // 🔥 페이지가 없으면 먼저 생성 (처음 접속 시 오류 방지)
+                    this.ensurePageForRole('wafer');
+
                     // 🔥 Label Explorer 선택만 해제 (savedViewState는 유지)
 
                     if (this.labelSelection) {
@@ -9346,6 +9352,9 @@ class WaferMapViewer {
 
                 if (e.shiftKey && this.lastSelectedFolder) {
                     if (!this.selectedFolders) this.selectedFolders = new Set();
+
+                    // 🔥 페이지가 없으면 먼저 생성 (처음 접속 시 오류 방지)
+                    this.ensurePageForRole('wafer');
 
                     // 🔥 Label Explorer 선택만 해제 (savedViewState는 유지)
 
@@ -9396,14 +9405,8 @@ class WaferMapViewer {
                 const allFolders = Array.from(this.dom.fileExplorer.querySelectorAll('summary.folder'));
 
                 allFolders.forEach(folder => {
-                    if (folder !== target) {
-                        folder.classList.remove('selected');
-                    }
+                    folder.classList.remove('selected');
                 });
-
-                // 새로 클릭된 폴더 시각적 표시
-
-                target.classList.add('selected');
 
                 // 🔥 Label Explorer 선택도 해제
 
@@ -9414,6 +9417,15 @@ class WaferMapViewer {
 
                     this.updateLabelExplorerSelection();
                 }
+
+                // 🔥 폴더 선택 상태 초기화
+                if (this.selectedFolders) {
+                    this.selectedFolders.clear();
+                }
+                this.lastSelectedFolder = null;
+
+                // 🔥 일반 클릭: expansion/collapse만 수행 (그리드 생성 안 함)
+                // 폴더는 expansion/collapse만 되어야 함
             }
         } 
 
@@ -18293,6 +18305,28 @@ class WaferMapViewer {
 
         this.viewMode = 'single';
         console.log(`✅ [LOAD_FOLDER] Loaded ${this.singleViewImageList.length} images from folder, index: ${this.singleViewImageIndex}`);
+    }
+
+    async loadImagesInFolderAndShowGrid(folderPath) {
+        try {
+            const response = await fetch(`/api/files?path=${encodeURIComponent(folderPath)}`);
+            const data = await response.json();
+            const files = (data.items || [])
+                .filter(item => item.type === 'file' && this.isImageFile(item.name))
+                .map(item => item.path || `${folderPath}/${item.name}`);
+            
+            this.naturalSortPaths(files);
+
+            if (files.length > 0) {
+                this.selectedImages = [];
+                this.showGrid(files);
+            } else {
+                 this.hideGrid();
+                 this.hideImage();
+            }
+        } catch (error) {
+            console.error('Failed to load images for grid:', error);
+        }
     }
 
     /**
