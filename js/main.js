@@ -17367,9 +17367,11 @@ class WaferMapViewer {
             }
 
             if (!targetPage) {
-                // 🔥 my lot 페이지에서 온 경우 새로운 my lot 페이지 생성
+                // 🔥 my lot 또는 composite 페이지에서 온 경우 같은 role의 새 페이지 생성
                 if (originPage?.role === 'mylot') {
                     targetPage = this.ensurePageForRole('mylot', { forceNew: true, skipPersist: true });
+                } else if (originPage?.role === 'composite') {
+                    targetPage = this.ensurePageForRole('composite', { forceNew: true, skipPersist: true });
                 } else {
                     targetPage = this.ensurePageForRole('wafer', { forceNew: true, skipPersist: true });
                 }

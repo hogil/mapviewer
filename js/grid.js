@@ -104,10 +104,10 @@ export class GridManager {
         
         console.log('Grid double-click at index:', index);
         
-        // 🔥 my lot 그리드인지 확인 (activePageRole이 'mylot'인 경우)
+        // 🔥 my lot 또는 composite 그리드인지 확인
         const activePageRole = this.viewer.activePageRole;
-        if (activePageRole === 'mylot') {
-            // my lot 그리드에서는 enterGridImageViewMode 호출하여 my lot 페이지 유지
+        if (activePageRole === 'mylot' || activePageRole === 'composite') {
+            // my lot 또는 composite 그리드에서는 enterGridImageViewMode 호출
             if (typeof this.viewer.enterGridImageViewMode === 'function') {
                 this.viewer.enterGridImageViewMode(index);
             }
