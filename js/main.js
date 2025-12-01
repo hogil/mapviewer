@@ -243,8 +243,9 @@ class ThumbnailManager {
             // timestamp를 추가하여 브라우저 캐싱 활용하면서도 새로고침 가능
             const personalizedParams = this.viewer ? this.viewer.getPersonalizedParams() : '';
             // 썸네일 캐시 버스팅을 위한 timestamp 추가 (scheme 변경 시 새로운 썸네일 요청)
-            const cacheBuster = this.viewer?._personalizedColorCacheBuster || Date.now();
-            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}&_t=${cacheBuster}`;
+            const cacheBuster = this.viewer?._personalizedColorCacheBuster;
+            const cacheParam = cacheBuster ? `&_t=${cacheBuster}` : '';
+            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}${cacheParam}`;
 
             // 🔍 디버그: 썸네일 URL 로그
                                     // 서버 URL을 직접 반환 (브라우저가 자동으로 로드)
@@ -516,6 +517,9 @@ class WaferMapViewer {
         this.contextMenuTargetIndex = null;
         this.contextMenuTargetPath = null;
         this.compositeProgressOverlay = null;
+        this.compositePageTasks = new Map(); // composite 생성/대기 상태를 페이지별로 추적
+        this.compositeInlineStatusEl = null;
+        this.compositeInlineStatusOwner = null;
         
         // 전역 AbortController 초기화 (모든 API 요청 중단용)
         this.globalAbortController = new AbortController();
@@ -1431,6 +1435,8 @@ class WaferMapViewer {
 
     captureActivePageState() {
         const savedViewSnapshot = this.deepCloneSimple(this.buildSavedViewSnapshot());
+        const activePageId = this.pageManager?.activePageId;
+        const compositeTaskState = activePageId ? this.compositePageTasks.get(activePageId) : null;
         return {
             savedViewState: savedViewSnapshot,
             waferMapExplorerState: this.deepCloneSimple(this.waferMapExplorerState),
@@ -1456,7 +1462,146 @@ class WaferMapViewer {
             sessionStack: Array.isArray(this.sessionStack) ? this.deepCloneSimple(this.sessionStack) : [],
             gridCols: this.gridCols,
             gridThumbSize: this.gridThumbSize,
+            pendingCompositeTask: compositeTaskState?.task ? this.deepCloneSimple(compositeTaskState.task) : null,
+            pendingCompositeResult: compositeTaskState?.result ? this.deepCloneSimple(compositeTaskState.result) : null,
         };
+    }
+
+    setCompositePageTask(pageId, taskState = {}) {
+        if (!pageId) return;
+        const nextTask = taskState.task ? this.deepCloneSimple(taskState.task) : null;
+        const nextResult = taskState.result ? this.deepCloneSimple(taskState.result) : null;
+        this.compositePageTasks.set(pageId, { task: nextTask, result: nextResult });
+
+        const page = this.pageManager?.pages?.find?.(p => p.id === pageId);
+        if (page) {
+            page.state = {
+                ...(page.state || {}),
+                pendingCompositeTask: nextTask,
+                pendingCompositeResult: nextResult,
+            };
+        }
+        this.syncCompositeInlineStatus(pageId);
+    }
+
+    getCompositePageTask(pageId) {
+        if (!pageId) return { task: null, result: null };
+        const current = this.compositePageTasks.get(pageId);
+        if (!current) return { task: null, result: null };
+        return {
+            task: current.task ? this.deepCloneSimple(current.task) : null,
+            result: current.result ? this.deepCloneSimple(current.result) : null,
+        };
+    }
+
+    clearCompositePageTask(pageId) {
+        if (!pageId) return;
+        this.compositePageTasks.delete(pageId);
+        const page = this.pageManager?.pages?.find?.(p => p.id === pageId);
+        if (page?.state) {
+            page.state.pendingCompositeTask = null;
+            page.state.pendingCompositeResult = null;
+        }
+        if (this.compositeInlineStatusOwner === pageId) {
+            this.hideCompositeInlineStatus();
+        }
+    }
+
+    syncCompositeInlineStatus(pageId) {
+        const activeId = this.pageManager?.activePageId;
+        if (!activeId || activeId !== pageId) {
+            this.hideCompositeInlineStatus();
+            return;
+        }
+        const { task } = this.getCompositePageTask(pageId);
+        const showStatuses = ['running', 'queued', 'processing', 'rendering'];
+        if (task && showStatuses.includes(task.status)) {
+            this.showCompositeInlineStatus(task.message || 'Composite Map 처리 중...');
+        } else {
+            this.hideCompositeInlineStatus();
+        }
+    }
+
+    showCompositeInlineStatus(message = 'Composite Map 처리 중...') {
+        // 🔥 현재 활성 페이지가 composite 페이지인지 확인
+        const activePage = this.pageManager?.getActivePage();
+        if (!activePage || activePage.role !== 'composite') {
+            // composite 페이지가 아니면 표시하지 않음
+            return;
+        }
+
+        const container = this.dom?.viewerContainer || document.querySelector('.viewer-container');
+        if (!container) return;
+
+        if (!document.getElementById('composite-inline-status-style')) {
+            const style = document.createElement('style');
+            style.id = 'composite-inline-status-style';
+            style.textContent = `
+                @keyframes composite-inline-spin {
+                    0% { transform: rotate(0deg); }
+                    100% { transform: rotate(360deg); }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
+        if (!this.compositeInlineStatusEl) {
+            const wrap = document.createElement('div');
+            wrap.id = 'composite-inline-status';
+            wrap.style.cssText = `
+                position: absolute;
+                left: 0;
+                right: 0;
+                top: 0;
+                /* 페이지 탭 영역이 살짝 잘리는 것을 막기 위해 약간 여유를 둔다 */
+                bottom: 40px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 12px;
+                background: #050505;
+                color: #f4f4f4;
+                z-index: 15000;
+                pointer-events: none;
+            `;
+            const spinner = document.createElement('div');
+            spinner.className = 'composite-inline-spinner';
+            spinner.style.cssText = `
+                width: 40px;
+                height: 40px;
+                border: 5px solid rgba(255,255,255,0.35);
+                border-top-color: #3ec7ff;
+                border-radius: 50%;
+                animation: composite-inline-spin 1s linear infinite;
+                flex-shrink: 0;
+            `;
+            const text = document.createElement('div');
+            text.className = 'composite-inline-text';
+            text.style.cssText = `
+                font-size: 17px;
+                font-weight: 700;
+                line-height: 1.5;
+                white-space: nowrap;
+            `;
+            wrap.appendChild(spinner);
+            wrap.appendChild(text);
+            this.compositeInlineStatusEl = wrap;
+            container.appendChild(wrap);
+        }
+
+        const textEl = this.compositeInlineStatusEl.querySelector('.composite-inline-text');
+        if (textEl) {
+            textEl.textContent = message;
+        }
+        this.compositeInlineStatusEl.style.display = 'flex';
+        this.compositeInlineStatusOwner = this.pageManager?.activePageId || null;
+    }
+
+    hideCompositeInlineStatus() {
+        if (this.compositeInlineStatusEl) {
+            this.compositeInlineStatusEl.style.display = 'none';
+        }
+        this.compositeInlineStatusOwner = null;
     }
 
     persistActivePageState(stateOverride) {
@@ -1466,6 +1611,7 @@ class WaferMapViewer {
 
     async applyPageState(page) {
         if (!page) return;
+        this.hideCompositeInlineStatus();
         const state = page.state || {};
         this.activePageRole = page.role || 'blank';
         this.savedViewState = state.savedViewState ? this.deepCloneSimple(state.savedViewState) : null;
@@ -1505,16 +1651,40 @@ class WaferMapViewer {
         if (this.dom?.filterTestSelect && this.filterTestMode !== undefined) {
             this.dom.filterTestSelect.value = this.filterTestMode || '';
         }
-        await this.restoreSavedViewState();
+
+        const pendingTask = state.pendingCompositeTask ? this.deepCloneSimple(state.pendingCompositeTask) : null;
+        const pendingResult = state.pendingCompositeResult ? this.deepCloneSimple(state.pendingCompositeResult) : null;
+        if (page?.id) {
+            this.setCompositePageTask(page.id, { task: pendingTask, result: pendingResult });
+        }
+
+        if (pendingResult) {
+            state.pendingCompositeResult = null;
+            state.pendingCompositeTask = null;
+            await this.switchToCompositeGrid(pendingResult);
+            if (page?.id) {
+                this.clearCompositePageTask(page.id);
+            }
+            this.persistActivePageState();
+        } else {
+            await this.restoreSavedViewState();
+        }
         this.restoreWaferMapExplorerState();
         this.restoreLabelExplorerState();
         this.updateContextMenuState();
+        this.syncCompositeInlineStatus(page?.id);
         await this.syncExplorerSelectionForPage(page);
     }
 
     handlePageClosed(page) {
         if (!page) return;
         const pageId = page.id;
+        if (pageId && this.compositePageTasks.has(pageId)) {
+            this.compositePageTasks.delete(pageId);
+            if (this.compositeInlineStatusOwner === pageId) {
+                this.hideCompositeInlineStatus();
+            }
+        }
         if (this.gridDetailOriginMap?.has(pageId)) {
             const originId = this.gridDetailOriginMap.get(pageId);
             this.gridDetailOriginMap.delete(pageId);
@@ -7027,7 +7197,6 @@ class WaferMapViewer {
             return;
         }
 
-        const previousPageState = this.captureActivePageState();
         const selected = this.getSelectedImagesForModal();
         if (!selected.length) {
             alert('Composite Map을 만들 이미지를 선택하세요.');
@@ -7035,69 +7204,26 @@ class WaferMapViewer {
         }
         this.lastCompositeSourceImages = [...selected];
 
-        // 🔥 로딩 오버레이 표시
-        let loadingOverlay = null;
+        const previousPageState = this.captureActivePageState();
+        let targetPageId = this.pageManager?.activePageId || null;
+        if (this.pageManager) {
+            this.persistActivePageState(previousPageState);
+            const compositePage = this.ensurePageForRole('composite', { forceNew: true, skipPersist: true });
+            targetPageId = compositePage?.id || targetPageId;
+        }
+
+        const initialTask = {
+            status: 'queued',
+            message: `Composite Map 생성 준비 중... (${selected.length}개 이미지)`,
+            selectedCount: selected.length,
+            startedAt: Date.now(),
+        };
+        if (targetPageId) {
+            this.setCompositePageTask(targetPageId, { task: initialTask, result: null });
+        }
+        this.syncCompositeInlineStatus(targetPageId);
+
         try {
-            // 🔥 로딩 오버레이 생성
-            loadingOverlay = document.createElement('div');
-            loadingOverlay.id = 'composite-loading-overlay';
-            loadingOverlay.style.cssText = `
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background: rgba(0, 0, 0, 0.7);
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-                z-index: 20000;
-                color: #fff;
-                font-size: 16px;
-            `;
-            
-            // 🔥 스피너와 메시지
-            const spinner = document.createElement('div');
-            spinner.style.cssText = `
-                width: 50px;
-                height: 50px;
-                border: 4px solid rgba(255, 255, 255, 0.3);
-                border-top-color: #007acc;
-                border-radius: 50%;
-                animation: spin 1s linear infinite;
-                margin-bottom: 20px;
-            `;
-            
-            const message = document.createElement('div');
-            message.textContent = `Composite Map 생성 중... (${selected.length}개 이미지 처리 중)`;
-            message.style.cssText = `
-                font-size: 16px;
-                font-weight: 500;
-                text-align: center;
-            `;
-            
-            // 🔥 CSS 애니메이션 추가 (이미 있으면 추가하지 않음)
-            if (!document.getElementById('composite-loading-spinner-style')) {
-                const style = document.createElement('style');
-                style.id = 'composite-loading-spinner-style';
-                style.textContent = `
-                    @keyframes spin {
-                        0% { transform: rotate(0deg); }
-                        100% { transform: rotate(360deg); }
-                    }
-                `;
-                document.head.appendChild(style);
-            }
-            
-            loadingOverlay.appendChild(spinner);
-            loadingOverlay.appendChild(message);
-            document.body.appendChild(loadingOverlay);
-
-            // 🔥 1단계: 현재 Grid 세션 저장
-            this.saveCurrentGridSession();
-
-            // 🔥 2단계: API 호출하여 Composite Map 생성 시작 (백그라운드)
             const res = await fetch('/api/composite-map', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -7112,7 +7238,6 @@ class WaferMapViewer {
             const startResponse = await res.json();
             const taskId = startResponse.task_id;
 
-            // 🔥 3단계: 상태 폴링 (1초마다 확인)
             let result = null;
             while (true) {
                 await new Promise(resolve => setTimeout(resolve, 1000)); // 1초 대기
@@ -7127,13 +7252,21 @@ class WaferMapViewer {
 
                 const status = await statusRes.json();
 
-                // 메시지 업데이트
-                if (message) {
-                    const statusText = status.status === 'processing' ? '처리 중...' :
-                                     status.status === 'queued' ? '대기 중...' :
-                                     status.status === 'completed' ? '완료!' : '실패';
-                    message.textContent = `Composite Map ${statusText} (${selected.length}개 이미지)`;
+                const statusText = status.status === 'processing' ? '처리 중...' :
+                                 status.status === 'queued' ? '대기 중...' :
+                                 status.status === 'completed' ? '완료!' : '실패';
+                const baseTask = {
+                    message: `Composite Map ${statusText} (${selected.length}개 이미지)`,
+                    selectedCount: selected.length,
+                    startedAt: initialTask.startedAt,
+                };
+                const updatedTask = status.status === 'completed'
+                    ? { ...baseTask, status: 'rendering' }
+                    : { ...baseTask, status: status.status };
+                if (targetPageId) {
+                    this.setCompositePageTask(targetPageId, { task: updatedTask, result: null });
                 }
+                this.syncCompositeInlineStatus(targetPageId);
 
                 if (status.status === 'completed') {
                     result = status.result;
@@ -7141,46 +7274,45 @@ class WaferMapViewer {
                 } else if (status.status === 'failed') {
                     throw new Error(status.error || 'Composite Map 생성 실패');
                 }
+            }
 
-                // 진행률 표시 (있다면)
-                if (status.progress !== undefined && message) {
-                    message.textContent = `Composite Map 처리 중... (${selected.length}개 이미지)`;
+            // 결과 반영: 활성 탭이면 렌더링이 끝날 때까지 로딩 표시 유지
+            if (result && targetPageId) {
+                const isActiveComposite = this.pageManager?.activePageId === targetPageId;
+                if (isActiveComposite) {
+                    const renderingTask = {
+                        status: 'rendering',
+                        message: 'Composite 결과 표시 중입니다...',
+                        selectedCount: selected.length,
+                        startedAt: initialTask.startedAt,
+                    };
+                    this.setCompositePageTask(targetPageId, { task: renderingTask, result: null });
+                    this.showCompositeInlineStatus(renderingTask.message);
+                    await this.switchToCompositeGrid(result);
+                    this.clearCompositePageTask(targetPageId);
+                    this.hideCompositeInlineStatus();
+                    this.persistActivePageState();
+                } else {
+                    // 다른 페이지에서는 로딩 오버레이를 숨기고 결과만 저장
+                    this.hideCompositeInlineStatus();
+                    this.setCompositePageTask(targetPageId, { task: null, result });
                 }
+            } else {
+                this.hideCompositeInlineStatus();
             }
 
-            // 🔥 로딩 오버레이 제거
-            if (loadingOverlay && loadingOverlay.parentNode) {
-                loadingOverlay.parentNode.removeChild(loadingOverlay);
-            }
-
-            // 🔥 4단계: Grid를 Composite Grid로 교체 (새로운 Composite 페이지로 이동)
-            if (this.pageManager) {
-                this.persistActivePageState(previousPageState);
-                this.ensurePageForRole('composite', { forceNew: true, skipPersist: true });
-                this.sessionStack = [];
-                this.gridViewSaveState = null;
-                this.savedViewState = null;
-            }
-            await this.switchToCompositeGrid(result);
-            this.persistActivePageState();
-
-            // 🔥 완료 메시지
-            this.showToast?.('Composite Map 생성 완료!', 2000);
+            this.showCompositeDoneMessage?.('Composite Map 생성 완료! com 탭에서 확인하세요.', 2400);
 
         } catch (error) {
             console.error('❌ Composite Map 생성 실패:', error);
-            
-            // 🔥 로딩 오버레이 제거
-            if (loadingOverlay && loadingOverlay.parentNode) {
-                loadingOverlay.parentNode.removeChild(loadingOverlay);
+
+            this.hideCompositeInlineStatus();
+            if (targetPageId) {
+                this.clearCompositePageTask(targetPageId);
             }
-            
+
             alert('Composite Map 생성에 실패했습니다.');
 
-            // 세션 스택에서 저장한 상태 제거 (롤백)
-            if (this.sessionStack.length > 0) {
-                this.sessionStack.pop();
-            }
         }
     }
 
@@ -7534,6 +7666,31 @@ class WaferMapViewer {
 
             document.body.appendChild(toast);
 
+            setTimeout(() => toast.remove(), duration);
+        } catch {}
+    }
+
+    showCompositeDoneMessage(message, duration = 2000) {
+        try {
+            const toast = document.createElement('div');
+            toast.textContent = message;
+            toast.style.cssText = `
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: rgba(0, 0, 0, 0.92);
+                color: #fff;
+                padding: 18px 28px;
+                border-radius: 14px;
+                z-index: 20000;
+                font-size: 26px;
+                font-weight: 800;
+                box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+                text-align: center;
+                pointer-events: none;
+            `;
+            document.body.appendChild(toast);
             setTimeout(() => toast.remove(), duration);
         } catch {}
     }
@@ -9981,9 +10138,10 @@ class WaferMapViewer {
                 
                 // Label Explorer 등에서 이미 캐시된 썸네일이 있을 가능성이 높음
                 const pParams = this.getPersonalizedParams();
-                const cBuster = this._personalizedColorCacheBuster || Date.now();
+                const cBuster = this._personalizedColorCacheBuster;
                 // size=512는 Label Explorer 썸네일 크기와 맞춤
-                const thumbUrl = `/api/thumbnail?path=${encodeURIComponent(fullPath)}&size=512${pParams}&_t=${cBuster}`;
+                const cacheParam = cBuster ? `&_t=${cBuster}` : '';
+                const thumbUrl = `/api/thumbnail?path=${encodeURIComponent(fullPath)}&size=512${pParams}${cacheParam}`;
                 
                 const thumbResp = await fetch(thumbUrl, { signal });
                 if (!thumbResp.ok) return;
@@ -15441,14 +15599,19 @@ class WaferMapViewer {
 
             const personalizedParams = this.getPersonalizedParams();
             // ✅ 캐시 버스터 추가 (색상 스킴 변경 시 새로운 썸네일 요청)
-            const cacheBuster = this._personalizedColorCacheBuster || Date.now();
-            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}&_t=${cacheBuster}`;
+            const cacheBuster = this._personalizedColorCacheBuster;
+            const cacheParam = cacheBuster ? `&_t=${cacheBuster}` : '';
+            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}${cacheParam}`;
 
             // 🔥 data-src에 URL 저장 (스크롤 디바운스용)
             img.dataset.src = thumbnailUrl;
 
             // 🔥 초기 로드: 즉시 src에 할당 (화면 뜨자마자 로드)
             img.src = thumbnailUrl;
+            if (img.complete && img.naturalWidth > 0) {
+                // 캐시된 경우 onload 지연 없이 바로 표시
+                img.style.opacity = '1';
+            }
 
             thumbBox.appendChild(img);
             wrap.appendChild(thumbBox);
@@ -17367,14 +17530,18 @@ class WaferMapViewer {
             }
 
             if (!targetPage) {
-                // 🔥 my lot 또는 composite 페이지에서 온 경우 같은 role의 새 페이지 생성
-                if (originPage?.role === 'mylot') {
-                    targetPage = this.ensurePageForRole('mylot', { forceNew: true, skipPersist: true });
-                } else if (originPage?.role === 'composite') {
-                    targetPage = this.ensurePageForRole('composite', { forceNew: true, skipPersist: true });
-                } else {
-                    targetPage = this.ensurePageForRole('wafer', { forceNew: true, skipPersist: true });
-                }
+                // 🔥 현재 페이지 바로 옆에 새 페이지 삽입
+                const targetRole = originPage?.role === 'mylot' ? 'mylot' 
+                    : originPage?.role === 'composite' ? 'composite'
+                    : 'wafer';
+                
+                // 현재 페이지 다음에 삽입하기 위해 createPage 직접 호출
+                const newPage = this.pageManager.createPage(targetRole, null, {
+                    activate: true,
+                    skipPersist: true,
+                    insertAfter: originPageId  // 현재 페이지 바로 다음에 삽입
+                });
+                targetPage = newPage;
             }
 
             if (originPageId && targetPage?.id) {

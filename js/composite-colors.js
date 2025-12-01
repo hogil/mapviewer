@@ -630,26 +630,32 @@ export class CompositeColorModal {
     }
 
     async handleApply() {
-        if (!this.isDirty) {
-            this.close();
-            return;
-        }
+        if (!this.isOpen) return;
         this.clearError();
+        const colorsToUse = [...this.colors];
+        const shouldPersist = this.isDirty;
+
+        // UI 즉시 반응: 먼저 닫기
+        this.close();
+
         try {
-            const response = await fetch('/api/composite-colors', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ colors: this.colors }),
-            });
-            if (!response.ok) {
-                const message = await response.text();
-                throw new Error(message || 'Failed to save composite colors');
+            if (shouldPersist) {
+                const response = await fetch('/api/composite-colors', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ colors: colorsToUse }),
+                });
+                if (!response.ok) {
+                    const message = await response.text();
+                    throw new Error(message || 'Failed to save composite colors');
+                }
+                const payload = await response.json();
+                this.colors = payload.colors || colorsToUse;
+                this.defaultColors = payload.defaultColors || this.defaultColors;
+                this.originalColors = [...this.colors];
+                this.updateInputs(true);
             }
-            const payload = await response.json();
-            this.colors = payload.colors || this.colors;
-            this.defaultColors = payload.defaultColors || this.defaultColors;
-            this.updateInputs(true);
-            this.originalColors = [...this.colors];
+
             this.previewApplied = false;
             if (this.previewAbortController) {
                 this.previewAbortController.abort();
@@ -657,34 +663,19 @@ export class CompositeColorModal {
             }
             this.lastPreviewKey = null;
 
-            console.log('[CompositeColorModal] handleApply() - 색상 저장 완료');
-            console.log('  livePreviewEnabled:', this.livePreviewEnabled);
-            console.log('  refreshCompositeSumMaps 존재:', !!this.viewer?.refreshCompositeSumMaps);
-
-            const doRecolor = this.livePreviewEnabled && this.viewer?.refreshCompositeSumMaps;
-
-            // 모달을 먼저 닫아서 UI가 즉시 반응하도록 함
-            this.close();
-
-            if (doRecolor) {
-                console.log('  refreshCompositeSumMaps() 실행 (오버레이 표시, 비동기)');
-                // 모달 닫힌 후 리컬러 시작
-                this.viewer.refreshCompositeSumMaps({
-                    colors: this.colors,
+            if (this.viewer?.refreshCompositeSumMaps) {
+                await this.viewer.refreshCompositeSumMaps({
+                    colors: colorsToUse,
                     silent: true,
                     skipOverlay: false,
                     overlayMessage: '색상 변경 중입니다...',
-                }).catch(error => {
-                    console.error('[CompositeColorModal] refresh after apply failed:', error);
-                    this.viewer?.showToast?.('색상 변경에 실패했습니다.', 2000);
                 });
             } else {
-                console.log('  refreshCompositeSumMaps() 호출되지 않음');
                 this.viewer?.showToast?.('Composite 색상을 저장했습니다.', 2000);
             }
         } catch (error) {
             console.error('[CompositeColorModal] handleApply failed:', error);
-            this.showError('Composite 색상을 저장하지 못했습니다.');
+            this.viewer?.showToast?.('색상 적용에 실패했습니다.', 2000);
         }
     }
 

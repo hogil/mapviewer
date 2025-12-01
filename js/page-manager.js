@@ -104,7 +104,20 @@ export class PageManager {
             title: this.buildTitle(role || 'blank'),
             state: state ? this.clone(state) : null,
         };
-        this.pages.push(page);
+        
+        // 🔥 insertAfter 옵션이 있으면 특정 페이지 다음에 삽입
+        if (options.insertAfter) {
+            const insertIndex = this.pages.findIndex(p => p.id === options.insertAfter);
+            if (insertIndex !== -1) {
+                this.pages.splice(insertIndex + 1, 0, page);
+            } else {
+                // 찾지 못하면 맨 끝에 추가
+                this.pages.push(page);
+            }
+        } else {
+            this.pages.push(page);
+        }
+        
         if (typeof this.onPageCreated === 'function') {
             this.onPageCreated(page);
         }

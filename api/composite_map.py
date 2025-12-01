@@ -763,11 +763,10 @@ def _persist_square_map_data(
     image_count: Optional[int] = None,
     color_scheme: Optional[str] = None,
     colors: Optional[Sequence[str]] = None,
-    blocking: bool = False,
 ) -> None:
     """
     Cache square-map arrays for fast recoloring.
-    If blocking=True, save synchronously to avoid partial writes (e.g., during recolor).
+    NPZ is saved asynchronously in a daemon thread to avoid blocking the main pipeline.
     """
     import threading
 
@@ -799,11 +798,7 @@ def _persist_square_map_data(
             np.savez_compressed(cache_path, **save_payload)
         except Exception:
             pass
-
-    if blocking:
-        _save_npz()
-    else:
-        threading.Thread(target=_save_npz, daemon=True).start()
+    threading.Thread(target=_save_npz, daemon=True).start()
 
 
 def _recompute_square_maps_from_counts(
@@ -983,7 +978,6 @@ def recolor_saved_sum_maps(
             image_count=source_image_count,
             color_scheme=settings.scheme,
             colors=colors_to_use,
-            blocking=True,
         )
     except Exception as exc:
         print(f"[recolor_saved_sum_maps] Failed to persist updated NPZ: {exc}")
@@ -1190,7 +1184,6 @@ def _save_sum_map_variants(
             image_count=image_count,
             color_scheme=settings.scheme,
             colors=resolved_colors,
-            blocking=True,
         )
 
     display_suffix = f" [{name_suffix.lstrip('_')}]" if name_suffix else ""
@@ -1449,8 +1442,6 @@ def create_composite_heatmaps(
     invalid_mask = has_14_plus
     stacked_indices = np.clip(stacked_raw, 0, 13, out=stacked_raw)  # 0-13 범위 (8-13만 남김)
     stacked_indices = np.ascontiguousarray(stacked_indices, dtype=np.uint8)
-    fast_median = _FAST_MEDIAN
-    float_indices = np.asarray(stacked_indices, dtype=np.float32, order="C")
     _, height, width = stacked_indices.shape
     mask_time = time.perf_counter() - t
 
@@ -1487,7 +1478,7 @@ def create_composite_heatmaps(
         heatmap_path = output_dir / f"Grade_{idx}{_image_ext()}"
         heatmap_img = Image.fromarray(result, mode='P')
         heatmap_img.putpalette(palette_bytes)
-        actual_path, rel_path = _save_image_with_backend(heatmap_img.convert("RGB"), heatmap_path)
+        actual_path, rel_path = _save_image_with_backend(heatmap_img, heatmap_path)
         total_pixels = width * height
         pixel_count = int(np.count_nonzero(presence_mask))
         percentage = round(pixel_count / total_pixels * 100, 2) if total_pixels else 0
