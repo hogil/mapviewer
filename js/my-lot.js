@@ -235,15 +235,29 @@ export class MyLotModal {
             // 🔥 모달 열 때마다 업데이트 상태 초기화 (매번 접속 시 새로 업데이트하도록)
             this.updatedGroups.clear();
 
-            await this.refreshData();
-            this.setMode(this.activeMode || "lot");
-            this.updateCurrentValues();
-            this.updatePendingButtonVisibility();
-            this.updateCopyButtonVisibility(); // Tab에 따라 복사 버튼 표시/숨김
             this.windowEl.style.display = 'flex';
             this.windowEl.classList.add('is-open');
             this.ensureWindowBounds();
             document.addEventListener('keydown', this.boundKeyHandler);
+
+            // 캐시된 데이터로 즉시 렌더 (초기에는 빈 상태라도 모달이 바로 뜸)
+            const render = () => {
+                this.setMode(this.activeMode || "lot");
+                this.updateCurrentValues();
+                this.updatePendingButtonVisibility();
+                this.updateCopyButtonVisibility(); // Tab에 따라 복사 버튼 표시/숨김
+            };
+            render();
+
+            // 백그라운드로 최신 데이터 갱신
+            this.refreshData()
+                .then(() => {
+                    render();
+                })
+                .catch((error) => {
+                    console.error('[MyLotModal] open refresh failed:', error);
+                    this.viewer?.showToast?.('MY LOT 데이터를 불러오지 못했습니다.', 2200);
+                });
         } catch (error) {
             console.error('[MyLotModal] open failed:', error);
             this.viewer?.showToast?.('MY LOT 데이터를 불러오지 못했습니다.', 2200);
@@ -527,28 +541,52 @@ export class MyLotModal {
         const action = actionBtn.dataset.action;
         this.ensureMyLotPage();
         if (action === 'preview') {
-            // 보기 버튼: Wafer Map Explorer에서 이미지 선택과 동일하게 동작
-            if (entry.path) {
-                // Wafer Map Explorer와 동일하게 selectedImages 설정
-                if (this.viewer) {
-                    this.viewer.selectedImages = [entry.path];
-                    this.viewer.selectedImagePath = entry.path;
+            // 보기 버튼: LOT 탭일 경우 그리드로 모든 이미지 표시, Wafer 탭일 경우 단일 이미지 표시
+            if (this.activeMode === 'lot') {
+                // LOT 탭: 해당 LOT의 모든 이미지를 그리드로 표시
+                let paths = [];
+                if (entry.all_paths && Array.isArray(entry.all_paths)) {
+                    paths = entry.all_paths;
+                } else if (entry.path) {
+                    paths = [entry.path];
                 }
-                // enterSingleViewMode를 호출하여 Wafer Map Explorer와 동일한 동작 수행
-                if (this.viewer?.enterSingleViewMode) {
-                    this.viewer.enterSingleViewMode(entry.path).catch((error) => {
-                        console.error('[MyLotModal] enterSingleViewMode failed:', error);
-                        this.viewer?.showToast?.('이미지 로드에 실패했습니다.', 2000);
-                    });
+
+                if (paths.length > 0) {
+                    if (this.viewer?.showGrid) {
+                        this.viewer.showGrid(paths).catch((error) => {
+                            console.error('[MyLotModal] showGrid failed:', error);
+                            this.viewer?.showToast?.('그리드 표시에 실패했습니다.', 2000);
+                        });
+                    } else {
+                        this.viewer?.showToast?.('그리드 기능을 사용할 수 없습니다.', 2000);
+                    }
                 } else {
-                    // fallback: 직접 loadImage 호출
-                    this.viewer?.loadImage?.(entry.path).catch((error) => {
-                        console.error('[MyLotModal] loadImage failed:', error);
-                        this.viewer?.showToast?.('이미지 로드에 실패했습니다.', 2000);
-                    });
+                    this.viewer?.showToast?.('표시할 이미지가 없습니다.', 1700);
                 }
             } else {
-                this.viewer?.showToast?.('경로 정보가 없습니다.', 1700);
+                // Wafer 탭: 단일 이미지로 표시
+                if (entry.path) {
+                    // Wafer Map Explorer와 동일하게 selectedImages 설정
+                    if (this.viewer) {
+                        this.viewer.selectedImages = [entry.path];
+                        this.viewer.selectedImagePath = entry.path;
+                    }
+                    // enterSingleViewMode를 호출하여 Wafer Map Explorer와 동일한 동작 수행
+                    if (this.viewer?.enterSingleViewMode) {
+                        this.viewer.enterSingleViewMode(entry.path).catch((error) => {
+                            console.error('[MyLotModal] enterSingleViewMode failed:', error);
+                            this.viewer?.showToast?.('이미지 로드에 실패했습니다.', 2000);
+                        });
+                    } else {
+                        // fallback: 직접 loadImage 호출
+                        this.viewer?.loadImage?.(entry.path).catch((error) => {
+                            console.error('[MyLotModal] loadImage failed:', error);
+                            this.viewer?.showToast?.('이미지 로드에 실패했습니다.', 2000);
+                        });
+                    }
+                } else {
+                    this.viewer?.showToast?.('경로 정보가 없습니다.', 1700);
+                }
             }
         } else if (action === 'copy') {
             // 개별 항목 복사
