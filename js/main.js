@@ -621,6 +621,7 @@ class WaferMapViewer {
             addBtn: this.dom?.pageAddBtn || document.getElementById('page-add-btn'),
             onRequestState: () => this.captureActivePageState(),
             onPageActivated: (page) => this.applyPageState(page),
+            onPageClosed: (page) => this.handlePageClosed(page),
             shouldSkipShortcut: (event) => !this.shouldAllowKeyboardShortcut(event),
         });
 
@@ -835,6 +836,9 @@ class WaferMapViewer {
         this.permissionSearchSelectedIndex = -1;
         this.pageManager = null;
         this.activePageRole = 'blank';
+        this.gridDetailPageMap = new Map();
+        this.gridDetailOriginMap = new Map();
+        this.lastGridOriginPageId = null;
 
         // 🔥 Composite Map 세션 관리
         this.isCompositeMode = false;
@@ -1109,10 +1113,20 @@ class WaferMapViewer {
                     }
                 }
                 
-                // ✅ Step 3: 그리드 이미지 모드 (gridImage) - 그리드 복귀
+                // ? Step 3: 그리드 이미지 모드 (gridImage) - 그리드 복귀
                 if (this.viewMode === 'gridImage') {
-                    console.log('🖱️ [DBLCLICK] → 그리드 이미지 모드: 그리드 복귀');
+                    console.log('??? [DBLCLICK] → 그리드 이미지 모드: 그리드 복귀');
                     e.preventDefault();
+                    const activePageId = this.pageManager?.getActivePage()?.id || this.pageManager?.activePageId;
+                    let originPageId = activePageId && this.gridDetailOriginMap ? this.gridDetailOriginMap.get(activePageId) : null;
+                    if (!originPageId && this.lastGridOriginPageId) {
+                        originPageId = this.lastGridOriginPageId;
+                    }
+                    const hasOrigin = originPageId && Array.isArray(this.pageManager?.pages) && this.pageManager.pages.some(p => p.id === originPageId);
+                    if (hasOrigin) {
+                        this.pageManager.activatePage(originPageId);
+                        return;
+                    }
                     this.exitSingleImageViewMode();
                     return;
                 }
@@ -1495,6 +1509,56 @@ class WaferMapViewer {
         this.restoreWaferMapExplorerState();
         this.restoreLabelExplorerState();
         this.updateContextMenuState();
+        await this.syncExplorerSelectionForPage(page);
+    }
+
+    handlePageClosed(page) {
+        if (!page) return;
+        const pageId = page.id;
+        if (this.gridDetailOriginMap?.has(pageId)) {
+            const originId = this.gridDetailOriginMap.get(pageId);
+            this.gridDetailOriginMap.delete(pageId);
+            if (originId && this.gridDetailPageMap) {
+                this.gridDetailPageMap.delete(originId);
+            }
+        }
+        if (this.gridDetailPageMap?.has(pageId)) {
+            const detailId = this.gridDetailPageMap.get(pageId);
+            this.gridDetailPageMap.delete(pageId);
+            if (detailId && this.gridDetailOriginMap) {
+                this.gridDetailOriginMap.delete(detailId);
+            }
+        }
+        if (this.lastGridOriginPageId === pageId) {
+            this.lastGridOriginPageId = null;
+        }
+    }
+
+    async syncExplorerSelectionForPage(page) {
+        const role = page?.role || this.activePageRole || 'blank';
+
+        if (role === 'label') {
+            try {
+                await this.refreshLabelExplorer();
+            } catch (error) {
+                console.warn('Label explorer refresh failed during page switch:', error);
+            }
+            this.updateLabelExplorerSelection();
+            return;
+        }
+
+        if (role === 'wafer' || role === 'composite' || role === 'mylot' || role === 'blank') {
+            this.updateFileExplorerSelection({ highlightOnly: true, skipEnsurePage: true });
+
+            const highlightTarget =
+                this.selectedImagePath ||
+                (this.savedViewState?.type === 'single' ? this.savedViewState.imagePath : null) ||
+                (Array.isArray(this.selectedImages) && this.selectedImages.length ? this.selectedImages[0] : null);
+
+            if (highlightTarget) {
+                this.updateWaferMapExplorerHighlight(highlightTarget);
+            }
+        }
     }
 
     ensurePageForRole(role, options = {}) {
@@ -8631,27 +8695,45 @@ class WaferMapViewer {
         return imageExtensions.includes(extension);
     }
 
-    updateFileExplorerSelection() {
+
+    updateFileExplorerSelection(options = {}) {
+        const { highlightOnly = false, skipEnsurePage = false } = options;
+        const explorer = this.dom.fileExplorer;
+        if (!explorer) return;
+
+        if (!highlightOnly && !skipEnsurePage) {
+            this.ensurePageForRole('wafer');
+        }
+
         // 시각적 선택 상태 업데이트
 
-        this.dom.fileExplorer.querySelectorAll('a.selected').forEach(a => a.classList.remove('selected'));
+        explorer.querySelectorAll('a.selected').forEach(a => a.classList.remove('selected'));
         
-        // 🔥 모든 파일 링크의 inline background style 초기화
-        this.dom.fileExplorer.querySelectorAll('a[data-path]').forEach(link => {
+        // ?? 모든 파일 링크의 inline background style 초기화
+        explorer.querySelectorAll('a[data-path]').forEach(link => {
             link.style.removeProperty('background');
             link.style.background = ''; // 기본 배경색으로 복원
         });
 
-        if (this.selectedImages) {
-            this.selectedImages.forEach(selPath => {
-                const a = this.dom.fileExplorer.querySelector(`a[data-path="${selPath.replace(/"/g, '\\"')}"]`);
+        const pathsToHighlight = [];
+        if (Array.isArray(this.selectedImages) && this.selectedImages.length) {
+            pathsToHighlight.push(...this.selectedImages);
+        } else if (this.selectedImagePath) {
+            pathsToHighlight.push(this.selectedImagePath);
+        }
 
-                if (a) {
-                    a.classList.add('selected');
-                    // 🔥 선택된 파일의 배경색 설정
-                    a.style.background = '#05b';
-                }
-            });
+        pathsToHighlight.forEach(selPath => {
+            const a = explorer.querySelector(`a[data-path="${selPath.replace(/"/g, '\\"')}"]`);
+
+            if (a) {
+                a.classList.add('selected');
+                // ?? 선택된 파일의 배경색 설정
+                a.style.background = '#05b';
+            }
+        });
+
+        if (highlightOnly) {
+            return;
         }
 
         // 뷰 모드 결정
@@ -9652,8 +9734,12 @@ class WaferMapViewer {
     }
 
     async loadImage(path, fromLabelExplorer = false, loadVersion = null) {
+        // 🔥 gridImage 모드에서는 같은 이미지라도 다시 로드 (next/prev 동작 보장)
+        const isGridImageMode = this.viewMode === 'gridImage';
+        
         // 이미 같은 이미지를 보고 있고 비트맵이 준비된 경우, 네트워크 로딩 없이 UI만 전환
-        if (!fromLabelExplorer && path === this.selectedImagePath && this.currentImageBitmap) {
+        // 단, gridImage 모드이거나 fromLabelExplorer이면 항상 로드
+        if (!isGridImageMode && !fromLabelExplorer && path === this.selectedImagePath && this.currentImageBitmap) {
             const gridEl = document.getElementById('image-grid');
             if (gridEl) {
                 gridEl.style.display = 'none';
@@ -10053,6 +10139,21 @@ class WaferMapViewer {
 
             if (viewControls) {
                 viewControls.style.display = 'flex';
+            }
+
+            // 🔥 Label Explorer에서 이미지 로드 시 페이지 변환 처리
+            if (fromLabelExplorer) {
+                const activePage = this.pageManager?.getActivePage();
+                if (activePage) {
+                    if (activePage.role === 'blank') {
+                        // blank 페이지면 label로 변환
+                        this.pageManager.convertPage(activePage.id, 'label');
+                        this.activePageRole = 'label';
+                    } else if (activePage.role !== 'label') {
+                        // wafer/mylot/composite 페이지면 새 label 페이지 생성
+                        this.ensurePageForRole('label', { forceNew: true, skipPersist: true });
+                    }
+                }
             }
 
             // Label Explorer 클래스 선택 초기화 (이미지 선택 시 클래스 선택 해제)
@@ -17244,10 +17345,41 @@ class WaferMapViewer {
         const gridImages = Array.isArray(this.currentGridImages) ? [...this.currentGridImages] : [];
         const gridSelectedIdxs = Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : [];
         const savedSnapshot = this.captureActivePageState();
+        const originPage = this.pageManager?.getActivePage ? this.pageManager.getActivePage() : null;
+        const originPageId = originPage?.id || null;
 
         if (this.pageManager) {
             this.persistActivePageState(savedSnapshot);
-            this.ensurePageForRole('wafer', { forceNew: true, skipPersist: true });
+
+            let targetPage = null;
+            if (originPageId && this.gridDetailPageMap?.has(originPageId)) {
+                const candidateId = this.gridDetailPageMap.get(originPageId);
+                const exists = Array.isArray(this.pageManager.pages) && this.pageManager.pages.some(p => p.id === candidateId);
+                if (exists) {
+                    this.pageManager.activatePage(candidateId, { skipPersist: true });
+                    targetPage = this.pageManager.getActivePage();
+                } else {
+                    this.gridDetailPageMap.delete(originPageId);
+                    if (candidateId && this.gridDetailOriginMap) {
+                        this.gridDetailOriginMap.delete(candidateId);
+                    }
+                }
+            }
+
+            if (!targetPage) {
+                // 🔥 my lot 페이지에서 온 경우 새로운 my lot 페이지 생성
+                if (originPage?.role === 'mylot') {
+                    targetPage = this.ensurePageForRole('mylot', { forceNew: true, skipPersist: true });
+                } else {
+                    targetPage = this.ensurePageForRole('wafer', { forceNew: true, skipPersist: true });
+                }
+            }
+
+            if (originPageId && targetPage?.id) {
+                this.gridDetailPageMap?.set(originPageId, targetPage.id);
+                this.gridDetailOriginMap?.set(targetPage.id, originPageId);
+                this.lastGridOriginPageId = originPageId;
+            }
         }
 
         if (gridImages.length) {
@@ -18504,7 +18636,24 @@ class WaferMapViewer {
 
     showGridFromLabelExplorer(imageKeys) {
         if (!imageKeys || imageKeys.length === 0) return;
-        this.ensurePageForRole('label');
+        
+        // 🔥 Label Explorer에서 그리드 표시 시 페이지 변환 처리
+        const activePage = this.pageManager?.getActivePage();
+        if (activePage) {
+            if (activePage.role === 'blank') {
+                // blank 페이지면 label로 변환
+                this.pageManager.convertPage(activePage.id, 'label');
+                this.activePageRole = 'label';
+            } else if (activePage.role !== 'label') {
+                // wafer/mylot/composite 페이지면 새 label 페이지 생성
+                this.ensurePageForRole('label', { forceNew: true, skipPersist: true });
+            } else {
+                // 이미 label 페이지면 그대로 사용
+                this.ensurePageForRole('label');
+            }
+        } else {
+            this.ensurePageForRole('label');
+        }
 
         // 🔥 savedViewState 백업 (Label Explorer Grid가 덮어쓰지 않도록)
         const savedViewStateBackup = this.savedViewState;

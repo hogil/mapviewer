@@ -104,9 +104,18 @@ export class GridManager {
         
         console.log('Grid double-click at index:', index);
         
-        // enterSingleImageMode 호출
-        if (typeof this.viewer.enterSingleImageMode === 'function') {
-            this.viewer.enterSingleImageMode(index);
+        // 🔥 my lot 그리드인지 확인 (activePageRole이 'mylot'인 경우)
+        const activePageRole = this.viewer.activePageRole;
+        if (activePageRole === 'mylot') {
+            // my lot 그리드에서는 enterGridImageViewMode 호출하여 my lot 페이지 유지
+            if (typeof this.viewer.enterGridImageViewMode === 'function') {
+                this.viewer.enterGridImageViewMode(index);
+            }
+        } else {
+            // 일반 그리드에서는 enterSingleImageMode 호출
+            if (typeof this.viewer.enterSingleImageMode === 'function') {
+                this.viewer.enterSingleImageMode(index);
+            }
         }
     }
     

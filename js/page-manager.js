@@ -12,6 +12,7 @@ export class PageManager {
         this.onRequestState = options.onRequestState || null;
         this.onPageActivated = options.onPageActivated || null;
         this.onPageCreated = options.onPageCreated || null;
+        this.onPageClosed = options.onPageClosed || null;
         this.shouldSkipShortcut = options.shouldSkipShortcut || null;
 
         this.pages = [];
@@ -198,8 +199,16 @@ export class PageManager {
     closePage(id) {
         const idx = this.pages.findIndex(p => p.id === id);
         if (idx === -1) return;
+        const closedPage = this.pages[idx];
         const wasActive = this.activePageId === id;
         this.pages.splice(idx, 1);
+        if (typeof this.onPageClosed === 'function') {
+            try {
+                this.onPageClosed(closedPage);
+            } catch (err) {
+                console.error('[PageManager] onPageClosed error', err);
+            }
+        }
         if (!this.pages.length) {
             this.createPage('blank', null, { activate: true, skipPersist: true });
             return;
