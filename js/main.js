@@ -11902,7 +11902,8 @@ class WaferMapViewer {
 
             btn.style.fontWeight = '500';
 
-            btn.style.fontSize = '15px';
+            // Fail List 버튼 글자 크기 13px로 통일
+            btn.style.fontSize = '13px';
 
             btn.style.marginRight = '2px';
 
@@ -13809,7 +13810,7 @@ class WaferMapViewer {
         for (const cls of classes) {
             const li = document.createElement('li');
 
-            li.style.marginBottom = '2px';
+            li.style.marginBottom = '6px';
 
             // 폴더 summary
 
@@ -14017,7 +14018,7 @@ class WaferMapViewer {
 
                 imgUl.style.listStyle = 'none';
 
-                imgUl.style.paddingLeft = '18px';
+                imgUl.style.paddingLeft = '8px';
 
                 imgUl.style.margin = '0';
 
@@ -14076,6 +14077,7 @@ class WaferMapViewer {
 
                     imgLi.style.alignItems = 'center';
 
+                    // 🔥 라벨 버튼 좌우 여백 최소화 (상하만 2px)
                     imgLi.style.margin = '2px 0';
 
                     const imgBtn = document.createElement('button');
@@ -14086,7 +14088,8 @@ class WaferMapViewer {
 
                     imgBtn.style.cursor = 'pointer';
 
-                    imgBtn.style.padding = '4px 12px';
+                    // 🔥 좌우 패딩을 12px → 6px으로 줄여서 라벨 간 간격 축소
+                    imgBtn.style.padding = '4px 9px';
 
                     imgBtn.style.background = labelSelection.selected.includes(`${cls}/${img.name}`) ? '#08e' : '#222';
 
@@ -14096,7 +14099,8 @@ class WaferMapViewer {
 
                     imgBtn.style.borderRadius = '6px';
 
-                    imgBtn.style.marginRight = '4px';
+                    // 🔥 버튼 자체 좌우 마진 4px로 통일
+                    imgBtn.style.margin = '0 4px';
 
                     imgBtn.style.fontSize = '13px';
 
@@ -14528,6 +14532,7 @@ class WaferMapViewer {
 
                             imgLi.style.alignItems = 'center';
 
+                            // 🔥 라벨 버튼 좌우 여백 최소화 (상하만 2px)
                             imgLi.style.margin = '2px 0';
 
                             const imgBtn = document.createElement('button');
@@ -14538,7 +14543,8 @@ class WaferMapViewer {
 
                             imgBtn.style.cursor = 'pointer';
 
-                            imgBtn.style.padding = '4px 12px';
+                            // 🔥 좌우 패딩을 12px → 6px으로 줄여서 라벨 간 간격 축소
+                            imgBtn.style.padding = '4px 6px';
 
                             imgBtn.style.background = labelSelection.selected.includes(labelKey) ? '#06c' : '#222';
 
@@ -14548,7 +14554,8 @@ class WaferMapViewer {
 
                             imgBtn.style.borderRadius = '6px';
 
-                            imgBtn.style.marginRight = '4px';
+                            // 🔥 버튼 자체 좌우 마진 4px로 통일
+                            imgBtn.style.margin = '0 4px';
 
                             imgBtn.style.fontSize = '13px';
 

@@ -1624,16 +1624,16 @@
     box-shadow: 0 0 12px rgba(20, 195, 255, 0.25);
 }
 
-.class-btn {
-    padding: 3px 8px;
-    border-radius: 18px;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    background: rgba(255, 255, 255, 0.05);
-    color: var(--text-color);
-    font-size: 12px;
-    cursor: pointer;
-    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
-}
+        .class-btn {
+            padding: 3px 8px;
+            border-radius: 18px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-color);
+            font-size: 13px; /* Fail List 클래스 버튼 글자 크기 13px로 통일 */
+            cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+        }
 
 .class-btn:hover {
     background: rgba(0, 153, 255, 0.12);
@@ -2135,6 +2135,9 @@
             border-radius: 8px;
             box-sizing: border-box;
             overflow: auto;
+            /* 오른쪽 패널 기본 폰트: Arial 13px */
+            font-family: Arial, sans-serif;
+            font-size: 13px;
         }
         
         .label-explorer-frame,
@@ -2142,20 +2145,53 @@
             background: #232323;
             border: 1px solid #333;
             border-radius: 8px;
-            margin-bottom: 18px;
-            padding: 18px 16px 12px 16px;
+            margin-bottom: 14px;
+            padding: 10px 14px 8px 14px; /* 위/아래 여백 약간 축소 */
         }
         
         .label-explorer-frame h3,
         .classification-frame h3 {
+            /* 기본 제목 스타일 (굵기 제외) */
             color: #fff;
+            font-weight: normal;
+            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 14px;
+            margin-top: 0; /* Label Explorer / Class Manager 상단 여백 제거 */
+        }
+
+        /* Label Explorer 제목만 굵게 */
+        .label-explorer-frame h3 {
+            font-weight: bold;
         }
         
         .label-explorer-frame .tree-folder,
         .label-explorer-frame .tree-folder-icon {
             color: #fff !important;
+            font-size: 12px !important;
         }
-        
+
+        .label-explorer-frame .tree-folder {
+            margin-bottom: 4px !important;
+        }
+
+        /* Label Explorer 내부 UL 기본 여백 제거하여 Fail List와 상단 정렬 */
+        #label-explorer-list ul {
+            margin-top: 0;
+            margin-bottom: 4px;
+            padding-left: 16px;
+        }
+
+        /* Label Explorer 클래스 간 구분 간격 (위/아래 모두 약간의 여백) */
+        #label-explorer-list > ul > li {
+            margin: 4px 0 8px;
+        }
+
+        /* Label Explorer 폰트 크기 통일 (Arial 13px) */
+        #label-explorer-list,
+        #label-explorer-list * {
+            font-size: 13px !important;
+        }
+
         .class-manager-input-row {
             margin-bottom: 10px;
             display: flex;
@@ -3314,23 +3350,23 @@
                 <div style="margin-bottom: 10px; display: flex; justify-content: flex-start;">
                     <input type="text" id="new-class-input" placeholder="클래스명 입력" style="width: 240px; min-width: 120px; max-width: 320px; background: #1a1a1a; color: #fff; border: 1px solid #555; border-radius: 4px; padding: 6px 12px; font-size: 14px;" aria-label="새 클래스 입력" autocomplete="off" />
                 </div>
-                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
+                <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 10px;">
                     <button id="add-class-btn" class="grid-btn" aria-label="클래스 추가">Add Class</button>
                     <button id="rename-class-btn" class="grid-btn" aria-label="클래스 이름 변경">Rename Class</button>
                     <button id="delete-class-btn" class="grid-btn" aria-label="클래스 삭제">Delete Class</button>
                 </div>
-                <h3>Fail List</h3>
-                <div id="class-list" style="display: flex; flex-wrap: wrap; gap: 6px 6px; margin-bottom: 12px;"></div>
+                <h3 style="margin: 20px 0 6px; font-weight: bold; font-size: 15px;">Fail List</h3>
+                <div id="class-list" style="display: flex; flex-wrap: wrap; gap: 6px 6px; margin-bottom: 8px;"></div>
                 <div id="label-status"></div>
                 <div id="class-images-section">
                     <h4 id="class-images-title" style="display:none;">Labeled Images</h4>
                     <div id="class-images-list"></div>
                 </div>
             </section>
-            
+
             <section class="label-explorer-frame">
-                <h3>Label Explorer</h3>
-                <div style="display:flex; gap:10px; margin-bottom:14px;">
+                <h3 style="margin-bottom: 8px; font-size: 15px;">Label Explorer</h3>
+                <div style="display:flex; gap:10px; margin-bottom:8px;">
                                     <button id="label-explorer-batch-label-btn" class="grid-btn" aria-label="라벨 추가">Add Label</button>
                 <button id="label-explorer-batch-delete-btn" class="grid-btn" aria-label="라벨 삭제">Delete Label</button>
                 </div>
