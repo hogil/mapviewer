@@ -16,6 +16,15 @@ import numpy as np
 from PIL import Image
 from PIL.Image import DecompressionBombWarning
 
+try:
+    from numba import njit, prange
+
+    _HAS_NUMBA = True
+except Exception:
+    njit = None
+    prange = None
+    _HAS_NUMBA = False
+
 from .config import (
     IMAGES_ROOT,
     COMPOSITE_MAX_WORKERS,
@@ -329,6 +338,34 @@ def _count_low_grade_occurrences(
     return clipped.reshape(8, height, width)
 
 
+if _HAS_NUMBA:
+    @njit(parallel=True, fastmath=False, cache=True)
+    def _numba_count_grades_impl(stacked_indices: np.ndarray) -> np.ndarray:
+        total_images, height, width = stacked_indices.shape
+        # NumPy zeros with uint32 to avoid overflow during accumulation
+        counts = np.zeros((8, height, width), dtype=np.uint32)
+        for y in prange(height):
+            for x in range(width):
+                for img_idx in range(total_images):
+                    value = int(stacked_indices[img_idx, y, x])
+                    if 0 <= value < 8:
+                        counts[value, y, x] += 1
+        return counts
+else:
+    _numba_count_grades_impl = None
+
+
+def _count_grades_with_numba(stacked_indices: np.ndarray) -> Optional[np.ndarray]:
+    if _numba_count_grades_impl is None:
+        return None
+    counts32 = _numba_count_grades_impl(stacked_indices)
+    if counts32 is None:
+        return None
+    # Clamp to uint16 range to stay aligned with downstream consumers
+    np.minimum(counts32, np.uint32(np.iinfo(np.uint16).max), out=counts32)
+    return counts32.astype(np.uint16, copy=False)
+
+
 def _broadcast_grade_counts(stacked_indices: np.ndarray) -> np.ndarray:
     grade_counts_vec = (stacked_indices[..., None] == _GRADE_RANGE).sum(axis=0)
     return grade_counts_vec.transpose(2, 0, 1).astype(np.uint16, copy=False)
@@ -347,6 +384,9 @@ def _compute_grade_counts(stacked_indices: np.ndarray) -> np.ndarray:
             return _cython_count_grades(contiguous)
         except Exception as exc:
             print(f"  [WARNING] Cython failed, falling back to NumPy: {exc}")
+    numba_counts = _count_grades_with_numba(contiguous)
+    if numba_counts is not None:
+        return numba_counts
     return _chunk()
 
 

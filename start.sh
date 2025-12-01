@@ -26,18 +26,18 @@ export THUMBNAIL_SIZE="512"
 export THUMBNAIL_FORMAT="JPEG"           # JPEG가 PNG보다 훨씬 빠름 (139ms vs 수백ms)
 export THUMBNAIL_QUALITY="100"           # Q=100 최고 품질
 export PNG_COMPRESSION_LEVEL="3"
-export IO_THREADS="160"                  # 중간값 (256→64→160) - I/O 병렬화
-export THUMBNAIL_SEM="288"               # 중간값 (512→64→288) - 동시 썸네일 생성
+export IO_THREADS="192"                  # 32C 서버에서 I/O 대기시간 숨김 (6x CPU)
+export THUMBNAIL_SEM="320"               # 여유 메모리 활용해 썸네일 동시 생성 확대
 export THUMB_PREFETCH_BATCH="64"
 export THUMB_CLIENT_MAX_CONCURRENCY="12"
-export COMPOSITE_MAX_WORKERS="20"        # Composite: fixed fast path
+export COMPOSITE_MAX_WORKERS="32"        # Composite 로더: CPU당 1스레드
 export COMPOSITE_LOADER_MODE="thread"
-export COMPOSITE_BATCH_SIZE="10"
+export COMPOSITE_BATCH_SIZE="24"
 export COMPOSITE_COUNT_MODE="cython"
-export COMPOSITE_RENDER_WORKERS="16"   # 렌더링 워커 (32코어용, 병렬 렌더링)
-export COMPOSITE_SAVE_WORKERS="32"     # 저장 워커 (32코어용, save_sum_maps 병목 해소)
-export OMP_NUM_THREADS="16"              # Numba/OpenMP 스레드
-export NUMBA_NUM_THREADS="16"
+export COMPOSITE_RENDER_WORKERS="24"     # 렌더링 병렬도 ↑
+export COMPOSITE_SAVE_WORKERS="36"       # 저장 워커 (고속 SSD 기준)
+export OMP_NUM_THREADS="24"              # Numba/OpenMP 스레드
+export NUMBA_NUM_THREADS="24"
 export SEARCH_WORKERS="24"               # 검색 병렬 워커 수 (32코어 기준, 논리 검색 가속)
 
 # libvips 최적화 (웹서버 환경)
