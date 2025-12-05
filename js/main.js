@@ -15891,6 +15891,7 @@ class WaferMapViewer {
 
     /**
      * 🔥 현재 뷰포트에 보이는 그리드 썸네일만 즉시 로드
+     * Navigator와 동일한 방식: viewport ± 2x viewport height 범위 로드
      */
     loadVisibleGridThumbnails() {
         const grid = document.getElementById('image-grid');
@@ -15901,18 +15902,23 @@ class WaferMapViewer {
         const thumbnails = grid.querySelectorAll('.grid-thumb-img[data-src]');
         const scrollRect = scrollWrapper.getBoundingClientRect();
 
+        // 🔥 Navigator 방식: 뷰포트 위아래로 2배 범위 확장 (즉시 로드)
+        const viewportHeight = scrollRect.height;
+        const expandedTop = scrollRect.top - (viewportHeight * 2);
+        const expandedBottom = scrollRect.bottom + (viewportHeight * 2);
+
         thumbnails.forEach((img) => {
             const imgRect = img.getBoundingClientRect();
 
-            // 🔥 뷰포트에 보이는지 확인
-            const isVisible = (
-                imgRect.top < scrollRect.bottom &&
-                imgRect.bottom > scrollRect.top &&
+            // 🔥 확장된 범위에 있는지 확인 (viewport ± 2x height)
+            const isInExpandedRange = (
+                imgRect.top < expandedBottom &&
+                imgRect.bottom > expandedTop &&
                 imgRect.left < scrollRect.right &&
                 imgRect.right > scrollRect.left
             );
 
-            if (isVisible && img.dataset.src) {
+            if (isInExpandedRange && img.dataset.src) {
                 // 즉시 로드
                 const src = img.dataset.src;
                 if (img.src !== src) {
