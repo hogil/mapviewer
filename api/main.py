@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
+import anyio
 try:
     from starlette.middleware.brotli import BrotliMiddleware
     HAS_BROTLI = True
@@ -2395,70 +2396,130 @@ async def delayed_background_resume():
 # ---- 라벨/클래스 노스토어 ----
 @app.middleware("http")
 async def no_store_for_labels_and_classes(request: Request, call_next):
-    response = await call_next(request)
-    p = request.url.path
-    if p.startswith("/api/labels") or p.startswith("/api/classes"):
-        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-    return response
+    try:
+        response = await call_next(request)
+        p = request.url.path
+        if p.startswith("/api/labels") or p.startswith("/api/classes"):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+    except BaseException as e:
+        # 클라이언트 연결 끊김 관련 예외는 조용히 처리
+        exc_str = str(e)
+        exc_type = type(e).__name__
+
+        # EndOfStream, "No response returned", ExceptionGroup 등 클라이언트 연결 끊김 관련
+        if (exc_type == "EndOfStream" or
+            "No response returned" in exc_str or
+            "EndOfStream" in exc_str or
+            isinstance(e, (ConnectionError, ConnectionResetError, BrokenPipeError))):
+            return Response(status_code=499)
+
+        # ExceptionGroup인 경우 하위 예외 확인
+        if exc_type in ("ExceptionGroup", "BaseExceptionGroup"):
+            # ExceptionGroup의 경우 모든 하위 예외가 EndOfStream 관련인지 확인
+            try:
+                if hasattr(e, 'exceptions'):
+                    all_client_disconnect = all(
+                        "EndOfStream" in str(ex) or "No response returned" in str(ex)
+                        for ex in e.exceptions
+                    )
+                    if all_client_disconnect:
+                        return Response(status_code=499)
+            except:
+                pass
+
+        # 예상치 못한 예외는 로깅 후 재발생
+        logger = logging.getLogger(__name__)
+        logger.error(f"미들웨어 예외: {exc_type}: {e}")
+        raise
 
 # ---- 액세스 테이블 로그 ----
 class AccessTrackingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # 자동 로그인 강제: 세션 쿠키가 없고 HTML 페이지 접근 시 /saml/login으로 리다이렉트
-        skip_logging = False  # 로그 스킵 플래그
-        
-        # AUTO_LOGIN은 /saml/login 엔드포인트에서 처리 (수동 접속과 동일)
-        # 미들웨어에서는 리다이렉트하지 않음
-        
-        response = await call_next(request)
-        
-        # SAML 리다이렉트로 인한 요청은 로그 스킵
-        if skip_logging:
+        try:
+            # 자동 로그인 강제: 세션 쿠키가 없고 HTML 페이지 접근 시 /saml/login으로 리다이렉트
+            skip_logging = False  # 로그 스킵 플래그
+
+            # AUTO_LOGIN은 /saml/login 엔드포인트에서 처리 (수동 접속과 동일)
+            # 미들웨어에서는 리다이렉트하지 않음
+
+            response = await call_next(request)
+
+            # SAML 리다이렉트로 인한 요청은 로그 스킵
+            if skip_logging:
+                return response
+
+            endpoint = str(request.url.path)
+
+            # 🔥 최적화: 이미지/썸네일 요청은 완전히 스킵 (대량 요청 시 성능 향상)
+            if endpoint.startswith("/api/thumbnail") or endpoint.startswith("/api/image"):
+                return response
+
+            # 🔥 로그 스킵 대상 엔드포인트 체크 (통계 업데이트 전에 먼저 체크)
+            skip_prefix = ["/favicon.ico", "/static/", "/js/", "/api/files/all", "/api/stats", "/api/stats/", "/stats", "/saml/login", "/saml/acs", "/saml/metadata", "/saml/sls"]
+
+            # 루트(/) 페이지는 SAML 로그인 시에만 직접 기록하므로 미들웨어에서 스킵
+            skip_endpoints = ["/", "/index.html"]
+            if endpoint in skip_endpoints:
+                return response
+
+            if any(endpoint.startswith(p) for p in skip_prefix):
+                return response
+
+            client_ip = logger_instance.get_client_ip(request)
+
+            # 🔥 stats.json을 읽지 않음 - SAML 로그인은 /saml/acs에서만 처리
+            # middleware에서는 접속 제어를 하지 않음
+
+            # 표시: IP만 표시
+            display_user = client_ip
+
+            method = request.method
+            status = response.status_code
+
+            # 🔥 최적화: 이미지/썸네일은 이미 위에서 return했으므로 여기는 도달 불가
+            if endpoint.startswith("/api/classify"):
+                tag = "ACTION"
+            else:
+                tag = "API"
+
+            # 🔥 stats.json 업데이트는 /saml/acs에서만 수행 (쓰기만 함, 읽지 않음)
+            # middleware에서는 stats.json을 읽거나 업데이트하지 않음
+
+            note = _note_from_request(request, endpoint)
+            # IP 칼럼에 IP만 표시 (stats.json 읽지 않음)
+            log_access_row(tag=tag, ip=display_user, method=method, status=status, path=endpoint, note=note)
             return response
+        except BaseException as e:
+            # 클라이언트 연결 끊김 관련 예외는 조용히 처리
+            exc_str = str(e)
+            exc_type = type(e).__name__
 
-        endpoint = str(request.url.path)
+            # EndOfStream, "No response returned", ExceptionGroup 등 클라이언트 연결 끊김 관련
+            if (exc_type == "EndOfStream" or
+                "No response returned" in exc_str or
+                "EndOfStream" in exc_str or
+                isinstance(e, (ConnectionError, ConnectionResetError, BrokenPipeError))):
+                return Response(status_code=499)
 
-        # 🔥 최적화: 이미지/썸네일 요청은 완전히 스킵 (대량 요청 시 성능 향상)
-        if endpoint.startswith("/api/thumbnail") or endpoint.startswith("/api/image"):
-            return response
+            # ExceptionGroup인 경우 하위 예외 확인
+            if exc_type in ("ExceptionGroup", "BaseExceptionGroup"):
+                # ExceptionGroup의 경우 모든 하위 예외가 EndOfStream 관련인지 확인
+                try:
+                    if hasattr(e, 'exceptions'):
+                        all_client_disconnect = all(
+                            "EndOfStream" in str(ex) or "No response returned" in str(ex)
+                            for ex in e.exceptions
+                        )
+                        if all_client_disconnect:
+                            return Response(status_code=499)
+                except:
+                    pass
 
-        # 🔥 로그 스킵 대상 엔드포인트 체크 (통계 업데이트 전에 먼저 체크)
-        skip_prefix = ["/favicon.ico", "/static/", "/js/", "/api/files/all", "/api/stats", "/api/stats/", "/stats", "/saml/login", "/saml/acs", "/saml/metadata", "/saml/sls"]
-
-        # 루트(/) 페이지는 SAML 로그인 시에만 직접 기록하므로 미들웨어에서 스킵
-        skip_endpoints = ["/", "/index.html"]
-        if endpoint in skip_endpoints:
-            return response
-
-        if any(endpoint.startswith(p) for p in skip_prefix):
-            return response
-
-        client_ip = logger_instance.get_client_ip(request)
-        
-        # 🔥 stats.json을 읽지 않음 - SAML 로그인은 /saml/acs에서만 처리
-        # middleware에서는 접속 제어를 하지 않음
-        
-        # 표시: IP만 표시
-        display_user = client_ip
-        
-        method = request.method
-        status = response.status_code
-
-        # 🔥 최적화: 이미지/썸네일은 이미 위에서 return했으므로 여기는 도달 불가
-        if endpoint.startswith("/api/classify"):
-            tag = "ACTION"
-        else:
-            tag = "API"
-
-        # 🔥 stats.json 업데이트는 /saml/acs에서만 수행 (쓰기만 함, 읽지 않음)
-        # middleware에서는 stats.json을 읽거나 업데이트하지 않음
-        
-        note = _note_from_request(request, endpoint)
-        # IP 칼럼에 IP만 표시 (stats.json 읽지 않음)
-        log_access_row(tag=tag, ip=display_user, method=method, status=status, path=endpoint, note=note)
-        return response
+            # 예상치 못한 예외는 재발생 (상위 레벨에서 처리)
+            raise
 
 app.add_middleware(AccessTrackingMiddleware)
 
@@ -7415,7 +7476,7 @@ if __name__ == "__main__":
     logger.info(f"[SSL] HTTPS 모드 활성화: 포트 {config.HTTPS_PORT}")
     logger.info(f"[SSL] CERTFILE={cert_path}")
     logger.info(f"[SSL] KEYFILE={key_path}")
-    
+
     # 디버그 로그 제거 (초기 로드 시에만 필요하면 주석 해제)
     # logger.info(f"🔍 [SERVER START] ROOT_DIR: {ROOT_DIR}")
     # logger.info(f"🔍 [SERVER START] current_folder: {current_folder}")
@@ -7424,6 +7485,24 @@ if __name__ == "__main__":
     requested_workers = os.getenv("UVICORN_WORKERS") or os.getenv("WORKERS")
     if requested_workers and requested_workers.strip() not in {"", "1"}:
         logger.warning(f"⚠️ [WORKERS] FastAPI는 단일 워커로 고정됩니다. 요청된 워커 수({requested_workers})는 무시됩니다.")
+
+    # 클라이언트 연결 끊김 관련 에러 필터링 (그리드 스크롤 시 이미지 로드 취소 등)
+    class SuppressClientDisconnectFilter(logging.Filter):
+        def filter(self, record):
+            # EndOfStream, "No response returned" 등 클라이언트 연결 끊김 관련 로그 필터링
+            if record.levelno == logging.ERROR:
+                msg = record.getMessage() if hasattr(record, 'getMessage') else str(record.msg)
+                if any(keyword in msg for keyword in [
+                    "EndOfStream",
+                    "No response returned",
+                    "unhandled errors in a TaskGroup"
+                ]):
+                    return False
+            return True
+
+    # uvicorn 에러 로거에 필터 추가
+    uvicorn_error_logger = logging.getLogger("uvicorn.error")
+    uvicorn_error_logger.addFilter(SuppressClientDisconnectFilter())
 
     uvicorn.run(
         "api.main:app",
