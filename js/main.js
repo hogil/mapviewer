@@ -1623,6 +1623,37 @@ class WaferMapViewer {
 
     persistActivePageState(stateOverride) {
         if (!this.pageManager) return;
+        
+        // 🔥 현재 페이지의 이미지 상태를 메모리 캐시에 저장 (DOM 유지 효과)
+        const activePageId = this.pageManager.activePageId;
+        if (activePageId && this.currentImage && !this.gridMode) {
+            if (!this.pageImageCache) this.pageImageCache = new Map();
+            
+            // 캔버스 transform 상태 저장
+            const transformState = {
+                scale: this.transform?.scale || 1,
+                dx: this.transform?.dx || 0,
+                dy: this.transform?.dy || 0
+            };
+            
+            this.pageImageCache.set(activePageId, {
+                path: this.selectedImagePath,
+                bitmap: this.currentImage, // ImageBitmap or HTMLImageElement
+                width: this.originalWidth,
+                height: this.originalHeight,
+                transform: transformState,
+                zoom: this.zoom,
+                pyramid: this.semiconductorRenderer?.imagePyramid,
+                minimapUrl: this.minimapPreview?.src // 미니맵 이미지 소스 (선택적)
+            });
+            
+            // 캐시 크기 제한 (최근 5개만 유지)
+            if (this.pageImageCache.size > 5) {
+                const firstKey = this.pageImageCache.keys().next().value;
+                this.pageImageCache.delete(firstKey);
+            }
+        }
+
         this.pageManager.persistActivePage(stateOverride ?? this.captureActivePageState());
     }
 
@@ -1674,6 +1705,57 @@ class WaferMapViewer {
     }
 
     restoreCachedPageView(pageId, state = {}) {
+        // 🔥 메모리 캐싱된 이미지가 있는지 확인
+        if (this.pageImageCache?.has(pageId)) {
+            const cached = this.pageImageCache.get(pageId);
+            if (cached.path === this.selectedImagePath && cached.bitmap) {
+                console.log(`⚡ [RESTORE] Restore cached image bitmap for page ${pageId}`);
+                this.currentImage = cached.bitmap;
+                this.currentImageBitmap = cached.bitmap;
+                this.originalWidth = cached.width;
+                this.originalHeight = cached.height;
+                this.currentImagePath = cached.path; // Set this too just in case
+                
+                // Show canvas
+                if (this.dom.imageCanvas) {
+                    this.dom.imageCanvas.style.display = 'block';
+                    this.dom.imageCanvas.style.width = '100%';
+                    this.dom.imageCanvas.style.height = '100%';
+                }
+                
+                // Restore transform if available
+                if (cached.transform) {
+                    this.transform = { ...cached.transform };
+                    this.zoom = cached.zoom || 1;
+                }
+                
+                // Inject into renderer
+                if (this.semiconductorRenderer) {
+                    // We need to use 'loadImage' logic but skip fetch
+                    // But renderer needs 'loadImage' to be called or we call renderer methods directly
+                    // To avoid full reload, let's manually setup renderer
+                    if (this.semiconductorRenderer.isGpuAvailable()) {
+                        this.semiconductorRenderer.setImageSize(this.originalWidth, this.originalHeight);
+                        this.semiconductorRenderer.uploadLevelBitmap(1, this.currentImage);
+                        this.semiconductorRenderer.setActiveLevel(1);
+                    }
+                    this.semiconductorRenderer.currentImage = this.currentImage;
+                    // Restore pyramid if cached
+                    if (cached.pyramid) {
+                         this.semiconductorRenderer.imagePyramid = cached.pyramid;
+                    }
+                    this.scheduleDraw();
+                    
+                    // Restore minimap
+                    if (cached.minimapUrl) {
+                         // Minimap logic... (might skip for speed)
+                    }
+                    
+                    return true;
+                }
+            }
+        }
+        
         if (!pageId || !this.pageViewCache?.has?.(pageId)) {
             return false;
         }
