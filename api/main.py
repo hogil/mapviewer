@@ -2523,10 +2523,12 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(AccessTrackingMiddleware)
 
-# 🚀 압축 미들웨어: Brotli > GZip 순서 (Brotli가 더 효율적)
+# 🚀 압축 미들웨어: 텍스트 응답만 압축 (이미지는 이미 압축됨)
+# minimum_size를 10KB로 높여서 작은 응답과 이미지는 자동 제외 (gzip 오류 방지)
+# compresslevel을 3으로 낮춰서 CPU 부하 감소
 if HAS_BROTLI:
-    app.add_middleware(BrotliMiddleware, quality=4, minimum_size=512)
-app.add_middleware(GZipMiddleware, minimum_size=512, compresslevel=6)
+    app.add_middleware(BrotliMiddleware, quality=3, minimum_size=10240)  # 10KB
+app.add_middleware(GZipMiddleware, minimum_size=10240, compresslevel=3)  # 10KB
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 

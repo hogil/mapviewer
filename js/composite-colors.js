@@ -123,22 +123,12 @@ export class CompositeColorModal {
                 this.schemeLabel.textContent = schemeName ? `- ${schemeName}` : '';
             }
 
-            // 🔍 디버그 로그
-            console.log('[CompositeColorModal] open() debug:');
-            console.log('  isCompositeMode:', this.viewer?.isCompositeMode);
-            console.log('  sessionContext:', this.sessionContext);
-            console.log('  outputDir:', this.sessionContext?.outputDir);
-            console.log('  sumMaps:', this.sessionContext?.sumMaps);
-            console.log('  sumMaps.length:', this.sessionContext?.sumMaps?.length);
-
             this.livePreviewEnabled = !!(
                 this.viewer?.isCompositeMode &&
                 this.sessionContext?.outputDir &&
                 Array.isArray(this.sessionContext?.sumMaps) &&
                 this.sessionContext.sumMaps.length > 0
             );
-
-            console.log('  livePreviewEnabled:', this.livePreviewEnabled);
 
             if (this.viewer?.isCompositeMode && !this.livePreviewEnabled) {
                 this.viewer?.showToast?.('이번 Composite Map에서는 실시간 색상 미리보기를 사용할 수 없습니다. 새로 생성하면 사용할 수 있습니다.', 2400);
@@ -833,7 +823,6 @@ export class CompositeColorModal {
         // 🔥 우클릭 시 셀 선택 변경하지 않음 (현재 선택 유지)
         // 셀 선택을 변경하는 코드 없음
         
-        console.log('[CompositeColorModal] 컨텍스트 메뉴 표시:', e.clientX, e.clientY, e.target);
         this.showContextMenu(e.clientX, e.clientY);
     }
 
@@ -948,7 +937,6 @@ export class CompositeColorModal {
         menu.style.left = `${x}px`;
         menu.style.top = `${y}px`;
         menu.style.display = 'block';
-        console.log('[CompositeColorModal] 컨텍스트 메뉴 표시됨:', menu.style.display, menu.style.left, menu.style.top);
         setTimeout(() => {
             document.addEventListener('click', this.boundHideContextMenu, { once: true });
             document.addEventListener('contextmenu', this.boundHideContextMenu, { once: true });

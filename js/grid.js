@@ -34,6 +34,11 @@ export class GridManager {
 
         // 🔥 진행 중인 이미지 로드 요청 취소용
         this.abortControllers = new Map(); // index -> AbortController
+        
+        // 🔥 동시 로딩 제한 (서버 부하 및 gzip 오류 방지)
+        this.concurrentLoads = 0;
+        this.maxConcurrentLoads = 8; // 8개씩만 동시 로딩
+        this.loadQueue = [];
     }
     
     /**
@@ -287,6 +292,13 @@ export class GridManager {
 
         if (!src || this.loadingThumbnails.has(index)) return;
 
+        // 🔥 동시 로딩 수 제한 (서버 부하 및 gzip 오류 방지)
+        if (this.concurrentLoads >= this.maxConcurrentLoads) {
+            await new Promise(resolve => this.loadQueue.push(resolve));
+        }
+        
+        this.concurrentLoads++;
+
         // 🔥 기존 요청이 있으면 취소
         if (this.abortControllers.has(index)) {
             this.abortControllers.get(index).abort();
@@ -337,6 +349,13 @@ export class GridManager {
         } finally {
             this.loadingThumbnails.delete(index);
             this.abortControllers.delete(index);
+            
+            // 🔥 동시 로딩 수 감소 및 대기 중인 다음 로드 시작
+            this.concurrentLoads--;
+            if (this.loadQueue.length > 0) {
+                const nextResolve = this.loadQueue.shift();
+                nextResolve();
+            }
         }
     }
     

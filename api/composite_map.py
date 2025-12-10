@@ -263,8 +263,8 @@ def _cache_path_for_image(rel_path: str, width: int, height: int) -> Optional[Pa
     return cache_path
 
 
-# 메모리 캐시 (LRU): 최근 256개 이미지를 메모리에 캐싱
-@lru_cache(maxsize=256)
+# 메모리 캐시 (LRU): 최근 512개 이미지를 메모리에 캐싱 (대용량 이미지 대응)
+@lru_cache(maxsize=512)
 def _cached_load_pixel_indices(image_rel_path: str, width: int, height: int, mtime: float) -> Optional[bytes]:
     """
     메모리 캐시 레이어 (LRU)
@@ -544,6 +544,9 @@ def _load_pixel_indices(image_rel_path: str, width: int, height: int) -> Optiona
     # 캐시 미스 - 이미지 로드 및 캐싱
     try:
         with Image.open(full_path) as img:
+            # 🔥 lazy loading 방지: 명시적으로 load() 호출
+            img.load()
+            
             if img.size != (width, height):
                 img = img.resize((width, height), Image.NEAREST)
 
@@ -564,6 +567,7 @@ def _load_pixel_indices(image_rel_path: str, width: int, height: int) -> Optiona
                     is_transparent = (temp_arr == transparency)
 
             if img.mode == 'P':
+                # 🔥 팔레트 모드: 직접 numpy 배열로 변환 (가장 빠름)
                 pixel_indices = np.array(img, dtype=np.uint8)
             else:
                 img_l = img.convert('L')
@@ -623,8 +627,6 @@ def _iter_pixel_indices(
 
     total = len(image_paths)
     processed = 0
-    last_log_time = time.perf_counter()
-    log_interval = 0.5  # 0.5초마다 진행률 출력
 
     if normalized_mode in {"sequential", "none"} or worker_count <= 1:
         for rel_path in image_paths:
@@ -641,8 +643,8 @@ def _iter_pixel_indices(
         executor_cls = ProcessPoolExecutor
 
     # chunksize 계산: 작업 분배 최적화
-    # 🔥 작은 작업에서도 워커를 충분히 채우도록 chunksize 축소 (최대 32)
-    chunksize = max(1, min(32, len(image_paths) // max(1, worker_count * 2)))
+    # 🔥 대용량 이미지에서는 chunksize를 1로 고정 (각 이미지가 크므로)
+    chunksize = 1
 
     with executor_cls(max_workers=worker_count) as executor:
         for rel_path, result in zip(
@@ -1480,21 +1482,25 @@ def create_composite_heatmaps(
     idx_0_7_mask = (stacked_raw >= 0) & (stacked_raw <= 7)  # (N, H, W)
     idx_14_plus_mask = (stacked_raw >= 14)  # (N, H, W)
 
-    # 각 포인트에서 8-13이 있는지, 0-7이 있는지, 14 이상이 있는지 확인
-    has_8_13 = idx_8_13_mask.any(axis=0)  # (H, W)
-    has_0_7 = idx_0_7_mask.any(axis=0)  # (H, W)
-    has_14_plus = idx_14_plus_mask.any(axis=0)  # (H, W)
+    # 🔥 invalid 칩(14 이상)을 0으로 변환하여 계산에 포함
+    # 일부 이미지만 invalid여도 나머지 valid 이미지로 정상 계산
+    stacked_raw[idx_14_plus_mask] = 0
 
-    # 8-13만 있고 0-7이나 14 이상이 없는 포인트
-    idx_8_13_only = has_8_13 & ~has_0_7 & ~has_14_plus  # (H, W)
+    # 각 포인트에서 8-13이 있는지, 0-7이 있는지 확인 (14 이상은 이미 0으로 변환됨)
+    has_8_13 = idx_8_13_mask.any(axis=0)  # (H, W)
+    has_0_7 = idx_0_7_mask.any(axis=0) | idx_14_plus_mask.any(axis=0)  # (H, W) - invalid도 0으로 처리되어 포함
+    
+    # 🔥 모든 이미지가 invalid인 포인트만 invalid_mask로 마킹
+    all_invalid = idx_14_plus_mask.all(axis=0)  # (H, W) - 모든 이미지가 14 이상
+
+    # 8-13만 있고 0-7이나 invalid가 없는 포인트
+    idx_8_13_only = has_8_13 & ~has_0_7  # (H, W)
 
     # 해당 픽셀을 모든 이미지에서 8로 변경
     stacked_raw[:, idx_8_13_only] = 8
 
-    # 3단계: invalid mask 생성 및 clipping
-    # 인덱스 14 이상만 invalid (31로)
-    invalid_mask = has_14_plus
-    stacked_indices = np.clip(stacked_raw, 0, 13, out=stacked_raw)  # 0-13 범위 (8-13만 남김)
+    # 3단계: clipping (이미 14 이상은 0으로 변환됨)
+    stacked_indices = np.clip(stacked_raw, 0, 13, out=stacked_raw)  # 0-13 범위
     stacked_indices = np.ascontiguousarray(stacked_indices, dtype=np.uint8)
     _, height, width = stacked_indices.shape
     mask_time = time.perf_counter() - t
@@ -1504,9 +1510,10 @@ def create_composite_heatmaps(
     grade_time = time.perf_counter() - t
     _mark("grade_counts", t)
 
-    # (invalid_mask와 idx_8_13_only를 제외한 포인트 중 0-7만 있는 것)
+    # (idx_8_13_only를 제외한 포인트 중 0-7이 있는 것)
     t = time.perf_counter()
-    only_0_7_mask = has_0_7 & ~has_8_13 & ~invalid_mask  # (H, W)
+    only_0_7_mask = has_0_7 & ~has_8_13  # (H, W) - invalid는 이미 0으로 변환되어 포함
+    invalid_mask = all_invalid  # 🔥 모든 이미지가 invalid인 포인트만
     base_indices = np.full((height, width), 31, dtype=np.uint8)
     base_indices[idx_8_13_only] = 8
     _mark("mask_and_base_setup", t)
@@ -1589,8 +1596,16 @@ def create_composite_heatmaps(
     total_time = time.perf_counter() - start_time
     timings["total"] = total_time
 
-    # 최종 실행 시간만 출력
-    print(f"[COMPOSITE] Completed in {total_time:.3f}s")
+    # 시간별 분절 로그 출력
+    print(f"\n[COMPOSITE] 시간 분석:")
+    print(f"  • 준비:         {timings.get('prepare_output_dir', 0):.3f}s")
+    print(f"  • 이미지 로드:  {timings.get('load_indices', 0):.3f}s")
+    print(f"  • Grade 계산:   {timings.get('grade_counts', 0):.3f}s")
+    print(f"  • 마스크 설정:  {timings.get('mask_and_base_setup', 0):.3f}s")
+    print(f"  • 히트맵 저장:  {timings.get('save_heatmaps', 0):.3f}s")
+    if create_sum:
+        print(f"  • Sum 맵 저장:  {timings.get('save_sum_maps', 0):.3f}s")
+    print(f"  • 전체:         {total_time:.3f}s\n")
 
     result = {
         "output_dir": output_dir.relative_to(IMAGES_ROOT).as_posix(),
@@ -1741,29 +1756,25 @@ def create_sum_map(
     idx_0_7_mask = (stacked_raw >= 0) & (stacked_raw <= 7)  # (N, H, W)
     idx_14_plus_mask = (stacked_raw >= 14)  # (N, H, W)
     
-    # 각 포인트에서 8-13이 있는지, 0-7이 있는지, 14 이상이 있는지 확인
-    has_8_13 = idx_8_13_mask.any(axis=0)  # (H, W)
-    has_0_7 = idx_0_7_mask.any(axis=0)  # (H, W)
-    has_14_plus = idx_14_plus_mask.any(axis=0)  # (H, W)
+    # 🔥 invalid 칩(14 이상)을 0으로 변환하여 계산에 포함
+    # 일부 이미지만 invalid여도 나머지 valid 이미지로 정상 계산
+    stacked_raw[idx_14_plus_mask] = 0
     
-    # 8-13만 있고 0-7이나 14 이상이 없는 포인트
-    idx_8_13_only = has_8_13 & ~has_0_7 & ~has_14_plus  # (H, W)
+    # 각 포인트에서 8-13이 있는지, 0-7이 있는지 확인 (14 이상은 이미 0으로 변환됨)
+    has_8_13 = idx_8_13_mask.any(axis=0)  # (H, W)
+    has_0_7 = idx_0_7_mask.any(axis=0) | idx_14_plus_mask.any(axis=0)  # (H, W) - invalid도 0으로 처리되어 포함
+    
+    # 🔥 모든 이미지가 invalid인 포인트만 invalid_mask로 마킹
+    all_invalid = idx_14_plus_mask.all(axis=0)  # (H, W) - 모든 이미지가 14 이상
+    
+    # 8-13만 있고 0-7이나 invalid가 없는 포인트
+    idx_8_13_only = has_8_13 & ~has_0_7  # (H, W)
 
     # 해당 픽셀을 모든 이미지에서 8로 변경
-    for i in range(len(raw_indices_list)):
-        raw_indices_list[i][idx_8_13_only] = 8
+    stacked_raw[:, idx_8_13_only] = 8
 
-    # 3단계: invalid mask 생성 및 clipping
-    # 인덱스 14 이상만 invalid (31로)
-    invalid_mask = np.zeros((height, width), dtype=bool)
-    all_indices_list = []
-
-    for raw_indices in raw_indices_list:
-        invalid_mask |= (raw_indices >= 14)  # 14 이상만 invalid
-        clipped = np.clip(raw_indices, 0, 13).astype(np.uint8)  # 0-13 범위 (8-13은 유지)
-        all_indices_list.append(clipped)
-
-    stacked_indices = np.stack(all_indices_list, axis=0)
+    # 3단계: clipping (이미 14 이상은 0으로 변환됨)
+    stacked_indices = np.clip(stacked_raw, 0, 13).astype(np.uint8)  # 0-13 범위
     _, height, width = stacked_indices.shape
 
     grade_counts = _compute_grade_counts(stacked_indices)
@@ -1771,7 +1782,8 @@ def create_sum_map(
     valid_0_7_mask = (stacked_indices >= 0) & (stacked_indices <= 7)
     has_valid_0_7 = valid_0_7_mask.any(axis=0)
     has_8_13_after = ((stacked_indices >= 8) & (stacked_indices <= 13)).any(axis=0)
-    only_0_7_mask = has_valid_0_7 & ~has_8_13_after & ~invalid_mask
+    only_0_7_mask = has_valid_0_7 & ~has_8_13_after  # invalid는 이미 0으로 변환되어 포함
+    invalid_mask = all_invalid  # 🔥 모든 이미지가 invalid인 포인트만
 
     float_indices = stacked_indices.astype(np.float32)
     if _FAST_MEDIAN:

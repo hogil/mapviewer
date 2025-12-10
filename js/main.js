@@ -5468,29 +5468,19 @@ class WaferMapViewer {
         let scheme = this.currentUser || "change"; // fallback to "change"
         
         if (!this.colorLegends[scheme]) {
-            console.warn(`PARAMS: Scheme '${scheme}' not found, falling back...`);
             // fallback 순서: change -> default -> 첫 번째 키
             if (this.colorLegends["change"]) {
                 scheme = "change";
-                console.log("PARAMS: Fallback to 'change'");
             } else if (this.colorLegends["default"]) {
                 scheme = "default";
-                console.log("PARAMS: Fallback to 'default'");
             } else {
                 const keys = Object.keys(this.colorLegends);
                 if (keys.length > 0) {
                     scheme = keys[0];
-                    console.log(`PARAMS: Fallback to first key '${scheme}'`);
                 } else {
                     scheme = "change";
-                    console.warn("PARAMS: No schemes available, using 'change'");
                 }
             }
-        }
-        
-        // currentUser 로깅
-        if (this.currentUser !== scheme) {
-            console.log(`PARAMS: currentUser='${this.currentUser}' but using scheme='${scheme}'`);
         }
         
         let params = `&personalized=true&scheme=${encodeURIComponent(scheme)}`;

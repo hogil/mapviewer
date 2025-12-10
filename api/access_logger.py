@@ -265,8 +265,10 @@ class AccessLogger:
         if '/api/stats' in endpoint or endpoint == '/stats' or endpoint.endswith('/stats.html'):
             return
 
-        # 🔥 최적화: 이미지/썸네일 요청은 콘솔 로그 생략 (대량 요청 시 성능 향상)
-        skip_console_log = endpoint.startswith('/api/image') or endpoint.startswith('/api/thumbnail')
+        # 🔥 최적화: 이미지/썸네일/composite-map 상태 요청은 콘솔 로그 생략 (대량 요청 시 성능 향상)
+        skip_console_log = (endpoint.startswith('/api/image') or 
+                           endpoint.startswith('/api/thumbnail') or 
+                           '/api/composite-map/status' in endpoint)
 
         client_ip = self.get_client_ip(request)
         # 메모리 세션에서 사용자 정보 가져오기 (request.state에 저장됨)
