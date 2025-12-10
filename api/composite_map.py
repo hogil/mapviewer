@@ -51,7 +51,6 @@ if not os.environ.get("OMP_NUM_THREADS"):
     _OMP_DEFAULT_THREADS = max(4, min(8, os.cpu_count() or 8))
     os.environ["OMP_NUM_THREADS"] = str(_OMP_DEFAULT_THREADS)
 
-# Fixed runtime tuning (only workers/batch remain configurable)
 _HAS_TURBOJPEG = False
 try:
     from turbojpeg import TurboJPEG, TJPF_RGB, TJSAMP_444
@@ -71,6 +70,19 @@ _FAST_MEDIAN = True
 # High-end (32-core): Set COMPOSITE_RENDER_WORKERS=16, COMPOSITE_SAVE_WORKERS=32
 _RENDER_WORKERS = int(os.environ.get("COMPOSITE_RENDER_WORKERS", "2"))
 _SAVE_WORKERS = int(os.environ.get("COMPOSITE_SAVE_WORKERS", "4"))
+
+# 🔥 Fast mode: if env 미설정이면 CPU 스펙에 맞춰 상향 조정
+_FAST_MODE = os.getenv("COMPOSITE_FAST_MODE", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
+_CPU_COUNT = os.cpu_count() or 8
+if _FAST_MODE and "COMPOSITE_RENDER_WORKERS" not in os.environ:
+    # Render는 CPU 코어에 비례 (최대 32)
+    _RENDER_WORKERS = max(4, min(32, _CPU_COUNT))
+if _FAST_MODE and "COMPOSITE_SAVE_WORKERS" not in os.environ:
+    # Save는 I/O 위주라 코어*2까지 허용 (최대 64)
+    _SAVE_WORKERS = max(4, min(64, _CPU_COUNT * 2))
+# 저장 백엔드도 fast 모드에서 vips를 우선 사용
+if _FAST_MODE and _SAVE_BACKEND == "pil" and _HAS_PYVIPS:
+    _SAVE_BACKEND = "vips"
 
 Image.MAX_IMAGE_PIXELS = None
 warnings.simplefilter("ignore", DecompressionBombWarning)
@@ -606,6 +618,7 @@ def _iter_pixel_indices(
     normalized_mode = (loader_mode or "thread").lower()
     max_workers = max_workers or COMPOSITE_MAX_WORKERS
     worker_count = min(max(1, max_workers), len(image_paths))
+    # 🔥 fast 모드에서는 워커 수를 조금 더 공격적으로 사용 (이미 상단에서 기본값 상향)
     loader = partial(_load_pixel_indices_with_cache, width=width, height=height)
 
     total = len(image_paths)
@@ -628,7 +641,8 @@ def _iter_pixel_indices(
         executor_cls = ProcessPoolExecutor
 
     # chunksize 계산: 작업 분배 최적화
-    chunksize = max(1, len(image_paths) // (worker_count * 4))
+    # 🔥 작은 작업에서도 워커를 충분히 채우도록 chunksize 축소 (최대 32)
+    chunksize = max(1, min(32, len(image_paths) // max(1, worker_count * 2)))
 
     with executor_cls(max_workers=worker_count) as executor:
         for rel_path, result in zip(
@@ -1850,8 +1864,9 @@ def create_subset_map(
         raise ValueError("grade_counts가 NPZ 파일에 없습니다.")
 
     grade_counts_arr = grade_counts.astype(np.uint16, copy=False)
-    invalid_mask_arr = invalid_mask.astype(bool, copy=False) if invalid_mask is not None else None
-    idx_8_mask_arr = idx_8_mask.astype(bool, copy=False) if idx_8_mask is not None else None
+    # Subset 계산 시 invalid/idx_8 포인트는 0으로 취급하고 마스크에서 제외
+    invalid_mask_arr = None
+    idx_8_mask_arr = None
     only_low_mask_arr = only_low_mask.astype(bool, copy=False) if only_low_mask is not None else None
 
     # Subset Map 계산 (only_low_mask=None으로 subset만의 calc_mask 재계산)

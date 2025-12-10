@@ -10,6 +10,7 @@ export class PageManager {
         this.tabListEl = options.tabListEl || null;
         this.addBtn = options.addBtn || null;
         this.onRequestState = options.onRequestState || null;
+        this.onBeforePagePersist = options.onBeforePagePersist || null;
         this.onPageActivated = options.onPageActivated || null;
         this.onPageCreated = options.onPageCreated || null;
         this.onPageClosed = options.onPageClosed || null;
@@ -161,6 +162,13 @@ export class PageManager {
     activatePage(id, options = {}) {
         if (id === this.activePageId) return;
         if (!options.skipPersist) {
+            if (typeof this.onBeforePagePersist === 'function') {
+                try {
+                    this.onBeforePagePersist(this.getActivePage());
+                } catch (err) {
+                    console.error('[PageManager] onBeforePagePersist error', err);
+                }
+            }
             this.persistActivePage();
         }
         this.activePageId = id;

@@ -15,13 +15,25 @@ export class GridManager {
         this.currentImages = [];
         this.selectedIndices = [];
         this.loadingThumbnails = new Set();
-        
+
         // 지연 로딩을 위한 Intersection Observer
         this.observer = null;
         this.initIntersectionObserver();
-        
+
         // 디바운싱된 업데이트 함수
         this.debouncedUpdateSelection = debounce(() => this.updateSelectionUI(), 100);
+
+        // 드래그 감지용 변수
+        this.isDragging = false;
+        this.mouseDownPos = null;
+        this.dragThreshold = 5; // 5px 이상 이동하면 드래그로 간주
+
+        // 🔥 스크롤 디바운스 (스크롤 멈춘 후 100ms 후 로드)
+        this.scrollDebounceTimer = null;
+        this.isScrolling = false;
+
+        // 🔥 진행 중인 이미지 로드 요청 취소용
+        this.abortControllers = new Map(); // index -> AbortController
     }
     
     /**
@@ -57,21 +69,53 @@ export class GridManager {
      */
     bindEvents() {
         if (!this.container) return;
-        
+
+        // 드래그 감지를 위한 mousedown 이벤트
+        this.container.addEventListener('mousedown', (e) => {
+            this.isDragging = false;
+            this.mouseDownPos = { x: e.clientX, y: e.clientY };
+        });
+
+        // 마우스 이동 시 드래그 감지
+        this.container.addEventListener('mousemove', (e) => {
+            if (this.mouseDownPos) {
+                const deltaX = Math.abs(e.clientX - this.mouseDownPos.x);
+                const deltaY = Math.abs(e.clientY - this.mouseDownPos.y);
+
+                if (deltaX > this.dragThreshold || deltaY > this.dragThreshold) {
+                    this.isDragging = true;
+                }
+            }
+        });
+
+        // mouseup 시 초기화
+        this.container.addEventListener('mouseup', () => {
+            // 약간의 지연 후 초기화 (click 이벤트가 먼저 발생하도록)
+            setTimeout(() => {
+                this.mouseDownPos = null;
+                this.isDragging = false;
+            }, 10);
+        });
+
         // 그리드 컨테이너 클릭 이벤트 (이벤트 위임)
         this.container.addEventListener('click', (e) => {
+            // 드래그 중이었으면 클릭 무시
+            if (this.isDragging) {
+                return;
+            }
+
             const gridItem = e.target.closest('.grid-item');
             if (gridItem) {
                 const index = parseInt(gridItem.dataset.index);
                 this.handleItemClick(index, e);
             }
         });
-        
+
         // 더블클릭 이벤트 추가
         this.container.addEventListener('dblclick', (e) => {
             e.preventDefault();
             e.stopPropagation();
-            
+
             const gridItem = e.target.closest('.grid-item');
             if (!gridItem) {
                 // grid-thumb-wrap도 체크 (main.js의 그리드 구조)
@@ -84,13 +128,18 @@ export class GridManager {
                 }
                 return;
             }
-            
+
             const index = parseInt(gridItem.dataset.index);
             if (!isNaN(index)) {
                 this.handleDoubleClick(index);
             }
         });
-        
+
+        // 🔥 스크롤 이벤트 리스너 추가 (디바운스)
+        this.container.addEventListener('scroll', () => {
+            this.handleScroll();
+        });
+
         // 키보드 이벤트
         document.addEventListener('keydown', (e) => this.handleKeyDown(e));
     }
@@ -219,7 +268,10 @@ export class GridManager {
     handleIntersection(entries) {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
-                this.loadThumbnail(entry.target);
+                // 🔥 스크롤 중일 때는 로드하지 않음 (요청 쌓이는 것 방지)
+                if (!this.isScrolling) {
+                    this.loadThumbnail(entry.target);
+                }
                 this.observer.unobserve(entry.target);
             }
         });
@@ -232,31 +284,59 @@ export class GridManager {
     async loadThumbnail(gridItem) {
         const src = gridItem.dataset.src;
         const index = parseInt(gridItem.dataset.index);
-        
+
         if (!src || this.loadingThumbnails.has(index)) return;
-        
+
+        // 🔥 기존 요청이 있으면 취소
+        if (this.abortControllers.has(index)) {
+            this.abortControllers.get(index).abort();
+            this.abortControllers.delete(index);
+        }
+
         this.loadingThumbnails.add(index);
-        
+
+        // 🔥 새로운 AbortController 생성
+        const abortController = new AbortController();
+        this.abortControllers.set(index, abortController);
+
         try {
             const img = gridItem.querySelector('.grid-thumbnail');
             if (!img) return;
-            
-            // 이미지 프리로드
-            const preloadImg = new Image();
-            preloadImg.onload = () => {
-                img.src = src;
-                gridItem.classList.add('loaded');
-            };
-            preloadImg.onerror = () => {
+
+            // 🔥 fetch로 이미지 로드 (AbortController 사용)
+            const response = await fetch(src, {
+                signal: abortController.signal
+            });
+
+            if (!response.ok) throw new Error('Failed to load image');
+
+            const blob = await response.blob();
+            const imageUrl = URL.createObjectURL(blob);
+
+            img.src = imageUrl;
+            gridItem.classList.add('loaded');
+
+            // 🔥 성공 시 data-src 제거 (중복 로드 방지)
+            delete gridItem.dataset.src;
+
+            // 메모리 정리 (이미지 로드 후)
+            img.onload = () => URL.revokeObjectURL(imageUrl);
+
+        } catch (error) {
+            // 🔥 취소된 요청은 무시
+            if (error.name === 'AbortError') {
+                return;
+            }
+
+            console.error('썸네일 로드 오류:', error);
+            const img = gridItem.querySelector('.grid-thumbnail');
+            if (img) {
                 img.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iIzMzMyIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmaWxsPSIjZjAwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkeT0iMC4zZW0iPkVycm9yPC90ZXh0Pjwvc3ZnPg==';
                 gridItem.classList.add('error');
-            };
-            preloadImg.src = src;
-            
-        } catch (error) {
-            console.error('썸네일 로드 오류:', error);
+            }
         } finally {
             this.loadingThumbnails.delete(index);
+            this.abortControllers.delete(index);
         }
     }
     
@@ -418,9 +498,77 @@ export class GridManager {
         }
         this.currentImages = [];
         this.selectedIndices = [];
-        this.loadingThumbnails.clear();
+        // 🔥 모든 진행 중인 요청 취소
+        this.cancelAllLoads();
     }
     
+    /**
+     * 🔥 스크롤 핸들러 (디바운스: 100ms 후 실행)
+     */
+    handleScroll() {
+        // 🔥 스크롤 시작 시 모든 진행 중인 요청 취소
+        if (!this.isScrolling) {
+            this.cancelAllLoads();
+        }
+
+        // 스크롤 중임을 표시
+        this.isScrolling = true;
+
+        // 기존 타이머 클리어
+        if (this.scrollDebounceTimer) {
+            clearTimeout(this.scrollDebounceTimer);
+        }
+
+        // 100ms 후 실행
+        this.scrollDebounceTimer = setTimeout(() => {
+            this.isScrolling = false;
+            // 🔥 스크롤이 멈춘 후 현재 뷰포트의 이미지만 즉시 로드
+            this.loadVisibleImages();
+        }, 100);
+    }
+
+    /**
+     * 🔥 모든 진행 중인 이미지 로드 취소
+     */
+    cancelAllLoads() {
+        this.abortControllers.forEach((controller) => {
+            controller.abort();
+        });
+        this.abortControllers.clear();
+        this.loadingThumbnails.clear();
+    }
+
+    /**
+     * 🔥 현재 뷰포트에 보이는 이미지만 즉시 로드
+     */
+    loadVisibleImages() {
+        if (!this.container) return;
+
+        const gridItems = this.container.querySelectorAll('.grid-item[data-src]');
+        const containerRect = this.container.getBoundingClientRect();
+
+        gridItems.forEach((gridItem) => {
+            const itemRect = gridItem.getBoundingClientRect();
+
+            // 뷰포트 내에 있는지 확인 (여유 공간 200px 추가)
+            const isVisible = (
+                itemRect.top < containerRect.bottom + 200 &&
+                itemRect.bottom > containerRect.top - 200 &&
+                itemRect.left < containerRect.right + 200 &&
+                itemRect.right > containerRect.left - 200
+            );
+
+            if (isVisible) {
+                // 🔥 즉시 로드 (data-src 제거는 loadThumbnail에서 처리하지 않음)
+                // Observer가 이미 unobserve했으므로 여기서 명시적으로 로드
+                const index = parseInt(gridItem.dataset.index);
+                if (!this.loadingThumbnails.has(index)) {
+                    this.loadThumbnail(gridItem);
+                }
+            }
+        });
+    }
+
     /**
      * 리소스 정리
      */
@@ -428,7 +576,11 @@ export class GridManager {
         if (this.observer) {
             this.observer.disconnect();
         }
-        this.loadingThumbnails.clear();
+        if (this.scrollDebounceTimer) {
+            clearTimeout(this.scrollDebounceTimer);
+        }
+        // 🔥 모든 진행 중인 요청 취소
+        this.cancelAllLoads();
         document.removeEventListener('keydown', this.handleKeyDown);
     }
 }

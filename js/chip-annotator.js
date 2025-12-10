@@ -756,13 +756,26 @@ export class ChipAnnotator {
             listItems.innerHTML = '';
 
             // 🔥 선택 순서대로 렌더링 (맨 밑에 추가된 순서)
-            const sortedChips = this.selectedChipsOrder
+            let sortedChips = this.selectedChipsOrder
                 .filter(idx => this.selectedChips.has(idx))
                 .map(idx => {
                     const chip = this.chips[idx];
                     return chip ? { idx, x: chip.x_abs, y: chip.y_abs } : null;
                 })
                 .filter(Boolean);
+
+            // 순서 배열이 비어있거나 chips lookup 실패 시 Set 기반으로 백업
+            if (sortedChips.length === 0 && this.selectedChips.size > 0) {
+                sortedChips = Array.from(this.selectedChips)
+                    .map(idx => {
+                        const chip = this.chips[idx];
+                        return chip ? { idx, x: chip.x_abs, y: chip.y_abs } : null;
+                    })
+                    .filter(Boolean);
+
+                // 백업으로부터 순서 배열도 재구성
+                this.selectedChipsOrder = sortedChips.map(c => c.idx);
+            }
 
             sortedChips.forEach((chipData, listIndex) => {
                 const { idx, x, y } = chipData;
@@ -1592,11 +1605,18 @@ export class ChipAnnotator {
                     console.log('🖱️ [DRAG] 범위 내 chip 제거:', selected.length, '개 (제거:', toRemove.length, ')');
                 }
             } else {
-                // 🔥 드래그가 발생하지 않았을 때: 선택 해제 (칩이 있는 곳을 클릭해도 해제)
+                // 🔥 드래그가 발생하지 않았을 때: 클릭한 칩을 단일 선택 (없으면 해제)
+                const chipAtClick = this.findChipAtPixel(canvasX, canvasY);
                 this.selectedChips.clear();
-                this.selectedChipsOrder = []; // 🔥 선택 순서도 초기화
+                this.selectedChipsOrder = [];
+                if (chipAtClick) {
+                    this.selectedChips.add(chipAtClick.index);
+                    this.selectedChipsOrder.push(chipAtClick.index);
+                    console.log('🖱️ [CLICK] chip 단일 선택:', chipAtClick.index);
+                } else {
+                    console.log('🖱️ [CLICK] chip 없음 → 선택 해제');
+                }
                 this.updateSelectedChipsList(); // 🔥 Selection 패널 즉시 업데이트
-                console.log('🖱️ [CLICK] 선택 해제');
             }
 
             // 상태 초기화
