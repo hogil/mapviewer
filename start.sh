@@ -30,14 +30,18 @@ export IO_THREADS="192"                  # 32C 서버에서 I/O 대기시간 숨
 export THUMBNAIL_SEM="320"               # 여유 메모리 활용해 썸네일 동시 생성 확대
 export THUMB_PREFETCH_BATCH="64"
 export THUMB_CLIENT_MAX_CONCURRENCY="12"
-export COMPOSITE_MAX_WORKERS="32"        # Composite 로더: CPU당 1스레드
+export COMPOSITE_FAST_MODE="1"           # ✅ Fast 모드 활성화 (워커 자동 상향 + vips 저장)
+export COMPOSITE_MAX_WORKERS="48"        # Composite 로더: CPU당 1~1.5 스레드
 export COMPOSITE_LOADER_MODE="thread"
-export COMPOSITE_BATCH_SIZE="24"
+export COMPOSITE_BATCH_SIZE="32"
 export COMPOSITE_COUNT_MODE="cython"
-export COMPOSITE_RENDER_WORKERS="24"     # 렌더링 병렬도 ↑
-export COMPOSITE_SAVE_WORKERS="36"       # 저장 워커 (고속 SSD 기준)
-export OMP_NUM_THREADS="24"              # Numba/OpenMP 스레드
-export NUMBA_NUM_THREADS="24"
+export COMPOSITE_RENDER_WORKERS="32"     # 렌더링 병렬도 ↑ (fast 모드와 맞춤)
+export COMPOSITE_SAVE_WORKERS="48"       # 저장 워커 (고속 SSD 기준)
+export COMPOSITE_SAVE_BACKEND="vips"     # 저장 백엔드 vips 우선
+export COMPOSITE_FORMAT="JPEG"           # 저장 포맷: JPEG (속도 우선)
+export COMPOSITE_JPEG_QUALITY="95"       # JPEG 품질 (속도/품질 균형)
+export OMP_NUM_THREADS="32"              # Numba/OpenMP 스레드
+export NUMBA_NUM_THREADS="32"
 export SEARCH_WORKERS="24"               # 검색 병렬 워커 수 (32코어 기준, 논리 검색 가속)
 
 # libvips 최적화 (웹서버 환경)
