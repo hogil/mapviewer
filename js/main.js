@@ -29,8 +29,9 @@ const MIN_DRAG_DISTANCE = 5;
 const ZOOM_FACTOR = 1.2;
 let THUMB_BATCH_SIZE = 24;
 const DEBOUNCE_DELAY = 0;
-const GRID_DRAG_CLICK_THRESHOLD = 14;
+const GRID_DRAG_CLICK_THRESHOLD = 30; // 스크롤 드래그 시 선택 방지
 const CLASSIFICATION_DIR_NAMES = ['classification', 'classification_chips', 'chips'];
+const GRID_THUMB_PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 
 // ✅ 미니맵 뷰포트 크기 제한 상수
 const MINIMAP_VIEWPORT_MIN_SIZE = 0.05;  // 최소 5%
@@ -631,6 +632,7 @@ class WaferMapViewer {
             tabListEl: this.dom?.pageTabs || document.getElementById('page-tabs'),
             addBtn: this.dom?.pageAddBtn || document.getElementById('page-add-btn'),
             onRequestState: () => this.captureActivePageState(),
+            onBeforePagePersist: (page) => this.cachePageView(page),
             onPageActivated: (page) => this.applyPageState(page),
             onPageClosed: (page) => this.handlePageClosed(page),
             shouldSkipShortcut: (event) => !this.shouldAllowKeyboardShortcut(event),
@@ -898,6 +900,8 @@ class WaferMapViewer {
         this.gridThumbWraps = [];
         this.invalidateGridGeometry();
         this.gridThumbRectCache = null;
+        this.pageViewCache = new Map(); // 페이지 전환 시 그리드 DOM 캐시
+        this.pageViewCacheLimit = 3;    // 캐시 최대 유지 페이지 수 (과도한 메모리 사용 방지)
         this.chipLabelLegendData = [];
         this.activeChipLabelClasses = null;
         this.gridLayoutCache = null;
@@ -1425,6 +1429,8 @@ class WaferMapViewer {
                 scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
                 isCompositeMode: this.isCompositeMode,
                 compositeSession: this.isCompositeMode ? this.cloneCompositeSession() : null,
+                selectedFolders: this.selectedFolders ? Array.from(this.selectedFolders) : [],
+                lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || null,
             };
         }
         if (this.viewMode === 'single' && this.selectedImagePath) {
@@ -1459,6 +1465,8 @@ class WaferMapViewer {
             selectedImagePath: this.selectedImagePath || null,
             currentGridImages: this.currentGridImages ? [...this.currentGridImages] : [],
             gridSelectedIdxs: this.gridSelectedIdxs ? [...this.gridSelectedIdxs] : [],
+            selectedFolders: this.selectedFolders ? Array.from(this.selectedFolders) : [],
+            lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || null,
             gridViewSaveState: this.deepCloneSimple(this.gridViewSaveState),
             gridViewImageList: this.gridViewImageList ? [...this.gridViewImageList] : [],
             gridViewImageIndex: typeof this.gridViewImageIndex === 'number' ? this.gridViewImageIndex : -1,
@@ -1618,6 +1626,205 @@ class WaferMapViewer {
         this.pageManager.persistActivePage(stateOverride ?? this.captureActivePageState());
     }
 
+    cachePageView(page) {
+        const pageId = page?.id || this.pageManager?.activePageId || null;
+        if (!pageId || !this.pageViewCache) return;
+
+        const grid = document.getElementById('image-grid');
+        if (!grid || !this.gridMode || !grid.childElementCount) {
+            if (this.pageViewCache.has(pageId)) {
+                this.pageViewCache.delete(pageId);
+            }
+            return;
+        }
+
+        const scrollWrapper = grid.parentElement;
+        const fragment = document.createDocumentFragment();
+        fragment.append(...Array.from(grid.children));
+
+        const cacheEntry = {
+            fragment,
+            scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
+            scrollLeft: scrollWrapper ? scrollWrapper.scrollLeft : 0,
+            selectedIdxs: Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : [],
+            selectedSet: this.gridSelectedSet ? Array.from(this.gridSelectedSet) : (Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : []),
+            currentImages: this.currentGridImages ? [...this.currentGridImages] : [],
+            selectedImages: this.selectedImages ? [...this.selectedImages] : [],
+            gridCols: this.gridCols,
+            gridThumbSize: this.gridThumbSize,
+            savedViewState: this.savedViewState ? this.deepCloneSimple(this.savedViewState) : null,
+            gridViewSaveState: this.gridViewSaveState ? this.deepCloneSimple(this.gridViewSaveState) : null,
+            isCompositeMode: this.isCompositeMode,
+            compositeSession: this.isCompositeMode ? this.cloneCompositeSession() : null,
+        };
+
+        this.pageViewCache.set(pageId, cacheEntry);
+
+        if (this.pageViewCacheLimit && this.pageViewCache.size > this.pageViewCacheLimit) {
+            for (const key of this.pageViewCache.keys()) {
+                if (this.pageViewCache.size <= this.pageViewCacheLimit) break;
+                if (key === pageId) continue;
+                this.pageViewCache.delete(key);
+            }
+        }
+
+        grid.innerHTML = '';
+        this.gridThumbWraps = [];
+        this.invalidateGridGeometry();
+    }
+
+    restoreCachedPageView(pageId, state = {}) {
+        if (!pageId || !this.pageViewCache?.has?.(pageId)) {
+            return false;
+        }
+
+        const cache = this.pageViewCache.get(pageId);
+        if (!cache?.fragment || cache.fragment.childElementCount === 0) {
+            this.pageViewCache.delete(pageId);
+            return false;
+        }
+
+        const grid = document.getElementById('image-grid');
+        if (!grid) return false;
+
+        grid.innerHTML = '';
+        grid.appendChild(cache.fragment);
+
+        this.gridMode = true;
+        this.viewMode = null;
+        this.singleImageFromGrid = false;
+
+        document.body.classList.add('grid-mode-active');
+        if (this.thumbnailNavigator) {
+            this.thumbnailNavigator.hide();
+        }
+
+        this.dom.viewerContainer.classList.add('grid-mode');
+        this.dom.viewerContainer.classList.remove('single-image-mode');
+        if (this.dom.minimapContainer) this.dom.minimapContainer.style.display = 'none';
+        if (this.dom.imageCanvas) this.dom.imageCanvas.style.display = 'none';
+        if (this.dom.overlayCanvas) this.dom.overlayCanvas.style.display = 'none';
+
+        const gridControls = document.getElementById('grid-controls');
+        if (gridControls) gridControls.style.display = '';
+
+        const gridColsRange = document.getElementById('grid-cols-range');
+        if (typeof cache.gridCols === 'number') {
+            this.gridCols = cache.gridCols;
+            document.documentElement.style.setProperty('--grid-cols', this.gridCols);
+            if (gridColsRange) gridColsRange.value = this.gridCols;
+        } else if (gridColsRange && this.gridCols) {
+            gridColsRange.value = this.gridCols;
+        }
+        if (typeof cache.gridThumbSize === 'number') {
+            this.gridThumbSize = cache.gridThumbSize;
+        }
+
+        this.currentGridImages = cache.currentImages ? [...cache.currentImages] : [];
+        this.selectedImages = cache.selectedImages ? [...cache.selectedImages] : [...this.currentGridImages];
+        this.gridSelectedIdxs = Array.isArray(cache.selectedIdxs) ? [...cache.selectedIdxs] : [];
+        const selectedSetSource = Array.isArray(cache.selectedSet) ? cache.selectedSet : this.gridSelectedIdxs;
+        this.gridSelectedSet = new Set(selectedSetSource || []);
+        this._prevGridSelectedIdxs = new Set(this.gridSelectedSet || []);
+        this.gridThumbWraps = Array.from(grid.querySelectorAll('.grid-thumb-wrap'));
+        this.invalidateGridGeometry();
+
+        const scrollWrapper = grid.parentElement;
+        if (scrollWrapper) {
+            scrollWrapper.scrollTop = cache.scrollTop ?? 0;
+            scrollWrapper.scrollLeft = cache.scrollLeft ?? 0;
+        }
+
+        this.savedViewState = cache.savedViewState
+            ? cache.savedViewState
+            : (state.savedViewState ? this.deepCloneSimple(state.savedViewState) : this.savedViewState);
+        this.gridViewSaveState = cache.gridViewSaveState ? cache.gridViewSaveState : this.gridViewSaveState;
+
+        this.isCompositeMode = !!cache.isCompositeMode;
+        this.compositeSession = cache.compositeSession ? this.deepCloneSimple(cache.compositeSession) : null;
+
+        grid.style.display = 'grid';
+        grid.classList.add('active');
+
+        if (!this.gridResizeObserver) {
+            this.gridResizeObserver = new ResizeObserver(() => this.updateGridSquaresPixel());
+        }
+        try {
+            this.gridResizeObserver.observe(grid);
+        } catch (error) {
+            console.warn('[GridCache] resize observe failed:', error);
+        }
+
+        this.updateGridSelection();
+        this.updateSelectedGridImagesList();
+        this.updateContextMenuState();
+        this.updateGridSquaresPixel();
+
+        this.pageViewCache.delete(pageId);
+        return true;
+    }
+
+    async restoreGridImageViewFromState() {
+        const state = this.gridViewSaveState;
+        if (!state || !Array.isArray(state.images) || state.images.length === 0) {
+            return false;
+        }
+
+        const images = [...state.images];
+        const selectedIndices = Array.isArray(state.selectedIndices) && state.selectedIndices.length
+            ? [...state.selectedIndices]
+            : images.map((_, index) => index);
+        const targetIndex = Math.max(0, Math.min(selectedIndices[0] ?? 0, images.length - 1));
+
+        this.gridMode = false;
+        this.viewMode = 'gridImage';
+        this.singleImageFromGrid = true;
+
+        this.hideGrid(false);
+
+        this.currentGridImages = images;
+        this.selectedImages = images;
+        this.gridSelectedIdxs = selectedIndices;
+        this.gridSelectedSet = new Set(selectedIndices);
+        this.gridViewImageList = images;
+        this.gridViewImageIndex = targetIndex;
+
+        // ✅ 폴더 선택 상태 복원
+        if (state.selectedFolders) {
+            this.selectedFolders = new Set(state.selectedFolders);
+        }
+        if (state.lastSelectedFolderPath) {
+            this.lastSelectedFolderPath = state.lastSelectedFolderPath;
+        }
+
+        this.savedViewState = {
+            type: 'grid',
+            images: [...images],
+            scrollTop: state.scrollTop ?? 0,
+            isCompositeMode: state.isCompositeMode,
+            compositeSession: state.compositeSession ? this.deepCloneSimple(state.compositeSession) : null,
+            selectedFolders: state.selectedFolders ? [...state.selectedFolders] : [],
+            lastSelectedFolderPath: state.lastSelectedFolderPath || null,
+        };
+
+        if (state.isCompositeMode) {
+            this.isCompositeMode = true;
+            this.compositeSession = state.compositeSession ? this.deepCloneSimple(state.compositeSession) : null;
+        }
+        try {
+            await this.loadImage(images[targetIndex]);
+            if (this.thumbnailNavigator) {
+                this.thumbnailNavigator.show();
+                this.thumbnailNavigator.setImages(this.gridViewImageList, images[targetIndex]);
+            }
+            this.updateArrowButtonVisibility();
+            return true;
+        } catch (error) {
+            console.error('[GridImageRestore] restore failed:', error);
+            return false;
+        }
+    }
+
     async applyPageState(page) {
         if (!page) return;
         this.hideCompositeInlineStatus();
@@ -1639,6 +1846,9 @@ class WaferMapViewer {
         this.currentGridImages = state.currentGridImages ? [...state.currentGridImages] : [];
         this.gridSelectedIdxs = state.gridSelectedIdxs ? [...state.gridSelectedIdxs] : [];
         this.gridSelectedSet = new Set(this.gridSelectedIdxs || []);
+        this.selectedFolders = state.selectedFolders ? new Set(state.selectedFolders) : new Set();
+        this.lastSelectedFolderPath = state.lastSelectedFolderPath || null;
+        this.lastSelectedFolder = null; // Will be restored from DOM after explorer sync
         this.gridViewSaveState = state.gridViewSaveState ? this.deepCloneSimple(state.gridViewSaveState) : null;
         this.gridViewImageList = state.gridViewImageList ? [...state.gridViewImageList] : [];
         this.gridViewImageIndex = typeof state.gridViewImageIndex === 'number' ? state.gridViewImageIndex : -1;
@@ -1661,10 +1871,34 @@ class WaferMapViewer {
             this.dom.filterTestSelect.value = this.filterTestMode || '';
         }
 
+        // 폴더 전체 선택을 복원할 때 파일 선택도 유지 (폴더 선택만 남고 파일이 한 개로 축소되는 문제 방지)
+        // 🔥 단, 이미 명시적인 그리드 선택이 있는 경우(state.gridSelectedIdxs)에는 덮어쓰지 않음
+        if (this.selectedFolders && this.selectedFolders.size > 0 && this.savedViewState?.type === 'grid') {
+            const folderImages = Array.isArray(this.savedViewState.images) ? this.savedViewState.images : [];
+            const hasExplicitSelection = state.gridSelectedIdxs && state.gridSelectedIdxs.length > 0;
+            
+            if (folderImages.length > 0 && !hasExplicitSelection) {
+                this.selectedImages = [...folderImages];
+                this.currentGridImages = [...folderImages];
+                this.gridSelectedIdxs = folderImages.map((_, idx) => idx);
+                this.gridSelectedSet = new Set(this.gridSelectedIdxs);
+                this.gridMode = true;
+            }
+        }
+
         const pendingTask = state.pendingCompositeTask ? this.deepCloneSimple(state.pendingCompositeTask) : null;
         const pendingResult = state.pendingCompositeResult ? this.deepCloneSimple(state.pendingCompositeResult) : null;
         if (page?.id) {
             this.setCompositePageTask(page.id, { task: pendingTask, result: pendingResult });
+        }
+
+        let restoredFromCache = false;
+        let restoredGridImage = false;
+        if (!pendingResult && page?.id) {
+            restoredFromCache = this.restoreCachedPageView(page.id, state);
+        }
+        if (!pendingResult && this.viewMode === 'gridImage' && this.gridViewSaveState) {
+            restoredGridImage = await this.restoreGridImageViewFromState();
         }
 
         if (pendingResult) {
@@ -1675,11 +1909,15 @@ class WaferMapViewer {
                 this.clearCompositePageTask(page.id);
             }
             this.persistActivePageState();
-        } else {
+        } else if (!restoredFromCache && !restoredGridImage) {
             await this.restoreSavedViewState();
         }
-        this.restoreWaferMapExplorerState();
+
+        this.restoreWaferMapExplorerState({ skipGrid: restoredFromCache });
         this.restoreLabelExplorerState();
+        if (!restoredFromCache && !restoredGridImage && this.gridMode && this.gridSelectedIdxs?.length) {
+            this.updateGridSelection();
+        }
         this.updateContextMenuState();
         this.syncCompositeInlineStatus(page?.id);
         this.syncSubsetStatus(page?.id);
@@ -1699,6 +1937,9 @@ class WaferMapViewer {
     handlePageClosed(page) {
         if (!page) return;
         const pageId = page.id;
+        if (pageId && this.pageViewCache?.has?.(pageId)) {
+            this.pageViewCache.delete(pageId);
+        }
         if (pageId && this.compositePageTasks.has(pageId)) {
             this.compositePageTasks.delete(pageId);
             if (this.compositeInlineStatusOwner === pageId) {
@@ -1738,15 +1979,21 @@ class WaferMapViewer {
         }
 
         if (role === 'wafer' || role === 'composite' || role === 'mylot' || role === 'blank') {
-            this.updateFileExplorerSelection({ highlightOnly: true, skipEnsurePage: true });
+            // 폴더 선택이 살아 있으면 파일 하이라이트를 건드리지 않고 폴더만 복원
+            if (this.selectedFolders && this.selectedFolders.size > 0) {
+                this.restoreFolderSelection();
+            } else {
+                this.updateFileExplorerSelection({ highlightOnly: true, skipEnsurePage: true });
+                this.restoreFolderSelection();
 
-            const highlightTarget =
-                this.selectedImagePath ||
-                (this.savedViewState?.type === 'single' ? this.savedViewState.imagePath : null) ||
-                (Array.isArray(this.selectedImages) && this.selectedImages.length ? this.selectedImages[0] : null);
+                const highlightTarget =
+                    this.selectedImagePath ||
+                    (this.savedViewState?.type === 'single' ? this.savedViewState.imagePath : null) ||
+                    (Array.isArray(this.selectedImages) && this.selectedImages.length ? this.selectedImages[0] : null);
 
-            if (highlightTarget) {
-                this.updateWaferMapExplorerHighlight(highlightTarget);
+                if (highlightTarget) {
+                    this.updateWaferMapExplorerHighlight(highlightTarget);
+                }
             }
         }
     }
@@ -2013,6 +2260,9 @@ class WaferMapViewer {
         this.savedViewState = null;
         this.waferMapExplorerState = null;
         this.labelExplorerState = null;
+        if (this.pageViewCache) {
+            this.pageViewCache.clear();
+        }
 
         // 모든 선택 해제
 
@@ -2382,7 +2632,7 @@ class WaferMapViewer {
         clearTimeout(this.searchTimeout);
         this.searchTimeout = setTimeout(() => {
             this.filterSubfolderOptions(query);
-        }, 100);
+        }, 50);
     }
 
     // 제품 검색 드롭다운 표시
@@ -2679,6 +2929,9 @@ class WaferMapViewer {
                 this.savedViewState = null;
                 this.waferMapExplorerState = null;
                 this.labelExplorerState = null;
+                if (this.pageViewCache) {
+                    this.pageViewCache.clear();
+                }
                 
                 // 🔥 Label Explorer 폴더 상태 초기화 (이전 제품의 열린 폴더 상태 제거)
                 if (this.labelSelection) {
@@ -3950,10 +4203,35 @@ class WaferMapViewer {
             return { left, top, width, height };
         };
 
+        // 스크롤 이벤트 - 스크롤 중 드래그 선택 취소
+        scrollWrapper.addEventListener('scroll', () => {
+            if (dragData.selecting) {
+                // 스크롤이 발생하면 드래그 선택 취소
+                dragData.selecting = false;
+                dragData.active = false;
+                dragData.start = null;
+                dragOverlay.style.display = 'none';
+                document.body.style.userSelect = '';
+                if (document.body.style.cursor === 'crosshair') {
+                    document.body.style.cursor = '';
+                }
+            }
+        });
+
         // 마우스 다운 이벤트 - 드래그 준비
 
         scrollWrapper.addEventListener('mousedown', e => {
             if (!this.gridMode || e.button !== 0) return;
+
+            const rect = scrollWrapper.getBoundingClientRect();
+            const scrollbarWidth = scrollWrapper.offsetWidth - scrollWrapper.clientWidth;
+            const scrollbarHeight = scrollWrapper.offsetHeight - scrollWrapper.clientHeight;
+            const overVerticalBar = scrollbarWidth > 2 && (e.clientX >= rect.right - scrollbarWidth);
+            const overHorizontalBar = scrollbarHeight > 2 && (e.clientY >= rect.bottom - scrollbarHeight);
+            if (overVerticalBar || overHorizontalBar) {
+                // 스크롤바 드래그 시 선택 박스 시작하지 않음
+                return;
+            }
 
             e.preventDefault();
 
@@ -4300,6 +4578,36 @@ class WaferMapViewer {
         // 스크롤 중 드래그 박스 위치 실시간 업데이트 (디바운싱)
 
         let scrollTimeoutId = null;
+
+        // ✅ 스크롤바 드래그 감지용 변수
+        let isScrollbarDragging = false;
+
+        // ✅ 스크롤바 영역 mousedown 감지
+        scrollWrapper.addEventListener('mousedown', (e) => {
+            const rect = scrollWrapper.getBoundingClientRect();
+            const scrollbarWidth = scrollWrapper.offsetWidth - scrollWrapper.clientWidth;
+            const scrollbarHeight = scrollWrapper.offsetHeight - scrollWrapper.clientHeight;
+            const overVerticalBar = scrollbarWidth > 2 && (e.clientX >= rect.right - scrollbarWidth);
+            const overHorizontalBar = scrollbarHeight > 2 && (e.clientY >= rect.bottom - scrollbarHeight);
+
+            if (overVerticalBar || overHorizontalBar) {
+                isScrollbarDragging = true;
+            }
+        });
+
+        // ✅ 마우스업 시 즉시 로드
+        scrollWrapper.addEventListener('mouseup', () => {
+            if (isScrollbarDragging || this.isGridScrolling) {
+                isScrollbarDragging = false;
+                // 디바운스 타이머 취소하고 즉시 로드
+                if (this.gridScrollDebounceTimer) {
+                    clearTimeout(this.gridScrollDebounceTimer);
+                    this.gridScrollDebounceTimer = null;
+                }
+                this.isGridScrolling = false;
+                this.loadVisibleGridThumbnails();
+            }
+        });
 
         scrollWrapper.addEventListener('scroll', () => {
             // 🔥 썸네일 로드 디바운스
@@ -8986,10 +9294,21 @@ class WaferMapViewer {
         });
 
         const pathsToHighlight = [];
-        if (Array.isArray(this.selectedImages) && this.selectedImages.length) {
-            pathsToHighlight.push(...this.selectedImages);
-        } else if (this.selectedImagePath) {
-            pathsToHighlight.push(this.selectedImagePath);
+        if (this.gridMode && Array.isArray(this.gridSelectedIdxs) && this.gridSelectedIdxs.length && Array.isArray(this.currentGridImages)) {
+            this.gridSelectedIdxs.forEach(idx => {
+                const path = this.currentGridImages[idx];
+                if (path) {
+                    pathsToHighlight.push(path);
+                }
+            });
+        }
+
+        if (pathsToHighlight.length === 0) {
+            if (Array.isArray(this.selectedImages) && this.selectedImages.length) {
+                pathsToHighlight.push(...this.selectedImages);
+            } else if (this.selectedImagePath) {
+                pathsToHighlight.push(this.selectedImagePath);
+            }
         }
 
         pathsToHighlight.forEach(selPath => {
@@ -9022,6 +9341,37 @@ class WaferMapViewer {
 
         if (this.selectedImages && this.selectedImages.length > 0) {
             this.selectedImagePath = this.selectedImages[this.selectedImages.length - 1];
+        }
+    }
+
+    /**
+     * Restore folder selection visual state from saved state
+     * Called during page switching to restore folder highlights
+     */
+    restoreFolderSelection() {
+        const explorer = this.dom.fileExplorer;
+        if (!explorer) return;
+
+        // Clear existing folder selections first
+        explorer.querySelectorAll('summary.folder.selected').forEach(summary => {
+            summary.classList.remove('selected');
+        });
+
+        // Restore folder selections from state
+        if (this.selectedFolders && this.selectedFolders.size > 0) {
+            this.selectedFolders.forEach(folderPath => {
+                const summary = explorer.querySelector(`summary.folder[data-path="${folderPath.replace(/"/g, '\\"')}"]`);
+                if (summary) {
+                    summary.classList.add('selected');
+
+                    // Restore lastSelectedFolder reference if this matches the saved path
+                    if (this.lastSelectedFolderPath === folderPath) {
+                        this.lastSelectedFolder = summary;
+                        // 폴더 선택 후 스크롤 위치도 폴더로 이동
+                        summary.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                    }
+                }
+            });
         }
     }
 
@@ -15497,11 +15847,13 @@ class WaferMapViewer {
             }
             
             const currentScrollTop = scrollWrapper ? scrollWrapper.scrollTop : 0;
-            
+
             this.savedViewState = {
                 type: 'grid',
                 images: [...sortedImages],  // 🔥 정렬된 이미지를 저장
-                scrollTop: currentScrollTop
+                scrollTop: currentScrollTop,
+                selectedFolders: this.selectedFolders ? Array.from(this.selectedFolders) : [],
+                lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || null,
             };
         }
 
@@ -15558,6 +15910,9 @@ class WaferMapViewer {
         // grid 모드에서는 cursor를 default로
         this.dom.viewerContainer.style.cursor = 'default';
         this.showGridImmediately(sortedImages);
+        requestAnimationFrame(() => {
+            this.loadVisibleGridThumbnails();
+        });
         setTimeout(() => {
             this.loadCurrentFolderThumbnails(sortedImages);
         }, 100);
@@ -15592,6 +15947,14 @@ class WaferMapViewer {
         // 🔥 그리드 재생성 후 레이아웃 캐시 무효화 (드래그 영역 재계산용)
         this.invalidateGridGeometry();
         
+        // 🔥 폴더 선택 복원 (skipSaveState=true일 때만)
+        if (skipSaveState) {
+            // 약간의 지연 후 폴더 선택 복원 (DOM 렌더링 대기)
+            setTimeout(() => {
+                this.restoreFolderSelection();
+            }, 50);
+        }
+
         // 🔥 스크롤 위치 복원 (skipSaveState=true일 때만)
         if (skipSaveState && scrollTopToRestore !== null && scrollWrapper) {
             // 그리드 렌더링 완료 후 스크롤 위치 복원
@@ -15604,7 +15967,7 @@ class WaferMapViewer {
                 }
                 return false;
             };
-            
+
             // 여러 번 시도 (DOM 렌더링 대기)
             requestAnimationFrame(() => {
                 if (!restoreScroll()) {
@@ -15675,6 +16038,8 @@ class WaferMapViewer {
             img.loading = 'lazy';
             img.decoding = 'async';
             img.style.opacity = '0';
+            img.dataset.loading = 'false';
+            img.dataset.gridLoaded = 'false';
             
             // 고품질 이미지 렌더링 설정
             img.style.imageRendering = 'high-quality';
@@ -15686,6 +16051,12 @@ class WaferMapViewer {
             
             // 이미지 로드 핸들러
             img.onload = () => {
+                if (img.src === GRID_THUMB_PLACEHOLDER) {
+                    img.style.opacity = '0';
+                    return;
+                }
+                img.dataset.loading = 'false';
+                img.dataset.gridLoaded = 'true';
                 img.style.opacity = '1';
                 // 원본 이미지 유지 - 썸네일로 교체하지 않음
             };
@@ -15713,6 +16084,8 @@ class WaferMapViewer {
                 if (img.parentElement) {
                     img.style.backgroundColor = '#333';
                     img.style.opacity = '0.5';
+                    img.dataset.loading = 'false';
+                    img.dataset.gridLoaded = 'false';
                     
                     // 실패 후에도 썸네일 시도 (서버에서 썸네일이 생성되었을 수 있음)
                     // 단, 중단된 경우는 시도하지 않음
@@ -15735,12 +16108,8 @@ class WaferMapViewer {
             // 🔥 data-src에 URL 저장 (스크롤 디바운스용)
             img.dataset.src = thumbnailUrl;
 
-            // 🔥 초기 로드: 즉시 src에 할당 (화면 뜨자마자 로드)
-            img.src = thumbnailUrl;
-            if (img.complete && img.naturalWidth > 0) {
-                // 캐시된 경우 onload 지연 없이 바로 표시
-                img.style.opacity = '1';
-            }
+            // 🔥 초기 로드는 플레이스홀더로 유지하고 가시 영역에서만 요청
+            img.src = GRID_THUMB_PLACEHOLDER;
 
             thumbBox.appendChild(img);
             wrap.appendChild(thumbBox);
@@ -15869,10 +16238,41 @@ class WaferMapViewer {
         return;
     }
 
+    getGridScrollWrapper() {
+        const grid = document.getElementById('image-grid');
+        return document.querySelector('.grid-scroll-wrapper') || grid?.parentElement || null;
+    }
+
+    cancelGridImageRequests() {
+        const grid = document.getElementById('image-grid');
+        if (grid) {
+            const images = grid.querySelectorAll('.grid-thumb-img');
+            images.forEach((img) => {
+                const isLoading = img.dataset.loading === 'true';
+                const inProgress = img.dataset.gridLoaded !== 'true' && img.src && img.src !== GRID_THUMB_PLACEHOLDER;
+                if (isLoading || inProgress) {
+                    img.src = GRID_THUMB_PLACEHOLDER;
+                    img.dataset.loading = 'false';
+                    img.dataset.gridLoaded = 'false';
+                    img.style.opacity = '0';
+                }
+            });
+        }
+
+        if (this.thumbnailManager) {
+            this.thumbnailManager.abortAll();
+        }
+    }
+
     /**
-     * 🔥 그리드 스크롤 핸들러 (디바운스: 0.1초 후 실행)
+     * 🔥 그리드 스크롤 핸들러 (즉시 취소, 10ms 후 로드)
      */
     handleGridScroll() {
+        // ✅ 스크롤 시작 시 즉시 모든 이뮌지 요청 취소
+        // ✅ 스크롤 시작 시 즉시 모든 이미지 요청 취소
+        this.cancelGridImageRequests();
+        this.gridLoadingBatch = null;
+
         // 스크롤 중임을 표시
         this.isGridScrolling = true;
 
@@ -15881,51 +16281,66 @@ class WaferMapViewer {
             clearTimeout(this.gridScrollDebounceTimer);
         }
 
-        // 0.1초 (100ms) 후 실행
+        // ✅ 10ms로 단축 (거의 즉시 반응)
         this.gridScrollDebounceTimer = setTimeout(() => {
             this.isGridScrolling = false;
-            // 🔥 스크롤이 멈춘 후 현재 뷰포트의 썸네일만 로드
+            // 🔥 스크롤이 멈춘 후 현재 뷰포트의 썸네일만 즉시 로드
             this.loadVisibleGridThumbnails();
-        }, 100);
+        }, 10);
     }
 
     /**
      * 🔥 현재 뷰포트에 보이는 그리드 썸네일만 즉시 로드
-     * Navigator와 동일한 방식: viewport ± 2x viewport height 범위 로드
+     * thumbnailManager 캐시를 활용하여 즉시 표시
      */
-    loadVisibleGridThumbnails() {
+    async loadVisibleGridThumbnails() {
         const grid = document.getElementById('image-grid');
-        const scrollWrapper = document.getElementById('image-grid-scroll-wrapper');
+        const scrollWrapper = this.getGridScrollWrapper();
 
         if (!grid || !scrollWrapper) return;
 
-        const thumbnails = grid.querySelectorAll('.grid-thumb-img[data-src]');
+        const thumbWraps = grid.querySelectorAll('.grid-thumb-wrap');
         const scrollRect = scrollWrapper.getBoundingClientRect();
 
-        // 🔥 Navigator 방식: 뷰포트 위아래로 2배 범위 확장 (즉시 로드)
-        const viewportHeight = scrollRect.height;
-        const expandedTop = scrollRect.top - (viewportHeight * 2);
-        const expandedBottom = scrollRect.bottom + (viewportHeight * 2);
+        // ✅ 보이는 영역만 (여유 없이) - 최대한 빠르게
+        const visibleTop = scrollRect.top;
+        const visibleBottom = scrollRect.bottom;
 
-        thumbnails.forEach((img) => {
-            const imgRect = img.getBoundingClientRect();
+        // ✅ 보이는 이미지만 수집
+        const visibleItems = [];
+        thumbWraps.forEach((wrap) => {
+            const wrapRect = wrap.getBoundingClientRect();
 
-            // 🔥 확장된 범위에 있는지 확인 (viewport ± 2x height)
-            const isInExpandedRange = (
-                imgRect.top < expandedBottom &&
-                imgRect.bottom > expandedTop &&
-                imgRect.left < scrollRect.right &&
-                imgRect.right > scrollRect.left
+            // 완전히 보이거나 일부라도 보이는 경우
+            const isVisible = (
+                wrapRect.bottom > visibleTop &&
+                wrapRect.top < visibleBottom &&
+                wrapRect.right > scrollRect.left &&
+                wrapRect.left < scrollRect.right
             );
 
-            if (isInExpandedRange && img.dataset.src) {
-                // 즉시 로드
-                const src = img.dataset.src;
-                if (img.src !== src) {
-                    img.src = src;
+            if (isVisible) {
+                const img = wrap.querySelector('.grid-thumb-img');
+                if (img && img.dataset.src) {
+                    visibleItems.push({ img });
                 }
-                // data-src 제거 (중복 로드 방지)
-                delete img.dataset.src;
+            }
+        });
+
+        // ✅ 보이는 이미지들을 병렬로 즉시 로드
+        visibleItems.forEach(({ img }) => {
+            if (img.dataset.gridLoaded === 'true' && img.src && img.src !== GRID_THUMB_PLACEHOLDER) {
+                return;
+            }
+            const src = img.dataset.src;
+            if (src) {
+                if (img.dataset.loading === 'true') {
+                    return;
+                }
+                img.dataset.loading = 'true';
+                img.dataset.gridLoaded = 'false';
+                img.style.opacity = '0';
+                img.src = src;
             }
         });
     }
@@ -16402,7 +16817,8 @@ class WaferMapViewer {
     }
 
     // 🔥 Wafer Map Explorer 상태 복원
-    restoreWaferMapExplorerState() {
+    restoreWaferMapExplorerState(options = {}) {
+        const skipGrid = options.skipGrid === true;
         if (!this.waferMapExplorerState) {
             return;
         }
@@ -16410,7 +16826,7 @@ class WaferMapViewer {
         const state = this.waferMapExplorerState;
         
         // Grid 모드 복원
-        if (state.gridMode && state.selectedImages && state.selectedImages.length > 0) {
+        if (!skipGrid && state.gridMode && state.selectedImages && state.selectedImages.length > 0) {
             this.showGrid(state.selectedImages, true); // skipSaveState=true
             
             // Grid 스크롤 복원
@@ -16432,7 +16848,7 @@ class WaferMapViewer {
             }, 100);
         } 
         // Single Image 모드 복원
-        else if (state.currentImage) {
+        else if (!skipGrid && state.currentImage) {
             this.loadImage(state.currentImage);
             
             // Viewer 스크롤 복원
@@ -16751,7 +17167,18 @@ class WaferMapViewer {
 
             this.selectedImages = [...this.savedViewState.images];
 
+            // ✅ 폴더 선택 상태 복원
+            if (this.savedViewState.selectedFolders) {
+                this.selectedFolders = new Set(this.savedViewState.selectedFolders);
+            }
+            if (this.savedViewState.lastSelectedFolderPath) {
+                this.lastSelectedFolderPath = this.savedViewState.lastSelectedFolderPath;
+            }
+
             this.showGrid(this.savedViewState.images, true);  // ✅ skipSaveState=true로 호출
+
+            // ✅ 폴더 선택 시각 상태 복원
+            this.restoreFolderSelection();
 
             // 스크롤 위치 복원
 
@@ -16833,7 +17260,18 @@ class WaferMapViewer {
 
             this.selectedImages = [...savedState.images];
 
+            // ✅ 폴더 선택 상태 복원
+            if (savedState.selectedFolders) {
+                this.selectedFolders = new Set(savedState.selectedFolders);
+            }
+            if (savedState.lastSelectedFolderPath) {
+                this.lastSelectedFolderPath = savedState.lastSelectedFolderPath;
+            }
+
             this.showGrid(savedState.images);
+
+            // ✅ 폴더 선택 시각 상태 복원
+            this.restoreFolderSelection();
 
             // 스크롤 위치 복원
 
@@ -17700,6 +18138,8 @@ class WaferMapViewer {
                     scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
                     isCompositeMode: this.isCompositeMode,
                     compositeSession: this.isCompositeMode ? this.cloneCompositeSession() : null,
+                    selectedFolders: this.selectedFolders ? Array.from(this.selectedFolders) : [],
+                    lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || null,
                 };
             }
             if (savedSnapshot?.gridViewSaveState) {
@@ -17728,15 +18168,24 @@ class WaferMapViewer {
         const grid = document.getElementById('image-grid');
         const scrollWrapper = grid?.parentElement;
         const scrollTop = scrollWrapper ? scrollWrapper.scrollTop : 0;
-        const selectedIndices = Array.isArray(this.gridSelectedIdxs) && this.gridSelectedIdxs.length
+        const hasGridSelection = Array.isArray(this.gridSelectedIdxs) && this.gridSelectedIdxs.length > 0;
+        const hasFolderSelection = this.selectedFolders && this.selectedFolders.size > 0;
+        const selectedIndices = hasGridSelection
             ? [...this.gridSelectedIdxs]
-            : currentImages.map((_, index) => index);
+            : [];
+        const selectedImagePaths = selectedIndices
+            .map(idx => currentImages[idx])
+            .filter(Boolean);
+
         this.gridViewSaveState = {
             images: [...currentImages],
             selectedIndices,
+            selectedImagePaths,
             scrollTop,
             isCompositeMode: this.isCompositeMode,
             compositeSession: this.isCompositeMode ? this.cloneCompositeSession() : null,
+            selectedFolders: this.selectedFolders ? Array.from(this.selectedFolders) : [],
+            lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || null,
         };
 
         const currentList = this.selectedImages || currentImages;
@@ -17810,6 +18259,15 @@ class WaferMapViewer {
         const savedGridViewImageList = this.gridViewImageList;
         const savedGridViewImageIndex = this.gridViewImageIndex;
         const savedGridViewSaveState = this.gridViewSaveState;
+        const savedGridSelectionIndices = Array.isArray(savedGridViewSaveState?.selectedIndices)
+            ? [...savedGridViewSaveState.selectedIndices]
+            : null;
+        const selectionRestoreState = savedGridViewSaveState || this.savedViewState;
+        const savedFolderSelection = selectionRestoreState?.selectedFolders;
+        const savedLastSelectedFolderPath = selectionRestoreState?.lastSelectedFolderPath || null;
+        const savedGridSelectedImages = Array.isArray(selectionRestoreState?.images)
+            ? [...selectionRestoreState.images]
+            : null;
         this.gridViewImageList = [];
         this.gridViewImageIndex = -1;
         this.selectedImagePath = null;
@@ -17838,24 +18296,60 @@ class WaferMapViewer {
         // ✅ Step 4: 그리드 복귀 및 스크롤 복원
         if (savedViewMode === 'gridImage') {
             console.log('🔄 [EXIT] 그리드 모드로 복귀');
-            
+
+            // ✅ 폴더/파일 선택 상태 먼저 복원 (그리드 렌더링 전에 반영)
+            if (savedFolderSelection && savedFolderSelection.length > 0) {
+                this.selectedFolders = new Set(savedFolderSelection);
+            }
+            if (savedLastSelectedFolderPath) {
+                this.lastSelectedFolderPath = savedLastSelectedFolderPath;
+            }
+
             let imagesToShow = savedGridViewImageList;
             if (savedGridViewSaveState && savedGridViewSaveState.images && savedGridViewSaveState.images.length > 0) {
                 imagesToShow = savedGridViewSaveState.images;
-                this.selectedImages = [...savedGridViewSaveState.images];
             } else if (this.savedViewState && this.savedViewState.type === 'grid' && this.savedViewState.images && this.savedViewState.images.length > 0) {
                 imagesToShow = this.savedViewState.images;
-                this.selectedImages = [...this.savedViewState.images];
             }
-            
+
             if (!imagesToShow || imagesToShow.length === 0) {
                 console.error('❌ [RESTORE] 복원할 이미지가 없습니다!');
                 this.gridViewSaveState = null;
                 return;
             }
 
+            // ✅ 선택된 이미지 복원 (selectedIndices를 사용)
+            if (savedGridSelectionIndices) {
+                this.gridSelectedIdxs = [...savedGridSelectionIndices];
+                this.gridSelectedSet = new Set(savedGridSelectionIndices);
+                // selectedImages는 선택된 인덱스에 해당하는 이미지만
+                this.selectedImages = savedGridSelectionIndices
+                    .map(idx => imagesToShow[idx])
+                    .filter(Boolean);
+            } else if (savedGridSelectedImages && savedGridSelectedImages.length > 0) {
+                // 하위 호환성: savedGridSelectedImages가 있으면 사용
+                this.selectedImages = [...savedGridSelectedImages];
+                // 인덱스 재구성
+                this.gridSelectedIdxs = savedGridSelectedImages
+                    .map(img => imagesToShow.indexOf(img))
+                    .filter(idx => idx >= 0);
+                this.gridSelectedSet = new Set(this.gridSelectedIdxs);
+            } else {
+                this.gridSelectedIdxs = [];
+                this.gridSelectedSet = new Set();
+                this.selectedImages = [];
+            }
+
+            console.log('🔍 [RESTORE] 선택 복원:', this.gridSelectedIdxs.length, '개 이미지');
+
             // ✅ 그리드 복귀
             this.showGrid(imagesToShow, true);
+            
+            // ✅ Wafer Map Explorer 선택 표시 복원 (모든 파일/폴더 선택 강조)
+            setTimeout(() => {
+                this.restoreFolderSelection();
+                this.updateFileExplorerSelection({ highlightOnly: true, skipEnsurePage: true });
+            }, 80);
             
             // ✅ Composite Mode 상태 복원
             const saveState = savedGridViewSaveState || this.savedViewState;
