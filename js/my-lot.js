@@ -963,6 +963,8 @@ export class MyLotModal {
         const searchParams = new URLSearchParams();
         searchParams.set('lot_multi', normalizedLots.join(','));
         searchParams.set('limit', '3000');
+        // 🔥 전체 검색: folder를 빈 문자열로 설정하여 모든 하위폴더 검색
+        searchParams.set('folder', '');
         const searchUrl = `/api/search?${searchParams.toString()}`;
 
         console.log(`[MyLotModal] 이미지 검색: LOT=[${normalizedLots.join(', ')}], Wafer=${waferFilter || '없음'}`);

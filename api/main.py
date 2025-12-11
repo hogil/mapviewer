@@ -2641,14 +2641,13 @@ class _SkipCompositeStatusFilter(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(_SkipCompositeStatusFilter())
 
-# 🚀 압축 미들웨어: 비활성화
-# 🔥 Python 3.13에서 GZip "I/O operation on closed file" 에러가 발생하므로 
-# minimum_size를 10MB로 설정하여 사실상 압축 비활성화
+# 🚀 압축 미들웨어: 완전 비활성화
+# 🔥 Python 3.13에서 GZip "I/O operation on closed file" 에러가 발생
 # 이미지는 이미 압축되어 있고, JSON 응답은 작아서 압축 불필요
-_COMPRESS_MIN_SIZE = 10 * 1024 * 1024  # 10MB (사실상 비활성화)
-if HAS_BROTLI:
-    app.add_middleware(BrotliMiddleware, quality=3, minimum_size=_COMPRESS_MIN_SIZE)
-app.add_middleware(GZipMiddleware, minimum_size=_COMPRESS_MIN_SIZE, compresslevel=1)
+# 미들웨어를 추가하지 않음으로써 에러 완전 방지
+# if HAS_BROTLI:
+#     app.add_middleware(BrotliMiddleware, quality=3, minimum_size=_COMPRESS_MIN_SIZE)
+# app.add_middleware(GZipMiddleware, minimum_size=_COMPRESS_MIN_SIZE, compresslevel=1)
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 
@@ -4676,15 +4675,23 @@ async def search_files(q: str = Query("", description="파일명 검색(대소�
         if lot_multi:
             logger.info(f"LOT_MULTI 원본: {lot_multi}, 파싱 결과: {lot_filter_values}, 개수: {len(lot_filter_values)}")
         
-        # 🔥 folder 파라미터가 있으면 해당 폴더와 하위 폴더만 검색
-        if folder:
-            folder_path = safe_resolve_path(folder)
-            if folder_path.exists() and folder_path.is_dir():
-                search_root = folder_path
-                logger.info(f"[SEARCH] folder 파라미터 지정: {folder} → {search_root}")
-            else:
-                logger.warning(f"[SEARCH] 잘못된 folder 경로: {folder}, 전체 검색으로 폴백")
+        # 🔥 folder 파라미터 처리
+        # - folder가 None이면: current_folder 사용 (기존 동작)
+        # - folder가 빈 문자열("")이면: ROOT_DIR 전체 검색 (명시적 전체 검색)
+        # - folder가 경로이면: 해당 폴더와 하위 폴더 검색
+        if folder is not None:
+            if folder == "":
+                # 🔥 빈 문자열은 명시적으로 전체 검색 요청
                 search_root = ROOT_DIR
+                logger.info(f"[SEARCH] folder='' → ROOT_DIR 전체 검색")
+            else:
+                folder_path = safe_resolve_path(folder)
+                if folder_path.exists() and folder_path.is_dir():
+                    search_root = folder_path
+                    logger.info(f"[SEARCH] folder 파라미터 지정: {folder} → {search_root}")
+                else:
+                    logger.warning(f"[SEARCH] 잘못된 folder 경로: {folder}, 전체 검색으로 폴백")
+                    search_root = ROOT_DIR
         else:
             # folder 미지정 시 current_folder 또는 ROOT_DIR (전체 검색)
             search_root = current_folder if current_folder.exists() else ROOT_DIR
