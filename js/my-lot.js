@@ -271,6 +271,11 @@ export class MyLotModal {
         this.selectedManualCells.clear();
         this.selectedManualCells.add(`${newIndex}_lot`);
         this.renderEntries();
+        
+        // 🔥 행 추가 후 자동으로 LOT 입력 모드 진입
+        requestAnimationFrame(() => {
+            this.startManualCellEditByIndex(newIndex, 'lot');
+        });
     }
 
     deleteManualRow() {
@@ -337,11 +342,19 @@ export class MyLotModal {
             this.updateManualRowPreview(newRowIndices[0]);
         }
         
-        // 백그라운드에서 이미지 검색
-        newRowIndices.forEach(async (rowIndex) => {
+        // 🔥 백그라운드에서 모든 행 이미지 검색 (병렬 처리)
+        this.viewer?.showToast?.(`${newRowIndices.length}개 LOT 검색 중...`, 2000);
+        
+        const searchPromises = newRowIndices.map(async (rowIndex) => {
             await this.searchAndUpdateManualRowImage(rowIndex);
-            this.updateManualRowPreview(rowIndex);
         });
+        
+        await Promise.all(searchPromises);
+        
+        // 검색 완료 후 결과 요약
+        const totalFound = this.manualRows.reduce((sum, row) => 
+            sum + (row.searchResults?.length || 0), 0);
+        this.viewer?.showToast?.(`검색 완료: ${totalFound}개 이미지 발견`, 2000);
     }
     
     handleManualCellClick(rowIndex, cellType, event) {
@@ -531,6 +544,17 @@ export class MyLotModal {
         this.copyToClipboard(text, `${values.length}개 셀 복사됨`);
     }
 
+    /**
+     * 🔥 특정 행/셀 편집 모드 진입 (행 추가 시 자동 호출)
+     */
+    startManualCellEditByIndex(rowIndex, cellType, initialText = '') {
+        this.activeManualCell = { rowIndex, cellType };
+        this.selectedManualCells.clear();
+        this.selectedManualCells.add(`${rowIndex}_${cellType}`);
+        this.updateManualCellStyles();
+        this.startManualCellEdit(initialText);
+    }
+
     startManualCellEdit(initialText = '') {
         if (!this.activeManualCell) return;
 
@@ -568,13 +592,13 @@ export class MyLotModal {
                 const minute = String(now.getMinutes()).padStart(2, '0');
                 const second = String(now.getSeconds()).padStart(2, '0');
                 this.manualRows[index].saved_at = `${year}${month}${day}_${hour}${minute}${second}`;
-                if (cellType === 'lot') {
-                    this.scheduleManualRowSearch(index);
-                }
+                // 🔥 LOT 또는 Wafer 입력 시 검색 스케줄
+                this.scheduleManualRowSearch(index, 300);
             } else {
                 delete this.manualRows[index].saved_at;
                 if (cellType === 'lot') {
                     this.manualRows[index].path = null;
+                    this.manualRows[index].searchResults = [];
                     this.updateManualRowPreview(index);
                 }
             }
@@ -597,11 +621,9 @@ export class MyLotModal {
                 const second = String(now.getSeconds()).padStart(2, '0');
                 this.manualRows[index].saved_at = `${year}${month}${day}_${hour}${minute}${second}`;
                 
-                // LOT 입력 시 자동으로 이미지 검색
-                if (cellType === 'lot') {
-                    await this.searchAndUpdateManualRowImage(index);
-                    this.updateManualRowPreview(index);
-                }
+                // 🔥 LOT 또는 Wafer 입력 시 자동으로 이미지 검색
+                await this.searchAndUpdateManualRowImage(index);
+                this.updateManualRowPreview(index);
             }
             this.renderEntries();
         };
@@ -675,6 +697,9 @@ export class MyLotModal {
         return lots;
     }
 
+    /**
+     * 🔥 저장 버튼 클릭 - 검색된 모든 이미지를 my-lot 폴더에 복사 (리팩토링)
+     */
     async handleManualSubmit() {
         if (!this.activeGroup) {
             this.viewer?.showToast?.('먼저 그룹을 선택해주세요.', 2000);
@@ -688,18 +713,32 @@ export class MyLotModal {
             return;
         }
 
+        this.viewer?.showToast?.('저장 중...', 1500);
+
         try {
-            // 이미지 있는 항목과 없는 항목 분리
-            const withImage = validRows.filter(row => row.path);
-            const withoutImage = validRows.filter(row => !row.path);
+            // 🔥 모든 행의 검색 결과 수집 (searchResults 또는 path)
+            const allPaths = new Set();
+            const rowsWithoutImages = [];
+
+            for (const row of validRows) {
+                // searchResults가 있으면 모두 추가, 없으면 path만 추가
+                if (row.searchResults && row.searchResults.length > 0) {
+                    row.searchResults.forEach(p => allPaths.add(p));
+                } else if (row.path) {
+                    allPaths.add(row.path);
+                } else {
+                    // 이미지 없는 행
+                    rowsWithoutImages.push(row);
+                }
+            }
 
             let successCount = 0;
             let errors = [];
 
-            // 1. 이미지 있는 항목: 기존 batch API 사용
-            if (withImage.length > 0) {
-                // 중복 제거
-                const paths = Array.from(new Set(withImage.map(row => row.path)));
+            // 1. 🔥 검색된 모든 이미지를 my-lot 폴더에 복사 (batch API)
+            if (allPaths.size > 0) {
+                const pathsArray = Array.from(allPaths);
+                console.log(`[MyLotModal] 저장할 이미지: ${pathsArray.length}개`);
                 
                 const res = await fetch('/api/my-lot/batch', {
                     method: 'POST',
@@ -707,7 +746,7 @@ export class MyLotModal {
                     body: JSON.stringify({
                         mode: this.activeMode,
                         group: this.activeGroup,
-                        paths: paths,
+                        paths: pathsArray,
                     }),
                 });
                 
@@ -715,16 +754,16 @@ export class MyLotModal {
                     const result = await res.json();
                     successCount += (result.success_count || 0);
                     if (result.errors && result.errors.length > 0) errors.push(...result.errors);
+                    console.log(`[MyLotModal] 이미지 저장 완료: 성공=${result.success_count}, 중복=${result.duplicate_count || 0}`);
                 } else {
                     const errorText = await this.parseErrorResponse(res);
                     errors.push({ reason: errorText });
                 }
             }
 
-            // 2. 이미지 없는 항목: 신규 manual API 사용 (개별 호출)
-            if (withoutImage.length > 0) {
-                // 병렬 처리 (최대 5개씩 끊어서 처리해도 되지만 일단 전체 병렬)
-                const promises = withoutImage.map(row => 
+            // 2. 이미지 없는 항목: LOT 폴더만 생성 (manual API)
+            if (rowsWithoutImages.length > 0) {
+                const promises = rowsWithoutImages.map(row => 
                     fetch('/api/my-lot/manual', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -769,24 +808,26 @@ export class MyLotModal {
     }
 
     /**
-     * LOT 값들로 이미지 검색 (공통 함수)
+     * 🔥 LOT 값들로 이미지 검색 (리팩토링)
      * @param {Array<string>} lotValues LOT 값 배열
+     * @param {string} waferFilter 선택적 Wafer 필터 (있으면 파일명에 포함된 것만 반환)
      * @returns {Promise<Array<string>>} 검색된 이미지 경로 배열
      */
-    async searchImagesByLots(lotValues) {
+    async searchImagesByLots(lotValues, waferFilter = '') {
         if (!lotValues || lotValues.length === 0) {
             return [];
         }
 
-        // 🔥 대소문자 구분 없이 검색하기 위해 소문자로 변환 (백엔드와 일치)
-        const normalizedLots = lotValues.map(lot => (lot || '').trim().toLowerCase());
+        // 대소문자 구분 없이 검색
+        const normalizedLots = lotValues.map(lot => (lot || '').trim().toLowerCase()).filter(Boolean);
+        if (normalizedLots.length === 0) return [];
         
         const searchParams = new URLSearchParams();
         searchParams.set('lot_multi', normalizedLots.join(','));
-        searchParams.set('limit', '3000');  // 🔥 검색 결과 최대 3000개
+        searchParams.set('limit', '3000');
         const searchUrl = `/api/search?${searchParams.toString()}`;
 
-        console.log(`[MyLotModal] 이미지 검색: ${normalizedLots.join(', ')}`);
+        console.log(`[MyLotModal] 이미지 검색: LOT=[${normalizedLots.join(', ')}], Wafer=${waferFilter || '없음'}`);
 
         const searchRes = await fetch(searchUrl);
         if (!searchRes.ok) {
@@ -798,8 +839,60 @@ export class MyLotModal {
             throw new Error('검색 응답 형식이 올바르지 않습니다.');
         }
 
-        console.log(`[MyLotModal] 검색 결과: ${searchData.results.length}개`);
-        return searchData.results;
+        let results = searchData.results;
+
+        // 🔥 Wafer 필터가 있으면 파일명에 wafer 값이 포함된 것만 필터링
+        if (waferFilter) {
+            const waferLower = waferFilter.trim().toLowerCase();
+            results = results.filter(path => {
+                const filename = path.split('/').pop().split('\\').pop().toLowerCase();
+                return filename.includes(waferLower);
+            });
+            console.log(`[MyLotModal] Wafer 필터 적용 후: ${results.length}개`);
+        }
+
+        console.log(`[MyLotModal] 검색 결과: ${results.length}개`);
+        return results;
+    }
+
+    /**
+     * 🔥 단일 행 검색 및 이미지 연결 (LOT + Wafer)
+     * @param {number} rowIndex 행 인덱스
+     * @returns {Promise<{paths: Array<string>, previewPath: string|null}>}
+     */
+    async searchRowImages(rowIndex) {
+        const row = this.manualRows[rowIndex];
+        if (!row || !row.lot) {
+            return { paths: [], previewPath: null };
+        }
+
+        const lot = row.lot.trim();
+        const wafer = (row.wafer || '').trim();
+
+        try {
+            // LOT으로 검색, Wafer 있으면 필터링
+            const results = await this.searchImagesByLots([lot], wafer);
+            
+            // Placeholder 제외한 유효한 이미지 필터링
+            const validPaths = results.filter(p => 
+                p && !p.includes('_placeholders') && !p.includes('placeholder.png')
+            );
+
+            // 첫 번째 이미지를 미리보기용으로 선택
+            const previewPath = validPaths.length > 0 ? validPaths[0] : null;
+
+            // 행에 검색 결과 저장
+            this.manualRows[rowIndex].searchResults = validPaths;
+            this.manualRows[rowIndex].path = previewPath;
+
+            console.log(`[MyLotModal] 행 ${rowIndex} 검색 완료: LOT="${lot}", Wafer="${wafer}", 결과=${validPaths.length}개`);
+            return { paths: validPaths, previewPath };
+        } catch (error) {
+            console.error(`[MyLotModal] 행 ${rowIndex} 검색 실패:`, error);
+            this.manualRows[rowIndex].searchResults = [];
+            this.manualRows[rowIndex].path = null;
+            return { paths: [], previewPath: null };
+        }
     }
 
     /**
@@ -862,49 +955,60 @@ export class MyLotModal {
         this.manualSearchTimers.set(rowIndex, timer);
     }
 
+    /**
+     * 🔥 행 검색 및 미리보기 업데이트 (리팩토링)
+     */
     async searchAndUpdateManualRowImage(rowIndex) {
         if (!this.manualRows[rowIndex]) {
             console.warn(`[MyLotModal] manualRows[${rowIndex}] 없음`);
             return;
         }
         
-        const lot = this.manualRows[rowIndex].lot;
-        if (!lot) {
-            console.warn(`[MyLotModal] manualRows[${rowIndex}] LOT 값 없음`);
-            this.manualRows[rowIndex].path = null;
+        const row = this.manualRows[rowIndex];
+        if (!row.lot) {
+            row.path = null;
+            row.searchResults = [];
             this.updateManualRowPreview(rowIndex);
             return;
         }
 
-        console.log(`[MyLotModal] LOT "${lot}" 이미지 검색 시작...`);
+        // 🔥 새로운 검색 함수 사용 (LOT + Wafer 필터)
+        const { paths, previewPath } = await this.searchRowImages(rowIndex);
         
-        try {
-            const results = await this.searchImagesByLots([lot]);
-            console.log(`[MyLotModal] LOT "${lot}" 검색 결과:`, results);
-            
-            if (results && results.length > 0) {
-                // Placeholder가 아닌 첫 번째 실제 이미지 찾기
-                const validPath = results.find(p => 
-                    p && !p.includes('_placeholders') && !p.includes('placeholder.png')
-                );
-                
-                if (validPath) {
-                    this.manualRows[rowIndex].path = validPath;
-                    console.log(`[MyLotModal] LOT "${lot}" 이미지 연결: ${validPath}`);
-                } else {
-                    this.manualRows[rowIndex].path = null;
-                    console.log(`[MyLotModal] LOT "${lot}" placeholder만 있음`);
-                }
-            } else {
-                // 이미지 없음 - path를 null로 설정
-                this.manualRows[rowIndex].path = null;
-                console.log(`[MyLotModal] LOT "${lot}" 이미지 없음`);
-            }
-        } catch (error) {
-            console.error(`[MyLotModal] LOT "${lot}" 검색 실패:`, error);
-            this.manualRows[rowIndex].path = null;
-        }
+        // UI 업데이트
         this.updateManualRowPreview(rowIndex);
+        this.updateManualRowSearchCount(rowIndex, paths.length);
+    }
+
+    /**
+     * 🔥 행의 검색 결과 개수 표시 업데이트
+     */
+    updateManualRowSearchCount(rowIndex, count) {
+        const inputRows = this.entriesContainer?.querySelectorAll('.my-lot-input-row');
+        if (!inputRows) return;
+        
+        const targetRow = Array.from(inputRows).find(
+            r => Number(r.dataset.manualIndex) === rowIndex
+        );
+        if (!targetRow) return;
+
+        // 검색 결과 개수 표시 셀 찾기 또는 생성
+        let countCell = targetRow.querySelector('.search-count');
+        if (!countCell) {
+            countCell = document.createElement('span');
+            countCell.className = 'search-count';
+            countCell.style.cssText = 'margin-left: 8px; font-size: 11px; color: #888;';
+            const lotCell = targetRow.querySelector('td[data-cell-type="lot"]');
+            if (lotCell) lotCell.appendChild(countCell);
+        }
+        
+        if (count > 0) {
+            countCell.textContent = `(${count}개)`;
+            countCell.style.color = '#4ade80';
+        } else {
+            countCell.textContent = '(0개)';
+            countCell.style.color = '#ef4444';
+        }
     }
 
     setupDragging() {
@@ -1479,7 +1583,7 @@ export class MyLotModal {
                 input.focus();
                 input.select();
                 
-                const finishEdit = () => {
+                const finishEdit = async () => {
                     this.manualRows[index].wafer = input.value;
                     if (input.value) {
                         // 입력 시 현재 시간으로 saved_at 설정
@@ -1491,6 +1595,11 @@ export class MyLotModal {
                         const minute = String(now.getMinutes()).padStart(2, '0');
                         const second = String(now.getSeconds()).padStart(2, '0');
                         this.manualRows[index].saved_at = `${year}${month}${day}_${hour}${minute}${second}`;
+                        
+                        // 🔥 Wafer 입력 시 재검색 (LOT + Wafer 필터)
+                        if (this.manualRows[index].lot) {
+                            await this.searchAndUpdateManualRowImage(index);
+                        }
                         this.renderEntries();
                     } else {
                         waferCell.textContent = '(Wafer)';
