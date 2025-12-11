@@ -383,19 +383,35 @@ export class MyLotModal {
             this.updateManualRowPreview(newRowIndices[0]);
         }
         
-        // 🔥 백그라운드에서 모든 행 이미지 검색 (병렬 처리)
-        this.viewer?.showToast?.(`${newRowIndices.length}개 LOT 검색 중...`, 2000);
+        // 🔥🔥🔥 배치 검색: 모든 LOT을 한번에 검색하여 초고속 처리
+        this.viewer?.showToast?.(`${newRowIndices.length}개 LOT 검색 중...`, 1500);
         
-        const searchPromises = newRowIndices.map(async (rowIndex) => {
-            await this.searchAndUpdateManualRowImage(rowIndex);
-        });
+        // 검색할 행 정보 수집
+        const searchRows = newRowIndices.map(rowIndex => ({
+            rowIndex,
+            lot: this.manualRows[rowIndex]?.lot || '',
+            wafer: this.manualRows[rowIndex]?.wafer || ''
+        })).filter(r => r.lot);
+
+        if (searchRows.length > 0) {
+            // 한번의 API 호출로 모든 LOT 검색
+            const resultMap = await this.searchImagesByLotsBatch(searchRows);
+            
+            // 결과를 각 행에 적용
+            let totalFound = 0;
+            for (const [rowIndex, result] of resultMap) {
+                if (this.manualRows[rowIndex]) {
+                    this.manualRows[rowIndex].searchResults = result.paths;
+                    this.manualRows[rowIndex].path = result.previewPath;
+                    totalFound += result.paths.length;
+                }
+            }
+            
+            this.viewer?.showToast?.(`검색 완료: ${totalFound}개 이미지 발견`, 2000);
+        } else {
+            this.viewer?.showToast?.('검색할 LOT이 없습니다.', 1500);
+        }
         
-        await Promise.all(searchPromises);
-        
-        // 검색 완료 후 결과 요약
-        const totalFound = this.manualRows.reduce((sum, row) => 
-            sum + (row.searchResults?.length || 0), 0);
-        this.viewer?.showToast?.(`검색 완료: ${totalFound}개 이미지 발견`, 2000);
         this.renderEntries(); // 검색 결과 개수 반영
     }
     
@@ -730,8 +746,8 @@ export class MyLotModal {
                 const minute = String(now.getMinutes()).padStart(2, '0');
                 const second = String(now.getSeconds()).padStart(2, '0');
                 this.manualRows[index].saved_at = `${year}${month}${day}_${hour}${minute}${second}`;
-                // 🔥 LOT 또는 Wafer 입력 시 검색 스케줄
-                this.scheduleManualRowSearch(index, 300);
+                // 🔥 LOT 또는 Wafer 입력 시 즉시 검색 (delay 제거)
+                this.scheduleManualRowSearch(index, 0);
             } else {
                 delete this.manualRows[index].saved_at;
                 if (cellType === 'lot') {
@@ -994,6 +1010,95 @@ export class MyLotModal {
         console.log(`[MyLotModal] 검색 결과: ${results.length}개`);
 
         return results;
+    }
+
+    /**
+     * 🔥🔥🔥 다중 LOT 배치 검색 - 모든 LOT을 한번에 검색하여 초고속 처리
+     * @param {Array<{lot: string, wafer?: string, rowIndex: number}>} rows 검색할 행 정보
+     * @returns {Promise<Map<number, {paths: Array<string>, previewPath: string|null}>>} rowIndex -> 검색 결과 매핑
+     */
+    async searchImagesByLotsBatch(rows) {
+        if (!rows || rows.length === 0) {
+            return new Map();
+        }
+
+        // 1. 모든 고유 LOT 수집
+        const uniqueLots = [...new Set(rows.map(r => (r.lot || '').trim().toLowerCase()).filter(Boolean))];
+        if (uniqueLots.length === 0) {
+            return new Map();
+        }
+
+        console.log(`[MyLotModal] 🔥 배치 검색 시작: ${uniqueLots.length}개 LOT, ${rows.length}개 행`);
+        const startTime = performance.now();
+
+        try {
+            // 2. 한번의 API 호출로 모든 LOT 검색
+            const searchParams = new URLSearchParams();
+            searchParams.set('lot_multi', uniqueLots.join(','));
+            searchParams.set('limit', '10000');
+            searchParams.set('folder', ''); // 전체 검색 (하위폴더 포함)
+            const searchUrl = `/api/search?${searchParams.toString()}`;
+
+            const searchRes = await fetch(searchUrl);
+            if (!searchRes.ok) {
+                throw new Error(`검색 API 오류: ${searchRes.status}`);
+            }
+
+            const searchData = await searchRes.json();
+            if (!searchData || !searchData.success || !Array.isArray(searchData.results)) {
+                throw new Error('검색 응답 형식이 올바르지 않습니다.');
+            }
+
+            const allResults = searchData.results.filter(p => 
+                p && !p.includes('_placeholders') && !p.includes('placeholder.png')
+            );
+
+            console.log(`[MyLotModal] API 응답: ${allResults.length}개 이미지 (${(performance.now() - startTime).toFixed(0)}ms)`);
+
+            // 3. LOT별로 결과 분류 (소문자 비교)
+            const lotResultsMap = new Map(); // lot(소문자) -> paths[]
+            for (const path of allResults) {
+                const filename = path.split('/').pop().split('\\').pop().toLowerCase();
+                const lotToken = filename.split('_')[0];
+                if (!lotResultsMap.has(lotToken)) {
+                    lotResultsMap.set(lotToken, []);
+                }
+                lotResultsMap.get(lotToken).push(path);
+            }
+
+            // 4. 각 행에 결과 분배
+            const resultMap = new Map();
+            for (const row of rows) {
+                const lotLower = (row.lot || '').trim().toLowerCase();
+                const waferFilter = (row.wafer || '').trim().toLowerCase();
+                
+                let paths = lotResultsMap.get(lotLower) || [];
+                
+                // Wafer 필터 적용
+                if (waferFilter && paths.length > 0) {
+                    paths = paths.filter(p => {
+                        const fn = p.split('/').pop().split('\\').pop().toLowerCase();
+                        return fn.includes(waferFilter);
+                    });
+                }
+
+                const previewPath = paths.length > 0 ? paths[0] : null;
+                resultMap.set(row.rowIndex, { paths, previewPath });
+            }
+
+            const elapsed = (performance.now() - startTime).toFixed(0);
+            console.log(`[MyLotModal] 🔥 배치 검색 완료: ${elapsed}ms, 총 ${allResults.length}개 이미지`);
+
+            return resultMap;
+        } catch (error) {
+            console.error('[MyLotModal] 배치 검색 실패:', error);
+            // 실패 시 빈 결과 반환
+            const emptyMap = new Map();
+            for (const row of rows) {
+                emptyMap.set(row.rowIndex, { paths: [], previewPath: null });
+            }
+            return emptyMap;
+        }
     }
 
     /**
