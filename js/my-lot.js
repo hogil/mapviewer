@@ -89,20 +89,77 @@ export class MyLotModal {
         this.pendingPaths = []; // Context Menu에서 추가할 경로들
         this.updatedGroups = new Set(); // 🔥 세션 당 그룹별 업데이트 여부 추적
 
+        // 🔥 Excel 스타일 키보드 핸들링
+        this.isEditMode = false; // 편집 모드 상태
+        
         this.boundKeyHandler = (event) => {
+            // 입력 필드에서는 특정 키만 처리
+            if (event.target.matches('input, textarea')) {
+                if (event.key === 'Escape') {
+                    event.target.blur();
+                    this.isEditMode = false;
+                    return;
+                }
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    event.target.blur();
+                    this.isEditMode = false;
+                    // Enter: 아래 셀로 이동
+                    this.moveCellSelection(1, 0);
+                    return;
+                }
+                if (event.key === 'Tab') {
+                    event.preventDefault();
+                    event.target.blur();
+                    this.isEditMode = false;
+                    // Tab: 오른쪽 셀로 이동 (Shift+Tab: 왼쪽)
+                    this.moveCellSelection(0, event.shiftKey ? -1 : 1);
+                    return;
+                }
+                return; // 다른 키는 input에서 기본 동작
+            }
+            
             if (event.key === 'Escape') {
                 this.close();
                 return;
             }
 
-            // 🔥 Ctrl+C: 선택된 항목 복사
-            if ((event.ctrlKey || event.metaKey) && event.key === 'c') {
-                // 입력 필드에서는 기본 동작 유지
-                if (event.target.matches('input, textarea')) {
-                    return;
-                }
+            // 🔥 F2: 편집 모드 진입 (기존 내용 유지)
+            if (event.key === 'F2' && this.activeManualCell) {
                 event.preventDefault();
-                // 수동 입력 셀이 선택되어 있으면 셀 내용 복사
+                this.isEditMode = true;
+                const row = this.manualRows[this.activeManualCell.rowIndex];
+                const value = row ? (row[this.activeManualCell.cellType] || '') : '';
+                this.startManualCellEdit(value);
+                return;
+            }
+
+            // 🔥 Arrow Keys: 셀 이동 (Shift: 범위 선택)
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+                event.preventDefault();
+                const dr = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+                const dc = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0;
+                this.moveCellSelection(dr, dc, event.shiftKey);
+                return;
+            }
+
+            // 🔥 Enter: 아래 셀로 이동
+            if (event.key === 'Enter' && this.activeManualCell) {
+                event.preventDefault();
+                this.moveCellSelection(1, 0);
+                return;
+            }
+
+            // 🔥 Tab: 오른쪽 셀로 이동 (Shift+Tab: 왼쪽)
+            if (event.key === 'Tab' && this.activeManualCell) {
+                event.preventDefault();
+                this.moveCellSelection(0, event.shiftKey ? -1 : 1);
+                return;
+            }
+
+            // 🔥 Ctrl+C: 복사
+            if ((event.ctrlKey || event.metaKey) && event.key === 'c') {
+                event.preventDefault();
                 if (this.selectedManualCells.size > 0) {
                     this.copySelectedManualCells();
                 } else {
@@ -111,12 +168,8 @@ export class MyLotModal {
                 return;
             }
 
-            // 🔥 Ctrl+V: 클립보드에서 붙여넣기
+            // 🔥 Ctrl+V: 붙여넣기
             if ((event.ctrlKey || event.metaKey) && event.key === 'v') {
-                // 입력 필드에서는 기본 동작 유지
-                if (event.target.matches('input, textarea')) {
-                    return;
-                }
                 event.preventDefault();
                 this.handleKeyboardPaste();
                 return;
@@ -124,12 +177,7 @@ export class MyLotModal {
 
             // 🔥 Delete: 선택된 행 삭제
             if (event.key === 'Delete') {
-                // 입력 필드에서는 기본 동작 유지
-                if (event.target.matches('input, textarea')) {
-                    return;
-                }
                 event.preventDefault();
-                // 수동 입력 셀이 선택되어 있으면 행 전체 삭제
                 if (this.selectedManualCells.size > 0) {
                     this.deleteSelectedManualRows();
                 } else {
@@ -140,32 +188,19 @@ export class MyLotModal {
 
             // 🔥 Backspace: 선택된 셀 내용만 삭제
             if (event.key === 'Backspace') {
-                // 입력 필드에서는 기본 동작 유지
-                if (event.target.matches('input, textarea')) {
-                    return;
-                }
-                // 수동 입력 셀이 선택되어 있으면 내용만 삭제
+                event.preventDefault();
                 if (this.selectedManualCells.size > 0) {
-                    event.preventDefault();
                     this.deleteSelectedManualCells();
                 }
                 return;
             }
 
-            // 🔥 선택된 셀에 직접 타이핑: 내용 지우고 새 내용으로 교체
+            // 🔥 문자 입력: 기존 내용 지우고 편집 모드 (Excel처럼)
             if (this.activeManualCell && !event.ctrlKey && !event.metaKey && !event.altKey) {
-                // 입력 필드나 특수 키는 제외
-                if (event.target.matches('input, textarea, button, select')) {
-                    return;
-                }
-                // 특수 키 제외 (Enter, Tab, Arrow keys 등)
-                if (event.key.length > 1 && event.key !== 'Backspace') {
-                    return;
-                }
-                // Backspace나 일반 문자 입력 시 편집 모드로 전환
-                if (event.key.length === 1 || event.key === 'Backspace') {
+                if (event.key.length === 1) {
                     event.preventDefault();
-                    this.startManualCellEdit(event.key === 'Backspace' ? '' : event.key);
+                    this.isEditMode = true;
+                    this.startManualCellEdit(event.key);
                     return;
                 }
             }
@@ -270,11 +305,12 @@ export class MyLotModal {
         this.activeManualCell = { rowIndex: newIndex, cellType: 'lot' };
         this.selectedManualCells.clear();
         this.selectedManualCells.add(`${newIndex}_lot`);
+        this.lastManualCellIndex = newIndex;
         this.renderEntries();
         
-        // 🔥 행 추가 후 자동으로 LOT 입력 모드 진입
+        // 🔥 셀 선택만 (파란색 테두리), 문자 입력 시 편집 모드 진입
         requestAnimationFrame(() => {
-            this.startManualCellEditByIndex(newIndex, 'lot');
+            this.updateManualCellStyles();
         });
     }
 
@@ -286,6 +322,11 @@ export class MyLotModal {
         }
     }
 
+    /**
+     * 🔥 클립보드 붙여넣기 (Excel 스타일)
+     * - 선택된 셀이 있으면 그 다음 행부터 추가
+     * - 기존 행이 있으면 그 뒤에 추가 (덮어쓰기 X)
+     */
     async handleManualPaste(text, clearExisting = false) {
         const lines = (text || '')
             .split(/\r?\n/)
@@ -295,23 +336,18 @@ export class MyLotModal {
         
         // 현재 시간
         const now = new Date();
-        const year = String(now.getFullYear()).slice(2);
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
-        const hour = String(now.getHours()).padStart(2, '0');
-        const minute = String(now.getMinutes()).padStart(2, '0');
-        const second = String(now.getSeconds()).padStart(2, '0');
-        const timestamp = `${year}${month}${day}_${hour}${minute}${second}`;
+        const timestamp = `${String(now.getFullYear()).slice(2)}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
         
         if (clearExisting) {
             this.manualRows = [];
         }
         this.manualSearchTimers.clear();
         
-        // 선택된 셀이 있으면 그 위치부터 시작
-        let startIndex = this.manualRows.length;
-        if (this.activeManualCell && this.activeManualCell.rowIndex < this.manualRows.length) {
-            startIndex = this.activeManualCell.rowIndex;
+        // 🔥 선택된 셀이 있으면 그 다음 행부터 추가 (기존 행 유지)
+        let insertIndex = this.manualRows.length; // 기본: 맨 끝
+        if (this.activeManualCell) {
+            // 선택된 셀의 다음 행부터 삽입
+            insertIndex = this.activeManualCell.rowIndex + 1;
         }
         
         const newRowIndices = [];
@@ -319,25 +355,23 @@ export class MyLotModal {
             const parts = line.split(/\t|,/).map(p => p.trim()).filter(Boolean);
             const lot = parts[0] || '';
             const wafer = parts.length > 1 ? parts[1] : '';
-            const newRow = { lot, wafer, saved_at: timestamp, path: null };
+            const newRow = { lot, wafer, saved_at: timestamp, path: null, searchResults: [] };
             
-            const targetIndex = startIndex + lineIndex;
-            if (targetIndex < this.manualRows.length) {
-                // 기존 행 덮어쓰기
-                this.manualRows[targetIndex] = newRow;
-            } else {
-                // 새 행 추가
-                this.manualRows.push(newRow);
-            }
+            // 🔥 기존 행 사이에 삽입
+            const targetIndex = insertIndex + lineIndex;
+            this.manualRows.splice(targetIndex, 0, newRow);
             newRowIndices.push(targetIndex);
         });
         
         this.renderEntries();
-        // 새로 붙여넣은 첫 행을 활성 셀로 설정해 바로 미리보기 갱신
+        
+        // 새로 붙여넣은 첫 행을 활성 셀로 설정
         if (newRowIndices.length > 0) {
             this.activeManualCell = { rowIndex: newRowIndices[0], cellType: 'lot' };
             this.selectedManualCells.clear();
-            this.selectedManualCells.add(`${newRowIndices[0]}_lot`);
+            // 모든 새 행 선택
+            newRowIndices.forEach(idx => this.selectedManualCells.add(`${idx}_lot`));
+            this.lastManualCellIndex = newRowIndices[newRowIndices.length - 1];
             this.updateManualCellStyles();
             this.updateManualRowPreview(newRowIndices[0]);
         }
@@ -355,6 +389,7 @@ export class MyLotModal {
         const totalFound = this.manualRows.reduce((sum, row) => 
             sum + (row.searchResults?.length || 0), 0);
         this.viewer?.showToast?.(`검색 완료: ${totalFound}개 이미지 발견`, 2000);
+        this.renderEntries(); // 검색 결과 개수 반영
     }
     
     handleManualCellClick(rowIndex, cellType, event) {
@@ -409,6 +444,73 @@ export class MyLotModal {
         }) || null;
     }
 
+    /**
+     * 🔥 Excel 스타일 셀 이동 (Arrow keys, Enter, Tab)
+     * @param {number} dr 행 이동 (-1: 위, 1: 아래)
+     * @param {number} dc 열 이동 (-1: 왼쪽, 1: 오른쪽)
+     * @param {boolean} extendSelection Shift 누른 상태 (범위 선택)
+     */
+    moveCellSelection(dr, dc, extendSelection = false) {
+        if (!this.activeManualCell && this.manualRows.length === 0) return;
+        
+        // 셀이 선택되지 않았으면 첫 번째 셀 선택
+        if (!this.activeManualCell) {
+            this.activeManualCell = { rowIndex: 0, cellType: 'lot' };
+            this.selectedManualCells.clear();
+            this.selectedManualCells.add('0_lot');
+            this.lastManualCellIndex = 0;
+            this.updateManualCellStyles();
+            this.updateManualRowPreview(0);
+            return;
+        }
+        
+        let { rowIndex, cellType } = this.activeManualCell;
+        const cellTypes = this.activeMode === 'wafer' ? ['lot', 'wafer'] : ['lot'];
+        let colIndex = cellTypes.indexOf(cellType);
+        
+        // 새 위치 계산
+        let newRow = rowIndex + dr;
+        let newCol = colIndex + dc;
+        
+        // 열 범위 벗어나면 행 이동
+        if (newCol < 0) {
+            newCol = cellTypes.length - 1;
+            newRow--;
+        } else if (newCol >= cellTypes.length) {
+            newCol = 0;
+            newRow++;
+        }
+        
+        // 행 범위 체크
+        if (newRow < 0) newRow = 0;
+        if (newRow >= this.manualRows.length) {
+            // 마지막 행 넘어가면 새 행 추가
+            if (dr > 0) {
+                this.manualRows.push({ lot: '', wafer: '' });
+                this.renderEntries();
+            } else {
+                newRow = this.manualRows.length - 1;
+            }
+        }
+        
+        const newCellType = cellTypes[newCol];
+        const newCellKey = `${newRow}_${newCellType}`;
+        
+        if (extendSelection) {
+            // Shift 범위 선택
+            this.selectedManualCells.add(newCellKey);
+        } else {
+            // 단일 선택
+            this.selectedManualCells.clear();
+            this.selectedManualCells.add(newCellKey);
+            this.lastManualCellIndex = newRow;
+        }
+        
+        this.activeManualCell = { rowIndex: newRow, cellType: newCellType };
+        this.updateManualCellStyles();
+        this.updateManualRowPreview(newRow);
+    }
+
     updateManualCellStyles() {
         // 모든 수동 입력 행의 셀에서 선택 스타일 제거
         const inputRows = this.entriesContainer?.querySelectorAll('.my-lot-input-row');
@@ -416,12 +518,13 @@ export class MyLotModal {
         
         inputRows.forEach(row => {
             row.querySelectorAll('td[data-cell-type]').forEach(cell => {
-                cell.style.border = '';
+                cell.style.outline = '';
+                cell.style.outlineOffset = '';
                 cell.style.backgroundColor = '';
             });
         });
         
-        // 선택된 셀들에 파란 테두리 적용
+        // 🔥 선택된 셀: 파란색 테두리만 (Excel 스타일)
         this.selectedManualCells.forEach(cellKey => {
             const [rowIndex, cellType] = cellKey.split('_');
             const targetRow = Array.from(inputRows).find(
@@ -430,8 +533,14 @@ export class MyLotModal {
             if (targetRow) {
                 const targetCell = targetRow.querySelector(`td[data-cell-type="${cellType}"]`);
                 if (targetCell) {
-                    targetCell.style.border = '2px solid #3b82f6';
-                    targetCell.style.backgroundColor = 'rgba(59, 130, 246, 0.1)';
+                    // 활성 셀만 진한 파란색 테두리
+                    const isActive = this.activeManualCell && 
+                        this.activeManualCell.rowIndex === Number(rowIndex) &&
+                        this.activeManualCell.cellType === cellType;
+                    
+                    targetCell.style.outline = isActive ? '2px solid #3b82f6' : '1px solid #60a5fa';
+                    targetCell.style.outlineOffset = '-1px';
+                    // 배경색 없음 (파란색 테두리만)
                 }
             }
         });
