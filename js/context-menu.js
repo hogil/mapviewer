@@ -521,6 +521,19 @@ export class ContextMenuManager {
      * 현재 선택된 파일들 가져오기
      */
     getSelectedFiles() {
+        // 단일 이미지 뷰(그리드에서 더블클릭 진입)에서는 현재 이미지만 대상
+        if (this.viewer.viewMode === 'gridImage') {
+            if (this.viewer.gridSelectedIdxs && this.viewer.gridSelectedIdxs.length > 0) {
+                const imageList = this.viewer.currentGridImages || this.viewer.selectedImages;
+                if (imageList) {
+                    return this.viewer.gridSelectedIdxs.map(idx => imageList[idx]).filter(Boolean);
+                }
+            }
+            if (this.viewer.selectedImagePath) {
+                return [this.viewer.selectedImagePath];
+            }
+        }
+
         if (this.viewer.gridMode && this.viewer.gridSelectedIdxs && this.viewer.gridSelectedIdxs.length > 0) {
             const imageList = this.viewer.currentGridImages || this.viewer.selectedImages;
             if (imageList) {
@@ -528,6 +541,10 @@ export class ContextMenuManager {
             }
         }
         
+        if (!this.viewer.gridMode && this.viewer.selectedImagePath) {
+            return [this.viewer.selectedImagePath];
+        }
+
         if (this.viewer.selectedImages && this.viewer.selectedImages.length > 0) {
             return [...this.viewer.selectedImages];
         }

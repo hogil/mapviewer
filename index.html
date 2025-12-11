@@ -1074,13 +1074,47 @@
             overflow: hidden;
             max-width: 100%;
         }
+        .my-lot-input-row {
+            background: #0d0d0d !important;
+            height: 32px;
+        }
+        .my-lot-input-row td {
+            padding: 4px 8px !important;
+            height: 32px;
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+        }
+        .my-lot-input-row input {
+            width: 100%;
+            padding: 6px 8px;
+            background: transparent;
+            border: none;
+            color: #f3f3f3;
+            font-size: 12px;
+        }
+        .my-lot-input-row input:focus {
+            outline: 1px solid #3b82f6;
+            background: #0b0b0b;
+        }
+        .my-lot-table-actions {
+            padding: 10px;
+            background: #0d0d0d;
+            border-top: 1px solid #2a2a2a;
+            display: flex;
+            gap: 6px;
+            justify-content: flex-start;
+            flex-wrap: wrap;
+        }
         
         #my-lot-entries {
             flex: 1;
             overflow-y: auto;
             overflow-x: hidden;
             border: 1px solid #2a2a2a;
-            border-radius: 8px;
+            border-top: 0;
+            border-radius: 0 0 8px 8px;
             margin-bottom: 0;
         }
 
@@ -1200,22 +1234,29 @@
 
         .my-lot-entry-row {
             cursor: pointer;
+            height: 32px;
+        }
+
+        .my-lot-entry-row td {
+            padding: 4px 8px;
+            height: 32px;
         }
 
         #my-lot-entries .my-lot-entry-row:hover {
-            background-color: rgba(0, 123, 204, 0.2);
+            background-color: rgba(0, 123, 204, 0.1);
         }
 
         #my-lot-entries .my-lot-entry-row:hover td {
-            background-color: rgba(0, 123, 204, 0.2);
+            background-color: rgba(0, 123, 204, 0.1);
         }
 
         #my-lot-entries .my-lot-entry-row.selected {
-            background-color: rgba(0, 123, 204, 0.3);
+            background-color: transparent;
         }
 
         #my-lot-entries .my-lot-entry-row.selected td {
-            background-color: rgba(0, 123, 204, 0.3);
+            background-color: transparent;
+            border: 2px solid #3b82f6;
             color: #fff;
         }
 
@@ -3473,6 +3514,7 @@
             <div class="my-lot-group-row">
                 <select id="my-lot-group-select"></select>
                 <button id="my-lot-new-group-btn" class="grid-btn" style="padding: 6px 12px; font-size: 12px;">+ 새 그룹</button>
+                <button id="my-lot-rename-group-btn" class="grid-btn" style="padding: 6px 12px; font-size: 12px;">이름 변경</button>
                 <button id="my-lot-delete-group-btn" class="grid-btn" style="padding: 6px 12px; font-size: 12px; background: #b91c1c; border: 1px solid #8b1212;">그룹 삭제</button>
             </div>
             <div class="my-lot-actions">
@@ -3500,7 +3542,14 @@
                 </div>
             </div>
             <div class="my-lot-content">
-                <div class="my-lot-table" id="my-lot-entries"></div>
+                <div class="my-lot-table">
+                    <div id="my-lot-entries"></div>
+                    <div class="my-lot-table-actions">
+                        <button id="my-lot-manual-add-row" class="grid-btn" type="button">+ 행 추가</button>
+                        <button id="my-lot-manual-delete-row" class="grid-btn" type="button">행 삭제</button>
+                        <button id="my-lot-manual-submit" class="grid-btn" type="button" style="background: #4a9e4a; border: 1px solid #357a35;">저장</button>
+                    </div>
+                </div>
                 <div class="my-lot-preview">
                     <div style="font-size: 13px; color: #bbb;">미리보기</div>
                     <img id="my-lot-preview-image" src="" alt="MY LOT Preview">

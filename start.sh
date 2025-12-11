@@ -4,6 +4,11 @@
 # SAML 설정
 export AUTO_LOGIN=False                    # 0=자동SAML로그인skip
 
+# Python 출력/인코딩
+export PYTHONIOENCODING="utf-8"
+export PYTHONUNBUFFERED="1"
+export UVICORN_LIFESPAN="on"   # FastAPI lifespan 강제 (인덱스 초기화/재빌드 보장)
+
 # 서버 설정
 export HOST="0.0.0.0"
 export PORT="8080"

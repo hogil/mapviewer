@@ -3,8 +3,25 @@
 L3Tracker - Wafer Map Viewer API (HTTPS, Pretty Table Logs, Noise-free)
 """
 
+# ======================== UTF-8 Console Setup ========================
+import sys
+import os
+
+# Windows 콘솔 UTF-8 인코딩 설정 (이모지 지원)
+if sys.platform == 'win32':
+    try:
+        import io
+        if sys.stdout.encoding != 'utf-8':
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        if sys.stderr.encoding != 'utf-8':
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+        # Windows 콘솔 코드 페이지를 UTF-8로 설정
+        os.system('chcp 65001 > nul 2>&1')
+    except Exception:
+        pass
+
 # ======================== Imports ========================
-import os, re, sys, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid
+import re, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid
 from pathlib import Path
 from contextlib import contextmanager, asynccontextmanager
 from typing import List, Optional, Dict, Any, Tuple, Set, Literal, Iterable
@@ -74,6 +91,14 @@ except Exception:
 
 from .thumbnail_service import ThumbnailService
 from . import config
+from .index_service import (
+    IndexService,
+    _tokenize_logical_query,
+    is_complex_query,
+    search_index_logical,
+    search_index_slice_parallel,
+)
+from .search_service import SearchService
 from .personal_colors import (
     load_color_legends,
     save_color_legends,
@@ -90,11 +115,14 @@ from .composite_colors import (
 from .my_lot import (
     add_entry as my_lot_add_entry,
     add_lot_batch as my_lot_add_lot_batch,
+    create_placeholder_image as my_lot_create_placeholder,
     create_group as my_lot_create_group,
     delete_group as my_lot_delete_group,
+    rename_group as my_lot_rename_group,
     list_my_lot as my_lot_list,
     remove_entry as my_lot_remove_entry,
     remove_entries_batch as my_lot_remove_entries_batch,
+    create_manual_entry as my_lot_create_manual_entry,
 )
 from .user_manager import (
     get_user_manager,
@@ -366,22 +394,45 @@ THUMBNAIL_EXECUTOR = ThreadPoolExecutor(max_workers=_THUMBNAIL_EXECUTOR_WORKERS)
 
 USER_ACTIVITY_FLAG = False
 BACKGROUND_TASKS_PAUSED = False
-INDEX_BUILDING = False
-INDEX_READY = False
-INDEX_REFRESH_TASK: Optional[asyncio.Task] = None
-
-FILE_INDEX: Dict[str, Dict[str, Any]] = {}
-FILE_INDEX_LOCK = RLock()
-FILE_INDEX_KEYS: List[str] = []
-FILE_INDEX_NAMES: List[str] = []
-INDEX_TOTAL_FILES = 0
-INDEX_TOTAL_DIRS = 0
-INDEX_COMPLETED_DIRS = 0
-INDEX_BUILD_STARTED_AT = 0.0
-INDEX_BUILD_COMPLETED_AT = 0.0
-
+INDEX_LOCK_WAIT_SECONDS = int(os.getenv("INDEX_LOCK_WAIT_SECONDS", "600"))
 INDEX_CACHE_FILE = ROOT_DIR / ".file_index_cache.txt"
 INDEX_LOCK_FILE = ROOT_DIR / ".file_index_cache.lock"
+index_service = IndexService(
+    root_dir=ROOT_DIR,
+    skip_dirs=SKIP_DIRS,
+    cache_file=INDEX_CACHE_FILE,
+    lock_file=INDEX_LOCK_FILE,
+    index_workers=config.INDEX_WORKERS,
+    lock_wait_seconds=INDEX_LOCK_WAIT_SECONDS,
+    logger=logging.getLogger("uvicorn.error"),
+)
+FILE_INDEX = index_service.file_index
+FILE_INDEX_LOCK = index_service.lock
+FILE_INDEX_KEYS = index_service.keys
+FILE_INDEX_NAMES = index_service.names
+
+SEARCH_FALLBACK_MAX_FILES = int(os.getenv("SEARCH_FALLBACK_MAX_FILES", "2000") or "0")
+SEARCH_FALLBACK_TIMEOUT_MS = int(os.getenv("SEARCH_FALLBACK_TIMEOUT_MS", "5000") or "0")
+_fallback_timeout_sec = SEARCH_FALLBACK_TIMEOUT_MS / 1000 if SEARCH_FALLBACK_TIMEOUT_MS > 0 else 5.0
+search_service = SearchService(
+    index_service=index_service,
+    io_executor=IO_POOL,
+    logger=logging.getLogger("uvicorn.error"),
+    search_workers=config.SEARCH_WORKERS,
+    excluded_folders=["classification", "classification_chips", "chip_annotations", "thumbnails", "composite_map"],
+    supported_exts=config.SUPPORTED_EXTS,
+    fallback_max_files=SEARCH_FALLBACK_MAX_FILES,
+    fallback_timeout_sec=_fallback_timeout_sec,
+)
+
+# 검색 연산자 정규식 패턴 캐싱 (재컴파일 방지로 성능 향상) - 기존 유틸과 호환
+_OPERATOR_PATTERNS = {
+    "and": re.compile(r"\band\b", re.IGNORECASE),
+    "or": re.compile(r"\bor\b", re.IGNORECASE),
+    "not": re.compile(r"\bnot\b", re.IGNORECASE),
+}
+_LOGICAL_OPERATORS = {"and", "or", "not"}
+_LOGICAL_PRECEDENCE = {"or": 1, "and": 2, "not": 3}
 
 ROLES_FILE = Path("logs") / "permissions.json"
 ROLES_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -390,196 +441,18 @@ ROLE_DEFAULT = "ROLE_USER"
 ROLE_HIERARCHY = ["ROLE_USER", "ROLE_POWER", "ROLE_ADMIN", "ROLE_SUPER"]
 COMPOSITE_ROOT = ROOT_DIR / "composite_map"
 COMPOSITE_ROOT.mkdir(parents=True, exist_ok=True)
-INDEX_LOCK_WAIT_SECONDS = int(os.getenv("INDEX_LOCK_WAIT_SECONDS", "600"))
-INDEX_CACHE_LOADED = False
-
-# 검색 연산자 정규식 패턴 캐싱 (재컴파일 방지로 성능 향상)
-_OPERATOR_PATTERNS = {
-    'and': re.compile(r'\band\b', re.IGNORECASE),
-    'or': re.compile(r'\bor\b', re.IGNORECASE),
-    'not': re.compile(r'\bnot\b', re.IGNORECASE),
-}
-
-_LOGICAL_OPERATORS = {"and", "or", "not"}
-_LOGICAL_PRECEDENCE = {"or": 1, "and": 2, "not": 3}
 
 def _pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
+    # index_service가 내부에서 관리하므로 이전 호환성을 위해 유지
     try:
         os.kill(pid, 0)
     except OSError as exc:
-        if exc.errno == errno.ESRCH:
-            return False
         if exc.errno == errno.EPERM:
             return True
         return False
     except Exception:
         return False
     return True
-
-
-def _lock_file_stale() -> bool:
-    if not INDEX_LOCK_FILE.exists():
-        return False
-    try:
-        with INDEX_LOCK_FILE.open("r", encoding="utf-8") as f:
-            content = f.read().strip()
-        pid = int(content) if content else -1
-    except Exception:
-        try:
-            INDEX_LOCK_FILE.unlink()
-        except Exception:
-            pass
-        return True
-
-    if not _pid_alive(pid):
-        try:
-            INDEX_LOCK_FILE.unlink()
-            logger.info("🧹 [INDEX] 잠금 파일이 고아 상태여서 제거했습니다 (pid=%s)", pid)
-        except OSError as exc:
-            # Windows에서 파일이 사용 중일 때 (WinError 32)는 조용히 무시
-            if hasattr(exc, 'winerror') and exc.winerror == 32:  # ERROR_SHARING_VIOLATION
-                # 파일이 사용 중이면 제거하지 않고 False 반환 (다음 시도에서 다시 확인)
-                return False
-            logger.warning(f"⚠️ [INDEX] 고아 잠금 파일 제거 실패: {exc}")
-        except Exception as exc:
-            logger.warning(f"⚠️ [INDEX] 고아 잠금 파일 제거 실패: {exc}")
-        return True
-    return False
-
-def _acquire_index_lock(timeout: int = INDEX_LOCK_WAIT_SECONDS) -> Optional[int]:
-    deadline = time.time() + max(1, timeout)
-    wait_logged = False
-    while True:
-        try:
-            fd = os.open(str(INDEX_LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(os.getpid()).encode("utf-8", "ignore"))
-            return fd
-        except FileExistsError:
-            if _lock_file_stale():
-                continue
-            if not wait_logged:
-                logger.info("🕒 [INDEX] 잠금 대기 중 (다른 프로세스가 빌드 중)")
-                wait_logged = True
-            if time.time() >= deadline:
-                return None
-            time.sleep(0.5)
-        except Exception as exc:
-            logger.warning(f"⚠️ [INDEX] 잠금 파일 획득 실패: {exc}")
-            time.sleep(0.5)
-
-
-def _try_acquire_index_lock_once() -> Optional[int]:
-    try:
-        fd = os.open(str(INDEX_LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, str(os.getpid()).encode("utf-8", "ignore"))
-        return fd
-    except FileExistsError:
-        return None
-    except Exception as exc:
-        logger.warning(f"⚠️ [INDEX] 잠금 파일 단일 획득 실패: {exc}")
-        return None
-
-
-def _release_index_lock(lock_fd: Optional[int]) -> None:
-    if lock_fd is None:
-        return
-    try:
-        os.close(lock_fd)
-    except Exception:
-        pass
-    try:
-        INDEX_LOCK_FILE.unlink(missing_ok=True)  # type: ignore[attr-defined]
-    except AttributeError:
-        try:
-            if INDEX_LOCK_FILE.exists():
-                INDEX_LOCK_FILE.unlink()
-        except Exception:
-            pass
-    except Exception:
-        pass
-
-
-def _save_index_cache(keys: List[str]) -> None:
-    try:
-        tmp_path = INDEX_CACHE_FILE.with_suffix(".tmp")
-        with tmp_path.open("w", encoding="utf-8") as f:
-            for rel in keys:
-                f.write(rel)
-                f.write("\n")
-        tmp_path.replace(INDEX_CACHE_FILE)
-    except Exception as exc:
-        logger.warning(f"⚠️ [INDEX] 캐시 저장 실패: {exc}")
-
-
-def _load_index_cache(log: bool = True) -> bool:
-    global INDEX_CACHE_LOADED
-    if not INDEX_CACHE_FILE.exists():
-        return False
-    try:
-        with INDEX_CACHE_FILE.open("r", encoding="utf-8") as f:
-            keys = [line.strip() for line in f if line.strip()]
-    except Exception as exc:
-        logger.warning(f"⚠️ [INDEX] 캐시 로드 실패: {exc}")
-        return False
-    if not keys:
-        return False
-    with FILE_INDEX_LOCK:
-        FILE_INDEX.clear()
-        FILE_INDEX_KEYS.clear()
-        FILE_INDEX_NAMES.clear()
-        for rel in keys:
-            file_name = rel.rsplit("/", 1)[-1].lower()
-            FILE_INDEX[rel] = {"name_lower": file_name}
-            FILE_INDEX_KEYS.append(rel)
-            FILE_INDEX_NAMES.append(file_name)
-    global INDEX_TOTAL_FILES, INDEX_READY, INDEX_BUILD_COMPLETED_AT, INDEX_BUILD_STARTED_AT, INDEX_COMPLETED_DIRS, INDEX_TOTAL_DIRS
-    INDEX_TOTAL_FILES = len(keys)
-    INDEX_TOTAL_DIRS = 0
-    INDEX_COMPLETED_DIRS = 0
-    INDEX_BUILD_STARTED_AT = time.time()
-    INDEX_BUILD_COMPLETED_AT = INDEX_BUILD_STARTED_AT
-    INDEX_READY = True
-    if log and not INDEX_CACHE_LOADED:
-        logger.info(f"✅ [INDEX] 캐시 로드 완료 | files={INDEX_TOTAL_FILES}")
-    INDEX_CACHE_LOADED = True
-    return True
-
-
-def _wait_for_index_cache(timeout: int = INDEX_LOCK_WAIT_SECONDS) -> bool:
-    start = time.time()
-    cache_mtime = INDEX_CACHE_FILE.stat().st_mtime if INDEX_CACHE_FILE.exists() else 0.0
-    while time.time() - start < timeout:
-        if not INDEX_LOCK_FILE.exists() and INDEX_CACHE_FILE.exists():
-            if INDEX_CACHE_FILE.stat().st_mtime != cache_mtime or cache_mtime == 0.0:
-                if _load_index_cache():
-                    return True
-        time.sleep(0.5)
-    return _load_index_cache(log=not INDEX_CACHE_LOADED)
-
-
-def _file_index_clear() -> None:
-    with FILE_INDEX_LOCK:
-        FILE_INDEX.clear()
-        FILE_INDEX_KEYS.clear()
-        FILE_INDEX_NAMES.clear()
-
-def file_index_set(path: str, meta: Dict[str, Any]) -> None:
-    with FILE_INDEX_LOCK:
-        FILE_INDEX[path] = meta
-        name_lower = meta.get("name_lower")
-        if not name_lower:
-            try:
-                name_lower = Path(path).name.lower()
-            except Exception:
-                name_lower = path.lower()
-        idx = bisect_left(FILE_INDEX_KEYS, path)
-        if idx == len(FILE_INDEX_KEYS) or FILE_INDEX_KEYS[idx] != path:
-            FILE_INDEX_KEYS.insert(idx, path)
-            FILE_INDEX_NAMES.insert(idx, name_lower)
-        else:
-            FILE_INDEX_NAMES[idx] = name_lower
 
 def _matches_search_query(filename_lower: str, query: str) -> bool:
     """검색 쿼리와 파일명 매칭 (AND/OR/NOT 지원)
@@ -1058,31 +931,30 @@ def _split_by_operator(text: str, operator: str) -> List[str]:
 
 def _search_index_slice(keys: List[str], names: List[str], query: str, goal: Optional[int] = None) -> List[str]:
     """단일 청크 단순 검색 (AND/OR 없는 경우 전용)."""
-    results: List[str] = []
     if not query:
-        return results
+        return []
 
-    # 🔥 성능 최적화: 띄어쓰기가 없는 단일 단어는 파일명 앞부분만 매칭
-    # 예: "center" 검색 시 파일명이 "center"로 시작하는지만 체크 (전체 스캔 불필요)
-    use_prefix_match = ' ' not in query and len(query) > 0
+    # 🔥 단일어도 포함 검색으로 처리 (파일명 중간 위치 매칭 보장)
+    #    prefix 매치는 우선 수집 후 부족하면 포함 매치로 채움
+    prefix_hits: List[str] = []
+    contains_hits: List[str] = []
 
-    # 🔥 goal이 None이면 제한 없이 모든 매칭 파일 검색
-    if use_prefix_match:
-        # 앞부분 매칭 (startswith) - 더 빠름
-        for rel, name_lower in zip(keys, names):
-            if name_lower.startswith(query):
-                results.append(rel)
-                if goal is not None and len(results) >= goal:
-                    break
-    else:
-        # 전체 포함 매칭 (in) - 기존 방식
-        for rel, name_lower in zip(keys, names):
-            if query in name_lower:
-                results.append(rel)
-                if goal is not None and len(results) >= goal:
-                    break
+    for rel, name_lower in zip(keys, names):
+        if name_lower.startswith(query):
+            prefix_hits.append(rel)
+        elif query in name_lower:
+            contains_hits.append(rel)
 
-    return results
+        if goal is not None and len(prefix_hits) >= goal:
+            break
+
+    if goal is not None:
+        remaining = goal - len(prefix_hits)
+        if remaining > 0:
+            prefix_hits.extend(contains_hits[:remaining])
+        return prefix_hits
+
+    return prefix_hits + contains_hits
 
 def _search_index_slice_parallel(keys: List[str], names: List[str], query: str, goal: Optional[int] = None, num_chunks: int = 4) -> List[str]:
     """병렬 검색 (멀티청크, 단순 쿼리 전용)."""
@@ -1234,8 +1106,12 @@ def _get_cached_palette(image_path: Path) -> Optional[List[int]]:
 # ======================== Lifecycle ========================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 🔥 lifespan 시작 즉시 출력 (디버그용)
+    print("=" * 80, flush=True)
+    print("[LIFESPAN] ✅ lifespan 함수 진입!", flush=True)
+    print("=" * 80, flush=True)
+    
     # Startup
-    global INDEX_REFRESH_TASK
     
     # 🧹 Python 캐시 정리 (서버 시작 시)
     try:
@@ -1306,33 +1182,91 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
+    print("=" * 80, flush=True)
+    print("[LIFESPAN] Starting lifespan context...", flush=True)
+    print("=" * 80, flush=True)
+
     _classification_dir().mkdir(parents=True, exist_ok=True)
     _labels_load()
     global CLASSES_MTIME
     CLASSES_MTIME = _classes_stat_mtime()
-    cache_loaded = _load_index_cache()
-    if cache_loaded:
-        logger.info("ℹ️ [INDEX] 캐시 로드 완료 → 즉시 재생성 예약")
+
+    print("[INDEX] Loading cache...", flush=True)
+    try:
+        cache_loaded = index_service.load_cache()
+    except Exception as exc:
+        bootlog.error(f"❌ [INDEX] 캐시 로드 중 오류: {exc}")
+        print(f"[INDEX] Cache load failed: {exc}", flush=True)
+        cache_loaded = False
+
+    if cache_loaded and index_service.keys:
+        bootlog.info(f"📂 [INDEX] 캐시 로드 완료: {len(index_service.keys)}개 파일")
+        print(f"[INDEX] Cache loaded: {len(index_service.keys)} files", flush=True)
     else:
-        logger.info("ℹ️ [INDEX] 캐시 없음 → 전체 인덱스 생성 예약")
-    asyncio.create_task(build_file_index_background(force=True))
-    if INDEX_REFRESH_INTERVAL_SECONDS > 0 and INDEX_REFRESH_TASK is None:
+        bootlog.info("[INDEX] 캐시 없음/비어 있음")
+        print("[INDEX] No cache found", flush=True)
+
+    index_action = "rebuild" if cache_loaded and index_service.keys else "build"
+    bootlog.info(f"🔨 [INDEX] 인덱스 {index_action} 시작 (캐시 성공/실패와 무관하게 즉시 실행)")
+    print(f"[INDEX] Starting index {index_action}...", flush=True)
+    try:
+        # 🔥 락 파일이 stale 상태일 수 있으므로 강제 삭제 시도
+        if index_service.lock_file.exists():
+            try:
+                if index_service._lock_file_stale():
+                    bootlog.warning(f"⚠️ [INDEX] Stale 락 파일 발견, 삭제 시도: {index_service.lock_file}")
+                    index_service.lock_file.unlink(missing_ok=True)
+            except Exception as lock_exc:
+                bootlog.warning(f"⚠️ [INDEX] 락 파일 확인 실패: {lock_exc}")
+        
+        build_result = await index_service.build(force=True, allow_background=False)
+        if not build_result:
+            # 🔥 빌드가 False를 반환한 경우 (락 획득 실패 등)
+            bootlog.error(f"❌ [INDEX] {index_action} 실패: build() 메서드가 False 반환 (락 획득 실패 또는 다른 프로세스가 빌드 중)")
+            print(f"[INDEX] {index_action.capitalize()} failed: build() returned False", flush=True)
+            # 락 파일을 다시 확인하고 강제 삭제 후 재시도
+            if index_service.lock_file.exists():
+                try:
+                    index_service.lock_file.unlink(missing_ok=True)
+                    bootlog.info(f"🔄 [INDEX] 락 파일 삭제 후 재시도")
+                    build_result = await index_service.build(force=True, allow_background=False)
+                    if not build_result:
+                        bootlog.error(f"❌ [INDEX] 재시도 후에도 실패")
+                except Exception as retry_exc:
+                    bootlog.error(f"❌ [INDEX] 재시도 실패: {retry_exc}")
+        else:
+            # 🔥 인덱스 파일이 실제로 생성되었는지 확인
+            cache_file = index_service.cache_file
+            if cache_file.exists():
+                file_size = cache_file.stat().st_size
+                bootlog.info(
+                    f"✅ [INDEX] 빌드 완료: files={index_service.total_files}, dirs={index_service.total_dirs}, cache_size={file_size:,} bytes"
+                )
+                print(
+                    f"[INDEX] Build complete: files={index_service.total_files}, dirs={index_service.total_dirs}, cache_size={file_size:,} bytes",
+                    flush=True,
+                )
+            else:
+                bootlog.error(f"❌ [INDEX] 빌드 완료했지만 캐시 파일이 생성되지 않음: {cache_file}")
+                print(f"[INDEX] Build complete but cache file not found: {cache_file}", flush=True)
+    except Exception as exc:
+        bootlog.error(f"❌ [INDEX] {index_action} 실패: {exc}", exc_info=True)
+        print(f"[INDEX] {index_action.capitalize()} failed: {exc}", flush=True)
+
+    if INDEX_REFRESH_INTERVAL_SECONDS > 0:
         interval_minutes = INDEX_REFRESH_INTERVAL_SECONDS // 60 or 1
-        bootlog.info(f"🔁 [INDEX] 자동 재빌드 주기: {interval_minutes}분")
-        INDEX_REFRESH_TASK = asyncio.create_task(_index_refresh_loop(INDEX_REFRESH_INTERVAL_SECONDS))
+        bootlog.info(f"🔁 [INDEX] 자동 재빌드 주기: {interval_minutes}분 (첫 재빌드는 즉시 실행)")
+        await index_service.start_refresh_loop(INDEX_REFRESH_INTERVAL_SECONDS)
+        bootlog.info(f"✅ [INDEX] 자동 재빌드 루프 시작됨 (매 {interval_minutes}분마다 실행)")
+    else:
+        bootlog.warning("⚠️ [INDEX] 자동 재빌드가 비활성화됨 (INDEX_REFRESH_INTERVAL_MINUTES=0)")
 
     yield  # 앱 실행 중
 
     # Shutdown
     logging.getLogger("uvicorn.error").info("🛑 L3Tracker 서버 종료")
 
-    if INDEX_REFRESH_TASK:
-        INDEX_REFRESH_TASK.cancel()
-        try:
-            await INDEX_REFRESH_TASK
-        except asyncio.CancelledError:
-            pass
-        INDEX_REFRESH_TASK = None
+    await index_service.stop_refresh_loop()
 
     try:
         THUMBNAIL_EXECUTOR.shutdown(wait=False, cancel_futures=False)
@@ -1345,6 +1279,81 @@ async def lifespan(app: FastAPI):
 
 # ======================== FastAPI & Middleware ========================
 app = FastAPI(title="L3Tracker API", version="2.6.0", lifespan=lifespan)
+
+
+# ======================== 🔥 Startup Event (lifespan 백업) ========================
+# lifespan이 호출되지 않는 경우를 대비한 백업 startup 이벤트
+@app.on_event("startup")
+async def startup_event():
+    """lifespan이 호출되지 않는 경우를 대비한 백업 startup 이벤트"""
+    global INDEX_REFRESH_INTERVAL_SECONDS
+    
+    print("=" * 80, flush=True)
+    print("[STARTUP EVENT] ✅ on_event('startup') 실행됨!", flush=True)
+    print("=" * 80, flush=True)
+    
+    bootlog = logging.getLogger("uvicorn.error")
+    
+    # 인덱스가 이미 준비되었는지 확인 (lifespan에서 이미 처리된 경우)
+    if index_service.ready and index_service.keys:
+        bootlog.info(f"ℹ️ [STARTUP] 인덱스 이미 준비됨 (lifespan에서 처리): {len(index_service.keys)}개 파일")
+        print(f"[STARTUP] Index already ready: {len(index_service.keys)} files", flush=True)
+        return
+    
+    # 🔥 캐시 로드는 즉시 실행 (빠름)
+    try:
+        cache_loaded = index_service.load_cache()
+        if cache_loaded and index_service.keys:
+            bootlog.info(f"📂 [STARTUP] 캐시 로드 완료: {len(index_service.keys)}개 파일 (검색 즉시 가능)")
+            print(f"[STARTUP] Cache loaded: {len(index_service.keys)} files (search ready)", flush=True)
+        else:
+            bootlog.info("[STARTUP] 캐시 없음/비어 있음")
+            print("[STARTUP] No cache found", flush=True)
+    except Exception as exc:
+        bootlog.warning(f"⚠️ [STARTUP] 캐시 로드 실패: {exc}")
+        cache_loaded = False
+    
+    # 🔥 인덱스 빌드는 백그라운드에서 비동기 실행 (서버 시작 블로킹 방지)
+    asyncio.create_task(_background_index_build())
+    bootlog.info("🚀 [STARTUP] 인덱스 빌드가 백그라운드에서 시작됨 (서버는 즉시 사용 가능)")
+    print("[STARTUP] Index build started in background (server ready)", flush=True)
+    
+    # 🔥 자동 재빌드 루프도 백그라운드에서 시작
+    if INDEX_REFRESH_INTERVAL_SECONDS > 0:
+        interval_minutes = INDEX_REFRESH_INTERVAL_SECONDS // 60 or 1
+        bootlog.info(f"🔁 [STARTUP] 자동 재빌드 주기: {interval_minutes}분")
+        await index_service.start_refresh_loop(INDEX_REFRESH_INTERVAL_SECONDS)
+
+
+async def _background_index_build():
+    """백그라운드에서 인덱스 빌드 실행"""
+    bootlog = logging.getLogger("uvicorn.error")
+    try:
+        print("[INDEX] 백그라운드 인덱스 빌드 시작...", flush=True)
+        build_result = await index_service.build(force=True, allow_background=False)
+        if build_result:
+            cache_file = index_service.cache_file
+            if cache_file.exists():
+                file_size = cache_file.stat().st_size
+                bootlog.info(
+                    f"✅ [INDEX] 백그라운드 빌드 완료: files={index_service.total_files}, cache_size={file_size:,} bytes"
+                )
+                print(f"[INDEX] Background build complete: {index_service.total_files} files", flush=True)
+            else:
+                bootlog.error(f"❌ [INDEX] 캐시 파일이 생성되지 않음: {cache_file}")
+        else:
+            bootlog.warning("⚠️ [INDEX] 백그라운드 빌드 실패 (락 획득 실패 또는 이미 진행 중)")
+    except Exception as exc:
+        bootlog.error(f"❌ [INDEX] 백그라운드 빌드 오류: {exc}", exc_info=True)
+        print(f"[INDEX] Background build failed: {exc}", flush=True)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """서버 종료 시 정리"""
+    print("[SHUTDOWN EVENT] 서버 종료 중...", flush=True)
+    await index_service.stop_refresh_loop()
+
 
 # ======================== SAML SSO (OneLogin python3-saml) ========================
 SAML_DIR = Path("saml")
@@ -2193,6 +2202,27 @@ async def create_my_lot_group(request: Request):
         raise HTTPException(status_code=500, detail=f"그룹을 생성하지 못했습니다: {exc}")
 
 
+@app.put("/api/my-lot/group/rename")
+async def rename_my_lot_group(request: Request):
+    login_id = _resolve_my_lot_login(request)
+    try:
+        payload = await request.json()
+        mode = payload.get("mode", "lot")
+        old_name = payload.get("old_name")
+        new_name = payload.get("new_name")
+        if not old_name or not new_name:
+            raise HTTPException(status_code=400, detail="old_name과 new_name이 필요합니다.")
+        renamed = my_lot_rename_group(login_id, mode, old_name, new_name)
+        if not renamed:
+            raise HTTPException(status_code=404, detail="그룹을 찾을 수 없습니다.")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"❌ [/api/my-lot/group/rename] 이름 변경 실패: {exc}")
+        raise HTTPException(status_code=500, detail=f"그룹 이름을 변경하지 못했습니다: {exc}")
+
+
 @app.delete("/api/my-lot/group")
 async def delete_my_lot_group(request: Request):
     login_id = _resolve_my_lot_login(request)
@@ -2253,35 +2283,114 @@ async def add_my_lot_batch_endpoint(request: Request):
         group = payload.get("group")
         lot_value = payload.get("lot")  # LOT 값
         paths = payload.get("paths")  # 또는 경로 리스트
+        manual_values = payload.get("manual_values") or []
 
         if not group:
             raise HTTPException(status_code=400, detail="group이 필요합니다.")
 
-        # paths가 제공된 경우: 해당 경로들을 일괄 등록
+        # 🔥 실제 이미지가 있는 LOT/Wafer 조합을 추적 (placeholder 중복 방지)
+        matched_keys = set()
+        collected_paths = []
+        
+        # 🔥 1단계: 실제 이미지 경로 수집
         if paths:
-            image_paths = []
             for path in paths:
                 rel_path = relkey_from_any_path(path)
                 abs_path = ROOT_DIR / rel_path
                 if abs_path.exists() and abs_path.is_file():
-                    image_paths.append(abs_path)
+                    collected_paths.append(abs_path)
+                    # 파일명에서 LOT/Wafer 추출하여 추적
+                    filename = abs_path.stem  # 확장자 제외한 파일명
+                    parts = filename.split("_")
+                    root = parts[0] if len(parts) > 0 else filename
+                    wafer = ""
+                    if len(parts) > 2:
+                        wafer = parts[2]
+                    elif len(parts) > 1:
+                        # W로 시작하는 부분 찾기
+                        for part in reversed(parts):
+                            if part and (part[0] == 'W' or part[0] == 'w'):
+                                wafer = part
+                                break
+                    
+                    if mode == "lot":
+                        key = root.lower()
+                    else:
+                        key = f"{root.lower()}_{wafer.lower()}"
+                    if key:
+                        matched_keys.add(key)
 
-            result = my_lot_add_lot_batch(login_id, mode, group, image_paths)
+        # 🔥 2단계: 실제 이미지가 없는 항목만 placeholder 생성
+        placeholder_paths = []
+        if manual_values:
+            if not isinstance(manual_values, list):
+                raise HTTPException(status_code=400, detail="manual_values는 배열이어야 합니다.")
+            for item in manual_values:
+                lot_candidate = ""
+                wafer_candidate = ""
+                if isinstance(item, str):
+                    lot_candidate = item
+                elif isinstance(item, dict):
+                    lot_candidate = (item.get("lot") or "").strip()
+                    wafer_candidate = (item.get("wafer") or "").strip()
+                if not lot_candidate:
+                    continue
+                
+                # 🔥 실제 이미지가 있는지 확인 (중복 방지)
+                if mode == "lot":
+                    key = lot_candidate.lower()
+                else:
+                    key = f"{lot_candidate.lower()}_{wafer_candidate.lower()}"
+                
+                if key in matched_keys:
+                    # 실제 이미지가 이미 있으므로 placeholder 생성 skip
+                    continue
+                
+                # 🔥 실제 이미지가 없으면 placeholder 생성
+                from .my_lot import create_placeholder_image
+                placeholder = create_placeholder_image(
+                    mode,
+                    lot_candidate,
+                    wafer_candidate if mode == "wafer" else "",
+                )
+                if placeholder:
+                    placeholder_paths.append(placeholder)
+                    matched_keys.add(key)
+
+        # 🔥 3단계: placeholder 경로 추가
+        if placeholder_paths:
+            collected_paths.extend(placeholder_paths)
+
+        if collected_paths:
+            result = my_lot_add_lot_batch(login_id, mode, group, collected_paths)
+            result["placeholder_count"] = len(placeholder_paths)
             return {"success": True, **result}
+
+        # collected_paths가 비어있지만 manual_values가 제공된 경우 (placeholder 생성 실패)
+        if manual_values:
+            return {
+                "success": True,
+                "success_count": 0,
+                "duplicate_count": 0,
+                "placeholder_count": 0,
+                "message": "이미지를 찾을 수 없어 등록하지 못했습니다."
+            }
 
         # lot_value가 제공된 경우: search로 해당 LOT의 모든 이미지 찾기
         if not lot_value:
             raise HTTPException(status_code=400, detail="lot 또는 paths가 필요합니다.")
 
-        # FILE_INDEX를 사용하여 LOT 검색
-        if not FILE_INDEX or not FILE_INDEX_NAMES:
+        if not index_service.keys:
+            await index_service.ensure_ready_for_search()
+        if not index_service.keys:
+            asyncio.create_task(index_service.build(force=True, allow_background=True))
             raise HTTPException(status_code=503, detail="파일 인덱스가 준비되지 않았습니다.")
 
         # LOT로 시작하는 파일들을 검색
         lot_prefix = lot_value.strip().lower()
         matched_paths = []
 
-        for rel_path, name_lower in zip(FILE_INDEX, FILE_INDEX_NAMES):
+        for rel_path, name_lower in zip(index_service.keys, index_service.names):
             # 파일명이 LOT_로 시작하는지 확인
             if name_lower.startswith(lot_prefix + "_") or name_lower.startswith(lot_prefix + "."):
                 abs_path = ROOT_DIR / rel_path
@@ -2523,12 +2632,23 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(AccessTrackingMiddleware)
 
-# 🚀 압축 미들웨어: 텍스트 응답만 압축 (이미지는 이미 압축됨)
-# minimum_size를 10KB로 높여서 작은 응답과 이미지는 자동 제외 (gzip 오류 방지)
-# compresslevel을 3으로 낮춰서 CPU 부하 감소
+# 🔇 uvicorn access 로그에서 composite-map status polling 제거
+class _SkipCompositeStatusFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        # request_line 또는 경로가 포함된 로그 메시지에서 status 엔드포인트 차단
+        return "/api/composite-map/status" not in msg
+
+logging.getLogger("uvicorn.access").addFilter(_SkipCompositeStatusFilter())
+
+# 🚀 압축 미들웨어: 비활성화
+# 🔥 Python 3.13에서 GZip "I/O operation on closed file" 에러가 발생하므로 
+# minimum_size를 10MB로 설정하여 사실상 압축 비활성화
+# 이미지는 이미 압축되어 있고, JSON 응답은 작아서 압축 불필요
+_COMPRESS_MIN_SIZE = 10 * 1024 * 1024  # 10MB (사실상 비활성화)
 if HAS_BROTLI:
-    app.add_middleware(BrotliMiddleware, quality=3, minimum_size=10240)  # 10KB
-app.add_middleware(GZipMiddleware, minimum_size=10240, compresslevel=3)  # 10KB
+    app.add_middleware(BrotliMiddleware, quality=3, minimum_size=_COMPRESS_MIN_SIZE)
+app.add_middleware(GZipMiddleware, minimum_size=_COMPRESS_MIN_SIZE, compresslevel=1)
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 
@@ -2813,223 +2933,7 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
     return items
 
 async def build_file_index_background(force: bool = False):
-    global INDEX_BUILDING, INDEX_READY
-    logger.info(
-        "🟡 [INDEX] 빌드 요청 수신 | force=%s | ready=%s | building=%s",
-        force,
-        INDEX_READY,
-        INDEX_BUILDING,
-    )
-    if INDEX_BUILDING:
-        logger.info("🟡 [INDEX] 이미 빌드 중이어서 요청 무시")
-        return
-    if INDEX_READY and not force:
-        logger.info("🟡 [INDEX] 이미 준비 완료 상태이므로 건너뜀 (force=False)")
-        return
-    INDEX_BUILDING, INDEX_READY = True, False
-
-    def _walk_and_index():
-        global INDEX_READY, INDEX_TOTAL_FILES, INDEX_TOTAL_DIRS, INDEX_COMPLETED_DIRS, INDEX_BUILD_STARTED_AT, INDEX_BUILD_COMPLETED_AT
-
-        start = time.time()
-        INDEX_BUILD_STARTED_AT = start
-        INDEX_BUILD_COMPLETED_AT = 0.0
-        INDEX_COMPLETED_DIRS = 0
-        INDEX_TOTAL_FILES = 0
-        INDEX_TOTAL_DIRS = 0
-        logger.info(
-            "🚧 [INDEX] 빌드 시작 | force=%s | thread_workers=%d",
-            force,
-            config.INDEX_WORKERS,
-        )
-
-        collected_entries: List[Tuple[str, str]] = []
-        base_root = str(ROOT_DIR.resolve())
-        skip_dirs = {d for d in SKIP_DIRS if d}
-
-        task_queue: "queue.Queue[Optional[str]]" = queue.Queue()
-        seen_dirs: Set[str] = set()
-        stats_lock = Lock()
-        index_lock = Lock()
-        base_root_slash = base_root.replace("\\", "/")
-        base_root_len = len(base_root_slash)
-
-        def enqueue_dir(path: str) -> None:
-            nonlocal seen_dirs
-            global INDEX_TOTAL_DIRS
-            with stats_lock:
-                if path not in seen_dirs:
-                    seen_dirs.add(path)
-                    INDEX_TOTAL_DIRS += 1
-                    task_queue.put(path)
-
-        def _flush_local(entries: List[Tuple[str, str]]) -> None:
-            if not entries:
-                return
-            with index_lock:
-                collected_entries.extend(entries)
-            entries.clear()
-
-        def worker() -> None:
-            global INDEX_COMPLETED_DIRS
-            local_buffer: List[Tuple[str, str]] = []
-            while True:
-                try:
-                    current_dir = task_queue.get()
-                except Exception:
-                    _flush_local(local_buffer)
-                    return
-                if current_dir is None:
-                    task_queue.task_done()
-                    _flush_local(local_buffer)
-                    return
-
-                if BACKGROUND_TASKS_PAUSED or USER_ACTIVITY_FLAG:
-                    time.sleep(0.01)
-
-                try:
-                    with os.scandir(current_dir) as it:
-                        for entry in it:
-                            try:
-                                if entry.is_dir(follow_symlinks=False):
-                                    if entry.name in skip_dirs:
-                                        continue
-                                    enqueue_dir(str(entry.path))
-                                    continue
-
-                                if not entry.is_file(follow_symlinks=False):
-                                    continue
-
-                                entry_path = str(entry.path).replace("\\", "/")
-                                if entry_path.startswith(base_root_slash):
-                                    rel_path = entry_path[base_root_len:].lstrip("/")
-                                else:
-                                    rel_path = entry_path
-                                name_lower = entry.name.lower()
-
-                                local_buffer.append((rel_path, name_lower))
-                                if len(local_buffer) >= 16384:
-                                    _flush_local(local_buffer)
-                            except Exception:
-                                continue
-                except Exception as exc:
-                    logger.debug(f"[INDEX] 디렉터리 스캔 중 오류: {exc}")
-                finally:
-                    with stats_lock:
-                        INDEX_COMPLETED_DIRS += 1
-                    task_queue.task_done()
-            _flush_local(local_buffer)
-
-        enqueue_dir(base_root)
-        workers = max(4, config.INDEX_WORKERS)
-        threads = [threading.Thread(target=worker, daemon=True) for _ in range(workers)]
-        for t in threads:
-            t.start()
-
-        task_queue.join()
-
-        for _ in threads:
-            task_queue.put(None)
-
-        for t in threads:
-            t.join(timeout=0.1)
-
-        INDEX_TOTAL_DIRS = len(seen_dirs)
-        INDEX_COMPLETED_DIRS = INDEX_TOTAL_DIRS
-
-        sorted_entries = sorted(collected_entries, key=lambda item: item[0])
-        sorted_keys: List[str] = []
-        sorted_names: List[str] = []
-        last_key: Optional[str] = None
-        for rel_path, name_lower in sorted_entries:
-            if rel_path == last_key:
-                continue
-            sorted_keys.append(rel_path)
-            sorted_names.append(name_lower)
-            last_key = rel_path
-        with FILE_INDEX_LOCK:
-            FILE_INDEX.clear()
-            FILE_INDEX.update((key, {"name_lower": name}) for key, name in zip(sorted_keys, sorted_names))
-            FILE_INDEX_KEYS.clear()
-            FILE_INDEX_KEYS.extend(sorted_keys)
-            FILE_INDEX_NAMES.clear()
-            FILE_INDEX_NAMES.extend(sorted_names)
-
-        _save_index_cache(sorted_keys)
-
-        INDEX_TOTAL_FILES = len(sorted_keys)
-        INDEX_READY = True
-        INDEX_BUILD_COMPLETED_AT = time.time()
-        duration = INDEX_BUILD_COMPLETED_AT - start
-        logger.info(
-            "✅ [INDEX] 빌드 완료 | files=%d | dirs=%d | workers=%d | duration=%.3fs",
-            INDEX_TOTAL_FILES,
-            INDEX_TOTAL_DIRS,
-            config.INDEX_WORKERS,
-            duration,
-        )
-
-    lock_fd: Optional[int] = None
-    if force:
-        lock_fd = _acquire_index_lock()
-        if lock_fd is None:
-            logger.error("❌ [INDEX] 강제 재빌드 잠금 획득 실패")
-            INDEX_BUILDING = False
-            return
-        else:
-            logger.info("🔒 [INDEX] 강제 재빌드 잠금 획득 성공")
-    else:
-        lock_fd = _try_acquire_index_lock_once()
-        if lock_fd is None:
-            if _wait_for_index_cache():
-                INDEX_BUILDING = False
-                logger.info("ℹ️ [INDEX] 다른 프로세스 빌드 결과 사용")
-                return
-            else:
-                logger.warning("⚠️ [INDEX] 잠금 선점 실패, 캐시 로드 불가 → 잠금 대기 후 직접 빌드 진행")
-                lock_fd = _acquire_index_lock()
-                if lock_fd is None:
-                    logger.error("❌ [INDEX] 잠금 획득 실패로 빌드 중단")
-                    INDEX_BUILDING = False
-                    return
-                logger.info("🔒 [INDEX] 잠금 획득 성공 (대기 후)")
-        else:
-            logger.info("🔒 [INDEX] 잠금 선점 성공 (즉시)")
-
-    loop = asyncio.get_running_loop()
-    try:
-        logger.info(
-            "🚧 [INDEX] 빌드 작업 제출 | force=%s | thread_workers=%d",
-            force,
-            config.INDEX_WORKERS,
-        )
-        await loop.run_in_executor(None, _walk_and_index)
-    finally:
-        _release_index_lock(lock_fd)
-        INDEX_BUILDING = False
-
-async def _index_refresh_loop(interval_seconds: int) -> None:
-    global INDEX_REFRESH_TASK
-    try:
-        while True:
-            await asyncio.sleep(interval_seconds)
-            while BACKGROUND_TASKS_PAUSED or USER_ACTIVITY_FLAG:
-                await asyncio.sleep(1)
-            if INDEX_BUILDING:
-                logger.debug("[INDEX] 자동 재빌드 건너뜀 (이미 실행 중)")
-                continue
-            logger.info("🔁 [INDEX] 자동 재빌드 시작")
-            try:
-                await build_file_index_background(force=True)
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.exception("[INDEX] 자동 재빌드 실패: %s", exc)
-    except asyncio.CancelledError:
-        logger.info("🛑 [INDEX] 자동 재빌드 루프 종료")
-        raise
-    finally:
-        INDEX_REFRESH_TASK = None
+    await index_service.build(force=force, allow_background=False)
 
 # ======================== Thumbnails / Common ========================
 def _save_with_turbojpeg(vips_image, thumbnail_path: str, quality: int) -> bool:
@@ -4747,336 +4651,52 @@ async def preload_thumbnails(request: Request, preload_req: PreloadRequest):
 
 @app.get("/api/index/status")
 async def get_index_status():
-    with FILE_INDEX_LOCK:
-        indexed = len(FILE_INDEX_KEYS)
-    percent = None
-    if INDEX_TOTAL_DIRS:
-        percent = round((INDEX_COMPLETED_DIRS / INDEX_TOTAL_DIRS) * 100, 2)
-    duration = None
-    if INDEX_BUILD_COMPLETED_AT and INDEX_BUILD_STARTED_AT:
-        duration = INDEX_BUILD_COMPLETED_AT - INDEX_BUILD_STARTED_AT
-    return {
-        "indexed_files": indexed,
-        "index_ready": INDEX_READY,
-        "index_building": INDEX_BUILDING,
-        "indexed_directories": INDEX_COMPLETED_DIRS,
-        "total_directories": INDEX_TOTAL_DIRS,
-        "progress_percent": percent,
-        "build_duration_sec": duration,
-        "build_started_at": INDEX_BUILD_STARTED_AT,
-        "build_completed_at": INDEX_BUILD_COMPLETED_AT,
-        "timestamp": time.time()
-    }
+    return index_service.status()
 
 @app.get("/api/search")
 async def search_files(q: str = Query("", description="파일명 검색(대소문자 무시, 부분일치)"),
-                       limit: int = Query(2000, ge=1, le=5000),
+                       limit: int = Query(3000, ge=1, le=10000),
                        offset: int = Query(0, ge=0),
-                       lot_multi: Optional[str] = Query(None, alias="lot_multi")):
+                       lot_multi: Optional[str] = Query(None, alias="lot_multi"),
+                       folder: Optional[str] = Query(None, description="검색할 폴더 경로 (ROOT_DIR 기준 상대경로, 하위폴더 포함)")):
+    """
+    파일 검색 API
+    
+    - q: 검색어 (파일명 검색, AND/OR/NOT 논리 연산 지원)
+    - limit: 최대 결과 수 (기본 3000, 최대 10000)
+    - offset: 결과 오프셋 (페이지네이션용)
+    - lot_multi: LOT 필터 (쉼표로 구분된 LOT 목록)
+    - folder: 검색 폴더 경로 (지정 시 해당 폴더와 모든 하위 폴더 검색, 미지정 시 전체 검색)
+    """
     try:
-        total_start = time.perf_counter()
-        timings: Dict[str, Any] = {}
-
-        query = (q or "").strip().lower()
+        global current_folder
+        THUMB_STAT_CACHE.clear()
         lot_filter_values = _parse_lot_filter(lot_multi)
-        lot_filter = set(lot_filter_values) if lot_filter_values else None
-        # 🔥 디버깅: LOT 필터 파싱 결과 확인
+        lot_filter = set(lot_filter_values) if lot_filter_values else set()
         if lot_multi:
             logger.info(f"LOT_MULTI 원본: {lot_multi}, 파싱 결과: {lot_filter_values}, 개수: {len(lot_filter_values)}")
-            if lot_filter:
-                logger.info(f"LOT 필터 세트: {sorted(lot_filter)}")
-        if not query and not lot_filter:
-            timings["total_ms"] = round((time.perf_counter() - total_start) * 1000, 3)
-            timings["early_exit"] = True
-            timings["lot_filter_count"] = 0
-            return {"success": True, "results": [], "offset": offset, "limit": limit, "timings": timings}
-
-        # 🔥 검색은 제한 없이 모든 파일 검색, 결과만 limit으로 제한
-        # goal 제한 제거: 검색은 current_folder의 모든 하위 파일 대상
-        bucket: List[str] = []
-
-        # 🔍 current_folder 기준 루트 계산
-        global current_folder
-        search_root = current_folder.resolve()
-        if not search_root.exists():
-            search_root = ROOT_DIR
-            current_folder = ROOT_DIR
-
-        # 🔄 썸네일 캐시 초기화 (검색 시 즉시 반영)
-        THUMB_STAT_CACHE.clear()
-
-        # 📁 current_folder 기준 prefix 계산
-        try:
-            prefix = str(search_root.relative_to(ROOT_DIR)).replace('\\', '/')
-        except ValueError:
-            prefix = ""
-        if prefix == '.':
-            prefix = ''
-        prefix_with_sep = prefix.rstrip('/') + '/' if prefix else ""
-
-        # 📚 인덱스 기반 1차 검색: current_folder의 모든 하위 폴더 검색
-        prepare_start = time.perf_counter()
-        with FILE_INDEX_LOCK:
-            if prefix:
-                # 🔥 current_folder로 시작하는 모든 경로 검색 (모든 하위 폴더 포함)
-                start_key = prefix_with_sep  # 예: "folder/" 또는 "folder/subfolder/"
-                end_key = prefix_with_sep + '\uffff'  # 예: "folder/\uffff" (모든 하위 항목 포함)
-                start_idx = bisect_left(FILE_INDEX_KEYS, start_key)
-                end_idx = bisect_right(FILE_INDEX_KEYS, end_key)
-                keys_slice = FILE_INDEX_KEYS[start_idx:end_idx]
-                names_slice = FILE_INDEX_NAMES[start_idx:end_idx]
-                logger.info(f"검색 범위: prefix={prefix}, start_key={start_key}, end_key={end_key[:50]}..., 파일 수={len(keys_slice)}")
-            else:
-                # 🔥 prefix가 없으면 전체 인덱스 검색 (ROOT_DIR 전체)
-                # 인덱스 재구축 중에는 복사본 사용, 평상시에는 원본 리스트를 직접 참조해 오버헤드 최소화
-                if INDEX_BUILDING:
-                    keys_slice = list(FILE_INDEX_KEYS)
-                    names_slice = list(FILE_INDEX_NAMES)
-                else:
-                    keys_slice = FILE_INDEX_KEYS
-                    names_slice = FILE_INDEX_NAMES
-                logger.info(f"검색 범위: 전체 (prefix 없음), 파일 수={len(keys_slice)}")
-
-        timings["prepare_keys_ms"] = round((time.perf_counter() - prepare_start) * 1000, 3)
-        timings["keys_considered"] = len(keys_slice)
-        timings["search_prefix"] = prefix  # 🔥 검색 prefix 로깅
-        timings["total_indexed_files"] = len(FILE_INDEX_KEYS)  # 🔥 전체 인덱스 파일 수
-
-        # 🔥 LOT 검색: 파일명의 첫 부분(_로 split)이 LOT 목록에 포함되면 검색 결과로 선택
-        timings["lot_filter_count"] = len(lot_filter) if lot_filter else 0
-
-        loop = asyncio.get_running_loop()
-        logical_terms: List[str] = []
-        effective_workers = 0
-        bucket: List[str] = []
         
-        # 🔥 검색 로직: query가 있으면 일반 검색, lot_filter가 있으면 LOT 검색
-        if query and lot_filter:
-            # 둘 다 있는 경우: 일반 검색 후 LOT 필터링
-            search_start = time.perf_counter()
-            is_complex = _is_complex_query(query)
-            if is_complex:
-                raw_tokens = _tokenize_logical_query(query)
-                logical_terms = [
-                    token for token in raw_tokens
-                    if token and token not in _LOGICAL_OPERATORS and token not in ("(", ")")
-                ]
-                logical_terms = list(dict.fromkeys(logical_terms))
-                if not logical_terms:
-                    is_complex = False
-            if is_complex:
-                index_hits = await loop.run_in_executor(
-                    IO_POOL,
-                    _search_index_logical,
-                    keys_slice,
-                    names_slice,
-                    query,
-                    None  # goal 제한 없음 (모든 파일 검색)
-                )
-                effective_workers = config.SEARCH_WORKERS or 1
+        # 🔥 folder 파라미터가 있으면 해당 폴더와 하위 폴더만 검색
+        if folder:
+            folder_path = safe_resolve_path(folder)
+            if folder_path.exists() and folder_path.is_dir():
+                search_root = folder_path
+                logger.info(f"[SEARCH] folder 파라미터 지정: {folder} → {search_root}")
             else:
-                worker_chunks = max(1, config.SEARCH_WORKERS)
-                effective_workers = worker_chunks
-                index_hits = await loop.run_in_executor(
-                    IO_POOL,
-                    _search_index_slice_parallel,
-                    keys_slice,
-                    names_slice,
-                    query,
-                    None,  # goal 제한 없음 (모든 파일 검색)
-                    worker_chunks
-                )
-            # 일반 검색 결과에서 LOT 검색 적용 (파일명의 첫 부분이 LOT 목록에 포함되면 선택)
-            filtered_hits = []
-            matched_lots = set()  # 🔥 매칭된 LOT 추적
-            # index_hits는 검색된 경로 리스트이므로, FILE_INDEX에서 직접 파일명 가져오기
-            with FILE_INDEX_LOCK:
-                for rel in index_hits:
-                    # FILE_INDEX에서 파일명 가져오기
-                    meta = FILE_INDEX.get(rel)
-                    if meta:
-                        name_lower = meta.get("name_lower")
-                        if not name_lower:
-                            name_lower = Path(rel).name.lower()
-                    else:
-                        # 인덱스에 없으면 경로에서 파일명 추출
-                        name_lower = Path(rel).name.lower()
-                    
-                    lot_token = name_lower.split("_", 1)[0]  # 파일명의 첫 부분(LOT ID) 추출
-                    if lot_token in lot_filter:  # LOT 목록에 포함되면 검색 결과에 추가
-                        filtered_hits.append(rel)
-                        matched_lots.add(lot_token)  # 🔥 매칭된 LOT 기록
-            index_hits = filtered_hits
-            logger.info(f"LOT+Query 검색: 요청 LOT {len(lot_filter)}개, 매칭된 LOT {len(matched_lots)}개, 파일 {len(index_hits)}개")
-            if len(matched_lots) < len(lot_filter):
-                missing_lots = sorted(lot_filter - matched_lots)
-                logger.warning(f"매칭되지 않은 LOT: {missing_lots}")
-            elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
-            bucket.extend(index_hits)
-            timings["logical_eval_ms"] = elapsed_ms if is_complex else 0.0
-            timings["search_mode"] = "query+lot"
-        elif query:
-            is_complex = _is_complex_query(query)
-            if is_complex:
-                raw_tokens = _tokenize_logical_query(query)
-                logical_terms = [
-                    token for token in raw_tokens
-                    if token and token not in _LOGICAL_OPERATORS and token not in ("(", ")")
-                ]
-                logical_terms = list(dict.fromkeys(logical_terms))
-                if not logical_terms:
-                    is_complex = False
-            search_start = time.perf_counter()
-            if is_complex:
-                # 🔥 goal 제한 제거: 모든 매칭 파일 검색 (current_folder의 모든 하위 파일)
-                index_hits = await loop.run_in_executor(
-                    IO_POOL,
-                    _search_index_logical,
-                    keys_slice,
-                    names_slice,
-                    query,
-                    None  # goal 제한 없음 (모든 파일 검색)
-                )
-                effective_workers = config.SEARCH_WORKERS or 1
-            else:
-                worker_chunks = max(1, config.SEARCH_WORKERS)
-                effective_workers = worker_chunks
-                # 🔥 goal 제한 제거: 모든 매칭 파일 검색 (current_folder의 모든 하위 파일)
-                index_hits = await loop.run_in_executor(
-                    IO_POOL,
-                    _search_index_slice_parallel,
-                    keys_slice,
-                    names_slice,
-                    query,
-                    None,  # goal 제한 없음 (모든 파일 검색)
-                    worker_chunks
-                )
-            elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
-            bucket.extend(index_hits)
-            timings["logical_eval_ms"] = elapsed_ms if is_complex else 0.0
-            timings["search_mode"] = "logical" if is_complex else "simple"
-        elif lot_filter:
-            # 🔥 LOT 검색만 수행: 파일명을 _로 split한 첫 번째 부분이 LOT 목록에 포함되면 선택
-            # 🔥 검색 제한 없음: keys_slice의 모든 파일 검색 (current_folder의 모든 하위 파일)
-            search_start = time.perf_counter()
-            all_matching_hits = []  # 🔥 모든 매칭 파일 수집 (검색 제한 없이)
-            matched_lots = set()  # 🔥 매칭된 LOT 추적
-            lot_file_counts = {}  # 🔥 LOT별 파일 개수 추적
-            
-            logger.info(f"LOT 검색 시작: keys_slice={len(keys_slice)}개 파일 검색 대상, 요청 LOT={sorted(lot_filter)}")
-            
-            all_lot_tokens = set()  # 🔥 모든 추출된 lot_token 추적
-            
-            # 🔥 keys_slice의 모든 파일 검색 (제한 없음)
-            for rel, name_lower in zip(keys_slice, names_slice):
-                lot_token = name_lower.split("_", 1)[0]  # 파일명의 첫 부분(LOT ID) 추출
-                
-                # 🔥 실제 LOT 매칭은 필터링 없이 수행 (모든 토큰 허용)
-                if lot_token in lot_filter:  # LOT 목록에 포함되면 검색 결과에 추가
-                    all_matching_hits.append(rel)
-                    matched_lots.add(lot_token)  # 🔥 매칭된 LOT 기록
-                    lot_file_counts[lot_token] = lot_file_counts.get(lot_token, 0) + 1
-                
-                # 🔥 디버깅용 토큰 수집: 잘못된 토큰 필터링 (숫자만, .file 등 제외)
-                # 숫자만 있는 경우 (예: 0, 1, 10, 100 등) 제외
-                if lot_token.isdigit():
-                    continue
-                # .file 같은 특수 케이스 제외
-                if lot_token.startswith('.'):
-                    continue
-                # 빈 문자열 또는 너무 짧은 토큰 제외
-                if not lot_token or len(lot_token) < 2:
-                    continue
-                
-                all_lot_tokens.add(lot_token)  # 🔥 유효한 lot_token만 수집 (디버깅용)
-            
-            # 🔥 모든 추출된 lot_token 로깅 (요청 LOT와 비교)
-            missing_lot_tokens = lot_filter - all_lot_tokens
-            if missing_lot_tokens:
-                logger.warning(f"🔍 [LOT 디버깅] 추출된 lot_token에 없는 요청 LOT: {sorted(missing_lot_tokens)}")
-                # 🔥 상위 2000개 출력 (UI에 표시할 수 있는 최대 개수)
-                sorted_tokens = sorted(list(all_lot_tokens))
-                display_count = min(2000, len(sorted_tokens))
-                logger.info(f"🔍 [LOT 디버깅] keys_slice에서 추출된 모든 lot_token (상위 {display_count}개, 전체 {len(sorted_tokens)}개): {sorted_tokens[:display_count]}")
-            
-            # 🔥 검색 제한 없음: 모든 매칭 파일 수집 (current_folder의 모든 하위 파일 검색)
-            index_hits = all_matching_hits  # 모든 파일 검색 (제한 없음)
-            elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
-            bucket = list(index_hits)
-            timings["logical_eval_ms"] = elapsed_ms
-            timings["search_mode"] = "lot-only"
-            timings["matched_lots"] = sorted(matched_lots)  # 🔥 매칭된 LOT 목록
-            timings["matched_lot_count"] = len(matched_lots)  # 🔥 매칭된 LOT 개수
-            timings["total_matching_files"] = len(all_matching_hits)  # 🔥 전체 매칭 파일 수 (검색 제한 없음)
-            timings["lot_file_counts"] = lot_file_counts  # 🔥 LOT별 파일 개수
-            effective_workers = 1
-            logger.info(f"LOT 검색 완료: 요청 LOT {len(lot_filter)}개, 매칭된 LOT {len(matched_lots)}개, 전체 파일 {len(all_matching_hits)}개 (검색 제한 없음, keys_slice={len(keys_slice)}개 검색)")
-            logger.info(f"LOT별 파일 개수: {lot_file_counts}")
-            if len(matched_lots) < len(lot_filter):
-                missing_lots = sorted(lot_filter - matched_lots)
-                logger.warning(f"매칭되지 않은 LOT: {missing_lots} (파일명에 해당 LOT로 시작하는 파일이 없음)")
+                logger.warning(f"[SEARCH] 잘못된 folder 경로: {folder}, 전체 검색으로 폴백")
+                search_root = ROOT_DIR
         else:
-            # query도 없고 lot_filter도 없으면 빈 결과
-            index_hits = []
-            elapsed_ms = 0.0
-            bucket = []
-            timings["logical_eval_ms"] = 0.0
-            timings["search_mode"] = "none"
-
-        timings["index_executor_ms"] = elapsed_ms
-        timings["index_hit_count"] = len(index_hits)
-        timings["search_workers"] = effective_workers
-        timings["logical_term_count"] = len(logical_terms)
-        timings["index_workers"] = config.INDEX_WORKERS
-        timings["fallback_invoked"] = False
-        timings["fallback_goal"] = 0
-        timings["fallback_scan_ms"] = 0.0
-        timings["fallback_files_scanned"] = 0
-        timings["fallback_dirs_scanned"] = 0
-        timings["fallback_new_hits"] = 0
-        timings["fallback_truncated"] = False
-        timings["fallback_max_files"] = 0
-        timings["fallback_timeout_ms"] = 0
-        timings["fallback_remaining_need"] = 0
-        timings["index_rebuild_triggered"] = False
-        bucket, missing_count = _filter_existing_relpaths(bucket)
-        if missing_count:
-            timings["missing_files_filtered"] = missing_count
-
-        # 🔥 특정 폴더 제외: classification, classification_chips, chip_annotations, thumbnails, composite_map
-        excluded_folders = ['classification', 'classification_chips', 'chip_annotations', 'thumbnails', 'composite_map']
-        original_bucket_size = len(bucket)
-        filtered_bucket = []
-        for rel in bucket:
-            # 경로에 제외할 폴더가 포함되어 있는지 확인
-            path_parts = rel.replace('\\', '/').split('/')
-            should_exclude = any(excluded in path_parts for excluded in excluded_folders)
-            if not should_exclude:
-                filtered_bucket.append(rel)
+            # folder 미지정 시 current_folder 또는 ROOT_DIR (전체 검색)
+            search_root = current_folder if current_folder.exists() else ROOT_DIR
         
-        timings["excluded_folders_filtered"] = original_bucket_size - len(filtered_bucket)
-        bucket = filtered_bucket
-
-        results = bucket[offset: offset + limit]
-
-        timings["total_candidates"] = len(bucket)
-        timings["results_count"] = len(results)
-        timings["total_ms"] = round((time.perf_counter() - total_start) * 1000, 3)
-
-        logger.info(
-            "SEARCH_TIMING %s",
-            json.dumps(
-                {
-                    "query": query,
-                    "offset": offset,
-                    "limit": limit,
-                    "timings": timings
-                },
-                ensure_ascii=False
-            )
+        result = await search_service.search(
+            query=q or "",
+            lot_filter=lot_filter,
+            limit=limit,
+            offset=offset,
+            current_folder=search_root,
         )
-
-        return {"success": True, "results": results, "offset": offset, "limit": limit, "total": len(bucket), "timings": timings}
+        return result
     except Exception as e:
         logger.exception(f"검색 중 오류: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -5085,8 +4705,8 @@ async def get_all_files():
     try:
         with FILE_INDEX_LOCK:
             keys = list(FILE_INDEX_KEYS)
-        if not keys and not INDEX_BUILDING:
-            asyncio.create_task(build_file_index_background())
+        if not keys and not index_service.building:
+            asyncio.create_task(index_service.build(force=True, allow_background=True))
         return {"success": True, "files": keys}
     except Exception as e:
         logger.exception(f"전체 파일 목록 조회 실패: {e}")
@@ -6068,9 +5688,11 @@ async def clear_all_cache(request: Request):
         THUMB_STAT_CACHE.clear()
         
         # 전역 인덱스도 초기화
-        global INDEX_READY, INDEX_BUILDING
-        INDEX_READY = False
-        INDEX_BUILDING = False
+        index_service.clear()
+        try:
+            INDEX_CACHE_FILE.unlink(missing_ok=True)  # type: ignore[arg-type]
+        except Exception:
+            pass
         
         log_access_row(tag="INFO", note="전체 캐시 초기화 완료 (파일 인덱스 포함)")
         
@@ -6101,11 +5723,7 @@ async def change_folder(request: Request):
         # 썸네일과 라벨은 원래 ROOT_DIR 기준으로 관리
 
         DIRLIST_CACHE.clear();  THUMB_STAT_CACHE.clear()
-        
-        # 썸네일 요청 카운터 리셋 (새로운 폴더)
-        global INDEX_READY, INDEX_BUILDING
-        
-        INDEX_READY = False; INDEX_BUILDING = False
+        # 인덱스는 ROOT_DIR 기준이므로 유지 (폴더 변경 시 재사용)
 
         classification_dir = _classification_dir()
         if not classification_dir.exists():
@@ -7232,6 +6850,31 @@ async def create_user(payload: UserCreateRequest, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class CreateManualEntryReq(BaseModel):
+    mode: str
+    group: str
+    lot: str
+    wafer: Optional[str] = ""
+
+@app.post("/api/my-lot/manual")
+async def create_my_lot_manual_entry(req: CreateManualEntryReq, request: Request):
+    """이미지 없이 수동으로 항목 생성"""
+    try:
+        current_user = get_current_user(request)
+        result = my_lot_create_manual_entry(
+            current_user,
+            req.mode,
+            req.group,
+            req.lot,
+            req.wafer
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception(f"MY LOT 수동 생성 실패: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.put("/api/users/{username}/role")
 async def update_user_role(username: str, payload: RoleUpdateRequest, request: Request):
     """사용자 역할 변경"""
@@ -7474,7 +7117,7 @@ if __name__ == "__main__":
         logger.error(f"[SSL] 인증서/키 파일이 없습니다.\n  CERT: {cert_path}\n  KEY : {key_path}")
         sys.exit(2)
 
-    reload_flag = os.getenv("RELOAD", "1") == "1"
+    reload_flag = os.getenv("RELOAD", "0") == "1"
     logger.info(f"[SSL] HTTPS 모드 활성화: 포트 {config.HTTPS_PORT}")
     logger.info(f"[SSL] CERTFILE={cert_path}")
     logger.info(f"[SSL] KEYFILE={key_path}")
@@ -7486,7 +7129,8 @@ if __name__ == "__main__":
 
     requested_workers = os.getenv("UVICORN_WORKERS") or os.getenv("WORKERS")
     if requested_workers and requested_workers.strip() not in {"", "1"}:
-        logger.warning(f"⚠️ [WORKERS] FastAPI는 단일 워커로 고정됩니다. 요청된 워커 수({requested_workers})는 무시됩니다.")
+        serverlog = logging.getLogger("uvicorn.error")
+        serverlog.warning(f"[WORKERS] FastAPI는 단일 워커로 고정됩니다. 요청된 워커 수({requested_workers})는 무시됩니다.")
 
     # 클라이언트 연결 끊김 관련 에러 필터링 (그리드 스크롤 시 이미지 로드 취소 등)
     class SuppressClientDisconnectFilter(logging.Filter):
@@ -7506,16 +7150,63 @@ if __name__ == "__main__":
     uvicorn_error_logger = logging.getLogger("uvicorn.error")
     uvicorn_error_logger.addFilter(SuppressClientDisconnectFilter())
 
-    uvicorn.run(
-        "api.main:app",
-        host="0.0.0.0",
-        port=int(config.HTTPS_PORT),        # 기본 8443
-        reload=reload_flag,                 # 개발 편의
-        workers=1,
-        log_level="info",
-        access_log=False,                   # 커스텀 테이블 로그 사용
-        use_colors=True,
-        log_config=None,
-        ssl_certfile=str(cert_path),
-        ssl_keyfile=str(key_path),
-    )
+    print(f"[DEBUG] Starting uvicorn with reload={reload_flag}", flush=True)
+    print(f"[DEBUG] Port: {config.HTTPS_PORT}", flush=True)
+    print(f"[DEBUG] SSL Cert: {cert_path}", flush=True)
+    print(f"[DEBUG] SSL Key: {key_path}", flush=True)
+
+    # 🔥 로깅 설정: uvicorn의 기본 로깅을 사용하되, 필요한 로거만 설정
+    # log_config=None 제거 - 이 설정이 lifespan 로그를 숨기는 원인이었음
+    logging_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "default": {
+                "()": "uvicorn.logging.DefaultFormatter",
+                "format": "%(levelprefix)s %(asctime)s     %(message)s",
+                "datefmt": "%Y-%m-%d %H:%M:%S"
+            },
+            "access": {
+                "()": "uvicorn.logging.AccessFormatter",
+                "format": "%(levelprefix)s %(asctime)s     %(client_addr)s - \"%(request_line)s\" %(status_code)s"
+            }
+        },
+        "handlers": {
+            "default": {
+                "formatter": "default",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout"
+            },
+            "access": {
+                "formatter": "access",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout"
+            }
+        },
+        "loggers": {
+            "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+            "uvicorn.error": {"level": "INFO"},
+            "uvicorn.access": {"handlers": ["access"], "level": "INFO", "propagate": False}
+        }
+    }
+
+    try:
+        uvicorn.run(
+            "api.main:app",
+            host="0.0.0.0",
+            port=int(config.HTTPS_PORT),        # 기본 8443
+            reload=reload_flag,                 # 개발 편의
+            workers=1,
+            lifespan="on",                      # FastAPI lifespan 강제 활성화 (인덱스/캐시 초기화 보장)
+            log_level="info",
+            access_log=False,                   # 커스텀 테이블 로그 사용
+            use_colors=True,
+            log_config=logging_config,          # 🔥 기본 로깅 설정 사용 (None 대신)
+            ssl_certfile=str(cert_path),
+            ssl_keyfile=str(key_path),
+        )
+    except Exception as e:
+        print(f"[ERROR] Failed to start uvicorn: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

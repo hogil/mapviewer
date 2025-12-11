@@ -5,6 +5,8 @@
 $OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $env:PYTHONIOENCODING = "utf-8"
+$env:PYTHONUNBUFFERED = "1"
+$env:UVICORN_LIFESPAN = "on"   # FastAPI lifespan 강제 (인덱스 초기화/재빌드 보장)
 chcp 65001 | Out-Null
 
 # 환경변수 설정
@@ -54,7 +56,7 @@ $env:SEARCH_FALLBACK_TIMEOUT_MS="0"     # 0=시간 제한 없음
 
 # 인덱스 구축 워커 수 (병렬 디렉터리 스캔 가속)
 $env:INDEX_WORKERS = "4" # CPU 수 대비 2배, 최대 64
-$env:INDEX_REFRESH_ERVAL_MINUTES="30" # 파일 인덱스 자동 재빌드 간격(분)
+$env:INDEX_REFRESH_INTERVAL_MINUTES="30" # 파일 인덱스 자동 재빌드 간격(분)
 
 # 이미지 피라미드 설정
 # 2025-10-23: 피라미드 썸네일 품질 및 속도 최적화

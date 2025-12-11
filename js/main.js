@@ -6579,6 +6579,10 @@ class WaferMapViewer {
 
     openMultiSearchModal() {
         if (!this.dom?.multiSearchModal) return;
+        // 🔥 멀티검색 모달 열 때 일반 검색창 텍스트 초기화 (영향 방지)
+        if (this.dom.fileSearch) {
+            this.dom.fileSearch.value = '';
+        }
         this.dom.multiSearchModal.style.display = 'flex';
         if (this.dom.multiSearchInput) {
             if (!this.dom.multiSearchInput.value) {
@@ -6679,9 +6683,16 @@ class WaferMapViewer {
         const lotList = parsed.lots;
         this.setMultiSearchError('');
         try {
-            await this.performSearch({ multiLotList: [...lotList] });
+            const success = await this.performSearch({
+                multiLotList: [...lotList],
+                suppressAlerts: true
+            });
             // 🔥 검색 성공 시 텍스트 초기화
-            this.closeMultiSearchModal(true);
+            if (success) {
+                this.closeMultiSearchModal(true);
+            } else {
+                this.setMultiSearchError('검색 결과가 없거나 오류가 발생했습니다. LOT 목록을 확인해주세요.');
+            }
         } catch (error) {
             console.error('다중 LOT 검색 실패:', error);
             this.setMultiSearchError('검색 중 오류가 발생했습니다.');
@@ -7802,11 +7813,17 @@ class WaferMapViewer {
 
     async performSearch(options = {}) {
         try {
-            const fileQuery = this.dom.fileSearch?.value?.trim() || '';
-            const normalizedLots = this.normalizeLotPayload(options.multiLotList || []);
+            const { multiLotList = [], suppressAlerts = false } = options;
+            // 🔥 멀티검색일 때는 일반 검색창 텍스트 무시
+            const normalizedLots = this.normalizeLotPayload(multiLotList || []);
+            const isMultiSearch = normalizedLots.length > 0;
+            const fileQuery = isMultiSearch ? '' : (this.dom.fileSearch?.value?.trim() || '');
+
             if (!fileQuery && normalizedLots.length === 0) {
-                alert('파일명을 입력하거나 LOT 다중검색을 설정해주세요.');
-                return;
+                if (!suppressAlerts) {
+                    alert('파일명을 입력하거나 LOT 다중검색을 설정해주세요.');
+                }
+                return false;
             }
 
             // 즉시 버튼 피드백 제공
@@ -7862,6 +7879,7 @@ class WaferMapViewer {
             // 서버 검색 API 사용: 프런트는 결과만 표시
             const searchParams = new URLSearchParams();
             searchParams.set('q', fileQuery || '');
+            searchParams.set('limit', '3000');  // 🔥 검색 결과 최대 3000개
             if (normalizedLots.length) {
                 // 🔥 여러 LOT를 쉼표로 구분하여 전달
                 const lotMultiValue = normalizedLots.join(',');
@@ -7930,9 +7948,10 @@ class WaferMapViewer {
             }
 
             if (matchedImages.length === 0) {
-                alert('검색 결과가 없습니다.');
-
-                return;
+                if (!suppressAlerts) {
+                    alert('검색 결과가 없습니다.');
+                }
+                return false;
             }
 
             // 검색 결과를 그리드 모드로 표시
@@ -7947,7 +7966,8 @@ class WaferMapViewer {
         this.invalidateGridGeometry();
 
             this.showGrid(matchedImages);
-            
+
+            return true;
         } catch (error) {
             console.error('검색 실패:', error);
 
@@ -7963,7 +7983,10 @@ class WaferMapViewer {
                 searchBtn.style.opacity = '1';
             }
 
-            alert('검색 중 오류가 발생했습니다.');
+            if (!suppressAlerts) {
+                alert('검색 중 오류가 발생했습니다.');
+            }
+            return false;
         }
     }
 
