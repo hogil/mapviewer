@@ -1191,7 +1191,8 @@ async def lifespan(app: FastAPI):
     global CLASSES_MTIME
     CLASSES_MTIME = _classes_stat_mtime()
 
-    print("[INDEX] Loading cache...", flush=True)
+    print("[INDEX] Cache load started...", flush=True)
+    cache_start = time.time()
     try:
         cache_loaded = index_service.load_cache()
     except Exception as exc:
@@ -1199,11 +1200,12 @@ async def lifespan(app: FastAPI):
         print(f"[INDEX] Cache load failed: {exc}", flush=True)
         cache_loaded = False
 
+    cache_duration = time.time() - cache_start
     if cache_loaded and index_service.keys:
-        bootlog.info(f"📂 [INDEX] 캐시 로드 완료: {len(index_service.keys)}개 파일")
-        print(f"[INDEX] Cache loaded: {len(index_service.keys)} files", flush=True)
+        bootlog.info(f"📂 [INDEX] Cache load complete: {len(index_service.keys)} files ({cache_duration:.2f}s)")
+        print(f"[INDEX] Cache load complete: {len(index_service.keys)} files ({cache_duration:.2f}s)", flush=True)
     else:
-        bootlog.info("[INDEX] 캐시 없음/비어 있음")
+        bootlog.info("[INDEX] No cache found")
         print("[INDEX] No cache found", flush=True)
 
     index_action = "rebuild" if cache_loaded and index_service.keys else "build"
@@ -1301,16 +1303,18 @@ async def startup_event():
         return
     
     # 🔥 캐시 로드는 즉시 실행 (빠름)
+    cache_start = time.time()
     try:
         cache_loaded = index_service.load_cache()
+        cache_duration = time.time() - cache_start
         if cache_loaded and index_service.keys:
-            bootlog.info(f"📂 [STARTUP] 캐시 로드 완료: {len(index_service.keys)}개 파일 (검색 즉시 가능)")
-            print(f"[STARTUP] Cache loaded: {len(index_service.keys)} files (search ready)", flush=True)
+            bootlog.info(f"📂 [STARTUP] Cache load complete: {len(index_service.keys)} files ({cache_duration:.2f}s)")
+            print(f"[STARTUP] Cache load complete: {len(index_service.keys)} files ({cache_duration:.2f}s)", flush=True)
         else:
-            bootlog.info("[STARTUP] 캐시 없음/비어 있음")
+            bootlog.info("[STARTUP] No cache found")
             print("[STARTUP] No cache found", flush=True)
     except Exception as exc:
-        bootlog.warning(f"⚠️ [STARTUP] 캐시 로드 실패: {exc}")
+        bootlog.warning(f"⚠️ [STARTUP] Cache load failed: {exc}")
         cache_loaded = False
     
     # 🔥 인덱스 빌드는 백그라운드에서 비동기 실행 (서버 시작 블로킹 방지)
@@ -1328,17 +1332,22 @@ async def startup_event():
 async def _background_index_build():
     """백그라운드에서 인덱스 빌드 실행"""
     bootlog = logging.getLogger("uvicorn.error")
+    build_start = time.time()
     try:
-        print("[INDEX] 백그라운드 인덱스 빌드 시작...", flush=True)
+        print("[INDEX] Background build started...", flush=True)
+        bootlog.info("🔨 [INDEX] Background build started")
+        
         build_result = await index_service.build(force=True, allow_background=False)
+        build_duration = time.time() - build_start
+        
         if build_result:
             cache_file = index_service.cache_file
             if cache_file.exists():
                 file_size = cache_file.stat().st_size
                 bootlog.info(
-                    f"✅ [INDEX] 백그라운드 빌드 완료: files={index_service.total_files}, cache_size={file_size:,} bytes"
+                    f"✅ [INDEX] Background build complete: {index_service.total_files} files ({build_duration:.2f}s)"
                 )
-                print(f"[INDEX] Background build complete: {index_service.total_files} files", flush=True)
+                print(f"[INDEX] Background build complete: {index_service.total_files} files ({build_duration:.2f}s)", flush=True)
             else:
                 bootlog.error(f"❌ [INDEX] 캐시 파일이 생성되지 않음: {cache_file}")
         else:
@@ -4562,16 +4571,26 @@ async def get_thumbnail(
             raise HTTPException(status_code=415, detail="Unsupported image format")
 
         try:
-            # 디버그 로그 제거 (너무 자주 출력됨)
-            # logger.info(f"🎨 [THUMBNAIL API] path={image_path.name}, size={size}, personalized={personalized}, scheme={scheme}")
             # 기본 썸네일 생성 (개인색 설정 포함)
             thumb = await generate_thumbnail(image_path, (size, size), personalized=personalized, scheme=scheme)
             if thumb and thumb.exists():
                 st = thumb.stat()
                 resp_304 = maybe_304(request, st)
                 if resp_304: return resp_304
-                headers = {"Cache-Control": "public, max-age=604800, immutable", "ETag": compute_etag(st)}
-                return FileResponse(thumb, headers=headers)
+                
+                # 🔥 FileResponse 대신 메모리에서 직접 응답 (Content-Length 오류 방지)
+                try:
+                    content = thumb.read_bytes()
+                    content_type = "image/jpeg" if thumb.suffix.lower() in ['.jpg', '.jpeg'] else "image/png"
+                    headers = {
+                        "Cache-Control": "public, max-age=604800, immutable",
+                        "ETag": compute_etag(st),
+                        "Content-Length": str(len(content))
+                    }
+                    return Response(content=content, media_type=content_type, headers=headers)
+                except Exception as read_error:
+                    logger.warning(f"썸네일 읽기 실패, FileResponse 폴백: {read_error}")
+                    return FileResponse(thumb, headers={"Cache-Control": "public, max-age=604800, immutable", "ETag": compute_etag(st)})
             else:
                 # 썸네일 생성 실패 시 원본 이미지 제공
                 logger.warning(f"썸네일 생성 실패, 원본 이미지 제공: {image_path}")

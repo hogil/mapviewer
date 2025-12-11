@@ -363,6 +363,11 @@ class IndexService:
     def load_cache(self, log: bool = True) -> bool:
         if not self.cache_file.exists():
             return False
+        
+        load_start = time.time()
+        if log:
+            self.logger.info("📂 [INDEX] Cache load started: %s", self.cache_file.name)
+        
         try:
             with self.cache_file.open("r", encoding="utf-8") as f:
                 keys = [line.strip() for line in f if line.strip()]
@@ -389,8 +394,10 @@ class IndexService:
         self.build_started_at = time.time()
         self.build_completed_at = self.build_started_at
         self.ready = True
+        
+        load_duration = time.time() - load_start
         if log and not self._cache_loaded:
-            self.logger.info("✅ [INDEX] 캐시 로드 완료 | files=%d", self.total_files)
+            self.logger.info("✅ [INDEX] Cache load complete: %d files (%.2fs)", self.total_files, load_duration)
         self._cache_loaded = True
         return True
 
@@ -620,6 +627,9 @@ class IndexService:
             self.ready = False
             self.build_started_at = time.time()
             self.build_completed_at = 0.0
+            
+            self.logger.info("🔨 [INDEX] Build started: scanning %s (workers=%d)", self.root_dir, self.index_workers)
+            
             try:
                 sorted_keys, sorted_names, total_dirs, completed_dirs = await loop.run_in_executor(
                     None, self._walk_and_collect
@@ -651,12 +661,9 @@ class IndexService:
                 self.ready = True
                 duration = self.build_completed_at - self.build_started_at
                 self.logger.info(
-                    "✅ [INDEX] 빌드 완료 | files=%d | dirs=%d | workers=%d | duration=%.3fs | cache=%s",
+                    "✅ [INDEX] Build complete: %d files (%.2fs)",
                     self.total_files,
-                    self.total_dirs,
-                    self.index_workers,
                     duration,
-                    "✅" if self.cache_file.exists() else "❌",
                 )
                 return True
             finally:

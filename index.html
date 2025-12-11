@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
@@ -863,6 +863,172 @@
             color: #8c8c8c;
             font-size: 13px;
             text-align: center;
+        }
+
+        /* Lot Mode Button */
+        .lot-mode-btn {
+            transition: all 0.2s ease;
+        }
+        .lot-mode-btn.active {
+            background: #2f6fed !important;
+            border-color: #4a7fff !important;
+            color: #fff !important;
+        }
+        .lot-mode-btn .lot-mode-icon {
+            margin-right: 4px;
+        }
+
+        /* Lot List Modal */
+        .lot-list-modal {
+            position: fixed;
+            left: 230px;
+            top: 155px;
+            width: 150px;
+            max-height: calc(100vh - 200px);
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 8px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            z-index: 25000;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            resize: both;
+            min-width: 120px;
+            min-height: 150px;
+        }
+        .lot-list-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 10px;
+            background: #232323;
+            border-bottom: 1px solid #333;
+            cursor: move;
+            user-select: none;
+        }
+        .lot-list-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #fff;
+        }
+        .lot-list-count {
+            font-size: 11px;
+            color: #888;
+            margin-left: auto;
+            margin-right: 4px;
+        }
+        .lot-list-close-btn {
+            background: transparent;
+            border: none;
+            color: #888;
+            font-size: 16px;
+            cursor: pointer;
+            padding: 0 2px;
+            line-height: 1;
+        }
+        .lot-list-close-btn:hover {
+            color: #fff;
+        }
+        .lot-list-search {
+            padding: 6px 8px;
+            border-bottom: 1px solid #2a2a2a;
+        }
+        .lot-list-search input {
+            width: 100%;
+            padding: 5px 8px;
+            background: #0f0f0f;
+            border: 1px solid #333;
+            border-radius: 4px;
+            color: #fff;
+            font-size: 12px;
+        }
+        .lot-list-search input:focus {
+            outline: none;
+            border-color: #2f6fed;
+        }
+        .lot-list-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 4px 0;
+        }
+        .lot-list-item {
+            padding: 6px 10px;
+            cursor: pointer;
+            transition: background 0.15s;
+            border-bottom: 1px solid #222;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 4px;
+        }
+        .lot-list-item:hover {
+            background: #2a2a2a;
+        }
+        .lot-list-item.active {
+            background: rgba(47, 111, 237, 0.2);
+            border-left: 3px solid #2f6fed;
+        }
+        .lot-list-item-name {
+            font-size: 11px;
+            color: #e0e0e0;
+            font-weight: 500;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 1;
+        }
+        .lot-list-item-count {
+            font-size: 10px;
+            color: #888;
+            background: #333;
+            padding: 1px 6px;
+            border-radius: 8px;
+            flex-shrink: 0;
+        }
+
+        /* Lot Header in Grid */
+        .lot-header {
+            grid-column: 1 / -1;
+            background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%);
+            border: 1px solid #404040;
+            border-radius: 4px;
+            padding: 5px 12px;
+            margin: 6px 0 3px 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .lot-header:first-child {
+            margin-top: 0;
+        }
+        .lot-header-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: #e0e0e0;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .lot-header-name::before {
+            content: "▸";
+            color: #888;
+        }
+        .lot-header-count {
+            font-size: 11px;
+            color: #888;
+            background: rgba(255, 255, 255, 0.08);
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+
+        /* Lot Spacer (빈 공간 채우기) */
+        .lot-spacer {
+            background: transparent;
+            pointer-events: none;
         }
 
         /* MY LOT Window */
@@ -3193,6 +3359,7 @@
                     <button type="button" id="multi-search-btn" class="grid-btn" aria-label="LOT 다중 검색">다중검색</button>
                 </div>
                 <div class="control-group" style="margin-left: auto; margin-right: 8px; gap: 8px;">
+                    <button id="lot-mode-btn" class="grid-btn lot-mode-btn" title="Lot별로 그룹화하여 보기">LOT Mode</button>
                     <button id="composite-btn-top" class="grid-btn" data-composite-btn title="Composite Map 만들기">Composite</button>
                     <button id="ref-map-btn-top" class="grid-btn" data-ref-map-btn title="Reference Map 보기">Ref Map</button>
                     <button id="my-lot-btn-top" class="grid-btn" data-my-lot-btn title="MY LOT 보기">MY LOT</button>
@@ -3493,6 +3660,21 @@
                 <img id="ref-map-image" src="" alt="Reference Map">
                 <div id="ref-map-placeholder" class="ref-map-empty">Ref Map을 등록하면 이곳에 표시됩니다.</div>
             </div>
+        </div>
+    </div>
+
+    <!-- Lot 목록 모달 (Lot 모드용) -->
+    <div id="lot-list-modal" class="lot-list-modal" style="display: none;">
+        <div class="lot-list-header">
+            <div class="lot-list-title">LOT List</div>
+            <div class="lot-list-count" id="lot-list-count">0개 Lot</div>
+            <button id="lot-list-close-btn" class="lot-list-close-btn">&times;</button>
+        </div>
+        <div class="lot-list-search">
+            <input type="text" id="lot-list-search-input" placeholder="Lot 검색...">
+        </div>
+        <div class="lot-list-content" id="lot-list-content">
+            <!-- Lot 항목들이 동적으로 추가됨 -->
         </div>
     </div>
 

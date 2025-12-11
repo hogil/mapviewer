@@ -35,9 +35,9 @@ export class GridManager {
         // 🔥 진행 중인 이미지 로드 요청 취소용
         this.abortControllers = new Map(); // index -> AbortController
         
-        // 🔥 동시 로딩 제한 (서버 부하 및 gzip 오류 방지)
+        // 🔥 동시 로딩 제한 (서버 부하 방지)
         this.concurrentLoads = 0;
-        this.maxConcurrentLoads = 8; // 8개씩만 동시 로딩
+        this.maxConcurrentLoads = 16; // 🔥 8 → 16으로 증가 (성능 개선)
         this.loadQueue = [];
     }
     
