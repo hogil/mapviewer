@@ -686,10 +686,12 @@ export class MyLotModal {
         input.type = 'text';
         input.value = initialText;
         input.style.width = '100%';
-        input.style.background = '#0b0b0b';
-        input.style.border = '1px solid #3b82f6';
+        input.style.background = 'transparent';
+        input.style.border = 'none';
+        input.style.outline = 'none';
         input.style.color = '#f3f3f3';
         input.style.padding = '4px 8px';
+        input.style.caretColor = '#3b82f6'; // 커서 색상 (파란색 깜빡임)
         input.addEventListener('input', () => {
             this.manualRows[index][cellType] = input.value;
             if (input.value) {
@@ -1577,10 +1579,12 @@ export class MyLotModal {
             input.type = 'text';
             input.value = data.lot || '';
             input.style.width = '100%';
-            input.style.background = '#0b0b0b';
-            input.style.border = '1px solid #3b82f6';
+            input.style.background = 'transparent';
+            input.style.border = 'none';
+            input.style.outline = 'none';
             input.style.color = '#f3f3f3';
             input.style.padding = '4px 8px';
+            input.style.caretColor = '#3b82f6'; // 커서 색상 (파란색 깜빡임)
             input.addEventListener('input', () => {
                 this.manualRows[index].lot = input.value;
                 if (input.value) {
@@ -1667,10 +1671,12 @@ export class MyLotModal {
                 input.type = 'text';
                 input.value = data.wafer || '';
                 input.style.width = '100%';
-                input.style.background = '#0b0b0b';
-                input.style.border = '1px solid #3b82f6';
+                input.style.background = 'transparent';
+                input.style.border = 'none';
+                input.style.outline = 'none';
                 input.style.color = '#f3f3f3';
                 input.style.padding = '4px 8px';
+                input.style.caretColor = '#3b82f6'; // 커서 색상 (파란색 깜빡임)
                 input.addEventListener('input', () => {
                     this.manualRows[index].wafer = input.value;
                     if (input.value) {
