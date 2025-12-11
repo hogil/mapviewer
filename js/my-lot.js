@@ -88,6 +88,10 @@ export class MyLotModal {
         this.dragSelectActive = false;
         this.pendingPaths = []; // Context Menu에서 추가할 경로들
         this.updatedGroups = new Set(); // 🔥 세션 당 그룹별 업데이트 여부 추적
+        this.pendingSearchRows = new Set(); // 🔥 배치 검색 대상 행
+        this.batchSearchTimer = null;
+        this.batchSearchPromise = null;
+        this.batchSearchPromiseResolve = null;
 
         // 🔥 Excel 스타일 키보드 핸들링
         this.isEditMode = false; // 편집 모드 상태
@@ -143,10 +147,13 @@ export class MyLotModal {
                 return;
             }
 
-            // 🔥 Enter: 아래 셀로 이동
+            // 🔥 Enter: 선택 확정, Shift+Enter: 아래 줄 추가
             if (event.key === 'Enter' && this.activeManualCell) {
                 event.preventDefault();
-                this.moveCellSelection(1, 0);
+                if (event.shiftKey) {
+                    this.moveCellSelection(1, 0);
+                }
+                // Enter만: 아무 동작 없음 (선택 유지)
                 return;
             }
 
@@ -451,7 +458,10 @@ export class MyLotModal {
      * @param {boolean} extendSelection Shift 누른 상태 (범위 선택)
      */
     moveCellSelection(dr, dc, extendSelection = false) {
-        if (!this.activeManualCell && this.manualRows.length === 0) return;
+        // 🔥 manualRows가 비어있으면 새 행 추가
+        if (this.manualRows.length === 0) {
+            this.manualRows.push({ lot: '', wafer: '', searchResults: [] });
+        }
         
         // 셀이 선택되지 않았으면 첫 번째 셀 선택
         if (!this.activeManualCell) {
@@ -459,8 +469,8 @@ export class MyLotModal {
             this.selectedManualCells.clear();
             this.selectedManualCells.add('0_lot');
             this.lastManualCellIndex = 0;
-            this.updateManualCellStyles();
-            this.updateManualRowPreview(0);
+            this.renderEntries();
+            requestAnimationFrame(() => this.updateManualCellStyles());
             return;
         }
         
@@ -483,11 +493,13 @@ export class MyLotModal {
         
         // 행 범위 체크
         if (newRow < 0) newRow = 0;
+        
+        let needsRerender = false;
         if (newRow >= this.manualRows.length) {
             // 마지막 행 넘어가면 새 행 추가
             if (dr > 0) {
-                this.manualRows.push({ lot: '', wafer: '' });
-                this.renderEntries();
+                this.manualRows.push({ lot: '', wafer: '', searchResults: [] });
+                needsRerender = true;
             } else {
                 newRow = this.manualRows.length - 1;
             }
@@ -507,7 +519,15 @@ export class MyLotModal {
         }
         
         this.activeManualCell = { rowIndex: newRow, cellType: newCellType };
-        this.updateManualCellStyles();
+        
+        if (needsRerender) {
+            this.renderEntries();
+            // 🔥 renderEntries 후 셀 스타일 업데이트
+            requestAnimationFrame(() => this.updateManualCellStyles());
+        } else {
+            this.updateManualCellStyles();
+        }
+        
         this.updateManualRowPreview(newRow);
     }
 
@@ -685,13 +705,20 @@ export class MyLotModal {
         const input = document.createElement('input');
         input.type = 'text';
         input.value = initialText;
-        input.style.width = '100%';
-        input.style.background = 'transparent';
-        input.style.border = 'none';
-        input.style.outline = 'none';
-        input.style.color = '#f3f3f3';
-        input.style.padding = '4px 8px';
-        input.style.caretColor = '#3b82f6'; // 커서 색상 (파란색 깜빡임)
+        input.style.cssText = `
+            width: 100%;
+            height: 100%;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: #f3f3f3;
+            padding: 0;
+            margin: 0;
+            font-size: inherit;
+            font-family: inherit;
+            caret-color: #3b82f6;
+            box-sizing: border-box;
+        `;
         input.addEventListener('input', () => {
             this.manualRows[index][cellType] = input.value;
             if (input.value) {
@@ -737,6 +764,8 @@ export class MyLotModal {
                 this.updateManualRowPreview(index);
             }
             this.renderEntries();
+            // 🔥 renderEntries 후 셀 스타일 복원
+            requestAnimationFrame(() => this.updateManualCellStyles());
         };
 
         input.addEventListener('blur', finishEdit);
@@ -744,23 +773,19 @@ export class MyLotModal {
             if (e.key === 'Enter') {
                 e.preventDefault();
                 finishEdit();
-                this.handleManualSubmit();
+                if (e.shiftKey) {
+                    // 🔥 Shift+Enter: 아래 줄 추가하며 내려가기
+                    this.moveCellSelection(1, 0);
+                }
+                // 🔥 Enter만: 수정 완료 (이동 없음)
             } else if (e.key === 'Escape') {
                 e.preventDefault();
                 finishEdit();
             } else if (e.key === 'Tab') {
                 e.preventDefault();
                 finishEdit();
-                // Tab으로 다음 셀로 이동
-                if (cellType === 'lot' && this.activeMode === 'wafer') {
-                    this.activeManualCell = { rowIndex: index, cellType: 'wafer' };
-                } else {
-                    // 다음 행의 첫 번째 셀로
-                    if (index + 1 < this.manualRows.length) {
-                        this.activeManualCell = { rowIndex: index + 1, cellType: 'lot' };
-                    }
-                }
-                this.updateManualCellStyles();
+                // Tab: 오른쪽 셀로 이동
+                this.moveCellSelection(0, e.shiftKey ? -1 : 1);
             }
         });
     }
@@ -827,16 +852,16 @@ export class MyLotModal {
         this.viewer?.showToast?.('저장 중...', 1500);
 
         try {
-            // 🔥 모든 행의 검색 결과 수집 (searchResults 또는 path)
-            const allPaths = new Set();
+            // 🔥 모든 행의 검색 결과 수집 (중복 제거 안 함)
+            const allPaths = [];
             const rowsWithoutImages = [];
 
             for (const row of validRows) {
                 // searchResults가 있으면 모두 추가, 없으면 path만 추가
                 if (row.searchResults && row.searchResults.length > 0) {
-                    row.searchResults.forEach(p => allPaths.add(p));
+                    allPaths.push(...row.searchResults);
                 } else if (row.path) {
-                    allPaths.add(row.path);
+                    allPaths.push(row.path);
                 } else {
                     // 이미지 없는 행
                     rowsWithoutImages.push(row);
@@ -846,9 +871,9 @@ export class MyLotModal {
             let successCount = 0;
             let errors = [];
 
-            // 1. 🔥 검색된 모든 이미지를 my-lot 폴더에 복사 (batch API)
-            if (allPaths.size > 0) {
-                const pathsArray = Array.from(allPaths);
+            // 1. 🔥 검색된 모든 이미지를 my-lot 폴더에 복사 (batch API, 중복 제거 안 함)
+            if (allPaths.length > 0) {
+                const pathsArray = allPaths;
                 console.log(`[MyLotModal] 저장할 이미지: ${pathsArray.length}개`);
                 
                 const res = await fetch('/api/my-lot/batch', {
@@ -898,6 +923,8 @@ export class MyLotModal {
             }
 
             // 결과 처리
+            // 임시 그룹에 저장이 완료되었으므로 자동 삭제 대상에서 제외
+            this.tempGroup = null;
             await this.refreshData();
             
             // 입력창 초기화
@@ -963,6 +990,7 @@ export class MyLotModal {
         }
 
         console.log(`[MyLotModal] 검색 결과: ${results.length}개`);
+
         return results;
     }
 
@@ -1080,19 +1108,63 @@ export class MyLotModal {
             row.path = null;
             row.searchResults = [];
             this.updateManualRowPreview(rowIndex);
+            this.updateManualRowSearchCount(rowIndex, 0);
             return;
         }
+
+        // 🔥 검색 시작 즉시 "..." 표시
+        this.updateManualRowSearchBadge(rowIndex, '...');
 
         // 🔥 새로운 검색 함수 사용 (LOT + Wafer 필터)
         const { paths, previewPath } = await this.searchRowImages(rowIndex);
         
-        // UI 업데이트
+        // UI 업데이트 (즉시)
         this.updateManualRowPreview(rowIndex);
         this.updateManualRowSearchCount(rowIndex, paths.length);
     }
 
     /**
-     * 🔥 행의 검색 결과 개수 표시 업데이트
+     * 🔥 검색 중 배지 즉시 업데이트
+     */
+    updateManualRowSearchBadge(rowIndex, text) {
+        const inputRows = this.entriesContainer?.querySelectorAll('.my-lot-input-row');
+        if (!inputRows) return;
+        
+        const targetRow = Array.from(inputRows).find(
+            r => Number(r.dataset.manualIndex) === rowIndex
+        );
+        if (!targetRow) return;
+
+        const lotCell = targetRow.querySelector('td[data-cell-type="lot"]');
+        if (!lotCell) return;
+
+        lotCell.style.position = 'relative';
+
+        let countBadge = lotCell.querySelector('.search-count-badge');
+        if (!countBadge) {
+            countBadge = document.createElement('span');
+            countBadge.className = 'search-count-badge';
+            countBadge.style.cssText = `
+                position: absolute;
+                right: 4px;
+                top: 50%;
+                transform: translateY(-50%);
+                font-size: 10px;
+                padding: 1px 4px;
+                border-radius: 3px;
+                pointer-events: none;
+                white-space: nowrap;
+            `;
+            lotCell.appendChild(countBadge);
+        }
+        
+        countBadge.textContent = text;
+        countBadge.style.background = 'rgba(156, 163, 175, 0.2)';
+        countBadge.style.color = '#9ca3af';
+    }
+
+    /**
+     * 🔥 행의 검색 결과 개수 표시 업데이트 (셀 내부 우측 끝에 작게)
      */
     updateManualRowSearchCount(rowIndex, count) {
         const inputRows = this.entriesContainer?.querySelectorAll('.my-lot-input-row');
@@ -1103,22 +1175,40 @@ export class MyLotModal {
         );
         if (!targetRow) return;
 
-        // 검색 결과 개수 표시 셀 찾기 또는 생성
-        let countCell = targetRow.querySelector('.search-count');
-        if (!countCell) {
-            countCell = document.createElement('span');
-            countCell.className = 'search-count';
-            countCell.style.cssText = 'margin-left: 8px; font-size: 11px; color: #888;';
-            const lotCell = targetRow.querySelector('td[data-cell-type="lot"]');
-            if (lotCell) lotCell.appendChild(countCell);
+        const lotCell = targetRow.querySelector('td[data-cell-type="lot"]');
+        if (!lotCell) return;
+
+        // 셀에 position: relative 설정 (이미 있어도 무방)
+        lotCell.style.position = 'relative';
+
+        // 검색 결과 개수 표시 요소 찾기 또는 생성
+        let countBadge = lotCell.querySelector('.search-count-badge');
+        if (!countBadge) {
+            countBadge = document.createElement('span');
+            countBadge.className = 'search-count-badge';
+            countBadge.style.cssText = `
+                position: absolute;
+                right: 4px;
+                top: 50%;
+                transform: translateY(-50%);
+                font-size: 10px;
+                padding: 1px 4px;
+                border-radius: 3px;
+                pointer-events: none;
+                white-space: nowrap;
+            `;
+            lotCell.appendChild(countBadge);
         }
         
+        // 🔥 즉시 업데이트 (requestAnimationFrame 없이)
         if (count > 0) {
-            countCell.textContent = `(${count}개)`;
-            countCell.style.color = '#4ade80';
+            countBadge.textContent = `${count}`;
+            countBadge.style.background = 'rgba(74, 222, 128, 0.2)';
+            countBadge.style.color = '#4ade80';
         } else {
-            countCell.textContent = '(0개)';
-            countCell.style.color = '#ef4444';
+            countBadge.textContent = '0';
+            countBadge.style.background = 'rgba(239, 68, 68, 0.2)';
+            countBadge.style.color = '#ef4444';
         }
     }
 
@@ -1447,8 +1537,11 @@ export class MyLotModal {
         if (this.activeGroup) {
             this.updateSelectionStyles();
             this.updatePreviewForSelection();
-            this.updateManualCellStyles();
-            this.updateManualPreviewForActiveRow();
+            // 🔥 셀 스타일은 DOM이 완전히 렌더링된 후 적용
+            requestAnimationFrame(() => {
+                this.updateManualCellStyles();
+                this.updateManualPreviewForActiveRow();
+            });
         }
         this.updateActionButtonStates();
     }
@@ -1578,13 +1671,20 @@ export class MyLotModal {
             const input = document.createElement('input');
             input.type = 'text';
             input.value = data.lot || '';
-            input.style.width = '100%';
-            input.style.background = 'transparent';
-            input.style.border = 'none';
-            input.style.outline = 'none';
-            input.style.color = '#f3f3f3';
-            input.style.padding = '4px 8px';
-            input.style.caretColor = '#3b82f6'; // 커서 색상 (파란색 깜빡임)
+            input.style.cssText = `
+                width: 100%;
+                height: 100%;
+                background: transparent;
+                border: none;
+                outline: none;
+                color: #f3f3f3;
+                padding: 0;
+                margin: 0;
+                font-size: inherit;
+                font-family: inherit;
+                caret-color: #3b82f6;
+                box-sizing: border-box;
+            `;
             input.addEventListener('input', () => {
                 this.manualRows[index].lot = input.value;
                 if (input.value) {
@@ -1638,13 +1738,18 @@ export class MyLotModal {
                 if (e.key === 'Enter') {
                     e.preventDefault();
                     finishEdit();
-                    this.handleManualSubmit();
+                    if (e.shiftKey) {
+                        // 🔥 Shift+Enter: 아래 줄 추가하며 내려가기
+                        this.moveCellSelection(1, 0);
+                    }
+                    // 🔥 Enter만: 수정 완료 (이동 없음)
                 } else if (e.key === 'Escape') {
                     e.preventDefault();
                     finishEdit();
                 } else if (e.key === 'Tab') {
                     e.preventDefault();
                     finishEdit();
+                    this.moveCellSelection(0, e.shiftKey ? -1 : 1);
                 }
             });
         });
@@ -1670,13 +1775,20 @@ export class MyLotModal {
                 const input = document.createElement('input');
                 input.type = 'text';
                 input.value = data.wafer || '';
-                input.style.width = '100%';
-                input.style.background = 'transparent';
-                input.style.border = 'none';
-                input.style.outline = 'none';
-                input.style.color = '#f3f3f3';
-                input.style.padding = '4px 8px';
-                input.style.caretColor = '#3b82f6'; // 커서 색상 (파란색 깜빡임)
+                input.style.cssText = `
+                    width: 100%;
+                    height: 100%;
+                    background: transparent;
+                    border: none;
+                    outline: none;
+                    color: #f3f3f3;
+                    padding: 0;
+                    margin: 0;
+                    font-size: inherit;
+                    font-family: inherit;
+                    caret-color: #3b82f6;
+                    box-sizing: border-box;
+                `;
                 input.addEventListener('input', () => {
                     this.manualRows[index].wafer = input.value;
                     if (input.value) {
@@ -1728,13 +1840,18 @@ export class MyLotModal {
                     if (e.key === 'Enter') {
                         e.preventDefault();
                         finishEdit();
-                        this.handleManualSubmit();
+                        if (e.shiftKey) {
+                            // 🔥 Shift+Enter: 아래 줄 추가하며 내려가기
+                            this.moveCellSelection(1, 0);
+                        }
+                        // 🔥 Enter만: 수정 완료 (이동 없음)
                     } else if (e.key === 'Escape') {
                         e.preventDefault();
                         finishEdit();
                     } else if (e.key === 'Tab') {
                         e.preventDefault();
                         finishEdit();
+                        this.moveCellSelection(0, e.shiftKey ? -1 : 1);
                     }
                 });
             });
@@ -1792,6 +1909,1264 @@ export class MyLotModal {
         row.appendChild(actionCell);
 
         return row;
+    }
+
+    handleEntriesClick(event) {
+        const actionBtn = event.target.closest('button[data-action]');
+        if (!actionBtn) {
+            return;
+        }
+        const row = event.target.closest('.my-lot-entry-row');
+        if (!row) return;
+        const index = Number(row.dataset.index);
+        const entry = this.currentEntries[index];
+        if (!entry) return;
+        const action = actionBtn.dataset.action;
+        this.ensureMyLotPage();
+        if (action === 'preview') {
+            // 보기 버튼: LOT 탭일 경우 그리드로 모든 이미지 표시, Wafer 탭일 경우 단일 이미지 표시
+            if (this.activeMode === 'lot') {
+                // LOT 탭: 해당 LOT의 모든 이미지를 그리드로 표시
+                let paths = [];
+                if (entry.all_paths && Array.isArray(entry.all_paths)) {
+                    // Placeholder 제외
+                    paths = entry.all_paths.filter(p => 
+                        p && !p.includes('_placeholders') && !p.includes('placeholder.png')
+                    );
+                } else if (entry.path && !entry.path.includes('_placeholders') && !entry.path.includes('placeholder.png')) {
+                    paths = [entry.path];
+                }
+
+                if (paths.length > 0) {
+                    if (this.viewer?.showGrid) {
+                        this.viewer.showGrid(paths).catch((error) => {
+                            console.error('[MyLotModal] showGrid failed:', error);
+                            this.viewer?.showToast?.('그리드 표시에 실패했습니다.', 2000);
+                        });
+                    } else {
+                        this.viewer?.showToast?.('그리드 기능을 사용할 수 없습니다.', 2000);
+                    }
+                } else {
+                    this.viewer?.showToast?.('표시할 이미지가 없습니다.', 1700);
+                }
+            } else {
+                // Wafer 탭: 단일 이미지로 표시 (Placeholder 제외)
+                if (entry.path && !entry.path.includes('_placeholders') && !entry.path.includes('placeholder.png')) {
+                    // Wafer Map Explorer와 동일하게 selectedImages 설정
+                    if (this.viewer) {
+                        this.viewer.selectedImages = [entry.path];
+                        this.viewer.selectedImagePath = entry.path;
+                    }
+                    // enterSingleViewMode를 호출하여 Wafer Map Explorer와 동일한 동작 수행
+                    if (this.viewer?.enterSingleViewMode) {
+                        this.viewer.enterSingleViewMode(entry.path).catch((error) => {
+                            console.error('[MyLotModal] enterSingleViewMode failed:', error);
+                            this.viewer?.showToast?.('이미지 로드에 실패했습니다.', 2000);
+                        });
+                    } else {
+                        // fallback: 직접 loadImage 호출
+                        this.viewer?.loadImage?.(entry.path).catch((error) => {
+                            console.error('[MyLotModal] loadImage failed:', error);
+                            this.viewer?.showToast?.('이미지 로드에 실패했습니다.', 2000);
+                        });
+                    }
+                } else {
+                    this.viewer?.showToast?.('경로 정보가 없습니다.', 1700);
+                }
+            }
+        } else if (action === 'copy') {
+            // 개별 항목 복사
+            const { lot, wafer } = splitLotWaferValue(entry.value || entry.filename || '');
+            if (this.activeMode === 'wafer') {
+                // Wafer Tab: LOT\tWafer 형식
+                const text = `${lot}\t${wafer}`;
+                this.copyToClipboard(text, '복사했습니다.');
+            } else {
+                // LOT Tab: LOT만
+                this.copyToClipboard(lot, '복사했습니다.');
+            }
+        } else if (action === 'delete') {
+            this.handleDelete(entry.value || entry.filename);
+        }
+        event.stopPropagation();
+    }
+
+    handleEntryDoubleClick(event) {
+        const row = event.target.closest('.my-lot-entry-row');
+        if (!row) return;
+        const index = Number(row.dataset.index);
+        const entry = this.currentEntries[index];
+        if (!entry?.path) return;
+        this.ensureMyLotPage();
+        // Wafer Map Explorer와 동일하게 selectedImages 설정
+        if (this.viewer) {
+            this.viewer.selectedImages = [entry.path];
+            this.viewer.selectedImagePath = entry.path;
+        }
+        // Wafer Map Explorer에서 이미지 선택과 동일하게 동작
+        if (this.viewer?.enterSingleViewMode) {
+            this.viewer.enterSingleViewMode(entry.path).catch((error) => {
+                console.error('[MyLotModal] enterSingleViewMode failed:', error);
+                this.viewer?.showToast?.('이미지 로드에 실패했습니다.', 2000);
+            });
+        } else {
+            // fallback: 직접 loadImage 호출
+            this.viewer?.loadImage?.(entry.path).catch((error) => {
+                console.error('[MyLotModal] loadImage failed:', error);
+                this.viewer?.showToast?.('이미지 로드에 실패했습니다.', 2000);
+            });
+        }
+    }
+
+    handleEntryMouseDown(event) {
+        if (event.button !== 0) return;
+        if (event.target.closest('button[data-action]')) {
+            return;
+        }
+        const row = event.target.closest('.my-lot-entry-row');
+        if (!row) return;
+        const index = Number(row.dataset.index);
+        if (Number.isNaN(index)) return;
+
+        if (event.shiftKey && this.lastSelectedIndex !== null) {
+            this.selectRange(this.lastSelectedIndex, index, event.ctrlKey || event.metaKey);
+        } else if (event.ctrlKey || event.metaKey) {
+            this.toggleRowSelection(index);
+        } else {
+            this.clearSelection(true);
+            this.selectRow(index, true);
+            this.dragSelectActive = true;
+        }
+        event.preventDefault();
+        this.updatePreviewForSelection();
+    }
+
+    handleEntryMouseOver(event) {
+        if (!this.dragSelectActive) return;
+        const row = event.target.closest('.my-lot-entry-row');
+        if (!row) return;
+        const index = Number(row.dataset.index);
+        if (Number.isNaN(index)) return;
+        this.selectRow(index, false);
+    }
+
+    stopDragSelection() {
+        this.dragSelectActive = false;
+    }
+
+    selectRow(index, setAnchor = true) {
+        const entry = this.currentEntries[index];
+        if (!entry) return;
+        const key = entry.value || entry.filename;
+        this.selectedKeys.add(key);
+        if (setAnchor) {
+            this.lastSelectedIndex = index;
+        }
+        this.updateSelectionStyles();
+    }
+
+    selectRange(start, end, keepExisting = false) {
+        if (!keepExisting) {
+            this.clearSelection(true);
+        }
+        const [min, max] = [Math.min(start, end), Math.max(start, end)];
+        for (let i = min; i <= max; i += 1) {
+            this.selectRow(i, false);
+        }
+        this.lastSelectedIndex = end;
+        this.updateSelectionStyles();
+    }
+
+    toggleRowSelection(index) {
+        const entry = this.currentEntries[index];
+        if (!entry) return;
+        const key = entry.value || entry.filename;
+        if (this.selectedKeys.has(key)) {
+            this.selectedKeys.delete(key);
+        } else {
+            this.selectedKeys.add(key);
+            this.lastSelectedIndex = index;
+        }
+        this.updateSelectionStyles();
+        this.updatePreviewForSelection();
+    }
+
+    selectAllEntries() {
+        if (!this.currentEntries.length) return;
+        this.selectedKeys = new Set(this.currentEntries.map(entry => entry.value));
+        this.updateSelectionStyles();
+        this.updatePreviewForSelection();
+    }
+
+    clearSelection(silent = false) {
+        if (!this.selectedKeys.size) {
+            return;
+        }
+        this.selectedKeys.clear();
+        this.lastSelectedIndex = null;
+        this.updateSelectionStyles();
+        if (!silent) {
+            this.updatePreviewForSelection();
+        }
+    }
+
+    syncSelectionWithEntries() {
+        const valid = new Set(
+            this.currentEntries.map(entry => entry.value || entry.filename)
+        );
+        let changed = false;
+        for (const value of Array.from(this.selectedKeys)) {
+            if (!valid.has(value)) {
+                this.selectedKeys.delete(value);
+                changed = true;
+            }
+        }
+        if (changed) {
+            this.updateSelectionStyles();
+        }
+    }
+
+    updateSelectionStyles() {
+        if (!this.entriesContainer) return;
+        const rows = this.entriesContainer.querySelectorAll('.my-lot-entry-row');
+        rows.forEach(row => {
+            const value = row.dataset.value || '';
+            const entry = this.currentEntries[Number(row.dataset.index)];
+            const filename = entry?.filename || entry?.value || '';
+            row.classList.toggle('selected', 
+                this.selectedKeys.has(value) || this.selectedKeys.has(filename)
+            );
+        });
+        this.updateActionButtonStates();
+    }
+
+    updateActionButtonStates() {
+        const hasSelection = this.selectedKeys.size > 0;
+        if (this.copyLotBtn) {
+            this.copyLotBtn.disabled = !hasSelection;
+        }
+        if (this.copyWaferBtn) {
+            const canCopyWafer = this.activeMode === 'wafer' && hasSelection;
+            this.copyWaferBtn.disabled = !canCopyWafer;
+        }
+        if (this.copyLotWaferBtn) {
+            this.copyLotWaferBtn.disabled = !hasSelection;
+        }
+        if (this.clearSelectionBtn) {
+            this.clearSelectionBtn.disabled = !hasSelection;
+        }
+        if (this.deleteSelectionBtn) {
+            this.deleteSelectionBtn.disabled = !hasSelection;
+        }
+        if (this.gridViewBtn) {
+            this.gridViewBtn.disabled = !hasSelection;
+        }
+        if (this.selectAllBtn) {
+            this.selectAllBtn.disabled = !this.currentEntries.length;
+        }
+    }
+
+    /**
+     * 복사 버튼 표시/숨김 업데이트 (Tab에 따라)
+     */
+    updateCopyButtonVisibility() {
+        if (this.activeMode === 'lot') {
+            // LOT Tab: LOT 복사 버튼만 표시
+            if (this.copyLotBtn) {
+                this.copyLotBtn.style.display = 'inline-block';
+            }
+            if (this.copyWaferBtn) {
+                this.copyWaferBtn.style.display = 'none';
+            }
+            if (this.copyLotWaferBtn) {
+                this.copyLotWaferBtn.style.display = 'none';
+            }
+        } else {
+            // Wafer Tab: LOT and Wafer 복사 버튼만 표시
+            if (this.copyLotBtn) {
+                this.copyLotBtn.style.display = 'none';
+            }
+            if (this.copyWaferBtn) {
+                this.copyWaferBtn.style.display = 'none';
+            }
+            if (this.copyLotWaferBtn) {
+                this.copyLotWaferBtn.style.display = 'inline-block';
+            }
+        }
+    }
+
+    updatePreview(entry) {
+        if (!this.previewImage || !this.previewEmpty) return;
+        
+        // Placeholder 이미지는 미리보기에서 제외
+        if (!entry || !entry.path || 
+            entry.path.includes('_placeholders') || 
+            entry.path.includes('placeholder.png')) {
+            this.previewImage.style.display = 'none';
+            this.previewEmpty.style.display = 'block';
+            this.previewImage.src = '';
+            return;
+        }
+        
+        const absolutePath = this.viewer?.buildAbsoluteImagePath?.(entry.path);
+        if (!absolutePath) {
+            this.previewImage.style.display = 'none';
+            this.previewEmpty.style.display = 'block';
+            this.previewImage.src = '';
+            return;
+        }
+        const separator = absolutePath.includes('?') ? '&' : '?';
+        
+        // 🔥 Personal Colors 및 Cache Buster 적용
+        const personalizedParams = this.viewer?.getPersonalizedParams?.() || '';
+        const cacheBuster = this.viewer?._personalizedColorCacheBuster || Date.now();
+
+        this.previewImage.onload = () => {
+            this.previewImage.style.display = 'block';
+            this.previewEmpty.style.display = 'none';
+        };
+        this.previewImage.onerror = () => {
+            this.previewImage.style.display = 'none';
+            this.previewEmpty.style.display = 'block';
+        };
+        this.previewImage.src = `${absolutePath}${separator}t=${cacheBuster}${personalizedParams}`;
+    }
+
+    updatePreviewForSelection() {
+        const selected = this.getSelectedEntries();
+        if (selected.length) {
+            this.updatePreview(selected[selected.length - 1]);
+            return;
+        }
+        if (this.currentEntries.length) {
+            this.updatePreview(this.currentEntries[0]);
+        } else {
+            this.updatePreview(null);
+        }
+    }
+
+    getSelectedEntries() {
+        if (!this.selectedKeys.size) return [];
+        return this.currentEntries.filter(entry => 
+            this.selectedKeys.has(entry.value) || this.selectedKeys.has(entry.filename)
+        );
+    }
+
+    copySelection(type) {
+        const entries = this.getSelectedEntries();
+        if (!entries.length) {
+            this.viewer?.showToast?.('선택된 항목이 없습니다.', 1700);
+            return;
+        }
+
+        if (type === 'lot-wafer') {
+            // Wafer Tab: LOT\tWafer 형식으로 복사
+            const payload = entries.map(entry => {
+                const { lot, wafer } = splitLotWaferValue(entry.value || entry.filename || '');
+                return `${lot}\t${wafer}`;
+            }).filter(Boolean);
+
+            if (!payload.length) {
+                this.viewer?.showToast?.('복사할 값이 없습니다.', 1700);
+                return;
+            }
+            const text = payload.join('\n');
+            this.copyToClipboard(text, 'LOT and Wafer 복사했습니다.');
+        } else if (type === 'lot') {
+            // LOT Tab: LOT만 복사
+            const payload = entries.map(entry => {
+                const { lot } = splitLotWaferValue(entry.value || entry.filename || '');
+                return lot || '';
+            }).filter(Boolean);
+
+            if (!payload.length) {
+                this.viewer?.showToast?.('복사할 값이 없습니다.', 1700);
+                return;
+            }
+            const text = payload.join('\n');
+            this.copyToClipboard(text, 'LOT 복사했습니다.');
+        } else if (type === 'wafer') {
+            // Wafer만 복사 (기존 호환성 유지)
+            const payload = entries.map(entry => {
+                const { wafer } = splitLotWaferValue(entry.value || entry.filename || '');
+                return wafer || '';
+            }).filter(Boolean);
+
+            if (!payload.length) {
+                this.viewer?.showToast?.('복사할 값이 없습니다.', 1700);
+                return;
+            }
+            const text = payload.join('\n');
+            this.copyToClipboard(text, 'Wafer 복사했습니다.');
+        }
+    }
+
+    /**
+     * 🔥 Ctrl+C: 선택된 항목을 클립보드에 복사 (현재 모드에 맞게)
+     */
+    handleKeyboardCopy() {
+        const entries = this.getSelectedEntries();
+        if (!entries.length) {
+            this.viewer?.showToast?.('선택된 항목이 없습니다.', 1700);
+            return;
+        }
+
+        // 현재 모드에 따라 복사 형식 결정
+        if (this.activeMode === 'lot') {
+            // LOT Tab: LOT만 복사
+            const payload = entries.map(entry => {
+                const { lot } = splitLotWaferValue(entry.value || entry.filename || '');
+                return lot || '';
+            }).filter(Boolean);
+
+            if (!payload.length) {
+                this.viewer?.showToast?.('복사할 값이 없습니다.', 1700);
+                return;
+            }
+            const text = payload.join('\n');
+            this.copyToClipboard(text, `${payload.length}개 LOT 복사했습니다.`);
+        } else {
+            // Wafer Tab: LOT\tWafer 형식으로 복사
+            const payload = entries.map(entry => {
+                const { lot, wafer } = splitLotWaferValue(entry.value || entry.filename || '');
+                return `${lot}\t${wafer}`;
+            }).filter(Boolean);
+
+            if (!payload.length) {
+                this.viewer?.showToast?.('복사할 값이 없습니다.', 1700);
+                return;
+            }
+            const text = payload.join('\n');
+            this.copyToClipboard(text, `${payload.length}개 항목 복사했습니다.`);
+        }
+    }
+
+    /**
+     * 🔥 Ctrl+V: 클립보드에서 붙여넣기 (수동 입력 행에 추가)
+     */
+    async handleKeyboardPaste() {
+        // 그룹이 선택되지 않았으면 임시 그룹 생성
+        if (!this.activeGroup) {
+            await this.createTempGroup();
+        }
+
+        try {
+            // 클립보드에서 텍스트 읽기
+            let clipboardText = '';
+
+            if (navigator.clipboard && navigator.clipboard.readText) {
+                clipboardText = await navigator.clipboard.readText();
+            } else {
+                this.viewer?.showToast?.('클립보드 읽기를 지원하지 않는 브라우저입니다.', 2000);
+                return;
+            }
+
+            if (!clipboardText || !clipboardText.trim()) {
+                this.viewer?.showToast?.('클립보드가 비어있습니다.', 1700);
+                return;
+            }
+
+            // 수동 입력 행에 바로 추가
+            await this.handleManualPaste(clipboardText, false);
+            this.viewer?.showToast?.('입력 행에 추가되었습니다. 이미지 검색 중...', 2000);
+
+        } catch (error) {
+            console.error('[MyLotModal] handleKeyboardPaste failed:', error);
+            const message = error?.message || '붙여넣기에 실패했습니다.';
+            this.viewer?.showToast?.(message, 2200);
+        }
+    }
+
+    async openSelectionInViewer() {
+        const entries = this.getSelectedEntries();
+        if (!entries.length) {
+            this.viewer?.showToast?.('선택된 항목이 없습니다.', 1700);
+            return;
+        }
+        this.ensureMyLotPage();
+        
+        let paths = [];
+
+        // 🔥 LOT 탭일 경우: 선택된 LOT 폴더 내 모든 이미지 경로를 표시 (all_paths 사용)
+        if (this.activeMode === 'lot') {
+            // 선택된 LOT entry들의 all_paths를 모두 수집
+            entries.forEach(entry => {
+                if (entry.all_paths && Array.isArray(entry.all_paths)) {
+                    // LOT 폴더 내 모든 이미지 경로 추가 (placeholder 제외)
+                    const validPaths = entry.all_paths.filter(p => 
+                        p && !p.includes('_placeholders') && !p.includes('placeholder.png')
+                    );
+                    paths.push(...validPaths);
+                } else if (entry.path && !entry.path.includes('_placeholders') && !entry.path.includes('placeholder.png')) {
+                    // all_paths가 없으면 대표 이미지만 추가 (placeholder 제외)
+                    paths.push(entry.path);
+                }
+            });
+
+            console.log(`[MyLotModal] LOT Grid 보기: ${entries.length}개 LOT, 총 ${paths.length}개 이미지 표시`);
+        } else {
+            // Wafer 탭일 경우: 선택된 항목의 경로만 보여줌 (placeholder 제외)
+            paths = entries
+                .map(entry => entry.path)
+                .filter(p => p && !p.includes('_placeholders') && !p.includes('placeholder.png'));
+        }
+
+        if (!paths.length) {
+            this.viewer?.showToast?.('표시할 이미지가 없습니다.', 1700);
+            return;
+        }
+        
+        // 1개여도 그리드로 보여달라는 요구사항 반영
+        if (this.viewer?.showGrid) {
+            await this.viewer.showGrid(paths);
+            return;
+        }
+
+        // fallback: 그리드가 없으면 첫 번째 이미지만이라도 연다
+        const loadImage = this.viewer?.loadImage?.bind(this.viewer);
+        if (loadImage && paths.length > 0) {
+            try {
+                await loadImage(paths[0]);
+                if (paths.length > 1) {
+                    this.viewer?.showToast?.('그리드가 없어 첫 번째 이미지만 열었습니다.', 2000);
+                }
+            } catch (error) {
+                console.error('[MyLotModal] loadImage fallback failed:', error);
+                this.viewer?.showToast?.('이미지를 열지 못했습니다.', 2000);
+            }
+            return;
+        }
+
+        this.viewer?.showToast?.('그리드/이미지 보기 기능을 사용할 수 없습니다.', 2000);
+    }
+
+    async handleSave() {
+        const candidate = this.viewer?.getMyLotCandidate?.();
+        if (!candidate || !candidate.path) {
+            this.viewer?.showToast?.('현재 이미지를 찾을 수 없습니다.', 1800);
+            return;
+        }
+        if (!this.activeGroup) {
+            this.viewer?.showToast?.('먼저 그룹을 선택해주세요.', 2000);
+            return;
+        }
+        const candidateName = candidate.path?.split(/[\\/]/).pop() || null;
+        
+        const lotValue = candidate.lotValue; // getMyLotCandidate에서 lotValue 반환한다고 가정 (안되면 추출)
+        let targetLot = lotValue;
+
+        if (!targetLot) {
+            // path에서 추출 시도
+            const tokens = this.viewer?.extractLotTokensFromPath?.(candidate.path);
+            if (tokens && tokens.lotValue) {
+                targetLot = tokens.lotValue;
+            }
+        }
+
+        if (!targetLot) {
+            this.viewer?.showToast?.('LOT 정보를 추출할 수 없습니다.', 2000);
+            return;
+        }
+
+        try {
+            // 1. 해당 LOT으로 전체 이미지 검색 (공통 함수 사용)
+            this.viewer?.showToast?.(`'${targetLot}' 관련 이미지 검색 중...`, 1500);
+
+            let searchResults = [];
+
+            // 🔥 검색 API 실패 시 현재 이미지라도 저장할 수 있도록 try-catch
+            try {
+                searchResults = await this.searchImagesByLots([targetLot]);
+            } catch (searchError) {
+                console.warn('[MyLotModal] LOT 검색 실패, fallback 사용:', searchError);
+                // 검색 실패 시 빈 배열로 계속 진행 (폴더 검색은 시도)
+            }
+
+            // 🔥 추가: 현재 이미지와 같은 폴더에 있는 이미지들도 수집 (탐색기 폴더 내 이미지 누락 방지)
+            const lastSlash = Math.max(candidate.path.lastIndexOf('/'), candidate.path.lastIndexOf('\\'));
+            if (lastSlash > 0) {
+                const folderPath = candidate.path.substring(0, lastSlash);
+                try {
+                    const filesRes = await fetch(`/api/files?path=${encodeURIComponent(folderPath)}`);
+                    if (filesRes.ok) {
+                        const filesData = await filesRes.json();
+                        if (filesData.items && Array.isArray(filesData.items)) {
+                            const folderImages = filesData.items
+                                .filter(item => item.type === 'file' && /\.(png|jpg|jpeg|gif|bmp|webp)$/i.test(item.name))
+                                .map(item => item.path || `${folderPath}/${item.name}`);
+
+                            if (folderImages.length > 0) {
+                                searchResults.push(...folderImages);
+                                console.log(`[MyLotModal] 같은 폴더 이미지 ${folderImages.length}개 추가`);
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[MyLotModal] 폴더 검색 실패:', e);
+                }
+            }
+
+            if (searchResults.length === 0) {
+                // 검색 결과가 없으면 이미지 없이 LOT만 저장
+                if (this.activeMode !== 'lot') {
+                    this.viewer?.showToast?.('검색된 이미지가 없어 저장을 건너뛰었습니다.', 2000);
+                    return;
+                }
+
+                const manualResult = await this.createManualLotEntries([targetLot]);
+                if (manualResult.successCount > 0) {
+                    await this.refreshData();
+                    this.renderEntries();
+                    this.viewer?.showToast?.(`'${targetLot}'을(를) 이미지 없이 저장했습니다.`, 2400);
+                } else {
+                    const reason = manualResult.errors[0]?.reason || '저장에 실패했습니다.';
+                    this.viewer?.showToast?.(reason, 2200);
+                }
+                return;
+            } else {
+                console.log(`[MyLotModal] LOT 검색 완료: ${searchResults.length}개 이미지 발견`);
+            }
+
+            // 2. 검색된 이미지 일괄 저장 (batch API)
+            const res = await fetch('/api/my-lot/batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: this.activeMode, // 현재 탭 모드 (lot/wafer)
+                    group: this.activeGroup,
+                    paths: searchResults,
+                }),
+            });
+
+            if (!res.ok) {
+                const errorText = await this.parseErrorResponse(res);
+                throw new Error(errorText);
+            }
+            
+            const result = await res.json();
+
+            await this.refreshData();
+            this.renderEntries();
+            
+            // 결과 메시지
+            const messages = [];
+            if (result.success_count > 0) messages.push(`${result.success_count}개 저장`);
+            if (result.duplicate_count > 0) messages.push(`${result.duplicate_count}개 중복`);
+            
+            this.viewer?.showToast?.(`'${targetLot}' 저장 완료: ${messages.join(', ')}`, 2500);
+
+        } catch (error) {
+            console.error('[MyLotModal] save failed:', error);
+            const message = error?.message || 'MY LOT 저장에 실패했습니다.';
+            this.viewer?.showToast?.(message, 2200);
+        }
+    }
+
+    async handleCreateGroup() {
+        const name = prompt('새 그룹 이름을 입력하세요.');
+        if (!name) {
+            return;
+        }
+        try {
+            const res = await fetch('/api/my-lot/group', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode: this.activeMode, group: name }),
+            });
+            if (!res.ok) {
+                throw new Error(await this.parseErrorResponse(res));
+            }
+            await this.refreshData();
+            this.activeGroup = name.replace(/[^0-9A-Za-z_\-\.]+/g, "_") || name;
+            this.renderGroups();
+            this.renderEntries();
+            this.viewer?.showToast?.('그룹을 생성했습니다.', 1600);
+        } catch (error) {
+            console.error('[MyLotModal] create group failed:', error);
+            const message = error?.message || '그룹 생성에 실패했습니다.';
+            this.viewer?.showToast?.(message, 2200);
+        }
+    }
+
+    async createTempGroup() {
+        // 임시 그룹명 생성
+        const now = new Date();
+        const year = String(now.getFullYear()).slice(2);
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const hour = String(now.getHours()).padStart(2, '0');
+        const minute = String(now.getMinutes()).padStart(2, '0');
+        const second = String(now.getSeconds()).padStart(2, '0');
+        const tempName = `temp_${year}${month}${day}_${hour}${minute}${second}`;
+
+        try {
+            const res = await fetch('/api/my-lot/group', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode: this.activeMode, group: tempName }),
+            });
+            if (!res.ok) {
+                throw new Error(await this.parseErrorResponse(res));
+            }
+            await this.refreshData();
+            this.activeGroup = tempName;
+            this.tempGroup = tempName;
+            this.renderGroups();
+            this.viewer?.showToast?.(`임시 그룹 "${tempName}" 생성됨`, 1600);
+        } catch (error) {
+            console.error('[MyLotModal] create temp group failed:', error);
+            const message = error?.message || '임시 그룹 생성에 실패했습니다.';
+            this.viewer?.showToast?.(message, 2200);
+        }
+    }
+
+    async deleteTempGroupIfExists() {
+        if (!this.tempGroup) return;
+
+        try {
+            const res = await fetch('/api/my-lot/group', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: this.activeMode,
+                    group: this.tempGroup,
+                }),
+            });
+            if (res.ok) {
+                console.log(`[MyLotModal] 임시 그룹 "${this.tempGroup}" 삭제됨`);
+            }
+        } catch (error) {
+            console.warn('[MyLotModal] temp group delete failed:', error);
+        } finally {
+            this.tempGroup = null;
+        }
+    }
+
+    async handleRenameGroup() {
+        if (!this.activeGroup) {
+            this.viewer?.showToast?.('변경할 그룹을 선택해주세요.', 1800);
+            return;
+        }
+        const newName = prompt(`새 그룹 이름을 입력하세요.`, this.activeGroup);
+        if (!newName || newName === this.activeGroup) {
+            return;
+        }
+        try {
+            const res = await fetch('/api/my-lot/group/rename', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: this.activeMode,
+                    old_name: this.activeGroup,
+                    new_name: newName,
+                }),
+            });
+            if (!res.ok) {
+                throw new Error(await this.parseErrorResponse(res));
+            }
+            await this.refreshData();
+            this.activeGroup = newName.replace(/[^0-9A-Za-z_\-\.]+/g, "_") || newName;
+            this.renderGroups();
+            this.renderEntries();
+            this.viewer?.showToast?.('그룹 이름을 변경했습니다.', 1600);
+        } catch (error) {
+            console.error('[MyLotModal] rename group failed:', error);
+            const message = error?.message || '그룹 이름 변경에 실패했습니다.';
+            this.viewer?.showToast?.(message, 2200);
+        }
+    }
+
+    async handleDeleteGroup() {
+        if (!this.activeGroup) {
+            this.viewer?.showToast?.('삭제할 그룹을 선택해주세요.', 1800);
+            return;
+        }
+        if (!confirm(`"${this.activeGroup}" 그룹과 모든 항목을 삭제할까요?`)) {
+            return;
+        }
+        
+        const deletingGroup = this.activeGroup;
+        
+        // 🔥 낙관적 업데이트: 먼저 UI 즉시 반영
+        this.activeGroup = null;
+        this.manualRows = [];
+        this.selectedManualCells.clear();
+        this.activeManualCell = null;
+        
+        // 로컬 데이터에서 그룹 제거
+        if (this.data) {
+            const modeData = this.activeMode === 'lot' ? this.data.lot : this.data.wafer;
+            if (modeData?.groups) {
+                modeData.groups = modeData.groups.filter(g => g.name !== deletingGroup);
+            }
+        }
+        
+        this.renderGroups();
+        this.renderEntries();
+        this.viewer?.showToast?.('그룹을 삭제했습니다.', 1600);
+        
+        // 🔥 백그라운드에서 서버 요청
+        try {
+            const res = await fetch('/api/my-lot/group', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: this.activeMode,
+                    group: deletingGroup,
+                }),
+            });
+            if (!res.ok) {
+                console.error('[MyLotModal] delete group failed:', await res.text());
+                // 실패 시 데이터 새로고침
+                await this.refreshData();
+                this.renderGroups();
+                this.renderEntries();
+            }
+        } catch (error) {
+            console.error('[MyLotModal] delete group failed:', error);
+        }
+    }
+
+    async handleDelete(value) {
+        if (!this.activeGroup) return;
+        if (!confirm('선택한 항목을 삭제할까요?')) {
+            return;
+        }
+        try {
+            const res = await fetch('/api/my-lot', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: this.activeMode,
+                    group: this.activeGroup,
+                    value,
+                }),
+            });
+            if (!res.ok) {
+                throw new Error(await this.parseErrorResponse(res));
+            }
+            await this.refreshData();
+            this.renderGroups();
+            this.renderEntries();
+            this.viewer?.showToast?.('삭제했습니다.', 1600);
+        } catch (error) {
+            console.error('[MyLotModal] delete failed:', error);
+            const message = error?.message || '항목 삭제에 실패했습니다.';
+            this.viewer?.showToast?.(message, 2200);
+        }
+    }
+
+    async handleDeleteSelection() {
+        if (!this.activeGroup) {
+            this.viewer?.showToast?.('그룹을 선택해주세요.', 1800);
+            return;
+        }
+        const entries = this.getSelectedEntries();
+        if (!entries.length) {
+            this.viewer?.showToast?.('선택된 항목이 없습니다.', 1700);
+            return;
+        }
+        if (!confirm(`선택한 ${entries.length}개 항목을 삭제할까요?`)) {
+            return;
+        }
+        
+        // 파일명 목록 추출
+        const filenames = entries.map(entry => entry.value || entry.filename).filter(Boolean);
+        if (!filenames.length) {
+            this.viewer?.showToast?.('삭제할 파일명이 없습니다.', 1800);
+            return;
+        }
+
+        const deletingFilenames = new Set(filenames);
+        
+        // 🔥 낙관적 업데이트: 먼저 UI 즉시 반영
+        if (this.data) {
+            const modeData = this.activeMode === 'lot' ? this.data.lot : this.data.wafer;
+            if (modeData?.groups) {
+                const group = modeData.groups.find(g => g.name === this.activeGroup);
+                if (group?.entries) {
+                    group.entries = group.entries.filter(e => 
+                        !deletingFilenames.has(e.value) && !deletingFilenames.has(e.filename)
+                    );
+                }
+            }
+        }
+        
+        this.clearSelection(true);
+        this.renderEntries();
+        this.viewer?.showToast?.(`${entries.length}개 삭제`, 1600);
+        
+        // 🔥 백그라운드에서 서버 요청
+        try {
+            const res = await fetch('/api/my-lot/batch', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: this.activeMode,
+                    group: this.activeGroup,
+                    filenames: filenames,
+                }),
+            });
+            if (!res.ok) {
+                console.error('[MyLotModal] delete selection failed:', await res.text());
+                // 실패 시 데이터 새로고침
+                await this.refreshData();
+                this.renderEntries();
+            }
+        } catch (error) {
+            console.error('[MyLotModal] delete selection failed:', error);
+        }
+    }
+
+    updateCurrentValues() {
+        const candidate = this.viewer?.getMyLotCandidate?.();
+        if (this.currentLotEl) {
+            this.currentLotEl.textContent = candidate?.lotValue || '-';
+        }
+        if (this.currentWaferEl) {
+            this.currentWaferEl.textContent = candidate?.waferValue || '-';
+        }
+    }
+
+    async copyToClipboard(value, message = '복사했습니다.') {
+        if (!value) return;
+        const onSuccess = () => this.viewer?.showToast?.(message, 1400);
+        const onFail = () => this.viewer?.showToast?.('클립보드 복사에 실패했습니다.', 1600);
+        
+        try {
+            // 최신 Clipboard API 사용
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(value);
+                onSuccess();
+                return;
+            }
+            
+            // Fallback: textarea 방식
+            const textarea = document.createElement('textarea');
+            textarea.value = value;
+            textarea.style.position = 'fixed';
+            textarea.style.left = '-9999px';
+            textarea.style.top = '0';
+            document.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+            
+            const successful = document.execCommand('copy');
+            document.body.removeChild(textarea);
+            
+            if (successful) {
+                onSuccess();
+            } else {
+                onFail();
+            }
+        } catch (error) {
+            console.error('[MyLotModal] copyToClipboard error:', error);
+            onFail();
+        }
+    }
+
+    /**
+     * 특정 경로를 MY LOT에 저장 (Context Menu에서 호출)
+     * @param {string} path 저장할 이미지 경로
+     */
+    async handleSaveFromPath(path) {
+        if (!path) {
+            this.viewer?.showToast?.('경로 정보가 없습니다.', 1800);
+            return;
+        }
+        if (!this.activeGroup) {
+            this.viewer?.showToast?.('먼저 그룹을 선택해주세요.', 2000);
+            return;
+        }
+        
+        // 경로에서 LOT/Wafer 값 추출
+        const tokens = this.viewer?.extractLotTokensFromPath?.(path);
+        if (!tokens) {
+            this.viewer?.showToast?.('경로에서 정보를 추출할 수 없습니다.', 2000);
+            return;
+        }
+        
+        const value = this.activeMode === 'lot' ? tokens.lotValue : tokens.waferValue;
+        if (!value) {
+            this.viewer?.showToast?.('LOT/Wafer 값을 추출하지 못했습니다.', 2000);
+            return;
+        }
+        
+        try {
+            const res = await fetch('/api/my-lot', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: this.activeMode,
+                    group: this.activeGroup,
+                    path: path,
+                }),
+            });
+            if (!res.ok) {
+                const errorText = await this.parseErrorResponse(res);
+                // 중복 등록 에러 메시지 처리
+                if (errorText.includes('이미 등록된 항목')) {
+                    this.viewer?.showToast?.('이미 등록된 항목입니다.', 2000);
+                } else {
+                    throw new Error(errorText);
+                }
+                return;
+            }
+            await this.refreshData();
+            this.renderGroups();
+            this.renderEntries();
+            this.viewer?.showToast?.('MY LOT에 저장했습니다.', 1600);
+        } catch (error) {
+            console.error('[MyLotModal] handleSaveFromPath failed:', error);
+            const message = error?.message || 'MY LOT 저장에 실패했습니다.';
+            this.viewer?.showToast?.(message, 2200);
+        }
+    }
+
+    /**
+     * 여러 경로를 MY LOT에 일괄 저장 (Context Menu에서 호출)
+     * @param {Array<string>} paths 저장할 이미지 경로 배열
+     */
+    async addMultipleEntries(paths) {
+        if (!paths || paths.length === 0) {
+            this.viewer?.showToast?.('저장할 이미지가 없습니다.', 1800);
+            return;
+        }
+        if (!this.activeGroup) {
+            this.viewer?.showToast?.('먼저 그룹을 선택해주세요.', 2000);
+            return;
+        }
+        try {
+            let finalPaths = [];
+
+            if (this.activeMode === 'lot') {
+                // LOT Tab: 검색을 통해 각 LOT의 모든 이미지 찾기
+                const lotSet = new Set();
+
+                // 선택한 이미지에서 LOT 값 추출
+                for (const path of paths) {
+                    const tokens = this.viewer?.extractLotTokensFromPath?.(path);
+                    if (tokens && tokens.lotValue) {
+                        lotSet.add(tokens.lotValue);
+                    }
+                }
+
+                if (lotSet.size === 0) {
+                    this.viewer?.showToast?.('LOT 정보를 추출할 수 없습니다.', 1800);
+                    return;
+                }
+
+                const lotList = Array.from(lotSet);
+                this.viewer?.showToast?.(`${lotList.length}개 LOT 검색 중...`, 2000);
+
+                // 서버 검색 API 호출 (공통 함수 사용)
+                try {
+                    finalPaths = await this.searchImagesByLots(lotList);
+                } catch (searchError) {
+                    console.warn('[MyLotModal] LOT 검색 실패, 이미지 없이 목록만 생성:', searchError);
+                    finalPaths = [];
+                }
+
+                if (finalPaths.length === 0) {
+                    // 검색 결과가 없으면 이미지 없이 LOT 폴더만 생성
+                    const manualResult = await this.createManualLotEntries(lotList);
+                    await this.refreshData();
+                    this.renderGroups();
+                    this.renderEntries();
+
+                    if (manualResult.successCount > 0) {
+                        const message = `${manualResult.successCount}개 LOT을 이미지 없이 저장했습니다.`;
+                        this.viewer?.showToast?.(message, 2500);
+                    } else {
+                        const reason = manualResult.errors[0]?.reason || '저장할 LOT이 없습니다.';
+                        this.viewer?.showToast?.(reason, 2200);
+                    }
+                    return;
+                }
+
+                console.log(`[MyLotModal] LOT 검색 완료: ${lotList.length}개 LOT, ${finalPaths.length}개 이미지`);
+
+            } else {
+                // Wafer Tab: 선택한 이미지 모두 저장 (중복 제거 안 함)
+                finalPaths = paths.filter(path => {
+                    const tokens = this.viewer?.extractLotTokensFromPath?.(path);
+                    return tokens != null;
+                });
+            }
+
+            if (finalPaths.length === 0) {
+                this.viewer?.showToast?.('추가할 항목이 없습니다.', 1800);
+                return;
+            }
+
+            // batch API 사용하여 일괄 등록
+            const res = await fetch('/api/my-lot/batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: this.activeMode,
+                    group: this.activeGroup,
+                    paths: finalPaths,
+                }),
+            });
+
+            if (!res.ok) {
+                const errorText = await this.parseErrorResponse(res);
+                throw new Error(errorText);
+            }
+
+            const result = await res.json();
+
+            // 결과 메시지 표시
+            await this.refreshData();
+            this.renderGroups();
+            this.renderEntries();
+
+            const messages = [];
+            if (result.success_count > 0) messages.push(`${result.success_count}개 저장`);
+            if (result.duplicate_count > 0) messages.push(`${result.duplicate_count}개 중복`);
+            if (result.error_count > 0) {
+                messages.push(`${result.error_count}개 실패`);
+                if (result.errors && result.errors.length > 0) {
+                    console.warn('[MyLotModal] 일괄 등록 오류:', result.errors);
+                }
+            }
+
+            if (messages.length > 0) {
+                this.viewer?.showToast?.(messages.join(', '), 3000);
+            } else {
+                this.viewer?.showToast?.('저장 완료', 1600);
+            }
+
+        } catch (error) {
+            console.error('[MyLotModal] addMultipleEntries failed:', error);
+            const message = error?.message || 'MY LOT 일괄 등록에 실패했습니다.';
+            this.viewer?.showToast?.(message, 3000);
+        } finally {
+            // 대기 중인 경로 초기화
+            this.pendingPaths = [];
+            this.updatePendingButtonVisibility();
+        }
+    }
+
+    /**
+     * 대기 중인 경로들을 저장 (Context Menu에서 호출된 항목들)
+     */
+    async handleSavePending() {
+        if (this.pendingPaths.length === 0) {
+            this.viewer?.showToast?.('저장할 항목이 없습니다.', 1800);
+            return;
+        }
+        if (!this.activeGroup) {
+            this.viewer?.showToast?.('먼저 그룹을 선택해주세요.', 2000);
+            return;
+        }
+        
+        await this.addMultipleEntries(this.pendingPaths);
+    }
+
+    /**
+     * 대기 중인 항목 저장 버튼 표시/숨김 업데이트
+     */
+    updatePendingButtonVisibility() {
+        if (this.savePendingBtn) {
+            if (this.pendingPaths && this.pendingPaths.length > 0) {
+                const count = this.pendingPaths.length; // 중복 포함 그대로 표시
+                this.savePendingBtn.style.display = 'block';
+                this.savePendingBtn.textContent = `선택 항목 저장 (${count}개)`;
+            } else {
+                this.savePendingBtn.style.display = 'none';
+            }
+        }
+    }
+
+    /**
+     * mode 기반 중복 제거 후 실제 개수 계산
+     * @param {Array<string>} paths 경로 배열
+     * @returns {number} 중복 제거된 개수
+     */
+    calculateUniqueCount(paths) {
+        if (!paths || paths.length === 0) {
+            return 0;
+        }
+
+        // 중복 제거 없이 원본 길이 반환
+        return paths.length;
+    }
+
+    /**
+     * 특정 그룹의 항목들을 업데이트 (단일 그룹 대상, LOT/Wafer 모드 모두 지원)
+     * @param {string} groupName 업데이트할 그룹 이름
+     */
+    async updateGroupEntries(groupName) {
+        if (!groupName) return;
+
+        try {
+            const modeData = this.getModeData();
+            const groups = modeData.groups || [];
+            const group = groups.find(g => g.name === groupName);
+
+            if (!group || !group.entries || group.entries.length === 0) {
+                return;
+            }
+
+            // 해당 그룹의 LOT 값들 추출 (LOT/Wafer 모드 모두 LOT 기준으로 검색)
+            const groupLots = new Set();
+            group.entries.forEach(entry => {
+                const { lot } = splitLotWaferValue(entry.value || entry.filename || '');
+                if (lot) {
+                    groupLots.add(lot);
+                }
+            });
+
+            if (groupLots.size === 0) {
+                return;
+            }
+
+            // 서버 검색 API 호출 (공통 함수 사용)
+            const lotList = Array.from(groupLots);
+            let searchResults = [];
+
+            try {
+                searchResults = await this.searchImagesByLots(lotList);
+            } catch (searchError) {
+                console.warn(`[MyLotModal] 그룹 "${groupName}" 검색 실패:`, searchError);
+                return;  // 검색 실패 시 조용히 종료
+            }
+
+            if (searchResults.length === 0) {
+                return;
+            }
+
+            // batch API로 업데이트 (현재 모드에 맞게 저장)
+            const res = await fetch('/api/my-lot/batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    mode: this.activeMode,  // 🔥 현재 모드 사용 (lot/wafer)
+                    group: groupName,
+                    paths: searchResults,
+                }),
+            });
+
+            if (!res.ok) {
+                throw new Error(`그룹 "${groupName}" 업데이트 실패: ${res.status}`);
+            }
+
+            const result = await res.json();
+            console.log(`[MyLotModal] [${this.activeMode}] 그룹 "${groupName}" 업데이트: ${result.success_count || 0}개 추가, ${result.duplicate_count || 0}개 중복`);
+
+            // 데이터 새로고침 및 UI 업데이트 (현재 보고 있는 그룹일 경우에만)
+            if (this.activeGroup === groupName) {
+                await this.refreshData();
+                this.renderEntries();
+            } else {
+                // 백그라운드에서 데이터만 갱신
+                await this.refreshData();
+            }
+        } catch (error) {
+            console.error(`[MyLotModal] 그룹 "${groupName}" 업데이트 실패:`, error);
+        }
     }
 
     handleEntriesClick(event) {
@@ -2566,27 +3941,46 @@ export class MyLotModal {
         if (!confirm(`"${this.activeGroup}" 그룹과 모든 항목을 삭제할까요?`)) {
             return;
         }
+        
+        const deletingGroup = this.activeGroup;
+        
+        // 🔥 낙관적 업데이트: 먼저 UI 즉시 반영
+        this.activeGroup = null;
+        this.manualRows = [];
+        this.selectedManualCells.clear();
+        this.activeManualCell = null;
+        
+        // 로컬 데이터에서 그룹 제거
+        if (this.data) {
+            const modeData = this.activeMode === 'lot' ? this.data.lot : this.data.wafer;
+            if (modeData?.groups) {
+                modeData.groups = modeData.groups.filter(g => g.name !== deletingGroup);
+            }
+        }
+        
+        this.renderGroups();
+        this.renderEntries();
+        this.viewer?.showToast?.('그룹을 삭제했습니다.', 1600);
+        
+        // 🔥 백그라운드에서 서버 요청
         try {
             const res = await fetch('/api/my-lot/group', {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     mode: this.activeMode,
-                    group: this.activeGroup,
+                    group: deletingGroup,
                 }),
             });
             if (!res.ok) {
-                throw new Error(await this.parseErrorResponse(res));
+                console.error('[MyLotModal] delete group failed:', await res.text());
+                // 실패 시 데이터 새로고침
+                await this.refreshData();
+                this.renderGroups();
+                this.renderEntries();
             }
-            await this.refreshData();
-            this.activeGroup = null;
-            this.renderGroups();
-            this.renderEntries();
-            this.viewer?.showToast?.('그룹을 삭제했습니다.', 1600);
         } catch (error) {
             console.error('[MyLotModal] delete group failed:', error);
-            const message = error?.message || '그룹 삭제에 실패했습니다.';
-            this.viewer?.showToast?.(message, 2200);
         }
     }
 
@@ -2632,15 +4026,35 @@ export class MyLotModal {
         if (!confirm(`선택한 ${entries.length}개 항목을 삭제할까요?`)) {
             return;
         }
-        try {
-            // 파일명 목록 추출
-            const filenames = entries.map(entry => entry.value || entry.filename).filter(Boolean);
-            if (!filenames.length) {
-                this.viewer?.showToast?.('삭제할 파일명이 없습니다.', 1800);
-                return;
-            }
+        
+        // 파일명 목록 추출
+        const filenames = entries.map(entry => entry.value || entry.filename).filter(Boolean);
+        if (!filenames.length) {
+            this.viewer?.showToast?.('삭제할 파일명이 없습니다.', 1800);
+            return;
+        }
 
-            // batch delete API 호출
+        const deletingFilenames = new Set(filenames);
+        
+        // 🔥 낙관적 업데이트: 먼저 UI 즉시 반영
+        if (this.data) {
+            const modeData = this.activeMode === 'lot' ? this.data.lot : this.data.wafer;
+            if (modeData?.groups) {
+                const group = modeData.groups.find(g => g.name === this.activeGroup);
+                if (group?.entries) {
+                    group.entries = group.entries.filter(e => 
+                        !deletingFilenames.has(e.value) && !deletingFilenames.has(e.filename)
+                    );
+                }
+            }
+        }
+        
+        this.clearSelection(true);
+        this.renderEntries();
+        this.viewer?.showToast?.(`${entries.length}개 삭제`, 1600);
+        
+        // 🔥 백그라운드에서 서버 요청
+        try {
             const res = await fetch('/api/my-lot/batch', {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
@@ -2651,28 +4065,13 @@ export class MyLotModal {
                 }),
             });
             if (!res.ok) {
-                throw new Error(await this.parseErrorResponse(res));
-            }
-
-            const result = await res.json();
-            await this.refreshData();
-            this.clearSelection(true);
-            this.renderGroups();
-            this.renderEntries();
-
-            const messages = [];
-            if (result.success_count > 0) messages.push(`${result.success_count}개 삭제`);
-            if (result.error_count > 0) messages.push(`${result.error_count}개 실패`);
-
-            if (messages.length > 0) {
-                this.viewer?.showToast?.(messages.join(', '), 2000);
-            } else {
-                this.viewer?.showToast?.('삭제 완료', 1600);
+                console.error('[MyLotModal] delete selection failed:', await res.text());
+                // 실패 시 데이터 새로고침
+                await this.refreshData();
+                this.renderEntries();
             }
         } catch (error) {
             console.error('[MyLotModal] delete selection failed:', error);
-            const message = error?.message || '선택 항목 삭제에 실패했습니다.';
-            this.viewer?.showToast?.(message, 2200);
         }
     }
 
@@ -2846,26 +4245,11 @@ export class MyLotModal {
                 console.log(`[MyLotModal] LOT 검색 완료: ${lotList.length}개 LOT, ${finalPaths.length}개 이미지`);
 
             } else {
-                // Wafer Tab: 선택한 이미지만 중복 제거하여 저장
-                const uniquePaths = [];
-                const seen = new Set();
-
-                for (const path of paths) {
+                // Wafer Tab: 선택한 이미지 모두 저장 (중복 제거 안 함)
+                finalPaths = paths.filter(path => {
                     const tokens = this.viewer?.extractLotTokensFromPath?.(path);
-                    if (!tokens) {
-                        continue;
-                    }
-
-                    // Wafer Tab: LOT + Wafer 조합으로 중복 제거
-                    const key = `${tokens.lotValue || ''}_${tokens.waferValue || ''}`;
-
-                    if (key && !seen.has(key)) {
-                        seen.add(key);
-                        uniquePaths.push(path);
-                    }
-                }
-
-                finalPaths = uniquePaths;
+                    return tokens != null;
+                });
             }
 
             if (finalPaths.length === 0) {
@@ -2945,10 +4329,9 @@ export class MyLotModal {
     updatePendingButtonVisibility() {
         if (this.savePendingBtn) {
             if (this.pendingPaths && this.pendingPaths.length > 0) {
-                // mode 기반 중복 제거 후 실제 저장될 개수 계산
-                const uniqueCount = this.calculateUniqueCount(this.pendingPaths);
+                const count = this.pendingPaths.length; // 중복 포함 그대로 표시
                 this.savePendingBtn.style.display = 'block';
-                this.savePendingBtn.textContent = `선택 항목 저장 (${uniqueCount}개)`;
+                this.savePendingBtn.textContent = `선택 항목 저장 (${count}개)`;
             } else {
                 this.savePendingBtn.style.display = 'none';
             }
@@ -2965,28 +4348,8 @@ export class MyLotModal {
             return 0;
         }
 
-        const seen = new Set();
-        for (const path of paths) {
-            const tokens = this.viewer?.extractLotTokensFromPath?.(path);
-            if (!tokens) {
-                continue;
-            }
-
-            let key;
-            if (this.activeMode === 'lot') {
-                // LOT Tab: LOT 값으로 중복 제거
-                key = tokens.lotValue || '';
-            } else {
-                // Wafer Tab: LOT + Wafer 조합으로 중복 제거
-                key = `${tokens.lotValue || ''}_${tokens.waferValue || ''}`;
-            }
-
-            if (key) {
-                seen.add(key);
-            }
-        }
-
-        return seen.size;
+        // 중복 제거 없이 원본 길이 반환
+        return paths.length;
     }
 
     /**
