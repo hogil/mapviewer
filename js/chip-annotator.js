@@ -1250,10 +1250,11 @@ export class ChipAnnotator {
             }
 
             // 상대 좌표: JSON 파일의 x_cal, y_cal 값 사용
+            // 🔥 중심 기준 좌표: 오른쪽 +x, 위쪽 +y (짝수일 때 좌측 아래 기준)
             if (this.coordChipRel) {
                 const x_cal = chip.x_cal;
                 const y_cal = chip.y_cal;
-                
+
                 if (x_cal !== undefined && y_cal !== undefined && x_cal !== null && y_cal !== null) {
                     this.coordChipRel.textContent = `(${x_cal}, ${y_cal})`;
                 } else {

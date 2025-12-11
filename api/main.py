@@ -4578,19 +4578,28 @@ async def get_thumbnail(
                 resp_304 = maybe_304(request, st)
                 if resp_304: return resp_304
                 
-                # 🔥 FileResponse 대신 메모리에서 직접 응답 (Content-Length 오류 방지)
+                headers = {
+                    "Cache-Control": "public, max-age=604800, immutable",
+                    "ETag": compute_etag(st),
+                }
+                content_type = "image/jpeg" if thumb.suffix.lower() in ['.jpg', '.jpeg'] else "image/png"
+
+                # OS sendfile 경로 우선 (메모리 복사 없이 전송)
                 try:
-                    content = thumb.read_bytes()
-                    content_type = "image/jpeg" if thumb.suffix.lower() in ['.jpg', '.jpeg'] else "image/png"
-                    headers = {
-                        "Cache-Control": "public, max-age=604800, immutable",
-                        "ETag": compute_etag(st),
-                        "Content-Length": str(len(content))
-                    }
-                    return Response(content=content, media_type=content_type, headers=headers)
-                except Exception as read_error:
-                    logger.warning(f"썸네일 읽기 실패, FileResponse 폴백: {read_error}")
-                    return FileResponse(thumb, headers={"Cache-Control": "public, max-age=604800, immutable", "ETag": compute_etag(st)})
+                    return FileResponse(
+                        thumb,
+                        media_type=content_type,
+                        headers=headers,
+                    )
+                except Exception as file_resp_error:
+                    logger.warning(f"썸네일 FileResponse 실패, 메모리 폴백: {file_resp_error}")
+                    try:
+                        content = thumb.read_bytes()
+                        headers["Content-Length"] = str(len(content))
+                        return Response(content=content, media_type=content_type, headers=headers)
+                    except Exception as read_error:
+                        logger.warning(f"썸네일 읽기 실패, 원본 제공 폴백: {read_error}")
+                        return await get_image(request, path)
             else:
                 # 썸네일 생성 실패 시 원본 이미지 제공
                 logger.warning(f"썸네일 생성 실패, 원본 이미지 제공: {image_path}")

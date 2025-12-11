@@ -921,6 +921,14 @@ class WaferMapViewer {
         this.gridSelectionGridHidden = false;
         this.gridSelectionOriginalDisplay = null;
 
+        this.gridLoadQueue = [];
+        this.gridQueuedImages = new Set();
+        this.gridPendingIntersecting = new Set();
+        this.gridLoadInFlight = 0;
+        this.gridMaxConcurrentLoads = Math.min(10, SERVER_CONFIG.THUMB_MAX_CONCURRENCY || 12);
+        this.gridLoadingPaused = false;
+        this.gridIntersectionObserver = null;
+
         this.gridCols = DEFAULT_GRID_COLS;
 
         this.gridThumbSize = DEFAULT_THUMB_SIZE;
@@ -4130,6 +4138,11 @@ class WaferMapViewer {
             this.dom.viewerContainer.style.cursor = 'default';
         }
 
+        // 🔥 LOT 모드가 활성화되어 있으면 Lot List 모달 자동 열기
+        if (this.lotMode) {
+            this.showLotListModal();
+        }
+
         this.debugLog('🔷 초기 상태 표시 완료 - 미니맵 숨김');
     }
 
@@ -4831,10 +4844,16 @@ class WaferMapViewer {
 
         const lotListSearchInput = document.getElementById('lot-list-search-input');
         if (lotListSearchInput) {
+            // 실시간 필터링
+            lotListSearchInput.addEventListener('input', (e) => {
+                this.filterLotList(e.target.value);
+            });
+
+            // 엔터 키로 첫 번째 매칭 항목 선택
             lotListSearchInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
                     e.preventDefault();
-                    this.searchAndScrollToLot(e.target.value);
+                    this.selectFirstFilteredLot(e.target.value);
                 }
             });
         }
@@ -16137,124 +16156,301 @@ class WaferMapViewer {
         }
     }
 
-    showGridImmediately(images) {
-        const grid = document.getElementById('image-grid');
-        images.forEach((imgPath, idx) => {
-            const wrap = document.createElement('div');
-            wrap.className = 'grid-thumb-wrap' + (this.gridSelectedIdxs.includes(idx) ? ' selected' : '');
-            // 🔥 성능 최적화: data-index 추가 (indexOf 대신 O(1) 룩업)
-            wrap.dataset.index = idx;
-            // 🔥 이미지 경로를 data-path에 저장 (체크박스 변경 시 경로 추출용)
-            wrap.dataset.path = imgPath;
-            // 클릭 이벤트는 onMouseUp에서 처리하므로 여기서는 제거
-            // wrap.onclick = e => { e.stopPropagation(); this.toggleGridImageSelect(idx, e); };
-            wrap.ondblclick = e => {
-                e.stopPropagation();
-                this.revertGradeSelectionIfNeeded(idx);
-                this.enterGridImageViewMode(idx);
-            };
-            
-            // 우클릭 컨텍스트 메뉴 표시
-            wrap.oncontextmenu = e => {
-                e.preventDefault();
-                e.stopPropagation();
-                // contextmenu 이벤트 발생 플래그 설정 (다음 click 이벤트 무시)
-                this.contextMenuJustShown = true;
-                // 선택 상태를 변경하지 않고 컨텍스트 메뉴만 표시
-                this.showContextMenu(e, idx);
-            };
-            // 썸네일 이미지 컨테이너
-            const thumbBox = document.createElement('div');
-            thumbBox.className = 'grid-thumb-imgbox';
-            const img = document.createElement('img');
-            img.className = 'grid-thumb-img';
-            img.alt = imgPath.split('/').pop();
-            img.loading = 'lazy';
-            img.decoding = 'async';
-            img.style.opacity = '0';
-            img.dataset.loading = 'false';
-            img.dataset.gridLoaded = 'false';
-            
-            // 고품질 이미지 렌더링 설정
-            img.style.imageRendering = 'high-quality';
-            img.style.imageRendering = 'crisp-edges';
-            img.style.imageRendering = '-webkit-optimize-contrast';
-            
-            // 브라우저 기본 drag&drop 방지
-            img.ondragstart = e => e.preventDefault();
-            
-            // 이미지 로드 핸들러
-            img.onload = () => {
-                if (img.src === GRID_THUMB_PLACEHOLDER) {
-                    img.style.opacity = '0';
-                    return;
+    setupGridLazyLoader() {
+        this.gridLoadQueue = [];
+        this.gridQueuedImages.clear();
+        this.gridPendingIntersecting.clear();
+        this.gridLoadInFlight = 0;
+        this.gridLoadingPaused = false;
+
+        const scrollWrapper = this.getGridScrollWrapper();
+
+        if (this.gridIntersectionObserver) {
+            this.gridIntersectionObserver.disconnect();
+        }
+
+        this.gridIntersectionObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (!entry.isIntersecting) return;
+                const img = entry.target;
+                if (this.gridIntersectionObserver) {
+                    this.gridIntersectionObserver.unobserve(img);
                 }
-                img.dataset.loading = 'false';
+                this.enqueueGridThumbnail(img);
+            });
+        }, {
+            root: scrollWrapper || null,
+            rootMargin: '200px',
+            threshold: 0.1
+        });
+    }
+
+    teardownGridLazyLoader() {
+        if (this.gridIntersectionObserver) {
+            this.gridIntersectionObserver.disconnect();
+            this.gridIntersectionObserver = null;
+        }
+        this.gridLoadQueue = [];
+        this.gridQueuedImages.clear();
+        this.gridPendingIntersecting.clear();
+        this.gridLoadInFlight = 0;
+        this.gridLoadingPaused = false;
+    }
+
+    enqueueGridThumbnail(img) {
+        if (!img || !img.dataset?.src || img.dataset.gridLoaded === 'true') {
+            return;
+        }
+        if (img.dataset.loading === 'true') {
+            return;
+        }
+        if (this.gridQueuedImages.has(img)) {
+            return;
+        }
+
+        if (this.gridLoadingPaused) {
+            this.gridPendingIntersecting.add(img);
+            return;
+        }
+
+        if (this.gridLoadInFlight >= this.gridMaxConcurrentLoads) {
+            this.gridLoadQueue.push(img);
+            this.gridQueuedImages.add(img);
+            return;
+        }
+
+        this.startGridThumbnailLoad(img);
+    }
+
+    startGridThumbnailLoad(img) {
+        if (!img || !img.dataset?.src) return;
+
+        this.gridQueuedImages.delete(img);
+
+        if (img.dataset.gridLoaded === 'true' || img.dataset.loading === 'true') {
+            return;
+        }
+
+        this.gridLoadInFlight++;
+        img.dataset.loading = 'true';
+        img.dataset.gridLoaded = 'false';
+        img.style.opacity = '0';
+
+        const finalize = () => {
+            if (img.complete && img.naturalWidth > 0) {
                 img.dataset.gridLoaded = 'true';
                 img.style.opacity = '1';
-                // 원본 이미지 유지 - 썸네일로 교체하지 않음
-            };
-            
-            // 고화질 썸네일로 시작 (빠른 로딩)
-            // 🔥 imgPath는 이미 ROOT_DIR 기준 절대 경로
-            
-            img.onerror = (e) => {
-                // 🔥 이미지 로드가 중단된 경우 (다른 이미지로 전환 시) 로그 출력 안 함
-                const isAborted = !img.parentElement || // DOM에서 제거됨
-                                 !img.src || // src가 비어있음
-                                 img.src === window.location.href || // URL이 루트로 변경됨
-                                 img.src.length < 20; // URL이 불완전함
-                
+            }
+            img.dataset.loading = 'false';
+            if (this.gridLoadInFlight > 0) {
+                this.gridLoadInFlight--;
+            }
+            this.drainGridLoadQueue();
+        };
+
+        const onLoad = () => {
+            finalize();
+        };
+
+        const onError = () => {
+            finalize();
+        };
+
+        img.addEventListener('load', onLoad, { once: true });
+        img.addEventListener('error', onError, { once: true });
+
+        img.src = img.dataset.src;
+
+        if (img.complete && img.naturalWidth > 0) {
+            finalize();
+        }
+    }
+
+    drainGridLoadQueue() {
+        if (this.gridLoadingPaused) return;
+
+        if (this.gridPendingIntersecting.size > 0) {
+            this.gridPendingIntersecting.forEach((img) => {
+                if (!img || img.dataset.gridLoaded === 'true' || img.dataset.loading === 'true') {
+                    this.gridQueuedImages.delete(img);
+                    return;
+                }
+                if (!this.gridQueuedImages.has(img)) {
+                    this.gridQueuedImages.add(img);
+                    this.gridLoadQueue.push(img);
+                }
+            });
+            this.gridPendingIntersecting.clear();
+        }
+
+        while (this.gridLoadInFlight < this.gridMaxConcurrentLoads && this.gridLoadQueue.length > 0) {
+            const next = this.gridLoadQueue.shift();
+            if (!next || next.dataset.gridLoaded === 'true') {
+                this.gridQueuedImages.delete(next);
+                continue;
+            }
+            this.startGridThumbnailLoad(next);
+        }
+    }
+
+    pauseGridLoadingForScroll() {
+        this.gridLoadingPaused = true;
+    }
+
+    resumeGridLoading() {
+        if (!this.gridLoadingPaused) {
+            this.drainGridLoadQueue();
+            return;
+        }
+
+        this.gridLoadingPaused = false;
+        this.drainGridLoadQueue();
+    }
+
+    buildGridThumbWrap(imgPath, idx) {
+        const wrap = document.createElement('div');
+        wrap.className = 'grid-thumb-wrap' + (this.gridSelectedIdxs.includes(idx) ? ' selected' : '');
+        wrap.dataset.index = idx;
+        wrap.dataset.path = imgPath;
+
+        wrap.ondblclick = (e) => {
+            e.stopPropagation();
+            this.revertGradeSelectionIfNeeded(idx);
+            this.enterGridImageViewMode(idx);
+        };
+
+        wrap.oncontextmenu = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.contextMenuJustShown = true;
+            this.showContextMenu(e, idx);
+        };
+
+        const thumbBox = document.createElement('div');
+        thumbBox.className = 'grid-thumb-imgbox';
+
+        const img = document.createElement('img');
+        img.className = 'grid-thumb-img';
+        img.alt = imgPath.split('/').pop();
+        img.loading = 'lazy';
+        img.decoding = 'async';
+        img.style.opacity = '0';
+        img.dataset.loading = 'false';
+        img.dataset.gridLoaded = 'false';
+
+        img.style.imageRendering = 'high-quality';
+        img.style.imageRendering = 'crisp-edges';
+        img.style.imageRendering = '-webkit-optimize-contrast';
+
+        img.ondragstart = (e) => e.preventDefault();
+
+        img.onload = () => {
+            if (img.src === GRID_THUMB_PLACEHOLDER) {
+                img.style.opacity = '0';
+                return;
+            }
+            img.dataset.loading = 'false';
+            img.dataset.gridLoaded = 'true';
+            img.style.opacity = '1';
+        };
+
+        img.onerror = (e) => {
+            const isAborted = !img.parentElement ||
+                             !img.src ||
+                             img.src === window.location.href ||
+                             img.src.length < 20;
+
+            if (!isAborted) {
+                console.error(`? [THUMBNAIL ERROR] 썸네일 로드 실패:`, {
+                    경로: imgPath,
+                    URL: img.src,
+                    에러타입: e.type,
+                    인덱스: idx
+                });
+            }
+
+            if (img.parentElement) {
+                img.style.backgroundColor = '#333';
+                img.style.opacity = '0.5';
+                img.dataset.loading = 'false';
+                img.dataset.gridLoaded = 'false';
+
                 if (!isAborted) {
-                    console.error(`❌ [THUMBNAIL ERROR] 썸네일 로드 실패:`, {
-                        경로: imgPath,
-                        URL: img.src,
-                        에러타입: e.type,
-                        인덱스: idx
-                    });
+                    setTimeout(() => {
+                        if (img.parentElement) {
+                            this.replaceWithThumbnail(img, imgPath);
+                        }
+                    }, 500);
                 }
-                
-                // 실패시 기본 스타일 적용 (DOM에 연결되어 있을 때만)
-                if (img.parentElement) {
-                    img.style.backgroundColor = '#333';
-                    img.style.opacity = '0.5';
-                    img.dataset.loading = 'false';
-                    img.dataset.gridLoaded = 'false';
-                    
-                    // 실패 후에도 썸네일 시도 (서버에서 썸네일이 생성되었을 수 있음)
-                    // 단, 중단된 경우는 시도하지 않음
-                    if (!isAborted) {
-                        setTimeout(() => {
-                            if (img.parentElement) {
-                                this.replaceWithThumbnail(img, imgPath);
-                            }
-                        }, 500);
-                    }
+            }
+        };
+
+        const personalizedParams = this.getPersonalizedParams();
+        const cacheBuster = this._personalizedColorCacheBuster;
+        const cacheParam = cacheBuster ? `&_t=${cacheBuster}` : '';
+        const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}${cacheParam}`;
+
+        img.dataset.src = thumbnailUrl;
+        img.src = GRID_THUMB_PLACEHOLDER;
+
+        thumbBox.appendChild(img);
+        wrap.appendChild(thumbBox);
+
+        const label = document.createElement('div');
+        label.className = 'grid-thumb-label';
+        const fileName = imgPath.split('/').pop();
+        label.textContent = fileName.replace(/\.[^.]+$/, '');
+        wrap.appendChild(label);
+
+        return { wrap, img };
+    }
+
+    showGridImmediately(images) {
+        const grid = document.getElementById('image-grid');
+        if (!grid) return;
+
+        this.setupGridLazyLoader();
+
+        const chunkSize = 200;
+        let rendered = 0;
+        let firstChunkLoaded = false;
+
+        const renderChunk = () => {
+            if (!grid.isConnected || !this.gridMode) return;
+
+            const fragment = document.createDocumentFragment();
+            const end = Math.min(rendered + chunkSize, images.length);
+
+            for (let i = rendered; i < end; i++) {
+                const { wrap, img } = this.buildGridThumbWrap(images[i], i);
+                fragment.appendChild(wrap);
+                if (img && this.gridIntersectionObserver) {
+                    this.gridIntersectionObserver.observe(img);
                 }
-            };
+            }
 
-            const personalizedParams = this.getPersonalizedParams();
-            // ✅ 캐시 버스터 추가 (색상 스킴 변경 시 새로운 썸네일 요청)
-            const cacheBuster = this._personalizedColorCacheBuster;
-            const cacheParam = cacheBuster ? `&_t=${cacheBuster}` : '';
-            const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}${cacheParam}`;
+            grid.appendChild(fragment);
+            rendered = end;
 
-            // 🔥 data-src에 URL 저장 (스크롤 디바운스용)
-            img.dataset.src = thumbnailUrl;
+            if (!firstChunkLoaded) {
+                firstChunkLoaded = true;
+                this.resumeGridLoading();
+                this.loadVisibleGridThumbnails();
+            }
 
-            // 🔥 초기 로드는 플레이스홀더로 유지하고 가시 영역에서만 요청
-            img.src = GRID_THUMB_PLACEHOLDER;
+            if (rendered < images.length) {
+                const schedule = window.requestIdleCallback || ((cb) => setTimeout(() => cb({ timeRemaining: () => 16, didTimeout: true }), 0));
+                schedule(renderChunk, { timeout: 120 });
+            } else {
+                this.gridThumbWraps = Array.from(grid.querySelectorAll('.grid-thumb-wrap'));
+                requestAnimationFrame(() => {
+                    this.resumeGridLoading();
+                    this.loadVisibleGridThumbnails();
+                });
+            }
+        };
 
-            thumbBox.appendChild(img);
-            wrap.appendChild(thumbBox);
-            // 파일명 (확장자 제거)
-            const label = document.createElement('div');
-            label.className = 'grid-thumb-label';
-            const fileName = imgPath.split('/').pop();
-            label.textContent = fileName.replace(/\.[^.]+$/, '');
-            wrap.appendChild(label);
-            grid.appendChild(wrap);
-        });
+        renderChunk();
     }
 
     async replaceWithThumbnail(img, imgPath) {
@@ -16377,7 +16573,7 @@ class WaferMapViewer {
         return document.querySelector('.grid-scroll-wrapper') || grid?.parentElement || null;
     }
 
-    cancelGridImageRequests() {
+    cancelGridImageRequests(resetQueue = true, keepPaused = false) {
         const grid = document.getElementById('image-grid');
         if (grid) {
             const images = grid.querySelectorAll('.grid-thumb-img');
@@ -16393,39 +16589,45 @@ class WaferMapViewer {
             });
         }
 
+        if (resetQueue) {
+            this.gridLoadQueue = [];
+            this.gridQueuedImages.clear();
+            this.gridPendingIntersecting.clear();
+            this.gridLoadInFlight = 0;
+        }
+        if (!keepPaused) {
+            this.gridLoadingPaused = false;
+        }
+
         if (this.thumbnailManager) {
             this.thumbnailManager.abortAll();
         }
     }
 
     /**
-     * 🔥 그리드 스크롤 핸들러 (즉시 취소, 10ms 후 로드)
+     * 🔥 그리드 스크롤 핸들러 (스크롤 중 로딩 일시 정지 후 재개)
      */
     handleGridScroll() {
-        // ✅ 스크롤 시작 시 즉시 모든 이뮌지 요청 취소
-        // ✅ 스크롤 시작 시 즉시 모든 이미지 요청 취소
-        this.cancelGridImageRequests();
+        this.pauseGridLoadingForScroll();
+        this.cancelGridImageRequests(true, true);
         this.gridLoadingBatch = null;
 
-        // 스크롤 중임을 표시
         this.isGridScrolling = true;
 
-        // 기존 타이머 클리어
         if (this.gridScrollDebounceTimer) {
             clearTimeout(this.gridScrollDebounceTimer);
         }
 
-        // ✅ 10ms로 단축 (거의 즉시 반응)
+        // 스크롤이 멈춘 뒤 여유를 두고 다시 로딩
         this.gridScrollDebounceTimer = setTimeout(() => {
             this.isGridScrolling = false;
-            // 🔥 스크롤이 멈춘 후 현재 뷰포트의 썸네일만 즉시 로드
+            this.resumeGridLoading();
             this.loadVisibleGridThumbnails();
-        }, 10);
+        }, 60);
     }
 
     /**
      * 🔥 현재 뷰포트에 보이는 그리드 썸네일만 즉시 로드
-     * thumbnailManager 캐시를 활용하여 즉시 표시
      */
     async loadVisibleGridThumbnails() {
         const grid = document.getElementById('image-grid');
@@ -16436,47 +16638,26 @@ class WaferMapViewer {
         const thumbWraps = grid.querySelectorAll('.grid-thumb-wrap');
         const scrollRect = scrollWrapper.getBoundingClientRect();
 
-        // ✅ 보이는 영역만 (여유 없이) - 최대한 빠르게
-        const visibleTop = scrollRect.top;
-        const visibleBottom = scrollRect.bottom;
+        const visibleTop = scrollRect.top - 200;
+        const visibleBottom = scrollRect.bottom + 200;
 
-        // ✅ 보이는 이미지만 수집
-        const visibleItems = [];
-        thumbWraps.forEach((wrap) => {
+        for (const wrap of thumbWraps) {
             const wrapRect = wrap.getBoundingClientRect();
 
-            // 완전히 보이거나 일부라도 보이는 경우
-            const isVisible = (
-                wrapRect.bottom > visibleTop &&
-                wrapRect.top < visibleBottom &&
-                wrapRect.right > scrollRect.left &&
-                wrapRect.left < scrollRect.right
-            );
+            if (wrapRect.top > visibleBottom) {
+                break;
+            }
+            if (wrapRect.bottom < visibleTop) {
+                continue;
+            }
 
-            if (isVisible) {
-                const img = wrap.querySelector('.grid-thumb-img');
-                if (img && img.dataset.src) {
-                    visibleItems.push({ img });
-                }
+            const img = wrap.querySelector('.grid-thumb-img');
+            if (img && img.dataset?.src && img.dataset.gridLoaded !== 'true') {
+                this.enqueueGridThumbnail(img);
             }
-        });
+        }
 
-        // ✅ 보이는 이미지들을 병렬로 즉시 로드
-        visibleItems.forEach(({ img }) => {
-            if (img.dataset.gridLoaded === 'true' && img.src && img.src !== GRID_THUMB_PLACEHOLDER) {
-                return;
-            }
-            const src = img.dataset.src;
-            if (src) {
-                if (img.dataset.loading === 'true') {
-                    return;
-                }
-                img.dataset.loading = 'true';
-                img.dataset.gridLoaded = 'false';
-                img.style.opacity = '0';
-                img.src = src;
-            }
-        });
+        this.drainGridLoadQueue();
     }
 
     hideGrid(hideControls = true) {
@@ -16507,6 +16688,8 @@ class WaferMapViewer {
                 console.log(`🛑 [GRID] hideGrid - ${canceledCount}개 네트워크 요청 중단`);
             }
         }
+
+        this.teardownGridLazyLoader();
 
         this.gridMode = false;
         
@@ -21503,6 +21686,14 @@ class WaferMapViewer {
 
         for (const lotId of sortedLotIds) {
             const lotImages = lotMap.get(lotId);
+
+            // 🔥 LOT 내부 이미지들도 정렬 (파일명 기준)
+            lotImages.sort((a, b) => {
+                const pathA = a.path.toLowerCase();
+                const pathB = b.path.toLowerCase();
+                return pathA.localeCompare(pathB, undefined, { numeric: true, sensitivity: 'base' });
+            });
+
             groups.push({
                 lotName: lotId,
                 images: lotImages.map(item => item.path),
@@ -21596,19 +21787,25 @@ class WaferMapViewer {
 
         // 이미지들을 Lot별로 그룹화
         this.lotGroups = this.groupImagesByLot(images);
-        
+
+        // 🔥 정렬된 순서로 currentGridImages 재구성
+        const sortedImages = [];
+        this.lotGroups.forEach(lotGroup => {
+            sortedImages.push(...lotGroup.images);
+        });
+
         // Lot 목록 모달 업데이트
         this.updateLotListContent();
 
         // 그리드 초기화
         grid.innerHTML = '';
         this.gridThumbWraps = [];
-        
+
         // 현재 컬럼 수 가져오기
         const gridCols = this.gridCols || 3;
-        
+
         let globalIndex = 0;
-        
+
         this.lotGroups.forEach((lotGroup, lotIdx) => {
             // Lot 헤더 추가
             const header = document.createElement('div');
@@ -21645,8 +21842,8 @@ class WaferMapViewer {
 
         // 그리드 모드 설정
         this.gridMode = true;
-        this.selectedImages = images;
-        this.currentGridImages = images;
+        this.selectedImages = sortedImages;  // 🔥 정렬된 순서로 설정
+        this.currentGridImages = sortedImages;  // 🔥 정렬된 순서로 설정
         if (!this.gridSelectedIdxs) this.gridSelectedIdxs = [];
 
         // 그리드 활성화
@@ -21664,7 +21861,7 @@ class WaferMapViewer {
             this.loadVisibleGridThumbnails();
         });
         setTimeout(() => {
-            this.loadCurrentFolderThumbnails?.(images);
+            this.loadCurrentFolderThumbnails?.(sortedImages);  // 🔥 정렬된 순서로 전달
         }, 100);
     }
 
@@ -21844,13 +22041,142 @@ class WaferMapViewer {
         content.querySelectorAll('.lot-list-item').forEach(item => {
             item.onclick = () => {
                 const lotName = item.dataset.lotName;
+
+                // 🔥 검색창 클리어
+                const searchInput = document.getElementById('lot-list-search-input');
+                if (searchInput) {
+                    searchInput.value = '';
+                }
+
+                // 🔥 필터 해제 (전체 목록 다시 표시)
+                this.updateLotListContent();
+
+                // 스크롤 이동
                 this.scrollToLot(lotName);
-                
+
                 // 활성 상태 업데이트
-                content.querySelectorAll('.lot-list-item').forEach(i => i.classList.remove('active'));
-                item.classList.add('active');
+                const updatedContent = document.getElementById('lot-list-content');
+                if (updatedContent) {
+                    updatedContent.querySelectorAll('.lot-list-item').forEach(i => i.classList.remove('active'));
+                    const targetItem = updatedContent.querySelector(`.lot-list-item[data-lot-name="${lotName}"]`);
+                    if (targetItem) {
+                        targetItem.classList.add('active');
+                        targetItem.scrollIntoView({ block: 'nearest' });
+                    }
+                }
             };
         });
+    }
+
+    /**
+     * Lot 목록 필터링 (실시간 검색)
+     * @param {string} query - 검색어
+     */
+    filterLotList(query) {
+        const content = document.getElementById('lot-list-content');
+        const countLabel = document.getElementById('lot-list-count');
+
+        if (!content || !this.lotGroups) return;
+
+        const normalizedQuery = (query || '').toLowerCase().trim();
+
+        // 빈 검색어면 전체 목록 표시
+        if (!normalizedQuery) {
+            this.updateLotListContent();
+            return;
+        }
+
+        // 필터링된 lot 목록
+        const filteredLots = this.lotGroups.filter(lot =>
+            lot.lotName.toLowerCase().includes(normalizedQuery)
+        );
+
+        // 카운트 업데이트
+        if (countLabel) {
+            countLabel.textContent = `${filteredLots.length} / ${this.lotGroups.length} Lots`;
+        }
+
+        // 필터링된 목록 렌더링
+        if (filteredLots.length === 0) {
+            content.innerHTML = '<div style="padding: 16px; text-align: center; color: #666; font-size: 11px;">No matching Lots</div>';
+            return;
+        }
+
+        content.innerHTML = filteredLots.map((lot, idx) => `
+            <div class="lot-list-item" data-lot-name="${lot.lotName}" data-lot-index="${idx}">
+                <span class="lot-list-item-name">${lot.lotName}</span>
+                <span class="lot-list-item-count">${lot.count}</span>
+            </div>
+        `).join('');
+
+        // 클릭 이벤트 바인딩
+        content.querySelectorAll('.lot-list-item').forEach(item => {
+            item.onclick = () => {
+                const lotName = item.dataset.lotName;
+
+                // 🔥 검색창 클리어
+                const searchInput = document.getElementById('lot-list-search-input');
+                if (searchInput) {
+                    searchInput.value = '';
+                }
+
+                // 🔥 필터 해제 (전체 목록 다시 표시)
+                this.updateLotListContent();
+
+                // 스크롤 이동
+                this.scrollToLot(lotName);
+
+                // 활성 상태 업데이트
+                const updatedContent = document.getElementById('lot-list-content');
+                if (updatedContent) {
+                    updatedContent.querySelectorAll('.lot-list-item').forEach(i => i.classList.remove('active'));
+                    const targetItem = updatedContent.querySelector(`.lot-list-item[data-lot-name="${lotName}"]`);
+                    if (targetItem) {
+                        targetItem.classList.add('active');
+                        targetItem.scrollIntoView({ block: 'nearest' });
+                    }
+                }
+            };
+        });
+    }
+
+    /**
+     * 필터링된 첫 번째 Lot 선택 (엔터 키 동작)
+     * @param {string} query - 검색어
+     */
+    selectFirstFilteredLot(query) {
+        const normalizedQuery = (query || '').toLowerCase().trim();
+        if (!normalizedQuery || !this.lotGroups) return;
+
+        // 첫 번째 매칭되는 lot 찾기
+        const matchedLot = this.lotGroups.find(lot =>
+            lot.lotName.toLowerCase().includes(normalizedQuery)
+        );
+
+        if (matchedLot) {
+            // 검색창 클리어
+            const searchInput = document.getElementById('lot-list-search-input');
+            if (searchInput) {
+                searchInput.value = '';
+            }
+
+            // 필터 해제 (전체 목록 다시 표시)
+            this.updateLotListContent();
+
+            // 스크롤 이동
+            this.scrollToLot(matchedLot.lotName);
+
+            // 활성 상태 업데이트
+            const content = document.getElementById('lot-list-content');
+            if (content) {
+                content.querySelectorAll('.lot-list-item').forEach(i => i.classList.remove('active'));
+                const targetItem = content.querySelector(`.lot-list-item[data-lot-name="${matchedLot.lotName}"]`);
+                if (targetItem) {
+                    targetItem.classList.add('active');
+                    targetItem.scrollIntoView({ block: 'nearest' });
+                }
+            }
+        }
     }
 
     /**
@@ -21862,20 +22188,20 @@ class WaferMapViewer {
         if (!normalizedQuery) return;
 
         // lotGroups에서 검색어를 포함하는 Lot 찾기 (정렬 순서대로)
-        const matchedLot = this.lotGroups.find(lot => 
-            lot.name.toLowerCase().includes(normalizedQuery)
+        const matchedLot = this.lotGroups.find(lot =>
+            lot.lotName.toLowerCase().includes(normalizedQuery)
         );
 
         if (matchedLot) {
             // 해당 Lot으로 스크롤 이동
-            this.scrollToLot(matchedLot.name);
-            
+            this.scrollToLot(matchedLot.lotName);
+
             // Lot 목록에서 해당 항목 활성화
             const content = document.getElementById('lot-list-content');
             if (content) {
                 content.querySelectorAll('.lot-list-item').forEach(item => {
                     item.classList.remove('active');
-                    if (item.dataset.lotName === matchedLot.name) {
+                    if (item.dataset.lotName === matchedLot.lotName) {
                         item.classList.add('active');
                         // 목록에서도 해당 항목이 보이도록 스크롤
                         item.scrollIntoView({ block: 'nearest' });

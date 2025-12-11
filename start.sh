@@ -30,18 +30,18 @@ export POSITIONS_ROOT="/appdata/appuser/positions"  # Positions 루트 경로
 export THUMBNAIL_SIZE="512"
 export THUMBNAIL_FORMAT="JPEG"           # JPEG가 PNG보다 훨씬 빠름 (139ms vs 수백ms)
 export THUMBNAIL_QUALITY="100"           # Q=100 최고 품질
-export PNG_COMPRESSION_LEVEL="3"
-export IO_THREADS="192"                  # 32C 서버에서 I/O 대기시간 숨김 (6x CPU)
-export THUMBNAIL_SEM="320"               # 여유 메모리 활용해 썸네일 동시 생성 확대
-export THUMB_PREFETCH_BATCH="64"
-export THUMB_CLIENT_MAX_CONCURRENCY="12"
+export PNG_COMPRESSION_LEVEL="1"
+export IO_THREADS="256"                  # 32C 서버에서 I/O 대기시간 숨김 (8x CPU)
+export THUMBNAIL_SEM="384"               # 여유 메모리 활용해 썸네일 동시 생성 확대
+export THUMB_PREFETCH_BATCH="80"
+export THUMB_CLIENT_MAX_CONCURRENCY="14"
 export COMPOSITE_FAST_MODE="1"           # ✅ Fast 모드 활성화 (워커 자동 상향 + vips 저장)
-export COMPOSITE_MAX_WORKERS="48"        # Composite 로더: CPU당 1~1.5 스레드
+export COMPOSITE_MAX_WORKERS="56"        # Composite 로더: CPU당 ~1.7 스레드
 export COMPOSITE_LOADER_MODE="thread"
-export COMPOSITE_BATCH_SIZE="16"         # 🔥 32→16으로 감소 (대용량 이미지에 최적)
+export COMPOSITE_BATCH_SIZE="20"         # 대용량 이미지용 배치 상향
 export COMPOSITE_COUNT_MODE="cython"
-export COMPOSITE_RENDER_WORKERS="32"     # 렌더링 병렬도 ↑ (fast 모드와 맞춤)
-export COMPOSITE_SAVE_WORKERS="48"       # 저장 워커 (고속 SSD 기준)
+export COMPOSITE_RENDER_WORKERS="36"     # 렌더링 병렬도 ↑ (fast 모드와 맞춤)
+export COMPOSITE_SAVE_WORKERS="56"       # 저장 워커 (고속 SSD 기준)
 export COMPOSITE_SAVE_BACKEND="vips"     # 저장 백엔드 vips 우선
 export COMPOSITE_FORMAT="JPEG"           # 저장 포맷: JPEG (속도 우선)
 export COMPOSITE_JPEG_QUALITY="95"       # JPEG 품질 (속도/품질 균형)
@@ -51,10 +51,10 @@ export NUMBA_NUM_THREADS="32"
 export SEARCH_WORKERS="24"               # 검색 병렬 워커 수 (32코어 기준, 논리 검색 가속)
 
 # libvips 최적화 (웹서버 환경)
-export VIPS_CONCURRENCY="20"             # 중간값 (24→16→20) - 병렬 처리
-export VIPS_DISC_THRESHOLD="5500m"       # 중간값 (10000m→1000m→5500m) - 디스크 사용 기준
-export VIPS_MAX_CACHE="7000"             # 중간값 (10000→4000→7000) - 캐시 항목 수
-export VIPS_MAX_CACHE_MEM="11024m"       # 중간값 (20000m→2048m→11024m) - 메모리 캐시
+export VIPS_CONCURRENCY="28"             # 32C 서버 최적 근사
+export VIPS_DISC_THRESHOLD="6000m"       # 디스크 사용 기준
+export VIPS_MAX_CACHE="8000"             # 캐시 항목 수
+export VIPS_MAX_CACHE_MEM="12000m"       # 메모리 캐시
 
 # 검색 폴백 비활성화 (인덱스 결과만 활용)
 export SEARCH_FALLBACK_LIMIT="0"          # 0=폴백 결과 제한 없음 → 폴백 비활성화

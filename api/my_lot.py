@@ -9,12 +9,13 @@ from pathlib import Path
 from threading import RLock
 from typing import Dict, List, Optional
 
-# config.py에서 IMAGES_ROOT 가져오기
+# config.py에서 IMAGES_ROOT 및 POSITIONS_ROOT 가져오기
 try:
-    from .config import IMAGES_ROOT, SUPPORTED_EXTS
+    from .config import IMAGES_ROOT, POSITIONS_ROOT, SUPPORTED_EXTS
 except ImportError:
     # fallback
     IMAGES_ROOT = Path(__file__).parent.parent / "data"
+    POSITIONS_ROOT = Path(__file__).parent.parent / "positions"
     SUPPORTED_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp', '.gif'}
 
 MY_LOT_ROOT = IMAGES_ROOT / "my-lot"
@@ -69,6 +70,96 @@ def _group_dir(login_id: str, mode: str, group: str) -> Path:
     normalized_mode = _normalize_mode(mode)
     safe_group = _SAFE_SEGMENT.sub("_", (group or "").strip()) or "default"
     return user_dir / normalized_mode / safe_group
+
+
+def _find_position_file(image_rel_path: str) -> Optional[Path]:
+    """
+    이미지의 positions.json 파일 찾기 (composite_map.py의 로직과 동일)
+
+    Args:
+        image_rel_path: IMAGES_ROOT 기준 이미지 상대 경로 (예: "wm-811k/1.png")
+
+    Returns:
+        positions.json 경로, 없으면 None
+    """
+    try:
+        image_path = Path(image_rel_path)
+        image_stem = image_path.stem
+        image_parent = image_path.parent
+
+        # positions.json 후보 경로들
+        candidate_paths = []
+
+        # 우선순위 1: trimmed 경로 (첫 번째 경로 구성요소 제거)
+        parent_parts = [p for p in image_parent.parts if p not in ("", ".")]
+
+        if len(parent_parts) > 1:
+            trimmed_parts = parent_parts[1:]
+            candidate_paths.append(POSITIONS_ROOT.joinpath(*trimmed_parts) / f"{image_stem}.json")
+        elif parent_parts:
+            candidate_paths.append(POSITIONS_ROOT / f"{image_stem}.json")
+
+        # 우선순위 2: 레거시 경로
+        legacy_path = POSITIONS_ROOT / image_parent / f"{image_stem}.json"
+        if legacy_path not in candidate_paths:
+            candidate_paths.append(legacy_path)
+
+        # 존재하는 파일 찾기
+        for candidate in candidate_paths:
+            if candidate.exists():
+                return candidate
+
+        return None
+    except Exception:
+        return None
+
+
+def _copy_position_file(src_image_path: Path, dst_image_path: Path) -> None:
+    """
+    소스 이미지의 position 파일을 대상 이미지 위치로 복사
+
+    Args:
+        src_image_path: 원본 이미지 절대 경로
+        dst_image_path: 대상 이미지 절대 경로
+    """
+    import json
+
+    try:
+        # 소스 이미지의 상대 경로 (IMAGES_ROOT 기준)
+        try:
+            src_rel_path = src_image_path.relative_to(IMAGES_ROOT).as_posix()
+        except ValueError:
+            return  # IMAGES_ROOT 하위가 아니면 스킵
+
+        # 소스 position 파일 찾기
+        src_positions_file = _find_position_file(src_rel_path)
+        if not src_positions_file:
+            return  # position 파일 없으면 스킵
+
+        # 대상 위치 계산: POSITIONS_ROOT 하위에 이미지와 동일한 구조로 저장
+        # 예: my-lot/user/lot/group/LOT/image.png → positions/my-lot/user/lot/group/LOT/image.json
+        try:
+            dst_rel_path = dst_image_path.relative_to(IMAGES_ROOT)
+            dst_positions_file = POSITIONS_ROOT / dst_rel_path.parent / f"{dst_image_path.stem}.json"
+        except ValueError:
+            return
+
+        # 대상 디렉토리 생성
+        dst_positions_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # position 파일 로드 및 image_path 업데이트
+        with open(src_positions_file, 'r', encoding='utf-8') as f:
+            positions_data = json.load(f)
+
+        # image_path를 새로운 경로로 업데이트
+        positions_data['image_path'] = dst_rel_path.as_posix()
+
+        # position 파일 저장
+        with open(dst_positions_file, 'w', encoding='utf-8') as f:
+            json.dump(positions_data, f, ensure_ascii=False, indent=2)
+
+    except Exception:
+        pass  # position 복사 실패해도 이미지 복사는 진행
 
 
 def _parse_filename(path: str) -> Dict[str, str]:
@@ -355,6 +446,9 @@ def add_entry(login_id: str, mode: str, group: str, src_path: Path) -> Dict[str,
             os.utime(str(target_file), (now, now))
         except Exception:
             pass  # 타임스탬프 업데이트 실패해도 진행
+
+        # 🔥 position 파일 복사
+        _copy_position_file(src_path, target_file)
 
         # 상대 경로 생성
         try:
@@ -763,6 +857,10 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path])
                     os.utime(str(target_file), (now, now))
                 except Exception:
                     pass  # 타임스탬프 업데이트 실패해도 진행
+
+                # 🔥 position 파일 복사 (실제 이미지 파일인 경우에만)
+                if not is_no_image:
+                    _copy_position_file(src_path, target_file)
 
                 success_count += 1
                 processed_files.add(file_key)  # 성공한 파일 추적
