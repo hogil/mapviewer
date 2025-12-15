@@ -795,6 +795,21 @@
             overflow: hidden;
         }
 
+        /* 🔥 큰 resize handle */
+        .ref-map-window::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 24px;
+            height: 24px;
+            cursor: nwse-resize;
+            background: linear-gradient(135deg, transparent 0%, transparent 40%, #555 40%, #555 45%, transparent 45%, transparent 55%, #555 55%, #555 60%, transparent 60%, transparent 70%, #555 70%, #555 75%, transparent 75%);
+            border-bottom-right-radius: 10px;
+            z-index: 1;
+            pointer-events: none;
+        }
+
         .ref-map-window.is-open {
             display: flex;
         }

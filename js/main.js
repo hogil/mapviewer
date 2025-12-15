@@ -1311,7 +1311,17 @@ class WaferMapViewer {
         }
         try {
             const normalizedPath = this.normalizeImagePath(imagePath);
-            localStorage.setItem('refMapPath', normalizedPath);
+            // 🔥 localStorage 접근 테스트
+            try {
+                localStorage.setItem('refMapPath', normalizedPath);
+            } catch (storageError) {
+                // 🔥 localStorage 접근 실패 시 메모리에만 저장
+                if (!this._refMapMemoryStorage) {
+                    this._refMapMemoryStorage = {};
+                }
+                this._refMapMemoryStorage.refMapPath = normalizedPath;
+                console.warn('[RefMap] localStorage 접근 실패, 메모리에 저장:', storageError);
+            }
             this.showToast?.('📌 Ref Map으로 등록했습니다.', 1500);
             console.log('[RefMap] 등록:', normalizedPath);
             setTimeout(() => this.openRefMapWindow(), 100);
@@ -1329,10 +1339,18 @@ class WaferMapViewer {
             return;
         }
         try {
-            const refMapPath = this.normalizeImagePath(localStorage.getItem('refMapPath'));
+            let refMapPath = null;
+            try {
+                refMapPath = localStorage.getItem('refMapPath');
+            } catch (storageError) {
+                // 🔥 localStorage 접근 실패 시 메모리에서 읽기
+                refMapPath = this._refMapMemoryStorage?.refMapPath || null;
+                console.warn('[RefMap] localStorage 접근 실패, 메모리에서 읽기:', storageError);
+            }
+            refMapPath = this.normalizeImagePath(refMapPath);
             this.updateRefMapPanel(refMapPath);
         } catch (error) {
-            console.warn('[RefMap] localStorage 접근 실패:', error);
+            console.warn('[RefMap] 경로 읽기 실패:', error);
             this.updateRefMapPanel(null);
         }
         this.refMapWindow.style.display = 'flex';
@@ -21240,6 +21258,9 @@ class WaferMapViewer {
      * Show chip context menu
      */
     showChipContextMenu(event, selectedChips) {
+        // 🔥 contextMenuTargetPath 설정 (single context menu 항목이 작동하도록)
+        this.contextMenuTargetPath = this.selectedImagePath || null;
+
         // 기존 context menu 제거 (있다면)
         const existingMenu = document.getElementById('chip-context-menu');
         if (existingMenu) {
@@ -21276,6 +21297,9 @@ class WaferMapViewer {
                 this.showChipViewModal(selectedChips[0]);
                 menu.remove();
             };
+            // Hover 효과
+            viewItem.onmouseenter = () => { viewItem.style.background = '#3a3a3a'; };
+            viewItem.onmouseleave = () => { viewItem.style.background = ''; };
             menu.appendChild(viewItem);
         }
 
@@ -21298,6 +21322,9 @@ class WaferMapViewer {
                 this.copyChipCoordinates(selectedChips);
                 menu.remove();
             };
+            // Hover 효과
+            copyCoordsItem.onmouseenter = () => { copyCoordsItem.style.background = '#3a3a3a'; };
+            copyCoordsItem.onmouseleave = () => { copyCoordsItem.style.background = ''; };
             menu.appendChild(copyCoordsItem);
 
             const copyTableItem = document.createElement('div');
@@ -21313,8 +21340,65 @@ class WaferMapViewer {
                 this.copyChipCoordinatesAsTable(selectedChips);
                 menu.remove();
             };
+            // Hover 효과
+            copyTableItem.onmouseenter = () => { copyTableItem.style.background = '#3a3a3a'; };
+            copyTableItem.onmouseleave = () => { copyTableItem.style.background = ''; };
             menu.appendChild(copyTableItem);
         }
+
+        // 🔥 Single context menu 항목들 추가 (구분선 아래)
+        const separator2 = document.createElement('div');
+        separator2.style.cssText = 'height: 1px; background: #555; margin: 4px 0;';
+        menu.appendChild(separator2);
+
+        // Single image context menu 항목들 추가
+        const singleMenuItems = [
+            { id: 'download-original', text: '💾 원본 다운로드', handler: async () => {
+                menu.remove();
+                if (this.contextMenuManager) {
+                    await this.contextMenuManager.downloadOriginalImage();
+                }
+            }},
+            { id: 'copy-image', text: '📋 이미지 복사', handler: async () => {
+                menu.remove();
+                if (this.contextMenuManager) {
+                    await this.contextMenuManager.copyImageToClipboard();
+                }
+            }},
+            { id: 'copy-canvas', text: '🎨 캔버스 전체 복사', handler: async () => {
+                menu.remove();
+                if (this.contextMenuManager) {
+                    await this.contextMenuManager.copyCanvasToClipboard();
+                }
+            }},
+            { id: 'my-lot-add', text: '📁 MY LOT 추가', handler: async () => {
+                menu.remove();
+                if (this.contextMenuManager) {
+                    await this.contextMenuManager.addToMyLot();
+                }
+            }},
+            { id: 'set-ref-map', text: '📌 Ref Map 등록', handler: () => {
+                menu.remove();
+                this.handleSetRefMapFromContext();
+            }}
+        ];
+
+        singleMenuItems.forEach(item => {
+            const menuItem = document.createElement('div');
+            menuItem.className = 'context-menu-item';
+            menuItem.style.cssText = `
+                padding: 8px 16px;
+                cursor: pointer;
+                color: #fff;
+                font-size: 14px;
+            `;
+            menuItem.textContent = item.text;
+            menuItem.onclick = item.handler;
+            // Hover 효과
+            menuItem.onmouseenter = () => { menuItem.style.background = '#3a3a3a'; };
+            menuItem.onmouseleave = () => { menuItem.style.background = ''; };
+            menu.appendChild(menuItem);
+        });
 
         // 메뉴 위치 설정
         menu.style.left = event.pageX + 'px';
