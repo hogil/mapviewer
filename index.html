@@ -998,9 +998,8 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
-            position: sticky;
-            top: 0;
-            z-index: 10;
+            position: static;
+            z-index: 1;
         }
         .lot-header:first-child {
             margin-top: 0;
@@ -1023,6 +1022,14 @@
             background: rgba(255, 255, 255, 0.08);
             padding: 2px 8px;
             border-radius: 10px;
+        }
+        .lot-section {
+            grid-column: 1 / -1;
+            display: grid;
+            grid-template-columns: repeat(var(--grid-cols, 3), 1fr);
+            gap: 8px;
+            width: 100%;
+            box-sizing: border-box;
         }
 
         /* Lot Spacer (빈 공간 채우기) */

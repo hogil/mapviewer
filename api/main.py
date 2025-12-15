@@ -1208,58 +1208,28 @@ async def lifespan(app: FastAPI):
         bootlog.info("[INDEX] No cache found")
         print("[INDEX] No cache found", flush=True)
 
+    # 🔥 인덱스 빌드를 백그라운드 태스크로 실행 (서버 시작 블로킹 방지)
     index_action = "rebuild" if cache_loaded and index_service.keys else "build"
-    bootlog.info(f"🔨 [INDEX] 인덱스 {index_action} 시작 (캐시 성공/실패와 무관하게 즉시 실행)")
-    print(f"[INDEX] Starting index {index_action}...", flush=True)
-    try:
-        # 🔥 락 파일이 stale 상태일 수 있으므로 강제 삭제 시도
-        if index_service.lock_file.exists():
-            try:
-                if index_service._lock_file_stale():
-                    bootlog.warning(f"⚠️ [INDEX] Stale 락 파일 발견, 삭제 시도: {index_service.lock_file}")
-                    index_service.lock_file.unlink(missing_ok=True)
-            except Exception as lock_exc:
-                bootlog.warning(f"⚠️ [INDEX] 락 파일 확인 실패: {lock_exc}")
-        
-        build_result = await index_service.build(force=True, allow_background=False)
-        if not build_result:
-            # 🔥 빌드가 False를 반환한 경우 (락 획득 실패 등)
-            bootlog.error(f"❌ [INDEX] {index_action} 실패: build() 메서드가 False 반환 (락 획득 실패 또는 다른 프로세스가 빌드 중)")
-            print(f"[INDEX] {index_action.capitalize()} failed: build() returned False", flush=True)
-            # 락 파일을 다시 확인하고 강제 삭제 후 재시도
-            if index_service.lock_file.exists():
-                try:
-                    index_service.lock_file.unlink(missing_ok=True)
-                    bootlog.info(f"🔄 [INDEX] 락 파일 삭제 후 재시도")
-                    build_result = await index_service.build(force=True, allow_background=False)
-                    if not build_result:
-                        bootlog.error(f"❌ [INDEX] 재시도 후에도 실패")
-                except Exception as retry_exc:
-                    bootlog.error(f"❌ [INDEX] 재시도 실패: {retry_exc}")
-        else:
-            # 🔥 인덱스 파일이 실제로 생성되었는지 확인
-            cache_file = index_service.cache_file
-            if cache_file.exists():
-                file_size = cache_file.stat().st_size
-                bootlog.info(
-                    f"✅ [INDEX] 빌드 완료: files={index_service.total_files}, dirs={index_service.total_dirs}, cache_size={file_size:,} bytes"
-                )
-                print(
-                    f"[INDEX] Build complete: files={index_service.total_files}, dirs={index_service.total_dirs}, cache_size={file_size:,} bytes",
-                    flush=True,
-                )
-            else:
-                bootlog.error(f"❌ [INDEX] 빌드 완료했지만 캐시 파일이 생성되지 않음: {cache_file}")
-                print(f"[INDEX] Build complete but cache file not found: {cache_file}", flush=True)
-    except Exception as exc:
-        bootlog.error(f"❌ [INDEX] {index_action} 실패: {exc}", exc_info=True)
-        print(f"[INDEX] {index_action.capitalize()} failed: {exc}", flush=True)
+    bootlog.info(f"🚀 [INDEX] 인덱스 {index_action}를 백그라운드에서 시작 (서버는 즉시 사용 가능)")
+    print(f"[INDEX] Starting index {index_action} in background (server ready)...", flush=True)
 
+    # 🔥 락 파일이 stale 상태일 수 있으므로 미리 정리
+    try:
+        if index_service.lock_file.exists() and index_service._lock_file_stale():
+            bootlog.warning(f"⚠️ [INDEX] Stale 락 파일 발견, 삭제: {index_service.lock_file}")
+            index_service.lock_file.unlink(missing_ok=True)
+    except Exception as lock_exc:
+        bootlog.warning(f"⚠️ [INDEX] 락 파일 정리 실패: {lock_exc}")
+
+    # 백그라운드 태스크 시작
+    asyncio.create_task(_lifespan_background_index_build(index_action))
+
+    # 🔥 자동 재빌드 루프도 백그라운드에서 시작
     if INDEX_REFRESH_INTERVAL_SECONDS > 0:
         interval_minutes = INDEX_REFRESH_INTERVAL_SECONDS // 60 or 1
-        bootlog.info(f"🔁 [INDEX] 자동 재빌드 주기: {interval_minutes}분 (첫 재빌드는 즉시 실행)")
-        await index_service.start_refresh_loop(INDEX_REFRESH_INTERVAL_SECONDS)
-        bootlog.info(f"✅ [INDEX] 자동 재빌드 루프 시작됨 (매 {interval_minutes}분마다 실행)")
+        bootlog.info(f"🔁 [INDEX] 자동 재빌드 주기: {interval_minutes}분")
+        asyncio.create_task(index_service.start_refresh_loop(INDEX_REFRESH_INTERVAL_SECONDS))
+        bootlog.info(f"✅ [INDEX] 자동 재빌드 루프 백그라운드 시작 (매 {interval_minutes}분마다 실행)")
     else:
         bootlog.warning("⚠️ [INDEX] 자동 재빌드가 비활성화됨 (INDEX_REFRESH_INTERVAL_MINUTES=0)")
 
@@ -1329,6 +1299,39 @@ async def startup_event():
         await index_service.start_refresh_loop(INDEX_REFRESH_INTERVAL_SECONDS)
 
 
+async def _lifespan_background_index_build(index_action: str):
+    """lifespan에서 백그라운드로 인덱스 빌드 실행"""
+    bootlog = logging.getLogger("uvicorn.error")
+    build_start = time.time()
+    try:
+        print(f"[INDEX] Background {index_action} started...", flush=True)
+        bootlog.info(f"🔨 [INDEX] Background {index_action} started")
+
+        build_result = await index_service.build(force=True, allow_background=False)
+        build_duration = time.time() - build_start
+
+        if build_result:
+            cache_file = index_service.cache_file
+            if cache_file.exists():
+                file_size = cache_file.stat().st_size
+                bootlog.info(
+                    f"✅ [INDEX] Background {index_action} complete: files={index_service.total_files}, dirs={index_service.total_dirs}, cache_size={file_size:,} bytes ({build_duration:.2f}s)"
+                )
+                print(
+                    f"[INDEX] Background {index_action} complete: files={index_service.total_files}, dirs={index_service.total_dirs} ({build_duration:.2f}s)",
+                    flush=True,
+                )
+            else:
+                bootlog.error(f"❌ [INDEX] 캐시 파일이 생성되지 않음: {cache_file}")
+                print(f"[INDEX] Background {index_action} complete but cache file not found", flush=True)
+        else:
+            bootlog.warning(f"⚠️ [INDEX] 백그라운드 {index_action} 실패 (락 획득 실패 또는 이미 진행 중)")
+            print(f"[INDEX] Background {index_action} failed (lock acquisition failed)", flush=True)
+    except Exception as exc:
+        bootlog.error(f"❌ [INDEX] 백그라운드 {index_action} 오류: {exc}", exc_info=True)
+        print(f"[INDEX] Background {index_action} failed: {exc}", flush=True)
+
+
 async def _background_index_build():
     """백그라운드에서 인덱스 빌드 실행"""
     bootlog = logging.getLogger("uvicorn.error")
@@ -1336,10 +1339,10 @@ async def _background_index_build():
     try:
         print("[INDEX] Background build started...", flush=True)
         bootlog.info("🔨 [INDEX] Background build started")
-        
+
         build_result = await index_service.build(force=True, allow_background=False)
         build_duration = time.time() - build_start
-        
+
         if build_result:
             cache_file = index_service.cache_file
             if cache_file.exists():

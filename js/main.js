@@ -21809,12 +21809,15 @@ class WaferMapViewer {
         // 🔥 Lazy loader 설정 (IntersectionObserver 초기화)
         this.setupGridLazyLoader();
 
-        // 현재 컬럼 수 가져오기
-        const gridCols = this.gridCols || 3;
-
         let globalIndex = 0;
 
         this.lotGroups.forEach((lotGroup, lotIdx) => {
+            // Lot 별 섹션 (독립 그리드) 생성
+            const lotSection = document.createElement('div');
+            lotSection.className = 'lot-section';
+            lotSection.dataset.lotName = lotGroup.lotName;
+            lotSection.dataset.lotIndex = lotIdx;
+
             // Lot 헤더 추가
             const header = document.createElement('div');
             header.className = 'lot-header';
@@ -21825,27 +21828,19 @@ class WaferMapViewer {
                 <div class="lot-header-count">${lotGroup.count}</div>
             `;
             header.onclick = () => this.scrollToLot(lotGroup.lotName);
-            grid.appendChild(header);
+            lotSection.appendChild(header);
 
             // Lot의 이미지들 추가
             lotGroup.images.forEach((imgPath, imgIdx) => {
                 const wrap = this.createGridThumbWrap(imgPath, globalIndex);
                 wrap.dataset.lotName = lotGroup.lotName;
-                grid.appendChild(wrap);
+                lotSection.appendChild(wrap);
                 this.gridThumbWraps.push(wrap);
                 globalIndex++;
             });
 
-            // 마지막 행의 빈 공간 채우기 (다음 Lot과 구분)
-            const imagesInLastRow = lotGroup.count % gridCols;
-            if (imagesInLastRow > 0) {
-                const spacersNeeded = gridCols - imagesInLastRow;
-                for (let i = 0; i < spacersNeeded; i++) {
-                    const spacer = document.createElement('div');
-                    spacer.className = 'lot-spacer';
-                    grid.appendChild(spacer);
-                }
-            }
+            // Lot 섹션을 그리드에 추가
+            grid.appendChild(lotSection);
         });
 
         // 그리드 모드 설정
