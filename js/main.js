@@ -15950,6 +15950,16 @@ class WaferMapViewer {
             return;
         }
 
+        // 🔥 일반 그리드 모드: LOT 스크롤 이벤트 리스너 제거
+        if (this.boundLotScrollHandler) {
+            const grid = document.getElementById('image-grid');
+            const scrollWrapper = grid?.parentElement;
+            if (scrollWrapper) {
+                scrollWrapper.removeEventListener('scroll', this.boundLotScrollHandler);
+            }
+            this.boundLotScrollHandler = null;
+        }
+
         // ✅ 방법 1: 모든 가능한 패널 강제 숨기기 (가장 확실)
         const selectorsToHide = [
             '#file-name',
@@ -16922,6 +16932,21 @@ class WaferMapViewer {
         }
 
         this.teardownGridLazyLoader();
+
+        // 🔥 LOT 스크롤 이벤트 리스너 제거
+        if (this.boundLotScrollHandler) {
+            const scrollWrapper = grid?.parentElement;
+            if (scrollWrapper) {
+                scrollWrapper.removeEventListener('scroll', this.boundLotScrollHandler);
+            }
+            this.boundLotScrollHandler = null;
+        }
+
+        // 🔥 LOT 스크롤 타임아웃 정리
+        if (this._lotScrollTimeout) {
+            clearTimeout(this._lotScrollTimeout);
+            this._lotScrollTimeout = null;
+        }
 
         this.gridMode = false;
         
@@ -18326,6 +18351,12 @@ class WaferMapViewer {
 
         // 🔥 LOT 그룹 초기화
         this.lotGroups = [];
+
+        // 🔥 LOT 스크롤 타임아웃 정리
+        if (this._lotScrollTimeout) {
+            clearTimeout(this._lotScrollTimeout);
+            this._lotScrollTimeout = null;
+        }
 
         // ✅ 화살표 숨김
         this.updateArrowButtonVisibility();
@@ -22196,6 +22227,22 @@ class WaferMapViewer {
         setTimeout(() => {
             this.loadCurrentFolderThumbnails?.(sortedImages);  // 🔥 정렬된 순서로 전달
         }, 100);
+
+        // 🔥 LOT 리스트 모달 - 처음 시작 시 첫 번째 LOT 선택
+        setTimeout(() => {
+            this.updateActiveLotInModal();
+        }, 200);
+
+        // 🔥 LOT 리스트 모달 - 스크롤 이벤트 리스너 추가 (현재 보이는 LOT에 따라 자동 선택)
+        if (scrollWrapper) {
+            // 기존 리스너 제거 (중복 방지)
+            if (this.boundLotScrollHandler) {
+                scrollWrapper.removeEventListener('scroll', this.boundLotScrollHandler);
+            }
+            // 새 리스너 추가
+            this.boundLotScrollHandler = this.handleLotScrollChange.bind(this);
+            scrollWrapper.addEventListener('scroll', this.boundLotScrollHandler);
+        }
     }
 
     /**
@@ -22521,6 +22568,72 @@ class WaferMapViewer {
                 this.scrollToLot(lotName);
             }
         }
+    }
+
+    /**
+     * 🔥 현재 뷰포트에 보이는 첫 번째 LOT을 LOT 리스트 모달에서 active 상태로 표시
+     */
+    updateActiveLotInModal() {
+        const grid = document.getElementById('image-grid');
+        const scrollWrapper = grid?.parentElement;
+        if (!grid || !scrollWrapper || !this.lotGroups || this.lotGroups.length === 0) return;
+
+        // 그리드 내 모든 LOT 헤더 가져오기
+        const lotHeaders = Array.from(grid.querySelectorAll('.lot-header'));
+        if (lotHeaders.length === 0) return;
+
+        // 현재 스크롤 위치
+        const scrollTop = scrollWrapper.scrollTop;
+        const viewportHeight = scrollWrapper.clientHeight;
+
+        // 뷰포트에 보이는 첫 번째 LOT 헤더 찾기
+        let visibleLot = null;
+        for (const header of lotHeaders) {
+            const rect = header.getBoundingClientRect();
+            const containerRect = scrollWrapper.getBoundingClientRect();
+            const relativeTop = rect.top - containerRect.top + scrollWrapper.scrollTop;
+
+            // 헤더가 뷰포트 내에 있거나 뷰포트 위에 있는 경우
+            if (relativeTop <= scrollTop + 100) {  // 100px 여유
+                visibleLot = header.dataset.lotName;
+            } else {
+                break;  // 더 이상 확인 불필요
+            }
+        }
+
+        // 첫 번째 LOT이 없으면 맨 위 LOT 선택
+        if (!visibleLot && lotHeaders.length > 0) {
+            visibleLot = lotHeaders[0].dataset.lotName;
+        }
+
+        if (!visibleLot) return;
+
+        // LOT 리스트 모달에서 해당 LOT을 active 상태로 표시
+        const content = document.getElementById('lot-list-content');
+        if (!content) return;
+
+        content.querySelectorAll('.lot-list-item').forEach(item => {
+            if (item.dataset.lotName === visibleLot) {
+                item.classList.add('active');
+                // 모달 스크롤도 해당 항목으로 이동 (부드럽게)
+                item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            } else {
+                item.classList.remove('active');
+            }
+        });
+    }
+
+    /**
+     * 🔥 그리드 스크롤 변경 시 LOT 리스트 모달 업데이트 (디바운스 포함)
+     */
+    handleLotScrollChange() {
+        // 디바운스: 스크롤이 멈춘 후 100ms 후에 실행
+        if (this._lotScrollTimeout) {
+            clearTimeout(this._lotScrollTimeout);
+        }
+        this._lotScrollTimeout = setTimeout(() => {
+            this.updateActiveLotInModal();
+        }, 100);
     }
 
     /**
