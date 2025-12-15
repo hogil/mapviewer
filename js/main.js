@@ -2032,6 +2032,15 @@ class WaferMapViewer {
                 this.persistActivePageState();
             }
         }
+
+        // 🔥 LOT 리스트 모달 표시/숨김 (그리드 페이지일 때만 표시)
+        if (!this.gridMode) {
+            // 그리드 모드가 아님: 모달 닫기
+            if (typeof this.hideLotListModal === 'function') {
+                this.hideLotListModal();
+            }
+        }
+        // 그리드 모드일 때는 모달 상태 유지 (이미 열려있으면 유지, 닫혀있으면 유지)
     }
 
     handlePageClosed(page) {
@@ -4771,6 +4780,13 @@ class WaferMapViewer {
 
             // 🔥 검색/입력 필드에서 허용되지 않는 단축키는 차단
             if (!this.shouldAllowKeyboardShortcut(e)) return;
+
+            if (this.lotMode && this.lotListVisible && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+                e.preventDefault();
+                const delta = e.key === 'ArrowUp' ? -1 : 1;
+                this.navigateLotList(delta);
+                return;
+            }
 
             if (e.key === 'Escape') {
                 this.clearGridSelection();
@@ -10637,6 +10653,11 @@ class WaferMapViewer {
 
             // 🔥 그리드 모드 → 단일 이미지 모드 전환
             this.gridMode = false;
+
+            // 🔥 LOT 리스트 모달 닫기 (그리드 모드 종료)
+            if (typeof this.hideLotListModal === 'function') {
+                this.hideLotListModal();
+            }
 
             // 그리드 컨테이너 숨기기
             if (grid) {
@@ -16912,7 +16933,25 @@ class WaferMapViewer {
         if (panel) {
             panel.style.display = 'none';
         }
-        
+        // Lot 리스트 모달도 함께 숨김 (그리드 종료 시)
+        if (typeof this.hideLotListModal === 'function') {
+            this.hideLotListModal();
+        }
+
+        // 🔥 LOT 그룹 초기화
+        this.lotGroups = [];
+
+        // 🔥 LOT 리스트 모달 내용 업데이트 (빈 목록 표시)
+        if (typeof this.updateLotListContent === 'function') {
+            this.updateLotListContent();
+        }
+
+        // 🔥 LOT 리스트 검색 입력창 초기화
+        const lotListSearchInput = document.getElementById('lot-list-search-input');
+        if (lotListSearchInput) {
+            lotListSearchInput.value = '';
+        }
+
         // ✅ 그리드 숨길 때는 chip selection을 유지 (단일 이미지 모드에서 사용)
         // viewMode가 null이면 chip selection도 숨김
         if (!this.viewMode || (this.viewMode !== 'single' && this.viewMode !== 'gridImage')) {
@@ -16920,7 +16959,7 @@ class WaferMapViewer {
             if (chipSelectionPanel) {
                 chipSelectionPanel.style.display = 'none';
             }
-            
+
             const selectedChipsList = document.getElementById('selected-chips-list');
             if (selectedChipsList) {
                 selectedChipsList.style.display = 'none';
@@ -18271,7 +18310,7 @@ class WaferMapViewer {
     clearGridSelection() {
         // ✅ 화살표가 표시 중인지 확인
         const wasShowingArrow = this.viewMode === 'single' || this.viewMode === 'gridImage';
-        
+
         // ✅ 상태 완전 초기화
         this.viewMode = null;
         this.gridSelectedIdxs = [];
@@ -18284,10 +18323,13 @@ class WaferMapViewer {
         this.gridViewImageList = [];
         this.gridViewImageIndex = -1;
         this.gridViewSaveState = null;
-        
+
+        // 🔥 LOT 그룹 초기화
+        this.lotGroups = [];
+
         // ✅ 화살표 숨김
         this.updateArrowButtonVisibility();
-        
+
         // ✅ UI 업데이트
         const grid = document.getElementById('image-grid');
         if (grid) {
@@ -18299,10 +18341,21 @@ class WaferMapViewer {
 
         // ✅ 선택된 웨이퍼 목록 업데이트 (빈 목록)
         this.updateSelectedGridImagesList();
-        
+
         // ✅ 이미지 캔버스 숨김
         this.hideImage();
-        
+
+        // 🔥 LOT 리스트 모달 내용 업데이트 (빈 목록 표시)
+        if (typeof this.updateLotListContent === 'function') {
+            this.updateLotListContent();
+        }
+
+        // 🔥 LOT 리스트 검색 입력창 초기화
+        const lotListSearchInput = document.getElementById('lot-list-search-input');
+        if (lotListSearchInput) {
+            lotListSearchInput.value = '';
+        }
+
         console.log('✅ [CLEAR] 선택 해제 완료', wasShowingArrow ? '(화살표 숨김)' : '(화살표 없음)');
     }
 
@@ -18687,6 +18740,11 @@ class WaferMapViewer {
     
     enterSingleImageMode(idx) {
         console.log('[ENTER_SINGLE] Index:', idx);
+
+        // 단일 보기에서는 Lot 리스트 모달 숨김
+        if (typeof this.hideLotListModal === 'function') {
+            this.hideLotListModal();
+        }
 
         // ✅ 네비게이션 큐 리셋
         this._isNavigating = false;
@@ -22006,6 +22064,9 @@ class WaferMapViewer {
 
         // 이미지들을 Lot별로 그룹화
         this.lotGroups = this.groupImagesByLot(images);
+        if (this.lotMode && typeof this.showLotListModal === 'function') {
+            this.showLotListModal();
+        }
 
         // 🔥 정렬된 순서로 currentGridImages 재구성
         const sortedImages = [];
@@ -22299,6 +22360,11 @@ class WaferMapViewer {
             modal.style.display = 'none';
             this.lotListVisible = false;
         }
+
+        // 🔥 MyLotModal도 함께 닫기
+        if (this.myLotModal) {
+            this.myLotModal.close();
+        }
     }
 
     /**
@@ -22317,7 +22383,7 @@ class WaferMapViewer {
         }
 
         if (countLabel) {
-            countLabel.textContent = `${this.lotGroups.length} Lots`;
+            countLabel.textContent = `${this.lotGroups.length}`;
         }
 
         content.innerHTML = this.lotGroups.map((lot, idx) => `
@@ -22383,7 +22449,7 @@ class WaferMapViewer {
 
         // 카운트 업데이트
         if (countLabel) {
-            countLabel.textContent = `${filteredLots.length} / ${this.lotGroups.length} Lots`;
+            countLabel.textContent = `${filteredLots.length} / ${this.lotGroups.length}`;
         }
 
         // 필터링된 목록 렌더링
@@ -22428,6 +22494,33 @@ class WaferMapViewer {
                 }
             };
         });
+    }
+
+
+    navigateLotList(delta = 0) {
+        if (!this.lotListVisible) return;
+        const content = document.getElementById('lot-list-content');
+        if (!content) return;
+        const items = Array.from(content.querySelectorAll('.lot-list-item'));
+        if (!items.length) return;
+
+        let currentIndex = items.findIndex(item => item.classList.contains('active'));
+        if (currentIndex === -1) {
+            currentIndex = delta > 0 ? 0 : items.length - 1;
+        } else {
+            currentIndex = Math.max(0, Math.min(items.length - 1, currentIndex + delta));
+        }
+
+        items.forEach(item => item.classList.remove('active'));
+        const target = items[currentIndex];
+        if (target) {
+            target.classList.add('active');
+            target.scrollIntoView({ block: 'nearest' });
+            const lotName = target.dataset.lotName;
+            if (lotName) {
+                this.scrollToLot(lotName);
+            }
+        }
     }
 
     /**

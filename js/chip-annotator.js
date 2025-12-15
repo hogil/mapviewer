@@ -1258,6 +1258,9 @@ export class ChipAnnotator {
     _extractMetadataValue(keys = []) {
         if (!this.positionsData) return null;
 
+        const normalize = (key) => key.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const targetKeys = keys.map(normalize);
+
         const sources = [
             this.positionsData,
             this.positionsData.meta,
@@ -1267,45 +1270,42 @@ export class ChipAnnotator {
         ].filter(src => src && typeof src === 'object');
 
         for (const source of sources) {
-            const value = this._findMetadataValue(source, keys);
+            const value = this._findMetadataValue(source, targetKeys, normalize);
             if (value !== undefined && value !== null && `${value}`.trim() !== '') {
                 return value;
+            }
+        }
+
+        // 중첩된 위치를 대비해 얕은 탐색 수행
+        const visited = new Set();
+        const queue = [...sources];
+        while (queue.length) {
+            const obj = queue.shift();
+            if (!obj || typeof obj !== 'object' || visited.has(obj)) continue;
+            visited.add(obj);
+
+            const value = this._findMetadataValue(obj, targetKeys, normalize);
+            if (value !== undefined && value !== null && `${value}`.trim() !== '') {
+                return value;
+            }
+
+            for (const val of Object.values(obj)) {
+                if (val && typeof val === 'object') {
+                    queue.push(val);
+                }
             }
         }
 
         return null;
     }
 
-    _findMetadataValue(source, keys) {
+    _findMetadataValue(source, targetKeys, normalize) {
         if (!source || typeof source !== 'object') return null;
 
-        for (const key of keys) {
-            if (source[key] !== undefined && source[key] !== null) {
-                return source[key];
-            }
-        }
-
-        const lowerMap = new Map();
-        const collapsedMap = new Map();
         for (const [k, v] of Object.entries(source)) {
-            lowerMap.set(k.toLowerCase(), v);
-            collapsedMap.set(k.toLowerCase().replace(/[^a-z0-9]/g, ''), v);
-        }
-
-        for (const key of keys) {
-            const lowerKey = key.toLowerCase();
-            if (lowerMap.has(lowerKey)) {
-                const val = lowerMap.get(lowerKey);
-                if (val !== undefined && val !== null && `${val}`.trim() !== '') {
-                    return val;
-                }
-            }
-            const collapsedKey = lowerKey.replace(/[^a-z0-9]/g, '');
-            if (collapsedMap.has(collapsedKey)) {
-                const val = collapsedMap.get(collapsedKey);
-                if (val !== undefined && val !== null && `${val}`.trim() !== '') {
-                    return val;
-                }
+            const nk = normalize(k);
+            if (targetKeys.includes(nk)) {
+                return v;
             }
         }
 
