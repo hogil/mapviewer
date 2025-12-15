@@ -21377,6 +21377,59 @@ class WaferMapViewer {
                     await this.contextMenuManager.addToMyLot();
                 }
             }},
+            { id: 'copy-yms', text: '📋 파일명복사 (YMS)', handler: async () => {
+                menu.remove();
+                const paths = this.getSelectedImagesForModal();
+                if (!paths.length && this.selectedImagePath) {
+                    paths.push(this.selectedImagePath);
+                }
+                if (!paths.length) {
+                    this.showToast?.('복사할 이미지가 없습니다.', 1800);
+                    return;
+                }
+                const ymsList = paths.map(filePath => {
+                    const cleanPath = filePath.replace(/\\/g, '/');
+                    const fileName = cleanPath.split('/').pop() || '';
+                    const parts = fileName.split('_');
+                    const part0 = parts[0] || '';
+                    let part2 = parts[2] || '';
+                    part2 = part2.replace(/\.(png|jpg|jpeg|gif|bmp|tiff?)$/i, '');
+                    return `${part0}\t${part2}`;
+                }).join('\n');
+                try {
+                    await navigator.clipboard.writeText(ymsList);
+                    this.showToast?.(`${paths.length}개 파일명 복사 (YMS)`, 1800);
+                } catch (err) {
+                    console.error(err);
+                    this.showToast?.('클립보드 복사에 실패했습니다.', 2000);
+                }
+            }},
+            { id: 'copy-table', text: '📋 파일명복사 (Table)', handler: async () => {
+                menu.remove();
+                const paths = this.getSelectedImagesForModal();
+                if (!paths.length && this.selectedImagePath) {
+                    paths.push(this.selectedImagePath);
+                }
+                if (!paths.length) {
+                    this.showToast?.('복사할 이미지가 없습니다.', 1800);
+                    return;
+                }
+                const tableText = paths.map(filePath => {
+                    const cleanPath = filePath.replace(/\\/g, '/');
+                    const partsPath = cleanPath.split('/');
+                    const folder2 = partsPath.length >= 3 ? partsPath[partsPath.length - 3] : '';
+                    const fileName = (partsPath.pop() || '').replace(/\.[^/.]+$/, '');
+                    const tokens = fileName.split('_').join('\t');
+                    return `${folder2}\t${tokens}`.trim();
+                }).join('\n');
+                try {
+                    await navigator.clipboard.writeText(tableText);
+                    this.showToast?.(`${paths.length}개 파일명 복사 (Table)`, 1800);
+                } catch (err) {
+                    console.error(err);
+                    this.showToast?.('클립보드 복사에 실패했습니다.', 2000);
+                }
+            }},
             { id: 'set-ref-map', text: '📌 Ref Map 등록', handler: () => {
                 menu.remove();
                 this.handleSetRefMapFromContext();
