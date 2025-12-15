@@ -18,6 +18,9 @@ export class ChipAnnotator {
         // Chip position data
         this.positionsData = null;
         this.chips = [];
+        this.partId = null;
+        this.device = null;
+        this.pgm = null;
 
         // Annotation data
         this.markedChips = []; // {x_abs, y_abs, class, label, ...}
@@ -70,6 +73,9 @@ export class ChipAnnotator {
         this.coordBox = document.getElementById('chip-coordinate-box');
         this.coordChipAbs = document.getElementById('coord-chip-abs');
         this.coordChipRel = document.getElementById('coord-chip-rel');
+        this.coordPartId = document.getElementById('coord-partid');
+        this.coordDevice = document.getElementById('coord-device');
+        this.coordPgm = document.getElementById('coord-pgm');
 
         // Current image path
         this.currentImagePath = null;
@@ -99,12 +105,15 @@ export class ChipAnnotator {
         document.addEventListener('mouseup', this._onDocumentMouseUp);
     }
 
-    /**
+    /** 
      * Load chip positions from backend
      */
     async loadPositions(imagePath) {
         try {
             this.currentImagePath = imagePath;
+            this.partId = null;
+            this.device = null;
+            this.pgm = null;
             const response = await fetch(`/api/chip-positions?path=${encodeURIComponent(imagePath)}`);
 
             if (!response.ok) {
@@ -120,7 +129,17 @@ export class ChipAnnotator {
             this.chips = this.positionsData.chips || [];
             this._buildChipIndexMap();
 
-            console.log(`✅ Loaded ${this.chips.length} chip positions`);
+            this.partId = this._extractMetadataValue(['partid', 'part_id', 'partId', 'PartID']);
+            this.device = this._extractMetadataValue(['device', 'devcie', 'Device']);
+            this.pgm = this._extractMetadataValue(['pgm', 'PGM', 'pgm_name']);
+
+            console.log(`✅ Loaded ${this.chips.length} chip positions`, {
+                partId: this.partId,
+                device: this.device,
+                pgm: this.pgm
+            });
+
+            this._updateMetadataDisplay();
 
             // Load existing annotations
             await this.loadAnnotations(imagePath);
@@ -135,6 +154,10 @@ export class ChipAnnotator {
             this.chips = [];
             this.chipIndexMap.clear();
             this._notifyLegendUpdate([]);
+            this.partId = null;
+            this.device = null;
+            this.pgm = null;
+            this._updateMetadataDisplay();
             return false;
         }
     }
@@ -1232,6 +1255,75 @@ export class ChipAnnotator {
         this.ctx.restore(); // ⭐ 추가
     }
 
+    _extractMetadataValue(keys = []) {
+        if (!this.positionsData) return null;
+
+        const sources = [
+            this.positionsData,
+            this.positionsData.meta,
+            this.positionsData.metadata,
+            this.positionsData.header,
+            this.positionsData.info
+        ].filter(src => src && typeof src === 'object');
+
+        for (const source of sources) {
+            const value = this._findMetadataValue(source, keys);
+            if (value !== undefined && value !== null && `${value}`.trim() !== '') {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    _findMetadataValue(source, keys) {
+        if (!source || typeof source !== 'object') return null;
+
+        for (const key of keys) {
+            if (source[key] !== undefined && source[key] !== null) {
+                return source[key];
+            }
+        }
+
+        const lowerMap = new Map();
+        const collapsedMap = new Map();
+        for (const [k, v] of Object.entries(source)) {
+            lowerMap.set(k.toLowerCase(), v);
+            collapsedMap.set(k.toLowerCase().replace(/[^a-z0-9]/g, ''), v);
+        }
+
+        for (const key of keys) {
+            const lowerKey = key.toLowerCase();
+            if (lowerMap.has(lowerKey)) {
+                const val = lowerMap.get(lowerKey);
+                if (val !== undefined && val !== null && `${val}`.trim() !== '') {
+                    return val;
+                }
+            }
+            const collapsedKey = lowerKey.replace(/[^a-z0-9]/g, '');
+            if (collapsedMap.has(collapsedKey)) {
+                const val = collapsedMap.get(collapsedKey);
+                if (val !== undefined && val !== null && `${val}`.trim() !== '') {
+                    return val;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    _updateMetadataDisplay() {
+        if (this.coordPartId) {
+            this.coordPartId.textContent = this.partId || '-';
+        }
+        if (this.coordDevice) {
+            this.coordDevice.textContent = this.device || '-';
+        }
+        if (this.coordPgm) {
+            this.coordPgm.textContent = this.pgm || '-';
+        }
+    }
+
     /**
      * Update chip coordinate box
      */
@@ -1270,6 +1362,7 @@ export class ChipAnnotator {
                 this.coordChipRel.textContent = '-';
             }
         }
+        this._updateMetadataDisplay();
     }
 
     /**
@@ -1938,6 +2031,9 @@ export class ChipAnnotator {
         this.classColorIndex = 0;
         this.legendFilterClasses = null;
         this._notifyLegendUpdate([]);
+        this.partId = null;
+        this.device = null;
+        this.pgm = null;
         this.selectedChips.clear();
         this.selectedChipsOrder = []; // 🔥 선택 순서도 초기화
         if (this.viewer && typeof this.viewer.handleChipSelectionCleared === 'function') {
@@ -1968,6 +2064,15 @@ export class ChipAnnotator {
         }
         if (this.coordChipRel) {
             this.coordChipRel.textContent = '-';
+        }
+        if (this.coordPartId) {
+            this.coordPartId.textContent = '-';
+        }
+        if (this.coordDevice) {
+            this.coordDevice.textContent = '-';
+        }
+        if (this.coordPgm) {
+            this.coordPgm.textContent = '-';
         }
     }
 }

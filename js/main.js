@@ -4455,6 +4455,8 @@ class WaferMapViewer {
             if (!layout || !layout.cellWidth) {
                 layout = this.computeGridLayoutFromDom(grid, wraps);
             }
+            const hasLotArtifacts = this.lotMode || grid.querySelector('.lot-header') || grid.querySelector('.lot-spacer');
+            const useLayoutApprox = layout && layout.cellWidth && !hasLotArtifacts;
 
             const scrollRect = scrollWrapper.getBoundingClientRect();
             if (!Array.isArray(this.gridThumbRectCache) || this.gridThumbRectCache.length !== wraps.length) {
@@ -4479,7 +4481,7 @@ class WaferMapViewer {
                 return cached;
             };
 
-            if (layout && layout.cellWidth) {
+            if (useLayoutApprox) {
                 const { cellWidth, cellHeight, gapX, gapY, paddingLeft, paddingTop, cols } = layout;
                 const totalItems = wraps.length;
                 if (!cols || totalItems === 0) {
@@ -22060,6 +22062,8 @@ class WaferMapViewer {
                 }
             }
         });
+
+        this.invalidateGridGeometry();
 
         // 그리드 모드 설정
         this.gridMode = true;

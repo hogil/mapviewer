@@ -883,7 +883,7 @@
             position: fixed;
             left: 230px;
             top: 155px;
-            width: 150px;
+            width: 120px; /* 🔥 Navigator와 비슷한 기본 너비로 축소 */
             max-height: calc(100vh - 200px);
             background: #1a1a1a;
             border: 1px solid #333;
@@ -894,7 +894,7 @@
             flex-direction: column;
             overflow: hidden;
             resize: both;
-            min-width: 120px;
+            min-width: 120px; /* 🔥 Thumbnail Navigator의 min-width와 동일 */
             min-height: 150px;
         }
         .lot-list-header {
@@ -3522,6 +3522,18 @@
                 <!-- Chip Info (Bottom Left) -->
                 <div id="chip-info-container">
                     <div id="chip-coordinate-box">
+                        <div class="coord-row">
+                            <span class="coord-label">Device</span>
+                            <span id="coord-device" class="coord-value">-</span>
+                        </div>
+                        <div class="coord-row">
+                            <span class="coord-label">PartID</span>
+                            <span id="coord-partid" class="coord-value">-</span>
+                        </div>
+                        <div class="coord-row">
+                            <span class="coord-label">PGM</span>
+                            <span id="coord-pgm" class="coord-value">-</span>
+                        </div>
                         <div class="coord-row">
                             <span class="coord-label">Chip(Abs)</span>
                             <span id="coord-chip-abs" class="coord-value">-</span>
