@@ -22464,7 +22464,7 @@ class WaferMapViewer {
                     const targetItem = updatedContent.querySelector(`.lot-list-item[data-lot-name="${lotName}"]`);
                     if (targetItem) {
                         targetItem.classList.add('active');
-                        targetItem.scrollIntoView({ block: 'nearest' });
+                        targetItem.scrollIntoView({ block: 'nearest', behavior: 'auto' });
                     }
                 }
             };
@@ -22536,7 +22536,7 @@ class WaferMapViewer {
                     const targetItem = updatedContent.querySelector(`.lot-list-item[data-lot-name="${lotName}"]`);
                     if (targetItem) {
                         targetItem.classList.add('active');
-                        targetItem.scrollIntoView({ block: 'nearest' });
+                        targetItem.scrollIntoView({ block: 'nearest', behavior: 'auto' });
                     }
                 }
             };
@@ -22562,7 +22562,7 @@ class WaferMapViewer {
         const target = items[currentIndex];
         if (target) {
             target.classList.add('active');
-            target.scrollIntoView({ block: 'nearest' });
+            target.scrollIntoView({ block: 'nearest', behavior: 'auto' });
             const lotName = target.dataset.lotName;
             if (lotName) {
                 this.scrollToLot(lotName);
@@ -22615,8 +22615,8 @@ class WaferMapViewer {
         content.querySelectorAll('.lot-list-item').forEach(item => {
             if (item.dataset.lotName === visibleLot) {
                 item.classList.add('active');
-                // 모달 스크롤도 해당 항목으로 이동 (부드럽게)
-                item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                // 🔥 모달 스크롤도 해당 항목으로 이동 (즉시)
+                item.scrollIntoView({ block: 'nearest', behavior: 'auto' });
             } else {
                 item.classList.remove('active');
             }
@@ -22627,13 +22627,13 @@ class WaferMapViewer {
      * 🔥 그리드 스크롤 변경 시 LOT 리스트 모달 업데이트 (디바운스 포함)
      */
     handleLotScrollChange() {
-        // 디바운스: 스크롤이 멈춘 후 100ms 후에 실행
+        // 디바운스: 스크롤이 멈춘 후 50ms 후에 실행 (빠른 반응)
         if (this._lotScrollTimeout) {
             clearTimeout(this._lotScrollTimeout);
         }
         this._lotScrollTimeout = setTimeout(() => {
             this.updateActiveLotInModal();
-        }, 100);
+        }, 50);
     }
 
     /**
@@ -22669,7 +22669,7 @@ class WaferMapViewer {
                 const targetItem = content.querySelector(`.lot-list-item[data-lot-name="${matchedLot.lotName}"]`);
                 if (targetItem) {
                     targetItem.classList.add('active');
-                    targetItem.scrollIntoView({ block: 'nearest' });
+                    targetItem.scrollIntoView({ block: 'nearest', behavior: 'auto' });
                 }
             }
         }
@@ -22699,8 +22699,8 @@ class WaferMapViewer {
                     item.classList.remove('active');
                     if (item.dataset.lotName === matchedLot.lotName) {
                         item.classList.add('active');
-                        // 목록에서도 해당 항목이 보이도록 스크롤
-                        item.scrollIntoView({ block: 'nearest' });
+                        // 목록에서도 해당 항목이 보이도록 스크롤 (빠르게)
+                        item.scrollIntoView({ block: 'nearest', behavior: 'auto' });
                     }
                 });
             }
@@ -22734,9 +22734,10 @@ class WaferMapViewer {
         const wrapperRect = scrollWrapper.getBoundingClientRect();
         const scrollOffset = headerRect.top - wrapperRect.top + scrollWrapper.scrollTop - 10;
 
+        // 🔥 빠른 스크롤을 위해 behavior를 'auto'로 변경 (즉시 이동)
         scrollWrapper.scrollTo({
             top: scrollOffset,
-            behavior: 'smooth'
+            behavior: 'auto'
         });
 
         // 하이라이트 효과
