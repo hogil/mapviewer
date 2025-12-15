@@ -1483,18 +1483,22 @@ export class ThumbnailNavigator {
      */
 
     saveToSession() {
+        try {
+            const state = {
 
-        const state = {
+                position: this.position,
 
-            position: this.position,
+                // size는 저장하지 않음 - 항상 기본값(30%) 사용
 
-            // size는 저장하지 않음 - 항상 기본값(30%) 사용
+                layout: this.layout
 
-            layout: this.layout
+            };
 
-        };
-
-        sessionStorage.setItem('thumbnailNavigator', JSON.stringify(state));
+            sessionStorage.setItem('thumbnailNavigator', JSON.stringify(state));
+        } catch (error) {
+            // localStorage/sessionStorage 접근 불가 시 무시 (프라이버시 모드 등)
+            console.warn('[ThumbnailNavigator] sessionStorage 접근 실패:', error);
+        }
 
     }
 

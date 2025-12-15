@@ -1328,8 +1328,13 @@ class WaferMapViewer {
         if (!this.refMapWindow) {
             return;
         }
-        const refMapPath = this.normalizeImagePath(localStorage.getItem('refMapPath'));
-        this.updateRefMapPanel(refMapPath);
+        try {
+            const refMapPath = this.normalizeImagePath(localStorage.getItem('refMapPath'));
+            this.updateRefMapPanel(refMapPath);
+        } catch (error) {
+            console.warn('[RefMap] localStorage 접근 실패:', error);
+            this.updateRefMapPanel(null);
+        }
         this.refMapWindow.style.display = 'flex';
         this.refMapWindow.classList.add('is-open');
         this.ensureRefMapWindowBounds();
@@ -21801,6 +21806,9 @@ class WaferMapViewer {
         grid.innerHTML = '';
         this.gridThumbWraps = [];
 
+        // 🔥 Lazy loader 설정 (IntersectionObserver 초기화)
+        this.setupGridLazyLoader();
+
         // 현재 컬럼 수 가져오기
         const gridCols = this.gridCols || 3;
 
@@ -21856,10 +21864,21 @@ class WaferMapViewer {
         this.viewMode = null;
         this.updateArrowButtonVisibility?.();
 
-        // 썸네일 로드
-        requestAnimationFrame(() => {
+        // 🔥 IntersectionObserver로 모든 썸네일 이미지 관찰 시작
+        if (this.gridIntersectionObserver) {
+            const allGridImages = grid.querySelectorAll('.grid-thumb-img');
+            allGridImages.forEach(img => {
+                if (img.dataset?.src && img.dataset.gridLoaded !== 'true') {
+                    this.gridIntersectionObserver.observe(img);
+                }
+            });
+        }
+
+        // 🔥 썸네일 로드 (레이아웃 완료 후 실행하도록 setTimeout으로 변경)
+        setTimeout(() => {
             this.loadVisibleGridThumbnails();
-        });
+        }, 50);  // 🔥 50ms 후 실행하여 CSS 그리드 레이아웃 완료 보장
+
         setTimeout(() => {
             this.loadCurrentFolderThumbnails?.(sortedImages);  // 🔥 정렬된 순서로 전달
         }, 100);
