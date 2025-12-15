@@ -15994,9 +15994,13 @@ class WaferMapViewer {
         let scrollTopToRestore = null;
 
         if (skipSaveState) {
-            // 🔥 skipSaveState=true: 복원만 수행 (savedViewState에서 스크롤 위치 읽기)
-            if (this.savedViewState && this.savedViewState.scrollTop !== undefined) {
+            // 🔥 skipSaveState=true: 복원만 수행 (gridViewSaveState 우선, 없으면 savedViewState에서 스크롤 위치 읽기)
+            if (this.gridViewSaveState && this.gridViewSaveState.scrollTop !== undefined) {
+                scrollTopToRestore = this.gridViewSaveState.scrollTop;
+                console.log(`🔄 [SHOW_GRID] gridViewSaveState에서 스크롤 위치 복원: ${scrollTopToRestore}px`);
+            } else if (this.savedViewState && this.savedViewState.scrollTop !== undefined) {
                 scrollTopToRestore = this.savedViewState.scrollTop;
+                console.log(`🔄 [SHOW_GRID] savedViewState에서 스크롤 위치 복원: ${scrollTopToRestore}px`);
             }
         } else {
             // 🔥 skipSaveState=false: Wafer Map Explorer - 현재 스크롤 위치 저장
@@ -16289,6 +16293,11 @@ class WaferMapViewer {
         };
 
         const onLoad = () => {
+            // 🔥 placeholder 이미지 로드는 성공으로 간주하지 않음 (취소된 이미지 재로드 가능하도록)
+            if (img.src === GRID_THUMB_PLACEHOLDER || !img.dataset.src) {
+                finalize(false);
+                return;
+            }
             finalize(true);
         };
 
@@ -16331,7 +16340,12 @@ class WaferMapViewer {
 
         // 🔥 이미지가 이미 로드된 경우 (캐시된 경우) 즉시 완료 처리
         if (img.complete && img.naturalWidth > 0) {
-            finalize(true);
+            // 🔥 placeholder 이미지는 성공으로 간주하지 않음
+            if (img.src === GRID_THUMB_PLACEHOLDER || !img.dataset.src) {
+                finalize(false);
+            } else {
+                finalize(true);
+            }
         }
     }
 
@@ -16726,7 +16740,7 @@ class WaferMapViewer {
             this.gridScrollRAF = null;
         }
 
-        // 🔥 스크롤이 멈추면 즉시 현재 뷰포트 이미지 로드 (10ms 디바운스로 빠른 반응)
+        // 🔥 스크롤이 멈추면 즉시 현재 뷰포트 이미지 로드 (0ms = 즉시 실행, requestAnimationFrame으로 최적화)
         this.gridScrollDebounceTimer = setTimeout(() => {
             this.isGridScrolling = false;
 
@@ -16736,7 +16750,7 @@ class WaferMapViewer {
                 this.loadVisibleGridThumbnails();
                 this.gridScrollRAF = null;
             });
-        }, 10);
+        }, 0);
     }
 
     /**
@@ -18820,15 +18834,6 @@ class WaferMapViewer {
 
             console.log('🔍 [RESTORE] 선택 복원:', this.gridSelectedIdxs.length, '개 이미지');
 
-            // ✅ 그리드 복귀
-            this.showGrid(imagesToShow, true);
-            
-            // ✅ Wafer Map Explorer 선택 표시 복원 (모든 파일/폴더 선택 강조)
-            setTimeout(() => {
-                this.restoreFolderSelection();
-                this.updateFileExplorerSelection({ highlightOnly: true, skipEnsurePage: true });
-            }, 80);
-            
             // ✅ Composite Mode 상태 복원
             const saveState = savedGridViewSaveState || this.savedViewState;
             if (saveState && saveState.isCompositeMode) {
@@ -18838,23 +18843,65 @@ class WaferMapViewer {
                 this.updateContextMenuState();
             }
             
-            // ✅ 현재 이미지가 화면 중앙에 오도록 스크롤 조정
-            setTimeout(() => {
-                const grid = document.getElementById('image-grid');
-                if (grid && savedGridViewImageIndex >= 0) {
-                    const wraps = grid.querySelectorAll('.grid-thumb-wrap');
-                    if (savedGridViewImageIndex < wraps.length) {
-                        const targetWrap = wraps[savedGridViewImageIndex];
-                        // 화면 중앙에 보이도록 스크롤
-                        targetWrap.scrollIntoView({ 
-                            behavior: 'smooth', 
-                            block: 'center',
-                            inline: 'center'
-                        });
-                        console.log('✅ [EXIT] 그리드 스크롤: 이미지', savedGridViewImageIndex, '를 화면 중앙에 표시');
-                    }
+            // ✅ 스크롤 위치를 savedViewState에 설정 (showGrid에서 복원되도록)
+            const scrollTopToRestore = saveState?.scrollTop;
+            if (scrollTopToRestore !== undefined) {
+                console.log(`🔄 [EXIT] 스크롤 위치를 savedViewState에 설정: ${scrollTopToRestore}px`);
+                // savedViewState가 없으면 생성
+                if (!this.savedViewState) {
+                    this.savedViewState = {
+                        type: 'grid',
+                        images: imagesToShow,
+                        scrollTop: scrollTopToRestore
+                    };
+                } else {
+                    // savedViewState에 스크롤 위치 설정
+                    this.savedViewState.scrollTop = scrollTopToRestore;
                 }
-            }, 50);
+            }
+
+            // ✅ 그리드 복귀 (skipSaveState=true로 호출하면 savedViewState에서 스크롤 복원)
+            this.showGrid(imagesToShow, true);
+            
+            // ✅ Wafer Map Explorer 선택 표시 복원 (모든 파일/폴더 선택 강조)
+            setTimeout(() => {
+                this.restoreFolderSelection();
+                this.updateFileExplorerSelection({ highlightOnly: true, skipEnsurePage: true });
+            }, 80);
+            
+            // ✅ 스크롤 위치 복원 (showGrid 후에도 확실하게 복원)
+            if (scrollTopToRestore !== undefined) {
+                console.log(`🔄 [EXIT] 스크롤 위치 추가 복원 시도: ${scrollTopToRestore}px`);
+
+                // 그리드 렌더링 완료 후 스크롤 위치 복원 (여러 번 시도)
+                const restoreScroll = () => {
+                    const grid = document.getElementById('image-grid');
+                    const scrollWrapper = grid?.parentElement;
+                    if (scrollWrapper) {
+                        scrollWrapper.scrollTop = scrollTopToRestore;
+                        console.log(`✅ [EXIT] 스크롤 위치 복원 완료: ${scrollTopToRestore}px`);
+                        return true;
+                    }
+                    return false;
+                };
+
+                // 여러 번 시도 (DOM 렌더링 대기)
+                requestAnimationFrame(() => {
+                    if (!restoreScroll()) {
+                        setTimeout(() => {
+                            if (!restoreScroll()) {
+                                setTimeout(() => {
+                                    if (!restoreScroll()) {
+                                        setTimeout(restoreScroll, 500);
+                                    }
+                                }, 300);
+                            }
+                        }, 150);
+                    }
+                });
+            } else {
+                console.warn('⚠️ [EXIT] 저장된 스크롤 위치가 없습니다. saveState:', saveState);
+            }
         } else if (savedViewMode === 'single') {
             // ✅ 파일 탐색기로 복귀
             console.log('🔄 [EXIT] 파일 탐색기로 복귀');
