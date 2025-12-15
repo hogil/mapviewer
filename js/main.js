@@ -16178,10 +16178,18 @@ class WaferMapViewer {
             entries.forEach(entry => {
                 if (!entry.isIntersecting) return;
                 const img = entry.target;
-                if (this.gridIntersectionObserver) {
-                    this.gridIntersectionObserver.unobserve(img);
+                
+                // 이미 로드되었으면 unobserve
+                if (img.dataset?.gridLoaded === 'true') {
+                    if (this.gridIntersectionObserver) {
+                        this.gridIntersectionObserver.unobserve(img);
+                    }
+                    return;
                 }
+                
+                // 🔥 스크롤 중이어도 큐에 추가 (pause 중이어도 pending에 추가됨)
                 this.enqueueGridThumbnail(img);
+                // 🔥 로드 완료 후 unobserve는 startGridThumbnailLoad의 finalize에서 처리
             });
         }, {
             root: scrollWrapper || null,
@@ -16202,7 +16210,7 @@ class WaferMapViewer {
         this.gridLoadingPaused = false;
     }
 
-    enqueueGridThumbnail(img) {
+    enqueueGridThumbnail(img, forceLoad = false) {
         if (!img || !img.dataset?.src || img.dataset.gridLoaded === 'true') {
             return;
         }
@@ -16213,7 +16221,8 @@ class WaferMapViewer {
             return;
         }
 
-        if (this.gridLoadingPaused) {
+        // 🔥 forceLoad가 true이면 pause 중이어도 즉시 로드 (뷰포트에 보이는 이미지)
+        if (this.gridLoadingPaused && !forceLoad) {
             this.gridPendingIntersecting.add(img);
             return;
         }
@@ -16250,6 +16259,10 @@ class WaferMapViewer {
             if (this.gridLoadInFlight > 0) {
                 this.gridLoadInFlight--;
             }
+            // 🔥 로드 완료 후 unobserve (성공/실패 모두)
+            if (this.gridIntersectionObserver && img.dataset.gridLoaded === 'true') {
+                this.gridIntersectionObserver.unobserve(img);
+            }
             this.drainGridLoadQueue();
         };
 
@@ -16271,8 +16284,9 @@ class WaferMapViewer {
         }
     }
 
-    drainGridLoadQueue() {
-        if (this.gridLoadingPaused) return;
+    drainGridLoadQueue(force = false) {
+        // 🔥 force가 true이면 pause 중이어도 처리 (뷰포트에 보이는 이미지)
+        if (this.gridLoadingPaused && !force) return;
 
         if (this.gridPendingIntersecting.size > 0) {
             this.gridPendingIntersecting.forEach((img) => {
@@ -16610,23 +16624,30 @@ class WaferMapViewer {
     }
 
     /**
-     * 🔥 그리드 스크롤 핸들러 (스크롤 중 로딩 일시 정지 후 재개)
+     * 🔥 그리드 스크롤 핸들러 (스크롤 중에는 로드 취소, 멈췄을 때만 로드)
      */
     handleGridScroll() {
+        // 🔥 스크롤 중에는 모든 이미지 로드 취소
         this.pauseGridLoadingForScroll();
         this.cancelGridImageRequests(true, true);
         this.gridLoadingBatch = null;
 
         this.isGridScrolling = true;
 
+        // 🔥 기존 타이머 취소
         if (this.gridScrollDebounceTimer) {
             clearTimeout(this.gridScrollDebounceTimer);
         }
+        if (this.gridScrollRAF) {
+            cancelAnimationFrame(this.gridScrollRAF);
+            this.gridScrollRAF = null;
+        }
 
-        // 스크롤이 멈춘 뒤 여유를 두고 다시 로딩
+        // 🔥 스크롤이 멈춘 뒤 여유를 두고 다시 로딩 재개
         this.gridScrollDebounceTimer = setTimeout(() => {
             this.isGridScrolling = false;
             this.resumeGridLoading();
+            // 🔥 스크롤이 멈춘 후 현재 화면에 보이는 이미지들 로드
             this.loadVisibleGridThumbnails();
         }, 60);
     }
@@ -16644,13 +16665,26 @@ class WaferMapViewer {
         const thumbWraps = grid.querySelectorAll('.grid-thumb-wrap');
         const scrollRect = scrollWrapper.getBoundingClientRect();
 
-        const visibleTop = scrollRect.top - 200;
-        const visibleBottom = scrollRect.bottom + 200;
+        // 🔥 뷰포트 크기 계산
+        const viewportWidth = scrollRect.width;
+        const viewportHeight = scrollRect.height;
+        
+        // 🔥 뷰 대비 뒤로 20%, 아래로 20% 더 로드
+        const rightPadding = viewportWidth * 0.2;  // 뒤로 20%
+        const bottomPadding = viewportHeight * 0.2; // 아래로 20%
+        
+        const visibleTop = scrollRect.top;
+        const visibleBottom = scrollRect.bottom + bottomPadding;
+        const visibleLeft = scrollRect.left;
+        const visibleRight = scrollRect.right + rightPadding;
+
+        let loadedCount = 0;
+        const maxLoadPerFrame = 20; // 한 프레임에 최대 20개만 로드 (성능 최적화)
 
         for (const wrap of thumbWraps) {
             const wrapRect = wrap.getBoundingClientRect();
 
-            // 🔥 뷰포트 하단을 벗어나면 중단
+            // 🔥 뷰포트 하단을 벗어나면 중단 (정렬된 순서 가정)
             if (wrapRect.top > visibleBottom) {
                 break;
             }
@@ -16658,14 +16692,28 @@ class WaferMapViewer {
             if (wrapRect.bottom < visibleTop) {
                 continue;
             }
+            // 🔥 좌우 범위 확인
+            if (wrapRect.right < visibleLeft || wrapRect.left > visibleRight) {
+                continue;
+            }
 
             const img = wrap.querySelector('.grid-thumb-img');
-            if (img && img.dataset?.src && img.dataset.gridLoaded !== 'true') {
+            if (img && img.dataset?.src && img.dataset.gridLoaded !== 'true' && img.dataset.loading !== 'true') {
+                // 🔥 스크롤이 멈춘 후이므로 정상적으로 로드
                 this.enqueueGridThumbnail(img);
+                loadedCount++;
+                
+                // 🔥 한 프레임에 너무 많이 로드하지 않도록 제한
+                if (loadedCount >= maxLoadPerFrame) {
+                    break;
+                }
             }
         }
 
-        this.drainGridLoadQueue();
+        // 🔥 큐 처리
+        if (loadedCount > 0) {
+            this.drainGridLoadQueue();
+        }
     }
 
     hideGrid(hideControls = true) {

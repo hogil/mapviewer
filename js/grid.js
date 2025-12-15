@@ -39,6 +39,8 @@ export class GridManager {
         this.concurrentLoads = 0;
         this.maxConcurrentLoads = 16; // 🔥 8 → 16으로 증가 (성능 개선)
         this.loadQueue = [];
+        // 🔥 스크롤 중에 발견된 아이템들을 저장하는 큐
+        this.scrollPendingItems = new Set();
     }
     
     /**
@@ -273,11 +275,34 @@ export class GridManager {
     handleIntersection(entries) {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
-                // 🔥 스크롤 중일 때는 로드하지 않음 (요청 쌓이는 것 방지)
-                if (!this.isScrolling) {
-                    this.loadThumbnail(entry.target);
+                const gridItem = entry.target;
+                const src = gridItem.dataset.src;
+                const index = parseInt(gridItem.dataset.index);
+                
+                // 이미 로드되었거나 로딩 중이면 건너뛰기
+                if (!src || this.loadingThumbnails.has(index)) {
+                    // 로드 완료된 경우에만 unobserve
+                    if (!src) {
+                        this.observer.unobserve(gridItem);
+                    }
+                    return;
                 }
-                this.observer.unobserve(entry.target);
+                
+                // 🔥 스크롤 중이어도 로드하되, 스크롤 중에는 큐에 추가
+                if (this.isScrolling) {
+                    // 스크롤 중에는 pending 큐에 추가 (스크롤이 멈춘 후 로드)
+                    this.scrollPendingItems.add(gridItem);
+                    // unobserve하지 않음 (스크롤이 멈춘 후 다시 확인)
+                } else {
+                    // 스크롤 중이 아니면 즉시 로드
+                    this.loadThumbnail(gridItem).then(() => {
+                        // 로드 완료 후 unobserve
+                        this.observer.unobserve(gridItem);
+                    }).catch(() => {
+                        // 에러 발생 시에도 unobserve (재시도 방지)
+                        this.observer.unobserve(gridItem);
+                    });
+                }
             }
         });
     }
@@ -285,12 +310,15 @@ export class GridManager {
     /**
      * 썸네일 로드
      * @param {HTMLElement} gridItem 그리드 아이템
+     * @returns {Promise<void>} 로드 완료 Promise
      */
     async loadThumbnail(gridItem) {
         const src = gridItem.dataset.src;
         const index = parseInt(gridItem.dataset.index);
 
-        if (!src || this.loadingThumbnails.has(index)) return;
+        if (!src || this.loadingThumbnails.has(index)) {
+            return Promise.resolve();
+        }
 
         // 🔥 동시 로딩 수 제한 (서버 부하 및 gzip 오류 방지)
         if (this.concurrentLoads >= this.maxConcurrentLoads) {
@@ -313,7 +341,9 @@ export class GridManager {
 
         try {
             const img = gridItem.querySelector('.grid-thumbnail');
-            if (!img) return;
+            if (!img) {
+                return Promise.resolve();
+            }
 
             // 🔥 fetch로 이미지 로드 (AbortController 사용)
             const response = await fetch(src, {
@@ -337,7 +367,7 @@ export class GridManager {
         } catch (error) {
             // 🔥 취소된 요청은 무시
             if (error.name === 'AbortError') {
-                return;
+                return Promise.resolve();
             }
 
             console.error('썸네일 로드 오류:', error);
@@ -541,6 +571,23 @@ export class GridManager {
         // 100ms 후 실행
         this.scrollDebounceTimer = setTimeout(() => {
             this.isScrolling = false;
+            // 🔥 스크롤이 멈춘 후 pending 아이템들 로드
+            if (this.scrollPendingItems.size > 0) {
+                const pendingItems = Array.from(this.scrollPendingItems);
+                this.scrollPendingItems.clear();
+                pendingItems.forEach(gridItem => {
+                    if (gridItem.dataset.src && !this.loadingThumbnails.has(parseInt(gridItem.dataset.index))) {
+                        this.loadThumbnail(gridItem).then(() => {
+                            this.observer.unobserve(gridItem);
+                        }).catch(() => {
+                            this.observer.unobserve(gridItem);
+                        });
+                    } else if (!gridItem.dataset.src) {
+                        // 이미 로드된 경우 unobserve
+                        this.observer.unobserve(gridItem);
+                    }
+                });
+            }
             // 🔥 스크롤이 멈춘 후 현재 뷰포트의 이미지만 즉시 로드
             this.loadVisibleImages();
         }, 100);
@@ -566,15 +613,23 @@ export class GridManager {
         const gridItems = this.container.querySelectorAll('.grid-item[data-src]');
         const containerRect = this.container.getBoundingClientRect();
 
+        // 🔥 뷰포트 크기 계산
+        const viewportWidth = containerRect.width;
+        const viewportHeight = containerRect.height;
+        
+        // 🔥 뷰 대비 뒤로 20%, 아래로 20% 더 로드
+        const rightPadding = viewportWidth * 0.2;  // 뒤로 20%
+        const bottomPadding = viewportHeight * 0.2; // 아래로 20%
+
         gridItems.forEach((gridItem) => {
             const itemRect = gridItem.getBoundingClientRect();
 
-            // 뷰포트 내에 있는지 확인 (여유 공간 200px 추가)
+            // 🔥 뷰포트 내에 있는지 확인 (뒤로 20%, 아래로 20% 추가)
             const isVisible = (
-                itemRect.top < containerRect.bottom + 200 &&
-                itemRect.bottom > containerRect.top - 200 &&
-                itemRect.left < containerRect.right + 200 &&
-                itemRect.right > containerRect.left - 200
+                itemRect.top < containerRect.bottom + bottomPadding &&
+                itemRect.bottom > containerRect.top &&
+                itemRect.left < containerRect.right + rightPadding &&
+                itemRect.right > containerRect.left
             );
 
             if (isVisible) {
