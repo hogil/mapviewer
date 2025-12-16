@@ -497,24 +497,204 @@ export class ContextMenuManager {
     }
     
     /**
-     * 현재 화면 배율로 이미지 복사
+     * 이미지만 복사 (개인색 설정 적용, 현재 화면에 보이는 부분만)
      */
     async copyImageToClipboard() {
-        // ... (생략 - 필요하면 기존 코드 복사)
-        alert('이 기능은 현재 컨텍스트 메뉴에서 지원되지 않습니다.');
-    }
-    
-    /**
-     * 캔버스 복사
-     */
-    async copyCanvasToClipboard() {
-        // ... (생략 - 필요하면 기존 코드 복사)
-        alert('이 기능은 현재 컨텍스트 메뉴에서 지원되지 않습니다.');
+        try {
+            const imageCanvas = this.viewer.dom?.imageCanvas;
+            const transform = this.viewer.transform;
+            const imgWidth = this.viewer.originalWidth;
+            const imgHeight = this.viewer.originalHeight;
+
+            if (!imageCanvas || !transform || !imgWidth || !imgHeight) {
+                alert('복사할 이미지가 없습니다.');
+                return;
+            }
+
+            const scale = Number(transform.scale) || 1;
+            const offsetX = Number(transform.dx) || 0;
+            const offsetY = Number(transform.dy) || 0;
+
+            const renderedWidth = imgWidth * scale;
+            const renderedHeight = imgHeight * scale;
+            const viewWidth = imageCanvas.width || imageCanvas.getBoundingClientRect().width;
+            const viewHeight = imageCanvas.height || imageCanvas.getBoundingClientRect().height;
+
+            // 화면에 실제로 표시된 이미지 영역만 잘라내기
+            const visibleLeft = Math.max(0, Math.floor(offsetX));
+            const visibleTop = Math.max(0, Math.floor(offsetY));
+            const visibleRight = Math.min(viewWidth, Math.ceil(offsetX + renderedWidth));
+            const visibleBottom = Math.min(viewHeight, Math.ceil(offsetY + renderedHeight));
+
+            const sourceWidth = Math.max(0, visibleRight - visibleLeft);
+            const sourceHeight = Math.max(0, visibleBottom - visibleTop);
+
+            if (sourceWidth < 1 || sourceHeight < 1) {
+                alert('화면에 보이는 이미지 영역이 없습니다.');
+                return;
+            }
+
+            const outputWidth = Math.max(1, Math.round(sourceWidth));
+            const outputHeight = Math.max(1, Math.round(sourceHeight));
+
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = outputWidth;
+            tempCanvas.height = outputHeight;
+            const tempCtx = tempCanvas.getContext('2d');
+            if (!tempCtx) {
+                throw new Error('캔버스를 준비할 수 없습니다.');
+            }
+
+            tempCtx.imageSmoothingEnabled = false;
+            tempCtx.drawImage(
+                imageCanvas,
+                visibleLeft, visibleTop, sourceWidth, sourceHeight,
+                0, 0, outputWidth, outputHeight
+            );
+
+            const blob = await new Promise((resolve, reject) => {
+                tempCanvas.toBlob(
+                    (blob) => {
+                        if (blob) {
+                            resolve(blob);
+                        } else {
+                            reject(new Error('Canvas Blob 변환 실패'));
+                        }
+                    },
+                    'image/png',
+                    1.0
+                );
+            });
+
+            await navigator.clipboard.write([
+                new ClipboardItem({ 'image/png': blob })
+            ]);
+
+            alert('이미지가 클립보드에 복사되었습니다. (이미지 영역만)');
+        } catch (error) {
+            console.error('이미지 복사 실패:', error);
+            alert('이미지 복사에 실패했습니다: ' + error.message);
+        }
     }
 
+
+    /**
+     * 전체 캔버스를 클립보드에 복사 (모든 UI 패널 포함 - html2canvas 사용)
+     */
+    async copyCanvasToClipboard() {
+        try {
+            const viewerContainer = this.viewer.dom?.viewerContainer;
+            if (!viewerContainer) {
+                alert('복사할 영역이 없습니다.');
+                return;
+            }
+
+            // html2canvas 로드
+            const html2canvas = await this.ensureHtml2Canvas();
+            if (!html2canvas) {
+                // html2canvas 없으면 기본 캔버스만 복사
+                await this.copyCanvasOnly();
+                return;
+            }
+
+            // 🔥 html2canvas로 화면 캡처
+            const canvas = await html2canvas(viewerContainer, {
+                backgroundColor: '#1a1a1a',
+                scale: 2,  // 고해상도
+                logging: false,
+                useCORS: true,
+                allowTaint: true
+            });
+
+            // Canvas를 Blob으로 변환
+            const blob = await new Promise((resolve, reject) => {
+                canvas.toBlob(
+                    (blob) => {
+                        if (blob) {
+                            resolve(blob);
+                        } else {
+                            reject(new Error('Canvas Blob 변환 실패'));
+                        }
+                    },
+                    'image/png',
+                    1.0
+                );
+            });
+
+            // 클립보드에 복사
+            await navigator.clipboard.write([
+                new ClipboardItem({ 'image/png': blob })
+            ]);
+
+            alert('전체 화면이 클립보드에 복사되었습니다. (UI 포함)');
+        } catch (error) {
+            console.error('캔버스 복사 실패:', error);
+            alert('캔버스 복사에 실패했습니다. 기본 캔버스만 복사합니다.');
+            // 실패 시 캔버스만 복사
+            await this.copyCanvasOnly();
+        }
+    }
+
+    /**
+     * 캔버스만 복사 (fallback)
+     */
+    async copyCanvasOnly() {
+        const imageCanvas = this.viewer.dom?.imageCanvas;
+        if (!imageCanvas) {
+            alert('복사할 캔버스가 없습니다.');
+            return;
+        }
+
+        const blob = await new Promise((resolve, reject) => {
+            imageCanvas.toBlob(
+                (blob) => {
+                    if (blob) {
+                        resolve(blob);
+                    } else {
+                        reject(new Error('Canvas Blob 변환 실패'));
+                    }
+                },
+                'image/png',
+                1.0
+            );
+        });
+
+        await navigator.clipboard.write([
+            new ClipboardItem({ 'image/png': blob })
+        ]);
+
+        alert('캔버스가 클립보드에 복사되었습니다.');
+    }
+
+    /**
+     * html2canvas 라이브러리 동적 로드
+     */
     async ensureHtml2Canvas() {
-        // ... (생략)
-        return null;
+        if (this.html2canvasPromise) {
+            return this.html2canvasPromise;
+        }
+
+        this.html2canvasPromise = new Promise((resolve) => {
+            // 이미 로드되어 있는지 확인
+            if (window.html2canvas) {
+                resolve(window.html2canvas);
+                return;
+            }
+
+            // CDN에서 로드
+            const script = document.createElement('script');
+            script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+            script.onload = () => {
+                resolve(window.html2canvas);
+            };
+            script.onerror = () => {
+                console.error('html2canvas 로드 실패');
+                resolve(null);
+            };
+            document.head.appendChild(script);
+        });
+
+        return this.html2canvasPromise;
     }
     
     /**

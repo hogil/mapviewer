@@ -85,6 +85,9 @@ export class PageManager {
     }
 
     buildTitle(role) {
+        // 🔥 role에서 숫자 제거 (예: "composite1" → "composite")
+        const baseRole = (role || 'blank').replace(/\d+$/, '');
+
         const prefix = {
             wafer: 'wafer',
             label: 'label',
@@ -92,7 +95,7 @@ export class PageManager {
             composite: 'com',
             blank: 'page',
         };
-        const key = prefix[role] ? role : 'blank';
+        const key = prefix[baseRole] ? baseRole : 'blank';
         const idx = this.counters[key] ?? 0;
         this.counters[key] = idx + 1;
         return `${prefix[key]}${idx}`;

@@ -291,7 +291,8 @@ export class MyLotModal {
 
     ensureMyLotPage() {
         if (this.viewer?.ensurePageForRole) {
-            this.viewer.ensurePageForRole('mylot');
+            const forceNew = this.viewer.activePageRole !== 'mylot';
+            this.viewer.ensurePageForRole('mylot', { forceNew, skipPersist: true });
         }
     }
 
@@ -4534,4 +4535,3 @@ export class MyLotModal {
         }
     }
 }
-

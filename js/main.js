@@ -1497,6 +1497,7 @@ class WaferMapViewer {
             gridMode: this.gridMode,
             viewMode: this.viewMode,
             singleImageFromGrid: this.singleImageFromGrid,
+            lotMode: this.lotMode,
             selectedImages: this.selectedImages ? [...this.selectedImages] : [],
             selectedImagePath: this.selectedImagePath || null,
             currentGridImages: this.currentGridImages ? [...this.currentGridImages] : [],
@@ -1959,6 +1960,13 @@ class WaferMapViewer {
         this.gridMode = !!state.gridMode && !!this.savedViewState && this.savedViewState.type === 'grid';
         this.viewMode = state.viewMode || null;
         this.singleImageFromGrid = state.singleImageFromGrid || false;
+        if (typeof state.lotMode === 'boolean') {
+            this.lotMode = state.lotMode;
+            const lotModeBtn = document.getElementById('lot-mode-btn');
+            if (lotModeBtn) {
+                lotModeBtn.classList.toggle('active', this.lotMode);
+            }
+        }
         this.selectedImages = state.selectedImages ? [...state.selectedImages] : [];
         this.selectedImagePath = state.selectedImagePath || null;
         this.currentGridImages = state.currentGridImages ? [...state.currentGridImages] : [];
@@ -7731,7 +7739,10 @@ class WaferMapViewer {
             const res = await fetch('/api/composite-map', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image_paths: selected }),
+                body: JSON.stringify({
+                    image_paths: selected,
+                    lot_mode: this.lotMode  // 🔥 LOT Mode 파라미터 추가
+                }),
                 cache: 'no-store'  // 캐시 사용 안 함
             });
 
@@ -10944,7 +10955,27 @@ class WaferMapViewer {
         console.log(`[LOAD_IMAGE] FIT_RELATIVE_MARGIN: ${FIT_RELATIVE_MARGIN}, resetView 호출 전 scale: ${this.transform.scale?.toFixed(4) || 'N/A'}`);
         this.resetView(false);
         console.log(`[LOAD_IMAGE] resetView 호출 후 transform.scale: ${this.transform.scale.toFixed(4)}`);
+        const initialFitSnapshot = {
+            path: fullPath,
+            scale: this.transform.scale,
+            dx: this.transform.dx,
+            dy: this.transform.dy,
+            width: containerRect.width,
+            height: containerRect.height
+        };
         this.scheduleViewportRefit();
+        requestAnimationFrame(() => {
+            const rect = this.dom.viewerContainer?.getBoundingClientRect();
+            if (!rect || this.currentImagePath !== initialFitSnapshot.path) return;
+            const sizeChanged = Math.abs(rect.width - initialFitSnapshot.width) > 0.5 ||
+                                Math.abs(rect.height - initialFitSnapshot.height) > 0.5;
+            const transformUnchanged = Math.abs(this.transform.scale - initialFitSnapshot.scale) < 0.0001 &&
+                                       Math.abs(this.transform.dx - initialFitSnapshot.dx) < 1 &&
+                                       Math.abs(this.transform.dy - initialFitSnapshot.dy) < 1;
+            if (sizeChanged && transformUnchanged) {
+                this.resetViewWithAbsoluteOffset();
+            }
+        });
 
         // 🔄 초기 로드 직후에도 현재 줌과 피라미드 레벨이 일치하도록 약간의 지연 후 강제 동기화
         setTimeout(() => {
@@ -18734,10 +18765,15 @@ class WaferMapViewer {
 
             if (!targetPage) {
                 // 🔥 현재 페이지 바로 옆에 새 페이지 삽입
-                const targetRole = originPage?.role === 'mylot' ? 'mylot' 
-                    : originPage?.role === 'composite' ? 'composite'
+                const originRole = originPage?.role || this.activePageRole || 'wafer';
+                // 🔥 기본 role 추출 (숫자 제거)
+                const baseRole = originRole.replace(/\d+$/, '');
+                // 🔥 상세 페이지는 동일한 base role 사용 (PageManager가 자동으로 번호 증가)
+                const targetRole = baseRole === 'mylot' ? 'mylot'
+                    : baseRole === 'composite' ? 'composite'
+                    : baseRole === 'label' ? 'label'
                     : 'wafer';
-                
+
                 // 현재 페이지 다음에 삽입하기 위해 createPage 직접 호출
                 const newPage = this.pageManager.createPage(targetRole, null, {
                     activate: true,
@@ -18827,6 +18863,7 @@ class WaferMapViewer {
             compositeSession: this.isCompositeMode ? this.cloneCompositeSession() : null,
             selectedFolders: this.selectedFolders ? Array.from(this.selectedFolders) : [],
             lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || null,
+            lotMode: this.lotMode,
         };
 
         const currentList = this.selectedImages || currentImages;
@@ -18985,6 +19022,13 @@ class WaferMapViewer {
 
             // ✅ Composite Mode 상태 복원
             const saveState = savedGridViewSaveState || this.savedViewState;
+            if (typeof saveState?.lotMode === 'boolean') {
+                this.lotMode = saveState.lotMode;
+                const lotModeBtn = document.getElementById('lot-mode-btn');
+                if (lotModeBtn) {
+                    lotModeBtn.classList.toggle('active', this.lotMode);
+                }
+            }
             if (saveState && saveState.isCompositeMode) {
                 console.log('🔄 [EXIT] Composite Mode 상태 복원');
                 this.isCompositeMode = true;
@@ -20102,18 +20146,9 @@ class WaferMapViewer {
         
         // 🔥 Label Explorer에서 그리드 표시 시 페이지 변환 처리
         const activePage = this.pageManager?.getActivePage();
-        if (activePage) {
-            if (activePage.role === 'blank') {
-                // blank 페이지면 label로 변환
-                this.pageManager.convertPage(activePage.id, 'label');
-                this.activePageRole = 'label';
-            } else if (activePage.role !== 'label') {
-                // wafer/mylot/composite 페이지면 새 label 페이지 생성
-                this.ensurePageForRole('label', { forceNew: true, skipPersist: true });
-            } else {
-                // 이미 label 페이지면 그대로 사용
-                this.ensurePageForRole('label');
-            }
+        if (activePage?.role !== 'label') {
+            // 다른 역할에서 온 경우 기존 탭은 그대로 두고 전용 label 페이지 생성
+            this.ensurePageForRole('label', { forceNew: true, skipPersist: true });
         } else {
             this.ensurePageForRole('label');
         }
@@ -22026,6 +22061,7 @@ class WaferMapViewer {
             const payload = {
                 output_dir: this.compositeSession.outputDir,
                 selected_grades: selectedGradeList,
+                lot_mode: this.lotMode  // 🔥 LOT Mode 파라미터 추가
             };
 
             const res = await fetch('/api/composite-subset', {
