@@ -890,6 +890,7 @@ class WaferMapViewer {
         this.lotMode = true;
         this.lotGroups = [];  // { lotName: string, images: string[], startIndex: number }[]
         this.lotListVisible = false;
+        this.lastSelectedLotIndex = undefined;  // 마지막 선택된 LOT 인덱스 (Shift 범위 선택용)
         
         // 이미지 상세 보기 모드
         this.detailMode = false;
@@ -4592,6 +4593,9 @@ class WaferMapViewer {
                 if (!isNaN(idx)) {
                     this.toggleGridImageSelect(idx, event);
                 }
+            } else if (event.target.closest('.lot-header')) {
+                // Lot 헤더 클릭은 별도 핸들러에서 처리하므로 선택 초기화 방지
+                return;
             } else if (!event.ctrlKey && !event.metaKey) {
                 this.clearGridSelection();
             }
@@ -22182,7 +22186,7 @@ class WaferMapViewer {
                 startIndex: currentIndex,
                 count: lotImages.length
             });
-            currentIndex += lotImages.length + 1; // +1 for header
+            currentIndex += lotImages.length; // 🔥 헤더는 이미지 인덱스에 포함하지 않음
         }
 
         return groups;
@@ -22303,8 +22307,12 @@ class WaferMapViewer {
                 <div class="lot-header-name">${lotGroup.lotName}</div>
                 <div class="lot-header-count">${lotGroup.count}</div>
             `;
-            // 🔥 LOT 헤더 클릭 시 자동 스크롤 제거 (스크롤 복원 방해 방지)
-            // header.onclick = () => this.scrollToLot(lotGroup.lotName);
+            // 🔥 LOT 헤더 클릭 시 해당 LOT의 모든 이미지 선택
+            header.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.handleLotHeaderClick(lotGroup, lotIdx, e);
+            });
             grid.appendChild(header);
 
             // Lot의 이미지들 추가
@@ -22591,9 +22599,15 @@ class WaferMapViewer {
      * Lot 목록 내용 업데이트
      */
     updateLotListContent() {
+        // 🔥 LOT 헤더 선택 중에는 모달 업데이트 건너뜀 (불필요한 재렌더링 방지)
+        if (this._updatingLotHeaderSelection) {
+            console.log('⚠️ [LOT_LIST] LOT 헤더 선택 중이므로 모달 업데이트 건너뜀');
+            return;
+        }
+
         const content = document.getElementById('lot-list-content');
         const countLabel = document.getElementById('lot-list-count');
-        
+
         if (!content) return;
 
         if (!this.lotGroups || this.lotGroups.length === 0) {
@@ -22877,6 +22891,85 @@ class WaferMapViewer {
                     }
                 });
             }
+        }
+    }
+
+    /**
+     * LOT 헤더 클릭 처리
+     * @param {Object} lotGroup - LOT 그룹 정보
+     * @param {number} lotIdx - LOT 인덱스
+     * @param {MouseEvent} event - 마우스 이벤트
+     */
+    handleLotHeaderClick(lotGroup, lotIdx, event) {
+        console.log(`🔥 [LOT_HEADER_CLICK] LOT 헤더 클릭: ${lotGroup.lotName}, Ctrl: ${event.ctrlKey}, Shift: ${event.shiftKey}`);
+
+        // 🔥 LOT 헤더 선택 중임을 표시 (모달 업데이트 방지용)
+        this._updatingLotHeaderSelection = true;
+
+        try {
+            // LOT의 모든 이미지 인덱스 계산
+            const startIdx = lotGroup.startIndex;
+            const endIdx = startIdx + lotGroup.count - 1;
+            const lotIndices = [];
+            for (let i = startIdx; i <= endIdx; i++) {
+                lotIndices.push(i);
+            }
+
+            // 현재 선택 상태
+            if (!this.gridSelectedIdxs) {
+                this.gridSelectedIdxs = [];
+            }
+
+            if (event.shiftKey && this.lastSelectedLotIndex !== undefined) {
+                // Shift+클릭: 마지막 선택된 LOT부터 현재 LOT까지 범위 선택
+                const minLotIdx = Math.min(this.lastSelectedLotIndex, lotIdx);
+                const maxLotIdx = Math.max(this.lastSelectedLotIndex, lotIdx);
+
+                this.gridSelectedIdxs = [];
+                for (let i = minLotIdx; i <= maxLotIdx; i++) {
+                    const lot = this.lotGroups[i];
+                    if (lot) {
+                        const lotStartIdx = lot.startIndex;
+                        const lotEndIdx = lotStartIdx + lot.count - 1;
+                        for (let j = lotStartIdx; j <= lotEndIdx; j++) {
+                            this.gridSelectedIdxs.push(j);
+                        }
+                    }
+                }
+                console.log(`🔥 [LOT_HEADER_CLICK] Shift 범위 선택: LOT ${minLotIdx} ~ ${maxLotIdx}, ${this.gridSelectedIdxs.length}개 이미지`);
+
+            } else if (event.ctrlKey) {
+                // Ctrl+클릭: 토글 선택 (해당 LOT의 이미지들 추가/제거)
+                const allSelected = lotIndices.every(idx => this.gridSelectedIdxs.includes(idx));
+
+                if (allSelected) {
+                    // 모두 선택되어 있으면 제거
+                    this.gridSelectedIdxs = this.gridSelectedIdxs.filter(idx => !lotIndices.includes(idx));
+                    console.log(`🔥 [LOT_HEADER_CLICK] Ctrl 선택 해제: LOT ${lotIdx}, ${lotIndices.length}개 이미지 제거`);
+                } else {
+                    // 일부만 선택되어 있거나 선택되지 않았으면 추가
+                    lotIndices.forEach(idx => {
+                        if (!this.gridSelectedIdxs.includes(idx)) {
+                            this.gridSelectedIdxs.push(idx);
+                        }
+                    });
+                    console.log(`🔥 [LOT_HEADER_CLICK] Ctrl 선택 추가: LOT ${lotIdx}, ${lotIndices.length}개 이미지 추가`);
+                }
+
+            } else {
+                // 일반 클릭: 해당 LOT의 이미지들만 선택
+                this.gridSelectedIdxs = [...lotIndices];
+                console.log(`🔥 [LOT_HEADER_CLICK] 단일 선택: LOT ${lotIdx}, ${lotIndices.length}개 이미지`);
+            }
+
+            // 마지막 선택된 LOT 인덱스 저장
+            this.lastSelectedLotIndex = lotIdx;
+
+            // UI 업데이트
+            this.updateGridSelection();
+        } finally {
+            // 🔥 플래그 해제
+            this._updatingLotHeaderSelection = false;
         }
     }
 
