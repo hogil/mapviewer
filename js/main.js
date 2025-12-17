@@ -18166,15 +18166,13 @@ class WaferMapViewer {
             countBadge.textContent = `${unique.length}`;
         }
         
-        // ✅ 최대 10개만 표시 (최근 추가된 것이 아래에 보이도록)
-        // 전체 목록은 유지하되, 화면에는 최근 10개만 표시
-        const displayItems = unique.slice(-10); // 마지막 10개
-        const startIndex = unique.length - displayItems.length; // 시작 인덱스
+        // ✅ 전체 목록을 표시하고 스크롤로 탐색
+        const displayItems = unique;
         
         // ✅ 번호 + 값 표시
         const html = displayItems
             .map((item, idx) => {
-                const actualIndex = startIndex + idx; // 실제 번호 (전체 목록 기준)
+                const actualIndex = idx; // 전체 목록 기준
                 // 안전하게 이스케이프
                 const safePath = item.imagePath.replace(/'/g, "\\'");
 
@@ -18402,9 +18400,6 @@ class WaferMapViewer {
         this.gridViewImageIndex = -1;
         this.gridViewSaveState = null;
 
-        // 🔥 LOT 그룹 초기화
-        this.lotGroups = [];
-
         // 🔥 LOT 스크롤 타임아웃 정리
         if (this._lotScrollTimeout) {
             clearTimeout(this._lotScrollTimeout);
@@ -18428,17 +18423,6 @@ class WaferMapViewer {
 
         // ✅ 이미지 캔버스 숨김
         this.hideImage();
-
-        // 🔥 LOT 리스트 모달 내용 업데이트 (빈 목록 표시)
-        if (typeof this.updateLotListContent === 'function') {
-            this.updateLotListContent();
-        }
-
-        // 🔥 LOT 리스트 검색 입력창 초기화
-        const lotListSearchInput = document.getElementById('lot-list-search-input');
-        if (lotListSearchInput) {
-            lotListSearchInput.value = '';
-        }
 
         console.log('✅ [CLEAR] 선택 해제 완료', wasShowingArrow ? '(화살표 숨김)' : '(화살표 없음)');
     }
