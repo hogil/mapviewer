@@ -15,6 +15,13 @@ export class ChipAnnotator {
         this.viewer = viewer;
         this.ctx = canvas.getContext('2d');
 
+        // 🔥 Chip overlay Y 방향 보정 값 (px)
+        //    - 이미지 기준으로 chip rect가 전체적으로 얼마나 올라가 있는지 나타내는 상수
+        //    - UI 렌더링/선택 로직에서는 이 값을 "위로" 적용하고,
+        //      컨텍스트 메뉴 이미지 복사 시에는 같은 값을 "아래로" 적용해서
+        //      실제 이미지와 chip overlay가 정확히 겹치도록 사용한다.
+        this.Y_OFFSET = -55;
+
         // Chip position data
         this.positionsData = null;
         this.chips = [];

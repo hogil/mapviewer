@@ -729,9 +729,25 @@ export class ContextMenuManager {
         }
         mergedCtx.imageSmoothingEnabled = false;
 
+        // ✅ 베이스 이미지 먼저 그대로 그리기
         mergedCtx.drawImage(imageCanvas, 0, 0, viewWidth, viewHeight);
+
+        // ✅ Chip overlay는 UI에서 사용한 Y 오프셋만큼 아래로 내려서 합성
+        //    - UI에서는 chip 선택/렌더링을 위해 ChipAnnotator 내부에서 Y_OFFSET을 위로 올려서 사용하고 있음
+        //    - 클립보드 이미지에서는 같은 오프셋만큼 chip 레이어를 "아래로" 내려서,
+        //      실제 이미지 상의 chip 위치와 정확히 겹치도록 보정한다.
         if (overlayCanvas) {
-            mergedCtx.drawImage(overlayCanvas, 0, 0, viewWidth, viewHeight);
+            const chipAnnotator = this.viewer?.chipAnnotator;
+            // ChipAnnotator에 Y_OFFSET 속성이 있으면 그 값을 사용, 없으면 0
+            const yOffset = chipAnnotator && typeof chipAnnotator.Y_OFFSET === 'number'
+                ? -chipAnnotator.Y_OFFSET   // UI에서 위로 올린 만큼, 복사할 땐 아래로 내린다
+                : 0;
+
+            mergedCtx.drawImage(
+                overlayCanvas,
+                0, 0, viewWidth, viewHeight,   // source 영역 전체
+                0, yOffset, viewWidth, viewHeight // destination에서 Y 방향으로만 보정
+            );
         }
 
         const tempCanvas = document.createElement('canvas');
