@@ -1,0 +1,26 @@
+                this.updateSelectedChipsList();
+                console.log('🖱️ [SHIFT+DRAG] 범위 선택 추가:', selected.length, '개 (신규:', toAdd.length, ')');
+            } else {
+                // 드래그 없음: 선택 해제
+                this.selectedChips.clear();
+                this.selectedChipsOrder = []; // 🔥 선택 순서도 초기화
+                console.log('🖱️ [SHIFT+CLICK] 선택 해제 (드래그 없음)');
+            }
+            this.shiftClickPos = null;
+            this._tempDragSelection = null;
+            this.render();
+            return;
+        }
+
+        // 🔥 일반 클릭/드래그 (Ctrl/Shift/Alt 없음): 클릭은 선택 해제, 드래그는 범위 내 chip 제거
+        if (!e.ctrlKey && !e.shiftKey && !e.altKey && this.clickStartPos) {
+            const dragDistance = Math.sqrt(
+                Math.pow(canvasX - this.clickStartPos.x, 2) +
+                Math.pow(canvasY - this.clickStartPos.y, 2)
+            );
+            
+            // 🔥 드래그가 발생했으면 범위 내 chip 제거
+            if (dragDistance > 5) {
+                const chipAtStart = this.findChipAtPixel(this.clickStartPos.x, this.clickStartPos.y);
+                const chipAtEnd = this.findChipAtPixel(canvasX, canvasY);
+                

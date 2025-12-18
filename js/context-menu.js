@@ -193,7 +193,11 @@ export class ContextMenuManager {
         
         try {
             console.log(`${selectedFiles.length}개 이미지 합성 시작 (Dark Theme Legend)`);
-            
+
+            const personalizedParams = (this.viewer && typeof this.viewer.getPersonalizedParams === 'function')
+                ? this.viewer.getPersonalizedParams()
+                : '';
+
             // Color legends 데이터 로드
             const colorLegends = await this.loadColorLegends();
             
@@ -286,7 +290,7 @@ export class ContextMenuManager {
                         resolve();
                     };
                     img.onerror = reject;
-                    img.src = `/api/thumbnail?path=${encodeURIComponent(imagePath)}&size=512`;
+                    img.src = `/api/thumbnail?path=${encodeURIComponent(imagePath)}&size=512${personalizedParams}`;
                 });
             });
             
@@ -497,80 +501,11 @@ export class ContextMenuManager {
     }
     
     /**
-     * 이미지만 복사 (개인색 설정 적용, 현재 화면에 보이는 부분만)
+     * 이미지만 복사 (패널 제외, 이미지/오버레이 보이는 영역만)
      */
     async copyImageToClipboard() {
         try {
-            const imageCanvas = this.viewer.dom?.imageCanvas;
-            const transform = this.viewer.transform;
-            const imgWidth = this.viewer.originalWidth;
-            const imgHeight = this.viewer.originalHeight;
-
-            if (!imageCanvas || !transform || !imgWidth || !imgHeight) {
-                alert('복사할 이미지가 없습니다.');
-                return;
-            }
-
-            const scale = Number(transform.scale) || 1;
-            const offsetX = Number(transform.dx) || 0;
-            const offsetY = Number(transform.dy) || 0;
-
-            const renderedWidth = imgWidth * scale;
-            const renderedHeight = imgHeight * scale;
-            const viewWidth = imageCanvas.width || imageCanvas.getBoundingClientRect().width;
-            const viewHeight = imageCanvas.height || imageCanvas.getBoundingClientRect().height;
-
-            // 화면에 실제로 표시된 이미지 영역만 잘라내기
-            const visibleLeft = Math.max(0, Math.floor(offsetX));
-            const visibleTop = Math.max(0, Math.floor(offsetY));
-            const visibleRight = Math.min(viewWidth, Math.ceil(offsetX + renderedWidth));
-            const visibleBottom = Math.min(viewHeight, Math.ceil(offsetY + renderedHeight));
-
-            const sourceWidth = Math.max(0, visibleRight - visibleLeft);
-            const sourceHeight = Math.max(0, visibleBottom - visibleTop);
-
-            if (sourceWidth < 1 || sourceHeight < 1) {
-                alert('화면에 보이는 이미지 영역이 없습니다.');
-                return;
-            }
-
-            const outputWidth = Math.max(1, Math.round(sourceWidth));
-            const outputHeight = Math.max(1, Math.round(sourceHeight));
-
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = outputWidth;
-            tempCanvas.height = outputHeight;
-            const tempCtx = tempCanvas.getContext('2d');
-            if (!tempCtx) {
-                throw new Error('캔버스를 준비할 수 없습니다.');
-            }
-
-            tempCtx.imageSmoothingEnabled = false;
-            tempCtx.drawImage(
-                imageCanvas,
-                visibleLeft, visibleTop, sourceWidth, sourceHeight,
-                0, 0, outputWidth, outputHeight
-            );
-
-            const blob = await new Promise((resolve, reject) => {
-                tempCanvas.toBlob(
-                    (blob) => {
-                        if (blob) {
-                            resolve(blob);
-                        } else {
-                            reject(new Error('Canvas Blob 변환 실패'));
-                        }
-                    },
-                    'image/png',
-                    1.0
-                );
-            });
-
-            await navigator.clipboard.write([
-                new ClipboardItem({ 'image/png': blob })
-            ]);
-
-            alert('이미지가 클립보드에 복사되었습니다. (이미지 영역만)');
+            await this.copyVisibleCanvasViewport();
         } catch (error) {
             console.error('이미지 복사 실패:', error);
             alert('이미지 복사에 실패했습니다: ' + error.message);
@@ -579,58 +514,45 @@ export class ContextMenuManager {
 
 
     /**
-     * 전체 캔버스를 클립보드에 복사 (모든 UI 패널 포함 - html2canvas 사용)
+     * 전체 캔버스를 클립보드에 복사 (모든 UI/범례 포함 - html2canvas 사용)
      */
     async copyCanvasToClipboard() {
         try {
-            const viewerContainer = this.viewer.dom?.viewerContainer;
-            if (!viewerContainer) {
+            const dom = this.viewer?.dom || {};
+            const mainContent = document.querySelector('.main-content');
+            const captureRoot = mainContent || dom.viewerContainer;
+            if (!captureRoot) {
                 alert('복사할 영역이 없습니다.');
                 return;
             }
 
-            // html2canvas 로드
             const html2canvas = await this.ensureHtml2Canvas();
             if (!html2canvas) {
-                // html2canvas 없으면 기본 캔버스만 복사
                 await this.copyCanvasOnly();
                 return;
             }
 
-            // 🔥 html2canvas로 화면 캡처
-            const canvas = await html2canvas(viewerContainer, {
+            const captureRect = this.getCaptureRect(
+                [dom.viewerContainer, dom.colorLegendTop, dom.colorLegendBottom, dom.gridColorLegendBottom],
+                captureRoot
+            );
+
+            const canvas = await html2canvas(captureRoot, {
                 backgroundColor: '#1a1a1a',
-                scale: 2,  // 고해상도
+                scale: Math.min(2.5, window.devicePixelRatio || 1),
                 logging: false,
                 useCORS: true,
-                allowTaint: true
+                allowTaint: true,
+                x: captureRect.x,
+                y: captureRect.y,
+                width: captureRect.width,
+                height: captureRect.height
             });
 
-            // Canvas를 Blob으로 변환
-            const blob = await new Promise((resolve, reject) => {
-                canvas.toBlob(
-                    (blob) => {
-                        if (blob) {
-                            resolve(blob);
-                        } else {
-                            reject(new Error('Canvas Blob 변환 실패'));
-                        }
-                    },
-                    'image/png',
-                    1.0
-                );
-            });
-
-            // 클립보드에 복사
-            await navigator.clipboard.write([
-                new ClipboardItem({ 'image/png': blob })
-            ]);
-
-            alert('전체 화면이 클립보드에 복사되었습니다. (UI 포함)');
+            await this.writeCanvasToClipboard(canvas, '전체 화면이 클립보드에 복사되었습니다. (UI 포함)');
         } catch (error) {
             console.error('캔버스 복사 실패:', error);
             alert('캔버스 복사에 실패했습니다. 기본 캔버스만 복사합니다.');
-            // 실패 시 캔버스만 복사
             await this.copyCanvasOnly();
         }
     }
@@ -664,6 +586,170 @@ export class ContextMenuManager {
         ]);
 
         alert('캔버스가 클립보드에 복사되었습니다.');
+    }
+
+    /**
+     * UI 캡처용 요소 가시성 체크
+     */
+    isElementVisibleForCapture(el) {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) {
+            return false;
+        }
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+    }
+
+    /**
+     * 캡처할 영역 계산 (이미지/범례가 보이는 영역만)
+     */
+    getCaptureRect(elements = [], root) {
+        const rootRect = root?.getBoundingClientRect();
+        if (!rootRect) {
+            return { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight };
+        }
+
+        const visibleRects = elements
+            .filter(el => this.isElementVisibleForCapture(el))
+            .map(el => el.getBoundingClientRect());
+
+        if (!visibleRects.length) {
+            return {
+                x: 0,
+                y: 0,
+                width: Math.max(1, Math.ceil(rootRect.width)),
+                height: Math.max(1, Math.ceil(rootRect.height))
+            };
+        }
+
+        const union = visibleRects.reduce((acc, rect) => ({
+            left: Math.min(acc.left, rect.left),
+            top: Math.min(acc.top, rect.top),
+            right: Math.max(acc.right, rect.right),
+            bottom: Math.max(acc.bottom, rect.bottom)
+        }), {
+            left: Number.POSITIVE_INFINITY,
+            top: Number.POSITIVE_INFINITY,
+            right: Number.NEGATIVE_INFINITY,
+            bottom: Number.NEGATIVE_INFINITY
+        });
+
+        const x = Math.max(0, union.left - rootRect.left);
+        const y = Math.max(0, union.top - rootRect.top);
+        const width = Math.min(rootRect.width - x, union.right - union.left);
+        const height = Math.min(rootRect.height - y, union.bottom - union.top);
+
+        return {
+            x: Math.floor(x),
+            y: Math.floor(y),
+            width: Math.max(1, Math.ceil(width)),
+            height: Math.max(1, Math.ceil(height))
+        };
+    }
+
+    /**
+     * 현재 화면을 PNG Blob으로 변환 후 클립보드에 복사
+     */
+    async writeCanvasToClipboard(canvas, successMessage) {
+        const blob = await new Promise((resolve, reject) => {
+            canvas.toBlob(
+                (result) => {
+                    if (result) {
+                        resolve(result);
+                    } else {
+                        reject(new Error('Canvas Blob 변환 실패'));
+                    }
+                },
+                'image/png',
+                1.0
+            );
+        });
+
+        await navigator.clipboard.write([
+            new ClipboardItem({ 'image/png': blob })
+        ]);
+
+        alert(successMessage || '화면이 클립보드에 복사되었습니다.');
+    }
+
+    /**
+     * html2canvas 실패 시: 기존 로직으로 가시 영역만 병합/복사
+     */
+    async copyVisibleCanvasViewport() {
+        const imageCanvas = this.viewer.dom?.imageCanvas;
+        const overlayCanvas = this.viewer.dom?.overlayCanvas;
+        const transform = this.viewer.transform;
+        const imgWidth = this.viewer.originalWidth;
+        const imgHeight = this.viewer.originalHeight;
+
+        if (!imageCanvas || !transform || !imgWidth || !imgHeight) {
+            alert('복사할 이미지가 없습니다.');
+            return;
+        }
+
+        const viewWidth = (overlayCanvas && overlayCanvas.width) || imageCanvas.width || imageCanvas.getBoundingClientRect().width;
+        const viewHeight = (overlayCanvas && overlayCanvas.height) || imageCanvas.height || imageCanvas.getBoundingClientRect().height;
+        const scale = Number(transform.scale) || 1;
+        const offsetX = Number(transform.dx) || 0;
+        const offsetY = Number(transform.dy) || 0;
+        const renderedWidth = imgWidth * scale;
+        const renderedHeight = imgHeight * scale;
+
+        let visibleLeft = Math.max(0, Math.floor(offsetX));
+        let visibleTop = Math.max(0, Math.floor(offsetY));
+        let visibleRight = Math.min(viewWidth, Math.ceil(offsetX + renderedWidth));
+        let visibleBottom = Math.min(viewHeight, Math.ceil(offsetY + renderedHeight));
+
+        let sourceWidth = Math.max(0, visibleRight - visibleLeft);
+        let sourceHeight = Math.max(0, visibleBottom - visibleTop);
+
+        if (sourceWidth < 1 || sourceHeight < 1) {
+            visibleLeft = 0;
+            visibleTop = 0;
+            visibleRight = viewWidth;
+            visibleBottom = viewHeight;
+            sourceWidth = viewWidth;
+            sourceHeight = viewHeight;
+        }
+
+        const outputWidth = Math.max(1, Math.round(sourceWidth));
+        const outputHeight = Math.max(1, Math.round(sourceHeight));
+
+        if (this.viewer?.chipAnnotator?.render) {
+            this.viewer.chipAnnotator.render();
+        }
+
+        const mergedCanvas = document.createElement('canvas');
+        mergedCanvas.width = viewWidth;
+        mergedCanvas.height = viewHeight;
+        const mergedCtx = mergedCanvas.getContext('2d');
+        if (!mergedCtx) {
+            throw new Error('캔버스를 준비할 수 없습니다.');
+        }
+        mergedCtx.imageSmoothingEnabled = false;
+
+        mergedCtx.drawImage(imageCanvas, 0, 0, viewWidth, viewHeight);
+        if (overlayCanvas) {
+            mergedCtx.drawImage(overlayCanvas, 0, 0, viewWidth, viewHeight);
+        }
+
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = outputWidth;
+        tempCanvas.height = outputHeight;
+        const tempCtx = tempCanvas.getContext('2d');
+        if (!tempCtx) {
+            throw new Error('캔버스를 준비할 수 없습니다.');
+        }
+        tempCtx.imageSmoothingEnabled = false;
+
+        tempCtx.drawImage(
+            mergedCanvas,
+            visibleLeft, visibleTop, sourceWidth, sourceHeight,
+            0, 0, outputWidth, outputHeight
+        );
+
+        await this.writeCanvasToClipboard(tempCanvas, '이미지가 클립보드에 복사되었습니다. (보이는 영역)');
     }
 
     /**

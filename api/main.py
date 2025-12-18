@@ -107,6 +107,7 @@ from .personal_colors import (
     apply_personalized_palette,
     swap_first16_colors,
     plte_inplace_patch_memory,
+    plte_bottom_filter_memory,
 )
 from .composite_colors import (
     load_composite_color_settings,
@@ -3413,7 +3414,7 @@ def _pyramid_path_lock(path: Path):
         lock.release()
 
 
-def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None):
+def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None):
     """🚀 피라미드 레벨 이미지 생성 (속도 극대화)"""
     import time
     start_time = time.time()
@@ -3491,35 +3492,40 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                 # 🔥 초고속 방식에 PLTE 패치만 추가
                 # Grade 필터가 우선, 그 다음 개인색 설정
                 # 원본 이미지가 PNG이면 팔레트 필터링 적용 (저장 포맷과 무관 - JPEG로 저장해도 적용)
-                if grade_filter and image_path.suffix.lower() == '.png':
-                    logger.info(f"🎯 [PYRAMID] Grade 필터 적용: grade_filter={grade_filter}, path={image_path.name}, target_format={target_format}")
+                if (grade_filter or bottom_filter) and image_path.suffix.lower() == '.png':
+                    logger.info(f"🎯 [PYRAMID] 필터 적용: grade_filter={grade_filter}, bottom_filter={bottom_filter}, path={image_path.name}, target_format={target_format}")
                     try:
-                        from .personal_colors import plte_grade_filter_memory, plte_inplace_patch_memory
+                        from .personal_colors import plte_grade_filter_memory, plte_bottom_filter_memory, plte_inplace_patch_memory
 
-                        # grade_filter 파싱: "3" 또는 "2,4,7"
-                        grade_indices = [int(g.strip()) for g in grade_filter.split(',') if g.strip().isdigit()]
+                        # 1. 원본 PNG 파일 읽기
+                        with open(image_path, 'rb') as f:
+                            png_data = bytearray(f.read())
 
-                        if grade_indices:
-                            # 1. 원본 PNG 파일 읽기
-                            with open(image_path, 'rb') as f:
-                                png_data = bytearray(f.read())
+                        # 2. 먼저 개인색 설정 적용 (Grade0-7을 인덱스 0-7로 매핑)
+                        if personalized and scheme:
+                            png_data = plte_inplace_patch_memory(png_data, scheme)
+                            logger.debug(f"🎨 [PYRAMID FILTER] 개인색 설정 먼저 적용: scheme={scheme}")
 
-                            # 2. 먼저 개인색 설정 적용 (Grade0-7을 인덱스 0-7로 매핑)
-                            if personalized and scheme:
-                                png_data = plte_inplace_patch_memory(png_data, scheme)
-                                logger.debug(f"🎨 [PYRAMID GRADE FILTER] 개인색 설정 먼저 적용: scheme={scheme}")
+                        # 3. Grade PLTE 필터 (인덱스 0-7 필터링)
+                        if grade_filter:
+                            grade_indices = [int(g.strip()) for g in grade_filter.split(',') if g.strip().isdigit()]
+                            if grade_indices:
+                                png_data = plte_grade_filter_memory(png_data, grade_indices)
+                                logger.debug(f"✅ [PYRAMID GRADE FILTER] Grade {grade_filter} 필터링 완료")
 
-                            # 3. 그 다음 Grade PLTE 필터 (인덱스 0-7 필터링)
-                            png_data = plte_grade_filter_memory(png_data, grade_indices)
+                        # 4. Bottom PLTE 필터 (인덱스 8-13 필터링)
+                        if bottom_filter:
+                            bottom_values = [b.strip() for b in bottom_filter.split(',') if b.strip()]
+                            if bottom_values:
+                                png_data = plte_bottom_filter_memory(png_data, bottom_values)
+                                logger.debug(f"✅ [PYRAMID BOTTOM FILTER] Bottom {bottom_filter} 필터링 완료")
 
-                            # 4. 필터링된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
-                            image = pyvips.Image.new_from_buffer(bytes(png_data), "", access='sequential', fail_on='none', memory=True, unlimited=True)
+                        # 5. 필터링된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
+                        image = pyvips.Image.new_from_buffer(bytes(png_data), "", access='sequential', fail_on='none', memory=True, unlimited=True)
 
-                            logger.debug(f"✅ [PYRAMID GRADE FILTER] Grade {grade_filter} 필터링 완료, 리사이즈 시작: {pyramid_path.name}")
-                        else:
-                            image = None
+                        logger.debug(f"✅ [PYRAMID FILTER] 필터링 완료, 리사이즈 시작: {pyramid_path.name}")
                     except Exception as e:
-                        logger.warning(f"⚠️ [PYRAMID GRADE FILTER] 필터링 실패, 폴백: {e}", exc_info=True)
+                        logger.warning(f"⚠️ [PYRAMID FILTER] 필터링 실패, 폴백: {e}", exc_info=True)
                         # 폴백: 기존 방식 사용
                         image = None
                 elif personalized and scheme and image_path.suffix.lower() == '.png':
@@ -3742,7 +3748,7 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
 _pyramid_bg_executor = ThreadPoolExecutor(max_workers=config.PYRAMID_BG_WORKERS)
 _pyramid_bg_generating = set()  # 현재 생성 중인 파일 경로
 
-async def _generate_other_levels_background(image_path: Path, current_level: float, stem: str, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None):
+async def _generate_other_levels_background(image_path: Path, current_level: float, stem: str, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None):
     """다른 피라미드 레벨들을 background에서 생성 (원본 재사용 파이프라인)"""
     format_ext = config.PYRAMID_FORMAT.lower()
     try:
@@ -3776,7 +3782,8 @@ async def _generate_other_levels_background(image_path: Path, current_level: flo
             format_ext,
             personalized,
             scheme,
-            grade_filter
+            grade_filter,
+            bottom_filter
         )
         
         # 결과 로깅
@@ -3804,7 +3811,7 @@ def _generate_pyramid_bg_worker(image_path: Path, pyramid_path: Path, level: flo
         _pyramid_bg_generating.discard(path_key)
 
 
-def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format_ext: str, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None):
+def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format_ext: str, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None):
     """원본 이미지를 한 번만 읽고 여러 레벨을 연속 생성하는 파이프라인
     🔥 Grade 필터 또는 개인색 설정이 있으면 원본을 먼저 메모리에서 변경하고,
     그 변경된 이미지로 모든 레벨을 생성"""
@@ -3820,43 +3827,50 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
         personalized = False  # scheme이 없으면 개인색 비활성화
 
     try:
-        # 🔥 Step 1: 원본 이미지를 먼저 Grade 필터 또는 개인색으로 변경 (메모리에서)
+        # 🔥 Step 1: 원본 이미지를 먼저 필터링 (Grade/Bottom) 또는 개인색으로 변경 (메모리에서)
         original_image = None
-        if grade_filter and image_path.suffix.lower() == '.png':
-            # Grade 필터 (개인색 설정 먼저 적용 후 필터링)
+        if (grade_filter or bottom_filter) and image_path.suffix.lower() == '.png':
+            # Grade/Bottom 필터 (개인색 설정 먼저 적용 후 필터링)
             try:
-                from .personal_colors import plte_grade_filter_memory, plte_inplace_patch_memory
+                from .personal_colors import plte_grade_filter_memory, plte_bottom_filter_memory, plte_inplace_patch_memory
 
-                logger.info(f"🎯 [PIPELINE] Grade 필터 적용 시작: grade_filter={grade_filter}, levels={levels}, path={image_path.name}")
+                logger.info(f"🎯 [PIPELINE] 필터 적용 시작: grade_filter={grade_filter}, bottom_filter={bottom_filter}, levels={levels}, path={image_path.name}")
 
-                # grade_filter 파싱: "3" 또는 "2,4,7"
-                grade_indices = [int(g.strip()) for g in grade_filter.split(',') if g.strip().isdigit()]
+                # 1. 원본 PNG 파일 읽기
+                with open(image_path, 'rb') as f:
+                    png_data = bytearray(f.read())
 
-                if grade_indices:
-                    # 1. 원본 PNG 파일 읽기
-                    with open(image_path, 'rb') as f:
-                        png_data = bytearray(f.read())
+                # 2. 먼저 개인색 설정 적용 (Grade0-7을 인덱스 0-7로 매핑)
+                if personalized and scheme:
+                    png_data = plte_inplace_patch_memory(png_data, scheme)
+                    logger.debug(f"🎨 [PIPELINE] 개인색 설정 먼저 적용: scheme={scheme}")
 
-                    # 2. 먼저 개인색 설정 적용 (Grade0-7을 인덱스 0-7로 매핑)
-                    if personalized and scheme:
-                        png_data = plte_inplace_patch_memory(png_data, scheme)
-                        logger.debug(f"🎨 [PIPELINE] 개인색 설정 먼저 적용: scheme={scheme}")
+                # 3. Grade PLTE 필터 (인덱스 0-7 필터링)
+                if grade_filter:
+                    grade_indices = [int(g.strip()) for g in grade_filter.split(',') if g.strip().isdigit()]
+                    if grade_indices:
+                        png_data = plte_grade_filter_memory(png_data, grade_indices)
+                        logger.debug(f"✅ [PIPELINE] Grade {grade_filter} 필터링 완료")
 
-                    # 3. 메모리에서 Grade PLTE 필터 적용 (인덱스 0-7 필터링)
-                    png_data = plte_grade_filter_memory(png_data, grade_indices)
+                # 4. Bottom PLTE 필터 (인덱스 8-13 필터링)
+                if bottom_filter:
+                    bottom_values = [b.strip() for b in bottom_filter.split(',') if b.strip()]
+                    if bottom_values:
+                        png_data = plte_bottom_filter_memory(png_data, bottom_values)
+                        logger.debug(f"✅ [PIPELINE] Bottom {bottom_filter} 필터링 완료")
 
-                    # 4. 필터링된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
-                    original_image = pyvips.Image.new_from_buffer(
-                        bytes(png_data),
-                        "",
-                        access='sequential',
-                        fail_on='none',
-                        memory=True,
-                        unlimited=True
-                    )
-                    logger.info(f"✅ [PIPELINE] 원본 이미지를 메모리에서 Grade 필터 완료: grade_filter={grade_filter}, size={original_image.width}x{original_image.height}, levels={levels}")
+                # 5. 필터링된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
+                original_image = pyvips.Image.new_from_buffer(
+                    bytes(png_data),
+                    "",
+                    access='sequential',
+                    fail_on='none',
+                    memory=True,
+                    unlimited=True
+                )
+                logger.info(f"✅ [PIPELINE] 원본 이미지 필터 완료: size={original_image.width}x{original_image.height}, levels={levels}")
             except Exception as e:
-                logger.warning(f"⚠️ [PIPELINE] Grade 필터 실패, 폴백: {e}", exc_info=True)
+                logger.warning(f"⚠️ [PIPELINE] 필터 실패, 폴백: {e}", exc_info=True)
                 original_image = None
         elif personalized and scheme and image_path.suffix.lower() == '.png':
             # 개인색 설정
@@ -4258,7 +4272,8 @@ async def get_image(
     level: Optional[float] = None,
     personalized: bool = False,
     scheme: Optional[str] = None,
-    grade_filter: Optional[str] = None
+    grade_filter: Optional[str] = None,
+    bottom_filter: Optional[str] = None
 ):
     try:
         is_head = request.method == "HEAD"
@@ -4415,12 +4430,12 @@ async def get_image(
             # 🔥 개인색 설정 또는 Grade 필터가 있으면 _generate_pyramid_sync에서 메모리에서 직접 처리
             # (임시 파일 생성 제거, 메모리에서 직접 PLTE 패치 후 pyvips로 로드)
             if not is_head:
-                logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}, path={pyramid_path}, personalized={personalized}, scheme={scheme}, grade_filter={grade_filter}")
-            _generate_pyramid_sync(image_path, pyramid_path, level, personalized=personalized, scheme=scheme, grade_filter=grade_filter)
+                logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}, path={pyramid_path}, personalized={personalized}, scheme={scheme}, grade_filter={grade_filter}, bottom_filter={bottom_filter}")
+            _generate_pyramid_sync(image_path, pyramid_path, level, personalized=personalized, scheme=scheme, grade_filter=grade_filter, bottom_filter=bottom_filter)
 
             # 🔥 Background에서 다른 레벨들도 생성 시작 (사용자 대기 없음)
-            # 개인별 설정 또는 Grade 필터가 활성화된 경우 background에서도 동일한 설정으로 생성
-            asyncio.create_task(_generate_other_levels_background(image_path, level, stem, personalized=personalized, scheme=scheme, grade_filter=grade_filter))
+            # 개인별 설정 또는 필터가 활성화된 경우 background에서도 동일한 설정으로 생성
+            asyncio.create_task(_generate_other_levels_background(image_path, level, stem, personalized=personalized, scheme=scheme, grade_filter=grade_filter, bottom_filter=bottom_filter))
 
             # 생성된 파일 확인 및 반환
             if pyramid_path.exists():
@@ -4444,52 +4459,64 @@ async def get_image(
                     logger.error(f"❌ [GENERATION FAILED] {pyramid_path}")
                 raise HTTPException(status_code=500, detail="Pyramid generation failed")
         else:
-            # 원본 이미지 반환 (개인색 설정 적용 또는 Grade 필터링)
+            # 원본 이미지 반환 (개인색 설정 적용 또는 필터링)
             if not is_head:
-                logger.info(f"🎯 [ORIGINAL MODE] {image_path} - personalized={personalized}, scheme={scheme}, grade_filter={grade_filter}")
+                logger.info(f"🎯 [ORIGINAL MODE] {image_path} - personalized={personalized}, scheme={scheme}, grade_filter={grade_filter}, bottom_filter={bottom_filter}")
 
-            # 🔥 Grade 필터링이 활성화되고 PNG인 경우 PLTE Grade 필터 적용
-            # 개인색 설정을 먼저 적용한 후 Grade 필터 적용
-            if grade_filter and image_path.suffix.lower() == '.png':
+            # 🔥 Grade/Bottom 필터링이 활성화되고 PNG인 경우 PLTE 필터 적용
+            # 개인색 설정을 먼저 적용한 후 필터 적용
+            if (grade_filter or bottom_filter) and image_path.suffix.lower() == '.png':
                 try:
-                    from .personal_colors import plte_grade_filter_memory, plte_inplace_patch_memory
+                    from .personal_colors import plte_grade_filter_memory, plte_bottom_filter_memory, plte_inplace_patch_memory
 
-                    # grade_filter 파싱: "3" 또는 "2,4,7"
-                    grade_indices = [int(g.strip()) for g in grade_filter.split(',') if g.strip().isdigit()]
+                    # 1. 원본 이미지 파일 읽기
+                    with open(image_path, 'rb') as f:
+                        png_data = bytearray(f.read())
 
-                    if grade_indices:
-                        # 1. 원본 이미지 파일 읽기
-                        with open(image_path, 'rb') as f:
-                            png_data = bytearray(f.read())
-
-                        # 2. 먼저 개인색 설정 적용 (Grade0-7을 인덱스 0-7로 매핑)
-                        if personalized and scheme:
-                            png_data = plte_inplace_patch_memory(png_data, scheme)
-                            if not is_head:
-                                logger.info(f"🎨 [GRADE FILTER] 개인색 설정 먼저 적용: scheme={scheme}")
-
-                        # 3. 그 다음 Grade 필터 적용 (인덱스 0-7 필터링)
-                        png_data = plte_grade_filter_memory(png_data, grade_indices)
-
-                        # 메모리에서 직접 반환
-                        headers = {
-                            "Cache-Control": "public, max-age=3600",
-                            "Content-Type": "image/png",
-                            "X-Grade-Filter": grade_filter
-                        }
-                        if personalized and scheme:
-                            headers["X-Personalized"] = "true"
-                            headers["X-Scheme"] = scheme
-
+                    # 2. 먼저 개인색 설정 적용 (Grade0-7을 인덱스 0-7로 매핑)
+                    if personalized and scheme:
+                        png_data = plte_inplace_patch_memory(png_data, scheme)
                         if not is_head:
-                            logger.info(f"✅ [GRADE FILTER] Grade {grade_filter} 필터링 완료: {image_path.name}")
+                            logger.info(f"🎨 [FILTER] 개인색 설정 먼저 적용: scheme={scheme}")
 
-                        return Response(content=bytes(png_data), headers=headers, media_type="image/png")
+                    # 3. Grade 필터 적용 (인덱스 0-7 필터링)
+                    if grade_filter:
+                        grade_indices = [int(g.strip()) for g in grade_filter.split(',') if g.strip().isdigit()]
+                        if grade_indices:
+                            png_data = plte_grade_filter_memory(png_data, grade_indices)
+                            if not is_head:
+                                logger.info(f"✅ [GRADE FILTER] Grade {grade_filter} 필터링 완료")
+
+                    # 4. Bottom 필터 적용 (인덱스 8-13 필터링)
+                    if bottom_filter:
+                        bottom_values = [b.strip() for b in bottom_filter.split(',') if b.strip()]
+                        if bottom_values:
+                            png_data = plte_bottom_filter_memory(png_data, bottom_values)
+                            if not is_head:
+                                logger.info(f"✅ [BOTTOM FILTER] Bottom {bottom_filter} 필터링 완료")
+
+                    # 메모리에서 직접 반환
+                    headers = {
+                        "Cache-Control": "public, max-age=3600",
+                        "Content-Type": "image/png",
+                    }
+                    if grade_filter:
+                        headers["X-Grade-Filter"] = grade_filter
+                    if bottom_filter:
+                        headers["X-Bottom-Filter"] = bottom_filter
+                    if personalized and scheme:
+                        headers["X-Personalized"] = "true"
+                        headers["X-Scheme"] = scheme
+
+                    if not is_head:
+                        logger.info(f"✅ [FILTER] 필터링 완료: {image_path.name}")
+
+                    return Response(content=bytes(png_data), headers=headers, media_type="image/png")
                 except Exception as e:
-                    logger.warning(f"⚠️ [GRADE FILTER] PLTE 필터 실패, 원본 반환: {e}", exc_info=True)
+                    logger.warning(f"⚠️ [FILTER] PLTE 필터 실패, 원본 반환: {e}", exc_info=True)
                     # 폴백: 원본 이미지 반환
 
-            # 🔥 개인색 설정이 활성화되고 PNG인 경우 PLTE 패치 적용 (grade_filter가 없을 때만)
+            # 🔥 개인색 설정이 활성화되고 PNG인 경우 PLTE 패치 적용 (필터가 없을 때만)
             elif personalized and scheme and image_path.suffix.lower() == '.png':
                 try:
                     from .personal_colors import plte_inplace_patch_memory
@@ -7188,10 +7215,14 @@ if __name__ == "__main__":
     uvicorn_error_logger = logging.getLogger("uvicorn.error")
     uvicorn_error_logger.addFilter(SuppressClientDisconnectFilter())
 
+    access_log_enabled = os.getenv("ACCESS_LOG_ENABLED", "0").strip().lower() not in ("0", "false", "no", "")
+    access_log_level = os.getenv("ACCESS_LOG_LEVEL", "WARNING").upper()
+
     print(f"[DEBUG] Starting uvicorn with reload={reload_flag}", flush=True)
     print(f"[DEBUG] Port: {config.HTTPS_PORT}", flush=True)
     print(f"[DEBUG] SSL Cert: {cert_path}", flush=True)
     print(f"[DEBUG] SSL Key: {key_path}", flush=True)
+    print(f"[DEBUG] Access log enabled={access_log_enabled} level={access_log_level}", flush=True)
 
     # 🔥 로깅 설정: uvicorn의 기본 로깅을 사용하되, 필요한 로거만 설정
     # log_config=None 제거 - 이 설정이 lifespan 로그를 숨기는 원인이었음
@@ -7224,7 +7255,11 @@ if __name__ == "__main__":
         "loggers": {
             "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
             "uvicorn.error": {"level": "INFO"},
-            "uvicorn.access": {"handlers": ["access"], "level": "INFO", "propagate": False}
+            "uvicorn.access": {
+                "handlers": ["access"] if access_log_enabled else [],
+                "level": access_log_level if access_log_enabled else "CRITICAL",
+                "propagate": False
+            }
         }
     }
 
@@ -7237,7 +7272,7 @@ if __name__ == "__main__":
             workers=1,
             lifespan="on",                      # FastAPI lifespan 강제 활성화 (인덱스/캐시 초기화 보장)
             log_level="info",
-            access_log=False,                   # 커스텀 테이블 로그 사용
+            access_log=access_log_enabled,      # 커스텀 테이블 로그 사용
             use_colors=True,
             log_config=logging_config,          # 🔥 기본 로깅 설정 사용 (None 대신)
             ssl_certfile=str(cert_path),

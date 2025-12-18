@@ -5558,53 +5558,59 @@ class WaferMapViewer {
      * @returns {string} URL 파라미터 (예: "&personalized=true&scheme=john")
      */
     getPersonalizedParams() {
-        if (!this.personalizedColorEnabled) {
-            console.log("PARAMS: personalizedColorEnabled=false, no scheme");
-            return "";
-        }
-        
-        // colorLegends가 로드되지 않았으면 빈 문자열 반환
-        if (!this.colorLegends) {
-            console.warn("PARAMS: colorLegends not loaded.");
-            return "";
-        }
-        
-        // 1. currentUser가 있고 해당 scheme이 존재하면 사용
-        let scheme = this.currentUser || "change"; // fallback to "change"
-        
-        if (!this.colorLegends[scheme]) {
-            // fallback 순서: change -> default -> 첫 번째 키
-            if (this.colorLegends["change"]) {
-                scheme = "change";
-            } else if (this.colorLegends["default"]) {
-                scheme = "default";
-            } else {
-                const keys = Object.keys(this.colorLegends);
-                if (keys.length > 0) {
-                    scheme = keys[0];
-                } else {
+        const parts = [];
+
+        // Personalized 색상 적용
+        if (this.personalizedColorEnabled) {
+            if (!this.colorLegends) {
+                console.warn("PARAMS: colorLegends not loaded.");
+            }
+
+            // 1. currentUser가 있고 해당 scheme이 존재하면 사용
+            let scheme = this.currentUser || "change"; // fallback to "change"
+
+            if (this.colorLegends && !this.colorLegends[scheme]) {
+                // fallback 순서: change -> default -> 첫 번째 키
+                if (this.colorLegends["change"]) {
                     scheme = "change";
+                } else if (this.colorLegends["default"]) {
+                    scheme = "default";
+                } else {
+                    const keys = Object.keys(this.colorLegends);
+                    if (keys.length > 0) {
+                        scheme = keys[0];
+                    } else {
+                        scheme = "change";
+                    }
                 }
             }
-        }
-        
-        let params = `&personalized=true&scheme=${encodeURIComponent(scheme)}`;
 
-        // cacheBuster 추가
-        if (this._personalizedColorCacheBuster) {
-            params += `&_t=${this._personalizedColorCacheBuster}`;
+            parts.push(`personalized=true`);
+            parts.push(`scheme=${encodeURIComponent(scheme)}`);
+
+            // cacheBuster 추가
+            if (this._personalizedColorCacheBuster) {
+                parts.push(`_t=${this._personalizedColorCacheBuster}`);
+            }
         }
 
-        // 🔥 Grade 필터 추가 (personalized와 함께 사용)
+        // 🔥 Grade 필터는 personalized 여부와 무관하게 항상 적용
         if (this.selectedGrades.size > 0) {
             const gradeList = Array.from(this.selectedGrades).sort((a, b) => a - b).join(',');
-            // Grade 필터를 params에 추가 (personalized colors 먼저 적용 후 필터링)
-            params += `&grade_filter=${gradeList}`;
+            parts.push(`grade_filter=${gradeList}`);
         }
 
-        // 디버그 로그 제거 (너무 자주 출력됨)
-        // console.log(`PARAMS: Final params='${params}', scheme='${scheme}', currentUser='${this.currentUser}', enabled=${this.personalizedColorEnabled}`);
-        return params;
+        // 🔥 Bottom 필터는 personalized 여부와 무관하게 항상 적용
+        if (this.selectedBottoms.size > 0) {
+            const bottomList = Array.from(this.selectedBottoms).sort().join(',');
+            parts.push(`bottom_filter=${encodeURIComponent(bottomList)}`);
+        }
+
+        if (!parts.length) {
+            return "";
+        }
+
+        return `&${parts.join("&")}`;
     }
 
     /**
@@ -9185,7 +9191,8 @@ class WaferMapViewer {
         try {
             if (!this.selectedImagePath) return;
 
-            const res = await fetch(`/api/image?path=${encodeURIComponent(this.selectedImagePath)}`);
+            const personalizedParams = this.getPersonalizedParams();
+            const res = await fetch(`/api/image?path=${encodeURIComponent(this.selectedImagePath)}${personalizedParams}`);
             const blob = await res.blob();
             const img = await decodeBitmapSmart(blob);
             const canvas = document.createElement('canvas');
@@ -10575,13 +10582,14 @@ class WaferMapViewer {
         }
     }
 
-    async loadImage(path, fromLabelExplorer = false, loadVersion = null) {
+    async loadImage(path, fromLabelExplorer = false, loadVersion = null, forceReload = false, options = {}) {
+        const { preserveBottomSelection = false } = options || {};
         // 🔥 gridImage 모드에서는 같은 이미지라도 다시 로드 (next/prev 동작 보장)
         const isGridImageMode = this.viewMode === 'gridImage';
-        
+
         // 이미 같은 이미지를 보고 있고 비트맵이 준비된 경우, 네트워크 로딩 없이 UI만 전환
-        // 단, gridImage 모드이거나 fromLabelExplorer이면 항상 로드
-        if (!isGridImageMode && !fromLabelExplorer && path === this.selectedImagePath && this.currentImageBitmap) {
+        // 단, gridImage 모드이거나 fromLabelExplorer이거나 forceReload이면 항상 로드
+        if (!isGridImageMode && !fromLabelExplorer && !forceReload && path === this.selectedImagePath && this.currentImageBitmap) {
             const gridEl = document.getElementById('image-grid');
             if (gridEl) {
                 gridEl.style.display = 'none';
@@ -10745,10 +10753,15 @@ class WaferMapViewer {
 
             this.selectedImagePath = fullPath;  // 🔥 fullPath 사용 (prefix 포함)
 
-            // 🔥 새로운 이미지 로드 시 Bottom 필터 상태 초기화
-            this.selectedBottoms.clear();
-            if (this.chipAnnotator) {
-                this.chipAnnotator.setBottomFilter(null);
+            // 🔥 새로운 이미지 로드 시 Bottom 필터 상태 초기화 (필요 시 유지)
+            if (!preserveBottomSelection) {
+                this.selectedBottoms.clear();
+                if (this.chipAnnotator) {
+                    this.chipAnnotator.setBottomFilter(null);
+                }
+            } else if (this.chipAnnotator) {
+                // 선택 유지 시 ChipAnnotator에도 즉시 반영
+                this.chipAnnotator.setBottomFilter(this.selectedBottoms);
             }
             this.updateBottomButtonUI();
 
@@ -20711,8 +20724,8 @@ class WaferMapViewer {
     async applyGradeFilter() {
         if (!this.selectedImagePath) return;
 
-        // 현재 이미지 재로드
-        await this.loadImage(this.selectedImagePath);
+        // 🔥 forceReload=true로 캐시 우회하고 필터 적용된 이미지 다시 로드
+        await this.loadImage(this.selectedImagePath, false, null, true, { preserveBottomSelection: true });
     }
 
     /**
@@ -20798,14 +20811,13 @@ class WaferMapViewer {
     }
 
     /**
-     * Bottom 필터 적용 (오버레이 렌더링)
+     * Bottom 필터 적용 (이미지 다시 로드)
      */
     async applyBottomFilter() {
         if (!this.selectedImagePath) return;
 
-        if (this.chipAnnotator) {
-            this.chipAnnotator.setBottomFilter(this.selectedBottoms);
-        }
+        // 🔥 forceReload=true로 캐시 우회하고 필터 적용된 이미지 다시 로드
+        await this.loadImage(this.selectedImagePath, false, null, true, { preserveBottomSelection: true });
     }
 
     /**
@@ -20819,10 +20831,17 @@ class WaferMapViewer {
 
         bottomItems.forEach(item => {
             const key = item.getAttribute('data-key');
-            if (!key || !key.startsWith('B')) return;
+            if (!key) return;
 
-            // 🔥 Extract as string for comparison
-            const bottomValueStr = key.substring(1);
+            // 🔥 Normal, Invalid도 처리하도록 수정
+            let bottomValueStr;
+            if (key.startsWith('B')) {
+                // B285, B286, etc. → "285", "286"
+                bottomValueStr = key.substring(1);
+            } else {
+                // Normal, Invalid → "Normal", "Invalid"
+                bottomValueStr = key;
+            }
 
             if (this.selectedBottoms.has(bottomValueStr)) {
                 item.classList.add('selected');

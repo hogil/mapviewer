@@ -322,7 +322,7 @@ def plte_grade_filter_memory(png_data: bytearray, grade_indices: List[int]) -> b
     메모리 상태에서 PLTE Grade 필터링 (선택된 grade만 색상 유지, Grade 0-7만 필터링).
 
     PNG 파일의 PLTE 청크를 수정하여 선택된 Grade 인덱스만 색상을 유지하고
-    선택되지 않은 Grade 인덱스(0-7)는 흰색(255, 255, 255)으로 변경합니다.
+    선택되지 않은 Grade 인덱스(0-7)는 팔레트 인덱스 31의 색상(흰색)으로 덮어씁니다.
 
     중요: 팔레트 인덱스 8 이상(Normal, Invalid, B285 등)은 그대로 유지됩니다.
 
@@ -361,7 +361,19 @@ def plte_grade_filter_memory(png_data: bytearray, grade_indices: List[int]) -> b
             num_colors = len(current_plte) // 3
             logger.info("🎨 PLTE 청크 발견: chunk_length=%d, 팔레트 색상 수=%d", chunk_length, num_colors)
 
-            # 팔레트 필터링: Grade 0-7 중 선택되지 않은 것만 흰색으로 변경
+            # 🔥 팔레트 인덱스 31의 색상 가져오기 (흰색)
+            # 인덱스 31이 존재하지 않으면 흰색 사용
+            if num_colors > 31:
+                white_color = list(current_plte[31 * 3 : 31 * 3 + 3])
+            else:
+                white_color = [255, 255, 255]
+
+            if len(white_color) < 3:
+                white_color = [255, 255, 255]
+
+            logger.info("🎨 인덱스 31 색상 (Grade 필터용): %s", white_color)
+
+            # 팔레트 필터링: Grade 0-7 중 선택되지 않은 것만 인덱스 31 색상으로 변경
             # 인덱스 8 이상(Normal, Invalid 등)은 그대로 유지
             new_plte = current_plte[:]
 
@@ -369,14 +381,122 @@ def plte_grade_filter_memory(png_data: bytearray, grade_indices: List[int]) -> b
             modified_indices = []
             for i in range(min(8, num_colors)):
                 if i not in grade_set:
-                    # 흰색으로 변경
-                    new_plte[i * 3] = 255      # R
-                    new_plte[i * 3 + 1] = 255  # G
-                    new_plte[i * 3 + 2] = 255  # B
+                    # 선택되지 않은 Grade는 팔레트 31번 색상(흰색)으로 교체
+                    new_plte[i * 3] = white_color[0]      # R
+                    new_plte[i * 3 + 1] = white_color[1]  # G
+                    new_plte[i * 3 + 2] = white_color[2]  # B
                     modified_indices.append(i)
 
-            logger.info("✏️  필터링된 인덱스: %s (흰색으로 변경)", modified_indices)
-            logger.info("✅ 유지된 인덱스: %s", list(grade_set))
+            logger.info("✏️  필터링된 Grade 인덱스: %s (white color=%s)", modified_indices, white_color)
+            logger.info("✅ 유지된 Grade 인덱스: %s", list(grade_set))
+
+            # PLTE 데이터 교체
+            png_data[plte_start:plte_end] = new_plte
+
+            # CRC 재계산 및 수정
+            crc_data = chunk_type + bytes(new_plte)
+            crc = zlib.crc32(crc_data) & 0xffffffff
+
+            if plte_end + 4 <= len(png_data):
+                png_data[plte_end:plte_end+4] = struct.pack('>I', crc)
+            break
+
+        pos += chunk_length + 4
+
+    return png_data
+
+
+def plte_bottom_filter_memory(png_data: bytearray, bottom_values: List[str]) -> bytearray:
+    """
+    메모리 상태에서 PLTE Bottom 필터링 (선택된 bottom 값만 색상 유지, 나머지는 인덱스 31 색상으로 변경).
+
+    PNG 파일의 PLTE 청크를 수정하여 선택된 Bottom 값들만 색상을 유지하고
+    선택되지 않은 Bottom 값들은 팔레트 인덱스 31의 색상(보통 흰색)으로 덮어씁니다.
+
+    Bottom 값 매핑:
+    - 'Normal' → 인덱스 8
+    - 'Invalid' → 인덱스 9
+    - '285' (B285) → 인덱스 10
+    - '286' (B286) → 인덱스 11
+    - '287' (B287) → 인덱스 12
+    - '288' (B288) → 인덱스 13
+
+    중요: 팔레트 인덱스 0-7 (Grade)는 그대로 유지됩니다.
+
+    Args:
+        png_data: PNG 파일의 바이트 데이터 (bytearray)
+        bottom_values: 유지할 Bottom 값 리스트 (예: ['285', '287', 'Normal'])
+
+    Returns:
+        수정된 PNG 바이트 데이터 (bytearray)
+    """
+    # Bottom 값을 팔레트 인덱스로 매핑
+    BOTTOM_MAP = {
+        'Normal': 8,
+        'Invalid': 9,
+        '285': 10,
+        '286': 11,
+        '287': 12,
+        '288': 13
+    }
+
+    # 선택된 bottom 값들을 인덱스로 변환
+    selected_indices = set()
+    for val in bottom_values:
+        if val in BOTTOM_MAP:
+            selected_indices.add(BOTTOM_MAP[val])
+
+    logger.info("🔍 Bottom 필터 적용: bottom_values=%s, selected_indices=%s", bottom_values, selected_indices)
+
+    # PNG 청크 찾기
+    pos = 8  # PNG 시그니처 건너뛰기
+
+    while pos < len(png_data):
+        if pos + 4 > len(png_data):
+            break
+        chunk_length = struct.unpack('>I', png_data[pos:pos+4])[0]
+        pos += 4
+
+        if pos + 4 > len(png_data):
+            break
+        chunk_type = png_data[pos:pos+4]
+        pos += 4
+
+        if chunk_type == b'PLTE':
+            # PLTE 데이터 수정
+            plte_start = pos
+            plte_end = pos + chunk_length
+
+            # 기존 PLTE 데이터 읽기
+            current_plte = list(png_data[plte_start:plte_end])
+            num_colors = len(current_plte) // 3
+            logger.info("🎨 PLTE 청크 발견: chunk_length=%d, 팔레트 색상 수=%d", chunk_length, num_colors)
+
+            # 팔레트 인덱스 31의 색상 가져오기 (보통 흰색)
+            # 인덱스 31이 존재하지 않으면 흰색 사용
+            if num_colors > 31:
+                white_color = list(current_plte[31 * 3 : 31 * 3 + 3])
+            else:
+                white_color = [255, 255, 255]
+
+            if len(white_color) < 3:
+                white_color = [255, 255, 255]
+
+            # 팔레트 필터링: Bottom 인덱스 8-13 중 선택되지 않은 것만 인덱스 31 색상(흰색)으로 변경
+            # Grade 인덱스 0-7은 그대로 유지
+            new_plte = current_plte[:]
+            modified_indices = []
+
+            for idx, palette_idx in BOTTOM_MAP.items():
+                if palette_idx < num_colors and palette_idx not in selected_indices:
+                    # 선택되지 않은 Bottom 값은 인덱스 31 색상으로 교체
+                    new_plte[palette_idx * 3] = white_color[0]      # R
+                    new_plte[palette_idx * 3 + 1] = white_color[1]  # G
+                    new_plte[palette_idx * 3 + 2] = white_color[2]  # B
+                    modified_indices.append(f"{idx}(idx={palette_idx})")
+
+            logger.info("✏️  필터링된 Bottom: %s (white color=%s)", modified_indices, white_color)
+            logger.info("✅ 유지된 Bottom: %s", [f"{k}({BOTTOM_MAP[k]})" for k in bottom_values if k in BOTTOM_MAP])
 
             # PLTE 데이터 교체
             png_data[plte_start:plte_end] = new_plte
@@ -403,4 +523,5 @@ __all__ = [
     "swap_first16_colors",
     "plte_inplace_patch_memory",
     "plte_grade_filter_memory",
+    "plte_bottom_filter_memory",
 ]

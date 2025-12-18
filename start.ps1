@@ -73,6 +73,10 @@ $env:PYRAMID_KERNEL="cubic"            # 리사이즈 커널 (cubic, 최고 품�
 $env:PYRAMID_LOADER_MODE="random"      # 로더 모드 (random=스트리밍, seq_early_copy=메모리 복사)
 $env:PYRAMID_BG_WORKERS="4"            # 개발 환경 백그라운드 피라미드 워커
 
+# 접근 로그 최소화
+$env:ACCESS_LOG_ENABLED="0"            # uvicorn access log 비활성화 (필요 시 1로)
+$env:ACCESS_LOG_LEVEL="WARNING"        # 활성 시 레벨
+
 # TurboJPEG 설정 (그리드 썸네일 전용)
 # 2025-10-24: 그리드 썸네일 TurboJPEG 4:2:2 적용
 # - 벤치마크 결과 (300개): TurboJPEG Q100 422 FASTDCT (12,593ms) > pyvips (13,016ms) = 3.4% 빠름

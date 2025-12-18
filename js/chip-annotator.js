@@ -556,16 +556,7 @@ export class ChipAnnotator {
             return;
         }
 
-        // 2. viewMode가 'single' 또는 'gridImage'가 아니면 숨김
-        if (viewer.viewMode !== 'single' && viewer.viewMode !== 'gridImage') {
-            const listContainer = document.getElementById('selected-chips-list');
-            if (listContainer) {
-                listContainer.style.display = 'none';
-            }
-            return;
-        }
-
-        // 3. 현재 이미지가 없으면 숨김
+        // 2. 현재 이미지가 없으면 숨김 (viewMode가 없더라도 currentImage를 우선 신뢰)
         if (!viewer.currentImage) {
             const listContainer = document.getElementById('selected-chips-list');
             if (listContainer) {
@@ -574,7 +565,7 @@ export class ChipAnnotator {
             return;
         }
 
-        // 4. listContainer 찾거나 생성
+        // 3. listContainer 찾거나 생성
         let listContainer = document.getElementById('selected-chips-list');
         
         if (!listContainer) {
@@ -693,7 +684,7 @@ export class ChipAnnotator {
             }
         }
 
-        // 5. listItems 요소 찾기
+        // 4. listItems 요소 찾기
         const listItems = document.getElementById('selected-chips-list-items');
         if (!listItems) {
             console.error('[updateSelectedChipsList] Could not find selected-chips-list-items');
@@ -753,7 +744,7 @@ export class ChipAnnotator {
             listContainer.insertBefore(newHeader, listItems);
         }
 
-        // 5-1. color-legend-bottom의 높이를 계산하여 위치 업데이트 (이미 생성된 경우에도)
+        // 4-1. color-legend-bottom의 높이를 계산하여 위치 업데이트 (이미 생성된 경우에도)
         const colorLegendBottom = document.getElementById('color-legend-bottom');
         if (colorLegendBottom && listContainer) {
             let bottomPosition = 10; // 기본값
@@ -772,7 +763,7 @@ export class ChipAnnotator {
             listContainer.style.bottom = `${bottomPosition}px`;
         }
 
-        // 6. 선택된 칩이 있으면 렌더링
+        // 5. 선택된 칩이 있으면 렌더링
         if (this.selectedChips.size > 0) {
             
             // 목록 초기화
@@ -1044,28 +1035,26 @@ export class ChipAnnotator {
         
         ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-        // 🔥 Bottom Filter Mask: Mask ONLY unselected chips (preserve background/text)
+        // 🔥 Bottom Filter Mask: 허용되지 않은 칩 영역만 흰색으로 덮기 (배경은 그대로 유지)
         if (this.bottomFilterSet.size > 0) {
             const transform = this.viewer.transform;
-            const Y_OFFSET = -55; // Match _drawChipRect logic
-
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-
+            const Y_OFFSET = -55; // _drawChipRect와 동일한 오프셋
+            ctx.save();
+            ctx.resetTransform();
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
             this.chips.forEach(chip => {
-                // If chip is NOT in the selected set, cover it with white
-                // 🔥 Convert chip.b to string for comparison
                 if (chip && !this.bottomFilterSet.has(String(chip.b))) {
                     const rect = chip.rect;
-
-                    // Calculate canvas coordinates (same as _drawChipRect)
                     const x = rect.x0 * transform.scale + transform.dx;
                     const y = rect.y0 * transform.scale + transform.dy + Y_OFFSET;
                     const w = (rect.x1 - rect.x0) * transform.scale;
                     const h = (rect.y1 - rect.y0) * transform.scale;
-
-                    ctx.fillRect(x, y, w, h);
+                    ctx.rect(x, y, w, h);
                 }
             });
+            ctx.fill();
+            ctx.restore();
         }
 
         // Draw grid if enabled
@@ -1080,6 +1069,10 @@ export class ChipAnnotator {
                 c => c.x_abs === markedChip.x_abs && c.y_abs === markedChip.y_abs
             );
             if (!chip) return;
+            // Bottom 필터 활성 시 허용된 b 값만 렌더링
+            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(String(chip.b))) {
+                return;
+            }
             const isVisible = !activeSet || activeSet.has(chipClass);
             const alpha = isVisible ? 0.45 : 0;
             if (alpha > 0) {
@@ -1092,7 +1085,7 @@ export class ChipAnnotator {
         if (this.selectedChips.size > 0) {
             this.selectedChips.forEach(chipIdx => {
                 const chip = this.chips[chipIdx];
-                if (chip) {
+                if (chip && (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(String(chip.b)))) {
                     this._drawChipRect(chip, this.selectedColor);
                 }
             });
@@ -1102,7 +1095,11 @@ export class ChipAnnotator {
         if (this._tempDragSelection && this._tempDragSelection.length > 0) {
             this._tempDragSelection.forEach(chipIdx => {
                 const chip = this.chips[chipIdx];
-                if (chip && !this.selectedChips.has(chipIdx)) {
+                if (
+                    chip &&
+                    !this.selectedChips.has(chipIdx) &&
+                    (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(String(chip.b)))
+                ) {
                     // 🔥 이미 선택된 chip은 제외 (중복 표시 방지)
                     this._drawChipRect(chip, 'rgba(255, 255, 0, 0.2)'); // 🔥 더 투명하게 미리보기 (0.3 -> 0.2)
                 }
@@ -1111,7 +1108,9 @@ export class ChipAnnotator {
 
         // Draw hovered chip
         if (this.hoveredChip) {
-            this._drawChipRect(this.hoveredChip, this.hoverColor);
+            if (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(String(this.hoveredChip.b))) {
+                this._drawChipRect(this.hoveredChip, this.hoverColor);
+            }
         }
 
         // Draw Alt+Drag free-form selection polygon
@@ -1699,16 +1698,14 @@ export class ChipAnnotator {
                     console.log('🖱️ [DRAG] 범위 내 chip 제거:', selected.length, '개 (제거:', toRemove.length, ')');
                 }
             } else {
-                // 🔥 드래그가 발생하지 않았을 때: 클릭한 칩을 단일 선택 (없으면 해제)
-                const chipAtClick = this.findChipAtPixel(canvasX, canvasY);
+                // 🔥 드래그가 없는 일반 클릭: 선택만 해제 (단일 선택은 허용하지 않음)
+                const hadSelection = this.selectedChips.size > 0;
                 this.selectedChips.clear();
                 this.selectedChipsOrder = [];
-                if (chipAtClick) {
-                    this.selectedChips.add(chipAtClick.index);
-                    this.selectedChipsOrder.push(chipAtClick.index);
-                    console.log('🖱️ [CLICK] chip 단일 선택:', chipAtClick.index);
+                if (hadSelection) {
+                    console.log('🖱️ [CLICK] plain 클릭으로 선택 해제');
                 } else {
-                    console.log('🖱️ [CLICK] chip 없음 → 선택 해제');
+                    console.log('🖱️ [CLICK] 선택 상태 없음 - 유지');
                 }
                 this.updateSelectedChipsList(); // 🔥 Selection 패널 즉시 업데이트
             }
