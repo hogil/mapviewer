@@ -1,14 +1,24 @@
-# Wafer Map Viewer (MapViewer)
+# L3 Tracker – Wafer Map Viewer & Analyzer
 
 <div align="center">
   <img src="https://img.shields.io/badge/version-2.0.0-blue.svg" />
+  <img src="https://img.shields.io/badge/python-3.8%2B-green.svg" />
+  <img src="https://img.shields.io/badge/javascript-ES6%2B-yellow.svg" />
   <img src="https://img.shields.io/badge/backend-FastAPI-green.svg" />
-  <img src="https://img.shields.io/badge/frontend-Vanilla%20JS%20(ES6%2B)-yellow.svg" />
-  <img src="https://img.shields.io/badge/render-Canvas%20%2B%20WebGL2-orange.svg" />
 </div>
 
-대용량 반도체 웨이퍼맵(수천~수만 장 썸네일, 단일 맵 수천만 픽셀)을 **지연 없이 탐색(줌/팬)** 하고,
-**개인색(palette) / 필터 / 합성(Composite) / 클립보드 복사** 같은 업무 기능을 “빠르게” 제공하는 웹 애플리케이션입니다.
+## Overview
+
+L3 Tracker(=Wafer Map Viewer)는 대규모 반도체 웨이퍼 맵 이미지를 **초고속으로 탐색(줌/팬)** 하고,
+**개인색(palette) / Composite / 클립보드 복사 / Chip 오버레이/라벨링** 같은 업무 기능을 빠르게 제공하는 웹 애플리케이션입니다.
+
+### 주요 특징
+
+- **Pyramid(level) 기반 렌더링**: `/api/image?path=...&level=...` 로 필요한 해상도만 전송/캐시
+- **썸네일/프리패치 파이프라인**: 서버·클라이언트 동시 병렬 처리, 환경변수로 튜닝 가능
+- **개인색(팔레트) 적용**: PNG 팔레트(PLTE)만 패치하여 빠르게 색상 변경
+- **Composite Map**: 다수 맵을 집계/합성해 히트맵 생성
+- **Chip 오버레이/선택/라벨링**: overlay canvas 기반으로 빠른 UI 피드백
 
 ---
 
@@ -16,137 +26,112 @@
 
 ### 1) 서버: 피라미드(해상도 레벨) + 디스크 캐시 + 백그라운드 생성
 
-- **한 장의 원본을 그대로 계속 보내지 않음**  
-  단일 뷰는 `/api/image?path=...&level=...` 로 **피라미드 레벨**(예: 1.0 / 0.5 / 0.25)을 요청합니다.
-- **레벨 이미지는 디스크에 캐시**  
-  생성된 피라미드는 `THUMBNAIL_DIR/pyramid_*` (또는 개인색 scheme 하위)로 저장되고,
-  응답은 `Cache-Control: immutable` + `ETag` 로 브라우저/프록시 캐시가 강하게 동작합니다.
-- **“지금 필요한 레벨”만 즉시 만들고, 나머지는 백그라운드로**  
-  최초 요청 레벨만 동기 생성 → 나머지 레벨은 `asyncio` 백그라운드 태스크로 미리 생성합니다.
+- 단일 뷰는 원본 전체를 매번 내려받지 않고, **피라미드 레벨**을 요청합니다.
+- 생성된 피라미드는 디스크에 캐시되고, 응답은 `Cache-Control: immutable` + `ETag` 로 브라우저 캐시가 강하게 동작합니다.
+- 첫 요청 레벨만 즉시 생성하고, 나머지 레벨은 `asyncio` 로 백그라운드에서 미리 생성합니다.
 
-관련 코드:
-- `api/main.py` (`GET /api/image`, pyramid 캐시/HIT/MISS, 백그라운드 레벨 생성)
+관련 코드: `api/main.py` (`GET /api/image`)
 
-### 2) 썸네일: pyvips(스트리밍) + (옵션) TurboJPEG + 동시성 세마포어
+### 2) 썸네일: pyvips(스트리밍) + (옵션) TurboJPEG + 동시성 제어
 
-- `pyvips.Image.new_from_file(..., access="sequential")` 로 **디스크 I/O 효율**을 최대화합니다.
-- JPEG 저장은 (옵션) TurboJPEG를 사용해 인코딩 시간을 줄입니다.
-- `THUMBNAIL_SEM` 기반 세마포어로 서버 동시 생성량을 제어해 **과부하/스톨을 방지**합니다.
+- `pyvips`의 `access="sequential"` 로 스트리밍 I/O를 활용합니다.
+- JPEG 인코딩은 (옵션) TurboJPEG를 사용해 CPU 시간을 줄입니다.
+- 서버는 `THUMBNAIL_SEM` 세마포어로 동시 생성을 제한해 과부하를 방지합니다.
 
-관련 코드:
-- `api/thumbnail_service.py` (`ThumbnailService`)
-- `api/cache_manager.py` (LRU/TTL 기반 캐시 계층)
+관련 코드: `api/thumbnail_service.py`, `api/cache_manager.py`
 
-### 3) 개인색/필터: “재렌더링”이 아니라 “팔레트(PLTE)만 패치”
+### 3) 개인색/필터: “재렌더링”이 아니라 “PLTE만 패치”
 
-웨이퍼맵 PNG가 **팔레트(P) 기반**일 때, 색을 바꾸기 위해 전체 이미지를 다시 만들 필요가 없습니다.
-이 프로젝트는 PNG의 **PLTE 청크만 메모리에서 in-place 패치**해서 색상을 변경합니다.
+- 팔레트(P) PNG는 **픽셀(IDAT) 재압축 없이** PLTE 청크만 수정하면 색을 바꿀 수 있습니다.
+- 이 방식은 CPU/지연을 크게 줄이고, 사용자별 scheme 캐시도 충돌 없이 관리합니다.
 
-- 장점: **IDAT 재압축이 없어서 매우 빠름**, CPU 사용량/지연이 급감
-- 개인색은 사용자별 scheme + timestamp 경로로 분리 캐시되어 충돌이 없습니다.
+관련 코드: `api/personal_colors.py`, `api/main.py`
 
-관련 코드:
-- `api/personal_colors.py` (`plte_inplace_patch_memory`, `swap_first16_colors`, `load_color_legends`)
-- `api/main.py` (`/api/image`에서 personalized/grade/bottom filter 처리)
+### 4) 클라이언트: Vanilla JS + Canvas/WebGL2 + 프레임 친화 스케줄링
 
-### 4) 클라이언트: Canvas/WebGL2 렌더러 + 피라미드 레벨 선택 + 프레임 친화적 스케줄링
+- ES6 모듈 기반 Vanilla JS로 동작해 런타임 오버헤드가 적습니다.
+- 렌더는 Canvas 2D/WebGL2로 수행하며, 작업은 `rAF`/`requestIdleCallback` 기반 큐로 분산해 프레임 드랍을 최소화합니다.
 
-- 렌더링은 **Vanilla JS + Canvas/WebGL2** 로 구현되어 번들러/프레임워크 오버헤드가 없습니다.
-- `SemiconductorRenderer`는 2D context를 `desynchronized: true` 로 생성하고,
-  WebGL2가 가능하면 GPU로 스케일링(바이큐빅)하여 줌/팬 시 체감 지연을 줄입니다.
-- 렌더/DOM 작업은 `requestAnimationFrame` / `requestIdleCallback` 기반 큐로 분산해
-  **스크롤/줌 중 프레임 드랍을 최소화**합니다.
-
-관련 코드:
-- `js/semiconductor-renderer.js` (Canvas2D/WebGL2 렌더러)
-- `js/render-optimizer.js` (idle task / rAF 스케줄링, lazy load, virtual scroll)
-- `js/main.js` (피라미드 레벨 로딩/캐시, 프리패치 흐름)
+관련 코드: `js/semiconductor-renderer.js`, `js/render-optimizer.js`, `js/main.js`
 
 ---
 
-## 편의 기능도 “빠르게” 구현한 이유
+## 편의 기능 구현 포인트
 
-- **개인색(Color Scheme)**: 사용자별 색상표를 `logs/color-legends.json`에 저장 → 서버가 PLTE만 패치해서 즉시 반영  
-  - 관련: `api/personal_colors.py`, `js/color-editor.js`
-- **Composite Map / Composite Subset**: numpy/numba(+옵션 Cython)로 집계, 병렬 워커로 렌더/저장 분리  
-  - 관련: `api/composite_map.py`, `/api/composite-map`, `/api/composite-subset`
-- **컨텍스트 메뉴 복사/합성**: 캔버스에서 보이는 영역만 합성해서 Clipboard API로 복사 (오버레이/범례 포함)  
-  - 관련: `js/context-menu.js`
-- **Chip 오버레이/선택/라벨링**: 별도 overlay canvas에 chip 레이어를 렌더링해 메인 이미지와 독립적으로 빠르게 갱신  
-  - 관련: `js/chip-annotator.js`, `/api/chip-positions`, `/api/chip-annotations`, `/api/classify/chips`
-- **라벨/분류 워크플로우**: 분류는 “이미지 복사”가 아니라 가능하면 **하드링크**를 사용해 I/O를 줄임  
-  - 관련: `api/main.py` (`/api/classify`, `/api/classify/batch`)
+- **개인색(Color Scheme)**: `logs/color-legends.json` 저장 → 서버가 PLTE만 패치해 즉시 반영 (`api/personal_colors.py`, `js/color-editor.js`)
+- **Composite Map / Subset**: numpy/numba(+옵션 Cython) 집계 + 병렬 워커 (`api/composite_map.py`)
+- **컨텍스트 메뉴 복사/합성**: 보이는 영역만 합성해서 Clipboard API로 복사 (`js/context-menu.js`)
+- **Chip 오버레이/선택**: overlay canvas 기반 렌더 (`js/chip-annotator.js`)
+- **라벨/분류**: 가능한 경우 하드링크로 I/O 최소화 (`api/main.py` `/api/classify*`)
 
----
+## Project Structure
 
-## 기술 스택
-
-- **Backend**: FastAPI, Uvicorn, asyncio, (옵션) Brotli/GZip
-- **Image Pipeline**: pyvips, Pillow, (옵션) TurboJPEG, numpy, numba, (옵션) Cython
-- **Frontend**: Vanilla JavaScript (ES6 Modules, **No build step**), Canvas 2D, WebGL2, Web APIs(Clipboard/IntersectionObserver 등)
-
----
-
-## 빠른 시작
-
-### 설치
-
-```bash
-pip install -r requirements.txt
+```
+├─ api/                   # FastAPI backend (image/pyramid/thumbnail/search/composite)
+├─ js/                    # 프론트엔드 ES6 모듈 (번들러 없이 index.html에서 로드)
+├─ index.html             # SPA 진입점
+├─ start.ps1              # Windows 개발 환경 스타터
+├─ start.sh               # Ubuntu/Linux 실행 스크립트
+├─ scripts/               # 벤치마크 및 유틸리티 스크립트
+├─ docs/                  # 설계/성능 문서
+├─ docs/archive/          # 벤치마크 결과 및 최적화 히스토리
+├─ ARCHITECTURE.md        # 시스템 구성 설명
+├─ CHIP_ANNOTATION.md     # Chip 주석/좌표 설명
+└─ README.md
 ```
 
-### 실행
+## Environment & Deployment
 
-- Windows: `./start.ps1`
-- Ubuntu/Linux: `./start.sh`
+| 구분               | CPU/RAM        | 실행 스크립트 | 주요 환경 변수                                       |
+|-------------------|---------------|---------------|------------------------------------------------------|
+| **개발 (Windows)**| 8C / 64 GB     | `./start.ps1` | `THUMB_PREFETCH_BATCH=24`, `THUMB_CLIENT_MAX_CONCURRENCY=8`, `VIPS_CONCURRENCY=4` |
+| **운영 (Ubuntu)** | 32C / 192 GB   | `./start.sh`  | `THUMB_PREFETCH_BATCH=64`, `THUMB_CLIENT_MAX_CONCURRENCY=12`, `VIPS_CONCURRENCY=24` |
+| **클라이언트**    | 6C / 32 GB     | 웹 브라우저   | `/api/config` 로 전달된 값 적용 (기본 24/12)         |
 
-브라우저에서 `http://localhost:8080` 접속
+> 운영 서버의 코어·RAM이 더 높다면 `start.sh` 상단의 주석에 따라 `IO_THREADS`, `THUMBNAIL_SEM`, `VIPS_CONCURRENCY` 등을 확장한 뒤 `/api/config` 응답을 확인하세요.
 
----
+### 설치 및 실행
 
-## 성능 튜닝 포인트 (자주 조절하는 것들)
+1. 저장소 클론
+   ```bash
+   git clone https://github.com/hogil/mapviewer.git
+   cd mapviewer
+   ```
+2. Python 의존성 설치
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. 개발 환경 실행
+   ```powershell
+   ./start.ps1
+   ```
+4. 운영 환경 실행
+   ```bash
+   ./start.sh
+   ```
+5. 브라우저에서 접속  
+   기본 주소는 `http://localhost:8080`
 
-| 변수 | 의미 | 권장 접근 |
-|---|---|---|
-| `THUMB_PREFETCH_BATCH` | 클라이언트 프리패치 배치 크기 | 썸네일 밀집 환경에서 점진적으로 ↑ |
-| `THUMB_CLIENT_MAX_CONCURRENCY` | 클라이언트 동시 요청 수 | 네트워크/서버 여유에 맞춰 ↑ |
-| `THUMBNAIL_SEM` | 서버 썸네일 생성 동시성(세마포어) | CPU/I/O 한계 넘지 않게 조절 |
-| `VIPS_CONCURRENCY` | pyvips 내부 동시성 | 코어 수에 비례하되 과도하면 역효과 |
-| `IO_THREADS` | I/O 스레드 풀 | HDD/네트워크 스토리지면 보수적으로 |
+## Documentation
 
-실제 운영 값은 `start.ps1`, `start.sh`의 기본값과 `/api/config` 응답을 기준으로 맞춥니다.
-
----
+- **시스템 구성**: `ARCHITECTURE.md`
+- **칩 주석/좌표**: `CHIP_ANNOTATION.md`
+- **성능 분석/벤치마크**: `docs/`, `docs/archive/`
 
 ## API Snapshot
 
-| Method | Path | 설명 |
-|---|---|---|
-| GET | `/api/files` | 폴더 탐색 |
-| GET | `/api/search` | 현재 폴더 범위 검색 |
-| GET | `/api/config` | 프론트 설정(프리패치/동시성 등) |
-| GET | `/api/thumbnail` | 썸네일 생성/제공 |
-| POST | `/api/thumbnail/preload` | 썸네일 배치 프리패치 |
-| GET | `/api/image` | 원본/피라미드 레벨 이미지 (`level`, `personalized`, `scheme`, 필터) |
-| POST | `/api/classify` | 분류(하드링크/복사) + 라벨 업데이트 |
-| POST | `/api/classify/chips` | chip crop 저장/라벨링 |
-| POST | `/api/composite-map` | composite map 생성(비동기 작업) |
-| GET | `/api/composite-map/status/{task_id}` | composite map 진행상태 |
-| POST | `/api/composite-subset` | subset composite 생성 |
+| Method | Path              | 설명                    |
+|--------|-------------------|-------------------------|
+| GET    | `/api/files`      | 현재 폴더 목록          |
+| GET    | `/api/image`      | 원본/피라미드 이미지    |
+| GET    | `/api/thumbnail`  | 썸네일 생성/제공        |
+| POST   | `/api/thumbnail/preload` | 썸네일 배치 프리패치 |
+| GET    | `/api/config`     | 프론트 설정 정보        |
+| GET    | `/api/search`     | 현재 폴더 범위 검색     |
+| POST   | `/api/classify`   | 라벨/분류               |
+| POST   | `/api/composite-map` | Composite map 생성(비동기) |
+| GET    | `/api/composite-map/status/{task_id}` | Composite 진행상태 |
 
----
+## Note
 
-## 더 읽을거리
-
-- 성능/벤치마크 자료: `docs/`, `docs/archive/`
-- 칩 주석/좌표: `CHIP_ANNOTATION.md`
-- 내부 구조 개요: `ARCHITECTURE.md`
-
----
-
-## 저장소
-
-```bash
-git clone https://github.com/hogil/mapviewer.git
-cd mapviewer
-```
+- 예전 README에 있던 `ENVIRONMENT_SETUP.md`, `CHANGELOG.md`, `LICENSE` 는 현재 레포에 없어서 링크가 깨질 수 있습니다. 최신 튜닝/히스토리는 `docs/`, `docs/archive/` 를 기준으로 보시면 됩니다.
