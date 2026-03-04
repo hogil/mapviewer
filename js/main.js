@@ -7476,6 +7476,7 @@ class WaferMapViewer {
         this._prevGridSelectedIdxs = new Set();
         this.gridLastClickedIdx = undefined;
         this.selectedImages = heatmapPaths;  // 🔥 컬럼 슬라이더 작동을 위해 selectedImages 설정
+        this.isCompositeMode = true;  // 🔥 showGrid 호출 전에 설정 (showGridByLot 리다이렉트 방지)
 
         // 🔥 Grid를 9개 이미지로 교체 (선택 상태 초기화)
         await this.showGrid(heatmapPaths, true);  // skipSaveState=true
@@ -7514,9 +7515,6 @@ class WaferMapViewer {
             isCompositeMode: true,
             compositeSession: this.cloneCompositeSession(),
         };
-
-        // Composite 모드 활성화
-        this.isCompositeMode = true;
 
         this.updateContextMenuState();
     }
