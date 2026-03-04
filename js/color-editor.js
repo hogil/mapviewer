@@ -417,9 +417,20 @@ export class ColorSchemeEditor {
     async close() {
         if (!this.modal) return;
         
-        // 그리드 모드나 이미지가 없으면 원래 색상 복원 불필요
+        // 그리드 모드나 이미지가 없으면 원래 색상 복원 불필요하지만 __preview_ 는 항상 삭제
         if (!this.viewer || (this.viewer.gridMode && !this.viewer.selectedImagePath)) {
-            // 모달만 닫기
+            // __preview_ 임시 스킴 삭제 (이미지가 없어도 preview가 생성됐을 수 있음)
+            if (this.currentSchemeName) {
+                const previewName = `__preview_${this.currentSchemeName}`;
+                if (this.viewer && this.viewer.colorLegends) {
+                    delete this.viewer.colorLegends[previewName];
+                }
+                fetch(`/api/color-scheme`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ schemeName: previewName }),
+                }).catch(() => {});
+            }
             this.modal.classList.remove("is-open");
             this.modal.setAttribute("aria-hidden", "true");
             document.removeEventListener("keydown", this.boundKeyHandler);
