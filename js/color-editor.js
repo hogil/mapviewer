@@ -378,21 +378,9 @@ export class ColorSchemeEditor {
             schemeName = 'change';
         }
         
-        // 해당 scheme이 없으면 fallback
-        if (!legends[schemeName]) {
-            if (legends.change) {
-                schemeName = 'change';
-            } else {
-                const keys = Object.keys(legends);
-                if (keys.length > 0) {
-                    schemeName = keys[0];
-                } else {
-                    schemeName = 'change';
-                }
-            }
-        }
+        // 해당 scheme이 없으면 default 색상으로 시작 (schemeName은 유지 - 저장 시 올바른 key에 생성)
         this.currentSchemeName = schemeName;
-        const schemeData = legends[schemeName] || getDefaultScheme(legends);
+        const schemeData = legends[schemeName] || legends['default'] || getDefaultScheme(legends);
         // 초기 상태 저장 (깊은 복사)
         this.originalSchemeData = JSON.parse(JSON.stringify(schemeData));
         
@@ -455,19 +443,16 @@ export class ColorSchemeEditor {
                         JSON.parse(JSON.stringify(this.originalSchemeData));
                 }
 
-                // 2. 백엔드에 원래 scheme 임시 저장 (프리뷰 복원용)
-                try {
-                    await fetch(`/api/color-scheme`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            schemeName: `__preview_${this.currentSchemeName}`,
-                            schemeData: JSON.parse(JSON.stringify(this.originalSchemeData)),
-                        }),
-                    });
-                } catch (e) {
-                    console.warn("ColorEditor: Restore preview scheme failed", e);
+                // 2. __preview_ 임시 스킴 삭제 (메모리 + 서버)
+                const previewName = `__preview_${this.currentSchemeName}`;
+                if (this.viewer.colorLegends) {
+                    delete this.viewer.colorLegends[previewName];
                 }
+                fetch(`/api/color-scheme`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ schemeName: previewName }),
+                }).catch(() => {});
 
                 // 3. 캐시 초기화
                 this.viewer.pyramidLevels = {};

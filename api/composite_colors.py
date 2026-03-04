@@ -93,14 +93,19 @@ def load_composite_color_settings(scheme: Optional[str] = None) -> CompositeColo
     scheme_key = (scheme or "change").strip() or "change"
     legends = load_color_legends()
     storage, mutated = _ensure_composite_storage(legends)
-    entry, created = _ensure_scheme_entry(storage, scheme_key)
-    colors = _normalize_dict(entry)
 
+    # 저장하지 않고 읽기만 함 - 없으면 default 값 반환 (JSON 생성 안 함)
+    if mutated:
+        save_color_legends(legends)
+
+    entry = storage.get(scheme_key)
+    if not isinstance(entry, dict):
+        # 유저 scheme 없으면 default 값으로 반환 (저장 안 함)
+        entry = {key: DEFAULT_COMPOSITE_COLORS[key] for key in QUANTILE_KEYS}
+
+    colors = _normalize_dict(entry)
     modified = bool(entry.get("modified"))
     last_modified = entry.get("lastModified")
-
-    if mutated or created:
-        save_color_legends(legends)
 
     return CompositeColorSettings(
         keys=list(QUANTILE_KEYS),

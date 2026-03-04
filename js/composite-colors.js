@@ -96,6 +96,13 @@ export class CompositeColorModal {
         }
     }
 
+    _withLogin(url) {
+        const id = this.viewer?.currentUser;
+        if (!id || id === 'change') return url;
+        const sep = url.includes('?') ? '&' : '?';
+        return `${url}${sep}LoginId=${encodeURIComponent(id)}`;
+    }
+
     bindEvents() {
         this.closeBtn?.addEventListener('click', () => this.handleCancel());
         this.cancelBtn?.addEventListener('click', () => this.handleCancel());
@@ -195,7 +202,7 @@ export class CompositeColorModal {
     }
 
     async loadConfig() {
-        const response = await fetch('/api/composite-colors', { cache: 'no-store' });
+        const response = await fetch(this._withLogin('/api/composite-colors'), { cache: 'no-store' });
         if (!response.ok) {
             const message = await response.text();
             throw new Error(message || 'Failed to load composite colors');
@@ -630,7 +637,7 @@ export class CompositeColorModal {
 
         try {
             if (shouldPersist) {
-                const response = await fetch('/api/composite-colors', {
+                const response = await fetch(this._withLogin('/api/composite-colors'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ colors: colorsToUse }),

@@ -51,6 +51,20 @@ def load_color_legends() -> Dict[str, Any]:
             return _color_legends_cache or {}
 
 
+def _compact_color_dicts(text: str) -> str:
+    """top/bottom 색상 딕셔너리를 한 줄로 압축 (저장 포맷용)"""
+    import re
+
+    def replace_block(match):
+        key = match.group(1)
+        inner = match.group(2)
+        pairs = re.findall(r'"([^"]+)":\s*"([^"]+)"', inner)
+        compact = '{' + ', '.join(f'"{k}": "{v}"' for k, v in pairs) + '}'
+        return f'"{key}": {compact}'
+
+    return re.sub(r'"(top|bottom)":\s*(\{[^}]+\})', replace_block, text, flags=re.DOTALL)
+
+
 def save_color_legends(legends: Dict[str, Any], updated_scheme_name: Optional[str] = None) -> bool:
     """Persist legends to disk.
     
@@ -73,7 +87,8 @@ def save_color_legends(legends: Dict[str, Any], updated_scheme_name: Optional[st
             tmp_path = COLOR_LEGENDS_PATH.with_suffix('.json.tmp')
 
             with tmp_path.open('w', encoding='utf-8') as fh:
-                json.dump(legends, fh, ensure_ascii=False, indent=2)
+                raw = json.dumps(legends, ensure_ascii=False, indent=2)
+                fh.write(_compact_color_dicts(raw))
 
             tmp_path.replace(COLOR_LEGENDS_PATH)
             _color_legends_cache = legends
@@ -101,47 +116,14 @@ def normalize_hex_color(value: str) -> str:
 
 def get_user_color_scheme(login_id: Optional[str], username: Optional[str] = None, dept_name: Optional[str] = None) -> str:
     """Resolve scheme key for a user. Anonymous users default to 'change'.
-    
-    Args:
-        login_id: 사용자 LoginId
-        username: 사용자 Username (선택)
-        dept_name: 사용자 DeptName (선택)
-    
+
+    색상 저장 시점에 처음으로 JSON 항목이 생성됩니다 (로그인 시 자동 생성 안 함).
+
     Returns:
         scheme key (LoginId 또는 'change')
     """
     if not login_id:
         return 'change'
-
-    legends = load_color_legends()
-    
-    # LoginId가 이미 있으면 반환 (이미 존재하면 생성하지 않음)
-    if login_id in legends:
-        return login_id
-    
-    # default scheme이 없으면 생성 불가
-    if 'default' not in legends:
-        logger.warning("default scheme 없음, change로 대체: LoginId=%s", login_id)
-        return 'change'
-    
-    # LoginId scheme만 생성 (존재하지 않을 때만)
-    # default의 top, bottom, background, text value를 복사
-    legends[login_id] = copy.deepcopy(legends['default'])
-    
-    # LoginId scheme에 Username과 DeptName 메타데이터 추가
-    if username:
-        legends[login_id]['Username'] = username
-    if dept_name:
-        legends[login_id]['DeptName'] = dept_name
-    
-    # 처음 생성 시 modified: false 설정
-    legends[login_id]['modified'] = False
-    
-    # 변경사항 저장 (마지막 수정 시간 추가)
-    save_color_legends(legends, updated_scheme_name=login_id)
-    logger.info("새 color scheme 생성: %s (from default, Username=%s, DeptName=%s)", 
-                login_id, username or 'None', dept_name or 'None')
-    
     return login_id
 
 
@@ -266,11 +248,9 @@ def plte_inplace_patch_memory(png_data: bytearray, scheme: str) -> bytearray:
         수정된 PNG 바이트 데이터 (bytearray)
     """
     legends = load_color_legends()
-    scheme_data = legends.get(scheme)
+    scheme_data = legends.get(scheme) or legends.get('default')
     if not scheme_data:
-        scheme_data = list(legends.values())[0] if legends else None
-        if not scheme_data:
-            raise ValueError(f"scheme 데이터 없음: {scheme}")
+        raise ValueError(f"scheme 데이터 없음: {scheme}")
     
     palette_bytes = get_palette_for_scheme(scheme_data)
     new_palette = list(palette_bytes)

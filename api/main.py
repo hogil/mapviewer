@@ -1740,14 +1740,6 @@ async def saml_acs(request: Request):
         # LoginId 기준으로 저장
         SAML_USER_SESSIONS[LoginId] = meta
 
-        # 🔥 SAML 로그인 직후 color scheme 생성 (LoginId, Username, DeptName)
-        try:
-            username = meta.get("Username", "")
-            dept_name = meta.get("DeptName", "")
-            get_user_color_scheme(LoginId, username if username else None, dept_name if dept_name else None)
-            bootlog.info(f"✅ [SAML LOGIN] Color scheme 생성 완료: LoginId={LoginId}, Username={username}, DeptName={dept_name}")
-        except Exception as e:
-            bootlog.warning(f"⚠️ [SAML LOGIN] Color scheme 생성 실패: {e}")
     except Exception as e:
         bootlog.error(f"❌ [SAML SESSION] 사용자 정보 저장 실패: {e}")
     
@@ -1820,14 +1812,6 @@ async def saml_dev_login(request: Request):
             # LoginId 기준으로 저장
             SAML_USER_SESSIONS[LoginId] = meta
 
-            # 🔥 개발 모드 로그인 직후 color scheme 생성 (LoginId, Username, DeptName)
-            try:
-                username = meta.get("Username", "")
-                dept_name = meta.get("DeptName", "")
-                get_user_color_scheme(LoginId, username if username else None, dept_name if dept_name else None)
-                logger.info(f"✅ [DEV LOGIN] Color scheme 생성 완료: LoginId={LoginId}, Username={username}, DeptName={dept_name}")
-            except Exception as e:
-                logger.warning(f"⚠️ [DEV LOGIN] Color scheme 생성 실패: {e}")
         else:
             logger.warning(f"⚠️ [DEV SESSION] LoginId가 없어서 저장하지 않음")
     except Exception as e:
@@ -1960,12 +1944,20 @@ async def save_color_scheme(request: Request):
             'text': scheme_data.get('text', '#000001')
         }
         
-        # 기존 scheme의 메타데이터 유지 (Username, DeptName, lastModified 등)
+        # 기존 scheme의 메타데이터 유지, 없으면 세션에서 가져오기 (첫 저장 시 생성)
         existing_scheme = legends.get(scheme_name, {})
         if 'Username' in existing_scheme:
             filtered_scheme_data['Username'] = existing_scheme['Username']
+        elif scheme_name in SAML_USER_SESSIONS:
+            uname = SAML_USER_SESSIONS[scheme_name].get('Username', '')
+            if uname:
+                filtered_scheme_data['Username'] = uname
         if 'DeptName' in existing_scheme:
             filtered_scheme_data['DeptName'] = existing_scheme['DeptName']
+        elif scheme_name in SAML_USER_SESSIONS:
+            dname = SAML_USER_SESSIONS[scheme_name].get('DeptName', '')
+            if dname:
+                filtered_scheme_data['DeptName'] = dname
         
         # default scheme과 비교하여 modified 설정
         # 색상 값 정규화 후 비교 (대소문자 무시)
@@ -2102,6 +2094,25 @@ async def save_color_scheme(request: Request):
     except Exception as e:
         logger.error(f"❌ [API /api/color-scheme] 오류 발생: {e}")
         raise HTTPException(status_code=500, detail=f"색상 스킴 저장 중 오류: {str(e)}")
+
+
+@app.delete("/api/color-scheme")
+async def delete_color_scheme(request: Request):
+    """색상 스킴 삭제 (주로 __preview_ 임시 스킴 정리용)"""
+    try:
+        data = await request.json()
+        scheme_name = data.get('schemeName')
+        if not scheme_name:
+            raise HTTPException(status_code=400, detail="schemeName이 필요합니다")
+        legends = load_color_legends()
+        if scheme_name in legends:
+            del legends[scheme_name]
+            save_color_legends(legends)
+        return {"success": True, "deleted": scheme_name}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ===== 사내 ADFS/STS 헬스 체크 (핑) =====
