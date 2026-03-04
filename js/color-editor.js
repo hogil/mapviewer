@@ -1508,7 +1508,7 @@ export class ColorSchemeEditor {
         menu.className = 'color-editor-context-menu';
         menu.style.cssText = `
             position: fixed;
-            z-index: 20000;
+            z-index: 30001;
             background: #222;
             color: #fff;
             border: 1px solid #444;
