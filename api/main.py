@@ -2004,16 +2004,6 @@ async def save_color_scheme(request: Request):
             'text': normalize_single_color(default_scheme.get('text'))
         }
         
-        is_same_as_default = (
-            normalized_scheme.get('top') == normalized_default.get('top') and
-            normalized_scheme.get('bottom') == normalized_default.get('bottom') and
-            normalized_scheme.get('background') == normalized_default.get('background') and
-            normalized_scheme.get('text') == normalized_default.get('text')
-        )
-        
-        # default와 같으면 modified: false, 다르면 modified: true
-        filtered_scheme_data['modified'] = not is_same_as_default
-        
         legends[scheme_name] = filtered_scheme_data
         
         # 파일에 저장 (마지막 수정 시간 추가)
@@ -4184,9 +4174,9 @@ async def get_image_crop(
 ):
     """Chip 영역 이미지 crop (개인색 설정 지원)"""
     try:
-        # 🔥 개인색 설정이 활성화되었지만 scheme이 없으면 'change'로 기본값 설정
+        # LoginId가 있으면 우선 사용, 없을 때만 'change'로 fallback
         if personalized and not scheme:
-            scheme = 'change'
+            scheme = _current_login_id(request) or 'change'
 
         # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
         if Path(path).is_absolute():
@@ -4289,9 +4279,9 @@ async def get_image(
     try:
         is_head = request.method == "HEAD"
         
-        # 🔥 개인색 설정이 활성화되었지만 scheme이 없으면 'change'로 기본값 설정
+        # LoginId가 있으면 우선 사용, 없을 때만 'change'로 fallback
         if personalized and not scheme:
-            scheme = 'change'
+            scheme = _current_login_id(request) or 'change'
 
         # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
         if Path(path).is_absolute():
@@ -4577,9 +4567,9 @@ async def get_thumbnail(
     scheme: Optional[str] = None
 ):
     try:
-        # 🔥 개인색 설정이 활성화되었지만 scheme이 없으면 'change'로 기본값 설정
+        # LoginId가 있으면 우선 사용, 없을 때만 'change'로 fallback
         if personalized and not scheme:
-            scheme = 'change'
+            scheme = _current_login_id(request) or 'change'
 
         # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
         if Path(path).is_absolute():

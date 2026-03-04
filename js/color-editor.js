@@ -713,8 +713,7 @@ export class ColorSchemeEditor {
                 // Scheme명 (굵게) + (default) 표시
                 const schemeNameEl = document.createElement('span');
                 schemeNameEl.style.cssText = 'font-weight: 600; font-size: 14px; color: #fff; min-width: 80px; flex-shrink: 0;';
-                const isModified = schemeData.modified === false; // modified가 false면 default와 동일
-                schemeNameEl.textContent = name + (isModified ? ' (default)' : '');
+                schemeNameEl.textContent = name;
                 content.appendChild(schemeNameEl);
                 
                 // Username과 DeptName (가로로 나란히)

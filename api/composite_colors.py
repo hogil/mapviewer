@@ -28,7 +28,6 @@ class CompositeColorSettings:
     quantiles: List[float]
     colors: List[str]
     default_colors: List[str]
-    modified: bool
     last_modified: str | None
     scheme: str
 
@@ -38,7 +37,6 @@ class CompositeColorSettings:
             "quantiles": self.quantiles,
             "colors": self.colors,
             "defaultColors": self.default_colors,
-            "modified": self.modified,
             "lastModified": self.last_modified,
             "scheme": self.scheme,
         }
@@ -83,7 +81,6 @@ def _ensure_scheme_entry(storage: Dict[str, Dict[str, str]], scheme: str) -> Tup
     created = False
     if not isinstance(entry, dict):
         entry = {key: DEFAULT_COMPOSITE_COLORS[key] for key in QUANTILE_KEYS}
-        entry["modified"] = False
         storage[scheme] = entry
         created = True
     return entry, created
@@ -104,7 +101,6 @@ def load_composite_color_settings(scheme: Optional[str] = None) -> CompositeColo
         entry = {key: DEFAULT_COMPOSITE_COLORS[key] for key in QUANTILE_KEYS}
 
     colors = _normalize_dict(entry)
-    modified = bool(entry.get("modified"))
     last_modified = entry.get("lastModified")
 
     return CompositeColorSettings(
@@ -112,7 +108,6 @@ def load_composite_color_settings(scheme: Optional[str] = None) -> CompositeColo
         quantiles=list(QUANTILE_VALUES),
         colors=colors,
         default_colors=[DEFAULT_COMPOSITE_COLORS[key] for key in QUANTILE_KEYS],
-        modified=modified,
         last_modified=last_modified,
         scheme=scheme_key,
     )
@@ -128,11 +123,6 @@ def save_composite_color_settings(colors: Sequence[str], scheme: Optional[str] =
     for idx, key in enumerate(QUANTILE_KEYS):
         entry[key] = normalized[idx]
 
-    is_default = all(
-        normalized[idx] == DEFAULT_COMPOSITE_COLORS[key]
-        for idx, key in enumerate(QUANTILE_KEYS)
-    )
-    entry["modified"] = not is_default
     entry["lastModified"] = datetime.now().strftime("%y%m%d_%H%M%S")
     save_color_legends(legends)
     return load_composite_color_settings(scheme_key)

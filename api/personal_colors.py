@@ -52,17 +52,21 @@ def load_color_legends() -> Dict[str, Any]:
 
 
 def _compact_color_dicts(text: str) -> str:
-    """top/bottom 색상 딕셔너리를 한 줄로 압축 (저장 포맷용)"""
+    """중첩 없는 leaf 딕셔너리를 한 줄로 압축 (top/bottom 색상, composite scheme 항목 등)"""
     import re
 
     def replace_block(match):
         key = match.group(1)
         inner = match.group(2)
-        pairs = re.findall(r'"([^"]+)":\s*"([^"]+)"', inner)
-        compact = '{' + ', '.join(f'"{k}": "{v}"' for k, v in pairs) + '}'
-        return f'"{key}": {compact}'
+        # 문자열, boolean, null, 숫자 값만 있는 경우 압축
+        pairs = re.findall(r'"([^"]+)":\s*("[^"]*"|true|false|null|-?\d+(?:\.\d+)?)', inner)
+        if not pairs:
+            return match.group(0)
+        items = ', '.join(f'"{k}": {v}' for k, v in pairs)
+        return f'"{key}": {{{items}}}'
 
-    return re.sub(r'"(top|bottom)":\s*(\{[^}]+\})', replace_block, text, flags=re.DOTALL)
+    # 중첩 객체 없는 모든 leaf 딕셔너리를 한 줄로 압축
+    return re.sub(r'"([^"]+)":\s*(\{[^{}]+\})', replace_block, text, flags=re.DOTALL)
 
 
 def save_color_legends(legends: Dict[str, Any], updated_scheme_name: Optional[str] = None) -> bool:
