@@ -333,7 +333,7 @@ export class ContextMenuManager {
      */
     calculateLegendHeight(ctx, colorLegends, canvasWidth) {
         const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
-        const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288'];
+        const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291'];
         const allKeys = [...TOP_KEYS, ...BOTTOM_KEYS];
         
         const itemWidth = 70; // 아이템 간격 포함 예상 너비
@@ -360,7 +360,7 @@ export class ContextMenuManager {
         const bottomColors = scheme.bottom || {};
         
         const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
-        const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288'];
+        const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291'];
         
         // Legend 아이템 설정
         const itemWidth = 20; // 컬러바 너비
@@ -413,7 +413,9 @@ export class ContextMenuManager {
             'B285': 'B285',
             'B286': 'B286',
             'B287': 'B287',
-            'B288': 'B288'
+            'B288': 'B288',
+            'B290': 'B290',
+            'B291': 'B291',
         };
         
         BOTTOM_KEYS.forEach((key) => {

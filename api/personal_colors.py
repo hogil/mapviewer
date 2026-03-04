@@ -26,7 +26,7 @@ _color_legends_mtime: float = 0.0
 _PALETTE_CACHE: Dict[str, bytes] = {}
 
 TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7']
-BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288']
+BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291']
 
 
 def load_color_legends() -> Dict[str, Any]:
@@ -154,12 +154,12 @@ def _scheme_to_palette_bytes(scheme: Dict[str, Any]) -> bytes:
     """
     Convert color scheme to palette bytes.
     
-    scheme의 색상을 순서대로 인덱스 0~15에 매핑:
+    scheme의 색상을 순서대로 인덱스 0~17에 매핑:
     - top의 색상들 순서대로 (Grade0~7) → 인덱스 0~7
-    - bottom의 색상들 순서대로 (Normal, Invalid, B285~8) → 인덱스 8~13
-    - background → 인덱스 14
-    - text → 인덱스 15
-    - 총 16개 색상 (48 bytes = 16 * 3 RGB)
+    - bottom의 색상들 순서대로 (Normal, Invalid, B285~8, B290, B291) → 인덱스 8~15
+    - background → 인덱스 16
+    - text → 인덱스 17
+    - 총 18개 색상 (54 bytes = 18 * 3 RGB)
     """
     palette: List[int] = []
     top = scheme.get('top', {})
@@ -171,17 +171,17 @@ def _scheme_to_palette_bytes(scheme: Dict[str, Any]) -> bytes:
     for key in TOP_KEYS:
         palette.extend(_hex_to_rgb_triple(top.get(key, '#000000')))
     
-    # bottom의 색상들 순서대로 (Normal, Invalid, B285~8) → 인덱스 8~13
+    # bottom의 색상들 순서대로 (Normal, Invalid, B285~8, B290, B291) → 인덱스 8~15
     for key in BOTTOM_KEYS:
         palette.extend(_hex_to_rgb_triple(bottom.get(key, '#000000')))
-    
-    # background → 인덱스 14
+
+    # background → 인덱스 16
     palette.extend(_hex_to_rgb_triple(background))
-    
-    # text → 인덱스 15
+
+    # text → 인덱스 17
     palette.extend(_hex_to_rgb_triple(text))
 
-    return bytes(palette[: 16 * 3])
+    return bytes(palette[: 18 * 3])
 
 
 def _palette_cache_key(scheme: Dict[str, Any]) -> str:
@@ -297,9 +297,9 @@ def plte_inplace_patch_memory(png_data: bytearray, scheme: str) -> bytearray:
             # 기존 PLTE 데이터 읽기
             current_plte = list(png_data[plte_start:plte_end])
             
-            # 인덱스 0~15의 RGB 값 교체 (48바이트)
+            # 인덱스 0~17의 RGB 값 교체 (54바이트)
             new_plte = current_plte[:]
-            new_plte[:48] = new_palette[:48]  # ← 여기서 색상 교체
+            new_plte[:54] = new_palette[:54]  # ← 여기서 색상 교체
             
             # PLTE 데이터 교체
             png_data[plte_start:plte_end] = new_plte
@@ -420,6 +420,8 @@ def plte_bottom_filter_memory(png_data: bytearray, bottom_values: List[str]) -> 
     - '286' (B286) → 인덱스 11
     - '287' (B287) → 인덱스 12
     - '288' (B288) → 인덱스 13
+    - '290' (B290) → 인덱스 14
+    - '291' (B291) → 인덱스 15
 
     중요: 팔레트 인덱스 0-7 (Grade)는 그대로 유지됩니다.
 
@@ -437,7 +439,9 @@ def plte_bottom_filter_memory(png_data: bytearray, bottom_values: List[str]) -> 
         '285': 10,
         '286': 11,
         '287': 12,
-        '288': 13
+        '288': 13,
+        '290': 14,
+        '291': 15,
     }
 
     # 선택된 bottom 값들을 인덱스로 변환

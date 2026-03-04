@@ -221,6 +221,20 @@ export class MyLotModal {
         document.addEventListener('mouseup', this.boundStopDragSelection);
     }
 
+    /** LoginId URL 파라미터 반환 (SAML 로그인 사용자 식별용) */
+    get _loginParam() {
+        const id = this.viewer?.currentUser;
+        return id && id !== 'change' ? `?LoginId=${encodeURIComponent(id)}` : '';
+    }
+
+    /** LoginId를 URL에 추가 (기존 쿼리스트링 고려) */
+    _withLogin(url) {
+        const id = this.viewer?.currentUser;
+        if (!id || id === 'change') return url;
+        const sep = url.includes('?') ? '&' : '?';
+        return `${url}${sep}LoginId=${encodeURIComponent(id)}`;
+    }
+
     async parseErrorResponse(response) {
         const text = await response.text();
         try {
@@ -893,7 +907,7 @@ export class MyLotModal {
                 const pathsArray = allPaths;
                 console.log(`[MyLotModal] 저장할 이미지: ${pathsArray.length}개`);
                 
-                const res = await fetch('/api/my-lot/batch', {
+                const res = await fetch(this._withLogin('/api/my-lot/batch'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -917,7 +931,7 @@ export class MyLotModal {
             // 2. 이미지 없는 항목: LOT 폴더만 생성 (manual API)
             if (rowsWithoutImages.length > 0) {
                 const promises = rowsWithoutImages.map(row => 
-                    fetch('/api/my-lot/manual', {
+                    fetch(this._withLogin('/api/my-lot/manual'), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -1163,7 +1177,7 @@ export class MyLotModal {
 
         for (const lot of uniqueLots) {
             try {
-                const res = await fetch('/api/my-lot/manual', {
+                const res = await fetch(this._withLogin('/api/my-lot/manual'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1468,7 +1482,7 @@ export class MyLotModal {
     }
 
     async refreshData() {
-        const res = await fetch('/api/my-lot', { cache: 'no-store' });
+        const res = await fetch(this._withLogin('/api/my-lot'), { cache: 'no-store' });
         if (!res.ok) {
             throw new Error(await res.text());
         }
@@ -2636,7 +2650,7 @@ export class MyLotModal {
             }
 
             // 2. 검색된 이미지 일괄 저장 (batch API)
-            const res = await fetch('/api/my-lot/batch', {
+            const res = await fetch(this._withLogin('/api/my-lot/batch'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -2676,7 +2690,7 @@ export class MyLotModal {
             return;
         }
         try {
-            const res = await fetch('/api/my-lot/group', {
+            const res = await fetch(this._withLogin('/api/my-lot/group'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mode: this.activeMode, group: name }),
@@ -2708,7 +2722,7 @@ export class MyLotModal {
         const tempName = `temp_${year}${month}${day}_${hour}${minute}${second}`;
 
         try {
-            const res = await fetch('/api/my-lot/group', {
+            const res = await fetch(this._withLogin('/api/my-lot/group'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mode: this.activeMode, group: tempName }),
@@ -2732,7 +2746,7 @@ export class MyLotModal {
         if (!this.tempGroup) return;
 
         try {
-            const res = await fetch('/api/my-lot/group', {
+            const res = await fetch(this._withLogin('/api/my-lot/group'), {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -2760,7 +2774,7 @@ export class MyLotModal {
             return;
         }
         try {
-            const res = await fetch('/api/my-lot/group/rename', {
+            const res = await fetch(this._withLogin('/api/my-lot/group/rename'), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -2815,7 +2829,7 @@ export class MyLotModal {
         
         // 🔥 백그라운드에서 서버 요청
         try {
-            const res = await fetch('/api/my-lot/group', {
+            const res = await fetch(this._withLogin('/api/my-lot/group'), {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -2841,7 +2855,7 @@ export class MyLotModal {
             return;
         }
         try {
-            const res = await fetch('/api/my-lot', {
+            const res = await fetch(this._withLogin('/api/my-lot'), {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -2906,7 +2920,7 @@ export class MyLotModal {
         
         // 🔥 백그라운드에서 서버 요청
         try {
-            const res = await fetch('/api/my-lot/batch', {
+            const res = await fetch(this._withLogin('/api/my-lot/batch'), {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -3001,7 +3015,7 @@ export class MyLotModal {
         }
         
         try {
-            const res = await fetch('/api/my-lot', {
+            const res = await fetch(this._withLogin('/api/my-lot'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -3108,7 +3122,7 @@ export class MyLotModal {
             }
 
             // batch API 사용하여 일괄 등록
-            const res = await fetch('/api/my-lot/batch', {
+            const res = await fetch(this._withLogin('/api/my-lot/batch'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -3247,7 +3261,7 @@ export class MyLotModal {
             }
 
             // batch API로 업데이트 (현재 모드에 맞게 저장)
-            const res = await fetch('/api/my-lot/batch', {
+            const res = await fetch(this._withLogin('/api/my-lot/batch'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -3893,7 +3907,7 @@ export class MyLotModal {
             }
 
             // 2. 검색된 이미지 일괄 저장 (batch API)
-            const res = await fetch('/api/my-lot/batch', {
+            const res = await fetch(this._withLogin('/api/my-lot/batch'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -3933,7 +3947,7 @@ export class MyLotModal {
             return;
         }
         try {
-            const res = await fetch('/api/my-lot/group', {
+            const res = await fetch(this._withLogin('/api/my-lot/group'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mode: this.activeMode, group: name }),
@@ -3965,7 +3979,7 @@ export class MyLotModal {
         const tempName = `temp_${year}${month}${day}_${hour}${minute}${second}`;
 
         try {
-            const res = await fetch('/api/my-lot/group', {
+            const res = await fetch(this._withLogin('/api/my-lot/group'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mode: this.activeMode, group: tempName }),
@@ -3989,7 +4003,7 @@ export class MyLotModal {
         if (!this.tempGroup) return;
 
         try {
-            const res = await fetch('/api/my-lot/group', {
+            const res = await fetch(this._withLogin('/api/my-lot/group'), {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -4017,7 +4031,7 @@ export class MyLotModal {
             return;
         }
         try {
-            const res = await fetch('/api/my-lot/group/rename', {
+            const res = await fetch(this._withLogin('/api/my-lot/group/rename'), {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -4072,7 +4086,7 @@ export class MyLotModal {
         
         // 🔥 백그라운드에서 서버 요청
         try {
-            const res = await fetch('/api/my-lot/group', {
+            const res = await fetch(this._withLogin('/api/my-lot/group'), {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -4098,7 +4112,7 @@ export class MyLotModal {
             return;
         }
         try {
-            const res = await fetch('/api/my-lot', {
+            const res = await fetch(this._withLogin('/api/my-lot'), {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -4163,7 +4177,7 @@ export class MyLotModal {
         
         // 🔥 백그라운드에서 서버 요청
         try {
-            const res = await fetch('/api/my-lot/batch', {
+            const res = await fetch(this._withLogin('/api/my-lot/batch'), {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -4258,7 +4272,7 @@ export class MyLotModal {
         }
         
         try {
-            const res = await fetch('/api/my-lot', {
+            const res = await fetch(this._withLogin('/api/my-lot'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -4366,7 +4380,7 @@ export class MyLotModal {
             }
 
             // batch API 사용하여 일괄 등록
-            const res = await fetch('/api/my-lot/batch', {
+            const res = await fetch(this._withLogin('/api/my-lot/batch'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -4505,7 +4519,7 @@ export class MyLotModal {
             }
 
             // batch API로 업데이트 (현재 모드에 맞게 저장)
-            const res = await fetch('/api/my-lot/batch', {
+            const res = await fetch(this._withLogin('/api/my-lot/batch'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

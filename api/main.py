@@ -613,13 +613,13 @@ def _current_login_id(req: Optional[Request]) -> Optional[str]:
         login_id_param = req.query_params.get("LoginId")
         if login_id_param and login_id_param in SAML_USER_SESSIONS:
             return login_id_param
-        
+
         # SAML_USER_SESSIONS에서 모든 세션 확인 (현재는 간단하게 첫 번째 매칭)
         # 실제로는 쿠키나 헤더로 사용자를 식별해야 하지만, 일단 모든 세션 확인
         # TODO: 더 정확한 사용자 식별 방법 필요 (IP, 쿠키 등)
     except Exception:
         pass
-    
+
     return None
 
 def _get_user_role(login_id: Optional[str]) -> str:
@@ -1214,10 +1214,10 @@ async def lifespan(app: FastAPI):
     bootlog.info(f"🚀 [INDEX] 인덱스 {index_action}를 백그라운드에서 시작 (서버는 즉시 사용 가능)")
     print(f"[INDEX] Starting index {index_action} in background (server ready)...", flush=True)
 
-    # 🔥 락 파일이 stale 상태일 수 있으므로 미리 정리
+    # 🔥 서버 재시작 시 이전 프로세스의 lock file 무조건 제거 (PID 재사용 문제 방지)
     try:
-        if index_service.lock_file.exists() and index_service._lock_file_stale():
-            bootlog.warning(f"⚠️ [INDEX] Stale 락 파일 발견, 삭제: {index_service.lock_file}")
+        if index_service.lock_file.exists():
+            bootlog.warning(f"⚠️ [INDEX] 서버 시작 시 락 파일 제거: {index_service.lock_file}")
             index_service.lock_file.unlink(missing_ok=True)
     except Exception as lock_exc:
         bootlog.warning(f"⚠️ [INDEX] 락 파일 정리 실패: {lock_exc}")
@@ -1739,7 +1739,7 @@ async def saml_acs(request: Request):
         meta["saml_attributes"] = attrs
         # LoginId 기준으로 저장
         SAML_USER_SESSIONS[LoginId] = meta
-        
+
         # 🔥 SAML 로그인 직후 color scheme 생성 (LoginId, Username, DeptName)
         try:
             username = meta.get("Username", "")
@@ -1819,7 +1819,7 @@ async def saml_dev_login(request: Request):
         if LoginId:
             # LoginId 기준으로 저장
             SAML_USER_SESSIONS[LoginId] = meta
-            
+
             # 🔥 개발 모드 로그인 직후 color scheme 생성 (LoginId, Username, DeptName)
             try:
                 username = meta.get("Username", "")
@@ -7166,6 +7166,49 @@ async def search_users_from_stats(
     except Exception as e:
         logger.exception(f"사용자 검색 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ======================== User Preferences API ========================
+
+_USER_PREFS_DIR = ROOT_DIR / "user-prefs"
+
+def _user_prefs_path(login_id: str) -> Path:
+    safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", login_id)[:80]
+    _USER_PREFS_DIR.mkdir(parents=True, exist_ok=True)
+    return _USER_PREFS_DIR / f"{safe}.json"
+
+@app.get("/api/user-prefs")
+async def get_user_prefs(request: Request):
+    """현재 로그인 사용자의 개인 설정 조회"""
+    login_id = _current_login_id(request) or "change"
+    path = _user_prefs_path(login_id)
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return {"success": True, "login_id": login_id, "prefs": data}
+        except Exception:
+            pass
+    return {"success": True, "login_id": login_id, "prefs": {}}
+
+@app.put("/api/user-prefs")
+async def set_user_prefs(request: Request):
+    """현재 로그인 사용자의 개인 설정 저장 (부분 업데이트)"""
+    login_id = _current_login_id(request) or "change"
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    path = _user_prefs_path(login_id)
+    existing = {}
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    existing.update(body)
+    path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"success": True, "login_id": login_id, "prefs": existing}
 
 
 # ======================== __main__ ========================

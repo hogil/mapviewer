@@ -21,7 +21,7 @@ import { ContextMenuManager } from './context-menu.js?v=2';
 
 // Constants
 
-const DEFAULT_GRID_COLS = 3;
+const DEFAULT_GRID_COLS = 4;
 const DEFAULT_THUMB_SIZE = 512;
 const MIN_SIDEBAR_WIDTH = 200;
 const MAX_SIDEBAR_WIDTH_RATIO = 0.5;
@@ -1832,9 +1832,13 @@ class WaferMapViewer {
         if (typeof cache.gridCols === 'number') {
             this.gridCols = cache.gridCols;
             document.documentElement.style.setProperty('--grid-cols', this.gridCols);
-            if (gridColsRange) gridColsRange.value = this.gridCols;
+            if (gridColsRange) gridColsRange.value = Math.min(10, this.gridCols);
+            const gridColsInputEl = document.getElementById('grid-cols-input');
+            if (gridColsInputEl) gridColsInputEl.value = this.gridCols;
         } else if (gridColsRange && this.gridCols) {
-            gridColsRange.value = this.gridCols;
+            gridColsRange.value = Math.min(10, this.gridCols);
+            const gridColsInputEl = document.getElementById('grid-cols-input');
+            if (gridColsInputEl) gridColsInputEl.value = this.gridCols;
         }
         if (typeof cache.gridThumbSize === 'number') {
             this.gridThumbSize = cache.gridThumbSize;
@@ -1987,9 +1991,9 @@ class WaferMapViewer {
             this.gridCols = state.gridCols;
             document.documentElement.style.setProperty('--grid-cols', this.gridCols);
             const gridColsRange = document.getElementById('grid-cols-range');
-            if (gridColsRange) {
-                gridColsRange.value = this.gridCols;
-            }
+            if (gridColsRange) gridColsRange.value = Math.min(10, this.gridCols);
+            const gridColsInputEl = document.getElementById('grid-cols-input');
+            if (gridColsInputEl) gridColsInputEl.value = this.gridCols;
         }
         if (typeof state.gridThumbSize === 'number') {
             this.gridThumbSize = state.gridThumbSize;
@@ -4251,6 +4255,8 @@ class WaferMapViewer {
                 const gridColsRange = document.getElementById('grid-cols-range');
 
                 if(gridColsRange) gridColsRange.value = newCols.toString();
+                const gridColsInputEl = document.getElementById('grid-cols-input');
+                if (gridColsInputEl) gridColsInputEl.value = newCols;
 
                 document.documentElement.style.setProperty('--grid-cols', newCols.toString());
 
@@ -4926,11 +4932,38 @@ class WaferMapViewer {
         if (gridColsRange) {
             gridColsRange.addEventListener('input', e => {
                 this.gridCols = parseInt(e.target.value, 10);
-
                 document.documentElement.style.setProperty('--grid-cols', this.gridCols);
-
+                const gridColsInput = document.getElementById('grid-cols-input');
+                if (gridColsInput) gridColsInput.value = this.gridCols;
+                this._saveGridColsPref();
                 if (this.selectedImages && this.selectedImages.length > 1) {
                     this.scheduleShowGrid();
+                }
+            });
+        }
+
+        const gridColsInput = document.getElementById('grid-cols-input');
+        if (gridColsInput) {
+            const applyGridColsInput = (input) => {
+                const val = parseInt(input.value, 10);
+                if (!isNaN(val) && val >= 1 && val <= 20) {
+                    this.gridCols = val;
+                    document.documentElement.style.setProperty('--grid-cols', this.gridCols);
+                    if (gridColsRange) gridColsRange.value = Math.min(10, this.gridCols);
+                    this._saveGridColsPref();
+                    if (this.selectedImages && this.selectedImages.length > 1) {
+                        this.scheduleShowGrid();
+                    }
+                } else {
+                    input.value = this.gridCols;
+                }
+                input.blur();
+            };
+            gridColsInput.addEventListener('change', e => applyGridColsInput(e.target));
+            gridColsInput.addEventListener('keydown', e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    applyGridColsInput(e.target);
                 }
             });
         }
@@ -4941,11 +4974,11 @@ class WaferMapViewer {
         if (minusBtn) {
             minusBtn.onclick = () => {
                 this.gridCols = Math.max(1, this.gridCols - 1);
-
-                document.getElementById('grid-cols-range').value = this.gridCols;
-
+                document.getElementById('grid-cols-range').value = Math.min(10, this.gridCols);
+                const inp = document.getElementById('grid-cols-input');
+                if (inp) inp.value = this.gridCols;
                 document.documentElement.style.setProperty('--grid-cols', this.gridCols);
-
+                this._saveGridColsPref();
                 if (this.selectedImages && this.selectedImages.length > 1) {
                     this.scheduleShowGrid();
                 }
@@ -4954,12 +4987,12 @@ class WaferMapViewer {
 
         if (plusBtn) {
             plusBtn.onclick = () => {
-                this.gridCols = Math.min(10, this.gridCols + 1);
-
-                document.getElementById('grid-cols-range').value = this.gridCols;
-
+                this.gridCols = Math.min(20, this.gridCols + 1);
+                document.getElementById('grid-cols-range').value = Math.min(10, this.gridCols);
+                const inp = document.getElementById('grid-cols-input');
+                if (inp) inp.value = this.gridCols;
                 document.documentElement.style.setProperty('--grid-cols', this.gridCols);
-
+                this._saveGridColsPref();
                 if (this.selectedImages && this.selectedImages.length > 1) {
                     this.scheduleShowGrid();
                 }
@@ -5645,6 +5678,9 @@ class WaferMapViewer {
         this.renderColorLegends();
         this.showColorLegends();
 
+        // ✅ 5단계: 사용자 개인 설정 로드 (gridCols 등)
+        await this._loadUserPrefs();
+
         if (this.dom.fileExplorer) {
             this.dom.fileExplorer.innerHTML = '';
         }
@@ -5865,6 +5901,8 @@ class WaferMapViewer {
                 // currentUser가 없으면 "change"로 설정
                 this.currentUser = this.currentUser || "change";
                 this.renderColorLegends(); // init에서도 호출됨
+                // 🔥 로그인 후 사용자 설정 로드 (gridCols 등)
+                await this._loadUserPrefs();
                 return;
             }
             
@@ -8701,14 +8739,16 @@ class WaferMapViewer {
         }
 
         const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
-        const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288'];
+        const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291'];
         const bottomLabelMap = {
             Normal: 'nor',
             Invalid: 'inv',
             B285: 'B285',
             B286: 'B286',
             B287: 'B287',
-            B288: 'B288'
+            B288: 'B288',
+            B290: 'B290',
+            B291: 'B291',
         };
 
         const topEntries = [];
@@ -19396,7 +19436,8 @@ class WaferMapViewer {
         }
 
         // ✅ 이미지 로드 (loadImage 완료 시 자동으로 Wafer Map Explorer 하이라이트 업데이트됨)
-        this.loadImage(nextImagePath, false, currentLoadVersion)
+        // forceReload=true: selectedImagePath가 미리 업데이트되어 early-exit 조건이 잘못 발동하는 것 방지
+        this.loadImage(nextImagePath, false, currentLoadVersion, true)
             .then(() => {
                 // ✅ pyramid level을 즉시 동기적으로 업데이트
                 this.updatePyramidLevel();
@@ -20851,6 +20892,44 @@ class WaferMapViewer {
         });
     }
 
+    /**
+     * 🔥 그리드 컬럼 수를 서버에 저장 (로그인 사용자 기준)
+     */
+    _saveGridColsPref() {
+        if (!this.currentUser) return;
+        const loginParam = `?LoginId=${encodeURIComponent(this.currentUser)}`;
+        fetch(`/api/user-prefs${loginParam}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ gridCols: this.gridCols }),
+        }).catch(() => {});
+    }
+
+    /**
+     * 🔥 서버에서 사용자 설정 로드 (로그인 후 호출)
+     */
+    async _loadUserPrefs() {
+        try {
+            const loginParam = this.currentUser && this.currentUser !== 'change'
+                ? `?LoginId=${encodeURIComponent(this.currentUser)}` : '';
+            const res = await fetch(`/api/user-prefs${loginParam}`);
+            if (!res.ok) return;
+            const data = await res.json();
+            const prefs = data?.prefs || {};
+            if (typeof prefs.gridCols === 'number' && prefs.gridCols >= 1) {
+                this.gridCols = prefs.gridCols;
+                document.documentElement.style.setProperty('--grid-cols', this.gridCols);
+                const gridColsRange = document.getElementById('grid-cols-range');
+                if (gridColsRange) gridColsRange.value = Math.min(10, this.gridCols);
+                const gridColsInput = document.getElementById('grid-cols-input');
+                if (gridColsInput) gridColsInput.value = this.gridCols;
+            }
+        } catch (e) {
+            // noop
+        }
+    }
+
+
     updateChipLabelLegend(markedChips = []) {
         const chips = Array.isArray(markedChips) ? markedChips : [];
         const counts = new Map();
@@ -20990,8 +21069,6 @@ class WaferMapViewer {
                 throw new Error(`Failed to load color legends: ${response.status} ${response.statusText}`);
             }
             this.colorLegends = await response.json();
-            // 디버그 로그 제거 (초기 로드 시에만 필요하면 주석 해제)
-            // console.log('✅ [LOAD_COLORS] 색상 로드 완료:', Object.keys(this.colorLegends || {}).length, 'schemes');
             return this.colorLegends;
         } catch (error) {
             // 🔥 AbortError는 정상 (이미지 로딩 중단 시)
@@ -21088,7 +21165,7 @@ class WaferMapViewer {
         // Render bottom legend
         // 🔥 BOTTOM_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
         if (userData.bottom && typeof userData.bottom === 'object') {
-            const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288'];
+            const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291'];
             const bottomHtml = BOTTOM_KEYS.map((label, index) => {
                 // 🔥 "Border" 키가 있는 경우 "Normal"로 매핑 (Ubuntu 서버 호환성)
                 let actualLabel = label;
@@ -21219,7 +21296,7 @@ class WaferMapViewer {
         // 🔥 BOTTOM_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
         html += '<div class="legend-group-bottom">';
         if (userData.bottom && typeof userData.bottom === 'object') {
-            const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288'];
+            const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291'];
             const bottomHtml = BOTTOM_KEYS.map((label) => {
                 // 🔥 "Border" 키가 있는 경우 "Normal"로 매핑 (Ubuntu 서버 호환성)
                 let actualLabel = label;
