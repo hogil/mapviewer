@@ -11,7 +11,7 @@
 
 // 🚀 Fetch 최적화 import
 import { optimizedFetch, fetchOptimizer } from './fetch-optimizer.js';
-import { ColorSchemeEditor } from './color-editor.js';
+import { ColorSchemeEditor } from './color-editor.js?v=2';
 import { ChipAnnotator } from './chip-annotator.js';
 import { ThumbnailNavigator } from './thumbnail-navigator.js';
 import { CompositeColorModal } from './composite-colors.js';
@@ -8801,7 +8801,8 @@ class WaferMapViewer {
         }
 
         const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
-        const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291'];
+        const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
+                             'B300', 'B385', 'B386', 'B388', 'B389', 'B390'];
         const bottomLabelMap = {
             Normal: 'nor',
             Invalid: 'inv',
@@ -21250,7 +21251,8 @@ class WaferMapViewer {
         // Render bottom legend
         // 🔥 BOTTOM_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
         if (userData.bottom && typeof userData.bottom === 'object') {
-            const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291'];
+            const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
+                                 'B300', 'B385', 'B386', 'B388', 'B389', 'B390'];
             const bottomHtml = BOTTOM_KEYS.map((label, index) => {
                 // 🔥 "Border" 키가 있는 경우 "Normal"로 매핑 (Ubuntu 서버 호환성)
                 let actualLabel = label;
@@ -21381,7 +21383,8 @@ class WaferMapViewer {
         // 🔥 BOTTOM_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
         html += '<div class="legend-group-bottom">';
         if (userData.bottom && typeof userData.bottom === 'object') {
-            const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291'];
+            const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
+                                 'B300', 'B385', 'B386', 'B388', 'B389', 'B390'];
             const bottomHtml = BOTTOM_KEYS.map((label) => {
                 // 🔥 "Border" 키가 있는 경우 "Normal"로 매핑 (Ubuntu 서버 호환성)
                 let actualLabel = label;

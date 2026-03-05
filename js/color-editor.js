@@ -1,5 +1,6 @@
 const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
-const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291'];
+const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
+                     'B300', 'B385', 'B386', 'B388', 'B389', 'B390'];
 
 /**
  * 서버에서 로드한 color-legends.json의 default scheme을 가져옴
@@ -317,10 +318,10 @@ export class ColorSchemeEditor {
             rows.push(row);
         };
 
-        TOP_KEYS.forEach((key) => buildRow('top', key));
-        BOTTOM_KEYS.forEach((key) => buildRow('bottom', key));
         buildRow('background', 'Background');
         buildRow('text', 'Text');
+        TOP_KEYS.forEach((key) => buildRow('top', key));
+        BOTTOM_KEYS.forEach((key) => buildRow('bottom', key));
 
         this.rows = rows;
         
