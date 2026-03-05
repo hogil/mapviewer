@@ -7171,8 +7171,8 @@ async def search_users_from_stats(
 
 # ======================== User Preferences API ========================
 
-_UI_PREFS_FILE = ROOT_DIR / "logs" / "ui-prefs.json"
-_ui_prefs_lock = asyncio.Lock()
+_UI_PREFS_FILE = Path(__file__).parent.parent / "logs" / "ui-prefs.json"
+_ui_prefs_lock = __import__('threading').Lock()
 
 def _load_all_prefs() -> dict:
     try:
@@ -7202,7 +7202,7 @@ async def set_user_prefs(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-    async with _ui_prefs_lock:
+    with _ui_prefs_lock:
         all_prefs = _load_all_prefs()
         user_prefs = all_prefs.get(login_id, {})
         user_prefs.update(body)
