@@ -7171,25 +7171,27 @@ async def search_users_from_stats(
 
 # ======================== User Preferences API ========================
 
-_USER_PREFS_DIR = ROOT_DIR / "logs"
+_UI_PREFS_FILE = ROOT_DIR / "logs" / "ui-prefs.json"
+_ui_prefs_lock = asyncio.Lock()
 
-def _user_prefs_path(login_id: str) -> Path:
-    safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", login_id)[:80]
-    _USER_PREFS_DIR.mkdir(parents=True, exist_ok=True)
-    return _USER_PREFS_DIR / f"{safe}_prefs.json"
+def _load_all_prefs() -> dict:
+    try:
+        if _UI_PREFS_FILE.exists():
+            return json.loads(_UI_PREFS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+def _save_all_prefs(data: dict) -> None:
+    _UI_PREFS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _UI_PREFS_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 @app.get("/api/user-prefs")
 async def get_user_prefs(request: Request):
     """현재 로그인 사용자의 개인 설정 조회"""
     login_id = _current_login_id(request) or "change"
-    path = _user_prefs_path(login_id)
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return {"success": True, "login_id": login_id, "prefs": data}
-        except Exception:
-            pass
-    return {"success": True, "login_id": login_id, "prefs": {}}
+    all_prefs = _load_all_prefs()
+    return {"success": True, "login_id": login_id, "prefs": all_prefs.get(login_id, {})}
 
 @app.put("/api/user-prefs")
 async def set_user_prefs(request: Request):
@@ -7200,16 +7202,13 @@ async def set_user_prefs(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
-    path = _user_prefs_path(login_id)
-    existing = {}
-    if path.exists():
-        try:
-            existing = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    existing.update(body)
-    path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"success": True, "login_id": login_id, "prefs": existing}
+    async with _ui_prefs_lock:
+        all_prefs = _load_all_prefs()
+        user_prefs = all_prefs.get(login_id, {})
+        user_prefs.update(body)
+        all_prefs[login_id] = user_prefs
+        _save_all_prefs(all_prefs)
+    return {"success": True, "login_id": login_id, "prefs": user_prefs}
 
 
 # ======================== __main__ ========================
