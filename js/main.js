@@ -11,7 +11,7 @@
 
 // 🚀 Fetch 최적화 import
 import { optimizedFetch, fetchOptimizer } from './fetch-optimizer.js';
-import { ColorSchemeEditor } from './color-editor.js?v=2';
+import { ColorSchemeEditor } from './color-editor.js?v=3';
 import { ChipAnnotator } from './chip-annotator.js';
 import { ThumbnailNavigator } from './thumbnail-navigator.js';
 import { CompositeColorModal } from './composite-colors.js';
@@ -1493,7 +1493,12 @@ class WaferMapViewer {
         return {
             savedViewState: savedViewSnapshot,
             waferMapExplorerState: this.deepCloneSimple(this.waferMapExplorerState),
-            labelExplorerState: this.deepCloneSimple(this.labelExplorerState),
+            labelExplorerState: this.labelSelection ? {
+                selected: [...this.labelSelection.selected],
+                lastClicked: this.labelSelection.lastClicked,
+                openFolders: {...this.labelSelection.openFolders},
+                selectedClasses: [...this.labelSelection.selectedClasses],
+            } : this.deepCloneSimple(this.labelExplorerState),
             currentFolderPath: this.currentFolderPath,
             currentFolderPrefix: this.currentFolderPrefix,
             filterTestMode: this.filterTestMode,
@@ -8806,12 +8811,18 @@ class WaferMapViewer {
         const bottomLabelMap = {
             Normal: 'nor',
             Invalid: 'inv',
-            B285: 'B285',
-            B286: 'B286',
-            B287: 'B287',
-            B288: 'B288',
-            B290: 'B290',
-            B291: 'B291',
+            B285: '285',
+            B286: '286',
+            B287: '287',
+            B288: '288',
+            B290: '290',
+            B291: '291',
+            B300: '300',
+            B385: '385',
+            B386: '386',
+            B388: '388',
+            B389: '389',
+            B390: '390',
         };
 
         const topEntries = [];
@@ -11669,8 +11680,8 @@ class WaferMapViewer {
 
         this.updateMinimap();
 
-        // 🔥 단일 이미지 모드에서 파일명 패널 절대 보호
-        if (this.currentImage && this.dom.fileNameDisplay) {
+        // 🔥 단일 이미지 모드에서 파일명 패널 절대 보호 (그리드 모드에서는 숨겨져야 정상)
+        if (this.currentImage && this.dom.fileNameDisplay && !this.gridMode) {
             if (this.dom.fileNameDisplay.style.display === 'none') {
                 this.dom.fileNameDisplay.style.display = 'block';
                 console.log('⚠️ EMERGENCY PANEL RESTORE: fileNameDisplay was hidden in draw()');
@@ -16214,6 +16225,12 @@ class WaferMapViewer {
             } else {
                 console.warn(`⚠️ [SHOW_GRID] 복원할 스크롤 위치가 없습니다!`);
             }
+            // 🔥 이미지 목록은 항상 업데이트 (그리드 복귀 시 올바른 이미지 복원용)
+            if (this.savedViewState) {
+                this.savedViewState.images = [...sortedImages];
+            } else {
+                this.savedViewState = { type: 'grid', images: [...sortedImages], scrollTop: 0 };
+            }
         } else {
             // 🔥 skipSaveState=false: Wafer Map Explorer - 현재 스크롤 위치 저장
             if (grid && grid.hasAttribute('data-label-explorer-grid')) {
@@ -18847,7 +18864,13 @@ class WaferMapViewer {
         const gridSelectedIdxs = Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : [];
         const savedSnapshot = this.captureActivePageState();
         const originPage = this.pageManager?.getActivePage ? this.pageManager.getActivePage() : null;
-        const originPageId = originPage?.id || null;
+        let originPageId = originPage?.id || null;
+
+        // 🔥 이미 단일 이미지 뷰 모드인 경우 (viewMode='gridImage'), 현재 페이지는 단일 이미지 페이지임
+        // gridDetailOriginMap에서 실제 그리드 origin 페이지를 찾아 사용 (페이지 탭 누적 방지)
+        if (this.viewMode === 'gridImage' && originPageId && this.gridDetailOriginMap?.has(originPageId)) {
+            originPageId = this.gridDetailOriginMap.get(originPageId);
+        }
 
         if (this.pageManager) {
             this.persistActivePageState(savedSnapshot);
@@ -20481,6 +20504,9 @@ class WaferMapViewer {
 
             this.clearWaferMapExplorerSelection();
 
+            // 🔥 Label Explorer 선택 상태 저장 (페이지 전환 시 복원용)
+            this.saveLabelExplorerState();
+
             // 그리드 모드로 전환
 
             this.selectedImages = allImageFiles;
@@ -21272,9 +21298,10 @@ class WaferMapViewer {
                 if (color) {
                     // 🔥 "Border"를 "Normal"로 표시 및 data-key도 "Normal"로 설정
                     const displayLabel = actualLabel === 'Border' ? 'Normal' : label;
+                    const renderLabel = displayLabel.startsWith('B') ? displayLabel.slice(1) : displayLabel;
                     return `
                         <div class="legend-item" data-section="bottom" data-key="${displayLabel}" data-index="${index}" draggable="true" style="cursor: pointer;">
-                            <span class="legend-label">${displayLabel}</span>
+                            <span class="legend-label">${renderLabel}</span>
                             <div class="legend-color-bar" data-section="bottom" data-key="${displayLabel}" style="background-color: ${color}; cursor: pointer;"></div>
                         </div>
                     `;
@@ -21353,6 +21380,10 @@ class WaferMapViewer {
             // Invalid → inv
             if (label === 'Invalid') {
                 return 'inv';
+            }
+            // B285, B286 등 → 285, 286
+            if (label.startsWith('B') && label.length > 1 && /^\d/.test(label[1])) {
+                return label.slice(1);
             }
             // 나머지는 그대로
             return label;
