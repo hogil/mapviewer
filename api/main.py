@@ -7171,12 +7171,12 @@ async def search_users_from_stats(
 
 # ======================== User Preferences API ========================
 
-_USER_PREFS_DIR = ROOT_DIR / "user-prefs"
+_USER_PREFS_DIR = ROOT_DIR / "logs"
 
 def _user_prefs_path(login_id: str) -> Path:
     safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", login_id)[:80]
     _USER_PREFS_DIR.mkdir(parents=True, exist_ok=True)
-    return _USER_PREFS_DIR / f"{safe}.json"
+    return _USER_PREFS_DIR / f"{safe}_prefs.json"
 
 @app.get("/api/user-prefs")
 async def get_user_prefs(request: Request):

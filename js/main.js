@@ -757,6 +757,7 @@ class WaferMapViewer {
             subfolderSearch: document.getElementById('subfolder-search'),
             subfolderDropdown: document.getElementById('subfolder-dropdown'),
             filterTestSelect: document.getElementById('filter-test-select'),
+            filterPlcPlhSelect: document.getElementById('filter-plc-plh-select'),
             personalizedColorButton: document.getElementById('personalized-color-button'),
             personalizedColorCheckbox: document.getElementById('personalized-color-checkbox'),
             permissionEditorButton: document.getElementById('permission-editor-button'),
@@ -954,8 +955,11 @@ class WaferMapViewer {
         this.selectedFolderForBrowser = '';
         this.productFolderPath = null;  // 🔥 제품 폴더 경로 저장 (classification 조회용)
 
-        // 파일 필터 상태 (기본값: '' - Lot Type, 필터 적용 안 함)
-        this.filterTestMode = '';
+        // 파일 필터 상태 (기본값: 'remove' - Test 제거)
+        this.filterTestMode = 'remove';
+
+        // PLC/PLH 필터 상태 (기본값: 'PLH')
+        this.filterPLCPLH = 'PLH';
 
         // 개인색 설정 상태 (기본값: false)
         this.personalizedColorEnabled = true; // 🔥 기본값: 개인색 설정 활성화
@@ -1493,6 +1497,7 @@ class WaferMapViewer {
             currentFolderPath: this.currentFolderPath,
             currentFolderPrefix: this.currentFolderPrefix,
             filterTestMode: this.filterTestMode,
+            filterPLCPLH: this.filterPLCPLH,
             personalizedColorEnabled: this.personalizedColorEnabled,
             classMode: this.classMode,
             gridMode: this.gridMode,
@@ -1960,6 +1965,7 @@ class WaferMapViewer {
         this.currentFolderPath = state.currentFolderPath ?? this.currentFolderPath;
         this.currentFolderPrefix = state.currentFolderPrefix ?? this.currentFolderPrefix;
         this.filterTestMode = state.filterTestMode ?? this.filterTestMode;
+        this.filterPLCPLH = state.filterPLCPLH ?? this.filterPLCPLH;
         this.personalizedColorEnabled = state.personalizedColorEnabled ?? this.personalizedColorEnabled;
         this.classMode = state.classMode || this.classMode;
         this.gridMode = !!state.gridMode && !!this.savedViewState && this.savedViewState.type === 'grid';
@@ -2000,6 +2006,9 @@ class WaferMapViewer {
         }
         if (this.dom?.filterTestSelect && this.filterTestMode !== undefined) {
             this.dom.filterTestSelect.value = this.filterTestMode || '';
+        }
+        if (this.dom?.filterPlcPlhSelect && this.filterPLCPLH !== undefined) {
+            this.dom.filterPlcPlhSelect.value = this.filterPLCPLH || 'PLH';
         }
 
         // 폴더 전체 선택을 복원할 때 파일 선택도 유지 (폴더 선택만 남고 파일이 한 개로 축소되는 문제 방지)
@@ -5162,7 +5171,16 @@ class WaferMapViewer {
         if (this.dom.filterTestSelect) {
             this.dom.filterTestSelect.addEventListener('change', async (e) => {
                 this.filterTestMode = e.target.value || ''; // 빈 문자열은 'Lot Type' (필터 적용 안 함)
+                this._saveUserPrefs();
                 // 필터 상태가 변경되면 파일 탐색기 다시 로드
+                await this.loadDirectoryContents(this.currentFolderPrefix || null, this.dom.fileExplorer);
+            });
+        }
+
+        if (this.dom.filterPlcPlhSelect) {
+            this.dom.filterPlcPlhSelect.addEventListener('change', async (e) => {
+                this.filterPLCPLH = e.target.value || 'PLH';
+                this._saveUserPrefs();
                 await this.loadDirectoryContents(this.currentFolderPrefix || null, this.dom.fileExplorer);
             });
         }
@@ -6568,6 +6586,16 @@ class WaferMapViewer {
                     }
                 }
 
+                // PLC/PLH 필터 적용
+                if (this.filterPLCPLH && this.filterPLCPLH !== 'all') {
+                    const parts = node.name.split('_');
+                    if (this.filterPLCPLH === 'PLC') {
+                        if (parts.length <= 1 || parts[1] !== '00C') continue;
+                    } else if (this.filterPLCPLH === 'PLH') {
+                        if (parts.length <= 1 || parts[1] !== '00P') continue;
+                    }
+                }
+
                 const draggableAttr = 'draggable="true"';
                 html += `<li><a href="#" data-path="${fullPath}" ${draggableAttr}>📄 ${node.name}</a></li>`;
             }
@@ -6609,6 +6637,17 @@ class WaferMapViewer {
                                 return false;
                             }
                         }
+                    }
+                }
+
+                // PLC/PLH 필터 적용
+                if (this.filterPLCPLH && this.filterPLCPLH !== 'all') {
+                    const fileName = path.split('/').pop() || path.split('\\').pop() || path;
+                    const parts = fileName.split('_');
+                    if (this.filterPLCPLH === 'PLC') {
+                        if (parts.length <= 1 || parts[1] !== '00C') return false;
+                    } else if (this.filterPLCPLH === 'PLH') {
+                        if (parts.length <= 1 || parts[1] !== '00P') return false;
                     }
                 }
 
@@ -6661,6 +6700,17 @@ class WaferMapViewer {
                                 return false;
                             }
                         }
+                    }
+                }
+
+                // PLC/PLH 필터 적용
+                if (this.filterPLCPLH && this.filterPLCPLH !== 'all') {
+                    const fileName = path.split('/').pop() || path.split('\\').pop() || path;
+                    const parts = fileName.split('_');
+                    if (this.filterPLCPLH === 'PLC') {
+                        if (parts.length <= 1 || parts[1] !== '00C') return false;
+                    } else if (this.filterPLCPLH === 'PLH') {
+                        if (parts.length <= 1 || parts[1] !== '00P') return false;
                     }
                 }
 
@@ -8078,6 +8128,20 @@ class WaferMapViewer {
                         return !hasTest;  // test 제거
                     } else if (this.filterTestMode === 'only') {
                         return hasTest;   // test만
+                    }
+                    return true;
+                });
+            }
+
+            // PLC/PLH 필터 적용
+            if (this.filterPLCPLH && this.filterPLCPLH !== 'all') {
+                matchedImages = matchedImages.filter(path => {
+                    const fileName = path.split('/').pop() || path.split('\\').pop() || path;
+                    const parts = fileName.split('_');
+                    if (this.filterPLCPLH === 'PLC') {
+                        return parts.length > 1 && parts[1] === '00C';
+                    } else if (this.filterPLCPLH === 'PLH') {
+                        return parts.length > 1 && parts[1] === '00P';
                     }
                     return true;
                 });
@@ -20891,15 +20955,26 @@ class WaferMapViewer {
     }
 
     /**
-     * 🔥 그리드 컬럼 수를 서버에 저장 (로그인 사용자 기준)
+     * 🔥 그리드 컬럼 수를 서버에 저장 (로그인 사용자 기준) - 하위 호환 래퍼
      */
     _saveGridColsPref() {
+        this._saveUserPrefs();
+    }
+
+    /**
+     * 🔥 사용자 UI 설정을 서버에 저장 (gridCols, filterTestMode, filterPLCPLH)
+     */
+    _saveUserPrefs() {
         if (!this.currentUser) return;
         const loginParam = `?LoginId=${encodeURIComponent(this.currentUser)}`;
         fetch(`/api/user-prefs${loginParam}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ gridCols: this.gridCols }),
+            body: JSON.stringify({
+                gridCols: this.gridCols,
+                filterTestMode: this.filterTestMode,
+                filterPLCPLH: this.filterPLCPLH,
+            }),
         }).catch(() => {});
     }
 
@@ -20908,7 +20983,7 @@ class WaferMapViewer {
      */
     async _loadUserPrefs() {
         try {
-            const loginParam = this.currentUser && this.currentUser !== 'change'
+            const loginParam = this.currentUser
                 ? `?LoginId=${encodeURIComponent(this.currentUser)}` : '';
             const res = await fetch(`/api/user-prefs${loginParam}`);
             if (!res.ok) return;
@@ -20921,6 +20996,18 @@ class WaferMapViewer {
                 if (gridColsRange) gridColsRange.value = Math.min(10, this.gridCols);
                 const gridColsInput = document.getElementById('grid-cols-input');
                 if (gridColsInput) gridColsInput.value = this.gridCols;
+            }
+            if (typeof prefs.filterTestMode === 'string') {
+                this.filterTestMode = prefs.filterTestMode;
+                if (this.dom?.filterTestSelect) {
+                    this.dom.filterTestSelect.value = this.filterTestMode;
+                }
+            }
+            if (typeof prefs.filterPLCPLH === 'string') {
+                this.filterPLCPLH = prefs.filterPLCPLH;
+                if (this.dom?.filterPlcPlhSelect) {
+                    this.dom.filterPlcPlhSelect.value = this.filterPLCPLH;
+                }
             }
         } catch (e) {
             // noop

@@ -3328,12 +3328,17 @@
                 </div>
                 <!-- 파일 필터 선택 -->
                 <div style="margin-top: 8px; padding: 4px 0; display: flex; gap: 6px; align-items: center;">
-                    <select id="filter-test-select" style="width: 33%; background: #333; color: #fff; border: 1px solid #555; border-radius: 3px; padding: 4px 6px; font-size: 12px; cursor: pointer;">
-                        <option value="" selected>Lot Type</option>
+                    <select id="filter-test-select" style="width: 20%; background: #333; color: #fff; border: 1px solid #555; border-radius: 3px; padding: 4px 6px; font-size: 12px; cursor: pointer;">
+                        <option value="">Lot Type</option>
                         <option disabled>────────</option>
                         <option value="all">전체</option>
-                        <option value="remove">Test 제거</option>
+                        <option value="remove" selected>Test 제거</option>
                         <option value="only">Test만</option>
+                    </select>
+                    <select id="filter-plc-plh-select" style="width: 18%; background: #333; color: #fff; border: 1px solid #555; border-radius: 3px; padding: 4px 6px; font-size: 12px; cursor: pointer;">
+                        <option value="all">ALL</option>
+                        <option value="PLC">PLC</option>
+                        <option value="PLH" selected>PLH</option>
                     </select>
                     <div class="personalized-color-actions">
                         <!-- 🔥 개인색 설정은 항상 활성화되므로 체크박스 제거 -->
@@ -3380,7 +3385,7 @@
                 <div class="control-group control-group-columns">
                     <button id="grid-cols-minus" class="grid-btn" aria-label="컬럼 감소">-</button>
                     <input type="range" id="grid-cols-range" min="1" max="10" value="4" step="1" aria-label="그리드 컬럼 수">
-                    <input type="number" id="grid-cols-input" min="1" max="20" value="4" step="1" aria-label="컬럼 수 직접 입력" style="width:42px;text-align:center;padding:2px 4px;background:#2a2a2a;color:#ccc;border:1px solid #555;border-radius:3px;font-size:12px;">
+                    <input type="number" id="grid-cols-input" min="1" max="20" value="4" step="1" aria-label="컬럼 수 직접 입력" style="width:32px;text-align:center;padding:2px 4px;background:#2a2a2a;color:#ccc;border:1px solid #555;border-radius:3px;font-size:12px;">
                     <button id="grid-cols-plus" class="grid-btn" aria-label="컬럼 증가">+</button>
                 </div>
                 
