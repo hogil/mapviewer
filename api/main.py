@@ -1973,14 +1973,37 @@ async def save_color_scheme(request: Request):
         
         # 기존 legends 로드
         legends = load_color_legends()
-        
-        # 새로운 스킴 데이터 저장
+
+        # default 기반으로 누락 키를 채워 저장 (팔레트 인덱스 정합성 유지)
+        default_scheme = legends.get('default', {})
+        default_top = dict(default_scheme.get('top') or {})
+        default_bottom = dict(default_scheme.get('bottom') or {})
+        incoming_top = dict(scheme_data.get('top') or {})
+        incoming_bottom = dict(scheme_data.get('bottom') or {})
+
+        # 레거시 호환: bottom.Border를 bottom.Normal로 승격
+        if 'Border' in default_bottom and 'Normal' not in default_bottom:
+            default_bottom['Normal'] = default_bottom.get('Border')
+        if 'Border' in incoming_bottom and 'Normal' not in incoming_bottom:
+            incoming_bottom['Normal'] = incoming_bottom.get('Border')
+
+        merged_top = {
+            **default_top,
+            **incoming_top,
+        }
+        merged_bottom = {
+            **default_bottom,
+            **incoming_bottom,
+        }
+        # canonical key만 유지
+        merged_bottom.pop('Border', None)
+
         # 색상 편집에는 top, bottom, background, text만 사용 (다른 필드 제거)
         filtered_scheme_data = {
-            'top': scheme_data.get('top', {}),
-            'bottom': scheme_data.get('bottom', {}),
-            'background': scheme_data.get('background', '#FEFEFE'),
-            'text': scheme_data.get('text', '#000001')
+            'top': merged_top,
+            'bottom': merged_bottom,
+            'background': scheme_data.get('background', default_scheme.get('background', '#FEFEFE')),
+            'text': scheme_data.get('text', default_scheme.get('text', '#000001'))
         }
         
         # 기존 scheme의 메타데이터 유지, 없으면 세션에서 가져오기 (첫 저장 시 생성)
@@ -2001,8 +2024,6 @@ async def save_color_scheme(request: Request):
         # default scheme과 비교하여 modified 설정
         # 색상 값 정규화 후 비교 (대소문자 무시)
         from .personal_colors import normalize_hex_color
-        
-        default_scheme = legends.get('default', {})
         
         def normalize_color_dict(color_dict):
             """색상 딕셔너리의 모든 색상 값을 정규화"""

@@ -57,6 +57,22 @@ function rgbToHex(r, g, b) {
     return `#${toHex(rr)}${toHex(gg)}${toHex(bb)}`;
 }
 
+function formatEditorLabel(key) {
+    if (!key) return '';
+    if (key.startsWith('Grade')) {
+        const n = key.replace('Grade', '');
+        return `G${n}`;
+    }
+    if (key === 'Normal') return 'nor';
+    if (key === 'Invalid') return 'invalid';
+    if (key === 'background') return 'background';
+    if (key === 'text') return 'text';
+    if (key.startsWith('B') && key.length > 1 && /^\d/.test(key[1])) {
+        return key.slice(1);
+    }
+    return key;
+}
+
 export class ColorSchemeEditor {
     constructor(viewer) {
         this.viewer = viewer;
@@ -185,8 +201,7 @@ export class ColorSchemeEditor {
 
             const labelTd = document.createElement('td');
             labelTd.className = 'color-editor-label';
-            const renderKey = (key.startsWith('B') && key.length > 1 && /^\d/.test(key[1])) ? key.slice(1) : key;
-            labelTd.textContent = renderKey;
+            labelTd.textContent = formatEditorLabel(key);
 
             const hexTd = document.createElement('td');
             const hexContainer = document.createElement('div');
@@ -321,9 +336,10 @@ export class ColorSchemeEditor {
             rows.push(row);
         };
 
-        buildRow('background', 'Background');
-        buildRow('text', 'Text');
+        // 고정 순서: G0~G7 -> background -> text -> nor/invalid/BIN
         TOP_KEYS.forEach((key) => buildRow('top', key));
+        buildRow('background', 'background');
+        buildRow('text', 'text');
         BOTTOM_KEYS.forEach((key) => buildRow('bottom', key));
 
         this.rows = rows;
@@ -784,8 +800,30 @@ export class ColorSchemeEditor {
     applySchemeToRows(scheme) {
         const legends = this.viewer?.colorLegends || {};
         const defaultScheme = getDefaultScheme(legends);
-        const top = scheme.top || defaultScheme.top || {};
-        const bottom = scheme.bottom || defaultScheme.bottom || {};
+        const defaultTop = defaultScheme.top || {};
+        const defaultBottom = defaultScheme.bottom || {};
+
+        const top = {
+            ...defaultTop,
+            ...(scheme.top || {}),
+        };
+
+        // 레거시 호환: 일부 스킴은 bottom.Normal 대신 bottom.Border를 사용
+        const sourceBottom = {
+            ...(scheme.bottom || {}),
+        };
+        if (!sourceBottom.Normal && sourceBottom.Border) {
+            sourceBottom.Normal = sourceBottom.Border;
+        }
+
+        const bottom = {
+            ...defaultBottom,
+            ...sourceBottom,
+        };
+        if (!bottom.Normal && defaultBottom.Border) {
+            bottom.Normal = defaultBottom.Border;
+        }
+
         const background = scheme.background || defaultScheme.background || '#FEFEFE';
         const text = scheme.text || defaultScheme.text || '#000001';
 
@@ -802,7 +840,23 @@ export class ColorSchemeEditor {
             } else {
                 hex = background;
             }
-            const valid = normalizeHex(hex) || '#000000';
+
+            let fallbackHex = '#000000';
+            if (row.section === 'top') {
+                fallbackHex = defaultTop[row.key] || fallbackHex;
+            } else if (row.section === 'bottom') {
+                if (row.key === 'Normal') {
+                    fallbackHex = defaultBottom.Normal || defaultBottom.Border || fallbackHex;
+                } else {
+                    fallbackHex = defaultBottom[row.key] || fallbackHex;
+                }
+            } else if (row.section === 'background') {
+                fallbackHex = defaultScheme.background || fallbackHex;
+            } else if (row.section === 'text') {
+                fallbackHex = defaultScheme.text || fallbackHex;
+            }
+
+            const valid = normalizeHex(hex) || normalizeHex(fallbackHex) || '#000000';
             this.setRowHex(row, valid);
         });
     }
