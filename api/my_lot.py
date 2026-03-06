@@ -197,6 +197,32 @@ def _parse_filename(path: str) -> Dict[str, str]:
     }
 
 
+def _lot_folder_candidates(value: str) -> List[str]:
+    """LOT 모드 삭제 시 입력값(value/path/filename)에서 LOT 폴더 후보를 생성."""
+    raw = (value or "").strip()
+    if not raw:
+        return []
+
+    normalized = raw.replace("\\", "/")
+    basename = Path(normalized).name
+    stem = Path(basename).stem
+
+    candidates = [raw, basename, stem]
+    # 파일명 규칙: LOT_STEP_WAFER_... 에서 LOT는 첫 토큰
+    if stem:
+        candidates.append(stem.split("_", 1)[0])
+
+    result: List[str] = []
+    seen = set()
+    for c in candidates:
+        token = (c or "").strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        result.append(token)
+    return result
+
+
 def _load_group_entries(login_id: str, mode: str, group: str) -> List[Dict[str, str]]:
     """Group 디렉토리에서 이미지 파일 목록 로드."""
     group_dir = _group_dir(login_id, mode, group)
@@ -485,15 +511,17 @@ def remove_entry(login_id: str, mode: str, group: str, filename: str) -> bool:
         group_dir = _group_dir(login_segment, mode, safe_group)
 
         if mode == "lot":
-            # 🔥 LOT 모드: filename이 LOT 이름이므로 LOT 폴더 전체 삭제
+            # LOT 모드: value/path/filename 어떤 형태가 와도 LOT 폴더를 찾도록 보강
             if group_dir.exists():
-                lot_folder = group_dir / filename
-                if lot_folder.exists() and lot_folder.is_dir():
-                    try:
-                        shutil.rmtree(str(lot_folder))
-                        removed = True
-                    except Exception:
-                        pass
+                for lot_name in _lot_folder_candidates(filename):
+                    lot_folder = group_dir / lot_name
+                    if lot_folder.exists() and lot_folder.is_dir():
+                        try:
+                            shutil.rmtree(str(lot_folder))
+                            removed = True
+                            break
+                        except Exception:
+                            pass
         else:
             # Wafer 모드: 직접 파일 찾기
             target_file = group_dir / filename
@@ -539,13 +567,15 @@ def remove_entries_batch(login_id: str, mode: str, group: str, filenames: List[s
             try:
                 found = False
                 if mode == "lot":
-                    # 🔥 LOT 모드: filename이 LOT 이름이므로 LOT 폴더 전체 삭제
+                    # LOT 모드: value/path/filename 어떤 형태가 와도 LOT 폴더를 찾도록 보강
                     if group_dir.exists():
-                        lot_folder = group_dir / filename
-                        if lot_folder.exists() and lot_folder.is_dir():
-                            shutil.rmtree(str(lot_folder))
-                            success_count += 1
-                            found = True
+                        for lot_name in _lot_folder_candidates(filename):
+                            lot_folder = group_dir / lot_name
+                            if lot_folder.exists() and lot_folder.is_dir():
+                                shutil.rmtree(str(lot_folder))
+                                success_count += 1
+                                found = True
+                                break
                 else:
                     # Wafer 모드: 직접 파일 찾기
                     target_file = group_dir / filename

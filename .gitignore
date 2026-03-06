@@ -20,8 +20,8 @@ cert/*.key
 cert/*.crt
 
 # Logs and data (runtime generated)
-logs/my-lot/
-logs/roles/
+logs/**
+!logs/color-legends.json
 
 # IDE
 .idea/
@@ -35,6 +35,24 @@ Thumbs.db
 
 # MCP config (local machine specific)
 .mcp.json
+.claude/
+.playwright-mcp/
+.pytest_cache/
+output/
+mcp.sqlite3
+network-log.txt
+AGENTS.md
+
+# Local verification artifacts
+color-edit-dialog.png
+error.png
+error2.png
+label-click.png
+label-explorer.png
+preview-test.png
+test-after-fix.png
+test-label-explorer-before.png
+test-single-image.png
 
 # Temp files
 temp_snippet.txt

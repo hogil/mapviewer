@@ -792,7 +792,11 @@ def _save_image_with_backend(img: Image.Image, path: Path) -> Tuple[Path, str]:
         if arr.ndim == 2:
             arr = np.stack([arr, arr, arr], axis=2)
         encoded = _TURBOJPEG.encode(arr, quality=_JPEG_QUALITY, jpeg_subsample=TJSAMP_444, pixel_format=TJPF_RGB)
-        target_path.write_bytes(encoded)
+        # Windows에서 기존 파일을 직접 truncate(write_bytes)할 때
+        # 간헐적으로 OSError(Errno 22)가 발생할 수 있어 atomic replace를 사용한다.
+        tmp_path = target_path.with_suffix(f"{target_path.suffix}.tmp")
+        tmp_path.write_bytes(encoded)
+        os.replace(tmp_path, target_path)
     else:
         if fmt == "WEBP":
             save_img.save(target_path, format="WEBP", quality=100, lossless=True, method=6)
@@ -822,10 +826,8 @@ def _persist_square_map_data(
 ) -> None:
     """
     Cache square-map arrays for fast recoloring.
-    NPZ is saved asynchronously in a daemon thread to avoid blocking the main pipeline.
+    Recolor 요청이 생성 직후 바로 들어와도 동작하도록 NPZ를 동기 저장한다.
     """
-    import threading
-
     cache_path = output_dir / SQUARE_MAP_CACHE_FILENAME
     palette_array = np.array(palette_list, dtype=np.uint8).reshape(256, 3)
     save_payload: Dict[str, np.ndarray] = {
@@ -851,10 +853,17 @@ def _persist_square_map_data(
 
     def _save_npz():
         try:
-            np.savez_compressed(cache_path, **save_payload)
+            # NPZ를 직접 덮어쓰면 실패 시 0바이트 파일이 남을 수 있어
+            # 임시 파일에 저장 후 원자적 교체로 일관성을 보장한다.
+            tmp_path = cache_path.with_suffix(f"{cache_path.suffix}.tmp")
+            # np.savez_compressed(path)는 자동으로 .npz를 덧붙이므로 파일 핸들로 저장
+            # (예: square_maps_data.npz.tmp -> square_maps_data.npz.tmp.npz 방지)
+            with open(tmp_path, "wb") as fp:
+                np.savez_compressed(fp, **save_payload)
+            os.replace(tmp_path, cache_path)
         except Exception:
             pass
-    threading.Thread(target=_save_npz, daemon=True).start()
+    _save_npz()
 
 
 def _recompute_square_maps_from_counts(

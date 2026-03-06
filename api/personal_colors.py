@@ -519,6 +519,14 @@ def plte_bottom_filter_memory(png_data: bytearray, bottom_values: List[str]) -> 
             new_plte = current_plte[:]
             modified_indices = []
 
+            # Bottom 필터가 활성화되면 경계선(border/border_inv)도 숨김 처리
+            # (선택된 BIN 외 칩만 보이도록 테두리 잔상 제거)
+            for border_idx in (IDX_BORDER, IDX_BORDER_INV):
+                if border_idx < num_colors:
+                    new_plte[border_idx * 3] = white_color[0]
+                    new_plte[border_idx * 3 + 1] = white_color[1]
+                    new_plte[border_idx * 3 + 2] = white_color[2]
+
             for idx, palette_idx in BOTTOM_MAP.items():
                 if palette_idx < num_colors and palette_idx not in selected_indices:
                     # 선택되지 않은 Bottom 값은 인덱스 31 색상으로 교체

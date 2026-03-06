@@ -1035,7 +1035,7 @@ export class ThumbnailNavigator {
 
      */
 
-    setImages(images, currentImagePath) {
+    setImages(images, currentImagePath, forceRender = false) {
 
         this.imageList = images || [];
 
@@ -1073,10 +1073,8 @@ export class ThumbnailNavigator {
 
 
 
-        if (this.isVisible) {
-
+        if (this.isVisible || forceRender) {
             this.render();
-
         }
 
     }
@@ -1174,8 +1172,9 @@ export class ThumbnailNavigator {
         const personalizedParams = this.viewer ? this.viewer.getPersonalizedParams() : '';
 
         const cacheBuster = this.viewer?._personalizedColorCacheBuster || Date.now();
-
-        const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}&_t=${cacheBuster}`;
+        const hasCacheBusterInParams = typeof personalizedParams === 'string' && personalizedParams.includes('_t=');
+        const cacheSuffix = hasCacheBusterInParams ? '' : `&_t=${cacheBuster}`;
+        const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}${cacheSuffix}`;
 
         img.alt = imagePath.split('/').pop();
 

@@ -21,7 +21,7 @@ if sys.platform == 'win32':
         pass
 
 # ======================== Imports ========================
-import re, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid
+import re, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid, io
 from pathlib import Path
 from contextlib import contextmanager, asynccontextmanager
 from typing import List, Optional, Dict, Any, Tuple, Set, Literal, Iterable
@@ -47,7 +47,7 @@ except ImportError:
     BrotliMiddleware = None
     HAS_BROTLI = False
 from pydantic import BaseModel, Field
-from PIL import Image
+from PIL import Image, ImageDraw
 import http.client
 import urllib.parse
 
@@ -106,6 +106,7 @@ from .personal_colors import (
     prepare_personalized_image,
     apply_personalized_palette,
     swap_first16_colors,
+    plte_grade_filter_memory,
     plte_inplace_patch_memory,
     plte_bottom_filter_memory,
 )
@@ -296,6 +297,35 @@ def _note_from_request(request: Request, endpoint: str) -> str:
         return "[클래스]"
     return ""
 
+
+def _build_invalid_image_png(size: int) -> bytes:
+    side = max(32, min(int(size or 256), 1024))
+    cached = _INVALID_IMAGE_CACHE.get(side)
+    if cached is not None:
+        return cached
+
+    img = Image.new("RGB", (side, side), color=(38, 38, 38))
+    draw = ImageDraw.Draw(img)
+    stroke = max(2, side // 20)
+    draw.line((0, 0, side - 1, side - 1), fill=(220, 80, 80), width=stroke)
+    draw.line((side - 1, 0, 0, side - 1), fill=(220, 80, 80), width=stroke)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    payload = buf.getvalue()
+    _INVALID_IMAGE_CACHE[side] = payload
+    return payload
+
+
+def _invalid_image_response(image_path: Path, size: int = 256) -> Response:
+    payload = _build_invalid_image_png(size)
+    headers = {
+        "Cache-Control": "no-store",
+        "X-Invalid-Image": "true",
+        "X-Invalid-Path": image_path.name,
+    }
+    return Response(content=payload, media_type="image/png", headers=headers)
+
 def log_access_row(*, tag: str, ip: str = "-", method: str = "-", status: str = "-",
                    path: str = "-", note: str = ""):
     """셀을 wcwidth 기준으로 패딩해 열 경계를 항상 맞춤."""
@@ -345,6 +375,7 @@ current_folder = IMAGES_ROOT
 THUMBNAIL_FORMAT = config.THUMBNAIL_FORMAT
 THUMBNAIL_QUALITY = config.THUMBNAIL_QUALITY
 THUMBNAIL_SIZE_DEFAULT = config.THUMBNAIL_SIZE_DEFAULT
+_INVALID_IMAGE_CACHE: Dict[int, bytes] = {}
 
 # TurboJPEG 인스턴스 (그리드 썸네일 최적화)
 TURBO_JPEG = globals().get("TURBO_JPEG")
@@ -386,6 +417,7 @@ THUMBNAIL_SEM = asyncio.Semaphore(THUMBNAIL_SEM_SIZE)
 # Composite map background task storage
 COMPOSITE_TASKS: Dict[str, Dict[str, Any]] = {}
 COMPOSITE_TASKS_LOCK = asyncio.Lock()
+COMPOSITE_BG_TASKS: Dict[str, asyncio.Task] = {}
 
 # Composite map concurrency control (최대 2개 동시 실행)
 COMPOSITE_CONCURRENCY_LIMIT = 2
@@ -510,10 +542,17 @@ def _parse_lot_filter(raw: Optional[str]) -> List[str]:
     seen: Set[str] = set()
     for part in parts:
         cleaned = part.strip().lower()
-        if not cleaned or cleaned in seen:
+        if not cleaned:
             continue
-        seen.add(cleaned)
-        tokens.append(cleaned)
+
+        # 다중 LOT 검색 입력이 파일명/경로여도 LOT 토큰(underscore 좌측) 기준으로 정규화
+        basename = cleaned.replace("\\", "/").split("/")[-1]
+        lot_token = basename.split("_", 1)[0].strip()
+        if not lot_token or lot_token in seen:
+            continue
+
+        seen.add(lot_token)
+        tokens.append(lot_token)
         if len(tokens) >= 100:
             break
     return tokens
@@ -2155,13 +2194,7 @@ async def recolor_composite_sum_maps_endpoint(request: Request):
     if override_colors is not None and not isinstance(override_colors, list):
         raise HTTPException(status_code=400, detail="colors 필드는 배열이어야 합니다.")
 
-    normalized_rel = str(rel_output_dir).strip().replace("\\", "/")
-    target_path = (IMAGES_ROOT / normalized_rel).resolve()
-    composite_root = COMPOSITE_ROOT.resolve()
-    if not str(target_path).startswith(str(composite_root)):
-        raise HTTPException(status_code=400, detail="유효한 Composite 출력 디렉터리가 아닙니다.")
-    if not target_path.exists():
-        raise HTTPException(status_code=404, detail="Composite 출력 디렉터리를 찾을 수 없습니다.")
+    target_path = _resolve_composite_output_dir(rel_output_dir)
 
     try:
         login_id = _current_login_id(request)
@@ -2180,6 +2213,66 @@ async def recolor_composite_sum_maps_endpoint(request: Request):
     except Exception as exc:
         logger.error(f"? [/api/composite-recolor] 실패: {exc}")
         raise HTTPException(status_code=500, detail="Composite Sum Map을 갱신하지 못했습니다.")
+
+
+def _resolve_composite_output_dir(output_dir_value: Any) -> Path:
+    raw_value = str(output_dir_value or "").strip()
+    if not raw_value:
+        raise HTTPException(status_code=400, detail="output_dir 값이 비어 있습니다.")
+
+    decoded = urllib.parse.unquote(raw_value).strip()
+    if decoded.startswith("/api/image"):
+        parsed = urlparse(decoded)
+        decoded = urllib.parse.unquote((parse_qs(parsed.query).get("path") or [""])[0]).strip()
+
+    # 쿼리스트링/해시 제거 및 경로 정규화
+    decoded = decoded.split("?", 1)[0].split("#", 1)[0].replace("\\", "/").strip()
+    if not decoded:
+        raise HTTPException(status_code=400, detail="유효한 output_dir 값이 아닙니다.")
+
+    images_root = IMAGES_ROOT.resolve()
+    images_root_posix = images_root.as_posix().lower()
+    composite_root = COMPOSITE_ROOT.resolve()
+    candidates: List[Path] = []
+
+    def _push_candidate(path_value: Path) -> None:
+        candidate = path_value.resolve()
+        if candidate.suffix:
+            candidate = candidate.parent
+        candidates.append(candidate)
+
+    parsed_path = Path(decoded)
+    if parsed_path.is_absolute():
+        _push_candidate(parsed_path)
+
+    normalized_rel = decoded
+    if normalized_rel.lower().startswith(images_root_posix):
+        normalized_rel = normalized_rel[len(images_root_posix):].lstrip("/")
+    normalized_rel = normalized_rel.lstrip("/")
+
+    if normalized_rel:
+        _push_candidate(images_root / normalized_rel)
+
+    if normalized_rel.startswith("composite_map/"):
+        suffix = normalized_rel.split("/", 1)[1]
+        if suffix:
+            _push_candidate(composite_root / suffix)
+
+    if not candidates:
+        raise HTTPException(status_code=400, detail="유효한 Composite 출력 디렉터리가 아닙니다.")
+
+    first_missing_under_root: Optional[Path] = None
+    for candidate in candidates:
+        if not str(candidate).startswith(str(composite_root)):
+            continue
+        if candidate.exists():
+            return candidate
+        if first_missing_under_root is None:
+            first_missing_under_root = candidate
+
+    if first_missing_under_root is not None:
+        raise HTTPException(status_code=404, detail="Composite 출력 디렉터리를 찾을 수 없습니다.")
+    raise HTTPException(status_code=400, detail="유효한 Composite 출력 디렉터리가 아닙니다.")
 
 
 # ===== MY LOT 관리 API =====
@@ -2440,7 +2533,7 @@ async def delete_my_lot_entry_endpoint(request: Request):
         payload = await request.json()
         mode = payload.get("mode", "lot")
         group = payload.get("group")
-        filename = payload.get("value")  # value는 filename으로 처리
+        filename = payload.get("value") or payload.get("filename")
         if not group or not filename:
             raise HTTPException(status_code=400, detail="group과 filename이 필요합니다.")
         removed = my_lot_remove_entry(login_id, mode, group, filename)
@@ -2669,12 +2762,21 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
 def is_supported_image(path: Path) -> bool:
     return path.suffix.lower() in SUPPORTED_EXTENSIONS
 
-def get_thumbnail_path(image_path: Path, size: Tuple[int, int], scheme: Optional[str] = None) -> Path:
+def get_thumbnail_path(
+    image_path: Path,
+    size: Tuple[int, int],
+    scheme: Optional[str] = None,
+    variant: Optional[str] = None,
+) -> Path:
     # 🔥 절대 경로를 해시로 변환하여 썸네일 경로 생성
     path_hash = hashlib.md5(str(image_path.resolve()).encode()).hexdigest()[:16]
-    
-    # 썸네일 파일명
-    thumbnail_name = f"{path_hash}_{size[0]}x{size[1]}.{THUMBNAIL_FORMAT.lower()}"
+
+    # 썸네일 파일명 (variant가 있으면 별도 캐시 키 사용)
+    if variant:
+        variant_hash = hashlib.md5(variant.encode("utf-8")).hexdigest()[:8]
+        thumbnail_name = f"{path_hash}_{size[0]}x{size[1]}_{variant_hash}.{THUMBNAIL_FORMAT.lower()}"
+    else:
+        thumbnail_name = f"{path_hash}_{size[0]}x{size[1]}.{THUMBNAIL_FORMAT.lower()}"
     
     # scheme이 있으면 scheme별 폴더 사용 (예: thumbnail/LoginId/251106_091612/)
     if scheme:
@@ -3008,7 +3110,16 @@ def _save_with_turbojpeg(vips_image, thumbnail_path: str, quality: int) -> bool:
         # TurboJPEG 실패 시 pyvips 폴백
         return False
 
-def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple[int, int], personalized: bool = False, scheme: Optional[str] = None, force_jpeg_encoder: Optional[str] = None):
+def _generate_thumbnail_sync(
+    image_path: Path,
+    thumbnail_path: Path,
+    size: Tuple[int, int],
+    personalized: bool = False,
+    scheme: Optional[str] = None,
+    force_jpeg_encoder: Optional[str] = None,
+    grade_filter: Optional[str] = None,
+    bottom_filter: Optional[str] = None,
+):
     try:
         thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -3022,31 +3133,43 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
                 pass
 
             # =============================================================
-            # 그리드 썸네일 생성 - 개인색 설정 적용
+            # 그리드 썸네일 생성 - 개인색/Grade/Bottom 필터 적용
             # =============================================================
-            # 🔥 초고속 방식에 PLTE 패치만 추가:
-            # 1. 원본 PNG 파일 읽기 및 PLTE 패치 (최우선!)
-            # 2. 패치된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
-            # 3. pyvips로 리사이즈 (기존 초고속 방식)
-            # 4. 저장 (요청된 형식으로)
-            if personalized and scheme and image_path.suffix.lower() == '.png':
-                logger.debug(f"🎨 [THUMBNAIL] 개인색 설정 적용: personalized={personalized}, scheme={scheme}, path={image_path.name}, fmt={fmt}")
+            should_patch_palette = image_path.suffix.lower() == '.png' and (
+                (personalized and scheme) or bool(grade_filter) or bool(bottom_filter)
+            )
+
+            if should_patch_palette:
                 try:
-                    from .personal_colors import plte_inplace_patch_memory
-                    
-                    # 1. 원본 PNG 파일 읽기 및 PLTE 패치 (최우선!)
                     with open(image_path, 'rb') as f:
                         png_data = bytearray(f.read())
-                    
-                    png_data = plte_inplace_patch_memory(png_data, scheme)
-                    
-                    # 2. 패치된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
-                    vips_image = pyvips.Image.new_from_buffer(bytes(png_data), "", access='sequential', fail_on='none', memory=True, unlimited=True)
-                    
-                    logger.debug(f"✅ [PLTE PATCH] 색 변경 완료, 리사이즈 시작: {thumbnail_path.name}")
+
+                    # 1) personalized palette
+                    if personalized and scheme:
+                        png_data = plte_inplace_patch_memory(png_data, scheme)
+
+                    # 2) grade filter
+                    if grade_filter:
+                        grade_indices = [int(g.strip()) for g in grade_filter.split(',') if g.strip().isdigit()]
+                        if grade_indices:
+                            png_data = plte_grade_filter_memory(png_data, grade_indices)
+
+                    # 3) bottom filter
+                    if bottom_filter:
+                        bottom_values = [b.strip() for b in bottom_filter.split(',') if b.strip()]
+                        if bottom_values:
+                            png_data = plte_bottom_filter_memory(png_data, bottom_values)
+
+                    vips_image = pyvips.Image.new_from_buffer(
+                        bytes(png_data),
+                        "",
+                        access='sequential',
+                        fail_on='none',
+                        memory=True,
+                        unlimited=True
+                    )
                 except Exception as e:
-                    logger.warning(f"⚠️ [PLTE PATCH] 개인색 팔레트 적용 실패: {e}", exc_info=True)
-                    # 실패 시 기존 pyvips 로직 사용 (개인색 미적용)
+                    logger.warning(f"⚠️ [THUMBNAIL PATCH] 팔레트/필터 적용 실패: {e}", exc_info=True)
                     vips_image = pyvips.Image.new_from_file(
                         str(image_path),
                         access='sequential',
@@ -3055,7 +3178,6 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
                         unlimited=True
                     )
             else:
-                # 개인색 설정 미적용: 기존 pyvips 로직 사용
                 vips_image = pyvips.Image.new_from_file(
                     str(image_path),
                     access='sequential',
@@ -3175,7 +3297,30 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
         except ImportError:
             pass
 
-        with Image.open(image_path) as img:
+        pil_image = None
+        if image_path.suffix.lower() == '.png' and ((personalized and scheme) or grade_filter or bottom_filter):
+            try:
+                with open(image_path, 'rb') as f:
+                    png_data = bytearray(f.read())
+                if personalized and scheme:
+                    png_data = plte_inplace_patch_memory(png_data, scheme)
+                if grade_filter:
+                    grade_indices = [int(g.strip()) for g in grade_filter.split(',') if g.strip().isdigit()]
+                    if grade_indices:
+                        png_data = plte_grade_filter_memory(png_data, grade_indices)
+                if bottom_filter:
+                    bottom_values = [b.strip() for b in bottom_filter.split(',') if b.strip()]
+                    if bottom_values:
+                        png_data = plte_bottom_filter_memory(png_data, bottom_values)
+                pil_image = Image.open(io.BytesIO(bytes(png_data)))
+            except Exception as e:
+                logger.warning(f"⚠️ [THUMBNAIL PATCH PIL] 팔레트/필터 적용 실패: {e}")
+                pil_image = None
+
+        if pil_image is None:
+            pil_image = Image.open(image_path)
+
+        with pil_image as img:
             if img.mode not in ('RGB', 'RGBA'):
                 img = img.convert('RGB')
 
@@ -3198,16 +3343,27 @@ def _generate_thumbnail_sync(image_path: Path, thumbnail_path: Path, size: Tuple
         logger.error(f"썸네일 생성 중 오류: {image_path} -> {thumbnail_path}, 오류: {e}")
         raise
 
-async def generate_thumbnail(image_path: Path, size: Tuple[int, int], personalized: bool = False, scheme: Optional[str] = None) -> Optional[Path]:
+async def generate_thumbnail(
+    image_path: Path,
+    size: Tuple[int, int],
+    personalized: bool = False,
+    scheme: Optional[str] = None,
+    grade_filter: Optional[str] = None,
+    bottom_filter: Optional[str] = None,
+) -> Optional[Path]:
     start_time = time.time()
     try:
-        # 썸네일 경로 생성 (scheme 포함)
+        # 썸네일 경로 생성 (scheme/filter 포함)
+        variant: Optional[str] = None
+        if grade_filter or bottom_filter:
+            variant = f"gf={grade_filter or ''}|bf={bottom_filter or ''}|p={1 if personalized else 0}|s={scheme or ''}"
+
         if personalized and scheme:
             logger.debug(f"🎨 [GENERATE_THUMB] Using scheme: {scheme} for {image_path.name}")
-            thumb = get_thumbnail_path(image_path, size, scheme=scheme)
+            thumb = get_thumbnail_path(image_path, size, scheme=scheme, variant=variant)
         else:
             logger.debug(f"🎨 [GENERATE_THUMB] No scheme (personalized={personalized}, scheme={scheme}) for {image_path.name}")
-            thumb = get_thumbnail_path(image_path, size, scheme=None)
+            thumb = get_thumbnail_path(image_path, size, scheme=None, variant=variant)
         key = f"{thumb}|{size[0]}x{size[1]}"
 
         if not image_path.exists():
@@ -3253,7 +3409,16 @@ async def generate_thumbnail(image_path: Path, size: Tuple[int, int], personaliz
             gen_start = time.time()
             try:
                 await asyncio.get_running_loop().run_in_executor(
-                    THUMBNAIL_EXECUTOR, _generate_thumbnail_sync, image_path, thumb, size, personalized, scheme
+                    THUMBNAIL_EXECUTOR,
+                    _generate_thumbnail_sync,
+                    image_path,
+                    thumb,
+                    size,
+                    personalized,
+                    scheme,
+                    None,
+                    grade_filter,
+                    bottom_filter,
                 )
                 gen_elapsed = time.time() - gen_start
                 
@@ -4141,22 +4306,56 @@ async def get_image_size(path: str):
         
         if not image_path.exists() or not image_path.is_file():
             raise HTTPException(status_code=404, detail="Image not found")
-        
-        # pyvips로 빠르게 크기만 조회
-        import pyvips
-        # VIPS 로그 억제 (set_log_handler는 일부 버전에서만 지원)
+
         try:
-            pyvips.set_log_handler(lambda domain, level, msg: None)
-        except AttributeError:
-            # set_log_handler가 없는 버전은 무시
-            pass
-        img = pyvips.Image.new_from_file(str(image_path), access='sequential')
-        
-        return {
-            "width": img.width,
-            "height": img.height,
-            "path": path
-        }
+            image_stat = image_path.stat()
+        except Exception:
+            raise HTTPException(status_code=404, detail="Image not found")
+
+        # 0-byte 손상 파일은 placeholder 크기로 폴백
+        if image_stat.st_size <= 0:
+            logger.warning(f"이미지 크기 조회 폴백(0-byte): {image_path}")
+            return {
+                "width": 256,
+                "height": 256,
+                "path": path,
+                "invalid": True,
+            }
+
+        # 1차: pyvips 메타데이터 조회
+        try:
+            import pyvips
+            try:
+                pyvips.set_log_handler(lambda domain, level, msg: None)
+            except AttributeError:
+                pass
+            img = pyvips.Image.new_from_file(str(image_path), access='sequential')
+            return {
+                "width": img.width,
+                "height": img.height,
+                "path": path
+            }
+        except Exception as vips_error:
+            logger.warning(f"이미지 크기 조회 pyvips 실패, PIL 폴백: {image_path} ({vips_error})")
+
+        # 2차: PIL 폴백
+        try:
+            with Image.open(image_path) as pil_img:
+                return {
+                    "width": pil_img.width,
+                    "height": pil_img.height,
+                    "path": path
+                }
+        except Exception as pil_error:
+            logger.warning(f"이미지 크기 조회 PIL 실패, placeholder 폴백: {image_path} ({pil_error})")
+            return {
+                "width": 256,
+                "height": 256,
+                "path": path,
+                "invalid": True,
+            }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"이미지 크기 조회 실패: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get image size: {str(e)}")
@@ -4303,6 +4502,16 @@ async def get_image(
 
         if not image_path.exists() or not image_path.is_file():
             raise HTTPException(status_code=404, detail="Image not found")
+
+        try:
+            image_stat = image_path.stat()
+        except Exception:
+            raise HTTPException(status_code=404, detail="Image not found")
+        if image_stat.st_size <= 0:
+            if not is_head:
+                logger.warning(f"원본 이미지가 비어 있어 placeholder 반환: {image_path}")
+                return _invalid_image_response(image_path)
+            return Response(content=b"", media_type="image/png", headers={"X-Invalid-Image": "true"})
 
         # 🔥 최적화: 디버그 로그 제거 (대량 이미지 로드 시 성능 저하 방지)
 
@@ -4564,7 +4773,9 @@ async def get_thumbnail(
     path: str,
     size: int = THUMBNAIL_SIZE_DEFAULT,
     personalized: bool = False,
-    scheme: Optional[str] = None
+    scheme: Optional[str] = None,
+    grade_filter: Optional[str] = None,
+    bottom_filter: Optional[str] = None,
 ):
     try:
         # LoginId가 있으면 우선 사용, 없을 때만 'change'로 fallback
@@ -4596,6 +4807,15 @@ async def get_thumbnail(
             logger.warning(f"이미지 파일이 존재하지 않습니다: {image_path}")
             raise HTTPException(status_code=404, detail="Image not found")
 
+        try:
+            image_stat = image_path.stat()
+        except Exception:
+            logger.warning(f"이미지 파일 stat 실패: {image_path}")
+            raise HTTPException(status_code=404, detail="Image not found")
+        if image_stat.st_size <= 0:
+            logger.warning(f"원본 이미지가 비어 있어 thumbnail placeholder 반환: {image_path}")
+            return _invalid_image_response(image_path, size=size)
+
         # 이미지 형식 확인
         if not is_supported_image(image_path):
             logger.warning(f"지원하지 않는 이미지 형식: {image_path}")
@@ -4603,9 +4823,22 @@ async def get_thumbnail(
 
         try:
             # 기본 썸네일 생성 (개인색 설정 포함)
-            thumb = await generate_thumbnail(image_path, (size, size), personalized=personalized, scheme=scheme)
+            thumb = await generate_thumbnail(
+                image_path,
+                (size, size),
+                personalized=personalized,
+                scheme=scheme,
+                grade_filter=grade_filter,
+                bottom_filter=bottom_filter,
+            )
             if thumb and thumb.exists():
                 st = thumb.stat()
+                if st.st_size <= 0:
+                    try:
+                        thumb.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    raise RuntimeError("generated thumbnail is empty")
                 resp_304 = maybe_304(request, st)
                 if resp_304: return resp_304
                 
@@ -4630,14 +4863,35 @@ async def get_thumbnail(
                         return Response(content=content, media_type=content_type, headers=headers)
                     except Exception as read_error:
                         logger.warning(f"썸네일 읽기 실패, 원본 제공 폴백: {read_error}")
-                        return await get_image(request, path)
+                        return await get_image(
+                            request,
+                            path,
+                            personalized=personalized,
+                            scheme=scheme,
+                            grade_filter=grade_filter,
+                            bottom_filter=bottom_filter,
+                        )
             else:
                 # 썸네일 생성 실패 시 원본 이미지 제공
                 logger.warning(f"썸네일 생성 실패, 원본 이미지 제공: {image_path}")
-                return await get_image(request, path)
+                return await get_image(
+                    request,
+                    path,
+                    personalized=personalized,
+                    scheme=scheme,
+                    grade_filter=grade_filter,
+                    bottom_filter=bottom_filter,
+                )
         except Exception as thumb_error:
             logger.warning(f"썸네일 생성 실패, 원본 이미지 제공: {thumb_error}")
-            return await get_image(request, path)
+            return await get_image(
+                request,
+                path,
+                personalized=personalized,
+                scheme=scheme,
+                grade_filter=grade_filter,
+                bottom_filter=bottom_filter,
+            )
     except HTTPException:
         raise
     except Exception as e:
@@ -4878,6 +5132,8 @@ async def create_class(request: Request,
         DIRLIST_CACHE.clear()
         log_access_row(tag="INFO", note=f"클래스 '{name}' 생성 완료")
         return {"success": True, "class": name, "refresh_required": True, "message": f"클래스 '{name}' 생성됨"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"클래스 생성 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -4909,6 +5165,8 @@ async def delete_class(request: Request,
         DIRLIST_CACHE.clear()
         log_access_row(tag="INFO", note=f"클래스 '{class_name}' 삭제 완료")
         return {"success": True, "deleted": class_name, "force": force, "labels_cleaned": removed_cnt, "refresh_required": True}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"클래스 삭제 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -4965,6 +5223,8 @@ async def rename_class(request: Request,
 
         log_access_row(tag="INFO", note=f"클래스 '{old_name}' → '{new_name}' 이름 변경 완료 ({renamed_count}개 이미지)")
         return {"success": True, "old_name": old_name, "new_name": new_name, "renamed_count": renamed_count, "refresh_required": True}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"클래스 이름 변경 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -6328,6 +6588,20 @@ async def run_composite_map_task(
     """
     global COMPOSITE_SEMAPHORE
 
+    async def _update_task(**updates: Any) -> None:
+        async with COMPOSITE_TASKS_LOCK:
+            task_state = COMPOSITE_TASKS.get(task_id)
+            if task_state is None:
+                task_state = {
+                    "status": "queued",
+                    "progress": 0,
+                    "result": None,
+                    "error": None,
+                    "created_at": datetime.now().isoformat(),
+                }
+                COMPOSITE_TASKS[task_id] = task_state
+            task_state.update(updates)
+
     # Lazy initialization of semaphore
     if COMPOSITE_SEMAPHORE is None:
         COMPOSITE_SEMAPHORE = asyncio.Semaphore(COMPOSITE_CONCURRENCY_LIMIT)
@@ -6335,9 +6609,7 @@ async def run_composite_map_task(
     # Semaphore로 동시 실행 수 제한 (최대 2개)
     async with COMPOSITE_SEMAPHORE:
         try:
-            async with COMPOSITE_TASKS_LOCK:
-                COMPOSITE_TASKS[task_id]["status"] = "processing"
-                COMPOSITE_TASKS[task_id]["started_at"] = datetime.now().isoformat()
+            await _update_task(status="processing", started_at=datetime.now().isoformat())
 
             # 동기 함수를 executor에서 실행 (이벤트 루프 블로킹 방지)
             from .composite_map import create_composite_heatmaps, create_palette_overlay
@@ -6399,18 +6671,21 @@ async def run_composite_map_task(
                 if "sum_maps" in result:
                     response["sum_maps"] = result["sum_maps"]
 
-            async with COMPOSITE_TASKS_LOCK:
-                COMPOSITE_TASKS[task_id]["status"] = "completed"
-                COMPOSITE_TASKS[task_id]["progress"] = 100
-                COMPOSITE_TASKS[task_id]["result"] = response
-                COMPOSITE_TASKS[task_id]["completed_at"] = datetime.now().isoformat()
+            await _update_task(
+                status="completed",
+                progress=100,
+                result=response,
+                completed_at=datetime.now().isoformat(),
+                error=None,
+            )
 
-        except Exception as e:
+        except BaseException as e:
             logger.exception(f"Composite map task {task_id} failed: {e}")
-            async with COMPOSITE_TASKS_LOCK:
-                COMPOSITE_TASKS[task_id]["status"] = "failed"
-                COMPOSITE_TASKS[task_id]["error"] = str(e)
-                COMPOSITE_TASKS[task_id]["failed_at"] = datetime.now().isoformat()
+            await _update_task(
+                status="failed",
+                error=(str(e) or e.__class__.__name__),
+                failed_at=datetime.now().isoformat(),
+            )
 
 
 @app.post("/api/chip-annotations")
@@ -6668,20 +6943,24 @@ async def create_composite_map_endpoint(
     login_id = _current_login_id(req)
     resolved_scheme = payload.scheme or (get_user_color_scheme(login_id) if login_id else "change")
 
-    # 백그라운드 작업 추가
-    background_tasks.add_task(
-        run_composite_map_task,
-        task_id=task_id,
-        image_paths=image_paths,
-        palette_mode=payload.palette_mode,
-        focus_index=payload.focus_index,
-        highlight_threshold=payload.highlight_threshold,
-        loader_mode=loader_mode,
-        max_workers=max_workers,
-        batch_size=batch_size,
-        scheme=resolved_scheme,
-        login_id=login_id
+    # 백그라운드 작업 등록 (클라이언트 연결 종료와 분리)
+    task = asyncio.create_task(
+        run_composite_map_task(
+            task_id=task_id,
+            image_paths=image_paths,
+            palette_mode=payload.palette_mode,
+            focus_index=payload.focus_index,
+            highlight_threshold=payload.highlight_threshold,
+            loader_mode=loader_mode,
+            max_workers=max_workers,
+            batch_size=batch_size,
+            scheme=resolved_scheme,
+            login_id=login_id,
+        ),
+        name=f"composite-map-{task_id}",
     )
+    COMPOSITE_BG_TASKS[task_id] = task
+    task.add_done_callback(lambda _task, tid=task_id: COMPOSITE_BG_TASKS.pop(tid, None))
 
     return {
         "success": True,

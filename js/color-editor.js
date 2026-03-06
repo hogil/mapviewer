@@ -185,7 +185,8 @@ export class ColorSchemeEditor {
 
             const labelTd = document.createElement('td');
             labelTd.className = 'color-editor-label';
-            labelTd.textContent = key;
+            const renderKey = (key.startsWith('B') && key.length > 1 && /^\d/.test(key[1])) ? key.slice(1) : key;
+            labelTd.textContent = renderKey;
 
             const hexTd = document.createElement('td');
             const hexContainer = document.createElement('div');
@@ -284,6 +285,7 @@ export class ColorSchemeEditor {
             });
             hexInput.addEventListener('input', () => {
                 this.clearError();
+                this.checkForChanges();
                 this.updatePreviewRealtime();
             });
             hexInput.addEventListener('paste', (e) => this.handleHexPaste(e, row));
@@ -299,6 +301,7 @@ export class ColorSchemeEditor {
                 });
                 input.addEventListener('input', () => {
                     this.clearError();
+                    this.checkForChanges();
                     this.updatePreviewRealtime();
                 });
                 input.addEventListener('paste', (e) => this.handleRgbPaste(e, row, idx));
@@ -391,6 +394,9 @@ export class ColorSchemeEditor {
         } else {
             this.originalCheckboxState = this.viewer?.personalizedColorEnabled || false;
         }
+        if (this.viewer) {
+            this.viewer._previewSchemeOverride = null;
+        }
         
         this.populateSchemeOptions();
         this.applySchemeToRows(schemeData);
@@ -418,8 +424,8 @@ export class ColorSchemeEditor {
     async close() {
         if (!this.modal) return;
         
-        // 그리드 모드나 이미지가 없으면 원래 색상 복원 불필요하지만 __preview_ 는 항상 삭제
-        if (!this.viewer || (this.viewer.gridMode && !this.viewer.selectedImagePath)) {
+        // viewer가 없으면 복원 로직 대신 __preview_ 정리만 수행
+        if (!this.viewer) {
             // __preview_ 임시 스킴 삭제 (이미지가 없어도 preview가 생성됐을 수 있음)
             if (this.currentSchemeName) {
                 const previewName = `__preview_${this.currentSchemeName}`;
@@ -445,6 +451,7 @@ export class ColorSchemeEditor {
             clearTimeout(this.realtimeUpdateTimeout);
             this.realtimeUpdateTimeout = null;
         }
+        this.viewer._previewSchemeOverride = null;
 
         // 🔥 취소 시 원래 색상으로 되돌리기
         try {
@@ -481,6 +488,7 @@ export class ColorSchemeEditor {
 
                 // 4. personalizedColorCacheBuster 업데이트
                 this.viewer._personalizedColorCacheBuster = Date.now();
+                this.viewer._previewSchemeOverride = null;
 
                 // 5. 원래 설정 복원
                 const originalUser = this.viewer.currentUser;
@@ -500,7 +508,7 @@ export class ColorSchemeEditor {
                     }
                 } else if (this.viewer.selectedImagePath) {
                     // 피라미드 모드: 현재 이미지 유지하며 리로드
-                    await this.viewer.loadImage(this.viewer.selectedImagePath);
+                    await this.viewer.loadImage(this.viewer.selectedImagePath, false, null, true);
                 }
 
                 // 7. Legend 업데이트
@@ -1007,17 +1015,20 @@ export class ColorSchemeEditor {
                 const schemeData = this.getCurrentSchemeData();
                 const schemeName = this.currentSchemeName;
                 if (!schemeName || !schemeData) return;
+                const tempSchemeName = `__preview_${schemeName}`;
 
                 // 1. 메모리 내 colorLegends 업데이트 (즉시 반영)
                 if (!this.viewer.colorLegends) {
                     this.viewer.colorLegends = {};
                 }
                 this.viewer.colorLegends[schemeName] = schemeData;
+                // preview scheme도 메모리에 등록해야 getPersonalizedParams()가 fallback(change)로 내려가지 않음
+                this.viewer.colorLegends[tempSchemeName] = JSON.parse(JSON.stringify(schemeData));
 
                 // 2. 백엔드에 임시 scheme 저장 (프리뷰용)
-                const tempSchemeName = `__preview_${schemeName}`;
                 try {
-                    await fetch(`/api/color-scheme`, {
+                    // 단일 이미지 프리뷰에서는 저장-적용 순서를 보장해 레이스를 방지
+                    const previewRes = await fetch(`/api/color-scheme`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -1025,6 +1036,9 @@ export class ColorSchemeEditor {
                             schemeData: schemeData,
                         }),
                     });
+                    if (!previewRes.ok) {
+                        console.warn("ColorEditor: Preview scheme save failed", previewRes.status);
+                    }
                 } catch (e) {
                     console.warn("ColorEditor: Preview scheme save failed", e);
                 }
@@ -1037,6 +1051,7 @@ export class ColorSchemeEditor {
                 const originalUser = this.viewer.currentUser;
                 this.viewer.personalizedColorEnabled = true;
                 this.viewer.currentUser = tempSchemeName;
+                this.viewer._previewSchemeOverride = tempSchemeName;
 
                 // 5. 캐시 초기화
                 this.viewer.pyramidLevels = {};
@@ -1052,32 +1067,49 @@ export class ColorSchemeEditor {
                 }
 
                 // ⭐ 6단계: 그리드 모드 vs 단일 이미지 구분
-                if (this.viewer.gridMode) {
+                // mode 플래그가 일시적으로 stale일 수 있어 캔버스 표시 상태 + 현재 경로 기준으로 판별
+                const previewImagePath = this.viewer.selectedImagePath || this.viewer.currentImagePath || null;
+                const singleCanvasVisible = Boolean(
+                    this.viewer.dom?.imageCanvas &&
+                    this.viewer.dom.imageCanvas.style.display !== 'none'
+                );
+
+                if (previewImagePath && singleCanvasVisible) {
+                    // ✅ 단일 이미지 모드: 이미지 리로드
+                    // 디버그 로그 제거
+                    // console.log('ColorEditor: Updating single image preview');
+                    // 같은 경로 재로드가 조기 반환되지 않도록 forceReload=true
+                    await this.viewer.loadImage(previewImagePath, false, null, true);
+                    this.refreshNavigatorPreview();
+                } else if (this.viewer.gridMode) {
                     // ✅ 그리드 모드: 썸네일 캐시 클리어 + 썸네일 리로드
                     // 디버그 로그 제거
                     // console.log('ColorEditor: Updating grid thumbnails preview');
-                    
+
                     // 썸네일 캐시 클리어
                     if (this.viewer.thumbnailManager) {
                         this.viewer.thumbnailManager.cache.clear();
                     }
-                    
+
                     // 모든 썸네일 이미지 리로드
                     const grid = document.getElementById('image-grid');
                     if (grid) {
                         const thumbnails = grid.querySelectorAll('.grid-thumb-img');
                         const personalizedParams = this.viewer.getPersonalizedParams();
                         const cacheBuster = this.viewer._personalizedColorCacheBuster || Date.now();
-                        
+                        const hasCacheBusterInParams =
+                            typeof personalizedParams === 'string' && personalizedParams.includes('_t=');
+
                         thumbnails.forEach(img => {
                             if (img.src && img.src.includes('api/thumbnail')) {
                                 try {
                                     const url = new URL(img.src, window.location.origin);
                                     const path = url.searchParams.get('path');
-                                    
+
                                     if (path) {
                                         // 새로운 URL 생성 (캐시 무효화)
-                                        const newUrl = `/api/thumbnail?path=${encodeURIComponent(path)}&size=512${personalizedParams}&_t=${cacheBuster}`;
+                                        const cacheSuffix = hasCacheBusterInParams ? '' : `&_t=${cacheBuster}`;
+                                        const newUrl = `/api/thumbnail?path=${encodeURIComponent(path)}&size=512${personalizedParams}${cacheSuffix}`;
                                         img.src = newUrl;
                                     }
                                 } catch (e) {
@@ -1087,11 +1119,6 @@ export class ColorSchemeEditor {
                             }
                         });
                     }
-                } else if (this.viewer.selectedImagePath) {
-                    // ✅ 단일 이미지 모드: 이미지 리로드
-                    // 디버그 로그 제거
-                    // console.log('ColorEditor: Updating single image preview');
-                    await this.viewer.loadImage(this.viewer.selectedImagePath);
                 }
 
                 // 7. Legend 업데이트
@@ -1104,6 +1131,47 @@ export class ColorSchemeEditor {
                 console.error("ColorEditor: Realtime preview failed", error);
             }
         }, 500); // 500ms 디바운스
+    }
+
+    refreshNavigatorPreview() {
+        if (!this.viewer?.thumbnailNavigator) {
+            return;
+        }
+
+        const navigator = this.viewer.thumbnailNavigator;
+        const navigatorContainer =
+            navigator.container ||
+            document.getElementById('thumbnail-navigator');
+
+        // isVisible 플래그가 stale인 경우(실제 DOM은 visible) 동기화
+        if (!navigator.isVisible && navigatorContainer) {
+            const style = window.getComputedStyle(navigatorContainer);
+            const domVisible = style.display !== 'none' && style.visibility !== 'hidden';
+            if (domVisible) {
+                navigator.isVisible = true;
+            }
+        }
+
+        const currentPath = this.viewer.selectedImagePath || this.viewer.currentImagePath || null;
+        if (!currentPath) {
+            return;
+        }
+
+        let sourceList = [];
+        if (this.viewer.viewMode === 'gridImage' && Array.isArray(this.viewer.gridViewImageList) && this.viewer.gridViewImageList.length > 0) {
+            sourceList = this.viewer.gridViewImageList;
+        } else if (Array.isArray(this.viewer.singleViewImageList) && this.viewer.singleViewImageList.length > 0) {
+            sourceList = this.viewer.singleViewImageList;
+        } else if (Array.isArray(this.viewer.selectedImages) && this.viewer.selectedImages.length > 0) {
+            sourceList = this.viewer.selectedImages;
+        }
+
+        if (!sourceList.length) {
+            return;
+        }
+
+        // forceRender=true로 stale isVisible 상태에서도 즉시 썸네일 URL을 갱신
+        navigator.setImages(sourceList, currentPath, true);
     }
 
     updateApplyButtonState(enabled) {
@@ -1197,6 +1265,7 @@ export class ColorSchemeEditor {
                     
                     // 캐시 버스팅을 위한 타임스탬프 추가
                     this.viewer._personalizedColorCacheBuster = Date.now();
+                    this.viewer._previewSchemeOverride = null;
                     
                     // 8. 그리드/이미지 모드 유지하며 리로드 (모드 변경 없음)
                     if (this.viewer.gridMode) {
@@ -1211,7 +1280,8 @@ export class ColorSchemeEditor {
                         // 피라미드 모드: 현재 이미지 유지
                         // 디버그 로그 제거
                         // console.log("ColorEditor: Reloading image without mode change");
-                        await this.viewer.loadImage(this.viewer.selectedImagePath);
+                        await this.viewer.loadImage(this.viewer.selectedImagePath, false, null, true);
+                        this.refreshNavigatorPreview();
                     }
                     
                     // 9. UI 업데이트
