@@ -16,24 +16,31 @@ AI/외부 도구가 호환 파일을 생성할 때 이 규칙을 따라야 합�
 | 인덱스 범위 | 0 ~ 31 |
 | 이미지 형태 | 정사각형 (rotation 후 square resize) |
 
-### 팔레트 인덱스 체계
+### 팔레트 인덱스 체계 (고정)
 
-픽셀 값은 RGB 값이 아닌 팔레트 테이블의 인덱스입니다.
+픽셀 값은 RGB 값이 아닌 팔레트 테이블 인덱스이며, 아래 순서를 **고정**으로 사용합니다.
 
-| 인덱스 | 의미 | 비고 |
-|--------|------|------|
-| 0 | Grade 0 | 칩 내부값 고정 |
-| 1 | Grade 1 | 칩 내부값 고정 |
-| 2 | Grade 2 | 칩 내부값 고정 |
-| 3 | Grade 3 | 칩 내부값 고정 |
-| 4 | Grade 4 | 칩 내부값 고정 |
-| 5 | Grade 5 | 칩 내부값 고정 |
-| 6 | Grade 6 | 칩 내부값 고정 |
-| 7 | Grade 7 | 칩 내부값 고정 |
-| 8+ | 오버레이 (bg/text/border/bin) | 용도에 따라 추가 정의 |
+| 인덱스 | 키 | 의미 |
+|--------|-----|------|
+| 0~7 | `Grade0`~`Grade7` | 칩 내부 Grade |
+| 8 | `background` | 배경 |
+| 9 | `text` | 텍스트 |
+| 10 | `bottom.Normal` | Normal 테두리 |
+| 11 | `bottom.Invalid` | Invalid 테두리 |
+| 12 | `bottom.B285` | 00P BIN |
+| 13 | `bottom.B286` | 00P BIN |
+| 14 | `bottom.B287` | 00P BIN |
+| 15 | `bottom.B288` | 00P BIN |
+| 16 | `bottom.B290` | 00P BIN |
+| 17 | `bottom.B291` | 00P BIN |
+| 18 | `bottom.B300` | 00C BIN |
+| 19 | `bottom.B385` | 00C BIN |
+| 20 | `bottom.B386` | 00C BIN |
+| 21 | `bottom.B388` | 00C BIN |
+| 22 | `bottom.B389` | 00C BIN |
+| 23 | `bottom.B390` | 00C BIN |
 
-Grade 0~7은 칩 내부의 품질 등급으로, 인덱스 값이 고정입니다. 오버레이 인덱스는
-배경, 텍스트, 테두리, BIN 타입 등 용도에 따라 추가로 정의합니다.
+`Normal/Invalid`는 BIN이 아니라 고정 테두리 인덱스(10, 11)입니다.
 
 ### BIN 타입 분기
 
@@ -69,17 +76,19 @@ Grade 0~7은 칩 내부의 품질 등급으로, 인덱스 값이 고정입니다
 
 ### 파일 경로 규칙
 
-```
-{이미지경로}.json
-```
+기본 저장 경로는 `positions_root` 기준이며, 이미지와 동일한 stem 이름을 사용합니다.
 
-이미지 파일과 동일한 위치에, 동일한 이름 + `.json` 확장자를 붙입니다.
+```text
+{positions_root}/{p1}/{p2}/{YYYYMMDD}/{image_stem}.json
+```
 
 예시:
+```text
+images/ASDF/EQ01/20260306/LOT1_STEP_W01_20260306_101530.png
+positions/ASDF/EQ01/20260306/LOT1_STEP_W01_20260306_101530.json
 ```
-images/lot/wafer01.png       → 이미지 파일
-images/lot/wafer01.png.json  → position 파일
-```
+
+참고: 서버 조회 시에는 위 경로를 우선 사용하고, 일부 레거시 경로도 fallback으로 탐색할 수 있습니다.
 
 ### 적재 조건
 
@@ -89,17 +98,28 @@ images/lot/wafer01.png.json  → position 파일
 
 ```json
 {
-  "grid_edges": {
-    "xs": [0, 100, 200, 300],
-    "ys": [0, 100, 200, 300]
+  "kind": "00P",
+  "coord": {
+    "grid_edges": {
+      "xs": [0, 100, 200, 300],
+      "ys": [0, 100, 200, 300]
+    },
+    "canvas": { "width": 300, "height": 300 }
   },
   "chips": [
     {
-      "col": 0,
-      "row": 0,
-      "rect": [x, y, w, h],
-      "bin": 285,
-      "grade": 2
+      "x_abs": 10,
+      "y_abs": 20,
+      "b": "285",
+      "x_cal": -12,
+      "y_cal": 8,
+      "rect": {
+        "x0": 0,
+        "y0": 0,
+        "x1": 100,
+        "y1": 100,
+        "quad": [[0, 0], [100, 0], [100, 100], [0, 100]]
+      }
     },
     ...
   ]
@@ -108,7 +128,7 @@ images/lot/wafer01.png.json  → position 파일
 
 ### 필드 설명
 
-#### `grid_edges`
+#### `coord.grid_edges`
 칩 그리드의 경계선 좌표 배열입니다.
 
 | 필드 | 타입 | 설명 |
@@ -123,11 +143,12 @@ images/lot/wafer01.png.json  → position 파일
 
 | 필드 | 타입 | 설명 |
 |------|------|------|
-| `col` | int | 열 인덱스 (0-based) |
-| `row` | int | 행 인덱스 (0-based) |
-| `rect` | [x, y, w, h] | 칩 바운딩 박스 (회전+리사이즈 후 픽셀 좌표) |
-| `bin` | int | BIN 코드 (예: 285, 300) |
-| `grade` | int | Grade 값 (0~7) |
+| `x_abs` | int | 원본 절대 X 좌표 |
+| `y_abs` | int | 원본 절대 Y 좌표 |
+| `b` | string | BIN 코드 문자열 (예: `"285"`) |
+| `x_cal` | int | 중심 기준 보정 X 좌표 |
+| `y_cal` | int | 중심 기준 보정 Y 좌표 |
+| `rect` | object | 타일 픽셀 영역 (`x0`,`y0`,`x1`,`y1`,`quad`) |
 
 ### UI에서 클릭 → 타일 찾기
 
@@ -135,8 +156,8 @@ images/lot/wafer01.png.json  → position 파일
 
 ```python
 def find_chip_at(position, px, py):
-    xs = position["grid_edges"]["xs"]
-    ys = position["grid_edges"]["ys"]
+    xs = position["coord"]["grid_edges"]["xs"]
+    ys = position["coord"]["grid_edges"]["ys"]
 
     # 이진 탐색으로 열/행 인덱스 찾기
     col = bisect_right(xs, px) - 1
@@ -146,8 +167,15 @@ def find_chip_at(position, px, py):
     if col < 0 or col >= len(xs) - 1: return None
     if row < 0 or row >= len(ys) - 1: return None
 
-    # 해당 col/row의 칩 찾기
-    return next((c for c in position["chips"] if c["col"] == col and c["row"] == row), None)
+    # 해당 셀에 속한 칩 찾기 (rect 기반)
+    return next(
+        (
+            c for c in position["chips"]
+            if c["rect"]["x0"] <= px < c["rect"]["x1"]
+            and c["rect"]["y0"] <= py < c["rect"]["y1"]
+        ),
+        None
+    )
 ```
 
 ---
@@ -230,8 +258,8 @@ logs/color-legends.json
 
 | 키 | 의미 |
 |----|------|
-| `Normal` | 정상 칩 |
-| `Invalid` | 유효하지 않은 칩 (웨이퍼 외곽 등) |
+| `Normal` | 정상 칩 테두리 (팔레트 인덱스 10) |
+| `Invalid` | 유효하지 않은 칩 테두리 (팔레트 인덱스 11) |
 | `B285`~`B291` | 00P 타입 BIN 코드별 색상 |
 | `B300`, `B385`~`B390` | 00C 타입 BIN 코드별 색상 |
 

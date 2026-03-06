@@ -28,18 +28,20 @@ _PALETTE_CACHE: Dict[str, bytes] = {}
 TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7']
 BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
                'B300', 'B385', 'B386', 'B388', 'B389', 'B390']
+BIN_KEYS = ['B285', 'B286', 'B287', 'B288', 'B290', 'B291',
+            'B300', 'B385', 'B386', 'B388', 'B389', 'B390']
 
 # 팔레트 인덱스 정의 (이미지 생성 코드와 반드시 일치해야 함)
 # 0-7  : Grade0-Grade7 (chip 내부 값, 고정)
 # 8    : background (고정)
 # 9    : text (고정)
-# 10   : border (preserved, 사용자 설정 불가)
-# 11   : border_inv (preserved, 사용자 설정 불가)
-# 12+  : BINs (Normal, Invalid, B285-B291, B300-series, 확장 가능)
+# 10   : Normal border (bottom.Normal)
+# 11   : Invalid border (bottom.Invalid)
+# 12+  : BINs (B285-B291, B300-series)
 IDX_BG = 8
 IDX_TEXT = 9
-IDX_BORDER = 10       # preserved from original PNG
-IDX_BORDER_INV = 11   # preserved from original PNG
+IDX_BORDER = 10       # Normal
+IDX_BORDER_INV = 11   # Invalid
 IDX_BOTTOM_START = 12 # BIN colors start here
 
 
@@ -158,12 +160,11 @@ def _scheme_to_palette_bytes(scheme: Dict[str, Any]) -> bytes:
     - 0~7  : Grade0~7 (chip 내부 값)
     - 8    : background
     - 9    : text
-    - 10   : border   (placeholder [0,0,0] → 패치 시 원본 보존)
-    - 11   : border_inv (placeholder [0,0,0] → 패치 시 원본 보존)
-    - 12+  : BINs (Normal, Invalid, B285~B291, B300-series)
+    - 10   : Normal border (bottom.Normal)
+    - 11   : Invalid border (bottom.Invalid)
+    - 12+  : BINs (B285~B291, B300-series)
 
-    인덱스 10-11은 패치 함수에서 원본 PNG 값을 보존하므로 여기서는 [0,0,0] 사용.
-    총 (12 + len(BOTTOM_KEYS)) * 3 bytes 반환.
+    총 (12 + len(BIN_KEYS)) * 3 bytes 반환.
     """
     palette: List[int] = []
     top = scheme.get('top', {})
@@ -181,12 +182,14 @@ def _scheme_to_palette_bytes(scheme: Dict[str, Any]) -> bytes:
     # 9: text
     palette.extend(_hex_to_rgb_triple(text))
 
-    # 10-11: border/border_inv (placeholder; 패치 시 원본 PNG 값 보존)
-    palette.extend([0, 0, 0])  # index 10: border
-    palette.extend([0, 0, 0])  # index 11: border_inv
+    # 10: Normal, 11: Invalid
+    normal_hex = bottom.get('Normal') or bottom.get('Border') or '#BEBEBE'
+    invalid_hex = bottom.get('Invalid') or '#FF9900'
+    palette.extend(_hex_to_rgb_triple(normal_hex))
+    palette.extend(_hex_to_rgb_triple(invalid_hex))
 
     # 12+: BINs
-    for key in BOTTOM_KEYS:
+    for key in BIN_KEYS:
         palette.extend(_hex_to_rgb_triple(bottom.get(key, '#000000')))
 
     return bytes(palette)
@@ -210,12 +213,15 @@ def get_palette_for_scheme(scheme_data: Dict[str, Any]) -> bytes:
 
 def swap_first16_colors(img: Image.Image, palette_bytes: bytes) -> Optional[Image.Image]:
     """
-    Apply scheme palette to image, preserving border/border_inv (indices 10-11).
+    Apply scheme palette to image using fixed palette index mapping.
 
     팔레트 인덱스 구조에 맞게 색상을 교체합니다:
-    - 0~9  : Grade0~7, background, text → 덮어쓰기
-    - 10-11: border/border_inv → 원본 보존
-    - 12+  : BINs → 덮어쓰기
+    - 0~7  : Grade0~7
+    - 8    : background
+    - 9    : text
+    - 10   : Normal border
+    - 11   : Invalid border
+    - 12+  : BINs
 
     이미지 픽셀 데이터는 변경하지 않고 팔레트만 교체합니다.
     """
@@ -225,12 +231,8 @@ def swap_first16_colors(img: Image.Image, palette_bytes: bytes) -> Optional[Imag
     if not palette:
         return None
     new_palette = palette[:]
-    # palette_bytes 전체를 쓰되 인덱스 10-11(border/border_inv)은 원본 보존
+    # palette_bytes 범위만 덮어쓴다.
     new_palette[: len(palette_bytes)] = list(palette_bytes)
-    for i in (IDX_BORDER, IDX_BORDER_INV):
-        offset = i * 3
-        if offset + 3 <= len(palette):
-            new_palette[offset:offset + 3] = palette[offset:offset + 3]
     out = img.copy()
     out.putpalette(new_palette)
     return out
@@ -310,12 +312,6 @@ def plte_inplace_patch_memory(png_data: bytearray, scheme: str) -> bytearray:
             new_plte = current_plte[:]
             n_bytes = min(len(new_palette), len(current_plte))
             new_plte[:n_bytes] = new_palette[:n_bytes]
-
-            # 인덱스 10-11(border/border_inv) 원본 보존
-            for i in (IDX_BORDER, IDX_BORDER_INV):
-                offset = i * 3
-                if offset + 3 <= len(current_plte):
-                    new_plte[offset:offset + 3] = current_plte[offset:offset + 3]
 
             # PLTE 데이터 교체
             png_data[plte_start:plte_end] = new_plte
@@ -429,23 +425,23 @@ def plte_bottom_filter_memory(png_data: bytearray, bottom_values: List[str]) -> 
     PNG 파일의 PLTE 청크를 수정하여 선택된 Bottom 값들만 색상을 유지하고
     선택되지 않은 Bottom 값들은 팔레트 인덱스 31의 색상(보통 흰색)으로 덮어씁니다.
 
-    Bottom 값 매핑 (IDX_BOTTOM_START=12 기준):
-    - 'Normal' → 인덱스 12
-    - 'Invalid' → 인덱스 13
-    - '285' (B285) → 인덱스 14
-    - '286' (B286) → 인덱스 15
-    - '287' (B287) → 인덱스 16
-    - '288' (B288) → 인덱스 17
-    - '290' (B290) → 인덱스 18
-    - '291' (B291) → 인덱스 19
-    - '300' (B300) → 인덱스 20
-    - '385' (B385) → 인덱스 21
-    - '386' (B386) → 인덱스 22
-    - '388' (B388) → 인덱스 23
-    - '389' (B389) → 인덱스 24
-    - '390' (B390) → 인덱스 25
+    Bottom 값 매핑 (고정 인덱스):
+    - 'Normal'  → 인덱스 10
+    - 'Invalid' → 인덱스 11
+    - '285' (B285) → 인덱스 12
+    - '286' (B286) → 인덱스 13
+    - '287' (B287) → 인덱스 14
+    - '288' (B288) → 인덱스 15
+    - '290' (B290) → 인덱스 16
+    - '291' (B291) → 인덱스 17
+    - '300' (B300) → 인덱스 18
+    - '385' (B385) → 인덱스 19
+    - '386' (B386) → 인덱스 20
+    - '388' (B388) → 인덱스 21
+    - '389' (B389) → 인덱스 22
+    - '390' (B390) → 인덱스 23
 
-    중요: 팔레트 인덱스 0-11 (Grade, bg, text, border, border_inv)은 그대로 유지됩니다.
+    중요: 팔레트 인덱스 0-9 (Grade, bg, text)은 그대로 유지됩니다.
 
     Args:
         png_data: PNG 파일의 바이트 데이터 (bytearray)
@@ -454,29 +450,34 @@ def plte_bottom_filter_memory(png_data: bytearray, bottom_values: List[str]) -> 
     Returns:
         수정된 PNG 바이트 데이터 (bytearray)
     """
-    # Bottom 값을 팔레트 인덱스로 매핑 (IDX_BOTTOM_START=12 기준)
+    # Bottom 값을 팔레트 인덱스로 매핑 (Normal/Invalid 포함 고정 인덱스)
     BOTTOM_MAP = {
-        'Normal': 12,
-        'Invalid': 13,
-        '285': 14,
-        '286': 15,
-        '287': 16,
-        '288': 17,
-        '290': 18,
-        '291': 19,
-        '300': 20,
-        '385': 21,
-        '386': 22,
-        '388': 23,
-        '389': 24,
-        '390': 25,
+        'Normal': 10,
+        'Invalid': 11,
+        '285': 12,
+        '286': 13,
+        '287': 14,
+        '288': 15,
+        '290': 16,
+        '291': 17,
+        '300': 18,
+        '385': 19,
+        '386': 20,
+        '388': 21,
+        '389': 22,
+        '390': 23,
     }
 
     # 선택된 bottom 값들을 인덱스로 변환
     selected_indices = set()
     for val in bottom_values:
-        if val in BOTTOM_MAP:
-            selected_indices.add(BOTTOM_MAP[val])
+        key = str(val).strip()
+        if not key:
+            continue
+        if key.startswith('B') and key[1:].isdigit():
+            key = key[1:]
+        if key in BOTTOM_MAP:
+            selected_indices.add(BOTTOM_MAP[key])
 
     logger.info("🔍 Bottom 필터 적용: bottom_values=%s, selected_indices=%s", bottom_values, selected_indices)
 
@@ -514,18 +515,10 @@ def plte_bottom_filter_memory(png_data: bytearray, bottom_values: List[str]) -> 
             if len(white_color) < 3:
                 white_color = [255, 255, 255]
 
-            # 팔레트 필터링: Bottom 인덱스 8-13 중 선택되지 않은 것만 인덱스 31 색상(흰색)으로 변경
-            # Grade 인덱스 0-7은 그대로 유지
+            # 팔레트 필터링: Bottom 인덱스(10~23) 중 선택되지 않은 것만 인덱스 31 색상으로 변경
+            # Grade/background/text 인덱스(0~9)는 그대로 유지
             new_plte = current_plte[:]
             modified_indices = []
-
-            # Bottom 필터가 활성화되면 경계선(border/border_inv)도 숨김 처리
-            # (선택된 BIN 외 칩만 보이도록 테두리 잔상 제거)
-            for border_idx in (IDX_BORDER, IDX_BORDER_INV):
-                if border_idx < num_colors:
-                    new_plte[border_idx * 3] = white_color[0]
-                    new_plte[border_idx * 3 + 1] = white_color[1]
-                    new_plte[border_idx * 3 + 2] = white_color[2]
 
             for idx, palette_idx in BOTTOM_MAP.items():
                 if palette_idx < num_colors and palette_idx not in selected_indices:
@@ -536,7 +529,13 @@ def plte_bottom_filter_memory(png_data: bytearray, bottom_values: List[str]) -> 
                     modified_indices.append(f"{idx}(idx={palette_idx})")
 
             logger.info("✏️  필터링된 Bottom: %s (white color=%s)", modified_indices, white_color)
-            logger.info("✅ 유지된 Bottom: %s", [f"{k}({BOTTOM_MAP[k]})" for k in bottom_values if k in BOTTOM_MAP])
+            normalized_bottoms = []
+            for raw in bottom_values:
+                key = str(raw).strip()
+                if key.startswith('B') and key[1:].isdigit():
+                    key = key[1:]
+                normalized_bottoms.append(key)
+            logger.info("✅ 유지된 Bottom: %s", [f"{k}({BOTTOM_MAP[k]})" for k in normalized_bottoms if k in BOTTOM_MAP])
 
             # PLTE 데이터 교체
             png_data[plte_start:plte_end] = new_plte

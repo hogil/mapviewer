@@ -5,6 +5,17 @@
 팔레트 기반 웨이퍼 이미지에 사용자별 커스텀 색상 스킴을 적용하는 기능.
 썸네일과 피라미드 캐시를 사용자별로 분리하여 관리.
 
+## 팔레트 인덱스 매핑 (생성기 기준)
+
+- `0~7`: `top.Grade0~Grade7`
+- `8`: `background`
+- `9`: `text`
+- `10`: `bottom.Normal`
+- `11`: `bottom.Invalid`
+- `12~23`: `bottom.B285~B390` (00P/00C BIN)
+
+중요: `bottom.Normal`/`bottom.Invalid`는 BIN이 아니라 고정 테두리 인덱스(10, 11)입니다.
+
 ---
 
 ## 썸네일 경로
