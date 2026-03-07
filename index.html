@@ -311,6 +311,14 @@
             box-shadow: 0 16px 38px rgba(0, 0, 0, 0.55);
         }
 
+        #color-editor-modal {
+            padding-left: 0;
+        }
+
+        #color-editor-modal .color-editor-dialog {
+            margin-left: 0;
+        }
+
         .color-editor-header {
             display: flex;
             justify-content: space-between;
@@ -419,6 +427,68 @@
 
         .color-editor-scheme-item:last-child {
             border-bottom: none;
+        }
+
+        /* Excel-like search dropdown table */
+        .color-editor-scheme-head-row,
+        .color-editor-scheme-row {
+            display: grid;
+            grid-template-columns: 1.2fr 1.2fr 1fr;
+            align-items: center;
+            gap: 0;
+        }
+
+        .color-editor-scheme-head-row {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            background: #2f2f2f;
+            border-bottom: 1px solid #5a5a5a;
+        }
+
+        .color-editor-scheme-head-cell {
+            padding: 7px 10px;
+            font-size: 11px;
+            font-weight: 700;
+            color: #d8d8d8;
+            text-transform: uppercase;
+            letter-spacing: 0.35px;
+            border-right: 1px solid #565656;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .color-editor-scheme-head-cell:last-child {
+            border-right: none;
+        }
+
+        .color-editor-scheme-row {
+            padding: 0;
+            border-bottom: 1px solid #3f3f3f;
+            background: #252525;
+        }
+
+        .color-editor-scheme-row:nth-child(odd) {
+            background: #292929;
+        }
+
+        .color-editor-scheme-row:hover {
+            background: #3b4b62 !important;
+        }
+
+        .color-editor-scheme-cell {
+            padding: 8px 10px;
+            border-right: 1px solid #3f3f3f;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 12px;
+        }
+
+        .color-editor-scheme-cell:last-child {
+            border-right: none;
         }
 
         .color-editor-dropdown-item {
@@ -649,6 +719,21 @@
             flex-wrap: nowrap;
             align-items: center;
             justify-content: space-between;
+            user-select: none;
+            -webkit-user-select: none;
+            caret-color: transparent;
+            -webkit-tap-highlight-color: transparent;
+            outline: none;
+        }
+
+        #grid-color-legend-bottom,
+        #grid-color-legend-bottom * {
+            caret-color: transparent !important;
+        }
+
+        #grid-color-legend-bottom:focus,
+        #grid-color-legend-bottom *:focus {
+            outline: none !important;
         }
         
         .legend-group-top {
@@ -678,6 +763,9 @@
             margin-right: 5px;
             font-size: 11px;
             flex-shrink: 0;
+            user-select: none;
+            -webkit-user-select: none;
+            caret-color: transparent;
         }
         
         .legend-item-grid:last-child {
@@ -701,6 +789,9 @@
         .legend-label-grid {
             color: #eee;
             white-space: nowrap;
+            user-select: none;
+            -webkit-user-select: none;
+            caret-color: transparent;
         }
         
         .control-group {
@@ -2534,6 +2625,9 @@
             background: rgba(0,0,0,0.7);
             pointer-events: auto;
         }
+        #permission-editor-modal {
+            z-index: 35000;
+        }
         
         .modal-content {
             background: var(--panel-color);
@@ -3980,8 +4074,9 @@
                 <div class="color-editor-scheme-toolbar">
                     <label for="color-editor-scheme-search">다른 팔레트 불러오기</label>
                     <div class="color-editor-scheme-search-row">
-                        <input type="text" id="color-editor-scheme-search" placeholder="스킴 이름 검색..." autocomplete="off">
+                        <input type="text" id="color-editor-scheme-search" placeholder="다른 User 검색..." autocomplete="off">
                         <button type="button" id="color-editor-scheme-load-btn" class="color-editor-btn">검색</button>
+                        <button type="button" id="color-editor-scheme-apply-btn" class="color-editor-btn">적용</button>
                     </div>
                     <div id="color-editor-scheme-dropdown" class="color-editor-modal-dropdown" role="listbox" aria-expanded="false"></div>
                 </div>
@@ -4119,7 +4214,7 @@
     <script defer src="/js/semiconductor-renderer.js"></script>
 
     <!-- 🚀 ES6 모듈로 로드 (최적화) -->
-    <script type="module" src="/js/main.js?v=cachebust4"></script>
+    <script type="module" src="/js/main.js?v=cachebust5"></script>
 
     <!-- 리팩토링된 모듈 방식 (디버깅 후 다시 활성화 예정) -->
     <!-- <script type="module" src="/js/main-refactored.js"></script> -->

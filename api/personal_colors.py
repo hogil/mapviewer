@@ -3,16 +3,17 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import io
 import json
 import logging
 import struct
 import zlib
 from pathlib import Path
 from threading import RLock
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from PIL import Image
-from .config import FALLBACK_LOGIN_ID
+from .config import FALLBACK_LOGIN_ID, IMAGES_ROOT, POSITIONS_ROOT
 
 # PIL DecompressionBombWarning 제한 해제 (큰 이미지 로드 허용)
 Image.MAX_IMAGE_PIXELS = None  # 제한 없음
@@ -74,13 +75,14 @@ IDX_TEXT = 9
 IDX_BORDER = 10       # Normal
 IDX_BORDER_INV = 11   # Invalid
 IDX_BOTTOM_START = 12 # BIN colors start here
+FILTERED_COLOR_RGB = [255, 255, 255]
 
 
 def _default_personal_scheme() -> Dict[str, Any]:
     return {
         "top": copy.deepcopy(DEFAULT_TOP_COLORS),
         "bottom": copy.deepcopy(DEFAULT_BOTTOM_COLORS),
-        "background": "#FEFEFE",
+        "background": "#CCCCCC",
         "text": "#000001",
     }
 
@@ -482,17 +484,10 @@ def plte_grade_filter_memory(png_data: bytearray, grade_indices: List[int]) -> b
             num_colors = len(current_plte) // 3
             logger.info("🎨 PLTE 청크 발견: chunk_length=%d, 팔레트 색상 수=%d", chunk_length, num_colors)
 
-            # 🔥 팔레트 인덱스 31의 색상 가져오기 (흰색)
-            # 인덱스 31이 존재하지 않으면 흰색 사용
-            if num_colors > 31:
-                white_color = list(current_plte[31 * 3 : 31 * 3 + 3])
-            else:
-                white_color = [255, 255, 255]
-
-            if len(white_color) < 3:
-                white_color = [255, 255, 255]
-
-            logger.info("🎨 인덱스 31 색상 (Grade 필터용): %s", white_color)
+            # 필터에서 제외된 포인트는 항상 흰색으로 고정한다.
+            # 일부 소스는 팔레트 인덱스 31이 흰색이 아니어서 필터 시 시각적으로 남아보일 수 있다.
+            white_color = FILTERED_COLOR_RGB
+            logger.info("🎨 Grade 필터 제외 색상: %s", white_color)
 
             # 팔레트 필터링: Grade 0-7 중 선택되지 않은 것만 인덱스 31 색상으로 변경
             # 인덱스 8 이상(Normal, Invalid 등)은 그대로 유지
@@ -527,7 +522,37 @@ def plte_grade_filter_memory(png_data: bytearray, grade_indices: List[int]) -> b
     return png_data
 
 
-def plte_bottom_filter_memory(png_data: bytearray, bottom_values: List[str]) -> bytearray:
+def _normalize_bottom_filter_key(raw_value: Any) -> Optional[str]:
+    key = str(raw_value).strip()
+    if not key:
+        return None
+
+    lowered = key.lower()
+    aliases = {
+        "normal": "Normal",
+        "nor": "Normal",
+        "border": "Normal",
+        "invalid": "Invalid",
+        "inv": "Invalid",
+    }
+
+    if lowered in aliases:
+        return aliases[lowered]
+
+    if lowered.startswith('b') and lowered[1:].isdigit():
+        return lowered[1:]
+
+    if lowered.isdigit():
+        return lowered
+
+    return key
+
+
+def plte_bottom_filter_memory(
+    png_data: bytearray,
+    bottom_values: List[str],
+    grade_indices: Optional[List[int]] = None,
+) -> bytearray:
     """
     메모리 상태에서 PLTE Bottom 필터링 (선택된 bottom 값만 색상 유지, 나머지는 인덱스 31 색상으로 변경).
 
@@ -550,7 +575,12 @@ def plte_bottom_filter_memory(png_data: bytearray, bottom_values: List[str]) -> 
     - '389' (B389) → 인덱스 22
     - '390' (B390) → 인덱스 23
 
-    중요: 팔레트 인덱스 0-9 (Grade, bg, text)은 그대로 유지됩니다.
+    동작 규칙:
+    - 선택된 Bottom 인덱스(10~23)는 원래 색(개인색 포함) 유지
+    - 선택되지 않은 Bottom 인덱스(10~23)는 흰색으로 치환
+    - grade_indices가 있으면 선택되지 않은 Grade(0~7)만 흰색 처리
+    - grade_indices가 없으면 Grade(0~7)는 모두 흰색 처리
+    - 배경/텍스트 인덱스(8, 9)는 유지
 
     Args:
         png_data: PNG 파일의 바이트 데이터 (bytearray)
@@ -580,11 +610,9 @@ def plte_bottom_filter_memory(png_data: bytearray, bottom_values: List[str]) -> 
     # 선택된 bottom 값들을 인덱스로 변환
     selected_indices = set()
     for val in bottom_values:
-        key = str(val).strip()
+        key = _normalize_bottom_filter_key(val)
         if not key:
             continue
-        if key.startswith('B') and key[1:].isdigit():
-            key = key[1:]
         if key in BOTTOM_MAP:
             selected_indices.add(BOTTOM_MAP[key])
 
@@ -614,20 +642,25 @@ def plte_bottom_filter_memory(png_data: bytearray, bottom_values: List[str]) -> 
             num_colors = len(current_plte) // 3
             logger.info("🎨 PLTE 청크 발견: chunk_length=%d, 팔레트 색상 수=%d", chunk_length, num_colors)
 
-            # 팔레트 인덱스 31의 색상 가져오기 (보통 흰색)
-            # 인덱스 31이 존재하지 않으면 흰색 사용
-            if num_colors > 31:
-                white_color = list(current_plte[31 * 3 : 31 * 3 + 3])
-            else:
-                white_color = [255, 255, 255]
+            # 필터에서 제외된 포인트는 항상 흰색으로 고정한다.
+            white_color = FILTERED_COLOR_RGB
 
-            if len(white_color) < 3:
-                white_color = [255, 255, 255]
-
-            # 팔레트 필터링: Bottom 인덱스(10~23) 중 선택되지 않은 것만 인덱스 31 색상으로 변경
-            # Grade/background/text 인덱스(0~9)는 그대로 유지
+            # 팔레트 필터링:
+            # 1) Grade(0~7)는 선택된 grade만 유지하고 나머지는 흰색
+            # 2) Bottom(10~23)은 선택된 값만 유지하고 나머지는 흰색
+            # 3) bg/text(8,9)는 유지
             new_plte = current_plte[:]
             modified_indices = []
+            grade_set = set(grade_indices or [])
+
+            # Grade 0~7 처리
+            for grade_idx in range(0, min(8, num_colors)):
+                if grade_set and grade_idx in grade_set:
+                    continue
+                new_plte[grade_idx * 3] = white_color[0]
+                new_plte[grade_idx * 3 + 1] = white_color[1]
+                new_plte[grade_idx * 3 + 2] = white_color[2]
+                modified_indices.append(f"Grade{grade_idx}(idx={grade_idx})")
 
             for idx, palette_idx in BOTTOM_MAP.items():
                 if palette_idx < num_colors and palette_idx not in selected_indices:
@@ -640,9 +673,7 @@ def plte_bottom_filter_memory(png_data: bytearray, bottom_values: List[str]) -> 
             logger.info("✏️  필터링된 Bottom: %s (white color=%s)", modified_indices, white_color)
             normalized_bottoms = []
             for raw in bottom_values:
-                key = str(raw).strip()
-                if key.startswith('B') and key[1:].isdigit():
-                    key = key[1:]
+                key = _normalize_bottom_filter_key(raw)
                 normalized_bottoms.append(key)
             logger.info("✅ 유지된 Bottom: %s", [f"{k}({BOTTOM_MAP[k]})" for k in normalized_bottoms if k in BOTTOM_MAP])
 

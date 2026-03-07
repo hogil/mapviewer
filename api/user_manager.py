@@ -4,6 +4,7 @@ Role-Based Access Control (RBAC) 시스템
 """
 import json
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -43,11 +44,34 @@ ROLE_PERMISSIONS = {
 # 🔥 데이터 경로 - logs 디렉토리로 통합
 LOGS_DIR = Path(__file__).parent.parent / "logs"
 USERS_FILE = LOGS_DIR / "users.json"
-AUDIT_LOG_DIR = LOGS_DIR / "roles"
+AUDIT_LOG_PREFIX = "audit-roles"
+LEGACY_AUDIT_LOG_DIR = LOGS_DIR / "roles"
 
 # 디렉토리 생성
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
-AUDIT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _migrate_legacy_audit_logs() -> None:
+    """레거시 logs/roles/audit-*.jsonl 파일을 logs/audit-roles-*.jsonl로 1회 마이그레이션."""
+    if not LEGACY_AUDIT_LOG_DIR.exists() or not LEGACY_AUDIT_LOG_DIR.is_dir():
+        return
+    for src in LEGACY_AUDIT_LOG_DIR.glob("audit-*.jsonl"):
+        suffix = src.name[len("audit-"):] if src.name.startswith("audit-") else src.name
+        dst = LOGS_DIR / f"{AUDIT_LOG_PREFIX}-{suffix}"
+        try:
+            if not dst.exists():
+                shutil.move(str(src), str(dst))
+        except Exception:
+            # 마이그레이션 실패 시에도 서비스는 계속 동작해야 함
+            pass
+    try:
+        # 비어 있으면 정리
+        LEGACY_AUDIT_LOG_DIR.rmdir()
+    except Exception:
+        pass
+
+
+_migrate_legacy_audit_logs()
 
 
 class UserManager:
@@ -305,7 +329,7 @@ class UserManager:
     def _write_audit_log(self, actor: str, action: str, target: str, details: Dict):
         """감사 로그 기록 (JSONL 형식, append-only)"""
         today = datetime.utcnow().strftime("%Y%m%d")
-        log_file = AUDIT_LOG_DIR / f"audit-{today}.jsonl"
+        log_file = LOGS_DIR / f"{AUDIT_LOG_PREFIX}-{today}.jsonl"
 
         log_entry = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -320,15 +344,32 @@ class UserManager:
 
     def get_audit_logs(self, date: Optional[str] = None, limit: int = 100) -> List[Dict]:
         """감사 로그 조회"""
+        files: List[Path] = []
         if date:
-            log_file = AUDIT_LOG_DIR / f"audit-{date}.jsonl"
-            files = [log_file] if log_file.exists() else []
+            current_log = LOGS_DIR / f"{AUDIT_LOG_PREFIX}-{date}.jsonl"
+            legacy_log = LEGACY_AUDIT_LOG_DIR / f"audit-{date}.jsonl"
+            if current_log.exists():
+                files.append(current_log)
+            if legacy_log.exists():
+                files.append(legacy_log)
         else:
             # 최근 파일부터 역순으로 조회
-            files = sorted(AUDIT_LOG_DIR.glob("audit-*.jsonl"), reverse=True)
+            files.extend(sorted(LOGS_DIR.glob(f"{AUDIT_LOG_PREFIX}-*.jsonl"), reverse=True))
+            if LEGACY_AUDIT_LOG_DIR.exists():
+                files.extend(sorted(LEGACY_AUDIT_LOG_DIR.glob("audit-*.jsonl"), reverse=True))
+
+        # 중복 제거(순서 유지)
+        dedup_files: List[Path] = []
+        seen = set()
+        for p in files:
+            key = str(p.resolve()) if p.exists() else str(p)
+            if key in seen:
+                continue
+            seen.add(key)
+            dedup_files.append(p)
 
         logs = []
-        for log_file in files:
+        for log_file in dedup_files:
             try:
                 with open(log_file, 'r', encoding='utf-8') as f:
                     for line in f:

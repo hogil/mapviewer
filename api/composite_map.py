@@ -6,6 +6,7 @@ import os
 import time
 import warnings
 import threading
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from datetime import datetime
 from functools import partial, lru_cache
@@ -64,6 +65,12 @@ except Exception:
 _SAVE_BACKEND = os.getenv("COMPOSITE_SAVE_BACKEND", "turbo" if _HAS_TURBOJPEG else "pil").lower()
 _SAVE_FORMAT = os.getenv("COMPOSITE_FORMAT", "JPEG" if _HAS_TURBOJPEG else "PNG").upper()
 _JPEG_QUALITY = int(os.getenv("COMPOSITE_JPEG_QUALITY", "95"))
+_CACHE_COMPRESS = os.getenv("COMPOSITE_CACHE_COMPRESS", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
+try:
+    _CACHE_COMPRESS_LEVEL = int(os.getenv("COMPOSITE_CACHE_COMPRESS_LEVEL", "1"))
+except ValueError:
+    _CACHE_COMPRESS_LEVEL = 1
+_CACHE_COMPRESS_LEVEL = max(0, min(9, _CACHE_COMPRESS_LEVEL))
 _FAST_MEDIAN = True
 
 # Worker configuration (configurable via environment variables)
@@ -812,6 +819,29 @@ def _save_image_with_backend(img: Image.Image, path: Path) -> Tuple[Path, str]:
     return target_path, rel_path
 
 
+def _save_npz_payload(
+    fp,
+    payload: Dict[str, np.ndarray],
+    *,
+    compress: bool,
+    compress_level: int,
+) -> None:
+    """Persist npz payload with tunable compression level."""
+    if not compress or compress_level <= 0:
+        np.savez(fp, **payload)
+        return
+
+    with zipfile.ZipFile(
+        fp,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=compress_level,
+    ) as zf:
+        for key, value in payload.items():
+            with zf.open(f"{key}.npy", mode="w") as member:
+                np.lib.format.write_array(member, np.asanyarray(value), allow_pickle=False)
+
+
 def _persist_square_map_data(
     output_dir: Path,
     palette_list: Sequence[int],
@@ -856,17 +886,10 @@ def _persist_square_map_data(
 
     def _save_npz():
         try:
-            # NPZ를 직접 덮어쓰면 실패 시 0바이트 파일이 남을 수 있어
-            # 임시 파일에 저장 후 원자적 교체로 일관성을 보장한다.
-            tmp_path = cache_path.with_suffix(f"{cache_path.suffix}.tmp")
-            # np.savez_compressed(path)는 자동으로 .npz를 덧붙이므로 파일 핸들로 저장
-            # (예: square_maps_data.npz.tmp -> square_maps_data.npz.tmp.npz 방지)
-            with open(tmp_path, "wb") as fp:
-                np.savez_compressed(fp, **save_payload)
-            os.replace(tmp_path, cache_path)
+            np.savez(cache_path, **save_payload)
         except Exception:
             pass
-    _save_npz()
+    threading.Thread(target=_save_npz, daemon=True).start()
 
 
 def _recompute_square_maps_from_counts(
@@ -1609,15 +1632,15 @@ def create_composite_heatmaps(
     timings["total"] = total_time
 
     # 시간별 분절 로그 출력
-    print(f"\n[COMPOSITE] 시간 분석:")
-    print(f"  • 준비:         {timings.get('prepare_output_dir', 0):.3f}s")
-    print(f"  • 이미지 로드:  {timings.get('load_indices', 0):.3f}s")
-    print(f"  • Grade 계산:   {timings.get('grade_counts', 0):.3f}s")
-    print(f"  • 마스크 설정:  {timings.get('mask_and_base_setup', 0):.3f}s")
-    print(f"  • 히트맵 저장:  {timings.get('save_heatmaps', 0):.3f}s")
+    print(f"\n[COMPOSITE] Timing breakdown:")
+    print(f"  - prepare_output_dir: {timings.get('prepare_output_dir', 0):.3f}s")
+    print(f"  - load_indices:       {timings.get('load_indices', 0):.3f}s")
+    print(f"  - grade_counts:       {timings.get('grade_counts', 0):.3f}s")
+    print(f"  - mask_and_base:      {timings.get('mask_and_base_setup', 0):.3f}s")
+    print(f"  - save_heatmaps:      {timings.get('save_heatmaps', 0):.3f}s")
     if create_sum:
-        print(f"  • Sum 맵 저장:  {timings.get('save_sum_maps', 0):.3f}s")
-    print(f"  • 전체:         {total_time:.3f}s\n")
+        print(f"  - save_sum_maps:      {timings.get('save_sum_maps', 0):.3f}s")
+    print(f"  - total:              {total_time:.3f}s\n")
 
     result = {
         "output_dir": output_dir.relative_to(IMAGES_ROOT).as_posix(),

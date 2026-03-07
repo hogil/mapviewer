@@ -88,6 +88,7 @@ export class ColorSchemeEditor {
         this.schemeLabel = this.modal ? this.modal.querySelector('#color-editor-scheme-label') : null;
         this.schemeSearchInput = this.modal ? this.modal.querySelector('#color-editor-scheme-search') : null;
         this.schemeLoadBtn = this.modal ? this.modal.querySelector('#color-editor-scheme-load-btn') : null;
+        this.schemeApplyBtn = this.modal ? this.modal.querySelector('#color-editor-scheme-apply-btn') : null;
         this.schemeDropdown = this.modal ? this.modal.querySelector('#color-editor-scheme-dropdown') : null;
         this.boundKeyHandler = this.handleKeyDown.bind(this);
         this.boundOutsideClick = this.handleOutsideClick.bind(this);
@@ -97,6 +98,7 @@ export class ColorSchemeEditor {
         this._setupDone = false;
         this.selectedSchemeIndex = -1; // 키보드 네비게이션용
         this.originalCheckboxState = null; // 모달 열 때 체크박스 상태 저장용
+        this.pendingSchemeName = ''; // 검색 리스트에서 선택한 임시 스킴명
         this.realtimeUpdateTimeout = null; // 실시간 미리보기 디바운스 타이머
         // 셀 선택 기능
         this.selectedCells = new Set(); // 선택된 셀들 (cellId 문자열)
@@ -159,6 +161,10 @@ export class ColorSchemeEditor {
                 }, 0);
             });
         }
+        if (this.schemeApplyBtn) {
+            this.schemeApplyBtn.addEventListener('click', () => this.applySelectedSchemeCandidate());
+            this.schemeApplyBtn.disabled = true;
+        }
         if (this.schemeSearchInput) {
             // 엔터 입력 시 리스트 표시
             this.schemeSearchInput.addEventListener('keydown', (e) => {
@@ -184,7 +190,12 @@ export class ColorSchemeEditor {
                     }, 0);
                 }
             });
-            // 입력 시에는 리스트를 열지 않음 (엔터나 검색 버튼으로만 열림)
+            // 입력 즉시 후보 리스트 표시
+            this.schemeSearchInput.addEventListener('input', () => {
+                this.pendingSchemeName = '';
+                this.setSchemeApplyButtonState(false);
+                this.populateSchemeOptions(true);
+            });
         }
         this.buildRows();
     }
@@ -382,6 +393,7 @@ export class ColorSchemeEditor {
             this.schemeLabel = this.modal.querySelector('#color-editor-scheme-label');
             this.schemeSearchInput = this.modal.querySelector('#color-editor-scheme-search');
             this.schemeLoadBtn = this.modal.querySelector('#color-editor-scheme-load-btn');
+            this.schemeApplyBtn = this.modal.querySelector('#color-editor-scheme-apply-btn');
             this.schemeDropdown = this.modal.querySelector('#color-editor-scheme-dropdown');
             // 이벤트 리스너가 아직 설정되지 않았으면 설정
             if (!this._setupDone) {
@@ -409,7 +421,8 @@ export class ColorSchemeEditor {
             this.viewer._previewSchemeOverride = null;
         }
         
-        this.populateSchemeOptions();
+        this.resetSchemeSearchState();
+        this.populateSchemeOptions(false);
         this.applySchemeToRows(schemeData);
         this.updateSchemeLabel(schemeName);
         this.clearError();
@@ -427,9 +440,46 @@ export class ColorSchemeEditor {
         
         this.modal.classList.add('is-open');
         this.modal.setAttribute('aria-hidden', 'false');
+        if (this.dialog) {
+            this.dialog.style.marginLeft = '0px';
+            this.dialog.scrollTop = 0;
+        }
+        const bodyEl = this.modal.querySelector('.color-editor-body');
+        if (bodyEl) {
+            bodyEl.scrollTop = 0;
+        }
         document.addEventListener('keydown', this.boundKeyHandler);
         document.addEventListener('mousedown', this.boundOutsideClick);
         // 디버그 로그 제거
+    }
+
+    async cleanupPreviewSchemeArtifacts() {
+        if (!this.currentSchemeName) {
+            return;
+        }
+
+        const canonicalPreviewName = `__preview_${this.currentSchemeName}`;
+        const previewAliases = [
+            canonicalPreviewName,
+            `_preview_${this.currentSchemeName}`,
+            `${this.currentSchemeName}_preview`,
+        ];
+
+        if (this.viewer?.colorLegends) {
+            previewAliases.forEach((name) => {
+                delete this.viewer.colorLegends[name];
+            });
+        }
+
+        try {
+            await fetch(`/api/color-scheme`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ schemeName: canonicalPreviewName }),
+            });
+        } catch (_) {
+            // ignore cleanup failures
+        }
     }
 
     async close() {
@@ -437,18 +487,7 @@ export class ColorSchemeEditor {
         
         // viewer가 없으면 복원 로직 대신 __preview_ 정리만 수행
         if (!this.viewer) {
-            // __preview_ 임시 스킴 삭제 (이미지가 없어도 preview가 생성됐을 수 있음)
-            if (this.currentSchemeName) {
-                const previewName = `__preview_${this.currentSchemeName}`;
-                if (this.viewer && this.viewer.colorLegends) {
-                    delete this.viewer.colorLegends[previewName];
-                }
-                fetch(`/api/color-scheme`, {
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ schemeName: previewName }),
-                }).catch(() => {});
-            }
+            await this.cleanupPreviewSchemeArtifacts();
             this.modal.classList.remove("is-open");
             this.modal.setAttribute("aria-hidden", "true");
             document.removeEventListener("keydown", this.boundKeyHandler);
@@ -474,17 +513,12 @@ export class ColorSchemeEditor {
                 }
 
                 // 2. __preview_ 임시 스킴 삭제 (메모리 + 서버)
-                const previewName = `__preview_${this.currentSchemeName}`;
-                if (this.viewer.colorLegends) {
-                    delete this.viewer.colorLegends[previewName];
-                }
-                fetch(`/api/color-scheme`, {
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ schemeName: previewName }),
-                }).catch(() => {});
+                await this.cleanupPreviewSchemeArtifacts();
 
                 // 3. 캐시 초기화
+                if (typeof this.viewer.hardResetUiCaches === 'function') {
+                    await this.viewer.hardResetUiCaches({ clearPersistentStorage: false });
+                }
                 this.viewer.pyramidLevels = {};
                 if (this.viewer._pyramidLoading) {
                     this.viewer._pyramidLoading = new Set();
@@ -500,6 +534,9 @@ export class ColorSchemeEditor {
                 // 4. personalizedColorCacheBuster 업데이트
                 this.viewer._personalizedColorCacheBuster = Date.now();
                 this.viewer._previewSchemeOverride = null;
+                if (this.viewer.thumbnailManager) {
+                    this.viewer.thumbnailManager.cache.clear();
+                }
 
                 // 5. 원래 설정 복원
                 const originalUser = this.viewer.currentUser;
@@ -562,12 +599,12 @@ export class ColorSchemeEditor {
                     return;
                 } else if (event.key === 'Enter') {
                     event.preventDefault();
-                    // 🔥 드롭다운이 열려있을 때 Enter: 선택된 항목 로드
+                    // 드롭다운이 열려있을 때 Enter: 항목 선택만 (적용은 별도 버튼)
                     if (this.selectedSchemeIndex >= 0 && this.selectedSchemeIndex < items.length) {
                         const selectedItem = items[this.selectedSchemeIndex];
                         const schemeName = selectedItem.dataset.name;
                         if (schemeName) {
-                            this.handleSchemeLoad(schemeName);
+                            this.selectSchemeCandidate(schemeName, true);
                         }
                     } else if (this.selectedSchemeIndex === -1 && items.length > 0) {
                         // 선택된 항목이 없으면 첫 번째 항목 선택
@@ -576,7 +613,7 @@ export class ColorSchemeEditor {
                         const firstItem = items[0];
                         const schemeName = firstItem.dataset.name;
                         if (schemeName) {
-                            this.handleSchemeLoad(schemeName);
+                            this.selectSchemeCandidate(schemeName, true);
                         }
                     }
                     return;
@@ -639,7 +676,8 @@ export class ColorSchemeEditor {
             // 드롭다운 영역 클릭이 아니면 닫기
             if (!this.schemeDropdown.contains(event.target) && 
                 !this.schemeSearchInput?.contains(event.target) &&
-                !this.schemeLoadBtn?.contains(event.target)) {
+                !this.schemeLoadBtn?.contains(event.target) &&
+                !this.schemeApplyBtn?.contains(event.target)) {
                 this.hideDropdown();
                 return;
             }
@@ -683,6 +721,9 @@ export class ColorSchemeEditor {
         this.updateApplyButtonState(true);
         this.clearError();
         this.hideDropdown();
+        this.pendingSchemeName = '';
+        this.setSchemeApplyButtonState(false);
+        this.clearSearchCaretFocus();
         
         // 🔥 미리보기에 적용
         this.updatePreviewRealtime();
@@ -694,26 +735,26 @@ export class ColorSchemeEditor {
         const filter = this.schemeSearchInput?.value?.trim().toLowerCase() || '';
         const entries = Object.keys(legends);
         
-        // 'default' 제외하고 필터링 (scheme명, Username, DeptName 모두 검색)
+        // 'default' 제외하고 필터링 (LoginId, Username, DeptName 모두 검색)
         const matches = entries.filter((name) => {
             if (name === 'default') return false;
             
             const schemeData = legends[name] || {};
-            const schemeName = name.toLowerCase();
+            const loginId = String(schemeData.LoginId || name || '').toLowerCase();
             const username = (schemeData.Username || '').toLowerCase();
             const deptName = (schemeData.DeptName || '').toLowerCase();
             
             // 필터가 없으면 모두 표시
             if (!filter) return true;
             
-            // scheme명, Username, DeptName 중 하나라도 매칭되면 표시
-            return schemeName.includes(filter) || 
+            // LoginId, Username, DeptName 중 하나라도 매칭되면 표시
+            return loginId.includes(filter) || 
                    username.includes(filter) || 
                    deptName.includes(filter);
         });
         
-        // 최대 10개로 제한
-        const limitedMatches = matches.slice(0, 10);
+        // 너무 긴 목록 방지
+        const limitedMatches = matches.slice(0, 30);
         
         this.schemeDropdown.innerHTML = '';
         this.selectedSchemeIndex = -1; // 리스트 갱신 시 선택 초기화
@@ -725,41 +766,40 @@ export class ColorSchemeEditor {
             noResultsItem.textContent = '검색 결과 없음';
             this.schemeDropdown.appendChild(noResultsItem);
         } else {
+            // 컬럼 헤더
+            const headerRow = document.createElement('div');
+            headerRow.className = 'color-editor-scheme-head-row';
+            ['LoginId', 'UserName', 'DeptName'].forEach((label) => {
+                const cell = document.createElement('div');
+                cell.className = 'color-editor-scheme-head-cell';
+                cell.textContent = label;
+                headerRow.appendChild(cell);
+            });
+            this.schemeDropdown.appendChild(headerRow);
+
             limitedMatches.forEach((name, index) => {
                 const schemeData = legends[name] || {};
-                const username = schemeData.Username || '';
-                const deptName = schemeData.DeptName || '';
+                const loginId = String(schemeData.LoginId || name || '');
+                const username = String(schemeData.Username || '');
+                const deptName = String(schemeData.DeptName || '');
                 
                 const item = document.createElement('div');
-                item.className = 'color-editor-scheme-item';
+                item.className = 'color-editor-scheme-item color-editor-scheme-row';
                 item.dataset.name = name;
-                
-                // 제품 선택 디자인 스타일 적용
-                item.style.cssText = 'padding: 10px 12px; cursor: pointer; border-bottom: 1px solid #444; transition: background-color 0.15s;';
-                
-                // 내용 구성 (가로로 배치: scheme명, Username, DeptName)
-                const content = document.createElement('div');
-                content.style.cssText = 'display: flex; align-items: center; gap: 12px; flex-wrap: nowrap;';
-                
-                // Scheme명 (굵게) + (default) 표시
-                const schemeNameEl = document.createElement('span');
-                schemeNameEl.style.cssText = 'font-weight: 600; font-size: 14px; color: #fff; min-width: 80px; flex-shrink: 0;';
-                schemeNameEl.textContent = name;
-                content.appendChild(schemeNameEl);
-                
-                // Username과 DeptName (가로로 나란히)
-                if (username || deptName) {
-                    const infoParts = [];
-                    if (username) infoParts.push(`이름: ${username}`);
-                    if (deptName) infoParts.push(`부서: ${deptName}`);
-                    
-                    const infoEl = document.createElement('span');
-                    infoEl.style.cssText = 'font-size: 12px; color: #aaa;';
-                    infoEl.textContent = infoParts.join(' | ');
-                    content.appendChild(infoEl);
-                }
-                
-                item.appendChild(content);
+
+                const createCell = (text, color = '#fff', weight = '400') => {
+                    const cell = document.createElement('div');
+                    cell.className = 'color-editor-scheme-cell';
+                    cell.style.color = color;
+                    cell.style.fontWeight = weight;
+                    cell.textContent = text || '-';
+                    return cell;
+                };
+
+                // 값만 표시 (prefix 제거)
+                item.appendChild(createCell(loginId, '#ffffff', '600'));
+                item.appendChild(createCell(username, '#d4d4d4', '400'));
+                item.appendChild(createCell(deptName, '#b9b9b9', '400'));
                 
                 // 호버 효과 및 클릭 이벤트
                 item.addEventListener('mouseenter', () => {
@@ -770,7 +810,8 @@ export class ColorSchemeEditor {
                     // 마우스가 벗어날 때는 선택 상태 유지 (키보드 네비게이션과 충돌 방지)
                 });
                 item.addEventListener('click', () => {
-                    this.handleSchemeLoad(name);
+                    this.selectSchemeCandidate(name, true);
+                    this.applySelectedSchemeCandidate();
                 });
                 
                 this.schemeDropdown.appendChild(item);
@@ -790,6 +831,65 @@ export class ColorSchemeEditor {
         this.schemeDropdown.classList.remove('is-open');
         this.schemeDropdown.setAttribute('aria-expanded', 'false');
         this.selectedSchemeIndex = -1;
+    }
+
+    clearSearchCaretFocus() {
+        try {
+            const active = document.activeElement;
+            if (active && this.modal && this.modal.contains(active) && typeof active.blur === 'function') {
+                active.blur();
+            }
+        } catch (_) {
+            // ignore focus errors
+        }
+    }
+
+    setSchemeApplyButtonState(enabled) {
+        if (!this.schemeApplyBtn) return;
+        this.schemeApplyBtn.disabled = !enabled;
+    }
+
+    resetSchemeSearchState() {
+        this.pendingSchemeName = '';
+        if (this.schemeSearchInput) {
+            this.schemeSearchInput.value = '';
+        }
+        this.hideDropdown();
+        this.setSchemeApplyButtonState(false);
+    }
+
+    selectSchemeCandidate(name, closeDropdown = false) {
+        if (!name) return;
+        this.pendingSchemeName = name;
+        if (this.schemeSearchInput) {
+            this.schemeSearchInput.value = name;
+        }
+        this.setSchemeApplyButtonState(true);
+        if (closeDropdown) {
+            this.hideDropdown();
+        }
+        this.clearSearchCaretFocus();
+    }
+
+    applySelectedSchemeCandidate() {
+        const legends = this.viewer?.colorLegends || {};
+        const typed = this.schemeSearchInput?.value?.trim() || '';
+        let target = this.pendingSchemeName || typed;
+
+        if (target && !legends[target]) {
+            const lower = target.toLowerCase();
+            const exact = Object.keys(legends).find((name) => name.toLowerCase() === lower);
+            if (exact) {
+                target = exact;
+            }
+        }
+
+        if (!target || !legends[target]) {
+            this.showError('적용할 사용자를 먼저 선택하세요.');
+            return;
+        }
+        this.handleSchemeLoad(target);
+        this.clearSearchCaretFocus();
     }
 
     applySchemeToRows(scheme) {
@@ -1134,40 +1234,12 @@ export class ColorSchemeEditor {
                     // ✅ 그리드 모드: 썸네일 캐시 클리어 + 썸네일 리로드
                     // 디버그 로그 제거
                     // console.log('ColorEditor: Updating grid thumbnails preview');
-
-                    // 썸네일 캐시 클리어
-                    if (this.viewer.thumbnailManager) {
-                        this.viewer.thumbnailManager.cache.clear();
+                    if (typeof this.viewer.refreshGridThumbnailsWithCurrentParams === 'function') {
+                        this.viewer.refreshGridThumbnailsWithCurrentParams();
                     }
 
-                    // 모든 썸네일 이미지 리로드
-                    const grid = document.getElementById('image-grid');
-                    if (grid) {
-                        const thumbnails = grid.querySelectorAll('.grid-thumb-img');
-                        const personalizedParams = this.viewer.getPersonalizedParams();
-                        const cacheBuster = this.viewer._personalizedColorCacheBuster || Date.now();
-                        const hasCacheBusterInParams =
-                            typeof personalizedParams === 'string' && personalizedParams.includes('_t=');
-
-                        thumbnails.forEach(img => {
-                            if (img.src && img.src.includes('api/thumbnail')) {
-                                try {
-                                    const url = new URL(img.src, window.location.origin);
-                                    const path = url.searchParams.get('path');
-
-                                    if (path) {
-                                        // 새로운 URL 생성 (캐시 무효화)
-                                        const cacheSuffix = hasCacheBusterInParams ? '' : `&_t=${cacheBuster}`;
-                                        const newUrl = `/api/thumbnail?path=${encodeURIComponent(path)}&size=512${personalizedParams}${cacheSuffix}`;
-                                        img.src = newUrl;
-                                    }
-                                } catch (e) {
-                                    // URL 파싱 실패 시 무시
-                                    console.warn('ColorEditor: Failed to update thumbnail URL', e);
-                                }
-                            }
-                        });
-                    }
+                    // gridImage 단일뷰에서 navigator가 열려 있으면 즉시 갱신
+                    this.refreshNavigatorPreview();
                 }
 
                 // 7. Legend 업데이트
@@ -1297,6 +1369,10 @@ export class ColorSchemeEditor {
                     if (this.viewer.thumbnailManager) {
                         this.viewer.thumbnailManager.cache.clear();
                     }
+
+                    if (typeof this.viewer.hardResetUiCaches === 'function') {
+                        await this.viewer.hardResetUiCaches({ clearPersistentStorage: false });
+                    }
                     
                     // 🔥 피라미드 레벨 캐시 완전 초기화 (저장된 색상 적용을 위해 필수)
                     this.viewer.pyramidLevels = {};
@@ -1338,7 +1414,7 @@ export class ColorSchemeEditor {
                     this.viewer.showColorLegends();
                     
                     this.viewer?.showToast?.("색상이 적용되었습니다.", 1800);
-                    this.close();
+                    await this.close();
                 }
             } else {
                 throw new Error('저장 실패');
@@ -1462,12 +1538,14 @@ export class ColorSchemeEditor {
     showError(message) {
         if (this.errorEl) {
             this.errorEl.textContent = message;
+            this.errorEl.style.display = 'block';
         }
     }
 
     clearError() {
         if (this.errorEl) {
             this.errorEl.textContent = '';
+            this.errorEl.style.display = 'none';
         }
     }
 

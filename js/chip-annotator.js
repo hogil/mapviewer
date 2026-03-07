@@ -700,10 +700,14 @@ export class ChipAnnotator {
         
         // listItems에 스크롤 스타일 적용 (이미 생성된 경우에도)
         if (listItems) {
+            listItems.style.display = 'flex';
+            listItems.style.flexDirection = 'column';
             listItems.style.overflowY = 'auto';
             listItems.style.maxHeight = '200px';
             listItems.style.flex = '1';
             listItems.style.minHeight = '0';
+            listItems.style.visibility = 'visible';
+            listItems.style.pointerEvents = 'auto';
         }
         
         // 헤더가 항상 유지되도록 확인 (listItems만 초기화, 헤더는 유지)
@@ -1705,14 +1709,22 @@ export class ChipAnnotator {
                     console.log('🖱️ [DRAG] 범위 내 chip 제거:', selected.length, '개 (제거:', toRemove.length, ')');
                 }
             } else {
-                // 🔥 드래그가 없는 일반 클릭: 선택만 해제 (단일 선택은 허용하지 않음)
-                const hadSelection = this.selectedChips.size > 0;
-                this.selectedChips.clear();
-                this.selectedChipsOrder = [];
-                if (hadSelection) {
-                    console.log('🖱️ [CLICK] plain 클릭으로 선택 해제');
+                // 🔥 드래그가 없는 일반 클릭: 클릭한 chip 하나를 선택
+                const clickedChip = this.findChipAtPixel(canvasX, canvasY);
+                if (clickedChip) {
+                    this.selectedChips.clear();
+                    this.selectedChips.add(clickedChip.index);
+                    this.selectedChipsOrder = [clickedChip.index];
+                    console.log('🖱️ [CLICK] plain 클릭으로 단일 선택:', clickedChip.index);
                 } else {
-                    console.log('🖱️ [CLICK] 선택 상태 없음 - 유지');
+                    const hadSelection = this.selectedChips.size > 0;
+                    this.selectedChips.clear();
+                    this.selectedChipsOrder = [];
+                    if (hadSelection) {
+                        console.log('🖱️ [CLICK] 빈 영역 클릭으로 선택 해제');
+                    } else {
+                        console.log('🖱️ [CLICK] 선택 상태 없음 - 유지');
+                    }
                 }
                 this.updateSelectedChipsList(); // 🔥 Selection 패널 즉시 업데이트
             }

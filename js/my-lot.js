@@ -1028,6 +1028,40 @@ export class MyLotModal {
         return results;
     }
 
+    extractWaferTokenFromPath(path) {
+        const normalizedPath = String(path || '');
+        if (!normalizedPath) return '';
+
+        const tokenFromViewer = this.viewer?.extractLotTokensFromPath?.(normalizedPath)?.waferValue;
+        if (tokenFromViewer) {
+            return String(tokenFromViewer).trim();
+        }
+
+        const filename = normalizedPath.split('/').pop()?.split('\\').pop() || '';
+        const parsed = splitLotWaferValue(filename);
+        if (parsed.wafer) {
+            return String(parsed.wafer).trim();
+        }
+
+        const m = filename.match(/(?:^|_)(W[0-9A-Z]{1,5})(?:_|\.|$)/i);
+        return m ? m[1].toUpperCase() : '';
+    }
+
+    buildWaferCandidates(paths = []) {
+        const seen = new Map();
+        for (const path of paths || []) {
+            const wafer = this.extractWaferTokenFromPath(path);
+            if (!wafer) continue;
+            const key = wafer.toLowerCase();
+            if (!seen.has(key)) {
+                seen.set(key, wafer);
+            }
+        }
+        return Array.from(seen.values()).sort((a, b) =>
+            a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+        );
+    }
+
     /**
      * 🔥🔥🔥 다중 LOT 배치 검색 - 모든 LOT을 한번에 검색하여 초고속 처리
      * @param {Array<{lot: string, wafer?: string, rowIndex: number}>} rows 검색할 행 정보
@@ -1132,27 +1166,57 @@ export class MyLotModal {
         const wafer = (row.wafer || '').trim();
 
         try {
-            // LOT으로 검색, Wafer 있으면 필터링
-            const results = await this.searchImagesByLots([lot], wafer);
-            
+            // lot 기준으로 먼저 검색 후 wafer 필터는 클라이언트에서 적용
+            const results = await this.searchImagesByLots([lot], '');
+
             // Placeholder 제외한 유효한 이미지 필터링
-            const validPaths = results.filter(p => 
+            const validPaths = results.filter(p =>
                 p && !p.includes('_placeholders') && !p.includes('placeholder.png')
             );
+            const waferCandidates = this.buildWaferCandidates(validPaths);
+            this.manualRows[rowIndex].waferCandidates = waferCandidates;
+
+            if (this.activeMode === 'wafer' && !wafer) {
+                // wafer 모드에서는 lot만으로는 보기/미리보기 확정 금지
+                this.manualRows[rowIndex].searchResults = validPaths;
+                this.manualRows[rowIndex].path = null;
+                return {
+                    paths: [],
+                    previewPath: null,
+                    requiresWaferSelection: true,
+                    candidateWafers: waferCandidates,
+                    lotMatchCount: validPaths.length,
+                };
+            }
+
+            let filteredPaths = validPaths;
+            if (wafer) {
+                const waferLower = wafer.toLowerCase();
+                filteredPaths = validPaths.filter((p) => {
+                    const fn = p.split('/').pop()?.split('\\').pop()?.toLowerCase() || '';
+                    return fn.includes(waferLower);
+                });
+            }
 
             // 첫 번째 이미지를 미리보기용으로 선택
-            const previewPath = validPaths.length > 0 ? validPaths[0] : null;
+            const previewPath = filteredPaths.length > 0 ? filteredPaths[0] : null;
 
             // 행에 검색 결과 저장
-            this.manualRows[rowIndex].searchResults = validPaths;
+            this.manualRows[rowIndex].searchResults = filteredPaths;
             this.manualRows[rowIndex].path = previewPath;
 
-            console.log(`[MyLotModal] 행 ${rowIndex} 검색 완료: LOT="${lot}", Wafer="${wafer}", 결과=${validPaths.length}개`);
-            return { paths: validPaths, previewPath };
+            console.log(`[MyLotModal] 행 ${rowIndex} 검색 완료: LOT="${lot}", Wafer="${wafer}", 결과=${filteredPaths.length}개`);
+            return {
+                paths: filteredPaths,
+                previewPath,
+                candidateWafers: waferCandidates,
+                lotMatchCount: validPaths.length,
+            };
         } catch (error) {
             console.error(`[MyLotModal] 행 ${rowIndex} 검색 실패:`, error);
             this.manualRows[rowIndex].searchResults = [];
             this.manualRows[rowIndex].path = null;
+            this.manualRows[rowIndex].waferCandidates = [];
             return { paths: [], previewPath: null };
         }
     }
@@ -1230,6 +1294,7 @@ export class MyLotModal {
         if (!row.lot) {
             row.path = null;
             row.searchResults = [];
+            row.waferCandidates = [];
             this.updateManualRowPreview(rowIndex);
             this.updateManualRowSearchCount(rowIndex, 0);
             return;
@@ -1239,8 +1304,16 @@ export class MyLotModal {
         this.updateManualRowSearchBadge(rowIndex, '...');
 
         // 🔥 새로운 검색 함수 사용 (LOT + Wafer 필터)
-        const { paths, previewPath } = await this.searchRowImages(rowIndex);
-        
+        const result = await this.searchRowImages(rowIndex);
+        const paths = result?.paths || [];
+
+        if (result?.requiresWaferSelection) {
+            const waferCount = (result?.candidateWafers || []).length;
+            this.updateManualRowPreview(rowIndex);
+            this.updateManualRowSearchBadge(rowIndex, waferCount > 0 ? `Wafer ${waferCount}` : 'Wafer 0');
+            return;
+        }
+
         // UI 업데이트 (즉시)
         this.updateManualRowPreview(rowIndex);
         this.updateManualRowSearchCount(rowIndex, paths.length);

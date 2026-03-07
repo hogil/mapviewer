@@ -4,6 +4,7 @@
 import logging
 import json
 import time
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict, Counter
@@ -17,9 +18,10 @@ LOG_DIR.mkdir(exist_ok=True)
 # 접속자 로그 파일
 ACCESS_LOG_FILE = LOG_DIR / "access.log"
 STATS_LOG_FILE = LOG_DIR / "stats.json"
+ALLOW_LOCAL_STATS = os.getenv("ALLOW_LOCAL_STATS", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
 
-# 로거 설정 - 로깅 시스템 충돌 방지
-access_logger = logging.getLogger("access")
+# 로거 설정 - main.py의 dictConfig("access") 충돌을 피하기 위해 전용 로거 사용
+access_logger = logging.getLogger("access.file")
 access_logger.setLevel(logging.INFO)
 access_logger.propagate = False  # 상위 로거로 전파 방지
 
@@ -44,21 +46,50 @@ class AccessLogger:
         self._stats_dirty = False  # stats.json이 변경되었는지 플래그
         self._last_save_time = time.time()  # 마지막 저장 시간
         self._save_interval = 60.0  # 🔥 최적화: 60초마다 자동 저장 (대량 썸네일 로드 시 성능 향상)
-    
-    def _load_stats(self) -> Dict[str, Any]:
-        """통계 데이터 로드 - 🔥 이전 기록을 누적하기 위해서만 읽음 (접속 제어 안 함)"""
-        if STATS_LOG_FILE.exists():
-            try:
-                with open(STATS_LOG_FILE, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception:
-                pass
+
+    @staticmethod
+    def _empty_stats_template() -> Dict[str, Any]:
         return {
             "users": {},
             "daily_stats": {},
             "monthly_stats": {},
             "department_stats": {}
         }
+
+    def _normalize_stats_shape(self, stats: Any) -> Dict[str, Any]:
+        base = self._empty_stats_template()
+        if not isinstance(stats, dict):
+            return base
+        for key in base.keys():
+            value = stats.get(key)
+            base[key] = value if isinstance(value, dict) else {}
+        return base
+
+    def _stats_source(self) -> Dict[str, Any]:
+        """
+        2026-02 이전 운영 방식과 동일하게 stats API는 stats.json 누적본을 기준으로 조회한다.
+        멀티 워커 환경에서 워커별 메모리 편차가 생겨도 /stats 화면 값이 일관되게 보이도록
+        파일을 우선 사용하고, 파일이 비어 있을 때만 메모리 캐시를 폴백으로 사용한다.
+        """
+        disk = self._normalize_stats_shape(self._load_stats())
+        if any(disk[k] for k in ("users", "daily_stats", "monthly_stats", "department_stats")):
+            self.stats_data = disk
+            return disk
+
+        return self._normalize_stats_shape(getattr(self, "stats_data", {}))
+    
+    def _load_stats(self) -> Dict[str, Any]:
+        """통계 데이터 로드 - 🔥 이전 기록을 누적하기 위해서만 읽음 (접속 제어 안 함)"""
+        if STATS_LOG_FILE.exists():
+            try:
+                with open(STATS_LOG_FILE, 'r', encoding='utf-8') as f:
+                    return self._normalize_stats_shape(json.load(f))
+            except Exception as e:
+                print(f"통계 로드 실패, 메모리 캐시 사용: {e}")
+                cached = getattr(self, "stats_data", None)
+                if isinstance(cached, dict) and cached:
+                    return self._normalize_stats_shape(cached)
+        return self._empty_stats_template()
     
     def _save_stats(self, force: bool = False):
         """통계 데이터 저장 - 배치 처리로 성능 최적화 + 멀티워커 병합"""
@@ -143,9 +174,11 @@ class AccessLogger:
                             # 병합 로직 (간단하게 덮어쓰기)
                             file_data[stat_key][key] = value
 
-            # 병합된 데이터 저장
-            with open(STATS_LOG_FILE, 'w', encoding='utf-8') as f:
+            # 병합된 데이터 저장 (원자적 교체: 읽기 중 깨진 JSON 방지)
+            tmp_path = STATS_LOG_FILE.with_suffix(".json.tmp")
+            with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(file_data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, STATS_LOG_FILE)
 
             # 🔥 중요: 메모리 데이터도 병합된 데이터로 업데이트 (동기화)
             self.stats_data = file_data
@@ -504,8 +537,8 @@ class AccessLogger:
     
     def _update_stats(self, ip: str, endpoint: str, method: str, user_id_override: Optional[str] = None, meta: Optional[Dict[str, Any]] = None):
         """통계 업데이트 - 세션 관리 포함 (LoginId 기준, SAML 인증된 경우만 기록)"""
-        # localhost IP 제외
-        if ip in ['127.0.0.1', '::1', 'localhost']:
+        # localhost IP는 환경변수로 허용 제어 (기본: 허용)
+        if ip in ['127.0.0.1', '::1', 'localhost'] and not ALLOW_LOCAL_STATS:
             return
             
         today = datetime.now().strftime('%Y-%m-%d')
@@ -539,17 +572,17 @@ class AccessLogger:
             if existing_user:
                 profile_meta = existing_user.get("profile", {})
 
-        # 🔥 3. 여전히 LoginId가 없거나 IP와 같으면 완전 차단
-        if not LoginId or LoginId == ip:
-            # IP만 있고 LoginId가 없음 → IP 로그 차단
-            print(f"[STATS DEBUG] LoginId 없음 차단 - IP: {ip}, LoginId: {LoginId}, endpoint: {endpoint}")
+        # LoginId가 없으면 통계 대상에서 제외
+        if not LoginId:
+            print(f"[STATS DEBUG] LoginId 없음 차단 - IP: {ip}, endpoint: {endpoint}")
             return
 
-        # 🔥 4. LoginId가 있지만 profile이 비어있으면 차단 (SAML 미인증)
+        # profile이 비어있으면 최소 프로필로 보완 (비-SAML/개발 모드 지원)
         if not profile_meta or len(profile_meta) == 0:
-            # profile이 없음 → SAML 미인증 사용자 → 차단
-            print(f"[STATS DEBUG] Profile 없음 차단 - IP: {ip}, LoginId: {LoginId}, profile_meta: {profile_meta}, endpoint: {endpoint}")
-            return
+            profile_meta = {
+                "LoginId": LoginId,
+                "Username": LoginId,
+            }
         
         # 🔥 detail_access.csv에 기록 (SAML 로그인 시마다)
         if endpoint == "/saml/acs" and profile_meta:
@@ -732,9 +765,9 @@ class AccessLogger:
         
         print(f"[STATS DEBUG] 통계 업데이트 완료 - LoginId: {LoginId}, endpoint: {endpoint}, total_users: {len(self.stats_data['users'])}, active_today: {len(daily['active_users'])}")
         
-        # 통계 저장 (배치 처리 - 10초마다 자동 저장)
+        # 통계 저장 (즉시 반영: stats.html에서 바로 보이도록 강제 저장)
         self._stats_dirty = True
-        self._save_stats()
+        self._save_stats(force=True)
     
     def get_client_ip(self, request: Request) -> str:
         """실제 클라이언트 IP 추출 (프록시 고려)"""
@@ -843,8 +876,7 @@ class AccessLogger:
     # 통계 API 메서드들
     def get_daily_stats(self) -> Dict[str, Any]:
         """일별 통계 조회 - 실시간 활성 사용자 포함"""
-        # 실시간으로 최신 stats.json 데이터 로드
-        current_stats = self._load_stats()
+        current_stats = self._stats_source()
         today = datetime.now().strftime('%Y-%m-%d')
         today_data = current_stats["daily_stats"].get(today, {
             "active_users": [],
@@ -856,7 +888,7 @@ class AccessLogger:
         active_users_info = self.get_active_users()
         
         return {
-            "total_users": len(self.stats_data["users"]),
+            "total_users": len(current_stats.get("users", {})),
             "active_today": len(today_data["active_users"]),
             "currently_active": active_users_info["total_active"],
             "new_users_today": len(today_data["new_users"]),
@@ -866,12 +898,13 @@ class AccessLogger:
     
     def get_daily_trend(self, days: int = 7) -> Dict[str, Any]:
         """일별 트렌드 통계"""
+        current_stats = self._stats_source()
         end_date = datetime.now()
         trend_data = {}
         
         for i in range(days):
             date = (end_date - timedelta(days=i)).strftime('%Y-%m-%d')
-            daily_data = self.stats_data["daily_stats"].get(date, {
+            daily_data = current_stats.get("daily_stats", {}).get(date, {
                 "active_users": [],
                 "new_users": [],
                 "total_requests": 0
@@ -887,13 +920,14 @@ class AccessLogger:
     
     def get_monthly_trend(self, months: int = 3) -> Dict[str, Any]:
         """월별 트렌드 통계"""
+        current_stats = self._stats_source()
         end_date = datetime.now()
         trend_data = {}
         
         for i in range(months):
             date = end_date.replace(day=1) - timedelta(days=i*30)
             month = date.strftime('%Y-%m')
-            monthly_data = self.stats_data["monthly_stats"].get(month, {
+            monthly_data = current_stats.get("monthly_stats", {}).get(month, {
                 "active_users": [],
                 "new_users": [],
                 "total_requests": 0,
@@ -911,8 +945,7 @@ class AccessLogger:
     
     def get_users_stats(self) -> Dict[str, Any]:
         """사용자 통계 - 세션 정보 포함 (접속일수 기준 내림차순 정렬)"""
-        # 실시간으로 최신 stats.json 데이터 로드
-        current_stats = self._load_stats()
+        current_stats = self._stats_source()
         users = []
         for user_id, data in current_stats["users"].items():
             # localhost IP 제외
@@ -954,8 +987,7 @@ class AccessLogger:
     
     def get_recent_users(self) -> Dict[str, Any]:
         """최근 접속 사용자 (LoginId 기준)"""
-        # 실시간으로 최신 stats.json 데이터 로드
-        current_stats = self._load_stats()
+        current_stats = self._stats_source()
         today = datetime.now().strftime('%Y-%m-%d')
         
         recent_users = []
@@ -991,15 +1023,76 @@ class AccessLogger:
     
     def get_user_detail(self, user_id: str) -> Optional[Dict[str, Any]]:
         """특정 사용자 상세 정보"""
-        if user_id not in self.stats_data["users"]:
+        current_stats = self._stats_source()
+        users = current_stats.get("users", {})
+        if user_id not in users:
             return None
         
-        return self.stats_data["users"][user_id]
+        return users[user_id]
+
+    def _rebuild_department_stats_from_users(self, current_stats: Dict[str, Any]) -> Dict[str, Any]:
+        """legacy 데이터(부서 캐시 없음)에서 users를 기준으로 부서 통계를 재구성."""
+        users = current_stats.get("users", {}) if isinstance(current_stats, dict) else {}
+        result: Dict[str, Any] = {}
+        thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+
+        for user_id, user_data in users.items():
+            if user_id in ['127.0.0.1', '::1', 'localhost']:
+                continue
+
+            user_data = user_data or {}
+            profile = user_data.get("profile", {}) or {}
+            user_type = str(user_data.get("user_type", "")).lower()
+
+            dept_name = (
+                profile.get("DeptName")
+                or profile.get("Department")
+                or profile.get("department")
+                or ("외부" if user_type in {"ip", "guest", "external"} else "부서미지정")
+            )
+            dept_name = str(dept_name).strip() or "부서미지정"
+
+            if dept_name not in result:
+                result[dept_name] = {
+                    "name": dept_name,
+                    "user_count": 0,
+                    "total_requests": 0,
+                    "new_users_30d": 0,
+                    "users": []
+                }
+
+            dept = result[dept_name]
+            dept["user_count"] += 1
+            dept["total_requests"] += int(user_data.get("total_requests", 0) or 0)
+
+            first_seen = str(user_data.get("first_seen", "") or "")
+            if first_seen and first_seen >= thirty_days_ago:
+                dept["new_users_30d"] += 1
+
+            dept["users"].append({
+                "user_id": user_id,
+                "profile": profile,
+                "first_seen": user_data.get("first_seen", ""),
+                "last_seen": user_data.get("last_seen", ""),
+                "last_access_time": user_data.get("last_access_time", "")
+            })
+
+        return result
     
     def get_department_stats(self) -> Dict[str, Any]:
         """부서별 사용자 분포 및 활동량 통계 - 캐시된 통계 반환 (빠름!)"""
-        # department_stats가 없으면 빈 딕셔너리 반환
-        department_stats = self.stats_data.get("department_stats", {})
+        current_stats = self._stats_source()
+        department_stats = current_stats.get("department_stats", {})
+        if not isinstance(department_stats, dict):
+            department_stats = {}
+
+        # 이전 포맷/비정상 파일 대응: 캐시가 비어있으면 users 기준으로 복구
+        if not department_stats:
+            department_stats = self._rebuild_department_stats_from_users(current_stats)
+            if department_stats:
+                self.stats_data["department_stats"] = department_stats
+                self._stats_dirty = True
+                self._save_stats(force=True)
         
         return {
             "departments": department_stats,

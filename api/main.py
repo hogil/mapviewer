@@ -21,7 +21,7 @@ if sys.platform == 'win32':
         pass
 
 # ======================== Imports ========================
-import re, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid, io
+import re, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid, io, math
 from pathlib import Path
 from contextlib import contextmanager, asynccontextmanager
 from typing import List, Optional, Dict, Any, Tuple, Set, Literal, Iterable
@@ -29,7 +29,7 @@ from collections import OrderedDict
 from bisect import bisect_left, bisect_right
 from threading import RLock, Lock
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs
 
 from fastapi import FastAPI, HTTPException, Query, Request, Path as PathParam, Depends, BackgroundTasks
@@ -78,7 +78,7 @@ except ImportError:
     TJFLAG_FASTDCT = None
     np = None
 
-from .access_logger import logger_instance
+from .access_logger import logger_instance, access_logger as access_file_logger, ACCESS_LOG_FILE
 from .detail_access_logger import detail_access_logger
 
 # SAML (thumbnail_service보다 먼저 import - SAML은 필수, thumbnail은 optional)
@@ -208,6 +208,16 @@ LOGGING_CONFIG = {
     },
 }
 logging.config.dictConfig(LOGGING_CONFIG)
+# access file logger는 dictConfig 이후 핸들러가 제거될 수 있어 재보장
+try:
+    access_file_logger.handlers.clear()
+    _access_file_handler = logging.FileHandler(ACCESS_LOG_FILE, encoding="utf-8")
+    _access_file_handler.setFormatter(logging.Formatter("%(message)s"))
+    access_file_logger.addHandler(_access_file_handler)
+    access_file_logger.setLevel(logging.INFO)
+    access_file_logger.propagate = False
+except Exception:
+    pass
 # 실행 후 필터 부착(딕트 설정만으로는 content-based filter 넣기 번거로움)
 for name in ("uvicorn", "uvicorn.error", "asyncio", ""):
     logging.getLogger(name).addFilter(_SuppressNoise())
@@ -475,6 +485,30 @@ ROLE_HIERARCHY = ["ROLE_USER", "ROLE_POWER", "ROLE_ADMIN", "ROLE_SUPER"]
 COMPOSITE_ROOT = ROOT_DIR / "composite_map"
 COMPOSITE_ROOT.mkdir(parents=True, exist_ok=True)
 
+
+def _env_int(name: str, default: int, *, min_value: Optional[int] = None, max_value: Optional[int] = None) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = default
+    if min_value is not None:
+        value = max(min_value, value)
+    if max_value is not None:
+        value = min(max_value, value)
+    return value
+
+
+COMPOSITE_RETENTION_HOURS = _env_int("COMPOSITE_RETENTION_HOURS", 24, min_value=0)
+COMPOSITE_CLEANUP_MODE = (os.getenv("COMPOSITE_CLEANUP_MODE", "daily").strip().lower() or "daily")
+COMPOSITE_CLEANUP_INTERVAL_SECONDS = _env_int("COMPOSITE_CLEANUP_INTERVAL_SECONDS", 86400, min_value=0)
+COMPOSITE_CLEANUP_HOUR = _env_int("COMPOSITE_CLEANUP_HOUR", 2, min_value=0, max_value=23)
+COMPOSITE_CLEANUP_MINUTE = _env_int("COMPOSITE_CLEANUP_MINUTE", 0, min_value=0, max_value=59)
+COMPOSITE_CLEANUP_RUN_ON_STARTUP = (
+    os.getenv("COMPOSITE_CLEANUP_RUN_ON_STARTUP", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
+)
+COMPOSITE_CLEANUP_TASK: Optional[asyncio.Task] = None
+
 def _pid_alive(pid: int) -> bool:
     # index_service가 내부에서 관리하므로 이전 호환성을 위해 유지
     try:
@@ -486,6 +520,206 @@ def _pid_alive(pid: int) -> bool:
     except Exception:
         return False
     return True
+
+
+def _cleanup_old_composite_dirs(retention_seconds: int) -> Dict[str, Any]:
+    """Delete composite output directories older than retention_seconds."""
+    stats: Dict[str, Any] = {
+        "scanned_dirs": 0,
+        "deleted_dirs": 0,
+        "skipped_recent": 0,
+        "error_count": 0,
+        "errors": [],
+        "retention_seconds": retention_seconds,
+    }
+    if retention_seconds <= 0:
+        return stats
+    if not COMPOSITE_ROOT.exists():
+        return stats
+
+    now = time.time()
+    cutoff = now - retention_seconds
+
+    for user_dir in COMPOSITE_ROOT.iterdir():
+        if not user_dir.is_dir():
+            continue
+        for output_dir in user_dir.iterdir():
+            if not output_dir.is_dir():
+                continue
+            stats["scanned_dirs"] += 1
+            try:
+                mtime = output_dir.stat().st_mtime
+            except Exception as exc:
+                stats["error_count"] += 1
+                if len(stats["errors"]) < 5:
+                    stats["errors"].append(f"{output_dir}: stat failed ({exc})")
+                continue
+
+            if mtime >= cutoff:
+                stats["skipped_recent"] += 1
+                continue
+
+            try:
+                shutil.rmtree(output_dir)
+                stats["deleted_dirs"] += 1
+            except Exception as exc:
+                stats["error_count"] += 1
+                if len(stats["errors"]) < 5:
+                    stats["errors"].append(f"{output_dir}: delete failed ({exc})")
+
+        # 빈 user 폴더 정리
+        try:
+            if user_dir.exists() and not any(user_dir.iterdir()):
+                user_dir.rmdir()
+        except Exception:
+            pass
+
+    return stats
+
+
+async def _composite_cleanup_loop(interval_seconds: int, retention_seconds: int) -> None:
+    bootlog = logging.getLogger("uvicorn.error")
+    loop_interval = max(60, interval_seconds)
+    try:
+        while True:
+            stats = _cleanup_old_composite_dirs(retention_seconds)
+            if stats["deleted_dirs"] > 0 or stats["error_count"] > 0:
+                bootlog.info(
+                    "[COMPOSITE CLEANUP] scanned=%d deleted=%d skipped_recent=%d errors=%d retention=%ds",
+                    stats["scanned_dirs"],
+                    stats["deleted_dirs"],
+                    stats["skipped_recent"],
+                    stats["error_count"],
+                    stats["retention_seconds"],
+                )
+                for err in stats["errors"]:
+                    bootlog.warning("[COMPOSITE CLEANUP] %s", err)
+            await asyncio.sleep(loop_interval)
+    except asyncio.CancelledError:
+        bootlog.info("[COMPOSITE CLEANUP] loop stopped")
+        raise
+
+
+def _seconds_until_next_daily_run(hour: int, minute: int) -> Tuple[float, datetime]:
+    now = datetime.now()
+    run_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if run_at <= now:
+        run_at += timedelta(days=1)
+    wait_seconds = max(1.0, (run_at - now).total_seconds())
+    return wait_seconds, run_at
+
+
+async def _composite_cleanup_daily_loop(retention_seconds: int, hour: int, minute: int) -> None:
+    bootlog = logging.getLogger("uvicorn.error")
+    try:
+        while True:
+            wait_seconds, run_at = _seconds_until_next_daily_run(hour, minute)
+            bootlog.info(
+                "[COMPOSITE CLEANUP] next daily run=%s retention=%ds",
+                run_at.isoformat(timespec="seconds"),
+                retention_seconds,
+            )
+            await asyncio.sleep(wait_seconds)
+            stats = _cleanup_old_composite_dirs(retention_seconds)
+            bootlog.info(
+                "[COMPOSITE CLEANUP] daily scan=%d deleted=%d skipped_recent=%d errors=%d retention=%ds",
+                stats["scanned_dirs"],
+                stats["deleted_dirs"],
+                stats["skipped_recent"],
+                stats["error_count"],
+                stats["retention_seconds"],
+            )
+            for err in stats["errors"]:
+                bootlog.warning("[COMPOSITE CLEANUP] %s", err)
+    except asyncio.CancelledError:
+        bootlog.info("[COMPOSITE CLEANUP] daily loop stopped")
+        raise
+
+
+async def _start_composite_cleanup_loop() -> None:
+    global COMPOSITE_CLEANUP_TASK
+    if COMPOSITE_RETENTION_HOURS <= 0:
+        logging.getLogger("uvicorn.error").info(
+            "[COMPOSITE CLEANUP] disabled (COMPOSITE_RETENTION_HOURS=%d)",
+            COMPOSITE_RETENTION_HOURS,
+        )
+        return
+    if COMPOSITE_CLEANUP_TASK is not None and not COMPOSITE_CLEANUP_TASK.done():
+        return
+
+    cleanup_mode = COMPOSITE_CLEANUP_MODE
+    if cleanup_mode not in {"daily", "interval"}:
+        logging.getLogger("uvicorn.error").warning(
+            "[COMPOSITE CLEANUP] invalid COMPOSITE_CLEANUP_MODE=%s, fallback=interval",
+            cleanup_mode,
+        )
+        cleanup_mode = "interval"
+
+    if cleanup_mode == "interval" and COMPOSITE_CLEANUP_INTERVAL_SECONDS <= 0:
+        logging.getLogger("uvicorn.error").info(
+            "[COMPOSITE CLEANUP] disabled (COMPOSITE_CLEANUP_INTERVAL_SECONDS=%d)",
+            COMPOSITE_CLEANUP_INTERVAL_SECONDS,
+        )
+        return
+
+    retention_seconds = COMPOSITE_RETENTION_HOURS * 3600
+    bootlog = logging.getLogger("uvicorn.error")
+
+    if COMPOSITE_CLEANUP_RUN_ON_STARTUP:
+        initial_stats = _cleanup_old_composite_dirs(retention_seconds)
+        bootlog.info(
+            "[COMPOSITE CLEANUP] startup scan=%d deleted=%d skipped_recent=%d errors=%d retention_hours=%d",
+            initial_stats["scanned_dirs"],
+            initial_stats["deleted_dirs"],
+            initial_stats["skipped_recent"],
+            initial_stats["error_count"],
+            COMPOSITE_RETENTION_HOURS,
+        )
+        for err in initial_stats["errors"]:
+            bootlog.warning("[COMPOSITE CLEANUP] %s", err)
+    else:
+        bootlog.info(
+            "[COMPOSITE CLEANUP] startup scan skipped (COMPOSITE_CLEANUP_RUN_ON_STARTUP=0)"
+        )
+
+    if cleanup_mode == "daily":
+        bootlog.info(
+            "[COMPOSITE CLEANUP] mode=daily run_at=%02d:%02d retention_hours=%d",
+            COMPOSITE_CLEANUP_HOUR,
+            COMPOSITE_CLEANUP_MINUTE,
+            COMPOSITE_RETENTION_HOURS,
+        )
+        COMPOSITE_CLEANUP_TASK = asyncio.create_task(
+            _composite_cleanup_daily_loop(
+                retention_seconds=retention_seconds,
+                hour=COMPOSITE_CLEANUP_HOUR,
+                minute=COMPOSITE_CLEANUP_MINUTE,
+            ),
+            name="composite-cleanup-daily-loop",
+        )
+    else:
+        interval_seconds = COMPOSITE_CLEANUP_INTERVAL_SECONDS
+        bootlog.info(
+            "[COMPOSITE CLEANUP] mode=interval interval_sec=%d retention_hours=%d",
+            interval_seconds,
+            COMPOSITE_RETENTION_HOURS,
+        )
+        COMPOSITE_CLEANUP_TASK = asyncio.create_task(
+            _composite_cleanup_loop(interval_seconds, retention_seconds),
+            name="composite-cleanup-interval-loop",
+        )
+
+
+async def _stop_composite_cleanup_loop() -> None:
+    global COMPOSITE_CLEANUP_TASK
+    if COMPOSITE_CLEANUP_TASK is None:
+        return
+    COMPOSITE_CLEANUP_TASK.cancel()
+    try:
+        await COMPOSITE_CLEANUP_TASK
+    except asyncio.CancelledError:
+        pass
+    COMPOSITE_CLEANUP_TASK = None
 
 def _matches_search_query(filename_lower: str, query: str) -> bool:
     """검색 쿼리와 파일명 매칭 (AND/OR/NOT 지원)
@@ -710,6 +944,32 @@ def _ensure_admin_access(req: Request) -> None:
 
 def _check_folder_permission(req: Request, folder_path: str, permission_type: str) -> None:
     """폴더별 권한 검사 (LABEL_WRITE 또는 CLASS_MANAGE)"""
+    # 권한 제어를 실제로 설정하지 않은 개발 환경에서는 기본 허용한다.
+    # 현재 프로젝트는 logs/permissions.json 이 없고 users.json 에 bootstrap admin 만
+    # 있는 경우가 많아서, 이 상태에서는 모든 사용자가 클래스/라벨 작업을 할 수 있어야 한다.
+    try:
+        roles_data = _load_roles_data()
+        legacy_users = roles_data.get("users", []) if isinstance(roles_data, dict) else []
+    except Exception:
+        legacy_users = []
+
+    try:
+        managed_users = get_user_manager().get_all_users()
+    except Exception:
+        managed_users = []
+
+    effective_managed_users = [
+        user for user in managed_users
+        if str(user.get("username", "")).strip().lower() not in {"", "admin"}
+    ]
+    if not legacy_users and not effective_managed_users:
+        logger.info(
+            "✅ [PERMISSION] explicit 권한 설정이 없어 기본 허용 (폴더: %s, 권한: %s)",
+            folder_path,
+            permission_type,
+        )
+        return
+
     # 🔥 permissions.json에서 "all" 사용자 확인 (가장 먼저 확인, username 없어도 작동)
     try:
         roles_data = _load_roles_data()
@@ -1074,6 +1334,11 @@ LABELS_LOCK = RLock()
 LABELS_MTIME: float = 0.0
 CLASSES_MTIME: float = 0.0
 
+# classification 파일명 → 원본 상대경로 매핑(동일 파일명 충돌 방지용)
+CLASS_SOURCE_MAP_FILE = ".source_map.json"
+_CLASS_SOURCE_MAP_CACHE: Dict[str, Tuple[float, Dict[str, str]]] = {}
+_CLASS_SOURCE_MAP_CACHE_LOCK = RLock()
+
 class LRUCache:
     def __init__(self, capacity: int):
         self.capacity = capacity
@@ -1301,11 +1566,14 @@ async def lifespan(app: FastAPI):
     else:
         bootlog.warning("⚠️ [INDEX] 자동 재빌드가 비활성화됨 (INDEX_REFRESH_INTERVAL_MINUTES=0)")
 
+    await _start_composite_cleanup_loop()
+
     yield  # 앱 실행 중
 
     # Shutdown
     logging.getLogger("uvicorn.error").info("🛑 L3Tracker 서버 종료")
 
+    await _stop_composite_cleanup_loop()
     await index_service.stop_refresh_loop()
 
     try:
@@ -1365,6 +1633,7 @@ async def startup_event():
         interval_minutes = INDEX_REFRESH_INTERVAL_SECONDS // 60 or 1
         bootlog.info(f"🔁 [STARTUP] 자동 재빌드 주기: {interval_minutes}분")
         await index_service.start_refresh_loop(INDEX_REFRESH_INTERVAL_SECONDS)
+    await _start_composite_cleanup_loop()
 
 
 async def _lifespan_background_index_build(index_action: str):
@@ -1432,6 +1701,7 @@ async def _background_index_build():
 async def shutdown_event():
     """서버 종료 시 정리"""
     print("[SHUTDOWN EVENT] 서버 종료 중...", flush=True)
+    await _stop_composite_cleanup_loop()
     await index_service.stop_refresh_loop()
 
 
@@ -1986,6 +2256,118 @@ async def api_auth_user(request: Request, LoginId: Optional[str] = None):
 
 
 # ===== 색상 스킴 저장 API =====
+def _collect_related_preview_scheme_names(scheme_name: str) -> Tuple[Set[str], Optional[str]]:
+    """preview 스킴 이름 변형들을 수집한다."""
+    name = str(scheme_name or "").strip()
+    if not name:
+        return set(), None
+
+    names: Set[str] = {name}
+    base_scheme: Optional[str] = None
+
+    for prefix in ("__preview_", "_preview_"):
+        if name.startswith(prefix):
+            candidate = name[len(prefix):].strip()
+            if candidate:
+                base_scheme = candidate
+            break
+
+    if base_scheme is None and name.endswith("_preview"):
+        candidate = name[: -len("_preview")].strip()
+        if candidate:
+            base_scheme = candidate
+
+    if base_scheme:
+        names.add(f"__preview_{base_scheme}")
+        names.add(f"_preview_{base_scheme}")
+        names.add(f"{base_scheme}_preview")
+
+    return {item for item in names if item}, base_scheme
+
+
+def _invalidate_single_scheme_thumbnail_cache(scheme_name: str) -> int:
+    """특정 scheme 관련 썸네일/피라미드 캐시를 디스크에서 제거한다."""
+    name = str(scheme_name or "").strip()
+    if not name:
+        return 0
+
+    deleted_count = 0
+    lower_name = name.lower()
+
+    try:
+        scheme_dir = THUMBNAIL_DIR / name
+        if scheme_dir.exists() and scheme_dir.is_dir():
+            shutil.rmtree(scheme_dir)
+            deleted_count += 1
+    except Exception as e:
+        logger.warning(f"scheme 폴더 삭제 실패: {name}, 오류: {e}")
+
+    try:
+        if THUMBNAIL_DIR.exists():
+            for entry in THUMBNAIL_DIR.iterdir():
+                entry_name = entry.name
+                lower_entry_name = entry_name.lower()
+                if entry.is_dir():
+                    if (
+                        lower_entry_name.startswith(f"{lower_name}_")
+                        or lower_entry_name.startswith(f"pyramid_{lower_name}_")
+                        or lower_entry_name.startswith(f"pyramid_filter_{lower_name}_")
+                    ):
+                        try:
+                            shutil.rmtree(entry)
+                            deleted_count += 1
+                        except Exception as e:
+                            logger.warning(f"캐시 디렉토리 삭제 실패: {entry}, 오류: {e}")
+                    continue
+
+                is_image_ext = lower_entry_name.endswith((".jpg", ".jpeg", ".png", ".webp"))
+                if (
+                    (is_image_ext and f"_{lower_name}_" in lower_entry_name)
+                    or lower_entry_name.startswith(f"pyramid_{lower_name}_")
+                    or lower_entry_name.startswith(f"pyramid_filter_{lower_name}_")
+                ):
+                    try:
+                        entry.unlink()
+                        deleted_count += 1
+                    except Exception as e:
+                        logger.warning(f"캐시 파일 삭제 실패: {entry}, 오류: {e}")
+    except Exception as e:
+        logger.warning(f"캐시 스캔 실패: {name}, 오류: {e}")
+
+    return deleted_count
+
+
+def _invalidate_scheme_thumbnail_caches(scheme_names: Iterable[str]) -> int:
+    """여러 scheme의 썸네일/피라미드 캐시를 제거하고 메모리 캐시를 비운다."""
+    unique_names = {
+        str(item or "").strip()
+        for item in scheme_names
+        if str(item or "").strip()
+    }
+    if not unique_names:
+        return 0
+
+    deleted_count = 0
+    for scheme_name in sorted(unique_names):
+        deleted_count += _invalidate_single_scheme_thumbnail_cache(scheme_name)
+
+    try:
+        THUMB_STAT_CACHE.clear()
+    except Exception:
+        pass
+
+    try:
+        thumbnail_service.clear_cache()
+    except Exception:
+        try:
+            from .cache_manager import cache_manager
+            cache_manager.clear_thumbnail_cache()
+        except Exception:
+            pass
+
+    return deleted_count
+
+
 @app.post("/api/color-scheme")
 async def save_color_scheme(request: Request):
     """색상 스킴 저장"""
@@ -2096,73 +2478,7 @@ async def save_color_scheme(request: Request):
         
         # 파일에 저장 (마지막 수정 시간 추가)
         if save_color_legends(legends, updated_scheme_name=scheme_name):
-            # 디버그 로그 제거 (너무 자주 출력됨)
-            # logger.info(f"✅ Color scheme saved: {scheme_name}")
-            
-            # 🔥 색상 편집 저장 후 해당 scheme의 썸네일 및 피라미드 캐시 무효화
-            # scheme별 폴더 전체 삭제 (예: thumbnail/LoginId_251106_091612/)
-            try:
-                deleted_count = 0
-                import shutil
-                
-                # 1. scheme 폴더 전체 삭제 (thumbnail/{scheme}/ 형태)
-                scheme_dir = THUMBNAIL_DIR / scheme_name
-                if scheme_dir.exists() and scheme_dir.is_dir():
-                    try:
-                        shutil.rmtree(scheme_dir)
-                        deleted_count += 1
-                        # 디버그 로그 제거
-                        # logger.info(f"✅ scheme 폴더 삭제: {scheme_dir}")
-                    except Exception as e:
-                        logger.warning(f"scheme 폴더 삭제 실패: {scheme_dir}, 오류: {e}")
-                
-                # 하위 호환성: 기존 scheme_timestamp 형태도 삭제
-                old_pattern = f"{scheme_name}_*"
-                for old_dir in THUMBNAIL_DIR.glob(old_pattern):
-                    if old_dir.is_dir():
-                        try:
-                            shutil.rmtree(old_dir)
-                            deleted_count += 1
-                            # 디버그 로그 제거
-                            # logger.info(f"✅ 기존 scheme 폴더 삭제: {old_dir}")
-                        except Exception as e:
-                            logger.warning(f"기존 scheme 폴더 삭제 실패: {old_dir}, 오류: {e}")
-                
-                # 2. 기존 방식 썸네일 파일 삭제 (하위 호환성: scheme 이름이 파일명에 포함된 경우)
-                scheme_pattern = f"*_{scheme_name}_*.{THUMBNAIL_FORMAT.lower()}"
-                for thumb_file in THUMBNAIL_DIR.glob(scheme_pattern):
-                    try:
-                        thumb_file.unlink()
-                        deleted_count += 1
-                    except Exception as e:
-                        logger.warning(f"썸네일 삭제 실패: {thumb_file}, 오류: {e}")
-                
-                # 3. 기존 방식 피라미드 디렉토리 삭제 (하위 호환성)
-                pyramid_pattern = f"pyramid_{scheme_name}_*"
-                for pyramid_dir in THUMBNAIL_DIR.glob(pyramid_pattern):
-                    if pyramid_dir.is_dir():
-                        try:
-                            shutil.rmtree(pyramid_dir)
-                            deleted_count += 1
-                            logger.debug(f"피라미드 디렉토리 삭제: {pyramid_dir}")
-                        except Exception as e:
-                            logger.warning(f"피라미드 디렉토리 삭제 실패: {pyramid_dir}, 오류: {e}")
-                
-                # 4. 메모리 캐시 초기화 (cache_manager가 있으면 사용)
-                try:
-                    from .cache_manager import cache_manager
-                    cache_manager.clear_thumbnail_cache()
-                except ImportError:
-                    # cache_manager가 없으면 무시 (선택적 기능)
-                    pass
-                except Exception as e:
-                    logger.warning(f"메모리 캐시 초기화 실패: {e}")
-                
-                # 디버그 로그 제거 (너무 자주 출력됨)
-                # logger.info(f"✅ 캐시 무효화 완료: {scheme_name} ({deleted_count}개 항목 삭제)")
-            except Exception as e:
-                logger.warning(f"⚠️ 캐시 무효화 실패: {e}")
-            
+            _invalidate_scheme_thumbnail_caches([scheme_name])
             return {"success": True, "schemeName": scheme_name}
         else:
             raise HTTPException(status_code=500, detail="색상 스킴 저장 실패")
@@ -2182,11 +2498,33 @@ async def delete_color_scheme(request: Request):
         scheme_name = data.get('schemeName')
         if not scheme_name:
             raise HTTPException(status_code=400, detail="schemeName이 필요합니다")
+
+        related_names, base_scheme = _collect_related_preview_scheme_names(scheme_name)
+        if not related_names:
+            related_names = {str(scheme_name)}
+
         legends = load_color_legends()
-        if scheme_name in legends:
-            del legends[scheme_name]
+        removed_names: List[str] = []
+        for name in sorted(related_names):
+            if name in legends:
+                del legends[name]
+                removed_names.append(name)
+
+        if removed_names:
             save_color_legends(legends)
-        return {"success": True, "deleted": scheme_name}
+
+        # preview 삭제 시 원본 scheme 캐시도 함께 지워 취소/적용 직후 항상 새 썸네일을 생성한다.
+        cache_targets = set(related_names)
+        if base_scheme:
+            cache_targets.add(base_scheme)
+        deleted_cache_entries = _invalidate_scheme_thumbnail_caches(cache_targets)
+
+        return {
+            "success": True,
+            "deleted": removed_names or [str(scheme_name)],
+            "cacheInvalidated": sorted(cache_targets),
+            "deletedCacheEntries": deleted_cache_entries,
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -2243,11 +2581,17 @@ async def recolor_composite_sum_maps_endpoint(request: Request):
     if override_colors is not None and not isinstance(override_colors, list):
         raise HTTPException(status_code=400, detail="colors 필드는 배열이어야 합니다.")
 
-    target_path = _resolve_composite_output_dir(rel_output_dir)
+    normalized_rel = str(rel_output_dir).strip().replace("\\", "/")
+    target_path = (IMAGES_ROOT / normalized_rel).resolve()
+    composite_root = COMPOSITE_ROOT.resolve()
+    if not str(target_path).startswith(str(composite_root)):
+        raise HTTPException(status_code=400, detail="유효한 Composite 출력 디렉터리가 아닙니다.")
+    if not target_path.exists():
+        raise HTTPException(status_code=404, detail="Composite 출력 디렉터리를 찾을 수 없습니다.")
 
     try:
         login_id = _current_login_id(request)
-        scheme = get_user_color_scheme(login_id)
+        scheme = get_user_color_scheme(login_id) if login_id else "change"
         from .composite_map import recolor_saved_sum_maps
 
         entries = recolor_saved_sum_maps(target_path, override_colors=override_colors, scheme=scheme)
@@ -2663,7 +3007,13 @@ async def no_store_for_labels_and_classes(request: Request, call_next):
     try:
         response = await call_next(request)
         p = request.url.path
-        if p.startswith("/api/labels") or p.startswith("/api/classes"):
+        if (
+            p.startswith("/api/labels")
+            or p.startswith("/api/classes")
+            or p.startswith("/api/files")
+            or p.startswith("/api/thumbnail")
+            or p.startswith("/api/image")
+        ):
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
@@ -2733,28 +3083,14 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
                 return response
 
             client_ip = logger_instance.get_client_ip(request)
-
-            # 🔥 stats.json을 읽지 않음 - SAML 로그인은 /saml/acs에서만 처리
-            # middleware에서는 접속 제어를 하지 않음
-
-            # 표시: IP만 표시
-            display_user = client_ip
-
-            method = request.method
             status = response.status_code
-
-            # 🔥 최적화: 이미지/썸네일은 이미 위에서 return했으므로 여기는 도달 불가
-            if endpoint.startswith("/api/classify"):
-                tag = "ACTION"
-            else:
-                tag = "API"
-
-            # 🔥 stats.json 업데이트는 /saml/acs에서만 수행 (쓰기만 함, 읽지 않음)
-            # middleware에서는 stats.json을 읽거나 업데이트하지 않음
-
-            note = _note_from_request(request, endpoint)
-            # IP 칼럼에 IP만 표시 (stats.json 읽지 않음)
-            log_access_row(tag=tag, ip=display_user, method=method, status=status, path=endpoint, note=note)
+            effective_login_id = _effective_login_id(request)
+            request.state.session_user = effective_login_id
+            request.state.session_meta = {
+                "LoginId": effective_login_id,
+                "Username": effective_login_id,
+            }
+            logger_instance.log_access(request, endpoint, status)
             return response
         except BaseException as e:
             # 클라이언트 연결 끊김 관련 예외는 조용히 처리
@@ -2846,6 +3182,317 @@ def get_thumbnail_path(
     
     return THUMBNAIL_DIR / thumbnail_name
 
+
+# 필터 동작(특히 bottom/grade 매핑) 변경 시 캐시 충돌 방지를 위해 버전을 올린다.
+FILTER_CACHE_REV = "4"
+
+FILTER_WHITE_INDEX = 31
+FILTER_BOTTOM_BIN_VALUES = {"285", "286", "287", "288", "290", "291", "300", "385", "386", "388", "389", "390"}
+
+
+def _normalize_bottom_filter_key_local(raw_value: Any) -> Optional[str]:
+    key = str(raw_value).strip()
+    if not key:
+        return None
+
+    lowered = key.lower()
+    aliases = {
+        "normal": "Normal",
+        "nor": "Normal",
+        "border": "Normal",
+        "invalid": "Invalid",
+        "inv": "Invalid",
+    }
+
+    if lowered in aliases:
+        return aliases[lowered]
+
+    if lowered.startswith("b") and lowered[1:].isdigit():
+        return str(int(lowered[1:]))
+
+    if lowered.isdigit():
+        return str(int(lowered))
+
+    return key
+
+
+def _parse_grade_filter_indices(grade_filter: Optional[str]) -> List[int]:
+    if not grade_filter:
+        return []
+
+    selected: Set[int] = set()
+    for raw in str(grade_filter).split(","):
+        token = raw.strip()
+        if not token or not token.lstrip("-").isdigit():
+            continue
+        value = int(token)
+        # 유효 Grade 인덱스(0~7)만 허용. 레거시 sentinel(예: 999)은 무시.
+        if 0 <= value <= 7:
+            selected.add(value)
+
+    return sorted(selected)
+
+
+def _parse_bottom_filter_values(bottom_filter: Optional[str]) -> List[str]:
+    if not bottom_filter:
+        return []
+
+    normalized: List[str] = []
+    seen: Set[str] = set()
+    for raw in str(bottom_filter).split(","):
+        key = _normalize_bottom_filter_key_local(raw)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+
+    return normalized
+
+
+def _classify_chip_bottom_value(raw_value: Any) -> str:
+    key = _normalize_bottom_filter_key_local(raw_value)
+    if not key:
+        return "Normal"
+    if key == "Invalid":
+        return "Invalid"
+    if key == "Normal":
+        return "Normal"
+    if key in FILTER_BOTTOM_BIN_VALUES:
+        return key
+    # 정의되지 않은 숫자/문자 코드는 Normal로 간주한다.
+    return "Normal"
+
+
+def _scaled_chip_rect(
+    chip: Dict[str, Any],
+    scale_x: float,
+    scale_y: float,
+    width: int,
+    height: int,
+) -> Optional[Tuple[int, int, int, int]]:
+    rect = chip.get("rect", {})
+    x0_raw = rect.get("x0") if isinstance(rect, dict) else None
+    y0_raw = rect.get("y0") if isinstance(rect, dict) else None
+    x1_raw = rect.get("x1") if isinstance(rect, dict) else None
+    y1_raw = rect.get("y1") if isinstance(rect, dict) else None
+
+    if None in (x0_raw, y0_raw, x1_raw, y1_raw):
+        x_raw = chip.get("x")
+        y_raw = chip.get("y")
+        w_raw = chip.get("w", chip.get("width"))
+        h_raw = chip.get("h", chip.get("height"))
+        if None in (x_raw, y_raw, w_raw, h_raw):
+            return None
+        x0_raw = x_raw
+        y0_raw = y_raw
+        x1_raw = float(x_raw) + float(w_raw)
+        y1_raw = float(y_raw) + float(h_raw)
+
+    try:
+        x0 = float(x0_raw)
+        y0 = float(y0_raw)
+        x1 = float(x1_raw)
+        y1 = float(y1_raw)
+    except (TypeError, ValueError):
+        return None
+
+    if x1 < x0:
+        x0, x1 = x1, x0
+    if y1 < y0:
+        y0, y1 = y1, y0
+
+    sx0 = max(0, min(width, int(math.floor(x0 * scale_x))))
+    sy0 = max(0, min(height, int(math.floor(y0 * scale_y))))
+    sx1 = max(0, min(width, int(math.ceil(x1 * scale_x))))
+    sy1 = max(0, min(height, int(math.ceil(y1 * scale_y))))
+
+    if sx1 <= sx0 or sy1 <= sy0:
+        return None
+    return sx0, sy0, sx1, sy1
+
+
+def _apply_bottom_position_mask_memory(
+    png_data: bytearray,
+    image_path: Path,
+    bottom_values: List[str],
+) -> Optional[bytearray]:
+    selected_bottoms = {_classify_chip_bottom_value(value) for value in bottom_values}
+    if not selected_bottoms:
+        return bytearray(png_data)
+
+    try:
+        rel_path = Path(_get_relative_path_from_image(str(image_path)))
+        positions_path = _resolve_positions_path(rel_path)
+        if not positions_path.exists():
+            logger.debug("⚠️ [BOTTOM MASK] positions 파일 없음: %s", positions_path)
+            return None
+
+        with open(positions_path, "r", encoding="utf-8") as f:
+            positions_data = json.load(f)
+        chips = positions_data.get("chips", [])
+        if not isinstance(chips, list) or not chips:
+            logger.debug("⚠️ [BOTTOM MASK] chips 데이터 없음: %s", positions_path)
+            return None
+
+        with Image.open(io.BytesIO(bytes(png_data))) as src:
+            if src.mode != "P":
+                return None
+            out = src.copy()
+
+        palette = out.getpalette()
+        if palette and len(palette) >= (FILTER_WHITE_INDEX + 1) * 3:
+            patched_palette = palette[:]
+            base = FILTER_WHITE_INDEX * 3
+            patched_palette[base : base + 3] = [255, 255, 255]
+            out.putpalette(patched_palette)
+
+        width, height = out.size
+        coord = positions_data.get("coord", {})
+        canvas = coord.get("canvas", {}) if isinstance(coord, dict) else {}
+        canvas_w = int(canvas.get("width", width)) if isinstance(canvas, dict) else width
+        canvas_h = int(canvas.get("height", height)) if isinstance(canvas, dict) else height
+        if canvas_w <= 0:
+            canvas_w = width
+        if canvas_h <= 0:
+            canvas_h = height
+
+        scale_x = width / float(canvas_w)
+        scale_y = height / float(canvas_h)
+
+        mask_lut = [FILTER_WHITE_INDEX] * 256
+        mask_lut[8] = 8
+        mask_lut[9] = 9
+        masked_count = 0
+        for chip in chips:
+            if not isinstance(chip, dict):
+                continue
+            chip_bottom = _classify_chip_bottom_value(chip.get("b"))
+            if chip_bottom in selected_bottoms:
+                continue
+
+            scaled = _scaled_chip_rect(chip, scale_x, scale_y, width, height)
+            if not scaled:
+                continue
+            sx0, sy0, sx1, sy1 = scaled
+            box = (sx0, sy0, sx1, sy1)
+            region = out.crop(box)
+            out.paste(region.point(mask_lut), box)
+            masked_count += 1
+
+        if masked_count == 0:
+            return bytearray(png_data)
+
+        output = io.BytesIO()
+        out.save(output, format="PNG", optimize=False, compress_level=config.PNG_COMPRESSION_LEVEL)
+        return bytearray(output.getvalue())
+    except Exception as exc:
+        logger.warning(
+            "⚠️ [BOTTOM MASK] positions 기반 마스킹 실패 (%s): %s",
+            image_path.name,
+            exc,
+            exc_info=True,
+        )
+        return None
+
+
+def _apply_png_filters_memory(
+    image_path: Path,
+    png_data: bytearray,
+    personalized: bool = False,
+    scheme: Optional[str] = None,
+    grade_filter: Optional[str] = None,
+    bottom_filter: Optional[str] = None,
+) -> bytearray:
+    patched = bytearray(png_data)
+
+    if personalized and scheme:
+        patched = plte_inplace_patch_memory(patched, scheme)
+
+    grade_indices = _parse_grade_filter_indices(grade_filter)
+    if grade_indices:
+        patched = plte_grade_filter_memory(patched, grade_indices)
+
+    bottom_values = _parse_bottom_filter_values(bottom_filter)
+    if bottom_values:
+        masked = _apply_bottom_position_mask_memory(patched, image_path, bottom_values)
+        patched = masked if masked is not None else plte_bottom_filter_memory(
+            patched,
+            bottom_values,
+            grade_indices=grade_indices or None,
+        )
+
+    return patched
+
+
+def _normalize_filter_value(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    return ",".join(part.strip() for part in str(value).split(",") if part and part.strip())
+
+
+def _build_filter_variant_token(
+    personalized: bool = False,
+    scheme: Optional[str] = None,
+    grade_filter: Optional[str] = None,
+    bottom_filter: Optional[str] = None,
+) -> str:
+    norm_grade = _normalize_filter_value(grade_filter)
+    norm_bottom = _normalize_filter_value(bottom_filter)
+    if not norm_grade and not norm_bottom:
+        return ""
+
+    parts = [f"rev={FILTER_CACHE_REV}"]
+    if norm_grade:
+        parts.append(f"gf={norm_grade}")
+    if norm_bottom:
+        parts.append(f"bf={norm_bottom}")
+    if personalized and scheme:
+        parts.append(f"s={scheme}")
+    return "|".join(parts)
+
+
+def _resolve_pyramid_dir(
+    level: float,
+    personalized: bool = False,
+    scheme: Optional[str] = None,
+    grade_filter: Optional[str] = None,
+    bottom_filter: Optional[str] = None,
+) -> Path:
+    level_tag = int(level * 100)
+    filter_token = _build_filter_variant_token(
+        personalized=personalized,
+        scheme=scheme,
+        grade_filter=grade_filter,
+        bottom_filter=bottom_filter,
+    )
+
+    # 필터 캐시는 scheme/filter/rev별로 분리해 stale 충돌을 방지한다.
+    if filter_token:
+        token_hash = hashlib.sha1(filter_token.encode("utf-8")).hexdigest()[:12]
+        if personalized and scheme:
+            from .personal_colors import load_color_legends
+            legends = load_color_legends()
+            scheme_data = legends.get(scheme, {})
+            timestamp = scheme_data.get('lastModified')
+
+            if timestamp:
+                return config.THUMBNAIL_DIR / scheme / timestamp / f"pyramid_filter_{token_hash}_{level_tag}"
+            return config.THUMBNAIL_DIR / f"pyramid_filter_{scheme}_{token_hash}_{level_tag}"
+
+        return config.THUMBNAIL_DIR / f"pyramid_filter_{token_hash}_{level_tag}"
+
+    if personalized and scheme:
+        from .personal_colors import load_color_legends
+        legends = load_color_legends()
+        scheme_data = legends.get(scheme, {})
+        timestamp = scheme_data.get('lastModified')
+
+        if timestamp:
+            return config.THUMBNAIL_DIR / scheme / timestamp / f"pyramid_{level_tag}"
+        return config.THUMBNAIL_DIR / f"pyramid_{scheme}_{level_tag}"
+
+    return config.THUMBNAIL_DIR / f"pyramid_{level_tag}"
+
 def safe_resolve_path(path: Optional[str]) -> Path:
     if not path: return current_folder
     try:
@@ -2871,6 +3518,113 @@ def compute_etag(st) -> str:
 def relkey_from_any_path(any_path: str) -> str:
     abs_path = safe_resolve_path(any_path)
     return str(abs_path.relative_to(ROOT_DIR)).replace("\\", "/")
+
+
+def _normalize_relpath_value(path_value: str) -> str:
+    return str(path_value or "").replace("\\", "/").lstrip("/")
+
+
+def _class_source_map_path(class_dir: Path) -> Path:
+    return class_dir / CLASS_SOURCE_MAP_FILE
+
+
+def _load_class_source_map(class_dir: Path, force_reload: bool = False) -> Dict[str, str]:
+    map_path = _class_source_map_path(class_dir)
+    cache_key = str(map_path)
+    mtime = 0.0
+    try:
+        if map_path.exists():
+            mtime = map_path.stat().st_mtime
+    except Exception:
+        mtime = 0.0
+
+    with _CLASS_SOURCE_MAP_CACHE_LOCK:
+        cached = _CLASS_SOURCE_MAP_CACHE.get(cache_key)
+        if cached and not force_reload:
+            cached_mtime, cached_data = cached
+            if cached_mtime == mtime:
+                return dict(cached_data)
+
+    if not map_path.exists():
+        with _CLASS_SOURCE_MAP_CACHE_LOCK:
+            _CLASS_SOURCE_MAP_CACHE[cache_key] = (0.0, {})
+        return {}
+
+    try:
+        with map_path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception:
+        raw = {}
+
+    mapping: Dict[str, str] = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            key_str = str(key or "").strip()
+            rel_str = _normalize_relpath_value(str(value or ""))
+            if key_str and rel_str:
+                mapping[key_str] = rel_str
+
+    with _CLASS_SOURCE_MAP_CACHE_LOCK:
+        _CLASS_SOURCE_MAP_CACHE[cache_key] = (mtime, mapping)
+    return dict(mapping)
+
+
+def _save_class_source_map(class_dir: Path, mapping: Dict[str, str]) -> None:
+    map_path = _class_source_map_path(class_dir)
+    map_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = map_path.with_suffix(map_path.suffix + ".tmp")
+    with tmp_path.open("w", encoding="utf-8") as f:
+        json.dump(mapping, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, map_path)
+
+    try:
+        mtime = map_path.stat().st_mtime
+    except Exception:
+        mtime = 0.0
+    with _CLASS_SOURCE_MAP_CACHE_LOCK:
+        _CLASS_SOURCE_MAP_CACHE[str(map_path)] = (mtime, dict(mapping))
+
+
+def _resolve_original_relpath_from_classification_map(path_str: str) -> Optional[str]:
+    try:
+        abs_path = safe_resolve_path(path_str)
+        rel_path = str(abs_path.relative_to(ROOT_DIR)).replace("\\", "/")
+    except Exception:
+        return None
+
+    parts = [part for part in rel_path.split("/") if part]
+    classification_dir_names = {"classification", "classification_chips"}
+    class_idx = next((idx for idx, part in enumerate(parts) if part in classification_dir_names), -1)
+    if class_idx < 0 or len(parts) <= class_idx + 2:
+        return None
+
+    class_dir = ROOT_DIR.joinpath(*parts[: class_idx + 2])
+    file_key = "/".join(parts[class_idx + 2 :])
+    if not file_key:
+        return None
+
+    source_map = _load_class_source_map(class_dir)
+    mapped_rel = source_map.get(file_key) or source_map.get(Path(file_key).name)
+    if not mapped_rel:
+        return None
+
+    try:
+        mapped_abs = (ROOT_DIR / mapped_rel).resolve()
+        mapped_abs.relative_to(ROOT_DIR.resolve())
+    except Exception:
+        return None
+
+    if not mapped_abs.exists() or not mapped_abs.is_file():
+        return None
+
+    return str(mapped_abs.relative_to(ROOT_DIR)).replace("\\", "/")
+
+
+def _is_same_physical_file(path_a: Path, path_b: Path) -> bool:
+    try:
+        return os.path.samefile(str(path_a), str(path_b))
+    except Exception:
+        return False
 
 def _chip_classification_root(base_folder: Optional[Path] = None) -> Path:
     """
@@ -2929,6 +3683,14 @@ def _dircache_invalidate(path: Path):
     except Exception: pass
     try: DIRLIST_CACHE.delete(str(path.resolve()))
     except Exception: pass
+
+
+def _dir_state_signature(path: Path) -> Optional[str]:
+    try:
+        st = path.stat()
+        return f"{st.st_mtime_ns}:{st.st_ctime_ns}"
+    except Exception:
+        return None
 
 def _sync_labels_with_classes(existing_classes: set) -> int:
     removed = 0
@@ -3019,10 +3781,22 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
     should_cache = not any(x in str(target).replace("\\", "/") for x in no_cache_paths)
 
     key = str(target)
+    current_signature = _dir_state_signature(target) if should_cache else None
     if should_cache:
         cached = DIRLIST_CACHE.get(key)
-        if cached is not None:
-            return cached
+        if isinstance(cached, dict):
+            cached_signature = cached.get("signature")
+            cached_items = cached.get("items")
+            if (
+                cached_signature
+                and current_signature
+                and cached_signature == current_signature
+                and isinstance(cached_items, list)
+            ):
+                return cached_items
+        elif isinstance(cached, list):
+            # 레거시 캐시 포맷(list)은 디렉토리 변경 감지를 못 하므로 재사용하지 않는다.
+            pass
 
     items: List[Dict[str, str]] = []
     
@@ -3089,7 +3863,14 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
         
         # 폴더 먼저, 파일 나중에
         items = directories + files
-        if should_cache: DIRLIST_CACHE.set(key, items)
+        if should_cache:
+            DIRLIST_CACHE.set(
+                key,
+                {
+                    "signature": _dir_state_signature(target),
+                    "items": items,
+                },
+            )
     except FileNotFoundError:
         pass
     
@@ -3192,21 +3973,14 @@ def _generate_thumbnail_sync(
                     with open(image_path, 'rb') as f:
                         png_data = bytearray(f.read())
 
-                    # 1) personalized palette
-                    if personalized and scheme:
-                        png_data = plte_inplace_patch_memory(png_data, scheme)
-
-                    # 2) grade filter
-                    if grade_filter:
-                        grade_indices = [int(g.strip()) for g in grade_filter.split(',') if g.strip().isdigit()]
-                        if grade_indices:
-                            png_data = plte_grade_filter_memory(png_data, grade_indices)
-
-                    # 3) bottom filter
-                    if bottom_filter:
-                        bottom_values = [b.strip() for b in bottom_filter.split(',') if b.strip()]
-                        if bottom_values:
-                            png_data = plte_bottom_filter_memory(png_data, bottom_values)
+                    png_data = _apply_png_filters_memory(
+                        image_path=image_path,
+                        png_data=png_data,
+                        personalized=personalized,
+                        scheme=scheme,
+                        grade_filter=grade_filter,
+                        bottom_filter=bottom_filter,
+                    )
 
                     vips_image = pyvips.Image.new_from_buffer(
                         bytes(png_data),
@@ -3350,16 +4124,14 @@ def _generate_thumbnail_sync(
             try:
                 with open(image_path, 'rb') as f:
                     png_data = bytearray(f.read())
-                if personalized and scheme:
-                    png_data = plte_inplace_patch_memory(png_data, scheme)
-                if grade_filter:
-                    grade_indices = [int(g.strip()) for g in grade_filter.split(',') if g.strip().isdigit()]
-                    if grade_indices:
-                        png_data = plte_grade_filter_memory(png_data, grade_indices)
-                if bottom_filter:
-                    bottom_values = [b.strip() for b in bottom_filter.split(',') if b.strip()]
-                    if bottom_values:
-                        png_data = plte_bottom_filter_memory(png_data, bottom_values)
+                png_data = _apply_png_filters_memory(
+                    image_path=image_path,
+                    png_data=png_data,
+                    personalized=personalized,
+                    scheme=scheme,
+                    grade_filter=grade_filter,
+                    bottom_filter=bottom_filter,
+                )
                 pil_image = Image.open(io.BytesIO(bytes(png_data)))
             except Exception as e:
                 logger.warning(f"⚠️ [THUMBNAIL PATCH PIL] 팔레트/필터 적용 실패: {e}")
@@ -3403,8 +4175,14 @@ async def generate_thumbnail(
     try:
         # 썸네일 경로 생성 (scheme/filter 포함)
         variant: Optional[str] = None
-        if grade_filter or bottom_filter:
-            variant = f"gf={grade_filter or ''}|bf={bottom_filter or ''}|p={1 if personalized else 0}|s={scheme or ''}"
+        filter_token = _build_filter_variant_token(
+            personalized=personalized,
+            scheme=scheme,
+            grade_filter=grade_filter,
+            bottom_filter=bottom_filter,
+        )
+        if filter_token:
+            variant = filter_token
 
         if personalized and scheme:
             logger.debug(f"🎨 [GENERATE_THUMB] Using scheme: {scheme} for {image_path.name}")
@@ -3568,11 +4346,68 @@ async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
 def _lookup_original_relpath_from_classification_path(path_str: str) -> Optional[str]:
     """classification/<class>/<filename> 형식이 오면 ROOT_DIR 내 원본 상대경로를 추정한다."""
     try:
-        p = Path(path_str).as_posix()
+        mapped_rel = _resolve_original_relpath_from_classification_map(path_str)
+        if mapped_rel:
+            return mapped_rel
+
+        try:
+            p = str(safe_resolve_path(path_str).relative_to(ROOT_DIR)).replace("\\", "/")
+        except Exception:
+            p = Path(path_str).as_posix().lstrip("/")
         if ("/classification/" not in p and not p.startswith("classification/") and
                 "/classification_chips/" not in p and not p.startswith("classification_chips/")):
             return None
         filename = Path(p).name
+        classification_dir_names = {"classification", "classification_chips"}
+        path_parts = list(Path(p).parts)
+        classification_idx = next(
+            (idx for idx, part in enumerate(path_parts) if part in classification_dir_names),
+            -1,
+        )
+        if classification_idx < 0:
+            return None
+        source_prefix = "/".join(path_parts[:classification_idx]) if classification_idx > 0 else ""
+        class_name = path_parts[classification_idx + 1] if len(path_parts) > classification_idx + 1 else ""
+        source_key = "/".join(path_parts[classification_idx + 2 :]) if len(path_parts) > classification_idx + 2 else filename
+        class_dir = (
+            ROOT_DIR.joinpath(*path_parts[: classification_idx + 2])
+            if len(path_parts) > classification_idx + 1
+            else None
+        )
+
+        # labels.json에 이미 있는 최신 매핑을 우선 사용한다.
+        if class_name:
+            label_candidates: List[str] = []
+            with LABELS_LOCK:
+                for rel, labs in LABELS.items():
+                    if class_name in labs and Path(rel).name == filename:
+                        label_candidates.append(rel)
+
+            if source_prefix:
+                label_candidates = [
+                    rel for rel in label_candidates
+                    if Path(rel).as_posix().startswith(f"{source_prefix}/")
+                ]
+
+            if label_candidates:
+                if len(label_candidates) > 1:
+                    def _candidate_mtime(rel: str) -> float:
+                        try:
+                            return (ROOT_DIR / rel).stat().st_mtime
+                        except Exception:
+                            return 0.0
+                    label_candidates.sort(key=lambda rel: (_candidate_mtime(rel), rel), reverse=True)
+
+                chosen_rel = label_candidates[0]
+                if class_dir and source_key:
+                    try:
+                        source_map = _load_class_source_map(class_dir)
+                        if source_map.get(source_key) != chosen_rel:
+                            source_map[source_key] = chosen_rel
+                            _save_class_source_map(class_dir, source_map)
+                    except Exception:
+                        pass
+                return chosen_rel
         
         # 🔥 최적화: FILE_INDEX_BY_NAME 캐시 사용 (빠른 O(1) 룩업)
         if not hasattr(_lookup_original_relpath_from_classification_path, '_name_cache'):
@@ -3588,6 +4423,10 @@ def _lookup_original_relpath_from_classification_path(path_str: str) -> Optional
             # 파일명 → 경로 매핑 생성 (같은 파일명이 여러 개 있을 수 있으므로 리스트로)
             name_cache = {}
             for rel in keys_snapshot:
+                rel_posix = Path(rel).as_posix()
+                rel_parts = set(Path(rel_posix).parts)
+                if rel_parts & classification_dir_names:
+                    continue
                 fname = Path(rel).name
                 if fname not in name_cache:
                     name_cache[fname] = []
@@ -3599,8 +4438,22 @@ def _lookup_original_relpath_from_classification_path(path_str: str) -> Optional
         # 🔥 캐시에서 빠른 조회
         candidates = _lookup_original_relpath_from_classification_path._name_cache.get(filename, [])
         if candidates:
-            # 첫 번째 매칭 반환 (같은 파일명이 여러 개면 첫 번째 사용)
-            return candidates[0]
+            if source_prefix:
+                prefix_matches = [
+                    rel for rel in candidates
+                    if Path(rel).as_posix().startswith(f"{source_prefix}/")
+                ]
+                if len(prefix_matches) == 1:
+                    return prefix_matches[0]
+                if len(prefix_matches) > 1:
+                    candidates = prefix_matches
+
+            if len(candidates) == 1:
+                return candidates[0]
+
+            # 파일명이 중복되어 원본이 여러 개면 임의 선택하지 않는다.
+            # 잘못된(과거) 파일로 매핑되는 문제를 방지하기 위해 None 반환.
+            return None
         
         # 🔥 캐시에 없으면 NULL 반환 (os.walk 건너뛰기 - 너무 느림)
         # relkey_from_any_path()가 폴백으로 처리할 것임
@@ -3709,32 +4562,18 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                 if (grade_filter or bottom_filter) and image_path.suffix.lower() == '.png':
                     logger.info(f"🎯 [PYRAMID] 필터 적용: grade_filter={grade_filter}, bottom_filter={bottom_filter}, path={image_path.name}, target_format={target_format}")
                     try:
-                        from .personal_colors import plte_grade_filter_memory, plte_bottom_filter_memory, plte_inplace_patch_memory
-
-                        # 1. 원본 PNG 파일 읽기
                         with open(image_path, 'rb') as f:
                             png_data = bytearray(f.read())
 
-                        # 2. 먼저 개인색 설정 적용 (Grade0-7을 인덱스 0-7로 매핑)
-                        if personalized and scheme:
-                            png_data = plte_inplace_patch_memory(png_data, scheme)
-                            logger.debug(f"🎨 [PYRAMID FILTER] 개인색 설정 먼저 적용: scheme={scheme}")
+                        png_data = _apply_png_filters_memory(
+                            image_path=image_path,
+                            png_data=png_data,
+                            personalized=personalized,
+                            scheme=scheme,
+                            grade_filter=grade_filter,
+                            bottom_filter=bottom_filter,
+                        )
 
-                        # 3. Grade PLTE 필터 (인덱스 0-7 필터링)
-                        if grade_filter:
-                            grade_indices = [int(g.strip()) for g in grade_filter.split(',') if g.strip().isdigit()]
-                            if grade_indices:
-                                png_data = plte_grade_filter_memory(png_data, grade_indices)
-                                logger.debug(f"✅ [PYRAMID GRADE FILTER] Grade {grade_filter} 필터링 완료")
-
-                        # 4. Bottom PLTE 필터 (인덱스 8-13 필터링)
-                        if bottom_filter:
-                            bottom_values = [b.strip() for b in bottom_filter.split(',') if b.strip()]
-                            if bottom_values:
-                                png_data = plte_bottom_filter_memory(png_data, bottom_values)
-                                logger.debug(f"✅ [PYRAMID BOTTOM FILTER] Bottom {bottom_filter} 필터링 완료")
-
-                        # 5. 필터링된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
                         image = pyvips.Image.new_from_buffer(bytes(png_data), "", access='sequential', fail_on='none', memory=True, unlimited=True)
 
                         logger.debug(f"✅ [PYRAMID FILTER] 필터링 완료, 리사이즈 시작: {pyramid_path.name}")
@@ -3745,15 +4584,16 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                 elif personalized and scheme and image_path.suffix.lower() == '.png':
                     logger.info(f"🎨 [PYRAMID] 개인색 설정 적용: personalized={personalized}, scheme={scheme}, path={image_path.name}, target_format={target_format}")
                     try:
-                        from .personal_colors import plte_inplace_patch_memory
-
-                        # 1. 원본 PNG 파일 읽기 및 PLTE 패치 (최우선!)
                         with open(image_path, 'rb') as f:
                             png_data = bytearray(f.read())
 
-                        png_data = plte_inplace_patch_memory(png_data, scheme)
+                        png_data = _apply_png_filters_memory(
+                            image_path=image_path,
+                            png_data=png_data,
+                            personalized=personalized,
+                            scheme=scheme,
+                        )
 
-                        # 2. 패치된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
                         image = pyvips.Image.new_from_buffer(bytes(png_data), "", access='sequential', fail_on='none', memory=True, unlimited=True)
 
                         logger.debug(f"✅ [PYRAMID PLTE PATCH] 색 변경 완료, 리사이즈 시작: {pyramid_path.name}")
@@ -4046,34 +4886,20 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
         if (grade_filter or bottom_filter) and image_path.suffix.lower() == '.png':
             # Grade/Bottom 필터 (개인색 설정 먼저 적용 후 필터링)
             try:
-                from .personal_colors import plte_grade_filter_memory, plte_bottom_filter_memory, plte_inplace_patch_memory
-
                 logger.info(f"🎯 [PIPELINE] 필터 적용 시작: grade_filter={grade_filter}, bottom_filter={bottom_filter}, levels={levels}, path={image_path.name}")
 
-                # 1. 원본 PNG 파일 읽기
                 with open(image_path, 'rb') as f:
                     png_data = bytearray(f.read())
 
-                # 2. 먼저 개인색 설정 적용 (Grade0-7을 인덱스 0-7로 매핑)
-                if personalized and scheme:
-                    png_data = plte_inplace_patch_memory(png_data, scheme)
-                    logger.debug(f"🎨 [PIPELINE] 개인색 설정 먼저 적용: scheme={scheme}")
+                png_data = _apply_png_filters_memory(
+                    image_path=image_path,
+                    png_data=png_data,
+                    personalized=personalized,
+                    scheme=scheme,
+                    grade_filter=grade_filter,
+                    bottom_filter=bottom_filter,
+                )
 
-                # 3. Grade PLTE 필터 (인덱스 0-7 필터링)
-                if grade_filter:
-                    grade_indices = [int(g.strip()) for g in grade_filter.split(',') if g.strip().isdigit()]
-                    if grade_indices:
-                        png_data = plte_grade_filter_memory(png_data, grade_indices)
-                        logger.debug(f"✅ [PIPELINE] Grade {grade_filter} 필터링 완료")
-
-                # 4. Bottom PLTE 필터 (인덱스 8-13 필터링)
-                if bottom_filter:
-                    bottom_values = [b.strip() for b in bottom_filter.split(',') if b.strip()]
-                    if bottom_values:
-                        png_data = plte_bottom_filter_memory(png_data, bottom_values)
-                        logger.debug(f"✅ [PIPELINE] Bottom {bottom_filter} 필터링 완료")
-
-                # 5. 필터링된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
                 original_image = pyvips.Image.new_from_buffer(
                     bytes(png_data),
                     "",
@@ -4089,16 +4915,18 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
         elif personalized and scheme and image_path.suffix.lower() == '.png':
             # 개인색 설정
             try:
-                from .personal_colors import plte_inplace_patch_memory
-
                 logger.info(f"🎨 [PIPELINE] 개인색 적용 시작: scheme={scheme}, levels={levels}, path={image_path.name}")
 
                 # 원본 PNG 파일 읽기 및 PLTE 패치 (메모리에서)
                 with open(image_path, 'rb') as f:
                     png_data = bytearray(f.read())
 
-                # 메모리에서 PLTE 패치 적용
-                png_data = plte_inplace_patch_memory(png_data, scheme)
+                png_data = _apply_png_filters_memory(
+                    image_path=image_path,
+                    png_data=png_data,
+                    personalized=personalized,
+                    scheme=scheme,
+                )
 
                 # 패치된 PNG를 메모리에서 pyvips로 직접 로드 (초고속!)
                 original_image = pyvips.Image.new_from_buffer(
@@ -4131,34 +4959,22 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
         
         for level in levels:
             try:
-                # 피라미드 경로 생성 (Grade 필터 또는 개인색 설정인 경우 별도 폴더 사용)
-                # 🔥 Grade 필터가 우선순위가 높음
-                if grade_filter:
-                    # Grade 필터 전용 피라미드 디렉토리
-                    grade_suffix = grade_filter.replace(',', '_')
-                    pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_grade_{grade_suffix}_{int(level*100)}"
-                    logger.debug(f"🎯 [PIPELINE] level={level}: Grade 필터 경로 사용, grade_filter={grade_filter}, dir={pyramid_dir.name}")
-                elif personalized and scheme:
-                    # 개인색 설정 피라미드 디렉토리
-                    from .personal_colors import load_color_legends
-                    legends = load_color_legends()
-                    scheme_data = legends.get(scheme, {})
-                    timestamp = scheme_data.get('lastModified')
-
-                    if timestamp:
-                        # scheme/timestamp 폴더 안에 pyramid_{level} 폴더 생성
-                        pyramid_dir = config.THUMBNAIL_DIR / scheme / timestamp / f"pyramid_{int(level*100)}"
-                    else:
-                        # lastModified가 없으면 기존 방식 (하위 호환성)
-                        pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{scheme}_{int(level*100)}"
-
-                    # 🔥 개인색 설정이 활성화된 경우 비개인색 경로는 절대 사용하지 않음
-                    logger.debug(f"🎨 [PIPELINE] level={level}: 개인색 경로 사용, scheme={scheme}, dir={pyramid_dir.name}")
-                else:
-                    # 🔥 기본 피라미드 디렉토리
-                    pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
-                    if personalized and not scheme:
-                        logger.warning(f"⚠️ [PIPELINE] level={level}: personalized=True인데 scheme이 None! 비개인색 경로 사용: {pyramid_dir.name}")
+                # 피라미드 경로 생성 (scheme/filter/rev 분리)
+                pyramid_dir = _resolve_pyramid_dir(
+                    level=level,
+                    personalized=personalized,
+                    scheme=scheme,
+                    grade_filter=grade_filter,
+                    bottom_filter=bottom_filter,
+                )
+                logger.debug(
+                    "🎯 [PIPELINE] level=%s: pyramid_dir=%s (scheme=%s, grade_filter=%s, bottom_filter=%s)",
+                    level,
+                    pyramid_dir.name,
+                    scheme,
+                    grade_filter,
+                    bottom_filter,
+                )
                 
                 # 🔥 디렉토리 생성 안전성 강화
                 try:
@@ -4417,7 +5233,9 @@ async def get_image_crop(
     width: int,
     height: int,
     personalized: bool = False,
-    scheme: Optional[str] = None
+    scheme: Optional[str] = None,
+    grade_filter: Optional[str] = None,
+    bottom_filter: Optional[str] = None
 ):
     """Chip 영역 이미지 crop (개인색 설정 지원)"""
     try:
@@ -4449,16 +5267,24 @@ async def get_image_crop(
         except AttributeError:
             pass
 
-        # 🎨 개인색 설정이 활성화되고 PNG인 경우 PLTE 패치 적용
-        if personalized and scheme and image_path.suffix.lower() == '.png':
+        # 🎨 개인색/legend 필터가 활성화되고 PNG인 경우 PLTE 패치 적용
+        should_patch_palette = image_path.suffix.lower() == '.png' and (
+            (personalized and scheme) or bool(grade_filter) or bool(bottom_filter)
+        )
+        if should_patch_palette:
             try:
-                from .personal_colors import plte_inplace_patch_memory
-
                 # 원본 이미지 파일 읽기 및 PLTE 패치
                 with open(image_path, 'rb') as f:
                     png_data = bytearray(f.read())
 
-                png_data = plte_inplace_patch_memory(png_data, scheme)
+                png_data = _apply_png_filters_memory(
+                    image_path=image_path,
+                    png_data=png_data,
+                    personalized=personalized,
+                    scheme=scheme,
+                    grade_filter=grade_filter,
+                    bottom_filter=bottom_filter,
+                )
 
                 # PLTE 패치된 PNG를 메모리에서 pyvips로 로드
                 img = pyvips.Image.new_from_buffer(bytes(png_data), '', access='sequential')
@@ -4473,15 +5299,18 @@ async def get_image_crop(
                 # PNG로 인코딩하여 반환
                 png_buffer = cropped.pngsave_buffer(compression=6, interlace=False, strip=True)
 
-                return Response(
-                    content=bytes(png_buffer),
-                    media_type="image/png",
-                    headers={
-                        "Cache-Control": "public, max-age=3600",
-                        "X-Personalized": "true",
-                        "X-Scheme": scheme
-                    }
-                )
+                headers = {
+                    "Cache-Control": "public, max-age=3600",
+                }
+                if personalized and scheme:
+                    headers["X-Personalized"] = "true"
+                    headers["X-Scheme"] = scheme
+                if grade_filter:
+                    headers["X-Grade-Filter"] = grade_filter
+                if bottom_filter:
+                    headers["X-Bottom-Filter"] = bottom_filter
+
+                return Response(content=bytes(png_buffer), media_type="image/png", headers=headers)
             except Exception as e:
                 logger.warning(f"⚠️ [CHIP CROP PLTE] PLTE 패치 실패, 원본으로 crop: {e}")
                 # 폴백: 원본 이미지 사용
@@ -4525,6 +5354,9 @@ async def get_image(
 ):
     try:
         is_head = request.method == "HEAD"
+        original_rel = _lookup_original_relpath_from_classification_path(path)
+        if original_rel:
+            path = original_rel
         
         # LoginId가 있으면 우선 사용, 없으면 anonymous scheme fallback
         if personalized and not scheme:
@@ -4575,28 +5407,13 @@ async def get_image(
                 if not is_head:
                     logger.info(f"🎯 [LEVEL FIXED] {level}")
 
-            # 🔥 Grade 필터와 개인색 설정은 동시에 사용할 수 없음
-            # Grade 필터가 우선순위가 높음
-            if grade_filter:
-                # Grade 필터 전용 피라미드 디렉토리
-                grade_suffix = grade_filter.replace(',', '_')
-                pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_grade_{grade_suffix}_{int(level*100)}"
-            elif personalized and scheme:
-                # 개인색 설정 피라미드 디렉토리
-                from .personal_colors import load_color_legends
-                legends = load_color_legends()
-                scheme_data = legends.get(scheme, {})
-                timestamp = scheme_data.get('lastModified')
-
-                if timestamp:
-                    # scheme/timestamp 폴더 안에 pyramid_{level} 폴더 생성
-                    pyramid_dir = config.THUMBNAIL_DIR / scheme / timestamp / f"pyramid_{int(level*100)}"
-                else:
-                    # lastModified가 없으면 기존 방식 (하위 호환성)
-                    pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{scheme}_{int(level*100)}"
-            else:
-                # 기본 피라미드 디렉토리
-                pyramid_dir = config.THUMBNAIL_DIR / f"pyramid_{int(level*100)}"
+            pyramid_dir = _resolve_pyramid_dir(
+                level=level,
+                personalized=personalized,
+                scheme=scheme,
+                grade_filter=grade_filter,
+                bottom_filter=bottom_filter,
+            )
             pyramid_dir.mkdir(parents=True, exist_ok=True)
 
             # 피라미드 파일 경로
@@ -4725,33 +5542,18 @@ async def get_image(
             # 개인색 설정을 먼저 적용한 후 필터 적용
             if (grade_filter or bottom_filter) and image_path.suffix.lower() == '.png':
                 try:
-                    from .personal_colors import plte_grade_filter_memory, plte_bottom_filter_memory, plte_inplace_patch_memory
-
                     # 1. 원본 이미지 파일 읽기
                     with open(image_path, 'rb') as f:
                         png_data = bytearray(f.read())
 
-                    # 2. 먼저 개인색 설정 적용 (Grade0-7을 인덱스 0-7로 매핑)
-                    if personalized and scheme:
-                        png_data = plte_inplace_patch_memory(png_data, scheme)
-                        if not is_head:
-                            logger.info(f"🎨 [FILTER] 개인색 설정 먼저 적용: scheme={scheme}")
-
-                    # 3. Grade 필터 적용 (인덱스 0-7 필터링)
-                    if grade_filter:
-                        grade_indices = [int(g.strip()) for g in grade_filter.split(',') if g.strip().isdigit()]
-                        if grade_indices:
-                            png_data = plte_grade_filter_memory(png_data, grade_indices)
-                            if not is_head:
-                                logger.info(f"✅ [GRADE FILTER] Grade {grade_filter} 필터링 완료")
-
-                    # 4. Bottom 필터 적용 (인덱스 8-13 필터링)
-                    if bottom_filter:
-                        bottom_values = [b.strip() for b in bottom_filter.split(',') if b.strip()]
-                        if bottom_values:
-                            png_data = plte_bottom_filter_memory(png_data, bottom_values)
-                            if not is_head:
-                                logger.info(f"✅ [BOTTOM FILTER] Bottom {bottom_filter} 필터링 완료")
+                    png_data = _apply_png_filters_memory(
+                        image_path=image_path,
+                        png_data=png_data,
+                        personalized=personalized,
+                        scheme=scheme,
+                        grade_filter=grade_filter,
+                        bottom_filter=bottom_filter,
+                    )
 
                     # 메모리에서 직접 반환
                     headers = {
@@ -4777,13 +5579,16 @@ async def get_image(
             # 🔥 개인색 설정이 활성화되고 PNG인 경우 PLTE 패치 적용 (필터가 없을 때만)
             elif personalized and scheme and image_path.suffix.lower() == '.png':
                 try:
-                    from .personal_colors import plte_inplace_patch_memory
-
                     # 원본 이미지 파일 읽기 및 PLTE 패치
                     with open(image_path, 'rb') as f:
                         png_data = bytearray(f.read())
 
-                    png_data = plte_inplace_patch_memory(png_data, scheme)
+                    png_data = _apply_png_filters_memory(
+                        image_path=image_path,
+                        png_data=png_data,
+                        personalized=personalized,
+                        scheme=scheme,
+                    )
 
                     # 메모리에서 직접 반환
                     headers = {
@@ -4803,10 +5608,10 @@ async def get_image(
             
             # 일반 원본 이미지 반환
             st = image_path.stat()
-            resp_304 = maybe_304(request, st)
-            if resp_304: return resp_304
             headers = {
-                "Cache-Control": "public, max-age=3600",
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
                 "ETag": compute_etag(st)
             }
             return FileResponse(image_path, headers=headers)
@@ -4826,6 +5631,10 @@ async def get_thumbnail(
     bottom_filter: Optional[str] = None,
 ):
     try:
+        original_rel = _lookup_original_relpath_from_classification_path(path)
+        if original_rel:
+            path = original_rel
+
         # LoginId가 있으면 우선 사용, 없으면 anonymous scheme fallback
         if personalized and not scheme:
             scheme = get_user_color_scheme(_current_login_id(request))
@@ -4887,11 +5696,11 @@ async def get_thumbnail(
                     except Exception:
                         pass
                     raise RuntimeError("generated thumbnail is empty")
-                resp_304 = maybe_304(request, st)
-                if resp_304: return resp_304
                 
                 headers = {
-                    "Cache-Control": "public, max-age=604800, immutable",
+                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
                     "ETag": compute_etag(st),
                 }
                 content_type = "image/jpeg" if thumb.suffix.lower() in ['.jpg', '.jpeg'] else "image/png"
@@ -5482,34 +6291,71 @@ async def classify_images(req: Request,
         
         # 대상 파일 경로
         target_file = class_dir / abs_path.name
+        class_source_map = _load_class_source_map(class_dir)
+        mapped_rel = class_source_map.get(target_file.name)
+        needs_replace = (not target_file.exists()) or (mapped_rel != rel_path)
         
-        # 파일 복사 또는 하드링크 생성
-        try:
-            if abs_path.stat().st_dev == class_dir.stat().st_dev:
-                # 같은 드라이브면 하드링크 시도
-                if not target_file.exists():
-                    os.link(str(abs_path), str(target_file))
+        # 파일 복사 또는 하드링크 생성 (executor로 이벤트 루프 블로킹 방지)
+        loop = asyncio.get_running_loop()
+        if needs_replace:
+            if target_file.exists():
+                try:
+                    target_file.unlink()
+                except FileNotFoundError:
+                    pass
+                except Exception as unlink_err:
+                    logger.warning(f"분류 파일 교체 전 삭제 실패: {target_file}, 오류: {unlink_err}")
+
+            try:
+                if abs_path.stat().st_dev == class_dir.stat().st_dev:
+                    # 같은 드라이브면 하드링크 시도
+                    await loop.run_in_executor(IO_POOL, os.link, str(abs_path), str(target_file))
                     log_access_row(tag="ACTION", note=f"하드링크 생성: {rel_path} -> {class_name}")
-            else:
-                # 다른 드라이브면 복사
-                if not target_file.exists():
-                    shutil.copy2(abs_path, target_file)
+                else:
+                    # 다른 드라이브면 복사
+                    await loop.run_in_executor(IO_POOL, shutil.copy2, abs_path, target_file)
                     log_access_row(tag="ACTION", note=f"파일 복사: {rel_path} -> {class_name}")
-        except (OSError, PermissionError) as e:
-            # 하드링크 실패시 복사로 폴백
-            if not target_file.exists():
-                shutil.copy2(abs_path, target_file)
+            except (OSError, PermissionError):
+                # 하드링크 실패시 복사로 폴백
+                await loop.run_in_executor(IO_POOL, shutil.copy2, abs_path, target_file)
                 log_access_row(tag="ACTION", note=f"복사 폴백: {rel_path} -> {class_name}")
-        
+        elif not _is_same_physical_file(abs_path, target_file):
+            # 같은 파일명이지만 다른 원본이면 반드시 최신 원본으로 교체한다.
+            needs_replace = True
+            try:
+                target_file.unlink()
+            except FileNotFoundError:
+                pass
+            except Exception as unlink_err:
+                logger.warning(f"분류 파일 교체 전 삭제 실패: {target_file}, 오류: {unlink_err}")
+            try:
+                if abs_path.stat().st_dev == class_dir.stat().st_dev:
+                    await loop.run_in_executor(IO_POOL, os.link, str(abs_path), str(target_file))
+                else:
+                    await loop.run_in_executor(IO_POOL, shutil.copy2, abs_path, target_file)
+            except (OSError, PermissionError):
+                await loop.run_in_executor(IO_POOL, shutil.copy2, abs_path, target_file)
+
+        class_source_map[target_file.name] = rel_path
+        _save_class_source_map(class_dir, class_source_map)
+
         # 라벨도 추가
         with LABELS_LOCK:
             cur_labels = set(LABELS.get(rel_path, []))
             cur_labels.add(class_name)
             LABELS[rel_path] = sorted(cur_labels)
-        
-        _labels_save()
+
+        await loop.run_in_executor(IO_POOL, _labels_save)
         _dircache_invalidate(class_dir)
-        
+
+        # 썸네일 미리 생성 (Label Explorer에서 지연 없이 표시되도록)
+        login_id = _current_login_id(req)
+        scheme = get_user_color_scheme(login_id)
+        asyncio.create_task(
+            generate_thumbnail(abs_path, (THUMBNAIL_SIZE_DEFAULT, THUMBNAIL_SIZE_DEFAULT),
+                               personalized=True, scheme=scheme)
+        )
+
         return {"success": True, "image": rel_path, "class": class_name, "labels": LABELS[rel_path]}
         
     except Exception as e:
@@ -5533,6 +6379,7 @@ class ChipClassifyRequest(BaseModel):
 
 @app.post("/api/classify/batch")
 async def classify_images_batch(request: BatchClassifyRequest,
+                                req: Request,
                                 _=Depends(labels_classes_sync_dep)):
     """배치 이미지 분류"""
     batch_start_time = time.perf_counter()
@@ -5550,6 +6397,8 @@ async def classify_images_batch(request: BatchClassifyRequest,
         
         # 🔥 성능 최적화: 드라이브 체크는 한 번만 수행
         class_dir_dev = class_dir.stat().st_dev
+        class_source_map = _load_class_source_map(class_dir)
+        source_map_dirty = False
         
         results = []
         errors = []
@@ -5588,10 +6437,19 @@ async def classify_images_batch(request: BatchClassifyRequest,
                 
                 # 🔥 파일 복사/하드링크 최적화 - 간결한 로직
                 link_start = time.perf_counter()
-                # 이미 존재하면 스킵 (stat 체크 제거)
-                if target_file.exists():
-                    pass  # 파일이 이미 있으면 아무 작업 안 함
-                else:
+                mapped_rel = class_source_map.get(target_file.name)
+                needs_replace = (not target_file.exists()) or (mapped_rel != rel_path)
+                if not needs_replace and not _is_same_physical_file(abs_path, target_file):
+                    needs_replace = True
+
+                if needs_replace:
+                    if target_file.exists():
+                        try:
+                            target_file.unlink()
+                        except FileNotFoundError:
+                            pass
+                        except Exception as unlink_err:
+                            logger.warning(f"배치 분류 기존 파일 삭제 실패: {target_file}, 오류: {unlink_err}")
                     try:
                         # 같은 드라이브면 하드링크, 아니면 복사
                         if abs_path.stat().st_dev == class_dir_dev:
@@ -5600,6 +6458,10 @@ async def classify_images_batch(request: BatchClassifyRequest,
                             shutil.copy2(abs_path, target_file)
                     except (OSError, PermissionError):
                         shutil.copy2(abs_path, target_file)
+
+                if class_source_map.get(target_file.name) != rel_path:
+                    class_source_map[target_file.name] = rel_path
+                    source_map_dirty = True
                 link_time += time.perf_counter() - link_start
                 
                 # 🔥 라벨 배치 업데이트 (락 없이 임시 저장)
@@ -5619,11 +6481,14 @@ async def classify_images_batch(request: BatchClassifyRequest,
                     LABELS[rel_path] = sorted(cur_labels)
         label_update_time = time.perf_counter() - label_update_start
         
-        # 🔥 파일 저장 및 캐시 무효화 (간결한 로직)
+        # 🔥 파일 저장 및 캐시 무효화 (executor로 이벤트 루프 블로킹 방지)
         save_start = time.perf_counter()
         if results:
-            _labels_save()
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(IO_POOL, _labels_save)
             _dircache_invalidate(class_dir)
+            if source_map_dirty:
+                await loop.run_in_executor(IO_POOL, _save_class_source_map, class_dir, class_source_map)
         save_time = time.perf_counter() - save_start
         
         batch_total_time = time.perf_counter() - batch_start_time
@@ -5638,6 +6503,16 @@ async def classify_images_batch(request: BatchClassifyRequest,
                    f"저장: {save_time*1000:.1f}ms")
         
         log_access_row(tag="ACTION", note=f"배치 분류: {len(results)}개 성공, {len(errors)}개 실패 -> {class_name}")
+
+        # 썸네일 미리 생성 (Label Explorer에서 지연 없이 표시되도록)
+        if results:
+            login_id = _current_login_id(req)
+            scheme = get_user_color_scheme(login_id)
+            for rel in results:
+                asyncio.create_task(
+                    generate_thumbnail(ROOT_DIR / rel, (THUMBNAIL_SIZE_DEFAULT, THUMBNAIL_SIZE_DEFAULT),
+                                       personalized=True, scheme=scheme)
+                )
 
         return {
             "success": True,
@@ -5844,6 +6719,8 @@ async def delete_classification(request: ClassifyDeleteRequest,
         class_dir = classification_dir / class_name
         if not class_dir.exists():
             raise HTTPException(status_code=404, detail="Class not found")
+        class_source_map = _load_class_source_map(class_dir)
+        source_map_dirty = False
         
         # 이미지 경로 또는 이름으로 찾기
         if request.image_path:
@@ -5852,14 +6729,18 @@ async def delete_classification(request: ClassifyDeleteRequest,
             target_file = class_dir / abs_path.name
         elif request.image_name:
             target_file = class_dir / request.image_name
-            # 원본 파일 경로 찾기
-            for root, dirs, files in os.walk(ROOT_DIR):
-                if request.image_name in files:
-                    abs_path = Path(root) / request.image_name
-                    rel_path = str(abs_path.relative_to(ROOT_DIR)).replace("\\", "/")
-                    break
+            rel_path = class_source_map.get(request.image_name, "")
+            if rel_path:
+                abs_path = ROOT_DIR / rel_path
             else:
-                raise HTTPException(status_code=404, detail="Original image not found")
+                # 원본 파일 경로 찾기 (legacy fallback)
+                for root, dirs, files in os.walk(ROOT_DIR):
+                    if request.image_name in files:
+                        abs_path = Path(root) / request.image_name
+                        rel_path = str(abs_path.relative_to(ROOT_DIR)).replace("\\", "/")
+                        break
+                else:
+                    raise HTTPException(status_code=404, detail="Original image not found")
         else:
             raise HTTPException(status_code=400, detail="Either image_path or image_name required")
         
@@ -5868,6 +6749,9 @@ async def delete_classification(request: ClassifyDeleteRequest,
         
         # classification 디렉토리에서 파일 삭제
         target_file.unlink()
+        if target_file.name in class_source_map:
+            class_source_map.pop(target_file.name, None)
+            source_map_dirty = True
         try:
             classification_rel_path = str(target_file.relative_to(ROOT_DIR)).replace("\\", "/")
         except ValueError:
@@ -5883,6 +6767,8 @@ async def delete_classification(request: ClassifyDeleteRequest,
                     LABELS.pop(rel_path, None)
         
         _labels_save()
+        if source_map_dirty:
+            _save_class_source_map(class_dir, class_source_map)
         _dircache_invalidate(class_dir)
 
         if mode == "chip":
@@ -5916,17 +6802,30 @@ async def classify_delete_batch(request: ClassifyDeleteBatchReq,
 
         classification_dir = _classification_dir(mode=mode)
         class_dir = classification_dir / class_name
+        class_source_map = _load_class_source_map(class_dir)
+        source_map_dirty = False
         removed = 0
         for any_path in request.images:
             try:
-                rel_path = relkey_from_any_path(any_path)
-                abs_path = ROOT_DIR / rel_path
-                target_file = class_dir / abs_path.name
+                raw_value = str(any_path or "").strip()
+                source_name = Path(raw_value).name
+                mapped_rel = class_source_map.get(source_name)
+                if mapped_rel:
+                    rel_path = mapped_rel
+                    abs_path = ROOT_DIR / rel_path
+                    target_file = class_dir / source_name
+                else:
+                    rel_path = relkey_from_any_path(any_path)
+                    abs_path = ROOT_DIR / rel_path
+                    target_file = class_dir / abs_path.name
                 if target_file.exists():
                     try:
                         target_file.unlink()
                     except FileNotFoundError:
                         pass
+                if target_file.name in class_source_map:
+                    class_source_map.pop(target_file.name, None)
+                    source_map_dirty = True
                 try:
                     classification_rel_path = str(target_file.relative_to(ROOT_DIR)).replace("\\", "/")
                 except ValueError:
@@ -5947,7 +6846,10 @@ async def classify_delete_batch(request: ClassifyDeleteBatchReq,
             except Exception:
                 continue
 
-        _labels_save(); _dircache_invalidate(class_dir)
+        _labels_save()
+        if source_map_dirty:
+            _save_class_source_map(class_dir, class_source_map)
+        _dircache_invalidate(class_dir)
         log_access_row(tag="ACTION", note=f"배치 분류 제거: {removed} items from {class_name}")
         return {"success": True, "removed": removed, "class": class_name}
     except HTTPException:
@@ -6641,20 +7543,6 @@ async def run_composite_map_task(
     """
     global COMPOSITE_SEMAPHORE
 
-    async def _update_task(**updates: Any) -> None:
-        async with COMPOSITE_TASKS_LOCK:
-            task_state = COMPOSITE_TASKS.get(task_id)
-            if task_state is None:
-                task_state = {
-                    "status": "queued",
-                    "progress": 0,
-                    "result": None,
-                    "error": None,
-                    "created_at": datetime.now().isoformat(),
-                }
-                COMPOSITE_TASKS[task_id] = task_state
-            task_state.update(updates)
-
     # Lazy initialization of semaphore
     if COMPOSITE_SEMAPHORE is None:
         COMPOSITE_SEMAPHORE = asyncio.Semaphore(COMPOSITE_CONCURRENCY_LIMIT)
@@ -6662,7 +7550,9 @@ async def run_composite_map_task(
     # Semaphore로 동시 실행 수 제한 (최대 2개)
     async with COMPOSITE_SEMAPHORE:
         try:
-            await _update_task(status="processing", started_at=datetime.now().isoformat())
+            async with COMPOSITE_TASKS_LOCK:
+                COMPOSITE_TASKS[task_id]["status"] = "processing"
+                COMPOSITE_TASKS[task_id]["started_at"] = datetime.now().isoformat()
 
             # 동기 함수를 executor에서 실행 (이벤트 루프 블로킹 방지)
             from .composite_map import create_composite_heatmaps, create_palette_overlay
@@ -6724,21 +7614,18 @@ async def run_composite_map_task(
                 if "sum_maps" in result:
                     response["sum_maps"] = result["sum_maps"]
 
-            await _update_task(
-                status="completed",
-                progress=100,
-                result=response,
-                completed_at=datetime.now().isoformat(),
-                error=None,
-            )
+            async with COMPOSITE_TASKS_LOCK:
+                COMPOSITE_TASKS[task_id]["status"] = "completed"
+                COMPOSITE_TASKS[task_id]["progress"] = 100
+                COMPOSITE_TASKS[task_id]["result"] = response
+                COMPOSITE_TASKS[task_id]["completed_at"] = datetime.now().isoformat()
 
-        except BaseException as e:
+        except Exception as e:
             logger.exception(f"Composite map task {task_id} failed: {e}")
-            await _update_task(
-                status="failed",
-                error=(str(e) or e.__class__.__name__),
-                failed_at=datetime.now().isoformat(),
-            )
+            async with COMPOSITE_TASKS_LOCK:
+                COMPOSITE_TASKS[task_id]["status"] = "failed"
+                COMPOSITE_TASKS[task_id]["error"] = str(e)
+                COMPOSITE_TASKS[task_id]["failed_at"] = datetime.now().isoformat()
 
 
 @app.post("/api/chip-annotations")
@@ -7006,26 +7893,22 @@ async def create_composite_map_endpoint(
     max_workers = payload.max_workers if payload.max_workers is not None else None
     batch_size = payload.batch_size if payload.batch_size is not None else None
     login_id = _current_login_id(req)
-    resolved_scheme = payload.scheme or get_user_color_scheme(login_id)
+    resolved_scheme = payload.scheme or (get_user_color_scheme(login_id) if login_id else "change")
 
-    # 백그라운드 작업 등록 (클라이언트 연결 종료와 분리)
-    task = asyncio.create_task(
-        run_composite_map_task(
-            task_id=task_id,
-            image_paths=image_paths,
-            palette_mode=payload.palette_mode,
-            focus_index=payload.focus_index,
-            highlight_threshold=payload.highlight_threshold,
-            loader_mode=loader_mode,
-            max_workers=max_workers,
-            batch_size=batch_size,
-            scheme=resolved_scheme,
-            login_id=login_id,
-        ),
-        name=f"composite-map-{task_id}",
+    # 백그라운드 작업 추가
+    background_tasks.add_task(
+        run_composite_map_task,
+        task_id=task_id,
+        image_paths=image_paths,
+        palette_mode=payload.palette_mode,
+        focus_index=payload.focus_index,
+        highlight_threshold=payload.highlight_threshold,
+        loader_mode=loader_mode,
+        max_workers=max_workers,
+        batch_size=batch_size,
+        scheme=resolved_scheme,
+        login_id=login_id,
     )
-    COMPOSITE_BG_TASKS[task_id] = task
-    task.add_done_callback(lambda _task, tid=task_id: COMPOSITE_BG_TASKS.pop(tid, None))
 
     return {
         "success": True,

@@ -443,6 +443,79 @@
         let trendData = null;
         let monthlyData = null;
         let departmentData = null;
+
+        function isAllZeroTrend(data) {
+            if (!data || typeof data !== 'object') return true;
+            const keys = Object.keys(data);
+            if (keys.length === 0) return true;
+            return keys.every((k) => {
+                const item = data[k] || {};
+                return Number(item.active_users || 0) === 0 &&
+                       Number(item.new_users || 0) === 0 &&
+                       Number(item.total_requests || 0) === 0;
+            });
+        }
+
+        function patchTrendWithDaily(trend, daily) {
+            if (!daily) return trend;
+            const out = (trend && typeof trend === 'object') ? { ...trend } : {};
+            const today = new Date().toISOString().slice(0, 10);
+            const existing = out[today] || {};
+            out[today] = {
+                active_users: Number(existing.active_users || daily.active_today || 0),
+                new_users: Number(existing.new_users || daily.new_users_today || 0),
+                total_requests: Number(existing.total_requests || daily.total_requests_today || 0)
+            };
+            return out;
+        }
+
+        function patchMonthlyWithDaily(monthly, daily) {
+            if (!daily) return monthly;
+            const out = (monthly && typeof monthly === 'object') ? { ...monthly } : {};
+            const now = new Date();
+            const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+            const existing = out[monthKey] || {};
+            out[monthKey] = {
+                active_users: Number(existing.active_users || daily.active_today || 0),
+                new_users: Number(existing.new_users || daily.new_users_today || 0),
+                total_requests: Number(existing.total_requests || daily.total_requests_today || 0),
+                month_name: existing.month_name || `${now.getFullYear()}년 ${String(now.getMonth() + 1).padStart(2, '0')}월`
+            };
+            return out;
+        }
+
+        function buildDepartmentDataFromUsers(users) {
+            const departments = {};
+            (users || []).forEach((user) => {
+                const profile = user.profile || {};
+                const isIpUser = user.user_type === 'ip' || (!profile || Object.keys(profile).length === 0);
+                const deptName = isIpUser
+                    ? '외부'
+                    : (profile.DeptName || profile.Department || profile.department || '부서미지정');
+
+                if (!departments[deptName]) {
+                    departments[deptName] = {
+                        name: deptName,
+                        user_count: 0,
+                        total_requests: 0,
+                        new_users_30d: 0,
+                        users: []
+                    };
+                }
+
+                departments[deptName].user_count += 1;
+                departments[deptName].total_requests += Number(user.total_requests || 0);
+                departments[deptName].users.push({
+                    user_id: user.user_id,
+                    profile: profile,
+                    first_seen: user.first_seen || '',
+                    last_seen: user.last_seen || '',
+                    last_access_time: user.last_access_time || ''
+                });
+            });
+
+            return { departments, activity: departments };
+        }
         
         async function loadStats() {
             try {
@@ -461,17 +534,30 @@
                 monthlyData = await monthlyResponse.json();
                 const usersData = await usersResponse.json();
                 const recentUsersData = await recentUsersResponse.json();
+                const usersList = Array.isArray(usersData?.users) ? usersData.users : [];
+
+                if (Number(dailyData?.total_users || 0) === 0 && Number(usersData?.total_users || 0) > 0) {
+                    dailyData.total_users = Number(usersData.total_users);
+                }
                 
                 // 부서 데이터가 없는 경우 빈 객체로 처리
                 try {
                     departmentData = await departmentResponse.json();
-                    console.log('✅ [부서 데이터] 로드 성공:', {
-                        부서수: Object.keys(departmentData.departments || {}).length,
-                        부서목록: Object.keys(departmentData.departments || {})
-                    });
+                    const deptCount = Object.keys(departmentData?.departments || {}).length;
+                    if (deptCount === 0 && usersList.length > 0) {
+                        departmentData = buildDepartmentDataFromUsers(usersList);
+                    }
                 } catch (e) {
                     console.error('❌ [부서 데이터] 로드 실패:', e);
-                    departmentData = { departments: {}, activity: {} };
+                    departmentData = buildDepartmentDataFromUsers(usersList);
+                }
+
+                // 백엔드가 0값만 반환한 경우 최소 표시 보정
+                if (isAllZeroTrend(trendData) && Number(dailyData?.active_today || 0) > 0) {
+                    trendData = patchTrendWithDaily(trendData, dailyData);
+                }
+                if (isAllZeroTrend(monthlyData) && Number(dailyData?.active_today || 0) > 0) {
+                    monthlyData = patchMonthlyWithDaily(monthlyData, dailyData);
                 }
                 
                 renderDailyStats(dailyData);
@@ -882,7 +968,7 @@
                 // profile 정보를 우선적으로 사용 (IP 사용자는 "IP" / "Guest" / "외부")
                 const displayName = isIpUser ? 'IP' : (user.profile?.Username || user.profile?.username || user.display_name || "Anonymous");
                 const position = isIpUser ? 'Guest' : (user.profile?.GrdName_EN || '-');  // 직급
-                const department = isIpUser ? '외부' : (user.profile?.DeptName || user.profile?.Department || user.profile?.department || '-');
+                const department = isIpUser ? '외부' : (user.profile?.DeptName || user.profile?.Department || user.profile?.department || '부서미지정');
                 
                 // 사용자 ID 추출 (IP 주소 또는 실제 ID)
                 const userId = user.user_id.includes('@') ? user.user_id.split('@')[0] : user.user_id;
@@ -932,7 +1018,7 @@
                 // profile 정보를 우선적으로 사용 (IP 사용자는 "IP" / "Guest" / "외부")
                 const displayName = isIpUser ? 'IP' : (user.profile?.Username || user.profile?.username || user.display_name || user.user_id);
                 const position = isIpUser ? 'Guest' : (user.profile?.GrdName_EN || '-');  // 직급
-                const department = isIpUser ? '외부' : (user.profile?.DeptName || user.profile?.Department || user.profile?.department || '-');
+                const department = isIpUser ? '외부' : (user.profile?.DeptName || user.profile?.Department || user.profile?.department || '부서미지정');
                 
                 // 사용자 ID 추출 (IP 주소 또는 실제 ID)
                 const userId = user.user_id.includes('@') ? user.user_id.split('@')[0] : user.user_id;

@@ -2,7 +2,7 @@
   "default": {
     "top": {"Grade0": "#FFFFFF", "Grade1": "#9B9B9B", "Grade2": "#009619", "Grade3": "#0000FF", "Grade4": "#D91DFF", "Grade5": "#FFFF00", "Grade6": "#FF0000", "Grade7": "#000000"},
     "bottom": {"Normal": "#BEBEBE", "Invalid": "#FF9900", "B285": "#0099FF", "B286": "#FF714F", "B287": "#66FFCC", "B288": "#DA26CD", "B290": "#FFD700", "B291": "#32CD32", "B300": "#AAAAAA", "B385": "#00C8FF", "B386": "#FF00C8", "B388": "#00FF66", "B389": "#FF6666", "B390": "#6666FF"},
-    "background": "#FEFEFE",
+    "background": "#CCCCCC",
     "text": "#000001",
     "lastModified": "251106_102058"
   },
@@ -12,7 +12,7 @@
     "admin": {"quantile0": "#00FF00", "quantile10": "#FFE6E6", "quantile20": "#FFCCCC", "quantile30": "#FFB2B2", "quantile40": "#FF9999", "quantile50": "#FF8080", "quantile60": "#FF6666", "quantile70": "#FF4D4D", "quantile80": "#FF3333", "quantile90": "#FF1919", "quantile100": "#00FF00", "lastModified": "260306_072448"},
     "anonymous": {"quantile0": "#FFFFFF", "quantile10": "#FFE6E6", "quantile20": "#FFCCCC", "quantile30": "#FFB2B2", "quantile40": "#FF9999", "quantile50": "#FF8080", "quantile60": "#FF6666", "quantile70": "#FF4D4D", "quantile80": "#FF3333", "quantile90": "#FF1919", "quantile100": "#FF0000", "modified": false, "lastModified": "260306_234142"},
     "anon": {"quantile0": "#FFFFFF", "quantile10": "#FFE6E6", "quantile20": "#FFCCCC", "quantile30": "#FFB2B2", "quantile40": "#FF9999", "quantile50": "#FF8080", "quantile60": "#FF6666", "quantile70": "#FF4D4D", "quantile80": "#FF3333", "quantile90": "#FF1919", "quantile100": "#FF0000", "modified": false, "lastModified": "260306_234142"},
-    "guest": {"quantile0": "#FFFFFF", "quantile10": "#FFE6E6", "quantile20": "#FFCCCC", "quantile30": "#FFB2B2", "quantile40": "#FF9999", "quantile50": "#FF8080", "quantile60": "#FF6666", "quantile70": "#FF4D4D", "quantile80": "#FF3333", "quantile90": "#FF1919", "quantile100": "#FF0000", "modified": false, "lastModified": "260307_105938"}
+    "guest": {"quantile0": "#FFFFFF", "quantile10": "#FFE6E6", "quantile20": "#FFCCCC", "quantile30": "#FFB2B2", "quantile40": "#FF9999", "quantile50": "#FF8080", "quantile60": "#FF6666", "quantile70": "#FF4D4D", "quantile80": "#FF3333", "quantile90": "#FF1919", "quantile100": "#FF0000", "modified": false, "lastModified": "260307_115811"}
   },
   "change": {
     "top": {"Grade0": "#FFFFFE", "Grade1": "#778899", "Grade2": "#839400", "Grade3": "#00FFAA", "Grade4": "#D91DFF", "Grade5": "#FFFF00", "Grade6": "#FF0000", "Grade7": "#000000"},
@@ -142,10 +142,10 @@
     "lastModified": "260306_234142"
   },
   "guest": {
-    "top": {"Grade0": "#FFFFFE", "Grade1": "#778899", "Grade2": "#839400", "Grade3": "#00FFAA", "Grade4": "#D91DFF", "Grade5": "#FFFF00", "Grade6": "#FF0000", "Grade7": "#000000"},
-    "bottom": {"Normal": "#333333", "Invalid": "#FF9900", "B285": "#0099FF", "B286": "#FFA3A3", "B287": "#66FFCC", "B288": "#DA26CD", "B290": "#FFD700", "B291": "#32CD32", "B300": "#AAAAAA", "B385": "#00C8FF", "B386": "#FF00C8", "B388": "#00FF66", "B389": "#FF6666", "B390": "#6666FF"},
-    "background": "#11AA33",
+    "top": {"Grade0": "#FFFFFE", "Grade1": "#778899", "Grade2": "#839400", "Grade3": "#00FFAA", "Grade4": "#000000", "Grade5": "#FFFF00", "Grade6": "#FF0000", "Grade7": "#000000"},
+    "bottom": {"Normal": "#333333", "Invalid": "#FF9900", "B285": "#0099FF", "B286": "#FF0000", "B287": "#66FFCC", "B288": "#000000", "B290": "#FFD700", "B291": "#32CD32", "B300": "#AAAAAA", "B385": "#00C8FF", "B386": "#FF00C8", "B388": "#00FF66", "B389": "#FF6666", "B390": "#6666FF"},
+    "background": "#9900FF",
     "text": "#000000",
-    "lastModified": "260307_111032"
+    "lastModified": "260307_235549"
   }
 }
