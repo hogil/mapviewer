@@ -664,12 +664,16 @@
         
         function renderDepartmentActivityChart() {
             const ctx = document.getElementById('departmentActivityChart');
-            
+
             if (!departmentData || !departmentData.departments || Object.keys(departmentData.departments).length === 0) {
-                // 차트 영역에 메시지 표시
-                ctx.parentElement.innerHTML = '<div class="loading">부서 활동 데이터가 없습니다.</div>';
+                // 차트 영역에 메시지 표시 (ctx가 null이면 이미 메시지가 표시된 상태)
+                if (ctx) {
+                    ctx.parentElement.innerHTML = '<div class="loading">부서 활동 데이터가 없습니다.</div>';
+                }
                 return;
             }
+
+            if (!ctx) return; // 이전 렌더링에서 canvas가 교체됨
             
             // 기존 차트 삭제
             if (departmentActivityChart) {
