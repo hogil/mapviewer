@@ -5,7 +5,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Sequence, Tuple, Optional
 
-from .personal_colors import load_color_legends, save_color_legends, normalize_hex_color
+from .personal_colors import (
+    ANONYMOUS_SCHEME,
+    load_color_legends,
+    normalize_hex_color,
+    save_color_legends,
+)
 
 QUANTILE_KEYS: List[str] = [f"quantile{step}" for step in range(0, 101, 10)]
 QUANTILE_VALUES: List[float] = [step / 100 for step in range(0, 101, 10)]
@@ -70,7 +75,7 @@ def _ensure_composite_storage(legends: Dict[str, object]) -> Tuple[Dict[str, Dic
         mutated = True
     # Legacy format: direct quantile list under 'composite'
     if entry and any(key.startswith("quantile") for key in entry.keys()):
-        entry = {"change": entry}
+        entry = {ANONYMOUS_SCHEME: entry}
         legends["composite"] = entry
         mutated = True
     return entry, mutated
@@ -87,7 +92,7 @@ def _ensure_scheme_entry(storage: Dict[str, Dict[str, str]], scheme: str) -> Tup
 
 
 def load_composite_color_settings(scheme: Optional[str] = None) -> CompositeColorSettings:
-    scheme_key = (scheme or "change").strip() or "change"
+    scheme_key = (scheme or ANONYMOUS_SCHEME).strip() or ANONYMOUS_SCHEME
     legends = load_color_legends()
     storage, mutated = _ensure_composite_storage(legends)
 
@@ -96,6 +101,14 @@ def load_composite_color_settings(scheme: Optional[str] = None) -> CompositeColo
         save_color_legends(legends)
 
     entry = storage.get(scheme_key)
+    if not isinstance(entry, dict) and scheme_key == ANONYMOUS_SCHEME:
+        # Backward compatibility: 기존 anonymous 이전 데이터는 change 아래에 있을 수 있음
+        legacy_entry = storage.get("anonymous")
+        if not isinstance(legacy_entry, dict):
+            legacy_entry = storage.get("change")
+        if isinstance(legacy_entry, dict):
+            entry = legacy_entry
+
     if not isinstance(entry, dict):
         # 유저 scheme 없으면 default 값으로 반환 (저장 안 함)
         entry = {key: DEFAULT_COMPOSITE_COLORS[key] for key in QUANTILE_KEYS}
@@ -114,7 +127,7 @@ def load_composite_color_settings(scheme: Optional[str] = None) -> CompositeColo
 
 
 def save_composite_color_settings(colors: Sequence[str], scheme: Optional[str] = None) -> CompositeColorSettings:
-    scheme_key = (scheme or "change").strip() or "change"
+    scheme_key = (scheme or ANONYMOUS_SCHEME).strip() or ANONYMOUS_SCHEME
     normalized = _normalize_color_values(colors)
     legends = load_color_legends()
     storage, _ = _ensure_composite_storage(legends)

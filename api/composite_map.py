@@ -31,6 +31,7 @@ from .config import (
     COMPOSITE_LOADER_MODE,
     COMPOSITE_BATCH_SIZE,
     POSITIONS_ROOT,
+    FALLBACK_LOGIN_ID,
 )
 from .personal_colors import load_color_legends, _scheme_to_palette_bytes, normalize_hex_color
 from .composite_colors import load_composite_color_settings
@@ -89,7 +90,9 @@ warnings.simplefilter("ignore", DecompressionBombWarning)
 
 # Composite 맵 저장 디렉토리 (사용자별 하위 폴더)
 COMPOSITE_ROOT = IMAGES_ROOT / "composite_map"
+ANONYMOUS_LOGIN_ID = FALLBACK_LOGIN_ID
 COMPOSITE_ROOT.mkdir(parents=True, exist_ok=True)
+(COMPOSITE_ROOT / ANONYMOUS_LOGIN_ID).mkdir(parents=True, exist_ok=True)
 SQUARE_MAP_CACHE_FILENAME = "square_maps_data.npz"
 # composite_cache_v1은 선택적 사용 (환경변수로 제어)
 # 같은 이미지를 여러 composite map에 재사용할 때만 유용
@@ -106,7 +109,7 @@ def _copy_positions_without_bin(first_image_rel_path: str, output_dir: Path, com
 
     Args:
         first_image_rel_path: 첫 번째 소스 이미지 상대 경로 (예: "wm-811k/1.png")
-        output_dir: Composite map 출력 디렉토리 (예: composite_map/change/20251126_140343)
+        output_dir: Composite map 출력 디렉토리 (예: composite_map/anonymous/20251126_140343)
         composite_images: 생성된 composite 이미지 파일명 리스트 (예: ["Grade_0.png", "square_average.png"])
     """
     import json
@@ -156,8 +159,8 @@ def _copy_positions_without_bin(first_image_rel_path: str, output_dir: Path, com
                     del chip['b']
 
         # 3. composite map 출력 디렉토리에 positions 폴더 생성
-        # output_dir: IMAGES_ROOT/composite_map/change/20251126_140343
-        # positions 저장 위치: POSITIONS_ROOT/composite_map/change/20251126_140343
+        # output_dir: IMAGES_ROOT/composite_map/anonymous/20251126_140343
+        # positions 저장 위치: POSITIONS_ROOT/composite_map/anonymous/20251126_140343
         output_dir_rel = output_dir.relative_to(IMAGES_ROOT)
         positions_output_dir = POSITIONS_ROOT / output_dir_rel
         positions_output_dir.mkdir(parents=True, exist_ok=True)
@@ -198,16 +201,16 @@ def _build_palette_list(source_palette: Optional[Sequence[int]]) -> List[int]:
 
 
 def _sanitize_login_id(login_id: Optional[str]) -> str:
-    candidate = (login_id or "change").strip()
+    candidate = (login_id or ANONYMOUS_LOGIN_ID).strip()
     if not candidate:
-        candidate = "change"
+        candidate = ANONYMOUS_LOGIN_ID
     safe_chars = []
     for ch in candidate:
         if ch.isalnum() or ch in ("-", "_"):
             safe_chars.append(ch)
         else:
             safe_chars.append("_")
-    sanitized = "".join(safe_chars).strip("_") or "change"
+    sanitized = "".join(safe_chars).strip("_") or ANONYMOUS_LOGIN_ID
     return sanitized[:64]
 
 
@@ -954,7 +957,7 @@ def recolor_saved_sum_maps(
         square_mean_map = cached_square_mean
         weighted_map = cached_weighted
     palette_list = palette_array.reshape(-1).tolist()
-    resolved_scheme = (scheme or cached_scheme or "change").strip() or "change"
+    resolved_scheme = (scheme or cached_scheme or ANONYMOUS_LOGIN_ID).strip() or ANONYMOUS_LOGIN_ID
     settings = load_composite_color_settings(resolved_scheme)
     cached_colors: Optional[List[str]] = None
     if colors_arr is not None:
@@ -1175,7 +1178,6 @@ def _save_sum_map_variants(
     image_count = all_indices.shape[0]
     if image_count == 0:
         return []
-    float_indices = all_indices.astype(np.float32, copy=False)
     sum_float16 = _use_sum_float16()
     float_dtype = np.float16 if sum_float16 else np.float32
 
@@ -1214,11 +1216,12 @@ def _save_sum_map_variants(
 
     if base_indices is None:
         if _FAST_MEDIAN:
-            # Use mean instead of median for better performance (O(n) vs O(n log n))
-            mean_map = np.mean(float_indices, axis=0)
+            # Use mean instead of median for better performance (O(n) vs O(n log n)).
+            # Avoid materializing a full float32 copy of all_indices (N*H*W) to keep memory bounded.
+            mean_map = np.mean(all_indices, axis=0, dtype=np.float32)
             base_indices = np.clip(np.rint(mean_map), 0, 13).astype(np.uint8)  # 0-13 범위
         else:
-            median_map = np.median(float_indices, axis=0)
+            median_map = np.median(all_indices, axis=0)
             base_indices = np.clip(np.rint(median_map), 0, 13).astype(np.uint8)  # 0-13 범위
     base_indices = base_indices.copy()
     if invalid_mask is not None:
@@ -1909,7 +1912,7 @@ def create_subset_map(
         except Exception:
             cached_scheme = None
 
-    resolved_scheme = (scheme or cached_scheme or "change").strip() or "change"
+    resolved_scheme = (scheme or cached_scheme or ANONYMOUS_LOGIN_ID).strip() or ANONYMOUS_LOGIN_ID
     settings = load_composite_color_settings(resolved_scheme)
 
     cached_colors: Optional[List[str]] = None

@@ -223,14 +223,15 @@ export class MyLotModal {
 
     /** LoginId URL 파라미터 반환 (SAML 로그인 사용자 식별용) */
     get _loginParam() {
-        const id = this.viewer?.currentUser;
-        return id && id !== 'change' ? `?LoginId=${encodeURIComponent(id)}` : '';
+        const id = String(this.viewer?.getCurrentLoginId?.() || this.viewer?.currentUser || '').trim();
+        if (!id) return '';
+        return `?LoginId=${encodeURIComponent(id)}`;
     }
 
     /** LoginId를 URL에 추가 (기존 쿼리스트링 고려) */
     _withLogin(url) {
-        const id = this.viewer?.currentUser;
-        if (!id || id === 'change') return url;
+        const id = String(this.viewer?.getCurrentLoginId?.() || this.viewer?.currentUser || '').trim();
+        if (!id) return url;
         const sep = url.includes('?') ? '&' : '?';
         return `${url}${sep}LoginId=${encodeURIComponent(id)}`;
     }
@@ -2604,7 +2605,9 @@ export class MyLotModal {
                 // 검색 실패 시 빈 배열로 계속 진행 (폴더 검색은 시도)
             }
 
-            // 🔥 추가: 현재 이미지와 같은 폴더에 있는 이미지들도 수집 (탐색기 폴더 내 이미지 누락 방지)
+            const targetLotLower = String(targetLot || '').trim().toLowerCase();
+
+            // 🔥 추가: 현재 이미지와 같은 폴더에서 "같은 LOT" 이미지만 수집 (탐색기 폴더 내 누락 방지)
             const lastSlash = Math.max(candidate.path.lastIndexOf('/'), candidate.path.lastIndexOf('\\'));
             if (lastSlash > 0) {
                 const folderPath = candidate.path.substring(0, lastSlash);
@@ -2616,10 +2619,16 @@ export class MyLotModal {
                             const folderImages = filesData.items
                                 .filter(item => item.type === 'file' && /\.(png|jpg|jpeg|gif|bmp|webp)$/i.test(item.name))
                                 .map(item => item.path || `${folderPath}/${item.name}`);
+                               
+                            const sameLotFolderImages = folderImages.filter((pathItem) => {
+                                const filename = String(pathItem).split('/').pop().split('\\').pop().toLowerCase();
+                                const lotToken = filename.split('_', 1)[0];
+                                return !!targetLotLower && lotToken === targetLotLower;
+                            });
 
-                            if (folderImages.length > 0) {
-                                searchResults.push(...folderImages);
-                                console.log(`[MyLotModal] 같은 폴더 이미지 ${folderImages.length}개 추가`);
+                            if (sameLotFolderImages.length > 0) {
+                                searchResults.push(...sameLotFolderImages);
+                                console.log(`[MyLotModal] 같은 LOT 폴더 이미지 ${sameLotFolderImages.length}개 추가`);
                             }
                         }
                     }
@@ -2627,6 +2636,15 @@ export class MyLotModal {
                     console.warn('[MyLotModal] 폴더 검색 실패:', e);
                 }
             }
+
+            // 중복 경로 제거
+            const seenPaths = new Set();
+            searchResults = searchResults.filter((pathItem) => {
+                const normalized = String(pathItem || '').replace(/\\/g, '/');
+                if (!normalized || seenPaths.has(normalized)) return false;
+                seenPaths.add(normalized);
+                return true;
+            });
 
             if (searchResults.length === 0) {
                 // 검색 결과가 없으면 이미지 없이 LOT만 저장
@@ -3861,7 +3879,9 @@ export class MyLotModal {
                 // 검색 실패 시 빈 배열로 계속 진행 (폴더 검색은 시도)
             }
 
-            // 🔥 추가: 현재 이미지와 같은 폴더에 있는 이미지들도 수집 (탐색기 폴더 내 이미지 누락 방지)
+            const targetLotLower = String(targetLot || '').trim().toLowerCase();
+
+            // 🔥 추가: 현재 이미지와 같은 폴더에서 "같은 LOT" 이미지만 수집 (탐색기 폴더 내 누락 방지)
             const lastSlash = Math.max(candidate.path.lastIndexOf('/'), candidate.path.lastIndexOf('\\'));
             if (lastSlash > 0) {
                 const folderPath = candidate.path.substring(0, lastSlash);
@@ -3873,10 +3893,16 @@ export class MyLotModal {
                             const folderImages = filesData.items
                                 .filter(item => item.type === 'file' && /\.(png|jpg|jpeg|gif|bmp|webp)$/i.test(item.name))
                                 .map(item => item.path || `${folderPath}/${item.name}`);
+                               
+                            const sameLotFolderImages = folderImages.filter((pathItem) => {
+                                const filename = String(pathItem).split('/').pop().split('\\').pop().toLowerCase();
+                                const lotToken = filename.split('_', 1)[0];
+                                return !!targetLotLower && lotToken === targetLotLower;
+                            });
 
-                            if (folderImages.length > 0) {
-                                searchResults.push(...folderImages);
-                                console.log(`[MyLotModal] 같은 폴더 이미지 ${folderImages.length}개 추가`);
+                            if (sameLotFolderImages.length > 0) {
+                                searchResults.push(...sameLotFolderImages);
+                                console.log(`[MyLotModal] 같은 LOT 폴더 이미지 ${sameLotFolderImages.length}개 추가`);
                             }
                         }
                     }
@@ -3884,6 +3910,15 @@ export class MyLotModal {
                     console.warn('[MyLotModal] 폴더 검색 실패:', e);
                 }
             }
+
+            // 중복 경로 제거
+            const seenPaths = new Set();
+            searchResults = searchResults.filter((pathItem) => {
+                const normalized = String(pathItem || '').replace(/\\/g, '/');
+                if (!normalized || seenPaths.has(normalized)) return false;
+                seenPaths.add(normalized);
+                return true;
+            });
 
             if (searchResults.length === 0) {
                 // 검색 결과가 없으면 이미지 없이 LOT만 저장

@@ -276,3 +276,120 @@ logs/color-legends.json
 | `quantile0`~`quantile100` | 10단계 분위수 색상 (quantile0=최솟값, quantile100=최댓값) |
 | `modified` | 사용자가 변경했는지 여부 |
 | `lastModified` | 마지막 수정 시각 (선택) |
+
+---
+
+## 5. 외부 이미지 파이프라인 (S3 → PNG + positions JSON)
+
+S3에 저장된 Fail-Bit Map `.Z` 파일을 파싱하여 PNG와 positions JSON을 생성하는 외부 파이프라인입니다.
+
+### 개요
+
+| 항목 | 값 |
+|------|----|
+| 소스 | S3 (`eds-ec-memory.fbm-data` 버킷) |
+| 파일 형식 | `.Z` (Unix compress) / ZIP / 7z / gzip 중첩 가능 |
+| 제품 타입 | 00P (`-00P_`), 00C (`-00C_`) 파일명 키워드로 구분 |
+| 출력 이미지 | palette-indexed PNG (mode=P, 32색) |
+| 출력 positions | `{POSITIONS_ROOT}/{p1}/{p2}/{YYYYMMDD}/{stem}.json` |
+| 사용 색상 JSON | `color-legends2.json` (앱은 `color-legends.json` 사용) |
+
+### 파이프라인 흐름
+
+```
+S3 버킷
+  └── YYMMDD 폴더 선택 (시간 윈도우 기준)
+        └── 1차 필터: 파일명에서 token + kind(00P/00C) + 시간 추출
+              └── download_and_decompress_parallel
+                    └── process_file_content (Cython: hex→chip grid)
+                          └── create_sample_image_func
+                                ├── 팔레트 인덱스 PNG 생성
+                                └── positions JSON 생성
+```
+
+### 팔레트 인덱스 (외부 파이프라인)
+
+L3 Tracker 앱의 팔레트 인덱스와 **동일한 규격** 사용:
+
+| 인덱스 | 의미 |
+|--------|------|
+| 0~7 | Grade0~Grade7 (칩 내부 grade, ASCII `'0'`~`'7'` 에서 변환) |
+| 8 | background |
+| 9 | text |
+| 10 | Normal border |
+| 11 | Invalid border (fill: 인덱스 31 = 흰색) |
+| 12~17 | 00P BIN (B285/286/287/288/290/291) |
+| 18~23 | 00C BIN (B300/385/386/388/389/390) |
+| 31 | Invalid fill (흰색, 고정) |
+
+### kind별 BIN 테두리 화이트리스트
+
+```python
+00P: {285, 286, 287, 288, 290, 291}
+00C: {300, 385, 386, 388, 389, 390}
+```
+각 kind의 이미지에는 해당 kind의 BIN만 색상 테두리로 표시됩니다.
+
+### 회전 코드 (rot_code)
+
+| 코드 | 동작 |
+|------|------|
+| 7 | 90° CCW |
+| 3 | 270° CCW (= 90° CW) |
+| 0 | 180° |
+| 기타 | 회전 없음 |
+
+### 주요 설정 (PipelineConfig)
+
+| 설정 | 기본값 | 설명 |
+|------|--------|------|
+| `bucket_name` | `eds-ec-memory.fbm-data` | S3 버킷 |
+| `download_threads` | 128 | S3 다운로드 병렬 수 |
+| `cpu_processes` | min(CPU수, 24) | 이미지 생성 병렬 수 |
+| `chunk_size` | 300 | S3 키 청크 크기 |
+| `border_thickness` | 1 | 기본 격자 테두리 두께 (px) |
+| `defect_border_thickness` | 2 | BIN/invalid 테두리 두께 (px) |
+| `default_tile_size` | (24, 24) | 타일 픽셀 크기 fallback |
+| `hours_back_start` | 0 | 시간 윈도우 시작 (현재 기준 n시간 전) |
+| `hours_back_end` | 1440 | 시간 윈도우 끝 (60일) |
+| `base_root` | `/appdata/appuser/images` | PNG 저장 루트 |
+| `positions_root` | `/appdata/appuser/positions` | JSON 저장 루트 |
+
+### 출력 파일 경로
+
+```text
+# PNG
+{base_root}/{p1}/{p2}/{YYYYMMDD}/{root}_{step}_{wafer}_{stime}.png
+
+# positions JSON
+{positions_root}/{p1}/{p2}/{YYYYMMDD}/{root}_{step}_{wafer}_{stime}.json
+```
+
+### positions JSON 구조 (파이프라인 출력)
+
+앱의 `docs/IMAGE_PIPELINE.md` 섹션 3과 동일한 규격. `kind` 필드 포함:
+
+```json
+{
+  "image_path": "...",
+  "kind": "00P",
+  "root": "...", "step": "...", "wafer": "...",
+  "stime": "20260306_101530",
+  "coord": {
+    "rot_code": 7,
+    "grid_edges": {"xs": [...], "ys": [...]},
+    "canvas": {"width": 512, "height": 512},
+    "scale": {"sx": 1.0, "sy": 0.9},
+    "center_rule": {"even_x_zero": "left", "even_y_zero": "down"}
+  },
+  "chips": [{"x_abs":10,"y_abs":20,"b":"285","x_cal":-5,"y_cal":3,"rect":{...}}]
+}
+```
+
+### centerize 규칙
+
+```python
+x_cal = i - (W//2 - 1)  if W % 2 == 0  else i - W//2
+y_cal = j - H//2
+```
+짝수 W일 때 x=0은 중앙 왼쪽, 홀수 W일 때 x=0은 정중앙.

@@ -390,13 +390,8 @@ export class ColorSchemeEditor {
             }
         }
         const legends = this.viewer?.colorLegends || {};
-        // LoginId가 있으면 해당 scheme 사용, 없으면 'change' 사용
-        let schemeName = this.viewer?.currentUser;
-        
-        // LoginId가 null이거나 undefined이면 'change' 사용
-        if (!schemeName || schemeName === 'null' || schemeName === 'undefined') {
-            schemeName = 'change';
-        }
+        // LoginId는 viewer에서 단일 정규화되어 전달됨
+        let schemeName = this.viewer?.getCurrentLoginId?.() || this.viewer?.currentUser;
         
         // 해당 scheme이 없으면 default 색상으로 시작 (schemeName은 유지 - 저장 시 올바른 key에 생성)
         this.currentSchemeName = schemeName;
@@ -658,7 +653,7 @@ export class ColorSchemeEditor {
 
     handleSchemeLoad(name) {
         const legends = this.viewer?.colorLegends || {};
-        const target = name || this.schemeSearchInput?.value?.trim() || 'change';
+        const target = name || this.schemeSearchInput?.value?.trim() || this.currentSchemeName || this.viewer?.currentUser;
         
         if (!legends[target]) {
             this.showError('해당하는 스킴을 찾을 수 없습니다.');
@@ -1076,7 +1071,7 @@ export class ColorSchemeEditor {
                     this.viewer.colorLegends = {};
                 }
                 this.viewer.colorLegends[schemeName] = schemeData;
-                // preview scheme도 메모리에 등록해야 getPersonalizedParams()가 fallback(change)로 내려가지 않음
+                // preview scheme도 메모리에 등록해야 getPersonalizedParams() fallback이 잘 유지됨
                 this.viewer.colorLegends[tempSchemeName] = JSON.parse(JSON.stringify(schemeData));
 
                 // 2. 백엔드에 임시 scheme 저장 (프리뷰용)
@@ -1374,7 +1369,7 @@ export class ColorSchemeEditor {
             // 서버에서 로드한 default scheme 사용
             const defaultScheme = getDefaultScheme(legends);
             
-            // 스킴 이름은 현재 스킴 이름 유지 (예: 'change')
+            // 스킴 이름은 현재 스킴 이름 유지 (예: 'anonymous')
             // 색상 값만 default scheme의 값으로 변경
             const schemeData = JSON.parse(JSON.stringify(defaultScheme));
             

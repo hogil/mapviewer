@@ -623,6 +623,19 @@ def _normalize_role(role: str) -> str:
         return ROLE_DEFAULT
     return value
 
+ANONYMOUS_LOGIN_ID = config.FALLBACK_LOGIN_ID
+_LOGIN_ID_SENTINELS = {"change", "default", "anon", "anonymous", ANONYMOUS_LOGIN_ID, "null", "undefined", "-"}
+
+def _normalize_login_id_candidate(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    candidate = str(value).strip()
+    if not candidate:
+        return None
+    if candidate.lower() in _LOGIN_ID_SENTINELS:
+        return None
+    return candidate
+
 def _current_login_id(req: Optional[Request]) -> Optional[str]:
     if req is None:
         return None
@@ -638,18 +651,28 @@ def _current_login_id(req: Optional[Request]) -> Optional[str]:
             session_user = {}
         if isinstance(session_user, dict):
             for key in ("LoginId", "loginId", "login_id", "username"):
-                if session_user.get(key):
-                    return str(session_user[key])
+                candidate = _normalize_login_id_candidate(session_user.get(key))
+                if candidate:
+                    return candidate
     
     # cookie fallback
-    login_id = req.cookies.get("session_user")
+    login_id = _normalize_login_id_candidate(req.cookies.get("session_user"))
     if login_id:
         return login_id
+
+    # URL query fallback (프론트가 LoginId를 전달하는 경우)
+    try:
+        for key in ("LoginId", "loginId", "login_id"):
+            candidate = _normalize_login_id_candidate(req.query_params.get(key))
+            if candidate:
+                return candidate
+    except Exception:
+        pass
     
     # 🔥 SAML 세션 확인 (URL 파라미터 또는 쿠키)
     try:
         # URL 파라미터에서 LoginId 확인 (SAML 로그인 직후)
-        login_id_param = req.query_params.get("LoginId")
+        login_id_param = _normalize_login_id_candidate(req.query_params.get("LoginId"))
         if login_id_param and login_id_param in SAML_USER_SESSIONS:
             return login_id_param
 
@@ -660,6 +683,11 @@ def _current_login_id(req: Optional[Request]) -> Optional[str]:
         pass
 
     return None
+
+
+def _effective_login_id(req: Optional[Request]) -> str:
+    """단일 LoginId 해석 지점: 없으면 fallback 값 사용."""
+    return _current_login_id(req) or ANONYMOUS_LOGIN_ID
 
 def _get_user_role(login_id: Optional[str]) -> str:
     if not login_id:
@@ -1928,7 +1956,7 @@ async def api_auth_user(request: Request, LoginId: Optional[str] = None):
                 "colorScheme": color_scheme  # 🎨 개인색 scheme
             }
 
-        # LoginId가 없으면 'change' scheme 반환
+        # LoginId가 없으면 anonymous scheme 반환
         return {
             "authenticated": False,
             "LoginId": None,
@@ -1938,12 +1966,12 @@ async def api_auth_user(request: Request, LoginId: Optional[str] = None):
             "GrdName": "",
             "metadata": {},
             "saml_attributes": {},
-            "colorScheme": "change"  # 🎨 LoginId가 없으면 change scheme
+            "colorScheme": get_user_color_scheme(None)  # 🎨 LoginId가 없으면 anonymous scheme
         }
         
     except Exception as e:
         logger.error(f"❌ [API /auth/user] 오류 발생: {e}")
-        # 오류 발생 시 빈 인증 정보 반환 (LoginId 없으면 change scheme)
+        # 오류 발생 시 빈 인증 정보 반환 (LoginId 없으면 anonymous scheme)
         return {
             "authenticated": False,
             "LoginId": None,
@@ -1953,7 +1981,7 @@ async def api_auth_user(request: Request, LoginId: Optional[str] = None):
             "GrdName": "",
             "metadata": {},
             "saml_attributes": {},
-            "colorScheme": "change"  # 🎨 LoginId가 없으면 change scheme
+            "colorScheme": get_user_color_scheme(None)  # 🎨 LoginId가 없으면 anonymous scheme
         }
 
 
@@ -2173,7 +2201,7 @@ async def delete_color_scheme(request: Request):
 async def get_composite_colors(request: Request):
     try:
         login_id = _current_login_id(request)
-        scheme = get_user_color_scheme(login_id) if login_id else "change"
+        scheme = get_user_color_scheme(login_id)
         settings = load_composite_color_settings(scheme)
         return settings.to_dict()
     except Exception as exc:
@@ -2189,7 +2217,7 @@ async def save_composite_colors_endpoint(request: Request):
         if not isinstance(colors, list) or not colors:
             raise HTTPException(status_code=400, detail="colors 배열이 필요합니다.")
         login_id = _current_login_id(request)
-        scheme = get_user_color_scheme(login_id) if login_id else "change"
+        scheme = get_user_color_scheme(login_id)
         settings = save_composite_color_settings(colors, scheme)
         return settings.to_dict()
     except HTTPException:
@@ -2219,7 +2247,7 @@ async def recolor_composite_sum_maps_endpoint(request: Request):
 
     try:
         login_id = _current_login_id(request)
-        scheme = get_user_color_scheme(login_id) if login_id else "change"
+        scheme = get_user_color_scheme(login_id)
         from .composite_map import recolor_saved_sum_maps
 
         entries = recolor_saved_sum_maps(target_path, override_colors=override_colors, scheme=scheme)
@@ -2298,8 +2326,7 @@ def _resolve_composite_output_dir(output_dir_value: Any) -> Path:
 
 # ===== MY LOT 관리 API =====
 def _resolve_my_lot_login(request: Request) -> str:
-    login_id = _current_login_id(request)
-    return login_id or "change"
+    return _effective_login_id(request)
 
 
 @app.get("/api/my-lot")
@@ -2695,7 +2722,7 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
                 return response
 
             # 🔥 로그 스킵 대상 엔드포인트 체크 (통계 업데이트 전에 먼저 체크)
-            skip_prefix = ["/favicon.ico", "/static/", "/js/", "/api/files/all", "/api/stats", "/api/stats/", "/stats", "/saml/login", "/saml/acs", "/saml/metadata", "/saml/sls"]
+            skip_prefix = ["/favicon.ico", "/static/", "/js/", "/api/files/all", "/api/stats", "/api/stats/", "/stats", "/status", "/api/composite-map/status", "/saml/login", "/saml/acs", "/saml/metadata", "/saml/sls"]
 
             # 루트(/) 페이지는 SAML 로그인 시에만 직접 기록하므로 미들웨어에서 스킵
             skip_endpoints = ["/", "/index.html"]
@@ -4394,9 +4421,9 @@ async def get_image_crop(
 ):
     """Chip 영역 이미지 crop (개인색 설정 지원)"""
     try:
-        # LoginId가 있으면 우선 사용, 없을 때만 'change'로 fallback
+        # LoginId가 있으면 우선 사용, 없으면 anonymous scheme fallback
         if personalized and not scheme:
-            scheme = _current_login_id(request) or 'change'
+            scheme = get_user_color_scheme(_current_login_id(request))
 
         # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
         if Path(path).is_absolute():
@@ -4499,9 +4526,9 @@ async def get_image(
     try:
         is_head = request.method == "HEAD"
         
-        # LoginId가 있으면 우선 사용, 없을 때만 'change'로 fallback
+        # LoginId가 있으면 우선 사용, 없으면 anonymous scheme fallback
         if personalized and not scheme:
-            scheme = _current_login_id(request) or 'change'
+            scheme = get_user_color_scheme(_current_login_id(request))
 
         # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
         if Path(path).is_absolute():
@@ -4799,9 +4826,9 @@ async def get_thumbnail(
     bottom_filter: Optional[str] = None,
 ):
     try:
-        # LoginId가 있으면 우선 사용, 없을 때만 'change'로 fallback
+        # LoginId가 있으면 우선 사용, 없으면 anonymous scheme fallback
         if personalized and not scheme:
-            scheme = _current_login_id(request) or 'change'
+            scheme = get_user_color_scheme(_current_login_id(request))
 
         # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
         if Path(path).is_absolute():
@@ -5970,6 +5997,11 @@ async def read_stats():
         logger.exception(f"통계 페이지 로드 실패: {e}")
         return {"error": "Failed to load stats page"}
 
+
+@app.get("/status")
+async def read_status():
+    return await read_stats()
+
 @app.get("/main.js")
 async def get_main_js():
     try:
@@ -6714,7 +6746,7 @@ async def save_chip_annotations(request: ChipAnnotationRequest, req: Request):
     """사용자가 마킹한 Chip 정보 저장"""
     try:
         # 세션에서 사용자 정보 가져오기
-        username = _current_username(req, default="anonymous")
+        username = _current_username(req, default=ANONYMOUS_LOGIN_ID)
 
         # 이미지 경로에서 상대 경로 추출
         rel_path = _get_relative_path_from_image(request.image_path)
@@ -6944,6 +6976,18 @@ async def create_composite_map_endpoint(
     if len(image_paths) > max_images:
         raise HTTPException(status_code=400, detail=f"최대 {max_images}개의 이미지만 지원합니다.")
 
+    # positions 파일 있는 이미지만 처리 (속도 최적화: 위치 데이터 없는 이미지 제외)
+    position_filtered = [
+        p for p in image_paths
+        if any(c.exists() for c in _candidate_positions_paths(Path(p)))
+    ]
+    if position_filtered:
+        if len(position_filtered) < len(image_paths):
+            logger.info(
+                f"[composite-map] positions 필터: {len(image_paths)} → {len(position_filtered)}개 이미지"
+            )
+        image_paths = position_filtered
+
     # Task ID 생성
     task_id = str(uuid.uuid4())
 
@@ -6962,7 +7006,7 @@ async def create_composite_map_endpoint(
     max_workers = payload.max_workers if payload.max_workers is not None else None
     batch_size = payload.batch_size if payload.batch_size is not None else None
     login_id = _current_login_id(req)
-    resolved_scheme = payload.scheme or (get_user_color_scheme(login_id) if login_id else "change")
+    resolved_scheme = payload.scheme or get_user_color_scheme(login_id)
 
     # 백그라운드 작업 등록 (클라이언트 연결 종료와 분리)
     task = asyncio.create_task(
@@ -7018,7 +7062,7 @@ async def create_subset_map_endpoint(payload: SubsetMapRequest, req: Request):
     {
         "output_dir": "composite_map/user/20250125_123456",
         "selected_grades": [3, 5],
-        "scheme": "change",
+        "scheme": "anonymous",
         "override_colors": ["#ff0000", ...]
     }
 
@@ -7226,7 +7270,7 @@ class CreateManualEntryReq(BaseModel):
 async def create_my_lot_manual_entry(req: CreateManualEntryReq, request: Request):
     """이미지 없이 수동으로 항목 생성"""
     try:
-        current_user = get_current_user(request)
+        current_user = _resolve_my_lot_login(request)
         result = my_lot_create_manual_entry(
             current_user,
             req.mode,
@@ -7475,12 +7519,16 @@ _UI_PREFS_FILE = Path(__file__).parent.parent / "logs" / "ui-prefs.json"
 _ui_prefs_lock = __import__('threading').Lock()
 
 def _load_all_prefs() -> dict:
+    data: dict = {}
     try:
         if _UI_PREFS_FILE.exists():
-            return json.loads(_UI_PREFS_FILE.read_text(encoding="utf-8"))
+            loaded = json.loads(_UI_PREFS_FILE.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
     except Exception:
-        pass
-    return {}
+        data = {}
+
+    return data
 
 def _save_all_prefs(data: dict) -> None:
     _UI_PREFS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -7489,14 +7537,14 @@ def _save_all_prefs(data: dict) -> None:
 @app.get("/api/user-prefs")
 async def get_user_prefs(request: Request):
     """현재 로그인 사용자의 개인 설정 조회"""
-    login_id = _current_login_id(request) or "change"
+    login_id = _effective_login_id(request)
     all_prefs = _load_all_prefs()
     return {"success": True, "login_id": login_id, "prefs": all_prefs.get(login_id, {})}
 
 @app.put("/api/user-prefs")
 async def set_user_prefs(request: Request):
     """현재 로그인 사용자의 개인 설정 저장 (부분 업데이트)"""
-    login_id = _current_login_id(request) or "change"
+    login_id = _effective_login_id(request)
     try:
         body = await request.json()
     except Exception:

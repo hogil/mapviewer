@@ -11,12 +11,13 @@ from typing import Dict, List, Optional
 
 # config.py에서 IMAGES_ROOT 및 POSITIONS_ROOT 가져오기
 try:
-    from .config import IMAGES_ROOT, POSITIONS_ROOT, SUPPORTED_EXTS
+    from .config import IMAGES_ROOT, POSITIONS_ROOT, SUPPORTED_EXTS, FALLBACK_LOGIN_ID
 except ImportError:
     # fallback
     IMAGES_ROOT = Path(__file__).parent.parent / "data"
     POSITIONS_ROOT = Path(__file__).parent.parent / "positions"
     SUPPORTED_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp', '.gif'}
+    FALLBACK_LOGIN_ID = "guest"
 
 MY_LOT_ROOT = IMAGES_ROOT / "my-lot"
 MY_LOT_ROOT.mkdir(parents=True, exist_ok=True)
@@ -25,13 +26,15 @@ PLACEHOLDER_DIR.mkdir(parents=True, exist_ok=True)
 
 _LOCK = RLock()
 _SAFE_SEGMENT = re.compile(r"[^0-9A-Za-z_\-\.]+")
+ANONYMOUS_LOGIN_ID = FALLBACK_LOGIN_ID
+(MY_LOT_ROOT / ANONYMOUS_LOGIN_ID).mkdir(parents=True, exist_ok=True)
 
 
 def _safe_login(login_id: Optional[str]) -> str:
-    """LoginId를 안전한 파일명으로 변환. 없으면 'change' 반환."""
-    raw = (login_id or "change").strip() or "change"
+    """LoginId를 안전한 파일명으로 변환. 없으면 기본 fallback 반환."""
+    raw = (login_id or ANONYMOUS_LOGIN_ID).strip() or ANONYMOUS_LOGIN_ID
     safe = _SAFE_SEGMENT.sub("_", raw)
-    return safe[:80] or "change"
+    return safe[:80] or ANONYMOUS_LOGIN_ID
 
 
 def create_placeholder_image(mode: str, lot_value: str, wafer_value: str = "") -> Optional[Path]:

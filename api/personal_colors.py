@@ -12,6 +12,7 @@ from threading import RLock
 from typing import Any, Dict, List, Optional, Tuple
 
 from PIL import Image
+from .config import FALLBACK_LOGIN_ID
 
 # PIL DecompressionBombWarning 제한 해제 (큰 이미지 로드 허용)
 Image.MAX_IMAGE_PIXELS = None  # 제한 없음
@@ -30,6 +31,36 @@ BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B29
                'B300', 'B385', 'B386', 'B388', 'B389', 'B390']
 BIN_KEYS = ['B285', 'B286', 'B287', 'B288', 'B290', 'B291',
             'B300', 'B385', 'B386', 'B388', 'B389', 'B390']
+ANONYMOUS_SCHEME = FALLBACK_LOGIN_ID
+LEGACY_ANONYMOUS_SCHEMES = ("anon", "anonymous", "change")
+
+DEFAULT_TOP_COLORS = {
+    "Grade0": "#FFFFFF",
+    "Grade1": "#9B9B9B",
+    "Grade2": "#009619",
+    "Grade3": "#0000FF",
+    "Grade4": "#D91DFF",
+    "Grade5": "#FFFF00",
+    "Grade6": "#FF0000",
+    "Grade7": "#000000",
+}
+
+DEFAULT_BOTTOM_COLORS = {
+    "Normal": "#BEBEBE",
+    "Invalid": "#FF9900",
+    "B285": "#0099FF",
+    "B286": "#FF714F",
+    "B287": "#66FFCC",
+    "B288": "#DA26CD",
+    "B290": "#FFD700",
+    "B291": "#32CD32",
+    "B300": "#AAAAAA",
+    "B385": "#00C8FF",
+    "B386": "#FF00C8",
+    "B388": "#00FF66",
+    "B389": "#FF6666",
+    "B390": "#6666FF",
+}
 
 # 팔레트 인덱스 정의 (이미지 생성 코드와 반드시 일치해야 함)
 # 0-7  : Grade0-Grade7 (chip 내부 값, 고정)
@@ -45,6 +76,69 @@ IDX_BORDER_INV = 11   # Invalid
 IDX_BOTTOM_START = 12 # BIN colors start here
 
 
+def _default_personal_scheme() -> Dict[str, Any]:
+    return {
+        "top": copy.deepcopy(DEFAULT_TOP_COLORS),
+        "bottom": copy.deepcopy(DEFAULT_BOTTOM_COLORS),
+        "background": "#FEFEFE",
+        "text": "#000001",
+    }
+
+
+def _default_composite_scheme() -> Dict[str, str]:
+    scheme: Dict[str, str] = {}
+    for step in range(0, 101, 10):
+        ratio = step / 100
+        gb = int(round(255 * (1 - ratio)))
+        scheme[f"quantile{step}"] = f"#FF{gb:02X}{gb:02X}"
+    return scheme
+
+
+def _ensure_anonymous_entries(legends: Dict[str, Any]) -> bool:
+    """Ensure base anonymous keys exist for personal/composite colors."""
+    if not isinstance(legends, dict):
+        return False
+
+    mutated = False
+
+    if not isinstance(legends.get("default"), dict):
+        legends["default"] = _default_personal_scheme()
+        mutated = True
+
+    if not isinstance(legends.get(ANONYMOUS_SCHEME), dict):
+        source = None
+        for key in (*LEGACY_ANONYMOUS_SCHEMES, "default"):
+            candidate = legends.get(key)
+            if isinstance(candidate, dict):
+                source = candidate
+                break
+        if not isinstance(source, dict):
+            source = _default_personal_scheme()
+        legends[ANONYMOUS_SCHEME] = copy.deepcopy(source)
+        mutated = True
+
+    composite = legends.get("composite")
+    if not isinstance(composite, dict):
+        composite = {}
+        legends["composite"] = composite
+        mutated = True
+
+    # Legacy format: legends["composite"] 가 바로 quantile 딕셔너리인 경우
+    if composite and any(str(k).startswith("quantile") for k in composite.keys()):
+        composite = {ANONYMOUS_SCHEME: copy.deepcopy(composite)}
+        legends["composite"] = composite
+        mutated = True
+
+    if not isinstance(composite.get(ANONYMOUS_SCHEME), dict):
+        legacy = composite.get("anonymous")
+        if not isinstance(legacy, dict):
+            legacy = composite.get("change")
+        composite[ANONYMOUS_SCHEME] = copy.deepcopy(legacy) if isinstance(legacy, dict) else _default_composite_scheme()
+        mutated = True
+
+    return mutated
+
+
 def load_color_legends() -> Dict[str, Any]:
     """Load color legend data with simple caching."""
     global _color_legends_cache, _color_legends_mtime
@@ -52,16 +146,31 @@ def load_color_legends() -> Dict[str, Any]:
     with COLOR_LEGENDS_LOCK:
         try:
             if not COLOR_LEGENDS_PATH.exists():
-                return {}
+                initial = {
+                    "default": _default_personal_scheme(),
+                    ANONYMOUS_SCHEME: _default_personal_scheme(),
+                    "composite": {ANONYMOUS_SCHEME: _default_composite_scheme()},
+                }
+                save_color_legends(initial)
+                return initial
 
             current_mtime = COLOR_LEGENDS_PATH.stat().st_mtime
             if _color_legends_cache is not None and current_mtime == _color_legends_mtime:
                 return _color_legends_cache
 
             with COLOR_LEGENDS_PATH.open('r', encoding='utf-8') as fh:
-                _color_legends_cache = json.load(fh)
-                _color_legends_mtime = current_mtime
-                return _color_legends_cache
+                loaded = json.load(fh)
+
+            if not isinstance(loaded, dict):
+                loaded = {}
+
+            if _ensure_anonymous_entries(loaded):
+                save_color_legends(loaded)
+                current_mtime = COLOR_LEGENDS_PATH.stat().st_mtime
+
+            _color_legends_cache = loaded
+            _color_legends_mtime = current_mtime
+            return _color_legends_cache
         except Exception as exc:
             logger.warning("color-legends.json 로드 실패: %s", exc)
             return _color_legends_cache or {}
@@ -135,15 +244,15 @@ def normalize_hex_color(value: str) -> str:
 
 
 def get_user_color_scheme(login_id: Optional[str], username: Optional[str] = None, dept_name: Optional[str] = None) -> str:
-    """Resolve scheme key for a user. Anonymous users default to 'change'.
+    """Resolve scheme key for a user. Anonymous users default to 'anonymous'.
 
     색상 저장 시점에 처음으로 JSON 항목이 생성됩니다 (로그인 시 자동 생성 안 함).
 
     Returns:
-        scheme key (LoginId 또는 'change')
+        scheme key (LoginId 또는 'anonymous')
     """
     if not login_id:
-        return 'change'
+        return ANONYMOUS_SCHEME
     return login_id
 
 
@@ -273,7 +382,7 @@ def plte_inplace_patch_memory(png_data: bytearray, scheme: str) -> bytearray:
     
     Args:
         png_data: PNG 파일의 바이트 데이터 (bytearray)
-        scheme: 색상 스킴 이름 (예: 'change', 'default')
+        scheme: 색상 스킴 이름 (예: 'anonymous', 'default')
     
     Returns:
         수정된 PNG 바이트 데이터 (bytearray)

@@ -32,6 +32,8 @@ const DEBOUNCE_DELAY = 0;
 const GRID_DRAG_CLICK_THRESHOLD = 30; // 스크롤 드래그 시 선택 방지
 const CLASSIFICATION_DIR_NAMES = ['classification', 'classification_chips', 'chips'];
 const GRID_THUMB_PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+const FALLBACK_LOGIN_ID = 'guest';
+const INVALID_LOGIN_ID_VALUES = new Set(['', 'change', 'default', 'anon', 'anonymous', FALLBACK_LOGIN_ID, 'null', 'undefined', '-']);
 
 // ✅ 미니맵 뷰포트 크기 제한 상수
 const MINIMAP_VIEWPORT_MIN_SIZE = 0.05;  // 최소 5%
@@ -975,8 +977,8 @@ class WaferMapViewer {
 
         // Color Legends 데이터
         this.colorLegends = null;
-        this.currentUser = null; // ✅ 초기값: null (아직 결정 안 됨, loadUserInfo()에서 설정됨)
-        // 색상 편집 실시간 미리보기 임시 scheme (예: __preview_change)
+        this.currentUser = FALLBACK_LOGIN_ID; // ✅ LoginId 단일 fallback
+        // 색상 편집 실시간 미리보기 임시 scheme (예: __preview_anonymous)
         this._previewSchemeOverride = null;
 
         // 클래스 선택 상태 초기화 (Label Explorer와 Class Manager가 공유)
@@ -1017,6 +1019,17 @@ class WaferMapViewer {
 
     debugLog(...args) {
         if (this.debugMode) console.log(...args);
+    }
+
+    normalizeLoginId(value) {
+        const raw = String(value ?? '').trim();
+        const lower = raw.toLowerCase();
+        return (!raw || INVALID_LOGIN_ID_VALUES.has(lower)) ? FALLBACK_LOGIN_ID : raw;
+    }
+
+    getCurrentLoginId() {
+        this.currentUser = this.normalizeLoginId(this.currentUser);
+        return this.currentUser;
     }
 
     bindEvents() {
@@ -5226,9 +5239,8 @@ class WaferMapViewer {
                 console.log('🎨 [CHECKBOX] 개인색 설정:', this.personalizedColorEnabled ? '활성화' : '비활성화');
                 console.log('🔍 [DEBUG] gridMode:', this.gridMode, '| selectedImagePath:', this.selectedImagePath);
 
-                // 🔥 currentUser 설정 확인 (개인색 활성화 시에만 사용)
-                if (this.personalizedColorEnabled) {
-                    this.currentUser = this.currentUser || 'change';
+                // 🔥 currentUser가 확인된 경우에만 로그 출력
+                if (this.personalizedColorEnabled && this.currentUser) {
                     console.log('🎨 [CHECKBOX] currentUser:', this.currentUser);
                 }
 
@@ -5618,17 +5630,21 @@ class WaferMapViewer {
      * @returns {string} URL 파라미터 (예: "&personalized=true&scheme=john")
      */
     getActivePersonalizedScheme() {
-        let scheme = this._previewSchemeOverride || this.currentUser || "change";
+        let scheme = this._previewSchemeOverride || this.currentUser;
 
         if (this.colorLegends && !this.colorLegends[scheme]) {
-            // fallback 순서: change -> default -> 첫 번째 키
-            if (this.colorLegends["change"]) {
-                scheme = "change";
+            // fallback 순서: fallback_id -> anon(legacy) -> anonymous(legacy) -> default -> 첫 번째 키
+            if (this.colorLegends[FALLBACK_LOGIN_ID]) {
+                scheme = FALLBACK_LOGIN_ID;
+            } else if (this.colorLegends["anon"]) {
+                scheme = "anon";
+            } else if (this.colorLegends["anonymous"]) {
+                scheme = "anonymous";
             } else if (this.colorLegends["default"]) {
                 scheme = "default";
             } else {
                 const keys = Object.keys(this.colorLegends);
-                scheme = keys.length > 0 ? keys[0] : "change";
+                scheme = keys.length > 0 ? keys[0] : FALLBACK_LOGIN_ID;
             }
         }
 
@@ -5926,8 +5942,7 @@ class WaferMapViewer {
             
             // SAML/DEV로 표시됐으면 여기서 종료
             if (displayed) {
-                // currentUser가 없으면 "change"로 설정
-                this.currentUser = this.currentUser || "change";
+                this.currentUser = this.normalizeLoginId(this.currentUser);
                 this.renderColorLegends(); // init에서도 호출됨
                 // 🔥 로그인 후 사용자 설정 로드 (gridCols 등)
                 await this._loadUserPrefs();
@@ -5964,8 +5979,7 @@ class WaferMapViewer {
             console.error("DEBUG: loadUserInfo error", error);
         }
         
-        // currentUser가 없으면 "change"로 설정
-        this.currentUser = this.currentUser || "change";
+        this.currentUser = this.normalizeLoginId(this.currentUser);
         this.renderColorLegends(); // init에서도 호출됨
     }
 
@@ -8864,16 +8878,18 @@ class WaferMapViewer {
         // grid legend와 동일한 우선순위로 scheme 결정
         let schemeToUse = 'default';
         if (this.personalizedColorEnabled) {
-            schemeToUse = this.currentUser || 'change';
+            schemeToUse = this.currentUser;
         }
 
         if (!this.colorLegends[schemeToUse]) {
-            if (!this.personalizedColorEnabled && this.colorLegends.change) {
-                schemeToUse = 'change';
+            if (this.colorLegends[FALLBACK_LOGIN_ID]) {
+                schemeToUse = FALLBACK_LOGIN_ID;
+            } else if (this.colorLegends.anon) {
+                schemeToUse = 'anon';
+            } else if (this.colorLegends.anonymous) {
+                schemeToUse = 'anonymous';
             } else if (this.colorLegends.default) {
                 schemeToUse = 'default';
-            } else if (this.colorLegends.change) {
-                schemeToUse = 'change';
             } else {
                 const firstKey = Object.keys(this.colorLegends)[0];
                 schemeToUse = firstKey || 'default';
@@ -21386,8 +21402,8 @@ class WaferMapViewer {
      * 🔥 사용자 UI 설정을 서버에 저장 (gridCols, filterTestMode, filterPLCPLH)
      */
     _saveUserPrefs() {
-        if (!this.currentUser) return;
-        const loginParam = `?LoginId=${encodeURIComponent(this.currentUser)}`;
+        const loginId = this.getCurrentLoginId();
+        const loginParam = `?LoginId=${encodeURIComponent(loginId)}`;
         fetch(`/api/user-prefs${loginParam}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -21404,8 +21420,8 @@ class WaferMapViewer {
      */
     async _loadUserPrefs() {
         try {
-            const loginParam = this.currentUser
-                ? `?LoginId=${encodeURIComponent(this.currentUser)}` : '';
+            const loginId = this.getCurrentLoginId();
+            const loginParam = `?LoginId=${encodeURIComponent(loginId)}`;
             const res = await fetch(`/api/user-prefs${loginParam}`);
             if (!res.ok) return;
             const data = await res.json();
@@ -21609,7 +21625,7 @@ class WaferMapViewer {
             return;
         }
         
-        // ✅ Scheme 결정 로직 개선 (우선순위: currentUser → change → default → 첫 번째 스킴)
+        // ✅ Scheme 결정 로직 개선 (우선순위: currentUser → fallback_id → anon(legacy) → anonymous(legacy) → default → 첫 번째 스킴)
         let schemeToUse = 'default';
         
         if (this.personalizedColorEnabled) {
@@ -21617,15 +21633,23 @@ class WaferMapViewer {
             if (this.currentUser && this.colorLegends[this.currentUser]) {
                 schemeToUse = this.currentUser;
             } 
-            // ✅ 2순위: change
-            else if (this.colorLegends.change) {
-                schemeToUse = 'change';
+            // ✅ 2순위: fallback_id
+            else if (this.colorLegends[FALLBACK_LOGIN_ID]) {
+                schemeToUse = FALLBACK_LOGIN_ID;
             }
-            // ✅ 3순위: default
+            // ✅ 3순위: anon (legacy)
+            else if (this.colorLegends.anon) {
+                schemeToUse = 'anon';
+            }
+            // ✅ 4순위: anonymous (legacy)
+            else if (this.colorLegends.anonymous) {
+                schemeToUse = 'anonymous';
+            }
+            // ✅ 5순위: default
             else if (this.colorLegends.default) {
                 schemeToUse = 'default';
             }
-            // ✅ 4순위: 첫 번째 스킴
+            // ✅ 6순위: 첫 번째 스킴
             else {
                 const firstKey = Object.keys(this.colorLegends)[0];
                 schemeToUse = firstKey || 'default';
@@ -21726,8 +21750,8 @@ class WaferMapViewer {
         let schemeToUse = 'default'; // 기본값
         
         if (this.personalizedColorEnabled) {
-            // 개인색 설정이 활성화되어 있으면: LoginId가 있으면 LoginId 사용, 없으면 'change' 사용
-            schemeToUse = this.currentUser || 'change';
+            // 개인색 설정이 활성화되어 있으면: LoginId 사용 (없으면 fallback_id로 정규화됨)
+            schemeToUse = this.currentUser;
         } else {
             // 개인색 설정이 비활성화되어 있으면 항상 'default' 사용
             schemeToUse = 'default';
@@ -21735,12 +21759,14 @@ class WaferMapViewer {
         
         // Scheme이 존재하는지 확인하고 없으면 fallback
         if (!this.colorLegends[schemeToUse]) {
-            if (!this.personalizedColorEnabled && this.colorLegends.change) {
-                schemeToUse = 'change';
+            if (this.colorLegends[FALLBACK_LOGIN_ID]) {
+                schemeToUse = FALLBACK_LOGIN_ID;
+            } else if (this.colorLegends.anon) {
+                schemeToUse = 'anon';
+            } else if (this.colorLegends.anonymous) {
+                schemeToUse = 'anonymous';
             } else if (this.colorLegends.default) {
                 schemeToUse = 'default';
-            } else if (this.colorLegends.change) {
-                schemeToUse = 'change';
             } else {
                 const firstKey = Object.keys(this.colorLegends)[0];
                 schemeToUse = firstKey || 'default';
@@ -22213,7 +22239,7 @@ class WaferMapViewer {
 
         // Chip 이미지 로드 (🎨 개인색 설정 적용)
         const personalized = this.personalizedColorEnabled || false;
-        const scheme = personalized ? (this.currentUser || 'change') : null;
+        const scheme = personalized ? this.currentUser : null;
         const imageUrl = await this.chipAnnotator.getChipImageRegion(chipData.index, personalized, scheme);
         if (imageUrl) {
             const img = new Image();

@@ -97,8 +97,8 @@ export class CompositeColorModal {
     }
 
     _withLogin(url) {
-        const id = this.viewer?.currentUser;
-        if (!id || id === 'change') return url;
+        const id = String(this.viewer?.getCurrentLoginId?.() || this.viewer?.currentUser || '').trim();
+        if (!id) return url;
         const sep = url.includes('?') ? '&' : '?';
         return `${url}${sep}LoginId=${encodeURIComponent(id)}`;
     }
@@ -124,7 +124,7 @@ export class CompositeColorModal {
         try {
             await this.loadConfig();
             this.sessionContext = previewContext || (this.viewer?.isCompositeMode ? this.viewer?.compositeSession : null);
-            const schemeName = this.viewer?.currentUser || 'change';
+            const schemeName = this.viewer?.getCurrentLoginId?.() || this.viewer?.currentUser;
             this.schemeName = schemeName;
             if (this.schemeLabel) {
                 this.schemeLabel.textContent = schemeName ? `- ${schemeName}` : '';
@@ -1199,4 +1199,3 @@ export class CompositeColorModal {
         }
     }
 }
-
