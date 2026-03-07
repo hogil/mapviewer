@@ -2647,6 +2647,33 @@ export class MyLotModal {
             return;
         }
         const candidateName = candidate.path?.split(/[\\/]/).pop() || null;
+
+        if (this.activeMode === 'wafer') {
+            try {
+                const res = await fetch(this._withLogin('/api/my-lot'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mode: this.activeMode,
+                        group: this.activeGroup,
+                        path: candidate.path,
+                    }),
+                });
+                if (!res.ok) {
+                    const errorText = await this.parseErrorResponse(res);
+                    throw new Error(errorText);
+                }
+
+                await this.refreshData();
+                this.renderEntries();
+                this.viewer?.showToast?.(`${candidateName || '현재 이미지'} 저장 완료`, 2000);
+            } catch (error) {
+                console.error('[MyLotModal] wafer save failed:', error);
+                const message = error?.message || 'MY LOT 저장에 실패했습니다.';
+                this.viewer?.showToast?.(message, 2200);
+            }
+            return;
+        }
         
         const lotValue = candidate.lotValue; // getMyLotCandidate에서 lotValue 반환한다고 가정 (안되면 추출)
         let targetLot = lotValue;
@@ -3919,6 +3946,34 @@ export class MyLotModal {
         }
         if (!this.activeGroup) {
             this.viewer?.showToast?.('먼저 그룹을 선택해주세요.', 2000);
+            return;
+        }
+        const candidateName = candidate.path?.split(/[\\/]/).pop() || null;
+
+        if (this.activeMode === 'wafer') {
+            try {
+                const res = await fetch(this._withLogin('/api/my-lot'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mode: this.activeMode,
+                        group: this.activeGroup,
+                        path: candidate.path,
+                    }),
+                });
+                if (!res.ok) {
+                    const errorText = await this.parseErrorResponse(res);
+                    throw new Error(errorText);
+                }
+
+                await this.refreshData();
+                this.renderEntries();
+                this.viewer?.showToast?.(`${candidateName || '현재 이미지'} 저장 완료`, 2000);
+            } catch (error) {
+                console.error('[MyLotModal] wafer save failed:', error);
+                const message = error?.message || 'MY LOT 저장에 실패했습니다.';
+                this.viewer?.showToast?.(message, 2200);
+            }
             return;
         }
         

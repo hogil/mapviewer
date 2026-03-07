@@ -858,7 +858,7 @@ def _normalize_role(role: str) -> str:
     return value
 
 ANONYMOUS_LOGIN_ID = config.FALLBACK_LOGIN_ID
-_LOGIN_ID_SENTINELS = {"change", "default", "anon", "anonymous", ANONYMOUS_LOGIN_ID, "null", "undefined", "-"}
+_LOGIN_ID_SENTINELS = {ANONYMOUS_LOGIN_ID.lower()}
 
 def _normalize_login_id_candidate(value: Any) -> Optional[str]:
     if value is None:
@@ -2368,6 +2368,58 @@ def _invalidate_scheme_thumbnail_caches(scheme_names: Iterable[str]) -> int:
     return deleted_count
 
 
+def _invalidate_composite_thumbnail_caches(
+    *,
+    output_dir: Optional[Path] = None,
+    login_id: Optional[str] = None,
+) -> int:
+    """Composite 결과물 관련 썸네일 캐시를 사용자 단위로 제거한다."""
+    targets: Set[Path] = set()
+
+    if login_id:
+        safe_login = re.sub(r"[^0-9A-Za-z_\-]+", "_", str(login_id).strip()).strip("_") or ANONYMOUS_LOGIN_ID
+        targets.add(THUMBNAIL_DIR / "composite_map" / safe_login)
+
+    if output_dir is not None:
+        try:
+            rel_output = output_dir.resolve().relative_to(IMAGES_ROOT.resolve())
+            parts = rel_output.parts
+            if parts and parts[0] == "composite_map":
+                targets.add(THUMBNAIL_DIR / rel_output)
+                if len(parts) >= 2:
+                    targets.add(THUMBNAIL_DIR / "composite_map" / parts[1])
+        except Exception:
+            pass
+
+    deleted_count = 0
+    for target in targets:
+        try:
+            if target.exists() and target.is_dir():
+                shutil.rmtree(target)
+                deleted_count += 1
+            elif target.exists():
+                target.unlink()
+                deleted_count += 1
+        except Exception as exc:
+            logger.warning(f"Composite thumbnail cache 삭제 실패: {target}, 오류: {exc}")
+
+    try:
+        THUMB_STAT_CACHE.clear()
+    except Exception:
+        pass
+
+    try:
+        thumbnail_service.clear_cache()
+    except Exception:
+        try:
+            from .cache_manager import cache_manager
+            cache_manager.clear_thumbnail_cache()
+        except Exception:
+            pass
+
+    return deleted_count
+
+
 @app.post("/api/color-scheme")
 async def save_color_scheme(request: Request):
     """색상 스킴 저장"""
@@ -2594,6 +2646,7 @@ async def recolor_composite_sum_maps_endpoint(request: Request):
         scheme = get_user_color_scheme(login_id) if login_id else "change"
         from .composite_map import recolor_saved_sum_maps
 
+        _invalidate_composite_thumbnail_caches(output_dir=target_path, login_id=login_id or ANONYMOUS_LOGIN_ID)
         entries = recolor_saved_sum_maps(target_path, override_colors=override_colors, scheme=scheme)
         rel_path = target_path.relative_to(IMAGES_ROOT).as_posix()
         response_data = {"output_dir": rel_path, "sum_maps": entries}
@@ -7581,7 +7634,7 @@ async def run_composite_map_task(
                     "focus_index": result["focus_index"],
                     "highlight_threshold": result["highlight_threshold"],
                     "processing_time": result["processing_time"],
-                    "generated_at": result["output_dir"].split("/")[-1]
+                    "generated_at": result.get("generated_at") or result["output_dir"].split("/")[-1]
                 }
             else:
                 # 히트맵 모드
@@ -7607,7 +7660,7 @@ async def run_composite_map_task(
                     "width": result["image_size"]["width"],
                     "height": result["image_size"]["height"],
                     "processing_time": result["processing_time"],
-                    "generated_at": result["output_dir"].split("/")[-1]
+                    "generated_at": result.get("generated_at") or result["output_dir"].split("/")[-1]
                 }
                 if "sum_map_path" in result:
                     response["sum_map_path"] = result["sum_map_path"]
@@ -7894,6 +7947,7 @@ async def create_composite_map_endpoint(
     batch_size = payload.batch_size if payload.batch_size is not None else None
     login_id = _current_login_id(req)
     resolved_scheme = payload.scheme or (get_user_color_scheme(login_id) if login_id else "change")
+    _invalidate_composite_thumbnail_caches(login_id=login_id or ANONYMOUS_LOGIN_ID)
 
     # 백그라운드 작업 추가
     background_tasks.add_task(
@@ -7989,6 +8043,9 @@ async def create_subset_map_endpoint(payload: SubsetMapRequest, req: Request):
         output_dir = IMAGES_ROOT / payload.output_dir
         if not output_dir.exists():
             raise HTTPException(status_code=404, detail=f"디렉토리가 존재하지 않습니다: {payload.output_dir}")
+
+        login_id = _current_login_id(req)
+        _invalidate_composite_thumbnail_caches(output_dir=output_dir, login_id=login_id or ANONYMOUS_LOGIN_ID)
 
         # Subset Map 생성
         subset_maps = create_subset_map(

@@ -3,6 +3,7 @@ Composite Map 생성 모듈
 여러 웨이퍼 맵의 인덱스별 빈도를 히트맵으로 시각화
 """
 import os
+import shutil
 import time
 import warnings
 import threading
@@ -100,6 +101,7 @@ COMPOSITE_ROOT = IMAGES_ROOT / "composite_map"
 ANONYMOUS_LOGIN_ID = FALLBACK_LOGIN_ID
 COMPOSITE_ROOT.mkdir(parents=True, exist_ok=True)
 (COMPOSITE_ROOT / ANONYMOUS_LOGIN_ID).mkdir(parents=True, exist_ok=True)
+COMPOSITE_SESSION_DIRNAME = "current"
 SQUARE_MAP_CACHE_FILENAME = "square_maps_data.npz"
 # composite_cache_v1은 선택적 사용 (환경변수로 제어)
 # 같은 이미지를 여러 composite map에 재사용할 때만 유용
@@ -224,9 +226,54 @@ def _sanitize_login_id(login_id: Optional[str]) -> str:
 def _prepare_output_dir(login_id: Optional[str]) -> Tuple[Path, str]:
     safe_login = _sanitize_login_id(login_id)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = COMPOSITE_ROOT / safe_login / timestamp
+    user_dir = COMPOSITE_ROOT / safe_login
+    positions_user_dir = POSITIONS_ROOT / "composite_map" / safe_login
+
+    # 사용자별 composite 결과는 항상 1세트만 유지한다.
+    try:
+        if user_dir.exists():
+            shutil.rmtree(user_dir)
+    except Exception:
+        pass
+    try:
+        if positions_user_dir.exists():
+            shutil.rmtree(positions_user_dir)
+    except Exception:
+        pass
+
+    output_dir = user_dir / COMPOSITE_SESSION_DIRNAME
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir, timestamp
+
+
+def _delete_existing_subset_outputs(output_dir: Path) -> None:
+    """현재 output_dir의 이전 subset PNG/positions 흔적을 모두 제거한다."""
+    try:
+        for candidate in output_dir.iterdir():
+            if not candidate.is_file():
+                continue
+            if _SUBSET_NAME_RE.match(candidate.name):
+                try:
+                    candidate.unlink()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    try:
+        output_dir_rel = output_dir.relative_to(IMAGES_ROOT)
+        positions_output_dir = POSITIONS_ROOT / output_dir_rel
+        if positions_output_dir.exists():
+            for candidate in positions_output_dir.iterdir():
+                if not candidate.is_file():
+                    continue
+                if _SUBSET_NAME_RE.match(candidate.stem + ".png"):
+                    try:
+                        candidate.unlink()
+                    except Exception:
+                        pass
+    except Exception:
+        pass
 
 
 def _extract_subset_grades(filename: str) -> Optional[List[int]]:
@@ -420,6 +467,30 @@ def _hex_to_rgb_tuple(value: str) -> Tuple[int, int, int]:
     g = int(value[2:4], 16)
     b = int(value[4:6], 16)
     return (r, g, b)
+
+
+def _resolve_scheme_background_rgb(scheme: Optional[str]) -> Tuple[int, int, int]:
+    """현재 개인 색 설정의 background를 Composite 배경색으로 사용한다."""
+    try:
+        legends = load_color_legends()
+    except Exception:
+        legends = {}
+
+    scheme_name = (scheme or ANONYMOUS_LOGIN_ID).strip() or ANONYMOUS_LOGIN_ID
+    scheme_data = legends.get(scheme_name)
+    if not isinstance(scheme_data, dict):
+        scheme_data = legends.get(ANONYMOUS_LOGIN_ID)
+    if not isinstance(scheme_data, dict):
+        scheme_data = legends.get("default")
+    if not isinstance(scheme_data, dict):
+        return (255, 255, 255)
+
+    raw_background = scheme_data.get("background")
+    try:
+        normalized = normalize_hex_color(str(raw_background or "#FFFFFF"))
+    except Exception:
+        normalized = "#FFFFFF"
+    return _hex_to_rgb_tuple(normalized)
 
 
 def _percentile_ranks(
@@ -982,6 +1053,8 @@ def recolor_saved_sum_maps(
     palette_list = palette_array.reshape(-1).tolist()
     resolved_scheme = (scheme or cached_scheme or ANONYMOUS_LOGIN_ID).strip() or ANONYMOUS_LOGIN_ID
     settings = load_composite_color_settings(resolved_scheme)
+    background_rgb = _resolve_scheme_background_rgb(resolved_scheme)
+    palette_list[31 * 3:31 * 3 + 3] = list(background_rgb)
     cached_colors: Optional[List[str]] = None
     if colors_arr is not None:
         try:
@@ -1481,7 +1554,8 @@ def create_composite_heatmaps(
             limit = min(len(palette_bytes) // 3, 256)
             for i in range(limit):
                 palette_list[i * 3:(i + 1) * 3] = palette_bytes[i * 3:(i + 1) * 3]
-    palette_list[31 * 3:31 * 3 + 3] = [255, 255, 255]
+    background_rgb = _resolve_scheme_background_rgb(scheme)
+    palette_list[31 * 3:31 * 3 + 3] = list(background_rgb)
 
     if indices is None:
         indices = list(range(8))
@@ -1649,6 +1723,7 @@ def create_composite_heatmaps(
         "source_image_paths": image_paths,
         "image_size": {"width": width, "height": height},
         "processing_time": round(total_time, 2),
+        "generated_at": timestamp,
         "timings": timings,
     }
     if sum_map_rel_path:
@@ -1725,7 +1800,8 @@ def create_palette_overlay(
         "focus_index": focus_index,
         "highlight_threshold": highlight_threshold,
         "source_images": processed_count,
-        "processing_time": round(time.time() - start_time, 2)
+        "processing_time": round(time.time() - start_time, 2),
+        "generated_at": timestamp,
     }
 
 
@@ -1746,7 +1822,8 @@ def create_sum_map(
         source_palette = first_img.getpalette() if first_img.mode == 'P' else None
 
     palette_list = _build_palette_list(source_palette)
-    palette_list[31 * 3:31 * 3 + 3] = [255, 255, 255]
+    background_rgb = _resolve_scheme_background_rgb(scheme)
+    palette_list[31 * 3:31 * 3 + 3] = list(background_rgb)
 
     # 1단계: 모든 raw indices 수집
     raw_indices_list = []
@@ -1864,6 +1941,7 @@ def create_sum_map(
         "source_images": processed_count,
         "image_size": {"width": width, "height": height},
         "processing_time": round(processing_time, 2),
+        "generated_at": timestamp,
     }
 def create_subset_map(
     output_dir: Path,
@@ -1889,6 +1967,9 @@ def create_subset_map(
     # 선택된 grade를 정렬하여 파일명 suffix 생성 (예: [3, 5] -> "_35")
     sorted_grades = sorted(selected_grades)
     suffix = "_" + "".join(str(g) for g in sorted_grades)
+
+    # subset 결과도 현재 선택 1세트만 유지한다.
+    _delete_existing_subset_outputs(output_dir)
 
     # NPZ 파일 로드
     cache_path = output_dir / SQUARE_MAP_CACHE_FILENAME
@@ -1937,6 +2018,7 @@ def create_subset_map(
 
     resolved_scheme = (scheme or cached_scheme or ANONYMOUS_LOGIN_ID).strip() or ANONYMOUS_LOGIN_ID
     settings = load_composite_color_settings(resolved_scheme)
+    background_rgb = _resolve_scheme_background_rgb(resolved_scheme)
 
     cached_colors: Optional[List[str]] = None
     if colors_arr is not None:
@@ -1968,6 +2050,7 @@ def create_subset_map(
     lut_positions = np.linspace(0.0, 100.0, 256, dtype=np.float32)
     shared_lut_colors = _interpolate_percentile_colors(lut_positions, color_stops, quantile_positions)
     palette_list = palette_array.reshape(-1).tolist()
+    palette_list[31 * 3:31 * 3 + 3] = list(background_rgb)
 
     # Subset Map 이미지 생성 (독립적인 min→0%, max→100% 매핑)
     grade_str = "".join(str(g) for g in sorted_grades)

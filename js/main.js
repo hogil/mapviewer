@@ -6323,7 +6323,10 @@ class WaferMapViewer {
         const { files } = await this.fetchExplorerEntries(folderPath);
         if (!files || files.length === 0) return null;
         const normalizedTarget = this.normalizePath(currentImagePath);
-        const index = files.findIndex(file => this.normalizePath(file.path) === normalizedTarget);
+        const index = files.findIndex(file => {
+            const fileNorm = this.normalizePath(file.path);
+            return fileNorm === normalizedTarget || fileNorm.endsWith(normalizedTarget) || normalizedTarget.endsWith(fileNorm);
+        });
         if (index !== -1 && index + 1 < files.length) {
             return files[index + 1].path;
         }
@@ -6335,7 +6338,10 @@ class WaferMapViewer {
         const { files } = await this.fetchExplorerEntries(folderPath);
         if (!files || files.length === 0) return null;
         const normalizedTarget = this.normalizePath(currentImagePath);
-        const index = files.findIndex(file => this.normalizePath(file.path) === normalizedTarget);
+        const index = files.findIndex(file => {
+            const fileNorm = this.normalizePath(file.path);
+            return fileNorm === normalizedTarget || fileNorm.endsWith(normalizedTarget) || normalizedTarget.endsWith(fileNorm);
+        });
         if (index > 0) {
             return files[index - 1].path;
         }
@@ -6380,7 +6386,10 @@ class WaferMapViewer {
         }
 
         const normalizedChild = this.normalizePath(childEntryPath);
-        let index = entries.findIndex(entry => this.normalizePath(entry.path) === normalizedChild);
+        let index = entries.findIndex(entry => {
+            const entryNorm = this.normalizePath(entry.path);
+            return entryNorm === normalizedChild || entryNorm.endsWith(normalizedChild) || normalizedChild.endsWith(entryNorm);
+        });
         if (index === -1) {
             index = -1;
         }
@@ -6409,7 +6418,10 @@ class WaferMapViewer {
         }
 
         const normalizedChild = this.normalizePath(childEntryPath);
-        let index = entries.findIndex(entry => this.normalizePath(entry.path) === normalizedChild);
+        let index = entries.findIndex(entry => {
+            const entryNorm = this.normalizePath(entry.path);
+            return entryNorm === normalizedChild || entryNorm.endsWith(normalizedChild) || normalizedChild.endsWith(entryNorm);
+        });
         if (index === -1) {
             index = entries.length;
         }
@@ -6442,14 +6454,24 @@ class WaferMapViewer {
         this.selectedImagePath = targetPath;
         this.showFileName(targetPath);
         this.selectedImages = [targetPath];
-        this.updateWaferMapExplorerHighlight(targetPath);
+        this.selectedFolders = new Set();
+        this.lastSelectedFolder = null;
+        const normalizedTargetPath = this.getRelativePathFromImageFolder(String(targetPath || '')).replace(/\\/g, '/');
+        const slashIndex = normalizedTargetPath.lastIndexOf('/');
+        this.lastSelectedFolderPath = slashIndex >= 0 ? normalizedTargetPath.slice(0, slashIndex) : null;
+        try {
+            await this.ensureExplorerPathVisible(targetPath);
+        } catch (error) {
+            console.warn('⚠️ [NAV_FOLDER] ensureExplorerPathVisible failed:', error);
+        }
+        this.applyWaferMapExplorerHighlight(targetPath);
 
         if (this.thumbnailNavigator && this.thumbnailNavigator.isVisible) {
             this.thumbnailNavigator.setImages(this.singleViewImageList, targetPath);
         }
 
         try {
-            await this.loadImage(targetPath, false, currentLoadVersion);
+            await this.loadImage(targetPath, false, currentLoadVersion, true);
             this.updatePyramidLevel();
             console.log(`✅ [NAV_FOLDER] Moved to ${directionLabel} entry:`, targetPath);
             return true;
@@ -6485,7 +6507,9 @@ class WaferMapViewer {
 
     async ensureExplorerPathVisible(imagePath) {
         if (!this.dom.fileExplorer || !imagePath) return;
-        const normalized = imagePath.replace(/\\/g, '/').replace(/\/+$/g, '');
+        const normalized = this.getRelativePathFromImageFolder(String(imagePath || ''))
+            .replace(/\\/g, '/')
+            .replace(/\/+$/g, '');
         const slashIndex = normalized.lastIndexOf('/');
         if (slashIndex === -1) return;
 
@@ -6504,7 +6528,7 @@ class WaferMapViewer {
         if (!this.dom.fileExplorer || !imagePath) return;
 
         const allLinks = Array.from(this.dom.fileExplorer.querySelectorAll('a[data-path]'));
-        const normalizedTarget = this.normalizePath(imagePath);
+        const normalizedTarget = this.normalizePath(this.getRelativePathFromImageFolder(String(imagePath || '')));
 
         let targetLink = allLinks.find(link => {
             const linkPath = link.dataset.path;
@@ -6580,7 +6604,10 @@ class WaferMapViewer {
         const { files } = await this.fetchExplorerEntries(folderPath);
         if (!files || files.length === 0) return null;
         const normalizedTarget = this.normalizePath(currentImagePath);
-        const index = files.findIndex(file => this.normalizePath(file.path) === normalizedTarget);
+        const index = files.findIndex(file => {
+            const fileNorm = this.normalizePath(file.path);
+            return fileNorm === normalizedTarget || fileNorm.endsWith(normalizedTarget) || normalizedTarget.endsWith(fileNorm);
+        });
         if (index !== -1 && index + 1 < files.length) {
             return files[index + 1].path;
         }
@@ -6592,7 +6619,10 @@ class WaferMapViewer {
         const { files } = await this.fetchExplorerEntries(folderPath);
         if (!files || files.length === 0) return null;
         const normalizedTarget = this.normalizePath(currentImagePath);
-        const index = files.findIndex(file => this.normalizePath(file.path) === normalizedTarget);
+        const index = files.findIndex(file => {
+            const fileNorm = this.normalizePath(file.path);
+            return fileNorm === normalizedTarget || fileNorm.endsWith(normalizedTarget) || normalizedTarget.endsWith(fileNorm);
+        });
         if (index > 0) {
             return files[index - 1].path;
         }
@@ -6637,7 +6667,10 @@ class WaferMapViewer {
         }
 
         const normalizedChild = this.normalizePath(childEntryPath);
-        let index = entries.findIndex(entry => this.normalizePath(entry.path) === normalizedChild);
+        let index = entries.findIndex(entry => {
+            const entryNorm = this.normalizePath(entry.path);
+            return entryNorm === normalizedChild || entryNorm.endsWith(normalizedChild) || normalizedChild.endsWith(entryNorm);
+        });
         if (index === -1) {
             index = -1;
         }
@@ -6666,7 +6699,10 @@ class WaferMapViewer {
         }
 
         const normalizedChild = this.normalizePath(childEntryPath);
-        let index = entries.findIndex(entry => this.normalizePath(entry.path) === normalizedChild);
+        let index = entries.findIndex(entry => {
+            const entryNorm = this.normalizePath(entry.path);
+            return entryNorm === normalizedChild || entryNorm.endsWith(normalizedChild) || normalizedChild.endsWith(entryNorm);
+        });
         if (index === -1) {
             index = entries.length;
         }
@@ -7538,8 +7574,7 @@ class WaferMapViewer {
 
         // Subset Map 항목: Composite 모드 + Grade 선택된 경우에만 표시
         if (subsetMapItem) {
-            const subsetGrades = this.getSelectedGradesFromGrid();
-            const showSubsetMap = this.isCompositeMode && subsetGrades.size > 0;
+            const showSubsetMap = this.isCompositeMode;
             subsetMapItem.style.setProperty('display', showSubsetMap ? 'block' : 'none', 'important');
             if (showSubsetMap) {
                 subsetMapItem.textContent = '🎯 선택 Grade Composite Map';
@@ -9323,9 +9358,11 @@ class WaferMapViewer {
         this.contextMenuTargetPath = this.selectedImagePath || null;
         let menu = document.getElementById('single-context-menu');
 
-        const isCompositeSquare = this.selectedImagePath &&
-            (this.selectedImagePath.includes('square_average') ||
-            this.selectedImagePath.includes('square_weighted_average'));
+        const normalizedSelectedPath = String(this.selectedImagePath || '').replace(/\\/g, '/');
+        const isCompositeContext = !!(
+            this.isCompositeMode ||
+            normalizedSelectedPath.includes('composite_map/')
+        );
 
         if (!menu) {
             menu = document.createElement('div');
@@ -9344,6 +9381,7 @@ class WaferMapViewer {
                 <div id="single-set-ref-map" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📌 Ret Map 등록</div>
                 <hr style="margin: 4px 0; border: none; border-top: 1px solid #555;">
                 <div id="single-composite-color" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px; display:none;">🎨 Composite 색상</div>
+                <div id="single-composite-subset" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px; display:none;">🎯 선택 Grade Composite Map</div>
             `;
 
             document.body.appendChild(menu);
@@ -9447,11 +9485,20 @@ class WaferMapViewer {
                 this.hideSingleContextMenu();
                 this.openCompositeColorModal(true); // skipModeCheck=true
             });
+
+            menu.querySelector('#single-composite-subset')?.addEventListener('click', () => {
+                this.hideSingleContextMenu();
+                this.createSubsetMap();
+            });
         }
 
         const compositeColorItem = menu.querySelector('#single-composite-color');
         if (compositeColorItem) {
-            compositeColorItem.style.display = isCompositeSquare ? 'block' : 'none';
+            compositeColorItem.style.display = isCompositeContext ? 'block' : 'none';
+        }
+        const compositeSubsetItem = menu.querySelector('#single-composite-subset');
+        if (compositeSubsetItem) {
+            compositeSubsetItem.style.display = isCompositeContext ? 'block' : 'none';
         }
         const refItem = menu.querySelector('#single-set-ref-map');
         if (refItem) {
@@ -9818,7 +9865,8 @@ class WaferMapViewer {
         }
 
         pathsToHighlight.forEach(selPath => {
-            const a = explorer.querySelector(`a[data-path="${selPath.replace(/"/g, '\\"')}"]`);
+            const explorerPath = this.getRelativePathFromImageFolder(String(selPath || '')).replace(/\\/g, '/');
+            const a = explorer.querySelector(`a[data-path="${explorerPath.replace(/"/g, '\\"')}"]`);
 
             if (a) {
                 a.classList.add('selected');
@@ -10405,6 +10453,9 @@ class WaferMapViewer {
                 this.selectedImages = [path];
 
                 this.selectedImagePath = path;
+                this.selectedFolders = new Set();
+                this.lastSelectedFolder = null;
+                this.lastSelectedFolderPath = null;
 
                 // 새로 선택된 항목 시각적 표시
 
@@ -19622,6 +19673,23 @@ class WaferMapViewer {
                 this.updateFileExplorerSelection({ highlightOnly: true, skipEnsurePage: true });
             }, 80);
 
+            const activeDetailPage = this.pageManager?.getActivePage?.();
+            const detailPageId = activeDetailPage?.id || null;
+            const originPageId = detailPageId && this.gridDetailOriginMap?.has(detailPageId)
+                ? this.gridDetailOriginMap.get(detailPageId)
+                : null;
+            if (originPageId && this.pageManager) {
+                const restoredSnapshot = this.captureActivePageState();
+                const originPage = this.pageManager.pages?.find?.(p => p.id === originPageId);
+                if (originPage) {
+                    originPage.state = this.deepCloneSimple(restoredSnapshot);
+                }
+                this.pageManager.activatePage(originPageId, { skipPersist: true });
+                if (detailPageId !== originPageId) {
+                    this.pageManager.closePage(detailPageId);
+                }
+            }
+
             // 🔥 스크롤 복원은 showGrid() 또는 showGridByLot() 내부에서 처리됨
             console.log(`🔄 [EXIT] 스크롤 복원은 showGrid/showGridByLot에서 처리 (scrollTop: ${scrollTopToRestore}px)`);
         } else if (savedViewMode === 'single') {
@@ -23041,14 +23109,17 @@ class WaferMapViewer {
             console.log('✅ [Subset Map] Created:', result);
 
             if (result.subset_maps && result.subset_maps.length > 0) {
-                // 새로 생성된 Subset Map을 그리드에 추가 (기존 뒤에 추가)
+                const subsetMapPattern = /(?:^|\/)square_(weighted_)?average_[0-7]+\.(png|jpg|jpeg|webp)$/i;
+
+                // 새로 생성된 Subset Map만 유지하고, 이전 subset 결과는 교체한다.
                 const newImages = result.subset_maps.map(item => item.path);
                 const baseImages = originImages.length
                     ? [...originImages]
                     : (Array.isArray(this.selectedImages) ? [...this.selectedImages] : []);
-                const seen = new Set(baseImages);
-                newImages.forEach(p => { if (!seen.has(p)) { seen.add(p); baseImages.push(p); } });
-                const allImages = baseImages;
+                const filteredBaseImages = baseImages.filter(path => !subsetMapPattern.test(String(path || '').replace(/\\/g, '/')));
+                const seen = new Set(filteredBaseImages);
+                const allImages = [...filteredBaseImages];
+                newImages.forEach(p => { if (!seen.has(p)) { seen.add(p); allImages.push(p); } });
 
                 const gradeStr = selectedGradeList.join(', ');
 
@@ -23058,6 +23129,9 @@ class WaferMapViewer {
                     this.currentGridImages = allImages;
 
                     if (this.compositeSession && this.compositeSession.sumMaps) {
+                        this.compositeSession.sumMaps = this.compositeSession.sumMaps.filter(
+                            entry => !subsetMapPattern.test(String(entry?.path || '').replace(/\\/g, '/'))
+                        );
                         const newSumMapEntries = result.subset_maps.map(item => ({
                             path: item.path,
                             type: item.type || 'subset',
