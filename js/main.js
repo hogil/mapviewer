@@ -33,7 +33,7 @@ const GRID_DRAG_CLICK_THRESHOLD = 30; // 스크롤 드래그 시 선택 방지
 const CLASSIFICATION_DIR_NAMES = ['classification', 'classification_chips', 'chips'];
 const GRID_THUMB_PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 const FALLBACK_LOGIN_ID = 'guest';
-const INVALID_LOGIN_ID_VALUES = new Set(['', 'change', 'default', 'anon', 'anonymous', FALLBACK_LOGIN_ID, 'null', 'undefined', '-']);
+const INVALID_LOGIN_ID_VALUES = new Set(['', 'default', 'anon', 'anonymous', FALLBACK_LOGIN_ID, 'null', 'undefined', '-']);
 
 // ✅ 미니맵 뷰포트 크기 제한 상수
 const MINIMAP_VIEWPORT_MIN_SIZE = 0.05;  // 최소 5%

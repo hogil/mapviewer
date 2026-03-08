@@ -33,7 +33,7 @@ BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B29
 BIN_KEYS = ['B285', 'B286', 'B287', 'B288', 'B290', 'B291',
             'B300', 'B385', 'B386', 'B388', 'B389', 'B390']
 ANONYMOUS_SCHEME = FALLBACK_LOGIN_ID
-LEGACY_ANONYMOUS_SCHEMES = ("anon", "anonymous", "change")
+LEGACY_ANONYMOUS_SCHEMES = ("anon", "anonymous")
 
 DEFAULT_TOP_COLORS = {
     "Grade0": "#FFFFFF",
@@ -133,8 +133,6 @@ def _ensure_anonymous_entries(legends: Dict[str, Any]) -> bool:
 
     if not isinstance(composite.get(ANONYMOUS_SCHEME), dict):
         legacy = composite.get("anonymous")
-        if not isinstance(legacy, dict):
-            legacy = composite.get("change")
         composite[ANONYMOUS_SCHEME] = copy.deepcopy(legacy) if isinstance(legacy, dict) else _default_composite_scheme()
         mutated = True
 

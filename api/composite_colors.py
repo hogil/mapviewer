@@ -102,10 +102,7 @@ def load_composite_color_settings(scheme: Optional[str] = None) -> CompositeColo
 
     entry = storage.get(scheme_key)
     if not isinstance(entry, dict) and scheme_key == ANONYMOUS_SCHEME:
-        # Backward compatibility: 기존 anonymous 이전 데이터는 change 아래에 있을 수 있음
         legacy_entry = storage.get("anonymous")
-        if not isinstance(legacy_entry, dict):
-            legacy_entry = storage.get("change")
         if isinstance(legacy_entry, dict):
             entry = legacy_entry
 

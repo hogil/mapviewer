@@ -111,88 +111,229 @@ _GRADE_RANGE = np.arange(8, dtype=np.uint8)
 _SUBSET_NAME_RE = re.compile(r"^square_(weighted_)?average_([0-7]+)\.(png|jpg|jpeg|webp)$", re.IGNORECASE)
 
 
-def _copy_positions_without_bin(first_image_rel_path: str, output_dir: Path, composite_images: List[str]) -> None:
-    """
-    첫 번째 이미지의 positions.json을 찾아서 bin(b) 정보를 제거한 후
-    composite map 이미지들에 대응하는 positions 파일로 복사
+def _candidate_source_positions_paths(image_rel_path: str) -> List[Path]:
+    image_path = Path(image_rel_path)
+    image_stem = image_path.stem
+    image_parent = image_path.parent
+    candidate_paths: List[Path] = []
 
-    Args:
-        first_image_rel_path: 첫 번째 소스 이미지 상대 경로 (예: "wm-811k/1.png")
-        output_dir: Composite map 출력 디렉토리 (예: composite_map/anonymous/20251126_140343)
-        composite_images: 생성된 composite 이미지 파일명 리스트 (예: ["Grade_0.png", "square_average.png"])
+    parent_parts = [p for p in image_parent.parts if p not in ("", ".")]
+    if len(parent_parts) > 1:
+        candidate_paths.append(POSITIONS_ROOT.joinpath(*parent_parts[1:]) / f"{image_stem}.json")
+    elif parent_parts:
+        candidate_paths.append(POSITIONS_ROOT / f"{image_stem}.json")
+
+    legacy_path = POSITIONS_ROOT / image_parent / f"{image_stem}.json"
+    if legacy_path not in candidate_paths:
+        candidate_paths.append(legacy_path)
+    return candidate_paths
+
+
+def _load_source_positions_data(image_rel_path: str) -> Optional[Dict[str, Any]]:
+    import json
+
+    for candidate in _candidate_source_positions_paths(image_rel_path):
+        if not candidate.exists():
+            continue
+        try:
+            with open(candidate, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+    return None
+
+
+def _copy_positions_without_bin(
+    first_image_rel_path: str,
+    output_dir: Path,
+    composite_images: List[str],
+    keep_chip_bin: bool = False,
+) -> None:
+    """
+    첫 번째 이미지의 positions.json을 찾아 composite 결과 이미지들에 대응하는
+    positions 파일로 복사한다.
+
+    keep_chip_bin=True면 chip의 'b' 필드를 유지(없으면 Normal로 보정)하고,
+    False면 기존처럼 제거한다.
     """
     import json
 
-
-    # 1. 첫 번째 이미지의 positions.json 찾기
-    first_image_path = Path(first_image_rel_path)
-    first_image_stem = first_image_path.stem
-    first_image_parent = first_image_path.parent
-
-    # positions.json 후보 경로들 (main.py의 _candidate_positions_paths와 동일 로직)
-    candidate_paths = []
-
-    # 우선순위 1: trimmed 경로 (첫 번째 경로 구성요소 제거)
-    parent_parts = [p for p in first_image_parent.parts if p not in ("", ".")]
-
-    if len(parent_parts) > 1:
-        trimmed_parts = parent_parts[1:]
-        candidate_paths.append(POSITIONS_ROOT.joinpath(*trimmed_parts) / f"{first_image_stem}.json")
-    elif parent_parts:
-        candidate_paths.append(POSITIONS_ROOT / f"{first_image_stem}.json")
-
-    # 우선순위 2: 레거시 경로
-    legacy_path = POSITIONS_ROOT / first_image_parent / f"{first_image_stem}.json"
-    if legacy_path not in candidate_paths:
-        candidate_paths.append(legacy_path)
-
-    # 존재하는 파일 찾기
-    source_positions_path = None
-    for candidate in candidate_paths:
-        if candidate.exists():
-            source_positions_path = candidate
-            break
-
-    if not source_positions_path:
+    positions_data = _load_source_positions_data(first_image_rel_path)
+    if not positions_data:
         return
 
-    # 2. positions.json 로드 및 "b" 필드 제거
     try:
-        with open(source_positions_path, 'r', encoding='utf-8') as f:
-            positions_data = json.load(f)
+        chips = positions_data.get("chips")
+        if isinstance(chips, list):
+            for chip in chips:
+                if not isinstance(chip, dict):
+                    continue
+                if keep_chip_bin:
+                    chip["b"] = "Normal"
+                elif "b" in chip:
+                    del chip["b"]
 
-        # chips 배열에서 "b" 필드 제거
-        if 'chips' in positions_data and isinstance(positions_data['chips'], list):
-            for chip in positions_data['chips']:
-                if isinstance(chip, dict) and 'b' in chip:
-                    del chip['b']
-
-        # 3. composite map 출력 디렉토리에 positions 폴더 생성
-        # output_dir: IMAGES_ROOT/composite_map/anonymous/20251126_140343
-        # positions 저장 위치: POSITIONS_ROOT/composite_map/anonymous/20251126_140343
         output_dir_rel = output_dir.relative_to(IMAGES_ROOT)
         positions_output_dir = POSITIONS_ROOT / output_dir_rel
         positions_output_dir.mkdir(parents=True, exist_ok=True)
 
-        # 4. 각 composite 이미지마다 positions 파일 생성
         for img_filename in composite_images:
             img_stem = Path(img_filename).stem
-
-            # image_path 업데이트 (composite map 경로로)
             composite_rel_path = output_dir_rel / img_filename
             positions_data_copy = positions_data.copy()
-            positions_data_copy['image_path'] = composite_rel_path.as_posix()
-            positions_data_copy['wafer'] = img_stem
-            if 'step' in positions_data_copy:
-                positions_data_copy['step'] = img_filename
+            positions_data_copy["image_path"] = composite_rel_path.as_posix()
+            positions_data_copy["wafer"] = img_stem
+            if "step" in positions_data_copy:
+                positions_data_copy["step"] = img_filename
 
-            # positions 파일 저장
             positions_file_path = positions_output_dir / f"{img_stem}.json"
-            with open(positions_file_path, 'w', encoding='utf-8') as f:
+            with open(positions_file_path, "w", encoding="utf-8") as f:
                 json.dump(positions_data_copy, f, ensure_ascii=False, indent=2)
-
     except Exception:
         pass
+
+
+def _count_unique_devices(image_paths: List[str], max_sample: int = 64) -> int:
+    """소스 이미지 positions의 top-level device 개수를 반환한다."""
+    devices: set[str] = set()
+    for rel_path in image_paths[:max_sample]:
+        positions_data = _load_source_positions_data(rel_path)
+        if not isinstance(positions_data, dict):
+            continue
+        device_name = str(positions_data.get("device") or "").strip()
+        if not device_name:
+            continue
+        devices.add(device_name)
+        if len(devices) >= 2:
+            return len(devices)
+    return len(devices)
+
+
+def _first_image_with_positions(image_paths: Sequence[str]) -> Optional[str]:
+    for rel_path in image_paths:
+        if _load_source_positions_data(rel_path):
+            return rel_path
+    return image_paths[0] if image_paths else None
+
+
+def _resolve_personal_scheme_data(scheme: Optional[str]) -> Dict[str, Any]:
+    try:
+        legends = load_color_legends()
+    except Exception:
+        legends = {}
+
+    scheme_name = (scheme or ANONYMOUS_LOGIN_ID).strip() or ANONYMOUS_LOGIN_ID
+    scheme_data = legends.get(scheme_name)
+    if not isinstance(scheme_data, dict):
+        scheme_data = legends.get(ANONYMOUS_LOGIN_ID)
+    if not isinstance(scheme_data, dict):
+        scheme_data = legends.get("default")
+    if not isinstance(scheme_data, dict):
+        scheme_data = {}
+    return scheme_data
+
+
+def _apply_personal_palette(
+    palette_list: List[int],
+    scheme: Optional[str],
+) -> List[int]:
+    scheme_data = _resolve_personal_scheme_data(scheme)
+    if not scheme_data:
+        return palette_list
+
+    palette_bytes = _scheme_to_palette_bytes(scheme_data)
+    limit = min(len(palette_bytes) // 3, 256)
+    for i in range(limit):
+        palette_list[i * 3:(i + 1) * 3] = palette_bytes[i * 3:(i + 1) * 3]
+
+    # index 31 = composite map 배경색 (chip 바깥)
+    # _scheme_to_palette_bytes는 인덱스 ~24까지만 반환하므로 31은 명시적으로 설정
+    background_rgb = _resolve_scheme_background_rgb(scheme)
+    palette_list[31 * 3:31 * 3 + 3] = list(background_rgb)
+    return palette_list
+
+
+def _build_chip_base_indices_from_positions(
+    image_rel_path: str,
+    width: int,
+    height: int,
+    show_normal_border: bool = True,
+) -> Optional[np.ndarray]:
+    """
+    positions.json의 chip 좌표로 base_indices 배열 생성.
+    chip 바깥은 전부 배경색(31)으로 채워 wafer 원형 더미 영역을 제거.
+
+    Returns:
+        (H, W) uint8 ndarray:
+            - 31: chip 바깥 (배경색) — 원형 wafer 더미 포함
+            - 0: chip 내부 (grade0 색)
+            - 10: chip 테두리 (Normal 색, show_normal_border=True일 때)
+        None: positions.json을 찾을 수 없는 경우
+    """
+    positions_data = _load_source_positions_data(image_rel_path)
+    if not isinstance(positions_data, dict):
+        return None
+
+    chips = positions_data.get("chips")
+    if not isinstance(chips, list) or not chips:
+        return None
+
+    # coord.canvas 기반 스케일 계산 (main.py _scaled_chip_rect와 동일 로직)
+    coord = positions_data.get("coord", {})
+    canvas = coord.get("canvas", {}) if isinstance(coord, dict) else {}
+    canvas_w = int(canvas.get("width", width)) if isinstance(canvas, dict) else width
+    canvas_h = int(canvas.get("height", height)) if isinstance(canvas, dict) else height
+    if canvas_w <= 0:
+        canvas_w = width
+    if canvas_h <= 0:
+        canvas_h = height
+    scale_x = width / float(canvas_w)
+    scale_y = height / float(canvas_h)
+
+    base = np.full((height, width), 31, dtype=np.uint8)  # 전체 = 배경색
+
+    for chip in chips:
+        if not isinstance(chip, dict):
+            continue
+        rect = chip.get("rect", {})
+        x0_raw = rect.get("x0") if isinstance(rect, dict) else None
+        y0_raw = rect.get("y0") if isinstance(rect, dict) else None
+        x1_raw = rect.get("x1") if isinstance(rect, dict) else None
+        y1_raw = rect.get("y1") if isinstance(rect, dict) else None
+        if None in (x0_raw, y0_raw, x1_raw, y1_raw):
+            x_raw = chip.get("x")
+            y_raw = chip.get("y")
+            w_raw = chip.get("w", chip.get("width"))
+            h_raw = chip.get("h", chip.get("height"))
+            if None in (x_raw, y_raw, w_raw, h_raw):
+                continue
+            x0_raw, y0_raw = x_raw, y_raw
+            x1_raw = float(x_raw) + float(w_raw)
+            y1_raw = float(y_raw) + float(h_raw)
+        try:
+            x0, y0, x1, y1 = float(x0_raw), float(y0_raw), float(x1_raw), float(y1_raw)
+        except (TypeError, ValueError):
+            continue
+        if x1 < x0:
+            x0, x1 = x1, x0
+        if y1 < y0:
+            y0, y1 = y1, y0
+
+        sx0 = max(0, min(width, int(x0 * scale_x)))
+        sy0 = max(0, min(height, int(y0 * scale_y)))
+        sx1 = max(0, min(width, int(x1 * scale_x + 0.9999)))
+        sy1 = max(0, min(height, int(y1 * scale_y + 0.9999)))
+        if sx1 <= sx0 or sy1 <= sy0:
+            continue
+
+        base[sy0:sy1, sx0:sx1] = 0  # chip 내부 = grade0 색
+        if show_normal_border:
+            base[sy0, sx0:sx1] = 10        # 상단 테두리
+            base[sy1 - 1, sx0:sx1] = 10   # 하단 테두리
+            base[sy0:sy1, sx0] = 10        # 좌측 테두리
+            base[sy0:sy1, sx1 - 1] = 10   # 우측 테두리
+
+    return base
 
 
 def _build_palette_list(source_palette: Optional[Sequence[int]]) -> List[int]:
@@ -1035,11 +1176,13 @@ def recolor_saved_sum_maps(
         except Exception:
             cached_scheme = None
 
+    chip_inner_mask = (base_indices == 0)
+
     if grade_counts_arr is not None:
         try:
             square_mean_map, weighted_map, calc_mask, weighted_mask = _recompute_square_maps_from_counts(
                 grade_counts=grade_counts_arr,
-                only_low_mask=calc_mask,
+                only_low_mask=chip_inner_mask,
                 invalid_mask=invalid_mask_arr,
                 idx_8_mask=idx_8_mask_arr,
                 image_count=source_image_count,
@@ -1053,8 +1196,7 @@ def recolor_saved_sum_maps(
     palette_list = palette_array.reshape(-1).tolist()
     resolved_scheme = (scheme or cached_scheme or ANONYMOUS_LOGIN_ID).strip() or ANONYMOUS_LOGIN_ID
     settings = load_composite_color_settings(resolved_scheme)
-    background_rgb = _resolve_scheme_background_rgb(resolved_scheme)
-    palette_list[31 * 3:31 * 3 + 3] = list(background_rgb)
+    palette_list = _apply_personal_palette(palette_list, resolved_scheme)
     cached_colors: Optional[List[str]] = None
     if colors_arr is not None:
         try:
@@ -1170,7 +1312,7 @@ def recolor_saved_sum_maps(
                     selected_grades=list(grade_tuple),
                     invalid_mask=invalid_mask_arr,
                     idx_8_mask=idx_8_mask_arr,
-                    only_low_mask=None,
+                    only_low_mask=chip_inner_mask,
                     image_count=source_image_count,
                     include_unselected_in_denominator=False,
                 )
@@ -1319,9 +1461,10 @@ def _save_sum_map_variants(
         else:
             median_map = np.median(all_indices, axis=0)
             base_indices = np.clip(np.rint(median_map), 0, 13).astype(np.uint8)  # 0-13 범위
-    base_indices = base_indices.copy()
-    if invalid_mask is not None:
-        base_indices[invalid_mask] = 31
+        if invalid_mask is not None:
+            base_indices[invalid_mask] = 31
+    else:
+        base_indices = base_indices.copy()
 
     palette = _build_palette_list(palette_list)
     settings = load_composite_color_settings(scheme)
@@ -1546,16 +1689,7 @@ def create_composite_heatmaps(
     batch_size = batch_size or COMPOSITE_BATCH_SIZE
 
     palette_list = _build_palette_list(source_palette)
-    if scheme:
-        legends = load_color_legends()
-        scheme_data = legends.get(scheme)
-        if scheme_data:
-            palette_bytes = _scheme_to_palette_bytes(scheme_data)
-            limit = min(len(palette_bytes) // 3, 256)
-            for i in range(limit):
-                palette_list[i * 3:(i + 1) * 3] = palette_bytes[i * 3:(i + 1) * 3]
-    background_rgb = _resolve_scheme_background_rgb(scheme)
-    palette_list[31 * 3:31 * 3 + 3] = list(background_rgb)
+    palette_list = _apply_personal_palette(palette_list, scheme)
 
     if indices is None:
         indices = list(range(8))
@@ -1619,19 +1753,38 @@ def create_composite_heatmaps(
     grade_time = time.perf_counter() - t
     _mark("grade_counts", t)
 
+    device_count = _count_unique_devices(image_paths)
+    show_normal_border = device_count <= 1
+    positions_source_path = _first_image_with_positions(image_paths)
+
     # (idx_8_13_only를 제외한 포인트 중 0-7이 있는 것)
     t = time.perf_counter()
     only_0_7_mask = has_0_7 & ~has_8_13  # (H, W) - invalid는 이미 0으로 변환되어 포함
     invalid_mask = all_invalid  # 🔥 모든 이미지가 invalid인 포인트만
-    base_indices = np.full((height, width), 31, dtype=np.uint8)
-    base_indices[idx_8_13_only] = 8
+    invalid_mask_bool = invalid_mask.astype(bool, copy=False) if invalid_mask is not None else None
+    chip_area = has_0_7 | idx_8_13_only
+    if invalid_mask_bool is not None:
+        chip_area &= ~invalid_mask_bool
+
+    base_indices = None
+    if positions_source_path:
+        base_indices = _build_chip_base_indices_from_positions(
+            positions_source_path,
+            width=width,
+            height=height,
+            show_normal_border=show_normal_border,
+        )
+    if base_indices is None:
+        # positions.json 없을 때 fallback: chip 영역은 grade0, 나머지는 배경색
+        base_indices = np.full((height, width), 31, dtype=np.uint8)
+        base_indices[chip_area] = 0
+    chip_inner_mask = (base_indices == 0)
     _mark("mask_and_base_setup", t)
 
     heatmaps: List[Dict[str, Any]] = []
     palette_bytes = palette_list[:]
     grade_presence = grade_counts > 0
     invalid_mask_bool = invalid_mask.astype(bool, copy=False) if invalid_mask is not None else None
-    idx_8_overlay = idx_8_13_only & ~invalid_mask_bool if invalid_mask_bool is not None else idx_8_13_only.copy()
 
     t = time.perf_counter()
     heatmap_times = []
@@ -1639,12 +1792,12 @@ def create_composite_heatmaps(
         if idx >= 8:
             continue
         t_hm = time.perf_counter()
-        result = np.full((height, width), 31, dtype=np.uint8)
+        result = base_indices.copy()
         presence_mask = grade_presence[idx].copy()
         if invalid_mask_bool is not None:
             presence_mask &= ~invalid_mask_bool
-        result[presence_mask] = idx
-        result[idx_8_overlay] = 8
+        presence_mask &= chip_inner_mask
+        result[presence_mask] = idx  # 해당 grade 포인트 = grade 색
         heatmap_path = output_dir / f"Grade_{idx}{_image_ext()}"
         heatmap_img = Image.fromarray(result, mode='P')
         heatmap_img.putpalette(palette_bytes)
@@ -1677,14 +1830,14 @@ def create_composite_heatmaps(
             idx_8_mask=idx_8_13_only,
             scheme=scheme,
             grade_counts=grade_counts,
-            only_low_mask=only_0_7_mask,
+            only_low_mask=chip_inner_mask,
         )
         sum_map_time = time.perf_counter() - t
         _mark("save_sum_maps", t)
         if sum_map_entries:
             sum_map_rel_path = sum_map_entries[0]["path"]
 
-    # 🔥 첫 번째 이미지의 positions.json을 복사 (bin 정보 제거)
+    # 첫 번째 이미지의 positions.json을 composite 결과에 맞게 복사
     composite_image_filenames = []
     for heatmap in heatmaps:
         filename = heatmap["path"].split("/")[-1]
@@ -1693,13 +1846,14 @@ def create_composite_heatmaps(
         filename = entry.get("filename") or entry["path"].split("/")[-1]
         composite_image_filenames.append(filename)
 
-    if composite_image_filenames and image_paths:
+    if composite_image_filenames and positions_source_path:
         t = time.perf_counter()
-        threading.Thread(
-            target=_copy_positions_without_bin,
-            args=(image_paths[0], output_dir, composite_image_filenames),
-            daemon=True,
-        ).start()
+        _copy_positions_without_bin(
+            positions_source_path,
+            output_dir,
+            composite_image_filenames,
+            keep_chip_bin=show_normal_border,
+        )
         _mark("copy_positions_async", t)
 
     total_time = time.perf_counter() - start_time
@@ -1822,8 +1976,7 @@ def create_sum_map(
         source_palette = first_img.getpalette() if first_img.mode == 'P' else None
 
     palette_list = _build_palette_list(source_palette)
-    background_rgb = _resolve_scheme_background_rgb(scheme)
-    palette_list[31 * 3:31 * 3 + 3] = list(background_rgb)
+    palette_list = _apply_personal_palette(palette_list, scheme)
 
     # 1단계: 모든 raw indices 수집
     raw_indices_list = []
@@ -1897,27 +2050,24 @@ def create_sum_map(
     only_0_7_mask = has_valid_0_7 & ~has_8_13_after  # invalid는 이미 0으로 변환되어 포함
     invalid_mask = all_invalid  # 🔥 모든 이미지가 invalid인 포인트만
 
-    float_indices = stacked_indices.astype(np.float32)
-    if _FAST_MEDIAN:
-        # Use mean instead of median for better performance (O(n) vs O(n log n))
-        mean_map = np.mean(float_indices, axis=0)
-        base_map_indices = np.clip(np.rint(mean_map), 0, 13).astype(np.uint8)  # 0-13 범위
-    else:
-        median_map = np.median(float_indices, axis=0)
-        base_map_indices = np.clip(np.rint(median_map), 0, 13).astype(np.uint8)  # 0-13 범위
+    device_count = _count_unique_devices(image_paths)
+    show_normal_border = device_count <= 1
+    positions_source_path = _first_image_with_positions(image_paths)
+    chip_area = (has_0_7 | idx_8_13_only) & ~invalid_mask
 
-    # [규칙 적용]
-    # 1. 나머지 포인트는 기본적으로 31(흰색)
-    base_indices = np.full_like(base_map_indices, 31, dtype=np.uint8)
-
-    # 2. 0-7만 있는 곳 (Composite 계산 대상)
-    base_indices[only_0_7_mask] = base_map_indices[only_0_7_mask]
-    
-    # 3. 8-13만 있는 곳은 인덱스 8 색상 고정
-    base_indices[idx_8_13_only] = 8  
-    
-    # 4. Invalid 영역은 31(흰색)
-    base_indices[invalid_mask] = 31
+    base_indices = None
+    if positions_source_path:
+        base_indices = _build_chip_base_indices_from_positions(
+            positions_source_path,
+            width=width,
+            height=height,
+            show_normal_border=show_normal_border,
+        )
+    if base_indices is None:
+        # positions.json 없을 때 fallback: chip 영역은 grade0, 나머지는 배경색
+        base_indices = np.full((height, width), 31, dtype=np.uint8)
+        base_indices[chip_area] = 0
+    chip_inner_mask = (base_indices == 0)
 
     entries = _save_sum_map_variants(
         stacked_indices,
@@ -1928,10 +2078,23 @@ def create_sum_map(
         idx_8_mask=idx_8_13_only,
         scheme=scheme,
         grade_counts=grade_counts,
-        only_low_mask=only_0_7_mask,
+        only_low_mask=chip_inner_mask,
     )
     if not entries:
         raise RuntimeError("Sum Map 생성을 완료하지 못했습니다.")
+
+    composite_image_filenames = []
+    for entry in entries:
+        filename = entry.get("filename") or entry["path"].split("/")[-1]
+        composite_image_filenames.append(filename)
+
+    if composite_image_filenames and positions_source_path:
+        _copy_positions_without_bin(
+            positions_source_path,
+            output_dir,
+            composite_image_filenames,
+            keep_chip_bin=show_normal_border,
+        )
 
     primary = entries[0]["path"]
     processing_time = time.time() - start_time
@@ -1995,15 +2158,15 @@ def create_subset_map(
     # Subset 계산 시 invalid/idx_8 포인트는 0으로 취급하고 마스크에서 제외
     invalid_mask_arr = None
     idx_8_mask_arr = None
-    only_low_mask_arr = only_low_mask.astype(bool, copy=False) if only_low_mask is not None else None
+    chip_inner_mask = (base_indices == 0)
 
-    # Subset Map 계산 (only_low_mask=None으로 subset만의 calc_mask 재계산)
+    # Subset Map 계산 (chip 내부만 계산 대상으로 제한)
     square_mean_map, weighted_map, calc_mask, weighted_mask = _compute_maps_from_counts(
         grade_counts=grade_counts_arr,
         selected_grades=selected_grades,
         invalid_mask=invalid_mask_arr,
         idx_8_mask=idx_8_mask_arr,
-        only_low_mask=None,  # 🔥 None으로 전달하여 선택된 grade만으로 calc_mask 재계산
+        only_low_mask=chip_inner_mask,
         image_count=source_image_count,
         include_unselected_in_denominator=False,
     )
@@ -2018,7 +2181,6 @@ def create_subset_map(
 
     resolved_scheme = (scheme or cached_scheme or ANONYMOUS_LOGIN_ID).strip() or ANONYMOUS_LOGIN_ID
     settings = load_composite_color_settings(resolved_scheme)
-    background_rgb = _resolve_scheme_background_rgb(resolved_scheme)
 
     cached_colors: Optional[List[str]] = None
     if colors_arr is not None:
@@ -2050,7 +2212,7 @@ def create_subset_map(
     lut_positions = np.linspace(0.0, 100.0, 256, dtype=np.float32)
     shared_lut_colors = _interpolate_percentile_colors(lut_positions, color_stops, quantile_positions)
     palette_list = palette_array.reshape(-1).tolist()
-    palette_list[31 * 3:31 * 3 + 3] = list(background_rgb)
+    palette_list = _apply_personal_palette(palette_list, resolved_scheme)
 
     # Subset Map 이미지 생성 (독립적인 min→0%, max→100% 매핑)
     grade_str = "".join(str(g) for g in sorted_grades)

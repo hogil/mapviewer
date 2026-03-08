@@ -2643,7 +2643,7 @@ async def recolor_composite_sum_maps_endpoint(request: Request):
 
     try:
         login_id = _current_login_id(request)
-        scheme = get_user_color_scheme(login_id) if login_id else "change"
+        scheme = login_id or ANONYMOUS_LOGIN_ID
         from .composite_map import recolor_saved_sum_maps
 
         _invalidate_composite_thumbnail_caches(output_dir=target_path, login_id=login_id or ANONYMOUS_LOGIN_ID)
@@ -7946,7 +7946,7 @@ async def create_composite_map_endpoint(
     max_workers = payload.max_workers if payload.max_workers is not None else None
     batch_size = payload.batch_size if payload.batch_size is not None else None
     login_id = _current_login_id(req)
-    resolved_scheme = payload.scheme or (get_user_color_scheme(login_id) if login_id else "change")
+    resolved_scheme = login_id or ANONYMOUS_LOGIN_ID
     _invalidate_composite_thumbnail_caches(login_id=login_id or ANONYMOUS_LOGIN_ID)
 
     # 백그라운드 작업 추가
@@ -8045,13 +8045,14 @@ async def create_subset_map_endpoint(payload: SubsetMapRequest, req: Request):
             raise HTTPException(status_code=404, detail=f"디렉토리가 존재하지 않습니다: {payload.output_dir}")
 
         login_id = _current_login_id(req)
+        resolved_scheme = login_id or ANONYMOUS_LOGIN_ID
         _invalidate_composite_thumbnail_caches(output_dir=output_dir, login_id=login_id or ANONYMOUS_LOGIN_ID)
 
         # Subset Map 생성
         subset_maps = create_subset_map(
             output_dir=output_dir,
             selected_grades=payload.selected_grades,
-            scheme=payload.scheme,
+            scheme=resolved_scheme,
             override_colors=payload.override_colors,
         )
 
