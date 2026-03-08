@@ -43,7 +43,6 @@ mcp.sqlite3
 network-log.txt
 AGENTS.md
 node_modules/
-.cursor/skills/
 
 # Local verification artifacts
 color-edit-dialog.png

@@ -17,6 +17,10 @@
 | `docs/ROLE_ACCESS.md` | 현재 RBAC 구현 상태와 두 권한 체계의 차이 |
 | `docs/performance-optimization.md` | 현재 런타임 기준 성능/캐시/워커/압축 동작 |
 
+## MCP (Cursor / IDE)
+
+저장소 루트의 `mcp.json.example`을 `.mcp.json`으로 복사한 뒤, `PROJECT_ROOT`와 `USER_HOME`을 각자 환경에 맞는 절대 경로로 바꾸면 Cursor 등에서 MCP 서버(filesystem, git)를 사용할 수 있습니다. `.mcp.json`은 로컬 전용이므로 `.gitignore`에 두고 커밋하지 않습니다.
+
 ## 정리 원칙
 
 - 팔레트 인덱스와 `positions.json` 공통 규격은 `docs/IMAGE_PIPELINE.md`를 기준으로 봅니다.
