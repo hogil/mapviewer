@@ -2,74 +2,68 @@
 
 ## 개요
 
-줌 레벨에 따라 적절한 해상도를 즉시 제공하기 위해 여러 레벨(0.2, 0.5, 0.7, 1.0)로 이미지를 미리 생성·캐시한다.
+피라미드 이미지는 `GET /api/image?level=...` 경로로 제공되며, 서버 캐시와 브라우저 내부 피라미드를 함께 사용합니다. 현재 구현 정본은 `api/main.py`, `api/config.py`, `js/main.js`, `js/semiconductor-renderer.js`입니다.
 
----
+## 레벨과 줌 기준
 
-## 디렉토리 구조
+서버와 프런트는 `/api/config`로 내려오는 값을 기준으로 같은 레벨 체계를 사용합니다.
 
-| 상태 | 경로 패턴 |
-|------|----------|
-| 개인색 OFF | `thumbnails/pyramid_{level*100}/` |
-| 개인색 ON | `thumbnails/pyramid_{scheme}_{level*100}/` |
+- 기본 `PYRAMID_LEVELS`: `0.2, 0.5, 0.7, 1.0`
+- 기본 `PYRAMID_ZOOM_THRESHOLDS`: `0.25, 0.5, 0.75`
 
-파일명: `{stem}_L{level*100}.webp`
+요청 레벨이 정확히 일치하지 않으면 서버는 가장 가까운 configured level로 보정합니다.
 
-캐시는 완전히 분리되어 혼선 없음.
+## 캐시 구조
 
----
+현재 피라미드 캐시는 단순 `pyramid_{scheme}_{level}` 구조보다 더 세분화됩니다.
 
-## 생성 워크플로우
+- 비개인색: `thumbnails/pyramid_{levelTag}`
+- 개인색: `thumbnails/{scheme}/{lastModified}/pyramid_{levelTag}`
+- 필터 포함: `thumbnails/{scheme}/{lastModified}/pyramid_filter_{tokenHash}_{levelTag}`
 
-### 개인색 OFF
-```
-요청 → 캐시 확인 (pyramid_{level}/)
-     → 미스 시: 원본 → pyvips 리사이즈 → 저장
-     → Background: 나머지 레벨 병렬 생성
-```
+즉 캐시 분리는 `scheme + lastModified + filter token + level` 기준입니다.
 
-### 개인색 ON
-```
-요청 → 캐시 확인 (pyramid_{scheme}_{level}/)
-     → 미스 시 (레벨 1.0):
-         원본 PNG → PIL 팔레트 교체 → RGB 변환 → pyvips → 저장
-     → 미스 시 (다른 레벨):
-         레벨 1.0 파일 존재 → 1.0 기반 리사이즈 (빠름)
-         레벨 1.0 없음     → 원본 기반 리사이즈 (폴백)
-     → Background: 나머지 레벨 병렬 생성
-```
+## 서버 생성 방식
 
-**핵심 최적화**: 레벨 1.0을 먼저 생성하면 나머지는 단순 리사이즈만 수행.
+현재 개인색/필터 피라미드는 원본 PNG를 메모리에서 패치한 뒤 각 레벨을 직접 생성합니다.
 
----
+- 비개인색: 원본 기반 리사이즈
+- 개인색: palette patch 후 리사이즈
+- grade/bottom filter가 있으면 동일하게 패치된 원본 기준 생성
 
-## 성능
+예전 문서처럼 "레벨 1.0을 먼저 만들고 다른 레벨이 그 파일을 다시 리사이즈한다"는 설명은 현재 기준 정본이 아닙니다.
 
-| 항목 | 개인색 ON | 개인색 OFF |
-|------|-----------|------------|
-| 레벨 1.0 생성 | ~500ms (팔레트 교체 오버헤드) | ~100ms |
-| 다른 레벨 (캐시 있음) | ~50ms | ~100ms |
-| 메모리 | 높음 (PIL + numpy + pyvips) | 낮음 (pyvips만) |
-| 디스크 | 2배 (경로 분리) | 1배 |
+## 포맷과 커널
 
----
+- 기본 포맷은 `api/config.py` 기준 `WEBP`
+- 런타임은 `start.ps1`, `start.sh`에서 `JPEG`로 override 가능
+- 리사이즈 커널은 `PYRAMID_KERNEL` 기준이며 현재 기본은 `cubic`
+- 문서에서 Lanczos3를 현재 구현처럼 설명하면 틀릴 수 있습니다.
 
-## 클라이언트 파라미터
+## 클라이언트 동작
 
-```
-/api/image?path=...&level=1.0                              # 개인색 OFF
-/api/image?path=...&level=1.0&personalized=true&scheme=change  # 개인색 ON
-/api/image?...&_t=1234567890                               # 캐시 버스팅 (체크박스 변경 시)
-```
+클라이언트는 서버 피라미드와 별개로 브라우저 메모리 내부 피라미드도 유지합니다.
 
-캐시 키: `{level}_p_{scheme}` (ON) / `{level}_n_change` (OFF)
+- 줌 threshold를 넘으면 즉시 캔버스 레벨을 만듦
+- 이후 `ImageBitmap`으로 품질을 올려 교체
+- 서버 캐시와 클라이언트 피라미드가 함께 동작
 
----
+## composite와의 관계
 
-## 트러블슈팅
+현재 프런트는 `composite_map/` 및 `composite_cache_v1/` 경로에 대해서는 서버 피라미드를 사용하지 않고 원본 `/api/image` 경로를 사용합니다.
 
-| 문제 | 원인 | 해결 |
-|------|------|------|
-| 레벨 1.0만 색상 적용됨 | 다른 레벨 생성 시 원본 사용 | 레벨 1.0 파일 기반으로 수정 |
-| 일부 레벨만 색상 적용됨 | 캐시 키에 scheme 없음 | `{level}_{personalized}_{scheme}` 형식 사용 |
-| 캐시 혼선 | 경로 미분리 | 개인색/비개인색 경로 완전 분리 |
+## 관련 엔드포인트
+
+- `GET /api/config`
+- `GET /api/image`
+
+## 관련 설정
+
+- `PYRAMID_LEVELS`
+- `PYRAMID_ZOOM_THRESHOLDS`
+- `PYRAMID_FORMAT`
+- `PYRAMID_Q`
+- `PYRAMID_PNG_COMPRESSION`
+- `PYRAMID_PNG_EFFORT`
+- `PYRAMID_KERNEL`
+- `PYRAMID_LOADER_MODE`

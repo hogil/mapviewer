@@ -380,4 +380,4 @@ Never commit real secrets; `cert/` holds placeholders only. Use `ENVIRONMENT_SET
 - [ENVIRONMENT_SETUP.md](ENVIRONMENT_SETUP.md): Complete environment variable guide
 - [CHANGELOG.md](CHANGELOG.md): Version history and changes
 - [FULL_VS_SUBSET_COMPARISON.md](FULL_VS_SUBSET_COMPARISON.md): Composite Map technical deep-dive
-- [CHIP_ANNOTATION.md](CHIP_ANNOTATION.md): Chip-level defect annotation system
+- [docs/CHIP_ANNOTATION.md](docs/CHIP_ANNOTATION.md): Chip-level defect annotation system

@@ -2,69 +2,83 @@
 
 ## 개요
 
-팔레트 기반 웨이퍼 이미지에 사용자별 커스텀 색상 스킴을 적용하는 기능.
-썸네일과 피라미드 캐시를 사용자별로 분리하여 관리.
+개인색은 palette PNG의 팔레트를 사용자별 스킴으로 바꿔 응답하는 기능입니다. 현재 구현 정본은 `api/main.py`와 `api/personal_colors.py`입니다.
 
-## 팔레트 인덱스 매핑 (생성기 기준)
+## 저장소
 
-- `0~7`: `top.Grade0~Grade7`
+```text
+logs/color-legends.json
+```
+
+최상위 사용자 스킴과 `composite` 하위 gradient 스킴이 함께 저장됩니다.
+
+## 현재 적용 방식
+
+현재 주 경로는 "PIL 전체 RGB 변환"이 아니라 서버가 PNG의 PLTE를 메모리에서 직접 패치하는 방식입니다.
+
+- 원본 이미지: `GET /api/image`
+- crop 이미지: `GET /api/image/crop`
+- 썸네일: `GET /api/thumbnail`
+- 피라미드: `GET /api/image?level=...`
+
+이 경로에서 `personalized`, `scheme`, `grade_filter`, `bottom_filter`가 함께 적용될 수 있습니다.
+
+## 스킴 결정
+
+- 기본 기준은 현재 로그인 사용자 ID
+- 사용자 정보는 `GET /api/auth/user`가 `colorScheme`으로 내려줌
+- 로그인 정보가 없으면 fallback login id 사용
+- 예전 레거시 문자열을 직접 scheme로 쓰는 방식은 현재 기준이 아님
+
+즉 개인색은 "현재 사용자 스킴" 중심으로 동작합니다.
+
+## 팔레트 인덱스 매핑
+
+- `0~7`: `top.Grade0` ~ `top.Grade7`
 - `8`: `background`
 - `9`: `text`
 - `10`: `bottom.Normal`
 - `11`: `bottom.Invalid`
-- `12~23`: `bottom.B285~B390` (00P/00C BIN)
+- `12~23`: `bottom.B285` ~ `bottom.B390`
 
-중요: `bottom.Normal`/`bottom.Invalid`는 BIN이 아니라 고정 테두리 인덱스(10, 11)입니다.
+`bottom.Normal`과 `bottom.Invalid`는 BIN이 아니라 고정 border 인덱스입니다.
 
----
+## 캐시 분리
 
-## 썸네일 경로
+개인색 캐시는 사용자 스킴 기준으로 분리되며, 단순히 `scheme`만이 아니라 `lastModified`와 filter variant도 반영됩니다.
 
-| 상태 | 경로 |
-|------|------|
-| 개인색 OFF | `thumbnails/{relative_path}/{stem}_{size}.jpg` |
-| 개인색 ON | `thumbnails/{scheme}/{relative_path}/{stem}_{size}.jpg` |
+- 썸네일: `scheme + lastModified + filter variant`
+- 피라미드: `scheme + lastModified + filter token + level`
 
----
+현재 파일명은 원본 상대경로 기반 단순 조합이 아니라 해시 기반입니다.
 
-## 처리 성능 (7788×7788 → 512×512, 100개 이미지)
+## UI 상태
 
-| 방식 | 총 시간 | 처리 속도 | 비고 |
-|------|---------|----------|------|
-| 개인색 미적용 (pyvips) | 8.36초 | 11.96/초 | 기준 |
-| **현재 방식** (PIL 팔레트 교체 → RGB → pyvips) | 22.45초 | 4.45/초 | 약 2.7배 느림 |
-| 메모리 해제 최적화 | 21.95초 | 4.56/초 | 2.2% 개선 (미미) |
+프런트 기본값은 개인색 ON입니다.
 
-**병목**: `PIL.convert('RGB')` – 원본 크기(7788×7788)에서 RGB 변환이 150~200ms 소요. 대체 불가.
+- `js/main.js`는 개인색을 기본 활성 상태로 사용
+- 과거의 ON/OFF 체크박스 설명은 현재 UI 기준으로 stale일 수 있음
+- 요청 URL에는 `personalized=true`, `scheme`, `grade_filter`, `bottom_filter`가 함께 붙을 수 있음
 
-### 시도했으나 실패한 최적화
-- numpy 직접 팔레트 → RGB 변환: 오히려 더 느림 (메모리 접근 패턴 비효율)
-- 리사이즈 먼저 → 작은 이미지에서 팔레트 교체: 빠르지만 색상 품질 저하
+## composite와의 관계
 
-**결론**: 현재 방식(품질 우선) 유지. 단일 이미지 처리 시간 단축은 한계. 병렬처리/캐싱으로 처리량 개선.
+개인색은 wafer 이미지에만 쓰이지 않습니다. composite도 개인색 팔레트의 배경과 border를 재사용합니다.
 
----
+- composite 배경: 개인색 `background`
+- composite border: 개인색 `bottom.Normal`
+- composite 내부 gradient: `composite` 섹션의 사용자별 gradient
 
-## 주요 버그 수정 이력
+## 관련 엔드포인트
 
-### 1. 체크박스 변경 시 그리드 썸네일 미갱신
+- `GET /api/auth/user`
+- `POST /api/color-scheme`
+- `DELETE /api/color-scheme`
+- `GET /api/image`
+- `GET /api/image/crop`
+- `GET /api/thumbnail`
 
-**원인**: 체크박스 변경 시 기존 `<img>` 태그 src가 업데이트되지 않아 브라우저 캐시 사용.
+## 관련 파일
 
-**수정**: 캐시 버스터 추가
-```javascript
-url.searchParams.set('_t', Date.now());
-img.src = url.toString();
-```
-
-### 2. Legend 기본값 'change' 하드코딩
-
-**원인**: 개인색 OFF 시에도 `schemeToUse = 'change'`로 고정됨.
-
-**수정**: 개인색 OFF → `default` legend 표시, ON → 현재 사용자 scheme 사용.
-
-### 3. 캐시 키에 scheme 미포함
-
-**원인**: 피라미드 캐시 키가 레벨만 사용하여 개인색/비개인색 캐시 혼선.
-
-**수정**: 캐시 키를 `{level}_{personalized}_{scheme}` 형식으로 변경.
+- `api/main.py`
+- `api/personal_colors.py`
+- `js/main.js`

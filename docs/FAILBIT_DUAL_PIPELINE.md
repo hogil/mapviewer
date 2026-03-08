@@ -1,45 +1,34 @@
 # Fail-Bit Dual Pipeline
 
-This document captures the fail-bit PNG + positions JSON generation rules behind the `00P` / `00C` dual pipeline and the local synthetic dataset workflow used in this repository.
+이 문서는 저장소 내부 생성기 사용법이 아니라, fail-bit 외부 파이프라인이 이 앱과 맞으려면 어떤 계약을 따라야 하는지 정리한 메모입니다.
 
-## Goals
+공통 팔레트 인덱스, `positions.json`, 이미지 응답 계약은 `docs/IMAGE_PIPELINE.md`를 정본으로 봅니다.
 
-- Match the frontend/backend contract for chip overlays, selection, and metadata display.
-- Keep palette indices stable so `api/personal_colors.py` and the UI render the same semantics.
-- Always emit a positions JSON file together with each PNG.
-- Separate `00P` and `00C` BIN border behavior.
+## 현재 저장소 범위
 
-## File Discovery Rules
+현재 저장소에는 fail-bit synthetic dataset 생성 스크립트가 포함되어 있지 않습니다. 따라서 이 문서는 "이 저장소 안에서 재생성하는 법"이 아니라 외부 파이프라인 계약 문서입니다.
 
-The production-style pipeline distinguishes files by filename middle tokens:
+## 핵심 원칙
 
-- `00P`: `-00P_`
-- `00C`: `-00C_`
+- fail-bit PNG는 대응하는 `positions.json`을 함께 제공해야 합니다.
+- 앱이 읽는 이미지/좌표 계약은 공통 규격 하나로 유지합니다.
+- 파일명의 `-00P_`, `-00C_`는 입력 파일을 필터링하거나 묶을 때 사용하는 힌트입니다.
+- 그 이후 렌더링/좌표/오버레이 계약은 공통 규격을 따릅니다.
 
-The matched file determines `kind`, and `kind` drives BIN border selection and JSON metadata.
+## 파일명 필터
 
-## Palette Contract
+프로덕션 스타일 파이프라인에서는 파일명 중간 토큰으로 입력 대상을 나눌 수 있습니다.
 
-Palette indices are fixed and must not be reordered:
+- `-00P_`
+- `-00C_`
 
-| Index | Meaning |
-| --- | --- |
-| `0..7` | `Grade0..Grade7` chip interior |
-| `8` | background |
-| `9` | text |
-| `10` | normal border |
-| `11` | invalid border |
-| `12..17` | `00P` BIN borders: `285 286 287 288 290 291` |
-| `18..23` | `00C` BIN borders: `300 385 386 388 389 390` |
-| `31` | invalid fill / white mask |
+이 구분은 파일 탐색과 그룹핑의 힌트로만 설명합니다. 문서에서 "00P 이미지", "00C 이미지"를 완전히 다른 이미지 규격처럼 설명하지 않습니다.
 
-This ordering is the compatibility boundary for local PNG generators too.
+## BIN 코드 세트
 
-## BIN Border Rules
+파일명 필터 결과에 따라 주로 사용하는 BIN 집합은 아래와 같습니다.
 
-Only the allowed BIN set for the detected `kind` receives a colored BIN border.
-
-### `00P`
+### `-00P_`
 
 - `285`
 - `286`
@@ -48,7 +37,7 @@ Only the allowed BIN set for the detected `kind` receives a colored BIN border.
 - `290`
 - `291`
 
-### `00C`
+### `-00C_`
 
 - `300`
 - `385`
@@ -57,92 +46,31 @@ Only the allowed BIN set for the detected `kind` receives a colored BIN border.
 - `389`
 - `390`
 
-`Normal` always uses palette index `10`, and `Invalid` always uses palette index `11`.
+공통 border 인덱스:
 
-## Positions JSON Contract
+- `Normal` = palette index `10`
+- `Invalid` = palette index `11`
 
-Every PNG must have a matching JSON file. The UI depends on the JSON for click hit-testing, chip selection labels, and the bottom-left metadata block.
+## 메타데이터
 
-Required top-level fields:
+fail-bit 데이터셋은 필요 시 아래 식별용 메타데이터를 가질 수 있습니다.
 
-- `image_path`
-- `kind`
 - `partid`
 - `device`
 - `pgm`
-- `coord`
-- `chips`
 
-Required `coord` fields:
+이 값들은 데이터셋 식별과 UI 표시, 일부 후속 로직에 쓰일 수 있지만, 문서 기준으로 파일명 필터 이후의 독립 이미지 규격을 정의하는 핵심 축은 아닙니다.
 
-- `canvas.width`
-- `canvas.height`
-- `grid_edges.xs`
-- `grid_edges.ys`
-- `grid_shape.cols`
-- `grid_shape.rows`
+## 외부 파이프라인 메모
 
-Required chip fields:
+외부 생성기는 최소한 아래 계약을 만족해야 합니다.
 
-- `x_abs`
-- `y_abs`
-- `x_cal`
-- `y_cal`
-- `b`
-- `rect.x0`
-- `rect.y0`
-- `rect.x1`
-- `rect.y1`
-- `rect.quad`
+- palette 인덱스는 앱과 호환되어야 함
+- 이미지와 대응하는 `positions.json`이 있어야 함
+- `coord.grid_edges`, `chips[].rect`, `x_abs/y_abs/x_cal/y_cal`, `b`를 제공해야 함
 
-Minimal example:
+자세한 스키마는 `docs/IMAGE_PIPELINE.md`를 따릅니다.
 
-```json
-{
-  "image_path": "palette_5mb/wafer_palette_5mb.png",
-  "kind": "00P",
-  "partid": "WAFER_PALETTE_5MB-00P",
-  "device": "FAILBIT-DEMO-00P",
-  "pgm": "FAILBIT-GENERATOR",
-  "coord": {
-    "canvas": { "width": 2048, "height": 2048 },
-    "grid_edges": { "xs": [104, 184, 264], "ys": [104, 184, 264] }
-  },
-  "chips": [
-    {
-      "x_abs": 10,
-      "y_abs": 20,
-      "x_cal": -3,
-      "y_cal": 4,
-      "b": "285",
-      "rect": {
-        "x0": 104,
-        "y0": 184,
-        "x1": 184,
-        "y1": 264,
-        "quad": [[104, 184], [184, 184], [184, 264], [104, 264]]
-      }
-    }
-  ]
-}
-```
+## 보안 메모
 
-## Local Synthetic Dataset
-
-For local development, `scripts/create_wafer_images.py` generates deterministic demo datasets under:
-
-- `D:/project/data/wm-811k/palette_5mb`
-- `D:/project/data/wm-811k/palette_3k`
-- `D:/project/data/positions/palette_5mb`
-- `D:/project/data/positions/palette_3k`
-
-Current local behavior:
-
-- `palette_5mb`: regenerate the named demo files with positions JSON.
-- `palette_3k`: generate one template image and duplicate it into 3000 PNG/JSON pairs.
-
-This is intentionally synthetic. It preserves the UI contract without requiring the production S3/dataframe pipeline.
-
-## Security Note
-
-The original production pipeline example includes S3 credentials and environment-specific paths. Those values must not be copied into repository docs or skills. Keep credentials in environment variables or a secure external secret store.
+프로덕션 파이프라인의 S3 자격 증명이나 환경별 실제 경로는 저장소 문서에 직접 적지 않고, 환경 변수나 외부 비밀 저장소로 분리합니다.

@@ -76,7 +76,7 @@ L3 Tracker(=Wafer Map Viewer)는 대규모 반도체 웨이퍼 맵 이미지를 
 ├─ docs/                  # 설계/성능 문서
 ├─ docs/archive/          # 벤치마크 결과 및 최적화 히스토리
 ├─ ARCHITECTURE.md        # 시스템 구성 설명
-├─ CHIP_ANNOTATION.md     # Chip 주석/좌표 설명
+├─ docs/CHIP_ANNOTATION.md # Chip 주석/좌표 설명
 └─ README.md
 ```
 
@@ -114,8 +114,9 @@ L3 Tracker(=Wafer Map Viewer)는 대규모 반도체 웨이퍼 맵 이미지를 
 
 ## Documentation
 
+- **문서 인덱스**: `docs/README.md`
 - **시스템 구성**: `ARCHITECTURE.md`
-- **칩 주석/좌표**: `CHIP_ANNOTATION.md`
+- **칩 주석/좌표**: `docs/CHIP_ANNOTATION.md`
 - **성능 분석/벤치마크**: `docs/`, `docs/archive/`
 
 ## API Snapshot

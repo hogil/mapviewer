@@ -1,91 +1,176 @@
 # Composite Map
 
-## 개요
+Composite Map은 여러 웨이퍼 이미지를 같은 좌표계로 합쳐 grade map과 average 계열 맵을 생성하는 기능입니다. 실제 구현 정본은 `api/composite_map.py`와 `api/main.py`입니다.
 
-여러 웨이퍼 맵을 선택하여 인덱스(0~7)별 출현 빈도를 히트맵으로 시각화하는 기능.
-각 픽셀 위치에서 N개 이미지의 인덱스 분포를 집계해 8개의 히트맵을 생성한다.
+## 핵심 파일
 
----
+- `api/composite_map.py`
+- `api/composite_colors.py`
+- `api/personal_colors.py`
+- `api/main.py`
+- `logs/color-legends.json`
 
-## 아키텍처
+## 출력 위치
 
-### 처리 흐름
-```
-N개 이미지 선택
-  → 픽셀값 // 32 로 인덱스(0~7) 변환
-  → 좌표별 인덱스 카운트 누적
-  → Sum Map (중앙값) + Grade Count 히트맵 생성
-  → NPZ 캐시 저장 (recolor용)
-```
+현재 결과는 사용자별 단일 세션 경로에 유지됩니다.
 
-### 핵심 파일
-- `api/composite_map.py` – 생성 로직 (Full/Subset)
-- `api/composite_colors.py` – 색상 스킴 관리
-- `logs/color-legends.json` – 커스텀 컬러 설정
-
-### 출력 구조
-```
-IMAGES_ROOT/
-└── composite_map/
-    └── {login_id}/{timestamp}/
-        ├── index_0.png ~ index_7.png   (히트맵)
-        └── data.npz                     (recolor 캐시)
+```text
+IMAGES_ROOT/composite_map/{login_id}/current
 ```
 
----
+새 생성이 시작되면 해당 사용자의 기존 composite 결과는 정리되고 현재 결과 1세트만 남습니다.
 
-## Full vs Subset Composite Map
+## 대표 출력물
 
-| 항목 | Full | Subset |
-|------|------|--------|
-| 대상 인덱스 | 0~7 전체 | 선택된 인덱스만 |
-| 비선택 인덱스 | 포함 | grade 0으로 이동 (0² = 0) |
-| 값 범위 | 상대적으로 큼 | 좁음 (색상이 연하게 보임 – 정상) |
-| calc_mask | 공유 | 별도 재계산 필요 (`only_low_mask=None`) |
+파일 확장자는 고정 PNG가 아닙니다. `COMPOSITE_FORMAT` 설정에 따라 `PNG` 또는 `JPEG`로 저장될 수 있습니다.
 
-**주의**: Subset은 Full의 `calc_mask` 재사용 금지 – 반드시 `grade_counts`에서 재계산.
+- `Grade_0.*` ~ `Grade_7.*`
+- `square_average.*`
+- `square_weighted_average.*`
+- `square_average_{grades}.*`
+- `square_weighted_average_{grades}.*`
+- `square_maps_data.npz`
+- 각 결과 이미지에 대응하는 `positions.json`
 
----
+## 생성 흐름
 
-## 성능 비교 (7788×7788 이미지 10개 기준)
-
-| 방식 | 처리 시간 | 메모리 | 특징 |
-|------|----------|--------|------|
-| 기존 방식 | 10.49초 | 2,545 MB | `all_indices_list` 전체 보관 + np.median |
-| **비트마스크** | **3.02초** | **173 MB** | presence_map + LUT, 3.48배 빠름, 93.2% 절감 |
-| 하이브리드 | 8.82초 | 2,024 MB | presence_map + counts 배열, 카운트 기반 히트맵 가능 |
-
-### 방식 선택 기준
-- **Sum Map만 필요**: 비트마스크 (LUT 기반 O(1))
-- **히트맵 그라데이션 필요**: 하이브리드 (counts 배열 유지)
-
-### 비트마스크 원리
-```python
-# 각 픽셀에서 인덱스 0~7의 presence를 8비트로 인코딩
-presence_map |= (1 << pixel_indices)  # 비트 OR 누적
-
-# LUT: 256패턴 사전계산 → O(1) 중앙값
-sum_map = lut[presence_map]
+```text
+이미지 선택
+  → 입력 이미지 정규화 및 로드
+  → grade_counts 계산
+  → positions.json 기반 chip 영역(base_indices) 생성
+  → grade map 8장 생성
+  → average map 2장 생성
+  → NPZ 캐시 저장
+  → 결과용 positions.json 복사
+  → 필요 시 subset / recolor 재생성
 ```
 
----
+## 입력 이미지 규칙
 
-## 추가 최적화
+- `POST /api/composite-map`는 최대 256장까지 허용합니다.
+- 입력 이미지 중 positions 파일이 하나라도 발견되면, positions가 없는 이미지는 composite 계산에서 제외합니다.
+- 입력 이미지 전체에 positions가 전혀 없을 때만 positions 없이 fallback 계산을 수행합니다.
 
-| 최적화 | 효과 | 적용 여부 |
-|--------|------|-----------|
-| 배열 C-contiguous 보장 | 5-10% | ✅ 적용 |
-| pyvips 로딩 | 50% 로딩 개선 | ✅ 적용 |
-| 병렬 저장 (ThreadPoolExecutor) | 50% 저장 개선 | ✅ 적용 |
-| PNG compress_level=0 | 10-15% 추가 | 조건부 |
-| OpenCV PNG 저장 | 4배 빠름, 팔레트 모드 포기 | 미적용 |
-| Numba JIT | 2-5배, 컴파일 오버헤드 | 미적용 |
+## 스킴 결정 규칙
 
----
+Composite는 클라이언트가 임의 scheme 문자열을 밀어 넣는 방식보다 현재 로그인 사용자 기준 스킴을 우선합니다.
 
-## 색상 스킴
+- full composite 생성: 현재 `login_id`
+- recolor: 현재 `login_id`
+- subset: 현재 `login_id`, 없으면 NPZ에 저장된 scheme
+- 로그인 정보가 없으면 `ANONYMOUS_LOGIN_ID`
 
-- 11포인트 그라데이션: Blue(0%) → Cyan → Green → Yellow → Orange → Red(100%)
-- Min-Max 스케일링 후 백분율 매핑
-- `logs/color-legends.json`에 커스텀 설정 저장
-- Recolor: NPZ 캐시 활용으로 이미지 재계산 없이 색상만 변경
+즉 composite 배경과 개인색 기반 팔레트는 현재 사용자 기준으로 결정됩니다.
+
+## 3영역 렌더링
+
+모든 composite 결과는 아래 3영역 모델을 따릅니다.
+
+1. 배경
+   chip 바깥은 개인색의 `background`
+2. chip border
+   단일 device 입력이면 개인색의 `bottom.Normal`
+3. chip interior
+   grade map은 grade 개인색, average 계열은 composite gradient
+
+positions가 있으면 chip 사각형을 기준으로 base canvas를 만들고, wafer 바깥의 원형 더미 영역도 전부 배경으로 바꿉니다.
+
+## Grade Map
+
+`Grade_n.*`는 특정 grade의 존재만 강조합니다.
+
+- chip 바깥: 개인색 `background`
+- chip 테두리: `bottom.Normal` 또는 숨김
+- 해당 grade가 있는 픽셀: `Grade n` 개인색
+- 같은 chip 내부의 나머지 픽셀: `Grade0`
+
+## Average Map
+
+현재 full average 계열은 두 종류입니다.
+
+- `square_average.*`
+- `square_weighted_average.*`
+
+렌더링 규칙:
+
+- chip 바깥: 개인색 `background`
+- chip 테두리: `bottom.Normal` 또는 숨김
+- 계산 대상 chip 내부: 사용자별 composite gradient
+- 계산되지 않은 내부 기본 바탕: `Grade0`
+
+계산은 chip 내부 마스크만 대상으로 하므로, chip도 아니고 배경도 아닌 중간 dummy 영역은 남기지 않습니다.
+
+## Device 수에 따른 border
+
+입력 이미지의 positions 메타데이터에서 unique device 수를 샘플링해 판정합니다.
+
+- device 1개 이하: 모든 chip border 표시
+- device 2개 이상: 모든 chip border 숨김
+
+이 규칙은 결과 이미지와 복사된 `positions.json` 모두에 동일하게 적용됩니다.
+
+## positions.json 복사 규칙
+
+Composite 결과에는 결과 이미지마다 대응하는 `positions.json`을 복사합니다.
+
+- source는 입력 이미지 중 positions가 실제로 존재하는 첫 번째 이미지
+- 단일 device면 chip의 `b`를 `Normal`로 설정
+- 다중 device면 chip의 `b`를 제거
+
+즉 이미지 자체 렌더링과 JS overlay 규칙이 어긋나지 않도록 맞춥니다.
+
+## NPZ 캐시
+
+`square_maps_data.npz`는 recolor와 subset의 기준 데이터입니다.
+
+주요 저장 항목:
+
+- `square_mean`
+- `square_weighted`
+- `base_indices`
+- `calc_mask`
+- `weighted_mask`
+- `grade_counts`
+- `color_scheme`
+- `colors`
+
+## Subset
+
+Subset은 저장된 `grade_counts`를 다시 읽어 생성합니다.
+
+- 선택되지 않은 grade는 분모에 포함하지 않음
+- 계산 범위는 chip 내부만 사용
+- 이전 subset 결과는 지우고 현재 선택 1세트만 유지
+
+대표 파일명:
+
+- `square_average_35.*`
+- `square_weighted_average_35.*`
+
+## Recolor
+
+Recolor는 원본 이미지를 다시 읽지 않고 `square_maps_data.npz`를 사용합니다.
+
+- full average map 2장 재색칠
+- 이미 존재하는 subset average map도 함께 재색칠
+- 배경/개인색 팔레트와 composite gradient를 현재 사용자 기준으로 다시 적용
+
+## API
+
+- `POST /api/composite-map`
+- `GET /api/composite-map/status/{task_id}`
+- `POST /api/composite-subset`
+- `POST /api/composite-recolor`
+- `GET /api/composite-colors`
+- `POST /api/composite-colors`
+
+## 관련 설정
+
+- `COMPOSITE_FORMAT`
+- `COMPOSITE_JPEG_QUALITY`
+- `COMPOSITE_MAX_WORKERS`
+- `COMPOSITE_RENDER_WORKERS`
+- `COMPOSITE_SAVE_WORKERS`
+- `COMPOSITE_BATCH_SIZE`
+- `COMPOSITE_RETENTION_HOURS`

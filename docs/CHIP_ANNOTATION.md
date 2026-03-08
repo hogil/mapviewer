@@ -1,353 +1,159 @@
-# Chip Annotation System 통합 문서
+# Chip Annotation System
 
-> L3 Tracker 웨이퍼 맵 분석 시스템의 Chip 단위 결함 마킹 및 YOLO 학습 데이터 생성 기능
+Chip Annotation은 wafer 이미지 위에 chip overlay를 띄우고, 선택한 chip의 라벨을 저장하거나 chip crop 이미지를 내보내는 기능입니다. 현재 구현 정본은 `api/main.py`와 `js/chip-annotator.js`입니다.
 
-**작성일:** 2025-01-08  
-**대상 시스템:** L3 Tracker (Wafer Map Defect Analysis)
+관련 문서:
 
----
+- 공통 이미지/좌표 계약: `docs/IMAGE_PIPELINE.md`
 
-## 목차
+## 현재 구성
 
-1. [시스템 개요](#1-시스템-개요)
-2. [아키텍처 및 폴더 구조](#2-아키텍처-및-폴더-구조)
-3. [데이터 구조](#3-데이터-구조)
-4. [API 엔드포인트](#4-api-엔드포인트)
-5. [사용 방법](#5-사용-방법)
-6. [문제 해결](#6-문제-해결)
+Chip Annotation은 별도 좌표 생성기를 저장소 안에 두고 있지 않습니다. 현재 저장소는 이미 존재하는 `positions.json`을 읽어 overlay와 저장 기능을 제공합니다.
 
----
+핵심 파일:
 
-## 1. 시스템 개요
+- `api/main.py`
+- `api/config.py`
+- `js/chip-annotator.js`
+- `js/main.js`
 
-### 1.1 배경
+## positions 의존성
 
-L3 Tracker는 반도체 웨이퍼 맵의 결함 패턴을 분석하는 시스템입니다. 현재는 웨이퍼 전체 이미지 단위로 분류를 수행하지만, 실제 제조 현장에서는 웨이퍼 내부의 **개별 Chip(Die) 단위로 결함을 분석**해야 합니다.
+Chip Annotation은 입력 이미지에 대응하는 `positions.json`이 있어야 정상 동작합니다.
 
-### 1.2 핵심 목표
+실제로 사용하는 필드:
 
-1. **Chip 단위 마킹:** 사용자가 웨이퍼 이미지에서 결함 Chip 영역을 사각형으로 마킹하고 클래스 할당
-2. **좌표 시스템:** 파이프라인이 자동 생성한 Chip 좌표 메타데이터 활용
-3. **이력 관리:** 누가 언제 어떤 Chip을 마킹했는지 추적
-4. **YOLO 학습 데이터:** 마킹된 Chip 정보를 YOLO 객체 탐지 포맷으로 자동 변환
-5. **기존 시스템과의 호환:** 웨이퍼 레벨 분류 기능은 그대로 유지
+- `coord.grid_edges`
+- `chips[].rect`
+- `chips[].x_abs`
+- `chips[].y_abs`
+- `chips[].x_cal`
+- `chips[].y_cal`
+- `chips[].b`
 
----
+메타데이터 표시에는 `partid`, `device`, `pgm`이 사용될 수 있습니다.
 
-## 2. 아키텍처 및 폴더 구조
+## 현재 annotation 저장 구조
 
-### 2.1 경로 구조 (개선된 버전)
+과거 설계 문서의 복잡한 단일 payload 구조가 아니라, 현재 구현은 versioned multi-entry JSON 구조를 사용합니다.
 
-**단순화된 경로 구조:**
-
-```
-IMAGES_ROOT = /appdata/appuser/images
-  ├── classification/           (wafer 모드)
-  ├── classification_chips/     (chip 모드)
-  ├── chip_annotations/        (사용자 마킹 데이터)
-  ├── chip_images/              (추출된 칩 이미지)
-  ├── thumbnails/
-  └── yolo_datasets/            (YOLO 데이터셋)
-
-POSITIONS_ROOT = /appdata/appuser/positions  (Chip 좌표 메타데이터)
-```
-
-**설계 원칙:**
-- **Stateless API:** 서버는 전역 상태를 유지하지 않음, 모든 요청에 필요한 컨텍스트(mode)를 파라미터로 전달
-- **단일 책임:** Wafer Map Explorer와 Class Manager는 독립적으로 동작
-- **경로 계층 구조:** 모든 메타데이터는 IMAGES_ROOT 하위에 통합
-
-### 2.2 데이터 흐름
-
-```
-[S3 Bucket] → [파이프라인] → [PNG 이미지] → /appdata/appuser/images/
-                                    ↓
-                            [Positions JSON] → /appdata/appuser/positions/
-                                    ↓
-                            [사용자 Chip 마킹] → /appdata/appuser/images/chip_annotations/
-                                    ↓
-                            [YOLO Dataset] → /appdata/appuser/images/yolo_datasets/
-```
-
----
-
-## 3. 데이터 구조
-
-### 3.1 Positions JSON (파이프라인 자동 생성)
-
-**경로:** `/appdata/appuser/positions/{p1}/{p2}/{day}/{root}_{step}_{wafer}_{stime}.json`
+개념적으로는 아래와 같습니다.
 
 ```json
 {
-  "image_path": "/appdata/appuser/images/LINE1/PROCESS_A/20250108/ROOT_STEP_WAFER_20250108_103000.png",
-  "root": "ROOT",
-  "step": "STEP",
-  "wafer": "WAFER",
-  "stime": "20250108_103000",
-  "coord": {
-    "rot_code": 5,
-    "tiles_w_rot": 324,
-    "tiles_h_rot": 324,
-    "grid_edges": {
-      "xs": [0, 24, 48, ...],
-      "ys": [0, 24, 48, ...]
-    },
-    "canvas": {
-      "width": 7788,
-      "height": 7788
-    }
-  },
-  "chips": [
-    {
-      "x_abs": -162,
-      "y_abs": -162,
-      "b": "B000",
-      "x_cal": -162,
-      "y_cal": -162,
-      "rect": {
-        "x0": 1000,
-        "y0": 1600,
-        "x1": 1024,
-        "y1": 1624
+  "_version": 2,
+  "folder_key_a": {
+    "marked_chips": [
+      {
+        "x_abs": 10,
+        "y_abs": 20,
+        "class_name": "defect"
+      }
+    ],
+    "metadata": {
+      "status": "draft",
+      "total_marked_chips": 1,
+      "created_at": "2026-03-08T10:00:00",
+      "updated_at": "2026-03-08T10:10:00",
+      "created_by": "user1",
+      "updated_by": "user1",
+      "class_distribution": {
+        "defect": 1
       }
     }
-  ]
-}
-```
-
-### 3.2 Chip Annotations JSON (사용자 생성)
-
-**경로:** `/appdata/appuser/images/chip_annotations/{p1}/{p2}/{day}/{root}_{step}_{wafer}_{stime}_chips.json`
-
-```json
-{
-  "image_path": "/appdata/appuser/images/LINE1/PROCESS_A/20250108/ROOT_STEP_WAFER_20250108_103000.png",
-  "positions_ref": "/appdata/appuser/positions/LINE1/PROCESS_A/20250108/ROOT_STEP_WAFER_20250108_103000.json",
-  "metadata": {
-    "created_at": "2025-01-08T10:30:00Z",
-    "created_by": "john.doe",
-    "last_modified": "2025-01-08T14:20:00Z",
-    "last_modified_by": "jane.smith",
-    "status": "verified",
-    "total_marked_chips": 15,
-    "defect_chips": 12,
-    "good_chips": 3
-  },
-  "marked_chips": [
-    {
-      "chip_id": "chip_001",
-      "x_abs": -25,
-      "y_abs": -10,
-      "class": "defect_edge_loc",
-      "bbox": {
-        "x0": 1000,
-        "y0": 1600,
-        "x1": 1040,
-        "y1": 1640
-      },
-      "bbox_normalized": {
-        "center_x": 0.5125,
-        "center_y": 0.410,
-        "width": 0.010,
-        "height": 0.010
-      },
-      "created_by": "john.doe",
-      "created_at": "2025-01-08T10:35:00Z",
-      "verified_by": "jane.smith",
-      "verified_at": "2025-01-08T11:20:00Z",
-      "history": [
-        {
-          "action": "create",
-          "user": "john.doe",
-          "timestamp": "2025-01-08T10:35:00Z",
-          "class": "defect_edge_loc"
-        }
-      ],
-      "comments": []
-    }
-  ],
-  "class_distribution": {
-    "defect_edge_loc": 8,
-    "defect_scratch": 4,
-    "good_chip": 3
   }
 }
 ```
 
----
+중요한 점:
 
-## 4. API 엔드포인트
+- annotation 파일은 folder scope별 엔트리를 담을 수 있음
+- 핵심 데이터는 `marked_chips`와 `metadata`
+- 문서에서 `history`, `comments`, `bbox_normalized`, YOLO 전용 필드를 현재 구현처럼 설명하면 맞지 않음
 
-### GET `/api/chip-positions`
+## 저장 위치
 
-Positions JSON 로드
+현재 구현은 설정 이름보다 helper 동작이 더 중요합니다.
 
-**Parameters:**
-- `path` (string): 이미지 경로
+- annotation 저장: 현재 folder context 기준 `chip_annotations/.../<image>_chips.json`
+- chip 분류 이미지 저장: `classification_chips/<class>/...`
+- chip crop 추출: `chip_images/<class>/...`
 
-**Response:**
-```json
-{
-  "chips": [...],
-  "coord": {...}
-}
-```
+즉 annotation 저장은 단순 전역 `CHIP_ANNOTATIONS_ROOT` 한 곳만의 문제로 설명하면 부정확할 수 있습니다.
 
-### GET `/api/chip-annotations`
+## 현재 API
 
-Chip Annotations 로드 (없으면 빈 템플릿 반환)
+좌표/annotation:
 
-**Parameters:**
-- `path` (string): 이미지 경로
+- `GET /api/chip-positions`
+- `GET /api/chip-annotations`
+- `POST /api/chip-annotations`
 
-**Response:**
-```json
-{
-  "marked_chips": [...],
-  "metadata": {...}
-}
-```
+chip 분류/추출:
 
-### POST `/api/chip-annotations`
+- `POST /api/classify/chips`
+- `GET /api/classify/chips/{wafer_name}`
+- `POST /api/chip-images/extract`
 
-Chip Annotations 저장
+## API 의미
 
-**Request Body:**
-```json
-{
-  "image_path": "wm-811k/palette_5mb/wafer_palette_5mb.png",
-  "marked_chips": [...]
-}
-```
+### `GET /api/chip-positions`
 
-### POST `/api/chip-images/extract`
+이미지에 대응하는 `positions.json`을 찾아 반환합니다.
 
-Chip 이미지 추출 (YOLO 학습용)
+### `GET /api/chip-annotations`
 
-**Request Body:**
-```json
-{
-  "image_path": "wm-811k/palette_5mb/wafer_palette_5mb.png",
-  "chips": [...],
-  "class_name": "defect_class",
-  "create_label": true
-}
-```
+현재 이미지/폴더 컨텍스트에 대한 chip annotation을 읽습니다.
 
-### POST `/api/export-yolo-dataset`
+### `POST /api/chip-annotations`
 
-YOLO 데이터셋 생성
+선택 chip의 annotation 상태를 저장합니다.
 
-**Request Body:**
-```json
-{
-  "filters": {
-    "classes": ["defect_edge_loc", "defect_scratch"],
-    "verified_only": true,
-    "date_range": {
-      "from": "2025-01-01",
-      "to": "2025-01-31"
-    }
-  },
-  "split_ratio": {
-    "train": 0.8,
-    "val": 0.2
-  }
-}
-```
+### `POST /api/classify/chips`
 
----
+단순 annotation 저장만 하는 API가 아닙니다.
 
-## 5. 사용 방법
+- `classification_chips/<class>/`에 chip crop PNG 저장
+- annotation도 함께 upsert
 
-### 5.1 사전 준비
+### `POST /api/chip-images/extract`
 
-**Positions JSON 생성:**
+선택된 chip 또는 전달된 chip 목록을 crop PNG로 저장합니다. 현재 구현 기준으로는 YOLO export가 아니라 chip crop 추출 API입니다.
 
-```bash
-python scripts/generate_positions_from_image.py <이미지_경로>
-```
+## 현재 UI 동작
 
-### 5.2 기본 사용법
+`js/chip-annotator.js`는 positions 기반 overlay를 직접 사용합니다.
 
-1. **이미지 로드**
-   - L3 Tracker 웹 페이지 열기
-   - 왼쪽 파일 탐색기에서 웨이퍼 이미지 선택
+- chip hover/선택
+- 좌표 표시
+- class assignment
+- 저장 후 복원
 
-2. **Chip Annotation 모드 활성화**
-   - 우측 상단 `Chip Mode` 버튼 클릭 또는 `C` 키
+과거 문서의 `Chip Mode`, `C` 키, `G` 키 같은 설명은 현재 코드 기준으로 최신 보장이 약합니다. 현재 문서는 실제 API와 저장 구조를 기준으로 유지합니다.
 
-3. **Die Grid 표시**
-   - 우측 상단 `Grid` 버튼 클릭 또는 `G` 키
+## 현재 저장소에 없는 것
 
-4. **Chip 선택**
-   - **단일 선택:** 마우스로 칩 클릭
-   - **다중 선택:** `Ctrl` 키를 누른 채로 여러 칩 클릭
-   - **영역 선택:** 마우스 드래그로 영역 선택
-   - **좌표 확인:** 마우스를 칩 위에 올리면 `Chip (x, y)` 툴팁 표시
+다음 항목은 현재 저장소 구현 기준으로 사용법 문서에서 제거해야 합니다.
 
-5. **Annotations 저장**
-   - 우측 상단 `Save` 버튼 클릭 또는 `Ctrl + S`
+- `docs/CHIP_ANNOTATION_QUICKSTART.md`
+- `scripts/generate_positions_from_image.py`
+- `scripts/generate_demo_wafer.py`
+- `scripts/export_chip_crops.py`
+- `POST /api/export-yolo-dataset`
 
-### 5.3 키보드 단축키
+이 항목들은 현재 저장소에서 구현/제공되지 않거나 문서 기준에서 제거된 상태입니다.
 
-| 키 | 기능 |
-|---|---|
-| `C` | Chip Mode 토글 |
-| `G` | Die Grid 표시/숨김 (Chip Mode 활성화 시) |
-| `Ctrl + S` | Chip Annotations 저장 (Chip Mode 활성화 시) |
+## 문제 확인 포인트
 
-### 5.4 YOLO 데이터셋 내보내기
+### overlay가 보이지 않을 때
 
-1. "YOLO 데이터셋 내보내기" 버튼 클릭
-2. 필터 설정:
-   - 검증된 것만 (verified_only)
-   - 특정 클래스만 선택
-   - 날짜 범위 설정
-3. "내보내기" 클릭
-4. 생성된 데이터셋은 `/appdata/appuser/images/yolo_datasets/export_{timestamp}/`에 저장
+- `positions.json`이 실제로 존재하는지 확인
+- `/api/chip-positions?path=...` 응답이 비어 있지 않은지 확인
+- 브라우저 콘솔에서 chip annotator 초기화 오류가 없는지 확인
 
----
+### 저장이 안 될 때
 
-## 6. 문제 해결
-
-### Positions JSON을 찾을 수 없다는 오류
-
-**원인:** 이미지에 대한 positions JSON이 생성되지 않음
-
-**해결책:**
-```bash
-python scripts/generate_positions_from_image.py <이미지_경로>
-```
-
-### Chip Mode 활성화가 안됨
-
-**원인:** JavaScript 에러 또는 초기화 실패
-
-**해결책:**
-1. 브라우저 개발자 도구 열기 (F12)
-2. Console 탭에서 에러 메시지 확인
-3. 페이지 새로고침 (F5)
-
-### Grid가 표시되지 않음
-
-**원인:** Positions JSON이 로드되지 않음
-
-**해결책:**
-1. Chip Mode를 껐다가 다시 켜기
-2. 브라우저 콘솔에서 `viewer.chipAnnotator.positionsData` 확인
-
----
-
-## 참고 자료
-
-- **구현 파일:**
-  - Backend: `api/main.py`
-  - Frontend: `js/chip-annotator.js`
-  - Config: `api/config.py`
-  - Script: `scripts/generate_positions_from_image.py`
-
----
-
-**문서 끝**
+- `POST /api/chip-annotations` 응답 확인
+- 현재 folder context가 기대한 위치인지 확인
+- annotation JSON이 versioned 구조로 저장되는지 확인
 
