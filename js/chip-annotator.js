@@ -83,6 +83,7 @@ export class ChipAnnotator {
         this.coordPartId = document.getElementById('coord-partid');
         this.coordDevice = document.getElementById('coord-device');
         this.coordPgm = document.getElementById('coord-pgm');
+        this.coordBin = document.getElementById('coord-bin');
 
         // Current image path
         this.currentImagePath = null;
@@ -1363,6 +1364,10 @@ export class ChipAnnotator {
                     this.coordChipRel.textContent = '-';
                 }
             }
+            if (this.coordBin) {
+                const bval = chip.b != null ? String(chip.b) : '';
+                this.coordBin.textContent = (bval && bval !== 'Normal' && bval !== 'Invalid') ? bval : '-';
+            }
         } else {
             // Chip 위에 없으면 "-" 표시
             if (this.coordChipAbs) {
@@ -1370,6 +1375,9 @@ export class ChipAnnotator {
             }
             if (this.coordChipRel) {
                 this.coordChipRel.textContent = '-';
+            }
+            if (this.coordBin) {
+                this.coordBin.textContent = '-';
             }
         }
         this._updateMetadataDisplay();
@@ -2089,6 +2097,9 @@ export class ChipAnnotator {
         }
         if (this.coordPgm) {
             this.coordPgm.textContent = '-';
+        }
+        if (this.coordBin) {
+            this.coordBin.textContent = '-';
         }
     }
 }
