@@ -150,6 +150,46 @@ Chip Annotation은 positions를 직접 참조합니다.
 
 따라서 `device`, `partid`, `pgm` 같은 메타데이터를 단순 표시용 optional 정보로만 축소하면 불완전할 수 있습니다.
 
+## 현재 로컬 fail-bit 샘플 데이터 규칙
+
+현재 사내 로컬 PC에서 사용하는 샘플 데이터는 아래 경로를 기준으로 유지합니다.
+
+- `D:/project/data/wm-811k/palette_5mb`
+- `D:/project/data/wm-811k/palette_3k`
+- `D:/project/data/positions/palette_5mb`
+- `D:/project/data/positions/palette_3k`
+
+이 로컬 더미 데이터셋은 아래 추가 규칙을 따릅니다.
+
+### 1. full grade chip의 95% / 5% 규칙
+
+chip interior가 `Grade1..Grade7` 중 하나로 100% 채워져 있는 칩은 그대로 두지 않습니다.
+
+- chip border는 유지
+- interior 픽셀의 약 95%는 원래 grade 유지
+- interior 픽셀의 약 5%는 `Grade0`로 랜덤 치환
+
+즉 synthetic dataset에서도 완전한 단색 grade chip 대신, 소량의 `Grade0` 노이즈가 섞인 형태를 사용합니다.
+
+### 2. wafer 원형 더미 영역 제거
+
+wafer를 둥글게 보이게 하려고 chip 바깥에 남겨 둔 dummy 픽셀은 최종 데이터셋에서 유지하지 않습니다.
+
+- chip rectangle 바깥 픽셀은 모두 background index `8`
+- dummy outside-chip 인덱스는 남기지 않음
+
+즉 chip 영역과 배경 영역 사이에 별도의 원형 dummy zone이 있으면 안 됩니다.
+
+## 로컬 재생성 구현
+
+로컬 fail-bit dataset 재생성용 구현은 아래 스크립트를 사용합니다.
+
+```text
+scripts/refresh_failbit_local_maps.py
+```
+
+처음 보는 AI가 그대로 재생성할 수 있어야 하는 상세 절차, 파일 인벤토리, deterministic seed 규칙, `palette_3k`의 `wafer_palette_5mb.png` 복제 규칙은 `docs/LOCAL_FAILBIT_DATASET_SPEC.md`를 따릅니다.
+
 ## chip annotation 저장과의 차이
 
 이 문서는 `positions.json` 계약 문서입니다. chip annotation 저장 포맷은 별도 문서인 `docs/CHIP_ANNOTATION.md`를 따릅니다.
@@ -172,6 +212,6 @@ logs/color-legends.json
 
 ## 외부 파이프라인에 대한 범위
 
-현재 저장소에는 fail-bit synthetic dataset 생성 스크립트나 positions 생성 스크립트가 포함되어 있지 않습니다. 따라서 이 문서는 "저장소 내부 생성기 사용법"이 아니라, 앱이 소비하는 공통 계약 문서로 유지합니다.
+현재 저장소에는 로컬 fail-bit synthetic dataset 재생성 스크립트가 포함되어 있습니다. 다만 이 문서는 여전히 앱이 소비하는 공통 계약 문서로 유지합니다.
 
 외부 fail-bit 파이프라인 메모는 `docs/FAILBIT_DUAL_PIPELINE.md`를 참고합니다.

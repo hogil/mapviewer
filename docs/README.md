@@ -7,6 +7,7 @@
 | 문서 | 현재 역할 |
 |------|-----------|
 | `docs/IMAGE_PIPELINE.md` | 이미지 응답, 팔레트 인덱스, `positions.json`, 개인색/필터 적용의 공통 계약 |
+| `docs/LOCAL_FAILBIT_DATASET_SPEC.md` | 로컬 `palette_5mb` / `palette_3k` 재생성 절차, 파일 인벤토리, deterministic seed 규칙 |
 | `docs/FAILBIT_DUAL_PIPELINE.md` | fail-bit 파일명 필터 규칙과 외부 파이프라인 계약 메모 |
 | `docs/CHIP_ANNOTATION.md` | chip overlay, annotation 저장 구조, 관련 API |
 | `docs/COMPOSITE_MAP.md` | composite 생성, recolor, subset, positions 복사 규칙 |
@@ -19,6 +20,7 @@
 ## 정리 원칙
 
 - 팔레트 인덱스와 `positions.json` 공통 규격은 `docs/IMAGE_PIPELINE.md`를 기준으로 봅니다.
+- 로컬 fail-bit 샘플 데이터 생성 절차는 `docs/LOCAL_FAILBIT_DATASET_SPEC.md`를 기준으로 봅니다.
 - composite, chip annotation, personalized colors 문서는 공통 규격을 다시 복사하지 않고 필요한 차이만 적습니다.
 - 저장소에 없는 스크립트나 미구현 API는 사용법 문서에서 제거하거나 "외부 파이프라인"으로 명시합니다.
 - 예전 fallback 문자열, 과거 실험 수치, 희망 설계보다 현재 코드 경로와 실제 엔드포인트를 우선합니다.

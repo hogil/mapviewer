@@ -1,12 +1,19 @@
 # Fail-Bit Dual Pipeline
 
-이 문서는 저장소 내부 생성기 사용법이 아니라, fail-bit 외부 파이프라인이 이 앱과 맞으려면 어떤 계약을 따라야 하는지 정리한 메모입니다.
+이 문서는 fail-bit 외부 파이프라인 계약과 로컬 dummy 데이터셋의 역할 분리를 설명하는 메모입니다.
 
-공통 팔레트 인덱스, `positions.json`, 이미지 응답 계약은 `docs/IMAGE_PIPELINE.md`를 정본으로 봅니다.
+정본 문서 구분:
+
+- 공통 팔레트 인덱스, `positions.json`, 이미지 응답 계약: `docs/IMAGE_PIPELINE.md`
+- 로컬 `palette_5mb` / `palette_3k` 재생성 절차와 seed 규칙: `docs/LOCAL_FAILBIT_DATASET_SPEC.md`
 
 ## 현재 저장소 범위
 
-현재 저장소에는 fail-bit synthetic dataset 생성 스크립트가 포함되어 있지 않습니다. 따라서 이 문서는 "이 저장소 안에서 재생성하는 법"이 아니라 외부 파이프라인 계약 문서입니다.
+현재 저장소에는 로컬 fail-bit dataset 재생성 스크립트가 포함되어 있습니다.
+
+- 스크립트: `scripts/refresh_failbit_local_maps.py`
+
+하지만 이 문서의 주목적은 여전히 "외부 파이프라인 계약 설명"입니다. 로컬 데이터셋을 실제로 만드는 상세 절차는 `docs/LOCAL_FAILBIT_DATASET_SPEC.md`를 따릅니다.
 
 ## 핵심 원칙
 
@@ -70,6 +77,27 @@ fail-bit 데이터셋은 필요 시 아래 식별용 메타데이터를 가질 �
 - `coord.grid_edges`, `chips[].rect`, `x_abs/y_abs/x_cal/y_cal`, `b`를 제공해야 함
 
 자세한 스키마는 `docs/IMAGE_PIPELINE.md`를 따릅니다.
+
+## 현재 로컬 더미 데이터 규칙
+
+사내 로컬 PC에서 유지하는 샘플 데이터셋은 아래 경로를 기준으로 사용합니다.
+
+- `D:/project/data/wm-811k/palette_5mb`
+- `D:/project/data/wm-811k/palette_3k`
+- `D:/project/data/positions/palette_5mb`
+- `D:/project/data/positions/palette_3k`
+
+현재 로컬 규칙 요약:
+
+- `Grade1..Grade7` chip interior는 그대로 두지 않고, interior 픽셀의 약 95%만 원래 grade로 유지합니다.
+- 나머지 약 5% interior 픽셀은 deterministic random으로 `Grade0` 치환합니다.
+- chip border는 유지하고, interior만 바꿉니다.
+- wafer를 둥글게 보이게 하려고 chip 바깥에 남아 있던 dummy 영역은 전부 배경으로 정리합니다.
+- 즉 chip rectangle 밖 픽셀은 최종적으로 background index `8`만 남아야 합니다.
+
+`palette_3k`는 의도적으로 synthetic dataset일 수 있으므로, 현재 로컬 기본 규칙에서는 `palette_5mb/wafer_palette_5mb.png` 1장을 전체 PNG 3000장으로 복제하는 방식도 사용합니다.
+
+세부 수치와 seed 공식은 `docs/LOCAL_FAILBIT_DATASET_SPEC.md`를 그대로 따릅니다.
 
 ## 보안 메모
 
