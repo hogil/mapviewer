@@ -20437,6 +20437,7 @@ class WaferMapViewer {
             .replace(/\\/g, '/')
             .replace(/^\/+/, '')
             .replace(/\/+/g, '/')
+            .replace(/\/+$/, '')
             .trim();
     }
 
