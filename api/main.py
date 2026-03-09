@@ -110,6 +110,7 @@ from .personal_colors import (
     plte_grade_filter_memory,
     plte_inplace_patch_memory,
     plte_bottom_filter_memory,
+    plte_normalize_border_memory,
 )
 from .composite_colors import (
     load_composite_color_settings,
@@ -123,6 +124,8 @@ from .my_lot import (
     delete_group as my_lot_delete_group,
     rename_group as my_lot_rename_group,
     list_my_lot as my_lot_list,
+    list_my_lot_groups as my_lot_list_groups,
+    list_group_entries as my_lot_list_group_entries,
     remove_entry as my_lot_remove_entry,
     remove_entries_batch as my_lot_remove_entries_batch,
     create_manual_entry as my_lot_create_manual_entry,
@@ -2746,6 +2749,40 @@ async def get_my_lot_entries(request: Request):
         raise HTTPException(status_code=500, detail="MY LOT 데이터를 불러오지 못했습니다.")
 
 
+@app.get("/api/my-lot/groups")
+async def get_my_lot_groups(request: Request):
+    """
+    MY LOT 그룹(폴더) 목록만 반환하는 경량 엔드포인트.
+
+    - LOT / Wafer 모드별 그룹 이름만 포함
+    - 각 그룹의 entries는 비어 있음
+    """
+    login_id = _resolve_my_lot_login(request)
+    try:
+        return my_lot_list_groups(login_id)
+    except Exception as exc:
+        logger.error(f"❌ [/api/my-lot/groups] 조회 실패: {exc}")
+        raise HTTPException(status_code=500, detail="MY LOT 그룹 목록을 불러오지 못했습니다.")
+
+
+@app.get("/api/my-lot/entries")
+async def get_my_lot_group_entries(request: Request, mode: str, group: str):
+    """
+    특정 모드/그룹의 엔트리 목록만 반환.
+    """
+    login_id = _resolve_my_lot_login(request)
+    if not group:
+        raise HTTPException(status_code=400, detail="group 이름이 필요합니다.")
+    try:
+        entries = my_lot_list_group_entries(login_id, mode, group)
+        return entries
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"❌ [/api/my-lot/entries] 조회 실패: {exc}")
+        raise HTTPException(status_code=500, detail="MY LOT 그룹 항목을 불러오지 못했습니다.")
+
+
 @app.post("/api/my-lot/group")
 async def create_my_lot_group(request: Request):
     login_id = _resolve_my_lot_login(request)
@@ -3465,11 +3502,15 @@ def _apply_png_filters_memory(
     scheme: Optional[str] = None,
     grade_filter: Optional[str] = None,
     bottom_filter: Optional[str] = None,
+    border_normalize: bool = False,
 ) -> bytearray:
     patched = bytearray(png_data)
 
     if personalized and scheme:
         patched = plte_inplace_patch_memory(patched, scheme)
+
+    if border_normalize:
+        patched = plte_normalize_border_memory(patched)
 
     grade_indices = _parse_grade_filter_indices(grade_filter)
     if grade_indices:
@@ -3498,10 +3539,11 @@ def _build_filter_variant_token(
     scheme: Optional[str] = None,
     grade_filter: Optional[str] = None,
     bottom_filter: Optional[str] = None,
+    border_normalize: bool = False,
 ) -> str:
     norm_grade = _normalize_filter_value(grade_filter)
     norm_bottom = _normalize_filter_value(bottom_filter)
-    if not norm_grade and not norm_bottom:
+    if not norm_grade and not norm_bottom and not border_normalize:
         return ""
 
     parts = [f"rev={FILTER_CACHE_REV}"]
@@ -3509,6 +3551,8 @@ def _build_filter_variant_token(
         parts.append(f"gf={norm_grade}")
     if norm_bottom:
         parts.append(f"bf={norm_bottom}")
+    if border_normalize:
+        parts.append("bn=1")
     if personalized and scheme:
         parts.append(f"s={scheme}")
     return "|".join(parts)
@@ -3520,6 +3564,7 @@ def _resolve_pyramid_dir(
     scheme: Optional[str] = None,
     grade_filter: Optional[str] = None,
     bottom_filter: Optional[str] = None,
+    border_normalize: bool = False,
 ) -> Path:
     level_tag = int(level * 100)
     filter_token = _build_filter_variant_token(
@@ -3527,6 +3572,7 @@ def _resolve_pyramid_dir(
         scheme=scheme,
         grade_filter=grade_filter,
         bottom_filter=bottom_filter,
+        border_normalize=border_normalize,
     )
 
     # 필터 캐시는 scheme/filter/rev별로 분리해 stale 충돌을 방지한다.
@@ -4011,6 +4057,7 @@ def _generate_thumbnail_sync(
     force_jpeg_encoder: Optional[str] = None,
     grade_filter: Optional[str] = None,
     bottom_filter: Optional[str] = None,
+    border_normalize: bool = False,
 ):
     try:
         thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4028,7 +4075,7 @@ def _generate_thumbnail_sync(
             # 그리드 썸네일 생성 - 개인색/Grade/Bottom 필터 적용
             # =============================================================
             should_patch_palette = image_path.suffix.lower() == '.png' and (
-                (personalized and scheme) or bool(grade_filter) or bool(bottom_filter)
+                (personalized and scheme) or bool(grade_filter) or bool(bottom_filter) or border_normalize
             )
 
             if should_patch_palette:
@@ -4043,6 +4090,7 @@ def _generate_thumbnail_sync(
                         scheme=scheme,
                         grade_filter=grade_filter,
                         bottom_filter=bottom_filter,
+                        border_normalize=border_normalize,
                     )
 
                     vips_image = pyvips.Image.new_from_buffer(
@@ -4183,7 +4231,7 @@ def _generate_thumbnail_sync(
             pass
 
         pil_image = None
-        if image_path.suffix.lower() == '.png' and ((personalized and scheme) or grade_filter or bottom_filter):
+        if image_path.suffix.lower() == '.png' and ((personalized and scheme) or grade_filter or bottom_filter or border_normalize):
             try:
                 with open(image_path, 'rb') as f:
                     png_data = bytearray(f.read())
@@ -4194,6 +4242,7 @@ def _generate_thumbnail_sync(
                     scheme=scheme,
                     grade_filter=grade_filter,
                     bottom_filter=bottom_filter,
+                    border_normalize=border_normalize,
                 )
                 pil_image = Image.open(io.BytesIO(bytes(png_data)))
             except Exception as e:
@@ -4233,6 +4282,7 @@ async def generate_thumbnail(
     scheme: Optional[str] = None,
     grade_filter: Optional[str] = None,
     bottom_filter: Optional[str] = None,
+    border_normalize: bool = False,
 ) -> Optional[Path]:
     start_time = time.time()
     try:
@@ -4243,6 +4293,7 @@ async def generate_thumbnail(
             scheme=scheme,
             grade_filter=grade_filter,
             bottom_filter=bottom_filter,
+            border_normalize=border_normalize,
         )
         if filter_token:
             variant = filter_token
@@ -4308,6 +4359,7 @@ async def generate_thumbnail(
                     None,
                     grade_filter,
                     bottom_filter,
+                    border_normalize,
                 )
                 gen_elapsed = time.time() - gen_start
                 
@@ -4544,7 +4596,7 @@ def _pyramid_path_lock(path: Path):
         lock.release()
 
 
-def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None):
+def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None, border_normalize: bool = False):
     """🚀 피라미드 레벨 이미지 생성 (속도 극대화)"""
     import time
     start_time = time.time()
@@ -4622,8 +4674,8 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                 # 🔥 초고속 방식에 PLTE 패치만 추가
                 # Grade 필터가 우선, 그 다음 개인색 설정
                 # 원본 이미지가 PNG이면 팔레트 필터링 적용 (저장 포맷과 무관 - JPEG로 저장해도 적용)
-                if (grade_filter or bottom_filter) and image_path.suffix.lower() == '.png':
-                    logger.info(f"🎯 [PYRAMID] 필터 적용: grade_filter={grade_filter}, bottom_filter={bottom_filter}, path={image_path.name}, target_format={target_format}")
+                if (grade_filter or bottom_filter or border_normalize) and image_path.suffix.lower() == '.png':
+                    logger.info(f"🎯 [PYRAMID] 필터 적용: grade_filter={grade_filter}, bottom_filter={bottom_filter}, border_normalize={border_normalize}, path={image_path.name}, target_format={target_format}")
                     try:
                         with open(image_path, 'rb') as f:
                             png_data = bytearray(f.read())
@@ -4635,6 +4687,7 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                             scheme=scheme,
                             grade_filter=grade_filter,
                             bottom_filter=bottom_filter,
+                            border_normalize=border_normalize,
                         )
 
                         image = pyvips.Image.new_from_buffer(bytes(png_data), "", access='sequential', fail_on='none', memory=True, unlimited=True)
@@ -4865,7 +4918,7 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
 _pyramid_bg_executor = ThreadPoolExecutor(max_workers=config.PYRAMID_BG_WORKERS)
 _pyramid_bg_generating = set()  # 현재 생성 중인 파일 경로
 
-async def _generate_other_levels_background(image_path: Path, current_level: float, stem: str, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None):
+async def _generate_other_levels_background(image_path: Path, current_level: float, stem: str, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None, border_normalize: bool = False):
     """다른 피라미드 레벨들을 background에서 생성 (원본 재사용 파이프라인)"""
     format_ext = config.PYRAMID_FORMAT.lower()
     try:
@@ -4900,7 +4953,8 @@ async def _generate_other_levels_background(image_path: Path, current_level: flo
             personalized,
             scheme,
             grade_filter,
-            bottom_filter
+            bottom_filter,
+            border_normalize
         )
         
         # 결과 로깅
@@ -4928,7 +4982,7 @@ def _generate_pyramid_bg_worker(image_path: Path, pyramid_path: Path, level: flo
         _pyramid_bg_generating.discard(path_key)
 
 
-def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format_ext: str, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None):
+def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format_ext: str, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None, border_normalize: bool = False):
     """원본 이미지를 한 번만 읽고 여러 레벨을 연속 생성하는 파이프라인
     🔥 Grade 필터 또는 개인색 설정이 있으면 원본을 먼저 메모리에서 변경하고,
     그 변경된 이미지로 모든 레벨을 생성"""
@@ -4946,10 +5000,10 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
     try:
         # 🔥 Step 1: 원본 이미지를 먼저 필터링 (Grade/Bottom) 또는 개인색으로 변경 (메모리에서)
         original_image = None
-        if (grade_filter or bottom_filter) and image_path.suffix.lower() == '.png':
+        if (grade_filter or bottom_filter or border_normalize) and image_path.suffix.lower() == '.png':
             # Grade/Bottom 필터 (개인색 설정 먼저 적용 후 필터링)
             try:
-                logger.info(f"🎯 [PIPELINE] 필터 적용 시작: grade_filter={grade_filter}, bottom_filter={bottom_filter}, levels={levels}, path={image_path.name}")
+                logger.info(f"🎯 [PIPELINE] 필터 적용 시작: grade_filter={grade_filter}, bottom_filter={bottom_filter}, border_normalize={border_normalize}, levels={levels}, path={image_path.name}")
 
                 with open(image_path, 'rb') as f:
                     png_data = bytearray(f.read())
@@ -4961,6 +5015,7 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                     scheme=scheme,
                     grade_filter=grade_filter,
                     bottom_filter=bottom_filter,
+                    border_normalize=border_normalize,
                 )
 
                 original_image = pyvips.Image.new_from_buffer(
@@ -5029,14 +5084,16 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                     scheme=scheme,
                     grade_filter=grade_filter,
                     bottom_filter=bottom_filter,
+                    border_normalize=border_normalize,
                 )
                 logger.debug(
-                    "🎯 [PIPELINE] level=%s: pyramid_dir=%s (scheme=%s, grade_filter=%s, bottom_filter=%s)",
+                    "🎯 [PIPELINE] level=%s: pyramid_dir=%s (scheme=%s, grade_filter=%s, bottom_filter=%s, border_normalize=%s)",
                     level,
                     pyramid_dir.name,
                     scheme,
                     grade_filter,
                     bottom_filter,
+                    border_normalize,
                 )
                 
                 # 🔥 디렉토리 생성 안전성 강화
@@ -5413,7 +5470,8 @@ async def get_image(
     personalized: bool = False,
     scheme: Optional[str] = None,
     grade_filter: Optional[str] = None,
-    bottom_filter: Optional[str] = None
+    bottom_filter: Optional[str] = None,
+    border_normalize: bool = False,
 ):
     try:
         is_head = request.method == "HEAD"
@@ -5476,6 +5534,7 @@ async def get_image(
                 scheme=scheme,
                 grade_filter=grade_filter,
                 bottom_filter=bottom_filter,
+                border_normalize=border_normalize,
             )
             pyramid_dir.mkdir(parents=True, exist_ok=True)
 
@@ -5569,11 +5628,11 @@ async def get_image(
             # (임시 파일 생성 제거, 메모리에서 직접 PLTE 패치 후 pyvips로 로드)
             if not is_head:
                 logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}, path={pyramid_path}, personalized={personalized}, scheme={scheme}, grade_filter={grade_filter}, bottom_filter={bottom_filter}")
-            _generate_pyramid_sync(image_path, pyramid_path, level, personalized=personalized, scheme=scheme, grade_filter=grade_filter, bottom_filter=bottom_filter)
+            _generate_pyramid_sync(image_path, pyramid_path, level, personalized=personalized, scheme=scheme, grade_filter=grade_filter, bottom_filter=bottom_filter, border_normalize=border_normalize)
 
             # 🔥 Background에서 다른 레벨들도 생성 시작 (사용자 대기 없음)
             # 개인별 설정 또는 필터가 활성화된 경우 background에서도 동일한 설정으로 생성
-            asyncio.create_task(_generate_other_levels_background(image_path, level, stem, personalized=personalized, scheme=scheme, grade_filter=grade_filter, bottom_filter=bottom_filter))
+            asyncio.create_task(_generate_other_levels_background(image_path, level, stem, personalized=personalized, scheme=scheme, grade_filter=grade_filter, bottom_filter=bottom_filter, border_normalize=border_normalize))
 
             # 생성된 파일 확인 및 반환
             if pyramid_path.exists():
@@ -5601,9 +5660,9 @@ async def get_image(
             if not is_head:
                 logger.info(f"🎯 [ORIGINAL MODE] {image_path} - personalized={personalized}, scheme={scheme}, grade_filter={grade_filter}, bottom_filter={bottom_filter}")
 
-            # 🔥 Grade/Bottom 필터링이 활성화되고 PNG인 경우 PLTE 필터 적용
+            # 🔥 Grade/Bottom/Border 필터링이 활성화되고 PNG인 경우 PLTE 필터 적용
             # 개인색 설정을 먼저 적용한 후 필터 적용
-            if (grade_filter or bottom_filter) and image_path.suffix.lower() == '.png':
+            if (grade_filter or bottom_filter or border_normalize) and image_path.suffix.lower() == '.png':
                 try:
                     # 1. 원본 이미지 파일 읽기
                     with open(image_path, 'rb') as f:
@@ -5616,6 +5675,7 @@ async def get_image(
                         scheme=scheme,
                         grade_filter=grade_filter,
                         bottom_filter=bottom_filter,
+                        border_normalize=border_normalize,
                     )
 
                     # 메모리에서 직접 반환
@@ -5640,7 +5700,7 @@ async def get_image(
                     # 폴백: 원본 이미지 반환
 
             # 🔥 개인색 설정이 활성화되고 PNG인 경우 PLTE 패치 적용 (필터가 없을 때만)
-            elif personalized and scheme and image_path.suffix.lower() == '.png':
+            elif (personalized and scheme or border_normalize) and image_path.suffix.lower() == '.png':
                 try:
                     # 원본 이미지 파일 읽기 및 PLTE 패치
                     with open(image_path, 'rb') as f:
@@ -5651,6 +5711,7 @@ async def get_image(
                         png_data=png_data,
                         personalized=personalized,
                         scheme=scheme,
+                        border_normalize=border_normalize,
                     )
 
                     # 메모리에서 직접 반환
@@ -5692,6 +5753,7 @@ async def get_thumbnail(
     scheme: Optional[str] = None,
     grade_filter: Optional[str] = None,
     bottom_filter: Optional[str] = None,
+    border_normalize: bool = False,
 ):
     try:
         original_rel = _lookup_original_relpath_from_classification_path(path)
@@ -5750,6 +5812,7 @@ async def get_thumbnail(
                 scheme=scheme,
                 grade_filter=grade_filter,
                 bottom_filter=bottom_filter,
+                border_normalize=border_normalize,
             )
             if thumb and thumb.exists():
                 st = thumb.stat()
@@ -5790,6 +5853,7 @@ async def get_thumbnail(
                             scheme=scheme,
                             grade_filter=grade_filter,
                             bottom_filter=bottom_filter,
+                            border_normalize=border_normalize,
                         )
             else:
                 # 썸네일 생성 실패 시 원본 이미지 제공
@@ -5801,6 +5865,7 @@ async def get_thumbnail(
                     scheme=scheme,
                     grade_filter=grade_filter,
                     bottom_filter=bottom_filter,
+                    border_normalize=border_normalize,
                 )
         except Exception as thumb_error:
             logger.warning(f"썸네일 생성 실패, 원본 이미지 제공: {thumb_error}")
@@ -5811,6 +5876,7 @@ async def get_thumbnail(
                 scheme=scheme,
                 grade_filter=grade_filter,
                 bottom_filter=bottom_filter,
+                border_normalize=border_normalize,
             )
     except HTTPException:
         raise

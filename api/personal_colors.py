@@ -644,17 +644,22 @@ def plte_bottom_filter_memory(
             white_color = FILTERED_COLOR_RGB
 
             # 팔레트 필터링:
-            # 1) Grade(0~7)는 선택된 grade만 유지하고 나머지는 흰색
+            # 1) Grade(0~7)는 grade filter가 활성화된 경우에만 필터링 (없으면 유지)
             # 2) Bottom(10~23)은 선택된 값만 유지하고 나머지는 흰색
             # 3) bg/text(8,9)는 유지
+            # ※ grade filter 없이 bottom filter만 활성화된 경우, grade 인덱스는 그대로
+            #   유지한다. Normal/Invalid 칩의 내부가 grade 색으로 칠해져 있어서, grade를
+            #   흰색으로 치환하면 Normal/Invalid 칩이 사라지는 버그가 발생한다.
             new_plte = current_plte[:]
             modified_indices = []
             grade_set = set(grade_indices or [])
 
-            # Grade 0~7 처리
+            # Grade 0~7 처리 (grade filter가 있을 때만 적용)
             for grade_idx in range(0, min(8, num_colors)):
-                if grade_set and grade_idx in grade_set:
-                    continue
+                if not grade_set:
+                    continue  # grade filter 없음: grade 인덱스 유지
+                if grade_idx in grade_set:
+                    continue  # 선택된 grade: 유지
                 new_plte[grade_idx * 3] = white_color[0]
                 new_plte[grade_idx * 3 + 1] = white_color[1]
                 new_plte[grade_idx * 3 + 2] = white_color[2]
@@ -691,6 +696,50 @@ def plte_bottom_filter_memory(
     return png_data
 
 
+def plte_normalize_border_memory(png_data: bytearray) -> bytearray:
+    """모든 border 팔레트 인덱스(11~23)를 Normal 색(인덱스 10)으로 통일한다.
+
+    Border 정규화 모드: chip 테두리 색을 구분 없이 Normal 색으로 표시한다.
+    - 인덱스 10 (Normal border) 색을 읽어 인덱스 11~23에 복사한다.
+    - 인덱스 0~9, 24+ 는 건드리지 않는다.
+    """
+    pos = 8  # PNG 시그니처 건너뛰기
+    while pos < len(png_data):
+        if pos + 4 > len(png_data):
+            break
+        chunk_length = struct.unpack('>I', png_data[pos:pos + 4])[0]
+        pos += 4
+        if pos + 4 > len(png_data):
+            break
+        chunk_type = png_data[pos:pos + 4]
+        pos += 4
+
+        if chunk_type == b'PLTE':
+            plte_start = pos
+            plte_end = pos + chunk_length
+            if plte_end > len(png_data):
+                break
+            plte = list(png_data[plte_start:plte_end])
+            num_colors = len(plte) // 3
+            # Normal border color (index 10)
+            if num_colors > 10:
+                nr, ng, nb = plte[30], plte[31], plte[32]
+                for idx in range(11, min(24, num_colors)):
+                    plte[idx * 3]     = nr
+                    plte[idx * 3 + 1] = ng
+                    plte[idx * 3 + 2] = nb
+                png_data[plte_start:plte_end] = plte
+                crc_data = chunk_type + bytes(plte)
+                crc = zlib.crc32(crc_data) & 0xffffffff
+                if plte_end + 4 <= len(png_data):
+                    png_data[plte_end:plte_end + 4] = struct.pack('>I', crc)
+            break
+
+        pos += chunk_length + 4
+
+    return png_data
+
+
 __all__ = [
     "load_color_legends",
     "save_color_legends",
@@ -701,4 +750,5 @@ __all__ = [
     "plte_inplace_patch_memory",
     "plte_grade_filter_memory",
     "plte_bottom_filter_memory",
+    "plte_normalize_border_memory",
 ]

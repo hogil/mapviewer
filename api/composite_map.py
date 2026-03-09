@@ -513,8 +513,7 @@ def _count_low_grade_occurrences(
 ) -> np.ndarray:
     """
     (N, H, W) 인덱스 배열에서 grade 0~7의 등장 횟수를 계산.
-    4차원 브로드캐스트 대신 np.add.at 기반 누적로직을 사용하여
-    메모리 사용량을 8배 이상 줄이고 CPU 캐시 효율을 높인다.
+    빠른 numpy vectorization 연산을 통해 np.add.at로 인한 속도 저하를 없앰.
     """
     if stacked_indices.ndim != 3:
         raise ValueError("stacked_indices must be a 3D array (N, H, W)")
@@ -523,29 +522,13 @@ def _count_low_grade_occurrences(
     if total_images == 0 or height == 0 or width == 0:
         return np.zeros((8, height, width), dtype=np.uint16)
 
-    inferred_chunk = chunk_size or COMPOSITE_BATCH_SIZE or 8
-    chunk = max(1, min(total_images, max(4, min(64, inferred_chunk))))
-
-    flat_pixels = height * width
-    counts = np.zeros((8, flat_pixels), dtype=np.uint32)
-    base_pixels = np.arange(flat_pixels, dtype=np.int64)
-    pixel_cache: Dict[int, np.ndarray] = {}
-
-    for start in range(0, total_images, chunk):
-        chunk_arr = stacked_indices[start:start + chunk]
-        current_len = chunk_arr.shape[0]
-        flat_chunk = chunk_arr.reshape(-1)
-        valid_mask = flat_chunk < 8
-        if not valid_mask.any():
-            continue
-        if current_len not in pixel_cache:
-            pixel_cache[current_len] = np.tile(base_pixels, current_len)
-        pixel_ids = pixel_cache[current_len][valid_mask]
-        grade_ids = flat_chunk[valid_mask].astype(np.int64, copy=False)
-        np.add.at(counts, (grade_ids, pixel_ids), 1)
-
-    clipped = np.clip(counts, 0, np.iinfo(np.uint16).max).astype(np.uint16, copy=False)
-    return clipped.reshape(8, height, width)
+    counts = np.zeros((8, height, width), dtype=np.uint16)
+    
+    # 0부터 7까지 각 숫자에 대해 boolean 마스크를 만들고 이미지 축(axis=0)을 따라 합산
+    for g in range(8):
+        counts[g] = (stacked_indices == g).sum(axis=0, dtype=np.uint16)
+        
+    return counts
 
 
 if _HAS_NUMBA:
@@ -1788,9 +1771,8 @@ def create_composite_heatmaps(
 
     t = time.perf_counter()
     heatmap_times = []
-    for idx in indices:
-        if idx >= 8:
-            continue
+    
+    def _save_heatmap_task(idx: int) -> Optional[Dict[str, Any]]:
         t_hm = time.perf_counter()
         result = base_indices.copy()
         presence_mask = grade_presence[idx].copy()
@@ -1806,14 +1788,28 @@ def create_composite_heatmaps(
         pixel_count = int(np.count_nonzero(presence_mask))
         percentage = round(pixel_count / total_pixels * 100, 2) if total_pixels else 0
         heatmap_time = time.perf_counter() - t_hm
-        heatmap_times.append(heatmap_time)
-        heatmaps.append({
+        return {
             "index": idx,
             "path": rel_path,
             "pixel_count": pixel_count,
             "max_count": processed_count,
             "percentage": percentage,
-        })
+            "heatmap_time": heatmap_time,
+        }
+
+    # ThreadPoolExecutor를 사용해 이미지 생성 및 저장 병렬화
+    valid_indices = [idx for idx in indices if idx < 8]
+    with ThreadPoolExecutor(max_workers=min(len(valid_indices), 8)) as hm_pool:
+        futures = []
+        for idx in valid_indices:
+            futures.append(hm_pool.submit(_save_heatmap_task, idx))
+            
+        for future in futures:
+            res = future.result()
+            if res:
+                heatmap_times.append(res.pop("heatmap_time"))
+                heatmaps.append(res)
+
     total_heatmap_time = time.perf_counter() - t
     _mark("save_heatmaps", t)
 

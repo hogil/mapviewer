@@ -235,6 +235,28 @@ export class ChipAnnotator {
     }
 
     /**
+     * Normalize a chip's b-value to match the canonical bottomFilterSet format.
+     * Mirrors Python's _classify_chip_bottom_value logic.
+     * - null/undefined/""  → "Normal"
+     * - "normal"/"nor"/"border" (case-insensitive) → "Normal"
+     * - "invalid"/"inv"   → "Invalid"
+     * - "B285"/285        → "285"
+     */
+    _normalizeBottomValue(b) {
+        if (b === null || b === undefined) return 'Normal';
+        const str = String(b).trim();
+        if (!str) return 'Normal';
+        const lower = str.toLowerCase();
+        if (lower === 'normal' || lower === 'nor' || lower === 'border') return 'Normal';
+        if (lower === 'invalid' || lower === 'inv') return 'Invalid';
+        if (lower.startsWith('b') && /^\d+$/.test(lower.slice(1))) {
+            return String(parseInt(lower.slice(1), 10));
+        }
+        if (/^\d+$/.test(str)) return String(parseInt(str, 10));
+        return str;
+    }
+
+    /**
      * Set Bottom Filter (Chip b-value based mask)
      * @param {Set|Array} filterSet - Set of b-values to keep visible (others masked white)
      */
@@ -382,7 +404,7 @@ export class ChipAnnotator {
             if (imgX >= rect.x0 && imgX <= rect.x1 &&
                 imgY >= rect.y0 && imgY <= rect.y1) {
                 // 🔥 Bottom Filter가 활성화된 경우, 가려진 칩은 선택 불가
-                if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(String(chip.b))) {
+                if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) {
                     return null;
                 }
                 return { ...chip, index: i };
@@ -408,7 +430,7 @@ export class ChipAnnotator {
             if (chip.x_abs >= minX && chip.x_abs <= maxX &&
                 chip.y_abs >= minY && chip.y_abs <= maxY) {
                 // 🔥 Bottom Filter가 활성화된 경우, 가려진 칩은 선택 불가
-                if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(String(chip.b))) {
+                if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) {
                     continue;
                 }
                 selected.push(i);
@@ -1056,7 +1078,7 @@ export class ChipAnnotator {
             ctx.fillStyle = '#ffffff';
             ctx.beginPath();
             this.chips.forEach(chip => {
-                if (chip && !this.bottomFilterSet.has(String(chip.b))) {
+                if (chip && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) {
                     const rect = chip.rect;
                     const x = rect.x0 * transform.scale + transform.dx;
                     const y = rect.y0 * transform.scale + transform.dy + Y_OFFSET;
@@ -1082,7 +1104,7 @@ export class ChipAnnotator {
             );
             if (!chip) return;
             // Bottom 필터 활성 시 허용된 b 값만 렌더링
-            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(String(chip.b))) {
+            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) {
                 return;
             }
             const isVisible = !activeSet || activeSet.has(chipClass);
@@ -1097,7 +1119,7 @@ export class ChipAnnotator {
         if (this.selectedChips.size > 0) {
             this.selectedChips.forEach(chipIdx => {
                 const chip = this.chips[chipIdx];
-                if (chip && (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(String(chip.b)))) {
+                if (chip && (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(this._normalizeBottomValue(chip.b)))) {
                     this._drawChipRect(chip, this.selectedColor);
                 }
             });
@@ -1110,7 +1132,7 @@ export class ChipAnnotator {
                 if (
                     chip &&
                     !this.selectedChips.has(chipIdx) &&
-                    (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(String(chip.b)))
+                    (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(this._normalizeBottomValue(chip.b)))
                 ) {
                     // 🔥 이미 선택된 chip은 제외 (중복 표시 방지)
                     this._drawChipRect(chip, 'rgba(255, 255, 0, 0.2)'); // 🔥 더 투명하게 미리보기 (0.3 -> 0.2)
@@ -1120,7 +1142,7 @@ export class ChipAnnotator {
 
         // Draw hovered chip
         if (this.hoveredChip) {
-            if (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(String(this.hoveredChip.b))) {
+            if (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(this._normalizeBottomValue(this.hoveredChip.b))) {
                 this._drawChipRect(this.hoveredChip, this.hoverColor);
             }
         }
@@ -1365,7 +1387,7 @@ export class ChipAnnotator {
                 }
             }
             if (this.coordBin) {
-                const bval = chip.b != null ? String(chip.b) : '';
+                const bval = chip.b != null ? this._normalizeBottomValue(chip.b) : '';
                 this.coordBin.textContent = (bval && bval !== 'Normal' && bval !== 'Invalid') ? bval : '-';
             }
         } else {
@@ -1851,7 +1873,7 @@ export class ChipAnnotator {
             const rect = chip.rect;
 
             // 🔥 Bottom Filter가 활성화된 경우, 가려진 칩은 선택 불가
-            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(String(chip.b))) {
+            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) {
                 continue;
             }
 
@@ -1885,7 +1907,7 @@ export class ChipAnnotator {
             const rect = chip.rect;
 
             // 🔥 Bottom Filter가 활성화된 경우, 가려진 칩은 선택 불가
-            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(String(chip.b))) {
+            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) {
                 continue;
             }
 
@@ -1988,7 +2010,7 @@ export class ChipAnnotator {
 
         this.chips.forEach((chip, index) => {
             // Skip chips filtered out by Bottom Legend
-            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(String(chip.b))) {
+            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) {
                 return;
             }
             newSelections.push(index);

@@ -807,30 +807,33 @@ export class ContextMenuManager {
      * 현재 선택된 파일들 가져오기
      */
     getSelectedFiles() {
-        // 단일 이미지 뷰(그리드에서 더블클릭 진입)에서는 현재 이미지만 대상
-        if (this.viewer.viewMode === 'gridImage') {
-            if (this.viewer.gridSelectedIdxs && this.viewer.gridSelectedIdxs.length > 0) {
-                const imageList = this.viewer.currentGridImages || this.viewer.selectedImages;
-                if (imageList) {
-                    return this.viewer.gridSelectedIdxs.map(idx => imageList[idx]).filter(Boolean);
-                }
+        // 🔥 WaferMapViewer의 공통 선택 로직 우선 사용
+        if (this.viewer?.getSelectedImagesForModal) {
+            const selected = this.viewer.getSelectedImagesForModal();
+            if (Array.isArray(selected) && selected.length > 0) {
+                return [...selected];
+            }
+        }
+
+        const imageList = this.viewer.currentGridImages || this.viewer.selectedImages || this.viewer.gridViewImageList;
+        const selectedIdxs = this.viewer.gridSelectedIdxs;
+
+        // 그리드 선택이 있는 경우 (다중 선택 포함)
+        if (selectedIdxs && selectedIdxs.length > 0 && imageList) {
+            return selectedIdxs.map(idx => imageList[idx]).filter(Boolean);
+        }
+
+        // 2. 단일 이미지 상세 보기 모드 (선택된 인덱스가 없는 경우 fallback)
+        if (this.viewer.viewMode === 'gridImage' || this.viewer.detailMode) {
+            if (this.viewer.detailImagePath) {
+                return [this.viewer.detailImagePath];
             }
             if (this.viewer.selectedImagePath) {
                 return [this.viewer.selectedImagePath];
             }
         }
 
-        if (this.viewer.gridMode && this.viewer.gridSelectedIdxs && this.viewer.gridSelectedIdxs.length > 0) {
-            const imageList = this.viewer.currentGridImages || this.viewer.selectedImages;
-            if (imageList) {
-                return this.viewer.gridSelectedIdxs.map(idx => imageList[idx]).filter(Boolean);
-            }
-        }
-        
-        if (!this.viewer.gridMode && this.viewer.selectedImagePath) {
-            return [this.viewer.selectedImagePath];
-        }
-
+        // 3. 기타 선택된 이미지들
         if (this.viewer.selectedImages && this.viewer.selectedImages.length > 0) {
             return [...this.viewer.selectedImages];
         }

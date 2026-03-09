@@ -178,16 +178,8 @@ def _parse_filename(path: str) -> Dict[str, str]:
     root = parts[0] if len(parts) > 0 else filename_without_ext
     step = parts[1] if len(parts) > 1 else ""
 
-    # 🔥 Wafer 추출 개선: parts[2] 우선, 없으면 W로 시작하는 부분 찾기
-    wafer = ""
-    if len(parts) > 2:
-        wafer = parts[2]
-    elif len(parts) > 1:
-        # parts[2]가 없으면 W로 시작하는 부분을 역순으로 찾기 (예: ABC123_W01 → W01)
-        for part in reversed(parts):
-            if part and (part[0] == 'W' or part[0] == 'w'):
-                wafer = part
-                break
+    # 🔥 Wafer = parts[1] (LOT_WAFER_BIN 형식: LOT001_W05_00C → wafer=W05)
+    wafer = step  # parts[1]이 Wafer
 
     if not root:
         root = filename_without_ext
@@ -226,8 +218,78 @@ def _lot_folder_candidates(value: str) -> List[str]:
     return result
 
 
+def _load_entries_json(group_dir: Path, mode: str) -> Optional[List[Dict]]:
+    """entries.json 읽기. 없으면 None 반환."""
+    import json
+    entries_file = group_dir / "entries.json"
+    if not entries_file.exists():
+        return None
+    try:
+        with open(entries_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("entries", [])
+    except Exception:
+        return None
+
+
+def _save_entries_json(group_dir: Path, entries: List[Dict]) -> None:
+    """entries.json 저장."""
+    import json
+    entries_file = group_dir / "entries.json"
+    with open(entries_file, "w", encoding="utf-8") as f:
+        json.dump({"entries": entries}, f, ensure_ascii=False)
+
+
 def _load_group_entries(login_id: str, mode: str, group: str) -> List[Dict[str, str]]:
-    """Group 디렉토리에서 이미지 파일 목록 로드."""
+    """Group 디렉토리에서 항목 목록 로드 (entries.json 우선, 없으면 파일 스캔 fallback)."""
+    group_dir = _group_dir(login_id, mode, group)
+    if not group_dir.exists():
+        return []
+
+    raw = _load_entries_json(group_dir, mode)
+    if raw is not None:
+        # JSON 방식
+        if mode == "lot":
+            lot_groups: Dict[str, List] = {}
+            for e in raw:
+                lot = e.get("lot") or _parse_filename(e.get("filename", ""))["root"]
+                lot_groups.setdefault(lot, []).append(e)
+            entries = []
+            for lot_name, lot_entries in sorted(lot_groups.items()):
+                all_paths = [e["path"] for e in lot_entries if e.get("path")]
+                entries.append({
+                    "path": all_paths[0] if all_paths else "",
+                    "value": lot_name,
+                    "filename": lot_name,
+                    "root": lot_name,
+                    "step": "",
+                    "wafer": "",
+                    "saved_at": lot_entries[0].get("added_at", "") if lot_entries else "",
+                    "file_count": len(all_paths),
+                    "all_paths": all_paths,
+                })
+            return entries
+        else:
+            entries = []
+            for e in raw:
+                parsed = _parse_filename(e.get("filename") or e.get("path", ""))
+                entries.append({
+                    "path": e.get("path", ""),
+                    "value": e.get("filename", parsed["filename"]),
+                    "filename": e.get("filename", parsed["filename"]),
+                    "root": parsed["root"],
+                    "step": parsed["step"],
+                    "wafer": parsed["wafer"],
+                    "saved_at": e.get("added_at", ""),
+                })
+            entries.sort(key=lambda x: x.get("filename", ""))
+            return entries
+
+    return _load_group_entries_legacy(login_id, mode, group)
+
+
+def _load_group_entries_legacy(login_id: str, mode: str, group: str) -> List[Dict[str, str]]:
+    """기존 파일 스캔 방식 (구버전 데이터 호환)."""
     group_dir = _group_dir(login_id, mode, group)
     if not group_dir.exists():
         return []
@@ -400,6 +462,51 @@ def list_my_lot(login_id: str) -> Dict[str, object]:
     }
 
 
+def _list_groups_only(login_id: str, mode: str) -> Dict[str, List[Dict[str, str]]]:
+    """
+    파일을 스캔하지 않고 그룹(폴더) 이름만 반환.
+
+    Returns:
+        {group_name: []}
+    """
+    user_dir = _user_dir(login_id)
+    mode_dir = user_dir / _normalize_mode(mode)
+    if not mode_dir.exists():
+        return {}
+
+    groups: Dict[str, List[Dict[str, str]]] = {}
+    try:
+        for group_path in mode_dir.iterdir():
+            if not group_path.is_dir():
+                continue
+            group_name = group_path.name
+            # 엔트리는 나중에 개별 API로 로드하므로 여기서는 빈 리스트만 사용
+            groups[group_name] = []
+    except Exception:
+        pass
+    return groups
+
+
+def list_my_lot_groups(login_id: str) -> Dict[str, object]:
+    """
+    그룹(폴더) 목록만 반환하는 경량 버전.
+
+    - LOT / Wafer 모드별 그룹 이름만 제공
+    - 각 그룹의 entries는 비워둔 상태로 반환
+    """
+    login_segment = _safe_login(login_id)
+    with _LOCK:
+        lot_groups = _list_groups_only(login_segment, "lot")
+        wafer_groups = _list_groups_only(login_segment, "wafer")
+
+    return {
+        "login_id": login_segment,
+        "storage_path": str(_user_dir(login_segment)),
+        "lot": _convert_for_response("lot", lot_groups),
+        "wafer": _convert_for_response("wafer", wafer_groups),
+    }
+
+
 def create_group(login_id: str, mode: str, group: str) -> Dict[str, object]:
     """새 그룹 디렉토리 생성."""
     if not group:
@@ -419,82 +526,48 @@ def create_group(login_id: str, mode: str, group: str) -> Dict[str, object]:
 
 
 def add_entry(login_id: str, mode: str, group: str, src_path: Path) -> Dict[str, object]:
-    """이미지를 그룹 디렉토리에 복사/하드링크."""
+    """이미지 경로를 entries.json에 추가 (파일 복사 없음)."""
     if not src_path or not src_path.exists():
         raise ValueError("유효한 이미지 경로가 필요합니다.")
 
     login_segment = _safe_login(login_id)
     mode = _normalize_mode(mode)
     safe_group = _SAFE_SEGMENT.sub("_", (group or "").strip()) or "default"
-
     parsed = _parse_filename(src_path.name)
+
+    try:
+        rel_path = src_path.relative_to(IMAGES_ROOT).as_posix()
+    except ValueError:
+        rel_path = src_path.as_posix()
 
     with _LOCK:
         group_dir = _group_dir(login_segment, mode, safe_group)
         group_dir.mkdir(parents=True, exist_ok=True)
 
-        # 🔥 기존 항목 로드하여 중복 체크 제거 (파일 존재 여부로만 체크)
-        # LOT 모드는 같은 LOT에 여러 wafer 이미지가 추가될 수 있어야 함
-
-        # 대상 파일 경로: LOT 모드는 LOT별 폴더, Wafer 모드는 직접 저장
-        if mode == "lot":
-            # LOT 모드: my-lot/{LoginId}/lot/{group}/{LOT값}/파일명
-            lot_folder = group_dir / parsed["root"]
-            lot_folder.mkdir(parents=True, exist_ok=True)
-            target_file = lot_folder / src_path.name
-        else:
-            # Wafer 모드: my-lot/{LoginId}/wafer/{group}/파일명
-            target_file = group_dir / src_path.name
-
-        # 🔥 파일이 이미 존재하면 에러 (중복 방지)
-        if target_file.exists():
+        existing = _load_entries_json(group_dir, mode) or []
+        existing_paths = {e.get("path", "") for e in existing}
+        if rel_path in existing_paths:
             raise ValueError(f"이미 등록된 항목입니다: {src_path.name}")
 
-        # 하드링크 시도, 실패 시 복사 (classification과 동일)
-        try:
-            # 같은 드라이브인지 확인
-            src_dev = src_path.stat().st_dev
-            if mode == "lot":
-                dst_dev = lot_folder.stat().st_dev
-            else:
-                dst_dev = group_dir.stat().st_dev
-            if src_dev == dst_dev:
-                # 하드링크 생성
-                os.link(str(src_path.resolve()), str(target_file))
-            else:
-                # 다른 드라이브: 복사
-                shutil.copy2(str(src_path), str(target_file))
-        except (OSError, AttributeError):
-            # 하드링크 실패 시 복사
-            shutil.copy2(str(src_path), str(target_file))
-
-        # 파일 타임스탬프를 현재 시간으로 업데이트 (등록 시간 기록)
-        try:
-            import time
-            now = time.time()
-            os.utime(str(target_file), (now, now))
-        except Exception:
-            pass  # 타임스탬프 업데이트 실패해도 진행
-
-        # 🔥 position 파일 복사
-        _copy_position_file(src_path, target_file)
-
-        # 상대 경로 생성
-        try:
-            rel_path = target_file.relative_to(IMAGES_ROOT).as_posix()
-        except ValueError:
-            rel_path = target_file.as_posix()
-
-        entry = {
+        new_entry = {
             "path": rel_path,
-            "value": parsed["filename"],
-            "filename": parsed["filename"],
-            "root": parsed["root"],
-            "step": parsed["step"],
+            "lot": parsed["root"],
             "wafer": parsed["wafer"],
-            "saved_at": datetime.now().strftime("%y%m%d_%H%M%S"),
+            "filename": parsed["filename"],
+            "added_at": datetime.now().strftime("%y%m%d_%H%M%S"),
         }
+        existing.append(new_entry)
+        _save_entries_json(group_dir, existing)
 
+    entry = {
+        "path": rel_path,
+        "value": parsed["filename"],
+        "filename": parsed["filename"],
+        "root": parsed["root"],
+        "step": parsed["step"],
+        "wafer": parsed["wafer"],
+        "saved_at": new_entry["added_at"],
+    }
     return {
         "login_id": login_segment,
         "mode": mode,
@@ -505,28 +578,45 @@ def add_entry(login_id: str, mode: str, group: str, src_path: Path) -> Dict[str,
 
 
 def remove_entry(login_id: str, mode: str, group: str, filename: str) -> bool:
-    """파일명 기준으로 이미지 삭제. LOT 모드에서는 filename이 LOT 이름이므로 폴더 전체 삭제."""
+    """entries.json에서 항목 제거. LOT 모드는 해당 LOT의 모든 이미지 제거."""
     login_segment = _safe_login(login_id)
     mode = _normalize_mode(mode)
     safe_group = _SAFE_SEGMENT.sub("_", (group or "").strip()) or "default"
     removed = False
     with _LOCK:
         group_dir = _group_dir(login_segment, mode, safe_group)
+        if not group_dir.exists():
+            return False
 
+        existing = _load_entries_json(group_dir, mode)
+        if existing is not None:
+            # JSON 방식
+            before = len(existing)
+            if mode == "lot":
+                # LOT 모드: lot 필드가 filename과 일치하는 항목 전부 제거
+                candidates = set(_lot_folder_candidates(filename))
+                existing = [e for e in existing if e.get("lot", "") not in candidates]
+            else:
+                # Wafer 모드: filename/path 일치 항목 제거
+                existing = [e for e in existing
+                            if e.get("filename", "") != filename and e.get("path", "").split("/")[-1] != filename]
+            removed = len(existing) < before
+            if removed:
+                _save_entries_json(group_dir, existing)
+            return removed
+
+        # Legacy: 파일 직접 삭제
         if mode == "lot":
-            # LOT 모드: value/path/filename 어떤 형태가 와도 LOT 폴더를 찾도록 보강
-            if group_dir.exists():
-                for lot_name in _lot_folder_candidates(filename):
-                    lot_folder = group_dir / lot_name
-                    if lot_folder.exists() and lot_folder.is_dir():
-                        try:
-                            shutil.rmtree(str(lot_folder))
-                            removed = True
-                            break
-                        except Exception:
-                            pass
+            for lot_name in _lot_folder_candidates(filename):
+                lot_folder = group_dir / lot_name
+                if lot_folder.exists() and lot_folder.is_dir():
+                    try:
+                        shutil.rmtree(str(lot_folder))
+                        removed = True
+                        break
+                    except Exception:
+                        pass
         else:
-            # Wafer 모드: 직접 파일 찾기
             target_file = group_dir / filename
             if target_file.exists() and target_file.is_file():
                 try:
@@ -566,33 +656,53 @@ def remove_entries_batch(login_id: str, mode: str, group: str, filenames: List[s
     with _LOCK:
         group_dir = _group_dir(login_segment, mode, safe_group)
 
-        for filename in filenames:
-            try:
-                found = False
-                if mode == "lot":
-                    # LOT 모드: value/path/filename 어떤 형태가 와도 LOT 폴더를 찾도록 보강
-                    if group_dir.exists():
-                        for lot_name in _lot_folder_candidates(filename):
-                            lot_folder = group_dir / lot_name
-                            if lot_folder.exists() and lot_folder.is_dir():
-                                shutil.rmtree(str(lot_folder))
-                                success_count += 1
-                                found = True
-                                break
-                else:
-                    # Wafer 모드: 직접 파일 찾기
-                    target_file = group_dir / filename
-                    if target_file.exists() and target_file.is_file():
-                        target_file.unlink()
-                        success_count += 1
-                        found = True
+        existing = _load_entries_json(group_dir, mode)
+        if existing is not None:
+            # JSON 방식: 한 번에 필터링
+            before = len(existing)
+            if mode == "lot":
+                remove_set = set()
+                for filename in filenames:
+                    for c in _lot_folder_candidates(filename):
+                        remove_set.add(c)
+                existing = [e for e in existing if e.get("lot", "") not in remove_set]
+            else:
+                remove_set = set(filenames)
+                existing = [e for e in existing
+                            if e.get("filename", "") not in remove_set
+                            and e.get("path", "").split("/")[-1] not in remove_set]
+            removed = before - len(existing)
+            success_count = removed
+            if removed > 0:
+                _save_entries_json(group_dir, existing)
+            # 못 찾은 항목은 오류로 기록하지 않음 (이미 없는 경우)
+        else:
+            # Legacy: 파일 직접 삭제
+            for filename in filenames:
+                try:
+                    found = False
+                    if mode == "lot":
+                        if group_dir.exists():
+                            for lot_name in _lot_folder_candidates(filename):
+                                lot_folder = group_dir / lot_name
+                                if lot_folder.exists() and lot_folder.is_dir():
+                                    shutil.rmtree(str(lot_folder))
+                                    success_count += 1
+                                    found = True
+                                    break
+                    else:
+                        target_file = group_dir / filename
+                        if target_file.exists() and target_file.is_file():
+                            target_file.unlink()
+                            success_count += 1
+                            found = True
 
-                if not found:
+                    if not found:
+                        error_count += 1
+                        errors.append({"filename": filename, "reason": "파일을 찾을 수 없습니다"})
+                except Exception as exc:
                     error_count += 1
-                    errors.append({"filename": filename, "reason": "파일을 찾을 수 없습니다"})
-            except Exception as exc:
-                error_count += 1
-                errors.append({"filename": filename, "reason": str(exc)})
+                    errors.append({"filename": filename, "reason": str(exc)})
 
     return {
         "success_count": success_count,
@@ -625,45 +735,55 @@ def create_manual_entry(login_id: str, mode: str, group: str, lot: str, wafer: s
         
         entry = {}
         
+        now_iso = __import__('datetime').datetime.utcnow().isoformat() + "Z"
+        existing = _load_entries_json(group_dir, mode) or []
+
         if mode == "lot":
-            # LOT 모드: 폴더만 생성
-            lot_folder = group_dir / safe_lot
-            if not lot_folder.exists():
-                lot_folder.mkdir(parents=True, exist_ok=True)
-                
-            entry = {
-                "path": "",  # 이미지 없음
-                "value": safe_lot,
-                "filename": safe_lot,
-                "root": safe_lot,
-                "step": "",
-                "wafer": "",
-                "saved_at": datetime.now().strftime("%y%m%d_%H%M%S"),
-                "file_count": 0,
-                "all_paths": [],
-            }
+            # 이미 같은 lot가 있으면 중복 추가하지 않음
+            if any(e.get("lot") == safe_lot and not e.get("path") for e in existing):
+                entry = {
+                    "path": "",
+                    "lot": safe_lot,
+                    "wafer": "",
+                    "filename": safe_lot,
+                    "added_at": now_iso,
+                }
+            else:
+                entry = {
+                    "path": "",  # 이미지 없음 (수동 등록)
+                    "lot": safe_lot,
+                    "wafer": "",
+                    "filename": safe_lot,
+                    "added_at": now_iso,
+                }
+                existing.append(entry)
+                _save_entries_json(group_dir, existing)
         else:
-            # Wafer 모드: 이미지 없이 항목 생성이 파일 기반이라 어려움.
-            # 0바이트 파일 생성 (확장자 없이)
-            # wafer_value가 없으면 LOT 이름만으로 파일 생성
-            filename = f"{safe_lot}"
-            if wafer:
-                safe_wafer = _SAFE_SEGMENT.sub("_", wafer.strip())
-                filename = f"{safe_lot}_{safe_wafer}"
-            
-            # .noimg 확장자로 생성하여 이미지 아님을 표시 (SUPPORTED_EXTS에 없으므로 로드 시 무시될 수 있음 -> 로직 수정 필요할수도)
-            # 하지만 _load_group_entries는 SUPPORTED_EXTS만 읽는다.
-            # 따라서 .png로 만들되 1x1 투명 픽셀로 만드는게 낫다 (기존 placeholder 로직 재활용?)
-            # 아니면 사용자가 '이미지 연결하지 말고'라고 했으므로,
-            # 로딩 로직을 수정해서 .json 같은 메타데이터 파일을 읽게 하거나 해야 하는데 복잡도가 높음.
-            # 일단 LOT 모드 위주 대응: Wafer 모드는 지원 제한.
-            raise ValueError("Wafer 모드에서 이미지 없는 항목 생성은 지원되지 않습니다.")
+            safe_wafer = _SAFE_SEGMENT.sub("_", wafer.strip()) if wafer else ""
+            filename = f"{safe_lot}_{safe_wafer}" if safe_wafer else safe_lot
+            entry = {
+                "path": "",
+                "lot": safe_lot,
+                "wafer": safe_wafer,
+                "filename": filename,
+                "added_at": now_iso,
+            }
+            existing.append(entry)
+            _save_entries_json(group_dir, existing)
 
     return {
         "login_id": login_segment,
         "mode": mode,
         "group": safe_group,
-        "entry": entry,
+        "entry": {
+            **entry,
+            "value": entry.get("lot", ""),
+            "root": entry.get("lot", ""),
+            "step": "",
+            "saved_at": datetime.now().strftime("%y%m%d_%H%M%S"),
+            "file_count": 0,
+            "all_paths": [],
+        },
         "storage_path": str(group_dir),
     }
 
@@ -717,7 +837,7 @@ def rename_group(login_id: str, mode: str, old_name: str, new_name: str) -> bool
 
 def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path]) -> Dict[str, object]:
     """
-    여러 이미지를 그룹에 일괄 추가.
+    여러 이미지를 그룹에 일괄 추가 (entries.json 경로 저장 방식, 파일 복사 없음).
 
     Returns:
         {
@@ -748,162 +868,64 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path])
         group_dir = _group_dir(login_segment, mode, safe_group)
         group_dir.mkdir(parents=True, exist_ok=True)
 
-        # 🔥 기존 wafer 조합(LOT+Wafer) 추적: 동일 wafer를 다른 파일명으로 중복 추가하는 것 방지
-        existing_wafer_keys = set()
-        if mode == "wafer":
-            for entry in _load_group_entries(login_segment, mode, safe_group):
-                key = f"{entry.get('root')}_{entry.get('wafer')}"
-                if key and key != "_":
-                    existing_wafer_keys.add(key)
+        # 기존 entries 로드
+        existing = _load_entries_json(group_dir, mode) or []
+        existing_paths = {e.get("path", "") for e in existing}
 
-        # 같은 배치 내 중복 방지를 위한 파일/wafer 추적 Set
-        processed_files = set()
-        processed_wafer_keys = set()
+        import time
+        now_iso = __import__('datetime').datetime.utcnow().isoformat() + "Z"
 
-        # 드라이브 체크는 한 번만 수행 (성능 최적화)
-        try:
-            dst_dev = group_dir.stat().st_dev
-        except Exception:
-            dst_dev = None
+        images_root_str = str(IMAGES_ROOT.resolve())
 
         for src_path in image_paths:
             try:
-                # 🔥 _NO_IMAGE_ 마커 처리
                 path_str = str(src_path)
                 is_no_image = '_NO_IMAGE_' in path_str
-                
-                if not is_no_image and (not src_path.exists() or not src_path.is_file()):
-                    error_count += 1
-                    errors.append({"path": str(src_path), "reason": "파일을 찾을 수 없습니다"})
-                    continue
 
-                # 파일명 파싱
+                # _NO_IMAGE_ 마커는 entries.json에 추가하지 않음 (실제 파일 없음)
                 if is_no_image:
-                    # 마커 형식: _NO_IMAGE_:LOT[:WAFER]
-                    parts = path_str.split(':')
-                    lot_val = parts[1] if len(parts) > 1 else "Unknown"
-                    wafer_val = parts[2] if len(parts) > 2 else ""
-                    # 가짜 파일명 생성
-                    filename = f"{lot_val}.png"
-                    if wafer_val:
-                        filename = f"{lot_val}_{wafer_val}.png"
-                    parsed = {
-                        "root": lot_val,
-                        "step": "",
-                        "wafer": wafer_val,
-                        "filename": filename
-                    }
-                else:
-                    parsed = _parse_filename(src_path.name)
-                
-                wafer_key = None
-
-                # 대상 파일 경로: LOT 모드는 LOT별 폴더, Wafer 모드는 직접 저장
-                if mode == "lot":
-                    # LOT 모드: my-lot/{LoginId}/lot/{group}/{LOT값}/파일명
-                    lot_folder = group_dir / parsed["root"]
-                    lot_folder.mkdir(parents=True, exist_ok=True)
-                    target_file = lot_folder / parsed["filename"]
-                    # 드라이브 체크
-                    try:
-                        if not is_no_image:
-                            lot_dst_dev = lot_folder.stat().st_dev
-                        else:
-                            lot_dst_dev = None
-                    except Exception:
-                        lot_dst_dev = None
-                else:
-                    # Wafer 모드: my-lot/{LoginId}/wafer/{group}/파일명
-                    target_file = group_dir / parsed["filename"]
-                    lot_dst_dev = dst_dev
-                    wafer_key = f"{parsed['root']}_{parsed['wafer']}"
-                    if wafer_key and wafer_key in existing_wafer_keys:
-                        duplicate_count += 1
-                        continue
-                    if wafer_key and wafer_key in processed_wafer_keys:
-                        duplicate_count += 1
-                        continue
-
-                # 🔥 중복 체크: 파일명 기준 (같은 배치 내 중복 방지)
-                file_key = target_file.as_posix()
-                if file_key in processed_files:
-                    duplicate_count += 1
+                    success_count += 1
                     continue
 
-                # 🔥 파일이 이미 존재하면 skip (등록 일시 유지)
-                if target_file.exists():
-                    duplicate_count += 1
-                    processed_files.add(file_key)  # 배치 내 중복 방지
-                    continue
-
-                # 하드링크 시도, 실패 시 복사
+                # 상대 경로 계산 (IMAGES_ROOT 기준)
                 try:
-                    # 이미지 없는 경우 (특수 마커) -> 1x1 투명 PNG 생성
-                    if str(src_path).startswith('_NO_IMAGE_'):
-                        # src_path는 "_NO_IMAGE_:LOT" 또는 "_NO_IMAGE_:LOT:WAFER" 형태가 됨
-                        # 하지만 add_lot_batch 호출 전에 이미 필터링되거나,
-                        # 여기서는 src_path가 Path 객체이므로 exist() 체크에서 걸러졌을 것임.
-                        # 따라서 이 블록에 도달하려면 src_path가 실제 파일이어야 함.
-                        # 하지만 handleManualSubmit에서 _NO_IMAGE_... 문자열을 보냈다면,
-                        # FastAPI/Pydantic 모델이나 요청 처리에서 문자열 리스트로 받을 것임.
-                        # add_lot_batch의 image_paths 인자는 List[Path] 타입 힌트가 있지만,
-                        # 실제로는 문자열 리스트가 넘어올 수도 있음 (FastAPI가 자동 변환하거나 직접 호출 시).
-                        # 하지만 main.py에서 어떻게 호출하는지 확인 필요.
-                        pass
-                    
-                    if lot_dst_dev is not None:
-                        src_dev = src_path.stat().st_dev
-                        if src_dev == lot_dst_dev:
-                            os.link(str(src_path.resolve()), str(target_file))
-                        else:
-                            shutil.copy2(str(src_path), str(target_file))
+                    resolved = str(src_path.resolve())
+                    if resolved.startswith(images_root_str):
+                        rel_path = resolved[len(images_root_str):].lstrip('/\\').replace('\\', '/')
                     else:
-                        shutil.copy2(str(src_path), str(target_file))
-                except (OSError, AttributeError):
-                    # 파일이 없거나(OSError) 복사 실패 시
-                    # 특수 마커(_NO_IMAGE_) 확인
-                    path_str = str(src_path)
-                    if '_NO_IMAGE_' in path_str:
-                        # 1x1 투명 PNG 생성
-                        try:
-                            # 타겟 파일명은 이미 위에서 결정됨 (parsed['root'] 등 사용)
-                            # 하지만 src_path.name이 이상할 수 있음.
-                            # _parse_filename이 마커 문자열을 어떻게 처리했는지에 따라 다름.
-                            
-                            # 1x1 투명 PNG 데이터
-                            empty_png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
-                            target_file.write_bytes(empty_png)
-                        except Exception:
-                            pass
-                    else:
-                        try:
-                            shutil.copy2(str(src_path), str(target_file))
-                        except Exception:
-                            # 복사 실패 시 0바이트 파일 생성 (최후의 수단)
-                            # 사용자가 "이미지 없이 리스트만 저장"을 원함
-                            target_file.touch()
-
-                # 🔥 파일 타임스탬프를 현재 시간으로 업데이트 (최초 등록 시만)
-                try:
-                    import time
-                    now = time.time()
-                    os.utime(str(target_file), (now, now))
+                        rel_path = src_path.as_posix()
                 except Exception:
-                    pass  # 타임스탬프 업데이트 실패해도 진행
+                    rel_path = src_path.as_posix()
 
-                # 🔥 position 파일 복사 (실제 이미지 파일인 경우에만)
-                if not is_no_image:
-                    _copy_position_file(src_path, target_file)
+                # Wafer 모드: 파일 전체 경로가 다르면 중복 아님
+                # LOT 모드: 동일 경로면 중복
+                if rel_path in existing_paths:
+                    duplicate_count += 1
+                    continue
 
+                # 빠른 파싱: LOT_WAFER_BIN.ext 형식 (예: LOT001_W05_00C)
+                stem = src_path.stem
+                parts = stem.split('_')
+                lot_val = parts[0] if parts else stem
+                wafer_val = parts[1] if len(parts) > 1 else ""
+                entry = {
+                    "path": rel_path,
+                    "lot": lot_val,
+                    "wafer": wafer_val,
+                    "filename": src_path.name,
+                    "added_at": now_iso,
+                }
+                existing.append(entry)
+                existing_paths.add(rel_path)
                 success_count += 1
-                processed_files.add(file_key)  # 성공한 파일 추적
-                if wafer_key:
-                    existing_wafer_keys.add(wafer_key)
-                    processed_wafer_keys.add(wafer_key)
 
             except Exception as exc:
                 error_count += 1
                 errors.append({"path": str(src_path), "reason": str(exc)})
+
+        # 한 번에 저장
+        if success_count > 0:
+            _save_entries_json(group_dir, existing)
 
     return {
         "success_count": success_count,
@@ -917,8 +939,21 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path])
     }
 
 
+def list_group_entries(login_id: str, mode: str, group: str) -> List[Dict[str, str]]:
+    """
+    특정 모드/그룹의 엔트리 목록만 반환.
+
+    - 기존 내부 헬퍼 _load_group_entries 래퍼
+    - FastAPI 엔드포인트에서 사용
+    """
+    login_segment = _safe_login(login_id)
+    normalized_mode = _normalize_mode(mode)
+    return _load_group_entries(login_segment, normalized_mode, group)
+
+
 __all__ = [
     "list_my_lot",
+    "list_my_lot_groups",
     "create_group",
     "delete_group",
     "add_entry",

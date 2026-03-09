@@ -11,7 +11,7 @@ export UVICORN_LIFESPAN="on"   # FastAPI lifespan 강제 (인덱스 초기화/�
 
 # 서버 설정
 export HOST="0.0.0.0"
-export PORT="8080"
+export PORT="5354"
 export UVICORN_WORKERS="1"              # 메인 워커 1개 (인덱스/캐시 공유)
 
 # SSL/TLS 설정

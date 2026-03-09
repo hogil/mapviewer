@@ -13,14 +13,14 @@ chcp 65001 | Out-Null
 $env:AUTO_LOGIN="0"      # 0=수동 로그인 (/saml/login 직접 호출)
                          # 1=자동 로그인 (domain 접속 시 자동 리다이렉트) - Ubuntu 사내 서버용
 $env:HOST="0.0.0.0"
-$env:PORT="8080"
+$env:PORT="5354"
 $env:RELOAD="0"          # PowerShell 스크립트 실행 시 uvicorn reload 비활성화 (이중 실행 방지)
 $env:UVICORN_WORKERS="1" # 개발 환경: 단일 워커 (중복 인덱스 방지)
 $env:WORKERS="1"         # FastAPI 워커 단일 고정
 $env:HTTP2="1"           # 🚀 HTTP/2 활성화 (다중 요청 병렬 처리)
 $env:KEEP_ALIVE="1"      # 🚀 Keep-Alive 연결 유지
 $env:SSL_ENABLED="1"
-$env:HTTPS_PORT="443"
+$env:HTTPS_PORT="8443"
 $env:SSL_CERTFILE="cert/fullchain.pem"
 $env:SSL_KEYFILE="cert/server.key"
 
