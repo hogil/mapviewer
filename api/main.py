@@ -6,6 +6,7 @@ L3Tracker - Wafer Map Viewer API (HTTPS, Pretty Table Logs, Noise-free)
 # ======================== UTF-8 Console Setup ========================
 import sys
 import os
+import subprocess
 
 # Windows 콘솔 UTF-8 인코딩 설정 (이모지 지원)
 if sys.platform == 'win32':
@@ -1584,6 +1585,15 @@ async def lifespan(app: FastAPI):
         DIRLIST_EXECUTOR.shutdown(wait=False, cancel_futures=False)
     except Exception:
         pass
+
+# ======================== Git 버전 해시 (JS 캐시버스팅용) ========================
+try:
+    _JS_VERSION = subprocess.check_output(
+        ["git", "rev-parse", "--short", "HEAD"],
+        cwd=BASE_DIR, stderr=subprocess.DEVNULL
+    ).decode().strip()
+except Exception:
+    _JS_VERSION = str(int(time.time()))
 
 # ======================== FastAPI & Middleware ========================
 app = FastAPI(title="L3Tracker API", version="2.6.0", lifespan=lifespan)
@@ -6933,11 +6943,14 @@ async def read_root(request: Request):
         # AUTO_LOGIN=False 또는 SAML 인증 완료 → index.html 제공
         html_path = Path("index.html")
         if html_path.exists():
-            # HTML에 캐시 헤더만 추가 (preload 제거로 경고 해결)
-            headers = {
-                "Cache-Control": "public, max-age=3600"
-            }
-            return FileResponse(html_path, headers=headers)
+            # JS 파일 URL에 git hash 버전 주입 (브라우저 캐시 무효화)
+            content = html_path.read_text(encoding="utf-8")
+            content = re.sub(r'(/js/[^"\']+\.js)(?:\?v=[^"\']*)?', rf'\1?v={_JS_VERSION}', content)
+            from fastapi.responses import HTMLResponse
+            return HTMLResponse(
+                content=content,
+                headers={"Cache-Control": "no-store, no-cache, must-revalidate"}
+            )
         return {"message": "index.html not found"}
     except Exception as e:
         logger.exception(f"루트 페이지 로드 실패: {e}")
