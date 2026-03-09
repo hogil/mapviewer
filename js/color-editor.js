@@ -1291,8 +1291,13 @@ export class ColorSchemeEditor {
             return;
         }
 
-        // forceRender=true로 stale isVisible 상태에서도 즉시 썸네일 URL을 갱신
-        navigator.setImages(sourceList, currentPath, true);
+        // 이미지 목록이 이미 로드된 경우 DOM 재생성 없이 URL만 갱신 (성능 최적화)
+        if (navigator.imageList && navigator.imageList.length > 0) {
+            navigator.refreshThumbnailUrls(currentPath);
+        } else {
+            // 최초 초기화: 전체 렌더링
+            navigator.setImages(sourceList, currentPath, true);
+        }
     }
 
     updateApplyButtonState(enabled) {
@@ -1370,11 +1375,7 @@ export class ColorSchemeEditor {
                         this.viewer.thumbnailManager.cache.clear();
                     }
 
-                    if (typeof this.viewer.hardResetUiCaches === 'function') {
-                        await this.viewer.hardResetUiCaches({ clearPersistentStorage: false });
-                    }
-                    
-                    // 🔥 피라미드 레벨 캐시 완전 초기화 (저장된 색상 적용을 위해 필수)
+                    // 피라미드 레벨 캐시 완전 초기화 (저장된 색상 적용을 위해 필수)
                     this.viewer.pyramidLevels = {};
                     if (this.viewer._pyramidLoading) {
                         this.viewer._pyramidLoading = new Set();

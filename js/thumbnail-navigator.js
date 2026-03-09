@@ -1141,6 +1141,49 @@ export class ThumbnailNavigator {
 
 
 
+    /**
+     * 색상 스킴 변경 시 DOM 재생성 없이 기존 img.src/data-src만 갱신
+     */
+    refreshThumbnailUrls(currentPath) {
+        if (!this.list || !this.viewer || !this.imageList.length) return;
+
+        const personalizedParams = this.viewer.getPersonalizedParams ? this.viewer.getPersonalizedParams() : '';
+        const cacheBuster = this.viewer._personalizedColorCacheBuster || Date.now();
+        const hasBusterInParams = typeof personalizedParams === 'string' && personalizedParams.includes('_t=');
+        const cacheSuffix = hasBusterInParams ? '' : `&_t=${cacheBuster}`;
+
+        // currentIndex 갱신
+        if (currentPath) {
+            const norm = currentPath.replace(/\\/g, '/');
+            const idx = this.imageList.findIndex(p => {
+                const pn = p.replace(/\\/g, '/');
+                return pn === norm || pn.endsWith(norm) || norm.endsWith(pn);
+            });
+            if (idx !== -1) this.currentImageIndex = idx;
+        }
+
+        const items = this.list.querySelectorAll('.thumbnail-nav-item');
+        const priorityRange = 30;
+
+        items.forEach((item, i) => {
+            const img = item.querySelector('img');
+            if (!img) return;
+            const imagePath = this.imageList[i];
+            if (!imagePath) return;
+
+            const newUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}${cacheSuffix}`;
+            const distance = Math.abs(i - this.currentImageIndex);
+
+            if (distance <= priorityRange) {
+                img.style.display = 'none';
+                img.src = newUrl;
+                delete img.dataset.src;
+            } else {
+                img.dataset.src = newUrl;
+            }
+        });
+    }
+
     createThumbnailItem(imagePath, index) {
 
         const item = document.createElement('div');
