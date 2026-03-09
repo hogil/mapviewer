@@ -19137,14 +19137,11 @@ class WaferMapViewer {
                     return isFile && isImage;
                 })
                 .map(item => {
-                    // 경로 정규화: path가 있으면 사용, 없으면 폴더 경로 + 파일명
-                    if (item.path) {
-                        console.log('🔍 [MAP] Using item.path:', item.path);
-                        return item.path;
+                    // root_relative(상대경로) 우선 사용, 없으면 폴더+파일명으로 구성
+                    if (item.root_relative) {
+                        return item.root_relative;
                     } else {
-                        const fullPath = folderPath ? `${folderPath}/${item.name}` : item.name;
-                        console.log('🔍 [MAP] Building fullPath:', fullPath);
-                        return fullPath;
+                        return folderPath ? `${folderPath}/${item.name}` : item.name;
                     }
                 });
 
@@ -20150,7 +20147,7 @@ class WaferMapViewer {
 
         this.singleViewImageList = (data.items || [])
             .filter(item => item.type === 'file' && this.isImageFile(item.name))
-            .map(item => item.path || `${folderPath}/${item.name}`);
+            .map(item => item.root_relative || `${folderPath}/${item.name}`);
         this.naturalSortPaths(this.singleViewImageList);
 
         // 현재 이미지 인덱스 찾기
