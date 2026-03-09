@@ -2375,22 +2375,8 @@ class WaferMapViewer {
         const normalized = this.normalizeImagePath(relPath);
         if (!normalized) return '';
         const personalizedParams = this.getPersonalizedParams();
-        if (!this.shouldUsePyramidForPath(normalized)) {
-            return `/api/image?path=${encodeURIComponent(normalized)}${personalizedParams}`;
-        }
-
-        let level = Number.isFinite(this.currentPyramidLevel) ? this.currentPyramidLevel : null;
-        if (level === null && Number.isFinite(this.transform?.scale)) {
-            level = this.getBestPyramidLevel(this.transform.scale);
-        }
-        if (level === null && Array.isArray(SERVER_CONFIG.PYRAMID_LEVELS) && SERVER_CONFIG.PYRAMID_LEVELS.length) {
-            level = SERVER_CONFIG.PYRAMID_LEVELS[0];
-        }
-        if (level === null) {
-            level = 1.0;
-        }
-
-        return `/api/image?path=${encodeURIComponent(normalized)}&level=${level}${personalizedParams}`;
+        // 🔥 Reference Map은 항상 원본(level=1.0) 사용 — 축소 피라미드 레벨 사용 금지
+        return `/api/image?path=${encodeURIComponent(normalized)}&level=1.0${personalizedParams}`;
     }
 
     loadRefMapImage(path) {
@@ -2413,6 +2399,8 @@ class WaferMapViewer {
         this.refMapImageEl.onload = () => {
             this.refMapImageEl.style.display = 'block';
             if (this.refMapPlaceholderEl) this.refMapPlaceholderEl.style.display = 'none';
+            // 🔥 이미지 로드 후 창이 뷰포트 밖으로 나가지 않도록 보정
+            this.ensureRefMapWindowBounds();
         };
         this.refMapImageEl.src = bust;
     }
@@ -16587,6 +16575,10 @@ class WaferMapViewer {
     }
 
     showGrid(images, skipSaveState = false) {
+        // 🔥 새 이미지 목록 진입 시 이전 그리드 선택 초기화 (다른 폴더 선택 시 잔존 방지)
+        this.gridSelectedIdxs = [];
+        this.gridSelectedSet = new Set();
+
         // 📦 Lot 모드가 활성화되어 있으면 Lot별 그리드로 표시
         if (this.lotMode) {
             this.showGridByLot(images);
