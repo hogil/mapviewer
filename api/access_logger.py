@@ -554,7 +554,6 @@ class AccessLogger:
         
         # 🔥 1. meta에서 LoginId 추출 시도
         if meta and isinstance(meta, dict):
-            print(f"[STATS DEBUG] meta 수신됨: {meta}")
             LoginId = meta.get("LoginId")
             if LoginId:
                 # SAML profile 정보 저장 (7개 필드만)
@@ -562,7 +561,6 @@ class AccessLogger:
                     value = meta.get(field)
                     if value:
                         profile_meta[field] = value
-                print(f"[STATS DEBUG] profile_meta 추출됨: {profile_meta}")
 
         # 🔥 2. meta가 없으면 user_id_override 사용 (쿠키에서 온 LoginId)
         if not LoginId and user_id_override:
@@ -574,7 +572,6 @@ class AccessLogger:
 
         # LoginId가 없으면 통계 대상에서 제외
         if not LoginId:
-            print(f"[STATS DEBUG] LoginId 없음 차단 - IP: {ip}, endpoint: {endpoint}")
             return
 
         # profile이 비어있으면 최소 프로필로 보완 (비-SAML/개발 모드 지원)
@@ -613,7 +610,6 @@ class AccessLogger:
         last_request_time = self._recent_requests.get(recent_key, 0)
         if now_unix - last_request_time < 5.0:
             # 5초 이내 중복 요청 → 스킵
-            print(f"[STATS DEBUG] 중복 요청 스킵 - LoginId: {LoginId}, endpoint: {endpoint}, last_time: {last_request_time}, now: {now_unix}")
             return
         
         self._recent_requests[recent_key] = now_unix
@@ -622,7 +618,6 @@ class AccessLogger:
         
         # 🔥 stats.json을 읽어서 이전 기록을 누적 (덮어쓰기가 아님)
         if LoginId not in self.stats_data["users"]:
-            print(f"[STATS DEBUG] 새 사용자 생성 - LoginId: {LoginId}, IP: {ip}, dept: {profile_meta.get('DeptName', 'N/A')}")
             # 새로운 사용자 생성
             self.stats_data["users"][LoginId] = {
                 "primary_ip": ip,
@@ -762,8 +757,6 @@ class AccessLogger:
         thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
         is_new_user = user_data.get("first_seen", "") >= thirty_days_ago
         self._update_department_stats(LoginId, dept_name, is_new_user)
-        
-        print(f"[STATS DEBUG] 통계 업데이트 완료 - LoginId: {LoginId}, endpoint: {endpoint}, total_users: {len(self.stats_data['users'])}, active_today: {len(daily['active_users'])}")
         
         # 통계 저장 (즉시 반영: stats.html에서 바로 보이도록 강제 저장)
         self._stats_dirty = True
