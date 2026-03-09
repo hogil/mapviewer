@@ -6770,7 +6770,15 @@ class WaferMapViewer {
                     }
                 }
 
-                // 파일명/이미지 kind 기준의 PLC/PLH 분리는 더 이상 적용하지 않는다.
+                // PLC/PLH 필터 적용 (PLC=00C, PLH=00P)
+                if (this.filterPLCPLH && this.filterPLCPLH !== 'all') {
+                    const parts = node.name.split('_');
+                    if (this.filterPLCPLH === 'PLC') {
+                        if (parts.length <= 1 || parts[1] !== '00C') continue;
+                    } else if (this.filterPLCPLH === 'PLH') {
+                        if (parts.length <= 1 || parts[1] !== '00P') continue;
+                    }
+                }
 
                 const draggableAttr = 'draggable="true"';
                 html += `<li><a href="#" data-path="${fullPath}" ${draggableAttr}>📄 ${node.name}</a></li>`;
@@ -6816,7 +6824,15 @@ class WaferMapViewer {
                     }
                 }
 
-                // 파일명/이미지 kind 기준의 PLC/PLH 분리는 더 이상 적용하지 않는다.
+                // PLC/PLH 필터 적용 (PLC=00C, PLH=00P)
+                if (this.filterPLCPLH && this.filterPLCPLH !== 'all') {
+                    const parts = (path.split('/').pop() || path).split('_');
+                    if (this.filterPLCPLH === 'PLC') {
+                        if (parts.length <= 1 || parts[1] !== '00C') return false;
+                    } else if (this.filterPLCPLH === 'PLH') {
+                        if (parts.length <= 1 || parts[1] !== '00P') return false;
+                    }
+                }
 
                 return true;
             });
@@ -6870,7 +6886,15 @@ class WaferMapViewer {
                     }
                 }
 
-                // 파일명/이미지 kind 기준의 PLC/PLH 분리는 더 이상 적용하지 않는다.
+                // PLC/PLH 필터 적용 (PLC=00C, PLH=00P)
+                if (this.filterPLCPLH && this.filterPLCPLH !== 'all') {
+                    const parts = (path.split('/').pop() || path).split('_');
+                    if (this.filterPLCPLH === 'PLC') {
+                        if (parts.length <= 1 || parts[1] !== '00C') return false;
+                    } else if (this.filterPLCPLH === 'PLH') {
+                        if (parts.length <= 1 || parts[1] !== '00P') return false;
+                    }
+                }
 
                 return true;
             });
@@ -8365,7 +8389,18 @@ class WaferMapViewer {
                 });
             }
 
-            // 파일명/이미지 kind 기준의 PLC/PLH 분리는 더 이상 적용하지 않는다.
+            // PLC/PLH 필터 적용 (PLC=00C, PLH=00P)
+            if (this.filterPLCPLH && this.filterPLCPLH !== 'all') {
+                matchedImages = matchedImages.filter(path => {
+                    const parts = (path.split('/').pop() || path).split('_');
+                    if (this.filterPLCPLH === 'PLC') {
+                        return parts.length > 1 && parts[1] === '00C';
+                    } else if (this.filterPLCPLH === 'PLH') {
+                        return parts.length > 1 && parts[1] === '00P';
+                    }
+                    return true;
+                });
+            }
 
             const endTime = performance.now();
 
