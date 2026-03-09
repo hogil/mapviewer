@@ -9883,6 +9883,12 @@ class WaferMapViewer {
         const explorer = this.dom.fileExplorer;
         if (!explorer) return;
 
+        // 🔥 폴더/파일 선택 변경 시 그리드 선택 초기화 (다른 폴더 전환 시 잔존 방지)
+        if (!highlightOnly) {
+            this.gridSelectedIdxs = [];
+            this.gridSelectedSet = new Set();
+        }
+
         if (!highlightOnly && !skipEnsurePage) {
             this.ensurePageForRole('wafer');
         }
@@ -16575,10 +16581,6 @@ class WaferMapViewer {
     }
 
     showGrid(images, skipSaveState = false) {
-        // 🔥 새 이미지 목록 진입 시 이전 그리드 선택 초기화 (다른 폴더 선택 시 잔존 방지)
-        this.gridSelectedIdxs = [];
-        this.gridSelectedSet = new Set();
-
         // 📦 Lot 모드가 활성화되어 있으면 Lot별 그리드로 표시
         if (this.lotMode) {
             this.showGridByLot(images);
@@ -17597,6 +17599,62 @@ class WaferMapViewer {
         this.drainGridLoadQueue();
     }
 
+    /**
+     * 🔥 그리드 DOM을 파괴하지 않고 시각적으로만 숨김 (단일 이미지 진입 시 사용).
+     * exitSingleImageViewMode에서 _showGridVisual()로 즉시 복원 가능.
+     */
+    _hideGridVisual() {
+        const grid = document.getElementById('image-grid');
+        const gridControls = document.getElementById('grid-controls');
+        const scrollWrapper = grid?.parentElement;
+        if (grid) grid.style.display = 'none';
+        if (gridControls) gridControls.style.display = 'none';
+        if (scrollWrapper && scrollWrapper.classList.contains('grid-scroll-wrapper')) {
+            scrollWrapper.style.display = 'none';
+        }
+        this.dom.viewerContainer.classList.remove('grid-mode');
+        this.dom.imageCanvas.style.display = 'block';
+        this.dom.overlayCanvas.style.display = 'block';
+        this.dom.minimapContainer.style.display = 'block';
+        document.body.classList.remove('grid-mode-active');
+
+        // 선택된 웨이퍼 목록 숨기기
+        const panel = document.getElementById('selected-grid-images-panel');
+        if (panel) panel.style.display = 'none';
+
+        // Lot 리스트 모달 숨김
+        if (typeof this.hideLotListModal === 'function') this.hideLotListModal();
+
+        this._gridVisuallyHidden = true;
+    }
+
+    /**
+     * 🔥 _hideGridVisual()로 숨겨진 그리드를 즉시 복원.
+     * DOM을 재생성하지 않으므로 즉각적인 복귀.
+     */
+    _showGridVisual() {
+        const grid = document.getElementById('image-grid');
+        const gridControls = document.getElementById('grid-controls');
+        const scrollWrapper = grid?.parentElement;
+        if (grid) grid.style.display = '';
+        if (gridControls) gridControls.style.display = '';
+        if (scrollWrapper && scrollWrapper.classList.contains('grid-scroll-wrapper')) {
+            scrollWrapper.style.display = '';
+        }
+        this.dom.viewerContainer.classList.add('grid-mode');
+        this.dom.imageCanvas.style.display = 'none';
+        this.dom.overlayCanvas.style.display = 'none';
+        this.dom.minimapContainer.style.display = 'none';
+        document.body.classList.add('grid-mode-active');
+
+        this.gridMode = true;
+        this.enforceGridModeUiState();
+        this._gridVisuallyHidden = false;
+
+        // 선택 웨이퍼 목록 패널 복원
+        this.updateSelectedGridImagesList();
+    }
+
     hideGrid(hideControls = true) {
         this.debugLog('🔷 [DEBUG] hideGrid() 호출됨');
         
@@ -18408,6 +18466,11 @@ class WaferMapViewer {
         }
 
         if (!this.savedViewState) {
+            // 🔥 그리드가 시각적으로만 숨겨진 상태(단일 이미지 진입 중)이면 DOM 파괴 스킵
+            if (this._gridVisuallyHidden) {
+                this.debugLog('🔷 [RESTORE] _gridVisuallyHidden 활성 - 초기화 스킵');
+                return;
+            }
 
             // 초기 화면: 모두 숨기고 초기화
 
@@ -19369,6 +19432,10 @@ class WaferMapViewer {
             originPageId = this.gridDetailOriginMap.get(originPageId);
         }
 
+        // 🔥 그리드 DOM 보존: 페이지 전환 전에 시각적으로만 숨김
+        // (createPage(activate:true)가 applyPageState→restoreSavedViewState→hideGrid를 호출하여 DOM을 파괴하는 것 방지)
+        this._hideGridVisual();
+
         if (this.pageManager) {
             this.persistActivePageState(savedSnapshot);
 
@@ -19518,8 +19585,8 @@ class WaferMapViewer {
         // 2. 키보드 좌우 키 네비게이션 설정
         this.setupGridImageNavigation();
 
-        // 3. 그리드 숨김
-        this.hideGrid(false);
+        // 3. 그리드 숨김 (DOM 파괴 없이 시각적으로만 숨김 → 복귀 시 즉시 표시)
+        this._hideGridVisual();
 
         const targetImagePath = this.selectedImages[idx];
         if (targetImagePath) {
@@ -19726,12 +19793,31 @@ class WaferMapViewer {
                 }
             }
 
-            // ✅ 그리드 복귀 (skipSaveState=true로 호출하면 savedViewState에서 스크롤 복원)
-            this.showGrid(imagesToShow, true);
-            if (isLabelExplorerRestore) {
-                const restoreGrid = document.getElementById('image-grid');
-                if (restoreGrid) {
-                    restoreGrid.setAttribute('data-label-explorer-grid', 'true');
+            // ✅ 그리드 복귀: DOM이 살아있으면 즉시 표시, 아니면 재생성
+            const existingGrid = document.getElementById('image-grid');
+            if (this._gridVisuallyHidden && existingGrid && existingGrid.children.length > 0) {
+                // 🔥 Fast path: 그리드 DOM이 그대로 남아있으므로 시각적 복원만
+                this._showGridVisual();
+
+                // 스크롤 위치 복원
+                const scrollWrapper = existingGrid.parentElement;
+                if (scrollWrapper && scrollTopToRestore !== undefined) {
+                    requestAnimationFrame(() => {
+                        scrollWrapper.scrollTop = scrollTopToRestore;
+                    });
+                }
+
+                if (isLabelExplorerRestore) {
+                    existingGrid.setAttribute('data-label-explorer-grid', 'true');
+                }
+            } else {
+                // Slow path: 그리드 재생성 필요 (다른 경로에서 hideGrid가 호출된 경우)
+                this.showGrid(imagesToShow, true);
+                if (isLabelExplorerRestore) {
+                    const restoreGrid = document.getElementById('image-grid');
+                    if (restoreGrid) {
+                        restoreGrid.setAttribute('data-label-explorer-grid', 'true');
+                    }
                 }
             }
 
