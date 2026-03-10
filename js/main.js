@@ -17375,24 +17375,44 @@ class WaferMapViewer {
     }
 
     /**
-     * 🔥 그리드 스크롤 핸들러 — 경량화 (DOM 쿼리 제거)
-     * 스크롤 중: 큐만 비우고 플래그 설정 (O(1))
-     * 스크롤 후: loadVisibleGridThumbnails()로 뷰포트 이미지만 로드
+     * 🔥 그리드 스크롤 핸들러 (스크롤 시작 시 모든 요청 취소, 멈추면 즉시 뷰포트 로드)
      */
     handleGridScroll() {
-        // 🔥 큐만 비움 (O(1))
+        // 🔥 큐 비움
         this.gridLoadQueue.length = 0;
         this.gridQueuedImages.clear();
         this.gridLoadingBatch = null;
 
-        // 🔥 rAF 1회만 스케줄 — 같은 프레임 내 중복 호출 방지
-        // IntersectionObserver 제거 후 loadVisibleGridThumbnails()는 O(~50)이므로 매 프레임 호출 가능
-        if (!this.gridScrollRAF) {
+        // 🔥 진행 중인 이미지 다운로드 강제 취소 (src를 placeholder로 → HTTP 요청 중단)
+        const grid = document.getElementById('image-grid');
+        if (grid) {
+            const loadingImgs = grid.querySelectorAll('.grid-thumb-img[data-loading="true"]');
+            for (let i = 0; i < loadingImgs.length; i++) {
+                const img = loadingImgs[i];
+                img.src = GRID_THUMB_PLACEHOLDER;
+                img.dataset.loading = 'false';
+                img.dataset.gridLoaded = 'false';
+                img.style.opacity = '0';
+            }
+        }
+        this.gridLoadInFlight = 0;
+
+        // 🔥 기존 타이머/rAF 취소
+        if (this.gridScrollDebounceTimer) {
+            clearTimeout(this.gridScrollDebounceTimer);
+        }
+        if (this.gridScrollRAF) {
+            cancelAnimationFrame(this.gridScrollRAF);
+            this.gridScrollRAF = null;
+        }
+
+        // 🔥 스크롤이 멈추면 즉시 뷰포트 이미지 로드
+        this.gridScrollDebounceTimer = setTimeout(() => {
             this.gridScrollRAF = requestAnimationFrame(() => {
                 this.gridScrollRAF = null;
                 this.loadVisibleGridThumbnails();
             });
-        }
+        }, 0);
     }
 
     /**
