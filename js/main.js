@@ -938,6 +938,7 @@ class WaferMapViewer {
         this.gridMaxConcurrentLoads = 30; // 🔥 뷰포트 25개 전체를 1배치로 로드
         this.gridLoadingPaused = false;
         this.gridIntersectionObserver = null;
+        this._gridAbortControllers = new Map(); // 🔥 fetch AbortController 관리
 
         this.gridCols = DEFAULT_GRID_COLS;
 
@@ -9996,6 +9997,11 @@ class WaferMapViewer {
                 currentGridImagesLength: this.currentGridImages?.length
             });
 
+            // 🔥 선택 해제 시 모든 진행 중인 그리드 썸네일 요청 즉시 취소
+            this._cancelInFlightGridLoads();
+            this.gridLoadQueue.length = 0;
+            this.gridQueuedImages.clear();
+
             // Wafer Map Explorer 선택 해제
 
             // 🔥 Grid 모드에서는 selectedImages를 초기화하지 않음 (체크된 이미지 유지)
@@ -16888,6 +16894,7 @@ class WaferMapViewer {
             this.gridIntersectionObserver = null;
         }
         this._stopGridScrollDetection();
+        this._cancelInFlightGridLoads(); // 🔥 모든 fetch abort
         this.gridLoadQueue = [];
         this.gridQueuedImages.clear();
         this.gridLoadInFlight = 0;
@@ -16897,34 +16904,46 @@ class WaferMapViewer {
     /**
      * 🔥 setInterval 기반 스크롤 감지 — rAF/scroll 이벤트 대체
      * 3000 DOM → rAF는 1fps (1000ms/frame), scroll 이벤트는 715ms 지연.
-     * setInterval은 렌더링과 독립적으로 16ms 간격 실행.
+     * setInterval은 렌더링과 독립적으로 4ms 간격 실행.
+     *
+     * 핵심 정책:
+     * - 스크롤 중: 절대 요청하지 않음 + 진행 중인 요청 모두 abort
+     * - 스크롤 멈춤 후 1ms: 뷰포트 1.5배 영역만 로드
+     * - "멈춤" 판정: scrollTop이 마지막 변경 후 최소 50ms 동안 안정
+     *   (마우스 휠 이벤트 간격 ~16ms, 드래그 ~8ms → 50ms면 확실히 멈춤)
      */
     _startGridScrollDetection() {
         this._stopGridScrollDetection();
         let lastScrollTop = -1;
-        let wasScrolling = false;
+        let lastChangeTime = 0;  // 🔥 마지막 scrollTop 변경 시각
+        let loadTimer = null;
+        const SETTLE_MS = 50;    // 🔥 스크롤 안정 판정 최소 시간
 
         this._gridScrollDetectionTimer = setInterval(() => {
             const sw = this.getGridScrollWrapper();
             if (!sw) return;
 
             const currentTop = sw.scrollTop;
+            const now = Date.now();
+
             if (currentTop !== lastScrollTop) {
-                // 🔥 스크롤 중 — 큐 비우고 진행 중인 요청 취소
+                // 🔥 스크롤 중 — 모든 요청 abort + 대기 타이머 취소
                 lastScrollTop = currentTop;
-                if (!wasScrolling) {
-                    wasScrolling = true;
-                    this._cancelInFlightGridLoads();
-                }
+                lastChangeTime = now;
+                if (loadTimer) { clearTimeout(loadTimer); loadTimer = null; }
+                this._cancelInFlightGridLoads();
                 this.gridLoadQueue.length = 0;
                 this.gridQueuedImages.clear();
                 this.gridLoadingBatch = null;
-            } else if (wasScrolling) {
-                // 🔥 스크롤 멈춤 — 즉시 뷰포트 로드 (1ms 폴링이므로 사실상 0.1ms 지연)
-                wasScrolling = false;
-                this.loadVisibleGridThumbnails();
+            } else if (lastChangeTime > 0 && !loadTimer && (now - lastChangeTime) >= SETTLE_MS) {
+                // 🔥 scrollTop이 SETTLE_MS 이상 안정 → 1ms 후 로드
+                loadTimer = setTimeout(() => {
+                    loadTimer = null;
+                    lastChangeTime = 0;
+                    this.loadVisibleGridThumbnails();
+                }, 1);
             }
-        }, 4); // 🔥 4ms 폴링 — CPU 부하 4배 감소, 감지 지연 무시 수준
+        }, 4); // 🔥 4ms 폴링
     }
 
     _stopGridScrollDetection() {
@@ -16935,18 +16954,17 @@ class WaferMapViewer {
     }
 
     /**
-     * 🔥 진행 중인 그리드 이미지 다운로드 강제 취소
+     * 🔥 진행 중인 그리드 이미지 다운로드 강제 취소 (AbortController로 TCP 레벨 취소)
      */
     _cancelInFlightGridLoads() {
-        const grid = document.getElementById('image-grid');
-        if (grid) {
-            const loadingImgs = grid.querySelectorAll('.grid-thumb-img[data-loading="true"]');
-            for (let i = 0; i < loadingImgs.length; i++) {
-                const img = loadingImgs[i];
-                img.src = GRID_THUMB_PLACEHOLDER;
+        // 🔥 AbortController로 실제 HTTP 요청 취소
+        if (this._gridAbortControllers) {
+            for (const [img, ctrl] of this._gridAbortControllers) {
+                ctrl.abort();
                 img.dataset.loading = 'false';
                 img.dataset.gridLoaded = 'false';
             }
+            this._gridAbortControllers.clear();
         }
         this.gridLoadInFlight = 0;
     }
@@ -16980,79 +16998,50 @@ class WaferMapViewer {
             return;
         }
 
+        // 🔥 AbortController Map 초기화
+        if (!this._gridAbortControllers) {
+            this._gridAbortControllers = new Map();
+        }
+
         this.gridLoadInFlight++;
         img.dataset.loading = 'true';
         img.dataset.gridLoaded = 'false';
-        img.decoding = 'async'; // 🔥 메인스레드 밖에서 디코딩
 
-        const finalize = (success = false) => {
-            img.dataset.loading = 'false';
+        // 🔥 fetch + AbortController — 스크롤 시 abort()로 TCP 레벨 취소
+        const controller = new AbortController();
+        this._gridAbortControllers.set(img, controller);
 
-            if (success && img.complete && img.naturalWidth > 0) {
+        fetch(img.dataset.src, { signal: controller.signal })
+            .then(res => {
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                return res.blob();
+            })
+            .then(blob => {
+                this._gridAbortControllers.delete(img);
+                const url = URL.createObjectURL(blob);
+                img.src = url;
+                img.onload = () => URL.revokeObjectURL(url);
+                img.dataset.loading = 'false';
                 img.dataset.gridLoaded = 'true';
                 img.style.opacity = '1';
-                delete img.dataset.retryCount;
-            } else if (!success) {
-                img.dataset.gridLoaded = 'false';
-            }
-            
-            if (this.gridLoadInFlight > 0) {
-                this.gridLoadInFlight--;
-            }
-            this.drainGridLoadQueue();
-        };
-
-        const onLoad = () => {
-            // 🔥 placeholder 이미지 로드는 성공으로 간주하지 않음 (취소된 이미지 재로드 가능하도록)
-            if (img.src === GRID_THUMB_PLACEHOLDER || !img.dataset.src) {
-                finalize(false);
-                return;
-            }
-            finalize(true);
-        };
-
-        const onError = () => {
-            // 🔥 로드 실패 시 재시도 (최대 3회)
-            const retryCount = parseInt(img.dataset.retryCount || '0');
-            if (retryCount < 3 && img.dataset?.src) {
-                img.dataset.retryCount = String(retryCount + 1);
-                img.dataset.loading = 'false';
-                img.style.opacity = '0';
-                
-                // 🔥 짧은 지연 후 재시도
-                setTimeout(() => {
-                    if (img.dataset?.src && img.dataset.gridLoaded !== 'true' && img.dataset.loading !== 'true') {
-                        this.enqueueGridThumbnail(img, true);
-                    }
-                }, 500 * (retryCount + 1));
-                
-                // 🔥 재시도 중이므로 finalize 호출하지 않음
-                if (this.gridLoadInFlight > 0) {
-                    this.gridLoadInFlight--;
-                }
+                if (this.gridLoadInFlight > 0) this.gridLoadInFlight--;
                 this.drainGridLoadQueue();
-            } else {
-                // 🔥 최대 재시도 횟수 초과 시 실패 처리
-                console.warn(`이미지 로드 실패 (재시도 ${retryCount}회): ${img.dataset.src}`);
-                delete img.dataset.retryCount; // 재시도 카운터 초기화
-                finalize(false);
-            }
-        };
-
-        img.addEventListener('load', onLoad, { once: true });
-        img.addEventListener('error', onError, { once: true });
-
-        img.src = img.dataset.src;
-
-        // 🔥 이미지가 이미 로드된 경우 (캐시된 경우) 즉시 완료 처리
-        if (img.complete && img.naturalWidth > 0) {
-            // 🔥 placeholder 이미지는 성공으로 간주하지 않음
-            if (img.src === GRID_THUMB_PLACEHOLDER || !img.dataset.src) {
-                finalize(false);
-            } else {
-                finalize(true);
-            }
-        }
+            })
+            .catch(err => {
+                this._gridAbortControllers.delete(img);
+                if (err.name === 'AbortError') {
+                    // 🔥 스크롤 취소 — 조용히 처리, 재시도 안 함
+                    img.dataset.loading = 'false';
+                    img.dataset.gridLoaded = 'false';
+                    if (this.gridLoadInFlight > 0) this.gridLoadInFlight--;
+                    return;
+                }
+                // 진짜 에러 — 재시도
+                img.dataset.loading = 'false';
+                img.dataset.gridLoaded = 'false';
+                if (this.gridLoadInFlight > 0) this.gridLoadInFlight--;
+                this.drainGridLoadQueue();
+            });
     }
 
     drainGridLoadQueue(force = false) {
@@ -17140,47 +17129,7 @@ class WaferMapViewer {
         img.dataset.gridLoaded = 'false';
 
         img.ondragstart = (e) => e.preventDefault();
-
-        img.onload = () => {
-            if (img.src === GRID_THUMB_PLACEHOLDER) {
-                img.style.opacity = '0';
-                return;
-            }
-            img.dataset.loading = 'false';
-            img.dataset.gridLoaded = 'true';
-            img.style.opacity = '1';
-        };
-
-        img.onerror = (e) => {
-            const isAborted = !img.parentElement ||
-                             !img.src ||
-                             img.src === window.location.href ||
-                             img.src.length < 20;
-
-            if (!isAborted) {
-                console.error(`? [THUMBNAIL ERROR] 썸네일 로드 실패:`, {
-                    경로: imgPath,
-                    URL: img.src,
-                    에러타입: e.type,
-                    인덱스: idx
-                });
-            }
-
-            if (img.parentElement) {
-                img.style.backgroundColor = '#333';
-                img.style.opacity = '0.5';
-                img.dataset.loading = 'false';
-                img.dataset.gridLoaded = 'false';
-
-                if (!isAborted) {
-                    setTimeout(() => {
-                        if (img.parentElement) {
-                            this.replaceWithThumbnail(img, imgPath);
-                        }
-                    }, 500);
-                }
-            }
-        };
+        // 🔥 onload/onerror 제거 — fetch+AbortController가 전담 (img.src 직접 설정 안 함)
 
         const personalizedParams = this.getPersonalizedParams();
         const cacheBuster = this._personalizedColorCacheBuster;
@@ -17308,7 +17257,6 @@ class WaferMapViewer {
             .slice(0, maxCount);
 
         images.forEach((img, index) => {
-            img.loading = 'eager';
             if (index < 8) {
                 img.fetchPriority = 'high';
             }
@@ -17591,21 +17539,7 @@ class WaferMapViewer {
             this.gridLoadingBatch = null;
         }
 
-        // 🔥 2단계: DOM의 모든 로딩 중인 이미지 src 중단 (네트워크 요청 취소)
-        if (grid) {
-            const oldImages = grid.querySelectorAll('.grid-thumb-img');
-            let canceledCount = 0;
-            oldImages.forEach(img => {
-                if (!img.complete) {  // 로딩 중인 이미지만
-                    img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-                    canceledCount++;
-                }
-            });
-            if (canceledCount > 0) {
-                console.log(`🛑 [GRID] hideGrid - ${canceledCount}개 네트워크 요청 중단`);
-            }
-        }
-
+        // 🔥 2단계: fetch AbortController로 실제 네트워크 요청 취소
         this.teardownGridLazyLoader();
 
         // 🔥 LOT 스크롤 이벤트 리스너 제거

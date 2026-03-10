@@ -60,11 +60,14 @@ export class GridManager {
      */
     initIntersectionObserver() {
         if ('IntersectionObserver' in window) {
+            // 🔥 뷰포트 1.5배 영역만 관찰 (위아래 25%씩 = 50% 추가)
+            const viewportHeight = window.innerHeight;
+            const margin = Math.round(viewportHeight * 0.25);
             this.observer = new IntersectionObserver(
                 (entries) => this.handleIntersection(entries),
                 {
                     root: null,
-                    rootMargin: '100px',
+                    rootMargin: `${margin}px 0px ${margin}px 0px`,
                     threshold: 0.1
                 }
             );
@@ -278,7 +281,7 @@ export class GridManager {
                 const gridItem = entry.target;
                 const src = gridItem.dataset.src;
                 const index = parseInt(gridItem.dataset.index);
-                
+
                 // 이미 로드되었거나 로딩 중이면 건너뛰기
                 if (!src || this.loadingThumbnails.has(index)) {
                     // 로드 완료된 경우에만 unobserve
@@ -287,19 +290,15 @@ export class GridManager {
                     }
                     return;
                 }
-                
-                // 🔥 스크롤 중이어도 로드하되, 스크롤 중에는 큐에 추가
+
+                // 🔥 스크롤 중에는 절대 요청하지 않음 — pending 큐에만 추가
                 if (this.isScrolling) {
-                    // 스크롤 중에는 pending 큐에 추가 (스크롤이 멈춘 후 로드)
                     this.scrollPendingItems.add(gridItem);
-                    // unobserve하지 않음 (스크롤이 멈춘 후 다시 확인)
                 } else {
                     // 스크롤 중이 아니면 즉시 로드
                     this.loadThumbnail(gridItem).then(() => {
-                        // 로드 완료 후 unobserve
                         this.observer.unobserve(gridItem);
                     }).catch(() => {
-                        // 에러 발생 시에도 unobserve (재시도 방지)
                         this.observer.unobserve(gridItem);
                     });
                 }
@@ -552,45 +551,27 @@ export class GridManager {
     }
     
     /**
-     * 🔥 스크롤 핸들러 (디바운스: 100ms 후 실행)
+     * 🔥 스크롤 핸들러 (디바운스: 50ms settle + 즉시 로드)
+     * 스크롤 중에는 절대 요청하지 않으며, 진행 중인 요청도 모두 취소.
+     * 스크롤 이벤트가 50ms 동안 없으면 "멈춤"으로 판정, 뷰포트 1.5배만 로드.
      */
     handleScroll() {
-        // 🔥 스크롤 시작 시 모든 진행 중인 요청 취소
-        if (!this.isScrolling) {
-            this.cancelAllLoads();
-        }
-
-        // 스크롤 중임을 표시
+        // 🔥 스크롤 시작 시 모든 진행 중인 요청 취소 + pending 큐 초기화
+        this.cancelAllLoads();
         this.isScrolling = true;
+        this.scrollPendingItems.clear();
 
         // 기존 타이머 클리어
         if (this.scrollDebounceTimer) {
             clearTimeout(this.scrollDebounceTimer);
         }
 
-        // 100ms 후 실행
+        // 🔥 50ms settle — scroll 이벤트 간격(~16ms)보다 충분히 길어야 진짜 멈춤 판정
         this.scrollDebounceTimer = setTimeout(() => {
             this.isScrolling = false;
-            // 🔥 스크롤이 멈춘 후 pending 아이템들 로드
-            if (this.scrollPendingItems.size > 0) {
-                const pendingItems = Array.from(this.scrollPendingItems);
-                this.scrollPendingItems.clear();
-                pendingItems.forEach(gridItem => {
-                    if (gridItem.dataset.src && !this.loadingThumbnails.has(parseInt(gridItem.dataset.index))) {
-                        this.loadThumbnail(gridItem).then(() => {
-                            this.observer.unobserve(gridItem);
-                        }).catch(() => {
-                            this.observer.unobserve(gridItem);
-                        });
-                    } else if (!gridItem.dataset.src) {
-                        // 이미 로드된 경우 unobserve
-                        this.observer.unobserve(gridItem);
-                    }
-                });
-            }
-            // 🔥 스크롤이 멈춘 후 현재 뷰포트의 이미지만 즉시 로드
+            this.scrollPendingItems.clear();
             this.loadVisibleImages();
-        }, 100);
+        }, 50);
     }
 
     /**
@@ -607,34 +588,32 @@ export class GridManager {
     /**
      * 🔥 현재 뷰포트에 보이는 이미지만 즉시 로드
      */
+    /**
+     * 🔥 현재 뷰포트 1.5배 영역에 보이는 이미지만 즉시 로드
+     * 스크롤이 멈춘 후 1ms 뒤에만 호출됨.
+     */
     loadVisibleImages() {
         if (!this.container) return;
 
         const gridItems = this.container.querySelectorAll('.grid-item[data-src]');
         const containerRect = this.container.getBoundingClientRect();
 
-        // 🔥 뷰포트 크기 계산
-        const viewportWidth = containerRect.width;
+        // 🔥 뷰포트 1.5배 영역: 위아래로 25%씩 확장
         const viewportHeight = containerRect.height;
-        
-        // 🔥 뷰 대비 뒤로 20%, 아래로 20% 더 로드
-        const rightPadding = viewportWidth * 0.2;  // 뒤로 20%
-        const bottomPadding = viewportHeight * 0.2; // 아래로 20%
+        const verticalPadding = viewportHeight * 0.25;
 
         gridItems.forEach((gridItem) => {
             const itemRect = gridItem.getBoundingClientRect();
 
-            // 🔥 뷰포트 내에 있는지 확인 (뒤로 20%, 아래로 20% 추가)
+            // 🔥 뷰포트 1.5배 내에 있는지 확인
             const isVisible = (
-                itemRect.top < containerRect.bottom + bottomPadding &&
-                itemRect.bottom > containerRect.top &&
-                itemRect.left < containerRect.right + rightPadding &&
+                itemRect.top < containerRect.bottom + verticalPadding &&
+                itemRect.bottom > containerRect.top - verticalPadding &&
+                itemRect.left < containerRect.right &&
                 itemRect.right > containerRect.left
             );
 
             if (isVisible) {
-                // 🔥 즉시 로드 (data-src 제거는 loadThumbnail에서 처리하지 않음)
-                // Observer가 이미 unobserve했으므로 여기서 명시적으로 로드
                 const index = parseInt(gridItem.dataset.index);
                 if (!this.loadingThumbnails.has(index)) {
                     this.loadThumbnail(gridItem);
