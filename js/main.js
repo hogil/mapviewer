@@ -16920,11 +16920,11 @@ class WaferMapViewer {
                 this.gridQueuedImages.clear();
                 this.gridLoadingBatch = null;
             } else if (wasScrolling) {
-                // 🔥 스크롤 멈춤 (16ms 동안 scrollTop 불변) — 즉시 뷰포트 로드
+                // 🔥 스크롤 멈춤 — 즉시 뷰포트 로드 (1ms 폴링이므로 사실상 0.1ms 지연)
                 wasScrolling = false;
                 this.loadVisibleGridThumbnails();
             }
-        }, 16);
+        }, 1); // 🔥 1ms 폴링 — 스크롤 멈추면 즉시 감지
     }
 
     _stopGridScrollDetection() {
@@ -17488,7 +17488,7 @@ class WaferMapViewer {
 
         const scrollTop = scrollWrapper.scrollTop;
         const viewportHeight = scrollWrapper.clientHeight;
-        const padding = 500;
+        const padding = Math.round(viewportHeight * 0.25); // 뷰포트 1.5배 영역 (위아래 25%씩)
 
         // 🔥 이진 탐색 — 캐시된 offsetTop 사용 (layout reflow 없음)
         const targetTop = Math.max(0, scrollTop - padding);
