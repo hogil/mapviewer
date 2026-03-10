@@ -17407,58 +17407,34 @@ class WaferMapViewer {
 
         const scrollTop = scrollWrapper.scrollTop;
         const viewportHeight = scrollWrapper.clientHeight;
-        const cols = this.gridCols || 5;
+        const padding = 500; // 위아래 여유 px
 
-        // 🔥 행 피치 계산 (CSS gap + LOT 헤더 포함한 실제 간격, 캐시)
-        if (!this._gridRowPitch || this._gridRowHeightStale) {
-            if (wraps.length > cols) {
-                // 두 번째 행의 첫 wrap과 첫 번째 행의 첫 wrap 차이 = 실제 행 피치
-                this._gridRowPitch = wraps[cols].offsetTop - wraps[0].offsetTop;
+        // 🔥 이진 탐색: offsetTop >= target인 첫 번째 인덱스 찾기 — O(log n)
+        const targetTop = Math.max(0, scrollTop - padding);
+        let lo = 0, hi = wraps.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi) >>> 1;
+            if (wraps[mid].offsetTop + wraps[mid].offsetHeight < targetTop) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
             }
-            if (!this._gridRowPitch || this._gridRowPitch <= 0) {
-                this._gridRowPitch = (wraps[0] ? wraps[0].offsetHeight : 0) || 200;
-            }
-            this._gridFirstWrapOffset = wraps[0] ? wraps[0].offsetTop : 0;
-            this._gridRowHeightStale = false;
         }
-        const rowPitch = this._gridRowPitch;
-        const firstOffset = this._gridFirstWrapOffset || 0;
-        const padding = rowPitch * 3; // 위아래 3행 여유
 
-        // 🔥 가시 범위의 인덱스 추정 (O(1) — firstOffset과 실제 피치 사용)
-        const adjustedScrollTop = Math.max(0, scrollTop - firstOffset);
-        const estimatedStartRow = Math.max(0, Math.floor((adjustedScrollTop - padding) / rowPitch));
-        const estimatedEndRow = Math.ceil((adjustedScrollTop + viewportHeight + padding) / rowPitch);
-        const startIdx = Math.max(0, (estimatedStartRow - 2) * cols);
-        const endIdx = Math.min(wraps.length, (estimatedEndRow + 3) * cols);
-
-        // 🔥 추정 범위 내에서만 가시성 확인 (수십 개만 체크)
+        // 🔥 lo부터 순방향 스캔 — 뷰포트 벗어나면 즉시 중단
         const scrollRect = scrollWrapper.getBoundingClientRect();
-        const visibleTop = scrollRect.top - padding;
         const visibleBottom = scrollRect.bottom + padding;
-
         const viewportImages = [];
         const preloadImages = [];
-        let foundVisible = false;
 
-        for (let i = startIdx; i < endIdx; i++) {
+        for (let i = lo; i < wraps.length; i++) {
             const wrap = wraps[i];
-            if (!wrap) continue;
-
             const wrapRect = wrap.getBoundingClientRect();
-            if (wrapRect.bottom < visibleTop) continue;
-            if (wrapRect.top > visibleBottom) {
-                if (foundVisible) break; // 가시 영역 지나감
-                continue; // 아직 가시 영역 전 — LOT 헤더 오프셋 차이 가능
-            }
-            foundVisible = true;
+            if (wrapRect.top > visibleBottom) break;
 
             const img = wrap.querySelector('.grid-thumb-img');
             if (img && img.dataset?.src && img.dataset.gridLoaded !== 'true' && img.dataset.loading !== 'true') {
-                const isInViewport = (
-                    wrapRect.top < scrollRect.bottom &&
-                    wrapRect.bottom > scrollRect.top
-                );
+                const isInViewport = (wrapRect.top < scrollRect.bottom && wrapRect.bottom > scrollRect.top);
                 if (isInViewport) {
                     viewportImages.push(img);
                 } else {
@@ -17467,13 +17443,9 @@ class WaferMapViewer {
             }
         }
 
-        // 🔥 뷰포트 이미지 최우선 로드
-        for (const img of viewportImages) {
-            this.enqueueGridThumbnail(img, true);
-        }
-        for (const img of preloadImages) {
-            this.enqueueGridThumbnail(img, true);
-        }
+        // 🔥 뷰포트 최우선 → 프리로드
+        for (const img of viewportImages) this.enqueueGridThumbnail(img, true);
+        for (const img of preloadImages) this.enqueueGridThumbnail(img, true);
         this.drainGridLoadQueue();
     }
 
@@ -18619,9 +18591,6 @@ class WaferMapViewer {
     invalidateGridGeometry() {
         this.gridThumbRectCache = null;
         this.gridLayoutCache = null;
-        this._gridRowHeightStale = true;
-        this._gridRowPitch = 0;
-        this._gridFirstWrapOffset = 0;
     }
 
     insertIndexSorted(arr, value) {
