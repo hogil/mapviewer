@@ -19,9 +19,9 @@ cert/*.pem
 cert/*.key
 cert/*.crt
 
-# Logs and data (runtime generated)
-logs/**
-!logs/color-legends.json
+# Logs (runtime generated, exclude from VCS)
+logs/access.log
+logs/detail_access.csv
 
 # IDE
 .idea/

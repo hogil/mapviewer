@@ -1,0 +1,829 @@
+{
+  "users": {
+    "guest": {
+      "primary_ip": "127.0.0.1",
+      "ip_addresses": [
+        "87.106.42.199",
+        "185.12.59.117",
+        "89.248.168.239",
+        "185.231.33.46",
+        "175.209.146.210",
+        "144.91.93.174",
+        "127.0.0.1",
+        "195.178.110.246",
+        "206.168.34.211",
+        "167.94.138.185",
+        "159.195.94.111",
+        "185.224.128.251",
+        "185.12.59.118",
+        "192.159.99.132"
+      ],
+      "total_requests": 1896,
+      "unique_days": [
+        "2026-03-06",
+        "2026-03-07",
+        "2026-03-08",
+        "2026-03-09",
+        "2026-03-10",
+        "2026-03-11"
+      ],
+      "first_seen": "2026-03-06",
+      "last_seen": "2026-03-11",
+      "last_access_time": "2026-03-11 06:39:20",
+      "first_access_time": "2026-03-06 09:00:01",
+      "session_count": 0,
+      "total_session_time": 0,
+      "current_session_start": "2026-03-07 12:46:46",
+      "daily_requests": {
+        "2026-03-06": 5,
+        "2026-03-07": 1801,
+        "2026-03-08": 1,
+        "2026-03-09": 10,
+        "2026-03-10": 75,
+        "2026-03-11": 4
+      },
+      "endpoints": {
+        "/api/index/status": 3,
+        "/api/composite-map": 5,
+        "/api/stats/users": 3,
+        "/api/user-prefs": 104,
+        "/api/files": 190,
+        "/api/config": 104,
+        "/api/cache": 79,
+        "/logs/color-legends.json": 111,
+        "/api/auth/user": 107,
+        "/api/root-folder": 105,
+        "/api/current-folder": 119,
+        "/api/browse-folders": 107,
+        "/api/classes": 129,
+        "/api/files/recursive": 65,
+        "/api/chip-positions": 228,
+        "/api/chip-annotations": 200,
+        "/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/vendor/phpunit/phpunit/Util/PHP/eval-stdin.php": 2,
+        "/vendor/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/vendor/phpunit/Util/PHP/eval-stdin.php": 1,
+        "/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/phpunit/phpunit/Util/PHP/eval-stdin.php": 1,
+        "/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/phpunit/Util/PHP/eval-stdin.php": 1,
+        "/lib/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/lib/phpunit/phpunit/Util/PHP/eval-stdin.php": 1,
+        "/lib/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/lib/phpunit/Util/PHP/eval-stdin.php": 1,
+        "/lib/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/app/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/api/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/backend/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/public/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/web/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/html/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/site/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/src/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/core/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/cms/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/crm/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/shop/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/blog/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/portal/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/test/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/dev/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/admin/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/laravel/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/laravel52/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/yii/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/zend/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/concrete/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/sites/all/libraries/mailchimp/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/sites/default/libraries/mailchimp/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/modules/autoupgrade/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/modules/gamification/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/modules/ps_facetedsearch/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/modules/pscartabandonmentpro/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/modules/ps_checkout/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/auth/saml/extlib/simplesamlphp/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/simplesaml/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/wp-content/plugins/dzs-videogallery/class_parts/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/wp-content/plugins/jekyll-exporter/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/wp-content/plugins/cloudflare/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/wp-content/plugins/flavor/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/wp-content/plugins/developer/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/wp-content/plugins/mm-plugin/inc/vendors/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/wp-content/plugins/contact-form-7-to-database-extension/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/wp-content/plugins/shortcode-tumblr-gallery/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/wp-content/plugins/user-export-with-their-meta-data/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/wp-content/plugins/jannes-mannes-social-media-auto-publisher/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/wp-content/plugins/rollbar/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 1,
+        "/api/color-scheme": 48,
+        "/api/user-info": 1,
+        "/sitemap.xml": 1,
+        "/cgi-bin/../../../../../../../../../../bin/sh": 4,
+        "/cgi-bin/%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/bin/sh": 4,
+        "/admin/config.php": 1,
+        "/api/change-folder": 11,
+        "/api/composite-subset": 1,
+        "/.well-known/appspecific/com.chrome.devtools.json": 10,
+        "/.env": 1,
+        "/hello.world": 2,
+        "/api/roles/users": 2,
+        "/api/classify/batch": 7,
+        "/Dr0v": 2,
+        "/version": 1,
+        "/helpdesk/WebObjects/Helpdesk.woa": 1,
+        "/api/my-lot": 24,
+        "/api/my-lot/groups": 65
+      },
+      "sessions": [],
+      "profile": {
+        "LoginId": "guest",
+        "Username": "guest"
+      },
+      "user_type": "saml"
+    },
+    "hgchoi": {
+      "primary_ip": "10.10.1.21",
+      "ip_addresses": [
+        "10.10.1.21",
+        "10.10.1.30"
+      ],
+      "total_requests": 42,
+      "unique_days": [
+        "2026-03-05",
+        "2026-03-06",
+        "2026-03-07"
+      ],
+      "first_seen": "2026-03-05",
+      "last_seen": "2026-03-07",
+      "last_access_time": "2026-03-07 13:12:08",
+      "first_access_time": "2026-03-05 08:31:10",
+      "session_count": 0,
+      "total_session_time": 0,
+      "current_session_start": "2026-03-07 13:12:08",
+      "daily_requests": {
+        "2026-03-05": 9,
+        "2026-03-06": 13,
+        "2026-03-07": 20
+      },
+      "endpoints": {
+        "/api/files": 10,
+        "/api/stats/daily": 8,
+        "/api/thumbnail": 24
+      },
+      "sessions": [],
+      "profile": {
+        "LoginId": "hgchoi",
+        "Username": "홍길동",
+        "DeptName": "개발팀",
+        "GrdName_EN": "Senior Engineer"
+      },
+      "user_type": "saml"
+    },
+    "jkim": {
+      "primary_ip": "10.10.2.11",
+      "ip_addresses": [
+        "10.10.2.11"
+      ],
+      "total_requests": 17,
+      "unique_days": [
+        "2026-03-06",
+        "2026-03-07"
+      ],
+      "first_seen": "2026-03-06",
+      "last_seen": "2026-03-07",
+      "last_access_time": "2026-03-07 11:47:19",
+      "first_access_time": "2026-03-06 10:11:04",
+      "session_count": 0,
+      "total_session_time": 0,
+      "current_session_start": "2026-03-07 11:47:19",
+      "daily_requests": {
+        "2026-03-06": 7,
+        "2026-03-07": 10
+      },
+      "endpoints": {
+        "/api/search": 7,
+        "/api/stats/recent-users": 3,
+        "/api/composite-colors": 7
+      },
+      "sessions": [],
+      "profile": {
+        "LoginId": "jkim",
+        "Username": "김지수",
+        "DeptName": "품질팀",
+        "GrdName_EN": "Manager"
+      },
+      "user_type": "saml"
+    },
+    "ylee": {
+      "primary_ip": "10.10.3.90",
+      "ip_addresses": [
+        "10.10.3.90"
+      ],
+      "total_requests": 11,
+      "unique_days": [
+        "2026-03-07"
+      ],
+      "first_seen": "2026-03-07",
+      "last_seen": "2026-03-07",
+      "last_access_time": "2026-03-07 10:22:11",
+      "first_access_time": "2026-03-07 10:22:11",
+      "session_count": 0,
+      "total_session_time": 0,
+      "current_session_start": "2026-03-07 10:22:11",
+      "daily_requests": {
+        "2026-03-07": 11
+      },
+      "endpoints": {
+        "/api/thumbnail": 5,
+        "/api/files": 6
+      },
+      "sessions": [],
+      "profile": {
+        "LoginId": "ylee",
+        "Username": "이영희",
+        "DeptName": "개발팀",
+        "GrdName_EN": "Engineer"
+      },
+      "user_type": "saml"
+    },
+    "ho.choi": {
+      "primary_ip": "127.0.0.1",
+      "ip_addresses": [
+        "127.0.0.1"
+      ],
+      "total_requests": 1,
+      "unique_days": [
+        "2026-03-07"
+      ],
+      "first_seen": "2026-03-07",
+      "last_seen": "2026-03-07",
+      "last_access_time": "2026-03-07 15:44:47",
+      "first_access_time": "2026-03-07 15:44:47",
+      "session_count": 0,
+      "total_session_time": 0,
+      "current_session_start": "2026-03-07 15:44:47",
+      "daily_requests": {
+        "2026-03-07": 1
+      },
+      "endpoints": {
+        "/api/user-prefs": 1
+      },
+      "sessions": [],
+      "profile": {
+        "LoginId": "ho.choi",
+        "Username": "ho.choi"
+      },
+      "user_type": "saml"
+    },
+    "notsaml": {
+      "primary_ip": "175.209.146.210",
+      "ip_addresses": [
+        "52.165.81.92",
+        "172.245.21.30",
+        "54.167.11.4",
+        "47.245.117.221",
+        "167.94.146.62",
+        "18.246.249.116",
+        "103.40.61.98",
+        "35.216.144.195",
+        "64.62.156.108",
+        "34.158.79.105",
+        "147.45.60.22",
+        "3.83.105.161",
+        "185.12.59.118",
+        "170.64.173.46",
+        "64.62.197.122",
+        "165.154.59.90",
+        "98.93.63.52",
+        "115.190.211.111",
+        "43.162.97.123",
+        "20.163.57.99",
+        "102.22.20.125",
+        "165.227.159.131",
+        "45.156.129.56",
+        "139.59.136.184",
+        "206.168.34.115",
+        "45.156.87.205",
+        "199.45.155.94",
+        "89.42.231.182",
+        "167.94.146.51",
+        "162.142.125.206",
+        "172.202.118.17",
+        "49.232.164.64",
+        "20.106.57.141",
+        "91.232.238.112",
+        "185.12.59.117",
+        "167.94.138.187",
+        "187.110.175.205",
+        "177.70.2.220",
+        "127.0.0.1",
+        "172.94.9.253",
+        "20.65.192.160",
+        "77.83.39.82",
+        "3.90.111.248",
+        "176.65.149.253",
+        "164.52.0.92",
+        "195.178.110.162",
+        "175.209.146.210",
+        "128.14.236.128",
+        "152.32.132.203",
+        "20.172.67.176",
+        "40.76.250.51",
+        "5.61.209.96",
+        "107.20.3.176",
+        "40.124.174.138",
+        "172.203.234.251",
+        "47.245.63.168",
+        "206.168.34.214",
+        "47.87.140.88",
+        "3.86.193.171",
+        "40.76.116.132",
+        "85.105.253.144",
+        "45.148.10.64",
+        "185.224.128.251",
+        "172.202.117.213",
+        "74.7.228.50",
+        "13.83.90.155"
+      ],
+      "total_requests": 3061,
+      "unique_days": [
+        "2026-03-08",
+        "2026-03-09",
+        "2026-03-10",
+        "2026-03-11"
+      ],
+      "first_seen": "2026-03-08",
+      "last_seen": "2026-03-11",
+      "last_access_time": "2026-03-11 00:20:30",
+      "first_access_time": "2026-03-08 00:04:46",
+      "session_count": 0,
+      "total_session_time": 0,
+      "current_session_start": "2026-03-08 00:04:46",
+      "daily_requests": {
+        "2026-03-08": 735,
+        "2026-03-09": 1280,
+        "2026-03-10": 927,
+        "2026-03-11": 119
+      },
+      "endpoints": {
+        "/api/config": 182,
+        "/logs/color-legends.json": 186,
+        "/api/auth/user": 186,
+        "/api/user-prefs": 217,
+        "/api/root-folder": 185,
+        "/api/current-folder": 188,
+        "/api/browse-folders": 188,
+        "/api/classes": 188,
+        "/api/files": 347,
+        "/api/color-scheme": 11,
+        "/api/files/recursive": 132,
+        "/api/cache": 125,
+        "/api/chip-positions": 203,
+        "/api/chip-annotations": 143,
+        "/api/my-lot": 91,
+        "/api/my-lot/group": 24,
+        "/api/search": 47,
+        "/api/my-lot/batch": 59,
+        "/api/composite-map": 23,
+        "/api/composite-colors": 2,
+        "/api/cache/all": 6,
+        "/api/composite-subset": 4,
+        "/cgi-bin/../../../../../../../../../../bin/sh": 9,
+        "/cgi-bin/%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/bin/sh": 9,
+        "/hello.world": 4,
+        "/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 4,
+        "/vendor/phpunit/phpunit/Util/PHP/eval-stdin.php": 2,
+        "/vendor/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/vendor/phpunit/Util/PHP/eval-stdin.php": 2,
+        "/vendor/phpunit/phpunit/LICENSE/eval-stdin.php": 2,
+        "/vendor/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/phpunit/phpunit/Util/PHP/eval-stdin.php": 2,
+        "/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/phpunit/Util/PHP/eval-stdin.php": 2,
+        "/lib/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/lib/phpunit/phpunit/Util/PHP/eval-stdin.php": 2,
+        "/lib/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/lib/phpunit/Util/PHP/eval-stdin.php": 2,
+        "/lib/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/laravel/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/www/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/ws/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/yii/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/zend/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/ws/ec/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/V2/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/tests/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/test/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/testing/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/api/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/demo/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/cms/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/crm/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/admin/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/backup/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/blog/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/workspace/drupal/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/panel/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/public/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/apps/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/app/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php": 2,
+        "/index.php": 2,
+        "/public/index.php": 2,
+        "/containers/json": 2,
+        "/.env": 10,
+        "/Dr0v": 8,
+        "/.env.save": 2,
+        "/dev/.env": 2,
+        "/phpinfo": 2,
+        "/config.json": 7,
+        "/application/.env": 2,
+        "/api/.env": 4,
+        "/.env.prod": 2,
+        "/phpinfo.php": 3,
+        "/php_info.php": 2,
+        "/_profiler/phpinfo": 2,
+        "/autodiscover/autodiscover.json": 2,
+        "/owa/auth/x.js": 1,
+        "/developmentserver/metadatauploader": 2,
+        "/robots.txt": 15,
+        "/version": 5,
+        "/login": 2,
+        "/web_shell_cmd.gch": 1,
+        "/sitemap.xml": 4,
+        "/sse": 2,
+        "/mcp": 2,
+        "/mcp-sse": 2,
+        "/telescope/requests": 2,
+        "/info.php": 2,
+        "/.git/config": 5,
+        "/server-status": 2,
+        "/owa/auth/logon.aspx": 3,
+        "/odinhttpcall1773027147": 1,
+        "/sdk": 1,
+        "/evox/about": 1,
+        "/HNAP1": 1,
+        "/geoserver/web/": 2,
+        "/.well-known/appspecific/com.chrome.devtools.json": 11,
+        "/admin/config.php": 3,
+        "/api/change-folder": 11,
+        "/actuator/health": 1,
+        "/security.txt": 1,
+        "/backend/.env": 1,
+        "/admin/.env": 1,
+        "/app_dev.php/_profiler/phpinfo": 1,
+        "/.env.example": 1,
+        "/phpinfo/": 1,
+        "/server/.env": 1,
+        "/laravel/.env": 1,
+        "/core/.env": 1,
+        "/info/": 1,
+        "/web/.env": 1,
+        "/test/.env": 1,
+        "/test": 1,
+        "/app_dev.php/_profiler/open": 1,
+        "/secrets.env": 1,
+        "/.env.bak": 1,
+        "/info": 1,
+        "/app/.env": 1,
+        "/.env.local": 1,
+        "/docs/.env": 1,
+        "/cms/.env": 1,
+        "/sendgrid/.env": 1,
+        "/staging/.env": 1,
+        "/download/.env": 1,
+        "/new/.env": 1,
+        "/old/.env": 1,
+        "/.env.production": 1,
+        "/v2/.env": 1,
+        "/api/whoami": 3,
+        "/api/my-lot/groups": 24,
+        "/api/my-lot/entries": 10,
+        "/ReportServer": 1,
+        "/api/my-lot/group/entries": 1,
+        "/owa/": 1,
+        "/../../../../../../../../etc/passwd": 1,
+        "/../../../../../../etc/passwd": 1,
+        "/dns-query": 1,
+        "/query": 1,
+        "/resolve": 1,
+        "/v1/models": 1,
+        "/v1/embeddings": 1,
+        "/v1/completions": 1,
+        "/console/": 1,
+        "/server": 1,
+        "/about": 1,
+        "/login.action": 1,
+        "/v2/_catalog": 1,
+        "/.DS_Store": 1,
+        "/ecp/Current/exporttool/microsoft.exchange.ediscovery.exporttool.application": 1,
+        "/graphql": 1,
+        "/api": 1,
+        "/api/graphql": 1,
+        "/graphql/api": 1,
+        "/api/gql": 1,
+        "/s/031323e2634313e2930323e2537313/_/;/META-INF/maven/com.atlassian.jira/jira-webapp-dist/pom.properties": 1,
+        "/.well-known/security.txt": 1,
+        "/actuator/env": 1,
+        "/swagger-ui.html": 1,
+        "/swagger/index.html": 1,
+        "/swagger/swagger-ui.html": 1,
+        "/webjars/swagger-ui/index.html": 1,
+        "/swagger.json": 1,
+        "/swagger/v1/swagger.json": 1,
+        "/v2/api-docs": 1,
+        "/v3/api-docs": 1,
+        "/api-docs/swagger.json": 1,
+        "/api/swagger.json": 1,
+        "/trace.axd": 1,
+        "/@vite/env": 1,
+        "/.vscode/sftp.json": 1,
+        "/debug/default/view": 1,
+        "/dBEq": 1,
+        "/SDK/webLanguage": 1,
+        "/debug/default/index": 1,
+        "/blog": 1,
+        "/demo": 1,
+        "/wp": 1,
+        "/new": 1,
+        "/wordpress": 1,
+        "/vendor/laravel-filemanager/js/script.js": 1,
+        "/_ignition/execute-solution": 1,
+        "/public/vendor/laravel-filemanager/js/script.js": 1
+      },
+      "sessions": [],
+      "profile": {
+        "LoginId": "notsaml",
+        "Username": "notsaml"
+      },
+      "user_type": "saml"
+    },
+    "apitest": {
+      "primary_ip": "127.0.0.1",
+      "ip_addresses": [
+        "127.0.0.1"
+      ],
+      "total_requests": 3,
+      "unique_days": [
+        "2026-03-09"
+      ],
+      "first_seen": "2026-03-09",
+      "last_seen": "2026-03-09",
+      "last_access_time": "2026-03-09 22:24:42",
+      "first_access_time": "2026-03-09 22:24:42",
+      "session_count": 0,
+      "total_session_time": 0,
+      "current_session_start": "2026-03-09 22:24:42",
+      "daily_requests": {
+        "2026-03-09": 3
+      },
+      "endpoints": {
+        "/api/my-lot/batch": 2,
+        "/api/my-lot": 1
+      },
+      "sessions": [],
+      "profile": {
+        "LoginId": "apitest",
+        "Username": "apitest"
+      },
+      "user_type": "saml"
+    }
+  },
+  "daily_stats": {
+    "2026-03-06": {
+      "active_users": [
+        "guest",
+        "hgchoi",
+        "jkim"
+      ],
+      "new_users": [
+        "guest",
+        "jkim"
+      ],
+      "total_requests": 25,
+      "by_department": {
+        "부서미지정": 5,
+        "개발팀": 13,
+        "품질팀": 7
+      },
+      "by_team": {},
+      "by_company": {},
+      "by_org_url": {}
+    },
+    "2026-03-07": {
+      "active_users": [
+        "guest",
+        "hgchoi",
+        "jkim",
+        "ylee",
+        "ho.choi"
+      ],
+      "new_users": [
+        "ylee",
+        "ho.choi"
+      ],
+      "total_requests": 1620,
+      "by_department": {
+        "부서미지정": 1579,
+        "개발팀": 31,
+        "품질팀": 10
+      },
+      "by_team": {},
+      "by_company": {},
+      "by_org_url": {}
+    },
+    "2026-03-08": {
+      "active_users": [
+        "guest",
+        "notsaml"
+      ],
+      "new_users": [
+        "notsaml"
+      ],
+      "total_requests": 485,
+      "by_department": {
+        "부서미지정": 485
+      },
+      "by_team": {},
+      "by_company": {},
+      "by_org_url": {}
+    },
+    "2026-03-09": {
+      "active_users": [
+        "notsaml",
+        "apitest",
+        "guest"
+      ],
+      "new_users": [
+        "apitest"
+      ],
+      "total_requests": 824,
+      "by_department": {
+        "부서미지정": 824
+      },
+      "by_team": {},
+      "by_company": {},
+      "by_org_url": {}
+    },
+    "2026-03-10": {
+      "active_users": [
+        "notsaml",
+        "guest"
+      ],
+      "new_users": [],
+      "total_requests": 673,
+      "by_department": {
+        "부서미지정": 673
+      },
+      "by_team": {},
+      "by_company": {},
+      "by_org_url": {}
+    },
+    "2026-03-11": {
+      "active_users": [
+        "notsaml",
+        "guest"
+      ],
+      "new_users": [],
+      "total_requests": 84,
+      "by_department": {
+        "부서미지정": 84
+      },
+      "by_team": {},
+      "by_company": {},
+      "by_org_url": {}
+    }
+  },
+  "monthly_stats": {
+    "2026-03": {
+      "active_users": [
+        "guest",
+        "hgchoi",
+        "jkim",
+        "ylee",
+        "ho.choi",
+        "notsaml",
+        "apitest"
+      ],
+      "new_users": [
+        "guest",
+        "jkim",
+        "ylee",
+        "ho.choi",
+        "notsaml",
+        "apitest"
+      ],
+      "total_requests": 3711,
+      "month_name": "2026년 03월",
+      "by_department": {
+        "부서미지정": 3650,
+        "개발팀": 44,
+        "품질팀": 17
+      },
+      "by_team": {},
+      "by_company": {},
+      "by_org_url": {}
+    }
+  },
+  "department_stats": {
+    "부서미지정": {
+      "name": "부서미지정",
+      "user_count": 4,
+      "total_requests": 3650,
+      "new_users_30d": 4,
+      "users": [
+        {
+          "user_id": "guest",
+          "profile": {
+            "LoginId": "guest",
+            "Username": "guest"
+          },
+          "first_seen": "2026-03-06",
+          "last_seen": "2026-03-11",
+          "last_access_time": "2026-03-11 06:52:26"
+        },
+        {
+          "user_id": "ho.choi",
+          "profile": {
+            "LoginId": "ho.choi",
+            "Username": "ho.choi"
+          },
+          "first_seen": "2026-03-07",
+          "last_seen": "2026-03-07",
+          "last_access_time": "2026-03-07 15:44:47"
+        },
+        {
+          "user_id": "notsaml",
+          "profile": {
+            "LoginId": "notsaml",
+            "Username": "notsaml"
+          },
+          "first_seen": "2026-03-08",
+          "last_seen": "2026-03-11",
+          "last_access_time": "2026-03-11 06:52:28"
+        },
+        {
+          "user_id": "apitest",
+          "profile": {
+            "LoginId": "apitest",
+            "Username": "apitest"
+          },
+          "first_seen": "2026-03-09",
+          "last_seen": "2026-03-09",
+          "last_access_time": "2026-03-09 22:25:00"
+        }
+      ]
+    },
+    "개발팀": {
+      "name": "개발팀",
+      "user_count": 2,
+      "total_requests": 53,
+      "new_users_30d": 2,
+      "users": [
+        {
+          "user_id": "hgchoi",
+          "profile": {
+            "LoginId": "hgchoi",
+            "Username": "홍길동",
+            "DeptName": "개발팀",
+            "GrdName_EN": "Senior Engineer"
+          },
+          "first_seen": "2026-03-05",
+          "last_seen": "2026-03-07",
+          "last_access_time": "2026-03-07 13:12:08"
+        },
+        {
+          "user_id": "ylee",
+          "profile": {
+            "LoginId": "ylee",
+            "Username": "이영희",
+            "DeptName": "개발팀",
+            "GrdName_EN": "Engineer"
+          },
+          "first_seen": "2026-03-07",
+          "last_seen": "2026-03-07",
+          "last_access_time": "2026-03-07 10:22:11"
+        }
+      ]
+    },
+    "품질팀": {
+      "name": "품질팀",
+      "user_count": 1,
+      "total_requests": 17,
+      "new_users_30d": 1,
+      "users": [
+        {
+          "user_id": "jkim",
+          "profile": {
+            "LoginId": "jkim",
+            "Username": "김지수",
+            "DeptName": "품질팀",
+            "GrdName_EN": "Manager"
+          },
+          "first_seen": "2026-03-06",
+          "last_seen": "2026-03-07",
+          "last_access_time": "2026-03-07 11:47:19"
+        }
+      ]
+    }
+  }
+}
