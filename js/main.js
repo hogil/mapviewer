@@ -935,7 +935,7 @@ class WaferMapViewer {
         this.gridQueuedImages = new Set();
         this.gridPendingIntersecting = new Set();
         this.gridLoadInFlight = 0;
-        this.gridMaxConcurrentLoads = Math.min(16, SERVER_CONFIG.THUMB_MAX_CONCURRENCY || 12);
+        this.gridMaxConcurrentLoads = 30; // 🔥 뷰포트 25개 전체를 1배치로 로드
         this.gridLoadingPaused = false;
         this.gridIntersectionObserver = null;
 
@@ -16924,7 +16924,7 @@ class WaferMapViewer {
                 wasScrolling = false;
                 this.loadVisibleGridThumbnails();
             }
-        }, 1); // 🔥 1ms 폴링 — 스크롤 멈추면 즉시 감지
+        }, 4); // 🔥 4ms 폴링 — CPU 부하 4배 감소, 감지 지연 무시 수준
     }
 
     _stopGridScrollDetection() {
@@ -16946,7 +16946,6 @@ class WaferMapViewer {
                 img.src = GRID_THUMB_PLACEHOLDER;
                 img.dataset.loading = 'false';
                 img.dataset.gridLoaded = 'false';
-                img.style.opacity = '0';
             }
         }
         this.gridLoadInFlight = 0;
@@ -16984,7 +16983,7 @@ class WaferMapViewer {
         this.gridLoadInFlight++;
         img.dataset.loading = 'true';
         img.dataset.gridLoaded = 'false';
-        img.style.opacity = '0';
+        img.decoding = 'async'; // 🔥 메인스레드 밖에서 디코딩
 
         const finalize = (success = false) => {
             img.dataset.loading = 'false';
@@ -16995,7 +16994,6 @@ class WaferMapViewer {
                 delete img.dataset.retryCount;
             } else if (!success) {
                 img.dataset.gridLoaded = 'false';
-                img.style.opacity = '0';
             }
             
             if (this.gridLoadInFlight > 0) {
@@ -17135,16 +17133,11 @@ class WaferMapViewer {
         const img = document.createElement('img');
         img.className = 'grid-thumb-img';
         img.alt = imgPath.split('/').pop();
-        img.loading = 'lazy';
-        img.decoding = 'async';
+        img.decoding = 'async'; // 🔥 lazy 제거 — 수동 lazy loading과 충돌
         img.style.opacity = '0';
         img.style.backgroundColor = '#1c1c1c';
         img.dataset.loading = 'false';
         img.dataset.gridLoaded = 'false';
-
-        img.style.imageRendering = 'high-quality';
-        img.style.imageRendering = 'crisp-edges';
-        img.style.imageRendering = '-webkit-optimize-contrast';
 
         img.ondragstart = (e) => e.preventDefault();
 

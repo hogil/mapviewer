@@ -5822,11 +5822,14 @@ async def get_thumbnail(
                     except Exception:
                         pass
                     raise RuntimeError("generated thumbnail is empty")
-                
+
+                # 🔥 ETag 304 체크 — 브라우저 캐시 히트 시 파일 전송 생략
+                etag_304 = maybe_304(request, st)
+                if etag_304:
+                    return etag_304
+
                 headers = {
-                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-                    "Pragma": "no-cache",
-                    "Expires": "0",
+                    "Cache-Control": "private, max-age=300",
                     "ETag": compute_etag(st),
                 }
                 content_type = "image/jpeg" if thumb.suffix.lower() in ['.jpg', '.jpeg'] else "image/png"
