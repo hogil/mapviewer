@@ -99,6 +99,18 @@ export class ThumbnailNavigator {
 
         this.isScrolling = false;
 
+        // 🔥 Virtual Scroll 상태 (300개 이상일 때 활성화)
+        this._vsEnabled = false;
+        this._vsItemSize = 0;       // 아이템 높이(vertical) 또는 너비(horizontal) + gap
+        this._vsGap = 8;            // CSS gap
+        this._vsPadding = 8;        // CSS padding
+        this._vsSpacer = null;      // 총 높이를 잡는 spacer div
+        this._vsRenderedRange = { start: -1, end: -1 };
+        this._vsItemMap = new Map(); // index → DOM element
+        this._vsScrollRAF = null;
+        this._vsThreshold = 300;    // 이 개수 이상이면 virtual scroll 활성화
+        this._vsContentWidth = 0;   // 스크롤바 제외한 콘텐츠 너비
+
 
 
         if (this.container) {
@@ -1091,13 +1103,7 @@ export class ThumbnailNavigator {
 
         if (!this.list) return;
 
-
-
-        // 기존 썸네일 제거
-
         this.clearThumbnails();
-
-
 
         if (this.imageList.length === 0) {
 
@@ -1107,39 +1113,208 @@ export class ThumbnailNavigator {
 
         }
 
+        // 🔥 300개 미만: 기존 방식 (전체 DOM 생성)
+        if (this.imageList.length < this._vsThreshold) {
 
+            this._vsEnabled = false;
+            const fragment = document.createDocumentFragment();
 
-        // 썸네일 생성
+            this.imageList.forEach((imagePath, index) => {
 
-        this.imageList.forEach((imagePath, index) => {
+                fragment.appendChild(this.createThumbnailItem(imagePath, index));
 
-            const item = this.createThumbnailItem(imagePath, index);
+            });
 
-            this.list.appendChild(item);
+            this.list.appendChild(fragment);
 
-        });
+            requestAnimationFrame(() => {
 
+                this.list.offsetHeight;
 
+                this.scrollToCurrentImage();
 
-        // ✅ DOM 렌더링 완료 후 스크롤 (레이아웃 계산 보장)
+            });
+
+            return;
+
+        }
+
+        // 🔥 Virtual Scrolling: 보이는 아이템만 DOM에 렌더링
+        this._vsEnabled = true;
+        this._measureItemSize();
+
+        this.list.style.position = 'relative';
+        this.list.style.display = 'block';
+
+        this._vsSpacer = document.createElement('div');
+        const totalSize = this._vsPadding +
+            this.imageList.length * this._vsItemSize - this._vsGap + this._vsPadding;
+        if (this.layout === 'vertical') {
+            this._vsSpacer.style.height = `${totalSize}px`;
+            this._vsSpacer.style.width = '100%';
+        } else {
+            this._vsSpacer.style.width = `${totalSize}px`;
+            this._vsSpacer.style.height = '100%';
+        }
+        this._vsSpacer.style.pointerEvents = 'none';
+        this.list.appendChild(this._vsSpacer);
+
+        this._vsRenderedRange = { start: -1, end: -1 };
+        this._vsItemMap = new Map();
 
         requestAnimationFrame(() => {
-
-            // 레이아웃 강제 계산 (reflow)
-
-            this.list.offsetHeight;
-
-
-
-            // 현재 이미지로 스크롤
-
-            this.scrollToCurrentImage();
-
+            this._vsContentWidth = this.list.clientWidth;
+            if (this.currentImageIndex >= 0) {
+                this._vsScrollToIndex(this.currentImageIndex);
+            }
+            this._vsRenderVisible();
         });
 
     }
 
 
+
+    /**
+     * 🔥 Virtual Scroll: 아이템 크기 측정 (flex 모드에서 측정 후 block으로 전환)
+     */
+    _measureItemSize() {
+        const temp = document.createElement('div');
+        temp.className = 'thumbnail-nav-item';
+        temp.style.visibility = 'hidden';
+
+        const imgContainer = document.createElement('div');
+        imgContainer.className = 'thumbnail-nav-item-image';
+        temp.appendChild(imgContainer);
+
+        const fileName = document.createElement('div');
+        fileName.className = 'thumbnail-nav-item-filename';
+        fileName.textContent = 'X';
+        temp.appendChild(fileName);
+
+        // List는 아직 flex 모드 → 자연 크기 측정 가능
+        this.list.appendChild(temp);
+        temp.offsetHeight; // force layout
+
+        if (this.layout === 'vertical') {
+            this._vsItemSize = temp.offsetHeight + this._vsGap;
+        } else {
+            this._vsItemSize = temp.offsetWidth + this._vsGap;
+        }
+
+        this.list.removeChild(temp);
+
+        if (this._vsItemSize <= this._vsGap) {
+            this._vsItemSize = 100 + this._vsGap;
+        }
+    }
+
+    /**
+     * 🔥 Virtual Scroll: 보이는 범위만 DOM에 렌더링
+     */
+    _vsRenderVisible() {
+        if (!this._vsEnabled || !this.list) return;
+
+        const isVertical = this.layout === 'vertical';
+        const scrollPos = isVertical ? this.list.scrollTop : this.list.scrollLeft;
+        const viewSize = isVertical ? this.list.clientHeight : this.list.clientWidth;
+
+        const BUFFER = 20;
+
+        let startIndex = Math.floor((scrollPos - this._vsPadding) / this._vsItemSize);
+        let endIndex = Math.ceil((scrollPos + viewSize - this._vsPadding) / this._vsItemSize);
+
+        startIndex = Math.max(0, startIndex - BUFFER);
+        endIndex = Math.min(this.imageList.length - 1, endIndex + BUFFER);
+
+        if (startIndex === this._vsRenderedRange.start && endIndex === this._vsRenderedRange.end) {
+            return;
+        }
+
+        // 범위 밖 아이템 제거
+        for (const [idx, el] of this._vsItemMap) {
+            if (idx < startIndex || idx > endIndex) {
+                el.remove();
+                this._vsItemMap.delete(idx);
+            }
+        }
+
+        const contentWidth = this._vsContentWidth || this.list.clientWidth;
+        const itemWidth = contentWidth - this._vsPadding * 2;
+
+        // 새 아이템 추가
+        for (let i = startIndex; i <= endIndex; i++) {
+            if (this._vsItemMap.has(i)) continue;
+
+            const item = this.createThumbnailItem(this.imageList[i], i);
+            item.style.position = 'absolute';
+
+            const pos = this._vsPadding + i * this._vsItemSize;
+            if (isVertical) {
+                item.style.top = `${pos}px`;
+                item.style.left = `${this._vsPadding}px`;
+                item.style.width = `${itemWidth}px`;
+            } else {
+                item.style.left = `${pos}px`;
+                item.style.top = `${this._vsPadding}px`;
+                item.style.height = `calc(100% - ${this._vsPadding * 2}px)`;
+            }
+
+            this.list.appendChild(item);
+            this._vsItemMap.set(i, item);
+        }
+
+        this._vsRenderedRange = { start: startIndex, end: endIndex };
+    }
+
+    /**
+     * 🔥 Virtual Scroll: 특정 인덱스로 즉시 스크롤
+     */
+    _vsScrollToIndex(index) {
+        if (!this.list) return;
+
+        const isVertical = this.layout === 'vertical';
+        const viewSize = isVertical ? this.list.clientHeight : this.list.clientWidth;
+        const targetPos = this._vsPadding + index * this._vsItemSize - viewSize / 2 + this._vsItemSize / 2;
+
+        if (isVertical) {
+            this.list.scrollTop = Math.max(0, targetPos);
+        } else {
+            this.list.scrollLeft = Math.max(0, targetPos);
+        }
+    }
+
+    /**
+     * 🔥 Virtual Scroll: 렌더된 아이템의 data-src를 src로 전환
+     */
+    _vsLoadVisibleImages() {
+        for (const [, item] of this._vsItemMap) {
+            const img = item.querySelector('img');
+            if (img && img.dataset.src) {
+                img.style.display = 'none';
+                img.src = img.dataset.src;
+                delete img.dataset.src;
+            }
+        }
+    }
+
+    /**
+     * 🔥 Virtual Scroll: 특정 인덱스 주변 썸네일 로드
+     */
+    _vsLoadNearbyImages(index, range = 30) {
+        const start = Math.max(0, index - range);
+        const end = Math.min(this.imageList.length - 1, index + range);
+
+        for (let i = start; i <= end; i++) {
+            const item = this._vsItemMap.get(i);
+            if (!item) continue;
+            const img = item.querySelector('img');
+            if (img && img.dataset.src) {
+                img.style.display = 'none';
+                img.src = img.dataset.src;
+                delete img.dataset.src;
+            }
+        }
+    }
 
     /**
      * 색상 스킴 변경 시 DOM 재생성 없이 기존 img.src/data-src만 갱신
@@ -1160,6 +1335,17 @@ export class ThumbnailNavigator {
                 return pn === norm || pn.endsWith(norm) || norm.endsWith(pn);
             });
             if (idx !== -1) this.currentImageIndex = idx;
+        }
+
+        // 🔥 Virtual Scroll: 렌더된 아이템만 갱신 후 재생성 강제
+        if (this._vsEnabled) {
+            for (const [idx, el] of this._vsItemMap) {
+                el.remove();
+            }
+            this._vsItemMap.clear();
+            this._vsRenderedRange = { start: -1, end: -1 };
+            this._vsRenderVisible();
+            return;
         }
 
         const items = this.list.querySelectorAll('.thumbnail-nav-item');
@@ -1372,21 +1558,31 @@ export class ThumbnailNavigator {
 
         if (!this.list) return;
 
-
-
         this.currentImageIndex = index;
 
-
+        // 🔥 Virtual Scroll 모드
+        if (this._vsEnabled) {
+            // 기존 active 제거
+            for (const [, item] of this._vsItemMap) {
+                item.classList.remove('active');
+            }
+            // 스크롤 → 렌더 → 하이라이트
+            this._vsScrollToIndex(index);
+            this._vsRenderVisible();
+            const activeItem = this._vsItemMap.get(index);
+            if (activeItem) {
+                activeItem.classList.add('active');
+            }
+            // 주변 썸네일 로드
+            this._vsLoadNearbyImages(index, 30);
+            return;
+        }
 
         const items = this.list.querySelectorAll('.thumbnail-nav-item');
 
-        const priorityRange = 30; // 현재 이미지 기준 앞뒤 30개 (next/prev 반응 속도 개선)
-
-
+        const priorityRange = 30;
 
         items.forEach((item, i) => {
-
-            // 활성화 상태 업데이트
 
             if (i === index) {
 
@@ -1398,12 +1594,6 @@ export class ThumbnailNavigator {
 
             }
 
-
-
-            // 🔥 현재 위치가 변경되면 주변 썸네일을 즉시 로드
-
-            // 새로운 위치 주변의 썸네일이 즉시 로드되도록 함
-
             const img = item.querySelector('img');
 
             if (img) {
@@ -1412,12 +1602,9 @@ export class ThumbnailNavigator {
 
                 if (distance <= priorityRange) {
 
-                    // 우선 로드 영역: data-src에서 src로 즉시 로드
-
                     if (img.dataset.src) {
 
-                        // 🔥 지연 로드: data-src에서 src로 전환
-                        img.style.display = 'none'; // 로드 전에는 숨김
+                        img.style.display = 'none';
                         img.src = img.dataset.src;
 
                         delete img.dataset.src;
@@ -1426,15 +1613,9 @@ export class ThumbnailNavigator {
 
                 }
 
-                // 멀리 있는 영역은 그대로 유지 (data-src 상태로 남겨둠)
-
             }
 
         });
-
-
-
-        // 스크롤
 
         this.scrollToIndex(index);
 
@@ -1457,6 +1638,13 @@ export class ThumbnailNavigator {
     scrollToIndex(index) {
 
         if (!this.list) return;
+
+        // 🔥 Virtual Scroll 모드
+        if (this._vsEnabled) {
+            this._vsScrollToIndex(index);
+            this._vsRenderVisible();
+            return;
+        }
 
         const items = this.list.querySelectorAll('.thumbnail-nav-item');
 
@@ -1511,7 +1699,21 @@ export class ThumbnailNavigator {
         if (this.list) {
 
             this.list.innerHTML = '';
+            // 🔥 VS 모드에서 설정한 인라인 스타일 초기화 (CSS flex 복원)
+            this.list.style.display = '';
+            this.list.style.position = '';
 
+        }
+
+        // 🔥 Virtual Scroll 상태 초기화
+        this._vsEnabled = false;
+        this._vsItemMap = new Map();
+        this._vsRenderedRange = { start: -1, end: -1 };
+        this._vsSpacer = null;
+        this._vsContentWidth = 0;
+        if (this._vsScrollRAF) {
+            cancelAnimationFrame(this._vsScrollRAF);
+            this._vsScrollRAF = null;
         }
 
     }
@@ -1666,13 +1868,15 @@ export class ThumbnailNavigator {
 
     handleScroll() {
 
-        // 스크롤 중임을 표시
+        // 🔥 Virtual Scroll: rAF로 DOM 즉시 업데이트
+        if (this._vsEnabled && !this._vsScrollRAF) {
+            this._vsScrollRAF = requestAnimationFrame(() => {
+                this._vsScrollRAF = null;
+                this._vsRenderVisible();
+            });
+        }
 
         this.isScrolling = true;
-
-
-
-        // 기존 타이머 클리어
 
         if (this.scrollDebounceTimer) {
 
@@ -1680,17 +1884,15 @@ export class ThumbnailNavigator {
 
         }
 
-
-
-        // 0.1초 (100ms) 후 실행
-
         this.scrollDebounceTimer = setTimeout(() => {
 
             this.isScrolling = false;
 
-            // 🔥 스크롤이 멈춘 후 현재 뷰포트의 이미지만 로드
-
-            this.loadVisibleImages();
+            if (this._vsEnabled) {
+                this._vsLoadVisibleImages();
+            } else {
+                this.loadVisibleImages();
+            }
 
         }, 100);
 
@@ -1706,7 +1908,11 @@ export class ThumbnailNavigator {
 
         if (!this.list) return;
 
-
+        // 🔥 Virtual Scroll 모드
+        if (this._vsEnabled) {
+            this._vsLoadVisibleImages();
+            return;
+        }
 
         const items = this.list.querySelectorAll('.thumbnail-nav-item');
 
