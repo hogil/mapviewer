@@ -16873,11 +16873,13 @@ class WaferMapViewer {
         this.gridLoadingPaused = false;
 
         // 🔥 IntersectionObserver 제거 — 3000개 관찰 시 스크롤 점프에서 ~9초 블로킹 발생
-        // 대신 loadVisibleGridThumbnails() (인덱스 기반 O(1) 뷰포트 추정)만 사용
         if (this.gridIntersectionObserver) {
             this.gridIntersectionObserver.disconnect();
             this.gridIntersectionObserver = null;
         }
+
+        // 🔥 rAF 기반 스크롤 감지 시작 (scroll 이벤트는 3000 DOM에서 715ms 지연됨)
+        this._startGridScrollDetection();
     }
 
     teardownGridLazyLoader() {
@@ -16885,10 +16887,69 @@ class WaferMapViewer {
             this.gridIntersectionObserver.disconnect();
             this.gridIntersectionObserver = null;
         }
+        this._stopGridScrollDetection();
         this.gridLoadQueue = [];
         this.gridQueuedImages.clear();
         this.gridLoadInFlight = 0;
         this.gridLoadingPaused = false;
+    }
+
+    /**
+     * 🔥 setInterval 기반 스크롤 감지 — rAF/scroll 이벤트 대체
+     * 3000 DOM → rAF는 1fps (1000ms/frame), scroll 이벤트는 715ms 지연.
+     * setInterval은 렌더링과 독립적으로 16ms 간격 실행.
+     */
+    _startGridScrollDetection() {
+        this._stopGridScrollDetection();
+        let lastScrollTop = -1;
+        let wasScrolling = false;
+
+        this._gridScrollDetectionTimer = setInterval(() => {
+            const sw = this.getGridScrollWrapper();
+            if (!sw) return;
+
+            const currentTop = sw.scrollTop;
+            if (currentTop !== lastScrollTop) {
+                // 🔥 스크롤 중 — 큐 비우고 진행 중인 요청 취소
+                lastScrollTop = currentTop;
+                if (!wasScrolling) {
+                    wasScrolling = true;
+                    this._cancelInFlightGridLoads();
+                }
+                this.gridLoadQueue.length = 0;
+                this.gridQueuedImages.clear();
+                this.gridLoadingBatch = null;
+            } else if (wasScrolling) {
+                // 🔥 스크롤 멈춤 (16ms 동안 scrollTop 불변) — 즉시 뷰포트 로드
+                wasScrolling = false;
+                this.loadVisibleGridThumbnails();
+            }
+        }, 16);
+    }
+
+    _stopGridScrollDetection() {
+        if (this._gridScrollDetectionTimer) {
+            clearInterval(this._gridScrollDetectionTimer);
+            this._gridScrollDetectionTimer = null;
+        }
+    }
+
+    /**
+     * 🔥 진행 중인 그리드 이미지 다운로드 강제 취소
+     */
+    _cancelInFlightGridLoads() {
+        const grid = document.getElementById('image-grid');
+        if (grid) {
+            const loadingImgs = grid.querySelectorAll('.grid-thumb-img[data-loading="true"]');
+            for (let i = 0; i < loadingImgs.length; i++) {
+                const img = loadingImgs[i];
+                img.src = GRID_THUMB_PLACEHOLDER;
+                img.dataset.loading = 'false';
+                img.dataset.gridLoaded = 'false';
+                img.style.opacity = '0';
+            }
+        }
+        this.gridLoadInFlight = 0;
     }
 
     enqueueGridThumbnail(img, forceLoad = false) {
@@ -17375,48 +17436,43 @@ class WaferMapViewer {
     }
 
     /**
-     * 🔥 그리드 스크롤 핸들러 (스크롤 시작 시 모든 요청 취소, 멈추면 즉시 뷰포트 로드)
+     * 🔥 그리드 스크롤 핸들러 — rAF 루프가 주 감지를 담당.
+     * scroll 이벤트 핸들러는 드래그 박스 업데이트 등 보조 역할만.
+     * (scroll 이벤트는 3000 DOM에서 ~715ms 지연되므로 썸네일 로드에 의존하지 않음)
      */
     handleGridScroll() {
-        // 🔥 큐 비움
-        this.gridLoadQueue.length = 0;
-        this.gridQueuedImages.clear();
-        this.gridLoadingBatch = null;
+        // rAF 루프(_startGridScrollDetection)가 스크롤 감지 + 썸네일 로드를 담당
+        // 여기서는 추가 작업 없음
+    }
 
-        // 🔥 진행 중인 이미지 다운로드 강제 취소 (src를 placeholder로 → HTTP 요청 중단)
-        const grid = document.getElementById('image-grid');
-        if (grid) {
-            const loadingImgs = grid.querySelectorAll('.grid-thumb-img[data-loading="true"]');
-            for (let i = 0; i < loadingImgs.length; i++) {
-                const img = loadingImgs[i];
-                img.src = GRID_THUMB_PLACEHOLDER;
-                img.dataset.loading = 'false';
-                img.dataset.gridLoaded = 'false';
-                img.style.opacity = '0';
-            }
-        }
-        this.gridLoadInFlight = 0;
+    /**
+     * 🔥 그리드 요소의 offsetTop을 캐시 (layout reflow 1회만 발생)
+     * 3000 DOM에서 offsetTop 읽기 = layout 강제 → ~1초.
+     * 캐시하면 이후 binary search는 layout 없이 O(log n).
+     */
+    _ensureGridOffsetCache() {
+        const wraps = this.gridThumbWraps;
+        if (!wraps || wraps.length === 0) return;
+        if (this._gridOffsetCache && this._gridOffsetCache.length === wraps.length) return;
 
-        // 🔥 기존 타이머/rAF 취소
-        if (this.gridScrollDebounceTimer) {
-            clearTimeout(this.gridScrollDebounceTimer);
+        // 1회 layout reflow로 모든 offsetTop/offsetHeight 캐시
+        const cache = new Array(wraps.length);
+        for (let i = 0; i < wraps.length; i++) {
+            cache[i] = { top: wraps[i].offsetTop, height: wraps[i].offsetHeight };
         }
-        if (this.gridScrollRAF) {
-            cancelAnimationFrame(this.gridScrollRAF);
-            this.gridScrollRAF = null;
-        }
+        this._gridOffsetCache = cache;
+    }
 
-        // 🔥 스크롤이 멈추면 즉시 뷰포트 이미지 로드
-        this.gridScrollDebounceTimer = setTimeout(() => {
-            this.gridScrollRAF = requestAnimationFrame(() => {
-                this.gridScrollRAF = null;
-                this.loadVisibleGridThumbnails();
-            });
-        }, 0);
+    /**
+     * 🔥 offsetTop 캐시 무효화 (컬럼 수 변경, 리사이즈 시)
+     */
+    invalidateGridOffsetCache() {
+        this._gridOffsetCache = null;
     }
 
     /**
      * 🔥 현재 뷰포트에 보이는 그리드 썸네일만 즉시 로드
+     * layout reflow 없이 캐시된 offsetTop + scrollTop으로 계산.
      */
     async loadVisibleGridThumbnails() {
         const scrollWrapper = this.getGridScrollWrapper();
@@ -17425,37 +17481,40 @@ class WaferMapViewer {
         const wraps = this.gridThumbWraps;
         if (!wraps || wraps.length === 0) return;
 
+        // 🔥 offsetTop 캐시 확보 (없으면 1회 빌드)
+        this._ensureGridOffsetCache();
+        const cache = this._gridOffsetCache;
+        if (!cache || cache.length === 0) return;
+
         const scrollTop = scrollWrapper.scrollTop;
         const viewportHeight = scrollWrapper.clientHeight;
-        const padding = 500; // 위아래 여유 px
+        const padding = 500;
 
-        // 🔥 이진 탐색: offsetTop >= target인 첫 번째 인덱스 찾기 — O(log n)
+        // 🔥 이진 탐색 — 캐시된 offsetTop 사용 (layout reflow 없음)
         const targetTop = Math.max(0, scrollTop - padding);
-        let lo = 0, hi = wraps.length - 1;
+        let lo = 0, hi = cache.length - 1;
         while (lo < hi) {
             const mid = (lo + hi) >>> 1;
-            if (wraps[mid].offsetTop + wraps[mid].offsetHeight < targetTop) {
+            if (cache[mid].top + cache[mid].height < targetTop) {
                 lo = mid + 1;
             } else {
                 hi = mid;
             }
         }
 
-        // 🔥 lo부터 순방향 스캔 — 뷰포트 벗어나면 즉시 중단
-        const scrollRect = scrollWrapper.getBoundingClientRect();
-        const visibleBottom = scrollRect.bottom + padding;
+        // 🔥 순방향 스캔 — scrollTop 기반 계산 (getBoundingClientRect 없음)
+        const viewBottom = scrollTop + viewportHeight;
         const viewportImages = [];
         const preloadImages = [];
 
-        for (let i = lo; i < wraps.length; i++) {
-            const wrap = wraps[i];
-            const wrapRect = wrap.getBoundingClientRect();
-            if (wrapRect.top > visibleBottom) break;
+        for (let i = lo; i < cache.length; i++) {
+            const c = cache[i];
+            if (c.top > viewBottom + padding) break;
 
-            const img = wrap.querySelector('.grid-thumb-img');
+            const img = wraps[i].querySelector('.grid-thumb-img');
             if (img && img.dataset?.src && img.dataset.gridLoaded !== 'true' && img.dataset.loading !== 'true') {
-                const isInViewport = (wrapRect.top < scrollRect.bottom && wrapRect.bottom > scrollRect.top);
-                if (isInViewport) {
+                const inViewport = (c.top + c.height > scrollTop && c.top < viewBottom);
+                if (inViewport) {
                     viewportImages.push(img);
                 } else {
                     preloadImages.push(img);
@@ -18611,6 +18670,7 @@ class WaferMapViewer {
     invalidateGridGeometry() {
         this.gridThumbRectCache = null;
         this.gridLayoutCache = null;
+        this._gridOffsetCache = null; // 🔥 offsetTop 캐시도 무효화
     }
 
     insertIndexSorted(arr, value) {
