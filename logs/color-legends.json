@@ -151,10 +151,10 @@
   },
   "notsaml": {
     "top": {"Grade0": "#FFFFFE", "Grade1": "#778899", "Grade2": "#839400", "Grade3": "#00FFAA", "Grade4": "#D91DFF", "Grade5": "#FFFF00", "Grade6": "#FF0000", "Grade7": "#000000"},
-    "bottom": {"Normal": "#BDBDBD", "Invalid": "#FF9900", "B285": "#0099FF", "B286": "#FFA3A3", "B287": "#66FFCC", "B288": "#DA26CD", "B290": "#FFD700", "B291": "#32CD32", "B300": "#AAAAAA", "B385": "#00C8FF", "B386": "#FF00C8", "B388": "#00FF66", "B389": "#FF6666", "B390": "#6666FF", "ETC": "#9EB6FF"},
+    "bottom": {"Normal": "#BDBDBD", "Invalid": "#FF9900", "B285": "#0099FF", "B286": "#FFA3A3", "B287": "#66FFCC", "B288": "#DA26CD", "B290": "#FFD700", "B291": "#32CD32", "B300": "#FF9494", "B385": "#00C8FF", "B386": "#FF00C8", "B388": "#00FF66", "B389": "#FF6666", "B390": "#6666FF", "ETC": "#9EB6FF"},
     "background": "#00FFE1",
     "text": "#000000",
-    "lastModified": "260313_114538"
+    "lastModified": "260313_132052"
   },
   "measure": {
     "notsaml": {"quantile0": "#FFFFFF", "quantile10": "#FFFFFF", "quantile20": "#FFFFFF", "quantile30": "#FFFFFF", "quantile40": "#FFFFFF", "quantile50": "#FFD1D1", "quantile60": "#F8BFBF", "quantile70": "#EAAEAE", "quantile80": "#F8A5A5", "quantile90": "#FF5C5C", "quantile100": "#FF0000"}

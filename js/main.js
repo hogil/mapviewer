@@ -21909,6 +21909,8 @@ class WaferMapViewer {
             }
         }
 
+        // 🔥 Measure overlay 전환 시 top legend 갱신 (Grade ↔ Gradient)
+        this.renderColorLegends();
         this.updateFailbitButtonUI();
 
         // 그리드 모드: 서버 사이드 렌더링
@@ -22851,8 +22853,35 @@ class WaferMapViewer {
         };
 
         // Render top legend
-        // 🔥 TOP_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
-        if (userData.top && typeof userData.top === 'object') {
+        const isMeasureOverlay = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioGradientCache;
+        if (isMeasureOverlay) {
+            // 🔥 Measure overlay 활성 시: gradient percentile 범례 표시
+            const stops = this._ratioGradientCache;  // 11개 hex (0%,10%,...,100%)
+            const labels = ['0~10', '10~20', '20~30', '30~40', '40~50', '50~60', '60~70', '70~80', '80~90', '90~100'];
+            const itemLabel = this._ratioActiveItemKey || '';
+            const topHtml = labels.map((label, i) => {
+                // 구간 중앙 색상 (stops[i]와 stops[i+1]의 중간)
+                const c1 = stops[i], c2 = stops[i + 1];
+                const rgb1 = this.chipAnnotator?._hexToRgb(c1);
+                const rgb2 = this.chipAnnotator?._hexToRgb(c2);
+                let color = c1;
+                if (rgb1 && rgb2) {
+                    const r = Math.round((rgb1.r + rgb2.r) / 2);
+                    const g = Math.round((rgb1.g + rgb2.g) / 2);
+                    const b = Math.round((rgb1.b + rgb2.b) / 2);
+                    color = `rgb(${r},${g},${b})`;
+                }
+                return `
+                    <div class="legend-item" style="cursor: default;">
+                        <span class="legend-label" style="font-size:10px;">${label}%</span>
+                        <div class="legend-color-bar" style="background-color: ${color}; position: relative; overflow: hidden;">
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            this.dom.colorLegendTop.innerHTML = topHtml;
+        } else if (userData.top && typeof userData.top === 'object') {
+            // 🔥 TOP_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
             const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
             // 🔥 Grade별 pixel 갯수 (palette index 0-7, backend API 결과)
             const pc = this._paletteCounts;  // [c0, c1, ..., c31]
