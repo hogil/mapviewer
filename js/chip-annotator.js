@@ -493,6 +493,22 @@ export class ChipAnnotator {
     }
 
     /**
+     * 숫자를 K/M 단위로 축약 (≥1000: 유효숫자 2자리)
+     */
+    _formatCompact(n) {
+        if (n == null) return '';
+        const v = Number(n);
+        if (isNaN(v)) return String(n);
+        const abs = Math.abs(v);
+        const sign = v < 0 ? '-' : '';
+        if (abs < 1000) return String(v);
+        if (abs < 10000) return sign + (abs / 1000).toFixed(1) + 'K';
+        if (abs < 1000000) return sign + Math.round(abs / 1000) + 'K';
+        if (abs < 10000000) return sign + (abs / 1000000).toFixed(1) + 'M';
+        return sign + Math.round(abs / 1000000) + 'M';
+    }
+
+    /**
      * Get available sub-item keys for f or q field from loaded chips.
      * @param {'f'|'q'} field
      * @returns {string[]} sorted item keys
@@ -1326,7 +1342,7 @@ export class ChipAnnotator {
                 if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) return;
                 const dict = chip[this.overlayMode];
                 const raw = dict && this.overlayItemKey ? dict[this.overlayItemKey] : null;
-                const text = raw != null ? String(raw) : '';
+                const text = raw != null ? this._formatCompact(raw) : '';
                 this._drawChipRectWithText(chip, color, text);
             });
         }
