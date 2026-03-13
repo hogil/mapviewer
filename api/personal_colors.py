@@ -563,6 +563,8 @@ def _normalize_bottom_filter_key(raw_value: Any) -> Optional[str]:
     if num is not None:
         if num < 200:
             return "Normal"
+        if num < 280:
+            return "Invalid"
         return str(num)
 
     return key

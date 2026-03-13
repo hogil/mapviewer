@@ -3379,6 +3379,8 @@ def _normalize_bottom_filter_key_local(raw_value: Any) -> Optional[str]:
     if num is not None:
         if num < 200:
             return "Normal"
+        if num < 280:
+            return "Invalid"
         return str(num)
 
     return key
@@ -6486,8 +6488,16 @@ async def get_thumbnail(
                 if etag_304:
                     return etag_304
 
+                # 필터/오버레이 적용 시에만 짧은 캐시, 기본 썸네일은 장기 캐시
+                has_filters = any([grade_filter, bottom_filter, measure_overlay, bin_overlay])
+                if has_filters:
+                    cache_control = "private, max-age=300"
+                elif personalized:
+                    cache_control = "private, max-age=86400"
+                else:
+                    cache_control = "public, max-age=604800, immutable"
                 headers = {
-                    "Cache-Control": "private, max-age=300",
+                    "Cache-Control": cache_control,
                     "ETag": compute_etag(st),
                 }
                 content_type = "image/jpeg" if thumb.suffix.lower() in ['.jpg', '.jpeg'] else "image/png"

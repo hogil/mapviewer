@@ -301,6 +301,7 @@ export class ChipAnnotator {
         }
         if (!isNaN(num)) {
             if (num < 200) return 'Normal';
+            if (num < 280) return 'Invalid';
             return KNOWN_BINS.has(num) ? String(num) : 'ETC';
         }
         return str;
@@ -1305,28 +1306,33 @@ export class ChipAnnotator {
         
         ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-        // === Overlay rendering (mutually exclusive modes) ===
+        // === Overlay rendering ===
         if (this.overlayMode === 'bin') {
-            // BIN MAP: 모든 chip을 BIN 색상으로 채우고 텍스트 표시
+            // BIN MAP: 색상은 normalized 카테고리, 텍스트는 raw b 값
             this.chips.forEach(chip => {
                 if (!chip) return;
+                if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) return;
                 const norm = this._normalizeBottomValue(chip.b);
                 const hexColor = this.binOverlayColors.get(norm);
                 if (!hexColor) return;
-                this._drawChipRectWithText(chip, hexColor, norm === 'Normal' ? 'N' : norm === 'Invalid' ? 'INV' : norm);
+                const rawText = chip.b != null ? String(chip.b) : '';
+                this._drawChipRectWithText(chip, hexColor, rawText);
             });
         } else if ((this.overlayMode === 'f' || this.overlayMode === 'q') && this.ratioOverlayColors) {
             // Ratio overlay: fill chips with percentile gradient color
             this.ratioOverlayColors.forEach((color, chipIdx) => {
                 const chip = this.chips[chipIdx];
                 if (!chip) return;
+                if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) return;
                 const dict = chip[this.overlayMode];
                 const raw = dict && this.overlayItemKey ? dict[this.overlayItemKey] : null;
                 const text = raw != null ? String(raw) : '';
                 this._drawChipRectWithText(chip, color, text);
             });
-        } else if (this.bottomFilterSet.size > 0) {
-            // White mask filter: 허용되지 않은 칩 영역만 흰색으로 덮기 (Legend 클릭 필터)
+        }
+
+        // Bottom filter white mask: overlay 모드와 관계없이 항상 적용
+        if (this.bottomFilterSet.size > 0) {
             const transform = this.viewer.transform;
             const Y_OFFSET = -55;
             ctx.save();

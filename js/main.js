@@ -939,7 +939,7 @@ class WaferMapViewer {
         this.gridQueuedImages = new Set();
         this.gridPendingIntersecting = new Set();
         this.gridLoadInFlight = 0;
-        this.gridMaxConcurrentLoads = 30; // 🔥 뷰포트 25개 전체를 1배치로 로드
+        this.gridMaxConcurrentLoads = 30; // 뷰포트 25개 전체를 1배치로 로드
         this.gridLoadingPaused = false;
         this.gridIntersectionObserver = null;
         this._gridAbortControllers = null; // 미사용 (img.src 직접 할당 방식)
@@ -16891,15 +16891,10 @@ class WaferMapViewer {
         this.dom.viewerContainer.style.cursor = 'default';
         this.showGridImmediately(sortedImages);
         requestAnimationFrame(() => {
-            this.primeRenderedGridThumbnails(24);
+            this.primeRenderedGridThumbnails(40);
             this.loadVisibleGridThumbnails();
         });
         setTimeout(() => {
-            this.primeRenderedGridThumbnails(32);
-            this.loadVisibleGridThumbnails();
-        }, 60);
-        setTimeout(() => {
-            this.primeRenderedGridThumbnails(40);
             this.loadCurrentFolderThumbnails(sortedImages);
         }, 100);
         grid.classList.add('active');
@@ -17038,41 +17033,75 @@ class WaferMapViewer {
     _startGridScrollDetection() {
         this._stopGridScrollDetection();
         let lastScrollTop = -1;
-        let lastChangeTime = 0;  // 🔥 마지막 scrollTop 변경 시각
+        let lastChangeTime = 0;
         let loadTimer = null;
-        const SETTLE_MS = 30;    // 🔥 스크롤 안정 판정 (마우스 휠 ~16ms 간격 → 30ms면 확실)
+        let pollTimer = null;
+        const SETTLE_MS = 30;
+        const POLL_MS = 4;
 
-        this._gridScrollDetectionTimer = setInterval(() => {
+        // 스크롤 중일 때만 활성화되는 폴링 (idle 시 CPU 0%)
+        const startPolling = () => {
+            if (pollTimer) return;
+            pollTimer = setInterval(() => {
+                const sw = this.getGridScrollWrapper();
+                if (!sw) return;
+                const currentTop = sw.scrollTop;
+                const now = Date.now();
+
+                if (currentTop !== lastScrollTop) {
+                    // scroll 이벤트가 못 잡은 미세 변동 감지 (settle 타이머 리셋만)
+                    lastScrollTop = currentTop;
+                    lastChangeTime = now;
+                    if (loadTimer) { clearTimeout(loadTimer); loadTimer = null; }
+                } else if (lastChangeTime > 0 && !loadTimer && (now - lastChangeTime) >= SETTLE_MS) {
+                    loadTimer = setTimeout(() => {
+                        loadTimer = null;
+                        lastChangeTime = 0;
+                        this.loadVisibleGridThumbnails();
+                    }, 1);
+                    // 스크롤 멈춤 → 폴링 중지
+                    stopPolling();
+                }
+            }, POLL_MS);
+        };
+
+        const stopPolling = () => {
+            if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        };
+
+        // scroll 이벤트에서 폴링 시작 (passive)
+        const onScroll = () => {
             const sw = this.getGridScrollWrapper();
             if (!sw) return;
-
             const currentTop = sw.scrollTop;
-            const now = Date.now();
-
             if (currentTop !== lastScrollTop) {
-                // 🔥 스크롤 중 — 모든 요청 abort + 대기 타이머 취소
                 lastScrollTop = currentTop;
-                lastChangeTime = now;
+                lastChangeTime = Date.now();
                 if (loadTimer) { clearTimeout(loadTimer); loadTimer = null; }
                 this._cancelInFlightGridLoads();
                 this.gridLoadQueue.length = 0;
                 this.gridQueuedImages.clear();
                 this.gridLoadingBatch = null;
-            } else if (lastChangeTime > 0 && !loadTimer && (now - lastChangeTime) >= SETTLE_MS) {
-                // 🔥 scrollTop이 SETTLE_MS 이상 안정 → 1ms 후 로드
-                loadTimer = setTimeout(() => {
-                    loadTimer = null;
-                    lastChangeTime = 0;
-                    this.loadVisibleGridThumbnails();
-                }, 1);
             }
-        }, 4); // 🔥 4ms 폴링
+            startPolling();
+        };
+
+        const sw = this.getGridScrollWrapper();
+        if (sw) {
+            sw.addEventListener('scroll', onScroll, { passive: true });
+            this._gridScrollListener = onScroll;
+            this._gridScrollWrapper = sw;
+        }
+
+        this._gridPollStop = stopPolling;
     }
 
     _stopGridScrollDetection() {
-        if (this._gridScrollDetectionTimer) {
-            clearInterval(this._gridScrollDetectionTimer);
-            this._gridScrollDetectionTimer = null;
+        if (this._gridPollStop) { this._gridPollStop(); this._gridPollStop = null; }
+        if (this._gridScrollWrapper && this._gridScrollListener) {
+            this._gridScrollWrapper.removeEventListener('scroll', this._gridScrollListener);
+            this._gridScrollListener = null;
+            this._gridScrollWrapper = null;
         }
     }
 
@@ -17140,7 +17169,7 @@ class WaferMapViewer {
         // 🔥 img.src 직접 할당 — 브라우저 HTTP 캐시 즉시 활용
         //   캐시 히트 시: decoding='sync' → 다음 페인트에 즉시 표시 (~1ms)
         //   캐시 미스 시: 브라우저 내장 파이프라인으로 최적 로드
-        img.decoding = 'sync';
+        img.decoding = 'async';
 
         const onLoad = () => {
             img.removeEventListener('load', onLoad);
@@ -17352,7 +17381,7 @@ class WaferMapViewer {
 
                 // 🔥 첫 청크의 뷰포트 이미지: 큐 우회, 바로 src 할당 (캐시 히트 시 0ms)
                 if (rendered === 0 && i < INSTANT_COUNT) {
-                    img.decoding = 'sync';  // 캐시 히트 시 동기 디코딩 → 다음 페인트에 즉시 표시
+                    img.decoding = 'async';  // 캐시 히트 시 동기 디코딩 → 다음 페인트에 즉시 표시
                     img.src = img.dataset.src;
                     img.style.opacity = '1';
                     img.dataset.loading = 'false';
@@ -19640,14 +19669,7 @@ class WaferMapViewer {
         if (targetImagePath) {
             this.showFileName(targetImagePath);
         }
-        if (this.thumbnailNavigator && Array.isArray(this.gridViewImageList) && this.gridViewImageList.length > 0) {
-            try {
-                this.thumbnailNavigator.show();
-                this.thumbnailNavigator.setImages(this.gridViewImageList, targetImagePath);
-            } catch (navError) {
-                console.warn('[ENTER_SINGLE] Navigator pre-show failed:', navError);
-            }
-        }
+        // Navigator는 loadImage 완료 후에만 세팅 (이미지 로드와 DOM 경합 방지)
 
         // 4. 이미지 로드
         this.loadImage(targetImagePath).then(() => {
@@ -21475,6 +21497,9 @@ class WaferMapViewer {
                 const key = legendItem.getAttribute('data-key');
                 if (!key || !key.startsWith('Grade')) return;
 
+                // Measure 모드(FBT/QVL/BIN)에서는 grade 필터 비활성
+                if (this.overlayMode) return;
+
                 const gradeIndex = parseInt(key.replace('Grade', ''));
                 if (isNaN(gradeIndex) || gradeIndex < 0 || gradeIndex > 7) return;
 
@@ -22416,26 +22441,27 @@ class WaferMapViewer {
         if (!this.thumbnailNavigator || !this.thumbnailNavigator.isVisible) {
             return;
         }
+        // 디바운스: 연속 필터 변경 시 마지막 1회만 실행
+        if (this._navRefreshTimer) clearTimeout(this._navRefreshTimer);
+        this._navRefreshTimer = setTimeout(() => {
+            this._navRefreshTimer = null;
+            if (!this.thumbnailNavigator || !this.thumbnailNavigator.isVisible) return;
 
-        const currentPath = this.selectedImagePath || this.currentImagePath;
-        if (!currentPath) {
-            return;
-        }
+            const currentPath = this.selectedImagePath || this.currentImagePath;
+            if (!currentPath) return;
 
-        let imageList = [];
-        if (this.viewMode === 'gridImage' && Array.isArray(this.gridViewImageList) && this.gridViewImageList.length > 0) {
-            imageList = this.gridViewImageList;
-        } else if (Array.isArray(this.singleViewImageList) && this.singleViewImageList.length > 0) {
-            imageList = this.singleViewImageList;
-        } else if (Array.isArray(this.selectedImages) && this.selectedImages.length > 0) {
-            imageList = this.selectedImages;
-        }
+            let imageList = [];
+            if (this.viewMode === 'gridImage' && Array.isArray(this.gridViewImageList) && this.gridViewImageList.length > 0) {
+                imageList = this.gridViewImageList;
+            } else if (Array.isArray(this.singleViewImageList) && this.singleViewImageList.length > 0) {
+                imageList = this.singleViewImageList;
+            } else if (Array.isArray(this.selectedImages) && this.selectedImages.length > 0) {
+                imageList = this.selectedImages;
+            }
+            if (!imageList.length) return;
 
-        if (!imageList.length) {
-            return;
-        }
-
-        this.thumbnailNavigator.setImages(imageList, currentPath, true);
+            this.thumbnailNavigator.setImages(imageList, currentPath, true);
+        }, 150);
     }
 
     /**
@@ -22817,6 +22843,18 @@ class WaferMapViewer {
                            outline:none;flex-shrink:0;"
                     title="Border: 모든 칩 테두리를 Normal 색으로 표시">Border</button>
             `;
+            // 🔥 BIN 카테고리별 칩 개수 집계
+            const binCounts = {};
+            const ca = this.chipAnnotator;
+            const chips = ca?.chips || [];
+            const netd = parseInt(ca?.netd) || 0;
+            if (chips.length > 0 && ca?._normalizeBottomValue) {
+                chips.forEach(chip => {
+                    const norm = ca._normalizeBottomValue(chip.b);
+                    binCounts[norm] = (binCounts[norm] || 0) + 1;
+                });
+            }
+
             const bottomHtml = BOTTOM_KEYS.map((label, index) => {
                 // 🔥 "Border" 키가 있는 경우 "Normal"로 매핑 (Ubuntu 서버 호환성)
                 let actualLabel = label;
@@ -22841,10 +22879,18 @@ class WaferMapViewer {
                     // 🔥 "Border"를 "Normal"로 표시 및 data-key도 "Normal"로 설정
                     const displayLabel = actualLabel === 'Border' ? 'Normal' : label;
                     const renderLabel = displayLabel.startsWith('B') ? displayLabel.slice(1) : displayLabel;
+                    // 🔥 칩 개수 및 퍼센트 계산
+                    const countKey = displayLabel.startsWith('B') ? displayLabel.slice(1) : displayLabel;
+                    const cnt = binCounts[countKey] || 0;
+                    const pct = netd > 0 ? (cnt / netd * 100).toFixed(1) : '-';
+                    const countHtml = `<span style="font-size:8px;color:#999;margin-left:2px;white-space:nowrap;">${cnt} (${pct}%)</span>`;
                     return `
                         <div class="legend-item" data-section="bottom" data-key="${displayLabel}" data-index="${index}" draggable="true" style="cursor: pointer;">
                             <span class="legend-label">${renderLabel}</span>
-                            <div class="legend-color-bar" data-section="bottom" data-key="${displayLabel}" style="background-color: ${color}; cursor: pointer;"></div>
+                            <div class="legend-color-bar" data-section="bottom" data-key="${displayLabel}" style="background-color: ${color}; cursor: pointer; position:relative; display:flex; align-items:center; justify-content:center;">
+                                <span style="font-size:7px;color:rgba(0,0,0,0.6);line-height:1;pointer-events:none;">${cnt}</span>
+                            </div>
+                            ${countHtml}
                         </div>
                     `;
                 }
