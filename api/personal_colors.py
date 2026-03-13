@@ -29,9 +29,9 @@ _PALETTE_CACHE: Dict[str, bytes] = {}
 
 TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7']
 BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
-               'B300', 'B385', 'B386', 'B388', 'B389', 'B390']
+               'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC']
 BIN_KEYS = ['B285', 'B286', 'B287', 'B288', 'B290', 'B291',
-            'B300', 'B385', 'B386', 'B388', 'B389', 'B390']
+            'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC']
 ANONYMOUS_SCHEME = FALLBACK_LOGIN_ID
 LEGACY_ANONYMOUS_SCHEMES = ("anon", "anonymous")
 
@@ -61,6 +61,7 @@ DEFAULT_BOTTOM_COLORS = {
     "B388": "#00FF66",
     "B389": "#FF6666",
     "B390": "#6666FF",
+    "ETC": "#C0C0C0",
 }
 
 DEFAULT_RATIO_GRADIENT = {
@@ -547,6 +548,7 @@ def _normalize_bottom_filter_key(raw_value: Any) -> Optional[str]:
         "border": "Normal",
         "invalid": "Invalid",
         "inv": "Invalid",
+        "etc": "ETC",
     }
 
     if lowered in aliases:
@@ -618,6 +620,7 @@ def plte_bottom_filter_memory(
         '388': 21,
         '389': 22,
         '390': 23,
+        'ETC': 24,
     }
 
     # 선택된 bottom 값들을 인덱스로 변환

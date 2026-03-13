@@ -1107,13 +1107,11 @@ class WaferMapViewer {
                 if (!this.selectedImagePath) return;
                 e.preventDefault();
                 e.stopPropagation();
-                // 칩이 선택돼 있으면 칩 컨텍스트 메뉴 우선
-                if (preferChipMenu && this.chipAnnotator) {
+                // 칩 컨텍스트 메뉴 (선택 여부 무관하게 항상 표시)
+                if (preferChipMenu && this.chipAnnotator && this.chipAnnotator.positionsData) {
                     const chips = this.chipAnnotator.getSelectedChipData?.() || [];
-                    if (chips.length > 0) {
-                        this.showChipContextMenu(e, chips);
-                        return;
-                    }
+                    this.showChipContextMenu(e, chips);
+                    return;
                 }
                 this.showSingleContextMenu(e);
             });
@@ -1137,10 +1135,8 @@ class WaferMapViewer {
                 e.preventDefault();
                 e.stopPropagation();
 
-                // 선택된 chip 확인
+                // 선택된 chip 확인 (미선택이어도 메뉴 표시)
                 const selectedChips = this.chipAnnotator.getSelectedChipData();
-                if (selectedChips.length === 0) return;
-
                 this.showChipContextMenu(e, selectedChips);
             });
         }
@@ -8890,7 +8886,6 @@ class WaferMapViewer {
         const mergeCopyItem = document.getElementById('context-merge-copy');
         const mergeSaveItem = document.getElementById('context-merge-save');
         const listCopyItem = document.getElementById('context-list-copy');
-        const tableCopyItem = document.getElementById('context-table-copy');
         const cancelItem = document.getElementById('context-cancel');
         const compositeCreateItem = document.getElementById('context-composite-create');
         const compositeReturnItem = document.getElementById('context-composite-return');
@@ -8963,14 +8958,6 @@ class WaferMapViewer {
                 this.hideContextMenu();
 
                 this.copyFileList();
-            };
-        }
-
-        if (tableCopyItem) {
-            tableCopyItem.onclick = () => {
-                this.hideContextMenu();
-
-                this.copyFileListAsTable();
             };
         }
 
@@ -9203,7 +9190,7 @@ class WaferMapViewer {
 
         const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
         const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
-                             'B300', 'B385', 'B386', 'B388', 'B389', 'B390'];
+                             'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
         const bottomLabelMap = {
             Normal: 'nor',
             Invalid: 'inv',
@@ -9219,6 +9206,7 @@ class WaferMapViewer {
             B388: '388',
             B389: '389',
             B390: '390',
+            ETC: 'ETC',
         };
 
         const topEntries = [];
@@ -9556,7 +9544,6 @@ class WaferMapViewer {
                 <div id="single-copy-canvas" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">🎨 캔버스 전체 복사</div>
                 <div id="single-my-lot-add" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📁 MY LOT 추가</div>
                 <div id="single-copy-yms" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📋 파일명복사 (YMS)</div>
-                <div id="single-copy-table" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📋 파일명복사 (Table)</div>
                 <div id="single-set-ref-map" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📌 Ret Map 등록</div>
                 <hr style="margin: 4px 0; border: none; border-top: 1px solid #555;">
                 <div id="single-composite-color" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px; display:none;">🎨 Ratio 색상</div>
@@ -9621,34 +9608,6 @@ class WaferMapViewer {
                 try {
                     await navigator.clipboard.writeText(ymsList);
                     this.showToast?.(`${paths.length}개 파일명 복사 (YMS)`, 1800);
-                } catch (err) {
-                    console.error(err);
-                    this.showToast?.('클립보드 복사에 실패했습니다.', 2000);
-                }
-            });
-
-            // 파일명복사 (Table)
-            menu.querySelector('#single-copy-table')?.addEventListener('click', async () => {
-                this.hideSingleContextMenu();
-                const paths = this.getSelectedImagesForModal();
-                if (!paths.length && this.selectedImagePath) {
-                    paths.push(this.selectedImagePath);
-                }
-                if (!paths.length) {
-                    this.showToast?.('복사할 이미지가 없습니다.', 1800);
-                    return;
-                }
-                const tableText = paths.map(filePath => {
-                    const cleanPath = filePath.replace(/\\/g, '/');
-                    const partsPath = cleanPath.split('/');
-                    const folder2 = partsPath.length >= 3 ? partsPath[partsPath.length - 3] : '';
-                    const fileName = (partsPath.pop() || '').replace(/\.[^/.]+$/, ''); // 확장자 제거
-                    const tokens = fileName.split('_').join('\t'); // _ 로 split한 모든 토큰을 탭으로 연결
-                    return `${folder2}\t${tokens}`.trim();
-                }).join('\n');
-                try {
-                    await navigator.clipboard.writeText(tableText);
-                    this.showToast?.(`${paths.length}개 파일명 복사 (Table)`, 1800);
                 } catch (err) {
                     console.error(err);
                     this.showToast?.('클립보드 복사에 실패했습니다.', 2000);
@@ -11352,7 +11311,9 @@ class WaferMapViewer {
                     };
                 } 
                 // 단일 이미지를 직접 선택하는 경우 (Wafer Map Explorer에서)
-                else if (!this.gridMode && this.selectedImages && this.selectedImages.length === 1) {
+                // 🔥 singleImageFromGrid(gridImage 모드 내 탐색)일 때는 savedViewState를 덮어쓰지 않음
+                //    — 그리드 복귀를 위해 기존 grid 상태를 유지해야 함
+                else if (!loadFromGridSingleMode && !this.gridMode && this.selectedImages && this.selectedImages.length === 1) {
                     this.savedViewState = {
                         type: 'single',
                         imagePath: fullPath,
@@ -16873,7 +16834,14 @@ class WaferMapViewer {
         // 🔥 그리드를 명시적으로 표시 (display: none에서 복원)
         if (grid) {
             grid.style.display = 'grid';
+            // 🔥 scroll wrapper도 복원 (_hideGridVisual에서 숨겨진 경우)
+            const sw = grid.parentElement;
+            if (sw && sw.classList.contains('grid-scroll-wrapper')) {
+                sw.style.display = '';
+            }
         }
+        // 🔥 _gridVisuallyHidden 플래그 초기화 (새 그리드 생성이므로)
+        this._gridVisuallyHidden = false;
 
         // ⭐ Grid 진입 시 단일 이미지 모드 UI 숨기기
         if (this.dom.fileNameDisplay) {
@@ -21647,7 +21615,7 @@ class WaferMapViewer {
                 const endIndex = parseInt(targetItem.getAttribute('data-index'));
 
                 if (!isNaN(startIndex) && !isNaN(endIndex)) {
-                    const BOTTOM_VALUES = ['Normal', 'Invalid', '285', '286', '287', '288', '290', '291', '300', '385', '386', '388', '389', '390'];
+                    const BOTTOM_VALUES = ['Normal', 'Invalid', '285', '286', '287', '288', '290', '291', '300', '385', '386', '388', '389', '390', 'ETC'];
                     const start = Math.min(startIndex, endIndex);
                     const end = Math.max(startIndex, endIndex);
                     
@@ -22213,7 +22181,7 @@ class WaferMapViewer {
 
         if (shiftKey && this.lastBottomClickValue !== null) {
             // Shift 클릭: 범위 선택 (이전 클릭과 현재 클릭 사이 모두 선택)
-            const bottomValues = ['Normal', 'Invalid', '285', '286', '287', '288', '290', '291', '300', '385', '386', '388', '389', '390'];
+            const bottomValues = ['Normal', 'Invalid', '285', '286', '287', '288', '290', '291', '300', '385', '386', '388', '389', '390', 'ETC'];
             const lastIndex = bottomValues.indexOf(this.lastBottomClickValue);
             const currentIndex = bottomValues.indexOf(bottomStr);
 
@@ -22836,7 +22804,7 @@ class WaferMapViewer {
         // 🔥 BOTTOM_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
         if (userData.bottom && typeof userData.bottom === 'object') {
             const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
-                                 'B300', 'B385', 'B386', 'B388', 'B389', 'B390'];
+                                 'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
             // Get Normal color for the Border button
             let normalColor = userData.bottom['Normal'] || userData.bottom['Border'] || '#BEBEBE';
             const borderBtnActive = this.borderNormalize;
@@ -22863,6 +22831,10 @@ class WaferMapViewer {
                         // "Normal"도 없고 "Border"도 없으면 fallback 색상 사용 (기본 회색)
                         color = '#BEBEBE';
                     }
+                }
+                // ETC 키가 없는 기존 스킴 호환
+                if (label === 'ETC' && !color) {
+                    color = '#C0C0C0';
                 }
 
                 if (color) {
@@ -22954,6 +22926,8 @@ class WaferMapViewer {
             if (label === 'Invalid') {
                 return 'inv';
             }
+            // ETC는 그대로
+            if (label === 'ETC') return 'ETC';
             // B285, B286 등 → 285, 286
             if (label.startsWith('B') && label.length > 1 && /^\d/.test(label[1])) {
                 return label.slice(1);
@@ -22988,7 +22962,7 @@ class WaferMapViewer {
         html += '<div class="legend-group-bottom">';
         if (userData.bottom && typeof userData.bottom === 'object') {
             const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
-                                 'B300', 'B385', 'B386', 'B388', 'B389', 'B390'];
+                                 'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
             // Border button (left of Normal, same style as legend-item-grid)
             const borderActive = this.borderNormalize;
             html += `<button id="grid-border-normalize-btn" class="grid-btn${borderActive ? ' is-active' : ''}" style="cursor:pointer;padding:2px 6px;border-radius:3px;font-size:11px;background:${borderActive ? '#2f6fed' : '#222'};border:1px solid ${borderActive ? '#1c50b5' : '#444'};color:${borderActive ? '#fff' : '#ccc'};flex-shrink:0;user-select:none;margin-right:4px;">Border</button>`;
@@ -23006,6 +22980,10 @@ class WaferMapViewer {
                         // "Normal"도 없고 "Border"도 없으면 fallback 색상 사용 (기본 회색)
                         color = '#BEBEBE';
                     }
+                }
+                // ETC 키가 없는 기존 스킴 호환
+                if (label === 'ETC' && !color) {
+                    color = '#C0C0C0';
                 }
 
                 if (color) {
@@ -23130,47 +23108,39 @@ class WaferMapViewer {
             menu.appendChild(viewItem);
         }
 
-        // Chip 여러개 선택 시: 좌표 복사 옵션
-        if (selectedChips.length > 0) {
+        // 정보 복사 옵션 (항상 표시)
+        {
             const separator = document.createElement('div');
             separator.style.cssText = 'height: 1px; background: #555; margin: 4px 0;';
             menu.appendChild(separator);
 
-            const copyCoordsItem = document.createElement('div');
-            copyCoordsItem.className = 'context-menu-item';
-            copyCoordsItem.style.cssText = `
-                padding: 8px 16px;
-                cursor: pointer;
-                color: #fff;
-                font-size: 14px;
-            `;
-            copyCoordsItem.textContent = `Chip 좌표 클립보드 복사 (${selectedChips.length}개)`;
-            copyCoordsItem.onclick = () => {
-                this.copyChipCoordinates(selectedChips);
-                menu.remove();
-            };
-            // Hover 효과
-            copyCoordsItem.onmouseenter = () => { copyCoordsItem.style.background = '#3a3a3a'; };
-            copyCoordsItem.onmouseleave = () => { copyCoordsItem.style.background = ''; };
-            menu.appendChild(copyCoordsItem);
+            // 1) 선택 Chip 정보복사
+            if (selectedChips.length > 0) {
+                const copyChipInfoItem = document.createElement('div');
+                copyChipInfoItem.className = 'context-menu-item';
+                copyChipInfoItem.style.cssText = 'padding: 8px 16px; cursor: pointer; color: #fff; font-size: 14px;';
+                copyChipInfoItem.textContent = `선택 Chip 정보복사 (${selectedChips.length}개)`;
+                copyChipInfoItem.onclick = () => {
+                    this.copySelectedChipInfo(selectedChips);
+                    menu.remove();
+                };
+                copyChipInfoItem.onmouseenter = () => { copyChipInfoItem.style.background = '#3a3a3a'; };
+                copyChipInfoItem.onmouseleave = () => { copyChipInfoItem.style.background = ''; };
+                menu.appendChild(copyChipInfoItem);
+            }
 
-            const copyTableItem = document.createElement('div');
-            copyTableItem.className = 'context-menu-item';
-            copyTableItem.style.cssText = `
-                padding: 8px 16px;
-                cursor: pointer;
-                color: #fff;
-                font-size: 14px;
-            `;
-            copyTableItem.textContent = `Chip 좌표 테이블 복사 (${selectedChips.length}개)`;
-            copyTableItem.onclick = () => {
-                this.copyChipCoordinatesAsTable(selectedChips);
+            // 2) Wafer 전체 정보복사
+            const copyWaferInfoItem = document.createElement('div');
+            copyWaferInfoItem.className = 'context-menu-item';
+            copyWaferInfoItem.style.cssText = 'padding: 8px 16px; cursor: pointer; color: #fff; font-size: 14px;';
+            copyWaferInfoItem.textContent = 'Wafer 전체 정보복사';
+            copyWaferInfoItem.onclick = () => {
+                this.copyWaferFullInfo();
                 menu.remove();
             };
-            // Hover 효과
-            copyTableItem.onmouseenter = () => { copyTableItem.style.background = '#3a3a3a'; };
-            copyTableItem.onmouseleave = () => { copyTableItem.style.background = ''; };
-            menu.appendChild(copyTableItem);
+            copyWaferInfoItem.onmouseenter = () => { copyWaferInfoItem.style.background = '#3a3a3a'; };
+            copyWaferInfoItem.onmouseleave = () => { copyWaferInfoItem.style.background = ''; };
+            menu.appendChild(copyWaferInfoItem);
         }
 
         // 🔥 Single context menu 항목들 추가 (구분선 아래)
@@ -23226,32 +23196,6 @@ class WaferMapViewer {
                 try {
                     await navigator.clipboard.writeText(ymsList);
                     this.showToast?.(`${paths.length}개 파일명 복사 (YMS)`, 1800);
-                } catch (err) {
-                    console.error(err);
-                    this.showToast?.('클립보드 복사에 실패했습니다.', 2000);
-                }
-            }},
-            { id: 'copy-table', text: '📋 파일명복사 (Table)', handler: async () => {
-                menu.remove();
-                const paths = this.getSelectedImagesForModal();
-                if (!paths.length && this.selectedImagePath) {
-                    paths.push(this.selectedImagePath);
-                }
-                if (!paths.length) {
-                    this.showToast?.('복사할 이미지가 없습니다.', 1800);
-                    return;
-                }
-                const tableText = paths.map(filePath => {
-                    const cleanPath = filePath.replace(/\\/g, '/');
-                    const partsPath = cleanPath.split('/');
-                    const folder2 = partsPath.length >= 3 ? partsPath[partsPath.length - 3] : '';
-                    const fileName = (partsPath.pop() || '').replace(/\.[^/.]+$/, '');
-                    const tokens = fileName.split('_').join('\t');
-                    return `${folder2}\t${tokens}`.trim();
-                }).join('\n');
-                try {
-                    await navigator.clipboard.writeText(tableText);
-                    this.showToast?.(`${paths.length}개 파일명 복사 (Table)`, 1800);
                 } catch (err) {
                     console.error(err);
                     this.showToast?.('클립보드 복사에 실패했습니다.', 2000);
@@ -23667,19 +23611,47 @@ class WaferMapViewer {
     }
 
     /**
-     * Copy chip coordinates to clipboard
+     * Wafer 메타 정보를 가져온다 (lot, wafer, step, 좌하단 패널 정보)
      */
-    async copyChipCoordinates(selectedChips) {
+    _getWaferMetaInfo() {
+        const tokens = this.extractLotTokensFromPath(this.selectedImagePath);
+        const ca = this.chipAnnotator;
+        return {
+            lot: tokens.lotValue || '-',
+            wafer: tokens.waferValue || '-',
+            step: tokens.step || '-',
+            device: ca?.device || '-',
+            partId: ca?.partId || '-',
+            pgm: ca?.pgm || '-',
+            tm: ca?.tm || '-',
+            lt: ca?.lt || '-',
+            net: ca?.netd || '-',
+            good: ca?.gd || '-',
+            yield: ca?.yield || '-',
+            sys: ca?.sys || '-',
+        };
+    }
+
+    /**
+     * 선택 Chip 정보복사 - 헤더 + 선택 chip 행 (TSV)
+     */
+    async copySelectedChipInfo(selectedChips) {
         if (!selectedChips || selectedChips.length === 0) {
             alert('복사할 chip이 없습니다.');
             return;
         }
-
-        const coords = selectedChips.map(chip => `(${chip.x_abs}, ${chip.y_abs})`).join('\n');
-        
+        const m = this._getWaferMetaInfo();
+        const header = ['LOT', 'WAFER', 'STEP', 'Device', 'PartID', 'PGM', 'TM', 'LT', 'NET', 'GOOD', 'YIELD', 'SYS', 'X_ABS', 'Y_ABS', 'BIN', 'G/B'].join('\t');
+        const rows = selectedChips.map(chip => {
+            const bin = chip.b !== undefined && chip.b !== null ? chip.b : '';
+            const binNum = Number(bin);
+            const gb = binNum < 200 ? 'G' : 'B';
+            return [m.lot, m.wafer, m.step, m.device, m.partId, m.pgm, m.tm, m.lt, m.net, m.good, m.yield, m.sys, chip.x_abs, chip.y_abs, bin, gb].join('\t');
+        });
+        const text = [header, ...rows].join('\n');
         try {
-            await navigator.clipboard.writeText(coords);
-            alert(`${selectedChips.length}개 chip 좌표가 클립보드에 복사되었습니다.`);
+            await navigator.clipboard.writeText(text);
+            this.showToast?.(`${selectedChips.length}개 Chip 정보가 클립보드에 복사되었습니다.`, 2000);
         } catch (error) {
             console.error('클립보드 복사 실패:', error);
             alert('클립보드 복사에 실패했습니다.');
@@ -23687,36 +23659,24 @@ class WaferMapViewer {
     }
 
     /**
-     * Copy chip coordinates as table to clipboard
+     * Wafer 전체 정보복사 - 헤더 + 전체 chip 행 (TSV)
      */
-    async copyChipCoordinatesAsTable(selectedChips) {
-        if (!selectedChips || selectedChips.length === 0) {
-            alert('복사할 chip이 없습니다.');
-            return;
-        }
-
+    async copyWaferFullInfo() {
         if (!this.selectedImagePath) {
-            alert('파일 경로를 찾을 수 없습니다.');
+            alert('이미지가 로드되지 않았습니다.');
             return;
         }
-
-        // 파일명에서 확장자 제거
-        const fileName = this.selectedImagePath.split('/').pop().replace(/\.[^/.]+$/, '');
-        // 파일명을 _로 split
-        const nameParts = fileName.split('_');
-
-        // 테이블 데이터 생성
-        const tableData = selectedChips.map(chip => {
-            const row = [...nameParts, chip.x_abs, chip.y_abs];
-            return row.join('\t');
+        const m = this._getWaferMetaInfo();
+        const allChips = this.chipAnnotator?.chips || [];
+        const header = ['LOT', 'WAFER', 'STEP', 'Device', 'PartID', 'PGM', 'TM', 'LT', 'NET', 'GOOD', 'YIELD', 'SYS', 'X_ABS', 'Y_ABS', 'BIN'].join('\t');
+        const rows = allChips.map(chip => {
+            const bin = chip.b !== undefined && chip.b !== null ? chip.b : '-';
+            return [m.lot, m.wafer, m.step, m.device, m.partId, m.pgm, m.tm, m.lt, m.net, m.good, m.yield, m.sys, chip.x_abs, chip.y_abs, bin].join('\t');
         });
-
-        // TSV 형식으로 변환
-        const tableText = tableData.join('\n');
-
+        const text = [header, ...rows].join('\n');
         try {
-            await navigator.clipboard.writeText(tableText);
-            alert(`${selectedChips.length}개 chip 좌표가 테이블 형태로 클립보드에 복사되었습니다.`);
+            await navigator.clipboard.writeText(text);
+            this.showToast?.(`Wafer 전체 정보 (${allChips.length}개 Chip)가 클립보드에 복사되었습니다.`, 2000);
         } catch (error) {
             console.error('클립보드 복사 실패:', error);
             alert('클립보드 복사에 실패했습니다.');

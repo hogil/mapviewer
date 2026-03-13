@@ -33,9 +33,9 @@ export class ContextMenuManager {
         const downloadItem = document.getElementById('context-download');
         const mergeCopyItem = document.getElementById('context-merge-copy');
         const listCopyItem = document.getElementById('context-list-copy');
-        const tableCopyItem = document.getElementById('context-table-copy');
+        const waferInfoCopyItem = document.getElementById('context-wafer-info-copy');
         const cancelItem = document.getElementById('context-cancel');
-        
+
         // 🔥 MY LOT 추가 메뉴 항목
         const myLotAddItem = document.getElementById('context-my-lot-add');
 
@@ -60,10 +60,10 @@ export class ContextMenuManager {
             };
         }
 
-        if (tableCopyItem) {
-            tableCopyItem.onclick = () => {
+        if (waferInfoCopyItem) {
+            waferInfoCopyItem.onclick = () => {
                 this.hide();
-                this.copyFileListAsTable();
+                this.copyWaferInfoAsTable();
             };
         }
 
@@ -334,7 +334,7 @@ export class ContextMenuManager {
     calculateLegendHeight(ctx, colorLegends, canvasWidth) {
         const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
         const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
-                             'B300', 'B385', 'B386', 'B388', 'B389', 'B390'];
+                             'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
         const allKeys = [...TOP_KEYS, ...BOTTOM_KEYS];
         
         const itemWidth = 70; // 아이템 간격 포함 예상 너비
@@ -362,7 +362,7 @@ export class ContextMenuManager {
         
         const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
         const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
-                             'B300', 'B385', 'B386', 'B388', 'B389', 'B390'];
+                             'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
         
         // Legend 아이템 설정
         const itemWidth = 20; // 컬러바 너비
@@ -421,7 +421,7 @@ export class ContextMenuManager {
         };
         
         BOTTOM_KEYS.forEach((key) => {
-            const color = bottomColors[key] || '#FFFFFF';
+            const color = bottomColors[key] || (key === 'ETC' ? '#C0C0C0' : '#FFFFFF');
             const label = labelMap[key] || key;
             drawItem(key, color, label);
         });
@@ -457,6 +457,91 @@ export class ContextMenuManager {
         }
     }
     
+    /**
+     * 선택된 wafer의 position 정보를 테이블 형태로 클립보드에 복사
+     * - chip 정보 제외, wafer 레벨 메타데이터만
+     * - Wafer 필드: "W07" → "07" (W 제거)
+     * - Stime 전까지 + coord에서 rot_code, min, ax, abs
+     */
+    async copyWaferInfoAsTable() {
+        const selectedFiles = this.getSelectedFiles();
+        if (selectedFiles.length === 0) {
+            alert('복사할 파일을 선택해주세요.');
+            return;
+        }
+
+        try {
+            const COORD_FIELDS = ['rot_code', 'min', 'ax', 'abs'];
+            const STOP_KEY = 'Stime';
+            const SKIP_KEYS = new Set(['chips', 'coord', 'image_path']);
+
+            const rows = [];
+            let headerKeys = null;
+
+            for (const filePath of selectedFiles) {
+                try {
+                    const resp = await fetch(`/api/chip-positions?path=${encodeURIComponent(filePath)}`);
+                    if (!resp.ok) continue;
+                    const pos = await resp.json();
+
+                    const row = {};
+                    // top-level 필드: Stime 전까지 (primitive만)
+                    for (const key of Object.keys(pos)) {
+                        if (key === STOP_KEY) break;
+                        if (SKIP_KEYS.has(key)) continue;
+                        const val = pos[key];
+                        if (val === null || val === undefined || typeof val === 'object') continue;
+                        // Wafer 필드: W 제거
+                        if (/^wafer$/i.test(key)) {
+                            row[key] = String(val).replace(/^W/i, '');
+                        } else {
+                            row[key] = val;
+                        }
+                    }
+
+                    // coord 하위 필드: rot_code, min, ax, abs
+                    const coord = pos.coord;
+                    if (coord && typeof coord === 'object') {
+                        for (const cf of COORD_FIELDS) {
+                            if (coord[cf] !== undefined && coord[cf] !== null) {
+                                row[cf] = coord[cf];
+                            }
+                        }
+                    }
+
+                    if (!headerKeys) {
+                        headerKeys = Object.keys(row);
+                    }
+                    rows.push(row);
+                } catch (e) {
+                    console.warn('Position 로드 실패:', filePath, e);
+                }
+            }
+
+            if (rows.length === 0 || !headerKeys) {
+                alert('wafer 정보를 가져올 수 없습니다.');
+                return;
+            }
+
+            // 탭 구분 테이블: 헤더 + 데이터
+            const header = headerKeys.join('\t');
+            const dataLines = rows.map(r =>
+                headerKeys.map(k => r[k] ?? '').join('\t')
+            );
+            const tableText = [header, ...dataLines].join('\n');
+
+            const success = await copyToClipboard(tableText);
+            if (success) {
+                alert(`${rows.length}개 wafer 정보가 클립보드에 복사되었습니다.`);
+            } else {
+                alert('클립보드 복사에 실패했습니다.');
+            }
+        } catch (error) {
+            console.error('wafer 정보 복사 오류:', error);
+            alert('wafer 정보 복사에 실패했습니다.');
+        }
+    }
+
     /**
      * 선택된 파일 리스트를 테이블 형태로 클립보드에 복사
      */

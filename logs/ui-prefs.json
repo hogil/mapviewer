@@ -1,1 +1,1 @@
-{"guest": {"filterTestMode": "all", "filterPLCPLH": "all", "gridCols": 4}, "notsaml": {"gridCols": 5, "filterTestMode": "all", "filterPLCPLH": "all", "borderNormalize": false}}
+{"guest": {"filterTestMode": "all", "filterPLCPLH": "all", "gridCols": 4}, "notsaml": {"gridCols": 4, "filterTestMode": "all", "filterPLCPLH": "all", "borderNormalize": true, "filterLT": [], "filterTM": [], "lastProductFolder": "", "filterSTEP": []}}

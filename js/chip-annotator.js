@@ -291,10 +291,17 @@ export class ChipAnnotator {
         const lower = str.toLowerCase();
         if (lower === 'normal' || lower === 'nor' || lower === 'border') return 'Normal';
         if (lower === 'invalid' || lower === 'inv') return 'Invalid';
+        // Known BIN set
+        const KNOWN_BINS = new Set([285, 286, 287, 288, 290, 291, 300, 385, 386, 388, 389, 390]);
+        let num = NaN;
         if (lower.startsWith('b') && /^\d+$/.test(lower.slice(1))) {
-            return String(parseInt(lower.slice(1), 10));
+            num = parseInt(lower.slice(1), 10);
+        } else if (/^\d+$/.test(str)) {
+            num = parseInt(str, 10);
         }
-        if (/^\d+$/.test(str)) return String(parseInt(str, 10));
+        if (!isNaN(num)) {
+            return KNOWN_BINS.has(num) ? String(num) : 'ETC';
+        }
         return str;
     }
 
@@ -1653,8 +1660,9 @@ export class ChipAnnotator {
                 }
             }
             if (this.coordBin) {
-                const bval = chip.b != null ? this._normalizeBottomValue(chip.b) : '';
-                this.coordBin.textContent = (bval && bval !== 'Normal' && bval !== 'Invalid') ? bval : '-';
+                const raw = chip.b != null ? String(chip.b).trim() : '';
+                const lower = raw.toLowerCase();
+                this.coordBin.textContent = (raw && lower !== 'normal' && lower !== 'nor' && lower !== 'border' && lower !== 'invalid' && lower !== 'inv') ? raw : '-';
             }
         } else {
             // Chip 위에 없으면 "-" 표시
