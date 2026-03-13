@@ -22,7 +22,7 @@ if sys.platform == 'win32':
         pass
 
 # ======================== Imports ========================
-import re, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid, io, math
+import re, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid, io, math, struct, zlib  # struct/zlib: PNG PLTE 바이너리 조작용
 from pathlib import Path
 from contextlib import contextmanager, asynccontextmanager
 from typing import List, Optional, Dict, Any, Tuple, Set, Literal, Iterable
@@ -115,6 +115,8 @@ from .personal_colors import (
 from .composite_colors import (
     load_composite_color_settings,
     save_composite_color_settings,
+    load_measure_color_settings,
+    save_measure_color_settings,
 )
 from .my_lot import (
     add_entry as my_lot_add_entry,
@@ -2596,10 +2598,42 @@ async def delete_color_scheme(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/color-scheme-ratio")
+async def save_color_scheme_ratio(request: Request):
+    """Ratio 그라데이션 색상 저장"""
+    try:
+        data = await request.json()
+        scheme_name = data.get('schemeName')
+        ratio_data = data.get('ratioData')
+
+        if not scheme_name:
+            raise HTTPException(status_code=400, detail="schemeName이 필요합니다")
+        if not ratio_data:
+            raise HTTPException(status_code=400, detail="ratioData가 필요합니다")
+
+        legends = load_color_legends()
+
+        if scheme_name not in legends:
+            legends[scheme_name] = {}
+
+        legends[scheme_name]['ratio'] = ratio_data
+
+        if save_color_legends(legends, updated_scheme_name=scheme_name):
+            _invalidate_scheme_thumbnail_caches([scheme_name])
+            return {"success": True, "schemeName": scheme_name}
+        else:
+            raise HTTPException(status_code=500, detail="Ratio 색상 저장 실패")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[API /api/color-scheme-ratio] 오류 발생: {e}")
+        raise HTTPException(status_code=500, detail=f"Ratio 색상 저장 중 오류: {str(e)}")
+
+
 # ===== 사내 ADFS/STS 헬스 체크 (핑) =====
 
 
-# ===== Composite 색상 편집 API =====
+# ===== Ratio 색상 편집 API =====
 @app.get("/api/composite-colors")
 async def get_composite_colors(request: Request):
     try:
@@ -2609,7 +2643,7 @@ async def get_composite_colors(request: Request):
         return settings.to_dict()
     except Exception as exc:
         logger.error(f"❌ [/api/composite-colors] 조회 실패: {exc}")
-        raise HTTPException(status_code=500, detail="Composite 색상 정보를 불러오지 못했습니다.")
+        raise HTTPException(status_code=500, detail="Ratio 색상 정보를 불러오지 못했습니다.")
 
 
 @app.post("/api/composite-colors")
@@ -2627,7 +2661,37 @@ async def save_composite_colors_endpoint(request: Request):
         raise
     except Exception as exc:
         logger.error(f"❌ [/api/composite-colors] 저장 실패: {exc}")
-        raise HTTPException(status_code=500, detail="Composite 색상을 저장하지 못했습니다.")
+        raise HTTPException(status_code=500, detail="Ratio 색상을 저장하지 못했습니다.")
+
+
+@app.get("/api/measure-colors")
+async def get_measure_colors(request: Request):
+    try:
+        login_id = _current_login_id(request)
+        scheme = get_user_color_scheme(login_id)
+        settings = load_measure_color_settings(scheme)
+        return settings.to_dict()
+    except Exception as exc:
+        logger.error(f"❌ [/api/measure-colors] 조회 실패: {exc}")
+        raise HTTPException(status_code=500, detail="Measure 색상 정보를 불러오지 못했습니다.")
+
+
+@app.post("/api/measure-colors")
+async def save_measure_colors_endpoint(request: Request):
+    try:
+        payload = await request.json()
+        colors = payload.get("colors")
+        if not isinstance(colors, list) or not colors:
+            raise HTTPException(status_code=400, detail="colors 배열이 필요합니다.")
+        login_id = _current_login_id(request)
+        scheme = get_user_color_scheme(login_id)
+        settings = save_measure_color_settings(colors, scheme)
+        return settings.to_dict()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"❌ [/api/measure-colors] 저장 실패: {exc}")
+        raise HTTPException(status_code=500, detail="Measure 색상을 저장하지 못했습니다.")
 
 
 @app.post("/api/composite-recolor")
@@ -3111,7 +3175,6 @@ async def no_store_for_labels_and_classes(request: Request, call_next):
             p.startswith("/api/labels")
             or p.startswith("/api/classes")
             or p.startswith("/api/files")
-            or p.startswith("/api/thumbnail")
             or p.startswith("/api/image")
         ):
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -3284,7 +3347,7 @@ def get_thumbnail_path(
 
 
 # 필터 동작(특히 bottom/grade 매핑) 변경 시 캐시 충돌 방지를 위해 버전을 올린다.
-FILTER_CACHE_REV = "4"
+FILTER_CACHE_REV = "8"
 
 FILTER_WHITE_INDEX = 31
 FILTER_BOTTOM_BIN_VALUES = {"285", "286", "287", "288", "290", "291", "300", "385", "386", "388", "389", "390"}
@@ -3435,16 +3498,19 @@ def _apply_bottom_position_mask_memory(
             return None
 
         with Image.open(io.BytesIO(bytes(png_data))) as src:
-            if src.mode != "P":
+            is_rgb = src.mode in ("RGB", "RGBA")
+            is_palette = src.mode == "P"
+            if not is_rgb and not is_palette:
                 return None
             out = src.copy()
 
-        palette = out.getpalette()
-        if palette and len(palette) >= (FILTER_WHITE_INDEX + 1) * 3:
-            patched_palette = palette[:]
-            base = FILTER_WHITE_INDEX * 3
-            patched_palette[base : base + 3] = [255, 255, 255]
-            out.putpalette(patched_palette)
+        if is_palette:
+            palette = out.getpalette()
+            if palette and len(palette) >= (FILTER_WHITE_INDEX + 1) * 3:
+                patched_palette = palette[:]
+                base = FILTER_WHITE_INDEX * 3
+                patched_palette[base : base + 3] = [255, 255, 255]
+                out.putpalette(patched_palette)
 
         width, height = out.size
         coord = positions_data.get("coord", {})
@@ -3459,28 +3525,48 @@ def _apply_bottom_position_mask_memory(
         scale_x = width / float(canvas_w)
         scale_y = height / float(canvas_h)
 
-        mask_lut = [FILTER_WHITE_INDEX] * 256
-        mask_lut[8] = 8
-        mask_lut[9] = 9
         masked_count = 0
-        for chip in chips:
-            if not isinstance(chip, dict):
-                continue
-            chip_bottom = _classify_chip_bottom_value(chip.get("b"))
-            if chip_bottom in selected_bottoms:
-                continue
-
-            scaled = _scaled_chip_rect(chip, scale_x, scale_y, width, height)
-            if not scaled:
-                continue
-            sx0, sy0, sx1, sy1 = scaled
-            box = (sx0, sy0, sx1, sy1)
-            region = out.crop(box)
-            out.paste(region.point(mask_lut), box)
-            masked_count += 1
-
-        if masked_count == 0:
-            return bytearray(png_data)
+        if is_rgb:
+            # RGB 모드 (ratio overlay 이후): numpy로 비선택 칩을 흰색으로 마스킹
+            import numpy as np
+            img_arr = np.array(out, dtype=np.uint8)
+            white = np.array([255, 255, 255], dtype=np.uint8)
+            for chip in chips:
+                if not isinstance(chip, dict):
+                    continue
+                chip_bottom = _classify_chip_bottom_value(chip.get("b"))
+                if chip_bottom in selected_bottoms:
+                    continue
+                scaled = _scaled_chip_rect(chip, scale_x, scale_y, width, height)
+                if not scaled:
+                    continue
+                sx0, sy0, sx1, sy1 = scaled
+                img_arr[sy0:sy1, sx0:sx1] = white[:img_arr.shape[2]]
+                masked_count += 1
+            if masked_count == 0:
+                return bytearray(png_data)
+            out = Image.fromarray(img_arr)
+        else:
+            # Palette 모드: 기존 LUT 기반 마스킹
+            mask_lut = [FILTER_WHITE_INDEX] * 256
+            mask_lut[8] = 8
+            mask_lut[9] = 9
+            for chip in chips:
+                if not isinstance(chip, dict):
+                    continue
+                chip_bottom = _classify_chip_bottom_value(chip.get("b"))
+                if chip_bottom in selected_bottoms:
+                    continue
+                scaled = _scaled_chip_rect(chip, scale_x, scale_y, width, height)
+                if not scaled:
+                    continue
+                sx0, sy0, sx1, sy1 = scaled
+                box = (sx0, sy0, sx1, sy1)
+                region = out.crop(box)
+                out.paste(region.point(mask_lut), box)
+                masked_count += 1
+            if masked_count == 0:
+                return bytearray(png_data)
 
         output = io.BytesIO()
         out.save(output, format="PNG", optimize=False, compress_level=config.PNG_COMPRESSION_LEVEL)
@@ -3495,6 +3581,245 @@ def _apply_bottom_position_mask_memory(
         return None
 
 
+BIN_MAP_PALETTE_INDEX = {
+    'Normal': 10, 'Invalid': 11,
+    '285': 12, '286': 13, '287': 14, '288': 15,
+    '290': 16, '291': 17, '300': 18,
+    '385': 19, '386': 20, '388': 21, '389': 22, '390': 23,
+}
+
+
+def _apply_bin_map_overlay_memory(
+    png_data: bytearray,
+    image_path: Path,
+) -> Optional[bytearray]:
+    """BIN MAP: 모든 chip 내부를 BIN palette index로 교체 (numpy 벡터 연산)."""
+    try:
+        import numpy as np
+
+        rel_path = Path(_get_relative_path_from_image(str(image_path)))
+        positions_path = _resolve_positions_path(rel_path)
+        if not positions_path.exists():
+            return None
+
+        with open(positions_path, "r", encoding="utf-8") as f:
+            positions_data = json.load(f)
+        chips = positions_data.get("chips", [])
+        if not isinstance(chips, list) or not chips:
+            return None
+
+        with Image.open(io.BytesIO(bytes(png_data))) as src:
+            if src.mode != "P":
+                return None
+            arr = np.array(src, dtype=np.uint8)  # (height, width) palette index 배열
+            palette = src.getpalette()
+
+        height, width = arr.shape
+        coord = positions_data.get("coord", {})
+        canvas = coord.get("canvas", {}) if isinstance(coord, dict) else {}
+        canvas_w = int(canvas.get("width", width)) if isinstance(canvas, dict) else width
+        canvas_h = int(canvas.get("height", height)) if isinstance(canvas, dict) else height
+        if canvas_w <= 0:
+            canvas_w = width
+        if canvas_h <= 0:
+            canvas_h = height
+
+        scale_x = width / float(canvas_w)
+        scale_y = height / float(canvas_h)
+
+        filled = 0
+        for chip in chips:
+            if not isinstance(chip, dict):
+                continue
+            b_val = _classify_chip_bottom_value(chip.get("b"))
+            palette_idx = BIN_MAP_PALETTE_INDEX.get(b_val)
+            if palette_idx is None:
+                continue
+
+            scaled = _scaled_chip_rect(chip, scale_x, scale_y, width, height)
+            if not scaled:
+                continue
+            sx0, sy0, sx1, sy1 = scaled
+            # numpy 슬라이싱으로 chip 영역 한번에 채우기 (Python 루프 대비 ~50x 빠름)
+            arr[sy0:sy1, sx0:sx1] = palette_idx
+            filled += 1
+
+        if filled == 0:
+            return None
+
+        out = Image.fromarray(arr, mode="P")
+        out.putpalette(palette)
+        output = io.BytesIO()
+        out.save(output, format="PNG", optimize=False, compress_level=config.PNG_COMPRESSION_LEVEL)
+        return bytearray(output.getvalue())
+    except Exception as exc:
+        logger.warning("⚠️ [BIN MAP] overlay 실패 (%s): %s", image_path.name, exc)
+        return None
+
+
+def _apply_ratio_overlay_memory(
+    png_data: bytearray,
+    image_path: Path,
+    field: str,       # 'f' or 'q'
+    item_key: str,    # e.g. '2342'
+    scheme: Optional[str] = None,
+) -> Optional[bytearray]:
+    """Ratio overlay: chip interiors colored by percentile rank of f/q values."""
+    try:
+        # 1. Read positions
+        rel_path = Path(_get_relative_path_from_image(str(image_path)))
+        positions_path = _resolve_positions_path(rel_path)
+        if not positions_path.exists():
+            return None
+
+        with open(positions_path, "r", encoding="utf-8") as f:
+            positions_data = json.load(f)
+        chips = positions_data.get("chips", [])
+        if not isinstance(chips, list) or not chips:
+            return None
+
+        # 2. Extract ratio values
+        values = []  # (chip_index, numeric_value)
+        for idx, chip in enumerate(chips):
+            if not isinstance(chip, dict):
+                continue
+            field_data = chip.get(field)
+            if not isinstance(field_data, dict):
+                continue
+            raw = field_data.get(item_key)
+            if raw is None:
+                continue
+            try:
+                val = float(raw)
+                values.append((idx, val))
+            except (ValueError, TypeError):
+                continue
+
+        if not values:
+            return None
+
+        # 3. Compute percentile ranks (0-100) — match client-side algorithm
+        # Client uses all values (not deduplicated) with binary search for rank
+        all_vals = sorted(v for _, v in values)
+        n = len(all_vals)
+
+        def _percentile_rank(val):
+            """Binary search to find rank, matching client-side logic."""
+            lo, hi = 0, n - 1
+            while lo <= hi:
+                mid = (lo + hi) >> 1
+                if all_vals[mid] < val:
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+            # lo = count of values strictly less than val
+            if n > 1:
+                return (lo / (n - 1)) * 100.0
+            return 50.0
+
+        # 4. Get gradient colors
+        from .personal_colors import get_ratio_gradient_for_scheme
+        gradient_stops = get_ratio_gradient_for_scheme(scheme)  # list of 11 (r,g,b)
+
+        def interpolate_color(percentile):
+            """Interpolate gradient at given percentile (0-100)."""
+            idx_f = percentile / 10.0
+            idx_low = max(0, min(10, int(idx_f)))
+            idx_high = min(10, idx_low + 1)
+            t = idx_f - idx_low
+            r0, g0, b0 = gradient_stops[idx_low]
+            r1, g1, b1 = gradient_stops[idx_high]
+            r = int(r0 + (r1 - r0) * t)
+            g = int(g0 + (g1 - g0) * t)
+            b = int(b0 + (b1 - b0) * t)
+            return (r, g, b)
+
+        # 5. Build chip color map
+        chip_colors = {}  # chip_index -> (r, g, b)
+        for chip_idx, val in values:
+            pct = max(0.0, min(100.0, _percentile_rank(val)))
+            chip_colors[chip_idx] = interpolate_color(pct)
+
+        # 6. Open image and convert to RGB, then to NumPy for fast blending
+        import numpy as np
+        with Image.open(io.BytesIO(bytes(png_data))) as src:
+            out = src.convert("RGB")
+
+        width, height = out.size
+        coord = positions_data.get("coord", {})
+        canvas = coord.get("canvas", {}) if isinstance(coord, dict) else {}
+        canvas_w = int(canvas.get("width", width)) if isinstance(canvas, dict) else width
+        canvas_h = int(canvas.get("height", height)) if isinstance(canvas, dict) else height
+        if canvas_w <= 0:
+            canvas_w = width
+        if canvas_h <= 0:
+            canvas_h = height
+        scale_x = width / float(canvas_w)
+        scale_y = height / float(canvas_h)
+
+        # 7. Opaque overlay using NumPy vectorized ops (pure gradient color, no blending)
+        img_arr = np.array(out, dtype=np.uint8)
+        filled = 0
+        for chip_idx, color in chip_colors.items():
+            chip = chips[chip_idx]
+            scaled = _scaled_chip_rect(chip, scale_x, scale_y, width, height)
+            if not scaled:
+                continue
+            sx0, sy0, sx1, sy1 = scaled
+            y0 = min(sy0 + 1, sy1)
+            y1 = max(sy1 - 1, sy0)
+            x0 = min(sx0 + 1, sx1)
+            x1 = max(sx1 - 1, sx0)
+            if y1 <= y0 or x1 <= x0:
+                continue
+            img_arr[y0:y1, x0:x1] = color
+            filled += 1
+
+        if filled == 0:
+            return None
+
+        out = Image.fromarray(img_arr)
+        output = io.BytesIO()
+        out.save(output, format="PNG", optimize=False, compress_level=config.PNG_COMPRESSION_LEVEL)
+        return bytearray(output.getvalue())
+    except Exception as exc:
+        logger.warning("⚠️ [RATIO OVERLAY] 실패 (%s): %s", image_path.name, exc)
+        return None
+
+
+def _patch_bin_map_background(png_data: bytearray) -> bytearray:
+    """BIN MAP 전용: Grade(0-7), text(9), invalid(31)를 검정으로. index 8(배경)은 개인색 유지."""
+    BLACK = (0, 0, 0)
+    # index 8(background)은 건드리지 않음 — 개인색 PLTE 패치 유지
+    BLACKOUT_INDICES = list(range(0, 8)) + [9, 31]
+    pos = 8  # PNG 시그니처
+    while pos < len(png_data):
+        if pos + 8 > len(png_data):
+            break
+        chunk_length = struct.unpack('>I', png_data[pos:pos + 4])[0]
+        chunk_type = png_data[pos + 4:pos + 8]
+        data_start = pos + 8
+        if chunk_type == b'PLTE':
+            for idx in BLACKOUT_INDICES:
+                offset = data_start + idx * 3
+                if offset + 3 <= data_start + chunk_length:
+                    png_data[offset] = BLACK[0]
+                    png_data[offset + 1] = BLACK[1]
+                    png_data[offset + 2] = BLACK[2]
+            # CRC 재계산
+            crc_data = chunk_type + bytes(png_data[data_start:data_start + chunk_length])
+            crc = zlib.crc32(crc_data) & 0xffffffff
+            crc_pos = data_start + chunk_length
+            if crc_pos + 4 <= len(png_data):
+                png_data[crc_pos:crc_pos + 4] = struct.pack('>I', crc)
+            break
+        pos = data_start + chunk_length + 4
+    return png_data
+
+
+BIN_MAP_FILTER_TOKEN = "__BIN_MAP__"
+
+
 def _apply_png_filters_memory(
     image_path: Path,
     png_data: bytearray,
@@ -3503,11 +3828,54 @@ def _apply_png_filters_memory(
     grade_filter: Optional[str] = None,
     bottom_filter: Optional[str] = None,
     border_normalize: bool = False,
+    measure_overlay: Optional[str] = None,
+    bin_overlay: bool = False,
 ) -> bytearray:
     patched = bytearray(png_data)
 
-    if personalized and scheme:
-        patched = plte_inplace_patch_memory(patched, scheme)
+    # ── 레거시 호환: bottom_filter에 BIN MAP 토큰이 있으면 bin_overlay로 전환 ──
+    if bottom_filter == BIN_MAP_FILTER_TOKEN:
+        bin_overlay = True
+        bottom_filter = None
+
+    # ── Step 1: BIN MAP overlay (palette mode — pixel index 교체) ──
+    if bin_overlay:
+        overlay = _apply_bin_map_overlay_memory(patched, image_path)
+        if overlay is not None:
+            patched = overlay
+        # BIN palette (index 10-23)에 색상이 반드시 필요 → 항상 PLTE 패치
+        effective_scheme = scheme if (personalized and scheme) else ANONYMOUS_LOGIN_ID
+        try:
+            patched = plte_inplace_patch_memory(patched, effective_scheme)
+        except (ValueError, Exception) as exc:
+            logger.warning("⚠️ [BIN MAP] PLTE 패치 실패 (scheme=%s): %s", effective_scheme, exc)
+        # 배경/Grade/텍스트를 검정으로 → 깨끗한 BIN 표시
+        patched = _patch_bin_map_background(patched)
+        # BIN MAP + bottom chip filter 동시 사용 가능
+        bottom_values = _parse_bottom_filter_values(bottom_filter)
+        if bottom_values:
+            masked = _apply_bottom_position_mask_memory(patched, image_path, bottom_values)
+            if masked is not None:
+                patched = masked
+        return patched
+
+    # ── Step 2: PLTE 패치 (personalized 색상) ──
+    measure_applied = False
+    if measure_overlay:
+        parts = measure_overlay.split(":", 1)
+        if len(parts) == 2:
+            m_field, m_key = parts
+            if m_field in ("f", "q") and m_key:
+                if personalized and scheme:
+                    patched = plte_inplace_patch_memory(patched, scheme)
+                overlay = _apply_ratio_overlay_memory(patched, image_path, m_field, m_key, scheme)
+                if overlay is not None:
+                    patched = overlay
+                measure_applied = True
+
+    if not measure_applied:
+        if personalized and scheme:
+            patched = plte_inplace_patch_memory(patched, scheme)
 
     if border_normalize:
         patched = plte_normalize_border_memory(patched)
@@ -3516,6 +3884,7 @@ def _apply_png_filters_memory(
     if grade_indices:
         patched = plte_grade_filter_memory(patched, grade_indices)
 
+    # ── Step 3: Bottom chip filter (measure/grade와 동시 사용 가능) ──
     bottom_values = _parse_bottom_filter_values(bottom_filter)
     if bottom_values:
         masked = _apply_bottom_position_mask_memory(patched, image_path, bottom_values)
@@ -3540,21 +3909,30 @@ def _build_filter_variant_token(
     grade_filter: Optional[str] = None,
     bottom_filter: Optional[str] = None,
     border_normalize: bool = False,
+    measure_overlay: Optional[str] = None,
+    bin_overlay: bool = False,
 ) -> str:
     norm_grade = _normalize_filter_value(grade_filter)
     norm_bottom = _normalize_filter_value(bottom_filter)
-    if not norm_grade and not norm_bottom and not border_normalize:
+    if not norm_grade and not norm_bottom and not border_normalize and not measure_overlay and not bin_overlay:
         return ""
 
     parts = [f"rev={FILTER_CACHE_REV}"]
+    if bin_overlay:
+        parts.append("bo=1")
     if norm_grade:
         parts.append(f"gf={norm_grade}")
     if norm_bottom:
         parts.append(f"bf={norm_bottom}")
     if border_normalize:
         parts.append("bn=1")
+    if measure_overlay:
+        parts.append(f"mo={measure_overlay}")
     if personalized and scheme:
         parts.append(f"s={scheme}")
+    elif bin_overlay:
+        # BIN MAP은 항상 PLTE 패치 → scheme 캐시 키 필요
+        parts.append(f"s={scheme or ANONYMOUS_LOGIN_ID}")
     return "|".join(parts)
 
 
@@ -3565,6 +3943,8 @@ def _resolve_pyramid_dir(
     grade_filter: Optional[str] = None,
     bottom_filter: Optional[str] = None,
     border_normalize: bool = False,
+    measure_overlay: Optional[str] = None,
+    bin_overlay: bool = False,
 ) -> Path:
     level_tag = int(level * 100)
     filter_token = _build_filter_variant_token(
@@ -3573,6 +3953,8 @@ def _resolve_pyramid_dir(
         grade_filter=grade_filter,
         bottom_filter=bottom_filter,
         border_normalize=border_normalize,
+        measure_overlay=measure_overlay,
+        bin_overlay=bin_overlay,
     )
 
     # 필터 캐시는 scheme/filter/rev별로 분리해 stale 충돌을 방지한다.
@@ -4058,6 +4440,8 @@ def _generate_thumbnail_sync(
     grade_filter: Optional[str] = None,
     bottom_filter: Optional[str] = None,
     border_normalize: bool = False,
+    measure_overlay: Optional[str] = None,
+    bin_overlay: bool = False,
 ):
     try:
         thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4074,8 +4458,13 @@ def _generate_thumbnail_sync(
             # =============================================================
             # 그리드 썸네일 생성 - 개인색/Grade/Bottom 필터 적용
             # =============================================================
+            # Ratio overlay는 썸네일 생성 후 적용 (full-size에 적용하면 극도로 느림)
+            _deferred_measure_overlay = None
+            if measure_overlay and image_path.suffix.lower() == '.png':
+                _deferred_measure_overlay = measure_overlay
+
             should_patch_palette = image_path.suffix.lower() == '.png' and (
-                (personalized and scheme) or bool(grade_filter) or bool(bottom_filter) or border_normalize
+                (personalized and scheme) or bool(grade_filter) or bool(bottom_filter) or border_normalize or bin_overlay
             )
 
             if should_patch_palette:
@@ -4091,6 +4480,8 @@ def _generate_thumbnail_sync(
                         grade_filter=grade_filter,
                         bottom_filter=bottom_filter,
                         border_normalize=border_normalize,
+                        measure_overlay=None,  # ratio overlay deferred
+                        bin_overlay=bin_overlay,
                     )
 
                     vips_image = pyvips.Image.new_from_buffer(
@@ -4188,23 +4579,13 @@ def _generate_thumbnail_sync(
                 _write(vips_image)
             else:
                 # 최적화 3: 공격적인 shrink + resize 로직 적용
-                # - 큰 축소(scale < 0.5)의 경우: shrink(정수 배율) + resize(나머지)
-                # - 작은 축소의 경우: resize만 사용
-                # - shrink는 HW 가속으로 매우 빠름 (정수 배율 축소)
-                # - resize는 cubic 커널로 고품질 유지
                 scale = min(target_w / vips_image.width, target_h / vips_image.height)
-                scale = max(scale, 1.0 / max(vips_image.width, vips_image.height))  # avoid zero
-                
+                scale = max(scale, 1.0 / max(vips_image.width, vips_image.height))
+
                 if scale < 0.5:
-                    # 큰 축소: shrink + resize 조합
-                    # 예: 10000x10000 → 512x512 (scale=0.0512)
-                    # shrink_factor = int(1/0.0512) + 1 = 20
-                    # shrink로 10000 → 500 (20배 축소, 매우 빠름)
-                    # resize로 500 → 512 (1.024배 확대, cubic)
                     shrink_factor = max(int(1.0 / scale) + 1, 1)
                     if shrink_factor > 1:
                         resized = vips_image.shrink(shrink_factor, shrink_factor)
-                        # 추가 리사이즈가 필요한 경우만
                         remaining_scale = scale * shrink_factor
                         if abs(remaining_scale - 1.0) > 0.01:
                             resized = resized.resize(
@@ -4219,13 +4600,31 @@ def _generate_thumbnail_sync(
                             kernel='cubic'
                         )
                 else:
-                    # 작은 축소: resize만 사용
                     resized = vips_image.resize(
                         scale,
                         vscale=scale,
                         kernel='cubic'
                     )
                 _write(resized)
+
+            # 🔥 Deferred ratio overlay: 썸네일에 적용 (full-size 대비 ~60x 빠름)
+            if _deferred_measure_overlay:
+                try:
+                    parts = _deferred_measure_overlay.split(":", 1)
+                    if len(parts) == 2:
+                        m_field, m_key = parts
+                        if m_field in ("f", "q") and m_key:
+                            with open(thumbnail_path, 'rb') as tf:
+                                thumb_data = bytearray(tf.read())
+                            overlay = _apply_ratio_overlay_memory(
+                                thumb_data, image_path, m_field, m_key, scheme
+                            )
+                            if overlay is not None:
+                                with open(thumbnail_path, 'wb') as tf:
+                                    tf.write(overlay)
+                except Exception as e:
+                    logger.warning(f"⚠️ [DEFERRED RATIO] 썸네일 오버레이 실패: {e}")
+
             return
         except ImportError:
             pass
@@ -4243,6 +4642,7 @@ def _generate_thumbnail_sync(
                     grade_filter=grade_filter,
                     bottom_filter=bottom_filter,
                     border_normalize=border_normalize,
+                    measure_overlay=None,  # ratio overlay deferred to thumbnail
                 )
                 pil_image = Image.open(io.BytesIO(bytes(png_data)))
             except Exception as e:
@@ -4283,6 +4683,8 @@ async def generate_thumbnail(
     grade_filter: Optional[str] = None,
     bottom_filter: Optional[str] = None,
     border_normalize: bool = False,
+    measure_overlay: Optional[str] = None,
+    bin_overlay: bool = False,
 ) -> Optional[Path]:
     start_time = time.time()
     try:
@@ -4294,6 +4696,8 @@ async def generate_thumbnail(
             grade_filter=grade_filter,
             bottom_filter=bottom_filter,
             border_normalize=border_normalize,
+            measure_overlay=measure_overlay,
+            bin_overlay=bin_overlay,
         )
         if filter_token:
             variant = filter_token
@@ -4306,25 +4710,33 @@ async def generate_thumbnail(
             thumb = get_thumbnail_path(image_path, size, scheme=None, variant=variant)
         key = f"{thumb}|{size[0]}x{size[1]}"
 
-        if not image_path.exists():
+        # 🔥 동기 파일 검증을 스레드 풀에서 실행 — 이벤트 루프 블록 방지
+        def _check_thumb_cache_sync():
+            if not image_path.exists():
+                return None, 'missing'
+            try:
+                image_mtime = image_path.stat().st_mtime
+            except Exception:
+                return None, 'stat_error'
+            if thumb.exists() and thumb.stat().st_size > 0:
+                try:
+                    if thumb.stat().st_mtime >= image_mtime:
+                        return image_mtime, 'cached'
+                except Exception:
+                    pass
+            return image_mtime, 'generate'
+
+        image_mtime, cache_status = await asyncio.get_running_loop().run_in_executor(
+            None, _check_thumb_cache_sync
+        )
+
+        if cache_status == 'missing':
             logger.warning(f"원본 이미지 파일이 존재하지 않습니다: {image_path}")
             return None
-
-        try:
-            image_mtime = image_path.stat().st_mtime
-        except Exception as e:
-            logger.warning(f"이미지 파일 정보 읽기 실패: {image_path}, 오류: {e}")
+        if cache_status == 'stat_error':
+            logger.warning(f"이미지 파일 정보 읽기 실패: {image_path}")
             return None
-
-        # 캐시 확인
-        cached = False
-        if thumb.exists() and thumb.stat().st_size > 0:
-            try:
-                if thumb.stat().st_mtime >= image_mtime:
-                    cached = THUMB_STAT_CACHE.get(key)
-            except Exception:
-                cached = False
-        if cached:
+        if cache_status == 'cached':
             THUMB_STAT_CACHE.set(key, True)
             return thumb
 
@@ -4360,6 +4772,8 @@ async def generate_thumbnail(
                     grade_filter,
                     bottom_filter,
                     border_normalize,
+                    measure_overlay,
+                    bin_overlay,
                 )
                 gen_elapsed = time.time() - gen_start
                 
@@ -4414,6 +4828,108 @@ class ClassifyDeleteBatchReq(BaseModel):
     mode: Literal["wafer", "chip"] = "wafer"
 
 # ======================== Endpoints ========================
+
+# 알려진 LT / TM 값 (동적 스캔 결과에 합산하여 항상 드롭다운에 표시)
+KNOWN_LT_VALUES = {"PP", "EE", "PT", "PE", "EP", "LT", "TP", "ES", "-", "EY", "TE", "TA", "TT", "TQ", "EU", "EH", "TD", "ET"}
+KNOWN_TM_VALUES = {"ENGINE", "ENGINEER", "NONPAS", "NORMAL", "PWQ", "R1", "REWORK", "NORM", "MACHINE", "ENGR", "ENG"}
+
+
+@app.get("/api/filter-metadata")
+async def get_filter_metadata(path: Optional[str] = None):
+    """이미지 폴더에 대응하는 positions JSON에서 lt/tm 메타데이터를 추출하여 반환"""
+    import re as _re
+    try:
+        # 이미지 폴더의 상대 경로 결정
+        if not path:
+            rel_folder = ""
+        else:
+            try:
+                target = safe_resolve_path(path)
+                rel_folder = str(target.relative_to(ROOT_DIR)).replace("\\", "/")
+            except (ValueError, Exception):
+                rel_folder = path.replace("\\", "/").strip("/")
+
+        # POSITIONS_ROOT 하위에서 해당 폴더의 JSON 파일 검색
+        if rel_folder:
+            # 첫 번째 컴포넌트 제거 (trimmed path 방식)
+            parts = [p for p in Path(rel_folder).parts if p not in ("", ".")]
+            if len(parts) > 1:
+                positions_dir = config.POSITIONS_ROOT.joinpath(*parts[1:])
+            else:
+                positions_dir = config.POSITIONS_ROOT.joinpath(*parts) if parts else config.POSITIONS_ROOT
+            # 레거시 경로도 시도
+            legacy_dir = config.POSITIONS_ROOT / rel_folder
+        else:
+            positions_dir = config.POSITIONS_ROOT
+            legacy_dir = positions_dir
+
+        # 존재하는 디렉터리 선택
+        scan_dir = None
+        for d in [positions_dir, legacy_dir]:
+            if d.exists() and d.is_dir():
+                scan_dir = d
+                break
+
+        lt_values = set()
+        tm_values = set()
+        file_map = {}
+
+        if scan_dir:
+            # 루트(POSITIONS_ROOT 자체)일 때는 하위 폴더까지 재귀 스캔 (값 목록만)
+            is_root = (scan_dir == config.POSITIONS_ROOT and rel_folder in ("", "."))
+            json_files = list(scan_dir.rglob("*.json")) if is_root else list(scan_dir.glob("*.json"))
+
+            def _extract_lt_tm(fpath):
+                """파일 끝 부분에서 lt/tm 추출 (빠른 tail-read)"""
+                try:
+                    size = fpath.stat().st_size
+                    with open(fpath, "rb") as fh:
+                        fh.seek(max(0, size - 500))
+                        tail = fh.read().decode("utf-8", errors="ignore")
+                    lt_m = _re.search(r'"lt"\s*:\s*"([^"]*)"', tail)
+                    tm_m = _re.search(r'"tm"\s*:\s*"([^"]*)"', tail)
+                    lt_val = lt_m.group(1) if lt_m else None
+                    tm_val = tm_m.group(1) if tm_m else None
+                    return fpath.stem, lt_val, tm_val
+                except Exception:
+                    return fpath.stem, None, None
+
+            loop = asyncio.get_running_loop()
+            results = await loop.run_in_executor(
+                DIRLIST_EXECUTOR,
+                lambda: [_extract_lt_tm(f) for f in json_files]
+            )
+
+            for stem, lt_val, tm_val in results:
+                if lt_val is not None:
+                    lt_values.add(lt_val)
+                if tm_val is not None:
+                    tm_values.add(tm_val)
+                # 루트 스캔 시에는 file_map 생략 (너무 큼)
+                if not is_root:
+                    entry = {}
+                    if lt_val is not None:
+                        entry["lt"] = lt_val
+                    if tm_val is not None:
+                        entry["tm"] = tm_val
+                    if entry:
+                        file_map[stem] = entry
+
+        # 알려진 값과 동적 스캔 결과 합산
+        all_lt = lt_values | KNOWN_LT_VALUES
+        all_tm = tm_values | KNOWN_TM_VALUES
+
+        return {
+            "success": True,
+            "lt_values": sorted(all_lt),
+            "tm_values": sorted(all_tm),
+            "file_map": file_map,
+        }
+    except Exception as e:
+        logger.exception(f"filter-metadata 조회 실패: {e}")
+        return {"success": False, "lt_values": [], "tm_values": [], "file_map": {}}
+
+
 @app.get("/api/files")
 async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
     global current_folder
@@ -4596,7 +5112,7 @@ def _pyramid_path_lock(path: Path):
         lock.release()
 
 
-def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None, border_normalize: bool = False):
+def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None, border_normalize: bool = False, measure_overlay: Optional[str] = None):
     """🚀 피라미드 레벨 이미지 생성 (속도 극대화)"""
     import time
     start_time = time.time()
@@ -4674,8 +5190,8 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                 # 🔥 초고속 방식에 PLTE 패치만 추가
                 # Grade 필터가 우선, 그 다음 개인색 설정
                 # 원본 이미지가 PNG이면 팔레트 필터링 적용 (저장 포맷과 무관 - JPEG로 저장해도 적용)
-                if (grade_filter or bottom_filter or border_normalize) and image_path.suffix.lower() == '.png':
-                    logger.info(f"🎯 [PYRAMID] 필터 적용: grade_filter={grade_filter}, bottom_filter={bottom_filter}, border_normalize={border_normalize}, path={image_path.name}, target_format={target_format}")
+                if (grade_filter or bottom_filter or border_normalize or measure_overlay) and image_path.suffix.lower() == '.png':
+                    logger.info(f"🎯 [PYRAMID] 필터 적용: grade_filter={grade_filter}, bottom_filter={bottom_filter}, border_normalize={border_normalize}, measure_overlay={measure_overlay}, path={image_path.name}, target_format={target_format}")
                     try:
                         with open(image_path, 'rb') as f:
                             png_data = bytearray(f.read())
@@ -4688,6 +5204,7 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                             grade_filter=grade_filter,
                             bottom_filter=bottom_filter,
                             border_normalize=border_normalize,
+                            measure_overlay=measure_overlay,
                         )
 
                         image = pyvips.Image.new_from_buffer(bytes(png_data), "", access='sequential', fail_on='none', memory=True, unlimited=True)
@@ -4918,7 +5435,7 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
 _pyramid_bg_executor = ThreadPoolExecutor(max_workers=config.PYRAMID_BG_WORKERS)
 _pyramid_bg_generating = set()  # 현재 생성 중인 파일 경로
 
-async def _generate_other_levels_background(image_path: Path, current_level: float, stem: str, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None, border_normalize: bool = False):
+async def _generate_other_levels_background(image_path: Path, current_level: float, stem: str, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None, border_normalize: bool = False, measure_overlay: Optional[str] = None):
     """다른 피라미드 레벨들을 background에서 생성 (원본 재사용 파이프라인)"""
     format_ext = config.PYRAMID_FORMAT.lower()
     try:
@@ -4954,7 +5471,8 @@ async def _generate_other_levels_background(image_path: Path, current_level: flo
             scheme,
             grade_filter,
             bottom_filter,
-            border_normalize
+            border_normalize,
+            measure_overlay,
         )
         
         # 결과 로깅
@@ -4982,7 +5500,7 @@ def _generate_pyramid_bg_worker(image_path: Path, pyramid_path: Path, level: flo
         _pyramid_bg_generating.discard(path_key)
 
 
-def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format_ext: str, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None, border_normalize: bool = False):
+def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format_ext: str, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None, border_normalize: bool = False, measure_overlay: Optional[str] = None):
     """원본 이미지를 한 번만 읽고 여러 레벨을 연속 생성하는 파이프라인
     🔥 Grade 필터 또는 개인색 설정이 있으면 원본을 먼저 메모리에서 변경하고,
     그 변경된 이미지로 모든 레벨을 생성"""
@@ -5000,10 +5518,10 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
     try:
         # 🔥 Step 1: 원본 이미지를 먼저 필터링 (Grade/Bottom) 또는 개인색으로 변경 (메모리에서)
         original_image = None
-        if (grade_filter or bottom_filter or border_normalize) and image_path.suffix.lower() == '.png':
+        if (grade_filter or bottom_filter or border_normalize or measure_overlay) and image_path.suffix.lower() == '.png':
             # Grade/Bottom 필터 (개인색 설정 먼저 적용 후 필터링)
             try:
-                logger.info(f"🎯 [PIPELINE] 필터 적용 시작: grade_filter={grade_filter}, bottom_filter={bottom_filter}, border_normalize={border_normalize}, levels={levels}, path={image_path.name}")
+                logger.info(f"🎯 [PIPELINE] 필터 적용 시작: grade_filter={grade_filter}, bottom_filter={bottom_filter}, border_normalize={border_normalize}, measure_overlay={measure_overlay}, levels={levels}, path={image_path.name}")
 
                 with open(image_path, 'rb') as f:
                     png_data = bytearray(f.read())
@@ -5016,6 +5534,7 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
                     grade_filter=grade_filter,
                     bottom_filter=bottom_filter,
                     border_normalize=border_normalize,
+                    measure_overlay=measure_overlay,
                 )
 
                 original_image = pyvips.Image.new_from_buffer(
@@ -5744,6 +6263,135 @@ async def get_image(
         logger.exception(f"❌ [IMAGE API ERROR] {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ── BIN MAP 경량 썸네일 (positions JSON만 사용, 이미지 로드 없음) ──────────
+_bin_map_thumb_cache: Dict[str, bytes] = {}
+
+def _generate_bin_map_thumb(image_path: Path, size: int, scheme: Optional[str] = None) -> Optional[bytes]:
+    """positions JSON에서 chip BIN 값을 읽어 순수 색상 맵 이미지를 생성한다.
+    원본 이미지를 로드하지 않으므로 매우 빠르다."""
+    import numpy as np
+
+    rel_path = Path(_get_relative_path_from_image(str(image_path)))
+    positions_path = _resolve_positions_path(rel_path)
+    if not positions_path.exists():
+        return None
+
+    with open(positions_path, "r", encoding="utf-8") as f:
+        positions_data = json.load(f)
+    chips = positions_data.get("chips", [])
+    if not isinstance(chips, list) or not chips:
+        return None
+
+    coord = positions_data.get("coord", {})
+    canvas = coord.get("canvas", {}) if isinstance(coord, dict) else {}
+    canvas_w = int(canvas.get("width", 256)) if isinstance(canvas, dict) else 256
+    canvas_h = int(canvas.get("height", 256)) if isinstance(canvas, dict) else 256
+    if canvas_w <= 0: canvas_w = 256
+    if canvas_h <= 0: canvas_h = 256
+
+    # 색상 팔레트 로드 (개인색 지원)
+    from .personal_colors import (
+        load_color_legends, DEFAULT_BOTTOM_COLORS, DEFAULT_TOP_COLORS,
+        _hex_to_rgb_triple, ANONYMOUS_SCHEME,
+    )
+    legends = load_color_legends()
+    scheme_key = scheme or ANONYMOUS_SCHEME
+    scheme_data = legends.get(scheme_key) or legends.get("default") or {}
+    bottom_colors = scheme_data.get("bottom", {})
+    bg_hex = scheme_data.get("background", "#CCCCCC")
+    bg_rgb = _hex_to_rgb_triple(bg_hex)
+
+    # BIN 값 → RGB 맵핑
+    bin_color_map = {}
+    for bval, default_hex in DEFAULT_BOTTOM_COLORS.items():
+        hex_color = bottom_colors.get(bval, default_hex)
+        bin_color_map[bval] = _hex_to_rgb_triple(hex_color)
+
+    # 출력 크기 계산 (비율 유지)
+    if canvas_w >= canvas_h:
+        out_w = size
+        out_h = max(1, int(size * canvas_h / canvas_w))
+    else:
+        out_h = size
+        out_w = max(1, int(size * canvas_w / canvas_h))
+
+    scale_x = out_w / float(canvas_w)
+    scale_y = out_h / float(canvas_h)
+
+    # numpy RGB 배열 (배경색)
+    img_arr = np.full((out_h, out_w, 3), bg_rgb, dtype=np.uint8)
+
+    filled = 0
+    for chip in chips:
+        if not isinstance(chip, dict):
+            continue
+        b_val = _classify_chip_bottom_value(chip.get("b"))
+        # BIN 값을 color key로 변환
+        if b_val == "Normal":
+            color_key = "Normal"
+        elif b_val == "Invalid":
+            color_key = "Invalid"
+        else:
+            color_key = f"B{b_val}"
+        rgb = bin_color_map.get(color_key)
+        if rgb is None:
+            continue
+
+        scaled = _scaled_chip_rect(chip, scale_x, scale_y, out_w, out_h)
+        if not scaled:
+            continue
+        sx0, sy0, sx1, sy1 = scaled
+        # 테두리 1px 유지 — numpy 슬라이싱 (즉시)
+        inner_x0 = min(sx0 + 1, sx1)
+        inner_y0 = min(sy0 + 1, sy1)
+        inner_x1 = max(sx1 - 1, sx0)
+        inner_y1 = max(sy1 - 1, sy0)
+        if inner_y1 > inner_y0 and inner_x1 > inner_x0:
+            img_arr[inner_y0:inner_y1, inner_x0:inner_x1] = rgb
+            filled += 1
+
+    if filled == 0:
+        return None
+
+    pil_img = Image.fromarray(img_arr, "RGB")
+    buf = io.BytesIO()
+    pil_img.save(buf, format="WEBP", quality=85)
+    return buf.getvalue()
+
+
+@app.get("/api/bin-map-thumb")
+async def get_bin_map_thumb(
+    request: Request,
+    path: str = Query(...),
+    size: int = Query(256),
+    scheme: Optional[str] = Query(None),
+):
+    """BIN 맵 경량 썸네일 — positions JSON만 읽어 색상 맵 생성 (이미지 로드 없음)."""
+    image_path = Path(path) if Path(path).is_absolute() else ROOT_DIR / path
+    cache_key = f"{image_path}:{size}:{scheme or ''}"
+
+    cached = _bin_map_thumb_cache.get(cache_key)
+    if cached:
+        return Response(
+            content=cached,
+            media_type="image/webp",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+
+    result = await asyncio.get_event_loop().run_in_executor(
+        IO_POOL, _generate_bin_map_thumb, image_path, size, scheme,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="BIN map generation failed")
+
+    _bin_map_thumb_cache[cache_key] = result
+    return Response(
+        content=result,
+        media_type="image/webp",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 @app.get("/api/thumbnail")
 async def get_thumbnail(
     request: Request,
@@ -5754,6 +6402,8 @@ async def get_thumbnail(
     grade_filter: Optional[str] = None,
     bottom_filter: Optional[str] = None,
     border_normalize: bool = False,
+    measure_overlay: Optional[str] = None,
+    bin_overlay: bool = False,
 ):
     try:
         original_rel = _lookup_original_relpath_from_classification_path(path)
@@ -5764,43 +6414,44 @@ async def get_thumbnail(
         if personalized and not scheme:
             scheme = get_user_color_scheme(_current_login_id(request))
 
-        # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
-        if Path(path).is_absolute():
-            # 절대 경로인 경우
-            image_path = Path(path)
-            # ROOT_DIR 내 경로인지 보안 검증
+        # 🔥 동기 파일 검증을 스레드 풀에서 실행 — 이벤트 루프 블록 방지
+        def _validate_path_sync():
+            effective_path = path
+            if Path(effective_path).is_absolute():
+                image_path = Path(effective_path)
+                try:
+                    image_path.resolve().relative_to(ROOT_DIR.resolve())
+                except ValueError:
+                    return None, 'forbidden', None
+            else:
+                image_path = ROOT_DIR / effective_path
+                try:
+                    image_path.resolve().relative_to(ROOT_DIR.resolve())
+                except ValueError:
+                    return None, 'forbidden', None
+            if not image_path.exists() or not image_path.is_file():
+                return None, 'not_found', None
             try:
-                image_path.resolve().relative_to(ROOT_DIR.resolve())
-            except ValueError:
-                logger.warning(f"ROOT_DIR 외부 경로 접근 시도: {path}")
-                raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
-        else:
-            # 상대 경로인 경우 ROOT_DIR 기준으로 해석
-            image_path = ROOT_DIR / path
-            # 보안 검증: ROOT_DIR 내에 있는지 확인
-            try:
-                image_path.resolve().relative_to(ROOT_DIR.resolve())
-            except ValueError:
-                logger.warning(f"ROOT_DIR 외부 경로 접근 시도: {path}")
-                raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
+                image_stat = image_path.stat()
+            except Exception:
+                return None, 'stat_error', None
+            if image_stat.st_size <= 0:
+                return image_path, 'empty', image_stat
+            if not is_supported_image(image_path):
+                return None, 'unsupported', None
+            return image_path, 'ok', image_stat
 
-        # 파일 존재 확인
-        if not image_path.exists() or not image_path.is_file():
-            logger.warning(f"이미지 파일이 존재하지 않습니다: {image_path}")
-            raise HTTPException(status_code=404, detail="Image not found")
+        image_path, status, image_stat = await asyncio.get_running_loop().run_in_executor(
+            None, _validate_path_sync
+        )
 
-        try:
-            image_stat = image_path.stat()
-        except Exception:
-            logger.warning(f"이미지 파일 stat 실패: {image_path}")
+        if status == 'forbidden':
+            raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
+        elif status == 'not_found' or status == 'stat_error':
             raise HTTPException(status_code=404, detail="Image not found")
-        if image_stat.st_size <= 0:
-            logger.warning(f"원본 이미지가 비어 있어 thumbnail placeholder 반환: {image_path}")
+        elif status == 'empty':
             return _invalid_image_response(image_path, size=size)
-
-        # 이미지 형식 확인
-        if not is_supported_image(image_path):
-            logger.warning(f"지원하지 않는 이미지 형식: {image_path}")
+        elif status == 'unsupported':
             raise HTTPException(status_code=415, detail="Unsupported image format")
 
         try:
@@ -5813,6 +6464,8 @@ async def get_thumbnail(
                 grade_filter=grade_filter,
                 bottom_filter=bottom_filter,
                 border_normalize=border_normalize,
+                measure_overlay=measure_overlay,
+                bin_overlay=bin_overlay,
             )
             if thumb and thumb.exists():
                 st = thumb.stat()

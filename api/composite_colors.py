@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Dict, List, Sequence, Tuple, Optional
 
 from .personal_colors import (
@@ -33,7 +32,6 @@ class CompositeColorSettings:
     quantiles: List[float]
     colors: List[str]
     default_colors: List[str]
-    last_modified: str | None
     scheme: str
 
     def to_dict(self) -> Dict[str, object]:
@@ -42,7 +40,6 @@ class CompositeColorSettings:
             "quantiles": self.quantiles,
             "colors": self.colors,
             "defaultColors": self.default_colors,
-            "lastModified": self.last_modified,
             "scheme": self.scheme,
         }
 
@@ -111,14 +108,12 @@ def load_composite_color_settings(scheme: Optional[str] = None) -> CompositeColo
         entry = {key: DEFAULT_COMPOSITE_COLORS[key] for key in QUANTILE_KEYS}
 
     colors = _normalize_dict(entry)
-    last_modified = entry.get("lastModified")
 
     return CompositeColorSettings(
         keys=list(QUANTILE_KEYS),
         quantiles=list(QUANTILE_VALUES),
         colors=colors,
         default_colors=[DEFAULT_COMPOSITE_COLORS[key] for key in QUANTILE_KEYS],
-        last_modified=last_modified,
         scheme=scheme_key,
     )
 
@@ -133,15 +128,74 @@ def save_composite_color_settings(colors: Sequence[str], scheme: Optional[str] =
     for idx, key in enumerate(QUANTILE_KEYS):
         entry[key] = normalized[idx]
 
-    entry["lastModified"] = datetime.now().strftime("%y%m%d_%H%M%S")
     save_color_legends(legends)
     return load_composite_color_settings(scheme_key)
+
+
+# ── Measure colors (separate from composite) ──────────────────────────
+
+def _ensure_measure_storage(legends: Dict[str, object]) -> Tuple[Dict[str, Dict[str, str]], bool]:
+    """Ensure legends['measure'] is a dict keyed by scheme name."""
+    entry = legends.get("measure")
+    mutated = False
+    if not isinstance(entry, dict):
+        entry = {}
+        legends["measure"] = entry
+        mutated = True
+    return entry, mutated
+
+
+def load_measure_color_settings(scheme: Optional[str] = None) -> CompositeColorSettings:
+    scheme_key = (scheme or ANONYMOUS_SCHEME).strip() or ANONYMOUS_SCHEME
+    legends = load_color_legends()
+    storage, mutated = _ensure_measure_storage(legends)
+    if mutated:
+        save_color_legends(legends)
+
+    entry = storage.get(scheme_key)
+    if not isinstance(entry, dict) and scheme_key == ANONYMOUS_SCHEME:
+        legacy_entry = storage.get("anonymous")
+        if isinstance(legacy_entry, dict):
+            entry = legacy_entry
+
+    if not isinstance(entry, dict):
+        # measure 없으면 composite 값을 fallback
+        composite_settings = load_composite_color_settings(scheme_key)
+        return composite_settings
+
+    colors = _normalize_dict(entry)
+    return CompositeColorSettings(
+        keys=list(QUANTILE_KEYS),
+        quantiles=list(QUANTILE_VALUES),
+        colors=colors,
+        default_colors=[DEFAULT_COMPOSITE_COLORS[key] for key in QUANTILE_KEYS],
+        scheme=scheme_key,
+    )
+
+
+def save_measure_color_settings(colors: Sequence[str], scheme: Optional[str] = None) -> CompositeColorSettings:
+    scheme_key = (scheme or ANONYMOUS_SCHEME).strip() or ANONYMOUS_SCHEME
+    normalized = _normalize_color_values(colors)
+    legends = load_color_legends()
+    storage, _ = _ensure_measure_storage(legends)
+    entry = storage.get(scheme_key)
+    if not isinstance(entry, dict):
+        entry = {}
+        storage[scheme_key] = entry
+
+    for idx, key in enumerate(QUANTILE_KEYS):
+        entry[key] = normalized[idx]
+
+    save_color_legends(legends)
+    return load_measure_color_settings(scheme_key)
 
 
 __all__ = [
     "CompositeColorSettings",
     "load_composite_color_settings",
     "save_composite_color_settings",
+    "load_measure_color_settings",
+    "save_measure_color_settings",
     "QUANTILE_KEYS",
     "QUANTILE_VALUES",
     "DEFAULT_COMPOSITE_COLORS",

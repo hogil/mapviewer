@@ -63,6 +63,20 @@ DEFAULT_BOTTOM_COLORS = {
     "B390": "#6666FF",
 }
 
+DEFAULT_RATIO_GRADIENT = {
+    "quantile0": "#0000FF",
+    "quantile10": "#0066FF",
+    "quantile20": "#00CCFF",
+    "quantile30": "#00FFCC",
+    "quantile40": "#00FF00",
+    "quantile50": "#66FF00",
+    "quantile60": "#CCFF00",
+    "quantile70": "#FFCC00",
+    "quantile80": "#FF6600",
+    "quantile90": "#FF3300",
+    "quantile100": "#FF0000",
+}
+
 # 팔레트 인덱스 정의 (이미지 생성 코드와 반드시 일치해야 함)
 # 0-7  : Grade0-Grade7 (chip 내부 값, 고정)
 # 8    : background (고정)
@@ -82,6 +96,7 @@ def _default_personal_scheme() -> Dict[str, Any]:
     return {
         "top": copy.deepcopy(DEFAULT_TOP_COLORS),
         "bottom": copy.deepcopy(DEFAULT_BOTTOM_COLORS),
+        "ratio": copy.deepcopy(DEFAULT_RATIO_GRADIENT),
         "background": "#CCCCCC",
         "text": "#000001",
     }
@@ -740,6 +755,62 @@ def plte_normalize_border_memory(png_data: bytearray) -> bytearray:
     return png_data
 
 
+def get_ratio_gradient_for_scheme(scheme: str) -> List[Tuple[int, int, int]]:
+    """Return 11 RGB tuples for quantile 0,10,...100 from measure colors.
+
+    Reads from ``legends["measure"][scheme]`` first (FBT/QVL overlay),
+    then falls back to ``legends["composite"][scheme]`` (composite map),
+    then DEFAULT_RATIO_GRADIENT.
+    """
+    gradient_dict: Optional[Dict[str, str]] = None
+    try:
+        legends = load_color_legends()
+        # Primary: measure storage (separate from composite map)
+        measure = legends.get("measure")
+        if isinstance(measure, dict):
+            entry = measure.get(scheme)
+            if not isinstance(entry, dict) and scheme != ANONYMOUS_SCHEME:
+                entry = measure.get(ANONYMOUS_SCHEME)
+            if isinstance(entry, dict):
+                if any(k.startswith("quantile") for k in entry):
+                    gradient_dict = entry
+        # Fallback: composite storage
+        if not gradient_dict:
+            composite = legends.get("composite")
+            if isinstance(composite, dict):
+                entry = composite.get(scheme)
+                if not isinstance(entry, dict) and scheme != ANONYMOUS_SCHEME:
+                    entry = composite.get(ANONYMOUS_SCHEME)
+                if isinstance(entry, dict):
+                    if any(k.startswith("quantile") for k in entry):
+                        gradient_dict = entry
+        # Fallback: legacy ratio storage
+        if not gradient_dict:
+            scheme_data = legends.get(scheme) or legends.get("default")
+            if isinstance(scheme_data, dict):
+                ratio_data = scheme_data.get("ratio")
+                if isinstance(ratio_data, dict):
+                    gradient_dict = ratio_data
+    except Exception:
+        pass
+
+    if not gradient_dict:
+        gradient_dict = DEFAULT_RATIO_GRADIENT
+
+    result: List[Tuple[int, int, int]] = []
+    for step in range(0, 101, 10):
+        key = f"quantile{step}"
+        hex_val = gradient_dict.get(key)
+        if hex_val:
+            try:
+                result.append(_hex_to_rgb_triple(hex_val))
+            except Exception:
+                result.append((0, 0, 0))
+        else:
+            result.append((0, 0, 0))
+    return result
+
+
 __all__ = [
     "load_color_legends",
     "save_color_legends",
@@ -751,4 +822,6 @@ __all__ = [
     "plte_grade_filter_memory",
     "plte_bottom_filter_memory",
     "plte_normalize_border_memory",
+    "DEFAULT_RATIO_GRADIENT",
+    "get_ratio_gradient_for_scheme",
 ]

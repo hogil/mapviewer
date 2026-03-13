@@ -1357,6 +1357,7 @@ export class ThumbnailNavigator {
             const imagePath = this.imageList[i];
             if (!imagePath) return;
 
+            // 🔥 항상 /api/thumbnail 사용 — BIN MAP은 personalizedParams에 bin_overlay=1 포함
             const newUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}${cacheSuffix}`;
             const distance = Math.abs(i - this.currentImageIndex);
 
@@ -1403,6 +1404,8 @@ export class ThumbnailNavigator {
         const cacheBuster = this.viewer?._personalizedColorCacheBuster || Date.now();
         const hasCacheBusterInParams = typeof personalizedParams === 'string' && personalizedParams.includes('_t=');
         const cacheSuffix = hasCacheBusterInParams ? '' : `&_t=${cacheBuster}`;
+
+        // 🔥 항상 /api/thumbnail 사용 — BIN MAP은 personalizedParams에 bin_overlay=1 포함
         const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}${cacheSuffix}`;
 
         img.alt = imagePath.split('/').pop();

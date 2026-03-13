@@ -112,7 +112,25 @@ export class ColorSchemeEditor {
         this.boundCellKeyDown = this.handleCellKeyDown.bind(this);
         this.contextMenu = null;
         this.boundHideContextMenu = () => this.hideContextMenu();
+        this._boundPasteHandler = this._handlePasteEvent.bind(this);
         this._contextMenuBound = false;
+        // Tab state
+        this.activeTab = 'fail';  // 'fail', 'composite', or 'measure'
+        // Composite tab state
+        this.compositeRows = [];
+        this.compositeTableBody = null;
+        this.compositeErrorEl = null;
+        this.originalCompositeData = null;
+        // Measure tab state
+        this.measureRows = [];
+        this.measureTableBody = null;
+        this.measureErrorEl = null;
+        this.originalMeasureData = null;
+        // Backward compat aliases
+        this.ratioRows = this.compositeRows;
+        this.ratioTableBody = null;
+        this.ratioErrorEl = null;
+        this.originalRatioData = null;
         this.setup();
         if (this.modal) {
             this._setupDone = true;
@@ -198,6 +216,32 @@ export class ColorSchemeEditor {
             });
         }
         this.buildRows();
+
+        // Tab switching
+        this.tabBar = this.modal?.querySelector('#color-editor-tabs');
+        this.failContent = this.modal?.querySelector('#color-editor-fail-content');
+        this.compositeContent = this.modal?.querySelector('#color-editor-composite-content');
+        this.measureContent = this.modal?.querySelector('#color-editor-measure-content');
+        this.compositeTableBody = this.modal?.querySelector('#color-editor-composite-table-body');
+        this.compositeErrorEl = this.modal?.querySelector('#color-editor-composite-error');
+        this.measureTableBody = this.modal?.querySelector('#color-editor-measure-table-body');
+        this.measureErrorEl = this.modal?.querySelector('#color-editor-measure-error');
+        // Backward compat
+        this.ratioContent = this.compositeContent;
+        this.ratioTableBody = this.compositeTableBody;
+        this.ratioErrorEl = this.compositeErrorEl;
+
+        if (this.tabBar) {
+            this.tabBar.addEventListener('click', (e) => {
+                const btn = e.target.closest('.color-editor-tab');
+                if (!btn) return;
+                const tab = btn.dataset.tab;
+                if (tab) this.switchTab(tab);
+            });
+        }
+
+        this._buildGradientRows('composite');
+        this._buildGradientRows('measure');
     }
 
     buildRows() {
@@ -372,7 +416,7 @@ export class ColorSchemeEditor {
         }
     }
 
-    open() {
+    async open(initialTab = 'fail') {
         // 모달이 없으면 다시 찾기 시도
         if (!this.modal) {
             this.modal = document.getElementById('color-editor-modal');
@@ -437,7 +481,18 @@ export class ColorSchemeEditor {
             this.tableBody.addEventListener('contextmenu', (e) => this.handleContextMenu(e), true);
             this._contextMenuBound = true;
         }
-        
+
+        // Load gradient tab data
+        this._savedRatioGradientCache = this.viewer?._ratioGradientCache
+            ? [...this.viewer._ratioGradientCache] : null;
+        await this._loadGradientColors('composite', schemeName);
+        this._clearGradientError('composite');
+        await this._loadGradientColors('measure', schemeName);
+        this._clearGradientError('measure');
+
+        // Switch to requested tab
+        this.switchTab(initialTab);
+
         this.modal.classList.add('is-open');
         this.modal.setAttribute('aria-hidden', 'false');
         if (this.dialog) {
@@ -450,7 +505,7 @@ export class ColorSchemeEditor {
         }
         document.addEventListener('keydown', this.boundKeyHandler);
         document.addEventListener('mousedown', this.boundOutsideClick);
-        // 디버그 로그 제거
+        document.addEventListener('paste', this._boundPasteHandler, true);
     }
 
     async cleanupPreviewSchemeArtifacts() {
@@ -500,6 +555,23 @@ export class ColorSchemeEditor {
         if (this.realtimeUpdateTimeout) {
             clearTimeout(this.realtimeUpdateTimeout);
             this.realtimeUpdateTimeout = null;
+        }
+        if (this._gradientPreviewTimeout) {
+            clearTimeout(this._gradientPreviewTimeout);
+            this._gradientPreviewTimeout = null;
+        }
+        // Gradient preview 복원 (measure overlay)
+        if (this._savedRatioGradientCache) {
+            this.viewer._ratioGradientCache = this._savedRatioGradientCache;
+            this._savedRatioGradientCache = null;
+            if (!this.viewer.gridMode &&
+                (this.viewer.overlayMode === 'f' || this.viewer.overlayMode === 'q') &&
+                this.viewer.chipAnnotator) {
+                this.viewer.chipAnnotator.setOverlayMode(this.viewer.overlayMode, {
+                    gradientStops: this.viewer._ratioGradientCache,
+                    itemKey: this.viewer._ratioActiveItemKey,
+                });
+            }
         }
         this.viewer._previewSchemeOverride = null;
 
@@ -571,6 +643,7 @@ export class ColorSchemeEditor {
         this.modal.setAttribute('aria-hidden', 'true');
         document.removeEventListener('keydown', this.boundKeyHandler);
         document.removeEventListener('mousedown', this.boundOutsideClick);
+        document.removeEventListener('paste', this._boundPasteHandler, true);
         if (this.modal) {
             this.modal.removeEventListener('mousemove', this.boundCellMouseMove);
             this.modal.removeEventListener('mouseup', this.boundCellMouseUp);
@@ -633,6 +706,14 @@ export class ColorSchemeEditor {
             return;
         }
         
+        // Ctrl+C: 셀 복사 (document-level fallback)
+        if ((event.ctrlKey || event.metaKey) && event.key === 'c' && this.selectedCells.size > 0) {
+            this.copySelectedCells();
+            event.preventDefault();
+            return;
+        }
+        // Ctrl+V: native paste 이벤트가 _handlePasteEvent에서 처리 (keydown을 막으면 안 됨)
+
         // 🔥 ESC 키: 취소 버튼과 동일하게 동작
         if (event.key === 'Escape') {
             event.preventDefault();
@@ -690,9 +771,19 @@ export class ColorSchemeEditor {
     }
 
     handleSchemeLoad(name) {
+        // Gradient 탭이면 별도 로직
+        if (this.activeTab === 'composite' || this.activeTab === 'measure') {
+            this._handleGradientSchemeLoad(name);
+            this.hideDropdown();
+            this.pendingSchemeName = '';
+            this.setSchemeApplyButtonState(false);
+            this.clearSearchCaretFocus();
+            return;
+        }
+
         const legends = this.viewer?.colorLegends || {};
         const target = name || this.schemeSearchInput?.value?.trim() || this.currentSchemeName || this.viewer?.currentUser;
-        
+
         if (!legends[target]) {
             this.showError('해당하는 스킴을 찾을 수 없습니다.');
             return;
@@ -1133,11 +1224,22 @@ export class ColorSchemeEditor {
     }
 
     checkForChanges() {
-        if (!this.originalSchemeData) return;
-        
-        const currentData = this.getCurrentSchemeData();
-        const hasChanges = JSON.stringify(currentData) !== JSON.stringify(this.originalSchemeData);
-        this.updateApplyButtonState(hasChanges);
+        if (this.activeTab === 'composite' || this.activeTab === 'ratio') {
+            if (!this.originalCompositeData) return;
+            const currentData = this._getCurrentGradientData('composite');
+            const hasChanges = JSON.stringify(currentData) !== JSON.stringify(this.originalCompositeData);
+            this.updateApplyButtonState(hasChanges);
+        } else if (this.activeTab === 'measure') {
+            if (!this.originalMeasureData) return;
+            const currentData = this._getCurrentGradientData('measure');
+            const hasChanges = JSON.stringify(currentData) !== JSON.stringify(this.originalMeasureData);
+            this.updateApplyButtonState(hasChanges);
+        } else {
+            if (!this.originalSchemeData) return;
+            const currentData = this.getCurrentSchemeData();
+            const hasChanges = JSON.stringify(currentData) !== JSON.stringify(this.originalSchemeData);
+            this.updateApplyButtonState(hasChanges);
+        }
     }
 
     /**
@@ -1313,7 +1415,11 @@ export class ColorSchemeEditor {
 
     async handleApply() {
         if (!this.applyBtn || this.applyBtn.disabled) return;
-        
+
+        if (this.activeTab === 'composite' || this.activeTab === 'measure' || this.activeTab === 'ratio') {
+            return this._handleApplyGradient(this.activeTab === 'measure' ? 'measure' : 'composite');
+        }
+
         const schemeData = this.getCurrentSchemeData();
         if (!schemeData) {
             this.showError('색상 데이터를 가져올 수 없습니다.');
@@ -1429,6 +1535,9 @@ export class ColorSchemeEditor {
 
 
     async handleReset() {
+        if (this.activeTab === 'composite' || this.activeTab === 'measure' || this.activeTab === 'ratio') {
+            return this.handleResetRatio();
+        }
         // 기본값(default)으로 초기화 - 서버에서 최신 color-legends.json 로드
         try {
             // 서버에서 color-legends.json 다시 로드
@@ -1479,6 +1588,9 @@ export class ColorSchemeEditor {
     }
     
     async handleRestore() {
+        if (this.activeTab === 'composite' || this.activeTab === 'measure' || this.activeTab === 'ratio') {
+            return this.handleRestoreRatio();
+        }
         // color-legends.json에 저장된 scheme 값으로 복원 (서버에서 다시 로드)
         try {
             // 서버에서 color-legends.json 다시 로드
@@ -1550,6 +1662,445 @@ export class ColorSchemeEditor {
         }
     }
 
+    // ========== Tab switching ==========
+
+    switchTab(tab) {
+        this.activeTab = tab;
+        // Clear selection when switching tabs
+        this.selectedCells.clear();
+        this.updateCellSelection();
+        // Update tab buttons
+        const tabs = this.tabBar?.querySelectorAll('.color-editor-tab');
+        tabs?.forEach(t => {
+            t.classList.toggle('active', t.dataset.tab === tab);
+        });
+        // Update content visibility
+        const panels = { fail: this.failContent, composite: this.compositeContent, measure: this.measureContent };
+        for (const [key, panel] of Object.entries(panels)) {
+            if (panel) {
+                panel.style.display = tab === key ? 'block' : 'none';
+                panel.classList.toggle('active', tab === key);
+            }
+        }
+        // Check for changes on the active tab
+        this.checkForChanges();
+    }
+
+    // ========== Ratio tab methods ==========
+
+    /**
+     * Load gradient from API for a given tab type.
+     * @param {'composite'|'measure'} tabType
+     */
+    async _loadGradientColors(tabType, schemeName) {
+        const apiPath = tabType === 'measure' ? '/api/measure-colors' : '/api/composite-colors';
+        const rows = tabType === 'measure' ? this.measureRows : this.compositeRows;
+        const originalKey = tabType === 'measure' ? 'originalMeasureData' : 'originalCompositeData';
+        try {
+            const loginId = schemeName || this.viewer?.getCurrentLoginId?.() || this.viewer?.currentUser || '';
+            const resp = await fetch(`${apiPath}?scheme=${encodeURIComponent(loginId)}`);
+            if (resp.ok) {
+                const data = await resp.json();
+                const gradData = {};
+                if (data.keys && data.colors) {
+                    data.keys.forEach((key, i) => {
+                        gradData[key] = data.colors[i] || '#000000';
+                    });
+                }
+                this[originalKey] = JSON.parse(JSON.stringify(gradData));
+                this._applyGradientToRows(tabType, gradData);
+                return;
+            }
+        } catch (e) {
+            console.warn(`⚠️ ${tabType} colors 로드 실패, fallback:`, e);
+        }
+        // Fallback
+        const legends = this.viewer?.colorLegends || {};
+        const gradData = (legends[schemeName] || legends['default'] || {}).ratio || {};
+        this[originalKey] = JSON.parse(JSON.stringify(gradData));
+        this._applyGradientToRows(tabType, gradData);
+    }
+
+    /** Backward compat alias */
+    async _loadRatioFromComposite(schemeName) {
+        await this._loadGradientColors('composite', schemeName);
+    }
+
+    /**
+     * Build gradient rows for composite or measure tab.
+     * @param {'composite'|'measure'} tabType
+     */
+    _buildGradientRows(tabType) {
+        const tbody = tabType === 'measure' ? this.measureTableBody : this.compositeTableBody;
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        const rows = [];
+
+        for (let step = 0; step <= 100; step += 10) {
+            const key = `quantile${step}`;
+            const label = `${step}%`;
+            const tr = document.createElement('tr');
+            tr.dataset.key = key;
+
+            const labelTd = document.createElement('td');
+            labelTd.className = 'color-editor-label';
+            labelTd.textContent = label;
+
+            const hexTd = document.createElement('td');
+            const hexContainer = document.createElement('div');
+            hexContainer.className = 'color-editor-hex';
+            const hexInput = document.createElement('input');
+            hexInput.type = 'text';
+            hexInput.maxLength = 7;
+            hexInput.placeholder = '#RRGGBB';
+            // Selection support
+            const hexCellId = `${tabType}-hex-${this.cellIdCounter++}`;
+            hexInput.dataset.cellId = hexCellId;
+            hexInput.dataset.cellType = 'hex';
+            hexInput.dataset.rowIndex = String(rows.length);
+            hexInput.dataset.tabType = tabType;
+            hexContainer.appendChild(hexInput);
+            hexTd.appendChild(hexContainer);
+
+            const rgbTd = document.createElement('td');
+            const rgbContainer = document.createElement('div');
+            rgbContainer.className = 'color-editor-rgb';
+            const rgbInputs = ['R', 'G', 'B'].map((ch, idx) => {
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.min = '0';
+                input.max = '255';
+                input.placeholder = ch;
+                const rgbCellId = `${tabType}-rgb-${this.cellIdCounter++}`;
+                input.dataset.cellId = rgbCellId;
+                input.dataset.cellType = 'rgb';
+                input.dataset.channelIndex = String(idx);
+                input.dataset.rowIndex = String(rows.length);
+                input.dataset.tabType = tabType;
+                rgbContainer.appendChild(input);
+                return input;
+            });
+            rgbTd.appendChild(rgbContainer);
+
+            const pickerTd = document.createElement('td');
+            pickerTd.className = 'color-editor-picker';
+            const colorPreview = document.createElement('div');
+            colorPreview.className = 'color-editor-preview';
+            colorPreview.style.cssText = 'width:48px;height:24px;border:1px solid #444;border-radius:4px;cursor:pointer;';
+            const colorInput = document.createElement('input');
+            colorInput.type = 'color';
+            colorInput.value = '#000000';
+            colorInput.style.cssText = 'position:absolute;opacity:0;width:48px;height:24px;cursor:pointer;pointer-events:auto;top:0;left:0;';
+            const pickerWrapper = document.createElement('div');
+            pickerWrapper.style.cssText = 'position:relative;display:inline-block;';
+            pickerWrapper.appendChild(colorPreview);
+            pickerWrapper.appendChild(colorInput);
+            colorPreview.addEventListener('click', (e) => { e.stopPropagation(); colorInput.click(); });
+            pickerTd.appendChild(pickerWrapper);
+
+            tr.appendChild(labelTd);
+            tr.appendChild(hexTd);
+            tr.appendChild(rgbTd);
+            tr.appendChild(pickerTd);
+            tbody.appendChild(tr);
+
+            const row = { key, hexInput, rgbInputs, colorInput, colorPreview };
+
+            hexInput.addEventListener('change', () => { this._syncGradientFromHex(tabType, row); this.checkForChanges(); this._updateGradientPreview(tabType); });
+            hexInput.addEventListener('input', () => { this._clearGradientError(tabType); this.checkForChanges(); this._updateGradientPreview(tabType); });
+            // Selection events
+            hexInput.addEventListener('mousedown', (e) => this.handleCellMouseDown(e, hexCellId, 'hex'));
+            hexInput.addEventListener('keydown', (e) => this.handleInputKeyDown(e, hexCellId, 'hex'), true);
+            rgbInputs.forEach((input, idx) => {
+                input.addEventListener('change', () => { this._syncGradientFromRgb(tabType, row); this.checkForChanges(); this._updateGradientPreview(tabType); });
+                input.addEventListener('input', () => { this._clearGradientError(tabType); this.checkForChanges(); this._updateGradientPreview(tabType); });
+                input.addEventListener('mousedown', (e) => this.handleCellMouseDown(e, input.dataset.cellId, 'rgb'));
+                input.addEventListener('keydown', (e) => this.handleInputKeyDown(e, input.dataset.cellId, 'rgb'), true);
+            });
+            colorInput.addEventListener('input', () => { this._syncGradientFromPicker(tabType, row); this.checkForChanges(); this._updateGradientPreview(tabType); });
+            colorInput.addEventListener('change', () => { this.checkForChanges(); this._updateGradientPreview(tabType); });
+
+            rows.push(row);
+        }
+        if (tabType === 'measure') {
+            this.measureRows = rows;
+        } else {
+            this.compositeRows = rows;
+            this.ratioRows = rows; // backward compat
+        }
+    }
+
+    /** Backward compat */
+    buildRatioRows() { this._buildGradientRows('composite'); }
+
+    _setGradientRowHex(row, hex) {
+        row.hexInput.value = hex;
+        row.colorInput.value = hex;
+        if (row.colorPreview) {
+            row.colorPreview.style.backgroundColor = hex;
+        }
+        const rgb = hexToRgb(hex);
+        if (rgb) {
+            row.rgbInputs[0].value = rgb.r;
+            row.rgbInputs[1].value = rgb.g;
+            row.rgbInputs[2].value = rgb.b;
+        } else {
+            row.rgbInputs.forEach(i => (i.value = ''));
+        }
+    }
+
+    _syncGradientFromHex(tabType, row) {
+        const value = normalizeHex(row.hexInput.value);
+        if (!value) {
+            this._showGradientError(tabType, 'HEX 색상은 #RRGGBB 형식이어야 합니다.');
+            return;
+        }
+        this._setGradientRowHex(row, value);
+        this._clearGradientError(tabType);
+    }
+
+    _syncGradientFromRgb(tabType, row) {
+        const hex = rgbToHex(row.rgbInputs[0].value, row.rgbInputs[1].value, row.rgbInputs[2].value);
+        if (!hex) {
+            this._showGradientError(tabType, 'RGB 값은 0~255 사이의 숫자여야 합니다.');
+            return;
+        }
+        this._setGradientRowHex(row, hex);
+        this._clearGradientError(tabType);
+    }
+
+    _syncGradientFromPicker(tabType, row) {
+        const hex = normalizeHex(row.colorInput.value);
+        if (!hex) return;
+        this._setGradientRowHex(row, hex);
+        this._clearGradientError(tabType);
+    }
+
+    _getGradientErrorEl(tabType) {
+        return tabType === 'measure' ? this.measureErrorEl : this.compositeErrorEl;
+    }
+
+    _showGradientError(tabType, msg) {
+        const el = this._getGradientErrorEl(tabType);
+        if (el) { el.textContent = msg; el.style.display = 'block'; }
+    }
+
+    _clearGradientError(tabType) {
+        const el = this._getGradientErrorEl(tabType);
+        if (el) { el.textContent = ''; el.style.display = 'none'; }
+    }
+
+    _applyGradientToRows(tabType, gradData) {
+        const defaults = {
+            "quantile0": "#0000FF", "quantile10": "#0066FF", "quantile20": "#00CCFF",
+            "quantile30": "#00FFCC", "quantile40": "#00FF00", "quantile50": "#66FF00",
+            "quantile60": "#CCFF00", "quantile70": "#FFCC00", "quantile80": "#FF6600",
+            "quantile90": "#FF3300", "quantile100": "#FF0000"
+        };
+        const rows = tabType === 'measure' ? this.measureRows : this.compositeRows;
+        const data = gradData || {};
+        rows.forEach(row => {
+            const hex = normalizeHex(data[row.key]) || normalizeHex(defaults[row.key]) || '#000000';
+            this._setGradientRowHex(row, hex);
+        });
+    }
+
+    _getCurrentGradientData(tabType) {
+        const rows = tabType === 'measure' ? this.measureRows : this.compositeRows;
+        const data = {};
+        rows.forEach(row => {
+            const hex = normalizeHex(row.hexInput.value);
+            if (hex) data[row.key] = hex;
+        });
+        return data;
+    }
+
+    // Backward compat aliases
+    setRatioRowHex(row, hex) { this._setGradientRowHex(row, hex); }
+    syncRatioFromHex(row) { this._syncGradientFromHex('composite', row); }
+    syncRatioFromRgb(row) { this._syncGradientFromRgb('composite', row); }
+    syncRatioFromPicker(row) { this._syncGradientFromPicker('composite', row); }
+    showRatioError(msg) { this._showGradientError('composite', msg); }
+    clearRatioError() { this._clearGradientError('composite'); }
+    applyRatioToRows(ratioData) { this._applyGradientToRows('composite', ratioData); }
+    getCurrentRatioData() { return this._getCurrentGradientData('composite'); }
+
+    async handleApplyRatio() {
+        await this._handleApplyGradient(this.activeTab === 'measure' ? 'measure' : 'composite');
+    }
+
+    async _handleApplyGradient(tabType) {
+        if (!this.applyBtn || this.applyBtn.disabled) return;
+
+        const gradData = this._getCurrentGradientData(tabType);
+        const schemeName = this.currentSchemeName;
+        if (!schemeName) {
+            this._showGradientError(tabType, '스킴 이름을 찾을 수 없습니다.');
+            return;
+        }
+
+        const colorsArray = [];
+        for (let step = 0; step <= 100; step += 10) {
+            const key = `quantile${step}`;
+            colorsArray.push(gradData[key] || '#000000');
+        }
+
+        this.applyBtn.disabled = true;
+        this._clearGradientError(tabType);
+
+        try {
+            const apiPath = tabType === 'measure' ? '/api/measure-colors' : '/api/composite-colors';
+            const loginId = this.viewer?.getCurrentLoginId?.() || this.viewer?.currentUser || '';
+            const response = await fetch(`${apiPath}?LoginId=${encodeURIComponent(loginId)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ colors: colorsArray }),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.detail || `저장 실패 (${response.status})`);
+            }
+
+            const result = await response.json();
+            if (result.colors) {
+                const originalKey = tabType === 'measure' ? 'originalMeasureData' : 'originalCompositeData';
+                this[originalKey] = JSON.parse(JSON.stringify(gradData));
+                this.updateApplyButtonState(false);
+
+                if (this.viewer) {
+                    this.viewer._ratioGradientCache = null;
+                }
+                this.viewer._personalizedColorCacheBuster = Date.now();
+                if (this.viewer.thumbnailManager) {
+                    this.viewer.thumbnailManager.cache.clear();
+                }
+                if (this.viewer.gridMode) {
+                    if (typeof this.viewer.refreshGridThumbnailsWithCurrentParams === 'function') {
+                        this.viewer.refreshGridThumbnailsWithCurrentParams();
+                    }
+                } else if (this.viewer.selectedImagePath) {
+                    await this.viewer.loadImage(this.viewer.selectedImagePath, false, null, true);
+                }
+
+                const label = tabType === 'measure' ? 'Measure' : 'Composite';
+                this.viewer?.showToast?.(`${label} 색상이 적용되었습니다.`, 1800);
+                this._savedRatioGradientCache = null; // 복원 방지
+                await this.close();
+            } else {
+                throw new Error('저장 실패');
+            }
+        } catch (error) {
+            console.error(`[ColorEditor] ${tabType} 저장 오류:`, error);
+            this._showGradientError(tabType, error.message || '색상 저장 중 오류가 발생했습니다.');
+            this.applyBtn.disabled = false;
+        }
+    }
+
+    async handleResetRatio() {
+        const tabType = this.activeTab === 'measure' ? 'measure' : 'composite';
+        const defaults = {};
+        for (let step = 0; step <= 100; step += 10) {
+            const gb = Math.round(255 * (1 - step / 100));
+            const hex = gb.toString(16).padStart(2, '0').toUpperCase();
+            defaults[`quantile${step}`] = `#FF${hex}${hex}`;
+        }
+        this._applyGradientToRows(tabType, defaults);
+        this.updateApplyButtonState(true);
+        this._clearGradientError(tabType);
+    }
+
+    async handleRestoreRatio() {
+        const tabType = this.activeTab === 'measure' ? 'measure' : 'composite';
+        try {
+            await this._loadGradientColors(tabType, this.currentSchemeName);
+            this.updateApplyButtonState(false);
+            this._clearGradientError(tabType);
+        } catch (error) {
+            this._showGradientError(tabType, '저장된 스킴을 불러오는 중 오류가 발생했습니다.');
+        }
+    }
+
+    /**
+     * Gradient (composite/measure) 실시간 미리보기.
+     * measure + 단일 이미지 모드에서 overlay가 활성화되어 있으면 직접 갱신.
+     */
+    _updateGradientPreview(tabType) {
+        if (!this.viewer) return;
+
+        if (this._gradientPreviewTimeout) {
+            clearTimeout(this._gradientPreviewTimeout);
+        }
+
+        this._gradientPreviewTimeout = setTimeout(() => {
+            try {
+                const gradData = this._getCurrentGradientData(tabType);
+                const colorsArray = [];
+                for (let step = 0; step <= 100; step += 10) {
+                    colorsArray.push(gradData[`quantile${step}`] || '#000000');
+                }
+
+                if (tabType === 'measure') {
+                    // 단일 이미지: 클라이언트 overlay 직접 갱신
+                    this.viewer._ratioGradientCache = colorsArray;
+                    if (!this.viewer.gridMode &&
+                        (this.viewer.overlayMode === 'f' || this.viewer.overlayMode === 'q') &&
+                        this.viewer.chipAnnotator) {
+                        this.viewer.chipAnnotator.setOverlayMode(this.viewer.overlayMode, {
+                            gradientStops: colorsArray,
+                            itemKey: this.viewer._ratioActiveItemKey,
+                        });
+                    }
+                }
+                // composite 미리보기: 서버 recolor가 필요하므로 생략 (적용 후 확인)
+            } catch (error) {
+                console.warn(`ColorEditor: ${tabType} preview failed`, error);
+            }
+        }, 500);
+    }
+
+    /**
+     * Gradient 탭에서 다른 사용자 scheme 적용.
+     * Fail 탭의 handleSchemeLoad와 유사하게 동작.
+     */
+    async _handleGradientSchemeLoad(name) {
+        if (!name) return;
+        const tabType = this.activeTab;
+        if (tabType !== 'composite' && tabType !== 'measure') return;
+
+        try {
+            const apiPath = tabType === 'measure' ? '/api/measure-colors' : '/api/composite-colors';
+            const resp = await fetch(`${apiPath}?LoginId=${encodeURIComponent(name)}`);
+            if (!resp.ok) throw new Error(`API ${resp.status}`);
+            const data = await resp.json();
+            const gradData = {};
+            if (data.keys && data.colors) {
+                data.keys.forEach((key, i) => {
+                    gradData[key] = data.colors[i] || '#000000';
+                });
+            }
+            this._applyGradientToRows(tabType, gradData);
+            this.updateApplyButtonState(true);
+            this._clearGradientError(tabType);
+            this._updateGradientPreview(tabType);
+        } catch (e) {
+            this._showGradientError(tabType, '해당 사용자의 색상을 불러올 수 없습니다.');
+        }
+    }
+
+    // ─── Helpers for active tab rows/tbody ───
+    _getActiveRows() {
+        if (this.activeTab === 'measure') return this.measureRows;
+        if (this.activeTab === 'composite') return this.compositeRows;
+        return this.rows; // fail tab
+    }
+
+    _getActiveTableBody() {
+        if (this.activeTab === 'measure') return this.measureTableBody;
+        if (this.activeTab === 'composite') return this.compositeTableBody;
+        return this.tableBody; // fail tab
+    }
+
     // 셀 선택 관련 메서드들
     handleCellMouseDown(e, cellId, cellType) {
         if (!e) return;
@@ -1565,33 +2116,28 @@ export class ColorSchemeEditor {
         const channelIndex = cellType === 'rgb' ? parseInt(e.target.dataset.channelIndex || '0') : null;
         
         if (isShift && this.lastSelectedCell) {
-            // Shift 키: 마지막 선택된 셀부터 현재 셀까지 범위 선택
             const startRowIndex = this.lastSelectedCell.rowIndex;
             const endRowIndex = rowIndex;
             const startCellType = this.lastSelectedCell.cellType;
             const startChannelIndex = this.lastSelectedCell.channelIndex;
-            
-            // 같은 타입의 셀만 선택 (hex끼리, rgb끼리)
+
             if (startCellType === cellType) {
                 const minRow = Math.min(startRowIndex, endRowIndex);
                 const maxRow = Math.max(startRowIndex, endRowIndex);
-                
-                // 범위의 모든 셀 선택
+                const activeRows = this._getActiveRows();
+
                 this.selectedCells.clear();
                 for (let i = minRow; i <= maxRow; i++) {
-                    if (i >= 0 && i < this.rows.length) {
+                    if (i >= 0 && i < activeRows.length) {
                         if (cellType === 'hex') {
-                            const hexInput = this.rows[i].hexInput;
+                            const hexInput = activeRows[i].hexInput;
                             if (hexInput && hexInput.dataset.cellId) {
                                 this.selectedCells.add(hexInput.dataset.cellId);
                             }
                         } else if (cellType === 'rgb') {
-                            // RGB: 시작 column과 끝 column 사이의 모든 column 선택
-                            // 예: R(0)에서 B(2)까지 선택하면 R, G, B 모두 선택
-                            // 예: R(0)에서 R(0)까지 선택하면 R만 선택
                             const minChannel = Math.min(startChannelIndex, channelIndex);
                             const maxChannel = Math.max(startChannelIndex, channelIndex);
-                            const rgbInputs = this.rows[i].rgbInputs;
+                            const rgbInputs = activeRows[i].rgbInputs;
                             if (rgbInputs) {
                                 for (let ch = minChannel; ch <= maxChannel; ch++) {
                                     if (rgbInputs[ch] && rgbInputs[ch].dataset.cellId) {
@@ -1654,22 +2200,19 @@ export class ColorSchemeEditor {
         const minRow = Math.min(startRowIndex, endRowIndex);
         const maxRow = Math.max(startRowIndex, endRowIndex);
         
-        // 드래그 범위의 모든 셀 선택
+        const activeRows = this._getActiveRows();
         this.selectedCells.clear();
         for (let i = minRow; i <= maxRow; i++) {
-            if (i >= 0 && i < this.rows.length) {
+            if (i >= 0 && i < activeRows.length) {
                 if (startCellType === 'hex') {
-                    const hexInput = this.rows[i].hexInput;
+                    const hexInput = activeRows[i].hexInput;
                     if (hexInput && hexInput.dataset.cellId) {
                         this.selectedCells.add(hexInput.dataset.cellId);
                     }
                 } else if (startCellType === 'rgb') {
-                    // RGB: 시작 column과 끝 column 사이의 모든 column 선택
-                    // 예: R(0)에서 B(2)까지 선택하면 R, G, B 모두 선택
-                    // 예: R(0)에서 R(0)까지 선택하면 R만 선택
                     const minChannel = Math.min(startChannelIndex, endChannelIndex);
                     const maxChannel = Math.max(startChannelIndex, endChannelIndex);
-                    const rgbInputs = this.rows[i].rgbInputs;
+                    const rgbInputs = activeRows[i].rgbInputs;
                     if (rgbInputs) {
                         for (let ch = minChannel; ch <= maxChannel; ch++) {
                             if (rgbInputs[ch] && rgbInputs[ch].dataset.cellId) {
@@ -1788,20 +2331,10 @@ export class ColorSchemeEditor {
             if (this.selectedCells.size > 0) {
                 try {
                     const text = await navigator.clipboard.readText();
-                    this.pasteToSelectedCells(text);
+                    if (text) this.pasteToSelectedCells(text);
+                    else this.viewer?.showToast?.('클립보드가 비어 있습니다.', 1500);
                 } catch (err) {
-                    // Fallback
-                    const textarea = document.createElement('textarea');
-                    document.body.appendChild(textarea);
-                    textarea.focus();
-                    document.execCommand('paste');
-                    const text = textarea.value;
-                    document.body.removeChild(textarea);
-                    if (text) {
-                        this.pasteToSelectedCells(text);
-                    } else {
-                        this.viewer?.showToast?.('클립보드에서 텍스트를 읽을 수 없습니다.', 1500);
-                    }
+                    this.viewer?.showToast?.('클립보드 접근이 차단되었습니다. Ctrl+V를 사용하세요.', 2000);
                 }
             } else {
                 this.viewer?.showToast?.('붙여넣을 셀이 선택되지 않았습니다.', 1500);
@@ -1838,8 +2371,8 @@ export class ColorSchemeEditor {
         }
         if (cellId) {
             this.selectedCells.add(cellId);
-            // 마지막 선택된 셀 업데이트
-            const input = this.tableBody?.querySelector(`input[data-cell-id="${cellId}"]`);
+            const tbody = this._getActiveTableBody();
+            const input = tbody?.querySelector(`input[data-cell-id="${cellId}"]`);
             if (input) {
                 this.lastSelectedCell = {
                     cellId,
@@ -1852,15 +2385,15 @@ export class ColorSchemeEditor {
     }
 
     updateCellSelection() {
-        // 모든 셀에서 선택 클래스 제거
-        const allInputs = this.tableBody?.querySelectorAll('input[data-cell-id]') || [];
-        allInputs.forEach(input => {
-            input.classList.remove('cell-selected');
-        });
-        
-        // 선택된 셀에 클래스 추가
+        // Clear all tabs
+        for (const tbody of [this.tableBody, this.compositeTableBody, this.measureTableBody]) {
+            const allInputs = tbody?.querySelectorAll('input[data-cell-id]') || [];
+            allInputs.forEach(input => input.classList.remove('cell-selected'));
+        }
+        // Apply selection on active tab
+        const tbody = this._getActiveTableBody();
         this.selectedCells.forEach(cellId => {
-            const input = this.tableBody?.querySelector(`input[data-cell-id="${cellId}"]`);
+            const input = tbody?.querySelector(`input[data-cell-id="${cellId}"]`);
             if (input) {
                 input.classList.add('cell-selected');
             }
@@ -1870,53 +2403,19 @@ export class ColorSchemeEditor {
     handleInputKeyDown(e, cellId, cellType) {
         // 입력 필드에서 Ctrl+C: 선택된 셀 복사
         if ((e.ctrlKey || e.metaKey) && e.key === 'c' && this.selectedCells.size > 0) {
-            // 입력 필드의 텍스트 선택 취소
-            if (e.target.setSelectionRange) {
-                e.target.setSelectionRange(0, 0);
-            }
-            // 선택된 셀의 값 복사
+            try { e.target.setSelectionRange?.(0, 0); } catch (_) { /* ignore */ }
             this.copySelectedCells();
             e.preventDefault();
             e.stopPropagation();
             e.stopImmediatePropagation();
             return false;
         }
-        
-        // 입력 필드에서 Ctrl+V: 선택된 셀에 붙여넣기
-        if ((e.ctrlKey || e.metaKey) && e.key === 'v' && this.selectedCells.size > 0) {
-            setTimeout(() => {
-                navigator.clipboard.readText().then(text => {
-                    this.pasteToSelectedCells(text);
-                }).catch(() => {
-                    const textarea = document.createElement('textarea');
-                    document.body.appendChild(textarea);
-                    textarea.focus();
-                    document.execCommand('paste');
-                    const text = textarea.value;
-                    document.body.removeChild(textarea);
-                    if (text) {
-                        this.pasteToSelectedCells(text);
-                    }
-                });
-            }, 0);
-            e.preventDefault();
-            e.stopPropagation();
-            e.stopImmediatePropagation();
-            return false;
-        }
+
+        // Ctrl+V: keydown을 막지 않아야 native paste 이벤트가 발생함
+        // _handlePasteEvent에서 처리
     }
 
     handleCellKeyDown(e) {
-        // 모달 내부에서 Ctrl+C/V 처리 (입력 필드가 아닌 경우)
-        const activeElement = document.activeElement;
-        const isInputField = activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA');
-        const isCellInput = isInputField && activeElement.dataset?.cellId;
-        
-        // 입력 필드가 아닐 때만 처리 (입력 필드는 handleInputKeyDown에서 처리)
-        if (isCellInput) {
-            return;
-        }
-        
         // Ctrl+C: 복사 (선택된 셀이 있을 때만)
         if ((e.ctrlKey || e.metaKey) && e.key === 'c' && this.selectedCells.size > 0) {
             this.copySelectedCells();
@@ -1924,28 +2423,7 @@ export class ColorSchemeEditor {
             e.stopPropagation();
             return;
         }
-        
-        // Ctrl+V: 붙여넣기 (선택된 셀이 있을 때만)
-        if ((e.ctrlKey || e.metaKey) && e.key === 'v' && this.selectedCells.size > 0) {
-            setTimeout(() => {
-                navigator.clipboard.readText().then(text => {
-                    this.pasteToSelectedCells(text);
-                }).catch(() => {
-                    const textarea = document.createElement('textarea');
-                    document.body.appendChild(textarea);
-                    textarea.focus();
-                    document.execCommand('paste');
-                    const text = textarea.value;
-                    document.body.removeChild(textarea);
-                    if (text) {
-                        this.pasteToSelectedCells(text);
-                    }
-                });
-            }, 0);
-            e.preventDefault();
-            e.stopPropagation();
-            return;
-        }
+        // Ctrl+V: native paste 이벤트가 _handlePasteEvent에서 처리
     }
 
     copySelectedCells() {
@@ -1953,29 +2431,30 @@ export class ColorSchemeEditor {
             console.log('[ColorEditor] 복사할 셀이 선택되지 않았습니다.');
             return;
         }
-        
+        const tbody = this._getActiveTableBody();
+        const activeRows = this._getActiveRows();
+
         const sortedCells = Array.from(this.selectedCells).sort((a, b) => {
-            const inputA = this.tableBody?.querySelector(`input[data-cell-id="${a}"]`);
-            const inputB = this.tableBody?.querySelector(`input[data-cell-id="${b}"]`);
+            const inputA = tbody?.querySelector(`input[data-cell-id="${a}"]`);
+            const inputB = tbody?.querySelector(`input[data-cell-id="${b}"]`);
             if (!inputA || !inputB) return 0;
             const rowA = parseInt(inputA.dataset.rowIndex || '0');
             const rowB = parseInt(inputB.dataset.rowIndex || '0');
             if (rowA !== rowB) return rowA - rowB;
-            // 같은 행이면 hex가 먼저
             if (inputA.dataset.cellType === 'hex') return -1;
             if (inputB.dataset.cellType === 'hex') return 1;
             return 0;
         });
-        
+
         const values = sortedCells.map(cellId => {
-            const input = this.tableBody?.querySelector(`input[data-cell-id="${cellId}"]`);
+            const input = tbody?.querySelector(`input[data-cell-id="${cellId}"]`);
             if (!input) return '';
-            
+
             if (input.dataset.cellType === 'hex') {
                 return input.value || '';
             } else if (input.dataset.cellType === 'rgb') {
                 const rowIndex = parseInt(input.dataset.rowIndex || '0');
-                const row = this.rows[rowIndex];
+                const row = activeRows[rowIndex];
                 if (row && row.rgbInputs) {
                     const r = row.rgbInputs[0]?.value || '';
                     const g = row.rgbInputs[1]?.value || '';
@@ -2014,15 +2493,33 @@ export class ColorSchemeEditor {
         }
     }
 
+    /**
+     * Native paste event handler.
+     * clipboard.readText()는 권한이 필요하지만 paste 이벤트의 clipboardData는 권한 없이 사용 가능.
+     */
+    _handlePasteEvent(e) {
+        if (this.selectedCells.size === 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const text = (e.clipboardData || window.clipboardData)?.getData('text');
+        if (text) {
+            this.pasteToSelectedCells(text);
+        }
+    }
+
     pasteToSelectedCells(pastedText) {
         if (!pastedText || !pastedText.trim()) return;
-        
+
         const lines = pastedText.split(/\r?\n/).map(line => line.trim()).filter(line => line);
         if (lines.length === 0) return;
 
+        const tbody = this._getActiveTableBody();
+        const activeRows = this._getActiveRows();
+        const isGradientTab = this.activeTab === 'composite' || this.activeTab === 'measure';
+
         const sortedCells = Array.from(this.selectedCells).sort((a, b) => {
-            const inputA = this.tableBody?.querySelector(`input[data-cell-id="${a}"]`);
-            const inputB = this.tableBody?.querySelector(`input[data-cell-id="${b}"]`);
+            const inputA = tbody?.querySelector(`input[data-cell-id="${a}"]`);
+            const inputB = tbody?.querySelector(`input[data-cell-id="${b}"]`);
             if (!inputA || !inputB) return 0;
             const rowA = parseInt(inputA.dataset.rowIndex || '0');
             const rowB = parseInt(inputB.dataset.rowIndex || '0');
@@ -2031,13 +2528,13 @@ export class ColorSchemeEditor {
             if (inputB.dataset.cellType === 'hex') return 1;
             return 0;
         });
-        const anchorInput = this.tableBody?.querySelector(`input[data-cell-id="${sortedCells[0]}"]`);
+        const anchorInput = tbody?.querySelector(`input[data-cell-id="${sortedCells[0]}"]`);
         if (!anchorInput) return;
         const anchorType = anchorInput.dataset.cellType;
         const anchorRowIndex = parseInt(anchorInput.dataset.rowIndex || '0');
 
         // 선택 타입이 다른 셀은 무시
-        const filteredCells = sortedCells.map(cellId => this.tableBody?.querySelector(`input[data-cell-id="${cellId}"]`))
+        const filteredCells = sortedCells.map(cellId => tbody?.querySelector(`input[data-cell-id="${cellId}"]`))
             .filter(input => input && input.dataset.cellType === anchorType);
 
         const getTargetInput = (offset) => {
@@ -2045,7 +2542,7 @@ export class ColorSchemeEditor {
                 return filteredCells[offset];
             }
             const targetRowIndex = anchorRowIndex + offset;
-            const row = this.rows[targetRowIndex];
+            const row = activeRows[targetRowIndex];
             if (!row) return null;
             if (anchorType === 'hex') return row.hexInput;
             if (anchorType === 'rgb') return row.rgbInputs?.[0];
@@ -2058,13 +2555,17 @@ export class ColorSchemeEditor {
             if (!input) return;
 
             const rowIndex = parseInt(input.dataset.rowIndex || '0');
-            const row = this.rows[rowIndex];
+            const row = activeRows[rowIndex];
             if (!row) return;
-            
+
             if (input.dataset.cellType === 'hex') {
                 const hex = normalizeHex(line);
                 if (hex) {
-                    this.setRowHex(row, hex);
+                    if (isGradientTab) {
+                        this._setGradientRowHex(row, hex);
+                    } else {
+                        this.setRowHex(row, hex);
+                    }
                     successCount++;
                 }
             } else if (input.dataset.cellType === 'rgb') {
@@ -2079,13 +2580,17 @@ export class ColorSchemeEditor {
                         row.rgbInputs[0].value = Math.round(r);
                         row.rgbInputs[1].value = Math.round(g);
                         row.rgbInputs[2].value = Math.round(b);
-                        this.syncFromRgb(row);
+                        if (isGradientTab) {
+                            this._syncGradientFromRgb(this.activeTab, row);
+                        } else {
+                            this.syncFromRgb(row);
+                        }
                         successCount++;
                     }
                 }
             }
         });
-        
+
         if (successCount > 0) {
             this.checkForChanges();
             this.updatePreviewRealtime();

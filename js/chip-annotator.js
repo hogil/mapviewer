@@ -28,6 +28,12 @@ export class ChipAnnotator {
         this.partId = null;
         this.device = null;
         this.pgm = null;
+        this.tm = null;
+        this.lt = null;
+        this.netd = null;
+        this.gd = null;
+        this.yield = null;
+        this.sys = null;
 
         // Annotation data
         this.markedChips = []; // {x_abs, y_abs, class, label, ...}
@@ -36,6 +42,15 @@ export class ChipAnnotator {
         this.selectedChipsOrder = []; // 🔥 선택 순서 추적 (항상 맨 밑에 추가)
         this.legendFilterClasses = null;
         this.bottomFilterSet = new Set(); // 🔥 Bottom Filter (Chip b-value based mask)
+
+        // Overlay mode: null = normal (white mask), 'bin' = bin color fill+text, 'f'/'q' = ratio gradient
+        this.overlayMode = null;
+        this.overlayItemKey = null;        // selected f/q sub-item key (e.g., "2342")
+        this.binOverlayColors = new Map(); // normalized b-value string -> hex color
+        this.ratioOverlayColors = null;    // Map<chipIndex, rgbaColor> or null
+        this.gradientStops = null;         // Array of 11 hex strings
+        this.gradientQuantiles = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+
         this.classColors = new Map();
         this.classColorPalette = [
             [239, 83, 80],
@@ -83,6 +98,12 @@ export class ChipAnnotator {
         this.coordPartId = document.getElementById('coord-partid');
         this.coordDevice = document.getElementById('coord-device');
         this.coordPgm = document.getElementById('coord-pgm');
+        this.coordTm = document.getElementById('coord-tm');
+        this.coordLt = document.getElementById('coord-lt');
+        this.coordNetd = document.getElementById('coord-netd');
+        this.coordGd = document.getElementById('coord-gd');
+        this.coordYield = document.getElementById('coord-yield');
+        this.coordSys = document.getElementById('coord-sys');
         this.coordBin = document.getElementById('coord-bin');
 
         // Current image path
@@ -122,6 +143,12 @@ export class ChipAnnotator {
             this.partId = null;
             this.device = null;
             this.pgm = null;
+            this.tm = null;
+            this.lt = null;
+            this.netd = null;
+            this.gd = null;
+            this.yield = null;
+            this.sys = null;
             const response = await fetch(`/api/chip-positions?path=${encodeURIComponent(imagePath)}`);
 
             if (!response.ok) {
@@ -140,11 +167,19 @@ export class ChipAnnotator {
             this.partId = this._extractMetadataValue(['partid', 'part_id', 'partId', 'PartID']);
             this.device = this._extractMetadataValue(['device', 'devcie', 'Device']);
             this.pgm = this._extractMetadataValue(['pgm', 'PGM', 'pgm_name']);
+            this.tm = this._extractMetadataValue(['tm', 'TM', 'test_mode']);
+            this.lt = this._extractMetadataValue(['lt', 'LT', 'lot_type']);
+            this.netd = this._extractMetadataValue(['netd', 'NETD', 'net_die', 'netdie']);
+            this.gd = this._extractMetadataValue(['gd', 'GD', 'gross_die', 'grossdie']);
+            this.yield = this._extractMetadataValue(['yield', 'YIELD', 'yld']);
+            this.sys = this._extractMetadataValue(['sys', 'SYS', 'system']);
 
             console.log(`✅ Loaded ${this.chips.length} chip positions`, {
                 partId: this.partId,
                 device: this.device,
-                pgm: this.pgm
+                pgm: this.pgm,
+                tm: this.tm, lt: this.lt, netd: this.netd,
+                gd: this.gd, yield: this.yield, sys: this.sys
             });
 
             this._updateMetadataDisplay();
@@ -153,6 +188,7 @@ export class ChipAnnotator {
             await this.loadAnnotations(imagePath);
 
             // 🎨 positions 로드 후 즉시 렌더링 (hover, grid 등 표시)
+            // 오버레이 모드 재적용은 main.js의 _reapplyOverlayAfterPositionsLoad()에서 처리
             this.render();
 
             return true;
@@ -165,6 +201,12 @@ export class ChipAnnotator {
             this.partId = null;
             this.device = null;
             this.pgm = null;
+            this.tm = null;
+            this.lt = null;
+            this.netd = null;
+            this.gd = null;
+            this.yield = null;
+            this.sys = null;
             this._updateMetadataDisplay();
             return false;
         }
@@ -271,6 +313,192 @@ export class ChipAnnotator {
             this.bottomFilterSet.clear();
         }
         this.render();
+    }
+
+    /**
+     * Set overlay mode for chip rendering.
+     * @param {'bin'|'f'|'q'|null} mode
+     * @param {Object} options - { binColors?: Map, gradientStops?: string[] }
+     */
+    setOverlayMode(mode, options = {}) {
+        this.overlayMode = mode;
+
+        if (mode === 'bin') {
+            this.binOverlayColors = options.binColors || new Map();
+            this.ratioOverlayColors = null;
+            this.overlayItemKey = null;
+        } else if (mode === 'f' || mode === 'q') {
+            this.binOverlayColors.clear();
+            this.gradientStops = options.gradientStops || null;
+            this.overlayItemKey = options.itemKey || null;
+            this._computeRatioOverlay(mode, this.overlayItemKey);
+        } else {
+            this.binOverlayColors.clear();
+            this.ratioOverlayColors = null;
+            this.gradientStops = null;
+            this.overlayItemKey = null;
+        }
+        this.render();
+    }
+
+    /**
+     * Compute percentile-based overlay colors for each chip's f or q value.
+     */
+    /**
+     * Compute percentile-based overlay colors for each chip's f or q value.
+     * f/q are dicts: { "testItemId": "numericStringValue", ... }
+     * When itemKey is provided, use chip[field][itemKey] as the numeric value.
+     */
+    _computeRatioOverlay(field, itemKey) {
+        this.ratioOverlayColors = new Map();
+        if (!this.chips || !this.gradientStops) return;
+
+        // Collect all numeric values from dict[itemKey]
+        const values = [];
+        const chipIndices = [];
+        this.chips.forEach((chip, idx) => {
+            if (!chip) return;
+            const dict = chip[field];
+            if (!dict || typeof dict !== 'object') return;
+            const raw = itemKey ? dict[itemKey] : null;
+            if (raw == null) return;
+            const val = Number(raw);
+            if (!isFinite(val)) return;
+            values.push(val);
+            chipIndices.push(idx);
+        });
+
+        if (values.length === 0) return;
+
+        // Sort for percentile ranking
+        const sorted = [...values].sort((a, b) => a - b);
+        const n = sorted.length;
+
+        for (let i = 0; i < values.length; i++) {
+            // Percentile rank (0~100)
+            const val = values[i];
+            let rank = 0;
+            // Binary search for position in sorted array
+            let lo = 0, hi = n - 1;
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                if (sorted[mid] < val) lo = mid + 1;
+                else hi = mid - 1;
+            }
+            // lo = first index where sorted[lo] >= val
+            // Count values strictly less than val
+            let below = lo;
+            rank = n > 1 ? (below / (n - 1)) * 100 : 50;
+            rank = Math.max(0, Math.min(100, rank));
+
+            const color = this._interpolateGradientColor(rank);
+            this.ratioOverlayColors.set(chipIndices[i], color);
+        }
+    }
+
+    /**
+     * Interpolate gradient color for a percentile value (0-100).
+     * Uses 11-point gradient stops (quantile 0,10,...,100).
+     */
+    _interpolateGradientColor(percentile) {
+        const stops = this.gradientStops;
+        if (!stops || stops.length !== 11) return 'rgba(128,128,128,0.7)';
+
+        const p = Math.max(0, Math.min(100, percentile));
+        // Map to index in 0-10 range
+        const idx = p / 10;
+        const lo = Math.floor(idx);
+        const hi = Math.min(lo + 1, 10);
+        const t = idx - lo;
+
+        const c1 = this._hexToRgb(stops[lo]);
+        const c2 = this._hexToRgb(stops[hi]);
+        if (!c1 || !c2) return 'rgba(128,128,128,0.7)';
+
+        const r = Math.round(c1.r + (c2.r - c1.r) * t);
+        const g = Math.round(c1.g + (c2.g - c1.g) * t);
+        const b = Math.round(c1.b + (c2.b - c1.b) * t);
+        return `rgb(${r},${g},${b})`;
+    }
+
+    _hexToRgb(hex) {
+        if (!hex) return null;
+        const h = hex.replace('#', '');
+        if (h.length !== 6) return null;
+        return {
+            r: parseInt(h.slice(0, 2), 16),
+            g: parseInt(h.slice(2, 4), 16),
+            b: parseInt(h.slice(4, 6), 16),
+        };
+    }
+
+    /**
+     * Draw chip rect filled with color AND centered text.
+     */
+    _drawChipRectWithText(chip, fillColor, text) {
+        const transform = this.viewer.transform;
+        const rect = chip.rect;
+        const Y_OFFSET = -55;
+
+        this.ctx.save();
+        this.ctx.resetTransform();
+
+        const x = rect.x0 * transform.scale + transform.dx;
+        const y = rect.y0 * transform.scale + transform.dy + Y_OFFSET;
+        const w = (rect.x1 - rect.x0) * transform.scale;
+        const h = (rect.y1 - rect.y0) * transform.scale;
+
+        // Fill interior
+        this.ctx.fillStyle = fillColor;
+        this.ctx.fillRect(x, y, w, h);
+
+        // Draw text only when chip is large enough to read
+        if (w > 18 && h > 14 && text) {
+            const fontSize = Math.max(8, Math.min(w, h) * 0.35);
+            this.ctx.font = `bold ${fontSize}px sans-serif`;
+            this.ctx.textAlign = 'center';
+            this.ctx.textBaseline = 'middle';
+
+            // Contrast color based on fill luminance
+            const rgb = this._hexToRgb(fillColor) || this._parseRgba(fillColor);
+            if (rgb) {
+                const lum = 0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
+                this.ctx.fillStyle = lum > 128 ? '#000000' : '#FFFFFF';
+            } else {
+                this.ctx.fillStyle = '#FFFFFF';
+            }
+            this.ctx.fillText(text, x + w / 2, y + h / 2);
+        }
+
+        this.ctx.restore();
+    }
+
+    /**
+     * Parse rgba(...) string to {r, g, b}.
+     */
+    _parseRgba(str) {
+        if (!str) return null;
+        const m = str.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+        if (!m) return null;
+        return { r: parseInt(m[1]), g: parseInt(m[2]), b: parseInt(m[3]) };
+    }
+
+    /**
+     * Get available sub-item keys for f or q field from loaded chips.
+     * @param {'f'|'q'} field
+     * @returns {string[]} sorted item keys
+     */
+    getAvailableItemKeys(field) {
+        const keySet = new Set();
+        if (!this.chips) return [];
+        for (const chip of this.chips) {
+            if (!chip) continue;
+            const dict = chip[field];
+            if (dict && typeof dict === 'object') {
+                for (const k of Object.keys(dict)) keySet.add(k);
+            }
+        }
+        return Array.from(keySet).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     }
 
     _refreshClassColors() {
@@ -1069,10 +1297,30 @@ export class ChipAnnotator {
         
         ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
-        // 🔥 Bottom Filter Mask: 허용되지 않은 칩 영역만 흰색으로 덮기 (배경은 그대로 유지)
-        if (this.bottomFilterSet.size > 0) {
+        // === Overlay rendering (mutually exclusive modes) ===
+        if (this.overlayMode === 'bin') {
+            // BIN MAP: 모든 chip을 BIN 색상으로 채우고 텍스트 표시
+            this.chips.forEach(chip => {
+                if (!chip) return;
+                const norm = this._normalizeBottomValue(chip.b);
+                const hexColor = this.binOverlayColors.get(norm);
+                if (!hexColor) return;
+                this._drawChipRectWithText(chip, hexColor, norm === 'Normal' ? 'N' : norm === 'Invalid' ? 'INV' : norm);
+            });
+        } else if ((this.overlayMode === 'f' || this.overlayMode === 'q') && this.ratioOverlayColors) {
+            // Ratio overlay: fill chips with percentile gradient color
+            this.ratioOverlayColors.forEach((color, chipIdx) => {
+                const chip = this.chips[chipIdx];
+                if (!chip) return;
+                const dict = chip[this.overlayMode];
+                const raw = dict && this.overlayItemKey ? dict[this.overlayItemKey] : null;
+                const text = raw != null ? String(raw) : '';
+                this._drawChipRectWithText(chip, color, text);
+            });
+        } else if (this.bottomFilterSet.size > 0) {
+            // White mask filter: 허용되지 않은 칩 영역만 흰색으로 덮기 (Legend 클릭 필터)
             const transform = this.viewer.transform;
-            const Y_OFFSET = -55; // _drawChipRect와 동일한 오프셋
+            const Y_OFFSET = -55;
             ctx.save();
             ctx.resetTransform();
             ctx.fillStyle = '#ffffff';
@@ -1354,6 +1602,24 @@ export class ChipAnnotator {
         }
         if (this.coordPgm) {
             this.coordPgm.textContent = this.pgm || '-';
+        }
+        if (this.coordTm) {
+            this.coordTm.textContent = this.tm || '-';
+        }
+        if (this.coordLt) {
+            this.coordLt.textContent = this.lt || '-';
+        }
+        if (this.coordNetd) {
+            this.coordNetd.textContent = this.netd || '-';
+        }
+        if (this.coordGd) {
+            this.coordGd.textContent = this.gd || '-';
+        }
+        if (this.coordYield) {
+            this.coordYield.textContent = this.yield || '-';
+        }
+        if (this.coordSys) {
+            this.coordSys.textContent = this.sys || '-';
         }
     }
 
@@ -2080,6 +2346,12 @@ export class ChipAnnotator {
         this.partId = null;
         this.device = null;
         this.pgm = null;
+        this.tm = null;
+        this.lt = null;
+        this.netd = null;
+        this.gd = null;
+        this.yield = null;
+        this.sys = null;
         this.selectedChips.clear();
         this.selectedChipsOrder = []; // 🔥 선택 순서도 초기화
         if (this.viewer && typeof this.viewer.handleChipSelectionCleared === 'function') {
@@ -2119,6 +2391,24 @@ export class ChipAnnotator {
         }
         if (this.coordPgm) {
             this.coordPgm.textContent = '-';
+        }
+        if (this.coordTm) {
+            this.coordTm.textContent = '-';
+        }
+        if (this.coordLt) {
+            this.coordLt.textContent = '-';
+        }
+        if (this.coordNetd) {
+            this.coordNetd.textContent = '-';
+        }
+        if (this.coordGd) {
+            this.coordGd.textContent = '-';
+        }
+        if (this.coordYield) {
+            this.coordYield.textContent = '-';
+        }
+        if (this.coordSys) {
+            this.coordSys.textContent = '-';
         }
         if (this.coordBin) {
             this.coordBin.textContent = '-';

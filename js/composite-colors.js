@@ -163,7 +163,7 @@ export class CompositeColorModal {
             this.show();
         } catch (error) {
             console.error('[CompositeColorModal] loadConfig failed:', error);
-            this.showError('Composite 색상 정보를 불러오지 못했습니다.');
+            this.showError('Ratio 색상 정보를 불러오지 못했습니다.');
         }
     }
 
@@ -651,6 +651,8 @@ export class CompositeColorModal {
                 this.defaultColors = payload.defaultColors || this.defaultColors;
                 this.originalColors = [...this.colors];
                 this.updateInputs(true);
+                // Invalidate ratio gradient cache so F/Q overlay uses updated colors
+                if (this.viewer) this.viewer._ratioGradientCache = null;
             }
 
             this.previewApplied = false;
@@ -668,7 +670,7 @@ export class CompositeColorModal {
                     overlayMessage: '색상 변경 중입니다...',
                 });
             } else {
-                this.viewer?.showToast?.('Composite 색상을 저장했습니다.', 2000);
+                this.viewer?.showToast?.('Ratio 색상을 저장했습니다.', 2000);
             }
         } catch (error) {
             console.error('[CompositeColorModal] handleApply failed:', error);

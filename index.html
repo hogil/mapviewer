@@ -29,6 +29,11 @@
             box-sizing: border-box;
             scrollbar-color: #333 #181818;
             scrollbar-width: auto;
+            caret-color: transparent;
+        }
+        input[type="text"], input[type="search"], input[type="number"],
+        input:not([type]), textarea, [contenteditable="true"] {
+            caret-color: auto;
         }
         
         html, body {
@@ -282,6 +287,83 @@
             background: #555;
         }
 
+        /* 🔥 Multi-select checkbox dropdown (LT/TM 필터) */
+        .multi-select-dropdown {
+            display: inline-block;
+            position: relative;
+        }
+        .multi-select-btn {
+            background: #333;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 3px;
+            padding: 4px 8px;
+            font-size: 12px;
+            cursor: pointer;
+            min-width: 36px;
+            text-align: center;
+            white-space: nowrap;
+            outline: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        .multi-select-btn:hover {
+            background: #444;
+        }
+        .multi-select-btn.active {
+            border-color: #7ab;
+            background: #2a3a4a;
+        }
+        .multi-select-panel {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: #2a2a2a;
+            border: 1px solid #555;
+            border-radius: 0 0 4px 4px;
+            min-width: 120px;
+            max-height: 300px;
+            overflow-y: auto;
+            z-index: 1000;
+            padding: 4px 0;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        }
+        .multi-select-panel label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 10px;
+            font-size: 12px;
+            color: #ddd;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .multi-select-panel label:hover {
+            background: #3a3a3a;
+        }
+        .multi-select-panel label.multi-select-separator {
+            color: #777;
+            font-size: 10px;
+            cursor: default;
+            padding: 4px 10px 2px;
+        }
+        .multi-select-panel label.multi-select-separator:hover {
+            background: transparent;
+        }
+        .multi-select-panel input[type="checkbox"] {
+            accent-color: #7ab;
+            margin: 0;
+        }
+        .multi-select-dropdown *:focus {
+            outline: none;
+        }
+        /* 그리드 컬럼 입력 스피너 숨기기 */
+        #grid-cols-input::-webkit-outer-spin-button,
+        #grid-cols-input::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+
         .color-editor-modal {
             position: fixed;
             inset: 0;
@@ -295,6 +377,36 @@
 
         .color-editor-modal.is-open {
             display: flex;
+        }
+
+        .color-editor-tabs {
+            display: flex;
+            border-bottom: 1px solid #444;
+            padding: 0 16px;
+            gap: 0;
+        }
+        .color-editor-tab {
+            padding: 8px 20px;
+            border: none;
+            background: transparent;
+            color: #999;
+            cursor: pointer;
+            font-size: 14px;
+            border-bottom: 2px solid transparent;
+            transition: color 0.2s, border-color 0.2s;
+        }
+        .color-editor-tab:hover {
+            color: #ccc;
+        }
+        .color-editor-tab.active {
+            color: #fff;
+            border-bottom-color: #007acc;
+        }
+        .color-editor-tab-content {
+            display: none;
+        }
+        .color-editor-tab-content.active {
+            display: block;
         }
 
         .color-editor-dialog {
@@ -721,14 +833,8 @@
             justify-content: space-between;
             user-select: none;
             -webkit-user-select: none;
-            caret-color: transparent;
             -webkit-tap-highlight-color: transparent;
             outline: none;
-        }
-
-        #grid-color-legend-bottom,
-        #grid-color-legend-bottom * {
-            caret-color: transparent !important;
         }
 
         #grid-color-legend-bottom:focus,
@@ -765,9 +871,8 @@
             flex-shrink: 0;
             user-select: none;
             -webkit-user-select: none;
-            caret-color: transparent;
         }
-        
+
         .legend-item-grid:last-child {
             margin-right: 0;
         }
@@ -791,7 +896,6 @@
             white-space: nowrap;
             user-select: none;
             -webkit-user-select: none;
-            caret-color: transparent;
         }
         
         .control-group {
@@ -2278,6 +2382,59 @@
             bottom: 10px;
         }
 
+        /* Measure Dropdown */
+        .failbit-dropdown-wrap { display: inline-block; }
+        .failbit-panel {
+            position: fixed;
+            margin-top: 2px;
+            background: #2a2a2a;
+            border: 1px solid #555;
+            border-radius: 4px;
+            z-index: 50000;
+            min-width: 160px;
+            max-width: 240px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+        }
+        .failbit-search {
+            width: 100%;
+            box-sizing: border-box;
+            background: #333;
+            color: #fff;
+            border: none;
+            border-bottom: 1px solid #555;
+            border-radius: 4px 4px 0 0;
+            padding: 6px 8px;
+            font-size: 12px;
+            outline: none;
+        }
+        .failbit-search::placeholder { color: #888; }
+        .failbit-list {
+            max-height: 340px;
+            overflow-y: auto;
+        }
+        .failbit-list .failbit-item {
+            padding: 5px 10px;
+            cursor: pointer;
+            font-size: 12px;
+            color: #ccc;
+            border-bottom: 1px solid #333;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .failbit-list .failbit-item:hover { background: #3a3a5a; }
+        .failbit-list .failbit-item.active { background: #2f6fed; color: #fff; }
+        .failbit-list .failbit-item:last-child { border-bottom: none; }
+        .failbit-list .failbit-section {
+            padding: 4px 10px 2px;
+            font-size: 10px;
+            color: #888;
+            font-weight: 600;
+            text-transform: uppercase;
+            border-bottom: 1px solid #333;
+            user-select: none;
+        }
+
         .legend-item {
             display: flex;
             align-items: center;
@@ -3428,18 +3585,59 @@
                 </div>
                 <!-- 파일 필터 선택 -->
                 <div style="margin-top: 8px; padding: 4px 0; display: flex; gap: 6px; align-items: center;">
-                    <select id="filter-test-select" style="width: 30%; background: #333; color: #fff; border: 1px solid #555; border-radius: 3px; padding: 4px 6px; font-size: 12px; cursor: pointer;">
-                        <option value="">Lot Type</option>
-                        <option disabled>────────</option>
-                        <option value="all">전체</option>
-                        <option value="remove" selected>Test 제거</option>
-                        <option value="only">Test만</option>
-                    </select>
-                    <select id="filter-plc-plh-select" style="width: 18%; background: #333; color: #fff; border: 1px solid #555; border-radius: 3px; padding: 4px 6px; font-size: 12px; cursor: pointer;">
-                        <option value="all">ALL</option>
-                        <option value="PLC">PLC</option>
-                        <option value="PLH" selected>PLH</option>
-                    </select>
+                    <!-- LT 다중선택 드롭다운 -->
+                    <div id="filter-lt-multi" class="multi-select-dropdown" style="position:relative;">
+                        <button type="button" class="multi-select-btn" id="filter-lt-btn">LT</button>
+                        <div class="multi-select-panel" id="filter-lt-panel" style="display:none;">
+                            <label class="multi-select-separator">── Wildcard ──</label>
+                            <label><input type="checkbox" value="P%"> P%</label>
+                            <label><input type="checkbox" value="E%"> E%</label>
+                            <label><input type="checkbox" value="T%"> T%</label>
+                            <label class="multi-select-separator">── Individual ──</label>
+                            <label><input type="checkbox" value="-"> -</label>
+                            <label><input type="checkbox" value="EE"> EE</label>
+                            <label><input type="checkbox" value="EH"> EH</label>
+                            <label><input type="checkbox" value="EP"> EP</label>
+                            <label><input type="checkbox" value="ES"> ES</label>
+                            <label><input type="checkbox" value="ET"> ET</label>
+                            <label><input type="checkbox" value="EU"> EU</label>
+                            <label><input type="checkbox" value="EY"> EY</label>
+                            <label><input type="checkbox" value="LT"> LT</label>
+                            <label><input type="checkbox" value="PE"> PE</label>
+                            <label><input type="checkbox" value="PP"> PP</label>
+                            <label><input type="checkbox" value="PT"> PT</label>
+                            <label><input type="checkbox" value="TA"> TA</label>
+                            <label><input type="checkbox" value="TD"> TD</label>
+                            <label><input type="checkbox" value="TE"> TE</label>
+                            <label><input type="checkbox" value="TP"> TP</label>
+                            <label><input type="checkbox" value="TQ"> TQ</label>
+                            <label><input type="checkbox" value="TT"> TT</label>
+                        </div>
+                    </div>
+                    <!-- TM 다중선택 드롭다운 -->
+                    <div id="filter-tm-multi" class="multi-select-dropdown" style="position:relative;">
+                        <button type="button" class="multi-select-btn" id="filter-tm-btn">TM</button>
+                        <div class="multi-select-panel" id="filter-tm-panel" style="display:none;">
+                            <label><input type="checkbox" value="NORMAL" data-values="NORMAL,NORM"> NORMAL</label>
+                            <label><input type="checkbox" value="NONPASS" data-values="NONPASS,NONPAS"> NONPASS</label>
+                            <label><input type="checkbox" value="ENGINEER" data-values="ENGINE,ENGINEER,ENGR,ENG"> ENGINEER</label>
+                            <label><input type="checkbox" value="REWORK" data-values="REWORK,R1"> REWORK</label>
+                            <label><input type="checkbox" value="MACHINE"> MACHINE</label>
+                            <label><input type="checkbox" value="REFERENCE"> REFERENCE</label>
+                            <label><input type="checkbox" value="SAMPLE"> SAMPLE</label>
+                            <label><input type="checkbox" value="EDL"> EDL</label>
+                            <label><input type="checkbox" value="PWQ"> PWQ</label>
+                            <label><input type="checkbox" value="BFDS"> BFDS</label>
+                        </div>
+                    </div>
+                    <!-- STEP 다중선택 드롭다운 -->
+                    <div id="filter-step-multi" class="multi-select-dropdown" style="position:relative;">
+                        <button type="button" class="multi-select-btn" id="filter-step-btn">STEP</button>
+                        <div class="multi-select-panel" id="filter-step-panel" style="display:none;">
+                            <label><input type="checkbox" value="PLC"> PLC</label>
+                            <label><input type="checkbox" value="PLH"> PLH</label>
+                        </div>
+                    </div>
                     <div class="personalized-color-actions">
                         <!-- 🔥 개인색 설정은 항상 활성화되므로 체크박스 제거 -->
                         <button type="button" id="personalized-color-button" class="color-editor-btn">색상 편집</button>
@@ -3485,7 +3683,7 @@
                 <div class="control-group control-group-columns">
                     <button id="grid-cols-minus" class="grid-btn" aria-label="컬럼 감소">-</button>
                     <input type="range" id="grid-cols-range" min="1" max="10" value="4" step="1" aria-label="그리드 컬럼 수">
-                    <input type="number" id="grid-cols-input" min="1" max="20" value="4" step="1" aria-label="컬럼 수 직접 입력" style="width:32px;text-align:center;padding:2px 4px;background:#2a2a2a;color:#ccc;border:1px solid #555;border-radius:3px;font-size:12px;">
+                    <input type="number" id="grid-cols-input" min="1" max="20" value="4" step="1" aria-label="컬럼 수 직접 입력" style="width:28px;text-align:center;padding:2px 0;background:#2a2a2a;color:#ccc;border:1px solid #555;border-radius:3px;font-size:12px;-moz-appearance:textfield;" onwheel="event.preventDefault()">
                     <button id="grid-cols-plus" class="grid-btn" aria-label="컬럼 증가">+</button>
                 </div>
                 
@@ -3505,6 +3703,13 @@
                     <button id="lot-mode-btn" class="grid-btn lot-mode-btn" title="Lot별로 그룹화하여 보기">LOT Mode</button>
                     <button id="composite-btn-top" class="grid-btn" data-composite-btn title="Composite Map 만들기">Composite</button>
                     <button id="ref-map-btn-top" class="grid-btn" data-ref-map-btn title="Reference Map 보기">Ref Map</button>
+                    <div id="failbit-dropdown-top" class="failbit-dropdown-wrap" style="position:relative;">
+                        <button id="failbit-btn-top" class="grid-btn" title="Measure 오버레이 (BIN / FBT / QVL)">Measure</button>
+                        <div id="failbit-panel-top" class="failbit-panel" style="display:none;">
+                            <input type="text" class="failbit-search" placeholder="검색..." autocomplete="off">
+                            <div class="failbit-list"></div>
+                        </div>
+                    </div>
                     <button id="my-lot-btn-top" class="grid-btn" data-my-lot-btn title="MY LOT 보기">MY LOT</button>
                 </div>
             </div>
@@ -3628,6 +3833,13 @@
                         </div>
                         <div style="display: flex; gap: 8px; position: absolute; right: 18px;">
                             <button id="ref-map-btn-filename" class="grid-btn" data-ref-map-btn style="padding: 6px 12px; font-size: 12px; background: #444; border: 1px solid #666; flex-shrink: 0;" title="Reference Map 보기">Ref Map</button>
+                            <div id="failbit-dropdown-filename" class="failbit-dropdown-wrap" style="position:relative;">
+                                <button id="failbit-btn-filename" class="grid-btn" style="padding: 6px 12px; font-size: 12px; flex-shrink: 0;" title="Measure 오버레이">Measure</button>
+                                <div id="failbit-panel-filename" class="failbit-panel" style="display:none;">
+                                    <input type="text" class="failbit-search" placeholder="검색..." autocomplete="off">
+                                    <div class="failbit-list"></div>
+                                </div>
+                            </div>
                             <button id="my-lot-btn-filename" class="grid-btn" data-my-lot-btn style="padding: 6px 12px; font-size: 12px; background: #2f6fed; border: 1px solid #1c50b5; flex-shrink: 0;" title="MY LOT 보기">MY LOT</button>
                         </div>
                     </div>
@@ -3655,6 +3867,8 @@
                 <div id="color-legend-top" class="color-legend" aria-label="상단 컬러 범례"></div>
                 <div id="color-legend-bottom" class="color-legend" aria-label="하단 컬러 범례"></div>
 
+                <!-- (Measure dropdown은 상단 패널에 통합됨) -->
+
                 <!-- Chip Info (Bottom Left) -->
                 <div id="chip-info-container">
                     <div id="chip-coordinate-box">
@@ -3669,6 +3883,30 @@
                         <div class="coord-row">
                             <span class="coord-label">PGM</span>
                             <span id="coord-pgm" class="coord-value">-</span>
+                        </div>
+                        <div class="coord-row">
+                            <span class="coord-label">TM</span>
+                            <span id="coord-tm" class="coord-value">-</span>
+                        </div>
+                        <div class="coord-row">
+                            <span class="coord-label">LT</span>
+                            <span id="coord-lt" class="coord-value">-</span>
+                        </div>
+                        <div class="coord-row">
+                            <span class="coord-label">NETD</span>
+                            <span id="coord-netd" class="coord-value">-</span>
+                        </div>
+                        <div class="coord-row">
+                            <span class="coord-label">GD</span>
+                            <span id="coord-gd" class="coord-value">-</span>
+                        </div>
+                        <div class="coord-row">
+                            <span class="coord-label">YIELD</span>
+                            <span id="coord-yield" class="coord-value">-</span>
+                        </div>
+                        <div class="coord-row">
+                            <span class="coord-label">SYS</span>
+                            <span id="coord-sys" class="coord-value">-</span>
                         </div>
                         <div class="coord-row">
                             <span class="coord-label">BIN</span>
@@ -3755,7 +3993,7 @@
             ↩ 이전 그리드로 돌아가기
         </div>
         <div class="context-menu-item" id="context-composite-colors" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px; display: none;">
-            🎨 Composite 색상
+            🎨 Ratio 색상
         </div>
         <div class="context-menu-item" id="context-subset-map-create" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px; display: none;">
             🎯 선택 Grade로 Subset Map 생성
@@ -4078,28 +4316,73 @@
                 </h2>
                 <button type="button" id="color-editor-close-btn" class="color-editor-close-btn" aria-label="닫기">×</button>
             </div>
+            <!-- Tab bar -->
+            <div class="color-editor-tabs" id="color-editor-tabs">
+                <button type="button" class="color-editor-tab active" data-tab="fail">Fail</button>
+                <button type="button" class="color-editor-tab" data-tab="composite">Composite</button>
+                <button type="button" class="color-editor-tab" data-tab="measure">Measure</button>
+            </div>
             <div class="color-editor-body">
-                <div class="color-editor-error" id="color-editor-error"></div>
-                <div class="color-editor-scheme-toolbar">
-                    <label for="color-editor-scheme-search">다른 팔레트 불러오기</label>
-                    <div class="color-editor-scheme-search-row">
-                        <input type="text" id="color-editor-scheme-search" placeholder="다른 User 검색..." autocomplete="off">
-                        <button type="button" id="color-editor-scheme-load-btn" class="color-editor-btn">검색</button>
-                        <button type="button" id="color-editor-scheme-apply-btn" class="color-editor-btn">적용</button>
+                <!-- Fail tab content (existing) -->
+                <div id="color-editor-fail-content" class="color-editor-tab-content active">
+                    <div class="color-editor-error" id="color-editor-error"></div>
+                    <div class="color-editor-scheme-toolbar">
+                        <label for="color-editor-scheme-search">다른 팔레트 불러오기</label>
+                        <div class="color-editor-scheme-search-row">
+                            <input type="text" id="color-editor-scheme-search" placeholder="다른 User 검색..." autocomplete="off">
+                            <button type="button" id="color-editor-scheme-load-btn" class="color-editor-btn">검색</button>
+                            <button type="button" id="color-editor-scheme-apply-btn" class="color-editor-btn">적용</button>
+                        </div>
+                        <div id="color-editor-scheme-dropdown" class="color-editor-modal-dropdown" role="listbox" aria-expanded="false"></div>
                     </div>
-                    <div id="color-editor-scheme-dropdown" class="color-editor-modal-dropdown" role="listbox" aria-expanded="false"></div>
+                    <table class="color-editor-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 110px;">레이블</th>
+                                <th style="width: 100px;">HEX</th>
+                                <th style="width: 170px;">RGB</th>
+                                <th style="width: 70px;">미리보기</th>
+                            </tr>
+                        </thead>
+                        <tbody id="color-editor-table-body"></tbody>
+                    </table>
                 </div>
-                <table class="color-editor-table">
-                    <thead>
-                        <tr>
-                            <th style="width: 110px;">레이블</th>
-                            <th style="width: 100px;">HEX</th>
-                            <th style="width: 170px;">RGB</th>
-                            <th style="width: 70px;">미리보기</th>
-                        </tr>
-                    </thead>
-                    <tbody id="color-editor-table-body"></tbody>
-                </table>
+                <!-- Composite tab content -->
+                <div id="color-editor-composite-content" class="color-editor-tab-content" style="display:none;">
+                    <div class="color-editor-error" id="color-editor-composite-error"></div>
+                    <p class="color-editor-info" style="color:#aaa; font-size:13px; margin:8px 0;">
+                        Composite Map에 사용되는 그라데이션 색상을 설정합니다.
+                    </p>
+                    <table class="color-editor-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 110px;">분위수</th>
+                                <th style="width: 100px;">HEX</th>
+                                <th style="width: 170px;">RGB</th>
+                                <th style="width: 70px;">미리보기</th>
+                            </tr>
+                        </thead>
+                        <tbody id="color-editor-composite-table-body"></tbody>
+                    </table>
+                </div>
+                <!-- Measure tab content -->
+                <div id="color-editor-measure-content" class="color-editor-tab-content" style="display:none;">
+                    <div class="color-editor-error" id="color-editor-measure-error"></div>
+                    <p class="color-editor-info" style="color:#aaa; font-size:13px; margin:8px 0;">
+                        FBT/QVL Measure 오버레이에 사용되는 그라데이션 색상을 설정합니다.
+                    </p>
+                    <table class="color-editor-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 110px;">분위수</th>
+                                <th style="width: 100px;">HEX</th>
+                                <th style="width: 170px;">RGB</th>
+                                <th style="width: 70px;">미리보기</th>
+                            </tr>
+                        </thead>
+                        <tbody id="color-editor-measure-table-body"></tbody>
+                    </table>
+                </div>
             </div>
             <div class="color-editor-footer">
                 <button type="button" id="color-editor-reset-btn">초기값</button>
@@ -4114,7 +4397,7 @@
         <div class="color-editor-dialog">
             <div class="color-editor-header">
                 <h2 class="color-editor-title">
-                    Composite 색상 설정
+                    Ratio 색상 설정
                     <span id="composite-color-scheme-label" class="color-editor-scheme-name"></span>
                 </h2>
                 <button type="button" id="composite-color-close-btn" class="color-editor-close-btn" aria-label="닫기">×</button>
@@ -4129,7 +4412,7 @@
                     </div>
                     <div id="composite-color-scheme-dropdown" class="color-editor-modal-dropdown" role="listbox" aria-expanded="false"></div>
                     <p class="color-editor-info">
-                        0%는 흰색, 100%는 빨간색으로 이어지는 단일 그라데이션입니다. 11개 분위수(0·10·…·100%)에 색을 지정하면 Sum Map과 Composite 그리드에 실시간 반영됩니다.
+                        0%는 흰색, 100%는 빨간색으로 이어지는 단일 그라데이션입니다. 11개 분위수(0·10·…·100%)에 색을 지정하면 Sum Map, Composite 그리드, F/Q Ratio 오버레이에 실시간 반영됩니다.
                     </p>
                 </div>
                 <table class="color-editor-table">
@@ -4223,7 +4506,7 @@
     <script defer src="/js/semiconductor-renderer.js"></script>
 
     <!-- 🚀 ES6 모듈로 로드 (최적화) -->
-    <script type="module" src="/js/main.js?v=cachebust5"></script>
+    <script type="module" src="/js/main.js?v=cachebust8"></script>
 
     <!-- 리팩토링된 모듈 방식 (디버깅 후 다시 활성화 예정) -->
     <!-- <script type="module" src="/js/main-refactored.js"></script> -->
