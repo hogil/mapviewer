@@ -556,8 +556,10 @@ export class GridManager {
      * 스크롤 이벤트가 50ms 동안 없으면 "멈춤"으로 판정, 뷰포트 1.5배만 로드.
      */
     handleScroll() {
-        // 🔥 스크롤 시작 시 모든 진행 중인 요청 취소 + pending 큐 초기화
-        this.cancelAllLoads();
+        // 🔥 스크롤 시작 시에만 진행 중인 요청 취소 (매 이벤트마다 반복 X)
+        if (!this.isScrolling) {
+            this.cancelAllLoads();
+        }
         this.isScrolling = true;
         this.scrollPendingItems.clear();
 

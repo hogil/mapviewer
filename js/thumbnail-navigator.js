@@ -1401,9 +1401,9 @@ export class ThumbnailNavigator {
 
         const personalizedParams = this.viewer ? this.viewer.getPersonalizedParams() : '';
 
-        const cacheBuster = this.viewer?._personalizedColorCacheBuster || Date.now();
+        const cacheBuster = this.viewer?._personalizedColorCacheBuster || '';
         const hasCacheBusterInParams = typeof personalizedParams === 'string' && personalizedParams.includes('_t=');
-        const cacheSuffix = hasCacheBusterInParams ? '' : `&_t=${cacheBuster}`;
+        const cacheSuffix = (hasCacheBusterInParams || !cacheBuster) ? '' : `&_t=${cacheBuster}`;
 
         // 🔥 항상 /api/thumbnail 사용 — BIN MAP은 personalizedParams에 bin_overlay=1 포함
         const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}${cacheSuffix}`;

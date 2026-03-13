@@ -8284,6 +8284,38 @@ async def get_chip_positions(path: str):
         logger.exception(f"Failed to load chip positions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/palette-counts")
+async def get_palette_counts(path: str):
+    """이미지의 palette index별 pixel 수를 반환 (mode=P PNG 전용)"""
+    try:
+        rel_path = _get_relative_path_from_image(path)
+        img_path = ROOT_DIR / rel_path
+        try:
+            img_path.resolve().relative_to(ROOT_DIR.resolve())
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        if not img_path.exists() or not img_path.is_file():
+            raise HTTPException(status_code=404, detail="Image not found")
+
+        def _count():
+            img = Image.open(img_path)
+            if img.mode != 'P':
+                img = img.convert('P')
+            data = np.array(img)
+            counts = np.bincount(data.ravel(), minlength=32).tolist()
+            return counts[:32]  # index 0~31
+
+        counts = await anyio.to_thread.run_sync(_count)
+        total = sum(counts)
+        return JSONResponse(content={"counts": counts, "total": total})
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to get palette counts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/chip-annotations")
 async def get_chip_annotations(path: str, folder: Optional[str] = Query(None)):
     """chip_annotations.json 반환 (없으면 빈 템플릿)"""

@@ -11677,6 +11677,10 @@ class WaferMapViewer {
                         console.log('✅ Chip positions & annotations loaded successfully');
                         // 오버레이 모드 활성 상태면 새 positions에 대해 재적용
                         await this._reapplyOverlayAfterPositionsLoad();
+                        // 🔥 Palette pixel counts 로드 (Grade % 표시용)
+                        await this._fetchPaletteCounts(fullPath);
+                        // 🔥 Chip positions 로드 후 BIN count 표시를 위해 범례 재렌더
+                        this.renderColorLegends();
                     } else {
                         console.log('ℹ️ No chip positions found for this image');
                     }
@@ -21956,6 +21960,27 @@ class WaferMapViewer {
     }
 
     /**
+     * Palette index별 pixel 수를 backend API에서 가져온다 (Grade % 표시용)
+     */
+    async _fetchPaletteCounts(imagePath) {
+        try {
+            const resp = await fetch(`/api/palette-counts?path=${encodeURIComponent(imagePath)}`);
+            if (resp.ok) {
+                const data = await resp.json();
+                this._paletteCounts = data.counts;  // [c0, c1, ..., c31]
+                this._paletteTotal = data.total;
+            } else {
+                this._paletteCounts = null;
+                this._paletteTotal = 0;
+            }
+        } catch (e) {
+            console.warn('Failed to fetch palette counts:', e);
+            this._paletteCounts = null;
+            this._paletteTotal = 0;
+        }
+    }
+
+    /**
      * 모든 Measure 패널 닫기
      */
     _closeFailbitPanels() {
@@ -22805,17 +22830,48 @@ class WaferMapViewer {
             return;
         }
 
+        // 🔥 배경색 밝기에 따라 텍스트 색상 결정 (어두운 배경→흰글, 밝은 배경→검은글)
+        const _contrastText = (hexColor) => {
+            if (!hexColor) return 'rgba(0,0,0,0.85)';
+            const hex = hexColor.replace('#', '');
+            const r = parseInt(hex.substring(0, 2), 16);
+            const g = parseInt(hex.substring(2, 4), 16);
+            const b = parseInt(hex.substring(4, 6), 16);
+            const lum = (0.299 * r + 0.587 * g + 0.114 * b);
+            return lum > 140 ? 'rgba(0,0,0,0.85)' : 'rgba(255,255,255,0.9)';
+        };
+
+        // 🔥 대량 pixel count를 K/M 단위로 축약 (유효숫자: <1K=그대로, ≥1K=2자리)
+        const _formatCount = (n) => {
+            if (n < 1000) return String(n);
+            if (n < 10000) return (n / 1000).toFixed(1) + 'K';
+            if (n < 1000000) return Math.round(n / 1000) + 'K';
+            if (n < 10000000) return (n / 1000000).toFixed(1) + 'M';
+            return Math.round(n / 1000000) + 'M';
+        };
+
         // Render top legend
         // 🔥 TOP_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
         if (userData.top && typeof userData.top === 'object') {
             const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
+            // 🔥 Grade별 pixel 갯수 (palette index 0-7, backend API 결과)
+            const pc = this._paletteCounts;  // [c0, c1, ..., c31]
+            let gradeTotal = 0;
+            if (pc) {
+                for (let i = 0; i < 8; i++) gradeTotal += (pc[i] || 0);
+            }
             const topHtml = TOP_KEYS.map((label, index) => {
                 const color = userData.top[label];
                 if (color) {
+                    const cnt = pc ? (pc[index] || 0) : 0;
+                    const pct = gradeTotal > 0 ? (cnt / gradeTotal * 100).toFixed(1) : '0.0';
+                    const countText = pc ? `${pct}%(${_formatCount(cnt)})` : '';
                     return `
                         <div class="legend-item" data-section="top" data-key="${label}" data-index="${index}" draggable="true" style="cursor: pointer;">
                             <span class="legend-label">${label}</span>
-                            <div class="legend-color-bar" data-section="top" data-key="${label}" style="background-color: ${color}; cursor: pointer;"></div>
+                            <div class="legend-color-bar" data-section="top" data-key="${label}" style="background-color: ${color}; cursor: pointer; position: relative; overflow: hidden;">
+                                <span style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:9px;color:${_contrastText(color)};line-height:1;pointer-events:none;font-weight:600;">${countText}</span>
+                            </div>
                         </div>
                     `;
                 }
@@ -22884,12 +22940,12 @@ class WaferMapViewer {
                     const countKey = displayLabel.startsWith('B') ? displayLabel.slice(1) : displayLabel;
                     const cnt = binCounts[countKey] || 0;
                     const pct = netd > 0 ? (cnt / netd * 100).toFixed(1) : '0.0';
-                    const countText = chips.length > 0 ? `${cnt} ${pct}%` : '';
+                    const countText = chips.length > 0 ? `${pct}%(${cnt})` : '';
                     return `
                         <div class="legend-item" data-section="bottom" data-key="${displayLabel}" data-index="${index}" draggable="true" style="cursor: pointer;">
                             <span class="legend-label">${renderLabel}</span>
                             <div class="legend-color-bar" data-section="bottom" data-key="${displayLabel}" style="background-color: ${color}; cursor: pointer; position: relative; overflow: hidden;">
-                                <span style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:7px;color:rgba(0,0,0,0.7);line-height:1;pointer-events:none;">${countText}</span>
+                                <span style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:9px;color:${_contrastText(color)};line-height:1;pointer-events:none;font-weight:600;">${countText}</span>
                             </div>
                         </div>
                     `;
