@@ -992,6 +992,8 @@ class WaferMapViewer {
 
         // Bottom (Chip) 필터링 상태
         this.selectedBottoms = new Set();  // 선택된 Bottom 값들 (285, 286, 287, 288 등)
+        this.selectedGradientRanges = new Set(); // 선택된 gradient 범위 인덱스 (0~9)
+        this.lastGradientRangeClickIndex = null;
         this.overlayMode = null;  // 'bin' | 'f' | 'q' | null
         this._ratioGradientCache = null;  // cached gradient stops
         this.positionsData = null;  // Positions JSON 데이터 캐시
@@ -21495,6 +21497,17 @@ class WaferMapViewer {
         // Color Legend Top 클릭 이벤트
         if (this.dom.colorLegendTop) {
             this.dom.colorLegendTop.addEventListener('click', (e) => {
+                // Gradient range 클릭
+                const gradientItem = e.target.closest('.legend-item[data-section="gradient"]');
+                if (gradientItem) {
+                    const rangeIdx = parseInt(gradientItem.getAttribute('data-index'));
+                    if (!isNaN(rangeIdx) && rangeIdx >= 0 && rangeIdx <= 9) {
+                        e.preventDefault();
+                        this.onGradientRangeClick(rangeIdx, e.ctrlKey || e.metaKey, e.shiftKey);
+                    }
+                    return;
+                }
+
                 const legendItem = e.target.closest('.legend-item[data-section="top"]');
                 if (!legendItem) return;
 
@@ -21515,6 +21528,13 @@ class WaferMapViewer {
                 e.stopPropagation();
                 e.stopImmediatePropagation();
 
+                // Gradient range 우클릭 → 전체 해제
+                const gradientItem = e.target.closest('.legend-item[data-section="gradient"]');
+                if (gradientItem) {
+                    this.clearGradientFilter();
+                    return;
+                }
+
                 const legendItem = e.target.closest('.legend-item[data-section="top"]');
                 if (!legendItem) return;
 
@@ -21531,11 +21551,21 @@ class WaferMapViewer {
 
             // Drag & Drop 이벤트 (범위 선택)
             this.dom.colorLegendTop.addEventListener('dragstart', (e) => {
+                // Gradient drag
+                const gradItem = e.target.closest('.legend-item[data-section="gradient"]');
+                if (gradItem) {
+                    e.dataTransfer.setData('text/plain', 'grad:' + gradItem.getAttribute('data-index'));
+                    e.dataTransfer.effectAllowed = 'copy';
+                    const img = new Image();
+                    img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+                    e.dataTransfer.setDragImage(img, 0, 0);
+                    return;
+                }
                 const item = e.target.closest('.legend-item[data-section="top"]');
                 if (!item) return;
                 e.dataTransfer.setData('text/plain', item.getAttribute('data-index'));
                 e.dataTransfer.effectAllowed = 'copy';
-                
+
                 // 🔥 드래그 시 보이는 고스트 이미지 제거 (투명 이미지 설정)
                 const img = new Image();
                 img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'; // 1x1 투명 gif
@@ -21549,10 +21579,30 @@ class WaferMapViewer {
 
             this.dom.colorLegendTop.addEventListener('drop', (e) => {
                 e.preventDefault();
+                const data = e.dataTransfer.getData('text/plain');
+
+                // Gradient range drag & drop
+                if (data && data.startsWith('grad:')) {
+                    const targetItem = e.target.closest('.legend-item[data-section="gradient"]');
+                    if (!targetItem) return;
+                    const startIndex = parseInt(data.replace('grad:', ''));
+                    const endIndex = parseInt(targetItem.getAttribute('data-index'));
+                    if (!isNaN(startIndex) && !isNaN(endIndex)) {
+                        const start = Math.min(startIndex, endIndex);
+                        const end = Math.max(startIndex, endIndex);
+                        for (let i = start; i <= end; i++) {
+                            this.selectedGradientRanges.add(i);
+                        }
+                        this.applyGradientFilter();
+                        this.renderColorLegends();
+                    }
+                    return;
+                }
+
                 const targetItem = e.target.closest('.legend-item[data-section="top"]');
                 if (!targetItem) return;
 
-                const startIndex = parseInt(e.dataTransfer.getData('text/plain'));
+                const startIndex = parseInt(data);
                 const endIndex = parseInt(targetItem.getAttribute('data-index'));
 
                 if (!isNaN(startIndex) && !isNaN(endIndex)) {
@@ -21909,7 +21959,9 @@ class WaferMapViewer {
             }
         }
 
-        // 🔥 Measure overlay 전환 시 top legend 갱신 (Grade ↔ Gradient)
+        // 🔥 Measure overlay 전환 시 gradient 필터 초기화 및 top legend 갱신
+        this.selectedGradientRanges.clear();
+        this.lastGradientRangeClickIndex = null;
         this.renderColorLegends();
         this.updateFailbitButtonUI();
 
@@ -22185,6 +22237,60 @@ class WaferMapViewer {
             preserveViewport: true,
         });
         this.refreshThumbnailNavigatorWithCurrentParams();
+    }
+
+    /**
+     * Gradient 범위 클릭 핸들러
+     */
+    onGradientRangeClick(rangeIdx, ctrlKey, shiftKey) {
+        const wasSelected = this.selectedGradientRanges.has(rangeIdx);
+
+        if (shiftKey && this.lastGradientRangeClickIndex !== null) {
+            const start = Math.min(this.lastGradientRangeClickIndex, rangeIdx);
+            const end = Math.max(this.lastGradientRangeClickIndex, rangeIdx);
+            for (let i = start; i <= end; i++) {
+                this.selectedGradientRanges.add(i);
+            }
+        } else if (ctrlKey) {
+            if (wasSelected) {
+                this.selectedGradientRanges.delete(rangeIdx);
+            } else {
+                this.selectedGradientRanges.add(rangeIdx);
+            }
+        } else {
+            if (wasSelected && this.selectedGradientRanges.size === 1) {
+                this.selectedGradientRanges.clear();
+            } else {
+                this.selectedGradientRanges.clear();
+                this.selectedGradientRanges.add(rangeIdx);
+            }
+        }
+
+        this.lastGradientRangeClickIndex = this.selectedGradientRanges.size === 0 ? null : rangeIdx;
+        this.applyGradientFilter();
+        this.renderColorLegends();
+    }
+
+    /**
+     * Gradient 범위 필터 해제
+     */
+    clearGradientFilter() {
+        if (this.selectedGradientRanges.size === 0) return;
+        this.selectedGradientRanges.clear();
+        this.lastGradientRangeClickIndex = null;
+        this.applyGradientFilter();
+        this.renderColorLegends();
+    }
+
+    /**
+     * Gradient 범위 필터 적용 (chipAnnotator에 전달)
+     */
+    applyGradientFilter() {
+        if (this.chipAnnotator) {
+            this.chipAnnotator.setGradientFilter(
+                this.selectedGradientRanges.size > 0 ? this.selectedGradientRanges : null
+            );
+        }
     }
 
     /**
@@ -22858,7 +22964,8 @@ class WaferMapViewer {
             // 🔥 Measure overlay 활성 시: gradient percentile 범례 표시
             const stops = this._ratioGradientCache;  // 11개 hex (0%,10%,...,100%)
             const labels = ['0~10', '10~20', '20~30', '30~40', '40~50', '50~60', '60~70', '70~80', '80~90', '90~100'];
-            const itemLabel = this._ratioActiveItemKey || '';
+            // Chip counts per range
+            const rc = this.chipAnnotator ? this.chipAnnotator.getGradientRangeCounts() : { counts: new Array(10).fill(0), total: 0 };
             const topHtml = labels.map((label, i) => {
                 // 구간 중앙 색상 (stops[i]와 stops[i+1]의 중간)
                 const c1 = stops[i], c2 = stops[i + 1];
@@ -22871,10 +22978,17 @@ class WaferMapViewer {
                     const b = Math.round((rgb1.b + rgb2.b) / 2);
                     color = `rgb(${r},${g},${b})`;
                 }
+                const cnt = rc.counts[i] || 0;
+                const pct = rc.total > 0 ? (cnt / rc.total * 100).toFixed(1) : '0.0';
+                const countText = rc.total > 0 ? `${pct}%(${_formatCount(cnt)})` : '';
+                const isSelected = this.selectedGradientRanges.has(i);
+                const selBorder = isSelected ? 'outline:2px solid #1976d2;outline-offset:-2px;' : '';
+                const opacity = this.selectedGradientRanges.size > 0 && !isSelected ? 'opacity:0.35;' : '';
                 return `
-                    <div class="legend-item" style="cursor: default;">
+                    <div class="legend-item" data-section="gradient" data-index="${i}" draggable="true" style="cursor: pointer;${opacity}">
                         <span class="legend-label" style="font-size:10px;">${label}%</span>
-                        <div class="legend-color-bar" style="background-color: ${color}; position: relative; overflow: hidden;">
+                        <div class="legend-color-bar" data-section="gradient" data-index="${i}" style="background-color: ${color}; position: relative; overflow: hidden;${selBorder}cursor:pointer;">
+                            <span style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:9px;color:${_contrastText(typeof color === 'string' && color.startsWith('#') ? color : c1)};line-height:1;pointer-events:none;font-weight:600;">${countText}</span>
                         </div>
                     </div>
                 `;

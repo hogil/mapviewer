@@ -48,6 +48,8 @@ export class ChipAnnotator {
         this.overlayItemKey = null;        // selected f/q sub-item key (e.g., "2342")
         this.binOverlayColors = new Map(); // normalized b-value string -> hex color
         this.ratioOverlayColors = null;    // Map<chipIndex, rgbaColor> or null
+        this.ratioPercentiles = null;      // Map<chipIndex, percentile(0~100)> for gradient range filtering
+        this.gradientFilterSet = new Set(); // Selected gradient range indices (0~9)
         this.gradientStops = null;         // Array of 11 hex strings
         this.gradientQuantiles = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
 
@@ -335,6 +337,8 @@ export class ChipAnnotator {
         if (mode === 'bin') {
             this.binOverlayColors = options.binColors || new Map();
             this.ratioOverlayColors = null;
+            this.ratioPercentiles = null;
+            this.gradientFilterSet.clear();
             this.overlayItemKey = null;
         } else if (mode === 'f' || mode === 'q') {
             this.binOverlayColors.clear();
@@ -344,6 +348,8 @@ export class ChipAnnotator {
         } else {
             this.binOverlayColors.clear();
             this.ratioOverlayColors = null;
+            this.ratioPercentiles = null;
+            this.gradientFilterSet.clear();
             this.gradientStops = null;
             this.overlayItemKey = null;
         }
@@ -360,6 +366,8 @@ export class ChipAnnotator {
      */
     _computeRatioOverlay(field, itemKey) {
         this.ratioOverlayColors = new Map();
+        this.ratioPercentiles = new Map();
+        this.gradientFilterSet.clear();
         if (!this.chips || !this.gradientStops) return;
 
         // Collect all numeric values from dict[itemKey]
@@ -402,7 +410,38 @@ export class ChipAnnotator {
 
             const color = this._interpolateGradientColor(rank);
             this.ratioOverlayColors.set(chipIndices[i], color);
+            this.ratioPercentiles.set(chipIndices[i], rank);
         }
+    }
+
+    /**
+     * Set gradient range filter (percentile range selection).
+     * @param {Set|null} rangeSet - Set of range indices (0~9), null to clear
+     */
+    setGradientFilter(rangeSet) {
+        if (rangeSet instanceof Set && rangeSet.size > 0) {
+            this.gradientFilterSet = new Set(rangeSet);
+        } else {
+            this.gradientFilterSet.clear();
+        }
+        this.render();
+    }
+
+    /**
+     * Get chip counts per gradient percentile range (10 ranges: 0~10, 10~20, ..., 90~100).
+     * @returns {{ counts: number[], total: number }}
+     */
+    getGradientRangeCounts() {
+        const counts = new Array(10).fill(0);
+        let total = 0;
+        if (!this.ratioPercentiles) return { counts, total };
+
+        this.ratioPercentiles.forEach((pct) => {
+            const rangeIdx = pct >= 100 ? 9 : Math.floor(pct / 10);
+            counts[rangeIdx]++;
+            total++;
+        });
+        return { counts, total };
     }
 
     /**
@@ -1336,10 +1375,17 @@ export class ChipAnnotator {
             });
         } else if ((this.overlayMode === 'f' || this.overlayMode === 'q') && this.ratioOverlayColors) {
             // Ratio overlay: fill chips with percentile gradient color
+            const hasGradFilter = this.gradientFilterSet.size > 0;
             this.ratioOverlayColors.forEach((color, chipIdx) => {
                 const chip = this.chips[chipIdx];
                 if (!chip) return;
                 if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) return;
+                // Gradient range filter: skip chips outside selected ranges
+                if (hasGradFilter) {
+                    const pct = this.ratioPercentiles.get(chipIdx);
+                    const rangeIdx = pct >= 100 ? 9 : Math.floor(pct / 10);
+                    if (!this.gradientFilterSet.has(rangeIdx)) return;
+                }
                 const dict = chip[this.overlayMode];
                 const raw = dict && this.overlayItemKey ? dict[this.overlayItemKey] : null;
                 const text = raw != null ? this._formatCompact(raw) : '';
@@ -1364,6 +1410,32 @@ export class ChipAnnotator {
                     const h = (rect.y1 - rect.y0) * transform.scale;
                     ctx.rect(x, y, w, h);
                 }
+            });
+            ctx.fill();
+            ctx.restore();
+        }
+
+        // Gradient range filter white mask: measure overlay 모드에서 비선택 범위 chip 숨김
+        if (this.gradientFilterSet.size > 0 && (this.overlayMode === 'f' || this.overlayMode === 'q') && this.ratioPercentiles) {
+            const transform = this.viewer.transform;
+            const Y_OFFSET = -55;
+            ctx.save();
+            ctx.resetTransform();
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            this.ratioPercentiles.forEach((pct, chipIdx) => {
+                const rangeIdx = pct >= 100 ? 9 : Math.floor(pct / 10);
+                if (this.gradientFilterSet.has(rangeIdx)) return; // 선택된 범위는 건너뜀
+                const chip = this.chips[chipIdx];
+                if (!chip) return;
+                // bottom filter로 이미 마스킹된 chip은 중복 마스킹 불필요
+                if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) return;
+                const rect = chip.rect;
+                const x = rect.x0 * transform.scale + transform.dx;
+                const y = rect.y0 * transform.scale + transform.dy + Y_OFFSET;
+                const w = (rect.x1 - rect.x0) * transform.scale;
+                const h = (rect.y1 - rect.y0) * transform.scale;
+                ctx.rect(x, y, w, h);
             });
             ctx.fill();
             ctx.restore();
