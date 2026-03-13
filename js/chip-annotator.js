@@ -300,6 +300,7 @@ export class ChipAnnotator {
             num = parseInt(str, 10);
         }
         if (!isNaN(num)) {
+            if (num < 200) return 'Normal';
             return KNOWN_BINS.has(num) ? String(num) : 'ETC';
         }
         return str;

@@ -554,11 +554,16 @@ def _normalize_bottom_filter_key(raw_value: Any) -> Optional[str]:
     if lowered in aliases:
         return aliases[lowered]
 
+    num = None
     if lowered.startswith('b') and lowered[1:].isdigit():
-        return lowered[1:]
+        num = int(lowered[1:])
+    elif lowered.isdigit():
+        num = int(lowered)
 
-    if lowered.isdigit():
-        return lowered
+    if num is not None:
+        if num < 200:
+            return "Normal"
+        return str(num)
 
     return key
 

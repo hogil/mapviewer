@@ -23643,9 +23643,8 @@ class WaferMapViewer {
         const m = this._getWaferMetaInfo();
         const header = ['LOT', 'WAFER', 'STEP', 'Device', 'PartID', 'PGM', 'TM', 'LT', 'NET', 'GOOD', 'YIELD', 'SYS', 'X_ABS', 'Y_ABS', 'BIN', 'G/B'].join('\t');
         const rows = selectedChips.map(chip => {
-            const bin = chip.b !== undefined && chip.b !== null ? chip.b : '';
-            const binNum = Number(bin);
-            const gb = binNum < 200 ? 'G' : 'B';
+            const bin = chip.b ?? '';
+            const gb = Number(bin) < 200 ? 'G' : 'B';
             return [m.lot, m.wafer, m.step, m.device, m.partId, m.pgm, m.tm, m.lt, m.net, m.good, m.yield, m.sys, chip.x_abs, chip.y_abs, bin, gb].join('\t');
         });
         const text = [header, ...rows].join('\n');
