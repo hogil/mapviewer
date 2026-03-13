@@ -21497,9 +21497,6 @@ class WaferMapViewer {
                 const key = legendItem.getAttribute('data-key');
                 if (!key || !key.startsWith('Grade')) return;
 
-                // Measure 모드(FBT/QVL/BIN)에서는 grade 필터 비활성
-                if (this.overlayMode) return;
-
                 const gradeIndex = parseInt(key.replace('Grade', ''));
                 if (isNaN(gradeIndex) || gradeIndex < 0 || gradeIndex > 7) return;
 
@@ -22094,6 +22091,9 @@ class WaferMapViewer {
      * @param {boolean} shiftKey - Shift 키 누름 여부
      */
     async onGradeButtonClick(gradeIndex, ctrlKey, shiftKey) {
+        // measure BIN 모드일 때 grade filter 비활성
+        if (this.overlayMode === 'bin') return;
+
         const wasSelected = this.selectedGrades.has(gradeIndex);
 
         if (shiftKey && this.lastGradeClickIndex !== null) {
@@ -22831,6 +22831,19 @@ class WaferMapViewer {
         if (userData.bottom && typeof userData.bottom === 'object') {
             const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
                                  'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
+
+            // 🔥 Position 데이터에서 BIN별 chip 갯수 계산
+            const binCounts = {};
+            const chips = this.chipAnnotator?.chips || [];
+            const netd = this.chipAnnotator?.netd || chips.length || 1;
+            if (chips.length > 0) {
+                const normalizeB = this.chipAnnotator._normalizeBottomValue.bind(this.chipAnnotator);
+                chips.forEach(chip => {
+                    const norm = normalizeB(chip.b);
+                    binCounts[norm] = (binCounts[norm] || 0) + 1;
+                });
+            }
+
             // Get Normal color for the Border button
             let normalColor = userData.bottom['Normal'] || userData.bottom['Border'] || '#BEBEBE';
             const borderBtnActive = this.borderNormalize;
@@ -22843,18 +22856,6 @@ class WaferMapViewer {
                            outline:none;flex-shrink:0;"
                     title="Border: 모든 칩 테두리를 Normal 색으로 표시">Border</button>
             `;
-            // 🔥 BIN 카테고리별 칩 개수 집계
-            const binCounts = {};
-            const ca = this.chipAnnotator;
-            const chips = ca?.chips || [];
-            const netd = parseInt(ca?.netd) || 0;
-            if (chips.length > 0 && ca?._normalizeBottomValue) {
-                chips.forEach(chip => {
-                    const norm = ca._normalizeBottomValue(chip.b);
-                    binCounts[norm] = (binCounts[norm] || 0) + 1;
-                });
-            }
-
             const bottomHtml = BOTTOM_KEYS.map((label, index) => {
                 // 🔥 "Border" 키가 있는 경우 "Normal"로 매핑 (Ubuntu 서버 호환성)
                 let actualLabel = label;
@@ -22879,18 +22880,17 @@ class WaferMapViewer {
                     // 🔥 "Border"를 "Normal"로 표시 및 data-key도 "Normal"로 설정
                     const displayLabel = actualLabel === 'Border' ? 'Normal' : label;
                     const renderLabel = displayLabel.startsWith('B') ? displayLabel.slice(1) : displayLabel;
-                    // 🔥 칩 개수 및 퍼센트 계산
+                    // 🔥 BIN count / percent 계산
                     const countKey = displayLabel.startsWith('B') ? displayLabel.slice(1) : displayLabel;
                     const cnt = binCounts[countKey] || 0;
-                    const pct = netd > 0 ? (cnt / netd * 100).toFixed(1) : '-';
-                    const countHtml = `<span style="font-size:8px;color:#999;margin-left:2px;white-space:nowrap;">${cnt} (${pct}%)</span>`;
+                    const pct = netd > 0 ? (cnt / netd * 100).toFixed(1) : '0.0';
+                    const countText = chips.length > 0 ? `${cnt} ${pct}%` : '';
                     return `
                         <div class="legend-item" data-section="bottom" data-key="${displayLabel}" data-index="${index}" draggable="true" style="cursor: pointer;">
                             <span class="legend-label">${renderLabel}</span>
-                            <div class="legend-color-bar" data-section="bottom" data-key="${displayLabel}" style="background-color: ${color}; cursor: pointer; position:relative; display:flex; align-items:center; justify-content:center;">
-                                <span style="font-size:7px;color:rgba(0,0,0,0.6);line-height:1;pointer-events:none;">${cnt}</span>
+                            <div class="legend-color-bar" data-section="bottom" data-key="${displayLabel}" style="background-color: ${color}; cursor: pointer; position: relative; overflow: hidden;">
+                                <span style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:7px;color:rgba(0,0,0,0.7);line-height:1;pointer-events:none;">${countText}</span>
                             </div>
-                            ${countHtml}
                         </div>
                     `;
                 }
