@@ -27,8 +27,10 @@ logs/*.csv
 # IDE
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
+playwright.config.js
 
 # OS
 .DS_Store
