@@ -5396,8 +5396,8 @@ class WaferMapViewer {
         const meta = this.filterFileMetadata[stem];
 
         if (!meta) {
-            // 메타데이터가 없는 파일은 필터가 적용되면 제외
-            return !hasLT && !hasTM;
+            // 메타데이터가 없는 파일은 필터와 무관하게 통과 (위치정보 미로드 폴더)
+            return true;
         }
 
         // LT 필터 — 선택된 값 중 하나라도 매치하면 통과 (OR, 대소문자 무시)
@@ -5586,6 +5586,23 @@ class WaferMapViewer {
         this._bindMultiSelectFilter('lt');
         this._bindMultiSelectFilter('tm');
         this._bindMultiSelectFilter('step');
+
+        // 필터 리셋 버튼
+        const filterResetBtn = document.getElementById('filter-reset-btn');
+        if (filterResetBtn) {
+            filterResetBtn.addEventListener('click', async () => {
+                const openPaths = this._getOpenExplorerFolders();
+                this.filterLT = [];
+                this.filterTM = [];
+                this.filterSTEP = [];
+                this._restoreMultiSelectUI('lt');
+                this._restoreMultiSelectUI('tm');
+                this._restoreMultiSelectUI('step');
+                this._saveUserPrefs();
+                await this.loadDirectoryContents(this.currentFolderPrefix || null, this.dom.fileExplorer);
+                await this._restoreOpenExplorerFolders(openPaths);
+            });
+        }
 
         if (this.dom.personalizedColorButton) {
             this.dom.personalizedColorButton.addEventListener('click', (e) => {
@@ -7076,6 +7093,11 @@ class WaferMapViewer {
     async selectAllFolderFiles(folderPath) {
         try {
             this.debugLog(`폴더 선택: ${folderPath}`);
+
+            // 필터 메타데이터가 없으면 로드 (LT/TM 필터 적용 위해 필수)
+            if (!this.filterFileMetadata || Object.keys(this.filterFileMetadata).length === 0) {
+                await this.fetchFilterMetadata(folderPath);
+            }
 
             // API를 통해 폴더 내 모든 파일 가져오기 (재귀적)
 

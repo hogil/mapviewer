@@ -806,12 +806,13 @@
             display: flex;
             flex-direction: row;
             align-items: center;
-            gap: 6px;
-            padding: 4px 8px 4px 8px;
+            gap: 4px;
+            padding: 4px 6px;
             background: rgba(30, 30, 30, 0.96);
             border-bottom: 1px solid #222;
             box-sizing: border-box;
             position: static;
+            overflow: hidden;
         }
         
         /* Grid Mode Color Legend */
@@ -903,13 +904,13 @@
             align-items: center;
             gap: 4px;
             flex-shrink: 0;
-            margin-right: 6px;
+            margin-right: 4px;
         }
         .control-group.control-group-columns {
             display: flex !important;
             align-items: center;
             gap: 4px;
-            margin-right: 16px;
+            margin-right: 8px;
         }
         .grid-slider {
             display: flex;
@@ -917,7 +918,7 @@
             gap: 8px;
         }
         #grid-cols-range {
-            width: 100px;
+            width: 80px;
             accent-color: #0a86da;
         }
         #grid-cols-minus,
@@ -937,7 +938,7 @@
             align-items: center;
             gap: 6px;
             margin-left: 0;
-            flex: 1 1 auto;
+            flex: 0 1 auto;
             min-width: 0;
         }
         
@@ -948,9 +949,9 @@
             border-radius: 4px !important;
             font-size: 13px !important;
             padding: 4px 8px !important;
-            width: 180px !important;
-            max-width: 40% !important;
-            min-width: 150px !important;
+            width: 150px !important;
+            max-width: 30% !important;
+            min-width: 100px !important;
             transition: border-color 0.2s ease;
         }
         
@@ -3587,6 +3588,8 @@
                 </div>
                 <!-- 파일 필터 선택 -->
                 <div style="margin-top: 8px; padding: 4px 0; display: flex; gap: 6px; align-items: center;">
+                    <!-- 필터 리셋 버튼 -->
+                    <button type="button" id="filter-reset-btn" class="multi-select-btn" title="LOT/TEST/STEP 필터 전체 해제" style="padding:2px 6px;font-size:11px;color:#aaa;border-color:#555;">↺</button>
                     <!-- LT 다중선택 드롭다운 -->
                     <div id="filter-lt-multi" class="multi-select-dropdown" style="position:relative;">
                         <button type="button" class="multi-select-btn" id="filter-lt-btn">LOT</button>
@@ -3714,7 +3717,7 @@
                     <button id="search-btn" class="grid-btn" aria-label="검색">검색</button>
                     <button type="button" id="multi-search-btn" class="grid-btn" aria-label="LOT 다중 검색">다중검색</button>
                 </div>
-                <div class="control-group" style="margin-left: auto; margin-right: 8px; gap: 8px;">
+                <div class="control-group" style="margin-left: auto; margin-right: 8px; gap: 6px; flex-shrink: 1;">
                     <button id="lot-mode-btn" class="grid-btn lot-mode-btn" title="Lot별로 그룹화하여 보기">LOT Mode</button>
                     <div id="mc-dropdown-wrap" class="failbit-dropdown-wrap" style="position:relative;">
                         <button id="measure-composite-btn-top" class="grid-btn" title="Composite Map (Grade/BIN/FBT/QVL 집계)">Composite</button>
