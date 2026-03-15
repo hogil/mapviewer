@@ -5483,7 +5483,10 @@ class WaferMapViewer {
             this[stateKey] = checked;
             this._updateMultiSelectBtn(type);
             this._saveUserPrefs();
+            // 열린 폴더 경로 수집 → 필터 적용 → 열린 폴더 복원
+            const openPaths = this._getOpenExplorerFolders();
             await this.loadDirectoryContents(this.currentFolderPrefix || null, this.dom.fileExplorer);
+            await this._restoreOpenExplorerFolders(openPaths);
         });
 
         // 패널 밖 클릭 → 닫기
@@ -5493,6 +5496,40 @@ class WaferMapViewer {
                 btn.classList.remove('active');
             }
         });
+    }
+
+    /**
+     * 파일 탐색기에서 현재 열려있는 폴더 경로 목록 반환
+     */
+    _getOpenExplorerFolders() {
+        const explorer = this.dom.fileExplorer;
+        if (!explorer) return [];
+        const openPaths = [];
+        explorer.querySelectorAll('details[open] > summary[data-path]').forEach(summary => {
+            openPaths.push(summary.dataset.path);
+        });
+        return openPaths;
+    }
+
+    /**
+     * 파일 탐색기에서 지정된 폴더 경로들을 순차적으로 다시 열기
+     */
+    async _restoreOpenExplorerFolders(paths) {
+        if (!paths || paths.length === 0) return;
+        const explorer = this.dom.fileExplorer;
+        if (!explorer) return;
+        for (const folderPath of paths) {
+            const summary = explorer.querySelector(`summary[data-path="${CSS.escape(folderPath)}"]`);
+            if (!summary) continue;
+            const details = summary.closest('details');
+            if (!details || details.open) continue;
+            // 폴더 콘텐츠 로드
+            const contentDiv = details.querySelector('.folder-content');
+            if (contentDiv) {
+                await this.loadDirectoryContents(folderPath, contentDiv);
+            }
+            details.open = true;
+        }
     }
 
     /**
