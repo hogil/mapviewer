@@ -5400,21 +5400,24 @@ class WaferMapViewer {
             return !hasLT && !hasTM;
         }
 
-        // LT 필터 — 선택된 값 중 하나라도 매치하면 통과 (OR)
+        // LT 필터 — 선택된 값 중 하나라도 매치하면 통과 (OR, 대소문자 무시)
         if (hasLT) {
+            const ltVal = (meta.lt || '').toUpperCase();
             const ltMatch = this.filterLT.some(f => {
-                if (f.endsWith('%')) {
-                    const prefix = f.slice(0, -1);
-                    return meta.lt && meta.lt.startsWith(prefix);
+                const fUp = f.toUpperCase();
+                if (fUp.endsWith('%')) {
+                    const prefix = fUp.slice(0, -1);
+                    return ltVal.startsWith(prefix);
                 }
-                return meta.lt === f;
+                return ltVal === fUp;
             });
             if (!ltMatch) return false;
         }
 
-        // TM 필터 — 선택된 값 중 하나라도 매치하면 통과 (OR)
+        // TM 필터 — 선택된 값 중 하나라도 매치하면 통과 (OR, 대소문자 무시)
         if (hasTM) {
-            if (!this.filterTM.includes(meta.tm)) return false;
+            const tmVal = (meta.tm || '').toUpperCase();
+            if (!this.filterTM.some(f => f.toUpperCase() === tmVal)) return false;
         }
 
         return true;
