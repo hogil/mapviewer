@@ -1213,6 +1213,42 @@ class WaferMapViewer {
                 btn.addEventListener('click', () => this.handleCompositeCreate());
             });
         }
+        // Measure Composite dropdown
+        const mcBtn = document.getElementById('measure-composite-btn-top');
+        if (mcBtn) {
+            mcBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._toggleMcPanel();
+            });
+        }
+        // M.Comp search filter
+        const mcSearch = document.querySelector('#mc-panel .mc-search');
+        if (mcSearch) {
+            mcSearch.addEventListener('input', (e) => {
+                const list = document.querySelector('#mc-panel .mc-list');
+                if (!list) return;
+                const q = e.target.value.trim().toLowerCase();
+                list.querySelectorAll('.failbit-item').forEach(item => {
+                    const text = (item.dataset.label || '').toLowerCase();
+                    item.style.display = (!q || text.includes(q)) ? '' : 'none';
+                });
+            });
+            mcSearch.addEventListener('click', (e) => e.stopPropagation());
+        }
+        // Close mc-panel on outside click
+        // 패널이 body로 이동해도 #mc-panel 내부 클릭은 닫히지 않게 처리
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('#mc-dropdown-wrap') && !e.target.closest('#mc-panel')) {
+                this._closeMcPanel();
+            }
+        });
+
+        // Compare View button
+        const compareBtn = document.getElementById('compare-view-btn');
+        if (compareBtn) {
+            compareBtn.addEventListener('click', () => this.openCompareView());
+        }
+
         const refMapButtons = document.querySelectorAll('[data-ref-map-btn]');
         if (refMapButtons.length) {
             refMapButtons.forEach(btn => {
@@ -5020,6 +5056,16 @@ class WaferMapViewer {
             });
         }
 
+        // 📦 그리드 정렬 드롭다운
+        this._gridSortKey = 'filename';
+        const gridSortSelect = document.getElementById('grid-sort-select');
+        if (gridSortSelect) {
+            gridSortSelect.onchange = () => {
+                this._gridSortKey = gridSortSelect.value;
+                this._applySortAndRerender();
+            };
+        }
+
         const gridSelectAll = document.getElementById('grid-select-all');
 
         if (gridSelectAll) {
@@ -5459,7 +5505,8 @@ class WaferMapViewer {
         if (!keys) return;
         const btnKey = keys.btn;
         const stateKey = keys.state;
-        const label = type.toUpperCase();
+        const labelMap = { lt: 'LOT', tm: 'TEST', step: 'STEP' };
+        const label = labelMap[type] || type.toUpperCase();
         const btn = this.dom[btnKey];
         if (!btn) return;
         const panelMap = { lt: 'filterLtPanel', tm: 'filterTmPanel', step: 'filterStepPanel' };
@@ -5927,17 +5974,26 @@ class WaferMapViewer {
             parts.push(`grade_filter=${gradeList}`);
         }
 
+        // 🔥 Measure Composite 결과는 이미 gradient 렌더링된 RGB PNG
+        // overlay/filter를 보내면 서버가 palette 조작/재오버레이를 시도하여 깨짐
+        const isMeasureCompositeView = this.isCompositeMode && this.compositeSession?.measureMode;
+
         // 🔥 BIN overlay / bottom filter / measure overlay — 모두 독립 전송 (동시 사용 가능)
-        if (this.overlayMode === 'bin') {
+        if (!isMeasureCompositeView && this.overlayMode === 'bin') {
             parts.push('bin_overlay=1');
         }
-        if (hasBottomFilter) {
+        if (!isMeasureCompositeView && hasBottomFilter) {
             const bottomList = Array.from(this.selectedBottoms).sort().join(',');
             parts.push(`bottom_filter=${encodeURIComponent(bottomList)}`);
         }
-        if (this.overlayMode === 'f' || this.overlayMode === 'q') {
+        if (!isMeasureCompositeView && (this.overlayMode === 'f' || this.overlayMode === 'q')) {
             if (this._ratioActiveItemKey) {
                 parts.push(`measure_overlay=${encodeURIComponent(this.overlayMode + ':' + this._ratioActiveItemKey)}`);
+            }
+            // Grid mode: gradient percentile filter (server-side)
+            if (this.selectedGradientRanges.size > 0) {
+                const rangeList = Array.from(this.selectedGradientRanges).sort((a, b) => a - b).join(',');
+                parts.push(`gradient_filter=${rangeList}`);
             }
         }
 
@@ -5997,6 +6053,8 @@ class WaferMapViewer {
         try {
             await fetchOptimizer.clearCache();
         } catch (_) {}
+
+        this._cachedMcKeys = null;
 
         if (clearPersistentStorage) {
             try {
@@ -7720,11 +7778,14 @@ class WaferMapViewer {
             console.warn('?? ���ؽ�Ʈ �޴� �׸��� ã�� �� �����ϴ�.');
             return;
         }
+        const mcCreateItem = document.getElementById('context-mc-create');
         if (this.isCompositeMode) {
             createItem.style.setProperty('display', 'none', 'important');
+            if (mcCreateItem) mcCreateItem.style.setProperty('display', 'none', 'important');
             returnItem.style.setProperty('display', 'block', 'important');
         } else {
             createItem.style.setProperty('display', 'block', 'important');
+            if (mcCreateItem) mcCreateItem.style.setProperty('display', 'block', 'important');
             returnItem.style.setProperty('display', 'none', 'important');
         }
         if (colorItem) {
@@ -8334,6 +8395,799 @@ class WaferMapViewer {
         }
     }
 
+    /**
+     * Measure Composite 모달 열기
+     */
+    /**
+     * M.Comp 드롭다운 토글
+     */
+    _toggleMcPanel() {
+        const panel = document.getElementById('mc-panel');
+        if (!panel) return;
+
+        if (this.isCompositeMode) {
+            this.showToast?.('Composite 모드에서 나간 후 다시 시도하세요.', 1800);
+            return;
+        }
+
+        const selected = this.getSelectedImagesForModal();
+        if (!selected.length) {
+            this.showToast?.('이미지를 먼저 선택하세요.', 1800);
+            return;
+        }
+
+        const isOpen = panel.style.display !== 'none';
+        this._closeMcPanel();
+        if (isOpen) return;
+
+        this._mcSelectedImages = [...selected];
+
+        // Build list
+        this._buildMcList(panel);
+
+        // Search reset & show
+        const search = panel.querySelector('.mc-search');
+        if (search) search.value = '';
+
+        // body로 이동 (z-index stacking context 탈출)
+        if (panel.parentElement !== document.body) {
+            panel._originalParent = panel.parentElement;
+            panel._originalNext = panel.nextSibling;
+            document.body.appendChild(panel);
+        }
+        panel.style.display = '';
+
+        // 패널 내부 클릭이 document click handler로 버블링되지 않도록 차단
+        if (!panel._mcClickBlocker) {
+            panel._mcClickBlocker = true;
+            panel.addEventListener('click', (e) => e.stopPropagation());
+        }
+
+        // 버튼 아래 fixed 위치
+        const btn = document.getElementById('measure-composite-btn-top');
+        if (btn) {
+            const rect = btn.getBoundingClientRect();
+            panel.style.top = `${rect.bottom + 2}px`;
+            panel.style.right = `${window.innerWidth - rect.right}px`;
+            panel.style.left = 'auto';
+        }
+
+        if (search) setTimeout(() => search.focus(), 50);
+    }
+
+    _closeMcPanel() {
+        const panel = document.getElementById('mc-panel');
+        if (!panel) return;
+        panel.style.display = 'none';
+        // 생성 버튼 wrap 제거 (다음 open 시 재생성)
+        const btnWrap = panel.querySelector('.mc-generate-btn')?.parentElement;
+        if (btnWrap && btnWrap !== panel) btnWrap.remove();
+        if (panel._originalParent) {
+            panel._originalParent.insertBefore(panel, panel._originalNext || null);
+            delete panel._originalParent;
+            delete panel._originalNext;
+        }
+    }
+
+    /**
+     * Context menu 서브메뉴 빌드 (M.Comp용)
+     */
+    _buildMcContextSubmenu() {
+        const submenu = document.getElementById('context-mc-submenu');
+        if (!submenu) return;
+        const list = submenu.querySelector('.mc-ctx-list');
+        if (!list) return;
+
+        const selected = this.getSelectedImagesForModal();
+        if (!selected.length) {
+            list.innerHTML = '<div class="failbit-item" style="color:#888;">이미지를 선택하세요</div>';
+            return;
+        }
+        this._mcSelectedImages = [...selected];
+
+        // 캐시 있으면 즉시 렌더링
+        if (this._cachedMcKeys) {
+            this._renderMcContextList(list, this._cachedMcKeys);
+            return;
+        }
+
+        list.innerHTML = '<div class="failbit-item" style="color:#888;">로딩 중...</div>';
+        fetch(`/api/chip-positions?path=${encodeURIComponent(selected[0])}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+                if (!data) { list.innerHTML = '<div class="failbit-item" style="color:#888;">데이터 없음</div>'; return; }
+                const chips = data.chips || [];
+                const fKeySet = new Set(), qKeySet = new Set(), binSet = new Set();
+                for (const chip of chips) {
+                    if (chip.f && typeof chip.f === 'object') Object.keys(chip.f).forEach(k => fKeySet.add(k));
+                    if (chip.q && typeof chip.q === 'object') Object.keys(chip.q).forEach(k => qKeySet.add(k));
+                    if (chip.b != null) {
+                        const norm = this.chipAnnotator?._normalizeBottomValue?.(chip.b) || String(chip.b);
+                        binSet.add(norm);
+                    }
+                }
+                const keys = {
+                    bin: [...binSet].sort((a, b) => Number(a) - Number(b)),
+                    f: [...fKeySet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+                    q: [...qKeySet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+                };
+                this._cachedMcKeys = keys;
+                this._renderMcContextList(list, keys);
+            })
+            .catch(() => {
+                list.innerHTML = '<div class="failbit-item" style="color:#888;">로드 실패</div>';
+            });
+    }
+
+    _renderMcContextList(list, keys) {
+        // Context menu에서도 체크박스 멀티 선택 사용 (패널과 동일한 UI)
+        this._renderMcList(list, keys);
+    }
+
+    /**
+     * M.Comp 리스트 빌드 (BIN 개별 / FBT / QVL)
+     */
+    _buildMcList(panel) {
+        const list = panel.querySelector('.mc-list');
+        if (!list) return;
+        list.innerHTML = '<div class="failbit-item" style="color:#888;">로딩 중...</div>';
+
+        // 캐시가 있으면 즉시 렌더링
+        if (this._cachedMcKeys) {
+            this._renderMcList(list, this._cachedMcKeys);
+            return;
+        }
+
+        // 첫 이미지에서 키 로드
+        const images = this._mcSelectedImages || [];
+        if (!images.length) return;
+
+        fetch(`/api/chip-positions?path=${encodeURIComponent(images[0])}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+                if (!data) { list.innerHTML = '<div class="failbit-item" style="color:#888;">데이터 없음</div>'; return; }
+                const chips = data.chips || [];
+                const fKeySet = new Set();
+                const qKeySet = new Set();
+                const binSet = new Set();
+                for (const chip of chips) {
+                    if (chip.f && typeof chip.f === 'object') {
+                        Object.keys(chip.f).forEach(k => fKeySet.add(k));
+                    }
+                    if (chip.q && typeof chip.q === 'object') {
+                        Object.keys(chip.q).forEach(k => qKeySet.add(k));
+                    }
+                    if (chip.b != null) {
+                        const norm = this.chipAnnotator?._normalizeBottomValue?.(chip.b) || String(chip.b);
+                        binSet.add(norm);
+                    }
+                }
+                const keys = {
+                    bin: [...binSet].sort((a, b) => Number(a) - Number(b)),
+                    f: [...fKeySet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+                    q: [...qKeySet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+                };
+                this._cachedMcKeys = keys;
+                if (panel.style.display !== 'none') {
+                    this._renderMcList(list, keys);
+                }
+            })
+            .catch(() => {
+                list.innerHTML = '<div class="failbit-item" style="color:#888;">로드 실패</div>';
+            });
+    }
+
+    _renderMcList(list, keys) {
+        list.innerHTML = '';
+        this._mcCheckedItems = [];  // [{mode, itemKey, binType, label}]
+
+        const updateGenBtn = () => {
+            const btn = list.parentElement?.querySelector('.mc-generate-btn');
+            if (btn) {
+                btn.textContent = `생성 (${this._mcCheckedItems.length})`;
+                btn.disabled = this._mcCheckedItems.length === 0;
+                btn.style.opacity = this._mcCheckedItems.length === 0 ? '0.5' : '1';
+            }
+        };
+
+        const makeItem = (label, mode, itemKey, binType) => {
+            const item = document.createElement('div');
+            item.className = 'failbit-item';
+            item.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;';
+            item.dataset.label = label;
+
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.style.cssText = 'margin:0;cursor:pointer;flex-shrink:0;';
+            item.appendChild(cb);
+
+            const span = document.createElement('span');
+            span.textContent = label;
+            span.style.flex = '1';
+            item.appendChild(span);
+
+            const entry = { mode, itemKey, binType, label };
+            const toggle = (e) => {
+                if (e.target === cb) return;  // checkbox handles itself
+                cb.checked = !cb.checked;
+                cb.dispatchEvent(new Event('change'));
+            };
+            item.addEventListener('click', toggle);
+            cb.addEventListener('change', () => {
+                if (cb.checked) {
+                    this._mcCheckedItems.push(entry);
+                } else {
+                    this._mcCheckedItems = this._mcCheckedItems.filter(
+                        x => !(x.mode === mode && x.itemKey === itemKey && x.binType === binType)
+                    );
+                }
+                updateGenBtn();
+            });
+            return item;
+        };
+
+        // Composite Map (Grade heatmap) — 최상단
+        const specialHeader = document.createElement('div');
+        specialHeader.className = 'failbit-section';
+        specialHeader.textContent = 'MAP';
+        list.appendChild(specialHeader);
+        list.appendChild(makeItem('Failbit', 'composite', null, null));
+
+        // BIN section
+        if (keys.bin.length > 0) {
+            const header = document.createElement('div');
+            header.className = 'failbit-section';
+            header.textContent = 'BIN';
+            list.appendChild(header);
+            const _headOrder = { 'Normal': 1, 'Invalid': 2, 'ETC': 3 };
+            const sortedBins = [...keys.bin].sort((a, b) => {
+                const ha = _headOrder[a] || 99, hb = _headOrder[b] || 99;
+                if (ha !== hb) return ha - hb;
+                return Number(a) - Number(b);
+            });
+            const _displayName = { 'Normal': 'NORMAL', 'Invalid': 'INVALID', 'ETC': 'ETC' };
+            for (const bin of sortedBins) {
+                list.appendChild(makeItem(_displayName[bin] || `BIN${bin}`, 'bin', null, bin));
+            }
+        }
+
+        // FBT section
+        if (keys.f.length > 0) {
+            const header = document.createElement('div');
+            header.className = 'failbit-section';
+            header.textContent = 'FBT';
+            list.appendChild(header);
+            for (const k of keys.f) {
+                list.appendChild(makeItem(`FBT${k}`, 'f', k, null));
+            }
+        }
+
+        // QVL section
+        if (keys.q.length > 0) {
+            const header = document.createElement('div');
+            header.className = 'failbit-section';
+            header.textContent = 'QVL';
+            list.appendChild(header);
+            for (const k of keys.q) {
+                list.appendChild(makeItem(`QVL${k}`, 'q', k, null));
+            }
+        }
+
+        if (list.children.length === 0) {
+            list.innerHTML = '<div class="failbit-item" style="color:#888;">항목 없음</div>';
+            return;
+        }
+
+        // 생성 버튼 추가 (기존 제거 후 재생성)
+        const existingBtnWrap = list.parentElement?.querySelector('.mc-generate-wrap');
+        if (existingBtnWrap) existingBtnWrap.remove();
+        const btnWrap = document.createElement('div');
+        btnWrap.className = 'mc-generate-wrap';
+        btnWrap.style.cssText = 'padding:6px 8px;border-top:1px solid #444;';
+        const genBtn = document.createElement('button');
+        genBtn.className = 'mc-generate-btn';
+        genBtn.textContent = '생성 (0)';
+        genBtn.disabled = true;
+        genBtn.style.cssText = 'width:100%;padding:6px 0;background:#1976d2;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:600;opacity:0.5;';
+        genBtn.addEventListener('click', () => {
+            if (!this._mcCheckedItems.length) return;
+            this._closeMcPanel();
+            if (typeof this.hideContextMenu === 'function') this.hideContextMenu();
+            this._startMultipleMeasureComposites([...this._mcCheckedItems]);
+        });
+        btnWrap.appendChild(genBtn);
+        list.parentElement.appendChild(btnWrap);
+    }
+
+    /**
+     * 다중 Measure Composite 생성 (체크된 항목들 동시 생성)
+     * items: [{mode, itemKey, binType, label}, ...]
+     */
+    async _startMultipleMeasureComposites(items) {
+        if (!items.length) return;
+        const selected = this._mcSelectedImages || [];
+        if (!selected.length) return;
+
+        // Composite Map (Grade) 항목과 Measure Composite 항목 분리
+        const compositeMapItems = items.filter(it => it.mode === 'composite');
+        const measureItems = items.filter(it => it.mode !== 'composite');
+
+        if (!compositeMapItems.length && !measureItems.length) return;
+
+        // Page management
+        const previousPageState = this.captureActivePageState();
+        let targetPageId = this.pageManager?.activePageId || null;
+        if (this.pageManager) {
+            this.persistActivePageState(previousPageState);
+            const compositePage = this.ensurePageForRole('composite', { forceNew: true, skipPersist: true });
+            targetPageId = compositePage?.id || targetPageId;
+        }
+
+        const initialTask = {
+            status: 'queued',
+            message: `Composite 생성 준비 중... (${items.length}개 항목, ${selected.length}개 wafer)`,
+            selectedCount: selected.length,
+            startedAt: Date.now(),
+        };
+        if (targetPageId) {
+            this.setCompositePageTask(targetPageId, { task: initialTask, result: null });
+        }
+        this.syncCompositeInlineStatus(targetPageId);
+
+        try {
+            // ── 1) Composite Map (Grade heatmap) API 호출 ──
+            const compositeTaskIds = [];
+            if (compositeMapItems.length > 0) {
+                const res = await fetch('/api/composite-map', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image_paths: selected }),
+                    cache: 'no-store',
+                });
+                if (!res.ok) throw new Error(await res.text());
+                const data = await res.json();
+                compositeTaskIds.push({ taskId: data.task_id, item: compositeMapItems[0], isGradeComposite: true });
+            }
+
+            // ── 2) Measure Composite (BIN/FBT/QVL) API 호출 ──
+            const measureTaskPromises = measureItems.map(async (item) => {
+                const bin_types = item.mode === 'bin' ? [item.binType] : null;
+                const item_key = item.mode !== 'bin' ? item.itemKey : null;
+                const aggregation = item.mode === 'bin' ? 'count' : 'average';
+
+                const res = await fetch('/api/measure-composite', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        image_paths: selected,
+                        mode: item.mode,
+                        item_key,
+                        bin_types,
+                        aggregation,
+                    }),
+                    cache: 'no-store',
+                });
+                if (!res.ok) throw new Error(await res.text());
+                const data = await res.json();
+                return { taskId: data.task_id, item, isGradeComposite: false };
+            });
+
+            const measureTasks = await Promise.all(measureTaskPromises);
+            const allTasks = [...compositeTaskIds, ...measureTasks];
+
+            // ── 3) 모든 태스크 완료 대기 (병렬 폴링) ──
+            const pollTask = async ({ taskId, item, isGradeComposite }) => {
+                while (true) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    const statusRes = await fetch(`/api/composite-map/status/${taskId}`, { cache: 'no-store' });
+                    if (!statusRes.ok) throw new Error(`작업 상태 조회 실패: ${item.label}`);
+                    const status = await statusRes.json();
+
+                    if (status.status === 'completed') {
+                        const result = status.result;
+                        // Grade Composite: 결과를 개별 이미지로 풀어서 배열 반환
+                        // (Grade 0~7 heatmap + sum_maps average 2개 = 10개)
+                        if (isGradeComposite && result) {
+                            const expanded = [];
+                            // 1) sum_maps (average maps) — 먼저 표시
+                            const sumMaps = result.sum_maps || [];
+                            for (const sm of sumMaps) {
+                                expanded.push({
+                                    ...result,
+                                    image_path: sm.path,
+                                    display_name: sm.display_name || sm.filename?.replace(/\.[^.]+$/, '') || 'Average',
+                                    measure_mode: 'composite',
+                                    is_grade_composite: true,
+                                    range_counts: [],
+                                    chip_count: 0,
+                                });
+                            }
+                            // 2) Grade heatmaps (Grade 0~7)
+                            const heatmaps = result.heatmaps || [];
+                            for (const hm of heatmaps) {
+                                expanded.push({
+                                    ...result,
+                                    image_path: hm.path,
+                                    display_name: `Grade ${hm.index}`,
+                                    measure_mode: 'composite',
+                                    is_grade_composite: true,
+                                    range_counts: [],
+                                    chip_count: hm.pixel_count || 0,
+                                });
+                            }
+                            return expanded;
+                        }
+                        return [result];  // Measure Composite는 단일 결과를 배열로 래핑
+                    }
+                    if (status.status === 'failed') throw new Error(status.error || `${item.label} 생성 실패`);
+
+                    const updatedTask = {
+                        status: 'processing',
+                        message: `Composite 처리 중... (${items.length}개 항목)`,
+                        selectedCount: selected.length,
+                        startedAt: initialTask.startedAt,
+                    };
+                    if (targetPageId) {
+                        this.setCompositePageTask(targetPageId, { task: updatedTask, result: null });
+                    }
+                    this.syncCompositeInlineStatus(targetPageId);
+                }
+            };
+
+            const nestedResults = await Promise.all(allTasks.map(pollTask));
+            const allResults = nestedResults.flat();
+
+            // Display all results in grid
+            if (allResults.length && targetPageId) {
+                const isActiveComposite = this.pageManager?.activePageId === targetPageId;
+                if (isActiveComposite) {
+                    this.showCompositeInlineStatus('Measure Composite 결과 표시 중...');
+                    await this.switchToMeasureCompositeGrid(allResults);
+                    this.clearCompositePageTask(targetPageId);
+                    this.hideCompositeInlineStatus();
+                    this.persistActivePageState();
+                } else {
+                    this.hideCompositeInlineStatus();
+                    this.setCompositePageTask(targetPageId, { task: null, result: allResults[0] });
+                }
+            } else {
+                this.hideCompositeInlineStatus();
+            }
+
+            this.showCompositeDoneMessage?.(`Measure Composite ${items.length}개 생성 완료!`, 2400);
+        } catch (error) {
+            console.error('Measure Composite 다중 생성 실패:', error);
+            this.hideCompositeInlineStatus();
+            if (targetPageId) this.clearCompositePageTask(targetPageId);
+            alert('Measure Composite 생성에 실패했습니다: ' + error.message);
+        }
+    }
+
+    /**
+     * Measure Composite 생성 실행 (드롭다운에서 항목 선택 시)
+     */
+    async _startMeasureComposite(mode, itemKey, binType) {
+        const selected = this._mcSelectedImages || [];
+        if (!selected.length) return;
+
+        // BIN: 단일 타입, FBT/QVL: aggregation=average
+        const bin_types = mode === 'bin' ? [binType] : null;
+        const item_key = mode !== 'bin' ? itemKey : null;
+        const aggregation = mode === 'bin' ? 'count' : 'average';
+
+        const modeLabel = mode === 'bin' ? `BIN${binType}` :
+                          mode === 'f' ? `FBT${itemKey}` : `QVL${itemKey}`;
+
+        // Page management
+        const previousPageState = this.captureActivePageState();
+        let targetPageId = this.pageManager?.activePageId || null;
+        if (this.pageManager) {
+            this.persistActivePageState(previousPageState);
+            const compositePage = this.ensurePageForRole('composite', { forceNew: true, skipPersist: true });
+            targetPageId = compositePage?.id || targetPageId;
+        }
+
+        const initialTask = {
+            status: 'queued',
+            message: `Measure Composite 준비 중... (${modeLabel}, ${selected.length}개)`,
+            selectedCount: selected.length,
+            startedAt: Date.now(),
+        };
+        if (targetPageId) {
+            this.setCompositePageTask(targetPageId, { task: initialTask, result: null });
+        }
+        this.syncCompositeInlineStatus(targetPageId);
+
+        try {
+            const res = await fetch('/api/measure-composite', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    image_paths: selected,
+                    mode,
+                    item_key,
+                    bin_types,
+                    aggregation,
+                }),
+                cache: 'no-store',
+            });
+
+            if (!res.ok) throw new Error(await res.text());
+
+            const startResponse = await res.json();
+            const taskId = startResponse.task_id;
+
+            let result = null;
+            while (true) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                const statusRes = await fetch(`/api/composite-map/status/${taskId}`, { cache: 'no-store' });
+                if (!statusRes.ok) throw new Error('작업 상태 조회 실패');
+
+                const status = await statusRes.json();
+                const statusText = status.status === 'processing' ? '처리 중...' :
+                                   status.status === 'queued' ? '대기 중...' :
+                                   status.status === 'completed' ? '완료!' : '실패';
+                const updatedTask = {
+                    status: status.status === 'completed' ? 'rendering' : status.status,
+                    message: `Measure Composite ${statusText} (${modeLabel}, ${selected.length}개)`,
+                    selectedCount: selected.length,
+                    startedAt: initialTask.startedAt,
+                };
+                if (targetPageId) {
+                    this.setCompositePageTask(targetPageId, { task: updatedTask, result: null });
+                }
+                this.syncCompositeInlineStatus(targetPageId);
+
+                if (status.status === 'completed') {
+                    result = status.result;
+                    break;
+                } else if (status.status === 'failed') {
+                    throw new Error(status.error || 'Measure Composite 생성 실패');
+                }
+            }
+
+            // Display result
+            if (result && targetPageId) {
+                const isActiveComposite = this.pageManager?.activePageId === targetPageId;
+                if (isActiveComposite) {
+                    this.showCompositeInlineStatus('Measure Composite 결과 표시 중...');
+                    await this.switchToMeasureCompositeGrid(result);
+                    this.clearCompositePageTask(targetPageId);
+                    this.hideCompositeInlineStatus();
+                    this.persistActivePageState();
+                } else {
+                    this.hideCompositeInlineStatus();
+                    this.setCompositePageTask(targetPageId, { task: null, result });
+                }
+            } else {
+                this.hideCompositeInlineStatus();
+            }
+
+            this.showCompositeDoneMessage?.('Measure Composite 생성 완료!', 2400);
+        } catch (error) {
+            console.error('Measure Composite 생성 실패:', error);
+            this.hideCompositeInlineStatus();
+            if (targetPageId) this.clearCompositePageTask(targetPageId);
+            alert('Measure Composite 생성에 실패했습니다: ' + error.message);
+        }
+    }
+
+    /**
+     * Measure Composite 필터 적용 → recolor API 호출
+     * gradient_filter (selectedGradientRanges) + bin_filter (selectedBottoms)
+     */
+    async _recolorMeasureComposite() {
+        const cs = this.compositeSession;
+        if (!cs) return;
+
+        const gradientFilter = this.selectedGradientRanges.size > 0
+            ? Array.from(this.selectedGradientRanges) : null;
+        const binFilter = this.selectedBottoms.size > 0
+            ? Array.from(this.selectedBottoms) : null;
+
+        const results = cs.measureResults || [];
+        if (!results.length) return;
+
+        // 모든 결과에 대해 recolor (병렬)
+        const recolorPromises = results.map(async (r) => {
+            try {
+                const res = await fetch('/api/measure-composite-recolor', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        output_dir: r.output_dir,
+                        gradient_filter: gradientFilter,
+                        bin_filter: binFilter,
+                    }),
+                    cache: 'no-store',
+                });
+                if (res.ok) return await res.json();
+            } catch (e) {
+                console.error('Measure composite recolor failed:', e);
+            }
+            return null;
+        });
+
+        const recolorResults = await Promise.all(recolorPromises);
+
+        // range_counts 합산 업데이트
+        const merged = new Array(10).fill(0);
+        for (const r of recolorResults) {
+            if (r?.range_counts) {
+                for (let i = 0; i < 10; i++) merged[i] += (r.range_counts[i] || 0);
+            }
+        }
+        cs.rangeCounts = merged;
+
+        // 캐시 무효화 + 리로드
+        this._personalizedColorCacheBuster = Date.now();
+        if (this.gridMode) {
+            this.refreshGridThumbnailsWithCurrentParams();
+        } else if (this.selectedImagePath) {
+            await this._reloadCurrentImageWithFilters();
+        }
+        this.renderColorLegends();
+    }
+
+    /**
+     * Measure Composite 결과를 그리드에 표시
+     */
+    async switchToMeasureCompositeGrid(result) {
+        // result can be a single object or an array of results (multi-select)
+        const results = Array.isArray(result) ? result : [result];
+        // Use first measure result for session metadata (skip grade composite)
+        const firstResult = results.find(r => !r.is_grade_composite) || results[0];
+
+        this.selectedGrades.clear();
+        this.selectedBottoms.clear();
+        this.selectedGradientRanges.clear();
+
+        // 🔥 Cache-buster 갱신 — 새로 생성된 composite 결과 이미지가 캐시 우회
+        this._personalizedColorCacheBuster = Date.now();
+
+        // Pre-load gradient cache
+        if (!this._ratioGradientCache) {
+            try {
+                const loginId = this.currentUser || FALLBACK_LOGIN_ID;
+                const resp = await fetch(`/api/measure-colors?scheme=${encodeURIComponent(loginId)}`);
+                if (resp.ok) {
+                    const data = await resp.json();
+                    this._ratioGradientCache = data.colors || data.defaultColors;
+                }
+            } catch (_) {}
+        }
+
+        const heatmapPaths = results.map(r => r.image_path);
+
+        // Aggregate range_counts across all results
+        const mergedRangeCounts = new Array(10).fill(0);
+        let totalChipCount = 0;
+        for (const r of results) {
+            const rc = r.range_counts || [];
+            for (let i = 0; i < 10; i++) mergedRangeCounts[i] += (rc[i] || 0);
+            totalChipCount += (r.chip_count || 0);
+        }
+
+        // Build display name for multiple results
+        const displayNames = results.map(r => r.display_name || '').filter(Boolean);
+        const mergedDisplayName = displayNames.length <= 3
+            ? displayNames.join(', ')
+            : `${displayNames.slice(0, 3).join(', ')} +${displayNames.length - 3}`;
+
+        // Merge value_range across all results
+        const allMins = results.map(r => r.value_range?.min).filter(v => v != null);
+        const allMaxs = results.map(r => r.value_range?.max).filter(v => v != null);
+        const mergedValueRange = allMins.length > 0 ? {
+            min: Math.min(...allMins),
+            max: Math.max(...allMaxs),
+        } : firstResult.value_range;
+
+        // compositeSession 먼저 설정 (showGrid → renderGridColorLegend에서 참조)
+        this.compositeSession = {
+            sourceImageCount: firstResult.image_count,
+            outputDir: firstResult.output_dir,
+            sourceImagePaths: this._mcSelectedImages || [],
+            imageSize: firstResult.image_size,
+            processingTime: results.reduce((sum, r) => sum + (r.processing_time || 0), 0),
+            generatedAt: firstResult.generated_at,
+            sumMaps: [],
+            measureMode: firstResult.measure_mode,
+            measureItemKey: firstResult.item_key,
+            measureBinTypes: firstResult.bin_types,
+            measureAggregation: firstResult.aggregation,
+            measureDisplayName: mergedDisplayName,
+            chipCount: totalChipCount,
+            valueRange: mergedValueRange,
+            rangeCounts: mergedRangeCounts,
+            measureResults: results,  // 개별 결과 보관
+        };
+
+        this.gridSelectedIdxs = [];
+        this.gridSelectedSet = new Set();
+        this.selectedImages = heatmapPaths;
+        this.isCompositeMode = true;
+        this.lastCompositeSourceImages = this._mcSelectedImages || [];
+
+        await this.showGrid(heatmapPaths, true);
+
+        this.savedViewState = {
+            type: 'grid',
+            images: [...heatmapPaths],
+            isCompositeMode: true,
+            compositeSession: this.deepCloneSimple(this.compositeSession),
+        };
+
+        // Compare 버튼 표시 (measure composite 결과가 2개 이상일 때)
+        const compareBtn = document.getElementById('compare-view-btn');
+        if (compareBtn) {
+            compareBtn.style.display = heatmapPaths.length >= 2 ? 'inline-block' : 'none';
+        }
+    }
+
+    /**
+     * Compare View: Measure Composite 결과를 나란히 비교
+     */
+    openCompareView() {
+        const overlay = document.getElementById('compare-overlay');
+        const grid = document.getElementById('compare-grid');
+        if (!overlay || !grid) return;
+
+        const results = this.compositeSession?.measureResults || [];
+        const heatmapPaths = this.selectedImages || [];
+        if (heatmapPaths.length < 1) return;
+
+        // Grid 레이아웃 결정 (2개: 1x2, 3개: 1x3, 4+: 2x2)
+        const count = heatmapPaths.length;
+        const cols = count <= 3 ? count : Math.ceil(Math.sqrt(count));
+        grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+
+        // 패널 생성
+        grid.innerHTML = '';
+        const personalizedParams = this.getPersonalizedParams();
+        const cacheBuster = this._personalizedColorCacheBuster || Date.now();
+
+        heatmapPaths.forEach((path, i) => {
+            const result = results[i] || {};
+            const displayName = result.display_name || path.split('/').pop().replace(/\.[^.]+$/, '');
+
+            const panel = document.createElement('div');
+            panel.style.cssText = 'display:flex;flex-direction:column;background:#1a1a1a;border:1px solid #333;border-radius:6px;overflow:hidden;min-height:0;';
+
+            const label = document.createElement('div');
+            label.style.cssText = 'padding:6px 10px;background:#222;color:#ddd;font-size:13px;font-weight:600;text-align:center;border-bottom:1px solid #333;flex-shrink:0;';
+            label.textContent = displayName;
+            panel.appendChild(label);
+
+            const imgWrap = document.createElement('div');
+            imgWrap.style.cssText = 'flex:1;display:flex;align-items:center;justify-content:center;padding:4px;min-height:0;';
+
+            const img = document.createElement('img');
+            img.src = `/api/image?path=${encodeURIComponent(path)}&_t=${cacheBuster}`;
+            img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;border-radius:4px;';
+            img.alt = displayName;
+
+            imgWrap.appendChild(img);
+            panel.appendChild(imgWrap);
+            grid.appendChild(panel);
+        });
+
+        overlay.style.display = 'flex';
+
+        // 닫기 버튼
+        const closeBtn = document.getElementById('compare-close-btn');
+        if (closeBtn) {
+            closeBtn.onclick = () => { overlay.style.display = 'none'; };
+        }
+        // ESC로 닫기
+        const escHandler = (e) => {
+            if (e.key === 'Escape' && overlay.style.display !== 'none') {
+                overlay.style.display = 'none';
+                document.removeEventListener('keydown', escHandler);
+            }
+        };
+        document.addEventListener('keydown', escHandler);
+    }
+
     showCompositeProgressOverlay(message = 'Composite 작업 중입니다...') {
         try {
             if (this.compositeProgressOverlay) {
@@ -8861,7 +9715,8 @@ class WaferMapViewer {
         }
 
         this.hideContextMenuHandler = (e) => {
-            if (!contextMenu.contains(e.target)) {
+            const mcSubmenu = document.getElementById('context-mc-submenu');
+            if (!contextMenu.contains(e.target) && !(mcSubmenu && mcSubmenu.contains(e.target))) {
                 this.hideContextMenu();
             }
         };
@@ -8874,6 +9729,11 @@ class WaferMapViewer {
 
         if (contextMenu) {
             contextMenu.style.display = 'none';
+        }
+        const mcSubmenu = document.getElementById('context-mc-submenu');
+        if (mcSubmenu) {
+            mcSubmenu.style.display = 'none';
+            mcSubmenu._mcBuilt = false;
         }
 
         if (this.hideContextMenuHandler) {
@@ -8893,6 +9753,8 @@ class WaferMapViewer {
         const compositeReturnItem = document.getElementById('context-composite-return');
         const compositeColorItem = document.getElementById('context-composite-colors');
         const refMapContextItem = document.getElementById('context-set-ref-map');
+        const mcCreateItem = document.getElementById('context-mc-create');
+        const mcSubmenu = document.getElementById('context-mc-submenu');
         const myLotAddItem = document.getElementById('context-my-lot-add');
         const myLotAddSelectedItem = document.getElementById('context-my-lot-add-selected');
 
@@ -8901,6 +9763,33 @@ class WaferMapViewer {
                 this.hideContextMenu();
                 this.handleCompositeCreate();
             };
+        }
+
+        // Measure Composite 서브메뉴
+        if (mcCreateItem && mcSubmenu) {
+            mcCreateItem.addEventListener('mouseenter', () => {
+                // 서브메뉴 빌드 (이미 빌드 완료 시 스킵)
+                if (!mcSubmenu._mcBuilt) {
+                    this._buildMcContextSubmenu();
+                    mcSubmenu._mcBuilt = true;
+                }
+                mcSubmenu.style.display = '';
+            });
+            // mouseleave로 닫지 않음 — hideContextMenu()에서만 닫힘
+            // 서브메뉴 내부 클릭이 컨텍스트 메뉴를 닫지 않도록 차단
+            mcSubmenu.addEventListener('click', (e) => e.stopPropagation());
+            // 서브메뉴 검색 필터
+            const mcCtxSearch = mcSubmenu.querySelector('.mc-ctx-search');
+            if (mcCtxSearch) {
+                mcCtxSearch.addEventListener('input', (e) => {
+                    const q = e.target.value.trim().toLowerCase();
+                    mcSubmenu.querySelectorAll('.failbit-item').forEach(item => {
+                        const text = (item.dataset.label || '').toLowerCase();
+                        item.style.display = (!q || text.includes(q)) ? '' : 'none';
+                    });
+                });
+                mcCtxSearch.addEventListener('click', (e) => e.stopPropagation());
+            }
         }
 
         if (compositeReturnItem) {
@@ -10243,7 +11132,7 @@ class WaferMapViewer {
 
                 e.target === labelExplorerFrame ||
 
-                e.target.closest('#label-explorer-list')
+                (e.target.closest && e.target.closest('#label-explorer-list'))
 
             );
 
@@ -11665,6 +12554,19 @@ class WaferMapViewer {
             }
 
             // 🎨 Color Legends 표시 및 렌더링 (Single Image Mode)
+            // 🔥 Measure overlay 또는 Measure Composite 시 gradient 캐시 보장 (그리드→단일 전환 시 유실 방지)
+            const needsGradient = (this.overlayMode === 'f' || this.overlayMode === 'q') ||
+                                  (this.isCompositeMode && this.compositeSession?.measureMode);
+            if (needsGradient && !this._ratioGradientCache) {
+                try {
+                    const loginId = this.currentUser || FALLBACK_LOGIN_ID;
+                    const gcResp = await fetch(`/api/measure-colors?scheme=${encodeURIComponent(loginId)}`);
+                    if (gcResp.ok) {
+                        const gcData = await gcResp.json();
+                        this._ratioGradientCache = gcData.colors || gcData.defaultColors;
+                    }
+                } catch (_) {}
+            }
             this.showColorLegends();
             this.renderColorLegends();
 
@@ -11685,6 +12587,9 @@ class WaferMapViewer {
                         this.renderColorLegends();
                     } else {
                         console.log('ℹ️ No chip positions found for this image');
+                        // 🔥 Positions가 없어도 palette counts + gradient 범례 표시
+                        await this._fetchPaletteCounts(fullPath);
+                        this.renderColorLegends();
                     }
                 } catch (err) {
                     console.warn('Failed to load chip positions:', err);
@@ -13805,7 +14710,7 @@ class WaferMapViewer {
     getSelectedImagesForModal() {
         // 그리드 모드에서 선택된 이미지들 반환
         if (this.gridMode && this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0) {
-            const imageList = this.selectedImages || this.currentGridImages || [];
+            const imageList = (this.selectedImages?.length ? this.selectedImages : this.currentGridImages) || [];
             return this.gridSelectedIdxs
                 .map(idx => imageList[idx])
                 .filter(Boolean);
@@ -16757,20 +17662,14 @@ class WaferMapViewer {
         this.gridMode = true;
         this.enforceGridModeUiState();
 
-        // 🔥 Composite 모드가 아닐 때만 이미지를 이름 순으로 오름차순 정렬 (숫자 자연 정렬 적용)
+        // 🔥 Composite 모드가 아닐 때만 이미지를 현재 정렬 키 기준으로 정렬
         let sortedImages;
         if (this.isCompositeMode) {
             // Composite 모드: 전달된 순서 그대로 유지 (subset 추가 시 순서 보존)
             sortedImages = [...images];
         } else {
-            // 일반 모드: 파일명 기준 정렬
-            sortedImages = [...images].sort((a, b) => {
-                // 파일명만 추출 (경로 제거)
-                const nameA = a.split('/').pop();
-                const nameB = b.split('/').pop();
-                // 🔥 숫자 자연 정렬 (예: 5가 10보다 앞에 옴)
-                return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
-            });
+            // 일반 모드: 현재 정렬 키 사용 (기본: 파일명)
+            sortedImages = this._sortGridImages(images, this._gridSortKey || 'filename');
         }
 
         this.selectedImages = sortedImages;
@@ -17997,10 +18896,17 @@ class WaferMapViewer {
         this.dom.imageCanvas.style.display = 'none';
         this.dom.overlayCanvas.style.display = 'none';
         
+        // Compare 버튼: measure composite 모드에서만 표시
+        const compareBtnGrid = document.getElementById('compare-view-btn');
+        if (compareBtnGrid) {
+            const showCompare = this.isCompositeMode && this.compositeSession?.measureMode && this.selectedImages?.length >= 2;
+            compareBtnGrid.style.display = showCompare ? 'inline-block' : 'none';
+        }
+
         // ⭐ 그리드 모드에서는 화살표 버튼 숨기기
         this.viewMode = null;
         this.updateArrowButtonVisibility();
-        
+
         // ⭐ 파일명 패널 숨기기 (다양한 선택자로 확인)
         if (this.dom.fileNameDisplay) {
             this.dom.fileNameDisplay.style.display = 'none';
@@ -19215,6 +20121,7 @@ class WaferMapViewer {
             }
 
             this.gridSelectedIdxs = this.selectedImages.map((_, i) => i);
+            this.gridSelectedSet = new Set(this.gridSelectedIdxs);
 
             // ✅ 선택된 웨이퍼 목록 업데이트
             this.updateSelectedGridImagesList();
@@ -19516,6 +20423,16 @@ class WaferMapViewer {
         // (createPage(activate:true)가 applyPageState→restoreSavedViewState→hideGrid를 호출하여 DOM을 파괴하는 것 방지)
         this._hideGridVisual();
 
+        // 🔥 Composite/overlay/filter 상태 보존 (createPage→applyPageState가 빈 state로 리셋하므로)
+        const _savedCompositeMode = this.isCompositeMode;
+        const _savedCompositeSession = this.compositeSession ? this.deepCloneSimple(this.compositeSession) : null;
+        const _savedOverlayMode = this.overlayMode;
+        const _savedRatioActiveItemKey = this._ratioActiveItemKey;
+        const _savedRatioGradientCache = this._ratioGradientCache;
+        const _savedSelectedBottoms = new Set(this.selectedBottoms);
+        const _savedSelectedGrades = new Set(this.selectedGrades);
+        const _savedSelectedGradientRanges = new Set(this.selectedGradientRanges);
+
         if (this.pageManager) {
             this.persistActivePageState(savedSnapshot);
 
@@ -19560,6 +20477,16 @@ class WaferMapViewer {
                 this.lastGridOriginPageId = originPageId;
             }
         }
+
+        // 🔥 Composite/overlay/filter 상태 복원 (applyPageState가 빈 state로 리셋한 것을 되돌림)
+        this.isCompositeMode = _savedCompositeMode;
+        this.compositeSession = _savedCompositeSession;
+        this.overlayMode = _savedOverlayMode;
+        this._ratioActiveItemKey = _savedRatioActiveItemKey;
+        this._ratioGradientCache = _savedRatioGradientCache;
+        this.selectedBottoms = _savedSelectedBottoms;
+        this.selectedGrades = _savedSelectedGrades;
+        this.selectedGradientRanges = _savedSelectedGradientRanges;
 
         if (gridImages.length) {
             // 🔥 스크롤 위치는 더블클릭 핸들러에서 이미 savedViewState.scrollTop에 저장됨
@@ -19677,8 +20604,11 @@ class WaferMapViewer {
         }
         // Navigator는 loadImage 완료 후에만 세팅 (이미지 로드와 DOM 경합 방지)
 
-        // 4. 이미지 로드
-        this.loadImage(targetImagePath).then(() => {
+        // 4. 이미지 로드 (그리드에서 진입 시 Bottom/Grade 필터 상태 보존)
+        this.loadImage(targetImagePath, false, null, false, {
+            preserveBottomSelection: this.selectedBottoms.size > 0,
+            preserveViewport: false,
+        }).then(() => {
             if (this._singleModeRequestId !== singleModeRequestId || this.viewMode !== 'gridImage') {
                 return;
             }
@@ -20773,6 +21703,61 @@ class WaferMapViewer {
             const bx = this.getFilenameOnly(b);
             return collator.compare(ax, bx);
         });
+    }
+
+    /**
+     * 파일명을 _ 기준으로 분리하여 파트 배열 반환
+     * 형식: {root}_{step}_{wafer}_{date}_{time}_{yield}_{sys}.ext
+     * 인덱스: 0=LOT, 1=step, 2=wafer, 3=date, 4=time, 5=yield, 6=sys
+     */
+    _getFilenameParts(imgPath) {
+        const filename = imgPath.split('/').pop().replace(/\.[^.]+$/, '');
+        return filename.split('_');
+    }
+
+    /**
+     * 정렬 키에 따라 이미지 배열 정렬
+     */
+    _sortGridImages(images, sortKey) {
+        const sorted = [...images];
+        const collator = this.getNaturalCollator();
+        switch (sortKey) {
+            case 'lot_asc':
+                sorted.sort((a, b) => collator.compare(this._getFilenameParts(a)[0] || '', this._getFilenameParts(b)[0] || ''));
+                break;
+            case 'lot_desc':
+                sorted.sort((a, b) => collator.compare(this._getFilenameParts(b)[0] || '', this._getFilenameParts(a)[0] || ''));
+                break;
+            case 'yield_asc':
+                sorted.sort((a, b) => (parseFloat(this._getFilenameParts(a)[5]) || 0) - (parseFloat(this._getFilenameParts(b)[5]) || 0));
+                break;
+            case 'yield_desc':
+                sorted.sort((a, b) => (parseFloat(this._getFilenameParts(b)[5]) || 0) - (parseFloat(this._getFilenameParts(a)[5]) || 0));
+                break;
+            case 'sys_asc':
+                sorted.sort((a, b) => (parseFloat(this._getFilenameParts(a)[6]) || 0) - (parseFloat(this._getFilenameParts(b)[6]) || 0));
+                break;
+            case 'sys_desc':
+                sorted.sort((a, b) => (parseFloat(this._getFilenameParts(b)[6]) || 0) - (parseFloat(this._getFilenameParts(a)[6]) || 0));
+                break;
+            default: // filename natural sort
+                sorted.sort((a, b) => {
+                    const nameA = a.split('/').pop();
+                    const nameB = b.split('/').pop();
+                    return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+                });
+        }
+        return sorted;
+    }
+
+    /**
+     * 현재 정렬 키로 그리드 재정렬 및 리렌더
+     * showGrid()를 통해 LOT Mode 등 기존 모드를 유지한다.
+     */
+    _applySortAndRerender() {
+        if (!this.currentGridImages || this.currentGridImages.length === 0) return;
+        const sorted = this._sortGridImages(this.currentGridImages, this._gridSortKey);
+        this.showGrid(sorted);
     }
 
     /**
@@ -21952,10 +22937,22 @@ class WaferMapViewer {
             this.overlayMode = type;
             this._ratioActiveItemKey = itemKey;
             // 🔥 Bottom 선택은 유지 (동시 사용 가능)
-            // 단일 이미지 모드: 클라이언트 사이드 오버레이
             if (!this.gridMode) {
+                // 단일 이미지 모드: 클라이언트 사이드 오버레이
                 await this._applyRatioOverlayClient(type, itemKey);
                 this.refreshThumbnailNavigatorWithCurrentParams();
+            } else {
+                // Grid 모드: gradient 캐시 로드 (범례를 gradient로 전환하기 위해)
+                if (!this._ratioGradientCache) {
+                    try {
+                        const loginId = this.currentUser || FALLBACK_LOGIN_ID;
+                        const resp = await fetch(`/api/measure-colors?scheme=${encodeURIComponent(loginId)}`);
+                        if (resp.ok) {
+                            const data = await resp.json();
+                            this._ratioGradientCache = data.colors || data.defaultColors;
+                        }
+                    } catch (_) {}
+                }
             }
         }
 
@@ -22128,11 +23125,27 @@ class WaferMapViewer {
 
             const section = item.getAttribute('data-section');
             const key = item.getAttribute('data-key');
-            if (!section || !key) return;
+            const indexAttr = item.getAttribute('data-index');
 
             suppressLegendCaret();
             e.preventDefault();
             e.stopPropagation();
+
+            // Gradient percentile range click (grid mode measure overlay)
+            if (section === 'gradient') {
+                const rangeIdx = parseInt(indexAttr, 10);
+                if (!Number.isNaN(rangeIdx) && rangeIdx >= 0 && rangeIdx <= 9) {
+                    this.onGradientRangeClick(rangeIdx, e.ctrlKey || e.metaKey, e.shiftKey);
+                    // Measure composite: _recolorMeasureComposite가 refresh 처리
+                    if (!(this.isCompositeMode && this.compositeSession?.measureMode)) {
+                        this.refreshGridThumbnailsWithCurrentParams();
+                        this.refreshThumbnailNavigatorWithCurrentParams();
+                    }
+                }
+                return;
+            }
+
+            if (!key) return;
 
             if (section === 'top' && key.startsWith('Grade')) {
                 const gradeIndex = parseInt(key.replace('Grade', ''), 10);
@@ -22155,7 +23168,16 @@ class WaferMapViewer {
             e.stopPropagation();
 
             const section = item.getAttribute('data-section');
-            if (section === 'top') {
+            if (section === 'gradient') {
+                this.selectedGradientRanges.clear();
+                this.lastGradientRangeClickIndex = null;
+                this.applyGradientFilter();
+                this.renderColorLegends();
+                if (!(this.isCompositeMode && this.compositeSession?.measureMode)) {
+                    this.refreshGridThumbnailsWithCurrentParams();
+                    this.refreshThumbnailNavigatorWithCurrentParams();
+                }
+            } else if (section === 'top') {
                 this.clearGradeFilter();
             } else if (section === 'bottom') {
                 this.clearBottomFilter();
@@ -22285,7 +23307,12 @@ class WaferMapViewer {
     /**
      * Gradient 범위 필터 적용 (chipAnnotator에 전달)
      */
-    applyGradientFilter() {
+    async applyGradientFilter() {
+        // Measure Composite: recolor API로 필터 적용
+        if (this.isCompositeMode && this.compositeSession?.measureMode) {
+            await this._recolorMeasureComposite();
+            return;
+        }
         if (this.chipAnnotator) {
             this.chipAnnotator.setGradientFilter(
                 this.selectedGradientRanges.size > 0 ? this.selectedGradientRanges : null
@@ -22395,6 +23422,11 @@ class WaferMapViewer {
      * Bottom 필터 적용 (흰색 마스크로 비선택 chip 숨김)
      */
     async applyBottomFilter() {
+        // Measure Composite: recolor API로 BIN 필터 적용
+        if (this.isCompositeMode && this.compositeSession?.measureMode) {
+            await this._recolorMeasureComposite();
+            return;
+        }
         if (this.gridMode) {
             this.refreshGridThumbnailsWithCurrentParams();
             this.refreshThumbnailNavigatorWithCurrentParams();
@@ -22960,12 +23992,20 @@ class WaferMapViewer {
 
         // Render top legend
         const isMeasureOverlay = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioGradientCache;
-        if (isMeasureOverlay) {
+        const isMeasureComposite = this.isCompositeMode && this.compositeSession?.measureMode && this._ratioGradientCache;
+        if (isMeasureOverlay || isMeasureComposite) {
             // 🔥 Measure overlay 활성 시: gradient percentile 범례 표시
             const stops = this._ratioGradientCache;  // 11개 hex (0%,10%,...,100%)
             const labels = ['0~10', '10~20', '20~30', '30~40', '40~50', '50~60', '60~70', '70~80', '80~90', '90~100'];
-            // Chip counts per range
-            const rc = this.chipAnnotator ? this.chipAnnotator.getGradientRangeCounts() : { counts: new Array(10).fill(0), total: 0 };
+            // Chip counts per range — measure composite uses server-side range_counts
+            let rc;
+            if (isMeasureComposite && this.compositeSession?.rangeCounts?.length === 10) {
+                const counts = this.compositeSession.rangeCounts;
+                const total = counts.reduce((a, b) => a + b, 0);
+                rc = { counts, total };
+            } else {
+                rc = this.chipAnnotator ? this.chipAnnotator.getGradientRangeCounts() : { counts: new Array(10).fill(0), total: 0 };
+            }
             const topHtml = labels.map((label, i) => {
                 // 구간 중앙 색상 (stops[i]와 stops[i+1]의 중간)
                 const c1 = stops[i], c2 = stops[i + 1];
@@ -22980,7 +24020,7 @@ class WaferMapViewer {
                 }
                 const cnt = rc.counts[i] || 0;
                 const pct = rc.total > 0 ? (cnt / rc.total * 100).toFixed(1) : '0.0';
-                const countText = rc.total > 0 ? `${pct}%(${_formatCount(cnt)})` : '';
+                const countText = rc.total > 0 ? `${pct}%(${_formatCount(cnt)})` : '0';
                 const isSelected = this.selectedGradientRanges.has(i);
                 const selBorder = isSelected ? 'outline:2px solid #1976d2;outline-offset:-2px;' : '';
                 const opacity = this.selectedGradientRanges.size > 0 && !isSelected ? 'opacity:0.35;' : '';
@@ -23182,9 +24222,53 @@ class WaferMapViewer {
         };
         
         // Top legend 그룹 (좌측 정렬)
-        // 🔥 TOP_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
+        const isMeasureOverlay = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey;
+        const isMeasureComposite = this.isCompositeMode && this.compositeSession?.measureMode;
         html += '<div class="legend-group-top">';
-        if (userData.top && typeof userData.top === 'object') {
+        if ((isMeasureOverlay || isMeasureComposite) && this._ratioGradientCache) {
+            // Gradient percentile legend (10 ranges: 0~10, 10~20, ..., 90~100)
+            const stops = this._ratioGradientCache;
+            const labels = ['0~10', '10~20', '20~30', '30~40', '40~50', '50~60', '60~70', '70~80', '80~90', '90~100'];
+            const hexToRgb = (hex) => {
+                const h = hex.replace('#', '');
+                return { r: parseInt(h.substring(0, 2), 16), g: parseInt(h.substring(2, 4), 16), b: parseInt(h.substring(4, 6), 16) };
+            };
+            // range_counts for measure composite
+            let gridRc = { counts: new Array(10).fill(0), total: 0 };
+            if (isMeasureComposite && this.compositeSession?.rangeCounts?.length === 10) {
+                const counts = this.compositeSession.rangeCounts;
+                gridRc = { counts, total: counts.reduce((a, b) => a + b, 0) };
+            }
+            const _fmtCnt = (n) => {
+                if (n < 1000) return String(n);
+                if (n < 10000) return (n / 1000).toFixed(1) + 'K';
+                if (n < 1000000) return Math.round(n / 1000) + 'K';
+                return (n / 1000000).toFixed(1) + 'M';
+            };
+            const _contrastGrid = (r, g, b) => {
+                const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+                return lum > 140 ? 'rgba(0,0,0,0.85)' : 'rgba(255,255,255,0.9)';
+            };
+            const topHtml = labels.map((label, i) => {
+                const c1 = hexToRgb(stops[i]);
+                const c2 = hexToRgb(stops[i + 1]);
+                const r = Math.round((c1.r + c2.r) / 2);
+                const g = Math.round((c1.g + c2.g) / 2);
+                const b = Math.round((c1.b + c2.b) / 2);
+                const color = `rgb(${r},${g},${b})`;
+                const isSelected = this.selectedGradientRanges.has(i);
+                const selBorder = isSelected ? 'outline:2px solid #1976d2;outline-offset:-2px;' : '';
+                const opacity = this.selectedGradientRanges.size > 0 && !isSelected ? 'opacity:0.35;' : '';
+                return `
+                    <div class="legend-item-grid" data-section="gradient" data-index="${i}" style="cursor: pointer;${opacity}">
+                        <div class="legend-color-bar-grid" style="background-color: ${color};${selBorder}"></div>
+                        <span class="legend-label-grid" style="font-size:10px;">${label}%</span>
+                    </div>
+                `;
+            }).join('');
+            html += topHtml;
+        } else if (userData.top && typeof userData.top === 'object') {
+            // 🔥 TOP_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
             const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
             const topHtml = TOP_KEYS.map((label, index) => {
                 const color = userData.top[label];
@@ -23203,9 +24287,34 @@ class WaferMapViewer {
         html += '</div>';
         
         // Bottom legend 그룹 (우측 정렬)
-        // 🔥 BOTTOM_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
         html += '<div class="legend-group-bottom">';
-        if (userData.bottom && typeof userData.bottom === 'object') {
+        if (isMeasureComposite && userData.bottom && typeof userData.bottom === 'object') {
+            // Measure Composite: BIN chip 범례 (gradient + BIN chip 2개 범례, 둘 다 필터)
+            const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
+                                 'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
+            const bottomHtml = BOTTOM_KEYS.map((label, index) => {
+                let actualLabel = label;
+                let color = userData.bottom[label];
+                if (label === 'Normal' && !color) {
+                    if (userData.bottom['Border']) { actualLabel = 'Border'; color = userData.bottom['Border']; }
+                    else { color = '#BEBEBE'; }
+                }
+                if (label === 'ETC' && !color) color = '#C0C0C0';
+                if (!color) return '';
+                const displayLabel = actualLabel === 'Border' ? 'Normal' : label;
+                const isSelected = this.selectedBottoms.has(displayLabel);
+                const selBorder = isSelected ? 'outline:2px solid #1976d2;outline-offset:-2px;' : '';
+                const opacity = this.selectedBottoms.size > 0 && !isSelected ? 'opacity:0.35;' : '';
+                return `
+                    <div class="legend-item-grid" data-section="bottom" data-key="${displayLabel}" data-index="${index}" style="cursor:pointer;${opacity}">
+                        <div class="legend-color-bar-grid" style="background-color:${color};${selBorder}"></div>
+                        <span class="legend-label-grid">${shortenLabel(displayLabel)}</span>
+                    </div>
+                `;
+            }).filter(h => h).join('');
+            html += bottomHtml;
+        } else if (userData.bottom && typeof userData.bottom === 'object') {
+            // 🔥 BOTTOM_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
             const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
                                  'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
             // Border button (left of Normal, same style as legend-item-grid)
@@ -24180,18 +25289,25 @@ class WaferMapViewer {
         const groups = [];
         let currentIndex = 0;
         
-        const sortedLotIds = Array.from(lotMap.keys()).sort((a, b) => 
-            a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
-        );
+        const sortKey = this._gridSortKey || 'filename';
+
+        // LOT 그룹 자체 정렬: lot_desc일 때 역순, 나머지는 오름차순
+        const sortedLotIds = Array.from(lotMap.keys()).sort((a, b) => {
+            const cmp = a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+            return sortKey === 'lot_desc' ? -cmp : cmp;
+        });
 
         for (const lotId of sortedLotIds) {
             const lotImages = lotMap.get(lotId);
 
-            // 🔥 LOT 내부 이미지들도 정렬 (파일명 기준)
-            lotImages.sort((a, b) => {
-                const pathA = a.path.toLowerCase();
-                const pathB = b.path.toLowerCase();
-                return pathA.localeCompare(pathB, undefined, { numeric: true, sensitivity: 'base' });
+            // 🔥 LOT 내부 이미지 정렬: 현재 정렬 키 반영
+            const sortedPaths = this._sortGridImages(lotImages.map(item => item.path), sortKey);
+            // sortedPaths 순서에 맞게 lotImages 재배열
+            const pathToItem = new Map(lotImages.map(item => [item.path, item]));
+            lotImages.length = 0;
+            sortedPaths.forEach(p => {
+                const item = pathToItem.get(p);
+                if (item) lotImages.push(item);
             });
 
             groups.push({

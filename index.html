@@ -903,7 +903,7 @@
             align-items: center;
             gap: 4px;
             flex-shrink: 0;
-            margin-right: 16px;
+            margin-right: 6px;
         }
         .control-group.control-group-columns {
             display: flex !important;
@@ -981,9 +981,9 @@
             position: fixed;
             top: 90px;
             right: 50px;
-            width: auto;
-            height: auto;
-            min-width: 300px;
+            width: 420px;
+            height: 480px;
+            min-width: 250px;
             min-height: 200px;
             max-width: 90vw;
             max-height: 90vh;
@@ -993,7 +993,7 @@
             box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
             display: none;
             flex-direction: column;
-            z-index: 25000;
+            z-index: 26000;
             resize: both;
             overflow: hidden;
         }
@@ -1067,14 +1067,16 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            overflow: auto;
+            overflow: hidden;
+            min-height: 0;
         }
 
         .ref-map-preview img {
             display: none;
             border-radius: 4px;
-            max-width: 80vw;
-            max-height: 75vh;
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
         }
 
         .ref-map-empty {
@@ -3587,7 +3589,7 @@
                 <div style="margin-top: 8px; padding: 4px 0; display: flex; gap: 6px; align-items: center;">
                     <!-- LT 다중선택 드롭다운 -->
                     <div id="filter-lt-multi" class="multi-select-dropdown" style="position:relative;">
-                        <button type="button" class="multi-select-btn" id="filter-lt-btn">LT</button>
+                        <button type="button" class="multi-select-btn" id="filter-lt-btn">LOT</button>
                         <div class="multi-select-panel" id="filter-lt-panel" style="display:none;">
                             <label class="multi-select-separator">── Wildcard ──</label>
                             <label><input type="checkbox" value="P%"> P%</label>
@@ -3616,7 +3618,7 @@
                     </div>
                     <!-- TM 다중선택 드롭다운 -->
                     <div id="filter-tm-multi" class="multi-select-dropdown" style="position:relative;">
-                        <button type="button" class="multi-select-btn" id="filter-tm-btn">TM</button>
+                        <button type="button" class="multi-select-btn" id="filter-tm-btn">TEST</button>
                         <div class="multi-select-panel" id="filter-tm-panel" style="display:none;">
                             <label><input type="checkbox" value="NORMAL" data-values="NORMAL,NORM"> NORMAL</label>
                             <label><input type="checkbox" value="NONPASS" data-values="NONPASS,NONPAS"> NONPASS</label>
@@ -3692,6 +3694,19 @@
                     <button id="grid-select-all" class="grid-btn selection-btn" aria-label="전체 선택">전체선택</button>
                     <button id="grid-deselect-all" class="grid-btn selection-btn" aria-label="전체 해제">전체해제</button>
                 </div>
+
+                <!-- Sort Controls -->
+                <div class="control-group" style="margin-right:2px;">
+                    <select id="grid-sort-select" class="grid-btn" aria-label="정렬 기준" title="그리드 정렬 기준" style="padding:2px 4px;background:#232323;color:#ccc;border:1px solid #555;border-radius:3px;font-size:12px;cursor:pointer;">
+                        <option value="filename">정렬</option>
+                        <option value="lot_asc">LOT ↑</option>
+                        <option value="lot_desc">LOT ↓</option>
+                        <option value="yield_asc">Yield ↑</option>
+                        <option value="yield_desc">Yield ↓</option>
+                        <option value="sys_asc">Sys ↑</option>
+                        <option value="sys_desc">Sys ↓</option>
+                    </select>
+                </div>
                 
                 <!-- Search Controls -->
                 <div class="search-controls">
@@ -3701,7 +3716,14 @@
                 </div>
                 <div class="control-group" style="margin-left: auto; margin-right: 8px; gap: 8px;">
                     <button id="lot-mode-btn" class="grid-btn lot-mode-btn" title="Lot별로 그룹화하여 보기">LOT Mode</button>
-                    <button id="composite-btn-top" class="grid-btn" data-composite-btn title="Composite Map 만들기">Composite</button>
+                    <div id="mc-dropdown-wrap" class="failbit-dropdown-wrap" style="position:relative;">
+                        <button id="measure-composite-btn-top" class="grid-btn" title="Composite Map (Grade/BIN/FBT/QVL 집계)">Composite</button>
+                        <div id="mc-panel" class="failbit-panel" style="display:none;">
+                            <input type="text" class="failbit-search mc-search" placeholder="검색..." autocomplete="off">
+                            <div class="failbit-list mc-list"></div>
+                        </div>
+                    </div>
+                    <button id="compare-view-btn" class="grid-btn" style="display:none;" title="Measure Composite 결과를 나란히 비교">Compare</button>
                     <button id="ref-map-btn-top" class="grid-btn" data-ref-map-btn title="Reference Map 보기">Ref Map</button>
                     <div id="failbit-dropdown-top" class="failbit-dropdown-wrap" style="position:relative;">
                         <button id="failbit-btn-top" class="grid-btn" title="Measure 오버레이 (BIN / FBT / QVL)">Measure</button>
@@ -3716,7 +3738,16 @@
             
             <!-- Grid Mode Color Legend -->
             <div id="grid-color-legend-bottom" class="color-legend-grid" aria-label="그리드 모드 하단 컬러 범례"></div>
-            
+
+            <!-- Compare View Overlay -->
+            <div id="compare-overlay" style="display:none;position:absolute;inset:0;z-index:9000;background:#111;flex-direction:column;">
+                <div id="compare-header" style="display:flex;align-items:center;justify-content:space-between;padding:6px 16px;background:#1a1a1a;border-bottom:1px solid #333;flex-shrink:0;">
+                    <span style="color:#ddd;font-size:14px;font-weight:600;">Compare View</span>
+                    <button id="compare-close-btn" style="background:none;border:none;color:#aaa;font-size:20px;cursor:pointer;padding:2px 8px;" title="닫기">&times;</button>
+                </div>
+                <div id="compare-grid" style="flex:1;display:grid;gap:4px;padding:4px;overflow:auto;"></div>
+            </div>
+
             <!-- Viewer Container -->
             <section id="viewer-container" class="viewer-container" aria-label="이미지 뷰어">
                 <!-- Grid Mode -->
@@ -3801,6 +3832,8 @@
                     </div>
                 </div>
                 
+                <!-- Measure Composite Modal: removed — replaced by mc-panel dropdown -->
+
                 <!-- File Name Display (Top reserved bar) -->
                 <div id="file-name-display" style="
                     position: absolute;
@@ -3885,11 +3918,11 @@
                             <span id="coord-pgm" class="coord-value">-</span>
                         </div>
                         <div class="coord-row">
-                            <span class="coord-label">TM</span>
+                            <span class="coord-label">TEST</span>
                             <span id="coord-tm" class="coord-value">-</span>
                         </div>
                         <div class="coord-row">
-                            <span class="coord-label">LT</span>
+                            <span class="coord-label">LOT</span>
                             <span id="coord-lt" class="coord-value">-</span>
                         </div>
                         <div class="coord-row">
@@ -3986,8 +4019,12 @@
     </main>
     <!-- Context Menu -->
     <div id="grid-context-menu" class="context-menu" style="display: none; position: absolute; background: #333; border: 1px solid #555; border-radius: 4px; padding: 4px 0; z-index: 10000; min-width: 180px;">
-        <div class="context-menu-item" id="context-composite-create" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px;">
-            🧩 Composite Map 만들기
+        <div class="context-menu-item" id="context-mc-create" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px; position: relative;">
+            📊 Composite 만들기 ▸
+            <div id="context-mc-submenu" class="failbit-panel" style="display:none; position:absolute; left:100%; top:0; min-width:160px;">
+                <input type="text" class="failbit-search mc-ctx-search" placeholder="검색..." autocomplete="off" style="width:100%;box-sizing:border-box;">
+                <div class="failbit-list mc-ctx-list"></div>
+            </div>
         </div>
         <div class="context-menu-item" id="context-composite-return" style="padding: 8px 12px; color: #fff; cursor: pointer; font-size: 14px; display: none;">
             ↩ 이전 그리드로 돌아가기

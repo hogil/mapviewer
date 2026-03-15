@@ -1970,23 +1970,37 @@ export class ColorSchemeEditor {
                 this.updateApplyButtonState(false);
 
                 if (this.viewer) {
-                    this.viewer._ratioGradientCache = null;
+                    // 새 색상으로 캐시 즉시 갱신 (null 대신)
+                    this.viewer._ratioGradientCache = colorsArray;
                 }
                 this.viewer._personalizedColorCacheBuster = Date.now();
                 if (this.viewer.thumbnailManager) {
                     this.viewer.thumbnailManager.cache.clear();
                 }
+
+                // close() 전에 복원 방지 플래그 설정
+                this._savedRatioGradientCache = null;
+
                 if (this.viewer.gridMode) {
                     if (typeof this.viewer.refreshGridThumbnailsWithCurrentParams === 'function') {
                         this.viewer.refreshGridThumbnailsWithCurrentParams();
                     }
                 } else if (this.viewer.selectedImagePath) {
+                    // 단일 이미지: measure overlay 즉시 재적용
+                    if (tabType === 'measure' &&
+                        (this.viewer.overlayMode === 'f' || this.viewer.overlayMode === 'q') &&
+                        this.viewer.chipAnnotator) {
+                        this.viewer.chipAnnotator.setOverlayMode(this.viewer.overlayMode, {
+                            gradientStops: colorsArray,
+                            itemKey: this.viewer._ratioActiveItemKey,
+                        });
+                        this.viewer.renderColorLegends();
+                    }
                     await this.viewer.loadImage(this.viewer.selectedImagePath, false, null, true);
                 }
 
                 const label = tabType === 'measure' ? 'Measure' : 'Composite';
                 this.viewer?.showToast?.(`${label} 색상이 적용되었습니다.`, 1800);
-                this._savedRatioGradientCache = null; // 복원 방지
                 await this.close();
             } else {
                 throw new Error('저장 실패');
@@ -2041,9 +2055,11 @@ export class ColorSchemeEditor {
                     colorsArray.push(gradData[`quantile${step}`] || '#000000');
                 }
 
+                // Gradient 캐시 갱신 + 범례 리렌더링 (measure/composite 공통)
+                this.viewer._ratioGradientCache = colorsArray;
+
                 if (tabType === 'measure') {
                     // 단일 이미지: 클라이언트 overlay 직접 갱신
-                    this.viewer._ratioGradientCache = colorsArray;
                     if (!this.viewer.gridMode &&
                         (this.viewer.overlayMode === 'f' || this.viewer.overlayMode === 'q') &&
                         this.viewer.chipAnnotator) {
@@ -2053,7 +2069,9 @@ export class ColorSchemeEditor {
                         });
                     }
                 }
-                // composite 미리보기: 서버 recolor가 필요하므로 생략 (적용 후 확인)
+
+                // 범례 색상 미리보기 갱신
+                this.viewer.renderColorLegends();
             } catch (error) {
                 console.warn(`ColorEditor: ${tabType} preview failed`, error);
             }

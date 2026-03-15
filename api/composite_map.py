@@ -169,7 +169,9 @@ def _copy_positions_without_bin(
                 if not isinstance(chip, dict):
                     continue
                 if keep_chip_bin:
-                    chip["b"] = "Normal"
+                    # BIN 값 유지, 없으면 Normal 보정
+                    if "b" not in chip:
+                        chip["b"] = "Normal"
                 elif "b" in chip:
                     del chip["b"]
 

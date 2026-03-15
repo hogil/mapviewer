@@ -3555,9 +3555,9 @@ def _apply_bottom_position_mask_memory(
             out = Image.fromarray(img_arr)
         else:
             # Palette 모드: 기존 LUT 기반 마스킹
+            # index 8(배경) 유지, index 9(텍스트)도 흰색으로 변환 (숫자 숨김)
             mask_lut = [FILTER_WHITE_INDEX] * 256
             mask_lut[8] = 8
-            mask_lut[9] = 9
             for chip in chips:
                 if not isinstance(chip, dict):
                     continue
@@ -3670,6 +3670,7 @@ def _apply_ratio_overlay_memory(
     field: str,       # 'f' or 'q'
     item_key: str,    # e.g. '2342'
     scheme: Optional[str] = None,
+    gradient_filter: Optional[str] = None,  # e.g. "0,1,2" — percentile range indices (0~9)
 ) -> Optional[bytearray]:
     """Ratio overlay: chip interiors colored by percentile rank of f/q values."""
     try:
@@ -3741,10 +3742,23 @@ def _apply_ratio_overlay_memory(
             b = int(b0 + (b1 - b0) * t)
             return (r, g, b)
 
-        # 5. Build chip color map
+        # 5. Build chip color map (with optional gradient_filter)
+        allowed_ranges = None
+        if gradient_filter:
+            try:
+                allowed_ranges = set(int(x) for x in gradient_filter.split(",") if x.strip().isdigit())
+            except Exception:
+                allowed_ranges = None
+
         chip_colors = {}  # chip_index -> (r, g, b)
+        masked_chips = []  # chip indices to blacken (outside selected ranges)
         for chip_idx, val in values:
             pct = max(0.0, min(100.0, _percentile_rank(val)))
+            if allowed_ranges is not None:
+                range_idx = min(int(pct / 10), 9)
+                if range_idx not in allowed_ranges:
+                    masked_chips.append(chip_idx)
+                    continue
             chip_colors[chip_idx] = interpolate_color(pct)
 
         # 6. Open image and convert to RGB, then to NumPy for fast blending
@@ -3766,6 +3780,33 @@ def _apply_ratio_overlay_memory(
 
         # 7. Opaque overlay using NumPy vectorized ops (pure gradient color, no blending)
         img_arr = np.array(out, dtype=np.uint8)
+
+        # 7a. Mask chips outside selected gradient ranges (white, no text)
+        # When gradient_filter active, also mask ALL chips without ratio data
+        chips_with_data = set(idx for idx, _ in values)
+        all_masked = list(masked_chips)  # chips with data but outside selected ranges
+        if allowed_ranges is not None:
+            # Also mask chips without ratio data
+            for idx_c, chip in enumerate(chips):
+                if idx_c in chips_with_data:
+                    continue
+                if not isinstance(chip, dict):
+                    continue
+                all_masked.append(idx_c)
+
+        if all_masked:
+            for chip_idx in all_masked:
+                chip = chips[chip_idx]
+                scaled = _scaled_chip_rect(chip, scale_x, scale_y, width, height)
+                if not scaled:
+                    continue
+                sx0, sy0, sx1, sy1 = scaled
+                # Full chip area (no inset) — hide text/numbers completely
+                if sy1 <= sy0 or sx1 <= sx0:
+                    continue
+                img_arr[sy0:sy1, sx0:sx1] = (255, 255, 255)
+
+        # 7b. Paint matching chips with gradient colors
         filled = 0
         for chip_idx, color in chip_colors.items():
             chip = chips[chip_idx]
@@ -3782,7 +3823,7 @@ def _apply_ratio_overlay_memory(
             img_arr[y0:y1, x0:x1] = color
             filled += 1
 
-        if filled == 0:
+        if filled == 0 and not all_masked:
             return None
 
         out = Image.fromarray(img_arr)
@@ -3918,10 +3959,12 @@ def _build_filter_variant_token(
     border_normalize: bool = False,
     measure_overlay: Optional[str] = None,
     bin_overlay: bool = False,
+    gradient_filter: Optional[str] = None,
 ) -> str:
     norm_grade = _normalize_filter_value(grade_filter)
     norm_bottom = _normalize_filter_value(bottom_filter)
-    if not norm_grade and not norm_bottom and not border_normalize and not measure_overlay and not bin_overlay:
+    norm_gradient = _normalize_filter_value(gradient_filter)
+    if not norm_grade and not norm_bottom and not border_normalize and not measure_overlay and not bin_overlay and not norm_gradient:
         return ""
 
     parts = [f"rev={FILTER_CACHE_REV}"]
@@ -3935,6 +3978,8 @@ def _build_filter_variant_token(
         parts.append("bn=1")
     if measure_overlay:
         parts.append(f"mo={measure_overlay}")
+    if norm_gradient:
+        parts.append(f"grf={norm_gradient}")
     if personalized and scheme:
         parts.append(f"s={scheme}")
     elif bin_overlay:
@@ -4449,6 +4494,7 @@ def _generate_thumbnail_sync(
     border_normalize: bool = False,
     measure_overlay: Optional[str] = None,
     bin_overlay: bool = False,
+    gradient_filter: Optional[str] = None,
 ):
     try:
         thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4479,26 +4525,42 @@ def _generate_thumbnail_sync(
                     with open(image_path, 'rb') as f:
                         png_data = bytearray(f.read())
 
-                    png_data = _apply_png_filters_memory(
-                        image_path=image_path,
-                        png_data=png_data,
-                        personalized=personalized,
-                        scheme=scheme,
-                        grade_filter=grade_filter,
-                        bottom_filter=bottom_filter,
-                        border_normalize=border_normalize,
-                        measure_overlay=None,  # ratio overlay deferred
-                        bin_overlay=bin_overlay,
-                    )
+                    # 🔥 RGB PNG (palette 없음, e.g. Measure Composite 결과)는 palette 패치 불필요
+                    # PNG IHDR 13바이트 중 color type (offset 25) 확인: 2=RGB, 3=Indexed(palette)
+                    _is_palette_png = True
+                    if len(png_data) > 29:
+                        _color_type = png_data[25]  # IHDR chunk: sig(8)+len(4)+IHDR(4)+width(4)+height(4)+bitdepth(1)+colortype(1)
+                        if _color_type != 3:  # 3 = indexed color (palette)
+                            _is_palette_png = False
+                    if not _is_palette_png:
+                        # RGB/RGBA PNG — skip palette ops, load directly
+                        vips_image = pyvips.Image.new_from_buffer(
+                            bytes(png_data), "",
+                            access='sequential', fail_on='none', memory=True, unlimited=True,
+                        )
+                        # deferred measure overlay도 skip — 이미 렌더링된 composite 이미지
+                        _deferred_measure_overlay = None
+                    else:
+                        png_data = _apply_png_filters_memory(
+                            image_path=image_path,
+                            png_data=png_data,
+                            personalized=personalized,
+                            scheme=scheme,
+                            grade_filter=grade_filter,
+                            bottom_filter=bottom_filter,
+                            border_normalize=border_normalize,
+                            measure_overlay=None,  # ratio overlay deferred
+                            bin_overlay=bin_overlay,
+                        )
 
-                    vips_image = pyvips.Image.new_from_buffer(
-                        bytes(png_data),
-                        "",
-                        access='sequential',
-                        fail_on='none',
-                        memory=True,
-                        unlimited=True
-                    )
+                        vips_image = pyvips.Image.new_from_buffer(
+                            bytes(png_data),
+                            "",
+                            access='sequential',
+                            fail_on='none',
+                            memory=True,
+                            unlimited=True
+                        )
                 except Exception as e:
                     logger.warning(f"⚠️ [THUMBNAIL PATCH] 팔레트/필터 적용 실패: {e}", exc_info=True)
                     vips_image = pyvips.Image.new_from_file(
@@ -4624,7 +4686,8 @@ def _generate_thumbnail_sync(
                             with open(thumbnail_path, 'rb') as tf:
                                 thumb_data = bytearray(tf.read())
                             overlay = _apply_ratio_overlay_memory(
-                                thumb_data, image_path, m_field, m_key, scheme
+                                thumb_data, image_path, m_field, m_key, scheme,
+                                gradient_filter=gradient_filter,
                             )
                             if overlay is not None:
                                 with open(thumbnail_path, 'wb') as tf:
@@ -4641,16 +4704,21 @@ def _generate_thumbnail_sync(
             try:
                 with open(image_path, 'rb') as f:
                     png_data = bytearray(f.read())
-                png_data = _apply_png_filters_memory(
-                    image_path=image_path,
-                    png_data=png_data,
-                    personalized=personalized,
-                    scheme=scheme,
-                    grade_filter=grade_filter,
-                    bottom_filter=bottom_filter,
-                    border_normalize=border_normalize,
-                    measure_overlay=None,  # ratio overlay deferred to thumbnail
-                )
+                # 🔥 RGB PNG (Measure Composite 등)는 palette 패치 불필요
+                _skip_pil_patch = False
+                if len(png_data) > 29 and png_data[25] != 3:
+                    _skip_pil_patch = True
+                if not _skip_pil_patch:
+                    png_data = _apply_png_filters_memory(
+                        image_path=image_path,
+                        png_data=png_data,
+                        personalized=personalized,
+                        scheme=scheme,
+                        grade_filter=grade_filter,
+                        bottom_filter=bottom_filter,
+                        border_normalize=border_normalize,
+                        measure_overlay=None,  # ratio overlay deferred to thumbnail
+                    )
                 pil_image = Image.open(io.BytesIO(bytes(png_data)))
             except Exception as e:
                 logger.warning(f"⚠️ [THUMBNAIL PATCH PIL] 팔레트/필터 적용 실패: {e}")
@@ -4692,6 +4760,7 @@ async def generate_thumbnail(
     border_normalize: bool = False,
     measure_overlay: Optional[str] = None,
     bin_overlay: bool = False,
+    gradient_filter: Optional[str] = None,
 ) -> Optional[Path]:
     start_time = time.time()
     try:
@@ -4705,6 +4774,7 @@ async def generate_thumbnail(
             border_normalize=border_normalize,
             measure_overlay=measure_overlay,
             bin_overlay=bin_overlay,
+            gradient_filter=gradient_filter,
         )
         if filter_token:
             variant = filter_token
@@ -4781,6 +4851,7 @@ async def generate_thumbnail(
                     border_normalize,
                     measure_overlay,
                     bin_overlay,
+                    gradient_filter,
                 )
                 gen_elapsed = time.time() - gen_start
                 
@@ -6411,6 +6482,7 @@ async def get_thumbnail(
     border_normalize: bool = False,
     measure_overlay: Optional[str] = None,
     bin_overlay: bool = False,
+    gradient_filter: Optional[str] = None,
 ):
     try:
         original_rel = _lookup_original_relpath_from_classification_path(path)
@@ -6473,6 +6545,7 @@ async def get_thumbnail(
                 border_normalize=border_normalize,
                 measure_overlay=measure_overlay,
                 bin_overlay=bin_overlay,
+                gradient_filter=gradient_filter,
             )
             if thumb and thumb.exists():
                 st = thumb.stat()
@@ -8208,6 +8281,15 @@ def _trim_leading_component(path_obj: Path) -> Path:
         return Path(parts[0])
     return Path(*parts[1:])
 
+def _to_relative_path(image_path: str) -> str:
+    """절대경로를 IMAGES_ROOT 기준 상대경로로 변환. 이미 상대경로면 그대로 반환."""
+    p = Path(str(image_path).replace("\\", "/"))
+    try:
+        return str(p.relative_to(ROOT_DIR)).replace("\\", "/")
+    except ValueError:
+        return str(p).replace("\\", "/")
+
+
 def _candidate_positions_paths(rel_path: Path) -> List[Path]:
     """positions.json 파일 경로 후보 목록 반환 (파일명.json만 사용)"""
     trimmed_parent = _trim_leading_component(rel_path.parent)
@@ -8694,6 +8776,9 @@ async def create_composite_map_endpoint(
     if not image_paths:
         raise HTTPException(status_code=400, detail="image_paths가 필요합니다.")
 
+    # 절대경로 → 상대경로 변환
+    image_paths = [_to_relative_path(p) for p in image_paths]
+
     max_images = 256
     if len(image_paths) > max_images:
         raise HTTPException(status_code=400, detail=f"최대 {max_images}개의 이미지만 지원합니다.")
@@ -8763,6 +8848,189 @@ async def get_composite_map_status(task_id: str):
         if task_id not in COMPOSITE_TASKS:
             raise HTTPException(status_code=404, detail="Task not found")
         return COMPOSITE_TASKS[task_id]
+
+
+class MeasureCompositeRequest(BaseModel):
+    image_paths: List[str]
+    mode: str                                           # 'bin' | 'f' | 'q'
+    item_key: Optional[str] = None                      # FBT/QVL item key (e.g., "2342")
+    bin_types: Optional[List[str]] = None               # BIN mode: ["285", "286", ...]
+    aggregation: str = "average"                        # 'count' | 'sum' | 'average'
+    scheme: Optional[str] = None
+
+
+def _run_measure_composite_sync(
+    task_id: str,
+    image_paths: List[str],
+    mode: str,
+    item_key: Optional[str],
+    bin_types: Optional[List[str]],
+    aggregation: str,
+    scheme: str,
+    login_id: Optional[str],
+):
+    """Run measure composite generation synchronously in a dedicated thread."""
+    try:
+        COMPOSITE_TASKS[task_id]["status"] = "processing"
+        COMPOSITE_TASKS[task_id]["started_at"] = datetime.now().isoformat()
+
+        from .measure_composite import create_measure_composite
+
+        result = create_measure_composite(
+            image_paths=image_paths,
+            mode=mode,
+            item_key=item_key,
+            bin_types=bin_types,
+            aggregation=aggregation,
+            scheme=scheme,
+            login_id=login_id,
+        )
+
+        COMPOSITE_TASKS[task_id]["status"] = "completed"
+        COMPOSITE_TASKS[task_id]["progress"] = 100
+        COMPOSITE_TASKS[task_id]["result"] = {
+            "success": True,
+            "mode": "measure",
+            "measure_mode": mode,
+            "item_key": item_key,
+            "bin_types": bin_types,
+            "aggregation": aggregation,
+            "image_count": result["source_images"],
+            "output_dir": result["output_dir"],
+            "image_path": result["image_path"],
+            "display_name": result["display_name"],
+            "filename": result["filename"],
+            "chip_count": result["chip_count"],
+            "value_range": result["value_range"],
+            "range_counts": result.get("range_counts", []),
+            "processing_time": result["processing_time"],
+            "generated_at": result["generated_at"],
+            "image_size": result["image_size"],
+        }
+        COMPOSITE_TASKS[task_id]["completed_at"] = datetime.now().isoformat()
+        logger.info(f"[measure-composite] task {task_id}: completed successfully")
+
+    except Exception as e:
+        logger.exception(f"Measure composite task {task_id} failed: {e}")
+        COMPOSITE_TASKS[task_id]["status"] = "failed"
+        COMPOSITE_TASKS[task_id]["error"] = str(e)
+        COMPOSITE_TASKS[task_id]["failed_at"] = datetime.now().isoformat()
+
+
+@app.post("/api/measure-composite")
+async def create_measure_composite_endpoint(
+    payload: MeasureCompositeRequest,
+    req: Request,
+):
+    """
+    Measure Composite Map 생성 (chip-level FBT/QVL/BIN 값 집계)
+    즉시 task_id 반환, 백그라운드 처리 (dedicated thread)
+    상태 확인: /api/composite-map/status/{task_id}
+    """
+    image_paths = payload.image_paths or []
+    if not image_paths:
+        raise HTTPException(status_code=400, detail="image_paths가 필요합니다.")
+
+    if payload.mode not in ("bin", "f", "q"):
+        raise HTTPException(status_code=400, detail="mode는 'bin', 'f', 'q' 중 하나여야 합니다.")
+
+    if payload.mode in ("f", "q") and not payload.item_key:
+        raise HTTPException(status_code=400, detail="FBT/QVL 모드에서는 item_key가 필요합니다.")
+
+    if payload.aggregation not in ("count", "sum", "average"):
+        raise HTTPException(status_code=400, detail="aggregation은 'count', 'sum', 'average' 중 하나여야 합니다.")
+
+    # 절대경로 → 상대경로 변환
+    image_paths = [_to_relative_path(p) for p in image_paths]
+
+    max_images = 256
+    if len(image_paths) > max_images:
+        raise HTTPException(status_code=400, detail=f"최대 {max_images}개의 이미지만 지원합니다.")
+
+    # positions 파일 있는 이미지만 필터링
+    position_filtered = [
+        p for p in image_paths
+        if any(c.exists() for c in _candidate_positions_paths(Path(p)))
+    ]
+    if position_filtered:
+        if len(position_filtered) < len(image_paths):
+            logger.info(
+                f"[measure-composite] positions 필터: {len(image_paths)} → {len(position_filtered)}개 이미지"
+            )
+        image_paths = position_filtered
+
+    if not image_paths:
+        raise HTTPException(status_code=400, detail="positions 데이터가 있는 이미지가 없습니다.")
+
+    task_id = str(uuid.uuid4())
+    COMPOSITE_TASKS[task_id] = {
+        "status": "queued",
+        "progress": 0,
+        "result": None,
+        "error": None,
+        "created_at": datetime.now().isoformat(),
+    }
+
+    login_id = _current_login_id(req)
+    resolved_scheme = login_id or ANONYMOUS_LOGIN_ID
+
+    # 전용 스레드에서 실행 (IO_POOL 포화 문제 방지)
+    import threading
+    t = threading.Thread(
+        target=_run_measure_composite_sync,
+        kwargs=dict(
+            task_id=task_id,
+            image_paths=image_paths,
+            mode=payload.mode,
+            item_key=payload.item_key,
+            bin_types=payload.bin_types,
+            aggregation=payload.aggregation,
+            scheme=resolved_scheme,
+            login_id=login_id,
+        ),
+        daemon=True,
+    )
+    t.start()
+
+    return {
+        "success": True,
+        "task_id": task_id,
+        "status": "processing",
+        "message": "Measure composite generation started",
+    }
+
+
+class MeasureCompositeRecolorRequest(BaseModel):
+    output_dir: str
+    scheme: Optional[str] = None
+    gradient_filter: Optional[List[int]] = None   # [0,1,...,9] percentile range
+    bin_filter: Optional[List[str]] = None         # ["285","286",...] BIN 타입
+
+
+@app.post("/api/measure-composite-recolor")
+async def recolor_measure_composite_endpoint(
+    payload: MeasureCompositeRecolorRequest,
+    req: Request,
+):
+    """NPZ 캐시 기반 Measure Composite 빠른 색상 변경 + filter"""
+    try:
+        from .measure_composite import recolor_measure_composite
+
+        login_id = _current_login_id(req)
+        resolved_scheme = payload.scheme or login_id or ANONYMOUS_LOGIN_ID
+
+        result = recolor_measure_composite(
+            output_dir_rel=payload.output_dir,
+            scheme=resolved_scheme,
+            gradient_filter=payload.gradient_filter,
+            bin_filter=payload.bin_filter,
+        )
+        return result
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Measure composite recolor failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 class SubsetMapRequest(BaseModel):
