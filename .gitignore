@@ -44,6 +44,8 @@ mcp.sqlite3
 network-log.txt
 AGENTS.md
 node_modules/
+package.json
+package-lock.json
 
 # Screenshots & test artifacts
 phase*.png
