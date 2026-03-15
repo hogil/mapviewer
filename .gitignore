@@ -20,8 +20,9 @@ cert/*.key
 cert/*.crt
 
 # Logs (runtime generated, exclude from VCS)
-logs/access.log
-logs/detail_access.csv
+logs/*.json
+logs/*.log
+logs/*.csv
 
 # IDE
 .idea/
@@ -44,7 +45,9 @@ network-log.txt
 AGENTS.md
 node_modules/
 
-# Local verification artifacts
+# Screenshots & test artifacts
+phase*.png
+*.screenshot.png
 color-edit-dialog.png
 error.png
 error2.png
