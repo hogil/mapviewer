@@ -1703,6 +1703,9 @@ async def _background_index_build():
                     f"✅ [INDEX] Background build complete: {index_service.total_files} files ({build_duration:.2f}s)"
                 )
                 print(f"[INDEX] Background build complete: {index_service.total_files} files ({build_duration:.2f}s)", flush=True)
+                # 🔥 폴더별 파일 캐시 자동 빌드
+                _build_folder_files_cache()
+                print(f"[INDEX] Folder files cache built: {len(_FOLDER_FILES_CACHE)} folders", flush=True)
             else:
                 bootlog.error(f"❌ [INDEX] 캐시 파일이 생성되지 않음: {cache_file}")
         else:
@@ -6796,9 +6799,37 @@ async def get_all_files():
         logger.exception(f"전체 파일 목록 조회 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# 🔥 폴더별 파일 캐시 (인덱스 빌드 후 자동 생성, O(1) 조회)
+_FOLDER_FILES_CACHE: Dict[str, list] = {}
+_FOLDER_FILES_CACHE_BUILT = False
+
+def _build_folder_files_cache():
+    """인덱스에서 폴더별 파일 목록을 미리 그룹핑"""
+    global _FOLDER_FILES_CACHE, _FOLDER_FILES_CACHE_BUILT
+    skip = {'classification', 'thumbnails', 'composite_map'} | SKIP_DIRS
+    cache: Dict[str, list] = {}
+    with FILE_INDEX_LOCK:
+        for key in FILE_INDEX_KEYS:
+            ext = os.path.splitext(key)[1].lower()
+            if ext not in SUPPORTED_EXTENSIONS:
+                continue
+            parts = key.split("/")
+            if any(p in skip for p in parts[:-1]):
+                continue
+            # 첫 번째 폴더를 키로 사용
+            folder = parts[0] if len(parts) > 1 else ""
+            if folder not in cache:
+                cache[folder] = []
+            cache[folder].append(key)
+    # 미리 정렬
+    for folder in cache:
+        cache[folder].sort(key=lambda x: x.split("/")[-1].lower())
+    _FOLDER_FILES_CACHE = cache
+    _FOLDER_FILES_CACHE_BUILT = True
+
 @app.get("/api/files/recursive")
 async def get_files_recursive(path: str):
-    """폴더 내 모든 파일을 재귀적으로 가져오기 — 인덱스 우선, 폴백 os.walk"""
+    """폴더 내 모든 파일을 재귀적으로 가져오기 — 폴더 캐시 O(1) 조회"""
     try:
         target = safe_resolve_path(path)
         if not target.exists() or not target.is_dir():
@@ -6807,39 +6838,31 @@ async def get_files_recursive(path: str):
         rel_prefix = str(target.relative_to(ROOT_DIR)).replace("\\", "/")
         if rel_prefix == ".":
             rel_prefix = ""
-        prefix = (rel_prefix + "/") if rel_prefix else ""
 
-        # 🔥 인덱스에서 prefix 매칭 (디스크 접근 없음, 즉시 반환)
-        skip = {'classification', 'thumbnails', 'composite_map'} | SKIP_DIRS
+        # 🔥 폴더 캐시에서 O(1) 조회
+        if _FOLDER_FILES_CACHE_BUILT and rel_prefix in _FOLDER_FILES_CACHE:
+            files = _FOLDER_FILES_CACHE[rel_prefix]
+            return Response(
+                content=b'{"success":true,"files":' + json.dumps(files, ensure_ascii=False).encode() + b'}',
+                media_type="application/json"
+            )
+
+        # 캐시 miss → os.walk 폴백
         files = []
-        with FILE_INDEX_LOCK:
-            for key in FILE_INDEX_KEYS:
-                if prefix and not key.startswith(prefix):
+        for root, dirs, filenames in os.walk(target):
+            for s in list(SKIP_DIRS):
+                if s in dirs: dirs.remove(s)
+            dirs[:] = [d for d in dirs if d not in ['classification', 'thumbnails', 'composite_map']]
+            for fn in filenames:
+                ext = os.path.splitext(fn)[1].lower()
+                if ext not in SUPPORTED_EXTENSIONS:
                     continue
-                # skip dirs 체크
-                parts = key.split("/")
-                if any(p in skip for p in parts[:-1]):
+                full_path = Path(root) / fn
+                try:
+                    root_relative = str(full_path.relative_to(ROOT_DIR)).replace('\\', '/')
+                    files.append(root_relative)
+                except ValueError:
                     continue
-                ext = os.path.splitext(key)[1].lower()
-                if ext in SUPPORTED_EXTENSIONS:
-                    files.append(key)
-
-        # 인덱스가 비어있으면 os.walk 폴백
-        if not files:
-            for root, dirs, filenames in os.walk(target):
-                for s in list(SKIP_DIRS):
-                    if s in dirs: dirs.remove(s)
-                dirs[:] = [d for d in dirs if d not in ['classification', 'thumbnails', 'composite_map']]
-                for fn in filenames:
-                    ext = os.path.splitext(fn)[1].lower()
-                    if ext not in SUPPORTED_EXTENSIONS:
-                        continue
-                    full_path = Path(root) / fn
-                    try:
-                        root_relative = str(full_path.relative_to(ROOT_DIR)).replace('\\', '/')
-                        files.append(root_relative)
-                    except ValueError:
-                        continue
 
         files.sort(key=lambda x: x.split('/')[-1].lower())
         return Response(
