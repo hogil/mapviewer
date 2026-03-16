@@ -3364,8 +3364,8 @@ class WaferMapViewer {
                 this._restoreMultiSelectUI('tm');
                 this._restoreMultiSelectUI('step');
 
-                // 🔥 필터 메타데이터 로드 (LT/TM 드롭다운 갱신)
-                await this.fetchFilterMetadata(this.currentFolderPath);
+                // 🔥 폴더 전환 시 메타 초기화 (파일 폴더 클릭 시 lazy 로드)
+                this.filterFileMetadata = {};
 
                 this.loadDirectoryContents(null, this.dom.fileExplorer);
 
@@ -5483,15 +5483,10 @@ class WaferMapViewer {
             this[stateKey] = checked;
             this._updateMultiSelectBtn(type);
             this._saveUserPrefs();
-            // 🔥 필터 활성 시 메타 보장 (한 번만 호출)
-            if (checked.length > 0 && Object.keys(this.filterFileMetadata).length === 0) {
-                const metaPath = this.currentFolderPath || this.productFolderPath;
-                if (metaPath) await this.fetchFilterMetadata(metaPath);
-            }
-            // 열린 폴더 경로 수집 → 필터 적용 → 열린 폴더 복원
+            // 열린 폴더 경로 수집 → 필터 적용 → 열린 폴더 복원 (메타 포함)
             const openPaths = this._getOpenExplorerFolders();
             await this.loadDirectoryContents(this.currentFolderPrefix || null, this.dom.fileExplorer);
-            await this._restoreOpenExplorerFolders(openPaths);
+            await this._restoreOpenExplorerFolders(openPaths, { skipMeta: false });
         });
 
         // 패널 밖 클릭 → 닫기
@@ -5519,7 +5514,7 @@ class WaferMapViewer {
     /**
      * 파일 탐색기에서 지정된 폴더 경로들을 순차적으로 다시 열기
      */
-    async _restoreOpenExplorerFolders(paths) {
+    async _restoreOpenExplorerFolders(paths, { skipMeta = true } = {}) {
         if (!paths || paths.length === 0) return;
         const explorer = this.dom.fileExplorer;
         if (!explorer) return;
@@ -5528,10 +5523,9 @@ class WaferMapViewer {
             if (!summary) continue;
             const details = summary.closest('details');
             if (!details || details.open) continue;
-            // 폴더 콘텐츠 로드
             const contentDiv = details.querySelector('.folder-content');
             if (contentDiv) {
-                await this.loadDirectoryContents(folderPath, contentDiv);
+                await this.loadDirectoryContents(folderPath, contentDiv, { skipMeta });
             }
             details.open = true;
         }
@@ -6256,11 +6250,7 @@ class WaferMapViewer {
 
             this.showInitialState();
 
-            // 🔥 필터 메타데이터 로드 (await — 필터 적용 전에 반드시 완료)
-            const filterMetaPath = this._savedLastProductFolder || this.currentFolderPath;
-            try { await this.fetchFilterMetadata(filterMetaPath); } catch (err) {
-                console.warn('[INIT] Filter metadata 로드 실패:', err);
-            }
+            // 🔥 필터 메타데이터는 폴더 클릭 시 lazy 로드 (초기화 시 전체 스캔 안 함)
 
             // 🔥 2순위: File Explorer 로딩은 백그라운드로 실행
             if (this.dom.fileExplorer) {
@@ -6529,7 +6519,7 @@ class WaferMapViewer {
             }
         }
 
-    async loadDirectoryContents(path, containerElement) {
+    async loadDirectoryContents(path, containerElement, { skipMeta = false } = {}) {
         this.debugLog("[DEBUG] loadDirectoryContents called with path:", path);
 
         try {
@@ -6542,12 +6532,24 @@ class WaferMapViewer {
             });
 
             const files = Array.isArray(data.items) ? data.items : [];
-            
+
             const sortedFiles = this.sortExplorerItems(files);
 
             // 제품 폴더 선택 시 label 캐시 초기화
             if (path) {
                 this.clearParCache();
+            }
+
+            // 🔥 파일이 포함된 폴더 + 필터 활성 → 해당 폴더만 메타 lazy 로드
+            if (!skipMeta && path) {
+                const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0);
+                const hasFiles = sortedFiles.some(n => n.type === 'file');
+                if (hasFilter && hasFiles) {
+                    const firstStem = sortedFiles.find(n => n.type === 'file')?.name?.replace(/\.[^.]+$/, '');
+                    if (firstStem && !this.filterFileMetadata[firstStem]) {
+                        await this.fetchFilterMetadata(path);
+                    }
+                }
             }
 
             containerElement.innerHTML = this.createFileTreeHtml(sortedFiles, path || '');
