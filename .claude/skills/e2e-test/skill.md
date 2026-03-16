@@ -280,6 +280,25 @@ UI 체크박스 값은 대문자 (`"ENGINEER"`, `"NORMAL"`)이므로 대소문�
    - 탐색기 파일 수: 개별 필터 적용 수보다 적음
 9. **전체 해제**: LOT/TEST 필터 모두 해제 → 전체 파일 복원
 
+#### 3-3-1. 부분 해제 시 나머지 필터 유지 (초기화 금지)
+**핵심**: 여러 필터 중 하나를 해제하면 나머지 필터만으로 재필터링해야 한다.
+해제된 것만 보고 전체 초기화하면 안 된다.
+
+1. **LOT 와일드카드 부분 해제**:
+   - P% + E% 체크 → 전체 표시 (P+E=모두)
+   - P% 해제 → **E%만 적용** (전체가 아님!) → `filterLT = ["E%"]`
+   - E%만 남은 상태에서 파일 수가 전체보다 적은지 확인
+2. **LOT 개별 부분 해제**:
+   - EE + PT + ENGINEER 체크
+   - PT 해제 → **EE + ENGINEER만** (초기화 아님!) → `filterLT = ["EE"]`
+   - EE도 해제 → **ENGINEER만** → `filterLT = [], filterTM = ["ENGINE",...]`
+3. **LOT+TEST 교차 해제**:
+   - E% + NORMAL 체크
+   - E% 해제 → **NORMAL만** → `filterLT = [], filterTM = ["NORMAL","NORM"]`
+   - NORMAL 해제 → 전체 (필터 없음)
+4. **검증 포인트**: 각 해제 단계에서 `v.filterLT`, `v.filterTM` 배열이 정확한지,
+   DOM에 표시되는 파일 수가 남은 조건에 맞는지 확인
+
 #### 3-4. 필터 변경 시 열린 폴더 상태 보존 (DOM show/hide)
 필터는 `_applyFilterToExplorer()`로 DOM의 `<li>` 요소를 `display:none`/`''` 토글.
 API 재호출이나 innerHTML 교체가 **없어야** 한다 (폴더 닫힘 금지).
