@@ -4964,61 +4964,38 @@ async def get_filter_metadata(path: Optional[str] = None):
         if scan_dir:
             is_root = (scan_dir == config.POSITIONS_ROOT and rel_folder in ("", "."))
 
-            def _build_or_load_index(folder: Path, recursive: bool):
-                """인덱스 파일로 lt/tm 일괄 로드 (없으면 생성)"""
-                idx_path = folder / "_filter_index.json"
-                # 인덱스가 있고, 폴더 내 최신 JSON보다 새로우면 캐시 사용
-                if idx_path.exists():
-                    idx_mtime = idx_path.stat().st_mtime
-                    json_files = list(folder.rglob("*.json") if recursive else folder.glob("*.json"))
-                    json_files = [f for f in json_files if f.name != "_filter_index.json"]
-                    if json_files:
-                        newest = max(f.stat().st_mtime for f in json_files)
-                        if idx_mtime >= newest:
-                            with open(idx_path, "r", encoding="utf-8") as fh:
-                                return json.load(fh)
-                    elif not json_files:
-                        with open(idx_path, "r", encoding="utf-8") as fh:
-                            return json.load(fh)
-
-                # 인덱스 생성
-                json_files = list(folder.rglob("*.json") if recursive else folder.glob("*.json"))
-                json_files = [f for f in json_files if f.name != "_filter_index.json"]
-                index = {}
-                for fpath in json_files:
-                    try:
-                        with open(fpath, "rb") as fh:
-                            head = fh.read(512).decode("utf-8", errors="ignore")
-                        lt_m = _re.search(r'"lt"\s*:\s*"([^"]*)"', head)
-                        tm_m = _re.search(r'"tm"\s*:\s*"([^"]*)"', head)
-                        entry = {}
-                        if lt_m: entry["lt"] = lt_m.group(1)
-                        if tm_m: entry["tm"] = tm_m.group(1)
-                        if entry:
-                            index[fpath.stem] = entry
-                    except Exception:
-                        pass
-                # 인덱스 저장
+            def _extract_lt_tm(fpath):
+                """head 512B에서 lt/tm 추출"""
                 try:
-                    with open(idx_path, "w", encoding="utf-8") as fh:
-                        json.dump(index, fh, ensure_ascii=False)
+                    with open(fpath, "rb") as fh:
+                        head = fh.read(512).decode("utf-8", errors="ignore")
+                    lt_m = _re.search(r'"lt"\s*:\s*"([^"]*)"', head)
+                    tm_m = _re.search(r'"tm"\s*:\s*"([^"]*)"', head)
+                    return fpath.stem, lt_m.group(1) if lt_m else None, tm_m.group(1) if tm_m else None
                 except Exception:
-                    pass
-                return index
+                    return fpath.stem, None, None
+
+            def _scan_parallel(folder: Path, recursive: bool):
+                """멀티스레드 병렬 스캔"""
+                from concurrent.futures import ThreadPoolExecutor as _TPE
+                json_files = list(folder.rglob("*.json") if recursive else folder.glob("*.json"))
+                with _TPE(max_workers=64) as pool:
+                    return list(pool.map(_extract_lt_tm, json_files))
 
             loop = asyncio.get_running_loop()
-            index = await loop.run_in_executor(
+            results = await loop.run_in_executor(
                 DIRLIST_EXECUTOR,
-                lambda: _build_or_load_index(scan_dir, recursive=is_root)
+                lambda: _scan_parallel(scan_dir, recursive=is_root)
             )
 
-            for stem, entry in index.items():
-                lt_val = entry.get("lt")
-                tm_val = entry.get("tm")
+            for stem, lt_val, tm_val in results:
                 if lt_val: lt_values.add(lt_val)
                 if tm_val: tm_values.add(tm_val)
                 if not is_root:
-                    file_map[stem] = entry
+                    entry = {}
+                    if lt_val: entry["lt"] = lt_val
+                    if tm_val: entry["tm"] = tm_val
+                    if entry: file_map[stem] = entry
 
         # 알려진 값과 동적 스캔 결과 합산
         all_lt = lt_values | KNOWN_LT_VALUES
