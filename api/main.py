@@ -4924,21 +4924,28 @@ async def get_filter_metadata(path: Optional[str] = None):
             rel_folder = ""
         else:
             try:
-                target = safe_resolve_path(path)
-                rel_folder = str(target.relative_to(ROOT_DIR)).replace("\\", "/")
+                # 절대 경로를 직접 resolve하여 ROOT_DIR 기준 상대 경로 추출
+                path_obj = Path(path).resolve()
+                root_resolved = ROOT_DIR.resolve()
+                try:
+                    rel_folder = str(path_obj.relative_to(root_resolved)).replace("\\", "/")
+                except ValueError:
+                    # ROOT_DIR 하위가 아닌 경우 safe_resolve_path로 폴백
+                    target = safe_resolve_path(path)
+                    rel_folder = str(target.relative_to(root_resolved)).replace("\\", "/")
             except (ValueError, Exception):
                 rel_folder = path.replace("\\", "/").strip("/")
 
         # POSITIONS_ROOT 하위에서 해당 폴더의 JSON 파일 검색
-        if rel_folder:
-            # 첫 번째 컴포넌트 제거 (trimmed path 방식)
+        if rel_folder and rel_folder != ".":
             parts = [p for p in Path(rel_folder).parts if p not in ("", ".")]
+            # 직접 매핑 우선 (제품 폴더명 = positions 하위 폴더명)
+            positions_dir = config.POSITIONS_ROOT.joinpath(*parts) if parts else config.POSITIONS_ROOT
+            # 레거시: 첫 번째 컴포넌트 제거 방식도 시도
             if len(parts) > 1:
-                positions_dir = config.POSITIONS_ROOT.joinpath(*parts[1:])
+                legacy_dir = config.POSITIONS_ROOT.joinpath(*parts[1:])
             else:
-                positions_dir = config.POSITIONS_ROOT.joinpath(*parts) if parts else config.POSITIONS_ROOT
-            # 레거시 경로도 시도
-            legacy_dir = config.POSITIONS_ROOT / rel_folder
+                legacy_dir = positions_dir
         else:
             positions_dir = config.POSITIONS_ROOT
             legacy_dir = positions_dir

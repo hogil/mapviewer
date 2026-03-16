@@ -5483,6 +5483,11 @@ class WaferMapViewer {
             this[stateKey] = checked;
             this._updateMultiSelectBtn(type);
             this._saveUserPrefs();
+            // 🔥 필터 활성 시 메타 보장 (한 번만 호출)
+            if (checked.length > 0 && Object.keys(this.filterFileMetadata).length === 0) {
+                const metaPath = this.currentFolderPath || this.productFolderPath;
+                if (metaPath) await this.fetchFilterMetadata(metaPath);
+            }
             // 열린 폴더 경로 수집 → 필터 적용 → 열린 폴더 복원
             const openPaths = this._getOpenExplorerFolders();
             await this.loadDirectoryContents(this.currentFolderPrefix || null, this.dom.fileExplorer);
@@ -6251,12 +6256,11 @@ class WaferMapViewer {
 
             this.showInitialState();
 
-            // 🔥 필터 메타데이터 로드 (LT/TM 드롭다운 갱신)
-            // 마지막 제품 폴더가 저장되어 있으면 해당 경로 기준으로 로드
+            // 🔥 필터 메타데이터 로드 (await — 필터 적용 전에 반드시 완료)
             const filterMetaPath = this._savedLastProductFolder || this.currentFolderPath;
-            this.fetchFilterMetadata(filterMetaPath).catch(err => {
+            try { await this.fetchFilterMetadata(filterMetaPath); } catch (err) {
                 console.warn('[INIT] Filter metadata 로드 실패:', err);
-            });
+            }
 
             // 🔥 2순위: File Explorer 로딩은 백그라운드로 실행
             if (this.dom.fileExplorer) {
