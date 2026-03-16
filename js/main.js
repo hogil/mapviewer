@@ -7214,9 +7214,13 @@ class WaferMapViewer {
         try {
             this.debugLog(`폴더 선택: ${folderPath}`);
 
-            // 필터 메타데이터가 없으면 로드 (LT/TM 필터 적용 위해 필수)
-            if (!this.filterFileMetadata || Object.keys(this.filterFileMetadata).length === 0) {
-                await this.fetchFilterMetadata(folderPath);
+            const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
+
+            // 🔥 필터 활성 시에만 메타 로드 (미선택이면 건너뜀)
+            if (hasFilter && (this.filterLT?.length > 0 || this.filterTM?.length > 0)) {
+                if (!this.filterFileMetadata || Object.keys(this.filterFileMetadata).length === 0) {
+                    await this.fetchFilterMetadata(folderPath);
+                }
             }
 
             // API를 통해 폴더 내 모든 파일 가져오기 (재귀적)
@@ -7225,14 +7229,13 @@ class WaferMapViewer {
 
             if (!this.selectedImages) this.selectedImages = [];
 
-            // 이미지 파일만 필터링하고 LT/TM + STEP 필터 적용
+            // 🔥 필터 없으면 이미지 파일만 필터링 (빠른 경로)
             const imageFiles = allFiles.filter(path => {
                 if (!this.isImageFile(path)) return false;
+                if (!hasFilter) return true;
 
-                // LT/TM 필터 적용
+                // 필터 활성 시에만 LT/TM + STEP 적용
                 if (!this._passesLtTmFilter(path)) return false;
-
-                // STEP 필터 적용 (PLC=00C, PLH=00P)
                 if (!this._passesStepFilter(path)) return false;
 
                 return true;
@@ -7261,16 +7264,13 @@ class WaferMapViewer {
 
             if (!this.selectedImages) this.selectedImages = [];
 
-            // 해당 폴더의 파일들을 선택에서 제거 (LT/TM + STEP 필터 적용)
+            // 해당 폴더의 파일들을 선택에서 제거
+            const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
             const imageFiles = allFiles.filter(path => {
                 if (!this.isImageFile(path)) return false;
-
-                // LT/TM 필터 적용
+                if (!hasFilter) return true;
                 if (!this._passesLtTmFilter(path)) return false;
-
-                // STEP 필터 적용 (PLC=00C, PLH=00P)
                 if (!this._passesStepFilter(path)) return false;
-
                 return true;
             });
 
