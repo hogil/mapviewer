@@ -5517,14 +5517,21 @@ class WaferMapViewer {
         const explorer = this.dom.fileExplorer;
         if (!explorer) return null;
         const rect = explorer.getBoundingClientRect();
-        const folders = explorer.querySelectorAll('summary[data-path]');
-        for (const el of folders) {
+        // 폴더 우선
+        for (const el of explorer.querySelectorAll('summary[data-path]')) {
             const r = el.getBoundingClientRect();
             if (r.top >= rect.top - 10 && r.top < rect.bottom) {
                 return el.dataset.path;
             }
         }
-        // 폴더가 없으면 scrollTop 보존 (파일만 있는 구조)
+        // 폴더 없으면 보이는 첫 번째 파일
+        for (const el of explorer.querySelectorAll('a[data-path]')) {
+            if (el.closest('li')?.style.display === 'none') continue;
+            const r = el.getBoundingClientRect();
+            if (r.top >= rect.top - 10 && r.top < rect.bottom) {
+                return el.dataset.path;
+            }
+        }
         return null;
     }
 
@@ -5535,8 +5542,11 @@ class WaferMapViewer {
         const explorer = this.dom.fileExplorer;
         if (!explorer) return;
         if (anchorPath) {
-            const el = explorer.querySelector(`summary[data-path="${CSS.escape(anchorPath)}"]`);
-            if (el) { el.scrollIntoView({ block: 'start' }); return; }
+            const el = explorer.querySelector(`summary[data-path="${CSS.escape(anchorPath)}"], a[data-path="${CSS.escape(anchorPath)}"]`);
+            if (el && el.closest('li')?.style.display !== 'none') {
+                el.scrollIntoView({ block: 'start' });
+                return;
+            }
         }
         if (savedScroll != null) explorer.scrollTop = savedScroll;
     }
@@ -5565,6 +5575,10 @@ class WaferMapViewer {
             }
         }
 
+        // 앵커 저장 (폴더 기준, 없으면 scrollTop)
+        const anchorPath = this._getVisibleAnchorPath();
+        const savedScroll = explorer.scrollTop;
+
         // 모든 파일 링크에 대해 show/hide
         const allFiles = explorer.querySelectorAll('a[data-path]');
         for (const a of allFiles) {
@@ -5579,6 +5593,9 @@ class WaferMapViewer {
             const passStep = this._passesStepFilter(name);
             li.style.display = (passLtTm && passStep) ? '' : 'none';
         }
+
+        // 앵커 복원
+        this._scrollToAnchorPath(anchorPath, savedScroll);
     }
 
     /**
