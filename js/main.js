@@ -5552,9 +5552,11 @@ class WaferMapViewer {
     }
 
     /**
-     * 🔥 DOM show/hide로 필터 적용 (API 재호출 없음, 폴더 상태 유지, 즉시 반영)
+     * 🔥 DOM show/hide로 필터 적용 — 마지막 요청만 실행 (이전 요청 취소)
      */
     async _applyFilterToExplorer() {
+        const seq = (this._filterSeq = (this._filterSeq || 0) + 1);
+
         const explorer = this.dom.fileExplorer;
         if (!explorer) return;
         const hasLT = this.filterLT?.length > 0;
@@ -5564,18 +5566,21 @@ class WaferMapViewer {
 
         // 필터 활성인데 메타가 비어있으면 한 번 로드
         if ((hasLT || hasTM) && Object.keys(this.filterFileMetadata).length === 0) {
-            // 열린 폴더들에 대해 메타 로드
             const openFolders = this._getOpenExplorerFolders();
             for (const fp of openFolders) {
                 await this.fetchFilterMetadata(fp);
+                if (seq !== this._filterSeq) return; // 새 요청 들어옴 → 중단
             }
-            // 루트 레벨 파일도 있을 수 있으니
             if (this.currentFolderPrefix) {
                 await this.fetchFilterMetadata(this.currentFolderPrefix.replace(/\/+$/, ''));
+                if (seq !== this._filterSeq) return;
             }
         }
 
-        // 앵커 저장 (폴더 기준, 없으면 scrollTop)
+        // 새 요청이 들어왔으면 이 실행은 버림
+        if (seq !== this._filterSeq) return;
+
+        // 앵커 저장
         const anchorPath = this._getVisibleAnchorPath();
         const savedScroll = explorer.scrollTop;
 
