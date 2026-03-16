@@ -5483,10 +5483,12 @@ class WaferMapViewer {
             this[stateKey] = checked;
             this._updateMultiSelectBtn(type);
             this._saveUserPrefs();
-            // 열린 폴더 경로 수집 → 필터 적용 → 열린 폴더 복원 (메타 포함)
+            // 열린 폴더 경로 + 스크롤 위치 보존 → 필터 적용 → 복원
             const openPaths = this._getOpenExplorerFolders();
+            const savedScroll = this.dom.fileExplorer?.scrollTop || 0;
             await this.loadDirectoryContents(this.currentFolderPrefix || null, this.dom.fileExplorer);
             await this._restoreOpenExplorerFolders(openPaths, { skipMeta: false });
+            if (this.dom.fileExplorer) this.dom.fileExplorer.scrollTop = savedScroll;
         });
 
         // 패널 밖 클릭 → 닫기
@@ -5615,6 +5617,7 @@ class WaferMapViewer {
         if (filterResetBtn) {
             filterResetBtn.addEventListener('click', async () => {
                 const openPaths = this._getOpenExplorerFolders();
+                const savedScroll = this.dom.fileExplorer?.scrollTop || 0;
                 this.filterLT = [];
                 this.filterTM = [];
                 this.filterSTEP = [];
@@ -5624,6 +5627,7 @@ class WaferMapViewer {
                 this._saveUserPrefs();
                 await this.loadDirectoryContents(this.currentFolderPrefix || null, this.dom.fileExplorer);
                 await this._restoreOpenExplorerFolders(openPaths);
+                if (this.dom.fileExplorer) this.dom.fileExplorer.scrollTop = savedScroll;
             });
         }
 
