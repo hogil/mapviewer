@@ -296,14 +296,15 @@
             background: #333;
             color: #fff;
             border: 1px solid #555;
-            border-radius: 3px;
-            padding: 4px 8px;
-            font-size: 12px;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 11px;
             cursor: pointer;
             min-width: 36px;
             text-align: center;
             white-space: nowrap;
             outline: none;
+            transition: all 0.2s ease;
             -webkit-user-select: none;
             user-select: none;
         }
@@ -313,6 +314,11 @@
         .multi-select-btn.active {
             border-color: #7ab;
             background: #2a3a4a;
+        }
+        .multi-select-btn.filter-active {
+            background: #2f6fed;
+            border-color: #4a7fff;
+            color: #fff;
         }
         .multi-select-panel {
             position: absolute;
@@ -3579,7 +3585,7 @@
                             <option value="">제품 선택</option>
                         </select>
                         <!-- 검색 입력 필드 (검색 모드) -->
-                        <input type="text" id="subfolder-search" placeholder="제품 검색..." style="width: 100%; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; padding: 6px 8px; font-size: 14px; font-weight: 500;" autocomplete="off">
+                        <input type="text" id="subfolder-search" placeholder="제품 검색..." style="width: 100%; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; padding: 4px 8px; font-size: 12px; font-weight: 500;" autocomplete="off">
                         <!-- 검색 결과 드롭다운 -->
                         <div id="subfolder-dropdown" style="position: absolute; top: 100%; left: 0; right: 0; background: #333; border: 1px solid #555; border-top: none; border-radius: 0 0 4px 4px; max-height: 400px; overflow-y: auto; display: none; z-index: 1000;">
                         </div>
@@ -3589,7 +3595,7 @@
                 <!-- 파일 필터 선택 -->
                 <div style="margin-top: 8px; padding: 4px 0; display: flex; gap: 6px; align-items: center;">
                     <!-- 필터 리셋 버튼 -->
-                    <button type="button" id="filter-reset-btn" class="multi-select-btn" title="LOT/TEST/STEP 필터 전체 해제" style="padding:2px 6px;font-size:11px;color:#aaa;border-color:#555;">↺</button>
+                    <button type="button" id="filter-reset-btn" class="multi-select-btn" title="LOT/TEST/STEP 필터 전체 해제">Reset</button>
                     <!-- LT 다중선택 드롭다운 -->
                     <div id="filter-lt-multi" class="multi-select-dropdown" style="position:relative;">
                         <button type="button" class="multi-select-btn" id="filter-lt-btn">LOT</button>
@@ -3645,8 +3651,8 @@
                     </div>
                     <div class="personalized-color-actions">
                         <!-- 🔥 개인색 설정은 항상 활성화되므로 체크박스 제거 -->
-                        <button type="button" id="personalized-color-button" class="color-editor-btn">색상 편집</button>
-                        <button type="button" id="permission-editor-button" class="color-editor-btn">권한 편집</button>
+                        <button type="button" id="personalized-color-button" class="color-editor-btn">색 변경</button>
+                        <button type="button" id="permission-editor-button" class="color-editor-btn">권한 변경</button>
                     </div>
                 </div>
             </div>
@@ -3980,7 +3986,7 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                     <h3 style="margin: 0;">Class Manager</h3>
                     <div style="display: flex; align-items: center; gap: 8px;">
-                        <a href="https://example.com/manual" target="_blank" rel="noopener" class="grid-btn" style="font-size: 11px; text-decoration: none; white-space: nowrap; padding: 3px 8px;">
+                        <a href="http://go/failbitmapmanual/" target="_blank" rel="noopener" class="grid-btn" style="font-size: 11px; text-decoration: none; white-space: nowrap; padding: 3px 8px;">
                             Manual
                         </a>
                         <div style="font-size: 11px; color: #999; line-height: 1.3;">

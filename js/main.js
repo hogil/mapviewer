@@ -5555,7 +5555,31 @@ class WaferMapViewer {
         const count = panel
             ? panel.querySelectorAll('input[type="checkbox"]:checked').length
             : this[stateKey].length;
-        btn.textContent = count > 0 ? `${label}(${count})` : label;
+        // 버튼 텍스트는 항상 라벨만 표시
+        btn.textContent = label;
+        // 선택 시 파란색 활성화
+        btn.classList.toggle('filter-active', count > 0);
+        // 드롭다운 패널 상단에 선택 갯수 표시
+        if (panel) {
+            let badge = panel.querySelector('.filter-count-badge');
+            if (count > 0) {
+                if (!badge) {
+                    badge = document.createElement('div');
+                    badge.className = 'filter-count-badge';
+                    badge.style.cssText = 'padding:4px 10px;font-size:10px;color:#7ab;border-bottom:1px solid #444;';
+                    panel.prepend(badge);
+                }
+                badge.textContent = `${count}개 선택됨`;
+            } else if (badge) {
+                badge.remove();
+            }
+        }
+        // Reset 버튼 활성 상태
+        const resetBtn = document.getElementById('filter-reset-btn');
+        if (resetBtn) {
+            const anyActive = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
+            resetBtn.classList.toggle('filter-active', anyActive);
+        }
     }
 
     /**
@@ -25731,6 +25755,11 @@ class WaferMapViewer {
     showLotListModal() {
         const modal = document.getElementById('lot-list-modal');
         if (modal) {
+            // folder-selection 하단 경계선에 맞춰 top 위치 동적 설정
+            const folderSel = document.getElementById('folder-selection');
+            if (folderSel) {
+                modal.style.top = Math.round(folderSel.getBoundingClientRect().bottom) + 'px';
+            }
             modal.style.display = 'flex';
             this.lotListVisible = true;
             this.updateLotListContent();
