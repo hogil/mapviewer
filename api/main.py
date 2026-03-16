@@ -4967,23 +4967,12 @@ async def get_filter_metadata(path: Optional[str] = None):
             json_files = list(scan_dir.rglob("*.json")) if is_root else list(scan_dir.glob("*.json"))
 
             def _extract_lt_tm(fpath):
-                """앞 2KB에서 lt/tm 추출 (운영: pretty-print 15~16번째 줄, 개발: 1줄 JSON)"""
+                """앞 512B에서 lt/tm 추출 (pretty-print 15~16줄 고정 위치)"""
                 try:
                     with open(fpath, "rb") as fh:
-                        head = fh.read(2048).decode("utf-8", errors="ignore")
+                        head = fh.read(512).decode("utf-8", errors="ignore")
                     lt_m = _re.search(r'"lt"\s*:\s*"([^"]*)"', head)
                     tm_m = _re.search(r'"tm"\s*:\s*"([^"]*)"', head)
-                    # head에서 못 찾으면 tail fallback (개발 데이터 호환)
-                    if not lt_m or not tm_m:
-                        size = fpath.stat().st_size
-                        if size > 2048:
-                            with open(fpath, "rb") as fh:
-                                fh.seek(max(0, size - 500))
-                                tail = fh.read().decode("utf-8", errors="ignore")
-                            if not lt_m:
-                                lt_m = _re.search(r'"lt"\s*:\s*"([^"]*)"', tail)
-                            if not tm_m:
-                                tm_m = _re.search(r'"tm"\s*:\s*"([^"]*)"', tail)
                     lt_val = lt_m.group(1) if lt_m else None
                     tm_val = tm_m.group(1) if tm_m else None
                     return fpath.stem, lt_val, tm_val
