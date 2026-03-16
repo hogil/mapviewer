@@ -1,0 +1,956 @@
+---
+name: e2e-test
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 19개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드를 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+context: fork
+agent: general-purpose
+argument-hint: [Phase 번호 또는 범위]
+---
+
+# L3 Tracker E2E 기능 점검
+
+Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으로 테스트합니다.
+`browser_evaluate`로 JS를 실행하고, `browser_take_screenshot`으로 시각 확인합니다.
+
+## 사전 조건 (자동 설정)
+
+테스트 실행 전에 아래 단계를 **순서대로** 자동 수행합니다. 이미 준비된 항목은 건너뜁니다.
+
+### Step 0-1: Playwright MCP 설치 확인
+1. `browser_navigate` 등 Playwright MCP 도구 호출을 시도하여 연결 확인
+2. 실패 시 `npx @playwright/mcp@latest --install` 실행하여 브라우저 설치
+3. 재시도하여 MCP 연결 확인 — 실패 시 사용자에게 안내 후 중단
+
+### Step 0-2: 서버 시작 (기존 서버 모두 종료 후 새로 시작)
+1. **기존 서버 모두 종료**: 443, 8443 포트에서 실행 중인 프로세스를 강제 종료
+   - Windows: `netstat -ano | findstr :443` 및 `netstat -ano | findstr :8443` → PID 확인 → `taskkill /F /PID <pid>`
+   - Ubuntu: `fuser -k 443/tcp` 및 `fuser -k 8443/tcp`
+   - 또한 `python -m api.main` 프로세스가 남아있으면 모두 종료
+2. **포트 사용 가능 여부 즉시 확인** (1~2초 이내):
+   - Windows: `netstat -ano | findstr :8443` → 결과 없으면 사용 가능
+   - Ubuntu: `ss -tlnp | grep :8443` → 결과 없으면 사용 가능
+3. **포트 사용 가능하면**: `HTTPS_PORT=8443 python -m api.main` 을 백그라운드로 실행 (Bash `run_in_background`)
+4. **포트가 아직 점유 중이면** (종료 후에도 즉시 해제 안됨): 재시도 없이 바로 다음 포트로 이동
+   - `HTTPS_PORT=8444 python -m api.main` 백그라운드 실행
+   - 8444도 점유 중이면 → `HTTPS_PORT=8445`로 마지막 시도
+5. 서버 시작 후 최대 15초 대기하며 해당 포트 폴링 (3초 간격, 최대 5회)
+6. 모든 포트(8443, 8444, 8445) 실패 시 사용자에게 안내 후 중단
+7. 성공한 포트를 BASE_URL (`https://localhost:{port}`)로 설정
+
+### Step 0-3: 테스트 데이터 확인
+- 테스트 데이터 폴더: `palette_3k` (3000장), `palette_5mb` (대용량), `wafer_folder`, `wafer_edge_ring`
+- 서버 접속 후 파일 탐색기에 위 폴더가 표시되는지 확인 (없으면 경고 후 계속 진행)
+
+> **참고**: 이후 모든 Phase에서 `https://localhost/` 대신 `BASE_URL`을 사용합니다.
+
+## 테스트 실행 방법
+
+각 Phase를 순서대로 `browser_evaluate`로 실행합니다.
+- 각 단계에서 결과 객체를 반환받아 pass/fail 판정
+- 실패 시 스크린샷 촬영 후 원인 분석
+- alert/confirm 다이얼로그는 `browser_handle_dialog`로 처리
+- Phase 끝마다 정리(cleanup)하여 다음 Phase에 영향 없도록
+
+---
+
+### Phase 1: 페이지 로드 & 기본 UI
+
+**목적**: 앱이 정상 기동되고 핵심 UI 요소가 모두 렌더링되는지 확인
+
+**평가 항목**:
+1. `BASE_URL` 접속 → HTTP 200, 타이틀 "Wafer Map Viewer"
+2. 좌측 파일 탐색기(`#file-tree` 또는 `nav[aria-label]`)에 폴더 목록 렌더링 확인
+   - `querySelectorAll('nav li, nav .folder-item')` → length > 0
+3. 상단 컨트롤 바 버튼 존재 확인:
+   - `#lot-mode-btn` 텍스트 "LOT Mode"
+   - `#measure-composite-btn-top` 텍스트 "Composite"
+   - `[data-ref-map-btn]` 또는 `#ref-map-btn-top` 텍스트 "Ref Map"
+   - `#failbit-btn-top` 텍스트 "Measure"
+   - `#my-lot-btn-top` 텍스트 "MY LOT"
+4. 우측 Class Manager 패널: "Class Manager" 헤딩, "Wafer"/"Chip" 탭 버튼, Add/Rename/Delete Class 버튼
+5. 우측 Label Explorer 패널: "Label Explorer" 헤딩, Add/Delete Label 버튼
+6. 콘솔 에러 0개 확인 (favicon 404 제외)
+
+**pass 기준**: 항목 1~5 모두 true, 콘솔 critical error 0
+
+---
+
+### Phase 2: 폴더 & 그리드 + 스크롤 성능
+
+**목적**: 폴더 로드, 그리드 렌더링, 대량 이미지 스크롤 시 썸네일 즉시 로드 확인
+
+**평가 항목**:
+
+#### 2-1. 기본 그리드 로드
+1. `v.loadImagesInFolderAndShowGrid('palette_3k')` → `v.currentGridImages.length === 3000`
+2. `#image-grid`에 `.grid-thumb-wrap` 요소 존재 (가상 스크롤이므로 전체 3000개는 아닐 수 있음)
+3. 첫 번째 이미지의 `<img>` 태그 `complete === true`, `naturalWidth > 0`
+
+#### 2-2. 컬럼 수 변경
+1. 컬럼 입력 `#grid-cols-input`에 값 7 입력 → 그리드 레이아웃이 7열로 변경 확인
+2. 다시 4로 복원
+
+#### 2-3. 전체선택/해제
+1. `#grid-select-all` 클릭 → `v.gridSelectedIdxs.length === 3000`, `v.gridSelectedSet.size === 3000`
+2. `#grid-deselect-all` 클릭 → `v.gridSelectedIdxs.length === 0`, `v.gridSelectedSet.size === 0`
+
+#### 2-4. 스크롤 성능 (palette_3k, 3000장)
+1. 스크롤 래퍼 찾기: `document.querySelector('.viewer-scroll-wrapper')` 또는 `#image-grid`의 parentElement
+2. `wrapper.scrollTop = wrapper.scrollHeight` (맨 아래로 즉시 스크롤)
+3. 500ms 대기 후 뷰포트 내 보이는 이미지 확인:
+   ```javascript
+   const visible = [...document.querySelectorAll('#image-grid img')].filter(img => {
+     const r = img.getBoundingClientRect();
+     return r.top < window.innerHeight && r.bottom > 0;
+   });
+   const loaded = visible.filter(i => i.complete && i.naturalWidth > 0);
+   ```
+4. **pass 기준**: `loaded.length / visible.length >= 0.9` (90% 이상 로드), **100ms 이내 목표**
+5. 추가 500ms 대기 후 다시 측정 → 100% 로드 확인
+6. 스크롤을 중간 지점 (`scrollHeight / 2`)으로 이동 → 동일 측정 반복
+
+#### 2-5. 스크롤 성능 (palette_5mb, 대용량)
+1. `v.loadImagesInFolderAndShowGrid('palette_5mb')` → 폴더 로드 확인
+2. 맨 아래 스크롤 → 500ms 후 이미지 로드율 측정
+3. 다시 `palette_3k`로 전환 → 캐시 히트로 즉시 로드 확인 (로드율 95%+)
+
+#### 2-6. 여러 폴더 전환
+1. `wafer_folder` 로드 → `v.currentGridImages` 내용이 이전 폴더와 다른지 확인
+2. `wafer_edge_ring` 로드 → 동일 확인
+3. `palette_3k` 로드 → 복귀 확인
+4. 각 전환 시 이전 폴더 이미지가 그리드에 남아있지 않은지 확인
+   - `#image-grid img[src*="이전폴더명"]` → length === 0
+
+**스크린샷**: 맨 아래 스크롤 후 그리드 상태
+
+#### 2-7. 그리드 정렬 (`sort_test` 폴더, 12장)
+파일명 형식: `{root}_{step}_{wafer}_{date}_{time}_{yield}_{sys}.png`
+(인덱스: 0=LOT, 1=step, 2=wafer, 3=date, 4=time, 5=yield, 6=sys)
+
+1. `v.loadImagesInFolderAndShowGrid('sort_test')` → 12개 이미지 로드 확인
+2. **정렬 드롭다운 존재 확인**: `#grid-sort-select` 요소 존재, 7개 옵션 (파일명, LOT↑↓, Yield↑↓, Sys↑↓)
+3. **파일명 정렬** (기본값): 첫 이미지 파일명이 자연 정렬 순서 확인
+4. **LOT ↑ (오름차순)**:
+   - `#grid-sort-select` 값을 `lot_asc`로 변경 → change 이벤트 발생
+   - 첫 번째 이미지: LOTA 포함, 마지막 이미지: LOTD 포함
+   - `v.currentGridImages[0]`에 "LOTA" 포함, `v.currentGridImages[11]`에 "LOTD" 포함
+5. **LOT ↓ (내림차순)**:
+   - `lot_desc` 선택 → 첫 번째: LOTD, 마지막: LOTA
+6. **Yield ↑ (오름차순)**:
+   - `yield_asc` 선택 → 첫 번째 이미지 파일명에서 인덱스[5] = 최소 Yield (54.2)
+   - `v._getFilenameParts(v.currentGridImages[0])[5]` === "54.2"
+7. **Yield ↓ (내림차순)**:
+   - `yield_desc` 선택 → 첫 번째 = 최대 Yield (99.1)
+   - `v._getFilenameParts(v.currentGridImages[0])[5]` === "99.1"
+8. **Sys ↑ (오름차순)**:
+   - `sys_asc` 선택 → 첫 번째 = 최소 Sys (0.5)
+9. **Sys ↓ (내림차순)**:
+   - `sys_desc` 선택 → 첫 번째 = 최대 Sys (22.1)
+10. **파일명 복원**: `filename` 선택 → 원래 자연 정렬 순서 복원
+11. 각 정렬 변경 시 그리드가 즉시 리렌더되고 이미지가 정상 표시되는지 확인
+
+#### 2-8. LOT Mode + 정렬 연동
+LOT Mode 활성 상태에서 정렬 변경 시 LOT 그룹핑이 유지되고 그룹 내부 순서만 바뀌는지 확인.
+
+1. `v.loadImagesInFolderAndShowGrid('sort_test')` → LOT Mode ON 확인 (`#lot-mode-btn.active`)
+2. LOT 그룹 헤더 존재 확인 (LOTA, LOTB, LOTC, LOTD 그룹)
+3. **LOT ↓ (내림차순)**: `lot_desc` 선택
+   - LOT 그룹 순서: LOTD → LOTC → LOTB → LOTA (그룹 헤더 순서 확인)
+   - 각 그룹 내 이미지도 내림차순
+4. **Yield ↑ (오름차순)**: `yield_asc` 선택
+   - LOT 그룹 순서: 오름차순 유지 (LOTA → LOTB → ...)
+   - 각 LOT 그룹 내에서 Yield 낮은 순 (그룹 내 첫 이미지의 인덱스[5]이 가장 작은 값)
+5. **Sys ↓ (내림차순)**: `sys_desc` 선택
+   - LOT 그룹 유지, 그룹 내 Sys 높은 순
+6. **파일명 복원**: `filename` 선택 → 그룹 내 자연 정렬 순서 복원
+7. LOT Mode OFF → 정렬 상태 유지 확인 (flat 그리드에서도 동일 순서)
+8. LOT Mode ON → 다시 그룹핑 + 정렬 유지
+
+**pass 기준**: 7개 정렬 옵션 모두 LOT 그룹핑 유지, 그룹 내 정렬 정확, 모드 전환 시 정렬 유지
+
+---
+
+### Phase 3: 제품 검색 & 필터 (LOT/TEST/STEP)
+
+**목적**: 검색/필터로 이미지 목록을 좁힐 수 있는지, 필터 해제로 복원되는지 확인
+
+**평가 항목**:
+
+#### 3-1. 제품 검색
+1. 검색 입력창 `input[placeholder*="제품 검색"]`에 "palette" 입력
+2. 파일 탐색기에 "palette" 포함 폴더만 표시되는지 확인
+3. 검색어 지우기 → 전체 폴더 복원
+
+#### 3-2. LOT/TEST/STEP 필터
+Wafer Map Explorer에서 폴더를 열어놓은 상태에서 필터 적용 시:
+- **폴더 상태 유지**: 열려있던 폴더는 그대로 유지, 파일만 필터
+- **그리드 연동**: 그리드에 표시된 이미지도 필터 영향을 받음
+
+1. LOT 버튼 클릭 → LOT 드롭다운 열림, LOT 목록 표시
+2. LOT 하나 선택 → 탐색기에서 해당 LOT 파일만 표시 (폴더는 열린 상태 유지)
+3. 그리드 이미지도 해당 LOT만으로 필터링 확인
+4. TEST 버튼 → TEST 선택 → 동일하게 파일 + 그리드 필터
+5. STEP 버튼 → STEP 선택 → 동일하게 파일 + 그리드 필터
+6. 필터 해제 → 전체 파일/이미지 복원, 폴더 열림 상태 유지
+
+#### 3-3. 필터 대소문자 무시 검증 (`palette_3k` 폴더)
+Position JSON의 tm/lt 값이 title case (`"Engineer"`, `"Normal"`)이고
+UI 체크박스 값은 대문자 (`"ENGINEER"`, `"NORMAL"`)이므로 대소문자 무시 매칭이 필수.
+
+1. `palette_3k` 폴더 열기 → `fetchFilterMetadata('palette_3k')` 로드 확인
+   - `v.filterFileMetadata` 키 수 > 0 (3000개)
+2. **Position 원본 값 확인**:
+   - `Object.values(v.filterFileMetadata)` 에서 tm 값 수집
+   - tm 고유값: `"Engineer"`, `"Normal"`, `"Test"` (title case) 확인
+   - lt 고유값: `"EE"`, `"PE"`, `"PT"` 등 확인
+3. **TEST 필터 — NORMAL 체크**:
+   - `#filter-tm-panel` 에서 NORMAL 체크박스 체크 → change 이벤트
+   - `v.filterTM` = `["NORMAL", "NORM"]` (data-values alias)
+   - 탐색기 파일 수: position `"Normal"` 매칭 파일만 표시 (전체보다 적음)
+4. **TEST 필터 — ENGINEER 체크**:
+   - NORMAL 해제 → ENGINEER 체크
+   - `v.filterTM` = `["ENGINE", "ENGINEER", "ENGR", "ENG"]`
+   - 탐색기 파일 수: position `"Engineer"` 매칭 파일만 표시
+5. **LOT 필터 — EE 체크**:
+   - TEST 필터 해제 → LOT 필터 `#filter-lt-panel` 에서 EE 체크
+   - `v.filterLT` = `["EE"]`
+   - 탐색기 파일 수: position `"EE"` 매칭 파일만 표시 (전체보다 적음)
+6. **LOT 필터 — PE 체크** (EE 해제 → PE 체크):
+   - `v.filterLT` = `["PE"]`
+   - 탐색기 파일 수: position `"PE"` 매칭 파일만 표시
+7. **LOT 필터 — 와일드카드 E% 체크**:
+   - PE 해제 → `E%` 체크
+   - `v.filterLT` = `["E%"]`
+   - 탐색기 파일 수: lt가 `"E"`로 시작하는 파일만 표시 (`"EE"`, `"EP"`, `"ES"`, `"ET"`, `"EU"`, `"EY"` 등)
+   - 와일드카드 `startsWith` 매칭 + 대소문자 무시 확인
+8. **LOT + TEST 동시 필터**: E% + NORMAL 동시 체크
+   - lt가 `E`로 시작 AND tm이 `NORMAL`/`NORM` 인 파일만 표시
+   - 탐색기 파일 수: 개별 필터 적용 수보다 적음
+9. **전체 해제**: LOT/TEST 필터 모두 해제 → 전체 파일 복원
+
+#### 3-4. 필터 변경 시 열린 폴더 상태 보존 (DOM show/hide)
+필터는 `_applyFilterToExplorer()`로 DOM의 `<li>` 요소를 `display:none`/`''` 토글.
+API 재호출이나 innerHTML 교체가 **없어야** 한다 (폴더 닫힘 금지).
+
+1. 폴더 3개 열기: `palette_3k`, `palette_5mb`, `wafer_folder`
+   - `details[open] > summary[data-path]` 로 열린 폴더 3개 확인
+2. TEST 필터에서 NORMAL 체크 (change 이벤트 발생)
+3. 필터 적용 후 확인:
+   - `details[open]` 폴더가 필터 전과 동일한 3개인지 확인
+   - DOM 파일 수 변화 없음 (숨겨진 것만 다름): `querySelectorAll('a[data-path]').length` 동일
+   - 보이는 파일 수만 변경: `filter(a => a.closest('li')?.style.display !== 'none').length` < 전체
+4. 필터 해제 후에도 폴더 열림 상태 유지 확인
+
+#### 3-5. 필터 성능 — DOM show/hide 속도 (palette_3k, 3000파일)
+메타 로드 후 필터 전환은 API 호출 없이 DOM만 조작하므로 즉시 반영되어야 한다.
+
+1. `palette_3k` 폴더에서 메타 로드 완료 확인 (`Object.keys(v.filterFileMetadata).length === 3000`)
+2. LOT=EE 적용:
+   ```javascript
+   v.filterLT = ['EE'];
+   const t0 = performance.now();
+   await v._applyFilterToExplorer();
+   const elapsed = performance.now() - t0;
+   // elapsed < 50ms (API 호출 없음, DOM show/hide만)
+   ```
+3. LOT=EE + TEST=ENGINEER 적용: `elapsed < 50ms`
+4. Reset: `elapsed < 10ms`
+
+#### 3-6. 필터 연속 클릭 취소 (시퀀스 카운터)
+빠르게 여러 필터를 연속 클릭하면 이전 요청은 취소되고 마지막만 실행.
+
+1. 필터 3개 연속 빠르게 체크 (await 없이):
+   ```javascript
+   check(ltPanel, 'EE', true);
+   check(ltPanel, 'PT', true);
+   check(ltPanel, 'PE', true);
+   ```
+2. 1초 대기 후 결과가 **마지막 조건(EE|PT|PE)** 기준으로 필터링 확인
+3. 중간 상태(EE만, EE|PT만)가 최종 DOM에 남아있지 않은지 확인
+
+#### 3-7. 필터 변경 시 스크롤 위치 보존
+1. 탐색기를 중간으로 스크롤 → 앵커 파일/폴더 확인
+2. LOT 필터 적용 → 보이는 첫 번째 폴더가 필터 전과 동일 (또는 scrollTop 근사 유지)
+3. 필터 해제 → 원래 스크롤 위치로 복원
+4. Reset → 동일하게 스크롤 복원
+
+#### 3-8. Ubuntu 호환성 검증
+1. `_extract_lt_tm` 함수에서 `os.O_BINARY` 대신 `getattr(os, 'O_BINARY', 0)` 사용 확인
+   (코드 확인: `api/main.py`의 `_extract_lt_tm` 내 `os.O_BINARY` 문자열 없음)
+2. API 경로 해석: 절대 경로 전달 시 `Path(path).resolve().relative_to(ROOT_DIR)` 사용 확인
+
+**pass 기준**: 필터 시 파일만 숨김(폴더 유지, DOM 교체 없음), 대소문자 무시 매칭,
+열린 폴더 보존, 해제 시 전체 복원, DOM show/hide 50ms 이내, 연속 클릭 마지막만 실행,
+스크롤 보존, Ubuntu 호환
+
+---
+
+### Phase 4: 색상 편집
+
+**목적**: 색상 편집 모달이 정상 열리고 탭 전환이 되는지 확인
+
+**평가 항목**:
+1. 색상 편집 버튼 클릭 → `#color-editor-modal` 열림 (`aria-hidden !== 'true'` 또는 `display !== 'none'`)
+2. Top 탭 클릭 → Grade 색상 테이블 표시 (G0~G7 행)
+3. Bottom 탭 클릭 → BIN 색상 테이블 표시 (Normal, Invalid, B285, ...)
+4. Composite 탭 클릭 → Ratio gradient 색상 테이블 표시 (quantile0~100)
+5. 닫기 버튼 (`#color-editor-close-btn`) 클릭 → 모달 닫힘
+6. 모달이 닫힌 후 그리드가 정상 표시되는지 확인
+
+**pass 기준**: 모달 open/close, 3개 탭 전환 모두 성공
+
+---
+
+### Phase 5: 상단 컬러 범례 (Grade/BIN/Gradient)
+
+**목적**: 범례 클릭으로 칩 필터가 정상 적용/해제되고, Measure 오버레이 시 Gradient 범례로 전환되는지 확인
+
+**평가 항목**:
+
+#### 5-1. Grade 범례 (Top Legend) — **pixel 필터**
+1. 그리드 모드에서 상단 범례 영역에 G0~G7 항목 존재 확인
+   - `document.querySelectorAll('.top-legend-item, [data-grade]')` → length >= 8
+2. G0 클릭 → **pixel 필터 적용**: 해당 palette index(0)를 가진 pixel만 남기고, 나머지 Grade pixel은 Grade0 색상으로 변경하여 표시
+   - 서버 API `/api/image` 또는 `/api/thumbnail`에 `grade_filter` 파라미터 전달
+   - 스크린샷으로 시각 확인 (선택 Grade만 원래 색, 나머지는 G0 색)
+3. G0 다시 클릭 → 필터 해제, 원래 이미지로 복원
+4. G1 + G3 연속 클릭 → 두 Grade 동시 pixel 필터 확인 (G1+G3만 원래 색)
+
+#### 5-2. BIN 범례 (Bottom Legend)
+1. 하단 범례에 nor, inv, 285, 286, ... ETC 항목 존재 확인
+2. "285" 클릭 → BIN 285 칩만 하이라이트/필터
+3. Border 버튼 클릭 → 칩 테두리 on/off 토글 (이미지 rerender 확인)
+4. 다시 "285" 클릭 → 필터 해제
+
+#### 5-3. Gradient 범례 (Measure 오버레이 + BIN/FBT/QVL Composite Map)
+Composite에서 Failbit이 아닌 모든 항목(BIN/FBT/QVL)은 gradient 범례를 사용합니다.
+1. **Measure 오버레이**: Measure 패널에서 FBT2342 클릭 → 오버레이 적용
+2. 상단 범례가 G0~G7에서 percentile 범례 (0~10%, 10~20%, ..., 90~100%)로 변경 확인
+   - 범례 텍스트에 "%" 포함 여부로 판별
+3. Gradient 범례의 90~100% 클릭 → 해당 범위 칩만 표시, 나머지 흰색
+4. 클릭 해제 → 전체 오버레이 복원
+5. Measure 초기화 버튼 클릭 → Grade 범례로 복원 확인 (G0~G7 다시 표시)
+6. **BIN Composite Map**: Composite에서 BIN285 생성 후 결과 이미지 → gradient 범례 확인
+7. **Failbit Composite Map**: Composite에서 Failbit 생성 → Grade 범례 유지 확인
+   - Failbit 결과에서 여러 Grade 선택 시 **Subset Grade Composite Map** 생성 가능 확인
+
+#### 5-4. 단일 이미지 모드에서 범례 — 퍼센트/숫자 검증
+1. 이미지 더블클릭 → 단일 모드 진입
+2. **Grade 범례 퍼센트/칩수 확인** (`#color-legend-top`):
+   - G0~G7 각 항목의 `.legend-color-bar` 내부 텍스트에 `%` 와 `(` 포함 확인
+   - 예: "25.3%(12.5K)", "8.1%(404)" 형태
+   - 모든 Grade 퍼센트 합이 약 100% (±2%) 확인:
+     ```javascript
+     const items = document.querySelectorAll('#color-legend-top .legend-color-bar span');
+     const pcts = [...items].map(s => parseFloat(s.textContent));
+     const sum = pcts.reduce((a,b) => a+b, 0);
+     // sum should be ~100 (±2)
+     ```
+   - 각 퍼센트가 0 이상, 숫자가 유효한 값인지 확인
+3. **BIN 범례 퍼센트/칩수 확인** (`#color-legend-bottom`):
+   - Normal, Invalid, 285~390, ETC 각 항목의 `.legend-color-bar` 내부 텍스트에 `%` 와 `(` 포함 확인
+   - 예: "15.2%(12)", "42.0%(56)" 형태
+   - 칩수가 0 이상의 정수인지 확인
+   - BIN 전체 칩수 합이 NET 값(정보패널)과 일치하는지 확인
+4. **Grade 범례 클릭 기능** (pixel 필터):
+   - G3 클릭 → `v.selectedGrades.has(3) === true`, canvas rerender 확인
+   - 스크린샷으로 G3만 원래 색, 나머지 G0 색 확인
+   - G3 다시 클릭 → 필터 해제, `v.selectedGrades.size === 0`
+   - Ctrl+클릭으로 G1+G5 동시 선택 → `v.selectedGrades.size === 2`
+   - 우클릭 → 전체 해제 (`v.selectedGrades.size === 0`)
+5. **BIN 범례 클릭 기능** (칩 필터):
+   - "285" 클릭 → `v.selectedBottoms.has('285') === true`, 해당 BIN 칩만 하이라이트
+   - 스크린샷 확인
+   - "285" 다시 클릭 → 필터 해제
+   - Ctrl+클릭으로 "Normal"+"285" 동시 선택 → `v.selectedBottoms.size === 2`
+   - 우클릭 → 전체 해제
+6. **Border 버튼**: 클릭 → 칩 테두리 on/off, canvas rerender 확인
+7. Back → 그리드 복귀 시 범례 상태 유지 확인
+
+#### 5-5. Measure 오버레이 단일 모드 — Gradient 범례 퍼센트/칩수 및 클릭
+1. 그리드 모드로 복귀 → Measure 패널에서 FBT2342 클릭 → 오버레이 적용
+2. 이미지 더블클릭 → 단일 모드 진입
+3. **Gradient 범례 퍼센트/칩수 확인** (`#color-legend-top`):
+   - 10개 항목 (`0~10%`, `10~20%`, ..., `90~100%`) 존재 확인
+   - 각 항목의 `.legend-color-bar` 내부 텍스트에 `%` 와 `(` 포함 확인
+   - 예: "18.5%(245)", "5.2%(12)" 형태
+   - 모든 범위 퍼센트 합이 약 100% (±2%) 확인
+4. **Gradient 범례 클릭 기능** (칩 필터):
+   - `90~100%` 클릭 → `v.selectedGradientRanges.has(9) === true`
+   - 해당 범위 칩만 표시, 나머지 흰색 처리 확인 (스크린샷)
+   - 다시 클릭 → 해제, `v.selectedGradientRanges.size === 0`
+   - Ctrl+클릭으로 `0~10%` + `90~100%` 동시 선택 → `v.selectedGradientRanges.size === 2`
+   - 우클릭 → 전체 해제
+5. **BIN 범례**: Gradient 모드에서도 하단 BIN 범례는 유지, 퍼센트/칩수 표시 확인
+6. Measure 초기화 → Grade 범례 복원, 퍼센트/칩수 다시 표시 확인
+7. Back → 그리드 복귀
+
+**스크린샷**: Grade 필터 적용, Gradient 범례 칩수 표시, Gradient 클릭 필터 적용
+
+---
+
+### Phase 6: LOT Mode
+
+**목적**: LOT별 그룹화 표시 on/off 전환
+
+**평가 항목**:
+1. `#lot-mode-btn` 클릭 전 `classList.contains('active')` 확인 (기본값 true)
+2. 클릭 → `active` 해제, 그리드가 LOT 헤더 없이 flat 표시
+3. 다시 클릭 → `active` 복원, LOT 헤더(`▸ wafer`, LOT 구분선) 표시
+4. LOT 헤더의 이미지 개수 배지 표시 확인
+
+**pass 기준**: 토글 2회 성공, 그리드 레이아웃 변경 확인
+
+---
+
+### Phase 7: Class Manager & Label Explorer
+
+**목적**: 클래스 CRUD + 라벨 할당/삭제 + Label Explorer 탐색이 모두 동작하는지 확인
+
+**평가 항목**:
+
+#### 7-1. 클래스 추가
+1. 입력 필드 `input[placeholder*="클래스명"]`에 "e2e_test_class" 입력
+2. "Add Class" 버튼 클릭
+3. Fail List에 "e2e_test_class" 버튼 생성 확인
+4. API 응답 status 200 확인 (콘솔 로그)
+
+#### 7-2. 라벨 할당
+1. 이미지 5개 Ctrl+클릭 선택 (`v.toggleGridImageSelect(i, {ctrlKey:true})`)
+2. Fail List에서 "e2e_test_class" 클릭 (선택 상태)
+3. "Add Label" 클릭 → alert "Label ... added to 5 images successfully!" 확인
+4. `browser_handle_dialog(accept: true)`
+
+#### 7-3. Label Explorer 확인
+1. Label Explorer 영역에서 "e2e_test_class" 텍스트 존재 확인
+2. 해당 폴더 클릭 → 그리드에 5개 이미지만 표시 확인 (`v.currentGridImages.length === 5`)
+3. 스크린샷 촬영
+
+#### 7-4. 단일 모드 전환
+1. 이미지 더블클릭 → 단일 모드 진입 확인 (`v.gridMode === false`)
+2. ESC 또는 `v.handleBackToGrid()` → 그리드 복귀 (`v.gridMode === true`)
+
+#### 7-5. 선택 목록 X 클릭 제거
+1. 선택 목록 패널 (`#selected-grid-images-panel`)에서 이미지 항목 클릭 (X 아이콘)
+2. `v.removeWaferFromSelectionByPath(path)` 호출 → 해당 이미지만 선택 해제
+3. `v.gridSelectedIdxs.length`가 1 감소했는지 확인
+
+#### 7-6. 정리
+1. 입력 필드에 "e2e_test_class" 입력 → "Delete Class" 클릭
+2. confirm 다이얼로그 accept
+3. Fail List에 "e2e_test_class" 없음 확인
+4. Label Explorer에서도 제거 확인
+
+**pass 기준**: 추가→라벨→탐색→단일뷰→복귀→삭제 전체 플로우 성공
+
+---
+
+### Phase 8: Composite (구 M.Comp)
+
+**목적**: Composite 드롭다운에서 다중 선택 후 Failbit/BIN/FBT/QVL 맵 생성 및 결과 확인
+
+**평가 항목**:
+
+#### 8-1. 드롭다운 열기
+1. 이미지 20개 선택 (`toggleGridImageSelect` × 20)
+2. `#measure-composite-btn-top` 클릭 → `#mc-panel` display !== 'none'
+
+#### 8-2. 드롭다운 항목 검증
+1. `.mc-list` 텍스트 내용 확인:
+   - "MAP" 섹션 헤더 → "Failbit" 항목
+   - "BIN" 섹션 헤더 → "NORMAL", "INVALID", "ETC" (상단), "BIN285"~"BIN390" (숫자 오름차순)
+   - "FBT" 섹션 헤더 → "FBT2342", "FBT2456", ... (대문자)
+   - "QVL" 섹션 헤더 → "QVL5501", "QVL5502" (대문자)
+2. 검색 입력에 "285" 입력 → BIN285만 보이는지 확인
+3. 검색 초기화
+
+#### 8-3. 생성 테스트 (Failbit + BIN + FBT + QVL)
+1. Failbit + BIN285 + FBT2342 + QVL5501 체크 → 생성 버튼 텍스트 "생성 (4)"
+2. 생성 클릭 → 30초 대기 (서버 처리, 4개 항목)
+3. 결과 그리드 확인:
+   - "Grade" 섹션: Grade_0 ~ Grade_7 이미지 (8개)
+   - "square" 섹션: square_average, square_weighted_average (2개)
+   - "BIN" 섹션: BIN_285_count 이미지
+   - "FBT" 섹션: FBT_2342 이미지
+   - "QVL" 섹션: QVL_5501 이미지
+
+#### 8-4. Failbit 결과 그리드 — 범례 확인
+Failbit 결과 그리드에는 Grade_0~Grade_7 (8개) + square_average, square_weighted_average (2개)가 있다.
+1. **그리드 범례 확인**: 결과 그리드 상태에서 상단 범례 확인
+   - Gradient 범례 (0~10% ~ 90~100%) 10개 항목이 표시되는지 확인
+     - `_ratioGradientCache` 존재 + `compositeSession.measureMode === true` 조건
+   - 하단에 BIN 범례도 표시 확인
+2. **Average 이미지 더블클릭 → Gradient 범례**:
+   - `square_average` 또는 `square_weighted_average` 이미지 더블클릭 → 단일 뷰 진입
+   - `#color-legend-top`에 **Gradient 범례** (0~10% ~ 90~100%) 표시 확인
+   - 각 항목에 퍼센트와 칩수 표시: `%` 와 `(` 포함 텍스트
+   - 모든 범위 퍼센트 합이 약 100% (±2%) 확인
+   - Gradient 항목 클릭 → 해당 범위 칩만 표시, 나머지 흰색 (스크린샷)
+   - 다시 클릭 → 해제
+   - Back → 결과 그리드 복귀
+3. **Grade 이미지 더블클릭 → Grade 범례**:
+   - Grade_3 이미지 더블클릭 → 단일 뷰 진입
+   - `#color-legend-top`에 Grade 범례 (G0~G7) 표시 확인
+   - 각 항목에 퍼센트와 칩수 표시 확인
+   - Grade 항목 클릭 → pixel 필터 적용 (canvas rerender), 스크린샷 확인
+   - 다시 클릭 → 필터 해제
+   - Back → 결과 그리드 복귀
+
+#### 8-5. Subset Grade Map 생성 및 검증
+Failbit 결과 그리드에서 여러 Grade를 선택하여 Subset Composite Map을 생성한다.
+1. **Grade 이미지 선택**: 결과 그리드에서 Grade_3, Grade_5 이미지를 Ctrl+클릭으로 선택
+   - `v.gridSelectedIdxs` 에 2개 이상 포함 확인
+2. **Subset 생성**: Grade 범례에서 Grade 선택 또는 컨텍스트 메뉴를 통해 Subset 생성 트리거
+   - `POST /api/composite-subset` 호출 확인 (콘솔/네트워크)
+   - payload: `{ output_dir, selected_grades: [3, 5], lot_mode }`
+3. **결과 확인**: 그리드에 Subset 이미지 추가 표시
+   - `square_average_35.png`, `square_weighted_average_35.png` 2개 이미지 생성
+   - 기존 Grade/average 이미지는 유지
+   - 스크린샷으로 Subset 이미지가 그리드에 추가된 것 확인
+4. **Subset 단일 뷰**: Subset 이미지 (`square_average_35`) 더블클릭
+   - Gradient 범례 표시 확인 (0~10% ~ 90~100%)
+   - 퍼센트와 칩수 표시 확인
+   - Full Composite average와 색상 범위가 다를 수 있음 (독립적 min/max 스케일링 — 정상)
+   - Gradient 항목 클릭 → 필터 동작 확인
+   - Back → 결과 그리드 복귀
+
+#### 8-6. BIN/FBT/QVL Composite 결과 — Gradient 범례 공통 검증
+BIN, FBT, QVL Composite는 모두 Gradient 범례를 사용한다. 각 유형별로 동일한 검증을 수행한다.
+
+**8-3 생성을 확장하여 Failbit + BIN285 + FBT2342 + QVL5501 총 4개를 체크 후 생성한다.**
+(생성 버튼 텍스트 "생성 (4)", 생성 후 결과 그리드에 각 유형 이미지 모두 표시 확인)
+
+각 유형별 Gradient 범례 검증 (BIN285 → FBT2342 → QVL5501 순서):
+
+##### 그리드 모드 Gradient 범례
+1. 결과 그리드 상태에서 상단 범례에 Gradient (0~10% ~ 90~100%) 표시 확인
+2. 각 항목에 퍼센트와 칩수 텍스트 존재 확인 (`%` 와 `(` 포함)
+3. Gradient 항목 클릭 → `v.selectedGradientRanges` 업데이트 확인
+4. Ctrl+클릭으로 다중 범위 선택 (예: 0~10% + 90~100%) → `v.selectedGradientRanges.size === 2`
+5. 우클릭 → 전체 해제 (`v.selectedGradientRanges.size === 0`)
+
+##### 단일 뷰 Gradient 범례 (유형별 반복)
+각 유형(BIN285, FBT2342, QVL5501)의 결과 이미지를 더블클릭하여 단일 뷰에서 확인:
+1. 더블클릭 → 단일 뷰 진입
+2. `#color-legend-top`에 **Gradient 범례** (0~10% ~ 90~100%) 10개 항목 표시 확인
+3. 각 항목에 퍼센트와 칩수 표시: `%` 와 `(` 포함 텍스트
+4. 모든 범위 퍼센트 합이 약 100% (±2%) 확인
+5. **단일 선택**: 90~100% 클릭 → `v.selectedGradientRanges.has(9) === true`
+   - 해당 범위 칩만 표시, 나머지 흰색 처리 (스크린샷)
+6. **해제**: 다시 클릭 → `v.selectedGradientRanges.size === 0`, 전체 복원
+7. **다중 선택**: Ctrl+클릭으로 0~10% + 50~60% + 90~100% 선택
+   - `v.selectedGradientRanges.size === 3`
+   - 선택된 3개 범위 칩만 표시, 나머지 흰색
+8. **전체 해제**: 우클릭 → `v.selectedGradientRanges.size === 0`
+9. `#color-legend-bottom`에 BIN 범례도 표시, 퍼센트/칩수 확인
+10. Back → 결과 그리드 복귀
+
+**스크린샷**: Failbit 그리드 Gradient 범례, Average 단일 뷰, Grade 단일 뷰, Subset 결과, BIN/FBT/QVL 각 단일 뷰 Gradient 범례 + 클릭 필터
+
+**pass 기준**: 그리드 Gradient 범례 표시, Average/Grade 단일 뷰 범례 분리, Subset 생성→검증, BIN/FBT/QVL 모두 Gradient 범례 + 퍼센트/칩수 + 단일/다중 선택/해제 필터 정상
+
+---
+
+### Phase 9: Context Menu Composite
+
+**목적**: 우클릭 컨텍스트 메뉴의 Composite 서브메뉴가 안정적으로 동작하는지 확인
+
+**평가 항목**:
+
+#### 9-1. 컨텍스트 메뉴 열기
+1. 원본 폴더 복귀, 이미지 5개 선택
+2. `.grid-thumb-wrap` 우클릭 (`contextmenu` 이벤트) → `#grid-context-menu` display === 'block'
+3. "Composite 만들기" 항목 존재 확인
+
+#### 9-2. 서브메뉴 열기
+1. `#context-mc-create` mouseenter → `#context-mc-submenu` display !== 'none'
+2. 서브메뉴 항목: Failbit, NORMAL, INVALID, ETC, BIN285, ..., FBT2342, ..., QVL5501, ...
+3. `.mc-generate-btn` 1개만 존재 확인
+
+#### 9-3. 클릭 안정성
+1. Failbit 항목 클릭 → `v._mcCheckedItems.length === 1`
+2. 클릭 후 컨텍스트 메뉴 여전히 열림 (`display === 'block'`) — stopPropagation 확인
+3. 서브메뉴도 여전히 열림 확인
+
+#### 9-4. mouseleave 안정성
+1. `#context-mc-submenu` mouseleave 이벤트 발생
+2. 500ms 대기 → 서브메뉴 여전히 열림 확인 (mouseleave로 닫히지 않음)
+
+#### 9-5. 재호버 체크 상태 유지
+1. `#context-mc-create` mouseenter 다시 발생
+2. 이전 체크(Failbit)가 유지되는지 확인 (`_mcBuilt` 플래그로 재빌드 방지)
+3. BIN285 추가 체크 → `v._mcCheckedItems.length === 2`
+4. 생성 버튼 텍스트 "생성 (2)"
+
+#### 9-6. 메뉴 닫기
+1. 메뉴 바깥 영역 클릭 → `hideContextMenu()` 호출
+2. 컨텍스트 메뉴 + 서브메뉴 모두 `display === 'none'`
+3. `_mcBuilt === false` (리셋됨)
+
+**pass 기준**: 9-1 ~ 9-6 전체 pass
+
+---
+
+### Phase 10: Ref Map
+
+**목적**: Reference Map 등록/표시/크기조절/삭제 전체 플로우
+
+**평가 항목**:
+1. `v.setRefMap(v.currentGridImages[0])` → 등록 성공 (콘솔 "[RefMap] 등록:" 로그)
+2. `#ref-map-btn-top` 클릭 → `#ref-map-window` classList.contains('is-open')
+3. z-index 확인: `getComputedStyle(window).zIndex` === "26000" (LOT 모달 25000보다 위)
+4. 이미지 표시: `#ref-map-image` src !== "" && display !== 'none'
+5. 이미지가 창에 맞게 축소: `max-width: 100%; max-height: 100%; object-fit: contain` CSS 확인
+6. `#ref-map-clear-btn` 클릭 → Ref Map 삭제, 이미지 src 초기화
+7. `#ref-map-close-btn` 클릭 → 창 닫힘
+
+**pass 기준**: 등록→열기→z-index→이미지표시→삭제→닫기 전체 성공
+
+---
+
+### Phase 11: Measure 오버레이
+
+**목적**: Measure 패널에서 FBT/QVL/BIN 오버레이 적용/해제
+
+**평가 항목**:
+1. `#failbit-btn-top` 클릭 → `#failbit-panel-top` display !== 'none'
+2. 패널 내용에 "FBT", "QVL" 섹션 존재, 항목 (FBT2342, QVL5501 등) 표시
+3. BIN 섹션 존재 확인
+4. FBT2342 클릭 → 그리드 이미지에 오버레이 적용 (이미지 src에 measure 관련 파라미터 추가)
+5. 초기화 버튼 클릭 → 오버레이 해제, 원본 이미지 복원
+6. `#failbit-btn-top` 다시 클릭 → 패널 닫힘
+
+**pass 기준**: 열기→항목확인→오버레이적용→초기화→닫기
+
+---
+
+### Phase 12: MY LOT
+
+**목적**: MY LOT 모달에서 그룹 CRUD + 이미지 추가/삭제
+
+**평가 항목**:
+
+#### 12-1. 모달 열기 & 모드 확인
+1. `#my-lot-btn-top` 클릭 → MY LOT 모달 display !== 'none'
+2. **LOT 모드** / **Wafer 모드** 탭 전환 확인
+   - LOT 모드: 선택 이미지들의 LOT ID 리스트 → 중복제거 → 다중검색으로 해당 LOT의 모든 이미지 저장
+   - Wafer 모드: 선택한 이미지만 바로 저장
+
+#### 12-2. LOT 모드 테스트
+1. 이미지 10개 선택 → LOT 모드에서 그룹 추가 ("e2e_test_group")
+2. 추가 시 선택 이미지의 LOT ID 추출 → 중복제거 → 해당 LOT의 전체 이미지 자동 포함 확인
+3. 그룹 내 이미지 수가 선택 수(10)보다 많거나 같은지 확인 (같은 LOT의 다른 wafer 포함)
+
+#### 12-3. Wafer 모드 테스트
+1. Wafer 모드 전환
+2. 이미지 5개 선택 → 그룹에 추가
+3. 그룹 내 이미지 수가 정확히 5개인지 확인 (선택한 것만)
+
+#### 12-4. Manual 입력
+1. **LOT 모드 Manual**: LOT ID 직접 입력 → 해당 LOT 검색 → 전체 이미지 등록
+2. **Wafer 모드 Manual**: LOT 입력 → 해당 LOT 내 Wafer 목록 드롭다운 표시
+   - 드롭다운에서 특정 Wafer 선택 → 해당 이미지만 등록
+   - (LOT 내 어떤 wafer가 있는지 확인 후 선택 등록 가능)
+
+#### 12-5. 이미지/그룹 삭제
+1. 그룹 내 이미지 삭제 버튼 → 개별 이미지 제거 확인
+2. 그룹 삭제 → 목록에서 제거 확인
+
+#### 12-6. 모달 닫기
+1. 닫기 버튼 또는 `#my-lot-btn-top` 다시 클릭 → 모달 닫힘
+
+**pass 기준**: LOT/Wafer 모드 전환, 그룹 CRUD, Manual 입력(LOT검색/Wafer드롭다운), 이미지/그룹 삭제
+
+---
+
+### Phase 13: 단일 이미지 모드 — 기본
+
+**목적**: 더블클릭 진입, 화살표 탐색, 줌, 복귀가 안정적으로 동작하는지
+
+**평가 항목**:
+1. 그리드 이미지 더블클릭 (`dblclick` 이벤트) → `v.gridMode === false`
+2. 타이틀 바에 파일명 표시 확인
+3. 좌측 Navigator에 썸네일 목록 표시 확인
+4. 좌 화살표 클릭 → 이전 이미지로 전환 (파일명 변경 확인)
+5. 우 화살표 클릭 → 다음 이미지로 전환
+6. 줌 버튼 테스트:
+   - "50%" 클릭 → `v.renderer.transform.scale` ≈ 0.5 (±0.1)
+   - "100%" 클릭 → scale ≈ 1.0
+   - "200%" 클릭 → scale ≈ 2.0
+   - "300%" 클릭 → scale ≈ 3.0
+7. "-" / "+" 줌 버튼 → scale 증감 확인
+8. "Reset" 버튼 → fit-to-container 크기로 복원
+9. Back/ESC → `v.gridMode === true`, 그리드 복귀
+10. 스크롤 위치 복원 확인 (이전 스크롤 위치와 ±50px 이내)
+
+**pass 기준**: 진입→탐색→줌→복귀 전체 성공
+
+---
+
+### Phase 14: 단일 이미지 모드 — 피라미드 렌더링
+
+**목적**: 줌 레벨에 따라 올바른 피라미드 레벨이 선택되고, 픽셀이 선명하게 렌더링되는지
+
+**평가 항목**:
+1. 단일 모드 진입 → 콘솔 `[INIT] Lv0.5` 로그 확인 (기본 fit 줌)
+2. `v.renderer` 객체에서 현재 피라미드 정보 확인:
+   ```javascript
+   const r = v.renderer;
+   r.pyramidLevels  // 사용 가능한 레벨 목록
+   r.currentLevel   // 현재 사용 중인 레벨
+   ```
+3. 줌 50% 설정 → 피라미드 Lv0.5 사용 확인 (zoom < 75%)
+4. 줌 100% 설정 → 피라미드 Lv1.0 사용 확인 (zoom >= 75%)
+   - 콘솔 `[PREFETCH]` 로그에서 원본 다운로드 확인
+5. 줌 200% 설정 → Lv1.0 유지, 캔버스 `imageSmoothingEnabled === false` 확인
+   ```javascript
+   const ctx = document.querySelector('canvas')?.getContext('2d');
+   ctx.imageSmoothingEnabled === false  // 픽셀 선명
+   ```
+6. 줌 300% 설정 → 개별 픽셀이 선명한 사각형으로 보이는지 스크린샷 확인
+7. 각 줌 전환 시:
+   - 빈 화면 (검정/흰색) 없이 이미지가 즉시 표시
+   - canvas width/height > 0
+   - 렌더링 지연 200ms 이내
+
+**pass 기준**: 줌별 올바른 레벨 선택, imageSmoothingEnabled=false, 빈 화면 없음
+
+---
+
+### Phase 15: 단일 이미지 모드 — 웨이퍼/칩 정보 패널
+
+**목적**: 좌하단 정보 패널에 웨이퍼 메타데이터와 칩 좌표가 정확히 표시되는지
+
+**평가 항목**:
+
+#### 15-1. 웨이퍼 정보 테이블
+1. 좌하단 정보 영역 (`#wafer-info-table` 또는 `.wafer-info`) 존재 확인
+2. 다음 필드가 모두 표시되는지 확인:
+   - **Device**: 제품명 (예: "FAILBIT-DEMO-PLTE")
+   - **PartID**: 파트 ID (예: "WAFER_P3K-0001-PLTE")
+   - **PGM**: 프로그램명
+   - **TEST**: 테스트명 (예: "Engineer")
+   - **LOT**: LOT명 (예: "EE")
+   - **NET**: 순 칩 수 (예: 404)
+   - **GOOD**: 양품 수 (예: 385)
+   - **YIELD**: 수율 (예: 95.3)
+   - **SYS**: 시스템 수율 (예: 23.4)
+3. 칩 미선택 상태에서:
+   - **BIN**: "-"
+   - **Chip(Abs)**: "-"
+   - **Chip(Rel)**: "-"
+
+#### 15-2. 칩 클릭 시 정보 업데이트
+1. 캔버스에서 칩 영역 클릭 (chipAnnotator를 통해)
+2. 클릭 후 정보 패널 업데이트 확인:
+   - **BIN**: 실제 BIN 값 (예: "285", "Normal" 등)
+   - **Chip(Abs)**: `x_abs, y_abs` 좌표 (예: "12, 8")
+   - **Chip(Rel)**: `x, y` 상대 좌표 (예: "3, 2")
+3. 값이 "-"가 아닌 실제 숫자/문자열인지 확인
+
+#### 15-3. CHIP LABELS 섹션
+1. 정보 패널 하단에 "CHIP LABELS" 헤딩 존재 확인
+2. 라벨 없는 칩 선택 시: "No chip labels" 텍스트 표시
+3. (Phase 18에서 라벨 추가 후 재확인)
+
+**pass 기준**: 웨이퍼 필드 9개 표시, 칩 클릭 시 BIN/좌표 업데이트, CHIP LABELS 섹션 존재
+
+---
+
+### Phase 16: 단일 이미지 모드 — 칩 선택 & 좌표
+
+**목적**: 칩 클릭/다중선택/해제 시 하이라이트와 좌표 표시가 정확한지
+
+**평가 항목**:
+1. 칩 영역 클릭 → 칩 선택 하이라이트 (테두리 또는 색상 변경) 확인
+   - `v.chipAnnotator.selectedChips` 또는 유사 프로퍼티 length > 0
+2. 선택된 칩의 좌표가 정보 패널에 표시:
+   - Chip(Abs) 행에 `"x_abs, y_abs"` 형태의 실제 숫자 값
+   - Chip(Rel) 행에 `"x, y"` 형태의 실제 숫자 값
+3. Ctrl+클릭으로 추가 칩 선택 → 다중 선택 확인
+   - 선택 칩 수 2개 이상
+4. 빈 영역 클릭 → 선택 해제
+   - 정보 패널 BIN, Chip(Abs), Chip(Rel) 모두 "-"로 리셋
+   - 하이라이트 제거
+
+**pass 기준**: 단일선택→좌표표시→다중선택→해제→초기화
+
+---
+
+### Phase 17: 단일 이미지 모드 — 우클릭 컨텍스트 메뉴
+
+**목적**: 단일 이미지 모드에서 칩/빈영역 우클릭 시 적절한 컨텍스트 메뉴 표시
+
+**평가 항목**:
+1. 칩 위에서 `contextmenu` 이벤트 → 컨텍스트 메뉴 열림
+2. 메뉴 항목 확인:
+   - 칩 라벨 관련 항목 존재 (Add Chip Label, Remove Chip Label 등)
+   - 기타 항목 (이미지 정보, 좌표 복사 등)
+3. 메뉴 항목 클릭 → 해당 기능 동작 (라벨 추가 등)
+4. 빈 영역 클릭 또는 ESC → 메뉴 닫힘
+
+**pass 기준**: 메뉴 열림, 항목 존재, 닫힘
+
+---
+
+### Phase 18: 단일 이미지 모드 — Chip Labels 추가/확인
+
+**목적**: Chip 모드에서 칩 라벨 CRUD가 동작하고 정보 패널에 반영되는지
+
+**평가 항목**:
+
+#### 18-1. Chip 모드 전환
+1. Class Manager에서 "Chip" 탭 클릭 → `button[pressed]` 상태 변경
+2. Chip 모드 활성 확인
+
+#### 18-2. 칩 라벨용 클래스 추가
+1. 입력 필드에 "e2e_chip_test" 입력 → "Add Class" 클릭
+2. Fail List에 "e2e_chip_test" 표시 확인
+
+#### 18-3. 칩 라벨 추가
+1. 칩 선택 (클릭)
+2. Fail List에서 "e2e_chip_test" 클릭 (선택)
+3. "Add Label" 클릭 → 성공 확인
+4. 정보 패널 CHIP LABELS 섹션에 "e2e_chip_test" 표시 확인
+5. "No chip labels" 텍스트 사라짐 확인
+
+#### 18-4. 칩 라벨 삭제
+1. 해당 칩 선택 상태에서 "Delete Label" 클릭 → 라벨 제거
+2. CHIP LABELS 섹션이 "No chip labels"로 복원 확인
+
+#### 18-5. 정리
+1. "Wafer" 탭으로 복귀
+2. 입력 필드에 "e2e_chip_test" → "Delete Class" → confirm accept
+3. 클래스 삭제 확인
+
+**pass 기준**: Chip 모드→클래스 추가→칩 라벨 추가→표시 확인→삭제→정리
+
+---
+
+### Phase 19: 이미지 미선택 상태 보호
+
+**목적**: 이미지를 선택하지 않은 상태에서 Composite 기능 접근 시 적절한 안내 표시
+
+**평가 항목**:
+1. 그리드 복귀, 전체해제 → `v.gridSelectedIdxs.length === 0`
+2. `#measure-composite-btn-top` 클릭 → 토스트 "이미지를 먼저 선택하세요." 표시
+   - `#mc-panel` display === 'none' (드롭다운 안 열림)
+3. 우클릭 → 컨텍스트 메뉴 열기 → "Composite 만들기" 호버
+4. 서브메뉴 내용에 "이미지를 선택하세요" 텍스트 표시 확인
+
+**pass 기준**: 토스트 표시, 드롭다운 미열림, 서브메뉴 안내 메시지
+
+---
+
+### Phase 20: 접속 통계 대시보드 (stats.html)
+
+**목적**: 접속 통계 페이지가 정상 로드되고, 데이터 표시/차트/내보내기가 모두 동작하는지 확인
+
+**평가 항목**:
+
+#### 20-1. 페이지 로드 & API 응답
+1. `BASE_URL/stats` 접속 → 타이틀 "웨이퍼맵 뷰어 접속 분석" 확인
+2. Stats API 엔드포인트 호출 확인 (browser_evaluate로 fetch):
+   - `GET /api/stats/daily` → 200 응답, `total_users` 필드 존재 (숫자 >= 0)
+   - `GET /api/stats/trend?days=14` → 200 응답, 객체 키가 날짜 형식 (YYYY-MM-DD)
+   - `GET /api/stats/monthly?months=6` → 200 응답, 객체 키가 월 형식 (YYYY-MM)
+   - `GET /api/stats/users` → 200 응답, `total_users` 필드 + `users` 배열
+   - `GET /api/stats/recent-users` → 200 응답, `recent_users` 배열
+   - `GET /api/stats/department` → 200 응답, `departments` 객체
+
+#### 20-2. 대시보드 UI 요소
+1. **오늘 요약 카드** 4개 표시:
+   - 전체 사용자 수 (숫자 표시, >= 0)
+   - 오늘 활성 사용자 (숫자 표시)
+   - 신규 사용자 (숫자 표시)
+   - 오늘 요청 수 (숫자 표시)
+2. **사용자 목록 테이블**: 행이 1개 이상 존재, 컬럼 (사용자 ID, 이름, 부서, 직급, 요청수, 최근 접속)
+3. **최근 사용자 테이블**: 행 존재 확인
+4. **부서 분석 테이블**: 행 존재 확인
+
+#### 20-3. 차트 렌더링
+1. **일별 접속 트렌드 차트**: `<canvas>` 요소 존재, Chart.js로 렌더링됨
+   - `Chart.getChart(canvas)` 또는 canvas 크기 > 0 확인
+2. **월별 접속 트렌드 차트**: 동일하게 canvas 렌더링 확인
+3. **부서별 Top10 차트**: canvas 렌더링 확인
+
+#### 20-4. 새로고침 버튼
+1. "새로고침" 버튼 클릭 → 데이터가 다시 로드됨
+2. 로드 후 카드 숫자가 여전히 유효한 값 (NaN 아님)
+
+#### 20-5. CSV 내보내기
+1. "통계 내보내기" 버튼 존재 확인
+2. `GET /api/stats/export-csv` 호출 → 200 응답 확인
+   - Content-Type에 `csv` 또는 `text` 포함
+   - 응답 본문 첫 줄에 CSV 헤더 포함 ("접속일시" 또는 "Username" 등)
+
+#### 20-6. 로그 파일 생성 확인
+1. 서버에 몇 개 요청 발생 후 (이미 Phase 1~19에서 충분히 발생)
+2. `logs/stats.json` 파일 존재 확인 (서버 파일시스템):
+   ```javascript
+   const res = await fetch('/api/stats/users');
+   const data = await res.json();
+   data.total_users >= 1  // 최소 1명 (테스트 접속자)
+   ```
+3. `logs/access.log` 생성 확인 (Phase 1~19 요청 로그)
+
+**스크린샷**: 대시보드 전체 화면, 차트 영역
+
+**pass 기준**: 페이지 로드, 6개 API 정상 응답, 4개 카드 숫자 표시, 3개 차트 렌더링, 새로고침 동작, CSV 내보내기 200 응답, 로그 데이터 존재
+
+---
+
+## 결과 보고
+
+각 Phase별로 pass/fail 요약표를 작성하세요:
+
+| Phase | 항목 | 결과 | 비고 |
+|-------|------|------|------|
+| 1 | 페이지 로드 & 기본 UI | pass/fail | |
+| 2 | 폴더 & 그리드 + 스크롤 성능 + 정렬 | pass/fail | 로드 시간, 로드율, 7개 정렬 검증 |
+| 3 | 제품 검색 & 필터 + 대소문자/폴더보존 | pass/fail | 대소문자 무시, 폴더 상태 보존 |
+| 4 | 색상 편집 | pass/fail | |
+| 5 | 상단 컬러 범례 (Grade/BIN/Gradient) — 퍼센트/칩수/클릭 | pass/fail | 스크린샷 첨부 |
+| 6 | LOT Mode | pass/fail | |
+| 7 | Class Manager & Label Explorer | pass/fail | CRUD 전체 |
+| 8 | Composite + 결과 범례/Subset 검증 | pass/fail | Gradient 범례, Subset 생성, 칩수 검증 |
+| 9 | Context Menu Composite | pass/fail | 안정성 6개 항목 |
+| 10 | Ref Map | pass/fail | z-index, resize |
+| 11 | Measure 오버레이 | pass/fail | |
+| 12 | MY LOT | pass/fail | CRUD 전체 |
+| 13 | 단일 이미지 — 기본 | pass/fail | 줌/탐색/복귀 |
+| 14 | 단일 이미지 — 피라미드 렌더링 | pass/fail | 줌별 레벨, 선명도 |
+| 15 | 단일 이미지 — 웨이퍼/칩 정보 | pass/fail | 필드 9개+좌표 |
+| 16 | 단일 이미지 — 칩 선택 좌표 | pass/fail | Abs/Rel 좌표 |
+| 17 | 단일 이미지 — 컨텍스트 메뉴 | pass/fail | |
+| 18 | 단일 이미지 — Chip Labels | pass/fail | CRUD |
+| 19 | 미선택 보호 | pass/fail | 토스트/안내 |
+| 20 | 접속 통계 (stats.html) | pass/fail | API 6개, 카드 4개, 차트 3개, CSV 내보내기 |
+
+핵심 단계마다 스크린샷을 촬영하여 첨부하세요.
+
+## 자동 수정 (Auto-Fix)
+
+**실패 Phase가 발견되면 자동으로 코드를 수정합니다.**
+
+### 수정 프로세스
+
+1. **원인 분석**: 실패 Phase의 스크린샷, 콘솔 에러, DOM 상태를 종합하여 근본 원인 파악
+2. **관련 코드 탐색**: 원인과 관련된 소스 파일을 Read/Grep으로 찾아 읽기
+3. **코드 수정**: Edit 도구로 해당 파일을 직접 수정
+4. **재검증**: 수정 후 해당 Phase를 다시 실행하여 pass 확인
+5. **반복**: 재검증에서도 실패하면 원인 재분석 → 수정 → 재검증 (최대 3회 반복)
+
+### 수정 원칙
+
+- **최소 변경**: 실패 원인을 해결하는 데 필요한 최소한의 코드만 수정
+- **기존 패턴 유지**: 프로젝트의 기존 코딩 스타일과 패턴을 따름
+- **부작용 방지**: 다른 Phase에 영향을 줄 수 있는 변경은 사용자 확인 후 진행
+- **수정 불가 판단**: 3회 반복 후에도 실패하거나, 구조적 변경이 필요한 경우 사용자에게 상황 보고 후 판단 요청
+
+### 결과 보고
+
+수정이 발생한 경우 요약표에 수정 내역을 추가합니다:
+
+| Phase | 항목 | 결과 | 수정 | 비고 |
+|-------|------|------|------|------|
+| N | ... | fix → pass | `파일명:라인` 수정 내용 요약 | |
