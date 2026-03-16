@@ -4962,43 +4962,63 @@ async def get_filter_metadata(path: Optional[str] = None):
         file_map = {}
 
         if scan_dir:
-            # 루트(POSITIONS_ROOT 자체)일 때는 하위 폴더까지 재귀 스캔 (값 목록만)
             is_root = (scan_dir == config.POSITIONS_ROOT and rel_folder in ("", "."))
-            json_files = list(scan_dir.rglob("*.json")) if is_root else list(scan_dir.glob("*.json"))
 
-            def _extract_lt_tm(fpath):
-                """앞 512B에서 lt/tm 추출 (pretty-print 15~16줄 고정 위치)"""
+            def _build_or_load_index(folder: Path, recursive: bool):
+                """인덱스 파일로 lt/tm 일괄 로드 (없으면 생성)"""
+                idx_path = folder / "_filter_index.json"
+                # 인덱스가 있고, 폴더 내 최신 JSON보다 새로우면 캐시 사용
+                if idx_path.exists():
+                    idx_mtime = idx_path.stat().st_mtime
+                    json_files = list(folder.rglob("*.json") if recursive else folder.glob("*.json"))
+                    json_files = [f for f in json_files if f.name != "_filter_index.json"]
+                    if json_files:
+                        newest = max(f.stat().st_mtime for f in json_files)
+                        if idx_mtime >= newest:
+                            with open(idx_path, "r", encoding="utf-8") as fh:
+                                return json.load(fh)
+                    elif not json_files:
+                        with open(idx_path, "r", encoding="utf-8") as fh:
+                            return json.load(fh)
+
+                # 인덱스 생성
+                json_files = list(folder.rglob("*.json") if recursive else folder.glob("*.json"))
+                json_files = [f for f in json_files if f.name != "_filter_index.json"]
+                index = {}
+                for fpath in json_files:
+                    try:
+                        with open(fpath, "rb") as fh:
+                            head = fh.read(512).decode("utf-8", errors="ignore")
+                        lt_m = _re.search(r'"lt"\s*:\s*"([^"]*)"', head)
+                        tm_m = _re.search(r'"tm"\s*:\s*"([^"]*)"', head)
+                        entry = {}
+                        if lt_m: entry["lt"] = lt_m.group(1)
+                        if tm_m: entry["tm"] = tm_m.group(1)
+                        if entry:
+                            index[fpath.stem] = entry
+                    except Exception:
+                        pass
+                # 인덱스 저장
                 try:
-                    with open(fpath, "rb") as fh:
-                        head = fh.read(512).decode("utf-8", errors="ignore")
-                    lt_m = _re.search(r'"lt"\s*:\s*"([^"]*)"', head)
-                    tm_m = _re.search(r'"tm"\s*:\s*"([^"]*)"', head)
-                    lt_val = lt_m.group(1) if lt_m else None
-                    tm_val = tm_m.group(1) if tm_m else None
-                    return fpath.stem, lt_val, tm_val
+                    with open(idx_path, "w", encoding="utf-8") as fh:
+                        json.dump(index, fh, ensure_ascii=False)
                 except Exception:
-                    return fpath.stem, None, None
+                    pass
+                return index
 
             loop = asyncio.get_running_loop()
-            results = await loop.run_in_executor(
+            index = await loop.run_in_executor(
                 DIRLIST_EXECUTOR,
-                lambda: [_extract_lt_tm(f) for f in json_files]
+                lambda: _build_or_load_index(scan_dir, recursive=is_root)
             )
 
-            for stem, lt_val, tm_val in results:
-                if lt_val is not None:
-                    lt_values.add(lt_val)
-                if tm_val is not None:
-                    tm_values.add(tm_val)
-                # 루트 스캔 시에는 file_map 생략 (너무 큼)
+            for stem, entry in index.items():
+                lt_val = entry.get("lt")
+                tm_val = entry.get("tm")
+                if lt_val: lt_values.add(lt_val)
+                if tm_val: tm_values.add(tm_val)
                 if not is_root:
-                    entry = {}
-                    if lt_val is not None:
-                        entry["lt"] = lt_val
-                    if tm_val is not None:
-                        entry["tm"] = tm_val
-                    if entry:
-                        file_map[stem] = entry
+                    file_map[stem] = entry
 
         # 알려진 값과 동적 스캔 결과 합산
         all_lt = lt_values | KNOWN_LT_VALUES
