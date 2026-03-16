@@ -4965,7 +4965,7 @@ async def get_filter_metadata(path: Optional[str] = None):
             is_root = (scan_dir == config.POSITIONS_ROOT and rel_folder in ("", "."))
 
             def _extract_lt_tm(fpath_str):
-                """head 512B → bytes.find (regex 없음, 최고속)"""
+                """head 512B → bytes.find (regex 없음, 최고속) — bytes 반환"""
                 try:
                     fd = os.open(fpath_str, os.O_RDONLY | os.O_BINARY)
                     h = os.read(fd, 512)
@@ -4975,54 +4975,71 @@ async def get_filter_metadata(path: Optional[str] = None):
                     if i >= 0:
                         j = h.find(b'"', i + 5)
                         k = h.find(b'"', j + 1)
-                        if j >= 0 and k >= 0:
-                            lt = h[j + 1:k].decode()
+                        if j >= 0 and k >= 0: lt = h[j+1:k]
                     i = h.find(b'"tm"')
                     if i >= 0:
                         j = h.find(b'"', i + 5)
                         k = h.find(b'"', j + 1)
-                        if j >= 0 and k >= 0:
-                            tm = h[j + 1:k].decode()
-                    stem = os.path.splitext(os.path.basename(fpath_str))[0]
-                    return stem, lt, tm
+                        if j >= 0 and k >= 0: tm = h[j+1:k]
+                    return lt, tm
                 except Exception:
-                    return os.path.splitext(os.path.basename(fpath_str))[0], None, None
+                    return None, None
 
-            def _scan_parallel(folder: Path, recursive: bool):
+            def _scan_and_build(folder: Path, recursive: bool, build_map: bool):
+                """스캔 + JSON 바이트 직접 빌드 (직렬화 오버헤드 제거)"""
                 from concurrent.futures import ThreadPoolExecutor as _TPE
-                pat = "**/*.json" if recursive else "*.json"
-                flist = [str(f) for f in folder.glob(pat)]
-                with _TPE(max_workers=32) as pool:
-                    return list(pool.map(_extract_lt_tm, flist))
+                # os.scandir (glob보다 빠름)
+                flist = []
+                if recursive:
+                    for root, dirs, files in os.walk(str(folder)):
+                        for fn in files:
+                            if fn.endswith(".json"):
+                                flist.append(os.path.join(root, fn))
+                else:
+                    with os.scandir(str(folder)) as it:
+                        for e in it:
+                            if e.name.endswith(".json"):
+                                flist.append(e.path)
+
+                with _TPE(max_workers=64) as pool:
+                    raw = list(pool.map(_extract_lt_tm, flist))
+
+                _lt_set = set()
+                _tm_set = set()
+                # file_map JSON을 bytes로 직접 빌드
+                map_parts = []
+                for i in range(len(flist)):
+                    lt, tm = raw[i]
+                    if lt: _lt_set.add(lt.decode())
+                    if tm: _tm_set.add(tm.decode())
+                    if build_map and (lt or tm):
+                        stem = os.path.splitext(os.path.basename(flist[i]))[0].encode()
+                        inner = []
+                        if lt: inner.append(b'"lt":"' + lt + b'"')
+                        if tm: inner.append(b'"tm":"' + tm + b'"')
+                        map_parts.append(b'"' + stem + b'":{' + b','.join(inner) + b'}')
+
+                return _lt_set, _tm_set, b','.join(map_parts)
 
             loop = asyncio.get_running_loop()
-            results = await loop.run_in_executor(
+            _lt_set, _tm_set, map_bytes = await loop.run_in_executor(
                 None,
-                lambda: _scan_parallel(scan_dir, recursive=is_root)
+                lambda: _scan_and_build(scan_dir, recursive=is_root, build_map=not is_root)
             )
+            lt_values |= _lt_set
+            tm_values |= _tm_set
 
-            for stem, lt_val, tm_val in results:
-                if lt_val: lt_values.add(lt_val)
-                if tm_val: tm_values.add(tm_val)
-                if not is_root:
-                    entry = {}
-                    if lt_val: entry["lt"] = lt_val
-                    if tm_val: entry["tm"] = tm_val
-                    if entry: file_map[stem] = entry
+        # 알려진 값과 동적 스캔 결과 합산 → 최종 JSON bytes 직접 빌드
+        all_lt = sorted(lt_values | KNOWN_LT_VALUES)
+        all_tm = sorted(tm_values | KNOWN_TM_VALUES)
+        lt_json = b'[' + b','.join(b'"' + v.encode() + b'"' for v in all_lt) + b']'
+        tm_json = b'[' + b','.join(b'"' + v.encode() + b'"' for v in all_tm) + b']'
+        body = b'{"success":true,"lt_values":' + lt_json + b',"tm_values":' + tm_json + b',"file_map":{' + map_bytes + b'}}'
 
-        # 알려진 값과 동적 스캔 결과 합산
-        all_lt = lt_values | KNOWN_LT_VALUES
-        all_tm = tm_values | KNOWN_TM_VALUES
-
-        return {
-            "success": True,
-            "lt_values": sorted(all_lt),
-            "tm_values": sorted(all_tm),
-            "file_map": file_map,
-        }
+        return Response(content=body, media_type="application/json")
     except Exception as e:
         logger.exception(f"filter-metadata 조회 실패: {e}")
-        return {"success": False, "lt_values": [], "tm_values": [], "file_map": {}}
+        return JSONResponse({"success": False, "lt_values": [], "tm_values": [], "file_map": {}})
 
 
 @app.get("/api/files")
