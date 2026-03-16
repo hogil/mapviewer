@@ -180,17 +180,70 @@ LOT Mode 활성 상태에서 정렬 변경 시 LOT 그룹핑이 유지되고 그
 2. 파일 탐색기에 "palette" 포함 폴더만 표시되는지 확인
 3. 검색어 지우기 → 전체 폴더 복원
 
-#### 3-2. LOT/TEST/STEP 필터
-Wafer Map Explorer에서 폴더를 열어놓은 상태에서 필터 적용 시:
-- **폴더 상태 유지**: 열려있던 폴더는 그대로 유지, 파일만 필터
-- **그리드 연동**: 그리드에 표시된 이미지도 필터 영향을 받음
+#### 3-2. LOT/TEST/STEP 필터 — 전체 동작 라이프사이클
 
-1. LOT 버튼 클릭 → LOT 드롭다운 열림, LOT 목록 표시
-2. LOT 하나 선택 → 탐색기에서 해당 LOT 파일만 표시 (폴더는 열린 상태 유지)
-3. 그리드 이미지도 해당 LOT만으로 필터링 확인
-4. TEST 버튼 → TEST 선택 → 동일하게 파일 + 그리드 필터
-5. STEP 버튼 → STEP 선택 → 동일하게 파일 + 그리드 필터
-6. 필터 해제 → 전체 파일/이미지 복원, 폴더 열림 상태 유지
+**핵심 원칙**:
+- 필터 미선택(초기 상태) → positions 파일을 읽지 않음, 모든 파일 그대로 표시
+- 필터 선택 시 → 해당 폴더의 positions만 멀티스레드 병렬 스캔하여 메타 로드 후 필터
+- 필터 변경 시 → API 재호출 없이 DOM show/hide만 (메타는 이미 캐시됨)
+- 필터 해제/Reset → 모든 파일 다시 표시 (display:'' 복원)
+
+##### 3-2-1. 필터 미선택 상태 (초기)
+1. 제품 폴더 선택 (changeFolder) → `v.filterFileMetadata`는 빈 객체 `{}`
+2. 탐색기에 폴더/파일 전체 표시 — positions 파일 읽기 없음
+3. 폴더 클릭하여 열기 → 파일 전체 표시, 필터 미적용
+4. `v.filterLT === []`, `v.filterTM === []` 확인
+
+##### 3-2-2. 폴더 열어놓은 상태에서 필터 선택
+1. 탐색기에서 폴더를 열어놓은 상태 확인 (파일 목록 보임)
+2. LOT 버튼 클릭 → 드롭다운 열림
+3. LOT > EE 체크 → change 이벤트 발생
+4. **첫 필터 적용 시**: `_applyFilterToExplorer()` 호출
+   - `filterFileMetadata`가 비어있으므로 해당 폴더의 positions를 `fetchFilterMetadata(path)` 호출
+   - API `/api/filter-metadata` → 멀티스레드 64 병렬로 head 512B 읽어 lt/tm 추출
+   - 메타 로드 완료 후 DOM의 `<li>` 요소에 `display:none`/`''` 토글
+   - **폴더는 열린 상태 유지 (innerHTML 교체 없음)**
+5. 결과: 해당 LOT 파일만 표시, 나머지 숨김
+
+##### 3-2-3. 필터가 적용된 상태에서 추가 필터 변경
+1. LOT=EE 상태에서 TEST > ENGINEER 체크
+2. **메타가 이미 로드되어 있으므로** API 호출 없음
+3. `_applyFilterToExplorer()` → DOM show/hide만 (7ms 이내)
+4. 결과: LOT=EE AND TEST=ENGINEER 조건의 파일만 표시
+5. LOT=EE 해제 → TEST=ENGINEER만 적용
+6. LOT=PT 추가 → LOT=PT AND TEST=ENGINEER 적용
+
+##### 3-2-4. 필터 해제 (개별 체크 해제)
+1. TEST > ENGINEER 체크 해제 → `v.filterTM = []`
+2. `_applyFilterToExplorer()` → LOT 필터만 적용, TEST 무시
+3. LOT도 해제 → 필터 없음 → 모든 `<li>` display:'' → 전체 파일 표시
+
+##### 3-2-5. Reset 버튼
+1. Reset 클릭 → `v.filterLT = [], v.filterTM = [], v.filterSTEP = []`
+2. 모든 체크박스 해제 (`_restoreMultiSelectUI`)
+3. `_applyFilterToExplorer()` → 모든 파일 display:'' → 전체 복원
+4. **폴더 열림 상태 유지, 스크롤 위치 유지**
+
+##### 3-2-6. 새 폴더 열 때 필터 자동 적용
+1. 필터가 활성인 상태에서 탐색기의 닫힌 폴더를 클릭하여 열기
+2. `loadDirectoryContents(path, contentDiv)` 호출
+3. 파일 HTML 렌더링 후 즉시 필터 적용 (DOM show/hide)
+   - `loadDirectoryContents` 내부에서 `hasFilter` 체크 → `_passesLtTmFilter` + `_passesStepFilter`
+4. 결과: 새로 연 폴더에도 현재 필터 조건이 즉시 반영
+
+##### 3-2-7. 필터 버튼 색상 활성화
+1. 필터 선택 시 해당 버튼(LOT/TEST/STEP)에 `filter-active` 클래스 추가 → 파란색
+2. 필터 해제 시 `filter-active` 클래스 제거 → 원래 색
+3. Reset 버튼도 필터 활성 시 파란색, 전부 해제 시 원래 색
+4. 드롭다운 패널 상단에 "N개 선택됨" 배지 표시/제거
+
+**검증 단계**:
+1. LOT 단독 테스트 (EE → PT → PE → E% 와일드카드)
+2. TEST 단독 테스트 (NORMAL → ENGINEER → REWORK)
+3. LOT + TEST 조합 (EE + NORMAL → EE + ENGINEER → PT + NORMAL)
+4. 추가/제거 (LOT=EE 추가 → LOT=EE 제거 → TEST만 남음)
+5. Reset → 전체 복원
+6. 새 폴더 열기 → 필터 자동 적용 확인
 
 #### 3-3. 필터 대소문자 무시 검증 (`palette_3k` 폴더)
 Position JSON의 tm/lt 값이 title case (`"Engineer"`, `"Normal"`)이고
