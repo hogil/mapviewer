@@ -5483,13 +5483,8 @@ class WaferMapViewer {
             this[stateKey] = checked;
             this._updateMultiSelectBtn(type);
             this._saveUserPrefs();
-            // 열린 폴더 + 현재 보이는 폴더 기준 스크롤 복원
-            const openPaths = this._getOpenExplorerFolders();
-            const anchorPath = this._getVisibleAnchorPath();
-            const savedScroll = this.dom.fileExplorer?.scrollTop || 0;
-            await this.loadDirectoryContents(this.currentFolderPrefix || null, this.dom.fileExplorer);
-            await this._restoreOpenExplorerFolders(openPaths, { skipMeta: false });
-            this._scrollToAnchorPath(anchorPath, savedScroll);
+            // 🔥 DOM show/hide 방식: API 재호출 없이 기존 파일만 표시/숨김
+            await this._applyFilterToExplorer();
         });
 
         // 패널 밖 클릭 → 닫기
@@ -5544,6 +5539,46 @@ class WaferMapViewer {
             if (el) { el.scrollIntoView({ block: 'start' }); return; }
         }
         if (savedScroll != null) explorer.scrollTop = savedScroll;
+    }
+
+    /**
+     * 🔥 DOM show/hide로 필터 적용 (API 재호출 없음, 폴더 상태 유지, 즉시 반영)
+     */
+    async _applyFilterToExplorer() {
+        const explorer = this.dom.fileExplorer;
+        if (!explorer) return;
+        const hasLT = this.filterLT?.length > 0;
+        const hasTM = this.filterTM?.length > 0;
+        const hasSTEP = this.filterSTEP?.length > 0;
+        const hasAnyFilter = hasLT || hasTM || hasSTEP;
+
+        // 필터 활성인데 메타가 비어있으면 한 번 로드
+        if ((hasLT || hasTM) && Object.keys(this.filterFileMetadata).length === 0) {
+            // 열린 폴더들에 대해 메타 로드
+            const openFolders = this._getOpenExplorerFolders();
+            for (const fp of openFolders) {
+                await this.fetchFilterMetadata(fp);
+            }
+            // 루트 레벨 파일도 있을 수 있으니
+            if (this.currentFolderPrefix) {
+                await this.fetchFilterMetadata(this.currentFolderPrefix.replace(/\/+$/, ''));
+            }
+        }
+
+        // 모든 파일 링크에 대해 show/hide
+        const allFiles = explorer.querySelectorAll('a[data-path]');
+        for (const a of allFiles) {
+            const li = a.closest('li');
+            if (!li) continue;
+            if (!hasAnyFilter) {
+                li.style.display = '';
+                continue;
+            }
+            const name = a.dataset.path.split('/').pop();
+            const passLtTm = this._passesLtTmFilter(name);
+            const passStep = this._passesStepFilter(name);
+            li.style.display = (passLtTm && passStep) ? '' : 'none';
+        }
     }
 
     /**
@@ -5649,9 +5684,6 @@ class WaferMapViewer {
         const filterResetBtn = document.getElementById('filter-reset-btn');
         if (filterResetBtn) {
             filterResetBtn.addEventListener('click', async () => {
-                const openPaths = this._getOpenExplorerFolders();
-                const anchorPath = this._getVisibleAnchorPath();
-                const savedScroll = this.dom.fileExplorer?.scrollTop || 0;
                 this.filterLT = [];
                 this.filterTM = [];
                 this.filterSTEP = [];
@@ -5659,9 +5691,8 @@ class WaferMapViewer {
                 this._restoreMultiSelectUI('tm');
                 this._restoreMultiSelectUI('step');
                 this._saveUserPrefs();
-                await this.loadDirectoryContents(this.currentFolderPrefix || null, this.dom.fileExplorer);
-                await this._restoreOpenExplorerFolders(openPaths);
-                this._scrollToAnchorPath(anchorPath, savedScroll);
+                // 🔥 DOM show/hide: 모든 파일 다시 표시
+                this._applyFilterToExplorer();
             });
         }
 
@@ -6592,6 +6623,18 @@ class WaferMapViewer {
 
             containerElement.innerHTML = this.createFileTreeHtml(sortedFiles, path || '');
 
+            // 🔥 렌더링 후 필터 적용 (DOM show/hide)
+            const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
+            if (hasFilter) {
+                // containerElement 내의 파일만 필터
+                for (const a of containerElement.querySelectorAll('a[data-path]')) {
+                    const li = a.closest('li');
+                    if (!li) continue;
+                    const name = a.dataset.path.split('/').pop();
+                    li.style.display = (this._passesLtTmFilter(name) && this._passesStepFilter(name)) ? '' : 'none';
+                }
+            }
+
             // classification 폴더 자동 확장 제거 (항상 닫힘)
         } catch (error) {
             containerElement.innerHTML = `<p style=\"color: #ff5555; padding: 10px;\">Error loading files.</p>`;
@@ -7136,20 +7179,7 @@ class WaferMapViewer {
             if (node.type === 'directory') {
                 html += `<li><details><summary data-path="${fullPath}" class="folder">📁 ${node.name}</summary><div class="folder-content" style="padding-left: 0.5rem;"></div></details></li>`;
             } else if (node.type === 'file') {
-                // LT/TM 필터 적용
-                if (!this._passesLtTmFilter(node.name)) continue;
-
-                // STEP 필터 적용 (PLC=00C, PLH=00P) — 파일명 내 어디든 포함 여부
-                if (this.filterSTEP && this.filterSTEP.length > 0) {
-                    const fname = node.name;
-                    const matchStep = this.filterSTEP.some(s => {
-                        if (s === 'PLC') return fname.includes('00C');
-                        if (s === 'PLH') return fname.includes('00P');
-                        return false;
-                    });
-                    if (!matchStep) continue;
-                }
-
+                // 🔥 필터는 DOM show/hide로 적용 (_applyFilterToExplorer) — 여기서는 모든 파일 렌더링
                 const draggableAttr = 'draggable="true"';
                 html += `<li><a href="#" data-path="${fullPath}" ${draggableAttr}>📄 ${node.name}</a></li>`;
             }
