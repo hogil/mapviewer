@@ -4964,27 +4964,40 @@ async def get_filter_metadata(path: Optional[str] = None):
         if scan_dir:
             is_root = (scan_dir == config.POSITIONS_ROOT and rel_folder in ("", "."))
 
-            def _extract_lt_tm(fpath):
-                """head 512B에서 lt/tm 추출"""
+            def _extract_lt_tm(fpath_str):
+                """head 512B → bytes.find (regex 없음, 최고속)"""
                 try:
-                    with open(fpath, "rb") as fh:
-                        head = fh.read(512).decode("utf-8", errors="ignore")
-                    lt_m = _re.search(r'"lt"\s*:\s*"([^"]*)"', head)
-                    tm_m = _re.search(r'"tm"\s*:\s*"([^"]*)"', head)
-                    return fpath.stem, lt_m.group(1) if lt_m else None, tm_m.group(1) if tm_m else None
+                    fd = os.open(fpath_str, os.O_RDONLY | os.O_BINARY)
+                    h = os.read(fd, 512)
+                    os.close(fd)
+                    lt = tm = None
+                    i = h.find(b'"lt"')
+                    if i >= 0:
+                        j = h.find(b'"', i + 5)
+                        k = h.find(b'"', j + 1)
+                        if j >= 0 and k >= 0:
+                            lt = h[j + 1:k].decode()
+                    i = h.find(b'"tm"')
+                    if i >= 0:
+                        j = h.find(b'"', i + 5)
+                        k = h.find(b'"', j + 1)
+                        if j >= 0 and k >= 0:
+                            tm = h[j + 1:k].decode()
+                    stem = os.path.splitext(os.path.basename(fpath_str))[0]
+                    return stem, lt, tm
                 except Exception:
-                    return fpath.stem, None, None
+                    return os.path.splitext(os.path.basename(fpath_str))[0], None, None
 
             def _scan_parallel(folder: Path, recursive: bool):
-                """멀티스레드 병렬 스캔"""
                 from concurrent.futures import ThreadPoolExecutor as _TPE
-                json_files = list(folder.rglob("*.json") if recursive else folder.glob("*.json"))
-                with _TPE(max_workers=64) as pool:
-                    return list(pool.map(_extract_lt_tm, json_files))
+                pat = "**/*.json" if recursive else "*.json"
+                flist = [str(f) for f in folder.glob(pat)]
+                with _TPE(max_workers=32) as pool:
+                    return list(pool.map(_extract_lt_tm, flist))
 
             loop = asyncio.get_running_loop()
             results = await loop.run_in_executor(
-                DIRLIST_EXECUTOR,
+                None,
                 lambda: _scan_parallel(scan_dir, recursive=is_root)
             )
 
