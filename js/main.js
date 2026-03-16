@@ -5559,17 +5559,15 @@ class WaferMapViewer {
 
         const explorer = this.dom.fileExplorer;
         if (!explorer) return;
-        const hasLT = this.filterLT?.length > 0;
-        const hasTM = this.filterTM?.length > 0;
-        const hasSTEP = this.filterSTEP?.length > 0;
-        const hasAnyFilter = hasLT || hasTM || hasSTEP;
 
         // 필터 활성인데 메타가 비어있으면 한 번 로드
+        const hasLT = this.filterLT?.length > 0;
+        const hasTM = this.filterTM?.length > 0;
         if ((hasLT || hasTM) && Object.keys(this.filterFileMetadata).length === 0) {
             const openFolders = this._getOpenExplorerFolders();
             for (const fp of openFolders) {
                 await this.fetchFilterMetadata(fp);
-                if (seq !== this._filterSeq) return; // 새 요청 들어옴 → 중단
+                if (seq !== this._filterSeq) return; // 새 요청 → 메타 fetch만 중단 (새 요청이 이어받음)
             }
             if (this.currentFolderPrefix) {
                 await this.fetchFilterMetadata(this.currentFolderPrefix.replace(/\/+$/, ''));
@@ -5577,10 +5575,12 @@ class WaferMapViewer {
             }
         }
 
-        // 새 요청이 들어왔으면 이 실행은 버림
-        if (seq !== this._filterSeq) return;
+        // 🔥 DOM show/hide는 항상 최신 필터 상태로 실행 (취소하지 않음)
+        const curLT = this.filterLT?.length > 0;
+        const curTM = this.filterTM?.length > 0;
+        const curSTEP = this.filterSTEP?.length > 0;
+        const hasAnyFilter = curLT || curTM || curSTEP;
 
-        // 앵커 저장
         const anchorPath = this._getVisibleAnchorPath();
         const savedScroll = explorer.scrollTop;
 
