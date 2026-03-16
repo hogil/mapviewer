@@ -570,16 +570,13 @@ class AccessLogger:
             if existing_user:
                 profile_meta = existing_user.get("profile", {})
 
-        # LoginId가 없으면 통계 대상에서 제외
-        if not LoginId:
+        # LoginId가 없거나 IP와 같으면 통계 대상에서 제외
+        if not LoginId or LoginId == ip:
             return
 
-        # profile이 비어있으면 최소 프로필로 보완 (비-SAML/개발 모드 지원)
+        # profile이 비어있으면 차단 (SAML 미인증 사용자)
         if not profile_meta or len(profile_meta) == 0:
-            profile_meta = {
-                "LoginId": LoginId,
-                "Username": LoginId,
-            }
+            return
         
         # 🔥 detail_access.csv에 기록 (SAML 로그인 시마다)
         if endpoint == "/saml/acs" and profile_meta:

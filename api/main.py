@@ -864,7 +864,7 @@ def _normalize_role(role: str) -> str:
     return value
 
 ANONYMOUS_LOGIN_ID = config.FALLBACK_LOGIN_ID
-_LOGIN_ID_SENTINELS = {ANONYMOUS_LOGIN_ID.lower()}
+_LOGIN_ID_SENTINELS = {ANONYMOUS_LOGIN_ID.lower(), "guest"}
 
 def _normalize_login_id_candidate(value: Any) -> Optional[str]:
     if value is None:
@@ -3247,8 +3247,10 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
 
             client_ip = logger_instance.get_client_ip(request)
             status = response.status_code
+            # 🔥 stats에는 SAML 인증된 실제 LoginId만 전달 (guest/notsaml/preview 차단)
+            real_login_id = _current_login_id(request)
             effective_login_id = _effective_login_id(request)
-            request.state.session_user = effective_login_id
+            request.state.session_user = real_login_id  # stats용: None이면 기록 안 됨
             request.state.session_meta = {
                 "LoginId": effective_login_id,
                 "Username": effective_login_id,
