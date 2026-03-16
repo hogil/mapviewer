@@ -4967,7 +4967,7 @@ async def get_filter_metadata(path: Optional[str] = None):
             def _extract_lt_tm(fpath_str):
                 """head 512B → bytes.find (regex 없음, 최고속) — bytes 반환"""
                 try:
-                    fd = os.open(fpath_str, os.O_RDONLY | os.O_BINARY)
+                    fd = os.open(fpath_str, os.O_RDONLY | getattr(os, 'O_BINARY', 0))
                     h = os.read(fd, 512)
                     os.close(fd)
                     lt = tm = None
