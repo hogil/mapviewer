@@ -5483,12 +5483,12 @@ class WaferMapViewer {
             this[stateKey] = checked;
             this._updateMultiSelectBtn(type);
             this._saveUserPrefs();
-            // 열린 폴더 경로 + 스크롤 위치 보존 → 필터 적용 → 복원
+            // 열린 폴더 + 현재 보이는 폴더 기준 스크롤 복원
             const openPaths = this._getOpenExplorerFolders();
-            const savedScroll = this.dom.fileExplorer?.scrollTop || 0;
+            const anchorPath = this._getVisibleAnchorPath();
             await this.loadDirectoryContents(this.currentFolderPrefix || null, this.dom.fileExplorer);
             await this._restoreOpenExplorerFolders(openPaths, { skipMeta: false });
-            if (this.dom.fileExplorer) this.dom.fileExplorer.scrollTop = savedScroll;
+            this._scrollToAnchorPath(anchorPath);
         });
 
         // 패널 밖 클릭 → 닫기
@@ -5511,6 +5511,37 @@ class WaferMapViewer {
             openPaths.push(summary.dataset.path);
         });
         return openPaths;
+    }
+
+    /**
+     * 탐색기에서 현재 뷰포트에 보이는 첫 번째 폴더/파일의 data-path 반환
+     */
+    _getVisibleAnchorPath() {
+        const explorer = this.dom.fileExplorer;
+        if (!explorer) return null;
+        const rect = explorer.getBoundingClientRect();
+        // 폴더(summary) 우선, 없으면 파일(a)
+        const els = explorer.querySelectorAll('summary[data-path], a[data-path]');
+        for (const el of els) {
+            const r = el.getBoundingClientRect();
+            if (r.top >= rect.top && r.top < rect.bottom) {
+                return el.dataset.path;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * anchorPath에 해당하는 요소로 스크롤 복원
+     */
+    _scrollToAnchorPath(anchorPath) {
+        if (!anchorPath) return;
+        const explorer = this.dom.fileExplorer;
+        if (!explorer) return;
+        const el = explorer.querySelector(`summary[data-path="${CSS.escape(anchorPath)}"], a[data-path="${CSS.escape(anchorPath)}"]`);
+        if (el) {
+            el.scrollIntoView({ block: 'start' });
+        }
     }
 
     /**
@@ -5617,7 +5648,7 @@ class WaferMapViewer {
         if (filterResetBtn) {
             filterResetBtn.addEventListener('click', async () => {
                 const openPaths = this._getOpenExplorerFolders();
-                const savedScroll = this.dom.fileExplorer?.scrollTop || 0;
+                const anchorPath = this._getVisibleAnchorPath();
                 this.filterLT = [];
                 this.filterTM = [];
                 this.filterSTEP = [];
@@ -5627,7 +5658,7 @@ class WaferMapViewer {
                 this._saveUserPrefs();
                 await this.loadDirectoryContents(this.currentFolderPrefix || null, this.dom.fileExplorer);
                 await this._restoreOpenExplorerFolders(openPaths);
-                if (this.dom.fileExplorer) this.dom.fileExplorer.scrollTop = savedScroll;
+                this._scrollToAnchorPath(anchorPath);
             });
         }
 
