@@ -6798,39 +6798,54 @@ async def get_all_files():
 
 @app.get("/api/files/recursive")
 async def get_files_recursive(path: str):
-    """폴더 내 모든 파일을 재귀적으로 가져오기 (ROOT_DIR 기준 절대 경로, 파일명 정렬)"""
+    """폴더 내 모든 파일을 재귀적으로 가져오기 — 인덱스 우선, 폴백 os.walk"""
     try:
         target = safe_resolve_path(path)
         if not target.exists() or not target.is_dir():
             raise HTTPException(status_code=404, detail="폴더를 찾을 수 없습니다")
 
+        rel_prefix = str(target.relative_to(ROOT_DIR)).replace("\\", "/")
+        if rel_prefix == ".":
+            rel_prefix = ""
+        prefix = (rel_prefix + "/") if rel_prefix else ""
+
+        # 🔥 인덱스에서 prefix 매칭 (디스크 접근 없음, 즉시 반환)
+        skip = {'classification', 'thumbnails', 'composite_map'} | SKIP_DIRS
         files = []
-        for root, dirs, filenames in os.walk(target):
-            # SKIP_DIRS 제외
-            for skip in list(SKIP_DIRS):
-                if skip in dirs:
-                    dirs.remove(skip)
-            # classification, thumbnails, composite_map 제외
-            dirs[:] = [d for d in dirs if d not in ['classification', 'thumbnails', 'composite_map']]
-
-            for fn in filenames:
-                ext = os.path.splitext(fn)[1].lower()
-                if ext not in SUPPORTED_EXTENSIONS:
+        with FILE_INDEX_LOCK:
+            for key in FILE_INDEX_KEYS:
+                if prefix and not key.startswith(prefix):
                     continue
-
-                full_path = Path(root) / fn
-                try:
-                    # ROOT_DIR 기준 절대 경로
-                    rel_to_root = full_path.relative_to(ROOT_DIR)
-                    root_relative = str(rel_to_root).replace('\\', '/')
-                    files.append(root_relative)
-                except ValueError:
+                # skip dirs 체크
+                parts = key.split("/")
+                if any(p in skip for p in parts[:-1]):
                     continue
+                ext = os.path.splitext(key)[1].lower()
+                if ext in SUPPORTED_EXTENSIONS:
+                    files.append(key)
 
-        # 🔥 파일명 기준 정렬 (대소문자 구분 없이)
+        # 인덱스가 비어있으면 os.walk 폴백
+        if not files:
+            for root, dirs, filenames in os.walk(target):
+                for s in list(SKIP_DIRS):
+                    if s in dirs: dirs.remove(s)
+                dirs[:] = [d for d in dirs if d not in ['classification', 'thumbnails', 'composite_map']]
+                for fn in filenames:
+                    ext = os.path.splitext(fn)[1].lower()
+                    if ext not in SUPPORTED_EXTENSIONS:
+                        continue
+                    full_path = Path(root) / fn
+                    try:
+                        root_relative = str(full_path.relative_to(ROOT_DIR)).replace('\\', '/')
+                        files.append(root_relative)
+                    except ValueError:
+                        continue
+
         files.sort(key=lambda x: x.split('/')[-1].lower())
-
-        return {"success": True, "files": files}
+        return Response(
+            content=json.dumps({"success": True, "files": files}, ensure_ascii=False).encode(),
+            media_type="application/json"
+        )
     except Exception as e:
         logger.exception(f"재귀 파일 조회 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
