@@ -5390,33 +5390,36 @@ class WaferMapViewer {
         const hasTM = this.filterTM && this.filterTM.length > 0;
         if (!hasLT && !hasTM) return true;
 
-        // 파일명에서 stem 추출 (확장자 제거)
         const fileName = fileNameOrPath.split('/').pop().split('\\').pop() || fileNameOrPath;
         const stem = fileName.replace(/\.[^.]+$/, '');
-        const meta = this.filterFileMetadata[stem];
 
-        if (!meta) {
-            // 메타데이터가 없는 파일은 필터와 무관하게 통과 (위치정보 미로드 폴더)
-            return true;
+        // 🔥 1차: filterFileMetadata에서 조회 (API 로드 후)
+        let ltVal, tmVal;
+        const meta = this.filterFileMetadata[stem];
+        if (meta) {
+            ltVal = (meta.lt || '').toUpperCase();
+            tmVal = (meta.tm || '').toUpperCase();
+        } else {
+            // 🔥 2차: 파일명에서 _LT_TM 추출 ({stem}_{LT}_{TM}.ext)
+            const parts = stem.split('_');
+            if (parts.length >= 3) {
+                tmVal = (parts[parts.length - 1] || '').toUpperCase();
+                ltVal = (parts[parts.length - 2] || '').toUpperCase();
+            } else {
+                return true; // 파일명에도 LT/TM 없으면 통과
+            }
         }
 
-        // LT 필터 — 선택된 값 중 하나라도 매치하면 통과 (OR, 대소문자 무시)
         if (hasLT) {
-            const ltVal = (meta.lt || '').toUpperCase();
             const ltMatch = this.filterLT.some(f => {
                 const fUp = f.toUpperCase();
-                if (fUp.endsWith('%')) {
-                    const prefix = fUp.slice(0, -1);
-                    return ltVal.startsWith(prefix);
-                }
+                if (fUp.endsWith('%')) return ltVal.startsWith(fUp.slice(0, -1));
                 return ltVal === fUp;
             });
             if (!ltMatch) return false;
         }
 
-        // TM 필터 — 선택된 값 중 하나라도 매치하면 통과 (OR, 대소문자 무시)
         if (hasTM) {
-            const tmVal = (meta.tm || '').toUpperCase();
             if (!this.filterTM.some(f => f.toUpperCase() === tmVal)) return false;
         }
 

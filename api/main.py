@@ -4916,6 +4916,8 @@ class ClassifyDeleteBatchReq(BaseModel):
 KNOWN_LT_VALUES = {"PP", "EE", "PT", "PE", "EP", "LT", "TP", "ES", "-", "EY", "TE", "TA", "TT", "TQ", "EU", "EH", "TD", "ET"}
 KNOWN_TM_VALUES = {"ENGINE", "ENGINEER", "NONPAS", "NORMAL", "PWQ", "R1", "REWORK", "NORM", "MACHINE", "ENGR", "ENG"}
 
+# 🔥 필터 메타 서버 캐시 (폴더별, 첫 호출 후 메모리 유지)
+_FILTER_META_SERVER_CACHE: Dict[str, Dict] = {}
 
 @app.get("/api/filter-metadata")
 async def get_filter_metadata(path: Optional[str] = None):
@@ -4938,6 +4940,11 @@ async def get_filter_metadata(path: Optional[str] = None):
                     rel_folder = str(target.relative_to(root_resolved)).replace("\\", "/")
             except (ValueError, Exception):
                 rel_folder = path.replace("\\", "/").strip("/")
+
+        # 🔥 서버 캐시 체크 (같은 폴더 재요청 시 즉시 반환)
+        cache_key = rel_folder or "__root__"
+        if cache_key in _FILTER_META_SERVER_CACHE:
+            return Response(content=_FILTER_META_SERVER_CACHE[cache_key], media_type="application/json")
 
         # POSITIONS_ROOT 하위에서 해당 폴더의 JSON 파일 검색
         if rel_folder and rel_folder != ".":
@@ -4962,13 +4969,36 @@ async def get_filter_metadata(path: Optional[str] = None):
 
         lt_values = set()
         tm_values = set()
-        file_map = {}
+        map_bytes = b''
+        is_root = False
 
-        if scan_dir:
+        # 🔥 1차: 파일명에서 _LT_TM 추출 (폴더 캐시 사용, positions 읽기 불필요)
+        if _FOLDER_FILES_CACHE_BUILT and rel_folder and rel_folder != ".":
+            file_list = _FOLDER_FILES_CACHE.get(rel_folder, [])
+            if file_list:
+                map_parts = []
+                for fpath in file_list:
+                    fname = fpath.rsplit("/", 1)[-1]
+                    base = os.path.splitext(fname)[0]
+                    parts = base.rsplit("_", 2)
+                    if len(parts) >= 3:
+                        lt_val = parts[-2]
+                        tm_val = parts[-1]
+                        lt_values.add(lt_val)
+                        tm_values.add(tm_val)
+                        # 원본 stem (LT_TM 제외) 으로 매핑
+                        orig_stem = "_".join(parts[:-2])
+                        map_parts.append(
+                            b'"' + orig_stem.encode() + b'":{"lt":"' + lt_val.encode() + b'","tm":"' + tm_val.encode() + b'"}'
+                        )
+                if map_parts:
+                    map_bytes = b",".join(map_parts)
+
+        # 🔥 2차: 파일명에서 못 찾으면 positions 파일 폴백
+        if not map_bytes and scan_dir:
             is_root = (scan_dir == config.POSITIONS_ROOT and rel_folder in ("", "."))
 
             def _extract_lt_tm(fpath_str):
-                """head 512B → bytes.find (regex 없음, 최고속) — bytes 반환"""
                 try:
                     fd = os.open(fpath_str, os.O_RDONLY | getattr(os, 'O_BINARY', 0))
                     h = os.read(fd, 512)
@@ -4976,41 +5006,30 @@ async def get_filter_metadata(path: Optional[str] = None):
                     lt = tm = None
                     i = h.find(b'"lt"')
                     if i >= 0:
-                        j = h.find(b'"', i + 5)
-                        k = h.find(b'"', j + 1)
+                        j = h.find(b'"', i + 5); k = h.find(b'"', j + 1)
                         if j >= 0 and k >= 0: lt = h[j+1:k]
                     i = h.find(b'"tm"')
                     if i >= 0:
-                        j = h.find(b'"', i + 5)
-                        k = h.find(b'"', j + 1)
+                        j = h.find(b'"', i + 5); k = h.find(b'"', j + 1)
                         if j >= 0 and k >= 0: tm = h[j+1:k]
                     return lt, tm
                 except Exception:
                     return None, None
 
-            def _scan_and_build(folder: Path, recursive: bool, build_map: bool):
-                """스캔 + JSON 바이트 직접 빌드 (직렬화 오버헤드 제거)"""
+            def _scan_positions(folder: Path, recursive: bool, build_map: bool):
                 from concurrent.futures import ThreadPoolExecutor as _TPE
-                # os.scandir (glob보다 빠름)
                 flist = []
                 if recursive:
                     for root, dirs, files in os.walk(str(folder)):
                         for fn in files:
-                            if fn.endswith(".json"):
-                                flist.append(os.path.join(root, fn))
+                            if fn.endswith(".json"): flist.append(os.path.join(root, fn))
                 else:
                     with os.scandir(str(folder)) as it:
                         for e in it:
-                            if e.name.endswith(".json"):
-                                flist.append(e.path)
-
+                            if e.name.endswith(".json"): flist.append(e.path)
                 with _TPE(max_workers=64) as pool:
                     raw = list(pool.map(_extract_lt_tm, flist))
-
-                _lt_set = set()
-                _tm_set = set()
-                # file_map JSON을 bytes로 직접 빌드
-                map_parts = []
+                _lt_set, _tm_set, parts = set(), set(), []
                 for i in range(len(flist)):
                     lt, tm = raw[i]
                     if lt: _lt_set.add(lt.decode())
@@ -5020,14 +5039,12 @@ async def get_filter_metadata(path: Optional[str] = None):
                         inner = []
                         if lt: inner.append(b'"lt":"' + lt + b'"')
                         if tm: inner.append(b'"tm":"' + tm + b'"')
-                        map_parts.append(b'"' + stem + b'":{' + b','.join(inner) + b'}')
-
-                return _lt_set, _tm_set, b','.join(map_parts)
+                        parts.append(b'"' + stem + b'":{' + b','.join(inner) + b'}')
+                return _lt_set, _tm_set, b','.join(parts)
 
             loop = asyncio.get_running_loop()
             _lt_set, _tm_set, map_bytes = await loop.run_in_executor(
-                None,
-                lambda: _scan_and_build(scan_dir, recursive=is_root, build_map=not is_root)
+                None, lambda: _scan_positions(scan_dir, recursive=is_root, build_map=not is_root)
             )
             lt_values |= _lt_set
             tm_values |= _tm_set
@@ -5038,6 +5055,9 @@ async def get_filter_metadata(path: Optional[str] = None):
         lt_json = b'[' + b','.join(b'"' + v.encode() + b'"' for v in all_lt) + b']'
         tm_json = b'[' + b','.join(b'"' + v.encode() + b'"' for v in all_tm) + b']'
         body = b'{"success":true,"lt_values":' + lt_json + b',"tm_values":' + tm_json + b',"file_map":{' + map_bytes + b'}}'
+
+        # 🔥 서버 캐시 저장 (같은 폴더 재요청 시 즉시 반환)
+        _FILTER_META_SERVER_CACHE[cache_key] = body
 
         return Response(content=body, media_type="application/json")
     except Exception as e:
