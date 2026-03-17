@@ -8437,8 +8437,8 @@ def _current_username(req: Optional[Request], default: str = "system") -> str:
     return default
 
 @app.get("/api/chip-positions")
-async def get_chip_positions(path: str):
-    """주어진 이미지 경로에 대응하는 positions.json 반환"""
+async def get_chip_positions(path: str, include_fq: int = 0):
+    """주어진 이미지 경로에 대응하는 positions.json 반환 (include_fq=1이면 f/q 값 포함)"""
     try:
         # 이미지 경로에서 상대 경로 추출
         rel_path = _get_relative_path_from_image(path)
@@ -8477,10 +8477,11 @@ async def get_chip_positions(path: str):
             elif isinstance(q_data, list):
                 pass
 
-        # 응답용 경량 칩 데이터 (f/q 값 + quad 제거)
+        # 응답용 칩 데이터 (include_fq=0이면 f/q 제거, quad는 항상 제거)
+        strip_fq = not include_fq
         light_chips = []
         for chip in chips:
-            light = {k: v for k, v in chip.items() if k not in ("f", "q")}
+            light = {k: v for k, v in chip.items() if not (strip_fq and k in ("f", "q"))}
             # quad 제거
             if isinstance(light.get("rect"), dict):
                 light["rect"] = {k: v for k, v in light["rect"].items() if k != "quad"}

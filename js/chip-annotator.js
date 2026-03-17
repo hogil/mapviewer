@@ -151,7 +151,7 @@ export class ChipAnnotator {
             this.gd = null;
             this.yield = null;
             this.sys = null;
-            const response = await fetch(`/api/chip-positions?path=${encodeURIComponent(imagePath)}`);
+            const response = await fetch(`/api/chip-positions?path=${encodeURIComponent(imagePath)}&include_fq=1`);
 
             if (!response.ok) {
                 console.log('No positions found for:', imagePath);
@@ -370,14 +370,25 @@ export class ChipAnnotator {
         this.gradientFilterSet.clear();
         if (!this.chips || !this.gradientStops) return;
 
-        // Collect all numeric values from dict[itemKey]
+        // Collect all numeric values — dict 및 compact_array(list + ftn_keys) 모두 지원
+        const keyName = field === 'f' ? 'ftn_keys' : field === 'q' ? 'qtn_keys' : null;
+        const keyIndex = (keyName && this.positionsData?.[keyName])
+            ? this.positionsData[keyName].indexOf(String(itemKey))
+            : -1;
+
         const values = [];
         const chipIndices = [];
         this.chips.forEach((chip, idx) => {
             if (!chip) return;
-            const dict = chip[field];
-            if (!dict || typeof dict !== 'object') return;
-            const raw = itemKey ? dict[itemKey] : null;
+            const data = chip[field];
+            let raw = null;
+            if (Array.isArray(data)) {
+                // compact_array: ftn_keys 인덱스로 접근
+                raw = keyIndex >= 0 && keyIndex < data.length ? data[keyIndex] : null;
+            } else if (data && typeof data === 'object') {
+                // dict: 키로 직접 접근
+                raw = itemKey ? data[itemKey] : null;
+            }
             if (raw == null) return;
             const val = Number(raw);
             if (!isFinite(val)) return;
