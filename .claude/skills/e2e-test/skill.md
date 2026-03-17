@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 19개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드를 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 27개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키를 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -15,10 +15,11 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 
 테스트 실행 전에 아래 단계를 **순서대로** 자동 수행합니다. 이미 준비된 항목은 건너뜁니다.
 
-### Step 0-1: Playwright MCP 설치 확인
+### Step 0-1: Playwright MCP 설치 확인 및 브라우저 최대화
 1. `browser_navigate` 등 Playwright MCP 도구 호출을 시도하여 연결 확인
 2. 실패 시 `npx @playwright/mcp@latest --install` 실행하여 브라우저 설치
 3. 재시도하여 MCP 연결 확인 — 실패 시 사용자에게 안내 후 중단
+4. **브라우저 창 최대화**: 페이지 접속 직후 `browser_resize`로 **width: 1920, height: 1080** 설정 (전체 화면으로 UI 테스트)
 
 ### Step 0-2: 서버 시작 (기존 서버 모두 종료 후 새로 시작)
 1. **기존 서버 모두 종료**: 443, 8443 포트에서 실행 중인 프로세스를 강제 종료
@@ -940,6 +941,27 @@ BIN, FBT, QVL Composite는 모두 Gradient 범례를 사용한다. 각 유형별
 3. Measure 패널에서 FBT/QVL 키 목록 정상 표시 확인
 4. FBT overlay 적용 → gradient 범례 표시 확인
 
+#### 11-8. Measure 키 인덱스 방지 & 그리드→단일 전환 시 오버레이 보존
+compact_array 포맷에서 FBT/QVL 키가 배열 인덱스(0,1,2...)로 표시되지 않고 실제 키 이름으로 표시되는지, 그리드→단일 전환 시 measure 오버레이가 유지되는지 검증.
+
+1. palette_3k 그리드 로드 → 전체선택
+2. Measure 패널 열기 (`#failbit-btn-top` 클릭)
+3. **인덱스 방지 검증**: FBT 항목 텍스트에 `FBT0`, `FBT1`, `FBT2` 등 순차 인덱스가 **없는지** 확인
+   - `browser_evaluate`로 `.failbit-item` 텍스트 목록 수집
+   - `FBT0` 텍스트가 포함된 항목이 0개인지 확인 (인덱스가 아닌 실제 키: `FBT2824` 등)
+4. FBT 항목 중 하나 클릭 (예: 첫 번째 FBT 항목) → 그리드에 measure overlay 적용
+5. `viewer.overlayMode === 'f'` 확인
+6. `viewer._ratioActiveItemKey`가 숫자 문자열이 아닌 실제 키 값인지 확인 (예: `"2824"`, NOT `"0"`)
+7. 그리드 이미지 더블클릭 → 단일 이미지 뷰 진입
+8. **오버레이 보존 확인**: `viewer.overlayMode === 'f'` 확인
+9. **키 보존 확인**: `viewer._ratioActiveItemKey`가 동일한 값 유지 확인
+10. 단일 이미지 뷰에서 Measure 패널 열기 (`#failbit-btn-filename` 클릭)
+11. **단일 뷰 인덱스 방지**: FBT 항목 텍스트에 `FBT0`, `FBT1` 등 순차 인덱스 **없음** 확인
+12. 선택된 FBT 항목에 `active` 클래스 존재 확인
+13. `browser_take_screenshot` → 단일 뷰에서 measure heatmap 렌더링 확인
+14. 뒤로가기(ESC) → 그리드 복귀
+15. 그리드에서도 `viewer.overlayMode === 'f'` 유지 확인
+
 **pass 기준**:
 - 11-0: API 응답에서 ftn_keys 600개, qtn_keys 20개, 칩에 f/q/quad 없음
 - 11-1: Measure 패널에 FBT 600개, QVL 20개, BIN 표시
@@ -949,6 +971,7 @@ BIN, FBT, QVL Composite는 모두 Gradient 범례를 사용한다. 각 유형별
 - 11-5: 초기화 → Grade 범례 복원, overlay 파라미터 제거
 - 11-6: Measure Composite 생성 → FBT/QVL/BIN 결과 이미지 + gradient 범례 + 텍스트
 - 11-7: palette_5mb 대용량 정상 처리
+- 11-8: FBT/QVL 키 인덱스 미표시 + 그리드→단일 전환 시 measure 오버레이 보존
 
 ---
 
@@ -1228,6 +1251,268 @@ BIN, FBT, QVL Composite는 모두 Gradient 범례를 사용한다. 각 유형별
 
 ---
 
+### Phase 21: Page Manager (멀티탭)
+
+**목적**: 페이지 탭 생성/전환/닫기/역할 변경이 정상 동작하는지 확인
+
+**평가 항목**:
+
+#### 21-1. 탭 생성
+1. 하단 탭 바에 기본 탭 1개 존재 확인 (`#page-tab-bar .page-tab` length === 1)
+2. `+` 버튼(`#page-add-btn`) 클릭 → 새 탭 생성, 탭 수 2개로 증가
+3. 새 탭이 `active` 상태인지 확인 (`.page-tab.active`)
+4. 새 탭 이름이 자동 생성 (예: "page1")
+
+#### 21-2. 탭 전환
+1. 첫 번째 탭 클릭 → `active` 클래스가 첫 번째 탭으로 이동
+2. 두 번째 탭 클릭 → `active` 클래스가 두 번째 탭으로 이동
+3. 전환 시 뷰어 상태(그리드/단일/폴더 경로)가 독립적으로 유지되는지 확인
+   - 탭1에서 palette_3k 그리드 → 탭2로 전환 → 빈 화면(또는 별도 상태)
+   - 탭1로 복귀 → palette_3k 그리드 복원
+
+#### 21-3. 탭 역할 색상
+1. 단일 이미지 진입 시 탭에 `data-role="wafer"` 설정, 파란색 하단 보더
+2. Label Explorer 그리드 시 `data-role="label"`, 보라색 보더
+3. MY LOT 그리드 시 `data-role="mylot"`, 초록색 보더
+
+#### 21-4. 탭 닫기
+1. 탭의 `x` 버튼 클릭 → 해당 탭 제거
+2. 마지막 탭은 닫을 수 없음 (최소 1개 유지)
+3. 활성 탭 닫으면 인접 탭이 자동 활성화
+
+#### 21-5. 키보드 단축키
+1. `PageDown` → 다음 탭으로 전환
+2. `PageUp` → 이전 탭으로 전환
+3. 입력 필드 포커스 중에는 단축키 비활성 (shouldSkipShortcut)
+
+**pass 기준**: 생성→전환(상태 독립)→역할 색상→닫기→키보드 전체 성공
+
+---
+
+### Phase 22: Thumbnail Navigator
+
+**목적**: 단일 이미지 모드에서 Thumbnail Navigator 창의 표시/상호작용/리사이즈 확인
+
+**평가 항목**:
+
+#### 22-1. 자동 표시
+1. 단일 이미지 모드 진입 → `#thumbnail-navigator` display !== 'none'
+2. Navigator 헤더에 "Navigator" 텍스트 표시
+3. 썸네일 목록에 이미지 아이템 존재 (`#thumbnail-navigator-list` 자식 > 0)
+4. 현재 이미지가 하이라이트 표시 (active/selected 스타일)
+
+#### 22-2. 클릭 네비게이션
+1. Navigator 내 다른 이미지 썸네일 클릭 → 해당 이미지로 전환
+2. 전환 후 `#file-name-text` 변경 확인
+3. Navigator에서 새 이미지가 하이라이트로 변경
+
+#### 22-3. 스크롤
+1. Navigator 목록에서 마우스 휠 → 목록 스크롤
+2. 현재 이미지가 뷰포트 밖이면 자동 스크롤로 보이게
+
+#### 22-4. 드래그 이동
+1. Navigator 헤더 영역 mousedown → 드래그 → 창 위치 이동
+2. 이동 후 위치 유지 확인
+
+#### 22-5. 리사이즈
+1. 하단 리사이즈 핸들(`#thumbnail-navigator-resize-handle`) 드래그 → 높이 변경
+2. 좌측 핸들(`#thumbnail-navigator-resize-handle-left`) 드래그 → 너비 변경
+3. 리사이즈 후 썸네일 목록 레이아웃 적응
+
+#### 22-6. 닫기 & 재표시
+1. 닫기 버튼(`#thumbnail-navigator-close`) 클릭 → Navigator 숨김
+2. 다른 이미지 진입 시 Navigator 다시 표시
+
+#### 22-7. 가상 스크롤 (300+ 이미지)
+1. palette_3k(3000장) 단일 모드 진입
+2. Navigator에 모든 3000개를 DOM에 넣지 않고 가상 스크롤 적용 확인
+3. 빠른 스크롤 시 끊김 없이 렌더링
+
+**pass 기준**: 자동 표시→클릭 네비→드래그→리사이즈→닫기→가상 스크롤
+
+---
+
+### Phase 23: Minimap
+
+**목적**: 단일 이미지 모드에서 Minimap 표시, 뷰포트 인디케이터, 클릭/드래그 네비게이션
+
+**평가 항목**:
+
+#### 23-1. Minimap 표시
+1. 단일 이미지 모드 진입 → `#minimap-container` display !== 'none'
+2. `#minimap-canvas` 크기 > 0 (width, height)
+3. Minimap에 현재 이미지의 축소 버전 렌더링
+
+#### 23-2. 뷰포트 인디케이터
+1. `#minimap-viewport` 요소 존재, 위치/크기가 현재 줌에 비례
+2. 줌 50% → 뷰포트가 minimap의 큰 영역 차지
+3. 줌 300% → 뷰포트가 작은 영역 차지
+4. 팬 이동 → 뷰포트 위치가 실시간 이동
+
+#### 23-3. Minimap 클릭 네비게이션
+1. Minimap 영역 클릭 → 메인 뷰가 해당 위치로 팬 이동
+2. 클릭 후 `v.renderer.transform.tx/ty` 값 변경 확인
+
+#### 23-4. Minimap 뷰포트 드래그
+1. `#minimap-viewport` mousedown → 드래그 → 메인 뷰 실시간 팬 이동
+2. 드래그 중 부드러운 이동 (끊김 없음)
+
+**pass 기준**: 표시→뷰포트 크기 변화→클릭 네비→드래그 네비
+
+---
+
+### Phase 24: 다중검색 (Multi-Search) 모달
+
+**목적**: LOT 다중검색 모달의 입력/검증/적용/결과 확인
+
+**평가 항목**:
+
+#### 24-1. 모달 열기
+1. `#multi-search-btn` ("다중검색") 클릭 → `#multi-search-modal` display !== 'none'
+2. 모달 제목 "LOT 다중 검색" 표시
+3. textarea(`#multi-search-input`)가 비어있는지 확인
+4. 적용/취소 버튼 존재
+
+#### 24-2. LOT ID 입력 & 적용
+1. textarea에 여러 LOT ID 입력 (줄바꿈 구분):
+   ```
+   LOTA
+   LOTB
+   ```
+2. "적용" 버튼(`#multi-search-apply`) 클릭
+3. 그리드에 해당 LOT의 이미지만 표시 확인
+4. LOT ID가 없는 이미지는 필터링 확인
+
+#### 24-3. 검증 에러
+1. 빈 입력 상태에서 적용 → 에러 메시지(`#multi-search-error`) 표시
+2. 잘못된 형식 입력 시 에러 처리
+
+#### 24-4. 취소
+1. 취소 버튼(`#multi-search-cancel`) 클릭 → 모달 닫힘
+2. 그리드 상태 변경 없음
+
+**pass 기준**: 모달 열기→LOT 입력→적용(필터링)→에러 처리→취소
+
+---
+
+### Phase 25: 권한 관리 (Permission Editor)
+
+**목적**: 권한 편집 모달의 사용자 목록/역할 변경/저장 기능 확인
+
+**평가 항목**:
+
+#### 25-1. 모달 열기
+1. "권한 변경" 버튼(`#permission-editor-button`) 클릭 → `#permission-editor-modal` 표시
+2. 좌측 패널: 사용자 목록(`#permission-user-list`) 로드
+3. 역할 필터 버튼 존재: ALL, ROLE_POWER, ROLE_ADMIN, ROLE_SUPER
+
+#### 25-2. 역할 필터링
+1. ALL 버튼 `.active` 확인 (기본값)
+2. ROLE_ADMIN 클릭 → 해당 역할 사용자만 목록에 표시
+3. ALL 다시 클릭 → 전체 목록 복원
+
+#### 25-3. 사용자 검색
+1. 검색 입력(`#permission-search-input`)에 텍스트 입력
+2. `#permission-search-results` 드롭다운에 매칭 사용자 표시
+3. 검색 결과 클릭 → 등록 테이블에 행 추가
+
+#### 25-4. 등록 테이블
+1. `#permission-registration-table`에 행 존재 확인
+2. 행 추가 버튼(`#permission-add-row-btn`) 클릭 → 빈 행 추가
+3. 역할 드롭다운에서 역할 선택 가능
+
+#### 25-5. 모달 닫기
+1. 취소 버튼(`#permission-cancel-btn`) 클릭 → 모달 닫힘
+
+**pass 기준**: 모달 열기→필터→검색→테이블 조작→닫기
+
+---
+
+### Phase 26: 컨텍스트 메뉴 복사/다운로드 기능
+
+**목적**: 우클릭 메뉴의 복사/다운로드 항목이 정상 동작하는지 확인
+
+**평가 항목**:
+
+#### 26-1. 그리드 컨텍스트 메뉴 항목 확인
+1. 이미지 5개 선택 → `.grid-thumb-wrap` 우클릭
+2. `#grid-context-menu` display === 'block'
+3. 표시 항목 확인:
+   - "📊 Composite 만들기 ▸"
+   - "📌 Ref Map 등록"
+   - "📥 선택 파일 다운로드"
+   - "🖼️ 선택한 이미지 복사 (Legend 포함)"
+   - "📋 선택 LOT 리스트 복사(YMS 방식)"
+   - "📊 선택 wafer 정보 복사(테이블)"
+   - "📝 MY LOT에 추가"
+   - "❌ 취소"
+
+#### 26-2. LOT 리스트 복사 (YMS 방식)
+1. "📋 선택 LOT 리스트 복사" 클릭
+2. 클립보드에 `LOT\tWafer` 형식 텍스트 복사 확인
+3. alert 또는 토스트로 복사 성공 안내
+
+#### 26-3. Wafer 정보 복사 (테이블)
+1. "📊 선택 wafer 정보 복사" 클릭
+2. 클립보드에 탭 구분 테이블 형식 복사 확인
+3. 컬럼: Device, PartID, LOT, Wafer, Yield, Sys 등
+
+#### 26-4. 이미지 복사 (Legend 포함)
+1. "🖼️ 선택한 이미지 복사" 클릭
+2. 선택된 이미지들을 Legend와 함께 merge한 캔버스 생성
+3. 클립보드에 이미지 blob 복사 확인
+
+#### 26-5. 다운로드
+1. "📥 선택 파일 다운로드" 클릭
+2. 선택된 이미지 파일 다운로드 시작 (배치 100ms 간격)
+
+#### 26-6. 취소
+1. "❌ 취소" 클릭 → 메뉴 닫힘
+2. 메뉴 바깥 클릭 → 메뉴 닫힘
+
+**pass 기준**: 메뉴 항목 전체 표시, 복사 3종(LOT/wafer info/이미지), 다운로드, 닫기
+
+---
+
+### Phase 27: 키보드 단축키 & 드래그 선택
+
+**목적**: 그리드/단일 이미지 모드의 키보드 단축키와 드래그 선택이 정상 동작
+
+**평가 항목**:
+
+#### 27-1. 그리드 모드 키보드 단축키
+1. `Ctrl+A` → 전체 선택 (`v.gridSelectedIdxs.length === v.currentGridImages.length`)
+2. `Escape` → 전체 해제 (`v.gridSelectedIdxs.length === 0`)
+3. `Enter` → 선택 이미지가 1개면 단일 모드 진입
+
+#### 27-2. 그리드 드래그 선택 (러버밴드)
+1. 그리드 빈 영역에서 mousedown → 드래그 → `#grid-drag-select` 사각형 표시
+2. 드래그 영역 안에 들어온 이미지 자동 선택
+3. mouseup → 사각형 사라지고 선택 확정
+4. Shift+드래그 → 기존 선택에 추가
+
+#### 27-3. 단일 이미지 모드 키보드
+1. `←` / `→` 화살표 → 이전/다음 이미지 네비게이션
+2. `Escape` → 그리드 복귀
+3. `Ctrl+C` → 현재 이미지 클립보드 복사
+
+#### 27-4. 칩 다중선택 방식
+1. 칩 클릭 → 단일 선택
+2. `Ctrl+클릭` → 추가 선택 (토글)
+3. `Shift+클릭` → 범위 선택 (처음~끝 사이 칩 모두)
+4. `Alt+드래그` → 자유형(lasso) 영역 선택
+5. 빈 영역 클릭 → 전체 해제
+6. 선택된 칩 수가 정보 패널에 반영
+
+#### 27-5. 검색창 키보드 독립성
+1. 검색 입력창에 포커스 → 좌/우 화살표로 커서 이동 (Phase 3-13 참조)
+2. 검색 입력 중 `Ctrl+A` → 텍스트 전체 선택 (그리드 전체선택 아님)
+3. 검색 입력 중 `Escape` → 포커스 해제
+
+**pass 기준**: Ctrl+A/Escape/Enter, 드래그 선택, 화살표 네비, 칩 다중선택 4종, 검색창 독립
+
+---
+
 ## 결과 보고
 
 각 Phase별로 pass/fail 요약표를 작성하세요:
@@ -1254,6 +1539,13 @@ BIN, FBT, QVL Composite는 모두 Gradient 범례를 사용한다. 각 유형별
 | 18 | 단일 이미지 — Chip Labels | pass/fail | CRUD |
 | 19 | 미선택 보호 | pass/fail | 토스트/안내 |
 | 20 | 접속 통계 (stats.html) | pass/fail | API 6개, 카드 4개, 차트 3개, CSV 내보내기 |
+| 21 | Page Manager (멀티탭) | pass/fail | 생성/전환/역할색상/닫기/키보드 |
+| 22 | Thumbnail Navigator | pass/fail | 표시/클릭/드래그/리사이즈/가상스크롤 |
+| 23 | Minimap | pass/fail | 표시/뷰포트/클릭/드래그 네비 |
+| 24 | 다중검색 모달 | pass/fail | LOT 입력/적용/에러/취소 |
+| 25 | 권한 관리 | pass/fail | 목록/필터/검색/테이블 |
+| 26 | 컨텍스트 메뉴 복사/다운로드 | pass/fail | 복사 3종, 다운로드, 닫기 |
+| 27 | 키보드 단축키 & 드래그 선택 | pass/fail | Ctrl+A, 드래그선택, 칩 다중선택 4종 |
 
 핵심 단계마다 스크린샷을 촬영하여 첨부하세요.
 

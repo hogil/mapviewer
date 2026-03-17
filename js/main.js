@@ -22990,17 +22990,18 @@ class WaferMapViewer {
         list.appendChild(binItem);
 
         // chipAnnotator에서 키를 가져오거나, 그리드 모드용 캐시에서 가져옴
+        // (getAvailableItemKeys는 positionsData.ftn_keys/qtn_keys를 우선 사용하므로 인덱스가 아닌 실제 키 반환)
         const fKeys = this.chipAnnotator ? this.chipAnnotator.getAvailableItemKeys('f') : [];
         const qKeys = this.chipAnnotator ? this.chipAnnotator.getAvailableItemKeys('q') : [];
         const hasFQ = fKeys.length > 0 || qKeys.length > 0;
 
-        // 그리드 모드에서 chipAnnotator 키가 없으면 캐시된 키 사용
+        // chipAnnotator 키가 없으면 캐시된 키 사용
         const effectiveFKeys = fKeys.length > 0 ? fKeys : (this._cachedMeasureKeys?.f || []);
         const effectiveQKeys = qKeys.length > 0 ? qKeys : (this._cachedMeasureKeys?.q || []);
 
-        // 키가 있으면 캐시 업데이트
+        // chipAnnotator에서 실제 키를 가져왔으면 캐시 업데이트
         if (hasFQ) {
-            this._cachedMeasureKeys = { f: fKeys, q: qKeys };
+            this._cachedMeasureKeys = { f: effectiveFKeys, q: effectiveQKeys };
         }
 
         // --- FBT 섹션 ---
@@ -23177,6 +23178,15 @@ class WaferMapViewer {
      * Positions 로드 후 활성 오버레이 모드를 재적용
      */
     async _reapplyOverlayAfterPositionsLoad() {
+        // positions 로드 후 Measure 키 캐시 갱신 (compact_array의 ftn_keys/qtn_keys 사용)
+        if (this.chipAnnotator) {
+            const fKeys = this.chipAnnotator.getAvailableItemKeys('f');
+            const qKeys = this.chipAnnotator.getAvailableItemKeys('q');
+            if (fKeys.length > 0 || qKeys.length > 0) {
+                this._cachedMeasureKeys = { f: fKeys, q: qKeys };
+            }
+        }
+
         if (!this.chipAnnotator || !this.overlayMode) return;
 
         if (this.overlayMode === 'bin') {

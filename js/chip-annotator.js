@@ -580,12 +580,21 @@ export class ChipAnnotator {
      * @returns {string[]} sorted item keys
      */
     getAvailableItemKeys(field) {
+        // 1) compact_array format: positionsData에 ftn_keys/qtn_keys 헤더가 있으면 사용
+        if (this.positionsData) {
+            const keyName = field === 'f' ? 'ftn_keys' : field === 'q' ? 'qtn_keys' : null;
+            const headerKeys = keyName ? this.positionsData[keyName] : null;
+            if (Array.isArray(headerKeys) && headerKeys.length > 0) {
+                return headerKeys.map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+            }
+        }
+        // 2) dict format: chip[field]가 Object(Array 아님)인 경우 키 추출
         const keySet = new Set();
         if (!this.chips) return [];
         for (const chip of this.chips) {
             if (!chip) continue;
             const dict = chip[field];
-            if (dict && typeof dict === 'object') {
+            if (dict && typeof dict === 'object' && !Array.isArray(dict)) {
                 for (const k of Object.keys(dict)) keySet.add(k);
             }
         }
