@@ -359,21 +359,44 @@ API 재호출이나 innerHTML 교체가 **없어야** 한다 (폴더 닫힘 금�
    (코드 확인: `api/main.py`의 `_extract_lt_tm` 내 `os.O_BINARY` 문자열 없음)
 2. API 경로 해석: 절대 경로 전달 시 `Path(path).resolve().relative_to(ROOT_DIR)` 사용 확인
 
-#### 3-9. 파일명 _LT_TM 기반 필터 (positions 파일 읽기 불필요)
-운영 파일명 형식: `{LOT}_{STEP}_{WAFER}_{stime}_{yield}_{sys}_{LT}_{TM}.png`
-파일명 끝 2개 세그먼트가 LT/TM이므로 positions 파일 없이 필터 가능.
+#### 3-9. LOT/TEST 필터 데이터 소스 (파일명 인덱스 → positions 폴백)
 
-1. **파일명에 _LT_TM 있는 경우** (운영):
-   - `_passesLtTmFilter`에서 `filterFileMetadata`에 없으면 파일명 `split('_')` → 끝 2개로 LT/TM 추출
-   - 예: `ABC123_00P_W01_20260122_022718_87.35_3.21_EE_Normal.png` → LT=`EE`, TM=`Normal`
-   - positions 파일 접근 없이 **첫 필터 30~44ms**
-2. **파일명에 _LT_TM 없는 경우** (레거시):
-   - `fetchFilterMetadata` API 호출 → positions 멀티스레드 읽기 폴백 (~176ms)
-   - 서버 메모리 캐시 후 재요청 ~32ms
-3. **API 서버 측**:
-   - `_FOLDER_FILES_CACHE`에서 파일명 파싱 우선 (`rsplit("_", 2)`)
-   - 캐시 miss 시 positions 멀티스레드 64 병렬 읽기 폴백
-   - `_FILTER_META_SERVER_CACHE`에 응답 바이트 캐시 (같은 폴더 재요청 즉시 반환)
+**핵심 원리**: LOT(LT)과 TEST(TM) 값은 **파일명 자체에 포함**되어 있다.
+파일명이 인덱스에 들어가므로, 인덱스 빌드 → 폴더 캐시 생성 시 **LT/TM도 자동으로 캐시**된다.
+별도의 positions 파일 읽기가 불필요하다. positions 파일이 없거나 파일명에 LT/TM이 없는
+레거시 데이터만 positions 폴백을 사용한다.
+
+**데이터 흐름**:
+```
+서버 시작 → 파일 인덱스 빌드 (100만개 파일명 스캔, 3.8초)
+          → 폴더별 캐시 자동 생성 (_FOLDER_FILES_CACHE)
+          → 파일명에 LT/TM이 이미 포함되어 있음
+
+필터 요청 시:
+  1차: 폴더 캐시에서 파일명 rsplit("_", 2) → LT/TM 즉시 추출 (3ms)
+  2차: 파일명에서 못 찾으면 positions 파일 멀티스레드 읽기 폴백 (~176ms)
+  서버 캐시: 같은 폴더 재요청 시 바이트 캐시 즉시 반환 (~32ms)
+```
+
+**운영 파일명 형식**: `{LOT}_{STEP}_{WAFER}_{stime}_{yield}_{sys}_{LT}_{TM}.png`
+예: `ABC123_00P_W01_20260122_022718_87.35_3.21_EE_Normal.png` → LT=`EE`, TM=`Normal`
+
+**JS 클라이언트 측 (`_passesLtTmFilter`)**:
+1. `filterFileMetadata[stem]` 조회 (API에서 받은 메타)
+2. 없으면 파일명 `split('_')` → 끝에서 1번째=TM, 2번째=LT 추출
+3. 둘 다 없으면 `return true` (필터 미적용 통과)
+
+**API 서버 측 (`/api/filter-metadata`)**:
+1. `_FOLDER_FILES_CACHE`에서 파일 목록 가져옴
+2. 각 파일명 `rsplit("_", 2)` → LT/TM 추출, JSON 바이트 직접 빌드
+3. 캐시 miss → positions 폴더의 JSON 파일들을 ThreadPoolExecutor(64)로 병렬 head-read 512B
+4. `_FILTER_META_SERVER_CACHE`에 응답 바이트 저장 (재요청 즉시 반환)
+
+**검증 항목**:
+1. 파일명에 _LT_TM 있는 폴더에서 필터 첫 적용: **< 50ms** (positions 안 읽음)
+2. 파일명에 _LT_TM 없는 폴더에서 필터 첫 적용: **< 200ms** (positions 폴백)
+3. 같은 폴더 재요청: **< 35ms** (서버 캐시)
+4. 필터 해제 후 재적용 시 필터 미선택과 동일 속도
 
 #### 3-10. 폴더 선택 + 그리드 성능 (palette_3k, 3000파일)
 1. **필터 없이 selectAllFolderFiles + showGrid**: 합계 **< 100ms**
@@ -745,33 +768,112 @@ BIN, FBT, QVL Composite는 모두 Gradient 범례를 사용한다. 각 유형별
 
 **목적**: Measure 패널에서 FBT/QVL/BIN 오버레이 적용/해제
 
-**변경사항 (2026-03-17)**:
-- `/api/chip-positions` 응답에서 칩별 f/q 값 제거, `ftn_keys`/`qtn_keys`를 상단에 제공
-- JS에서 `Object.keys(chip.f)` 대신 `data.ftn_keys`로 키 목록 추출
-- positions 파일이 compact_array 포맷(f/q가 배열)일 수 있음 — 서버가 양쪽 모두 지원
-- `rect.quad` 필드도 응답에서 제거됨
+**positions 파일 compact_array 포맷 (2026-03-17 적용)**:
+- `/api/chip-positions` 응답: 칩별 f/q 값 제거, `ftn_keys`/`qtn_keys`를 상단에 제공
+- JS: `data.ftn_keys`/`data.qtn_keys`로 키 목록 추출 (chip.f 순회 제거)
+- 서버: positions 파일의 f/q가 dict든 list든 양쪽 모두 지원
+- `rect.quad` 필드 응답에서 제거
+
+**테스트 데이터 기준**:
+- palette_3k: ftn_keys 600개, qtn_keys 20개, chips 384개/파일, 3000파일
+- palette_5mb: ftn_keys 600개, qtn_keys 20개, chips 812개/파일, 6파일
+- ftn_keys 예시: `["2824","1409","5506","5012","4657","3286",...]` (600개)
+- qtn_keys 예시: `["5445","5180","5751","5534","5988",...]` (20개)
+- f 값 범위: 25~9976 (정수 문자열), q 값 범위: 0~100
 
 **평가 항목**:
 
 #### 11-0. `/api/chip-positions` 응답 구조 검증
 1. `fetch('/api/chip-positions?path=palette_3k/wafer_p3k_0001_EE_Engineer.png')` 호출
-2. 응답에 `ftn_keys` 배열 존재 확인 (예: `["2342", "2456", "3834", "9834"]`)
-3. 응답에 `qtn_keys` 배열 존재 확인 (예: `["5501", "5502"]`)
-4. 칩 객체에 `f`, `q` 키 **없음** 확인 (`chips[0].f === undefined`)
-5. 칩 객체에 `rect.quad` **없음** 확인
-6. 칩 객체에 `b`, `g`, `rect.x0`, `rect.y0`, `rect.x1`, `rect.y1`, `x_abs`, `y_abs` 존재 확인
+2. 응답에 `ftn_keys` 배열 존재, **길이 600** 확인
+3. 응답에 `qtn_keys` 배열 존재, **길이 20** 확인
+4. `ftn_keys` 첫 번째 키가 문자열인지 확인 (예: `"2824"`)
+5. 칩 객체에 `f`, `q` 키 **없음** 확인 (`chips[0].f === undefined`)
+6. 칩 객체에 `rect.quad` **없음** 확인
+7. 칩 객체에 `b`, `g`, `rect.x0/y0/x1/y1`, `x_abs`, `y_abs`, `x_cal`, `y_cal` 존재 확인
+8. chips 배열 길이 **384** 확인
+9. 응답 크기 측정 (경량화 전 ~2MB → 경량화 후 수십KB 기대)
 
-#### 11-1. Measure 패널 열기 & FBT/QVL 키 표시
-1. `#failbit-btn-top` 클릭 → `#failbit-panel-top` display !== 'none'
-2. 패널 내용에 "FBT", "QVL" 섹션 존재, 항목 (FBT2342, QVL5501 등) 표시
-3. BIN 섹션 존재 확인
+#### 11-1. Measure 패널 열기 & FBT/QVL/BIN 키 표시
+1. palette_3k 그리드 로드 (`loadImagesInFolderAndShowGrid`) → 전체선택
+2. `#failbit-btn-top` 클릭 → `#failbit-panel-top` display !== 'none'
+3. 패널에 **"FBT" 섹션 헤더** 존재, FBT 항목 **600개** 표시 (ftn_keys 기반)
+4. 패널에 **"QVL" 섹션 헤더** 존재, QVL 항목 **20개** 표시 (qtn_keys 기반)
+5. **"BIN" 섹션** 존재 확인
+6. FBT 항목 중 `FBT2824` (첫 번째 ftn_key) 표시 확인
+7. QVL 항목 중 `QVL5445` (첫 번째 qtn_key) 표시 확인
 
-#### 11-2. 오버레이 적용/해제
-4. FBT2342 클릭 → 그리드 이미지에 오버레이 적용 (이미지 src에 measure 관련 파라미터 추가)
-5. 초기화 버튼 클릭 → 오버레이 해제, 원본 이미지 복원
-6. `#failbit-btn-top` 다시 클릭 → 패널 닫힘
+#### 11-2. FBT Ratio Overlay 적용 & 시각 검증
+1. FBT 항목 아무거나 클릭 (예: FBT2824 또는 목록 첫 번째) → 그리드에 ratio overlay 적용
+2. `viewer.overlayMode` === `"f"` 확인
+3. 이미지 src에 `measure_overlay=f:2824` 또는 `field=f` 파라미터 포함 확인
+4. **Gradient 범례** 전환 확인: Grade(G0~G7) → Gradient(파란→초록→빨강)
+5. Gradient bar 내 **퍼센트 구간 텍스트** 존재 확인 ("0~10%", "10~20%", ..., "90~100%" 등)
+6. Gradient bar 내 **칩 수 텍스트** 존재 확인 (각 구간별 칩 개수)
+7. 그리드 썸네일 이미지가 원본과 다르게 gradient 색상으로 렌더링 확인 (스크린샷)
+8. 그리드 이미지 더블클릭 → 단일 이미지 뷰 진입
+9. 단일 뷰에서 ratio overlay heatmap 렌더링 확인 (칩별 색상 gradient)
+10. 단일 뷰에서도 Gradient 범례 + 퍼센트/칩수 표시 확인
+11. 뒤로가기 → 그리드 복귀
 
-**pass 기준**: API 구조 검증 + 열기→항목확인→오버레이적용→초기화→닫기
+#### 11-3. QVL Ratio Overlay 적용 & 시각 검증
+1. 초기화 버튼 클릭 → overlay 해제
+2. QVL 항목 아무거나 클릭 (예: QVL5445 또는 QVL5180)
+3. `viewer.overlayMode` === `"q"` 확인
+4. 이미지 src에 `measure_overlay=q:5445` 파라미터 포함 확인
+5. Gradient 범례 + 퍼센트/칩수 텍스트 확인 (11-2와 동일 검증)
+6. 단일 이미지 더블클릭 → ratio overlay heatmap 확인 → 뒤로가기
+
+#### 11-4. BIN Overlay 적용 & 시각 검증
+1. 초기화 → BIN 항목 중 하나 (285 등) 클릭
+2. `viewer.overlayMode` === `"bin"` 확인
+3. 이미지 src에 `bin_overlay=1` 파라미터 포함 확인
+4. 범례가 BIN 모드로 표시 확인 (Grade + BIN 항목)
+
+#### 11-5. 초기화 & 복원
+1. 초기화 버튼 클릭 → `viewer.overlayMode` === `null` 또는 `undefined`
+2. Grade 범례(G0~G7)로 복원 확인
+3. 그리드 이미지 src에 `measure_overlay`/`bin_overlay` 파라미터 **없음** 확인
+4. Gradient 범례 DOM 요소 숨겨짐 또는 제거 확인
+5. `#failbit-btn-top` 다시 클릭 → 패널 닫힘
+
+#### 11-6. Measure Composite 생성 (서버 compact_array f/q 처리 검증)
+서버가 compact_array 포맷(f가 list, ftn_keys로 인덱스 매핑)의 positions 파일을 읽어 Measure Composite 이미지를 정상 생성하는지 검증.
+
+1. palette_3k 그리드 → 이미지 10개 이상 선택
+2. Composite 버튼(`#measure-composite-btn-top`) 클릭 → MC 패널 열기
+3. MC 패널에서 FBT 항목(아무거나) + QVL 항목(아무거나) + BIN285 체크
+4. "생성" 버튼 클릭 → 생성 시작
+5. 상태 폴링으로 완료 대기 (최대 60초)
+6. 결과 확인: composite 그리드에 이미지 표시
+   - Grade 이미지 8개 (Grade_0 ~ Grade_7)
+   - Square 이미지 2개 (square_average, square_weighted_average)
+   - FBT_XXXX 이미지 1개 (선택한 FBT 키)
+   - QVL_XXXX 이미지 1개 (선택한 QVL 키)
+   - BIN_285_count 이미지 1개
+7. FBT Composite 결과 이미지 더블클릭 → 단일 뷰 진입
+8. **Gradient 범례** 표시 확인 (Measure Composite 결과는 gradient)
+9. Gradient bar 내 **퍼센트/칩수 텍스트** 확인
+10. 뒤로가기 → BIN Composite 결과 이미지 더블클릭
+11. **Gradient 범례** 표시 확인 (BIN count도 gradient)
+12. 뒤로가기 → QVL Composite 결과 이미지 더블클릭
+13. **Gradient 범례** 표시 확인
+
+#### 11-7. palette_5mb 대용량 positions 처리 검증
+1. palette_5mb 그리드 로드 → `/api/chip-positions` 호출
+2. 응답에 `ftn_keys` 600개, `qtn_keys` 20개, chips **812개** 확인
+3. Measure 패널에서 FBT/QVL 키 목록 정상 표시 확인
+4. FBT overlay 적용 → gradient 범례 표시 확인
+
+**pass 기준**:
+- 11-0: API 응답에서 ftn_keys 600개, qtn_keys 20개, 칩에 f/q/quad 없음
+- 11-1: Measure 패널에 FBT 600개, QVL 20개, BIN 표시
+- 11-2: FBT overlay → gradient 범례 + 퍼센트/칩수 텍스트 + 단일뷰 heatmap
+- 11-3: QVL overlay → 동일 검증
+- 11-4: BIN overlay → BIN 범례
+- 11-5: 초기화 → Grade 범례 복원, overlay 파라미터 제거
+- 11-6: Measure Composite 생성 → FBT/QVL/BIN 결과 이미지 + gradient 범례 + 텍스트
+- 11-7: palette_5mb 대용량 정상 처리
 
 ---
 
