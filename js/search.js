@@ -12,11 +12,13 @@
 export function matchesSearchQuery(fileName, query) {
     if (!query || !query.trim()) return true;
 
-    // 🔥 stime(날짜_시간) 부분 제거하여 검색 — AND 시 timestamp 오매칭 방지
-    // 파일명: {LOT}_{STEP}_{WAFER}_{YYYYMMDD}_{HHMMSS}_{yield}_{sys}_{LT}_{TM}.ext
-    // 날짜(8자리숫자)_시간(6자리숫자) 패턴 제거
-    const normalizedFileName = fileName.toLowerCase().replace(/\d{8}_\d{6}_?/g, '');
     const normalizedQuery = query.toLowerCase().trim();
+    // 🔥 and/or/not/() 연산자가 있으면 timestamp 제거 (오매칭 방지)
+    // 띄어쓰기 없는 단순 문자열은 timestamp 포함 전체 파일명에서 검색
+    const hasOperator = /\b(and|or|not)\b|\(|\)/.test(normalizedQuery);
+    const normalizedFileName = hasOperator
+        ? fileName.toLowerCase().replace(/\d{8}_\d{6}_?/g, '')
+        : fileName.toLowerCase();
 
     try {
         return evaluateExpression(normalizedFileName, normalizedQuery);
