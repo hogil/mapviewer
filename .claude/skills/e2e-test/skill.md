@@ -350,9 +350,62 @@ API 재호출이나 innerHTML 교체가 **없어야** 한다 (폴더 닫힘 금�
    (코드 확인: `api/main.py`의 `_extract_lt_tm` 내 `os.O_BINARY` 문자열 없음)
 2. API 경로 해석: 절대 경로 전달 시 `Path(path).resolve().relative_to(ROOT_DIR)` 사용 확인
 
+#### 3-9. 파일명 _LT_TM 기반 필터 (positions 파일 읽기 불필요)
+운영 파일명 형식: `{LOT}_{STEP}_{WAFER}_{stime}_{yield}_{sys}_{LT}_{TM}.png`
+파일명 끝 2개 세그먼트가 LT/TM이므로 positions 파일 없이 필터 가능.
+
+1. **파일명에 _LT_TM 있는 경우** (운영):
+   - `_passesLtTmFilter`에서 `filterFileMetadata`에 없으면 파일명 `split('_')` → 끝 2개로 LT/TM 추출
+   - 예: `ABC123_00P_W01_20260122_022718_87.35_3.21_EE_Normal.png` → LT=`EE`, TM=`Normal`
+   - positions 파일 접근 없이 **첫 필터 30~44ms**
+2. **파일명에 _LT_TM 없는 경우** (레거시):
+   - `fetchFilterMetadata` API 호출 → positions 멀티스레드 읽기 폴백 (~176ms)
+   - 서버 메모리 캐시 후 재요청 ~32ms
+3. **API 서버 측**:
+   - `_FOLDER_FILES_CACHE`에서 파일명 파싱 우선 (`rsplit("_", 2)`)
+   - 캐시 miss 시 positions 멀티스레드 64 병렬 읽기 폴백
+   - `_FILTER_META_SERVER_CACHE`에 응답 바이트 캐시 (같은 폴더 재요청 즉시 반환)
+
+#### 3-10. 폴더 선택 + 그리드 성능 (palette_3k, 3000파일)
+1. **필터 없이 selectAllFolderFiles + showGrid**: 합계 **< 100ms**
+   - selectAllFolderFiles: 폴더 캐시 O(1) 조회 (~7ms)
+   - showGrid: DOM 렌더링 (~68ms)
+2. **필터 있을 때 (파일명 _LT_TM)**:
+   - 첫 적용: **< 50ms** (파일명 파싱, API 불필요)
+   - 변경: **< 20ms** (DOM show/hide)
+3. **필터 해제 후**: 필터 없는 속도와 동일 (~44ms)
+4. **폴더 캐시**: 서버 인덱스 빌드 후 자동 생성, dict[폴더명] O(1) 조회
+
+#### 3-11. 이미지 선택 최대 3000개 제한
+1. 10만개 이미지가 있는 폴더 Ctrl+클릭 시
+2. `selectAllFolderFiles`에서 3000개 초과 시 잘라냄
+3. 토스트 "최대 3000개까지 선택 가능합니다 (N개 중 3000개 선택됨)" 표시
+4. 그리드에 3000개만 렌더링 (브라우저 메모리 보호)
+
+#### 3-12. AND 검색에서 timestamp 제외
+파일명에 날짜_시간(`YYYYMMDD_HHMMSS`)이 포함되어 AND 검색 시 오매칭 발생 방지.
+
+1. `ABC123 and 03` 검색 시:
+   - 파일명에서 `\d{8}_\d{6}` 패턴 제거 후 매칭
+   - `ABC123_00P_03_20260122_022718_...` → `ABC123_00P_03_...`에서 매칭
+   - timestamp `20260122`나 `022718`의 `03`에 매칭되지 않음
+2. `ABC123 and 00P and 03` → LOT=ABC123, STEP=00P, WAFER=03 정확 매칭
+3. 단순 검색 (`ABC123_00P_03`)은 기존과 동일하게 전체 파일명 매칭
+
+#### 3-13. 검색창 화살표 키 커서 이동
+1. 검색 입력창에 텍스트 입력
+2. 좌/우 화살표 키로 커서 이동 가능 확인
+3. 화살표가 그리드 네비게이션 단축키로 가로채이지 않음
+
+#### 3-14. N/n 키 네비게이터 단축키 제거 확인
+1. 단일 이미지 모드에서 `n` 또는 `N` 키 입력
+2. 네비게이터 토글이 발생하지 않음
+3. 키 입력이 무시되거나 다른 동작 없음
+
 **pass 기준**: 필터 시 파일만 숨김(폴더 유지, DOM 교체 없음), 대소문자 무시 매칭,
 열린 폴더 보존, 해제 시 전체 복원, DOM show/hide 50ms 이내, 연속 클릭 마지막만 실행,
-스크롤 보존, Ubuntu 호환
+스크롤 보존, Ubuntu 호환, 파일명 _LT_TM 추출 50ms 이내, 폴더선택+그리드 100ms 이내,
+선택 3000개 제한, AND 검색 timestamp 제외, 검색창 화살표 커서, N키 단축키 없음
 
 ---
 
