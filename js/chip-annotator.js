@@ -9,6 +9,10 @@
  * - Chip에 class/label 할당
  */
 
+// positions 클라이언트 캐시 (화살표 이동 시 재요청 방지)
+const _positionsCache = new Map(); // path → positionsData
+const _POSITIONS_CACHE_MAX = 50;
+
 export class ChipAnnotator {
     constructor(canvas, viewer) {
         this.canvas = canvas;
@@ -151,20 +155,32 @@ export class ChipAnnotator {
             this.gd = null;
             this.yield = null;
             this.sys = null;
-            const response = await fetch(`/api/chip-positions?path=${encodeURIComponent(imagePath)}&include_fq=1`);
-
-            if (!response.ok) {
-                console.log('No positions found for:', imagePath);
-                this.positionsData = null;
-                this.chips = [];
-                this.chipIndexMap.clear();
-                this._notifyLegendUpdate([]);
-                return false;
+            // 캐시 히트 확인
+            const cacheKey = imagePath;
+            if (_positionsCache.has(cacheKey)) {
+                this.positionsData = _positionsCache.get(cacheKey);
+            } else {
+                const response = await fetch(`/api/chip-positions?path=${encodeURIComponent(imagePath)}&include_fq=1`);
+                if (!response.ok) {
+                    console.log('No positions found for:', imagePath);
+                    this.positionsData = null;
+                    this.chips = [];
+                    this.chipIndexMap.clear();
+                    this._spatialGrid = null;
+                    this._notifyLegendUpdate([]);
+                    return false;
+                }
+                this.positionsData = await response.json();
+                // LRU 캐시: 최대 50개
+                if (_positionsCache.size >= _POSITIONS_CACHE_MAX) {
+                    const oldest = _positionsCache.keys().next().value;
+                    _positionsCache.delete(oldest);
+                }
+                _positionsCache.set(cacheKey, this.positionsData);
             }
-
-            this.positionsData = await response.json();
             this.chips = this.positionsData.chips || [];
             this._buildChipIndexMap();
+            this._buildSpatialGrid();
 
             this.partId = this._extractMetadataValue(['partid', 'part_id', 'partId', 'PartID']);
             this.device = this._extractMetadataValue(['device', 'devcie', 'Device']);
@@ -684,36 +700,75 @@ export class ChipAnnotator {
     }
 
     /**
-     * Find chip at canvas pixel coordinates
+     * 공간 인덱스 빌드 (loadPositions 후 호출)
+     */
+    _buildSpatialGrid() {
+        this._spatialGrid = new Map();
+        if (!this.chips.length) return;
+        // 칩 크기 기반 셀 크기 결정
+        const first = this.chips[0].rect;
+        this._cellW = (first.x1 - first.x0) || 96;
+        this._cellH = (first.y1 - first.y0) || 96;
+        for (let i = 0; i < this.chips.length; i++) {
+            const r = this.chips[i].rect;
+            const gx = Math.floor(r.x0 / this._cellW);
+            const gy = Math.floor(r.y0 / this._cellH);
+            const key = (gx << 16) | (gy & 0xffff);
+            let arr = this._spatialGrid.get(key);
+            if (!arr) { arr = []; this._spatialGrid.set(key, arr); }
+            arr.push(i);
+        }
+    }
+
+    /**
+     * Find chip at canvas pixel coordinates (공간 인덱스 사용)
      */
     findChipAtPixel(canvasX, canvasY) {
         if (!this.positionsData || !this.viewer.transform) return null;
 
-        // 🔥 Y_OFFSET 적용: chip이 그려진 위치와 동일하게 계산
-        const Y_OFFSET = -50; // _drawChipRect와 동일한 값
+        const Y_OFFSET = -50;
         const transform = this.viewer.transform;
-
-        // Convert canvas coordinates to image coordinates
-        // chip 위치: rect.y0 * scale + dy + Y_OFFSET
-        // 역변환: imgY = (canvasY - dy - Y_OFFSET) / scale
         const imgX = (canvasX - transform.dx) / transform.scale;
         const imgY = (canvasY - transform.dy - Y_OFFSET) / transform.scale;
 
-        // Find chip containing this point
+        // 공간 인덱스가 있으면 O(1) 탐색
+        if (this._spatialGrid && this._cellW) {
+            const gx = Math.floor(imgX / this._cellW);
+            const gy = Math.floor(imgY / this._cellH);
+            // 현재 셀 + 인접 셀 검색 (경계 칩 대응)
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                    const key = ((gx + dx) << 16) | ((gy + dy) & 0xffff);
+                    const indices = this._spatialGrid.get(key);
+                    if (!indices) continue;
+                    for (const i of indices) {
+                        const chip = this.chips[i];
+                        const rect = chip.rect;
+                        if (imgX >= rect.x0 && imgX <= rect.x1 &&
+                            imgY >= rect.y0 && imgY <= rect.y1) {
+                            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) {
+                                return null;
+                            }
+                            return { ...chip, index: i };
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+
+        // fallback: 리니어 스캔
         for (let i = 0; i < this.chips.length; i++) {
             const chip = this.chips[i];
             const rect = chip.rect;
-
             if (imgX >= rect.x0 && imgX <= rect.x1 &&
                 imgY >= rect.y0 && imgY <= rect.y1) {
-                // 🔥 Bottom Filter가 활성화된 경우, 가려진 칩은 선택 불가
                 if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) {
                     return null;
                 }
                 return { ...chip, index: i };
             }
         }
-
         return null;
     }
 

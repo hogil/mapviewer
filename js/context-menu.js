@@ -475,47 +475,47 @@ export class ContextMenuManager {
             const STOP_KEY = 'Stime';
             const SKIP_KEYS = new Set(['chips', 'coord', 'image_path']);
 
+            // 병렬 fetch (순차 → 동시 요청)
+            const results = await Promise.allSettled(
+                selectedFiles.map(filePath =>
+                    fetch(`/api/chip-positions?path=${encodeURIComponent(filePath)}`)
+                        .then(r => r.ok ? r.json() : null)
+                )
+            );
+
             const rows = [];
             let headerKeys = null;
 
-            for (const filePath of selectedFiles) {
-                try {
-                    const resp = await fetch(`/api/chip-positions?path=${encodeURIComponent(filePath)}`);
-                    if (!resp.ok) continue;
-                    const pos = await resp.json();
+            for (const result of results) {
+                const pos = result.status === 'fulfilled' ? result.value : null;
+                if (!pos) continue;
 
-                    const row = {};
-                    // top-level 필드: Stime 전까지 (primitive만)
-                    for (const key of Object.keys(pos)) {
-                        if (key === STOP_KEY) break;
-                        if (SKIP_KEYS.has(key)) continue;
-                        const val = pos[key];
-                        if (val === null || val === undefined || typeof val === 'object') continue;
-                        // Wafer 필드: W 제거
-                        if (/^wafer$/i.test(key)) {
-                            row[key] = String(val).replace(/^W/i, '');
-                        } else {
-                            row[key] = val;
-                        }
+                const row = {};
+                for (const key of Object.keys(pos)) {
+                    if (key === STOP_KEY) break;
+                    if (SKIP_KEYS.has(key)) continue;
+                    const val = pos[key];
+                    if (val === null || val === undefined || typeof val === 'object') continue;
+                    if (/^wafer$/i.test(key)) {
+                        row[key] = String(val).replace(/^W/i, '');
+                    } else {
+                        row[key] = val;
                     }
-
-                    // coord 하위 필드: rot_code, min, ax, abs
-                    const coord = pos.coord;
-                    if (coord && typeof coord === 'object') {
-                        for (const cf of COORD_FIELDS) {
-                            if (coord[cf] !== undefined && coord[cf] !== null) {
-                                row[cf] = coord[cf];
-                            }
-                        }
-                    }
-
-                    if (!headerKeys) {
-                        headerKeys = Object.keys(row);
-                    }
-                    rows.push(row);
-                } catch (e) {
-                    console.warn('Position 로드 실패:', filePath, e);
                 }
+
+                const coord = pos.coord;
+                if (coord && typeof coord === 'object') {
+                    for (const cf of COORD_FIELDS) {
+                        if (coord[cf] !== undefined && coord[cf] !== null) {
+                            row[cf] = coord[cf];
+                        }
+                    }
+                }
+
+                if (!headerKeys) {
+                    headerKeys = Object.keys(row);
+                }
+                rows.push(row);
             }
 
             if (rows.length === 0 || !headerKeys) {

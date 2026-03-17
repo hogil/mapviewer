@@ -13856,6 +13856,26 @@ class WaferMapViewer {
             );
         }
 
+        // Measure overlay 미니맵 반영 (f/q 모드일 때 칩에 gradient 색상 덧그리기)
+        if (this.chipAnnotator?.ratioOverlayColors?.size > 0 &&
+            (this.overlayMode === 'f' || this.overlayMode === 'q')) {
+            const chips = this.chipAnnotator.chips;
+            const colors = this.chipAnnotator.ratioOverlayColors;
+            this.minimapCtx.globalAlpha = 0.7;
+            colors.forEach((color, idx) => {
+                const chip = chips[idx];
+                if (!chip?.rect) return;
+                const r = chip.rect;
+                const x = padX + r.x0 * scale;
+                const y = padY + r.y0 * scale;
+                const w = (r.x1 - r.x0) * scale;
+                const h = (r.y1 - r.y0) * scale;
+                this.minimapCtx.fillStyle = color;
+                this.minimapCtx.fillRect(x, y, w, h);
+            });
+            this.minimapCtx.globalAlpha = 1.0;
+        }
+
         // 메인 뷰의 영역(이미지 좌표계) → 미니맵 좌표계로 변환
 
         const { width: viewW, height: viewH } = this.dom.viewerContainer.getBoundingClientRect();

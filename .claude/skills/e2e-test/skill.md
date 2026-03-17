@@ -40,6 +40,72 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 - 테스트 데이터 폴더: `palette_3k` (3000장), `palette_5mb` (대용량), `wafer_folder`, `wafer_edge_ring`
 - 서버 접속 후 파일 탐색기에 위 폴더가 표시되는지 확인 (없으면 경고 후 계속 진행)
 
+### Positions 파일 양식 (compact_array 포맷)
+
+positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치한다.
+`/api/chip-positions` API가 이 파일을 읽어 브라우저에 전달한다.
+
+```json
+{
+  "bucket_b_key": "20260122/wafer_palette_5mb_PE_Engineer.gz",
+  "root": "LOTBIG05",        // LOT ID
+  "step": "S01",
+  "wafer": "W06",
+  "stime": "20260106_120000", // 검사 시각
+  "partid": "WAFER_5MB-0005",
+  "tester": "TST-EQ01",
+  "device": "AKSEIFKXK-AB3",
+  "pgm": "PGM-MAIN",
+  "netd": 384,                // Net Die
+  "gd": 330,                  // Good Die
+  "yield": "85.94",
+  "sys": "3.21",
+  "tm": "Engineer",           // Test Mode (Normal/Engineer/Test)
+  "lt": "PT",                 // Lot Type (EE/PE/PT)
+  "coord": {
+    "rot_code": 5,
+    "x_min_abs": 0, "y_min_abs": 0,
+    "x_max_abs": 23, "y_max_abs": 23,
+    "tiles_w_rot": 24, "tiles_h_rot": 24,
+    "grid_edges": {
+      "xs": [0, 96, 192, ...],   // X 그리드 경계 좌표 (pixels)
+      "ys": [0, 96, 192, ...]    // Y 그리드 경계 좌표 (pixels)
+    },
+    "canvas": { "width": 2304, "height": 2304 },
+    "scale": { "sx": 1.0, "sy": 1.0 },
+    "border": 1, "defect_border": 2,
+    "center_rule": { "even_x_zero": "left", "even_y_zero": "down" }
+  },
+  "ftn_keys": ["2824", "1409", "5506", ...],  // FBT 키 목록 (600개, 상단 1회)
+  "qtn_keys": ["5997", "5055", "5566", ...],  // QVL 키 목록 (20개, 상단 1회)
+  "chips": [
+    {
+      "x_abs": 9, "y_abs": 1,      // 절대 좌표
+      "x_cal": -2, "y_cal": -11,   // 캘리브레이션 좌표 (중심 기준)
+      "b": "9",                     // BIN 값 (문자열)
+      "f": ["7402", "1519", ...],   // FBT 값 배열 (ftn_keys 순서 대응, 600개)
+      "q": ["9", "24", "25", ...],  // QVL 값 배열 (qtn_keys 순서 대응, 20개)
+      "rect": { "x0": 864, "y0": 96, "x1": 960, "y1": 192 }  // 픽셀 바운딩 박스
+    },
+    ...
+  ]
+}
+```
+
+**핵심 규칙**:
+- `chip.f`는 배열(list), `ftn_keys[i]`에 대응하는 값이 `chip.f[i]`
+- `chip.q`는 배열(list), `qtn_keys[i]`에 대응하는 값이 `chip.q[i]`
+- 값은 모두 문자열 (숫자로 변환 시 `float(raw)` 또는 `Number(raw)`)
+- `rect.quad`는 없음 (제거됨)
+- `/api/chip-positions` 응답: 기본적으로 칩별 f/q 제거 (경량화), `include_fq=1` 시 포함
+- `chip-annotator.js`의 `loadPositions()`에서 `include_fq=1`로 호출 (단일 이미지 뷰)
+
+**데이터 규모 (테스트 환경)**:
+| 폴더 | 파일 수 | chips/파일 | ftn_keys | qtn_keys | 파일 크기 |
+|------|---------|-----------|----------|----------|----------|
+| palette_3k | 3000 | 384 | 600 | 20 | ~1.9MB |
+| palette_5mb | 6 | 812 | 600 | 20 | ~4MB |
+
 > **참고**: 이후 모든 Phase에서 `https://localhost/` 대신 `BASE_URL`을 사용합니다.
 
 ## 테스트 실행 방법
