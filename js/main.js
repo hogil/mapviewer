@@ -697,10 +697,11 @@ class WaferMapViewer {
             return true;
         }
 
-        // Ctrl+C, Ctrl+V, Ctrl+A 허용
+        // Ctrl+A/C/V/X → 입력 필드에서는 브라우저 기본 동작 사용 (단축키 차단)
         if (event.ctrlKey || event.metaKey) {
-            if (key === 'c' || key === 'C' || key === 'v' || key === 'V' || key === 'a' || key === 'A') {
-                return true;
+            if (key === 'c' || key === 'C' || key === 'v' || key === 'V' ||
+                key === 'a' || key === 'A' || key === 'x' || key === 'X') {
+                return false;
             }
         }
 
