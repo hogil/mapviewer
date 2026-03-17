@@ -7243,7 +7243,14 @@ class WaferMapViewer {
                 return true;
             });
 
-            this.selectedImages = Array.from(new Set([...this.selectedImages, ...imageFiles]));
+            const MAX_SELECTION = 3000;
+            const merged = Array.from(new Set([...this.selectedImages, ...imageFiles]));
+            if (merged.length > MAX_SELECTION) {
+                this.selectedImages = merged.slice(0, MAX_SELECTION);
+                this.showToast?.(`최대 ${MAX_SELECTION}개까지 선택 가능합니다 (${merged.length}개 중 ${MAX_SELECTION}개 선택됨)`, 3000);
+            } else {
+                this.selectedImages = merged;
+            }
 
             this.debugLog(`폴더 ${folderPath}에서 ${imageFiles.length}개 이미지 선택됨`);
             
