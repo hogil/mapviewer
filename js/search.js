@@ -11,15 +11,17 @@
  */
 export function matchesSearchQuery(fileName, query) {
     if (!query || !query.trim()) return true;
-    
-    const normalizedFileName = fileName.toLowerCase();
+
+    // 🔥 stime(날짜_시간) 부분 제거하여 검색 — AND 시 timestamp 오매칭 방지
+    // 파일명: {LOT}_{STEP}_{WAFER}_{YYYYMMDD}_{HHMMSS}_{yield}_{sys}_{LT}_{TM}.ext
+    // 날짜(8자리숫자)_시간(6자리숫자) 패턴 제거
+    const normalizedFileName = fileName.toLowerCase().replace(/\d{8}_\d{6}_?/g, '');
     const normalizedQuery = query.toLowerCase().trim();
-    
+
     try {
         return evaluateExpression(normalizedFileName, normalizedQuery);
     } catch (error) {
         console.warn('검색 표현식 오류, 기본 검색으로 폴백:', error);
-        // 오류 시 기본 포함 검색으로 폴백
         return normalizedFileName.includes(normalizedQuery);
     }
 }

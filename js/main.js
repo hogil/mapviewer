@@ -687,9 +687,9 @@ class WaferMapViewer {
             return true;
         }
 
-        // Arrow keys 허용
+        // Arrow keys → 검색창에서는 커서 이동으로 사용 (단축키 차단)
         if (key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown') {
-            return true;
+            return false;
         }
 
         // Shift 허용 (단독 또는 조합)
@@ -20498,18 +20498,6 @@ class WaferMapViewer {
                     e.preventDefault();
                     e.stopPropagation();
                     this.navigateNext();
-                } else if (e.key === 'n' || e.key === 'N') {
-                    // 🔥 'n' 키로 네비게이터 UI 토글 (기능은 유지, UI만 숨김/표시)
-                    e.preventDefault();
-                    if (this.thumbnailNavigator) {
-                        if (this.thumbnailNavigator.isVisible) {
-                            this.thumbnailNavigator.hide();
-                            console.log('🔒 [NAV] Navigator UI 숨김 (기능은 유지)');
-                        } else {
-                            this.thumbnailNavigator.show();
-                            console.log('🔓 [NAV] Navigator UI 표시');
-                        }
-                    }
                 }
             });
 
