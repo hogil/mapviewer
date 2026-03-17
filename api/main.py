@@ -3691,15 +3691,26 @@ def _apply_ratio_overlay_memory(
         if not isinstance(chips, list) or not chips:
             return None
 
-        # 2. Extract ratio values
+        # 2. Extract ratio values (dict 및 compact_array 포맷 모두 지원)
+        # compact_array: ftn_keys/qtn_keys 인덱스로 접근
+        ftn_idx_map: dict = {}
+        key_name = "ftn_keys" if field == "f" else "qtn_keys" if field == "q" else None
+        if key_name:
+            for i, k in enumerate(positions_data.get(key_name, [])):
+                ftn_idx_map[str(k)] = i
+
         values = []  # (chip_index, numeric_value)
         for idx, chip in enumerate(chips):
             if not isinstance(chip, dict):
                 continue
             field_data = chip.get(field)
-            if not isinstance(field_data, dict):
+            if isinstance(field_data, dict):
+                raw = field_data.get(item_key)
+            elif isinstance(field_data, list) and ftn_idx_map:
+                ki = ftn_idx_map.get(str(item_key))
+                raw = field_data[ki] if ki is not None and ki < len(field_data) else None
+            else:
                 continue
-            raw = field_data.get(item_key)
             if raw is None:
                 continue
             try:
@@ -8447,10 +8458,42 @@ async def get_chip_positions(path: str):
         with open(positions_file, 'r', encoding='utf-8') as f:
             positions_data = json.load(f)
 
-        chip_count = len(positions_data.get('chips', []))
+        chips = positions_data.get('chips', [])
+        chip_count = len(chips)
         logger.info(f"✅ Loaded {chip_count} chip positions from {positions_file.name}")
 
-        return JSONResponse(content=positions_data)
+        # f/q 키 목록을 상단에 추출하고, 칩별 f/q 값은 제거 (브라우저에서 값 불필요)
+        ftn_keys_set: set = set()
+        qtn_keys_set: set = set()
+        for chip in chips:
+            f_data = chip.get("f")
+            if isinstance(f_data, dict):
+                ftn_keys_set.update(f_data.keys())
+            elif isinstance(f_data, list):
+                pass  # compact_array 포맷: 키는 이미 ftn_keys에 있음
+            q_data = chip.get("q")
+            if isinstance(q_data, dict):
+                qtn_keys_set.update(q_data.keys())
+            elif isinstance(q_data, list):
+                pass
+
+        # 응답용 경량 칩 데이터 (f/q 값 + quad 제거)
+        light_chips = []
+        for chip in chips:
+            light = {k: v for k, v in chip.items() if k not in ("f", "q")}
+            # quad 제거
+            if isinstance(light.get("rect"), dict):
+                light["rect"] = {k: v for k, v in light["rect"].items() if k != "quad"}
+            light_chips.append(light)
+
+        response_data = {k: v for k, v in positions_data.items() if k not in ("chips", "ftn_keys", "qtn_keys")}
+        response_data["ftn_keys"] = sorted(ftn_keys_set | set(positions_data.get("ftn_keys") or []),
+                                           key=lambda x: (int(x) if str(x).isdigit() else float('inf'), str(x)))
+        response_data["qtn_keys"] = sorted(qtn_keys_set | set(positions_data.get("qtn_keys") or []),
+                                           key=lambda x: (int(x) if str(x).isdigit() else float('inf'), str(x)))
+        response_data["chips"] = light_chips
+
+        return JSONResponse(content=response_data)
 
     except HTTPException:
         raise

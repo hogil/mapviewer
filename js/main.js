@@ -8688,10 +8688,8 @@ class WaferMapViewer {
             .then(data => {
                 if (!data) { list.innerHTML = '<div class="failbit-item" style="color:#888;">데이터 없음</div>'; return; }
                 const chips = data.chips || [];
-                const fKeySet = new Set(), qKeySet = new Set(), binSet = new Set();
+                const binSet = new Set();
                 for (const chip of chips) {
-                    if (chip.f && typeof chip.f === 'object') Object.keys(chip.f).forEach(k => fKeySet.add(k));
-                    if (chip.q && typeof chip.q === 'object') Object.keys(chip.q).forEach(k => qKeySet.add(k));
                     if (chip.b != null) {
                         const norm = this.chipAnnotator?._normalizeBottomValue?.(chip.b) || String(chip.b);
                         binSet.add(norm);
@@ -8699,8 +8697,8 @@ class WaferMapViewer {
                 }
                 const keys = {
                     bin: [...binSet].sort((a, b) => Number(a) - Number(b)),
-                    f: [...fKeySet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
-                    q: [...qKeySet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+                    f: (data.ftn_keys || []).map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+                    q: (data.qtn_keys || []).map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
                 };
                 this._cachedMcKeys = keys;
                 this._renderMcContextList(list, keys);
@@ -8738,16 +8736,8 @@ class WaferMapViewer {
             .then(data => {
                 if (!data) { list.innerHTML = '<div class="failbit-item" style="color:#888;">데이터 없음</div>'; return; }
                 const chips = data.chips || [];
-                const fKeySet = new Set();
-                const qKeySet = new Set();
                 const binSet = new Set();
                 for (const chip of chips) {
-                    if (chip.f && typeof chip.f === 'object') {
-                        Object.keys(chip.f).forEach(k => fKeySet.add(k));
-                    }
-                    if (chip.q && typeof chip.q === 'object') {
-                        Object.keys(chip.q).forEach(k => qKeySet.add(k));
-                    }
                     if (chip.b != null) {
                         const norm = this.chipAnnotator?._normalizeBottomValue?.(chip.b) || String(chip.b);
                         binSet.add(norm);
@@ -8755,8 +8745,8 @@ class WaferMapViewer {
                 }
                 const keys = {
                     bin: [...binSet].sort((a, b) => Number(a) - Number(b)),
-                    f: [...fKeySet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
-                    q: [...qKeySet].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+                    f: (data.ftn_keys || []).map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+                    q: (data.qtn_keys || []).map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
                 };
                 this._cachedMcKeys = keys;
                 if (panel.style.display !== 'none') {
@@ -23053,21 +23043,8 @@ class WaferMapViewer {
             const resp = await fetch(`/api/chip-positions?path=${encodeURIComponent(images[0])}`);
             if (!resp.ok) return;
             const data = await resp.json();
-            const chips = data.chips || [];
-
-            const fKeySet = new Set();
-            const qKeySet = new Set();
-            for (const chip of chips) {
-                if (chip.f && typeof chip.f === 'object') {
-                    for (const k of Object.keys(chip.f)) fKeySet.add(k);
-                }
-                if (chip.q && typeof chip.q === 'object') {
-                    for (const k of Object.keys(chip.q)) qKeySet.add(k);
-                }
-            }
-
-            const fKeys = Array.from(fKeySet).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-            const qKeys = Array.from(qKeySet).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+            const fKeys = (data.ftn_keys || []).map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+            const qKeys = (data.qtn_keys || []).map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 
             if (fKeys.length > 0 || qKeys.length > 0) {
                 this._cachedMeasureKeys = { f: fKeys, q: qKeys };
@@ -23758,19 +23735,8 @@ class WaferMapViewer {
             .then(resp => resp.ok ? resp.json() : null)
             .then(data => {
                 if (!data) return;
-                const chips = data.chips || [];
-                const fKeySet = new Set();
-                const qKeySet = new Set();
-                for (const chip of chips) {
-                    if (chip.f && typeof chip.f === 'object') {
-                        for (const k of Object.keys(chip.f)) fKeySet.add(k);
-                    }
-                    if (chip.q && typeof chip.q === 'object') {
-                        for (const k of Object.keys(chip.q)) qKeySet.add(k);
-                    }
-                }
-                const f = Array.from(fKeySet).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-                const q = Array.from(qKeySet).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+                const f = (data.ftn_keys || []).map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+                const q = (data.qtn_keys || []).map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
                 if (f.length > 0 || q.length > 0) {
                     this._cachedMeasureKeys = { f, q };
                 }

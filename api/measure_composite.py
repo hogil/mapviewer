@@ -77,6 +77,27 @@ def _normalize_bin(b) -> str:
     return s
 
 
+# ── compact_array 포맷 지원: ftn_keys/qtn_keys 인덱스 조회 ──
+
+_compact_key_index_cache: Dict[str, Dict[str, int]] = {}
+
+
+def _set_compact_keys(positions_data: dict):
+    """positions 로드 후 ftn_keys/qtn_keys 인덱스 캐시 설정."""
+    _compact_key_index_cache.clear()
+    for prefix, key_name in (("f", "ftn_keys"), ("q", "qtn_keys")):
+        keys = positions_data.get(key_name)
+        if keys:
+            _compact_key_index_cache[prefix] = {str(k): i for i, k in enumerate(keys)}
+
+
+def _ftn_key_index(mode: str, item_key: str) -> Optional[int]:
+    idx_map = _compact_key_index_cache.get(mode)
+    if idx_map is None:
+        return None
+    return idx_map.get(str(item_key))
+
+
 # ── 값 추출: BIN=1/0 전처리, FBT/QVL=수치 ──────────────────
 
 def _extract_value(
@@ -92,9 +113,14 @@ def _extract_value(
         return 1.0 if norm in bin_set else 0.0
 
     data = chip.get(mode)
-    if not isinstance(data, dict):
+    if isinstance(data, dict):
+        raw = data.get(item_key)
+    elif isinstance(data, list):
+        # compact_array 포맷: ftn_keys/qtn_keys 인덱스로 접근
+        idx = _ftn_key_index(mode, item_key)
+        raw = data[idx] if idx is not None and idx < len(data) else None
+    else:
         return None
-    raw = data.get(item_key)
     if raw is None:
         return None
     try:
@@ -141,6 +167,7 @@ def _collect_and_aggregate(
     for _rel, pos_data in positions_list:
         if not pos_data:
             continue
+        _set_compact_keys(pos_data)
         chips = pos_data.get("chips", [])
         if not isinstance(chips, list):
             continue

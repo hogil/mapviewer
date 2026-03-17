@@ -56,6 +56,15 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 
 **목적**: 앱이 정상 기동되고 핵심 UI 요소가 모두 렌더링되는지 확인
 
+**변경사항 (2026-03-17)**:
+- 필터 버튼 UI: LOT/TEST/STEP 선택 시 `.filter-active` 파란색, 드롭다운에 "N개 선택됨" 배지
+- Reset 버튼: `↺` → `Reset` 텍스트, 필터 활성 시 파란색
+- 헤더 버튼: "Wafer Map Explorer" / "Label Explorer" 텍스트로 변경
+- 텍스트: "색변경"→"색 변경", "권한"→"권한 변경"
+- Manual 링크: `http://go/failbitmapmanual/`
+- FALLBACK_LOGIN_ID: frontend 'guest'→'notsaml' (backend와 통일)
+- SAML /acs: `session_user` 쿠키 설정 추가
+
 **평가 항목**:
 1. `BASE_URL` 접속 → HTTP 200, 타이틀 "Wafer Map Viewer"
 2. 좌측 파일 탐색기(`#file-tree` 또는 `nav[aria-label]`)에 폴더 목록 렌더링 확인
@@ -736,15 +745,33 @@ BIN, FBT, QVL Composite는 모두 Gradient 범례를 사용한다. 각 유형별
 
 **목적**: Measure 패널에서 FBT/QVL/BIN 오버레이 적용/해제
 
+**변경사항 (2026-03-17)**:
+- `/api/chip-positions` 응답에서 칩별 f/q 값 제거, `ftn_keys`/`qtn_keys`를 상단에 제공
+- JS에서 `Object.keys(chip.f)` 대신 `data.ftn_keys`로 키 목록 추출
+- positions 파일이 compact_array 포맷(f/q가 배열)일 수 있음 — 서버가 양쪽 모두 지원
+- `rect.quad` 필드도 응답에서 제거됨
+
 **평가 항목**:
+
+#### 11-0. `/api/chip-positions` 응답 구조 검증
+1. `fetch('/api/chip-positions?path=palette_3k/wafer_p3k_0001_EE_Engineer.png')` 호출
+2. 응답에 `ftn_keys` 배열 존재 확인 (예: `["2342", "2456", "3834", "9834"]`)
+3. 응답에 `qtn_keys` 배열 존재 확인 (예: `["5501", "5502"]`)
+4. 칩 객체에 `f`, `q` 키 **없음** 확인 (`chips[0].f === undefined`)
+5. 칩 객체에 `rect.quad` **없음** 확인
+6. 칩 객체에 `b`, `g`, `rect.x0`, `rect.y0`, `rect.x1`, `rect.y1`, `x_abs`, `y_abs` 존재 확인
+
+#### 11-1. Measure 패널 열기 & FBT/QVL 키 표시
 1. `#failbit-btn-top` 클릭 → `#failbit-panel-top` display !== 'none'
 2. 패널 내용에 "FBT", "QVL" 섹션 존재, 항목 (FBT2342, QVL5501 등) 표시
 3. BIN 섹션 존재 확인
+
+#### 11-2. 오버레이 적용/해제
 4. FBT2342 클릭 → 그리드 이미지에 오버레이 적용 (이미지 src에 measure 관련 파라미터 추가)
 5. 초기화 버튼 클릭 → 오버레이 해제, 원본 이미지 복원
 6. `#failbit-btn-top` 다시 클릭 → 패널 닫힘
 
-**pass 기준**: 열기→항목확인→오버레이적용→초기화→닫기
+**pass 기준**: API 구조 검증 + 열기→항목확인→오버레이적용→초기화→닫기
 
 ---
 
