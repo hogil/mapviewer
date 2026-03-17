@@ -3767,6 +3767,7 @@ def _apply_ratio_overlay_memory(
                 allowed_ranges = None
 
         chip_colors = {}  # chip_index -> (r, g, b)
+        chip_raw_values = {}  # chip_index -> raw numeric value (for text rendering)
         masked_chips = []  # chip indices to blacken (outside selected ranges)
         for chip_idx, val in values:
             pct = max(0.0, min(100.0, _percentile_rank(val)))
@@ -3776,6 +3777,7 @@ def _apply_ratio_overlay_memory(
                     masked_chips.append(chip_idx)
                     continue
             chip_colors[chip_idx] = interpolate_color(pct)
+            chip_raw_values[chip_idx] = val
 
         # 6. Open image and convert to RGB, then to NumPy for fast blending
         import numpy as np
@@ -3843,6 +3845,70 @@ def _apply_ratio_overlay_memory(
             return None
 
         out = Image.fromarray(img_arr)
+
+        # 7c. Render text values on chips (K/M abbreviated)
+        if chip_colors and chip_raw_values:
+            try:
+                draw = ImageDraw.Draw(out)
+                # 칩 크기 샘플링 → 폰트 사이즈 결정
+                sample_heights = []
+                for ci in list(chip_colors.keys())[:20]:
+                    sc = _scaled_chip_rect(chips[ci], scale_x, scale_y, width, height)
+                    if sc:
+                        sample_heights.append(sc[3] - sc[1])
+                avg_h = (sum(sample_heights) / len(sample_heights)) if sample_heights else 0
+                font_size = max(6, min(18, int(avg_h * 0.40)))
+                try:
+                    from PIL import ImageFont
+                    font = ImageFont.truetype("arial.ttf", font_size)
+                except (OSError, IOError):
+                    try:
+                        font = ImageFont.truetype(
+                            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size
+                        )
+                    except (OSError, IOError):
+                        font = ImageFont.load_default()
+
+                def _fmt_compact(v):
+                    """K/M 축약 — 클라이언트 _formatCompact와 동일"""
+                    absv = abs(v)
+                    sign = '-' if v < 0 else ''
+                    if absv < 1000:
+                        return f"{v:g}"
+                    if absv < 10000:
+                        return f"{sign}{absv/1000:.1f}K"
+                    if absv < 1000000:
+                        return f"{sign}{round(absv/1000)}K"
+                    if absv < 10000000:
+                        return f"{sign}{absv/1000000:.1f}M"
+                    return f"{sign}{round(absv/1000000)}M"
+
+                for ci, color_rgb in chip_colors.items():
+                    sc = _scaled_chip_rect(chips[ci], scale_x, scale_y, width, height)
+                    if not sc:
+                        continue
+                    sx0, sy0, sx1, sy1 = sc
+                    cw = sx1 - sx0
+                    ch = sy1 - sy0
+                    if cw < 12 or ch < 10:
+                        continue  # 너무 작으면 텍스트 생략
+                    raw_val = chip_raw_values.get(ci)
+                    if raw_val is None:
+                        continue
+                    text = _fmt_compact(raw_val)
+                    # contrast text color
+                    lum = 0.299 * color_rgb[0] + 0.587 * color_rgb[1] + 0.114 * color_rgb[2]
+                    txt_color = (0, 0, 0) if lum > 128 else (255, 255, 255)
+                    # center text
+                    bbox = draw.textbbox((0, 0), text, font=font)
+                    tw = bbox[2] - bbox[0]
+                    th = bbox[3] - bbox[1]
+                    tx = sx0 + (cw - tw) // 2
+                    ty = sy0 + (ch - th) // 2
+                    draw.text((tx, ty), text, fill=txt_color, font=font)
+            except Exception as text_err:
+                logger.debug("⚠️ [RATIO OVERLAY] 텍스트 렌더링 실패: %s", text_err)
+
         output = io.BytesIO()
         out.save(output, format="PNG", optimize=False, compress_level=config.PNG_COMPRESSION_LEVEL)
         return bytearray(output.getvalue())

@@ -12,7 +12,7 @@
 // 🚀 Fetch 최적화 import
 import { optimizedFetch, fetchOptimizer } from './fetch-optimizer.js';
 import { ColorSchemeEditor } from './color-editor.js?v=9';
-import { ChipAnnotator } from './chip-annotator.js';
+import { ChipAnnotator } from './chip-annotator.js?v=2';
 import { ThumbnailNavigator } from './thumbnail-navigator.js?v=2';
 import { CompositeColorModal } from './composite-colors.js';
 import { MyLotModal } from './my-lot.js';
@@ -23070,6 +23070,7 @@ class WaferMapViewer {
 
             if (fKeys.length > 0 || qKeys.length > 0) {
                 this._cachedMeasureKeys = { f: fKeys, q: qKeys };
+                this._cachedMeasureKeysSource = images[0];
                 // 패널이 아직 열려있으면 리스트 갱신
                 if (panel.style.display !== 'none') {
                     this._buildFailbitList(panel);
@@ -23759,10 +23760,12 @@ class WaferMapViewer {
     _preCacheMeasureKeys() {
         const images = this.currentGridImages || this.selectedImages;
         if (!images || images.length === 0) return;
-        // 이미 캐시가 있으면 스킵
-        if (this._cachedMeasureKeys && (this._cachedMeasureKeys.f?.length > 0 || this._cachedMeasureKeys.q?.length > 0)) return;
+        // 캐시 소스 이미지가 현재 그리드 첫 번째 이미지와 다르면 갱신
+        const sourceImage = images[0];
+        if (this._cachedMeasureKeys && this._cachedMeasureKeysSource === sourceImage &&
+            (this._cachedMeasureKeys.f?.length > 0 || this._cachedMeasureKeys.q?.length > 0)) return;
 
-        fetch(`/api/chip-positions?path=${encodeURIComponent(images[0])}`)
+        fetch(`/api/chip-positions?path=${encodeURIComponent(sourceImage)}`)
             .then(resp => resp.ok ? resp.json() : null)
             .then(data => {
                 if (!data) return;
@@ -23770,6 +23773,7 @@ class WaferMapViewer {
                 const q = (data.qtn_keys || []).map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
                 if (f.length > 0 || q.length > 0) {
                     this._cachedMeasureKeys = { f, q };
+                    this._cachedMeasureKeysSource = sourceImage;
                 }
             })
             .catch(() => {});
@@ -24409,11 +24413,13 @@ class WaferMapViewer {
                 const h = hex.replace('#', '');
                 return { r: parseInt(h.substring(0, 2), 16), g: parseInt(h.substring(2, 4), 16), b: parseInt(h.substring(4, 6), 16) };
             };
-            // range_counts for measure composite
+            // range_counts for measure composite or single-image overlay
             let gridRc = { counts: new Array(10).fill(0), total: 0 };
             if (isMeasureComposite && this.compositeSession?.rangeCounts?.length === 10) {
                 const counts = this.compositeSession.rangeCounts;
                 gridRc = { counts, total: counts.reduce((a, b) => a + b, 0) };
+            } else if (this.chipAnnotator) {
+                gridRc = this.chipAnnotator.getGradientRangeCounts();
             }
             const _fmtCnt = (n) => {
                 if (n < 1000) return String(n);
@@ -24435,9 +24441,15 @@ class WaferMapViewer {
                 const isSelected = this.selectedGradientRanges.has(i);
                 const selBorder = isSelected ? 'outline:2px solid #1976d2;outline-offset:-2px;' : '';
                 const opacity = this.selectedGradientRanges.size > 0 && !isSelected ? 'opacity:0.35;' : '';
+                const cnt = gridRc.counts[i] || 0;
+                const pct = gridRc.total > 0 ? (cnt / gridRc.total * 100).toFixed(1) : '0.0';
+                const countText = gridRc.total > 0 ? `${pct}%(${_fmtCnt(cnt)})` : '';
+                const textColor = _contrastGrid(r, g, b);
                 return `
                     <div class="legend-item-grid" data-section="gradient" data-index="${i}" style="cursor: pointer;${opacity}">
-                        <div class="legend-color-bar-grid" style="background-color: ${color};${selBorder}"></div>
+                        <div class="legend-color-bar-grid" style="background-color: ${color};${selBorder}position:relative;overflow:hidden;">
+                            ${countText ? `<span style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:8px;color:${textColor};line-height:1;pointer-events:none;font-weight:600;">${countText}</span>` : ''}
+                        </div>
                         <span class="legend-label-grid" style="font-size:10px;">${label}%</span>
                     </div>
                 `;

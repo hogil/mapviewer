@@ -1461,8 +1461,19 @@ export class ChipAnnotator {
                     const rangeIdx = pct >= 100 ? 9 : Math.floor(pct / 10);
                     if (!this.gradientFilterSet.has(rangeIdx)) return;
                 }
-                const dict = chip[this.overlayMode];
-                const raw = dict && this.overlayItemKey ? dict[this.overlayItemKey] : null;
+                const data = chip[this.overlayMode];
+                let raw = null;
+                if (Array.isArray(data)) {
+                    // compact_array: ftn_keys/qtn_keys 인덱스로 접근
+                    const keyName = this.overlayMode === 'f' ? 'ftn_keys' : this.overlayMode === 'q' ? 'qtn_keys' : null;
+                    const keyIdx = (keyName && this.positionsData?.[keyName])
+                        ? this.positionsData[keyName].indexOf(String(this.overlayItemKey))
+                        : -1;
+                    raw = keyIdx >= 0 && keyIdx < data.length ? data[keyIdx] : null;
+                } else if (data && typeof data === 'object') {
+                    // dict: 키로 직접 접근
+                    raw = this.overlayItemKey ? data[this.overlayItemKey] : null;
+                }
                 const text = raw != null ? this._formatCompact(raw) : '';
                 this._drawChipRectWithText(chip, color, text);
             });
