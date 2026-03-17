@@ -5587,19 +5587,18 @@ class WaferMapViewer {
         const anchorPath = this._getVisibleAnchorPath();
         const savedScroll = explorer.scrollTop;
 
-        // 모든 파일 링크에 대해 show/hide
-        const allFiles = explorer.querySelectorAll('a[data-path]');
-        for (const a of allFiles) {
-            const li = a.closest('li');
-            if (!li) continue;
-            if (!hasAnyFilter) {
+        // 🔥 필터 없으면 숨겨진 것만 복원 (전체 순회 안 함)
+        if (!hasAnyFilter) {
+            for (const li of explorer.querySelectorAll('li[style*="display: none"], li[style*="display:none"]')) {
                 li.style.display = '';
-                continue;
             }
-            const name = a.dataset.path.split('/').pop();
-            const passLtTm = this._passesLtTmFilter(name);
-            const passStep = this._passesStepFilter(name);
-            li.style.display = (passLtTm && passStep) ? '' : 'none';
+        } else {
+            for (const a of explorer.querySelectorAll('a[data-path]')) {
+                const li = a.closest('li');
+                if (!li) continue;
+                const name = a.dataset.path.split('/').pop();
+                li.style.display = (this._passesLtTmFilter(name) && this._passesStepFilter(name)) ? '' : 'none';
+            }
         }
 
         // 앵커 복원
