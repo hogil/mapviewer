@@ -359,54 +359,70 @@ API 재호출이나 innerHTML 교체가 **없어야** 한다 (폴더 닫힘 금�
    (코드 확인: `api/main.py`의 `_extract_lt_tm` 내 `os.O_BINARY` 문자열 없음)
 2. API 경로 해석: 절대 경로 전달 시 `Path(path).resolve().relative_to(ROOT_DIR)` 사용 확인
 
-#### 3-9. LOT/TEST 필터 데이터 소스 (파일명 인덱스 → positions 폴백)
+#### 3-9. LOT/TEST 필터 데이터 소스 — 인덱스 → 폴더 캐시 → 파일명 추출
 
-**핵심 원리**: LOT(LT)과 TEST(TM) 값은 **파일명 자체에 포함**되어 있다.
-파일명이 인덱스에 들어가므로, 인덱스 빌드 → 폴더 캐시 생성 시 **LT/TM도 자동으로 캐시**된다.
-별도의 positions 파일 읽기가 불필요하다. positions 파일이 없거나 파일명에 LT/TM이 없는
-레거시 데이터만 positions 폴백을 사용한다.
+**핵심**: LT/TM 값은 **이미지 파일명 자체에 포함**되어 있다.
+서버 시작 시 파일 인덱스를 빌드하는데, 이때 **파일명이 인덱스에 들어간다**.
+인덱스 빌드 직후 폴더별 캐시(`_FOLDER_FILES_CACHE`)를 자동 생성한다.
+폴더 캐시에 이미 파일명이 있으므로 **파일명에서 LT/TM을 바로 추출**할 수 있다.
+**positions 파일을 읽을 필요가 없다** — 이것이 핵심 최적화.
 
-**데이터 흐름**:
+**서버 시작 흐름 (1회)**:
 ```
-서버 시작 → 파일 인덱스 빌드 (100만개 파일명 스캔, 3.8초)
-          → 폴더별 캐시 자동 생성 (_FOLDER_FILES_CACHE)
-          → 파일명에 LT/TM이 이미 포함되어 있음
+1. 파일 인덱스 빌드 (100만개 파일명 스캔, 3.8초)
+   → 파일명 예: "palette_3k/wafer_0001_EE_Normal.png"
+   → 파일명 안에 이미 LT=EE, TM=Normal이 들어있음
 
-필터 요청 시:
-  1차: 폴더 캐시에서 파일명 rsplit("_", 2) → LT/TM 즉시 추출 (3ms)
-  2차: 파일명에서 못 찾으면 positions 파일 멀티스레드 읽기 폴백 (~176ms)
-  서버 캐시: 같은 폴더 재요청 시 바이트 캐시 즉시 반환 (~32ms)
+2. 인덱스 완료 → 폴더별 캐시 자동 생성 (_FOLDER_FILES_CACHE)
+   → { "palette_3k": ["palette_3k/wafer_0001_EE_Normal.png", ...3000개] }
+   → 미리 정렬됨, dict[폴더명] O(1) 조회
+```
+
+**필터 요청 흐름 (`/api/filter-metadata`)**:
+```
+1차 (빠른 경로 — 3ms):
+  → _FOLDER_FILES_CACHE[폴더명]에서 파일명 목록 가져옴 (O(1))
+  → 각 파일명 rsplit("_", 2) → LT/TM 추출
+  → positions 파일 접근 없음!
+  → _FILTER_META_SERVER_CACHE에 응답 바이트 저장
+
+2차 (폴백 — 파일명에 LT/TM 없는 레거시 데이터):
+  → positions 폴더의 JSON 파일들을 ThreadPoolExecutor(64) 병렬 head-read 512B
+  → bytes.find로 "lt", "tm" 키 추출
+  → ~176ms (서버 캐시 후 ~32ms)
+```
+
+**JS 클라이언트 측 (`_passesLtTmFilter`)**:
+```
+1차: filterFileMetadata[stem] 조회 (서버 API에서 받은 메타)
+2차: 없으면 파일명 split('_') → 끝에서 1번째=TM, 2번째=LT 추출
+3차: 둘 다 없으면 return true (필터 미적용 통과)
 ```
 
 **운영 파일명 형식**: `{LOT}_{STEP}_{WAFER}_{stime}_{yield}_{sys}_{LT}_{TM}.png`
-예: `ABC123_00P_W01_20260122_022718_87.35_3.21_EE_Normal.png` → LT=`EE`, TM=`Normal`
-
-**JS 클라이언트 측 (`_passesLtTmFilter`)**:
-1. `filterFileMetadata[stem]` 조회 (API에서 받은 메타)
-2. 없으면 파일명 `split('_')` → 끝에서 1번째=TM, 2번째=LT 추출
-3. 둘 다 없으면 `return true` (필터 미적용 통과)
-
-**API 서버 측 (`/api/filter-metadata`)**:
-1. `_FOLDER_FILES_CACHE`에서 파일 목록 가져옴
-2. 각 파일명 `rsplit("_", 2)` → LT/TM 추출, JSON 바이트 직접 빌드
-3. 캐시 miss → positions 폴더의 JSON 파일들을 ThreadPoolExecutor(64)로 병렬 head-read 512B
-4. `_FILTER_META_SERVER_CACHE`에 응답 바이트 저장 (재요청 즉시 반환)
+예: `ABC123_00P_W01_20260122_022718_87.35_3.21_EE_Normal.png`
+→ `rsplit("_", 2)` → `["..._3.21", "EE", "Normal"]` → LT=`EE`, TM=`Normal`
 
 **검증 항목**:
-1. 파일명에 _LT_TM 있는 폴더에서 필터 첫 적용: **< 50ms** (positions 안 읽음)
-2. 파일명에 _LT_TM 없는 폴더에서 필터 첫 적용: **< 200ms** (positions 폴백)
-3. 같은 폴더 재요청: **< 35ms** (서버 캐시)
-4. 필터 해제 후 재적용 시 필터 미선택과 동일 속도
+1. 파일명에 _LT_TM 있는 폴더: 필터 첫 적용 **< 50ms** (positions 안 읽음 확인)
+2. 파일명에 _LT_TM 없는 폴더: 필터 첫 적용 **< 200ms** (positions 폴백)
+3. 같은 폴더 재요청: **< 35ms** (서버 캐시 `_FILTER_META_SERVER_CACHE`)
+4. 필터 해제 후 재적용: 필터 미선택과 동일 속도
+5. 서버 시작 시 `[INDEX] Folder files cache built: N folders` 로그 확인
 
-#### 3-10. 폴더 선택 + 그리드 성능 (palette_3k, 3000파일)
+#### 3-10. 폴더 선택 + 그리드 성능 — 인덱스 폴더 캐시 활용
+`selectAllFolderFiles`도 인덱스 폴더 캐시를 사용한다.
+`/api/files/recursive` API가 `_FOLDER_FILES_CACHE[폴더명]`에서 O(1) 조회하므로
+os.walk 디스크 순회 없이 즉시 반환.
+
 1. **필터 없이 selectAllFolderFiles + showGrid**: 합계 **< 100ms**
-   - selectAllFolderFiles: 폴더 캐시 O(1) 조회 (~7ms)
+   - selectAllFolderFiles: 인덱스 폴더 캐시 O(1) 조회 (~7ms)
    - showGrid: DOM 렌더링 (~68ms)
 2. **필터 있을 때 (파일명 _LT_TM)**:
-   - 첫 적용: **< 50ms** (파일명 파싱, API 불필요)
+   - 첫 적용: **< 50ms** (인덱스 캐시에서 파일명 파싱)
    - 변경: **< 20ms** (DOM show/hide)
 3. **필터 해제 후**: 필터 없는 속도와 동일 (~44ms)
-4. **폴더 캐시**: 서버 인덱스 빌드 후 자동 생성, dict[폴더명] O(1) 조회
+4. **인덱스 미빌드 시**: os.walk 폴백 (첫 요청 ~384ms)
 
 #### 3-11. 이미지 선택 최대 3000개 제한
 1. 10만개 이미지가 있는 폴더 Ctrl+클릭 시
