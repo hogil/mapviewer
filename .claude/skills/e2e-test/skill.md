@@ -962,6 +962,30 @@ compact_array 포맷에서 FBT/QVL 키가 배열 인덱스(0,1,2...)로 표시�
 14. 뒤로가기(ESC) → 그리드 복귀
 15. 그리드에서도 `viewer.overlayMode === 'f'` 유지 확인
 
+#### 11-9. 단일 이미지 compact_array 텍스트 & 그리드 Measure 항목 전환 & 범례 칩 수
+compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정상 표시, 그리드에서 FBT 항목 변경 시 맵 갱신, 그리드 gradient 범례 퍼센트/칩수 표시 검증.
+
+1. palette_3k 단일 이미지 로드 (wafer_p3k_0001_EE_Engineer.png)
+2. Measure 패널에서 FBT2824 클릭 → 오버레이 적용
+3. **단일 이미지 칩 텍스트 확인**: `chipAnnotator.ratioOverlayColors.size > 0` (칩 색상 계산됨)
+4. **칩 텍스트 값 검증**: `browser_evaluate`로 chipAnnotator 렌더 시 compact_array 인덱스 접근 확인
+   - `chipAnnotator.overlayItemKey`가 `"2824"`
+   - `chipAnnotator.positionsData.ftn_keys` 배열에 `"2824"` 포함
+   - `chipAnnotator.chips[0].f`가 Array (compact_array 포맷)
+5. **Gradient 범례 칩 수 확인** (단일 모드): `.legend-item[data-section="gradient"]` 내부에 퍼센트 텍스트 존재 (예: `10.2%(39)`)
+6. `browser_take_screenshot` → 단일 이미지에 칩 내 K/M 축약 숫자 텍스트 표시 확인
+7. 그리드 모드 진입 (`showGrid` 또는 전체선택)
+8. 그리드 gradient 범례 확인: `.legend-item-grid[data-section="gradient"]` 내부에 퍼센트/칩수 텍스트 존재
+9. **FBT 항목 전환 테스트**: Measure 패널에서 FBT5506 클릭 → 그리드 썸네일 갱신
+10. `viewer._ratioActiveItemKey === "5506"` 확인
+11. 그리드 이미지 src에 `measure_overlay=f%3A5506` 포함 확인
+12. `browser_take_screenshot` → 이전 FBT2824와 다른 gradient 패턴 확인
+13. 그리드 이미지 더블클릭 → 단일 이미지 뷰 진입
+14. **전환 후 칩 텍스트 확인**: `chipAnnotator.overlayItemKey === "5506"` 확인
+15. `chipAnnotator.ratioOverlayColors.size > 0` 확인 (칩 색상 재계산됨)
+16. `browser_take_screenshot` → 단일 뷰에서 FBT5506 heatmap + 칩 텍스트 표시 확인
+17. 뒤로가기(ESC) → 그리드 복귀 → `viewer._ratioActiveItemKey === "5506"` 유지 확인
+
 **pass 기준**:
 - 11-0: API 응답에서 ftn_keys 600개, qtn_keys 20개, 칩에 f/q/quad 없음
 - 11-1: Measure 패널에 FBT 600개, QVL 20개, BIN 표시
@@ -972,6 +996,7 @@ compact_array 포맷에서 FBT/QVL 키가 배열 인덱스(0,1,2...)로 표시�
 - 11-6: Measure Composite 생성 → FBT/QVL/BIN 결과 이미지 + gradient 범례 + 텍스트
 - 11-7: palette_5mb 대용량 정상 처리
 - 11-8: FBT/QVL 키 인덱스 미표시 + 그리드→단일 전환 시 measure 오버레이 보존
+- 11-9: compact_array 칩 텍스트 정상 표시 + FBT 항목 전환 시 그리드 갱신 + 범례 칩 수
 
 ---
 
