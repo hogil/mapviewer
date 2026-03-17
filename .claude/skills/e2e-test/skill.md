@@ -258,10 +258,10 @@ LOT Mode 활성 상태에서 정렬 변경 시 LOT 그룹핑이 유지되고 그
 #### 3-2. LOT/TEST/STEP 필터 — 전체 동작 라이프사이클
 
 **핵심 원칙**:
-- 필터 미선택(초기 상태) → positions 파일을 읽지 않음, 모든 파일 그대로 표시
-- 필터 선택 시 → 해당 폴더의 positions만 멀티스레드 병렬 스캔하여 메타 로드 후 필터
+- 필터 미선택(초기 상태) → LT/TM 읽기 없음, 모든 파일 그대로 표시
+- 필터 선택 시 → 파일명에서 LT/TM 추출 (인덱스 폴더 캐시 활용, 상세: 3-9)
 - 필터 변경 시 → API 재호출 없이 DOM show/hide만 (메타는 이미 캐시됨)
-- 필터 해제/Reset → 모든 파일 다시 표시 (display:'' 복원)
+- 필터 해제/Reset → 숨겨진 `<li>`만 `display:''` 복원
 
 ##### 3-2-1. 필터 미선택 상태 (초기)
 1. 제품 폴더 선택 (changeFolder) → `v.filterFileMetadata`는 빈 객체 `{}`
@@ -274,9 +274,9 @@ LOT Mode 활성 상태에서 정렬 변경 시 LOT 그룹핑이 유지되고 그
 2. LOT 버튼 클릭 → 드롭다운 열림
 3. LOT > EE 체크 → change 이벤트 발생
 4. **첫 필터 적용 시**: `_applyFilterToExplorer()` 호출
-   - `filterFileMetadata`가 비어있으므로 해당 폴더의 positions를 `fetchFilterMetadata(path)` 호출
-   - API `/api/filter-metadata` → 멀티스레드 64 병렬로 head 512B 읽어 lt/tm 추출
-   - 메타 로드 완료 후 DOM의 `<li>` 요소에 `display:none`/`''` 토글
+   - 파일명에 _LT_TM이 있으면 인덱스 폴더 캐시에서 파싱으로 즉시 추출 (데이터 소스 상세: 3-9)
+   - 없으면 `fetchFilterMetadata(path)` API 호출 (positions 폴백, 상세: 3-9)
+   - DOM의 `<li>` 요소에 `display:none`/`''` 토글
    - **폴더는 열린 상태 유지 (innerHTML 교체 없음)**
 5. 결과: 해당 LOT 파일만 표시, 나머지 숨김
 
@@ -296,8 +296,8 @@ LOT Mode 활성 상태에서 정렬 변경 시 LOT 그룹핑이 유지되고 그
 ##### 3-2-5. Reset 버튼
 1. Reset 클릭 → `v.filterLT = [], v.filterTM = [], v.filterSTEP = []`
 2. 모든 체크박스 해제 (`_restoreMultiSelectUI`)
-3. `_applyFilterToExplorer()` → 모든 파일 display:'' → 전체 복원
-4. **폴더 열림 상태 유지, 스크롤 위치 유지**
+3. `_applyFilterToExplorer()` → 숨겨진 `<li>`만 display:'' 복원 → 전체 표시
+4. 폴더 열림 상태 + 스크롤 위치 유지 (상세 검증: 3-4)
 
 ##### 3-2-6. 새 폴더 열 때 필터 자동 적용
 1. 필터가 활성인 상태에서 탐색기의 닫힌 폴더를 클릭하여 열기
@@ -312,48 +312,14 @@ LOT Mode 활성 상태에서 정렬 변경 시 LOT 그룹핑이 유지되고 그
 3. Reset 버튼도 필터 활성 시 파란색, 전부 해제 시 원래 색
 4. 드롭다운 패널 상단에 "N개 선택됨" 배지 표시/제거
 
-**검증 단계**:
-1. LOT 단독 테스트 (EE → PT → PE → E% 와일드카드)
-2. TEST 단독 테스트 (NORMAL → ENGINEER → REWORK)
-3. LOT + TEST 조합 (EE + NORMAL → EE + ENGINEER → PT + NORMAL)
-4. 추가/제거 (LOT=EE 추가 → LOT=EE 제거 → TEST만 남음)
-5. Reset → 전체 복원
-6. 새 폴더 열기 → 필터 자동 적용 확인
-
-#### 3-3. 필터 대소문자 무시 검증 (`palette_3k` 폴더)
-Position JSON의 tm/lt 값이 title case (`"Engineer"`, `"Normal"`)이고
-UI 체크박스 값은 대문자 (`"ENGINEER"`, `"NORMAL"`)이므로 대소문자 무시 매칭이 필수.
-
-1. `palette_3k` 폴더 열기 → `fetchFilterMetadata('palette_3k')` 로드 확인
-   - `v.filterFileMetadata` 키 수 > 0 (3000개)
-2. **Position 원본 값 확인**:
-   - `Object.values(v.filterFileMetadata)` 에서 tm 값 수집
-   - tm 고유값: `"Engineer"`, `"Normal"`, `"Test"` (title case) 확인
-   - lt 고유값: `"EE"`, `"PE"`, `"PT"` 등 확인
-3. **TEST 필터 — NORMAL 체크**:
-   - `#filter-tm-panel` 에서 NORMAL 체크박스 체크 → change 이벤트
-   - `v.filterTM` = `["NORMAL", "NORM"]` (data-values alias)
-   - 탐색기 파일 수: position `"Normal"` 매칭 파일만 표시 (전체보다 적음)
-4. **TEST 필터 — ENGINEER 체크**:
-   - NORMAL 해제 → ENGINEER 체크
-   - `v.filterTM` = `["ENGINE", "ENGINEER", "ENGR", "ENG"]`
-   - 탐색기 파일 수: position `"Engineer"` 매칭 파일만 표시
-5. **LOT 필터 — EE 체크**:
-   - TEST 필터 해제 → LOT 필터 `#filter-lt-panel` 에서 EE 체크
-   - `v.filterLT` = `["EE"]`
-   - 탐색기 파일 수: position `"EE"` 매칭 파일만 표시 (전체보다 적음)
-6. **LOT 필터 — PE 체크** (EE 해제 → PE 체크):
-   - `v.filterLT` = `["PE"]`
-   - 탐색기 파일 수: position `"PE"` 매칭 파일만 표시
-7. **LOT 필터 — 와일드카드 E% 체크**:
-   - PE 해제 → `E%` 체크
-   - `v.filterLT` = `["E%"]`
-   - 탐색기 파일 수: lt가 `"E"`로 시작하는 파일만 표시 (`"EE"`, `"EP"`, `"ES"`, `"ET"`, `"EU"`, `"EY"` 등)
-   - 와일드카드 `startsWith` 매칭 + 대소문자 무시 확인
-8. **LOT + TEST 동시 필터**: E% + NORMAL 동시 체크
-   - lt가 `E`로 시작 AND tm이 `NORMAL`/`NORM` 인 파일만 표시
-   - 탐색기 파일 수: 개별 필터 적용 수보다 적음
-9. **전체 해제**: LOT/TEST 필터 모두 해제 → 전체 파일 복원
+**검증 단계** (LOT과 TEST 둘 다 해야 함):
+1. LOT 단독 (EE → PT → PE → E% 와일드카드) + TEST 단독 (NORMAL → ENGINEER)
+2. LOT + TEST 조합 (EE + NORMAL → EE + ENGINEER → PT + NORMAL)
+3. 대소문자 무시: 파일명 `_EE_Normal` vs 체크박스 `ENGINEER` (title case ↔ UPPER)
+4. 와일드카드: E% → lt가 `E`로 시작하는 파일만 (`startsWith` 매칭)
+5. 추가/제거 (LOT=EE 추가 → LOT=EE 제거 → TEST만 남음, 부분 해제 상세: 3-3-1)
+6. Reset → 전체 복원
+7. 새 폴더 열기 → 필터 자동 적용 확인
 
 #### 3-3-1. 부분 해제 시 나머지 필터 유지 (초기화 금지)
 **핵심**: 여러 필터 중 하나를 해제하면 나머지 필터만으로 재필터링해야 한다.
