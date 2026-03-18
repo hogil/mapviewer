@@ -1241,12 +1241,6 @@ class WaferMapViewer {
             }
         });
 
-        // Compare View button
-        const compareBtn = document.getElementById('compare-view-btn');
-        if (compareBtn) {
-            compareBtn.addEventListener('click', () => this.openCompareView());
-        }
-
         const refMapButtons = document.querySelectorAll('[data-ref-map-btn]');
         if (refMapButtons.length) {
             refMapButtons.forEach(btn => {
@@ -9324,75 +9318,6 @@ class WaferMapViewer {
             compositeSession: this.deepCloneSimple(this.compositeSession),
         };
 
-        // Compare 버튼 표시 (measure composite 결과가 2개 이상일 때)
-        const compareBtn = document.getElementById('compare-view-btn');
-        if (compareBtn) {
-            compareBtn.style.display = heatmapPaths.length >= 2 ? 'inline-block' : 'none';
-        }
-    }
-
-    /**
-     * Compare View: Measure Composite 결과를 나란히 비교
-     */
-    openCompareView() {
-        const overlay = document.getElementById('compare-overlay');
-        const grid = document.getElementById('compare-grid');
-        if (!overlay || !grid) return;
-
-        const results = this.compositeSession?.measureResults || [];
-        const heatmapPaths = this.selectedImages || [];
-        if (heatmapPaths.length < 1) return;
-
-        // Grid 레이아웃 결정 (2개: 1x2, 3개: 1x3, 4+: 2x2)
-        const count = heatmapPaths.length;
-        const cols = count <= 3 ? count : Math.ceil(Math.sqrt(count));
-        grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
-
-        // 패널 생성
-        grid.innerHTML = '';
-        const personalizedParams = this.getPersonalizedParams();
-        const cacheBuster = this._personalizedColorCacheBuster || Date.now();
-
-        heatmapPaths.forEach((path, i) => {
-            const result = results[i] || {};
-            const displayName = result.display_name || path.split('/').pop().replace(/\.[^.]+$/, '');
-
-            const panel = document.createElement('div');
-            panel.style.cssText = 'display:flex;flex-direction:column;background:#1a1a1a;border:1px solid #333;border-radius:6px;overflow:hidden;min-height:0;';
-
-            const label = document.createElement('div');
-            label.style.cssText = 'padding:6px 10px;background:#222;color:#ddd;font-size:13px;font-weight:600;text-align:center;border-bottom:1px solid #333;flex-shrink:0;';
-            label.textContent = displayName;
-            panel.appendChild(label);
-
-            const imgWrap = document.createElement('div');
-            imgWrap.style.cssText = 'flex:1;display:flex;align-items:center;justify-content:center;padding:4px;min-height:0;';
-
-            const img = document.createElement('img');
-            img.src = `/api/image?path=${encodeURIComponent(path)}&_t=${cacheBuster}`;
-            img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;border-radius:4px;';
-            img.alt = displayName;
-
-            imgWrap.appendChild(img);
-            panel.appendChild(imgWrap);
-            grid.appendChild(panel);
-        });
-
-        overlay.style.display = 'flex';
-
-        // 닫기 버튼
-        const closeBtn = document.getElementById('compare-close-btn');
-        if (closeBtn) {
-            closeBtn.onclick = () => { overlay.style.display = 'none'; };
-        }
-        // ESC로 닫기
-        const escHandler = (e) => {
-            if (e.key === 'Escape' && overlay.style.display !== 'none') {
-                overlay.style.display = 'none';
-                document.removeEventListener('keydown', escHandler);
-            }
-        };
-        document.addEventListener('keydown', escHandler);
     }
 
     showCompositeProgressOverlay(message = 'Composite 작업 중입니다...') {
@@ -12825,6 +12750,8 @@ class WaferMapViewer {
                         console.log('✅ Chip positions & annotations loaded successfully');
                         // 오버레이 모드 활성 상태면 새 positions에 대해 재적용
                         await this._reapplyOverlayAfterPositionsLoad();
+                        // 🔥 오버레이 적용 후 Navigator 썸네일 URL 갱신 (measure_overlay 반영)
+                        this.refreshThumbnailNavigatorWithCurrentParams();
                         // 🔥 Palette pixel counts 로드 (Grade % 표시용)
                         await this._fetchPaletteCounts(fullPath);
                         // 🔥 Chip positions 로드 후 BIN count 표시를 위해 범례 재렌더
@@ -19169,13 +19096,6 @@ class WaferMapViewer {
         this.dom.imageCanvas.style.display = 'none';
         this.dom.overlayCanvas.style.display = 'none';
         
-        // Compare 버튼: measure composite 모드에서만 표시
-        const compareBtnGrid = document.getElementById('compare-view-btn');
-        if (compareBtnGrid) {
-            const showCompare = this.isCompositeMode && this.compositeSession?.measureMode && this.selectedImages?.length >= 2;
-            compareBtnGrid.style.display = showCompare ? 'inline-block' : 'none';
-        }
-
         // ⭐ 그리드 모드에서는 화살표 버튼 숨기기
         this.viewMode = null;
         this.updateArrowButtonVisibility();
