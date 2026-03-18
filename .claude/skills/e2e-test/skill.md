@@ -146,7 +146,12 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 5. 우측 Label Explorer 패널: "Label Explorer" 헤딩, Add/Delete Label 버튼
 6. 콘솔 에러 0개 확인 (favicon 404 제외)
 
-**pass 기준**: 항목 1~5 모두 true, 콘솔 critical error 0
+7. **fetch 래핑 LoginId 전달 확인**: SAML 로그인 후 (`viewer.currentUser !== 'guest'`일 때)
+   - `browser_evaluate`로 `/api/config` fetch 호출 → Network 탭에서 URL에 `LoginId=` 파라미터 포함 확인
+   - `viewer.currentUser`가 설정되어 있으면 모든 `/api/` 요청에 `?LoginId=` 자동 추가됨
+   - 서버 로그에서 IP 옆에 LoginId가 "—" 대신 실제 ID로 표시되는지 확인
+
+**pass 기준**: 항목 1~6 모두 true, 콘솔 critical error 0, LoginId 전달 확인
 
 ---
 
