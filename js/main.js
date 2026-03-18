@@ -2530,6 +2530,14 @@ class WaferMapViewer {
         this.savedViewState = null;
         this.waferMapExplorerState = null;
         this.labelExplorerState = null;
+        this.viewMode = null;
+        this.singleImageFromGrid = false;
+        this._gridVisuallyHidden = false;
+        this.gridViewSaveState = null;
+        this.gridViewImageList = [];
+        this.gridViewImageIndex = -1;
+        this.currentGridImages = [];
+        this._singleModeRequestId = (this._singleModeRequestId || 0) + 1;
         if (this.pageViewCache) {
             this.pageViewCache.clear();
         }
@@ -18882,7 +18890,8 @@ class WaferMapViewer {
         }
 
         this.gridMode = false;
-        
+        this._gridVisuallyHidden = false;  // 🔥 완전 hideGrid에서는 시각적 숨김 플래그도 해제
+
         // ✅ 방법 2: CSS 클래스 제거 (body에서 클래스 제거)
         document.body.classList.remove('grid-mode-active');
         
@@ -20280,6 +20289,7 @@ class WaferMapViewer {
         this.selectedImages = [];
         this.singleImageFromGrid = false;
         this._isNavigating = false;
+        this._gridVisuallyHidden = false;
         this.gridViewImageList = [];
         this.gridViewImageIndex = -1;
         this.gridViewSaveState = null;
@@ -20924,17 +20934,17 @@ class WaferMapViewer {
                 return;
             }
 
-            // ✅ 선택된 이미지 복원 (selectedIndices를 사용)
-            if (savedGridSelectionIndices) {
+            // ✅ 선택된 이미지 복원
+            // 🔥 selectedImages는 항상 전체 그리드 이미지로 복원 (그리드 표시용)
+            // gridSelectedIdxs/Set은 사용자가 선택(하이라이트)한 항목만 추적
+            this.selectedImages = [...imagesToShow];
+            this.currentGridImages = [...imagesToShow];
+
+            if (savedGridSelectionIndices && savedGridSelectionIndices.length > 0) {
                 this.gridSelectedIdxs = [...savedGridSelectionIndices];
                 this.gridSelectedSet = new Set(savedGridSelectionIndices);
-                // selectedImages는 선택된 인덱스에 해당하는 이미지만
-                this.selectedImages = savedGridSelectionIndices
-                    .map(idx => imagesToShow[idx])
-                    .filter(Boolean);
             } else if (savedGridSelectedImages && savedGridSelectedImages.length > 0) {
                 // 하위 호환성: savedGridSelectedImages가 있으면 사용
-                this.selectedImages = [...savedGridSelectedImages];
                 // 인덱스 재구성
                 this.gridSelectedIdxs = savedGridSelectedImages
                     .map(img => imagesToShow.indexOf(img))
@@ -20943,7 +20953,6 @@ class WaferMapViewer {
             } else {
                 this.gridSelectedIdxs = [];
                 this.gridSelectedSet = new Set();
-                this.selectedImages = [];
             }
 
             console.log('🔍 [RESTORE] 선택 복원:', this.gridSelectedIdxs.length, '개 이미지');

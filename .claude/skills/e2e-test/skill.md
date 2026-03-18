@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 27개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키를 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 28개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -1538,6 +1538,54 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 
 ---
 
+### Phase 28: 그리드 상태 복구 안정성 (반복 선택/해제/더블클릭)
+
+**목적**: 이미지 선택/해제, 더블클릭 단일 모드 진입·복귀, 우클릭 초기화를 반복해도 폴더 Ctrl+클릭으로 그리드가 정상 표시되는지 검증
+
+**배경**: `handleFileRightClick()`, `exitSingleImageViewMode()`, `hideGrid()` 간 상태 플래그(`_gridVisuallyHidden`, `viewMode`, `selectedImages`) 불일치로 반복 조작 후 그리드가 나타나지 않는 버그 수정 검증
+
+**평가 항목**:
+
+#### 28-1. 우클릭 초기화 후 폴더 재선택 (기본)
+1. Ctrl+클릭으로 폴더 선택 → 그리드 표시 (`v.gridMode === true`, `grid.children.length > 0`)
+2. Wafer Map Explorer 영역에서 우클릭 → `v.handleFileRightClick()` → 모든 상태 초기화
+3. 초기화 후 상태 확인: `v.selectedImages.length === 0`, `v._gridVisuallyHidden === false`, `v.viewMode === null`, `v.singleImageFromGrid === false`
+4. 같은 폴더 Ctrl+클릭 → 그리드 다시 표시 확인 (`v.gridMode === true`, `grid.children.length > 0`)
+
+#### 28-2. 더블클릭 단일 모드 → 더블클릭 복귀 → 우클릭 초기화 → 재선택 (3회 반복)
+1. Ctrl+클릭 폴더 → 그리드 로드
+2. 그리드 이미지 더블클릭 → 단일 이미지 모드 (`v.viewMode === 'gridImage'`)
+3. 뷰어 영역 더블클릭 → 그리드 복귀 (`v.gridMode === true`)
+4. 복귀 후 `v.selectedImages.length` > 0 확인 (전체 그리드 이미지 수와 동일해야 함)
+5. Wafer Map Explorer 우클릭 → 초기화
+6. 같은 폴더 Ctrl+클릭 → 그리드 재표시 확인
+7. 위 1~6을 3회 반복 — 매 반복마다 `grid.children.length > 0` 확인
+
+#### 28-3. 단일 모드에서 직접 우클릭 초기화 (더블클릭 복귀 없이)
+1. Ctrl+클릭 폴더 → 그리드 로드
+2. 그리드 이미지 더블클릭 → 단일 이미지 모드 (`v._gridVisuallyHidden === true`)
+3. **그리드 복귀 없이** Wafer Map Explorer 우클릭 → `handleFileRightClick()` 호출
+4. 초기화 후 `v._gridVisuallyHidden === false` 확인 (핵심 검증 포인트)
+5. 같은 폴더 Ctrl+클릭 → 그리드 정상 표시 확인
+
+#### 28-4. clearGridSelection 후 폴더 재선택
+1. Ctrl+클릭 폴더 → 그리드 로드
+2. `v.clearGridSelection()` 호출
+3. `v._gridVisuallyHidden === false` 확인
+4. Wafer Map Explorer 우클릭 → 초기화
+5. 같은 폴더 Ctrl+클릭 → 그리드 재표시 확인
+
+#### 28-5. selectedImages 복원 검증 (exitSingleImageViewMode)
+1. Ctrl+클릭 폴더 → 그리드 로드, `selectedImages.length` 기록 (`N`이라 하자)
+2. 그리드 이미지 더블클릭 → 단일 이미지 모드 진입
+3. `exitSingleImageViewMode()` 호출하여 그리드 복귀
+4. `v.selectedImages.length === N` 확인 (비어 있으면 안 됨)
+5. `v.currentGridImages.length === N` 확인
+
+**pass 기준**: 28-1~28-5 모든 항목에서 폴더 Ctrl+클릭 후 `grid.children.length > 0`이고 `v.gridMode === true`, `v.selectedImages.length > 0`
+
+---
+
 ## 결과 보고
 
 각 Phase별로 pass/fail 요약표를 작성하세요:
@@ -1571,6 +1619,7 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 | 25 | 권한 관리 | pass/fail | 목록/필터/검색/테이블 |
 | 26 | 컨텍스트 메뉴 복사/다운로드 | pass/fail | 복사 3종, 다운로드, 닫기 |
 | 27 | 키보드 단축키 & 드래그 선택 | pass/fail | Ctrl+A, 드래그선택, 칩 다중선택 4종 |
+| 28 | 그리드 상태 복구 안정성 | pass/fail | 반복 선택/해제/더블클릭 후 그리드 재표시 |
 
 핵심 단계마다 스크린샷을 촬영하여 첨부하세요.
 
