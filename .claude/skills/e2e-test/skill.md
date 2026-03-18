@@ -833,7 +833,24 @@ BIN, FBT, QVL Composite는 모두 Gradient 범례를 사용한다. 각 유형별
 2. 컨텍스트 메뉴 + 서브메뉴 모두 `display === 'none'`
 3. `_mcBuilt === false` (리셋됨)
 
-**pass 기준**: 9-1 ~ 9-6 전체 pass
+#### 9-7. 서브메뉴 뷰포트 하단 넘침 방지
+1. 화면 하단 근처(clientY > viewportHeight - 100)에서 우클릭 → 컨텍스트 메뉴 열기
+2. `#context-mc-create` hover → 서브메뉴 열기
+3. 서브메뉴 `getBoundingClientRect().bottom <= window.innerHeight` 확인 (뷰포트 안에 수렴)
+4. 서브메뉴가 `position:fixed`이고 `bottom` 스타일이 설정되어 있는지 확인
+
+#### 9-8. Composite Map 저장 경로 (LoginId 기반)
+1. `/api/config` 응답에서 FALLBACK_LOGIN_ID 확인 (기본값 "guest")
+2. Composite Map 생성 API 호출 시 응답의 `output_dir`에 LoginId 포함 확인
+3. `composite_map/{LoginId}/current/` 구조인지 확인 (timestamp 폴더 아님)
+4. 재생성 시 이전 결과가 삭제되고 새 결과로 교체되는지 확인
+
+#### 9-9. Measure Composite 누적 방지
+1. Measure Composite 생성 후 `output_dir` 경로 확인
+2. 동일 사용자로 재생성 시 이전 `*_measure/` 폴더가 삭제되는지 확인
+3. `current/` 디렉토리는 삭제되지 않는지 확인
+
+**pass 기준**: 9-1 ~ 9-9 전체 pass
 
 ---
 
