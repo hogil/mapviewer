@@ -9992,16 +9992,27 @@ class WaferMapViewer {
                 const itemRect = mcCreateItem.getBoundingClientRect();
                 mcSubmenu.style.position = 'fixed';
                 mcSubmenu.style.zIndex = '50000';
+                mcSubmenu.style.display = '';
+                // 🔥 리스트 max-height를 뷰포트 기준으로 제한 (생성 버튼 + 검색창 + 여백 확보)
+                const mcList = mcSubmenu.querySelector('.failbit-list, .mc-ctx-list');
+                const availH = window.innerHeight - 80; // 검색창(30) + 생성버튼(40) + 여백(10)
+                if (mcList) mcList.style.maxHeight = `${Math.max(150, availH - itemRect.top)}px`;
+                // 위치 계산
                 mcSubmenu.style.left = `${itemRect.right}px`;
                 mcSubmenu.style.top = `${itemRect.top}px`;
                 mcSubmenu.style.bottom = 'auto';
-                mcSubmenu.style.display = '';
                 // 뷰포트 경계 체크
                 requestAnimationFrame(() => {
                     const rect = mcSubmenu.getBoundingClientRect();
+                    // 아래 넘침 → 생성 버튼이 보이도록 위로 올림
                     if (rect.bottom > window.innerHeight) {
-                        mcSubmenu.style.top = 'auto';
-                        mcSubmenu.style.bottom = '4px';
+                        const overflowY = rect.bottom - window.innerHeight + 8;
+                        mcSubmenu.style.top = `${Math.max(4, itemRect.top - overflowY)}px`;
+                        // 리스트 높이도 재조정
+                        if (mcList) {
+                            const newMaxH = window.innerHeight - 90;
+                            mcList.style.maxHeight = `${Math.max(150, newMaxH)}px`;
+                        }
                     }
                     if (rect.right > window.innerWidth) {
                         mcSubmenu.style.left = `${itemRect.left - rect.width}px`;
