@@ -5612,6 +5612,12 @@ class WaferMapViewer {
 
         // 앵커 복원
         this._scrollToAnchorPath(anchorPath, savedScroll);
+
+        // 🔥 LOT 모달이 열려 있으면 필터 반영하여 갱신
+        const lotModal = document.getElementById('lot-list-modal');
+        if (lotModal && lotModal.style.display !== 'none') {
+            this.updateLotListContent();
+        }
     }
 
     /**
@@ -20453,7 +20459,13 @@ class WaferMapViewer {
                     }
                 });
 
-            console.log('✅ [SINGLE_VIEW] 필터링 후 이미지 리스트:', this.singleViewImageList);
+            // 🔥 LOT/TEST/STEP 필터 적용
+            const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
+            if (hasFilter) {
+                this.singleViewImageList = this.singleViewImageList.filter(p => this._passesLtTmFilter(p) && this._passesStepFilter(p));
+            }
+
+            console.log('✅ [SINGLE_VIEW] 필터링 후 이미지 리스트:', this.singleViewImageList.length);
 
             // ✅ 자연 정렬 (파일명 기준: 5 < 10 < 15)
             this.naturalSortPaths(this.singleViewImageList);
@@ -21515,11 +21527,17 @@ class WaferMapViewer {
         try {
             const response = await fetch(`/api/files?path=${encodeURIComponent(folderPath)}`);
             const data = await response.json();
-            const files = (data.items || [])
+            let files = (data.items || [])
                 .filter(item => item.type === 'file' && this.isImageFile(item.name))
                 .map(item => item.path || `${folderPath}/${item.name}`);
-            
+
             this.naturalSortPaths(files);
+
+            // 🔥 LOT/TEST/STEP 필터 적용
+            const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
+            if (hasFilter) {
+                files = files.filter(p => this._passesLtTmFilter(p) && this._passesStepFilter(p));
+            }
 
             if (files.length > 0) {
                 this.selectedImages = [];
@@ -25970,14 +25988,23 @@ class WaferMapViewer {
             return;
         }
 
+        // 🔥 LOT/TEST/STEP 필터 적용 — 필터에 맞는 이미지가 있는 LOT만 표시
+        const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
+        const filteredLotGroups = hasFilter
+            ? this.lotGroups.map((lot, idx) => {
+                const filteredImages = lot.images.filter(p => this._passesLtTmFilter(p) && this._passesStepFilter(p));
+                return filteredImages.length > 0 ? { ...lot, _filteredCount: filteredImages.length, _originalIdx: idx } : null;
+            }).filter(Boolean)
+            : this.lotGroups.map((lot, idx) => ({ ...lot, _filteredCount: lot.count, _originalIdx: idx }));
+
         if (countLabel) {
-            countLabel.textContent = `${this.lotGroups.length}`;
+            countLabel.textContent = `${filteredLotGroups.length}`;
         }
 
-        content.innerHTML = this.lotGroups.map((lot, idx) => `
-            <div class="lot-list-item" data-lot-name="${lot.lotName}" data-lot-index="${idx}">
+        content.innerHTML = filteredLotGroups.map(lot => `
+            <div class="lot-list-item" data-lot-name="${lot.lotName}" data-lot-index="${lot._originalIdx}">
                 <span class="lot-list-item-name">${lot.lotName}</span>
-                <span class="lot-list-item-count">${lot.count}</span>
+                <span class="lot-list-item-count">${lot._filteredCount}</span>
             </div>
         `).join('');
 

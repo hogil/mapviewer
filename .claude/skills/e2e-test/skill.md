@@ -631,7 +631,21 @@ Composite에서 Failbit이 아닌 모든 항목(BIN/FBT/QVL)은 gradient 범례�
 3. 다시 클릭 → `active` 복원, LOT 헤더(`▸ wafer`, LOT 구분선) 표시
 4. LOT 헤더의 이미지 개수 배지 표시 확인
 
-**pass 기준**: 토글 2회 성공, 그리드 레이아웃 변경 확인
+#### 6-2. LOT/TEST/STEP 필터 → 그리드/LOT 모달 연동
+1. LOT 필터 패널에서 "EE" 체크 → `v.filterLT = ["EE"]`
+2. 폴더 선택 → 그리드에 "EE" 파일만 표시 확인 (파일명에 EE 포함)
+3. LOT 모달 열기 → LOT 목록에서 EE가 아닌 LOT의 이미지 수가 감소하거나 숨겨짐 확인
+4. 그리드 이미지 더블클릭 → 단일 모드 → Navigator 이미지 리스트에 EE 파일만 포함 확인
+5. 필터 해제 → 그리드/모달/Navigator 원래 수 복원 확인
+
+#### 6-3. `loadImagesInFolderAndShowGrid` 필터 적용
+1. `v.filterLT = ["PT"]` 설정
+2. `v.loadImagesInFolderAndShowGrid('palette_3k')` 호출
+3. `v.currentGridImages`에 PT 파일만 포함 확인
+4. 전체 3000개보다 적은 수 확인
+5. 필터 해제 후 재호출 → 3000개 전체 로드 확인
+
+**pass 기준**: 토글 2회 성공, 그리드 레이아웃 변경 확인, 필터→그리드/모달/Navigator 연동
 
 ---
 
@@ -1353,7 +1367,20 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 2. Navigator에 모든 3000개를 DOM에 넣지 않고 가상 스크롤 적용 확인
 3. 빠른 스크롤 시 끊김 없이 렌더링
 
-**pass 기준**: 자동 표시→클릭 네비→드래그→리사이즈→닫기→가상 스크롤
+#### 22-8. Measure overlay 반영
+1. palette_3k 그리드 → 전체선택 → Measure FBT 항목 클릭 → 오버레이 적용
+2. 그리드 이미지 더블클릭 → 단일 모드 진입
+3. Navigator 썸네일 URL에 `measure_overlay=f:` 파라미터 포함 확인
+4. 다른 FBT 항목으로 전환 → Navigator 썸네일 URL이 새 키로 갱신 확인
+5. 초기화 → Navigator 썸네일 URL에서 `measure_overlay` 파라미터 제거 확인
+
+#### 22-9. LOT/TEST/STEP 필터 반영
+1. LOT 필터에서 "EE" 선택 (filterLT = ["EE"])
+2. 단일 이미지 모드 진입 → Navigator 이미지 목록이 EE 파일만 포함 확인
+3. Navigator 이미지 수 < 전체 이미지 수 확인
+4. 필터 해제 → Navigator 이미지 수 = 전체 이미지 수 복원 확인
+
+**pass 기준**: 자동 표시→클릭 네비→드래그→리사이즈→닫기→가상 스크롤→measure 반영→필터 반영
 
 ---
 
