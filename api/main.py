@@ -3237,10 +3237,8 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
 
             client_ip = logger_instance.get_client_ip(request)
             status = response.status_code
-            # 🔥 stats에는 SAML 인증된 실제 LoginId만 전달 (guest/notsaml/preview 차단)
-            real_login_id = _current_login_id(request)
             effective_login_id = _effective_login_id(request)
-            request.state.session_user = real_login_id  # stats용: None이면 기록 안 됨
+            request.state.session_user = effective_login_id  # 로그 + stats용 LoginId
             request.state.session_meta = {
                 "LoginId": effective_login_id,
                 "Username": effective_login_id,
