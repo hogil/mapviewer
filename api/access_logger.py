@@ -409,7 +409,7 @@ class AccessLogger:
         
         # 완벽한 테이블 정렬 - 모든 컬럼 고정 너비
         log_type = f"{log_type_name:<3}"     # 3자리 (API, PAGE, FILE 등)
-        # timestamp 제거 — systemd journal이 이미 시간을 앞에 출력하므로 중복 방지
+        time_col = timestamp[11:] if len(timestamp) > 11 else timestamp  # HH:MM:SS만 (날짜 제거)
         ip_col = f"{ip:<15}"                # 15자리
         login_col = f"{login_id:<12}" if login_id else f"{'—':<12}"  # 12자리 LoginId
         method_col = f"{method:<4}"          # 4자리 (GET, POST, PUT, DEL)
@@ -461,6 +461,7 @@ class AccessLogger:
         
         # 🎯 완벽한 테이블 정렬 - 색상 코드 길이 정확히 계산
         type_with_color = f"{type_color}{log_type}\033[0m"
+        time_with_color = f"\033[90m{time_col}\033[0m"  # 회색 시간
         ip_with_color = f"\033[90m{ip_col}\033[0m"
         login_with_color = f"\033[93m{login_col}\033[0m"  # 노란색 LoginId
         method_with_color = f"{method_color}{method_col}\033[0m"
@@ -473,9 +474,9 @@ class AccessLogger:
         method_padded = f"{method_with_color:<8}"
         status_padded = f"{status_with_color:>6}"
 
-        # 🎯 완벽한 정렬 — timestamp 제거 (systemd journal 중복 방지), LoginId 추가
+        # 🎯 완벽한 정렬 — 시간(HH:MM:SS) + IP + LoginId + 메서드 + 엔드포인트 + 상태
         message = (
-            f"{type_padded}  {ip_padded}  {login_padded}  "
+            f"{type_padded}  {time_with_color}  {ip_padded}  {login_padded}  "
             f"{method_padded}  {endpoint_col}  {status_padded}{extra_part}"
         )
         
