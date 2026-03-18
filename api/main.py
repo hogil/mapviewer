@@ -909,16 +909,24 @@ def _current_login_id(req: Optional[Request]) -> Optional[str]:
     except Exception:
         pass
     
-    # 🔥 SAML 세션 확인 (URL 파라미터 또는 쿠키)
+    # 🔥 SAML 세션 확인
     try:
-        # URL 파라미터에서 LoginId 확인 (SAML 로그인 직후)
+        # 1) URL 파라미터에서 LoginId 확인 (프론트가 명시적으로 전달)
         login_id_param = _normalize_login_id_candidate(req.query_params.get("LoginId"))
         if login_id_param and login_id_param in SAML_USER_SESSIONS:
             return login_id_param
 
-        # SAML_USER_SESSIONS에서 모든 세션 확인 (현재는 간단하게 첫 번째 매칭)
-        # 실제로는 쿠키나 헤더로 사용자를 식별해야 하지만, 일단 모든 세션 확인
-        # TODO: 더 정확한 사용자 식별 방법 필요 (IP, 쿠키 등)
+        # 2) IP→LoginId 매핑 (SAML 인증 완료된 IP → 서버가 이미 알고 있는 LoginId)
+        client_ip = None
+        try:
+            client_ip = req.client.host if req.client else None
+            forwarded = req.headers.get("x-forwarded-for")
+            if forwarded:
+                client_ip = forwarded.split(",")[0].strip()
+        except Exception:
+            pass
+        if client_ip and client_ip in SAML_IP_TO_LOGIN:
+            return SAML_IP_TO_LOGIN[client_ip]
     except Exception:
         pass
 
@@ -2081,6 +2089,8 @@ async def saml_acs(request: Request):
         meta["saml_attributes"] = attrs
         # LoginId 기준으로 저장
         SAML_USER_SESSIONS[LoginId] = meta
+        # IP→LoginId 매핑 저장 (SAML 인증 완료된 IP는 이후 모든 요청에서 LoginId 사용)
+        SAML_IP_TO_LOGIN[client_ip] = LoginId
 
     except Exception as e:
         bootlog.error(f"❌ [SAML SESSION] 사용자 정보 저장 실패: {e}")
@@ -2198,6 +2208,7 @@ async def api_config():
 
 # 🔥 서버 메모리에 SAML 로그인 정보 저장
 SAML_USER_SESSIONS = {}  # {LoginId: user_info}
+SAML_IP_TO_LOGIN = {}    # {client_ip: LoginId} — SAML 인증 완료된 IP의 LoginId
 # NOTE: 만료/검증 없이 유지되므로 내부 전용. 외부 노출 시 TTL/서명 검증 추가 필요.
 
 @app.get("/api/auth/user")

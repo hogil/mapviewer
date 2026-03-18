@@ -130,12 +130,10 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
   - `stats.json`의 `users`, `daily_stats.active_users`에 SAML 인증 후 fallback ID가 적재되면 안 된다.
   - `logs/color-legends.json`, `my-lot/`, `composite_map/` 저장 경로에 fallback ID가 나타나면 안 된다.
   - 이 모든 곳에서 SAML 인증 완료 시 실제 LoginId가 사용되어야 한다.
-- **LoginId 전달은 프론트(fetch 래핑)가 한다**: `index.html`의 `window.fetch` 래핑이 모든 `/api/` 요청에 `?LoginId=` 파라미터를 자동 추가한다. 서버 사이드에서 IP→LoginId 역매핑 같은 해킹을 하지 마라. `/api/user-prefs?LoginId=ho.choi`와 동일한 패턴이다.
-- **fetch 래핑은 SAML 리다이렉트 URL에서 LoginId를 즉시 추출한다**: `viewer.currentUser` 설정 전인 `loadServerConfig()`, `loadColorLegends()` 시점에도 URL의 `?LoginId=`에서 추출한 값을 사용한다.
-- **constructor에서 LoginId가 필요한 API를 호출하지 마라**: `my-lot/groups` 등 LoginId가 필요한 API는 `loadUserInfo()` 완료 후에 호출해야 한다. constructor 시점에는 `currentUser`가 아직 fallback 값이다.
-- **`_withLogin()` 등 자체 래핑도 fallback ID를 보내면 안 된다**: `viewer.currentUser`가 fallback이면 SAML URL의 `?LoginId=`를 우선 사용해야 한다.
-- **서버 미들웨어에서 `_effective_login_id()` 사용 금지**: `AccessTrackingMiddleware`의 `request.state.session_user`에는 `_current_login_id()`만 사용한다. `_effective_login_id()`는 fallback을 포함하므로 stats.json에 fallback ID가 적재되는 원인이 된다. LoginId 없으면 `None` → 로그에 "—", stats 미기록이 정상이다.
-- **stats.json `_update_stats()` 보호 로직**: `user_id_override`가 None이면 기록하지 않는다. 하지만 fallback ID("notsaml")가 `user_id_override`로 들어오면 기존 profile을 재사용하여 기록해버린다. 그래서 미들웨어에서 fallback을 넣으면 안 된다.
+- **SAML 인증 후 LoginId 해석은 서버가 한다**: SAML ACS 성공 시 `SAML_IP_TO_LOGIN[client_ip] = LoginId`로 IP→LoginId 매핑 저장. 이후 같은 IP의 모든 요청에서 `_current_login_id()`가 자동으로 실제 LoginId 반환. 프론트에서 fetch를 래핑하거나 URL에 LoginId를 강제로 붙이는 꼼수를 쓰지 마라.
+- **프론트가 LoginId를 명시 전달하는 경우**: `/api/user-prefs?LoginId=`, `_withLogin()` 등 프론트가 명시적으로 LoginId를 보내는 API는 기존 패턴 유지. 서버 `_current_login_id()`가 URL 파라미터를 우선 확인하므로 정상 동작.
+- **constructor에서 LoginId가 필요한 API를 호출하지 마라**: `my-lot/groups` 등은 `loadUserInfo()` 완료 후에 호출. constructor 시점에는 `currentUser`가 아직 fallback 값이다.
+- **서버 미들웨어에서 `_effective_login_id()` 사용 금지**: `AccessTrackingMiddleware`의 `request.state.session_user`에는 `_current_login_id()`만 사용. `_effective_login_id()`는 fallback을 포함하므로 stats.json 오염 원인.
 
 **변경사항 (2026-03-17)**:
 - 필터 버튼 UI: LOT/TEST/STEP 선택 시 `.filter-active` 파란색, 드롭다운에 "N개 선택됨" 배지

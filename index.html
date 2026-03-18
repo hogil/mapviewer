@@ -4551,24 +4551,6 @@
     <script defer src="/js/bitmap-loader.js"></script>
     <script defer src="/js/semiconductor-renderer.js"></script>
 
-    <!-- 🔥 fetch 래핑: 서버 요청에 자동으로 LoginId 파라미터 추가 -->
-    <script>
-    (function() {
-        var _urlLoginId = new URLSearchParams(window.location.search).get('LoginId');
-        var _invalidIds = {'': 1, 'guest': 1, 'notsaml': 1, 'default': 1, 'anon': 1, 'anonymous': 1, 'null': 1, 'undefined': 1};
-        var _origFetch = window.fetch;
-        window.fetch = function(url, opts) {
-            if (typeof url === 'string' && (url.startsWith('/api/') || url.startsWith('/logs/')) && !url.includes('LoginId=')) {
-                var id = (window.viewer && window.viewer.currentUser) || _urlLoginId;
-                if (id && !_invalidIds[id]) {
-                    url += (url.includes('?') ? '&' : '?') + 'LoginId=' + encodeURIComponent(id);
-                }
-            }
-            return _origFetch.call(this, url, opts);
-        };
-    })();
-    </script>
-
     <!-- 🚀 ES6 모듈로 로드 (최적화) -->
     <script type="module" src="/js/main.js?v=cachebust10"></script>
 
