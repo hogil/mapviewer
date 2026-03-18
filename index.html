@@ -4551,15 +4551,18 @@
     <script defer src="/js/bitmap-loader.js"></script>
     <script defer src="/js/semiconductor-renderer.js"></script>
 
-    <!-- 🔥 fetch 래핑: /api/ 요청에 자동으로 LoginId 파라미터 추가 (로그 표시용) -->
+    <!-- 🔥 fetch 래핑: /api/ 요청에 자동으로 LoginId 파라미터 추가 -->
     <script>
     (function() {
-        const _origFetch = window.fetch;
+        // SAML 리다이렉트 URL에서 LoginId를 즉시 추출 (viewer 초기화 전에도 사용 가능)
+        var _urlLoginId = new URLSearchParams(window.location.search).get('LoginId');
+        var _invalidIds = {'': 1, 'guest': 1, 'notsaml': 1, 'default': 1, 'anon': 1, 'anonymous': 1, 'null': 1, 'undefined': 1};
+        var _origFetch = window.fetch;
         window.fetch = function(url, opts) {
-            if (typeof url === 'string' && url.startsWith('/api/') && window.viewer?.currentUser) {
-                const loginId = window.viewer.currentUser;
-                if (loginId && loginId !== 'guest' && !url.includes('LoginId=')) {
-                    url += (url.includes('?') ? '&' : '?') + 'LoginId=' + encodeURIComponent(loginId);
+            if (typeof url === 'string' && url.startsWith('/api/') && !url.includes('LoginId=')) {
+                var id = (window.viewer && window.viewer.currentUser) || _urlLoginId;
+                if (id && !_invalidIds[id]) {
+                    url += (url.includes('?') ? '&' : '?') + 'LoginId=' + encodeURIComponent(id);
                 }
             }
             return _origFetch.call(this, url, opts);
