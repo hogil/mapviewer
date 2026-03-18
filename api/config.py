@@ -9,7 +9,7 @@ IMAGES_ROOT = Path(os.getenv("IMAGES_ROOT", _images_root_default)).resolve()
 ROOT_DIR = IMAGES_ROOT
 
 # 로그인/스킴 fallback 값 (단일 소스)
-FALLBACK_LOGIN_ID = (os.getenv("FALLBACK_LOGIN_ID", "notsaml").strip() or "notsaml")
+FALLBACK_LOGIN_ID = (os.getenv("FALLBACK_LOGIN_ID", "guest").strip() or "guest")
 
 # Positions는 별도 경로로 관리 (이미지와 분리)
 _positions_root_default = "D:/project/data/positions" if os.name == "nt" else "/appdata/appuser/positions"

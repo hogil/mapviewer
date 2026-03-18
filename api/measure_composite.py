@@ -519,9 +519,14 @@ def create_measure_composite(
     if not base_pos:
         raise ValueError("Cannot load positions for base image")
 
-    # 6. Output directory
+    # 6. Output directory — 기존 결과 삭제 후 current에 저장 (누적 방지)
+    import shutil
     user_dir = COMPOSITE_ROOT / (login_id or ANONYMOUS_LOGIN_ID)
-    user_dir.mkdir(parents=True, exist_ok=True)
+    if user_dir.exists():
+        # 기존 measure 결과만 삭제 (current/ 는 full composite 용이므로 유지)
+        for sub in user_dir.iterdir():
+            if sub.is_dir() and sub.name != "current":
+                shutil.rmtree(sub, ignore_errors=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = user_dir / f"{ts}_measure"
     out_dir.mkdir(parents=True, exist_ok=True)

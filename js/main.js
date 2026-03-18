@@ -8649,13 +8649,22 @@ class WaferMapViewer {
             panel.addEventListener('click', (e) => e.stopPropagation());
         }
 
-        // 버튼 아래 fixed 위치
+        // 버튼 아래 fixed 위치 — 뷰포트 경계 체크 포함
         const btn = document.getElementById('measure-composite-btn-top');
         if (btn) {
             const rect = btn.getBoundingClientRect();
-            panel.style.top = `${rect.bottom + 2}px`;
             panel.style.right = `${window.innerWidth - rect.right}px`;
             panel.style.left = 'auto';
+            panel.style.top = `${rect.bottom + 2}px`;
+            panel.style.bottom = 'auto';
+            // 🔥 아래로 넘치면 버튼 위쪽으로 표시
+            requestAnimationFrame(() => {
+                const pRect = panel.getBoundingClientRect();
+                if (pRect.bottom > window.innerHeight) {
+                    panel.style.top = 'auto';
+                    panel.style.bottom = `${window.innerHeight - rect.top + 2}px`;
+                }
+            });
         }
 
         if (search) setTimeout(() => search.focus(), 50);
@@ -9969,7 +9978,25 @@ class WaferMapViewer {
                     this._buildMcContextSubmenu();
                     mcSubmenu._mcBuilt = true;
                 }
+                // 🔥 position:fixed — 부모 메뉴 아이템 기준으로 위치 계산
+                const itemRect = mcCreateItem.getBoundingClientRect();
+                mcSubmenu.style.left = `${itemRect.right}px`;
+                mcSubmenu.style.top = `${itemRect.top}px`;
+                mcSubmenu.style.bottom = 'auto';
                 mcSubmenu.style.display = '';
+                // 뷰포트 경계 체크
+                requestAnimationFrame(() => {
+                    const rect = mcSubmenu.getBoundingClientRect();
+                    // 아래 넘침 → 위쪽으로
+                    if (rect.bottom > window.innerHeight) {
+                        mcSubmenu.style.top = 'auto';
+                        mcSubmenu.style.bottom = '4px';
+                    }
+                    // 오른쪽 넘침 → 왼쪽으로
+                    if (rect.right > window.innerWidth) {
+                        mcSubmenu.style.left = `${itemRect.left - rect.width}px`;
+                    }
+                });
             });
             // mouseleave로 닫지 않음 — hideContextMenu()에서만 닫힘
             // 서브메뉴 내부 클릭이 컨텍스트 메뉴를 닫지 않도록 차단
