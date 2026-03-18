@@ -124,10 +124,14 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 **목적**: 앱이 정상 기동되고 핵심 UI 요소가 모두 렌더링되는지 확인
 
 **⛔ 금기사항 (절대 위반 금지)**:
-- **FALLBACK_LOGIN_ID를 절대 변경하지 마라**: `api/config.py`의 `FALLBACK_LOGIN_ID`는 `"notsaml"`이다. `"guest"`나 다른 값으로 바꾸면 stats.json, color-legends.json, my-lot, composite_map 등 모든 저장 경로가 오염된다.
-- **SAML 인증 완료 후에는 반드시 실제 LoginId를 사용해라**: `FALLBACK_LOGIN_ID`/`ANONYMOUS_LOGIN_ID`는 SAML 미인증 상태에서만 사용하는 값이다. SAML 인증이 완료되었는데 fallback ID가 로그/저장 경로에 나타나면 버그다.
-- **LoginId 전달은 프론트가 한다**: `/api/user-prefs?LoginId=ho.choi`와 동일하게, 모든 `/api/` 요청에 프론트의 fetch 래핑이 `LoginId` 파라미터를 자동 추가한다 (`index.html`의 fetch 래핑). 서버 사이드에서 IP→LoginId 역매핑 같은 해킹을 하지 마라.
-- **`viewer.currentUser` 설정 전 API 호출 주의**: `loadServerConfig()`, `loadColorLegends()`는 `loadUserInfo()` 전에 호출되므로, SAML 리다이렉트 URL의 `?LoginId=` 파라미터를 fetch 래핑에서 즉시 추출하여 사용한다.
+- **FALLBACK_LOGIN_ID 값을 절대 변경하지 마라**: `api/config.py`의 `FALLBACK_LOGIN_ID`는 건드리지 않는다. 이 값은 SAML 미인증 상태에서만 사용하는 내부 식별자다.
+- **SAML 인증 완료 후 fallback ID가 로그/stats.json/저장 경로에 나타나면 버그다**:
+  - 서버 로그(`access_logger`)에 SAML 인증된 사용자의 요청이 `notsaml`이나 `guest`로 찍히면 안 된다. 반드시 실제 LoginId(`ho.choi` 등)로 표시되어야 한다.
+  - `stats.json`의 `users`, `daily_stats.active_users`에 SAML 인증 후 fallback ID가 적재되면 안 된다.
+  - `logs/color-legends.json`, `my-lot/`, `composite_map/` 저장 경로에 fallback ID가 나타나면 안 된다.
+  - 이 모든 곳에서 SAML 인증 완료 시 실제 LoginId가 사용되어야 한다.
+- **LoginId 전달은 프론트(fetch 래핑)가 한다**: `index.html`의 `window.fetch` 래핑이 모든 `/api/` 요청에 `?LoginId=` 파라미터를 자동 추가한다. 서버 사이드에서 IP→LoginId 역매핑 같은 해킹을 하지 마라. `/api/user-prefs?LoginId=ho.choi`와 동일한 패턴이다.
+- **fetch 래핑은 SAML 리다이렉트 URL에서 LoginId를 즉시 추출한다**: `viewer.currentUser` 설정 전인 `loadServerConfig()`, `loadColorLegends()` 시점에도 URL의 `?LoginId=`에서 추출한 값을 사용한다.
 
 **변경사항 (2026-03-17)**:
 - 필터 버튼 UI: LOT/TEST/STEP 선택 시 `.filter-active` 파란색, 드롭다운에 "N개 선택됨" 배지
