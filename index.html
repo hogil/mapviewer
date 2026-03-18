@@ -4551,6 +4551,22 @@
     <script defer src="/js/bitmap-loader.js"></script>
     <script defer src="/js/semiconductor-renderer.js"></script>
 
+    <!-- 🔥 fetch 래핑: /api/ 요청에 자동으로 LoginId 파라미터 추가 (로그 표시용) -->
+    <script>
+    (function() {
+        const _origFetch = window.fetch;
+        window.fetch = function(url, opts) {
+            if (typeof url === 'string' && url.startsWith('/api/') && window.viewer?.currentUser) {
+                const loginId = window.viewer.currentUser;
+                if (loginId && loginId !== 'guest' && !url.includes('LoginId=')) {
+                    url += (url.includes('?') ? '&' : '?') + 'LoginId=' + encodeURIComponent(loginId);
+                }
+            }
+            return _origFetch.call(this, url, opts);
+        };
+    })();
+    </script>
+
     <!-- 🚀 ES6 모듈로 로드 (최적화) -->
     <script type="module" src="/js/main.js?v=cachebust10"></script>
 
