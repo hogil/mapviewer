@@ -3237,12 +3237,11 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
 
             client_ip = logger_instance.get_client_ip(request)
             status = response.status_code
-            effective_login_id = _effective_login_id(request)
-            request.state.session_user = effective_login_id  # 로그 + stats용 LoginId
-            request.state.session_meta = {
-                "LoginId": effective_login_id,
-                "Username": effective_login_id,
-            }
+            # 🔥 _current_login_id만 사용 — fallback(notsaml) 절대 넣지 않음
+            # SAML 인증 완료 시 URL에 ?LoginId=가 있으므로 실제 ID 반환
+            # LoginId 없으면 None → log에 "—" 표시, stats에 미기록 (정상)
+            real_login_id = _current_login_id(request)
+            request.state.session_user = real_login_id  # None이면 log에 "—", stats 미기록
             logger_instance.log_access(request, endpoint, status)
             return response
         except BaseException as e:
