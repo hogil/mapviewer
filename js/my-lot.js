@@ -233,7 +233,11 @@ export class MyLotModal {
 
     /** LoginId를 URL에 추가 (기존 쿼리스트링 고려) */
     _withLogin(url) {
-        const id = String(this.viewer?.getCurrentLoginId?.() || this.viewer?.currentUser || '').trim();
+        // SAML 리다이렉트 URL의 LoginId를 우선 사용 (viewer 초기화 전에도 실제 ID 전달)
+        const urlLoginId = new URLSearchParams(window.location.search).get('LoginId');
+        const viewerId = String(this.viewer?.getCurrentLoginId?.() || this.viewer?.currentUser || '').trim();
+        const invalidIds = {'': 1, 'guest': 1, 'notsaml': 1, 'default': 1, 'anon': 1, 'anonymous': 1};
+        const id = (viewerId && !invalidIds[viewerId]) ? viewerId : (urlLoginId || viewerId);
         if (!id) return url;
         const sep = url.includes('?') ? '&' : '?';
         return `${url}${sep}LoginId=${encodeURIComponent(id)}`;

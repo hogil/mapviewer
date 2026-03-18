@@ -503,11 +503,8 @@ class WaferMapViewer {
         this.colorEditor = new ColorSchemeEditor(this);
         this.compositeColorModal = new CompositeColorModal(this);
         this.myLotModal = new MyLotModal(this);
-        // MY LOT 데이터는 앱 시작 시점에 미리 불러와서
-        // 버튼 클릭 즉시 모달 + 그룹 목록이 뜰 수 있도록 선로딩
-        this.myLotModal?.refreshData?.().catch((error) => {
-            console.error('[WaferMapViewer] MY LOT prefetch failed:', error);
-        });
+        // MY LOT refreshData는 loadUserInfo() 완료 후 호출 (currentUser 설정 이후)
+        // constructor에서 즉시 호출하면 FALLBACK_LOGIN_ID로 요청됨
         this.contextMenuManager = new ContextMenuManager(this);
         this.initRefMapWindow();
 
@@ -6292,6 +6289,11 @@ class WaferMapViewer {
 
         // ✅ 5단계: 사용자 개인 설정 로드 (gridCols 등)
         await this._loadUserPrefs();
+
+        // ✅ 6단계: MY LOT 선로딩 (currentUser 설정 완료 후)
+        this.myLotModal?.refreshData?.().catch((error) => {
+            console.error('[WaferMapViewer] MY LOT prefetch failed:', error);
+        });
 
         if (this.dom.fileExplorer) {
             this.dom.fileExplorer.innerHTML = '';
