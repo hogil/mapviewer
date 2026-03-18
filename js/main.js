@@ -9941,6 +9941,10 @@ class WaferMapViewer {
         if (mcSubmenu) {
             mcSubmenu.style.display = 'none';
             mcSubmenu._mcBuilt = false;
+            // body로 이동했던 서브메뉴를 원래 위치로 복원
+            if (mcSubmenu._origParent && mcSubmenu.parentElement === document.body) {
+                mcSubmenu._origParent.appendChild(mcSubmenu);
+            }
         }
 
         if (this.hideContextMenuHandler) {
@@ -9980,8 +9984,14 @@ class WaferMapViewer {
                     this._buildMcContextSubmenu();
                     mcSubmenu._mcBuilt = true;
                 }
-                // 🔥 position:fixed — 부모 메뉴 아이템 기준으로 위치 계산
+                // 🔥 body로 이동하여 부모 overflow/stacking 제약 탈출
+                if (mcSubmenu.parentElement !== document.body) {
+                    mcSubmenu._origParent = mcSubmenu.parentElement;
+                    document.body.appendChild(mcSubmenu);
+                }
                 const itemRect = mcCreateItem.getBoundingClientRect();
+                mcSubmenu.style.position = 'fixed';
+                mcSubmenu.style.zIndex = '50000';
                 mcSubmenu.style.left = `${itemRect.right}px`;
                 mcSubmenu.style.top = `${itemRect.top}px`;
                 mcSubmenu.style.bottom = 'auto';
@@ -9989,12 +9999,10 @@ class WaferMapViewer {
                 // 뷰포트 경계 체크
                 requestAnimationFrame(() => {
                     const rect = mcSubmenu.getBoundingClientRect();
-                    // 아래 넘침 → 위쪽으로
                     if (rect.bottom > window.innerHeight) {
                         mcSubmenu.style.top = 'auto';
                         mcSubmenu.style.bottom = '4px';
                     }
-                    // 오른쪽 넘침 → 왼쪽으로
                     if (rect.right > window.innerWidth) {
                         mcSubmenu.style.left = `${itemRect.left - rect.width}px`;
                     }
