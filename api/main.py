@@ -1932,22 +1932,9 @@ async def saml_acs(request: Request):
     form = dict(await request.form())
     logger.info(f"📋 [SAML ACS] Form 데이터 수신: {list(form.keys())}")
     
-    # SAMLResponse 디코딩
+    # SAMLResponse 수신 확인 (XML 전체 덤프 생략 — 아래 SAML 처리 결과에서 LoginId 등 확인 가능)
     if 'SAMLResponse' in form:
-        try:
-            import base64
-            saml_response_encoded = form['SAMLResponse']
-            logger.info(f"🔑 [SAML RESPONSE] Encoded (처음 100자):")
-            logger.info(f"  {saml_response_encoded[:100]}...")
-            
-            # Base64 디코딩
-            decoded = base64.b64decode(saml_response_encoded)
-            xml_content = decoded.decode('utf-8')
-            logger.info(f"🔑 [SAML RESPONSE] Decoded XML (전체):")
-            for line in xml_content.split('\n'):
-                logger.info(f"  {line}")
-        except Exception as e:
-            logger.warning(f"⚠️ [SAML RESPONSE] 디코딩 실패: {e}")
+        logger.info(f"🔑 [SAML ACS] SAMLResponse 수신 ({len(form['SAMLResponse'])} chars)")
     
     if 'RelayState' in form:
         logger.info(f"📌 [RELAY STATE] {form['RelayState']}")

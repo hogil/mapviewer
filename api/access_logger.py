@@ -315,8 +315,8 @@ class AccessLogger:
 
         # 🔥 최적화: 이미지/썸네일 제외하고만 테이블 로그 출력
         if not skip_console_log:
-            # 테이블 형식 로그 생성 (계정 우선 표시)
-            self._log_table_format(timestamp, display_user, method, endpoint, status_code, extra_info)
+            # 테이블 형식 로그 생성 (IP + LoginId 분리 표시)
+            self._log_table_format(timestamp, client_ip, method, endpoint, status_code, extra_info, login_id=session_user or "")
 
         # 통계 업데이트 (계정 기준 우선)
         self._update_stats(client_ip, endpoint, method, user_id_override=session_user)
@@ -371,7 +371,7 @@ class AccessLogger:
         
         return ""
     
-    def _log_table_format(self, timestamp: str, ip: str, method: str, endpoint: str, status_code: int, extra_info: str = ""):
+    def _log_table_format(self, timestamp: str, ip: str, method: str, endpoint: str, status_code: int, extra_info: str = "", login_id: str = ""):
         """완벽한 테이블 형식 로그 출력 - 요청 타입별 구분"""
         # 로그 타입 결정
         log_type_name = self._determine_log_type(endpoint, method)
@@ -409,8 +409,9 @@ class AccessLogger:
         
         # 완벽한 테이블 정렬 - 모든 컬럼 고정 너비
         log_type = f"{log_type_name:<3}"     # 3자리 (API, PAGE, FILE 등)
-        timestamp_col = f"{timestamp:<19}"   # 19자리 (YYYY-MM-DD HH:MM:SS)
+        # timestamp 제거 — systemd journal이 이미 시간을 앞에 출력하므로 중복 방지
         ip_col = f"{ip:<15}"                # 15자리
+        login_col = f"{login_id:<12}" if login_id else f"{'—':<12}"  # 12자리 LoginId
         method_col = f"{method:<4}"          # 4자리 (GET, POST, PUT, DEL)
         
         # 상위폴더+파일명 추출 (예: files→folder/image.png)
@@ -459,31 +460,31 @@ class AccessLogger:
         extra_part = f" {extra_info}" if extra_info else ""
         
         # 🎯 완벽한 테이블 정렬 - 색상 코드 길이 정확히 계산
-        # 색상 코드 길이: \033[XXm = 5자리, \033[0m = 4자리
         type_with_color = f"{type_color}{log_type}\033[0m"
         ip_with_color = f"\033[90m{ip_col}\033[0m"
+        login_with_color = f"\033[93m{login_col}\033[0m"  # 노란색 LoginId
         method_with_color = f"{method_color}{method_col}\033[0m"
         status_with_color = f"{status_color}{status_col}\033[0m"
-        
+
         # 🎯 완벽한 테이블 정렬 - 색상 코드 길이 보정
-        # 실제 텍스트 길이만 고려하여 정렬 (색상 코드는 무시)
-        type_padded = f"{type_with_color:<8}"   # API(3) + 색상코드(9) = 8자리
-        ip_padded = f"{ip_with_color:<20}"      # IP(15) + 색상코드(9) = 20자리  
-        method_padded = f"{method_with_color:<8}"  # GET(3) + 색상코드(9) = 8자리
-        status_padded = f"{status_with_color:>6}"  # 200(3) + 색상코드(9) = 6자리 (우측정렬)
-        
-        # 🎯 완벽한 정렬 - 모든 컬럼이 고정 위치에
+        type_padded = f"{type_with_color:<8}"
+        ip_padded = f"{ip_with_color:<20}"
+        login_padded = f"{login_with_color:<17}"  # 12자리 + 색상코드(5)
+        method_padded = f"{method_with_color:<8}"
+        status_padded = f"{status_with_color:>6}"
+
+        # 🎯 완벽한 정렬 — timestamp 제거 (systemd journal 중복 방지), LoginId 추가
         message = (
-            f"{type_padded}  {timestamp_col}  "  # 타입-시간 간 여백 2칸
-            f"{ip_padded}  {method_padded}  "    # IP-메서드 간 여백 2칸
-            f"{endpoint_col}  {status_padded}{extra_part}"  # 엔드포인트-상태 간 여백 2칸
+            f"{type_padded}  {ip_padded}  {login_padded}  "
+            f"{method_padded}  {endpoint_col}  {status_padded}{extra_part}"
         )
         
         # 콘솔에 테이블 형식으로 출력 (중복 방지)
         print(message)
         
-        # 파일에는 단순한 형식으로 저장
-        file_message = f"{log_type_name}: {timestamp} {ip:<15} {method:<6} {endpoint:<30} {status_code:>3}"
+        # 파일에는 timestamp 포함 (파일에는 systemd journal 없으므로)
+        login_part = f" {login_id:<12}" if login_id else f" {'—':<12}"
+        file_message = f"{log_type_name}: {timestamp} {ip:<15}{login_part} {method:<6} {endpoint:<30} {status_code:>3}"
         access_logger.info(file_message)
     
     def _determine_log_type(self, endpoint: str, method: str) -> str:
