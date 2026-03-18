@@ -909,25 +909,16 @@ def _current_login_id(req: Optional[Request]) -> Optional[str]:
     except Exception:
         pass
     
-    # 🔥 SAML 세션 확인 (URL 파라미터 → IP 역매핑)
+    # 🔥 SAML 세션 확인 (URL 파라미터 또는 쿠키)
     try:
-        # URL 파라미터에서 LoginId 확인 (SAML 로그인 직후 / user-prefs 등)
+        # URL 파라미터에서 LoginId 확인 (SAML 로그인 직후)
         login_id_param = _normalize_login_id_candidate(req.query_params.get("LoginId"))
         if login_id_param and login_id_param in SAML_USER_SESSIONS:
             return login_id_param
 
-        # 🔥 IP → LoginId 역매핑 (SAML 로그인 후 동일 IP의 모든 요청에 LoginId 적용)
-        client_ip = None
-        try:
-            client_ip = req.client.host if req.client else None
-            # X-Forwarded-For 헤더 확인 (프록시 뒤에서)
-            forwarded = req.headers.get("x-forwarded-for")
-            if forwarded:
-                client_ip = forwarded.split(",")[0].strip()
-        except Exception:
-            pass
-        if client_ip and client_ip in SAML_IP_TO_LOGIN:
-            return SAML_IP_TO_LOGIN[client_ip]
+        # SAML_USER_SESSIONS에서 모든 세션 확인 (현재는 간단하게 첫 번째 매칭)
+        # 실제로는 쿠키나 헤더로 사용자를 식별해야 하지만, 일단 모든 세션 확인
+        # TODO: 더 정확한 사용자 식별 방법 필요 (IP, 쿠키 등)
     except Exception:
         pass
 
@@ -2090,8 +2081,6 @@ async def saml_acs(request: Request):
         meta["saml_attributes"] = attrs
         # LoginId 기준으로 저장
         SAML_USER_SESSIONS[LoginId] = meta
-        # 🔥 IP → LoginId 역매핑 저장 (로그에서 LoginId 표시용)
-        SAML_IP_TO_LOGIN[client_ip] = LoginId
 
     except Exception as e:
         bootlog.error(f"❌ [SAML SESSION] 사용자 정보 저장 실패: {e}")
@@ -2209,7 +2198,6 @@ async def api_config():
 
 # 🔥 서버 메모리에 SAML 로그인 정보 저장
 SAML_USER_SESSIONS = {}  # {LoginId: user_info}
-SAML_IP_TO_LOGIN = {}    # {client_ip: LoginId} — IP 기반 LoginId 역매핑 (로그용)
 # NOTE: 만료/검증 없이 유지되므로 내부 전용. 외부 노출 시 TTL/서명 검증 추가 필요.
 
 @app.get("/api/auth/user")
@@ -3249,10 +3237,8 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
 
             client_ip = logger_instance.get_client_ip(request)
             status = response.status_code
-            # 🔥 stats에는 SAML 인증된 실제 LoginId만 전달 (guest/notsaml/preview 차단)
-            real_login_id = _current_login_id(request)
             effective_login_id = _effective_login_id(request)
-            request.state.session_user = real_login_id  # stats용: None이면 기록 안 됨
+            request.state.session_user = effective_login_id  # 로그 + stats용 LoginId
             request.state.session_meta = {
                 "LoginId": effective_login_id,
                 "Username": effective_login_id,
