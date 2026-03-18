@@ -1582,7 +1582,19 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 4. `v.selectedImages.length === N` 확인 (비어 있으면 안 됨)
 5. `v.currentGridImages.length === N` 확인
 
-**pass 기준**: 28-1~28-5 모든 항목에서 폴더 Ctrl+클릭 후 `grid.children.length > 0`이고 `v.gridMode === true`, `v.selectedImages.length > 0`
+#### 28-6. 3000개 폴더 반복 선택/해제/더블클릭 안정성 (5회)
+대량 이미지(3000장) 폴더에서 반복 조작 후에도 그리드가 정상 표시되는지 검증.
+
+1. `v.loadImagesInFolderAndShowGrid('palette_3k')` → 3000개 로드 확인
+2. 전체선택 (`v.selectAllGridImages()`) → `v.gridSelectedIdxs.length === 3000`
+3. 더블클릭 단일 모드 (`v.enterGridImageViewMode(0, v.currentGridImages)`) → `v.viewMode === 'gridImage'`
+4. 그리드 복귀 (`v.exitSingleImageViewMode()`) → `v.gridMode === true`, grid visible
+5. 전체해제 (`v.clearGridSelection()`) → `v.gridSelectedIdxs.length === 0`
+6. 상태 확인: `v._gridVisuallyHidden === false`, `v.viewMode === null`
+7. 1~6을 **5회 반복** — 매 라운드 모든 조건 통과
+8. 최종: `v.loadImagesInFolderAndShowGrid('palette_3k')` → 그리드 정상 표시 확인
+
+**pass 기준**: 28-1~28-6 모든 항목에서 폴더 클릭 후 `grid.children.length > 0`이고 `v.gridMode === true`, `v.selectedImages.length > 0`
 
 ---
 

@@ -17815,6 +17815,14 @@ class WaferMapViewer {
     }
 
     showGrid(images, skipSaveState = false) {
+        // 🔥 그리드 진입 전 잔류 상태 정리 — 단일 이미지 모드 잔존 플래그 강제 초기화
+        // (반복 선택/해제/우클릭 후 폴더 재진입 시 그리드 미표시 방지)
+        this._gridVisuallyHidden = false;
+        if (!skipSaveState) {
+            this.viewMode = null;
+            this.singleImageFromGrid = false;
+        }
+
         // 📦 Lot 모드가 활성화되어 있으면 Lot별 그리드로 표시
         if (this.lotMode) {
             this.showGridByLot(images);
@@ -20401,6 +20409,9 @@ class WaferMapViewer {
         // ✅ 네비게이션 큐 리셋
         this._isNavigating = false;
         this._pendingNavDirection = 0;
+
+        // 🔥 잔류 그리드 상태 정리
+        this._gridVisuallyHidden = false;
 
         // ✅ viewMode 설정
         this.viewMode = 'single';
@@ -25552,6 +25563,9 @@ class WaferMapViewer {
      */
     showGridByLot(images) {
         if (!images || images.length === 0) return;
+
+        // 🔥 잔류 상태 정리 (showGrid와 동일)
+        this._gridVisuallyHidden = false;
 
         // ✅ UI 요소 숨기기 (showGrid와 동일한 처리)
         const selectorsToHide = [
