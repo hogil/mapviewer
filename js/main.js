@@ -981,6 +981,7 @@ class WaferMapViewer {
 
         // STEP 필터 상태 (빈 배열 = 전체)
         this.filterSTEP = [];
+        this._unfilteredGridImages = null;  // 필터 변경 시 재필터링용 원본 그리드 이미지
 
         // 개인색 설정 상태 (기본값: false)
         this.personalizedColorEnabled = true; // 🔥 기본값: 개인색 설정 활성화
@@ -3356,16 +3357,9 @@ class WaferMapViewer {
                     this.thumbnailManager.abortAll();
                 }
 
-                // 🔥 폴더 변경 시 필터 초기화
-                this.filterLT = [];
-                this.filterTM = [];
-                this.filterSTEP = [];
-                this._restoreMultiSelectUI('lt');
-                this._restoreMultiSelectUI('tm');
-                this._restoreMultiSelectUI('step');
-
-                // 🔥 폴더 전환 시 메타 초기화 (파일 폴더 클릭 시 lazy 로드)
+                // 🔥 폴더 전환 시 메타만 초기화 (필터 값은 유지 — 새로고침 후에도 복원)
                 this.filterFileMetadata = {};
+                this._unfilteredGridImages = null;
 
                 this.loadDirectoryContents(null, this.dom.fileExplorer);
 
@@ -5488,6 +5482,10 @@ class WaferMapViewer {
             this._saveUserPrefs();
             // 🔥 DOM show/hide 방식: API 재호출 없이 기존 파일만 표시/숨김
             await this._applyFilterToExplorer();
+            // 🔥 그리드 모드일 때 그리드에도 필터 반영
+            if (this.gridMode) {
+                await this._applyFilterToGrid();
+            }
         });
 
         // 패널 밖 클릭 → 닫기
@@ -5614,6 +5612,51 @@ class WaferMapViewer {
     /**
      * 파일 탐색기에서 지정된 폴더 경로들을 순차적으로 다시 열기
      */
+    /**
+     * 🔥 필터 변경 시 그리드에도 필터 반영
+     * - selectedFolders가 있으면 폴더를 다시 스캔
+     * - _unfilteredGridImages가 있으면 그 목록에서 재필터링
+     */
+    async _applyFilterToGrid() {
+        if (!this.gridMode) return;
+
+        const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
+
+        // 방법 1: 선택된 폴더가 있으면 폴더를 다시 스캔하여 필터 적용
+        if (this.selectedFolders?.size > 0) {
+            this.selectedImages = [];
+            for (const folderPath of this.selectedFolders) {
+                await this.selectAllFolderFiles(folderPath);
+            }
+            if (this.selectedImages.length > 0) {
+                this.showGrid(this.selectedImages);
+            } else {
+                this.hideGrid();
+                this.hideImage();
+            }
+            return;
+        }
+
+        // 방법 2: 저장된 원본 목록에서 재필터링
+        if (this._unfilteredGridImages?.length > 0) {
+            let filtered;
+            if (hasFilter) {
+                filtered = this._unfilteredGridImages.filter(p =>
+                    this._passesLtTmFilter(p) && this._passesStepFilter(p)
+                );
+            } else {
+                filtered = [...this._unfilteredGridImages];
+            }
+            if (filtered.length > 0) {
+                this.selectedImages = filtered;
+                this.showGrid(filtered, true);
+            } else {
+                this.hideGrid();
+                this.hideImage();
+            }
+        }
+    }
+
     async _restoreOpenExplorerFolders(paths, { skipMeta = true } = {}) {
         if (!paths || paths.length === 0) return;
         const explorer = this.dom.fileExplorer;
@@ -5722,7 +5765,11 @@ class WaferMapViewer {
                 this._restoreMultiSelectUI('step');
                 this._saveUserPrefs();
                 // 🔥 DOM show/hide: 모든 파일 다시 표시
-                this._applyFilterToExplorer();
+                await this._applyFilterToExplorer();
+                // 🔥 그리드 모드일 때 그리드에도 필터 해제 반영
+                if (this.gridMode) {
+                    await this._applyFilterToGrid();
+                }
             });
         }
 
@@ -7229,7 +7276,7 @@ class WaferMapViewer {
 
             const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
 
-            // 🔥 필터 활성 시에만 메타 로드 (미선택이면 건너뜀)
+            // 🔥 필터 활성 시 메타 로드 — 이미 로드된 경우에도 해당 폴더가 커버되는지 확인
             if (hasFilter && (this.filterLT?.length > 0 || this.filterTM?.length > 0)) {
                 if (!this.filterFileMetadata || Object.keys(this.filterFileMetadata).length === 0) {
                     await this.fetchFilterMetadata(folderPath);
@@ -7242,17 +7289,15 @@ class WaferMapViewer {
 
             if (!this.selectedImages) this.selectedImages = [];
 
-            // 🔥 필터 없으면 이미지 파일만 필터링 (빠른 경로)
-            const imageFiles = allFiles.filter(path => {
-                if (!this.isImageFile(path)) return false;
-                if (!hasFilter) return true;
+            // 🔥 전체 이미지 목록 (필터 전) 저장 — 필터 변경 시 재필터링용
+            const allImageFiles = allFiles.filter(path => this.isImageFile(path));
+            if (!this._unfilteredGridImages) this._unfilteredGridImages = [];
+            this._unfilteredGridImages.push(...allImageFiles);
 
-                // 필터 활성 시에만 LT/TM + STEP 적용
-                if (!this._passesLtTmFilter(path)) return false;
-                if (!this._passesStepFilter(path)) return false;
-
-                return true;
-            });
+            // 🔥 필터 적용
+            const imageFiles = hasFilter
+                ? allImageFiles.filter(path => this._passesLtTmFilter(path) && this._passesStepFilter(path))
+                : allImageFiles;
 
             const MAX_SELECTION = 3000;
             const merged = Array.from(new Set([...this.selectedImages, ...imageFiles]));
@@ -7263,8 +7308,8 @@ class WaferMapViewer {
                 this.selectedImages = merged;
             }
 
-            this.debugLog(`폴더 ${folderPath}에서 ${imageFiles.length}개 이미지 선택됨`);
-            
+            this.debugLog(`폴더 ${folderPath}에서 ${imageFiles.length}/${allImageFiles.length}개 이미지 선택됨 (필터 ${hasFilter ? '적용' : '없음'})`);
+
             // ✅ 그리드 진입 전 패널 닫기
             if (imageFiles.length > 1) {
                 this.closeChipSelectionPanel();
@@ -11566,6 +11611,7 @@ class WaferMapViewer {
                     this.selectedFolders.clear();
                 }
                 this.lastSelectedFolder = null;
+                this._unfilteredGridImages = null;
 
                 // 🔥 일반 클릭: expansion/collapse만 수행 (그리드 생성 안 함)
                 // 폴더는 expansion/collapse만 되어야 함
@@ -17861,14 +17907,28 @@ class WaferMapViewer {
         this.gridMode = true;
         this.enforceGridModeUiState();
 
+        // 🔥 LOT/TEST/STEP 필터 적용 (Composite 모드는 제외)
+        let filteredImages = images;
+        if (!this.isCompositeMode) {
+            const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
+            if (hasFilter) {
+                filteredImages = images.filter(p => this._passesLtTmFilter(p) && this._passesStepFilter(p));
+                if (filteredImages.length === 0) {
+                    this.hideGrid();
+                    this.hideImage();
+                    return;
+                }
+            }
+        }
+
         // 🔥 Composite 모드가 아닐 때만 이미지를 현재 정렬 키 기준으로 정렬
         let sortedImages;
         if (this.isCompositeMode) {
             // Composite 모드: 전달된 순서 그대로 유지 (subset 추가 시 순서 보존)
-            sortedImages = [...images];
+            sortedImages = [...filteredImages];
         } else {
             // 일반 모드: 현재 정렬 키 사용 (기본: 파일명)
-            sortedImages = this._sortGridImages(images, this._gridSortKey || 'filename');
+            sortedImages = this._sortGridImages(filteredImages, this._gridSortKey || 'filename');
         }
 
         this.selectedImages = sortedImages;
@@ -19682,9 +19742,15 @@ class WaferMapViewer {
         }
 
         if (this.savedViewState.type === 'grid') {
-            // Grid 모드로 복원
+            // Grid 모드로 복원 — 🔥 현재 필터 적용
+            let gridImages = [...this.savedViewState.images];
+            const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
+            if (hasFilter) {
+                this._unfilteredGridImages = [...gridImages];
+                gridImages = gridImages.filter(p => this._passesLtTmFilter(p) && this._passesStepFilter(p));
+            }
 
-            this.selectedImages = [...this.savedViewState.images];
+            this.selectedImages = gridImages;
 
             // ✅ 폴더 선택 상태 복원
             if (this.savedViewState.selectedFolders) {
@@ -19694,7 +19760,7 @@ class WaferMapViewer {
                 this.lastSelectedFolderPath = this.savedViewState.lastSelectedFolderPath;
             }
 
-            this.showGrid(this.savedViewState.images, true);  // ✅ skipSaveState=true로 호출
+            this.showGrid(gridImages, true);  // ✅ skipSaveState=true로 호출
 
             // ✅ 폴더 선택 시각 상태 복원
             this.restoreFolderSelection();
@@ -21470,9 +21536,17 @@ class WaferMapViewer {
         const response = await fetch(`/api/files?path=${encodeURIComponent(folderPath)}`);
         const data = await response.json();
 
-        this.singleViewImageList = (data.items || [])
+        let singleList = (data.items || [])
             .filter(item => item.type === 'file' && this.isImageFile(item.name))
             .map(item => item.root_relative || `${folderPath}/${item.name}`);
+
+        // 🔥 LOT/TEST/STEP 필터 적용 (단일 이미지 탐색에도 반영)
+        const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
+        if (hasFilter) {
+            singleList = singleList.filter(p => this._passesLtTmFilter(p) && this._passesStepFilter(p));
+        }
+
+        this.singleViewImageList = singleList;
         this.naturalSortPaths(this.singleViewImageList);
 
         // 현재 이미지 인덱스 찾기
@@ -25549,6 +25623,13 @@ class WaferMapViewer {
      */
     showGridByLot(images) {
         if (!images || images.length === 0) return;
+
+        // 🔥 LOT/TEST/STEP 필터 적용
+        const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
+        if (hasFilter) {
+            images = images.filter(p => this._passesLtTmFilter(p) && this._passesStepFilter(p));
+            if (images.length === 0) return;
+        }
 
         // 🔥 잔류 상태 정리 (showGrid와 동일)
         this._gridVisuallyHidden = false;
