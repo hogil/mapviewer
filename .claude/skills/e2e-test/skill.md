@@ -1087,6 +1087,25 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
     (PNG 데이터가 `.webp` 파일에 저장되는 포맷 불일치가 없어야 함)
 13. `browser_take_screenshot` → 그리드 measure overlay 시각 확인
 
+#### 11-11. /api/measure-thumb 경량 heatmap 속도 및 정합성 검증
+그리드 Measure overlay가 `/api/measure-thumb` (positions-only, 이미지 로드 없음)를 사용하는지,
+속도가 기존 `/api/thumbnail` overlay 대비 빠른지 검증.
+
+1. palette_5mb 그리드 로드 → FBT2824 선택
+2. 그리드 첫 번째 이미지 `img.src` 또는 `img.dataset.src`에 `/api/measure-thumb` 포함 확인
+   (NOT `/api/thumbnail?...measure_overlay=`)
+3. URL에 `field=f`, `key=2824`, `scheme={LoginId}` 파라미터 존재 확인
+4. 서버 응답 Content-Type: `image/webp` 확인
+5. 응답 크기 **< 15KB** 확인 (기존 thumbnail overlay ~40KB 대비 경량)
+6. `performance.now()` 기준 FBT 선택→visible 이미지 로드 완료: **< 500ms** (6장 기준)
+7. 초기화 → 그리드 이미지 src가 `/api/thumbnail` (기존 방식)으로 복귀 확인
+8. palette_3k 3000장 로드 → FBT2824 선택
+9. visible 16장 로드 완료: **< 200ms** (positions 캐시 히트)
+10. 스크롤 → 새 이미지 lazy load 시에도 `/api/measure-thumb` 사용 확인
+11. Measure 선택 상태에서 폴더 전환 (palette_3k → palette_5mb)
+12. 전환 후 그리드 이미지에 measure overlay 적용 확인 (overlayMode 유지)
+13. `browser_take_screenshot` → 그리드 heatmap 시각 확인
+
 **pass 기준**:
 - 11-0: API 응답에서 ftn_keys 600개, qtn_keys 20개, 칩에 f/q/quad 없음
 - 11-1: Measure 패널에 FBT 600개, QVL 20개, BIN 표시
@@ -1099,6 +1118,7 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 - 11-8: FBT/QVL 키 인덱스 미표시 + 그리드→단일 전환 시 measure 오버레이 보존
 - 11-9: compact_array 칩 텍스트 정상 표시 + FBT 항목 전환 시 그리드 갱신 + 범례 칩 수
 - 11-10: 그리드/네비게이터 썸네일에 measure overlay 픽셀 적용 확인 + 포맷 일관성
+- 11-11: /api/measure-thumb 사용 확인 + 응답 < 15KB + visible 로드 < 500ms + 폴더 전환 유지
 
 ---
 
