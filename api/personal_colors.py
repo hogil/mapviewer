@@ -152,6 +152,26 @@ def _ensure_anonymous_entries(legends: Dict[str, Any]) -> bool:
         composite[ANONYMOUS_SCHEME] = copy.deepcopy(legacy) if isinstance(legacy, dict) else _default_composite_scheme()
         mutated = True
 
+    # 🔥 composite.default — Composite 기본색 (코드 하드코딩 대신 JSON 관리)
+    if not isinstance(composite.get("default"), dict):
+        composite["default"] = _default_composite_scheme()
+        mutated = True
+
+    # 🔥 measure 섹션 — Measure 기본색
+    measure = legends.get("measure")
+    if not isinstance(measure, dict):
+        measure = {}
+        legends["measure"] = measure
+        mutated = True
+
+    if not isinstance(measure.get("default"), dict):
+        measure["default"] = copy.deepcopy(DEFAULT_RATIO_GRADIENT)
+        mutated = True
+
+    if not isinstance(measure.get(ANONYMOUS_SCHEME), dict):
+        measure[ANONYMOUS_SCHEME] = copy.deepcopy(DEFAULT_RATIO_GRADIENT)
+        mutated = True
+
     return mutated
 
 
@@ -775,26 +795,28 @@ def get_ratio_gradient_for_scheme(scheme: str) -> List[Tuple[int, int, int]]:
     gradient_dict: Optional[Dict[str, str]] = None
     try:
         legends = load_color_legends()
-        # Primary: measure storage (separate from composite map)
+        # Primary: measure[scheme] → measure[anonymous] → measure["default"]
         measure = legends.get("measure")
         if isinstance(measure, dict):
             entry = measure.get(scheme)
             if not isinstance(entry, dict) and scheme != ANONYMOUS_SCHEME:
                 entry = measure.get(ANONYMOUS_SCHEME)
-            if isinstance(entry, dict):
-                if any(k.startswith("quantile") for k in entry):
-                    gradient_dict = entry
-        # Fallback: composite storage
+            if not isinstance(entry, dict):
+                entry = measure.get("default")
+            if isinstance(entry, dict) and any(k.startswith("quantile") for k in entry):
+                gradient_dict = entry
+        # Fallback: composite[scheme] → composite["default"]
         if not gradient_dict:
             composite = legends.get("composite")
             if isinstance(composite, dict):
                 entry = composite.get(scheme)
                 if not isinstance(entry, dict) and scheme != ANONYMOUS_SCHEME:
                     entry = composite.get(ANONYMOUS_SCHEME)
-                if isinstance(entry, dict):
-                    if any(k.startswith("quantile") for k in entry):
-                        gradient_dict = entry
-        # Fallback: legacy ratio storage
+                if not isinstance(entry, dict):
+                    entry = composite.get("default")
+                if isinstance(entry, dict) and any(k.startswith("quantile") for k in entry):
+                    gradient_dict = entry
+        # Fallback: legacy ratio storage (유저별 scheme.ratio)
         if not gradient_dict:
             scheme_data = legends.get(scheme) or legends.get("default")
             if isinstance(scheme_data, dict):
