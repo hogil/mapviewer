@@ -23834,24 +23834,20 @@ class WaferMapViewer {
             if (!imagePath) return;
 
             const nextUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}&size=512${personalizedParams}${cacheSuffix}`;
+            // 🔥 URL이 같으면 스킵 (불필요한 재로드 방지)
+            if (img.dataset.src === nextUrl || img.src.includes(nextUrl)) return;
             img.dataset.src = nextUrl;
             delete img.dataset.thumbnailUrl;
             img.dataset.loading = 'false';
             img.dataset.gridLoaded = 'false';
-            img.style.opacity = '0';
-            img.src = GRID_THUMB_PLACEHOLDER;
+            // 🔥 이미 로드된 이미지는 placeholder로 교체하지 않음 (깜빡임 방지)
+            // opacity만 살짝 낮춰서 갱신 중임을 표시
+            img.style.opacity = '0.5';
         });
 
         this.resumeGridLoading();
         this.loadVisibleGridThumbnails();
         setTimeout(() => this.loadVisibleGridThumbnails(), 80);
-
-        const preloadImages = (Array.isArray(this.currentGridImages) && this.currentGridImages.length > 0)
-            ? this.currentGridImages
-            : (Array.isArray(this.selectedImages) ? this.selectedImages : []);
-        if (preloadImages.length > 0) {
-            setTimeout(() => this.loadCurrentFolderThumbnails(preloadImages), 120);
-        }
 
         // Measure 키 사전 캐싱
         this._preCacheMeasureKeys();
