@@ -58,10 +58,11 @@ export OMP_NUM_THREADS="32"              # Numba/OpenMP 스레드
 export NUMBA_NUM_THREADS="32"
 export SEARCH_WORKERS="24"               # 검색 병렬 워커 수 (32코어 기준, 논리 검색 가속)
 
-# libvips 최적화 (웹서버 환경 — 동시 요청 처리 우선)
-# VIPS_CONCURRENCY=1: 개별 연산은 단일 스레드, 동시성은 IO_THREADS가 담당
-# 28로 설정 시 썸네일 1개에 28스레드 → 동시 10명 접속 시 280스레드 경합
-export VIPS_CONCURRENCY="1"              # 웹서버: 반드시 1 (동시 요청 간 스레드 경합 방지)
+# libvips 최적화 (32C/198GB — 대형 이미지 연산 가속)
+# VIPS_CONCURRENCY: 단일 이미지 연산의 내부 병렬 스레드 수
+# 28 = 4000x4000 리사이즈를 28스레드로 분할 처리 (단일 스레드 대비 ~10x 빠름)
+# 동시 요청 경합은 THUMBNAIL_SEM(384)으로 제어
+export VIPS_CONCURRENCY="28"             # 32C 서버: 대형 이미지 연산 병렬화
 export VIPS_DISC_THRESHOLD="10000m"      # 198GB RAM → 디스크 스필 기준 상향
 export VIPS_MAX_CACHE="10000"            # 캐시 항목 수 (고성능 서버)
 export VIPS_MAX_CACHE_MEM="20000m"       # 메모리 캐시 20GB (198GB 중)
