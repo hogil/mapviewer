@@ -292,15 +292,15 @@ class AccessLogger:
             print(f"IP 로그인 기록 삭제 실패: {e}")
         return False
     
-    def log_access(self, request: Request, endpoint: str, status_code: int = 200):
+    def log_access(self, request: Request, endpoint: str, status_code: int = 200, is_page_visit: bool = False):
         """테이블 형식 접속 로그 기록"""
         # stats 관련 요청은 로깅하지 않음
         if '/api/stats' in endpoint or endpoint == '/stats' or endpoint.endswith('/stats.html'):
             return
 
         # 🔥 최적화: 이미지/썸네일/composite-map 상태 요청은 콘솔 로그 생략 (대량 요청 시 성능 향상)
-        skip_console_log = (endpoint.startswith('/api/image') or 
-                           endpoint.startswith('/api/thumbnail') or 
+        skip_console_log = (endpoint.startswith('/api/image') or
+                           endpoint.startswith('/api/thumbnail') or
                            '/api/composite-map/status' in endpoint)
 
         client_ip = self.get_client_ip(request)
@@ -319,7 +319,7 @@ class AccessLogger:
             self._log_table_format(timestamp, client_ip, method, endpoint, status_code, extra_info, login_id=session_user or "")
 
         # 통계 업데이트 (계정 기준 우선)
-        self._update_stats(client_ip, endpoint, method, user_id_override=session_user)
+        self._update_stats(client_ip, endpoint, method, user_id_override=session_user, is_page_visit=is_page_visit)
     
     def _extract_extra_info(self, request: Request, endpoint: str, method: str) -> str:
         """요청에서 파일명, 클래스명 등 추가 정보 추출"""
@@ -537,7 +537,7 @@ class AccessLogger:
         
         return False
     
-    def _update_stats(self, ip: str, endpoint: str, method: str, user_id_override: Optional[str] = None, meta: Optional[Dict[str, Any]] = None):
+    def _update_stats(self, ip: str, endpoint: str, method: str, user_id_override: Optional[str] = None, meta: Optional[Dict[str, Any]] = None, is_page_visit: bool = False):
         """통계 업데이트 - 세션 관리 포함 (LoginId 기준, SAML 인증된 경우만 기록)"""
         # localhost IP는 환경변수로 허용 제어 (기본: 허용)
         if ip in ['127.0.0.1', '::1', 'localhost'] and not ALLOW_LOCAL_STATS:
@@ -590,22 +590,8 @@ class AccessLogger:
                 import traceback
                 traceback.print_exc()
         
-        # 🔥 접속 단위 카운트: 같은 LoginId의 마지막 요청으로부터 30초 이내면 같은 접속
-        # total_requests = "접속 횟수" (페이지 로드/새로고침 1회 = 1건)
-        if not hasattr(self, '_last_visit_time'):
-            self._last_visit_time = {}      # LoginId → last_unix
-            self._last_cache_cleanup = now_unix
-
-        # 1분마다 캐시 정리
-        if now_unix - self._last_cache_cleanup > 60:
-            cutoff = now_unix - 120
-            self._last_visit_time = {k: v for k, v in self._last_visit_time.items() if v > cutoff}
-            self._last_cache_cleanup = now_unix
-
-        # 같은 유저의 마지막 요청으로부터 30초 이내면 같은 접속 세션
-        last_visit = self._last_visit_time.get(LoginId, 0)
-        is_new_visit = (now_unix - last_visit) >= 30.0
-        self._last_visit_time[LoginId] = now_unix
+        # 🔥 접속 카운트: is_page_visit=True일 때만 (/ 페이지 로드 = 새로고침 1회 = 1건)
+        is_new_visit = is_page_visit
         
         # 🔥 세션 관리는 하지 않음 - stats.json 읽지 않음
         

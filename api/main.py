@@ -3238,9 +3238,13 @@ class AccessTrackingMiddleware(BaseHTTPMiddleware):
             # 🔥 로그 스킵 대상 엔드포인트 체크 (통계 업데이트 전에 먼저 체크)
             skip_prefix = ["/favicon.ico", "/static/", "/js/", "/api/files/all", "/api/stats", "/api/stats/", "/stats", "/status", "/api/composite-map/status", "/saml/login", "/saml/acs", "/saml/metadata", "/saml/sls"]
 
-            # 루트(/) 페이지는 SAML 로그인 시에만 직접 기록하므로 미들웨어에서 스킵
-            skip_endpoints = ["/", "/index.html"]
-            if endpoint in skip_endpoints:
+            # 🔥 루트(/) 페이지 접속 = 접속 1건 카운트 (새로고침/F5 포함)
+            is_page_visit = endpoint in ["/", "/index.html"]
+            if is_page_visit:
+                real_login_id = _current_login_id(request)
+                if real_login_id:
+                    request.state.session_user = real_login_id
+                    logger_instance.log_access(request, endpoint, response.status_code, is_page_visit=True)
                 return response
 
             if any(endpoint.startswith(p) for p in skip_prefix):
