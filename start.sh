@@ -2,7 +2,7 @@
 # Ubuntu 24 계열 운영 서버용 스크립트 (SAML Auto Login + 운영값) - 32C / 198GB RAM
 
 # SAML 설정
-export AUTO_LOGIN=False                    # 0=자동SAML로그인skip
+export AUTO_LOGIN="0"                      # 0=수동 로그인, 1=자동 SAML 리다이렉트
 
 # Python 출력/인코딩
 export PYTHONIOENCODING="utf-8"
@@ -13,6 +13,8 @@ export UVICORN_LIFESPAN="on"   # FastAPI lifespan 강제 (인덱스 초기화/�
 export HOST="0.0.0.0"
 export PORT="5354"
 export UVICORN_WORKERS="1"              # 메인 워커 1개 (인덱스/캐시 공유)
+export HTTP2="1"                        # 🚀 HTTP/2 활성화 (다중 요청 병렬 처리)
+export KEEP_ALIVE="1"                   # 🚀 Keep-Alive 연결 유지
 
 # SSL/TLS 설정
 export SSL_ENABLED="1"
@@ -56,11 +58,14 @@ export OMP_NUM_THREADS="32"              # Numba/OpenMP 스레드
 export NUMBA_NUM_THREADS="32"
 export SEARCH_WORKERS="24"               # 검색 병렬 워커 수 (32코어 기준, 논리 검색 가속)
 
-# libvips 최적화 (웹서버 환경)
-export VIPS_CONCURRENCY="28"             # 32C 서버 최적 근사
-export VIPS_DISC_THRESHOLD="6000m"       # 디스크 사용 기준
-export VIPS_MAX_CACHE="8000"             # 캐시 항목 수
-export VIPS_MAX_CACHE_MEM="12000m"       # 메모리 캐시
+# libvips 최적화 (웹서버 환경 — 동시 요청 처리 우선)
+# VIPS_CONCURRENCY=1: 개별 연산은 단일 스레드, 동시성은 IO_THREADS가 담당
+# 28로 설정 시 썸네일 1개에 28스레드 → 동시 10명 접속 시 280스레드 경합
+export VIPS_CONCURRENCY="1"              # 웹서버: 반드시 1 (동시 요청 간 스레드 경합 방지)
+export VIPS_DISC_THRESHOLD="10000m"      # 198GB RAM → 디스크 스필 기준 상향
+export VIPS_MAX_CACHE="10000"            # 캐시 항목 수 (고성능 서버)
+export VIPS_MAX_CACHE_MEM="20000m"       # 메모리 캐시 20GB (198GB 중)
+export VIPS_MAX_CACHE_FILES="800"        # 열린 파일 캐시 (누락 보완)
 
 # 검색 폴백 비활성화 (인덱스 결과만 활용)
 export SEARCH_FALLBACK_LIMIT="0"          # 0=폴백 결과 제한 없음 → 폴백 비활성화
