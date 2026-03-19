@@ -101,6 +101,13 @@ export class ColorSchemeEditor {
         this.originalCheckboxState = null; // 모달 열 때 체크박스 상태 저장용
         this.pendingSchemeName = ''; // 검색 리스트에서 선택한 임시 스킴명
         this.realtimeUpdateTimeout = null; // 실시간 미리보기 디바운스 타이머
+        // 🔥 LoginId 헬퍼 — 모든 색상 API에 LoginId 전달
+        this._withLogin = (url) => {
+            const id = String(this.viewer?.getCurrentLoginId?.() || this.viewer?.currentUser || '').trim();
+            if (!id) return url;
+            const sep = url.includes('?') ? '&' : '?';
+            return `${url}${sep}LoginId=${encodeURIComponent(id)}`;
+        };
         // 셀 선택 기능
         this.selectedCells = new Set(); // 선택된 셀들 (cellId 문자열)
         this.dragStartCell = null; // 드래그 시작 셀
@@ -528,7 +535,7 @@ export class ColorSchemeEditor {
         }
 
         try {
-            await fetch(`/api/color-scheme`, {
+            await fetch(this._withLogin(`/api/color-scheme`), {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ schemeName: canonicalPreviewName }),
@@ -1302,7 +1309,7 @@ export class ColorSchemeEditor {
                 // 2. 백엔드에 임시 scheme 저장 (프리뷰용)
                 try {
                     // 단일 이미지 프리뷰에서는 저장-적용 순서를 보장해 레이스를 방지
-                    const previewRes = await fetch(`/api/color-scheme`, {
+                    const previewRes = await fetch(this._withLogin(`/api/color-scheme`), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -1501,7 +1508,7 @@ export class ColorSchemeEditor {
         this.clearError();
 
         try {
-            const response = await fetch('/api/color-scheme', {
+            const response = await fetch(this._withLogin('/api/color-scheme'), {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1765,7 +1772,7 @@ export class ColorSchemeEditor {
         const originalKey = tabType === 'measure' ? 'originalMeasureData' : 'originalCompositeData';
         try {
             const loginId = schemeName || this.viewer?.getCurrentLoginId?.() || this.viewer?.currentUser || '';
-            const resp = await fetch(`${apiPath}?scheme=${encodeURIComponent(loginId)}`);
+            const resp = await fetch(`${apiPath}?LoginId=${encodeURIComponent(loginId)}`);
             if (resp.ok) {
                 const data = await resp.json();
                 const gradData = {};

@@ -9318,7 +9318,7 @@ class WaferMapViewer {
         if (!this._ratioGradientCache) {
             try {
                 const loginId = this.currentUser || FALLBACK_LOGIN_ID;
-                const resp = await fetch(`/api/measure-colors?scheme=${encodeURIComponent(loginId)}`);
+                const resp = await fetch(`/api/measure-colors?LoginId=${encodeURIComponent(loginId)}`);
                 if (resp.ok) {
                     const data = await resp.json();
                     this._ratioGradientCache = data.colors || data.defaultColors;
@@ -12798,7 +12798,7 @@ class WaferMapViewer {
             if (needsGradient && !this._ratioGradientCache) {
                 try {
                     const loginId = this.currentUser || FALLBACK_LOGIN_ID;
-                    const gcResp = await fetch(`/api/measure-colors?scheme=${encodeURIComponent(loginId)}`);
+                    const gcResp = await fetch(`/api/measure-colors?LoginId=${encodeURIComponent(loginId)}`);
                     if (gcResp.ok) {
                         const gcData = await gcResp.json();
                         this._ratioGradientCache = gcData.colors || gcData.defaultColors;
@@ -23228,7 +23228,7 @@ class WaferMapViewer {
                 if (!this._ratioGradientCache) {
                     try {
                         const loginId = this.currentUser || FALLBACK_LOGIN_ID;
-                        const resp = await fetch(`/api/measure-colors?scheme=${encodeURIComponent(loginId)}`);
+                        const resp = await fetch(`/api/measure-colors?LoginId=${encodeURIComponent(loginId)}`);
                         if (resp.ok) {
                             const data = await resp.json();
                             this._ratioGradientCache = data.colors || data.defaultColors;
@@ -23259,7 +23259,7 @@ class WaferMapViewer {
         if (!this._ratioGradientCache) {
             try {
                 const loginId = this.currentUser || FALLBACK_LOGIN_ID;
-                const resp = await fetch(`/api/measure-colors?scheme=${encodeURIComponent(loginId)}`);
+                const resp = await fetch(`/api/measure-colors?LoginId=${encodeURIComponent(loginId)}`);
                 if (resp.ok) {
                     const data = await resp.json();
                     this._ratioGradientCache = data.colors || data.defaultColors;
