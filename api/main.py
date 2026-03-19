@@ -9765,11 +9765,14 @@ def _save_all_prefs(data: dict) -> None:
     _UI_PREFS_FILE.parent.mkdir(parents=True, exist_ok=True)
     # 🔥 __preview_ 키 제거 (색상 편집기 임시 스킴이 prefs에 누적되는 것 방지)
     cleaned = {k: v for k, v in data.items() if "__preview_" not in k}
-    # 유저별 구분이 쉽도록 indent + 줄바꿈 포맷으로 저장
-    _UI_PREFS_FILE.write_text(
-        json.dumps(cleaned, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    # 유저별 한 줄씩 — 유저 구분 쉽고 prefs는 compact
+    lines = ["{"]
+    items = list(cleaned.items())
+    for i, (user, prefs) in enumerate(items):
+        comma = "," if i < len(items) - 1 else ""
+        lines.append(f"  {json.dumps(user, ensure_ascii=False)}: {json.dumps(prefs, ensure_ascii=False, separators=(',', ':'))}{comma}")
+    lines.append("}")
+    _UI_PREFS_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 @app.get("/api/user-prefs")
 async def get_user_prefs(request: Request):
