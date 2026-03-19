@@ -18086,11 +18086,12 @@ class WaferMapViewer {
         }, 100);
         grid.classList.add('active');
         setTimeout(() => this.updateGridSquaresPixel(), 0);
-        // 🔥 Measure overlay 유지: showGrid 후 overlay가 활성화돼 있으면 URL 갱신
+        // 🔥 Measure overlay 유지: buildGridThumbWrap이 이미 measure-thumb URL 생성함
+        // refreshGridThumbnailsWithCurrentParams 재호출 불필요 (cacheSuffix 차이로 URL 덮어쓰기 방지)
         if ((this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey) {
             setTimeout(() => {
-                this.refreshGridThumbnailsWithCurrentParams();
                 this.renderGridColorLegend();
+                this.updateFailbitButtonUI();
             }, 150);
         }
         if (!this.gridResizeObserver) {
@@ -18303,22 +18304,10 @@ class WaferMapViewer {
      * 🔥 진행 중인 그리드 이미지 다운로드 강제 취소 (img.src 리셋)
      */
     _cancelInFlightGridLoads() {
-        // 🔥 리스너만 제거, src는 유지 (placeholder로 바꾸지 않음 → 깜빡임 방지)
-        // 이미 브라우저가 로드 시작한 이미지는 완료될 수 있음 (캐시에 저장됨)
-        const grid = document.getElementById('image-grid');
-        if (grid) {
-            const loading = grid.querySelectorAll('.grid-thumb-img[data-loading="true"]');
-            loading.forEach(img => {
-                if (img._gridOnLoad) img.removeEventListener('load', img._gridOnLoad);
-                if (img._gridOnError) img.removeEventListener('error', img._gridOnError);
-                img._gridOnLoad = null;
-                img._gridOnError = null;
-                img.dataset.loading = 'false';
-                // gridLoaded는 false 유지 → 스크롤 멈추면 재시도
-            });
-        }
+        // 🔥 스크롤 중: 리스너 유지 (이미 요청된 이미지는 완료되면 자동 표시)
+        // 큐만 비우고 inflight 카운터만 리셋 → 새 visible 이미지 로드 가능
+        // src도, 리스너도 건드리지 않음 → 깜빡임 0, 로드 완료 시 자동 표시
         this.gridLoadInFlight = 0;
-        // 🔥 대기 큐도 완전 클리어 (재 enqueue 시 중복 방지)
         this.gridLoadQueue.length = 0;
         this.gridQueuedImages.clear();
     }
