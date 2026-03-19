@@ -2565,6 +2565,10 @@ class WaferMapViewer {
 
         this.hideGrid();
 
+        // 🔥 그리드 스크롤 초기화 (다음 폴더 선택 시 맨 위부터 시작)
+        const sw = document.querySelector('.grid-scroll-wrapper');
+        if (sw) sw.scrollTop = 0;
+
         // 단일 이미지 모드도 숨기기
 
         this.hideImage();
@@ -18076,13 +18080,18 @@ class WaferMapViewer {
         this.gridThumbWraps = [];
         // grid 모드에서는 cursor를 default로
         this.dom.viewerContainer.style.cursor = 'default';
-        // 🔥 새 그리드 진입 시 스크롤 맨 위 (skipSaveState=true면 나중에 복원됨)
+        this.showGridImmediately(sortedImages);
+        // 🔥 새 그리드 진입 시 스크롤 맨 위 (콘텐츠 추가 후 리셋하여 확실히 적용)
         if (!skipSaveState) {
             const sw = grid?.parentElement;
             if (sw) sw.scrollTop = 0;
         }
-        this.showGridImmediately(sortedImages);
         requestAnimationFrame(() => {
+            // 🔥 rAF에서 한 번 더 스크롤 리셋 (브라우저 레이아웃 이후 확실히 적용)
+            if (!skipSaveState) {
+                const sw = grid?.parentElement;
+                if (sw) sw.scrollTop = 0;
+            }
             this.primeRenderedGridThumbnails(40);
             this.loadVisibleGridThumbnails();
         });
@@ -18954,12 +18963,13 @@ class WaferMapViewer {
         const grid = document.getElementById('image-grid');
         const gridControls = document.getElementById('grid-controls');
         const scrollWrapper = grid?.parentElement;
-        if (grid) grid.style.display = '';
+        if (grid) grid.style.display = 'grid';
         if (gridControls) gridControls.style.display = '';
         if (scrollWrapper && scrollWrapper.classList.contains('grid-scroll-wrapper')) {
             scrollWrapper.style.display = '';
         }
         this.dom.viewerContainer.classList.add('grid-mode');
+        this.dom.viewerContainer.classList.remove('single-image-mode');
         this.dom.imageCanvas.style.display = 'none';
         this.dom.overlayCanvas.style.display = 'none';
         this.dom.minimapContainer.style.display = 'none';
@@ -20897,6 +20907,7 @@ class WaferMapViewer {
             lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || null,
             lotMode: this.lotMode,
             source: isLabelExplorerGrid ? 'labelExplorer' : 'grid',
+            fileExplorerScrollTop: this.dom.fileExplorer ? this.dom.fileExplorer.scrollTop : 0,
         };
 
         const currentList = this.selectedImages || currentImages;
@@ -21128,13 +21139,22 @@ class WaferMapViewer {
                 // 🔥 Fast path: 그리드 DOM이 그대로 남아있으므로 시각적 복원만
                 this._showGridVisual();
 
-                // 스크롤 위치 복원
+                // 스크롤 위치 복원 + 보이는 영역 썸네일 즉시 로드
                 const scrollWrapper = existingGrid.parentElement;
-                if (scrollWrapper && scrollTopToRestore !== undefined) {
-                    requestAnimationFrame(() => {
+                const doScrollRestore = () => {
+                    if (scrollWrapper && scrollTopToRestore !== undefined && scrollTopToRestore > 0) {
                         scrollWrapper.scrollTop = scrollTopToRestore;
-                    });
-                }
+                    }
+                };
+                const doLoadVisible = () => {
+                    this._ensureGridOffsetCache();
+                    this.loadVisibleGridThumbnails();
+                };
+                // 🔥 즉시 + rAF + setTimeout 다중 복원 (display:none→grid 전환 후 레이아웃 안정화 대기)
+                doScrollRestore();
+                requestAnimationFrame(() => { doScrollRestore(); doLoadVisible(); });
+                setTimeout(() => { doScrollRestore(); doLoadVisible(); }, 50);
+                setTimeout(() => { doScrollRestore(); doLoadVisible(); }, 150);
 
                 if (isLabelExplorerRestore) {
                     existingGrid.setAttribute('data-label-explorer-grid', 'true');
@@ -21156,9 +21176,14 @@ class WaferMapViewer {
             }
 
             // ✅ Wafer Map Explorer 선택 표시 복원 (모든 파일/폴더 선택 강조)
+            const savedFileExplorerScrollTop = savedGridViewSaveState?.fileExplorerScrollTop;
             setTimeout(() => {
                 this.restoreFolderSelection();
                 this.updateFileExplorerSelection({ highlightOnly: true, skipEnsurePage: true });
+                // 🔥 파일 탐색기 스크롤 위치 복원 (선택 폴더가 보이도록)
+                if (this.dom.fileExplorer && savedFileExplorerScrollTop !== undefined) {
+                    this.dom.fileExplorer.scrollTop = savedFileExplorerScrollTop;
+                }
             }, 80);
 
             const activeDetailPage = this.pageManager?.getActivePage?.();

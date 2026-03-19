@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 28개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 29개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -1730,6 +1730,59 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 8. 최종: `v.loadImagesInFolderAndShowGrid('palette_3k')` → 그리드 정상 표시 확인
 
 **pass 기준**: 28-1~28-6 모든 항목에서 폴더 클릭 후 `grid.children.length > 0`이고 `v.gridMode === true`, `v.selectedImages.length > 0`
+
+---
+
+### Phase 29: 그리드↔단일 이미지 전환 시 스크롤/로딩 안정성
+
+**목적**: 그리드→단일 이미지→그리드 복귀, 우클릭 해제→새 폴더 선택 시 스크롤 위치와 썸네일 로딩이 정상 동작하는지 검증
+
+**배경**:
+- `_showGridVisual()`에서 `single-image-mode` CSS 클래스 미제거로 `display: none !important` 유지되어 그리드 스크롤 복원 실패
+- `grid.style.display = ''`가 CSS 기본값으로 fallback되어 grid 레이아웃 미적용
+- 우클릭 해제 후 스크롤 wrapper scrollTop 미초기화로 새 폴더 선택 시 이전 스크롤 유지
+- fast path 복귀 시 `loadVisibleGridThumbnails()` 미호출로 보이는 영역 썸네일 로드 지연
+
+**평가 항목**:
+
+#### 29-1. 그리드 복귀 시 스크롤 위치 복원
+1. Ctrl+클릭 폴더(wafer_edge_ring) → 그리드 로드 (3000개)
+2. 그리드 스크롤을 8000px로 설정, 1초 대기
+3. `v.enterSingleImageMode(80)` → 단일 이미지 모드 진입
+4. 상태 확인: `v._gridVisuallyHidden === true`, `v.gridViewSaveState.scrollTop === 8000`
+5. `v.exitSingleImageViewMode()` → 그리드 복귀, 500ms 대기
+6. **핵심 검증**: `document.querySelector('.grid-scroll-wrapper').scrollTop` ≈ 8000 (±200)
+7. **핵심 검증**: `document.querySelector('.grid-scroll-wrapper').scrollHeight` > 0 (grid DOM 정상 표시)
+8. **핵심 검증**: `document.querySelector('.viewer-container').classList.contains('single-image-mode') === false`
+
+#### 29-2. 그리드 복귀 시 파일 탐색기 스크롤 및 폴더 선택 복원
+1. Ctrl+클릭 폴더 → 그리드 로드
+2. 파일 탐색기 스크롤 위치 기록 (`explorer.scrollTop`)
+3. `v.enterSingleImageMode(0)` → 단일 이미지 모드
+4. `v.exitSingleImageViewMode()` → 그리드 복귀, 300ms 대기
+5. **핵심 검증**: `explorer.querySelector('summary.folder.selected')` 존재 (폴더 선택 시각적 복원)
+6. **핵심 검증**: `v.selectedFolders.size > 0` (상태 복원)
+7. **핵심 검증**: `explorer.scrollTop` === 저장된 값 (파일 탐색기 스크롤 복원)
+
+#### 29-3. 우클릭 해제 후 새 폴더 선택 시 그리드 스크롤 맨 위
+1. Ctrl+클릭 폴더 → 그리드 로드 → 스크롤 8000px
+2. `v.enterSingleImageMode(80)` → 단일 이미지 모드
+3. `v.exitSingleImageViewMode()` → 그리드 복귀 (스크롤 8000px)
+4. `v.handleFileRightClick({preventDefault:()=>{}, stopPropagation:()=>{}})` → 전체 해제
+5. **핵심 검증**: `document.querySelector('.grid-scroll-wrapper').scrollTop === 0` (스크롤 초기화)
+6. 다른 폴더(wafer_folder) Ctrl+클릭 → 그리드 로드
+7. **핵심 검증**: `document.querySelector('.grid-scroll-wrapper').scrollTop === 0` (새 폴더 맨 위)
+8. **핵심 검증**: `v.currentGridImages.length > 0` (그리드 정상 표시)
+
+#### 29-4. 그리드 복귀 시 보이는 영역 썸네일 즉시 로드
+1. Ctrl+클릭 폴더(wafer_edge_ring) → 그리드 로드 (3000개)
+2. 그리드 스크롤을 5000px로 설정, 2초 대기 (스크롤 영역 썸네일 로드)
+3. `v.enterSingleImageMode(50)` → 단일 이미지 모드
+4. `v.exitSingleImageViewMode()` → 그리드 복귀, 1초 대기
+5. 현재 뷰포트 내 `.grid-thumb-img` 요소 중 `img.complete && img.naturalWidth > 1` 비율 계산
+6. **핵심 검증**: 뷰포트 내 로드된 비율 > 50% (즉시 로드 시작됨)
+
+**pass 기준**: 29-1~29-4 모든 핵심 검증 통과
 
 ---
 
