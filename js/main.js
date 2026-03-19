@@ -18303,7 +18303,8 @@ class WaferMapViewer {
      * 🔥 진행 중인 그리드 이미지 다운로드 강제 취소 (img.src 리셋)
      */
     _cancelInFlightGridLoads() {
-        // 🔥 리스너 먼저 제거 → src 변경 시 placeholder onload가 gridLoaded=true 설정 방지
+        // 🔥 리스너만 제거, src는 유지 (placeholder로 바꾸지 않음 → 깜빡임 방지)
+        // 이미 브라우저가 로드 시작한 이미지는 완료될 수 있음 (캐시에 저장됨)
         const grid = document.getElementById('image-grid');
         if (grid) {
             const loading = grid.querySelectorAll('.grid-thumb-img[data-loading="true"]');
@@ -18312,9 +18313,8 @@ class WaferMapViewer {
                 if (img._gridOnError) img.removeEventListener('error', img._gridOnError);
                 img._gridOnLoad = null;
                 img._gridOnError = null;
-                img.src = GRID_THUMB_PLACEHOLDER;
                 img.dataset.loading = 'false';
-                img.dataset.gridLoaded = 'false';
+                // gridLoaded는 false 유지 → 스크롤 멈추면 재시도
             });
         }
         this.gridLoadInFlight = 0;
@@ -18874,7 +18874,14 @@ class WaferMapViewer {
             if (c.top > viewBottom + padding) break;
 
             const img = wraps[i].querySelector('.grid-thumb-img');
-            if (img && img.dataset?.src && img.dataset.gridLoaded !== 'true' && img.dataset.loading !== 'true') {
+            if (!img || !img.dataset?.src) continue;
+            // 🔥 이미 올바른 URL로 로드 완료됨 → gridLoaded 마킹하고 스킵
+            if (img.dataset.gridLoaded !== 'true' && img.complete && img.naturalWidth > 1 && img.src === img.dataset.src) {
+                img.dataset.gridLoaded = 'true';
+                img.dataset.loading = 'false';
+                img.style.opacity = '1';
+            }
+            if (img.dataset.gridLoaded !== 'true' && img.dataset.loading !== 'true') {
                 const inViewport = (c.top + c.height > scrollTop && c.top < viewBottom);
                 if (inViewport) {
                     viewportImages.push(img);
