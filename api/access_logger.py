@@ -590,28 +590,22 @@ class AccessLogger:
                 import traceback
                 traceback.print_exc()
         
-        # 중복 요청 체크 (LoginId 기준으로 변경 - IP는 공유될 수 있음)
-        # 같은 LoginId에서 5초 이내 같은 endpoint 요청이면 중복으로 간주하고 스킵
-        recent_key = f"{LoginId}_{endpoint}"
-        
-        if not hasattr(self, '_recent_requests'):
-            self._recent_requests = {}
+        # 🔥 접속 단위 카운트: 같은 LoginId의 마지막 요청으로부터 30초 이내면 같은 접속
+        # total_requests = "접속 횟수" (페이지 로드/새로고침 1회 = 1건)
+        if not hasattr(self, '_last_visit_time'):
+            self._last_visit_time = {}      # LoginId → last_unix
             self._last_cache_cleanup = now_unix
-        
+
         # 1분마다 캐시 정리
         if now_unix - self._last_cache_cleanup > 60:
-            # 10초 이상 된 기록 삭제
-            cutoff = now_unix - 10
-            self._recent_requests = {k: v for k, v in self._recent_requests.items() if v > cutoff}
+            cutoff = now_unix - 120
+            self._last_visit_time = {k: v for k, v in self._last_visit_time.items() if v > cutoff}
             self._last_cache_cleanup = now_unix
-        
-        # 같은 LoginId에서 5초 이내 같은 endpoint 요청이면 중복으로 간주하고 스킵
-        last_request_time = self._recent_requests.get(recent_key, 0)
-        if now_unix - last_request_time < 5.0:
-            # 5초 이내 중복 요청 → 스킵
-            return
-        
-        self._recent_requests[recent_key] = now_unix
+
+        # 같은 유저의 마지막 요청으로부터 30초 이내면 같은 접속 세션
+        last_visit = self._last_visit_time.get(LoginId, 0)
+        is_new_visit = (now_unix - last_visit) >= 30.0
+        self._last_visit_time[LoginId] = now_unix
         
         # 🔥 세션 관리는 하지 않음 - stats.json 읽지 않음
         
@@ -660,7 +654,10 @@ class AccessLogger:
         if "first_access_time" not in user_data:
             user_data["first_access_time"] = now_timestamp
 
-        user_data["total_requests"] += 1
+        # 🔥 total_requests = 접속 횟수 (페이지 로드/새로고침 1회 = 1건)
+        # 30초 이내 연속 API 호출은 같은 접속으로 간주
+        if is_new_visit:
+            user_data["total_requests"] += 1
         user_data["last_seen"] = today
         # 🔥 중요: 마지막 접속 시간을 항상 최신으로 업데이트 (오늘 여러 번 접속해도 가장 마지막 시간으로 갱신)
         user_data["last_access_time"] = now_timestamp
@@ -683,12 +680,13 @@ class AccessLogger:
         
         if today not in user_data["daily_requests"]:
             user_data["daily_requests"][today] = 0
-        user_data["daily_requests"][today] += 1
-        
+        if is_new_visit:
+            user_data["daily_requests"][today] += 1
+
         if endpoint not in user_data["endpoints"]:
             user_data["endpoints"][endpoint] = 0
         user_data["endpoints"][endpoint] += 1
-        
+
         # 일별 통계
         if today not in self.stats_data["daily_stats"]:
             self.stats_data["daily_stats"][today] = {
@@ -700,19 +698,20 @@ class AccessLogger:
                 "by_company": {},
                 "by_org_url": {}
             }
-        
+
         daily = self.stats_data["daily_stats"][today]
-        
+
         # 중복 제거하며 추가
         if LoginId not in daily["active_users"]:
             daily["active_users"].append(LoginId)
-        daily["total_requests"] += 1
-        
+        if is_new_visit:
+            daily["total_requests"] += 1
+
         # 신규 사용자 체크
         if user_data["first_seen"] == today:
             if LoginId not in daily["new_users"]:
                 daily["new_users"].append(LoginId)
-        
+
         # 월별 통계
         month = today[:7]  # YYYY-MM
         if month not in self.stats_data["monthly_stats"]:
@@ -726,13 +725,14 @@ class AccessLogger:
                 "by_company": {},
                 "by_org_url": {}
             }
-        
+
         monthly = self.stats_data["monthly_stats"][month]
-        
+
         # 중복 제거하며 추가
         if LoginId not in monthly["active_users"]:
             monthly["active_users"].append(LoginId)
-        monthly["total_requests"] += 1
+        if is_new_visit:
+            monthly["total_requests"] += 1
         
         if user_data["first_seen"].startswith(month):
             if LoginId not in monthly["new_users"]:
