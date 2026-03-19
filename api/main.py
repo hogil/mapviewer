@@ -1401,6 +1401,26 @@ class TTLCache:
 
 THUMB_STAT_CACHE = TTLCache(THUMB_STAT_TTL_SECONDS, THUMB_STAT_CACHE_CAPACITY)
 
+# 🔥 positions JSON 캐시 (measure overlay 시 같은 폴더의 파일을 반복 로드 방지)
+_positions_json_cache: Dict[str, dict] = {}  # path_str → parsed JSON
+_POSITIONS_CACHE_MAX = 64
+
+def _load_positions_cached(positions_path: Path) -> Optional[dict]:
+    """positions JSON을 메모리 캐시에서 로드 (같은 파일 반복 읽기 방지, ~10ms 절약)"""
+    key = str(positions_path)
+    cached = _positions_json_cache.get(key)
+    if cached is not None:
+        return cached
+    if not positions_path.exists():
+        return None
+    with open(positions_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    # LRU: 오래된 항목 제거
+    if len(_positions_json_cache) >= _POSITIONS_CACHE_MAX:
+        _positions_json_cache.pop(next(iter(_positions_json_cache)))
+    _positions_json_cache[key] = data
+    return data
+
 # 🔥 팔레트 캐시 (원본 PNG 파일의 팔레트 정보 캐싱 - 파일 읽기 최소화)
 _PALETTE_CACHE: Dict[str, Tuple[float, List[int]]] = {}  # {image_path: (mtime, palette)}
 _PALETTE_CACHE_LOCK = RLock()
@@ -3679,14 +3699,12 @@ def _apply_ratio_overlay_memory(
 ) -> Optional[bytearray]:
     """Ratio overlay: chip interiors colored by percentile rank of f/q values."""
     try:
-        # 1. Read positions
+        # 1. Read positions (캐시 사용 — 같은 폴더 반복 로드 방지)
         rel_path = Path(_get_relative_path_from_image(str(image_path)))
         positions_path = _resolve_positions_path(rel_path)
-        if not positions_path.exists():
+        positions_data = _load_positions_cached(positions_path)
+        if positions_data is None:
             return None
-
-        with open(positions_path, "r", encoding="utf-8") as f:
-            positions_data = json.load(f)
         chips = positions_data.get("chips", [])
         if not isinstance(chips, list) or not chips:
             return None
@@ -3781,10 +3799,24 @@ def _apply_ratio_overlay_memory(
 
         # 6. Open image and convert to RGB, then to NumPy for fast blending
         import numpy as np
-        with Image.open(io.BytesIO(bytes(png_data))) as src:
-            out = src.convert("RGB")
-
-        width, height = out.size
+        # 🔥 pyvips 우선 사용 (PIL 대비 ~4x 빠름: 12ms vs 57ms)
+        _use_pyvips_load = False
+        try:
+            import pyvips as _pv
+            _vimg = _pv.Image.new_from_buffer(bytes(png_data), "", access='sequential')
+            if _vimg.bands < 3:
+                _vimg = _vimg.colourspace('srgb')
+            _buf = _vimg.write_to_memory()
+            width, height = _vimg.width, _vimg.height
+            img_bands = _vimg.bands
+            img_arr = np.frombuffer(_buf, dtype=np.uint8).reshape(height, width, img_bands).copy()
+            if img_bands == 4:
+                img_arr = img_arr[:, :, :3]  # RGBA → RGB
+            _use_pyvips_load = True
+        except Exception:
+            with Image.open(io.BytesIO(bytes(png_data))) as src:
+                out = src.convert("RGB")
+            width, height = out.size
         coord = positions_data.get("coord", {})
         canvas = coord.get("canvas", {}) if isinstance(coord, dict) else {}
         canvas_w = int(canvas.get("width", width)) if isinstance(canvas, dict) else width
@@ -3814,7 +3846,8 @@ def _apply_ratio_overlay_memory(
         logger.debug(f"🔍 [RATIO OVERLAY] image={image_path.name}, png_size={width}x{height}, canvas={canvas_w}x{canvas_h}, scale={scale_x:.4f}x{scale_y:.4f}, field={field}, key={item_key}, values={len(values)}, scheme={scheme}")
 
         # 7. Opaque overlay using NumPy vectorized ops (pure gradient color, no blending)
-        img_arr = np.array(out, dtype=np.uint8)
+        if not _use_pyvips_load:
+            img_arr = np.array(out, dtype=np.uint8)
 
         # 7a. Mask chips outside selected gradient ranges (white, no text)
         # When gradient_filter active, also mask ALL chips without ratio data
@@ -3861,10 +3894,22 @@ def _apply_ratio_overlay_memory(
         if filled == 0 and not all_masked:
             return None
 
+        # 🔥 썸네일(≤512px)에서는 텍스트 렌더링 생략 (75ms 절약, 텍스트가 너무 작아 안 보임)
+        _is_thumbnail = (width <= 512 and height <= 512)
+
+        if _is_thumbnail and _use_pyvips_load:
+            # 🔥 고속 경로: pyvips로 직접 저장 (PIL 거치지 않음)
+            try:
+                _vout = _pv.Image.new_from_memory(img_arr.data, width, height, 3, 'uchar')
+                _out_buf = _vout.pngsave_buffer(compression=config.PNG_COMPRESSION_LEVEL, strip=True)
+                return bytearray(_out_buf)
+            except Exception:
+                pass  # 실패 시 아래 PIL 경로로 fallback
+
         out = Image.fromarray(img_arr)
 
-        # 7c. Render text values on chips (K/M abbreviated)
-        if chip_colors and chip_raw_values:
+        # 7c. Render text values on chips (K/M abbreviated) — 썸네일에서는 생략
+        if chip_colors and chip_raw_values and not _is_thumbnail:
             try:
                 draw = ImageDraw.Draw(out)
                 # 칩 크기 샘플링 → 폰트 사이즈 결정
@@ -4617,6 +4662,43 @@ def _generate_thumbnail_sync(
             if measure_overlay and image_path.suffix.lower() == '.png':
                 _deferred_measure_overlay = measure_overlay
 
+            # 🔥 고속 경로: base 썸네일이 캐시에 있으면 원본 재생성 건너뛰기
+            # measure_overlay만 다른 경우, 기존 base 썸네일 위에 overlay만 적용 (~30ms vs ~150ms)
+            if _deferred_measure_overlay and not grade_filter and not bottom_filter and not bin_overlay:
+                base_thumb = get_thumbnail_path(image_path, size, scheme=scheme, variant=None)
+                if base_thumb.exists() and base_thumb.stat().st_size > 0:
+                    try:
+                        with open(base_thumb, 'rb') as tf:
+                            thumb_data = bytearray(tf.read())
+                        parts = _deferred_measure_overlay.split(":", 1)
+                        if len(parts) == 2:
+                            m_field, m_key = parts
+                            if m_field in ("f", "q") and m_key:
+                                effective_scheme = scheme or ANONYMOUS_LOGIN_ID
+                                overlay = _apply_ratio_overlay_memory(
+                                    thumb_data, image_path, m_field, m_key, effective_scheme,
+                                    gradient_filter=gradient_filter,
+                                    _source_image_path=image_path,
+                                )
+                                if overlay is not None:
+                                    # 포맷 변환 (PNG→WEBP)
+                                    if fmt != "PNG":
+                                        try:
+                                            _cv = pyvips.Image.new_from_buffer(bytes(overlay), "")
+                                            if fmt == "WEBP":
+                                                overlay = bytearray(_cv.webpsave_buffer(
+                                                    Q=THUMBNAIL_QUALITY, effort=0, strip=True))
+                                            elif fmt == "JPEG":
+                                                overlay = bytearray(_cv.jpegsave_buffer(
+                                                    Q=THUMBNAIL_QUALITY, strip=True))
+                                        except Exception:
+                                            pass
+                                    with open(thumbnail_path, 'wb') as tf:
+                                        tf.write(overlay)
+                                    return
+                    except Exception as fast_err:
+                        logger.debug(f"⚠️ [FAST OVERLAY] base 썸네일 재사용 실패, 정상 경로로 fallback: {fast_err}")
+
             should_patch_palette = image_path.suffix.lower() == '.png' and (
                 (personalized and scheme) or bool(grade_filter) or bool(bottom_filter) or border_normalize or bin_overlay
             )
@@ -4794,23 +4876,18 @@ def _generate_thumbnail_sync(
                                 _source_image_path=image_path,
                             )
                             if overlay is not None:
-                                # 🔥 overlay는 항상 PNG 포맷 → 썸네일 포맷에 맞춰 재변환
+                                # 🔥 overlay는 PNG 포맷 → 썸네일 포맷에 맞춰 재변환 (pyvips 우선)
                                 if fmt != "PNG":
                                     try:
-                                        with Image.open(io.BytesIO(bytes(overlay))) as png_img:
-                                            conv_buf = io.BytesIO()
-                                            if fmt == "WEBP":
-                                                png_img.save(conv_buf, format="WEBP",
-                                                             quality=THUMBNAIL_QUALITY, method=1)
-                                            elif fmt == "JPEG":
-                                                rgb = png_img.convert("RGB") if png_img.mode != "RGB" else png_img
-                                                rgb.save(conv_buf, format="JPEG",
-                                                         quality=THUMBNAIL_QUALITY)
-                                            else:
-                                                png_img.save(conv_buf, format=fmt)
-                                            overlay = bytearray(conv_buf.getvalue())
-                                    except Exception as conv_err:
-                                        logger.debug(f"⚠️ [DEFERRED RATIO] 포맷 변환 실패 (PNG→{fmt}), PNG으로 저장: {conv_err}")
+                                        _cv = pyvips.Image.new_from_buffer(bytes(overlay), "")
+                                        if fmt == "WEBP":
+                                            overlay = bytearray(_cv.webpsave_buffer(
+                                                Q=THUMBNAIL_QUALITY, effort=0, strip=True))
+                                        elif fmt == "JPEG":
+                                            overlay = bytearray(_cv.jpegsave_buffer(
+                                                Q=THUMBNAIL_QUALITY, strip=True))
+                                    except Exception:
+                                        pass  # PNG 그대로 저장
                                 with open(thumbnail_path, 'wb') as tf:
                                     tf.write(overlay)
                 except Exception as e:
