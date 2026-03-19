@@ -825,23 +825,35 @@ export class ColorSchemeEditor {
         if (!this.schemeDropdown) return;
         const legends = this.viewer?.colorLegends || {};
         const filter = this.schemeSearchInput?.value?.trim().toLowerCase() || '';
-        const entries = Object.keys(legends);
-        
-        // 'default' 제외하고 필터링 (LoginId, Username, DeptName 모두 검색)
+
+        // 탭에 따라 다른 사용자 목록 사용
+        const RESERVED_KEYS = new Set(['default', 'composite', 'measure']);
+        let entries;
+        if (this.activeTab === 'composite') {
+            entries = Object.keys(legends['composite'] || {});
+        } else if (this.activeTab === 'measure') {
+            entries = Object.keys(legends['measure'] || {});
+        } else {
+            entries = Object.keys(legends);
+        }
+
+        // 예약 키 및 미리보기 키 제외, 필터링 (LoginId, Username, DeptName 모두 검색)
         const matches = entries.filter((name) => {
-            if (name === 'default') return false;
-            
-            const schemeData = legends[name] || {};
-            const loginId = String(schemeData.LoginId || name || '').toLowerCase();
-            const username = (schemeData.Username || '').toLowerCase();
-            const deptName = (schemeData.DeptName || '').toLowerCase();
-            
+            if (RESERVED_KEYS.has(name)) return false;
+            if (name.startsWith('_preview_')) return false;
+
+            // 사용자 메타데이터는 top-level에서 참조
+            const userData = legends[name] || {};
+            const loginId = String(userData.LoginId || name || '').toLowerCase();
+            const username = (userData.Username || '').toLowerCase();
+            const deptName = (userData.DeptName || '').toLowerCase();
+
             // 필터가 없으면 모두 표시
             if (!filter) return true;
-            
+
             // LoginId, Username, DeptName 중 하나라도 매칭되면 표시
-            return loginId.includes(filter) || 
-                   username.includes(filter) || 
+            return loginId.includes(filter) ||
+                   username.includes(filter) ||
                    deptName.includes(filter);
         });
         
@@ -870,10 +882,11 @@ export class ColorSchemeEditor {
             this.schemeDropdown.appendChild(headerRow);
 
             limitedMatches.forEach((name, index) => {
-                const schemeData = legends[name] || {};
-                const loginId = String(schemeData.LoginId || name || '');
-                const username = String(schemeData.Username || '');
-                const deptName = String(schemeData.DeptName || '');
+                // composite/measure 탭: 사용자 메타데이터는 top-level에서 참조
+                const userData = legends[name] || {};
+                const loginId = String(userData.LoginId || name || '');
+                const username = String(userData.Username || '');
+                const deptName = String(userData.DeptName || '');
                 
                 const item = document.createElement('div');
                 item.className = 'color-editor-scheme-item color-editor-scheme-row';
@@ -1683,6 +1696,9 @@ export class ColorSchemeEditor {
                 panel.classList.toggle('active', tab === key);
             }
         }
+        // 탭 전환 시 스킴 드롭다운 갱신 (탭별 사용자 목록이 다름)
+        this.resetSchemeSearchState();
+        this.populateSchemeOptions(false);
         // Check for changes on the active tab
         this.checkForChanges();
     }
