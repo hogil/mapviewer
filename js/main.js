@@ -18086,6 +18086,13 @@ class WaferMapViewer {
         }, 100);
         grid.classList.add('active');
         setTimeout(() => this.updateGridSquaresPixel(), 0);
+        // 🔥 Measure overlay 유지: showGrid 후 overlay가 활성화돼 있으면 URL 갱신
+        if ((this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey) {
+            setTimeout(() => {
+                this.refreshGridThumbnailsWithCurrentParams();
+                this.renderGridColorLegend();
+            }, 150);
+        }
         if (!this.gridResizeObserver) {
             this.gridResizeObserver = new ResizeObserver(() => this.updateGridSquaresPixel());
             this.gridResizeObserver.observe(grid);
