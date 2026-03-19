@@ -64,18 +64,19 @@ DEFAULT_BOTTOM_COLORS = {
     "ETC": "#C0C0C0",
 }
 
+# Measure / Composite 공통 기본 그라디언트: 흰(#FFFFFF) → 검(#000000)
 DEFAULT_RATIO_GRADIENT = {
-    "quantile0": "#0000FF",
-    "quantile10": "#0066FF",
-    "quantile20": "#00CCFF",
-    "quantile30": "#00FFCC",
-    "quantile40": "#00FF00",
-    "quantile50": "#66FF00",
-    "quantile60": "#CCFF00",
-    "quantile70": "#FFCC00",
-    "quantile80": "#FF6600",
-    "quantile90": "#FF3300",
-    "quantile100": "#FF0000",
+    "quantile0": "#FFFFFF",
+    "quantile10": "#E6E6E6",
+    "quantile20": "#CCCCCC",
+    "quantile30": "#B3B3B3",
+    "quantile40": "#999999",
+    "quantile50": "#808080",
+    "quantile60": "#666666",
+    "quantile70": "#4D4D4D",
+    "quantile80": "#333333",
+    "quantile90": "#1A1A1A",
+    "quantile100": "#000000",
 }
 
 # 팔레트 인덱스 정의 (이미지 생성 코드와 반드시 일치해야 함)
@@ -104,12 +105,8 @@ def _default_personal_scheme() -> Dict[str, Any]:
 
 
 def _default_composite_scheme() -> Dict[str, str]:
-    scheme: Dict[str, str] = {}
-    for step in range(0, 101, 10):
-        ratio = step / 100
-        gb = int(round(255 * (1 - ratio)))
-        scheme[f"quantile{step}"] = f"#FF{gb:02X}{gb:02X}"
-    return scheme
+    """Composite 기본 그라디언트: 흰(#FFFFFF) → 검(#000000) — Measure와 동일"""
+    return copy.deepcopy(DEFAULT_RATIO_GRADIENT)
 
 
 def _ensure_anonymous_entries(legends: Dict[str, Any]) -> bool:
@@ -795,34 +792,23 @@ def get_ratio_gradient_for_scheme(scheme: str) -> List[Tuple[int, int, int]]:
     gradient_dict: Optional[Dict[str, str]] = None
     try:
         legends = load_color_legends()
-        # Primary: measure[scheme] → measure[anonymous] → measure["default"]
+        # 🔥 measure[LoginId] → measure["default"] (anonymous 거치지 않음)
         measure = legends.get("measure")
         if isinstance(measure, dict):
             entry = measure.get(scheme)
-            if not isinstance(entry, dict) and scheme != ANONYMOUS_SCHEME:
-                entry = measure.get(ANONYMOUS_SCHEME)
             if not isinstance(entry, dict):
                 entry = measure.get("default")
             if isinstance(entry, dict) and any(k.startswith("quantile") for k in entry):
                 gradient_dict = entry
-        # Fallback: composite[scheme] → composite["default"]
+        # Fallback: composite[LoginId] → composite["default"]
         if not gradient_dict:
             composite = legends.get("composite")
             if isinstance(composite, dict):
                 entry = composite.get(scheme)
-                if not isinstance(entry, dict) and scheme != ANONYMOUS_SCHEME:
-                    entry = composite.get(ANONYMOUS_SCHEME)
                 if not isinstance(entry, dict):
                     entry = composite.get("default")
                 if isinstance(entry, dict) and any(k.startswith("quantile") for k in entry):
                     gradient_dict = entry
-        # Fallback: legacy ratio storage (유저별 scheme.ratio)
-        if not gradient_dict:
-            scheme_data = legends.get(scheme) or legends.get("default")
-            if isinstance(scheme_data, dict):
-                ratio_data = scheme_data.get("ratio")
-                if isinstance(ratio_data, dict):
-                    gradient_dict = ratio_data
     except Exception:
         pass
 
