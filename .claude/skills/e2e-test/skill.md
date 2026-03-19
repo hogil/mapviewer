@@ -1034,6 +1034,27 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 16. `browser_take_screenshot` → 단일 뷰에서 FBT5506 heatmap + 칩 텍스트 표시 확인
 17. 뒤로가기(ESC) → 그리드 복귀 → `viewer._ratioActiveItemKey === "5506"` 유지 확인
 
+#### 11-10. Measure Overlay 그리드/네비게이터 픽셀 정합성 검증
+그리드 및 네비게이터 썸네일에 서버사이드 Measure overlay가 정확히 적용되는지 픽셀 수준으로 검증.
+단일 이미지(클라이언트 사이드)와 그리드/네비게이터(서버사이드)가 동일한 gradient/ftn_key/scheme을 사용하는지 확인.
+
+1. palette_5mb 단일 이미지 로드 (wafer_palette_5mb_PE_Engineer.png)
+2. Measure 패널에서 FBT2824 클릭 → 클라이언트 사이드 overlay 적용
+3. `browser_evaluate`로 gradient 캐시 확인: `viewer._ratioGradientCache` 11개 색상 존재
+4. Navigator 썸네일 URL에 `measure_overlay=f%3A2824` 포함 확인
+5. Navigator 첫 번째 썸네일 이미지를 canvas에 그려 픽셀 샘플링 (칩 영역 + 배경)
+6. 칩 영역 픽셀이 원본 Grade 색상과 **다름** 확인 (overlay 적용된 gradient 색상)
+7. 그리드 모드 진입 (`loadImagesInFolderAndShowGrid('palette_5mb')`)
+8. Measure 패널에서 FBT2824 클릭 → 서버사이드 overlay 적용
+9. 그리드 첫 번째 이미지 URL에 `measure_overlay=f%3A2824` 포함 확인
+10. 그리드 첫 번째 이미지를 canvas에 그려 칩 영역 픽셀 샘플링
+11. 칩 영역 픽셀이 원본 Grade 색상과 **다름** 확인
+12. **썸네일 포맷 검증**: `curl -sI` 또는 `fetch` HEAD로 Content-Type 확인
+    - `THUMBNAIL_FORMAT=PNG` → `image/png`
+    - `THUMBNAIL_FORMAT=WEBP` → `image/webp`
+    (PNG 데이터가 `.webp` 파일에 저장되는 포맷 불일치가 없어야 함)
+13. `browser_take_screenshot` → 그리드 measure overlay 시각 확인
+
 **pass 기준**:
 - 11-0: API 응답에서 ftn_keys 600개, qtn_keys 20개, 칩에 f/q/quad 없음
 - 11-1: Measure 패널에 FBT 600개, QVL 20개, BIN 표시
@@ -1045,6 +1066,7 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 - 11-7: palette_5mb 대용량 정상 처리
 - 11-8: FBT/QVL 키 인덱스 미표시 + 그리드→단일 전환 시 measure 오버레이 보존
 - 11-9: compact_array 칩 텍스트 정상 표시 + FBT 항목 전환 시 그리드 갱신 + 범례 칩 수
+- 11-10: 그리드/네비게이터 썸네일에 measure overlay 픽셀 적용 확인 + 포맷 일관성
 
 ---
 

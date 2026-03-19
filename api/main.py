@@ -3671,6 +3671,7 @@ def _apply_ratio_overlay_memory(
     item_key: str,    # e.g. '2342'
     scheme: Optional[str] = None,
     gradient_filter: Optional[str] = None,  # e.g. "0,1,2" — percentile range indices (0~9)
+    _source_image_path: Optional[Path] = None,  # 원본 이미지 경로 (썸네일 오버레이 시 원본 크기 참조용)
 ) -> Optional[bytearray]:
     """Ratio overlay: chip interiors colored by percentile rank of f/q values."""
     try:
@@ -3788,8 +3789,25 @@ def _apply_ratio_overlay_memory(
             canvas_w = width
         if canvas_h <= 0:
             canvas_h = height
+        # 🔥 썸네일에서 호출 시 image dimensions와 canvas 불일치 보정
+        # _source_image_path가 제공되면 원본 이미지 크기를 canvas로 사용
+        if _source_image_path and (width != canvas_w or height != canvas_h):
+            # canvas_w/h가 positions data에서 올바르게 설정된 경우 그대로 사용
+            pass
+        elif _source_image_path and canvas_w == width and canvas_h == height:
+            # canvas가 없어서 thumbnail 크기로 fallback된 경우 → 원본 크기 사용
+            try:
+                with Image.open(_source_image_path) as orig:
+                    orig_w, orig_h = orig.size
+                if orig_w != width or orig_h != height:
+                    logger.info(f"🔧 [RATIO OVERLAY] canvas 보정: {width}x{height} → {orig_w}x{orig_h} (원본 크기)")
+                    canvas_w = orig_w
+                    canvas_h = orig_h
+            except Exception:
+                pass
         scale_x = width / float(canvas_w)
         scale_y = height / float(canvas_h)
+        logger.debug(f"🔍 [RATIO OVERLAY] image={image_path.name}, png_size={width}x{height}, canvas={canvas_w}x{canvas_h}, scale={scale_x:.4f}x{scale_y:.4f}, field={field}, key={item_key}, values={len(values)}, scheme={scheme}")
 
         # 7. Opaque overlay using NumPy vectorized ops (pure gradient color, no blending)
         img_arr = np.array(out, dtype=np.uint8)
@@ -3905,6 +3923,8 @@ def _apply_ratio_overlay_memory(
                 logger.debug("⚠️ [RATIO OVERLAY] 텍스트 렌더링 실패: %s", text_err)
 
         output = io.BytesIO()
+        # 🔥 입력 데이터의 원본 포맷에 맞춰 저장 (PNG→PNG, WEBP→PNG 가능)
+        # 썸네일 포맷과 무관하게 항상 PNG으로 저장 (palette/gradient 정보 보존)
         out.save(output, format="PNG", optimize=False, compress_level=config.PNG_COMPRESSION_LEVEL)
         return bytearray(output.getvalue())
     except Exception as exc:
@@ -4762,11 +4782,31 @@ def _generate_thumbnail_sync(
                         if m_field in ("f", "q") and m_key:
                             with open(thumbnail_path, 'rb') as tf:
                                 thumb_data = bytearray(tf.read())
+                            # 🔥 scheme이 없으면 anonymous fallback (measure gradient 색상 결정에 필요)
+                            effective_scheme = scheme or ANONYMOUS_LOGIN_ID
                             overlay = _apply_ratio_overlay_memory(
-                                thumb_data, image_path, m_field, m_key, scheme,
+                                thumb_data, image_path, m_field, m_key, effective_scheme,
                                 gradient_filter=gradient_filter,
+                                _source_image_path=image_path,
                             )
                             if overlay is not None:
+                                # 🔥 overlay는 항상 PNG 포맷 → 썸네일 포맷에 맞춰 재변환
+                                if fmt != "PNG":
+                                    try:
+                                        with Image.open(io.BytesIO(bytes(overlay))) as png_img:
+                                            conv_buf = io.BytesIO()
+                                            if fmt == "WEBP":
+                                                png_img.save(conv_buf, format="WEBP",
+                                                             quality=THUMBNAIL_QUALITY, method=1)
+                                            elif fmt == "JPEG":
+                                                rgb = png_img.convert("RGB") if png_img.mode != "RGB" else png_img
+                                                rgb.save(conv_buf, format="JPEG",
+                                                         quality=THUMBNAIL_QUALITY)
+                                            else:
+                                                png_img.save(conv_buf, format=fmt)
+                                            overlay = bytearray(conv_buf.getvalue())
+                                    except Exception as conv_err:
+                                        logger.debug(f"⚠️ [DEFERRED RATIO] 포맷 변환 실패 (PNG→{fmt}), PNG으로 저장: {conv_err}")
                                 with open(thumbnail_path, 'wb') as tf:
                                     tf.write(overlay)
                 except Exception as e:
@@ -6621,6 +6661,10 @@ async def get_thumbnail(
         # LoginId가 있으면 우선 사용, 없으면 anonymous scheme fallback
         if personalized and not scheme:
             scheme = get_user_color_scheme(_current_login_id(request))
+        # 🔥 measure_overlay 사용 시 scheme이 없으면 LoginId에서 추출
+        # (personalized=false여도 measure gradient 색상 결정에 scheme 필요)
+        if measure_overlay and not scheme:
+            scheme = get_user_color_scheme(_current_login_id(request))
 
         # 🔥 동기 파일 검증을 스레드 풀에서 실행 — 이벤트 루프 블록 방지
         def _validate_path_sync():
@@ -6702,7 +6746,13 @@ async def get_thumbnail(
                     "Cache-Control": cache_control,
                     "ETag": compute_etag(st),
                 }
-                content_type = "image/jpeg" if thumb.suffix.lower() in ['.jpg', '.jpeg'] else "image/png"
+                _ext = thumb.suffix.lower()
+                if _ext in ('.jpg', '.jpeg'):
+                    content_type = "image/jpeg"
+                elif _ext == '.webp':
+                    content_type = "image/webp"
+                else:
+                    content_type = "image/png"
 
                 # OS sendfile 경로 우선 (메모리 복사 없이 전송)
                 try:
@@ -8541,8 +8591,11 @@ async def get_chip_positions(path: str, include_fq: int = 0):
         qtn_keys = positions_data.get("qtn_keys") or []
 
         response_data = {k: v for k, v in positions_data.items() if k not in ("chips", "ftn_keys", "qtn_keys")}
-        response_data["ftn_keys"] = sorted(set(ftn_keys), key=lambda x: (int(x) if str(x).isdigit() else float('inf'), str(x)))
-        response_data["qtn_keys"] = sorted(set(qtn_keys), key=lambda x: (int(x) if str(x).isdigit() else float('inf'), str(x)))
+        # 🔥 ftn_keys/qtn_keys는 원본 순서 유지 (정렬 금지!)
+        # chip.f/q 배열의 인덱스가 ftn_keys/qtn_keys 순서와 매핑되므로
+        # 정렬하면 인덱스 불일치로 잘못된 값이 표시됨
+        response_data["ftn_keys"] = list(dict.fromkeys(str(k) for k in ftn_keys))  # 중복 제거만, 순서 유지
+        response_data["qtn_keys"] = list(dict.fromkeys(str(k) for k in qtn_keys))  # 중복 제거만, 순서 유지
         response_data["chips"] = chips
 
         return JSONResponse(content=response_data)
