@@ -9763,7 +9763,13 @@ def _load_all_prefs() -> dict:
 
 def _save_all_prefs(data: dict) -> None:
     _UI_PREFS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _UI_PREFS_FILE.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    # 🔥 __preview_ 키 제거 (색상 편집기 임시 스킴이 prefs에 누적되는 것 방지)
+    cleaned = {k: v for k, v in data.items() if "__preview_" not in k}
+    # 유저별 구분이 쉽도록 indent + 줄바꿈 포맷으로 저장
+    _UI_PREFS_FILE.write_text(
+        json.dumps(cleaned, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 @app.get("/api/user-prefs")
 async def get_user_prefs(request: Request):
@@ -9780,6 +9786,10 @@ async def set_user_prefs(request: Request):
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    # 🔥 __preview_ 스킴 이름으로 저장 시도 차단
+    if "__preview_" in login_id:
+        return {"success": False, "login_id": login_id, "prefs": {}, "error": "preview scheme ignored"}
 
     with _ui_prefs_lock:
         all_prefs = _load_all_prefs()

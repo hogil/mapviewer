@@ -973,14 +973,14 @@ class WaferMapViewer {
         this.productFolderPath = null;  // 🔥 제품 폴더 경로 저장 (classification 조회용)
 
         // 파일 필터 상태 — LT (Lot Type), TM (Test Mode) — 다중선택 배열
-        this.filterLT = [];   // 빈 배열 = 전체 (필터 없음)
-        this.filterTM = [];   // 빈 배열 = 전체 (필터 없음)
-        this.filterFileMetadata = {};  // { fileStem: { lt, tm } }
-        this.filterLtValues = [];      // 현재 폴더의 고유 LT 값 목록
-        this.filterTmValues = [];      // 현재 폴더의 고유 TM 값 목록
+        this.filterLT = [];              // 빈 배열 = 전체 (필터 없음)
+        this.filterTM = ['Normal'];      // 🔥 초기값: Normal만 표시
+        this.filterFileMetadata = {};    // { fileStem: { lt, tm } }
+        this.filterLtValues = [];        // 현재 폴더의 고유 LT 값 목록
+        this.filterTmValues = [];        // 현재 폴더의 고유 TM 값 목록
 
-        // STEP 필터 상태 (빈 배열 = 전체)
-        this.filterSTEP = [];
+        // STEP 필터 상태
+        this.filterSTEP = ['PLH'];       // 🔥 초기값: PLH만 표시
         this._unfilteredGridImages = null;  // 필터 변경 시 재필터링용 원본 그리드 이미지
 
         // 개인색 설정 상태 (기본값: false)
