@@ -21623,6 +21623,11 @@ class WaferMapViewer {
 
             if (files.length > 0) {
                 this.selectedImages = [];
+                // 🔥 새 폴더 로드 시 스크롤 위치 리셋 (이전 폴더 위치로 내려가는 버그 방지)
+                this._lastGridScrollTop = null;
+                if (this.savedViewState) {
+                    this.savedViewState.scrollTop = 0;
+                }
                 this.showGrid(files);
             } else {
                  this.hideGrid();
@@ -23862,13 +23867,17 @@ class WaferMapViewer {
                 nextUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}&size=512${personalizedParams}${cacheSuffix}`;
             }
             // 🔥 URL이 같으면 스킵 (불필요한 재로드 방지)
-            if (img.dataset.src === nextUrl || img.src.includes(nextUrl)) return;
+            if (img.dataset.src === nextUrl || img.src === nextUrl) return;
+            // 🔥 이전 로드 진행 중이면 리스너 제거 (stale load/error 이벤트 방지)
+            if (img._gridOnLoad) img.removeEventListener('load', img._gridOnLoad);
+            if (img._gridOnError) img.removeEventListener('error', img._gridOnError);
+            img._gridOnLoad = null;
+            img._gridOnError = null;
             img.dataset.src = nextUrl;
             delete img.dataset.thumbnailUrl;
             img.dataset.loading = 'false';
             img.dataset.gridLoaded = 'false';
-            // 🔥 이미 로드된 이미지는 placeholder로 교체하지 않음 (깜빡임 방지)
-            // opacity만 살짝 낮춰서 갱신 중임을 표시
+            img.dataset.retryCount = '0';
             img.style.opacity = '0.5';
         });
 
