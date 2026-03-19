@@ -18304,9 +18304,35 @@ class WaferMapViewer {
      * 🔥 진행 중인 그리드 이미지 다운로드 강제 취소 (img.src 리셋)
      */
     _cancelInFlightGridLoads() {
-        // 🔥 스크롤 중: 리스너 유지 (이미 요청된 이미지는 완료되면 자동 표시)
-        // 큐만 비우고 inflight 카운터만 리셋 → 새 visible 이미지 로드 가능
-        // src도, 리스너도 건드리지 않음 → 깜빡임 0, 로드 완료 시 자동 표시
+        // 🔥 뷰포트 밖 이미지: src 취소 (네트워크 해제) + 리스너 제거
+        // 뷰포트 안 이미지: 유지 (깜빡임 방지)
+        const grid = document.getElementById('image-grid');
+        const wrapper = grid?.closest('.grid-scroll-wrapper') || grid?.parentElement;
+        if (grid && wrapper) {
+            const scrollTop = wrapper.scrollTop;
+            const viewH = wrapper.clientHeight;
+            const viewTop = scrollTop;
+            const viewBottom = scrollTop + viewH;
+
+            grid.querySelectorAll('.grid-thumb-img[data-loading="true"]').forEach(img => {
+                // 뷰포트 안인지 체크 (offsetTop 기준, reflow 없음)
+                const wrap = img.closest('.grid-thumb-wrap');
+                const top = wrap ? wrap.offsetTop : 0;
+                const h = wrap ? wrap.offsetHeight : 0;
+                const inView = (top + h > viewTop && top < viewBottom);
+
+                if (!inView) {
+                    // 뷰포트 밖: 네트워크 취소
+                    if (img._gridOnLoad) img.removeEventListener('load', img._gridOnLoad);
+                    if (img._gridOnError) img.removeEventListener('error', img._gridOnError);
+                    img._gridOnLoad = null;
+                    img._gridOnError = null;
+                    img.src = GRID_THUMB_PLACEHOLDER;
+                    img.dataset.gridLoaded = 'false';
+                }
+                img.dataset.loading = 'false';
+            });
+        }
         this.gridLoadInFlight = 0;
         this.gridLoadQueue.length = 0;
         this.gridQueuedImages.clear();
