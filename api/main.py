@@ -6766,6 +6766,174 @@ async def get_bin_map_thumb(
     )
 
 
+# ── Measure 경량 썸네일 (positions JSON만 사용, 이미지 로드 없음) ──────────
+_measure_thumb_cache: Dict[str, bytes] = {}
+
+def _generate_measure_thumb(
+    image_path: Path, size: int, field: str, item_key: str,
+    scheme: Optional[str] = None, gradient_filter: Optional[str] = None,
+) -> Optional[bytes]:
+    """positions JSON에서 chip f/q 값을 읽어 gradient heatmap 이미지를 생성.
+    원본 이미지를 로드하지 않으므로 ~3ms (기존 overlay 18ms 대비 6x 빠름)."""
+    import numpy as np
+    import bisect
+
+    rel_path = Path(_get_relative_path_from_image(str(image_path)))
+    positions_path = _resolve_positions_path(rel_path)
+    positions_data = _load_positions_cached(positions_path)
+    if positions_data is None:
+        return None
+    chips = positions_data.get("chips", [])
+    if not chips:
+        return None
+
+    # ftn/qtn 인덱스 매핑
+    key_name = "ftn_keys" if field == "f" else "qtn_keys" if field == "q" else None
+    ftn_idx_map = {}
+    if key_name:
+        for i, k in enumerate(positions_data.get(key_name, [])):
+            ftn_idx_map[str(k)] = i
+    ki = ftn_idx_map.get(str(item_key))
+    if ki is None:
+        return None
+
+    # 값 추출
+    chip_vals = []
+    for idx, chip in enumerate(chips):
+        fd = chip.get(field)
+        if isinstance(fd, list) and ki < len(fd) and fd[ki] is not None:
+            try:
+                chip_vals.append((idx, float(fd[ki])))
+            except (ValueError, TypeError):
+                continue
+        elif isinstance(fd, dict):
+            raw = fd.get(item_key)
+            if raw is not None:
+                try:
+                    chip_vals.append((idx, float(raw)))
+                except (ValueError, TypeError):
+                    continue
+    if not chip_vals:
+        return None
+
+    all_sorted = sorted(v for _, v in chip_vals)
+    n = len(all_sorted)
+
+    # gradient 색상
+    from .personal_colors import get_ratio_gradient_for_scheme
+    gradient_stops = get_ratio_gradient_for_scheme(scheme or ANONYMOUS_LOGIN_ID)
+
+    # gradient filter
+    allowed_ranges = None
+    if gradient_filter:
+        try:
+            allowed_ranges = set(int(x) for x in gradient_filter.split(",") if x.strip().isdigit())
+        except Exception:
+            pass
+
+    # 캔버스 크기
+    coord = positions_data.get("coord", {})
+    canvas = coord.get("canvas", {})
+    canvas_w = int(canvas.get("width", size))
+    canvas_h = int(canvas.get("height", size))
+    if canvas_w <= 0:
+        canvas_w = size
+    if canvas_h <= 0:
+        canvas_h = size
+
+    # 출력 크기 (비율 유지)
+    ratio = min(size / canvas_w, size / canvas_h)
+    out_w = max(1, int(canvas_w * ratio))
+    out_h = max(1, int(canvas_h * ratio))
+    sx = out_w / float(canvas_w)
+    sy = out_h / float(canvas_h)
+
+    # 배경
+    arr = np.full((out_h, out_w, 3), 204, dtype=np.uint8)  # #CCCCCC
+
+    # 칩 색칠
+    filled = 0
+    for chip_idx, val in chip_vals:
+        lo = bisect.bisect_left(all_sorted, val)
+        pct = max(0.0, min(100.0, (lo / (n - 1)) * 100.0 if n > 1 else 50.0))
+        if allowed_ranges is not None:
+            range_idx = min(int(pct / 10), 9)
+            if range_idx not in allowed_ranges:
+                arr[max(0,int(chips[chip_idx].get('rect',{}).get('y0',0)*sy)):
+                    min(out_h,int(chips[chip_idx].get('rect',{}).get('y1',0)*sy)),
+                    max(0,int(chips[chip_idx].get('rect',{}).get('x0',0)*sx)):
+                    min(out_w,int(chips[chip_idx].get('rect',{}).get('x1',0)*sx))] = (255,255,255)
+                continue
+        chip = chips[chip_idx]
+        r = chip.get("rect", {})
+        x0 = max(0, min(out_w, int(math.floor(r.get("x0", 0) * sx))))
+        y0 = max(0, min(out_h, int(math.floor(r.get("y0", 0) * sy))))
+        x1 = max(0, min(out_w, int(math.ceil(r.get("x1", 0) * sx))))
+        y1 = max(0, min(out_h, int(math.ceil(r.get("y1", 0) * sy))))
+        if y1 <= y0 or x1 <= x0:
+            continue
+        il = max(0, min(10, int(pct / 10)))
+        ih = min(10, il + 1)
+        t = pct / 10.0 - il
+        r0, g0, b0 = gradient_stops[il]
+        r1, g1, b1 = gradient_stops[ih]
+        color = (int(r0 + (r1 - r0) * t), int(g0 + (g1 - g0) * t), int(b0 + (b1 - b0) * t))
+        arr[y0:y1, x0:x1] = color
+        filled += 1
+
+    if filled == 0:
+        return None
+
+    try:
+        import pyvips as _pv
+        vout = _pv.Image.new_from_memory(arr.data, out_w, out_h, 3, 'uchar')
+        return vout.webpsave_buffer(Q=80, effort=0, strip=True)
+    except Exception:
+        pil_img = Image.fromarray(arr, "RGB")
+        buf = io.BytesIO()
+        pil_img.save(buf, format="WEBP", quality=80)
+        return buf.getvalue()
+
+
+@app.get("/api/measure-thumb")
+async def get_measure_thumb(
+    request: Request,
+    path: str = Query(...),
+    field: str = Query(...),       # 'f' or 'q'
+    key: str = Query(...),         # ftn_key (e.g. '2824')
+    size: int = Query(256),
+    scheme: Optional[str] = Query(None),
+    gradient_filter: Optional[str] = Query(None),
+):
+    """Measure 경량 썸네일 — positions JSON만 읽어 gradient heatmap 생성 (이미지 로드 없음, ~3ms)."""
+    if not scheme:
+        scheme = get_user_color_scheme(_current_login_id(request))
+    image_path = Path(path) if Path(path).is_absolute() else ROOT_DIR / path
+    cache_key = f"{image_path}:{size}:{field}:{key}:{scheme}:{gradient_filter or ''}"
+
+    cached = _measure_thumb_cache.get(cache_key)
+    if cached:
+        return Response(content=cached, media_type="image/webp",
+                        headers={"Cache-Control": "private, max-age=300"})
+
+    result = await asyncio.get_event_loop().run_in_executor(
+        IO_POOL, _generate_measure_thumb, image_path, size, field, key, scheme, gradient_filter,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Measure thumb generation failed")
+
+    # LRU 캐시 (최대 2000개)
+    if len(_measure_thumb_cache) > 2000:
+        for _ in range(200):
+            try:
+                _measure_thumb_cache.pop(next(iter(_measure_thumb_cache)))
+            except (StopIteration, RuntimeError):
+                break
+    _measure_thumb_cache[cache_key] = result
+    return Response(content=result, media_type="image/webp",
+                    headers={"Cache-Control": "private, max-age=300"})
+
+
 @app.get("/api/thumbnail")
 async def get_thumbnail(
     request: Request,

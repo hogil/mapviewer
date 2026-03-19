@@ -18519,8 +18519,18 @@ class WaferMapViewer {
             typeof personalizedParams === 'string' && personalizedParams.includes('_t=');
         const cacheParam = cacheBuster && !hasCacheBusterInParams ? `&_t=${cacheBuster}` : '';
 
-        // 🔥 항상 /api/thumbnail 사용 — BIN MAP은 getPersonalizedParams()가 bin_overlay=1 전송
-        const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}${cacheParam}`;
+        // 🔥 Measure overlay → /api/measure-thumb (positions-only, 이미지 로드 없음, 3ms)
+        // 그 외 → /api/thumbnail (기존)
+        let thumbnailUrl;
+        const isMeasureMode = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey;
+        if (isMeasureMode) {
+            const loginId = this.getCurrentLoginId();
+            const gf = this.selectedGradientRanges.size > 0
+                ? Array.from(this.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
+            thumbnailUrl = `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=256&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheParam}`;
+        } else {
+            thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}${cacheParam}`;
+        }
 
         img.dataset.src = thumbnailUrl;
         img.src = GRID_THUMB_PLACEHOLDER;
@@ -23833,7 +23843,17 @@ class WaferMapViewer {
             const imagePath = resolveImagePath(img);
             if (!imagePath) return;
 
-            const nextUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}&size=512${personalizedParams}${cacheSuffix}`;
+            // 🔥 Measure overlay → /api/measure-thumb (positions-only, 3ms)
+            let nextUrl;
+            const isMeasure = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey;
+            if (isMeasure) {
+                const loginId = this.getCurrentLoginId();
+                const gf = this.selectedGradientRanges.size > 0
+                    ? Array.from(this.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
+                nextUrl = `/api/measure-thumb?path=${encodeURIComponent(imagePath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=256&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
+            } else {
+                nextUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}&size=512${personalizedParams}${cacheSuffix}`;
+            }
             // 🔥 URL이 같으면 스킵 (불필요한 재로드 방지)
             if (img.dataset.src === nextUrl || img.src.includes(nextUrl)) return;
             img.dataset.src = nextUrl;
