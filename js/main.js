@@ -1641,6 +1641,14 @@ class WaferMapViewer {
             gridThumbSize: this.gridThumbSize,
             pendingCompositeTask: compositeTaskState?.task ? this.deepCloneSimple(compositeTaskState.task) : null,
             pendingCompositeResult: compositeTaskState?.result ? this.deepCloneSimple(compositeTaskState.result) : null,
+            // 🔥 Measure overlay 상태 보존 (탭 전환/폴더 변경 시 유지)
+            overlayMode: this.overlayMode || null,
+            _ratioActiveItemKey: this._ratioActiveItemKey || null,
+            _ratioGradientCache: this._ratioGradientCache ? [...this._ratioGradientCache] : null,
+            selectedBottoms: this.selectedBottoms ? [...this.selectedBottoms] : [],
+            selectedGrades: this.selectedGrades ? [...this.selectedGrades] : [],
+            selectedGradientRanges: this.selectedGradientRanges ? [...this.selectedGradientRanges] : [],
+            borderNormalize: this.borderNormalize || false,
         };
     }
 
@@ -2132,6 +2140,21 @@ class WaferMapViewer {
         this._restoreMultiSelectUI('lt');
         this._restoreMultiSelectUI('tm');
         this._restoreMultiSelectUI('step');
+
+        // 🔥 Measure overlay 상태 복원 (탭 전환 시 유지)
+        if ('overlayMode' in state) {
+            this.overlayMode = state.overlayMode || null;
+            this._ratioActiveItemKey = state._ratioActiveItemKey || null;
+            if (Array.isArray(state._ratioGradientCache) && state._ratioGradientCache.length > 0) {
+                this._ratioGradientCache = state._ratioGradientCache;
+            }
+            this.selectedBottoms = new Set(state.selectedBottoms || []);
+            this.selectedGrades = new Set(state.selectedGrades || []);
+            this.selectedGradientRanges = new Set(state.selectedGradientRanges || []);
+            this.borderNormalize = state.borderNormalize || false;
+            // Measure 버튼 UI 복원
+            this.updateFailbitButtonUI();
+        }
 
         // 폴더 전체 선택을 복원할 때 파일 선택도 유지 (폴더 선택만 남고 파일이 한 개로 축소되는 문제 방지)
         // 🔥 단, 이미 명시적인 그리드 선택이 있는 경우(state.gridSelectedIdxs)에는 덮어쓰지 않음
