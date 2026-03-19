@@ -18076,6 +18076,11 @@ class WaferMapViewer {
         this.gridThumbWraps = [];
         // grid 모드에서는 cursor를 default로
         this.dom.viewerContainer.style.cursor = 'default';
+        // 🔥 새 그리드 진입 시 스크롤 맨 위 (skipSaveState=true면 나중에 복원됨)
+        if (!skipSaveState) {
+            const sw = grid?.parentElement;
+            if (sw) sw.scrollTop = 0;
+        }
         this.showGridImmediately(sortedImages);
         requestAnimationFrame(() => {
             this.primeRenderedGridThumbnails(40);
