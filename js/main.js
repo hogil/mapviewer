@@ -18234,18 +18234,18 @@ class WaferMapViewer {
      * setInterval은 렌더링과 독립적으로 4ms 간격 실행.
      *
      * 핵심 정책:
-     * - 스크롤 중: 절대 요청하지 않음 + 진행 중인 요청 모두 abort
-     * - 스크롤 멈춤 후 1ms: 뷰포트 1.5배 영역만 로드
-     * - "멈춤" 판정: scrollTop이 마지막 변경 후 최소 50ms 동안 안정
-     *   (마우스 휠 이벤트 간격 ~16ms, 드래그 ~8ms → 50ms면 확실히 멈춤)
+     * - 스크롤 중: 뷰포트 밖 요청만 abort (근처 로드 유지)
+     * - 스크롤 멈춤 후 즉시: 뷰포트 1.5배 영역만 로드
+     * - "멈춤" 판정: scrollTop이 마지막 변경 후 최소 16ms 동안 안정
+     *   (마우스 휠 이벤트 간격 ~16ms → 1프레임 안정이면 멈춤)
      */
     _startGridScrollDetection() {
         this._stopGridScrollDetection();
         let lastScrollTop = -1;
         let lastChangeTime = 0;
-        let loadTimer = null;
+        let settled = false;
         let pollTimer = null;
-        const SETTLE_MS = 30;
+        const SETTLE_MS = 16;
         const POLL_MS = 4;
 
         // 스크롤 중일 때만 활성화되는 폴링 (idle 시 CPU 0%)
@@ -18258,17 +18258,14 @@ class WaferMapViewer {
                 const now = Date.now();
 
                 if (currentTop !== lastScrollTop) {
-                    // scroll 이벤트가 못 잡은 미세 변동 감지 (settle 타이머 리셋만)
                     lastScrollTop = currentTop;
                     lastChangeTime = now;
-                    if (loadTimer) { clearTimeout(loadTimer); loadTimer = null; }
-                } else if (lastChangeTime > 0 && !loadTimer && (now - lastChangeTime) >= SETTLE_MS) {
-                    loadTimer = setTimeout(() => {
-                        loadTimer = null;
-                        lastChangeTime = 0;
-                        this.loadVisibleGridThumbnails();
-                    }, 1);
-                    // 스크롤 멈춤 → 폴링 중지
+                    settled = false;
+                } else if (lastChangeTime > 0 && !settled && (now - lastChangeTime) >= SETTLE_MS) {
+                    // 🔥 멈춤 즉시 로드 (setTimeout 없이 직접 호출)
+                    settled = true;
+                    lastChangeTime = 0;
+                    this.loadVisibleGridThumbnails();
                     stopPolling();
                 }
             }, POLL_MS);
@@ -18286,8 +18283,9 @@ class WaferMapViewer {
             if (currentTop !== lastScrollTop) {
                 lastScrollTop = currentTop;
                 lastChangeTime = Date.now();
-                if (loadTimer) { clearTimeout(loadTimer); loadTimer = null; }
-                this._cancelInFlightGridLoads();
+                settled = false;
+                // 🔥 뷰포트 밖 로드만 취소 (근처 로드는 유지하여 멈춤 시 즉시 표시)
+                this._cancelOutOfViewportGridLoads(sw);
                 this.gridLoadQueue.length = 0;
                 this.gridQueuedImages.clear();
                 this.gridLoadingBatch = null;
@@ -18350,6 +18348,40 @@ class WaferMapViewer {
         this.gridLoadInFlight = 0;
         this.gridLoadQueue.length = 0;
         this.gridQueuedImages.clear();
+    }
+
+    /**
+     * 🔥 뷰포트에서 멀리 벗어난 로드만 취소 (스크롤 중 호출)
+     * 뷰포트 2배 밖 이미지만 취소 → 근처 이미지는 로드 유지하여 멈춤 시 즉시 표시
+     */
+    _cancelOutOfViewportGridLoads(wrapper) {
+        const grid = document.getElementById('image-grid');
+        if (!grid || !wrapper) return;
+
+        const scrollTop = wrapper.scrollTop;
+        const viewH = wrapper.clientHeight;
+        const margin = viewH * 1.5; // 뷰포트 1.5배 여유
+        const safeTop = scrollTop - margin;
+        const safeBottom = scrollTop + viewH + margin;
+        let cancelled = 0;
+
+        grid.querySelectorAll('.grid-thumb-img[data-loading="true"]').forEach(img => {
+            const wrap = img.closest('.grid-thumb-wrap');
+            const top = wrap ? wrap.offsetTop : 0;
+            const h = wrap ? wrap.offsetHeight : 0;
+            // 뷰포트 3배 밖만 취소 (근처 로드는 유지)
+            if (top + h < safeTop || top > safeBottom) {
+                if (img._gridOnLoad) img.removeEventListener('load', img._gridOnLoad);
+                if (img._gridOnError) img.removeEventListener('error', img._gridOnError);
+                img._gridOnLoad = null;
+                img._gridOnError = null;
+                img.src = GRID_THUMB_PLACEHOLDER;
+                img.dataset.gridLoaded = 'false';
+                img.dataset.loading = 'false';
+                if (this.gridLoadInFlight > 0) this.gridLoadInFlight--;
+                cancelled++;
+            }
+        });
     }
 
     enqueueGridThumbnail(img, forceLoad = false) {
