@@ -24547,13 +24547,11 @@ class WaferMapViewer {
                 const cnt = gridRc.counts[i] || 0;
                 const pct = gridRc.total > 0 ? (cnt / gridRc.total * 100).toFixed(1) : '0.0';
                 const countText = gridRc.total > 0 ? `${pct}%(${_fmtCnt(cnt)})` : '';
-                const textColor = _contrastGrid(r, g, b);
                 return `
                     <div class="legend-item-grid" data-section="gradient" data-index="${i}" style="cursor: pointer;${opacity}">
-                        <div class="legend-color-bar-grid" style="background-color: ${color};${selBorder}position:relative;overflow:hidden;">
-                            ${countText ? `<span style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:8px;color:${textColor};line-height:1;pointer-events:none;font-weight:600;">${countText}</span>` : ''}
-                        </div>
+                        <div class="legend-color-bar-grid" style="background-color: ${color};${selBorder}"></div>
                         <span class="legend-label-grid" style="font-size:10px;">${label}%</span>
+                        ${countText ? `<span class="legend-count-grid" style="font-size:8px;color:#aaa;">${countText}</span>` : ''}
                     </div>
                 `;
             }).join('');

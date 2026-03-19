@@ -2697,6 +2697,37 @@ async def get_measure_colors(request: Request):
         raise HTTPException(status_code=500, detail="Measure 색상 정보를 불러오지 못했습니다.")
 
 
+def _purge_measure_overlay_cache(scheme: str):
+    """measure overlay variant 썸네일 캐시 삭제 (색상 변경 시 이전 gradient 무효화)"""
+    import threading
+    def _do_purge():
+        try:
+            from .personal_colors import load_color_legends
+            legends = load_color_legends()
+            scheme_data = legends.get(scheme, {})
+            timestamp = scheme_data.get('lastModified', '')
+            if timestamp:
+                cache_dir = THUMBNAIL_DIR / scheme / timestamp
+            else:
+                cache_dir = THUMBNAIL_DIR / scheme
+            if not cache_dir.exists():
+                return
+            # variant 썸네일만 삭제 (base 유지): _XXXXXXXX.ext 패턴
+            count = 0
+            for f in cache_dir.glob('*_????????.*'):
+                if '_512x512_' in f.name or '_256x256_' in f.name:
+                    # measure overlay variant만 삭제 (mo= 포함하는 variant)
+                    f.unlink(missing_ok=True)
+                    count += 1
+            if count:
+                logger.info(f"🧹 [MEASURE PURGE] {scheme} 캐시 {count}개 삭제")
+            # positions JSON 캐시도 초기화 (gradient 변경이므로)
+            _positions_json_cache.clear()
+        except Exception as e:
+            logger.debug(f"⚠️ [MEASURE PURGE] 실패: {e}")
+    threading.Thread(target=_do_purge, daemon=True).start()
+
+
 @app.post("/api/measure-colors")
 async def save_measure_colors_endpoint(request: Request):
     try:
@@ -2707,6 +2738,13 @@ async def save_measure_colors_endpoint(request: Request):
         login_id = _current_login_id(request)
         scheme = get_user_color_scheme(login_id)
         settings = save_measure_color_settings(colors, scheme)
+
+        # 🔥 measure overlay 서버 캐시 무효화 (색상 변경 시 이전 gradient 캐시 삭제)
+        try:
+            _purge_measure_overlay_cache(scheme)
+        except Exception as purge_err:
+            logger.debug(f"⚠️ [MEASURE PURGE] 캐시 정리 실패 (무시): {purge_err}")
+
         return settings.to_dict()
     except HTTPException:
         raise

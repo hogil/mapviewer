@@ -1265,6 +1265,15 @@ export class ColorSchemeEditor {
             return;
         }
 
+        // 🔥 Measure/Composite gradient 탭: gradient 미리보기 전용 경로
+        if (this.activeTab === 'measure' || this.activeTab === 'composite' || this.activeTab === 'ratio') {
+            if (this.realtimeUpdateTimeout) clearTimeout(this.realtimeUpdateTimeout);
+            this.realtimeUpdateTimeout = setTimeout(() => {
+                this._previewGradientRealtime();
+            }, 300);
+            return;
+        }
+
         // ✅ 단일 이미지도 없고 그리드 모드도 아니면 리턴
         if (!this.viewer.gridMode && !this.viewer.selectedImagePath) {
             return;
@@ -1368,6 +1377,47 @@ export class ColorSchemeEditor {
                 console.error("ColorEditor: Realtime preview failed", error);
             }
         }, 500); // 500ms 디바운스
+    }
+
+    /**
+     * Measure/Composite gradient 탭 실시간 미리보기
+     * Grade 색상과 달리 서버에 __preview_ 스킴을 저장하지 않고,
+     * gradient 캐시만 업데이트하여 범례 + 클라이언트 오버레이를 즉시 반영
+     */
+    _previewGradientRealtime() {
+        try {
+            const tabType = this.activeTab === 'measure' ? 'measure' : 'composite';
+            const data = this._getCurrentGradientData(tabType);
+            if (!data) return;
+
+            // gradient stops 추출 (quantile0 ~ quantile100, 11개)
+            const stops = [];
+            for (let i = 0; i <= 100; i += 10) {
+                const key = `quantile${i}`;
+                if (data[key]) stops.push(data[key]);
+            }
+            if (stops.length !== 11) return;
+
+            // viewer의 gradient 캐시 업데이트
+            if (tabType === 'measure' && this.viewer) {
+                this.viewer._ratioGradientCache = stops;
+                // 단일 이미지: chipAnnotator 오버레이 재계산
+                if (this.viewer.chipAnnotator && this.viewer.overlayMode &&
+                    (this.viewer.overlayMode === 'f' || this.viewer.overlayMode === 'q')) {
+                    this.viewer.chipAnnotator.gradientStops = stops;
+                    this.viewer.chipAnnotator._computeRatioOverlay(
+                        this.viewer.overlayMode, this.viewer._ratioActiveItemKey);
+                    this.viewer.chipAnnotator.render();
+                }
+                // 범례 갱신
+                this.viewer.renderColorLegends();
+                if (typeof this.viewer.renderGridColorLegend === 'function') {
+                    this.viewer.renderGridColorLegend();
+                }
+            }
+        } catch (e) {
+            console.warn('ColorEditor: Gradient preview failed', e);
+        }
     }
 
     refreshNavigatorPreview() {
