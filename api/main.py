@@ -2463,11 +2463,19 @@ async def save_color_scheme(request: Request):
         data = await request.json()
         scheme_name = data.get('schemeName')
         scheme_data = data.get('schemeData')
-        
+
         if not scheme_name:
             raise HTTPException(status_code=400, detail="schemeName이 필요합니다")
         if not scheme_data:
             raise HTTPException(status_code=400, detail="schemeData가 필요합니다")
+
+        # 🔥 __preview_ 임시 스킴은 저장 허용 (미리보기용, 나중에 정리됨)
+        # 그 외에는 서버의 실제 LoginId로 강제 (클라이언트가 보낸 schemeName 무시)
+        if not scheme_name.startswith("__preview_"):
+            real_login_id = _current_login_id(request)
+            if real_login_id and real_login_id != scheme_name:
+                logger.info(f"🔧 [COLOR-SCHEME] schemeName 보정: '{scheme_name}' → '{real_login_id}' (서버 LoginId 기준)")
+                scheme_name = real_login_id
         
         # 기존 legends 로드
         legends = load_color_legends()
