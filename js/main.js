@@ -18178,6 +18178,10 @@ class WaferMapViewer {
                 console.log(`✅ [SHOW_GRID] 스크롤 복원 완료`);
             }, 500);
         } else {
+            // 🔥 새 폴더 진입(skipSaveState=false) 시 스크롤 맨 위 강제
+            if (!skipSaveState && scrollWrapper) {
+                scrollWrapper.scrollTop = 0;
+            }
             console.log(`📍 [SHOW_GRID] 스크롤 복원 건너뜀: skipSaveState=${skipSaveState}, scrollTopToRestore=${scrollTopToRestore}`);
         }
         
@@ -25970,6 +25974,10 @@ class WaferMapViewer {
             }, 500);  // 🔥 500ms까지 계속 복원
         } else {
             this._restoringScroll = false;
+            // 🔥 스크롤 맨 위 강제 (새 폴더 진입 시 이전 스크롤 위치가 남는 버그 방지)
+            if (scrollWrapper) {
+                scrollWrapper.scrollTop = 0;
+            }
             console.warn(`⚠️ [LOT-GRID] 복원할 스크롤 위치 없음 (scrollTop: ${scrollTopToRestore})`);
         }
 

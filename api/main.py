@@ -438,6 +438,7 @@ COMPOSITE_BG_TASKS: Dict[str, asyncio.Task] = {}
 # Composite map concurrency control (최대 2개 동시 실행)
 COMPOSITE_CONCURRENCY_LIMIT = 2
 COMPOSITE_SEMAPHORE: Optional[asyncio.Semaphore] = None
+COMPOSITE_EXECUTOR = ThreadPoolExecutor(max_workers=4)  # composite 전용 (IO_POOL 경합 방지)
 _THUMBNAIL_EXECUTOR_WORKERS = max(4, min(THUMBNAIL_SEM_SIZE, (os.cpu_count() or 4) * 2))
 THUMBNAIL_EXECUTOR = ThreadPoolExecutor(max_workers=_THUMBNAIL_EXECUTOR_WORKERS)
 
@@ -9023,7 +9024,7 @@ async def run_composite_map_task(
                     max_workers=max_workers,
                     login_id=login_id
                 )
-                result = await loop.run_in_executor(IO_POOL, task_fn)
+                result = await loop.run_in_executor(COMPOSITE_EXECUTOR, task_fn)
                 response = {
                     "success": True,
                     "mode": "palette",
@@ -9049,7 +9050,7 @@ async def run_composite_map_task(
                     scheme=scheme,
                     login_id=login_id
                 )
-                result = await loop.run_in_executor(IO_POOL, task_fn)
+                result = await loop.run_in_executor(COMPOSITE_EXECUTOR, task_fn)
                 response = {
                     "success": True,
                     "mode": "heatmap",
@@ -9351,20 +9352,77 @@ async def create_composite_map_endpoint(
     resolved_scheme = login_id or ANONYMOUS_LOGIN_ID
     _invalidate_composite_thumbnail_caches(login_id=login_id or ANONYMOUS_LOGIN_ID)
 
-    # 백그라운드 작업 추가
-    background_tasks.add_task(
-        run_composite_map_task,
-        task_id=task_id,
-        image_paths=image_paths,
-        palette_mode=payload.palette_mode,
-        focus_index=payload.focus_index,
-        highlight_threshold=payload.highlight_threshold,
-        loader_mode=loader_mode,
-        max_workers=max_workers,
-        batch_size=batch_size,
-        scheme=resolved_scheme,
-        login_id=login_id,
-    )
+    # 백그라운드 작업: COMPOSITE_EXECUTOR에서 직접 동기 실행
+    # (background_tasks.add_task + async run_in_executor 조합은 event loop 경합으로 stuck 발생)
+    def _run_sync():
+        try:
+            COMPOSITE_TASKS[task_id]["status"] = "processing"
+            COMPOSITE_TASKS[task_id]["started_at"] = datetime.now().isoformat()
+
+            from .composite_map import create_composite_heatmaps, create_palette_overlay
+            from functools import partial
+
+            if payload.palette_mode:
+                task_fn = partial(
+                    create_palette_overlay,
+                    image_paths=image_paths,
+                    focus_index=payload.focus_index,
+                    highlight_threshold=payload.highlight_threshold,
+                    loader_mode=loader_mode,
+                    max_workers=max_workers,
+                    login_id=login_id
+                )
+                result = task_fn()
+                response = {
+                    "success": True, "mode": "palette",
+                    "image_count": result["source_images"],
+                    "output_dir": result["output_dir"],
+                    "overlay_path": result["overlay_path"],
+                    "focus_index": result["focus_index"],
+                    "highlight_threshold": result["highlight_threshold"],
+                    "processing_time": result["processing_time"],
+                    "generated_at": result.get("generated_at") or result["output_dir"].split("/")[-1]
+                }
+            else:
+                task_fn = partial(
+                    create_composite_heatmaps,
+                    image_paths=image_paths,
+                    indices=list(range(8)),
+                    create_sum=True,
+                    loader_mode=loader_mode,
+                    max_workers=max_workers,
+                    batch_size=batch_size,
+                    scheme=resolved_scheme,
+                    login_id=login_id
+                )
+                result = task_fn()
+                response = {
+                    "success": True, "mode": "heatmap",
+                    "image_count": result["source_images"],
+                    "output_dir": result["output_dir"],
+                    "heatmaps": result["heatmaps"],
+                    "width": result["image_size"]["width"],
+                    "height": result["image_size"]["height"],
+                    "processing_time": result["processing_time"],
+                    "generated_at": result.get("generated_at") or result["output_dir"].split("/")[-1]
+                }
+                if "sum_map_path" in result:
+                    response["sum_map_path"] = result["sum_map_path"]
+                if "sum_maps" in result:
+                    response["sum_maps"] = result["sum_maps"]
+
+            COMPOSITE_TASKS[task_id]["status"] = "completed"
+            COMPOSITE_TASKS[task_id]["progress"] = 100
+            COMPOSITE_TASKS[task_id]["result"] = response
+            COMPOSITE_TASKS[task_id]["completed_at"] = datetime.now().isoformat()
+
+        except Exception as e:
+            logger.exception(f"Composite map task {task_id} failed: {e}")
+            COMPOSITE_TASKS[task_id]["status"] = "failed"
+            COMPOSITE_TASKS[task_id]["error"] = str(e)
+            COMPOSITE_TASKS[task_id]["failed_at"] = datetime.now().isoformat()
+
+    COMPOSITE_EXECUTOR.submit(_run_sync)
 
     return {
         "success": True,
