@@ -11175,6 +11175,11 @@ class WaferMapViewer {
         // 뷰 모드 결정
 
         if (this.selectedImages && this.selectedImages.length > 1) {
+            // 🔥 새 폴더/파일 선택 시 스크롤 맨 위로 강제 (이전 폴더 위치 복원 방지)
+            this._lastGridScrollTop = null;
+            if (this.savedViewState) {
+                this.savedViewState.scrollTop = 0;
+            }
             this.showGrid(this.selectedImages);
         } else if (this.selectedImages && this.selectedImages.length === 1) {
             this.hideGrid();
@@ -20914,7 +20919,12 @@ class WaferMapViewer {
         this.gridViewImageList = [...currentImages];
         const grid = document.getElementById('image-grid');
         const scrollWrapper = grid?.parentElement;
-        const scrollTop = scrollWrapper ? scrollWrapper.scrollTop : 0;
+        // 🔥 DOM scrollTop이 0이면 _lastGridScrollTop에서 복원 (그리드 숨김 시 scrollTop이 리셋될 수 있음)
+        const domScrollTop = scrollWrapper ? scrollWrapper.scrollTop : 0;
+        const fallbackScrollTop = this._lastGridScrollTop || this.savedViewState?.scrollTop || 0;
+        const scrollTop = (domScrollTop === 0 && fallbackScrollTop > 0)
+            ? fallbackScrollTop
+            : domScrollTop;
         const hasGridSelection = Array.isArray(this.gridSelectedIdxs) && this.gridSelectedIdxs.length > 0;
         const hasFolderSelection = this.selectedFolders && this.selectedFolders.size > 0;
         const selectedIndices = hasGridSelection
@@ -23962,7 +23972,12 @@ class WaferMapViewer {
             img.dataset.loading = 'false';
             img.dataset.gridLoaded = 'false';
             img.dataset.retryCount = '0';
-            img.style.opacity = '0.5';
+            // 🔥 이미 로드된 이미지는 opacity 유지 (회색 배경 방지)
+            // 새 이미지 로드 완료 시 onLoad에서 opacity=1 설정됨
+            const hasLoadedImage = img.src && !img.src.startsWith('data:');
+            if (!hasLoadedImage) {
+                img.style.opacity = '0.5';
+            }
         });
 
         this.resumeGridLoading();
@@ -25919,8 +25934,12 @@ class WaferMapViewer {
 
         console.log(`📍 [LOT-GRID] 스크롤 복원 준비: targetScrollTop=`, scrollTopToRestore);
 
-        // scrollTop이 0인 경우도 유효한 위치이므로 undefined/null 여부만 체크
-        if (scrollWrapper && scrollTopToRestore !== undefined && scrollTopToRestore !== null) {
+        // 🔥 이전 스크롤 복원 타이머 취소 (새 폴더 진입 시 이전 복원이 덮어쓰는 것 방지)
+        const restoreId = (this._scrollRestoreId || 0) + 1;
+        this._scrollRestoreId = restoreId;
+
+        // 🔥 0보다 큰 값만 복원 (0이면 이미 맨 위이므로 복원 불필요)
+        if (scrollWrapper && scrollTopToRestore !== undefined && scrollTopToRestore !== null && scrollTopToRestore > 0) {
             console.log(`📍 [LOT-GRID] 스크롤 복원 대기: ${scrollTopToRestore}px`);
 
             // 🔥 스크롤 복원 플래그 설정 (다른 코드가 스크롤을 변경하지 못하도록)
@@ -25928,6 +25947,8 @@ class WaferMapViewer {
 
             // 🔥 모든 DOM 조작이 끝난 후 스크롤 복원 (여러 번 강제 복원)
             const doRestore = () => {
+                // 🔥 새 호출이 들어왔으면 이전 복원 중단
+                if (this._scrollRestoreId !== restoreId) return;
                 const currentScrollWrapper = grid?.parentElement;
                 if (currentScrollWrapper) {
                     const beforeScroll = currentScrollWrapper.scrollTop;
@@ -25942,11 +25963,13 @@ class WaferMapViewer {
             setTimeout(doRestore, 200);
             setTimeout(doRestore, 300);
             setTimeout(() => {
+                if (this._scrollRestoreId !== restoreId) return;
                 doRestore();
                 this._restoringScroll = false;
                 console.log(`✅ [LOT-GRID] 스크롤 복원 완료`);
             }, 500);  // 🔥 500ms까지 계속 복원
         } else {
+            this._restoringScroll = false;
             console.warn(`⚠️ [LOT-GRID] 복원할 스크롤 위치 없음 (scrollTop: ${scrollTopToRestore})`);
         }
 

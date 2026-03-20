@@ -181,6 +181,18 @@ def add_png_padding_chunk(png_bytes: bytes, target_size: int, seed_text: str) ->
     return png_bytes[:iend_offset] + chunk + png_bytes[iend_offset:]
 
 
+def _assign_grade(chip: dict, chip_idx: int, image_name: str) -> int:
+    """JSON에 'g' 필드가 없으면 chip 위치 기반으로 다양한 grade(0~7) 할당."""
+    grade = chip.get("g")
+    if isinstance(grade, int) and 0 <= grade <= 7:
+        return grade
+    # chip 좌표 + 이미지 이름으로 결정적 grade 할당
+    x_abs = chip.get("x_abs", chip_idx)
+    y_abs = chip.get("y_abs", 0)
+    seed = stable_seed(image_name, x_abs, y_abs)
+    return seed % 8
+
+
 def render_image_from_positions(json_path: Path, palette: list[int]) -> Image.Image:
     with json_path.open("r", encoding="utf-8") as fh:
         data = json.load(fh)
@@ -191,8 +203,9 @@ def render_image_from_positions(json_path: Path, palette: list[int]) -> Image.Im
     height = int(canvas.get("height") or 2304)
 
     arr = np.full((height, width), BACKGROUND_INDEX, dtype=np.uint8)
+    image_name = json_path.stem
 
-    for chip in data.get("chips", []):
+    for chip_idx, chip in enumerate(data.get("chips", [])):
         rect = chip.get("rect") or {}
         x0 = int(rect.get("x0", 0))
         y0 = int(rect.get("y0", 0))
@@ -201,16 +214,13 @@ def render_image_from_positions(json_path: Path, palette: list[int]) -> Image.Im
         if x1 <= x0 or y1 <= y0:
             continue
 
-        border_index = border_index_from_bin(chip.get("b"))
-        arr[y0:y1, x0:x1] = border_index
+        arr[y0:y1, x0:x1] = BACKGROUND_INDEX
 
         if x1 - x0 <= 2 or y1 - y0 <= 2:
             continue
 
         inner = arr[y0 + 1 : y1 - 1, x0 + 1 : x1 - 1]
-        grade = chip.get("g", 0)
-        if not isinstance(grade, int) or not (0 <= grade <= 7):
-            grade = 0
+        grade = _assign_grade(chip, chip_idx, image_name)
 
         inner[:, :] = grade
 
@@ -281,12 +291,18 @@ def render_palette_3k(
     positions_dir = positions_root / "palette_3k"
     dataset_dir.mkdir(parents=True, exist_ok=True)
 
-    if render_all:
-        for json_path in sorted(positions_dir.glob("wafer_p3k_*.json")):
+    json_paths = sorted(positions_dir.glob("wafer_p3k_*.json"))
+
+    if render_all or json_paths:
+        rendered = 0
+        for json_path in json_paths:
             target_path = dataset_dir / f"{json_path.stem}.png"
             img = render_image_from_positions(json_path, palette)
             save_image(img, target_path)
-        print("[palette_3k] rendered every PNG from its JSON")
+            rendered += 1
+            if rendered % 500 == 0:
+                print(f"[palette_3k] rendered {rendered}/{len(json_paths)} ...")
+        print(f"[palette_3k] rendered {rendered} PNG files from JSON (diverse grades)")
         return
 
     source_path = images_root / "palette_5mb" / f"{PALETTE_3K_SOURCE_5MB}.png"
