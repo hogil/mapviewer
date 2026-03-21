@@ -8805,19 +8805,60 @@ class WaferMapViewer {
     _renderMeaContextList(list, fKeys, qKeys, selectedImages) {
         list.innerHTML = '';
         const padKey = (k) => String(k).replace(/^\d+$/, m => m.padStart(4, '0'));
+        const checkedItems = [];
 
+        // 적용 버튼
+        const btnWrap = document.createElement('div');
+        btnWrap.style.cssText = 'padding:6px 8px;position:sticky;bottom:0;background:#2a2a2a;';
+        const applyBtn = document.createElement('button');
+        applyBtn.className = 'measure-apply-btn';
+        applyBtn.textContent = '적용';
+        applyBtn.style.cssText = 'width:100%;padding:6px 0;background:#1976d2;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:600;';
+        applyBtn.addEventListener('click', () => {
+            this.hideContextMenu();
+            if (checkedItems.length === 0) return;
+            // 첫 번째 체크 항목으로 overlay 설정
+            const first = checkedItems[0];
+            this.overlayMode = first.type;
+            this._ratioActiveItemKey = first.key;
+            this._measureCheckedItems = [...checkedItems];
+            this._openMeasureTab();
+        });
+        const updateBtn = () => {
+            applyBtn.textContent = checkedItems.length > 0 ? `적용 (${checkedItems.length})` : '적용';
+        };
+
+        // 체크박스 아이템
         const makeItem = (label, type, key) => {
             const item = document.createElement('div');
             item.className = 'failbit-item';
             item.dataset.label = label;
-            item.style.cssText = 'padding:4px 8px;cursor:pointer;color:#fff;';
-            item.textContent = label;
-            item.addEventListener('click', () => {
-                this.hideContextMenu();
-                this.overlayMode = type;
-                this._ratioActiveItemKey = key;
-                this._measureCheckedItems = [{ type, key, label }];
-                this._openMeasureTab();
+            item.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;';
+
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.style.cssText = 'margin:0;cursor:pointer;flex-shrink:0;';
+            item.appendChild(cb);
+
+            const span = document.createElement('span');
+            span.textContent = label;
+            span.style.flex = '1';
+            item.appendChild(span);
+
+            const entry = { type, key, label };
+            item.addEventListener('click', (e) => {
+                if (e.target === cb) return;
+                cb.checked = !cb.checked;
+                cb.dispatchEvent(new Event('change'));
+            });
+            cb.addEventListener('change', () => {
+                if (cb.checked) {
+                    checkedItems.push(entry);
+                } else {
+                    const idx = checkedItems.findIndex(x => x.type === type && x.key === key);
+                    if (idx >= 0) checkedItems.splice(idx, 1);
+                }
+                updateBtn();
             });
             return item;
         };
@@ -8836,6 +8877,9 @@ class WaferMapViewer {
             list.appendChild(qHeader);
             for (const k of qKeys) list.appendChild(makeItem(`QVL${padKey(k)}`, 'q', k));
         }
+
+        btnWrap.appendChild(applyBtn);
+        list.parentElement.appendChild(btnWrap);
     }
 
     _buildMcContextSubmenu() {
