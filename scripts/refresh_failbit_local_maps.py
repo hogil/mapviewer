@@ -263,8 +263,8 @@ def scale_positions_json(json_path: Path, scale: int) -> None:
                 rect["x1"] = int(rect.get("x1", 0)) * scale
                 rect["y1"] = int(rect.get("y1", 0)) * scale
 
-    # ftn_keys / qtn_keys 생성 (500개씩)
-    rng = np.random.default_rng(stable_seed(json_path.stem, "ftn_qtn"))
+    # ftn_keys / qtn_keys 생성 (500개씩, 모든 이미지 동일 — measure overlay 호환)
+    rng = np.random.default_rng(stable_seed("global_ftn_qtn_keys"))
     ftn_keys = [str(k) for k in sorted(rng.choice(9999, size=FTN_COUNT, replace=False))]
     qtn_keys = [str(k) for k in sorted(rng.choice(9999, size=QTN_COUNT, replace=False))]
 
