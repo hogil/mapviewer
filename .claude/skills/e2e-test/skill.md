@@ -21,43 +21,28 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 3. 재시도하여 MCP 연결 확인 — 실패 시 사용자에게 안내 후 중단
 4. **브라우저 창 최대화**: 페이지 접속 직후 `browser_resize`로 **width: 1920, height: 1080** 설정 (전체 화면으로 UI 테스트)
 
-### Step 0-2: 서버 시작 (확실한 종료 → 포트 해제 대기 → 시작)
+### Step 0-2: 서버 시작 (원샷 스크립트)
 
 **반드시 아래 순서를 정확히 따른다. 서버 접속 확인 전에 테스트를 시작하지 않는다.**
 
-1. **모든 Python 프로세스 강제 종료**:
+1. **원샷 서버 시작** (프로세스 종료 → 포트 대기 → 시작 → HTTP 200 확인을 한번에):
    ```bash
-   taskkill //F //IM python.exe 2>/dev/null   # Windows
-   # Ubuntu: pkill -9 -f "python -m api.main"
+   bash scripts/start-e2e-server.sh 8443
    ```
-2. **5초 대기** (포트 해제 시간 확보):
-   ```bash
-   sleep 5
+   - 출력이 `READY:8443`이면 → `BASE_URL=https://localhost:8443`
+   - 출력이 `READY:8444`이면 → 포트 8443이 점유 중이어서 8444로 시작됨
+   - 출력이 `FAIL`이면 → 사용자에게 안내 후 중단
+
+2. **브라우저 접속 확인** (`browser_navigate`로 실제 페이지 로드):
    ```
-3. **포트 해제 확인** (LISTENING 없을 때까지 반복, 최대 3회):
-   ```bash
-   for i in 1 2 3; do
-     netstat -an | grep ":8443 " | grep LISTEN || break
-     sleep 3
-   done
+   browser_navigate(BASE_URL)
+   browser_resize(1920, 1080)
    ```
-4. **서버 시작** (`run_in_background`):
-   ```bash
-   cd D:/project/mapviewer && HTTPS_PORT=8443 python -m api.main
-   ```
-5. **서버 준비 대기** (LISTENING 확인될 때까지 폴링, 최대 20초):
-   ```bash
-   for i in $(seq 1 10); do
-     sleep 2
-     netstat -an | grep ":8443 " | grep LISTEN && break
-   done
-   ```
-6. **서버 접속 확인** (`browser_navigate`로 실제 페이지 로드 확인):
-   - `https://localhost:8443` 접속
    - 타이틀 "Wafer Map Viewer" 확인
-   - **실패 시**: 8443 포트 프로세스 종료 → `HTTPS_PORT=8444`로 재시도 (위 1~5 반복)
-7. **접속 성공한 포트를 BASE_URL로 설정**
-8. **절대 금지**: 서버 접속 확인 없이 테스트 Phase 진입하지 않는다
+   - 폴더 목록 렌더링 확인 (3초 대기)
+   - **실패 시**: `bash scripts/start-e2e-server.sh 8444`로 재시도
+
+3. **절대 금지**: 서버 접속 + 페이지 타이틀 확인 없이 테스트 Phase 진입하지 않는다
 
 ### Step 0-3: 테스트 데이터 확인
 - 테스트 데이터 폴더: `palette_3k` (3000장), `palette_5mb` (대용량), `wafer_folder`, `wafer_edge_ring`
