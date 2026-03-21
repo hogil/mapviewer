@@ -6769,6 +6769,25 @@ async def get_bin_map_thumb(
 
 # ── Measure 경량 썸네일 (positions JSON만 사용, 이미지 로드 없음) ──────────
 _measure_thumb_cache: Dict[str, bytes] = {}
+_empty_measure_placeholder: Dict[int, bytes] = {}
+
+def _get_empty_measure_placeholder(size: int) -> bytes:
+    """키가 없는 이미지용 빈 회색 placeholder (캐시됨)."""
+    if size in _empty_measure_placeholder:
+        return _empty_measure_placeholder[size]
+    import numpy as np
+    arr = np.full((size, size, 3), 60, dtype=np.uint8)  # 어두운 회색 #3C3C3C
+    try:
+        import pyvips as _pv
+        vout = _pv.Image.new_from_memory(arr.data, size, size, 3, "uchar")
+        data = vout.webpsave_buffer(Q=50, effort=0, strip=True)
+    except Exception:
+        pil_img = Image.fromarray(arr, "RGB")
+        buf = io.BytesIO()
+        pil_img.save(buf, format="WEBP", quality=50)
+        data = buf.getvalue()
+    _empty_measure_placeholder[size] = data
+    return data
 
 def _generate_measure_thumb(
     image_path: Path, size: int, field: str, item_key: str,
@@ -6849,8 +6868,18 @@ def _generate_measure_thumb(
     sx = out_w / float(canvas_w)
     sy = out_h / float(canvas_h)
 
-    # 배경
-    arr = np.full((out_h, out_w, 3), 204, dtype=np.uint8)  # #CCCCCC
+    # 배경 (개인색 적용)
+    from .personal_colors import load_color_legends
+    bg_rgb = (204, 204, 204)  # fallback #CCCCCC
+    try:
+        legends = load_color_legends()
+        user_scheme = legends.get(scheme) or legends.get("default") or {}
+        bg_hex = str(user_scheme.get("background", "#CCCCCC")).strip().lstrip("#")
+        if len(bg_hex) == 6:
+            bg_rgb = (int(bg_hex[0:2], 16), int(bg_hex[2:4], 16), int(bg_hex[4:6], 16))
+    except Exception:
+        pass
+    arr = np.full((out_h, out_w, 3), bg_rgb, dtype=np.uint8)
 
     # 칩 색칠
     filled = 0
@@ -6921,7 +6950,8 @@ async def get_measure_thumb(
         IO_POOL, _generate_measure_thumb, image_path, size, field, key, scheme, gradient_filter,
     )
     if result is None:
-        raise HTTPException(status_code=404, detail="Measure thumb generation failed")
+        # 키가 없는 이미지: 빈 회색 placeholder 반환 (404 대신)
+        result = _get_empty_measure_placeholder(size)
 
     # LRU 캐시 (최대 2000개)
     if len(_measure_thumb_cache) > 2000:
