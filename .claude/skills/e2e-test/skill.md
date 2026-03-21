@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 29개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 33개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드를 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -40,6 +40,22 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 ### Step 0-3: 테스트 데이터 확인
 - 테스트 데이터 폴더: `palette_3k` (3000장), `palette_5mb` (대용량), `wafer_folder`, `wafer_edge_ring`
 - 서버 접속 후 파일 탐색기에 위 폴더가 표시되는지 확인 (없으면 경고 후 계속 진행)
+
+### 테스트 데이터 제약 사항 (절대 위반 금지)
+
+1. **원본 이미지 파일 절대 수정 금지**: `wm-811k/` 하위의 PNG 파일을 E2E 테스트 중 변경, 삭제, 덮어쓰기하지 않는다.
+   이미지 재생성은 `scripts/refresh_failbit_local_maps.py`로만 수행한다.
+
+2. **chip 영역에 원형 마스크 절대 금지**: chip은 positions JSON의 `rect` (직사각형) 그대로 렌더링한다.
+   chip과 배경 사이에 동그라미, 원형 클리핑, 마스크 영역을 만들지 않는다.
+   chip 테두리는 항상 직사각형 1px(×scale) border이다.
+
+3. **테스트 이미지 규격**:
+   - 해상도: 최소 6000×6000 pixels (현재 6912×6912, scale=3)
+   - palette_5mb: 파일명대로 5~30MB (PNG padding chunk)
+   - Grade: 0~7 각각 chip 전체의 5%+ 점유, 각 chip 내부 pixel의 95%+ 단일 grade
+   - BIN: 285~291 + Normal + Invalid 등 다양한 BIN이 이미지마다 존재
+   - chip 테두리: BIN에 따른 palette index (Normal=10, Invalid=11, BIN별 12~23)
 
 ### Positions 파일 양식 (compact_array 포맷)
 
@@ -704,39 +720,52 @@ Composite에서 Failbit이 아닌 모든 항목(BIN/FBT/QVL)은 gradient 범례�
 
 **평가 항목**:
 
-#### 7-1. 클래스 추가
-1. 입력 필드 `input[placeholder*="클래스명"]`에 "e2e_test_class" 입력
+#### 7-1. 클래스 단건 추가
+1. 입력 필드 `input[placeholder*="클래스명"]`에 "e2e_class_a" 입력
 2. "Add Class" 버튼 클릭
-3. Fail List에 "e2e_test_class" 버튼 생성 확인
-4. API 응답 status 200 확인 (콘솔 로그)
+3. Fail List에 "e2e_class_a" 버튼 생성 확인
+4. API 응답 status 200 확인
 
-#### 7-2. 라벨 할당
-1. 이미지 5개 Ctrl+클릭 선택 (`v.toggleGridImageSelect(i, {ctrlKey:true})`)
-2. Fail List에서 "e2e_test_class" 클릭 (선택 상태)
-3. "Add Label" 클릭 → alert "Label ... added to 5 images successfully!" 확인
-4. `browser_handle_dialog(accept: true)`
+#### 7-2. 클래스 다중 추가 (쉼표 구분)
+1. 입력 필드에 "e2e_class_b, e2e_class_c, e2e_class_d" 입력 (쉼표 구분)
+2. "Add Class" 버튼 클릭
+3. Fail List에 "e2e_class_b", "e2e_class_c", "e2e_class_d" 3개 버튼 모두 생성 확인
+4. 총 4개 e2e 클래스 존재 확인 (a, b, c, d)
 
-#### 7-3. Label Explorer 확인
-1. Label Explorer 영역에서 "e2e_test_class" 텍스트 존재 확인
-2. 해당 폴더 클릭 → 그리드에 5개 이미지만 표시 확인 (`v.currentGridImages.length === 5`)
+#### 7-3. Class 버튼 클릭으로 라벨 즉시 추가
+1. 원본 폴더(palette_3k)로 이동 → 이미지 5개 Ctrl+클릭 선택
+2. Fail List에서 "e2e_class_a" 버튼 직접 클릭
+3. alert "5 images successfully!" 확인 → `browser_handle_dialog(accept: true)`
+4. Label Explorer에서 "e2e_class_a" 아래 5개 이미지 확인
+
+#### 7-4. Add Label 버튼으로 라벨 추가
+1. 이미지 3개 추가 선택
+2. Fail List에서 "e2e_class_b" 클릭 (선택 상태 표시)
+3. "Add Label" 버튼 클릭 → alert 확인 → accept
+4. Label Explorer에서 "e2e_class_b" 아래 3개 이미지 확인
+
+#### 7-5. Label Explorer 확인
+1. Label Explorer에서 "e2e_class_a" 클릭 → 그리드에 5개 이미지만 표시
+2. "e2e_class_b" 클릭 → 그리드에 3개 이미지 표시
 3. 스크린샷 촬영
 
-#### 7-4. 단일 모드 전환
-1. 이미지 더블클릭 → 단일 모드 진입 확인 (`v.gridMode === false`)
-2. ESC 또는 `v.handleBackToGrid()` → 그리드 복귀 (`v.gridMode === true`)
+#### 7-6. 단일 모드 전환
+1. 이미지 더블클릭 → 단일 모드 진입 (`v.gridMode === false`)
+2. ESC 또는 Back → 그리드 복귀 (`v.gridMode === true`)
 
-#### 7-5. 선택 목록 X 클릭 제거
-1. 선택 목록 패널 (`#selected-grid-images-panel`)에서 이미지 항목 클릭 (X 아이콘)
-2. `v.removeWaferFromSelectionByPath(path)` 호출 → 해당 이미지만 선택 해제
-3. `v.gridSelectedIdxs.length`가 1 감소했는지 확인
+#### 7-7. 다중 클래스 선택 후 삭제
+1. Fail List에서 "e2e_class_c" Ctrl+클릭 → "e2e_class_d" Ctrl+클릭 (다중 선택)
+2. "Delete Class" 버튼 클릭 → confirm 다이얼로그 accept
+3. Fail List에 "e2e_class_c", "e2e_class_d" 없음 확인
+4. "e2e_class_a", "e2e_class_b"는 여전히 존재 확인
 
-#### 7-6. 정리
-1. 입력 필드에 "e2e_test_class" 입력 → "Delete Class" 클릭
-2. confirm 다이얼로그 accept
-3. Fail List에 "e2e_test_class" 없음 확인
-4. Label Explorer에서도 제거 확인
+#### 7-8. 정리 (남은 클래스 삭제)
+1. "e2e_class_a" 클릭 → "e2e_class_b" Ctrl+클릭 (다중 선택)
+2. "Delete Class" 클릭 → confirm accept
+3. Fail List에 e2e_ 접두사 클래스 모두 없음 확인
+4. Label Explorer에서도 모두 제거 확인
 
-**pass 기준**: 추가→라벨→탐색→단일뷰→복귀→삭제 전체 플로우 성공
+**pass 기준**: 단건/다중 추가 → 버튼 클릭 라벨 → Add Label 라벨 → 탐색 → 단일뷰 → 다중 삭제 전체 성공
 
 ---
 
@@ -761,7 +790,8 @@ Composite에서 Failbit이 아닌 모든 항목(BIN/FBT/QVL)은 gradient 범례�
 
 #### 8-3. 생성 테스트 (Failbit + BIN + FBT + QVL)
 1. Failbit + BIN285 + FBT2342 + QVL5501 체크 → 생성 버튼 텍스트 "생성 (4)"
-2. 생성 클릭 → 30초 대기 (서버 처리, 4개 항목)
+2. 생성 클릭 → status polling (1초 간격, 최대 15초) → completed 확인
+   - 속도 측정: 생성 시작 ~ completed 도달 시간 기록
 3. 결과 그리드 확인:
    - "Grade" 섹션: Grade_0 ~ Grade_7 이미지 (8개)
    - "square" 섹션: square_average, square_weighted_average (2개)
@@ -1786,6 +1816,214 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 
 ---
 
+### Phase 30: Measure 맵 전환 시 회색 배경 방지
+
+**목적**: Measure 오버레이가 이미 적용된 상태에서 다른 measure key를 클릭할 때 이미지 배경이 회색으로 변하지 않는지 검증
+
+**배경**:
+- `refreshGridThumbnailsWithCurrentParams()`에서 이미 로드된 이미지의 `opacity`를 0.5로 설정 + `img.src`가 placeholder로 리셋되면 배경색(`#1c1c1c`)이 보여 회색으로 나타남
+- 수정: 이미 로드된 이미지(`img.src`가 `data:`로 시작하지 않는 경우)는 opacity를 유지
+
+**평가 항목**:
+1. palette_3k 폴더 로드 → Measure 버튼 클릭 → MC 패널 열기
+2. FBT 키 하나 클릭 → Measure 오버레이 적용 (이미지에 gradient 표시)
+3. 5초 대기 (이미지 로드 완료)
+4. 다른 FBT 키 클릭 → Measure 맵 전환
+5. **핵심 검증**: 뷰포트 내 `.grid-thumb-img` 중 `opacity < 1`인 이미지 비율 < 20%
+6. **핵심 검증**: 뷰포트 내 이미지의 `img.src`가 `data:` (placeholder)인 비율 < 10%
+7. 3초 대기 후 모든 뷰포트 이미지의 `opacity === '1'` 확인
+
+**pass 기준**: 전환 중 회색 배경 없이 이전 이미지가 유지되고, 새 이미지 로드 후 정상 교체
+
+---
+
+### Phase 31: palette_3k grade 다양성 검증
+
+**목적**: palette_3k 이미지들의 grade가 0~7로 다양하게 분포되어 있는지 검증
+
+**배경**:
+- positions JSON에 `g` 필드가 없어서 모든 chip이 grade 0으로 렌더링됨
+- 수정: `_assign_grade()` 함수로 chip 좌표 기반 해시 → grade 0~7 균등 분배
+
+**평가 항목**:
+1. palette_3k 폴더의 첫 이미지를 단일 이미지 모드로 열기
+2. `chipAnnotator.chips`에서 각 chip의 BIN 값 분포 확인 (다양한 BIN 존재)
+3. `/api/image?path=palette_3k/wafer_p3k_0001_...` 원본 이미지 요청
+4. **핵심 검증**: 이미지 pixel에서 grade 0~7 각각의 pixel 수가 전체의 5% 이상 (8 grade 모두 존재)
+5. 또는 browser_evaluate로 canvas에 이미지를 그려 pixel color 분석
+6. 대안: 그리드 스크린샷에서 이미지들이 시각적으로 다양한 색상을 가지는지 확인
+
+**pass 기준**: grade 0~7이 모두 이미지에 존재하고, 단일 grade만 있지 않음
+
+---
+
+### Phase 32: 폴더 전환 시 스크롤 맨 위 강제
+
+**목적**: 폴더를 전환할 때 그리드 스크롤이 항상 맨 위(0)로 리셋되는지 검증
+
+**배경**:
+- `updateFileExplorerSelection()` → `showGrid()` 경로에서 `_lastGridScrollTop`과 `savedViewState.scrollTop` 미리셋
+- `showGridByLot()`의 이전 `setTimeout(doRestore)` 타이머가 새 호출을 덮어씀
+- 수정: 스크롤 상태 리셋 + `_scrollRestoreId` 카운터로 이전 타이머 무효화
+
+**평가 항목**:
+
+#### 32-1. loadImagesInFolderAndShowGrid 경로
+1. `v.loadImagesInFolderAndShowGrid('palette_3k')` → 4초 대기
+2. 스크롤을 8000px로 설정
+3. `v.loadImagesInFolderAndShowGrid('sort_test')` → 3초 대기
+4. **핵심 검증**: `scrollWrapper.scrollTop === 0`
+
+#### 32-2. updateFileExplorerSelection 경로 (Ctrl+클릭 시뮬레이션)
+1. `v.loadImagesInFolderAndShowGrid('palette_3k')` → 4초 대기
+2. 스크롤을 8000px로 설정
+3. `fetch('/api/files?path=sort_test')` → `v.selectedImages = files` → `v.updateFileExplorerSelection()`
+4. 700ms 대기
+5. **핵심 검증**: `scrollWrapper.scrollTop === 0`
+
+#### 32-3. 연속 폴더 전환
+1. palette_3k 로드 → 스크롤 5000px → sort_test 로드 → 스크롤 확인
+2. sort_test 로드 → 스크롤 3000px → palette_3k 로드 → 스크롤 확인
+3. **핵심 검증**: 모든 전환에서 `scrollTop === 0`
+
+**pass 기준**: 32-1~32-3 모든 핵심 검증 통과 (새 폴더 진입 시 항상 scrollTop === 0)
+
+---
+
+### Phase 33: Measure 다중 선택 — 전체 기능 검증
+
+**목적**: Measure 드롭다운 다중선택 UI, 그리드 확장, 라벨 포맷, Navigator 갱신, 단일↔그리드 전환, 선택 이미지 필터, 404 placeholder를 종합 검증
+
+**배경**:
+- Measure 드롭다운: 체크박스 다중선택 (MAP: Failbit, BIN, FBT 섹션, QVL 섹션)
+- FBT/QVL 키: 4자리 제로패딩 (69 → `FBT0069`)
+- 다중 선택 시 `images × measureItems`로 그리드 리스트 확장
+- 라벨 포맷: Failbit(원본)=접두사 없음, FBT/QVL=`F0069_filename` (대문자), BIN=`BIN_filename`
+- 단일 이미지 파일명: `F0069_filename` (대문자 + 4자리 패딩)
+- measure-thumb 404: 빈 회색 placeholder 이미지 반환 (깨진 아이콘 방지)
+
+**사전 준비** (모든 하위 테스트 공통):
+```javascript
+v.lotMode = false;
+v.loadImagesInFolderAndShowGrid('palette_3k');
+// 6초 대기 후 v.currentGridImages.length > 0 확인
+```
+
+**평가 항목**:
+
+#### 33-1. 드롭다운 UI 확인
+1. Measure 버튼 (`#failbit-btn-top`) 클릭 → 패널 표시 확인
+2. **핵심 검증**: 패널에 체크박스 아이템 존재 (`.failbit-item input[type="checkbox"]`)
+3. **핵심 검증**: MAP 섹션에 `Failbit` 항목 존재
+4. **핵심 검증**: BIN 섹션에 `BIN` 항목 존재
+5. **핵심 검증**: FBT 항목이 4자리 패딩 (`FBT0069` 형태)
+6. **핵심 검증**: 적용 버튼 (`.measure-apply-btn`) 존재
+7. **핵심 검증**: 초기화 항목 존재 (클릭 시 전체 체크 해제)
+
+#### 33-2. 그리드 다중 선택 (Failbit + BIN + FBT)
+1. `v._measureCheckedItems = [{type:'failbit',key:null,label:'Failbit'},{type:'bin',key:null,label:'BIN'},{type:'f',key:'85',label:'FBT0085'}]`
+2. `v._applyMeasureSelection()` → 6초 대기
+3. **핵심 검증**: `v.overlayMode === 'multi'`
+4. **핵심 검증**: `v._gridMeasureMap`이 배열 (null 아님)
+5. **핵심 검증**: `v.currentGridImages.length === v._measureBaseImages.length × 3`
+6. **핵심 검증**: Measure 버튼 텍스트에 `Measure (3)` 포함
+7. **핵심 검증**: 모든 이미지 정상 로드 (깨진 아이콘 없음) — measure-thumb 404도 회색 placeholder로 표시
+
+#### 33-3. 라벨 포맷 검증
+1. 33-2 상태에서 `.grid-thumb-label` 텍스트 확인
+2. **핵심 검증**: Failbit 라벨 = 파일명만 (접두사 없음, 예: `wafer_p3k_0001_EE_Engineer`)
+3. **핵심 검증**: BIN 라벨 = `BIN_` 접두사 (예: `BIN_wafer_p3k_0001_EE_Engineer`)
+4. **핵심 검증**: FBT 라벨 = 대문자 + 4자리 패딩 (예: `F0085_wafer_p3k_0001_EE_Engineer`)
+5. **핵심 검증**: 같은 이미지의 3개 라벨에서 파일명 부분 동일
+
+#### 33-4. 선택 이미지만 measure 적용
+1. 33-2 초기화 후 일반 그리드로 복원
+2. `v.gridSelectedIdxs = [0,1,2]`, `v.gridSelectedSet = new Set([0,1,2])`
+3. Failbit + BIN 2개 적용 → `v._applyMeasureSelection()` → 5초 대기
+4. **핵심 검증**: `v.currentGridImages.length === 6` (선택 3개 × 2 measure)
+5. **핵심 검증**: `v._measureBaseImages.length === 3`
+
+#### 33-5. 1개 이미지 선택 + 1개 measure → 단일 이미지 전환
+1. 일반 그리드 상태에서 `v.gridSelectedIdxs = [0]`, `v.gridSelectedSet = new Set([0])`
+2. FBT0069 1개만 적용: `v._measureCheckedItems = [{type:'f',key:'69',label:'FBT0069'}]`
+3. `v._applyMeasureSelection()` → 4초 대기
+4. **핵심 검증**: `v.gridMode === false` (단일 이미지 모드 전환)
+5. **핵심 검증**: `v.overlayMode === 'f'`
+6. **핵심 검증**: 상단 파일명에 `F0069_` 접두사 포함 (대문자 + 4자리 패딩)
+7. **핵심 검증**: measure heatmap 이미지 정상 로드 (chip 값 표시)
+
+#### 33-6. 단일 이미지 모드 Navigator 갱신
+1. 33-5 상태에서 Navigator 썸네일 확인
+2. **핵심 검증**: Navigator 썸네일 URL에 `/api/measure-thumb` 포함
+3. **핵심 검증**: Navigator 썸네일이 measure heatmap으로 표시 (원본 아님)
+
+#### 33-7. 단일 이미지 모드에서 다중 선택 → 그리드 전환
+1. 33-5 상태(단일 이미지)에서 Failbit + BIN + FBT0069 3개 적용
+2. `v._applyMeasureSelection()` → 5초 대기
+3. **핵심 검증**: `v.gridMode === true` (그리드 모드 전환)
+4. **핵심 검증**: `v.overlayMode === 'multi'`
+5. **핵심 검증**: 그리드 이미지 정상 로드
+
+#### 33-8. 초기화 복원
+1. `v._measureCheckedItems = []` → `v._applyMeasureSelection()` → 4초 대기
+2. **핵심 검증**: `v.overlayMode === null`
+3. **핵심 검증**: `v._gridMeasureMap === null`
+4. **핵심 검증**: 라벨에 접두사 없음 (원래 파일명만)
+5. **핵심 검증**: Measure 버튼 텍스트가 `Measure` (숫자 없음)
+6. **핵심 검증**: `v.currentGridImages.length === v._measureBaseImages.length` (확장 해제)
+
+#### 33-9. measure-thumb 404 placeholder 확인
+1. 존재하지 않는 키로 API 직접 호출: `curl /api/measure-thumb?path=...&field=f&key=99999&size=256`
+2. **핵심 검증**: HTTP 200 반환 (404 아님)
+3. **핵심 검증**: 응답 크기 > 0 (빈 회색 placeholder 이미지)
+
+**pass 기준**: 33-1~33-9 모든 핵심 검증 통과
+
+---
+
+### Phase 34: Measure 탭 분리 + 폴더 전환 Measure 유지
+
+**목적**: 이미지 선택 후 Measure 키 클릭 시 새 "mea" 탭 생성, 미선택 시 현재 탭 바꿔치기, 폴더 전환 시 Measure 유지 검증
+
+**배경**:
+- 이미지 선택 + Measure 키 → 새 "mea" 탭, 선택 이미지만 measure-thumb
+- 미선택 + Measure 키 → 현재 탭에서 바꿔치기
+- mea 탭에서 다른 키 → 같은 탭에서 교체 (탭 추가 없음)
+- 원래 탭 → 일반 썸네일 유지
+- Measure 활성 상태에서 폴더 전환 → measure-thumb 유지
+
+**평가 항목**:
+
+#### 34-1. 선택 + Measure → 새 mea 탭
+1. palette_3k 로드 → 5개 이미지 Ctrl+클릭 선택
+2. Measure 드롭다운에서 FBT 키 클릭
+3. **핵심 검증**: 새 탭 생성, `title === 'mea0'`, `role === 'measure'`
+4. **핵심 검증**: 그리드에 5개 이미지만 표시, 모두 measure-thumb URL
+5. **핵심 검증**: gradient 범례 (0~10% ~ 90~100%) 표시
+
+#### 34-2. mea 탭에서 키 교체
+1. 다른 FBT 키 클릭
+2. **핵심 검증**: 탭 수 변화 없음 (새 탭 추가 안 됨)
+3. **핵심 검증**: 같은 mea0 탭에서 이미지 갱신
+
+#### 34-3. 원래 탭 복귀
+1. page0 탭 클릭
+2. **핵심 검증**: 일반 썸네일로 3000개 표시 (measure 아님)
+
+#### 34-4. 미선택 + Measure → 현재 탭 바꿔치기
+1. 선택 해제 상태에서 FBT 키 클릭
+2. **핵심 검증**: 탭 수 변화 없음
+3. **핵심 검증**: 현재 탭(page0)에서 measure-thumb으로 바꿔치기
+
+#### 34-5. Measure 활성 상태 폴더 전환
+1. Measure가 활성인 상태에서 `loadImagesInFolderAndShowGrid('palette_3k')` 재호출
+2. **핵심 검증**: `overlayMode === 'f'` 유지
+3. **핵심 검증**: 뷰포트 이미지가 measure-thumb URL
+
+**pass 기준**: 34-1~34-5 모든 핵심 검증 통과
+
+---
+
 ## 결과 보고
 
 각 Phase별로 pass/fail 요약표를 작성하세요:
@@ -1820,8 +2058,44 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 | 26 | 컨텍스트 메뉴 복사/다운로드 | pass/fail | 복사 3종, 다운로드, 닫기 |
 | 27 | 키보드 단축키 & 드래그 선택 | pass/fail | Ctrl+A, 드래그선택, 칩 다중선택 4종 |
 | 28 | 그리드 상태 복구 안정성 | pass/fail | 반복 선택/해제/더블클릭 후 그리드 재표시 |
+| 29 | 그리드↔단일 이미지 스크롤/로딩 | pass/fail | 스크롤 복원, 폴더선택 복원, 썸네일 즉시 로드 |
+| 30 | Measure 맵 전환 회색 배경 | pass/fail | 이전 이미지 유지, 회색 미발생 |
+| 31 | palette_3k grade 다양성 | pass/fail | grade 0~7 균등, 다양한 색상 |
+| 32 | 폴더 전환 스크롤 리셋 | pass/fail | 모든 경로에서 scrollTop===0 |
+| 33 | Measure 다중선택 전체 | pass/fail | UI/라벨/선택필터/단일전환/Navigator/404placeholder |
+| 34 | Measure 탭 분리 + 폴더 전환 유지 | pass/fail | mea 탭 생성/키 교체/원탭 복귀/미선택 바꿔치기/폴더 전환 유지 |
 
 핵심 단계마다 스크린샷을 촬영하여 첨부하세요.
+
+## 속도 측정 (Performance Report)
+
+**모든 맵 로드와 생성 속도를 측정하여 결과에 포함합니다.**
+
+### 필수 측정 항목
+
+| 항목 | 측정 방법 | 기준 |
+|------|----------|------|
+| 페이지 초기 로드 | `navigate` ~ 폴더 목록 렌더링 완료 | < 5초 |
+| palette_3k (3000장) 그리드 로드 | `loadImagesInFolderAndShowGrid` ~ grid children 생성 | < 3초 |
+| 뷰포트 썸네일 로드 (첫 화면) | grid 로드 ~ 뷰포트 내 `img.complete` > 80% | < 5초 |
+| 단일 이미지 로드 + 피라미드 | 더블클릭 ~ `[PREFETCH] 모든 레벨 다운로드 완료` | < 3초 |
+| Composite Map 생성 (5장) | POST ~ status=completed | < 5초 |
+| Composite Map 생성 (50장) | POST ~ status=completed | < 10초 |
+| Measure 오버레이 적용 | FBT 클릭 ~ 뷰포트 이미지 갱신 완료 | < 5초 |
+| Measure 맵 전환 | 다른 FBT 클릭 ~ 뷰포트 이미지 갱신 완료 | < 5초 |
+| 폴더 전환 | 새 폴더 로드 ~ grid children 생성 | < 3초 |
+
+### 결과 테이블 양식
+
+```
+| 항목 | 소요 시간 | 판정 |
+|------|----------|------|
+| 페이지 초기 로드 | 2.1초 | FAST |
+| palette_3k 그리드 로드 | 1.5초 | FAST |
+| ... | ... | ... |
+```
+
+판정 기준: 기준의 50% 이하 = FAST, 기준 이내 = OK, 기준 초과 = SLOW
 
 ## 자동 수정 (Auto-Fix)
 
