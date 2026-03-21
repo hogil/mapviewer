@@ -993,9 +993,12 @@ class WaferMapViewer {
         this.selectedBottoms = new Set();  // 선택된 Bottom 값들 (285, 286, 287, 288 등)
         this.selectedGradientRanges = new Set(); // 선택된 gradient 범위 인덱스 (0~9)
         this.lastGradientRangeClickIndex = null;
-        this.overlayMode = null;  // 'bin' | 'f' | 'q' | null
+        this.overlayMode = null;  // 'bin' | 'f' | 'q' | 'multi' | null
         this._ratioGradientCache = null;  // cached gradient stops
         this.positionsData = null;  // Positions JSON 데이터 캐시
+
+        // Measure 다중 선택 상태 [{type: 'original'|'failbit'|'bin'|'f'|'q', key: string|null, label: string}]
+        this._measureCheckedItems = [];
 
         // Color Legends 데이터
         this.colorLegends = null;
@@ -1645,6 +1648,7 @@ class WaferMapViewer {
             overlayMode: this.overlayMode || null,
             _ratioActiveItemKey: this._ratioActiveItemKey || null,
             _ratioGradientCache: this._ratioGradientCache ? [...this._ratioGradientCache] : null,
+            _measureCheckedItems: this._measureCheckedItems ? [...this._measureCheckedItems] : [],
             selectedBottoms: this.selectedBottoms ? [...this.selectedBottoms] : [],
             selectedGrades: this.selectedGrades ? [...this.selectedGrades] : [],
             selectedGradientRanges: this.selectedGradientRanges ? [...this.selectedGradientRanges] : [],
@@ -2143,6 +2147,7 @@ class WaferMapViewer {
 
         // 🔥 Measure overlay 상태 복원 (탭 전환 시 유지)
         if ('overlayMode' in state) {
+            this._measureCheckedItems = Array.isArray(state._measureCheckedItems) ? [...state._measureCheckedItems] : [];
             this.overlayMode = state.overlayMode || null;
             this._ratioActiveItemKey = state._ratioActiveItemKey || null;
             if (Array.isArray(state._ratioGradientCache) && state._ratioGradientCache.length > 0) {
@@ -2694,9 +2699,19 @@ class WaferMapViewer {
             }
             this.dom.filePathText.textContent = folderInfo;
 
-            // 🔥 Line 2: 파일명 전체 표시 (split하지 않음)
+            // 🔥 Line 2: 파일명 전체 표시 (measure 활성 시 접두사 추가)
             const fileNameWithoutExt = fileName.replace(/\.[^.]+$/, '');
-            this.dom.fileNameText.textContent = fileNameWithoutExt;
+            let displayName = fileNameWithoutExt;
+            if (this._measureCheckedItems && this._measureCheckedItems.length === 1) {
+                const mi = this._measureCheckedItems[0];
+                if (mi.type === 'f' || mi.type === 'q') {
+                    const pk = String(mi.key).replace(/^\d+$/, m => m.padStart(4, '0'));
+                    displayName = `${mi.type.toUpperCase()}${pk}_${fileNameWithoutExt}`;
+                } else if (mi.type !== 'failbit') {
+                    displayName = `${mi.label}_${fileNameWithoutExt}`;
+                }
+            }
+            this.dom.fileNameText.textContent = displayName;
 
             // 구분자 표시/숨김 처리
             const separator = document.getElementById('separator-text');
@@ -14980,9 +14995,14 @@ class WaferMapViewer {
         // 그리드 모드에서 선택된 이미지들 반환
         if (this.gridMode && this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0) {
             const imageList = (this.selectedImages?.length ? this.selectedImages : this.currentGridImages) || [];
-            return this.gridSelectedIdxs
+            let paths = this.gridSelectedIdxs
                 .map(idx => imageList[idx])
                 .filter(Boolean);
+            // 🔥 다중 Measure 모드: 확장된 리스트에서 중복 제거
+            if (this._gridMeasureMap) {
+                paths = [...new Set(paths)];
+            }
+            return paths;
         }
 
         // 단일 이미지 모드에서는 현재 선택된 이미지 반환
@@ -17882,6 +17902,13 @@ class WaferMapViewer {
             this.singleImageFromGrid = false;
         }
 
+        // 🔥 Measure 다중 선택 시 LOT 모드 비활성화 (다중 measure와 LOT 그룹핑 비호환)
+        if (this._measureCheckedItems && this._measureCheckedItems.length > 1 && this.lotMode) {
+            this.lotMode = false;
+            const lotBtn = document.getElementById('lot-mode-btn') || document.querySelector('[data-action="lot-mode"]');
+            if (lotBtn) lotBtn.classList.remove('active');
+        }
+
         // 📦 Lot 모드가 활성화되어 있으면 Lot별 그리드로 표시
         if (this.lotMode) {
             this.showGridByLot(images);
@@ -18085,6 +18112,30 @@ class WaferMapViewer {
         this.gridThumbWraps = [];
         // grid 모드에서는 cursor를 default로
         this.dom.viewerContainer.style.cursor = 'default';
+
+        // 🔥 Measure 다중 선택: 이미지 리스트 확장 (파일명 1차 정렬 + measure item 2차 정렬)
+        this._measureBaseImages = [...sortedImages];
+        const mcItems = this._measureCheckedItems;
+        if (mcItems && mcItems.length > 1) {
+            const expanded = [];
+            const measureMap = [];
+            for (const imgPath of sortedImages) {
+                for (const measureItem of mcItems) {
+                    expanded.push(imgPath);
+                    measureMap.push(measureItem);
+                }
+            }
+            sortedImages = expanded;
+            this._gridMeasureMap = measureMap;
+            this.selectedImages = sortedImages;
+            this.currentGridImages = sortedImages;
+        } else if (mcItems && mcItems.length === 1 && mcItems[0].type === 'failbit') {
+            // 단일 failbit도 measureMap 사용 (원본 thumbnail URL 빌드)
+            this._gridMeasureMap = sortedImages.map(() => mcItems[0]);
+        } else {
+            this._gridMeasureMap = null;
+        }
+
         this.showGridImmediately(sortedImages);
         // 🔥 새 그리드 진입 시 스크롤 맨 위 (콘텐츠 추가 후 리셋하여 확실히 적용)
         if (!skipSaveState) {
@@ -18105,10 +18156,10 @@ class WaferMapViewer {
         }, 100);
         grid.classList.add('active');
         setTimeout(() => this.updateGridSquaresPixel(), 0);
-        // 🔥 Measure overlay 유지: buildGridThumbWrap이 이미 measure-thumb URL 생성함
-        // refreshGridThumbnailsWithCurrentParams 재호출 불필요 (cacheSuffix 차이로 URL 덮어쓰기 방지)
+        // 🔥 Measure overlay 활성 시 썸네일 URL을 measure-thumb으로 교체
         if ((this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey) {
             setTimeout(() => {
+                this.refreshGridThumbnailsWithCurrentParams();
                 this.renderGridColorLegend();
                 this.updateFailbitButtonUI();
             }, 150);
@@ -18455,10 +18506,18 @@ class WaferMapViewer {
             img.dataset.loading = 'false';
             img.dataset.gridLoaded = 'false';
             if (this.gridLoadInFlight > 0) this.gridLoadInFlight--;
+            // 🔥 measure-thumb 404는 재시도 불필요 (해당 이미지에 키 없음)
+            const isMeasureUrl = (img.dataset.src || '').includes('/api/measure-thumb');
             const retries = parseInt(img.dataset.retryCount || '0', 10);
-            if (retries < 3) {
+            if (!isMeasureUrl && retries < 3) {
                 img.dataset.retryCount = String(retries + 1);
                 this.enqueueGridThumbnail(img, true);
+            } else {
+                // 로드 실패: placeholder로 교체 (깨진 아이콘 방지)
+                img.src = GRID_THUMB_PLACEHOLDER;
+                img.style.opacity = '0.3';
+                img.style.backgroundColor = '#3c3c3c';
+                img.dataset.gridLoaded = 'true';
             }
             this.drainGridLoadQueue();
         };
@@ -18554,14 +18613,17 @@ class WaferMapViewer {
                 this._transientGridRestoreState = { ...this.labelExplorerGridState };
             } else {
                 // savedViewState 초기화 또는 업데이트
+                // 🔥 다중 Measure 모드: base images로 저장 (복원 시 정상 그리드)
+                const saveImages = this._measureBaseImages || this.currentGridImages;
                 if (!this.savedViewState || this.savedViewState.type !== 'grid') {
                     this.savedViewState = {
                         type: 'grid',
-                        images: [...this.currentGridImages],
+                        images: [...saveImages],
                         scrollTop: currentScrollTop,
                     };
                 } else {
                     this.savedViewState.scrollTop = currentScrollTop;
+                    this.savedViewState.images = [...saveImages];
                 }
             }
 
@@ -18596,17 +18658,23 @@ class WaferMapViewer {
             typeof personalizedParams === 'string' && personalizedParams.includes('_t=');
         const cacheParam = cacheBuster && !hasCacheBusterInParams ? `&_t=${cacheBuster}` : '';
 
-        // 🔥 Measure overlay → /api/measure-thumb (positions-only, 이미지 로드 없음, 3ms)
-        // 그 외 → /api/thumbnail (기존)
+        // 🔥 Measure 다중 선택 모드 / 단일 Measure / 일반 모드
         let thumbnailUrl;
-        const isMeasureMode = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey;
-        if (isMeasureMode) {
-            const loginId = this.getCurrentLoginId();
-            const gf = this.selectedGradientRanges.size > 0
-                ? Array.from(this.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
-            thumbnailUrl = `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=256&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheParam}`;
+        const measureItem = this._gridMeasureMap ? this._gridMeasureMap[idx] : null;
+
+        if (measureItem) {
+            // 다중 선택 모드: measureItem에 맞는 URL 사용
+            thumbnailUrl = this._buildMeasureThumbUrl(imgPath, measureItem, cacheParam);
         } else {
-            thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}${cacheParam}`;
+            const isMeasureMode = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey;
+            if (isMeasureMode) {
+                const loginId = this.getCurrentLoginId();
+                const gf = this.selectedGradientRanges.size > 0
+                    ? Array.from(this.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
+                thumbnailUrl = `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=256&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheParam}`;
+            } else {
+                thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}${cacheParam}`;
+            }
         }
 
         img.dataset.src = thumbnailUrl;
@@ -18615,10 +18683,29 @@ class WaferMapViewer {
         thumbBox.appendChild(img);
         wrap.appendChild(thumbBox);
 
+        // 라벨: 다중 모드일 때 measure type 표시
         const label = document.createElement('div');
         label.className = 'grid-thumb-label';
         const fileName = imgPath.split('/').pop();
-        label.textContent = fileName.replace(/\.[^.]+$/, '');
+        const baseName = fileName.replace(/\.[^.]+$/, '');
+        if (measureItem) {
+            // 그리드 라벨: F0069, Q2824 형태 (대문자 + 4자리 패딩)
+            // failbit(원본)은 접두사 없이 파일명만 표시
+            const padK = (k) => String(k).replace(/^\d+$/, m => m.padStart(4, '0'));
+            if (measureItem.type === 'failbit') {
+                label.textContent = baseName;
+                label.title = baseName;
+            } else if (measureItem.type === 'f' || measureItem.type === 'q') {
+                const shortLabel = `${measureItem.type.toUpperCase()}${padK(measureItem.key)}`;
+                label.textContent = `${shortLabel}_${baseName}`;
+                label.title = `${shortLabel}_${baseName}`;
+            } else {
+                label.textContent = `${measureItem.label}_${baseName}`;
+                label.title = `${measureItem.label}_${baseName}`;
+            }
+        } else {
+            label.textContent = baseName;
+        }
         wrap.appendChild(label);
 
         return { wrap, img };
@@ -23167,6 +23254,12 @@ class WaferMapViewer {
         }
         panel.style.display = '';
 
+        // 🔥 패널 내부 클릭 시 외부 클릭 핸들러로 버블링 차단
+        if (!panel._failbitClickBlocker) {
+            panel._failbitClickBlocker = true;
+            panel.addEventListener('click', (e) => e.stopPropagation());
+        }
+
         // fixed 포지셔닝: 버튼 아래에 배치
         const btnId = panelId.replace('panel', 'btn');
         const btn = document.getElementById(btnId);
@@ -23181,48 +23274,108 @@ class WaferMapViewer {
     }
 
     /**
-     * Measure 통합 리스트 생성 (초기화 → BIN → FBT → QVL)
+     * Measure 통합 리스트 생성 (체크박스 다중선택: 원본 → Failbit → BIN → FBT → QVL)
      */
     _buildFailbitList(panel) {
         const list = panel.querySelector('.failbit-list');
         if (!list) return;
         list.innerHTML = '';
 
-        // --- 초기화 항목 (오버레이 해제) ---
+        // 키를 4자리 제로패딩 (69 → '0069')
+        const padKey = (k) => String(k).replace(/^\d+$/, m => m.padStart(4, '0'));
+
+        // 기존 적용 버튼 제거
+        const existingBtnWrap = panel.querySelector('.measure-apply-wrap');
+        if (existingBtnWrap) existingBtnWrap.remove();
+
+        // 현재 체크 상태 확인 헬퍼
+        const isChecked = (type, key) =>
+            this._measureCheckedItems.some(it => it.type === type && it.key === key);
+
+        // 적용 버튼 업데이트
+        const updateApplyBtn = () => {
+            const btn = panel.querySelector('.measure-apply-btn');
+            if (btn) {
+                const n = this._measureCheckedItems.length;
+                btn.textContent = n > 0 ? `적용 (${n})` : '적용';
+                btn.disabled = false;
+                btn.style.opacity = '1';
+            }
+        };
+
+        // 체크박스 아이템 생성
+        const makeItem = (label, type, key) => {
+            const item = document.createElement('div');
+            item.className = 'failbit-item';
+            item.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;';
+            item.dataset.label = label;
+
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = isChecked(type, key);
+            cb.style.cssText = 'margin:0;cursor:pointer;flex-shrink:0;';
+            item.appendChild(cb);
+
+            const span = document.createElement('span');
+            span.textContent = label;
+            span.style.flex = '1';
+            item.appendChild(span);
+
+            const entry = { type, key, label };
+            const toggle = (e) => {
+                if (e.target === cb) return;
+                cb.checked = !cb.checked;
+                cb.dispatchEvent(new Event('change'));
+            };
+            item.addEventListener('click', toggle);
+            cb.addEventListener('change', () => {
+                if (cb.checked) {
+                    this._measureCheckedItems.push(entry);
+                } else {
+                    this._measureCheckedItems = this._measureCheckedItems.filter(
+                        x => !(x.type === type && x.key === key)
+                    );
+                }
+                updateApplyBtn();
+            });
+            return item;
+        };
+
+        // --- 초기화 항목 (비체크박스, 클릭 시 전체 해제) ---
         const resetItem = document.createElement('div');
-        resetItem.className = 'failbit-item' + (!this.overlayMode ? ' active' : '');
+        resetItem.className = 'failbit-item';
         resetItem.textContent = '초기화';
         resetItem.dataset.label = '초기화 reset';
-        resetItem.dataset.type = 'reset';
+        resetItem.style.cssText = 'color:#f88;cursor:pointer;';
         resetItem.addEventListener('click', () => {
-            this._selectFailbitItem('reset', null);
-            this._closeFailbitPanels();
+            this._measureCheckedItems = [];
+            list.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+            updateApplyBtn();
         });
         list.appendChild(resetItem);
 
-        // --- BIN 항목 (항상 표시) ---
-        const binItem = document.createElement('div');
-        binItem.className = 'failbit-item' + (this.overlayMode === 'bin' ? ' active' : '');
-        binItem.textContent = 'BIN';
-        binItem.dataset.label = 'BIN';
-        binItem.dataset.type = 'bin';
-        binItem.addEventListener('click', () => {
-            this._selectFailbitItem('bin', null);
-            this._closeFailbitPanels();
-        });
-        list.appendChild(binItem);
+        // --- MAP 섹션 (Failbit = 원본 이미지) ---
+        const mapHeader = document.createElement('div');
+        mapHeader.className = 'failbit-section';
+        mapHeader.textContent = 'MAP';
+        list.appendChild(mapHeader);
+        list.appendChild(makeItem('Failbit', 'failbit', null));
+
+        // --- BIN 항목 ---
+        const binHeader = document.createElement('div');
+        binHeader.className = 'failbit-section';
+        binHeader.textContent = 'BIN';
+        list.appendChild(binHeader);
+        list.appendChild(makeItem('BIN', 'bin', null));
 
         // chipAnnotator에서 키를 가져오거나, 그리드 모드용 캐시에서 가져옴
-        // (getAvailableItemKeys는 positionsData.ftn_keys/qtn_keys를 우선 사용하므로 인덱스가 아닌 실제 키 반환)
         const fKeys = this.chipAnnotator ? this.chipAnnotator.getAvailableItemKeys('f') : [];
         const qKeys = this.chipAnnotator ? this.chipAnnotator.getAvailableItemKeys('q') : [];
         const hasFQ = fKeys.length > 0 || qKeys.length > 0;
 
-        // chipAnnotator 키가 없으면 캐시된 키 사용
         const effectiveFKeys = fKeys.length > 0 ? fKeys : (this._cachedMeasureKeys?.f || []);
         const effectiveQKeys = qKeys.length > 0 ? qKeys : (this._cachedMeasureKeys?.q || []);
 
-        // chipAnnotator에서 실제 키를 가져왔으면 캐시 업데이트
         if (hasFQ) {
             this._cachedMeasureKeys = { f: effectiveFKeys, q: effectiveQKeys };
         }
@@ -23234,18 +23387,7 @@ class WaferMapViewer {
             fHeader.textContent = 'FBT';
             list.appendChild(fHeader);
             effectiveFKeys.forEach(key => {
-                const item = document.createElement('div');
-                const displayLabel = `FBT${key}`;
-                item.className = 'failbit-item' + (this.overlayMode === 'f' && this._ratioActiveItemKey === key ? ' active' : '');
-                item.textContent = displayLabel;
-                item.dataset.label = displayLabel;
-                item.dataset.type = 'f';
-                item.dataset.key = key;
-                item.addEventListener('click', () => {
-                    this._selectFailbitItem('f', key);
-                    this._closeFailbitPanels();
-                });
-                list.appendChild(item);
+                list.appendChild(makeItem(`FBT${padKey(key)}`, 'f', key));
             });
         }
 
@@ -23256,20 +23398,25 @@ class WaferMapViewer {
             qHeader.textContent = 'QVL';
             list.appendChild(qHeader);
             effectiveQKeys.forEach(key => {
-                const item = document.createElement('div');
-                const displayLabel = `QVL${key}`;
-                item.className = 'failbit-item' + (this.overlayMode === 'q' && this._ratioActiveItemKey === key ? ' active' : '');
-                item.textContent = displayLabel;
-                item.dataset.label = displayLabel;
-                item.dataset.type = 'q';
-                item.dataset.key = key;
-                item.addEventListener('click', () => {
-                    this._selectFailbitItem('q', key);
-                    this._closeFailbitPanels();
-                });
-                list.appendChild(item);
+                list.appendChild(makeItem(`QVL${padKey(key)}`, 'q', key));
             });
         }
+
+        // --- 적용 버튼 ---
+        const btnWrap = document.createElement('div');
+        btnWrap.className = 'measure-apply-wrap';
+        btnWrap.style.cssText = 'padding:6px 8px;border-top:1px solid #444;';
+        const applyBtn = document.createElement('button');
+        applyBtn.className = 'measure-apply-btn';
+        const n = this._measureCheckedItems.length;
+        applyBtn.textContent = n > 0 ? `적용 (${n})` : '적용';
+        applyBtn.style.cssText = 'width:100%;padding:6px 0;background:#1976d2;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:600;';
+        applyBtn.addEventListener('click', () => {
+            this._closeFailbitPanels();
+            this._applyMeasureSelection();
+        });
+        btnWrap.appendChild(applyBtn);
+        panel.appendChild(btnWrap);
 
         // 그리드 모드에서 FBT/QVL 키가 없으면 첫 번째 이미지의 positions에서 비동기 로드
         if (this.gridMode && effectiveFKeys.length === 0 && effectiveQKeys.length === 0) {
@@ -23308,26 +23455,33 @@ class WaferMapViewer {
      * Measure 아이템 선택 (BIN / FBT / QVL 통합)
      */
     async _selectFailbitItem(type, itemKey) {
+        // 🔥 단일 선택 시 _measureCheckedItems 동기화 + _gridMeasureMap 해제
+        this._gridMeasureMap = null;
+
         // 초기화 (오버레이 해제)
         if (type === 'reset') {
             this.overlayMode = null;
             this._ratioActiveItemKey = null;
+            this._measureCheckedItems = [];
             if (this.chipAnnotator) this.chipAnnotator.setOverlayMode(null);
             if (!this.gridMode) this.refreshThumbnailNavigatorWithCurrentParams();
         }
         // 같은 항목 재클릭 → 해제
         else if (type === 'bin' && this.overlayMode === 'bin') {
             this.overlayMode = null;
+            this._measureCheckedItems = [];
             if (this.chipAnnotator) this.chipAnnotator.setOverlayMode(null);
             if (!this.gridMode) this.refreshThumbnailNavigatorWithCurrentParams();
         } else if ((type === 'f' || type === 'q') && this.overlayMode === type && this._ratioActiveItemKey === itemKey) {
             this.overlayMode = null;
             this._ratioActiveItemKey = null;
+            this._measureCheckedItems = [];
             if (this.chipAnnotator) this.chipAnnotator.setOverlayMode(null);
             if (!this.gridMode) this.refreshThumbnailNavigatorWithCurrentParams();
         } else if (type === 'bin') {
             this.overlayMode = 'bin';
             this._ratioActiveItemKey = null;
+            this._measureCheckedItems = [{ type: 'bin', key: null, label: 'BIN' }];
             // 🔥 Bottom 선택은 유지 (동시 사용 가능)
             if (!this.gridMode && this.chipAnnotator) {
                 const binColors = this._buildBinColorMap();
@@ -23338,6 +23492,9 @@ class WaferMapViewer {
             // FBT / QVL
             this.overlayMode = type;
             this._ratioActiveItemKey = itemKey;
+            const pk = String(itemKey).replace(/^\d+$/, m => m.padStart(4, '0'));
+            const lbl = type === 'f' ? `FBT${pk}` : `QVL${pk}`;
+            this._measureCheckedItems = [{ type, key: itemKey, label: lbl }];
             // 🔥 Bottom 선택은 유지 (동시 사용 가능)
             if (!this.gridMode) {
                 // 단일 이미지 모드: 클라이언트 사이드 오버레이
@@ -23368,6 +23525,156 @@ class WaferMapViewer {
         if (this.gridMode) {
             this.refreshGridThumbnailsWithCurrentParams();
             this.refreshThumbnailNavigatorWithCurrentParams();
+        }
+    }
+
+    /**
+     * _measureCheckedItems → overlayMode / _ratioActiveItemKey 동기화
+     */
+    _syncOverlayModeFromChecked() {
+        const items = this._measureCheckedItems;
+        if (!items || items.length === 0) {
+            this.overlayMode = null;
+            this._ratioActiveItemKey = null;
+        } else if (items.length === 1) {
+            const it = items[0];
+            if (it.type === 'f' || it.type === 'q') {
+                this.overlayMode = it.type;
+                this._ratioActiveItemKey = it.key;
+            } else if (it.type === 'bin') {
+                this.overlayMode = 'bin';
+                this._ratioActiveItemKey = null;
+            } else {
+                // 'failbit' — 원본 이미지 표시 (기존 overlay 사용 안 함)
+                this.overlayMode = it.type;
+                this._ratioActiveItemKey = null;
+            }
+        } else {
+            // 다중 선택 모드
+            this.overlayMode = 'multi';
+            this._ratioActiveItemKey = null;
+        }
+    }
+
+    /**
+     * 다중 선택 적용 — 그리드 재생성
+     */
+    async _applyMeasureSelection() {
+        this._syncOverlayModeFromChecked();
+        this.selectedGradientRanges.clear();
+        this.lastGradientRangeClickIndex = null;
+
+        // Gradient 캐시 로드 (FBT/QVL 항목 있을 때)
+        const hasFQ = this._measureCheckedItems.some(it => it.type === 'f' || it.type === 'q');
+        if (hasFQ && !this._ratioGradientCache) {
+            try {
+                const loginId = this.currentUser || FALLBACK_LOGIN_ID;
+                const resp = await fetch(`/api/measure-colors?LoginId=${encodeURIComponent(loginId)}`);
+                if (resp.ok) {
+                    const data = await resp.json();
+                    this._ratioGradientCache = data.colors || data.defaultColors;
+                }
+            } catch (_) {}
+        }
+
+        this.renderColorLegends();
+        this.updateFailbitButtonUI();
+
+        if (this.gridMode) {
+            // 🔥 그리드에서 선택된 이미지만 사용 (선택 없으면 전체)
+            const selected = this.getSelectedImagesForModal();
+            let targetImages = selected.length > 0 ? selected
+                : (this._measureBaseImages && this._measureBaseImages.length > 0) ? this._measureBaseImages
+                : (this.currentGridImages && this.currentGridImages.length > 0) ? this.currentGridImages
+                : (this.selectedImages && this.selectedImages.length > 0) ? this.selectedImages
+                : [];
+            // 🔥 LOT 모드 등에서 이미지 리스트가 비어있으면 fallback
+            if (targetImages.length === 0) {
+                // 파일 트리에서 현재 폴더의 이미지 가져오기
+                const allFiles = document.querySelectorAll('#file-tree [data-path]');
+                const imgPaths = [];
+                allFiles.forEach(el => {
+                    const p = el.dataset.path;
+                    if (p && /\.(png|jpg|jpeg|bmp|tiff|tif|webp|gif)$/i.test(p)) {
+                        imgPaths.push(p);
+                    }
+                });
+                if (imgPaths.length > 0) targetImages = imgPaths;
+            }
+
+            const wasMulti = !!this._gridMeasureMap;
+            const isMulti = this._measureCheckedItems.length > 1;
+            const isSingle = this._measureCheckedItems.length === 1;
+
+            // 🔥 1개 이미지 선택 + 1개 measure → 단일 이미지 보기로 전환
+            if (isSingle && selected.length === 1) {
+                const item = this._measureCheckedItems[0];
+                this.gridMode = false;
+                // overlay 적용 후 이미지 로드
+                if (item.type === 'bin') {
+                    this.overlayMode = 'bin';
+                    this._ratioActiveItemKey = null;
+                } else if (item.type === 'f' || item.type === 'q') {
+                    this.overlayMode = item.type;
+                    this._ratioActiveItemKey = item.key;
+                }
+                this.loadImage(selected[0]);
+                return;
+            }
+
+            if (isMulti || wasMulti) {
+                // 다중↔단일 전환 또는 다중 항목 변경: 그리드 전체 재생성
+                this.showGrid(targetImages);
+            } else {
+                // 단일 선택 유지: URL만 교체
+                this.refreshGridThumbnailsWithCurrentParams();
+            }
+            this.refreshThumbnailNavigatorWithCurrentParams();
+        } else {
+            // 단일 이미지 모드
+            if (this._measureCheckedItems.length > 1) {
+                // 🔥 다중 선택 → 현재 이미지 리스트로 그리드 모드 전환
+                const imageList = this.gridViewImageList || this.singleViewImageList || (this.selectedImagePath ? [this.selectedImagePath] : []);
+                if (imageList.length > 0) {
+                    this.gridMode = true;
+                    this.showGrid(imageList);
+                    return;
+                }
+            }
+            // 단일 선택: 첫 번째 적용 가능한 항목 적용
+            const firstApplicable = this._measureCheckedItems.find(it => it.type !== 'failbit');
+            if (!firstApplicable) {
+                if (this.chipAnnotator) this.chipAnnotator.setOverlayMode(null);
+            } else if (firstApplicable.type === 'bin') {
+                if (this.chipAnnotator) {
+                    const binColors = this._buildBinColorMap();
+                    this.chipAnnotator.setOverlayMode('bin', { binColors });
+                }
+            } else if (firstApplicable.type === 'f' || firstApplicable.type === 'q') {
+                await this._applyRatioOverlayClient(firstApplicable.type, firstApplicable.key);
+            }
+            this.refreshThumbnailNavigatorWithCurrentParams();
+        }
+    }
+
+    /**
+     * Measure 항목에 맞는 썸네일 URL 생성
+     */
+    _buildMeasureThumbUrl(imgPath, measureItem, cacheSuffix) {
+        const loginId = this.getCurrentLoginId();
+        const gf = this.selectedGradientRanges.size > 0
+            ? Array.from(this.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
+
+        switch (measureItem.type) {
+            case 'failbit':
+                return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${this.getPersonalizedParams()}${cacheSuffix}`;
+            case 'bin':
+                return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${this.getPersonalizedParams()}&bin_overlay=1${cacheSuffix}`;
+            case 'f':
+            case 'q':
+                return `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${measureItem.type}&key=${encodeURIComponent(measureItem.key)}&size=256&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
+            default:
+                return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${this.getPersonalizedParams()}${cacheSuffix}`;
         }
     }
 
@@ -23448,6 +23755,9 @@ class WaferMapViewer {
     _closeFailbitPanels() {
         document.querySelectorAll('.failbit-panel').forEach(p => {
             p.style.display = 'none';
+            // 적용 버튼 wrap 제거 (다음 open 시 재생성)
+            const btnWrap = p.querySelector('.measure-apply-wrap');
+            if (btnWrap) btnWrap.remove();
             // body로 이동했던 패널을 원래 위치로 복원
             if (p._originalParent && p.parentElement === document.body) {
                 if (p._originalNext) {
@@ -23463,11 +23773,25 @@ class WaferMapViewer {
      * Measure 버튼 UI 업데이트 (is-active 토글 + 라벨)
      */
     updateFailbitButtonUI() {
-        const active = !!this.overlayMode;
+        const items = this._measureCheckedItems || [];
         let label = 'Measure';
-        if (this.overlayMode === 'bin') label = 'BIN';
-        else if (this.overlayMode === 'f') label = `FBT${this._ratioActiveItemKey || ''}`;
-        else if (this.overlayMode === 'q') label = `QVL${this._ratioActiveItemKey || ''}`;
+        let active = false;
+
+        if (items.length === 1) {
+            label = items[0].label;
+            active = true;
+        } else if (items.length > 1) {
+            label = `Measure (${items.length})`;
+            active = true;
+        } else if (this.overlayMode) {
+            // 하위 호환: _measureCheckedItems 없이 overlayMode만 설정된 경우
+            active = true;
+            if (this.overlayMode === 'bin') label = 'BIN';
+            else if (this.overlayMode === 'f' || this.overlayMode === 'q') {
+                const pk = String(this._ratioActiveItemKey || '').replace(/^\d+$/, m => m.padStart(4, '0'));
+                label = this.overlayMode === 'f' ? `FBT${pk}` : `QVL${pk}`;
+            }
+        }
 
         for (const id of ['failbit-btn-top', 'failbit-btn-filename']) {
             const btn = document.getElementById(id);
@@ -23953,16 +24277,24 @@ class WaferMapViewer {
             const imagePath = resolveImagePath(img);
             if (!imagePath) return;
 
-            // 🔥 Measure overlay → /api/measure-thumb (positions-only, 3ms)
             let nextUrl;
-            const isMeasure = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey;
-            if (isMeasure) {
-                const loginId = this.getCurrentLoginId();
-                const gf = this.selectedGradientRanges.size > 0
-                    ? Array.from(this.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
-                nextUrl = `/api/measure-thumb?path=${encodeURIComponent(imagePath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=256&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
+            // 🔥 다중 Measure 선택 모드: _gridMeasureMap에서 인덱스로 참조
+            const wrapIdx = parseInt(img.closest('.grid-thumb-wrap')?.dataset?.index);
+            const measureItem = (this._gridMeasureMap && !isNaN(wrapIdx)) ? this._gridMeasureMap[wrapIdx] : null;
+
+            if (measureItem) {
+                nextUrl = this._buildMeasureThumbUrl(imagePath, measureItem, cacheSuffix);
             } else {
-                nextUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}&size=512${personalizedParams}${cacheSuffix}`;
+                // 단일 Measure overlay → /api/measure-thumb (positions-only, 3ms)
+                const isMeasure = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey;
+                if (isMeasure) {
+                    const loginId = this.getCurrentLoginId();
+                    const gf = this.selectedGradientRanges.size > 0
+                        ? Array.from(this.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
+                    nextUrl = `/api/measure-thumb?path=${encodeURIComponent(imagePath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=256&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
+                } else {
+                    nextUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}&size=512${personalizedParams}${cacheSuffix}`;
+                }
             }
             // 🔥 URL이 같으면 스킵 (불필요한 재로드 방지)
             if (img.dataset.src === nextUrl || img.src === nextUrl) return;
@@ -25780,6 +26112,9 @@ class WaferMapViewer {
     showGridByLot(images) {
         if (!images || images.length === 0) return;
 
+        // 🔥 Measure 다중 선택 시 base images 저장 (showGrid와 동일)
+        this._measureBaseImages = [...images];
+
         // 🔥 LOT/TEST/STEP 필터 적용
         const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
         if (hasFilter) {
@@ -25989,6 +26324,13 @@ class WaferMapViewer {
         setTimeout(() => {
             this.loadCurrentFolderThumbnails?.(sortedImages);  // 🔥 정렬된 순서로 전달
         }, 100);
+
+        // 🔥 Measure overlay 활성 시 썸네일 URL을 measure-thumb으로 교체
+        if ((this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey) {
+            setTimeout(() => {
+                this.refreshGridThumbnailsWithCurrentParams();
+            }, 150);
+        }
 
         // 🔥 LOT 리스트 모달 - 처음 시작 시 첫 번째 LOT 선택
         setTimeout(() => {
