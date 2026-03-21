@@ -18671,7 +18671,7 @@ class WaferMapViewer {
                 const loginId = this.getCurrentLoginId();
                 const gf = this.selectedGradientRanges.size > 0
                     ? Array.from(this.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
-                thumbnailUrl = `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=256&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheParam}`;
+                thumbnailUrl = `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=512&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheParam}`;
             } else {
                 thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}${cacheParam}`;
             }
@@ -23672,7 +23672,7 @@ class WaferMapViewer {
                 return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${this.getPersonalizedParams()}&bin_overlay=1${cacheSuffix}`;
             case 'f':
             case 'q':
-                return `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${measureItem.type}&key=${encodeURIComponent(measureItem.key)}&size=256&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
+                return `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${measureItem.type}&key=${encodeURIComponent(measureItem.key)}&size=512&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
             default:
                 return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${this.getPersonalizedParams()}${cacheSuffix}`;
         }
@@ -24291,7 +24291,7 @@ class WaferMapViewer {
                     const loginId = this.getCurrentLoginId();
                     const gf = this.selectedGradientRanges.size > 0
                         ? Array.from(this.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
-                    nextUrl = `/api/measure-thumb?path=${encodeURIComponent(imagePath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=256&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
+                    nextUrl = `/api/measure-thumb?path=${encodeURIComponent(imagePath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=512&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
                 } else {
                     nextUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}&size=512${personalizedParams}${cacheSuffix}`;
                 }
