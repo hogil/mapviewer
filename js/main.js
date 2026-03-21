@@ -8863,19 +8863,20 @@ class WaferMapViewer {
             return item;
         };
 
+        const CTX_MAX = 20; // 컨텍스트 메뉴 항목 수 제한
         if (fKeys.length > 0) {
             const fHeader = document.createElement('div');
             fHeader.className = 'failbit-section';
-            fHeader.textContent = 'FBT';
+            fHeader.textContent = `FBT (${fKeys.length}개 중 ${Math.min(CTX_MAX, fKeys.length)}개)`;
             list.appendChild(fHeader);
-            for (const k of fKeys) list.appendChild(makeItem(`FBT${padKey(k)}`, 'f', k));
+            for (const k of fKeys.slice(0, CTX_MAX)) list.appendChild(makeItem(`FBT${padKey(k)}`, 'f', k));
         }
         if (qKeys.length > 0) {
             const qHeader = document.createElement('div');
             qHeader.className = 'failbit-section';
-            qHeader.textContent = 'QVL';
+            qHeader.textContent = `QVL (${qKeys.length}개 중 ${Math.min(CTX_MAX, qKeys.length)}개)`;
             list.appendChild(qHeader);
-            for (const k of qKeys) list.appendChild(makeItem(`QVL${padKey(k)}`, 'q', k));
+            for (const k of qKeys.slice(0, CTX_MAX)) list.appendChild(makeItem(`QVL${padKey(k)}`, 'q', k));
         }
 
         btnWrap.appendChild(applyBtn);
@@ -8928,8 +8929,8 @@ class WaferMapViewer {
     }
 
     _renderMcContextList(list, keys) {
-        // Context menu에서도 체크박스 멀티 선택 사용 (패널과 동일한 UI)
-        this._renderMcList(list, keys);
+        // Context menu: 각 섹션 20개 제한
+        this._renderMcList(list, keys, { maxPerSection: 20 });
     }
 
     /**
@@ -8977,7 +8978,8 @@ class WaferMapViewer {
             });
     }
 
-    _renderMcList(list, keys) {
+    _renderMcList(list, keys, options = {}) {
+        const maxPerSection = options.maxPerSection || Infinity;
         list.innerHTML = '';
         this._mcCheckedItems = [];  // [{mode, itemKey, binType, label}]
 
@@ -9053,22 +9055,24 @@ class WaferMapViewer {
 
         // FBT section
         if (keys.f.length > 0) {
+            const fShow = keys.f.slice(0, maxPerSection);
             const header = document.createElement('div');
             header.className = 'failbit-section';
-            header.textContent = 'FBT';
+            header.textContent = maxPerSection < keys.f.length ? `FBT (${keys.f.length}개 중 ${fShow.length}개)` : 'FBT';
             list.appendChild(header);
-            for (const k of keys.f) {
+            for (const k of fShow) {
                 list.appendChild(makeItem(`FBT${k}`, 'f', k, null));
             }
         }
 
         // QVL section
         if (keys.q.length > 0) {
+            const qShow = keys.q.slice(0, maxPerSection);
             const header = document.createElement('div');
             header.className = 'failbit-section';
-            header.textContent = 'QVL';
+            header.textContent = maxPerSection < keys.q.length ? `QVL (${keys.q.length}개 중 ${qShow.length}개)` : 'QVL';
             list.appendChild(header);
-            for (const k of keys.q) {
+            for (const k of qShow) {
                 list.appendChild(makeItem(`QVL${k}`, 'q', k, null));
             }
         }
