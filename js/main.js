@@ -24033,6 +24033,12 @@ class WaferMapViewer {
             this.currentPyramidLevel = 1;
             this.resetView(false);
             this.scheduleDraw();
+
+            // 미니맵 갱신
+            this.prepareMinimapPreview(bitmap).then(() => {
+                requestAnimationFrame(() => this.updateMinimap());
+            }).catch(() => {});
+
             console.log(`[MEASURE] Canvas 렌더링 완료: ${w}×${h}, ${chips.length}칩`);
         });
     }

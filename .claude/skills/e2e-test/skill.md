@@ -2167,17 +2167,32 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 
 서버 재시작 직후(cold) 상태에서 핵심 기능의 응답 시간을 측정합니다.
 
-### 측정 항목 및 기준값
+### 측정 항목 및 기준값 (Cold = 서버 재시작 직후)
 
-| 항목 | API | 기준 (20이미지) | 비고 |
-|------|-----|----------------|------|
-| Composite Map | POST /api/composite-map → 폴링 | < 10초 | Grade 8장 + Sum 2장 생성 |
-| Measure 데이터 | POST /api/measure-composite-data | < 300ms | 좌표+값+색상 JSON 반환 (이미지 렌더링 없음) |
-| Measure 이미지 | POST /api/measure-composite → 폴링 | < 2초 | PIL ImageDraw 렌더링 + JPEG 저장 |
-| Measure 멀티 3키 | POST /api/measure-composite-data × 3 병렬 | < 500ms | ProcessPool 병렬 파싱 |
-| Measure-thumb | GET /api/measure-thumb | < 20ms/장 | positions-only 렌더링 |
-| 피라미드 전 레벨 | loadImage + prefetchAllPyramidLevels | < 2초 | 0.2 + 0.5 + 0.7 병렬 프리페치 |
-| 그리드 measure 전환 | FBT 키 적용 후 뷰포트 썸네일 로드 | < 3초 | measure-thumb 캐시 미스 기준 |
+**Failbit Composite (이미지 로드 필수)**
+
+| 항목 | API | Cold 기준 (20매) | 비고 |
+|------|-----|-----------------|------|
+| Failbit Composite | POST /api/composite-map → 폴링 | < 10초 | Grade 8장 + Sum 2장, PIL 이미지 로드 |
+
+**Measure Composite (이미지 로드 없음, positions만)**
+
+| 항목 | API | Cold 기준 (20매) | 비고 |
+|------|-----|-----------------|------|
+| FBT 데이터 | POST /api/measure-composite-data | < 2초 (cold) | ProcessPool 첫 디스패치 포함 |
+| BIN 데이터 | POST /api/measure-composite-data | < 300ms | positions 캐시 히트 |
+| QVL 데이터 | POST /api/measure-composite-data | < 300ms | positions 캐시 히트 |
+| FBT 이미지 | POST /api/measure-composite → 폴링 | < 1초 | PIL ImageDraw + JPEG 저장 |
+| 멀티 3키 | measure-composite-data × 3 병렬 | < 500ms | positions 캐시 |
+| 단일 Canvas | _applyRatioOverlayClient | < 1초 | 브라우저 Canvas 직접 렌더링 |
+| Measure-thumb | GET /api/measure-thumb | < 20ms/장 | positions-only WEBP |
+
+**공통**
+
+| 항목 | API | Cold 기준 | 비고 |
+|------|-----|----------|------|
+| 피라미드 전 레벨 | loadImage + prefetchAllPyramidLevels | < 2초 | 0.2+0.5+0.7 병렬 |
+| 그리드 measure 전환 | FBT 적용 후 뷰포트 썸네일 | < 3초 | measure-thumb 캐시 미스 |
 
 ### 측정 방법
 
@@ -2206,17 +2221,20 @@ const elapsed = Math.round(performance.now() - t0);
 - numpy 직접 저장 (PIL 변환 제거)
 - positions 복사 비동기화
 
-**Measure (6s → 112ms)**
+**Measure (6s → 112ms data / 556ms Canvas)**
 - /api/measure-composite-data: 이미지 렌더링 없이 좌표+값+색상 JSON 반환
+- 단일 이미지 모드: overlay 제거 → Canvas 직접 렌더링 (_renderMeasureOnCanvas)
 - ProcessPool 병렬 JSON 파싱 (모든 워커 서버 시작 시 워밍업)
-- PIL ImageDraw 렌더링 (numpy 143MB 배열 제거)
-- 원본 이미지 로드 제거 (positions 좌표만으로 캔버스)
-- positions JSON 메모리 캐시 + orjson
+- PIL ImageDraw 렌더링 (numpy 143MB 배열 제거, 6x 빠름)
+- 원본 이미지 로드 제거 (positions 좌표만으로 캔버스, 배경=개인색)
+- positions JSON 메모리 캐시 (256 entries) + orjson
+- 1개 이미지: 순차 (ProcessPool 스폰 회피), 다수: ProcessPool 병렬
 
 **Pyramid (3.9s → 0.5s)**
 - 프리페치 순차→병렬 (Promise.allSettled)
-- Level 1.0 body stream 버그 수정
+- Level 1.0 body stream 버그 수정 (arrayBuffer 선읽기)
 
 **품질 보장**
-- pyvips palette PNG 깨짐 발견 → PIL 유지
+- pyvips palette PNG 깨짐 발견 → PIL 유지 (palette 인덱스 보존)
 - JPEG Q=95, TJSAMP_444 동일 (1월 커밋 대비 검증)
+- 단일 이미지 Measure: Canvas에서 개인색 배경 + gradient 칩 + bold 숫자 텍스트
