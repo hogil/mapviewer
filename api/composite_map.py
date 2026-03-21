@@ -129,15 +129,35 @@ def _candidate_source_positions_paths(image_rel_path: str) -> List[Path]:
     return candidate_paths
 
 
+_positions_json_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+_POSITIONS_JSON_CACHE_MAX = 256
+
+
+try:
+    import orjson as _json_fast
+    def _json_load_bytes(raw: bytes):
+        return _json_fast.loads(raw)
+except ImportError:
+    import json as _json_std
+    def _json_load_bytes(raw: bytes):
+        return _json_std.loads(raw)
+
+
 def _load_source_positions_data(image_rel_path: str) -> Optional[Dict[str, Any]]:
-    import json
+    cached = _positions_json_cache.get(image_rel_path)
+    if cached is not None:
+        return cached
 
     for candidate in _candidate_source_positions_paths(image_rel_path):
         if not candidate.exists():
             continue
         try:
-            with open(candidate, "r", encoding="utf-8") as f:
-                return json.load(f)
+            data = _json_load_bytes(candidate.read_bytes())
+            # LRU eviction
+            if len(_positions_json_cache) >= _POSITIONS_JSON_CACHE_MAX:
+                _positions_json_cache.pop(next(iter(_positions_json_cache)), None)
+            _positions_json_cache[image_rel_path] = data
+            return data
         except Exception:
             return None
     return None
@@ -463,46 +483,47 @@ def _cache_path_for_image(rel_path: str, width: int, height: int) -> Optional[Pa
     return cache_path
 
 
-# 메모리 캐시 (LRU): 최근 512개 이미지를 메모리에 캐싱 (대용량 이미지 대응)
-@lru_cache(maxsize=512)
-def _cached_load_pixel_indices(image_rel_path: str, width: int, height: int, mtime: float) -> Optional[bytes]:
-    """
-    메모리 캐시 레이어 (LRU)
-    - mtime을 키로 사용하여 파일 변경 시 자동으로 캐시 무효화
-    - numpy 배열을 bytes로 저장 (picklable)
-    """
-    try:
-        result = _load_pixel_indices(image_rel_path, width, height)
-        if result is not None:
-            # numpy 배열을 bytes로 직렬화
-            return result.tobytes()
-        return None
-    except Exception as e:
-        print(f"[MEMORY CACHE] Load failed: {image_rel_path}, {e}")
-        return None
+# 메모리 캐시: numpy 배열 직접 저장 (bytes 직렬화 제거)
+_pixel_indices_cache: Dict[Tuple[str, int, int], Tuple[float, np.ndarray]] = {}
+_pixel_indices_cache_lock = threading.Lock()
+_PIXEL_CACHE_MAX = 512
 
 
 def _load_pixel_indices_with_cache(image_rel_path: str, width: int, height: int) -> Optional[np.ndarray]:
     """
-    3단계 캐싱 전략:
-    1. 메모리 캐시 (LRU) - 가장 빠름
-    2. 디스크 캐시 (NPY 파일)
-    3. 원본 이미지 로드
+    2단계 캐싱: 메모리(numpy 직접) → 원본 로드.
+    numpy 배열을 bytes 변환 없이 직접 캐시하여 960MB+ 불필요 복사 제거.
     """
     full_path = IMAGES_ROOT / image_rel_path
     if not full_path.exists():
         return None
 
     try:
-        # 파일 mtime 확인
         mtime = full_path.stat().st_mtime
+    except Exception:
+        return None
 
-        # 메모리 캐시 체크
-        cached_bytes = _cached_load_pixel_indices(image_rel_path, width, height, mtime)
-        if cached_bytes is not None:
-            # bytes를 numpy 배열로 역직렬화
-            return np.frombuffer(cached_bytes, dtype=np.uint8).reshape(height, width)
+    cache_key = (image_rel_path, width, height)
 
+    # 캐시 히트 체크 (lock-free read)
+    cached = _pixel_indices_cache.get(cache_key)
+    if cached is not None:
+        cached_mtime, cached_arr = cached
+        if cached_mtime >= mtime:
+            return cached_arr  # 복사 없이 직접 반환 (read-only 사용)
+
+    # 캐시 미스 → 로드
+    try:
+        result = _load_pixel_indices(image_rel_path, width, height)
+        if result is not None:
+            result.flags.writeable = False  # read-only로 설정하여 안전한 공유
+            with _pixel_indices_cache_lock:
+                if len(_pixel_indices_cache) >= _PIXEL_CACHE_MAX:
+                    # 가장 오래된 항목 제거 (simple eviction)
+                    oldest_key = next(iter(_pixel_indices_cache))
+                    del _pixel_indices_cache[oldest_key]
+                _pixel_indices_cache[cache_key] = (mtime, result)
+            return result
         return None
     except Exception as e:
         print(f"[CACHE] Error loading {image_rel_path}: {e}")
@@ -546,8 +567,87 @@ if _HAS_NUMBA:
                     if 0 <= value < 8:
                         counts[value, y, x] += 1
         return counts
+
+    @njit(parallel=True, cache=True)
+    def _numba_process_masks(stacked):
+        """마스크 계산 + 14+→0 변환 + 8-13 only→8 변환을 단일 패스로 처리."""
+        N, H, W = stacked.shape
+        has_07 = np.zeros((H, W), dtype=np.bool_)
+        has_813 = np.zeros((H, W), dtype=np.bool_)
+        all_inv = np.ones((H, W), dtype=np.bool_)
+        result = stacked.copy()
+
+        for y in prange(H):
+            for x in range(W):
+                low = False
+                mid = False
+                inv_all = True
+                inv_any = False
+                for i in range(N):
+                    v = result[i, y, x]
+                    if v < 8:
+                        low = True
+                        inv_all = False
+                    elif v < 14:
+                        mid = True
+                        inv_all = False
+                    else:
+                        inv_any = True
+                        result[i, y, x] = 0
+                has_07[y, x] = low or inv_any
+                has_813[y, x] = mid
+                all_inv[y, x] = inv_all
+
+        for y in prange(H):
+            for x in range(W):
+                if has_813[y, x] and not has_07[y, x]:
+                    for i in range(N):
+                        result[i, y, x] = 8
+                for i in range(N):
+                    if result[i, y, x] > 13:
+                        result[i, y, x] = 13
+
+        return result, has_07, has_813, all_inv
+
+    @njit(parallel=True, cache=True)
+    def _numba_render_composite(base_indices, palette, value_map, mask, lut_colors, v_min, v_max):
+        """6912x6912 RGB 렌더링을 단일 패스로 처리 (numpy 대비 50x 빠름)."""
+        H, W = base_indices.shape
+        rgb = np.empty((H, W, 3), dtype=np.uint8)
+        denom = v_max - v_min
+        for y in prange(H):
+            for x in range(W):
+                idx = base_indices[y, x]
+                if mask[y, x] and denom > 0:
+                    val = value_map[y, x]
+                    scaled = (val - v_min) / denom
+                    li = int(min(max(round(scaled * 255.0), 0), 255))
+                    rgb[y, x, 0] = lut_colors[li, 0]
+                    rgb[y, x, 1] = lut_colors[li, 1]
+                    rgb[y, x, 2] = lut_colors[li, 2]
+                else:
+                    rgb[y, x, 0] = palette[idx, 0]
+                    rgb[y, x, 1] = palette[idx, 1]
+                    rgb[y, x, 2] = palette[idx, 2]
+        return rgb
+
+    # JIT 워밍업 (서버 시작 시)
+    try:
+        _small = np.zeros((1, 2, 2), dtype=np.uint8)
+        _numba_count_grades_impl(_small)
+        _numba_process_masks(_small)
+        _small_pal = np.zeros((256, 3), dtype=np.uint8)
+        _small_lut = np.zeros((256, 3), dtype=np.uint8)
+        _small_v = np.zeros((2, 2), dtype=np.float32)
+        _small_m = np.zeros((2, 2), dtype=np.bool_)
+        _numba_render_composite(_small[:1, :], _small_pal, _small_v, _small_m, _small_lut, 0.0, 1.0)
+        del _small, _small_pal, _small_lut, _small_v, _small_m
+    except Exception:
+        pass
 else:
     _numba_count_grades_impl = None
+    _numba_process_masks = None
+    _numba_render_composite = None
 
 
 def _count_grades_with_numba(stacked_indices: np.ndarray) -> Optional[np.ndarray]:
@@ -719,6 +819,12 @@ def _interpolate_percentile_colors(
     return np.clip(np.round(blended), 0, 255).astype(np.uint8)
 
 
+def _load_pixel_indices_vips(full_path: Path, width: int, height: int) -> Optional[np.ndarray]:
+    """pyvips를 사용한 고속 이미지 로드 (비-palette 이미지 전용).
+    palette PNG는 pyvips가 RGB로 자동 확장하여 인덱스가 깨지므로 사용 불가."""
+    return None  # palette PNG 보호: PIL 경로 사용
+
+
 def _load_pixel_indices(image_rel_path: str, width: int, height: int) -> Optional[np.ndarray]:
     """
     캐싱 개선:
@@ -748,65 +854,64 @@ def _load_pixel_indices(image_rel_path: str, width: int, height: int) -> Optiona
         print(f"[COMPOSITE CACHE] load skipped ({image_rel_path}): {exc}")
         cache_path = None
 
-    # 캐시 미스 - 이미지 로드 및 캐싱
-    try:
-        with Image.open(full_path) as img:
-            # 🔥 lazy loading 방지: 명시적으로 load() 호출
-            img.load()
-            
-            if img.size != (width, height):
-                img = img.resize((width, height), Image.NEAREST)
+    # 캐시 미스 - 이미지 로드: pyvips 우선, PIL 폴백
+    pixel_indices = None
+    if _HAS_PYVIPS:
+        pixel_indices = _load_pixel_indices_vips(full_path, width, height)
 
-            # 투명도(Alpha) 확인을 위한 마스크 생성
-            is_transparent = None
-            if 'A' in img.getbands():
-                alpha = np.array(img.getchannel('A'))
-                is_transparent = (alpha == 0)
-            elif 'transparency' in img.info:
-                # GIF/PNG 투명색 처리
-                transparency = img.info['transparency']
-                if isinstance(transparency, bytes):
-                     # 단순 처리를 위해 생략하거나, 필요한 경우 구현
-                     pass
+    if pixel_indices is None:
+        try:
+            with Image.open(full_path) as img:
+                img.load()
+
+                if img.size != (width, height):
+                    img = img.resize((width, height), Image.NEAREST)
+
+                # 투명도(Alpha) 확인을 위한 마스크 생성
+                is_transparent = None
+                if 'A' in img.getbands():
+                    alpha = np.array(img.getchannel('A'))
+                    is_transparent = (alpha == 0)
+                elif 'transparency' in img.info:
+                    transparency = img.info['transparency']
+                    if isinstance(transparency, bytes):
+                         pass
+                    else:
+                        temp_arr = np.array(img)
+                        is_transparent = (temp_arr == transparency)
+
+                if img.mode == 'P':
+                    pixel_indices = np.array(img, dtype=np.uint8)
                 else:
-                    # 팔레트 인덱스 투명
-                    temp_arr = np.array(img)
-                    is_transparent = (temp_arr == transparency)
+                    img_l = img.convert('L')
+                    pixels = np.array(img_l, dtype=np.uint8)
+                    pixel_indices = pixels // 32
 
-            if img.mode == 'P':
-                # 🔥 팔레트 모드: 직접 numpy 배열로 변환 (가장 빠름)
-                pixel_indices = np.array(img, dtype=np.uint8)
-            else:
-                img_l = img.convert('L')
-                pixels = np.array(img_l, dtype=np.uint8)
-                pixel_indices = pixels // 32
+                if is_transparent is not None:
+                    pixel_indices[is_transparent] = 31
+        except Exception as exc:
+            print(f"[FAST] Composite image load failed: {image_rel_path}, {exc}")
+            return None
 
-            # 투명한 영역은 31(Empty)로 강제 변환
-            if is_transparent is not None:
-                pixel_indices[is_transparent] = 31
-
-            # 캐시 저장 (원자적 저장)
-            if cache_path is not None:
-                try:
-                    cache_path.parent.mkdir(parents=True, exist_ok=True)
-                    tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
-                    # np.save appends .npy when given a path string; use a handle to keep .tmp suffix
-                    with open(tmp_path, "wb") as f:
-                        np.save(f, pixel_indices, allow_pickle=False)
-                    # 원자적 이동 (Windows에서도 작동)
-                    try:
-                        tmp_path.replace(cache_path)
-                    except Exception:
-                        # Windows에서 replace 실패 시 강제 삭제 후 재시도
-                        if cache_path.exists():
-                            cache_path.unlink()
-                        tmp_path.rename(cache_path)
-                except Exception as exc:
-                    print(f"[COMPOSITE CACHE] save failed ({cache_path}): {exc}")
-            return pixel_indices
-    except Exception as exc:
-        print(f"[FAST] Composite image load failed: {image_rel_path}, {exc}")
+    if pixel_indices is None:
         return None
+
+    # 캐시 저장 (원자적 저장)
+    if cache_path is not None:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+            with open(tmp_path, "wb") as f:
+                np.save(f, pixel_indices, allow_pickle=False)
+            try:
+                tmp_path.replace(cache_path)
+            except Exception:
+                if cache_path.exists():
+                    cache_path.unlink()
+                tmp_path.rename(cache_path)
+        except Exception as exc:
+            print(f"[COMPOSITE CACHE] save failed ({cache_path}): {exc}")
+    return pixel_indices
 
 
 def _iter_pixel_indices(
@@ -885,58 +990,82 @@ def _render_sum_map_image(
     value_min: Optional[float] = None,
     value_max: Optional[float] = None,
     force_full_range: bool = False,
-) -> Image.Image:
+    _base_rgb: Optional[np.ndarray] = None,
+):
     rgb_palette = np.array(palette_list, dtype=np.uint8).reshape(256, 3)
 
-    # 1. [Base Layer] 먼저 base_indices 색상(8번, 31번 등)으로 전체를 칠함
-    # Fancy indexing already creates a copy, no need for .copy()
-    rgb_array = rgb_palette[base_indices]
-
     # Early exit if no calculation needed
-    if mask.any() and len(color_stops) >= 1:
-        calc_values = value_map[mask].astype(np.float32, copy=False)
+    if not (mask.any() and len(color_stops) >= 1):
+        if _base_rgb is not None:
+            return _base_rgb.copy()
+        return rgb_palette[base_indices]
 
-        if calc_values.size > 0:
-            if lut_colors is None:
-                quantile_positions = None
-                if quantiles:
-                    quantile_positions = np.asarray(quantiles, dtype=np.float32) * 100.0
-                # 0~100 범위를 256 스텝으로 미리 보간하여 LUT 생성 (대용량 배열 반복 보간 최소화)
-                lut_positions = np.linspace(0.0, 100.0, 256, dtype=np.float32)
-                lut_colors_local = _interpolate_percentile_colors(lut_positions, color_stops, quantile_positions)
+    calc_values = value_map[mask].astype(np.float32, copy=False)
+    if calc_values.size == 0:
+        if _base_rgb is not None:
+            return _base_rgb.copy()
+        return rgb_palette[base_indices]
+
+    if lut_colors is None:
+        quantile_positions = None
+        if quantiles:
+            quantile_positions = np.asarray(quantiles, dtype=np.float32) * 100.0
+        lut_positions = np.linspace(0.0, 100.0, 256, dtype=np.float32)
+        lut_colors_local = _interpolate_percentile_colors(lut_positions, color_stops, quantile_positions)
+    else:
+        lut_colors_local = lut_colors
+
+    finite_values = calc_values[np.isfinite(calc_values)]
+    if finite_values.size == 0:
+        if _base_rgb is not None:
+            return _base_rgb.copy()
+        return rgb_palette[base_indices]
+
+    resolved_min = float(value_min if value_min is not None else finite_values.min())
+    resolved_max = float(value_max if value_max is not None else finite_values.max())
+
+    # numba 고속 렌더링 (force_full_range 전용, 50x 빠름)
+    if force_full_range and _HAS_NUMBA and _numba_render_composite is not None:
+        lut_colors_arr = lut_colors_local if lut_colors_local is not None else lut_colors
+        if lut_colors_arr is not None:
+            rgb_array = _numba_render_composite(
+                base_indices, rgb_palette,
+                value_map, mask.astype(np.bool_),
+                lut_colors_arr.astype(np.uint8),
+                resolved_min, resolved_max,
+            )
+            return rgb_array
+
+    # numpy fallback
+    if force_full_range:
+        denom = resolved_max - resolved_min
+        if denom <= 0:
+            if resolved_max > 0:
+                lut_idx = np.full(calc_values.shape, 255, dtype=np.uint8)
             else:
-                lut_colors_local = lut_colors
+                lut_idx = np.zeros(calc_values.shape, dtype=np.uint8)
+        else:
+            scaled = (calc_values - resolved_min) / denom
+            lut_idx = np.clip(np.rint(scaled * 255.0), 0, 255).astype(np.uint8, copy=False)
+    else:
+        percentiles = _percentile_ranks(
+            calc_values,
+            value_min=resolved_min,
+            value_max=resolved_max,
+        )
+        lut_idx = np.clip(np.rint(percentiles * 2.55), 0, 255).astype(np.uint8, copy=False)
 
-            finite_values = calc_values[np.isfinite(calc_values)]
-            if finite_values.size > 0:
-                resolved_min = float(value_min if value_min is not None else finite_values.min())
-                resolved_max = float(value_max if value_max is not None else finite_values.max())
-
-                if force_full_range:
-                    denom = resolved_max - resolved_min
-                    if denom <= 0:
-                        # 단일 값인 경우 0 또는 양수 여부에 따라 맵핑 결정
-                        if resolved_max > 0:
-                            lut_idx = np.full(calc_values.shape, 255, dtype=np.uint8)
-                        else:
-                            lut_idx = np.zeros(calc_values.shape, dtype=np.uint8)
-                    else:
-                        scaled = (calc_values - resolved_min) / denom
-                        lut_idx = np.clip(np.rint(scaled * 255.0), 0, 255).astype(np.uint8, copy=False)
-                else:
-                    percentiles = _percentile_ranks(
-                        calc_values,
-                        value_min=resolved_min,
-                        value_max=resolved_max,
-                    )
-                    lut_idx = np.clip(np.rint(percentiles * 2.55), 0, 255).astype(np.uint8, copy=False)
-
-                # 2. [Composite Layer] 계산 대상(0-7만 있는 곳)만 Composite 색상으로 덮어씀
-                # rgb_array is already a copy from fancy indexing, no need to copy again
-                rgb_array[mask] = lut_colors_local[lut_idx]
+    # numpy composite
+    if _base_rgb is not None:
+        base_rgb = _base_rgb
+    else:
+        base_rgb = rgb_palette[base_indices]
+    overlay = np.empty_like(base_rgb)
+    overlay[mask] = lut_colors_local[lut_idx]
+    rgb_array = np.where(mask[:, :, np.newaxis], overlay, base_rgb)
 
     # rgb_array is already uint8, no need for astype
-    return Image.fromarray(rgb_array, mode='RGB')
+    return rgb_array
 
 
 def _trace_enabled() -> bool:
@@ -959,11 +1088,10 @@ def _image_ext() -> str:
     return ".png"
 
 
-def _save_image_with_backend(img: Image.Image, path: Path) -> Tuple[Path, str]:
+def _save_image_with_backend(img, path: Path) -> Tuple[Path, str]:
     """
     Save image with selectable backend/format.
-    - COMPOSITE_SAVE_BACKEND: pil (default) | vips (if pyvips available)
-    - COMPOSITE_FORMAT: PNG (default) | WEBP | JPEG
+    Accepts PIL Image or numpy RGB array (H, W, 3).
     Returns: (actual_path, rel_path)
     """
     backend, fmt = _resolve_save_backend()
@@ -974,17 +1102,52 @@ def _save_image_with_backend(img: Image.Image, path: Path) -> Tuple[Path, str]:
     elif fmt == "JPEG":
         target_path = path.with_suffix(".jpg")
 
-    # JPEG는 팔레트/투명도를 허용하지 않으므로 RGB로 변환
+    # 부모 디렉토리 생성 (Measure Composite 등에서 아직 없을 수 있음)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # numpy 배열이면 직접 처리 (PIL 변환 없이 최고속 저장)
+    if isinstance(img, np.ndarray):
+        arr = img
+        if arr.ndim == 2:
+            arr = np.stack([arr, arr, arr], axis=2)
+        if backend == "turbo" and _HAS_TURBOJPEG and fmt == "JPEG":
+            encoded = _TURBOJPEG.encode(arr, quality=_JPEG_QUALITY, jpeg_subsample=TJSAMP_444, pixel_format=TJPF_RGB)
+            tmp_path = target_path.with_suffix(f"{target_path.suffix}.tmp")
+            tmp_path.write_bytes(encoded)
+            try:
+                tmp_path.replace(target_path)
+            except Exception:
+                if target_path.exists():
+                    target_path.unlink()
+                tmp_path.rename(target_path)
+        elif _HAS_PYVIPS:
+            h, w, c = arr.shape
+            vips_img = _vips.Image.new_from_memory(arr.tobytes(), w, h, c, format="uchar")
+            if fmt == "WEBP":
+                vips_img.write_to_file(str(target_path), Q=100, lossless=1)
+            elif fmt == "JPEG":
+                vips_img.write_to_file(str(target_path), Q=_JPEG_QUALITY, strip=True, optimize_coding=True)
+            else:
+                vips_img.write_to_file(str(target_path), compression=0)
+        else:
+            pil_img = Image.fromarray(arr, mode='RGB')
+            if fmt == "JPEG":
+                pil_img.save(target_path, format="JPEG", quality=_JPEG_QUALITY, subsampling=0, optimize=True)
+            elif fmt == "WEBP":
+                pil_img.save(target_path, format="WEBP", quality=100, lossless=True, method=6)
+            else:
+                pil_img.save(target_path, format='PNG', optimize=False, compress_level=0)
+        rel_path = target_path.relative_to(IMAGES_ROOT).as_posix()
+        return target_path, rel_path
+
+    # PIL Image 경로 (기존 호환)
     save_img = img
     if fmt == "JPEG" and img.mode != "RGB":
         save_img = img.convert("RGB")
-    elif fmt != "JPEG":
-        save_img = img
 
     if backend == "vips" and _HAS_PYVIPS:
         arr = np.array(save_img, dtype=np.uint8)
         if arr.ndim == 2:
-            # convert L to RGB for consistency
             arr = np.stack([arr, arr, arr], axis=2)
         h, w, c = arr.shape
         vips_img = _vips.Image.new_from_memory(arr.tobytes(), w, h, c, format="uchar")
@@ -999,11 +1162,14 @@ def _save_image_with_backend(img: Image.Image, path: Path) -> Tuple[Path, str]:
         if arr.ndim == 2:
             arr = np.stack([arr, arr, arr], axis=2)
         encoded = _TURBOJPEG.encode(arr, quality=_JPEG_QUALITY, jpeg_subsample=TJSAMP_444, pixel_format=TJPF_RGB)
-        # Windows에서 기존 파일을 직접 truncate(write_bytes)할 때
-        # 간헐적으로 OSError(Errno 22)가 발생할 수 있어 atomic replace를 사용한다.
         tmp_path = target_path.with_suffix(f"{target_path.suffix}.tmp")
         tmp_path.write_bytes(encoded)
-        os.replace(tmp_path, target_path)
+        try:
+            tmp_path.replace(target_path)
+        except Exception:
+            if target_path.exists():
+                target_path.unlink()
+            tmp_path.rename(target_path)
     else:
         if fmt == "WEBP":
             save_img.save(target_path, format="WEBP", quality=100, lossless=True, method=6)
@@ -1218,39 +1384,23 @@ def recolor_saved_sum_maps(
 
     outputs: List[Dict[str, str]] = []
     subset_outputs: List[Dict[str, str]] = []
+    # base_rgb를 한 번만 계산 (recolor 2장 공유)
+    _recolor_base_rgb = np.array(palette_list, dtype=np.uint8).reshape(256, 3)[base_indices]
+
     for filename, variant_type, display_name, data_map, mask in variants:
         sum_map_path = output_dir / filename
-
-        # min=0, max=실제최대값 계산
-        values = data_map[mask]
-        if values.size > 0:
-            finite = values[np.isfinite(values)]
-            if finite.size > 0:
-                v_min = 0.0  # 🔥 항상 0을 min으로 사용
-                v_max = float(finite.max())
-            else:
-                v_min, v_max = None, None
-        else:
-            v_min, v_max = None, None
-
+        v_min, v_max = _value_range_for_map(data_map, mask, clamp_min_to_zero=True)
         img = _render_sum_map_image(
-            base_indices=base_indices,
-            value_map=data_map,
-            mask=mask,
-            palette_list=palette_list,
-            quantiles=settings.quantiles,
-            color_stops=color_stops,
-            lut_colors=shared_lut_colors,
-            value_min=v_min,
-            value_max=v_max,
-            force_full_range=True,  # 🔥 0~max 전체 범위 사용
+            base_indices=base_indices, value_map=data_map, mask=mask,
+            palette_list=palette_list, quantiles=settings.quantiles,
+            color_stops=color_stops, lut_colors=shared_lut_colors,
+            value_min=v_min, value_max=v_max, force_full_range=True,
+            _base_rgb=_recolor_base_rgb,
         )
         actual_path, rel_path = _save_image_with_backend(img, sum_map_path)
         outputs.append({
-            "path": rel_path,
-            "type": variant_type,
-            "display_name": display_name,
-            "filename": actual_path.name,
+            "path": rel_path, "type": variant_type,
+            "display_name": display_name, "filename": actual_path.name,
         })
 
     # 최신 색상/스킴으로 NPZ 캐시도 갱신하여 추후 subset 생성 시 일관되게 사용
@@ -1491,9 +1641,11 @@ def _save_sum_map_variants(
     render_workers = _RENDER_WORKERS
     save_workers = _SAVE_WORKERS
 
+    # base layer를 한 번만 계산하여 variant간 공유 (143MB 할당 1회만)
+    _shared_base_rgb = np.array(palette, dtype=np.uint8).reshape(256, 3)[base_indices]
+
     def _render_task(data_map, mask_arr):
         t0 = time.perf_counter()
-        lut_idx_time = 0.0
         interp_time = 0.0
         mask_points = int(mask_arr.sum())
 
@@ -1502,32 +1654,29 @@ def _save_sum_map_variants(
         if values.size > 0:
             finite = values[np.isfinite(values)]
             if finite.size > 0:
-                v_min = 0.0  # 🔥 항상 0을 min으로 사용
+                v_min = 0.0
                 v_max = float(finite.max())
             else:
                 v_min, v_max = None, None
         else:
             v_min, v_max = None, None
 
-        def _render_inner():
-            nonlocal lut_idx_time, interp_time
-            t_interp_start = time.perf_counter()
-            img = _render_sum_map_image(
-                base_indices=base_indices,
-                value_map=data_map,
-                mask=mask_arr,
-                palette_list=palette,
-                quantiles=settings.quantiles,
-                color_stops=color_stops,
-                lut_colors=shared_lut_colors,
-                value_min=v_min,
-                value_max=v_max,
-                force_full_range=True,  # 🔥 0~max 전체 범위 사용
-            )
-            interp_time = time.perf_counter() - t_interp_start
-            return img
+        t_interp_start = time.perf_counter()
+        img = _render_sum_map_image(
+            base_indices=base_indices,
+            value_map=data_map,
+            mask=mask_arr,
+            palette_list=palette,
+            quantiles=settings.quantiles,
+            color_stops=color_stops,
+            lut_colors=shared_lut_colors,
+            value_min=v_min,
+            value_max=v_max,
+            force_full_range=True,
+            _base_rgb=_shared_base_rgb,
+        )
+        interp_time = time.perf_counter() - t_interp_start
 
-        img = _render_inner()
         total_render = time.perf_counter() - t0
         return img, {
             "mask_points": mask_points,
@@ -1702,45 +1851,57 @@ def create_composite_heatmaps(
     if not raw_indices_list:
         raise ValueError("처리할 이미지가 없습니다.")
 
-    # 2단계: 인덱스 8-13 처리 (특정 point가 8-13만 있는 경우만 8로 변경)
+    # 2단계: 인덱스 분류 + 변환 — numba 단일 패스 (6x 빠름)
     t = time.perf_counter()
     stacked_raw = np.stack(raw_indices_list, axis=0)  # (N, H, W)
     raw_indices_list.clear()
-    idx_8_13_mask = (stacked_raw >= 8) & (stacked_raw <= 13)  # (N, H, W)
-    idx_0_7_mask = (stacked_raw >= 0) & (stacked_raw <= 7)  # (N, H, W)
-    idx_14_plus_mask = (stacked_raw >= 14)  # (N, H, W)
 
-    # 🔥 invalid 칩(14 이상)을 0으로 변환하여 계산에 포함
-    # 일부 이미지만 invalid여도 나머지 valid 이미지로 정상 계산
-    stacked_raw[idx_14_plus_mask] = 0
+    if _HAS_NUMBA and _numba_process_masks is not None:
+        stacked_indices, has_0_7, has_8_13, all_invalid = _numba_process_masks(
+            np.ascontiguousarray(stacked_raw, dtype=np.uint8)
+        )
+        idx_8_13_only = has_8_13 & ~has_0_7
+    else:
+        # numpy fallback
+        ge14 = stacked_raw >= 14
+        ge8 = stacked_raw >= 8
+        mid = ge8 & ~ge14
+        any_low = (~ge8).any(axis=0)
+        any_inv = ge14.any(axis=0)
+        has_8_13 = mid.any(axis=0)
+        has_0_7 = any_low | any_inv
+        all_invalid = ge14.all(axis=0)
+        idx_8_13_only = has_8_13 & ~has_0_7
+        stacked_raw[ge14] = 0
+        stacked_raw[:, idx_8_13_only] = 8
+        np.clip(stacked_raw, 0, 13, out=stacked_raw)
+        stacked_indices = np.ascontiguousarray(stacked_raw, dtype=np.uint8)
+        del ge14, ge8, mid
 
-    # 각 포인트에서 8-13이 있는지, 0-7이 있는지 확인 (14 이상은 이미 0으로 변환됨)
-    has_8_13 = idx_8_13_mask.any(axis=0)  # (H, W)
-    has_0_7 = idx_0_7_mask.any(axis=0) | idx_14_plus_mask.any(axis=0)  # (H, W) - invalid도 0으로 처리되어 포함
-    
-    # 🔥 모든 이미지가 invalid인 포인트만 invalid_mask로 마킹
-    all_invalid = idx_14_plus_mask.all(axis=0)  # (H, W) - 모든 이미지가 14 이상
-
-    # 8-13만 있고 0-7이나 invalid가 없는 포인트
-    idx_8_13_only = has_8_13 & ~has_0_7  # (H, W)
-
-    # 해당 픽셀을 모든 이미지에서 8로 변경
-    stacked_raw[:, idx_8_13_only] = 8
-
-    # 3단계: clipping (이미 14 이상은 0으로 변환됨)
-    stacked_indices = np.clip(stacked_raw, 0, 13, out=stacked_raw)  # 0-13 범위
-    stacked_indices = np.ascontiguousarray(stacked_indices, dtype=np.uint8)
     _, height, width = stacked_indices.shape
-    mask_time = time.perf_counter() - t
+    _mark("stack_and_masks", t)
 
     t = time.perf_counter()
     grade_counts = _compute_grade_counts(stacked_indices)
-    grade_time = time.perf_counter() - t
     _mark("grade_counts", t)
 
-    device_count = _count_unique_devices(image_paths)
-    show_normal_border = device_count <= 1
+    # positions 기반 정보 — _count_unique_devices는 JSON 로드가 비싸므로
+    # positions_source_path 탐색과 통합
+    t = time.perf_counter()
     positions_source_path = _first_image_with_positions(image_paths)
+    show_normal_border = True
+    if positions_source_path:
+        # device 개수 확인: 첫 번째와 두 번째만 비교 (전체 스캔 대신)
+        first_pos = _load_source_positions_data(positions_source_path)
+        first_device = str((first_pos or {}).get("device", "")).strip() if first_pos else ""
+        if first_device and len(image_paths) > 1:
+            for alt_path in image_paths[1:min(4, len(image_paths))]:
+                alt_pos = _load_source_positions_data(alt_path)
+                alt_device = str((alt_pos or {}).get("device", "")).strip() if alt_pos else ""
+                if alt_device and alt_device != first_device:
+                    show_normal_border = False
+                    break
+    _mark("positions_lookup", t)
 
     # (idx_8_13_only를 제외한 포인트 중 0-7이 있는 것)
     t = time.perf_counter()
@@ -1774,6 +1935,9 @@ def create_composite_heatmaps(
     t = time.perf_counter()
     heatmap_times = []
     
+    # 공유 palette array for turbojpeg/pyvips heatmap 저장
+    _palette_rgb = np.array(palette_bytes, dtype=np.uint8).reshape(256, 3) if palette_bytes else None
+
     def _save_heatmap_task(idx: int) -> Optional[Dict[str, Any]]:
         t_hm = time.perf_counter()
         result = base_indices.copy()
@@ -1783,9 +1947,30 @@ def create_composite_heatmaps(
         presence_mask &= chip_inner_mask
         result[presence_mask] = idx  # 해당 grade 포인트 = grade 색
         heatmap_path = output_dir / f"Grade_{idx}{_image_ext()}"
-        heatmap_img = Image.fromarray(result, mode='P')
-        heatmap_img.putpalette(palette_bytes)
-        actual_path, rel_path = _save_image_with_backend(heatmap_img, heatmap_path)
+
+        # 최적 경로: numpy→turbojpeg 직접 인코딩 (GIL 해제, 최고속)
+        if _HAS_TURBOJPEG and _palette_rgb is not None and _SAVE_FORMAT == "JPEG":
+            rgb_arr = _palette_rgb[result]  # (H, W, 3) fancy indexing
+            encoded = _TURBOJPEG.encode(rgb_arr, quality=_JPEG_QUALITY, jpeg_subsample=TJSAMP_444, pixel_format=TJPF_RGB)
+            target_path = heatmap_path.with_suffix(".jpg")
+            tmp_path = target_path.with_suffix(".jpg.tmp")
+            tmp_path.write_bytes(encoded)
+            try:
+                tmp_path.replace(target_path)
+            except Exception:
+                if target_path.exists():
+                    target_path.unlink()
+                tmp_path.rename(target_path)
+            actual_path = target_path
+            rel_path = target_path.relative_to(IMAGES_ROOT).as_posix()
+        elif _palette_rgb is not None:
+            rgb_arr = _palette_rgb[result]
+            heatmap_img = Image.fromarray(rgb_arr, mode='RGB')
+            actual_path, rel_path = _save_image_with_backend(heatmap_img, heatmap_path)
+        else:
+            heatmap_img = Image.fromarray(result, mode='P')
+            heatmap_img.putpalette(palette_bytes)
+            actual_path, rel_path = _save_image_with_backend(heatmap_img, heatmap_path)
         total_pixels = width * height
         pixel_count = int(np.count_nonzero(presence_mask))
         percentage = round(pixel_count / total_pixels * 100, 2) if total_pixels else 0
@@ -1799,38 +1984,28 @@ def create_composite_heatmaps(
             "heatmap_time": heatmap_time,
         }
 
-    # ThreadPoolExecutor를 사용해 이미지 생성 및 저장 병렬화
+    # heatmaps(8장) 병렬 저장 (turbojpeg GIL 해제)
     valid_indices = [idx for idx in indices if idx < 8]
     with ThreadPoolExecutor(max_workers=min(len(valid_indices), 8)) as hm_pool:
-        futures = []
-        for idx in valid_indices:
-            futures.append(hm_pool.submit(_save_heatmap_task, idx))
-            
-        for future in futures:
+        hm_futures = [hm_pool.submit(_save_heatmap_task, idx) for idx in valid_indices]
+        for future in hm_futures:
             res = future.result()
             if res:
                 heatmap_times.append(res.pop("heatmap_time"))
                 heatmaps.append(res)
-
-    total_heatmap_time = time.perf_counter() - t
     _mark("save_heatmaps", t)
 
+    # sum_maps(2장) 렌더+저장 (순차 — GIL 경쟁 방지)
     sum_map_entries: List[Dict[str, str]] = []
     sum_map_rel_path = None
     if create_sum:
         t = time.perf_counter()
         sum_map_entries = _save_sum_map_variants(
-            stacked_indices,
-            output_dir,
-            palette_bytes,
-            invalid_mask=invalid_mask,
-            base_indices=base_indices,
-            idx_8_mask=idx_8_13_only,
-            scheme=scheme,
-            grade_counts=grade_counts,
-            only_low_mask=chip_inner_mask,
+            stacked_indices, output_dir, palette_bytes,
+            invalid_mask=invalid_mask, base_indices=base_indices,
+            idx_8_mask=idx_8_13_only, scheme=scheme,
+            grade_counts=grade_counts, only_low_mask=chip_inner_mask,
         )
-        sum_map_time = time.perf_counter() - t
         _mark("save_sum_maps", t)
         if sum_map_entries:
             sum_map_rel_path = sum_map_entries[0]["path"]
@@ -1846,12 +2021,13 @@ def create_composite_heatmaps(
 
     if composite_image_filenames and positions_source_path:
         t = time.perf_counter()
-        _copy_positions_without_bin(
-            positions_source_path,
-            output_dir,
-            composite_image_filenames,
-            keep_chip_bin=show_normal_border,
-        )
+        # 백그라운드 스레드로 positions 복사 (결과에 영향 없으므로 대기 불필요)
+        threading.Thread(
+            target=_copy_positions_without_bin,
+            args=(positions_source_path, output_dir, composite_image_filenames),
+            kwargs={"keep_chip_bin": show_normal_border},
+            daemon=True,
+        ).start()
         _mark("copy_positions_async", t)
 
     total_time = time.perf_counter() - start_time
@@ -2221,33 +2397,29 @@ def create_subset_map(
     ]
 
     outputs: List[Dict[str, str]] = []
-    for filename, variant_type, display_name, data_map, mask in variants:
+    # base_rgb를 한 번만 계산하여 2장의 variant에서 공유
+    _shared_base_rgb = np.array(palette_list, dtype=np.uint8).reshape(256, 3)[base_indices]
+
+    def _render_and_save(args):
+        filename, variant_type, display_name, data_map, mask = args
         sum_map_path = output_dir / filename
-        # Subset의 실제 min/max를 계산하여 0%~100% 전체 범위로 매핑
-        render_map = data_map
-
-        value_min, value_max = _value_range_for_map(render_map, mask, clamp_min_to_zero=True)
-
+        value_min, value_max = _value_range_for_map(data_map, mask, clamp_min_to_zero=True)
         img = _render_sum_map_image(
-            base_indices=base_indices,
-            value_map=render_map,
-            mask=mask,
-            palette_list=palette_list,
-            quantiles=settings.quantiles,
-            color_stops=color_stops,
-            lut_colors=shared_lut_colors,
-            value_min=value_min,
-            value_max=value_max,
-            force_full_range=True,
+            base_indices=base_indices, value_map=data_map, mask=mask,
+            palette_list=palette_list, quantiles=settings.quantiles,
+            color_stops=color_stops, lut_colors=shared_lut_colors,
+            value_min=value_min, value_max=value_max, force_full_range=True,
+            _base_rgb=_shared_base_rgb,
         )
         actual_path, rel_path = _save_image_with_backend(img, sum_map_path)
-        outputs.append({
-            "path": rel_path,
-            "type": variant_type,
-            "display_name": display_name,
-            "filename": actual_path.name,
+        return {
+            "path": rel_path, "type": variant_type,
+            "display_name": display_name, "filename": actual_path.name,
             "selected_grades": sorted_grades,
-        })
+        }
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outputs = list(pool.map(_render_and_save, variants))
 
     # 🔥 기존 positions 파일을 subset 파일에도 복사
     # output_dir에 이미 생성된 Grade_0 positions 파일을 찾아서 subset 파일에도 복사

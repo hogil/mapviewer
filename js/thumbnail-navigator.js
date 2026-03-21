@@ -1357,8 +1357,18 @@ export class ThumbnailNavigator {
             const imagePath = this.imageList[i];
             if (!imagePath) return;
 
-            // 🔥 항상 /api/thumbnail 사용 — BIN MAP은 personalizedParams에 bin_overlay=1 포함
-            const newUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}${cacheSuffix}`;
+            // 🔥 Measure overlay 모드 판별 후 적절한 URL 사용
+            let newUrl;
+            const v = this.viewer;
+            const isMeasure = v && (v.overlayMode === 'f' || v.overlayMode === 'q') && v._ratioActiveItemKey;
+            if (isMeasure) {
+                const loginId = v.getCurrentLoginId();
+                const gf = v.selectedGradientRanges?.size > 0
+                    ? Array.from(v.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
+                newUrl = `/api/measure-thumb?path=${encodeURIComponent(imagePath)}&field=${v.overlayMode}&key=${encodeURIComponent(v._ratioActiveItemKey)}&size=256&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
+            } else {
+                newUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}${cacheSuffix}`;
+            }
             const distance = Math.abs(i - this.currentImageIndex);
 
             if (distance <= priorityRange) {
@@ -1405,8 +1415,18 @@ export class ThumbnailNavigator {
         const hasCacheBusterInParams = typeof personalizedParams === 'string' && personalizedParams.includes('_t=');
         const cacheSuffix = (hasCacheBusterInParams || !cacheBuster) ? '' : `&_t=${cacheBuster}`;
 
-        // 🔥 항상 /api/thumbnail 사용 — BIN MAP은 personalizedParams에 bin_overlay=1 포함
-        const thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}${cacheSuffix}`;
+        // 🔥 Measure overlay 모드 판별 후 적절한 URL 사용
+        let thumbnailUrl;
+        const v = this.viewer;
+        const isMeasure = v && (v.overlayMode === 'f' || v.overlayMode === 'q') && v._ratioActiveItemKey;
+        if (isMeasure) {
+            const loginId = v.getCurrentLoginId();
+            const gf = v.selectedGradientRanges?.size > 0
+                ? Array.from(v.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
+            thumbnailUrl = `/api/measure-thumb?path=${encodeURIComponent(imagePath)}&field=${v.overlayMode}&key=${encodeURIComponent(v._ratioActiveItemKey)}&size=256&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
+        } else {
+            thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}${cacheSuffix}`;
+        }
 
         img.alt = imagePath.split('/').pop();
 

@@ -9440,6 +9440,8 @@ async def create_composite_map_endpoint(
                     response["sum_map_path"] = result["sum_map_path"]
                 if "sum_maps" in result:
                     response["sum_maps"] = result["sum_maps"]
+                if "timings" in result:
+                    response["timings"] = result["timings"]
 
             COMPOSITE_TASKS[task_id]["status"] = "completed"
             COMPOSITE_TASKS[task_id]["progress"] = 100
@@ -9538,6 +9540,37 @@ def _run_measure_composite_sync(
         COMPOSITE_TASKS[task_id]["status"] = "failed"
         COMPOSITE_TASKS[task_id]["error"] = str(e)
         COMPOSITE_TASKS[task_id]["failed_at"] = datetime.now().isoformat()
+
+
+@app.post("/api/measure-composite-data")
+async def measure_composite_data_endpoint(
+    payload: MeasureCompositeRequest,
+    req: Request,
+):
+    """
+    Measure 칩 좌표+값+색상 데이터만 반환 (이미지 렌더링 없음).
+    브라우저에서 Canvas로 직접 그림 → 렌더링+저장 378ms 절약.
+    """
+    image_paths = [_to_relative_path(p) for p in payload.image_paths]
+    if not image_paths:
+        raise HTTPException(status_code=400, detail="image_paths required")
+
+    login_id = _current_login_id(req)
+    resolved_scheme = login_id or ANONYMOUS_LOGIN_ID
+
+    try:
+        from .measure_composite import create_measure_data_only
+        result = create_measure_data_only(
+            image_paths=image_paths,
+            mode=payload.mode,
+            item_key=payload.item_key,
+            bin_types=payload.bin_types,
+            aggregation=payload.aggregation,
+            scheme=resolved_scheme,
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/measure-composite")

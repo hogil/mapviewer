@@ -47,6 +47,18 @@ def _get_normal_border_rgb(scheme: Optional[str] = None) -> Tuple[int, int, int]
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 _MAX_WORKERS = int(os.getenv("MEASURE_COMPOSITE_WORKERS", "8"))
 
+# 미리 워밍업된 ProcessPool (JSON 병렬 파싱용, 서버 시작 시 1회 생성)
+from concurrent.futures import ProcessPoolExecutor as _ProcPool
+_MEASURE_PROC_POOL: _ProcPool = None
+try:
+    _PROC_WORKERS = min(os.cpu_count() or 8, 16)
+    _MEASURE_PROC_POOL = _ProcPool(max_workers=_PROC_WORKERS)
+    # 모든 워커 워밍업 (1개만 깨우면 첫 호출 시 나머지 스폰으로 느림)
+    from api._parallel_json import extract_chip_values as _warmup_fn
+    list(_MEASURE_PROC_POOL.map(_warmup_fn, [("__dummy__", "f", "0", None)] * _PROC_WORKERS))
+except Exception:
+    _MEASURE_PROC_POOL = None
+
 # ── BIN 정규화 (JS _normalizeBottomValue 동일) ──────────────
 
 _KNOWN_BINS = {285, 286, 287, 288, 290, 291, 300, 385, 386, 388, 389, 390}
@@ -129,6 +141,47 @@ def _extract_value(
         return None
 
 
+def _extract_values_from_data(data, mode, item_key, bin_types):
+    """캐시된 positions 데이터에서 칩 값 추출 (extract_chip_values와 동일 로직)."""
+    chips = data.get("chips")
+    if not isinstance(chips, list):
+        return None
+    key_idx = None
+    if mode in ("f", "q"):
+        key_name = "ftn_keys" if mode == "f" else "qtn_keys"
+        keys = data.get(key_name, [])
+        for i, k in enumerate(keys):
+            if str(k) == str(item_key):
+                key_idx = i
+                break
+    bin_set = set(str(b) for b in bin_types) if bin_types else None
+    results = []
+    for chip in chips:
+        xa, ya = chip.get("x_abs"), chip.get("y_abs")
+        if xa is None or ya is None:
+            continue
+        if mode == "bin":
+            b = chip.get("b")
+            norm = str(b).strip() if b else "Normal"
+            val = 1.0 if (bin_set and norm in bin_set) else 0.0
+        else:
+            fd = chip.get(mode)
+            if isinstance(fd, list) and key_idx is not None and key_idx < len(fd):
+                raw_val = fd[key_idx]
+            elif isinstance(fd, dict):
+                raw_val = fd.get(item_key)
+            else:
+                continue
+            if raw_val is None:
+                continue
+            try:
+                val = float(raw_val)
+            except (ValueError, TypeError):
+                continue
+        results.append((int(xa), int(ya), val))
+    return results
+
+
 # ── Positions 병렬 로드 ─────────────────────────────────────
 
 def _load_positions_parallel(
@@ -137,8 +190,11 @@ def _load_positions_parallel(
     def _load(rel_path):
         return (rel_path, _load_source_positions_data(rel_path))
 
-    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as pool:
-        return list(pool.map(_load, image_paths))
+    # 항상 ThreadPool 사용 (I/O read_bytes 병렬 + GIL 틈새 활용)
+    if len(image_paths) > 1:
+        with ThreadPoolExecutor(max_workers=min(len(image_paths), _MAX_WORKERS)) as pool:
+            return list(pool.map(_load, image_paths))
+    return [_load(p) for p in image_paths]
 
 
 # ── 값 수집 + 집계 (모든 모드 통합) ─────────────────────────
@@ -314,105 +370,89 @@ def _render(
     border_color: Optional[Tuple[int, int, int]] = None,
 ) -> Image.Image:
     """
-    Gradient-colored chip 렌더링.
-    gradient_filter: 표시할 percentile range 인덱스 (0-9). None=전체.
-    bin_filter: 표시할 BIN 타입. None=전체.
+    PIL ImageDraw 기반 고속 렌더링 — numpy 143MB 배열 제거.
+    positions 좌표만으로 칩 사각형을 직접 그림.
     """
     from PIL import ImageDraw, ImageFont
+    from .composite_map import _resolve_scheme_background_rgb
 
-    img = Image.open(base_image_path).convert("RGB")
-    w, h = img.size
-
+    # 캔버스 크기 결정 (이미지 로드 없음)
     coord = base_positions.get("coord", {})
-    canvas = coord.get("canvas", {}) if isinstance(coord, dict) else {}
-    cw = int(canvas.get("width", w)) if isinstance(canvas, dict) else w
-    ch = int(canvas.get("height", h)) if isinstance(canvas, dict) else h
-    if cw <= 0:
-        cw = w
-    if ch <= 0:
-        ch = h
+    canvas_info = coord.get("canvas", {}) if isinstance(coord, dict) else {}
+    w = int(canvas_info.get("width", 0)) if isinstance(canvas_info, dict) else 0
+    h = int(canvas_info.get("height", 0)) if isinstance(canvas_info, dict) else 0
+    if w <= 0 or h <= 0:
+        img = Image.open(base_image_path)
+        w, h = img.size
+        img.close()
+
+    cw = w if w > 0 else 1
+    ch = h if h > 0 else 1
     sx, sy = w / float(cw), h / float(ch)
 
     chips = base_positions.get("chips", [])
     if not isinstance(chips, list):
-        return img
+        return Image.new("RGB", (w, h), (0, 0, 0))
 
-    # Build (x_abs, y_abs) → chip index + BIN lookup
+    # chip rect 계산 + abs 좌표 매핑
+    chip_rects = []
     abs_to_idx: Dict[Tuple[int, int], int] = {}
     abs_to_bin: Dict[Tuple[int, int], str] = {}
     for i, c in enumerate(chips):
         if not isinstance(c, dict):
-            continue
-        xa, ya = c.get("x_abs"), c.get("y_abs")
-        if xa is None or ya is None:
-            continue
-        key = (int(xa), int(ya))
-        abs_to_idx[key] = i
-        abs_to_bin[key] = _normalize_bin(c.get("b"))
-
-    arr = np.array(img, dtype=np.uint8)
-
-    # 필터 활성 시 비매칭 chip → 흰색(숫자 없음), 비활성 시 → 연한 회색
-    has_filter = gradient_filter is not None or bin_filter is not None
-    BASE_COLOR = (255, 255, 255) if has_filter else (224, 224, 224)
-
-    # 1) 모든 chip → base color
-    for c in chips:
-        if not isinstance(c, dict):
+            chip_rects.append(None)
             continue
         r = _chip_rect(c, sx, sy, w, h)
-        if r:
-            arr[r[1]:r[3], r[0]:r[2]] = BASE_COLOR
+        chip_rects.append(r)
+        xa, ya = c.get("x_abs"), c.get("y_abs")
+        if xa is not None and ya is not None:
+            key = (int(xa), int(ya))
+            abs_to_idx[key] = i
+            abs_to_bin[key] = _normalize_bin(c.get("b"))
 
-    # 1.5) 칩 테두리 (Normal 색상)
-    if border_color is not None:
-        bc = border_color
-        for c in chips:
-            if not isinstance(c, dict):
-                continue
-            r = _chip_rect(c, sx, sy, w, h)
-            if not r:
-                continue
-            x0, y0, x1, y1 = r
-            arr[y0, x0:x1] = bc        # 상단
-            arr[y1 - 1, x0:x1] = bc    # 하단
-            arr[y0:y1, x0] = bc        # 좌측
-            arr[y0:y1, x1 - 1] = bc    # 우측
+    # PIL Image 직접 생성 (배경색 = 개인색)
+    bg_rgb = _resolve_scheme_background_rgb(None)
+    img = Image.new("RGB", (w, h), bg_rgb)
+    draw = ImageDraw.Draw(img)
 
-    # 2) 매칭 chip → gradient (filter 적용)
+    has_filter = gradient_filter is not None or bin_filter is not None
+    base_fill = (255, 255, 255) if has_filter else (224, 224, 224)
+    bc = border_color
+
+    # 1) 모든 칩 → base color + 테두리 (ImageDraw.rectangle, C 구현)
+    for r in chip_rects:
+        if r is None:
+            continue
+        draw.rectangle([r[0], r[1], r[2] - 1, r[3] - 1], fill=base_fill, outline=bc)
+
+    # 2) 매칭 칩 → gradient color
     render_info = []
     for (xa, ya), pct in percentile_map.items():
         idx = abs_to_idx.get((xa, ya))
         if idx is None:
             continue
-
-        # gradient filter: percentile range 체크
         if gradient_filter is not None:
-            range_idx = min(int(pct / 10), 9)
-            if range_idx not in gradient_filter:
+            if min(int(pct / 10), 9) not in gradient_filter:
                 continue
-
-        # bin filter: chip BIN 타입 체크
         if bin_filter is not None:
-            chip_bin = abs_to_bin.get((xa, ya), "Normal")
-            if chip_bin not in bin_filter:
+            if abs_to_bin.get((xa, ya), "Normal") not in bin_filter:
                 continue
-
-        rect = _chip_rect(chips[idx], sx, sy, w, h)
+        rect = chip_rects[idx]
         if not rect:
             continue
         color = _interpolate_color(pct, gradient_stops)
-        arr[rect[1]:rect[3], rect[0]:rect[2]] = color
+        x0, y0, x1, y1 = rect
+        draw.rectangle([x0, y0, x1 - 1, y1 - 1], fill=color)
+        if bc:
+            draw.rectangle([x0, y0, x1 - 1, y1 - 1], outline=bc)
         raw = value_map.get((xa, ya)) if value_map else None
-        render_info.append((rect[0], rect[1], rect[2], rect[3], color, raw))
+        render_info.append((x0, y0, x1, y1, color, raw))
 
     if not render_info:
-        return Image.fromarray(arr)
+        return img
 
-    # 3) 텍스트 렌더링
-    result_img = Image.fromarray(arr)
+    # 3) 텍스트
     if value_map and render_info:
-        draw = ImageDraw.Draw(result_img)
         samples = render_info[:20]
         avg_h = sum(y1 - y0 for _, y0, _, y1, _, _ in samples) / len(samples)
         font_size = max(8, min(24, int(avg_h * 0.45)))
@@ -420,9 +460,7 @@ def _render(
             font = ImageFont.truetype("arial.ttf", font_size)
         except (OSError, IOError):
             try:
-                font = ImageFont.truetype(
-                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size
-                )
+                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
             except (OSError, IOError):
                 font = ImageFont.load_default()
 
@@ -433,11 +471,9 @@ def _render(
             tc = _contrast_text(*bg)
             bbox = draw.textbbox((0, 0), text, font=font)
             tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            tx = x0 + ((x1 - x0) - tw) // 2
-            ty = y0 + ((y1 - y0) - th) // 2
-            draw.text((tx, ty), text, fill=tc, font=font)
+            draw.text((x0 + ((x1 - x0) - tw) // 2, y0 + ((y1 - y0) - th) // 2), text, fill=tc, font=font)
 
-    return result_img
+    return img
 
 
 # ── NPZ 캐시 ───────────────────────────────────────────────
@@ -475,6 +511,135 @@ def _save_cache(
     threading.Thread(target=_bg_save, daemon=True).start()
 
 
+def create_measure_data_only(
+    image_paths: List[str],
+    mode: str,
+    item_key: Optional[str] = None,
+    bin_types: Optional[List[str]] = None,
+    aggregation: str = "average",
+    scheme: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    이미지 렌더링/저장 없이 칩 좌표+값+색상만 반환.
+    브라우저에서 Canvas로 직접 그림.
+    """
+    t0 = time.perf_counter()
+
+    # 1. Positions 파싱 + 값 추출
+    #    1개: 순차 (13ms), 여러 개: ProcessPool 병렬 (GIL-free 병렬 파싱)
+    from .composite_map import _load_source_positions_data, _candidate_source_positions_paths
+    from ._parallel_json import extract_chip_values
+
+    if len(image_paths) <= 2:
+        # 소수 파일: 순차 (ProcessPool 스폰 오버헤드 회피)
+        all_chip_results = []
+        for rel_path in image_paths:
+            data = _load_source_positions_data(rel_path)
+            if data:
+                all_chip_results.append(_extract_values_from_data(data, mode, item_key, bin_types))
+            else:
+                all_chip_results.append(None)
+    else:
+        # 다수 파일: ProcessPool 병렬 (JSON 파싱이 GIL-free)
+        pos_args = []
+        for rel_path in image_paths:
+            for c in _candidate_source_positions_paths(rel_path):
+                if c.exists():
+                    pos_args.append((str(c), mode, item_key, bin_types))
+                    break
+        if _MEASURE_PROC_POOL is not None and pos_args:
+            all_chip_results = list(_MEASURE_PROC_POOL.map(extract_chip_values, pos_args))
+        else:
+            all_chip_results = [extract_chip_values(a) for a in pos_args]
+
+    # 2. 집계
+    values_by_pos: Dict[Tuple[int, int], List[float]] = {}
+    source_count = 0
+    for chip_vals in all_chip_results:
+        if not chip_vals:
+            continue
+        source_count += 1
+        for xa, ya, val in chip_vals:
+            values_by_pos.setdefault((xa, ya), []).append(val)
+
+    eff_agg = "sum" if (mode == "bin" and aggregation == "count") else aggregation
+    value_map: Dict[Tuple[int, int], float] = {}
+    for key, vals in values_by_pos.items():
+        if eff_agg == "sum":
+            value_map[key] = sum(vals)
+        elif eff_agg == "count":
+            value_map[key] = float(len(vals))
+        else:
+            value_map[key] = sum(vals) / len(vals) if vals else 0.0
+
+    if not value_map:
+        raise ValueError(f"No chip values found (mode={mode}, item_key={item_key})")
+
+    # 3. Percentile
+    pct_map = _percentile_ranks(value_map)
+
+    # 4. Gradient 색상
+    resolved = scheme or ANONYMOUS_LOGIN_ID
+    stops = get_ratio_gradient_for_scheme(resolved)
+
+    # 5. Base positions (canvas 크기 + 칩 좌표)
+    from .composite_map import _first_image_with_positions, _load_source_positions_data, _resolve_scheme_background_rgb
+    base_rel = _first_image_with_positions(image_paths)
+    base_pos = _load_source_positions_data(base_rel) if base_rel else None
+
+    canvas_w, canvas_h = 0, 0
+    chip_rects = []
+    if base_pos:
+        coord = base_pos.get("coord", {})
+        canvas_info = coord.get("canvas", {}) if isinstance(coord, dict) else {}
+        canvas_w = int(canvas_info.get("width", 0)) if isinstance(canvas_info, dict) else 0
+        canvas_h = int(canvas_info.get("height", 0)) if isinstance(canvas_info, dict) else 0
+        sx = 1.0 if canvas_w <= 0 else 1.0
+        sy = 1.0 if canvas_h <= 0 else 1.0
+
+        for chip in base_pos.get("chips", []):
+            if not isinstance(chip, dict):
+                continue
+            xa, ya = chip.get("x_abs"), chip.get("y_abs")
+            rect = chip.get("rect", {})
+            if isinstance(rect, dict) and all(rect.get(k) is not None for k in ("x0", "y0", "x1", "y1")):
+                chip_rects.append({
+                    "xa": xa, "ya": ya,
+                    "x0": rect["x0"], "y0": rect["y0"],
+                    "x1": rect["x1"], "y1": rect["y1"],
+                })
+
+    # 6. 칩별 결과 데이터
+    border_rgb = _get_normal_border_rgb(resolved)
+    bg_rgb = _resolve_scheme_background_rgb(None)
+    chips_data = []
+    for (xa, ya), pct in pct_map.items():
+        color = _interpolate_color(pct, stops)
+        raw = value_map.get((xa, ya))
+        chips_data.append({
+            "xa": xa, "ya": ya,
+            "pct": round(pct, 1),
+            "val": round(raw, 2) if raw is not None else None,
+            "color": list(color),
+        })
+
+    elapsed = time.perf_counter() - t0
+    return {
+        "canvas": {"width": canvas_w, "height": canvas_h},
+        "chips": chips_data,
+        "chip_rects": chip_rects,
+        "background": list(bg_rgb),
+        "border": list(border_rgb),
+        "gradient_stops": [list(s) for s in stops],
+        "source_images": source_count,
+        "chip_count": len(chips_data),
+        "processing_time": round(elapsed, 3),
+        "mode": mode,
+        "item_key": item_key,
+        "aggregation": aggregation,
+    }
+
+
 # ── Main: Measure Composite 생성 ───────────────────────────
 
 def create_measure_composite(
@@ -492,14 +657,75 @@ def create_measure_composite(
     """
     t0 = time.perf_counter()
 
-    # 1. Positions 병렬 로드
-    all_positions = _load_positions_parallel(image_paths)
-    valid = [(p, d) for p, d in all_positions if d is not None]
-    if not valid:
-        raise ValueError("No valid positions data found")
+    # 1+2. Positions 로드 + 값 추출을 ProcessPool 병렬로 한 번에 처리
+    # (JSON 2.7MB 파싱이 GIL-bound → ProcessPool로 진짜 병렬)
+    from .composite_map import _candidate_source_positions_paths, _positions_json_cache
+    from ._parallel_json import extract_chip_values
 
-    # 2. 값 수집 + 집계 (BIN=1/0 전처리 포함)
-    value_map = _collect_and_aggregate(valid, mode, item_key, bin_types, aggregation)
+    # positions 파일 경로 해결
+    pos_file_args = []
+    for rel_path in image_paths:
+        pos_path = None
+        # 캐시 히트 체크
+        cached = _positions_json_cache.get(rel_path)
+        if cached is not None:
+            pos_path = "__cached__:" + rel_path
+        else:
+            from pathlib import Path as _P
+            for c in _candidate_source_positions_paths(rel_path):
+                if c.exists():
+                    pos_path = str(c)
+                    break
+        if pos_path:
+            pos_file_args.append((pos_path, mode, item_key, bin_types))
+
+    # 캐시 히트는 순차, 캐시 미스는 ProcessPool 병렬
+    cached_results = []
+    proc_args = []
+    proc_indices = []
+    all_chip_results = [None] * len(pos_file_args)
+
+    for i, (path, m, k, b) in enumerate(pos_file_args):
+        if path.startswith("__cached__:"):
+            rel = path[len("__cached__:"):]
+            data = _positions_json_cache[rel]
+            # 캐시된 데이터에서 직접 추출
+            chip_vals = _extract_values_from_data(data, m, k, b)
+            all_chip_results[i] = chip_vals
+        else:
+            proc_args.append((path, m, k, b))
+            proc_indices.append(i)
+
+    # ProcessPool로 캐시 미스 파일 병렬 처리
+    if proc_args and _MEASURE_PROC_POOL is not None:
+        proc_results = list(_MEASURE_PROC_POOL.map(extract_chip_values, proc_args))
+        for idx, result in zip(proc_indices, proc_results):
+            all_chip_results[idx] = result
+    elif proc_args:
+        for idx, arg in zip(proc_indices, proc_args):
+            all_chip_results[idx] = extract_chip_values(arg)
+
+    # 집계
+    values_by_pos: Dict[Tuple[int, int], List[float]] = {}
+    source_count = 0
+    for chip_vals in all_chip_results:
+        if chip_vals is None:
+            continue
+        source_count += 1
+        for xa, ya, val in chip_vals:
+            values_by_pos.setdefault((xa, ya), []).append(val)
+
+    eff_agg = "sum" if (mode == "bin" and aggregation == "count") else aggregation
+    value_map: Dict[Tuple[int, int], float] = {}
+    for key, vals in values_by_pos.items():
+        if eff_agg == "sum":
+            value_map[key] = sum(vals)
+        elif eff_agg == "count":
+            value_map[key] = float(len(vals))
+        else:
+            value_map[key] = sum(vals) / len(vals) if vals else 0.0
+
+    valid_count = source_count
     if not value_map:
         raise ValueError(f"No chip values found (mode={mode}, item_key={item_key})")
 
@@ -555,15 +781,20 @@ def create_measure_composite(
 
     result_rel = actual.relative_to(IMAGES_ROOT).as_posix()
 
-    # 9. Positions 복사 (BIN 정보 보존 → bottom legend용)
-    _copy_positions_without_bin(base_rel, out_dir, [actual.name], keep_chip_bin=True)
+    # 9. Positions 복사 (BIN 정보 보존 → bottom legend용) — 비동기
+    threading.Thread(
+        target=_copy_positions_without_bin,
+        args=(base_rel, out_dir, [actual.name]),
+        kwargs={"keep_chip_bin": True},
+        daemon=True,
+    ).start()
 
     # 10. NPZ 캐시
     keys = sorted(pct_map.keys())
     pos_arr = np.array(keys, dtype=np.int32)
     val_arr = np.array([value_map[k] for k in keys], dtype=np.float32)
     pct_arr = np.array([pct_map[k] for k in keys], dtype=np.float32)
-    _save_cache(out_dir, pos_arr, val_arr, pct_arr, mode, item_key, aggregation, len(valid), resolved)
+    _save_cache(out_dir, pos_arr, val_arr, pct_arr, mode, item_key, aggregation, valid_count, resolved)
 
     elapsed = time.perf_counter() - t0
 
@@ -578,7 +809,7 @@ def create_measure_composite(
         "image_path": result_rel,
         "display_name": display_name,
         "filename": actual.name,
-        "source_images": len(valid),
+        "source_images": valid_count,
         "total_images": len(image_paths),
         "chip_count": len(pct_map),
         "mode": mode,

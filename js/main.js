@@ -13110,22 +13110,21 @@ class WaferMapViewer {
             return;
         }
 
-        console.log(`[PREFETCH] Background 순차 다운로드 시작: [${priorityOrder.join(', ')}]`);
+        console.log(`[PREFETCH] Background 병렬 다운로드 시작: [${priorityOrder.join(', ')}]`);
 
         const prefetchStart = performance.now();
-        let successCount = 0;
-        
-        // 순차 다운로드로 네트워크 대역폭 경쟁 방지
-        for (const level of priorityOrder) {
-            try {
-                await this.loadPyramidLevel(level, true);
-                successCount++;
-                console.log(`[PREFETCH] Lv${level} 완료`);
-            } catch (err) {
-                console.warn(`[PREFETCH] Lv${level} 다운로드 실패, 건너뜀`, err);
-            }
-        }
-        
+
+        // 병렬 다운로드 (레벨 수가 2~3개라 대역폭 경쟁 최소)
+        const results = await Promise.allSettled(
+            priorityOrder.map(level =>
+                this.loadPyramidLevel(level, true).then(() => {
+                    console.log(`[PREFETCH] Lv${level} 완료`);
+                    return level;
+                })
+            )
+        );
+        const successCount = results.filter(r => r.status === 'fulfilled').length;
+
         const elapsed = Math.round(performance.now() - prefetchStart);
         console.log(`[PREFETCH] 모든 레벨 다운로드 완료 | 성공:${successCount}/${priorityOrder.length} | Total:${elapsed}ms`);
     }
@@ -13218,35 +13217,24 @@ class WaferMapViewer {
             tBufferStart = performance.now();
             
             let bitmap;
-            // ImageDecoder 스트리밍 시도 (브라우저 호환성 체크)
-            if (typeof ImageDecoder !== 'undefined' && response.body) {
+            // ArrayBuffer를 먼저 읽어서 body stream 재사용 문제 방지
+            const arrayBuffer = await response.arrayBuffer();
+            tBufferEnd = performance.now();
+
+            tBitmapStart = performance.now();
+            // ImageDecoder 시도 → 실패 시 createImageBitmap 폴백
+            if (typeof ImageDecoder !== 'undefined') {
                 try {
-                    const decoder = new ImageDecoder({ data: response.body, type: contentType });
+                    const decoder = new ImageDecoder({ data: arrayBuffer, type: contentType });
                     const { image } = await decoder.decode({ completeFramesOnly: true });
-                    tBufferEnd = performance.now();
-                    
-                    tBitmapStart = performance.now();
                     bitmap = await createImageBitmap(image);
-                    tBitmapEnd = performance.now();
                 } catch (e) {
-                    console.warn('[STREAMING] ImageDecoder 실패, 폴백 사용:', e);
-                    // 폴백: ArrayBuffer 사용
-                    const arrayBuffer = await response.arrayBuffer();
-                    tBufferEnd = performance.now();
-                    
-                    tBitmapStart = performance.now();
                     bitmap = await decodeBitmapSmart({ buffer: arrayBuffer, type: contentType });
-                    tBitmapEnd = performance.now();
                 }
             } else {
-                // 폴백: ArrayBuffer 사용
-                const arrayBuffer = await response.arrayBuffer();
-                tBufferEnd = performance.now();
-                
-                tBitmapStart = performance.now();
                 bitmap = await decodeBitmapSmart({ buffer: arrayBuffer, type: contentType });
-                tBitmapEnd = performance.now();
             }
+            tBitmapEnd = performance.now();
 
             if (requestPath !== this.selectedImagePath) {
                 if (typeof bitmap?.close === 'function') {
