@@ -23523,9 +23523,63 @@ class WaferMapViewer {
 
         // 그리드 모드: 서버 사이드 렌더링
         if (this.gridMode) {
-            this.refreshGridThumbnailsWithCurrentParams();
+            // 이미지 선택 + Measure 활성 → 새 "mea" 탭으로 분리
+            const hasSelection = Array.isArray(this.gridSelectedIdxs) && this.gridSelectedIdxs.length > 0;
+            const isMeasureActive = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey;
+            if (hasSelection && isMeasureActive) {
+                this._openMeasureTab();
+            } else {
+                this.refreshGridThumbnailsWithCurrentParams();
+            }
             this.refreshThumbnailNavigatorWithCurrentParams();
         }
+    }
+
+    /**
+     * 선택된 이미지들로 새 "mea" 탭을 생성하고 measure-thumb으로 표시.
+     * 원래 탭은 일반 썸네일 그대로 유지.
+     */
+    _openMeasureTab() {
+        const selectedImages = this.gridSelectedIdxs
+            .map(idx => this.currentGridImages?.[idx])
+            .filter(Boolean);
+        if (!selectedImages.length) return;
+
+        // 원래 탭의 overlay 상태 저장 후 해제 (원래 탭은 일반 썸네일 유지)
+        const savedOverlay = this.overlayMode;
+        const savedKey = this._ratioActiveItemKey;
+        const savedChecked = this._measureCheckedItems ? [...this._measureCheckedItems] : [];
+
+        // 원래 탭 상태 복원 (일반 썸네일)
+        this.persistActivePageState();
+
+        // 새 "mea" 탭 생성
+        const originPage = this.pageManager?.getActivePage();
+        const originPageId = originPage?.id;
+        const newPage = this.pageManager.createPage('measure', null, {
+            activate: true,
+            skipPersist: true,
+            insertAfter: originPageId,
+        });
+
+        // 새 탭에 measure 상태 설정
+        this.overlayMode = savedOverlay;
+        this._ratioActiveItemKey = savedKey;
+        this._measureCheckedItems = savedChecked;
+
+        // 그리드 선택 초기화 + measure 이미지 표시
+        this.gridSelectedIdxs = [];
+        this.gridSelectedSet = new Set();
+        this.selectedImages = [...selectedImages];
+
+        this.showGrid(selectedImages, true); // skipSaveState=true
+
+        // measure-thumb URL로 교체
+        setTimeout(() => {
+            this.refreshGridThumbnailsWithCurrentParams();
+            this.renderColorLegends();
+            this.updateFailbitButtonUI();
+        }, 200);
     }
 
     /**

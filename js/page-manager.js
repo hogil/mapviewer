@@ -19,7 +19,7 @@ export class PageManager {
         this.pages = [];
         this.activePageId = null;
         this.nextId = 0;
-        this.counters = { blank: 0, wafer: 0, label: 0, mylot: 0, composite: 0 };
+        this.counters = { blank: 0, wafer: 0, label: 0, mylot: 0, composite: 0, measure: 0 };
 
         this.handleTabClick = this.handleTabClick.bind(this);
         this.handleAddClick = this.handleAddClick.bind(this);
@@ -93,6 +93,7 @@ export class PageManager {
             label: 'label',
             mylot: 'mylot',
             composite: 'com',
+            measure: 'mea',
             blank: 'page',
         };
         const key = prefix[baseRole] ? baseRole : 'blank';
