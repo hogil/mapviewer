@@ -23,12 +23,12 @@ LOCAL_IMAGES_ROOT = Path(r"D:/project/data/wm-811k")
 LOCAL_POSITIONS_ROOT = Path(r"D:/project/data/positions")
 
 PALETTE_5MB_FILES = [
-    "wafer_palette_5mb",
-    "wafer_palette_10mb",
-    "wafer_palette_15mb",
-    "wafer_palette_20mb",
-    "wafer_palette_25mb",
-    "wafer_palette_30mb",
+    "wafer_palette_5mb_PE_Engineer",
+    "wafer_palette_10mb_EE_Test",
+    "wafer_palette_15mb_PT_Engineer",
+    "wafer_palette_20mb_PT_Engineer",
+    "wafer_palette_25mb_EE_Test",
+    "wafer_palette_30mb_EE_Engineer",
 ]
 
 PALETTE_3K_TEMPLATE = "wafer_p3k_0001"
@@ -193,33 +193,150 @@ def _assign_grade(chip: dict, chip_idx: int, image_name: str) -> int:
     return seed % 8
 
 
-def render_image_from_positions(json_path: Path, palette: list[int]) -> Image.Image:
+MIN_CANVAS_SIZE = 6000  # 최소 canvas 크기 (pixels) — 이미지 최소 6000x6000
+
+
+FTN_COUNT = 500  # 생성할 FBT 키 개수
+QTN_COUNT = 500  # 생성할 QVL 키 개수
+
+
+def _compact_array_encode(obj: dict) -> str:
+    """positions_module.py의 compact_array 포맷과 동일한 JSON 직렬화."""
+    _compact_keys = {"f", "q", "rect", "xs", "ys", "ftn_keys", "qtn_keys"}
+
+    def _enc(o, level=0):
+        indent = "  " * level
+        if isinstance(o, dict):
+            if not o:
+                return "{}"
+            items = []
+            for k, v in o.items():
+                if k in _compact_keys and isinstance(v, (dict, list)):
+                    val_str = json.dumps(v, ensure_ascii=False, separators=(", ", ": "))
+                else:
+                    val_str = _enc(v, level + 1)
+                items.append(f'{indent}  "{k}": {val_str}')
+            return "{\n" + ",\n".join(items) + "\n" + indent + "}"
+        elif isinstance(o, list):
+            if not o:
+                return "[]"
+            items = [f"{indent}  {_enc(i, level + 1)}" for i in o]
+            return "[\n" + ",\n".join(items) + "\n" + indent + "]"
+        else:
+            return json.dumps(o, ensure_ascii=False)
+
+    return _enc(obj)
+
+
+def scale_positions_json(json_path: Path, scale: int) -> None:
+    """positions JSON을 scale배 확대 + f/q 500개 생성 + compact_array 포맷으로 저장."""
     with json_path.open("r", encoding="utf-8") as fh:
         data = json.load(fh)
 
     coord = data.get("coord") or {}
     canvas = coord.get("canvas") or {}
-    width = int(canvas.get("width") or 2304)
-    height = int(canvas.get("height") or 2304)
+    cur_w = int(canvas.get("width", 0))
+
+    # 이미 올바른 상태면 스킵
+    existing_ftn = data.get("ftn_keys", [])
+    if (cur_w >= MIN_CANVAS_SIZE
+            and len(existing_ftn) == FTN_COUNT
+            and json_path.read_text(encoding="utf-8").startswith("{\n")):
+        return
+
+    # canvas 스케일 (아직 작을 때만)
+    if cur_w < MIN_CANVAS_SIZE and scale > 1:
+        canvas["width"] = cur_w * scale
+        canvas["height"] = int(canvas.get("height", 2304)) * scale
+
+        grid_edges = coord.get("grid_edges") or {}
+        if "xs" in grid_edges:
+            grid_edges["xs"] = [x * scale for x in grid_edges["xs"]]
+        if "ys" in grid_edges:
+            grid_edges["ys"] = [y * scale for y in grid_edges["ys"]]
+
+        for chip in data.get("chips", []):
+            rect = chip.get("rect")
+            if rect:
+                rect["x0"] = int(rect.get("x0", 0)) * scale
+                rect["y0"] = int(rect.get("y0", 0)) * scale
+                rect["x1"] = int(rect.get("x1", 0)) * scale
+                rect["y1"] = int(rect.get("y1", 0)) * scale
+
+    # ftn_keys / qtn_keys 생성 (500개씩)
+    rng = np.random.default_rng(stable_seed(json_path.stem, "ftn_qtn"))
+    ftn_keys = [str(k) for k in sorted(rng.choice(9999, size=FTN_COUNT, replace=False))]
+    qtn_keys = [str(k) for k in sorted(rng.choice(9999, size=QTN_COUNT, replace=False))]
+
+    chips = data.get("chips", [])
+    for chip in chips:
+        x_abs = chip.get("x_abs", 0)
+        y_abs = chip.get("y_abs", 0)
+        chip_rng = np.random.default_rng(stable_seed(json_path.stem, x_abs, y_abs))
+        chip["f"] = [str(int(v)) for v in chip_rng.integers(0, 10000, size=FTN_COUNT)]
+        chip["q"] = [str(int(v)) for v in chip_rng.integers(0, 100, size=QTN_COUNT)]
+
+    # compact_array 포맷: ftn_keys/qtn_keys를 chips 앞에 삽입
+    ordered = {}
+    for k, v in data.items():
+        if k in ("ftn_keys", "qtn_keys"):
+            continue  # 기존 키 제거 (아래서 재삽입)
+        if k == "chips":
+            ordered["ftn_keys"] = ftn_keys
+            ordered["qtn_keys"] = qtn_keys
+        ordered[k] = v
+
+    with json_path.open("w", encoding="utf-8") as fh:
+        fh.write(_compact_array_encode(ordered))
+
+
+def render_image_from_positions(
+    json_path: Path,
+    palette: list[int],
+    min_canvas_size: int = 6000,
+) -> Image.Image:
+    """positions JSON으로부터 palette-indexed PNG를 렌더링한다.
+
+    주의사항:
+    - chip 영역은 직사각형 rect 그대로 사용한다. 원형 마스크 등 별도 영역을 절대 만들지 않는다.
+    - chip 테두리(1px * scale)에 BIN 인덱스를 적용한다 (Normal=10, Invalid=11, BIN별 12~23).
+    - chip 내부 pixel의 95%+ 를 단일 grade가 차지한다.
+    """
+    with json_path.open("r", encoding="utf-8") as fh:
+        data = json.load(fh)
+
+    coord = data.get("coord") or {}
+    canvas = coord.get("canvas") or {}
+    orig_w = int(canvas.get("width") or 2304)
+    orig_h = int(canvas.get("height") or 2304)
+
+    # 최소 canvas 크기 보장을 위한 스케일 팩터
+    scale = max(1, -(-min_canvas_size // max(orig_w, orig_h)))  # ceil division
+    width = orig_w * scale
+    height = orig_h * scale
 
     arr = np.full((height, width), BACKGROUND_INDEX, dtype=np.uint8)
     image_name = json_path.stem
+    border_width = max(1, scale)  # 스케일에 비례한 테두리 두께
 
     for chip_idx, chip in enumerate(data.get("chips", [])):
         rect = chip.get("rect") or {}
-        x0 = int(rect.get("x0", 0))
-        y0 = int(rect.get("y0", 0))
-        x1 = int(rect.get("x1", 0))
-        y1 = int(rect.get("y1", 0))
+        x0 = int(rect.get("x0", 0)) * scale
+        y0 = int(rect.get("y0", 0)) * scale
+        x1 = int(rect.get("x1", 0)) * scale
+        y1 = int(rect.get("y1", 0)) * scale
         if x1 <= x0 or y1 <= y0:
             continue
 
-        arr[y0:y1, x0:x1] = BACKGROUND_INDEX
+        # 테두리: BIN에 따른 인덱스 (Normal=10, Invalid=11, BIN별 12~23)
+        bin_idx = border_index_from_bin(chip.get("b"))
+        arr[y0:y1, x0:x1] = bin_idx
 
-        if x1 - x0 <= 2 or y1 - y0 <= 2:
+        if x1 - x0 <= border_width * 2 or y1 - y0 <= border_width * 2:
             continue
 
-        inner = arr[y0 + 1 : y1 - 1, x0 + 1 : x1 - 1]
+        # 내부: grade 인덱스 (95%+ 단일 grade)
+        inner = arr[y0 + border_width : y1 - border_width, x0 + border_width : x1 - border_width]
         grade = _assign_grade(chip, chip_idx, image_name)
 
         inner[:, :] = grade
@@ -264,6 +381,14 @@ def render_palette_5mb(images_root: Path, positions_root: Path, palette: list[in
     dataset_dir = images_root / "palette_5mb"
     positions_dir = positions_root / "palette_5mb"
 
+    # positions JSON 스케일 업 (첫 실행 시 1회)
+    for json_path in positions_dir.glob("*.json"):
+        with json_path.open("r", encoding="utf-8") as fh:
+            d = json.load(fh)
+        orig_w = int((d.get("coord") or {}).get("canvas", {}).get("width", 2304))
+        sc = max(1, -(-MIN_CANVAS_SIZE // orig_w))
+        scale_positions_json(json_path, sc)
+
     for stem in PALETTE_5MB_FILES:
         json_path = positions_dir / f"{stem}.json"
         if not json_path.exists():
@@ -278,7 +403,7 @@ def render_palette_5mb(images_root: Path, positions_root: Path, palette: list[in
             padding_seed=stem,
         )
         size_mb = target_path.stat().st_size / 1024 / 1024
-        print(f"[palette_5mb] wrote {target_path} ({size_mb:.3f} MiB)")
+        print(f"[palette_5mb] wrote {target_path} ({img.width}x{img.height}, {size_mb:.3f} MiB)")
 
 
 def render_palette_3k(
@@ -294,6 +419,17 @@ def render_palette_3k(
     json_paths = sorted(positions_dir.glob("wafer_p3k_*.json"))
 
     if render_all or json_paths:
+        # positions JSON 스케일 업 (첫 실행 시 1회)
+        if json_paths:
+            with json_paths[0].open("r", encoding="utf-8") as fh:
+                d = json.load(fh)
+            orig_w = int((d.get("coord") or {}).get("canvas", {}).get("width", 2304))
+            sc = max(1, -(-MIN_CANVAS_SIZE // orig_w))
+            if sc > 1:
+                print(f"[palette_3k] scaling {len(json_paths)} positions JSONs by {sc}x ...")
+                for jp in json_paths:
+                    scale_positions_json(jp, sc)
+
         rendered = 0
         for json_path in json_paths:
             target_path = dataset_dir / f"{json_path.stem}.png"
@@ -302,7 +438,8 @@ def render_palette_3k(
             rendered += 1
             if rendered % 500 == 0:
                 print(f"[palette_3k] rendered {rendered}/{len(json_paths)} ...")
-        print(f"[palette_3k] rendered {rendered} PNG files from JSON (diverse grades)")
+        if rendered > 0:
+            print(f"[palette_3k] rendered {rendered} PNG files ({img.width}x{img.height}, diverse grades+bins)")
         return
 
     source_path = images_root / "palette_5mb" / f"{PALETTE_3K_SOURCE_5MB}.png"
