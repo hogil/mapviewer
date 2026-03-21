@@ -8863,7 +8863,7 @@ class WaferMapViewer {
             return item;
         };
 
-        const CTX_MAX = 20; // 컨텍스트 메뉴 항목 수 제한
+        const CTX_MAX = 10; // 컨텍스트 메뉴 항목 수 제한
         if (fKeys.length > 0) {
             const fHeader = document.createElement('div');
             fHeader.className = 'failbit-section';
@@ -8930,7 +8930,7 @@ class WaferMapViewer {
 
     _renderMcContextList(list, keys) {
         // Context menu: 각 섹션 20개 제한
-        this._renderMcList(list, keys, { maxPerSection: 20 });
+        this._renderMcList(list, keys, { maxPerSection: 10 });
     }
 
     /**
