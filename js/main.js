@@ -23906,27 +23906,149 @@ class WaferMapViewer {
      * FBT/QVL Ratio 오버레이 적용
      */
     async _applyRatioOverlayClient(field, itemKey) {
-        // Gradient 색상 로드 (Measure 전용 API)
-        if (!this._ratioGradientCache) {
-            try {
-                const loginId = this.currentUser || FALLBACK_LOGIN_ID;
-                const resp = await fetch(`/api/measure-colors?LoginId=${encodeURIComponent(loginId)}`);
-                if (resp.ok) {
-                    const data = await resp.json();
-                    this._ratioGradientCache = data.colors || data.defaultColors;
-                }
-            } catch (e) {
-                console.warn('⚠️ Measure gradient 로드 실패:', e);
+        // positions에서 값을 가져와서 Canvas에 직접 그리기 (overlay 아님, 새 이미지 생성)
+        const imagePath = this.selectedImagePath || this.currentImagePath;
+        if (!imagePath) return;
+
+        try {
+            const t0 = performance.now();
+            const resp = await fetch('/api/measure-composite-data', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    image_paths: [imagePath],
+                    mode: field,
+                    item_key: String(itemKey),
+                    aggregation: 'average',
+                }),
+            });
+            if (!resp.ok) {
+                console.warn('⚠️ Measure data API 실패:', resp.status);
+                return;
+            }
+            const data = await resp.json();
+            console.log(`[MEASURE] 데이터 수신: ${data.chip_count}칩, ${Math.round(performance.now() - t0)}ms`);
+
+            // Canvas에 직접 렌더링
+            this._renderMeasureOnCanvas(data);
+        } catch (e) {
+            console.error('⚠️ Measure 렌더링 실패:', e);
+        }
+    }
+
+    /**
+     * Measure 데이터를 Canvas에 직접 렌더링 (positions 기반, 이미지 로드 없음)
+     */
+    _renderMeasureOnCanvas(data) {
+        const canvas = this.dom?.imageCanvas;
+        if (!canvas) return;
+
+        const { chips, chip_rects, canvas: canvasSize, background, border, gradient_stops } = data;
+        if (!chips || !chip_rects || !canvasSize) return;
+
+        const w = canvasSize.width;
+        const h = canvasSize.height;
+
+        // OffscreenCanvas에 그리기
+        const offscreen = document.createElement('canvas');
+        offscreen.width = w;
+        offscreen.height = h;
+        const ctx = offscreen.getContext('2d');
+
+        // 배경 (개인색)
+        ctx.fillStyle = `rgb(${background[0]},${background[1]},${background[2]})`;
+        ctx.fillRect(0, 0, w, h);
+
+        // chip_rects → abs 좌표 매핑
+        const rectMap = {};
+        for (const r of chip_rects) {
+            if (r.xa != null && r.ya != null) {
+                rectMap[`${r.xa},${r.ya}`] = r;
             }
         }
-        if (!this._ratioGradientCache) return;
 
-        if (this.chipAnnotator) {
-            this.chipAnnotator.setOverlayMode(field, {
-                gradientStops: this._ratioGradientCache,
-                itemKey: itemKey,
-            });
+        // 테두리 색
+        const borderColor = border ? `rgb(${border[0]},${border[1]},${border[2]})` : '#BEBEBE';
+
+        // 비매칭 칩 base color
+        const baseColor = 'rgb(224,224,224)';
+        for (const r of chip_rects) {
+            ctx.fillStyle = baseColor;
+            ctx.fillRect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
+            ctx.strokeStyle = borderColor;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
         }
+
+        // 매칭 칩 gradient color + 값 텍스트
+        const chipH = chip_rects.length > 0 ? (chip_rects[0].y1 - chip_rects[0].y0) : 20;
+        const fontSize = Math.max(10, Math.floor(chipH * 0.35));
+        ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        for (const chip of chips) {
+            const rect = rectMap[`${chip.xa},${chip.ya}`];
+            if (!rect) continue;
+
+            const [r, g, b] = chip.color;
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            ctx.fillRect(rect.x0, rect.y0, rect.x1 - rect.x0, rect.y1 - rect.y0);
+
+            // 테두리
+            ctx.strokeStyle = borderColor;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(rect.x0, rect.y0, rect.x1 - rect.x0, rect.y1 - rect.y0);
+
+            // 값 텍스트
+            if (chip.val != null) {
+                const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+                ctx.fillStyle = lum > 140 ? '#000' : '#fff';
+                const cx = (rect.x0 + rect.x1) / 2;
+                const cy = (rect.y0 + rect.y1) / 2;
+                const text = this._fmtMeasureValue(chip.val);
+                ctx.fillText(text, cx, cy);
+            }
+        }
+
+        // ImageBitmap으로 변환하여 렌더러에 로드
+        createImageBitmap(offscreen).then((bitmap) => {
+            this.originalWidth = w;
+            this.originalHeight = h;
+            this.currentImage = bitmap;
+            this.imagePyramid = {};
+
+            if (this.semiconductorRenderer) {
+                this.semiconductorRenderer.setImageSize(w, h);
+                if (this.semiconductorRenderer.isGpuAvailable()) {
+                    this.semiconductorRenderer.resetTextures();
+                    this.semiconductorRenderer.uploadLevelBitmap(1, bitmap);
+                    this.semiconductorRenderer.setActiveLevel(1);
+                }
+                this.semiconductorRenderer.currentImage = bitmap;
+                this.semiconductorRenderer.imagePyramid = { '1': bitmap };
+            }
+
+            this.pyramidLevels = { '1': bitmap };
+            this.currentPyramidLevel = 1;
+            this.resetView(false);
+            this.scheduleDraw();
+            console.log(`[MEASURE] Canvas 렌더링 완료: ${w}×${h}, ${chips.length}칩`);
+        });
+    }
+
+    _fmtMeasureValue(val) {
+        const v = Math.abs(val);
+        if (v === Math.floor(v)) {
+            const n = Math.floor(v);
+            if (n < 1000) return String(n);
+            if (n < 10000) return (n / 1000).toFixed(1) + 'K';
+            if (n < 1000000) return Math.floor(n / 1000) + 'K';
+            return (n / 1000000).toFixed(1) + 'M';
+        }
+        if (v < 1000) return v.toFixed(1);
+        if (v < 10000) return (v / 1000).toFixed(1) + 'K';
+        return Math.floor(v / 1000) + 'K';
     }
 
     /**

@@ -15,11 +15,20 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 
 테스트 실행 전에 아래 단계를 **순서대로** 자동 수행합니다. 이미 준비된 항목은 건너뜁니다.
 
+> **필수**: 브라우저는 **항상 1920×1080 최대화** 상태로 동작해야 한다. 모든 Phase에서 UI 요소가 뷰포트 안에 보여야 한다.
+> - MCP 서버 설정(`~/.claude.json`)에 `--viewport-size 1920,1080` 옵션이 반드시 포함되어야 한다.
+> - 페이지 접속 직후 `browser_resize(1920, 1080)`도 반드시 실행한다 (이중 보장).
+> - 페이지 새로고침이나 네비게이션 후에도 뷰포트 크기를 재확인한다.
+
 ### Step 0-1: Playwright MCP 설치 확인 및 브라우저 최대화
 1. `browser_navigate` 등 Playwright MCP 도구 호출을 시도하여 연결 확인
 2. 실패 시 `npx @playwright/mcp@latest --install` 실행하여 브라우저 설치
 3. 재시도하여 MCP 연결 확인 — 실패 시 사용자에게 안내 후 중단
 4. **브라우저 창 최대화**: 페이지 접속 직후 `browser_resize`로 **width: 1920, height: 1080** 설정 (전체 화면으로 UI 테스트)
+5. **MCP 설정 확인**: `~/.claude.json`의 playwright args에 `--viewport-size 1920,1080`이 포함되어야 한다:
+   ```json
+   "args": ["...", "@playwright/mcp@latest", "--browser", "chromium", "--viewport-size", "1920,1080"]
+   ```
 
 ### Step 0-2: 서버 시작 (원샷 스크립트)
 
@@ -100,15 +109,15 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
     "border": 1, "defect_border": 2,
     "center_rule": { "even_x_zero": "left", "even_y_zero": "down" }
   },
-  "ftn_keys": ["2824", "1409", "5506", ...],  // FBT 키 목록 (600개, 상단 1회)
-  "qtn_keys": ["5997", "5055", "5566", ...],  // QVL 키 목록 (20개, 상단 1회)
+  "ftn_keys": ["2824", "1409", "5506", ...],  // FBT 키 목록 (500개, 상단 1회)
+  "qtn_keys": ["5997", "5055", "5566", ...],  // QVL 키 목록 (500개, 상단 1회)
   "chips": [
     {
       "x_abs": 9, "y_abs": 1,      // 절대 좌표
       "x_cal": -2, "y_cal": -11,   // 캘리브레이션 좌표 (중심 기준)
       "b": "9",                     // BIN 값 (문자열)
-      "f": ["7402", "1519", ...],   // FBT 값 배열 (ftn_keys 순서 대응, 600개)
-      "q": ["9", "24", "25", ...],  // QVL 값 배열 (qtn_keys 순서 대응, 20개)
+      "f": ["7402", "1519", ...],   // FBT 값 배열 (ftn_keys 순서 대응, 500개)
+      "q": ["9", "24", "25", ...],  // QVL 값 배열 (qtn_keys 순서 대응, 500개)
       "rect": { "x0": 864, "y0": 96, "x1": 960, "y1": 192 }  // 픽셀 바운딩 박스
     },
     ...
@@ -127,8 +136,8 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 **데이터 규모 (테스트 환경)**:
 | 폴더 | 파일 수 | chips/파일 | ftn_keys | qtn_keys | 파일 크기 |
 |------|---------|-----------|----------|----------|----------|
-| palette_3k | 3000 | 384 | 600 | 20 | ~1.9MB |
-| palette_5mb | 6 | 812 | 600 | 20 | ~4MB |
+| palette_3k | 3000 | 384 | 500 | 500 | ~1.9MB |
+| palette_5mb | 6 | 812 | 500 | 500 | ~4MB |
 
 > **참고**: 이후 모든 Phase에서 `https://localhost/` 대신 `BASE_URL`을 사용합니다.
 
@@ -595,19 +604,19 @@ os.walk 디스크 순회 없이 즉시 반환.
 
 **평가 항목**:
 1. 색상 편집 버튼 클릭 → `#color-editor-modal` 열림 (`aria-hidden !== 'true'` 또는 `display !== 'none'`)
-2. Top 탭 클릭 → Grade 색상 테이블 표시 (G0~G7 행)
-3. Bottom 탭 클릭 → BIN 색상 테이블 표시 (Normal, Invalid, B285, ...)
-4. Composite 탭 클릭 → Ratio gradient 색상 테이블 표시 (quantile0~100)
+2. Fail 탭 클릭 → Grade/BIN 색상 테이블 표시 (G0~G7 + Normal, Invalid, B285, ...)
+3. Composite 탭 클릭 → Composite gradient 색상 테이블 표시 (quantile0~100)
+4. Measure 탭 클릭 → Measure gradient 색상 테이블 표시 (quantile0~100)
 5. 닫기 버튼 (`#color-editor-close-btn`) 클릭 → 모달 닫힘
 6. 모달이 닫힌 후 그리드가 정상 표시되는지 확인
 
-**pass 기준**: 모달 open/close, 3개 탭 전환 모두 성공
+**pass 기준**: 모달 open/close, 3개 탭(Fail/Composite/Measure) 전환 모두 성공
 
 ---
 
 ### Phase 5: 상단 컬러 범례 (Grade/BIN/Gradient)
 
-**목적**: 범례 클릭으로 칩 필터가 정상 적용/해제되고, Measure 오버레이 시 Gradient 범례로 전환되는지 확인
+**목적**: 범례 클릭으로 칩 필터가 정상 적용/해제되고, Measure heatmap 적용 시 Gradient 범례로 전환되는지 확인
 
 **평가 항목**:
 
@@ -626,9 +635,9 @@ os.walk 디스크 순회 없이 즉시 반환.
 3. Border 버튼 클릭 → 칩 테두리 on/off 토글 (이미지 rerender 확인)
 4. 다시 "285" 클릭 → 필터 해제
 
-#### 5-3. Gradient 범례 (Measure 오버레이 + BIN/FBT/QVL Composite Map)
+#### 5-3. Gradient 범례 (Measure heatmap + BIN/FBT/QVL Composite Map)
 Composite에서 Failbit이 아닌 모든 항목(BIN/FBT/QVL)은 gradient 범례를 사용합니다.
-1. **Measure 오버레이**: Measure 패널에서 FBT2342 클릭 → 오버레이 적용
+1. **Measure heatmap**: Measure 패널에서 FBT2342 클릭 → heatmap 적용 (원본 이미지를 `/api/measure-thumb` 이미지로 교체)
 2. 상단 범례가 G0~G7에서 percentile 범례 (0~10%, 10~20%, ..., 90~100%)로 변경 확인
    - 범례 텍스트에 "%" 포함 여부로 판별
 3. Gradient 범례의 90~100% 클릭 → 해당 범위 칩만 표시, 나머지 흰색
@@ -671,8 +680,8 @@ Composite에서 Failbit이 아닌 모든 항목(BIN/FBT/QVL)은 gradient 범례�
 6. **Border 버튼**: 클릭 → 칩 테두리 on/off, canvas rerender 확인
 7. Back → 그리드 복귀 시 범례 상태 유지 확인
 
-#### 5-5. Measure 오버레이 단일 모드 — Gradient 범례 퍼센트/칩수 및 클릭
-1. 그리드 모드로 복귀 → Measure 패널에서 FBT2342 클릭 → 오버레이 적용
+#### 5-5. Measure heatmap 단일 모드 — Gradient 범례 퍼센트/칩수 및 클릭
+1. 그리드 모드로 복귀 → Measure 패널에서 FBT2342 클릭 → heatmap 적용
 2. 이미지 더블클릭 → 단일 모드 진입
 3. **Gradient 범례 퍼센트/칩수 확인** (`#color-legend-top`):
    - 10개 항목 (`0~10%`, `10~20%`, ..., `90~100%`) 존재 확인
@@ -957,9 +966,11 @@ BIN, FBT, QVL Composite는 모두 Gradient 범례를 사용한다. 각 유형별
 
 ---
 
-### Phase 11: Measure 오버레이
+### Phase 11: Measure heatmap
 
-**목적**: Measure 패널에서 FBT/QVL/BIN 오버레이 적용/해제
+**목적**: Measure 패널에서 FBT/QVL/BIN heatmap 적용/해제
+
+> **핵심 구현**: `/api/measure-thumb`는 원본 이미지를 로드하지 않고, positions JSON의 chip rect + 측정값만으로 gradient heatmap 이미지를 새로 생성한다. 원본 위에 덧그리는 overlay가 아닌, **독립적인 이미지 교체** 방식이다. 그리드/네비게이터에서는 썸네일 URL 자체가 `/api/measure-thumb`로 교체되고, 단일 이미지 모드에서는 chipAnnotator가 칩 rect에 gradient 색상을 직접 렌더링한다.
 
 **positions 파일 compact_array 포맷 (2026-03-17 적용)**:
 - `/api/chip-positions` 응답: 칩별 f/q 값 제거, `ftn_keys`/`qtn_keys`를 상단에 제공
@@ -968,18 +979,18 @@ BIN, FBT, QVL Composite는 모두 Gradient 범례를 사용한다. 각 유형별
 - `rect.quad` 필드 응답에서 제거
 
 **테스트 데이터 기준**:
-- palette_3k: ftn_keys 600개, qtn_keys 20개, chips 384개/파일, 3000파일
-- palette_5mb: ftn_keys 600개, qtn_keys 20개, chips 812개/파일, 6파일
-- ftn_keys 예시: `["2824","1409","5506","5012","4657","3286",...]` (600개)
-- qtn_keys 예시: `["5445","5180","5751","5534","5988",...]` (20개)
+- palette_3k: ftn_keys 500개, qtn_keys 500개, chips 384개/파일, 3000파일
+- palette_5mb: ftn_keys 500개, qtn_keys 500개, chips 812개/파일, 6파일
+- ftn_keys 예시: `["2824","1409","5506","5012","4657","3286",...]` (500개)
+- qtn_keys 예시: `["5445","5180","5751","5534","5988",...]` (500개)
 - f 값 범위: 25~9976 (정수 문자열), q 값 범위: 0~100
 
 **평가 항목**:
 
 #### 11-0. `/api/chip-positions` 응답 구조 검증
 1. `fetch('/api/chip-positions?path=palette_3k/wafer_p3k_0001_EE_Engineer.png')` 호출
-2. 응답에 `ftn_keys` 배열 존재, **길이 600** 확인
-3. 응답에 `qtn_keys` 배열 존재, **길이 20** 확인
+2. 응답에 `ftn_keys` 배열 존재, **길이 500** 확인
+3. 응답에 `qtn_keys` 배열 존재, **길이 500** 확인
 4. `ftn_keys` 첫 번째 키가 문자열인지 확인 (예: `"2824"`)
 5. 칩 객체에 `f`, `q` 키 **없음** 확인 (`chips[0].f === undefined`)
 6. 칩 객체에 `rect.quad` **없음** 확인
@@ -990,14 +1001,14 @@ BIN, FBT, QVL Composite는 모두 Gradient 범례를 사용한다. 각 유형별
 #### 11-1. Measure 패널 열기 & FBT/QVL/BIN 키 표시
 1. palette_3k 그리드 로드 (`loadImagesInFolderAndShowGrid`) → 전체선택
 2. `#failbit-btn-top` 클릭 → `#failbit-panel-top` display !== 'none'
-3. 패널에 **"FBT" 섹션 헤더** 존재, FBT 항목 **600개** 표시 (ftn_keys 기반)
-4. 패널에 **"QVL" 섹션 헤더** 존재, QVL 항목 **20개** 표시 (qtn_keys 기반)
+3. 패널에 **"FBT" 섹션 헤더** 존재, FBT 항목 **500개** 표시 (ftn_keys 기반)
+4. 패널에 **"QVL" 섹션 헤더** 존재, QVL 항목 **500개** 표시 (qtn_keys 기반)
 5. **"BIN" 섹션** 존재 확인
 6. FBT 항목 중 `FBT2824` (첫 번째 ftn_key) 표시 확인
 7. QVL 항목 중 `QVL5445` (첫 번째 qtn_key) 표시 확인
 
-#### 11-2. FBT Ratio Overlay 적용 & 시각 검증
-1. FBT 항목 아무거나 클릭 (예: FBT2824 또는 목록 첫 번째) → 그리드에 ratio overlay 적용
+#### 11-2. FBT Measure heatmap 적용 & 시각 검증
+1. FBT 항목 아무거나 클릭 (예: FBT2824 또는 목록 첫 번째) → 그리드 썸네일이 `/api/measure-thumb` heatmap으로 교체
 2. `viewer.overlayMode` === `"f"` 확인
 3. 이미지 src에 `measure_overlay=f:2824` 또는 `field=f` 파라미터 포함 확인
 4. **Gradient 범례** 전환 확인: Grade(G0~G7) → Gradient(파란→초록→빨강)
@@ -1005,17 +1016,17 @@ BIN, FBT, QVL Composite는 모두 Gradient 범례를 사용한다. 각 유형별
 6. Gradient bar 내 **칩 수 텍스트** 존재 확인 (각 구간별 칩 개수)
 7. 그리드 썸네일 이미지가 원본과 다르게 gradient 색상으로 렌더링 확인 (스크린샷)
 8. 그리드 이미지 더블클릭 → 단일 이미지 뷰 진입
-9. 단일 뷰에서 ratio overlay heatmap 렌더링 확인 (칩별 색상 gradient)
+9. 단일 뷰에서 measure heatmap 렌더링 확인 (칩별 색상 gradient)
 10. 단일 뷰에서도 Gradient 범례 + 퍼센트/칩수 표시 확인
 11. 뒤로가기 → 그리드 복귀
 
-#### 11-3. QVL Ratio Overlay 적용 & 시각 검증
-1. 초기화 버튼 클릭 → overlay 해제
+#### 11-3. QVL Measure heatmap 적용 & 시각 검증
+1. 초기화 버튼 클릭 → heatmap 해제
 2. QVL 항목 아무거나 클릭 (예: QVL5445 또는 QVL5180)
 3. `viewer.overlayMode` === `"q"` 확인
 4. 이미지 src에 `measure_overlay=q:5445` 파라미터 포함 확인
 5. Gradient 범례 + 퍼센트/칩수 텍스트 확인 (11-2와 동일 검증)
-6. 단일 이미지 더블클릭 → ratio overlay heatmap 확인 → 뒤로가기
+6. 단일 이미지 더블클릭 → measure heatmap 확인 → 뒤로가기
 
 #### 11-4. BIN Overlay 적용 & 시각 검증
 1. 초기화 → BIN 항목 중 하나 (285 등) 클릭
@@ -1054,9 +1065,9 @@ BIN, FBT, QVL Composite는 모두 Gradient 범례를 사용한다. 각 유형별
 
 #### 11-7. palette_5mb 대용량 positions 처리 검증
 1. palette_5mb 그리드 로드 → `/api/chip-positions` 호출
-2. 응답에 `ftn_keys` 600개, `qtn_keys` 20개, chips **812개** 확인
+2. 응답에 `ftn_keys` 500개, `qtn_keys` 500개, chips **812개** 확인
 3. Measure 패널에서 FBT/QVL 키 목록 정상 표시 확인
-4. FBT overlay 적용 → gradient 범례 표시 확인
+4. FBT heatmap 적용 → gradient 범례 표시 확인
 
 #### 11-8. Measure 키 인덱스 방지 & 그리드→단일 전환 시 오버레이 보존
 compact_array 포맷에서 FBT/QVL 키가 배열 인덱스(0,1,2...)로 표시되지 않고 실제 키 이름으로 표시되는지, 그리드→단일 전환 시 measure 오버레이가 유지되는지 검증.
@@ -1066,7 +1077,7 @@ compact_array 포맷에서 FBT/QVL 키가 배열 인덱스(0,1,2...)로 표시�
 3. **인덱스 방지 검증**: FBT 항목 텍스트에 `FBT0`, `FBT1`, `FBT2` 등 순차 인덱스가 **없는지** 확인
    - `browser_evaluate`로 `.failbit-item` 텍스트 목록 수집
    - `FBT0` 텍스트가 포함된 항목이 0개인지 확인 (인덱스가 아닌 실제 키: `FBT2824` 등)
-4. FBT 항목 중 하나 클릭 (예: 첫 번째 FBT 항목) → 그리드에 measure overlay 적용
+4. FBT 항목 중 하나 클릭 (예: 첫 번째 FBT 항목) → 그리드 썸네일이 measure-thumb heatmap으로 교체
 5. `viewer.overlayMode === 'f'` 확인
 6. `viewer._ratioActiveItemKey`가 숫자 문자열이 아닌 실제 키 값인지 확인 (예: `"2824"`, NOT `"0"`)
 7. 그리드 이미지 더블클릭 → 단일 이미지 뷰 진입
@@ -1103,18 +1114,18 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 16. `browser_take_screenshot` → 단일 뷰에서 FBT5506 heatmap + 칩 텍스트 표시 확인
 17. 뒤로가기(ESC) → 그리드 복귀 → `viewer._ratioActiveItemKey === "5506"` 유지 확인
 
-#### 11-10. Measure Overlay 그리드/네비게이터 픽셀 정합성 검증
-그리드 및 네비게이터 썸네일에 서버사이드 Measure overlay가 정확히 적용되는지 픽셀 수준으로 검증.
-단일 이미지(클라이언트 사이드)와 그리드/네비게이터(서버사이드)가 동일한 gradient/ftn_key/scheme을 사용하는지 확인.
+#### 11-10. Measure heatmap 그리드/네비게이터 픽셀 정합성 검증
+그리드 및 네비게이터 썸네일에 서버사이드 `/api/measure-thumb` heatmap이 정확히 적용되는지 픽셀 수준으로 검증.
+단일 이미지(클라이언트 사이드 chipAnnotator 렌더링)와 그리드/네비게이터(서버사이드 이미지 생성)가 동일한 gradient/ftn_key/scheme을 사용하는지 확인.
 
 1. palette_5mb 단일 이미지 로드 (wafer_palette_5mb_PE_Engineer.png)
-2. Measure 패널에서 FBT2824 클릭 → 클라이언트 사이드 overlay 적용
+2. Measure 패널에서 FBT2824 클릭 → 클라이언트 사이드 chipAnnotator heatmap 적용
 3. `browser_evaluate`로 gradient 캐시 확인: `viewer._ratioGradientCache` 11개 색상 존재
 4. Navigator 썸네일 URL에 `measure_overlay=f%3A2824` 포함 확인
 5. Navigator 첫 번째 썸네일 이미지를 canvas에 그려 픽셀 샘플링 (칩 영역 + 배경)
-6. 칩 영역 픽셀이 원본 Grade 색상과 **다름** 확인 (overlay 적용된 gradient 색상)
+6. 칩 영역 픽셀이 원본 Grade 색상과 **다름** 확인 (heatmap gradient 색상)
 7. 그리드 모드 진입 (`loadImagesInFolderAndShowGrid('palette_5mb')`)
-8. Measure 패널에서 FBT2824 클릭 → 서버사이드 overlay 적용
+8. Measure 패널에서 FBT2824 클릭 → 서버사이드 `/api/measure-thumb` heatmap 적용
 9. 그리드 첫 번째 이미지 URL에 `measure_overlay=f%3A2824` 포함 확인
 10. 그리드 첫 번째 이미지를 canvas에 그려 칩 영역 픽셀 샘플링
 11. 칩 영역 픽셀이 원본 Grade 색상과 **다름** 확인
@@ -1122,7 +1133,7 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
     - `THUMBNAIL_FORMAT=PNG` → `image/png`
     - `THUMBNAIL_FORMAT=WEBP` → `image/webp`
     (PNG 데이터가 `.webp` 파일에 저장되는 포맷 불일치가 없어야 함)
-13. `browser_take_screenshot` → 그리드 measure overlay 시각 확인
+13. `browser_take_screenshot` → 그리드 measure heatmap 시각 확인
 
 #### 11-11. /api/measure-thumb 경량 heatmap 속도 및 정합성 검증
 그리드 Measure overlay가 `/api/measure-thumb` (positions-only, 이미지 로드 없음)를 사용하는지,
@@ -1140,21 +1151,21 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 9. visible 16장 로드 완료: **< 200ms** (positions 캐시 히트)
 10. 스크롤 → 새 이미지 lazy load 시에도 `/api/measure-thumb` 사용 확인
 11. Measure 선택 상태에서 폴더 전환 (palette_3k → palette_5mb)
-12. 전환 후 그리드 이미지에 measure overlay 적용 확인 (overlayMode 유지)
+12. 전환 후 그리드 이미지에 measure heatmap 적용 확인 (overlayMode 유지)
 13. `browser_take_screenshot` → 그리드 heatmap 시각 확인
 
 **pass 기준**:
-- 11-0: API 응답에서 ftn_keys 600개, qtn_keys 20개, 칩에 f/q/quad 없음
-- 11-1: Measure 패널에 FBT 600개, QVL 20개, BIN 표시
-- 11-2: FBT overlay → gradient 범례 + 퍼센트/칩수 텍스트 + 단일뷰 heatmap
-- 11-3: QVL overlay → 동일 검증
-- 11-4: BIN overlay → BIN 범례
-- 11-5: 초기화 → Grade 범례 복원, overlay 파라미터 제거
+- 11-0: API 응답에서 ftn_keys 500개, qtn_keys 500개, 칩에 f/q/quad 없음
+- 11-1: Measure 패널에 FBT 500개, QVL 500개, BIN 표시
+- 11-2: FBT heatmap → gradient 범례 + 퍼센트/칩수 텍스트 + 단일뷰 heatmap
+- 11-3: QVL heatmap → 동일 검증
+- 11-4: BIN heatmap → BIN 범례
+- 11-5: 초기화 → Grade 범례 복원, measure-thumb URL 제거
 - 11-6: Measure Composite 생성 → FBT/QVL/BIN 결과 이미지 + gradient 범례 + 텍스트
 - 11-7: palette_5mb 대용량 정상 처리
-- 11-8: FBT/QVL 키 인덱스 미표시 + 그리드→단일 전환 시 measure 오버레이 보존
+- 11-8: FBT/QVL 키 인덱스 미표시 + 그리드→단일 전환 시 measure heatmap 보존
 - 11-9: compact_array 칩 텍스트 정상 표시 + FBT 항목 전환 시 그리드 갱신 + 범례 칩 수
-- 11-10: 그리드/네비게이터 썸네일에 measure overlay 픽셀 적용 확인 + 포맷 일관성
+- 11-10: 그리드/네비게이터 썸네일에 measure heatmap 픽셀 적용 확인 + 포맷 일관성
 - 11-11: /api/measure-thumb 사용 확인 + 응답 < 15KB + visible 로드 < 500ms + 폴더 전환 유지
 
 ---
@@ -1512,8 +1523,8 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 2. Navigator에 모든 3000개를 DOM에 넣지 않고 가상 스크롤 적용 확인
 3. 빠른 스크롤 시 끊김 없이 렌더링
 
-#### 22-8. Measure overlay 반영
-1. palette_3k 그리드 → 전체선택 → Measure FBT 항목 클릭 → 오버레이 적용
+#### 22-8. Measure heatmap 반영
+1. palette_3k 그리드 → 전체선택 → Measure FBT 항목 클릭 → heatmap 적용
 2. 그리드 이미지 더블클릭 → 단일 모드 진입
 3. Navigator 썸네일 URL에 `measure_overlay=f:` 파라미터 포함 확인
 4. 다른 FBT 항목으로 전환 → Navigator 썸네일 URL이 새 키로 갱신 확인
@@ -1825,7 +1836,7 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 
 ### Phase 30: Measure 맵 전환 시 회색 배경 방지
 
-**목적**: Measure 오버레이가 이미 적용된 상태에서 다른 measure key를 클릭할 때 이미지 배경이 회색으로 변하지 않는지 검증
+**목적**: Measure heatmap이 이미 적용된 상태에서 다른 measure key를 클릭할 때 이미지 배경이 회색으로 변하지 않는지 검증
 
 **배경**:
 - `refreshGridThumbnailsWithCurrentParams()`에서 이미 로드된 이미지의 `opacity`를 0.5로 설정 + `img.src`가 placeholder로 리셋되면 배경색(`#1c1c1c`)이 보여 회색으로 나타남
@@ -1833,7 +1844,7 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 
 **평가 항목**:
 1. palette_3k 폴더 로드 → Measure 버튼 클릭 → MC 패널 열기
-2. FBT 키 하나 클릭 → Measure 오버레이 적용 (이미지에 gradient 표시)
+2. FBT 키 하나 클릭 → Measure heatmap 적용 (이미지에 gradient 표시)
 3. 5초 대기 (이미지 로드 완료)
 4. 다른 FBT 키 클릭 → Measure 맵 전환
 5. **핵심 검증**: 뷰포트 내 `.grid-thumb-img` 중 `opacity < 1`인 이미지 비율 < 20%
@@ -2066,7 +2077,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | 8 | Composite + 결과 범례/Subset 검증 | pass/fail | Gradient 범례, Subset 생성, 칩수 검증 |
 | 9 | Context Menu Composite | pass/fail | 안정성 6개 항목 |
 | 10 | Ref Map | pass/fail | z-index, resize |
-| 11 | Measure 오버레이 | pass/fail | |
+| 11 | Measure heatmap | pass/fail | |
 | 12 | MY LOT | pass/fail | CRUD 전체 |
 | 13 | 단일 이미지 — 기본 | pass/fail | 줌/탐색/복귀 |
 | 14 | 단일 이미지 — 피라미드 렌더링 | pass/fail | 줌별 레벨, 선명도 |
@@ -2107,7 +2118,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | 단일 이미지 로드 + 피라미드 | 더블클릭 ~ `[PREFETCH] 모든 레벨 다운로드 완료` | < 3초 |
 | Composite Map 생성 (5장) | POST ~ status=completed | < 5초 |
 | Composite Map 생성 (50장) | POST ~ status=completed | < 10초 |
-| Measure 오버레이 적용 | FBT 클릭 ~ 뷰포트 이미지 갱신 완료 | < 5초 |
+| Measure heatmap 적용 | FBT 클릭 ~ 뷰포트 이미지 갱신 완료 | < 5초 |
 | Measure 맵 전환 | 다른 FBT 클릭 ~ 뷰포트 이미지 갱신 완료 | < 5초 |
 | 폴더 전환 | 새 폴더 로드 ~ grid children 생성 | < 3초 |
 
@@ -2149,3 +2160,63 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | Phase | 항목 | 결과 | 수정 | 비고 |
 |-------|------|------|------|------|
 | N | ... | fix → pass | `파일명:라인` 수정 내용 요약 | |
+
+---
+
+## Phase 35: 성능 벤치마크
+
+서버 재시작 직후(cold) 상태에서 핵심 기능의 응답 시간을 측정합니다.
+
+### 측정 항목 및 기준값
+
+| 항목 | API | 기준 (20이미지) | 비고 |
+|------|-----|----------------|------|
+| Composite Map | POST /api/composite-map → 폴링 | < 10초 | Grade 8장 + Sum 2장 생성 |
+| Measure 데이터 | POST /api/measure-composite-data | < 300ms | 좌표+값+색상 JSON 반환 (이미지 렌더링 없음) |
+| Measure 이미지 | POST /api/measure-composite → 폴링 | < 2초 | PIL ImageDraw 렌더링 + JPEG 저장 |
+| Measure 멀티 3키 | POST /api/measure-composite-data × 3 병렬 | < 500ms | ProcessPool 병렬 파싱 |
+| Measure-thumb | GET /api/measure-thumb | < 20ms/장 | positions-only 렌더링 |
+| 피라미드 전 레벨 | loadImage + prefetchAllPyramidLevels | < 2초 | 0.2 + 0.5 + 0.7 병렬 프리페치 |
+| 그리드 measure 전환 | FBT 키 적용 후 뷰포트 썸네일 로드 | < 3초 | measure-thumb 캐시 미스 기준 |
+
+### 측정 방법
+
+```javascript
+// 1. 폴더 로드 + 20장 선택
+await v.loadImagesInFolderAndShowGrid('palette_3k');
+const paths = v.currentGridImages.slice(0, 20);
+v.selectedImages = paths;
+
+// 2. Measure 데이터 API (Cold)
+const t0 = performance.now();
+const resp = await fetch('/api/measure-composite-data', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ image_paths: paths, mode: 'f', item_key: fbtKey, aggregation: 'average' })
+});
+const data = await resp.json();
+const elapsed = Math.round(performance.now() - t0);
+// 기준: processing_time < 0.3s
+```
+
+### 성능 최적화 이력
+
+**Composite Map (11.5s → 7.3s)**
+- numba JIT: grade_counts(8x), mask+transform(6x), render(50x)
+- turbojpeg 병렬 Grade 히트맵 저장
+- numpy 직접 저장 (PIL 변환 제거)
+- positions 복사 비동기화
+
+**Measure (6s → 112ms)**
+- /api/measure-composite-data: 이미지 렌더링 없이 좌표+값+색상 JSON 반환
+- ProcessPool 병렬 JSON 파싱 (모든 워커 서버 시작 시 워밍업)
+- PIL ImageDraw 렌더링 (numpy 143MB 배열 제거)
+- 원본 이미지 로드 제거 (positions 좌표만으로 캔버스)
+- positions JSON 메모리 캐시 + orjson
+
+**Pyramid (3.9s → 0.5s)**
+- 프리페치 순차→병렬 (Promise.allSettled)
+- Level 1.0 body stream 버그 수정
+
+**품질 보장**
+- pyvips palette PNG 깨짐 발견 → PIL 유지
+- JPEG Q=95, TJSAMP_444 동일 (1월 커밋 대비 검증)
