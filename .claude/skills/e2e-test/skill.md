@@ -21,21 +21,43 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 3. 재시도하여 MCP 연결 확인 — 실패 시 사용자에게 안내 후 중단
 4. **브라우저 창 최대화**: 페이지 접속 직후 `browser_resize`로 **width: 1920, height: 1080** 설정 (전체 화면으로 UI 테스트)
 
-### Step 0-2: 서버 시작 (기존 서버 모두 종료 후 새로 시작)
-1. **기존 서버 모두 종료**: 443, 8443 포트에서 실행 중인 프로세스를 강제 종료
-   - Windows: `netstat -ano | findstr :443` 및 `netstat -ano | findstr :8443` → PID 확인 → `taskkill /F /PID <pid>`
-   - Ubuntu: `fuser -k 443/tcp` 및 `fuser -k 8443/tcp`
-   - 또한 `python -m api.main` 프로세스가 남아있으면 모두 종료
-2. **포트 사용 가능 여부 즉시 확인** (1~2초 이내):
-   - Windows: `netstat -ano | findstr :8443` → 결과 없으면 사용 가능
-   - Ubuntu: `ss -tlnp | grep :8443` → 결과 없으면 사용 가능
-3. **포트 사용 가능하면**: `HTTPS_PORT=8443 python -m api.main` 을 백그라운드로 실행 (Bash `run_in_background`)
-4. **포트가 아직 점유 중이면** (종료 후에도 즉시 해제 안됨): 재시도 없이 바로 다음 포트로 이동
-   - `HTTPS_PORT=8444 python -m api.main` 백그라운드 실행
-   - 8444도 점유 중이면 → `HTTPS_PORT=8445`로 마지막 시도
-5. 서버 시작 후 최대 15초 대기하며 해당 포트 폴링 (3초 간격, 최대 5회)
-6. 모든 포트(8443, 8444, 8445) 실패 시 사용자에게 안내 후 중단
-7. 성공한 포트를 BASE_URL (`https://localhost:{port}`)로 설정
+### Step 0-2: 서버 시작 (확실한 종료 → 포트 해제 대기 → 시작)
+
+**반드시 아래 순서를 정확히 따른다. 서버 접속 확인 전에 테스트를 시작하지 않는다.**
+
+1. **모든 Python 프로세스 강제 종료**:
+   ```bash
+   taskkill //F //IM python.exe 2>/dev/null   # Windows
+   # Ubuntu: pkill -9 -f "python -m api.main"
+   ```
+2. **5초 대기** (포트 해제 시간 확보):
+   ```bash
+   sleep 5
+   ```
+3. **포트 해제 확인** (LISTENING 없을 때까지 반복, 최대 3회):
+   ```bash
+   for i in 1 2 3; do
+     netstat -an | grep ":8443 " | grep LISTEN || break
+     sleep 3
+   done
+   ```
+4. **서버 시작** (`run_in_background`):
+   ```bash
+   cd D:/project/mapviewer && HTTPS_PORT=8443 python -m api.main
+   ```
+5. **서버 준비 대기** (LISTENING 확인될 때까지 폴링, 최대 20초):
+   ```bash
+   for i in $(seq 1 10); do
+     sleep 2
+     netstat -an | grep ":8443 " | grep LISTEN && break
+   done
+   ```
+6. **서버 접속 확인** (`browser_navigate`로 실제 페이지 로드 확인):
+   - `https://localhost:8443` 접속
+   - 타이틀 "Wafer Map Viewer" 확인
+   - **실패 시**: 8443 포트 프로세스 종료 → `HTTPS_PORT=8444`로 재시도 (위 1~5 반복)
+7. **접속 성공한 포트를 BASE_URL로 설정**
+8. **절대 금지**: 서버 접속 확인 없이 테스트 Phase 진입하지 않는다
 
 ### Step 0-3: 테스트 데이터 확인
 - 테스트 데이터 폴더: `palette_3k` (3000장), `palette_5mb` (대용량), `wafer_folder`, `wafer_edge_ring`
