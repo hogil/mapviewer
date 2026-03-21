@@ -8770,6 +8770,74 @@ class WaferMapViewer {
     /**
      * Context menu 서브메뉴 빌드 (M.Comp용)
      */
+    _buildMeaContextSubmenu() {
+        const submenu = document.getElementById('context-mea-submenu');
+        if (!submenu) return;
+        const list = submenu.querySelector('.mea-ctx-list');
+        if (!list) return;
+
+        const selected = this.getSelectedImagesForModal();
+        if (!selected.length) {
+            list.innerHTML = '<div class="failbit-item" style="color:#888;">이미지를 선택하세요</div>';
+            return;
+        }
+
+        const fKeys = this._cachedMeasureKeys?.f || [];
+        const qKeys = this._cachedMeasureKeys?.q || [];
+
+        if (fKeys.length === 0 && qKeys.length === 0) {
+            list.innerHTML = '<div class="failbit-item" style="color:#888;">로딩 중...</div>';
+            fetch(`/api/chip-positions?path=${encodeURIComponent(selected[0])}`)
+                .then(r => r.ok ? r.json() : null)
+                .then(data => {
+                    if (!data) { list.innerHTML = '<div class="failbit-item" style="color:#888;">데이터 없음</div>'; return; }
+                    const f = (data.ftn_keys || []).map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+                    const q = (data.qtn_keys || []).map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+                    this._cachedMeasureKeys = { f, q };
+                    this._renderMeaContextList(list, f, q, selected);
+                })
+                .catch(() => { list.innerHTML = '<div class="failbit-item" style="color:#888;">로드 실패</div>'; });
+            return;
+        }
+        this._renderMeaContextList(list, fKeys, qKeys, selected);
+    }
+
+    _renderMeaContextList(list, fKeys, qKeys, selectedImages) {
+        list.innerHTML = '';
+        const padKey = (k) => String(k).replace(/^\d+$/, m => m.padStart(4, '0'));
+
+        const makeItem = (label, type, key) => {
+            const item = document.createElement('div');
+            item.className = 'failbit-item';
+            item.dataset.label = label;
+            item.style.cssText = 'padding:4px 8px;cursor:pointer;color:#fff;';
+            item.textContent = label;
+            item.addEventListener('click', () => {
+                this.hideContextMenu();
+                this.overlayMode = type;
+                this._ratioActiveItemKey = key;
+                this._measureCheckedItems = [{ type, key, label }];
+                this._openMeasureTab();
+            });
+            return item;
+        };
+
+        if (fKeys.length > 0) {
+            const fHeader = document.createElement('div');
+            fHeader.className = 'failbit-section';
+            fHeader.textContent = 'FBT';
+            list.appendChild(fHeader);
+            for (const k of fKeys) list.appendChild(makeItem(`FBT${padKey(k)}`, 'f', k));
+        }
+        if (qKeys.length > 0) {
+            const qHeader = document.createElement('div');
+            qHeader.className = 'failbit-section';
+            qHeader.textContent = 'QVL';
+            list.appendChild(qHeader);
+            for (const k of qKeys) list.appendChild(makeItem(`QVL${padKey(k)}`, 'q', k));
+        }
+    }
+
     _buildMcContextSubmenu() {
         const submenu = document.getElementById('context-mc-submenu');
         if (!submenu) return;
@@ -9953,9 +10021,16 @@ class WaferMapViewer {
         if (mcSubmenu) {
             mcSubmenu.style.display = 'none';
             mcSubmenu._mcBuilt = false;
-            // body로 이동했던 서브메뉴를 원래 위치로 복원
             if (mcSubmenu._origParent && mcSubmenu.parentElement === document.body) {
                 mcSubmenu._origParent.appendChild(mcSubmenu);
+            }
+        }
+        const meaSubmenu = document.getElementById('context-mea-submenu');
+        if (meaSubmenu) {
+            meaSubmenu.style.display = 'none';
+            meaSubmenu._meaBuilt = false;
+            if (meaSubmenu._origParent && meaSubmenu.parentElement === document.body) {
+                meaSubmenu._origParent.appendChild(meaSubmenu);
             }
         }
 
@@ -10045,6 +10120,53 @@ class WaferMapViewer {
                     });
                 });
                 mcCtxSearch.addEventListener('click', (e) => e.stopPropagation());
+            }
+        }
+
+        // Measure 만들기 서브메뉴
+        const meaCreateItem = document.getElementById('context-mea-create');
+        const meaSubmenu = document.getElementById('context-mea-submenu');
+        if (meaCreateItem && meaSubmenu) {
+            meaCreateItem.addEventListener('mouseenter', () => {
+                if (!meaSubmenu._meaBuilt) {
+                    this._buildMeaContextSubmenu();
+                    meaSubmenu._meaBuilt = true;
+                }
+                if (meaSubmenu.parentElement !== document.body) {
+                    meaSubmenu._origParent = meaSubmenu.parentElement;
+                    document.body.appendChild(meaSubmenu);
+                }
+                const itemRect = meaCreateItem.getBoundingClientRect();
+                meaSubmenu.style.position = 'fixed';
+                meaSubmenu.style.zIndex = '50000';
+                meaSubmenu.style.display = '';
+                const meaList = meaSubmenu.querySelector('.mea-ctx-list');
+                const availH = window.innerHeight - 80;
+                if (meaList) meaList.style.maxHeight = `${Math.max(150, availH - itemRect.top)}px`;
+                meaSubmenu.style.left = `${itemRect.right}px`;
+                meaSubmenu.style.top = `${itemRect.top}px`;
+                meaSubmenu.style.bottom = 'auto';
+                requestAnimationFrame(() => {
+                    const rect = meaSubmenu.getBoundingClientRect();
+                    if (rect.bottom > window.innerHeight) {
+                        meaSubmenu.style.top = `${Math.max(4, itemRect.top - (rect.bottom - window.innerHeight) + 8)}px`;
+                        if (meaList) meaList.style.maxHeight = `${Math.max(150, window.innerHeight - 90)}px`;
+                    }
+                    if (rect.right > window.innerWidth) {
+                        meaSubmenu.style.left = `${itemRect.left - rect.width}px`;
+                    }
+                });
+            });
+            meaSubmenu.addEventListener('click', (e) => e.stopPropagation());
+            const meaCtxSearch = meaSubmenu.querySelector('.mea-ctx-search');
+            if (meaCtxSearch) {
+                meaCtxSearch.addEventListener('input', (e) => {
+                    const q = e.target.value.trim().toLowerCase();
+                    meaSubmenu.querySelectorAll('.failbit-item').forEach(item => {
+                        item.style.display = (!q || (item.dataset.label || '').toLowerCase().includes(q)) ? '' : 'none';
+                    });
+                });
+                meaCtxSearch.addEventListener('click', (e) => e.stopPropagation());
             }
         }
 
@@ -23676,8 +23798,20 @@ class WaferMapViewer {
                 return;
             }
 
+            // 🔥 이미지 선택 + measure → 새 "mea" 탭으로 분리
+            const hasGridSelection = selected.length > 0;
+            const isMeasureActive = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey;
+            if (hasGridSelection && isSingle && isMeasureActive) {
+                this._openMeasureTab();
+                return;
+            }
+
             if (isMulti || wasMulti) {
                 // 다중↔단일 전환 또는 다중 항목 변경: 그리드 전체 재생성
+                if (hasGridSelection && isMeasureActive) {
+                    this._openMeasureTab();
+                    return;
+                }
                 this.showGrid(targetImages);
             } else {
                 // 단일 선택 유지: URL만 교체
