@@ -958,18 +958,23 @@ export class MyLotModal {
         this.viewer?.showToast?.('저장 중...', 1500);
 
         try {
-            // 🔥 모든 행의 검색 결과 수집 (중복 제거 안 함)
+            // 🔥 모든 행의 검색 결과 수집 (중복 제거 안 함) + LOT/Wafer 매핑
             const allPaths = [];
+            const pathLotWaferMap = {};  // path → { lot, wafer }
             const rowsWithoutImages = [];
 
             for (const row of validRows) {
-                // searchResults가 있으면 모두 추가, 없으면 path만 추가
+                const lot = (row.lot || '').trim();
+                const wafer = (row.wafer || '').trim();
                 if (row.searchResults && row.searchResults.length > 0) {
-                    allPaths.push(...row.searchResults);
+                    row.searchResults.forEach(p => {
+                        allPaths.push(p);
+                        pathLotWaferMap[p] = { lot, wafer };
+                    });
                 } else if (row.path) {
                     allPaths.push(row.path);
+                    pathLotWaferMap[row.path] = { lot, wafer };
                 } else {
-                    // 이미지 없는 행
                     rowsWithoutImages.push(row);
                 }
             }
@@ -989,6 +994,7 @@ export class MyLotModal {
                         mode: this.activeMode,
                         group: this.activeGroup,
                         paths: pathsArray,
+                        path_lot_wafer: pathLotWaferMap,
                     }),
                 });
                 

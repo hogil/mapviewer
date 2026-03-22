@@ -15,7 +15,7 @@ import { ColorSchemeEditor } from './color-editor.js?v=9';
 import { ChipAnnotator } from './chip-annotator.js?v=2';
 import { ThumbnailNavigator } from './thumbnail-navigator.js?v=2';
 import { CompositeColorModal } from './composite-colors.js';
-import { MyLotModal } from './my-lot.js?v=4';
+import { MyLotModal } from './my-lot.js?v=5';
 import { PageManager } from './page-manager.js';
 import { ContextMenuManager } from './context-menu.js?v=2';
 import { stripDotSuffix } from './search.js';

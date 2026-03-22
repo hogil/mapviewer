@@ -3052,6 +3052,7 @@ async def add_my_lot_batch_endpoint(request: Request):
         group = payload.get("group")
         lot_value = payload.get("lot")  # LOT 값
         paths = payload.get("paths")  # 또는 경로 리스트
+        path_lot_wafer = payload.get("path_lot_wafer") or {}  # path → {lot, wafer} 매핑
         manual_values = payload.get("manual_values") or []
 
         if not group:
@@ -3131,7 +3132,7 @@ async def add_my_lot_batch_endpoint(request: Request):
             collected_paths.extend(placeholder_paths)
 
         if collected_paths:
-            result = my_lot_add_lot_batch(login_id, mode, group, collected_paths)
+            result = my_lot_add_lot_batch(login_id, mode, group, collected_paths, path_lot_wafer=path_lot_wafer)
             result["placeholder_count"] = len(placeholder_paths)
             return {"success": True, **result}
 

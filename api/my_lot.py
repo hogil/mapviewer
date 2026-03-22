@@ -836,7 +836,7 @@ def rename_group(login_id: str, mode: str, old_name: str, new_name: str) -> bool
     return renamed
 
 
-def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path]) -> Dict[str, object]:
+def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path], *, path_lot_wafer: dict = None) -> Dict[str, object]:
     """
     여러 이미지를 그룹에 일괄 추가 (entries.json 경로 저장 방식, 파일 복사 없음).
 
@@ -904,11 +904,16 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path])
                     duplicate_count += 1
                     continue
 
-                # 빠른 파싱: LOT_제품_Wafer_TYPE_MODE.ext 형식 (예: wafer_p3k_0001_EE_Engineer)
-                stem = src_path.stem
-                parts = stem.split('_')
-                lot_val = parts[0] if parts else stem
-                wafer_val = parts[2] if len(parts) > 2 else (parts[1] if len(parts) > 1 else "")
+                # 프론트가 보낸 LOT/Wafer 매핑 우선 사용, 없으면 파일명 파싱
+                lw = (path_lot_wafer or {}).get(rel_path) or {}
+                if lw.get('lot'):
+                    lot_val = lw['lot']
+                    wafer_val = lw.get('wafer', '')
+                else:
+                    stem = src_path.stem
+                    parts = stem.split('_')
+                    lot_val = parts[0] if parts else stem
+                    wafer_val = parts[2] if len(parts) > 2 else (parts[1] if len(parts) > 1 else "")
                 entry = {
                     "path": rel_path,
                     "lot": lot_val,
