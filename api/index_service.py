@@ -379,11 +379,6 @@ class IndexService:
         # 파일명만 검색 대상으로 사용 (폴더명 제외)
         names = [rel.rsplit("/", 1)[-1].lower() for rel in keys]
         with self._lock:
-            self._file_index.clear()
-            self._file_index.update(
-                (rel, {"name_lower": rel.rsplit("/", 1)[-1].lower(), "path_lower": rel.lower()})
-                for rel, name in zip(keys, names)
-            )
             self._keys.clear()
             self._keys.extend(keys)
             self._names.clear()
@@ -411,11 +406,10 @@ class IndexService:
             # 🔥 디렉토리가 없으면 생성
             tmp_path.parent.mkdir(parents=True, exist_ok=True)
             
-            # 임시 파일에 쓰기
+            # 임시 파일에 한번에 쓰기 (400만 줄 단위 write 대신)
             with tmp_path.open("w", encoding="utf-8") as f:
-                for rel in keys:
-                    f.write(rel)
-                    f.write("\n")
+                f.write("\n".join(keys))
+                f.write("\n")
             
             # 원자적 교체 (Windows에서도 안전)
             if self.cache_file.exists():
@@ -508,99 +502,47 @@ class IndexService:
 
     # ------------- 빌드 -------------
     def _walk_and_collect(self) -> Tuple[List[str], List[str], int, int]:
-        """루트 전체를 스캔하여 정렬된 경로/파일명 리스트를 만든다."""
-        collected_entries: List[Tuple[str, str]] = []
-        base_root = str(self.root_dir.resolve())
+        """루트 전체를 os.walk로 스캔하여 경로/파일명 리스트를 만든다.
+
+        최적화:
+        - os.walk 사용 (scandir 멀티스레드보다 오버헤드 적음)
+        - Lock 제거 (단일 스레드)
+        - 문자열 변환 최소화
+        - 정렬 생략 (검색은 순서 무관)
+        """
+        base_root = str(self.root_dir.resolve()).replace("\\", "/")
+        base_root_len = len(base_root) + 1  # +1 for trailing /
         skip_dirs = {d for d in self.skip_dirs if d}
+        cache_names = {self.cache_file.name, self.lock_file.name}
 
-        task_queue: "queue.Queue[Optional[str]]" = queue.Queue()
-        seen_dirs: Set[str] = set()
-        stats_lock = Lock()
-        index_lock = Lock()
-        base_root_slash = base_root.replace("\\", "/")
-        base_root_len = len(base_root_slash)
+        keys: List[str] = []
+        names: List[str] = []
+        total_dirs = 0
 
-        def enqueue_dir(path: str) -> None:
-            nonlocal seen_dirs
-            with stats_lock:
-                if path not in seen_dirs:
-                    seen_dirs.add(path)
-                    task_queue.put(path)
+        for dirpath, dirnames, filenames in os.walk(base_root):
+            # skip_dirs 필터 (in-place 수정으로 하위 탐색 방지)
+            dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+            total_dirs += 1
 
-        def _flush_local(entries: List[Tuple[str, str]]) -> None:
-            if not entries:
-                return
-            with index_lock:
-                collected_entries.extend(entries)
-            entries.clear()
-
-        def worker() -> None:
-            local_buffer: List[Tuple[str, str]] = []
-            while True:
-                try:
-                    current_dir = task_queue.get()
-                except Exception:
-                    _flush_local(local_buffer)
-                    return
-                if current_dir is None:
-                    task_queue.task_done()
-                    _flush_local(local_buffer)
-                    return
-                try:
-                    with os.scandir(current_dir) as it:
-                        for entry in it:
-                            try:
-                                if entry.is_dir(follow_symlinks=False):
-                                    if entry.name in skip_dirs:
-                                        continue
-                                    enqueue_dir(str(entry.path))
-                                    continue
-                                if not entry.is_file(follow_symlinks=False):
-                                    continue
-                                entry_path = str(entry.path).replace("\\", "/")
-                                if entry_path.startswith(base_root_slash):
-                                    rel_path = entry_path[base_root_len:].lstrip("/")
-                                else:
-                                    rel_path = entry_path
-                                if rel_path in {self.cache_file.name, self.lock_file.name}:
-                                    continue
-                                name_lower = entry.name.lower()
-                                local_buffer.append((rel_path, name_lower))
-                                if len(local_buffer) >= 16384:
-                                    _flush_local(local_buffer)
-                            except Exception:
-                                continue
-                except Exception:
-                    pass
-                finally:
-                    task_queue.task_done()
-            _flush_local(local_buffer)
-
-        enqueue_dir(base_root)
-        workers = min(4, max(2, self.index_workers))
-        threads = [threading.Thread(target=worker, daemon=True) for _ in range(workers)]
-        for t in threads:
-            t.start()
-
-        task_queue.join()
-        for _ in threads:
-            task_queue.put(None)
-        for t in threads:
-            t.join(timeout=0.1)
-
-        total_dirs = len(seen_dirs)
-        sorted_entries = sorted(collected_entries, key=lambda item: item[0])
-        sorted_keys: List[str] = []
-        sorted_names: List[str] = []
-        last_key: Optional[str] = None
-        for rel_path, name_lower in sorted_entries:
-            if rel_path == last_key:
+            if not filenames:
                 continue
-            sorted_keys.append(rel_path)
-            # 파일명만 검색 대상으로 사용 (폴더명 제외)
-            sorted_names.append(name_lower)
-            last_key = rel_path
-        return sorted_keys, sorted_names, total_dirs, total_dirs
+
+            # 디렉토리 경로를 한번만 변환
+            dir_rel = dirpath.replace("\\", "/")
+            if len(dir_rel) > base_root_len:
+                dir_prefix = dir_rel[base_root_len:] + "/"
+            elif len(dir_rel) == base_root_len - 1:
+                dir_prefix = ""
+            else:
+                dir_prefix = ""
+
+            for fname in filenames:
+                if fname in cache_names:
+                    continue
+                keys.append(dir_prefix + fname)
+                names.append(fname.lower())
+
+        return keys, names, total_dirs, total_dirs
 
     async def build(self, force: bool = False, allow_background: bool = False) -> bool:
         """파일 인덱스 빌드. allow_background=True면 이미 빌드 중일 때 바로 반환."""
@@ -638,11 +580,6 @@ class IndexService:
                     None, self._walk_and_collect
                 )
                 with self._lock:
-                    self._file_index.clear()
-                    self._file_index.update(
-                        (k, {"name_lower": k.rsplit("/", 1)[-1].lower(), "path_lower": n})
-                        for k, n in zip(sorted_keys, sorted_names)
-                    )
                     self._keys.clear()
                     self._keys.extend(sorted_keys)
                     self._names.clear()
