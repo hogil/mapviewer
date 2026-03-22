@@ -577,7 +577,7 @@ class IndexService:
             _flush_local(local_buffer)
 
         enqueue_dir(base_root)
-        workers = max(4, self.index_workers)
+        workers = min(4, max(2, self.index_workers))
         threads = [threading.Thread(target=worker, daemon=True) for _ in range(workers)]
         for t in threads:
             t.start()
@@ -624,7 +624,10 @@ class IndexService:
 
             loop = asyncio.get_running_loop()
             self.building = True
-            self.ready = False
+            # 🔥 이전 캐시가 있으면 ready 유지 (빌드 중에도 검색 가능)
+            had_previous = bool(self._keys)
+            if not had_previous:
+                self.ready = False
             self.build_started_at = time.time()
             self.build_completed_at = 0.0
             
