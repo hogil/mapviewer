@@ -803,6 +803,39 @@ def _parse_lot_filter(raw: Optional[str]) -> List[str]:
             break
     return tokens
 
+def _parse_lot_wafer(raw: Optional[str]) -> List[Tuple[str, str]]:
+    """LOT:WAFER 쌍 파싱 (예: 'abc123:04,def456:08')"""
+    if not raw:
+        return []
+    pairs: List[Tuple[str, str]] = []
+    seen: Set[str] = set()
+    for part in re.split(r"[,\n\r\t;]+", raw):
+        part = part.strip().lower()
+        if not part:
+            continue
+        if ":" in part:
+            lot_raw, wafer_raw = part.split(":", 1)
+            lot = lot_raw.strip()
+            wafer = wafer_raw.strip()
+            # dot 접미사 제거
+            if "." in lot:
+                dot_idx = lot.index(".")
+                if dot_idx > 0:
+                    lot = lot[:dot_idx]
+            if "." in wafer:
+                dot_idx = wafer.index(".")
+                if dot_idx > 0:
+                    wafer = wafer[:dot_idx]
+            if lot and wafer:
+                key = f"{lot}:{wafer}"
+                if key not in seen:
+                    seen.add(key)
+                    pairs.append((lot, wafer))
+        if len(pairs) >= 100:
+            break
+    return pairs
+
+
 def _filter_existing_relpaths(candidates: List[str]) -> Tuple[List[str], int]:
     valid: List[str] = []
     missing = 0
@@ -7210,14 +7243,16 @@ async def search_files(q: str = Query("", description="파일명 검색(대소�
                        limit: int = Query(3000, ge=1, le=10000),
                        offset: int = Query(0, ge=0),
                        lot_multi: Optional[str] = Query(None, alias="lot_multi"),
+                       lot_wafer: Optional[str] = Query(None, description="LOT:WAFER 쌍 (쉼표 구분, 예: abc123:04,def456:08)"),
                        folder: Optional[str] = Query(None, description="검색할 폴더 경로 (ROOT_DIR 기준 상대경로, 하위폴더 포함)")):
     """
     파일 검색 API
-    
+
     - q: 검색어 (파일명 검색, AND/OR/NOT 논리 연산 지원)
     - limit: 최대 결과 수 (기본 3000, 최대 10000)
     - offset: 결과 오프셋 (페이지네이션용)
     - lot_multi: LOT 필터 (쉼표로 구분된 LOT 목록)
+    - lot_wafer: LOT:WAFER 쌍 필터 (쉼표로 구분, 예: abc123:04,def456:08)
     - folder: 검색 폴더 경로 (지정 시 해당 폴더와 모든 하위 폴더 검색, 미지정 시 전체 검색)
     """
     try:
@@ -7225,8 +7260,11 @@ async def search_files(q: str = Query("", description="파일명 검색(대소�
         THUMB_STAT_CACHE.clear()
         lot_filter_values = _parse_lot_filter(lot_multi)
         lot_filter = set(lot_filter_values) if lot_filter_values else set()
+        lot_wafer_pairs = _parse_lot_wafer(lot_wafer)
         if lot_multi:
             logger.info(f"LOT_MULTI 원본: {lot_multi}, 파싱 결과: {lot_filter_values}, 개수: {len(lot_filter_values)}")
+        if lot_wafer_pairs:
+            logger.info(f"LOT_WAFER 원본: {lot_wafer}, 파싱 결과: {lot_wafer_pairs}, 개수: {len(lot_wafer_pairs)}")
         
         # 🔥 folder 파라미터 처리
         # - folder가 None이면: current_folder 사용 (기존 동작)
@@ -7252,6 +7290,7 @@ async def search_files(q: str = Query("", description="파일명 검색(대소�
         result = await search_service.search(
             query=q or "",
             lot_filter=lot_filter,
+            lot_wafer_pairs=lot_wafer_pairs,
             limit=limit,
             offset=offset,
             current_folder=search_root,

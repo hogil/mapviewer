@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 33개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드를 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 36개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -1192,20 +1192,68 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 2. 이미지 5개 선택 → 그룹에 추가
 3. 그룹 내 이미지 수가 정확히 5개인지 확인 (선택한 것만)
 
-#### 12-4. Manual 입력
-1. **LOT 모드 Manual**: LOT ID 직접 입력 → 해당 LOT 검색 → 전체 이미지 등록
-2. **Wafer 모드 Manual**: LOT 입력 → 해당 LOT 내 Wafer 목록 드롭다운 표시
-   - 드롭다운에서 특정 Wafer 선택 → 해당 이미지만 등록
-   - (LOT 내 어떤 wafer가 있는지 확인 후 선택 등록 가능)
+#### 12-4. Manual 입력 — LOT 모드
+1. LOT ID 직접 입력 → 해당 LOT 검색 → 전체 이미지 등록
 
-#### 12-5. 이미지/그룹 삭제
+#### 12-5. Manual 입력 — Wafer 모드 (Noise 입력 + 토큰 필터 + Grid 보기)
+
+**목적**: Wafer 모드에서 noise 포함 입력 → dot 제거 파싱 → 토큰 정확매칭 → 현재 폴더 우선 검색 → 저장 → Grid 보기까지 전체 흐름 검증
+
+1. `palette_3k` 그리드 로드 상태에서 MY LOT → Wafer 탭 → 새 그룹 생성
+2. 다음 형식으로 `handleManualPaste` 호출 (noise 포함):
+   ```
+   wafer.J3 0001
+   wafer.J2 0005
+   wafer 0010
+   wafer.abc 0050
+   wafer 0100
+   ```
+3. **파싱 검증**: `manualRows` 확인
+   - 모든 행의 `lot` === `'wafer'` (`.J3`, `.J2`, `.abc` 제거됨)
+   - `wafer` 값 === `'0001'`, `'0005'`, `'0010'`, `'0050'`, `'0100'`
+   - **pass 기준**: dot 이후 noise가 모두 제거되고 LOT/Wafer가 정확히 분리됨
+
+4. **검색 결과 검증**: 각 행의 `searchResults.length > 0`
+   - preview 파일명이 `wafer_p3k_XXXX` 패턴 (현재 폴더 `palette_3k`에서 검색됨)
+   - **pass 기준**: 5개 행 모두 paths > 0, preview에 `p3k` 포함
+
+5. **저장** (`#my-lot-manual-submit` 클릭) → 성공 메시지 확인
+6. **전체 선택** (`#my-lot-select-all` 클릭) → 3개 이상 항목 선택됨
+7. **선택 Grid 보기** (`#my-lot-grid-view` 클릭):
+   - 그리드에 **입력한 wafer 이미지만** 표시 (LOT 전체 아님)
+   - `v.currentGridImages.length` === 입력한 행 수 (5개)
+   - 각 이미지 파일명에 `0001`, `0005`, `0010`, `0050`, `0100` 포함
+   - **pass 기준**: gridImages === 5, LOT 전체(3000장)가 아닌 해당 wafer만
+
+8. **테스트 그룹 삭제**: `DELETE /api/my-lot/group` → 200
+
+```javascript
+// 파싱 테스트 코드
+const modal = v.myLotModal;
+modal.handleManualPaste('wafer.J3 0001\nwafer.J2 0005\nwafer 0010', true);
+// 5초 대기 후
+modal.manualRows.forEach(r => {
+    assert(r.lot === 'wafer');           // noise 제거
+    assert(r.searchResults.length > 0);  // 검색 매칭
+    assert(r.path?.includes('p3k'));     // 현재 폴더 결과
+});
+// 저장 → 전체선택 → Grid 보기
+document.getElementById('my-lot-manual-submit').click();
+// 3초 대기 후
+document.getElementById('my-lot-select-all').click();
+document.getElementById('my-lot-grid-view').click();
+// 5초 대기 후
+assert(v.currentGridImages.length === 3);  // 입력한 wafer만
+```
+
+#### 12-6. 이미지/그룹 삭제
 1. 그룹 내 이미지 삭제 버튼 → 개별 이미지 제거 확인
 2. 그룹 삭제 → 목록에서 제거 확인
 
-#### 12-6. 모달 닫기
+#### 12-7. 모달 닫기
 1. 닫기 버튼 또는 `#my-lot-btn-top` 다시 클릭 → 모달 닫힘
 
-**pass 기준**: LOT/Wafer 모드 전환, 그룹 CRUD, Manual 입력(LOT검색/Wafer드롭다운), 이미지/그룹 삭제
+**pass 기준**: LOT/Wafer 모드 전환, 그룹 CRUD, Wafer Manual 입력(noise 제거 + 토큰 정확매칭 + 현재 폴더 우선 검색 + Grid 보기에서 해당 wafer만 표시), 이미지/그룹 삭제
 
 ---
 
@@ -1571,7 +1619,7 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 
 ### Phase 24: 다중검색 (Multi-Search) 모달
 
-**목적**: LOT 다중검색 모달의 입력/검증/적용/결과 확인
+**목적**: LOT 다중검색 모달의 입력/검증/적용/결과 확인. dot(.) 접미사 제거, LOT+WAFER 쌍 매칭, 이미지 무결성까지 검증.
 
 **평가 항목**:
 
@@ -1580,6 +1628,7 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 2. 모달 제목 "LOT 다중 검색" 표시
 3. textarea(`#multi-search-input`)가 비어있는지 확인
 4. 적용/취소 버튼 존재
+5. **모달 열면 일반 검색창(`#file-search`) 텍스트 초기화 확인**
 
 #### 24-2. LOT ID 입력 & 적용
 1. textarea에 여러 LOT ID 입력 (줄바꿈 구분):
@@ -1592,14 +1641,68 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 4. LOT ID가 없는 이미지는 필터링 확인
 
 #### 24-3. 검증 에러
-1. 빈 입력 상태에서 적용 → 에러 메시지(`#multi-search-error`) 표시
-2. 잘못된 형식 입력 시 에러 처리
+1. 빈 입력 상태에서 적용 → 에러 메시지(`#multi-search-error`) "LOT ID를 한 개 이상 입력하세요." 표시
+2. Escape 키로 모달 닫기 확인
 
 #### 24-4. 취소
 1. 취소 버튼(`#multi-search-cancel`) 클릭 → 모달 닫힘
 2. 그리드 상태 변경 없음
 
-**pass 기준**: 모달 열기→LOT 입력→적용(필터링)→에러 처리→취소
+#### 24-5. dot(.) 접미사 제거
+입력에 `.숫자` 또는 `.문자`가 포함되면 dot 이후를 제거하고 검색한다.
+**stripDotSuffix 규칙**: 각 공백 구분 토큰에서 첫 번째 `.` 이후 제거 (`.`으로 시작하면 유지).
+
+1. **일반 검색**: `wafer_palette_5mb.3` 입력 → `wafer_palette_5mb`로 검색 → 결과 있음
+2. **일반 검색 복합**: `wafer.1 palette.2` 입력 → `wafer palette`로 검색 → 결과 있음
+3. **다중검색**: `ABC123.1\nDEF456.2\nGHI789` → LOT 파싱: `[ABC123, DEF456, GHI789]`
+4. **다중검색 중복 제거**: `ABC123.1\nABC123.2` → 둘 다 `ABC123` → 중복 제거 → 1개 LOT
+5. **AND/OR/NOT + dot**: `palette.1 and 5mb.2` → `palette and 5mb` → 결과 있음
+6. **dot 시작 유지**: `.hidden` → `.hidden` (변환 안 함)
+7. 다양한 케이스 검증:
+   ```
+   ABC123.1 → ABC123
+   ABC123.1 09 → ABC123 09
+   LOT001.2 LOT002.3 → LOT001 LOT002
+   A.1 B.2 C → A B C
+   .hidden → .hidden (유지)
+   ```
+
+#### 24-6. LOT+WAFER 쌍 매칭 (공백 구분)
+파일명 형식: `LOT_BINTYPE_WAFER_TIMESTAMP.png` (LOT=index 0, WAFER=index 2)
+다중검색에서 `LOT WAFER` (공백 구분)를 입력하면 LOT과 WAFER를 동시에 매칭한다.
+
+1. **LOT+WAFER 입력**: `wafer 07` → LOT=`wafer`, WAFER=`07` → `wafer_*_07_*.png` 파일만 매칭
+2. **dot noise + WAFER**: `wafer.J3 07` → dot 제거 → `wafer 07` → LOT=`wafer`, WAFER=`07`
+3. **여러 LOT+WAFER 쌍**:
+   ```
+   wafer.J3 07
+   wafer.X1 01
+   ```
+   → LOT=`wafer` / WAFER=`07` + LOT=`wafer` / WAFER=`01` → batch_07 + batch_01 이미지 매칭
+4. **LOT only + LOT+WAFER 혼합**:
+   ```
+   GHI789
+   ABC123 04
+   ```
+   → `GHI789`는 LOT only (모든 WAFER), `ABC123 04`는 LOT+WAFER 쌍 매칭
+5. **서버 API 검증**: `lot_wafer=wafer:07` 파라미터 → `wafer_*_07_*.png`만 반환
+6. **결과 건수 비교**:
+   - `lot_wafer=wafer:07` (WAFER 지정) < `lot_multi=wafer` (전체) 확인
+   - `lot_wafer=wafer:01,wafer:07` = `lot_wafer=wafer:01` + `lot_wafer=wafer:07` 합산
+
+#### 24-7. 검색 결과 이미지 무결성
+1. 검색 후 그리드 첫 36개 이미지 `naturalWidth > 0 && complete === true` 확인
+2. X표시, 깨진 이미지, 이상한 맵 없어야 함
+3. 썸네일 크기 512×512 확인
+4. 서버 API 이미지 다운로드 vs 디스크 원본 MD5 해시 비교 → 100% 일치
+
+#### 24-8. Shift+Enter 줄바꿈
+1. textarea에서 Shift+Enter → 줄바꿈 삽입 (검색 실행 아님)
+2. Enter만 누르면 → 검색 실행
+
+**pass 기준**: 모달 열기→LOT 입력→적용(필터링)→에러 처리→취소→dot 접미사 제거→LOT+WAFER 쌍 매칭→이미지 무결성→Shift+Enter 줄바꿈
+
+**참고**: E2E 테스트 스크립트 `scripts/test_search_e2e.py` (22개 테스트)
 
 ---
 
@@ -2090,7 +2193,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | 21 | Page Manager (멀티탭) | pass/fail | 생성/전환/역할색상/닫기/키보드 |
 | 22 | Thumbnail Navigator | pass/fail | 표시/클릭/드래그/리사이즈/가상스크롤 |
 | 23 | Minimap | pass/fail | 표시/뷰포트/클릭/드래그 네비 |
-| 24 | 다중검색 모달 | pass/fail | LOT 입력/적용/에러/취소 |
+| 24 | 다중검색 모달 | pass/fail | LOT 입력/적용/에러/취소/dot제거/LOT+WAFER쌍/이미지무결성 |
 | 25 | 권한 관리 | pass/fail | 목록/필터/검색/테이블 |
 | 26 | 컨텍스트 메뉴 복사/다운로드 | pass/fail | 복사 3종, 다운로드, 닫기 |
 | 27 | 키보드 단축키 & 드래그 선택 | pass/fail | Ctrl+A, 드래그선택, 칩 다중선택 4종 |
@@ -2238,3 +2341,105 @@ const elapsed = Math.round(performance.now() - t0);
 - pyvips palette PNG 깨짐 발견 → PIL 유지 (palette 인덱스 보존)
 - JPEG Q=95, TJSAMP_444 동일 (1월 커밋 대비 검증)
 - 단일 이미지 Measure: Canvas에서 개인색 배경 + gradient 칩 + bold 숫자 텍스트
+
+---
+
+## Phase 36: 이미지 무결성 검증 (깨짐/X표시/이상 맵 확인)
+
+모든 이미지 경로에서 깨진 이미지, X표시, 잘못된 맵이 없는지 전방위 확인합니다.
+
+### 36-1. 그리드 썸네일 무결성
+
+1. `palette_3k` 로드 → 뷰포트 내 이미지 30개 대기 (최대 20초)
+2. 첫 30개 `img.complete && img.naturalWidth > 10 && !img.src.startsWith('data:')` 확인
+3. **pass 기준**: broken === 0
+
+```javascript
+const wraps = document.querySelectorAll('.grid-thumb-wrap');
+let ok = 0, broken = 0;
+for (let i = 0; i < Math.min(30, wraps.length); i++) {
+    const img = wraps[i].querySelector('img');
+    if (img && img.complete && img.naturalWidth > 10 && !img.src.startsWith('data:')) ok++;
+    else broken++;
+}
+// broken === 0
+```
+
+### 36-2. 그리드 끝 영역 썸네일
+
+1. 마지막 30개 (2971~3000번) 이미지도 동일 확인
+2. `wraps[i].querySelector('img')` 로드 후 `naturalWidth > 10`
+3. **pass 기준**: broken === 0
+
+### 36-3. 썸네일 API 샘플링 (10개)
+
+1. 인덱스 [0, 50, 200, 500, 999, 1500, 2000, 2500, 2800, 2999]의 이미지 경로로 직접 `new Image()` 로드
+2. URL: `/api/thumbnail?path=${encodeURIComponent(path)}&size=512`
+3. `img.onload` → `naturalWidth === 512 && naturalHeight === 512`
+4. **pass 기준**: 10개 전부 ok
+
+```javascript
+const indices = [0, 50, 200, 500, 999, 1500, 2000, 2500, 2800, 2999];
+const promises = indices.map(i => {
+    const path = v.currentGridImages[i];
+    const url = '/api/thumbnail?path=' + encodeURIComponent(path) + '&size=512';
+    return new Promise(resolve => {
+        const img = new Image();
+        img.onload = () => resolve({ ok: img.naturalWidth === 512 });
+        img.onerror = () => resolve({ ok: false });
+        img.src = url;
+    });
+});
+const results = await Promise.all(promises);
+// results.every(r => r.ok)
+```
+
+### 36-4. 원본 이미지 API HEAD 확인 (5개)
+
+1. 인덱스 [0, 500, 1500, 2500, 2999]의 원본 이미지 HEAD 요청
+2. `fetch('/api/image?path=...', { method: 'HEAD' })` → status 200, content-type image/png
+3. **pass 기준**: 5개 전부 200 + image/png
+
+### 36-5. 단일 이미지 순회 (5개)
+
+1. 인덱스 [0, 99, 499, 1499, 2999]의 이미지를 `v.loadImage()` 순차 로드
+2. 각 로드 후 `v.currentImage != null`, `canvas.width > 100 && canvas.height > 100`
+3. **pass 기준**: 5개 전부 ok
+
+### 36-6. 피라미드 레벨별 HEAD 확인
+
+1. 첫 번째 이미지의 0.2 / 0.5 / 0.7 / 1.0 레벨 HEAD 요청
+2. `/api/image?path=...&pyramid_level=${level}` → status 200
+3. **pass 기준**: 4 레벨 전부 200
+
+### 36-7. Measure 데이터 무결성
+
+1. 20개 이미지로 `/api/measure-composite-data` 호출 (mode='f', item_key 첫 번째 ftn_key)
+2. `data.chips` 배열의 모든 칩: `color.length === 3`, 각 값 0~255, `val != null`
+3. `data.canvas.width > 0 && data.canvas.height > 0`
+4. `data.chip_rects.length === data.chip_count`
+5. **pass 기준**: colorBad === 0, valNull === 0, canvas 유효
+
+```javascript
+const { chips, chip_rects, canvas } = data;
+let colorOk = 0, colorBad = 0, valOk = 0, valNull = 0;
+for (const c of chips) {
+    if (c.color?.length === 3 && c.color.every(v => v >= 0 && v <= 255)) colorOk++;
+    else colorBad++;
+    if (c.val != null && !isNaN(c.val)) valOk++;
+    else valNull++;
+}
+// colorBad === 0 && valNull === 0 && canvas.width > 0
+```
+
+### 결과 요약표
+
+| 항목 | 샘플 수 | pass 기준 |
+|------|---------|----------|
+| 그리드 첫 30개 | 30 | broken === 0 |
+| 그리드 끝 30개 | 30 | broken === 0 |
+| 썸네일 API | 10 | 전부 512x512 |
+| 원본 API HEAD | 5 | 전부 200 + image/png |
+| 단일 이미지 순회 | 5 | 전부 canvas 정상 |
+| 피라미드 4레벨 | 4 | 전부 200 |
+| Measure 칩 색상/값 | 384 | colorBad=0, valNull=0 |

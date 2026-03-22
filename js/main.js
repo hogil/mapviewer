@@ -7514,33 +7514,42 @@ class WaferMapViewer {
 
     parseMultiSearchInput() {
         if (!this.dom?.multiSearchInput) {
-            return { lots: [], error: 'LOT 입력 영역을 찾을 수 없습니다.' };
+            return { lots: [], lotWaferPairs: [], error: 'LOT 입력 영역을 찾을 수 없습니다.' };
         }
         const raw = this.dom.multiSearchInput.value || '';
         const segments = raw.split(/[\n\r,;\t/]+/);
         const seen = new Set();
         const lots = [];
+        const lotWaferPairs = [];
         const MAX = 100;
         for (const segment of segments) {
             const trimmed = segment.trim();
             if (!trimmed) continue;
-            // 다중 LOT 검색은 "_" 기준 왼쪽 토큰을 LOT ID로 사용
-            // dot(.) 접미사 제거: ABC123.1 → ABC123
-            const rawToken = trimmed.split('_', 1)[0].trim();
-            const lotToken = stripDotSuffix(rawToken);
-            if (!lotToken) continue;
-            const key = lotToken.toLowerCase();
+            // dot(.) 접미사 제거 후 공백 분리
+            const stripped = stripDotSuffix(trimmed);
+            const words = stripped.split(/\s+/).filter(Boolean);
+            // 첫 번째 단어에서 "_" 기준 왼쪽 = LOT ID
+            const lot = (words[0] || '').split('_', 1)[0].trim();
+            if (!lot) continue;
+            // 두 번째 단어 = WAFER ID (있으면)
+            const wafer = words.length >= 2 ? words[words.length - 1].trim() : '';
+
+            const key = wafer ? `${lot}:${wafer}`.toLowerCase() : lot.toLowerCase();
             if (seen.has(key)) continue;
             seen.add(key);
-            if (lots.length >= MAX) {
-                return { lots: [], error: `LOT는 최대 ${MAX}개까지 입력할 수 있습니다. (현재 ${seen.size}개)` };
+            if (lots.length + lotWaferPairs.length >= MAX) {
+                return { lots: [], lotWaferPairs: [], error: `항목은 최대 ${MAX}개까지 입력할 수 있습니다. (현재 ${seen.size}개)` };
             }
-            lots.push(lotToken);
+            if (wafer) {
+                lotWaferPairs.push({ lot, wafer });
+            } else {
+                lots.push(lot);
+            }
         }
-        if (!lots.length) {
-            return { lots: [], error: 'LOT ID를 한 개 이상 입력하세요.' };
+        if (!lots.length && !lotWaferPairs.length) {
+            return { lots: [], lotWaferPairs: [], error: 'LOT ID를 한 개 이상 입력하세요.' };
         }
-        return { lots };
+        return { lots, lotWaferPairs };
     }
 
     async handleMultiSearchApply() {
@@ -7549,11 +7558,11 @@ class WaferMapViewer {
             this.setMultiSearchError(parsed.error);
             return;
         }
-        const lotList = parsed.lots;
         this.setMultiSearchError('');
         try {
             const success = await this.performSearch({
-                multiLotList: [...lotList],
+                multiLotList: [...(parsed.lots || [])],
+                multiLotWaferPairs: [...(parsed.lotWaferPairs || [])],
                 suppressAlerts: true
             });
             // 🔥 검색 성공 시 텍스트 초기화
@@ -9612,14 +9621,17 @@ class WaferMapViewer {
 
     async performSearch(options = {}) {
         try {
-            const { multiLotList = [], suppressAlerts = false } = options;
+            const { multiLotList = [], multiLotWaferPairs = [], suppressAlerts = false } = options;
             // 🔥 멀티검색일 때는 일반 검색창 텍스트 무시
             const normalizedLots = this.normalizeLotPayload(multiLotList || []);
-            const isMultiSearch = normalizedLots.length > 0;
+            const normalizedPairs = (multiLotWaferPairs || [])
+                .map(p => ({ lot: (p.lot || '').trim().toLowerCase(), wafer: (p.wafer || '').trim().toLowerCase() }))
+                .filter(p => p.lot && p.wafer);
+            const isMultiSearch = normalizedLots.length > 0 || normalizedPairs.length > 0;
             const rawFileQuery = isMultiSearch ? '' : (this.dom.fileSearch?.value?.trim() || '');
             const fileQuery = stripDotSuffix(rawFileQuery);
 
-            if (!fileQuery && normalizedLots.length === 0) {
+            if (!fileQuery && normalizedLots.length === 0 && normalizedPairs.length === 0) {
                 if (!suppressAlerts) {
                     alert('파일명을 입력하거나 LOT 다중검색을 설정해주세요.');
                 }
@@ -9684,8 +9696,13 @@ class WaferMapViewer {
                 // 🔥 여러 LOT를 쉼표로 구분하여 전달
                 const lotMultiValue = normalizedLots.join(',');
                 console.log(`[SEARCH] LOT 목록 전달: ${normalizedLots.length}개 -`, normalizedLots);
-                console.log(`[SEARCH] lot_multi 파라미터 값:`, lotMultiValue);
                 searchParams.set('lot_multi', lotMultiValue);
+            }
+            if (normalizedPairs.length) {
+                // 🔥 LOT:WAFER 쌍 전달 (예: abc123:04,def456:08)
+                const lotWaferValue = normalizedPairs.map(p => `${p.lot}:${p.wafer}`).join(',');
+                console.log(`[SEARCH] LOT:WAFER 쌍 전달: ${normalizedPairs.length}개 -`, normalizedPairs);
+                searchParams.set('lot_wafer', lotWaferValue);
             }
             const searchUrl = `/api/search?${searchParams.toString()}`;
             console.log(`[SEARCH] 검색 URL:`, searchUrl);

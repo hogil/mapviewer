@@ -76,6 +76,7 @@ class SearchService:
         *,
         query: str,
         lot_filter: Optional[Set[str]],
+        lot_wafer_pairs: Optional[List[tuple]] = None,
         limit: int,
         offset: int,
         current_folder: Path,
@@ -83,6 +84,7 @@ class SearchService:
         total_start = time.perf_counter()
         timings: Dict[str, Any] = {}
         lot_filter = lot_filter or set()
+        lot_wafer_pairs = lot_wafer_pairs or []
         query_raw = (query or "").strip().lower()
 
         # 공백/콤마/세미콜론으로 구분된 다중 키워드 지원 (논리 연산자가 없을 때 OR 검색)
@@ -91,7 +93,7 @@ class SearchService:
         if not is_complex_query(query_raw) and len(tokens) > 1:
             query_for_search = " or ".join(tokens)
 
-        if not query_for_search and not lot_filter:
+        if not query_for_search and not lot_filter and not lot_wafer_pairs:
             timings["total_ms"] = round((time.perf_counter() - total_start) * 1000, 3)
             timings["early_exit"] = True
             timings["lot_filter_count"] = 0
@@ -158,7 +160,10 @@ class SearchService:
                     )
                     search_mode = "query+lot"
                 elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
-                index_hits = self._apply_lot_filter(index_hits, lot_filter)
+                if lot_wafer_pairs:
+                    index_hits = self._apply_lot_wafer_filter(index_hits, lot_wafer_pairs, lot_filter)
+                else:
+                    index_hits = self._apply_lot_filter(index_hits, lot_filter)
             elif query_for_search:
                 complex_query = is_complex_query(query_for_search)
                 if complex_query:
@@ -193,11 +198,15 @@ class SearchService:
                     )
                     search_mode = "simple"
                 elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
-            elif lot_filter:
+            elif lot_filter or lot_wafer_pairs:
                 search_start = time.perf_counter()
-                index_hits = self._lot_only_scan(keys_slice, names_slice, lot_filter)
+                if lot_wafer_pairs:
+                    index_hits = self._lot_wafer_scan(keys_slice, names_slice, lot_wafer_pairs, lot_filter)
+                    search_mode = "lot-wafer"
+                else:
+                    index_hits = self._lot_only_scan(keys_slice, names_slice, lot_filter)
+                    search_mode = "lot-only"
                 elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
-                search_mode = "lot-only"
             else:
                 index_hits = []
                 search_mode = "none"
@@ -279,6 +288,62 @@ class SearchService:
             lot_token = name_lower.split("_", 1)[0]
             # 토큰이 연결 문자열에 포함되는지 확인
             if f"/{lot_token}/" in lot_joined:
+                filtered.append(rel)
+        return filtered
+
+    def _lot_wafer_scan(self, keys_slice: List[str], names_slice: List[str],
+                        lot_wafer_pairs: List[tuple], lot_filter: Set[str]) -> List[str]:
+        """LOT+WAFER 쌍 매칭 스캔
+
+        파일명 형식: LOT_BINTYPE_WAFER_TIMESTAMP.png
+        - lot_wafer_pairs: [(lot, wafer), ...] → LOT(index 0) + WAFER(index 2) 모두 매칭
+        - lot_filter: LOT만 매칭 (WAFER 무관)
+        """
+        # LOT:WAFER 쌍을 dict로 변환 (LOT → set of WAFERs)
+        pair_map: Dict[str, set] = {}
+        for lot, wafer in lot_wafer_pairs:
+            pair_map.setdefault(lot, set()).add(wafer)
+
+        # LOT-only 필터 (lot_wafer_pairs에 없는 LOT)
+        lot_only = lot_filter - set(pair_map.keys()) if lot_filter else set()
+        lot_only_joined = "/" + "/".join(lot_only) + "/" if lot_only else ""
+
+        hits: List[str] = []
+        for rel, name_lower in zip(keys_slice, names_slice):
+            parts = name_lower.split("_")
+            file_lot = parts[0] if parts else ""
+            file_wafer = parts[2] if len(parts) > 2 else ""
+
+            # LOT+WAFER 쌍 매칭
+            if file_lot in pair_map and file_wafer in pair_map[file_lot]:
+                hits.append(rel)
+                continue
+            # LOT-only 매칭 (폴백)
+            if lot_only_joined and f"/{file_lot}/" in lot_only_joined:
+                hits.append(rel)
+        return hits
+
+    def _apply_lot_wafer_filter(self, hits: List[str], lot_wafer_pairs: List[tuple],
+                                lot_filter: Set[str]) -> List[str]:
+        """검색 결과에 LOT+WAFER 필터 적용"""
+        pair_map: Dict[str, set] = {}
+        for lot, wafer in lot_wafer_pairs:
+            pair_map.setdefault(lot, set()).add(wafer)
+
+        lot_only = lot_filter - set(pair_map.keys()) if lot_filter else set()
+        lot_only_joined = "/" + "/".join(lot_only) + "/" if lot_only else ""
+
+        filtered: List[str] = []
+        for rel in hits:
+            name_lower = Path(rel).name.lower()
+            parts = name_lower.split("_")
+            file_lot = parts[0] if parts else ""
+            file_wafer = parts[2] if len(parts) > 2 else ""
+
+            if file_lot in pair_map and file_wafer in pair_map[file_lot]:
+                filtered.append(rel)
+                continue
+            if lot_only_joined and f"/{file_lot}/" in lot_only_joined:
                 filtered.append(rel)
         return filtered
 
