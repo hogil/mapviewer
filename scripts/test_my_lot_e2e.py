@@ -156,36 +156,44 @@ async def run_tests():
             else:
                 fail("Grid 이미지 로드", f"loaded={grid['loaded']}, total={grid['total']}")
 
-            # ── 7. Measure ──
-            print("\n=== 7. Measure ===")
+            # ── 7. Measure (mea0 탭 생성) ──
+            print("\n=== 7. Measure → mea0 탭 생성 ===")
             measure = await page.evaluate("""async () => {
-                document.getElementById('grid-select-all')?.click();
-                await new Promise(r => setTimeout(r, 500));
-                [...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Measure')?.click();
-                await new Promise(r => setTimeout(r, 3000));
-                const cbs = [...document.querySelectorAll('input[type="checkbox"]')]
-                    .filter(cb => cb.offsetParent !== null && cb.parentElement?.textContent?.includes('FBT'));
-                if (cbs.length === 0) return { fbtCount: 0 };
-                cbs[0].checked = true;
-                cbs[0].dispatchEvent(new Event('change', { bubbles: true }));
-                await new Promise(r => setTimeout(r, 300));
-                [...document.querySelectorAll('button')].find(b => b.textContent.trim() === '적용')?.click();
-                await new Promise(r => setTimeout(r, 10000));
+                const v = window.waferMapViewer || window.viewer;
+                // 5개 선택
+                v.gridSelectedIdxs = [0,1,2,3,4];
+                v.gridSelectedSet = new Set([0,1,2,3,4]);
+                // FBT0009 설정 후 _openMeasureTab 호출
+                v._measureCheckedItems = [{type: 'f', key: '9', label: 'FBT0009'}];
+                v._openMeasureTab();
+                await new Promise(r => setTimeout(r, 15000));
+                const tabs = [...document.querySelectorAll('#page-tabs button')].map(b => b.textContent.trim());
                 const imgs = document.querySelectorAll('#image-grid .grid-thumb-img');
                 let loaded = 0;
                 imgs.forEach(i => { if (i.complete && i.naturalWidth > 0) loaded++; });
-                return { fbtCount: cbs.length, loaded };
+                return { tabs, hasMea: tabs.some(t => t.includes('mea')), loaded };
             }""")
-            if measure["fbtCount"] > 0 and measure["loaded"] > 0:
-                ok(f"Measure 적용 (FBT {measure['fbtCount']}개, loaded={measure['loaded']})")
+            if measure["hasMea"] and measure["loaded"] > 0:
+                ok(f"Measure mea0 탭 생성 (loaded={measure['loaded']}, tabs={measure['tabs']})")
             else:
-                fail("Measure 적용", json.dumps(measure))
+                fail("Measure mea0 탭 생성", json.dumps(measure))
 
             # ── 8. Composite ──
             print("\n=== 8. Composite ===")
             composite = await page.evaluate("""async () => {
-                document.getElementById('grid-select-all')?.click();
-                await new Promise(r => setTimeout(r, 500));
+                const v = window.waferMapViewer || window.viewer;
+                // mylot0 탭으로 돌아가기
+                const tabBtns = document.querySelectorAll('#page-tabs button');
+                for (const b of tabBtns) {
+                    if (b.textContent.includes('mylot0') && !b.textContent.includes('mea') && !b.textContent.includes('com')) {
+                        b.click(); break;
+                    }
+                }
+                await new Promise(r => setTimeout(r, 3000));
+                // 전체 선택
+                const total = v.currentGridImages?.length || 0;
+                v.gridSelectedIdxs = Array.from({length: total}, (_, i) => i);
+                v.gridSelectedSet = new Set(v.gridSelectedIdxs);
                 [...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Composite')?.click();
                 await new Promise(r => setTimeout(r, 2000));
                 const cbs = document.querySelectorAll('input[type="checkbox"]');
