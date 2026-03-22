@@ -7524,18 +7524,15 @@ class WaferMapViewer {
         for (const segment of segments) {
             const trimmed = segment.trim();
             if (!trimmed) continue;
-            // 1. _ split → 맨앞 토큰
-            // 2. 공백/탭 split → 맨앞 토큰
-            // 3. dot 접미사 제거
             const lotToken = stripDotSuffix(trimmed.split('_', 1)[0].split(/\s+/)[0].trim());
             if (!lotToken) continue;
             const key = lotToken.toLowerCase();
             if (seen.has(key)) continue;
             seen.add(key);
-            if (lots.length >= MAX) {
-                return { lots: [], error: `LOT는 최대 ${MAX}개까지 입력할 수 있습니다. (현재 ${seen.size}개)` };
-            }
             lots.push(lotToken);
+        }
+        if (lots.length > MAX) {
+            return { lots: [], error: `LOT는 최대 ${MAX}개까지 입력할 수 있습니다. (현재 ${lots.length}개)` };
         }
         if (!lots.length) {
             return { lots: [], error: 'LOT ID를 한 개 이상 입력하세요.' };
