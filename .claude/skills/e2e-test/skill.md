@@ -1667,28 +1667,25 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
    .hidden → .hidden (유지)
    ```
 
-#### 24-6. LOT+WAFER 쌍 매칭 (공백 구분)
-파일명 형식: `LOT_BINTYPE_WAFER_TIMESTAMP.png` (LOT=index 0, WAFER=index 2)
-다중검색에서 `LOT WAFER` (공백 구분)를 입력하면 LOT과 WAFER를 동시에 매칭한다.
+#### 24-6. 대량 noise 입력 LOT 추출 (100개 초과)
+다중검색에 100줄 이상 다양한 noise 입력 시 LOT만 정확히 추출되어 빠르게 검색되는지 확인.
+**파싱 규칙**: `_ split → 맨앞`, `공백/탭 split → 맨앞`, `dot 제거`, `중복제거`.
 
-1. **LOT+WAFER 입력**: `wafer 07` → LOT=`wafer`, WAFER=`07` → `wafer_*_07_*.png` 파일만 매칭
-2. **dot noise + WAFER**: `wafer.J3 07` → dot 제거 → `wafer 07` → LOT=`wafer`, WAFER=`07`
-3. **여러 LOT+WAFER 쌍**:
+1. **110줄 noise 입력** (아래 패턴 혼합):
    ```
-   wafer.J3 07
-   wafer.X1 01
+   wafer                           → wafer
+   wafer_map_07_00001              → wafer (_ split)
+   wafer.J3                        → wafer (dot 제거)
+   wafer 07                        → wafer (공백 split)
+   wafer.J3_00P_04_timestamp       → wafer (dot+_ 혼합)
+   wafer\t99\textra                → wafer (탭 split)
+   WAFER.X1 99                     → WAFER (대소문자, 중복)
+   NONEXIST1.J3 04                 → NONEXIST1 (존재하지 않는 LOT)
    ```
-   → LOT=`wafer` / WAFER=`07` + LOT=`wafer` / WAFER=`01` → batch_07 + batch_01 이미지 매칭
-4. **LOT only + LOT+WAFER 혼합**:
-   ```
-   GHI789
-   ABC123 04
-   ```
-   → `GHI789`는 LOT only (모든 WAFER), `ABC123 04`는 LOT+WAFER 쌍 매칭
-5. **서버 API 검증**: `lot_wafer=wafer:07` 파라미터 → `wafer_*_07_*.png`만 반환
-6. **결과 건수 비교**:
-   - `lot_wafer=wafer:07` (WAFER 지정) < `lot_multi=wafer` (전체) 확인
-   - `lot_wafer=wafer:01,wafer:07` = `lot_wafer=wafer:01` + `lot_wafer=wafer:07` 합산
+2. **중복 제거**: 110줄 → 6개 유니크 LOT (wafer + 존재하지 않는 5개)
+3. **100개 초과 에러 없음**: 중복 제거 후 6개이므로 MAX 100 제한에 걸리지 않음
+4. **검색 속도**: LOT-only 빠른 경로 사용 (기존과 동일 성능)
+5. **그리드 결과**: 3000건, 이미지 60/60 정상 로드, broken=0
 
 #### 24-7. 검색 결과 이미지 무결성
 1. 검색 후 그리드 첫 36개 이미지 `naturalWidth > 0 && complete === true` 확인
@@ -2193,7 +2190,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | 21 | Page Manager (멀티탭) | pass/fail | 생성/전환/역할색상/닫기/키보드 |
 | 22 | Thumbnail Navigator | pass/fail | 표시/클릭/드래그/리사이즈/가상스크롤 |
 | 23 | Minimap | pass/fail | 표시/뷰포트/클릭/드래그 네비 |
-| 24 | 다중검색 모달 | pass/fail | LOT 입력/적용/에러/취소/dot제거/LOT+WAFER쌍/이미지무결성 |
+| 24 | 다중검색 모달 | pass/fail | LOT 입력/적용/에러/취소/dot제거/대량noise LOT추출/이미지무결성 |
 | 25 | 권한 관리 | pass/fail | 목록/필터/검색/테이블 |
 | 26 | 컨텍스트 메뉴 복사/다운로드 | pass/fail | 복사 3종, 다운로드, 닫기 |
 | 27 | 키보드 단축키 & 드래그 선택 | pass/fail | Ctrl+A, 드래그선택, 칩 다중선택 4종 |

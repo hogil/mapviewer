@@ -557,9 +557,9 @@ async def test_multi_search_dot_real_search(page):
             f"modal_closed={modal_closed}, count={count}" if not ok else f"결과 {count}건")
 
 
-async def test_multi_search_lot_wafer_pair(page):
-    """다중검색 - LOT WAFER 쌍 입력 (공백 구분)"""
-    print("  [20] 다중검색 - LOT WAFER 쌍")
+async def test_multi_search_noise_parsing(page):
+    """다중검색 - 대량 noise 입력 LOT 추출"""
+    print("  [20] 다중검색 - 대량 noise LOT 추출")
 
     result = await page.evaluate("""() => {
         function stripDotSuffix(text) {
@@ -571,96 +571,101 @@ async def test_multi_search_lot_wafer_pair(page):
             });
         }
 
-        // LOT WAFER 파싱 로직 시뮬레이션
-        const lines = ['ABC123 04', 'DEF456.J3 08', 'GHI789'];
-        const lots = [];
-        const pairs = [];
-        const seen = new Set();
-        for (const line of lines) {
-            const stripped = stripDotSuffix(line.trim());
-            const words = stripped.split(/\\s+/).filter(Boolean);
-            const lot = (words[0] || '').split('_', 1)[0].trim();
-            const wafer = words.length >= 2 ? words[words.length - 1].trim() : '';
-            if (!lot) continue;
-            const key = wafer ? (lot + ':' + wafer).toLowerCase() : lot.toLowerCase();
-            if (seen.has(key)) continue;
-            seen.add(key);
-            if (wafer) pairs.push({ lot, wafer });
-            else lots.push(lot);
-        }
-        return { lots, pairs };
-    }""")
-
-    expected_lots = ["GHI789"]
-    expected_pairs = [{"lot": "ABC123", "wafer": "04"}, {"lot": "DEF456", "wafer": "08"}]
-    lots_ok = result["lots"] == expected_lots
-    pairs_ok = result["pairs"] == expected_pairs
-    ok = lots_ok and pairs_ok
-    return ("다중검색 - LOT WAFER 쌍 파싱", ok,
-            f"lots={result['lots']}, pairs={result['pairs']}" if not ok else "")
-
-
-async def test_multi_search_lot_wafer_dot_noise(page):
-    """다중검색 - LOT.noise WAFER → dot 제거 후 LOT WAFER"""
-    print("  [21] 다중검색 - LOT.noise WAFER dot 제거")
-
-    result = await page.evaluate("""() => {
-        function stripDotSuffix(text) {
-            if (!text) return text;
-            return text.replace(/(\\S+)/g, (token) => {
-                const dotIdx = token.indexOf('.');
-                if (dotIdx > 0) return token.substring(0, dotIdx);
-                return token;
-            });
-        }
-
-        const cases = [
-            { input: 'ABC123.J3 04', expected_lot: 'ABC123', expected_wafer: '04' },
-            { input: 'DEF456.1 08', expected_lot: 'DEF456', expected_wafer: '08' },
-            { input: 'GHI789.XY 12.3', expected_lot: 'GHI789', expected_wafer: '12' },
+        // 다양한 noise 패턴
+        const lines = [
+            'ABC123',                        // 기본
+            'ABC123_00P_04_timestamp',        // _ split → ABC123
+            'ABC123.J3',                      // dot 제거 → ABC123
+            'ABC123 04',                      // 공백 split → ABC123
+            'ABC123.J3_00P_04',              // dot+_ 혼합 → ABC123
+            'ABC123\\t99\\textra',            // 탭 split → ABC123
+            'DEF456.1 08',                    // dot+공백 → DEF456
+            'GHI789_00C_11',                  // _ split → GHI789
+            'JKL012.XY',                      // dot 제거 → JKL012
         ];
 
-        const results = [];
-        for (const c of cases) {
-            const stripped = stripDotSuffix(c.input.trim());
-            const words = stripped.split(/\\s+/).filter(Boolean);
-            const lot = (words[0] || '').split('_', 1)[0].trim();
-            const wafer = words.length >= 2 ? words[words.length - 1].trim() : '';
-            results.push({
-                input: c.input,
-                lot, wafer,
-                lot_ok: lot === c.expected_lot,
-                wafer_ok: wafer === c.expected_wafer
-            });
+        const seen = new Set();
+        const lots = [];
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            const lotToken = stripDotSuffix(trimmed.split('_', 1)[0].split(/\\s+/)[0].trim());
+            if (!lotToken) continue;
+            const key = lotToken.toLowerCase();
+            if (!seen.has(key)) {
+                seen.add(key);
+                lots.push(lotToken);
+            }
         }
-        return results;
+        return { inputCount: lines.length, lots, uniqueCount: lots.length };
     }""")
 
-    all_pass = all(r["lot_ok"] and r["wafer_ok"] for r in result)
-    failed = [r["input"] for r in result if not r["lot_ok"] or not r["wafer_ok"]]
-    return ("다중검색 - dot noise LOT WAFER", all_pass,
-            f"실패: {failed}" if not all_pass else "")
+    expected = ["ABC123", "DEF456", "GHI789", "JKL012"]
+    ok = result["lots"] == expected and result["uniqueCount"] == 4
+    return ("다중검색 - noise LOT 추출", ok,
+            f"expected={expected}, got={result['lots']}" if not ok else f"{result['inputCount']}줄→{result['uniqueCount']}개 LOT")
 
 
-async def test_multi_search_lot_wafer_api(page):
-    """다중검색 - LOT:WAFER API 호출 확인"""
-    print("  [22] 다중검색 - LOT:WAFER API 검증")
+async def test_multi_search_100_plus_input(page):
+    """다중검색 - 100개 초과 입력 → 중복 제거로 통과"""
+    print("  [21] 다중검색 - 100개 초과 noise 입력")
+    multi_btn = page.locator('#multi-search-btn')
+    modal = page.locator('#multi-search-modal')
+    textarea = page.locator('#multi-search-input')
+    apply_btn = page.locator('#multi-search-apply')
 
-    result = await page.evaluate("""async () => {
-        // lot_wafer 파라미터로 API 호출
-        const res = await fetch('/api/search?q=&lot_wafer=wafer:01&limit=5');
-        const data = await res.json();
-        return {
-            total: data.total,
-            has_results: data.total > 0,
-            first: data.results ? data.results[0] : null,
-            success: data.success
-        };
+    await multi_btn.click()
+    await page.wait_for_timeout(500)
+
+    # 110줄 생성 (전부 동일 LOT + noise)
+    lines = await page.evaluate("""() => {
+        const lines = [];
+        for (let i = 0; i < 20; i++) lines.push('wafer');
+        for (let i = 0; i < 20; i++) lines.push('wafer_map_' + i);
+        for (let i = 0; i < 20; i++) lines.push('wafer.' + i);
+        for (let i = 0; i < 20; i++) lines.push('wafer ' + i);
+        for (let i = 0; i < 10; i++) lines.push('wafer.J' + i + '_00P');
+        for (let i = 0; i < 10; i++) lines.push('wafer\\t' + i);
+        lines.push('WAFER.X1 99', 'Wafer.abc', 'wAfEr_00C', 'WAFER', 'wafer.999');
+        lines.push('NONEXIST.J3 04', 'FAKE_LOT', 'MISSING.1', 'ABSENT 55', 'GONE.X1_00P');
+        return lines;
     }""")
 
-    ok = result["success"] and result["has_results"]
-    return ("다중검색 - LOT:WAFER API", ok,
-            f"total={result['total']}, first={result['first']}" if not ok else f"total={result['total']}")
+    await textarea.fill('\n'.join(lines))
+    await apply_btn.click()
+    await page.wait_for_timeout(3000)
+
+    modal_closed = not await modal.is_visible()
+    count = await page.locator('#image-grid .grid-thumb-wrap').count()
+    ok = modal_closed and count > 0
+
+    if not modal_closed:
+        cancel_btn = page.locator('#multi-search-cancel')
+        await cancel_btn.click()
+        await page.wait_for_timeout(300)
+
+    return ("다중검색 - 100+ noise 입력 검색", ok,
+            f"modal_closed={modal_closed}, count={count}" if not ok else f"결과 {count}건")
+
+
+async def test_multi_search_images_not_broken(page):
+    """다중검색 결과 이미지 깨짐/X표시 없음"""
+    print("  [22] 다중검색 - 이미지 무결성")
+    await page.wait_for_timeout(3000)
+
+    result = await page.evaluate("""() => {
+        const imgs = Array.from(document.querySelectorAll('#image-grid .grid-thumb-img')).slice(0, 60);
+        let loaded = 0, broken = 0;
+        imgs.forEach(img => {
+            if (img.complete && img.naturalWidth > 0) loaded++;
+            else broken++;
+        });
+        return { checked: imgs.length, loaded, broken };
+    }""")
+
+    ok = result["loaded"] > 0 and result["broken"] == 0
+    return ("다중검색 - 이미지 무결성", ok,
+            f"loaded={result['loaded']}, broken={result['broken']}")
 
 
 async def main():
@@ -708,9 +713,9 @@ async def main():
                 test_server_lot_dot_strip,
                 test_grid_images_not_broken,
                 test_multi_search_dot_real_search,
-                test_multi_search_lot_wafer_pair,
-                test_multi_search_lot_wafer_dot_noise,
-                test_multi_search_lot_wafer_api,
+                test_multi_search_noise_parsing,
+                test_multi_search_100_plus_input,
+                test_multi_search_images_not_broken,
             ]
 
             for test_fn in tests:
