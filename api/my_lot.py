@@ -914,6 +914,16 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path],
                     parts = stem.split('_')
                     lot_val = parts[0] if parts else stem
                     wafer_val = parts[2] if len(parts) > 2 else (parts[1] if len(parts) > 1 else "")
+                # 🔥 이미지 파일 복사: group_dir/LOT/filename.png
+                lot_folder = group_dir / lot_val
+                lot_folder.mkdir(parents=True, exist_ok=True)
+                dst_image = lot_folder / src_path.name
+                if not dst_image.exists():
+                    shutil.copy2(str(src_path), str(dst_image))
+
+                # 🔥 position 파일 복사
+                _copy_position_file(src_path, dst_image)
+
                 entry = {
                     "path": rel_path,
                     "lot": lot_val,
