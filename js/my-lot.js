@@ -3307,11 +3307,17 @@ export class MyLotModal {
             return;
         }
         
-        // 1개여도 그리드로 보여달라는 요구사항 반영
-        // 🔥 일반 폴더 이미지처럼 취급 (Measure/Composite 등 모든 기능 사용 가능)
+        // 일반 폴더 선택과 동일하게 처리 (Measure/Composite/컬럼조절 등 모든 기능 사용 가능)
         if (this.viewer?.showGrid) {
-            this.viewer.selectedImages = [...paths];
-            await this.viewer.showGrid(paths);
+            // currentFolderPath를 my-lot 그룹 경로로 설정
+            const groupPath = `my-lot/notsaml/${this.activeMode}/${this.activeGroup}`;
+            this.viewer.currentFolderPath = groupPath;
+            this.viewer.selectedImages = [];
+            this.viewer._lastGridScrollTop = null;
+            if (this.viewer.savedViewState) {
+                this.viewer.savedViewState.scrollTop = 0;
+            }
+            this.viewer.showGrid(paths);
             return;
         }
 
