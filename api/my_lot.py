@@ -178,8 +178,8 @@ def _parse_filename(path: str) -> Dict[str, str]:
     root = parts[0] if len(parts) > 0 else filename_without_ext
     step = parts[1] if len(parts) > 1 else ""
 
-    # 🔥 Wafer = parts[1] (LOT_WAFER_BIN 형식: LOT001_W05_00C → wafer=W05)
-    wafer = step  # parts[1]이 Wafer
+    # Wafer = parts[2] (LOT_STEP_WAFER 형식: ABC234_00P_02_... → wafer=02)
+    wafer = parts[2] if len(parts) > 2 else ""
 
     if not root:
         root = filename_without_ext
