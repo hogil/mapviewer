@@ -1186,7 +1186,7 @@ export class MyLotModal {
             } else {
                 params.set('lot_multi', uniqueLots.join(','));
             }
-            params.set('limit', '200000');
+            params.set('limit', '3000');
             params.set('folder', '');  // 전체 검색
 
             console.log(`[MyLotModal] 배치 검색: ${uniqueLots.length}개 LOT, mode=${this.activeMode}`);
