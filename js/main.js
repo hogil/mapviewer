@@ -8767,6 +8767,48 @@ class WaferMapViewer {
     }
 
     /**
+     * 드롭다운 리스트에 pinned section을 확보하고, 체크 시 항목을 상단 고정/해제하는 헬퍼
+     */
+    _ensurePinnedSection(list) {
+        let pinned = list.querySelector('.pinned-section');
+        if (!pinned) {
+            pinned = document.createElement('div');
+            pinned.className = 'pinned-section';
+            list.prepend(pinned);
+        }
+        return pinned;
+    }
+
+    _pinItem(list, item) {
+        const pinned = this._ensurePinnedSection(list);
+        if (!item.dataset.pinSection) {
+            // 원래 섹션 헤더 이름 저장 (이전 형제 중 가장 가까운 .failbit-section)
+            let prev = item.previousElementSibling;
+            while (prev && !prev.classList.contains('failbit-section')) prev = prev.previousElementSibling;
+            item.dataset.pinSection = prev ? prev.textContent : '';
+        }
+        pinned.appendChild(item);
+    }
+
+    _unpinItem(list, item) {
+        if (!item.parentElement?.classList.contains('pinned-section')) return;
+        const sectionName = item.dataset.pinSection || '';
+        delete item.dataset.pinSection;
+        // 원래 섹션 헤더 뒤 마지막 아이템 다음에 삽입
+        const sections = [...list.children].filter(el => el.classList.contains('failbit-section'));
+        let target = sections.find(s => s.textContent === sectionName);
+        if (target) {
+            let after = target;
+            while (after.nextElementSibling && after.nextElementSibling.classList.contains('failbit-item')) {
+                after = after.nextElementSibling;
+            }
+            after.after(item);
+        } else {
+            list.appendChild(item);
+        }
+    }
+
+    /**
      * Context menu 서브메뉴 빌드 (M.Comp용)
      */
     _buildMeaContextSubmenu() {
@@ -8805,6 +8847,9 @@ class WaferMapViewer {
         list.innerHTML = '';
         const padKey = (k) => String(k).replace(/^\d+$/, m => m.padStart(4, '0'));
         const checkedItems = [];
+
+        // 상단 고정 영역
+        this._ensurePinnedSection(list);
 
         // 적용 버튼
         const btnWrap = document.createElement('div');
@@ -8853,9 +8898,11 @@ class WaferMapViewer {
             cb.addEventListener('change', () => {
                 if (cb.checked) {
                     checkedItems.push(entry);
+                    this._pinItem(list, item);
                 } else {
                     const idx = checkedItems.findIndex(x => x.type === type && x.key === key);
                     if (idx >= 0) checkedItems.splice(idx, 1);
+                    this._unpinItem(list, item);
                 }
                 updateBtn();
             });
@@ -8982,6 +9029,9 @@ class WaferMapViewer {
         list.innerHTML = '';
         this._mcCheckedItems = [];  // [{mode, itemKey, binType, label}]
 
+        // 상단 고정 영역
+        this._ensurePinnedSection(list);
+
         const updateGenBtn = () => {
             const btn = list.parentElement?.querySelector('.mc-generate-btn');
             if (btn) {
@@ -9017,15 +9067,34 @@ class WaferMapViewer {
             cb.addEventListener('change', () => {
                 if (cb.checked) {
                     this._mcCheckedItems.push(entry);
+                    this._pinItem(list, item);
                 } else {
                     this._mcCheckedItems = this._mcCheckedItems.filter(
                         x => !(x.mode === mode && x.itemKey === itemKey && x.binType === binType)
                     );
+                    this._unpinItem(list, item);
                 }
                 updateGenBtn();
             });
             return item;
         };
+
+        // 초기화 항목
+        const resetItem = document.createElement('div');
+        resetItem.className = 'failbit-item';
+        resetItem.textContent = '초기화';
+        resetItem.dataset.label = '초기화 reset';
+        resetItem.style.cssText = 'color:#f88;cursor:pointer;';
+        resetItem.addEventListener('click', () => {
+            this._mcCheckedItems = [];
+            const pinned = list.querySelector('.pinned-section');
+            if (pinned) {
+                [...pinned.querySelectorAll('.failbit-item')].forEach(item => this._unpinItem(list, item));
+            }
+            list.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+            updateGenBtn();
+        });
+        list.appendChild(resetItem);
 
         // Composite Map (Grade heatmap) — 최상단
         const specialHeader = document.createElement('div');
@@ -23447,6 +23516,9 @@ class WaferMapViewer {
         if (!list) return;
         list.innerHTML = '';
 
+        // 상단 고정 영역
+        this._ensurePinnedSection(list);
+
         // 키를 4자리 제로패딩 (69 → '0069')
         const padKey = (k) => String(k).replace(/^\d+$/, m => m.padStart(4, '0'));
 
@@ -23497,10 +23569,12 @@ class WaferMapViewer {
             cb.addEventListener('change', () => {
                 if (cb.checked) {
                     this._measureCheckedItems.push(entry);
+                    this._pinItem(list, item);
                 } else {
                     this._measureCheckedItems = this._measureCheckedItems.filter(
                         x => !(x.type === type && x.key === key)
                     );
+                    this._unpinItem(list, item);
                 }
                 updateApplyBtn();
             });
@@ -23515,6 +23589,11 @@ class WaferMapViewer {
         resetItem.style.cssText = 'color:#f88;cursor:pointer;';
         resetItem.addEventListener('click', () => {
             this._measureCheckedItems = [];
+            // pinned 항목들을 원래 위치로 복귀
+            const pinned = list.querySelector('.pinned-section');
+            if (pinned) {
+                [...pinned.querySelectorAll('.failbit-item')].forEach(item => this._unpinItem(list, item));
+            }
             list.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
             updateApplyBtn();
         });
@@ -23567,6 +23646,12 @@ class WaferMapViewer {
                 list.appendChild(makeItem(`QVL${padKey(key)}`, 'q', key));
             });
         }
+
+        // 이미 체크된 항목을 pinned section으로 이동
+        list.querySelectorAll('.failbit-item input[type="checkbox"]:checked').forEach(cb => {
+            const item = cb.closest('.failbit-item');
+            if (item) this._pinItem(list, item);
+        });
 
         // --- 적용 버튼 ---
         const btnWrap = document.createElement('div');
