@@ -3308,7 +3308,9 @@ export class MyLotModal {
         }
         
         // 1개여도 그리드로 보여달라는 요구사항 반영
+        // 🔥 일반 폴더 이미지처럼 취급 (Measure/Composite 등 모든 기능 사용 가능)
         if (this.viewer?.showGrid) {
+            this.viewer.selectedImages = [...paths];
             await this.viewer.showGrid(paths);
             return;
         }

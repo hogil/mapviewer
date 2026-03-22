@@ -4494,7 +4494,7 @@ class WaferMapViewer {
 
                 document.documentElement.style.setProperty('--grid-cols', newCols.toString());
 
-                if (this.selectedImages && this.selectedImages.length > 1) {
+                if ((this.currentGridImages && this.currentGridImages.length > 0) || (this.selectedImages && this.selectedImages.length > 1)) {
                     this.scheduleShowGrid();
                 }
             } else if (e.shiftKey) {
@@ -5174,7 +5174,7 @@ class WaferMapViewer {
                 const gridColsInput = document.getElementById('grid-cols-input');
                 if (gridColsInput) gridColsInput.value = this.gridCols;
                 this._saveGridColsPref();
-                if (this.selectedImages && this.selectedImages.length > 1) {
+                if ((this.currentGridImages && this.currentGridImages.length > 0) || (this.selectedImages && this.selectedImages.length > 1)) {
                     this.scheduleShowGrid();
                 }
             });
@@ -5217,7 +5217,7 @@ class WaferMapViewer {
                 if (inp) inp.value = this.gridCols;
                 document.documentElement.style.setProperty('--grid-cols', this.gridCols);
                 this._saveGridColsPref();
-                if (this.selectedImages && this.selectedImages.length > 1) {
+                if ((this.currentGridImages && this.currentGridImages.length > 0) || (this.selectedImages && this.selectedImages.length > 1)) {
                     this.scheduleShowGrid();
                 }
             };
@@ -5231,7 +5231,7 @@ class WaferMapViewer {
                 if (inp) inp.value = this.gridCols;
                 document.documentElement.style.setProperty('--grid-cols', this.gridCols);
                 this._saveGridColsPref();
-                if (this.selectedImages && this.selectedImages.length > 1) {
+                if ((this.currentGridImages && this.currentGridImages.length > 0) || (this.selectedImages && this.selectedImages.length > 1)) {
                     this.scheduleShowGrid();
                 }
             };
@@ -22759,8 +22759,12 @@ class WaferMapViewer {
 
         setTimeout(() => {
             this._showGridScheduled = false;
-
-            this.showGrid(this.selectedImages);
+            const images = this.currentGridImages && this.currentGridImages.length > 0
+                ? this.currentGridImages
+                : this.selectedImages;
+            if (images && images.length > 0) {
+                this.showGrid(images);
+            }
         }, 0);
     }
 
