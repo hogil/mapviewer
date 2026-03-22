@@ -9675,7 +9675,7 @@ class WaferMapViewer {
             // 서버 검색 API 사용: 프런트는 결과만 표시
             const searchParams = new URLSearchParams();
             searchParams.set('q', fileQuery || '');
-            searchParams.set('limit', '3000');  // 🔥 검색 결과 최대 3000개
+            searchParams.set('limit', '5000');  // 🔥 검색 결과 최대 5000개
             if (normalizedLots.length) {
                 // 🔥 여러 LOT를 쉼표로 구분하여 전달
                 const lotMultiValue = normalizedLots.join(',');
@@ -21964,6 +21964,11 @@ class WaferMapViewer {
             }
 
             if (files.length > 0) {
+                // 🔥 폴더 선택 시 최대 5000개 제한
+                if (files.length > 5000) {
+                    console.warn(`[GRID] 폴더 이미지 ${files.length}개 → 5000개로 제한`);
+                    files = files.slice(0, 5000);
+                }
                 this.selectedImages = [];
                 // 🔥 새 폴더 로드 시 스크롤 위치 리셋 (이전 폴더 위치로 내려가는 버그 방지)
                 this._lastGridScrollTop = null;
