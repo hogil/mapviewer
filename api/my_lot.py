@@ -741,78 +741,81 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path],
     mode = _normalize_mode(mode)
     safe_group = _SAFE_SEGMENT.sub("_", (group or "").strip()) or "default"
 
-    success_count = 0
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    group_dir = _group_dir(login_segment, mode, safe_group)
+    group_dir.mkdir(parents=True, exist_ok=True)
+    images_root_str = str(IMAGES_ROOT.resolve())
+
+    # 1. 복사 작업 리스트 생성 (경량, 락 불필요)
+    copy_tasks = []  # [(src_path, dst_image), ...]
     duplicate_count = 0
-    error_count = 0
+
+    # LOT 모드: 필요한 LOT 서브폴더 미리 생성
+    if mode == "lot":
+        lot_dirs_created = set()
+
+    for src_path in image_paths:
+        if '_NO_IMAGE_' in str(src_path):
+            continue
+
+        # LOT/Wafer 매핑
+        try:
+            resolved = str(src_path.resolve())
+            rel_path = resolved[len(images_root_str):].lstrip('/\\').replace('\\', '/') if resolved.startswith(images_root_str) else src_path.as_posix()
+        except Exception:
+            rel_path = src_path.as_posix()
+
+        lw = (path_lot_wafer or {}).get(rel_path) or {}
+        if lw.get('lot'):
+            lot_val = lw['lot']
+        else:
+            parts = src_path.stem.split('_')
+            lot_val = parts[0] if parts else src_path.stem
+
+        # 대상 경로 결정
+        if mode == "wafer":
+            dst_image = group_dir / src_path.name
+        else:
+            lot_folder = group_dir / lot_val
+            if lot_val not in lot_dirs_created:
+                lot_folder.mkdir(parents=True, exist_ok=True)
+                lot_dirs_created.add(lot_val)
+            dst_image = lot_folder / src_path.name
+
+        if dst_image.exists():
+            duplicate_count += 1
+            continue
+
+        copy_tasks.append((src_path, dst_image))
+
+    # 2. 병렬 복사 (이미지 + position)
+    def _copy_one(task):
+        src, dst = task
+        try:
+            shutil.copy2(str(src), str(dst))
+            _copy_position_file(src, dst)
+            return None
+        except Exception as exc:
+            return {"path": str(src), "reason": str(exc)}
+
     errors = []
+    success_count = 0
+    max_workers = min(32, len(copy_tasks) or 1)
 
-    with _LOCK:
-        group_dir = _group_dir(login_segment, mode, safe_group)
-        group_dir.mkdir(parents=True, exist_ok=True)
-
-        import time
-        now_iso = __import__('datetime').datetime.utcnow().isoformat() + "Z"
-
-        images_root_str = str(IMAGES_ROOT.resolve())
-
-        for src_path in image_paths:
-            try:
-                path_str = str(src_path)
-                is_no_image = '_NO_IMAGE_' in path_str
-
-                # _NO_IMAGE_ 마커는 스킵 (실제 파일 없음)
-                if is_no_image:
-                    success_count += 1
-                    continue
-
-                # 상대 경로 계산 (IMAGES_ROOT 기준)
-                try:
-                    resolved = str(src_path.resolve())
-                    if resolved.startswith(images_root_str):
-                        rel_path = resolved[len(images_root_str):].lstrip('/\\').replace('\\', '/')
-                    else:
-                        rel_path = src_path.as_posix()
-                except Exception:
-                    rel_path = src_path.as_posix()
-
-                # 프론트가 보낸 LOT/Wafer 매핑 우선 사용, 없으면 파일명 파싱
-                lw = (path_lot_wafer or {}).get(rel_path) or {}
-                if lw.get('lot'):
-                    lot_val = lw['lot']
-                    wafer_val = lw.get('wafer', '')
-                else:
-                    stem = src_path.stem
-                    parts = stem.split('_')
-                    lot_val = parts[0] if parts else stem
-                    wafer_val = parts[2] if len(parts) > 2 else (parts[1] if len(parts) > 1 else "")
-
-                # 이미지 파일 복사
-                if mode == "wafer":
-                    # Wafer 모드: group_dir/filename.png (플랫)
-                    dst_image = group_dir / src_path.name
-                else:
-                    # LOT 모드: group_dir/LOT/filename.png
-                    lot_folder = group_dir / lot_val
-                    lot_folder.mkdir(parents=True, exist_ok=True)
-                    dst_image = lot_folder / src_path.name
-                if dst_image.exists():
-                    duplicate_count += 1
-                    continue
-                shutil.copy2(str(src_path), str(dst_image))
-
-                # position 파일 복사
-                _copy_position_file(src_path, dst_image)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_copy_one, t): t for t in copy_tasks}
+        for future in as_completed(futures):
+            result = future.result()
+            if result is None:
                 success_count += 1
-
-            except Exception as exc:
-                error_count += 1
-                errors.append({"path": str(src_path), "reason": str(exc)})
-
+            else:
+                errors.append(result)
 
     return {
         "success_count": success_count,
         "duplicate_count": duplicate_count,
-        "error_count": error_count,
+        "error_count": len(errors),
         "errors": errors,
         "login_id": login_segment,
         "mode": mode,

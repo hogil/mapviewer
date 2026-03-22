@@ -267,10 +267,10 @@ def _evaluate_logical_query(
                 if token == "and":
                     stack_str.append(left & right)
                 elif token == "or":
-                    stack.append(left | right)
+                    stack_str.append(left | right)
         else:
-            stack.append(term_hits.get(token, set()))
-    result_set = stack.pop() if stack else set()
+            stack_str.append(term_hits.get(token, set()))
+    result_set = stack_str.pop() if stack_str else set()
     ordered_hits: List[str] = []
     for rel in keys_slice:
         if rel in result_set:
