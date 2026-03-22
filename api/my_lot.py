@@ -903,11 +903,11 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path])
                     duplicate_count += 1
                     continue
 
-                # 빠른 파싱: LOT_WAFER_BIN.ext 형식 (예: LOT001_W05_00C)
+                # 빠른 파싱: LOT_제품_Wafer_TYPE_MODE.ext 형식 (예: wafer_p3k_0001_EE_Engineer)
                 stem = src_path.stem
                 parts = stem.split('_')
                 lot_val = parts[0] if parts else stem
-                wafer_val = parts[1] if len(parts) > 1 else ""
+                wafer_val = parts[2] if len(parts) > 2 else (parts[1] if len(parts) > 1 else "")
                 entry = {
                     "path": rel_path,
                     "lot": lot_val,

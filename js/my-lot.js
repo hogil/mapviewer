@@ -416,8 +416,8 @@ export class MyLotModal {
         let offsetAdjust = 0;
         lines.forEach((line) => {
             const parts = line.split(/\t|\s+/).map(p => p.trim()).filter(Boolean);
-            const lot = (parts[0] || '').replace(/\.\d*$/, '');
-            const wafer = parts.length > 1 ? (parts[1] || '').replace(/\.\d*$/, '') : '';
+            const lot = (parts[0] || '').replace(/\..+$/, '');
+            const wafer = parts.length > 1 ? (parts[1] || '').replace(/\..+$/, '') : '';
             if (!lot) return;
 
             // 중복 체크
@@ -1161,24 +1161,46 @@ export class MyLotModal {
         const startTime = performance.now();
 
         try {
-            // 2. 한번의 API 호출로 모든 LOT 검색
-            const searchParams = new URLSearchParams();
-            searchParams.set('lot_multi', uniqueLots.join(','));
-            searchParams.set('limit', '10000');
-            searchParams.set('folder', ''); // 전체 검색 (하위폴더 포함)
-            const searchUrl = `/api/search?${searchParams.toString()}`;
+            // 2. 현재 폴더에서 먼저 검색, 결과 없으면 전체 검색으로 확대
+            // 그리드 이미지 경로에서 폴더명 추출
+            const firstImg = this.viewer?.currentGridImages?.[0] || '';
+            const pathParts = firstImg.replace(/\\/g, '/').split('/');
+            const folderName = pathParts.length > 1 ? pathParts[pathParts.length - 2] : '';
 
-            const searchRes = await fetch(searchUrl);
-            if (!searchRes.ok) {
-                throw new Error(`검색 API 오류: ${searchRes.status}`);
+            let allResults = [];
+            // 2a. 현재 폴더에서 먼저 검색
+            if (folderName) {
+                const params1 = new URLSearchParams();
+                params1.set('lot_multi', uniqueLots.join(','));
+                params1.set('limit', '10000');
+                params1.set('folder', folderName);
+                const res1 = await fetch(`/api/search?${params1.toString()}`);
+                if (res1.ok) {
+                    const data1 = await res1.json();
+                    if (data1?.success && Array.isArray(data1.results)) {
+                        allResults = data1.results;
+                    }
+                }
+            }
+            // 2b. 현재 폴더에서 결과가 없으면 전체 검색
+            if (allResults.length === 0) {
+                const params2 = new URLSearchParams();
+                params2.set('lot_multi', uniqueLots.join(','));
+                params2.set('limit', '50000');
+                params2.set('folder', '');
+                const res2 = await fetch(`/api/search?${params2.toString()}`);
+                if (res2.ok) {
+                    const data2 = await res2.json();
+                    if (data2?.success && Array.isArray(data2.results)) {
+                        allResults = data2.results;
+                    }
+                }
+            }
+            if (allResults.length === 0) {
+                throw new Error('검색 결과가 없습니다.');
             }
 
-            const searchData = await searchRes.json();
-            if (!searchData || !searchData.success || !Array.isArray(searchData.results)) {
-                throw new Error('검색 응답 형식이 올바르지 않습니다.');
-            }
-
-            const allResults = searchData.results.filter(p => 
+            allResults = allResults.filter(p =>
                 p && !p.includes('_placeholders') && !p.includes('placeholder.png')
             );
 
@@ -1203,11 +1225,12 @@ export class MyLotModal {
                 
                 let paths = lotResultsMap.get(lotLower) || [];
                 
-                // Wafer 필터 적용
+                // Wafer 필터 적용: 파일명 토큰 중 정확 매칭 (부분 매칭 방지)
                 if (waferFilter && paths.length > 0) {
                     paths = paths.filter(p => {
                         const fn = p.split('/').pop().split('\\').pop().toLowerCase();
-                        return fn.includes(waferFilter);
+                        const tokens = fn.replace(/\.[^.]+$/, '').split('_');
+                        return tokens.some(t => t === waferFilter);
                     });
                 }
 
@@ -1273,7 +1296,8 @@ export class MyLotModal {
                 const waferLower = wafer.toLowerCase();
                 filteredPaths = validPaths.filter((p) => {
                     const fn = p.split('/').pop()?.split('\\').pop()?.toLowerCase() || '';
-                    return fn.includes(waferLower);
+                    const tokens = fn.replace(/\.[^.]+$/, '').split('_');
+                    return tokens.some(t => t === waferLower);
                 });
             }
 
@@ -3278,10 +3302,17 @@ export class MyLotModal {
 
             console.log(`[MyLotModal] LOT Grid 보기: ${entries.length}개 LOT, 총 ${paths.length}개 이미지 표시`);
         } else {
-            // Wafer 탭일 경우: 선택된 항목의 경로만 보여줌 (placeholder 제외)
-            paths = entries
-                .map(entry => entry.path)
-                .filter(p => p && !p.includes('_placeholders') && !p.includes('placeholder.png'));
+            // Wafer 탭일 경우: 선택된 항목의 all_paths (해당 wafer 이미지들) 사용
+            entries.forEach(entry => {
+                if (entry.all_paths && Array.isArray(entry.all_paths) && entry.all_paths.length > 0) {
+                    const validPaths = entry.all_paths.filter(p =>
+                        p && !p.includes('_placeholders') && !p.includes('placeholder.png')
+                    );
+                    paths.push(...validPaths);
+                } else if (entry.path && !entry.path.includes('_placeholders') && !entry.path.includes('placeholder.png')) {
+                    paths.push(entry.path);
+                }
+            });
         }
 
         if (!paths.length) {
