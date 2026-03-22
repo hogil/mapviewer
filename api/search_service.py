@@ -293,57 +293,63 @@ class SearchService:
 
     def _lot_wafer_scan(self, keys_slice: List[str], names_slice: List[str],
                         lot_wafer_pairs: List[tuple], lot_filter: Set[str]) -> List[str]:
-        """LOT+WAFER 쌍 매칭 스캔
+        """LOT+WAFER 쌍 매칭 스캔 (LOT 먼저 빠르게 필터 → WAFER는 통과 파일만 체크)
 
         파일명 형식: LOT_BINTYPE_WAFER_TIMESTAMP.png
         - lot_wafer_pairs: [(lot, wafer), ...] → LOT(index 0) + WAFER(index 2) 모두 매칭
         - lot_filter: LOT만 매칭 (WAFER 무관)
         """
-        # LOT:WAFER 쌍을 dict로 변환 (LOT → set of WAFERs)
         pair_map: Dict[str, set] = {}
         for lot, wafer in lot_wafer_pairs:
             pair_map.setdefault(lot, set()).add(wafer)
 
-        # LOT-only 필터 (lot_wafer_pairs에 없는 LOT)
         lot_only = lot_filter - set(pair_map.keys()) if lot_filter else set()
-        lot_only_joined = "/" + "/".join(lot_only) + "/" if lot_only else ""
+
+        # 🔥 속도 최적화: 모든 LOT을 합쳐서 LOT 프리필터용 문자열 생성
+        all_lots = set(pair_map.keys()) | lot_only
+        lot_joined = "/" + "/".join(all_lots) + "/"
 
         hits: List[str] = []
         for rel, name_lower in zip(keys_slice, names_slice):
-            parts = name_lower.split("_")
-            file_lot = parts[0] if parts else ""
-            file_wafer = parts[2] if len(parts) > 2 else ""
-
-            # LOT+WAFER 쌍 매칭
-            if file_lot in pair_map and file_wafer in pair_map[file_lot]:
-                hits.append(rel)
+            # 🔥 1단계: LOT 빠른 프리필터 (split("_", 1)로 최소 분할)
+            lot_token = name_lower.split("_", 1)[0]
+            if f"/{lot_token}/" not in lot_joined:
                 continue
-            # LOT-only 매칭 (폴백)
-            if lot_only_joined and f"/{file_lot}/" in lot_only_joined:
+
+            # 2단계: LOT 통과 → WAFER 체크 (필요한 파일만)
+            if lot_token in pair_map:
+                parts = name_lower.split("_", 3)
+                file_wafer = parts[2] if len(parts) > 2 else ""
+                if file_wafer in pair_map[lot_token]:
+                    hits.append(rel)
+            elif lot_token in lot_only:
                 hits.append(rel)
         return hits
 
     def _apply_lot_wafer_filter(self, hits: List[str], lot_wafer_pairs: List[tuple],
                                 lot_filter: Set[str]) -> List[str]:
-        """검색 결과에 LOT+WAFER 필터 적용"""
+        """검색 결과에 LOT+WAFER 필터 적용 (LOT 프리필터 → WAFER 체크)"""
         pair_map: Dict[str, set] = {}
         for lot, wafer in lot_wafer_pairs:
             pair_map.setdefault(lot, set()).add(wafer)
 
         lot_only = lot_filter - set(pair_map.keys()) if lot_filter else set()
-        lot_only_joined = "/" + "/".join(lot_only) + "/" if lot_only else ""
+        all_lots = set(pair_map.keys()) | lot_only
+        lot_joined = "/" + "/".join(all_lots) + "/"
 
         filtered: List[str] = []
         for rel in hits:
             name_lower = Path(rel).name.lower()
-            parts = name_lower.split("_")
-            file_lot = parts[0] if parts else ""
-            file_wafer = parts[2] if len(parts) > 2 else ""
-
-            if file_lot in pair_map and file_wafer in pair_map[file_lot]:
-                filtered.append(rel)
+            lot_token = name_lower.split("_", 1)[0]
+            if f"/{lot_token}/" not in lot_joined:
                 continue
-            if lot_only_joined and f"/{file_lot}/" in lot_only_joined:
+
+            if lot_token in pair_map:
+                parts = name_lower.split("_", 3)
+                file_wafer = parts[2] if len(parts) > 2 else ""
+                if file_wafer in pair_map[lot_token]:
+                    filtered.append(rel)
+            elif lot_token in lot_only:
                 filtered.append(rel)
         return filtered
 
