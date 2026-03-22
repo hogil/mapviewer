@@ -312,39 +312,40 @@ def _load_group_entries_legacy(login_id: str, mode: str, group: str) -> List[Dic
                 }
                 entries.append(entry)
         else:
-            # Wafer 모드: 직접 파일들 스캔
-            for file_path in group_dir.iterdir():
-                if not file_path.is_file():
-                    continue
-                if file_path.suffix.lower() not in SUPPORTED_EXTS:
-                    continue
+            # Wafer 모드: LOT 서브폴더 내 파일들 + 직접 파일들 스캔
+            def _scan_dir(scan_dir):
+                for file_path in scan_dir.iterdir():
+                    if file_path.is_dir():
+                        # LOT 서브폴더 재귀 스캔
+                        _scan_dir(file_path)
+                        continue
+                    if not file_path.is_file():
+                        continue
+                    if file_path.suffix.lower() not in SUPPORTED_EXTS:
+                        continue
 
-                # 파일명에서 정보 추출
-                parsed = _parse_filename(file_path.name)
+                    parsed = _parse_filename(file_path.name)
+                    try:
+                        rel_path = file_path.relative_to(IMAGES_ROOT).as_posix()
+                    except ValueError:
+                        rel_path = file_path.as_posix()
 
-                # 상대 경로 생성 (IMAGES_ROOT 기준)
-                try:
-                    rel_path = file_path.relative_to(IMAGES_ROOT).as_posix()
-                except ValueError:
-                    rel_path = file_path.as_posix()
+                    try:
+                        mtime = file_path.stat().st_mtime
+                        saved_at = datetime.fromtimestamp(mtime).strftime("%y%m%d_%H%M%S")
+                    except Exception:
+                        saved_at = datetime.now().strftime("%y%m%d_%H%M%S")
 
-                # 파일 생성 시간 (saved_at)
-                try:
-                    mtime = file_path.stat().st_mtime
-                    saved_at = datetime.fromtimestamp(mtime).strftime("%y%m%d_%H%M%S")
-                except Exception:
-                    saved_at = datetime.now().strftime("%y%m%d_%H%M%S")
-
-                entry = {
-                    "path": rel_path,
-                    "value": parsed["filename"],
-                    "filename": parsed["filename"],
-                    "root": parsed["root"],
-                    "step": parsed["step"],
-                    "wafer": parsed["wafer"],
-                    "saved_at": saved_at,
-                }
-                entries.append(entry)
+                    entries.append({
+                        "path": rel_path,
+                        "value": parsed["filename"],
+                        "filename": parsed["filename"],
+                        "root": parsed["root"],
+                        "step": parsed["step"],
+                        "wafer": parsed["wafer"],
+                        "saved_at": saved_at,
+                    })
+            _scan_dir(group_dir)
     except Exception:
         pass
 
