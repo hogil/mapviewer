@@ -68,22 +68,6 @@ async def run_tests():
 
             # ── 1. Wafer 모드 검색 속도 ──
             print("\n=== 1. Wafer 모드 검색 속도 ===")
-            data = await page.evaluate(f"""async () => {{
-                const v = window.waferMapViewer || window.viewer;
-                document.getElementById('my-lot-btn')?.click();
-                await new Promise(r => setTimeout(r, 1000));
-                document.querySelector('[data-my-lot-mode="wafer"]')?.click();
-                await new Promise(r => setTimeout(r, 500));
-                const op = window.prompt; window.prompt = () => '{TEST_GROUP}';
-                document.getElementById('my-lot-new-group-btn')?.click();
-                window.prompt = op;
-                await new Promise(r => setTimeout(r, 1500));
-                const m = v.myLotModal || v._myLotModal;
-                const t0 = performance.now();
-                await m.handleManualPaste('{TEST_LOT} {" ".join(TEST_WAFERS)}'.replace(/ /g, '\\n').replace(/{TEST_LOT}\\n/g, '{TEST_LOT} '), true);
-                return Math.round(performance.now() - t0);
-            }}""")
-            # 위 코드가 복잡하니 간단하게 재작성
             search_ms = await page.evaluate("""async () => {
                 const v = window.waferMapViewer || window.viewer;
                 document.getElementById('my-lot-btn')?.click();
@@ -248,6 +232,50 @@ async def run_tests():
                 ok(f"LOT 모드 중복 제거: 1행 (cnt={lot_result['firstCnt']})")
             else:
                 fail("LOT 모드", json.dumps(lot_result))
+
+            # ── 10. LOT 모드 저장 → 디스크 이미지 복사 ──
+            print("\n=== 10. LOT 모드 저장 → 디스크 복사 ===")
+            await page.evaluate("""async () => {
+                document.getElementById('my-lot-manual-submit')?.click();
+                await new Promise(r => setTimeout(r, 8000));
+            }""")
+            lot_group_dir = IMAGES_ROOT / "my-lot" / "notsaml" / "lot" / "__e2e_mylot_lot__"
+            lot_png_files = list(lot_group_dir.rglob("*.png")) if lot_group_dir.exists() else []
+            lot_entries_json = lot_group_dir / "entries.json"
+            if len(lot_png_files) > 0:
+                ok(f"LOT 모드 이미지 디스크 복사 ({len(lot_png_files)}개)")
+            else:
+                fail("LOT 모드 이미지 디스크 복사", "0개")
+            if not lot_entries_json.exists():
+                ok("LOT 모드 entries.json 미생성")
+            else:
+                fail("LOT 모드 entries.json 미생성", "존재함!")
+
+            # ── 11. noise 입력 처리 (중복/빈줄/탭/dot/공백) ──
+            print("\n=== 11. noise 입력 처리 ===")
+            noise_result = await page.evaluate("""async () => {
+                const v = window.waferMapViewer || window.viewer;
+                document.querySelector('[data-my-lot-mode="wafer"]')?.click();
+                await new Promise(r => setTimeout(r, 500));
+                const op = window.prompt; window.prompt = () => '__e2e_noise__';
+                document.getElementById('my-lot-new-group-btn')?.click();
+                window.prompt = op;
+                await new Promise(r => setTimeout(r, 1500));
+                const m = (v.myLotModal || v._myLotModal);
+                const paste = 'wafer 0001\\nwafer 0002\\nwafer 0001\\n\\n  wafer  0003  \\nwafer\\t0004\\nwafer 0005\\nwafer 0005\\nNOSUCHLOT 9999\\nfakeLOT.1 0001\\n   \\nwafer 0002\\nXYZABC 0001\\nwafer.1 0004';
+                await m.handleManualPaste(paste, true);
+                await new Promise(r => setTimeout(r, 3000));
+                return {
+                    rowCount: m.manualRows.length,
+                    withImages: m.manualRows.filter(r => (r.searchResults?.length || 0) > 0).length,
+                    withoutImages: m.manualRows.filter(r => (r.searchResults?.length || 0) === 0).length,
+                };
+            }""")
+            # 14줄 입력 → 중복/빈줄/dot 제거 → 8행 이하
+            if noise_result["rowCount"] <= 10 and noise_result["withImages"] >= 3:
+                ok(f"noise 처리: {noise_result['rowCount']}행 (이미지있음={noise_result['withImages']}, 없음={noise_result['withoutImages']})")
+            else:
+                fail("noise 처리", json.dumps(noise_result))
 
         except Exception as e:
             import traceback
