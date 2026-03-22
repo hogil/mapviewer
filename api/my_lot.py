@@ -480,14 +480,15 @@ def add_entry(login_id: str, mode: str, group: str, src_path: Path) -> Dict[str,
         group_dir = _group_dir(login_segment, mode, safe_group)
         group_dir.mkdir(parents=True, exist_ok=True)
 
-        # 디스크 파일 존재 여부로 중복 체크
-        lot_folder = group_dir / parsed["root"]
-        dst_file = lot_folder / src_path.name
+        # 이미지 복사
+        if mode == "wafer":
+            dst_file = group_dir / src_path.name
+        else:
+            lot_folder = group_dir / parsed["root"]
+            lot_folder.mkdir(parents=True, exist_ok=True)
+            dst_file = lot_folder / src_path.name
         if dst_file.exists():
             raise ValueError(f"이미 등록된 항목입니다: {src_path.name}")
-
-        # 이미지 복사
-        lot_folder.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(src_path), str(dst_file))
         _copy_position_file(src_path, dst_file)
 
@@ -785,10 +786,15 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path],
                     lot_val = parts[0] if parts else stem
                     wafer_val = parts[2] if len(parts) > 2 else (parts[1] if len(parts) > 1 else "")
 
-                # 이미지 파일 복사: group_dir/LOT/filename.png
-                lot_folder = group_dir / lot_val
-                lot_folder.mkdir(parents=True, exist_ok=True)
-                dst_image = lot_folder / src_path.name
+                # 이미지 파일 복사
+                if mode == "wafer":
+                    # Wafer 모드: group_dir/filename.png (플랫)
+                    dst_image = group_dir / src_path.name
+                else:
+                    # LOT 모드: group_dir/LOT/filename.png
+                    lot_folder = group_dir / lot_val
+                    lot_folder.mkdir(parents=True, exist_ok=True)
+                    dst_image = lot_folder / src_path.name
                 if dst_image.exists():
                     duplicate_count += 1
                     continue
