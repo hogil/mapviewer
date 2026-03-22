@@ -146,7 +146,30 @@ def _collect_term_hits(keys_slice: List[str], names_slice: List[str], tokens: Li
     if not unique_terms:
         return {}
 
-    # 🔥 단일 패스: 모든 용어를 한번에 체크 (501만 × N용어, 루프 1회)
+    # 🔥 토큰 인덱스가 있으면 O(1) 검색, 없으면 순차 fallback
+    # token_index는 IndexService에서 전달 (names_joined 파라미터 재활용)
+    if isinstance(names_joined, dict) and names_joined:
+        # names_joined를 token_index로 재활용
+        token_index = names_joined
+        term_hits: Dict[str, Set[str]] = {}
+        keys_set = set(range(len(keys_slice))) if len(keys_slice) == len(names_slice) else None
+        for term in unique_terms:
+            idx_list = token_index.get(term)
+            if idx_list is not None:
+                if keys_set is not None:
+                    term_hits[term] = {keys_slice[i] for i in idx_list if i < len(keys_slice)}
+                else:
+                    term_hits[term] = {keys_slice[i] for i in idx_list if i < len(keys_slice)}
+            else:
+                # 토큰 정확매칭 실패 → 부분매칭 fallback
+                hits: Set[str] = set()
+                for rel, name_lower in zip(keys_slice, names_slice):
+                    if term in name_lower:
+                        hits.add(rel)
+                term_hits[term] = hits
+        return term_hits
+
+    # fallback: 단일 패스 순차 스캔
     term_hits: Dict[str, Set[str]] = {t: set() for t in unique_terms}
     for rel, name_lower in zip(keys_slice, names_slice):
         for term in unique_terms:
@@ -296,8 +319,7 @@ class IndexService:
         self._names: List[str] = []
         self._lot_index: Dict[str, List[int]] = {}   # lot_token -> [indices]
         self._folder_index: Dict[str, List[int]] = {} # folder_name -> [indices]
-        self._names_joined: bytes = b""               # \n-joined names for fast bytes search
-        self._names_offsets: List[int] = []            # byte offset of each name start
+        self._token_index: Dict[str, List[int]] = {}    # token -> [indices] (파일명 _ split)
         self._lock = RLock()
         self._async_build_lock = asyncio.Lock()
         self._cache_loaded = False
@@ -633,10 +655,12 @@ class IndexService:
         return keys_ref[start_idx:end_idx], names_ref[start_idx:end_idx]
 
     def _build_lookup_indices(self) -> None:
-        """LOT별/폴더별 역인덱스 + bytes 캐시 빌드."""
+        """LOT별/폴더별/토큰별 역인덱스 빌드."""
+        from collections import defaultdict
         t0 = time.time()
         lot_idx: Dict[str, List[int]] = {}
         folder_idx: Dict[str, List[int]] = {}
+        token_idx: Dict[str, List[int]] = defaultdict(list)
         for i, (key, name) in enumerate(zip(self._keys, self._names)):
             lot = name.split("_", 1)[0]
             if lot not in lot_idx:
@@ -648,19 +672,17 @@ class IndexService:
                 if folder not in folder_idx:
                     folder_idx[folder] = []
                 folder_idx[folder].append(i)
+            # 토큰 인덱스: 확장자 제거 후 _ split
+            dot = name.rfind(".")
+            stem = name[:dot] if dot > 0 else name
+            for token in stem.split("_"):
+                token_idx[token].append(i)
         self._lot_index = lot_idx
         self._folder_index = folder_idx
-        # bytes 캐시: 검색용 (501만 파일명을 \n으로 합친 bytes)
-        joined = "\n".join(self._names)
-        self._names_joined = joined.encode("utf-8")
-        # 각 이름의 시작 오프셋 계산
-        offsets = [0]
-        for name in self._names[:-1]:
-            offsets.append(offsets[-1] + len(name.encode("utf-8")) + 1)  # +1 for \n
-        self._names_offsets = offsets
+        self._token_index = dict(token_idx)
         elapsed = time.time() - t0
-        self.logger.info("✅ [INDEX] Lookup indices built: %d LOTs, %d folders, %dMB names cache (%.2fs)",
-                         len(lot_idx), len(folder_idx), len(self._names_joined) // 1048576, elapsed)
+        self.logger.info("✅ [INDEX] Lookup indices built: %d LOTs, %d folders, %d tokens (%.2fs)",
+                         len(lot_idx), len(folder_idx), len(token_idx), elapsed)
 
     def lot_search(self, lot_filter: Set[str], folder: str = "") -> List[str]:
         """LOT 필터로 O(1) 검색. folder가 있으면 해당 폴더 내만."""
@@ -685,6 +707,32 @@ class IndexService:
         if not idx_list:
             return [], []
         return [self._keys[i] for i in idx_list], [self._names[i] for i in idx_list]
+
+    def token_search(self, terms: List[str], logic: str = "and") -> Set[int]:
+        """토큰 역인덱스로 O(1) 검색. logic='and'/'or'."""
+        if not terms:
+            return set()
+        sets = []
+        for term in terms:
+            idx_list = self._token_index.get(term)
+            if idx_list is not None:
+                sets.append(set(idx_list))
+            else:
+                if logic == "and":
+                    return set()  # AND에서 하나라도 없으면 빈 결과
+                sets.append(set())
+        if not sets:
+            return set()
+        if logic == "and":
+            result = sets[0]
+            for s in sets[1:]:
+                result &= s
+            return result
+        else:
+            result = set()
+            for s in sets:
+                result |= s
+            return result
 
     def keys_snapshot(self) -> List[str]:
         with self._lock:
