@@ -136,9 +136,22 @@ def _logical_to_postfix(tokens: List[str]) -> List[str]:
     return output
 
 
+def _token_contains_search(token_index: Dict[str, List[int]], term: str, keys_slice: List[str],
+                            constraint: Optional[Set[int]] = None) -> Set[int]:
+    """토큰 역인덱스에서 포함매칭. 항상 모든 토큰에서 term 포함 여부 확인."""
+    indices: Set[int] = set()
+    for token, idx_list in token_index.items():
+        if term in token:
+            if constraint is not None:
+                indices.update(i for i in idx_list if i in constraint)
+            else:
+                indices.update(idx_list)
+    return indices
+
+
 def _collect_term_hits(keys_slice: List[str], names_slice: List[str], tokens: List[str], max_workers: int,
                        names_joined: bytes = b"", names_offsets: List[int] = None) -> Dict[str, Set[str]]:
-    """각 용어별 히트 집합을 구성. bytes 캐시가 있으면 고속 검색."""
+    """각 용어별 히트 집합을 구성. 토큰 인덱스 사용 시 포함매칭 + 순차 축소."""
     unique_terms = [
         token for token in tokens if token and token not in _LOGICAL_OPERATORS and token not in ("(", ")")
     ]
@@ -146,36 +159,38 @@ def _collect_term_hits(keys_slice: List[str], names_slice: List[str], tokens: Li
     if not unique_terms:
         return {}
 
-    # 🔥 토큰 인덱스가 있으면 O(1) 검색, 없으면 순차 fallback
-    # token_index는 IndexService에서 전달 (names_joined 파라미터 재활용)
+    # 🔥 토큰 인덱스 사용: 포함매칭 + 순차 축소 (작은 결과 먼저)
     if isinstance(names_joined, dict) and names_joined:
-        # names_joined를 token_index로 재활용
         token_index = names_joined
-        term_hits: Dict[str, Set[str]] = {}
-        keys_set = set(range(len(keys_slice))) if len(keys_slice) == len(names_slice) else None
-        for term in unique_terms:
-            idx_list = token_index.get(term)
-            if idx_list is not None:
-                if keys_set is not None:
-                    term_hits[term] = {keys_slice[i] for i in idx_list if i < len(keys_slice)}
-                else:
-                    term_hits[term] = {keys_slice[i] for i in idx_list if i < len(keys_slice)}
-            else:
-                # 토큰 정확매칭 실패 → 부분매칭 fallback
-                hits: Set[str] = set()
-                for rel, name_lower in zip(keys_slice, names_slice):
-                    if term in name_lower:
-                        hits.add(rel)
-                term_hits[term] = hits
-        return term_hits
+        n = len(keys_slice)
+        term_hits: Dict[str, Set[int]] = {}
+
+        # 히트 수 예측: 정확매칭 있으면 그 크기, 없으면 큰 값
+        def _estimate(term: str) -> int:
+            exact = token_index.get(term)
+            if exact is not None:
+                return len(exact)
+            return n  # 포함매칭은 크기 모름 → 큰 값
+
+        # 히트 수 적은 용어부터 검색 (순차 축소)
+        sorted_terms = sorted(unique_terms, key=_estimate)
+
+        for term in sorted_terms:
+            term_hits[term] = _token_contains_search(token_index, term, keys_slice)
+
+        # key로 변환 (인덱스 → 경로)
+        result: Dict[str, Set[str]] = {}
+        for term, idx_set in term_hits.items():
+            result[term] = {keys_slice[i] for i in idx_set if i < n}
+        return result
 
     # fallback: 단일 패스 순차 스캔
-    term_hits: Dict[str, Set[str]] = {t: set() for t in unique_terms}
+    term_hits_str: Dict[str, Set[str]] = {t: set() for t in unique_terms}
     for rel, name_lower in zip(keys_slice, names_slice):
         for term in unique_terms:
             if term in name_lower:
-                term_hits[term].add(rel)
-    return term_hits
+                term_hits_str[term].add(rel)
+    return term_hits_str
 
 
 def _evaluate_logical_query(
@@ -184,24 +199,73 @@ def _evaluate_logical_query(
 ) -> List[str]:
     tokens = _tokenize_logical_query(query)
     postfix = _logical_to_postfix(tokens)
-    term_hits = _collect_term_hits(keys_slice, names_slice, tokens, max_workers,
-                                   names_joined=names_joined, names_offsets=names_offsets)
-    universe: Optional[Set[str]] = None
+
+    # 🔥 토큰 인덱스가 있으면 lazy 평가 (AND 시 왼쪽 결과로 오른쪽 범위 축소)
+    token_index = names_joined if isinstance(names_joined, dict) else None
+    n = len(keys_slice)
+
+    if token_index:
+        # 🔥 용어별 포함매칭 → postfix set 연산
+        # 히트 수 적은 용어 우선 검색 (정확매칭 크기로 예측)
+        unique_terms = [t for t in tokens if t and t not in _LOGICAL_OPERATORS and t not in ("(", ")")]
+        unique_terms = list(dict.fromkeys(unique_terms))
+
+        term_idx_hits: Dict[str, Set[int]] = {}
+        # 히트 수 적은 용어부터 검색
+        def _est(term: str) -> int:
+            e = token_index.get(term)
+            return len(e) if e is not None else n
+        sorted_terms = sorted(unique_terms, key=_est)
+
+        for term in sorted_terms:
+            term_idx_hits[term] = _token_contains_search(token_index, term, keys_slice)
+
+        universe: Optional[Set[int]] = None
+        if "not" in postfix:
+            universe = set(range(n))
+        stack: List[Set[int]] = []
+        for tok in postfix:
+            if tok in _LOGICAL_OPERATORS:
+                if tok == "not":
+                    operand = stack.pop() if stack else set()
+                    if universe is None:
+                        universe = set(range(n))
+                    stack.append(universe - operand)
+                elif tok == "and":
+                    right = stack.pop() if stack else set()
+                    left = stack.pop() if stack else set()
+                    stack.append(left & right)
+                elif tok == "or":
+                    right = stack.pop() if stack else set()
+                    left = stack.pop() if stack else set()
+                    stack.append(left | right)
+            else:
+                stack.append(term_idx_hits.get(tok, set()))
+
+        result_indices = stack.pop() if stack else set()
+        ordered = [keys_slice[i] for i in sorted(result_indices) if i < n]
+        if limit is not None:
+            return ordered[:limit]
+        return ordered
+
+    # fallback: 기존 방식
+    term_hits = _collect_term_hits(keys_slice, names_slice, tokens, max_workers)
+    universe_str: Optional[Set[str]] = None
     if "not" in postfix:
-        universe = set(keys_slice)
-    stack: List[Set[str]] = []
+        universe_str = set(keys_slice)
+    stack_str: List[Set[str]] = []
     for token in postfix:
         if token in _LOGICAL_OPERATORS:
             if token == "not":
-                operand = stack.pop() if stack else set()
-                if universe is None:
-                    universe = set(keys_slice)
-                stack.append(universe - operand)
+                operand = stack_str.pop() if stack_str else set()
+                if universe_str is None:
+                    universe_str = set(keys_slice)
+                stack_str.append(universe_str - operand)
             else:
-                right = stack.pop() if stack else set()
-                left = stack.pop() if stack else set()
+                right = stack_str.pop() if stack_str else set()
+                left = stack_str.pop() if stack_str else set()
                 if token == "and":
-                    stack.append(left & right)
+                    stack_str.append(left & right)
                 elif token == "or":
                     stack.append(left | right)
         else:

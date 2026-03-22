@@ -176,18 +176,19 @@ class SearchService:
                     effective_workers = self.search_workers
                     search_mode = "logical"
                 else:
-                    worker_chunks = max(1, self.search_workers)
-                    effective_workers = worker_chunks
-                    index_hits = await loop.run_in_executor(
-                        self.io_executor,
-                        search_index_slice_parallel,
-                        keys_slice,
-                        names_slice,
-                        query_for_search,
-                        None,
-                        worker_chunks,
-                    )
-                    search_mode = "simple"
+                    # 🔥 전체 검색(prefix 없음)이면 토큰 인덱스, 폴더 한정이면 순차(소규모)
+                    if not prefix and self.index_service._token_index:
+                        from .index_service import _token_contains_search
+                        hit_indices = _token_contains_search(
+                            self.index_service._token_index, query_for_search, self.index_service._keys)
+                        index_hits = [self.index_service._keys[i] for i in hit_indices
+                                      if i < len(self.index_service._keys)]
+                        search_mode = "simple-token"
+                    else:
+                        # 폴더 한정: keys_slice가 작으므로 순차 스캔 (빠름)
+                        index_hits = [k for k, n in zip(keys_slice, names_slice)
+                                      if query_for_search in n]
+                        search_mode = "simple"
                 elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
             elif lot_filter or lot_wafer_pairs:
                 search_start = time.perf_counter()
