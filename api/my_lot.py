@@ -277,10 +277,11 @@ def _load_group_entries(login_id: str, mode: str, group: str) -> List[Dict[str, 
                     "path": e.get("path", ""),
                     "value": e.get("filename", parsed["filename"]),
                     "filename": e.get("filename", parsed["filename"]),
-                    "root": parsed["root"],
+                    "root": e.get("lot") or parsed["root"],
                     "step": parsed["step"],
-                    "wafer": parsed["wafer"],
+                    "wafer": e.get("wafer") or parsed["wafer"],
                     "saved_at": e.get("added_at", ""),
+                    "all_paths": [e["path"]] if e.get("path") else [],
                 })
             entries.sort(key=lambda x: x.get("filename", ""))
             return entries
