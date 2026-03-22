@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 36개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 37개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -2483,3 +2483,80 @@ for (const c of chips) {
 | 단일 이미지 순회 | 5 | 전부 canvas 정상 |
 | 피라미드 4레벨 | 4 | 전부 200 |
 | Measure 칩 색상/값 | 384 | colorBad=0, valNull=0 |
+
+---
+
+## Phase 37: 인덱스 빌드 + 검색 벤치마크 (대용량)
+
+`benchmark_4m` 폴더(400만 더미 파일)를 포함한 대용량 환경에서 인덱스 빌드, 캐시 로드, 검색 성능을 측정합니다.
+
+> **전제**: `D:/project/data/wm-811k/benchmark_4m/` 에 400폴더 × 10000파일 = 400만 더미 파일이 존재해야 합니다.
+> 파일명 패턴: `lot_XXXX_step_YYYYY_WZZ_EE_Engineer.png`
+
+### 37-1. 더미 파일 존재 확인
+
+1. `benchmark_4m` 폴더 400개 확인
+2. 각 폴더 10000개 파일 확인 (샘플 3개 폴더)
+3. **pass 기준**: 400폴더, 각 10000파일
+
+### 37-2. 인덱스 빌드 (cold)
+
+1. 캐시 파일 삭제 (`.file_index_cache.txt`)
+2. 서버 시작 → 인덱스 빌드 완료 대기
+3. **측정**: 빌드 시간, 총 파일 수
+4. **pass 기준**: 빌드 < 10초 (로컬 SSD 기준), 파일 수 > 400만
+
+### 37-3. 빌드 중 서비스 유지 검증
+
+1. 서버 시작 직후 (인덱스 빌드 중) `palette_3k` 그리드 로드
+2. **pass 기준**: `v.currentGridImages.length === 3000`, 썸네일 30개 즉시 로드
+3. 빌드 중에도 `/api/files`, `/api/thumbnail` 정상 응답
+
+### 37-4. 캐시 로드 벤치마크
+
+1. 인덱스 빌드 완료 후 캐시 파일 크기 확인
+2. 캐시 로드 시간 측정
+3. **pass 기준**: 캐시 로드 < 5초
+
+### 37-5. 검색 벤치마크
+
+서버 재시작 + 인덱스 빌드 완료 후 실행:
+
+| 검색 모드 | 쿼리 | pass 기준 |
+|----------|------|----------|
+| 폴더 한정 | `q=ABC123&folder=palette_3k` | < 500ms, 결과 > 0 |
+| 전체 단순 | `q=lot_0001&folder=` | < 1초, 결과 > 0 |
+| LOT multi | `lot_multi=ABC123,DEF456&folder=palette_3k` | < 500ms |
+| AND 검색 | `q=lot_0050 and Engineer&folder=` | < 3초 |
+
+### 37-6. 다중검색 Noise 파싱 + 결과 검증
+
+1. 다중검색 모달에서 noise 포함 6개 LOT 입력:
+   ```
+   ABC123.J1 04
+   DEF456.2\t08
+   FEX482.abc W03
+   GHJ789 extra_junk
+   KHN931.X2\tW05.1
+   TMW067.99 0010
+   ```
+2. **파싱 검증**: 콘솔에서 `LOT 목록 전달: 6개 - abc123,def456,fex482,ghj789,khn931,tmw067` 확인
+3. **결과 검증**: `v.currentGridImages.length === 3000`, 6개 LOT 각 500개씩
+4. **pass 기준**: noise 전부 제거, 6 LOT 정확 추출, 이미지 정상 표시
+
+### 37-7. 텍스트 검색 UI
+
+1. 검색창에 `ABC123` 입력 → 검색 버튼 클릭
+2. **pass 기준**: 그리드에 500개 이미지 표시, 모두 ABC123 LOT
+
+### 결과 요약표
+
+| 항목 | 기준값 |
+|------|-------|
+| 인덱스 빌드 (500만+ 파일) | < 10초 |
+| 캐시 로드 | < 5초 |
+| 빌드 중 그리드 로드 | 즉시 (블로킹 없음) |
+| 폴더 한정 검색 | < 500ms |
+| 전체 검색 | < 1초 |
+| 다중검색 noise 파싱 | 6 LOT 정확 추출 |
+| 텍스트 검색 | 결과 정확 |
