@@ -1192,8 +1192,19 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 2. 이미지 5개 선택 → 그룹에 추가
 3. 그룹 내 이미지 수가 정확히 5개인지 확인 (선택한 것만)
 
-#### 12-4. Manual 입력 — LOT 모드
-1. LOT ID 직접 입력 → 해당 LOT 검색 → 전체 이미지 등록
+#### 12-4. Manual 입력 — LOT 모드 (Noise + 대량 + 디스크 검증)
+
+1. LOT ID 직접 입력 (noise 포함): `wafer.J1`, `wafer.2`, `wafer.abc`, `wafer` 등
+2. **파싱 검증**: dot 이후 제거, 탭/공백 뒤 무시 → 모두 LOT=`wafer`로 중복제거
+3. 저장 → entries.json 디스크 확인: `lot` 값 정확, `path` 존재
+4. Grid 보기 → 해당 LOT의 전체 이미지 표시
+5. **대량 테스트**: 100개 noise 입력 → 중복제거 후 1행 → 저장 → Grid 보기 3000개
+
+```javascript
+// Noise 패턴 (공백/탭 뒤는 LOT 모드에서 무시)
+const lines = ['wafer.J1', 'wafer.2', 'wafer\textra', 'wafer.abc junk', 'wafer'];
+// 모두 lot='wafer'로 중복제거 → 1행
+```
 
 #### 12-5. Manual 입력 — Wafer 모드 (Noise 입력 + 토큰 필터 + Grid 보기)
 
@@ -1225,7 +1236,30 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
    - 각 이미지 파일명에 `0001`, `0005`, `0010`, `0050`, `0100` 포함
    - **pass 기준**: gridImages === 5, LOT 전체(3000장)가 아닌 해당 wafer만
 
-8. **테스트 그룹 삭제**: `DELETE /api/my-lot/group` → 200
+8. **대량 테스트 (100개)**: 다양한 noise 패턴 100행 입력 (dot+숫자, dot+영문, tab 구분 혼합)
+   - lotOk === 100 (모두 `wafer`로 noise 제거)
+   - waferOk === 100 (4자리 숫자 정확)
+   - pathOk === 100 (검색 매칭)
+   - 저장 후 entries.json 디스크 확인: 100개 전부 lot/wafer/path 존재
+   - Grid 보기: `v.currentGridImages.length === 100`
+   - **API 응답 검증**: `GET /api/my-lot?mode=wafer` → entries의 `wafer` 필드가 entries.json 원본값 (파일명 재파싱 아님)
+
+9. **테스트 그룹 삭제**: `DELETE /api/my-lot/group` → 200
+
+#### 12-5-noise. Noise 패턴 상세 (LOT/Wafer 공통)
+
+입력 파싱 규칙: `line.split(/\t|\s+/)` → 첫 토큰의 `.` 이후 제거 → LOT, 두번째 토큰의 `.` 이후 제거 → Wafer
+
+| 입력 | LOT | Wafer | 비고 |
+|------|-----|-------|------|
+| `ABC123.1 03` | ABC123 | 03 | dot+숫자 제거 |
+| `ABC123.J1 03` | ABC123 | 03 | dot+영숫자 제거 |
+| `ABC123.abc 03` | ABC123 | 03 | dot+영문 제거 |
+| `ABC123.12.3 04` | ABC123 | 04 | 다중 dot 제거 |
+| `ABC123 03` | ABC123 | 03 | 정상 (noise 없음) |
+| `LOT001.2\t05` | LOT001 | 05 | tab 구분 |
+| `LOT002.X 06` | LOT002 | 06 | dot+영문 |
+| `wafer.J3` | wafer | (없음) | LOT 모드용 |
 
 ```javascript
 // 파싱 테스트 코드
@@ -1245,6 +1279,15 @@ document.getElementById('my-lot-grid-view').click();
 // 5초 대기 후
 assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 ```
+
+#### 12-5-api. API limit 및 전체 검색 검증
+`searchImagesByLotsBatch`에서 서버 limit 초과 시 검색 실패하므로 아래를 반드시 확인:
+
+1. **서버 API limit**: `/api/search` 의 `limit` 파라미터 상한이 200000 이상
+2. **전체 검색 fallback**: `currentGridImages`가 비어있어도 `folder=''` 전체 검색에서 limit 충분히 큰 값으로 호출 → 결과 포함
+3. **Wafer 필터링**: 전체 검색 결과에서 wafer 토큰 정확 매칭 (`tokens.some(t => t === waferFilter)`)
+4. **저장 확인**: `entries.json`이 디스크에 생성됨 (LOT, Wafer, Path 모두 기록)
+5. **Grid 보기**: 저장된 이미지 20/20 정상 로드, broken=0, 512×512
 
 #### 12-6. 이미지/그룹 삭제
 1. 그룹 내 이미지 삭제 버튼 → 개별 이미지 제거 확인
