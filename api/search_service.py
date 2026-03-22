@@ -170,6 +170,8 @@ class SearchService:
                         query_for_search,
                         None,
                         self.search_workers,
+                        self.index_service._names_joined,
+                        self.index_service._names_offsets,
                     )
                     effective_workers = self.search_workers
                     search_mode = "logical"

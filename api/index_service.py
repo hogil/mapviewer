@@ -136,8 +136,9 @@ def _logical_to_postfix(tokens: List[str]) -> List[str]:
     return output
 
 
-def _collect_term_hits(keys_slice: List[str], names_slice: List[str], tokens: List[str], max_workers: int) -> Dict[str, Set[str]]:
-    """각 용어별 히트 집합을 구성해 논리 평가 속도를 높인다."""
+def _collect_term_hits(keys_slice: List[str], names_slice: List[str], tokens: List[str], max_workers: int,
+                       names_joined: bytes = b"", names_offsets: List[int] = None) -> Dict[str, Set[str]]:
+    """각 용어별 히트 집합을 구성. bytes 캐시가 있으면 고속 검색."""
     unique_terms = [
         token for token in tokens if token and token not in _LOGICAL_OPERATORS and token not in ("(", ")")
     ]
@@ -145,11 +146,31 @@ def _collect_term_hits(keys_slice: List[str], names_slice: List[str], tokens: Li
     if not unique_terms:
         return {}
 
+    # 🔥 bytes 검색 (names_joined 캐시 사용 시 2~4x 빠름)
+    if names_joined and names_offsets and len(names_offsets) == len(keys_slice):
+        from bisect import bisect_right
+        term_hits: Dict[str, Set[str]] = {}
+        for term in unique_terms:
+            term_bytes = term.encode("utf-8")
+            hits: Set[str] = set()
+            start = 0
+            while True:
+                pos = names_joined.find(term_bytes, start)
+                if pos == -1:
+                    break
+                # byte offset → 파일 인덱스
+                idx = bisect_right(names_offsets, pos) - 1
+                if 0 <= idx < len(keys_slice):
+                    hits.add(keys_slice[idx])
+                start = pos + 1
+            term_hits[term] = hits
+        return term_hits
+
+    # fallback: 순차 스캔
     def _scan_term(term: str) -> Tuple[str, Set[str]]:
         hits: Set[str] = set()
         if not term:
             return term, hits
-        # 🔥 포함 검색: 파일명에 검색어가 포함되면 매칭
         for rel, name_lower in zip(keys_slice, names_slice):
             if term in name_lower:
                 hits.add(rel)
@@ -171,11 +192,13 @@ def _collect_term_hits(keys_slice: List[str], names_slice: List[str], tokens: Li
 
 
 def _evaluate_logical_query(
-    keys_slice: List[str], names_slice: List[str], query: str, limit: Optional[int] = None, max_workers: int = 4
+    keys_slice: List[str], names_slice: List[str], query: str, limit: Optional[int] = None, max_workers: int = 4,
+    names_joined: bytes = b"", names_offsets: List[int] = None,
 ) -> List[str]:
     tokens = _tokenize_logical_query(query)
     postfix = _logical_to_postfix(tokens)
-    term_hits = _collect_term_hits(keys_slice, names_slice, tokens, max_workers)
+    term_hits = _collect_term_hits(keys_slice, names_slice, tokens, max_workers,
+                                   names_joined=names_joined, names_offsets=names_offsets)
     universe: Optional[Set[str]] = None
     if "not" in postfix:
         universe = set(keys_slice)
@@ -215,25 +238,13 @@ def search_index_slice(keys: List[str], names: List[str], query: str, goal: Opti
     """단일 청크 단순 검색 (포함 검색)."""
     if not query:
         return []
-    
-    # 🔥 포함 검색: 파일명에 검색어가 포함되면 매칭
-    # 접두사 매칭을 우선 정렬 (검색어로 시작하는 파일이 먼저)
-    prefix_hits: List[str] = []
-    contains_hits: List[str] = []
-
+    hits: List[str] = []
     for rel, name_lower in zip(keys, names):
         if query in name_lower:
-            if name_lower.startswith(query):
-                prefix_hits.append(rel)
-            else:
-                contains_hits.append(rel)
-        if goal is not None and len(prefix_hits) + len(contains_hits) >= goal:
-            break
-
-    if goal is not None:
-        combined = prefix_hits + contains_hits
-        return combined[:goal]
-    return prefix_hits + contains_hits
+            hits.append(rel)
+            if goal is not None and len(hits) >= goal:
+                break
+    return hits
 
 
 def search_index_slice_parallel(
@@ -277,11 +288,13 @@ def search_index_slice_parallel(
 
 
 def search_index_logical(
-    keys: List[str], names: List[str], query: str, goal: Optional[int] = None, max_workers: int = 4
+    keys: List[str], names: List[str], query: str, goal: Optional[int] = None, max_workers: int = 4,
+    names_joined: bytes = b"", names_offsets: List[int] = None,
 ) -> List[str]:
     if not keys or not query:
         return []
-    return _evaluate_logical_query(keys, names, query, goal, max_workers)
+    return _evaluate_logical_query(keys, names, query, goal, max_workers,
+                                   names_joined=names_joined, names_offsets=names_offsets)
 
 
 def _matches_search_query(filename_lower: str, query: str) -> bool:
@@ -319,6 +332,8 @@ class IndexService:
         self._names: List[str] = []
         self._lot_index: Dict[str, List[int]] = {}   # lot_token -> [indices]
         self._folder_index: Dict[str, List[int]] = {} # folder_name -> [indices]
+        self._names_joined: bytes = b""               # \n-joined names for fast bytes search
+        self._names_offsets: List[int] = []            # byte offset of each name start
         self._lock = RLock()
         self._async_build_lock = asyncio.Lock()
         self._cache_loaded = False
@@ -654,17 +669,15 @@ class IndexService:
         return keys_ref[start_idx:end_idx], names_ref[start_idx:end_idx]
 
     def _build_lookup_indices(self) -> None:
-        """LOT별/폴더별 역인덱스 빌드 (O(n) 1회, 이후 검색 O(1))."""
+        """LOT별/폴더별 역인덱스 + bytes 캐시 빌드."""
         t0 = time.time()
         lot_idx: Dict[str, List[int]] = {}
         folder_idx: Dict[str, List[int]] = {}
         for i, (key, name) in enumerate(zip(self._keys, self._names)):
-            # LOT = 파일명 첫 _ 앞 토큰
             lot = name.split("_", 1)[0]
             if lot not in lot_idx:
                 lot_idx[lot] = []
             lot_idx[lot].append(i)
-            # 폴더 = 경로 첫 / 앞
             slash = key.find("/")
             folder = key[:slash] if slash > 0 else ""
             if folder:
@@ -673,9 +686,17 @@ class IndexService:
                 folder_idx[folder].append(i)
         self._lot_index = lot_idx
         self._folder_index = folder_idx
+        # bytes 캐시: 검색용 (501만 파일명을 \n으로 합친 bytes)
+        joined = "\n".join(self._names)
+        self._names_joined = joined.encode("utf-8")
+        # 각 이름의 시작 오프셋 계산
+        offsets = [0]
+        for name in self._names[:-1]:
+            offsets.append(offsets[-1] + len(name.encode("utf-8")) + 1)  # +1 for \n
+        self._names_offsets = offsets
         elapsed = time.time() - t0
-        self.logger.info("✅ [INDEX] Lookup indices built: %d LOTs, %d folders (%.2fs)",
-                         len(lot_idx), len(folder_idx), elapsed)
+        self.logger.info("✅ [INDEX] Lookup indices built: %d LOTs, %d folders, %dMB names cache (%.2fs)",
+                         len(lot_idx), len(folder_idx), len(self._names_joined) // 1048576, elapsed)
 
     def lot_search(self, lot_filter: Set[str], folder: str = "") -> List[str]:
         """LOT 필터로 O(1) 검색. folder가 있으면 해당 폴더 내만."""
