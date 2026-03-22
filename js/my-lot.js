@@ -1168,26 +1168,21 @@ export class MyLotModal {
         const isWaferMode = this.activeMode === 'wafer';
 
         try {
-            // 다중검색 API 동일 방식: /api/search?lot_multi=...&folder= (전체 검색 1회)
-            // Wafer 모드: lot_wafer로 서버에서 LOT+WAFER 쌍 직접 매칭
+            // 다중검색과 동일: q 파라미터 + lot_multi로 토큰 인덱스 경로 사용
             const params = new URLSearchParams();
+            // q에 LOT을 OR로 연결 → search_index_slice_parallel (토큰 인덱스) 경로
+            params.set('q', uniqueLots.join(' or '));
+            params.set('lot_multi', uniqueLots.join(','));
             if (isWaferMode) {
                 const pairs = [];
-                const lotsOnly = new Set();
                 for (const row of rows) {
                     const lot = (row.lot || '').trim().toLowerCase();
                     const wafer = (row.wafer || '').trim().toLowerCase();
-                    if (!lot) continue;
-                    if (wafer) pairs.push(`${lot}:${wafer}`);
-                    else lotsOnly.add(lot);
+                    if (lot && wafer) pairs.push(`${lot}:${wafer}`);
                 }
                 if (pairs.length > 0) params.set('lot_wafer', pairs.join(','));
-                if (lotsOnly.size > 0) params.set('lot_multi', [...lotsOnly].join(','));
-            } else {
-                params.set('lot_multi', uniqueLots.join(','));
             }
             params.set('limit', '3000');
-            params.set('folder', '');  // 전체 검색
 
             console.log(`[MyLotModal] 배치 검색: ${uniqueLots.length}개 LOT, mode=${this.activeMode}`);
             const res = await fetch(`/api/search?${params.toString()}`);
