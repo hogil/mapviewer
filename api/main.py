@@ -789,6 +789,11 @@ def _parse_lot_filter(raw: Optional[str]) -> List[str]:
         # 다중 LOT 검색 입력이 파일명/경로여도 LOT 토큰(underscore 좌측) 기준으로 정규화
         basename = cleaned.replace("\\", "/").split("/")[-1]
         lot_token = basename.split("_", 1)[0].strip()
+        # dot(.) 접미사 제거: abc123.1 → abc123
+        if "." in lot_token:
+            dot_idx = lot_token.index(".")
+            if dot_idx > 0:
+                lot_token = lot_token[:dot_idx]
         if not lot_token or lot_token in seen:
             continue
 

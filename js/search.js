@@ -222,6 +222,24 @@ function escapeRegExp(string) {
 }
 
 /**
+ * 각 토큰에서 dot(.) 이후 접미사를 제거
+ * 예: "ABC123.1 09" → "ABC123 09", "ABC123.1" → "ABC123"
+ * LOT ID에 붙는 .1, .2 등의 서브 넘버를 제거하기 위한 용도
+ * @param {string} text 입력 텍스트
+ * @returns {string} dot 접미사가 제거된 텍스트
+ */
+export function stripDotSuffix(text) {
+    if (!text) return text;
+    return text.replace(/(\S+)/g, (token) => {
+        const dotIdx = token.indexOf('.');
+        if (dotIdx > 0) {
+            return token.substring(0, dotIdx);
+        }
+        return token;
+    });
+}
+
+/**
  * 검색 쿼리 유효성 검사
  * @param {string} query 검색 쿼리
  * @returns {Object} {valid: boolean, error: string}

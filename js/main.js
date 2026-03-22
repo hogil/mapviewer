@@ -18,6 +18,7 @@ import { CompositeColorModal } from './composite-colors.js';
 import { MyLotModal } from './my-lot.js';
 import { PageManager } from './page-manager.js';
 import { ContextMenuManager } from './context-menu.js?v=2';
+import { stripDotSuffix } from './search.js';
 
 // Constants
 
@@ -7524,7 +7525,9 @@ class WaferMapViewer {
             const trimmed = segment.trim();
             if (!trimmed) continue;
             // 다중 LOT 검색은 "_" 기준 왼쪽 토큰을 LOT ID로 사용
-            const lotToken = trimmed.split('_', 1)[0].trim();
+            // dot(.) 접미사 제거: ABC123.1 → ABC123
+            const rawToken = trimmed.split('_', 1)[0].trim();
+            const lotToken = stripDotSuffix(rawToken);
             if (!lotToken) continue;
             const key = lotToken.toLowerCase();
             if (seen.has(key)) continue;
@@ -9613,7 +9616,8 @@ class WaferMapViewer {
             // 🔥 멀티검색일 때는 일반 검색창 텍스트 무시
             const normalizedLots = this.normalizeLotPayload(multiLotList || []);
             const isMultiSearch = normalizedLots.length > 0;
-            const fileQuery = isMultiSearch ? '' : (this.dom.fileSearch?.value?.trim() || '');
+            const rawFileQuery = isMultiSearch ? '' : (this.dom.fileSearch?.value?.trim() || '');
+            const fileQuery = stripDotSuffix(rawFileQuery);
 
             if (!fileQuery && normalizedLots.length === 0) {
                 if (!suppressAlerts) {
