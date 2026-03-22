@@ -255,18 +255,7 @@ async def run_tests():
             fail("테스트 실행", str(e))
 
         finally:
-            # 정리: 테스트 그룹 삭제
-            import shutil
-            for g in [TEST_GROUP, "__e2e_mylot_lot__"]:
-                for base in [IMAGES_ROOT / "my-lot" / "notsaml" / "wafer" / g,
-                             IMAGES_ROOT / "my-lot" / "notsaml" / "lot" / g]:
-                    if base.exists():
-                        shutil.rmtree(str(base), ignore_errors=True)
-                for base in [POSITIONS_ROOT / "my-lot" / "notsaml" / "wafer" / g,
-                             POSITIONS_ROOT / "my-lot" / "notsaml" / "lot" / g]:
-                    if base.exists():
-                        shutil.rmtree(str(base), ignore_errors=True)
-
+            # 테스트 데이터는 삭제하지 않음 (디스크 검증용으로 유지)
             await browser.close()
 
     # 결과 출력
