@@ -201,10 +201,18 @@ class SearchService:
             elif lot_filter or lot_wafer_pairs:
                 search_start = time.perf_counter()
                 if lot_wafer_pairs:
-                    index_hits = self._lot_wafer_scan(keys_slice, names_slice, lot_wafer_pairs, lot_filter)
+                    index_hits = await loop.run_in_executor(
+                        self.io_executor,
+                        self._lot_wafer_scan,
+                        keys_slice, names_slice, lot_wafer_pairs, lot_filter,
+                    )
                     search_mode = "lot-wafer"
                 else:
-                    index_hits = self._lot_only_scan(keys_slice, names_slice, lot_filter)
+                    index_hits = await loop.run_in_executor(
+                        self.io_executor,
+                        self._lot_only_scan,
+                        keys_slice, names_slice, lot_filter,
+                    )
                     search_mode = "lot-only"
                 elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
             else:

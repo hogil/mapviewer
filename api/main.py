@@ -799,7 +799,7 @@ def _parse_lot_filter(raw: Optional[str]) -> List[str]:
 
         seen.add(lot_token)
         tokens.append(lot_token)
-        if len(tokens) >= 100:
+        if len(tokens) >= 1000:
             break
     return tokens
 
@@ -831,7 +831,7 @@ def _parse_lot_wafer(raw: Optional[str]) -> List[Tuple[str, str]]:
                 if key not in seen:
                     seen.add(key)
                     pairs.append((lot, wafer))
-        if len(pairs) >= 100:
+        if len(pairs) >= 1000:
             break
     return pairs
 
