@@ -1162,17 +1162,28 @@ export class MyLotModal {
 
         try {
             // 2. 현재 폴더에서 먼저 검색, 결과 없으면 전체 검색으로 확대
-            // 그리드 이미지 경로에서 폴더명 추출
+            // 폴더명 추출: currentGridImages → currentFolderPath 순서로 시도
+            let folderName = '';
             const firstImg = this.viewer?.currentGridImages?.[0] || '';
-            const pathParts = firstImg.replace(/\\/g, '/').split('/');
-            const folderName = pathParts.length > 1 ? pathParts[pathParts.length - 2] : '';
+            if (firstImg) {
+                const pathParts = firstImg.replace(/\\/g, '/').split('/');
+                folderName = pathParts.length > 1 ? pathParts[pathParts.length - 2] : '';
+            }
+            if (!folderName) {
+                // currentFolderPath에서 폴더명 추출 (ROOT_DIR 기준 상대경로)
+                const cfp = (this.viewer?.currentFolderPath || '').replace(/\\/g, '/');
+                if (cfp) {
+                    const parts = cfp.split('/').filter(Boolean);
+                    folderName = parts[parts.length - 1] || '';
+                }
+            }
 
             let allResults = [];
             // 2a. 현재 폴더에서 먼저 검색
             if (folderName) {
                 const params1 = new URLSearchParams();
                 params1.set('lot_multi', uniqueLots.join(','));
-                params1.set('limit', '10000');
+                params1.set('limit', '200000');
                 params1.set('folder', folderName);
                 const res1 = await fetch(`/api/search?${params1.toString()}`);
                 if (res1.ok) {
@@ -1186,7 +1197,7 @@ export class MyLotModal {
             if (allResults.length === 0) {
                 const params2 = new URLSearchParams();
                 params2.set('lot_multi', uniqueLots.join(','));
-                params2.set('limit', '50000');
+                params2.set('limit', '200000');
                 params2.set('folder', '');
                 const res2 = await fetch(`/api/search?${params2.toString()}`);
                 if (res2.ok) {

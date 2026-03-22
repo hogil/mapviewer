@@ -7240,7 +7240,7 @@ async def get_index_status():
 
 @app.get("/api/search")
 async def search_files(q: str = Query("", description="파일명 검색(대소문자 무시, 부분일치)"),
-                       limit: int = Query(3000, ge=1, le=10000),
+                       limit: int = Query(3000, ge=1, le=200000),
                        offset: int = Query(0, ge=0),
                        lot_multi: Optional[str] = Query(None, alias="lot_multi"),
                        lot_wafer: Optional[str] = Query(None, description="LOT:WAFER 쌍 (쉼표 구분, 예: abc123:04,def456:08)"),
