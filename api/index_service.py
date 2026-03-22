@@ -317,6 +317,8 @@ class IndexService:
         self._file_index: Dict[str, Dict[str, Any]] = {}
         self._keys: List[str] = []
         self._names: List[str] = []
+        self._lot_index: Dict[str, List[int]] = {}   # lot_token -> [indices]
+        self._folder_index: Dict[str, List[int]] = {} # folder_name -> [indices]
         self._lock = RLock()
         self._async_build_lock = asyncio.Lock()
         self._cache_loaded = False
@@ -383,6 +385,7 @@ class IndexService:
             self._keys.extend(keys)
             self._names.clear()
             self._names.extend(names)
+        self._build_lookup_indices()
         self.total_files = len(keys)
         self.total_dirs = 0
         self.completed_dirs = 0
@@ -594,6 +597,7 @@ class IndexService:
                     cache_size = self.cache_file.stat().st_size
                     self.logger.info(f"✅ [INDEX] 캐시 파일 확인: {self.cache_file.name}, 크기: {cache_size:,} bytes")
                 
+                self._build_lookup_indices()
                 self.total_files = len(sorted_keys)
                 self.total_dirs = total_dirs
                 self.completed_dirs = completed_dirs
@@ -648,6 +652,54 @@ class IndexService:
         start_idx = bisect_left(keys_ref, start_key)
         end_idx = bisect_right(keys_ref, end_key)
         return keys_ref[start_idx:end_idx], names_ref[start_idx:end_idx]
+
+    def _build_lookup_indices(self) -> None:
+        """LOT별/폴더별 역인덱스 빌드 (O(n) 1회, 이후 검색 O(1))."""
+        t0 = time.time()
+        lot_idx: Dict[str, List[int]] = {}
+        folder_idx: Dict[str, List[int]] = {}
+        for i, (key, name) in enumerate(zip(self._keys, self._names)):
+            # LOT = 파일명 첫 _ 앞 토큰
+            lot = name.split("_", 1)[0]
+            if lot not in lot_idx:
+                lot_idx[lot] = []
+            lot_idx[lot].append(i)
+            # 폴더 = 경로 첫 / 앞
+            slash = key.find("/")
+            folder = key[:slash] if slash > 0 else ""
+            if folder:
+                if folder not in folder_idx:
+                    folder_idx[folder] = []
+                folder_idx[folder].append(i)
+        self._lot_index = lot_idx
+        self._folder_index = folder_idx
+        elapsed = time.time() - t0
+        self.logger.info("✅ [INDEX] Lookup indices built: %d LOTs, %d folders (%.2fs)",
+                         len(lot_idx), len(folder_idx), elapsed)
+
+    def lot_search(self, lot_filter: Set[str], folder: str = "") -> List[str]:
+        """LOT 필터로 O(1) 검색. folder가 있으면 해당 폴더 내만."""
+        if not lot_filter:
+            return []
+        indices = []
+        for lot in lot_filter:
+            idx_list = self._lot_index.get(lot)
+            if idx_list:
+                indices.extend(idx_list)
+        if not indices:
+            return []
+        if folder:
+            folder_set = set(self._folder_index.get(folder, []))
+            if folder_set:
+                indices = [i for i in indices if i in folder_set]
+        return [self._keys[i] for i in indices]
+
+    def folder_keys(self, folder: str) -> Tuple[List[str], List[str]]:
+        """폴더별 O(1) 키/이름 슬라이스."""
+        idx_list = self._folder_index.get(folder)
+        if not idx_list:
+            return [], []
+        return [self._keys[i] for i in idx_list], [self._names[i] for i in idx_list]
 
     def keys_snapshot(self) -> List[str]:
         with self._lock:

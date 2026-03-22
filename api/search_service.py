@@ -128,42 +128,31 @@ class SearchService:
         if keys_slice:
             if query_for_search and lot_filter:
                 search_start = time.perf_counter()
-                complex_query = is_complex_query(query_for_search)
-                if complex_query:
-                    raw_tokens = _tokenize_logical_query(query_for_search)
-                    logical_terms = [
-                        token for token in raw_tokens if token and token not in {"and", "or", "not"} and token not in ("(", ")")
-                    ]
-                if complex_query:
-                    index_hits = await loop.run_in_executor(
-                        self.io_executor,
-                        search_index_logical,
-                        keys_slice,
-                        names_slice,
-                        query_for_search,
-                        None,
-                        self.search_workers,
-                    )
+                # 🔥 LOT 인덱스로 먼저 후보 축소 → query 필터 적용 (501만 전체 스캔 제거)
+                folder_name = prefix.split("/")[0] if prefix else ""
+                lot_candidates = self.index_service.lot_search(lot_filter, folder_name)
+                if lot_candidates:
+                    lot_names = [k.rsplit("/", 1)[-1].lower() for k in lot_candidates]
+                    complex_query = is_complex_query(query_for_search)
+                    if complex_query:
+                        raw_tokens = _tokenize_logical_query(query_for_search)
+                        logical_terms = [
+                            token for token in raw_tokens if token and token not in {"and", "or", "not"} and token not in ("(", ")")
+                        ]
+                        index_hits = await loop.run_in_executor(
+                            self.io_executor, search_index_logical,
+                            lot_candidates, lot_names, query_for_search, None, self.search_workers,
+                        )
+                    else:
+                        index_hits = await loop.run_in_executor(
+                            self.io_executor, search_index_slice_parallel,
+                            lot_candidates, lot_names, query_for_search, None, max(1, self.search_workers),
+                        )
                     effective_workers = self.search_workers
-                    search_mode = "query+lot"
                 else:
-                    worker_chunks = max(1, self.search_workers)
-                    effective_workers = worker_chunks
-                    index_hits = await loop.run_in_executor(
-                        self.io_executor,
-                        search_index_slice_parallel,
-                        keys_slice,
-                        names_slice,
-                        query_for_search,
-                        None,
-                        worker_chunks,
-                    )
-                    search_mode = "query+lot"
+                    index_hits = []
+                search_mode = "query+lot-index"
                 elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
-                if lot_wafer_pairs:
-                    index_hits = self._apply_lot_wafer_filter(index_hits, lot_wafer_pairs, lot_filter)
-                else:
-                    index_hits = self._apply_lot_filter(index_hits, lot_filter)
             elif query_for_search:
                 complex_query = is_complex_query(query_for_search)
                 if complex_query:
@@ -208,12 +197,10 @@ class SearchService:
                     )
                     search_mode = "lot-wafer"
                 else:
-                    index_hits = await loop.run_in_executor(
-                        self.io_executor,
-                        self._lot_only_scan,
-                        keys_slice, names_slice, lot_filter,
-                    )
-                    search_mode = "lot-only"
+                    # 🔥 LOT 역인덱스로 O(1) 검색 (501만 순차 스캔 제거)
+                    folder_name = prefix.split("/")[0] if prefix else ""
+                    index_hits = self.index_service.lot_search(lot_filter, folder_name)
+                    search_mode = "lot-index"
                 elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
             else:
                 index_hits = []
