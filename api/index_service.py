@@ -146,48 +146,12 @@ def _collect_term_hits(keys_slice: List[str], names_slice: List[str], tokens: Li
     if not unique_terms:
         return {}
 
-    # 🔥 bytes 검색 (names_joined 캐시 사용 시 2~4x 빠름)
-    if names_joined and names_offsets and len(names_offsets) == len(keys_slice):
-        from bisect import bisect_right
-        term_hits: Dict[str, Set[str]] = {}
+    # 🔥 단일 패스: 모든 용어를 한번에 체크 (501만 × N용어, 루프 1회)
+    term_hits: Dict[str, Set[str]] = {t: set() for t in unique_terms}
+    for rel, name_lower in zip(keys_slice, names_slice):
         for term in unique_terms:
-            term_bytes = term.encode("utf-8")
-            hits: Set[str] = set()
-            start = 0
-            while True:
-                pos = names_joined.find(term_bytes, start)
-                if pos == -1:
-                    break
-                # byte offset → 파일 인덱스
-                idx = bisect_right(names_offsets, pos) - 1
-                if 0 <= idx < len(keys_slice):
-                    hits.add(keys_slice[idx])
-                start = pos + 1
-            term_hits[term] = hits
-        return term_hits
-
-    # fallback: 순차 스캔
-    def _scan_term(term: str) -> Tuple[str, Set[str]]:
-        hits: Set[str] = set()
-        if not term:
-            return term, hits
-        for rel, name_lower in zip(keys_slice, names_slice):
             if term in name_lower:
-                hits.add(rel)
-        return term, hits
-
-    max_workers = max(1, min(len(unique_terms), max_workers))
-    term_hits: Dict[str, Set[str]] = {}
-    if max_workers == 1 or len(unique_terms) == 1:
-        for term in unique_terms:
-            t, hits = _scan_term(term)
-            term_hits[t] = hits
-    else:
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(_scan_term, term) for term in unique_terms]
-            for future in as_completed(futures):
-                term, hits = future.result()
-                term_hits[term] = hits
+                term_hits[term].add(rel)
     return term_hits
 
 
