@@ -717,7 +717,7 @@ def rename_group(login_id: str, mode: str, old_name: str, new_name: str) -> bool
     return renamed
 
 
-def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path], *, path_lot_wafer: dict = None) -> Dict[str, object]:
+def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path], path_lot_wafer: dict = None) -> Dict[str, object]:
     """
     여러 이미지를 그룹에 일괄 복사.
 

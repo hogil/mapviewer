@@ -3132,7 +3132,11 @@ async def add_my_lot_batch_endpoint(request: Request):
             collected_paths.extend(placeholder_paths)
 
         if collected_paths:
-            result = my_lot_add_lot_batch(login_id, mode, group, collected_paths, path_lot_wafer=path_lot_wafer)
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                IO_POOL, my_lot_add_lot_batch,
+                login_id, mode, group, collected_paths, path_lot_wafer,
+            )
             result["placeholder_count"] = len(placeholder_paths)
             return {"success": True, **result}
 
@@ -3177,7 +3181,11 @@ async def add_my_lot_batch_endpoint(request: Request):
                 "message": f"LOT '{lot_value}'에 해당하는 이미지를 찾을 수 없습니다.",
             }
 
-        result = my_lot_add_lot_batch(login_id, mode, group, matched_paths)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            IO_POOL, my_lot_add_lot_batch,
+            login_id, mode, group, matched_paths, None,
+        )
         return {"success": True, **result}
 
     except HTTPException:
