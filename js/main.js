@@ -6452,11 +6452,21 @@ class WaferMapViewer {
 
             // 🔥 필터 메타데이터는 폴더 클릭 시 lazy 로드 (초기화 시 전체 스캔 안 함)
 
-            // 🔥 2순위: File Explorer 로딩은 백그라운드로 실행
+            // 🔥 2순위: File Explorer 로딩은 백그라운드로 실행 (실패 시 재시도)
             if (this.dom.fileExplorer) {
-                this.loadDirectoryContents(null, this.dom.fileExplorer).catch(err => {
-                    console.error('[INIT] File Explorer 로딩 실패:', err);
-                });
+                const loadExplorer = async (retries = 5, delay = 2000) => {
+                    for (let i = 0; i < retries; i++) {
+                        try {
+                            await this.loadDirectoryContents(null, this.dom.fileExplorer);
+                            return;
+                        } catch (err) {
+                            console.warn(`[INIT] File Explorer 로딩 실패 (${i + 1}/${retries}):`, err.message);
+                            if (i < retries - 1) await new Promise(r => setTimeout(r, delay));
+                        }
+                    }
+                    console.error('[INIT] File Explorer 로딩 최종 실패');
+                };
+                loadExplorer();
             }
         } catch (error) {
             console.error('[INIT] Explorer preload failed:', error);
@@ -8814,11 +8824,18 @@ class WaferMapViewer {
      * 드롭다운 리스트에 pinned section을 확보하고, 체크 시 항목을 상단 고정/해제하는 헬퍼
      */
     _ensurePinnedSection(list) {
-        let pinned = list.querySelector('.pinned-section');
+        // pinned-section은 list가 아닌 panel 직접 자식 (스크롤 독립)
+        const panel = list.closest('.failbit-panel');
+        if (!panel) {
+            let pinned = list.querySelector('.pinned-section');
+            if (!pinned) { pinned = document.createElement('div'); pinned.className = 'pinned-section'; list.prepend(pinned); }
+            return pinned;
+        }
+        let pinned = panel.querySelector(':scope > .pinned-section');
         if (!pinned) {
             pinned = document.createElement('div');
             pinned.className = 'pinned-section';
-            list.prepend(pinned);
+            panel.insertBefore(pinned, list);
         }
         return pinned;
     }
