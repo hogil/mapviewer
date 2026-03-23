@@ -26,6 +26,7 @@ from .composite_map import (
     _copy_positions_without_bin,
     COMPOSITE_ROOT,
     ANONYMOUS_LOGIN_ID,
+    _sanitize_login_id,
 )
 from .personal_colors import get_ratio_gradient_for_scheme, load_color_legends, DEFAULT_BOTTOM_COLORS
 
@@ -480,7 +481,9 @@ def _render(
     if value_map and render_info:
         samples = render_info[:20]
         avg_h = sum(y1 - y0 for _, y0, _, y1, _, _ in samples) / len(samples)
-        font_size = max(8, min(24, int(avg_h * 0.45)))
+        avg_w = sum(x1 - x0 for x0, _, x1, _, _, _ in samples) / len(samples)
+        # 칩 크기 비례 폰트 — 칩 높이의 35%, 최소 8px (대형 캔버스에서도 가독성 보장)
+        font_size = max(8, int(min(avg_w, avg_h) * 0.35))
         try:
             font = ImageFont.truetype("arial.ttf", font_size)
         except (OSError, IOError):
@@ -494,9 +497,21 @@ def _render(
                 continue
             text = _fmt_value(raw)
             tc = _contrast_text(*bg)
-            bbox = draw.textbbox((0, 0), text, font=font)
+            cw, ch = x1 - x0, y1 - y0
+            # 텍스트가 칩보다 클 경우 축소 폰트 사용
+            cur_font = font
+            bbox = draw.textbbox((0, 0), text, font=cur_font)
             tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            draw.text((x0 + ((x1 - x0) - tw) // 2, y0 + ((y1 - y0) - th) // 2), text, fill=tc, font=font)
+            if tw > cw * 0.95 or th > ch * 0.85:
+                shrink = min(cw * 0.9 / max(tw, 1), ch * 0.8 / max(th, 1))
+                sf = max(8, int(font_size * shrink))
+                try:
+                    cur_font = ImageFont.truetype(font.path, sf)
+                except Exception:
+                    cur_font = font
+                bbox = draw.textbbox((0, 0), text, font=cur_font)
+                tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            draw.text((x0 + (cw - tw) // 2, y0 + (ch - th) // 2), text, fill=tc, font=cur_font)
 
     return img
 
@@ -793,7 +808,7 @@ def create_measure_composite(
         raise ValueError("Cannot load positions for base image")
 
     # 6. Output directory — LoginId 바로 밑에 생성 (서브폴더 없음)
-    user_dir = COMPOSITE_ROOT / (login_id or ANONYMOUS_LOGIN_ID)
+    user_dir = COMPOSITE_ROOT / _sanitize_login_id(login_id)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = user_dir
     out_dir.mkdir(parents=True, exist_ok=True)
