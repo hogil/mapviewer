@@ -775,31 +775,32 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path],
 
         copy_tasks.append((src_path, dst_image))
 
-    # 2. 파일 복사 (이미지만, position은 원본에서 파일명 기반 조회)
-    #    LOT별로 robocopy/xcopy 활용 (Windows) 또는 순차 copyfile
-    import subprocess, platform
+    # 2. 병렬 파일 복사 (이미지 + position)
+    #    - 이미지: shutil.copyfile (가벼움, 메타데이터 스킵)
+    #    - position: 원본 bytes 캐시 + regex image_path 치환 (JSON parse/dump 제거)
+    _pos_cache = {}  # position 원본 bytes 캐시 (같은 파일 반복 읽기 방지)
+
+    def _copy_one(task):
+        src, dst = task
+        try:
+            shutil.copyfile(str(src), str(dst))
+            _copy_position_file(src, dst, _pos_cache=_pos_cache)
+            return None
+        except Exception as exc:
+            return {"path": str(src), "reason": str(exc)}
+
     errors = []
     success_count = 0
+    max_workers = min(16, len(copy_tasks) or 1)
 
-    # 하드링크 (즉시) → 실패 시 copyfile fallback
-    import logging as _log
-    _link_ok = 0
-    _link_fail = 0
-    for src, dst in copy_tasks:
-        try:
-            os.link(str(src), str(dst))
-            success_count += 1
-            _link_ok += 1
-        except OSError as _ose:
-            _link_fail += 1
-            if _link_fail <= 3:
-                _log.getLogger("my_lot").warning(f"hardlink fail: {_ose} | src={src} dst={dst}")
-            try:
-                shutil.copyfile(str(src), str(dst))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_copy_one, t): t for t in copy_tasks}
+        for future in as_completed(futures):
+            result = future.result()
+            if result is None:
                 success_count += 1
-            except Exception as exc:
-                errors.append({"path": str(src), "reason": str(exc)})
-    _log.getLogger("my_lot").info(f"[MY LOT batch] hardlink={_link_ok}, copyfile={_link_fail}, errors={len(errors)}")
+            else:
+                errors.append(result)
 
     return {
         "success_count": success_count,
