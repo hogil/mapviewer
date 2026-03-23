@@ -1678,16 +1678,24 @@ async def _lifespan_background_init():
     bootlog = logging.getLogger("uvicorn.error")
     loop = asyncio.get_running_loop()
 
-    # 0) 디스크 캐시 워밍 — 폴더 목록을 미리 읽어 OS 캐시에 올림
+    # 0) 디스크 캐시 워밍 — 3depth까지 폴더+파일 목록을 미리 읽어 OS 캐시에 올림
     def _warm_disk_cache():
+        skip = {'classification', 'classification_chips', 'thumbnails', 'composite_map', 'chip_annotations', '__pycache__'}
         try:
             root = str(config.ROOT_DIR)
-            for entry in os.scandir(root):
-                if entry.is_dir(follow_symlinks=False):
-                    try:
-                        list(os.scandir(entry.path))  # 2depth까지 미리 읽기
-                    except Exception:
-                        pass
+            for d1 in os.scandir(root):
+                if not d1.is_dir(follow_symlinks=False) or d1.name in skip:
+                    continue
+                try:
+                    for d2 in os.scandir(d1.path):
+                        if not d2.is_dir(follow_symlinks=False) or d2.name in skip:
+                            continue
+                        try:
+                            list(os.scandir(d2.path))  # 3depth 파일 목록까지 읽기
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
         except Exception:
             pass
     asyncio.ensure_future(loop.run_in_executor(DIRLIST_EXECUTOR, _warm_disk_cache))
