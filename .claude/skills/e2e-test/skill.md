@@ -11,6 +11,14 @@ argument-hint: [Phase 번호 또는 범위]
 Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으로 테스트합니다.
 `browser_evaluate`로 JS를 실행하고, `browser_take_screenshot`으로 시각 확인합니다.
 
+## 절대규칙: Non-blocking Server Startup
+
+서버 시작 관련 코드를 수정할 때 반드시 준수:
+- `lifespan`의 `yield` 전에는 최소한의 필수 초기화만 수행 (labels 로드, 디렉토리 생성)
+- 인덱스 로드/빌드, `_build_lookup_indices`, `_save_cache`, `__pycache__` 정리, composite cleanup 등 무거운 작업은 반드시 `asyncio.create_task`로 백그라운드 실행
+- CPU/IO 집약적 작업은 반드시 `loop.run_in_executor`로 실행 (이벤트 루프 블로킹 금지)
+- 서버는 인덱스 완료 여부와 무관하게 즉시 웹 요청 처리 가능해야 함
+
 ## 사전 조건 (자동 설정)
 
 테스트 실행 전에 아래 단계를 **순서대로** 자동 수행합니다. 이미 준비된 항목은 건너뜁니다.
@@ -2204,6 +2212,82 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 
 ---
 
+### Phase 35: Measure Map 항목 순차 전환 + 미니맵/범례/필터 종합 검증
+
+**목적**: Measure 패널에서 Failbit → BIN → FBT → QVL 순으로 항목을 전환하며 그리드 썸네일 URL, Navigator 썸네일, Gradient 범례(비율/갯수/필터), 단일 이미지 렌더링을 종합 검증. 3회 반복으로 상태 누적 버그를 탐지.
+
+**배경**:
+- `_selectFailbitItem()` 호출 시 `overlayMode`, `_gridMeasureMap`, `_ratioGradientCache` 상태 전환
+- `_ratioGradientCache`가 hex 문자열 또는 RGB 배열일 수 있음 — `renderGridColorLegend`의 `hexToRgb`가 양쪽 모두 처리해야 함
+- BIN 모드에서 `getPersonalizedParams()`와 `_buildMeasureThumbUrl` 모두 `bin_overlay=1`을 추가하면 중복 발생
+- 단일 이미지에서 `_renderMeasureOnCanvas` 완료 후 `renderColorLegends()` 미호출 시 gradient count가 0으로 표시
+
+**평가 항목**:
+
+#### 35-1. 그리드 모드 4개 항목 순차 전환 (3회 반복)
+1. palette_3k 폴더 로드 → 3000개 이미지 확인
+2. 아래 순서를 **3회 반복** (Round 1~3):
+   - `v._selectFailbitItem('failbit')` → 2초 대기
+     - **검증**: `overlayMode === null`, 썸네일 URL에 `/api/thumbnail` 포함
+   - `v._selectFailbitItem('reset')` → `v._selectFailbitItem('bin')` → 2초 대기
+     - **검증**: `overlayMode === 'bin'`, 썸네일 URL에 `bin_overlay=1` 포함
+     - **핵심 검증**: `bin_overlay`가 URL에 **1회만** 존재 (중복 없음)
+   - `v._selectFailbitItem('reset')` → `v._selectFailbitItem('f', '1000')` → 2초 대기
+     - **검증**: `overlayMode === 'f'`, 썸네일 URL에 `/api/measure-thumb` 포함
+     - **검증**: grid-color-legend-bottom에 `data-section="gradient"` 항목 10개 존재
+     - **핵심 검증**: JS 에러 없음 (`hexToRgb` 크래시 방지)
+   - `v._selectFailbitItem('reset')` → `v._selectFailbitItem('q', '5000')` → 2초 대기
+     - **검증**: `overlayMode === 'q'`, 썸네일 URL에 `/api/measure-thumb` 포함
+     - **검증**: gradient 범례 10개 존재
+   - `v._selectFailbitItem('reset')` → 0.5초 대기
+
+#### 35-2. 단일 이미지 모드 Measure 렌더링 + Navigator + 범례
+1. FBT1000 선택 → 그리드 첫 이미지 더블클릭 → 단일 이미지 진입
+2. 8초 대기 (measure-composite-data API 응답 + canvas 렌더링)
+3. **핵심 검증**: `gridMode === false`, `overlayMode === 'f'`
+4. **핵심 검증**: Navigator visible, `imageList.length > 0`
+5. **핵심 검증**: Navigator 썸네일 URL에 `/api/measure-thumb` 또는 `/api/thumbnail` 포함
+6. **핵심 검증**: 상단 범례(`color-legend-top`)에 `data-section="gradient"` 항목 10개
+7. **핵심 검증**: gradient 범례 bar에 비율/갯수 텍스트가 **"0"이 아닌** 값 1개 이상 존재
+   (예: `10.2%(39)`, `11.7%(45)` 등)
+8. 하단 범례(`color-legend-bottom`)에 BIN 항목 존재 확인
+
+#### 35-3. Gradient 범례 필터 클릭 테스트
+1. 35-2 상태에서 gradient 범례 첫 번째 항목 (0~10%) 클릭
+2. **핵심 검증**: `v.selectedGradientRanges.size === 1`
+3. 우클릭으로 필터 해제 (`clearGradientFilter`)
+4. **핵심 검증**: `v.selectedGradientRanges.size === 0`
+
+#### 35-4. 그리드 복귀 후 BIN URL 중복 방지
+1. 단일 이미지에서 그리드 복귀
+2. `v._selectFailbitItem('bin')` → 2초 대기
+3. 첫 번째 이미지 URL에서 `bin_overlay` 문자열 출현 횟수 확인
+4. **핵심 검증**: `bin_overlay` **1회만** 출현
+
+#### 35-5. Navigator 클릭으로 Measure 이미지 전환
+1. FBT1000 선택 → 그리드 첫 이미지 더블클릭 → 단일 이미지 진입
+2. 4초 대기 (Measure canvas 렌더링 완료)
+3. Navigator 두 번째 썸네일 클릭
+4. 4초 대기 (새 이미지 Measure 렌더링)
+5. **핵심 검증**: `selectedImagePath`가 이전과 다름 (이미지 전환됨)
+6. **핵심 검증**: Measure canvas 렌더링 완료 (`[MEASURE] Canvas 렌더링 완료` 로그 확인)
+7. **핵심 검증**: gradient 범례 count가 "0"이 아닌 값 포함 (새 이미지에서도 갱신됨)
+
+#### 35-6. Composite Map에서 동일 검증
+1. palette_3k 전체 선택 → Composite Map 생성 (20개 이미지)
+2. 10초 대기 (서버 생성 완료)
+3. **핵심 검증**: `isCompositeMode === true`, 그리드에 결과 이미지 표시
+4. **핵심 검증**: gradient 범례 10개 존재 (grid-color-legend-bottom)
+5. 더블클릭 → 단일 Composite 이미지 진입
+6. **핵심 검증**: Navigator visible, 이미지 목록 > 0
+7. **핵심 검증**: gradient 범례 필터 클릭 → `selectedGradientRanges.size === 1`
+8. 필터 해제 → `selectedGradientRanges.size === 0`
+9. 그리드 복귀 → 다른 이미지(Grade) 더블클릭 → 정상 전환 확인
+
+**pass 기준**: 35-1~35-6 모든 핵심 검증 통과, 3회 반복에서 JS 에러 0건
+
+---
+
 ## 결과 보고
 
 각 Phase별로 pass/fail 요약표를 작성하세요:
@@ -2244,6 +2328,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | 32 | 폴더 전환 스크롤 리셋 | pass/fail | 모든 경로에서 scrollTop===0 |
 | 33 | Measure 다중선택 전체 | pass/fail | UI/라벨/선택필터/단일전환/Navigator/404placeholder |
 | 34 | Measure 탭 분리 + 폴더 전환 유지 | pass/fail | mea 탭 생성/키 교체/원탭 복귀/미선택 바꿔치기/폴더 전환 유지 |
+| 35 | Measure Map 순차 전환 종합 검증 | pass/fail | 4항목×3회 반복, gradient count, bin중복, Navigator, 필터 |
 
 핵심 단계마다 스크린샷을 촬영하여 첨부하세요.
 

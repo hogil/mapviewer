@@ -8583,13 +8583,12 @@ class WaferMapViewer {
         const session = this.sessionStack.pop();
         console.log('🔙 이전 Grid 복귀:', session);
 
-        // Grid 복원
-        await this.showGrid(session.images, true);  // skipSaveState=true
+        // 🔥 Composite 모드를 showGrid 호출 전에 비활성화 (LOT 모드 복원을 위해)
+        this.isCompositeMode = false;
+        this.compositeSession = null;
 
-        // 선택 상태 복원
-        this.selectedImages = session.selectedImages;
-        this.currentGridImages = session.images;
-        this.gridSelectedIdxs = session.gridSelectedIdxs;
+        // Grid 복원 — lotMode가 활성화되어 있으면 showGridByLot으로 자동 리다이렉트
+        await this.showGrid(session.images, true);  // skipSaveState=true
 
         // 스크롤 위치 복원
         const grid = document.getElementById('image-grid');
@@ -8599,10 +8598,6 @@ class WaferMapViewer {
                 scrollWrapper.scrollTop = session.scrollTop;
             }, 50);
         }
-
-        // Composite 모드 비활성화
-        this.isCompositeMode = false;
-        this.compositeSession = null;
 
         this.updateContextMenuState();
     }
@@ -9124,8 +9119,9 @@ class WaferMapViewer {
         // 상단 고정 영역
         this._ensurePinnedSection(list);
 
+        const panel = list.closest('.failbit-panel') || list.parentElement;
         const updateGenBtn = () => {
-            const btn = list.parentElement?.querySelector('.mc-generate-btn');
+            const btn = panel.querySelector('.mc-generate-btn');
             if (btn) {
                 btn.textContent = `생성 (${this._mcCheckedItems.length})`;
                 btn.disabled = this._mcCheckedItems.length === 0;
@@ -9171,22 +9167,52 @@ class WaferMapViewer {
             return item;
         };
 
-        // 초기화 항목
+        // 초기화 버튼 — 검색 바 바로 아래, pinned 위 (항상 맨 위 고정)
+        let resetBar = panel.querySelector('.mc-reset-bar');
+        if (!resetBar) {
+            resetBar = document.createElement('div');
+            resetBar.className = 'mc-reset-bar';
+        }
+        // 항상 검색 바 바로 다음에 위치하도록 (pinned section 위)
+        const mcSearch = panel.querySelector('.mc-search, .failbit-search');
+        const resetAfter = mcSearch ? mcSearch.nextSibling : panel.firstChild;
+        if (resetBar.parentElement !== panel || resetBar !== resetAfter) {
+            panel.insertBefore(resetBar, resetAfter);
+        }
+        resetBar.innerHTML = '';
         const resetItem = document.createElement('div');
         resetItem.className = 'failbit-item';
         resetItem.textContent = '초기화';
-        resetItem.dataset.label = '초기화 reset';
-        resetItem.style.cssText = 'color:#f88;cursor:pointer;';
-        resetItem.addEventListener('click', () => {
+        resetItem.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // 1. 체크 상태 초기화
             this._mcCheckedItems = [];
-            const pinned = list.querySelector('.pinned-section');
+            // 2. pinned section 비우기
+            const pinned = panel.querySelector(':scope > .pinned-section');
             if (pinned) {
-                [...pinned.querySelectorAll('.failbit-item')].forEach(item => this._unpinItem(list, item));
+                while (pinned.firstChild) {
+                    const item = pinned.firstChild;
+                    const sectionName = item.dataset?.pinSection || '';
+                    delete item.dataset.pinSection;
+                    const sections = [...list.children].filter(el => el.classList.contains('failbit-section'));
+                    const target = sections.find(s => s.textContent === sectionName);
+                    if (target) {
+                        let after = target;
+                        while (after.nextElementSibling && after.nextElementSibling.classList.contains('failbit-item')) {
+                            after = after.nextElementSibling;
+                        }
+                        after.after(item);
+                    } else {
+                        list.appendChild(item);
+                    }
+                }
             }
-            list.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+            // 3. 모든 체크박스 해제
+            panel.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
+            // 4. 생성 버튼 업데이트
             updateGenBtn();
         });
-        list.appendChild(resetItem);
+        resetBar.appendChild(resetItem);
 
         // Composite Map (Grade heatmap) — 최상단
         const specialHeader = document.createElement('div');
@@ -12717,12 +12743,14 @@ class WaferMapViewer {
             
             // 🔥 Composite Mode 종료 (이미지 선택 시 자동 종료)
             // 단, composite mode의 그리드에서 단일 이미지로 들어간 경우(singleImageFromGrid)는 제외
-            if (this.isCompositeMode && !loadFromGridSingleMode) {
+            // 또한 gridImage 모드에서 Navigator로 이미지 전환 시에도 유지
+            const keepComposite = loadFromGridSingleMode || this.viewMode === 'gridImage';
+            if (this.isCompositeMode && !keepComposite) {
                 console.log('🔄 Composite Mode 종료 (이미지 선택됨)');
                 this.isCompositeMode = false;
                 this.compositeSession = null;
                 this.updateContextMenuState();
-            } else if (this.isCompositeMode && loadFromGridSingleMode) {
+            } else if (this.isCompositeMode && keepComposite) {
                 console.log('🔄 Composite Mode 유지 (그리드에서 단일 이미지로 진입)');
             }
 
@@ -18240,8 +18268,8 @@ class WaferMapViewer {
             if (lotBtn) lotBtn.classList.remove('active');
         }
 
-        // 📦 Lot 모드가 활성화되어 있으면 Lot별 그리드로 표시
-        if (this.lotMode) {
+        // 📦 Lot 모드가 활성화되어 있으면 Lot별 그리드로 표시 (Composite 모드는 제외)
+        if (this.lotMode && !this.isCompositeMode) {
             this.showGridByLot(images);
             return;
         }
@@ -18473,6 +18501,12 @@ class WaferMapViewer {
         }
 
         this.showGridImmediately(sortedImages);
+
+        // 🔥 다중 Measure: FBT/QVL 배치 프리페치 (서버 캐시 워밍, chips 1회 순회)
+        if (mcItems && mcItems.length > 1) {
+            this._prefetchMeasureThumbBatch(this._measureBaseImages, mcItems);
+        }
+
         // 🔥 새 그리드 진입 시 스크롤 맨 위 (콘텐츠 추가 후 리셋하여 확실히 적용)
         if (!skipSaveState) {
             const sw = grid?.parentElement;
@@ -22711,7 +22745,7 @@ class WaferMapViewer {
             if (navButtons) {
                 navButtons.style.display = 'flex';
                 navButtons.style.visibility = 'visible';
-                navButtons.style.pointerEvents = 'auto';
+                navButtons.style.pointerEvents = 'none';  // 컨테이너는 클릭 투과, 버튼만 auto
             }
             if (prevBtn) {
                 prevBtn.style.display = 'flex';
@@ -23762,23 +23796,65 @@ class WaferMapViewer {
             return item;
         };
 
-        // --- 초기화 항목 (비체크박스, 클릭 시 전체 해제) ---
+        // --- 초기화 버튼 — 검색 바 바로 아래, pinned 위 (항상 맨 위 고정) ---
+        const measurePanel = list.closest('.failbit-panel') || panel;
+        let resetBar = measurePanel.querySelector('.mc-reset-bar');
+        if (!resetBar) {
+            resetBar = document.createElement('div');
+            resetBar.className = 'mc-reset-bar';
+        }
+        // 항상 검색 바 바로 다음에 위치하도록 (pinned section 위)
+        const meaSearch = measurePanel.querySelector('.failbit-search');
+        const meaResetAfter = meaSearch ? meaSearch.nextSibling : measurePanel.firstChild;
+        if (resetBar.parentElement !== measurePanel || resetBar !== meaResetAfter) {
+            measurePanel.insertBefore(resetBar, meaResetAfter);
+        }
+        resetBar.innerHTML = '';
         const resetItem = document.createElement('div');
         resetItem.className = 'failbit-item';
         resetItem.textContent = '초기화';
-        resetItem.dataset.label = '초기화 reset';
-        resetItem.style.cssText = 'color:#f88;cursor:pointer;';
-        resetItem.addEventListener('click', () => {
+        resetItem.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // 1. 체크 상태 초기화
             this._measureCheckedItems = [];
-            // pinned 항목들을 원래 위치로 복귀
-            const pinned = list.querySelector('.pinned-section');
+            // 2. pinned section 비우기
+            const pinned = measurePanel.querySelector(':scope > .pinned-section');
             if (pinned) {
-                [...pinned.querySelectorAll('.failbit-item')].forEach(item => this._unpinItem(list, item));
+                while (pinned.firstChild) {
+                    const item = pinned.firstChild;
+                    const sectionName = item.dataset?.pinSection || '';
+                    delete item.dataset.pinSection;
+                    const sections = [...list.children].filter(el => el.classList.contains('failbit-section'));
+                    const target = sections.find(s => s.textContent === sectionName);
+                    if (target) {
+                        let after = target;
+                        while (after.nextElementSibling && after.nextElementSibling.classList.contains('failbit-item')) {
+                            after = after.nextElementSibling;
+                        }
+                        after.after(item);
+                    } else {
+                        list.appendChild(item);
+                    }
+                }
             }
-            list.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+            // 3. 모든 체크박스 해제
+            measurePanel.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
+            // 4. 적용 버튼 업데이트
             updateApplyBtn();
+            // 5. Measure 버튼 텍스트 + is-active 클래스 리셋
+            this.updateFailbitButtonUI();
+            // 6. 오버레이 해제
+            this.overlayMode = null;
+            this._ratioActiveItemKey = null;
+            this._gridMeasureMap = null;
+            if (this.chipAnnotator) this.chipAnnotator.setOverlayMode(null);
+            if (!this.gridMode) this.refreshThumbnailNavigatorWithCurrentParams();
+            // 7. 그리드 모드일 때 measure overlay 이미지 원복
+            if (this.gridMode && this._measureBaseImages?.length > 0) {
+                this.showGrid(this._measureBaseImages, true);
+            }
         });
-        list.appendChild(resetItem);
+        resetBar.appendChild(resetItem);
 
         // --- MAP 섹션 (Failbit = 원본 이미지) ---
         const mapHeader = document.createElement('div');
@@ -24128,20 +24204,17 @@ class WaferMapViewer {
                 return;
             }
 
-            // 🔥 이미지 선택 + measure → 새 "mea" 탭으로 분리
+            // 🔥 이미지 선택 + measure → 항상 새 "mea" 탭으로 분리
             const hasGridSelection = selected.length > 0;
-            const isMeasureActive = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey;
-            if (hasGridSelection && isSingle && isMeasureActive) {
+            if (hasGridSelection && (isSingle || isMulti)) {
+                // overlayMode를 먼저 설정 (_openMeasureTab에서 참조)
+                this._syncOverlayModeFromChecked();
                 this._openMeasureTab();
                 return;
             }
 
             if (isMulti || wasMulti) {
                 // 다중↔단일 전환 또는 다중 항목 변경: 그리드 전체 재생성
-                if (hasGridSelection && isMeasureActive) {
-                    this._openMeasureTab();
-                    return;
-                }
                 this.showGrid(targetImages);
             } else {
                 // 단일 선택 유지: URL만 교체
@@ -24186,14 +24259,63 @@ class WaferMapViewer {
         switch (measureItem.type) {
             case 'failbit':
                 return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${this.getPersonalizedParams()}${cacheSuffix}`;
-            case 'bin':
-                return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${this.getPersonalizedParams()}&bin_overlay=1${cacheSuffix}`;
+            case 'bin': {
+                // getPersonalizedParams()가 overlayMode=bin일 때 이미 bin_overlay=1 포함
+                const pp = this.getPersonalizedParams();
+                const extra = pp.indexOf('bin_overlay=1') < 0 ? '&bin_overlay=1' : '';
+                return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${pp}${extra}${cacheSuffix}`;
+            }
             case 'f':
             case 'q':
                 return `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${measureItem.type}&key=${encodeURIComponent(measureItem.key)}&size=512&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
             default:
                 return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${this.getPersonalizedParams()}${cacheSuffix}`;
         }
+    }
+
+    /**
+     * 다중 Measure 배치 프리페치: 서버에서 chips 1회 순회로 모든 FBT/QVL 썸네일 생성+캐시.
+     * 개별 /api/measure-thumb 요청이 오면 서버 캐시에서 즉시 응답.
+     */
+    _prefetchMeasureThumbBatch(baseImages, measureItems) {
+        if (!baseImages?.length || !measureItems?.length) return;
+        // FBT/QVL 항목만 추출 (failbit/bin은 일반 thumbnail API)
+        const fqItems = measureItems
+            .filter(it => it.type === 'f' || it.type === 'q')
+            .map(it => ({ field: it.type, key: String(it.key) }));
+        if (fqItems.length === 0) return;
+
+        const loginId = this.getCurrentLoginId();
+        const gf = this.selectedGradientRanges.size > 0
+            ? Array.from(this.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
+
+        // 이미지별로 배치 요청 (동시 최대 8개)
+        const uniqueImages = [...new Set(baseImages)];
+        const CONCURRENCY = 8;
+        let running = 0;
+        const queue = [...uniqueImages];
+
+        const processNext = () => {
+            while (running < CONCURRENCY && queue.length > 0) {
+                const imgPath = queue.shift();
+                running++;
+                fetch('/api/measure-thumb-batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        path: imgPath,
+                        items: fqItems,
+                        size: 512,
+                        scheme: loginId,
+                        gradient_filter: gf || undefined,
+                    }),
+                }).catch(() => {}).finally(() => {
+                    running--;
+                    processNext();
+                });
+            }
+        };
+        processNext();
     }
 
     /**
@@ -24225,6 +24347,31 @@ class WaferMapViewer {
 
             // Canvas에 직접 렌더링
             await this._renderMeasureOnCanvas(data);
+
+            // gradient bar 비율 표시: API 응답 chips에서 바로 percentile 계산
+            if (this.chipAnnotator && data.chips && data.chips.length > 0) {
+                const values = data.chips.filter(c => c.val != null).map(c => c.val);
+                if (values.length > 0) {
+                    const sorted = [...values].sort((a, b) => a - b);
+                    const n = sorted.length;
+                    this.chipAnnotator.ratioPercentiles = new Map();
+                    for (let i = 0; i < values.length; i++) {
+                        let lo = 0, hi = n - 1;
+                        while (lo <= hi) {
+                            const mid = (lo + hi) >> 1;
+                            if (sorted[mid] < values[i]) lo = mid + 1;
+                            else hi = mid - 1;
+                        }
+                        const rank = n > 1 ? (lo / (n - 1)) * 100 : 50;
+                        this.chipAnnotator.ratioPercentiles.set(i, Math.max(0, Math.min(100, rank)));
+                    }
+                }
+                if (data.gradient_stops) {
+                    this._ratioGradientCache = data.gradient_stops;
+                }
+                // 🔥 percentile 계산 후 범례 갱신 (gradient count 표시)
+                this.renderColorLegends();
+            }
         } catch (e) {
             console.error('⚠️ Measure 렌더링 실패:', e);
         }
@@ -24276,8 +24423,8 @@ class WaferMapViewer {
 
         // 매칭 칩 gradient color + 값 텍스트
         const chipH = chip_rects.length > 0 ? (chip_rects[0].y1 - chip_rects[0].y0) : 20;
-        const fontSize = Math.max(10, Math.floor(chipH * 0.35));
-        ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+        const chipW = chip_rects.length > 0 ? (chip_rects[0].x1 - chip_rects[0].x0) : 20;
+        const baseFontSize = Math.max(10, Math.floor(Math.min(chipH, chipW) * 0.4));
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
@@ -24294,13 +24441,24 @@ class WaferMapViewer {
             ctx.lineWidth = 1;
             ctx.strokeRect(rect.x0, rect.y0, rect.x1 - rect.x0, rect.y1 - rect.y0);
 
-            // 값 텍스트
+            // 값 텍스트 — 칩 크기에 맞게 폰트 축소
             if (chip.val != null) {
                 const lum = 0.299 * r + 0.587 * g + 0.114 * b;
                 ctx.fillStyle = lum > 140 ? '#000' : '#fff';
                 const cx = (rect.x0 + rect.x1) / 2;
                 const cy = (rect.y0 + rect.y1) / 2;
                 const text = this._fmtMeasureValue(chip.val);
+                const rW = rect.x1 - rect.x0;
+                const rH = rect.y1 - rect.y0;
+                // 칩 크기와 텍스트 길이를 고려한 폰트 축소
+                let fs = Math.max(10, Math.floor(Math.min(rH, rW) * 0.4));
+                ctx.font = `bold ${fs}px Arial, sans-serif`;
+                let tw = ctx.measureText(text).width;
+                while (tw > rW * 0.9 && fs > 8) {
+                    fs -= 1;
+                    ctx.font = `bold ${fs}px Arial, sans-serif`;
+                    tw = ctx.measureText(text).width;
+                }
                 ctx.fillText(text, cx, cy);
             }
         }
@@ -24365,12 +24523,23 @@ class WaferMapViewer {
             }
         }
 
-        if (!this.chipAnnotator || !this.overlayMode) return;
+        if (!this.chipAnnotator) return;
+
+        // 🔥 overlayMode가 null이면 chipAnnotator 오버레이도 해제 (BIN/FBT 잔존 방지)
+        if (!this.overlayMode) {
+            if (this.chipAnnotator.overlayMode) {
+                this.chipAnnotator.setOverlayMode(null);
+            }
+            return;
+        }
 
         if (this.overlayMode === 'bin') {
             const binColors = this._buildBinColorMap();
             this.chipAnnotator.setOverlayMode('bin', { binColors });
         } else if (this.overlayMode === 'f' || this.overlayMode === 'q') {
+            // 🔥 chipAnnotator.overlayMode 동기화 (이전 BIN 오버레이 잔존 방지)
+            this.chipAnnotator.overlayMode = this.overlayMode;
+            this.chipAnnotator.binOverlayColors.clear();
             await this._applyRatioOverlayClient(this.overlayMode, this._ratioActiveItemKey);
         }
     }
@@ -25410,11 +25579,12 @@ class WaferMapViewer {
                 rc = this.chipAnnotator ? this.chipAnnotator.getGradientRangeCounts() : { counts: new Array(10).fill(0), total: 0 };
             }
             const topHtml = labels.map((label, i) => {
-                // 구간 중앙 색상 (stops[i]와 stops[i+1]의 중간)
+                // 구간 중앙 색상 (stops[i]와 stops[i+1]의 중간) — hex 문자열 또는 RGB 배열 지원
                 const c1 = stops[i], c2 = stops[i + 1];
-                const rgb1 = this.chipAnnotator?._hexToRgb(c1);
-                const rgb2 = this.chipAnnotator?._hexToRgb(c2);
-                let color = c1;
+                const _toRgb = (v) => Array.isArray(v) ? { r: v[0], g: v[1], b: v[2] } : (this.chipAnnotator?._hexToRgb(v) || null);
+                const rgb1 = _toRgb(c1);
+                const rgb2 = _toRgb(c2);
+                let color = Array.isArray(c1) ? `rgb(${c1[0]},${c1[1]},${c1[2]})` : c1;
                 if (rgb1 && rgb2) {
                     const r = Math.round((rgb1.r + rgb2.r) / 2);
                     const g = Math.round((rgb1.g + rgb2.g) / 2);
@@ -25429,9 +25599,9 @@ class WaferMapViewer {
                 const opacity = this.selectedGradientRanges.size > 0 && !isSelected ? 'opacity:0.35;' : '';
                 return `
                     <div class="legend-item" data-section="gradient" data-index="${i}" draggable="true" style="cursor: pointer;${opacity}">
-                        <span class="legend-label" style="font-size:10px;">${label}%</span>
+                        <span class="legend-label" style="font-size:11px;">${label}%</span>
                         <div class="legend-color-bar" data-section="gradient" data-index="${i}" style="background-color: ${color}; position: relative; overflow: hidden;${selBorder}cursor:pointer;">
-                            <span style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:9px;color:${_contrastText(typeof color === 'string' && color.startsWith('#') ? color : c1)};line-height:1;pointer-events:none;font-weight:600;">${countText}</span>
+                            <span style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:${rgb1 ? ((0.299*rgb1.r + 0.587*rgb1.g + 0.114*rgb1.b) > 140 ? 'rgba(0,0,0,0.85)' : 'rgba(255,255,255,0.9)') : '#fff'};line-height:1;pointer-events:none;font-weight:600;">${countText}</span>
                         </div>
                     </div>
                 `;
@@ -25456,7 +25626,7 @@ class WaferMapViewer {
                         <div class="legend-item" data-section="top" data-key="${label}" data-index="${index}" draggable="true" style="cursor: pointer;">
                             <span class="legend-label">${label}</span>
                             <div class="legend-color-bar" data-section="top" data-key="${label}" style="background-color: ${color}; cursor: pointer; position: relative; overflow: hidden;">
-                                <span style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:9px;color:${_contrastText(color)};line-height:1;pointer-events:none;font-weight:600;">${countText}</span>
+                                <span style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:${_contrastText(color)};line-height:1;pointer-events:none;font-weight:600;">${countText}</span>
                             </div>
                         </div>
                     `;
@@ -25531,7 +25701,7 @@ class WaferMapViewer {
                         <div class="legend-item" data-section="bottom" data-key="${displayLabel}" data-index="${index}" draggable="true" style="cursor: pointer;">
                             <span class="legend-label">${renderLabel}</span>
                             <div class="legend-color-bar" data-section="bottom" data-key="${displayLabel}" style="background-color: ${color}; cursor: pointer; position: relative; overflow: hidden;">
-                                <span style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:9px;color:${_contrastText(color)};line-height:1;pointer-events:none;font-weight:600;">${countText}</span>
+                                <span style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:${_contrastText(color)};line-height:1;pointer-events:none;font-weight:600;">${countText}</span>
                             </div>
                         </div>
                     `;
@@ -25632,8 +25802,10 @@ class WaferMapViewer {
             // Gradient percentile legend (10 ranges: 0~10, 10~20, ..., 90~100)
             const stops = this._ratioGradientCache;
             const labels = ['0~10', '10~20', '20~30', '30~40', '40~50', '50~60', '60~70', '70~80', '80~90', '90~100'];
-            const hexToRgb = (hex) => {
-                const h = hex.replace('#', '');
+            const hexToRgb = (val) => {
+                if (Array.isArray(val)) return { r: val[0], g: val[1], b: val[2] };
+                if (typeof val !== 'string') return { r: 128, g: 128, b: 128 };
+                const h = val.replace('#', '');
                 return { r: parseInt(h.substring(0, 2), 16), g: parseInt(h.substring(2, 4), 16), b: parseInt(h.substring(4, 6), 16) };
             };
             // range_counts for measure composite or single-image overlay
@@ -25670,8 +25842,8 @@ class WaferMapViewer {
                 return `
                     <div class="legend-item-grid" data-section="gradient" data-index="${i}" style="cursor: pointer;${opacity}">
                         <div class="legend-color-bar-grid" style="background-color: ${color};${selBorder}"></div>
-                        <span class="legend-label-grid" style="font-size:10px;">${label}%</span>
-                        ${countText ? `<span class="legend-count-grid" style="font-size:8px;color:#aaa;">${countText}</span>` : ''}
+                        <span class="legend-label-grid" style="font-size:11px;">${label}%</span>
+                        ${countText ? `<span class="legend-count-grid" style="font-size:9px;color:#aaa;">${countText}</span>` : ''}
                     </div>
                 `;
             }).join('');
