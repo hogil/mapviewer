@@ -25,6 +25,27 @@ The codebase uses environment variables to adapt to both environments. SAML logi
 - SAML configuration in `saml/settings.json` is sample data; production values are configured separately in Ubuntu
 - Do not try to evaluate or test SAML features in the Windows development environment
 
+**Absolute Rule: Non-blocking Server Startup (비동기 서버 시작)**
+- 서버 시작 시 `lifespan`의 `yield` 전에는 최소한의 필수 초기화만 수행한다 (labels 로드, 디렉토리 생성 등)
+- 인덱스 캐시 로드(`load_cache`), 인덱스 빌드(`build`), `_build_lookup_indices`, `_save_cache`, `__pycache__` 정리, composite cleanup 등 모든 무거운 작업은 반드시 `asyncio.create_task`로 백그라운드 실행한다
+- CPU/IO 집약적 작업(`_walk_and_collect`, `_save_cache`, `_build_lookup_indices`, `_build_folder_files_cache`)은 반드시 `loop.run_in_executor`로 실행하여 이벤트 루프를 블로킹하지 않는다
+- 서버는 인덱스 빌드 완료 여부와 무관하게 즉시 웹 요청을 처리할 수 있어야 한다
+- `/api/files`, `/api/image` 등 인덱스에 의존하지 않는 엔드포인트는 서버 시작 즉시 동작해야 한다
+- 인덱스 빌드 상태는 `/api/index-status` 엔드포인트와 프론트엔드 배너로 사용자에게 표시한다
+- 이 규칙을 위반하는 코드 변경(동기 블로킹 초기화, yield 전 무거운 작업 추가)은 절대 금지한다
+
+**Absolute Rule: Playwright는 반드시 새 브라우저 창으로 실행**
+- Playwright MCP로 페이지를 열 때, 기존 탭에서 `browser_navigate`하지 말고 반드시 `browser_evaluate`로 `window.open(url)`을 실행하여 새 창/탭을 연 뒤 `browser_tabs`로 해당 탭으로 전환한다
+- 이미 열려있는 페이지가 있다면 절대 덮어쓰지 않는다 — 항상 새 창으로 띄운다
+- 여러 페이지를 동시에 봐야 할 경우, 서로 다른 Playwright 인스턴스(playwright, playwright2, playwright3 등)를 사용한다
+- 이 규칙을 위반하여 기존 페이지를 navigate로 덮어쓰는 행위는 절대 금지한다
+
+**Absolute Rule: 기존 브라우저 창을 절대 닫지 않는다**
+- `browser_close`를 사용자가 명시적으로 요청하기 전에는 절대 호출하지 않는다
+- 접속 오류, 타임아웃, 브라우저 컨트롤 불가 등 어떤 상황에서도 기존 브라우저 창을 닫는 것으로 해결하지 않는다
+- 브라우저 제어가 안 될 경우, 닫지 말고 사용자에게 상황을 보고하고 지시를 기다린다
+- 이 규칙을 위반하여 사용자 허락 없이 브라우저를 닫는 행위는 절대 금지한다
+
 ## Running the Application
 
 ### Start the Server

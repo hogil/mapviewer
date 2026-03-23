@@ -49,18 +49,15 @@ node_modules/
 package.json
 package-lock.json
 
-# Screenshots & test artifacts
-phase*.png
-*.screenshot.png
-color-edit-dialog.png
-error.png
-error2.png
-label-click.png
-label-explorer.png
-preview-test.png
-test-after-fix.png
-test-label-explorer-before.png
-test-single-image.png
+# Images
+*.png
+*.jpeg
+*.jpg
+*.bmp
+*.tiff
+*.tif
+*.webp
+*.gif
 
 # Temp files
 temp_snippet.txt

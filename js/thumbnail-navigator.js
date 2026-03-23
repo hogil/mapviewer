@@ -1418,12 +1418,19 @@ export class ThumbnailNavigator {
         // 🔥 Measure overlay 모드 판별 후 적절한 URL 사용
         let thumbnailUrl;
         const v = this.viewer;
-        const isMeasure = v && (v.overlayMode === 'f' || v.overlayMode === 'q') && v._ratioActiveItemKey;
-        if (isMeasure) {
+        // 🔥 다중 Measure 모드: _gridMeasureMap에서 인덱스별 measure item 참조
+        const measureItem = v?._gridMeasureMap ? v._gridMeasureMap[index] : null;
+        if (measureItem && v._buildMeasureThumbUrl) {
+            thumbnailUrl = v._buildMeasureThumbUrl(imagePath, measureItem, cacheSuffix);
+            // Navigator용 size=256으로 변경
+            thumbnailUrl = thumbnailUrl.replace('size=512', 'size=256');
+        } else if (v && (v.overlayMode === 'f' || v.overlayMode === 'q') && v._ratioActiveItemKey) {
             const loginId = v.getCurrentLoginId();
             const gf = v.selectedGradientRanges?.size > 0
                 ? Array.from(v.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
             thumbnailUrl = `/api/measure-thumb?path=${encodeURIComponent(imagePath)}&field=${v.overlayMode}&key=${encodeURIComponent(v._ratioActiveItemKey)}&size=256&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
+        } else if (v && v.overlayMode === 'bin') {
+            thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}&bin_overlay=1${cacheSuffix}`;
         } else {
             thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}${cacheSuffix}`;
         }
@@ -1505,6 +1512,15 @@ export class ThumbnailNavigator {
             } else {
                 displayName = processedName;
             }
+        }
+
+        // 🔥 다중 Measure 모드: measure type 라벨 접두사 추가
+        if (measureItem) {
+            const prefix = measureItem.type === 'failbit' ? '' :
+                           measureItem.type === 'bin' ? 'BIN ' :
+                           measureItem.type === 'f' ? `F${measureItem.key || ''} ` :
+                           measureItem.type === 'q' ? `Q${measureItem.key || ''} ` : '';
+            if (prefix) displayName = prefix + displayName;
         }
 
         fileName.textContent = displayName;

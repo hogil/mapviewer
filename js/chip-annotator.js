@@ -529,8 +529,14 @@ export class ChipAnnotator {
 
         // Draw text only when chip is large enough to read
         if (w > 18 && h > 14 && text) {
-            const fontSize = Math.max(8, Math.min(w, h) * 0.35);
+            let fontSize = Math.max(10, Math.min(w, h) * 0.4);
             this.ctx.font = `bold ${fontSize}px sans-serif`;
+            // 텍스트가 칩보다 넓으면 축소
+            const tm = this.ctx.measureText(text);
+            if (tm.width > w * 0.92) {
+                fontSize = Math.max(8, fontSize * (w * 0.88) / tm.width);
+                this.ctx.font = `bold ${fontSize}px sans-serif`;
+            }
             this.ctx.textAlign = 'center';
             this.ctx.textBaseline = 'middle';
 
@@ -716,10 +722,12 @@ export class ChipAnnotator {
         if (!this.chips.length) return;
         // 칩 크기 기반 셀 크기 결정
         const first = this.chips[0].rect;
+        if (!first) return;  // 🔥 rect가 없는 데이터 형식이면 공간 인덱스 스킵
         this._cellW = (first.x1 - first.x0) || 96;
         this._cellH = (first.y1 - first.y0) || 96;
         for (let i = 0; i < this.chips.length; i++) {
             const r = this.chips[i].rect;
+            if (!r) continue;
             const gx = Math.floor(r.x0 / this._cellW);
             const gy = Math.floor(r.y0 / this._cellH);
             const key = (gx << 16) | (gy & 0xffff);

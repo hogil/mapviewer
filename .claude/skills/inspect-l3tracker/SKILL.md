@@ -12,6 +12,14 @@ argument-hint: [점검-범위]
 
 이 스킬은 독립 서브에이전트에서 실행되어 메인 컨텍스트를 오염시키지 않는다.
 
+## 절대규칙: Non-blocking Server Startup
+
+서버 시작 관련 코드를 수정할 때 반드시 준수:
+- `lifespan`의 `yield` 전에는 최소한의 필수 초기화만 수행 (labels 로드, 디렉토리 생성)
+- 인덱스 로드/빌드, `_build_lookup_indices`, `_save_cache`, `__pycache__` 정리, composite cleanup 등 무거운 작업은 반드시 `asyncio.create_task`로 백그라운드 실행
+- CPU/IO 집약적 작업은 반드시 `loop.run_in_executor`로 실행 (이벤트 루프 블로킹 금지)
+- 서버는 인덱스 완료 여부와 무관하게 즉시 웹 요청 처리 가능해야 함
+
 ## 점검 체크리스트
 
 ### 1. 색상 매핑 일관성

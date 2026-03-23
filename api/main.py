@@ -33,7 +33,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs
 
-from fastapi import FastAPI, HTTPException, Query, Request, Path as PathParam, Depends, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Query, Request, Path as PathParam, Depends, BackgroundTasks, Body
 from fastapi import Response as FastAPIResponse
 from fastapi.responses import JSONResponse, FileResponse, Response, RedirectResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -1667,6 +1667,8 @@ async def lifespan(app: FastAPI):
     bootlog.info("🚀 [STARTUP] 서버 즉시 시작 — 인덱스 로드/빌드는 백그라운드에서 진행")
     asyncio.create_task(_lifespan_background_init())
 
+    import time as _t
+    bootlog.info(f"✅ [STARTUP] 서버 준비 완료 — https://0.0.0.0:{config.HTTPS_PORT} (시각: {_t.strftime('%H:%M:%S')})")
     yield  # 앱 실행 중 — 즉시 도달
 
     # Shutdown
@@ -7055,6 +7057,209 @@ async def get_measure_thumb(
     _measure_thumb_cache[cache_key] = result
     return Response(content=result, media_type="image/webp",
                     headers={"Cache-Control": "private, max-age=300"})
+
+
+def _generate_measure_thumbs_batch(
+    image_path: Path, size: int, items: list,
+    scheme: Optional[str] = None, gradient_filter: Optional[str] = None,
+) -> Dict[str, Optional[bytes]]:
+    """한 이미지에 대해 여러 field+key를 chips 1회 순회로 동시 추출 → 각각 heatmap 생성.
+    items: [{"field":"f","key":"1000"}, {"field":"q","key":"500"}, ...]
+    반환: {"f:1000": bytes, "q:500": bytes, ...}"""
+    import numpy as np
+    import bisect
+
+    rel_path = Path(_get_relative_path_from_image(str(image_path)))
+    positions_path = _resolve_positions_path(rel_path)
+    positions_data = _load_positions_cached(positions_path)
+    if positions_data is None:
+        return {f"{it['field']}:{it['key']}": None for it in items}
+    chips = positions_data.get("chips", [])
+    if not chips:
+        return {f"{it['field']}:{it['key']}": None for it in items}
+
+    # 각 item의 키 인덱스 준비
+    item_infos = []  # [(result_key, field, ki_or_dictkey, is_list)]
+    for it in items:
+        field, key = it["field"], str(it["key"])
+        key_name = "ftn_keys" if field == "f" else "qtn_keys" if field == "q" else None
+        ki = None
+        if key_name:
+            keys_list = positions_data.get(key_name, [])
+            for i, k in enumerate(keys_list):
+                if str(k) == key:
+                    ki = i
+                    break
+        item_infos.append((f"{field}:{key}", field, ki, key))
+
+    # 🔥 chips 1회 순회: 모든 item의 값을 동시 추출
+    item_vals = {info[0]: [] for info in item_infos}  # result_key → [(chip_idx, value)]
+    for chip_idx, chip in enumerate(chips):
+        for result_key, field, ki, dict_key in item_infos:
+            fd = chip.get(field)
+            if fd is None:
+                continue
+            if isinstance(fd, list):
+                if ki is not None and ki < len(fd) and fd[ki] is not None:
+                    try:
+                        item_vals[result_key].append((chip_idx, float(fd[ki])))
+                    except (ValueError, TypeError):
+                        pass
+            elif isinstance(fd, dict):
+                raw = fd.get(dict_key)
+                if raw is not None:
+                    try:
+                        item_vals[result_key].append((chip_idx, float(raw)))
+                    except (ValueError, TypeError):
+                        pass
+
+    # 공통: gradient 색상, 캔버스 크기, 배경색 (1회만 계산)
+    from .personal_colors import get_ratio_gradient_for_scheme, load_color_legends
+    gradient_stops = get_ratio_gradient_for_scheme(scheme or ANONYMOUS_LOGIN_ID)
+
+    allowed_ranges = None
+    if gradient_filter:
+        try:
+            allowed_ranges = set(int(x) for x in gradient_filter.split(",") if x.strip().isdigit())
+        except Exception:
+            pass
+
+    coord = positions_data.get("coord", {})
+    canvas_cfg = coord.get("canvas", {})
+    canvas_w = int(canvas_cfg.get("width", size))
+    canvas_h = int(canvas_cfg.get("height", size))
+    if canvas_w <= 0: canvas_w = size
+    if canvas_h <= 0: canvas_h = size
+    ratio = min(size / canvas_w, size / canvas_h)
+    out_w = max(1, int(canvas_w * ratio))
+    out_h = max(1, int(canvas_h * ratio))
+    sx = out_w / float(canvas_w)
+    sy = out_h / float(canvas_h)
+
+    bg_rgb = (204, 204, 204)
+    try:
+        legends = load_color_legends()
+        user_scheme = legends.get(scheme) or legends.get("default") or {}
+        bg_hex = str(user_scheme.get("background", "#CCCCCC")).strip().lstrip("#")
+        if len(bg_hex) == 6:
+            bg_rgb = (int(bg_hex[0:2], 16), int(bg_hex[2:4], 16), int(bg_hex[4:6], 16))
+    except Exception:
+        pass
+
+    # 공통: chip rect 사전 계산 (1회)
+    scaled_rects = {}
+    for chip_idx in range(len(chips)):
+        scaled = _scaled_chip_rect(chips[chip_idx], sx, sy, out_w, out_h)
+        if scaled:
+            scaled_rects[chip_idx] = scaled
+
+    # 각 item별 heatmap 생성
+    results = {}
+    for result_key, field, ki, dict_key in item_infos:
+        chip_vals = item_vals[result_key]
+        if not chip_vals:
+            results[result_key] = None
+            continue
+
+        all_sorted = sorted(v for _, v in chip_vals)
+        n = len(all_sorted)
+        arr = np.full((out_h, out_w, 3), bg_rgb, dtype=np.uint8)
+        filled = 0
+
+        for chip_idx, val in chip_vals:
+            scaled = scaled_rects.get(chip_idx)
+            if scaled is None:
+                continue
+            x0, y0, x1, y1 = scaled
+            lo = bisect.bisect_left(all_sorted, val)
+            pct = max(0.0, min(100.0, (lo / (n - 1)) * 100.0 if n > 1 else 50.0))
+            if allowed_ranges is not None:
+                range_idx = min(int(pct / 10), 9)
+                if range_idx not in allowed_ranges:
+                    arr[y0:y1, x0:x1] = (255, 255, 255)
+                    continue
+            il = max(0, min(10, int(pct / 10)))
+            ih = min(10, il + 1)
+            t = pct / 10.0 - il
+            r0, g0, b0 = gradient_stops[il]
+            r1, g1, b1 = gradient_stops[ih]
+            color = (int(r0 + (r1 - r0) * t), int(g0 + (g1 - g0) * t), int(b0 + (b1 - b0) * t))
+            arr[y0:y1, x0:x1] = color
+            filled += 1
+
+        if filled == 0:
+            results[result_key] = None
+            continue
+
+        try:
+            import pyvips as _pv
+            vout = _pv.Image.new_from_memory(arr.data, out_w, out_h, 3, 'uchar')
+            results[result_key] = vout.webpsave_buffer(Q=80, effort=0, strip=True)
+        except Exception:
+            pil_img = Image.fromarray(arr, "RGB")
+            buf = io.BytesIO()
+            pil_img.save(buf, format="WEBP", quality=80)
+            results[result_key] = buf.getvalue()
+
+    return results
+
+
+@app.post("/api/measure-thumb-batch")
+async def get_measure_thumb_batch(request: Request, body: dict = Body(...)):
+    """한 이미지에 대해 여러 measure 항목을 일괄 생성 (chips 1회 순회).
+    Body: {"path":"...", "items":[{"field":"f","key":"1000"},...],"size":512}
+    Returns: {"f:1000":"base64...","q:500":"base64...",...}"""
+    import base64
+    path = body.get("path", "")
+    items = body.get("items", [])
+    size = body.get("size", 256)
+    scheme = body.get("scheme")
+    gradient_filter = body.get("gradient_filter")
+    if not path or not items:
+        return JSONResponse({})
+
+    if not scheme:
+        scheme = get_user_color_scheme(_current_login_id(request))
+    image_path = Path(path) if Path(path).is_absolute() else ROOT_DIR / path
+
+    # 캐시 확인: 모두 캐시 히트면 배치 생성 스킵
+    fq_items = [it for it in items if it.get("field") in ("f", "q")]
+    if not fq_items:
+        return JSONResponse({})
+
+    uncached_items = []
+    cached_results = {}
+    for it in fq_items:
+        cache_key = f"{image_path}:{size}:{it['field']}:{it['key']}:{scheme}:{gradient_filter or ''}"
+        cached = _measure_thumb_cache.get(cache_key)
+        rk = f"{it['field']}:{it['key']}"
+        if cached:
+            cached_results[rk] = base64.b64encode(cached).decode("ascii")
+        else:
+            uncached_items.append(it)
+
+    if uncached_items:
+        batch_result = await asyncio.get_event_loop().run_in_executor(
+            IO_POOL, _generate_measure_thumbs_batch,
+            image_path, size, uncached_items, scheme, gradient_filter,
+        )
+        # 캐시 저장 + base64 변환
+        for rk, data in batch_result.items():
+            if data is None:
+                data = _get_empty_measure_placeholder(size)
+            # 개별 캐시에 저장 (기존 /api/measure-thumb에서도 히트)
+            parts = rk.split(":", 1)
+            cache_key = f"{image_path}:{size}:{parts[0]}:{parts[1]}:{scheme}:{gradient_filter or ''}"
+            if len(_measure_thumb_cache) > 2000:
+                for _ in range(200):
+                    try:
+                        _measure_thumb_cache.pop(next(iter(_measure_thumb_cache)))
+                    except (StopIteration, RuntimeError):
+                        break
+            _measure_thumb_cache[cache_key] = data
+            cached_results[rk] = base64.b64encode(data).decode("ascii")
+
+    return JSONResponse(cached_results)
 
 
 @app.get("/api/thumbnail")
