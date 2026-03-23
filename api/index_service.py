@@ -592,11 +592,6 @@ class IndexService:
             dirnames[:] = [d for d in dirnames if d not in skip_dirs]
             total_dirs += 1
 
-            # 🔥 100 디렉토리마다 10ms sleep — 다른 I/O 요청에 양보
-            if total_dirs % 100 == 0:
-                import time as _time
-                _time.sleep(0.01)
-
             if not filenames:
                 continue
 

@@ -8571,11 +8571,15 @@ async def browse_folders(path: Optional[str] = None):
                 logger.debug(f"2depth 스캔 오류 ({entry_info['name']}): {e}")
                 return []
         
-        # 🔥 ThreadPoolExecutor로 병렬 처리 (SEARCH_WORKERS 사용)
-        with ThreadPoolExecutor(max_workers=config.SEARCH_WORKERS) as executor:
-            results = executor.map(scan_2depth, folders)
-            for subfolder_list in results:
-                subfolders.extend(subfolder_list)
+        # 🔥 run_in_executor로 비동기 처리 (이벤트 루프 블로킹 방지 + 병렬 스캔)
+        def _scan_all_2depth_parallel():
+            result = []
+            with ThreadPoolExecutor(max_workers=min(8, len(folders) or 1)) as pool:
+                for subfolder_list in pool.map(scan_2depth, folders):
+                    result.extend(subfolder_list)
+            return result
+        loop = asyncio.get_running_loop()
+        subfolders = await loop.run_in_executor(DIRLIST_EXECUTOR, _scan_all_2depth_parallel)
         
         # 🔥 1depth 폴더에서 entry 제거 (반환 시 불필요)
         for folder in folders:
