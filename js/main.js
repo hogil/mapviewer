@@ -18268,8 +18268,8 @@ class WaferMapViewer {
             if (lotBtn) lotBtn.classList.remove('active');
         }
 
-        // 📦 Lot 모드가 활성화되어 있으면 Lot별 그리드로 표시 (Composite 모드는 제외)
-        if (this.lotMode && !this.isCompositeMode) {
+        // 📦 Lot 모드가 활성화되어 있으면 Lot별 그리드로 표시
+        if (this.lotMode) {
             this.showGridByLot(images);
             return;
         }
