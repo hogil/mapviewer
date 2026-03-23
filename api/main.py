@@ -530,7 +530,8 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _cleanup_old_composite_dirs(retention_seconds: int) -> Dict[str, Any]:
-    """Delete composite output directories older than retention_seconds."""
+    """Delete composite output directories older than retention_seconds.
+    Also cleans up corresponding positions directories."""
     stats: Dict[str, Any] = {
         "scanned_dirs": 0,
         "deleted_dirs": 0,
@@ -546,6 +547,7 @@ def _cleanup_old_composite_dirs(retention_seconds: int) -> Dict[str, Any]:
 
     now = time.time()
     cutoff = now - retention_seconds
+    positions_composite_root = config.POSITIONS_ROOT / "composite_map"
 
     for user_dir in COMPOSITE_ROOT.iterdir():
         if not user_dir.is_dir():
@@ -569,6 +571,10 @@ def _cleanup_old_composite_dirs(retention_seconds: int) -> Dict[str, Any]:
             try:
                 shutil.rmtree(output_dir)
                 stats["deleted_dirs"] += 1
+                # 대응하는 positions 디렉터리도 삭제
+                pos_dir = positions_composite_root / user_dir.name / output_dir.name
+                if pos_dir.exists():
+                    shutil.rmtree(pos_dir, ignore_errors=True)
             except Exception as exc:
                 stats["error_count"] += 1
                 if len(stats["errors"]) < 5:
@@ -578,6 +584,13 @@ def _cleanup_old_composite_dirs(retention_seconds: int) -> Dict[str, Any]:
         try:
             if user_dir.exists() and not any(user_dir.iterdir()):
                 user_dir.rmdir()
+        except Exception:
+            pass
+        # 빈 positions user 폴더 정리
+        pos_user = positions_composite_root / user_dir.name
+        try:
+            if pos_user.exists() and not any(pos_user.iterdir()):
+                pos_user.rmdir()
         except Exception:
             pass
 
@@ -673,7 +686,8 @@ async def _start_composite_cleanup_loop() -> None:
     bootlog = logging.getLogger("uvicorn.error")
 
     if COMPOSITE_CLEANUP_RUN_ON_STARTUP:
-        initial_stats = _cleanup_old_composite_dirs(retention_seconds)
+        loop = asyncio.get_running_loop()
+        initial_stats = await loop.run_in_executor(None, _cleanup_old_composite_dirs, retention_seconds)
         bootlog.info(
             "[COMPOSITE CLEANUP] startup scan=%d deleted=%d skipped_recent=%d errors=%d retention_hours=%d",
             initial_stats["scanned_dirs"],
@@ -1444,6 +1458,87 @@ THUMB_STAT_CACHE = TTLCache(THUMB_STAT_TTL_SECONDS, THUMB_STAT_CACHE_CAPACITY)
 _positions_json_cache: Dict[str, dict] = {}  # path_str → parsed JSON
 _POSITIONS_CACHE_MAX = 64
 
+def _normalize_positions_to_chips(data: dict) -> dict:
+    """positions dict(키="0","1"...) → chips list 자동 변환.
+    chips 키가 이미 있으면 그대로 반환.
+    rect/w/h가 없는 칩에 대해 인접 칩 간격으로 크기를 추정."""
+    if isinstance(data.get("chips"), list) and data["chips"]:
+        # 🔥 기존 chips에도 rect 보정 적용
+        _ensure_chip_rects(data["chips"], data)
+        return data
+    pos = data.get("positions")
+    if isinstance(pos, dict) and pos:
+        try:
+            max_idx = max(int(k) for k in pos.keys())
+            chips = [None] * (max_idx + 1)
+            for k, v in pos.items():
+                chips[int(k)] = v
+            chips = [c if c is not None else {} for c in chips]
+            data["chips"] = chips
+            # coord가 없으면 칩 좌표에서 canvas 크기 추정
+            if "coord" not in data:
+                xs = [c.get("x", 0) for c in chips if c]
+                ys = [c.get("y", 0) for c in chips if c]
+                if xs and ys:
+                    data["coord"] = {
+                        "canvas": {
+                            "width": max(xs) + 10,
+                            "height": max(ys) + 10,
+                        }
+                    }
+            # 🔥 rect/w/h가 없는 칩에 크기 추정
+            _ensure_chip_rects(chips, data)
+        except (ValueError, TypeError):
+            pass
+    return data
+
+
+def _ensure_chip_rects(chips: list, data: dict) -> None:
+    """rect/w/h가 없는 칩에 대해 인접 칩 간격으로 w/h를 추정하여 설정."""
+    if not chips:
+        return
+    # 이미 rect 또는 w/h가 있으면 스킵
+    sample = next((c for c in chips if c and c.get("x") is not None), None)
+    if sample is None:
+        return
+    if sample.get("rect") or sample.get("w") is not None or sample.get("width") is not None:
+        return
+
+    # x, y 좌표 수집
+    xs = sorted(set(c.get("x", 0) for c in chips if c and c.get("x") is not None))
+    ys = sorted(set(c.get("y", 0) for c in chips if c and c.get("y") is not None))
+    if len(xs) < 2 and len(ys) < 2:
+        return
+
+    # 최소 인접 간격으로 칩 크기 추정
+    dx = min((xs[i+1] - xs[i]) for i in range(len(xs)-1)) if len(xs) > 1 else 10
+    dy = min((ys[i+1] - ys[i]) for i in range(len(ys)-1)) if len(ys) > 1 else 10
+    if dx <= 0:
+        dx = 10
+    if dy <= 0:
+        dy = 10
+
+    # coord/canvas 크기 업데이트 (rect 기반 크기 반영)
+    coord = data.get("coord", {})
+    canvas = coord.get("canvas", {})
+    max_x = max(xs) if xs else 0
+    max_y = max(ys) if ys else 0
+    new_w = int(max_x + dx)
+    new_h = int(max_y + dy)
+    if new_w > canvas.get("width", 0):
+        canvas["width"] = new_w
+    if new_h > canvas.get("height", 0):
+        canvas["height"] = new_h
+    data["coord"] = {"canvas": canvas}
+
+    for c in chips:
+        if not c or c.get("x") is None:
+            continue
+        if not c.get("rect") and c.get("w") is None and c.get("width") is None:
+            c["w"] = dx
+            c["h"] = dy
+
+
 def _load_positions_cached(positions_path: Path) -> Optional[dict]:
     """positions JSON을 메모리 캐시에서 로드 (같은 파일 반복 읽기 방지, ~10ms 절약)"""
     key = str(positions_path)
@@ -1454,6 +1549,7 @@ def _load_positions_cached(positions_path: Path) -> Optional[dict]:
         return None
     with open(positions_path, "r", encoding="utf-8") as f:
         data = json.load(f)
+    _normalize_positions_to_chips(data)
     # LRU: 오래된 항목 제거
     if len(_positions_json_cache) >= _POSITIONS_CACHE_MAX:
         _positions_json_cache.pop(next(iter(_positions_json_cache)))
@@ -1512,49 +1608,7 @@ def _get_cached_palette(image_path: Path) -> Optional[List[int]]:
 # ======================== Lifecycle ========================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 🔥 lifespan 시작 즉시 출력 (디버그용)
-    print("=" * 80, flush=True)
-    print("[LIFESPAN] ✅ lifespan 함수 진입!", flush=True)
-    print("=" * 80, flush=True)
-    
-    # Startup
-    
-    # 🧹 Python 캐시 정리 (서버 시작 시)
-    try:
-        import glob
-        cache_dirs = []
-        cache_files = []
-        for root, dirs, files in os.walk(Path(__file__).parent.parent):
-            # __pycache__ 디렉토리 찾기
-            if '__pycache__' in dirs:
-                cache_dirs.append(os.path.join(root, '__pycache__'))
-            # .pyc 파일 찾기
-            for file in files:
-                if file.endswith('.pyc'):
-                    cache_files.append(os.path.join(root, file))
-        
-        # 캐시 삭제
-        deleted_count = 0
-        for cache_dir in cache_dirs:
-            try:
-                shutil.rmtree(cache_dir)
-                deleted_count += 1
-            except Exception:
-                pass
-        for cache_file in cache_files:
-            try:
-                os.remove(cache_file)
-                deleted_count += 1
-            except Exception:
-                pass
-        
-        if deleted_count > 0:
-            bootlog = logging.getLogger("uvicorn.error")
-            bootlog.info(f"🧹 Python 캐시 정리 완료: {deleted_count}개 항목 삭제")
-    except Exception:
-        # 캐시 정리 실패해도 서버는 계속 실행
-        pass
-    
+    # Startup — 최소한의 필수 초기화만 수행하고 즉시 yield (서버 즉시 응답 가능)
     bootlog = logging.getLogger("uvicorn.error")
     bootlog.info("🚀 L3Tracker 서버 시작 (테이블 로그 시스템)")
     scheme = "HTTPS" if config.SSL_ENABLED else "HTTP"
@@ -1563,11 +1617,6 @@ async def lifespan(app: FastAPI):
     bootlog.info(f"🔌 포트: {port_to_log} ({scheme})")
     bootlog.info(f"📁 ROOT_DIR: {config.ROOT_DIR}")
     bootlog.info(f"🔧 PROJECT_ROOT: {os.getenv('PROJECT_ROOT', 'NOT SET')}")
-    
-    # 디버그 로그 제거 (초기 로드 시에만 필요하면 주석 해제)
-    # bootlog.info(f"🔍 [STARTUP] current_folder: {current_folder}")
-    # bootlog.info(f"🔍 [STARTUP] THUMBNAIL_DIR: {THUMBNAIL_DIR}")
-    
     bootlog.info("=" * 50)
     print_access_header_once()
 
@@ -1588,38 +1637,13 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
-    print("=" * 80, flush=True)
-    print("[LIFESPAN] Starting lifespan context...", flush=True)
-    print("=" * 80, flush=True)
-
+    # 필수 최소 초기화 (블로킹 없음)
     _classification_dir().mkdir(parents=True, exist_ok=True)
     _labels_load()
     global CLASSES_MTIME
     CLASSES_MTIME = _classes_stat_mtime()
 
-    print("[INDEX] Cache load started...", flush=True)
-    cache_start = time.time()
-    try:
-        cache_loaded = index_service.load_cache()
-    except Exception as exc:
-        bootlog.error(f"❌ [INDEX] 캐시 로드 중 오류: {exc}")
-        print(f"[INDEX] Cache load failed: {exc}", flush=True)
-        cache_loaded = False
-
-    cache_duration = time.time() - cache_start
-    if cache_loaded and index_service.keys:
-        bootlog.info(f"📂 [INDEX] Cache load complete: {len(index_service.keys)} files ({cache_duration:.2f}s)")
-        print(f"[INDEX] Cache load complete: {len(index_service.keys)} files ({cache_duration:.2f}s)", flush=True)
-    else:
-        bootlog.info("[INDEX] No cache found")
-        print("[INDEX] No cache found", flush=True)
-
-    # 🔥 인덱스 빌드를 백그라운드 태스크로 실행 (서버 시작 블로킹 방지)
-    index_action = "rebuild" if cache_loaded and index_service.keys else "build"
-    bootlog.info(f"🚀 [INDEX] 인덱스 {index_action}를 백그라운드에서 시작 (서버는 즉시 사용 가능)")
-    print(f"[INDEX] Starting index {index_action} in background (server ready)...", flush=True)
-
-    # 🔥 서버 재시작 시 이전 프로세스의 lock file 무조건 제거 (PID 재사용 문제 방지)
+    # 락 파일 정리 (서버 재시작 시 이전 프로세스 잔여물)
     try:
         if index_service.lock_file.exists():
             bootlog.warning(f"⚠️ [INDEX] 서버 시작 시 락 파일 제거: {index_service.lock_file}")
@@ -1627,21 +1651,11 @@ async def lifespan(app: FastAPI):
     except Exception as lock_exc:
         bootlog.warning(f"⚠️ [INDEX] 락 파일 정리 실패: {lock_exc}")
 
-    # 백그라운드 태스크 시작
-    asyncio.create_task(_lifespan_background_index_build(index_action))
+    # 🔥 모든 무거운 초기화를 백그라운드로 (서버는 즉시 요청 처리 가능)
+    bootlog.info("🚀 [STARTUP] 서버 즉시 시작 — 인덱스 로드/빌드는 백그라운드에서 진행")
+    asyncio.create_task(_lifespan_background_init())
 
-    # 🔥 자동 재빌드 루프도 백그라운드에서 시작
-    if INDEX_REFRESH_INTERVAL_SECONDS > 0:
-        interval_minutes = INDEX_REFRESH_INTERVAL_SECONDS // 60 or 1
-        bootlog.info(f"🔁 [INDEX] 자동 재빌드 주기: {interval_minutes}분")
-        asyncio.create_task(index_service.start_refresh_loop(INDEX_REFRESH_INTERVAL_SECONDS))
-        bootlog.info(f"✅ [INDEX] 자동 재빌드 루프 백그라운드 시작 (매 {interval_minutes}분마다 실행)")
-    else:
-        bootlog.warning("⚠️ [INDEX] 자동 재빌드가 비활성화됨 (INDEX_REFRESH_INTERVAL_MINUTES=0)")
-
-    await _start_composite_cleanup_loop()
-
-    yield  # 앱 실행 중
+    yield  # 앱 실행 중 — 즉시 도달
 
     # Shutdown
     logging.getLogger("uvicorn.error").info("🛑 L3Tracker 서버 종료")
@@ -1658,6 +1672,85 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
+
+async def _lifespan_background_init():
+    """서버 시작 후 백그라운드에서 모든 무거운 초기화 수행."""
+    bootlog = logging.getLogger("uvicorn.error")
+    loop = asyncio.get_running_loop()
+
+    # 1) __pycache__ 정리 (executor에서 비동기)
+    def _cleanup_pycache():
+        deleted = 0
+        try:
+            for root, dirs, files in os.walk(Path(__file__).parent.parent):
+                if '__pycache__' in dirs:
+                    try:
+                        shutil.rmtree(os.path.join(root, '__pycache__'))
+                        deleted += 1
+                    except Exception:
+                        pass
+                for f in files:
+                    if f.endswith('.pyc'):
+                        try:
+                            os.remove(os.path.join(root, f))
+                            deleted += 1
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        return deleted
+    try:
+        deleted = await loop.run_in_executor(None, _cleanup_pycache)
+        if deleted:
+            bootlog.info(f"🧹 Python 캐시 정리 완료: {deleted}개 항목 삭제")
+    except Exception:
+        pass
+
+    # 2) 인덱스 캐시 로드 (executor에서 비동기 — 이벤트 루프 블로킹 방지)
+    cache_start = time.time()
+    try:
+        cache_loaded = await loop.run_in_executor(None, index_service.load_cache)
+    except Exception as exc:
+        bootlog.error(f"❌ [INDEX] 캐시 로드 중 오류: {exc}")
+        cache_loaded = False
+
+    cache_duration = time.time() - cache_start
+    if cache_loaded and index_service.keys:
+        bootlog.info(f"📂 [INDEX] Cache loaded: {len(index_service.keys)} files ({cache_duration:.2f}s)")
+    else:
+        bootlog.info("[INDEX] No cache found — full build required")
+
+    # 3) 인덱스 빌드 (executor 내부에서 scan + finalize)
+    index_action = "rebuild" if cache_loaded and index_service.keys else "build"
+    bootlog.info(f"🔨 [INDEX] Background {index_action} started")
+    build_start = time.time()
+    try:
+        build_result = await index_service.build(force=True, allow_background=False)
+        build_duration = time.time() - build_start
+        if build_result:
+            bootlog.info(
+                f"✅ [INDEX] Background {index_action} complete: "
+                f"files={index_service.total_files}, dirs={index_service.total_dirs} ({build_duration:.2f}s)"
+            )
+            # 폴더별 파일 캐시 빌드 (executor)
+            await loop.run_in_executor(None, _build_folder_files_cache)
+            bootlog.info(f"✅ [INDEX] Folder files cache built: {len(_FOLDER_FILES_CACHE)} folders")
+        else:
+            bootlog.warning(f"⚠️ [INDEX] Background {index_action} failed")
+    except Exception as exc:
+        bootlog.error(f"❌ [INDEX] Background {index_action} error: {exc}", exc_info=True)
+
+    # 4) 자동 재빌드 루프
+    if INDEX_REFRESH_INTERVAL_SECONDS > 0:
+        interval_minutes = INDEX_REFRESH_INTERVAL_SECONDS // 60 or 1
+        bootlog.info(f"🔁 [INDEX] 자동 재빌드 주기: {interval_minutes}분")
+        asyncio.create_task(index_service.start_refresh_loop(INDEX_REFRESH_INTERVAL_SECONDS))
+    else:
+        bootlog.warning("⚠️ [INDEX] 자동 재빌드 비활성화 (INDEX_REFRESH_INTERVAL_MINUTES=0)")
+
+    # 5) Composite cleanup 루프
+    await _start_composite_cleanup_loop()
+
 # ======================== Git 버전 해시 (JS 캐시버스팅용) ========================
 try:
     _JS_VERSION = subprocess.check_output(
@@ -1671,115 +1764,24 @@ except Exception:
 app = FastAPI(title="L3Tracker API", version="2.6.0", lifespan=lifespan)
 
 
-# ======================== 🔥 Startup Event (lifespan 백업) ========================
+# ======================== Startup Event (lifespan 백업) ========================
 # lifespan이 호출되지 않는 경우를 대비한 백업 startup 이벤트
 @app.on_event("startup")
 async def startup_event():
     """lifespan이 호출되지 않는 경우를 대비한 백업 startup 이벤트"""
-    global INDEX_REFRESH_INTERVAL_SECONDS
-    
-    print("=" * 80, flush=True)
-    print("[STARTUP EVENT] ✅ on_event('startup') 실행됨!", flush=True)
-    print("=" * 80, flush=True)
-    
     bootlog = logging.getLogger("uvicorn.error")
-    
-    # 인덱스가 이미 준비되었는지 확인 (lifespan에서 이미 처리된 경우)
+
+    # lifespan에서 이미 백그라운드 초기화를 시작한 경우 스킵
     if index_service.ready and index_service.keys:
         bootlog.info(f"ℹ️ [STARTUP] 인덱스 이미 준비됨 (lifespan에서 처리): {len(index_service.keys)}개 파일")
-        print(f"[STARTUP] Index already ready: {len(index_service.keys)} files", flush=True)
         return
-    
-    # 🔥 캐시 로드는 즉시 실행 (빠름)
-    cache_start = time.time()
-    try:
-        cache_loaded = index_service.load_cache()
-        cache_duration = time.time() - cache_start
-        if cache_loaded and index_service.keys:
-            bootlog.info(f"📂 [STARTUP] Cache load complete: {len(index_service.keys)} files ({cache_duration:.2f}s)")
-            print(f"[STARTUP] Cache load complete: {len(index_service.keys)} files ({cache_duration:.2f}s)", flush=True)
-        else:
-            bootlog.info("[STARTUP] No cache found")
-            print("[STARTUP] No cache found", flush=True)
-    except Exception as exc:
-        bootlog.warning(f"⚠️ [STARTUP] Cache load failed: {exc}")
-        cache_loaded = False
-    
-    # 🔥 인덱스 빌드는 백그라운드에서 비동기 실행 (서버 시작 블로킹 방지)
-    asyncio.create_task(_background_index_build())
-    bootlog.info("🚀 [STARTUP] 인덱스 빌드가 백그라운드에서 시작됨 (서버는 즉시 사용 가능)")
-    print("[STARTUP] Index build started in background (server ready)", flush=True)
-    
-    # 🔥 자동 재빌드 루프도 백그라운드에서 시작
-    if INDEX_REFRESH_INTERVAL_SECONDS > 0:
-        interval_minutes = INDEX_REFRESH_INTERVAL_SECONDS // 60 or 1
-        bootlog.info(f"🔁 [STARTUP] 자동 재빌드 주기: {interval_minutes}분")
-        await index_service.start_refresh_loop(INDEX_REFRESH_INTERVAL_SECONDS)
-    await _start_composite_cleanup_loop()
+    if index_service.building:
+        bootlog.info("ℹ️ [STARTUP] 인덱스 빌드 이미 진행 중 (lifespan에서 시작됨)")
+        return
 
-
-async def _lifespan_background_index_build(index_action: str):
-    """lifespan에서 백그라운드로 인덱스 빌드 실행"""
-    bootlog = logging.getLogger("uvicorn.error")
-    build_start = time.time()
-    try:
-        print(f"[INDEX] Background {index_action} started...", flush=True)
-        bootlog.info(f"🔨 [INDEX] Background {index_action} started")
-
-        build_result = await index_service.build(force=True, allow_background=False)
-        build_duration = time.time() - build_start
-
-        if build_result:
-            cache_file = index_service.cache_file
-            if cache_file.exists():
-                file_size = cache_file.stat().st_size
-                bootlog.info(
-                    f"✅ [INDEX] Background {index_action} complete: files={index_service.total_files}, dirs={index_service.total_dirs}, cache_size={file_size:,} bytes ({build_duration:.2f}s)"
-                )
-                print(
-                    f"[INDEX] Background {index_action} complete: files={index_service.total_files}, dirs={index_service.total_dirs} ({build_duration:.2f}s)",
-                    flush=True,
-                )
-            else:
-                bootlog.error(f"❌ [INDEX] 캐시 파일이 생성되지 않음: {cache_file}")
-                print(f"[INDEX] Background {index_action} complete but cache file not found", flush=True)
-        else:
-            bootlog.warning(f"⚠️ [INDEX] 백그라운드 {index_action} 실패 (락 획득 실패 또는 이미 진행 중)")
-            print(f"[INDEX] Background {index_action} failed (lock acquisition failed)", flush=True)
-    except Exception as exc:
-        bootlog.error(f"❌ [INDEX] 백그라운드 {index_action} 오류: {exc}", exc_info=True)
-        print(f"[INDEX] Background {index_action} failed: {exc}", flush=True)
-
-
-async def _background_index_build():
-    """백그라운드에서 인덱스 빌드 실행"""
-    bootlog = logging.getLogger("uvicorn.error")
-    build_start = time.time()
-    try:
-        print("[INDEX] Background build started...", flush=True)
-        bootlog.info("🔨 [INDEX] Background build started")
-
-        build_result = await index_service.build(force=True, allow_background=False)
-        build_duration = time.time() - build_start
-
-        if build_result:
-            cache_file = index_service.cache_file
-            if cache_file.exists():
-                file_size = cache_file.stat().st_size
-                bootlog.info(
-                    f"✅ [INDEX] Background build complete: {index_service.total_files} files ({build_duration:.2f}s)"
-                )
-                print(f"[INDEX] Background build complete: {index_service.total_files} files ({build_duration:.2f}s)", flush=True)
-                # 🔥 폴더별 파일 캐시 자동 빌드
-                _build_folder_files_cache()
-                print(f"[INDEX] Folder files cache built: {len(_FOLDER_FILES_CACHE)} folders", flush=True)
-            else:
-                bootlog.error(f"❌ [INDEX] 캐시 파일이 생성되지 않음: {cache_file}")
-        else:
-            bootlog.warning("⚠️ [INDEX] 백그라운드 빌드 실패 (락 획득 실패 또는 이미 진행 중)")
-    except Exception as exc:
-        bootlog.error(f"❌ [INDEX] 백그라운드 빌드 오류: {exc}", exc_info=True)
-        print(f"[INDEX] Background build failed: {exc}", flush=True)
+    # lifespan이 호출되지 않은 경우에만 백그라운드 초기화 시작
+    bootlog.info("🚀 [STARTUP] lifespan 미실행 — 백그라운드 초기화 시작")
+    asyncio.create_task(_lifespan_background_init())
 
 
 @app.on_event("shutdown")
@@ -2263,6 +2265,16 @@ async def api_config():
         "PYRAMID_ZOOM_THRESHOLDS": config.PYRAMID_ZOOM_THRESHOLDS,
         "THUMB_BATCH_SIZE": config.THUMB_PREFETCH_BATCH,
         "THUMB_MAX_CONCURRENCY": config.THUMB_CLIENT_MAX_CONCURRENCY
+    }
+
+@app.get("/api/index-status")
+async def api_index_status():
+    """인덱스 빌드 상태 API (프론트엔드 인디케이터용)"""
+    return {
+        "ready": index_service.ready,
+        "building": index_service.building,
+        "total_files": index_service.total_files,
+        "total_dirs": index_service.total_dirs,
     }
 
 # 🔥 서버 메모리에 SAML 로그인 정보 저장
@@ -2944,8 +2956,13 @@ async def get_my_lot_group_entries(request: Request, mode: str, group: str):
     if not group:
         raise HTTPException(status_code=400, detail="group 이름이 필요합니다.")
     try:
-        entries = my_lot_list_group_entries(login_id, mode, group)
-        return entries
+        # 🔥 IO_POOL에서 파일 스캔 + JSON 직렬화 한 번에 처리 (이벤트 루프 블로킹 방지)
+        import json as _json
+        def _load_and_serialize():
+            data = my_lot_list_group_entries(login_id, mode, group)
+            return _json.dumps(data, ensure_ascii=False).encode("utf-8")
+        raw = await asyncio.get_event_loop().run_in_executor(IO_POOL, _load_and_serialize)
+        return Response(content=raw, media_type="application/json")
     except HTTPException:
         raise
     except Exception as exc:
@@ -6928,27 +6945,21 @@ def _generate_measure_thumb(
         pass
     arr = np.full((out_h, out_w, 3), bg_rgb, dtype=np.uint8)
 
-    # 칩 색칠
+    # 칩 색칠 — _scaled_chip_rect 재사용 (rect/x,y,w,h fallback 지원)
     filled = 0
     for chip_idx, val in chip_vals:
         lo = bisect.bisect_left(all_sorted, val)
         pct = max(0.0, min(100.0, (lo / (n - 1)) * 100.0 if n > 1 else 50.0))
+        chip = chips[chip_idx]
+        scaled = _scaled_chip_rect(chip, sx, sy, out_w, out_h)
+        if scaled is None:
+            continue
+        x0, y0, x1, y1 = scaled
         if allowed_ranges is not None:
             range_idx = min(int(pct / 10), 9)
             if range_idx not in allowed_ranges:
-                arr[max(0,int(chips[chip_idx].get('rect',{}).get('y0',0)*sy)):
-                    min(out_h,int(chips[chip_idx].get('rect',{}).get('y1',0)*sy)),
-                    max(0,int(chips[chip_idx].get('rect',{}).get('x0',0)*sx)):
-                    min(out_w,int(chips[chip_idx].get('rect',{}).get('x1',0)*sx))] = (255,255,255)
+                arr[y0:y1, x0:x1] = (255, 255, 255)
                 continue
-        chip = chips[chip_idx]
-        r = chip.get("rect", {})
-        x0 = max(0, min(out_w, int(math.floor(r.get("x0", 0) * sx))))
-        y0 = max(0, min(out_h, int(math.floor(r.get("y0", 0) * sy))))
-        x1 = max(0, min(out_w, int(math.ceil(r.get("x1", 0) * sx))))
-        y1 = max(0, min(out_h, int(math.ceil(r.get("y1", 0) * sy))))
-        if y1 <= y0 or x1 <= x0:
-            continue
         il = max(0, min(10, int(pct / 10)))
         ih = min(10, il + 1)
         t = pct / 10.0 - il
@@ -8889,18 +8900,46 @@ def _candidate_positions_paths(rel_path: Path) -> List[Path]:
     trimmed_parts = [p for p in trimmed_parent.parts if p not in ("", ".")]
     base_dir = config.POSITIONS_ROOT
     paths = []
-    
+
     # 🔥 파일명.json 형식만 사용 (우선순위 1: trimmed 경로)
     if trimmed_parts:
         paths.append(base_dir.joinpath(*trimmed_parts) / f"{rel_path.stem}.json")
     else:
         paths.append(base_dir / f"{rel_path.stem}.json")
-    
+
     # 🔥 우선순위 2: 레거시 경로 (파일명.json)
     legacy = config.POSITIONS_ROOT / rel_path.parent / f"{rel_path.stem}.json"
     if legacy not in paths:
         paths.append(legacy)
-    
+
+    # 🔥 우선순위 3: my-lot 경로 fallback — 파일명으로 원본 position 검색
+    rel_str = rel_path.as_posix()
+    if rel_str.startswith("my-lot/") or "my-lot/" in rel_str:
+        # 파일명에서 LOT_STEP 추출하여 원본 position 경로 생성
+        # 예: ABC234_00C_02_... → positions/filter_test/ABC234_00C_02_...json (검색)
+        stem = rel_path.stem
+        stem_json = f"{stem}.json"
+        # POSITIONS_ROOT 전체에서 파일명으로 검색 (캐시)
+        _cache = getattr(_candidate_positions_paths, '_mylot_cache', None)
+        if _cache is None:
+            _cache = {}
+            _candidate_positions_paths._mylot_cache = _cache
+        if stem_json in _cache:
+            cached = _cache[stem_json]
+            if cached not in paths:
+                paths.append(cached)
+        else:
+            # 1단계 서브디렉토리만 검색 (빠름)
+            for sub in base_dir.iterdir():
+                if not sub.is_dir():
+                    continue
+                candidate = sub / stem_json
+                if candidate.exists():
+                    _cache[stem_json] = candidate
+                    if candidate not in paths:
+                        paths.append(candidate)
+                    break
+
     return paths
 
 def _resolve_positions_path(rel_path: Path) -> Path:
@@ -8961,6 +9000,7 @@ async def get_chip_positions(path: str, include_fq: int = 0):
             with open(positions_file, 'r', encoding='utf-8') as f:
                 positions_data = json.load(f)
 
+        _normalize_positions_to_chips(positions_data)
         chips = positions_data.get('chips', [])
         chip_count = len(chips)
         logger.info(f"✅ Loaded {chip_count} chip positions from {positions_file.name}")

@@ -117,52 +117,57 @@ def _find_position_file(image_rel_path: str) -> Optional[Path]:
         return None
 
 
-def _copy_position_file(src_image_path: Path, dst_image_path: Path) -> None:
+def _copy_position_file(src_image_path: Path, dst_image_path: Path,
+                        _pos_cache: dict = None) -> None:
     """
-    소스 이미지의 position 파일을 대상 이미지 위치로 복사
-
-    Args:
-        src_image_path: 원본 이미지 절대 경로
-        dst_image_path: 대상 이미지 절대 경로
+    소스 이미지의 position 파일을 대상 이미지 위치로 복사.
+    _pos_cache: {src_positions_file_str: raw_bytes} — 같은 원본을 반복 읽지 않음.
     """
     import json
 
     try:
-        # 소스 이미지의 상대 경로 (IMAGES_ROOT 기준)
         try:
             src_rel_path = src_image_path.relative_to(IMAGES_ROOT).as_posix()
         except ValueError:
-            return  # IMAGES_ROOT 하위가 아니면 스킵
+            return
 
-        # 소스 position 파일 찾기
         src_positions_file = _find_position_file(src_rel_path)
         if not src_positions_file:
-            return  # position 파일 없으면 스킵
+            return
 
-        # 대상 위치 계산: POSITIONS_ROOT 하위에 이미지와 동일한 구조로 저장
-        # 예: my-lot/user/lot/group/LOT/image.png → positions/my-lot/user/lot/group/LOT/image.json
         try:
             dst_rel_path = dst_image_path.relative_to(IMAGES_ROOT)
             dst_positions_file = POSITIONS_ROOT / dst_rel_path.parent / f"{dst_image_path.stem}.json"
         except ValueError:
             return
 
-        # 대상 디렉토리 생성
         dst_positions_file.parent.mkdir(parents=True, exist_ok=True)
 
-        # position 파일 로드 및 image_path 업데이트
-        with open(src_positions_file, 'r', encoding='utf-8') as f:
-            positions_data = json.load(f)
+        # 캐시에서 원본 bytes 가져오기 (같은 position 파일 반복 읽기 방지)
+        src_key = str(src_positions_file)
+        if _pos_cache is not None and src_key in _pos_cache:
+            raw = _pos_cache[src_key]
+        else:
+            with open(src_positions_file, 'rb') as f:
+                raw = f.read()
+            if _pos_cache is not None:
+                _pos_cache[src_key] = raw
 
-        # image_path를 새로운 경로로 업데이트
-        positions_data['image_path'] = dst_rel_path.as_posix()
-
-        # position 파일 저장
+        # image_path만 교체 (전체 JSON 파싱 대신 문자열 치환)
+        new_image_path = dst_rel_path.as_posix()
+        text = raw.decode('utf-8')
+        # "image_path": "..." 패턴을 직접 치환 (빠름)
+        import re
+        text = re.sub(
+            r'"image_path"\s*:\s*"[^"]*"',
+            f'"image_path": "{new_image_path}"',
+            text, count=1
+        )
         with open(dst_positions_file, 'w', encoding='utf-8') as f:
-            json.dump(positions_data, f, ensure_ascii=False, indent=2)
+            f.write(text)
 
     except Exception:
-        pass  # position 복사 실패해도 이미지 복사는 진행
+        pass
 
 
 def _parse_filename(path: str) -> Dict[str, str]:
@@ -229,88 +234,69 @@ def _load_group_entries_legacy(login_id: str, mode: str, group: str) -> List[Dic
     if not group_dir.exists():
         return []
 
+    # 🔥 IMAGES_ROOT.as_posix() 캐싱 (반복 호출 방지)
+    images_root_str = IMAGES_ROOT.as_posix()
+    images_root_len = len(images_root_str)
+
     entries = []
     try:
         if mode == "lot":
             # LOT 모드: LOT 폴더별로 하나의 entry 생성 (폴더 단위로 그룹화)
-            for lot_folder in group_dir.iterdir():
-                if not lot_folder.is_dir():
+            # 🔥 os.scandir 사용 (iterdir + stat 보다 ~3x 빠름)
+            import os
+            for lot_de in os.scandir(str(group_dir)):
+                if not lot_de.is_dir(follow_symlinks=False):
                     continue
 
-                lot_name = lot_folder.name
+                lot_name = lot_de.name
+                lot_path = lot_de.path
 
-                # LOT 폴더 내의 모든 이미지 파일 수집
-                first_file = None
-                file_count = 0
-                latest_mtime = 0
-                all_image_paths = []  # 🔥 LOT 폴더 내 모든 이미지 경로 저장
+                # 🔥 LOT 폴더 내 이미지 파일 수집 (os.scandir, stat 제거)
+                first_rel = None
+                all_image_paths = []
 
-                for file_path in lot_folder.iterdir():
-                    if not file_path.is_file():
+                for file_de in os.scandir(lot_path):
+                    if not file_de.is_file(follow_symlinks=False):
                         continue
-                    if file_path.suffix.lower() not in SUPPORTED_EXTS:
+                    ext = os.path.splitext(file_de.name)[1].lower()
+                    if ext not in SUPPORTED_EXTS:
                         continue
 
-                    file_count += 1
-                    if first_file is None:
-                        first_file = file_path
+                    # 🔥 상대 경로를 문자열 조작으로 빠르게 생성 (Path 객체 생성 회피)
+                    posix_path = file_de.path.replace("\\", "/")
+                    if posix_path.startswith(images_root_str):
+                        rel = posix_path[images_root_len + 1:]  # +1 for trailing /
+                    else:
+                        rel = posix_path
+                    all_image_paths.append(rel)
+                    if first_rel is None:
+                        first_rel = rel
 
-                    # 🔥 모든 이미지 파일의 상대 경로 수집
-                    try:
-                        rel_path_item = file_path.relative_to(IMAGES_ROOT).as_posix()
-                        all_image_paths.append(rel_path_item)
-                    except ValueError:
-                        all_image_paths.append(file_path.as_posix())
+                file_count = len(all_image_paths)
 
-                    # 최신 파일 시간 찾기
-                    try:
-                        mtime = file_path.stat().st_mtime
-                        if mtime > latest_mtime:
-                            latest_mtime = mtime
-                    except Exception:
-                        pass
-
-                # 이미지 파일이 없어도 LOT 폴더가 있으면 entry 생성 (이미지 없음 처리)
-                if first_file is None or file_count == 0:
-                    entry = {
-                        "path": "",  # 이미지 없음
-                        "value": lot_name,
-                        "filename": lot_name,
-                        "root": lot_name,
-                        "step": "",
-                        "wafer": "",
-                        "saved_at": datetime.now().strftime("%y%m%d_%H%M%S"),  # 생성 시간 추적 어려움 -> 현재 시간
-                        "file_count": 0,
-                        "all_paths": [],
-                    }
-                    entries.append(entry)
+                if file_count == 0:
+                    entries.append({
+                        "path": "", "value": lot_name, "filename": lot_name,
+                        "root": lot_name, "step": "", "wafer": "",
+                        "saved_at": datetime.now().strftime("%y%m%d_%H%M%S"),
+                        "file_count": 0, "all_paths": [],
+                    })
                     continue
 
-                # 대표 이미지 경로
+                # 🔥 폴더 mtime 사용 (개별 파일 stat 제거)
                 try:
-                    rel_path = first_file.relative_to(IMAGES_ROOT).as_posix()
-                except ValueError:
-                    rel_path = first_file.as_posix()
-
-                # 최신 파일 시간을 saved_at으로 사용
-                if latest_mtime > 0:
-                    saved_at = datetime.fromtimestamp(latest_mtime).strftime("%y%m%d_%H%M%S")
-                else:
+                    saved_at = datetime.fromtimestamp(lot_de.stat().st_mtime).strftime("%y%m%d_%H%M%S")
+                except Exception:
                     saved_at = datetime.now().strftime("%y%m%d_%H%M%S")
 
-                # LOT 폴더를 하나의 entry로 표현
-                entry = {
-                    "path": rel_path,  # 대표 이미지 경로
-                    "value": lot_name,  # LOT 이름
-                    "filename": lot_name,  # LOT 이름
-                    "root": lot_name,
-                    "step": "",
-                    "wafer": "",
+                entries.append({
+                    "path": first_rel,
+                    "value": lot_name, "filename": lot_name, "root": lot_name,
+                    "step": "", "wafer": "",
                     "saved_at": saved_at,
-                    "file_count": file_count,  # LOT 내 이미지 개수
-                    "all_paths": all_image_paths,  # 🔥 LOT 폴더 내 모든 이미지 경로 리스트
-                }
-                entries.append(entry)
+                    "file_count": file_count,
+                    "all_paths": all_image_paths,
+                })
         else:
             # Wafer 모드: LOT 서브폴더 내 파일들 + 직접 파일들 스캔
             def _scan_dir(scan_dir):
@@ -499,7 +485,7 @@ def add_entry(login_id: str, mode: str, group: str, src_path: Path) -> Dict[str,
         "root": parsed["root"],
         "step": parsed["step"],
         "wafer": parsed["wafer"],
-        "saved_at": new_entry["added_at"],
+        "saved_at": datetime.now().strftime("%y%m%d_%H%M%S"),
     }
     return {
         "login_id": login_segment,
@@ -789,28 +775,31 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path],
 
         copy_tasks.append((src_path, dst_image))
 
-    # 2. 병렬 복사 (이미지 + position)
-    def _copy_one(task):
-        src, dst = task
-        try:
-            shutil.copy2(str(src), str(dst))
-            _copy_position_file(src, dst)
-            return None
-        except Exception as exc:
-            return {"path": str(src), "reason": str(exc)}
-
+    # 2. 파일 복사 (이미지만, position은 원본에서 파일명 기반 조회)
+    #    LOT별로 robocopy/xcopy 활용 (Windows) 또는 순차 copyfile
+    import subprocess, platform
     errors = []
     success_count = 0
-    max_workers = min(32, len(copy_tasks) or 1)
 
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_copy_one, t): t for t in copy_tasks}
-        for future in as_completed(futures):
-            result = future.result()
-            if result is None:
+    # 하드링크 (즉시) → 실패 시 copyfile fallback
+    import logging as _log
+    _link_ok = 0
+    _link_fail = 0
+    for src, dst in copy_tasks:
+        try:
+            os.link(str(src), str(dst))
+            success_count += 1
+            _link_ok += 1
+        except OSError as _ose:
+            _link_fail += 1
+            if _link_fail <= 3:
+                _log.getLogger("my_lot").warning(f"hardlink fail: {_ose} | src={src} dst={dst}")
+            try:
+                shutil.copyfile(str(src), str(dst))
                 success_count += 1
-            else:
-                errors.append(result)
+            except Exception as exc:
+                errors.append({"path": str(src), "reason": str(exc)})
+    _log.getLogger("my_lot").info(f"[MY LOT batch] hardlink={_link_ok}, copyfile={_link_fail}, errors={len(errors)}")
 
     return {
         "success_count": success_count,

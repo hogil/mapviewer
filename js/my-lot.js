@@ -960,22 +960,30 @@ export class MyLotModal {
         this.viewer?.showToast?.('저장 중...', 1500);
 
         try {
-            // 🔥 모든 행의 검색 결과 수집 (중복 제거 안 함) + LOT/Wafer 매핑
+            // 🔥 모든 행의 검색 결과 수집 + 파일명 기준 중복 제거 + LOT/Wafer 매핑
             const allPaths = [];
             const pathLotWaferMap = {};  // path → { lot, wafer }
             const rowsWithoutImages = [];
+            const seenFilenames = new Set();  // 파일명 기준 중복 제거
 
             for (const row of validRows) {
                 const lot = (row.lot || '').trim();
                 const wafer = (row.wafer || '').trim();
                 if (row.searchResults && row.searchResults.length > 0) {
                     row.searchResults.forEach(p => {
+                        const fname = p.split('/').pop().split('\\').pop();
+                        if (seenFilenames.has(fname)) return;
+                        seenFilenames.add(fname);
                         allPaths.push(p);
                         pathLotWaferMap[p] = { lot, wafer };
                     });
                 } else if (row.path) {
-                    allPaths.push(row.path);
-                    pathLotWaferMap[row.path] = { lot, wafer };
+                    const fname = row.path.split('/').pop().split('\\').pop();
+                    if (!seenFilenames.has(fname)) {
+                        seenFilenames.add(fname);
+                        allPaths.push(row.path);
+                        pathLotWaferMap[row.path] = { lot, wafer };
+                    }
                 } else {
                     rowsWithoutImages.push(row);
                 }
@@ -1198,10 +1206,13 @@ export class MyLotModal {
 
             console.log(`[MyLotModal] API 응답: ${allResults.length}개 이미지 (${(performance.now() - startTime).toFixed(0)}ms)`);
 
-            // LOT별 결과 분류
+            // LOT별 결과 분류 (파일명 기준 중복 제거 — 여러 폴더에 같은 파일이 있을 수 있음)
             const lotResultsMap = new Map();
+            const seenFilenames = new Set();
             for (const path of allResults) {
                 const filename = path.split('/').pop().split('\\').pop().toLowerCase();
+                if (seenFilenames.has(filename)) continue;
+                seenFilenames.add(filename);
                 const lotToken = filename.split('_')[0];
                 if (!lotResultsMap.has(lotToken)) lotResultsMap.set(lotToken, []);
                 lotResultsMap.get(lotToken).push(path);
@@ -3317,6 +3328,12 @@ export class MyLotModal {
             if (this.viewer.savedViewState) {
                 this.viewer.savedViewState.scrollTop = 0;
             }
+            // 🔥 MY LOT Grid에서는 LOT Mode 비활성화 (다양한 LOT 이미지 혼합 → showGridByLot 재귀 방지)
+            if (this.viewer.lotMode) {
+                this.viewer.lotMode = false;
+                const lotBtn = document.getElementById('lot-mode-btn') || document.querySelector('[data-action="lot-mode"]');
+                if (lotBtn) lotBtn.classList.remove('active');
+            }
             this.viewer.showGrid(paths);
             return;
         }
@@ -3750,7 +3767,8 @@ export class MyLotModal {
             this.renderGroups();
             this.renderEntries();
             this.viewer?.showToast?.('MY LOT에 저장했습니다.', 1600);
-            this.refreshData().catch(err => console.warn('[MyLotModal] bg refresh after save:', err));
+            // 🔥 백그라운드에서 그룹 목록 + 현재 그룹 entries 동시 갱신 (저장 직후 Grid 보기 가능)
+            this.refreshData().then(() => this.loadActiveGroupEntriesAndRender()).catch(err => console.warn('[MyLotModal] bg refresh after save:', err));
         } catch (error) {
             console.error('[MyLotModal] handleSaveFromPath failed:', error);
             const message = error?.message || 'MY LOT 저장에 실패했습니다.';
