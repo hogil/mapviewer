@@ -9233,7 +9233,7 @@ class WaferMapViewer {
             header.textContent = maxPerSection < keys.f.length ? `FBT (${keys.f.length}개 중 ${fShow.length}개)` : 'FBT';
             list.appendChild(header);
             for (const k of fShow) {
-                list.appendChild(makeItem(`FBT ${k} Count`, 'f', k, null));
+                list.appendChild(makeItem(`FBT${k}`, 'f', k, null));
             }
         }
 
@@ -9245,7 +9245,7 @@ class WaferMapViewer {
             header.textContent = maxPerSection < keys.q.length ? `QVL (${keys.q.length}개 중 ${qShow.length}개)` : 'QVL';
             list.appendChild(header);
             for (const k of qShow) {
-                list.appendChild(makeItem(`QVL ${k} Count`, 'q', k, null));
+                list.appendChild(makeItem(`QVL${k}`, 'q', k, null));
             }
         }
 
@@ -9447,13 +9447,13 @@ class WaferMapViewer {
         const selected = this._mcSelectedImages || [];
         if (!selected.length) return;
 
-        // BIN: 단일 타입, FBT/QVL: aggregation=average
+        // BIN: 단일 타입, FBT/QVL: aggregation=sum
         const bin_types = mode === 'bin' ? [binType] : null;
         const item_key = mode !== 'bin' ? itemKey : null;
-        const aggregation = mode === 'bin' ? 'count' : 'average';
+        const aggregation = mode === 'bin' ? 'count' : 'sum';
 
         const modeLabel = mode === 'bin' ? `BIN${binType}` :
-                          mode === 'f' ? `FBT ${itemKey} Count` : `QVL ${itemKey} Count`;
+                          mode === 'f' ? `FBT_${itemKey}_sum` : `QVL_${itemKey}_sum`;
 
         // Page management
         const previousPageState = this.captureActivePageState();
