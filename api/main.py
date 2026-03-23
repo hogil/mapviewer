@@ -1539,21 +1539,33 @@ def _ensure_chip_rects(chips: list, data: dict) -> None:
             c["h"] = dy
 
 
+_positions_load_lock = RLock()  # 같은 파일 동시 파싱 방지
+
 def _load_positions_cached(positions_path: Path) -> Optional[dict]:
-    """positions JSON을 메모리 캐시에서 로드 (같은 파일 반복 읽기 방지, ~10ms 절약)"""
+    """positions JSON을 메모리 캐시에서 로드 (같은 파일 반복 읽기 방지)"""
     key = str(positions_path)
     cached = _positions_json_cache.get(key)
     if cached is not None:
         return cached
-    if not positions_path.exists():
-        return None
-    with open(positions_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    _normalize_positions_to_chips(data)
-    # LRU: 오래된 항목 제거
-    if len(_positions_json_cache) >= _POSITIONS_CACHE_MAX:
-        _positions_json_cache.pop(next(iter(_positions_json_cache)))
-    _positions_json_cache[key] = data
+    with _positions_load_lock:
+        # 다른 스레드가 이미 로드했을 수 있음
+        cached = _positions_json_cache.get(key)
+        if cached is not None:
+            return cached
+        if not positions_path.exists():
+            return None
+        # orjson (3x faster than json.load for 5MB+ files)
+        try:
+            import orjson as _orjson
+            with open(positions_path, "rb") as f:
+                data = _orjson.loads(f.read())
+        except ImportError:
+            with open(positions_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        _normalize_positions_to_chips(data)
+        if len(_positions_json_cache) >= _POSITIONS_CACHE_MAX:
+            _positions_json_cache.pop(next(iter(_positions_json_cache)))
+        _positions_json_cache[key] = data
     return data
 
 # 🔥 팔레트 캐시 (원본 PNG 파일의 팔레트 정보 캐싱 - 파일 읽기 최소화)
