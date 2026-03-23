@@ -2222,6 +2222,39 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 - BIN 모드에서 `getPersonalizedParams()`와 `_buildMeasureThumbUrl` 모두 `bin_overlay=1`을 추가하면 중복 발생
 - 단일 이미지에서 `_renderMeasureOnCanvas` 완료 후 `renderColorLegends()` 미호출 시 gradient count가 0으로 표시
 
+**발견 및 수정한 버그 (2026-03-23)**:
+
+| # | 버그 | 커밋 | 수정 내용 |
+|---|------|------|---------|
+| 1 | BIN `bin_overlay=1` URL 중복 | 52a34ac | `_buildMeasureThumbUrl`에서 `getPersonalizedParams`에 이미 포함된 경우 추가 안 함 |
+| 2 | FBT/QVL 단일 이미지 gradient 범례 count가 모두 0 | 52a34ac | `_renderMeasureOnCanvas` 완료 후 `renderColorLegends()` 호출 추가 |
+| 3 | `_ratioGradientCache` RGB 배열 시 `hexToRgb` 크래시 | 52a34ac | grid/single 모드 모두 배열+문자열 양쪽 처리 |
+| 4 | gradient 칩 내부 글자 크기 작음/넘침 | 52a34ac | 개별 칩 크기 기반 폰트 + `measureText` 자동 축소 |
+| 5 | Composite 단일 이미지에서 더블클릭 시 검은 화면 | e66b41d | `exitSingleImageViewMode`에서 Composite 상태 정상 복원 |
+| 6 | mea 탭 생성 후 원래 탭에 measure 상태 잔류 | e66b41d | `_openMeasureTab`에서 persist 전에 overlay/measure 상태 해제 |
+| 7 | 다중 Measure 초기화 시 확장된 이미지 갯수 유지 | e66b41d | `_measureBaseImages`로 복원 후 null 리셋 + `renderColorLegends()` |
+| 8 | Measure Composite LoginId 폴더 분리 (`ho.choi` vs `ho_choi`) | da05881 | `measure_composite.py`에서 `_sanitize_login_id()` 적용 |
+
+**정상 확인된 기능 (수정 후 검증 완료)**:
+
+| 기능 | 검증 내용 | 상태 |
+|------|---------|------|
+| Failbit 원본 이미지 표시 | 그리드 `/api/thumbnail` URL, Grade 범례 비율/갯수 | ✅ |
+| BIN 오버레이 | 그리드 `bin_overlay=1` 1회만, 단일 이미지 BIN 번호 + 색상 | ✅ |
+| FBT/QVL measure-thumb | 그리드 `/api/measure-thumb` URL, gradient 범례 10개 | ✅ |
+| 단일 이미지 Measure heatmap 렌더링 | Canvas gradient 색상 + 값 텍스트, 칩 크기 적응형 폰트 | ✅ |
+| Gradient 범례 비율/갯수 | 단일 이미지에서 `10.2%(39)` 등 non-zero count 표시 | ✅ |
+| Gradient 범례 필터 클릭/해제 | 클릭→`selectedGradientRanges.size=1`, 해제→`size=0` | ✅ |
+| Navigator 표시 및 이미지 전환 | 단일 이미지에서 Navigator visible, 클릭으로 다른 이미지 전환 | ✅ |
+| Navigator measure-thumb 반영 | Navigator 썸네일 URL에 `/api/measure-thumb` 포함 | ✅ |
+| Bottom legend (BIN) 비율/갯수 | Normal 92.2%(354) 등 정상 표시 | ✅ |
+| Composite Map 생성 및 그리드 | 10개 결과 이미지 (square avg, Grade 0~7), gradient 범례 | ✅ |
+| Composite 단일→더블클릭 복귀 | com 탭으로 정상 복귀, 검은 화면 없음 | ✅ |
+| Composite gradient 범례 count | Grade 이미지에서 `99.2%(1.8K)` 등 표시 | ✅ |
+| 4개 항목 × 3회 반복 안정성 | 12/12 PASS, JS 에러 0건, 상태 누적 버그 없음 | ✅ |
+| mea 탭 원래 탭 상태 분리 | 원래 탭 `overlayMode=null`, measure 해제 | ✅ |
+| 다중 Measure 초기화 이미지 복원 | 15개(확장) → 5개(원본) 정상 복원 | ✅ |
+
 **평가 항목**:
 
 #### 35-1. 그리드 모드 4개 항목 순차 전환 (3회 반복)
