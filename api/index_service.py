@@ -592,6 +592,11 @@ class IndexService:
             dirnames[:] = [d for d in dirnames if d not in skip_dirs]
             total_dirs += 1
 
+            # 🔥 100 디렉토리마다 10ms sleep — 다른 I/O 요청에 양보
+            if total_dirs % 100 == 0:
+                import time as _time
+                _time.sleep(0.01)
+
             if not filenames:
                 continue
 
@@ -647,22 +652,24 @@ class IndexService:
                 sorted_keys, sorted_names, total_dirs, completed_dirs = await loop.run_in_executor(
                     None, self._walk_and_collect
                 )
-                with self._lock:
-                    self._keys.clear()
-                    self._keys.extend(sorted_keys)
-                    self._names.clear()
-                    self._names.extend(sorted_names)
-                # 🔥 인덱스 캐시 파일 저장
-                self._save_cache(sorted_keys)
-                
-                # 🔥 캐시 파일이 실제로 생성되었는지 확인
-                if not self.cache_file.exists():
-                    self.logger.error(f"❌ [INDEX] 캐시 파일 생성 실패: {self.cache_file}")
-                else:
-                    cache_size = self.cache_file.stat().st_size
-                    self.logger.info(f"✅ [INDEX] 캐시 파일 확인: {self.cache_file.name}, 크기: {cache_size:,} bytes")
-                
-                self._build_lookup_indices()
+
+                # _save_cache + _build_lookup_indices 를 executor 에서 실행 (이벤트 루프 블로킹 방지)
+                def _finalize_build():
+                    with self._lock:
+                        self._keys.clear()
+                        self._keys.extend(sorted_keys)
+                        self._names.clear()
+                        self._names.extend(sorted_names)
+                    self._save_cache(sorted_keys)
+                    if not self.cache_file.exists():
+                        self.logger.error(f"❌ [INDEX] 캐시 파일 생성 실패: {self.cache_file}")
+                    else:
+                        cache_size = self.cache_file.stat().st_size
+                        self.logger.info(f"✅ [INDEX] 캐시 파일 확인: {self.cache_file.name}, 크기: {cache_size:,} bytes")
+                    self._build_lookup_indices()
+
+                await loop.run_in_executor(None, _finalize_build)
+
                 self.total_files = len(sorted_keys)
                 self.total_dirs = total_dirs
                 self.completed_dirs = completed_dirs

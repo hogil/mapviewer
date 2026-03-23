@@ -1678,9 +1678,6 @@ async def _lifespan_background_init():
     bootlog = logging.getLogger("uvicorn.error")
     loop = asyncio.get_running_loop()
 
-    # 🔥 첫 사용자 요청이 빠르게 응답하도록 3초 지연 후 무거운 작업 시작
-    await asyncio.sleep(3)
-
     # 1) __pycache__ 정리 (executor에서 비동기)
     def _cleanup_pycache():
         deleted = 0
