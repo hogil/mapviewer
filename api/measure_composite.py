@@ -157,12 +157,13 @@ def _extract_values_from_data(data, mode, item_key, bin_types):
     bin_set = set(str(b) for b in bin_types) if bin_types else None
     results = []
     for chip in chips:
-        xa, ya = chip.get("x_abs"), chip.get("y_abs")
+        xa = chip.get("x_abs") if chip.get("x_abs") is not None else chip.get("x")
+        ya = chip.get("y_abs") if chip.get("y_abs") is not None else chip.get("y")
         if xa is None or ya is None:
             continue
         if mode == "bin":
             b = chip.get("b")
-            norm = str(b).strip() if b else "Normal"
+            norm = _normalize_bin(b)
             val = 1.0 if (bin_set and norm in bin_set) else 0.0
         else:
             fd = chip.get(mode)
@@ -230,7 +231,8 @@ def _collect_and_aggregate(
         for chip in chips:
             if not isinstance(chip, dict):
                 continue
-            xa, ya = chip.get("x_abs"), chip.get("y_abs")
+            xa = chip.get("x_abs") if chip.get("x_abs") is not None else chip.get("x")
+            ya = chip.get("y_abs") if chip.get("y_abs") is not None else chip.get("y")
             if xa is None or ya is None:
                 continue
             val = _extract_value(chip, mode, item_key, bin_set)
@@ -394,6 +396,25 @@ def _render(
     if not isinstance(chips, list):
         return Image.new("RGB", (w, h), (0, 0, 0))
 
+    # w/h 없는 칩 데이터용: 칩 크기 추정 (인접 칩 간 최소 간격 기반)
+    _need_wh = any(
+        isinstance(c, dict) and c.get("w") is None and c.get("width") is None
+        and c.get("rect") is None
+        for c in chips
+    )
+    est_cw, est_ch = 1, 1
+    if _need_wh and len(chips) >= 2:
+        xs = sorted({int(c.get("x", 0)) for c in chips if isinstance(c, dict) and c.get("x") is not None})
+        ys = sorted({int(c.get("y", 0)) for c in chips if isinstance(c, dict) and c.get("y") is not None})
+        if len(xs) >= 2:
+            est_cw = min(xs[i+1] - xs[i] for i in range(len(xs)-1) if xs[i+1] > xs[i])
+        if len(ys) >= 2:
+            est_ch = min(ys[i+1] - ys[i] for i in range(len(ys)-1) if ys[i+1] > ys[i])
+        if est_cw <= 0:
+            est_cw = 1
+        if est_ch <= 0:
+            est_ch = 1
+
     # chip rect 계산 + abs 좌표 매핑
     chip_rects = []
     abs_to_idx: Dict[Tuple[int, int], int] = {}
@@ -402,9 +423,13 @@ def _render(
         if not isinstance(c, dict):
             chip_rects.append(None)
             continue
+        # w/h 없는 칩에 추정값 보충
+        if _need_wh and c.get("w") is None and c.get("width") is None:
+            c = {**c, "w": est_cw, "h": est_ch}
         r = _chip_rect(c, sx, sy, w, h)
         chip_rects.append(r)
-        xa, ya = c.get("x_abs"), c.get("y_abs")
+        xa = c.get("x_abs") if c.get("x_abs") is not None else c.get("x")
+        ya = c.get("y_abs") if c.get("y_abs") is not None else c.get("y")
         if xa is not None and ya is not None:
             key = (int(xa), int(ya))
             abs_to_idx[key] = i
@@ -597,16 +622,38 @@ def create_measure_data_only(
         sx = 1.0 if canvas_w <= 0 else 1.0
         sy = 1.0 if canvas_h <= 0 else 1.0
 
-        for chip in base_pos.get("chips", []):
+        base_chips = base_pos.get("chips", [])
+        # w/h 없는 칩용 크기 추정
+        _need_wh2 = any(
+            isinstance(c, dict) and c.get("w") is None and c.get("width") is None
+            and c.get("rect") is None
+            for c in base_chips
+        )
+        est_cw2, est_ch2 = 1, 1
+        if _need_wh2 and len(base_chips) >= 2:
+            xs2 = sorted({int(c.get("x", 0)) for c in base_chips if isinstance(c, dict) and c.get("x") is not None})
+            ys2 = sorted({int(c.get("y", 0)) for c in base_chips if isinstance(c, dict) and c.get("y") is not None})
+            if len(xs2) >= 2:
+                est_cw2 = min(xs2[i+1] - xs2[i] for i in range(len(xs2)-1) if xs2[i+1] > xs2[i])
+            if len(ys2) >= 2:
+                est_ch2 = min(ys2[i+1] - ys2[i] for i in range(len(ys2)-1) if ys2[i+1] > ys2[i])
+            if est_cw2 <= 0: est_cw2 = 1
+            if est_ch2 <= 0: est_ch2 = 1
+
+        for chip in base_chips:
             if not isinstance(chip, dict):
                 continue
-            xa, ya = chip.get("x_abs"), chip.get("y_abs")
-            rect = chip.get("rect", {})
-            if isinstance(rect, dict) and all(rect.get(k) is not None for k in ("x0", "y0", "x1", "y1")):
+            xa = chip.get("x_abs") if chip.get("x_abs") is not None else chip.get("x")
+            ya = chip.get("y_abs") if chip.get("y_abs") is not None else chip.get("y")
+            c_for_rect = chip
+            if _need_wh2 and chip.get("w") is None and chip.get("width") is None:
+                c_for_rect = {**chip, "w": est_cw2, "h": est_ch2}
+            cr = _chip_rect(c_for_rect, sx, sy, canvas_w, canvas_h)
+            if cr:
                 chip_rects.append({
                     "xa": xa, "ya": ya,
-                    "x0": rect["x0"], "y0": rect["y0"],
-                    "x1": rect["x1"], "y1": rect["y1"],
+                    "x0": cr[0], "y0": cr[1],
+                    "x1": cr[2], "y1": cr[3],
                 })
 
     # 6. 칩별 결과 데이터
@@ -745,16 +792,10 @@ def create_measure_composite(
     if not base_pos:
         raise ValueError("Cannot load positions for base image")
 
-    # 6. Output directory — 기존 결과 삭제 후 current에 저장 (누적 방지)
-    import shutil
+    # 6. Output directory — LoginId 바로 밑에 생성 (서브폴더 없음)
     user_dir = COMPOSITE_ROOT / (login_id or ANONYMOUS_LOGIN_ID)
-    if user_dir.exists():
-        # 기존 measure 결과만 삭제 (current/ 는 full composite 용이므로 유지)
-        for sub in user_dir.iterdir():
-            if sub.is_dir() and sub.name != "current":
-                shutil.rmtree(sub, ignore_errors=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = user_dir / f"{ts}_measure"
+    out_dir = user_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # 7. 렌더링
@@ -898,8 +939,11 @@ def recolor_measure_composite(
     bin_lookup = {}
     if bf_set is not None:
         for c in base_pos.get("chips", []):
-            if isinstance(c, dict) and c.get("x_abs") is not None:
-                bin_lookup[(int(c["x_abs"]), int(c["y_abs"]))] = _normalize_bin(c.get("b"))
+            if isinstance(c, dict):
+                _xa = c.get("x_abs") if c.get("x_abs") is not None else c.get("x")
+                _ya = c.get("y_abs") if c.get("y_abs") is not None else c.get("y")
+                if _xa is not None and _ya is not None:
+                    bin_lookup[(int(_xa), int(_ya))] = _normalize_bin(c.get("b"))
 
     range_counts = [0] * 10
     for (xa, ya), pct in pct_map.items():

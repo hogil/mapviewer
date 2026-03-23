@@ -143,6 +143,31 @@ except ImportError:
         return _json_std.loads(raw)
 
 
+def _normalize_positions_to_chips(data: dict) -> dict:
+    """positions dict(키="0","1"...) → chips list 자동 변환."""
+    if isinstance(data.get("chips"), list) and data["chips"]:
+        return data
+    pos = data.get("positions")
+    if isinstance(pos, dict) and pos:
+        try:
+            max_idx = max(int(k) for k in pos.keys())
+            chips = [None] * (max_idx + 1)
+            for k, v in pos.items():
+                chips[int(k)] = v
+            chips = [c if c is not None else {} for c in chips]
+            data["chips"] = chips
+            if "coord" not in data:
+                xs = [c.get("x", 0) for c in chips if c]
+                ys = [c.get("y", 0) for c in chips if c]
+                if xs and ys:
+                    data["coord"] = {
+                        "canvas": {"width": max(xs) + 10, "height": max(ys) + 10}
+                    }
+        except (ValueError, TypeError):
+            pass
+    return data
+
+
 def _load_source_positions_data(image_rel_path: str) -> Optional[Dict[str, Any]]:
     cached = _positions_json_cache.get(image_rel_path)
     if cached is not None:
@@ -153,6 +178,7 @@ def _load_source_positions_data(image_rel_path: str) -> Optional[Dict[str, Any]]
             continue
         try:
             data = _json_load_bytes(candidate.read_bytes())
+            _normalize_positions_to_chips(data)
             # LRU eviction
             if len(_positions_json_cache) >= _POSITIONS_JSON_CACHE_MAX:
                 _positions_json_cache.pop(next(iter(_positions_json_cache)), None)
@@ -392,7 +418,7 @@ def _prepare_output_dir(login_id: Optional[str]) -> Tuple[Path, str]:
     user_dir = COMPOSITE_ROOT / safe_login
     positions_user_dir = POSITIONS_ROOT / "composite_map" / safe_login
 
-    # 사용자별 composite 결과는 항상 1세트만 유지한다.
+    # 🔥 LoginId 폴더 하위 모든 이전 결과 삭제 후 새로 생성
     try:
         if user_dir.exists():
             shutil.rmtree(user_dir)
@@ -404,9 +430,8 @@ def _prepare_output_dir(login_id: Optional[str]) -> Tuple[Path, str]:
     except Exception:
         pass
 
-    output_dir = user_dir / COMPOSITE_SESSION_DIRNAME
-    output_dir.mkdir(parents=True, exist_ok=True)
-    return output_dir, timestamp
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return user_dir, timestamp
 
 
 def _delete_existing_subset_outputs(output_dir: Path) -> None:
