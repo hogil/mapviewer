@@ -8857,36 +8857,83 @@ class WaferMapViewer {
     /**
      * Context menu 서브메뉴 빌드 (M.Comp용)
      */
+    /**
+     * 컨텍스트 메뉴용 이미지 소스 결정:
+     * - 그리드 모드: 첫 이미지 + 마지막 이미지 (keys 병합)
+     * - 단일 이미지 모드: 현재 이미지
+     */
+    _getContextKeySourceImages() {
+        if (this.gridMode) {
+            const imgs = this.currentGridImages || [];
+            if (imgs.length === 0) return [];
+            if (imgs.length === 1) return [imgs[0]];
+            return [imgs[0], imgs[imgs.length - 1]];
+        }
+        // 단일 이미지 모드
+        const active = this.getActiveImagePath();
+        return active ? [active] : [];
+    }
+
+    /**
+     * 여러 이미지의 chip-positions를 병렬 fetch 후 keys 병합 (union)
+     */
+    async _fetchMergedKeys(imagePaths) {
+        const results = await Promise.all(
+            imagePaths.map(p =>
+                fetch(`/api/chip-positions?path=${encodeURIComponent(p)}`)
+                    .then(r => r.ok ? r.json() : null)
+                    .catch(() => null)
+            )
+        );
+        const fSet = new Set();
+        const qSet = new Set();
+        const binSet = new Set();
+        for (const data of results) {
+            if (!data) continue;
+            for (const k of (data.ftn_keys || [])) fSet.add(String(k));
+            for (const k of (data.qtn_keys || [])) qSet.add(String(k));
+            for (const chip of (data.chips || [])) {
+                if (chip.b != null) {
+                    const norm = this.chipAnnotator?._normalizeBottomValue?.(chip.b) || String(chip.b);
+                    binSet.add(norm);
+                }
+            }
+        }
+        const numSort = (a, b) => a.localeCompare(b, undefined, { numeric: true });
+        return {
+            f: [...fSet].sort(numSort),
+            q: [...qSet].sort(numSort),
+            bin: [...binSet].sort((a, b) => Number(a) - Number(b)),
+        };
+    }
+
     _buildMeaContextSubmenu() {
         const submenu = document.getElementById('context-mea-submenu');
         if (!submenu) return;
         const list = submenu.querySelector('.mea-ctx-list');
         if (!list) return;
 
-        const selected = this.getSelectedImagesForModal();
-        if (!selected.length) {
+        const sources = this._getContextKeySourceImages();
+        if (!sources.length) {
             list.innerHTML = '<div class="failbit-item" style="color:#888;">이미지를 선택하세요</div>';
             return;
         }
 
-        const fKeys = this._cachedMeasureKeys?.f || [];
-        const qKeys = this._cachedMeasureKeys?.q || [];
-
-        if (fKeys.length === 0 && qKeys.length === 0) {
-            list.innerHTML = '<div class="failbit-item" style="color:#888;">로딩 중...</div>';
-            fetch(`/api/chip-positions?path=${encodeURIComponent(selected[0])}`)
-                .then(r => r.ok ? r.json() : null)
-                .then(data => {
-                    if (!data) { list.innerHTML = '<div class="failbit-item" style="color:#888;">데이터 없음</div>'; return; }
-                    const f = (data.ftn_keys || []).map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-                    const q = (data.qtn_keys || []).map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-                    this._cachedMeasureKeys = { f, q };
-                    this._renderMeaContextList(list, f, q, selected);
-                })
-                .catch(() => { list.innerHTML = '<div class="failbit-item" style="color:#888;">로드 실패</div>'; });
+        const cacheKey = sources.join('|');
+        if (this._cachedMeaCtxKey === cacheKey && this._cachedMeasureKeys) {
+            const { f, q } = this._cachedMeasureKeys;
+            this._renderMeaContextList(list, f, q, this.getSelectedImagesForModal());
             return;
         }
-        this._renderMeaContextList(list, fKeys, qKeys, selected);
+
+        list.innerHTML = '<div class="failbit-item" style="color:#888;">로딩 중...</div>';
+        this._fetchMergedKeys(sources).then(keys => {
+            this._cachedMeasureKeys = keys;
+            this._cachedMeaCtxKey = cacheKey;
+            this._renderMeaContextList(list, keys.f, keys.q, this.getSelectedImagesForModal());
+        }).catch(() => {
+            list.innerHTML = '<div class="failbit-item" style="color:#888;">로드 실패</div>';
+        });
     }
 
     _renderMeaContextList(list, fKeys, qKeys, selectedImages) {
@@ -9002,37 +9049,21 @@ class WaferMapViewer {
         }
         this._mcSelectedImages = [...selected];
 
-        // 캐시 있으면 즉시 렌더링
-        if (this._cachedMcKeys) {
+        const sources = this._getContextKeySourceImages();
+        const cacheKey = sources.join('|');
+        if (this._cachedMcCtxKey === cacheKey && this._cachedMcKeys) {
             this._renderMcContextList(list, this._cachedMcKeys);
             return;
         }
 
         list.innerHTML = '<div class="failbit-item" style="color:#888;">로딩 중...</div>';
-        fetch(`/api/chip-positions?path=${encodeURIComponent(selected[0])}`)
-            .then(r => r.ok ? r.json() : null)
-            .then(data => {
-                if (!data) { list.innerHTML = '<div class="failbit-item" style="color:#888;">데이터 없음</div>'; return; }
-                const chips = data.chips || [];
-                const binSet = new Set();
-                for (const chip of chips) {
-                    if (chip.b != null) {
-                        const norm = this.chipAnnotator?._normalizeBottomValue?.(chip.b) || String(chip.b);
-                        binSet.add(norm);
-                    }
-                }
-                const keys = {
-                    bin: [...binSet].sort((a, b) => Number(a) - Number(b)),
-                    f: (data.ftn_keys || []).map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
-                    q: (data.qtn_keys || []).map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
-                };
-                this._cachedMcKeys = keys;
-                this._cachedMcKeysSource = selected[0];
-                this._renderMcContextList(list, keys);
-            })
-            .catch(() => {
-                list.innerHTML = '<div class="failbit-item" style="color:#888;">로드 실패</div>';
-            });
+        this._fetchMergedKeys(sources).then(keys => {
+            this._cachedMcKeys = keys;
+            this._cachedMcCtxKey = cacheKey;
+            this._renderMcContextList(list, keys);
+        }).catch(() => {
+            list.innerHTML = '<div class="failbit-item" style="color:#888;">로드 실패</div>';
+        });
     }
 
     _renderMcContextList(list, keys) {
@@ -9048,41 +9079,23 @@ class WaferMapViewer {
         if (!list) return;
         list.innerHTML = '<div class="failbit-item" style="color:#888;">로딩 중...</div>';
 
-        // 캐시가 있으면 즉시 렌더링
-        if (this._cachedMcKeys) {
+        const sources = this._getContextKeySourceImages();
+        const cacheKey = sources.join('|');
+        if (this._cachedMcPanelKey === cacheKey && this._cachedMcKeys) {
             this._renderMcList(list, this._cachedMcKeys);
             return;
         }
 
-        // 첫 이미지에서 키 로드
-        const images = this._mcSelectedImages || [];
-        if (!images.length) return;
+        if (!sources.length) return;
 
-        fetch(`/api/chip-positions?path=${encodeURIComponent(images[0])}`)
-            .then(r => r.ok ? r.json() : null)
-            .then(data => {
-                if (!data) { list.innerHTML = '<div class="failbit-item" style="color:#888;">데이터 없음</div>'; return; }
-                const chips = data.chips || [];
-                const binSet = new Set();
-                for (const chip of chips) {
-                    if (chip.b != null) {
-                        const norm = this.chipAnnotator?._normalizeBottomValue?.(chip.b) || String(chip.b);
-                        binSet.add(norm);
-                    }
-                }
-                const keys = {
-                    bin: [...binSet].sort((a, b) => Number(a) - Number(b)),
-                    f: (data.ftn_keys || []).map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
-                    q: (data.qtn_keys || []).map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
-                };
-                this._cachedMcKeys = keys;
-                this._cachedMcKeysSource = images[0];
-                if (panel.style.display !== 'none') {
-                    this._renderMcList(list, keys);
-                }
-            })
-            .catch(() => {
-                list.innerHTML = '<div class="failbit-item" style="color:#888;">로드 실패</div>';
+        this._fetchMergedKeys(sources).then(keys => {
+            this._cachedMcKeys = keys;
+            this._cachedMcPanelKey = cacheKey;
+            if (panel.style.display !== 'none') {
+                this._renderMcList(list, keys);
+            }
+        }).catch(() => {
+            list.innerHTML = '<div class="failbit-item" style="color:#888;">로드 실패</div>';
             });
     }
 
