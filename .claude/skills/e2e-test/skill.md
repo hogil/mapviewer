@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 37개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 38개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -2284,7 +2284,29 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 8. 필터 해제 → `selectedGradientRanges.size === 0`
 9. 그리드 복귀 → 다른 이미지(Grade) 더블클릭 → 정상 전환 확인
 
-**pass 기준**: 35-1~35-6 모든 핵심 검증 통과, 3회 반복에서 JS 에러 0건
+#### 35-7. Composite 단일 이미지 더블클릭 → 그리드 복귀
+1. Composite 그리드 표시 상태에서 첫 번째 이미지 더블클릭 → 단일 이미지 진입
+2. 단일 이미지에서 다시 더블클릭
+3. **핵심 검증**: Composite 그리드(com 탭)로 정상 복귀, 검은 화면 없음
+4. **핵심 검증**: `isCompositeMode === true`, 결과 이미지 10개 표시
+5. **핵심 검증**: 새 com 탭이 추가 생성되지 않음 (detail page 삭제 후 origin 복귀)
+
+#### 35-8. Measure 탭 생성 후 원래 탭 상태 해제
+1. palette_3k 그리드에서 이미지 5개 선택
+2. FBT1000 measure 클릭 → mea0 탭 생성
+3. 원래 그리드 탭으로 전환
+4. **핵심 검증**: 원래 탭에서 `overlayMode === null`, `_measureCheckedItems.length === 0`
+5. **핵심 검증**: 원래 탭의 썸네일이 일반 `/api/thumbnail` URL (measure-thumb 아님)
+
+#### 35-9. 다중 Measure 초기화 시 이미지 갯수 복원
+1. palette_3k 그리드에서 Failbit + BIN + FBT1000 3개 체크
+2. `_applyMeasureSelection()` → 이미지 갯수 = baseImages × 3 확인
+3. 초기화 (`_measureCheckedItems = []` + `_measureBaseImages` 복원)
+4. **핵심 검증**: 이미지 갯수 = 원본 baseImages 갯수 (확장 해제)
+5. **핵심 검증**: `overlayMode === null`, `_gridMeasureMap === null`
+6. **핵심 검증**: gradient 범례 → Grade 범례로 복원
+
+**pass 기준**: 35-1~35-9 모든 핵심 검증 통과, 3회 반복에서 JS 에러 0건
 
 ---
 
@@ -2732,3 +2754,108 @@ const ms = Math.round(performance.now() - t0);
 | 폴더 한정 검색 | < 10ms | 2ms |
 | 다중검색 noise 파싱 | 6 LOT 정확 추출 | ✅ |
 | AND/OR UI 스크린샷 | 두 LOT 모두 표시 | ✅ |
+
+---
+
+## Phase 38: Measure Map 다중 생성 + Navigator 전환 + 범례/필터 검증
+
+**목적**: Measure Map(Failbit/BIN/FBT/QVL) 다중 생성 후, 각 결과 이미지를 Navigator/Prev/Next/더블클릭으로 전환하며 gradient 범례·필터·텍스트·미니맵이 정상 동작하는지 3라운드 반복 검증
+
+**배경**:
+- Measure Map은 overlay가 아닌, chip별 item value로 gradient를 계산하여 독립 이미지를 생성
+- Navigator 클릭 시 `loadImage(path, false)` 호출에서 composite mode가 해제되던 버그 수정됨 (viewMode === 'gridImage' 조건 추가)
+- 서버사이드 텍스트 font_size가 24px 상한으로 대형 캔버스에서 읽을 수 없던 버그 수정됨 (칩 크기 비례 0.35 적용)
+
+**평가 항목**:
+
+### 38-1. Measure Map 다중 생성 (Failbit + BIN + FBT + QVL)
+
+1. filter_test 폴더 24개 이미지 그리드 로드 → 전체선택
+2. Measure 패널 열기 → 패널 구조 확인:
+   - MAP 섹션: Failbit (1개)
+   - BIN 섹션: NORMAL, BIN285~BIN390 (11+개)
+   - FBT 섹션: FBT1000~FBT1499 (500개)
+   - QVL 섹션: QVL5000~QVL5499 (500개)
+3. Failbit + BIN285 + FBT1000 + QVL5000 체크 → "생성 (4)" 버튼 활성
+4. 생성 클릭 → 완료 대기 (최대 30초)
+5. 결과 그리드 확인:
+   - square_average, square_weighted_average (2개)
+   - Grade_0 ~ Grade_7 (8개)
+   - BIN_285_count (1개)
+   - FBT_1000_average (1개)
+   - QVL_5000_average (1개)
+   총 13개 이미지
+
+### 38-2. 그리드 Gradient 범례 검증
+
+1. 결과 그리드 상단 범례에 Gradient (0~10% ~ 90~100%) 10개 항목 표시
+2. 각 항목에 퍼센트와 칩수 텍스트 존재 (예: "39.8%(459)")
+3. 하단 BIN 범례도 표시 (nor, inv, 285~390, ETC)
+
+### 38-3. 단일 뷰 진입 + 범례 + 미니맵 검증 (FBT)
+
+1. FBT_1000_average 더블클릭 → 단일 뷰 진입
+2. `v.isCompositeMode === true` 확인
+3. Gradient 범례 (0~10% ~ 90~100%) + 퍼센트/칩수 텍스트 확인
+4. BIN 범례 (Normal, BIN types) + 퍼센트/칩수 텍스트 확인
+5. 미니맵 표시 확인
+6. Navigator에 13개 썸네일 표시 확인
+7. 50% 줌 → 칩 내 텍스트 (K/M 축약 숫자) 가독성 확인
+
+### 38-4. Navigator 전환 시 Composite Mode 유지 (BIN → QVL)
+
+1. Navigator에서 BIN_285_count 클릭
+2. `v.isCompositeMode === true` 유지 확인
+3. **핵심 검증**: 상단 범례가 Grade(G0~G7)가 아닌 Gradient(0~10%~90~100%) 표시
+4. Navigator에서 QVL_5000_average 클릭
+5. `v.isCompositeMode === true` 유지 확인
+6. Gradient 범례 + 퍼센트/칩수 확인
+
+### 38-5. Prev/Next 버튼 전환 시 Composite Mode 유지
+
+1. FBT_1000_average 단일 뷰에서 ◀ (Previous) 클릭 → BIN_285_count로 이동
+2. `v.isCompositeMode === true` 유지 확인
+3. Gradient 범례 표시 확인
+4. ▶ (Next) 클릭 → FBT_1000_average 복귀
+5. ▶ 다시 → QVL_5000_average로 이동
+6. Gradient 범례 유지 확인
+
+### 38-6. Gradient 필터 클릭 동작 검증
+
+1. 단일 뷰에서 Gradient 범례 "90~100%" 클릭
+2. `v.selectedGradientRanges.has(9) === true`
+3. 범례 갱신: 90~100% = "100.0%(N)", 나머지 = "0.0%(0)"
+4. 비선택 범위 칩이 흰색/투명 처리 (스크린샷)
+5. 다시 클릭 → 해제, 전체 복원
+6. Ctrl+클릭으로 0~10% + 90~100% 다중 선택 → `v.selectedGradientRanges.size === 2`
+7. 우클릭 → 전체 해제
+
+### 38-7. ESC → 그리드 복귀 → 다시 더블클릭 (3라운드 반복)
+
+각 라운드에서 다른 이미지 타입 진입:
+- 라운드 1: BIN_285_count → 범례 확인 → ESC → 그리드 복귀
+- 라운드 2: QVL_5000_average → 범례 확인 → ESC → 그리드 복귀
+- 라운드 3: FBT_1000_average → Prev → BIN → 범례 확인 → ESC → 그리드 복귀
+
+각 라운드 검증:
+1. 더블클릭 후 `v.isCompositeMode === true`
+2. Gradient 범례 표시 (Grade 범례가 아님)
+3. ESC 후 그리드 모드 복귀 + `v.isCompositeMode === true` 유지
+4. 그리드 Gradient 범례 유지
+
+### 38-8. 칩 텍스트 가독성 검증 (서버사이드 렌더링)
+
+1. Measure Composite 결과 이미지(FBT_1000_average)를 50% 줌으로 표시
+2. 칩 내부에 K/M 축약 값 텍스트가 보이는지 스크린샷 확인
+3. 텍스트가 칩 영역을 넘지 않는지 확인 (overflow 방지)
+4. 대비 색상: 밝은 배경 → 검정 텍스트, 어두운 배경 → 흰색 텍스트
+
+**pass 기준**:
+- 38-1: 4개 항목 생성 → 13개 결과 이미지
+- 38-2: 그리드 Gradient 범례 10개 + 칩수
+- 38-3: FBT 단일 뷰 Gradient 범례 + 미니맵 + Navigator
+- 38-4: Navigator 전환 시 isCompositeMode 유지 + Gradient 범례 (NOT Grade)
+- 38-5: Prev/Next 전환 시 Composite Mode 유지
+- 38-6: Gradient 필터 단일/다중 선택/해제 정상
+- 38-7: 3라운드 ESC→그리드→더블클릭 모두 Composite Mode + Gradient 범례 유지
+- 38-8: 50% 줌에서 칩 텍스트 가독성 확인

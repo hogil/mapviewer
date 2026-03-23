@@ -8805,9 +8805,8 @@ class WaferMapViewer {
         const panel = document.getElementById('mc-panel');
         if (!panel) return;
         panel.style.display = 'none';
-        // 생성 버튼 wrap 제거 (다음 open 시 재생성)
-        const btnWrap = panel.querySelector('.mc-generate-btn')?.parentElement;
-        if (btnWrap && btnWrap !== panel) btnWrap.remove();
+        // 동적 생성 요소 모두 제거 (다음 open 시 깨끗하게 재생성)
+        panel.querySelectorAll('.pinned-section, .mc-reset-bar, .mc-generate-wrap').forEach(el => el.remove());
         if (panel._originalParent) {
             panel._originalParent.insertBefore(panel, panel._originalNext || null);
             delete panel._originalParent;
@@ -9113,13 +9112,20 @@ class WaferMapViewer {
 
     _renderMcList(list, keys, options = {}) {
         const maxPerSection = options.maxPerSection || Infinity;
-        list.innerHTML = '';
-        this._mcCheckedItems = [];  // [{mode, itemKey, binType, label}]
-
-        // 상단 고정 영역
-        this._ensurePinnedSection(list);
-
         const panel = list.closest('.failbit-panel') || list.parentElement;
+
+        // ── 1) 완전 초기화: 이전 렌더링 잔재 모두 제거 ──
+        list.innerHTML = '';
+        this._mcCheckedItems = [];
+        // pinned-section, resetBar, generate-wrap 모두 제거 (깨끗한 상태에서 시작)
+        panel.querySelectorAll('.pinned-section, .mc-reset-bar, .mc-generate-wrap').forEach(el => el.remove());
+
+        // ── 2) 상단 고정 영역 생성 ──
+        const pinned = document.createElement('div');
+        pinned.className = 'pinned-section';
+        panel.insertBefore(pinned, list);
+
+        // ── 3) 헬퍼 ──
         const updateGenBtn = () => {
             const btn = panel.querySelector('.mc-generate-btn');
             if (btn) {
@@ -9146,12 +9152,11 @@ class WaferMapViewer {
             item.appendChild(span);
 
             const entry = { mode, itemKey, binType, label };
-            const toggle = (e) => {
-                if (e.target === cb) return;  // checkbox handles itself
+            item.addEventListener('click', (e) => {
+                if (e.target === cb) return;
                 cb.checked = !cb.checked;
                 cb.dispatchEvent(new Event('change'));
-            };
-            item.addEventListener('click', toggle);
+            });
             cb.addEventListener('change', () => {
                 if (cb.checked) {
                     this._mcCheckedItems.push(entry);
@@ -9167,61 +9172,37 @@ class WaferMapViewer {
             return item;
         };
 
-        // 초기화 버튼 — 검색 바 바로 아래, pinned 위 (항상 맨 위 고정)
-        let resetBar = panel.querySelector('.mc-reset-bar');
-        if (!resetBar) {
-            resetBar = document.createElement('div');
-            resetBar.className = 'mc-reset-bar';
-        }
-        // 항상 검색 바 바로 다음에 위치하도록 (pinned section 위)
-        const mcSearch = panel.querySelector('.mc-search, .failbit-search');
-        const resetAfter = mcSearch ? mcSearch.nextSibling : panel.firstChild;
-        if (resetBar.parentElement !== panel || resetBar !== resetAfter) {
-            panel.insertBefore(resetBar, resetAfter);
-        }
-        resetBar.innerHTML = '';
-        const resetItem = document.createElement('div');
-        resetItem.className = 'failbit-item';
-        resetItem.textContent = '초기화';
-        resetItem.addEventListener('click', (e) => {
+        // ── 4) 초기화 버튼 ──
+        const resetBar = document.createElement('div');
+        resetBar.className = 'mc-reset-bar';
+        resetBar.style.cssText = 'padding:4px 8px;border-bottom:1px solid #333;';
+        const resetBtn = document.createElement('button');
+        resetBtn.className = 'mc-reset-btn';
+        resetBtn.textContent = '초기화';
+        resetBtn.style.cssText = 'width:100%;padding:4px 0;background:transparent;color:#aaa;border:1px solid #555;border-radius:3px;cursor:pointer;font-size:12px;';
+        resetBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            // 1. 체크 상태 초기화
-            this._mcCheckedItems = [];
-            // 2. pinned section 비우기
-            const pinned = panel.querySelector(':scope > .pinned-section');
-            if (pinned) {
-                while (pinned.firstChild) {
-                    const item = pinned.firstChild;
-                    const sectionName = item.dataset?.pinSection || '';
-                    delete item.dataset.pinSection;
-                    const sections = [...list.children].filter(el => el.classList.contains('failbit-section'));
-                    const target = sections.find(s => s.textContent === sectionName);
-                    if (target) {
-                        let after = target;
-                        while (after.nextElementSibling && after.nextElementSibling.classList.contains('failbit-item')) {
-                            after = after.nextElementSibling;
-                        }
-                        after.after(item);
-                    } else {
-                        list.appendChild(item);
-                    }
-                }
-            }
-            // 3. 모든 체크박스 해제
-            panel.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
-            // 4. 생성 버튼 업데이트
-            updateGenBtn();
+            // 리스트를 완전히 다시 렌더링 (가장 깨끗한 방법)
+            this._renderMcList(list, keys, options);
         });
-        resetBar.appendChild(resetItem);
+        resetBar.appendChild(resetBtn);
+        // 검색 바 바로 다음에 위치
+        const mcSearch = panel.querySelector('.mc-search, .failbit-search');
+        if (mcSearch && mcSearch.nextSibling) {
+            panel.insertBefore(resetBar, mcSearch.nextSibling);
+        } else {
+            panel.insertBefore(resetBar, pinned);
+        }
 
-        // Composite Map (Grade heatmap) — 최상단
-        const specialHeader = document.createElement('div');
-        specialHeader.className = 'failbit-section';
-        specialHeader.textContent = 'MAP';
-        list.appendChild(specialHeader);
+        // ── 5) 항목 생성 ──
+        // MAP (Composite)
+        const mapHeader = document.createElement('div');
+        mapHeader.className = 'failbit-section';
+        mapHeader.textContent = 'MAP';
+        list.appendChild(mapHeader);
         list.appendChild(makeItem('Failbit', 'composite', null, null));
 
-        // BIN section
+        // BIN
         if (keys.bin.length > 0) {
             const header = document.createElement('div');
             header.className = 'failbit-section';
@@ -9239,7 +9220,7 @@ class WaferMapViewer {
             }
         }
 
-        // FBT section
+        // FBT
         if (keys.f.length > 0) {
             const fShow = keys.f.slice(0, maxPerSection);
             const header = document.createElement('div');
@@ -9251,7 +9232,7 @@ class WaferMapViewer {
             }
         }
 
-        // QVL section
+        // QVL
         if (keys.q.length > 0) {
             const qShow = keys.q.slice(0, maxPerSection);
             const header = document.createElement('div');
@@ -9268,9 +9249,7 @@ class WaferMapViewer {
             return;
         }
 
-        // 생성 버튼 추가 (기존 제거 후 재생성)
-        const existingBtnWrap = list.parentElement?.querySelector('.mc-generate-wrap');
-        if (existingBtnWrap) existingBtnWrap.remove();
+        // ── 6) 생성 버튼 ──
         const btnWrap = document.createElement('div');
         btnWrap.className = 'mc-generate-wrap';
         btnWrap.style.cssText = 'padding:6px 8px;border-top:1px solid #444;';
@@ -9286,7 +9265,7 @@ class WaferMapViewer {
             this._startMultipleMeasureComposites([...this._mcCheckedItems]);
         });
         btnWrap.appendChild(genBtn);
-        list.parentElement.appendChild(btnWrap);
+        panel.appendChild(btnWrap);
     }
 
     /**
@@ -23849,10 +23828,17 @@ class WaferMapViewer {
             this._gridMeasureMap = null;
             if (this.chipAnnotator) this.chipAnnotator.setOverlayMode(null);
             if (!this.gridMode) this.refreshThumbnailNavigatorWithCurrentParams();
-            // 7. 그리드 모드일 때 measure overlay 이미지 원복
+            // 7. 그리드 모드일 때 measure overlay 이미지 원복 (base images로 복원)
             if (this.gridMode && this._measureBaseImages?.length > 0) {
-                this.showGrid(this._measureBaseImages, true);
+                const baseImages = [...this._measureBaseImages];
+                this._measureBaseImages = null;
+                this.currentGridImages = baseImages;
+                this.selectedImages = baseImages;
+                this.showGrid(baseImages, true);
             }
+            // 8. gradient 범례 → Grade 범례로 복원
+            this.selectedGradientRanges.clear();
+            this.renderColorLegends();
         });
         resetBar.appendChild(resetItem);
 
@@ -24078,7 +24064,11 @@ class WaferMapViewer {
         const savedKey = this._ratioActiveItemKey;
         const savedChecked = this._measureCheckedItems ? [...this._measureCheckedItems] : [];
 
-        // 원래 탭 상태 복원 (일반 썸네일)
+        // 🔥 원래 탭에 measure 상태를 저장하지 않도록 해제 후 persist
+        this.overlayMode = null;
+        this._ratioActiveItemKey = null;
+        this._measureCheckedItems = [];
+        this._gridMeasureMap = null;
         this.persistActivePageState();
 
         // 새 "mea" 탭 생성
