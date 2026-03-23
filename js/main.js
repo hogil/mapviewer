@@ -8689,27 +8689,25 @@ class WaferMapViewer {
                 }
             }
 
-            // 결과 반영: 활성 탭이면 렌더링이 끝날 때까지 로딩 표시 유지
+            // 결과 반영: 항상 해당 탭으로 전환 후 렌더링
             if (result && targetPageId) {
-                const isActiveComposite = this.pageManager?.activePageId === targetPageId;
-                if (isActiveComposite) {
-                    const renderingTask = {
-                        status: 'rendering',
-                        message: 'Composite 결과 표시 중입니다...',
-                        selectedCount: selected.length,
-                        startedAt: initialTask.startedAt,
-                    };
-                    this.setCompositePageTask(targetPageId, { task: renderingTask, result: null });
-                    this.showCompositeInlineStatus(renderingTask.message);
-                    await this.switchToCompositeGrid(result);
-                    this.clearCompositePageTask(targetPageId);
-                    this.hideCompositeInlineStatus();
-                    this.persistActivePageState();
-                } else {
-                    // 다른 페이지에서는 로딩 오버레이를 숨기고 결과만 저장
-                    this.hideCompositeInlineStatus();
-                    this.setCompositePageTask(targetPageId, { task: null, result });
+                // 다른 탭에 있으면 composite 탭으로 전환
+                if (this.pageManager?.activePageId !== targetPageId) {
+                    this.pageManager?.switchToPage(targetPageId);
+                    await new Promise(r => setTimeout(r, 300));
                 }
+                const renderingTask = {
+                    status: 'rendering',
+                    message: 'Composite 결과 표시 중입니다...',
+                    selectedCount: selected.length,
+                    startedAt: initialTask.startedAt,
+                };
+                this.setCompositePageTask(targetPageId, { task: renderingTask, result: null });
+                this.showCompositeInlineStatus(renderingTask.message);
+                await this.switchToCompositeGrid(result);
+                this.clearCompositePageTask(targetPageId);
+                this.hideCompositeInlineStatus();
+                this.persistActivePageState();
             } else {
                 this.hideCompositeInlineStatus();
             }
@@ -8921,8 +8919,7 @@ class WaferMapViewer {
 
         const cacheKey = sources.join('|');
         if (this._cachedMeaCtxKey === cacheKey && this._cachedMeasureKeys) {
-            const { f, q } = this._cachedMeasureKeys;
-            this._renderMeaContextList(list, f, q, this.getSelectedImagesForModal());
+            this._renderMeaContextList(list, this._cachedMeasureKeys.f, this._cachedMeasureKeys.q, this.getSelectedImagesForModal());
             return;
         }
 
@@ -8937,6 +8934,9 @@ class WaferMapViewer {
     }
 
     _renderMeaContextList(list, fKeys, qKeys, selectedImages) {
+        // 기존 적용 버튼 제거
+        const oldBtnWrap = list.parentElement?.querySelector('.mea-btn-wrap');
+        if (oldBtnWrap) oldBtnWrap.remove();
         list.innerHTML = '';
         const padKey = (k) => String(k).replace(/^\d+$/, m => m.padStart(4, '0'));
         const checkedItems = [];
@@ -8946,6 +8946,7 @@ class WaferMapViewer {
 
         // 적용 버튼
         const btnWrap = document.createElement('div');
+        btnWrap.className = 'mea-btn-wrap';
         btnWrap.style.cssText = 'padding:6px 8px;position:sticky;bottom:0;background:#2a2a2a;';
         const applyBtn = document.createElement('button');
         applyBtn.className = 'measure-apply-btn';
@@ -8954,7 +8955,6 @@ class WaferMapViewer {
         applyBtn.addEventListener('click', () => {
             this.hideContextMenu();
             if (checkedItems.length === 0) return;
-            // 첫 번째 체크 항목으로 overlay 설정
             const first = checkedItems[0];
             this.overlayMode = first.type;
             this._ratioActiveItemKey = first.key;
@@ -9384,19 +9384,17 @@ class WaferMapViewer {
             const nestedResults = await Promise.all(allTasks.map(pollTask));
             const allResults = nestedResults.flat();
 
-            // Display all results in grid
+            // Display all results in grid — 항상 해당 탭으로 전환 후 렌더링
             if (allResults.length && targetPageId) {
-                const isActiveComposite = this.pageManager?.activePageId === targetPageId;
-                if (isActiveComposite) {
-                    this.showCompositeInlineStatus('Measure Composite 결과 표시 중...');
-                    await this.switchToMeasureCompositeGrid(allResults);
-                    this.clearCompositePageTask(targetPageId);
-                    this.hideCompositeInlineStatus();
-                    this.persistActivePageState();
-                } else {
-                    this.hideCompositeInlineStatus();
-                    this.setCompositePageTask(targetPageId, { task: null, result: allResults[0] });
+                if (this.pageManager?.activePageId !== targetPageId) {
+                    this.pageManager?.switchToPage(targetPageId);
+                    await new Promise(r => setTimeout(r, 300));
                 }
+                this.showCompositeInlineStatus('Measure Composite 결과 표시 중...');
+                await this.switchToMeasureCompositeGrid(allResults);
+                this.clearCompositePageTask(targetPageId);
+                this.hideCompositeInlineStatus();
+                this.persistActivePageState();
             } else {
                 this.hideCompositeInlineStatus();
             }
@@ -9493,19 +9491,17 @@ class WaferMapViewer {
                 }
             }
 
-            // Display result
+            // Display result — 항상 해당 탭으로 전환 후 렌더링
             if (result && targetPageId) {
-                const isActiveComposite = this.pageManager?.activePageId === targetPageId;
-                if (isActiveComposite) {
-                    this.showCompositeInlineStatus('Measure Composite 결과 표시 중...');
-                    await this.switchToMeasureCompositeGrid(result);
-                    this.clearCompositePageTask(targetPageId);
-                    this.hideCompositeInlineStatus();
-                    this.persistActivePageState();
-                } else {
-                    this.hideCompositeInlineStatus();
-                    this.setCompositePageTask(targetPageId, { task: null, result });
+                if (this.pageManager?.activePageId !== targetPageId) {
+                    this.pageManager?.switchToPage(targetPageId);
+                    await new Promise(r => setTimeout(r, 300));
                 }
+                this.showCompositeInlineStatus('Measure Composite 결과 표시 중...');
+                await this.switchToMeasureCompositeGrid(result);
+                this.clearCompositePageTask(targetPageId);
+                this.hideCompositeInlineStatus();
+                this.persistActivePageState();
             } else {
                 this.hideCompositeInlineStatus();
             }
