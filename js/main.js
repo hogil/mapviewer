@@ -8623,7 +8623,12 @@ class WaferMapViewer {
         let targetPageId = this.pageManager?.activePageId || null;
         if (this.pageManager) {
             this.persistActivePageState(previousPageState);
-            const compositePage = this.ensurePageForRole('composite', { forceNew: true, skipPersist: true });
+            const originPageId = this.pageManager.activePageId;
+            const compositePage = this.pageManager.createPage('composite', null, {
+                activate: true,
+                skipPersist: true,
+                insertAfter: originPageId,
+            });
             targetPageId = compositePage?.id || targetPageId;
         }
 
@@ -9228,7 +9233,7 @@ class WaferMapViewer {
             header.textContent = maxPerSection < keys.f.length ? `FBT (${keys.f.length}개 중 ${fShow.length}개)` : 'FBT';
             list.appendChild(header);
             for (const k of fShow) {
-                list.appendChild(makeItem(`FBT${k}`, 'f', k, null));
+                list.appendChild(makeItem(`FBT ${k} Count`, 'f', k, null));
             }
         }
 
@@ -9240,7 +9245,7 @@ class WaferMapViewer {
             header.textContent = maxPerSection < keys.q.length ? `QVL (${keys.q.length}개 중 ${qShow.length}개)` : 'QVL';
             list.appendChild(header);
             for (const k of qShow) {
-                list.appendChild(makeItem(`QVL${k}`, 'q', k, null));
+                list.appendChild(makeItem(`QVL ${k} Count`, 'q', k, null));
             }
         }
 
@@ -9283,12 +9288,17 @@ class WaferMapViewer {
 
         if (!compositeMapItems.length && !measureItems.length) return;
 
-        // Page management
+        // Page management — 원래 탭 보존 후 새 composite 탭 생성
         const previousPageState = this.captureActivePageState();
         let targetPageId = this.pageManager?.activePageId || null;
         if (this.pageManager) {
             this.persistActivePageState(previousPageState);
-            const compositePage = this.ensurePageForRole('composite', { forceNew: true, skipPersist: true });
+            const originPageId = this.pageManager.activePageId;
+            const compositePage = this.pageManager.createPage('composite', null, {
+                activate: true,
+                skipPersist: true,
+                insertAfter: originPageId,
+            });
             targetPageId = compositePage?.id || targetPageId;
         }
 
@@ -9443,14 +9453,19 @@ class WaferMapViewer {
         const aggregation = mode === 'bin' ? 'count' : 'average';
 
         const modeLabel = mode === 'bin' ? `BIN${binType}` :
-                          mode === 'f' ? `FBT${itemKey}` : `QVL${itemKey}`;
+                          mode === 'f' ? `FBT ${itemKey} Count` : `QVL ${itemKey} Count`;
 
         // Page management
         const previousPageState = this.captureActivePageState();
         let targetPageId = this.pageManager?.activePageId || null;
         if (this.pageManager) {
             this.persistActivePageState(previousPageState);
-            const compositePage = this.ensurePageForRole('composite', { forceNew: true, skipPersist: true });
+            const originPageId = this.pageManager.activePageId;
+            const compositePage = this.pageManager.createPage('composite', null, {
+                activate: true,
+                skipPersist: true,
+                insertAfter: originPageId,
+            });
             targetPageId = compositePage?.id || targetPageId;
         }
 
@@ -21328,8 +21343,8 @@ class WaferMapViewer {
             // Measure 키 사전 캐싱
             this._preCacheMeasureKeys();
 
-            // 🔥 savedViewState가 없거나 type이 다를 때만 초기화 (이미 LOT/GRID에서 저장한 scrollTop은 건드리지 않음)
-            if (!this.savedViewState || this.savedViewState.type !== 'grid') {
+            // 🔥 savedViewState를 현재 그리드 이미지로 갱신 (Composite 10개 등 페이지별 이미지 반영)
+            {
                 const preservedScrollTop = this.savedViewState?.scrollTop;
                 this.savedViewState = {
                     type: 'grid',
