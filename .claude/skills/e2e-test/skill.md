@@ -2234,6 +2234,12 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | 6 | mea 탭 생성 후 원래 탭에 measure 상태 잔류 | e66b41d | `_openMeasureTab`에서 persist 전에 overlay/measure 상태 해제 |
 | 7 | 다중 Measure 초기화 시 확장된 이미지 갯수 유지 | e66b41d | `_measureBaseImages`로 복원 후 null 리셋 + `renderColorLegends()` |
 | 8 | Measure Composite LoginId 폴더 분리 (`ho.choi` vs `ho_choi`) | da05881 | `measure_composite.py`에서 `_sanitize_login_id()` 적용 |
+| 9 | Composite 생성 시 원래 그리드 탭 소멸 → LOT Mode 깨짐 | 31abed3 | `ensurePageForRole` → `createPage`로 변경, 원래 탭 보존 |
+| 10 | Composite 단일→더블클릭 복귀 시 3000개 원본 표시 (10개여야 함) | 31abed3 | `savedViewState.images`를 항상 현재 그리드로 갱신 |
+| 11 | MC 드롭다운 FBT/QVL 라벨 `FBT9105 Count` → `FBT9105` | e537f7c | 드롭다운은 원래 라벨, 결과 파일명만 `_sum` |
+| 12 | Composite 결과 파일명 `FBT_9105_average` → `FBT_9105_sum` | e537f7c | aggregation `average` → `sum`, modeLabel도 `_sum` |
+| 13 | Composite 생성 시 LOT 모달이 Composite 탭에 잔류 | cc5fe31 | `hideLotListModal()` 호출 추가 |
+| 14 | Composite 결과가 LOT Mode 무시하고 flat 그리드 표시 | 598026f | `showGrid`에서 `!isCompositeMode` 조건 제거 |
 
 **정상 확인된 기능 (수정 후 검증 완료)**:
 
@@ -2254,6 +2260,12 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | 4개 항목 × 3회 반복 안정성 | 12/12 PASS, JS 에러 0건, 상태 누적 버그 없음 | ✅ |
 | mea 탭 원래 탭 상태 분리 | 원래 탭 `overlayMode=null`, measure 해제 | ✅ |
 | 다중 Measure 초기화 이미지 복원 | 15개(확장) → 5개(원본) 정상 복원 | ✅ |
+| Composite 생성 후 원래 탭 보존 | page0(그리드) + com0(composite) 2탭 유지 | ✅ |
+| Composite 후 LOT Mode 정상 동작 | 원래 탭 복귀 시 lotHeaders=6, 토글 OFF→0/ON→6 | ✅ |
+| Composite 결과 LOT Mode 그룹핑 | Grade(8) + square(2) LOT 헤더 표시 | ✅ |
+| Composite 탭에서 LOT 모달 숨김 | Composite 진입 시 lotModalVisible=false | ✅ |
+| Composite 결과 파일명 sum | `FBT_9105_sum.png`, aggregation=sum | ✅ |
+| MC 드롭다운 라벨 | `FBT9105` (Count 없이 원래 형태) | ✅ |
 
 **평가 항목**:
 
