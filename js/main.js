@@ -8632,6 +8632,9 @@ class WaferMapViewer {
             targetPageId = compositePage?.id || targetPageId;
         }
 
+        // 🔥 Composite 탭에서는 LOT 모달 숨김
+        if (typeof this.hideLotListModal === 'function') this.hideLotListModal();
+
         const initialTask = {
             status: 'queued',
             message: `Composite Map 생성 준비 중... (${selected.length}개 이미지)`,
@@ -9301,6 +9304,9 @@ class WaferMapViewer {
             });
             targetPageId = compositePage?.id || targetPageId;
         }
+
+        // 🔥 Composite 탭에서는 LOT 모달 숨김
+        if (typeof this.hideLotListModal === 'function') this.hideLotListModal();
 
         const initialTask = {
             status: 'queued',
