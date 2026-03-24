@@ -2240,6 +2240,8 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | 12 | Composite 결과 파일명 `FBT_9105_average` → `FBT_9105_sum` | e537f7c | aggregation `average` → `sum`, modeLabel도 `_sum` |
 | 13 | Composite 생성 시 LOT 모달이 Composite 탭에 잔류 | cc5fe31 | `hideLotListModal()` 호출 추가 |
 | 14 | Composite 결과가 LOT Mode 무시하고 flat 그리드 표시 | 598026f | `showGrid`에서 `!isCompositeMode` 조건 제거 |
+| 15 | 다중 Composite 경로에서 FBT/QVL aggregation이 `average`로 전송 | e767169 | `_startMultipleMeasureComposites`에서도 `sum`으로 통일 |
+| 16 | Measure Composite 재생성 시 이전 파일 미삭제 | e767169 | 같은 prefix(FBT/QVL/BIN)의 이전 .png/.jpg/.webp/.npz 자동 삭제 |
 
 **정상 확인된 기능 (수정 후 검증 완료)**:
 
@@ -2266,6 +2268,9 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | Composite 탭에서 LOT 모달 숨김 | Composite 진입 시 lotModalVisible=false | ✅ |
 | Composite 결과 파일명 sum | `FBT_9105_sum.png`, aggregation=sum | ✅ |
 | MC 드롭다운 라벨 | `FBT9105` (Count 없이 원래 형태) | ✅ |
+| 다중 Composite 동시 생성 | Grade+FBT+BIN 3개 동시 → 12개 이미지 (10+1+1) | ✅ |
+| Measure Composite 파일 자동 교체 | FBT_1000_sum → FBT_1100_sum (이전 삭제 + 새로 생성) | ✅ |
+| 서버 파일 확인 | `composite_map/notsaml/` 내 .jpg + .npz 정상 | ✅ |
 
 **평가 항목**:
 
@@ -2358,14 +2363,33 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 5. **핵심 검증**: `overlayMode === null`, `_gridMeasureMap === null`
 6. **핵심 검증**: gradient 범례 → Grade 범례로 복원
 
-#### 35-10. Composite MC 드롭다운 UI 검증
+#### 35-10. Measure Composite 서버 파일 생성/삭제/교체 검증
+1. palette_3k 20개 선택 → Grade Composite + FBT1000 + BIN285 동시 생성
+2. 15초 대기 (서버 생성 완료)
+3. **핵심 검증**: `composite_map/{LoginId}/` 디렉터리에 파일 존재 확인
+   - `Grade_0.jpg` ~ `Grade_7.jpg` (8개)
+   - `square_average.jpg`, `square_weighted_average.jpg` (2개)
+   - `FBT_1000_sum.jpg` (파일명에 `_sum` 포함)
+   - `BIN_285_count.jpg` (파일명에 `_count` 포함)
+   - `measure_composite_data.npz` (캐시)
+   - `square_maps_data.npz` (Grade 캐시)
+4. **이전 파일 교체 테스트**: FBT1100 + QVL5000 생성
+5. **핵심 검증**: `FBT_1000_sum.jpg` **삭제됨**, `FBT_1100_sum.jpg` **새로 생성**
+6. **핵심 검증**: `QVL_5000_sum.jpg` **새로 생성**
+7. **핵심 검증**: `BIN_285_count.jpg`는 **그대로 유지** (다른 prefix)
+8. **"No chip values found" 에러**: `item_key`가 positions 파일의 `ftn_keys`에 없으면 발생
+   - 테스트 데이터(palette_3k)의 ftn_keys 범위: `1000~1499` (500개)
+   - 존재하지 않는 key (예: `9001`) 요청 시 서버 에러 정상 반환 확인
+   - 프론트엔드에서 `alert('Measure Composite 생성에 실패했습니다: ...')` 표시 확인
+
+#### 35-11. Composite MC 드롭다운 UI 검증
 1. MC 패널 열기 → Composite 드롭다운 표시
 2. **핵심 검증**: 드롭다운 패널 `max-height: min(520px, 60vh)` — 뷰포트 비례
 3. **핵심 검증**: 생성 버튼(`.mc-generate-wrap`)이 항상 보임 (`flex-shrink: 0`)
 4. **핵심 검증**: FBT 항목 라벨이 `FBT9105` 형태 (Count 없음)
 5. **핵심 검증**: QVL 항목 라벨이 `QVL5000` 형태 (Count 없음)
 
-**pass 기준**: 35-1~35-10 모든 핵심 검증 통과, 3회 반복에서 JS 에러 0건
+**pass 기준**: 35-1~35-11 모든 핵심 검증 통과, 3회 반복에서 JS 에러 0건, 서버 파일 생성/삭제 정상
 
 ---
 
