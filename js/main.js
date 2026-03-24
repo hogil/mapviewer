@@ -1059,6 +1059,13 @@ class WaferMapViewer {
         return this.currentUser;
     }
 
+    /** 현재 overlayMode가 gradient measure 모드인지 (positions chip 값 기반 렌더링)
+     *  bin/composite/null 이외의 모든 모드가 gradient measure */
+    isMeasureGradientMode(mode) {
+        const m = mode ?? this.overlayMode;
+        return !!m && m !== 'bin' && m !== 'composite';
+    }
+
     bindEvents() {
         this.bindViewerEvents();
 
@@ -6256,7 +6263,7 @@ class WaferMapViewer {
             const bottomList = Array.from(this.selectedBottoms).sort().join(',');
             parts.push(`bottom_filter=${encodeURIComponent(bottomList)}`);
         }
-        if (!isMeasureCompositeView && (this.overlayMode === 'f' || this.overlayMode === 'q')) {
+        if (!isMeasureCompositeView && (this.isMeasureGradientMode())) {
             if (this._ratioActiveItemKey) {
                 parts.push(`measure_overlay=${encodeURIComponent(this.overlayMode + ':' + this._ratioActiveItemKey)}`);
             }
@@ -8131,7 +8138,7 @@ class WaferMapViewer {
             colorItem.style.setProperty('display', 'block', 'important');
             if (this.isCompositeMode) {
                 colorItem.textContent = '🎨 Composite 색 변경';
-            } else if (this.overlayMode === 'f' || this.overlayMode === 'q') {
+            } else if (this.isMeasureGradientMode()) {
                 colorItem.textContent = '🎨 Measure 색 변경';
             } else {
                 colorItem.textContent = '🎨 Composite 색 변경';
@@ -8742,6 +8749,8 @@ class WaferMapViewer {
         if (!panel._mcClickBlocker) {
             panel._mcClickBlocker = true;
             panel.addEventListener('click', (e) => e.stopPropagation());
+            // 🔥 패널 내부 wheel 이벤트가 그리드로 전파되지 않도록 차단
+            panel.addEventListener('wheel', (e) => e.stopPropagation(), { passive: false });
         }
 
         // 버튼 아래 fixed 위치 — 뷰포트 경계 체크 포함
@@ -10342,7 +10351,7 @@ class WaferMapViewer {
                 this.hideContextMenu();
                 if (this.isCompositeMode) {
                     this.openCompositeColorModal();
-                } else if (this.overlayMode === 'f' || this.overlayMode === 'q') {
+                } else if (this.isMeasureGradientMode()) {
                     if (this.colorEditor) {
                         this.colorEditor.open('measure');
                     }
@@ -11053,7 +11062,7 @@ class WaferMapViewer {
                 this.hideSingleContextMenu();
                 if (this.isCompositeMode) {
                     this.openCompositeColorModal(true); // skipModeCheck=true
-                } else if (this.overlayMode === 'f' || this.overlayMode === 'q') {
+                } else if (this.isMeasureGradientMode()) {
                     if (this.colorEditor) {
                         this.colorEditor.open('measure');
                     }
@@ -11075,7 +11084,7 @@ class WaferMapViewer {
             compositeColorItem.style.display = 'block';
             if (isCompositeContext) {
                 compositeColorItem.textContent = '🎨 Composite 색 변경';
-            } else if (this.overlayMode === 'f' || this.overlayMode === 'q') {
+            } else if (this.isMeasureGradientMode()) {
                 compositeColorItem.textContent = '🎨 Measure 색 변경';
             } else {
                 compositeColorItem.textContent = '🎨 Composite 색 변경';
@@ -13027,7 +13036,7 @@ class WaferMapViewer {
 
         // 🔄 초기 로드 직후에도 현재 줌과 피라미드 레벨이 일치하도록 약간의 지연 후 강제 동기화
         // 🔥 Measure overlay (f/q) 적용 예정이면 스킵 (원본 이미지 pyramid로 덮어쓰기 방지)
-        const willApplyMeasureOverlay = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey;
+        const willApplyMeasureOverlay = (this.isMeasureGradientMode()) && this._ratioActiveItemKey;
         if (!willApplyMeasureOverlay) {
             setTimeout(() => {
                 if (signal.aborted || isStaleLoad() || this.gridMode || this._measureOverlayRendered) return;
@@ -13107,7 +13116,7 @@ class WaferMapViewer {
 
             // 🎨 Color Legends 표시 및 렌더링 (Single Image Mode)
             // 🔥 Measure overlay 또는 Measure Composite 시 gradient 캐시 보장 (그리드→단일 전환 시 유실 방지)
-            const needsGradient = (this.overlayMode === 'f' || this.overlayMode === 'q') ||
+            const needsGradient = (this.isMeasureGradientMode()) ||
                                   (this.isCompositeMode && this.compositeSession?.measureMode);
             if (needsGradient && !this._ratioGradientCache) {
                 try {
@@ -14225,7 +14234,7 @@ class WaferMapViewer {
 
         // Measure overlay 미니맵 반영 (f/q 모드일 때 칩에 gradient 색상 덧그리기)
         if (this.chipAnnotator?.ratioOverlayColors?.size > 0 &&
-            (this.overlayMode === 'f' || this.overlayMode === 'q')) {
+            (this.isMeasureGradientMode())) {
             const chips = this.chipAnnotator.chips;
             const colors = this.chipAnnotator.ratioOverlayColors;
             this.minimapCtx.globalAlpha = 0.7;
@@ -18452,7 +18461,7 @@ class WaferMapViewer {
         grid.classList.add('active');
         setTimeout(() => this.updateGridSquaresPixel(), 0);
         // 🔥 Measure overlay 활성 시 썸네일 URL을 measure-thumb으로 교체
-        if ((this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey) {
+        if ((this.isMeasureGradientMode()) && this._ratioActiveItemKey) {
             setTimeout(() => {
                 this.refreshGridThumbnailsWithCurrentParams();
                 this.renderGridColorLegend();
@@ -18961,7 +18970,7 @@ class WaferMapViewer {
             // 다중 선택 모드: measureItem에 맞는 URL 사용
             thumbnailUrl = this._buildMeasureThumbUrl(imgPath, measureItem, cacheParam);
         } else {
-            const isMeasureMode = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey;
+            const isMeasureMode = (this.isMeasureGradientMode()) && this._ratioActiveItemKey;
             if (isMeasureMode) {
                 const loginId = this.getCurrentLoginId();
                 const gf = this.selectedGradientRanges.size > 0
@@ -23634,6 +23643,8 @@ class WaferMapViewer {
         if (!panel._failbitClickBlocker) {
             panel._failbitClickBlocker = true;
             panel.addEventListener('click', (e) => e.stopPropagation());
+            // 🔥 패널 내부 wheel 이벤트가 그리드로 전파되지 않도록 차단
+            panel.addEventListener('wheel', (e) => e.stopPropagation(), { passive: false });
         }
 
         // fixed 포지셔닝: 버튼 아래에 배치
@@ -23986,7 +23997,7 @@ class WaferMapViewer {
 
             // 이미지 선택 + Measure 활성 → 새 "mea" 탭으로 분리
             const hasSelection = Array.isArray(this.gridSelectedIdxs) && this.gridSelectedIdxs.length > 0;
-            const isMeasureActive = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey;
+            const isMeasureActive = (this.isMeasureGradientMode()) && this._ratioActiveItemKey;
             if (hasSelection && isMeasureActive) {
                 this._openMeasureTab();
             } else {
@@ -24193,21 +24204,17 @@ class WaferMapViewer {
         const gf = this.selectedGradientRanges.size > 0
             ? Array.from(this.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
 
-        switch (measureItem.type) {
-            case 'failbit':
-                return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${this.getPersonalizedParams()}${cacheSuffix}`;
-            case 'bin': {
-                // getPersonalizedParams()가 overlayMode=bin일 때 이미 bin_overlay=1 포함
-                const pp = this.getPersonalizedParams();
-                const extra = pp.indexOf('bin_overlay=1') < 0 ? '&bin_overlay=1' : '';
-                return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${pp}${extra}${cacheSuffix}`;
-            }
-            case 'f':
-            case 'q':
-                return `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${measureItem.type}&key=${encodeURIComponent(measureItem.key)}&size=512&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
-            default:
-                return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${this.getPersonalizedParams()}${cacheSuffix}`;
+        // failbit/bin만 특수 경로, 나머지는 모두 measure-thumb gradient
+        if (measureItem.type === 'failbit' || measureItem.type === 'composite') {
+            return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${this.getPersonalizedParams()}${cacheSuffix}`;
         }
+        if (measureItem.type === 'bin') {
+            const pp = this.getPersonalizedParams();
+            const extra = pp.indexOf('bin_overlay=1') < 0 ? '&bin_overlay=1' : '';
+            return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${pp}${extra}${cacheSuffix}`;
+        }
+        // gradient measure (f, q, 향후 추가 모드 전부)
+        return `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${measureItem.type}&key=${encodeURIComponent(measureItem.key)}&size=512&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
     }
 
     /**
@@ -24473,7 +24480,7 @@ class WaferMapViewer {
         if (this.overlayMode === 'bin') {
             const binColors = this._buildBinColorMap();
             this.chipAnnotator.setOverlayMode('bin', { binColors });
-        } else if (this.overlayMode === 'f' || this.overlayMode === 'q') {
+        } else if (this.isMeasureGradientMode()) {
             // 🔥 chipAnnotator.overlayMode 동기화 (이전 BIN 오버레이 잔존 방지)
             this.chipAnnotator.overlayMode = this.overlayMode;
             this.chipAnnotator.binOverlayColors.clear();
@@ -24540,9 +24547,9 @@ class WaferMapViewer {
             // 하위 호환: _measureCheckedItems 없이 overlayMode만 설정된 경우
             active = true;
             if (this.overlayMode === 'bin') label = 'BIN';
-            else if (this.overlayMode === 'f' || this.overlayMode === 'q') {
+            else if (this.isMeasureGradientMode()) {
                 const pk = String(this._ratioActiveItemKey || '').replace(/^\d+$/, m => m.padStart(4, '0'));
-                label = this.overlayMode === 'f' ? `FBT${pk}` : `QVL${pk}`;
+                label = `${this.overlayMode.toUpperCase()}${pk}`;
             }
         }
 
@@ -25039,7 +25046,7 @@ class WaferMapViewer {
                 nextUrl = this._buildMeasureThumbUrl(imagePath, measureItem, cacheSuffix);
             } else {
                 // 단일 Measure overlay → /api/measure-thumb (positions-only, 3ms)
-                const isMeasure = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey;
+                const isMeasure = (this.isMeasureGradientMode()) && this._ratioActiveItemKey;
                 if (isMeasure) {
                     const loginId = this.getCurrentLoginId();
                     const gf = this.selectedGradientRanges.size > 0
@@ -25500,7 +25507,7 @@ class WaferMapViewer {
         };
 
         // Render top legend
-        const isMeasureOverlay = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioGradientCache;
+        const isMeasureOverlay = (this.isMeasureGradientMode()) && this._ratioGradientCache;
         const isMeasureComposite = this.isCompositeMode && this.compositeSession?.measureMode && this._ratioGradientCache;
         if (isMeasureOverlay || isMeasureComposite) {
             // 🔥 Measure overlay 활성 시: gradient percentile 범례 표시
@@ -25732,7 +25739,7 @@ class WaferMapViewer {
         };
         
         // Top legend 그룹 (좌측 정렬)
-        const isMeasureOverlay = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey;
+        const isMeasureOverlay = (this.isMeasureGradientMode()) && this._ratioActiveItemKey;
         const isMeasureComposite = this.isCompositeMode && this.compositeSession?.measureMode;
         html += '<div class="legend-group-top">';
         if ((isMeasureOverlay || isMeasureComposite) && this._ratioGradientCache) {
@@ -27103,7 +27110,7 @@ class WaferMapViewer {
         }, 100);
 
         // 🔥 Measure overlay 활성 시 썸네일 URL을 measure-thumb으로 교체
-        if ((this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey) {
+        if ((this.isMeasureGradientMode()) && this._ratioActiveItemKey) {
             setTimeout(() => {
                 this.refreshGridThumbnailsWithCurrentParams();
             }, 150);
@@ -27217,7 +27224,7 @@ class WaferMapViewer {
         if (measureItem) {
             thumbnailUrl = this._buildMeasureThumbUrl(imgPath, measureItem, cacheParam);
         } else {
-            const isMeasureMode = (this.overlayMode === 'f' || this.overlayMode === 'q') && this._ratioActiveItemKey;
+            const isMeasureMode = (this.isMeasureGradientMode()) && this._ratioActiveItemKey;
             if (isMeasureMode) {
                 const loginId = this.getCurrentLoginId();
                 const gf = this.selectedGradientRanges.size > 0
