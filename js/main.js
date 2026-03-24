@@ -8244,6 +8244,18 @@ class WaferMapViewer {
         };
         this.lastCompositeSourceImages = sourceImages;
 
+        // 🔥 Composite 결과 폴더 로드 전 필터/선택 상태 초기화
+        this.filterLT = [];
+        this.filterTM = [];
+        this.filterSTEP = [];
+        this.gridSelectedIdxs = [];
+        this.gridSelectedSet = new Set();
+        this.selectedFolders = new Set();
+        this.overlayMode = null;
+        this._ratioActiveItemKey = null;
+        this._measureCheckedItems = [];
+        this._gridMeasureMap = null;
+
         // 🔥 핵심: composite_map/{LoginId} 폴더를 일반 폴더처럼 로드
         await this.loadImagesInFolderAndShowGrid(outputDir);
         if (typeof this.hideLotListModal === 'function') this.hideLotListModal();
@@ -9598,6 +9610,18 @@ class WaferMapViewer {
             sourceImagePaths: this._mcSelectedImages || [],
             measureResults: results,
         };
+
+        // 🔥 Composite 결과 폴더 로드 전 필터/선택 상태 초기화
+        this.filterLT = [];
+        this.filterTM = [];
+        this.filterSTEP = [];
+        this.gridSelectedIdxs = [];
+        this.gridSelectedSet = new Set();
+        this.selectedFolders = new Set();
+        this.overlayMode = null;
+        this._ratioActiveItemKey = null;
+        this._measureCheckedItems = [];
+        this._gridMeasureMap = null;
 
         // 🔥 핵심: composite_map/{LoginId} 폴더를 일반 폴더처럼 로드
         if (outputDir) {
