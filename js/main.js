@@ -8642,6 +8642,9 @@ class WaferMapViewer {
         this.syncCompositeInlineStatus(targetPageId);
 
         try {
+            // 🔥 이전 Composite 결과 전체 삭제 (새 생성 전 cleanup)
+            await fetch('/api/composite-cleanup', { method: 'POST', cache: 'no-store' }).catch(() => {});
+
             const res = await fetch('/api/composite-map', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -9315,6 +9318,9 @@ class WaferMapViewer {
         this.syncCompositeInlineStatus(targetPageId);
 
         try {
+            // 🔥 이전 Composite 결과 전체 삭제 (새 생성 전 cleanup)
+            await fetch('/api/composite-cleanup', { method: 'POST', cache: 'no-store' }).catch(() => {});
+
             // ── 1) Composite Map (Grade heatmap) API 호출 ──
             const compositeTaskIds = [];
             if (compositeMapItems.length > 0) {

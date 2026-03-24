@@ -9659,6 +9659,25 @@ async def extract_chip_images(request: ChipImageExtractRequest):
         logger.exception(f"Failed to extract chip images: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/composite-cleanup")
+async def composite_cleanup_endpoint(request: Request):
+    """사용자의 composite_map 폴더 전체 삭제 (새 Composite 생성 전 호출)"""
+    import shutil
+    from .composite_map import COMPOSITE_ROOT, _sanitize_login_id, POSITIONS_ROOT
+    login_id = _current_login_id(request)
+    safe_login = _sanitize_login_id(login_id)
+    user_dir = COMPOSITE_ROOT / safe_login
+    positions_dir = POSITIONS_ROOT / "composite_map" / safe_login
+    deleted = []
+    for d in [user_dir, positions_dir]:
+        if d.exists():
+            try:
+                shutil.rmtree(d)
+                deleted.append(str(d))
+            except Exception:
+                pass
+    return JSONResponse({"deleted": deleted})
+
 @app.post("/api/composite-map")
 async def create_composite_map_endpoint(
     payload: CompositeMapRequest,
