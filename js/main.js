@@ -9333,7 +9333,7 @@ class WaferMapViewer {
             const measureTaskPromises = measureItems.map(async (item) => {
                 const bin_types = item.mode === 'bin' ? [item.binType] : null;
                 const item_key = item.mode !== 'bin' ? item.itemKey : null;
-                const aggregation = item.mode === 'bin' ? 'count' : 'average';
+                const aggregation = item.mode === 'bin' ? 'count' : 'sum';
 
                 const res = await fetch('/api/measure-composite', {
                     method: 'POST',

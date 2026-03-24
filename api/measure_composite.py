@@ -813,6 +813,15 @@ def create_measure_composite(
     out_dir = user_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # 🔥 이전 measure composite 결과 삭제 (같은 mode+key의 이전 파일)
+    prefix = "FBT" if mode == "f" else ("QVL" if mode == "q" else "BIN")
+    for old_file in out_dir.iterdir():
+        if old_file.is_file() and old_file.stem.startswith(prefix) and old_file.suffix.lower() in (".png", ".jpg", ".webp", ".npz"):
+            try:
+                old_file.unlink()
+            except OSError:
+                pass
+
     # 7. 렌더링
     border_rgb = _get_normal_border_rgb(resolved)
     result_img = _render(base_path, base_pos, pct_map, stops, value_map=value_map, border_color=border_rgb)
