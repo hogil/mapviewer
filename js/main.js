@@ -8117,20 +8117,15 @@ class WaferMapViewer {
         const returnItem = document.getElementById('context-composite-return');
         const colorItem = document.getElementById('context-composite-colors');
         const subsetMapItem = document.getElementById('context-subset-map-create');
-
-        if (!createItem || !returnItem) {
-            console.warn('?? ���ؽ�Ʈ �޴� �׸��� ã�� �� �����ϴ�.');
-            return;
-        }
         const mcCreateItem = document.getElementById('context-mc-create');
         if (this.isCompositeMode) {
-            createItem.style.setProperty('display', 'none', 'important');
+            if (createItem) createItem.style.setProperty('display', 'none', 'important');
             if (mcCreateItem) mcCreateItem.style.setProperty('display', 'none', 'important');
-            returnItem.style.setProperty('display', 'block', 'important');
+            if (returnItem) returnItem.style.setProperty('display', 'block', 'important');
         } else {
-            createItem.style.setProperty('display', 'block', 'important');
+            if (createItem) createItem.style.setProperty('display', 'block', 'important');
             if (mcCreateItem) mcCreateItem.style.setProperty('display', 'block', 'important');
-            returnItem.style.setProperty('display', 'none', 'important');
+            if (returnItem) returnItem.style.setProperty('display', 'none', 'important');
         }
         if (colorItem) {
             colorItem.style.setProperty('display', 'block', 'important');

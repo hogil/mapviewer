@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 38개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 39개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -2918,3 +2918,60 @@ const ms = Math.round(performance.now() - t0);
 - 38-6: Gradient 필터 단일/다중 선택/해제 정상
 - 38-7: 3라운드 ESC→그리드→더블클릭 모두 Composite Mode + Gradient 범례 유지
 - 38-8: 50% 줌에서 칩 텍스트 가독성 확인
+
+---
+
+## Phase 39: Subset Composite Map (선택 Grade → Sum Map) 검증
+
+**목적**: Failbit Composite 생성 후 특정 Grade만 선택하여 Subset Sum Map을 생성하는 기능이 정상 동작하는지 검증
+
+**배경**:
+- Subset Map은 Full Composite(Grade 0~7 전체) 결과에서 사용자가 원하는 Grade만 골라 해당 Grade들로만 재계산한 sum map
+- `updateContextMenuState()`에서 `context-composite-create` 요소가 없을 때 early return하여 subset 메뉴가 표시되지 않던 버그 수정됨
+- 트리거 경로: 그리드 우클릭 → `🎯 선택 Grade Composite Map` / 단일 이미지 우클릭 → `#single-composite-subset`
+- API: `POST /api/composite-subset` (output_dir, selected_grades, lot_mode)
+
+**평가 항목**:
+
+### 39-1. Failbit Composite 생성 + Grade 선택
+
+1. filter_test 24개 이미지 → 전체선택 → Measure 패널에서 Failbit만 체크 → 생성
+2. 결과 그리드: square_average, square_weighted_average, Grade_0~7 (10개)
+3. `v.isCompositeMode === true` 확인
+4. 전체선택 (`v.selectAllGridImages()`) → `gridSelectedIdxs.length === 10`
+5. `v.getSelectedGradesFromGrid()` → Set(0,1,2,3,4,5,6,7)
+
+### 39-2. 컨텍스트 메뉴 Subset 항목 표시
+
+1. Composite 결과 그리드에서 우클릭 → `showContextMenu()` 호출
+2. `context-subset-map-create` 요소: `display === 'block'` (NOT 'none')
+3. 텍스트: `🎯 선택 Grade Composite Map`
+4. **핵심 검증**: `updateContextMenuState()`에서 `context-composite-create` 없어도 subset 처리까지 도달
+
+### 39-3. 특정 Grade 선택 후 Subset Map 생성
+
+1. Grade_2, Grade_5만 선택 (나머지 해제)
+2. `v.getSelectedGradesFromGrid()` → Set(2, 5)
+3. `v.createSubsetMap()` 호출
+4. API 호출 확인: `POST /api/composite-subset` body에 `selected_grades: [2, 5]`
+5. 결과: `square_average_25.jpg`, `square_weighted_average_25.jpg` (subset sum maps) 생성
+6. 결과 그리드에 subset 이미지 추가됨
+
+### 39-4. 단일 이미지 모드에서 Subset 메뉴
+
+1. Composite 결과 이미지(Grade_2) 더블클릭 → 단일 뷰 진입
+2. 우클릭 → `#single-composite-subset` 표시 (`isCompositeContext === true`)
+3. 클릭 → `createSubsetMap()` 호출 가능
+
+### 39-5. Subset 결과 이미지 검증
+
+1. Subset sum map 이미지가 그리드에 표시됨
+2. 이미지가 정상 로드됨 (broken image 없음)
+3. Full Composite sum map과 다른 색상 분포 (subset은 특정 Grade만 포함하므로 값이 다름)
+
+**pass 기준**:
+- 39-1: Failbit Composite 10개 결과 + Grade 8개 인식
+- 39-2: 우클릭 메뉴에 Subset 항목 표시 (display: block)
+- 39-3: Grade 2,5 선택 → Subset API 호출 → subset sum map 생성
+- 39-4: 단일 이미지 모드에서도 Subset 메뉴 표시
+- 39-5: Subset 결과 이미지 정상 렌더링
