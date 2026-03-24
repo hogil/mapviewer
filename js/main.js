@@ -8221,86 +8221,32 @@ class WaferMapViewer {
      * Composite Grid로 전환 (8개 히트맵 표시)
      */
     async switchToCompositeGrid(result) {
-        if (!result?.heatmaps || result.heatmaps.length === 0) {
+        // 🔥 Composite 완료 → composite_map/{LoginId} 폴더를 일반 그리드로 표시
+        const outputDir = result?.output_dir;
+        if (!outputDir) {
             alert('생성된 히트맵이 없습니다.');
             return;
         }
 
-        // 🔥 Grade 선택 상태 초기화 (새로운 Composite 세션 시작)
+        this._personalizedColorCacheBuster = Date.now();
         this.selectedGrades.clear();
+        this.isCompositeMode = true;
 
-        // 🔥 히트맵 경로 추출 (index 0~7 순서대로)
-        const heatmapPaths = result.heatmaps
-            .sort((a, b) => a.index - b.index)
-            .map(h => h.path);
-
-        // 🔥 Sum Map 추가 (추가 계산 결과)
-        const sumMapEntries = Array.isArray(result.sum_maps) && result.sum_maps.length
-            ? result.sum_maps.map(entry => ({ ...entry }))
-            : [];
-
-        if (!sumMapEntries.length && result.sum_map_path) {
-            const derivedName = result.sum_map_path.split('/').pop() || 'square_average.jpg';
-            sumMapEntries.push({
-                path: result.sum_map_path,
-                type: 'square_mean',
-                display_name: 'Composite SqMean',
-                filename: derivedName,
-            });
-        }
-
-        sumMapEntries.forEach(entry => {
-            if (entry?.path) {
-                heatmapPaths.push(entry.path);
-            }
-        });
-
-        // 🔥 Grid 선택 상태 완전 초기화
-        this.gridSelectedIdxs = [];
-        this.gridSelectedSet = new Set();
-        this._prevGridSelectedIdxs = new Set();
-        this.gridLastClickedIdx = undefined;
-        this.selectedImages = heatmapPaths;  // 🔥 컬럼 슬라이더 작동을 위해 selectedImages 설정
-        this.isCompositeMode = true;  // 🔥 showGrid 호출 전에 설정 (showGridByLot 리다이렉트 방지)
-
-        // 🔥 Grid를 9개 이미지로 교체 (선택 상태 초기화)
-        await this.showGrid(heatmapPaths, true);  // skipSaveState=true
-
-        // DOM에서도 선택 상태 제거
-        const gridItems = document.querySelectorAll('.grid-thumb-wrap');
-        gridItems.forEach(item => item.classList.remove('selected'));
-
-        // 🔥 컬럼 슬라이더가 적용되도록 보장 (showGrid 후에도 컬럼 설정 유지)
-        const gridColsRange = document.getElementById('grid-cols-range');
-        if (gridColsRange) {
-            gridColsRange.value = this.gridCols;
-            document.documentElement.style.setProperty('--grid-cols', this.gridCols);
-        }
-
-        // Composite 세션 정보 저장
-        const sourceImages = result.source_image_paths || this.lastCompositeSourceImages || [];//Composite 원본들
+        const sourceImages = result.source_image_paths || this.lastCompositeSourceImages || [];
         this.compositeSession = {
             sourceImageCount: result.image_count || result.source_images,
-            outputDir: result.output_dir,
+            outputDir,
             sourceImagePaths: sourceImages,
             imageSize: result.image_size,
             processingTime: result.processing_time,
             generatedAt: result.generated_at,
-            sumMaps: sumMapEntries,
+            sumMaps: [],
         };
         this.lastCompositeSourceImages = sourceImages;
 
-        const grid = document.getElementById('image-grid');
-        const scrollWrapper = grid?.parentElement;
-        const scrollTop = scrollWrapper ? scrollWrapper.scrollTop : 0;
-        this.savedViewState = {
-            type: 'grid',
-            images: [...heatmapPaths],
-            scrollTop,
-            isCompositeMode: true,
-            compositeSession: this.cloneCompositeSession(),
-        };
-
+        // 🔥 핵심: composite_map/{LoginId} 폴더를 일반 폴더처럼 로드
+        await this.loadImagesInFolderAndShowGrid(outputDir);
+        if (typeof this.hideLotListModal === 'function') this.hideLotListModal();
         this.updateContextMenuState();
     }
 
@@ -9620,19 +9566,21 @@ class WaferMapViewer {
      * Measure Composite 결과를 그리드에 표시
      */
     async switchToMeasureCompositeGrid(result) {
-        // result can be a single object or an array of results (multi-select)
+        // 🔥 Composite 완료 → composite_map/{LoginId} 폴더를 일반 그리드로 표시
         const results = Array.isArray(result) ? result : [result];
-        // Use first measure result for session metadata (skip grade composite)
         const firstResult = results.find(r => !r.is_grade_composite) || results[0];
+        const outputDir = firstResult?.output_dir;
 
-        this.selectedGrades.clear();
-        this.selectedBottoms.clear();
-        this.selectedGradientRanges.clear();
-
-        // 🔥 Cache-buster 갱신 — 새로 생성된 composite 결과 이미지가 캐시 우회
         this._personalizedColorCacheBuster = Date.now();
+        this.isCompositeMode = true;
+        this.lastCompositeSourceImages = this._mcSelectedImages || [];
 
-        // Pre-load gradient cache
+        // compositeSession 최소 설정 (gradient 범례용)
+        const mergedRangeCounts = new Array(10).fill(0);
+        for (const r of results) {
+            const rc = r.range_counts || [];
+            for (let i = 0; i < 10; i++) mergedRangeCounts[i] += (rc[i] || 0);
+        }
         if (!this._ratioGradientCache) {
             try {
                 const loginId = this.currentUser || FALLBACK_LOGIN_ID;
@@ -9643,67 +9591,19 @@ class WaferMapViewer {
                 }
             } catch (_) {}
         }
-
-        const heatmapPaths = results.map(r => r.image_path);
-
-        // Aggregate range_counts across all results
-        const mergedRangeCounts = new Array(10).fill(0);
-        let totalChipCount = 0;
-        for (const r of results) {
-            const rc = r.range_counts || [];
-            for (let i = 0; i < 10; i++) mergedRangeCounts[i] += (rc[i] || 0);
-            totalChipCount += (r.chip_count || 0);
-        }
-
-        // Build display name for multiple results
-        const displayNames = results.map(r => r.display_name || '').filter(Boolean);
-        const mergedDisplayName = displayNames.length <= 3
-            ? displayNames.join(', ')
-            : `${displayNames.slice(0, 3).join(', ')} +${displayNames.length - 3}`;
-
-        // Merge value_range across all results
-        const allMins = results.map(r => r.value_range?.min).filter(v => v != null);
-        const allMaxs = results.map(r => r.value_range?.max).filter(v => v != null);
-        const mergedValueRange = allMins.length > 0 ? {
-            min: Math.min(...allMins),
-            max: Math.max(...allMaxs),
-        } : firstResult.value_range;
-
-        // compositeSession 먼저 설정 (showGrid → renderGridColorLegend에서 참조)
         this.compositeSession = {
-            sourceImageCount: firstResult.image_count,
-            outputDir: firstResult.output_dir,
-            sourceImagePaths: this._mcSelectedImages || [],
-            imageSize: firstResult.image_size,
-            processingTime: results.reduce((sum, r) => sum + (r.processing_time || 0), 0),
-            generatedAt: firstResult.generated_at,
-            sumMaps: [],
-            measureMode: firstResult.measure_mode,
-            measureItemKey: firstResult.item_key,
-            measureBinTypes: firstResult.bin_types,
-            measureAggregation: firstResult.aggregation,
-            measureDisplayName: mergedDisplayName,
-            chipCount: totalChipCount,
-            valueRange: mergedValueRange,
+            outputDir,
+            measureMode: firstResult?.measure_mode || 'composite',
             rangeCounts: mergedRangeCounts,
-            measureResults: results,  // 개별 결과 보관
+            sourceImagePaths: this._mcSelectedImages || [],
+            measureResults: results,
         };
 
-        this.gridSelectedIdxs = [];
-        this.gridSelectedSet = new Set();
-        this.selectedImages = heatmapPaths;
-        this.isCompositeMode = true;
-        this.lastCompositeSourceImages = this._mcSelectedImages || [];
-
-        await this.showGrid(heatmapPaths, true);
-
-        this.savedViewState = {
-            type: 'grid',
-            images: [...heatmapPaths],
-            isCompositeMode: true,
-            compositeSession: this.deepCloneSimple(this.compositeSession),
-        };
-
+        // 🔥 핵심: composite_map/{LoginId} 폴더를 일반 폴더처럼 로드
+        if (outputDir) {
+            await this.loadImagesInFolderAndShowGrid(outputDir);
+            if (typeof this.hideLotListModal === 'function') this.hideLotListModal();
+        }
     }
 
     showCompositeProgressOverlay(message = 'Composite 작업 중입니다...') {
