@@ -21508,11 +21508,12 @@ class WaferMapViewer {
         if (savedViewMode === 'gridImage') {
             console.log('🔄 [EXIT] 그리드 모드로 복귀');
 
-            // ✅ 폴더/파일 선택 상태 먼저 복원 (그리드 렌더링 전에 반영)
-            if (savedFolderSelection && savedFolderSelection.length > 0) {
+            // ✅ 폴더/파일 선택 상태 복원 (Composite 모드에서는 건너뜀 — 오염 방지)
+            const isCompositeRestore = saveState?.isCompositeMode;
+            if (!isCompositeRestore && savedFolderSelection && savedFolderSelection.length > 0) {
                 this.selectedFolders = new Set(savedFolderSelection);
             }
-            if (savedLastSelectedFolderPath) {
+            if (!isCompositeRestore && savedLastSelectedFolderPath) {
                 this.lastSelectedFolderPath = savedLastSelectedFolderPath;
             }
 
