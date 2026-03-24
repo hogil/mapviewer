@@ -2318,23 +2318,30 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 6. **핵심 검증**: Measure canvas 렌더링 완료 (`[MEASURE] Canvas 렌더링 완료` 로그 확인)
 7. **핵심 검증**: gradient 범례 count가 "0"이 아닌 값 포함 (새 이미지에서도 갱신됨)
 
-#### 35-6. Composite Map에서 동일 검증
-1. palette_3k 전체 선택 → Composite Map 생성 (20개 이미지)
-2. 10초 대기 (서버 생성 완료)
-3. **핵심 검증**: `isCompositeMode === true`, 그리드에 결과 이미지 표시
+#### 35-6. Composite Map 생성 + LOT Mode + 탭 보존 + 파일명 검증
+1. palette_3k 전체 선택, **LOT Mode ON** 상태에서 Composite Map 생성 (20개 이미지)
+2. 12초 대기 (서버 생성 완료)
+3. **핵심 검증**: `isCompositeMode === true`, 그리드에 결과 이미지 10개 표시
 4. **핵심 검증**: gradient 범례 10개 존재 (grid-color-legend-bottom)
-5. 더블클릭 → 단일 Composite 이미지 진입
-6. **핵심 검증**: Navigator visible, 이미지 목록 > 0
-7. **핵심 검증**: gradient 범례 필터 클릭 → `selectedGradientRanges.size === 1`
-8. 필터 해제 → `selectedGradientRanges.size === 0`
-9. 그리드 복귀 → 다른 이미지(Grade) 더블클릭 → 정상 전환 확인
+5. **핵심 검증**: 원래 그리드 탭(page0) + Composite 탭(com0) **2개 탭 존재** (원래 탭 소멸 방지)
+6. **핵심 검증**: Composite 탭에서 **LOT Mode 그룹핑 적용** — `lotHeaders >= 2` (Grade, square 등)
+7. **핵심 검증**: Composite 탭에서 **LOT 모달 숨김** — `lot-list-modal.style.display === 'none'`
+8. **핵심 검증**: FBT/QVL Measure Composite 결과 파일명이 `_sum` 포함 (예: `FBT_9105_sum.png`)
+9. 더블클릭 → 단일 Composite 이미지 진입
+10. **핵심 검증**: Navigator visible, 이미지 목록 > 0
+11. **핵심 검증**: gradient 범례 필터 클릭 → `selectedGradientRanges.size === 1`
+12. 필터 해제 → `selectedGradientRanges.size === 0`
+13. 그리드 복귀 → 다른 이미지(Grade) 더블클릭 → 정상 전환 확인
+14. 원래 그리드 탭으로 전환 → **핵심 검증**: `lotMode === true`, `lotHeaders === 6`, `isCompositeMode === false`
+15. LOT Mode 토글 OFF→ON → **핵심 검증**: OFF 시 `lotHeaders === 0`, ON 시 `lotHeaders === 6`
 
-#### 35-7. Composite 단일 이미지 더블클릭 → 그리드 복귀
+#### 35-7. Composite 단일 이미지 더블클릭 → 그리드 복귀 (이미지 사라짐 방지)
 1. Composite 그리드 표시 상태에서 첫 번째 이미지 더블클릭 → 단일 이미지 진입
 2. 단일 이미지에서 다시 더블클릭
 3. **핵심 검증**: Composite 그리드(com 탭)로 정상 복귀, 검은 화면 없음
-4. **핵심 검증**: `isCompositeMode === true`, 결과 이미지 10개 표시
+4. **핵심 검증**: `isCompositeMode === true`, **결과 이미지 10개 표시** (3000개 원본이 아닌)
 5. **핵심 검증**: 새 com 탭이 추가 생성되지 않음 (detail page 삭제 후 origin 복귀)
+6. **핵심 검증**: `savedViewState.images`가 현재 Composite 그리드(10개)로 갱신됨
 
 #### 35-8. Measure 탭 생성 후 원래 탭 상태 해제
 1. palette_3k 그리드에서 이미지 5개 선택
@@ -2351,7 +2358,14 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 5. **핵심 검증**: `overlayMode === null`, `_gridMeasureMap === null`
 6. **핵심 검증**: gradient 범례 → Grade 범례로 복원
 
-**pass 기준**: 35-1~35-9 모든 핵심 검증 통과, 3회 반복에서 JS 에러 0건
+#### 35-10. Composite MC 드롭다운 UI 검증
+1. MC 패널 열기 → Composite 드롭다운 표시
+2. **핵심 검증**: 드롭다운 패널 `max-height: min(520px, 60vh)` — 뷰포트 비례
+3. **핵심 검증**: 생성 버튼(`.mc-generate-wrap`)이 항상 보임 (`flex-shrink: 0`)
+4. **핵심 검증**: FBT 항목 라벨이 `FBT9105` 형태 (Count 없음)
+5. **핵심 검증**: QVL 항목 라벨이 `QVL5000` 형태 (Count 없음)
+
+**pass 기준**: 35-1~35-10 모든 핵심 검증 통과, 3회 반복에서 JS 에러 0건
 
 ---
 
@@ -2395,7 +2409,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | 32 | 폴더 전환 스크롤 리셋 | pass/fail | 모든 경로에서 scrollTop===0 |
 | 33 | Measure 다중선택 전체 | pass/fail | UI/라벨/선택필터/단일전환/Navigator/404placeholder |
 | 34 | Measure 탭 분리 + 폴더 전환 유지 | pass/fail | mea 탭 생성/키 교체/원탭 복귀/미선택 바꿔치기/폴더 전환 유지 |
-| 35 | Measure Map 순차 전환 종합 검증 | pass/fail | 4항목×3회 반복, gradient count, bin중복, Navigator, 필터 |
+| 35 | Measure Map + Composite 종합 검증 | pass/fail | 35-1~35-10: 4항목×3회, gradient, Navigator, LOT Mode, 탭 보존, 더블클릭 복귀, MC UI |
 
 핵심 단계마다 스크린샷을 촬영하여 첨부하세요.
 
