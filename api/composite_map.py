@@ -416,20 +416,7 @@ def _prepare_output_dir(login_id: Optional[str]) -> Tuple[Path, str]:
     safe_login = _sanitize_login_id(login_id)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     user_dir = COMPOSITE_ROOT / safe_login
-    positions_user_dir = POSITIONS_ROOT / "composite_map" / safe_login
-
-    # 🔥 LoginId 폴더 하위 모든 이전 결과 삭제 후 새로 생성
-    try:
-        if user_dir.exists():
-            shutil.rmtree(user_dir)
-    except Exception:
-        pass
-    try:
-        if positions_user_dir.exists():
-            shutil.rmtree(positions_user_dir)
-    except Exception:
-        pass
-
+    # 🔥 이전 삭제는 /api/composite-cleanup에서 처리 — 여기서는 폴더 생성만
     user_dir.mkdir(parents=True, exist_ok=True)
     return user_dir, timestamp
 
