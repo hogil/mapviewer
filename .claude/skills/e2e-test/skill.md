@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 40개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 41개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -3065,3 +3065,65 @@ const ms = Math.round(performance.now() - t0);
 - **캔버스 더블클릭**: com0 더블클릭 → com1 단일뷰 → 캔버스 영역 더블클릭 → com0 그리드 복원
 - **수동 탭 클릭**: com0 더블클릭 → com1 단일뷰 → com0 탭 직접 클릭 → com0 그리드 복원 (검은화면 없음)
 - **반복 안정성**: 위 3가지를 섞어 3회 반복 → 매 라운드 이미지 수 동일, isComposite 유지
+
+---
+
+## Phase 41: Measure 탭 분리 + 탭 전환 시 상태 복원
+
+**목적**: Measure overlay를 이미지 선택 유무에 따라 새 탭/현재 탭에 적용하고, 탭 전환 시 overlay 상태가 정확히 보존/해제되는지 검증
+
+**배경**:
+- 이미지 선택 후 Measure 적용 → mea 새 탭으로 분리 (`_openMeasureTab`)
+- 미선택 시 → 현재 탭에서 전체 이미지에 overlay
+- 탭별 `overlayMode`, `_ratioActiveItemKey`, `_measureCheckedItems`가 `captureActivePageState`/`restoreSavedViewState`로 저장/복원
+- Measure 버튼 라벨이 `updateFailbitButtonUI`로 탭 전환 시 동기화
+
+**평가 항목**:
+
+### 41-1. 이미지 선택 + Measure 적용 → mea 새 탭 생성
+
+1. 그리드에서 이미지 3개 선택 (gridSelectedIdxs = [0, 1, 2])
+2. Measure 패널에서 FBT1000 체크 → 적용
+3. **핵심 검증**: 새 "measure" 역할 탭(mea0) 생성
+4. mea0 탭: `overlayMode === 'f'`, `_ratioActiveItemKey === '1000'`
+5. mea0 탭: `_measureCheckedItems` = [{type:'f', key:'1000', label:'FBT1000'}]
+6. mea0 탭: `currentGridImages.length === 3` (선택 이미지만)
+7. mea0 탭: Measure 버튼 텍스트 = "FBT1000", `is-active` 클래스
+
+### 41-2. 원래 탭 전환 → overlay 해제
+
+1. 원래 탭(page0/wafer0) 클릭
+2. `overlayMode === null`, `_ratioActiveItemKey === null`
+3. `_measureCheckedItems.length === 0`
+4. `currentGridImages.length` = 원래 전체 이미지 수
+5. Measure 버튼 텍스트 = "Measure" (기본), `is-active` 없음
+
+### 41-3. mea 탭 다시 선택 → overlay 복원
+
+1. mea0 탭 클릭
+2. `overlayMode === 'f'`, `_ratioActiveItemKey === '1000'`
+3. `_measureCheckedItems` = [FBT1000]
+4. `currentGridImages.length === 3`
+5. Measure 버튼 텍스트 = "FBT1000", `is-active`
+6. 그리드 썸네일 URL에 `/api/measure-thumb` 포함
+
+### 41-4. mea 탭에서 Measure 패널 열기 → 체크 상태 복원
+
+1. mea0 탭에서 Measure 버튼 클릭 → 패널 열림
+2. FBT1000 항목의 체크박스가 **체크된 상태**
+3. 다른 항목들은 미체크
+
+### 41-5. 미선택 + Measure 적용 → 현재 탭에서 전체 적용
+
+1. 원래 탭에서 이미지 **선택 해제** (gridSelectedIdxs = [])
+2. Measure 패널에서 QVL5000 체크 → 적용
+3. **핵심 검증**: 새 탭 생성 안 됨, 현재 탭에서 전체 이미지에 overlay
+4. `overlayMode === 'q'`, `_ratioActiveItemKey === '5000'`
+5. 그리드 전체 이미지에 measure-thumb 적용
+
+**pass 기준**:
+- 41-1: mea 탭 생성, 선택 이미지만, overlay + 버튼 활성
+- 41-2: 원래 탭 overlay 해제, 전체 이미지 복원
+- 41-3: mea 탭 재진입 시 overlay/버튼 완전 복원
+- 41-4: 패널 체크 상태 복원
+- 41-5: 미선택 시 현재 탭 전체 적용
