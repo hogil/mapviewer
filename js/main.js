@@ -21350,6 +21350,11 @@ class WaferMapViewer {
         this.selectedBottoms = _savedSelectedBottoms;
         this.selectedGrades = _savedSelectedGrades;
 
+        // 🔥 다중 Measure 상태 먼저 복원 (overlayMode 설정 및 Navigator에서 참조)
+        this._gridMeasureMap = _savedGridMeasureMap;
+        this._measureCheckedItems = _savedMeasureCheckedItems;
+        this._measureBaseImages = _savedMeasureBaseImages;
+
         // 🔥 다중 Measure 모드: 클릭한 인덱스의 measure item으로 overlay 설정
         const clickedMeasureItem = this._gridMeasureMap ? this._gridMeasureMap[idx] : null;
         if (clickedMeasureItem && _savedOverlayMode === 'multi') {
@@ -21369,10 +21374,6 @@ class WaferMapViewer {
             this._ratioActiveItemKey = _savedRatioActiveItemKey;
         }
         this.selectedGradientRanges = _savedSelectedGradientRanges;
-        // 🔥 다중 Measure 상태 복원 (Navigator가 _gridMeasureMap으로 개별 썸네일 URL 결정)
-        this._gridMeasureMap = _savedGridMeasureMap;
-        this._measureCheckedItems = _savedMeasureCheckedItems;
-        this._measureBaseImages = _savedMeasureBaseImages;
 
         if (gridImages.length) {
             // 🔥 스크롤 위치는 더블클릭 핸들러에서 이미 savedViewState.scrollTop에 저장됨
