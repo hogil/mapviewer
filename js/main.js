@@ -8868,25 +8868,68 @@ class WaferMapViewer {
                     .catch(() => null)
             )
         );
-        const fSet = new Set();
-        const qSet = new Set();
+        // 첫 번째 성공 응답의 키 순서를 기준으로 사용 (positions 파일 원본 순서 유지)
+        // 나머지 응답에만 있는 키는 뒤에 추가
+        const fKeys = [];
+        const qKeys = [];
+        const fSeen = new Set();
+        const qSeen = new Set();
         const binSet = new Set();
+
         for (const data of results) {
             if (!data) continue;
-            for (const k of (data.ftn_keys || [])) fSet.add(String(k));
-            for (const k of (data.qtn_keys || [])) qSet.add(String(k));
-            for (const chip of (data.chips || [])) {
-                if (chip.b != null) {
-                    const norm = this.chipAnnotator?._normalizeBottomValue?.(chip.b) || String(chip.b);
-                    binSet.add(norm);
+            // ftn_keys/qtn_keys: 원본 순서 유지하며 union
+            for (const k of (data.ftn_keys || [])) {
+                const s = String(k);
+                if (!fSeen.has(s)) { fSeen.add(s); fKeys.push(s); }
+            }
+            for (const k of (data.qtn_keys || [])) {
+                const s = String(k);
+                if (!qSeen.has(s)) { qSeen.add(s); qKeys.push(s); }
+            }
+            // 동적 키 탐색: {mode}tn_keys 패턴 자동 인식
+            for (const [keyName, keys] of Object.entries(data)) {
+                if (keyName.endsWith('tn_keys') && Array.isArray(keys)
+                    && keyName !== 'ftn_keys' && keyName !== 'qtn_keys') {
+                    const mode = keyName.slice(0, -'tn_keys'.length);
+                    if (!this._dynamicModeKeys) this._dynamicModeKeys = {};
+                    if (!this._dynamicModeKeys[mode]) this._dynamicModeKeys[mode] = [];
+                    const seen = new Set(this._dynamicModeKeys[mode].map(String));
+                    for (const k of keys) {
+                        const s = String(k);
+                        if (!seen.has(s)) { seen.add(s); this._dynamicModeKeys[mode].push(s); }
+                    }
                 }
             }
+            // BIN: chip.b 값 수집
+            for (const chip of (data.chips || [])) {
+                if (chip.b != null) binSet.add(String(chip.b));
+            }
         }
-        const numSort = (a, b) => a.localeCompare(b, undefined, { numeric: true });
+        // BIN 정규화 (chipAnnotator 없이도 동작)
+        const _normBin = (b) => {
+            const s = String(b).trim();
+            if (!s) return 'Normal';
+            const low = s.toLowerCase();
+            if (low === 'normal' || low === 'nor' || low === 'border') return 'Normal';
+            if (low === 'invalid' || low === 'inv') return 'Invalid';
+            const num = parseInt(s, 10);
+            if (!isNaN(num)) {
+                if (num < 200) return 'Normal';
+                if (num < 280) return 'Invalid';
+                return String(num);
+            }
+            return s;
+        };
+        const binNormSet = new Set();
+        for (const b of binSet) {
+            binNormSet.add(_normBin(b));
+        }
+
         return {
-            f: [...fSet].sort(numSort),
-            q: [...qSet].sort(numSort),
-            bin: [...binSet].sort((a, b) => Number(a) - Number(b)),
+            f: fKeys,     // 원본 순서 유지
+            q: qKeys,     // 원본 순서 유지
+            bin: [...binNormSet],
         };
     }
 

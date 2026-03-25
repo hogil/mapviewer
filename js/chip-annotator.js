@@ -591,7 +591,7 @@ export class ChipAnnotator {
             const keyName = (field && field !== 'bin') ? `${field}tn_keys` : null;
             const headerKeys = keyName ? this.positionsData[keyName] : null;
             if (Array.isArray(headerKeys) && headerKeys.length > 0) {
-                return headerKeys.map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+                return headerKeys.map(String);  // positions 파일 원본 순서 유지
             }
         }
         // 2) dict format: chip[field]가 Object(Array 아님)인 경우 키 추출
@@ -604,7 +604,7 @@ export class ChipAnnotator {
                 for (const k of Object.keys(dict)) keySet.add(k);
             }
         }
-        return Array.from(keySet).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+        return Array.from(keySet);  // 원본 순서 유지
     }
 
     _refreshClassColors() {
