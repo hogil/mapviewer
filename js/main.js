@@ -26866,8 +26866,10 @@ class WaferMapViewer {
         if (this.dom?.imageCanvas) this.dom.imageCanvas.style.display = 'none';
         if (this.dom?.overlayCanvas) this.dom.overlayCanvas.style.display = 'none';
 
-        // 🔥 Measure 다중 선택 시 base images 저장 (showGrid와 동일)
-        this._measureBaseImages = [...images];
+        // 🔥 Measure base images: showGrid에서 이미 설정된 경우 유지 (확장 이미지로 덮어쓰기 방지)
+        if (!this._measureBaseImages || this._measureBaseImages.length === 0) {
+            this._measureBaseImages = [...new Set(images)];
+        }
 
         // 🔥 LOT/TEST/STEP 필터 적용
         const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
