@@ -60,6 +60,21 @@ try:
 except Exception:
     _MEASURE_PROC_POOL = None
 
+# ── 숫자 추출 (문자 혼합값 "0C", "123R" 등 지원) ────────────
+import re as _re
+_NUM_RE = _re.compile(r'-?\d+\.?\d*')
+
+def _safe_float(raw) -> Optional[float]:
+    """문자 혼합값에서 숫자 부분만 추출하여 float 변환."""
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        m = _NUM_RE.search(str(raw))
+        return float(m.group()) if m else None
+
+
 # ── BIN 정규화 (JS _normalizeBottomValue 동일) ──────────────
 
 _KNOWN_BINS = {285, 286, 287, 288, 290, 291, 300, 385, 386, 388, 389, 390}
@@ -134,12 +149,7 @@ def _extract_value(
         raw = data[idx] if idx is not None and idx < len(data) else None
     else:
         return None
-    if raw is None:
-        return None
-    try:
-        return float(raw)
-    except (ValueError, TypeError):
-        return None
+    return _safe_float(raw)
 
 
 def _extract_values_from_data(data, mode, item_key, bin_types):
@@ -174,11 +184,8 @@ def _extract_values_from_data(data, mode, item_key, bin_types):
                 raw_val = fd.get(item_key)
             else:
                 continue
-            if raw_val is None:
-                continue
-            try:
-                val = float(raw_val)
-            except (ValueError, TypeError):
+            val = _safe_float(raw_val)
+            if val is None:
                 continue
         results.append((int(xa), int(ya), val))
     return results

@@ -3878,11 +3878,15 @@ def _apply_ratio_overlay_memory(
                 continue
             if raw is None:
                 continue
+            val = _to_float(raw) if '_to_float' in dir() else None
             try:
                 val = float(raw)
-                values.append((idx, val))
             except (ValueError, TypeError):
-                continue
+                import re
+                m = re.search(r'-?\d+\.?\d*', str(raw))
+                val = float(m.group()) if m else None
+            if val is not None:
+                values.append((idx, val))
 
         if not values:
             return None
@@ -6919,20 +6923,24 @@ def _generate_measure_thumb(
 
     # 값 추출
     chip_vals = []
+    import re as _re
+    _num_re = _re.compile(r'-?\d+\.?\d*')
+    def _to_float(v):
+        try: return float(v)
+        except (ValueError, TypeError):
+            m = _num_re.search(str(v))
+            return float(m.group()) if m else None
+
     for idx, chip in enumerate(chips):
         fd = chip.get(field)
         if isinstance(fd, list) and ki < len(fd) and fd[ki] is not None:
-            try:
-                chip_vals.append((idx, float(fd[ki])))
-            except (ValueError, TypeError):
-                continue
+            val = _to_float(fd[ki])
+            if val is not None: chip_vals.append((idx, val))
         elif isinstance(fd, dict):
             raw = fd.get(item_key)
             if raw is not None:
-                try:
-                    chip_vals.append((idx, float(raw)))
-                except (ValueError, TypeError):
-                    continue
+                val = _to_float(raw)
+                if val is not None: chip_vals.append((idx, val))
     if not chip_vals:
         return None
 
@@ -7101,17 +7109,13 @@ def _generate_measure_thumbs_batch(
                 continue
             if isinstance(fd, list):
                 if ki is not None and ki < len(fd) and fd[ki] is not None:
-                    try:
-                        item_vals[result_key].append((chip_idx, float(fd[ki])))
-                    except (ValueError, TypeError):
-                        pass
+                    val = _to_float(fd[ki])
+                    if val is not None: item_vals[result_key].append((chip_idx, val))
             elif isinstance(fd, dict):
                 raw = fd.get(dict_key)
                 if raw is not None:
-                    try:
-                        item_vals[result_key].append((chip_idx, float(raw)))
-                    except (ValueError, TypeError):
-                        pass
+                    val = _to_float(raw)
+                    if val is not None: item_vals[result_key].append((chip_idx, val))
 
     # 공통: gradient 색상, 캔버스 크기, 배경색 (1회만 계산)
     from .personal_colors import get_ratio_gradient_for_scheme, load_color_legends

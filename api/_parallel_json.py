@@ -113,7 +113,12 @@ def extract_chip_values(args: tuple) -> Optional[List[Tuple[int, int, float]]]:
             try:
                 val = float(raw_val)
             except (ValueError, TypeError):
-                continue
+                import re
+                m = re.search(r'-?\d+\.?\d*', str(raw_val))
+                if m:
+                    val = float(m.group())
+                else:
+                    continue
 
         results.append((int(xa), int(ya), val))
 

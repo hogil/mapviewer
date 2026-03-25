@@ -2243,6 +2243,13 @@ class WaferMapViewer {
             }
         }
         // 그리드 모드일 때는 모달 상태 유지 (이미 열려있으면 유지, 닫혀있으면 유지)
+
+        // 최종 안전장치: 그리드 모드인데 캔버스가 보이면 강제 숨김
+        // (restoreSavedViewState 등 복원 함수가 캔버스를 다시 보이게 하는 경우 방지)
+        if (this.gridMode && this.viewMode !== 'gridImage') {
+            if (this.dom?.imageCanvas) this.dom.imageCanvas.style.display = 'none';
+            if (this.dom?.overlayCanvas) this.dom.overlayCanvas.style.display = 'none';
+        }
     }
 
     handlePageClosed(page) {
@@ -18229,8 +18236,20 @@ class WaferMapViewer {
             this.dom.minimapViewport.style.display = 'none';
         }
 
+        // 단일 이미지 뷰 요소 숨기기 (탭 전환 시 캔버스가 그리드를 가리는 버그 방지)
+        // image-canvas가 display:block으로 남아있으면 그리드 위를 덮어 검은화면이 됨
         if (this.dom?.imageCanvas) {
+            this.dom.imageCanvas.style.display = 'none';
             this.dom.imageCanvas.ondblclick = null;
+        }
+        if (this.dom?.overlayCanvas) {
+            this.dom.overlayCanvas.style.display = 'none';
+        }
+
+        // 뷰어 컨테이너 모드 클래스 정리
+        if (this.dom?.viewerContainer) {
+            this.dom.viewerContainer.classList.remove('single-image-mode');
+            this.dom.viewerContainer.classList.add('grid-mode');
         }
 
         if (this.boundSingleViewHandler) {
