@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 43개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지를 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 41개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지를 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -2146,7 +2146,28 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 2. **핵심 검증**: HTTP 200 반환 (404 아님)
 3. **핵심 검증**: 응답 크기 > 0 (빈 회색 placeholder 이미지)
 
-**pass 기준**: 33-1~33-9 모든 핵심 검증 통과
+#### 33-10. 컨텍스트 메뉴 Measure 전수 표시 (CTX_MAX 제거 회귀 검증)
+1. 그리드 이미지 선택 → 우클릭 → "Measure 만들기" 호버
+2. **핵심 검증**: 서브메뉴에 FBT 전체 수량 표시 (이전 CTX_MAX=10 제한 없음)
+3. **핵심 검증**: MAP, BIN, FBT 섹션 + 적용 버튼 표시
+4. `_renderMcList({mode:'measure'})` 통합 렌더링 확인
+
+#### 33-11. 다중 Measure N배 증식 방지 회귀 검증
+1. 다중 measure 3개 적용 → `_measureBaseImages=null` 후 `showGrid(10개, true)` 호출
+2. **핵심 검증**: `_measureBaseImages.length === 10`, `currentGridImages.length === 30` (10×3)
+3. **핵심 검증**: 재호출 `showGrid(currentGridImages, true)` → base=10 유지, grid=30 유지 (30→90 증식 없음)
+4. 초기화 후: `currentGridImages.length === 10`, `_gridMeasureMap === null`
+
+#### 33-12. 탭 전환 시 measure stale 데이터 초기화
+1. measure 활성 상태 설정 후, `overlayMode=null`, `_measureCheckedItems=[]` 복원 시뮬레이션
+2. **핵심 검증**: `_gridMeasureMap === null`, `_measureBaseImages === null` (stale 데이터 제거)
+
+#### 33-13. Measure/Composite 생성 시 LOT Mode 유지
+1. LOT Mode ON → 다중 Measure → `showGrid()` 호출
+2. **핵심 검증**: `viewer.lotMode === true` 유지 (해제되지 않음)
+3. Composite 생성 후 원래 탭 전환 → `lotMode === true` 확인
+
+**pass 기준**: 33-1~33-13 모든 핵심 검증 통과
 
 ---
 
@@ -2208,7 +2229,12 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 1. "📊 Composite 만들기 ▸" hover → 서브메뉴
 2. **핵심 검증**: FBT 항목 **10개** 이하, QVL 항목 **10개** 이하
 
-**pass 기준**: 34-1~34-8 모든 핵심 검증 통과
+#### 34-9. mea 탭에서 Measure 패널 열기 → 체크 상태 복원 (구 Phase 41-4)
+1. mea0 탭에서 Measure 버튼 클릭 → 패널 열림
+2. **핵심 검증**: 해당 FBT 항목의 체크박스가 **체크된 상태**
+3. **핵심 검증**: 다른 항목들은 미체크
+
+**pass 기준**: 34-1~34-9 모든 핵심 검증 통과
 
 ---
 
@@ -2517,7 +2543,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 
 ---
 
-## Phase 35: 성능 벤치마크
+## Phase 36: 성능 벤치마크
 
 서버 재시작 직후(cold) 상태에서 핵심 기능의 응답 시간을 측정합니다.
 
@@ -2595,7 +2621,7 @@ const elapsed = Math.round(performance.now() - t0);
 
 ---
 
-## Phase 36: 이미지 무결성 검증 (깨짐/X표시/이상 맵 확인)
+## Phase 37: 이미지 무결성 검증 (깨짐/X표시/이상 맵 확인)
 
 모든 이미지 경로에서 깨진 이미지, X표시, 잘못된 맵이 없는지 전방위 확인합니다.
 
@@ -2697,7 +2723,7 @@ for (const c of chips) {
 
 ---
 
-## Phase 37: 인덱스 빌드 + 검색 벤치마크 (대용량)
+## Phase 38: 인덱스 빌드 + 검색 벤치마크 (대용량)
 
 `benchmark_4m` 폴더(400만 더미 파일)를 포함한 대용량 환경에서 인덱스 빌드, 캐시 로드, 검색 성능을 측정합니다.
 
@@ -2861,7 +2887,7 @@ const ms = Math.round(performance.now() - t0);
 
 ---
 
-## Phase 38: Measure Map 다중 생성 + Navigator 전환 + 범례/필터 검증
+## Phase 39: Measure Map 다중 생성 + Navigator 전환 + 범례/필터 검증
 
 **목적**: Measure Map(Failbit/BIN/FBT/QVL) 다중 생성 후, 각 결과 이미지를 Navigator/Prev/Next/더블클릭으로 전환하며 gradient 범례·필터·텍스트·미니맵이 정상 동작하는지 3라운드 반복 검증
 
@@ -2966,7 +2992,7 @@ const ms = Math.round(performance.now() - t0);
 
 ---
 
-## Phase 39: Subset Composite Map (선택 Grade → Sum Map) 검증
+## Phase 40: Subset Composite Map (선택 Grade → Sum Map) 검증
 
 **목적**: Failbit Composite 생성 후 특정 Grade만 선택하여 Subset Sum Map을 생성하는 기능이 정상 동작하는지 검증
 
@@ -3023,7 +3049,7 @@ const ms = Math.round(performance.now() - t0);
 
 ---
 
-## Phase 40: Composite 탭 전환 안정성 (더블클릭→ESC→탭전환)
+## Phase 41: Composite 탭 전환 안정성 (더블클릭→ESC→탭전환)
 
 **목적**: Composite 결과 그리드에서 더블클릭→단일뷰→ESC→원래 탭 복귀, 수동 탭 전환 시 검은화면 방지
 
@@ -3089,159 +3115,10 @@ const ms = Math.round(performance.now() - t0);
 
 ---
 
-## Phase 41: Measure 탭 분리 + 탭 전환 시 상태 복원
+## 병합 이력
 
-**목적**: Measure overlay를 이미지 선택 유무에 따라 새 탭/현재 탭에 적용하고, 탭 전환 시 overlay 상태가 정확히 보존/해제되는지 검증
-
-**배경**:
-- 이미지 선택 후 Measure 적용 → mea 새 탭으로 분리 (`_openMeasureTab`)
-- 미선택 시 → 현재 탭에서 전체 이미지에 overlay
-- 탭별 `overlayMode`, `_ratioActiveItemKey`, `_measureCheckedItems`가 `captureActivePageState`/`restoreSavedViewState`로 저장/복원
-- Measure 버튼 라벨이 `updateFailbitButtonUI`로 탭 전환 시 동기화
-
-**평가 항목**:
-
-### 41-1. 이미지 선택 + Measure 적용 → mea 새 탭 생성
-
-1. 그리드에서 이미지 3개 선택 (gridSelectedIdxs = [0, 1, 2])
-2. Measure 패널에서 FBT1000 체크 → 적용
-3. **핵심 검증**: 새 "measure" 역할 탭(mea0) 생성
-4. mea0 탭: `overlayMode === 'f'`, `_ratioActiveItemKey === '1000'`
-5. mea0 탭: `_measureCheckedItems` = [{type:'f', key:'1000', label:'FBT1000'}]
-6. mea0 탭: `currentGridImages.length === 3` (선택 이미지만)
-7. mea0 탭: Measure 버튼 텍스트 = "FBT1000", `is-active` 클래스
-
-### 41-2. 원래 탭 전환 → overlay 해제
-
-1. 원래 탭(page0/wafer0) 클릭
-2. `overlayMode === null`, `_ratioActiveItemKey === null`
-3. `_measureCheckedItems.length === 0`
-4. `currentGridImages.length` = 원래 전체 이미지 수
-5. Measure 버튼 텍스트 = "Measure" (기본), `is-active` 없음
-
-### 41-3. mea 탭 다시 선택 → overlay 복원
-
-1. mea0 탭 클릭
-2. `overlayMode === 'f'`, `_ratioActiveItemKey === '1000'`
-3. `_measureCheckedItems` = [FBT1000]
-4. `currentGridImages.length === 3`
-5. Measure 버튼 텍스트 = "FBT1000", `is-active`
-6. 그리드 썸네일 URL에 `/api/measure-thumb` 포함
-
-### 41-4. mea 탭에서 Measure 패널 열기 → 체크 상태 복원
-
-1. mea0 탭에서 Measure 버튼 클릭 → 패널 열림
-2. FBT1000 항목의 체크박스가 **체크된 상태**
-3. 다른 항목들은 미체크
-
-### 41-5. 미선택 + Measure 적용 → 현재 탭에서 전체 적용
-
-1. 원래 탭에서 이미지 **선택 해제** (gridSelectedIdxs = [])
-2. Measure 패널에서 QVL5000 체크 → 적용
-3. **핵심 검증**: 새 탭 생성 안 됨, 현재 탭에서 전체 이미지에 overlay
-4. `overlayMode === 'q'`, `_ratioActiveItemKey === '5000'`
-5. 그리드 전체 이미지에 measure-thumb 적용
-
-**pass 기준**:
-- 41-1: mea 탭 생성, 선택 이미지만, overlay + 버튼 활성
-- 41-2: 원래 탭 overlay 해제, 전체 이미지 복원
-- 41-3: mea 탭 재진입 시 overlay/버튼 완전 복원
-- 41-4: 패널 체크 상태 복원
-- 41-5: 미선택 시 현재 탭 전체 적용
-
----
-
-## Phase 42: Measure/Composite 전체 흐름 안정성 (2개 시나리오)
-
-**목적**: Measure 생성 → 더블클릭 전환 → 탭 전환 → 폴더 전환의 전체 흐름에서 검은화면/상태 깨짐 없이 정상 동작
-
-**수정 이력 (검은화면 근본 원인 5중 방어)**:
-1. `showGrid`/`showGridByLot` 시작: canvas 강제 none (그리드 진입 시점)
-2. `restoreCachedPageView`: gridMode 시 canvas block 방지
-3. `enforceGridModeUiState`: canvas none + scroll-wrapper 표시
-4. `exitSingleImageViewMode` Step 7: 그리드 복귀 시 최종 강제 정리
-5. `applyPageState` 끝: 안전장치
-
-**시나리오 1**: 미선택 Measure → 더블클릭↔그리드 2회 → 탭매뉴얼 → 폴더전환
-**시나리오 2**: 선택 Measure → mea탭 → 더블클릭↔mea복귀 → wafer탭raw → mea복원
-
-**pass 기준**: 모든 단계 gridMode=true, scrollWrapper visible, 이미지 수 정확, 검은화면 없음
-
-## Phase 43: Measure 드롭다운 통합 + 다중 Measure 이미지 중복 방지
-
-**목적**: Measure 드롭다운이 Composite와 동일한 _renderMcList 렌더링을 사용하는지, 다중 Measure에서 이미지 N배 증식 버그가 재발하지 않는지 검증
-
-**수정 이력**:
-1. `_buildFailbitList` → `_fetchMergedKeys` + `_renderMcList({mode:'measure'})` 패턴으로 교체 (hasFQ 크래시 해결)
-2. `_renderMeaContextList` → `_renderMcList({mode:'measure'})` 위임 (CTX_MAX=10 제거, 전수 표시)
-3. 페이지 상태 복원에서 measure 비활성 시 `_gridMeasureMap`/`_measureBaseImages` 초기화
-4. `showGrid`: `_measureBaseImages` 존재 시 원본 보존 (확장 이미지 덮어쓰기 방지)
-5. `_openMeasureTab`: `new Set()` 중복 제거 + `_measureBaseImages=null`
-6. 초기화 버튼: `_measureCheckedItems=[]`를 `showGrid` 호출 전에 실행
-
-### 테스트 절차
-
-**Step 1: 상단 Measure 드롭다운 표시 확인**
-1. palette_3k 폴더를 열어 그리드 모드 진입 (3000장)
-2. 상단 `#failbit-btn-top` 클릭
-3. 패널 표시 확인: 검색 박스, 초기화 버튼, MAP→Failbit, BIN→BIN, FBT 섹션, 적용 버튼
-4. FBT 헤더에 `(500)` 등 전체 수량 표시 확인
-5. `viewer._measureCheckedItems.length === 0` 확인
-6. 패널 닫기
-
-**Step 2: 컨텍스트 메뉴 Measure 전수 표시 확인**
-1. 그리드 첫 번째 이미지 클릭 (선택)
-2. 우클릭 → 컨텍스트 메뉴 표시
-3. "Measure 만들기" 호버 → 서브메뉴 표시
-4. 서브메뉴에 MAP, BIN, FBT 전체 수량 표시 확인 (CTX_MAX=10 제한 없음)
-5. 적용 버튼 표시 확인
-6. 컨텍스트 메뉴 닫기
-
-**Step 3: 다중 Measure 이미지 확장 — N배 증식 방지**
-1. JS로 다중 measure 시뮬레이션:
-   ```js
-   const v = viewer;
-   v._measureCheckedItems = [
-     {type:'f', key:'1000', label:'FBT1000'},
-     {type:'f', key:'1001', label:'FBT1001'},
-     {type:'f', key:'1002', label:'FBT1002'}
-   ];
-   v.overlayMode = 'multi';
-   const testImages = v.currentGridImages.slice(0, 10);
-   v._measureBaseImages = null;
-   v.showGrid(testImages, true);
-   ```
-2. 확인: `_measureBaseImages.length === 10`, `currentGridImages.length === 30`, `_gridMeasureMap.length === 30`
-3. **재호출 시 증식 방지**: `v.showGrid(v.currentGridImages, true)` 실행
-4. 확인: base=10 보존, grid=30 유지 (이전에는 30→90→270 증식)
-
-**Step 4: 초기화 후 원본 복원**
-1. `v._measureCheckedItems = []; v.overlayMode = null; v._gridMeasureMap = null;`
-2. `const base = [...v._measureBaseImages]; v._measureBaseImages = null; v.showGrid(base, true);`
-3. 확인: `_measureBaseImages.length === 10`, `currentGridImages.length === 10`, `_gridMeasureMap === null`
-
-**Step 5: 탭 전환 시 measure 상태 초기화**
-1. measure 활성 상태 설정:
-   ```js
-   v._measureCheckedItems = [{type:'f', key:'1000', label:'FBT1000'}];
-   v.overlayMode = 'f';
-   v._gridMeasureMap = v.currentGridImages.map(() => v._measureCheckedItems[0]);
-   ```
-2. measure 비활성 페이지 상태 복원 시뮬레이션:
-   ```js
-   const state = { overlayMode: null, _measureCheckedItems: [] };
-   v._measureCheckedItems = state._measureCheckedItems;
-   v.overlayMode = state.overlayMode;
-   if (!v.overlayMode && v._measureCheckedItems.length === 0) {
-     v._gridMeasureMap = null;
-     v._measureBaseImages = null;
-   }
-   ```
-3. 확인: `overlayMode === null`, `_measureCheckedItems.length === 0`, `_gridMeasureMap === null`, `_measureBaseImages === null`
-
-**pass 기준**:
-- Step 1: 드롭다운 정상 표시, FBT 전수 로드
-- Step 2: 컨텍스트 메뉴 FBT 전수 표시 (10개 제한 없음)
-- Step 3: base=10 보존, grid=30 (재호출 후에도 동일)
-- Step 4: 초기화 후 grid=10, map=null
-- Step 5: 탭 전환 후 _gridMeasureMap=null, _measureBaseImages=null
+아래 Phase들은 중복/겹침으로 인해 다른 Phase에 병합됨:
+- **구 Phase 41** (Measure 탭 분리 + 탭 전환 상태 복원) → Phase 34에 34-9로 병합 (패널 체크 상태 복원)
+- **구 Phase 42** (Measure/Composite 전체 흐름 안정성) → Phase 35 + Phase 40에 흡수 (검은화면 5중 방어, 시나리오 2종)
+- **구 Phase 43** (Measure 드롭다운 통합 + 이미지 중복 방지) → Phase 33에 33-10~33-13으로 병합
+- **구 Phase 44** (Measure/Composite LOT Mode 유지) → Phase 33-13으로 병합
