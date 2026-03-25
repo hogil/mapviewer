@@ -1834,6 +1834,10 @@ def create_composite_heatmaps(
     max_workers = max_workers or COMPOSITE_MAX_WORKERS
     batch_size = batch_size or COMPOSITE_BATCH_SIZE
 
+    # 🔥 default palette: heatmap PNG 저장용 (인덱스 보존, 개인색 미적용)
+    # thumbnail API의 personalized=true가 표시 시 개인색 적용
+    default_palette_list = _build_palette_list(source_palette)
+    # 🔥 personal palette: sum map 렌더링용 (gradient 색상 반영)
     palette_list = _build_palette_list(source_palette)
     palette_list = _apply_personal_palette(palette_list, scheme)
 
@@ -1941,13 +1945,15 @@ def create_composite_heatmaps(
 
     heatmaps: List[Dict[str, Any]] = []
     palette_bytes = palette_list[:]
+    # 🔥 heatmap PNG용 default palette bytes (개인색 미적용, 인덱스 보존)
+    default_palette_bytes = default_palette_list[:]
     grade_presence = grade_counts > 0
     invalid_mask_bool = invalid_mask.astype(bool, copy=False) if invalid_mask is not None else None
 
     t = time.perf_counter()
     heatmap_times = []
-    
-    # 공유 palette array for turbojpeg/pyvips heatmap 저장
+
+    # 공유 palette array for sum map 렌더링 (개인색 적용)
     _palette_rgb = np.array(palette_bytes, dtype=np.uint8).reshape(256, 3) if palette_bytes else None
 
     def _save_heatmap_task(idx: int) -> Optional[Dict[str, Any]]:
@@ -1958,31 +1964,21 @@ def create_composite_heatmaps(
             presence_mask &= ~invalid_mask_bool
         presence_mask &= chip_inner_mask
         result[presence_mask] = idx  # 해당 grade 포인트 = grade 색
-        heatmap_path = output_dir / f"Grade_{idx}{_image_ext()}"
+        # 🔥 palette PNG로 저장 (인덱스 보존 → thumbnail의 personalized=true로 개인색 적용)
+        heatmap_path = output_dir / f"Grade_{idx}.png"
 
-        # 최적 경로: numpy→turbojpeg 직접 인코딩 (GIL 해제, 최고속)
-        if _HAS_TURBOJPEG and _palette_rgb is not None and _SAVE_FORMAT == "JPEG":
-            rgb_arr = _palette_rgb[result]  # (H, W, 3) fancy indexing
-            encoded = _TURBOJPEG.encode(rgb_arr, quality=_JPEG_QUALITY, jpeg_subsample=TJSAMP_420, pixel_format=TJPF_RGB)
-            target_path = heatmap_path.with_suffix(".jpg")
-            tmp_path = target_path.with_suffix(".jpg.tmp")
-            tmp_path.write_bytes(encoded)
-            try:
-                tmp_path.replace(target_path)
-            except Exception:
-                if target_path.exists():
-                    target_path.unlink()
-                tmp_path.rename(target_path)
-            actual_path = target_path
-            rel_path = target_path.relative_to(IMAGES_ROOT).as_posix()
-        elif _palette_rgb is not None:
-            rgb_arr = _palette_rgb[result]
-            heatmap_img = Image.fromarray(rgb_arr, mode='RGB')
-            actual_path, rel_path = _save_image_with_backend(heatmap_img, heatmap_path)
-        else:
-            heatmap_img = Image.fromarray(result, mode='P')
-            heatmap_img.putpalette(palette_bytes)
-            actual_path, rel_path = _save_image_with_backend(heatmap_img, heatmap_path)
+        heatmap_img = Image.fromarray(result, mode='P')
+        heatmap_img.putpalette(default_palette_bytes)
+        tmp_path = heatmap_path.with_suffix(".png.tmp")
+        heatmap_img.save(tmp_path, format='PNG', compress_level=1)
+        try:
+            tmp_path.replace(heatmap_path)
+        except Exception:
+            if heatmap_path.exists():
+                heatmap_path.unlink()
+            tmp_path.rename(heatmap_path)
+        actual_path = heatmap_path
+        rel_path = heatmap_path.relative_to(IMAGES_ROOT).as_posix()
         total_pixels = width * height
         pixel_count = int(np.count_nonzero(presence_mask))
         percentage = round(pixel_count / total_pixels * 100, 2) if total_pixels else 0
