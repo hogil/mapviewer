@@ -1173,7 +1173,7 @@ def _save_image_with_backend(img, path: Path) -> Tuple[Path, str]:
         arr = np.array(save_img, dtype=np.uint8)
         if arr.ndim == 2:
             arr = np.stack([arr, arr, arr], axis=2)
-        encoded = _TURBOJPEG.encode(arr, quality=_JPEG_QUALITY, jpeg_subsample=TJSAMP_444, pixel_format=TJPF_RGB)
+        encoded = _TURBOJPEG.encode(arr, quality=_JPEG_QUALITY, jpeg_subsample=TJSAMP_420, pixel_format=TJPF_RGB)
         tmp_path = target_path.with_suffix(f"{target_path.suffix}.tmp")
         tmp_path.write_bytes(encoded)
         try:
