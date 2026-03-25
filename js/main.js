@@ -21517,6 +21517,19 @@ class WaferMapViewer {
         if (savedViewMode === 'gridImage') {
             console.log('🔄 [EXIT] 그리드 모드로 복귀');
 
+            // ✅ 원래 페이지(origin)로 복귀 — detail 탭에서 벗어남
+            const currentPageId = this.pageManager?.activePageId;
+            if (currentPageId && this.gridDetailOriginMap?.has(currentPageId)) {
+                const originPageId = this.gridDetailOriginMap.get(currentPageId);
+                if (originPageId && this.pageManager?.pages?.some(p => p.id === originPageId)) {
+                    this.pageManager.activatePage(originPageId, { skipPersist: true });
+                    console.log(`🔄 [EXIT] detail 탭(${currentPageId}) → origin 탭(${originPageId})으로 복귀`);
+                }
+            }
+
+            // ✅ Composite Mode 상태 복원 소스 (폴더 선택 복원보다 먼저 참조)
+            const saveState = savedGridViewSaveState || this.savedViewState;
+
             // ✅ 폴더/파일 선택 상태 복원 (Composite 모드에서는 건너뜀 — 오염 방지)
             const isCompositeRestore = saveState?.isCompositeMode;
             if (!isCompositeRestore && savedFolderSelection && savedFolderSelection.length > 0) {
@@ -21562,8 +21575,7 @@ class WaferMapViewer {
 
             console.log('🔍 [RESTORE] 선택 복원:', this.gridSelectedIdxs.length, '개 이미지');
 
-            // ✅ Composite Mode 상태 복원
-            const saveState = savedGridViewSaveState || this.savedViewState;
+            // ✅ Composite Mode 상태 복원 (saveState는 위에서 이미 선언)
             const isLabelExplorerRestore = saveState?.source === 'labelExplorer';
             if (typeof saveState?.lotMode === 'boolean') {
                 this.lotMode = saveState.lotMode;
@@ -22172,7 +22184,15 @@ class WaferMapViewer {
             const data = await response.json();
             let files = (data.items || [])
                 .filter(item => item.type === 'file' && this.isImageFile(item.name))
-                .map(item => item.path || `${folderPath}/${item.name}`);
+                .map(item => {
+                    // 서버가 절대경로 반환 시 상대경로로 변환 (폴더명 기준)
+                    const raw = item.path || `${folderPath}/${item.name}`;
+                    if (raw.includes(':/') || raw.startsWith('/')) {
+                        const idx = raw.replace(/\\/g, '/').indexOf(folderPath.replace(/\\/g, '/'));
+                        if (idx >= 0) return raw.slice(idx).replace(/\\/g, '/');
+                    }
+                    return raw.replace(/\\/g, '/');
+                });
 
             this.naturalSortPaths(files);
 

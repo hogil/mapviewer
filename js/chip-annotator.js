@@ -387,7 +387,7 @@ export class ChipAnnotator {
         if (!this.chips || !this.gradientStops) return;
 
         // Collect all numeric values — dict 및 compact_array(list + ftn_keys) 모두 지원
-        const keyName = field === 'f' ? 'ftn_keys' : field === 'q' ? 'qtn_keys' : null;
+        const keyName = (field && field !== 'bin') ? `${field}tn_keys` : null;
         const keyIndex = (keyName && this.positionsData?.[keyName])
             ? this.positionsData[keyName].indexOf(String(itemKey))
             : -1;
@@ -588,7 +588,7 @@ export class ChipAnnotator {
     getAvailableItemKeys(field) {
         // 1) compact_array format: positionsData에 ftn_keys/qtn_keys 헤더가 있으면 사용
         if (this.positionsData) {
-            const keyName = field === 'f' ? 'ftn_keys' : field === 'q' ? 'qtn_keys' : null;
+            const keyName = (field && field !== 'bin') ? `${field}tn_keys` : null;
             const headerKeys = keyName ? this.positionsData[keyName] : null;
             if (Array.isArray(headerKeys) && headerKeys.length > 0) {
                 return headerKeys.map(String).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
@@ -1456,7 +1456,7 @@ export class ChipAnnotator {
                 const rawText = chip.b != null ? String(chip.b) : '';
                 this._drawChipRectWithText(chip, hexColor, rawText);
             });
-        } else if ((this.overlayMode === 'f' || this.overlayMode === 'q') && this.ratioOverlayColors) {
+        } else if ((this.viewer?.isMeasureGradientMode(this.overlayMode)) && this.ratioOverlayColors) {
             // Ratio overlay: fill chips with percentile gradient color
             const hasGradFilter = this.gradientFilterSet.size > 0;
             this.ratioOverlayColors.forEach((color, chipIdx) => {
@@ -1472,8 +1472,8 @@ export class ChipAnnotator {
                 const data = chip[this.overlayMode];
                 let raw = null;
                 if (Array.isArray(data)) {
-                    // compact_array: ftn_keys/qtn_keys 인덱스로 접근
-                    const keyName = this.overlayMode === 'f' ? 'ftn_keys' : this.overlayMode === 'q' ? 'qtn_keys' : null;
+                    // compact_array: {mode}tn_keys 인덱스로 접근 (f→ftn_keys, q→qtn_keys, 향후 모드도 동일 패턴)
+                    const keyName = this.positionsData?.[`${this.overlayMode}tn_keys`] ? `${this.overlayMode}tn_keys` : null;
                     const keyIdx = (keyName && this.positionsData?.[keyName])
                         ? this.positionsData[keyName].indexOf(String(this.overlayItemKey))
                         : -1;
@@ -1510,7 +1510,7 @@ export class ChipAnnotator {
         }
 
         // Gradient range filter white mask: measure overlay 모드에서 비선택 범위 chip 숨김
-        if (this.gradientFilterSet.size > 0 && (this.overlayMode === 'f' || this.overlayMode === 'q') && this.ratioPercentiles) {
+        if (this.gradientFilterSet.size > 0 && (this.viewer?.isMeasureGradientMode(this.overlayMode)) && this.ratioPercentiles) {
             const transform = this.viewer.transform;
             const Y_OFFSET = -55;
             ctx.save();

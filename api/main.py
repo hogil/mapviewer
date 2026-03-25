@@ -3859,7 +3859,7 @@ def _apply_ratio_overlay_memory(
         # 2. Extract ratio values (dict 및 compact_array 포맷 모두 지원)
         # compact_array: ftn_keys/qtn_keys 인덱스로 접근
         ftn_idx_map: dict = {}
-        key_name = "ftn_keys" if field == "f" else "qtn_keys" if field == "q" else None
+        key_name = f"{field}tn_keys" if field and field != "bin" else None
         if key_name:
             for i, k in enumerate(positions_data.get(key_name, [])):
                 ftn_idx_map[str(k)] = i
@@ -6907,8 +6907,8 @@ def _generate_measure_thumb(
     if not chips:
         return None
 
-    # ftn/qtn 인덱스 매핑
-    key_name = "ftn_keys" if field == "f" else "qtn_keys" if field == "q" else None
+    # {field}tn_keys 인덱스 매핑 (f→ftn_keys, q→qtn_keys, 향후 모드도 동일 패턴)
+    key_name = f"{field}tn_keys" if field and field != "bin" else None
     ftn_idx_map = {}
     if key_name:
         for i, k in enumerate(positions_data.get(key_name, [])):
@@ -7082,7 +7082,7 @@ def _generate_measure_thumbs_batch(
     item_infos = []  # [(result_key, field, ki_or_dictkey, is_list)]
     for it in items:
         field, key = it["field"], str(it["key"])
-        key_name = "ftn_keys" if field == "f" else "qtn_keys" if field == "q" else None
+        key_name = f"{field}tn_keys" if field and field != "bin" else None
         ki = None
         if key_name:
             keys_list = positions_data.get(key_name, [])

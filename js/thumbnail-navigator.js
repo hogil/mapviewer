@@ -1360,7 +1360,7 @@ export class ThumbnailNavigator {
             // 🔥 Measure overlay 모드 판별 후 적절한 URL 사용
             let newUrl;
             const v = this.viewer;
-            const isMeasure = v && (v.overlayMode === 'f' || v.overlayMode === 'q') && v._ratioActiveItemKey;
+            const isMeasure = v && (v.isMeasureGradientMode()) && v._ratioActiveItemKey;
             if (isMeasure) {
                 const loginId = v.getCurrentLoginId();
                 const gf = v.selectedGradientRanges?.size > 0
@@ -1424,7 +1424,7 @@ export class ThumbnailNavigator {
             thumbnailUrl = v._buildMeasureThumbUrl(imagePath, measureItem, cacheSuffix);
             // Navigator용 size=256으로 변경
             thumbnailUrl = thumbnailUrl.replace('size=512', 'size=256');
-        } else if (v && (v.overlayMode === 'f' || v.overlayMode === 'q') && v._ratioActiveItemKey) {
+        } else if (v && (v.isMeasureGradientMode()) && v._ratioActiveItemKey) {
             const loginId = v.getCurrentLoginId();
             const gf = v.selectedGradientRanges?.size > 0
                 ? Array.from(v.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';

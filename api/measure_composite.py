@@ -96,11 +96,11 @@ _compact_key_index_cache: Dict[str, Dict[str, int]] = {}
 
 
 def _set_compact_keys(positions_data: dict):
-    """positions 로드 후 ftn_keys/qtn_keys 인덱스 캐시 설정."""
+    """positions 로드 후 {mode}tn_keys 인덱스 캐시 설정."""
     _compact_key_index_cache.clear()
-    for prefix, key_name in (("f", "ftn_keys"), ("q", "qtn_keys")):
-        keys = positions_data.get(key_name)
-        if keys:
+    for key_name, keys in positions_data.items():
+        if key_name.endswith("tn_keys") and isinstance(keys, list):
+            prefix = key_name[:-len("tn_keys")]  # "ftn_keys" → "f", "qtn_keys" → "q"
             _compact_key_index_cache[prefix] = {str(k): i for i, k in enumerate(keys)}
 
 
@@ -148,8 +148,8 @@ def _extract_values_from_data(data, mode, item_key, bin_types):
     if not isinstance(chips, list):
         return None
     key_idx = None
-    if mode in ("f", "q"):
-        key_name = "ftn_keys" if mode == "f" else "qtn_keys"
+    if mode != "bin":
+        key_name = f"{mode}tn_keys"
         keys = data.get(key_name, [])
         for i, k in enumerate(keys):
             if str(k) == str(item_key):
@@ -824,8 +824,7 @@ def create_measure_composite(
         bins_label = ",".join(sorted(bin_types)) if bin_types else "all"
         display_name = f"BIN_{bins_label}_{aggregation}"
     else:
-        prefix = "FBT" if mode == "f" else "QVL"
-        display_name = f"{prefix}_{item_key}_{aggregation}"
+        display_name = f"{mode.upper()}_{item_key}_{aggregation}"
 
     out_file = out_dir / f"{display_name}.png"
     _save_image_with_backend(result_img, out_file)

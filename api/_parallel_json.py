@@ -78,8 +78,8 @@ def extract_chip_values(args: tuple) -> Optional[List[Tuple[int, int, float]]]:
 
     # item 인덱스 찾기
     key_idx = None
-    if mode in ("f", "q"):
-        key_name = "ftn_keys" if mode == "f" else "qtn_keys"
+    if mode != "bin":
+        key_name = f"{mode}tn_keys"
         keys = data.get(key_name, [])
         for i, k in enumerate(keys):
             if str(k) == str(item_key):

@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 39개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 40개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -2999,3 +2999,56 @@ const ms = Math.round(performance.now() - t0);
 - 39-3: Grade 2,5 선택 → Subset API 호출 → subset sum map 생성
 - 39-4: 단일 이미지 모드에서도 Subset 메뉴 표시
 - 39-5: Subset 결과 이미지 정상 렌더링
+
+---
+
+## Phase 40: Composite 탭 전환 안정성 (더블클릭→ESC→탭전환)
+
+**목적**: Composite 결과 그리드에서 더블클릭→단일뷰→ESC→원래 탭 복귀, 수동 탭 전환 시 검은화면 방지
+
+**배경**:
+- `/api/files` 응답의 `item.path`가 절대경로(`D:/project/data/...`)로 반환되어 `/api/image`, `/api/thumbnail` 호출 시 404 발생
+- `exitSingleImageViewMode`에서 `saveState` 변수를 선언 전에 참조 (TDZ ReferenceError)
+- detail 탭(com1)에서 ESC 시 origin 탭(com0)으로 자동 복귀하지 않음
+
+**평가 항목**:
+
+### 40-1. Composite 결과 이미지 경로 상대경로 확인
+
+1. Measure Composite 생성 (FBT1000 등)
+2. 결과 그리드의 이미지 경로 확인: `v.selectedImages[0]`
+3. **핵심 검증**: 경로가 `composite_map/notsaml/...` 형태 (절대경로 `D:/...` 아님)
+4. 썸네일 URL: `/api/thumbnail?path=composite_map%2F...` (정상 로드)
+
+### 40-2. 더블클릭→단일뷰→이미지 로드 성공
+
+1. Composite 결과 이미지 더블클릭 → 단일 뷰 진입
+2. 이미지 정상 로드 (404 에러 없음)
+3. `v.selectedImagePath`가 상대경로
+
+### 40-3. ESC → 원래 탭(com0) 복귀
+
+1. 단일 뷰에서 ESC 키
+2. **핵심 검증**: `v.pageManager.activePageId`가 origin 탭(com0)으로 복귀
+3. `v.gridMode === true`
+4. 그리드 이미지 정상 표시 (검은화면 아님)
+5. `v.isCompositeMode === true` 유지
+6. 콘솔에 `detail 탭 → origin 탭으로 복귀` 로그
+
+### 40-4. 수동 탭 전환 시 이미지 표시
+
+1. 더블클릭→단일뷰→ESC→com0 복귀 후
+2. page0 탭 클릭 → 정상 전환
+3. com0 탭 다시 클릭 → 그리드 이미지 정상 표시 (검은화면 아님)
+
+### 40-5. 반복 더블클릭/ESC 사이클
+
+1. com0에서 더블클릭 → ESC → com0 복귀 (3회 반복)
+2. 매 사이클: gridMode=true, 이미지 표시, isComposite=true
+
+**pass 기준**:
+- 40-1: 상대경로 확인 (D:/ 미포함)
+- 40-2: 단일 뷰 이미지 로드 성공 (404 없음)
+- 40-3: ESC 시 origin 탭 복귀 + 그리드 표시
+- 40-4: 수동 탭 전환 시 검은화면 없음
+- 40-5: 3회 반복 안정성

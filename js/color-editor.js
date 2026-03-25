@@ -573,7 +573,7 @@ export class ColorSchemeEditor {
             this.viewer._ratioGradientCache = this._savedRatioGradientCache;
             this._savedRatioGradientCache = null;
             if (!this.viewer.gridMode &&
-                (this.viewer.overlayMode === 'f' || this.viewer.overlayMode === 'q') &&
+                (this.viewer.isMeasureGradientMode()) &&
                 this.viewer.chipAnnotator) {
                 this.viewer.chipAnnotator.setOverlayMode(this.viewer.overlayMode, {
                     gradientStops: this.viewer._ratioGradientCache,
@@ -1410,7 +1410,7 @@ export class ColorSchemeEditor {
                 this.viewer._ratioGradientCache = stops;
                 // 단일 이미지: chipAnnotator 오버레이 재계산
                 if (this.viewer.chipAnnotator && this.viewer.overlayMode &&
-                    (this.viewer.overlayMode === 'f' || this.viewer.overlayMode === 'q')) {
+                    (this.viewer.isMeasureGradientMode())) {
                     this.viewer.chipAnnotator.gradientStops = stops;
                     this.viewer.chipAnnotator._computeRatioOverlay(
                         this.viewer.overlayMode, this.viewer._ratioActiveItemKey);
@@ -2061,7 +2061,7 @@ export class ColorSchemeEditor {
                 } else if (this.viewer.selectedImagePath) {
                     // 단일 이미지: measure overlay 즉시 재적용
                     if (tabType === 'measure' &&
-                        (this.viewer.overlayMode === 'f' || this.viewer.overlayMode === 'q') &&
+                        (this.viewer.isMeasureGradientMode()) &&
                         this.viewer.chipAnnotator) {
                         this.viewer.chipAnnotator.setOverlayMode(this.viewer.overlayMode, {
                             gradientStops: colorsArray,
@@ -2134,7 +2134,7 @@ export class ColorSchemeEditor {
                 if (tabType === 'measure') {
                     // 단일 이미지: 클라이언트 overlay 직접 갱신
                     if (!this.viewer.gridMode &&
-                        (this.viewer.overlayMode === 'f' || this.viewer.overlayMode === 'q') &&
+                        (this.viewer.isMeasureGradientMode()) &&
                         this.viewer.chipAnnotator) {
                         this.viewer.chipAnnotator.setOverlayMode(this.viewer.overlayMode, {
                             gradientStops: colorsArray,
