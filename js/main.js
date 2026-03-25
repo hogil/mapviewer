@@ -18264,11 +18264,42 @@ class WaferMapViewer {
             this.singleImageFromGrid = false;
         }
 
-        // 🔥 Measure 다중 선택 시 LOT 모드 비활성화 (다중 measure와 LOT 그룹핑 비호환)
-        if (this._measureCheckedItems && this._measureCheckedItems.length > 1 && this.lotMode) {
-            this.lotMode = false;
-            const lotBtn = document.getElementById('lot-mode-btn') || document.querySelector('[data-action="lot-mode"]');
-            if (lotBtn) lotBtn.classList.remove('active');
+        // 🔥 Measure 확장 + _gridMeasureMap 설정 (LOT 리다이렉트 전에 실행해야 함)
+        {
+            const mcItems = this._measureCheckedItems;
+            if (mcItems && mcItems.length > 1) {
+                // 🔥 base images 결정: 기존 base 우선, 없으면 입력 images를 deduplicate하여 base로 사용
+                let baseForMeasure;
+                if (this._measureBaseImages?.length > 0) {
+                    baseForMeasure = [...this._measureBaseImages];
+                } else {
+                    // 입력 images가 이미 확장된 것일 수 있으므로 deduplicate
+                    baseForMeasure = [...new Set(images)];
+                    this._measureBaseImages = [...baseForMeasure];
+                }
+                const maxExpand = 500;
+                if (baseForMeasure.length > maxExpand) baseForMeasure = baseForMeasure.slice(0, maxExpand);
+                const expanded = [];
+                const measureMap = [];
+                for (const imgPath of baseForMeasure) {
+                    for (const measureItem of mcItems) {
+                        expanded.push(imgPath);
+                        measureMap.push(measureItem);
+                    }
+                }
+                images = expanded;
+                this._gridMeasureMap = measureMap;
+            } else if (mcItems && mcItems.length === 1) {
+                // 단일 measure: 입력 images가 확장된 것일 수 있으므로 deduplicate
+                const deduped = this._measureBaseImages?.length > 0
+                    ? [...this._measureBaseImages] : [...new Set(images)];
+                this._measureBaseImages = deduped;
+                this._gridMeasureMap = deduped.map(() => mcItems[0]);
+                images = deduped;
+            } else {
+                this._measureBaseImages = [...new Set(images)];
+                this._gridMeasureMap = null;
+            }
         }
 
         // 📦 Lot 모드가 활성화되어 있으면 Lot별 그리드로 표시
@@ -18328,9 +18359,12 @@ class WaferMapViewer {
         this.gridMode = true;
         this.enforceGridModeUiState();
 
-        // 🔥 LOT/TEST/STEP 필터 적용 (Composite 모드는 제외)
+        // 🔥 다중 Measure 확장 모드에서는 필터/정렬 건너뛰기 (_gridMeasureMap 인덱스 매핑 보존)
+        const isMultiMeasureExpanded = this._measureCheckedItems?.length > 1 && this._gridMeasureMap;
+
+        // 🔥 LOT/TEST/STEP 필터 적용 (Composite 모드, 다중 Measure 확장 모드는 제외)
         let filteredImages = images;
-        if (!this.isCompositeMode) {
+        if (!this.isCompositeMode && !isMultiMeasureExpanded) {
             const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
             if (hasFilter) {
                 filteredImages = images.filter(p => this._passesLtTmFilter(p) && this._passesStepFilter(p));
@@ -18342,13 +18376,11 @@ class WaferMapViewer {
             }
         }
 
-        // 🔥 Composite 모드가 아닐 때만 이미지를 현재 정렬 키 기준으로 정렬
+        // 🔥 Composite/다중 Measure 확장 모드가 아닐 때만 정렬
         let sortedImages;
-        if (this.isCompositeMode) {
-            // Composite 모드: 전달된 순서 그대로 유지 (subset 추가 시 순서 보존)
+        if (this.isCompositeMode || isMultiMeasureExpanded) {
             sortedImages = [...filteredImages];
         } else {
-            // 일반 모드: 현재 정렬 키 사용 (기본: 파일명)
             sortedImages = this._sortGridImages(filteredImages, this._gridSortKey || 'filename');
         }
 
@@ -18403,9 +18435,13 @@ class WaferMapViewer {
                     images: [...sortedImages],
                 };
             } else if (this.savedViewState) {
-                this.savedViewState.images = [...sortedImages];
+                // 🔥 다중 Measure 모드: base images 저장 (이중 확장 방지)
+                this.savedViewState.images = (this._measureCheckedItems?.length > 0 && this._measureBaseImages?.length > 0)
+                    ? [...this._measureBaseImages] : [...sortedImages];
             } else {
-                this.savedViewState = { type: 'grid', images: [...sortedImages], scrollTop: 0 };
+                const saveImgs = (this._measureCheckedItems?.length > 0 && this._measureBaseImages?.length > 0)
+                    ? [...this._measureBaseImages] : [...sortedImages];
+                this.savedViewState = { type: 'grid', images: saveImgs, scrollTop: 0 };
             }
             this._transientGridRestoreState = null;
         } else {
@@ -18414,7 +18450,9 @@ class WaferMapViewer {
 
             this.savedViewState = {
                 type: 'grid',
-                images: [...sortedImages],  // 🔥 정렬된 이미지를 저장
+                // 🔥 다중 Measure 모드: 확장된 이미지가 아닌 base images 저장 (이중 확장 방지)
+                images: (this._measureCheckedItems?.length > 0 && this._measureBaseImages?.length > 0)
+                    ? [...this._measureBaseImages] : [...sortedImages],
                 scrollTop: currentScrollTop,
                 selectedFolders: this.selectedFolders ? Array.from(this.selectedFolders) : [],
                 lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || null,
@@ -18480,40 +18518,11 @@ class WaferMapViewer {
         // grid 모드에서는 cursor를 default로
         this.dom.viewerContainer.style.cursor = 'default';
 
-        // 🔥 Measure 다중 선택 처리
-        const mcItems = this._measureCheckedItems;
-        if (mcItems && mcItems.length > 1) {
-            // 🔥 이미 _measureBaseImages가 있으면 (재호출 시) 확장 전 원본을 사용
-            // → 확장된 이미지가 다시 base로 설정되어 N배씩 증가하는 문제 방지
-            if (this._measureBaseImages?.length > 0) {
-                sortedImages = this._sortGridImages([...this._measureBaseImages], this._gridSortKey || 'filename');
-            } else {
-                this._measureBaseImages = [...sortedImages];
-            }
-            // 다중 Measure: 이미지 확장 (원본 × N개 measure)
-            const maxExpand = 500;  // 최대 확장 이미지 수 (DOM 성능 보호)
-            const baseForExpand = sortedImages.length > maxExpand ? sortedImages.slice(0, maxExpand) : sortedImages;
-            if (sortedImages.length > maxExpand) {
-                console.warn(`[MEASURE-MULTI] ${sortedImages.length}개 → ${maxExpand}개로 제한 (다중 선택 성능 보호)`);
-            }
-            const expanded = [];
-            const measureMap = [];
-            for (const imgPath of baseForExpand) {
-                for (const measureItem of mcItems) {
-                    expanded.push(imgPath);
-                    measureMap.push(measureItem);
-                }
-            }
-            sortedImages = expanded;
-            this._gridMeasureMap = measureMap;
+        // 🔥 Measure 확장은 LOT 리다이렉트 전에 이미 처리됨 (images에 반영됨)
+        // sortedImages에 확장 결과 반영
+        if (this._measureCheckedItems?.length > 1 && this._gridMeasureMap) {
             this.selectedImages = sortedImages;
             this.currentGridImages = sortedImages;
-        } else if (mcItems && mcItems.length === 1) {
-            this._measureBaseImages = [...sortedImages];
-            this._gridMeasureMap = sortedImages.map(() => mcItems[0]);
-        } else {
-            this._measureBaseImages = [...sortedImages];
-            this._gridMeasureMap = null;
         }
 
         this.showGridImmediately(sortedImages);
@@ -21757,7 +21766,10 @@ class WaferMapViewer {
             this._measureOverlayRendered = false;  // 🔥 그리드 복귀 시 measure 렌더 플래그 초기화
 
             // 🔥 그리드 복귀 후 gridViewImageList 재설정 (다음 더블클릭 진입→복귀 시 빈 배열 방지)
-            this.gridViewImageList = [...imagesToShow];
+            // 다중 Measure 모드: 확장된 리스트가 아닌 base images를 저장 (이중 확장 방지)
+            this.gridViewImageList = (this._measureCheckedItems?.length > 0 && this._measureBaseImages?.length > 0)
+                ? [...this._measureBaseImages]
+                : [...imagesToShow];
 
             // 🔥 오버레이 모드(BIN/FBT/QVL) 활성 상태이면 그리드 썸네일을 현재 모드 URL로 갱신
             if (this.overlayMode && this.overlayMode !== 'multi') {
@@ -26996,13 +27008,13 @@ class WaferMapViewer {
         this.currentGridImages = sortedImages;
         if (!this.gridSelectedIdxs) this.gridSelectedIdxs = [];
 
-        // 🔥 Measure 다중 선택: _gridMeasureMap 설정 (showGrid와 동일)
+        // 🔥 Measure _gridMeasureMap: showGrid에서 이미 설정된 경우 유지, 아니면 단일 measure만 재설정
         const mcItems = this._measureCheckedItems;
-        if (mcItems && mcItems.length === 1 && mcItems[0].type === 'failbit') {
-            this._gridMeasureMap = sortedImages.map(() => mcItems[0]);
+        if (mcItems && mcItems.length > 1 && this._gridMeasureMap?.length === sortedImages.length) {
+            // 다중 measure: showGrid에서 이미 확장+매핑 완료, 그대로 유지
         } else if (mcItems && mcItems.length === 1) {
             this._gridMeasureMap = sortedImages.map(() => mcItems[0]);
-        } else {
+        } else if (!mcItems || mcItems.length === 0) {
             this._gridMeasureMap = null;
         }
 
