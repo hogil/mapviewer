@@ -56,7 +56,7 @@ if not os.environ.get("OMP_NUM_THREADS"):
 
 _HAS_TURBOJPEG = False
 try:
-    from turbojpeg import TurboJPEG, TJPF_RGB, TJSAMP_444
+    from turbojpeg import TurboJPEG, TJPF_RGB, TJSAMP_444, TJSAMP_420
 
     _TURBOJPEG = TurboJPEG()
     _HAS_TURBOJPEG = True
@@ -1123,7 +1123,7 @@ def _save_image_with_backend(img, path: Path) -> Tuple[Path, str]:
         if arr.ndim == 2:
             arr = np.stack([arr, arr, arr], axis=2)
         if backend == "turbo" and _HAS_TURBOJPEG and fmt == "JPEG":
-            encoded = _TURBOJPEG.encode(arr, quality=_JPEG_QUALITY, jpeg_subsample=TJSAMP_444, pixel_format=TJPF_RGB)
+            encoded = _TURBOJPEG.encode(arr, quality=_JPEG_QUALITY, jpeg_subsample=TJSAMP_420, pixel_format=TJPF_RGB)
             tmp_path = target_path.with_suffix(f"{target_path.suffix}.tmp")
             tmp_path.write_bytes(encoded)
             try:
@@ -1963,7 +1963,7 @@ def create_composite_heatmaps(
         # 최적 경로: numpy→turbojpeg 직접 인코딩 (GIL 해제, 최고속)
         if _HAS_TURBOJPEG and _palette_rgb is not None and _SAVE_FORMAT == "JPEG":
             rgb_arr = _palette_rgb[result]  # (H, W, 3) fancy indexing
-            encoded = _TURBOJPEG.encode(rgb_arr, quality=_JPEG_QUALITY, jpeg_subsample=TJSAMP_444, pixel_format=TJPF_RGB)
+            encoded = _TURBOJPEG.encode(rgb_arr, quality=_JPEG_QUALITY, jpeg_subsample=TJSAMP_420, pixel_format=TJPF_RGB)
             target_path = heatmap_path.with_suffix(".jpg")
             tmp_path = target_path.with_suffix(".jpg.tmp")
             tmp_path.write_bytes(encoded)
