@@ -2436,7 +2436,23 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 5. com0 탭으로 전환 → `isCompositeMode === true`, `images > 0`
 6. **핵심 검증**: 결과 이미지 정상 표시 (검은 화면 없음)
 
-**pass 기준**: 35-1~35-13 모든 핵심 검증 통과, 더블클릭 반복 3회 안정, 서버 파일 정상
+#### 35-14. 단일 Measure 선택 시 LOT Mode 유지
+1. palette_3k LOT Mode ON → FBT1000 단일 선택
+2. **핵심 검증**: `lotMode === true`, LOT 헤더 존재
+3. **핵심 검증**: LOT 그룹 레이아웃 깨지지 않음 (lot-header + lot-spacer)
+4. Measure 초기화 → LOT Mode 유지, Grade 범례 복원
+
+**발견 버그**: 단일 Measure 선택 시 `refreshGridThumbnailsWithCurrentParams()`가 LOT 그룹 레이아웃 무시
+수정: LOT Mode에서는 `showGridByLot(currentGridImages)` 호출
+
+#### 35-15. 더블클릭 반복 5회 + Navigator/Minimap 안정성
+1. palette_3k 그리드 → **5회 반복**: 더블클릭 단일 → 더블클릭 그리드 복귀
+2. **핵심 검증**: 매 단일 진입 시 Navigator visible, imageList.length > 0
+3. **핵심 검증**: 매 단일 진입 시 Minimap canvas visible
+4. **핵심 검증**: 매 복귀 시 currentGridImages.length === 3000, gridViewImageList.length > 0
+5. **핵심 검증**: 5회 모두 검은 화면 없음
+
+**pass 기준**: 35-1~35-15 모든 핵심 검증 통과, 더블클릭 반복 5회 안정, LOT Mode 유지, 서버 파일 정상
 
 ---
 

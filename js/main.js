@@ -23962,6 +23962,9 @@ class WaferMapViewer {
             const isMeasureActive = (this.isMeasureGradientMode()) && this._ratioActiveItemKey;
             if (hasSelection && isMeasureActive) {
                 this._openMeasureTab();
+            } else if (this.lotMode && this.currentGridImages && this.currentGridImages.length > 0) {
+                // 🔥 LOT Mode에서 단일 Measure 전환: LOT 그룹 레이아웃 유지
+                this.showGridByLot(this.currentGridImages);
             } else {
                 this.refreshGridThumbnailsWithCurrentParams();
             }
