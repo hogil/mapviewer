@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 41개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지를 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 42개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -22,6 +22,16 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 ## 사전 조건 (자동 설정)
 
 테스트 실행 전에 아래 단계를 **순서대로** 자동 수행합니다. 이미 준비된 항목은 건너뜁니다.
+
+> **대전제: 썸네일 캐시 삭제 후 서버 시작**
+> 이미지 로드 시간 측정의 정확성을 위해 **서버 시작 전 썸네일 캐시 폴더를 삭제**한다.
+> ```bash
+> rm -rf "${PROJECT_ROOT}/thumbnails"
+> ```
+> - `PROJECT_ROOT`는 `IMAGES_ROOT` 또는 `/appdata/appuser/images` (환경에 따라 다름)
+> - Windows 개발: `rm -rf D:/project/data/wm-811k/thumbnails`
+> - 이 규칙을 위반하면 캐시 히트로 인해 로드 시간이 비정상적으로 빠르게 측정됨
+> - 서버 시작 후 첫 요청에서 썸네일이 새로 생성되므로 cold start 성능을 정확히 측정 가능
 
 > **필수**: 브라우저는 **항상 1920×1080 최대화** 상태로 동작해야 한다. 모든 Phase에서 UI 요소가 뷰포트 안에 보여야 한다.
 > - MCP 서버 설정(`~/.claude.json`)에 `--viewport-size 1920,1080` 옵션이 반드시 포함되어야 한다.
@@ -3128,6 +3138,70 @@ const ms = Math.round(performance.now() - t0);
 - **캔버스 더블클릭**: com0 더블클릭 → com1 단일뷰 → 캔버스 영역 더블클릭 → com0 그리드 복원
 - **수동 탭 클릭**: com0 더블클릭 → com1 단일뷰 → com0 탭 직접 클릭 → com0 그리드 복원 (검은화면 없음)
 - **반복 안정성**: 위 3가지를 섞어 3회 반복 → 매 라운드 이미지 수 동일, isComposite 유지
+
+---
+
+## Phase 42: 다중 Measure 더블클릭 Navigator/그리드 overlay 타입 보존
+
+**목적**: 다중 Measure(Failbit+BIN+FBT+QVL) 그리드에서 각 타입 이미지를 더블클릭하여 단일 이미지 모드 진입 시 Navigator 썸네일이 올바른 overlay 타입을 유지하고, 그리드 복귀 시 이미지 수와 타입 분포가 변하지 않는지 검증
+
+**배경**:
+- 다중 Measure 확장 시 동일 이미지가 4가지 타입(failbit/bin/f/q)으로 반복됨
+- `_gridMeasureMap`이 각 그리드 인덱스의 measure 타입을 추적
+- 더블클릭 시 `createPage→applyPageState`가 `_gridMeasureMap`을 초기화하는 버그 존재했음
+- `groupImagesByLot`의 `pathToItem` Map이 동일 경로 중복으로 마지막 타입만 유지하는 버그
+- `_buildMeasureThumbUrl`에서 `getPersonalizedParams()`가 전역 `overlayMode`에 의존하여 failbit에 bin_overlay 적용하는 버그
+
+**사전 조건**: Phase 33 완료 (Measure 드롭다운 기본 동작)
+
+**테스트 절차**:
+
+#### 42-1. 다중 Measure 그리드 설정
+1. `palette_3k` 폴더 로드, 3개 이미지 선택
+2. `_measureCheckedItems = [failbit, bin, f(FBT1001), q(QVL5000)]` 설정
+3. `_applyMeasureSelection()` 호출
+4. **핵심 검증**: `currentGridImages.length === 12`, `_gridMeasureMap.length === 12`
+5. **핵심 검증**: `_gridMeasureMap` 타입 분포 = `{failbit:3, bin:3, f:3, q:3}`
+6. **핵심 검증**: `overlayMode === 'multi'`
+
+#### 42-2. BIN 더블클릭 → Navigator 타입 분포 확인
+1. BIN 인덱스(`_gridMeasureMap`에서 type==='bin'인 첫 번째) 더블클릭
+2. 6초 대기 (이미지 로드 + positions 로드 + Navigator 렌더)
+3. **핵심 검증**: Navigator 썸네일 URL 분포: `bin_overlay=1` 3개, `/api/thumbnail`(raw) 3개, `measure-thumb` 6개
+4. **핵심 검증**: `_gridMeasureMap.length === 12`, `_measureCheckedItems.length === 4`
+5. 스크린샷으로 캔버스(BIN overlay), Navigator(4타입 구분) 시각 확인
+
+#### 42-3. 그리드 복귀 → 타입 보존 확인
+1. `exitSingleImageViewMode()` 호출, 4초 대기
+2. **핵심 검증**: `currentGridImages.length === 12` (증식 없음)
+3. **핵심 검증**: `overlayMode === 'multi'`
+4. **핵심 검증**: `_gridMeasureMap` 타입 분포 유지 = `{failbit:3, bin:3, f:3, q:3}`
+5. 스크린샷으로 4열 그리드 시각 확인
+
+#### 42-4. QVL 더블클릭 → Navigator 확인 → 복귀
+1. QVL 인덱스 더블클릭, 6초 대기
+2. **핵심 검증**: Navigator URL 분포 동일 (3 raw + 3 bin + 6 measure)
+3. 복귀 후 `currentGridImages.length === 12`, `overlayMode === 'multi'`
+
+#### 42-5. Failbit 더블클릭 → Navigator 확인 → 복귀
+1. Failbit 인덱스 더블클릭, 6초 대기
+2. **핵심 검증**: Navigator URL 분포 동일 (3 raw + 3 bin + 6 measure)
+3. 복귀 후 `currentGridImages.length === 12`, `overlayMode === 'multi'`
+
+#### 42-6. FBT 더블클릭 → Navigator 확인 → 복귀
+1. FBT 인덱스 더블클릭, 6초 대기
+2. **핵심 검증**: Navigator URL 분포 동일
+3. 복귀 후 `currentGridImages.length === 12`, `overlayMode === 'multi'`
+
+**pass 기준**: 42-1~42-6 모든 핵심 검증 통과, 4가지 타입 모두 더블클릭→복귀 후 이미지 수/타입 변동 없음
+
+**pass 조건 요약**:
+- 42-1: 그리드 12개, map 12개, 타입 분포 정확
+- 42-2: Navigator 3+3+6 분포, map/mc 보존
+- 42-3: 복귀 후 12개, overlay=multi, 타입 분포 유지
+- 42-4: QVL 동일 검증
+- 42-5: Failbit 동일 검증
+- 42-6: FBT 동일 검증
 
 ---
 
