@@ -18501,13 +18501,20 @@ class WaferMapViewer {
         // grid 모드에서는 cursor를 default로
         this.dom.viewerContainer.style.cursor = 'default';
 
-        // 🔥 Measure 다중 선택: 이미지 리스트 확장 (파일명 1차 정렬 + measure item 2차 정렬)
+        // 🔥 Measure 다중 선택 처리
         this._measureBaseImages = [...sortedImages];
         const mcItems = this._measureCheckedItems;
         if (mcItems && mcItems.length > 1) {
+            // 다중 Measure: 이미지 확장 (원본 × N개 measure)
+            // LOT 모드에서는 확장 시 헤더가 깨지므로 상한 적용
+            const maxExpand = 500;  // 최대 확장 이미지 수 (DOM 성능 보호)
+            const baseForExpand = sortedImages.length > maxExpand ? sortedImages.slice(0, maxExpand) : sortedImages;
+            if (sortedImages.length > maxExpand) {
+                console.warn(`[MEASURE-MULTI] ${sortedImages.length}개 → ${maxExpand}개로 제한 (다중 선택 성능 보호)`);
+            }
             const expanded = [];
             const measureMap = [];
-            for (const imgPath of sortedImages) {
+            for (const imgPath of baseForExpand) {
                 for (const measureItem of mcItems) {
                     expanded.push(imgPath);
                     measureMap.push(measureItem);
@@ -18518,7 +18525,6 @@ class WaferMapViewer {
             this.selectedImages = sortedImages;
             this.currentGridImages = sortedImages;
         } else if (mcItems && mcItems.length === 1) {
-            // 단일 measure 선택 시 measureMap 사용 (더블클릭 시 overlay 타입 결정 + URL 빌드)
             this._gridMeasureMap = sortedImages.map(() => mcItems[0]);
         } else {
             this._gridMeasureMap = null;
@@ -18526,7 +18532,7 @@ class WaferMapViewer {
 
         this.showGridImmediately(sortedImages);
 
-        // 🔥 다중 Measure: FBT/QVL 배치 프리페치 (서버 캐시 워밍, chips 1회 순회)
+        // 🔥 다중 Measure: FBT/QVL 배치 프리페치
         if (mcItems && mcItems.length > 1) {
             this._prefetchMeasureThumbBatch(this._measureBaseImages, mcItems);
         }
@@ -22272,6 +22278,14 @@ class WaferMapViewer {
     }
 
     async loadImagesInFolderAndShowGrid(folderPath) {
+        // 새 폴더 로드 시 measure 상태 초기화 (이전 세션 잔재 방지)
+        this._measureCheckedItems = [];
+        this._gridMeasureMap = null;
+        this._measureBaseImages = null;
+        this.overlayMode = null;
+        this._ratioActiveItemKey = null;
+        this.updateFailbitButtonUI?.();
+
         try {
             const response = await fetch(`/api/files?path=${encodeURIComponent(folderPath)}`);
             const data = await response.json();
@@ -23776,7 +23790,7 @@ class WaferMapViewer {
     /**
      * Measure 통합 리스트 생성 (체크박스 다중선택: 원본 → Failbit → BIN → FBT → QVL)
      */
-    _buildFailbitList(panel) {
+    async _buildFailbitList(panel) {
         const list = panel.querySelector('.failbit-list');
         if (!list) return;
         list.innerHTML = '';
@@ -23927,10 +23941,22 @@ class WaferMapViewer {
         list.appendChild(binHeader);
         list.appendChild(makeItem('BIN', 'bin', null));
 
-        // chipAnnotator에서 키를 가져오거나, 그리드 모드용 캐시에서 가져옴
-        const fKeys = this.chipAnnotator ? this.chipAnnotator.getAvailableItemKeys('f') : [];
-        const qKeys = this.chipAnnotator ? this.chipAnnotator.getAvailableItemKeys('q') : [];
-        const hasFQ = fKeys.length > 0 || qKeys.length > 0;
+        // chipAnnotator(단일뷰) 또는 캐시(그리드)에서 키 가져오기
+        let fKeys = this.chipAnnotator ? this.chipAnnotator.getAvailableItemKeys('f') : [];
+        let qKeys = this.chipAnnotator ? this.chipAnnotator.getAvailableItemKeys('q') : [];
+
+        // 그리드 모드에서 키가 없으면 서버에서 비동기 로드
+        if (fKeys.length === 0 && qKeys.length === 0 && !this._cachedMeasureKeys?.f?.length) {
+            const sources = this._getContextKeySourceImages();
+            if (sources.length > 0) {
+                try {
+                    const keys = await this._fetchMergedKeys(sources);
+                    this._cachedMeasureKeys = keys;
+                    fKeys = keys.f || [];
+                    qKeys = keys.q || [];
+                } catch (_) {}
+            }
+        }
 
         const effectiveFKeys = fKeys.length > 0 ? fKeys : (this._cachedMeasureKeys?.f || []);
         const effectiveQKeys = qKeys.length > 0 ? qKeys : (this._cachedMeasureKeys?.q || []);
@@ -24336,9 +24362,9 @@ class WaferMapViewer {
      */
     _prefetchMeasureThumbBatch(baseImages, measureItems) {
         if (!baseImages?.length || !measureItems?.length) return;
-        // FBT/QVL 항목만 추출 (failbit/bin은 일반 thumbnail API)
+        // gradient measure 항목만 추출 (failbit/bin은 일반 thumbnail API)
         const fqItems = measureItems
-            .filter(it => it.type === 'f' || it.type === 'q')
+            .filter(it => this.isMeasureGradientMode(it.type))
             .map(it => ({ field: it.type, key: String(it.key) }));
         if (fqItems.length === 0) return;
 

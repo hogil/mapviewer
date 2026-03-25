@@ -7227,7 +7227,7 @@ async def get_measure_thumb_batch(request: Request, body: dict = Body(...)):
     image_path = Path(path) if Path(path).is_absolute() else ROOT_DIR / path
 
     # 캐시 확인: 모두 캐시 히트면 배치 생성 스킵
-    fq_items = [it for it in items if it.get("field") in ("f", "q")]
+    fq_items = [it for it in items if it.get("field") and it.get("field") != "bin"]
     if not fq_items:
         return JSONResponse({})
 
