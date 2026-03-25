@@ -1326,7 +1326,14 @@ def _persist_square_map_data(
 
     def _save_npz():
         try:
-            np.savez(cache_path, **save_payload)
+            tmp = cache_path.with_suffix(".npz.tmp")
+            np.savez(tmp, **save_payload)
+            try:
+                tmp.replace(cache_path)
+            except Exception:
+                if cache_path.exists():
+                    cache_path.unlink()
+                tmp.rename(cache_path)
         except Exception:
             pass
     threading.Thread(target=_save_npz, daemon=True).start()
@@ -1698,23 +1705,6 @@ def _save_sum_map_variants(
     lut_positions = np.linspace(0.0, 100.0, 256, dtype=np.float32)
     shared_lut_colors = _interpolate_percentile_colors(lut_positions, color_stops, quantile_positions)
 
-    if persist_cache:
-        _persist_square_map_data(
-            output_dir=output_dir,
-            palette_list=palette,
-            base_indices=base_indices,
-            square_mean_map=square_mean_map,
-            weighted_map=weighted_map,
-            calc_mask=calc_mask,
-            weighted_mask=weighted_mask,
-            grade_counts=grade_counts,
-            invalid_mask=invalid_mask,
-            idx_8_mask=idx_8_mask,
-            image_count=image_count,
-            color_scheme=settings.scheme,
-            colors=resolved_colors,
-        )
-
     display_suffix = f" [{name_suffix.lstrip('_')}]" if name_suffix else ""
     ext = _image_ext()
     variants = [
@@ -1795,6 +1785,25 @@ def _save_sum_map_variants(
                 "display_name": display_name,
                 "filename": actual_path.name,
             })
+
+    # 🔥 NPZ persist를 render/save 완료 후 실행 (GIL 경쟁 방지)
+    if persist_cache:
+        _persist_square_map_data(
+            output_dir=output_dir,
+            palette_list=palette,
+            base_indices=base_indices,
+            square_mean_map=square_mean_map,
+            weighted_map=weighted_map,
+            calc_mask=calc_mask,
+            weighted_mask=weighted_mask,
+            grade_counts=grade_counts,
+            invalid_mask=invalid_mask,
+            idx_8_mask=idx_8_mask,
+            image_count=image_count,
+            color_scheme=settings.scheme,
+            colors=resolved_colors,
+        )
+
     return outputs
 
 
@@ -2020,28 +2029,35 @@ def create_composite_heatmaps(
     # 공유 palette array for sum map 렌더링 (개인색 적용)
     _palette_rgb = np.array(palette_bytes, dtype=np.uint8).reshape(256, 3) if palette_bytes else None
 
+    # 🔥 사전 계산: 각 grade의 최종 마스크 (invalid 제외, chip_inner만)
+    _heatmap_masks = []
+    for idx in range(8):
+        m = grade_presence[idx].copy()
+        if invalid_mask_bool is not None:
+            m &= ~invalid_mask_bool
+        m &= chip_inner_mask
+        _heatmap_masks.append(m)
+
+    # 🔥 공유 palette bytes (default_palette_bytes → raw bytes)
+    _pal_bytes_768 = bytes(default_palette_bytes[:768]) if len(default_palette_bytes) >= 768 else bytes(default_palette_bytes)
+
     def _save_heatmap_task(idx: int) -> Optional[Dict[str, Any]]:
         t_hm = time.perf_counter()
-        result = base_indices.copy()
-        presence_mask = grade_presence[idx].copy()
-        if invalid_mask_bool is not None:
-            presence_mask &= ~invalid_mask_bool
-        presence_mask &= chip_inner_mask
-        result[presence_mask] = idx  # 해당 grade 포인트 = grade 색
-        # 🔥 palette PNG로 저장 (인덱스 보존 → thumbnail의 personalized=true로 개인색 적용)
+        presence_mask = _heatmap_masks[idx]
+        # np.where로 copy 없이 결과 생성 (47MB copy 제거)
+        result = np.where(presence_mask, np.uint8(idx), base_indices)
         heatmap_path = output_dir / f"Grade_{idx}.png"
 
         heatmap_img = Image.fromarray(result, mode='P')
         heatmap_img.putpalette(default_palette_bytes)
         tmp_path = heatmap_path.with_suffix(".png.tmp")
-        heatmap_img.save(tmp_path, format='PNG', compress_level=1)
+        heatmap_img.save(tmp_path, format='PNG', compress_level=0)
         try:
             tmp_path.replace(heatmap_path)
         except Exception:
             if heatmap_path.exists():
                 heatmap_path.unlink()
             tmp_path.rename(heatmap_path)
-        actual_path = heatmap_path
         rel_path = heatmap_path.relative_to(IMAGES_ROOT).as_posix()
         total_pixels = width * height
         pixel_count = int(np.count_nonzero(presence_mask))
@@ -2056,32 +2072,39 @@ def create_composite_heatmaps(
             "heatmap_time": heatmap_time,
         }
 
-    # heatmaps(8장) 병렬 저장 (turbojpeg GIL 해제)
+    # 🔥 heatmaps(8장) + sum_maps(2장) 동시 실행 (I/O 겹침 최대화)
     valid_indices = [idx for idx in indices if idx < 8]
-    with ThreadPoolExecutor(max_workers=min(len(valid_indices), 8)) as hm_pool:
-        hm_futures = [hm_pool.submit(_save_heatmap_task, idx) for idx in valid_indices]
+    sum_map_entries: List[Dict[str, str]] = []
+    sum_map_rel_path = None
+
+    with ThreadPoolExecutor(max_workers=min(len(valid_indices), 8) + 1) as pool:
+        # heatmap 작업 제출
+        hm_futures = [pool.submit(_save_heatmap_task, idx) for idx in valid_indices]
+
+        # sum map 작업도 같은 풀에 제출 (heatmap과 동시 실행)
+        sum_future = None
+        if create_sum:
+            sum_future = pool.submit(
+                _save_sum_map_variants,
+                None, output_dir, palette_bytes,
+                invalid_mask, base_indices, idx_8_13_only, scheme,
+                "", True, grade_counts, chip_inner_mask, None, processed_count,
+            )
+
+        # heatmap 결과 수집
         for future in hm_futures:
             res = future.result()
             if res:
                 heatmap_times.append(res.pop("heatmap_time"))
                 heatmaps.append(res)
-    _mark("save_heatmaps", t)
 
-    # sum_maps(2장) 렌더+저장 (순차 — GIL 경쟁 방지)
-    sum_map_entries: List[Dict[str, str]] = []
-    sum_map_rel_path = None
-    if create_sum:
-        t = time.perf_counter()
-        sum_map_entries = _save_sum_map_variants(
-            None, output_dir, palette_bytes,
-            invalid_mask=invalid_mask, base_indices=base_indices,
-            idx_8_mask=idx_8_13_only, scheme=scheme,
-            grade_counts=grade_counts, only_low_mask=chip_inner_mask,
-            image_count=processed_count,
-        )
-        _mark("save_sum_maps", t)
-        if sum_map_entries:
-            sum_map_rel_path = sum_map_entries[0]["path"]
+        # sum map 결과 수집
+        if sum_future:
+            sum_map_entries = sum_future.result()
+            if sum_map_entries:
+                sum_map_rel_path = sum_map_entries[0]["path"]
+
+    _mark("save_heatmaps_and_sum_maps", t)
 
     # 첫 번째 이미지의 positions.json을 composite 결과에 맞게 복사
     composite_image_filenames = []
@@ -2108,14 +2131,12 @@ def create_composite_heatmaps(
 
     # 시간별 분절 로그 출력
     print(f"\n[COMPOSITE] Timing breakdown (streaming):")
-    print(f"  - prepare_output_dir:  {timings.get('prepare_output_dir', 0):.3f}s")
-    print(f"  - load_and_accumulate: {timings.get('load_and_accumulate', 0):.3f}s")
-    print(f"  - positions_lookup:    {timings.get('positions_lookup', 0):.3f}s")
-    print(f"  - mask_and_base:       {timings.get('mask_and_base_setup', 0):.3f}s")
-    print(f"  - save_heatmaps:       {timings.get('save_heatmaps', 0):.3f}s")
-    if create_sum:
-        print(f"  - save_sum_maps:       {timings.get('save_sum_maps', 0):.3f}s")
-    print(f"  - total:               {total_time:.3f}s ({processed_count} images)\n")
+    print(f"  - prepare_output_dir:        {timings.get('prepare_output_dir', 0):.3f}s")
+    print(f"  - load_and_accumulate:       {timings.get('load_and_accumulate', 0):.3f}s")
+    print(f"  - positions_lookup:          {timings.get('positions_lookup', 0):.3f}s")
+    print(f"  - mask_and_base:             {timings.get('mask_and_base_setup', 0):.3f}s")
+    print(f"  - save_heatmaps+sum_maps:    {timings.get('save_heatmaps_and_sum_maps', 0):.3f}s")
+    print(f"  - total:                     {total_time:.3f}s ({processed_count} images)\n")
 
     result = {
         "output_dir": output_dir.relative_to(IMAGES_ROOT).as_posix(),

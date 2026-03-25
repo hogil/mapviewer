@@ -13117,8 +13117,7 @@ class WaferMapViewer {
             }
 
             const viewControls = document.querySelector('.view-controls');
-
-            if (viewControls) {
+            if (viewControls && !this.gridMode) {
                 viewControls.style.display = 'flex';
             }
 
@@ -13453,13 +13452,15 @@ class WaferMapViewer {
                 }
                 
                 // 🔥 이미지가 표시되어 있을 때는 view-controls 패널이 보이도록 보장
-                if (this.currentImage && !this.gridMode) {
+                // (비동기 콜백이므로 그리드 복귀 후 실행될 수 있어 viewerContainer 클래스도 체크)
+                if (this.currentImage && !this.gridMode &&
+                    this.dom?.viewerContainer?.classList.contains('single-image-mode')) {
                     const viewControls = document.querySelector('.view-controls');
                     if (viewControls) {
                         viewControls.style.display = 'flex';
                     }
                 }
-                
+
                 this.prepareMinimapPreview(bitmap).then(() => {
                     if (this.dom?.minimapContainer?.offsetWidth) {
                         requestAnimationFrame(() => this.updateMinimap());
@@ -13538,7 +13539,9 @@ class WaferMapViewer {
                 }
 
                 // 🔥 이미지가 표시되어 있을 때는 view-controls 패널이 보이도록 보장
-                if (this.currentImage && !this.gridMode) {
+                // (비동기 콜백이므로 그리드 복귀 후 실행될 수 있어 viewerContainer 클래스도 체크)
+                if (this.currentImage && !this.gridMode &&
+                    this.dom?.viewerContainer?.classList.contains('single-image-mode')) {
                     const viewControls = document.querySelector('.view-controls');
                     if (viewControls) {
                         viewControls.style.display = 'flex';
@@ -18224,6 +18227,10 @@ class WaferMapViewer {
         if (this.dom?.overlayCanvas) {
             this.dom.overlayCanvas.style.display = 'none';
         }
+
+        // view-controls (줌 패널) 숨기기
+        const viewControls = document.querySelector('.view-controls');
+        if (viewControls) viewControls.style.display = 'none';
 
         // 뷰어 컨테이너 모드 클래스 정리
         if (this.dom?.viewerContainer) {
