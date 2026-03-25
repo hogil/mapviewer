@@ -1360,14 +1360,23 @@ export class ThumbnailNavigator {
             // 🔥 Measure overlay 모드 판별 후 적절한 URL 사용
             let newUrl;
             const v = this.viewer;
-            const isMeasure = v && (v.isMeasureGradientMode()) && v._ratioActiveItemKey;
-            if (isMeasure) {
-                const loginId = v.getCurrentLoginId();
-                const gf = v.selectedGradientRanges?.size > 0
-                    ? Array.from(v.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
-                newUrl = `/api/measure-thumb?path=${encodeURIComponent(imagePath)}&field=${v.overlayMode}&key=${encodeURIComponent(v._ratioActiveItemKey)}&size=256&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
+            // 🔥 다중 Measure: _gridMeasureMap에서 인덱스별 measure item 참조
+            const measureItem = v?._gridMeasureMap ? v._gridMeasureMap[i] : null;
+            if (measureItem && v._buildMeasureThumbUrl) {
+                newUrl = v._buildMeasureThumbUrl(imagePath, measureItem, cacheSuffix);
+                newUrl = newUrl.replace('size=512', 'size=256');
             } else {
-                newUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}${cacheSuffix}`;
+                const isMeasure = v && (v.isMeasureGradientMode()) && v._ratioActiveItemKey;
+                if (isMeasure) {
+                    const loginId = v.getCurrentLoginId();
+                    const gf = v.selectedGradientRanges?.size > 0
+                        ? Array.from(v.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
+                    newUrl = `/api/measure-thumb?path=${encodeURIComponent(imagePath)}&field=${v.overlayMode}&key=${encodeURIComponent(v._ratioActiveItemKey)}&size=256&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
+                } else if (v && v.overlayMode === 'bin') {
+                    newUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}&bin_overlay=1${cacheSuffix}`;
+                } else {
+                    newUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}${personalizedParams}${cacheSuffix}`;
+                }
             }
             const distance = Math.abs(i - this.currentImageIndex);
 

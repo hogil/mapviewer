@@ -24192,14 +24192,31 @@ class WaferMapViewer {
         const gf = this.selectedGradientRanges.size > 0
             ? Array.from(this.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
 
+        // 🔥 다중 Measure용 순수 파라미터: 전역 overlayMode가 아닌 measureItem.type에 따라 결정
+        // getPersonalizedParams()는 전역 overlayMode 기반으로 bin_overlay/measure_overlay를 추가하므로
+        // 다중 Measure에서는 사용하지 않고 색상 스킴만 추출
+        const buildBaseParams = () => {
+            const parts = [];
+            if (this.personalizedColorEnabled) {
+                const scheme = this.getActivePersonalizedScheme();
+                parts.push(`personalized=true`);
+                parts.push(`scheme=${encodeURIComponent(scheme)}`);
+                if (this._personalizedColorCacheBuster) {
+                    parts.push(`_t=${this._personalizedColorCacheBuster}`);
+                }
+            }
+            if (this.selectedGrades.size > 0) {
+                parts.push(`grade_filter=${Array.from(this.selectedGrades).sort((a,b)=>a-b).join(',')}`);
+            }
+            return parts.length > 0 ? '&' + parts.join('&') : '';
+        };
+
         // failbit/bin만 특수 경로, 나머지는 모두 measure-thumb gradient
         if (measureItem.type === 'failbit' || measureItem.type === 'composite') {
-            return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${this.getPersonalizedParams()}${cacheSuffix}`;
+            return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${buildBaseParams()}${cacheSuffix}`;
         }
         if (measureItem.type === 'bin') {
-            const pp = this.getPersonalizedParams();
-            const extra = pp.indexOf('bin_overlay=1') < 0 ? '&bin_overlay=1' : '';
-            return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${pp}${extra}${cacheSuffix}`;
+            return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${buildBaseParams()}&bin_overlay=1${cacheSuffix}`;
         }
         // gradient measure (f, q, 향후 추가 모드 전부)
         return `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${measureItem.type}&key=${encodeURIComponent(measureItem.key)}&size=512&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
@@ -26812,15 +26829,19 @@ class WaferMapViewer {
         for (const lotId of sortedLotIds) {
             const lotImages = lotMap.get(lotId);
 
-            // 🔥 LOT 내부 이미지 정렬: 현재 정렬 키 반영
-            const sortedPaths = this._sortGridImages(lotImages.map(item => item.path), sortKey);
-            // sortedPaths 순서에 맞게 lotImages 재배열
-            const pathToItem = new Map(lotImages.map(item => [item.path, item]));
-            lotImages.length = 0;
-            sortedPaths.forEach(p => {
-                const item = pathToItem.get(p);
-                if (item) lotImages.push(item);
-            });
+            // 🔥 LOT 내부 이미지 정렬: 다중 Measure 확장 모드에서는 건너뛰기
+            // (동일 경로가 여러 measure 타입으로 반복되어 pathToItem Map이 마지막 값만 유지)
+            const isMultiMeasure = this._measureCheckedItems?.length > 1 && this._gridMeasureMap;
+            if (!isMultiMeasure) {
+                const sortedPaths = this._sortGridImages(lotImages.map(item => item.path), sortKey);
+                // sortedPaths 순서에 맞게 lotImages 재배열
+                const pathToItem = new Map(lotImages.map(item => [item.path, item]));
+                lotImages.length = 0;
+                sortedPaths.forEach(p => {
+                    const item = pathToItem.get(p);
+                    if (item) lotImages.push(item);
+                });
+            }
 
             groups.push({
                 lotName: lotId,
@@ -27016,10 +27037,18 @@ class WaferMapViewer {
         this.currentGridImages = sortedImages;
         if (!this.gridSelectedIdxs) this.gridSelectedIdxs = [];
 
-        // 🔥 Measure _gridMeasureMap: showGrid에서 이미 설정된 경우 유지, 아니면 단일 measure만 재설정
+        // 🔥 Measure _gridMeasureMap: LOT 정렬로 인덱스가 변경되었으므로 재매핑
         const mcItems = this._measureCheckedItems;
         if (mcItems && mcItems.length > 1 && this._gridMeasureMap?.length === sortedImages.length) {
-            // 다중 measure: showGrid에서 이미 확장+매핑 완료, 그대로 유지
+            // 🔥 LOT 정렬이 이미지 순서를 변경했으므로 _gridMeasureMap도 재매핑
+            const origMap = [...this._gridMeasureMap];
+            const newMap = [];
+            this.lotGroups.forEach(lotGroup => {
+                lotGroup.originalIndices.forEach(origIdx => {
+                    newMap.push(origMap[origIdx]);
+                });
+            });
+            this._gridMeasureMap = newMap;
         } else if (mcItems && mcItems.length === 1) {
             this._gridMeasureMap = sortedImages.map(() => mcItems[0]);
         } else if (!mcItems || mcItems.length === 0) {
