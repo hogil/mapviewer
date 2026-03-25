@@ -21838,6 +21838,15 @@ class WaferMapViewer {
         
         // ✅ Step 6: 상태 완전 초기화
         this.gridViewSaveState = null;
+
+        // ✅ Step 7: 그리드 모드이면 캔버스/단일뷰 잔재 강제 정리
+        if (this.gridMode) {
+            if (this.dom?.imageCanvas) this.dom.imageCanvas.style.display = 'none';
+            if (this.dom?.overlayCanvas) this.dom.overlayCanvas.style.display = 'none';
+            const _g = document.getElementById('image-grid');
+            const _sw = _g?.closest('.grid-scroll-wrapper') || _g?.parentElement;
+            if (_sw) _sw.style.display = '';
+        }
     }
     
     /**
