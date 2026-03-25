@@ -19468,9 +19468,13 @@ class WaferMapViewer {
             scrollWrapper.style.display = 'none';
         }
         this.dom.viewerContainer.classList.remove('grid-mode');
-        this.dom.imageCanvas.style.display = 'block';
-        this.dom.overlayCanvas.style.display = 'block';
-        this.dom.minimapContainer.style.display = 'block';
+        // 단일뷰 전환 시에만 canvas 표시 (gridMode가 false일 때)
+        // 탭 전환 등에서 hideGrid가 호출될 때는 canvas를 보이지 않음
+        if (!this.gridMode) {
+            this.dom.imageCanvas.style.display = 'block';
+            this.dom.overlayCanvas.style.display = 'block';
+            this.dom.minimapContainer.style.display = 'block';
+        }
         document.body.classList.remove('grid-mode-active');
 
         // 선택된 웨이퍼 목록 숨기기
