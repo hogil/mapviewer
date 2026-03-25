@@ -378,6 +378,7 @@ def _render(
     gradient_filter: Optional[Set[int]] = None,
     bin_filter: Optional[Set[str]] = None,
     border_color: Optional[Tuple[int, int, int]] = None,
+    scheme: Optional[str] = None,
 ) -> Image.Image:
     """
     PIL ImageDraw 기반 고속 렌더링 — numpy 143MB 배열 제거.
@@ -444,7 +445,7 @@ def _render(
             abs_to_bin[key] = _normalize_bin(c.get("b"))
 
     # PIL Image 직접 생성 (배경색 = 개인색)
-    bg_rgb = _resolve_scheme_background_rgb(None)
+    bg_rgb = _resolve_scheme_background_rgb(scheme)
     img = Image.new("RGB", (w, h), bg_rgb)
     draw = ImageDraw.Draw(img)
 
@@ -680,7 +681,7 @@ def create_measure_data_only(
 
     # 6. 칩별 결과 데이터
     border_rgb = _get_normal_border_rgb(resolved)
-    bg_rgb = _resolve_scheme_background_rgb(None)
+    bg_rgb = _resolve_scheme_background_rgb(resolved)
     chips_data = []
     for (xa, ya), pct in pct_map.items():
         color = _interpolate_color(pct, stops)
@@ -824,7 +825,7 @@ def create_measure_composite(
 
     # 7. 렌더링
     border_rgb = _get_normal_border_rgb(resolved)
-    result_img = _render(base_path, base_pos, pct_map, stops, value_map=value_map, border_color=border_rgb)
+    result_img = _render(base_path, base_pos, pct_map, stops, value_map=value_map, border_color=border_rgb, scheme=resolved)
 
     # 8. 저장
     if mode == "bin":
@@ -954,6 +955,7 @@ def recolor_measure_composite(
         gradient_filter=gf_set,
         bin_filter=bf_set,
         border_color=border_rgb,
+        scheme=resolved,
     )
     _save_image_with_backend(result_img, target)
 
