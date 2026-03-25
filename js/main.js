@@ -9096,7 +9096,7 @@ class WaferMapViewer {
 
     _renderMcContextList(list, keys) {
         // Context menu: 각 섹션 20개 제한
-        this._renderMcList(list, keys, { maxPerSection: 10 });
+        this._renderMcList(list, keys);
     }
 
     /**
@@ -9127,8 +9127,7 @@ class WaferMapViewer {
             });
     }
 
-    _renderMcList(list, keys, options = {}) {
-        const maxPerSection = options.maxPerSection || Infinity;
+    _renderMcList(list, keys) {
         const panel = list.closest('.failbit-panel') || list.parentElement;
 
         // ── 1) 완전 초기화: 이전 렌더링 잔재 모두 제거 ──
@@ -9237,27 +9236,40 @@ class WaferMapViewer {
             }
         }
 
-        // FBT
+        // FBT (전체 표시 — 스크롤+검색으로 탐색)
         if (keys.f.length > 0) {
-            const fShow = keys.f.slice(0, maxPerSection);
             const header = document.createElement('div');
             header.className = 'failbit-section';
-            header.textContent = maxPerSection < keys.f.length ? `FBT (${keys.f.length}개 중 ${fShow.length}개)` : 'FBT';
+            header.textContent = `FBT (${keys.f.length})`;
             list.appendChild(header);
-            for (const k of fShow) {
+            for (const k of keys.f) {
                 list.appendChild(makeItem(`FBT${k}`, 'f', k, null));
             }
         }
 
-        // QVL
+        // QVL (전체 표시)
         if (keys.q.length > 0) {
-            const qShow = keys.q.slice(0, maxPerSection);
             const header = document.createElement('div');
             header.className = 'failbit-section';
-            header.textContent = maxPerSection < keys.q.length ? `QVL (${keys.q.length}개 중 ${qShow.length}개)` : 'QVL';
+            header.textContent = `QVL (${keys.q.length})`;
             list.appendChild(header);
-            for (const k of qShow) {
+            for (const k of keys.q) {
                 list.appendChild(makeItem(`QVL${k}`, 'q', k, null));
+            }
+        }
+
+        // 동적 모드 키 (향후 추가 모드 자동 표시)
+        if (this._dynamicModeKeys) {
+            for (const [mode, modeKeys] of Object.entries(this._dynamicModeKeys)) {
+                if (modeKeys.length > 0) {
+                    const header = document.createElement('div');
+                    header.className = 'failbit-section';
+                    header.textContent = `${mode.toUpperCase()} (${modeKeys.length})`;
+                    list.appendChild(header);
+                    for (const k of modeKeys) {
+                        list.appendChild(makeItem(`${mode.toUpperCase()}${k}`, mode, k, null));
+                    }
+                }
             }
         }
 
