@@ -129,11 +129,15 @@ export class ColorSchemeEditor {
         this.compositeTableBody = null;
         this.compositeErrorEl = null;
         this.originalCompositeData = null;
+        this.compositeBackgroundRow = null;
+        this._originalCompositeBg = '#CCCCCC';
         // Measure tab state
         this.measureRows = [];
         this.measureTableBody = null;
         this.measureErrorEl = null;
         this.originalMeasureData = null;
+        this.measureBackgroundRow = null;
+        this._originalMeasureBg = '#CCCCCC';
         // Backward compat aliases
         this.ratioRows = this.compositeRows;
         this.ratioTableBody = null;
@@ -520,28 +524,17 @@ export class ColorSchemeEditor {
         if (!this.currentSchemeName) {
             return;
         }
-
-        const canonicalPreviewName = `__preview_${this.currentSchemeName}`;
-        const previewAliases = [
-            canonicalPreviewName,
-            `_preview_${this.currentSchemeName}`,
-            `${this.currentSchemeName}_preview`,
-        ];
-
+        // 메모리 전용 프리뷰이므로 서버 DELETE 불필요
+        // 메모리 내 __preview_ 잔여만 정리
         if (this.viewer?.colorLegends) {
+            const previewAliases = [
+                `__preview_${this.currentSchemeName}`,
+                `_preview_${this.currentSchemeName}`,
+                `${this.currentSchemeName}_preview`,
+            ];
             previewAliases.forEach((name) => {
                 delete this.viewer.colorLegends[name];
             });
-        }
-
-        try {
-            await fetch(this._withLogin(`/api/color-scheme`), {
-                method: 'DELETE',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ schemeName: canonicalPreviewName }),
-            });
-        } catch (_) {
-            // ignore cleanup failures
         }
     }
 
@@ -1248,13 +1241,15 @@ export class ColorSchemeEditor {
         if (this.activeTab === 'composite' || this.activeTab === 'ratio') {
             if (!this.originalCompositeData) return;
             const currentData = this._getCurrentGradientData('composite');
-            const hasChanges = JSON.stringify(currentData) !== JSON.stringify(this.originalCompositeData);
-            this.updateApplyButtonState(hasChanges);
+            const gradChanged = JSON.stringify(currentData) !== JSON.stringify(this.originalCompositeData);
+            const bgChanged = this._getGradientBackground('composite') !== (this._originalCompositeBg || '#CCCCCC');
+            this.updateApplyButtonState(gradChanged || bgChanged);
         } else if (this.activeTab === 'measure') {
             if (!this.originalMeasureData) return;
             const currentData = this._getCurrentGradientData('measure');
-            const hasChanges = JSON.stringify(currentData) !== JSON.stringify(this.originalMeasureData);
-            this.updateApplyButtonState(hasChanges);
+            const gradChanged = JSON.stringify(currentData) !== JSON.stringify(this.originalMeasureData);
+            const bgChanged = this._getGradientBackground('measure') !== (this._originalMeasureBg || '#CCCCCC');
+            this.updateApplyButtonState(gradChanged || bgChanged);
         } else {
             if (!this.originalSchemeData) return;
             const currentData = this.getCurrentSchemeData();
@@ -1296,43 +1291,19 @@ export class ColorSchemeEditor {
                 const schemeData = this.getCurrentSchemeData();
                 const schemeName = this.currentSchemeName;
                 if (!schemeName || !schemeData) return;
-                const tempSchemeName = `__preview_${schemeName}`;
-
-                // 1. 메모리 내 colorLegends 업데이트 (즉시 반영)
+                // 1. 메모리 내 colorLegends만 업데이트 (서버 저장 안 함 — 메모리 전용 프리뷰)
                 if (!this.viewer.colorLegends) {
                     this.viewer.colorLegends = {};
                 }
                 this.viewer.colorLegends[schemeName] = schemeData;
-                // preview scheme도 메모리에 등록해야 getPersonalizedParams() fallback이 잘 유지됨
-                this.viewer.colorLegends[tempSchemeName] = JSON.parse(JSON.stringify(schemeData));
 
-                // 2. 백엔드에 임시 scheme 저장 (프리뷰용)
-                try {
-                    // 단일 이미지 프리뷰에서는 저장-적용 순서를 보장해 레이스를 방지
-                    const previewRes = await fetch(this._withLogin(`/api/color-scheme`), {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            schemeName: tempSchemeName,
-                            schemeData: schemeData,
-                        }),
-                    });
-                    if (!previewRes.ok) {
-                        console.warn("ColorEditor: Preview scheme save failed", previewRes.status);
-                    }
-                } catch (e) {
-                    console.warn("ColorEditor: Preview scheme save failed", e);
-                }
-
-                // 3. personalizedColorCacheBuster 업데이트
+                // 2. personalizedColorCacheBuster 업데이트
                 this.viewer._personalizedColorCacheBuster = Date.now();
 
-                // 4. 임시로 currentUser를 변경하여 프리뷰 scheme 사용
+                // 3. 현재 scheme 이름으로 프리뷰 (임시 scheme 이름 불필요)
                 const originalEnabled = this.viewer.personalizedColorEnabled;
-                const originalUser = this.viewer.currentUser;
                 this.viewer.personalizedColorEnabled = true;
-                this.viewer.currentUser = tempSchemeName;
-                this.viewer._previewSchemeOverride = tempSchemeName;
+                this.viewer._previewSchemeOverride = schemeName;
 
                 // 5. 캐시 초기화
                 this.viewer.pyramidLevels = {};
@@ -1377,9 +1348,8 @@ export class ColorSchemeEditor {
                 // 7. Legend 업데이트
                 this.viewer.renderColorLegends();
 
-                // 8. 원래 설정 복원 (메모리에만, 백엔드는 유지)
+                // 7. 원래 설정 복원 (메모리에만)
                 this.viewer.personalizedColorEnabled = originalEnabled;
-                this.viewer.currentUser = originalUser;
             } catch (error) {
                 console.error("ColorEditor: Realtime preview failed", error);
             }
@@ -1770,6 +1740,7 @@ export class ColorSchemeEditor {
         const apiPath = tabType === 'measure' ? '/api/measure-colors' : '/api/composite-colors';
         const rows = tabType === 'measure' ? this.measureRows : this.compositeRows;
         const originalKey = tabType === 'measure' ? 'originalMeasureData' : 'originalCompositeData';
+        const bgOrigKey = tabType === 'measure' ? '_originalMeasureBg' : '_originalCompositeBg';
         try {
             const loginId = schemeName || this.viewer?.getCurrentLoginId?.() || this.viewer?.currentUser || '';
             const resp = await fetch(`${apiPath}?LoginId=${encodeURIComponent(loginId)}`);
@@ -1783,6 +1754,10 @@ export class ColorSchemeEditor {
                 }
                 this[originalKey] = JSON.parse(JSON.stringify(gradData));
                 this._applyGradientToRows(tabType, gradData);
+                // 배경색 로드
+                const bg = normalizeHex(data.background) || '#CCCCCC';
+                this[bgOrigKey] = bg;
+                this._setGradientBackground(tabType, bg);
                 return;
             }
         } catch (e) {
@@ -1793,6 +1768,8 @@ export class ColorSchemeEditor {
         const gradData = (legends[schemeName] || legends['default'] || {}).ratio || {};
         this[originalKey] = JSON.parse(JSON.stringify(gradData));
         this._applyGradientToRows(tabType, gradData);
+        this[bgOrigKey] = '#CCCCCC';
+        this._setGradientBackground(tabType, '#CCCCCC');
     }
 
     /** Backward compat alias */
@@ -1896,11 +1873,94 @@ export class ColorSchemeEditor {
 
             rows.push(row);
         }
+        // 🔥 배경색 행 추가
+        const bgTr = document.createElement('tr');
+        bgTr.dataset.key = 'background';
+        bgTr.style.borderTop = '2px solid #555';
+
+        const bgLabelTd = document.createElement('td');
+        bgLabelTd.className = 'color-editor-label';
+        bgLabelTd.textContent = '배경';
+        bgLabelTd.style.fontWeight = 'bold';
+
+        const bgHexTd = document.createElement('td');
+        const bgHexContainer = document.createElement('div');
+        bgHexContainer.className = 'color-editor-hex';
+        const bgHexInput = document.createElement('input');
+        bgHexInput.type = 'text';
+        bgHexInput.maxLength = 7;
+        bgHexInput.placeholder = '#RRGGBB';
+        const bgHexCellId = `${tabType}-bg-hex-${this.cellIdCounter++}`;
+        bgHexInput.dataset.cellId = bgHexCellId;
+        bgHexInput.dataset.cellType = 'hex';
+        bgHexInput.dataset.rowIndex = String(rows.length);
+        bgHexInput.dataset.tabType = tabType;
+        bgHexContainer.appendChild(bgHexInput);
+        bgHexTd.appendChild(bgHexContainer);
+
+        const bgRgbTd = document.createElement('td');
+        const bgRgbContainer = document.createElement('div');
+        bgRgbContainer.className = 'color-editor-rgb';
+        const bgRgbInputs = ['R', 'G', 'B'].map((ch, idx) => {
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.min = '0';
+            input.max = '255';
+            input.placeholder = ch;
+            const rgbCellId = `${tabType}-bg-rgb-${this.cellIdCounter++}`;
+            input.dataset.cellId = rgbCellId;
+            input.dataset.cellType = 'rgb';
+            input.dataset.channelIndex = String(idx);
+            input.dataset.rowIndex = String(rows.length);
+            input.dataset.tabType = tabType;
+            bgRgbContainer.appendChild(input);
+            return input;
+        });
+        bgRgbTd.appendChild(bgRgbContainer);
+
+        const bgPickerTd = document.createElement('td');
+        bgPickerTd.className = 'color-editor-picker';
+        const bgColorPreview = document.createElement('div');
+        bgColorPreview.className = 'color-editor-preview';
+        bgColorPreview.style.cssText = 'width:48px;height:24px;border:1px solid #444;border-radius:4px;cursor:pointer;';
+        const bgColorInput = document.createElement('input');
+        bgColorInput.type = 'color';
+        bgColorInput.value = '#CCCCCC';
+        bgColorInput.style.cssText = 'position:absolute;opacity:0;width:48px;height:24px;cursor:pointer;pointer-events:auto;top:0;left:0;';
+        const bgPickerWrapper = document.createElement('div');
+        bgPickerWrapper.style.cssText = 'position:relative;display:inline-block;';
+        bgPickerWrapper.appendChild(bgColorPreview);
+        bgPickerWrapper.appendChild(bgColorInput);
+        bgColorPreview.addEventListener('click', (e) => { e.stopPropagation(); bgColorInput.click(); });
+        bgPickerTd.appendChild(bgPickerWrapper);
+
+        bgTr.appendChild(bgLabelTd);
+        bgTr.appendChild(bgHexTd);
+        bgTr.appendChild(bgRgbTd);
+        bgTr.appendChild(bgPickerTd);
+        tbody.appendChild(bgTr);
+
+        const bgRow = { key: 'background', hexInput: bgHexInput, rgbInputs: bgRgbInputs, colorInput: bgColorInput, colorPreview: bgColorPreview };
+        bgHexInput.addEventListener('change', () => { this._syncGradientFromHex(tabType, bgRow); this.checkForChanges(); this._updateGradientPreview(tabType); });
+        bgHexInput.addEventListener('input', () => { this._clearGradientError(tabType); this.checkForChanges(); this._updateGradientPreview(tabType); });
+        bgHexInput.addEventListener('mousedown', (e) => this.handleCellMouseDown(e, bgHexCellId, 'hex'));
+        bgHexInput.addEventListener('keydown', (e) => this.handleInputKeyDown(e, bgHexCellId, 'hex'), true);
+        bgRgbInputs.forEach((input) => {
+            input.addEventListener('change', () => { this._syncGradientFromRgb(tabType, bgRow); this.checkForChanges(); this._updateGradientPreview(tabType); });
+            input.addEventListener('input', () => { this._clearGradientError(tabType); this.checkForChanges(); this._updateGradientPreview(tabType); });
+            input.addEventListener('mousedown', (e) => this.handleCellMouseDown(e, input.dataset.cellId, 'rgb'));
+            input.addEventListener('keydown', (e) => this.handleInputKeyDown(e, input.dataset.cellId, 'rgb'), true);
+        });
+        bgColorInput.addEventListener('input', () => { this._syncGradientFromPicker(tabType, bgRow); this.checkForChanges(); this._updateGradientPreview(tabType); });
+        bgColorInput.addEventListener('change', () => { this.checkForChanges(); this._updateGradientPreview(tabType); });
+
         if (tabType === 'measure') {
             this.measureRows = rows;
+            this.measureBackgroundRow = bgRow;
         } else {
             this.compositeRows = rows;
             this.ratioRows = rows; // backward compat
+            this.compositeBackgroundRow = bgRow;
         }
     }
 
@@ -1948,6 +2008,17 @@ export class ColorSchemeEditor {
         if (!hex) return;
         this._setGradientRowHex(row, hex);
         this._clearGradientError(tabType);
+    }
+
+    _setGradientBackground(tabType, hex) {
+        const bgRow = tabType === 'measure' ? this.measureBackgroundRow : this.compositeBackgroundRow;
+        if (bgRow) this._setGradientRowHex(bgRow, hex);
+    }
+
+    _getGradientBackground(tabType) {
+        const bgRow = tabType === 'measure' ? this.measureBackgroundRow : this.compositeBackgroundRow;
+        if (!bgRow) return '#CCCCCC';
+        return normalizeHex(bgRow.hexInput.value) || '#CCCCCC';
     }
 
     _getGradientErrorEl(tabType) {
@@ -2028,7 +2099,7 @@ export class ColorSchemeEditor {
             const response = await fetch(`${apiPath}?LoginId=${encodeURIComponent(loginId)}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ colors: colorsArray }),
+                body: JSON.stringify({ colors: colorsArray, background: this._getGradientBackground(tabType) }),
             });
 
             if (!response.ok) {
@@ -2039,7 +2110,9 @@ export class ColorSchemeEditor {
             const result = await response.json();
             if (result.colors) {
                 const originalKey = tabType === 'measure' ? 'originalMeasureData' : 'originalCompositeData';
+                const bgOrigKey = tabType === 'measure' ? '_originalMeasureBg' : '_originalCompositeBg';
                 this[originalKey] = JSON.parse(JSON.stringify(gradData));
+                this[bgOrigKey] = this._getGradientBackground(tabType);
                 this.updateApplyButtonState(false);
 
                 if (this.viewer) {
@@ -2094,6 +2167,7 @@ export class ColorSchemeEditor {
             defaults[`quantile${step}`] = `#FF${hex}${hex}`;
         }
         this._applyGradientToRows(tabType, defaults);
+        this._setGradientBackground(tabType, '#CCCCCC');
         this.updateApplyButtonState(true);
         this._clearGradientError(tabType);
     }
@@ -2172,6 +2246,8 @@ export class ColorSchemeEditor {
                 });
             }
             this._applyGradientToRows(tabType, gradData);
+            const bg = normalizeHex(data.background) || '#CCCCCC';
+            this._setGradientBackground(tabType, bg);
             this.updateApplyButtonState(true);
             this._clearGradientError(tabType);
             this._updateGradientPreview(tabType);

@@ -296,7 +296,7 @@ def _apply_personal_palette(
 
     # index 31 = composite map 배경색 (chip 바깥)
     # _scheme_to_palette_bytes는 인덱스 ~24까지만 반환하므로 31은 명시적으로 설정
-    background_rgb = _resolve_scheme_background_rgb(scheme)
+    background_rgb = _resolve_scheme_background_rgb(scheme, section="composite")
     palette_list[31 * 3:31 * 3 + 3] = list(background_rgb)
     return palette_list
 
@@ -643,6 +643,26 @@ if _HAS_NUMBA:
                     rgb[y, x, 2] = palette[idx, 2]
         return rgb
 
+    @njit(parallel=True, cache=True)
+    def _numba_accumulate_image(img, grade_counts, has_0_7, has_8_13, all_invalid):
+        """단일 이미지의 마스크 + grade 카운트 누적을 한 패스로 처리.
+        grade_counts (8,H,W), has_0_7 (H,W), has_8_13 (H,W), all_invalid (H,W) in-place 갱신."""
+        H, W = img.shape
+        for y in prange(H):
+            for x in range(W):
+                v = img[y, x]
+                if v < 8:
+                    grade_counts[v, y, x] += 1
+                    has_0_7[y, x] = True
+                    all_invalid[y, x] = False
+                elif v < 14:
+                    has_8_13[y, x] = True
+                    all_invalid[y, x] = False
+                else:
+                    # invalid (>=14) → grade 0으로 카운트
+                    grade_counts[0, y, x] += 1
+                    has_0_7[y, x] = True
+
     # JIT 워밍업 (서버 시작 시)
     try:
         _small = np.zeros((1, 2, 2), dtype=np.uint8)
@@ -653,13 +673,21 @@ if _HAS_NUMBA:
         _small_v = np.zeros((2, 2), dtype=np.float32)
         _small_m = np.zeros((2, 2), dtype=np.bool_)
         _numba_render_composite(_small[:1, :], _small_pal, _small_v, _small_m, _small_lut, 0.0, 1.0)
+        _small_img = np.zeros((2, 2), dtype=np.uint8)
+        _small_gc = np.zeros((8, 2, 2), dtype=np.uint32)
+        _small_h07 = np.zeros((2, 2), dtype=np.bool_)
+        _small_h813 = np.zeros((2, 2), dtype=np.bool_)
+        _small_inv = np.ones((2, 2), dtype=np.bool_)
+        _numba_accumulate_image(_small_img, _small_gc, _small_h07, _small_h813, _small_inv)
         del _small, _small_pal, _small_lut, _small_v, _small_m
+        del _small_img, _small_gc, _small_h07, _small_h813, _small_inv
     except Exception:
         pass
 else:
     _numba_count_grades_impl = None
     _numba_process_masks = None
     _numba_render_composite = None
+    _numba_accumulate_image = None
 
 
 def _count_grades_with_numba(stacked_indices: np.ndarray) -> Optional[np.ndarray]:
@@ -707,27 +735,43 @@ def _hex_to_rgb_tuple(value: str) -> Tuple[int, int, int]:
     return (r, g, b)
 
 
-def _resolve_scheme_background_rgb(scheme: Optional[str]) -> Tuple[int, int, int]:
-    """현재 개인 색 설정의 background를 Composite 배경색으로 사용한다."""
+def _resolve_scheme_background_rgb(scheme: Optional[str], section: Optional[str] = None) -> Tuple[int, int, int]:
+    """Composite/Measure 배경색 결정.
+    section별 배경 → 개인색 배경 → 기본색 순으로 탐색."""
     try:
         legends = load_color_legends()
     except Exception:
         legends = {}
 
     scheme_name = (scheme or ANONYMOUS_LOGIN_ID).strip() or ANONYMOUS_LOGIN_ID
+
+    # 1. section별 배경색 (composite/measure 탭에서 설정한 배경)
+    if section in ("composite", "measure"):
+        section_data = legends.get(section, {})
+        if isinstance(section_data, dict):
+            user_entry = section_data.get(scheme_name) or section_data.get(ANONYMOUS_LOGIN_ID)
+            if isinstance(user_entry, dict):
+                raw_bg = user_entry.get("background")
+                if raw_bg:
+                    try:
+                        return _hex_to_rgb_tuple(normalize_hex_color(str(raw_bg)))
+                    except Exception:
+                        pass
+
+    # 2. 개인색 배경 (Fail 탭에서 설정한 background)
     scheme_data = legends.get(scheme_name)
     if not isinstance(scheme_data, dict):
         scheme_data = legends.get(ANONYMOUS_LOGIN_ID)
     if not isinstance(scheme_data, dict):
         scheme_data = legends.get("default")
     if not isinstance(scheme_data, dict):
-        return (255, 255, 255)
+        return (204, 204, 204)  # #CCCCCC
 
     raw_background = scheme_data.get("background")
     try:
-        normalized = normalize_hex_color(str(raw_background or "#FFFFFF"))
+        normalized = normalize_hex_color(str(raw_background or "#CCCCCC"))
     except Exception:
-        normalized = "#FFFFFF"
+        normalized = "#CCCCCC"
     return _hex_to_rgb_tuple(normalized)
 
 
@@ -832,9 +876,30 @@ def _interpolate_percentile_colors(
 
 
 def _load_pixel_indices_vips(full_path: Path, width: int, height: int) -> Optional[np.ndarray]:
-    """pyvips를 사용한 고속 이미지 로드 (비-palette 이미지 전용).
-    palette PNG는 pyvips가 RGB로 자동 확장하여 인덱스가 깨지므로 사용 불가."""
-    return None  # palette PNG 보호: PIL 경로 사용
+    """pyvips를 사용한 고속 palette PNG 인덱스 로드.
+    pyvips는 palette PNG를 RGB로 자동 확장하므로,
+    역 팔레트 매핑 대신 PIL의 raw 인덱스 접근이 더 정확.
+    단, 비-palette 이미지(grayscale/RGB)는 pyvips로 빠르게 처리."""
+    if not _HAS_PYVIPS:
+        return None
+    try:
+        # pyvips sequential access로 고속 로드 (palette PNG는 RGB 확장됨)
+        img = _vips.Image.new_from_file(str(full_path), access='sequential')
+        if img.width != width or img.height != height:
+            img = img.resize(width / img.width, vscale=height / img.height, kernel='nearest')
+        bands = img.bands
+        if bands == 1:
+            # Grayscale → 인덱스로 변환
+            arr = np.ndarray(
+                buffer=img.write_to_memory(),
+                dtype=np.uint8,
+                shape=(img.height, img.width),
+            )
+            return arr // 32
+        # RGB/RGBA → grayscale → 인덱스 (비-palette 이미지 fallback)
+        return None
+    except Exception:
+        return None
 
 
 def _load_pixel_indices(image_rel_path: str, width: int, height: int) -> Optional[np.ndarray]:
@@ -1538,7 +1603,7 @@ def recolor_saved_sum_maps(
 
 
 def _save_sum_map_variants(
-    all_indices: np.ndarray,
+    all_indices: Optional[np.ndarray],
     output_dir: Path,
     palette_list: Optional[Sequence[int]] = None,
     invalid_mask: Optional[np.ndarray] = None,
@@ -1550,23 +1615,31 @@ def _save_sum_map_variants(
     grade_counts: Optional[np.ndarray] = None,
     only_low_mask: Optional[np.ndarray] = None,
     colors: Optional[Sequence[str]] = None,
+    image_count: Optional[int] = None,
 ) -> List[Dict[str, str]]:
     trace = _trace_enabled()
-    if all_indices.ndim != 3:
-        raise ValueError("all_indices must be (N, H, W)")
-    if all_indices.shape[0] == 0:
-        return []
+    # all_indices가 없으면 grade_counts + base_indices + image_count 필수
+    if all_indices is not None:
+        if all_indices.ndim != 3:
+            raise ValueError("all_indices must be (N, H, W)")
+        if all_indices.shape[0] == 0:
+            return []
+        _, height, width = all_indices.shape
+        if image_count is None:
+            image_count = all_indices.shape[0]
+    elif grade_counts is not None and base_indices is not None and image_count is not None:
+        height, width = base_indices.shape[:2]
+    else:
+        raise ValueError("all_indices 또는 (grade_counts + base_indices + image_count) 필요")
 
-    # all_indices는 (N, H, W) 형태이므로 height와 width 추출
-    _, height, width = all_indices.shape
-
-    image_count = all_indices.shape[0]
     if image_count == 0:
         return []
     sum_float16 = _use_sum_float16()
     float_dtype = np.float16 if sum_float16 else np.float32
 
     if grade_counts is None:
+        if all_indices is None:
+            raise ValueError("grade_counts와 all_indices 중 하나는 필수입니다")
         grade_counts = _compute_grade_counts(all_indices)
     grade_counts_float = grade_counts.astype(np.float32, copy=False)
 
@@ -1600,14 +1673,16 @@ def _save_sum_map_variants(
 
 
     if base_indices is None:
-        if _FAST_MEDIAN:
-            # Use mean instead of median for better performance (O(n) vs O(n log n)).
-            # Avoid materializing a full float32 copy of all_indices (N*H*W) to keep memory bounded.
-            mean_map = np.mean(all_indices, axis=0, dtype=np.float32)
-            base_indices = np.clip(np.rint(mean_map), 0, 13).astype(np.uint8)  # 0-13 범위
+        if all_indices is not None:
+            if _FAST_MEDIAN:
+                mean_map = np.mean(all_indices, axis=0, dtype=np.float32)
+                base_indices = np.clip(np.rint(mean_map), 0, 13).astype(np.uint8)
+            else:
+                median_map = np.median(all_indices, axis=0)
+                base_indices = np.clip(np.rint(median_map), 0, 13).astype(np.uint8)
         else:
-            median_map = np.median(all_indices, axis=0)
-            base_indices = np.clip(np.rint(median_map), 0, 13).astype(np.uint8)  # 0-13 범위
+            # all_indices 없이 grade_counts에서 최빈 grade 추정
+            base_indices = np.argmax(grade_counts, axis=0).astype(np.uint8)
         if invalid_mask is not None:
             base_indices[invalid_mask] = 31
     else:
@@ -1653,25 +1728,23 @@ def _save_sum_map_variants(
     render_workers = _RENDER_WORKERS
     save_workers = _SAVE_WORKERS
 
-    # base layer를 한 번만 계산하여 variant간 공유 (143MB 할당 1회만)
-    _shared_base_rgb = np.array(palette, dtype=np.uint8).reshape(256, 3)[base_indices]
+    # numba 사용 시 _shared_base_rgb 할당 스킵 (143MB 절약)
+    _use_numba_render = _HAS_NUMBA and _numba_render_composite is not None
+    _shared_base_rgb = None if _use_numba_render else np.array(palette, dtype=np.uint8).reshape(256, 3)[base_indices]
 
-    def _render_task(data_map, mask_arr):
-        t0 = time.perf_counter()
-        interp_time = 0.0
-        mask_points = int(mask_arr.sum())
-
-        # min=0, max=실제최대값 계산
+    # min/max 사전 계산 (render thread에서 GIL 경쟁 방지)
+    _precomputed_ranges: Dict[int, Tuple[Optional[float], Optional[float]]] = {}
+    for vi, (_, _, _, data_map, mask_arr) in enumerate(variants):
         values = data_map[mask_arr]
         if values.size > 0:
             finite = values[np.isfinite(values)]
-            if finite.size > 0:
-                v_min = 0.0
-                v_max = float(finite.max())
-            else:
-                v_min, v_max = None, None
+            _precomputed_ranges[vi] = (0.0, float(finite.max())) if finite.size > 0 else (None, None)
         else:
-            v_min, v_max = None, None
+            _precomputed_ranges[vi] = (None, None)
+
+    def _render_task(variant_idx, data_map, mask_arr):
+        t0 = time.perf_counter()
+        v_min, v_max = _precomputed_ranges[variant_idx]
 
         t_interp_start = time.perf_counter()
         img = _render_sum_map_image(
@@ -1691,7 +1764,7 @@ def _save_sum_map_variants(
 
         total_render = time.perf_counter() - t0
         return img, {
-            "mask_points": mask_points,
+            "mask_points": int(mask_arr.sum()),
             "render_time": total_render,
             "interp_time": interp_time,
         }
@@ -1704,9 +1777,9 @@ def _save_sum_map_variants(
         return actual_path, rel_path, render_stats, save_time
 
     with ThreadPoolExecutor(max_workers=render_workers) as render_pool, ThreadPoolExecutor(max_workers=save_workers) as save_pool:
-        for filename, variant_type, display_name, data_map, mask in variants:
+        for vi, (filename, variant_type, display_name, data_map, mask) in enumerate(variants):
             sum_map_path = output_dir / filename
-            render_future = render_pool.submit(_render_task, data_map, mask)
+            render_future = render_pool.submit(_render_task, vi, data_map, mask)
             save_future = save_pool.submit(_save_future, render_future, sum_map_path)
             save_futures.append((save_future, filename, variant_type, display_name))
 
@@ -1844,9 +1917,14 @@ def create_composite_heatmaps(
     if indices is None:
         indices = list(range(8))
 
-    # 1단계: 모든 raw indices 수집
-    raw_indices_list: List[np.ndarray] = []
+    # 🔥 스트리밍 누적 방식: 전체 이미지를 메모리에 올리지 않고 1-pass로 처리
+    # numba 사용 시 단일 패스로 마스크+grade 카운트 동시 처리 (2~3x 빠름)
+    grade_counts = np.zeros((8, height, width), dtype=np.uint32)
+    has_0_7 = np.zeros((height, width), dtype=np.bool_)
+    has_8_13 = np.zeros((height, width), dtype=np.bool_)
+    all_invalid = np.ones((height, width), dtype=np.bool_)
     processed_count = 0
+    _use_numba_accum = _HAS_NUMBA and _numba_accumulate_image is not None
 
     t = time.perf_counter()
     for batch_paths in _batched_paths(image_paths, batch_size):
@@ -1859,47 +1937,33 @@ def create_composite_heatmaps(
         ):
             if raw_indices is None:
                 continue
-            raw_indices_list.append(raw_indices.astype(np.uint8, copy=False))
-            processed_count += 1
-    load_time = time.perf_counter() - t
-    _mark("load_indices", t)
+            img = raw_indices.astype(np.uint8, copy=False)
 
-    if not raw_indices_list:
+            if _use_numba_accum:
+                # numba 단일 패스: 마스크 + grade 카운트 동시 처리
+                _numba_accumulate_image(img, grade_counts, has_0_7, has_8_13, all_invalid)
+            else:
+                # numpy 경로 (numba 미사용)
+                ge14 = img >= 14
+                ge8 = img >= 8
+                mid = ge8 & ~ge14
+                has_0_7 |= (~ge8) | ge14
+                has_8_13 |= mid
+                all_invalid &= ge14
+                if ge14.any():
+                    img = img.copy()
+                    img[ge14] = 0
+                for g in range(8):
+                    grade_counts[g] += (img == g)
+
+            processed_count += 1
+    _mark("load_and_accumulate", t)
+
+    if processed_count == 0:
         raise ValueError("처리할 이미지가 없습니다.")
 
-    # 2단계: 인덱스 분류 + 변환 — numba 단일 패스 (6x 빠름)
-    t = time.perf_counter()
-    stacked_raw = np.stack(raw_indices_list, axis=0)  # (N, H, W)
-    raw_indices_list.clear()
-
-    if _HAS_NUMBA and _numba_process_masks is not None:
-        stacked_indices, has_0_7, has_8_13, all_invalid = _numba_process_masks(
-            np.ascontiguousarray(stacked_raw, dtype=np.uint8)
-        )
-        idx_8_13_only = has_8_13 & ~has_0_7
-    else:
-        # numpy fallback
-        ge14 = stacked_raw >= 14
-        ge8 = stacked_raw >= 8
-        mid = ge8 & ~ge14
-        any_low = (~ge8).any(axis=0)
-        any_inv = ge14.any(axis=0)
-        has_8_13 = mid.any(axis=0)
-        has_0_7 = any_low | any_inv
-        all_invalid = ge14.all(axis=0)
-        idx_8_13_only = has_8_13 & ~has_0_7
-        stacked_raw[ge14] = 0
-        stacked_raw[:, idx_8_13_only] = 8
-        np.clip(stacked_raw, 0, 13, out=stacked_raw)
-        stacked_indices = np.ascontiguousarray(stacked_raw, dtype=np.uint8)
-        del ge14, ge8, mid
-
-    _, height, width = stacked_indices.shape
-    _mark("stack_and_masks", t)
-
-    t = time.perf_counter()
-    grade_counts = _compute_grade_counts(stacked_indices)
-    _mark("grade_counts", t)
+    idx_8_13_only = has_8_13 & ~has_0_7
+    grade_counts = grade_counts.astype(np.uint16, copy=False)
 
     # positions 기반 정보 — _count_unique_devices는 JSON 로드가 비싸므로
     # positions_source_path 탐색과 통합
@@ -2009,10 +2073,11 @@ def create_composite_heatmaps(
     if create_sum:
         t = time.perf_counter()
         sum_map_entries = _save_sum_map_variants(
-            stacked_indices, output_dir, palette_bytes,
+            None, output_dir, palette_bytes,
             invalid_mask=invalid_mask, base_indices=base_indices,
             idx_8_mask=idx_8_13_only, scheme=scheme,
             grade_counts=grade_counts, only_low_mask=chip_inner_mask,
+            image_count=processed_count,
         )
         _mark("save_sum_maps", t)
         if sum_map_entries:
@@ -2042,15 +2107,15 @@ def create_composite_heatmaps(
     timings["total"] = total_time
 
     # 시간별 분절 로그 출력
-    print(f"\n[COMPOSITE] Timing breakdown:")
-    print(f"  - prepare_output_dir: {timings.get('prepare_output_dir', 0):.3f}s")
-    print(f"  - load_indices:       {timings.get('load_indices', 0):.3f}s")
-    print(f"  - grade_counts:       {timings.get('grade_counts', 0):.3f}s")
-    print(f"  - mask_and_base:      {timings.get('mask_and_base_setup', 0):.3f}s")
-    print(f"  - save_heatmaps:      {timings.get('save_heatmaps', 0):.3f}s")
+    print(f"\n[COMPOSITE] Timing breakdown (streaming):")
+    print(f"  - prepare_output_dir:  {timings.get('prepare_output_dir', 0):.3f}s")
+    print(f"  - load_and_accumulate: {timings.get('load_and_accumulate', 0):.3f}s")
+    print(f"  - positions_lookup:    {timings.get('positions_lookup', 0):.3f}s")
+    print(f"  - mask_and_base:       {timings.get('mask_and_base_setup', 0):.3f}s")
+    print(f"  - save_heatmaps:       {timings.get('save_heatmaps', 0):.3f}s")
     if create_sum:
-        print(f"  - save_sum_maps:      {timings.get('save_sum_maps', 0):.3f}s")
-    print(f"  - total:              {total_time:.3f}s\n")
+        print(f"  - save_sum_maps:       {timings.get('save_sum_maps', 0):.3f}s")
+    print(f"  - total:               {total_time:.3f}s ({processed_count} images)\n")
 
     result = {
         "output_dir": output_dir.relative_to(IMAGES_ROOT).as_posix(),
@@ -2261,6 +2326,7 @@ def create_sum_map(
         scheme=scheme,
         grade_counts=grade_counts,
         only_low_mask=chip_inner_mask,
+        image_count=processed_count,
     )
     if not entries:
         raise RuntimeError("Sum Map 생성을 완료하지 못했습니다.")

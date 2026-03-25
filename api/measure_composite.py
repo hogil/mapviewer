@@ -445,7 +445,7 @@ def _render(
             abs_to_bin[key] = _normalize_bin(c.get("b"))
 
     # PIL Image 직접 생성 (배경색 = 개인색)
-    bg_rgb = _resolve_scheme_background_rgb(scheme)
+    bg_rgb = _resolve_scheme_background_rgb(scheme, section="measure")
     img = Image.new("RGB", (w, h), bg_rgb)
     draw = ImageDraw.Draw(img)
 
@@ -681,7 +681,7 @@ def create_measure_data_only(
 
     # 6. 칩별 결과 데이터
     border_rgb = _get_normal_border_rgb(resolved)
-    bg_rgb = _resolve_scheme_background_rgb(resolved)
+    bg_rgb = _resolve_scheme_background_rgb(resolved, section="measure")
     chips_data = []
     for (xa, ya), pct in pct_map.items():
         color = _interpolate_color(pct, stops)

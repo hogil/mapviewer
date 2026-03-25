@@ -2770,9 +2770,10 @@ async def save_composite_colors_endpoint(request: Request):
         colors = payload.get("colors")
         if not isinstance(colors, list) or not colors:
             raise HTTPException(status_code=400, detail="colors 배열이 필요합니다.")
+        background = payload.get("background")  # optional
         login_id = _current_login_id(request)
         scheme = get_user_color_scheme(login_id)
-        settings = save_composite_color_settings(colors, scheme)
+        settings = save_composite_color_settings(colors, scheme, background=background)
         return settings.to_dict()
     except HTTPException:
         raise
@@ -2831,9 +2832,10 @@ async def save_measure_colors_endpoint(request: Request):
         colors = payload.get("colors")
         if not isinstance(colors, list) or not colors:
             raise HTTPException(status_code=400, detail="colors 배열이 필요합니다.")
+        background = payload.get("background")  # optional
         login_id = _current_login_id(request)
         scheme = get_user_color_scheme(login_id)
-        settings = save_measure_color_settings(colors, scheme)
+        settings = save_measure_color_settings(colors, scheme, background=background)
 
         # 🔥 measure overlay 서버 캐시 무효화 (색상 변경 시 이전 gradient 캐시 삭제)
         try:

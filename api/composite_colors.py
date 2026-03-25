@@ -26,6 +26,9 @@ DEFAULT_COMPOSITE_COLORS: Dict[str, str] = {
 }
 
 
+DEFAULT_COMPOSITE_BACKGROUND = "#CCCCCC"
+
+
 @dataclass
 class CompositeColorSettings:
     keys: List[str]
@@ -33,6 +36,7 @@ class CompositeColorSettings:
     colors: List[str]
     default_colors: List[str]
     scheme: str
+    background: str = DEFAULT_COMPOSITE_BACKGROUND
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -41,6 +45,7 @@ class CompositeColorSettings:
             "colors": self.colors,
             "defaultColors": self.default_colors,
             "scheme": self.scheme,
+            "background": self.background,
         }
 
 
@@ -108,6 +113,7 @@ def load_composite_color_settings(scheme: Optional[str] = None) -> CompositeColo
         entry = {key: DEFAULT_COMPOSITE_COLORS[key] for key in QUANTILE_KEYS}
 
     colors = _normalize_dict(entry)
+    bg = normalize_hex_color(entry.get("background") or DEFAULT_COMPOSITE_BACKGROUND)
 
     return CompositeColorSettings(
         keys=list(QUANTILE_KEYS),
@@ -115,10 +121,15 @@ def load_composite_color_settings(scheme: Optional[str] = None) -> CompositeColo
         colors=colors,
         default_colors=[DEFAULT_COMPOSITE_COLORS[key] for key in QUANTILE_KEYS],
         scheme=scheme_key,
+        background=bg,
     )
 
 
-def save_composite_color_settings(colors: Sequence[str], scheme: Optional[str] = None) -> CompositeColorSettings:
+def save_composite_color_settings(
+    colors: Sequence[str],
+    scheme: Optional[str] = None,
+    background: Optional[str] = None,
+) -> CompositeColorSettings:
     scheme_key = (scheme or ANONYMOUS_SCHEME).strip() or ANONYMOUS_SCHEME
     normalized = _normalize_color_values(colors)
     legends = load_color_legends()
@@ -127,6 +138,9 @@ def save_composite_color_settings(colors: Sequence[str], scheme: Optional[str] =
 
     for idx, key in enumerate(QUANTILE_KEYS):
         entry[key] = normalized[idx]
+
+    if background is not None:
+        entry["background"] = normalize_hex_color(background)
 
     save_color_legends(legends)
     return load_composite_color_settings(scheme_key)
@@ -164,16 +178,22 @@ def load_measure_color_settings(scheme: Optional[str] = None) -> CompositeColorS
         return composite_settings
 
     colors = _normalize_dict(entry)
+    bg = normalize_hex_color(entry.get("background") or DEFAULT_COMPOSITE_BACKGROUND)
     return CompositeColorSettings(
         keys=list(QUANTILE_KEYS),
         quantiles=list(QUANTILE_VALUES),
         colors=colors,
         default_colors=[DEFAULT_COMPOSITE_COLORS[key] for key in QUANTILE_KEYS],
         scheme=scheme_key,
+        background=bg,
     )
 
 
-def save_measure_color_settings(colors: Sequence[str], scheme: Optional[str] = None) -> CompositeColorSettings:
+def save_measure_color_settings(
+    colors: Sequence[str],
+    scheme: Optional[str] = None,
+    background: Optional[str] = None,
+) -> CompositeColorSettings:
     scheme_key = (scheme or ANONYMOUS_SCHEME).strip() or ANONYMOUS_SCHEME
     normalized = _normalize_color_values(colors)
     legends = load_color_legends()
@@ -186,17 +206,21 @@ def save_measure_color_settings(colors: Sequence[str], scheme: Optional[str] = N
     for idx, key in enumerate(QUANTILE_KEYS):
         entry[key] = normalized[idx]
 
+    if background is not None:
+        entry["background"] = normalize_hex_color(background)
+
     save_color_legends(legends)
     return load_measure_color_settings(scheme_key)
 
 
 __all__ = [
     "CompositeColorSettings",
-    "load_composite_color_settings",
-    "save_composite_color_settings",
-    "load_measure_color_settings",
-    "save_measure_color_settings",
+    "DEFAULT_COMPOSITE_BACKGROUND",
+    "DEFAULT_COMPOSITE_COLORS",
     "QUANTILE_KEYS",
     "QUANTILE_VALUES",
-    "DEFAULT_COMPOSITE_COLORS",
+    "load_composite_color_settings",
+    "load_measure_color_settings",
+    "save_composite_color_settings",
+    "save_measure_color_settings",
 ]
