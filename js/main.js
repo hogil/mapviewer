@@ -21675,6 +21675,9 @@ class WaferMapViewer {
             }
             this._measureOverlayRendered = false;  // 🔥 그리드 복귀 시 measure 렌더 플래그 초기화
 
+            // 🔥 그리드 복귀 후 gridViewImageList 재설정 (다음 더블클릭 진입→복귀 시 빈 배열 방지)
+            this.gridViewImageList = [...imagesToShow];
+
             // 🔥 오버레이 모드(BIN/FBT/QVL) 활성 상태이면 그리드 썸네일을 현재 모드 URL로 갱신
             if (this.overlayMode && this.overlayMode !== 'multi') {
                 this.refreshGridThumbnailsWithCurrentParams();

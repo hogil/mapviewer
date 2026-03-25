@@ -2389,7 +2389,28 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 4. **핵심 검증**: FBT 항목 라벨이 `FBT9105` 형태 (Count 없음)
 5. **핵심 검증**: QVL 항목 라벨이 `QVL5000` 형태 (Count 없음)
 
-**pass 기준**: 35-1~35-11 모든 핵심 검증 통과, 3회 반복에서 JS 에러 0건, 서버 파일 생성/삭제 정상
+#### 35-12. 더블클릭 반복 그리드↔단일 전환 안정성 (3회 이상)
+1. palette_3k 폴더 로드 → 3000개 이미지 확인
+2. **3회 반복**: 더블클릭 → 단일 이미지 진입 → 더블클릭 → 그리드 복귀
+3. **핵심 검증**: 매 복귀 시 `currentGridImages.length === 3000` (이미지 사라지지 않음)
+4. **핵심 검증**: 매 복귀 시 `gridMode === true`, 그리드 DOM children > 0
+5. **핵심 검증**: 검은 화면 없음 (뷰포트 내 로드된 이미지 비율 > 50%)
+6. **핵심 검증**: `gridViewImageList.length > 0` (다음 진입을 위한 상태 보존)
+7. Composite 탭에서도 동일 테스트: com0 그리드 → 더블클릭 → com1 단일 → 더블클릭 → com0 복귀 × 3회
+
+**발견 버그 (2026-03-25)**: `exitSingleImageViewMode`에서 `gridViewImageList = []`로 초기화 후
+미복원 — 2번째 더블클릭 복귀 시 `imagesToShow`가 빈 배열 → 검은 화면.
+수정: 복귀 후 `gridViewImageList = [...imagesToShow]`로 재설정.
+
+#### 35-13. Composite 비동기 생성 + 탭 전환 안정성
+1. palette_3k 전체 선택 → Grade + FBT1000 Composite 생성 시작
+2. **즉시** page0 탭으로 전환 (생성 완료 전)
+3. 15초 대기 (서버 비동기 생성 완료)
+4. **핵심 검증**: JS 에러 없음 (alert 미발생)
+5. com0 탭으로 전환 → `isCompositeMode === true`, `images > 0`
+6. **핵심 검증**: 결과 이미지 정상 표시 (검은 화면 없음)
+
+**pass 기준**: 35-1~35-13 모든 핵심 검증 통과, 더블클릭 반복 3회 안정, 서버 파일 정상
 
 ---
 
