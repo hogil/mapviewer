@@ -3052,3 +3052,16 @@ const ms = Math.round(performance.now() - t0);
 - 40-3: ESC 시 origin 탭 복귀 + 그리드 표시
 - 40-4: 수동 탭 전환 시 검은화면 없음
 - 40-5: 3회 반복 안정성
+
+**발견된 버그 및 수정 이력 (Phase 40)**:
+1. **절대경로 버그**: `/api/files` 응답의 `item.path`가 `D:/project/data/...` 절대경로 → `loadImagesInFolderAndShowGrid`에서 상대경로 변환 추가
+2. **TDZ ReferenceError**: `exitSingleImageViewMode`에서 `saveState` 변수를 선언 전 참조 → 선언 위치 이동
+3. **ESC 복귀 미동작**: detail 탭(com1)에서 ESC 시 origin 탭(com0)으로 자동 복귀 안 됨 → `gridDetailOriginMap`으로 origin 탭 전환 + `skipApply` 옵션 추가
+4. **탭 전환 시 상태 오염**: Composite 완료 시 `switchToPage`가 현재 탭 상태를 오염 → `persistActivePageState()` 후 `activatePage(skipPersist: true)` 사용
+5. **수동 탭 전환 검은화면**: 위 절대경로 + 상태 오염 버그의 합산 결과 → 1~4 수정으로 해결
+
+**검증 시나리오 (3가지 복귀 방법 모두 검증)**:
+- **ESC 키**: com0 더블클릭 → com1 단일뷰 → ESC → com0 그리드 복원 (이미지 전체 표시)
+- **캔버스 더블클릭**: com0 더블클릭 → com1 단일뷰 → 캔버스 영역 더블클릭 → com0 그리드 복원
+- **수동 탭 클릭**: com0 더블클릭 → com1 단일뷰 → com0 탭 직접 클릭 → com0 그리드 복원 (검은화면 없음)
+- **반복 안정성**: 위 3가지를 섞어 3회 반복 → 매 라운드 이미지 수 동일, isComposite 유지

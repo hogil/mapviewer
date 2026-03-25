@@ -177,6 +177,8 @@ export class PageManager {
         }
         this.activePageId = id;
         this.renderTabs();
+        // skipApply: 페이지 상태 적용 건너뜀 (exitSingleImageViewMode에서 직접 복원할 때)
+        if (options.skipApply) return;
         const page = this.pages.find(p => p.id === id);
         if (page && typeof this.onPageActivated === 'function') {
             const maybePromise = this.onPageActivated(page);

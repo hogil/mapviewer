@@ -8667,9 +8667,10 @@ class WaferMapViewer {
 
             // 결과 반영: 항상 해당 탭으로 전환 후 렌더링
             if (result && targetPageId) {
-                // 다른 탭에 있으면 composite 탭으로 전환
+                // 다른 탭에 있으면 현재 상태 저장 후 composite 탭으로 전환
                 if (this.pageManager?.activePageId !== targetPageId) {
-                    this.pageManager?.switchToPage(targetPageId);
+                    this.persistActivePageState();
+                    this.pageManager?.activatePage(targetPageId, { skipPersist: true });
                     await new Promise(r => setTimeout(r, 300));
                 }
                 const renderingTask = {
@@ -9390,10 +9391,13 @@ class WaferMapViewer {
             const nestedResults = await Promise.all(allTasks.map(pollTask));
             const allResults = nestedResults.flat();
 
-            // Display all results in grid — 항상 해당 탭으로 전환 후 렌더링
+            // Display all results in grid — 해당 탭으로 전환 후 렌더링
             if (allResults.length && targetPageId) {
-                if (this.pageManager?.activePageId !== targetPageId) {
-                    this.pageManager?.switchToPage(targetPageId);
+                const wasOnDifferentPage = this.pageManager?.activePageId !== targetPageId;
+                if (wasOnDifferentPage) {
+                    // 현재 탭 상태 먼저 안전하게 저장 후 전환
+                    this.persistActivePageState();
+                    this.pageManager?.activatePage(targetPageId, { skipPersist: true });
                     await new Promise(r => setTimeout(r, 300));
                 }
                 this.showCompositeInlineStatus('Measure Composite 결과 표시 중...');
@@ -9502,10 +9506,11 @@ class WaferMapViewer {
                 }
             }
 
-            // Display result — 항상 해당 탭으로 전환 후 렌더링
+            // Display result — 해당 탭으로 전환 후 렌더링
             if (result && targetPageId) {
                 if (this.pageManager?.activePageId !== targetPageId) {
-                    this.pageManager?.switchToPage(targetPageId);
+                    this.persistActivePageState();
+                    this.pageManager?.activatePage(targetPageId, { skipPersist: true });
                     await new Promise(r => setTimeout(r, 300));
                 }
                 this.showCompositeInlineStatus('Measure Composite 결과 표시 중...');
@@ -21522,7 +21527,7 @@ class WaferMapViewer {
             if (currentPageId && this.gridDetailOriginMap?.has(currentPageId)) {
                 const originPageId = this.gridDetailOriginMap.get(currentPageId);
                 if (originPageId && this.pageManager?.pages?.some(p => p.id === originPageId)) {
-                    this.pageManager.activatePage(originPageId, { skipPersist: true });
+                    this.pageManager.activatePage(originPageId, { skipPersist: true, skipApply: true });
                     console.log(`🔄 [EXIT] detail 탭(${currentPageId}) → origin 탭(${originPageId})으로 복귀`);
                 }
             }
