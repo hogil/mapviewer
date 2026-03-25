@@ -3148,3 +3148,21 @@ const ms = Math.round(performance.now() - t0);
 - 41-3: mea 탭 재진입 시 overlay/버튼 완전 복원
 - 41-4: 패널 체크 상태 복원
 - 41-5: 미선택 시 현재 탭 전체 적용
+
+---
+
+## Phase 42: Measure/Composite 전체 흐름 안정성 (2개 시나리오)
+
+**목적**: Measure 생성 → 더블클릭 전환 → 탭 전환 → 폴더 전환의 전체 흐름에서 검은화면/상태 깨짐 없이 정상 동작
+
+**수정 이력 (검은화면 근본 원인 5중 방어)**:
+1. `showGrid`/`showGridByLot` 시작: canvas 강제 none (그리드 진입 시점)
+2. `restoreCachedPageView`: gridMode 시 canvas block 방지
+3. `enforceGridModeUiState`: canvas none + scroll-wrapper 표시
+4. `exitSingleImageViewMode` Step 7: 그리드 복귀 시 최종 강제 정리
+5. `applyPageState` 끝: 안전장치
+
+**시나리오 1**: 미선택 Measure → 더블클릭↔그리드 2회 → 탭매뉴얼 → 폴더전환
+**시나리오 2**: 선택 Measure → mea탭 → 더블클릭↔mea복귀 → wafer탭raw → mea복원
+
+**pass 기준**: 모든 단계 gridMode=true, scrollWrapper visible, 이미지 수 정확, 검은화면 없음
