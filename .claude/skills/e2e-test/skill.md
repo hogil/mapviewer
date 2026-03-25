@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 41개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 43개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지를 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -3166,3 +3166,82 @@ const ms = Math.round(performance.now() - t0);
 **시나리오 2**: 선택 Measure → mea탭 → 더블클릭↔mea복귀 → wafer탭raw → mea복원
 
 **pass 기준**: 모든 단계 gridMode=true, scrollWrapper visible, 이미지 수 정확, 검은화면 없음
+
+## Phase 43: Measure 드롭다운 통합 + 다중 Measure 이미지 중복 방지
+
+**목적**: Measure 드롭다운이 Composite와 동일한 _renderMcList 렌더링을 사용하는지, 다중 Measure에서 이미지 N배 증식 버그가 재발하지 않는지 검증
+
+**수정 이력**:
+1. `_buildFailbitList` → `_fetchMergedKeys` + `_renderMcList({mode:'measure'})` 패턴으로 교체 (hasFQ 크래시 해결)
+2. `_renderMeaContextList` → `_renderMcList({mode:'measure'})` 위임 (CTX_MAX=10 제거, 전수 표시)
+3. 페이지 상태 복원에서 measure 비활성 시 `_gridMeasureMap`/`_measureBaseImages` 초기화
+4. `showGrid`: `_measureBaseImages` 존재 시 원본 보존 (확장 이미지 덮어쓰기 방지)
+5. `_openMeasureTab`: `new Set()` 중복 제거 + `_measureBaseImages=null`
+6. 초기화 버튼: `_measureCheckedItems=[]`를 `showGrid` 호출 전에 실행
+
+### 테스트 절차
+
+**Step 1: 상단 Measure 드롭다운 표시 확인**
+1. palette_3k 폴더를 열어 그리드 모드 진입 (3000장)
+2. 상단 `#failbit-btn-top` 클릭
+3. 패널 표시 확인: 검색 박스, 초기화 버튼, MAP→Failbit, BIN→BIN, FBT 섹션, 적용 버튼
+4. FBT 헤더에 `(500)` 등 전체 수량 표시 확인
+5. `viewer._measureCheckedItems.length === 0` 확인
+6. 패널 닫기
+
+**Step 2: 컨텍스트 메뉴 Measure 전수 표시 확인**
+1. 그리드 첫 번째 이미지 클릭 (선택)
+2. 우클릭 → 컨텍스트 메뉴 표시
+3. "Measure 만들기" 호버 → 서브메뉴 표시
+4. 서브메뉴에 MAP, BIN, FBT 전체 수량 표시 확인 (CTX_MAX=10 제한 없음)
+5. 적용 버튼 표시 확인
+6. 컨텍스트 메뉴 닫기
+
+**Step 3: 다중 Measure 이미지 확장 — N배 증식 방지**
+1. JS로 다중 measure 시뮬레이션:
+   ```js
+   const v = viewer;
+   v._measureCheckedItems = [
+     {type:'f', key:'1000', label:'FBT1000'},
+     {type:'f', key:'1001', label:'FBT1001'},
+     {type:'f', key:'1002', label:'FBT1002'}
+   ];
+   v.overlayMode = 'multi';
+   const testImages = v.currentGridImages.slice(0, 10);
+   v._measureBaseImages = null;
+   v.showGrid(testImages, true);
+   ```
+2. 확인: `_measureBaseImages.length === 10`, `currentGridImages.length === 30`, `_gridMeasureMap.length === 30`
+3. **재호출 시 증식 방지**: `v.showGrid(v.currentGridImages, true)` 실행
+4. 확인: base=10 보존, grid=30 유지 (이전에는 30→90→270 증식)
+
+**Step 4: 초기화 후 원본 복원**
+1. `v._measureCheckedItems = []; v.overlayMode = null; v._gridMeasureMap = null;`
+2. `const base = [...v._measureBaseImages]; v._measureBaseImages = null; v.showGrid(base, true);`
+3. 확인: `_measureBaseImages.length === 10`, `currentGridImages.length === 10`, `_gridMeasureMap === null`
+
+**Step 5: 탭 전환 시 measure 상태 초기화**
+1. measure 활성 상태 설정:
+   ```js
+   v._measureCheckedItems = [{type:'f', key:'1000', label:'FBT1000'}];
+   v.overlayMode = 'f';
+   v._gridMeasureMap = v.currentGridImages.map(() => v._measureCheckedItems[0]);
+   ```
+2. measure 비활성 페이지 상태 복원 시뮬레이션:
+   ```js
+   const state = { overlayMode: null, _measureCheckedItems: [] };
+   v._measureCheckedItems = state._measureCheckedItems;
+   v.overlayMode = state.overlayMode;
+   if (!v.overlayMode && v._measureCheckedItems.length === 0) {
+     v._gridMeasureMap = null;
+     v._measureBaseImages = null;
+   }
+   ```
+3. 확인: `overlayMode === null`, `_measureCheckedItems.length === 0`, `_gridMeasureMap === null`, `_measureBaseImages === null`
+
+**pass 기준**:
+- Step 1: 드롭다운 정상 표시, FBT 전수 로드
+- Step 2: 컨텍스트 메뉴 FBT 전수 표시 (10개 제한 없음)
+- Step 3: base=10 보존, grid=30 (재호출 후에도 동일)
+- Step 4: 초기화 후 grid=10, map=null
+- Step 5: 탭 전환 후 _gridMeasureMap=null, _measureBaseImages=null

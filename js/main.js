@@ -18264,12 +18264,7 @@ class WaferMapViewer {
             this.singleImageFromGrid = false;
         }
 
-        // 🔥 Measure 다중 선택 시 LOT 모드 비활성화 (다중 measure와 LOT 그룹핑 비호환)
-        if (this._measureCheckedItems && this._measureCheckedItems.length > 1 && this.lotMode) {
-            this.lotMode = false;
-            const lotBtn = document.getElementById('lot-mode-btn') || document.querySelector('[data-action="lot-mode"]');
-            if (lotBtn) lotBtn.classList.remove('active');
-        }
+        // 🔥 Measure 다중 선택 시 LOT 모드 유지 (생성 전/후 LOT 상태 보존)
 
         // 📦 Lot 모드가 활성화되어 있으면 Lot별 그리드로 표시
         if (this.lotMode) {
