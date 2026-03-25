@@ -1900,8 +1900,8 @@ class WaferMapViewer {
                 this.originalHeight = cached.height;
                 this.currentImagePath = cached.path; // Set this too just in case
                 
-                // Show canvas
-                if (this.dom.imageCanvas) {
+                // Show canvas (단, 그리드 모드가 아닐 때만)
+                if (this.dom.imageCanvas && !this.gridMode) {
                     this.dom.imageCanvas.style.display = 'block';
                     this.dom.imageCanvas.style.width = '100%';
                     this.dom.imageCanvas.style.height = '100%';
@@ -2244,11 +2244,14 @@ class WaferMapViewer {
         }
         // 그리드 모드일 때는 모달 상태 유지 (이미 열려있으면 유지, 닫혀있으면 유지)
 
-        // 최종 안전장치: 그리드 모드인데 캔버스가 보이면 강제 숨김
-        // (restoreSavedViewState 등 복원 함수가 캔버스를 다시 보이게 하는 경우 방지)
+        // 최종 안전장치: 그리드 모드인데 단일뷰 잔재가 남아있으면 강제 정리
         if (this.gridMode && this.viewMode !== 'gridImage') {
             if (this.dom?.imageCanvas) this.dom.imageCanvas.style.display = 'none';
             if (this.dom?.overlayCanvas) this.dom.overlayCanvas.style.display = 'none';
+            const _grid = document.getElementById('image-grid');
+            const _sw = _grid?.closest('.grid-scroll-wrapper') || _grid?.parentElement;
+            if (_sw) _sw.style.display = '';
+            if (_grid) _grid.style.display = 'grid';
         }
     }
 
@@ -18251,6 +18254,14 @@ class WaferMapViewer {
             this.dom.viewerContainer.classList.remove('single-image-mode');
             this.dom.viewerContainer.classList.add('grid-mode');
         }
+
+        // 그리드 스크롤 래퍼 + 그리드 표시
+        const grid = document.getElementById('image-grid');
+        const scrollWrapper = grid?.closest('.grid-scroll-wrapper') || grid?.parentElement;
+        if (scrollWrapper) scrollWrapper.style.display = '';
+        if (grid) grid.style.display = 'grid';
+        const gridControls = document.getElementById('grid-controls');
+        if (gridControls) gridControls.style.display = '';
 
         if (this.boundSingleViewHandler) {
             document.removeEventListener('keydown', this.boundSingleViewHandler);
