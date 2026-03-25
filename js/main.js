@@ -18518,10 +18518,10 @@ class WaferMapViewer {
 
         this.showGridImmediately(sortedImages);
 
-        // 🔥 다중 Measure: FBT/QVL 배치 프리페치
-        if (mcItems && mcItems.length > 1) {
-            this._prefetchMeasureThumbBatch(this._measureBaseImages, mcItems);
-        }
+        // 🔥 다중 Measure 배치 프리페치 비활성화 (개별 measure-thumb이 정상 동작, 배치 API 500 에러 방지)
+        // if (mcItems && mcItems.length > 1) {
+        //     this._prefetchMeasureThumbBatch(this._measureBaseImages, mcItems);
+        // }
 
         // 🔥 새 그리드 진입 시 스크롤 맨 위 (콘텐츠 추가 후 리셋하여 확실히 적용)
         if (!skipSaveState) {
