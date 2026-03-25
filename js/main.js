@@ -18277,6 +18277,9 @@ class WaferMapViewer {
     }
 
     showGrid(images, skipSaveState = false) {
+        // 🔥 그리드 진입 시 캔버스 강제 숨김 (탭 전환/복귀 시 검은화면 방지)
+        if (this.dom?.imageCanvas) this.dom.imageCanvas.style.display = 'none';
+        if (this.dom?.overlayCanvas) this.dom.overlayCanvas.style.display = 'none';
         // 🔥 그리드 진입 전 잔류 상태 정리 — 단일 이미지 모드 잔존 플래그 강제 초기화
         // (반복 선택/해제/우클릭 후 폴더 재진입 시 그리드 미표시 방지)
         this._gridVisuallyHidden = false;
@@ -27032,6 +27035,10 @@ class WaferMapViewer {
      */
     showGridByLot(images) {
         if (!images || images.length === 0) return;
+
+        // 🔥 그리드 진입 시 캔버스 강제 숨김
+        if (this.dom?.imageCanvas) this.dom.imageCanvas.style.display = 'none';
+        if (this.dom?.overlayCanvas) this.dom.overlayCanvas.style.display = 'none';
 
         // 🔥 Measure 다중 선택 시 base images 저장 (showGrid와 동일)
         this._measureBaseImages = [...images];
