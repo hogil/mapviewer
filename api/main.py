@@ -7100,6 +7100,15 @@ def _generate_measure_thumbs_batch(
                     break
         item_infos.append((f"{field}:{key}", field, ki, key))
 
+    # float 변환 헬퍼 (숫자 문자열 → float, 실패 시 정규식 추출)
+    import re as _re
+    _num_re = _re.compile(r'-?\d+\.?\d*')
+    def _to_float(v):
+        try: return float(v)
+        except (ValueError, TypeError):
+            m = _num_re.search(str(v))
+            return float(m.group()) if m else None
+
     # 🔥 chips 1회 순회: 모든 item의 값을 동시 추출
     item_vals = {info[0]: [] for info in item_infos}  # result_key → [(chip_idx, value)]
     for chip_idx, chip in enumerate(chips):
