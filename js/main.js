@@ -21293,6 +21293,10 @@ class WaferMapViewer {
         const _savedSelectedBottoms = new Set(this.selectedBottoms);
         const _savedSelectedGrades = new Set(this.selectedGrades);
         const _savedSelectedGradientRanges = new Set(this.selectedGradientRanges);
+        // 🔥 다중 Measure 상태 보존 (applyPageState가 _gridMeasureMap/BaseImages를 null로 리셋)
+        const _savedGridMeasureMap = this._gridMeasureMap ? [...this._gridMeasureMap] : null;
+        const _savedMeasureCheckedItems = this._measureCheckedItems ? [...this._measureCheckedItems] : [];
+        const _savedMeasureBaseImages = this._measureBaseImages ? [...this._measureBaseImages] : null;
 
         if (this.pageManager) {
             this.persistActivePageState(savedSnapshot);
@@ -21365,6 +21369,10 @@ class WaferMapViewer {
             this._ratioActiveItemKey = _savedRatioActiveItemKey;
         }
         this.selectedGradientRanges = _savedSelectedGradientRanges;
+        // 🔥 다중 Measure 상태 복원 (Navigator가 _gridMeasureMap으로 개별 썸네일 URL 결정)
+        this._gridMeasureMap = _savedGridMeasureMap;
+        this._measureCheckedItems = _savedMeasureCheckedItems;
+        this._measureBaseImages = _savedMeasureBaseImages;
 
         if (gridImages.length) {
             // 🔥 스크롤 위치는 더블클릭 핸들러에서 이미 savedViewState.scrollTop에 저장됨
@@ -21712,7 +21720,9 @@ class WaferMapViewer {
 
             // ✅ 그리드 복귀: DOM이 살아있으면 즉시 표시, 아니면 재생성
             const existingGrid = document.getElementById('image-grid');
+            let usedFastPath = false;
             if (this._gridVisuallyHidden && existingGrid && existingGrid.children.length > 0) {
+                usedFastPath = true;
                 // 🔥 Fast path: 그리드 DOM이 그대로 남아있으므로 시각적 복원만
                 this._showGridVisual();
 
@@ -21751,19 +21761,14 @@ class WaferMapViewer {
                 }
             }
 
-            // 🔥 Measure 모드 복원: multi → overlayMode='multi', single → _gridMeasureMap 재구성
+            // 🔥 Measure 모드 복원: multi → overlayMode='multi'
+            // fast path에서는 DOM이 이미 올바른 상태이므로 _gridMeasureMap 재구성 안 함
             if (this._measureCheckedItems && this._measureCheckedItems.length > 1) {
                 this.overlayMode = 'multi';
                 this._ratioActiveItemKey = null;
-            } else if (this._measureCheckedItems && this._measureCheckedItems.length === 1) {
-                // 단일 measure: overlayMode는 이미 올바른 상태 (enterSingleImageMode에서 설정)
-                // _gridMeasureMap 재구성 (fast path에서 DOM 복원 시 필요)
-                const baseImgs = this._measureBaseImages || this.currentGridImages || [];
-                if (baseImgs.length > 0 && !this._gridMeasureMap) {
-                    this._gridMeasureMap = baseImgs.map(() => this._measureCheckedItems[0]);
-                }
             }
-            this._measureOverlayRendered = false;  // 🔥 그리드 복귀 시 measure 렌더 플래그 초기화
+            // 단일 measure: overlayMode/gridMeasureMap은 enterSingleImageMode에서 이미 설정된 상태 유지
+            this._measureOverlayRendered = false;
 
             // 🔥 그리드 복귀 후 gridViewImageList 재설정 (다음 더블클릭 진입→복귀 시 빈 배열 방지)
             // 다중 Measure 모드: 확장된 리스트가 아닌 base images를 저장 (이중 확장 방지)
@@ -21772,7 +21777,8 @@ class WaferMapViewer {
                 : [...imagesToShow];
 
             // 🔥 오버레이 모드(BIN/FBT/QVL) 활성 상태이면 그리드 썸네일을 현재 모드 URL로 갱신
-            if (this.overlayMode && this.overlayMode !== 'multi') {
+            // fast path(DOM 보존)에서는 이미 올바른 URL이므로 건너뜀 — slow path에서만 갱신
+            if (!usedFastPath && this.overlayMode && this.overlayMode !== 'multi') {
                 this.refreshGridThumbnailsWithCurrentParams();
             }
 
