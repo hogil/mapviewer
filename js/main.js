@@ -2166,6 +2166,12 @@ class WaferMapViewer {
             this.selectedGrades = new Set(state.selectedGrades || []);
             this.selectedGradientRanges = new Set(state.selectedGradientRanges || []);
             this.borderNormalize = state.borderNormalize || false;
+            // 🔥 Measure 비활성 상태이면 _gridMeasureMap / _measureBaseImages 초기화
+            // (탭 전환 시 이전 탭의 stale 데이터가 남아 measure 썸네일이 표시되는 문제 방지)
+            if (!this.overlayMode && this._measureCheckedItems.length === 0) {
+                this._gridMeasureMap = null;
+                this._measureBaseImages = null;
+            }
             // Measure 버튼 UI 복원
             this.updateFailbitButtonUI();
         }
@@ -8972,106 +8978,9 @@ class WaferMapViewer {
     }
 
     _renderMeaContextList(list, fKeys, qKeys, selectedImages) {
-        // 기존 적용 버튼 제거
-        const oldBtnWrap = list.parentElement?.querySelector('.mea-btn-wrap');
-        if (oldBtnWrap) oldBtnWrap.remove();
-        list.innerHTML = '';
-        const padKey = (k) => String(k).replace(/^\d+$/, m => m.padStart(4, '0'));
-        const checkedItems = [];
-
-        // 상단 고정 영역
-        this._ensurePinnedSection(list);
-
-        // 적용 버튼
-        const btnWrap = document.createElement('div');
-        btnWrap.className = 'mea-btn-wrap';
-        btnWrap.style.cssText = 'padding:6px 8px;position:sticky;bottom:0;background:#2a2a2a;';
-        const applyBtn = document.createElement('button');
-        applyBtn.className = 'measure-apply-btn';
-        applyBtn.textContent = '적용';
-        applyBtn.style.cssText = 'width:100%;padding:6px 0;background:#1976d2;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:600;';
-        applyBtn.addEventListener('click', () => {
-            this.hideContextMenu();
-            if (checkedItems.length === 0) return;
-            const first = checkedItems[0];
-            this.overlayMode = first.type;
-            this._ratioActiveItemKey = first.key;
-            this._measureCheckedItems = [...checkedItems];
-            this._openMeasureTab();
-        });
-        const updateBtn = () => {
-            applyBtn.textContent = checkedItems.length > 0 ? `적용 (${checkedItems.length})` : '적용';
-        };
-
-        // 체크박스 아이템
-        const makeItem = (label, type, key) => {
-            const item = document.createElement('div');
-            item.className = 'failbit-item';
-            item.dataset.label = label;
-            item.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;';
-
-            const cb = document.createElement('input');
-            cb.type = 'checkbox';
-            cb.style.cssText = 'margin:0;cursor:pointer;flex-shrink:0;';
-            item.appendChild(cb);
-
-            const span = document.createElement('span');
-            span.textContent = label;
-            span.style.flex = '1';
-            item.appendChild(span);
-
-            const entry = { type, key, label };
-            item.addEventListener('click', (e) => {
-                if (e.target === cb) return;
-                cb.checked = !cb.checked;
-                cb.dispatchEvent(new Event('change'));
-            });
-            cb.addEventListener('change', () => {
-                if (cb.checked) {
-                    checkedItems.push(entry);
-                    this._pinItem(list, item);
-                } else {
-                    const idx = checkedItems.findIndex(x => x.type === type && x.key === key);
-                    if (idx >= 0) checkedItems.splice(idx, 1);
-                    this._unpinItem(list, item);
-                }
-                updateBtn();
-            });
-            return item;
-        };
-
-        // MAP 섹션: Failbit
-        const mapHeader = document.createElement('div');
-        mapHeader.className = 'failbit-section';
-        mapHeader.textContent = 'MAP';
-        list.appendChild(mapHeader);
-        list.appendChild(makeItem('Failbit', 'failbit', 'failbit'));
-
-        // BIN 섹션
-        const binHeader = document.createElement('div');
-        binHeader.className = 'failbit-section';
-        binHeader.textContent = 'BIN';
-        list.appendChild(binHeader);
-        list.appendChild(makeItem('BIN', 'bin', 'bin'));
-
-        const CTX_MAX = 10; // 컨텍스트 메뉴 항목 수 제한
-        if (fKeys.length > 0) {
-            const fHeader = document.createElement('div');
-            fHeader.className = 'failbit-section';
-            fHeader.textContent = `FBT (${fKeys.length}개 중 ${Math.min(CTX_MAX, fKeys.length)}개)`;
-            list.appendChild(fHeader);
-            for (const k of fKeys.slice(0, CTX_MAX)) list.appendChild(makeItem(`FBT${padKey(k)}`, 'f', k));
-        }
-        if (qKeys.length > 0) {
-            const qHeader = document.createElement('div');
-            qHeader.className = 'failbit-section';
-            qHeader.textContent = `QVL (${qKeys.length}개 중 ${Math.min(CTX_MAX, qKeys.length)}개)`;
-            list.appendChild(qHeader);
-            for (const k of qKeys.slice(0, CTX_MAX)) list.appendChild(makeItem(`QVL${padKey(k)}`, 'q', k));
-        }
-
-        btnWrap.appendChild(applyBtn);
-        list.parentElement.appendChild(btnWrap);
+        // Composite 컨텍스트 메뉴와 동일하게 _renderMcList로 통합 (전수 표시, CTX_MAX 제거)
+        const keys = { f: fKeys || [], q: qKeys || [], bin: [] };
+        this._renderMcList(list, keys, { mode: 'measure' });
     }
 
     _buildMcContextSubmenu() {
@@ -9137,14 +9046,18 @@ class WaferMapViewer {
             });
     }
 
-    _renderMcList(list, keys) {
+    _renderMcList(list, keys, options = {}) {
+        const isMeasure = options.mode === 'measure';
         const panel = list.closest('.failbit-panel') || list.parentElement;
 
         // ── 1) 완전 초기화: 이전 렌더링 잔재 모두 제거 ──
         list.innerHTML = '';
-        this._mcCheckedItems = [];
-        // pinned-section, resetBar, generate-wrap 모두 제거 (깨끗한 상태에서 시작)
-        panel.querySelectorAll('.pinned-section, .mc-reset-bar, .mc-generate-wrap').forEach(el => el.remove());
+        if (isMeasure) {
+            this._measureCheckedItems = [];
+        } else {
+            this._mcCheckedItems = [];
+        }
+        panel.querySelectorAll('.pinned-section, .mc-reset-bar, .mc-generate-wrap, .measure-apply-wrap').forEach(el => el.remove());
 
         // ── 2) 상단 고정 영역 생성 ──
         const pinned = document.createElement('div');
@@ -9152,16 +9065,22 @@ class WaferMapViewer {
         panel.insertBefore(pinned, list);
 
         // ── 3) 헬퍼 ──
-        const updateGenBtn = () => {
-            const btn = panel.querySelector('.mc-generate-btn');
-            if (btn) {
-                btn.textContent = `생성 (${this._mcCheckedItems.length})`;
-                btn.disabled = this._mcCheckedItems.length === 0;
-                btn.style.opacity = this._mcCheckedItems.length === 0 ? '0.5' : '1';
+        const getChecked = () => isMeasure ? this._measureCheckedItems : this._mcCheckedItems;
+        const updateBtn = () => {
+            const sel = isMeasure ? '.measure-apply-btn' : '.mc-generate-btn';
+            const btn = panel.querySelector(sel);
+            if (!btn) return;
+            const n = getChecked().length;
+            if (isMeasure) {
+                btn.textContent = n > 0 ? `적용 (${n})` : '적용';
+            } else {
+                btn.textContent = `생성 (${n})`;
+                btn.disabled = n === 0;
+                btn.style.opacity = n === 0 ? '0.5' : '1';
             }
         };
 
-        const makeItem = (label, mode, itemKey, binType) => {
+        const makeItem = (label, itemMode, itemKey, binType) => {
             const item = document.createElement('div');
             item.className = 'failbit-item';
             item.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;';
@@ -9177,7 +9096,11 @@ class WaferMapViewer {
             span.style.flex = '1';
             item.appendChild(span);
 
-            const entry = { mode, itemKey, binType, label };
+            // Measure format: {type, key, label},  Composite format: {mode, itemKey, binType, label}
+            const entry = isMeasure
+                ? { type: itemMode === 'composite' ? 'failbit' : itemMode, key: itemKey, label }
+                : { mode: itemMode, itemKey, binType, label };
+
             item.addEventListener('click', (e) => {
                 if (e.target === cb) return;
                 cb.checked = !cb.checked;
@@ -9185,15 +9108,21 @@ class WaferMapViewer {
             });
             cb.addEventListener('change', () => {
                 if (cb.checked) {
-                    this._mcCheckedItems.push(entry);
+                    getChecked().push(entry);
                     this._pinItem(list, item);
                 } else {
-                    this._mcCheckedItems = this._mcCheckedItems.filter(
-                        x => !(x.mode === mode && x.itemKey === itemKey && x.binType === binType)
-                    );
+                    if (isMeasure) {
+                        this._measureCheckedItems = this._measureCheckedItems.filter(
+                            x => !(x.type === entry.type && x.key === entry.key)
+                        );
+                    } else {
+                        this._mcCheckedItems = this._mcCheckedItems.filter(
+                            x => !(x.mode === itemMode && x.itemKey === itemKey && x.binType === binType)
+                        );
+                    }
                     this._unpinItem(list, item);
                 }
-                updateGenBtn();
+                updateBtn();
             });
             return item;
         };
@@ -9208,6 +9137,26 @@ class WaferMapViewer {
         resetBtn.style.cssText = 'width:100%;padding:4px 0;background:transparent;color:#aaa;border:1px solid #555;border-radius:3px;cursor:pointer;font-size:12px;';
         resetBtn.addEventListener('click', (e) => {
             e.stopPropagation();
+            if (isMeasure) {
+                // Measure 전용 상태 초기화
+                // 🔥 _measureCheckedItems를 showGrid 호출 전에 먼저 비워야 다중 확장 방지
+                this._measureCheckedItems = [];
+                this.overlayMode = null;
+                this._ratioActiveItemKey = null;
+                this._gridMeasureMap = null;
+                if (this.chipAnnotator) this.chipAnnotator.setOverlayMode(null);
+                if (!this.gridMode) this.refreshThumbnailNavigatorWithCurrentParams();
+                if (this.gridMode && this._measureBaseImages?.length > 0) {
+                    const baseImages = [...this._measureBaseImages];
+                    this._measureBaseImages = null;
+                    this.currentGridImages = baseImages;
+                    this.selectedImages = baseImages;
+                    this.showGrid(baseImages, true);
+                }
+                this.selectedGradientRanges.clear();
+                this.renderColorLegends();
+                this.updateFailbitButtonUI();
+            }
             // 리스트를 완전히 다시 렌더링 (가장 깨끗한 방법)
             this._renderMcList(list, keys, options);
         });
@@ -9221,7 +9170,7 @@ class WaferMapViewer {
         }
 
         // ── 5) 항목 생성 ──
-        // MAP (Composite)
+        // MAP
         const mapHeader = document.createElement('div');
         mapHeader.className = 'failbit-section';
         mapHeader.textContent = 'MAP';
@@ -9229,7 +9178,15 @@ class WaferMapViewer {
         list.appendChild(makeItem('Failbit', 'composite', null, null));
 
         // BIN
-        if (keys.bin.length > 0) {
+        if (isMeasure) {
+            // Measure: 단일 BIN 항목
+            const binHeader = document.createElement('div');
+            binHeader.className = 'failbit-section';
+            binHeader.textContent = 'BIN';
+            list.appendChild(binHeader);
+            list.appendChild(makeItem('BIN', 'bin', null, null));
+        } else if (keys.bin && keys.bin.length > 0) {
+            // Composite: BIN 타입별 개별 항목
             const header = document.createElement('div');
             header.className = 'failbit-section';
             header.textContent = 'BIN';
@@ -9247,7 +9204,7 @@ class WaferMapViewer {
         }
 
         // FBT (전체 표시 — 스크롤+검색으로 탐색)
-        if (keys.f.length > 0) {
+        if (keys.f && keys.f.length > 0) {
             const header = document.createElement('div');
             header.className = 'failbit-section';
             header.textContent = `FBT (${keys.f.length})`;
@@ -9258,7 +9215,7 @@ class WaferMapViewer {
         }
 
         // QVL (전체 표시)
-        if (keys.q.length > 0) {
+        if (keys.q && keys.q.length > 0) {
             const header = document.createElement('div');
             header.className = 'failbit-section';
             header.textContent = `QVL (${keys.q.length})`;
@@ -9288,23 +9245,42 @@ class WaferMapViewer {
             return;
         }
 
-        // ── 6) 생성 버튼 ──
-        const btnWrap = document.createElement('div');
-        btnWrap.className = 'mc-generate-wrap';
-        btnWrap.style.cssText = 'padding:6px 8px;border-top:1px solid #444;';
-        const genBtn = document.createElement('button');
-        genBtn.className = 'mc-generate-btn';
-        genBtn.textContent = '생성 (0)';
-        genBtn.disabled = true;
-        genBtn.style.cssText = 'width:100%;padding:6px 0;background:#1976d2;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:600;opacity:0.5;';
-        genBtn.addEventListener('click', () => {
-            if (!this._mcCheckedItems.length) return;
-            this._closeMcPanel();
-            if (typeof this.hideContextMenu === 'function') this.hideContextMenu();
-            this._startMultipleMeasureComposites([...this._mcCheckedItems]);
-        });
-        btnWrap.appendChild(genBtn);
-        panel.appendChild(btnWrap);
+        // ── 6) 하단 버튼 ──
+        if (isMeasure) {
+            // Measure: 적용 버튼
+            const btnWrap = document.createElement('div');
+            btnWrap.className = 'measure-apply-wrap';
+            btnWrap.style.cssText = 'padding:6px 8px;border-top:1px solid #444;';
+            const applyBtn = document.createElement('button');
+            applyBtn.className = 'measure-apply-btn';
+            applyBtn.textContent = '적용';
+            applyBtn.style.cssText = 'width:100%;padding:6px 0;background:#1976d2;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:600;';
+            applyBtn.addEventListener('click', () => {
+                this._closeFailbitPanels();
+                if (typeof this.hideContextMenu === 'function') this.hideContextMenu();
+                this._applyMeasureSelection();
+            });
+            btnWrap.appendChild(applyBtn);
+            panel.appendChild(btnWrap);
+        } else {
+            // Composite: 생성 버튼
+            const btnWrap = document.createElement('div');
+            btnWrap.className = 'mc-generate-wrap';
+            btnWrap.style.cssText = 'padding:6px 8px;border-top:1px solid #444;';
+            const genBtn = document.createElement('button');
+            genBtn.className = 'mc-generate-btn';
+            genBtn.textContent = '생성 (0)';
+            genBtn.disabled = true;
+            genBtn.style.cssText = 'width:100%;padding:6px 0;background:#1976d2;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:600;opacity:0.5;';
+            genBtn.addEventListener('click', () => {
+                if (!this._mcCheckedItems.length) return;
+                this._closeMcPanel();
+                if (typeof this.hideContextMenu === 'function') this.hideContextMenu();
+                this._startMultipleMeasureComposites([...this._mcCheckedItems]);
+            });
+            btnWrap.appendChild(genBtn);
+            panel.appendChild(btnWrap);
+        }
     }
 
     /**
@@ -18505,11 +18481,16 @@ class WaferMapViewer {
         this.dom.viewerContainer.style.cursor = 'default';
 
         // 🔥 Measure 다중 선택 처리
-        this._measureBaseImages = [...sortedImages];
         const mcItems = this._measureCheckedItems;
         if (mcItems && mcItems.length > 1) {
+            // 🔥 이미 _measureBaseImages가 있으면 (재호출 시) 확장 전 원본을 사용
+            // → 확장된 이미지가 다시 base로 설정되어 N배씩 증가하는 문제 방지
+            if (this._measureBaseImages?.length > 0) {
+                sortedImages = this._sortGridImages([...this._measureBaseImages], this._gridSortKey || 'filename');
+            } else {
+                this._measureBaseImages = [...sortedImages];
+            }
             // 다중 Measure: 이미지 확장 (원본 × N개 measure)
-            // LOT 모드에서는 확장 시 헤더가 깨지므로 상한 적용
             const maxExpand = 500;  // 최대 확장 이미지 수 (DOM 성능 보호)
             const baseForExpand = sortedImages.length > maxExpand ? sortedImages.slice(0, maxExpand) : sortedImages;
             if (sortedImages.length > maxExpand) {
@@ -18528,8 +18509,10 @@ class WaferMapViewer {
             this.selectedImages = sortedImages;
             this.currentGridImages = sortedImages;
         } else if (mcItems && mcItems.length === 1) {
+            this._measureBaseImages = [...sortedImages];
             this._gridMeasureMap = sortedImages.map(() => mcItems[0]);
         } else {
+            this._measureBaseImages = [...sortedImages];
             this._gridMeasureMap = null;
         }
 
@@ -23806,229 +23789,53 @@ class WaferMapViewer {
     /**
      * Measure 통합 리스트 생성 (체크박스 다중선택: 원본 → Failbit → BIN → FBT → QVL)
      */
-    async _buildFailbitList(panel) {
+    _buildFailbitList(panel) {
         const list = panel.querySelector('.failbit-list');
         if (!list) return;
-        list.innerHTML = '';
+        list.innerHTML = '<div class="failbit-item" style="color:#888;">로딩 중...</div>';
 
-        // 상단 고정 영역
-        this._ensurePinnedSection(list);
+        // Composite _buildMcList와 동일한 키 로딩 패턴 사용
+        const sources = this._getContextKeySourceImages();
+        const cacheKey = sources.join('|');
 
-        // 키를 4자리 제로패딩 (69 → '0069')
-        const padKey = (k) => String(k).replace(/^\d+$/, m => m.padStart(4, '0'));
-
-        // 기존 적용 버튼 제거
-        const existingBtnWrap = panel.querySelector('.measure-apply-wrap');
-        if (existingBtnWrap) existingBtnWrap.remove();
-
-        // 현재 체크 상태 확인 헬퍼
-        const isChecked = (type, key) =>
-            this._measureCheckedItems.some(it => it.type === type && it.key === key);
-
-        // 적용 버튼 업데이트
-        const updateApplyBtn = () => {
-            const btn = panel.querySelector('.measure-apply-btn');
-            if (btn) {
-                const n = this._measureCheckedItems.length;
-                btn.textContent = n > 0 ? `적용 (${n})` : '적용';
-                btn.disabled = false;
-                btn.style.opacity = '1';
+        // 단일 이미지 모드: chipAnnotator에서 직접 키 가져오기
+        if (!this.gridMode && this.chipAnnotator) {
+            const fKeys = this.chipAnnotator.getAvailableItemKeys('f') || [];
+            const qKeys = this.chipAnnotator.getAvailableItemKeys('q') || [];
+            if (fKeys.length > 0 || qKeys.length > 0) {
+                const keys = { f: fKeys, q: qKeys, bin: [] };
+                this._cachedMeasureKeys = keys;
+                this._renderMcList(list, keys, { mode: 'measure' });
+                return;
             }
-        };
-
-        // 체크박스 아이템 생성
-        const makeItem = (label, type, key) => {
-            const item = document.createElement('div');
-            item.className = 'failbit-item';
-            item.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;';
-            item.dataset.label = label;
-
-            const cb = document.createElement('input');
-            cb.type = 'checkbox';
-            cb.checked = isChecked(type, key);
-            cb.style.cssText = 'margin:0;cursor:pointer;flex-shrink:0;';
-            item.appendChild(cb);
-
-            const span = document.createElement('span');
-            span.textContent = label;
-            span.style.flex = '1';
-            item.appendChild(span);
-
-            const entry = { type, key, label };
-            const toggle = (e) => {
-                if (e.target === cb) return;
-                cb.checked = !cb.checked;
-                cb.dispatchEvent(new Event('change'));
-            };
-            item.addEventListener('click', toggle);
-            cb.addEventListener('change', () => {
-                if (cb.checked) {
-                    this._measureCheckedItems.push(entry);
-                    this._pinItem(list, item);
-                } else {
-                    this._measureCheckedItems = this._measureCheckedItems.filter(
-                        x => !(x.type === type && x.key === key)
-                    );
-                    this._unpinItem(list, item);
-                }
-                updateApplyBtn();
-            });
-            return item;
-        };
-
-        // --- 초기화 버튼 — 검색 바 바로 아래, pinned 위 (항상 맨 위 고정) ---
-        const measurePanel = list.closest('.failbit-panel') || panel;
-        let resetBar = measurePanel.querySelector('.mc-reset-bar');
-        if (!resetBar) {
-            resetBar = document.createElement('div');
-            resetBar.className = 'mc-reset-bar';
         }
-        // 항상 검색 바 바로 다음에 위치하도록 (pinned section 위)
-        const meaSearch = measurePanel.querySelector('.failbit-search');
-        const meaResetAfter = meaSearch ? meaSearch.nextSibling : measurePanel.firstChild;
-        if (resetBar.parentElement !== measurePanel || resetBar !== meaResetAfter) {
-            measurePanel.insertBefore(resetBar, meaResetAfter);
+
+        // 캐시 히트
+        if (this._cachedMeaPanelKey === cacheKey && this._cachedMeasureKeys) {
+            this._renderMcList(list, this._cachedMeasureKeys, { mode: 'measure' });
+            return;
         }
-        resetBar.innerHTML = '';
-        const resetItem = document.createElement('div');
-        resetItem.className = 'failbit-item';
-        resetItem.textContent = '초기화';
-        resetItem.addEventListener('click', (e) => {
-            e.stopPropagation();
-            // 1. 체크 상태 초기화
-            this._measureCheckedItems = [];
-            // 2. pinned section 비우기
-            const pinned = measurePanel.querySelector(':scope > .pinned-section');
-            if (pinned) {
-                while (pinned.firstChild) {
-                    const item = pinned.firstChild;
-                    const sectionName = item.dataset?.pinSection || '';
-                    delete item.dataset.pinSection;
-                    const sections = [...list.children].filter(el => el.classList.contains('failbit-section'));
-                    const target = sections.find(s => s.textContent === sectionName);
-                    if (target) {
-                        let after = target;
-                        while (after.nextElementSibling && after.nextElementSibling.classList.contains('failbit-item')) {
-                            after = after.nextElementSibling;
-                        }
-                        after.after(item);
-                    } else {
-                        list.appendChild(item);
-                    }
-                }
+
+        if (!sources.length) {
+            // 소스 없음 — 캐시라도 있으면 사용
+            if (this._cachedMeasureKeys) {
+                this._renderMcList(list, this._cachedMeasureKeys, { mode: 'measure' });
+            } else {
+                this._renderMcList(list, { f: [], q: [], bin: [] }, { mode: 'measure' });
             }
-            // 3. 모든 체크박스 해제
-            measurePanel.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
-            // 4. 적용 버튼 업데이트
-            updateApplyBtn();
-            // 5. Measure 버튼 텍스트 + is-active 클래스 리셋
-            this.updateFailbitButtonUI();
-            // 6. 오버레이 해제
-            this.overlayMode = null;
-            this._ratioActiveItemKey = null;
-            this._gridMeasureMap = null;
-            if (this.chipAnnotator) this.chipAnnotator.setOverlayMode(null);
-            if (!this.gridMode) this.refreshThumbnailNavigatorWithCurrentParams();
-            // 7. 그리드 모드일 때 measure overlay 이미지 원복 (base images로 복원)
-            if (this.gridMode && this._measureBaseImages?.length > 0) {
-                const baseImages = [...this._measureBaseImages];
-                this._measureBaseImages = null;
-                this.currentGridImages = baseImages;
-                this.selectedImages = baseImages;
-                this.showGrid(baseImages, true);
+            return;
+        }
+
+        // 서버에서 비동기 로드 (Composite _buildMcList와 동일)
+        this._fetchMergedKeys(sources).then(keys => {
+            this._cachedMeasureKeys = keys;
+            this._cachedMeaPanelKey = cacheKey;
+            if (panel.style.display !== 'none') {
+                this._renderMcList(list, keys, { mode: 'measure' });
             }
-            // 8. gradient 범례 → Grade 범례로 복원
-            this.selectedGradientRanges.clear();
-            this.renderColorLegends();
+        }).catch(() => {
+            list.innerHTML = '<div class="failbit-item" style="color:#888;">로드 실패</div>';
         });
-        resetBar.appendChild(resetItem);
-
-        // --- MAP 섹션 (Failbit = 원본 이미지) ---
-        const mapHeader = document.createElement('div');
-        mapHeader.className = 'failbit-section';
-        mapHeader.textContent = 'MAP';
-        list.appendChild(mapHeader);
-        list.appendChild(makeItem('Failbit', 'failbit', null));
-
-        // --- BIN 항목 ---
-        const binHeader = document.createElement('div');
-        binHeader.className = 'failbit-section';
-        binHeader.textContent = 'BIN';
-        list.appendChild(binHeader);
-        list.appendChild(makeItem('BIN', 'bin', null));
-
-        // chipAnnotator(단일뷰) 또는 캐시(그리드)에서 키 가져오기
-        let fKeys = this.chipAnnotator ? this.chipAnnotator.getAvailableItemKeys('f') : [];
-        let qKeys = this.chipAnnotator ? this.chipAnnotator.getAvailableItemKeys('q') : [];
-
-        // 그리드 모드에서 키가 없으면 서버에서 비동기 로드
-        if (fKeys.length === 0 && qKeys.length === 0 && !this._cachedMeasureKeys?.f?.length) {
-            const sources = this._getContextKeySourceImages();
-            if (sources.length > 0) {
-                try {
-                    const keys = await this._fetchMergedKeys(sources);
-                    this._cachedMeasureKeys = keys;
-                    fKeys = keys.f || [];
-                    qKeys = keys.q || [];
-                } catch (_) {}
-            }
-        }
-
-        const effectiveFKeys = fKeys.length > 0 ? fKeys : (this._cachedMeasureKeys?.f || []);
-        const effectiveQKeys = qKeys.length > 0 ? qKeys : (this._cachedMeasureKeys?.q || []);
-
-        if (hasFQ) {
-            this._cachedMeasureKeys = { f: effectiveFKeys, q: effectiveQKeys };
-        }
-
-        // --- FBT 섹션 ---
-        if (effectiveFKeys.length > 0) {
-            const fHeader = document.createElement('div');
-            fHeader.className = 'failbit-section';
-            fHeader.textContent = 'FBT';
-            list.appendChild(fHeader);
-            effectiveFKeys.forEach(key => {
-                list.appendChild(makeItem(`FBT${padKey(key)}`, 'f', key));
-            });
-        }
-
-        // --- QVL 섹션 ---
-        if (effectiveQKeys.length > 0) {
-            const qHeader = document.createElement('div');
-            qHeader.className = 'failbit-section';
-            qHeader.textContent = 'QVL';
-            list.appendChild(qHeader);
-            effectiveQKeys.forEach(key => {
-                list.appendChild(makeItem(`QVL${padKey(key)}`, 'q', key));
-            });
-        }
-
-        // 이미 체크된 항목을 pinned section으로 이동
-        list.querySelectorAll('.failbit-item input[type="checkbox"]:checked').forEach(cb => {
-            const item = cb.closest('.failbit-item');
-            if (item) this._pinItem(list, item);
-        });
-
-        // --- 적용 버튼 ---
-        const btnWrap = document.createElement('div');
-        btnWrap.className = 'measure-apply-wrap';
-        btnWrap.style.cssText = 'padding:6px 8px;border-top:1px solid #444;';
-        const applyBtn = document.createElement('button');
-        applyBtn.className = 'measure-apply-btn';
-        const n = this._measureCheckedItems.length;
-        applyBtn.textContent = n > 0 ? `적용 (${n})` : '적용';
-        applyBtn.style.cssText = 'width:100%;padding:6px 0;background:#1976d2;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:600;';
-        applyBtn.addEventListener('click', () => {
-            this._closeFailbitPanels();
-            this._applyMeasureSelection();
-        });
-        btnWrap.appendChild(applyBtn);
-        panel.appendChild(btnWrap);
-
-        // 그리드 모드에서 FBT/QVL 키가 없으면 첫 번째 이미지의 positions에서 비동기 로드
-        if (this.gridMode && effectiveFKeys.length === 0 && effectiveQKeys.length === 0) {
-            this._loadMeasureKeysFromGrid(panel);
-        }
     }
 
     /**
@@ -24167,9 +23974,12 @@ class WaferMapViewer {
      * 원래 탭은 일반 썸네일 그대로 유지.
      */
     _openMeasureTab() {
-        const selectedImages = this.gridSelectedIdxs
+        // 🔥 선택된 이미지 — 이미 확장된 그리드에서 선택 시 중복 제거
+        let rawSelected = this.gridSelectedIdxs
             .map(idx => this.currentGridImages?.[idx])
             .filter(Boolean);
+        // 확장 모드에서는 동일 경로가 여러 번 나올 수 있으므로 유니크 처리
+        const selectedImages = [...new Set(rawSelected)];
         if (!selectedImages.length) return;
 
         // 원래 탭의 overlay 상태 저장 후 해제 (원래 탭은 일반 썸네일 유지)
@@ -24182,6 +23992,7 @@ class WaferMapViewer {
         this._ratioActiveItemKey = null;
         this._measureCheckedItems = [];
         this._gridMeasureMap = null;
+        this._measureBaseImages = null;  // 🔥 새 탭에서 깨끗한 base 시작
         this.persistActivePageState();
 
         // 새 "mea" 탭 생성
@@ -24197,6 +24008,7 @@ class WaferMapViewer {
         this.overlayMode = savedOverlay;
         this._ratioActiveItemKey = savedKey;
         this._measureCheckedItems = savedChecked;
+        this._measureBaseImages = null;  // 🔥 showGrid에서 새로 설정되도록
 
         // 그리드 선택 초기화 + measure 이미지 표시
         this.gridSelectedIdxs = [];
@@ -24670,9 +24482,8 @@ class WaferMapViewer {
     _closeFailbitPanels() {
         document.querySelectorAll('.failbit-panel').forEach(p => {
             p.style.display = 'none';
-            // 적용 버튼 wrap 제거 (다음 open 시 재생성)
-            const btnWrap = p.querySelector('.measure-apply-wrap');
-            if (btnWrap) btnWrap.remove();
+            // 동적 생성 요소 모두 제거 (다음 open 시 깨끗하게 재생성)
+            p.querySelectorAll('.measure-apply-wrap, .pinned-section, .mc-reset-bar').forEach(el => el.remove());
             // body로 이동했던 패널을 원래 위치로 복원
             if (p._originalParent && p.parentElement === document.body) {
                 if (p._originalNext) {
