@@ -799,7 +799,21 @@ Composite에서 Failbit이 아닌 모든 항목(BIN/FBT/QVL)은 gradient 범례�
 3. Fail List에 e2e_ 접두사 클래스 모두 없음 확인
 4. Label Explorer에서도 모두 제거 확인
 
-**pass 기준**: 단건/다중 추가 → 버튼 클릭 라벨 → Add Label 라벨 → 탐색 → 단일뷰 → 다중 삭제 전체 성공
+#### 7-9. 기존 라벨 클래스 로드 (non-palette 이미지 폴백)
+기존에 라벨링된 클래스의 이미지가 RGBA/RGB 등 non-palette 포맷이어도 에러 없이 표시되는지 확인.
+1. Label Explorer에서 기존 클래스 폴더 클릭 (예: `afwefaw`) → 폴더 열림 확인
+2. 이미지 목록 표시 확인 (Center.png, Donut.png 등)
+3. **서버 생존 확인**: 폴더 열기 후 `/api/classes` 응답 200 확인
+4. 이미지 썸네일 아이콘 표시 확인 (에러 이미지가 아닌 실제 이미지)
+5. Label Explorer에서 이미지 클릭 → 그리드에 해당 클래스 이미지만 표시
+6. **서버 생존 재확인**: 그리드 로드 후 `/api/classes` 응답 200 확인
+7. 이미지 더블클릭 → 단일 뷰 진입 (RGBA/RGB 이미지도 정상 렌더링)
+8. **범례**: non-palette 이미지는 Grade 범례가 비어있거나 기본값 표시 (에러 아님)
+9. ESC → 그리드 복귀
+- **핵심**: non-palette(RGBA/RGB) 이미지에 `personalized=true` 요청 시 서버가 죽지 않고 원본 이미지로 폴백
+- **핵심**: positions JSON이 없는 이미지에서 chip annotator 에러가 발생하지 않음
+
+**pass 기준**: 단건/다중 추가 → 버튼 클릭 라벨 → Add Label 라벨 → 탐색 → 단일뷰 → 다중 삭제 → 기존 라벨 non-palette 로드 전체 성공
 
 ---
 
