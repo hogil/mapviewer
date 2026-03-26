@@ -293,10 +293,8 @@ def _apply_personal_palette(
     for i in range(limit):
         palette_list[i * 3:(i + 1) * 3] = palette_bytes[i * 3:(i + 1) * 3]
 
-    # index 31 = composite map 배경색 (chip 바깥)
-    # _scheme_to_palette_bytes는 인덱스 ~24까지만 반환하므로 31은 명시적으로 설정
-    background_rgb = _resolve_scheme_background_rgb(scheme, section="composite")
-    palette_list[31 * 3:31 * 3 + 3] = list(background_rgb)
+    # index 8 = background (개인색 적용), index 31 = invalid fill (흰색 고정)
+    # composite map 배경은 index 8을 사용하므로 별도 설정 불필요
     return palette_list
 
 
@@ -308,11 +306,11 @@ def _build_chip_base_indices_from_positions(
 ) -> Optional[np.ndarray]:
     """
     positions.json의 chip 좌표로 base_indices 배열 생성.
-    chip 바깥은 전부 배경색(31)으로 채워 wafer 원형 더미 영역을 제거.
+    chip 바깥은 전부 배경색(8)으로 채워 wafer 원형 더미 영역을 제거.
 
     Returns:
         (H, W) uint8 ndarray:
-            - 31: chip 바깥 (배경색) — 원형 wafer 더미 포함
+            - 8: chip 바깥 (배경색, 개인색 적용)
             - 0: chip 내부 (grade0 색)
             - 10: chip 테두리 (Normal 색, show_normal_border=True일 때)
         None: positions.json을 찾을 수 없는 경우
@@ -337,7 +335,7 @@ def _build_chip_base_indices_from_positions(
     scale_x = width / float(canvas_w)
     scale_y = height / float(canvas_h)
 
-    base = np.full((height, width), 31, dtype=np.uint8)  # 전체 = 배경색
+    base = np.full((height, width), 8, dtype=np.uint8)  # 전체 = 배경색 (index 8, 개인색 적용)
 
     for chip in chips:
         if not isinstance(chip, dict):
@@ -2057,7 +2055,7 @@ def create_composite_heatmaps(
         )
     if base_indices is None:
         # positions.json 없을 때 fallback: chip 영역은 grade0, 나머지는 배경색
-        base_indices = np.full((height, width), 31, dtype=np.uint8)
+        base_indices = np.full((height, width), 8, dtype=np.uint8)
         base_indices[chip_area] = 0
     chip_inner_mask = (base_indices == 0)
     _mark("mask_and_base_setup", t)
@@ -2379,7 +2377,7 @@ def create_sum_map(
         )
     if base_indices is None:
         # positions.json 없을 때 fallback: chip 영역은 grade0, 나머지는 배경색
-        base_indices = np.full((height, width), 31, dtype=np.uint8)
+        base_indices = np.full((height, width), 8, dtype=np.uint8)
         base_indices[chip_area] = 0
     chip_inner_mask = (base_indices == 0)
 
