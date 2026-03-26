@@ -946,7 +946,30 @@ BIN, FBT, QVL Composite는 모두 Gradient 범례를 사용한다. 각 유형별
 
 **스크린샷**: Failbit 그리드 Gradient 범례, Average 단일 뷰, Grade 단일 뷰, Subset 결과, BIN/FBT/QVL 각 단일 뷰 Gradient 범례 + 클릭 필터
 
-**pass 기준**: 그리드 Gradient 범례 표시, Average/Grade 단일 뷰 범례 분리, Subset 생성→검증, BIN/FBT/QVL 모두 Gradient 범례 + 퍼센트/칩수 + 단일/다중 선택/해제 필터 정상
+#### 8-7. Composite Map 배경색 개인색 검증
+Composite 생성 결과의 모든 이미지(Grade 0~7, square_average, square_weighted_average) 배경이 개인색으로 적용되는지 확인.
+1. Composite 결과 그리드에서 이미지 더블클릭 → 단일 뷰 진입
+2. **Grade 이미지 배경색 확인**: chip 바깥 영역이 개인색 background (index 8) — 흰색이 아님
+3. **Average 이미지 배경색 확인**: chip 바깥 영역이 개인색 background
+4. Grade와 Average 모두 동일한 배경색 사용 확인
+5. 배경색이 `color-legends.json`의 해당 사용자 background 색상과 일치
+- **핵심**: composite_map.py `base_indices` 배경 = index 8 (개인색), index 31 = invalid fill (흰색 고정)
+- **핵심**: `_apply_personal_palette`에서 index 8은 개인색, index 31은 항상 (255,255,255)
+
+#### 8-8. Invalid Fill 흰색 고정 검증
+투명 영역/잘못된 데이터가 있는 이미지에서 invalid 영역이 항상 흰색(index 31)으로 표시되는지 확인.
+1. palette 이미지에서 투명 픽셀이 있으면 index 31 → 흰색 (255,255,255)
+2. 개인색 배경을 변경해도 invalid 영역은 흰색 유지
+3. `personal_colors.py`에서 index 31 = 흰색 고정 확인
+- **핵심**: index 8 (배경) vs index 31 (invalid) 역할 분리
+
+#### 8-9. Gradient Stats 성능 검증
+Composite average map 단일 뷰에서 gradient 범례 픽셀 분포 계산이 빠르게 완료되는지 확인.
+1. `/api/gradient-stats?path=...square_average...` API 호출 → 200 응답
+2. 응답 시간 < 500ms (np.histogram 직접 사용, float64 정규화 제거)
+3. 응답에 `stats` 객체 포함 (10개 구간별 카운트)
+
+**pass 기준**: 그리드 Gradient 범례 표시, Average/Grade 단일 뷰 범례 분리, Subset 생성→검증, BIN/FBT/QVL 모두 Gradient 범례 + 퍼센트/칩수 + 단일/다중 선택/해제 필터 정상, 배경색 개인색 적용, invalid 흰색 고정, gradient stats < 500ms
 
 ---
 
