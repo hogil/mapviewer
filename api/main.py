@@ -6336,52 +6336,46 @@ async def get_image(
 ):
     try:
         is_head = request.method == "HEAD"
-        classification_path = path  # 🔥 원본 classification 경로 보존
-        original_rel = _lookup_original_relpath_from_classification_path(path)
-        if original_rel:
-            path = original_rel
+
+        # 🔥 경로 해석: ROOT_DIR → current_folder 순으로 시도 (블로킹 lookup 제거)
+        def _resolve_image_path(p: str) -> Path:
+            """ROOT_DIR, current_folder 순으로 이미지 경로 해석"""
+            if Path(p).is_absolute():
+                return Path(p)
+            # 1. ROOT_DIR 기준
+            candidate = ROOT_DIR / p
+            if candidate.exists() and candidate.is_file():
+                return candidate
+            # 2. current_folder 기준
+            candidate = current_folder / p
+            if candidate.exists() and candidate.is_file():
+                return candidate
+            # 3. classification 경로 재구성
+            if "classification" in p:
+                tail = p.split("classification", 1)[-1].lstrip("/")
+                candidate = current_folder / "classification" / tail
+                if candidate.exists() and candidate.is_file():
+                    return candidate
+            return ROOT_DIR / p  # 기본값
+
+        image_path = _resolve_image_path(path)
 
         # LoginId가 있으면 우선 사용, 없으면 anonymous scheme fallback
         if personalized and not scheme:
             scheme = get_user_color_scheme(_current_login_id(request))
 
-        # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
-        if Path(path).is_absolute():
-            image_path = Path(path)
+        # 보안 검증
+        try:
+            image_path.resolve().relative_to(ROOT_DIR.resolve())
+        except ValueError:
             try:
-                image_path.resolve().relative_to(ROOT_DIR.resolve())
+                image_path.resolve().relative_to(current_folder.resolve())
             except ValueError:
-                raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
-        else:
-            image_path = ROOT_DIR / path
-            try:
-                image_path.resolve().relative_to(ROOT_DIR.resolve())
-            except ValueError:
-                raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
+                raise HTTPException(status_code=403, detail="Access denied")
 
-        # 🔥 파일이 없으면 다중 폴백 시도
         if not image_path.exists() or not image_path.is_file():
-            found = False
-            # 폴백 1: 원본 lookup 결과 경로와 다르면 classification 경로 시도
-            if classification_path != path:
-                fb = ROOT_DIR / classification_path
-                if fb.exists() and fb.is_file():
-                    image_path, path, found = fb, classification_path, True
-            # 폴백 2: current_folder 기준 경로 시도 (제품 폴더 내 classification)
-            if not found:
-                fb = current_folder / classification_path
-                if fb.exists() and fb.is_file():
-                    image_path, path, found = fb, classification_path, True
-            # 폴백 3: classification/ 포함 경로에서 current_folder 기준 시도
-            if not found and "classification" in classification_path:
-                # path가 "classification/cls/img.png" 형태일 때 current_folder 아래에서 탐색
-                fb = current_folder / classification_path.split("classification", 1)[-1].lstrip("/")
-                cls_fb = current_folder / "classification" / classification_path.split("classification", 1)[-1].lstrip("/")
-                if cls_fb.exists() and cls_fb.is_file():
-                    image_path, found = cls_fb, True
-            if not found:
-                logger.warning(f"❌ [get_image] 404: path={classification_path}, tried={image_path}, ROOT_DIR={ROOT_DIR}, current_folder={current_folder}")
-                raise HTTPException(status_code=404, detail="Image not found")
+            logger.warning(f"❌ [get_image] 404: path={path}, tried={image_path}")
+            raise HTTPException(status_code=404, detail="Image not found")
 
         try:
             image_stat = image_path.stat()
@@ -7186,56 +7180,41 @@ async def get_thumbnail(
     gradient_filter: Optional[str] = None,
 ):
     try:
-        classification_path = path  # 🔥 원본 classification 경로 보존
-        original_rel = _lookup_original_relpath_from_classification_path(path)
-        if original_rel:
-            path = original_rel
-
         # LoginId가 있으면 우선 사용, 없으면 anonymous scheme fallback
         if personalized and not scheme:
             scheme = get_user_color_scheme(_current_login_id(request))
-        # 🔥 measure_overlay 사용 시 scheme이 없으면 LoginId에서 추출
-        # (personalized=false여도 measure gradient 색상 결정에 scheme 필요)
         if measure_overlay and not scheme:
             scheme = get_user_color_scheme(_current_login_id(request))
 
         # 🔥 동기 파일 검증을 스레드 풀에서 실행 — 이벤트 루프 블록 방지
         def _validate_path_sync():
             nonlocal path
-            effective_path = path
-            if Path(effective_path).is_absolute():
-                image_path = Path(effective_path)
+            # 경로 해석: ROOT_DIR → current_folder 순으로 시도
+            def _try_resolve(p):
+                if Path(p).is_absolute():
+                    return Path(p)
+                c = ROOT_DIR / p
+                if c.exists() and c.is_file():
+                    return c
+                c = current_folder / p
+                if c.exists() and c.is_file():
+                    return c
+                if "classification" in p:
+                    tail = p.split("classification", 1)[-1].lstrip("/")
+                    c = current_folder / "classification" / tail
+                    if c.exists() and c.is_file():
+                        return c
+                return ROOT_DIR / p
+
+            image_path = _try_resolve(path)
+            try:
+                image_path.resolve().relative_to(ROOT_DIR.resolve())
+            except ValueError:
                 try:
-                    image_path.resolve().relative_to(ROOT_DIR.resolve())
+                    image_path.resolve().relative_to(current_folder.resolve())
                 except ValueError:
                     return None, 'forbidden', None
-            else:
-                image_path = ROOT_DIR / effective_path
-                try:
-                    image_path.resolve().relative_to(ROOT_DIR.resolve())
-                except ValueError:
-                    return None, 'forbidden', None
-            # 🔥 파일이 없으면 다중 폴백 시도
             if not image_path.exists() or not image_path.is_file():
-                # 폴백 1: classification 원본 경로
-                if classification_path != path:
-                    fb = ROOT_DIR / classification_path
-                    if fb.exists() and fb.is_file():
-                        path = classification_path
-                        return fb, 'ok', fb.stat()
-                # 폴백 2: current_folder 기준
-                fb2 = current_folder / classification_path
-                if fb2.exists() and fb2.is_file():
-                    path = classification_path
-                    return fb2, 'ok', fb2.stat()
-                # 폴백 3: current_folder/classification/... 재구성
-                if "classification" in classification_path:
-                    tail = classification_path.split("classification", 1)[-1].lstrip("/")
-                    fb3 = current_folder / "classification" / tail
-                    if fb3.exists() and fb3.is_file():
-                        path = classification_path
-                        return fb3, 'ok', fb3.stat()
-                logger.warning(f"❌ [thumbnail] 404: path={classification_path}, tried={image_path}, current_folder={current_folder}")
                 return None, 'not_found', None
             try:
                 image_stat = image_path.stat()
