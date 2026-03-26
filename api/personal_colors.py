@@ -430,9 +430,10 @@ def plte_inplace_patch_memory(png_data: bytearray, scheme: str) -> bytearray:
         수정된 PNG 바이트 데이터 (bytearray)
     """
     legends = load_color_legends()
-    scheme_data = legends.get(scheme) or legends.get('default')
+    scheme_data = legends.get(scheme) or legends.get(ANONYMOUS_SCHEME) or legends.get('default')
     if not scheme_data:
-        raise ValueError(f"scheme 데이터 없음: {scheme}")
+        # scheme 데이터 없으면 원본 그대로 반환 (에러 대신 graceful fallback)
+        return png_data
     
     palette_bytes = get_palette_for_scheme(scheme_data)
     new_palette = list(palette_bytes)

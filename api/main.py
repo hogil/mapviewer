@@ -4816,9 +4816,48 @@ def _generate_thumbnail_sync(
     gradient_filter: Optional[str] = None,
 ):
     try:
+        if not image_path.exists():
+            return  # 파일 없으면 즉시 반환 (크래시 방지)
+
         thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
 
         fmt = THUMBNAIL_FORMAT.upper()
+
+        # 🔥 PIL fast path: 작은 non-palette 이미지 (classification 등)
+        # pyvips 동시성 크래시 방지 — palette PNG가 아니면 PIL로 안전하게 처리
+        try:
+            _suffix = image_path.suffix.lower()
+            _use_pil_fast = False
+            if _suffix == '.png' and not (personalized and scheme) and not grade_filter and not bottom_filter and not border_normalize and not bin_overlay and not measure_overlay:
+                # 필터/개인색 없는 단순 PNG → PIL로 충분
+                _use_pil_fast = True
+            elif _suffix == '.png':
+                # 필터/개인색 있지만 non-palette PNG는 palette 패치 불필요 → PIL
+                with open(image_path, 'rb') as _f:
+                    _hdr = _f.read(30)
+                if len(_hdr) > 25 and _hdr[25] != 3:  # color type != indexed
+                    _use_pil_fast = True
+            elif _suffix in ('.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.gif'):
+                _use_pil_fast = True
+
+            if _use_pil_fast:
+                with Image.open(image_path) as img:
+                    if img.mode not in ('RGB', 'RGBA'):
+                        img = img.convert('RGB')
+                    target_w, target_h = size
+                    if img.width > target_w or img.height > target_h:
+                        img.thumbnail((target_w, target_h), Image.Resampling.BICUBIC)
+                    if fmt == "WEBP":
+                        img.save(thumbnail_path, "WEBP", quality=THUMBNAIL_QUALITY, method=1)
+                    elif fmt == "JPEG":
+                        if img.mode == 'RGBA':
+                            img = img.convert('RGB')
+                        img.save(thumbnail_path, "JPEG", quality=THUMBNAIL_QUALITY, optimize=True)
+                    else:
+                        img.save(thumbnail_path, "PNG", compress_level=1)
+                return
+        except Exception:
+            pass  # PIL fast path 실패 → 기존 pyvips 경로로 fallback
 
         try:
             import pyvips
