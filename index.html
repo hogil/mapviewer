@@ -2670,19 +2670,30 @@
             border: 1px solid #333;
             border-radius: 8px;
             box-sizing: border-box;
-            overflow: auto;
+            overflow: hidden;
             /* 오른쪽 패널 기본 폰트: Arial 13px */
             font-family: Arial, sans-serif;
             font-size: 13px;
         }
         
-        .label-explorer-frame,
         .classification-frame {
             background: #232323;
             border: 1px solid #333;
             border-radius: 8px;
             margin-bottom: 14px;
-            padding: 10px 14px 8px 14px; /* 위/아래 여백 약간 축소 */
+            padding: 10px 14px 8px 14px;
+            flex-shrink: 0;
+        }
+
+        .label-explorer-frame {
+            background: #232323;
+            border: 1px solid #333;
+            border-radius: 8px;
+            margin-bottom: 14px;
+            padding: 10px 14px 8px 14px;
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
         }
         
         .label-explorer-frame h3,

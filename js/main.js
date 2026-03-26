@@ -13122,16 +13122,25 @@ class WaferMapViewer {
             }
 
             // 🔥 Label Explorer에서 이미지 로드 시 페이지 변환 처리
-            if (fromLabelExplorer) {
-                const activePage = this.pageManager?.getActivePage();
+            // ⚠️ convertPage/ensurePageForRole는 applyPageState를 비동기 트리거하여
+            //    loadImage가 설정한 canvas/gridMode 상태를 초기화하는 버그가 있으므로
+            //    페이지 역할만 직접 변경하고 applyPageState는 트리거하지 않는다
+            if (fromLabelExplorer && this.pageManager) {
+                const activePage = this.pageManager.getActivePage();
                 if (activePage) {
                     if (activePage.role === 'blank') {
-                        // blank 페이지면 label로 변환
-                        this.pageManager.convertPage(activePage.id, 'label');
+                        // blank 페이지면 label로 직접 변환 (applyPageState 우회)
+                        activePage.role = 'label';
+                        activePage.title = this.pageManager.buildTitle('label');
+                        this.pageManager.renderTabs();
                         this.activePageRole = 'label';
                     } else if (activePage.role !== 'label') {
                         // wafer/mylot/composite 페이지면 새 label 페이지 생성
-                        this.ensurePageForRole('label', { forceNew: true, skipPersist: true });
+                        this.persistActivePageState();
+                        const newPage = this.pageManager.createPage('label', null, { activate: false });
+                        this.pageManager.activePageId = newPage.id;
+                        this.pageManager.renderTabs();
+                        this.activePageRole = 'label';
                     }
                 }
             }
@@ -23161,12 +23170,23 @@ class WaferMapViewer {
         if (!imageKeys || imageKeys.length === 0) return;
         
         // 🔥 Label Explorer에서 그리드 표시 시 페이지 변환 처리
-        const activePage = this.pageManager?.getActivePage();
-        if (activePage?.role !== 'label') {
-            // 다른 역할에서 온 경우 기존 탭은 그대로 두고 전용 label 페이지 생성
-            this.ensurePageForRole('label', { forceNew: true, skipPersist: true });
-        } else {
-            this.ensurePageForRole('label');
+        // ⚠️ applyPageState 트리거 방지 (showGrid 설정 상태 초기화 버그)
+        if (this.pageManager) {
+            const activePage = this.pageManager.getActivePage();
+            if (activePage) {
+                if (activePage.role === 'blank') {
+                    activePage.role = 'label';
+                    activePage.title = this.pageManager.buildTitle('label');
+                    this.pageManager.renderTabs();
+                    this.activePageRole = 'label';
+                } else if (activePage.role !== 'label') {
+                    this.persistActivePageState();
+                    const newPage = this.pageManager.createPage('label', null, { activate: false });
+                    this.pageManager.activePageId = newPage.id;
+                    this.pageManager.renderTabs();
+                    this.activePageRole = 'label';
+                }
+            }
         }
 
         // 🔥 savedViewState 백업 (Label Explorer Grid가 덮어쓰지 않도록)
