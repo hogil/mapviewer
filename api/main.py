@@ -4868,28 +4868,10 @@ def _generate_thumbnail_sync(
                         img.save(thumbnail_path, "PNG", compress_level=1)
                 return
         except Exception as _pil_err:
+            import traceback as _tb
             logger.warning(f"⚠️ [PIL SAFE PATH] 실패: {image_path.name}: {_pil_err}")
-            # 🔥 PIL 실패 시 개인색 없이 기본 썸네일 재시도
-            try:
-                with Image.open(image_path) as img_fb:
-                    if img_fb.mode not in ('RGB', 'RGBA'):
-                        img_fb = img_fb.convert('RGB')
-                    target_w, target_h = size
-                    if img_fb.width > target_w or img_fb.height > target_h:
-                        img_fb.thumbnail((target_w, target_h), Image.Resampling.BICUBIC)
-                    if img_fb.mode == 'RGBA':
-                        img_fb = img_fb.convert('RGB')
-                    if fmt == "WEBP":
-                        img_fb.save(thumbnail_path, "WEBP", quality=THUMBNAIL_QUALITY, method=1)
-                    elif fmt == "JPEG":
-                        img_fb.save(thumbnail_path, "JPEG", quality=THUMBNAIL_QUALITY, optimize=True)
-                    else:
-                        img_fb.save(thumbnail_path, "PNG", compress_level=1)
-                logger.info(f"✅ [PIL FALLBACK] 개인색 없이 기본 썸네일 생성: {image_path.name}")
-                return
-            except Exception as _fb_err:
-                logger.error(f"❌ [PIL FALLBACK] 기본 썸네일도 실패: {image_path.name}: {_fb_err}")
-                return
+            _tb.print_exc()
+            return  # pyvips fallback 안 함 — segfault 방지
 
         try:
             import pyvips
