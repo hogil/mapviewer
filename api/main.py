@@ -6362,7 +6362,24 @@ async def get_image(
                 return _invalid_image_response(image_path)
             return Response(content=b"", media_type="image/png", headers={"X-Invalid-Image": "true"})
 
-        # 🔥 최적화: 디버그 로그 제거 (대량 이미지 로드 시 성능 저하 방지)
+        # 🔥 classification 이미지는 피라미드/개인색 건너뛰고 원본 직접 서빙
+        # non-palette PNG에서 pyvips segfault 방지 + 항상 이미지가 나오도록
+        _is_classification = "classification" in str(image_path)
+        if _is_classification:
+            try:
+                with open(image_path, 'rb') as _cf:
+                    _chdr = _cf.read(30)
+                _is_palette = len(_chdr) > 25 and _chdr[25] == 3 if image_path.suffix.lower() == '.png' else False
+            except Exception:
+                _is_palette = False
+            if not _is_palette:
+                # non-palette classification 이미지: 원본 그대로 서빙 (피라미드/개인색 없음)
+                st = image_path.stat()
+                return FileResponse(image_path, headers={
+                    "Cache-Control": "public, max-age=3600",
+                    "ETag": compute_etag(st),
+                    "X-Classification": "direct",
+                })
 
         # 🎯 피라미드 레벨이 요청된 경우
         if level is not None:
@@ -7896,6 +7913,17 @@ async def classify_images(req: Request,
 
         _dircache_invalidate(class_dir)
 
+        # 🔥 positions.json도 classification 폴더에 복사 (measure/composite 지원)
+        try:
+            pos_path = _resolve_positions_path(Path(rel_path))
+            if pos_path.exists():
+                target_pos = class_dir / f"{abs_path.stem}.json"
+                if not target_pos.exists():
+                    await loop.run_in_executor(IO_POOL, shutil.copy2, str(pos_path), str(target_pos))
+                    log_access_row(tag="ACTION", note=f"positions 복사: {pos_path.name} -> {class_name}/")
+        except Exception as pos_err:
+            logger.debug(f"positions 복사 건너뜀 ({rel_path}): {pos_err}")
+
         # 썸네일 미리 생성 (Label Explorer에서 지연 없이 표시되도록)
         login_id = _current_login_id(req)
         scheme = get_user_color_scheme(login_id)
@@ -7997,6 +8025,16 @@ async def classify_images_batch(request: BatchClassifyRequest,
                         shutil.copy2(abs_path, target_file)
 
                 link_time += time.perf_counter() - link_start
+
+                # 🔥 positions.json도 classification 폴더에 복사
+                try:
+                    pos_path = _resolve_positions_path(Path(rel_path))
+                    if pos_path.exists():
+                        target_pos = class_dir / f"{abs_path.stem}.json"
+                        if not target_pos.exists():
+                            shutil.copy2(str(pos_path), str(target_pos))
+                except Exception:
+                    pass
 
                 results.append(rel_path)
 
