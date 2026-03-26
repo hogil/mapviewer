@@ -16577,6 +16577,25 @@ class WaferMapViewer {
         if (container) container.scrollTop = scrollTop;
 
         this.debugLog('Label Explorer 새로고침 완료');
+
+        // 🔥 백그라운드 프리페치: 캐시 미스 클래스의 이미지 목록 선로드
+        const uncachedClasses = classes.filter(c => !this.classToImgListCache?.[c]);
+        if (uncachedClasses.length > 0) {
+            Promise.all(uncachedClasses.map(async c => {
+                try {
+                    const labelPath = this.buildClassificationPath(c);
+                    const res = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`);
+                    const data = await res.json();
+                    const imgList = (Array.isArray(data.items) ? data.items : [])
+                        .filter(item => item.type === 'file' && this.isImageFile(item.name));
+                    if (!this.classToImgListCache) this.classToImgListCache = {};
+                    this.classToImgListCache[c] = imgList;
+                } catch {}
+            })).then(() => {
+                this.debugLog(`🚀 프리페치 완료: ${uncachedClasses.length}개 클래스`);
+            });
+        }
+
         } catch (error) {
             console.error('Label Explorer 새로고침 실패:', error);
 
@@ -16747,9 +16766,49 @@ class WaferMapViewer {
                     labelSelection.lastClickedClass = cls;
                 }
 
-                // 🔥 Ctrl/Shift 클래스 선택: 선택만 (그리드 전환 없음, 폴더 열기 없음)
-                // WME와 동일하게 선택 하이라이트만 표시
+                // 🔥 Ctrl/Shift 클래스 선택 → 선택된 폴더 자동 열기 + 하이라이트 + 그리드 표시
+                for (const c of labelSelection.selectedClasses) {
+                    labelSelection.openFolders[c] = true;
+                }
+                this._updateLabelExplorerContentFast();
                 this.updateLabelExplorerSelection();
+
+                // 선택된 클래스의 이미지 → 그리드 표시
+                if (labelSelection.selectedClasses.length > 0) {
+                    const allKeys = [];
+                    const missingClasses = [];
+                    for (const c of labelSelection.selectedClasses) {
+                        const cached = this.classToImgListCache?.[c];
+                        if (cached) {
+                            for (const img of cached) {
+                                if (img.type === 'file') allKeys.push(`${c}/${img.name}`);
+                            }
+                        } else {
+                            missingClasses.push(c);
+                        }
+                    }
+                    if (missingClasses.length === 0) {
+                        if (allKeys.length > 0) this.showGridFromLabelExplorer(allKeys);
+                    } else {
+                        // 캐시 미스: fetch 후 그리드
+                        Promise.all(missingClasses.map(async c => {
+                            const labelPath = this.buildClassificationPath(c);
+                            const res = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`);
+                            const data = await res.json();
+                            const imgList = (Array.isArray(data.items) ? data.items : [])
+                                .filter(item => item.type === 'file' && this.isImageFile(item.name));
+                            if (!this.classToImgListCache) this.classToImgListCache = {};
+                            this.classToImgListCache[c] = imgList;
+                            for (const img of imgList) allKeys.push(`${c}/${img.name}`);
+                        })).then(() => {
+                            if (allKeys.length > 0) this.showGridFromLabelExplorer(allKeys);
+                            this._updateLabelExplorerContentFast();
+                        });
+                    }
+                } else {
+                    // 선택 해제 → 이전 상태 복귀
+                    this.restorePreviousGridState();
+                }
 
                 // 클래스 매니저 버튼 상태 업데이트
                 this.updateClassManagerButtons();
@@ -17315,6 +17374,9 @@ class WaferMapViewer {
                             // 숫자를 고려한 자연 정렬 (natural sort)
                             return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
                         });
+
+                        // 🔥 캐시 동기화: 삭제 후 re-fetch 결과로 캐시 갱신
+                        this.classToImgListCache[cls] = sortedImgList.filter(item => item.type === 'file' && this.isImageFile(item.name));
 
                         // ul 내부만 갱신
 
