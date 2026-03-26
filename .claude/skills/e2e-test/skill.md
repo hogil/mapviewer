@@ -3268,6 +3268,75 @@ const ms = Math.round(performance.now() - t0);
 
 ---
 
+## Phase 43: Label Explorer 네비게이션 및 그리드↔단일 전환 안정성
+
+**목적**: Label Explorer에서 Wafer Map Explorer와 동일한 그리드/단일이미지 동작이 정상 작동하는지 검증
+
+**사전 조건**: 기존 라벨 클래스가 존재 (test_class 등 2개 이상 이미지를 가진 클래스)
+
+**평가 항목**:
+
+#### 43-1. Label Explorer 단일 이미지 모드 진입
+1. Label Explorer에서 클래스 폴더 열기 (예: test_class)
+2. 이미지 1개 클릭 → `viewMode='single'`, 캔버스 표시
+3. Navigator에 클래스 내 전체 이미지 리스트 표시 확인
+4. ◀ ▶ 화살표 버튼 표시 확인
+5. `_labelExplorerSingleMode === true` 확인
+
+#### 43-2. 방향키 네비게이션 (← →)
+1. → 키 → 다음 이미지로 이동, `singleViewImageIndex` 증가
+2. ← 키 → 이전 이미지로 이동, `singleViewImageIndex` 감소
+3. 마지막 이미지에서 → 키 → 폴더 이동 없이 멈춤 (로그: `Label Explorer 경계 — 마지막 이미지`)
+4. 첫 이미지에서 ← 키 → 멈춤 (로그: `Label Explorer 경계 — 첫 번째 이미지`)
+
+#### 43-3. 화살표 버튼 UI (◀ ▶) 클릭
+1. ▶ 클릭 → 다음 이미지로 이동 확인
+2. ◀ 클릭 → 이전 이미지로 이동 확인
+3. 이미지 이름이 정상 변경되는지 확인 (헤더 바)
+
+#### 43-4. Navigator 클릭 이동
+1. Navigator에서 다른 이미지 클릭 → 해당 이미지 로드
+2. `singleViewImageIndex` 변경 확인
+
+#### 43-5. ESC로 단일 이미지 종료 → 초기 상태 복귀
+1. ESC 키 → `viewMode=null`, 단일 이미지 숨김
+2. Label Explorer 선택 해제 (`labelSelection.selected.length === 0`)
+3. 초기 상태 메시지("파일을 선택하거나...") 표시 또는 이전 상태 복원
+
+#### 43-6. 다중 선택 → 그리드 모드
+1. 이미지 1개 클릭 → 단일 이미지 모드
+2. Ctrl+Click 두 번째 이미지 → 그리드 모드 전환 (`gridMode=true`)
+3. 그리드에 2개 이미지 표시 확인
+4. `data-label-explorer-grid` attribute 존재 확인
+
+#### 43-7. 그리드 더블클릭 → 단일 → ESC → 그리드 복귀 사이클
+1. Ctrl+Click 클래스명 → 그리드 (3개 이미지)
+2. 그리드 더블클릭 → 단일 이미지 진입 (`viewMode='gridImage'`)
+3. `savedViewState`에 classification 이미지 없음 확인 (오염 방지)
+4. ESC → 그리드 복귀 (`gridMode=true`, `data-label-explorer-grid=true`)
+5. 단일 이미지 클릭 → `viewMode='single'`, 그리드 사라짐 (`gridVisible=false`)
+6. ESC → 초기 상태 복귀 (`placeholder=true`, `savedViewState=null`)
+
+#### 43-8. 그리드 컨텍스트 메뉴
+1. 그리드 아이템 우클릭 → 컨텍스트 메뉴 표시 확인
+2. 메뉴에 Composite, Measure 등 옵션 존재 확인
+
+#### 43-9. Composite/Measure 버튼 동작 (Label Explorer 그리드)
+1. Ctrl+Click 클래스 → 그리드 표시
+2. Composite 버튼 클릭 → Composite 생성 모달/패널 표시
+3. Measure 버튼 클릭 → Measure 패널 표시
+4. `getSelectedImagesForModal()` 반환값에 원본 경로 포함 확인
+
+#### 43-10. Label Explorer 라벨 추가/삭제 동작
+1. Wafer Map Explorer에서 이미지 선택 → Fail List 클래스 클릭 → alert 확인
+2. Label Explorer에서 해당 클래스 열기 → 이미지 존재 확인
+3. 🗑️ 버튼 클릭 → 이미지 삭제 확인
+4. Delete Label 버튼으로 다중 삭제 확인
+
+**pass 기준**: 43-1~43-10 모든 항목 성공, 서버 생존 확인 (`/api/classes` 200)
+
+---
+
 ## 병합 이력
 
 아래 Phase들은 중복/겹침으로 인해 다른 Phase에 병합됨:

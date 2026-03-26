@@ -11959,9 +11959,10 @@ class WaferMapViewer {
                 const path = target.dataset.path;
                 const contentDiv = target.nextElementSibling;
 
-                await this.loadDirectoryContents(path, contentDiv);
-
-                detailsElement.dataset.loaded = 'true';
+                // 🔥 non-blocking: 폴더 UI 즉시 토글, 콘텐츠는 백그라운드 로드
+                this.loadDirectoryContents(path, contentDiv).then(() => {
+                    detailsElement.dataset.loaded = 'true';
+                });
             }
 
             // 🔥 폴더 클릭 시에도 이전 선택 해제 (Ctrl/Shift가 아닐 때)
@@ -16134,7 +16135,9 @@ class WaferMapViewer {
                         });
 
                         const data = await response.json();
-                        const imgList = Array.isArray(data.items) ? data.items : [];
+                        // ✅ 이미지 파일만 필터링 (JSON 등 비이미지 파일 제외)
+                        const imgList = (Array.isArray(data.items) ? data.items : [])
+                            .filter(item => item.type === 'file' && this.isImageFile(item.name));
 
                         if (isContextChanged()) {
                             this.debugLog(`?? [DEBUG] 폴더 '${cls}' 업데이트 중단 (컨텍스트 변경)`);
@@ -16678,31 +16681,38 @@ class WaferMapViewer {
 
                 if (!isCtrl && !isShift) {
                     const wasOpen = isOpen;
-                    labelSelection.openFolders[cls] = !isOpen;
+                    labelSelection.openFolders[cls] = !wasOpen;
 
                     if (!wasOpen) {
-                        // 폴더 열기: 이미지 리스트만 가져와서 Label Explorer에 표시
-                        const labelPath = this.buildClassificationPath(cls);
-                        fetch(`/api/files?path=${encodeURIComponent(labelPath)}`)
-                            .then(res => res.json())
-                            .then(data => {
-                                const imgList = Array.isArray(data.items) ? data.items : [];
-                                if (!this.classToImgListCache) this.classToImgListCache = {};
-                                this.classToImgListCache[cls] = imgList;
-                                this.updateLabelExplorerContent();
-                            })
-                            .catch(err => {
-                                console.error(`폴더 '${cls}' 이미지 로드 실패:`, err);
-                                if (!this.classToImgListCache) this.classToImgListCache = {};
-                                this.classToImgListCache[cls] = [];
-                                this.updateLabelExplorerContent();
-                            });
-                    } else {
-                        // 폴더 닫기: 캐시 무효화
-                        if (this.classToImgListCache && this.classToImgListCache[cls]) {
-                            delete this.classToImgListCache[cls];
+                        // 폴더 열기: 캐시가 있으면 즉시 렌더, 없으면 fetch 후 렌더
+                        if (!this.classToImgListCache) this.classToImgListCache = {};
+                        const cached = this.classToImgListCache[cls];
+                        if (cached) {
+                            // 🔥 캐시 히트: API 호출 없이 즉시 렌더
+                            this._updateLabelExplorerContentFast();
+                        } else {
+                            // 캐시 미스: fetch 후 렌더 (API 1회만)
+                            const labelPath = this.buildClassificationPath(cls);
+                            fetch(`/api/files?path=${encodeURIComponent(labelPath)}`)
+                                .then(res => res.json())
+                                .then(data => {
+                                    // ✅ 이미지 파일만 필터링 (JSON 등 비이미지 파일 제외)
+                                    const imgList = (Array.isArray(data.items) ? data.items : [])
+                                        .filter(item => item.type === 'file' && this.isImageFile(item.name));
+                                    this.classToImgListCache[cls] = imgList;
+                                    if (labelSelection.openFolders[cls]) {
+                                        this._updateLabelExplorerContentFast();
+                                    }
+                                })
+                                .catch(err => {
+                                    console.error(`폴더 '${cls}' 이미지 로드 실패:`, err);
+                                    this.classToImgListCache[cls] = [];
+                                    this._updateLabelExplorerContentFast();
+                                });
                         }
-                        this.updateLabelExplorerContent();
+                    } else {
+                        // 🔥 폴더 닫기: API 호출 없이 즉시 렌더
+                        this._updateLabelExplorerContentFast();
                     }
 
                     return;
@@ -16740,7 +16750,7 @@ class WaferMapViewer {
                 // 클래스 선택에 따른 그리드 모드 전환
 
                 if (labelSelection.selectedClasses.length === 1) {
-                    // 단일 클래스 선택: WME의 loadImagesInFolderAndShowGrid 재사용
+                    // 단일 클래스 선택
                     const selectedClass = labelSelection.selectedClasses[0];
                     const labelPath = this.buildClassificationPath(selectedClass);
                     this.debugLog(`Label Explorer: 클래스 '${selectedClass}' → 그리드 모드 (${labelPath})`);
@@ -16749,14 +16759,26 @@ class WaferMapViewer {
                     labelSelection.openFolders[selectedClass] = true;
                     // ✅ savedViewState 백업 (Label Explorer 그리드가 덮어쓰지 않도록)
                     const _svBackup = this.savedViewState;
-                    this.loadImagesInFolderAndShowGrid(labelPath).then(() => {
-                        // ✅ Label Explorer 그리드 마킹
-                        const g = document.getElementById('image-grid');
-                        if (g) g.setAttribute('data-label-explorer-grid', 'true');
-                        this.savedViewState = _svBackup;
-                        this.labelExplorerGridState = this.buildLabelExplorerGridState(this.currentGridImages, 0);
-                        this._transientGridRestoreState = { ...this.labelExplorerGridState };
-                    });
+                    // ✅ 폴더 내 이미지 사전 확인 (빈 폴더 시 UI 깨짐 방지)
+                    fetch(`/api/files?path=${encodeURIComponent(labelPath)}`)
+                        .then(r => r.json())
+                        .then(data => {
+                            const imgFiles = (data.items || []).filter(i => i.type === 'file' && this.isImageFile(i.name));
+                            if (imgFiles.length === 0) {
+                                // 빈 폴더: 그리드/패널 건드리지 않고 선택만 해제
+                                this.debugLog(`Label Explorer: 클래스 '${selectedClass}' 비어있음 — UI 변경 없음`);
+                                labelSelection.selectedClasses = [];
+                                this.updateLabelExplorerContent();
+                                return;
+                            }
+                            return this.loadImagesInFolderAndShowGrid(labelPath).then(() => {
+                                const g = document.getElementById('image-grid');
+                                if (g) g.setAttribute('data-label-explorer-grid', 'true');
+                                this.savedViewState = _svBackup;
+                                this.labelExplorerGridState = this.buildLabelExplorerGridState(this.currentGridImages, 0);
+                                this._transientGridRestoreState = { ...this.labelExplorerGridState };
+                            });
+                        });
                 } else if (labelSelection.selectedClasses.length > 1) {
                     // 다중 클래스 선택: 모든 선택된 클래스의 이미지를 그리드로 표시
 
@@ -17696,8 +17718,10 @@ class WaferMapViewer {
                                     try {
                                         const response = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`);
                                         const data = await response.json();
-                                        const imgList = Array.isArray(data.items) ? data.items : [];
-                                        
+                                        // ✅ 이미지 파일만 필터링 (JSON 등 비이미지 파일 제외)
+                                        const imgList = (Array.isArray(data.items) ? data.items : [])
+                                            .filter(item => item.type === 'file' && this.isImageFile(item.name));
+
                                         // 캐시 업데이트
                                         if (!this.classToImgListCache) this.classToImgListCache = {};
                                         this.classToImgListCache[cls] = imgList;
@@ -17829,6 +17853,29 @@ class WaferMapViewer {
         // 스크롤 위치 복원
             container.scrollTop = scrollTop;
         });
+    }
+
+    /**
+     * 🔥 Label Explorer 폴더 토글용 고속 렌더 — refreshClassList API 호출 없이 캐시만 사용
+     */
+    _updateLabelExplorerContentFast() {
+        const container = document.getElementById('label-explorer-list');
+        if (!container) return;
+        const scrollTop = container.scrollTop;
+
+        // 캐시된 클래스 목록 사용 (API 호출 제거)
+        const classes = Array.isArray(this.cachedClassList)
+            ? [...this.cachedClassList].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+            : [];
+        const labelSelection = this.labelSelection;
+
+        let classToImgList = {};
+        for (const cls of classes) {
+            classToImgList[cls] = this.classToImgListCache?.[cls] || [];
+        }
+
+        this.renderLabelExplorerContent(container, classes, classToImgList, labelSelection);
+        container.scrollTop = scrollTop;
     }
 
     /**
@@ -22496,8 +22543,9 @@ class WaferMapViewer {
                 }
                 this.showGrid(files);
             } else {
-                 this.hideGrid();
-                 this.hideImage();
+                // 🔥 빈 폴더: 기존 화면 상태 유지 (상단 패널 보존)
+                // hideGrid/hideImage를 호출하면 상단 패널이 사라지는 버그 발생
+                this.debugLog(`[GRID] 빈 폴더 — 기존 화면 유지 (${folderPath})`);
             }
         } catch (error) {
             console.error('Failed to load images for grid:', error);
