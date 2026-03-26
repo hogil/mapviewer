@@ -815,6 +815,32 @@ Composite에서 Failbit이 아닌 모든 항목(BIN/FBT/QVL)은 gradient 범례�
 
 **pass 기준**: 단건/다중 추가 → 버튼 클릭 라벨 → Add Label 라벨 → 탐색 → 단일뷰 → 다중 삭제 → 기존 라벨 non-palette 로드 전체 성공
 
+#### 7-10. Label Explorer 단일/다중 선택 전환
+Label Explorer에서 이미지 클릭으로 단일 뷰/다중 그리드 전환이 정상 동작하는지 확인.
+1. 이미지 1개 클릭 → `gridMode=false`, `viewMode='single'`, canvas `display:block`
+2. Ctrl+클릭으로 2번째 이미지 추가 → `gridMode=true`, `selected.length=2`, `currentGridImages.length=2`
+3. Ctrl+클릭으로 3번째 추가 → `selected.length=3`, `currentGridImages.length=3`
+4. 다른 이미지 단일 클릭 → `gridMode=false`, `viewMode='single'`, canvas `display:block`
+5. 같은 이미지 다시 클릭(해제) → `gridMode=true`, `selected.length=0` (이전 그리드 복귀)
+6. **서버 생존 확인**: `/api/classes` 응답 200
+
+#### 7-11. Label Explorer UI 안정성 — 상단 밀림 방지
+Label Explorer 클래스 폴더 열기/닫기 시 위쪽 UI(Class Manager, Fail List)가 움직이지 않는지 확인.
+1. 클래스 폴더 열기 전 `.classification-frame` offsetTop 기록
+2. 클래스 폴더 열기 후 `.classification-frame` offsetTop 비교 → 동일해야 함
+3. 이미지 클릭(단일 뷰) 후 `.classification-frame` offsetTop 비교 → 동일해야 함
+4. `.label-explorer-frame`에 `overflow-y: auto` 확인 (독립 스크롤)
+- **핵심**: `.wrapper-right`가 `overflow: hidden`, `.classification-frame`이 `flex-shrink: 0`
+
+#### 7-12. classification 이미지 경로 폴백 (Ubuntu 호환)
+`get_image`/`get_thumbnail` API가 classification 경로를 찾을 때 다중 폴백을 시도하는지 확인.
+1. `/api/image?path=classification/afwefaw/Center.png` → 200 (ROOT_DIR 또는 current_folder 기준)
+2. `/api/thumbnail?path=classification/afwefaw/Center.png&size=512` → 200
+3. 404 발생 시 서버 로그에 `❌ [get_image] 404: path=..., ROOT_DIR=..., current_folder=...` 진단 로그 출력
+- **핵심**: `ROOT_DIR/path` 실패 → `current_folder/path` → `current_folder/classification/tail` 순서로 폴백
+
+**pass 기준**: 단건/다중 추가 → 버튼 클릭 라벨 → Add Label 라벨 → 탐색 → 단일뷰 → 다중 삭제 → 기존 라벨 non-palette 로드 → 단일/다중 전환 → UI 안정성 → 경로 폴백 전체 성공
+
 ---
 
 ### Phase 8: Composite (구 M.Comp)
