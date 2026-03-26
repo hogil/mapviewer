@@ -6571,16 +6571,28 @@ async def get_image(
             except ValueError:
                 raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
 
-        # 🔥 원본 경로에 파일이 없으면 classification 경로로 폴백
+        # 🔥 파일이 없으면 다중 폴백 시도
         if not image_path.exists() or not image_path.is_file():
+            found = False
+            # 폴백 1: 원본 lookup 결과 경로와 다르면 classification 경로 시도
             if classification_path != path:
-                fallback_path = ROOT_DIR / classification_path
-                if fallback_path.exists() and fallback_path.is_file():
-                    image_path = fallback_path
-                    path = classification_path
-                else:
-                    raise HTTPException(status_code=404, detail="Image not found")
-            else:
+                fb = ROOT_DIR / classification_path
+                if fb.exists() and fb.is_file():
+                    image_path, path, found = fb, classification_path, True
+            # 폴백 2: current_folder 기준 경로 시도 (제품 폴더 내 classification)
+            if not found:
+                fb = current_folder / classification_path
+                if fb.exists() and fb.is_file():
+                    image_path, path, found = fb, classification_path, True
+            # 폴백 3: classification/ 포함 경로에서 current_folder 기준 시도
+            if not found and "classification" in classification_path:
+                # path가 "classification/cls/img.png" 형태일 때 current_folder 아래에서 탐색
+                fb = current_folder / classification_path.split("classification", 1)[-1].lstrip("/")
+                cls_fb = current_folder / "classification" / classification_path.split("classification", 1)[-1].lstrip("/")
+                if cls_fb.exists() and cls_fb.is_file():
+                    image_path, found = cls_fb, True
+            if not found:
+                logger.warning(f"❌ [get_image] 404: path={classification_path}, tried={image_path}, ROOT_DIR={ROOT_DIR}, current_folder={current_folder}")
                 raise HTTPException(status_code=404, detail="Image not found")
 
         try:
@@ -7400,13 +7412,27 @@ async def get_thumbnail(
                     image_path.resolve().relative_to(ROOT_DIR.resolve())
                 except ValueError:
                     return None, 'forbidden', None
-            # 🔥 원본 경로에 파일이 없으면 classification 경로로 폴백
+            # 🔥 파일이 없으면 다중 폴백 시도
             if not image_path.exists() or not image_path.is_file():
+                # 폴백 1: classification 원본 경로
                 if classification_path != path:
-                    fallback = ROOT_DIR / classification_path
-                    if fallback.exists() and fallback.is_file():
+                    fb = ROOT_DIR / classification_path
+                    if fb.exists() and fb.is_file():
                         path = classification_path
-                        return fallback, 'ok', fallback.stat()
+                        return fb, 'ok', fb.stat()
+                # 폴백 2: current_folder 기준
+                fb2 = current_folder / classification_path
+                if fb2.exists() and fb2.is_file():
+                    path = classification_path
+                    return fb2, 'ok', fb2.stat()
+                # 폴백 3: current_folder/classification/... 재구성
+                if "classification" in classification_path:
+                    tail = classification_path.split("classification", 1)[-1].lstrip("/")
+                    fb3 = current_folder / "classification" / tail
+                    if fb3.exists() and fb3.is_file():
+                        path = classification_path
+                        return fb3, 'ok', fb3.stat()
+                logger.warning(f"❌ [thumbnail] 404: path={classification_path}, tried={image_path}, current_folder={current_folder}")
                 return None, 'not_found', None
             try:
                 image_stat = image_path.stat()
