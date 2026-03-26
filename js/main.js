@@ -13664,12 +13664,17 @@ class WaferMapViewer {
 
         this.dom.viewerContainer.style.position = 'relative';
 
-        // 🔥 오버레이 캔버스 동기화
+        // 🔥 오버레이 캔버스 동기화 (이미지 캔버스와 정확히 동일한 위치/크기)
         if (this.dom.overlayCanvas) {
             this.dom.overlayCanvas.width = width;
             this.dom.overlayCanvas.height = height;
             this.dom.overlayCanvas.style.width = '100%';
             this.dom.overlayCanvas.style.height = '100%';
+            this.dom.overlayCanvas.style.position = 'absolute';
+            this.dom.overlayCanvas.style.left = '0';
+            this.dom.overlayCanvas.style.top = '0';
+            this.dom.overlayCanvas.style.zIndex = 2;
+            this.dom.overlayCanvas.style.pointerEvents = 'none';
         }
 
         let usedGpu = false;
@@ -15283,8 +15288,9 @@ class WaferMapViewer {
         this.classSelection.selected = [];
         this.classSelection.lastClicked = null;
 
-        // 🔥 refreshLabelExplorer가 내부에서 getClassList() 호출하므로 중복 제거
-        await this.refreshLabelExplorer();
+        // 삭제된 클래스만 캐시 무효화
+        for (const n of names) delete this.classToImgListCache?.[n];
+        await this.refreshLabelExplorer(names);
 
         // 🔥 추가: Fail List와 Label Explorer 즉시 업데이트
         this.updateLabelExplorerContent();
@@ -15499,8 +15505,9 @@ class WaferMapViewer {
 
             await this.loadExistingLabels(existingLabelsList, selectedImages);
 
-            // UI 업데이트 (refreshLabelExplorer가 내부에서 getClassList() 호출)
-            await this.refreshLabelExplorer();
+            // UI 업데이트 — 변경된 클래스만 캐시 무효화
+            const dirtyClasses = [...new Set(this.selectedLabelsForRemoval.map(g => g.className))];
+            await this.refreshLabelExplorer(dirtyClasses);
             
         } catch (error) {
             console.error('Failed to remove labels:', error);
@@ -15916,8 +15923,17 @@ class WaferMapViewer {
 
             this.debugLog('라벨 추가 완료, UI 새로고침 시작...');
 
-            // refreshLabelExplorer가 내부에서 getClassList() 호출하므로 중복 제거
-            await this.refreshLabelExplorer();
+            // 변경된 클래스만 캐시 무효화 (finalClassName + remove-and-add 시 제거된 클래스들)
+            const dirtyClasses = [finalClassName];
+            if (selectedAction === 'remove-and-add' && removedCount > 0) {
+                // 다른 클래스에서 제거한 경우 해당 클래스도 dirty
+                for (const cls of allClasses) {
+                    if (cls !== finalClassName && !dirtyClasses.includes(cls)) {
+                        dirtyClasses.push(cls);
+                    }
+                }
+            }
+            await this.refreshLabelExplorer(dirtyClasses);
             
         } catch (error) {
             console.error('Failed to add label:', error);
@@ -16000,11 +16016,12 @@ class WaferMapViewer {
 
     // --- LABEL EXPLORER ---
 
-    async refreshLabelExplorer() {
+    async refreshLabelExplorer(dirtyClasses) {
         // 🔥 Label Explorer 새로고침 활성화
         // 🔥 중복 호출 방지
         if (this._isRefreshingLabelExplorer) {
             this._pendingLabelExplorerRefresh = true;
+            this._pendingDirtyClasses = dirtyClasses; // dirty 정보 보존
             return;
         }
 
@@ -16041,17 +16058,17 @@ class WaferMapViewer {
 
         this.debugLog('Label Explorer 새로고침 시작...');
 
-        // 🔥 라벨링 후인 경우 캐시 완전 초기화 (단일 이미지 모드와 Grid 모드 모두)
+        // 🔥 라벨링 후 캐시 무효화 (dirty 클래스만 or 전체)
+        if (!this.classToImgListCache) this.classToImgListCache = {};
 
-        if ((!this.gridMode && this.selectedImagePath) || (this.gridMode && this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0)) {
+        if (dirtyClasses && dirtyClasses.length > 0) {
+            // 변경된 클래스만 캐시 무효화 (나머지 유지 → 초고속)
+            for (const cls of dirtyClasses) {
+                delete this.classToImgListCache[cls];
+            }
+            this.debugLog(`🔷 [DEBUG] dirty 캐시 무효화: ${dirtyClasses.join(', ')}`);
+        } else if ((!this.gridMode && this.selectedImagePath) || (this.gridMode && this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0)) {
             this.debugLog('🔷 [DEBUG] 라벨링 후 캐시 완전 초기화');
-
-            // 🔥 캐시 완전 초기화 (열린 폴더도 모두 새로고침)
-            this.classToImgListCache = {};
-            
-            // 🔥 열린 폴더 상태는 유지하되, 데이터는 다시 가져옴
-            // (아래 코드에서 열린 폴더를 서버에서 다시 가져옴)
-        } else if (!this.classToImgListCache) {
             this.classToImgListCache = {};
         }
 
@@ -16110,14 +16127,14 @@ class WaferMapViewer {
             }
         }
 
-        // 🔥 라벨링 후인 경우 열린 폴더 강제 새로고침 (단일 이미지 모드와 Grid 모드 모두)
+        // 🔥 dirty 또는 라벨링 후: 변경된 열린 폴더만 re-fetch
+        const needRefetch = dirtyClasses
+            ? (cls) => dirtyClasses.includes(cls)
+            : () => ((!this.gridMode && this.selectedImagePath) || (this.gridMode && this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0));
 
-        if ((!this.gridMode && this.selectedImagePath) || (this.gridMode && this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0)) {
-            this.debugLog('🔷 [DEBUG] 라벨링 후 열린 폴더 강제 새로고침');
-
-            // 🔥 열린 폴더의 이미지 목록을 서버에서 가져오기 (병렬 처리 최적화)
-
-            const openFolders = classes.filter(cls => labelSelection.openFolders[cls]);
+        {
+            const openFolders = classes.filter(cls => labelSelection.openFolders[cls] && needRefetch(cls));
+            if (openFolders.length > 0) this.debugLog(`🔷 [DEBUG] 열린 폴더 re-fetch: ${openFolders.join(', ')}`);
             
             // 🔥 모든 폴더를 병렬로 처리 (배치 제한 제거)
             const folderPromises = openFolders.map(async (cls) => {
@@ -16612,7 +16629,9 @@ class WaferMapViewer {
 
             if (this._pendingLabelExplorerRefresh || isContextChanged()) {
                 this._pendingLabelExplorerRefresh = false;
-                return this.refreshLabelExplorer();
+                const pendingDirty = this._pendingDirtyClasses;
+                this._pendingDirtyClasses = null;
+                return this.refreshLabelExplorer(pendingDirty);
             }
         }
     }

@@ -645,9 +645,8 @@ export class LabelManager {
                     // 🔥 refreshLabelExplorer()만 호출하여 추가된 라벨을 표시
                     console.log('🔍 [CLASS_CLICK_DEBUG] 라벨 추가 후 refreshLabelExplorer 호출 전 currentFolderPath:', this.viewer?.currentFolderPath);
                     
-                    // 🔥 refreshLabelExplorer()만 호출 (클래스 목록은 그대로 유지)
-                    // 🔥 refreshLabelExplorer() 내부에서 current_folder 복원을 처리하므로 여기서는 호출만
-                    await this.refreshLabelExplorer();
+                    // 🔥 변경된 클래스만 캐시 무효화 → 나머지 캐시 유지 (초고속)
+                    await this.refreshLabelExplorer([className]);
                     console.log('🔍 [CLASS_CLICK_DEBUG] refreshLabelExplorer 완료 후 currentFolderPath:', this.viewer?.currentFolderPath);
                 } catch (err) {
                     console.error('🔍 [CLASS_CLICK_DEBUG] 라벨 추가 오류:', err);
@@ -839,18 +838,22 @@ export class LabelManager {
     
     /**
      * Label Explorer 새로고침
+     * @param {string[]} [dirtyClasses] 변경된 클래스만 캐시 무효화 (생략 시 전체 무효화)
      */
-    async refreshLabelExplorer() {
-        console.log('🔍 [CACHE_DEBUG] Label Explorer 새로고침 시작 - 캐시 삭제');
+    async refreshLabelExplorer(dirtyClasses) {
+        console.log('🔍 [CACHE_DEBUG] Label Explorer 새로고침 시작', dirtyClasses ? `dirty=${dirtyClasses}` : '전체 캐시 삭제');
 
-        // 🔥 current_folder 복원 제거: 오직 changeFolder에서만 current_folder 변경 가능
-        // 🔥 label explorer는 changeFolder로 설정된 current_folder를 그대로 사용
-
-        // Label cache 삭제
+        // 변경된 클래스만 캐시 무효화 (나머지 유지 → 50ms 이하 가능)
         if (this.viewer && this.viewer.classToImgListCache) {
-            console.log('🔍 [CACHE_DEBUG] classToImgListCache 삭제 전:', Object.keys(this.viewer.classToImgListCache).length, '개');
-            this.viewer.classToImgListCache = {};
-            console.log('🔍 [CACHE_DEBUG] classToImgListCache 삭제 완료');
+            if (dirtyClasses && dirtyClasses.length > 0) {
+                for (const cls of dirtyClasses) {
+                    delete this.viewer.classToImgListCache[cls];
+                }
+                console.log('🔍 [CACHE_DEBUG] dirty 캐시 무효화:', dirtyClasses.join(', '));
+            } else {
+                this.viewer.classToImgListCache = {};
+                console.log('🔍 [CACHE_DEBUG] 전체 캐시 삭제');
+            }
         }
 
         const container = this.elements.labelExplorerList;
