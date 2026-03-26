@@ -13173,6 +13173,22 @@ class WaferMapViewer {
                     }
                 } catch (_) {}
             }
+            // Composite average map pixel 분포 로드 (gradient 범례용)
+            this._compositeGradientStats = null;
+            if (this.isCompositeMode && fullPath && (fullPath.includes('square_average') || fullPath.includes('square_weighted'))) {
+                try {
+                    const gsResp = await fetch(`/api/gradient-stats?path=${encodeURIComponent(fullPath)}`);
+                    if (gsResp.ok) {
+                        const gsData = await gsResp.json();
+                        if (gsData.stats) {
+                            const stem = fullPath.split('/').pop().replace(/\.[^.]+$/, '');
+                            const entry = gsData.stats[stem];
+                            if (entry?.ranges) this._compositeGradientStats = entry.ranges;
+                        }
+                    }
+                } catch (_) {}
+            }
+
             this.showColorLegends();
             this.renderColorLegends();
 
@@ -25527,10 +25543,14 @@ class WaferMapViewer {
             const labels = ['0~10', '10~20', '20~30', '30~40', '40~50', '50~60', '60~70', '70~80', '80~90', '90~100'];
             // Chip counts per range — measure composite uses server-side range_counts
             let rc;
-            if (isMeasureComposite && this.compositeSession?.rangeCounts?.length === 10) {
-                const counts = this.compositeSession.rangeCounts;
-                const total = counts.reduce((a, b) => a + b, 0);
-                rc = { counts, total };
+            const sessionRC = this.compositeSession?.rangeCounts;
+            const sessionTotal = sessionRC?.length === 10 ? sessionRC.reduce((a, b) => a + b, 0) : 0;
+            if (isMeasureComposite && sessionTotal > 0) {
+                rc = { counts: sessionRC, total: sessionTotal };
+            } else if (this._compositeGradientStats) {
+                // Composite average map: 서버에서 계산된 pixel 분포 사용
+                const gs = this._compositeGradientStats;
+                rc = { counts: gs.map(r => r.count), total: gs.reduce((a, r) => a + r.count, 0) };
             } else {
                 rc = this.chipAnnotator ? this.chipAnnotator.getGradientRangeCounts() : { counts: new Array(10).fill(0), total: 0 };
             }

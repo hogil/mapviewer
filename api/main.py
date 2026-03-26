@@ -2851,6 +2851,25 @@ async def save_measure_colors_endpoint(request: Request):
         raise HTTPException(status_code=500, detail="Measure 색상을 저장하지 못했습니다.")
 
 
+@app.get("/api/gradient-stats")
+async def get_gradient_stats(request: Request):
+    """Composite average map의 pixel 분포 통계 (gradient 범례용)"""
+    path = request.query_params.get("path", "")
+    if not path:
+        raise HTTPException(status_code=400, detail="path 파라미터가 필요합니다.")
+    # path에서 composite 결과 디렉토리 추출
+    image_path = IMAGES_ROOT / path
+    stats_path = image_path.parent / "gradient_stats.json"
+    if not stats_path.exists():
+        return {"stats": None}
+    try:
+        import json as _json
+        return {"stats": _json.loads(stats_path.read_text(encoding="utf-8"))}
+    except Exception as exc:
+        logger.warning(f"gradient_stats.json 읽기 실패: {exc}")
+        return {"stats": None}
+
+
 @app.post("/api/composite-recolor")
 async def recolor_composite_sum_maps_endpoint(request: Request):
     if not HAS_NUMPY:

@@ -1608,6 +1608,44 @@ def recolor_saved_sum_maps(
 
 
 
+def _save_gradient_stats(
+    output_dir: Path,
+    variants: List[Tuple],
+    precomputed_ranges: Dict[int, Tuple[Optional[float], Optional[float]]],
+) -> None:
+    """Gradient 범례용 pixel 분포 통계를 JSON으로 저장 (~500 bytes).
+    단일뷰에서 average map의 0~10%...90~100% 범례 퍼센트/갯수를 표시하는 데 사용."""
+    import json as _json
+    stats: Dict[str, Any] = {}
+    bins = np.arange(0, 101, 10, dtype=np.float64)
+    for vi, (filename, variant_type, _, data_map, mask_arr) in enumerate(variants):
+        v_min, v_max = precomputed_ranges.get(vi, (None, None))
+        if v_min is None or v_max is None or v_max <= v_min:
+            continue
+        values = data_map[mask_arr]
+        if values.size == 0:
+            continue
+        normalized = np.clip((values.astype(np.float64) - v_min) / (v_max - v_min) * 100.0, 0, 100)
+        counts, _ = np.histogram(normalized, bins=bins)
+        total = int(counts.sum())
+        ranges = []
+        for i in range(10):
+            c = int(counts[i])
+            pct = round(c / total * 100, 1) if total > 0 else 0.0
+            ranges.append({"label": f"{i*10}~{(i+1)*10}%", "percent": pct, "count": c})
+        stem = Path(filename).stem
+        stats[stem] = {"ranges": ranges, "total_pixels": total}
+
+    if stats:
+        json_path = output_dir / "gradient_stats.json"
+        def _write():
+            try:
+                json_path.write_text(_json.dumps(stats, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
+        threading.Thread(target=_write, daemon=True).start()
+
+
 def _save_sum_map_variants(
     all_indices: Optional[np.ndarray],
     output_dir: Path,
@@ -1804,6 +1842,9 @@ def _save_sum_map_variants(
             color_scheme=settings.scheme,
             colors=resolved_colors,
         )
+
+    # 🔥 Gradient 범례용 pixel 분포 JSON 저장 (단일뷰에서 사용)
+    _save_gradient_stats(output_dir, variants, _precomputed_ranges)
 
     return outputs
 
