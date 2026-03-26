@@ -1596,6 +1596,10 @@ export class ThumbnailNavigator {
 
             this.viewer.loadImage(imagePath, false);
 
+            // ✅ Label Explorer 하이라이트 동기화
+            if (typeof this.viewer.syncLabelExplorerHighlight === 'function') {
+                this.viewer.syncLabelExplorerHighlight(imagePath);
+            }
         }
 
     }

@@ -384,6 +384,7 @@ class IndexService:
         self._lot_index: Dict[str, List[int]] = {}   # lot_token -> [indices]
         self._folder_index: Dict[str, List[int]] = {} # folder_name -> [indices]
         self._token_index: Dict[str, List[int]] = {}    # token -> [indices] (파일명 _ split)
+        self._name_to_paths: Dict[str, List[str]] = {}  # filename -> [rel_paths] (classification 제외)
         self._lock = RLock()
         self._async_build_lock = asyncio.Lock()
         self._cache_loaded = False
@@ -413,6 +414,11 @@ class IndexService:
     @property
     def lock(self) -> RLock:
         return self._lock
+
+    @property
+    def name_to_paths(self) -> Dict[str, List[str]]:
+        """파일명 → 원본 경로 목록 (classification 디렉토리 제외). 인덱스 빌드 시 구축됨."""
+        return self._name_to_paths
 
     # ------------- 캐시 -------------
     def clear(self) -> None:
@@ -721,12 +727,14 @@ class IndexService:
         return keys_ref[start_idx:end_idx], names_ref[start_idx:end_idx]
 
     def _build_lookup_indices(self) -> None:
-        """LOT별/폴더별/토큰별 역인덱스 빌드."""
+        """LOT별/폴더별/토큰별/파일명별 역인덱스 빌드."""
         from collections import defaultdict
         t0 = time.time()
         lot_idx: Dict[str, List[int]] = {}
         folder_idx: Dict[str, List[int]] = {}
         token_idx: Dict[str, List[int]] = defaultdict(list)
+        name_to_paths: Dict[str, List[str]] = {}
+        classification_dir_names = {"classification", "classification_chips"}
         for i, (key, name) in enumerate(zip(self._keys, self._names)):
             lot = name.split("_", 1)[0]
             if lot not in lot_idx:
@@ -743,12 +751,19 @@ class IndexService:
             stem = name[:dot] if dot > 0 else name
             for token in stem.split("_"):
                 token_idx[token].append(i)
+            # 파일명 → 경로 인덱스 (classification 디렉토리 제외)
+            if folder not in classification_dir_names:
+                orig_name = key.rsplit("/", 1)[-1]  # 대소문자 원본 유지
+                if orig_name not in name_to_paths:
+                    name_to_paths[orig_name] = []
+                name_to_paths[orig_name].append(key)
         self._lot_index = lot_idx
         self._folder_index = folder_idx
         self._token_index = dict(token_idx)
+        self._name_to_paths = name_to_paths
         elapsed = time.time() - t0
-        self.logger.info("✅ [INDEX] Lookup indices built: %d LOTs, %d folders, %d tokens (%.2fs)",
-                         len(lot_idx), len(folder_idx), len(token_idx), elapsed)
+        self.logger.info("✅ [INDEX] Lookup indices built: %d LOTs, %d folders, %d tokens, %d unique names (%.2fs)",
+                         len(lot_idx), len(folder_idx), len(token_idx), len(name_to_paths), elapsed)
 
     def lot_search(self, lot_filter: Set[str], folder: str = "") -> List[str]:
         """LOT 필터로 O(1) 검색. folder가 있으면 해당 폴더 내만."""

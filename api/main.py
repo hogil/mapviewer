@@ -5337,7 +5337,8 @@ async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
 def _lookup_original_relpath_from_classification_path(path_str: str) -> Optional[str]:
     """classification/<class>/<filename> 형식이 오면 ROOT_DIR 내 원본 상대경로를 추정한다.
 
-    폴더 구조가 source of truth이므로 FILE_INDEX에서 파일명으로 원본을 찾는다.
+    IndexService의 name_to_paths 인덱스를 사용하여 O(1) 조회.
+    (이전: 30초마다 500만 키 풀스캔 → 서버 블로킹)
     """
     try:
         try:
@@ -5358,48 +5359,13 @@ def _lookup_original_relpath_from_classification_path(path_str: str) -> Optional
             return None
         source_prefix = "/".join(path_parts[:classification_idx]) if classification_idx > 0 else ""
 
-        # 🔥 FILE_INDEX 캐시에서 파일명으로 원본 경로 조회
-        # 캐시 빌드는 비블로킹으로 수행 (이벤트 루프 블록 방지)
-        _fn = _lookup_original_relpath_from_classification_path
-        if not hasattr(_fn, '_name_cache'):
-            _fn._name_cache = {}
-            _fn._cache_timestamp = 0
-            _fn._building = False
-
-        current_time = time.time()
-        if current_time - _fn._cache_timestamp > 30 and not _fn._building:
-            # 🔥 캐시가 오래됐으면 비동기로 갱신 (블록하지 않고 기존 캐시 사용)
-            _fn._building = True
-            try:
-                # FILE_INDEX_LOCK을 짧게만 사용 — trylock 패턴
-                if FILE_INDEX_LOCK.acquire(blocking=False):
-                    try:
-                        keys_snapshot = list(FILE_INDEX_KEYS)
-                    finally:
-                        FILE_INDEX_LOCK.release()
-
-                    name_cache: Dict[str, List[str]] = {}
-                    for rel in keys_snapshot:
-                        rel_parts = set(Path(rel).parts)
-                        if rel_parts & classification_dir_names:
-                            continue
-                        fname = Path(rel).name
-                        if fname not in name_cache:
-                            name_cache[fname] = []
-                        name_cache[fname].append(rel)
-
-                    _fn._name_cache = name_cache
-                    _fn._cache_timestamp = current_time
-                # LOCK 획득 실패 시 기존 캐시 사용 (인덱스 빌드 중)
-            finally:
-                _fn._building = False
-
-        candidates = _fn._name_cache.get(filename, [])
+        # 🔥 IndexService의 name_to_paths 인덱스 사용 (인덱스 빌드 시 1회 구축, O(1) 조회)
+        candidates = index_service.name_to_paths.get(filename, [])
         if candidates:
             if source_prefix:
                 prefix_matches = [
                     rel for rel in candidates
-                    if Path(rel).as_posix().startswith(f"{source_prefix}/")
+                    if rel.startswith(f"{source_prefix}/")
                 ]
                 if len(prefix_matches) == 1:
                     return prefix_matches[0]
@@ -7922,11 +7888,13 @@ async def classify_images(req: Request,
         _dircache_invalidate(class_dir)
 
         # 🔥 positions.json도 classification 폴더에 복사 (measure/composite 지원)
+        # 이미지 교체 시 position도 함께 최신으로 갱신
         try:
             pos_path = _resolve_positions_path(Path(rel_path))
             if pos_path.exists():
                 target_pos = class_dir / f"{abs_path.stem}.json"
-                if not target_pos.exists():
+                should_copy = not target_pos.exists() or needs_replace
+                if should_copy:
                     await loop.run_in_executor(IO_POOL, shutil.copy2, str(pos_path), str(target_pos))
                     log_access_row(tag="ACTION", note=f"positions 복사: {pos_path.name} -> {class_name}/")
         except Exception as pos_err:
@@ -7991,7 +7959,7 @@ async def classify_images_batch(request: BatchClassifyRequest,
         for image_path in request.images:
             try:
                 lookup_start = time.perf_counter()
-                rel_path = relkey_from_any_path(image_path)
+                rel_path = _lookup_original_relpath_from_classification_path(image_path) or relkey_from_any_path(image_path)
                 lookup_time += time.perf_counter() - lookup_start
 
                 abs_path = ROOT_DIR / rel_path
@@ -8034,12 +8002,12 @@ async def classify_images_batch(request: BatchClassifyRequest,
 
                 link_time += time.perf_counter() - link_start
 
-                # 🔥 positions.json도 classification 폴더에 복사
+                # 🔥 positions.json도 classification 폴더에 복사 (이미지 교체 시 함께 갱신)
                 try:
                     pos_path = _resolve_positions_path(Path(rel_path))
                     if pos_path.exists():
                         target_pos = class_dir / f"{abs_path.stem}.json"
-                        if not target_pos.exists():
+                        if not target_pos.exists() or needs_replace:
                             shutil.copy2(str(pos_path), str(target_pos))
                 except Exception:
                     pass
@@ -9019,14 +8987,29 @@ def _current_username(req: Optional[Request], default: str = "system") -> str:
 async def get_chip_positions(path: str, include_fq: int = 0):
     """주어진 이미지 경로에 대응하는 positions.json 반환 (include_fq=1이면 f/q 값 포함)"""
     try:
-        # 이미지 경로에서 상대 경로 추출
-        rel_path = _get_relative_path_from_image(path)
+        # 🔥 classification 경로면 해당 디렉토리의 position 파일을 먼저 확인
+        norm_path = path.replace("\\", "/")
+        cls_direct_pos = None
+        for cls_prefix in ("classification/", "classification_chips/"):
+            if cls_prefix in norm_path or norm_path.startswith(cls_prefix):
+                cls_rel = Path(norm_path)
+                cls_direct_pos = ROOT_DIR / cls_rel.parent / f"{cls_rel.stem}.json"
+                if not cls_direct_pos.exists():
+                    # current_folder 기준으로도 시도
+                    cls_direct_pos = current_folder / cls_rel.parent / f"{cls_rel.stem}.json"
+                break
+
+        if cls_direct_pos and cls_direct_pos.exists():
+            positions_file = cls_direct_pos
+            rel_path = norm_path
+        else:
+            # 원본 경로로 변환 후 검색
+            rel_path = _get_relative_path_from_image(path)
+            rel_path_obj = Path(rel_path)
+            positions_file = _resolve_positions_path(rel_path_obj)
 
         logger.info(f"🔍 [CHIP_POS] Input path: {path}")
-        logger.info(f"🔍 [CHIP_POS] Converted rel_path: {rel_path}")
-
-        rel_path_obj = Path(rel_path)
-        positions_file = _resolve_positions_path(rel_path_obj)
+        logger.info(f"🔍 [CHIP_POS] Resolved positions: {positions_file}")
 
         logger.info(f"🔍 Chip positions requested: {path} -> {positions_file}")
 

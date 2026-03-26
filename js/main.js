@@ -7108,6 +7108,8 @@ class WaferMapViewer {
         try {
             await this.loadImage(targetPath, false, currentLoadVersion, true);
             this.updatePyramidLevel();
+            // ✅ Label Explorer 하이라이트 동기화
+            this.syncLabelExplorerHighlight(targetPath);
             console.log(`✅ [NAV_FOLDER] Moved to ${directionLabel} entry:`, targetPath);
             return true;
         } catch (error) {
@@ -17179,6 +17181,52 @@ class WaferMapViewer {
                                 // ✅ viewMode 설정 (네비게이션 지원)
                                 this.viewMode = 'single';
                                 this.singleImageFromGrid = false;
+                                this._labelExplorerSingleMode = true;
+
+                                // ✅ 화살표 버튼 표시
+                                this.updateArrowButtonVisibility();
+
+                                // ✅ 키보드 이벤트 핸들러 설정 (ESC, ← →) — enterSingleViewMode와 동일
+                                if (this.boundSingleViewHandler) {
+                                    document.removeEventListener('keydown', this.boundSingleViewHandler);
+                                }
+                                if (this.boundGridNavigationHandler) {
+                                    document.removeEventListener('keydown', this.boundGridNavigationHandler);
+                                    this.boundGridNavigationHandler = null;
+                                }
+
+                                document.addEventListener('keydown', this.boundSingleViewHandler = (e) => {
+                                    if (!this.shouldAllowKeyboardShortcut(e)) return;
+                                    if (this.detailMode && e.key === 'Escape') {
+                                        this.exitDetailMode();
+                                        return;
+                                    }
+                                    if (e.key === 'Escape') {
+                                        const wasLabelExplorer = this._labelExplorerSingleMode;
+                                        this.exitSingleImageViewMode();
+                                        if (wasLabelExplorer) {
+                                            this.clearLabelExplorerSelection();
+                                        }
+                                    } else if (e.key === 'ArrowLeft') {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        this.navigatePrevious();
+                                    } else if (e.key === 'ArrowRight') {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        this.navigateNext();
+                                    }
+                                });
+
+                                // ✅ imageCanvas 더블클릭 핸들러 설정 (Label Explorer 모드)
+                                if (this.dom.imageCanvas) {
+                                    this.dom.imageCanvas.ondblclick = (e) => {
+                                        e.stopPropagation();
+                                        if (this.viewMode === 'single') {
+                                            this.handleDoubleClickNavigation();
+                                        }
+                                    };
+                                }
 
                                 this.loadImage(currentPath, true).then(() => {
                                     // ✅ Navigator 표시 (Label Explorer 이미지 리스트로)
@@ -17793,6 +17841,50 @@ class WaferMapViewer {
         
         // 스크롤 위치 복원
             container.scrollTop = scrollTop;
+        });
+    }
+
+    /**
+     * 화살표 키 등으로 이미지 이동 시 Label Explorer 하이라이트를 현재 이미지에 동기화
+     */
+    syncLabelExplorerHighlight(imagePath) {
+        if (!imagePath || !this.labelSelection) return;
+        const norm = this.normalizePath(imagePath);
+        // classification/<class>/<filename> 형식에서 key 추출
+        const classificationPrefixes = ['classification/', 'classification_chips/'];
+        let key = null;
+        for (const prefix of classificationPrefixes) {
+            const idx = norm.indexOf(prefix);
+            if (idx !== -1) {
+                // prefix 이후가 class/filename
+                key = norm.substring(idx + prefix.length);
+                break;
+            }
+        }
+        if (!key) return;
+
+        // labelSelection.selected 업데이트
+        this.labelSelection.selected = [key];
+        this.labelSelection.lastClicked = key;
+
+        // DOM에서 해당 버튼 하이라이트 + 스크롤
+        const container = document.getElementById('label-explorer-list');
+        if (!container) return;
+        const btns = container.querySelectorAll('button.label-img-name');
+        btns.forEach(btn => {
+            const li = btn.closest('li');
+            const classLi = li?.parentElement?.closest('li');
+            if (!classLi) return;
+            const folderDiv = classLi.querySelector('div');
+            if (!folderDiv) return;
+            const cls = folderDiv.textContent.replace(/[▾▸]/g, '').trim();
+            const btnKey = `${cls}/${btn.textContent}`;
+            const isActive = btnKey === key;
+            btn.style.background = isActive ? '#08e' : '#222';
+            btn.style.border = isActive ? '2px solid #09f' : '1px solid #444';
+            if (isActive) {
+                btn.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
         });
     }
 
@@ -19932,11 +20024,16 @@ class WaferMapViewer {
                     this.updatePyramidLevel();
                     this.detailImagePath = nextImagePath;
                     this._isNavigating = false;
+                    // ✅ Label Explorer / Thumbnail Navigator 동기화
+                    this.syncLabelExplorerHighlight(nextImagePath);
+                    if (this.thumbnailNavigator && this.thumbnailNavigator.isVisible) {
+                        this.thumbnailNavigator.updateCurrentImage(nextImagePath);
+                    }
                 });
             }
             return;
         }
-        
+
         // ✅ 파일 탐색기 모드에서 온 경우 singleViewImageList 사용
         if (this.singleViewImageList && this.singleViewImageList.length > 0) {
             if (this.singleViewImageIndex === -1) {
@@ -19944,19 +20041,19 @@ class WaferMapViewer {
                     path => this.normalizePath(path) === this.normalizePath(this.detailImagePath)
                 );
             }
-            
+
             if (this.singleViewImageIndex === -1) {
                 console.warn('⚠️ [NAV] Current image not found in singleViewImageList');
                 return;
             }
-            
+
             let nextIdx = this.singleViewImageIndex + direction;
             if (nextIdx < 0) {
                 nextIdx = this.singleViewImageList.length - 1;
             } else if (nextIdx >= this.singleViewImageList.length) {
                 nextIdx = 0;
             }
-            
+
             const nextImagePath = this.singleViewImageList[nextIdx];
             if (nextImagePath) {
                 this.singleViewImageIndex = nextIdx;
@@ -19966,6 +20063,11 @@ class WaferMapViewer {
                     this.updatePyramidLevel();
                     this.detailImagePath = nextImagePath;
                     this._isNavigating = false;
+                    // ✅ Label Explorer / Thumbnail Navigator 동기화
+                    this.syncLabelExplorerHighlight(nextImagePath);
+                    if (this.thumbnailNavigator && this.thumbnailNavigator.isVisible) {
+                        this.thumbnailNavigator.updateCurrentImage(nextImagePath);
+                    }
                 });
             }
             return;
@@ -21086,6 +21188,9 @@ class WaferMapViewer {
         this._isNavigating = false;
         this._pendingNavDirection = 0;
 
+        // ✅ Label Explorer 단일 모드 플래그 해제 (파일 탐색기 모드)
+        this._labelExplorerSingleMode = false;
+
         // 🔥 잔류 그리드 상태 정리
         this._gridVisuallyHidden = false;
 
@@ -21605,6 +21710,7 @@ class WaferMapViewer {
         const savedViewMode = this.viewMode;
         this.viewMode = null;
         this.singleImageFromGrid = false;
+        this._labelExplorerSingleMode = false;
         this._isNavigating = false;
         this._pendingNavDirection = 0; // ✅ 네비게이션 큐 리셋
         this._singleModeRequestId = (this._singleModeRequestId || 0) + 1;
@@ -22166,10 +22272,22 @@ class WaferMapViewer {
 
         // ✅ 폴더 경계 체크 (인덱스 기준으로 명확 처리)
         if (direction > 0 && currentIdx === listLength - 1) {
+            if (this._labelExplorerSingleMode) {
+                // Label Explorer: 클래스 경계에서 멈춤 (폴더 이동 없음)
+                console.log('⏹️ [NAV] Label Explorer 경계 — 마지막 이미지');
+                this._isNavigating = false;
+                return;
+            }
             await this.navigateToNextFolder();
             return;
         }
         if (direction < 0 && currentIdx === 0) {
+            if (this._labelExplorerSingleMode) {
+                // Label Explorer: 클래스 경계에서 멈춤 (폴더 이동 없음)
+                console.log('⏹️ [NAV] Label Explorer 경계 — 첫 번째 이미지');
+                this._isNavigating = false;
+                return;
+            }
             await this.navigateToPreviousFolder();
             return; // 이전 폴더로 이동했으므로 종료
         }
@@ -22210,6 +22328,9 @@ class WaferMapViewer {
         if (this.thumbnailNavigator && this.thumbnailNavigator.isVisible) {
             this.thumbnailNavigator.updateCurrentImage(nextImagePath);
         }
+
+        // ✅ Label Explorer 하이라이트 즉시 업데이트
+        this.syncLabelExplorerHighlight(nextImagePath);
 
         // ✅ 이미지 로드 (loadImage 완료 시 자동으로 Wafer Map Explorer 하이라이트 업데이트됨)
         // forceReload=true: selectedImagePath가 미리 업데이트되어 early-exit 조건이 잘못 발동하는 것 방지
