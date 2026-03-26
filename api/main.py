@@ -6362,31 +6362,15 @@ async def get_image(
                 return _invalid_image_response(image_path)
             return Response(content=b"", media_type="image/png", headers={"X-Invalid-Image": "true"})
 
-        # 🔥 non-palette 이미지(JPEG, RGB PNG, BMP 등)는 피라미드/개인색 처리 없이 원본 직접 서빙
-        # palette-indexed PNG(color_type=3)만 PLTE 패치/피라미드 처리 대상
-        _is_palette = False
+        # 🔥 non-palette 이미지 감지 (PLTE 패치 건너뛰기 판단용)
+        _is_palette_png = False
         if image_path.suffix.lower() == '.png':
             try:
                 with open(image_path, 'rb') as _cf:
                     _chdr = _cf.read(30)
-                _is_palette = len(_chdr) > 25 and _chdr[25] == 3
+                _is_palette_png = len(_chdr) > 25 and _chdr[25] == 3
             except Exception:
                 pass
-        if not _is_palette:
-            # non-palette 이미지: 원본 그대로 서빙 (피라미드/개인색 불필요, 서버 블로킹 방지)
-            _ext = image_path.suffix.lower()
-            _media = {
-                '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-                '.png': 'image/png', '.bmp': 'image/bmp',
-                '.tiff': 'image/tiff', '.tif': 'image/tiff',
-                '.webp': 'image/webp', '.gif': 'image/gif',
-            }.get(_ext, 'application/octet-stream')
-            st = image_path.stat()
-            return FileResponse(image_path, media_type=_media, headers={
-                "Cache-Control": "public, max-age=3600",
-                "ETag": compute_etag(st),
-                "X-Direct-Serve": "non-palette",
-            })
 
         # 🎯 피라미드 레벨이 요청된 경우
         if level is not None:
@@ -6540,9 +6524,8 @@ async def get_image(
             if not is_head:
                 logger.info(f"🎯 [ORIGINAL MODE] {image_path} - personalized={personalized}, scheme={scheme}, grade_filter={grade_filter}, bottom_filter={bottom_filter}")
 
-            # 🔥 Grade/Bottom/Border 필터링이 활성화되고 PNG인 경우 PLTE 필터 적용
-            # 개인색 설정을 먼저 적용한 후 필터 적용
-            if (grade_filter or bottom_filter or border_normalize) and image_path.suffix.lower() == '.png':
+            # 🔥 Grade/Bottom/Border 필터링이 활성화되고 palette PNG인 경우만 PLTE 필터 적용
+            if (grade_filter or bottom_filter or border_normalize) and _is_palette_png:
                 try:
                     # 1. 원본 이미지 파일 읽기
                     with open(image_path, 'rb') as f:
@@ -6579,8 +6562,8 @@ async def get_image(
                     logger.warning(f"⚠️ [FILTER] PLTE 필터 실패, 원본 반환: {e}", exc_info=True)
                     # 폴백: 원본 이미지 반환
 
-            # 🔥 개인색 설정이 활성화되고 PNG인 경우 PLTE 패치 적용 (필터가 없을 때만)
-            elif (personalized and scheme or border_normalize) and image_path.suffix.lower() == '.png':
+            # 🔥 개인색 설정이 활성화되고 palette PNG인 경우만 PLTE 패치 적용
+            elif (personalized and scheme or border_normalize) and _is_palette_png:
                 try:
                     # 원본 이미지 파일 읽기 및 PLTE 패치
                     with open(image_path, 'rb') as f:
