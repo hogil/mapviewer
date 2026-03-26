@@ -15274,10 +15274,23 @@ class WaferMapViewer {
 
         // 🔥 refreshLabelExplorer가 내부에서 getClassList() 호출하므로 중복 제거
         await this.refreshLabelExplorer();
-        
+
         // 🔥 추가: Fail List와 Label Explorer 즉시 업데이트
         this.updateLabelExplorerContent();
-        
+
+        // 🔥 삭제된 class의 이미지가 그리드/단일뷰에 남아있으면 초기화
+        if (this.gridMode || this.selectedImagePath) {
+            const currentPath = this.selectedImagePath || '';
+            const isDeletedClassImage = names.some(cls => currentPath.includes(`classification/${cls}/`) || currentPath.includes(`classification_chips/${cls}/`));
+            const gridHasDeletedClass = this.currentGridImages?.some(p => names.some(cls => p.includes(`classification/${cls}/`) || p.includes(`classification_chips/${cls}/`)));
+            if (isDeletedClassImage || gridHasDeletedClass) {
+                this.hideGrid();
+                this.hideImage();
+                this.labelSelection.selected = [];
+                this.labelSelection.selectedClasses = [];
+            }
+        }
+
         this.loadDirectoryContents(null, this.dom.fileExplorer);
 
         this.debugLog(`Successfully deleted ${names.length} classes`);
@@ -16650,81 +16663,40 @@ class WaferMapViewer {
                     console.warn('clearWaferMapExplorerSelection error:', error);
                 }
 
-                // 아무 modifier 없이 클릭: 열기/닫기 토글만
+                // 아무 modifier 없이 클릭: 열기/닫기 토글 + 그리드 로드
 
                 if (!isCtrl && !isShift) {
                     const wasOpen = isOpen;
                     labelSelection.openFolders[cls] = !isOpen;
 
-                    // 🔥 폴더를 열 때 항상 서버에서 최신 데이터 가져오기 (캐시 무시)
+                    // 🔥 폴더를 열 때: 서버에서 최신 데이터 가져오기 + 그리드에 표시 (WME와 동일)
                     if (!wasOpen) {
-                        this.debugLog(`🚀 폴더 열기: '${cls}' - 최신 이미지 로드 중...`);
-
-                        // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
                         const labelPath = this.buildClassificationPath(cls);
-                        
-                        // 🔥 디버깅: 로드 주소와 current_folder 로그 출력
-                        console.log(`🔍 [LABEL_EXPLORER_CLICK] 클래스 '${cls}' 폴더 클릭`);
-                        console.log(`🔍 [LABEL_EXPLORER_CLICK] 로드 주소: /api/files?path=${encodeURIComponent(labelPath)}`);
-                        console.log(`🔍 [LABEL_EXPLORER_CLICK] labelPath: ${labelPath}`);
-                        console.log(`🔍 [LABEL_EXPLORER_CLICK] currentFolderPath: ${this.currentFolderPath}`);
-                        console.log(`🔍 [LABEL_EXPLORER_CLICK] currentFolderPrefix: ${this.currentFolderPrefix}`);
-                        console.log(`🔍 [LABEL_EXPLORER_CLICK] productFolderPath: ${this.productFolderPath}`);
-                        
-                        // 🔥 current_folder 확인을 위한 API 호출 (로깅용)
-                        fetch('/api/current-folder')
-                            .then(res => res.json())
-                            .then(data => {
-                                console.log(`🔍 [LABEL_EXPLORER_CLICK] 서버 current_folder: ${data.current_folder}`);
-                                console.log(`🔍 [LABEL_EXPLORER_CLICK] 서버 current_folder_prefix: ${data.current_folder_prefix}`);
-                            })
-                            .catch(err => {
-                                console.error('❌ [LABEL_EXPLORER_CLICK] current_folder 조회 실패:', err);
-                            });
-                        
-                        // 🔥 캐시 무시 - 항상 서버에서 최신 데이터 가져오기
+                        console.log(`🔍 [LABEL_EXPLORER_CLICK] 클래스 '${cls}' 폴더 클릭, path: ${labelPath}`);
+
+                        // 🔥 WME의 loadImagesInFolderAndShowGrid 재사용 — 그리드에 class 이미지 표시
+                        this.loadImagesInFolderAndShowGrid(labelPath);
+
+                        // Label Explorer 내부 캐시도 갱신
                         fetch(`/api/files?path=${encodeURIComponent(labelPath)}`)
                             .then(res => res.json())
                             .then(data => {
                                 const imgList = Array.isArray(data.items) ? data.items : [];
-
-                                // 🔥 캐시 업데이트
                                 if (!this.classToImgListCache) this.classToImgListCache = {};
                                 this.classToImgListCache[cls] = imgList;
-
-                                this.debugLog(`✅ 폴더 '${cls}' - ${imgList.length}개 이미지 로드 완료`);
-                                
-                                // 🔥 로드 완료 후 current_folder 재확인
-                                fetch('/api/current-folder')
-                                    .then(res => res.json())
-                                    .then(data => {
-                                        console.log(`🔍 [LABEL_EXPLORER_CLICK] 로드 후 서버 current_folder: ${data.current_folder}`);
-                                        console.log(`🔍 [LABEL_EXPLORER_CLICK] 로드 후 서버 current_folder_prefix: ${data.current_folder_prefix}`);
-                                    })
-                                    .catch(err => {
-                                        console.error('❌ [LABEL_EXPLORER_CLICK] 로드 후 current_folder 조회 실패:', err);
-                                    });
-
-                                // 🔥 fetch 완료 후 한 번만 업데이트
                                 this.updateLabelExplorerContent();
                             })
                             .catch(err => {
                                 console.error(`폴더 '${cls}' 이미지 로드 실패:`, err);
-
                                 if (!this.classToImgListCache) this.classToImgListCache = {};
                                 this.classToImgListCache[cls] = [];
-
-                                // 🔥 에러 발생 시에도 한 번만 업데이트
                                 this.updateLabelExplorerContent();
                             });
                     } else {
-                        // 🔥 폴더를 닫을 때 캐시 무효화 (다음에 열 때 최신 데이터 가져오도록)
+                        // 🔥 폴더를 닫을 때 캐시 무효화
                         if (this.classToImgListCache && this.classToImgListCache[cls]) {
                             delete this.classToImgListCache[cls];
-                            this.debugLog(`🗑️ 폴더 닫기: '${cls}' - 캐시 삭제`);
                         }
-                        
-                        // 🔥 폴더 닫을 때만 업데이트
                         this.updateLabelExplorerContent();
                     }
 
