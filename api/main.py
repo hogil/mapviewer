@@ -8075,7 +8075,6 @@ async def classify_chips(request: ChipClassifyRequest,
         rel_path = relkey_from_any_path(request.image_path)
         wafer_path = ROOT_DIR / rel_path
         rel_path_obj = Path(rel_path)
-        folder_key = _chip_annotation_folder_key(rel_path_obj, folder_prefix=request.folder_prefix)
 
         if not wafer_path.exists() or not wafer_path.is_file():
             raise HTTPException(status_code=404, detail="Wafer image not found")
@@ -8101,7 +8100,6 @@ async def classify_chips(request: ChipClassifyRequest,
 
         saved_count = 0
         errors = []
-        chip_updates: List[Dict[str, Any]] = []
 
         # 각 chip 크롭 및 저장
         for chip_coord in request.chip_coords:
@@ -8136,19 +8134,12 @@ async def classify_chips(request: ChipClassifyRequest,
                 # 저장
                 chip_img.save(chip_path, format='PNG')
                 saved_count += 1
-                chip_updates.append({
-                    "x_abs": chip_coord.x_abs,
-                    "y_abs": chip_coord.y_abs,
-                    "class_name": class_name,
-                    "filename": chip_filename
-                })
 
             except Exception as e:
                 errors.append(f"Chip ({chip_coord.x_abs}, {chip_coord.y_abs}): {str(e)}")
 
         if saved_count > 0:
             _dircache_invalidate(class_dir)
-            _upsert_chip_annotations(rel_path_obj, folder_key, chip_updates, username=username)
 
         chip_time = time.perf_counter() - chip_start_time
         log_access_row(tag="ACTION", note=f"Chip 분류: {saved_count}개 성공, {len(errors)}개 실패 -> {class_name} (소요시간: {chip_time*1000:.1f}ms)")
@@ -8174,13 +8165,11 @@ async def get_chip_labels(
     """특정 wafer의 chip 라벨 조회"""
     try:
         if path:
+            # path 파라미터에서 wafer_name 추출하여 파일시스템 스캔으로 통일
             rel_path = _get_relative_path_from_image(path)
-            rel_path_obj = Path(rel_path)
-            folder_key = _chip_annotation_folder_key(rel_path_obj, folder_prefix=folder)
-            _, _, entry = _load_annotation_entry(rel_path_obj, folder_key)
-            return {"chips": entry.get("marked_chips", [])}
+            wafer_name = Path(rel_path).stem
 
-        # 🔥 Chip classification 폴더 사용
+        # 🔥 Chip classification 폴더 파일시스템 스캔
         classification_dir = _classification_dir(mode="chip")
         if not classification_dir.exists():
             return {"chips": []}
@@ -8260,14 +8249,6 @@ async def delete_classification(request: ClassifyDeleteRequest,
 
         _dircache_invalidate(class_dir)
 
-        if mode == "chip":
-            _remove_chip_annotations_from_classification_path(
-                classification_rel_path,
-                class_name=class_name,
-                filename=target_file.name,
-                username=username,
-            )
-
         log_access_row(tag="ACTION", note=f"분류 제거: {rel_path} from {class_name}")
 
         return {"success": True, "removed": str(target_file.relative_to(ROOT_DIR)), "class": class_name}
@@ -8309,13 +8290,6 @@ async def classify_delete_batch(request: ClassifyDeleteBatchReq,
                     classification_rel_path = str(target_file.relative_to(ROOT_DIR)).replace("\\", "/")
                 except ValueError:
                     classification_rel_path = target_file.as_posix()
-                if mode == "chip":
-                    _remove_chip_annotations_from_classification_path(
-                        classification_rel_path,
-                        class_name=class_name,
-                        filename=target_file.name,
-                        username=username,
-                    )
                 removed += 1
             except Exception:
                 continue
@@ -9092,15 +9066,45 @@ async def get_palette_counts(path: str):
 
 @app.get("/api/chip-annotations")
 async def get_chip_annotations(path: str, folder: Optional[str] = Query(None)):
-    """chip_annotations.json 반환 (없으면 빈 템플릿)"""
+    """classification_chips/ 파일시스템에서 chip annotation 파생 (JSON 미사용)"""
     try:
-        # 이미지 경로에서 상대 경로 추출
         rel_path = _get_relative_path_from_image(path)
-        rel_path_obj = Path(rel_path)
-        folder_key = _chip_annotation_folder_key(rel_path_obj, folder_prefix=folder)
+        wafer_stem = Path(rel_path).stem
 
-        _, _, entry = _load_annotation_entry(rel_path_obj, folder_key)
+        classification_dir = _classification_dir(mode="chip")
+        marked_chips: list = []
 
+        if classification_dir.exists():
+            for class_entry in os.scandir(classification_dir):
+                if not class_entry.is_dir():
+                    continue
+                class_name = class_entry.name
+                class_path = Path(class_entry.path)
+                for chip_file in class_path.glob(f"{wafer_stem}_x*_y*.png"):
+                    parsed = _parse_chip_filename(chip_file.stem)
+                    if not parsed:
+                        continue
+                    parsed_stem, x_abs, y_abs = parsed
+                    if parsed_stem != wafer_stem:
+                        continue
+                    marked_chips.append({
+                        "x_abs": x_abs,
+                        "y_abs": y_abs,
+                        "class": class_name,
+                        "filename": chip_file.name,
+                        "chip_id": _chip_id_from_coords(x_abs, y_abs),
+                    })
+
+        from collections import Counter
+        class_counts = Counter(c["class"] for c in marked_chips)
+        entry = {
+            "marked_chips": marked_chips,
+            "metadata": {
+                "status": "active" if marked_chips else "empty",
+                "total_marked_chips": len(marked_chips),
+                "class_distribution": dict(class_counts),
+            }
+        }
         return JSONResponse(content=entry)
 
     except Exception as e:
@@ -9239,45 +9243,8 @@ async def run_composite_map_task(
 
 @app.post("/api/chip-annotations")
 async def save_chip_annotations(request: ChipAnnotationRequest, req: Request):
-    """사용자가 마킹한 Chip 정보 저장"""
-    try:
-        # 세션에서 사용자 정보 가져오기
-        username = _current_username(req, default=ANONYMOUS_LOGIN_ID)
-
-        # 이미지 경로에서 상대 경로 추출
-        rel_path = _get_relative_path_from_image(request.image_path)
-
-        # chip_annotations 폴더 경로 생성
-        rel_path_obj = Path(rel_path)
-        folder_key = _chip_annotation_folder_key(rel_path_obj, folder_prefix=request.folder_prefix)
-
-        annot_file, entries, entry = _load_annotation_entry(rel_path_obj, folder_key)
-
-        metadata = entry.setdefault("metadata", _empty_chip_annotation_payload()["metadata"])
-        now_iso = datetime.now().isoformat()
-        if not metadata.get("created_at"):
-            metadata["created_at"] = now_iso
-            metadata["created_by"] = username
-
-        entry["marked_chips"] = request.marked_chips
-        metadata["updated_at"] = now_iso
-        metadata["updated_by"] = username
-        metadata["total_marked_chips"] = len(request.marked_chips)
-        metadata["status"] = "active" if request.marked_chips else "empty"
-
-        from collections import Counter
-        class_counts = Counter([chip.get('class') for chip in request.marked_chips if chip.get('class')])
-        metadata["class_distribution"] = dict(class_counts)
-
-        _save_annotation_entry(annot_file, entries, folder_key, entry)
-
-        log_access_row(tag="CHIP", note=f"Saved {len(request.marked_chips)} chip annotations for {rel_path}")
-
-        return {"success": True, "saved_chips": len(request.marked_chips), "file": str(annot_file)}
-
-    except Exception as e:
-        logger.exception(f"Failed to save chip annotations: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """No-op: chip annotations는 classification_chips/ 파일시스템에서 파생"""
+    return {"success": True, "saved_chips": len(request.marked_chips), "file": None}
 
 @app.get("/api/roles/users")
 async def get_role_users():

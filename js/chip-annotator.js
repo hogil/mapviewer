@@ -676,33 +676,8 @@ export class ChipAnnotator {
      * Save chip annotations to backend
      */
     async saveAnnotations() {
-        if (!this.currentImagePath) {
-            console.warn('No image path set');
-            return false;
-        }
-
-        try {
-            const folderPrefix = this.viewer?.currentFolderPrefix ?? '';
-            const response = await fetch('/api/chip-annotations', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    image_path: this.currentImagePath,
-                    marked_chips: this.markedChips,
-                    folder_prefix: folderPrefix
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error(`Failed to save annotations: ${response.statusText}`);
-            }
-
-            console.log('✅ Annotations saved successfully');
-            return true;
-        } catch (error) {
-            console.error('Error saving annotations:', error);
-            return false;
-        }
+        // No-op: chip annotations는 classification_chips/ 파일시스템에서 파생
+        return true;
     }
 
     /**
