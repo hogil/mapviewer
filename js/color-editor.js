@@ -578,14 +578,26 @@ export class ColorSchemeEditor {
 
         // 🔥 취소 시 원래 색상으로 되돌리기
         try {
-            // 1. 원래 scheme으로 메모리 복원
+            // 1. 원래 scheme으로 메모리 + 서버 복원
             if (this.originalSchemeData && this.currentSchemeName) {
                 if (this.viewer.colorLegends) {
-                    this.viewer.colorLegends[this.currentSchemeName] = 
+                    this.viewer.colorLegends[this.currentSchemeName] =
                         JSON.parse(JSON.stringify(this.originalSchemeData));
                 }
 
-                // 2. __preview_ 임시 스킴 삭제 (메모리 + 서버)
+                // 2. 서버에 원래 scheme 복원 (프리뷰 중 서버에 저장된 변경 되돌리기)
+                try {
+                    await fetch(this._withLogin('/api/color-scheme'), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            schemeName: this.currentSchemeName,
+                            schemeData: this.originalSchemeData,
+                        }),
+                    });
+                } catch (_) { /* 복원 실패 무시 */ }
+
+                // 3. __preview_ 임시 스킴 삭제 (메모리)
                 await this.cleanupPreviewSchemeArtifacts();
 
                 // 3. 캐시 초기화
@@ -1291,16 +1303,25 @@ export class ColorSchemeEditor {
                 const schemeData = this.getCurrentSchemeData();
                 const schemeName = this.currentSchemeName;
                 if (!schemeName || !schemeData) return;
-                // 1. 메모리 내 colorLegends만 업데이트 (서버 저장 안 함 — 메모리 전용 프리뷰)
+                // 1. 메모리 내 colorLegends 업데이트
                 if (!this.viewer.colorLegends) {
                     this.viewer.colorLegends = {};
                 }
                 this.viewer.colorLegends[schemeName] = schemeData;
 
-                // 2. personalizedColorCacheBuster 업데이트
+                // 2. 서버에도 실제 scheme 이름으로 저장 (서버 렌더링에 배경색/Grade색 반영 필요)
+                try {
+                    await fetch(this._withLogin('/api/color-scheme'), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ schemeName, schemeData }),
+                    });
+                } catch (_) { /* 프리뷰 실패는 무시 */ }
+
+                // 3. personalizedColorCacheBuster 업데이트
                 this.viewer._personalizedColorCacheBuster = Date.now();
 
-                // 3. 현재 scheme 이름으로 프리뷰 (임시 scheme 이름 불필요)
+                // 4. 현재 scheme 이름으로 프리뷰
                 const originalEnabled = this.viewer.personalizedColorEnabled;
                 this.viewer.personalizedColorEnabled = true;
                 this.viewer._previewSchemeOverride = schemeName;

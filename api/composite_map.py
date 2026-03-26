@@ -1361,7 +1361,8 @@ def _persist_square_map_data(
 
     def _save_npz():
         try:
-            tmp = cache_path.with_suffix(".npz.tmp")
+            # np.savez는 .npz로 끝나지 않으면 자동 추가 → .tmp.npz 사용 (추가 방지)
+            tmp = cache_path.with_name(cache_path.stem + "_tmp.npz")
             np.savez(tmp, **save_payload)
             try:
                 tmp.replace(cache_path)
