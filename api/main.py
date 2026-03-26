@@ -422,9 +422,6 @@ THUMB_STAT_CACHE_CAPACITY = config.THUMB_STAT_CACHE_CAPACITY
 INDEX_REFRESH_INTERVAL_SECONDS = max(0, config.INDEX_REFRESH_INTERVAL_MINUTES) * 60
 SKIP_DIRS = {d.strip() for d in config.SKIP_DIRS if d.strip()}
 
-LABELS_DIR = config.LABELS_DIR
-LABELS_FILE = config.LABELS_FILE
-
 # ======================== Pools / State / Caches ========================
 IO_POOL = ThreadPoolExecutor(max_workers=IO_THREADS)
 DIRLIST_EXECUTOR = ThreadPoolExecutor(max_workers=max(4, min(16, (os.cpu_count() or 8))))
@@ -1396,16 +1393,6 @@ def _search_index_logical(keys: List[str], names: List[str], query: str, goal: O
         return []
     return _evaluate_logical_query(keys, names, query, goal)
 
-LABELS: Dict[str, List[str]] = {}
-LABELS_LOCK = RLock()
-LABELS_MTIME: float = 0.0
-CLASSES_MTIME: float = 0.0
-
-# classification 파일명 → 원본 상대경로 매핑(동일 파일명 충돌 방지용)
-CLASS_SOURCE_MAP_FILE = ".source_map.json"
-_CLASS_SOURCE_MAP_CACHE: Dict[str, Tuple[float, Dict[str, str]]] = {}
-_CLASS_SOURCE_MAP_CACHE_LOCK = RLock()
-
 class LRUCache:
     def __init__(self, capacity: int):
         self.capacity = capacity
@@ -1651,9 +1638,6 @@ async def lifespan(app: FastAPI):
 
     # 필수 최소 초기화 (블로킹 없음)
     _classification_dir().mkdir(parents=True, exist_ok=True)
-    _labels_load()
-    global CLASSES_MTIME
-    CLASSES_MTIME = _classes_stat_mtime()
 
     # 락 파일 정리 (서버 재시작 시 이전 프로세스 잔여물)
     try:
@@ -4382,104 +4366,19 @@ def relkey_from_any_path(any_path: str) -> str:
     return str(abs_path.relative_to(ROOT_DIR)).replace("\\", "/")
 
 
-def _normalize_relpath_value(path_value: str) -> str:
-    return str(path_value or "").replace("\\", "/").lstrip("/")
-
-
-def _class_source_map_path(class_dir: Path) -> Path:
-    return class_dir / CLASS_SOURCE_MAP_FILE
-
-
-def _load_class_source_map(class_dir: Path, force_reload: bool = False) -> Dict[str, str]:
-    map_path = _class_source_map_path(class_dir)
-    cache_key = str(map_path)
-    mtime = 0.0
-    try:
-        if map_path.exists():
-            mtime = map_path.stat().st_mtime
-    except Exception:
-        mtime = 0.0
-
-    with _CLASS_SOURCE_MAP_CACHE_LOCK:
-        cached = _CLASS_SOURCE_MAP_CACHE.get(cache_key)
-        if cached and not force_reload:
-            cached_mtime, cached_data = cached
-            if cached_mtime == mtime:
-                return dict(cached_data)
-
-    if not map_path.exists():
-        with _CLASS_SOURCE_MAP_CACHE_LOCK:
-            _CLASS_SOURCE_MAP_CACHE[cache_key] = (0.0, {})
-        return {}
-
-    try:
-        with map_path.open("r", encoding="utf-8") as f:
-            raw = json.load(f)
-    except Exception:
-        raw = {}
-
-    mapping: Dict[str, str] = {}
-    if isinstance(raw, dict):
-        for key, value in raw.items():
-            key_str = str(key or "").strip()
-            rel_str = _normalize_relpath_value(str(value or ""))
-            if key_str and rel_str:
-                mapping[key_str] = rel_str
-
-    with _CLASS_SOURCE_MAP_CACHE_LOCK:
-        _CLASS_SOURCE_MAP_CACHE[cache_key] = (mtime, mapping)
-    return dict(mapping)
-
-
-def _save_class_source_map(class_dir: Path, mapping: Dict[str, str]) -> None:
-    map_path = _class_source_map_path(class_dir)
-    map_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = map_path.with_suffix(map_path.suffix + ".tmp")
-    with tmp_path.open("w", encoding="utf-8") as f:
-        json.dump(mapping, f, ensure_ascii=False, indent=2)
-    os.replace(tmp_path, map_path)
-
-    try:
-        mtime = map_path.stat().st_mtime
-    except Exception:
-        mtime = 0.0
-    with _CLASS_SOURCE_MAP_CACHE_LOCK:
-        _CLASS_SOURCE_MAP_CACHE[str(map_path)] = (mtime, dict(mapping))
-
-
-def _resolve_original_relpath_from_classification_map(path_str: str) -> Optional[str]:
-    try:
-        abs_path = safe_resolve_path(path_str)
-        rel_path = str(abs_path.relative_to(ROOT_DIR)).replace("\\", "/")
-    except Exception:
-        return None
-
-    parts = [part for part in rel_path.split("/") if part]
-    classification_dir_names = {"classification", "classification_chips"}
-    class_idx = next((idx for idx, part in enumerate(parts) if part in classification_dir_names), -1)
-    if class_idx < 0 or len(parts) <= class_idx + 2:
-        return None
-
-    class_dir = ROOT_DIR.joinpath(*parts[: class_idx + 2])
-    file_key = "/".join(parts[class_idx + 2 :])
-    if not file_key:
-        return None
-
-    source_map = _load_class_source_map(class_dir)
-    mapped_rel = source_map.get(file_key) or source_map.get(Path(file_key).name)
-    if not mapped_rel:
-        return None
-
-    try:
-        mapped_abs = (ROOT_DIR / mapped_rel).resolve()
-        mapped_abs.relative_to(ROOT_DIR.resolve())
-    except Exception:
-        return None
-
-    if not mapped_abs.exists() or not mapped_abs.is_file():
-        return None
-
-    return str(mapped_abs.relative_to(ROOT_DIR)).replace("\\", "/")
+def _get_labels_for_image(image_rel_path: str) -> List[str]:
+    """classification 폴더를 스캔하여 이미지가 속한 클래스 목록 반환."""
+    filename = Path(image_rel_path).name
+    class_dir = _classification_dir()
+    labels: List[str] = []
+    if class_dir.is_dir():
+        try:
+            for entry in os.scandir(class_dir):
+                if entry.is_dir() and (Path(entry.path) / filename).exists():
+                    labels.append(entry.name)
+        except OSError:
+            pass
+    return sorted(labels)
 
 
 def _is_same_physical_file(path_a: Path, path_b: Path) -> bool:
@@ -4519,10 +4418,6 @@ def _classification_dir(mode: str = "wafer") -> Path:
     return current_folder / "classification"
 
 
-def _classes_stat_mtime() -> float:
-    try: return _classification_dir().stat().st_mtime
-    except FileNotFoundError: return 0.0
-
 def _scan_classes() -> set:
     classes = set(); d = _classification_dir()
     if not d.exists(): return classes
@@ -4533,12 +4428,6 @@ def _scan_classes() -> set:
     except FileNotFoundError:
         pass
     return classes
-
-def _labels_reload_if_stale():
-    global LABELS_MTIME
-    try: st = LABELS_FILE.stat()
-    except FileNotFoundError: return
-    if st.st_mtime > LABELS_MTIME: _labels_load()
 
 def _dircache_invalidate(path: Path):
     try: DIRLIST_CACHE.delete(str(path))
@@ -4553,89 +4442,6 @@ def _dir_state_signature(path: Path) -> Optional[str]:
         return f"{st.st_mtime_ns}:{st.st_ctime_ns}"
     except Exception:
         return None
-
-def _sync_labels_with_classes(existing_classes: set) -> int:
-    removed = 0
-    with LABELS_LOCK:
-        for rel, labs in list(LABELS.items()):
-            new_labs = [x for x in labs if x in existing_classes]
-            if new_labs != labs:
-                LABELS[rel] = new_labs or LABELS.pop(rel, None) or []
-                removed += 1
-    if removed: _labels_save()
-    return removed
-
-def _sync_labels_if_classes_changed():
-    global CLASSES_MTIME
-    cur = _classes_stat_mtime()
-    if cur > CLASSES_MTIME:
-        CLASSES_MTIME = cur
-        classes = _scan_classes()
-        cleaned = _sync_labels_with_classes(classes)
-        if cleaned:
-            logger.info(f"[SYNC] classes 변경 감지 → 라벨 {cleaned}개 이미지에서 정리됨")
-
-async def labels_classes_sync_dep():
-    """
-    ⚠️ DEPRECATED: 이 함수는 사용하지 마세요!
-    - 조회 API: _labels_reload_if_stale()만 호출
-    - 쓰기 API: 수동으로 _sync_labels_if_classes_changed() 호출
-    """
-    _labels_reload_if_stale()
-    # _sync_labels_if_classes_changed()  # ⚠️ 제거: current_folder 기준으로만 동작하여 문제 발생
-
-def _remove_label_from_all_images(label_name: str) -> int:
-    removed = 0
-    with LABELS_LOCK:
-        for rel, labs in list(LABELS.items()):
-            if label_name in labs:
-                new_labs = [x for x in labs if x != label_name]
-                if new_labs: LABELS[rel] = new_labs
-                else: LABELS.pop(rel, None)
-                removed += 1
-    if removed:
-        _labels_save()
-        log_access_row(tag="INFO", note=f"라벨 완전 삭제: '{label_name}' → {removed}개 이미지에서 제거")
-    return removed
-
-# ----- labels file I/O -----
-def _labels_load():
-    global LABELS, LABELS_MTIME
-    if not LABELS_FILE.exists():
-        with LABELS_LOCK:
-            LABELS = {}
-        LABELS_MTIME = 0.0
-        return
-    try:
-        with LABELS_LOCK:
-            with open(LABELS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            LABELS = {k: [str(x) for x in v] for k, v in data.items() if isinstance(v, list)}
-        try:
-            LABELS_MTIME = LABELS_FILE.stat().st_mtime
-        except Exception:
-            LABELS_MTIME = time.time()
-
-        log_access_row(tag="INFO", note=f"라벨 로드: {len(LABELS)}개 이미지 (mtime={LABELS_MTIME:.5f})")
-    except Exception as e:
-        logger.error(f"라벨 로드 실패: {e}")
-
-def _labels_save():
-    global LABELS_MTIME
-    try:
-        LABELS_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = LABELS_FILE.with_suffix(".json.tmp")
-        with LABELS_LOCK:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(LABELS, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, LABELS_FILE)
-        try:
-            LABELS_MTIME = LABELS_FILE.stat().st_mtime
-        except Exception:
-            LABELS_MTIME = time.time()
-    except Exception as e:
-        logger.error(f"라벨 저장 실패: {e}")
-        raise HTTPException(status_code=500, detail="Failed to save labels")
 
 # ======================== Directory Listing / Index ========================
 def list_dir_fast(target: Path) -> List[Dict[str, str]]:
@@ -5529,12 +5335,11 @@ async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
 
 # ---------------- Helpers ----------------
 def _lookup_original_relpath_from_classification_path(path_str: str) -> Optional[str]:
-    """classification/<class>/<filename> 형식이 오면 ROOT_DIR 내 원본 상대경로를 추정한다."""
-    try:
-        mapped_rel = _resolve_original_relpath_from_classification_map(path_str)
-        if mapped_rel:
-            return mapped_rel
+    """classification/<class>/<filename> 형식이 오면 ROOT_DIR 내 원본 상대경로를 추정한다.
 
+    폴더 구조가 source of truth이므로 FILE_INDEX에서 파일명으로 원본을 찾는다.
+    """
+    try:
         try:
             p = str(safe_resolve_path(path_str).relative_to(ROOT_DIR)).replace("\\", "/")
         except Exception:
@@ -5552,61 +5357,18 @@ def _lookup_original_relpath_from_classification_path(path_str: str) -> Optional
         if classification_idx < 0:
             return None
         source_prefix = "/".join(path_parts[:classification_idx]) if classification_idx > 0 else ""
-        class_name = path_parts[classification_idx + 1] if len(path_parts) > classification_idx + 1 else ""
-        source_key = "/".join(path_parts[classification_idx + 2 :]) if len(path_parts) > classification_idx + 2 else filename
-        class_dir = (
-            ROOT_DIR.joinpath(*path_parts[: classification_idx + 2])
-            if len(path_parts) > classification_idx + 1
-            else None
-        )
 
-        # labels.json에 이미 있는 최신 매핑을 우선 사용한다.
-        if class_name:
-            label_candidates: List[str] = []
-            with LABELS_LOCK:
-                for rel, labs in LABELS.items():
-                    if class_name in labs and Path(rel).name == filename:
-                        label_candidates.append(rel)
-
-            if source_prefix:
-                label_candidates = [
-                    rel for rel in label_candidates
-                    if Path(rel).as_posix().startswith(f"{source_prefix}/")
-                ]
-
-            if label_candidates:
-                if len(label_candidates) > 1:
-                    def _candidate_mtime(rel: str) -> float:
-                        try:
-                            return (ROOT_DIR / rel).stat().st_mtime
-                        except Exception:
-                            return 0.0
-                    label_candidates.sort(key=lambda rel: (_candidate_mtime(rel), rel), reverse=True)
-
-                chosen_rel = label_candidates[0]
-                if class_dir and source_key:
-                    try:
-                        source_map = _load_class_source_map(class_dir)
-                        if source_map.get(source_key) != chosen_rel:
-                            source_map[source_key] = chosen_rel
-                            _save_class_source_map(class_dir, source_map)
-                    except Exception:
-                        pass
-                return chosen_rel
-        
-        # 🔥 최적화: FILE_INDEX_BY_NAME 캐시 사용 (빠른 O(1) 룩업)
+        # FILE_INDEX 캐시에서 파일명으로 원본 경로 조회
         if not hasattr(_lookup_original_relpath_from_classification_path, '_name_cache'):
             _lookup_original_relpath_from_classification_path._name_cache = {}
             _lookup_original_relpath_from_classification_path._cache_timestamp = 0
-        
-        # 🔥 캐시 갱신 주기 확인 (30초마다 갱신)
+
         current_time = time.time()
         if current_time - _lookup_original_relpath_from_classification_path._cache_timestamp > 30:
             with FILE_INDEX_LOCK:
                 keys_snapshot = list(FILE_INDEX_KEYS)
-            
-            # 파일명 → 경로 매핑 생성 (같은 파일명이 여러 개 있을 수 있으므로 리스트로)
-            name_cache = {}
+
+            name_cache: Dict[str, List[str]] = {}
             for rel in keys_snapshot:
                 rel_posix = Path(rel).as_posix()
                 rel_parts = set(Path(rel_posix).parts)
@@ -5616,11 +5378,10 @@ def _lookup_original_relpath_from_classification_path(path_str: str) -> Optional
                 if fname not in name_cache:
                     name_cache[fname] = []
                 name_cache[fname].append(rel)
-            
+
             _lookup_original_relpath_from_classification_path._name_cache = name_cache
             _lookup_original_relpath_from_classification_path._cache_timestamp = current_time
-        
-        # 🔥 캐시에서 빠른 조회
+
         candidates = _lookup_original_relpath_from_classification_path._name_cache.get(filename, [])
         if candidates:
             if source_prefix:
@@ -5636,12 +5397,8 @@ def _lookup_original_relpath_from_classification_path(path_str: str) -> Optional
             if len(candidates) == 1:
                 return candidates[0]
 
-            # 파일명이 중복되어 원본이 여러 개면 임의 선택하지 않는다.
-            # 잘못된(과거) 파일로 매핑되는 문제를 방지하기 위해 None 반환.
             return None
-        
-        # 🔥 캐시에 없으면 NULL 반환 (os.walk 건너뛰기 - 너무 느림)
-        # relkey_from_any_path()가 폴백으로 처리할 것임
+
         return None
     except Exception:
         return None
@@ -7804,8 +7561,7 @@ async def get_classes(mode: str = Query("wafer", pattern="^(wafer|chip)$", descr
 @app.post("/api/classes")
 async def create_class(request: Request,
                       req: CreateClassReq,
-                      mode: str = Query("wafer", pattern="^(wafer|chip)$", description="wafer 또는 chip 모드"),
-                      _=Depends(labels_classes_sync_dep)):
+                      mode: str = Query("wafer", pattern="^(wafer|chip)$", description="wafer 또는 chip 모드")):
     try:
         # 권한 검사: 클래스 관리 권한 필요
         _check_folder_permission(request, "*", "CLASS_MANAGE")
@@ -7828,7 +7584,6 @@ async def create_class(request: Request,
         if class_dir.exists(): raise HTTPException(status_code=409, detail="Class already exists")
 
         class_dir.mkdir(parents=True, exist_ok=False)
-        _sync_labels_if_classes_changed()
         for p in (classification_dir, class_dir, ROOT_DIR): _dircache_invalidate(p)
         DIRLIST_CACHE.clear()
         log_access_row(tag="INFO", note=f"클래스 '{name}' 생성 완료")
@@ -7843,8 +7598,7 @@ async def create_class(request: Request,
 async def delete_class(request: Request,
                        class_name: str = PathParam(..., min_length=1, max_length=128),
                        force: bool = Query(False, description="True면 내용 포함 통째 삭제"),
-                       mode: str = Query("wafer", pattern="^(wafer|chip)$", description="wafer 또는 chip 모드"),
-                       _=Depends(labels_classes_sync_dep)):
+                       mode: str = Query("wafer", pattern="^(wafer|chip)$", description="wafer 또는 chip 모드")):
     try:
         # 권한 검사: 클래스 관리 권한 필요
         _check_folder_permission(request, "*", "CLASS_MANAGE")
@@ -7860,12 +7614,10 @@ async def delete_class(request: Request,
             if any(class_dir.iterdir()): raise HTTPException(status_code=409, detail="Class directory not empty")
             class_dir.rmdir()
             log_access_row(tag="INFO", note=f"클래스 삭제: {class_name}")
-        removed_cnt = _remove_label_from_all_images(class_name)
-        _labels_load()
         for p in (classification_dir, class_dir, ROOT_DIR): _dircache_invalidate(p)
         DIRLIST_CACHE.clear()
         log_access_row(tag="INFO", note=f"클래스 '{class_name}' 삭제 완료")
-        return {"success": True, "deleted": class_name, "force": force, "labels_cleaned": removed_cnt, "refresh_required": True}
+        return {"success": True, "deleted": class_name, "force": force, "refresh_required": True}
     except HTTPException:
         raise
     except Exception as e:
@@ -7879,8 +7631,7 @@ class RenameClassReq(BaseModel):
 @app.post("/api/classes/rename")
 async def rename_class(request: Request,
                        req: RenameClassReq,
-                       mode: str = Query("wafer", pattern="^(wafer|chip)$", description="wafer 또는 chip 모드"),
-                       _=Depends(labels_classes_sync_dep)):
+                       mode: str = Query("wafer", pattern="^(wafer|chip)$", description="wafer 또는 chip 모드")):
     try:
         # 권한 검사: 클래스 관리 권한 필요
         _check_folder_permission(request, "*", "CLASS_MANAGE")
@@ -7903,27 +7654,15 @@ async def rename_class(request: Request,
         if new_class_dir.exists():
             raise HTTPException(status_code=409, detail="New class name already exists")
 
-        # 폴더 이름 변경
+        # 폴더 이름 변경 (폴더 구조가 source of truth이므로 이것만으로 충분)
         old_class_dir.rename(new_class_dir)
-
-        # labels.json에서 라벨 이름 변경
-        renamed_count = 0
-        with LABELS_LOCK:
-            for img_path, labels in list(LABELS.items()):
-                if old_name in labels:
-                    labels = [new_name if lbl == old_name else lbl for lbl in labels]
-                    LABELS[img_path] = labels
-                    renamed_count += 1
-
-        _labels_save()
-        _labels_load()
 
         # 캐시 무효화
         for p in (classification_dir, old_class_dir, new_class_dir, ROOT_DIR): _dircache_invalidate(p)
         DIRLIST_CACHE.clear()
 
-        log_access_row(tag="INFO", note=f"클래스 '{old_name}' → '{new_name}' 이름 변경 완료 ({renamed_count}개 이미지)")
-        return {"success": True, "old_name": old_name, "new_name": new_name, "renamed_count": renamed_count, "refresh_required": True}
+        log_access_row(tag="INFO", note=f"클래스 '{old_name}' → '{new_name}' 이름 변경 완료")
+        return {"success": True, "old_name": old_name, "new_name": new_name, "refresh_required": True}
     except HTTPException:
         raise
     except Exception as e:
@@ -7935,28 +7674,25 @@ class DeleteClassesReq(BaseModel):
 
 @app.post("/api/classes/delete")
 async def delete_classes(req: DeleteClassesReq,
-                         mode: str = Query("wafer", pattern="^(wafer|chip)$", description="wafer 또는 chip 모드"),
-                         _=Depends(labels_classes_sync_dep)):
+                         mode: str = Query("wafer", pattern="^(wafer|chip)$", description="wafer 또는 chip 모드")):
     try:
         if not req.names: raise HTTPException(status_code=400, detail="클래스명 목록이 비어있습니다")
         classification_dir = _classification_dir(mode=mode)
-        deleted, failed, total_cleaned = [], [], 0
+        deleted, failed = [], []
         for class_name in req.names:
             try:
                 class_name = class_name.strip()
                 if not _CLASS_NAME_RE.match(class_name): raise ValueError("Invalid class name")
                 class_dir = classification_dir / class_name
-                logger.info(f"🔍 [DELETE_CLASS] class_dir: {class_dir}, exists: {class_dir.exists()}")
+                logger.info(f"[DELETE_CLASS] class_dir: {class_dir}, exists: {class_dir.exists()}")
                 if not class_dir.exists() or not class_dir.is_dir(): raise FileNotFoundError("Class not found")
                 shutil.rmtree(class_dir); deleted.append(class_name)
-                total_cleaned += _remove_label_from_all_images(class_name)
             except Exception as e:
                 failed.append({"class": class_name, "error": str(e)})
                 logger.exception(f"클래스 {class_name} 삭제 실패: {e}")
-        if total_cleaned > 0: _labels_load()
         _dircache_invalidate(classification_dir)
         log_access_row(tag="INFO", note="배치 클래스 삭제 완료 - Label Explorer 새로고침 필요")
-        return {"success": True, "deleted": deleted, "failed": failed, "labels_cleaned": total_cleaned,
+        return {"success": True, "deleted": deleted, "failed": failed,
                 "refresh_required": True, "message": f"{len(deleted)}개 삭제, {len(failed)}개 실패"}
     except Exception as e:
         logger.exception(f"클래스 일괄 삭제 실패: {e}")
@@ -7996,7 +7732,7 @@ async def class_images(class_name: str = PathParam(..., min_length=1, max_length
 
 # ---------------- Labels ----------------
 @app.post("/api/labels")
-async def add_labels(req: LabelAddReq, _=Depends(labels_classes_sync_dep)):
+async def add_labels(req: LabelAddReq):
     try:
         rel = relkey_from_any_path(req.image_path)
         abs_path = ROOT_DIR / rel
@@ -8004,42 +7740,35 @@ async def add_labels(req: LabelAddReq, _=Depends(labels_classes_sync_dep)):
         if not is_supported_image(abs_path): raise HTTPException(status_code=400, detail="Unsupported image format")
         new_labels = [str(x).strip() for x in req.labels if str(x).strip()]
         if not new_labels: raise HTTPException(status_code=400, detail="Empty labels")
-        with LABELS_LOCK:
-            cur = set(LABELS.get(rel, [])); cur.update(new_labels); LABELS[rel] = sorted(cur)
-        _labels_save(); _dircache_invalidate(_classification_dir())
-        return {"success": True, "image": rel, "labels": LABELS[rel]}
+        # 폴더 구조가 source of truth — 라벨은 classification 폴더 스캔으로 조회
+        _dircache_invalidate(_classification_dir())
+        labels = _get_labels_for_image(rel)
+        return {"success": True, "image": rel, "labels": labels}
     except Exception as e:
         logger.exception(f"라벨 추가 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/labels")
-async def delete_labels(req: LabelDelReq, _=Depends(labels_classes_sync_dep)):
+async def delete_labels(req: LabelDelReq):
     try:
         rel = relkey_from_any_path(req.image_path)
-        with LABELS_LOCK:
-            if rel not in LABELS: raise HTTPException(status_code=404, detail="No labels for this image")
-            if req.labels is None: LABELS.pop(rel, None)
-            else:
-                to_remove = {str(x).strip() for x in req.labels if str(x).strip()}
-                if not to_remove: raise HTTPException(status_code=400, detail="Empty labels to remove")
-                remain = [x for x in LABELS[rel] if x not in to_remove]
-                LABELS[rel] = remain or LABELS.pop(rel, None) or []
-        _labels_save(); _dircache_invalidate(_classification_dir())
-        return {"success": True, "image": rel, "labels": LABELS.get(rel, [])}
+        # 폴더 구조가 source of truth — 라벨은 classification 폴더 스캔으로 조회
+        _dircache_invalidate(_classification_dir())
+        labels = _get_labels_for_image(rel)
+        return {"success": True, "image": rel, "labels": labels}
     except Exception as e:
         logger.exception(f"라벨 제거 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/labels/delete")
-async def delete_labels_post(req: LabelDelReq, _=Depends(labels_classes_sync_dep)):
+async def delete_labels_post(req: LabelDelReq):
     return await delete_labels(req)
 
 @app.get("/api/labels/{image_path:path}")
 async def get_labels(image_path: str):
     try:
-        _labels_reload_if_stale()  # 📖 조회 API: labels.json 파일만 리로드
         rel = relkey_from_any_path(image_path)
-        with LABELS_LOCK: labels = list(LABELS.get(rel, []))
+        labels = _get_labels_for_image(rel)
         return {"success": True, "image": rel, "labels": labels}
     except Exception as e:
         logger.exception(f"라벨 조회 실패: {e}")
@@ -8106,8 +7835,7 @@ async def get_breakdown():
 # ---------------- Classification ----------------
 @app.post("/api/classify")
 async def classify_images(req: Request,
-                         request: ClassifyRequest,
-                         _=Depends(labels_classes_sync_dep)):
+                         request: ClassifyRequest):
     """이미지를 클래스로 분류하고 classification 디렉토리에 복사/링크"""
     try:
         mode = request.mode
@@ -8123,49 +7851,35 @@ async def classify_images(req: Request,
         # 권한 검사: 이미지가 속한 폴더에 대한 라벨 쓰기 권한 필요
         folder_path = str(Path(rel_path).parent)
         _check_folder_permission(req, folder_path, "LABEL_WRITE")
-        
+
         class_name = request.class_name.strip()
         if not class_name or not _CLASS_NAME_RE.match(class_name):
             raise HTTPException(status_code=400, detail="Invalid class name")
-            
+
         # 클래스 디렉토리 생성
         classification_dir = _classification_dir(mode=mode)
         class_dir = classification_dir / class_name
         class_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # 대상 파일 경로
         target_file = class_dir / abs_path.name
-        class_source_map = _load_class_source_map(class_dir)
-        mapped_rel = class_source_map.get(target_file.name)
-        needs_replace = (not target_file.exists()) or (mapped_rel != rel_path)
-        
+        needs_replace = not target_file.exists()
+
         # 파일 복사 또는 하드링크 생성 (executor로 이벤트 루프 블로킹 방지)
         loop = asyncio.get_running_loop()
         if needs_replace:
-            if target_file.exists():
-                try:
-                    target_file.unlink()
-                except FileNotFoundError:
-                    pass
-                except Exception as unlink_err:
-                    logger.warning(f"분류 파일 교체 전 삭제 실패: {target_file}, 오류: {unlink_err}")
-
             try:
                 if abs_path.stat().st_dev == class_dir.stat().st_dev:
-                    # 같은 드라이브면 하드링크 시도
                     await loop.run_in_executor(IO_POOL, os.link, str(abs_path), str(target_file))
                     log_access_row(tag="ACTION", note=f"하드링크 생성: {rel_path} -> {class_name}")
                 else:
-                    # 다른 드라이브면 복사
                     await loop.run_in_executor(IO_POOL, shutil.copy2, abs_path, target_file)
                     log_access_row(tag="ACTION", note=f"파일 복사: {rel_path} -> {class_name}")
             except (OSError, PermissionError):
-                # 하드링크 실패시 복사로 폴백
                 await loop.run_in_executor(IO_POOL, shutil.copy2, abs_path, target_file)
                 log_access_row(tag="ACTION", note=f"복사 폴백: {rel_path} -> {class_name}")
         elif not _is_same_physical_file(abs_path, target_file):
             # 같은 파일명이지만 다른 원본이면 반드시 최신 원본으로 교체한다.
-            needs_replace = True
             try:
                 target_file.unlink()
             except FileNotFoundError:
@@ -8180,16 +7894,6 @@ async def classify_images(req: Request,
             except (OSError, PermissionError):
                 await loop.run_in_executor(IO_POOL, shutil.copy2, abs_path, target_file)
 
-        class_source_map[target_file.name] = rel_path
-        _save_class_source_map(class_dir, class_source_map)
-
-        # 라벨도 추가
-        with LABELS_LOCK:
-            cur_labels = set(LABELS.get(rel_path, []))
-            cur_labels.add(class_name)
-            LABELS[rel_path] = sorted(cur_labels)
-
-        await loop.run_in_executor(IO_POOL, _labels_save)
         _dircache_invalidate(class_dir)
 
         # 썸네일 미리 생성 (Label Explorer에서 지연 없이 표시되도록)
@@ -8200,7 +7904,7 @@ async def classify_images(req: Request,
                                personalized=True, scheme=scheme)
         )
 
-        return {"success": True, "image": rel_path, "class": class_name, "labels": LABELS[rel_path]}
+        return {"success": True, "image": rel_path, "class": class_name, "labels": _get_labels_for_image(rel_path)}
         
     except Exception as e:
         logger.exception(f"이미지 분류 실패: {e}")
@@ -8223,8 +7927,7 @@ class ChipClassifyRequest(BaseModel):
 
 @app.post("/api/classify/batch")
 async def classify_images_batch(request: BatchClassifyRequest,
-                                req: Request,
-                                _=Depends(labels_classes_sync_dep)):
+                                req: Request):
     """배치 이미지 분류"""
     batch_start_time = time.perf_counter()
     try:
@@ -8238,51 +7941,42 @@ async def classify_images_batch(request: BatchClassifyRequest,
         classification_dir = _classification_dir(mode=mode)
         class_dir = classification_dir / class_name
         class_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 🔥 성능 최적화: 드라이브 체크는 한 번만 수행
+
+        # 성능 최적화: 드라이브 체크는 한 번만 수행
         class_dir_dev = class_dir.stat().st_dev
-        class_source_map = _load_class_source_map(class_dir)
-        source_map_dirty = False
-        
+
         results = []
         errors = []
-        labels_batch_update = {}  # 🔥 배치 업데이트용 딕셔너리
-        
+
         lookup_time = 0
         file_check_time = 0
         link_time = 0
-        
+
         for image_path in request.images:
             try:
-                # 🔥 경로 조회 최적화 - 분류 작업은 classification 경로 조회 불필요 (너무 느림)
                 lookup_start = time.perf_counter()
-                # _lookup_original_relpath_from_classification_path는 FILE_INDEX 전체 순회로 매우 느림
-                # 분류 작업은 이미 원본 파일 경로이므로 relkey_from_any_path만 사용
                 rel_path = relkey_from_any_path(image_path)
                 lookup_time += time.perf_counter() - lookup_start
-                
+
                 abs_path = ROOT_DIR / rel_path
-                
-                # 🔥 파일 체크 최적화
+
                 check_start = time.perf_counter()
                 if not abs_path.exists() or not abs_path.is_file():
                     errors.append(f"{rel_path}: 파일 없음")
                     file_check_time += time.perf_counter() - check_start
                     continue
-                    
+
                 if not is_supported_image(abs_path):
                     errors.append(f"{rel_path}: 지원하지 않는 형식")
                     file_check_time += time.perf_counter() - check_start
                     continue
                 file_check_time += time.perf_counter() - check_start
-                
+
                 # 대상 파일 경로
                 target_file = class_dir / abs_path.name
-                
-                # 🔥 파일 복사/하드링크 최적화 - 간결한 로직
+
                 link_start = time.perf_counter()
-                mapped_rel = class_source_map.get(target_file.name)
-                needs_replace = (not target_file.exists()) or (mapped_rel != rel_path)
+                needs_replace = not target_file.exists()
                 if not needs_replace and not _is_same_physical_file(abs_path, target_file):
                     needs_replace = True
 
@@ -8295,7 +7989,6 @@ async def classify_images_batch(request: BatchClassifyRequest,
                         except Exception as unlink_err:
                             logger.warning(f"배치 분류 기존 파일 삭제 실패: {target_file}, 오류: {unlink_err}")
                     try:
-                        # 같은 드라이브면 하드링크, 아니면 복사
                         if abs_path.stat().st_dev == class_dir_dev:
                             os.link(str(abs_path), str(target_file))
                         else:
@@ -8303,48 +7996,25 @@ async def classify_images_batch(request: BatchClassifyRequest,
                     except (OSError, PermissionError):
                         shutil.copy2(abs_path, target_file)
 
-                if class_source_map.get(target_file.name) != rel_path:
-                    class_source_map[target_file.name] = rel_path
-                    source_map_dirty = True
                 link_time += time.perf_counter() - link_start
-                
-                # 🔥 라벨 배치 업데이트 (락 없이 임시 저장)
-                labels_batch_update[rel_path] = class_name
+
                 results.append(rel_path)
-                
+
             except Exception as e:
                 errors.append(f"{image_path}: {str(e)}")
-        
-        # 🔥 라벨 배치 업데이트 (락 한 번만 획득)
-        label_update_start = time.perf_counter()
-        if labels_batch_update:
-            with LABELS_LOCK:
-                for rel_path, cls_name in labels_batch_update.items():
-                    cur_labels = set(LABELS.get(rel_path, []))
-                    cur_labels.add(cls_name)
-                    LABELS[rel_path] = sorted(cur_labels)
-        label_update_time = time.perf_counter() - label_update_start
-        
-        # 🔥 파일 저장 및 캐시 무효화 (executor로 이벤트 루프 블로킹 방지)
-        save_start = time.perf_counter()
+
+        # 캐시 무효화
         if results:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(IO_POOL, _labels_save)
             _dircache_invalidate(class_dir)
-            if source_map_dirty:
-                await loop.run_in_executor(IO_POOL, _save_class_source_map, class_dir, class_source_map)
-        save_time = time.perf_counter() - save_start
-        
+
         batch_total_time = time.perf_counter() - batch_start_time
-        
-        # 🔥 성능 로그
-        logger.info(f"⚡ [BATCH_PERF] 총 {len(request.images)}개 처리 - "
+
+        # 성능 로그
+        logger.info(f"[BATCH_PERF] 총 {len(request.images)}개 처리 - "
                    f"총 시간: {batch_total_time*1000:.1f}ms, "
                    f"경로조회: {lookup_time*1000:.1f}ms, "
                    f"파일체크: {file_check_time*1000:.1f}ms, "
-                   f"링크생성: {link_time*1000:.1f}ms, "
-                   f"라벨업데이트: {label_update_time*1000:.1f}ms, "
-                   f"저장: {save_time*1000:.1f}ms")
+                   f"링크생성: {link_time*1000:.1f}ms")
         
         log_access_row(tag="ACTION", note=f"배치 분류: {len(results)}개 성공, {len(errors)}개 실패 -> {class_name}")
 
@@ -8373,8 +8043,7 @@ async def classify_images_batch(request: BatchClassifyRequest,
 
 @app.post("/api/classify/chips")
 async def classify_chips(request: ChipClassifyRequest,
-                         req: Request,
-                         _=Depends(labels_classes_sync_dep)):
+                         req: Request):
     """Chip 크롭 및 분류"""
     chip_start_time = time.perf_counter()
     try:
@@ -8460,19 +8129,10 @@ async def classify_chips(request: ChipClassifyRequest,
                     "filename": chip_filename
                 })
 
-                # 🔥 라벨 추가 (chip 파일 경로는 classification 하위에만 있음)
-                chip_rel_path = str(chip_path.relative_to(ROOT_DIR)).replace("\\", "/")
-                with LABELS_LOCK:
-                    cur_labels = set(LABELS.get(chip_rel_path, []))
-                    cur_labels.add(class_name)
-                    LABELS[chip_rel_path] = sorted(cur_labels)
-
             except Exception as e:
                 errors.append(f"Chip ({chip_coord.x_abs}, {chip_coord.y_abs}): {str(e)}")
 
-        # 라벨 저장
         if saved_count > 0:
-            _labels_save()
             _dircache_invalidate(class_dir)
             _upsert_chip_annotations(rel_path_obj, folder_key, chip_updates, username=username)
 
@@ -8548,8 +8208,7 @@ async def get_chip_labels(
 
 @app.delete("/api/classify")
 async def delete_classification(request: ClassifyDeleteRequest,
-                                req: Request,
-                                _=Depends(labels_classes_sync_dep)):
+                                req: Request):
     """classification 디렉토리에서 이미지 제거"""
     try:
         mode = request.mode
@@ -8558,14 +8217,12 @@ async def delete_classification(request: ClassifyDeleteRequest,
         class_name = request.class_name.strip()
         if not class_name or not _CLASS_NAME_RE.match(class_name):
             raise HTTPException(status_code=400, detail="Invalid class name")
-            
+
         classification_dir = _classification_dir(mode=mode)
         class_dir = classification_dir / class_name
         if not class_dir.exists():
             raise HTTPException(status_code=404, detail="Class not found")
-        class_source_map = _load_class_source_map(class_dir)
-        source_map_dirty = False
-        
+
         # 이미지 경로 또는 이름으로 찾기
         if request.image_path:
             rel_path = _lookup_original_relpath_from_classification_path(request.image_path) or relkey_from_any_path(request.image_path)
@@ -8573,46 +8230,20 @@ async def delete_classification(request: ClassifyDeleteRequest,
             target_file = class_dir / abs_path.name
         elif request.image_name:
             target_file = class_dir / request.image_name
-            rel_path = class_source_map.get(request.image_name, "")
-            if rel_path:
-                abs_path = ROOT_DIR / rel_path
-            else:
-                # 원본 파일 경로 찾기 (legacy fallback)
-                for root, dirs, files in os.walk(ROOT_DIR):
-                    if request.image_name in files:
-                        abs_path = Path(root) / request.image_name
-                        rel_path = str(abs_path.relative_to(ROOT_DIR)).replace("\\", "/")
-                        break
-                else:
-                    raise HTTPException(status_code=404, detail="Original image not found")
+            rel_path = relkey_from_any_path(request.image_name)
         else:
             raise HTTPException(status_code=400, detail="Either image_path or image_name required")
-        
+
         if not target_file.exists():
             raise HTTPException(status_code=404, detail="Classification file not found")
-        
+
         # classification 디렉토리에서 파일 삭제
         target_file.unlink()
-        if target_file.name in class_source_map:
-            class_source_map.pop(target_file.name, None)
-            source_map_dirty = True
         try:
             classification_rel_path = str(target_file.relative_to(ROOT_DIR)).replace("\\", "/")
         except ValueError:
             classification_rel_path = target_file.as_posix()
-        
-        # 라벨에서도 제거
-        with LABELS_LOCK:
-            if rel_path in LABELS and class_name in LABELS[rel_path]:
-                new_labels = [x for x in LABELS[rel_path] if x != class_name]
-                if new_labels:
-                    LABELS[rel_path] = new_labels
-                else:
-                    LABELS.pop(rel_path, None)
-        
-        _labels_save()
-        if source_map_dirty:
-            _save_class_source_map(class_dir, class_source_map)
+
         _dircache_invalidate(class_dir)
 
         if mode == "chip":
@@ -8622,9 +8253,9 @@ async def delete_classification(request: ClassifyDeleteRequest,
                 filename=target_file.name,
                 username=username,
             )
-        
+
         log_access_row(tag="ACTION", note=f"분류 제거: {rel_path} from {class_name}")
-        
+
         return {"success": True, "removed": str(target_file.relative_to(ROOT_DIR)), "class": class_name}
         
     except Exception as e:
@@ -8634,8 +8265,7 @@ async def delete_classification(request: ClassifyDeleteRequest,
 # 프런트엔드가 사용하는 엔드포인트: POST /api/classify/delete
 @app.post("/api/classify/delete")
 async def classify_delete_batch(request: ClassifyDeleteBatchReq,
-                                req: Request,
-                                _=Depends(labels_classes_sync_dep)):
+                                req: Request):
     try:
         mode = request.mode
         username = _current_username(req, default="system")
@@ -8646,19 +8276,13 @@ async def classify_delete_batch(request: ClassifyDeleteBatchReq,
 
         classification_dir = _classification_dir(mode=mode)
         class_dir = classification_dir / class_name
-        class_source_map = _load_class_source_map(class_dir)
-        source_map_dirty = False
         removed = 0
         for any_path in request.images:
             try:
                 raw_value = str(any_path or "").strip()
                 source_name = Path(raw_value).name
-                mapped_rel = class_source_map.get(source_name)
-                if mapped_rel:
-                    rel_path = mapped_rel
-                    abs_path = ROOT_DIR / rel_path
-                    target_file = class_dir / source_name
-                else:
+                target_file = class_dir / source_name
+                if not target_file.exists():
                     rel_path = relkey_from_any_path(any_path)
                     abs_path = ROOT_DIR / rel_path
                     target_file = class_dir / abs_path.name
@@ -8667,18 +8291,10 @@ async def classify_delete_batch(request: ClassifyDeleteBatchReq,
                         target_file.unlink()
                     except FileNotFoundError:
                         pass
-                if target_file.name in class_source_map:
-                    class_source_map.pop(target_file.name, None)
-                    source_map_dirty = True
                 try:
                     classification_rel_path = str(target_file.relative_to(ROOT_DIR)).replace("\\", "/")
                 except ValueError:
                     classification_rel_path = target_file.as_posix()
-                with LABELS_LOCK:
-                    labels = set(LABELS.get(rel_path, []))
-                    if class_name in labels:
-                        labels.discard(class_name)
-                        LABELS[rel_path] = sorted(labels) if labels else LABELS.pop(rel_path, None) or []
                 if mode == "chip":
                     _remove_chip_annotations_from_classification_path(
                         classification_rel_path,
@@ -8690,9 +8306,6 @@ async def classify_delete_batch(request: ClassifyDeleteBatchReq,
             except Exception:
                 continue
 
-        _labels_save()
-        if source_map_dirty:
-            _save_class_source_map(class_dir, class_source_map)
         _dircache_invalidate(class_dir)
         log_access_row(tag="ACTION", note=f"배치 분류 제거: {removed} items from {class_name}")
         return {"success": True, "removed": removed, "class": class_name}
@@ -8858,9 +8471,7 @@ async def change_folder(request: Request):
             classification_dir.mkdir(parents=True, exist_ok=True)
             log_access_row(tag="INFO", note=f"새 폴더의 classification 폴더 생성: {classification_dir}")
 
-        _labels_load()
-        
-        # 🔥 ROOT_DIR 기준 상대 경로 계산 (파일 경로 접두사)
+        # ROOT_DIR 기준 상대 경로 계산 (파일 경로 접두사)
         try:
             rel_path = str(current_folder.resolve().relative_to(ROOT_DIR.resolve())).replace('\\', '/')
             current_folder_prefix = rel_path + '/' if rel_path and rel_path != '.' else ''
