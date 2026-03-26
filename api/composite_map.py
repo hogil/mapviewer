@@ -103,9 +103,8 @@ COMPOSITE_ROOT.mkdir(parents=True, exist_ok=True)
 (COMPOSITE_ROOT / ANONYMOUS_LOGIN_ID).mkdir(parents=True, exist_ok=True)
 COMPOSITE_SESSION_DIRNAME = "current"
 SQUARE_MAP_CACHE_FILENAME = "square_maps_data.npz"
-# composite_cache_v1: PNG 디코딩 캐시 (cold 시 56ms/장 → 10ms/장)
-# 다른 이미지 조합으로 Composite 생성해도 개별 이미지 캐시는 재활용됨
-USE_COMPOSITE_IMAGE_CACHE = os.getenv("USE_COMPOSITE_IMAGE_CACHE", "1").strip().lower() not in {"0", "false", "no", "n", "off"}
+# composite_cache_v1: PNG→npy 디스크 캐시 (동일 이미지 재사용 시 유효)
+USE_COMPOSITE_IMAGE_CACHE = os.getenv("USE_COMPOSITE_IMAGE_CACHE", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
 COMPOSITE_CACHE_ROOT = IMAGES_ROOT / "composite_cache_v1" if USE_COMPOSITE_IMAGE_CACHE else None
 _GRADE_RANGE = np.arange(8, dtype=np.uint8)
 _SUBSET_NAME_RE = re.compile(r"^square_(weighted_)?average_([0-7]+)\.(png|jpg|jpeg|webp)$", re.IGNORECASE)
@@ -938,91 +937,53 @@ def _load_pixel_indices_vips(full_path: Path, width: int, height: int) -> Option
 
 
 def _load_pixel_indices(image_rel_path: str, width: int, height: int) -> Optional[np.ndarray]:
-    """
-    캐싱 개선:
-    1. 캐시 히트 시 즉시 반환 (파일 I/O 최소화)
-    2. 캐시 미스 시에만 이미지 로드
-    3. 원자적 캐시 저장 (임시 파일 사용)
-    """
+    """Palette PNG → uint8 인덱스 배열 로드. 최소 오버헤드."""
     full_path = IMAGES_ROOT / image_rel_path
-    if not full_path.exists():
-        return None
 
+    # 디스크 캐시 (활성화 시에만)
     cache_path: Optional[Path] = None
-    try:
-        cache_path = _cache_path_for_image(image_rel_path, width, height)
-        # 캐시 체크 (파일 mtime 비교)
-        if cache_path and cache_path.exists():
-            try:
-                cache_mtime = cache_path.stat().st_mtime
-                file_mtime = full_path.stat().st_mtime
-                if cache_mtime >= file_mtime:
-                    # 캐시가 최신 - 바로 반환
-                    return np.load(cache_path)
-            except Exception:
-                # 캐시 읽기 실패 - 재생성
-                pass
-    except Exception as exc:
-        print(f"[COMPOSITE CACHE] load skipped ({image_rel_path}): {exc}")
-        cache_path = None
-
-    # 캐시 미스 - 이미지 로드: pyvips 우선, PIL 폴백
-    pixel_indices = None
-    if _HAS_PYVIPS:
-        pixel_indices = _load_pixel_indices_vips(full_path, width, height)
-
-    if pixel_indices is None:
+    if USE_COMPOSITE_IMAGE_CACHE:
         try:
-            with Image.open(full_path) as img:
-                img.load()
+            cache_path = _cache_path_for_image(image_rel_path, width, height)
+            if cache_path and cache_path.exists():
+                try:
+                    if cache_path.stat().st_mtime >= full_path.stat().st_mtime:
+                        return np.load(cache_path)
+                except Exception:
+                    pass
+        except Exception:
+            cache_path = None
 
-                if img.size != (width, height):
-                    img = img.resize((width, height), Image.NEAREST)
-
-                # 투명도(Alpha) 확인을 위한 마스크 생성
-                is_transparent = None
-                if 'A' in img.getbands():
-                    alpha = np.array(img.getchannel('A'))
-                    is_transparent = (alpha == 0)
-                elif 'transparency' in img.info:
-                    transparency = img.info['transparency']
-                    if isinstance(transparency, bytes):
-                         pass
-                    else:
-                        temp_arr = np.array(img)
-                        is_transparent = (temp_arr == transparency)
-
-                if img.mode == 'P':
-                    pixel_indices = np.array(img, dtype=np.uint8)
-                else:
-                    img_l = img.convert('L')
-                    pixels = np.array(img_l, dtype=np.uint8)
-                    pixel_indices = pixels // 32
-
-                if is_transparent is not None:
-                    pixel_indices[is_transparent] = 31
-        except Exception as exc:
-            print(f"[FAST] Composite image load failed: {image_rel_path}, {exc}")
-            return None
-
-    if pixel_indices is None:
+    # PIL 직접 로드 (가장 빠른 경로 — pyvips는 palette→RGB 확장이라 느림)
+    try:
+        with Image.open(full_path) as img:
+            img.load()
+            if img.size != (width, height):
+                img = img.resize((width, height), Image.NEAREST)
+            if img.mode == 'P':
+                pixel_indices = np.array(img, dtype=np.uint8)
+            else:
+                pixel_indices = np.array(img.convert('L'), dtype=np.uint8) // 32
+            # 투명도 처리
+            if 'A' in img.getbands():
+                pixel_indices[np.array(img.getchannel('A')) == 0] = 31
+    except Exception:
         return None
 
-    # 캐시 저장 (원자적 저장)
+    # 디스크 캐시 백그라운드 저장
     if cache_path is not None:
-        try:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
-            with open(tmp_path, "wb") as f:
-                np.save(f, pixel_indices, allow_pickle=False)
+        _arr = pixel_indices
+        _cp = cache_path
+        def _save():
             try:
-                tmp_path.replace(cache_path)
+                _cp.parent.mkdir(parents=True, exist_ok=True)
+                tmp = _cp.with_name(_cp.stem + "_tmp.npy")
+                np.save(tmp, _arr)
+                tmp.replace(_cp)
             except Exception:
-                if cache_path.exists():
-                    cache_path.unlink()
-                tmp_path.rename(cache_path)
-        except Exception as exc:
-            print(f"[COMPOSITE CACHE] save failed ({cache_path}): {exc}")
+                pass
+        threading.Thread(target=_save, daemon=True).start()
+
     return pixel_indices
 
 
@@ -1200,13 +1161,15 @@ def _image_ext() -> str:
     return ".png"
 
 
-def _save_image_with_backend(img, path: Path) -> Tuple[Path, str]:
+def _save_image_with_backend(img, path: Path, quality: Optional[int] = None) -> Tuple[Path, str]:
     """
     Save image with selectable backend/format.
     Accepts PIL Image or numpy RGB array (H, W, 3).
+    quality: JPEG 품질 오버라이드 (None이면 _JPEG_QUALITY 사용)
     Returns: (actual_path, rel_path)
     """
     backend, fmt = _resolve_save_backend()
+    jpeg_q = quality if quality is not None else _JPEG_QUALITY
 
     target_path = path
     if fmt == "WEBP":
@@ -1223,7 +1186,7 @@ def _save_image_with_backend(img, path: Path) -> Tuple[Path, str]:
         if arr.ndim == 2:
             arr = np.stack([arr, arr, arr], axis=2)
         if backend == "turbo" and _HAS_TURBOJPEG and fmt == "JPEG":
-            encoded = _TURBOJPEG.encode(arr, quality=_JPEG_QUALITY, jpeg_subsample=TJSAMP_420, pixel_format=TJPF_RGB)
+            encoded = _TURBOJPEG.encode(arr, quality=jpeg_q, jpeg_subsample=TJSAMP_420, pixel_format=TJPF_RGB)
             tmp_path = target_path.with_suffix(f"{target_path.suffix}.tmp")
             tmp_path.write_bytes(encoded)
             try:
@@ -1238,13 +1201,13 @@ def _save_image_with_backend(img, path: Path) -> Tuple[Path, str]:
             if fmt == "WEBP":
                 vips_img.write_to_file(str(target_path), Q=100, lossless=1)
             elif fmt == "JPEG":
-                vips_img.write_to_file(str(target_path), Q=_JPEG_QUALITY, strip=True, optimize_coding=True)
+                vips_img.write_to_file(str(target_path), Q=jpeg_q, strip=True, optimize_coding=True)
             else:
                 vips_img.write_to_file(str(target_path), compression=0)
         else:
             pil_img = Image.fromarray(arr, mode='RGB')
             if fmt == "JPEG":
-                pil_img.save(target_path, format="JPEG", quality=_JPEG_QUALITY, subsampling=0, optimize=True)
+                pil_img.save(target_path, format="JPEG", quality=jpeg_q, subsampling=0, optimize=True)
             elif fmt == "WEBP":
                 pil_img.save(target_path, format="WEBP", quality=100, lossless=True, method=6)
             else:
@@ -1266,14 +1229,14 @@ def _save_image_with_backend(img, path: Path) -> Tuple[Path, str]:
         if fmt == "WEBP":
             vips_img.write_to_file(str(target_path), Q=100, lossless=1)
         elif fmt == "JPEG":
-            vips_img.write_to_file(str(target_path), Q=_JPEG_QUALITY, strip=True, optimize_coding=True)
+            vips_img.write_to_file(str(target_path), Q=jpeg_q, strip=True, optimize_coding=True)
         else:
             vips_img.write_to_file(str(target_path), compression=0)
     elif backend == "turbo" and _HAS_TURBOJPEG and fmt == "JPEG":
         arr = np.array(save_img, dtype=np.uint8)
         if arr.ndim == 2:
             arr = np.stack([arr, arr, arr], axis=2)
-        encoded = _TURBOJPEG.encode(arr, quality=_JPEG_QUALITY, jpeg_subsample=TJSAMP_420, pixel_format=TJPF_RGB)
+        encoded = _TURBOJPEG.encode(arr, quality=jpeg_q, jpeg_subsample=TJSAMP_420, pixel_format=TJPF_RGB)
         tmp_path = target_path.with_suffix(f"{target_path.suffix}.tmp")
         tmp_path.write_bytes(encoded)
         try:
@@ -1286,7 +1249,7 @@ def _save_image_with_backend(img, path: Path) -> Tuple[Path, str]:
         if fmt == "WEBP":
             save_img.save(target_path, format="WEBP", quality=100, lossless=True, method=6)
         elif fmt == "JPEG":
-            save_img.save(target_path, format="JPEG", quality=_JPEG_QUALITY, subsampling=0, optimize=True)
+            save_img.save(target_path, format="JPEG", quality=jpeg_q, subsampling=0, optimize=True)
         else:
             save_img.save(target_path, format='PNG', optimize=False, compress_level=0)
 
@@ -1517,7 +1480,7 @@ def recolor_saved_sum_maps(
             value_min=v_min, value_max=v_max, force_full_range=True,
             _base_rgb=_recolor_base_rgb,
         )
-        actual_path, rel_path = _save_image_with_backend(img, sum_map_path)
+        actual_path, rel_path = _save_image_with_backend(img, sum_map_path, quality=75)
         outputs.append({
             "path": rel_path, "type": variant_type,
             "display_name": display_name, "filename": actual_path.name,
@@ -1802,7 +1765,8 @@ def _save_sum_map_variants(
             force_full_range=True,
             _base_rgb=_shared_base_rgb,
         )
-        actual_path, rel_path = _save_image_with_backend(img, target_path)
+        # Sum map은 gradient heatmap → Q75로 충분 (Grade 히트맵은 별도 PNG 저장)
+        actual_path, rel_path = _save_image_with_backend(img, target_path, quality=75)
         return actual_path, rel_path
 
     # 🔥 2장을 ThreadPoolExecutor에서 병렬 실행
@@ -2543,7 +2507,7 @@ def create_subset_map(
             value_min=value_min, value_max=value_max, force_full_range=True,
             _base_rgb=_shared_base_rgb,
         )
-        actual_path, rel_path = _save_image_with_backend(img, sum_map_path)
+        actual_path, rel_path = _save_image_with_backend(img, sum_map_path, quality=75)
         return {
             "path": rel_path, "type": variant_type,
             "display_name": display_name, "filename": actual_path.name,
