@@ -11675,9 +11675,19 @@ class WaferMapViewer {
             this._transientGridRestoreState = null;
 
             // 저장된 뷰 상태로 복원
+            // ✅ savedViewState에 classification 이미지가 들어있으면 Label Explorer 잔재이므로 사용하지 않음
+            let usableSavedViewState = this.savedViewState;
+            if (usableSavedViewState && usableSavedViewState.type === 'grid') {
+                const svImages = usableSavedViewState.images || [];
+                const hasClassification = svImages.some(p => typeof p === 'string' && p.includes('classification'));
+                if (hasClassification) {
+                    usableSavedViewState = null;
+                    this.savedViewState = null;
+                }
+            }
 
-            if (this.savedViewState) {
-                const savedState = { ...this.savedViewState };
+            if (usableSavedViewState) {
+                const savedState = { ...usableSavedViewState };
 
                 this.restoreSavedViewStateWithState(savedState);
             } else {
@@ -16737,7 +16747,16 @@ class WaferMapViewer {
 
                     // 폴더도 자동으로 열기
                     labelSelection.openFolders[selectedClass] = true;
-                    this.loadImagesInFolderAndShowGrid(labelPath);
+                    // ✅ savedViewState 백업 (Label Explorer 그리드가 덮어쓰지 않도록)
+                    const _svBackup = this.savedViewState;
+                    this.loadImagesInFolderAndShowGrid(labelPath).then(() => {
+                        // ✅ Label Explorer 그리드 마킹
+                        const g = document.getElementById('image-grid');
+                        if (g) g.setAttribute('data-label-explorer-grid', 'true');
+                        this.savedViewState = _svBackup;
+                        this.labelExplorerGridState = this.buildLabelExplorerGridState(this.currentGridImages, 0);
+                        this._transientGridRestoreState = { ...this.labelExplorerGridState };
+                    });
                 } else if (labelSelection.selectedClasses.length > 1) {
                     // 다중 클래스 선택: 모든 선택된 클래스의 이미지를 그리드로 표시
 
@@ -21379,6 +21398,9 @@ class WaferMapViewer {
         const originPage = this.pageManager?.getActivePage ? this.pageManager.getActivePage() : null;
         let originPageId = originPage?.id || null;
 
+        // ✅ Label Explorer 그리드 여부를 _hideGridVisual() 전에 미리 판별
+        const _isLabelExplorerGrid = this.isLabelExplorerGridActive();
+
         // 🔥 현재 활성 페이지가 detail 페이지면 viewMode와 무관하게 origin 페이지를 사용
         // (grid로 복귀한 detail 페이지에서 재진입 시 새 탭 누적 방지)
         if (originPageId && this.gridDetailOriginMap?.has(originPageId)) {
@@ -21493,7 +21515,8 @@ class WaferMapViewer {
             this._preCacheMeasureKeys();
 
             // 🔥 savedViewState를 현재 그리드 이미지로 갱신 (Composite 10개 등 페이지별 이미지 반영)
-            {
+            // ✅ Label Explorer 그리드에서는 savedViewState를 덮어쓰지 않음 (clearLabelExplorerSelection 복원 시 버그 방지)
+            if (!_isLabelExplorerGrid) {
                 const preservedScrollTop = this.savedViewState?.scrollTop;
                 this.savedViewState = {
                     type: 'grid',
@@ -21506,6 +21529,8 @@ class WaferMapViewer {
                     lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || null,
                 };
                 console.log(`📍 [ENTER_GRID_IMAGE] savedViewState 생성, scrollTop 보존: ${preservedScrollTop}px`);
+            } else {
+                console.log(`📍 [ENTER_GRID_IMAGE] Label Explorer 그리드 — savedViewState 덮어쓰기 건너뜀`);
             }
             // 🔥 이미 savedViewState가 있으면 scrollTop 절대 덮어쓰지 않음!
             if (savedSnapshot?.gridViewSaveState) {
@@ -21810,6 +21835,15 @@ class WaferMapViewer {
                     selectedImagePaths: Array.isArray(saveState?.selectedImagePaths) ? [...saveState.selectedImagePaths] : [],
                 };
                 this._transientGridRestoreState = { ...this.labelExplorerGridState };
+                // ✅ Label Explorer 복원 시 savedViewState가 Label Explorer 이미지로 오염되지 않도록 정리
+                if (this.savedViewState && this.savedViewState.type === 'grid') {
+                    const svImages = this.savedViewState.images || [];
+                    const hasClassification = svImages.some(p => typeof p === 'string' && p.includes('classification'));
+                    if (hasClassification) {
+                        this.savedViewState = null;
+                        console.log('🔄 [EXIT] Label Explorer 복원 — savedViewState(classification) 정리');
+                    }
+                }
             } else if (scrollTopToRestore !== undefined) {
                 console.log(`🔄 [EXIT] 스크롤 위치를 savedViewState에 설정: ${scrollTopToRestore}px`);
                 // savedViewState가 없으면 생성
@@ -23352,7 +23386,13 @@ class WaferMapViewer {
         }
 
         this.showGrid(actualPaths, true);  // 🔥 라벨 Explorer에서 호출 시 상태 저장 건너뛰기
-        
+
+        // ✅ showGrid가 그리드를 재생성하므로 attribute를 다시 설정
+        const gridAfter = document.getElementById('image-grid');
+        if (gridAfter) {
+            gridAfter.setAttribute('data-label-explorer-grid', 'true');
+        }
+
         // 🔥 savedViewState 복원 (showGrid가 덮어쓸 수 있으므로)
         this.savedViewState = savedViewStateBackup;
     }
@@ -27315,15 +27355,22 @@ class WaferMapViewer {
             this._lastGridScrollTop = currentScrollTop;
             console.log(`📍 [DBLCLICK-LOT] 스크롤 위치 사전 저장: ${currentScrollTop}px`);
 
-            // savedViewState 초기화 또는 업데이트
-            if (!this.savedViewState || this.savedViewState.type !== 'grid') {
-                this.savedViewState = {
-                    type: 'grid',
-                    images: [...this.currentGridImages],
-                    scrollTop: currentScrollTop,
-                };
+            // ✅ Label Explorer 그리드에서는 labelExplorerGridState에만 저장 (savedViewState 오염 방지)
+            const isLabelExplorerGrid = grid && grid.hasAttribute('data-label-explorer-grid');
+            if (isLabelExplorerGrid) {
+                this.labelExplorerGridState = this.buildLabelExplorerGridState(this.currentGridImages, currentScrollTop);
+                this._transientGridRestoreState = { ...this.labelExplorerGridState };
             } else {
-                this.savedViewState.scrollTop = currentScrollTop;
+                // savedViewState 초기화 또는 업데이트
+                if (!this.savedViewState || this.savedViewState.type !== 'grid') {
+                    this.savedViewState = {
+                        type: 'grid',
+                        images: [...this.currentGridImages],
+                        scrollTop: currentScrollTop,
+                    };
+                } else {
+                    this.savedViewState.scrollTop = currentScrollTop;
+                }
             }
 
             this.enterGridImageViewMode(idx);
