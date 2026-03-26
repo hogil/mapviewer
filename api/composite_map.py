@@ -103,9 +103,9 @@ COMPOSITE_ROOT.mkdir(parents=True, exist_ok=True)
 (COMPOSITE_ROOT / ANONYMOUS_LOGIN_ID).mkdir(parents=True, exist_ok=True)
 COMPOSITE_SESSION_DIRNAME = "current"
 SQUARE_MAP_CACHE_FILENAME = "square_maps_data.npz"
-# composite_cache_v1은 선택적 사용 (환경변수로 제어)
-# 같은 이미지를 여러 composite map에 재사용할 때만 유용
-USE_COMPOSITE_IMAGE_CACHE = os.getenv("USE_COMPOSITE_IMAGE_CACHE", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
+# composite_cache_v1: PNG 디코딩 캐시 (cold 시 56ms/장 → 10ms/장)
+# 다른 이미지 조합으로 Composite 생성해도 개별 이미지 캐시는 재활용됨
+USE_COMPOSITE_IMAGE_CACHE = os.getenv("USE_COMPOSITE_IMAGE_CACHE", "1").strip().lower() not in {"0", "false", "no", "n", "off"}
 COMPOSITE_CACHE_ROOT = IMAGES_ROOT / "composite_cache_v1" if USE_COMPOSITE_IMAGE_CACHE else None
 _GRADE_RANGE = np.arange(8, dtype=np.uint8)
 _SUBSET_NAME_RE = re.compile(r"^square_(weighted_)?average_([0-7]+)\.(png|jpg|jpeg|webp)$", re.IGNORECASE)
