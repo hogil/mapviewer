@@ -340,8 +340,8 @@ def _scheme_to_palette_bytes(scheme: Dict[str, Any]) -> bytes:
         palette.extend([0, 0, 0])
         current_entries += 1
 
-    # 31: composite/heatmap 배경색 (chip 바깥 영역)
-    palette.extend(_hex_to_rgb_triple(background))
+    # 31: invalid fill — 원본 팔레트 고정 (흰색). 개인색 background와 무관
+    palette.extend([255, 255, 255])
 
     return bytes(palette)
 
