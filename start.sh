@@ -37,12 +37,10 @@ export IO_THREADS="256"                  # 32C 서버에서 I/O 대기시간 숨
 export THUMBNAIL_SEM="384"               # 여유 메모리 활용해 썸네일 동시 생성 확대
 export THUMB_PREFETCH_BATCH="80"
 export THUMB_CLIENT_MAX_CONCURRENCY="14"
-export COMPOSITE_FAST_MODE="1"           # Fast 모드 활성화 (워커 자동 상향 + vips 저장)
-export COMPOSITE_MAX_WORKERS="48"        # Composite 이미지 로더: CPU×1.5
-# PIL PNG 디코딩은 GIL 미해제 (Pillow#2635) → ThreadPool은 I/O 겹침만 유효
-# 32코어에서 48워커 = I/O 대기 숨김 최적점 (64 이상은 컨텍스트 스위칭 손해)
+export COMPOSITE_FAST_MODE="1"           # ✅ Fast 모드 활성화 (워커 자동 상향 + vips 저장)
+export COMPOSITE_MAX_WORKERS="56"        # Composite 로더: CPU당 ~1.7 스레드
 export COMPOSITE_LOADER_MODE="thread"
-export COMPOSITE_BATCH_SIZE="30"         # 대용량 이미지 배치 (30장 단위)
+export COMPOSITE_BATCH_SIZE="20"         # 대용량 이미지용 배치 상향
 export COMPOSITE_RETENTION_HOURS="24"    # Composite 결과 보관: 24시간
 export COMPOSITE_CLEANUP_INTERVAL_SECONDS="86400" # 정리 주기: 24시간마다
 export COMPOSITE_CLEANUP_MODE="daily"    # 정리 스케줄: daily | interval
@@ -50,13 +48,13 @@ export COMPOSITE_CLEANUP_HOUR="2"        # 매일 AM 2시 실행
 export COMPOSITE_CLEANUP_MINUTE="0"
 export COMPOSITE_CLEANUP_RUN_ON_STARTUP="0" # 시작 즉시 정리 비활성화 (하루 1회만)
 export COMPOSITE_COUNT_MODE="cython"
-export COMPOSITE_RENDER_WORKERS="32"     # numba 렌더링 (GIL 해제 → CPU 코어 수)
-export COMPOSITE_SAVE_WORKERS="48"       # JPEG 저장 워커 (I/O bound, CPU×1.5)
-export COMPOSITE_SAVE_BACKEND="turbo"    # TurboJPEG (vips보다 JPEG 인코딩 빠름)
+export COMPOSITE_RENDER_WORKERS="36"     # 렌더링 병렬도 ↑ (fast 모드와 맞춤)
+export COMPOSITE_SAVE_WORKERS="56"       # 저장 워커 (고속 SSD 기준)
+export COMPOSITE_SAVE_BACKEND="vips"     # 저장 백엔드 vips 우선
 export COMPOSITE_FORMAT="JPEG"           # 저장 포맷: JPEG (속도 우선)
 export COMPOSITE_JPEG_QUALITY="95"       # JPEG 품질 (속도/품질 균형)
-export USE_COMPOSITE_IMAGE_CACHE="0"     # 디스크 캐시 off (매번 다른 이미지)
-export OMP_NUM_THREADS="32"              # Numba/OpenMP 스레드 = 물리 코어 수
+export USE_COMPOSITE_IMAGE_CACHE="1"     # 🔥 디스크 캐시 활성화 (대용량 이미지 재사용)
+export OMP_NUM_THREADS="32"              # Numba/OpenMP 스레드
 export NUMBA_NUM_THREADS="32"
 export SEARCH_WORKERS="24"               # 검색 병렬 워커 수 (32코어 기준, 논리 검색 가속)
 
