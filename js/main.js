@@ -16747,70 +16747,11 @@ class WaferMapViewer {
                     labelSelection.lastClickedClass = cls;
                 }
 
-                // ✅ 클래스 선택에 따른 그리드 모드 전환 (WME와 동일: 폴더 열지 않고 캐시 활용)
-
-                if (labelSelection.selectedClasses.length > 0) {
-                    // ✅ savedViewState 백업
-                    const _svBackup = this.savedViewState;
-
-                    // ✅ 선택된 모든 클래스의 이미지를 캐시에서 즉시 수집
-                    const _collectFromCache = async () => {
-                        let allImages = [];
-                        for (const sc of labelSelection.selectedClasses) {
-                            const labelPath = this.buildClassificationPath(sc);
-                            let cached = this.classToImgListCache?.[sc];
-                            if (!cached) {
-                                // 캐시 미스: fetch 1회
-                                try {
-                                    const res = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`);
-                                    const data = await res.json();
-                                    cached = (Array.isArray(data.items) ? data.items : [])
-                                        .filter(item => item.type === 'file' && this.isImageFile(item.name));
-                                    if (!this.classToImgListCache) this.classToImgListCache = {};
-                                    this.classToImgListCache[sc] = cached;
-                                } catch (err) {
-                                    console.warn(`클래스 '${sc}' 로드 실패:`, err);
-                                    cached = [];
-                                }
-                            }
-                            // 캐시의 root_relative 경로를 사용
-                            for (const item of cached) {
-                                const path = this.resolveOriginalImagePath(
-                                    item.root_relative || this.buildClassificationPath(`${sc}/${item.name}`)
-                                );
-                                if (path) allImages.push(path);
-                            }
-                        }
-                        return allImages;
-                    };
-
-                    _collectFromCache().then(images => {
-                        if (images.length === 0) {
-                            // 빈 클래스: UI 변경 없음
-                            labelSelection.selectedClasses = [];
-                            this._updateLabelExplorerContentFast();
-                            return;
-                        }
-                        this.clearWaferMapExplorerSelection();
-                        this.selectedImages = images;
-                        // ✅ 폴더 열지 않음 (WME 동일) — 선택만
-                        this.showGridFromLabelExplorer(
-                            labelSelection.selectedClasses.flatMap(sc => {
-                                const cached = this.classToImgListCache?.[sc] || [];
-                                return cached.map(item => `${sc}/${item.name}`);
-                            })
-                        );
-                        this.savedViewState = _svBackup;
-                    });
-                } else {
-                    // 클래스 선택 없음: 이전 상태로 복귀
-                    this.restorePreviousGridState();
-                }
-
-                this._updateLabelExplorerContentFast();
+                // 🔥 Ctrl/Shift 클래스 선택: 선택만 (그리드 전환 없음, 폴더 열기 없음)
+                // WME와 동일하게 선택 하이라이트만 표시
+                this.updateLabelExplorerSelection();
 
                 // 클래스 매니저 버튼 상태 업데이트
-
                 this.updateClassManagerButtons();
             };
 

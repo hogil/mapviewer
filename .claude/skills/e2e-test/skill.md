@@ -3327,13 +3327,43 @@ const ms = Math.round(performance.now() - t0);
 3. Measure 버튼 클릭 → Measure 패널 표시
 4. `getSelectedImagesForModal()` 반환값에 원본 경로 포함 확인
 
-#### 43-10. Label Explorer 라벨 추가/삭제 동작
-1. Wafer Map Explorer에서 이미지 선택 → Fail List 클래스 클릭 → alert 확인
-2. Label Explorer에서 해당 클래스 열기 → 이미지 존재 확인
-3. 🗑️ 버튼 클릭 → 이미지 삭제 확인
-4. Delete Label 버튼으로 다중 삭제 확인
+#### 43-10. Label Explorer 라벨 추가 + Position 파일 복사
+1. filter_test 등 position JSON이 있는 폴더에서 이미지 5개 선택
+2. Fail List 클래스 버튼 클릭 → 라벨 추가
+3. `/api/files?path=classification/{class}` 확인: PNG 5개 + JSON(position) 5개 존재
+4. Label Explorer에서 해당 클래스 열기 → 이미지 5개만 표시 (JSON 제외)
+5. 단일 이미지 클릭 → chip positions 로드 확인 (콘솔: `Loaded 384 chip positions`)
 
-**pass 기준**: 43-1~43-10 모든 항목 성공, 서버 생존 확인 (`/api/classes` 200)
+#### 43-11. JSON 파일 필터링
+1. classification 폴더에 PNG + JSON 혼재된 클래스 열기
+2. Label Explorer 리스트에 `.json` 파일이 표시되지 않음 확인
+3. 그리드에도 이미지 파일만 표시 확인
+
+#### 43-12. 빈 폴더 Ctrl+Click — UI 보호
+1. 빈 클래스 폴더 Ctrl+Click
+2. 상단 그리드 컨트롤(컬럼 수, 전체선택 등) `display` 변경 없음 확인
+3. 뷰어 영역이 빈 검은 화면으로 바뀌지 않음 확인
+
+#### 43-13. 라벨 삭제
+1. 🗑️ 버튼 클릭 → 이미지 삭제 확인
+2. Delete Label 버튼으로 다중 삭제 확인
+3. Delete Class로 테스트 클래스 정리
+
+#### 43-14. 혼합 이미지 유형 클래스 (no-palette/palette/position)
+**사전 준비**: `e2e_mixed_test` 클래스에 3가지 유형 이미지 배치:
+- `rgba_no_pos_*.png`: RGBA non-palette, position 없음
+- `palette_no_pos_*.png`: palette PNG, position 없음
+- `palette_pos_*.png` + `.json`: palette PNG + position JSON
+
+1. Label Explorer에서 `e2e_mixed_test` 폴더 열기 → 6개 이미지만 표시 (JSON 제외)
+2. Ctrl+Click → 그리드 6개 아이템 표시 + 썸네일 정상 로딩
+3. RGBA 이미지 더블클릭 → 단일 뷰 정상 진입, `currentImageBitmap` 존재
+4. palette no-pos 이미지 더블클릭 → 단일 뷰 정상, Grade 범례 표시
+5. palette+pos 이미지 더블클릭 → 단일 뷰 정상, chip positions 로드 확인
+6. → 키로 6개 전체 순회: palette_no_pos → palette_pos → rgba_no_pos 순서로 정상 전환
+7. 서버 생존 확인
+
+**pass 기준**: 43-1~43-14 모든 항목 성공, 서버 생존 확인 (`/api/classes` 200)
 
 ---
 
