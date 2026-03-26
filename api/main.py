@@ -6548,34 +6548,40 @@ async def get_image(
 ):
     try:
         is_head = request.method == "HEAD"
+        classification_path = path  # 🔥 원본 classification 경로 보존
         original_rel = _lookup_original_relpath_from_classification_path(path)
         if original_rel:
             path = original_rel
-        
+
         # LoginId가 있으면 우선 사용, 없으면 anonymous scheme fallback
         if personalized and not scheme:
             scheme = get_user_color_scheme(_current_login_id(request))
 
         # 🔥 ROOT_DIR 기준으로 경로 해석 (상대 경로 지원)
         if Path(path).is_absolute():
-            # 절대 경로인 경우
             image_path = Path(path)
-            # ROOT_DIR 내 경로인지 보안 검증
             try:
                 image_path.resolve().relative_to(ROOT_DIR.resolve())
             except ValueError:
                 raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
         else:
-            # 상대 경로인 경우 ROOT_DIR 기준으로 해석
             image_path = ROOT_DIR / path
-            # 보안 검증: ROOT_DIR 내에 있는지 확인
             try:
                 image_path.resolve().relative_to(ROOT_DIR.resolve())
             except ValueError:
                 raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
 
+        # 🔥 원본 경로에 파일이 없으면 classification 경로로 폴백
         if not image_path.exists() or not image_path.is_file():
-            raise HTTPException(status_code=404, detail="Image not found")
+            if classification_path != path:
+                fallback_path = ROOT_DIR / classification_path
+                if fallback_path.exists() and fallback_path.is_file():
+                    image_path = fallback_path
+                    path = classification_path
+                else:
+                    raise HTTPException(status_code=404, detail="Image not found")
+            else:
+                raise HTTPException(status_code=404, detail="Image not found")
 
         try:
             image_stat = image_path.stat()
@@ -7365,6 +7371,7 @@ async def get_thumbnail(
     gradient_filter: Optional[str] = None,
 ):
     try:
+        classification_path = path  # 🔥 원본 classification 경로 보존
         original_rel = _lookup_original_relpath_from_classification_path(path)
         if original_rel:
             path = original_rel
@@ -7379,6 +7386,7 @@ async def get_thumbnail(
 
         # 🔥 동기 파일 검증을 스레드 풀에서 실행 — 이벤트 루프 블록 방지
         def _validate_path_sync():
+            nonlocal path
             effective_path = path
             if Path(effective_path).is_absolute():
                 image_path = Path(effective_path)
@@ -7392,7 +7400,13 @@ async def get_thumbnail(
                     image_path.resolve().relative_to(ROOT_DIR.resolve())
                 except ValueError:
                     return None, 'forbidden', None
+            # 🔥 원본 경로에 파일이 없으면 classification 경로로 폴백
             if not image_path.exists() or not image_path.is_file():
+                if classification_path != path:
+                    fallback = ROOT_DIR / classification_path
+                    if fallback.exists() and fallback.is_file():
+                        path = classification_path
+                        return fallback, 'ok', fallback.stat()
                 return None, 'not_found', None
             try:
                 image_stat = image_path.stat()
