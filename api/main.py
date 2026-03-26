@@ -6362,24 +6362,31 @@ async def get_image(
                 return _invalid_image_response(image_path)
             return Response(content=b"", media_type="image/png", headers={"X-Invalid-Image": "true"})
 
-        # 🔥 classification 이미지는 피라미드/개인색 건너뛰고 원본 직접 서빙
-        # non-palette PNG에서 pyvips segfault 방지 + 항상 이미지가 나오도록
-        _is_classification = "classification" in str(image_path)
-        if _is_classification:
+        # 🔥 non-palette 이미지(JPEG, RGB PNG, BMP 등)는 피라미드/개인색 처리 없이 원본 직접 서빙
+        # palette-indexed PNG(color_type=3)만 PLTE 패치/피라미드 처리 대상
+        _is_palette = False
+        if image_path.suffix.lower() == '.png':
             try:
                 with open(image_path, 'rb') as _cf:
                     _chdr = _cf.read(30)
-                _is_palette = len(_chdr) > 25 and _chdr[25] == 3 if image_path.suffix.lower() == '.png' else False
+                _is_palette = len(_chdr) > 25 and _chdr[25] == 3
             except Exception:
-                _is_palette = False
-            if not _is_palette:
-                # non-palette classification 이미지: 원본 그대로 서빙 (피라미드/개인색 없음)
-                st = image_path.stat()
-                return FileResponse(image_path, headers={
-                    "Cache-Control": "public, max-age=3600",
-                    "ETag": compute_etag(st),
-                    "X-Classification": "direct",
-                })
+                pass
+        if not _is_palette:
+            # non-palette 이미지: 원본 그대로 서빙 (피라미드/개인색 불필요, 서버 블로킹 방지)
+            _ext = image_path.suffix.lower()
+            _media = {
+                '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                '.png': 'image/png', '.bmp': 'image/bmp',
+                '.tiff': 'image/tiff', '.tif': 'image/tiff',
+                '.webp': 'image/webp', '.gif': 'image/gif',
+            }.get(_ext, 'application/octet-stream')
+            st = image_path.stat()
+            return FileResponse(image_path, media_type=_media, headers={
+                "Cache-Control": "public, max-age=3600",
+                "ETag": compute_etag(st),
+                "X-Direct-Serve": "non-palette",
+            })
 
         # 🎯 피라미드 레벨이 요청된 경우
         if level is not None:
@@ -6489,11 +6496,19 @@ async def get_image(
                         return response
 
             # 캐시 미스: 피라미드 이미지 생성
-            # 🔥 개인색 설정 또는 Grade 필터가 있으면 _generate_pyramid_sync에서 메모리에서 직접 처리
-            # (임시 파일 생성 제거, 메모리에서 직접 PLTE 패치 후 pyvips로 로드)
+            # 🔥 executor로 오프로드하여 이벤트 루프 블로킹 방지
             if not is_head:
                 logger.info(f"🎯 [CACHE MISS] 피라미드 생성 시작: level={level}, path={pyramid_path}, personalized={personalized}, scheme={scheme}, grade_filter={grade_filter}, bottom_filter={bottom_filter}")
-            _generate_pyramid_sync(image_path, pyramid_path, level, personalized=personalized, scheme=scheme, grade_filter=grade_filter, bottom_filter=bottom_filter, border_normalize=border_normalize)
+            _pyr_loop = asyncio.get_running_loop()
+            await _pyr_loop.run_in_executor(
+                IO_POOL,
+                lambda: _generate_pyramid_sync(
+                    image_path, pyramid_path, level,
+                    personalized=personalized, scheme=scheme,
+                    grade_filter=grade_filter, bottom_filter=bottom_filter,
+                    border_normalize=border_normalize,
+                ),
+            )
 
             # 🔥 Background에서 다른 레벨들도 생성 시작 (사용자 대기 없음)
             # 개인별 설정 또는 필터가 활성화된 경우 background에서도 동일한 설정으로 생성
@@ -8932,8 +8947,30 @@ def _candidate_positions_paths(rel_path: Path) -> List[Path]:
     if legacy not in paths:
         paths.append(legacy)
 
-    # 🔥 우선순위 3: my-lot 경로 fallback — 파일명으로 원본 position 검색
+    # 🔥 우선순위 3: classification 디렉토리에서 position 검색
+    # label 등록 시 복사된 positions.json을 찾기 위함
     rel_str = rel_path.as_posix()
+    if "classification" in rel_str:
+        # classification/class_name/image.png → LABELS_DIR/class_name/image.json
+        cls_pos = config.ROOT_DIR / rel_path.parent / f"{rel_path.stem}.json"
+        if cls_pos not in paths:
+            paths.append(cls_pos)
+    else:
+        # 원본 경로에서도 classification 디렉토리 내 position 검색
+        for cls_dir in (config.LABELS_DIR, config.CHIP_LABELS_DIR):
+            if cls_dir.exists():
+                try:
+                    for class_sub in cls_dir.iterdir():
+                        if not class_sub.is_dir():
+                            continue
+                        candidate = class_sub / f"{rel_path.stem}.json"
+                        if candidate.exists() and candidate not in paths:
+                            paths.append(candidate)
+                            break
+                except Exception:
+                    pass
+
+    # 🔥 우선순위 4: my-lot 경로 fallback — 파일명으로 원본 position 검색
     if rel_str.startswith("my-lot/") or "my-lot/" in rel_str:
         # 파일명에서 LOT_STEP 추출하여 원본 position 경로 생성
         # 예: ABC234_00C_02_... → positions/filter_test/ABC234_00C_02_...json (검색)
@@ -9481,7 +9518,7 @@ async def create_composite_map_endpoint(
     if len(image_paths) > max_images:
         raise HTTPException(status_code=400, detail=f"최대 {max_images}개의 이미지만 지원합니다.")
 
-    # positions 파일 있는 이미지만 처리 (속도 최적화: 위치 데이터 없는 이미지 제외)
+    # positions 파일 있는 이미지 우선 사용 (없으면 전체 이미지로 진행)
     position_filtered = [
         p for p in image_paths
         if any(c.exists() for c in _candidate_positions_paths(Path(p)))
@@ -9492,6 +9529,8 @@ async def create_composite_map_endpoint(
                 f"[composite-map] positions 필터: {len(image_paths)} → {len(position_filtered)}개 이미지"
             )
         image_paths = position_filtered
+    else:
+        logger.warning(f"[composite-map] positions 없는 이미지 {len(image_paths)}개 — positions 없이 진행")
 
     # Task ID 생성
     task_id = str(uuid.uuid4())
@@ -9735,7 +9774,7 @@ async def create_measure_composite_endpoint(
     if len(image_paths) > max_images:
         raise HTTPException(status_code=400, detail=f"최대 {max_images}개의 이미지만 지원합니다.")
 
-    # positions 파일 있는 이미지만 필터링
+    # positions 파일 있는 이미지 우선 사용 (없으면 전체 이미지로 진행)
     position_filtered = [
         p for p in image_paths
         if any(c.exists() for c in _candidate_positions_paths(Path(p)))
@@ -9746,9 +9785,8 @@ async def create_measure_composite_endpoint(
                 f"[measure-composite] positions 필터: {len(image_paths)} → {len(position_filtered)}개 이미지"
             )
         image_paths = position_filtered
-
-    if not image_paths:
-        raise HTTPException(status_code=400, detail="positions 데이터가 있는 이미지가 없습니다.")
+    else:
+        logger.warning(f"[measure-composite] positions 없는 이미지 {len(image_paths)}개 — positions 없이 진행")
 
     task_id = str(uuid.uuid4())
     COMPOSITE_TASKS[task_id] = {
