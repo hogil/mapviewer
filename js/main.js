@@ -16759,26 +16759,14 @@ class WaferMapViewer {
                     labelSelection.openFolders[selectedClass] = true;
                     // ✅ savedViewState 백업 (Label Explorer 그리드가 덮어쓰지 않도록)
                     const _svBackup = this.savedViewState;
-                    // ✅ 폴더 내 이미지 사전 확인 (빈 폴더 시 UI 깨짐 방지)
-                    fetch(`/api/files?path=${encodeURIComponent(labelPath)}`)
-                        .then(r => r.json())
-                        .then(data => {
-                            const imgFiles = (data.items || []).filter(i => i.type === 'file' && this.isImageFile(i.name));
-                            if (imgFiles.length === 0) {
-                                // 빈 폴더: 그리드/패널 건드리지 않고 선택만 해제
-                                this.debugLog(`Label Explorer: 클래스 '${selectedClass}' 비어있음 — UI 변경 없음`);
-                                labelSelection.selectedClasses = [];
-                                this.updateLabelExplorerContent();
-                                return;
-                            }
-                            return this.loadImagesInFolderAndShowGrid(labelPath).then(() => {
-                                const g = document.getElementById('image-grid');
-                                if (g) g.setAttribute('data-label-explorer-grid', 'true');
-                                this.savedViewState = _svBackup;
-                                this.labelExplorerGridState = this.buildLabelExplorerGridState(this.currentGridImages, 0);
-                                this._transientGridRestoreState = { ...this.labelExplorerGridState };
-                            });
-                        });
+                    // 🔥 사전 확인 fetch 제거 — loadImagesInFolderAndShowGrid가 빈 폴더를 안전하게 처리
+                    this.loadImagesInFolderAndShowGrid(labelPath).then(() => {
+                        const g = document.getElementById('image-grid');
+                        if (g) g.setAttribute('data-label-explorer-grid', 'true');
+                        this.savedViewState = _svBackup;
+                        this.labelExplorerGridState = this.buildLabelExplorerGridState(this.currentGridImages, 0);
+                        this._transientGridRestoreState = { ...this.labelExplorerGridState };
+                    });
                 } else if (labelSelection.selectedClasses.length > 1) {
                     // 다중 클래스 선택: 모든 선택된 클래스의 이미지를 그리드로 표시
 
@@ -16801,7 +16789,7 @@ class WaferMapViewer {
                     }
                 }
 
-                this.updateLabelExplorerContent();
+                this._updateLabelExplorerContentFast();
 
                 // 클래스 매니저 버튼 상태 업데이트
 
@@ -17913,7 +17901,7 @@ class WaferMapViewer {
             if (!folderDiv) return;
             const cls = folderDiv.textContent.replace(/[▾▸]/g, '').trim();
             const btnKey = `${cls}/${btn.textContent}`;
-            const isActive = btnKey === key;
+            const isActive = btnKey.toLowerCase() === key;
             btn.style.background = isActive ? '#08e' : '#222';
             btn.style.border = isActive ? '2px solid #09f' : '1px solid #444';
             if (isActive) {
@@ -17949,7 +17937,8 @@ class WaferMapViewer {
             const imgName = btn.textContent;
             const key = `${cls}/${imgName}`;
 
-            const isSelected = this.labelSelection.selected.includes(key);
+            const keyLower = key.toLowerCase();
+            const isSelected = this.labelSelection.selected.some(s => s.toLowerCase() === keyLower);
 
             btn.style.background = isSelected ? '#09f' : '#222';
 
