@@ -466,7 +466,7 @@ search_service = SearchService(
     io_executor=IO_POOL,
     logger=logging.getLogger("uvicorn.error"),
     search_workers=config.SEARCH_WORKERS,
-    excluded_folders=["classification", "classification_chips", "chip_annotations", "thumbnails", "composite_map"],
+    excluded_folders=["classification", "classification_chips", "thumbnails", "composite_map"],
     supported_exts=config.SUPPORTED_EXTS,
     fallback_max_files=SEARCH_FALLBACK_MAX_FILES,
     fallback_timeout_sec=_fallback_timeout_sec,
@@ -1678,7 +1678,7 @@ async def _lifespan_background_init():
 
     # 0) 디스크 캐시 워밍 — 3depth까지 폴더+파일 목록을 미리 읽어 OS 캐시에 올림
     def _warm_disk_cache():
-        skip = {'classification', 'classification_chips', 'thumbnails', 'composite_map', 'chip_annotations', '__pycache__'}
+        skip = {'classification', 'classification_chips', 'thumbnails', 'composite_map', '__pycache__'}
         try:
             root = str(config.ROOT_DIR)
             for d1 in os.scandir(root):
@@ -4478,8 +4478,8 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
         with os.scandir(target) as it:
             for entry in it:
                 name = entry.name
-                # 🔥 classification, classification_chips, chip_annotations, thumbnails 폴더 제외
-                if name.startswith('.') or name == '__pycache__' or name in SKIP_DIRS or name in ['classification', 'classification_chips', 'chip_annotations', 'thumbnails', 'labels']:
+                # 🔥 classification, classification_chips, thumbnails 폴더 제외
+                if name.startswith('.') or name == '__pycache__' or name in SKIP_DIRS or name in ['classification', 'classification_chips', 'thumbnails', 'labels']:
                     continue
                 entries_to_process.append(entry)
         
@@ -5314,8 +5314,8 @@ async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
         loop = asyncio.get_running_loop()
         items = await loop.run_in_executor(DIRLIST_EXECUTOR, list_dir_fast, target)
 
-        # 🔥 특정 폴더 제외: classification, classification_chips, chip_annotations, thumbnails, composite_map
-        excluded_folders = ['classification', 'classification_chips', 'chip_annotations', 'thumbnails', 'composite_map']
+        # 🔥 특정 폴더 제외: classification, classification_chips, thumbnails, composite_map
+        excluded_folders = ['classification', 'classification_chips', 'thumbnails', 'composite_map']
         items = [item for item in items if item['name'] not in excluded_folders]
         
         # 디버그 로그 제거 (너무 자주 출력됨)
@@ -8585,7 +8585,6 @@ def _chip_id_from_coords(x_abs: int, y_abs: int) -> str:
     return f"abs:{x_abs}:{y_abs}"
 
 _CHIP_COORD_RE = re.compile(r"^(?P<wafer>.+)_x(?P<x>-?\d+)_y(?P<y>-?\d+)$")
-_CHIP_CLASSIFICATION_SEGMENT = "/classification_chips"
 
 def _parse_chip_filename(stem: str) -> Optional[Tuple[str, int, int]]:
     """
@@ -8603,145 +8602,6 @@ def _parse_chip_filename(stem: str) -> Optional[Tuple[str, int, int]]:
         )
     except ValueError:
         return None
-
-def _normalize_annotation_record(record: Dict[str, Any]) -> Dict[str, Any]:
-    if "chip_id" not in record and "x_abs" in record and "y_abs" in record:
-        record["chip_id"] = _chip_id_from_coords(record["x_abs"], record["y_abs"])
-    return record
-
-def _refresh_annotation_metadata(entry: Dict[str, Any], username: str = "system") -> None:
-    metadata = entry.setdefault("metadata", {})
-    now_iso = datetime.now().isoformat()
-    if not metadata.get("created_at"):
-        metadata["created_at"] = now_iso
-        metadata["created_by"] = username
-    metadata["updated_at"] = now_iso
-    metadata["updated_by"] = username
-    marked = entry.get("marked_chips", [])
-    metadata["total_marked_chips"] = len(marked)
-    metadata["status"] = "active" if marked else "empty"
-    from collections import Counter
-    metadata["class_distribution"] = dict(Counter([chip.get("class") for chip in marked if chip.get("class")]))
-
-def _upsert_chip_annotations(rel_path: Path, folder_key: str, updates: List[Dict[str, Any]], username: str) -> None:
-    if not updates:
-        return
-    annot_file, entries, entry = _load_annotation_entry(rel_path, folder_key)
-    existing = {}
-    for chip in entry.get("marked_chips", []):
-        chip = _normalize_annotation_record(chip)
-        existing[chip.get("chip_id")] = chip
-    for update in updates:
-        x_abs = int(update["x_abs"])
-        y_abs = int(update["y_abs"])
-        chip_id = _chip_id_from_coords(x_abs, y_abs)
-        record = existing.get(chip_id, {"chip_id": chip_id})
-        record.update({
-            "x_abs": x_abs,
-            "y_abs": y_abs,
-            "class": update.get("class_name"),
-            "filename": update.get("filename"),
-            "updated_at": datetime.now().isoformat(),
-            "updated_by": username,
-        })
-        existing[chip_id] = record
-    entry["marked_chips"] = list(existing.values())
-    _refresh_annotation_metadata(entry, username=username)
-    _save_annotation_entry(annot_file, entries, folder_key, entry)
-
-def _remove_chip_annotations(
-    rel_path: Path,
-    folder_key: str,
-    coords: Optional[List[Tuple[int, int]]] = None,
-    filenames: Optional[Iterable[str]] = None,
-    class_name: Optional[str] = None,
-    username: str = "system"
-) -> None:
-    annot_file, entries, entry = _load_annotation_entry(rel_path, folder_key)
-    if not entry.get("marked_chips"):
-        return
-
-    coord_ids = set()
-    if coords:
-        for x, y in coords:
-            coord_ids.add(_chip_id_from_coords(int(x), int(y)))
-
-    filename_set = set()
-    if filenames:
-        for name in filenames:
-            if not name:
-                continue
-            filename_set.add(Path(name).name)
-
-    def should_remove(chip: Dict[str, Any]) -> bool:
-        chip = _normalize_annotation_record(chip)
-        cid = chip.get("chip_id")
-        if coord_ids:
-            if cid not in coord_ids:
-                return False
-            if class_name and chip.get("class") != class_name:
-                return False
-            return True
-        if filename_set:
-            chip_filename = Path(str(chip.get("filename") or "")).name
-            if not chip_filename or chip_filename not in filename_set:
-                return False
-            if class_name and chip.get("class") != class_name:
-                return False
-            return True
-        if class_name:
-            return chip.get("class") == class_name
-        return False
-
-    entry["marked_chips"] = [chip for chip in entry["marked_chips"] if not should_remove(chip)]
-    _refresh_annotation_metadata(entry, username=username)
-    _save_annotation_entry(annot_file, entries, folder_key, entry)
-
-def _derive_annotation_target_from_classification_path(class_rel_path: str) -> Optional[Tuple[Path, Path]]:
-    """
-    classification 경로에서 chip_annotations 상대 경로와 base 폴더를 유추한다.
-    예) wafer/product/classification_chips/class/foo_x1_y2.png →
-        (Path("wafer/product/foo.png"), ROOT_DIR/"wafer/product")
-    """
-    if not class_rel_path:
-        return None
-    normalized = class_rel_path.replace("\\", "/")
-    segment = _CHIP_CLASSIFICATION_SEGMENT
-    if segment not in normalized:
-        return None
-    prefix, remainder = normalized.split(segment, 1)
-    remainder = remainder.strip("/")
-    if not remainder:
-        return None
-    filename = Path(remainder).name
-    parsed = _parse_chip_filename(Path(filename).stem)
-    if not parsed:
-        return None
-    wafer_stem, _, _ = parsed
-    rel_parent = Path(prefix.strip("/")) if prefix.strip("/") else Path(".")
-    rel_path_obj = rel_parent / f"{wafer_stem}.png"
-    folder_base = (ROOT_DIR / rel_parent).resolve()
-    return rel_path_obj, folder_base
-
-def _remove_chip_annotations_from_classification_path(
-    classification_rel_path: str,
-    class_name: str,
-    filename: str,
-    username: str = "system"
-) -> None:
-    derived = _derive_annotation_target_from_classification_path(classification_rel_path)
-    if not derived:
-        logger.debug(f"[CHIP] 삭제 대상 경로 해석 실패: {classification_rel_path}")
-        return
-    rel_path_obj, folder_base = derived
-    folder_key = _chip_annotation_folder_key(rel_path_obj, base_folder=folder_base)
-    _remove_chip_annotations(
-        rel_path_obj,
-        folder_key,
-        filenames=[filename],
-        class_name=class_name,
-        username=username,
-    )
 
 def _trim_leading_component(path_obj: Path) -> Path:
     parts = [p for p in path_obj.parts if p not in (".", "")]
@@ -9007,11 +8867,6 @@ async def get_chip_annotations(path: str, folder: Optional[str] = Query(None)):
         logger.exception(f"Failed to load chip annotations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-class ChipAnnotationRequest(BaseModel):
-    image_path: str
-    marked_chips: List[Dict[str, Any]]
-    folder_prefix: Optional[str] = None
-
 class FolderPermission(BaseModel):
     path: str
     allow_label: bool = True
@@ -9136,11 +8991,6 @@ async def run_composite_map_task(
                 COMPOSITE_TASKS[task_id]["error"] = str(e)
                 COMPOSITE_TASKS[task_id]["failed_at"] = datetime.now().isoformat()
 
-
-@app.post("/api/chip-annotations")
-async def save_chip_annotations(request: ChipAnnotationRequest, req: Request):
-    """No-op: chip annotations는 classification_chips/ 파일시스템에서 파생"""
-    return {"success": True, "saved_chips": len(request.marked_chips), "file": None}
 
 @app.get("/api/roles/users")
 async def get_role_users():
