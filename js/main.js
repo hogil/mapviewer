@@ -16747,46 +16747,64 @@ class WaferMapViewer {
                     labelSelection.lastClickedClass = cls;
                 }
 
-                // 클래스 선택에 따른 그리드 모드 전환
+                // ✅ 클래스 선택에 따른 그리드 모드 전환 (WME와 동일: 폴더 열지 않고 캐시 활용)
 
-                if (labelSelection.selectedClasses.length === 1) {
-                    // 단일 클래스 선택
-                    const selectedClass = labelSelection.selectedClasses[0];
-                    const labelPath = this.buildClassificationPath(selectedClass);
-                    this.debugLog(`Label Explorer: 클래스 '${selectedClass}' → 그리드 모드 (${labelPath})`);
-
-                    // 폴더도 자동으로 열기
-                    labelSelection.openFolders[selectedClass] = true;
-                    // ✅ savedViewState 백업 (Label Explorer 그리드가 덮어쓰지 않도록)
+                if (labelSelection.selectedClasses.length > 0) {
+                    // ✅ savedViewState 백업
                     const _svBackup = this.savedViewState;
-                    // 🔥 사전 확인 fetch 제거 — loadImagesInFolderAndShowGrid가 빈 폴더를 안전하게 처리
-                    this.loadImagesInFolderAndShowGrid(labelPath).then(() => {
-                        const g = document.getElementById('image-grid');
-                        if (g) g.setAttribute('data-label-explorer-grid', 'true');
+
+                    // ✅ 선택된 모든 클래스의 이미지를 캐시에서 즉시 수집
+                    const _collectFromCache = async () => {
+                        let allImages = [];
+                        for (const sc of labelSelection.selectedClasses) {
+                            const labelPath = this.buildClassificationPath(sc);
+                            let cached = this.classToImgListCache?.[sc];
+                            if (!cached) {
+                                // 캐시 미스: fetch 1회
+                                try {
+                                    const res = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`);
+                                    const data = await res.json();
+                                    cached = (Array.isArray(data.items) ? data.items : [])
+                                        .filter(item => item.type === 'file' && this.isImageFile(item.name));
+                                    if (!this.classToImgListCache) this.classToImgListCache = {};
+                                    this.classToImgListCache[sc] = cached;
+                                } catch (err) {
+                                    console.warn(`클래스 '${sc}' 로드 실패:`, err);
+                                    cached = [];
+                                }
+                            }
+                            // 캐시의 root_relative 경로를 사용
+                            for (const item of cached) {
+                                const path = this.resolveOriginalImagePath(
+                                    item.root_relative || this.buildClassificationPath(`${sc}/${item.name}`)
+                                );
+                                if (path) allImages.push(path);
+                            }
+                        }
+                        return allImages;
+                    };
+
+                    _collectFromCache().then(images => {
+                        if (images.length === 0) {
+                            // 빈 클래스: UI 변경 없음
+                            labelSelection.selectedClasses = [];
+                            this._updateLabelExplorerContentFast();
+                            return;
+                        }
+                        this.clearWaferMapExplorerSelection();
+                        this.selectedImages = images;
+                        // ✅ 폴더 열지 않음 (WME 동일) — 선택만
+                        this.showGridFromLabelExplorer(
+                            labelSelection.selectedClasses.flatMap(sc => {
+                                const cached = this.classToImgListCache?.[sc] || [];
+                                return cached.map(item => `${sc}/${item.name}`);
+                            })
+                        );
                         this.savedViewState = _svBackup;
-                        this.labelExplorerGridState = this.buildLabelExplorerGridState(this.currentGridImages, 0);
-                        this._transientGridRestoreState = { ...this.labelExplorerGridState };
                     });
-                } else if (labelSelection.selectedClasses.length > 1) {
-                    // 다중 클래스 선택: 모든 선택된 클래스의 이미지를 그리드로 표시
-
-                    this.debugLog(`Label Explorer: ${labelSelection.selectedClasses.length}개 클래스 → 그리드 모드`);
-
-                    this.showGridFromMultipleClasses(labelSelection.selectedClasses);
                 } else {
-                    // 클래스 선택 없음: 이전 Grid 상태로 복귀 또는 이미지 숨기기
-
-                    if (this.gridMode) {
-                        this.debugLog('Label Explorer: 클래스 선택 해제 → 이전 Grid 상태로 복귀');
-
-                        this.restorePreviousGridState();
-                    } else {
-                        // 단일 이미지 모드에서도 이미지 숨기기
-
-                        this.debugLog('Label Explorer: 클래스 선택 해제 → 이미지 숨기기');
-
-                        this.restorePreviousGridState(); // 이전 Grid 상태가 없으면 hideImage() 포함
-                    }
+                    // 클래스 선택 없음: 이전 상태로 복귀
+                    this.restorePreviousGridState();
                 }
 
                 this._updateLabelExplorerContentFast();
@@ -17939,10 +17957,12 @@ class WaferMapViewer {
 
             const keyLower = key.toLowerCase();
             const isSelected = this.labelSelection.selected.some(s => s.toLowerCase() === keyLower);
+            // ✅ 클래스가 선택된 경우 해당 클래스의 모든 이미지도 하이라이트 (WME 동일)
+            const isClassSelected = this.labelSelection.selectedClasses.includes(cls);
 
-            btn.style.background = isSelected ? '#09f' : '#222';
+            btn.style.background = (isSelected || isClassSelected) ? '#09f' : '#222';
 
-            btn.style.border = isSelected ? '2px solid #09f' : '1px solid #444';
+            btn.style.border = (isSelected || isClassSelected) ? '2px solid #09f' : '1px solid #444';
 
             btn.style.color = '#fff';
         });
