@@ -5358,31 +5358,43 @@ def _lookup_original_relpath_from_classification_path(path_str: str) -> Optional
             return None
         source_prefix = "/".join(path_parts[:classification_idx]) if classification_idx > 0 else ""
 
-        # FILE_INDEX 캐시에서 파일명으로 원본 경로 조회
-        if not hasattr(_lookup_original_relpath_from_classification_path, '_name_cache'):
-            _lookup_original_relpath_from_classification_path._name_cache = {}
-            _lookup_original_relpath_from_classification_path._cache_timestamp = 0
+        # 🔥 FILE_INDEX 캐시에서 파일명으로 원본 경로 조회
+        # 캐시 빌드는 비블로킹으로 수행 (이벤트 루프 블록 방지)
+        _fn = _lookup_original_relpath_from_classification_path
+        if not hasattr(_fn, '_name_cache'):
+            _fn._name_cache = {}
+            _fn._cache_timestamp = 0
+            _fn._building = False
 
         current_time = time.time()
-        if current_time - _lookup_original_relpath_from_classification_path._cache_timestamp > 30:
-            with FILE_INDEX_LOCK:
-                keys_snapshot = list(FILE_INDEX_KEYS)
+        if current_time - _fn._cache_timestamp > 30 and not _fn._building:
+            # 🔥 캐시가 오래됐으면 비동기로 갱신 (블록하지 않고 기존 캐시 사용)
+            _fn._building = True
+            try:
+                # FILE_INDEX_LOCK을 짧게만 사용 — trylock 패턴
+                if FILE_INDEX_LOCK.acquire(blocking=False):
+                    try:
+                        keys_snapshot = list(FILE_INDEX_KEYS)
+                    finally:
+                        FILE_INDEX_LOCK.release()
 
-            name_cache: Dict[str, List[str]] = {}
-            for rel in keys_snapshot:
-                rel_posix = Path(rel).as_posix()
-                rel_parts = set(Path(rel_posix).parts)
-                if rel_parts & classification_dir_names:
-                    continue
-                fname = Path(rel).name
-                if fname not in name_cache:
-                    name_cache[fname] = []
-                name_cache[fname].append(rel)
+                    name_cache: Dict[str, List[str]] = {}
+                    for rel in keys_snapshot:
+                        rel_parts = set(Path(rel).parts)
+                        if rel_parts & classification_dir_names:
+                            continue
+                        fname = Path(rel).name
+                        if fname not in name_cache:
+                            name_cache[fname] = []
+                        name_cache[fname].append(rel)
 
-            _lookup_original_relpath_from_classification_path._name_cache = name_cache
-            _lookup_original_relpath_from_classification_path._cache_timestamp = current_time
+                    _fn._name_cache = name_cache
+                    _fn._cache_timestamp = current_time
+                # LOCK 획득 실패 시 기존 캐시 사용 (인덱스 빌드 중)
+            finally:
+                _fn._building = False
 
-        candidates = _lookup_original_relpath_from_classification_path._name_cache.get(filename, [])
+        candidates = _fn._name_cache.get(filename, [])
         if candidates:
             if source_prefix:
                 prefix_matches = [
