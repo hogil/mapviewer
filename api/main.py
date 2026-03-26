@@ -4823,41 +4823,55 @@ def _generate_thumbnail_sync(
 
         fmt = THUMBNAIL_FORMAT.upper()
 
-        # 🔥 PIL fast path: 작은 non-palette 이미지 (classification 등)
-        # pyvips 동시성 크래시 방지 — palette PNG가 아니면 PIL로 안전하게 처리
+        # 🔥 PIL safe path: non-palette PNG, 작은 이미지는 PIL로 안전하게 처리
+        # pyvips 동시성 segfault 방지
         try:
             _suffix = image_path.suffix.lower()
-            _use_pil_fast = False
-            if _suffix == '.png' and not (personalized and scheme) and not grade_filter and not bottom_filter and not border_normalize and not bin_overlay and not measure_overlay:
-                # 필터/개인색 없는 단순 PNG → PIL로 충분
-                _use_pil_fast = True
-            elif _suffix == '.png':
-                # 필터/개인색 있지만 non-palette PNG는 palette 패치 불필요 → PIL
+            _is_palette_png = False
+            if _suffix == '.png':
                 with open(image_path, 'rb') as _f:
                     _hdr = _f.read(30)
-                if len(_hdr) > 25 and _hdr[25] != 3:  # color type != indexed
-                    _use_pil_fast = True
-            elif _suffix in ('.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.gif'):
-                _use_pil_fast = True
+                _is_palette_png = len(_hdr) > 25 and _hdr[25] == 3
 
-            if _use_pil_fast:
+            # pyvips 경로는 palette PNG에서 PLTE in-place 패치 + 고속 리사이즈가 필요할 때만
+            # grade_filter/bottom_filter/bin_overlay/measure_overlay는 PLTE 바이너리 패치 필요 → pyvips
+            # personalized + scheme만 있으면 PIL의 apply_personalized_palette로 충분
+            _need_pyvips = (
+                _is_palette_png and
+                (bool(grade_filter) or bool(bottom_filter) or border_normalize or
+                 bin_overlay or bool(measure_overlay))
+            )
+
+            if not _need_pyvips:
                 with Image.open(image_path) as img:
+                    # palette PNG + 개인색이면 palette 교체 (PIL 경로)
+                    if img.mode == 'P' and personalized and scheme:
+                        from .personal_colors import apply_personalized_palette, load_color_legends
+                        legends = load_color_legends()
+                        scheme_data = legends.get(scheme) or legends.get('default')
+                        if scheme_data:
+                            patched = apply_personalized_palette(img, scheme_data)
+                            if patched:
+                                img = patched
                     if img.mode not in ('RGB', 'RGBA'):
                         img = img.convert('RGB')
                     target_w, target_h = size
                     if img.width > target_w or img.height > target_h:
                         img.thumbnail((target_w, target_h), Image.Resampling.BICUBIC)
+                    if img.mode == 'RGBA':
+                        img = img.convert('RGB')
                     if fmt == "WEBP":
                         img.save(thumbnail_path, "WEBP", quality=THUMBNAIL_QUALITY, method=1)
                     elif fmt == "JPEG":
-                        if img.mode == 'RGBA':
-                            img = img.convert('RGB')
                         img.save(thumbnail_path, "JPEG", quality=THUMBNAIL_QUALITY, optimize=True)
                     else:
                         img.save(thumbnail_path, "PNG", compress_level=1)
                 return
-        except Exception:
-            pass  # PIL fast path 실패 → 기존 pyvips 경로로 fallback
+        except Exception as _pil_err:
+            import traceback as _tb
+            logger.warning(f"⚠️ [PIL SAFE PATH] 실패: {image_path.name}: {_pil_err}")
+            _tb.print_exc()
+            return  # pyvips fallback 안 함 — segfault 방지
 
         try:
             import pyvips
