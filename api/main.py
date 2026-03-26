@@ -5501,7 +5501,17 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                 # 🔥 초고속 방식에 PLTE 패치만 추가
                 # Grade 필터가 우선, 그 다음 개인색 설정
                 # 원본 이미지가 PNG이면 팔레트 필터링 적용 (저장 포맷과 무관 - JPEG로 저장해도 적용)
-                if (grade_filter or bottom_filter or border_normalize or measure_overlay) and image_path.suffix.lower() == '.png':
+                # 🔥 palette PNG 판별
+                _pyr_is_palette = False
+                if image_path.suffix.lower() == '.png':
+                    try:
+                        with open(image_path, 'rb') as _pyf:
+                            _pyh = _pyf.read(30)
+                        _pyr_is_palette = len(_pyh) > 25 and _pyh[25] == 3
+                    except Exception:
+                        pass
+
+                if (grade_filter or bottom_filter or border_normalize or measure_overlay) and _pyr_is_palette:
                     logger.info(f"🎯 [PYRAMID] 필터 적용: grade_filter={grade_filter}, bottom_filter={bottom_filter}, border_normalize={border_normalize}, measure_overlay={measure_overlay}, path={image_path.name}, target_format={target_format}")
                     try:
                         with open(image_path, 'rb') as f:
@@ -5523,9 +5533,8 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                         logger.debug(f"✅ [PYRAMID FILTER] 필터링 완료, 리사이즈 시작: {pyramid_path.name}")
                     except Exception as e:
                         logger.warning(f"⚠️ [PYRAMID FILTER] 필터링 실패, 폴백: {e}", exc_info=True)
-                        # 폴백: 기존 방식 사용
                         image = None
-                elif personalized and scheme and image_path.suffix.lower() == '.png':
+                elif personalized and scheme and _pyr_is_palette:
                     logger.info(f"🎨 [PYRAMID] 개인색 설정 적용: personalized={personalized}, scheme={scheme}, path={image_path.name}, target_format={target_format}")
                     try:
                         with open(image_path, 'rb') as f:
@@ -5829,8 +5838,18 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
     try:
         # 🔥 Step 1: 원본 이미지를 먼저 필터링 (Grade/Bottom) 또는 개인색으로 변경 (메모리에서)
         original_image = None
-        if (grade_filter or bottom_filter or border_normalize or measure_overlay) and image_path.suffix.lower() == '.png':
-            # Grade/Bottom 필터 (개인색 설정 먼저 적용 후 필터링)
+        # 🔥 palette PNG 판별 (PLTE 패치 대상 결정)
+        _pipe_is_palette = False
+        if image_path.suffix.lower() == '.png':
+            try:
+                with open(image_path, 'rb') as _pf:
+                    _phdr = _pf.read(30)
+                _pipe_is_palette = len(_phdr) > 25 and _phdr[25] == 3
+            except Exception:
+                pass
+
+        if (grade_filter or bottom_filter or border_normalize or measure_overlay) and _pipe_is_palette:
+            # Grade/Bottom 필터 (palette PNG만 — 개인색 설정 먼저 적용 후 필터링)
             try:
                 logger.info(f"🎯 [PIPELINE] 필터 적용 시작: grade_filter={grade_filter}, bottom_filter={bottom_filter}, border_normalize={border_normalize}, measure_overlay={measure_overlay}, levels={levels}, path={image_path.name}")
 
@@ -5860,7 +5879,7 @@ def _generate_pyramid_pipeline(image_path: Path, levels: list, stem: str, format
             except Exception as e:
                 logger.warning(f"⚠️ [PIPELINE] 필터 실패, 폴백: {e}", exc_info=True)
                 original_image = None
-        elif personalized and scheme and image_path.suffix.lower() == '.png':
+        elif personalized and scheme and _pipe_is_palette:
             # 개인색 설정
             try:
                 logger.info(f"🎨 [PIPELINE] 개인색 적용 시작: scheme={scheme}, levels={levels}, path={image_path.name}")
