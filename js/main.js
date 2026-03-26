@@ -16663,21 +16663,16 @@ class WaferMapViewer {
                     console.warn('clearWaferMapExplorerSelection error:', error);
                 }
 
-                // 아무 modifier 없이 클릭: 열기/닫기 토글 + 그리드 로드
+                // 아무 modifier 없이 클릭: 열기/닫기 토글만 (그리드 로드 없음)
+                // Ctrl/Shift 클릭: 폴더 선택 + 하이라이트 + 그리드 로드 (WME와 동일)
 
                 if (!isCtrl && !isShift) {
                     const wasOpen = isOpen;
                     labelSelection.openFolders[cls] = !isOpen;
 
-                    // 🔥 폴더를 열 때: 서버에서 최신 데이터 가져오기 + 그리드에 표시 (WME와 동일)
                     if (!wasOpen) {
+                        // 폴더 열기: 이미지 리스트만 가져와서 Label Explorer에 표시
                         const labelPath = this.buildClassificationPath(cls);
-                        console.log(`🔍 [LABEL_EXPLORER_CLICK] 클래스 '${cls}' 폴더 클릭, path: ${labelPath}`);
-
-                        // 🔥 WME의 loadImagesInFolderAndShowGrid 재사용 — 그리드에 class 이미지 표시
-                        this.loadImagesInFolderAndShowGrid(labelPath);
-
-                        // Label Explorer 내부 캐시도 갱신
                         fetch(`/api/files?path=${encodeURIComponent(labelPath)}`)
                             .then(res => res.json())
                             .then(data => {
@@ -16693,7 +16688,7 @@ class WaferMapViewer {
                                 this.updateLabelExplorerContent();
                             });
                     } else {
-                        // 🔥 폴더를 닫을 때 캐시 무효화
+                        // 폴더 닫기: 캐시 무효화
                         if (this.classToImgListCache && this.classToImgListCache[cls]) {
                             delete this.classToImgListCache[cls];
                         }
@@ -16735,13 +16730,14 @@ class WaferMapViewer {
                 // 클래스 선택에 따른 그리드 모드 전환
 
                 if (labelSelection.selectedClasses.length === 1) {
-                    // 단일 클래스 선택: 해당 클래스의 모든 이미지를 그리드로 표시
-
+                    // 단일 클래스 선택: WME의 loadImagesInFolderAndShowGrid 재사용
                     const selectedClass = labelSelection.selectedClasses[0];
+                    const labelPath = this.buildClassificationPath(selectedClass);
+                    this.debugLog(`Label Explorer: 클래스 '${selectedClass}' → 그리드 모드 (${labelPath})`);
 
-                    this.debugLog(`Label Explorer: 클래스 '${selectedClass}' → 그리드 모드`);
-
-                    this.showGridFromClass(selectedClass);
+                    // 폴더도 자동으로 열기
+                    labelSelection.openFolders[selectedClass] = true;
+                    this.loadImagesInFolderAndShowGrid(labelPath);
                 } else if (labelSelection.selectedClasses.length > 1) {
                     // 다중 클래스 선택: 모든 선택된 클래스의 이미지를 그리드로 표시
 
