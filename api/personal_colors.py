@@ -334,6 +334,15 @@ def _scheme_to_palette_bytes(scheme: Dict[str, Any]) -> bytes:
     for key in BIN_KEYS:
         palette.extend(_hex_to_rgb_triple(bottom.get(key, '#000000')))
 
+    # 25~30: 미사용 인덱스 패딩 (index 31까지 도달하기 위해)
+    current_entries = len(palette) // 3  # 현재 팔레트 항목 수
+    while current_entries < 31:
+        palette.extend([0, 0, 0])
+        current_entries += 1
+
+    # 31: composite/heatmap 배경색 (chip 바깥 영역)
+    palette.extend(_hex_to_rgb_triple(background))
+
     return bytes(palette)
 
 
