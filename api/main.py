@@ -22,7 +22,7 @@ if sys.platform == 'win32':
         pass
 
 # ======================== Imports ========================
-import re, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid, io, math, struct, zlib  # struct/zlib: PNG PLTE 바이너리 조작용
+import re, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid, io, math, struct, zlib, stat as stat_module  # struct/zlib: PNG PLTE 바이너리 조작용
 from pathlib import Path
 from contextlib import contextmanager, asynccontextmanager
 from typing import List, Optional, Dict, Any, Tuple, Set, Literal, Iterable
@@ -1714,38 +1714,12 @@ async def _lifespan_background_init():
             pass
     asyncio.ensure_future(loop.run_in_executor(DIRLIST_EXECUTOR, _warm_disk_cache))
 
-    # 1) __pycache__ 정리 (executor에서 비동기)
-    def _cleanup_pycache():
-        deleted = 0
-        try:
-            for root, dirs, files in os.walk(Path(__file__).parent.parent):
-                if '__pycache__' in dirs:
-                    try:
-                        shutil.rmtree(os.path.join(root, '__pycache__'))
-                        deleted += 1
-                    except Exception:
-                        pass
-                for f in files:
-                    if f.endswith('.pyc'):
-                        try:
-                            os.remove(os.path.join(root, f))
-                            deleted += 1
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-        return deleted
-    try:
-        deleted = await loop.run_in_executor(None, _cleanup_pycache)
-        if deleted:
-            bootlog.info(f"🧹 Python 캐시 정리 완료: {deleted}개 항목 삭제")
-    except Exception:
-        pass
+    # 1) __pycache__ 정리 — 생략 (매 시작마다 불필요, 배포 시점에 수행)
 
-    # 2) 인덱스 캐시 로드 (executor에서 비동기 — 이벤트 루프 블로킹 방지)
+    # 2) 인덱스 캐시 로드 (전용 executor — DEFAULT executor 경합 방지)
     cache_start = time.time()
     try:
-        cache_loaded = await loop.run_in_executor(None, index_service.load_cache)
+        cache_loaded = await loop.run_in_executor(IO_POOL, index_service.load_cache)
     except Exception as exc:
         bootlog.error(f"❌ [INDEX] 캐시 로드 중 오류: {exc}")
         cache_loaded = False
@@ -1769,7 +1743,7 @@ async def _lifespan_background_init():
                 f"files={index_service.total_files}, dirs={index_service.total_dirs} ({build_duration:.2f}s)"
             )
             # 폴더별 파일 캐시 빌드 (executor)
-            await loop.run_in_executor(None, _build_folder_files_cache)
+            await loop.run_in_executor(DIRLIST_EXECUTOR, _build_folder_files_cache)
             bootlog.info(f"✅ [INDEX] Folder files cache built: {len(_FOLDER_FILES_CACHE)} folders")
         else:
             bootlog.warning(f"⚠️ [INDEX] Background {index_action} failed")
@@ -3527,10 +3501,11 @@ def get_thumbnail_path(
     size: Tuple[int, int],
     scheme: Optional[str] = None,
     variant: Optional[str] = None,
+    cached_stat: "Optional[os.stat_result]" = None,
 ) -> Path:
     # 🔥 inode 기반 해시 — 하드링크(classification ↔ 원본)는 동일 썸네일 캐시 공유
     try:
-        st = image_path.stat()
+        st = cached_stat or image_path.stat()
         path_key = f"{st.st_dev}:{st.st_ino}"
     except Exception:
         path_key = str(image_path.resolve())
@@ -4565,7 +4540,29 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
         
         directories = [x for x in items if x["type"] == "directory"]
         files = [x for x in items if x["type"] == "file"]
-        
+
+        # 🔥 classification 디렉토리: original_relative 추가 (IndexService O(1) 조회)
+        # 프론트엔드가 썸네일 요청 시 원본 경로를 사용할 수 있도록
+        target_str = str(target).replace('\\', '/')
+        if '/classification/' in target_str or '/classification_chips/' in target_str:
+            # source_prefix 추출: classification 앞의 경로 (예: "palette_3k")
+            _target_rel = target_str[root_dir_len:].lstrip('/') if target_str.startswith(root_dir_str) else ''
+            _parts = _target_rel.split('/')
+            _cls_idx = next((i for i, x in enumerate(_parts) if x in ('classification', 'classification_chips')), -1)
+            _src_prefix = '/'.join(_parts[:_cls_idx]) if _cls_idx > 0 else ''
+
+            _name_to_paths = getattr(index_service, 'name_to_paths', None) or {}
+            for item in files:
+                candidates = _name_to_paths.get(item['name'], [])
+                if candidates:
+                    if _src_prefix:
+                        matches = [r for r in candidates if r.startswith(_src_prefix + '/')]
+                        if len(matches) == 1:
+                            item['original_relative'] = matches[0]
+                            continue
+                    if len(candidates) == 1:
+                        item['original_relative'] = candidates[0]
+
         # 🔥 폴더 정렬: 이름 내림차순 (Z→A), depth 무관
         directories.sort(key=lambda x: x["name"].lower(), reverse=True)
         files.sort(key=lambda x: x["name"].lower(), reverse=True)
@@ -4690,30 +4687,30 @@ def _generate_thumbnail_sync(
             )
 
             if not _need_pyvips:
-                # 🔥 pyvips fast path: palette PNG 기본 리사이즈 (PIL 대비 1.4~2x 빠름)
-                if _is_palette_png:
-                    try:
-                        import pyvips as _pv
-                        if personalized and scheme:
-                            # 개인색: PLTE 바이너리 패치 후 thumbnail_buffer
-                            from .personal_colors import plte_inplace_patch_memory, load_color_legends
-                            _legends = load_color_legends()
-                            _sd = _legends.get(scheme) or _legends.get('default')
-                            _raw = image_path.read_bytes()
-                            if _sd:
-                                _raw = plte_inplace_patch_memory(_raw, _sd) or _raw
-                            _vi = _pv.Image.thumbnail_buffer(_raw, size[0])
-                        else:
-                            _vi = _pv.Image.thumbnail(str(image_path), size[0])
-                        if fmt == "WEBP":
-                            _vi.webpsave(str(thumbnail_path), Q=THUMBNAIL_QUALITY)
-                        elif fmt == "JPEG":
-                            _vi.jpegsave(str(thumbnail_path), Q=THUMBNAIL_QUALITY)
-                        else:
-                            _vi.pngsave(str(thumbnail_path))
-                        return
-                    except Exception:
-                        pass  # pyvips 실패 시 PIL 폴백
+                # 🔥 pyvips fast path: 모든 이미지 타입에 pyvips.thumbnail 사용 (PIL 대비 1.4~2x 빠름)
+                try:
+                    import pyvips as _pv
+                    if _is_palette_png and personalized and scheme:
+                        # palette PNG + 개인색: PLTE 바이너리 패치 후 thumbnail_buffer
+                        from .personal_colors import plte_inplace_patch_memory, load_color_legends
+                        _legends = load_color_legends()
+                        _sd = _legends.get(scheme) or _legends.get('default')
+                        _raw = image_path.read_bytes()
+                        if _sd:
+                            _raw = plte_inplace_patch_memory(_raw, _sd) or _raw
+                        _vi = _pv.Image.thumbnail_buffer(_raw, size[0])
+                    else:
+                        # palette(개인색 없음) + non-palette(RGBA/RGB/JPEG 등) 모두 pyvips
+                        _vi = _pv.Image.thumbnail(str(image_path), size[0])
+                    if fmt == "WEBP":
+                        _vi.webpsave(str(thumbnail_path), Q=THUMBNAIL_QUALITY)
+                    elif fmt == "JPEG":
+                        _vi.jpegsave(str(thumbnail_path), Q=THUMBNAIL_QUALITY)
+                    else:
+                        _vi.pngsave(str(thumbnail_path))
+                    return
+                except Exception:
+                    pass  # pyvips 실패 시 PIL 폴백
 
                 with Image.open(image_path) as img:
                     # palette PNG + 개인색이면 palette 교체 (PIL 경로 — pyvips 폴백)
@@ -7223,20 +7220,43 @@ async def get_thumbnail(
             # --- 경로 해석 ---
             p = path
             image_path = None
+            _path_stat = None  # 🔥 stat 캐시 — 중복 stat() 호출 제거
             if not Path(p).is_absolute():
-                for base in (ROOT_DIR, current_folder):
-                    c = base / p
-                    if c.exists() and c.is_file():
-                        image_path = c
-                        break
+                # 🔥 classification 경로 → O(1) 인덱스 조회 우선 (stat 9회 → 1회)
+                if "classification" in p:
+                    orig_rel = _lookup_original_relpath_from_classification_path(p)
+                    if orig_rel:
+                        c = ROOT_DIR / orig_rel
+                        try:
+                            st = c.stat()
+                            if stat_module.S_ISREG(st.st_mode):
+                                image_path = c
+                                _path_stat = st
+                        except OSError:
+                            pass
+                if not image_path:
+                    for base in (ROOT_DIR, current_folder):
+                        c = base / p
+                        try:
+                            st = c.stat()
+                            if stat_module.S_ISREG(st.st_mode):
+                                image_path = c
+                                _path_stat = st
+                                break
+                        except OSError:
+                            continue
                 if not image_path and "classification" in p:
                     tail = p.split("classification", 1)[-1].lstrip("/")
                     for base in (current_folder / "classification", config.LABELS_DIR, config.CHIP_LABELS_DIR):
-                        if base.exists():
+                        try:
                             c = base / tail
-                            if c.exists() and c.is_file():
+                            st = c.stat()
+                            if stat_module.S_ISREG(st.st_mode):
                                 image_path = c
+                                _path_stat = st
                                 break
+                        except OSError:
+                            continue
                 if not image_path:
                     image_path = ROOT_DIR / p
             else:
@@ -7249,8 +7269,10 @@ async def get_thumbnail(
                     return None, 'forbidden', None
             except Exception:
                 return None, 'forbidden', None
-            if not image_path.exists() or not image_path.is_file():
-                return None, 'not_found', None
+            # 🔥 _path_stat가 있으면 이미 exists+is_file 검증됨 — 중복 stat 제거
+            if not _path_stat:
+                if not image_path.exists() or not image_path.is_file():
+                    return None, 'not_found', None
             if not is_supported_image(image_path):
                 return None, 'unsupported', None
 
@@ -7263,7 +7285,8 @@ async def get_thumbnail(
             ) or None
             thumb_path = get_thumbnail_path(image_path, (size, size),
                                             scheme=scheme if personalized else None,
-                                            variant=variant)
+                                            variant=variant,
+                                            cached_stat=_path_stat)
             if thumb_path.exists() and thumb_path.stat().st_size > 0:
                 return image_path, 'cached', thumb_path
 
@@ -8424,6 +8447,84 @@ async def serve_js(filename: str, request: Request):
         return FileResponse(path, media_type="application/javascript")
     raise HTTPException(status_code=404, detail="Not found")
 
+# 🚀 CSS 파일: 메모리 캐시 + ETag 304
+_CSS_DIR = Path("css")
+_CSS_CACHE: Dict[str, Tuple[bytes, str]] = {}
+
+def _preload_css():
+    """서버 시작 시 CSS를 메모리에 캐시."""
+    for f in _CSS_DIR.iterdir():
+        if f.suffix == '.css':
+            content = f.read_bytes()
+            etag = hashlib.md5(content).hexdigest()[:12]
+            _CSS_CACHE[f.name] = (content, etag)
+    return len(_CSS_CACHE)
+
+_preload_css()
+
+@app.get("/css/{filename:path}")
+async def serve_css(filename: str, request: Request):
+    """CSS 서빙 + 장기 캐시 + ETag 304."""
+    if filename in _CSS_CACHE:
+        content, etag = _CSS_CACHE[filename]
+        if_none = request.headers.get("if-none-match", "").strip('"')
+        if if_none == etag:
+            return Response(status_code=304, headers={
+                "ETag": f'"{etag}"',
+                "Cache-Control": "public, max-age=31536000, immutable",
+            })
+        return Response(
+            content=content,
+            media_type="text/css; charset=utf-8",
+            headers={
+                "Cache-Control": "public, max-age=31536000, immutable",
+                "ETag": f'"{etag}"',
+                "Vary": "Accept-Encoding",
+            },
+        )
+    path = _CSS_DIR / filename
+    if path.exists() and path.is_file():
+        return FileResponse(path, media_type="text/css")
+    raise HTTPException(status_code=404, detail="Not found")
+
+# 🚀 color-legends.json 메모리 캐시 (logs/ StaticFiles의 112MB access.log 옆 FS 캐시미스 방지)
+_COLOR_LEGENDS_PATH = Path("logs/color-legends.json")
+_COLOR_LEGENDS_CACHE: Optional[Tuple[bytes, str]] = None
+
+def _reload_color_legends():
+    global _COLOR_LEGENDS_CACHE
+    try:
+        if _COLOR_LEGENDS_PATH.exists():
+            data = _COLOR_LEGENDS_PATH.read_bytes()
+            etag = hashlib.md5(data).hexdigest()[:12]
+            _COLOR_LEGENDS_CACHE = (data, etag)
+    except Exception:
+        pass
+
+_reload_color_legends()
+
+# save_color_legends 호출 후 자동으로 메모리 캐시 갱신
+_orig_save_color_legends = save_color_legends
+def _save_color_legends_with_cache_update(*args, **kwargs):
+    result = _orig_save_color_legends(*args, **kwargs)
+    _reload_color_legends()
+    return result
+save_color_legends = _save_color_legends_with_cache_update
+
+@app.get("/logs/color-legends.json")
+async def serve_color_legends(request: Request):
+    """color-legends.json 전용 — 메모리 캐시 + ETag 304."""
+    if _COLOR_LEGENDS_CACHE:
+        content, etag = _COLOR_LEGENDS_CACHE
+        if_none = request.headers.get("if-none-match", "").strip('"')
+        if if_none == etag:
+            return Response(status_code=304, headers={"ETag": f'"{etag}"', "Cache-Control": "no-cache"})
+        return Response(content=content, media_type="application/json",
+                        headers={"ETag": f'"{etag}"', "Cache-Control": "no-cache", "Vary": "Accept-Encoding"})
+    if _COLOR_LEGENDS_PATH.exists():
+        return FileResponse(_COLOR_LEGENDS_PATH, media_type="application/json")
+    return JSONResponse({})
+
 app.mount("/logs", StaticFiles(directory="logs"), name="logs")
 app.mount("/static", StaticFiles(directory="."), name="static")
 # NOTE: /logs, /static 노출은 내부 환경 전제. 공개 서비스에서는 제거/인증 필요.
@@ -8648,15 +8749,14 @@ async def browse_folders(path: Optional[str] = None):
                 logger.debug(f"2depth 스캔 오류 ({entry_info['name']}): {e}")
                 return []
         
-        # 🔥 run_in_executor로 비동기 처리 (이벤트 루프 블로킹 방지 + 병렬 스캔)
-        def _scan_all_2depth_parallel():
-            result = []
-            with ThreadPoolExecutor(max_workers=min(8, len(folders) or 1)) as pool:
-                for subfolder_list in pool.map(scan_2depth, folders):
-                    result.extend(subfolder_list)
-            return result
+        # 🔥 DIRLIST_EXECUTOR 직접 사용 (중첩 ThreadPool 제거 — GIL 경합 방지)
         loop = asyncio.get_running_loop()
-        subfolders = await loop.run_in_executor(DIRLIST_EXECUTOR, _scan_all_2depth_parallel)
+        futures = [loop.run_in_executor(DIRLIST_EXECUTOR, scan_2depth, f) for f in folders]
+        results = await asyncio.gather(*futures, return_exceptions=True)
+        subfolders = []
+        for r in results:
+            if isinstance(r, list):
+                subfolders.extend(r)
         
         # 🔥 1depth 폴더에서 entry 제거 (반환 시 불필요)
         for folder in folders:

@@ -6242,13 +6242,9 @@ class WaferMapViewer {
         );
     }
 
-    onPersonalColorButtonClick() {
-        if (!this.colorEditor) {
-            console.error('❌ colorEditor가 초기화되지 않았습니다.');
-            this.showToast?.('색상 편집기를 초기화하지 못했습니다.', 1800);
-            return;
-        }
-        this.colorEditor.open();
+    async onPersonalColorButtonClick() {
+        const editor = await this._getColorEditor();
+        editor.open();
     }
 
     /**
@@ -8214,7 +8210,7 @@ class WaferMapViewer {
         }
     }
 
-    openCompositeColorModal(skipModeCheck = false) {
+    async openCompositeColorModal(skipModeCheck = false) {
         if (!this.compositeColorModal) {
             this.showToast?.('Ratio 색상 설정을 열 수 없습니다.', 2000);
             return;
@@ -8224,15 +8220,13 @@ class WaferMapViewer {
             return;
         }
         const previewContext = this.isCompositeMode ? this.compositeSession : null;
-        this.compositeColorModal.open(previewContext);
+        const modal = await this._getCompositeColorModal();
+        modal.open(previewContext);
     }
 
-    openMyLotWindow() {
-        if (!this.myLotModal) {
-            this.showToast?.('MY LOT을 열 수 없습니다.', 2000);
-            return;
-        }
-        this.myLotModal.open();
+    async openMyLotWindow() {
+        const modal = await this._getMyLotModal();
+        modal.open();
     }
 
     async openMyLotModal() {
@@ -8241,11 +8235,8 @@ class WaferMapViewer {
             this.showToast?.('먼저 Login ID를 입력해주세요.', 2000);
             return;
         }
-        if (!this.myLotModal) {
-            this.myLotModal = new MyLotModal(this);
-        }
-        // 모달을 즉시 띄우기 위해 await를 사용하지 않음
-        this.myLotModal.open();
+        const modal = await this._getMyLotModal();
+        modal.open();
     }
 
 
@@ -10428,13 +10419,9 @@ class WaferMapViewer {
                 if (this.isCompositeMode) {
                     this.openCompositeColorModal();
                 } else if (this.isMeasureGradientMode()) {
-                    if (this.colorEditor) {
-                        this.colorEditor.open('measure');
-                    }
+                    this._getColorEditor().then(e => e.open('measure'));
                 } else {
-                    if (this.colorEditor) {
-                        this.colorEditor.open('composite');
-                    }
+                    this._getColorEditor().then(e => e.open('composite'));
                 }
             };
         }
@@ -11139,13 +11126,9 @@ class WaferMapViewer {
                 if (this.isCompositeMode) {
                     this.openCompositeColorModal(true); // skipModeCheck=true
                 } else if (this.isMeasureGradientMode()) {
-                    if (this.colorEditor) {
-                        this.colorEditor.open('measure');
-                    }
+                    this._getColorEditor().then(e => e.open('measure'));
                 } else {
-                    if (this.colorEditor) {
-                        this.colorEditor.open('composite');
-                    }
+                    this._getColorEditor().then(e => e.open('composite'));
                 }
             });
 
@@ -17202,7 +17185,7 @@ class WaferMapViewer {
                                 const selectedPath = this.resolveLabelExplorerImagePath(selectedKey);
                                 const imgList = this.classToImgListCache?.[cls] || [];
                                 this.singleViewImageList = imgList
-                                    .map(item => this.ensureFolderPrefix(item?.root_relative || ''))
+                                    .map(item => this.ensureFolderPrefix(item?.original_relative || item?.root_relative || ''))
                                     .filter(Boolean);
                                 if (this.singleViewImageList.length === 0 && selectedPath) {
                                     this.singleViewImageList = [selectedPath];
@@ -18442,7 +18425,7 @@ class WaferMapViewer {
         this.updateArrowButtonVisibility();
     }
 
-    showGrid(images, skipSaveState = false) {
+    showGrid(images, skipSaveState = false, forceFlatGrid = false) {
         // 🔥 그리드 진입 시 캔버스 강제 숨김 (탭 전환/복귀 시 검은화면 방지)
         if (this.dom?.imageCanvas) this.dom.imageCanvas.style.display = 'none';
         if (this.dom?.overlayCanvas) this.dom.overlayCanvas.style.display = 'none';
@@ -18493,7 +18476,8 @@ class WaferMapViewer {
         }
 
         // 📦 Lot 모드가 활성화되어 있으면 Lot별 그리드로 표시
-        if (this.lotMode) {
+        // 🔥 forceFlatGrid: Label Explorer 등에서 LOT 분류 없이 즉시 src 할당하는 flat grid 사용
+        if (this.lotMode && !forceFlatGrid) {
             this.showGridByLot(images, skipSaveState);
             return;
         }
@@ -22877,6 +22861,10 @@ class WaferMapViewer {
                 const matched = cachedList.find(item =>
                     this.normalizePath(item?.name || '') === this.normalizePath(fileName)
                 );
+                // 🔥 original_relative 우선 사용 (서버 1회 체크 vs classification 경로 5회)
+                if (matched?.original_relative) {
+                    return this.ensureFolderPrefix(matched.original_relative);
+                }
                 if (matched?.root_relative) {
                     return this.ensureFolderPrefix(matched.root_relative);
                 }
@@ -22918,7 +22906,7 @@ class WaferMapViewer {
             return this.resolveOriginalImagePath(classificationPath) || classificationPath;
         }
 
-        // 일반 key("class/file")는 캐시 root_relative 우선 사용
+        // 일반 key("class/file")는 캐시 original_relative → root_relative 순 사용
         const parts = normalizedKey.split('/').filter(Boolean);
         if (parts.length >= 2) {
             const className = parts[0];
@@ -22926,6 +22914,9 @@ class WaferMapViewer {
             const cachedList = this.classToImgListCache?.[className];
             if (Array.isArray(cachedList)) {
                 const matched = cachedList.find(item => item?.name === fileName);
+                if (matched?.original_relative) {
+                    return this.ensureFolderPrefix(matched.original_relative);
+                }
                 if (matched?.root_relative) {
                     return this.ensureFolderPrefix(matched.root_relative);
                 }
@@ -23475,7 +23466,7 @@ class WaferMapViewer {
             this.debugLog('🔷 [DEBUG] 그리드 컨테이너 표시 설정 완료');
         }
 
-        this.showGrid(actualPaths, true);
+        this.showGrid(actualPaths, true, true);  // forceFlatGrid: LOT 우회 → 즉시 src 할당
 
         // ✅ showGrid가 그리드를 재생성하므로 attribute를 다시 설정
         const gridAfter = document.getElementById('image-grid');

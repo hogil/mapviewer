@@ -839,7 +839,18 @@ Label Explorer 클래스 폴더 열기/닫기 시 위쪽 UI(Class Manager, Fail 
 3. 404 발생 시 서버 로그에 `❌ [get_image] 404: path=..., ROOT_DIR=..., current_folder=...` 진단 로그 출력
 - **핵심**: `ROOT_DIR/path` 실패 → `current_folder/path` → `current_folder/classification/tail` 순서로 폴백
 
-**pass 기준**: 단건/다중 추가 → 버튼 클릭 라벨 → Add Label 라벨 → 탐색 → 단일뷰 → 다중 삭제 → 기존 라벨 non-palette 로드 → 단일/다중 전환 → UI 안정성 → 경로 폴백 전체 성공
+#### 7-13. Label Explorer 클래스 선택 hover 시 하이라이트 유지
+Ctrl+클릭으로 클래스 폴더를 선택한 뒤, 이미지 버튼 위에 마우스를 올렸다 빼도 하이라이트(`#09f`)가 유지되는지 확인.
+1. Label Explorer에서 이미지가 있는 클래스 폴더 클릭 → 폴더 열림
+2. 폴더 헤더를 Ctrl+클릭 → `selectedClasses`에 해당 클래스 포함 확인
+3. 이미지 버튼 `style.background`가 `rgb(0, 153, 255)` (`#09f`) 확인
+4. 이미지 버튼에 `mouseover` 이벤트 발생 → `style.background`가 `#09f` 유지 확인 (hover 시 색상 변경 없음)
+5. 이미지 버튼에 `mouseout` 이벤트 발생 → `style.background`가 `#09f` 유지 확인 (`#222`로 리셋되지 않음)
+6. 다른 이미지 버튼에도 동일 테스트 반복 → 모두 `#09f` 유지
+- **핵심**: `onmouseover`/`onmouseout`에서 `labelSelection.selectedClasses.includes(cls)` 체크로 클래스 선택 상태의 하이라이트 보호
+- **회귀 방지**: 수정 전에는 `labelSelection.selected`만 체크하여 클래스 폴더 선택 시 mouseout에서 `#222`로 리셋되던 버그
+
+**pass 기준**: 단건/다중 추가 → 버튼 클릭 라벨 → Add Label 라벨 → 탐색 → 단일뷰 → 다중 삭제 → 기존 라벨 non-palette 로드 → 단일/다중 전환 → UI 안정성 → 경로 폴백 → hover 하이라이트 유지 전체 성공
 
 ---
 
