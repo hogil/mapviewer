@@ -16713,9 +16713,8 @@ class WaferMapViewer {
                     console.warn('clearWaferMapExplorerSelection error:', error);
                 }
 
-                // ▸/▾ 아이콘 클릭: 폴더 열기/닫기 토글만 (선택/그리드 없음)
-                const clickedArrow = e.target.tagName === 'SPAN' && /[▸▾]/.test(e.target.textContent);
-                if (clickedArrow && !isCtrl && !isShift) {
+                // 일반 클릭 (modifier 없음): 폴더 열기/닫기 토글
+                if (!isCtrl && !isShift) {
                     labelSelection.openFolders[cls] = !labelSelection.openFolders[cls];
                     if (labelSelection.openFolders[cls]) {
                         if (!this.classToImgListCache) this.classToImgListCache = {};
@@ -16746,7 +16745,7 @@ class WaferMapViewer {
                     return;
                 }
 
-                // 🔥 폴더 이름 클릭: 폴더 상태 유지 + 하이라이트 + 즉시 그리드
+                // 🔥 Ctrl/Shift 클릭: 폴더 상태 유지 + 하이라이트 + 즉시 그리드
                 labelSelection.selected = [];
 
                 if (isShift && labelSelection.lastClickedClass !== null) {
@@ -16764,10 +16763,6 @@ class WaferMapViewer {
                     } else {
                         labelSelection.selectedClasses = [...labelSelection.selectedClasses, cls];
                     }
-                    labelSelection.lastClickedClass = cls;
-                } else {
-                    // 일반 클릭: 단일 선택 (폴더 열림/닫힘 상태 변경 없음)
-                    labelSelection.selectedClasses = [cls];
                     labelSelection.lastClickedClass = cls;
                 }
 
