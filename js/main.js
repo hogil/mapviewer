@@ -19404,7 +19404,8 @@ class WaferMapViewer {
         const batchSize = THUMB_BATCH_SIZE || 24;
         const currentImages = images.slice(0, batchSize);
 
-        this.thumbnailManager.preloadBatch(currentImages).catch(() => {});
+        const result = this.thumbnailManager?.preloadBatch(currentImages);
+        if (result && typeof result.catch === 'function') result.catch(() => {});
     }
 
     async loadAllThumbnailsAtOnce(images) {

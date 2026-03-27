@@ -9,6 +9,13 @@ argument-hint: [Phase 번호 또는 범위]
 # L3 Tracker E2E 기능 점검
 
 Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으로 테스트합니다.
+
+## 절대규칙: 기본 전체 실행
+
+- **인자 없이 `/e2e-test` 실행 시 Phase 1~44 전체를 실행한다.**
+- 특정 Phase만 실행하려면 `/e2e-test 3,9,12` 또는 `/e2e-test 33-44`처럼 명시적으로 지정해야 한다.
+- "전체 테스트", "E2E 테스트" 등 범위 미지정 요청은 전체 실행으로 간주한다.
+- Phase를 건너뛰거나 일부만 실행하는 것은 사용자가 명시적으로 요청한 경우에만 허용된다.
 `browser_evaluate`로 JS를 실행하고, `browser_take_screenshot`으로 시각 확인합니다.
 
 ## 절대규칙: Non-blocking Server Startup
