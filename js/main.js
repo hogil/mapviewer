@@ -16692,10 +16692,7 @@ class WaferMapViewer {
 
             if (isClassSelected) {
                 folderSummary.style.background = '#09f';
-
-                folderSummary.style.color = '#fff';
-
-                folderSummary.style.borderRadius = '6px';
+                folderSummary.style.borderRadius = '4px';
             }
 
             const isOpen = labelSelection.openFolders[cls];
@@ -17978,12 +17975,9 @@ class WaferMapViewer {
                 const isSelected = this.labelSelection.selectedClasses.includes(cls);
 
                 summary.style.background = isSelected ? '#09f' : 'transparent';
-
                 summary.style.color = '#fff';
-
-                summary.style.borderRadius = isSelected ? '6px' : '0';
-
-                summary.style.padding = isSelected ? '4px 8px' : '2px 0';
+                summary.style.borderRadius = isSelected ? '4px' : '0';
+                summary.style.padding = '2px 0';
             }
         });
 
