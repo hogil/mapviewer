@@ -1091,6 +1091,31 @@ export class ThumbnailNavigator {
 
     }
 
+    /**
+     * 🔥 메인 이미지 로드 완료 후 호출 — 나머지 썸네일을 점진적으로 로드
+     */
+    loadRemainingThumbnails() {
+        if (!this.list) return;
+        const imgs = this.list.querySelectorAll('img[data-src]');
+        if (imgs.length === 0) return;
+        let idx = 0;
+        const BATCH = 8;
+        const loadBatch = () => {
+            const end = Math.min(idx + BATCH, imgs.length);
+            for (; idx < end; idx++) {
+                const img = imgs[idx];
+                if (img.dataset.src && !img.src) {
+                    img.src = img.dataset.src;
+                    delete img.dataset.src;
+                }
+            }
+            if (idx < imgs.length) {
+                requestAnimationFrame(loadBatch);
+            }
+        };
+        requestAnimationFrame(loadBatch);
+    }
+
 
 
     /**
@@ -1465,7 +1490,7 @@ export class ThumbnailNavigator {
 
         const distance = Math.abs(index - this.currentImageIndex);
 
-        const priorityRange = 30; // 현재 이미지 기준 앞뒤 30개 (next/prev 반응 속도 개선)
+        const priorityRange = 5; // 🔥 현재 이미지 기준 ±5만 즉시 (메인 이미지 블로킹 방지)
 
 
 

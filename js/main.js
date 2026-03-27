@@ -17254,6 +17254,8 @@ class WaferMapViewer {
                                     if (this.thumbnailNavigator) {
                                         this.thumbnailNavigator.show();
                                         this.thumbnailNavigator.setImages(this.singleViewImageList, currentPath);
+                                        // 🔥 메인 이미지 렌더 후 나머지 썸네일 점진 로드
+                                        requestAnimationFrame(() => this.thumbnailNavigator.loadRemainingThumbnails());
                                     }
                                 });  // 🔥 Label Explorer에서 호출 시 저장 안 함
                             } else {

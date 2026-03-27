@@ -1692,6 +1692,9 @@ async def _lifespan_background_init():
     bootlog = logging.getLogger("uvicorn.error")
     loop = asyncio.get_running_loop()
 
+    # 🚀 첫 페이지 로드에 GIL/IO 경합 없도록 대기 후 무거운 작업 시작
+    await asyncio.sleep(10)
+
     # 0) 디스크 캐시 워밍 — 3depth까지 폴더+파일 목록을 미리 읽어 OS 캐시에 올림
     def _warm_disk_cache():
         skip = {'classification', 'classification_chips', 'thumbnails', 'composite_map', '__pycache__'}
@@ -1714,6 +1717,15 @@ async def _lifespan_background_init():
             pass
     asyncio.ensure_future(loop.run_in_executor(DIRLIST_EXECUTOR, _warm_disk_cache))
 
+    # 0.5) browse-folders 캐시 프리로드 — 첫 요청 207ms → 0ms
+    try:
+        await browse_folders()
+        bootlog.info("✅ [STARTUP] browse-folders 캐시 프리로드 완료")
+    except Exception:
+        pass
+
+    await asyncio.sleep(0)  # yield to event loop
+
     # 1) __pycache__ 정리 — 생략 (매 시작마다 불필요, 배포 시점에 수행)
 
     # 2) 인덱스 캐시 로드 (전용 executor — DEFAULT executor 경합 방지)
@@ -1729,6 +1741,8 @@ async def _lifespan_background_init():
         bootlog.info(f"📂 [INDEX] Cache loaded: {len(index_service.keys)} files ({cache_duration:.2f}s)")
     else:
         bootlog.info("[INDEX] No cache found — full build required")
+
+    await asyncio.sleep(0)  # yield to event loop
 
     # 3) 인덱스 빌드 (executor 내부에서 scan + finalize)
     index_action = "rebuild" if cache_loaded and index_service.keys else "build"
@@ -1770,18 +1784,21 @@ try:
 except Exception:
     _JS_VERSION = str(int(time.time()))
 
-# ======================== index.html 메모리 캐시 ========================
+# ======================== index.html 메모리 캐시 + pre-gzip ========================
 _CACHED_INDEX_HTML: Optional[str] = None
+_CACHED_INDEX_HTML_GZ: Optional[bytes] = None
 
 def _build_index_cache():
-    """index.html을 메모리에 캐시 (매 요청마다 파일 I/O + regex 제거)."""
-    global _CACHED_INDEX_HTML
+    """index.html을 메모리에 캐시 + gzip 압축."""
+    import gzip as _gzip
+    global _CACHED_INDEX_HTML, _CACHED_INDEX_HTML_GZ
     html_path = Path("index.html")
     if html_path.exists():
         content = html_path.read_text(encoding="utf-8")
         _CACHED_INDEX_HTML = re.sub(
             r'(/js/[^"\']+\.js)(?:\?v=[^"\']*)?', rf'\1?v={_JS_VERSION}', content
         )
+        _CACHED_INDEX_HTML_GZ = _gzip.compress(_CACHED_INDEX_HTML.encode("utf-8"), compresslevel=6)
 
 _build_index_cache()
 
@@ -8404,36 +8421,51 @@ async def classify_delete_batch(request: ClassifyDeleteBatchReq,
 
 # ---------------- Static / Pages ----------------
 
-# 🚀 JS 파일: .min.js 자동 서빙 (minify된 버전 우선)
+# 🚀 JS 파일: .min.js 자동 서빙 + pre-gzip (GZipMiddleware 없이 압축)
 _JS_DIR = Path("js")
-_JS_MIN_CACHE: Dict[str, Tuple[bytes, str]] = {}  # filename -> (content, etag)
+_JS_MIN_CACHE: Dict[str, Tuple[bytes, bytes, str]] = {}  # filename -> (raw, gzipped, etag)
 
 def _preload_minified_js():
-    """서버 시작 시 minified JS를 메모리에 캐시."""
+    """서버 시작 시 minified JS를 메모리에 캐시 + gzip 압축."""
+    import gzip as _gzip
     for f in _JS_DIR.iterdir():
         if f.suffix == '.js' and '.min.' not in f.name:
             min_path = f.with_suffix('').with_suffix('.min.js')
             target = min_path if min_path.exists() else f
-            content = target.read_bytes()
-            etag = hashlib.md5(content).hexdigest()[:12]
-            _JS_MIN_CACHE[f.name] = (content, etag)
+            raw = target.read_bytes()
+            gz = _gzip.compress(raw, compresslevel=6)
+            etag = hashlib.md5(raw).hexdigest()[:12]
+            _JS_MIN_CACHE[f.name] = (raw, gz, etag)
     return len(_JS_MIN_CACHE)
 
 _preload_minified_js()
 
 @app.get("/js/{filename:path}")
 async def serve_js(filename: str, request: Request):
-    """Minified JS 자동 서빙 + 장기 캐시 + ETag 304."""
+    """Minified JS + pre-gzip 서빙 + ETag 304."""
     if filename in _JS_MIN_CACHE:
-        content, etag = _JS_MIN_CACHE[filename]
+        raw, gz, etag = _JS_MIN_CACHE[filename]
         if_none = request.headers.get("if-none-match", "").strip('"')
         if if_none == etag:
             return Response(status_code=304, headers={
                 "ETag": f'"{etag}"',
                 "Cache-Control": "public, max-age=31536000, immutable",
             })
+        # gzip 지원 시 압축본 전송
+        accept_enc = request.headers.get("accept-encoding", "")
+        if "gzip" in accept_enc:
+            return Response(
+                content=gz,
+                media_type="application/javascript; charset=utf-8",
+                headers={
+                    "Cache-Control": "public, max-age=31536000, immutable",
+                    "ETag": f'"{etag}"',
+                    "Content-Encoding": "gzip",
+                    "Vary": "Accept-Encoding",
+                },
+            )
         return Response(
-            content=content,
+            content=raw,
             media_type="application/javascript; charset=utf-8",
             headers={
                 "Cache-Control": "public, max-age=31536000, immutable",
@@ -8447,34 +8479,48 @@ async def serve_js(filename: str, request: Request):
         return FileResponse(path, media_type="application/javascript")
     raise HTTPException(status_code=404, detail="Not found")
 
-# 🚀 CSS 파일: 메모리 캐시 + ETag 304
+# 🚀 CSS 파일: 메모리 캐시 + pre-gzip + ETag 304
 _CSS_DIR = Path("css")
-_CSS_CACHE: Dict[str, Tuple[bytes, str]] = {}
+_CSS_CACHE: Dict[str, Tuple[bytes, bytes, str]] = {}
 
 def _preload_css():
-    """서버 시작 시 CSS를 메모리에 캐시."""
+    """서버 시작 시 CSS를 메모리에 캐시 + gzip 압축."""
+    import gzip as _gzip
     for f in _CSS_DIR.iterdir():
         if f.suffix == '.css':
-            content = f.read_bytes()
-            etag = hashlib.md5(content).hexdigest()[:12]
-            _CSS_CACHE[f.name] = (content, etag)
+            raw = f.read_bytes()
+            gz = _gzip.compress(raw, compresslevel=6)
+            etag = hashlib.md5(raw).hexdigest()[:12]
+            _CSS_CACHE[f.name] = (raw, gz, etag)
     return len(_CSS_CACHE)
 
 _preload_css()
 
 @app.get("/css/{filename:path}")
 async def serve_css(filename: str, request: Request):
-    """CSS 서빙 + 장기 캐시 + ETag 304."""
+    """CSS pre-gzip 서빙 + ETag 304."""
     if filename in _CSS_CACHE:
-        content, etag = _CSS_CACHE[filename]
+        raw, gz, etag = _CSS_CACHE[filename]
         if_none = request.headers.get("if-none-match", "").strip('"')
         if if_none == etag:
             return Response(status_code=304, headers={
                 "ETag": f'"{etag}"',
                 "Cache-Control": "public, max-age=31536000, immutable",
             })
+        accept_enc = request.headers.get("accept-encoding", "")
+        if "gzip" in accept_enc:
+            return Response(
+                content=gz,
+                media_type="text/css; charset=utf-8",
+                headers={
+                    "Cache-Control": "public, max-age=31536000, immutable",
+                    "ETag": f'"{etag}"',
+                    "Content-Encoding": "gzip",
+                    "Vary": "Accept-Encoding",
+                },
+            )
         return Response(
-            content=content,
+            content=raw,
             media_type="text/css; charset=utf-8",
             headers={
                 "Cache-Control": "public, max-age=31536000, immutable",
@@ -8539,8 +8585,19 @@ async def read_root(request: Request):
                 return RedirectResponse("/saml/login", status_code=302)
             logger.info("✅ [AUTO_LOGIN] SAML 인증 완료 → index.html 제공")
 
-        # 메모리 캐시된 index.html 즉시 반환 (파일 I/O + regex 제거)
+        # 메모리 캐시된 index.html 즉시 반환 (pre-gzip)
         if _CACHED_INDEX_HTML:
+            accept_enc = request.headers.get("accept-encoding", "")
+            if "gzip" in accept_enc and _CACHED_INDEX_HTML_GZ:
+                return Response(
+                    content=_CACHED_INDEX_HTML_GZ,
+                    media_type="text/html; charset=utf-8",
+                    headers={
+                        "Cache-Control": "no-store, no-cache, must-revalidate",
+                        "Content-Encoding": "gzip",
+                        "Vary": "Accept-Encoding",
+                    },
+                )
             return HTMLResponse(
                 content=_CACHED_INDEX_HTML,
                 headers={"Cache-Control": "no-store, no-cache, must-revalidate"}
@@ -8689,8 +8746,16 @@ async def change_folder(request: Request):
         logger.error(f"폴더 변경 실패: {e}")
         raise HTTPException(status_code=500, detail=f"폴더 변경 실패: {str(e)}")
 
+# 🚀 browse-folders 메모리 캐시 (콜드스타트 시 207ms → 0ms)
+_BROWSE_FOLDERS_CACHE: Optional[Dict] = None
+_BROWSE_FOLDERS_CACHE_TIME: float = 0
+
 @app.get("/api/browse-folders")
 async def browse_folders(path: Optional[str] = None):
+    global _BROWSE_FOLDERS_CACHE, _BROWSE_FOLDERS_CACHE_TIME
+    # 캐시 유효: 60초 TTL
+    if _BROWSE_FOLDERS_CACHE and (time.time() - _BROWSE_FOLDERS_CACHE_TIME) < 60:
+        return _BROWSE_FOLDERS_CACHE
     try:
         # 🔥 항상 ROOT_DIR 기준으로 폴더 목록 반환
         target_path = ROOT_DIR
@@ -8766,7 +8831,10 @@ async def browse_folders(path: Optional[str] = None):
         all_folders = folders + subfolders
         all_folders.sort(key=lambda x: x["name"].lower(), reverse=True)
         
-        return {"folders": all_folders}
+        result = {"folders": all_folders}
+        _BROWSE_FOLDERS_CACHE = result
+        _BROWSE_FOLDERS_CACHE_TIME = time.time()
+        return result
     except Exception as e:
         logger.error(f"폴더 브라우징 실패: {e}")
         raise HTTPException(status_code=500, detail=f"폴더 브라우징 실패: {str(e)}")
