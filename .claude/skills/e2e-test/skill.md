@@ -3331,13 +3331,13 @@ const ms = Math.round(performance.now() - t0);
 1. filter_test 등 position JSON이 있는 폴더에서 이미지 5개 선택
 2. Fail List 클래스 버튼 클릭 → 라벨 추가
 3. `/api/files?path=classification/{class}` 확인: PNG 5개 + JSON(position) 5개 존재
-4. Label Explorer에서 해당 클래스 열기 → 이미지 5개만 표시 (JSON 제외)
-5. 단일 이미지 클릭 → chip positions 로드 확인 (콘솔: `Loaded 384 chip positions`)
+4. Label Explorer에서 해당 클래스 열기 → **모든 파일 표시** (PNG + JSON 포함)
+5. 단일 이미지 클릭 → chip positions는 `POSITIONS_ROOT`에서 로드 (classification 내 JSON 아님)
 
-#### 43-11. JSON 파일 필터링
-1. classification 폴더에 PNG + JSON 혼재된 클래스 열기
-2. Label Explorer 리스트에 `.json` 파일이 표시되지 않음 확인
-3. 그리드에도 이미지 파일만 표시 확인
+#### 43-11. 모든 파일 타입 표시 (필터 없음)
+1. classification 폴더에 PNG + JSON + TXT 혼재된 클래스 열기
+2. Label Explorer 리스트에 **모든 파일** 표시 확인 (isImageFile 필터 제거됨)
+3. Ctrl+Click → 그리드에도 **모든 파일** 표시 확인 (썸네일 실패는 정상)
 
 #### 43-12. 빈 폴더 Ctrl+Click — UI 보호
 1. 빈 클래스 폴더 Ctrl+Click
@@ -3355,9 +3355,9 @@ const ms = Math.round(performance.now() - t0);
 - `palette_no_pos_*.png`: palette PNG, position 없음
 - `ABC234_00C_*.png`: palette PNG, position은 `POSITIONS_ROOT/e2e_mixed_test/` 에 JSON 배치
 
-1. Label Explorer에서 `e2e_mixed_test` 폴더 열기 → 6개 이미지만 표시 (JSON 없음, 이미지만)
-2. Ctrl+Click → 폴더 자동 열림 + 이미지 버튼 하이라이트 6/6 + 그리드 6개 아이템 표시
-3. 썸네일 6/6 정상 로딩
+1. Label Explorer에서 `e2e_mixed_test` 폴더 열기 → 모든 파일 표시 (필터 없음)
+2. Ctrl+Click → 폴더 자동 열림 + 파일 버튼 하이라이트 + 그리드 아이템 표시
+3. 이미지 썸네일 정상 로딩 (비이미지 파일은 썸네일 실패 정상)
 4. palette+pos 이미지 더블클릭 → 단일 뷰 정상, `POSITIONS_ROOT`에서 384 chips 로드 확인
 5. RGBA 이미지 더블클릭 → 단일 뷰 정상, `currentImageBitmap` 존재
 6. → 키로 6개 전체 순회: palette_no_pos → palette_pos → rgba_no_pos 순서로 정상 전환
@@ -3437,6 +3437,52 @@ const ms = Math.round(performance.now() - t0);
 **pass 기준**: 44-1~44-8 전 항목 성공, 모든 UI 반응 50ms 이내, 서버 생존 (`/api/classes?mode=chip` 200)
 
 ---
+
+## 버그 수정 이력 (2026-03-27)
+
+### Label Explorer Ctrl+Click 그리드 미표시
+- **버그**: Ctrl+Click 클래스 선택 시 하이라이트만 되고 그리드에 이미지 안 나옴
+- **원인**: `updateLabelExplorerSelection()`만 호출, `showGridFromLabelExplorer()` 미호출
+- **수정**: `selectedClasses`의 이미지를 `classToImgListCache`에서 수집 → `showGridFromLabelExplorer()` 호출
+- **커밋**: `010f57a`
+
+### 폴더 열기 느림 (매번 fetch)
+- **버그**: Label Explorer 폴더 클릭 시 매번 `/api/files` fetch → 2초+ 지연
+- **원인**: `classToImgListCache` 프리페치 없음, 매 클릭마다 API 호출
+- **수정**: `refreshLabelExplorer()` 완료 후 모든 클래스 이미지 목록 백그라운드 프리페치
+- **결과**: 폴더 열기 108ms (캐시 히트)
+- **커밋**: `010f57a`
+
+### 라벨 추가 후 전체 캐시 삭제 → 느림
+- **버그**: 라벨 1개 추가 시 `classToImgListCache = {}` 전체 초기화 → 모든 열린 폴더 re-fetch
+- **원인**: `labels.js:852`, `main.js:16050` 두 곳에서 전체 캐시 삭제
+- **수정**: `refreshLabelExplorer(dirtyClasses)` 파라미터 추가, 변경된 클래스만 `delete cache[cls]`
+- **결과**: UI 갱신 2ms (이전 수백ms)
+- **커밋**: `de39b94`
+
+### Ctrl+Click 선택 시 폴더 헤더 크기 변경
+- **버그**: 클래스 선택 시 padding `2px 0` → `4px 8px` 변경으로 폴더 헤더 크기 커짐
+- **수정**: padding을 `2px 0`으로 고정, 배경색+borderRadius만 변경
+- **커밋**: `9471023`
+
+### isImageFile 필터로 그리드 파일 누락
+- **버그**: Label Explorer에서 JSON/TXT 등 비이미지 파일이 그리드에 안 나옴
+- **원인**: `.filter(item => item.type === 'file' && this.isImageFile(item.name))` 10곳에서 필터링
+- **수정**: `isImageFile` 필터 전체 제거, `item.type === 'file'`만 유지
+- **커밋**: `7cd89be`
+
+### resolveOriginalImagePath 이중 호출
+- **버그**: `showGridFromLabelExplorer`에서 `resolveOriginalImagePath(resolveLabelExplorerImagePath(key))` 이중 변환
+- **원인**: `resolveLabelExplorerImagePath` 내부에서 이미 `resolveOriginalImagePath` 호출하는데 외부에서 또 감쌈
+- **수정**: 외부 `resolveOriginalImagePath` 제거, `resolveLabelExplorerImagePath`만 호출
+- **커밋**: `d0a7449`
+
+### Ubuntu 그리드 미표시 (미해결)
+- **증상**: Ubuntu 24에서 Label Explorer 이미지 다중선택/폴더 선택 시 그리드 미표시
+- **서버 로그**: 추가 API 호출 없음, 최근 추가한 라벨만 그리드에 나옴
+- **디버그 로그 추가**: `showGridFromLabelExplorer` 진입/경로해석/showGrid 호출 로그
+- **커밋**: `d0a7449`
+- **상태**: Ubuntu F12 콘솔 로그 확인 대기
 
 ## 병합 이력
 
