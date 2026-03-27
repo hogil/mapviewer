@@ -18464,7 +18464,7 @@ class WaferMapViewer {
 
         // 📦 Lot 모드가 활성화되어 있으면 Lot별 그리드로 표시
         if (this.lotMode) {
-            this.showGridByLot(images);
+            this.showGridByLot(images, skipSaveState);
             return;
         }
 
@@ -27142,8 +27142,9 @@ class WaferMapViewer {
     /**
      * Lot별로 그룹화된 그리드 표시
      * @param {string[]} images - 이미지 경로 배열
+     * @param {boolean} skipFilter - Label Explorer 등 외부 소스에서 호출 시 LOT/TEST/STEP 필터 우회
      */
-    showGridByLot(images) {
+    showGridByLot(images, skipFilter = false) {
         if (!images || images.length === 0) return;
 
         // 🔥 그리드 진입 시 캔버스 강제 숨김
@@ -27155,11 +27156,13 @@ class WaferMapViewer {
             this._measureBaseImages = [...new Set(images)];
         }
 
-        // 🔥 LOT/TEST/STEP 필터 적용
-        const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
-        if (hasFilter) {
-            images = images.filter(p => this._passesLtTmFilter(p) && this._passesStepFilter(p));
-            if (images.length === 0) return;
+        // 🔥 LOT/TEST/STEP 필터 적용 (Label Explorer 등 외부 소스에서 호출 시 우회)
+        if (!skipFilter) {
+            const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
+            if (hasFilter) {
+                images = images.filter(p => this._passesLtTmFilter(p) && this._passesStepFilter(p));
+                if (images.length === 0) return;
+            }
         }
 
         // 🔥 잔류 상태 정리 (showGrid와 동일)
