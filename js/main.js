@@ -16610,6 +16610,8 @@ class WaferMapViewer {
                 } catch {}
             })).then(() => {
                 this.debugLog(`🚀 프리페치 완료: ${uncachedClasses.length}개 클래스`);
+                // 🔥 썸네일 백그라운드 프리워밍: 프리페치된 이미지의 썸네일을 미리 생성
+                this._prefetchLabelThumbnails();
             });
         }
 
@@ -17878,6 +17880,40 @@ class WaferMapViewer {
 
         this.renderLabelExplorerContent(container, classes, classToImgList, labelSelection);
         container.scrollTop = scrollTop;
+    }
+
+    /**
+     * 🔥 Label Explorer 썸네일 백그라운드 프리워밍 — 폴더 클릭 전에 썸네일 캐시 준비
+     * classToImgListCache에 있는 모든 이미지의 썸네일을 8개씩 병렬로 미리 요청하여
+     * 폴더 선택 시 즉시 그리드가 표시되도록 한다.
+     */
+    _prefetchLabelThumbnails() {
+        const cache = this.classToImgListCache;
+        if (!cache) return;
+        const params = this.getPersonalizedParams?.() || '';
+        const paths = [];
+        for (const cls of Object.keys(cache)) {
+            for (const item of (cache[cls] || [])) {
+                if (item.type === 'file' && item.root_relative) {
+                    paths.push(this.ensureFolderPrefix(item.root_relative));
+                }
+            }
+        }
+        if (paths.length === 0) return;
+
+        // 8개씩 병렬 fetch (서버 과부하 방지)
+        const BATCH = 8;
+        let idx = 0;
+        const next = () => {
+            const batch = paths.slice(idx, idx + BATCH);
+            if (batch.length === 0) return;
+            idx += BATCH;
+            Promise.all(batch.map(p =>
+                fetch(`/api/thumbnail?path=${encodeURIComponent(p)}&size=512${params}`)
+                    .catch(() => {})
+            )).then(next);
+        };
+        next();
     }
 
     /**

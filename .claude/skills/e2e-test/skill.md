@@ -3519,6 +3519,38 @@ const ms = Math.round(performance.now() - t0);
 - **수정**: `api/main.py`에서 `threading.Thread` → `COMPOSITE_EXECUTOR.submit()` 교체
 - **테스트**: 동시 Measure Composite 요청 시 max_workers=4 병렬 제한 적용 확인
 
+### chip-positions classification 경로 → 원본 역추적 버그
+- **버그**: classification 경로의 chip-positions 요청 시 `ROOT_DIR`에서 JSON 검색 → 원본 경로(`positions/AB/A1AB/`)로 잘못 역추적
+- **수정**: `get_chip_positions`에서 `POSITIONS_ROOT.rglob(stem.json)` 우선 검색. `_candidate_positions_paths` 우선순위 3도 `ROOT_DIR` → `POSITIONS_ROOT`로 변경
+- **테스트**: classification 이미지의 chip-positions 요청 → 서버 로그에서 `POSITIONS_ROOT/classification/class/` 경로 확인
+- **커밋**: `d043581`
+
+### Label Explorer 그리드 LOT/TEST/STEP 필터에 의한 전체 제거
+- **버그**: 제품 폴더에서 LOT 필터 적용 후 Label Explorer 폴더 선택 시 `showGridByLot` 내 필터가 classification 이미지를 전부 걸러냄 → `wrapCount: 0`
+- **원인**: `showGrid(images, skipSaveState=true)` → `showGridByLot(images)` 호출 시 `skipFilter` 미전달
+- **수정**: `showGrid` → `showGridByLot(images, skipFilter)` 전달. Label Explorer 호출 시 필터 우회
+- **테스트**: LOT 필터 활성 상태에서 Label Explorer 클래스 선택 → `wrapCount > 0` + 이미지 정상 표시
+- **커밋**: `b95feef`
+
+### positions JSON이 이미지 폴더에 생성됨
+- **버그**: 라벨 추가(classify) 시 positions.json이 `ROOT_DIR/classification/class/`(이미지 폴더)에 복사됨
+- **수정**: 복사 대상을 `POSITIONS_ROOT/classification/class_name/`으로 변경 (classify + batch 2곳)
+- **테스트**: 라벨 추가 후 `ROOT_DIR/classification/class/` 에 `.json` 없고, `POSITIONS_ROOT/classification/class/`에 있어야 PASS
+- **커밋**: `e7a09d1`
+
+### classification 썸네일 경로 해석 실패 + 에러 시 그리드 셀 투명
+- **버그**: (1) `_try_resolve`에서 `LABELS_DIR` 직접 검색 누락 → 404 (2) `img.onerror`에서 `opacity: 0.5` → 실패 셀이 거의 안 보임
+- **수정**: (1) `LABELS_DIR`/`CHIP_LABELS_DIR` 직접 검색 추가 + 미발견 디버그 로그 (2) `opacity: 1` + `gridLoaded='error'`로 변경
+- **테스트**: 손상 이미지도 그리드에 회색 셀로 보여야 PASS
+- **커밋**: `a05470c`
+
+### Label Explorer 그리드 썸네일 로드 느림 (캐시 미스)
+- **버그**: classification 하드링크 이미지의 썸네일 hash가 원본과 다르게 생성 → 캐시 미스 → 매번 재생성
+- **원인**: `get_thumbnail_path`에서 `image_path.resolve()` 경로 기반 hash 사용 → 하드링크도 별도 hash
+- **수정**: hash를 `dev:ino`(inode) 기반으로 변경 → 하드링크는 동일 inode → 원본 썸네일 캐시 즉시 재사용
+- **테스트**: Label Explorer 클래스 폴더 선택 → 이미지 로드 속도가 WME 그리드와 동등해야 PASS
+- **커밋**: `ca72dd6`
+
 ## 병합 이력
 
 아래 Phase들은 중복/겹침으로 인해 다른 Phase에 병합됨:
