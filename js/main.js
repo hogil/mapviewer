@@ -11,11 +11,10 @@
 
 // 🚀 Fetch 최적화 import
 import { optimizedFetch, fetchOptimizer } from './fetch-optimizer.js';
-import { ColorSchemeEditor } from './color-editor.js?v=9';
+// 🚀 코드 스플리팅: 3개 모듈은 lazy import (초기 로드 ~300KB 절감)
+// ColorSchemeEditor, CompositeColorModal, MyLotModal → dynamic import()
 import { ChipAnnotator } from './chip-annotator.js?v=2';
 import { ThumbnailNavigator } from './thumbnail-navigator.js?v=2';
-import { CompositeColorModal } from './composite-colors.js';
-import { MyLotModal } from './my-lot.js?v=6';
 import { PageManager } from './page-manager.js';
 import { ContextMenuManager } from './context-menu.js?v=2';
 import { stripDotSuffix } from './search.js';
@@ -501,9 +500,10 @@ class WaferMapViewer {
         this.initState();
         this.initPageManager();
 
-        this.colorEditor = new ColorSchemeEditor(this);
-        this.compositeColorModal = new CompositeColorModal(this);
-        this.myLotModal = new MyLotModal(this);
+        // 🚀 코드 스플리팅: lazy import (첫 사용 시 로드)
+        this.colorEditor = null;
+        this.compositeColorModal = null;
+        this.myLotModal = null;
         // MY LOT refreshData는 loadUserInfo() 완료 후 호출 (currentUser 설정 이후)
         // constructor에서 즉시 호출하면 FALLBACK_LOGIN_ID로 요청됨
         this.contextMenuManager = new ContextMenuManager(this);
@@ -851,6 +851,29 @@ class WaferMapViewer {
     /**
      * Initialize the application's state.
      */
+
+    // 🚀 Lazy module loaders (코드 스플리팅)
+    async _getColorEditor() {
+        if (!this.colorEditor) {
+            const { ColorSchemeEditor } = await import('./color-editor.js');
+            this.colorEditor = new ColorSchemeEditor(this);
+        }
+        return this.colorEditor;
+    }
+    async _getCompositeColorModal() {
+        if (!this.compositeColorModal) {
+            const { CompositeColorModal } = await import('./composite-colors.js');
+            this.compositeColorModal = new CompositeColorModal(this);
+        }
+        return this.compositeColorModal;
+    }
+    async _getMyLotModal() {
+        if (!this.myLotModal) {
+            const { MyLotModal } = await import('./my-lot.js');
+            this.myLotModal = new MyLotModal(this);
+        }
+        return this.myLotModal;
+    }
 
     initState() {
         this.isMultiSearchOpen = false;

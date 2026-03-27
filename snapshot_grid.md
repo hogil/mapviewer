@@ -1,0 +1,724 @@
+- main [ref=e2]:
+  - complementary "파일 탐색기" [ref=e3]:
+    - generic [ref=e4]:
+      - button "Wafer Map Explorer" [ref=e5] [cursor=pointer]
+      - generic [ref=e8]: Loading...
+    - generic [ref=e9]:
+      - textbox "제품 검색..." [ref=e12]
+      - generic [ref=e13]:
+        - button "Reset" [ref=e14] [cursor=pointer]
+        - button "LOT" [ref=e16] [cursor=pointer]
+        - button "TEST" [ref=e18] [cursor=pointer]
+        - button "STEP" [ref=e20] [cursor=pointer]
+        - generic [ref=e21]:
+          - button "색 변경" [ref=e22] [cursor=pointer]
+          - button "권한 변경" [ref=e23] [cursor=pointer]
+    - navigation "폴더 및 파일 목록" [ref=e24]:
+      - list [ref=e98]:
+        - listitem [ref=e99]:
+          - group [ref=e100]:
+            - generic "📁 wafer_folder" [ref=e101] [cursor=pointer]
+        - listitem [ref=e102]:
+          - group [ref=e103]:
+            - generic "📁 wafer_edge_ring" [ref=e104] [cursor=pointer]
+        - listitem [ref=e105]:
+          - group [ref=e106]:
+            - generic "📁 wafer_edge_gradient" [ref=e107] [cursor=pointer]
+        - listitem [ref=e108]:
+          - group [ref=e109]:
+            - generic "📁 wafer_center_hot" [ref=e110] [cursor=pointer]
+        - listitem [ref=e111]:
+          - group [ref=e112]:
+            - generic "📁 wafer_center_cool" [ref=e113] [cursor=pointer]
+        - listitem [ref=e114]:
+          - group [ref=e115]:
+            - generic "📁 sort_test" [ref=e116] [cursor=pointer]
+        - listitem [ref=e117]:
+          - group [ref=e118]:
+            - generic "📁 palette_5mb" [ref=e119] [cursor=pointer]
+        - listitem [ref=e120]:
+          - group [ref=e121]:
+            - generic "📁 palette_3k" [ref=e122] [cursor=pointer]
+        - listitem [ref=e123]:
+          - group [ref=e124]:
+            - generic "📁 origin" [ref=e125] [cursor=pointer]
+        - listitem [ref=e126]:
+          - group [ref=e127]:
+            - generic "📁 mopology" [ref=e128] [cursor=pointer]
+        - listitem [ref=e129]:
+          - group [ref=e130]:
+            - generic "📁 filter_test" [ref=e131] [cursor=pointer]
+            - list [ref=e287]:
+              - listitem [ref=e288]:
+                - link "📄 ABC234_00C_02_20260315_090000_93.4_26_PE_NORMAL.png" [ref=e289]:
+                  - /url: "#"
+              - listitem [ref=e290]:
+                - link "📄 ABC234_00C_04_20260315_110000_91.5_9_EE_PWQ.png" [ref=e291]:
+                  - /url: "#"
+              - listitem [ref=e292]:
+                - link "📄 ABC234_00C_06_20260315_130000_88.6_5_PT_NORMAL.png" [ref=e293]:
+                  - /url: "#"
+              - listitem [ref=e294]:
+                - link "📄 ABC234_00C_08_20260315_150000_95.3_13_EE_NORMAL.png" [ref=e295]:
+                  - /url: "#"
+              - listitem [ref=e296]:
+                - link "📄 ABC234_00C_10_20260315_170000_88.1_12_PE_NORMAL.png" [ref=e297]:
+                  - /url: "#"
+              - listitem [ref=e298]:
+                - link "📄 ABC234_00C_12_20260315_190000_91.1_10_PE_PWQ.png" [ref=e299]:
+                  - /url: "#"
+              - listitem [ref=e300]:
+                - link "📄 ABC234_00C_14_20260315_210000_87.7_19_PE_NORMAL.png" [ref=e301]:
+                  - /url: "#"
+              - listitem [ref=e302]:
+                - link "📄 ABC234_00C_16_20260315_230000_98.0_16_PE_ENGINEER.png" [ref=e303]:
+                  - /url: "#"
+              - listitem [ref=e304]:
+                - link "📄 ABC234_00C_18_20260316_010000_94.6_15_EE_NORMAL.png" [ref=e305]:
+                  - /url: "#"
+              - listitem [ref=e306]:
+                - link "📄 ABC234_00C_20_20260316_030000_92.9_10_EE_NORMAL.png" [ref=e307]:
+                  - /url: "#"
+              - listitem [ref=e308]:
+                - link "📄 ABC234_00C_22_20260316_050000_97.0_36_EE_PWQ.png" [ref=e309]:
+                  - /url: "#"
+              - listitem [ref=e310]:
+                - link "📄 ABC234_00C_24_20260316_070000_98.5_29_PE_NORMAL.png" [ref=e311]:
+                  - /url: "#"
+              - listitem [ref=e312]:
+                - link "📄 ABC234_00P_01_20260315_080000_91.0_24_PE_NORMAL.png" [ref=e313]:
+                  - /url: "#"
+              - listitem [ref=e314]:
+                - link "📄 ABC234_00P_03_20260315_100000_89.8_17_PE_PWQ.png" [ref=e315]:
+                  - /url: "#"
+              - listitem [ref=e316]:
+                - link "📄 ABC234_00P_05_20260315_120000_89.2_17_PE_PWQ.png" [ref=e317]:
+                  - /url: "#"
+              - listitem [ref=e318]:
+                - link "📄 ABC234_00P_07_20260315_140000_88.8_24_PT_NORMAL.png" [ref=e319]:
+                  - /url: "#"
+              - listitem [ref=e320]:
+                - link "📄 ABC234_00P_09_20260315_160000_86.7_22_PT_PWQ.png" [ref=e321]:
+                  - /url: "#"
+              - listitem [ref=e322]:
+                - link "📄 ABC234_00P_11_20260315_180000_94.9_29_PT_NORMAL.png" [ref=e323]:
+                  - /url: "#"
+              - listitem [ref=e324]:
+                - link "📄 ABC234_00P_13_20260315_200000_93.9_43_EE_PWQ.png" [ref=e325]:
+                  - /url: "#"
+              - listitem [ref=e326]:
+                - link "📄 ABC234_00P_15_20260315_220000_94.8_3_PT_ENGINEER.png" [ref=e327]:
+                  - /url: "#"
+              - listitem [ref=e328]:
+                - link "📄 ABC234_00P_17_20260316_000000_95.8_30_PT_NORMAL.png" [ref=e329]:
+                  - /url: "#"
+              - listitem [ref=e330]:
+                - link "📄 ABC234_00P_19_20260316_020000_88.6_14_EE_ENGINEER.png" [ref=e331]:
+                  - /url: "#"
+              - listitem [ref=e332]:
+                - link "📄 ABC234_00P_21_20260316_040000_88.3_23_EE_NORMAL.png" [ref=e333]:
+                  - /url: "#"
+              - listitem [ref=e334]:
+                - link "📄 ABC234_00P_23_20260316_060000_96.4_38_PT_NORMAL.png" [ref=e335]:
+                  - /url: "#"
+              - listitem [ref=e336]:
+                - link "📄 DEF456_00C_02_20260319_090000_92.2_20_PT_ENGINEER.png" [ref=e337]:
+                  - /url: "#"
+              - listitem [ref=e338]:
+                - link "📄 DEF456_00C_04_20260319_110000_95.3_26_PE_ENGINEER.png" [ref=e339]:
+                  - /url: "#"
+              - listitem [ref=e340]:
+                - link "📄 DEF456_00C_06_20260319_130000_90.0_23_EE_PWQ.png" [ref=e341]:
+                  - /url: "#"
+              - listitem [ref=e342]:
+                - link "📄 DEF456_00C_08_20260319_150000_92.5_49_PT_PWQ.png" [ref=e343]:
+                  - /url: "#"
+              - listitem [ref=e344]:
+                - link "📄 DEF456_00C_10_20260319_170000_87.6_2_EE_ENGINEER.png" [ref=e345]:
+                  - /url: "#"
+              - listitem [ref=e346]:
+                - link "📄 DEF456_00C_12_20260319_190000_95.9_38_EE_PWQ.png" [ref=e347]:
+                  - /url: "#"
+              - listitem [ref=e348]:
+                - link "📄 DEF456_00C_14_20260319_210000_90.6_17_PT_PWQ.png" [ref=e349]:
+                  - /url: "#"
+              - listitem [ref=e350]:
+                - link "📄 DEF456_00C_16_20260319_230000_87.0_30_PE_ENGINEER.png" [ref=e351]:
+                  - /url: "#"
+              - listitem [ref=e352]:
+                - link "📄 DEF456_00C_18_20260320_010000_85.8_5_PE_NORMAL.png" [ref=e353]:
+                  - /url: "#"
+              - listitem [ref=e354]:
+                - link "📄 DEF456_00C_20_20260320_030000_96.3_34_PE_NORMAL.png" [ref=e355]:
+                  - /url: "#"
+              - listitem [ref=e356]:
+                - link "📄 DEF456_00C_22_20260320_050000_86.3_28_EE_PWQ.png" [ref=e357]:
+                  - /url: "#"
+              - listitem [ref=e358]:
+                - link "📄 DEF456_00C_24_20260320_070000_94.2_26_EE_ENGINEER.png" [ref=e359]:
+                  - /url: "#"
+              - listitem [ref=e360]:
+                - link "📄 DEF456_00P_01_20260319_080000_93.0_15_EE_NORMAL.png" [ref=e361]:
+                  - /url: "#"
+              - listitem [ref=e362]:
+                - link "📄 DEF456_00P_03_20260319_100000_91.0_24_EE_ENGINEER.png" [ref=e363]:
+                  - /url: "#"
+              - listitem [ref=e364]:
+                - link "📄 DEF456_00P_05_20260319_120000_94.6_3_PT_ENGINEER.png" [ref=e365]:
+                  - /url: "#"
+              - listitem [ref=e366]:
+                - link "📄 DEF456_00P_07_20260319_140000_97.6_39_PE_ENGINEER.png" [ref=e367]:
+                  - /url: "#"
+              - listitem [ref=e368]:
+                - link "📄 DEF456_00P_09_20260319_160000_92.3_50_EE_ENGINEER.png" [ref=e369]:
+                  - /url: "#"
+              - listitem [ref=e370]:
+                - link "📄 DEF456_00P_11_20260319_180000_92.6_20_PT_NORMAL.png" [ref=e371]:
+                  - /url: "#"
+              - listitem [ref=e372]:
+                - link "📄 DEF456_00P_13_20260319_200000_91.0_27_PE_ENGINEER.png" [ref=e373]:
+                  - /url: "#"
+              - listitem [ref=e374]:
+                - link "📄 DEF456_00P_15_20260319_220000_90.1_39_PE_PWQ.png" [ref=e375]:
+                  - /url: "#"
+              - listitem [ref=e376]:
+                - link "📄 DEF456_00P_17_20260320_000000_89.4_24_PE_NORMAL.png" [ref=e377]:
+                  - /url: "#"
+              - listitem [ref=e378]:
+                - link "📄 DEF456_00P_19_20260320_020000_86.9_46_PE_PWQ.png" [ref=e379]:
+                  - /url: "#"
+              - listitem [ref=e380]:
+                - link "📄 DEF456_00P_21_20260320_040000_89.8_38_EE_PWQ.png" [ref=e381]:
+                  - /url: "#"
+              - listitem [ref=e382]:
+                - link "📄 DEF456_00P_23_20260320_060000_89.8_23_PE_NORMAL.png" [ref=e383]:
+                  - /url: "#"
+              - listitem [ref=e384]:
+                - link "📄 FEX482_00C_02_20260316_090000_95.3_24_EE_ENGINEER.png" [ref=e385]:
+                  - /url: "#"
+              - listitem [ref=e386]:
+                - link "📄 FEX482_00C_04_20260316_110000_87.3_40_PT_ENGINEER.png" [ref=e387]:
+                  - /url: "#"
+              - listitem [ref=e388]:
+                - link "📄 FEX482_00C_06_20260316_130000_89.8_37_PE_PWQ.png" [ref=e389]:
+                  - /url: "#"
+              - listitem [ref=e390]:
+                - link "📄 FEX482_00C_08_20260316_150000_85.0_10_PE_NORMAL.png" [ref=e391]:
+                  - /url: "#"
+              - listitem [ref=e392]:
+                - link "📄 FEX482_00C_10_20260316_170000_91.4_8_PE_ENGINEER.png" [ref=e393]:
+                  - /url: "#"
+              - listitem [ref=e394]:
+                - link "📄 FEX482_00C_12_20260316_190000_91.5_32_EE_NORMAL.png" [ref=e395]:
+                  - /url: "#"
+              - listitem [ref=e396]:
+                - link "📄 FEX482_00C_14_20260316_210000_87.3_3_EE_ENGINEER.png" [ref=e397]:
+                  - /url: "#"
+              - listitem [ref=e398]:
+                - link "📄 FEX482_00C_16_20260316_230000_85.3_15_PT_ENGINEER.png" [ref=e399]:
+                  - /url: "#"
+              - listitem [ref=e400]:
+                - link "📄 FEX482_00C_18_20260317_010000_93.3_40_EE_NORMAL.png" [ref=e401]:
+                  - /url: "#"
+              - listitem [ref=e402]:
+                - link "📄 FEX482_00C_20_20260317_030000_91.9_43_PE_PWQ.png" [ref=e403]:
+                  - /url: "#"
+              - listitem [ref=e404]:
+                - link "📄 FEX482_00C_22_20260317_050000_92.3_21_PT_NORMAL.png" [ref=e405]:
+                  - /url: "#"
+              - listitem [ref=e406]:
+                - link "📄 FEX482_00C_24_20260317_070000_97.2_10_PE_ENGINEER.png" [ref=e407]:
+                  - /url: "#"
+              - listitem [ref=e408]:
+                - link "📄 FEX482_00P_01_20260316_080000_88.6_29_PT_PWQ.png" [ref=e409]:
+                  - /url: "#"
+              - listitem [ref=e410]:
+                - link "📄 FEX482_00P_03_20260316_100000_85.3_4_PT_NORMAL.png" [ref=e411]:
+                  - /url: "#"
+              - listitem [ref=e412]:
+                - link "📄 FEX482_00P_05_20260316_120000_89.7_22_PT_NORMAL.png" [ref=e413]:
+                  - /url: "#"
+              - listitem [ref=e414]:
+                - link "📄 FEX482_00P_07_20260316_140000_93.4_4_EE_PWQ.png" [ref=e415]:
+                  - /url: "#"
+              - listitem [ref=e416]:
+                - link "📄 FEX482_00P_09_20260316_160000_97.1_27_PE_PWQ.png" [ref=e417]:
+                  - /url: "#"
+              - listitem [ref=e418]:
+                - link "📄 FEX482_00P_11_20260316_180000_98.8_39_PT_PWQ.png" [ref=e419]:
+                  - /url: "#"
+              - listitem [ref=e420]:
+                - link "📄 FEX482_00P_13_20260316_200000_96.6_39_PE_ENGINEER.png" [ref=e421]:
+                  - /url: "#"
+              - listitem [ref=e422]:
+                - link "📄 FEX482_00P_15_20260316_220000_85.7_30_PE_ENGINEER.png" [ref=e423]:
+                  - /url: "#"
+              - listitem [ref=e424]:
+                - link "📄 FEX482_00P_17_20260317_000000_99.4_18_PT_NORMAL.png" [ref=e425]:
+                  - /url: "#"
+              - listitem [ref=e426]:
+                - link "📄 FEX482_00P_19_20260317_020000_95.6_19_EE_PWQ.png" [ref=e427]:
+                  - /url: "#"
+              - listitem [ref=e428]:
+                - link "📄 FEX482_00P_21_20260317_040000_99.5_47_PT_NORMAL.png" [ref=e429]:
+                  - /url: "#"
+              - listitem [ref=e430]:
+                - link "📄 FEX482_00P_23_20260317_060000_98.4_2_EE_NORMAL.png" [ref=e431]:
+                  - /url: "#"
+              - listitem [ref=e432]:
+                - link "📄 GHJ789_00C_02_20260320_090000_92.7_15_EE_PWQ.png" [ref=e433]:
+                  - /url: "#"
+              - listitem [ref=e434]:
+                - link "📄 GHJ789_00C_04_20260320_110000_95.5_39_EE_PWQ.png" [ref=e435]:
+                  - /url: "#"
+              - listitem [ref=e436]:
+                - link "📄 GHJ789_00C_06_20260320_130000_85.2_20_PT_PWQ.png" [ref=e437]:
+                  - /url: "#"
+              - listitem [ref=e438]:
+                - link "📄 GHJ789_00C_08_20260320_150000_90.4_10_EE_ENGINEER.png" [ref=e439]:
+                  - /url: "#"
+              - listitem [ref=e440]:
+                - link "📄 GHJ789_00C_10_20260320_170000_95.2_6_PT_PWQ.png" [ref=e441]:
+                  - /url: "#"
+              - listitem [ref=e442]:
+                - link "📄 GHJ789_00C_12_20260320_190000_97.8_48_PT_PWQ.png" [ref=e443]:
+                  - /url: "#"
+              - listitem [ref=e444]:
+                - link "📄 GHJ789_00C_14_20260320_210000_92.9_42_PT_PWQ.png" [ref=e445]:
+                  - /url: "#"
+              - listitem [ref=e446]:
+                - link "📄 GHJ789_00C_16_20260320_230000_96.8_36_EE_PWQ.png" [ref=e447]:
+                  - /url: "#"
+              - listitem [ref=e448]:
+                - link "📄 GHJ789_00C_18_20260321_010000_87.3_42_PE_NORMAL.png" [ref=e449]:
+                  - /url: "#"
+              - listitem [ref=e450]:
+                - link "📄 GHJ789_00C_20_20260321_030000_96.7_8_PE_PWQ.png" [ref=e451]:
+                  - /url: "#"
+              - listitem [ref=e452]:
+                - link "📄 GHJ789_00C_22_20260321_050000_98.3_23_PT_PWQ.png" [ref=e453]:
+                  - /url: "#"
+              - listitem [ref=e454]:
+                - link "📄 GHJ789_00C_24_20260321_070000_86.1_49_PT_NORMAL.png" [ref=e455]:
+                  - /url: "#"
+              - listitem [ref=e456]:
+                - link "📄 GHJ789_00P_01_20260320_080000_88.7_40_PT_ENGINEER.png" [ref=e457]:
+                  - /url: "#"
+              - listitem [ref=e458]:
+                - link "📄 GHJ789_00P_03_20260320_100000_99.6_9_EE_ENGINEER.png" [ref=e459]:
+                  - /url: "#"
+              - listitem [ref=e460]:
+                - link "📄 GHJ789_00P_05_20260320_120000_88.4_20_EE_PWQ.png" [ref=e461]:
+                  - /url: "#"
+              - listitem [ref=e462]:
+                - link "📄 GHJ789_00P_07_20260320_140000_90.6_13_PE_ENGINEER.png" [ref=e463]:
+                  - /url: "#"
+              - listitem [ref=e464]:
+                - link "📄 GHJ789_00P_09_20260320_160000_85.0_34_PE_NORMAL.png" [ref=e465]:
+                  - /url: "#"
+              - listitem [ref=e466]:
+                - link "📄 GHJ789_00P_11_20260320_180000_94.3_34_PE_NORMAL.png" [ref=e467]:
+                  - /url: "#"
+              - listitem [ref=e468]:
+                - link "📄 GHJ789_00P_13_20260320_200000_85.3_26_PE_ENGINEER.png" [ref=e469]:
+                  - /url: "#"
+              - listitem [ref=e470]:
+                - link "📄 GHJ789_00P_15_20260320_220000_96.7_11_PE_PWQ.png" [ref=e471]:
+                  - /url: "#"
+              - listitem [ref=e472]:
+                - link "📄 GHJ789_00P_17_20260321_000000_89.1_49_PE_NORMAL.png" [ref=e473]:
+                  - /url: "#"
+              - listitem [ref=e474]:
+                - link "📄 GHJ789_00P_19_20260321_020000_98.4_16_EE_ENGINEER.png" [ref=e475]:
+                  - /url: "#"
+              - listitem [ref=e476]:
+                - link "📄 GHJ789_00P_21_20260321_040000_97.4_7_EE_PWQ.png" [ref=e477]:
+                  - /url: "#"
+              - listitem [ref=e478]:
+                - link "📄 GHJ789_00P_23_20260321_060000_97.1_28_PE_NORMAL.png" [ref=e479]:
+                  - /url: "#"
+              - listitem [ref=e480]:
+                - link "📄 KHN931_00C_02_20260317_090000_85.6_42_PE_ENGINEER.png" [ref=e481]:
+                  - /url: "#"
+              - listitem [ref=e482]:
+                - link "📄 KHN931_00C_04_20260317_110000_95.5_35_PT_NORMAL.png" [ref=e483]:
+                  - /url: "#"
+              - listitem [ref=e484]:
+                - link "📄 KHN931_00C_06_20260317_130000_88.2_18_EE_ENGINEER.png" [ref=e485]:
+                  - /url: "#"
+              - listitem [ref=e486]:
+                - link "📄 KHN931_00C_08_20260317_150000_96.6_12_PT_NORMAL.png" [ref=e487]:
+                  - /url: "#"
+              - listitem [ref=e488]:
+                - link "📄 KHN931_00C_10_20260317_170000_92.1_42_EE_NORMAL.png" [ref=e489]:
+                  - /url: "#"
+              - listitem [ref=e490]:
+                - link "📄 KHN931_00C_12_20260317_190000_92.0_7_PE_NORMAL.png" [ref=e491]:
+                  - /url: "#"
+              - listitem [ref=e492]:
+                - link "📄 KHN931_00C_14_20260317_210000_97.6_28_EE_PWQ.png" [ref=e493]:
+                  - /url: "#"
+              - listitem [ref=e494]:
+                - link "📄 KHN931_00C_16_20260317_230000_97.2_33_PT_NORMAL.png" [ref=e495]:
+                  - /url: "#"
+              - listitem [ref=e496]:
+                - link "📄 KHN931_00C_18_20260318_010000_85.7_41_PE_NORMAL.png" [ref=e497]:
+                  - /url: "#"
+              - listitem [ref=e498]:
+                - link "📄 KHN931_00C_20_20260318_030000_95.5_27_EE_PWQ.png" [ref=e499]:
+                  - /url: "#"
+              - listitem [ref=e500]:
+                - link "📄 KHN931_00C_22_20260318_050000_97.3_4_PT_PWQ.png" [ref=e501]:
+                  - /url: "#"
+              - listitem [ref=e502]:
+                - link "📄 KHN931_00C_24_20260318_070000_97.7_41_EE_ENGINEER.png" [ref=e503]:
+                  - /url: "#"
+              - listitem [ref=e504]:
+                - link "📄 KHN931_00P_01_20260317_080000_97.2_40_PE_PWQ.png" [ref=e505]:
+                  - /url: "#"
+              - listitem [ref=e506]:
+                - link "📄 KHN931_00P_03_20260317_100000_93.5_22_PT_NORMAL.png" [ref=e507]:
+                  - /url: "#"
+              - listitem [ref=e508]:
+                - link "📄 KHN931_00P_05_20260317_120000_90.5_38_PE_PWQ.png" [ref=e509]:
+                  - /url: "#"
+              - listitem [ref=e510]:
+                - link "📄 KHN931_00P_07_20260317_140000_85.2_20_PE_NORMAL.png" [ref=e511]:
+                  - /url: "#"
+              - listitem [ref=e512]:
+                - link "📄 KHN931_00P_09_20260317_160000_97.9_5_PE_ENGINEER.png" [ref=e513]:
+                  - /url: "#"
+              - listitem [ref=e514]:
+                - link "📄 KHN931_00P_11_20260317_180000_94.5_45_PT_PWQ.png" [ref=e515]:
+                  - /url: "#"
+              - listitem [ref=e516]:
+                - link "📄 KHN931_00P_13_20260317_200000_94.4_20_PE_ENGINEER.png" [ref=e517]:
+                  - /url: "#"
+              - listitem [ref=e518]:
+                - link "📄 KHN931_00P_15_20260317_220000_92.3_24_PT_PWQ.png" [ref=e519]:
+                  - /url: "#"
+              - listitem [ref=e520]:
+                - link "📄 KHN931_00P_17_20260318_000000_87.7_37_PT_NORMAL.png" [ref=e521]:
+                  - /url: "#"
+              - listitem [ref=e522]:
+                - link "📄 KHN931_00P_19_20260318_020000_90.4_29_EE_NORMAL.png" [ref=e523]:
+                  - /url: "#"
+              - listitem [ref=e524]:
+                - link "📄 KHN931_00P_21_20260318_040000_95.5_34_EE_ENGINEER.png" [ref=e525]:
+                  - /url: "#"
+              - listitem [ref=e526]:
+                - link "📄 KHN931_00P_23_20260318_060000_98.3_8_EE_PWQ.png" [ref=e527]:
+                  - /url: "#"
+              - listitem [ref=e528]:
+                - link "📄 TMW067_00C_02_20260318_090000_87.7_19_PE_NORMAL.png" [ref=e529]:
+                  - /url: "#"
+              - listitem [ref=e530]:
+                - link "📄 TMW067_00C_04_20260318_110000_97.5_43_PE_NORMAL.png" [ref=e531]:
+                  - /url: "#"
+              - listitem [ref=e532]:
+                - link "📄 TMW067_00C_06_20260318_130000_86.4_8_EE_NORMAL.png" [ref=e533]:
+                  - /url: "#"
+              - listitem [ref=e534]:
+                - link "📄 TMW067_00C_08_20260318_150000_98.9_16_PE_PWQ.png" [ref=e535]:
+                  - /url: "#"
+              - listitem [ref=e536]:
+                - link "📄 TMW067_00C_10_20260318_170000_98.5_44_EE_NORMAL.png" [ref=e537]:
+                  - /url: "#"
+              - listitem [ref=e538]:
+                - link "📄 TMW067_00C_12_20260318_190000_97.9_43_EE_NORMAL.png" [ref=e539]:
+                  - /url: "#"
+              - listitem [ref=e540]:
+                - link "📄 TMW067_00C_14_20260318_210000_95.0_35_PT_NORMAL.png" [ref=e541]:
+                  - /url: "#"
+              - listitem [ref=e542]:
+                - link "📄 TMW067_00C_16_20260318_230000_94.6_36_PE_NORMAL.png" [ref=e543]:
+                  - /url: "#"
+              - listitem [ref=e544]:
+                - link "📄 TMW067_00C_18_20260319_010000_91.9_44_PT_PWQ.png" [ref=e545]:
+                  - /url: "#"
+              - listitem [ref=e546]:
+                - link "📄 TMW067_00C_20_20260319_030000_97.8_21_PT_NORMAL.png" [ref=e547]:
+                  - /url: "#"
+              - listitem [ref=e548]:
+                - link "📄 TMW067_00C_22_20260319_050000_86.2_25_PE_NORMAL.png" [ref=e549]:
+                  - /url: "#"
+              - listitem [ref=e550]:
+                - link "📄 TMW067_00C_24_20260319_070000_87.0_48_PE_PWQ.png" [ref=e551]:
+                  - /url: "#"
+              - listitem [ref=e552]:
+                - link "📄 TMW067_00P_01_20260318_080000_96.8_33_PE_ENGINEER.png" [ref=e553]:
+                  - /url: "#"
+              - listitem [ref=e554]:
+                - link "📄 TMW067_00P_03_20260318_100000_87.8_43_EE_ENGINEER.png" [ref=e555]:
+                  - /url: "#"
+              - listitem [ref=e556]:
+                - link "📄 TMW067_00P_05_20260318_120000_87.2_12_PT_NORMAL.png" [ref=e557]:
+                  - /url: "#"
+              - listitem [ref=e558]:
+                - link "📄 TMW067_00P_07_20260318_140000_89.7_3_EE_NORMAL.png" [ref=e559]:
+                  - /url: "#"
+              - listitem [ref=e560]:
+                - link "📄 TMW067_00P_09_20260318_160000_92.8_25_PE_ENGINEER.png" [ref=e561]:
+                  - /url: "#"
+              - listitem [ref=e562]:
+                - link "📄 TMW067_00P_11_20260318_180000_94.8_29_PT_ENGINEER.png" [ref=e563]:
+                  - /url: "#"
+              - listitem [ref=e564]:
+                - link "📄 TMW067_00P_13_20260318_200000_89.7_13_PT_ENGINEER.png" [ref=e565]:
+                  - /url: "#"
+              - listitem [ref=e566]:
+                - link "📄 TMW067_00P_15_20260318_220000_98.4_21_PE_NORMAL.png" [ref=e567]:
+                  - /url: "#"
+              - listitem [ref=e568]:
+                - link "📄 TMW067_00P_17_20260319_000000_96.1_48_PE_PWQ.png" [ref=e569]:
+                  - /url: "#"
+              - listitem [ref=e570]:
+                - link "📄 TMW067_00P_19_20260319_020000_95.5_11_PE_NORMAL.png" [ref=e571]:
+                  - /url: "#"
+              - listitem [ref=e572]:
+                - link "📄 TMW067_00P_21_20260319_040000_96.5_1_EE_ENGINEER.png" [ref=e573]:
+                  - /url: "#"
+              - listitem [ref=e574]:
+                - link "📄 TMW067_00P_23_20260319_060000_98.9_8_PE_ENGINEER.png" [ref=e575]:
+                  - /url: "#"
+        - listitem [ref=e132]:
+          - group [ref=e133]:
+            - generic "📁 cca" [ref=e134] [cursor=pointer]
+        - listitem [ref=e135]:
+          - group [ref=e136]:
+            - generic "📁 benchmark_4m" [ref=e137] [cursor=pointer]
+        - listitem [ref=e138]:
+          - group [ref=e139]:
+            - generic "📁 batch" [ref=e140] [cursor=pointer]
+        - listitem [ref=e141]:
+          - group [ref=e142]:
+            - generic "📁 backup2" [ref=e143] [cursor=pointer]
+        - listitem [ref=e144]:
+          - group [ref=e145]:
+            - generic "📁 backup" [ref=e146] [cursor=pointer]
+  - generic [ref=e27]:
+    - generic [ref=e28]:
+      - generic [ref=e29]:
+        - button "컬럼 감소" [ref=e30] [cursor=pointer]: "-"
+        - slider "그리드 컬럼 수" [ref=e31]: "6"
+        - spinbutton "컬럼 수 직접 입력" [ref=e32]: "6"
+        - button "컬럼 증가" [ref=e33] [cursor=pointer]: +
+      - generic [ref=e34]:
+        - button "전체 선택" [ref=e35] [cursor=pointer]: 전체선택
+        - button "전체 해제" [ref=e36] [cursor=pointer]: 전체해제
+      - combobox "정렬 기준" [ref=e38] [cursor=pointer]:
+        - option "정렬" [selected]
+        - option "LOT ↑"
+        - option "LOT ↓"
+        - option "Yield ↑"
+        - option "Yield ↓"
+        - option "Sys ↑"
+        - option "Sys ↓"
+      - generic [ref=e39]:
+        - textbox "and, or, not, () 사용" [ref=e40]
+        - button "검색" [ref=e41] [cursor=pointer]
+        - button "LOT 다중 검색" [ref=e42] [cursor=pointer]: 다중검색
+      - generic [ref=e43]:
+        - button "LOT Mode" [ref=e44] [cursor=pointer]
+        - button "Composite" [ref=e46] [cursor=pointer]
+        - button "Ref Map" [ref=e47] [cursor=pointer]
+        - button "Measure" [ref=e49] [cursor=pointer]
+        - button "MY LOT" [ref=e50] [cursor=pointer]
+    - generic "그리드 모드 하단 컬러 범례" [ref=e51]:
+      - generic [ref=e5213]:
+        - generic [ref=e5214] [cursor=pointer]:
+          - generic [ref=e5216]: 0~10%
+          - generic [ref=e5217]: 40.1%(462)
+        - generic [ref=e5218] [cursor=pointer]:
+          - generic [ref=e5220]: 10~20%
+          - generic [ref=e5221]: 6.8%(78)
+        - generic [ref=e5222] [cursor=pointer]:
+          - generic [ref=e5224]: 20~30%
+          - generic [ref=e5225]: 6.9%(79)
+        - generic [ref=e5226] [cursor=pointer]:
+          - generic [ref=e5228]: 30~40%
+          - generic [ref=e5229]: 6.2%(71)
+        - generic [ref=e5230] [cursor=pointer]:
+          - generic [ref=e5232]: 40~50%
+          - generic [ref=e5233]: 6.7%(77)
+        - generic [ref=e5234] [cursor=pointer]:
+          - generic [ref=e5236]: 50~60%
+          - generic [ref=e5237]: 7.3%(84)
+        - generic [ref=e5238] [cursor=pointer]:
+          - generic [ref=e5240]: 60~70%
+          - generic [ref=e5241]: 6.3%(72)
+        - generic [ref=e5242] [cursor=pointer]:
+          - generic [ref=e5244]: 70~80%
+          - generic [ref=e5245]: 6.6%(76)
+        - generic [ref=e5246] [cursor=pointer]:
+          - generic [ref=e5248]: 80~90%
+          - generic [ref=e5249]: 6.3%(72)
+        - generic [ref=e5250] [cursor=pointer]:
+          - generic [ref=e5252]: 90~100%
+          - generic [ref=e5253]: 7.0%(81)
+      - generic [ref=e5254]:
+        - generic [ref=e5257] [cursor=pointer]: nor
+        - generic [ref=e5260] [cursor=pointer]: inv
+        - generic [ref=e5263] [cursor=pointer]: "285"
+        - generic [ref=e5266] [cursor=pointer]: "286"
+        - generic [ref=e5269] [cursor=pointer]: "287"
+        - generic [ref=e5272] [cursor=pointer]: "288"
+        - generic [ref=e5275] [cursor=pointer]: "290"
+        - generic [ref=e5278] [cursor=pointer]: "291"
+        - generic [ref=e5281] [cursor=pointer]: "300"
+        - generic [ref=e5284] [cursor=pointer]: "385"
+        - generic [ref=e5287] [cursor=pointer]: "386"
+        - generic [ref=e5290] [cursor=pointer]: "388"
+        - generic [ref=e5293] [cursor=pointer]: "389"
+        - generic [ref=e5296] [cursor=pointer]: "390"
+        - generic [ref=e5299] [cursor=pointer]: ETC
+    - region "이미지 뷰어" [ref=e52]:
+      - generic "이미지 그리드" [ref=e54]:
+        - generic [ref=e5300] [cursor=pointer]:
+          - img "square_average.jpg" [ref=e5302]
+          - generic [ref=e5303]: square_average
+        - generic [ref=e5304] [cursor=pointer]:
+          - img "square_weighted_average.jpg" [ref=e5306]
+          - generic [ref=e5307]: square_weighted_average
+        - generic [ref=e5308] [cursor=pointer]:
+          - img "Grade_0.jpg" [ref=e5310]
+          - generic [ref=e5311]: Grade_0
+        - generic [ref=e5312] [cursor=pointer]:
+          - img "Grade_1.jpg" [ref=e5314]
+          - generic [ref=e5315]: Grade_1
+        - generic [ref=e5316] [cursor=pointer]:
+          - img "Grade_2.jpg" [ref=e5318]
+          - generic [ref=e5319]: Grade_2
+        - generic [ref=e5320] [cursor=pointer]:
+          - img "Grade_3.jpg" [ref=e5322]
+          - generic [ref=e5323]: Grade_3
+        - generic [ref=e5324] [cursor=pointer]:
+          - img "Grade_4.jpg" [ref=e5326]
+          - generic [ref=e5327]: Grade_4
+        - generic [ref=e5328] [cursor=pointer]:
+          - img "Grade_5.jpg" [ref=e5330]
+          - generic [ref=e5331]: Grade_5
+        - generic [ref=e5332] [cursor=pointer]:
+          - img "Grade_6.jpg" [ref=e5334]
+          - generic [ref=e5335]: Grade_6
+        - generic [ref=e5336] [cursor=pointer]:
+          - img "Grade_7.jpg" [ref=e5338]
+          - generic [ref=e5339]: Grade_7
+        - generic [ref=e5340] [cursor=pointer]:
+          - img "BIN_285_count.jpg" [ref=e5342]
+          - generic [ref=e5343]: BIN_285_count
+        - generic [ref=e5344] [cursor=pointer]:
+          - img "FBT_1000_average.jpg" [ref=e5346]
+          - generic [ref=e5347]: FBT_1000_average
+        - generic [ref=e5348] [cursor=pointer]:
+          - img "QVL_5000_average.jpg" [ref=e5350]
+          - generic [ref=e5351]: QVL_5000_average
+    - generic "페이지 탭" [ref=e58]:
+      - generic [ref=e60]:
+        - button "mylot0 x" [ref=e5352] [cursor=pointer]:
+          - generic [ref=e5353]: mylot0
+          - generic [ref=e5354]: x
+        - button "com0 x" [ref=e5355] [cursor=pointer]:
+          - generic [ref=e5356]: com0
+          - generic [ref=e5357]: x
+      - button "새 페이지 추가" [ref=e64] [cursor=pointer]: +
+  - complementary "클래스 및 라벨 관리" [ref=e66]:
+    - generic [ref=e67]:
+      - generic [ref=e68]:
+        - heading "Class Manager" [level=3] [ref=e69]
+        - generic [ref=e70]:
+          - link "Manual" [ref=e71] [cursor=pointer]:
+            - /url: http://go/failbitmapmanual/
+          - generic [ref=e73]: 최호길(ho.choi)
+      - generic [ref=e74]:
+        - button "Wafer" [pressed] [ref=e75] [cursor=pointer]
+        - button "Chip" [ref=e76] [cursor=pointer]
+      - textbox "새 클래스 입력" [ref=e78]:
+        - /placeholder: 클래스명 입력
+      - generic [ref=e79]:
+        - button "클래스 추가" [ref=e80] [cursor=pointer]: Add Class
+        - button "클래스 이름 변경" [ref=e81] [cursor=pointer]: Rename Class
+        - button "클래스 삭제" [ref=e82] [cursor=pointer]: Delete Class
+      - heading "Fail List" [level=3] [ref=e83]
+      - generic [ref=e222]:
+        - button "afwefaw" [ref=e223] [cursor=pointer]
+        - button "asdfasdf" [ref=e224] [cursor=pointer]
+        - button "slifhsfuhawkeh" [ref=e225] [cursor=pointer]
+        - button "test_class" [ref=e226] [cursor=pointer]
+        - button "xvliulsefawkfjef" [ref=e227] [cursor=pointer]
+        - button "zz_auto_370474_a" [ref=e228] [cursor=pointer]
+        - button "zz_auto_370474_c" [ref=e229] [cursor=pointer]
+        - button "zz_auto_523773" [ref=e230] [cursor=pointer]
+        - button "zz_auto_689637" [ref=e231] [cursor=pointer]
+        - button "zz_auto_a" [ref=e232] [cursor=pointer]
+        - button "zz_auto_b" [ref=e233] [cursor=pointer]
+        - button "zz_auto_c" [ref=e234] [cursor=pointer]
+        - button "zz_auto_test_class" [ref=e235] [cursor=pointer]
+        - button "zz_label_022579" [ref=e236] [cursor=pointer]
+        - button "zz406657xa" [ref=e237] [cursor=pointer]
+    - generic [ref=e84]:
+      - heading "Label Explorer" [level=3] [ref=e85]
+      - generic [ref=e86]:
+        - button "라벨 추가" [ref=e87] [cursor=pointer]: Add Label
+        - button "라벨 삭제" [ref=e88] [cursor=pointer]: Delete Label
+      - list [ref=e576]:
+        - listitem [ref=e577]:
+          - generic [ref=e578] [cursor=pointer]:
+            - generic [ref=e579]: ▸
+            - text: afwefaw
+        - listitem [ref=e580]:
+          - generic [ref=e581] [cursor=pointer]:
+            - generic [ref=e582]: ▸
+            - text: asdfasdf
+        - listitem [ref=e583]:
+          - generic [ref=e584] [cursor=pointer]:
+            - generic [ref=e585]: ▸
+            - text: slifhsfuhawkeh
+        - listitem [ref=e586]:
+          - generic [ref=e587] [cursor=pointer]:
+            - generic [ref=e588]: ▸
+            - text: test_class
+        - listitem [ref=e589]:
+          - generic [ref=e590] [cursor=pointer]:
+            - generic [ref=e591]: ▸
+            - text: xvliulsefawkfjef
+        - listitem [ref=e592]:
+          - generic [ref=e593] [cursor=pointer]:
+            - generic [ref=e594]: ▸
+            - text: zz_auto_370474_a
+        - listitem [ref=e595]:
+          - generic [ref=e596] [cursor=pointer]:
+            - generic [ref=e597]: ▸
+            - text: zz_auto_370474_c
+        - listitem [ref=e598]:
+          - generic [ref=e599] [cursor=pointer]:
+            - generic [ref=e600]: ▸
+            - text: zz_auto_523773
+        - listitem [ref=e601]:
+          - generic [ref=e602] [cursor=pointer]:
+            - generic [ref=e603]: ▸
+            - text: zz_auto_689637
+        - listitem [ref=e604]:
+          - generic [ref=e605] [cursor=pointer]:
+            - generic [ref=e606]: ▸
+            - text: zz_auto_a
+        - listitem [ref=e607]:
+          - generic [ref=e608] [cursor=pointer]:
+            - generic [ref=e609]: ▸
+            - text: zz_auto_b
+        - listitem [ref=e610]:
+          - generic [ref=e611] [cursor=pointer]:
+            - generic [ref=e612]: ▸
+            - text: zz_auto_c
+        - listitem [ref=e613]:
+          - generic [ref=e614] [cursor=pointer]:
+            - generic [ref=e615]: ▸
+            - text: zz_auto_test_class
+        - listitem [ref=e616]:
+          - generic [ref=e617] [cursor=pointer]:
+            - generic [ref=e618]: ▸
+            - text: zz_label_022579
+        - listitem [ref=e619]:
+          - generic [ref=e620] [cursor=pointer]:
+            - generic [ref=e621]: ▸
+            - text: zz406657xa
