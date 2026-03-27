@@ -8733,29 +8733,40 @@ def _current_username(req: Optional[Request], default: str = "system") -> str:
 async def get_chip_positions(path: str, include_fq: int = 0):
     """주어진 이미지 경로에 대응하는 positions.json 반환 (include_fq=1이면 f/q 값 포함)"""
     try:
-        # 🔥 classification 경로면 해당 디렉토리의 position 파일을 먼저 확인
         norm_path = path.replace("\\", "/")
-        cls_direct_pos = None
-        for cls_prefix in ("classification/", "classification_chips/"):
-            if cls_prefix in norm_path or norm_path.startswith(cls_prefix):
-                cls_rel = Path(norm_path)
-                cls_direct_pos = ROOT_DIR / cls_rel.parent / f"{cls_rel.stem}.json"
-                if not cls_direct_pos.exists():
-                    # current_folder 기준으로도 시도
-                    cls_direct_pos = current_folder / cls_rel.parent / f"{cls_rel.stem}.json"
-                break
+        rel_path = norm_path
 
-        if cls_direct_pos and cls_direct_pos.exists():
-            positions_file = cls_direct_pos
-            rel_path = norm_path
+        # classification 경로 → 파일명으로 POSITIONS_ROOT에서 먼저 검색
+        is_cls_path = any(
+            p in norm_path or norm_path.startswith(p)
+            for p in ("classification/", "classification_chips/")
+        )
+        if is_cls_path:
+            cls_rel = Path(norm_path)
+            stem = cls_rel.stem
+            # 1순위: POSITIONS_ROOT 전체에서 파일명.json 검색
+            positions_file = None
+            for candidate in config.POSITIONS_ROOT.rglob(f"{stem}.json"):
+                # classification 디렉토리 내 복사본은 후순위
+                if "classification" not in str(candidate):
+                    positions_file = candidate
+                    break
+            # 2순위: classification 폴더 내 복사본
+            if not positions_file:
+                for base in (ROOT_DIR, current_folder):
+                    c = base / cls_rel.parent / f"{stem}.json"
+                    if c.exists():
+                        positions_file = c
+                        break
+            if not positions_file:
+                positions_file = config.POSITIONS_ROOT / f"{stem}.json"
         else:
-            # 원본 경로로 변환 후 검색
             rel_path = _get_relative_path_from_image(path)
             rel_path_obj = Path(rel_path)
             positions_file = _resolve_positions_path(rel_path_obj)
 
         logger.info(f"🔍 [CHIP_POS] Input path: {path}")
-        logger.info(f"🔍 [CHIP_POS] Resolved positions: {positions_file}")
+        logger.info(f"🔍 [CHIP_POS] Resolved positions: {positions_file} (exists={positions_file.exists()})")
 
         logger.info(f"🔍 Chip positions requested: {path} -> {positions_file}")
 

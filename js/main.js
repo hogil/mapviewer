@@ -23445,8 +23445,27 @@ class WaferMapViewer {
             this.debugLog('🔷 [DEBUG] 그리드 컨테이너 표시 설정 완료');
         }
 
-        console.log('🔷 [GRID_FROM_LABEL] showGrid 호출:', { paths: actualPaths.length, first: actualPaths[0] });
+        console.log('🔷 [GRID_FROM_LABEL] showGrid 호출:', {
+            paths: actualPaths.length,
+            first: actualPaths[0],
+            last: actualPaths[actualPaths.length - 1],
+            lotMode: this.lotMode,
+            prefix: this.currentFolderPrefix
+        });
         this.showGrid(actualPaths, true);  // 🔥 라벨 Explorer에서 호출 시 상태 저장 건너뛰기
+
+        // 🔥 디버그: 그리드 생성 후 DOM 상태와 첫 번째 썸네일 URL 확인
+        setTimeout(() => {
+            const g = document.getElementById('image-grid');
+            const wraps = g ? g.querySelectorAll('.grid-thumb-wrap') : [];
+            const firstImg = wraps[0]?.querySelector('img');
+            console.log('🔷 [GRID_FROM_LABEL] 그리드 생성 결과:', {
+                gridDisplay: g?.style.display,
+                wrapCount: wraps.length,
+                firstSrc: firstImg?.dataset?.src?.substring(0, 100),
+                gridMode: this.gridMode
+            });
+        }, 200);
 
         // ✅ showGrid가 그리드를 재생성하므로 attribute를 다시 설정
         const gridAfter = document.getElementById('image-grid');
