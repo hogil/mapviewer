@@ -2731,6 +2731,9 @@ const elapsed = Math.round(performance.now() - t0);
 | 4 | `browse-folders` 중첩 ThreadPoolExecutor — DIRLIST_EXECUTOR 내에서 새 ThreadPool 생성 | GIL 경합 + 스레드 스폰 오버헤드, 콜드스타트 시 207ms | 중첩 제거 → `DIRLIST_EXECUTOR` 직접 사용 + 결과 메모리 캐시(60초 TTL) + 시작 시 프리로드 | 207ms → 31ms |
 | 5 | HTML/JS/CSS 무압축 전송 — 696KB (HTML 64 + JS 531 + CSS 101) | 네트워크 전송 + 브라우저 파싱 시간 증가 | pre-gzip: 서버 시작 시 `gzip.compress()` → `Content-Encoding: gzip` 직접 서빙 (GZipMiddleware Python 3.13 버그 우회) | 696KB → 147KB (▼79%) |
 | 6 | 백그라운드 init GIL 경합 — 인덱스 빌드가 서버 시작 직후 실행 | 단일 워커에서 인덱스 빌드(CPU/IO 집약)가 이벤트 루프를 굶김, 모든 API 4~6초 지연 | 백그라운드 init 10초 지연 시작 + 단계 사이 `asyncio.sleep(0)` yield | 첫 페이지 로드 시 경합 제거 |
+| 7 | `list_dir_fast` 중첩 ThreadPoolExecutor — 100개+ 파일 시 새 ThreadPool 생성 | 인덱스 빌드 중 GIL 경합으로 api/files 10.9초 지연 | 중첩 제거 → 순차 처리 (이미 DIRLIST_EXECUTOR에서 실행) | 10,965ms → 48ms |
+| 8 | `_walk_and_collect` GIL 독점 — os.walk 전체 순회 중 GIL 미해제 | 인덱스 빌드 중 모든 API 응답 3~11초 지연 | `time.sleep(0.01)` 매 10 디렉토리 + `_build_lookup_indices` 매 5000건 yield | 인덱스 빌드 중에도 API 48ms 응답 |
+| 9 | IndexService `run_in_executor(None)` — DEFAULT executor 사용 | 인덱스 빌드가 DEFAULT executor 점유 | IO_POOL 전용 executor 주입 (`index_service._io_pool = IO_POOL`) | executor 분리 |
 
 콜드스타트 측정 결과 (2026-03-27 19:26, 서버 준비 직후 17ms 만에 측정):
 
@@ -3639,18 +3642,35 @@ const ms = Math.round(performance.now() - t0);
 - **테스트**: LOT Mode ON → Label Explorer 클래스 폴더 선택 → 그리드가 LOT 그룹별로 정리되어야 PASS
 - **커밋**: `31b6f89`
 
-### 그리드 썸네일 5-10초 멈춤 후 일괄 로드 (배치 블로킹)
+### 그리드 썸네일 5-10초 멈춤 후 일괄 로드 (배치 블로킹 + 서버 POST 블로킹)
 - **버그**: 그리드에서 썸네일이 개별 표시되지 않고 5-10초 멈춘 후 24개가 한번에 표시
-- **원인**: `preloadBatch()` (줄 325)에서 `Promise.allSettled(promises)` — 배치 내 24개 썸네일 전부 완료 대기 후 한번에 반환. `loadCurrentFolderThumbnails()`도 `await preloadBatch()`로 블로킹
-- **수정**: (1) `Promise.allSettled(promises)` → `batch.forEach(path => this.loadThumbnail(path))` fire-and-forget (2) `async loadCurrentFolderThumbnails` → 동기 함수 + `preloadBatch().catch(() => {})` 비대기
-- **파일**: `js/main.js` 줄 320 (preloadBatch), 줄 19428 (loadCurrentFolderThumbnails)
-- **측정 결과**:
-  - 서버 썸네일 생성 속도: WME/Label 경로 무관 ~630ms/개 (cold), ~325ms/개 (cached)
+- **원인 1 (클라이언트)**: `preloadBatch()` (줄 325)에서 `Promise.allSettled(promises)` — 배치 내 24개 전부 완료 대기
+- **원인 2 (서버)**: `preloadBatch()`가 POST `/api/thumbnail/preload` → 서버 `asyncio.gather()`로 전체 배치 생성 완료까지 HTTP 응답 블로킹 (api/main.py 줄 7471)
+- **수정**: (1) `/api/thumbnail/preload` POST 호출 완전 제거 (2) 개별 `loadThumbnail()` fire-and-forget (3) `loadCurrentFolderThumbnails` 비동기 대기 제거
+- **파일**: `js/main.js` 줄 268-280 (preloadBatch 재작성), 줄 19428 (loadCurrentFolderThumbnails)
+- **측정 결과** (Playwright 실측, 썸네일 삭제 + 서버 재시작 + 새 브라우저):
+  - 서버 썸네일 생성 속도: WME/Label 경로 무관 ~630ms/개 (cold 순차), ~325ms/개 (cached)
   - 24개 병렬 cold: 1,773ms 전체 (73ms/개 effective)
-  - 변경 전: 클릭 → 1.8초 무응답 → 24개 동시 표시
-  - 변경 후: 클릭 → 0.65초에 첫 이미지 → 이후 계속 하나씩 채워짐
-- **테스트**: 썸네일 삭제 후 폴더 선택 → 첫 썸네일이 1초 이내 표시 + 이후 점진적 로드되어야 PASS. 5초 이상 빈 그리드 후 일괄 표시 시 FAIL
-- **커밋**: `31b6f89`
+  - 변경 전: 클릭 → **5-10초 무응답** → 24개 동시 표시
+  - 변경 후: 클릭 → **54ms에 첫 썸네일** → **324ms에 14개 로드** (40개 그리드, LOT 그룹별)
+- **테스트**: 썸네일 삭제 + 서버 재시작 + 새 브라우저 → Label Explorer 클래스 선택 → 첫 썸네일 100ms 이내 + 500ms 이내 뷰포트 채워짐이면 PASS
+- **커밋**: `31b6f89` → `2eb9fc2`
+
+### 그리드 뷰포트 외 3000개 전체 로드 (백그라운드 프리로드 무제한)
+- **버그**: palette_3k 등 3000개 이미지 폴더에서 그리드 표시 시 뷰포트에 보이는 ~50개뿐 아니라 전체 3000개를 순차 로드
+- **원인**: `_feedBackgroundGridBatch()`가 `grid.querySelectorAll('.grid-thumb-img:not([data-grid-loaded])')` — **전체 DOM 3000개**에서 미로드 이미지 선택 → 24개씩 계속 큐잉 → drainQueue → 다시 feed → 무한 반복으로 3000개 전부 로드
+- **수정**: `_feedBackgroundGridBatch()`에서 `scrollParent.scrollTop ± vpH*0.5` 범위 내 이미지만 큐잉. `wrap.offsetTop` 기반 범위 체크, 범위 밖이면 skip/break
+- **파일**: `js/main.js` 줄 19080-19110 (_feedBackgroundGridBatch)
+- **테스트**: 3000개 이미지 폴더 선택 → 15초 대기 → 썸네일 요청 수 < 100이면 PASS (뷰포트+버퍼만). 3000개 전부 요청 시 FAIL
+- **커밋**: `2eb9fc2`
+
+### lifespan browse_folders() 프리로드가 서버 시작 블로킹
+- **버그**: `_lifespan_background_init()`에서 `await browse_folders()` 호출 → lifespan yield 전 블로킹 → 서버 포트 열리지 않음
+- **원인**: `await browse_folders()`가 동기적으로 완료 대기 — CLAUDE.md 규칙 "yield 전 무거운 작업 금지" 위반
+- **수정**: `asyncio.ensure_future(_preload_browse())` — 백그라운드 비동기 실행으로 변경
+- **파일**: `api/main.py` 줄 1721-1729
+- **테스트**: 서버 시작 후 15초 이내 `curl https://localhost/api/config` 응답이면 PASS
+- **커밋**: `2eb9fc2` (amend)
 
 ### Navigator 썸네일 preload가 메인 이미지 블로킹
 - **버그**: Label Explorer에서 이미지 클릭 시 Navigator가 ±30개(최대 61개) 썸네일을 즉시 `img.src` 설정 → 브라우저 HTTP 연결 6개를 썸네일이 점유 → 메인 이미지가 대기열 뒤로 밀림

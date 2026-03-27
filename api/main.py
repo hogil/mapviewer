@@ -453,6 +453,7 @@ index_service = IndexService(
     lock_wait_seconds=INDEX_LOCK_WAIT_SECONDS,
     logger=logging.getLogger("uvicorn.error"),
 )
+index_service._io_pool = IO_POOL  # DEFAULT executor 대신 IO_POOL 사용 (GIL 경합 감소)
 FILE_INDEX = index_service.file_index
 FILE_INDEX_LOCK = index_service.lock
 FILE_INDEX_KEYS = index_service.keys
@@ -1717,12 +1718,14 @@ async def _lifespan_background_init():
             pass
     asyncio.ensure_future(loop.run_in_executor(DIRLIST_EXECUTOR, _warm_disk_cache))
 
-    # 0.5) browse-folders 캐시 프리로드 — 첫 요청 207ms → 0ms
-    try:
-        await browse_folders()
-        bootlog.info("✅ [STARTUP] browse-folders 캐시 프리로드 완료")
-    except Exception:
-        pass
+    # 0.5) browse-folders 캐시 프리로드 — 백그라운드 (lifespan 블로킹 방지)
+    async def _preload_browse():
+        try:
+            await browse_folders()
+            bootlog.info("✅ [STARTUP] browse-folders 캐시 프리로드 완료")
+        except Exception:
+            pass
+    asyncio.ensure_future(_preload_browse())
 
     await asyncio.sleep(0)  # yield to event loop
 
@@ -4516,44 +4519,20 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
                     continue
                 entries_to_process.append(entry)
         
-        # 🔥 대량 파일 처리 시에만 병렬 처리 (오버헤드 최소화)
-        if len(entries_to_process) > 100:
-            def process_entry(entry):
-                typ = "directory" if entry.is_dir(follow_symlinks=False) else "file"
-                entry_path_str = str(entry.path).replace('\\', '/')
-                # ROOT_DIR 부분을 제거하여 상대 경로 생성
-                if entry_path_str.startswith(root_dir_str):
-                    root_relative = entry_path_str[root_dir_len:].lstrip('/')
-                else:
-                    root_relative = entry.name
-                
-                return {
-                    "name": entry.name, 
-                    "type": typ, 
-                    "path": entry_path_str,
-                    "root_relative": root_relative  # ROOT_DIR 기준 절대 경로
-                }
-            
-            # 🔥 병렬 처리 (대량 파일 처리 시 성능 향상, SEARCH_WORKERS 사용)
-            with ThreadPoolExecutor(max_workers=config.SEARCH_WORKERS) as executor:
-                items = list(executor.map(process_entry, entries_to_process))
-        else:
-            # 🔥 소량 파일은 순차 처리 (오버헤드 방지)
-            for entry in entries_to_process:
-                typ = "directory" if entry.is_dir(follow_symlinks=False) else "file"
-                entry_path_str = str(entry.path).replace('\\', '/')
-                # ROOT_DIR 부분을 제거하여 상대 경로 생성
-                if entry_path_str.startswith(root_dir_str):
-                    root_relative = entry_path_str[root_dir_len:].lstrip('/')
-                else:
-                    root_relative = entry.name
-                
-                items.append({
-                    "name": entry.name, 
-                    "type": typ, 
-                    "path": entry_path_str,
-                    "root_relative": root_relative  # ROOT_DIR 기준 절대 경로
-                })
+        # 🔥 순차 처리 (중첩 ThreadPool 제거 — GIL 경합 방지, 이미 DIRLIST_EXECUTOR에서 실행 중)
+        for entry in entries_to_process:
+            typ = "directory" if entry.is_dir(follow_symlinks=False) else "file"
+            entry_path_str = str(entry.path).replace('\\', '/')
+            if entry_path_str.startswith(root_dir_str):
+                root_relative = entry_path_str[root_dir_len:].lstrip('/')
+            else:
+                root_relative = entry.name
+            items.append({
+                "name": entry.name,
+                "type": typ,
+                "path": entry_path_str,
+                "root_relative": root_relative
+            })
         
         directories = [x for x in items if x["type"] == "directory"]
         files = [x for x in items if x["type"] == "file"]
