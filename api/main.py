@@ -35,7 +35,7 @@ from urllib.parse import urlparse, parse_qs
 
 from fastapi import FastAPI, HTTPException, Query, Request, Path as PathParam, Depends, BackgroundTasks, Body
 from fastapi import Response as FastAPIResponse
-from fastapi.responses import JSONResponse, FileResponse, Response, RedirectResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, FileResponse, Response, RedirectResponse, PlainTextResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware

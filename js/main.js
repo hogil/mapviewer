@@ -2836,14 +2836,21 @@ class WaferMapViewer {
         if (this.cachedRootPath) {
             return this.cachedRootPath;
         }
-        
+
         try {
-            const response = await fetch('/api/root-folder');
-            if (!response.ok) {
-                throw new Error(`Failed to get root folder: ${response.status}`);
+            // 프리페치된 데이터 우선 사용
+            let data = null;
+            if (window.__prefetch?.rootFolder) {
+                data = await window.__prefetch.rootFolder;
+                window.__prefetch.rootFolder = null;
             }
-            
-            const data = await response.json();
+            if (!data) {
+                const response = await fetch('/api/root-folder');
+                if (!response.ok) {
+                    throw new Error(`Failed to get root folder: ${response.status}`);
+                }
+                data = await response.json();
+            }
             this.cachedRootPath = data.root_folder;
             return this.cachedRootPath;
         } catch (error) {
@@ -4049,9 +4056,17 @@ class WaferMapViewer {
                     this.displayFoldersAsIcons(this.cachedProductFolders);
                     return;
                 }
-                
-                const response = await fetch('/api/browse-folders?path=&force_root=true');
-                    const data = await response.json();
+
+                // 프리페치된 데이터 우선 사용
+                let data = null;
+                if (window.__prefetch?.browseFolders) {
+                    data = await window.__prefetch.browseFolders;
+                    window.__prefetch.browseFolders = null;
+                }
+                if (!data) {
+                    const response = await fetch('/api/browse-folders?path=&force_root=true');
+                    data = await response.json();
+                }
                     const folders = (data.folders || [])
 
                         .filter(folder => 
@@ -6387,23 +6402,18 @@ class WaferMapViewer {
             console.error('[RefMap] 초기화 실패:', error);
         }
 
-        // ✅ 1단계: 서버 설정 로드 (병렬 가능)
-        await this.loadServerConfig();
-        
-        // ✅ 2단계: 색상 정보 로드 (사용자 정보보다 먼저)
-        await this.loadColorLegends();
-        
-        // ✅ 3단계: 사용자 정보 로드 (currentUser 설정)
-        await this.loadUserInfo();
-        
+        // ✅ 1~3단계: 서버 설정 + 색상 + 사용자 정보 병렬 로드
+        await Promise.all([
+            this.loadServerConfig(),
+            this.loadColorLegends(),
+            this.loadUserInfo(),
+        ]);
+
         // ✅ 4단계: 색상 렌더링 (모든 준비 완료 후)
         this.renderColorLegends();
         this.showColorLegends();
 
-        // ✅ 5단계: 사용자 개인 설정 로드 (gridCols 등)
-        await this._loadUserPrefs();
-
-        // ✅ 6단계: MY LOT 선로딩 (currentUser 설정 완료 후)
+        // ✅ 5단계: MY LOT 선로딩 (fire-and-forget)
         this.myLotModal?.refreshData?.().catch((error) => {
             console.error('[WaferMapViewer] MY LOT prefetch failed:', error);
         });
@@ -6415,28 +6425,22 @@ class WaferMapViewer {
         // 먼저 이미지 폴더 최상위로 이동
 
         try {
-            // 🔥 초기화 시 currentFolderPath를 ROOT_DIR로 설정
-            const rootPath = await this.getRootPath();
+            // ✅ 6단계: 사용자 설정 + 폴더 초기화 병렬 실행
+            // current-folder와 browse-folders는 HTML 프리페치 활용
+            const prefetchCF = window.__prefetch?.currentFolder;
+            if (prefetchCF) window.__prefetch.currentFolder = null;
+            const [, rootPath, serverData] = await Promise.all([
+                this._loadUserPrefs(),
+                this.getRootPath(),
+                (prefetchCF ?? fetch('/api/current-folder').then(r => r.json())).catch(() => ({})),
+                this.loadFolderBrowser('')
+            ]);
+
             if (rootPath) {
                 this.currentFolderPath = rootPath;
                 this.currentFolderPrefix = '';
                 this.debugLog('🔍 [INIT] ROOT_DIR로 초기화:', rootPath);
             }
-            
-            // 🔥 resetToImageFolder는 이미 ROOT_DIR이므로 불필요한 API 호출 스킵
-            // await this.resetToImageFolder();
-
-            // 🔥 초기화 작업들을 병렬로 실행 (UI 블로킹 최소화)
-            const [serverData, folderBrowserResult] = await Promise.all([
-                // loadFolderBrowser와 current-folder를 병렬로 처리
-                (async () => {
-                    const response = await fetch('/api/current-folder');
-                    return await response.json();
-                })(),
-                // 1순위: Wafer Map Explorer 폴더 목록과 제품 선택 폴더 최우선 로딩
-                // 🔥 초기화 시에는 빈 문자열로 ROOT_DIR의 하위 폴더만 가져오기 (force_root=true 사용)
-                this.loadFolderBrowser('')
-            ]);
 
             // 🔥 current folder 확인 및 ROOT_DIR로 강제 변경
             try {
@@ -6569,12 +6573,13 @@ class WaferMapViewer {
     // 🔥 서버 설정 로드 (피라미드 레벨, zoom 기준 등)
     async loadServerConfig() {
         try {
-            const response = await fetch('/api/config');
-            if (!response.ok) {
+            // 프리페치된 데이터 우선 사용 (HTML에서 JS 로드 전에 시작됨)
+            const config = await (window.__prefetch?.config ?? fetch('/api/config').then(r => r.ok ? r.json() : null));
+            if (window.__prefetch?.config) window.__prefetch.config = null; // 1회 사용
+            if (!config) {
                 console.warn('[CONFIG] 서버 설정 로드 실패, 기본값 사용');
                 return;
             }
-            const config = await response.json();
 
             // 서버에서 받은 설정으로 업데이트
             if (config.PYRAMID_LEVELS && Array.isArray(config.PYRAMID_LEVELS)) {
@@ -16915,17 +16920,19 @@ class WaferMapViewer {
                     imgBtn.onmouseover = (e) => {
                         const key = `${cls}/${img.name}`;
                         const isSelected = labelSelection.selected.includes(key);
+                        const isClassSelected = labelSelection.selectedClasses.includes(cls);
                         // 선택된 항목에는 hover 효과 없음
-                        if (!isSelected && !this.dragStartKey) {
+                        if (!isSelected && !isClassSelected && !this.dragStartKey) {
                             imgBtn.style.background = '#08e'; // hover 색상
                         }
                     };
-                    
+
                     imgBtn.onmouseout = (e) => {
                         const key = `${cls}/${img.name}`;
                         const isSelected = labelSelection.selected.includes(key);
+                        const isClassSelected = labelSelection.selectedClasses.includes(cls);
                         // 선택되지 않은 항목만 원래 색으로 복원
-                        if (!isSelected && !this.dragStartKey) {
+                        if (!isSelected && !isClassSelected && !this.dragStartKey) {
                             imgBtn.style.background = '#222';
                         }
                     };
@@ -25654,13 +25661,21 @@ class WaferMapViewer {
      */
     async loadColorLegends(signal = null) {
         try {
-            // ✅ 캐시 버스터 추가하여 최신 색상 데이터 가져오기
-            const cacheBuster = Date.now();
-            const response = await fetch(`/logs/color-legends.json?_t=${cacheBuster}`, { signal });
-            if (!response.ok) {
-                throw new Error(`Failed to load color legends: ${response.status} ${response.statusText}`);
+            // 프리페치된 데이터 우선 사용 (초기 로드 시)
+            let data = null;
+            if (window.__prefetch?.colorLegends && !signal) {
+                data = await window.__prefetch.colorLegends;
+                window.__prefetch.colorLegends = null; // 1회 사용
             }
-            this.colorLegends = await response.json();
+            if (!data) {
+                const cacheBuster = Date.now();
+                const response = await fetch(`/logs/color-legends.json?_t=${cacheBuster}`, { signal });
+                if (!response.ok) {
+                    throw new Error(`Failed to load color legends: ${response.status} ${response.statusText}`);
+                }
+                data = await response.json();
+            }
+            this.colorLegends = data;
             return this.colorLegends;
         } catch (error) {
             // 🔥 AbortError는 정상 (이미지 로딩 중단 시)

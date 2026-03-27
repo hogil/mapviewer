@@ -8,8 +8,16 @@
     <!-- Favicon 추가 -->
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     
-    <!-- DNS prefetch만 사용 (preload 제거로 경고 해결) -->
-    <link rel="dns-prefetch" href="//api">
+    <!-- API 프리페치: JS 모듈 로드 전에 API 호출 시작 (워터폴 제거) -->
+    <script>
+    window.__prefetch = {
+        config: fetch('/api/config').then(r => r.json()).catch(() => null),
+        colorLegends: fetch('/logs/color-legends.json').then(r => r.json()).catch(() => null),
+        rootFolder: fetch('/api/root-folder').then(r => r.json()).catch(() => null),
+        currentFolder: fetch('/api/current-folder').then(r => r.json()).catch(() => null),
+        browseFolders: fetch('/api/browse-folders?path=&force_root=true').then(r => r.json()).catch(() => null),
+    };
+    </script>
     <style>
         :root {
             --bg-color: #1a1a1a;
