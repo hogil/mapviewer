@@ -265,61 +265,17 @@ class ThumbnailManager {
         }
     }
 
-    async preloadBatch(imagePaths) {
+    preloadBatch(imagePaths) {
         // 이미 캐시된 것 제외
-
         const uncachedPaths = imagePaths.filter(path => {
             const cached = this.cache.get(path);
-
             return !cached || (!cached.url && !cached.loading);
         });
-
         if (uncachedPaths.length === 0) return;
 
-        // 배치 크기 제한
-
+        // 🔥 개별 fire-and-forget 로딩 (서버 배치 POST 제거 — asyncio.gather 블로킹 원인)
         const batchSize = Math.min(uncachedPaths.length, THUMB_BATCH_SIZE || 24);
-        const batch = uncachedPaths.slice(0, batchSize);
-
-        // 서버 배치 프리로드 시도
-
-        try {
-            const response = await fetch('/api/thumbnail/preload', {
-                method: 'POST',
-
-                headers: { 'Content-Type': 'application/json' },
-
-                body: JSON.stringify({ paths: batch }),
-
-                signal: this.abortController?.signal
-            });
-
-            if (response.ok) {
-                const result = await response.json();
-
-                if (batch.length > 20) { // 대량 처리시만 로그
-
-                    this.debugLog(`썸네일 생성: ${result.results?.length || batch.length}개`);
-                }
-
-                return result;
-            } else if (response.status === 404) {
-                // 404는 정상 (API 미지원) - 조용히 무시
-
-                this.debugLog(`🚀 배치 프리로드 API 미지원 (404) - 클라이언트 캐시만 사용`);
-            }
-        } catch (error) {
-            // 🔥 AbortError는 조용히 처리 (중단된 요청)
-
-            if (error.name === 'AbortError') {
-                return;
-            }
-
-            console.warn('썸네일 배치 로드 실패, 개별 로딩으로 전환:', error);
-        }
-
-        // 서버 배치 실패 시 개별 로딩 — fire-and-forget (각 썸네일 즉시 표시)
-        batch.forEach(path => this.loadThumbnail(path));
+        uncachedPaths.slice(0, batchSize).forEach(path => this.loadThumbnail(path));
     }
 
     trimCache() {
@@ -19118,27 +19074,38 @@ class WaferMapViewer {
     }
 
     /**
-     * 🔥 뷰포트 로드 완료 후 나머지 이미지를 백그라운드에서 점진적으로 프리로드.
-     * 큐가 부족할 때마다 즉시 30개씩 피드 — requestIdleCallback 지연 없음.
+     * 🔥 뷰포트 근처 이미지만 백그라운드 프리로드 (전체 3000개 로드 방지).
+     * 현재 스크롤 위치 기준 ±뷰포트 높이 반경 내 미로드 이미지만 큐잉.
      */
     _feedBackgroundGridBatch() {
         if (this._bgFeedRunning) return;
         this._bgFeedRunning = true;
 
-        // setTimeout(0)으로 현재 콜스택 완료 후 즉시 실행
         setTimeout(() => {
             this._bgFeedRunning = false;
             if (!this.gridMode || this.gridLoadingPaused) return;
 
             const grid = document.getElementById('image-grid');
             if (!grid) return;
+            const scrollParent = grid.parentElement;
+            if (!scrollParent) return;
 
-            const unloaded = grid.querySelectorAll('.grid-thumb-img:not([data-grid-loaded="true"]):not([data-loading="true"])');
+            // 🔥 뷰포트 기반 범위 계산: 현재 스크롤 ± 뷰포트 높이×0.5
+            const vpH = scrollParent.clientHeight;
+            const scrollTop = scrollParent.scrollTop;
+            const rangeTop = scrollTop - vpH * 0.5;
+            const rangeBottom = scrollTop + vpH * 1.5;
+
+            const wraps = this.gridThumbWraps || grid.querySelectorAll('.grid-thumb-wrap');
             let count = 0;
-            for (const img of unloaded) {
-                if (!img.dataset?.src || this.gridQueuedImages.has(img)) continue;
+            for (const wrap of wraps) {
+                const top = wrap.offsetTop;
+                if (top < rangeTop) continue;
+                if (top > rangeBottom) break;
+                const img = wrap.querySelector('.grid-thumb-img');
+                if (!img || !img.dataset?.src || img.dataset.gridLoaded === 'true' || img.dataset.loading === 'true' || this.gridQueuedImages.has(img)) continue;
                 this.enqueueGridThumbnail(img, true);
-                if (++count >= 24) break; // 🔥 24개씩 피드 (큐 12 + 대기 12)
+                if (++count >= 24) break;
             }
         }, 0);
     }
