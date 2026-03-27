@@ -16610,8 +16610,6 @@ class WaferMapViewer {
                 } catch {}
             })).then(() => {
                 this.debugLog(`🚀 프리페치 완료: ${uncachedClasses.length}개 클래스`);
-                // 🔥 썸네일 백그라운드 프리워밍: 프리페치된 이미지의 썸네일을 미리 생성
-                this._prefetchLabelThumbnails();
             });
         }
 
@@ -17880,40 +17878,6 @@ class WaferMapViewer {
 
         this.renderLabelExplorerContent(container, classes, classToImgList, labelSelection);
         container.scrollTop = scrollTop;
-    }
-
-    /**
-     * 🔥 Label Explorer 썸네일 백그라운드 프리워밍 — 폴더 클릭 전에 썸네일 캐시 준비
-     * classToImgListCache에 있는 모든 이미지의 썸네일을 8개씩 병렬로 미리 요청하여
-     * 폴더 선택 시 즉시 그리드가 표시되도록 한다.
-     */
-    _prefetchLabelThumbnails() {
-        const cache = this.classToImgListCache;
-        if (!cache) return;
-        const params = this.getPersonalizedParams?.() || '';
-        const paths = [];
-        for (const cls of Object.keys(cache)) {
-            for (const item of (cache[cls] || [])) {
-                if (item.type === 'file' && item.root_relative) {
-                    paths.push(this.ensureFolderPrefix(item.root_relative));
-                }
-            }
-        }
-        if (paths.length === 0) return;
-
-        // 8개씩 병렬 fetch (서버 과부하 방지)
-        const BATCH = 8;
-        let idx = 0;
-        const next = () => {
-            const batch = paths.slice(idx, idx + BATCH);
-            if (batch.length === 0) return;
-            idx += BATCH;
-            Promise.all(batch.map(p =>
-                fetch(`/api/thumbnail?path=${encodeURIComponent(p)}&size=512${params}`)
-                    .catch(() => {})
-            )).then(next);
-        };
-        next();
     }
 
     /**
@@ -23481,27 +23445,25 @@ class WaferMapViewer {
             this.debugLog('🔷 [DEBUG] 그리드 컨테이너 표시 설정 완료');
         }
 
-        console.log('🔷 [GRID_FROM_LABEL] showGrid 호출:', {
-            paths: actualPaths.length,
-            first: actualPaths[0],
-            last: actualPaths[actualPaths.length - 1],
-            lotMode: this.lotMode,
-            prefix: this.currentFolderPrefix
-        });
-        this.showGrid(actualPaths, true);  // 🔥 라벨 Explorer에서 호출 시 상태 저장 건너뛰기
+        // 🔥 클릭 즉시 썸네일 배치 생성 — showGrid 전에 서버에 미리 요청
+        {
+            const params = this.getPersonalizedParams?.() || '';
+            const BATCH = 16;
+            let idx = 0;
+            const fireBatch = () => {
+                const batch = actualPaths.slice(idx, idx + BATCH);
+                if (batch.length === 0) return;
+                idx += BATCH;
+                batch.forEach(p => {
+                    const img = new Image();
+                    img.src = `/api/thumbnail?path=${encodeURIComponent(p)}&size=512${params}`;
+                });
+                if (idx < actualPaths.length) setTimeout(fireBatch, 0);
+            };
+            fireBatch();
+        }
 
-        // 🔥 디버그: 그리드 생성 후 DOM 상태와 첫 번째 썸네일 URL 확인
-        setTimeout(() => {
-            const g = document.getElementById('image-grid');
-            const wraps = g ? g.querySelectorAll('.grid-thumb-wrap') : [];
-            const firstImg = wraps[0]?.querySelector('img');
-            console.log('🔷 [GRID_FROM_LABEL] 그리드 생성 결과:', {
-                gridDisplay: g?.style.display,
-                wrapCount: wraps.length,
-                firstSrc: firstImg?.dataset?.src?.substring(0, 100),
-                gridMode: this.gridMode
-            });
-        }, 200);
+        this.showGrid(actualPaths, true);
 
         // ✅ showGrid가 그리드를 재생성하므로 attribute를 다시 설정
         const gridAfter = document.getElementById('image-grid');
