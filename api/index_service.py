@@ -387,6 +387,7 @@ class IndexService:
         self._name_to_paths: Dict[str, List[str]] = {}  # filename -> [rel_paths] (classification 제외)
         self._lock = RLock()
         self._async_build_lock = asyncio.Lock()
+        self._io_pool: Optional[Any] = None  # 외부에서 주입 (DEFAULT executor 경합 방지)
         self._cache_loaded = False
 
         self.ready = False
@@ -598,6 +599,10 @@ class IndexService:
             dirnames[:] = [d for d in dirnames if d not in skip_dirs]
             total_dirs += 1
 
+            # 🔥 매 10 디렉토리마다 GIL 해제 (10ms) — 다른 스레드(API 요청)가 실행 가능
+            if total_dirs % 10 == 0:
+                time.sleep(0.01)
+
             if not filenames:
                 continue
 
@@ -651,7 +656,7 @@ class IndexService:
             
             try:
                 sorted_keys, sorted_names, total_dirs, completed_dirs = await loop.run_in_executor(
-                    None, self._walk_and_collect
+                    self._io_pool, self._walk_and_collect
                 )
 
                 # _save_cache + _build_lookup_indices 를 executor 에서 실행 (이벤트 루프 블로킹 방지)
@@ -669,7 +674,7 @@ class IndexService:
                         self.logger.info(f"✅ [INDEX] 캐시 파일 확인: {self.cache_file.name}, 크기: {cache_size:,} bytes")
                     self._build_lookup_indices()
 
-                await loop.run_in_executor(None, _finalize_build)
+                await loop.run_in_executor(self._io_pool, _finalize_build)
 
                 self.total_files = len(sorted_keys)
                 self.total_dirs = total_dirs
@@ -736,6 +741,9 @@ class IndexService:
         name_to_paths: Dict[str, List[str]] = {}
         classification_dir_names = {"classification", "classification_chips"}
         for i, (key, name) in enumerate(zip(self._keys, self._names)):
+            # 🔥 매 5000건마다 GIL 해제 — API 요청 처리 기회 제공
+            if i % 5000 == 0 and i > 0:
+                time.sleep(0.01)
             lot = name.split("_", 1)[0]
             if lot not in lot_idx:
                 lot_idx[lot] = []

@@ -85,8 +85,8 @@ SSL_KEYFILE = os.getenv("SSL_KEYFILE", "cert/server.key")
 PYRAMID_LEVELS = [float(x) for x in os.getenv("PYRAMID_LEVELS", "0.2,0.5,0.7,1.0").split(",")]
 # zoom 기준 (쉼표로 구분, 기본: 0.25,0.5,0.75) - ≤0.25→0.2, ≤0.5→0.5, ≤0.75→0.7, >0.75→1.0
 PYRAMID_ZOOM_THRESHOLDS = [float(x) for x in os.getenv("PYRAMID_ZOOM_THRESHOLDS", "0.25,0.5,0.75").split(",")]
-THUMB_PREFETCH_BATCH = int(os.getenv("THUMB_PREFETCH_BATCH", "32"))
-THUMB_CLIENT_MAX_CONCURRENCY = int(os.getenv("THUMB_CLIENT_MAX_CONCURRENCY", "12"))
+THUMB_PREFETCH_BATCH = int(os.getenv("THUMB_PREFETCH_BATCH", "84"))
+THUMB_CLIENT_MAX_CONCURRENCY = int(os.getenv("THUMB_CLIENT_MAX_CONCURRENCY", "42"))
 PYRAMID_FORMAT = os.getenv("PYRAMID_FORMAT", "WEBP").upper()
 PYRAMID_Q = int(os.getenv("PYRAMID_Q", "100"))
 PYRAMID_PNG_COMPRESSION = int(os.getenv("PYRAMID_PNG_COMPRESSION", "3"))
