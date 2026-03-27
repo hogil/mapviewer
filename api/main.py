@@ -5100,7 +5100,7 @@ async def generate_thumbnail(
             return image_mtime, 'generate'
 
         image_mtime, cache_status = await asyncio.get_running_loop().run_in_executor(
-            None, _check_thumb_cache_sync
+            THUMBNAIL_EXECUTOR, _check_thumb_cache_sync
         )
 
         if cache_status == 'missing':
@@ -7273,7 +7273,7 @@ async def get_thumbnail(
             return image_path, 'ok', image_stat
 
         image_path, status, image_stat = await asyncio.get_running_loop().run_in_executor(
-            None, _validate_path_sync
+            THUMBNAIL_EXECUTOR, _validate_path_sync
         )
 
         if status == 'forbidden':
