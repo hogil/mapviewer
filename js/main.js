@@ -23445,24 +23445,6 @@ class WaferMapViewer {
             this.debugLog('🔷 [DEBUG] 그리드 컨테이너 표시 설정 완료');
         }
 
-        // 🔥 클릭 즉시 썸네일 배치 생성 — showGrid 전에 서버에 미리 요청
-        {
-            const params = this.getPersonalizedParams?.() || '';
-            const BATCH = 16;
-            let idx = 0;
-            const fireBatch = () => {
-                const batch = actualPaths.slice(idx, idx + BATCH);
-                if (batch.length === 0) return;
-                idx += BATCH;
-                batch.forEach(p => {
-                    const img = new Image();
-                    img.src = `/api/thumbnail?path=${encodeURIComponent(p)}&size=512${params}`;
-                });
-                if (idx < actualPaths.length) setTimeout(fireBatch, 0);
-            };
-            fireBatch();
-        }
-
         this.showGrid(actualPaths, true);
 
         // ✅ showGrid가 그리드를 재생성하므로 attribute를 다시 설정
@@ -27380,13 +27362,43 @@ class WaferMapViewer {
             console.warn(`⚠️ [LOT-GRID] 복원할 스크롤 위치 없음 (scrollTop: ${scrollTopToRestore})`);
         }
 
-        // 🔥 썸네일 로드 (레이아웃 완료 후 실행하도록 setTimeout으로 변경)
+        // 🔥 뷰포트 이미지 즉시 로드 — 큐/대기 없이 src 직접 할당
+        {
+            const cols = this.gridCols || 4;
+            const INSTANT = cols * 6; // 뷰포트 약 6행
+            const wraps = this.gridThumbWraps;
+            for (let i = 0; i < Math.min(INSTANT, wraps.length); i++) {
+                const img = wraps[i]?.querySelector('.grid-thumb-img');
+                if (img && img.dataset.src && img.dataset.gridLoaded !== 'true') {
+                    img.src = img.dataset.src;
+                    img.style.opacity = '1';
+                    img.dataset.loading = 'true';
+                    if (img.complete && img.naturalWidth > 0) {
+                        img.dataset.gridLoaded = 'true';
+                        img.dataset.loading = 'false';
+                    } else {
+                        img.addEventListener('load', () => {
+                            img.dataset.gridLoaded = 'true';
+                            img.dataset.loading = 'false';
+                            img.style.opacity = '1';
+                        }, { once: true });
+                        img.addEventListener('error', () => {
+                            img.dataset.gridLoaded = 'error';
+                            img.dataset.loading = 'false';
+                            img.style.backgroundColor = '#444';
+                        }, { once: true });
+                    }
+                }
+            }
+        }
+
+        // 나머지 이미지는 스크롤 시 lazy load
         setTimeout(() => {
             this.loadVisibleGridThumbnails();
-        }, 50);  // 🔥 50ms 후 실행하여 CSS 그리드 레이아웃 완료 보장
+        }, 0);
 
         setTimeout(() => {
-            this.loadCurrentFolderThumbnails?.(sortedImages);  // 🔥 정렬된 순서로 전달
+            this.loadCurrentFolderThumbnails?.(sortedImages);
         }, 100);
 
         // 🔥 Measure overlay 활성 시 썸네일 URL을 measure-thumb으로 교체
