@@ -2719,6 +2719,75 @@ const elapsed = Math.round(performance.now() - t0);
 - JPEG Q=95, TJSAMP_444 동일 (1월 커밋 대비 검증)
 - 단일 이미지 Measure: Canvas에서 개인색 배경 + gradient 칩 + bold 숫자 텍스트
 
+**페이지 콜드스타트 (2,883ms → 422ms, ▼85%) — 2026-03-27**
+
+병목 원인 5가지와 수정 내용:
+
+| # | 병목 원인 | 영향 | 수정 | 효과 |
+|---|----------|------|------|------|
+| 1 | `_cleanup_pycache()` 매 시작 실행 — `os.walk` 전체 트리 순회 + `shutil.rmtree` | DEFAULT executor 300~500ms 점유, GIL 경합으로 모든 요청 지연 | 시작 시 제거 (배포 시점에만 수행) | executor 해방 |
+| 2 | `run_in_executor(None, ...)` — DEFAULT executor 사용 | 인덱스 로드/빌드가 DEFAULT executor를 점유, 요청 핸들러도 같은 executor 경합 | `IO_POOL`/`DIRLIST_EXECUTOR` 전용 executor로 분리 | GIL 경합 감소 |
+| 3 | `logs/color-legends.json` StaticFiles 서빙 — 112MB access.log 옆 FS 캐시미스 | 첫 요청 시 OS가 112MB 파일 메타데이터를 캐시하느라 1.5초 지연 | 메모리 캐시 + ETag 304 (서버 시작 시 `read_bytes()` → 메모리) | 1,589ms → 2ms |
+| 4 | `browse-folders` 중첩 ThreadPoolExecutor — DIRLIST_EXECUTOR 내에서 새 ThreadPool 생성 | GIL 경합 + 스레드 스폰 오버헤드, 콜드스타트 시 207ms | 중첩 제거 → `DIRLIST_EXECUTOR` 직접 사용 + 결과 메모리 캐시(60초 TTL) + 시작 시 프리로드 | 207ms → 31ms |
+| 5 | HTML/JS/CSS 무압축 전송 — 696KB (HTML 64 + JS 531 + CSS 101) | 네트워크 전송 + 브라우저 파싱 시간 증가 | pre-gzip: 서버 시작 시 `gzip.compress()` → `Content-Encoding: gzip` 직접 서빙 (GZipMiddleware Python 3.13 버그 우회) | 696KB → 147KB (▼79%) |
+| 6 | 백그라운드 init GIL 경합 — 인덱스 빌드가 서버 시작 직후 실행 | 단일 워커에서 인덱스 빌드(CPU/IO 집약)가 이벤트 루프를 굶김, 모든 API 4~6초 지연 | 백그라운드 init 10초 지연 시작 + 단계 사이 `asyncio.sleep(0)` yield | 첫 페이지 로드 시 경합 제거 |
+
+콜드스타트 측정 결과 (2026-03-27 19:26, 서버 준비 직후 17ms 만에 측정):
+
+```
+서버 시작    19:26:00.467
+서버 준비    19:26:02.624  (부팅 2.2초)
+측정 시작    19:26:02.643  (준비 후 19ms)
+
+리소스          응답시간   전송크기   순수API(TLS제외)
+─────────────────────────────────────────────────
+HTML(gzip)      214ms     11KB      ~4ms
+main.js(gzip)   220ms     122KB     ~10ms
+style.css(gzip) 209ms     14KB      ~0ms
+config          220ms     -         ~10ms
+color-legends   223ms     13KB      ~13ms
+browse-folders  242ms     78KB      ~32ms
+files(3000개)   282ms     575KB     ~72ms
+image(5MB)      298ms     5MB       ~88ms
+thumbnail       356ms     19KB      ~146ms(생성)
+```
+
+> 각 curl은 개별 TLS 핸드셰이크(~210ms) 포함. 브라우저는 HTTP/2로 TLS 1회.
+> 브라우저 실제 체감: TLS 210ms + API 병렬 ~100ms + JS 파싱 ~200ms ≈ **~500ms**
+
+BEFORE vs AFTER 비교:
+
+| 항목 | BEFORE | AFTER | 개선 |
+|------|--------|-------|------|
+| DOMContentLoaded | 2,883ms | 422ms | ▼85% |
+| browse-folders API | 1,589ms | 32ms | ▼98% |
+| color-legends API | 1,589ms | 2ms | ▼99% |
+| HTML 전송 | 64KB | 11KB | ▼83% |
+| JS 전송 | 531KB | 122KB | ▼77% |
+| CSS 전송 | 101KB | 14KB | ▼86% |
+| 총 전송량 | 696KB | 147KB | ▼79% |
+
+콜드스타트 전체 플로우 측정 (2026-03-27 19:33, 서버→페이지→폴더→그리드):
+
+```
+19:33:43.332  서버 시작
+19:33:45.463  서버 준비              +2.1s
+19:33:45.478  측정 시작              +15ms (준비 직후)
+19:33:46.233  페이지 리소스 완료     +755ms (HTML 11KB + JS 122KB + CSS 14KB, 모두 gzip)
+19:33:46.995  초기 API 완료          +762ms (config + color-legends + browse-folders)
+19:33:47.305  palette_3k 파일목록    +310ms (3000개, 575KB)
+19:33:51.774  그리드 썸네일 16장     +4,469ms (순차 curl, 각각 TLS 210ms 포함)
+```
+
+> 브라우저 실제 체감 (HTTP/2 병렬): TLS 1회(210ms) + 리소스 병렬(~100ms) + API(~30ms) + 파일목록(~70ms) + 썸네일 병렬(~350ms) ≈ **~760ms**
+> curl 순차 측정은 각 요청마다 TLS 핸드셰이크(~210ms)를 포함하므로 실제보다 느리게 보임
+
+기술 세부:
+- pre-gzip: Python 내장 `gzip` 모듈, 추가 패키지 불필요, Python 3.8+ 모든 버전 호환
+- `save_color_legends()` 호출 시 자동 캐시 갱신 (래퍼 함수)
+- browse-folders 캐시: 60초 TTL, 시작 시 프리로드
+- 백그라운드 init 10초 지연: 첫 페이지 로드 윈도우 확보, 이후 인덱스 빌드 정상 진행
+
 ---
 
 ## Phase 37: 이미지 무결성 검증 (깨짐/X표시/이상 맵 확인)
@@ -3561,6 +3630,50 @@ const ms = Math.round(performance.now() - t0);
 - **수정**: hash를 `dev:ino`(inode) 기반으로 변경 → 하드링크는 동일 inode → 원본 썸네일 캐시 즉시 재사용
 - **테스트**: Label Explorer 클래스 폴더 선택 → 이미지 로드 속도가 WME 그리드와 동등해야 PASS
 - **커밋**: `ca72dd6`
+
+### Label Explorer 그리드에서 LOT Mode 미적용
+- **버그**: LOT Mode 활성 상태에서 Label Explorer 클래스 폴더 선택 → 그리드가 LOT 그룹 없이 flat 표시
+- **원인**: `showGridFromLabelExplorer()`가 `showGrid(actualPaths, true, true)` 호출 — 3번째 인자 `forceFlatGrid=true`가 `showGrid()` 내부의 `if (this.lotMode && !forceFlatGrid)` 조건을 강제 우회
+- **수정**: `showGrid(actualPaths, true)` — `forceFlatGrid` 인자 제거하여 LOT Mode 활성 시 `showGridByLot()` 정상 호출
+- **파일**: `js/main.js` 줄 23459 (수정 전 23471)
+- **테스트**: LOT Mode ON → Label Explorer 클래스 폴더 선택 → 그리드가 LOT 그룹별로 정리되어야 PASS
+- **커밋**: `31b6f89`
+
+### 그리드 썸네일 5-10초 멈춤 후 일괄 로드 (배치 블로킹)
+- **버그**: 그리드에서 썸네일이 개별 표시되지 않고 5-10초 멈춘 후 24개가 한번에 표시
+- **원인**: `preloadBatch()` (줄 325)에서 `Promise.allSettled(promises)` — 배치 내 24개 썸네일 전부 완료 대기 후 한번에 반환. `loadCurrentFolderThumbnails()`도 `await preloadBatch()`로 블로킹
+- **수정**: (1) `Promise.allSettled(promises)` → `batch.forEach(path => this.loadThumbnail(path))` fire-and-forget (2) `async loadCurrentFolderThumbnails` → 동기 함수 + `preloadBatch().catch(() => {})` 비대기
+- **파일**: `js/main.js` 줄 320 (preloadBatch), 줄 19428 (loadCurrentFolderThumbnails)
+- **측정 결과**:
+  - 서버 썸네일 생성 속도: WME/Label 경로 무관 ~630ms/개 (cold), ~325ms/개 (cached)
+  - 24개 병렬 cold: 1,773ms 전체 (73ms/개 effective)
+  - 변경 전: 클릭 → 1.8초 무응답 → 24개 동시 표시
+  - 변경 후: 클릭 → 0.65초에 첫 이미지 → 이후 계속 하나씩 채워짐
+- **테스트**: 썸네일 삭제 후 폴더 선택 → 첫 썸네일이 1초 이내 표시 + 이후 점진적 로드되어야 PASS. 5초 이상 빈 그리드 후 일괄 표시 시 FAIL
+- **커밋**: `31b6f89`
+
+### Navigator 썸네일 preload가 메인 이미지 블로킹
+- **버그**: Label Explorer에서 이미지 클릭 시 Navigator가 ±30개(최대 61개) 썸네일을 즉시 `img.src` 설정 → 브라우저 HTTP 연결 6개를 썸네일이 점유 → 메인 이미지가 대기열 뒤로 밀림
+- **원인**: `thumbnail-navigator.js` `createThumbnailItem()`에서 `priorityRange = 30` → 61개 동시 `img.src` 할당
+- **수정**: (1) `priorityRange = 5`로 축소 (±5 = 11개만 즉시) (2) `loadRemainingThumbnails()` 메서드 추가 — 메인 이미지 로드 완료 후 8개/프레임씩 점진 로드 (3) Label Explorer `loadImage().then()` 내에서 `requestAnimationFrame(() => this.thumbnailNavigator.loadRemainingThumbnails())` 호출
+- **파일**: `js/thumbnail-navigator.js` 줄 1490 (priorityRange), 줄 1093 (loadRemainingThumbnails), `js/main.js` 줄 17257
+- **테스트**: Label Explorer 이미지 클릭 → 메인 이미지가 Navigator 썸네일보다 먼저 표시되어야 PASS
+- **커밋**: `c6b2c1c`
+
+### Label Explorer 이미지 경로가 classification 심링크 경로 사용
+- **버그**: Label Explorer에서 이미지/썸네일 요청 시 `classification/test_class/file.png` 경로 사용 → 서버에서 심링크 해석에 stat 5+회 필요
+- **원인**: (1) `singleViewImageList`가 `item.root_relative` (classification 경로)만 사용 (2) `/api/files` 응답에 `original_relative` 필드 없음 (3) `resolveOriginalImagePath`/`resolveLabelExplorerImagePath`에서 `original_relative` 미참조
+- **수정**: (1) 백엔드 `/api/files`에서 classification 디렉토리 파일에 `original_relative` 추가 (IndexService O(1) 조회) (2) 프론트 `singleViewImageList` 구성 시 `item.original_relative || item.root_relative` 우선 (3) `resolveOriginalImagePath`/`resolveLabelExplorerImagePath`에서 `original_relative` 우선 반환 (4) 백엔드 `_resolve_and_generate`에서 stat 결과 캐싱 + `get_thumbnail_path`에 `cached_stat` 전달
+- **파일**: `api/main.py` (stat 캐싱, original_relative), `js/main.js` 줄 17188, 22864-22867, 22917-22919
+- **테스트**: Label Explorer 이미지 클릭 → `viewer.currentImagePath`가 `wafer_edge_ring/...` 형태 (classification 아님)이면 PASS
+- **커밋**: `c6b2c1c`
+
+### openCompositeColorModal async 누락
+- **버그**: `openCompositeColorModal()`이 `async` 없이 내부에서 `await` 사용 → minify 시 빌드 에러
+- **수정**: `openCompositeColorModal(skipModeCheck = false)` → `async openCompositeColorModal(skipModeCheck = false)`
+- **파일**: `js/main.js` 줄 8213
+- **테스트**: `node scripts/minify.js` 에러 없이 성공하면 PASS
+- **커밋**: `c6b2c1c`
 
 ## 병합 이력
 
