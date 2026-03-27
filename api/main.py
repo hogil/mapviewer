@@ -3508,8 +3508,13 @@ def get_thumbnail_path(
     scheme: Optional[str] = None,
     variant: Optional[str] = None,
 ) -> Path:
-    # 🔥 절대 경로를 해시로 변환하여 썸네일 경로 생성
-    path_hash = hashlib.md5(str(image_path.resolve()).encode()).hexdigest()[:16]
+    # 🔥 inode 기반 해시 — 하드링크(classification ↔ 원본)는 동일 썸네일 캐시 공유
+    try:
+        st = image_path.stat()
+        path_key = f"{st.st_dev}:{st.st_ino}"
+    except Exception:
+        path_key = str(image_path.resolve())
+    path_hash = hashlib.md5(path_key.encode()).hexdigest()[:16]
 
     # 썸네일 파일명 (variant가 있으면 별도 캐시 키 사용)
     if variant:
