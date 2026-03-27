@@ -1796,6 +1796,21 @@ try:
 except Exception:
     _JS_VERSION = str(int(time.time()))
 
+# ======================== index.html 메모리 캐시 ========================
+_CACHED_INDEX_HTML: Optional[str] = None
+
+def _build_index_cache():
+    """index.html을 메모리에 캐시 (매 요청마다 파일 I/O + regex 제거)."""
+    global _CACHED_INDEX_HTML
+    html_path = Path("index.html")
+    if html_path.exists():
+        content = html_path.read_text(encoding="utf-8")
+        _CACHED_INDEX_HTML = re.sub(
+            r'(/js/[^"\']+\.js)(?:\?v=[^"\']*)?', rf'\1?v={_JS_VERSION}', content
+        )
+
+_build_index_cache()
+
 # ======================== FastAPI & Middleware ========================
 app = FastAPI(title="L3Tracker API", version="2.6.0", lifespan=lifespan)
 
@@ -3357,10 +3372,15 @@ async def delayed_background_resume():
 
 # ---- 라벨/클래스 노스토어 ----
 @app.middleware("http")
-async def no_store_for_labels_and_classes(request: Request, call_next):
+async def cache_control_middleware(request: Request, call_next):
     try:
         response = await call_next(request)
         p = request.url.path
+        # JS 파일: 장기 캐시 (URL에 ?v=githash 붙어서 캐시 무효화 보장)
+        if p.startswith("/js/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            response.headers["Vary"] = "Accept-Encoding"
+            return response
         if (
             p.startswith("/api/labels")
             or p.startswith("/api/classes")
@@ -4670,8 +4690,33 @@ def _generate_thumbnail_sync(
             )
 
             if not _need_pyvips:
+                # 🔥 pyvips fast path: palette PNG 기본 리사이즈 (PIL 대비 1.4~2x 빠름)
+                if _is_palette_png:
+                    try:
+                        import pyvips as _pv
+                        if personalized and scheme:
+                            # 개인색: PLTE 바이너리 패치 후 thumbnail_buffer
+                            from .personal_colors import plte_inplace_patch_memory, load_color_legends
+                            _legends = load_color_legends()
+                            _sd = _legends.get(scheme) or _legends.get('default')
+                            _raw = image_path.read_bytes()
+                            if _sd:
+                                _raw = plte_inplace_patch_memory(_raw, _sd) or _raw
+                            _vi = _pv.Image.thumbnail_buffer(_raw, size[0])
+                        else:
+                            _vi = _pv.Image.thumbnail(str(image_path), size[0])
+                        if fmt == "WEBP":
+                            _vi.webpsave(str(thumbnail_path), Q=THUMBNAIL_QUALITY)
+                        elif fmt == "JPEG":
+                            _vi.jpegsave(str(thumbnail_path), Q=THUMBNAIL_QUALITY)
+                        else:
+                            _vi.pngsave(str(thumbnail_path))
+                        return
+                    except Exception:
+                        pass  # pyvips 실패 시 PIL 폴백
+
                 with Image.open(image_path) as img:
-                    # palette PNG + 개인색이면 palette 교체 (PIL 경로)
+                    # palette PNG + 개인색이면 palette 교체 (PIL 경로 — pyvips 폴백)
                     if img.mode == 'P' and personalized and scheme:
                         from .personal_colors import apply_personalized_palette, load_color_legends
                         legends = load_color_legends()
@@ -8351,24 +8396,16 @@ app.mount("/static", StaticFiles(directory="."), name="static")
 async def read_root(request: Request):
     try:
         # AUTO_LOGIN=True일 때: SAML 인증 완료 후가 아니면 무조건 /saml/login으로 리다이렉트
-        # 이렇게 하면 index.html 로드 전에 인증이 완료됨
         if AUTO_LOGIN:
             if not request.query_params.get("saml_success"):
                 logger.info("🔐 [AUTO_LOGIN] SAML 인증 미완료 → /saml/login으로 리다이렉트")
                 return RedirectResponse("/saml/login", status_code=302)
-
-            # SAML 인증 완료 후 → index.html 제공
             logger.info("✅ [AUTO_LOGIN] SAML 인증 완료 → index.html 제공")
 
-        # AUTO_LOGIN=False 또는 SAML 인증 완료 → index.html 제공
-        html_path = Path("index.html")
-        if html_path.exists():
-            # JS 파일 URL에 git hash 버전 주입 (브라우저 캐시 무효화)
-            content = html_path.read_text(encoding="utf-8")
-            content = re.sub(r'(/js/[^"\']+\.js)(?:\?v=[^"\']*)?', rf'\1?v={_JS_VERSION}', content)
-            from fastapi.responses import HTMLResponse
+        # 메모리 캐시된 index.html 즉시 반환 (파일 I/O + regex 제거)
+        if _CACHED_INDEX_HTML:
             return HTMLResponse(
-                content=content,
+                content=_CACHED_INDEX_HTML,
                 headers={"Cache-Control": "no-store, no-cache, must-revalidate"}
             )
         return {"message": "index.html not found"}
