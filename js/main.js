@@ -318,11 +318,8 @@ class ThumbnailManager {
             console.warn('썸네일 배치 로드 실패, 개별 로딩으로 전환:', error);
         }
 
-        // 서버 배치 실패 시 개별 로딩
-
-        const promises = batch.map(path => this.loadThumbnail(path));
-
-        return Promise.allSettled(promises);
+        // 서버 배치 실패 시 개별 로딩 — fire-and-forget (각 썸네일 즉시 표시)
+        batch.forEach(path => this.loadThumbnail(path));
     }
 
     trimCache() {
@@ -19428,25 +19425,19 @@ class WaferMapViewer {
         this.drainGridLoadQueue(true);
     }
 
-    async loadCurrentFolderThumbnails(images) {
+    loadCurrentFolderThumbnails(images) {
         if (images.length === 0) return;
 
         // 🔥 이전 썸네일 로드 중단
-
         if (this.thumbnailManager) {
             this.thumbnailManager.abortAll();
         }
 
-        // 배치 크기 제한
-
+        // 🔥 fire-and-forget: 각 썸네일이 준비되는 즉시 개별 표시 (배치 대기 제거)
         const batchSize = THUMB_BATCH_SIZE || 24;
         const currentImages = images.slice(0, batchSize);
 
-        try {
-            await this.thumbnailManager.preloadBatch(currentImages);
-        } catch (error) {
-            // 조용히 실패 처리
-        }
+        this.thumbnailManager.preloadBatch(currentImages).catch(() => {});
     }
 
     async loadAllThumbnailsAtOnce(images) {
@@ -23468,7 +23459,7 @@ class WaferMapViewer {
             this.debugLog('🔷 [DEBUG] 그리드 컨테이너 표시 설정 완료');
         }
 
-        this.showGrid(actualPaths, true, true);  // forceFlatGrid: LOT 우회 → 즉시 src 할당
+        this.showGrid(actualPaths, true);  // LOT 모드 활성 시 LOT 그룹 그리드 적용
 
         // ✅ showGrid가 그리드를 재생성하므로 attribute를 다시 설정
         const gridAfter = document.getElementById('image-grid');
