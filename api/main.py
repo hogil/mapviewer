@@ -7917,16 +7917,17 @@ async def classify_images(req: Request,
 
         _dircache_invalidate(class_dir)
 
-        # 🔥 positions.json도 classification 폴더에 복사 (measure/composite 지원)
-        # 이미지 교체 시 position도 함께 최신으로 갱신
+        # 🔥 positions.json을 POSITIONS_ROOT/classification/class_name/ 에 복사
         try:
             pos_path = _resolve_positions_path(Path(rel_path))
             if pos_path.exists():
-                target_pos = class_dir / f"{abs_path.stem}.json"
+                pos_target_dir = config.POSITIONS_ROOT / "classification" / class_name
+                pos_target_dir.mkdir(parents=True, exist_ok=True)
+                target_pos = pos_target_dir / f"{abs_path.stem}.json"
                 should_copy = not target_pos.exists() or needs_replace
                 if should_copy:
                     await loop.run_in_executor(IO_POOL, shutil.copy2, str(pos_path), str(target_pos))
-                    log_access_row(tag="ACTION", note=f"positions 복사: {pos_path.name} -> {class_name}/")
+                    log_access_row(tag="ACTION", note=f"positions 복사: {pos_path.name} -> positions/classification/{class_name}/")
         except Exception as pos_err:
             logger.debug(f"positions 복사 건너뜀 ({rel_path}): {pos_err}")
 
@@ -8032,11 +8033,13 @@ async def classify_images_batch(request: BatchClassifyRequest,
 
                 link_time += time.perf_counter() - link_start
 
-                # 🔥 positions.json도 classification 폴더에 복사 (이미지 교체 시 함께 갱신)
+                # 🔥 positions.json을 POSITIONS_ROOT/classification/class_name/ 에 복사
                 try:
                     pos_path = _resolve_positions_path(Path(rel_path))
                     if pos_path.exists():
-                        target_pos = class_dir / f"{abs_path.stem}.json"
+                        pos_target_dir = config.POSITIONS_ROOT / "classification" / class_name
+                        pos_target_dir.mkdir(parents=True, exist_ok=True)
+                        target_pos = pos_target_dir / f"{abs_path.stem}.json"
                         if not target_pos.exists() or needs_replace:
                             shutil.copy2(str(pos_path), str(target_pos))
                 except Exception:
@@ -8668,12 +8671,12 @@ def _candidate_positions_paths(rel_path: Path) -> List[Path]:
     if legacy not in paths:
         paths.append(legacy)
 
-    # 🔥 우선순위 3: classification 디렉토리에서 position 검색
+    # 🔥 우선순위 3: POSITIONS_ROOT/classification/ 에서 position 검색
     # label 등록 시 복사된 positions.json을 찾기 위함
     rel_str = rel_path.as_posix()
     if "classification" in rel_str:
-        # classification/class_name/image.png → LABELS_DIR/class_name/image.json
-        cls_pos = config.ROOT_DIR / rel_path.parent / f"{rel_path.stem}.json"
+        # classification/class_name/image.png → POSITIONS_ROOT/classification/class_name/image.json
+        cls_pos = config.POSITIONS_ROOT / rel_path.parent / f"{rel_path.stem}.json"
         if cls_pos not in paths:
             paths.append(cls_pos)
     else:
