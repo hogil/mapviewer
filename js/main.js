@@ -16154,7 +16154,7 @@ class WaferMapViewer {
                         const data = await response.json();
                         // ✅ 이미지 파일만 필터링 (JSON 등 비이미지 파일 제외)
                         const imgList = (Array.isArray(data.items) ? data.items : [])
-                            .filter(item => item.type === 'file' && this.isImageFile(item.name));
+                            .filter(item => item.type === 'file');
 
                         if (isContextChanged()) {
                             this.debugLog(`?? [DEBUG] 폴더 '${cls}' 업데이트 중단 (컨텍스트 변경)`);
@@ -16604,7 +16604,7 @@ class WaferMapViewer {
                     const res = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`);
                     const data = await res.json();
                     const imgList = (Array.isArray(data.items) ? data.items : [])
-                        .filter(item => item.type === 'file' && this.isImageFile(item.name));
+                        .filter(item => item.type === 'file');
                     if (!this.classToImgListCache) this.classToImgListCache = {};
                     this.classToImgListCache[c] = imgList;
                 } catch {}
@@ -16727,7 +16727,7 @@ class WaferMapViewer {
                                 .then(res => res.json())
                                 .then(data => {
                                     const imgList = (Array.isArray(data.items) ? data.items : [])
-                                        .filter(item => item.type === 'file' && this.isImageFile(item.name));
+                                        .filter(item => item.type === 'file');
                                     this.classToImgListCache[cls] = imgList;
                                     if (labelSelection.openFolders[cls]) {
                                         this._updateLabelExplorerContentFast();
@@ -16792,7 +16792,7 @@ class WaferMapViewer {
                             const res = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`);
                             const data = await res.json();
                             const imgList = (Array.isArray(data.items) ? data.items : [])
-                                .filter(item => item.type === 'file' && this.isImageFile(item.name));
+                                .filter(item => item.type === 'file');
                             if (!this.classToImgListCache) this.classToImgListCache = {};
                             this.classToImgListCache[c] = imgList;
                             for (const img of imgList) allKeys.push(`${c}/${img.name}`);
@@ -17372,7 +17372,7 @@ class WaferMapViewer {
                         });
 
                         // 🔥 캐시 동기화: 삭제 후 re-fetch 결과로 캐시 갱신
-                        this.classToImgListCache[cls] = sortedImgList.filter(item => item.type === 'file' && this.isImageFile(item.name));
+                        this.classToImgListCache[cls] = sortedImgList.filter(item => item.type === 'file');
 
                         // ul 내부만 갱신
 
@@ -17725,7 +17725,7 @@ class WaferMapViewer {
                                         const data = await response.json();
                                         // ✅ 이미지 파일만 필터링 (JSON 등 비이미지 파일 제외)
                                         const imgList = (Array.isArray(data.items) ? data.items : [])
-                                            .filter(item => item.type === 'file' && this.isImageFile(item.name));
+                                            .filter(item => item.type === 'file');
 
                                         // 캐시 업데이트
                                         if (!this.classToImgListCache) this.classToImgListCache = {};
@@ -22477,7 +22477,7 @@ class WaferMapViewer {
         const data = await response.json();
 
         let singleList = (data.items || [])
-            .filter(item => item.type === 'file' && this.isImageFile(item.name))
+            .filter(item => item.type === 'file')
             .map(item => item.root_relative || `${folderPath}/${item.name}`);
 
         // 🔥 LOT/TEST/STEP 필터 적용 (단일 이미지 탐색에도 반영)
@@ -22518,7 +22518,7 @@ class WaferMapViewer {
             const response = await fetch(`/api/files?path=${encodeURIComponent(folderPath)}`);
             const data = await response.json();
             let files = (data.items || [])
-                .filter(item => item.type === 'file' && this.isImageFile(item.name))
+                .filter(item => item.type === 'file')
                 .map(item => {
                     // 서버가 절대경로 반환 시 상대경로로 변환 (폴더명 기준)
                     const raw = item.path || `${folderPath}/${item.name}`;
@@ -23484,7 +23484,7 @@ class WaferMapViewer {
             const data = await response.json();
             const imageFiles = (data.items || [])
 
-                .filter(item => item.type === 'file' && this.isImageFile(item.name))
+                .filter(item => item.type === 'file')
 
                 .map(item => {
                     return this.resolveOriginalImagePath(
@@ -23574,7 +23574,7 @@ class WaferMapViewer {
                     const data = await response.json();
                     const imageFiles = (data.items || [])
 
-                        .filter(item => item.type === 'file' && this.isImageFile(item.name))
+                        .filter(item => item.type === 'file')
 
                         .map(item => this.resolveOriginalImagePath(
                             item.root_relative || this.buildClassificationPath(`${className}/${item.name}`)
