@@ -7171,7 +7171,7 @@ async def get_thumbnail(
         # 🔥 동기 파일 검증을 스레드 풀에서 실행 — 이벤트 루프 블록 방지
         def _validate_path_sync():
             nonlocal path
-            # 경로 해석: ROOT_DIR → current_folder 순으로 시도
+            # 경로 해석: ROOT_DIR → current_folder → LABELS_DIR 순으로 시도
             def _try_resolve(p):
                 if Path(p).is_absolute():
                     return Path(p)
@@ -7183,10 +7183,24 @@ async def get_thumbnail(
                     return c
                 if "classification" in p:
                     tail = p.split("classification", 1)[-1].lstrip("/")
+                    # current_folder 기준 classification
                     c = current_folder / "classification" / tail
                     if c.exists() and c.is_file():
                         return c
-                return ROOT_DIR / p
+                    # LABELS_DIR 직접 검색
+                    if config.LABELS_DIR.exists():
+                        c = config.LABELS_DIR / tail
+                        if c.exists() and c.is_file():
+                            return c
+                    # classification_chips도 확인
+                    if "classification_chips" not in p and config.CHIP_LABELS_DIR.exists():
+                        c = config.CHIP_LABELS_DIR / tail
+                        if c.exists() and c.is_file():
+                            return c
+                not_found = ROOT_DIR / p
+                if not not_found.exists():
+                    logger.debug(f"[THUMB] 이미지 미발견: {p} (ROOT={ROOT_DIR}, CUR={current_folder})")
+                return not_found
 
             image_path = _try_resolve(path)
             try:

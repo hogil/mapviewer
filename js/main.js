@@ -27491,10 +27491,13 @@ class WaferMapViewer {
         img.onerror = (e) => {
             const isAborted = !img.parentElement || !img.src || img.src.length < 20;
             if (!isAborted && img.parentElement) {
-                img.style.backgroundColor = '#333';
-                img.style.opacity = '0.5';
+                // 🔥 썸네일 실패해도 반드시 보이도록: 배경색 + 파일명 표시
+                img.style.backgroundColor = '#444';
+                img.style.opacity = '1';
                 img.dataset.loading = 'false';
-                img.dataset.gridLoaded = 'false';
+                img.dataset.gridLoaded = 'error';
+                // 에러 아이콘 표시
+                img.alt = '⚠ ' + (imgPath.split('/').pop() || 'error');
             }
         };
 
