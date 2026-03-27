@@ -3688,6 +3688,20 @@ const ms = Math.round(performance.now() - t0);
 - **테스트**: Label Explorer 이미지 클릭 → `viewer.currentImagePath`가 `wafer_edge_ring/...` 형태 (classification 아님)이면 PASS
 - **커밋**: `c6b2c1c`
 
+### JS/CSS/HTML pre-gzip 서빙 (성능 개선)
+- **개선**: JS/CSS/HTML을 서버 시작 시 gzip 압축하여 메모리 캐시 → 요청마다 실시간 압축 대신 즉시 전송
+- **수정**: `_preload_minified_js()`, `_preload_css()`, `_build_index_cache()`에서 `gzip.compress(raw, compresslevel=6)` 추가. `serve_js`, `serve_css`, `read_root`에서 `Accept-Encoding: gzip` 헤더 확인 후 압축본 전송
+- **파일**: `api/main.py` (JS/CSS/HTML 서빙 엔드포인트)
+- **테스트**: `curl -H "Accept-Encoding: gzip" -ks -o /dev/null -w "%{size_download}" https://localhost/js/main.js` — 압축본 크기가 원본보다 작으면 PASS
+- **커밋**: `c6b2c1c`
+
+### browse-folders 60초 TTL 캐시
+- **개선**: `/api/browse-folders` 응답을 60초 메모리 캐시 → 콜드스타트 시 207ms → 0ms
+- **수정**: `_BROWSE_FOLDERS_CACHE` 글로벌 변수 + `time.time()` TTL 체크
+- **파일**: `api/main.py` (`browse_folders` 엔드포인트)
+- **테스트**: 동일 요청 2회 → 2회째 응답 시간 < 5ms이면 PASS
+- **커밋**: `c6b2c1c`
+
 ### openCompositeColorModal async 누락
 - **버그**: `openCompositeColorModal()`이 `async` 없이 내부에서 `await` 사용 → minify 시 빌드 에러
 - **수정**: `openCompositeColorModal(skipModeCheck = false)` → `async openCompositeColorModal(skipModeCheck = false)`
