@@ -1527,7 +1527,7 @@ export class ChipAnnotator {
                 return;
             }
             const isVisible = !activeSet || activeSet.has(chipClass);
-            const alpha = isVisible ? 0.45 : 0;
+            const alpha = isVisible ? 0.6 : 0;
             if (alpha > 0) {
                 const fillColor = this.getClassColor(chipClass, alpha);
                 this._drawChipRect(chip, fillColor);
@@ -1680,31 +1680,27 @@ export class ChipAnnotator {
     _drawChipRect(chip, color) {
         const transform = this.viewer.transform;
         const rect = chip.rect;
+        const Y_OFFSET = this.Y_OFFSET || -55;
 
-        // 🔥 Y 오프셋: 칩 선택을 이미지 위치에 맞추기 위해 위로 올림
-        const Y_OFFSET = -55; // 픽셀 단위 오프셋 (음수 = 위로, 값이 클수록 더 위로)
-        
-        // ✅ save/restore로 transform 누적 방지
         this.ctx.save();
-        this.ctx.resetTransform(); // ⭐ 추가 (누적 방지)
-        
-        // 🔥 이미지와 동일한 변환: translate 후 scale
-        // 이미지: ctx.translate(dx, dy); ctx.scale(scale, scale); ctx.drawImage(img, 0, 0);
-        // 따라서 이미지 픽셀 (x, y)는 캔버스 좌표 (dx + x * scale, dy + y * scale)에 그려짐
+        this.ctx.resetTransform();
+        this.ctx.globalAlpha = 1.0; // 🔥 globalAlpha 리셋 (누적 방지)
+
         const topLeftX = rect.x0 * transform.scale + transform.dx;
         const topLeftY = rect.y0 * transform.scale + transform.dy + Y_OFFSET;
-        const bottomRightX = rect.x1 * transform.scale + transform.dx;
-        const bottomRightY = rect.y1 * transform.scale + transform.dy + Y_OFFSET;
+        const w = (rect.x1 - rect.x0) * transform.scale;
+        const h = (rect.y1 - rect.y0) * transform.scale;
 
+        // 🔥 Fill
         this.ctx.fillStyle = color;
-        this.ctx.fillRect(
-            topLeftX,
-            topLeftY,
-            bottomRightX - topLeftX,
-            bottomRightY - topLeftY
-        );
-        
-        this.ctx.restore(); // ⭐ 추가
+        this.ctx.fillRect(topLeftX, topLeftY, w, h);
+
+        // 🔥 밝은 테두리 (줌아웃에서도 칩 마크가 확실히 보이도록)
+        this.ctx.strokeStyle = color.replace(/[\d.]+\)$/, '0.9)');
+        this.ctx.lineWidth = Math.max(1.5, 2 * transform.scale);
+        this.ctx.strokeRect(topLeftX, topLeftY, w, h);
+
+        this.ctx.restore();
     }
 
     _extractMetadataValue(keys = []) {

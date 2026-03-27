@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 42개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 44개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -3353,17 +3353,88 @@ const ms = Math.round(performance.now() - t0);
 **사전 준비**: `e2e_mixed_test` 클래스에 3가지 유형 이미지 배치:
 - `rgba_no_pos_*.png`: RGBA non-palette, position 없음
 - `palette_no_pos_*.png`: palette PNG, position 없음
-- `palette_pos_*.png` + `.json`: palette PNG + position JSON
+- `ABC234_00C_*.png`: palette PNG, position은 `POSITIONS_ROOT/e2e_mixed_test/` 에 JSON 배치
 
-1. Label Explorer에서 `e2e_mixed_test` 폴더 열기 → 6개 이미지만 표시 (JSON 제외)
-2. Ctrl+Click → 그리드 6개 아이템 표시 + 썸네일 정상 로딩
-3. RGBA 이미지 더블클릭 → 단일 뷰 정상 진입, `currentImageBitmap` 존재
-4. palette no-pos 이미지 더블클릭 → 단일 뷰 정상, Grade 범례 표시
-5. palette+pos 이미지 더블클릭 → 단일 뷰 정상, chip positions 로드 확인
+1. Label Explorer에서 `e2e_mixed_test` 폴더 열기 → 6개 이미지만 표시 (JSON 없음, 이미지만)
+2. Ctrl+Click → 폴더 자동 열림 + 이미지 버튼 하이라이트 6/6 + 그리드 6개 아이템 표시
+3. 썸네일 6/6 정상 로딩
+4. palette+pos 이미지 더블클릭 → 단일 뷰 정상, `POSITIONS_ROOT`에서 384 chips 로드 확인
+5. RGBA 이미지 더블클릭 → 단일 뷰 정상, `currentImageBitmap` 존재
 6. → 키로 6개 전체 순회: palette_no_pos → palette_pos → rgba_no_pos 순서로 정상 전환
 7. 서버 생존 확인
 
-**pass 기준**: 43-1~43-14 모든 항목 성공, 서버 생존 확인 (`/api/classes` 200)
+#### 43-15. 프리페치 + dirty 캐시 무효화 속도
+1. `refreshLabelExplorer()` 후 백그라운드 프리페치 완료 확인 (`classToImgListCache` 채워짐)
+2. 폴더 열기 캐시 히트 → **200ms 이하**
+3. 라벨 추가 API 후 `refreshLabelExplorer(['className'])` dirty 호출 → **50ms 이하**
+4. dirty 호출 시 다른 클래스 캐시 유지 확인
+5. Ctrl+Click 그리드 표시 시 캐시 히트 → 즉시 그리드 (fetch 없이)
+
+**pass 기준**: 43-1~43-15 모든 항목 성공, 서버 생존 확인 (`/api/classes` 200)
+
+---
+
+## Phase 44: Chip Label Explorer — CRUD + 캐시 + 속도 검증
+
+**목적**: Chip 모드 Label Explorer의 전체 기능이 Wafer 모드와 동일하게 동작하는지, 50ms 이내 UI 반응을 검증
+
+**사전 조건**: `classification_chips/` 하위에 최소 1개 클래스 + 1개 chip 이미지 존재
+
+**평가 항목**:
+
+#### 44-1. Chip 모드 전환 + Label Explorer 갱신
+1. Chip 버튼 클릭 → `classMode === 'chip'` 확인
+2. Fail List에 chip 클래스만 표시 확인 (wafer 클래스 없음)
+3. Label Explorer에 chip 클래스 폴더 표시 확인
+4. 전환 속도 측정: `performance.now()` 기준 UI 업데이트 **50ms 이내**
+
+#### 44-2. 폴더 열기/닫기 + 이미지 목록
+1. 클래스 폴더 클릭 → ▸ → ▾ 전환 + 이미지 리스트 표시
+2. 이미지 파일명 형식: `{wafer}_x{n}_y{m}.png` 패턴 확인
+3. 다시 클릭 → ▾ → ▸ 닫힘
+4. 토글 반응: DOM 변경 **50ms 이내** (캐시 히트 시)
+
+#### 44-3. Chip 이미지 단일 뷰
+1. chip 이미지 클릭 → 단일 이미지 모드 진입 (`gridMode === false`)
+2. 이미지 렌더링 확인 (canvas width/height > 0)
+3. Navigator에 같은 클래스 내 chip 이미지 리스트 표시
+4. ◀ ▶ 버튼 표시
+5. Grade 범례 표시 (palette PNG인 경우)
+6. ESC → 초기 화면 복귀
+
+#### 44-4. Chip 클래스 생성
+1. 새 클래스명 입력 → Add Class 클릭
+2. Fail List + Label Explorer에 즉시 추가 확인
+3. 기존 열린 폴더의 열림 상태(▾) 유지 확인
+4. API 확인: `GET /api/classes?mode=chip` → 새 클래스 포함
+
+#### 44-5. Chip 클래스 삭제
+1. 테스트 클래스 Ctrl+클릭 선택
+2. Delete Class → confirm → 삭제
+3. Fail List + Label Explorer에서 제거 확인
+4. 다른 클래스의 열림 상태 유지 확인
+
+#### 44-6. Chip 라벨 삭제 (🗑️) + 캐시 일관성
+1. 폴더 열기 → 이미지 목록 확인
+2. 🗑️ 클릭 → 이미지 제거
+3. **캐시 검증**: 이후 클래스 생성/삭제 시 삭제된 이미지가 다시 나타나지 않음 확인
+4. `classToImgListCache[cls]` 동기화 확인 (evaluate)
+
+#### 44-7. Wafer ↔ Chip 모드 전환 왕복
+1. Chip → Wafer 전환: wafer 클래스 표시 확인
+2. Wafer → Chip 전환: chip 클래스 표시 확인
+3. 각 전환 시 `labelSelection` 초기화 확인
+4. 3회 왕복 → 마지막 모드의 데이터 정확성 확인
+
+#### 44-8. 속도 벤치마크 (50ms 기준)
+각 항목의 UI 반응 시간을 `performance.now()` 로 측정:
+1. 폴더 토글 (캐시 히트): **< 50ms**
+2. 이미지 클릭 → DOM selected 스타일 변경: **< 50ms**
+3. 클래스 선택 (Ctrl+Click Fail List): **< 50ms**
+4. 🗑️ 삭제 → DOM 업데이트 (API 제외, DOM만): **< 50ms**
+5. 모드 전환 버튼 → `classMode` 변경: **< 50ms**
+
+**pass 기준**: 44-1~44-8 전 항목 성공, 모든 UI 반응 50ms 이내, 서버 생존 (`/api/classes?mode=chip` 200)
 
 ---
 
