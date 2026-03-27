@@ -3374,9 +3374,16 @@ const ms = Math.round(performance.now() - t0);
 
 ---
 
-## Phase 44: Chip Label Explorer — CRUD + 캐시 + 속도 검증
+## Phase 44: Chip Label Explorer — CRUD + 캐시 + 폴더 클릭 + 속도 검증
 
 **목적**: Chip 모드 Label Explorer의 전체 기능이 Wafer 모드와 동일하게 동작하는지, 50ms 이내 UI 반응을 검증
+
+**관련 버그 수정 이력** (2026-03-27):
+1. **chip_annotations JSON dead code 제거** (`api/main.py` -158줄): `_upsert_chip_annotations`, `_remove_chip_annotations` 등 15개 미사용 함수, `POST /api/chip-annotations` no-op endpoint 제거. chip label은 `classification_chips/` 파일시스템에서만 파생.
+2. **🗑️ 삭제 후 캐시 불일치** (`js/main.js`): 🗑️ 삭제 시 `classToImgListCache[cls]` 미갱신 → 전체 새로고침 시 삭제 이미지 재출현. 수정: re-fetch 결과로 캐시 즉시 동기화.
+3. **폴더 클릭 동작 분리** (`js/main.js`): 일반 클릭=폴더 토글, Ctrl/Shift 클릭=폴더 상태 유지+하이라이트+그리드+LOT 패널. (Wafer/Chip 공통)
+
+**Phase 43과의 차이**: 43은 Wafer 모드 (네비게이션 ←→◀▶, savedViewState 오염 방지). 44는 Chip 모드 전용 (모드 전환, `_x{n}_y{m}.png` 패턴, 캐시 일관성, JSON 미사용). 폴더 클릭 동작은 양 모드 공통이므로 44-2~44-3에서 chip 기준 검증.
 
 **사전 조건**: `classification_chips/` 하위에 최소 1개 클래스 + 1개 chip 이미지 존재
 
@@ -3388,53 +3395,62 @@ const ms = Math.round(performance.now() - t0);
 3. Label Explorer에 chip 클래스 폴더 표시 확인
 4. 전환 속도 측정: `performance.now()` 기준 UI 업데이트 **50ms 이내**
 
-#### 44-2. 폴더 열기/닫기 + 이미지 목록
-1. 클래스 폴더 클릭 → ▸ → ▾ 전환 + 이미지 리스트 표시
+#### 44-2. 폴더 일반 클릭 = 열기/닫기 토글 (그리드 전환 없음)
+1. 클래스 폴더 **일반 클릭** → ▸ → ▾ 전환 + 이미지 리스트 표시
 2. 이미지 파일명 형식: `{wafer}_x{n}_y{m}.png` 패턴 확인
-3. 다시 클릭 → ▾ → ▸ 닫힘
-4. 토글 반응: DOM 변경 **50ms 이내** (캐시 히트 시)
+3. 다시 **일반 클릭** → ▾ → ▸ 닫힘
+4. **그리드 전환 없음** 확인 (`gridMode`, `selectedClasses` 변경 없음)
+5. 토글 반응: DOM 변경 **50ms 이내** (캐시 히트 시)
 
-#### 44-3. Chip 이미지 단일 뷰
+#### 44-3. 폴더 Ctrl+클릭 = 선택 + 폴더 상태 유지 + 그리드 + LOT
+1. 클래스 폴더 **Ctrl+클릭** → `selectedClasses`에 해당 클래스 추가
+2. **폴더 열림/닫힘 상태 변경 없음** (접혀있으면 접힌 채 하이라이트, 펼쳐져있으면 펼쳐진 채)
+3. 그리드에 클래스 이미지 표시 (`.grid-thumb-wrap` 개수 > 0)
+4. LOT 패널에 LOT 리스트 표시 확인
+5. Shift+클릭 범위 선택: 여러 클래스 한번에 선택 + 그리드 합산
+6. Ctrl+클릭 토글: 이미 선택된 클래스 다시 Ctrl+클릭 → 선택 해제
+
+#### 44-4. Chip 이미지 단일 뷰
 1. chip 이미지 클릭 → 단일 이미지 모드 진입 (`gridMode === false`)
-2. 이미지 렌더링 확인 (canvas width/height > 0)
+2. 이미지 렌더링 확인 (`currentImageBitmap` 존재, overlay canvas > 0)
 3. Navigator에 같은 클래스 내 chip 이미지 리스트 표시
 4. ◀ ▶ 버튼 표시
 5. Grade 범례 표시 (palette PNG인 경우)
 6. ESC → 초기 화면 복귀
 
-#### 44-4. Chip 클래스 생성
+#### 44-5. Chip 클래스 생성 + 폴더 상태 보존
 1. 새 클래스명 입력 → Add Class 클릭
 2. Fail List + Label Explorer에 즉시 추가 확인
-3. 기존 열린 폴더의 열림 상태(▾) 유지 확인
+3. **기존 열린 폴더의 열림 상태(▾) 유지 확인** (핵심!)
 4. API 확인: `GET /api/classes?mode=chip` → 새 클래스 포함
 
-#### 44-5. Chip 클래스 삭제
-1. 테스트 클래스 Ctrl+클릭 선택
+#### 44-6. Chip 클래스 삭제 + 폴더 상태 보존
+1. 테스트 클래스 Ctrl+클릭 선택 (Fail List에서)
 2. Delete Class → confirm → 삭제
 3. Fail List + Label Explorer에서 제거 확인
-4. 다른 클래스의 열림 상태 유지 확인
+4. **다른 클래스의 열림 상태 유지 확인** (핵심!)
 
-#### 44-6. Chip 라벨 삭제 (🗑️) + 캐시 일관성
-1. 폴더 열기 → 이미지 목록 확인
-2. 🗑️ 클릭 → 이미지 제거
-3. **캐시 검증**: 이후 클래스 생성/삭제 시 삭제된 이미지가 다시 나타나지 않음 확인
-4. `classToImgListCache[cls]` 동기화 확인 (evaluate)
+#### 44-7. Chip 라벨 삭제 (🗑️) + 캐시 일관성
+1. 폴더 열기 → 이미지 목록 + `classToImgListCache[cls].length` 확인
+2. 🗑️ 클릭 → 이미지 제거 (DOM에서 즉시 사라짐)
+3. **3중 일관성**: `classToImgListCache[cls].length` === DOM 개수 === API `/api/classes/{cls}/images?mode=chip` 결과 개수
+4. **재현 검증**: 클래스 생성 → 전체 새로고침 → 삭제된 이미지 미표시 확인
 
-#### 44-7. Wafer ↔ Chip 모드 전환 왕복
+#### 44-8. Wafer ↔ Chip 모드 전환 왕복
 1. Chip → Wafer 전환: wafer 클래스 표시 확인
 2. Wafer → Chip 전환: chip 클래스 표시 확인
 3. 각 전환 시 `labelSelection` 초기화 확인
 4. 3회 왕복 → 마지막 모드의 데이터 정확성 확인
 
-#### 44-8. 속도 벤치마크 (50ms 기준)
+#### 44-9. 속도 벤치마크 (50ms 기준)
 각 항목의 UI 반응 시간을 `performance.now()` 로 측정:
-1. 폴더 토글 (캐시 히트): **< 50ms**
+1. 폴더 토글 일반 클릭 (캐시 히트): **< 50ms**
 2. 이미지 클릭 → DOM selected 스타일 변경: **< 50ms**
-3. 클래스 선택 (Ctrl+Click Fail List): **< 50ms**
+3. Ctrl+Click 폴더 → 그리드 표시 시작: **< 50ms** (API fetch 제외, DOM 반응만)
 4. 🗑️ 삭제 → DOM 업데이트 (API 제외, DOM만): **< 50ms**
 5. 모드 전환 버튼 → `classMode` 변경: **< 50ms**
 
-**pass 기준**: 44-1~44-8 전 항목 성공, 모든 UI 반응 50ms 이내, 서버 생존 (`/api/classes?mode=chip` 200)
+**pass 기준**: 44-1~44-9 전 항목 성공, 모든 UI 반응 50ms 이내, 서버 생존 (`/api/classes?mode=chip` 200)
 
 ---
 
@@ -3483,6 +3499,25 @@ const ms = Math.round(performance.now() - t0);
 - **디버그 로그 추가**: `showGridFromLabelExplorer` 진입/경로해석/showGrid 호출 로그
 - **커밋**: `d0a7449`
 - **상태**: Ubuntu F12 콘솔 로그 확인 대기
+
+## 버그 수정 이력 (2026-03-27, Composite/Measure 점검)
+
+### NPZ 임시파일(_tmp.npz) 잔류
+- **버그**: Composite 생성/Recolor 후 `square_maps_data_tmp.npz`가 삭제되지 않고 남음 (1.3GB/건)
+- **원인**: `_save_npz()` daemon thread에서 `tmp.replace(cache_path)` Windows 파일 잠금으로 실패 → `except: pass`가 에러 무시, tmp 미삭제
+- **수정**: `api/composite_map.py` `_save_npz()` finally 블록에서 항상 tmp 삭제 + 실패 로깅. `api/main.py` cleanup에서 `*_tmp.npz` / `*.npz.tmp.npz` 자동 정리
+- **테스트**: Composite 생성 → `find composite_map -name "*_tmp.npz"` 결과 없어야 PASS
+
+### Label Explorer 프리페치 JSON 파일 415 에러
+- **버그**: classification 폴더의 `.json` 파일에 대해 `/api/thumbnail` 요청 → 415 대량 발생
+- **원인**: 프리페치(line 16607)에서 `isImageFile` 필터 누락 (커밋 `7cd89be`에서 전체 제거 시 같이 빠짐)
+- **수정**: `js/main.js` 프리페치에만 `&& this.isImageFile(item.name)` 재추가 (그리드 렌더링은 그대로)
+- **테스트**: Label Explorer 열기 → 콘솔에서 `.json` 썸네일 415 에러 없어야 PASS
+
+### Measure Composite COMPOSITE_EXECUTOR 미사용
+- **버그**: Grade Composite는 `COMPOSITE_EXECUTOR(max_workers=4)` 사용, Measure Composite는 raw `threading.Thread` 사용
+- **수정**: `api/main.py`에서 `threading.Thread` → `COMPOSITE_EXECUTOR.submit()` 교체
+- **테스트**: 동시 Measure Composite 요청 시 max_workers=4 병렬 제한 적용 확인
 
 ## 병합 이력
 

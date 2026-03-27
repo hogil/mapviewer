@@ -16604,7 +16604,7 @@ class WaferMapViewer {
                     const res = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`);
                     const data = await res.json();
                     const imgList = (Array.isArray(data.items) ? data.items : [])
-                        .filter(item => item.type === 'file');
+                        .filter(item => item.type === 'file' && this.isImageFile(item.name));
                     if (!this.classToImgListCache) this.classToImgListCache = {};
                     this.classToImgListCache[c] = imgList;
                 } catch {}

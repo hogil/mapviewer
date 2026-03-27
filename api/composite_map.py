@@ -1321,18 +1321,28 @@ def _persist_square_map_data(
         save_payload["colors"] = np.array(list(colors), dtype="U16")
 
     def _save_npz():
+        tmp = cache_path.with_name(cache_path.stem + "_tmp.npz")
         try:
-            # np.savez는 .npz로 끝나지 않으면 자동 추가 → .tmp.npz 사용 (추가 방지)
-            tmp = cache_path.with_name(cache_path.stem + "_tmp.npz")
+            # np.savez는 .npz로 끝나지 않으면 자동 추가 → _tmp.npz 사용 (추가 방지)
             np.savez(tmp, **save_payload)
             try:
                 tmp.replace(cache_path)
             except Exception:
-                if cache_path.exists():
-                    cache_path.unlink()
-                tmp.rename(cache_path)
-        except Exception:
-            pass
+                try:
+                    if cache_path.exists():
+                        cache_path.unlink()
+                    tmp.rename(cache_path)
+                except Exception as rename_err:
+                    logger.warning("[NPZ] rename failed (%s → %s): %s", tmp.name, cache_path.name, rename_err)
+        except Exception as save_err:
+            logger.warning("[NPZ] save failed (%s): %s", tmp.name, save_err)
+        finally:
+            # 항상 tmp 파일 정리 시도
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
     threading.Thread(target=_save_npz, daemon=True).start()
 
 

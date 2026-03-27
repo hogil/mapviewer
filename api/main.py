@@ -528,7 +528,7 @@ def _pid_alive(pid: int) -> bool:
 
 def _cleanup_old_composite_dirs(retention_seconds: int) -> Dict[str, Any]:
     """Delete composite output directories older than retention_seconds.
-    Also cleans up corresponding positions directories."""
+    Also cleans up corresponding positions directories and orphaned NPZ tmp files."""
     stats: Dict[str, Any] = {
         "scanned_dirs": 0,
         "deleted_dirs": 0,
@@ -536,11 +536,27 @@ def _cleanup_old_composite_dirs(retention_seconds: int) -> Dict[str, Any]:
         "error_count": 0,
         "errors": [],
         "retention_seconds": retention_seconds,
+        "tmp_cleaned": 0,
     }
     if retention_seconds <= 0:
         return stats
     if not COMPOSITE_ROOT.exists():
         return stats
+
+    # 먼저 잔류 NPZ tmp 파일 정리 (모든 user 디렉터리)
+    for tmp_file in COMPOSITE_ROOT.rglob("*_tmp.npz"):
+        try:
+            tmp_file.unlink()
+            stats["tmp_cleaned"] += 1
+        except Exception:
+            pass
+    # 이전 버그 잔류물: .npz.tmp.npz 패턴도 정리
+    for tmp_file in COMPOSITE_ROOT.rglob("*.npz.tmp.npz"):
+        try:
+            tmp_file.unlink()
+            stats["tmp_cleaned"] += 1
+        except Exception:
+            pass
 
     now = time.time()
     cutoff = now - retention_seconds
@@ -9489,23 +9505,18 @@ async def create_measure_composite_endpoint(
     login_id = _current_login_id(req)
     resolved_scheme = login_id or ANONYMOUS_LOGIN_ID
 
-    # 전용 스레드에서 실행 (IO_POOL 포화 문제 방지)
-    import threading
-    t = threading.Thread(
-        target=_run_measure_composite_sync,
-        kwargs=dict(
-            task_id=task_id,
-            image_paths=image_paths,
-            mode=payload.mode,
-            item_key=payload.item_key,
-            bin_types=payload.bin_types,
-            aggregation=payload.aggregation,
-            scheme=resolved_scheme,
-            login_id=login_id,
-        ),
-        daemon=True,
+    # COMPOSITE_EXECUTOR에서 실행 (IO_POOL 포화 방지 + 동시성 제어)
+    COMPOSITE_EXECUTOR.submit(
+        _run_measure_composite_sync,
+        task_id=task_id,
+        image_paths=image_paths,
+        mode=payload.mode,
+        item_key=payload.item_key,
+        bin_types=payload.bin_types,
+        aggregation=payload.aggregation,
+        scheme=resolved_scheme,
+        login_id=login_id,
     )
-    t.start()
 
     return {
         "success": True,
