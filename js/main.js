@@ -16707,34 +16707,26 @@ class WaferMapViewer {
                 const isShift = e.shiftKey;
 
                 // 다른 Explorer 선택 해제
-
                 try {
                     this.clearWaferMapExplorerSelection();
                 } catch (error) {
                     console.warn('clearWaferMapExplorerSelection error:', error);
                 }
 
-                // 아무 modifier 없이 클릭: 열기/닫기 토글만 (그리드 로드 없음)
-                // Ctrl/Shift 클릭: 폴더 선택 + 하이라이트 + 그리드 로드 (WME와 동일)
-
-                if (!isCtrl && !isShift) {
-                    const wasOpen = isOpen;
-                    labelSelection.openFolders[cls] = !wasOpen;
-
-                    if (!wasOpen) {
-                        // 폴더 열기: 캐시가 있으면 즉시 렌더, 없으면 fetch 후 렌더
+                // ▸/▾ 아이콘 클릭: 폴더 열기/닫기 토글만 (선택/그리드 없음)
+                const clickedArrow = e.target.tagName === 'SPAN' && /[▸▾]/.test(e.target.textContent);
+                if (clickedArrow && !isCtrl && !isShift) {
+                    labelSelection.openFolders[cls] = !labelSelection.openFolders[cls];
+                    if (labelSelection.openFolders[cls]) {
                         if (!this.classToImgListCache) this.classToImgListCache = {};
                         const cached = this.classToImgListCache[cls];
                         if (cached) {
-                            // 🔥 캐시 히트: API 호출 없이 즉시 렌더
                             this._updateLabelExplorerContentFast();
                         } else {
-                            // 캐시 미스: fetch 후 렌더 (API 1회만)
                             const labelPath = this.buildClassificationPath(cls);
                             fetch(`/api/files?path=${encodeURIComponent(labelPath)}`)
                                 .then(res => res.json())
                                 .then(data => {
-                                    // ✅ 이미지 파일만 필터링 (JSON 등 비이미지 파일 제외)
                                     const imgList = (Array.isArray(data.items) ? data.items : [])
                                         .filter(item => item.type === 'file' && this.isImageFile(item.name));
                                     this.classToImgListCache[cls] = imgList;
@@ -16749,46 +16741,36 @@ class WaferMapViewer {
                                 });
                         }
                     } else {
-                        // 🔥 폴더 닫기: API 호출 없이 즉시 렌더
                         this._updateLabelExplorerContentFast();
                     }
-
                     return;
                 }
 
-                // Ctrl/Shift로 클릭: 클래스 선택 (이미지 선택은 해제)
-
-                labelSelection.selected = []; // 이미지 선택 해제
+                // 🔥 폴더 이름 클릭: 폴더 상태 유지 + 하이라이트 + 즉시 그리드
+                labelSelection.selected = [];
 
                 if (isShift && labelSelection.lastClickedClass !== null) {
-                    // Shift+클릭: 범위 선택
-
                     const all = classes;
                     const lastIdx = all.indexOf(labelSelection.lastClickedClass);
                     const thisIdx = all.indexOf(cls);
-
                     if (lastIdx !== -1 && thisIdx !== -1) {
                         const [from, to] = [lastIdx, thisIdx].sort((a,b)=>a-b);
                         const range = all.slice(from, to+1);
-
                         labelSelection.selectedClasses = Array.from(new Set([...labelSelection.selectedClasses, ...range]));
                     }
                 } else if (isCtrl) {
-                    // Ctrl+클릭: 토글 선택
-
                     if (labelSelection.selectedClasses.includes(cls)) {
                         labelSelection.selectedClasses = labelSelection.selectedClasses.filter(k => k !== cls);
                     } else {
                         labelSelection.selectedClasses = [...labelSelection.selectedClasses, cls];
                     }
-
+                    labelSelection.lastClickedClass = cls;
+                } else {
+                    // 일반 클릭: 단일 선택 (폴더 열림/닫힘 상태 변경 없음)
+                    labelSelection.selectedClasses = [cls];
                     labelSelection.lastClickedClass = cls;
                 }
 
-                // 🔥 Ctrl/Shift 클래스 선택 → 선택된 폴더 자동 열기 + 하이라이트 + 그리드 표시
-                for (const c of labelSelection.selectedClasses) {
-                    labelSelection.openFolders[c] = true;
-                }
                 this._updateLabelExplorerContentFast();
                 this.updateLabelExplorerSelection();
 
@@ -23369,6 +23351,7 @@ class WaferMapViewer {
     // Label Explorer에서 그리드 모드 전환
 
     showGridFromLabelExplorer(imageKeys) {
+        console.log('🔷 [GRID_FROM_LABEL] called:', { count: imageKeys?.length, keys: imageKeys?.slice(0,3), prefix: this.currentFolderPrefix, cacheKeys: Object.keys(this.classToImgListCache || {}).length });
         if (!imageKeys || imageKeys.length === 0) return;
         
         // 🔥 Label Explorer에서 그리드 표시 시 페이지 변환 처리
@@ -23409,11 +23392,20 @@ class WaferMapViewer {
         }
 
         // 🔥 key (className/fileName)에서 현재 제품 폴더 기준 경로 생성
-        // 서버의 classify_images_batch가 classification 경로를 자동으로 원본 경로로 변환 (캐시 사용)
         const actualPaths = imageKeys
-            .map(key => this.resolveOriginalImagePath(this.resolveLabelExplorerImagePath(key)))
+            .map(key => {
+                const labelPath = this.resolveLabelExplorerImagePath(key);
+                const resolved = labelPath || '';
+                if (!resolved) {
+                    console.warn(`⚠️ [GRID_FROM_LABEL] key="${key}" → labelPath empty`);
+                }
+                return resolved;
+            })
             .filter(Boolean);
-        if (actualPaths.length === 0) return;
+        if (actualPaths.length === 0) {
+            console.warn('⚠️ [GRID_FROM_LABEL] actualPaths empty!', { imageKeys, prefix: this.currentFolderPrefix, cache: Object.keys(this.classToImgListCache || {}) });
+            return;
+        }
 
         // 🔥 Label Explorer에서 온 Grid에 우클릭 이벤트 추가
 
@@ -23464,6 +23456,7 @@ class WaferMapViewer {
             this.debugLog('🔷 [DEBUG] 그리드 컨테이너 표시 설정 완료');
         }
 
+        console.log('🔷 [GRID_FROM_LABEL] showGrid 호출:', { paths: actualPaths.length, first: actualPaths[0] });
         this.showGrid(actualPaths, true);  // 🔥 라벨 Explorer에서 호출 시 상태 저장 건너뛰기
 
         // ✅ showGrid가 그리드를 재생성하므로 attribute를 다시 설정
