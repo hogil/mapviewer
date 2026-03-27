@@ -7218,95 +7218,88 @@ async def get_thumbnail(
         if measure_overlay and not scheme:
             scheme = get_user_color_scheme(_current_login_id(request))
 
-        # 🔥 동기 파일 검증을 스레드 풀에서 실행 — 이벤트 루프 블록 방지
-        def _validate_path_sync():
-            nonlocal path
-            # 경로 해석: ROOT_DIR → current_folder → LABELS_DIR 순으로 시도
-            def _try_resolve(p):
-                if Path(p).is_absolute():
-                    return Path(p)
-                c = ROOT_DIR / p
-                if c.exists() and c.is_file():
-                    return c
-                c = current_folder / p
-                if c.exists() and c.is_file():
-                    return c
-                if "classification" in p:
-                    tail = p.split("classification", 1)[-1].lstrip("/")
-                    # current_folder 기준 classification
-                    c = current_folder / "classification" / tail
+        # 🔥 1단계: 경로 해석 + 캐시 체크 + 썸네일 생성을 한 번의 executor 호출로 통합
+        def _resolve_and_generate():
+            # --- 경로 해석 ---
+            p = path
+            image_path = None
+            if not Path(p).is_absolute():
+                for base in (ROOT_DIR, current_folder):
+                    c = base / p
                     if c.exists() and c.is_file():
-                        return c
-                    # LABELS_DIR 직접 검색
-                    if config.LABELS_DIR.exists():
-                        c = config.LABELS_DIR / tail
-                        if c.exists() and c.is_file():
-                            return c
-                    # classification_chips도 확인
-                    if "classification_chips" not in p and config.CHIP_LABELS_DIR.exists():
-                        c = config.CHIP_LABELS_DIR / tail
-                        if c.exists() and c.is_file():
-                            return c
-                not_found = ROOT_DIR / p
-                if not not_found.exists():
-                    logger.debug(f"[THUMB] 이미지 미발견: {p} (ROOT={ROOT_DIR}, CUR={current_folder})")
-                return not_found
+                        image_path = c
+                        break
+                if not image_path and "classification" in p:
+                    tail = p.split("classification", 1)[-1].lstrip("/")
+                    for base in (current_folder / "classification", config.LABELS_DIR, config.CHIP_LABELS_DIR):
+                        if base.exists():
+                            c = base / tail
+                            if c.exists() and c.is_file():
+                                image_path = c
+                                break
+                if not image_path:
+                    image_path = ROOT_DIR / p
+            else:
+                image_path = Path(p)
 
-            image_path = _try_resolve(path)
+            # --- 보안/유효성 체크 ---
             try:
-                image_path.resolve().relative_to(ROOT_DIR.resolve())
-            except ValueError:
-                try:
-                    image_path.resolve().relative_to(current_folder.resolve())
-                except ValueError:
+                resolved = image_path.resolve()
+                if not (resolved.is_relative_to(ROOT_DIR.resolve()) or resolved.is_relative_to(current_folder.resolve())):
                     return None, 'forbidden', None
+            except Exception:
+                return None, 'forbidden', None
             if not image_path.exists() or not image_path.is_file():
                 return None, 'not_found', None
-            try:
-                image_stat = image_path.stat()
-            except Exception:
-                return None, 'stat_error', None
-            if image_stat.st_size <= 0:
-                return image_path, 'empty', image_stat
             if not is_supported_image(image_path):
                 return None, 'unsupported', None
-            return image_path, 'ok', image_stat
 
-        image_path, status, image_stat = await asyncio.get_running_loop().run_in_executor(
-            THUMBNAIL_EXECUTOR, _validate_path_sync
+            # --- 캐시 체크 ---
+            variant = _build_filter_variant_token(
+                personalized=personalized, scheme=scheme,
+                grade_filter=grade_filter, bottom_filter=bottom_filter,
+                border_normalize=border_normalize, measure_overlay=measure_overlay,
+                bin_overlay=bin_overlay, gradient_filter=gradient_filter,
+            ) or None
+            thumb_path = get_thumbnail_path(image_path, (size, size),
+                                            scheme=scheme if personalized else None,
+                                            variant=variant)
+            if thumb_path.exists() and thumb_path.stat().st_size > 0:
+                return image_path, 'cached', thumb_path
+
+            # --- 썸네일 생성 (캐시 미스) ---
+            thumb_path.parent.mkdir(parents=True, exist_ok=True)
+            _generate_thumbnail_sync(
+                image_path, thumb_path, (size, size),
+                personalized=personalized, scheme=scheme,
+                grade_filter=grade_filter, bottom_filter=bottom_filter,
+                border_normalize=border_normalize, measure_overlay=measure_overlay,
+                bin_overlay=bin_overlay, gradient_filter=gradient_filter,
+            )
+            if thumb_path.exists() and thumb_path.stat().st_size > 0:
+                return image_path, 'generated', thumb_path
+            return image_path, 'failed', None
+
+        image_path, status, thumb = await asyncio.get_running_loop().run_in_executor(
+            THUMBNAIL_EXECUTOR, _resolve_and_generate
         )
 
         if status == 'forbidden':
-            raise HTTPException(status_code=403, detail="Access denied: Path outside ROOT_DIR")
-        elif status == 'not_found' or status == 'stat_error':
+            raise HTTPException(status_code=403, detail="Access denied")
+        elif status == 'not_found':
             raise HTTPException(status_code=404, detail="Image not found")
-        elif status == 'empty':
-            return _invalid_image_response(image_path, size=size)
         elif status == 'unsupported':
             raise HTTPException(status_code=415, detail="Unsupported image format")
+        elif status == 'failed' or not thumb:
+            return await get_image(request, path, personalized=personalized, scheme=scheme,
+                                   grade_filter=grade_filter, bottom_filter=bottom_filter,
+                                   border_normalize=border_normalize)
 
         try:
-            # 기본 썸네일 생성 (개인색 설정 포함)
-            thumb = await generate_thumbnail(
-                image_path,
-                (size, size),
-                personalized=personalized,
-                scheme=scheme,
-                grade_filter=grade_filter,
-                bottom_filter=bottom_filter,
-                border_normalize=border_normalize,
-                measure_overlay=measure_overlay,
-                bin_overlay=bin_overlay,
-                gradient_filter=gradient_filter,
-            )
             if thumb and thumb.exists():
                 st = thumb.stat()
                 if st.st_size <= 0:
-                    try:
-                        thumb.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                    raise RuntimeError("generated thumbnail is empty")
+                    raise RuntimeError("thumbnail empty")
 
                 # 🔥 ETag 304 체크 — 브라우저 캐시 히트 시 파일 전송 생략
                 etag_304 = maybe_304(request, st)
@@ -8387,7 +8380,50 @@ async def classify_delete_batch(request: ClassifyDeleteBatchReq,
         raise HTTPException(status_code=500, detail=str(e))
 
 # ---------------- Static / Pages ----------------
-app.mount("/js", StaticFiles(directory="js"), name="js")
+
+# 🚀 JS 파일: .min.js 자동 서빙 (minify된 버전 우선)
+_JS_DIR = Path("js")
+_JS_MIN_CACHE: Dict[str, Tuple[bytes, str]] = {}  # filename -> (content, etag)
+
+def _preload_minified_js():
+    """서버 시작 시 minified JS를 메모리에 캐시."""
+    for f in _JS_DIR.iterdir():
+        if f.suffix == '.js' and '.min.' not in f.name:
+            min_path = f.with_suffix('').with_suffix('.min.js')
+            target = min_path if min_path.exists() else f
+            content = target.read_bytes()
+            etag = hashlib.md5(content).hexdigest()[:12]
+            _JS_MIN_CACHE[f.name] = (content, etag)
+    return len(_JS_MIN_CACHE)
+
+_preload_minified_js()
+
+@app.get("/js/{filename:path}")
+async def serve_js(filename: str, request: Request):
+    """Minified JS 자동 서빙 + 장기 캐시 + ETag 304."""
+    if filename in _JS_MIN_CACHE:
+        content, etag = _JS_MIN_CACHE[filename]
+        if_none = request.headers.get("if-none-match", "").strip('"')
+        if if_none == etag:
+            return Response(status_code=304, headers={
+                "ETag": f'"{etag}"',
+                "Cache-Control": "public, max-age=31536000, immutable",
+            })
+        return Response(
+            content=content,
+            media_type="application/javascript; charset=utf-8",
+            headers={
+                "Cache-Control": "public, max-age=31536000, immutable",
+                "ETag": f'"{etag}"',
+                "Vary": "Accept-Encoding",
+            },
+        )
+    # 캐시에 없는 파일 (worker 등) → 디스크에서 서빙
+    path = _JS_DIR / filename
+    if path.exists() and path.is_file():
+        return FileResponse(path, media_type="application/javascript")
+    raise HTTPException(status_code=404, detail="Not found")
+
 app.mount("/logs", StaticFiles(directory="logs"), name="logs")
 app.mount("/static", StaticFiles(directory="."), name="static")
 # NOTE: /logs, /static 노출은 내부 환경 전제. 공개 서비스에서는 제거/인증 필요.
