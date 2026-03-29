@@ -104,7 +104,7 @@ Open browser and navigate to: `https://localhost:8443`
 - `THUMBNAIL_FORMAT`: Thumbnail format (default: `WEBP`)
 - `THUMBNAIL_QUALITY`: Thumbnail quality (default: `100`)
 
-See [ENVIRONMENT_SETUP.md](ENVIRONMENT_SETUP.md) for detailed environment variable configuration.
+See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for runtime performance details.
 
 ## Architecture Overview
 
@@ -134,8 +134,7 @@ GET  /api/whoami            # Check session (session_user, session_meta)
 ```
 
 **Worker Configuration:**
-- Default: 75% of CPU cores (minimum 24, maximum 32)
-- Override with `UVICORN_WORKERS` environment variable
+- Must stay at 1 (`UVICORN_WORKERS=1`) to avoid duplicate indexing
 - When `RELOAD=1`, workers are forced to 1
 
 ### Frontend (Vanilla JavaScript)
@@ -373,39 +372,33 @@ Composite Map is a powerful feature that aggregates multiple wafer maps into a s
 - Don't reuse Full Map's `calc_mask` - let subset recalculate from `grade_counts`
 - Subset colors appear lighter/different due to narrower value range (this is expected)
 
-See [FULL_VS_SUBSET_COMPARISON.md](FULL_VS_SUBSET_COMPARISON.md) for detailed technical comparison.
+See [docs/COMPOSITE_MAP.md](docs/COMPOSITE_MAP.md) for detailed technical comparison.
 
-## Development Guidelines (from AGENTS.md)
+## Development Guidelines
+
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for full development guide.
 
 ### Project Structure & Module Organization
 
-The FastAPI backend lives in `api/` (`main.py` entrypoint plus config, caching, and logging helpers). Frontend ES6 modules are in `js/` and loaded directly by `index.html`, so keep code browser-ready without a bundler. Operational scripts live in `scripts/`, long-form docs in `docs/`, sample wafers in `wafer/`, and TLS placeholders in `cert/`. Leave large datasets and private configuration outside version control.
+The FastAPI backend lives in `api/` (`main.py` entrypoint plus config, caching, and logging helpers). Frontend ES6 modules are in `js/` and loaded directly by `index.html`, so keep code browser-ready without a bundler. Long-form docs in `docs/`, and TLS placeholders in `cert/`. Leave large datasets and private configuration outside version control.
 
 ### Build, Test, and Development Commands
 
-Install dependencies with `pip install -r requirements.txt`. Launch the service via `python -m api.main`; use `./start.ps1` (Windows) or `./start.sh` (Ubuntu) when you need the tuned environment variables. Enable local hot reload by exporting `RELOAD=1` and setting `UVICORN_WORKERS=1`. Benchmarks double as smoke tests: `python scripts/benchmark_complete.py wafer` exercises the end-to-end flow, while `python scripts/turbojpeg_vs_pyvips_benchmark.py wafer --limit 100` profiles image codecs. Confirm `PROJECT_ROOT` points to your wafer directory before running any command.
+Install dependencies with `pip install -r requirements.txt`. Launch the service via `python -m api.main`; use `./start.ps1` (Windows) or `./start.sh` (Ubuntu) when you need the tuned environment variables. Enable local hot reload by exporting `RELOAD=1` and setting `UVICORN_WORKERS=1`. Confirm `PROJECT_ROOT` points to your wafer directory before running any command.
 
 ### Coding Style & Naming Conventions
 
 Python modules use 4-space indentation, `snake_case` for functions, and `CamelCase` for services or Pydantic models. Reuse helpers such as `thumbnail_service` and the shared loggers instead of reimplementing filesystem or caching logic, and keep structured logging intact. JavaScript stays as native ES6 modules with `camelCase` APIs and hyphenated filenames (`context-menu.js`, `semiconductor-renderer.js`). Guard long-running I/O with the existing async patterns and locks.
 
-### Testing Guidelines
-
-Add new automated checks under `api/tests/test_<feature>.py` using pytest-style naming. Capture performance baselines with the benchmark scripts above and paste the command plus summary table into reviews. When modifying authentication or configuration, hit `/api/config`, `/saml/login`, and `/api/thumbnail` with curl or HTTPie, noting response codes and payload differences.
-
-### Commit & Pull Request Guidelines
-
-Commits follow the conventional prefixes already in history (`feat:`, `perf:`, `debug:`, `test:`) and use short, imperative subjects. Branch names reflect scope (`feat/<topic>`). Pull requests should include a concise summary, linked issue, verification notes for any commands you ran, and screenshots or timings for UI or benchmark changes. Call out environment-variable or certificate adjustments so reviewers can mirror them.
-
 ### Security & Configuration Tips
 
-Never commit real secrets; `cert/` holds placeholders only. Use `ENVIRONMENT_SETUP.md` when adjusting SAML or HTTPS variables and explain overrides in your PR. Before leaving shared machines, reset aggressive concurrency knobs (`VIPS_CONCURRENCY`, `THUMBNAIL_SEM`, `IO_THREADS`) and re-check that HTTPS still terminates correctly after SSL changes.
+Never commit real secrets; `cert/` holds placeholders only. Before leaving shared machines, reset aggressive concurrency knobs (`VIPS_CONCURRENCY`, `THUMBNAIL_SEM`, `IO_THREADS`) and re-check that HTTPS still terminates correctly after SSL changes.
 
 ## Additional Documentation
 
 - [README.md](README.md): Project overview and quick start
-- [ARCHITECTURE.md](ARCHITECTURE.md): Detailed system architecture
-- [ENVIRONMENT_SETUP.md](ENVIRONMENT_SETUP.md): Complete environment variable guide
-- [CHANGELOG.md](CHANGELOG.md): Version history and changes
-- [FULL_VS_SUBSET_COMPARISON.md](FULL_VS_SUBSET_COMPARISON.md): Composite Map technical deep-dive
+- [docs/README.md](docs/README.md): Documentation index
+- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): Development guide and project structure
+- [docs/API_REFERENCE.md](docs/API_REFERENCE.md): Full API endpoint reference
+- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md): Debugging guide and deploy checklist
 - [docs/CHIP_ANNOTATION.md](docs/CHIP_ANNOTATION.md): Chip-level defect annotation system
