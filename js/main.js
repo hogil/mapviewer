@@ -808,7 +808,8 @@ class WaferMapViewer {
     // 🚀 Lazy module loaders (코드 스플리팅)
     async _getColorEditor() {
         if (!this.colorEditor) {
-            const { ColorSchemeEditor } = await import('./color-editor.js');
+            const jsVer = document.querySelector('script[src*="main.js"]')?.src?.match(/[?&]v=([^&]*)/)?.[1] || Date.now();
+            const { ColorSchemeEditor } = await import(`./color-editor.js?v=${jsVer}`);
             this.colorEditor = new ColorSchemeEditor(this);
         }
         return this.colorEditor;
@@ -3250,6 +3251,12 @@ class WaferMapViewer {
         this.invalidateGridGeometry();
 
                 this.selectedImagePath = '';
+
+                // 🔥 measure/overlay 상태 초기화 (이전 폴더의 measure 그리드 고착 방지)
+                this._measureBaseImages = null;
+                this._gridMeasureMap = null;
+                this.overlayMode = null;
+                this._ratioActiveItemKey = null;
 
                 // 🔥 모든 캐시 초기화 (제품 선택 시마다)
                 console.log('🔍 [CACHE_DEBUG] 제품 선택 시 모든 캐시 삭제 시작');
@@ -6240,10 +6247,14 @@ class WaferMapViewer {
             parts.push(`personalized=true`);
             parts.push(`scheme=${encodeURIComponent(scheme)}`);
 
-            // cacheBuster 추가
-            if (this._personalizedColorCacheBuster) {
-                parts.push(`_t=${this._personalizedColorCacheBuster}`);
+            // cacheBuster 추가 (없으면 colorLegends lastModified에서 생성)
+            if (!this._personalizedColorCacheBuster && this.colorLegends?.[scheme]?.lastModified) {
+                this._personalizedColorCacheBuster = this.colorLegends[scheme].lastModified.replace(/\D/g, '');
             }
+            if (!this._personalizedColorCacheBuster) {
+                this._personalizedColorCacheBuster = '1';  // 기본값 (서버 캐시 키 구분용)
+            }
+            parts.push(`_t=${this._personalizedColorCacheBuster}`);
         }
 
         const hasBottomFilter = this.selectedBottoms.size > 0;
@@ -6360,7 +6371,7 @@ class WaferMapViewer {
         // 인덱스 빌드 상태 폴링 (init 최초에 시작 — 배너 즉시 표시)
         this._pollIndexStatus();
 
-        await this.hardResetUiCaches();
+        this.hardResetUiCaches(); // 🔥 non-blocking — 캐시 클리어는 API 호출에 영향 없음
 
         // 🔥 Ref Map 초기화: 웹페이지 진입 시마다 localStorage에서 제거
         try {
@@ -6374,18 +6385,24 @@ class WaferMapViewer {
             console.error('[RefMap] 초기화 실패:', error);
         }
 
-        // ✅ 1~3단계: 서버 설정 + 색상 + 사용자 정보 병렬 로드
-        await Promise.all([
+        // 🔥 모든 네트워크 호출을 하나의 Promise.all로 병렬 실행 (기존 2단계 → 1단계)
+        const prefetchCF = window.__prefetch?.currentFolder;
+        if (prefetchCF) window.__prefetch.currentFolder = null;
+
+        const [, , , rootPath, serverData] = await Promise.all([
             this.loadServerConfig(),
             this.loadColorLegends(),
             this.loadUserInfo(),
+            this.getRootPath(),
+            (prefetchCF ?? fetch('/api/current-folder').then(r => r.json())).catch(() => ({})),
+            this.loadFolderBrowser('')
         ]);
 
-        // ✅ 4단계: 색상 렌더링 (모든 준비 완료 후)
+        // 색상 렌더링 (colorLegends + currentUser 필요)
         this.renderColorLegends();
         this.showColorLegends();
 
-        // ✅ 5단계: MY LOT 선로딩 (fire-and-forget)
+        // MY LOT prefetch (fire-and-forget)
         this.myLotModal?.refreshData?.().catch((error) => {
             console.error('[WaferMapViewer] MY LOT prefetch failed:', error);
         });
@@ -6394,19 +6411,9 @@ class WaferMapViewer {
             this.dom.fileExplorer.innerHTML = '';
         }
 
-        // 먼저 이미지 폴더 최상위로 이동
-
         try {
-            // ✅ 6단계: 사용자 설정 + 폴더 초기화 병렬 실행
-            // current-folder와 browse-folders는 HTML 프리페치 활용
-            const prefetchCF = window.__prefetch?.currentFolder;
-            if (prefetchCF) window.__prefetch.currentFolder = null;
-            const [, rootPath, serverData] = await Promise.all([
-                this._loadUserPrefs(),
-                this.getRootPath(),
-                (prefetchCF ?? fetch('/api/current-folder').then(r => r.json())).catch(() => ({})),
-                this.loadFolderBrowser('')
-            ]);
+            // 🔥 사용자 설정: fire-and-forget (gridCols 등은 폴더 클릭 전에 적용됨)
+            this._loadUserPrefs().catch(() => {});
 
             if (rootPath) {
                 this.currentFolderPath = rootPath;
@@ -6414,34 +6421,24 @@ class WaferMapViewer {
                 this.debugLog('🔍 [INIT] ROOT_DIR로 초기화:', rootPath);
             }
 
-            // 🔥 current folder 확인 및 ROOT_DIR로 강제 변경
+            // 🔥 current folder → ROOT_DIR 동기화: fire-and-forget (UI는 이미 준비됨)
             try {
                 const serverCurrentPath = serverData.current_folder;
-                
-                // 🔥 서버의 현재 폴더가 ROOT_DIR과 다르면 강제로 ROOT_DIR로 변경
+
                 if (rootPath && serverCurrentPath !== rootPath) {
-                    console.log('🔍 [INIT] 서버가 ROOT_DIR이 아닌 폴더에 있음. ROOT_DIR로 강제 변경:', serverCurrentPath, '->', rootPath);
-                    
-                    const changeFolderResponse = await fetch('/api/change-folder', {
+                    console.log('🔍 [INIT] 서버 ROOT_DIR 동기화 (백그라운드):', serverCurrentPath, '->', rootPath);
+                    fetch('/api/change-folder', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ path: rootPath })
-                    });
-                    
-                    if (changeFolderResponse.ok) {
-                        console.log('🔍 [INIT] ROOT_DIR로 강제 변경 완료');
-                        this.currentFolderPath = rootPath;
-                        this.currentFolderPrefix = '';
-                    } else {
-                        console.warn('🔍 [INIT] ROOT_DIR로 강제 변경 실패, 서버 상태 유지');
-                        this.currentFolderPath = serverCurrentPath;
-                        this.currentFolderPrefix = serverData.current_folder_prefix || '';
-                    }
+                    }).catch(() => {});
+                    this.currentFolderPath = rootPath;
+                    this.currentFolderPrefix = '';
                 } else {
                     this.currentFolderPath = serverCurrentPath;
                     this.currentFolderPrefix = serverData.current_folder_prefix || '';
                 }
-                
+
                 console.log('🔍 [INIT] currentFolderPath 최종:', this.currentFolderPath);
             } catch (error) {
                 console.error('🔍 [INIT] current folder 확인 실패:', error);
@@ -6449,9 +6446,7 @@ class WaferMapViewer {
 
             this.showInitialState();
 
-            // 🔥 필터 메타데이터는 폴더 클릭 시 lazy 로드 (초기화 시 전체 스캔 안 함)
-
-            // 🔥 2순위: File Explorer 로딩은 백그라운드로 실행 (실패 시 재시도)
+            // File Explorer 로딩 (백그라운드, 실패 시 재시도)
             if (this.dom.fileExplorer) {
                 const loadExplorer = async (retries = 5, delay = 2000) => {
                     for (let i = 0; i < retries; i++) {
@@ -6662,11 +6657,19 @@ class WaferMapViewer {
             }
             
             // 3. API로 사용자 정보 가져오기
-            const apiUrl = initialLoginIdFromUrl 
+            const apiUrl = initialLoginIdFromUrl
                 ? `/api/auth/user?LoginId=${encodeURIComponent(initialLoginIdFromUrl)}`
                 : `/api/auth/user`;
-            const response = await fetch(apiUrl);
-            const data = await response.json();
+            // 🔥 프리페치된 데이터 우선 사용 (HTML에서 JS 로드 전에 시작됨)
+            let data;
+            if (window.__prefetch?.authUser) {
+                data = await window.__prefetch.authUser;
+                window.__prefetch.authUser = null;
+            }
+            if (!data) {
+                const response = await fetch(apiUrl);
+                data = await response.json();
+            }
             
             // colorScheme이 있으면 사용
             if (data.colorScheme) {
@@ -7374,6 +7377,9 @@ class WaferMapViewer {
     async selectAllFolderFiles(folderPath) {
         try {
             this.debugLog(`폴더 선택: ${folderPath}`);
+
+            // 🔥 폴더 전환 시 measure base images 초기화 (이전 폴더 이미지 잔존 방지)
+            this._measureBaseImages = null;
 
             const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
 
@@ -9562,8 +9568,12 @@ class WaferMapViewer {
         const results = cs.measureResults || [];
         if (!results.length) return;
 
-        // 모든 결과에 대해 recolor (병렬)
-        const recolorPromises = results.map(async (r) => {
+        // 🔥 Grade composite 제외 — measure recolor API는 measure 이미지만 처리
+        const measureOnly = results.filter(r => !r.is_grade_composite);
+        if (!measureOnly.length) return;
+
+        // 모든 결과에 대해 recolor (병렬) — target_filename으로 개별 이미지 지정
+        const recolorPromises = measureOnly.map(async (r) => {
             try {
                 const res = await fetch('/api/measure-composite-recolor', {
                     method: 'POST',
@@ -9572,6 +9582,7 @@ class WaferMapViewer {
                         output_dir: r.output_dir,
                         gradient_filter: gradientFilter,
                         bin_filter: binFilter,
+                        target_filename: r.filename || null,
                     }),
                     cache: 'no-store',
                 });
@@ -9595,8 +9606,20 @@ class WaferMapViewer {
 
         // 캐시 무효화 + 리로드
         this._personalizedColorCacheBuster = Date.now();
+        if (this.thumbnailManager) this.thumbnailManager.cache.clear();
         if (this.gridMode) {
-            this.refreshGridThumbnailsWithCurrentParams();
+            // 🔥 Composite 이미지는 서버에서 직접 덮어쓰기됨 → 그리드 이미지 강제 리로드
+            const grid = document.getElementById('image-grid');
+            if (grid) {
+                const timestamp = Date.now();
+                grid.querySelectorAll('.grid-thumb-img').forEach(img => {
+                    if (img.src && !img.src.startsWith('data:')) {
+                        const url = new URL(img.src);
+                        url.searchParams.set('_t', timestamp);
+                        img.src = url.toString();
+                    }
+                });
+            }
         } else if (this.selectedImagePath) {
             await this._reloadCurrentImageWithFilters();
         }
@@ -13361,14 +13384,13 @@ class WaferMapViewer {
                 return segments.join(' ');
             };
 
-            // 🔥 캐시 무효화 강화: 개인색 설정 변경 시 브라우저 캐시도 무시
+            // 🔥 캐시 무효화: 항상 서버에서 최신 이미지 가져옴 (no-cache → ETag 304 지원)
             const fetchOptions = {
                 priority: 'high',
-                cache: this._personalizedColorCacheBuster ? 'no-cache' : 'default', // 캐시 버스팅 시 브라우저 캐시 무시
+                cache: 'no-cache',
                 headers: {
                     Accept: 'image/png,image/apng,image/*;q=0.8',
-                    // 🔥 캐시 무효화를 위한 헤더 추가
-                    'Cache-Control': this._personalizedColorCacheBuster ? 'no-cache' : 'max-age=31536000'
+                    'Cache-Control': 'no-cache'
                 },
                 // 🔥 이미지 로드 중단 시그널 추가 (next/prev 빠른 클릭 대응)
                 signal: this.imageLoadAbortController?.signal
@@ -13638,7 +13660,7 @@ class WaferMapViewer {
             this.dom.overlayCanvas.style.left = '0';
             this.dom.overlayCanvas.style.top = '0';
             this.dom.overlayCanvas.style.zIndex = 2;
-            this.dom.overlayCanvas.style.pointerEvents = 'none';
+            this.dom.overlayCanvas.style.pointerEvents = 'auto';
         }
 
         let usedGpu = false;
@@ -14776,19 +14798,19 @@ class WaferMapViewer {
                             console.warn(`⚠️ ${result.errors}개 파일 처리 실패`);
                         }
 
-                        // 🔥 라벨 추가 후 Label Explorer 자동 새로고침 (즉시)
-                        // 추가한 클래스 폴더가 열려있으면 캐시 무효화
-                        if (this.labelSelection && this.labelSelection.openFolders && this.labelSelection.openFolders[cls]) {
-                            console.log(`🔄 [AUTO_REFRESH] 폴더 '${cls}' 자동 새로고침`);
-                            
-                            // 해당 클래스 캐시 무효화
-                            if (this.classToImgListCache && this.classToImgListCache[cls]) {
-                                delete this.classToImgListCache[cls];
-                            }
-                            
-                            // Label Explorer 새로고침 (열린 폴더 상태 유지)
-                            this.refreshLabelExplorer();
+                        // 🔥 라벨 추가 후 Label Explorer 즉시 새로고침 (폴더 열림/닫힘 무관)
+                        console.log(`🔄 [AUTO_REFRESH] 라벨 추가 → '${cls}' 캐시 무효화 + Label Explorer 갱신`);
+
+                        // 해당 클래스 캐시 무효화
+                        if (this.classToImgListCache) {
+                            delete this.classToImgListCache[cls];
                         }
+                        // cachedClassList도 무효화 (새 클래스가 추가됐을 수 있으므로)
+                        this.cachedClassList = null;
+                        this.classListPromise = null;
+
+                        // Label Explorer 새로고침 (dirty class 전달 → 해당 폴더만 갱신, 나머지 상태 유지)
+                        this.refreshLabelExplorer([cls]);
                     }).catch(error => {
                         console.error('❌ 라벨 추가 중 오류:', error);
                     });
@@ -15356,16 +15378,20 @@ class WaferMapViewer {
 
     getSelectedImagesForModal() {
         // 그리드 모드에서 선택된 이미지들 반환
-        if (this.gridMode && this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0) {
-            const imageList = (this.selectedImages?.length ? this.selectedImages : this.currentGridImages) || [];
-            let paths = this.gridSelectedIdxs
-                .map(idx => imageList[idx])
-                .filter(Boolean);
-            // 🔥 다중 Measure 모드: 확장된 리스트에서 중복 제거
-            if (this._gridMeasureMap) {
-                paths = [...new Set(paths)];
+        if (this.gridMode) {
+            if (this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0) {
+                const imageList = (this.selectedImages?.length ? this.selectedImages : this.currentGridImages) || [];
+                let paths = this.gridSelectedIdxs
+                    .map(idx => imageList[idx])
+                    .filter(Boolean);
+                // 🔥 다중 Measure 모드: 확장된 리스트에서 중복 제거
+                if (this._gridMeasureMap) {
+                    paths = [...new Set(paths)];
+                }
+                return paths;
             }
-            return paths;
+            // 🔥 그리드 모드에서 선택 없으면 빈 배열 (selectedImagePath 반환 방지)
+            return [];
         }
 
         // 단일 이미지 모드에서는 현재 선택된 이미지 반환
@@ -15968,9 +15994,16 @@ class WaferMapViewer {
             // 모달 닫기
             this.closeAddLabelModal();
 
+            // 🔥 캐시 강제 무효화: 해당 클래스 + 클래스 목록
+            if (this.classToImgListCache) {
+                delete this.classToImgListCache[finalClassName];
+            }
+            this.cachedClassList = null;
+            this.classListPromise = null;
+
             // UI 업데이트 (Label Explorer)
             console.log('🔄 [CHIP_LABEL] Refreshing Label Explorer...');
-            await this.refreshLabelExplorer();
+            await this.refreshLabelExplorer([finalClassName]);
 
         } catch (error) {
             console.error('Failed to add chip labels:', error);
@@ -16512,6 +16545,17 @@ class WaferMapViewer {
             const tRefresh = performance.now();
             // refreshLabelExplorer가 내부에서 getClassList() 호출하므로 중복 제거
             await this.refreshLabelExplorer();
+
+            // 🔥 Chip annotation 캐시 무효화 + 재로드 (삭제된 라벨 즉시 반영)
+            if (this.chipAnnotator) {
+                // 클라이언트 positions 캐시 초기화
+                if (typeof _positionsCache !== 'undefined') _positionsCache.clear();
+                // chip annotation 재로드 (markedChips 갱신)
+                if (this.chipAnnotator.currentImagePath) {
+                    await this.chipAnnotator.loadAnnotations(this.chipAnnotator.currentImagePath);
+                }
+                this.chipAnnotator.render();
+            }
 
             this.debugLog(`⏱ Label Explorer 새로고침: ${(performance.now()-tRefresh).toFixed(1)}ms`);
 
@@ -21506,8 +21550,12 @@ class WaferMapViewer {
         this._measureCheckedItems = _savedMeasureCheckedItems;
         this._measureBaseImages = _savedMeasureBaseImages;
 
-        // 🔥 다중 Measure 모드: 클릭한 인덱스의 measure item으로 overlay 설정
-        const clickedMeasureItem = this._gridMeasureMap ? this._gridMeasureMap[idx] : null;
+        // 🔥 Measure 모드: 클릭한 인덱스의 measure item으로 overlay 설정
+        // _gridMeasureMap 우선, 없으면 _measureCheckedItems fallback
+        let clickedMeasureItem = this._gridMeasureMap ? this._gridMeasureMap[idx] : null;
+        if (!clickedMeasureItem && _savedMeasureCheckedItems?.length > 0) {
+            clickedMeasureItem = _savedMeasureCheckedItems[0];
+        }
         if (clickedMeasureItem && _savedOverlayMode === 'multi') {
             if (clickedMeasureItem.type === 'f' || clickedMeasureItem.type === 'q') {
                 this.overlayMode = clickedMeasureItem.type;
@@ -21651,8 +21699,12 @@ class WaferMapViewer {
         }
         // Navigator는 loadImage 완료 후에만 세팅 (이미지 로드와 DOM 경합 방지)
 
-        // 🔥 다중 Measure 모드: 더블클릭한 셀의 measure item에 맞게 overlay 적용
-        const measureItem = this._gridMeasureMap ? this._gridMeasureMap[idx] : null;
+        // 🔥 Measure 모드: 더블클릭한 셀의 measure item에 맞게 overlay 적용
+        // _gridMeasureMap 우선, 없으면 _measureCheckedItems fallback (그리드 표시 후 Measure 적용 시)
+        let measureItem = this._gridMeasureMap ? this._gridMeasureMap[idx] : null;
+        if (!measureItem && this._measureCheckedItems?.length > 0) {
+            measureItem = this._measureCheckedItems[0];
+        }
         if (measureItem) {
             if (measureItem.type === 'f' || measureItem.type === 'q') {
                 this.overlayMode = measureItem.type;
@@ -22487,7 +22539,7 @@ class WaferMapViewer {
             const response = await fetch(`/api/files?path=${encodeURIComponent(folderPath)}`);
             const data = await response.json();
             let files = (data.items || [])
-                .filter(item => item.type === 'file')
+                .filter(item => item.type === 'file' && this.isImageFile(item.name))
                 .map(item => {
                     // 서버가 절대경로 반환 시 상대경로로 변환 (폴더명 기준)
                     const raw = item.path || `${folderPath}/${item.name}`;
@@ -24701,6 +24753,8 @@ class WaferMapViewer {
             const binColors = this._buildBinColorMap();
             this.chipAnnotator.setOverlayMode('bin', { binColors });
         } else if (this.isMeasureGradientMode()) {
+            // 🔥 F/Q 데이터 lazy 로드 (칩 텍스트 표시용)
+            await this.chipAnnotator.ensureFqData();
             // 🔥 chipAnnotator.overlayMode 동기화 (이전 BIN 오버레이 잔존 방지)
             this.chipAnnotator.overlayMode = this.overlayMode;
             this.chipAnnotator.binOverlayColors.clear();
@@ -25262,7 +25316,9 @@ class WaferMapViewer {
             const measureItem = (this._gridMeasureMap && !isNaN(wrapIdx)) ? this._gridMeasureMap[wrapIdx] : null;
 
             if (measureItem) {
-                nextUrl = this._buildMeasureThumbUrl(imagePath, measureItem, cacheSuffix);
+                // 🔥 measure-thumb은 personalizedParams를 안 쓰므로 cacheBuster 직접 전달
+                const mSuffix = `&_t=${cacheBuster}`;
+                nextUrl = this._buildMeasureThumbUrl(imagePath, measureItem, mSuffix);
             } else {
                 // 단일 Measure overlay → /api/measure-thumb (positions-only, 3ms)
                 const isMeasure = (this.isMeasureGradientMode()) && this._ratioActiveItemKey;
@@ -25270,7 +25326,9 @@ class WaferMapViewer {
                     const loginId = this.getCurrentLoginId();
                     const gf = this.selectedGradientRanges.size > 0
                         ? Array.from(this.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
-                    nextUrl = `/api/measure-thumb?path=${encodeURIComponent(imagePath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=512&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
+                    // 🔥 measure-thumb은 personalizedParams를 안 쓰므로 cacheBuster를 직접 추가
+                    const measureCacheSuffix = `&_t=${cacheBuster}`;
+                    nextUrl = `/api/measure-thumb?path=${encodeURIComponent(imagePath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=512&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${measureCacheSuffix}`;
                 } else {
                     nextUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}&size=512${personalizedParams}${cacheSuffix}`;
                 }
@@ -25651,6 +25709,18 @@ class WaferMapViewer {
                 data = await response.json();
             }
             this.colorLegends = data;
+            // 🔥 초기 로드 시 개인색 cacheBuster 설정 (이전 세션 색상 변경 반영)
+            if (!this._personalizedColorCacheBuster) {
+                const scheme = this.getActivePersonalizedScheme?.() || this.currentUser || 'notsaml';
+                const lm = data[scheme]?.lastModified;
+                if (lm) {
+                    this._personalizedColorCacheBuster = lm.replace(/\D/g, '');
+                }
+                // lastModified 없으면 기본값 설정 (캐시 우회 보장)
+                if (!this._personalizedColorCacheBuster) {
+                    this._personalizedColorCacheBuster = Date.now().toString();
+                }
+            }
             return this.colorLegends;
         } catch (error) {
             // 🔥 AbortError는 정상 (이미지 로딩 중단 시)

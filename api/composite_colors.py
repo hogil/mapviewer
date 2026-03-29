@@ -142,7 +142,7 @@ def save_composite_color_settings(
     if background is not None:
         entry["background"] = normalize_hex_color(background)
 
-    save_color_legends(legends)
+    save_color_legends(legends, updated_scheme_name=scheme_key)
     return load_composite_color_settings(scheme_key)
 
 
@@ -209,7 +209,7 @@ def save_measure_color_settings(
     if background is not None:
         entry["background"] = normalize_hex_color(background)
 
-    save_color_legends(legends)
+    save_color_legends(legends, updated_scheme_name=scheme_key)
     return load_measure_color_settings(scheme_key)
 
 

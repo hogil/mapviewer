@@ -777,14 +777,16 @@ def _resolve_scheme_background_rgb(scheme: Optional[str], section: Optional[str]
 
     scheme_name = (scheme or ANONYMOUS_LOGIN_ID).strip() or ANONYMOUS_LOGIN_ID
 
-    # 1. section별 배경색 (composite/measure 탭에서 설정한 배경)
+    # 1. section별 배경색 (composite/measure 탭에서 사용자가 명시적으로 설정한 배경)
+    _DEFAULT_BG = "#CCCCCC"
     if section in ("composite", "measure"):
         section_data = legends.get(section, {})
         if isinstance(section_data, dict):
             user_entry = section_data.get(scheme_name) or section_data.get(ANONYMOUS_LOGIN_ID)
             if isinstance(user_entry, dict):
                 raw_bg = user_entry.get("background")
-                if raw_bg:
+                if raw_bg and str(raw_bg).strip().upper() != _DEFAULT_BG.upper():
+                    # 기본값(#CCCCCC)이 아닌 명시적 설정만 우선 사용
                     try:
                         return _hex_to_rgb_tuple(normalize_hex_color(str(raw_bg)))
                     except Exception:
@@ -801,9 +803,9 @@ def _resolve_scheme_background_rgb(scheme: Optional[str], section: Optional[str]
 
     raw_background = scheme_data.get("background")
     try:
-        normalized = normalize_hex_color(str(raw_background or "#CCCCCC"))
+        normalized = normalize_hex_color(str(raw_background or _DEFAULT_BG))
     except Exception:
-        normalized = "#CCCCCC"
+        normalized = _DEFAULT_BG
     return _hex_to_rgb_tuple(normalized)
 
 
@@ -1139,6 +1141,101 @@ def _render_sum_map_image(
     return rgb_array
 
 
+# ── Palette-indexed sum map (default palette로 생성, UI에서 PLTE 패치로 개인색 표시) ──
+
+COMPOSITE_GRADIENT_START = 24   # gradient 시작 팔레트 인덱스
+COMPOSITE_GRADIENT_END = 255    # gradient 끝 팔레트 인덱스
+COMPOSITE_GRADIENT_COUNT = COMPOSITE_GRADIENT_END - COMPOSITE_GRADIENT_START + 1  # 232
+
+
+def _build_composite_gradient_entries(scheme: str = "default") -> List[int]:
+    """composite gradient 색상을 palette 바이트로 반환 (indices 24-255 → 232*3=696 bytes)."""
+    from .composite_colors import load_composite_color_settings
+    settings = load_composite_color_settings(scheme)
+    stops = [_hex_to_rgb_tuple(c) for c in settings.colors]
+
+    gradient: List[int] = []
+    for i in range(COMPOSITE_GRADIENT_COUNT):
+        pct = i / max(COMPOSITE_GRADIENT_COUNT - 1, 1) * 100.0
+        idx_f = pct / 10.0
+        lo = max(0, min(10, int(idx_f)))
+        hi = min(10, lo + 1)
+        t = idx_f - lo
+        r0, g0, b0 = stops[lo]
+        r1, g1, b1 = stops[hi]
+        gradient.extend([
+            int(r0 + (r1 - r0) * t),
+            int(g0 + (g1 - g0) * t),
+            int(b0 + (b1 - b0) * t),
+        ])
+    return gradient
+
+
+def _build_sum_map_palette(source_palette_list: List[int], gradient_scheme: str = "default") -> List[int]:
+    """sum map용 전체 팔레트 (256*3=768 bytes).
+
+    - index 0-23: source palette (Grade/border/bg 색상)
+    - index 24-255: composite gradient (default 색상)
+    """
+    palette = list(source_palette_list[:768])
+    if len(palette) < 768:
+        palette.extend([0] * (768 - len(palette)))
+    gradient = _build_composite_gradient_entries(gradient_scheme)
+    palette[COMPOSITE_GRADIENT_START * 3:] = gradient
+    return palette
+
+
+def _render_sum_map_palette(
+    base_indices: np.ndarray,
+    value_map: np.ndarray,
+    mask: np.ndarray,
+    value_min: Optional[float] = None,
+    value_max: Optional[float] = None,
+) -> np.ndarray:
+    """sum map을 palette index 배열로 렌더링 (RGB가 아닌 (H,W) uint8).
+
+    - base 영역: base_indices 그대로 (0-23)
+    - gradient 영역 (mask=True): percentile → index 24-255
+    """
+    result = base_indices.copy()
+
+    if not mask.any():
+        return result
+
+    calc_values = value_map[mask].astype(np.float32, copy=False)
+    finite_values = calc_values[np.isfinite(calc_values)]
+    if finite_values.size == 0:
+        return result
+
+    v_min = value_min if value_min is not None else float(finite_values.min())
+    v_max = value_max if value_max is not None else float(finite_values.max())
+
+    denom = v_max - v_min
+    if denom <= 0:
+        grad_idx = np.full(calc_values.shape, COMPOSITE_GRADIENT_END if v_max > 0 else COMPOSITE_GRADIENT_START, dtype=np.uint8)
+    else:
+        scaled = (calc_values - v_min) / denom
+        grad_idx = np.clip(
+            np.rint(scaled * (COMPOSITE_GRADIENT_COUNT - 1) + COMPOSITE_GRADIENT_START),
+            COMPOSITE_GRADIENT_START, COMPOSITE_GRADIENT_END
+        ).astype(np.uint8, copy=False)
+
+    result[mask] = grad_idx
+    return result
+
+
+def _save_palette_png(index_array: np.ndarray, palette_list: List[int], path: Path) -> Tuple[Path, str]:
+    """palette-indexed PNG로 저장."""
+    from PIL import Image as _PILImage
+    path = path.with_suffix(".png")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img = _PILImage.fromarray(index_array.astype(np.uint8), mode="P")
+    img.putpalette(palette_list[:768])
+    img.save(str(path), format="PNG", optimize=True)
+    rel = path.relative_to(IMAGES_ROOT).as_posix()
+    return path, rel
+
+
 def _trace_enabled() -> bool:
     return os.getenv("COMPOSITE_TIMING", "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
@@ -1343,7 +1440,13 @@ def _persist_square_map_data(
                     tmp.unlink()
             except Exception:
                 pass
-    threading.Thread(target=_save_npz, daemon=True).start()
+    # 🔥 동기 저장 (recolor가 생성 직후 NPZ를 참조)
+    # grade_counts를 uint8로 저장하여 크기 절감 (최대 256장 → uint8 충분)
+    if "grade_counts" in save_payload:
+        gc = save_payload["grade_counts"]
+        if gc.max() <= 255:
+            save_payload["grade_counts"] = gc.astype(np.uint8, copy=False)
+    _save_npz()
 
 
 def _recompute_square_maps_from_counts(
@@ -1438,17 +1541,10 @@ def recolor_saved_sum_maps(
     palette_list = palette_array.reshape(-1).tolist()
     resolved_scheme = (scheme or cached_scheme or ANONYMOUS_LOGIN_ID).strip() or ANONYMOUS_LOGIN_ID
     settings = load_composite_color_settings(resolved_scheme)
-    palette_list = _apply_personal_palette(palette_list, resolved_scheme)
-    cached_colors: Optional[List[str]] = None
-    if colors_arr is not None:
-        try:
-            cached_colors = [normalize_hex_color(str(c)) for c in colors_arr.tolist()]
-        except Exception:
-            cached_colors = None
-    base_colors = cached_colors if cached_colors else settings.colors
+    # 🔥 개인색 미적용 — default palette로 저장, UI에서 PLTE 패치로 개인색 표시
     if override_colors:
         colors_to_use: List[str] = []
-        for idx, base_color in enumerate(base_colors):
+        for idx, base_color in enumerate(settings.colors):
             candidate = override_colors[idx] if idx < len(override_colors) else None
             if candidate:
                 try:
@@ -1458,37 +1554,31 @@ def recolor_saved_sum_maps(
                     pass
             colors_to_use.append(base_color)
     else:
-        colors_to_use = base_colors
+        colors_to_use = settings.colors
 
-    color_stops = np.array([_hex_to_rgb_tuple(c) for c in colors_to_use], dtype=np.float32)
-    quantile_positions = None
-    if settings.quantiles:
-        quantile_positions = np.asarray(settings.quantiles, dtype=np.float32) * 100.0
-    lut_positions = np.linspace(0.0, 100.0, 256, dtype=np.float32)
-    shared_lut_colors = _interpolate_percentile_colors(lut_positions, color_stops, quantile_positions)
-
-    ext = _image_ext()
+    # 🔥 Palette PNG로 저장 (default palette + UI에서 PLTE 패치로 개인색 표시)
+    sum_palette = _build_sum_map_palette(palette_list, gradient_scheme="default")
     variants = [
-        (f"square_average{ext}", "square_mean", "Composite SqMean", square_mean_map, calc_mask),
-        (f"square_weighted_average{ext}", "weighted_square_mean", "Composite Weighted SqMean", weighted_map, weighted_mask),
+        ("square_average.png", "square_mean", "Composite SqMean", square_mean_map, calc_mask),
+        ("square_weighted_average.png", "weighted_square_mean", "Composite Weighted SqMean", weighted_map, weighted_mask),
     ]
 
     outputs: List[Dict[str, str]] = []
     subset_outputs: List[Dict[str, str]] = []
-    # base_rgb를 한 번만 계산 (recolor 2장 공유)
-    _recolor_base_rgb = np.array(palette_list, dtype=np.uint8).reshape(256, 3)[base_indices]
 
     for filename, variant_type, display_name, data_map, mask in variants:
         sum_map_path = output_dir / filename
+        # 기존 JPEG/WEBP 파일 삭제 (palette PNG로 교체)
+        for old_ext in (".jpg", ".webp"):
+            old_file = sum_map_path.with_suffix(old_ext)
+            if old_file.exists():
+                old_file.unlink(missing_ok=True)
         v_min, v_max = _value_range_for_map(data_map, mask, clamp_min_to_zero=True)
-        img = _render_sum_map_image(
+        idx_arr = _render_sum_map_palette(
             base_indices=base_indices, value_map=data_map, mask=mask,
-            palette_list=palette_list, quantiles=settings.quantiles,
-            color_stops=color_stops, lut_colors=shared_lut_colors,
-            value_min=v_min, value_max=v_max, force_full_range=True,
-            _base_rgb=_recolor_base_rgb,
+            value_min=v_min, value_max=v_max,
         )
-        actual_path, rel_path = _save_image_with_backend(img, sum_map_path, quality=75)
+        actual_path, rel_path = _save_palette_png(idx_arr, sum_palette, sum_map_path)
         outputs.append({
             "path": rel_path, "type": variant_type,
             "display_name": display_name, "filename": actual_path.name,
@@ -1552,65 +1642,43 @@ def recolor_saved_sum_maps(
                 target = output_dir / name_map["mean"]
                 render_map = sub_square_mean
                 vmin, vmax = _value_range_for_map(render_map, sub_calc_mask, clamp_min_to_zero=True)
-                img = _render_sum_map_image(
-                    base_indices=base_indices,
-                    value_map=render_map,
-                    mask=sub_calc_mask,
-                    palette_list=palette_list,
-                    quantiles=settings.quantiles,
-                    color_stops=color_stops,
-                    lut_colors=shared_lut_colors,
-                    value_min=vmin,
-                    value_max=vmax,
-                    force_full_range=True,
+                idx_arr = _render_sum_map_palette(
+                    base_indices=base_indices, value_map=render_map, mask=sub_calc_mask,
+                    value_min=vmin, value_max=vmax,
                 )
-                actual_path, rel_path = _save_image_with_backend(img, target)
-                outputs.append({
-                    "path": rel_path,
-                    "type": "square_mean",
+                for old_ext in (".jpg", ".webp"):
+                    old_file = target.with_suffix(old_ext)
+                    if old_file.exists():
+                        old_file.unlink(missing_ok=True)
+                actual_path, rel_path = _save_palette_png(idx_arr, sum_palette, target)
+                entry = {
+                    "path": rel_path, "type": "square_mean",
                     "display_name": f"Composite SqMean [Grade {grade_label}]",
-                    "filename": actual_path.name,
-                    "selected_grades": list(grade_tuple),
-                })
-                subset_outputs.append({
-                    "path": rel_path,
-                    "type": "square_mean",
-                    "display_name": f"Composite SqMean [Grade {grade_label}]",
-                    "filename": actual_path.name,
-                    "selected_grades": list(grade_tuple),
-                })
+                    "filename": actual_path.name, "selected_grades": list(grade_tuple),
+                }
+                outputs.append(entry)
+                subset_outputs.append(entry)
 
             if "weighted" in name_map:
                 target = output_dir / name_map["weighted"]
                 render_map = sub_weighted
                 vmin, vmax = _value_range_for_map(render_map, sub_weighted_mask, clamp_min_to_zero=True)
-                img = _render_sum_map_image(
-                    base_indices=base_indices,
-                    value_map=render_map,
-                    mask=sub_weighted_mask,
-                    palette_list=palette_list,
-                    quantiles=settings.quantiles,
-                    color_stops=color_stops,
-                    lut_colors=shared_lut_colors,
-                    value_min=vmin,
-                    value_max=vmax,
-                    force_full_range=True,
+                idx_arr = _render_sum_map_palette(
+                    base_indices=base_indices, value_map=render_map, mask=sub_weighted_mask,
+                    value_min=vmin, value_max=vmax,
                 )
-                actual_path, rel_path = _save_image_with_backend(img, target)
-                outputs.append({
-                    "path": rel_path,
-                    "type": "weighted_square_mean",
+                for old_ext in (".jpg", ".webp"):
+                    old_file = target.with_suffix(old_ext)
+                    if old_file.exists():
+                        old_file.unlink(missing_ok=True)
+                actual_path, rel_path = _save_palette_png(idx_arr, sum_palette, target)
+                entry = {
+                    "path": rel_path, "type": "weighted_square_mean",
                     "display_name": f"Composite Weighted SqMean [Grade {grade_label}]",
-                    "filename": actual_path.name,
-                    "selected_grades": list(grade_tuple),
-                })
-                subset_outputs.append({
-                    "path": rel_path,
-                    "type": "weighted_square_mean",
-                    "display_name": f"Composite Weighted SqMean [Grade {grade_label}]",
-                    "filename": actual_path.name,
-                    "selected_grades": list(grade_tuple),
-                })
+                    "filename": actual_path.name, "selected_grades": list(grade_tuple),
+                }
+                outputs.append(entry)
+                subset_outputs.append(entry)
 
     return outputs + subset_outputs
 
@@ -1772,24 +1840,17 @@ def _save_sum_map_variants(
     lut_positions = np.linspace(0.0, 100.0, 256, dtype=np.float32)
     shared_lut_colors = _interpolate_percentile_colors(lut_positions, color_stops, quantile_positions)
 
+    # 🔥 Palette PNG로 저장 (default palette, UI에서 PLTE 패치로 개인색 표시)
     display_suffix = f" [{name_suffix.lstrip('_')}]" if name_suffix else ""
-    ext = _image_ext()
+    sum_palette = _build_sum_map_palette(palette, gradient_scheme="default")
     variants = [
-        (f"square_average{name_suffix}{ext}", "square_mean", f"Composite SqMean{display_suffix}", square_mean_map, calc_mask),
-        (f"square_weighted_average{name_suffix}{ext}", "weighted_square_mean", f"Composite Weighted SqMean{display_suffix}", weighted_map, weighted_mask),
+        (f"square_average{name_suffix}.png", "square_mean", f"Composite SqMean{display_suffix}", square_mean_map, calc_mask),
+        (f"square_weighted_average{name_suffix}.png", "weighted_square_mean", f"Composite Weighted SqMean{display_suffix}", weighted_map, weighted_mask),
     ]
 
     outputs: List[Dict[str, str]] = []
-    save_futures: List[Tuple] = []
 
-    render_workers = _RENDER_WORKERS
-    save_workers = _SAVE_WORKERS
-
-    # numba 사용 시 _shared_base_rgb 할당 스킵 (143MB 절약)
-    _use_numba_render = _HAS_NUMBA and _numba_render_composite is not None
-    _shared_base_rgb = None if _use_numba_render else np.array(palette, dtype=np.uint8).reshape(256, 3)[base_indices]
-
-    # min/max 사전 계산 (render thread에서 GIL 경쟁 방지)
+    # min/max 사전 계산
     _precomputed_ranges: Dict[int, Tuple[Optional[float], Optional[float]]] = {}
     for vi, (_, _, _, data_map, mask_arr) in enumerate(variants):
         values = data_map[mask_arr]
@@ -1799,33 +1860,27 @@ def _save_sum_map_variants(
         else:
             _precomputed_ranges[vi] = (None, None)
 
-    def _render_and_save(variant_idx, data_map, mask_arr, target_path):
-        """렌더링+인코딩+저장을 단일 함수로 합침 (파이프라인 오버헤드 제거)."""
+    def _render_and_save_palette(variant_idx, data_map, mask_arr, target_path):
+        """palette index 렌더링 + PNG 저장."""
         v_min, v_max = _precomputed_ranges[variant_idx]
-        img = _render_sum_map_image(
-            base_indices=base_indices,
-            value_map=data_map,
-            mask=mask_arr,
-            palette_list=palette,
-            quantiles=settings.quantiles,
-            color_stops=color_stops,
-            lut_colors=shared_lut_colors,
-            value_min=v_min,
-            value_max=v_max,
-            force_full_range=True,
-            _base_rgb=_shared_base_rgb,
+        idx_arr = _render_sum_map_palette(
+            base_indices=base_indices, value_map=data_map, mask=mask_arr,
+            value_min=v_min, value_max=v_max,
         )
-        # Sum map은 gradient heatmap → Q75로 충분 (Grade 히트맵은 별도 PNG 저장)
-        actual_path, rel_path = _save_image_with_backend(img, target_path, quality=75)
+        # 기존 JPEG/WEBP 파일 삭제 (palette PNG로 교체)
+        for old_ext in (".jpg", ".webp"):
+            old_file = target_path.with_suffix(old_ext)
+            if old_file.exists():
+                old_file.unlink(missing_ok=True)
+        actual_path, rel_path = _save_palette_png(idx_arr, sum_palette, target_path)
         return actual_path, rel_path
 
-    # 🔥 2장을 ThreadPoolExecutor에서 병렬 실행
-    # numba render + TurboJPEG 인코딩 모두 GIL 해제 → 실제 병렬
+    # 2장 병렬 저장
     with ThreadPoolExecutor(max_workers=min(len(variants), 4)) as pool:
         futures = []
         for vi, (filename, variant_type, display_name, data_map, mask) in enumerate(variants):
             sum_map_path = output_dir / filename
-            fut = pool.submit(_render_and_save, vi, data_map, mask, sum_map_path)
+            fut = pool.submit(_render_and_save_palette, vi, data_map, mask, sum_map_path)
             futures.append((fut, variant_type, display_name))
 
         for fut, variant_type, display_name in futures:
@@ -1970,12 +2025,10 @@ def create_composite_heatmaps(
     max_workers = max_workers or COMPOSITE_MAX_WORKERS
     batch_size = batch_size or COMPOSITE_BATCH_SIZE
 
-    # 🔥 default palette: heatmap PNG 저장용 (인덱스 보존, 개인색 미적용)
-    # thumbnail API의 personalized=true가 표시 시 개인색 적용
+    # 🔥 default palette로 생성 → display 시 개인색 적용 (썸네일 API PLTE 패치)
     default_palette_list = _build_palette_list(source_palette)
-    # 🔥 personal palette: sum map 렌더링용 (gradient 색상 반영)
     palette_list = _build_palette_list(source_palette)
-    palette_list = _apply_personal_palette(palette_list, scheme)
+    # 개인색 미적용 — /api/thumbnail의 personalized=true에서 display 시점에 적용
 
     if indices is None:
         indices = list(range(8))
@@ -1990,7 +2043,9 @@ def create_composite_heatmaps(
     _use_numba_accum = _HAS_NUMBA and _numba_accumulate_image is not None
 
     t = time.perf_counter()
-    for batch_paths in _batched_paths(image_paths, batch_size):
+    # 🔥 batch_size를 max_workers*4로 증가 — 배치 라운드 수 최소화하면서 메모리 안정
+    effective_batch = max(batch_size, max_workers * 4)
+    for batch_paths in _batched_paths(image_paths, effective_batch):
         for rel_path, raw_indices in _iter_pixel_indices(
             batch_paths,
             width=width,
@@ -2006,18 +2061,20 @@ def create_composite_heatmaps(
                 # numba 단일 패스: 마스크 + grade 카운트 동시 처리
                 _numba_accumulate_image(img, grade_counts, has_0_7, has_8_13, all_invalid)
             else:
-                # numpy 경로 (numba 미사용)
+                # numpy 경로 (numba 미사용) — 벡터화
                 ge14 = img >= 14
                 ge8 = img >= 8
                 mid = ge8 & ~ge14
                 has_0_7 |= (~ge8) | ge14
                 has_8_13 |= mid
                 all_invalid &= ge14
+                safe_img = img.copy() if ge14.any() else img
                 if ge14.any():
-                    img = img.copy()
-                    img[ge14] = 0
-                for g in range(8):
-                    grade_counts[g] += (img == g)
+                    safe_img[ge14] = 0
+                # 🔥 단일 패스 벡터화 (8-loop 대신 take/put_along_axis)
+                idx = safe_img[np.newaxis, :, :]  # (1, H, W)
+                current = np.take_along_axis(grade_counts, idx, axis=0)
+                np.put_along_axis(grade_counts, idx, current + 1, axis=0)
 
             processed_count += 1
     _mark("load_and_accumulate", t)
@@ -2095,24 +2152,26 @@ def create_composite_heatmaps(
     # 🔥 공유 palette bytes (default_palette_bytes → raw bytes)
     _pal_bytes_768 = bytes(default_palette_bytes[:768]) if len(default_palette_bytes) >= 768 else bytes(default_palette_bytes)
 
+    # 🔥 히트맵 저장용 RGB palette LUT (palette index → RGB)
+    _pal_lut = np.zeros((256, 3), dtype=np.uint8)
+    for _pi in range(min(256, len(default_palette_bytes) // 3)):
+        _pal_lut[_pi] = default_palette_bytes[_pi*3:_pi*3+3]
+
     def _save_heatmap_task(idx: int) -> Optional[Dict[str, Any]]:
         t_hm = time.perf_counter()
         presence_mask = _heatmap_masks[idx]
         # np.where로 copy 없이 결과 생성 (47MB copy 제거)
         result = np.where(presence_mask, np.uint8(idx), base_indices)
-        heatmap_path = output_dir / f"Grade_{idx}.png"
 
-        heatmap_img = Image.fromarray(result, mode='P')
-        heatmap_img.putpalette(default_palette_bytes)
-        tmp_path = heatmap_path.with_suffix(".png.tmp")
-        heatmap_img.save(tmp_path, format='PNG', compress_level=0)
-        try:
-            tmp_path.replace(heatmap_path)
-        except Exception:
-            if heatmap_path.exists():
-                heatmap_path.unlink()
-            tmp_path.rename(heatmap_path)
+        # 🔥 Palette-indexed PNG로 저장 (default palette)
+        # → /api/thumbnail에서 개인색 PLTE 패치 적용 (display 시점에 개인색 반영)
+        from PIL import Image as PILImage
+        pil_img = PILImage.fromarray(result, mode='P')
+        pil_img.putpalette(_pal_bytes_768 + b'\x00' * (768 - len(_pal_bytes_768)) if len(_pal_bytes_768) < 768 else _pal_bytes_768)
+        heatmap_path = output_dir / f"Grade_{idx}.png"
+        pil_img.save(str(heatmap_path), format='PNG', optimize=False)
         rel_path = heatmap_path.relative_to(IMAGES_ROOT).as_posix()
+        actual_path = heatmap_path
         total_pixels = width * height
         pixel_count = int(np.count_nonzero(presence_mask))
         percentage = round(pixel_count / total_pixels * 100, 2) if total_pixels else 0
@@ -2298,7 +2357,7 @@ def create_sum_map(
         source_palette = first_img.getpalette() if first_img.mode == 'P' else None
 
     palette_list = _build_palette_list(source_palette)
-    palette_list = _apply_personal_palette(palette_list, scheme)
+    # 🔥 개인색 미적용 — default palette로 저장, UI에서 PLTE 패치로 개인색 표시
 
     # 1단계: 모든 raw indices 수집
     raw_indices_list = []
@@ -2391,6 +2450,7 @@ def create_sum_map(
         base_indices[chip_area] = 0
     chip_inner_mask = (base_indices == 0)
 
+    # 🔥 default 색상으로 생성 → display 시 개인색 적용 (썸네일 API PLTE 패치 + recolor)
     entries = _save_sum_map_variants(
         stacked_indices,
         output_dir,
@@ -2398,7 +2458,7 @@ def create_sum_map(
         invalid_mask=invalid_mask,
         base_indices=base_indices,
         idx_8_mask=idx_8_13_only,
-        scheme=scheme,
+        scheme="default",
         grade_counts=grade_counts,
         only_low_mask=chip_inner_mask,
         image_count=processed_count,
@@ -2535,32 +2595,31 @@ def create_subset_map(
     lut_positions = np.linspace(0.0, 100.0, 256, dtype=np.float32)
     shared_lut_colors = _interpolate_percentile_colors(lut_positions, color_stops, quantile_positions)
     palette_list = palette_array.reshape(-1).tolist()
-    palette_list = _apply_personal_palette(palette_list, resolved_scheme)
+    # 🔥 개인색 미적용 — default palette로 저장, UI에서 PLTE 패치로 개인색 표시
 
-    # Subset Map 이미지 생성 (독립적인 min→0%, max→100% 매핑)
+    # 🔥 Subset Map: Palette PNG로 저장
     grade_str = "".join(str(g) for g in sorted_grades)
-    ext = _image_ext()
+    sum_palette = _build_sum_map_palette(palette_list, gradient_scheme="default")
     variants = [
-        (f"square_average_{grade_str}{ext}", "square_mean", f"Composite SqMean [Grade {', '.join(map(str, sorted_grades))}]", square_mean_map, calc_mask),
-        (f"square_weighted_average_{grade_str}{ext}", "weighted_square_mean", f"Composite Weighted SqMean [Grade {', '.join(map(str, sorted_grades))}]", weighted_map, weighted_mask),
+        (f"square_average_{grade_str}.png", "square_mean", f"Composite SqMean [Grade {', '.join(map(str, sorted_grades))}]", square_mean_map, calc_mask),
+        (f"square_weighted_average_{grade_str}.png", "weighted_square_mean", f"Composite Weighted SqMean [Grade {', '.join(map(str, sorted_grades))}]", weighted_map, weighted_mask),
     ]
 
     outputs: List[Dict[str, str]] = []
-    # base_rgb를 한 번만 계산하여 2장의 variant에서 공유
-    _shared_base_rgb = np.array(palette_list, dtype=np.uint8).reshape(256, 3)[base_indices]
 
     def _render_and_save(args):
         filename, variant_type, display_name, data_map, mask = args
         sum_map_path = output_dir / filename
+        for old_ext in (".jpg", ".webp"):
+            old_file = sum_map_path.with_suffix(old_ext)
+            if old_file.exists():
+                old_file.unlink(missing_ok=True)
         value_min, value_max = _value_range_for_map(data_map, mask, clamp_min_to_zero=True)
-        img = _render_sum_map_image(
+        idx_arr = _render_sum_map_palette(
             base_indices=base_indices, value_map=data_map, mask=mask,
-            palette_list=palette_list, quantiles=settings.quantiles,
-            color_stops=color_stops, lut_colors=shared_lut_colors,
-            value_min=value_min, value_max=value_max, force_full_range=True,
-            _base_rgb=_shared_base_rgb,
+            value_min=value_min, value_max=value_max,
         )
-        actual_path, rel_path = _save_image_with_backend(img, sum_map_path, quality=75)
+        actual_path, rel_path = _save_palette_png(idx_arr, sum_palette, sum_map_path)
         return {
             "path": rel_path, "type": variant_type,
             "display_name": display_name, "filename": actual_path.name,

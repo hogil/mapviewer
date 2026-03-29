@@ -22,7 +22,7 @@ if sys.platform == 'win32':
         pass
 
 # ======================== Imports ========================
-import re, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid, io, math, struct, zlib, stat as stat_module  # struct/zlib: PNG PLTE 바이너리 조작용
+import re, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid, io, math, struct, zlib, stat as stat_module, contextvars  # struct/zlib: PNG PLTE 바이너리 조작용
 from pathlib import Path
 from contextlib import contextmanager, asynccontextmanager
 from typing import List, Optional, Dict, Any, Tuple, Set, Literal, Iterable
@@ -111,6 +111,7 @@ from .personal_colors import (
     plte_inplace_patch_memory,
     plte_bottom_filter_memory,
     plte_normalize_border_memory,
+    plte_composite_gradient_patch_memory,
 )
 from .composite_colors import (
     load_composite_color_settings,
@@ -394,15 +395,12 @@ THUMBNAIL_SIZE_DEFAULT = config.THUMBNAIL_SIZE_DEFAULT
 _INVALID_IMAGE_CACHE: Dict[int, bytes] = {}
 
 # TurboJPEG 인스턴스 (그리드 썸네일 최적화)
-TURBO_JPEG = globals().get("TURBO_JPEG")
-if TURBO_JPEG is None and TURBOJPEG_AVAILABLE and getattr(config, "USE_TURBOJPEG", False):
+TURBO_JPEG = None
+if TURBOJPEG_AVAILABLE and getattr(config, "USE_TURBOJPEG", False):
     try:
         turbo_path = getattr(config, "TURBOJPEG_PATH", "") or None
         TURBO_JPEG = TurboJPEG(lib_path=turbo_path if turbo_path else None)
-        globals()["TURBO_JPEG"] = TURBO_JPEG
-        print("[main.py] TurboJPEG Q95 FASTDCT + 4:2:0 초기화 완료")
-    except Exception as e:
-        print(f"[main.py] TurboJPEG 초기화 실패, pyvips 폴백: {e}")
+    except Exception:
         TURBO_JPEG = None
 
 # ======================== Service Instances ========================
@@ -443,7 +441,9 @@ USER_ACTIVITY_FLAG = False
 BACKGROUND_TASKS_PAUSED = False
 INDEX_LOCK_WAIT_SECONDS = int(os.getenv("INDEX_LOCK_WAIT_SECONDS", "600"))
 INDEX_CACHE_FILE = ROOT_DIR / ".file_index_cache.txt"
-INDEX_LOCK_FILE = ROOT_DIR / ".file_index_cache.lock"
+# 🔥 포트별 lock 파일 → 같은 ROOT_DIR에서 여러 서버 동시 실행 가능
+_lock_port = os.getenv("HTTPS_PORT", str(config.HTTPS_PORT))
+INDEX_LOCK_FILE = ROOT_DIR / f".file_index_cache_{_lock_port}.lock"
 index_service = IndexService(
     root_dir=ROOT_DIR,
     skip_dirs=SKIP_DIRS,
@@ -1003,6 +1003,16 @@ def _current_login_id(req: Optional[Request]) -> Optional[str]:
 def _effective_login_id(req: Optional[Request]) -> str:
     """단일 LoginId 해석 지점: 없으면 fallback 값 사용."""
     return _current_login_id(req) or ANONYMOUS_LOGIN_ID
+
+
+_REQUEST_LOGIN_ID: contextvars.ContextVar[str] = contextvars.ContextVar("_REQUEST_LOGIN_ID", default="—")
+
+
+def _log(msg: str, *, level: str = "info"):
+    """LoginId를 포함한 로그 출력. 미들웨어에서 설정된 ContextVar 사용."""
+    tag = _REQUEST_LOGIN_ID.get()
+    getattr(logger, level)(f"[{tag}] {msg}")
+
 
 def _get_user_role(login_id: Optional[str]) -> str:
     if not login_id:
@@ -1633,6 +1643,8 @@ async def lifespan(app: FastAPI):
     bootlog.info(f"🔌 포트: {port_to_log} ({scheme})")
     bootlog.info(f"📁 ROOT_DIR: {config.ROOT_DIR}")
     bootlog.info(f"🔧 PROJECT_ROOT: {os.getenv('PROJECT_ROOT', 'NOT SET')}")
+    _jpeg_mode = "TurboJPEG" if TURBO_JPEG else "pyvips"
+    bootlog.info(f"🖼️ 이미지 인코딩: {_jpeg_mode}")
     bootlog.info("=" * 50)
     print_access_header_once()
 
@@ -2783,6 +2795,12 @@ async def save_composite_colors_endpoint(request: Request):
         login_id = _current_login_id(request)
         scheme = get_user_color_scheme(login_id)
         settings = save_composite_color_settings(colors, scheme, background=background)
+        # 🔥 composite 썸네일 캐시 무효화 — PLTE 패치가 새 색상을 반영하도록
+        _invalidate_composite_thumbnail_caches(login_id=login_id or ANONYMOUS_LOGIN_ID)
+        # 🔥 measure-thumb도 composite fallback 사용할 수 있으므로 인메모리 캐시 클리어
+        keys_to_del = [k for k in _measure_thumb_cache if f":{scheme}:" in k]
+        for k in keys_to_del:
+            _measure_thumb_cache.pop(k, None)
         return settings.to_dict()
     except HTTPException:
         raise
@@ -2848,6 +2866,12 @@ async def save_measure_colors_endpoint(request: Request):
 
         # 🔥 measure overlay 서버 캐시 무효화 (색상 변경 시 이전 gradient 캐시 삭제)
         try:
+            # 인메모리 measure-thumb 캐시에서 해당 scheme 엔트리 제거
+            keys_to_del = [k for k in _measure_thumb_cache if f":{scheme}:" in k]
+            for k in keys_to_del:
+                _measure_thumb_cache.pop(k, None)
+            if keys_to_del:
+                logger.info(f"🧹 [MEASURE COLOR] {scheme} 인메모리 캐시 {len(keys_to_del)}개 삭제")
             _purge_measure_overlay_cache(scheme)
         except Exception as purge_err:
             logger.debug(f"⚠️ [MEASURE PURGE] 캐시 정리 실패 (무시): {purge_err}")
@@ -2912,14 +2936,14 @@ async def recolor_composite_sum_maps_endpoint(request: Request):
         entries = recolor_saved_sum_maps(target_path, override_colors=override_colors, scheme=scheme)
         rel_path = target_path.relative_to(IMAGES_ROOT).as_posix()
         response_data = {"output_dir": rel_path, "sum_maps": entries}
-        print(f"[/api/composite-recolor] 응답 데이터: {response_data}")
+        _log(f"[composite-recolor] {len(entries)}개 sum map 갱신")
         return response_data
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="재색칠을 위한 원본 데이터가 없습니다.")
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error(f"? [/api/composite-recolor] 실패: {exc}")
+        _log(f"[composite-recolor] 실패: {exc}", level="error")
         raise HTTPException(status_code=500, detail="Composite Sum Map을 갱신하지 못했습니다.")
 
 
@@ -3370,9 +3394,9 @@ async def cache_control_middleware(request: Request, call_next):
     try:
         response = await call_next(request)
         p = request.url.path
-        # JS 파일: 장기 캐시 (URL에 ?v=githash 붙어서 캐시 무효화 보장)
+        # JS 파일: no-cache (매번 ETag 검증, 변경 없으면 304)
         if p.startswith("/js/"):
-            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            response.headers["Cache-Control"] = "no-cache"
             response.headers["Vary"] = "Accept-Encoding"
             return response
         if (
@@ -3420,11 +3444,11 @@ async def cache_control_middleware(request: Request, call_next):
 class AccessTrackingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         try:
-            # 자동 로그인 강제: 세션 쿠키가 없고 HTML 페이지 접근 시 /saml/login으로 리다이렉트
-            skip_logging = False  # 로그 스킵 플래그
+            # 🔥 ContextVar에 LoginId 설정 → _log()에서 자동 참조
+            _req_uid = _current_login_id(request) or "—"
+            _REQUEST_LOGIN_ID.set(_req_uid)
 
-            # AUTO_LOGIN은 /saml/login 엔드포인트에서 처리 (수동 접속과 동일)
-            # 미들웨어에서는 리다이렉트하지 않음
+            skip_logging = False
 
             response = await call_next(request)
 
@@ -4264,6 +4288,20 @@ def _apply_png_filters_memory(
         if personalized and scheme:
             patched = plte_inplace_patch_memory(patched, scheme)
 
+    # 🔥 Composite gradient map: palette indices 24-255 패치
+    # 대상: square_average, square_weighted, BIN_*, F_*, Q_* (Grade_ 히트맵 제외)
+    _norm_path = str(image_path).replace("\\", "/") if image_path else ""
+    _comp_fname = _norm_path.split("/")[-1] if _norm_path else ""
+    _is_composite_gradient = ("composite_map/" in _norm_path and
+                              not _comp_fname.startswith("Grade_") and
+                              _comp_fname.endswith(".png"))
+    if _is_composite_gradient and personalized and scheme:
+        try:
+            patched = plte_composite_gradient_patch_memory(patched, scheme)
+            logger.info(f"[COMPOSITE_GRADIENT] ✅ gradient PLTE 패치 완료 (scheme={scheme})")
+        except Exception as exc:
+            logger.warning("⚠️ [COMPOSITE] gradient PLTE 패치 실패 (scheme=%s): %s", scheme, exc)
+
     if border_normalize:
         patched = plte_normalize_border_memory(patched)
 
@@ -4688,13 +4726,15 @@ def _generate_thumbnail_sync(
                     import pyvips as _pv
                     if _is_palette_png and personalized and scheme:
                         # palette PNG + 개인색: PLTE 바이너리 패치 후 thumbnail_buffer
-                        from .personal_colors import plte_inplace_patch_memory, load_color_legends
-                        _legends = load_color_legends()
-                        _sd = _legends.get(scheme) or _legends.get('default')
-                        _raw = image_path.read_bytes()
-                        if _sd:
-                            _raw = plte_inplace_patch_memory(_raw, _sd) or _raw
-                        _vi = _pv.Image.thumbnail_buffer(_raw, size[0])
+                        from .personal_colors import plte_inplace_patch_memory, plte_composite_gradient_patch_memory
+                        _raw = bytearray(image_path.read_bytes())
+                        _raw = plte_inplace_patch_memory(_raw, scheme) or _raw
+                        # 🔥 Composite gradient map: indices 24-255 패치 (Grade_ 히트맵 제외)
+                        _ip = str(image_path).replace("\\", "/")
+                        _fn = _ip.split("/")[-1] if _ip else ""
+                        if "composite_map/" in _ip and not _fn.startswith("Grade_") and _fn.endswith(".png"):
+                            _raw = plte_composite_gradient_patch_memory(bytearray(_raw), scheme) or _raw
+                        _vi = _pv.Image.thumbnail_buffer(bytes(_raw), size[0])
                     else:
                         # palette(개인색 없음) + non-palette(RGBA/RGB/JPEG 등) 모두 pyvips
                         _vi = _pv.Image.thumbnail(str(image_path), size[0])
@@ -4705,19 +4745,43 @@ def _generate_thumbnail_sync(
                     else:
                         _vi.pngsave(str(thumbnail_path))
                     return
-                except Exception:
+                except Exception as _pv_err:
+                    logger.warning(f"[THUMB_PYVIPS_FALLBACK] pyvips 실패 → PIL 폴백: {_pv_err}")
                     pass  # pyvips 실패 시 PIL 폴백
 
                 with Image.open(image_path) as img:
                     # palette PNG + 개인색이면 palette 교체 (PIL 경로 — pyvips 폴백)
                     if img.mode == 'P' and personalized and scheme:
-                        from .personal_colors import apply_personalized_palette, load_color_legends
+                        from .personal_colors import apply_personalized_palette, get_composite_gradient_for_scheme, load_color_legends
                         legends = load_color_legends()
                         scheme_data = legends.get(scheme) or legends.get('default')
                         if scheme_data:
                             patched = apply_personalized_palette(img, scheme_data)
                             if patched:
                                 img = patched
+                        # 🔥 Composite gradient map: PIL 경로에서도 gradient palette 패치
+                        _ip2 = str(image_path).replace("\\", "/")
+                        _fn2 = _ip2.split("/")[-1] if _ip2 else ""
+                        if img.mode == 'P' and "composite_map/" in _ip2 and not _fn2.startswith("Grade_") and _fn2.endswith(".png"):
+                            stops = get_composite_gradient_for_scheme(scheme)
+                            if len(stops) >= 11:
+                                pal = list(img.getpalette() or [])
+                                if len(pal) < 768:
+                                    pal.extend([0] * (768 - len(pal)))
+                                _GS, _GC = 24, 232
+                                for gi in range(_GC):
+                                    pct = gi / max(_GC - 1, 1) * 100.0
+                                    idx_f = pct / 10.0
+                                    lo = max(0, min(10, int(idx_f)))
+                                    hi = min(10, lo + 1)
+                                    t = idx_f - lo
+                                    r0, g0, b0 = stops[lo]
+                                    r1, g1, b1 = stops[hi]
+                                    off = (_GS + gi) * 3
+                                    pal[off] = int(r0 + (r1 - r0) * t)
+                                    pal[off+1] = int(g0 + (g1 - g0) * t)
+                                    pal[off+2] = int(b0 + (b1 - b0) * t)
+                                img.putpalette(pal[:768])
                     if img.mode not in ('RGB', 'RGBA'):
                         img = img.convert('RGB')
                     target_w, target_h = size
@@ -5160,7 +5224,7 @@ async def generate_thumbnail(
 def maybe_304(request: Request, st) -> Optional[Response]:
     etag = compute_etag(st)
     if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "public, max-age=604800, immutable"})
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
     return None
 
 # ======================== Schemas ========================
@@ -5375,7 +5439,13 @@ async def get_files(path: Optional[str] = None, prefer: Optional[str] = None):
 
         # 🔥 특정 폴더 제외: classification, classification_chips, thumbnails, composite_map
         excluded_folders = ['classification', 'classification_chips', 'thumbnails', 'composite_map']
-        items = [item for item in items if item['name'] not in excluded_folders]
+        # 🔥 비이미지 파일 제외: .npz, .json, .npy, .tmp 등 캐시/메타데이터 파일
+        _IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp', '.gif'}
+        items = [
+            item for item in items
+            if item['name'] not in excluded_folders
+            and (item['type'] == 'directory' or Path(item['name']).suffix.lower() in _IMAGE_EXTS)
+        ]
         
         # 디버그 로그 제거 (너무 자주 출력됨)
         # logger.info(f"📁 [/api/files] 반환 항목 수: {len(items)} (폴더: {sum(1 for x in items if x['type']=='directory')}, 파일: {sum(1 for x in items if x['type']=='file')})")
@@ -6306,7 +6376,7 @@ async def get_image_crop(
                 png_buffer = cropped.pngsave_buffer(compression=6, interlace=False, strip=True)
 
                 headers = {
-                    "Cache-Control": "public, max-age=3600",
+                    "Cache-Control": "no-cache",
                 }
                 if personalized and scheme:
                     headers["X-Personalized"] = "true"
@@ -6338,7 +6408,7 @@ async def get_image_crop(
             content=bytes(png_buffer),
             media_type="image/png",
             headers={
-                "Cache-Control": "public, max-age=3600"
+                "Cache-Control": "no-cache"
             }
         )
     except HTTPException:
@@ -6500,15 +6570,15 @@ async def get_image(
                         logger.debug(f"✅ [CACHE HIT] 파일: {st.st_size/(1024*1024):.1f}MB (personalized={personalized}, scheme={scheme})")
 
                     headers = {
-                        "Cache-Control": "public, max-age=31536000, immutable",
+                        "Cache-Control": "no-cache",
                         "Content-Type": content_type,
                         "ETag": compute_etag(st),
                         "X-Pyramid-Level": str(level),
                         "X-Cache-Status": "HIT",
                         "X-File-Size": str(st.st_size)
                     }
-                    response = FileResponse(pyramid_path, headers=headers)
-                    return response
+                    # 🔥 메모리 기반 응답 — FileResponse stat/read 경합 방지
+                    return Response(content=pyramid_path.read_bytes(), media_type=content_type, headers=headers)
             else:
                 # 비개인색 설정인 경우: 기존 로직 유지
                 if pyramid_path.exists() and pyramid_path.stat().st_size > 0:
@@ -6519,15 +6589,15 @@ async def get_image(
                             logger.debug(f"✅ [CACHE HIT] 파일: {st.st_size/(1024*1024):.1f}MB (personalized={personalized}, scheme={scheme})")
 
                         headers = {
-                            "Cache-Control": "public, max-age=31536000, immutable",
+                            "Cache-Control": "no-cache",
                             "Content-Type": content_type,
                             "ETag": compute_etag(st),
                             "X-Pyramid-Level": str(level),
                             "X-Cache-Status": "HIT",
                             "X-File-Size": str(st.st_size)
                         }
-                        response = FileResponse(pyramid_path, headers=headers)
-                        return response
+                        # 🔥 메모리 기반 응답 — FileResponse stat/read 경합 방지
+                        return Response(content=pyramid_path.read_bytes(), media_type=content_type, headers=headers)
 
             # 캐시 미스: 피라미드 이미지 생성
             # 🔥 executor로 오프로드하여 이벤트 루프 블로킹 방지
@@ -6556,15 +6626,15 @@ async def get_image(
                     logger.info(f"✅ [PYRAMID SUCCESS] 파일: {file_size_mb:.1f}MB ({st.st_size:,} bytes)")
 
                 headers = {
-                    "Cache-Control": "public, max-age=31536000, immutable",
+                    "Cache-Control": "no-cache",
                     "Content-Type": content_type,
                     "ETag": compute_etag(st),
                     "X-Pyramid-Level": str(level),
                     "X-Cache-Status": "MISS",
                     "X-File-Size": str(st.st_size)
                 }
-                response = FileResponse(pyramid_path, headers=headers)
-                return response
+                # 🔥 메모리 기반 응답 — FileResponse stat/read 경합 방지
+                return Response(content=pyramid_path.read_bytes(), media_type=content_type, headers=headers)
             else:
                 if not is_head:
                     logger.error(f"❌ [GENERATION FAILED] {pyramid_path}")
@@ -6593,7 +6663,7 @@ async def get_image(
 
                     # 메모리에서 직접 반환
                     headers = {
-                        "Cache-Control": "public, max-age=3600",
+                        "Cache-Control": "no-cache",
                         "Content-Type": "image/png",
                     }
                     if grade_filter:
@@ -6629,7 +6699,7 @@ async def get_image(
 
                     # 메모리에서 직접 반환
                     headers = {
-                        "Cache-Control": "public, max-age=3600",
+                        "Cache-Control": "no-cache",
                         "Content-Type": "image/png",
                         "X-Personalized": "true",
                         "X-Scheme": scheme
@@ -6769,7 +6839,7 @@ async def get_bin_map_thumb(
         return Response(
             content=cached,
             media_type="image/webp",
-            headers={"Cache-Control": "public, max-age=3600"},
+            headers={"Cache-Control": "no-cache"},
         )
 
     result = await asyncio.get_event_loop().run_in_executor(
@@ -6782,7 +6852,7 @@ async def get_bin_map_thumb(
     return Response(
         content=result,
         media_type="image/webp",
-        headers={"Cache-Control": "public, max-age=3600"},
+        headers={"Cache-Control": "no-cache"},
     )
 
 
@@ -6891,13 +6961,14 @@ def _generate_measure_thumb(
     sx = out_w / float(canvas_w)
     sy = out_h / float(canvas_h)
 
-    # 배경 (개인색 적용)
+    # 배경 (개인색 적용 — measure 섹션에서 로드)
     from .personal_colors import load_color_legends
     bg_rgb = (204, 204, 204)  # fallback #CCCCCC
     try:
         legends = load_color_legends()
-        user_scheme = legends.get(scheme) or legends.get("default") or {}
-        bg_hex = str(user_scheme.get("background", "#CCCCCC")).strip().lstrip("#")
+        measure_section = legends.get("measure", {})
+        user_entry = measure_section.get(scheme) or measure_section.get("default") or {}
+        bg_hex = str(user_entry.get("background", "#CCCCCC")).strip().lstrip("#")
         if len(bg_hex) == 6:
             bg_rgb = (int(bg_hex[0:2], 16), int(bg_hex[2:4], 16), int(bg_hex[4:6], 16))
     except Exception:
@@ -6961,7 +7032,7 @@ async def get_measure_thumb(
     cached = _measure_thumb_cache.get(cache_key)
     if cached:
         return Response(content=cached, media_type="image/webp",
-                        headers={"Cache-Control": "private, max-age=300"})
+                        headers={"Cache-Control": "no-cache"})
 
     result = await asyncio.get_event_loop().run_in_executor(
         IO_POOL, _generate_measure_thumb, image_path, size, field, key, scheme, gradient_filter,
@@ -6979,7 +7050,7 @@ async def get_measure_thumb(
                 break
     _measure_thumb_cache[cache_key] = result
     return Response(content=result, media_type="image/webp",
-                    headers={"Cache-Control": "private, max-age=300"})
+                    headers={"Cache-Control": "no-cache"})
 
 
 def _generate_measure_thumbs_batch(
@@ -7067,8 +7138,9 @@ def _generate_measure_thumbs_batch(
     bg_rgb = (204, 204, 204)
     try:
         legends = load_color_legends()
-        user_scheme = legends.get(scheme) or legends.get("default") or {}
-        bg_hex = str(user_scheme.get("background", "#CCCCCC")).strip().lstrip("#")
+        measure_section = legends.get("measure", {})
+        user_entry = measure_section.get(scheme) or measure_section.get("default") or {}
+        bg_hex = str(user_entry.get("background", "#CCCCCC")).strip().lstrip("#")
         if len(bg_hex) == 6:
             bg_rgb = (int(bg_hex[0:2], 16), int(bg_hex[2:4], 16), int(bg_hex[4:6], 16))
     except Exception:
@@ -7326,13 +7398,8 @@ async def get_thumbnail(
                     return etag_304
 
                 # 필터/오버레이 적용 시에만 짧은 캐시, 기본 썸네일은 장기 캐시
-                has_filters = any([grade_filter, bottom_filter, measure_overlay, bin_overlay])
-                if has_filters:
-                    cache_control = "private, max-age=300"
-                elif personalized:
-                    cache_control = "private, max-age=86400"
-                else:
-                    cache_control = "public, max-age=604800, immutable"
+                # 모든 썸네일: no-cache (매번 ETag 검증, 변경 없으면 304)
+                cache_control = "no-cache"
                 headers = {
                     "Cache-Control": cache_control,
                     "ETag": compute_etag(st),
@@ -7345,30 +7412,22 @@ async def get_thumbnail(
                 else:
                     content_type = "image/png"
 
-                # OS sendfile 경로 우선 (메모리 복사 없이 전송)
+                # 🔥 메모리 기반 응답 — FileResponse는 stat()→read() 사이 파일 변경 시
+                # "Response content longer than Content-Length" 에러 발생 (색 변경 시 캐시 무효화 경합)
                 try:
-                    return FileResponse(
-                        thumb,
-                        media_type=content_type,
-                        headers=headers,
+                    content = thumb.read_bytes()
+                    return Response(content=content, media_type=content_type, headers=headers)
+                except Exception as read_error:
+                    logger.warning(f"썸네일 읽기 실패, 원본 제공 폴백: {read_error}")
+                    return await get_image(
+                        request,
+                        path,
+                        personalized=personalized,
+                        scheme=scheme,
+                        grade_filter=grade_filter,
+                        bottom_filter=bottom_filter,
+                        border_normalize=border_normalize,
                     )
-                except Exception as file_resp_error:
-                    logger.warning(f"썸네일 FileResponse 실패, 메모리 폴백: {file_resp_error}")
-                    try:
-                        content = thumb.read_bytes()
-                        headers["Content-Length"] = str(len(content))
-                        return Response(content=content, media_type=content_type, headers=headers)
-                    except Exception as read_error:
-                        logger.warning(f"썸네일 읽기 실패, 원본 제공 폴백: {read_error}")
-                        return await get_image(
-                            request,
-                            path,
-                            personalized=personalized,
-                            scheme=scheme,
-                            grade_filter=grade_filter,
-                            bottom_filter=bottom_filter,
-                            border_normalize=border_normalize,
-                        )
             else:
                 # 썸네일 생성 실패 시 원본 이미지 제공
                 logger.warning(f"썸네일 생성 실패, 원본 이미지 제공: {image_path}")
@@ -7785,7 +7844,7 @@ async def delete_classes(req: DeleteClassesReq,
 async def class_images(class_name: str = PathParam(..., min_length=1, max_length=128),
                        limit: int = Query(500, ge=1, le=5000),
                        offset: int = Query(0, ge=0),
-                       mode: str = Query("wafer", regex="^(wafer|chip)$", description="wafer 또는 chip 모드")):
+                       mode: str = Query("wafer", pattern="^(wafer|chip)$", description="wafer 또는 chip 모드")):
     try:
         # 디버그 로그 제거 (너무 자주 출력됨)
         if not _CLASS_NAME_RE.match(class_name): raise HTTPException(status_code=400, detail="Invalid class_name")
@@ -8410,7 +8469,11 @@ def _preload_minified_js():
     for f in _JS_DIR.iterdir():
         if f.suffix == '.js' and '.min.' not in f.name:
             min_path = f.with_suffix('').with_suffix('.min.js')
-            target = min_path if min_path.exists() else f
+            # 소스가 min보다 새로우면 소스 사용 (min이 stale인 경우 방지)
+            if min_path.exists() and min_path.stat().st_mtime >= f.stat().st_mtime:
+                target = min_path
+            else:
+                target = f
             raw = target.read_bytes()
             gz = _gzip.compress(raw, compresslevel=6)
             etag = hashlib.md5(raw).hexdigest()[:12]
@@ -8428,7 +8491,7 @@ async def serve_js(filename: str, request: Request):
         if if_none == etag:
             return Response(status_code=304, headers={
                 "ETag": f'"{etag}"',
-                "Cache-Control": "public, max-age=31536000, immutable",
+                "Cache-Control": "no-cache",
             })
         # gzip 지원 시 압축본 전송
         accept_enc = request.headers.get("accept-encoding", "")
@@ -8437,7 +8500,7 @@ async def serve_js(filename: str, request: Request):
                 content=gz,
                 media_type="application/javascript; charset=utf-8",
                 headers={
-                    "Cache-Control": "public, max-age=31536000, immutable",
+                    "Cache-Control": "no-cache",
                     "ETag": f'"{etag}"',
                     "Content-Encoding": "gzip",
                     "Vary": "Accept-Encoding",
@@ -8447,7 +8510,7 @@ async def serve_js(filename: str, request: Request):
             content=raw,
             media_type="application/javascript; charset=utf-8",
             headers={
-                "Cache-Control": "public, max-age=31536000, immutable",
+                "Cache-Control": "no-cache",
                 "ETag": f'"{etag}"',
                 "Vary": "Accept-Encoding",
             },
@@ -8484,7 +8547,7 @@ async def serve_css(filename: str, request: Request):
         if if_none == etag:
             return Response(status_code=304, headers={
                 "ETag": f'"{etag}"',
-                "Cache-Control": "public, max-age=31536000, immutable",
+                "Cache-Control": "no-cache",
             })
         accept_enc = request.headers.get("accept-encoding", "")
         if "gzip" in accept_enc:
@@ -8492,7 +8555,7 @@ async def serve_css(filename: str, request: Request):
                 content=gz,
                 media_type="text/css; charset=utf-8",
                 headers={
-                    "Cache-Control": "public, max-age=31536000, immutable",
+                    "Cache-Control": "no-cache",
                     "ETag": f'"{etag}"',
                     "Content-Encoding": "gzip",
                     "Vary": "Accept-Encoding",
@@ -8502,7 +8565,7 @@ async def serve_css(filename: str, request: Request):
             content=raw,
             media_type="text/css; charset=utf-8",
             headers={
-                "Cache-Control": "public, max-age=31536000, immutable",
+                "Cache-Control": "no-cache",
                 "ETag": f'"{etag}"',
                 "Vary": "Accept-Encoding",
             },
@@ -8738,7 +8801,7 @@ async def browse_folders(path: Optional[str] = None):
     try:
         # 🔥 항상 ROOT_DIR 기준으로 폴더 목록 반환
         target_path = ROOT_DIR
-        logger.info(f"🔍 [BROWSE FOLDERS] ROOT_DIR 기준 폴더 목록 조회: {target_path}")
+        _log(f"[BROWSE FOLDERS] ROOT_DIR 기준 폴더 목록 조회: {target_path}")
         
         if not target_path.exists() or not target_path.is_dir():
             raise HTTPException(status_code=404, detail="ROOT_DIR을 찾을 수 없습니다")
@@ -9007,13 +9070,10 @@ async def get_chip_positions(path: str, include_fq: int = 0):
             rel_path_obj = Path(rel_path)
             positions_file = _resolve_positions_path(rel_path_obj)
 
-        logger.info(f"🔍 [CHIP_POS] Input path: {path}")
-        logger.info(f"🔍 [CHIP_POS] Resolved positions: {positions_file} (exists={positions_file.exists()})")
-
-        logger.info(f"🔍 Chip positions requested: {path} -> {positions_file}")
+        _log(f"[CHIP_POS] {path} → {positions_file.name} (exists={positions_file.exists()})")
 
         if not positions_file.exists():
-            logger.warning(f"❌ Positions file not found: {positions_file}")
+            _log(f"[CHIP_POS] not found: {positions_file}", level="warning")
             raise HTTPException(status_code=404, detail=f"Positions file not found: {positions_file}")
 
         import re as _re
@@ -9035,7 +9095,7 @@ async def get_chip_positions(path: str, include_fq: int = 0):
         _normalize_positions_to_chips(positions_data)
         chips = positions_data.get('chips', [])
         chip_count = len(chips)
-        logger.info(f"✅ Loaded {chip_count} chip positions from {positions_file.name}")
+        _log(f"[CHIP_POS] loaded {chip_count} chips from {positions_file.name}")
 
         # ftn_keys/qtn_keys는 파일 상단에 이미 있음
         ftn_keys = positions_data.get("ftn_keys") or []
@@ -9483,12 +9543,10 @@ async def create_composite_map_endpoint(
     ]
     if position_filtered:
         if len(position_filtered) < len(image_paths):
-            logger.info(
-                f"[composite-map] positions 필터: {len(image_paths)} → {len(position_filtered)}개 이미지"
-            )
+            _log(f"[composite-map] positions 필터: {len(image_paths)} → {len(position_filtered)}개 이미지")
         image_paths = position_filtered
     else:
-        logger.warning(f"[composite-map] positions 없는 이미지 {len(image_paths)}개 — positions 없이 진행")
+        _log(f"[composite-map] positions 없는 이미지 {len(image_paths)}개 — positions 없이 진행", level="warning")
 
     # Task ID 생성
     task_id = str(uuid.uuid4())
@@ -9543,6 +9601,7 @@ async def create_composite_map_endpoint(
                     "generated_at": result.get("generated_at") or result["output_dir"].split("/")[-1]
                 }
             else:
+                # 🔥 default scheme으로 생성 (개인색은 생성 후 recolor로 적용)
                 task_fn = partial(
                     create_composite_heatmaps,
                     image_paths=image_paths,
@@ -9551,10 +9610,13 @@ async def create_composite_map_endpoint(
                     loader_mode=loader_mode,
                     max_workers=max_workers,
                     batch_size=batch_size,
-                    scheme=resolved_scheme,
+                    scheme="default",
                     login_id=login_id
                 )
                 result = task_fn()
+
+                # 🔥 Palette PNG: default palette로 저장, UI에서 PLTE 패치로 개인색 표시
+                # 파일 recolor 불필요 — thumbnail API가 개인색 gradient를 동적 패치
                 response = {
                     "success": True, "mode": "heatmap",
                     "image_count": result["source_images"],
@@ -9640,6 +9702,8 @@ def _run_measure_composite_sync(
             login_id=login_id,
         )
 
+        # palette PNG → 개인색은 프론트엔드 PLTE 패치로 적용 (서버 recolor 불필요)
+
         COMPOSITE_TASKS[task_id]["status"] = "completed"
         COMPOSITE_TASKS[task_id]["progress"] = 100
         COMPOSITE_TASKS[task_id]["result"] = {
@@ -9662,7 +9726,7 @@ def _run_measure_composite_sync(
             "image_size": result["image_size"],
         }
         COMPOSITE_TASKS[task_id]["completed_at"] = datetime.now().isoformat()
-        logger.info(f"[measure-composite] task {task_id}: completed successfully")
+        _log(f"[measure-composite] task {task_id}: completed")
 
     except Exception as e:
         logger.exception(f"Measure composite task {task_id} failed: {e}")
@@ -9739,12 +9803,10 @@ async def create_measure_composite_endpoint(
     ]
     if position_filtered:
         if len(position_filtered) < len(image_paths):
-            logger.info(
-                f"[measure-composite] positions 필터: {len(image_paths)} → {len(position_filtered)}개 이미지"
-            )
+            _log(f"[measure-composite] positions 필터: {len(image_paths)} → {len(position_filtered)}개 이미지")
         image_paths = position_filtered
     else:
-        logger.warning(f"[measure-composite] positions 없는 이미지 {len(image_paths)}개 — positions 없이 진행")
+        _log(f"[measure-composite] positions 없는 이미지 {len(image_paths)}개 — positions 없이 진행", level="warning")
 
     task_id = str(uuid.uuid4())
     COMPOSITE_TASKS[task_id] = {
@@ -9758,7 +9820,7 @@ async def create_measure_composite_endpoint(
     login_id = _current_login_id(req)
     resolved_scheme = login_id or ANONYMOUS_LOGIN_ID
 
-    # COMPOSITE_EXECUTOR에서 실행 (IO_POOL 포화 방지 + 동시성 제어)
+    # 🔥 default scheme으로 생성 (개인색은 프론트엔드 display 또는 recolor로 적용)
     COMPOSITE_EXECUTOR.submit(
         _run_measure_composite_sync,
         task_id=task_id,
@@ -9767,7 +9829,7 @@ async def create_measure_composite_endpoint(
         item_key=payload.item_key,
         bin_types=payload.bin_types,
         aggregation=payload.aggregation,
-        scheme=resolved_scheme,
+        scheme="default",
         login_id=login_id,
     )
 
@@ -9784,6 +9846,7 @@ class MeasureCompositeRecolorRequest(BaseModel):
     scheme: Optional[str] = None
     gradient_filter: Optional[List[int]] = None   # [0,1,...,9] percentile range
     bin_filter: Optional[List[str]] = None         # ["285","286",...] BIN 타입
+    target_filename: Optional[str] = None          # 특정 이미지만 recolor (없으면 첫 번째)
 
 
 @app.post("/api/measure-composite-recolor")
@@ -9803,12 +9866,13 @@ async def recolor_measure_composite_endpoint(
             scheme=resolved_scheme,
             gradient_filter=payload.gradient_filter,
             bin_filter=payload.bin_filter,
+            target_filename=payload.target_filename,
         )
         return result
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        logger.exception(f"Measure composite recolor failed: {e}")
+        _log(f"[measure-composite-recolor] 실패: {e}", level="error")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -10437,12 +10501,16 @@ if __name__ == "__main__":
         }
     }
 
+    # 🔥 reload 제외 패턴 — color-legends.json 수정 시 서버 재시작 방지
+    _reload_excludes = ["logs/*", "*.log", "thumbnails/*", "*.pyc", "__pycache__/*"]
+
     try:
         uvicorn.run(
             "api.main:app",
             host="0.0.0.0",
             port=int(config.HTTPS_PORT),        # 기본 8443
             reload=reload_flag,                 # 개발 편의
+            reload_excludes=_reload_excludes if reload_flag else None,
             workers=1,
             lifespan="on",                      # FastAPI lifespan 강제 활성화 (인덱스/캐시 초기화 보장)
             log_level="info",

@@ -839,6 +839,103 @@ def get_ratio_gradient_for_scheme(scheme: str) -> List[Tuple[int, int, int]]:
     return result
 
 
+def get_composite_gradient_for_scheme(scheme: str) -> List[Tuple[int, int, int]]:
+    """Return 11 RGB tuples from composite colors ONLY (measure 섹션 무시).
+
+    Composite Map에서 사용: measure 개인색과 무관하게 composite 탭 색상만 적용.
+    Reads from ``legends["composite"][scheme]`` → ``legends["composite"]["default"]``
+    → DEFAULT_RATIO_GRADIENT.
+    """
+    gradient_dict: Optional[Dict[str, str]] = None
+    try:
+        legends = load_color_legends()
+        composite = legends.get("composite")
+        if isinstance(composite, dict):
+            entry = composite.get(scheme)
+            if not isinstance(entry, dict):
+                entry = composite.get("default")
+            if isinstance(entry, dict) and any(k.startswith("quantile") for k in entry):
+                gradient_dict = entry
+    except Exception:
+        pass
+
+    if not gradient_dict:
+        gradient_dict = DEFAULT_RATIO_GRADIENT
+
+    result: List[Tuple[int, int, int]] = []
+    for step in range(0, 101, 10):
+        key = f"quantile{step}"
+        hex_val = gradient_dict.get(key)
+        if hex_val:
+            try:
+                result.append(_hex_to_rgb_triple(hex_val))
+            except Exception:
+                result.append((0, 0, 0))
+        else:
+            result.append((0, 0, 0))
+    return result
+
+
+def plte_composite_gradient_patch_memory(png_data: bytearray, scheme: str) -> bytearray:
+    """Composite sum map의 palette indices 24-255를 개인색 composite gradient로 패치.
+
+    square_average.png 등 palette-indexed composite 이미지 전용.
+    indices 0-23은 plte_inplace_patch_memory로 별도 패치.
+    """
+    GRAD_START = 24
+    GRAD_COUNT = 232  # 24-255
+
+    stops = get_composite_gradient_for_scheme(scheme)
+    if len(stops) < 11:
+        return png_data
+
+    # 232개 gradient 엔트리 생성
+    gradient: List[int] = []
+    for i in range(GRAD_COUNT):
+        pct = i / max(GRAD_COUNT - 1, 1) * 100.0
+        idx_f = pct / 10.0
+        lo = max(0, min(10, int(idx_f)))
+        hi = min(10, lo + 1)
+        t = idx_f - lo
+        r0, g0, b0 = stops[lo]
+        r1, g1, b1 = stops[hi]
+        gradient.extend([
+            int(r0 + (r1 - r0) * t),
+            int(g0 + (g1 - g0) * t),
+            int(b0 + (b1 - b0) * t),
+        ])
+
+    # PLTE chunk 찾아서 indices 24-255 패치
+    pos = 8  # PNG signature 건너뛰기
+    while pos < len(png_data):
+        if pos + 4 > len(png_data):
+            break
+        chunk_length = struct.unpack('>I', png_data[pos:pos + 4])[0]
+        pos += 4
+        if pos + 4 > len(png_data):
+            break
+        chunk_type = png_data[pos:pos + 4]
+        pos += 4
+
+        if chunk_type == b'PLTE':
+            plte_start = pos
+            plte_end = pos + chunk_length
+            offset = GRAD_START * 3
+            for i in range(min(len(gradient), chunk_length - offset)):
+                if plte_start + offset + i < plte_end:
+                    png_data[plte_start + offset + i] = gradient[i]
+            # CRC 재계산
+            crc_data = chunk_type + bytes(png_data[plte_start:plte_end])
+            crc = zlib.crc32(crc_data) & 0xffffffff
+            if plte_end + 4 <= len(png_data):
+                png_data[plte_end:plte_end + 4] = struct.pack('>I', crc)
+            break
+
+        pos += chunk_length + 4
+
+    return png_data
+
+
 __all__ = [
     "load_color_legends",
     "save_color_legends",
@@ -850,6 +947,8 @@ __all__ = [
     "plte_grade_filter_memory",
     "plte_bottom_filter_memory",
     "plte_normalize_border_memory",
+    "plte_composite_gradient_patch_memory",
     "DEFAULT_RATIO_GRADIENT",
     "get_ratio_gradient_for_scheme",
+    "get_composite_gradient_for_scheme",
 ]

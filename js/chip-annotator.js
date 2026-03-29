@@ -19,12 +19,10 @@ export class ChipAnnotator {
         this.viewer = viewer;
         this.ctx = canvas.getContext('2d');
 
-        // 🔥 Chip overlay Y 방향 보정 값 (px)
-        //    - 이미지 기준으로 chip rect가 전체적으로 얼마나 올라가 있는지 나타내는 상수
-        //    - UI 렌더링/선택 로직에서는 이 값을 "위로" 적용하고,
-        //      컨텍스트 메뉴 이미지 복사 시에는 같은 값을 "아래로" 적용해서
-        //      실제 이미지와 chip overlay가 정확히 겹치도록 사용한다.
-        this.Y_OFFSET = -55;
+        // Chip overlay Y 방향 보정 값 (px)
+        // 이미지 캔버스와 오버레이 캔버스가 동일한 위치(top:0)에 있고
+        // 동일한 transform(scale, dx, dy)을 사용하므로 추가 보정 불필요.
+        this.Y_OFFSET = 0;
 
         // Chip position data
         this.positionsData = null;
@@ -160,7 +158,7 @@ export class ChipAnnotator {
             if (_positionsCache.has(cacheKey)) {
                 this.positionsData = _positionsCache.get(cacheKey);
             } else {
-                const response = await fetch(`/api/chip-positions?path=${encodeURIComponent(imagePath)}&include_fq=1`);
+                const response = await fetch(`/api/chip-positions?path=${encodeURIComponent(imagePath)}&include_fq=0`);
                 if (!response.ok) {
                     console.log('No positions found for:', imagePath);
                     this.positionsData = null;
@@ -226,6 +224,41 @@ export class ChipAnnotator {
             this.yield = null;
             this.sys = null;
             this._updateMetadataDisplay();
+            return false;
+        }
+    }
+
+    /**
+     * Ensure F/Q data is loaded for current positions.
+     * Called lazily when Measure overlay is first activated.
+     * If already loaded (chips have .f/.q), returns immediately.
+     */
+    async ensureFqData(imagePath) {
+        imagePath = imagePath || this.currentImagePath;
+        if (!imagePath || !this.positionsData) return false;
+        // Already has F/Q data?
+        const firstChip = this.chips?.[0];
+        if (firstChip && (firstChip.f !== undefined || firstChip.q !== undefined)) {
+            return true;
+        }
+        try {
+            const response = await fetch(
+                `/api/chip-positions?path=${encodeURIComponent(imagePath)}&include_fq=1`
+            );
+            if (!response.ok) return false;
+            const fullData = await response.json();
+            const fullChips = fullData.chips || [];
+            // Merge F/Q arrays into existing chips
+            for (let i = 0; i < this.chips.length && i < fullChips.length; i++) {
+                if (fullChips[i].f !== undefined) this.chips[i].f = fullChips[i].f;
+                if (fullChips[i].q !== undefined) this.chips[i].q = fullChips[i].q;
+            }
+            // Update cache
+            _positionsCache.set(imagePath, this.positionsData);
+            console.log(`✅ F/Q data loaded: ${fullChips.length} chips`);
+            return true;
+        } catch (error) {
+            console.error('Error loading F/Q data:', error);
             return false;
         }
     }
@@ -513,7 +546,7 @@ export class ChipAnnotator {
     _drawChipRectWithText(chip, fillColor, text) {
         const transform = this.viewer.transform;
         const rect = chip.rect;
-        const Y_OFFSET = -55;
+        const Y_OFFSET = this.Y_OFFSET || 0;
 
         this.ctx.save();
         this.ctx.resetTransform();
@@ -718,7 +751,7 @@ export class ChipAnnotator {
     findChipAtPixel(canvasX, canvasY) {
         if (!this.positionsData || !this.viewer.transform) return null;
 
-        const Y_OFFSET = -50;
+        const Y_OFFSET = this.Y_OFFSET || 0;
         const transform = this.viewer.transform;
         const imgX = (canvasX - transform.dx) / transform.scale;
         const imgY = (canvasY - transform.dy - Y_OFFSET) / transform.scale;
@@ -1465,7 +1498,7 @@ export class ChipAnnotator {
         // Bottom filter white mask: overlay 모드와 관계없이 항상 적용
         if (this.bottomFilterSet.size > 0) {
             const transform = this.viewer.transform;
-            const Y_OFFSET = -55;
+            const Y_OFFSET = this.Y_OFFSET || 0;
             ctx.save();
             ctx.resetTransform();
             ctx.fillStyle = '#ffffff';
@@ -1487,7 +1520,7 @@ export class ChipAnnotator {
         // Gradient range filter white mask: measure overlay 모드에서 비선택 범위 chip 숨김
         if (this.gradientFilterSet.size > 0 && (this.viewer?.isMeasureGradientMode(this.overlayMode)) && this.ratioPercentiles) {
             const transform = this.viewer.transform;
-            const Y_OFFSET = -55;
+            const Y_OFFSET = this.Y_OFFSET || 0;
             ctx.save();
             ctx.resetTransform();
             ctx.fillStyle = '#ffffff';
@@ -1639,7 +1672,7 @@ export class ChipAnnotator {
         // 🔥 이미지 렌더링 방식과 동일: translate(dx, dy) 후 scale(scale, scale)
         // 이미지 픽셀 (imgX, imgY)는 캔버스 좌표 (imgX * scale + dx, imgY * scale + dy)에 그려짐
         // Y 오프셋을 추가하여 그리드도 칩 선택과 동일한 위치에 그리기
-        const Y_OFFSET = -55; // 칩 선택과 동일한 오프셋 (음수 = 위로)
+        const Y_OFFSET = this.Y_OFFSET || 0; // 칩 선택과 동일한 오프셋 (음수 = 위로)
         const toCanvas = (imgX, imgY) => ({
             x: imgX * transform.scale + transform.dx,
             y: imgY * transform.scale + transform.dy + Y_OFFSET
@@ -1680,7 +1713,7 @@ export class ChipAnnotator {
     _drawChipRect(chip, color) {
         const transform = this.viewer.transform;
         const rect = chip.rect;
-        const Y_OFFSET = this.Y_OFFSET || -55;
+        const Y_OFFSET = this.Y_OFFSET || 0;
 
         this.ctx.save();
         this.ctx.resetTransform();
@@ -2145,33 +2178,16 @@ export class ChipAnnotator {
             return;
         }
 
-        // 🔥 일반 클릭/드래그 (Ctrl/Shift/Alt 없음): 클릭은 선택 해제, 드래그는 범위 내 chip 제거
+        // 🔥 일반 클릭/드래그 (Ctrl/Shift/Alt 없음): 클릭은 선택, 드래그는 패닝이므로 무시
         if (!e.ctrlKey && !e.shiftKey && !e.altKey && this.clickStartPos) {
             const dragDistance = Math.sqrt(
                 Math.pow(canvasX - this.clickStartPos.x, 2) +
                 Math.pow(canvasY - this.clickStartPos.y, 2)
             );
-            
-            // 🔥 드래그가 발생했으면 범위 내 chip 제거
+
+            // 🔥 드래그가 발생했으면 패닝으로 간주 → chip 선택 변경 없음
             if (dragDistance > 5) {
-                const chipAtStart = this.findChipAtPixel(this.clickStartPos.x, this.clickStartPos.y);
-                const chipAtEnd = this.findChipAtPixel(canvasX, canvasY);
-                
-                if (chipAtStart && chipAtEnd && chipAtStart !== chipAtEnd) {
-                    const selected = this.getChipsInRect(chipAtStart, chipAtEnd);
-                    // 🔥 일반 드래그: 범위 내 chip 제거 (배치 처리로 성능 향상)
-                    const toRemove = selected.filter(idx => this.selectedChips.has(idx));
-                    toRemove.forEach(idx => {
-                        this.selectedChips.delete(idx);
-                        // 🔥 선택 순서 배열에서도 제거
-                        const orderIndex = this.selectedChipsOrder.indexOf(idx);
-                        if (orderIndex !== -1) {
-                            this.selectedChipsOrder.splice(orderIndex, 1);
-                        }
-                    });
-                    this.updateSelectedChipsList();
-                    console.log('🖱️ [DRAG] 범위 내 chip 제거:', selected.length, '개 (제거:', toRemove.length, ')');
-                }
+                // 패닝 중이므로 아무것도 하지 않음
             } else {
                 // 🔥 드래그가 없는 일반 클릭: 클릭한 chip 하나를 선택
                 const clickedChip = this.findChipAtPixel(canvasX, canvasY);
@@ -2300,7 +2316,7 @@ export class ChipAnnotator {
         const selected = [];
         const transform = this.viewer.transform;
         // 🔥 Y_OFFSET 적용: chip이 그려진 위치와 동일하게 계산
-        const Y_OFFSET = -50; // _drawChipRect와 동일한 값
+        const Y_OFFSET = this.Y_OFFSET || 0;
 
         for (let i = 0; i < this.chips.length; i++) {
             const chip = this.chips[i];
@@ -2334,7 +2350,7 @@ export class ChipAnnotator {
         const selected = [];
         const transform = this.viewer.transform;
         // 🔥 Y_OFFSET 적용: chip이 그려진 위치와 동일하게 계산
-        const Y_OFFSET = -50; // _drawChipRect와 동일한 값
+        const Y_OFFSET = this.Y_OFFSET || 0;
 
         for (let i = 0; i < this.chips.length; i++) {
             const chip = this.chips[i];

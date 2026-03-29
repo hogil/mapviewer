@@ -16,6 +16,11 @@
         rootFolder: fetch('/api/root-folder').then(r => r.json()).catch(() => null),
         currentFolder: fetch('/api/current-folder').then(r => r.json()).catch(() => null),
         browseFolders: fetch('/api/browse-folders?path=&force_root=true').then(r => r.json()).catch(() => null),
+        authUser: (() => {
+            const p = new URLSearchParams(location.search);
+            const lid = p.get('LoginId') || '';
+            return fetch(lid ? `/api/auth/user?LoginId=${encodeURIComponent(lid)}` : '/api/auth/user').then(r => r.json()).catch(() => null);
+        })(),
     };
     </script>
     <link rel="stylesheet" href="/css/style.css">

@@ -22,15 +22,27 @@ from .config import IMAGES_ROOT, POSITIONS_ROOT
 from .composite_map import (
     _load_source_positions_data,
     _first_image_with_positions,
-    _save_image_with_backend,
     _copy_positions_without_bin,
+    _build_sum_map_palette,
+    _build_palette_list,
     COMPOSITE_ROOT,
+    COMPOSITE_GRADIENT_START,
+    COMPOSITE_GRADIENT_COUNT,
     ANONYMOUS_LOGIN_ID,
     _sanitize_login_id,
 )
-from .personal_colors import get_ratio_gradient_for_scheme, load_color_legends, DEFAULT_BOTTOM_COLORS
+from .personal_colors import get_composite_gradient_for_scheme, load_color_legends, DEFAULT_BOTTOM_COLORS
 
-MEASURE_CACHE_FILENAME = "measure_composite_data.npz"
+MEASURE_CACHE_FILENAME = "measure_composite_data.npz"  # legacy fallback
+
+def _measure_cache_filename(mode: str = "", item_key: str = "") -> str:
+    """mode+key별 고유 NPZ 파일명 생성 (BIN/FBT/QVL 동시 생성 시 충돌 방지)"""
+    if mode and item_key:
+        safe_key = str(item_key).replace("/", "_").replace("\\", "_")
+        return f"measure_cache_{mode}_{safe_key}.npz"
+    elif mode:
+        return f"measure_cache_{mode}.npz"
+    return MEASURE_CACHE_FILENAME
 
 
 def _get_normal_border_rgb(scheme: Optional[str] = None) -> Tuple[int, int, int]:
@@ -302,10 +314,6 @@ def _interpolate_color(
     )
 
 
-def _contrast_text(r: int, g: int, b: int) -> Tuple[int, int, int]:
-    return (0, 0, 0) if (0.299 * r + 0.587 * g + 0.114 * b) > 140 else (255, 255, 255)
-
-
 # ── Chip rect 계산 ──────────────────────────────────────────
 
 def _chip_rect(
@@ -367,49 +375,50 @@ def _fmt_value(val: float) -> str:
     return f"{v / 1_000_000:.1f}M"
 
 
-# ── 이미지 렌더링 ──────────────────────────────────────────
+# ── 이미지 렌더링 (palette-indexed) ──────────────────────────
 
-def _render(
+def _render_indexed(
     base_image_path: Path,
     base_positions: dict,
     percentile_map: Dict[Tuple[int, int], float],
-    gradient_stops: List[Tuple[int, int, int]],
     value_map: Optional[Dict[Tuple[int, int], float]] = None,
     gradient_filter: Optional[Set[int]] = None,
     bin_filter: Optional[Set[str]] = None,
-    border_color: Optional[Tuple[int, int, int]] = None,
-    scheme: Optional[str] = None,
 ) -> Image.Image:
-    """
-    PIL ImageDraw 기반 고속 렌더링 — numpy 143MB 배열 제거.
-    positions 좌표만으로 칩 사각형을 직접 그림.
+    """Palette-indexed 렌더링 (default palette로 저장, PLTE 패치로 개인색 적용).
+
+    Palette layout:
+      0=Grade0(white), 7=Grade7(black), 8=BG, 9=text, 10=Normal border
+      24-255: gradient (232 levels)
     """
     from PIL import ImageDraw, ImageFont
-    from .composite_map import _resolve_scheme_background_rgb
 
-    # 캔버스 크기 결정 (이미지 로드 없음)
+    IDX_BG = 8
+    IDX_TEXT_DARK = 7   # black text on light chips
+    IDX_TEXT_LIGHT = 0  # white text on dark chips
+    IDX_CHIP_BASE = 0   # chip with no data
+    IDX_BORDER = 10
+    GRAD_MID = COMPOSITE_GRADIENT_START + COMPOSITE_GRADIENT_COUNT // 2
+
     coord = base_positions.get("coord", {})
     canvas_info = coord.get("canvas", {}) if isinstance(coord, dict) else {}
     w = int(canvas_info.get("width", 0)) if isinstance(canvas_info, dict) else 0
     h = int(canvas_info.get("height", 0)) if isinstance(canvas_info, dict) else 0
     if w <= 0 or h <= 0:
-        img = Image.open(base_image_path)
-        w, h = img.size
-        img.close()
+        tmp = Image.open(base_image_path)
+        w, h = tmp.size
+        tmp.close()
 
-    cw = w if w > 0 else 1
-    ch = h if h > 0 else 1
+    cw, ch = w if w > 0 else 1, h if h > 0 else 1
     sx, sy = w / float(cw), h / float(ch)
 
     chips = base_positions.get("chips", [])
     if not isinstance(chips, list):
-        return Image.new("RGB", (w, h), (0, 0, 0))
+        return Image.new("P", (w, h), IDX_BG)
 
-    # w/h 없는 칩 데이터용: 칩 크기 추정 (인접 칩 간 최소 간격 기반)
     _need_wh = any(
         isinstance(c, dict) and c.get("w") is None and c.get("width") is None
-        and c.get("rect") is None
-        for c in chips
+        and c.get("rect") is None for c in chips
     )
     est_cw, est_ch = 1, 1
     if _need_wh and len(chips) >= 2:
@@ -419,12 +428,9 @@ def _render(
             est_cw = min(xs[i+1] - xs[i] for i in range(len(xs)-1) if xs[i+1] > xs[i])
         if len(ys) >= 2:
             est_ch = min(ys[i+1] - ys[i] for i in range(len(ys)-1) if ys[i+1] > ys[i])
-        if est_cw <= 0:
-            est_cw = 1
-        if est_ch <= 0:
-            est_ch = 1
+        est_cw = max(1, est_cw)
+        est_ch = max(1, est_ch)
 
-    # chip rect 계산 + abs 좌표 매핑
     chip_rects = []
     abs_to_idx: Dict[Tuple[int, int], int] = {}
     abs_to_bin: Dict[Tuple[int, int], str] = {}
@@ -432,7 +438,6 @@ def _render(
         if not isinstance(c, dict):
             chip_rects.append(None)
             continue
-        # w/h 없는 칩에 추정값 보충
         if _need_wh and c.get("w") is None and c.get("width") is None:
             c = {**c, "w": est_cw, "h": est_ch}
         r = _chip_rect(c, sx, sy, w, h)
@@ -440,57 +445,49 @@ def _render(
         xa = c.get("x_abs") if c.get("x_abs") is not None else c.get("x")
         ya = c.get("y_abs") if c.get("y_abs") is not None else c.get("y")
         if xa is not None and ya is not None:
-            key = (int(xa), int(ya))
-            abs_to_idx[key] = i
-            abs_to_bin[key] = _normalize_bin(c.get("b"))
+            abs_to_idx[(int(xa), int(ya))] = i
+            abs_to_bin[(int(xa), int(ya))] = _normalize_bin(c.get("b"))
 
-    # PIL Image 직접 생성 (배경색 = 개인색)
-    bg_rgb = _resolve_scheme_background_rgb(scheme, section="measure")
-    img = Image.new("RGB", (w, h), bg_rgb)
+    img = Image.new("P", (w, h), IDX_BG)
     draw = ImageDraw.Draw(img)
 
     has_filter = gradient_filter is not None or bin_filter is not None
-    base_fill = (255, 255, 255) if has_filter else (224, 224, 224)
-    bc = border_color
+    base_fill = IDX_CHIP_BASE
 
-    # 1) 모든 칩 → base color + 테두리 (ImageDraw.rectangle, C 구현)
+    # 1) 모든 칩 → base color + border
     for r in chip_rects:
         if r is None:
             continue
-        draw.rectangle([r[0], r[1], r[2] - 1, r[3] - 1], fill=base_fill, outline=bc)
+        draw.rectangle([r[0], r[1], r[2] - 1, r[3] - 1], fill=base_fill, outline=IDX_BORDER)
 
-    # 2) 매칭 칩 → gradient color
+    # 2) 매칭 칩 → gradient palette index
     render_info = []
     for (xa, ya), pct in percentile_map.items():
         idx = abs_to_idx.get((xa, ya))
         if idx is None:
             continue
-        if gradient_filter is not None:
-            if min(int(pct / 10), 9) not in gradient_filter:
-                continue
-        if bin_filter is not None:
-            if abs_to_bin.get((xa, ya), "Normal") not in bin_filter:
-                continue
+        if gradient_filter is not None and min(int(pct / 10), 9) not in gradient_filter:
+            continue
+        if bin_filter is not None and abs_to_bin.get((xa, ya), "Normal") not in bin_filter:
+            continue
         rect = chip_rects[idx]
         if not rect:
             continue
-        color = _interpolate_color(pct, gradient_stops)
+        grad_idx = int(round(pct / 100.0 * (COMPOSITE_GRADIENT_COUNT - 1))) + COMPOSITE_GRADIENT_START
+        grad_idx = max(COMPOSITE_GRADIENT_START, min(COMPOSITE_GRADIENT_START + COMPOSITE_GRADIENT_COUNT - 1, grad_idx))
         x0, y0, x1, y1 = rect
-        draw.rectangle([x0, y0, x1 - 1, y1 - 1], fill=color)
-        if bc:
-            draw.rectangle([x0, y0, x1 - 1, y1 - 1], outline=bc)
+        draw.rectangle([x0, y0, x1 - 1, y1 - 1], fill=grad_idx, outline=IDX_BORDER)
         raw = value_map.get((xa, ya)) if value_map else None
-        render_info.append((x0, y0, x1, y1, color, raw))
+        render_info.append((x0, y0, x1, y1, grad_idx, raw))
 
     if not render_info:
         return img
 
-    # 3) 텍스트
+    # 3) 텍스트 (palette index: 밝은 chip → 검정 텍스트, 어두운 chip → 흰 텍스트)
     if value_map and render_info:
         samples = render_info[:20]
         avg_h = sum(y1 - y0 for _, y0, _, y1, _, _ in samples) / len(samples)
         avg_w = sum(x1 - x0 for x0, _, x1, _, _, _ in samples) / len(samples)
-        # 칩 크기 비례 폰트 — 칩 높이의 35%, 최소 8px (대형 캔버스에서도 가독성 보장)
         font_size = max(8, int(min(avg_w, avg_h) * 0.35))
         try:
             font = ImageFont.truetype("arial.ttf", font_size)
@@ -500,18 +497,17 @@ def _render(
             except (OSError, IOError):
                 font = ImageFont.load_default()
 
-        for x0, y0, x1, y1, bg, raw in render_info:
+        for x0, y0, x1, y1, gi, raw in render_info:
             if raw is None:
                 continue
             text = _fmt_value(raw)
-            tc = _contrast_text(*bg)
-            cw, ch = x1 - x0, y1 - y0
-            # 텍스트가 칩보다 클 경우 축소 폰트 사용
+            tc = IDX_TEXT_DARK if gi < GRAD_MID else IDX_TEXT_LIGHT
+            cw_px, ch_px = x1 - x0, y1 - y0
             cur_font = font
             bbox = draw.textbbox((0, 0), text, font=cur_font)
             tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            if tw > cw * 0.95 or th > ch * 0.85:
-                shrink = min(cw * 0.9 / max(tw, 1), ch * 0.8 / max(th, 1))
+            if tw > cw_px * 0.95 or th > ch_px * 0.85:
+                shrink = min(cw_px * 0.9 / max(tw, 1), ch_px * 0.8 / max(th, 1))
                 sf = max(8, int(font_size * shrink))
                 try:
                     cur_font = ImageFont.truetype(font.path, sf)
@@ -519,7 +515,7 @@ def _render(
                     cur_font = font
                 bbox = draw.textbbox((0, 0), text, font=cur_font)
                 tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            draw.text((x0 + (cw - tw) // 2, y0 + (ch - th) // 2), text, fill=tc, font=cur_font)
+            draw.text((x0 + (cw_px - tw) // 2, y0 + (ch_px - th) // 2), text, fill=tc, font=cur_font)
 
     return img
 
@@ -537,7 +533,8 @@ def _save_cache(
     source_count: int,
     scheme: Optional[str] = None,
 ) -> None:
-    cache_path = output_dir / MEASURE_CACHE_FILENAME
+    # 🔥 mode+key별 고유 파일명 (BIN/FBT/QVL 동시 생성 시 충돌 방지)
+    cache_path = output_dir / _measure_cache_filename(mode, item_key)
     payload = {
         "chip_positions": positions_arr,
         "aggregated_values": values_arr,
@@ -550,13 +547,11 @@ def _save_cache(
     if scheme:
         payload["color_scheme"] = np.array([scheme], dtype="U32")
 
-    def _bg_save():
-        try:
-            np.savez(cache_path, **payload)
-        except Exception:
-            pass
-
-    threading.Thread(target=_bg_save, daemon=True).start()
+    # 🔥 동기 저장 (recolor가 생성 직후 NPZ를 참조하므로)
+    try:
+        np.savez(cache_path, **payload)
+    except Exception:
+        pass
 
 
 def create_measure_data_only(
@@ -626,9 +621,9 @@ def create_measure_data_only(
     # 3. Percentile
     pct_map = _percentile_ranks(value_map)
 
-    # 4. Gradient 색상
+    # 4. Gradient 색상 (composite 탭 색상 사용)
     resolved = scheme or ANONYMOUS_LOGIN_ID
-    stops = get_ratio_gradient_for_scheme(resolved)
+    stops = get_composite_gradient_for_scheme(resolved)
 
     # 5. Base positions (canvas 크기 + 칩 좌표)
     from .composite_map import _first_image_with_positions, _load_source_positions_data, _resolve_scheme_background_rgb
@@ -681,7 +676,7 @@ def create_measure_data_only(
 
     # 6. 칩별 결과 데이터
     border_rgb = _get_normal_border_rgb(resolved)
-    bg_rgb = _resolve_scheme_background_rgb(resolved, section="measure")
+    bg_rgb = _resolve_scheme_background_rgb(resolved, section="composite")
     chips_data = []
     for (xa, ya), pct in pct_map.items():
         color = _interpolate_color(pct, stops)
@@ -802,9 +797,8 @@ def create_measure_composite(
     # 3. Percentile ranking
     pct_map = _percentile_ranks(value_map)
 
-    # 4. Gradient 색상
+    # 4. Resolve scheme (palette PNG는 default로 저장, display 시 PLTE 패치)
     resolved = scheme or login_id or ANONYMOUS_LOGIN_ID
-    stops = get_ratio_gradient_for_scheme(resolved)
 
     # 5. Base image
     base_rel = _first_image_with_positions(image_paths)
@@ -823,11 +817,10 @@ def create_measure_composite(
 
     # 🔥 이전 삭제는 /api/composite-cleanup에서 처리 — 여기서는 생성만
 
-    # 7. 렌더링
-    border_rgb = _get_normal_border_rgb(resolved)
-    result_img = _render(base_path, base_pos, pct_map, stops, value_map=value_map, border_color=border_rgb, scheme=resolved)
+    # 7. 렌더링 (palette-indexed PNG, default palette — display 시 PLTE 패치로 개인색 적용)
+    result_img = _render_indexed(base_path, base_pos, pct_map, value_map=value_map)
 
-    # 8. 저장
+    # 8. 저장 (palette-indexed PNG)
     if mode == "bin":
         bins_label = ",".join(sorted(bin_types)) if bin_types else "all"
         display_name = f"BIN_{bins_label}_{aggregation}"
@@ -835,24 +828,25 @@ def create_measure_composite(
         display_name = f"{mode.upper()}_{item_key}_{aggregation}"
 
     out_file = out_dir / f"{display_name}.png"
-    _save_image_with_backend(result_img, out_file)
-
+    # 기존 JPEG/WEBP 삭제
+    for old_ext in (".jpg", ".webp"):
+        old_f = out_file.with_suffix(old_ext)
+        if old_f.exists():
+            old_f.unlink(missing_ok=True)
+    # default palette로 저장
+    first_img = Image.open(base_path)
+    source_pal = first_img.getpalette() if first_img.mode == 'P' else None
+    first_img.close()
+    sum_palette = _build_sum_map_palette(_build_palette_list(source_pal), gradient_scheme="default")
+    result_img.putpalette(sum_palette[:768])
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    result_img.save(str(out_file), format='PNG', optimize=False, compress_level=1)
     actual = out_file
-    for ext in [".png", ".jpg", ".webp"]:
-        c = out_file.with_suffix(ext)
-        if c.exists():
-            actual = c
-            break
 
     result_rel = actual.relative_to(IMAGES_ROOT).as_posix()
 
-    # 9. Positions 복사 (BIN 정보 보존 → bottom legend용) — 비동기
-    threading.Thread(
-        target=_copy_positions_without_bin,
-        args=(base_rel, out_dir, [actual.name]),
-        kwargs={"keep_chip_bin": True},
-        daemon=True,
-    ).start()
+    # 9. Positions 복사 (BIN 정보 보존 → bottom legend용) — 동기 (recolor에서 참조)
+    _copy_positions_without_bin(base_rel, out_dir, [actual.name], keep_chip_bin=True)
 
     # 10. NPZ 캐시
     keys = sorted(pct_map.keys())
@@ -899,6 +893,7 @@ def recolor_measure_composite(
     scheme: Optional[str] = None,
     gradient_filter: Optional[List[int]] = None,
     bin_filter: Optional[List[str]] = None,
+    target_filename: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     NPZ 캐시 기반 빠른 재렌더링.
@@ -906,7 +901,50 @@ def recolor_measure_composite(
     bin_filter: 표시할 BIN 타입 리스트 ["285", "286", ...]
     """
     out_dir = IMAGES_ROOT / output_dir_rel
-    cache_path = out_dir / MEASURE_CACHE_FILENAME
+
+    # 🔥 모든 measure 이미지를 찾고 각각에 맞는 NPZ로 recolor
+    images = [
+        f for f in out_dir.iterdir()
+        if f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")
+        and "measure_cache" not in f.stem
+        and MEASURE_CACHE_FILENAME.replace(".npz", "") not in f.stem
+        and not f.stem.startswith("Grade_")
+        and not f.stem.startswith("square_")
+    ]
+    if not images:
+        raise FileNotFoundError("No measure output image found")
+
+    resolved = scheme or ANONYMOUS_LOGIN_ID
+
+    # 🔥 target_filename이 지정되면 해당 이미지만 recolor
+    if target_filename:
+        target = out_dir / target_filename
+        if not target.exists():
+            # 확장자가 다를 수 있으므로 stem으로 검색
+            stem = Path(target_filename).stem
+            matches = [f for f in images if f.stem == stem]
+            target = matches[0] if matches else images[0]
+    else:
+        target = images[0]
+
+    # 🔥 이미지 파일명에서 mode+key 추출하여 해당 NPZ 찾기
+    # 파일명 패턴: BIN_300_count.jpg, F_1000_average.jpg, Q_5000_average.jpg
+    stem = target.stem  # "BIN_300_count" or "F_1000_average"
+    parts = stem.split("_")
+    _mode = parts[0].lower() if parts else ""
+    # BIN은 item_key=None으로 저장되므로 key 없이 mode만 사용
+    # F/Q는 parts[1]이 item_key
+    if _mode == "bin":
+        _key = ""  # BIN은 key 없음 (bin_types는 파일명에만 포함)
+    elif _mode in ("f", "q") and len(parts) > 1:
+        _key = parts[1]
+    else:
+        _key = ""
+
+    cache_path = out_dir / _measure_cache_filename(_mode, _key)
+    if not cache_path.exists():
+        # fallback: legacy 단일 파일
+        cache_path = out_dir / MEASURE_CACHE_FILENAME
     if not cache_path.exists():
         raise FileNotFoundError(f"Measure cache not found: {cache_path}")
 
@@ -922,19 +960,6 @@ def recolor_measure_composite(
         pct_map[k] = float(pct_arr[i])
         val_map[k] = float(val_arr[i])
 
-    resolved = scheme or ANONYMOUS_LOGIN_ID
-    stops = get_ratio_gradient_for_scheme(resolved)
-
-    # 기존 출력 이미지 찾기
-    images = [
-        f for f in out_dir.iterdir()
-        if f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")
-        and MEASURE_CACHE_FILENAME.replace(".npz", "") not in f.stem
-    ]
-    if not images:
-        raise FileNotFoundError("No output image found")
-    target = images[0]
-
     # Positions 파일 로드
     pos_dir = POSITIONS_ROOT / out_dir.relative_to(IMAGES_ROOT)
     pos_file = pos_dir / f"{target.stem}.json"
@@ -947,17 +972,28 @@ def recolor_measure_composite(
     gf_set = set(gradient_filter) if gradient_filter else None
     bf_set = set(bin_filter) if bin_filter else None
 
-    # 재렌더링
-    border_rgb = _get_normal_border_rgb(resolved)
-    result_img = _render(
-        target, base_pos, pct_map, stops,
+    # 재렌더링 (palette-indexed PNG, default palette)
+    result_img = _render_indexed(
+        target, base_pos, pct_map,
         value_map=val_map,
         gradient_filter=gf_set,
         bin_filter=bf_set,
-        border_color=border_rgb,
-        scheme=resolved,
     )
-    _save_image_with_backend(result_img, target)
+    # 기존 JPEG/WEBP 삭제
+    for old_ext in (".jpg", ".webp"):
+        old_f = target.with_suffix(old_ext)
+        if old_f.exists():
+            old_f.unlink(missing_ok=True)
+    # default palette로 저장
+    base_img = Image.open(target) if target.exists() and target.suffix.lower() == '.png' else None
+    source_pal = base_img.getpalette() if base_img and base_img.mode == 'P' else None
+    if base_img:
+        base_img.close()
+    sum_palette = _build_sum_map_palette(_build_palette_list(source_pal), gradient_scheme="default")
+    result_img.putpalette(sum_palette[:768])
+    target = target.with_suffix(".png")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    result_img.save(str(target), format='PNG', optimize=False, compress_level=1)
 
     # filter 적용 후 range counts 재계산
     # BIN lookup 구성 (O(1) access)

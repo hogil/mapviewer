@@ -101,6 +101,7 @@ export class ColorSchemeEditor {
         this.originalCheckboxState = null; // 모달 열 때 체크박스 상태 저장용
         this.pendingSchemeName = ''; // 검색 리스트에서 선택한 임시 스킴명
         this.realtimeUpdateTimeout = null; // 실시간 미리보기 디바운스 타이머
+        this._previewApplied = false; // 🔥 미리보기 적용 여부 (취소 시 리로드 판단용)
         // 🔥 LoginId 헬퍼 — 모든 색상 API에 LoginId 전달
         this._withLogin = (url) => {
             const id = String(this.viewer?.getCurrentLoginId?.() || this.viewer?.currentUser || '').trim();
@@ -467,6 +468,8 @@ export class ColorSchemeEditor {
         // 초기 상태 저장 (깊은 복사)
         this.originalSchemeData = JSON.parse(JSON.stringify(schemeData));
         
+        // 🔥 모달 열 때 상태 초기화
+        this._previewApplied = false;
         // 🔥 모달 열 때 체크박스 상태 저장 (취소 시 복원용)
         if (this.viewer?.dom?.personalizedColorCheckbox) {
             this.originalCheckboxState = this.viewer.dom.personalizedColorCheckbox.checked;
@@ -540,118 +543,8 @@ export class ColorSchemeEditor {
 
     async close() {
         if (!this.modal) return;
-        
-        // viewer가 없으면 복원 로직 대신 __preview_ 정리만 수행
-        if (!this.viewer) {
-            await this.cleanupPreviewSchemeArtifacts();
-            this.modal.classList.remove("is-open");
-            this.modal.setAttribute("aria-hidden", "true");
-            document.removeEventListener("keydown", this.boundKeyHandler);
-            document.removeEventListener("mousedown", this.boundOutsideClick);
-            this.clearError();
-            return;
-        }
 
-        // 실시간 업데이트 타이머 정리
-        if (this.realtimeUpdateTimeout) {
-            clearTimeout(this.realtimeUpdateTimeout);
-            this.realtimeUpdateTimeout = null;
-        }
-        if (this._gradientPreviewTimeout) {
-            clearTimeout(this._gradientPreviewTimeout);
-            this._gradientPreviewTimeout = null;
-        }
-        // Gradient preview 복원 (measure overlay)
-        if (this._savedRatioGradientCache) {
-            this.viewer._ratioGradientCache = this._savedRatioGradientCache;
-            this._savedRatioGradientCache = null;
-            if (!this.viewer.gridMode &&
-                (this.viewer.isMeasureGradientMode()) &&
-                this.viewer.chipAnnotator) {
-                this.viewer.chipAnnotator.setOverlayMode(this.viewer.overlayMode, {
-                    gradientStops: this.viewer._ratioGradientCache,
-                    itemKey: this.viewer._ratioActiveItemKey,
-                });
-            }
-        }
-        this.viewer._previewSchemeOverride = null;
-
-        // 🔥 취소 시 원래 색상으로 되돌리기
-        try {
-            // 1. 원래 scheme으로 메모리 + 서버 복원
-            if (this.originalSchemeData && this.currentSchemeName) {
-                if (this.viewer.colorLegends) {
-                    this.viewer.colorLegends[this.currentSchemeName] =
-                        JSON.parse(JSON.stringify(this.originalSchemeData));
-                }
-
-                // 2. 서버에 원래 scheme 복원 (프리뷰 중 서버에 저장된 변경 되돌리기)
-                try {
-                    await fetch(this._withLogin('/api/color-scheme'), {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            schemeName: this.currentSchemeName,
-                            schemeData: this.originalSchemeData,
-                        }),
-                    });
-                } catch (_) { /* 복원 실패 무시 */ }
-
-                // 3. __preview_ 임시 스킴 삭제 (메모리)
-                await this.cleanupPreviewSchemeArtifacts();
-
-                // 3. 캐시 초기화
-                if (typeof this.viewer.hardResetUiCaches === 'function') {
-                    await this.viewer.hardResetUiCaches({ clearPersistentStorage: false });
-                }
-                this.viewer.pyramidLevels = {};
-                if (this.viewer._pyramidLoading) {
-                    this.viewer._pyramidLoading = new Set();
-                }
-                if (this.viewer.pyramidLoadingLevels) {
-                    this.viewer.pyramidLoadingLevels.clear();
-                }
-                if (this.viewer.semiconductorRenderer) {
-                    this.viewer.semiconductorRenderer.imagePyramid = {};
-                    this.viewer.semiconductorRenderer.levelTextures.clear();
-                }
-
-                // 4. personalizedColorCacheBuster 업데이트
-                this.viewer._personalizedColorCacheBuster = Date.now();
-                this.viewer._previewSchemeOverride = null;
-                if (this.viewer.thumbnailManager) {
-                    this.viewer.thumbnailManager.cache.clear();
-                }
-
-                // 5. 원래 설정 복원
-                const originalUser = this.viewer.currentUser;
-                if (this.originalCheckboxState !== null && this.viewer.dom?.personalizedColorCheckbox) {
-                    this.viewer.dom.personalizedColorCheckbox.checked = this.originalCheckboxState;
-                }
-                this.viewer.personalizedColorEnabled = 
-                    this.originalCheckboxState !== null ? this.originalCheckboxState : this.viewer.personalizedColorEnabled;
-                this.viewer.currentUser = originalUser;
-
-                // 6. 이미지/그리드 리로드
-                if (this.viewer.gridMode) {
-                    // 그리드 모드: 현재 그리드 이미지 유지하며 리로드
-                    const currentImages = this.viewer.selectedImages || [];
-                    if (currentImages.length > 0) {
-                        await this.viewer.showGrid(currentImages, false);
-                    }
-                } else if (this.viewer.selectedImagePath) {
-                    // 피라미드 모드: 현재 이미지 유지하며 리로드
-                    await this.viewer.loadImage(this.viewer.selectedImagePath, false, null, true);
-                }
-
-                // 7. Legend 업데이트
-                this.viewer.renderColorLegends();
-                this.viewer.showColorLegends();
-            }
-        } catch (error) {
-            console.error("ColorEditor: Restore on cancel failed", error);
-        }
-        
+        // 🔥 모달 즉시 닫기 (DOM 숨기기 + 리스너 제거를 가장 먼저 실행)
         this.modal.classList.remove('is-open');
         this.modal.setAttribute('aria-hidden', 'true');
         document.removeEventListener('keydown', this.boundKeyHandler);
@@ -666,6 +559,124 @@ export class ColorSchemeEditor {
         this.updateCellSelection();
         this.hideContextMenu();
         this.clearError();
+
+        // 실시간 업데이트 타이머 정리
+        if (this.realtimeUpdateTimeout) {
+            clearTimeout(this.realtimeUpdateTimeout);
+            this.realtimeUpdateTimeout = null;
+        }
+        if (this._gradientPreviewTimeout) {
+            clearTimeout(this._gradientPreviewTimeout);
+            this._gradientPreviewTimeout = null;
+        }
+
+        if (!this.viewer) {
+            this.cleanupPreviewSchemeArtifacts().catch(() => {});
+            this._previewApplied = false;
+            return;
+        }
+
+        // 🔥 미리보기 안 했으면 복원 불필요 — 즉시 종료
+        if (!this._previewApplied) {
+            this.cleanupPreviewSchemeArtifacts().catch(() => {});
+            this.viewer._previewSchemeOverride = null;
+            this._previewApplied = false;
+            return;
+        }
+
+        // 🔥 미리보기 했으면 → 원래 색상 복원 (백그라운드, await 없음)
+        const viewer = this.viewer;
+        const savedGradientCache = this._savedRatioGradientCache;
+        const previewApplied = this._previewApplied;
+        const originalSchemeData = this.originalSchemeData ? JSON.parse(JSON.stringify(this.originalSchemeData)) : null;
+        const currentSchemeName = this.currentSchemeName;
+        const originalMeasureData = this.originalMeasureData ? JSON.parse(JSON.stringify(this.originalMeasureData)) : null;
+        const originalCompositeData = this.originalCompositeData ? JSON.parse(JSON.stringify(this.originalCompositeData)) : null;
+        const originalMeasureBg = this._originalMeasureBg;
+        const originalCompositeBg = this._originalCompositeBg;
+        const originalCheckboxState = this.originalCheckboxState;
+
+        // 클라이언트 캐시 즉시 복원 (동기)
+        if (savedGradientCache) {
+            viewer._ratioGradientCache = savedGradientCache;
+            this._savedRatioGradientCache = null;
+            if (!viewer.gridMode && viewer.isMeasureGradientMode() && viewer.chipAnnotator) {
+                viewer.chipAnnotator.setOverlayMode(viewer.overlayMode, {
+                    gradientStops: viewer._ratioGradientCache,
+                    itemKey: viewer._ratioActiveItemKey,
+                });
+            }
+        }
+        viewer._previewSchemeOverride = null;
+        this._previewApplied = false;
+
+        // 🔥 서버 복원 + UI 리로드는 fire-and-forget (모달은 이미 닫힘)
+        (async () => {
+            try {
+                const loginId = viewer.getCurrentLoginId?.() || viewer.currentUser || '';
+
+                // gradient 색상 서버 복원
+                for (const tabType of ['measure', 'composite']) {
+                    const origData = tabType === 'measure' ? originalMeasureData : originalCompositeData;
+                    const origBg = tabType === 'measure' ? originalMeasureBg : originalCompositeBg;
+                    if (origData && Object.keys(origData).length > 0) {
+                        const origColors = [];
+                        for (let s = 0; s <= 100; s += 10) origColors.push(origData[`quantile${s}`] || '#000000');
+                        const apiPath = tabType === 'measure' ? '/api/measure-colors' : '/api/composite-colors';
+                        fetch(`${apiPath}?LoginId=${encodeURIComponent(loginId)}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ colors: origColors, background: origBg || '#CCCCCC' }),
+                        }).catch(() => {});
+                    }
+                }
+
+                // Fail 탭 색상 서버 복원
+                if (originalSchemeData && currentSchemeName) {
+                    if (viewer.colorLegends) {
+                        viewer.colorLegends[currentSchemeName] = originalSchemeData;
+                    }
+                    fetch(this._withLogin('/api/color-scheme'), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ schemeName: currentSchemeName, schemeData: originalSchemeData }),
+                    }).catch(() => {});
+                }
+
+                this.cleanupPreviewSchemeArtifacts().catch(() => {});
+
+                // 캐시 초기화
+                viewer._personalizedColorCacheBuster = Date.now();
+                if (viewer.thumbnailManager) viewer.thumbnailManager.cache.clear();
+                viewer.pyramidLevels = {};
+                if (viewer._pyramidLoading) viewer._pyramidLoading = new Set();
+                if (viewer.pyramidLoadingLevels) viewer.pyramidLoadingLevels.clear();
+                if (viewer.semiconductorRenderer) {
+                    viewer.semiconductorRenderer.imagePyramid = {};
+                    viewer.semiconductorRenderer.levelTextures.clear();
+                }
+
+                // 원래 설정 복원
+                const originalUser = viewer.currentUser;
+                if (originalCheckboxState !== null && viewer.dom?.personalizedColorCheckbox) {
+                    viewer.dom.personalizedColorCheckbox.checked = originalCheckboxState;
+                }
+                viewer.personalizedColorEnabled =
+                    originalCheckboxState !== null ? originalCheckboxState : viewer.personalizedColorEnabled;
+                viewer.currentUser = originalUser;
+
+                // 이미지/그리드 리로드
+                if (viewer.gridMode) {
+                    viewer.refreshGridThumbnailsWithCurrentParams();
+                } else if (viewer.selectedImagePath) {
+                    viewer.loadImage(viewer.selectedImagePath, false, null, true).catch(() => {});
+                }
+                viewer.renderColorLegends();
+                viewer.showColorLegends();
+            } catch (error) {
+                console.error("ColorEditor: Background restore failed", error);
+            }
+        })();
     }
 
     handleKeyDown(event) {
@@ -1283,8 +1294,8 @@ export class ColorSchemeEditor {
         if (this.activeTab === 'measure' || this.activeTab === 'composite' || this.activeTab === 'ratio') {
             if (this.realtimeUpdateTimeout) clearTimeout(this.realtimeUpdateTimeout);
             this.realtimeUpdateTimeout = setTimeout(() => {
-                this._previewGradientRealtime();
-            }, 300);
+                this._previewGradientRealtime().catch(() => {});
+            }, 500);
             return;
         }
 
@@ -1325,6 +1336,7 @@ export class ColorSchemeEditor {
                 const originalEnabled = this.viewer.personalizedColorEnabled;
                 this.viewer.personalizedColorEnabled = true;
                 this.viewer._previewSchemeOverride = schemeName;
+                this._previewApplied = true; // 🔥 미리보기 적용됨
 
                 // 5. 캐시 초기화
                 this.viewer.pyramidLevels = {};
@@ -1340,30 +1352,21 @@ export class ColorSchemeEditor {
                 }
 
                 // ⭐ 6단계: 그리드 모드 vs 단일 이미지 구분
-                // mode 플래그가 일시적으로 stale일 수 있어 캔버스 표시 상태 + 현재 경로 기준으로 판별
-                const previewImagePath = this.viewer.selectedImagePath || this.viewer.currentImagePath || null;
-                const singleCanvasVisible = Boolean(
-                    this.viewer.dom?.imageCanvas &&
-                    this.viewer.dom.imageCanvas.style.display !== 'none'
-                );
-
-                if (previewImagePath && singleCanvasVisible) {
-                    // ✅ 단일 이미지 모드: 이미지 리로드
-                    // 디버그 로그 제거
-                    // console.log('ColorEditor: Updating single image preview');
-                    // 같은 경로 재로드가 조기 반환되지 않도록 forceReload=true
-                    await this.viewer.loadImage(previewImagePath, false, null, true);
-                    this.refreshNavigatorPreview();
-                } else if (this.viewer.gridMode) {
+                // 🔥 gridMode를 먼저 체크 — loadImage()는 gridMode를 해제하므로
+                //    그리드 모드에서 절대 loadImage를 호출하면 안 된다
+                if (this.viewer.gridMode) {
                     // ✅ 그리드 모드: 썸네일 캐시 클리어 + 썸네일 리로드
-                    // 디버그 로그 제거
-                    // console.log('ColorEditor: Updating grid thumbnails preview');
                     if (typeof this.viewer.refreshGridThumbnailsWithCurrentParams === 'function') {
                         this.viewer.refreshGridThumbnailsWithCurrentParams();
                     }
-
-                    // gridImage 단일뷰에서 navigator가 열려 있으면 즉시 갱신
                     this.refreshNavigatorPreview();
+                } else {
+                    const previewImagePath = this.viewer.selectedImagePath || this.viewer.currentImagePath || null;
+                    if (previewImagePath) {
+                        // ✅ 단일 이미지 모드: 이미지 리로드
+                        await this.viewer.loadImage(previewImagePath, false, null, true);
+                        this.refreshNavigatorPreview();
+                    }
                 }
 
                 // 7. Legend 업데이트
@@ -1379,14 +1382,13 @@ export class ColorSchemeEditor {
 
     /**
      * Measure/Composite gradient 탭 실시간 미리보기
-     * Grade 색상과 달리 서버에 __preview_ 스킴을 저장하지 않고,
-     * gradient 캐시만 업데이트하여 범례 + 클라이언트 오버레이를 즉시 반영
+     * 서버에 gradient 색상을 저장 → 캐시 클리어 → 썸네일/이미지 재로드
      */
-    _previewGradientRealtime() {
+    async _previewGradientRealtime() {
         try {
             const tabType = this.activeTab === 'measure' ? 'measure' : 'composite';
             const data = this._getCurrentGradientData(tabType);
-            if (!data) return;
+            if (!data || !this.viewer) return;
 
             // gradient stops 추출 (quantile0 ~ quantile100, 11개)
             const stops = [];
@@ -1396,22 +1398,50 @@ export class ColorSchemeEditor {
             }
             if (stops.length !== 11) return;
 
-            // viewer의 gradient 캐시 업데이트
-            if (tabType === 'measure' && this.viewer) {
-                this.viewer._ratioGradientCache = stops;
-                // 단일 이미지: chipAnnotator 오버레이 재계산
-                if (this.viewer.chipAnnotator && this.viewer.overlayMode &&
-                    (this.viewer.isMeasureGradientMode())) {
-                    this.viewer.chipAnnotator.gradientStops = stops;
-                    this.viewer.chipAnnotator._computeRatioOverlay(
-                        this.viewer.overlayMode, this.viewer._ratioActiveItemKey);
-                    this.viewer.chipAnnotator.render();
+            // 1. gradient 캐시 업데이트
+            this.viewer._ratioGradientCache = stops;
+
+            // 2. 서버에 gradient 색상 저장 (PLTE 패치에 반영)
+            const apiPath = tabType === 'measure' ? '/api/measure-colors' : '/api/composite-colors';
+            const loginId = this.viewer.getCurrentLoginId?.() || this.viewer.currentUser || '';
+            try {
+                await fetch(`${apiPath}?LoginId=${encodeURIComponent(loginId)}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ colors: stops, background: this._getGradientBackground(tabType) }),
+                });
+            } catch (_) { /* 프리뷰 실패는 무시 */ }
+
+            // 3. 캐시 클리어 + cacheBuster
+            this.viewer._personalizedColorCacheBuster = Date.now();
+            if (this.viewer.thumbnailManager) {
+                this.viewer.thumbnailManager.cache.clear();
+            }
+            this._previewApplied = true;
+
+            // 4. 단일 이미지: chipAnnotator 오버레이 재계산
+            if (this.viewer.chipAnnotator && this.viewer.overlayMode &&
+                (this.viewer.isMeasureGradientMode())) {
+                this.viewer.chipAnnotator.gradientStops = stops;
+                this.viewer.chipAnnotator._computeRatioOverlay(
+                    this.viewer.overlayMode, this.viewer._ratioActiveItemKey);
+                this.viewer.chipAnnotator.render();
+            }
+
+            // 5. 그리드 모드: 썸네일 재로드 (composite 그리드 포함)
+            if (this.viewer.gridMode) {
+                if (typeof this.viewer.refreshGridThumbnailsWithCurrentParams === 'function') {
+                    this.viewer.refreshGridThumbnailsWithCurrentParams();
                 }
-                // 범례 갱신
-                this.viewer.renderColorLegends();
-                if (typeof this.viewer.renderGridColorLegend === 'function') {
-                    this.viewer.renderGridColorLegend();
-                }
+            } else if (this.viewer.selectedImagePath) {
+                // 단일 이미지 모드: 이미지 재로드
+                await this.viewer.loadImage(this.viewer.selectedImagePath, false, null, true);
+            }
+
+            // 6. 범례 갱신
+            this.viewer.renderColorLegends();
+            if (typeof this.viewer.renderGridColorLegend === 'function') {
+                this.viewer.renderGridColorLegend();
             }
         } catch (e) {
             console.warn('ColorEditor: Gradient preview failed', e);
@@ -1561,29 +1591,25 @@ export class ColorSchemeEditor {
                     this.viewer._personalizedColorCacheBuster = Date.now();
                     this.viewer._previewSchemeOverride = null;
                     
-                    // 8. 그리드/이미지 모드 유지하며 리로드 (모드 변경 없음)
+                    // 🔥 모달 즉시 닫기 → 그리드/이미지 리로드는 백그라운드
+                    this.viewer?.showToast?.("색상이 적용되었습니다.", 1800);
+                    this._previewApplied = false;
+                    this._savedRatioGradientCache = null;
+                    await this.close();
+
+                    // 8. 그리드/이미지 리로드 (모달 닫힌 후 백그라운드)
                     if (this.viewer.gridMode) {
-                        // 그리드 모드: 현재 그리드 유지
-                        const currentImages = this.viewer.selectedImages || [];
-                        if (currentImages.length > 0) {
-                            // 디버그 로그 제거
-                            // console.log("ColorEditor: Reloading grid without mode change");
-                            await this.viewer.showGrid(currentImages, false);
-                        }
+                        this.viewer.refreshGridThumbnailsWithCurrentParams();
                     } else if (this.viewer.selectedImagePath) {
-                        // 피라미드 모드: 현재 이미지 유지
-                        // 디버그 로그 제거
-                        // console.log("ColorEditor: Reloading image without mode change");
-                        await this.viewer.loadImage(this.viewer.selectedImagePath, false, null, true);
+                        this.viewer.loadImage(this.viewer.selectedImagePath, false, null, true).catch(() => {});
                         this.refreshNavigatorPreview();
                     }
-                    
-                    // 9. UI 업데이트
+                    // Composite 모드: PLTE 패치로 Grade 색 반영
+                    if (this.viewer.isCompositeMode && this.viewer.compositeSession?.outputDir) {
+                        this.viewer.refreshGridThumbnailsWithCurrentParams();
+                    }
                     this.viewer.renderColorLegends();
                     this.viewer.showColorLegends();
-                    
-                    this.viewer?.showToast?.("색상이 적용되었습니다.", 1800);
-                    await this.close();
                 }
             } else {
                 throw new Error('저장 실패');
@@ -1878,19 +1904,19 @@ export class ColorSchemeEditor {
 
             const row = { key, hexInput, rgbInputs, colorInput, colorPreview };
 
-            hexInput.addEventListener('change', () => { this._syncGradientFromHex(tabType, row); this.checkForChanges(); this._updateGradientPreview(tabType); });
-            hexInput.addEventListener('input', () => { this._clearGradientError(tabType); this.checkForChanges(); this._updateGradientPreview(tabType); });
+            hexInput.addEventListener('change', () => { this._syncGradientFromHex(tabType, row); this.checkForChanges(); this.updatePreviewRealtime(); });
+            hexInput.addEventListener('input', () => { this._clearGradientError(tabType); this.checkForChanges(); this.updatePreviewRealtime(); });
             // Selection events
             hexInput.addEventListener('mousedown', (e) => this.handleCellMouseDown(e, hexCellId, 'hex'));
             hexInput.addEventListener('keydown', (e) => this.handleInputKeyDown(e, hexCellId, 'hex'), true);
             rgbInputs.forEach((input, idx) => {
-                input.addEventListener('change', () => { this._syncGradientFromRgb(tabType, row); this.checkForChanges(); this._updateGradientPreview(tabType); });
-                input.addEventListener('input', () => { this._clearGradientError(tabType); this.checkForChanges(); this._updateGradientPreview(tabType); });
+                input.addEventListener('change', () => { this._syncGradientFromRgb(tabType, row); this.checkForChanges(); this.updatePreviewRealtime(); });
+                input.addEventListener('input', () => { this._clearGradientError(tabType); this.checkForChanges(); this.updatePreviewRealtime(); });
                 input.addEventListener('mousedown', (e) => this.handleCellMouseDown(e, input.dataset.cellId, 'rgb'));
                 input.addEventListener('keydown', (e) => this.handleInputKeyDown(e, input.dataset.cellId, 'rgb'), true);
             });
-            colorInput.addEventListener('input', () => { this._syncGradientFromPicker(tabType, row); this.checkForChanges(); this._updateGradientPreview(tabType); });
-            colorInput.addEventListener('change', () => { this.checkForChanges(); this._updateGradientPreview(tabType); });
+            colorInput.addEventListener('input', () => { this._syncGradientFromPicker(tabType, row); this.checkForChanges(); this.updatePreviewRealtime(); });
+            colorInput.addEventListener('change', () => { this.checkForChanges(); this.updatePreviewRealtime(); });
 
             rows.push(row);
         }
@@ -1962,18 +1988,18 @@ export class ColorSchemeEditor {
         tbody.appendChild(bgTr);
 
         const bgRow = { key: 'background', hexInput: bgHexInput, rgbInputs: bgRgbInputs, colorInput: bgColorInput, colorPreview: bgColorPreview };
-        bgHexInput.addEventListener('change', () => { this._syncGradientFromHex(tabType, bgRow); this.checkForChanges(); this._updateGradientPreview(tabType); });
-        bgHexInput.addEventListener('input', () => { this._clearGradientError(tabType); this.checkForChanges(); this._updateGradientPreview(tabType); });
+        bgHexInput.addEventListener('change', () => { this._syncGradientFromHex(tabType, bgRow); this.checkForChanges(); this.updatePreviewRealtime(); });
+        bgHexInput.addEventListener('input', () => { this._clearGradientError(tabType); this.checkForChanges(); this.updatePreviewRealtime(); });
         bgHexInput.addEventListener('mousedown', (e) => this.handleCellMouseDown(e, bgHexCellId, 'hex'));
         bgHexInput.addEventListener('keydown', (e) => this.handleInputKeyDown(e, bgHexCellId, 'hex'), true);
         bgRgbInputs.forEach((input) => {
-            input.addEventListener('change', () => { this._syncGradientFromRgb(tabType, bgRow); this.checkForChanges(); this._updateGradientPreview(tabType); });
-            input.addEventListener('input', () => { this._clearGradientError(tabType); this.checkForChanges(); this._updateGradientPreview(tabType); });
+            input.addEventListener('change', () => { this._syncGradientFromRgb(tabType, bgRow); this.checkForChanges(); this.updatePreviewRealtime(); });
+            input.addEventListener('input', () => { this._clearGradientError(tabType); this.checkForChanges(); this.updatePreviewRealtime(); });
             input.addEventListener('mousedown', (e) => this.handleCellMouseDown(e, input.dataset.cellId, 'rgb'));
             input.addEventListener('keydown', (e) => this.handleInputKeyDown(e, input.dataset.cellId, 'rgb'), true);
         });
-        bgColorInput.addEventListener('input', () => { this._syncGradientFromPicker(tabType, bgRow); this.checkForChanges(); this._updateGradientPreview(tabType); });
-        bgColorInput.addEventListener('change', () => { this.checkForChanges(); this._updateGradientPreview(tabType); });
+        bgColorInput.addEventListener('input', () => { this._syncGradientFromPicker(tabType, bgRow); this.checkForChanges(); this.updatePreviewRealtime(); });
+        bgColorInput.addEventListener('change', () => { this.checkForChanges(); this.updatePreviewRealtime(); });
 
         if (tabType === 'measure') {
             this.measureRows = rows;
@@ -2148,12 +2174,31 @@ export class ColorSchemeEditor {
                 // close() 전에 복원 방지 플래그 설정
                 this._savedRatioGradientCache = null;
 
-                if (this.viewer.gridMode) {
+                // 🔥 Composite 모드: PLTE 패치로 색상 반영 → 썸네일만 갱신 (recolor 불필요)
+                // composite PNG는 default palette로 저장, 개인색은 서빙 시 PLTE 패치로 적용
+                if (this.viewer.isCompositeMode && this.viewer.compositeSession) {
                     if (typeof this.viewer.refreshGridThumbnailsWithCurrentParams === 'function') {
                         this.viewer.refreshGridThumbnailsWithCurrentParams();
                     }
-                } else if (this.viewer.selectedImagePath) {
-                    // 단일 이미지: measure overlay 즉시 재적용
+                    this.viewer.renderColorLegends();
+                    if (typeof this.viewer.renderGridColorLegend === 'function') {
+                        this.viewer.renderGridColorLegend();
+                    }
+                } else if (this.viewer.gridMode) {
+                    if (typeof this.viewer.refreshGridThumbnailsWithCurrentParams === 'function') {
+                        this.viewer.refreshGridThumbnailsWithCurrentParams();
+                    }
+                }
+
+                // 🔥 모달 즉시 닫기 → 단일 이미지 리로드는 백그라운드
+                const label = tabType === 'measure' ? 'Measure' : 'Composite';
+                this.viewer?.showToast?.(`${label} 색상이 적용되었습니다.`, 1800);
+                this._previewApplied = false;
+                this._savedRatioGradientCache = null;
+                await this.close();
+
+                // 단일 이미지: measure overlay + 이미지 리로드 (모달 닫힌 후)
+                if (!this.viewer.gridMode && this.viewer.selectedImagePath) {
                     if (tabType === 'measure' &&
                         (this.viewer.isMeasureGradientMode()) &&
                         this.viewer.chipAnnotator) {
@@ -2163,12 +2208,8 @@ export class ColorSchemeEditor {
                         });
                         this.viewer.renderColorLegends();
                     }
-                    await this.viewer.loadImage(this.viewer.selectedImagePath, false, null, true);
+                    this.viewer.loadImage(this.viewer.selectedImagePath, false, null, true).catch(() => {});
                 }
-
-                const label = tabType === 'measure' ? 'Measure' : 'Composite';
-                this.viewer?.showToast?.(`${label} 색상이 적용되었습니다.`, 1800);
-                await this.close();
             } else {
                 throw new Error('저장 실패');
             }
@@ -2225,6 +2266,7 @@ export class ColorSchemeEditor {
 
                 // Gradient 캐시 갱신 + 범례 리렌더링 (measure/composite 공통)
                 this.viewer._ratioGradientCache = colorsArray;
+                this._previewApplied = true; // 🔥 gradient 미리보기 적용됨
 
                 if (tabType === 'measure') {
                     // 단일 이미지: 클라이언트 overlay 직접 갱신

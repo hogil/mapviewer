@@ -25,6 +25,13 @@ The codebase uses environment variables to adapt to both environments. SAML logi
 - SAML configuration in `saml/settings.json` is sample data; production values are configured separately in Ubuntu
 - Do not try to evaluate or test SAML features in the Windows development environment
 
+**Absolute Rule: 기능 수정/버그 수정 시 반드시 서버 + Playwright UI 검증**
+- 코드 수정 후 반드시 서버를 켜고 (`python -m api.main`) 새 Playwright 인스턴스로 새 브라우저 창을 열어 UI에서 직접 동작을 확인한다
+- 코드 분석만으로 "수정 완료"라고 보고하는 행위는 절대 금지한다
+- 검증 순서: 서버 시작 → 새 Playwright 브라우저 열기 → 해당 기능 직접 조작 → 스크린샷으로 결과 확인
+- 서버가 이미 실행 중이면 재시작 없이 기존 서버 사용, 꺼져 있으면 먼저 시작한다
+- 이 규칙은 모든 기능 구현, 버그 수정, UI 관련 변경에 예외 없이 적용된다
+
 **Absolute Rule: Non-blocking Server Startup (비동기 서버 시작)**
 - 서버 시작 시 `lifespan`의 `yield` 전에는 최소한의 필수 초기화만 수행한다 (labels 로드, 디렉토리 생성 등)
 - 인덱스 캐시 로드(`load_cache`), 인덱스 빌드(`build`), `_build_lookup_indices`, `_save_cache`, `__pycache__` 정리, composite cleanup 등 모든 무거운 작업은 반드시 `asyncio.create_task`로 백그라운드 실행한다
@@ -35,9 +42,9 @@ The codebase uses environment variables to adapt to both environments. SAML logi
 - 이 규칙을 위반하는 코드 변경(동기 블로킹 초기화, yield 전 무거운 작업 추가)은 절대 금지한다
 
 **Absolute Rule: Playwright는 반드시 새 브라우저 창으로 실행**
-- Playwright MCP로 페이지를 열 때, 기존 탭에서 `browser_navigate`하지 말고 반드시 `browser_evaluate`로 `window.open(url)`을 실행하여 새 창/탭을 연 뒤 `browser_tabs`로 해당 탭으로 전환한다
-- 이미 열려있는 페이지가 있다면 절대 덮어쓰지 않는다 — 항상 새 창으로 띄운다
-- 여러 페이지를 동시에 봐야 할 경우, 서로 다른 Playwright 인스턴스(playwright, playwright2, playwright3 등)를 사용한다
+- 이미 열려있는 페이지가 있다면 절대 덮어쓰지 않는다 — 기존 탭에서 `browser_navigate` 금지
+- **1순위: 사용 중이 아닌 다른 Playwright 인스턴스 사용** (playwright, playwright2, ..., playwright10 중 비어있는 것)
+- **2순위: 다른 인스턴스가 전부 사용 중일 때만** `browser_evaluate`로 `window.open(url)` → `browser_tabs`로 전환
 - 이 규칙을 위반하여 기존 페이지를 navigate로 덮어쓰는 행위는 절대 금지한다
 
 **Absolute Rule: 기존 브라우저 창을 절대 닫지 않는다**
