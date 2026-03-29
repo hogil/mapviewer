@@ -6247,12 +6247,12 @@ class WaferMapViewer {
             parts.push(`personalized=true`);
             parts.push(`scheme=${encodeURIComponent(scheme)}`);
 
-            // cacheBuster 추가 (없으면 colorLegends lastModified에서 생성)
-            if (!this._personalizedColorCacheBuster && this.colorLegends?.[scheme]?.lastModified) {
+            // cacheBuster: 항상 lastModified에서 최신값 사용 (구버전 고정 방지)
+            if (this.colorLegends?.[scheme]?.lastModified) {
                 this._personalizedColorCacheBuster = this.colorLegends[scheme].lastModified.replace(/\D/g, '');
             }
             if (!this._personalizedColorCacheBuster) {
-                this._personalizedColorCacheBuster = '1';  // 기본값 (서버 캐시 키 구분용)
+                this._personalizedColorCacheBuster = Date.now().toString();
             }
             parts.push(`_t=${this._personalizedColorCacheBuster}`);
         }
@@ -25709,15 +25709,13 @@ class WaferMapViewer {
                 data = await response.json();
             }
             this.colorLegends = data;
-            // 🔥 초기 로드 시 개인색 cacheBuster 설정 (이전 세션 색상 변경 반영)
-            if (!this._personalizedColorCacheBuster) {
+            // 🔥 초기 로드 시 개인색 cacheBuster를 항상 lastModified에서 갱신 (구버전 고정 방지)
+            {
                 const scheme = this.getActivePersonalizedScheme?.() || this.currentUser || 'notsaml';
                 const lm = data[scheme]?.lastModified;
                 if (lm) {
                     this._personalizedColorCacheBuster = lm.replace(/\D/g, '');
-                }
-                // lastModified 없으면 기본값 설정 (캐시 우회 보장)
-                if (!this._personalizedColorCacheBuster) {
+                } else if (!this._personalizedColorCacheBuster) {
                     this._personalizedColorCacheBuster = Date.now().toString();
                 }
             }

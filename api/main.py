@@ -6961,18 +6961,9 @@ def _generate_measure_thumb(
     sx = out_w / float(canvas_w)
     sy = out_h / float(canvas_h)
 
-    # 배경 (개인색 적용 — measure 섹션에서 로드)
-    from .personal_colors import load_color_legends
-    bg_rgb = (204, 204, 204)  # fallback #CCCCCC
-    try:
-        legends = load_color_legends()
-        measure_section = legends.get("measure", {})
-        user_entry = measure_section.get(scheme) or measure_section.get("default") or {}
-        bg_hex = str(user_entry.get("background", "#CCCCCC")).strip().lstrip("#")
-        if len(bg_hex) == 6:
-            bg_rgb = (int(bg_hex[0:2], 16), int(bg_hex[2:4], 16), int(bg_hex[4:6], 16))
-    except Exception:
-        pass
+    # 배경 (개인색 적용 — _resolve_scheme_background_rgb 공통 함수 사용)
+    from .composite_map import _resolve_scheme_background_rgb
+    bg_rgb = _resolve_scheme_background_rgb(scheme, section="measure")
     arr = np.full((out_h, out_w, 3), bg_rgb, dtype=np.uint8)
 
     # 칩 색칠 — _scaled_chip_rect 재사용 (rect/x,y,w,h fallback 지원)

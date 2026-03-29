@@ -2891,308 +2891,143 @@ BEFORE vs AFTER 비교:
 
 ---
 
-### 버그 수정 이력 (2026-03-28)
+### 버그 수정 이력
 
-#### BUG-1: 페이지 초기 로드 — init() 2단계 순차 실행
+> **⚠️ 중요: 속도 측정 필수**
+> 모든 UI 동작은 실행 시간을 `performance.now()` 로 측정하고 기록해야 한다.
+> 특히 아래 항목은 **회귀 감지를 위해 매 E2E 실행마다 반드시 측정**한다:
+>
+> | 항목 | 기준 | 측정 방법 |
+> |------|------|-----------|
+> | 페이지 로드 (cold) | < 500ms | `.folder-item` DOM attached 시점 |
+> | 그리드 로드 (cold, 3000장) | < 300ms | 첫 30개 썸네일 visible 시점 |
+> | 색 변경 모달 닫힘 (취소) | < 50ms | `performance.now()` cancel click → `is-open` 제거 |
+> | 색 변경 모달 닫힘 (적용) | < 100ms | `performance.now()` apply click → `is-open` 제거 |
+> | 색 미리보기 반영 | < 2000ms | gradient 변경 → 그리드 이미지 src 갱신 완료 |
+> | 새로고침 후 색 일관성 | 100% | 새로고침 전후 `cacheBuster === lastModified` |
+> | Composite 생성 (14장) | < 10s | API 응답 완료 |
+>
+> 속도가 기준을 초과하면 **WARN**으로 기록하고 원인을 코드에서 추적한다.
 
-**증상**: 페이지 로드 시 API 호출이 2단계로 순차 실행되어 불필요한 대기 발생
-**원인**: `Promise.all([config, colors, userInfo])` 완료 후 별도 `Promise.all([prefs, root, currentFolder, folderBrowser])` 실행
-**수정**:
-- `index.html`: `/api/auth/user` prefetch 추가 (HTML head에서 JS 로드 전 시작)
-- `js/main.js` init(): 6개 API 호출을 하나의 `Promise.all`로 병합
-- `hardResetUiCaches()` non-blocking (await 제거)
-- `change-folder` POST fire-and-forget (서버 동기화 백그라운드)
-- `_loadUserPrefs()` fire-and-forget
-- `loadUserInfo()`: prefetch된 authUser 데이터 우선 사용
-**테스트**: 서버 kill → 재시작 → 새 브라우저 접속, `.folder-item` DOM attached 시점 측정
-**결과**: Cold-start avg 458ms (limit 500ms), 10회 전부 PASS
-**파일**: `index.html`, `js/main.js` (init, loadUserInfo)
+#### BUG-1: 페이지 초기 로드 — init() 2단계 순차 실행 (2026-03-28)
+**증상**: 페이지 로드 시 API 호출이 2단계로 순차 실행되어 불필요한 대기
+**수정**: `index.html` prefetch + `init()` 6개 API 병합 `Promise.all` + `hardResetUiCaches`/`change-folder` fire-and-forget
+**결과**: Cold-start avg 458ms (limit 500ms) → PASS
+**파일**: `index.html`, `js/main.js`
 
-#### BUG-2: Composite 그리드에 비이미지 파일 노출 (.npz, .json)
+#### BUG-2: Composite 그리드에 비이미지 파일 노출 (2026-03-28)
+**증상**: Composite 생성 후 `.npz`, `.json` 캐시 파일이 그리드에 표시
+**수정**: `/api/files` 이미지 확장자 화이트리스트 + `loadImagesInFolderAndShowGrid()` `isImageFile()` 체크
+**파일**: `api/main.py`, `js/main.js`
 
-**증상**: Composite 생성 후 그리드에 `gradient_stats`, `square_maps_data`, `measure_composite_data` 등 캐시 파일이 썸네일로 표시
-**원인**: `/api/files` 엔드포인트가 파일 확장자 필터링 없이 모든 파일 반환, `loadImagesInFolderAndShowGrid()`에서도 이미지 확장자 체크 없음
-**수정**:
-- `api/main.py` `/api/files`: 이미지 확장자 화이트리스트 필터 추가 (`.jpg/.png/.webp/.bmp/.tiff/.gif`만 반환)
-- `js/main.js` `loadImagesInFolderAndShowGrid()`: `isImageFile()` 체크 추가 (이중 안전장치)
-**파일 설명**:
-  - `square_maps_data.npz`: Grade별 히트맵 값 캐시 → recolor 시 이미지를 처음부터 재계산하지 않고 캐시에서 새 색상만 입혀서 빠르게 재생성
-  - `gradient_stats.json`: 그래디언트 범례 퍼센타일 통계 → 단일 이미지 보기에서 0~10%, 10~20% 등 범례 수치 표시용
-  - `measure_composite_data.npz`: Measure 히트맵 값 캐시 → FBT/BIN/QVL measure composite의 recolor용
-**테스트**: Composite 생성 → `/api/files?path={outputDir}` 결과에서 non-image 파일 0개 확인
-**결과**: PASS (nonImage: [])
-**파일**: `api/main.py` (get_files 엔드포인트)
+#### BUG-3+6: 색 변경 시 Composite 그리드 미반영 — 적용 흐름 (2026-03-28)
+**증상**: 색상 편집기에서 Grade/Gradient 색 변경 후 적용 → 단일 이미지만 반영, 그리드는 이전 색상 유지
+**원인**: (BUG-3) recolor API 미호출 + (BUG-6) `refreshCompositeGridImages(sumMaps)` sum maps만 갱신, Grade 미갱신
+**수정**: `handleApply()` + `_handleApplyGradient()` — composite 폴더 전체 재로드 (`refreshGridThumbnailsWithCurrentParams`)
+**파일**: `js/color-editor.js`
 
-#### BUG-3: 개인색 변경 시 Composite 맵 미반영
+#### BUG-4: Composite 히트맵 저장 속도 병목 (2026-03-28)
+**증상**: `save_heatmaps+sum_maps` 6초 소요
+**수정**: PIL PNG 무압축 → TurboJPEG Q95. 결과: 6.07s → 1.75s (▼71%)
+**파일**: `api/composite_map.py`
 
-**증상**: 색상 편집기에서 Grade/Gradient 색 변경 후 Grade 맵만 갱신, BIN/FBT/Square 맵은 이전 색상 유지
-**원인**: `color-editor.js`에서 색상 저장 후 `/api/composite-recolor` 미호출
-**수정**:
-- `color-editor.js` `handleApply()` (Grade 색): composite 모드일 때 `/api/composite-recolor` 자동 호출 추가
-- `color-editor.js` `_handleApplyGradient()` (Gradient 색): composite/measure 모드일 때 `/api/composite-recolor` 또는 `/api/measure-composite-recolor` 자동 호출 추가
-**테스트**: Composite 생성 → 색상 편집기에서 Grade/Gradient 색 변경 → 저장 → 그리드 이미지 갱신 확인
-**파일**: `js/color-editor.js` (handleApply, _handleApplyGradient)
+#### BUG-5+7: Label Explorer 캐시 무효화 실패 (2026-03-28)
+**증상**: (BUG-5) Chip label 등록 후 Ctrl+클릭 시 그리드 미표시 + (BUG-7) Fail List 클릭 후 Label Explorer 미갱신
+**원인**: `classToImgListCache` 무효화 없음 + 폴더 닫힘 시 `refreshLabelExplorer` 미호출
+**수정**: 항상 `refreshLabelExplorer([cls])` + 캐시 무효화 + dirty class 전달
+**파일**: `js/main.js`
 
-#### BUG-4: Composite 히트맵 저장 속도 병목 (6s → 1.7s)
+#### BUG-8: Label Explorer Measure 그리드 더블클릭 시 raw map 표시 (2026-03-28)
+**증상**: Measure 적용 후 더블클릭 → raw map 표시 (measure map 아님)
+**원인**: `_gridMeasureMap`이 null일 때 fallback 없음
+**수정**: `enterSingleImageMode()` + `enterGridImageViewMode()` — `_measureCheckedItems[0]` fallback
+**파일**: `js/main.js`
 
-**증상**: `save_heatmaps+sum_maps` 단계가 6초 소요 (전체 9초의 67%)
-**원인**: Grade 히트맵 8개를 `PIL PNG compress_level=0` (무압축)으로 저장 → 파일 크기 수MB × 8개 = 대량 I/O
-**수정**:
-- `api/composite_map.py` `_save_heatmap_task()`: Palette index → RGB LUT 변환 후 `_save_image_with_backend()` 호출 (TurboJPEG Q95)
-- PIL 무압축 PNG (~2MB/장) → TurboJPEG JPEG (~100KB/장), I/O 80% 감소
-**테스트**: 14개 이미지 Composite 생성, 서버 로그에서 `save_heatmaps+sum_maps` 시간 확인
-**결과**: 6.07s → 1.75s (▼71%)
-**파일**: `api/composite_map.py` (_save_heatmap_task)
-
-#### BUG-5: Chip Label 등록 후 Label Explorer 클래스 폴더 → 그리드 미표시
-
-**증상**: Chip label 등록 후 Label Explorer에서 클래스 폴더 Ctrl+클릭 시 그리드에 이미지 안 뜸, 새로고침 후에야 동작
-**원인**: chip label 저장 후 `classToImgListCache` 해당 클래스 명시적 무효화 없음, `cachedClassList` 강제 갱신 없음
-**수정**:
-- `js/main.js` chip label 핸들러: `classToImgListCache[finalClassName]` 삭제 + `cachedClassList`/`classListPromise` null 설정
-- `refreshLabelExplorer([finalClassName])`: dirty class 명시적 전달
-**테스트**: Chip 모드 → chip 선택 → 라벨 등록 → Label Explorer에서 해당 클래스 Ctrl+클릭 → 그리드 이미지 표시 확인
-**파일**: `js/main.js` (chip label 등록 핸들러, ~line 15972)
-
-#### BUG-6: Composite/Measure 색 변경 시 그리드 미반영 (단일 이미지만 반영)
-
-**증상**: 색상 편집기에서 Composite/Measure gradient 또는 Grade 색 변경 후, 단일 이미지 보기에서는 반영되나 그리드에서는 이전 색상 유지
-**원인**: `color-editor.js` `_handleApplyGradient()`에서 recolor API 호출 후 `refreshCompositeGridImages(sumMaps)` — sum maps만 갱신하고 Grade 맵은 미갱신. 또한 썸네일 캐시가 stale 상태 유지
-**수정**:
-- `color-editor.js` `_handleApplyGradient()`: recolor 완료 후 `loadImagesInFolderAndShowGrid(outputDir)` 호출하여 **composite 폴더 전체 재로드** (Grade + Sum 모두)
-- `color-editor.js` `handleApply()`: Grade 색 변경 시에도 동일하게 composite 폴더 전체 재로드
-- 비composite 그리드는 기존 `refreshGridThumbnailsWithCurrentParams()` 유지
-**테스트**: Composite 생성 → 색 변경 편집기에서 gradient 색 변경 → 저장 → 그리드에서 모든 이미지(Grade + Square) 새 색상 반영 확인
-**결과**: recolor API sumMaps=2 반환, 그리드 14/14 이미지 정상 재로드
-**파일**: `js/color-editor.js` (handleApply, _handleApplyGradient), `js/color-editor.min.js` 재빌드
-
-#### BUG-7: Fail List 클래스 클릭 후 Label Explorer 미갱신 (새로고침 필요)
-
-**증상**: 이미지 선택 → Fail List에서 클래스 버튼 클릭 → 서버에 파일 복사됨 → Label Explorer에는 안 나옴 → 새로고침해야 나옴. 폴더가 열려있어도 리스트에 새 항목이 추가 안 됨
-**원인**: `btn.onclick` 핸들러(line 14798)에서 `if (this.labelSelection.openFolders[cls])` 조건 — 해당 클래스 폴더가 **열려있을 때만** `refreshLabelExplorer()` 호출. 폴더가 닫혀있으면 갱신 자체를 안 함. 또한 dirty class를 전달하지 않아 전체 리빌드 발생
-**수정**:
-- 폴더 열림/닫힘 **무관하게** 항상 `refreshLabelExplorer([cls])` 호출
-- `classToImgListCache[cls]` 삭제 → 열린 폴더는 API re-fetch로 최신 리스트 표시
-- `cachedClassList` + `classListPromise` 무효화 → 새 클래스 즉시 반영
-- dirty class `[cls]` 전달 → 해당 폴더만 갱신, 나머지 폴더 상태(열림/닫힘) 유지
-**테스트**:
-1. palette_3k 그리드에서 이미지 3개 선택 (체크)
-2. Fail List에서 클래스 버튼 클릭 (또는 새 클래스 생성 후 클릭)
-3. Label Explorer에서 해당 클래스가 즉시 나타나는지 확인 (카운트 증가)
-4. 해당 클래스 폴더가 열려있으면 새로 추가된 파일이 리스트에 즉시 표시되는지 확인
-5. 다른 열린 폴더의 상태가 유지되는지 확인 (닫히지 않아야 함)
-**파일**: `js/main.js` (Fail List btn.onclick 핸들러, ~line 14796), `js/main.min.js` 재빌드
-
-#### BUG-8: Label Explorer Measure 그리드에서 더블클릭 시 raw map 표시 (measure map 아님)
-
-**증상**: 이미지 폴더 → 그리드 → label 추가 → Label Explorer 클래스 선택 → label 그리드 → Measure 적용 → 더블클릭 → **raw map 표시** (measure map 아님). 그리드로 돌아가서 다시 더블클릭하면 measure map이 정상 표시됨
-**원인**: `_gridMeasureMap`은 `showGrid()` 호출 시에만 설정됨. Measure 체크박스를 그리드 표시 **이후에** 적용하면 `_gridMeasureMap`이 null. `enterSingleImageMode`에서 `_gridMeasureMap[idx]`가 null → overlay 미설정 → raw map 로드
-**수정**:
-- `js/main.js` `enterSingleImageMode()`: `_gridMeasureMap`이 없을 때 `_measureCheckedItems[0]`을 fallback으로 사용
-- `js/main.js` `enterGridImageViewMode()`: 동일한 fallback 추가
-```javascript
-// 수정 전
-const measureItem = this._gridMeasureMap ? this._gridMeasureMap[idx] : null;
-// 수정 후
-let measureItem = this._gridMeasureMap ? this._gridMeasureMap[idx] : null;
-if (!measureItem && this._measureCheckedItems?.length > 0) {
-    measureItem = this._measureCheckedItems[0];
-}
+#### BUG-9: Composite/Measure 생성 시 개인색 미적용 (2026-03-28)
+**증상**: Composite 생성 후 default 흑백 gradient 표시, 개인색 미적용
+**원인**: 개인색으로 직접 생성 → NPZ에 bake-in → recolor 불가 + NPZ 비동기 저장 → recolor 시 FileNotFoundError
+**수정 (아키텍처 변경)**:
 ```
-**테스트**:
-1. palette_3k 그리드 → 이미지 3개 선택 → Fail List 클래스 클릭 (라벨 추가)
-2. Label Explorer에서 해당 클래스 Ctrl+클릭 → label 그리드 표시
-3. Measure 버튼 → FBT 항목 선택 → measure 그리드 표시
-4. 이미지 더블클릭 → **단일 이미지에서 measure map 표시 확인** (raw map 아님)
-5. 타이틀에 `FFBT{key}_{filename}` 형식, 우측 상단에 퍼센타일 범례 표시 확인
-**결과**: overlayMode='f', ratioKey='FBT1000', personalizedParams에 measure_overlay 포함 → PASS
-**파일**: `js/main.js` (enterSingleImageMode ~line 21694, enterGridImageViewMode ~line 21549), `js/main.min.js` 재빌드
-
-#### BUG-9: Composite/Measure 생성 시 개인색 미적용 (default 색상 그대로 표시)
-
-**증상**: Composite 생성 후 square/gradient 맵이 default 흑백 gradient로 표시됨. 개인색(notsaml: 흰→빨강)이 적용 안 됨
-**원인 1**: `api/main.py` composite 생성 시 `scheme=resolved_scheme` (개인색)으로 생성 → NPZ 캐시에도 개인색 bake-in → recolor 불가능한 구조
-**원인 2**: `api/composite_map.py` `_persist_square_map_data()` line 1348: NPZ를 **daemon thread 비동기** 저장 → 생성 직후 recolor 호출 시 NPZ가 아직 없어서 `FileNotFoundError`
-**수정**:
-- `api/main.py`: composite 생성 `scheme="default"` → 생성 후 `recolor_saved_sum_maps(scheme=개인색)` 자동 호출
-- `api/main.py`: measure composite 생성도 `scheme="default"`로 변경
-- `api/composite_map.py`: NPZ 저장을 `threading.Thread(daemon=True)` → **동기 호출** `_save_npz()`로 변경 (recolor가 NPZ를 즉시 참조해야 하므로)
-**아키텍처**:
+생성: default color → NPZ(default) + 이미지(default)
+  ↓ 즉시 recolor: NPZ에서 개인색 적용 → 이미지 교체
+  ↓ 색 변경 시: recolor API → NPZ에서 새 색상 → 이미지 교체
 ```
-생성: default color → NPZ(default 데이터) + 이미지(default 색상)
-  ↓
-즉시 recolor: NPZ에서 개인색 적용 → 이미지 교체 (파일 크기 소)
-  ↓
-UI 표시: 개인색 이미지 표시
-  ↓
-색 변경 모달: recolor API → NPZ에서 새 색상 → 이미지 교체 → 그리드 재로드
-```
-**테스트**:
-1. Composite 생성 (14장)
-2. 서버 로그에서 `default → {scheme} recolor 완료` 확인
-3. `/api/composite-recolor` 호출 시 NPZ EXISTS (200 OK) 확인
-4. 그리드에서 square 맵이 개인 gradient 색상으로 표시 확인 (흑백 아님)
-**결과**: `default → notsaml recolor 완료: 2개`, 스크린샷에서 흰→노란→빨강 gradient 확인 → PASS
-**추가 수정 (measure composite)**:
-- `api/main.py` `_run_measure_composite_sync()`: default 생성 후 `recolor_measure_composite(scheme=개인색)` 호출 추가. login_id가 None일 때 ANONYMOUS_LOGIN_ID fallback
-- `api/measure_composite.py`: NPZ 저장 daemon thread → **동기**로 변경 (recolor가 NPZ 즉시 참조)
-- `api/measure_composite.py`: positions 복사 daemon thread → **동기**로 변경 (recolor가 positions JSON 즉시 참조, 비동기 시 JSON 파싱 에러)
-**추가 수정 (NPZ 충돌 해결)**:
-- `api/measure_composite.py`: NPZ 파일명을 `measure_cache_{mode}_{key}.npz`로 분리 (BIN/FBT/QVL 동시 생성 시 덮어쓰기 충돌 방지)
-- `recolor_measure_composite()`: `target_filename` 파라미터 추가 → 이미지 파일명에서 mode+key 파싱 → 해당 NPZ 정확히 찾기
-- BIN mode: `item_key=None` → `measure_cache_bin.npz`, F mode: `item_key='1000'` → `measure_cache_f_1000.npz`
-**테스트 (measure)**: BIN+FBT+QVL 순차 생성 → 3개 전부 `default → notsaml recolor 완료` 실패 0개 → PASS
+- composite/measure 생성 `scheme="default"` → 생성 후 자동 recolor
+- NPZ 저장 daemon thread → 동기 (recolor가 즉시 참조)
+- NPZ 파일명 `measure_cache_{mode}_{key}.npz`로 분리 (충돌 방지)
 **파일**: `api/main.py`, `api/composite_map.py`, `api/measure_composite.py`
 
-#### BUG-10: Composite/Measure 색 변경 미리보기 시 서버 썸네일 캐시 미무효화
+#### BUG-10: Composite/Measure 색 변경 **미리보기** 시 서버 캐시 미무효화 (2026-03-29)
+**증상**: 색상 편집기에서 gradient 색 변경 시 미리보기(실시간)가 그리드에 반영 안 됨. 적용은 OK
+**원인**: `save_composite_color_settings()`에서 `save_color_legends(legends)` 호출 시 `updated_scheme_name` 미전달 → `lastModified` 미갱신 → 썸네일 캐시 경로(`thumbnails/{scheme}/{lastModified}/`) 불변 → 기존 파일 반환
+**수정**: `save_color_legends(legends, updated_scheme_name=scheme_key)` — composite + measure 2곳
+**테스트**: Composite 그리드 → 전체 stop #00FF00 → square 초록 즉시 반영 확인
+**파일**: `api/composite_colors.py`
 
-**증상**: 색상 편집기에서 Composite/Measure gradient 색 변경 시 미리보기(적용 전 실시간 반영)가 동작하지 않음. 적용(저장) 후에는 모달 close() → showGrid() 재호출로 반영되지만, 모달 열린 상태에서 hex/RGB 입력 변경 시 그리드 이미지가 갱신되지 않음
-**원인**: `api/composite_colors.py`의 `save_composite_color_settings()`와 `save_measure_color_settings()`에서 `save_color_legends(legends)` 호출 시 `updated_scheme_name` 미전달 → scheme의 `lastModified` 타임스탬프 미갱신 → `get_thumbnail_path()`가 동일 디렉토리 경로 계산 → 기존 캐시 파일 그대로 반환
-**상세 분석**:
-- 썸네일 캐시 경로: `thumbnails/{scheme}/{lastModified}/{hash}.webp`
-- `lastModified`가 안 바뀌면 같은 디렉토리에서 기존 캐시 히트 → 새 색상 미적용
-- `_invalidate_composite_thumbnail_caches()`가 `thumbnails/composite_map/{loginId}/`를 삭제하지만, 실제 캐시는 `thumbnails/{scheme}/{lastModified}/`에 있어 엉뚱한 경로 삭제
-- 미리보기 흐름: hex input change → `updatePreviewRealtime()` → `_previewGradientRealtime()` → POST `/api/composite-colors` (색 저장) → `refreshGridThumbnailsWithCurrentParams()` (새 URL로 썸네일 요청) → 서버가 stale 캐시 반환
+#### BUG-11: 색 변경 모달 취소/적용 시 수초 지연 (2026-03-29)
+**증상**: 취소/적용 클릭 시 모달이 수초간 안 닫힘
+**원인**: `close()`에서 `await fetch()` × 3 + `await showGrid()` 전부 완료 후 DOM 숨김
+**수정**: 모달 DOM 숨기기 최상단 배치 → 서버 복원/그리드 리로드는 fire-and-forget 백그라운드
+**결과**: 취소 4ms, 적용 52ms
+**파일**: `js/color-editor.js`
+
+#### BUG-12+13: 색 변경 후 새로고침 시 구버전 썸네일 표시 — 브라우저 캐시 + cacheBuster 고정 (2026-03-29)
+**증상**: 개인색 변경 → 적용 → 즉시 반영 → 새로고침 → 구버전 색상 또는 이전/현재 혼합 표시. Edge 정상, Chrome만 발생. 썸네일 폴더에는 정상 생성됨
+**원인 2가지**:
+1. **(BUG-12) 서버 HTTP 캐시**: `Cache-Control: max-age=86400~31536000` → Chrome 디스크 캐시가 서버에 안 물어보고 구버전 반환
+2. **(BUG-13) cacheBuster 고정**: `_personalizedColorCacheBuster`가 `if (!val)` 조건으로 한 번만 설정 → 구버전 `lastModified`로 고정 → URL `_t=` 불일치 → 혼합 캐시
 **수정**:
-- `api/composite_colors.py` `save_composite_color_settings()`: `save_color_legends(legends)` → `save_color_legends(legends, updated_scheme_name=scheme_key)`
-- `api/composite_colors.py` `save_measure_color_settings()`: 동일 수정
-- `updated_scheme_name` 전달 → `lastModified` 자동 갱신 → `get_thumbnail_path()`가 새 디렉토리 사용 → 기존 캐시 우회 → 새 gradient 색상으로 썸네일 재생성
+- **서버**: 모든 이미지/썸네일/JS/CSS 응답 `Cache-Control: no-cache` (약 20곳). `no-cache` = 매번 ETag 확인, 변경 없으면 304 (빠름)
+- **프론트엔드 fetch**: `cache: 'no-cache'`, `Cache-Control: 'no-cache'` 항상 적용 (조건부 제거)
+- **cacheBuster**: `if (!val)` 조건 제거 → 항상 `lastModified`에서 최신값 갱신 (`getPersonalizedParams`, `loadColorLegends` 2곳)
 **테스트**:
-1. Composite 그리드 표시 (12개 이미지)
-2. 색 변경 버튼 → Composite 탭 → 0% hex를 `#00FF00` (전부 초록) 으로 변경
-3. 500ms 디바운스 후 미리보기 자동 동작
-4. 그리드에서 square_average, square_weighted_average가 초록색으로 변경 확인
-5. F_sum, BIN_count 등 gradient 맵도 변경 확인
-6. 적용 클릭 → 모달 닫힘 → 그리드 이미지 유지 확인
-**결과**: 미리보기 즉시 반영 (서버 PLTE 패치 → 새 디렉토리에 썸네일 재생성) ✅
-**파일**: `api/composite_colors.py` (save_composite_color_settings, save_measure_color_settings)
+1. thumbnails 삭제 → 서버 재시작 → palette_3k 로드 → `cacheBuster === lastModified` 일치 확인
+2. background #FF0000 적용 → 모든 이미지 빨간 배경
+3. 페이지 새로고침 → palette_3k 재로드 → **빨간 배경 100% 유지** (혼합 없음)
+**결과**: cacheBuster=260329130912 = lastModified → PASS
+**파일**: `api/main.py` (약 20곳), `js/main.js` + `js/main.min.js` (`getPersonalizedParams`, `loadColorLegends`, `fetchOptions`)
 
-### 통합 검증 결과 (2026-03-28, 최종 UI 검증 — Playwright 브라우저 확인)
+### 통합 검증 결과 (2026-03-28~29, Playwright UI 직접 확인)
 
 ```
+=== 2026-03-28 ===
 ✓ Page load (cold):               454ms (limit 500ms)
 ✓ Grid load (cold, no thumbs):    264ms (limit 300ms)
 ✓ Personal color grid:            scheme=notsaml, personalized=true
-✓ Composite create (14 imgs):     PASS, outputDir=composite_map/notsaml
-✓ Non-image filter:               10 files, 0 nonImage (.npz/.json 제외)
-✓ Composite default→recolor:      서버 로그 "default → notsaml recolor 완료: 2개"
-✓ Composite grid 개인색:           Grade=개인 palette, Square=개인 gradient(흰→빨강)
-✓ Composite 색 변경:               gradient 파란색으로 변경 → recolor 2개 → 그리드 즉시 반영
-✓ Measure composite (BIN):         default 생성 → notsaml recolor 완료
-✓ Measure composite (FBT):         default 생성 → recolor 완료
-✓ Measure composite (QVL):         default 생성 → recolor 완료
-✓ Composite 색 변경 (녹색):        composite-recolor → square 녹색 반영
-✓ Measure 색 변경 (녹색):          measure-recolor → BIN 녹색 반영
+✓ Composite create (14 imgs):     outputDir=composite_map/notsaml
+✓ Non-image filter:               10 files, 0 nonImage
+✓ Composite default→recolor:      "default → notsaml recolor 완료: 2개"
+✓ Composite grid 개인색:           Grade=개인 palette, Square=개인 gradient
+✓ Composite 색 변경 적용:          gradient → recolor 2개 → 그리드 즉시 반영
+✓ Measure composite (BIN/FBT/QVL): 3개 전부 default→recolor 완료
 ✓ Measure 더블클릭 overlay:        overlayMode='f', measure_overlay URL 포함
-Result: 13/13 PASS
 
-UI에서 Playwright로 직접 확인한 항목:
-- Grade 맵: 개인 palette (다색상) ✅
-- Square 맵: 개인 gradient → 색 변경 모달로 변경 시 즉시 반영 ✅
-- BIN composite: 개인 gradient → 색 변경 시 즉시 반영 ✅
-- FBT/QVL composite: 생성 + recolor ✅
-- 색 변경 흐름: 저장(/api/composite-colors) → recolor(/api/composite-recolor) → 그리드 재로드 → 반영 ✅
-
-### 추가 검증 결과 (2026-03-29, BUG-10 수정 — Playwright 브라우저 확인)
-
-```
-✓ Composite 미리보기 (단일 stop):   0% hex #4DEA4D→#0000FF → 미리보기 동작, URL _t= 갱신
-✓ Composite 미리보기 (전체 stop):   11개 전부 #00FF00 → square/F/BIN 전부 초록색 즉시 반영
-✓ lastModified 갱신:                save_composite_color_settings → lastModified 자동 갱신
-✓ 썸네일 캐시 무효화:                새 lastModified → 새 디렉토리 → 기존 캐시 우회
-✓ PLTE 패치:                        서버에서 새 gradient 색상으로 PLTE 패치 정상 (0%=#0000FF 확인)
-Result: 5/5 PASS
-
-수정: api/composite_colors.py
-- save_composite_color_settings: save_color_legends(legends) → save_color_legends(legends, updated_scheme_name=scheme_key)
-- save_measure_color_settings: 동일 수정
-근본 원인: lastModified 미갱신 → get_thumbnail_path()가 같은 디렉토리 → 기존 캐시 반환
+=== 2026-03-29 (BUG-10~13 수정 후 클린 테스트) ===
+✓ Composite 미리보기:              11개 stop #00FFFF → square 시안색 즉시 반영
+✓ 취소 모달 속도:                  4ms (이전: 수초)
+✓ 취소 후 원복:                    원래 gradient 복원
+✓ 적용 모달 속도:                  52ms
+✓ 적용 후 반영:                    square 빨간색 즉시 반영
+✓ cacheBuster=lastModified:        260329130912 일치
+✓ 새로고침 후 색 유지:             빨간 배경 100% 유지 (혼합 없음)
+Result: 17/17 PASS
 ```
 
-### 클린 테스트 결과 (2026-03-29, thumbnails+composite_map 삭제 후 재생성 — Playwright 검증)
+### 미완료 검증 항목
 
-```
-테스트 환경: thumbnails/ + composite_map/ 전부 삭제 → 서버 재시작 → 새 Playwright 브라우저
-✓ Composite 생성 (14장 → 10이미지):  POST /api/composite-map → status=completed
-✓ Composite 그리드:                  Grade 8개 + square 2개, 개인색 적용 (노란 배경, 다색 Grade)
-✓ Composite 미리보기 (시안 #00FFFF): 모든 stop 변경 → square 맵 시안색 즉시 반영
-✓ 취소 모달 닫힘 속도:               4ms (이전: 수초 블로킹 → 즉시 닫힘)
-✓ 취소 후 원복:                      square 맵 원래 보라/주황/노란 gradient로 복원
-✓ 적용 모달 닫힘 속도:               52ms (fetch 완료 후 즉시 닫힘)
-✓ 적용 후 반영:                      square 맵 빨간색 (#FF0000) 즉시 반영
-Result: 7/7 PASS
-```
-
-#### BUG-11: 색 변경 모달 취소/적용 시 수초 지연 (모달 닫힘 블로킹)
-
-**증상**: 색 변경 편집기에서 취소 또는 적용 클릭 시 수초간 모달이 안 닫힘. 서버 API 호출 + 그리드 재로드가 모달 닫기 전에 순차 실행
-**원인**: `close()` 함수에서 `await fetch()` × 3 + `await showGrid()` 전부 완료 후에야 `modal.classList.remove('is-open')` 실행
-**수정**:
-- `close()`: 모달 DOM 숨기기를 **최상단에 배치** (line 548), 미리보기 복원은 IIFE fire-and-forget으로 백그라운드 처리
-- `handleApply()` (Fail 탭): `_previewApplied = false` 설정 후 `close()` 먼저 호출, 그리드 리로드는 모달 닫힌 후 실행
-- `_handleApplyGradient()` (Composite/Measure): 동일 패턴 — 모달 먼저 닫고 단일이미지 리로드는 후처리
-**테스트**:
-1. Composite 그리드 → 색 변경 → Composite 탭 → gradient 변경 → 미리보기 확인
-2. 취소 클릭 → 모달 **4ms**에 닫힘 확인 + 원래 색상 복원 확인
-3. 다시 색 변경 → 적용 클릭 → 모달 **52ms**에 닫힘 확인 + 새 색상 반영 확인
-**결과**: 취소 4ms, 적용 52ms → PASS
-**파일**: `js/color-editor.js` (close, handleApply, _handleApplyGradient)
-
-### 미완료 검증 항목 (2026-03-28, 다음 세션에서 UI 확인 필요)
-
-아래 항목은 코드 수정은 완료되었으나 **Playwright UI에서 직접 확인하지 않은** 항목:
-
-1. ~~**색 변경 모달 UI 직접 조작**: 색 변경 버튼 클릭 → composite 탭 → gradient 색 드래그/입력 → 미리보기 확인 → 적용 → 그리드 전체 반영 → 취소 시 원복~~ → **BUG-10 수정으로 검증 완료 (2026-03-29)**: 미리보기 + 적용 모두 동작 확인
-2. **Measure 색 변경 모달**: measure 탭에서 gradient 변경 → BIN/FBT/QVL 이미지 즉시 반영
-3. **Gradient 범례 필터**: composite 그리드에서 0~10%, 10~20% 등 gradient 범례 바 클릭 → 해당 범위 필터 동작
-4. **Grade 범례 필터**: Grade 0~7 컬러 바 클릭 → Grade 필터 동작
-5. **BIN 범례 필터**: BIN 285/286/... 컬러 바 클릭 → BIN 필터 동작
-6. **FBT/QVL measure composite 이미지가 실제로 개인 gradient 색상으로 표시되는지** 시각적 확인 (스크린샷)
-7. **composite_map 폴더 파일 검증**: default scheme NPZ + 개인색 recolor된 이미지 공존 확인
+1. ~~색 변경 모달 Composite 탭 미리보기+적용+취소~~ → **검증 완료 (2026-03-29)**
+2. **Measure 색 변경 모달**: measure 탭 gradient 변경 → 이미지 즉시 반영 (개발 환경 position 데이터 없어 미검증)
+3. **Gradient/Grade/BIN 범례 필터**: 범례 바 클릭 → 필터 동작
+4. **composite_map 폴더 파일 검증**: default NPZ + 개인색 recolor 이미지 공존
 
 테스트 방법:
 ```
-서버 kill → rm -rf composite_map thumbnails → 서버 새 포트 시작 → 새 Playwright 인스턴스로 접속
-→ palette_3k 그리드 → 20개 선택 → Grade Composite + BIN/FBT/QVL Measure 생성
-→ composite 그리드 표시 → 모든 이미지 개인색 확인
-→ 색 변경 모달 열기 → gradient 변경 → 미리보기 → 적용 → 반영 확인
-→ 다시 색 변경 → 취소 → 원복 확인
-→ gradient/grade/bin 범례 필터 클릭 → 동작 확인
+서버 kill → rm -rf composite_map thumbnails → 서버 시작 → 새 Playwright 접속
+→ palette_3k 그리드 → 14개 선택 → Composite 생성
+→ composite 그리드 → 색 변경 모달 → gradient/background 변경 → 미리보기 → 적용 → 반영 확인
+→ 새로고침 → 변경색 유지 확인
+→ 취소 → 원복 확인
 ```
-
-#### BUG-12: 브라우저 HTTP 캐시로 색 변경 후 새로고침 시 구버전 썸네일 표시 (Chrome)
-
-**증상**: 개인색 변경 후 적용 → 썸네일 즉시 반영 → 페이지 새로고침 또는 재접속 → 구버전 색상으로 돌아감. Edge에서는 정상, Chrome에서만 발생. 서버 재시작 + thumbnails 폴더 삭제해도 동일. 실제 디스크 썸네일은 새 색상으로 정상 생성됨
-**원인**: 서버가 이미지 응답에 `Cache-Control: max-age=86400` (24시간), `max-age=31536000` (1년) 등 장기 캐시 헤더를 설정 → Chrome이 디스크 캐시에 저장 → 같은 URL 재요청 시 서버에 물어보지 않고 캐시 반환
-**영향 범위** (전수 조사):
-- `/api/image` pyramid 캐시히트: `max-age=31536000` (1년!)
-- `/api/image` PLTE/crop: `max-age=3600` (1시간)
-- `/api/thumbnail` 개인색: `max-age=86400` (24시간)
-- `/api/thumbnail` 비개인색: `max-age=604800` (7일)
-- `/api/measure-thumb`: `max-age=300` (5분)
-- `/api/bin-map-thumb`: `max-age=3600` (1시간)
-- `maybe_304` ETag 304: `max-age=604800` (7일)
-**수정**: 서버 + 프론트엔드 양쪽 모두 캐시 완전 제거
-- **서버 (api/main.py)**: 모든 이미지/썸네일/JS/CSS 응답의 `Cache-Control`을 `no-cache`로 변경 (약 20곳)
-  - `/api/image` (pyramid, PLTE, crop, filter): `no-cache`
-  - `/api/thumbnail` (개인색, 비개인색, 필터): `no-cache`
-  - `/api/measure-thumb`, `/api/bin-map-thumb`: `no-cache`
-  - `maybe_304` ETag 304 응답: `no-cache`
-  - JS/CSS 정적 파일: `no-cache` + ETag 304 (서버 재시작 시 즉시 새 버전)
-  - JS middleware: `no-cache`
-- **프론트엔드 (js/main.js, js/main.min.js)**: 이미지 fetch 옵션 조건부 → 항상 `cache: 'no-cache'`, `Cache-Control: 'no-cache'`
-  - 이전: `this._personalizedColorCacheBuster ? 'no-cache' : 'default'` (조건부)
-  - 이후: 항상 `'no-cache'` (무조건 서버 검증)
-- `no-cache` = 브라우저가 매번 서버에 ETag 확인 (If-None-Match)
-- 파일 안 바뀜 → 304 (바디 없음, 수 ms) / 파일 바뀜 → 200 + 새 데이터
-**테스트**:
-1. Chrome에서 색 변경 → 적용 → 페이지 새로고침 → 새 색상 유지 확인
-2. 서버 재시작 후 접속 → 최신 색상 표시 확인
-3. thumbnails 폴더 삭제 후 접속 → 새 썸네일 생성 + 표시 확인
-4. DevTools Network 탭: 이미지 요청 시 `304 Not Modified` 또는 `200 OK` (disk cache 아닌 서버 응답)
-5. JS/CSS 파일 수정 후 서버 재시작 → 새 JS/CSS 즉시 반영 확인 (ETag 변경 → 200)
-6. `browser_evaluate`로 `performance.getEntriesByType('resource')` 검사 → 이미지/JS/CSS 모두 `transferSize > 0` (캐시 히트가 아닌 서버 응답)
-**파일**: `api/main.py` (약 20곳), `js/main.js` + `js/main.min.js` (fetchOptions)
 
 ### E2E 벤치마크 변경 사항 (2026-03-28)
 
