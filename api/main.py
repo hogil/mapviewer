@@ -8958,47 +8958,7 @@ def _candidate_positions_paths(rel_path: Path) -> List[Path]:
         cls_pos = config.POSITIONS_ROOT / rel_path.parent / f"{rel_path.stem}.json"
         if cls_pos not in paths:
             paths.append(cls_pos)
-    else:
-        # 원본 경로에서도 classification 디렉토리 내 position 검색
-        for cls_dir in (config.LABELS_DIR, config.CHIP_LABELS_DIR):
-            if cls_dir.exists():
-                try:
-                    for class_sub in cls_dir.iterdir():
-                        if not class_sub.is_dir():
-                            continue
-                        candidate = class_sub / f"{rel_path.stem}.json"
-                        if candidate.exists() and candidate not in paths:
-                            paths.append(candidate)
-                            break
-                except Exception:
-                    pass
-
-    # 🔥 우선순위 4: my-lot 경로 fallback — 파일명으로 원본 position 검색
-    if rel_str.startswith("my-lot/") or "my-lot/" in rel_str:
-        # 파일명에서 LOT_STEP 추출하여 원본 position 경로 생성
-        # 예: ABC234_00C_02_... → positions/filter_test/ABC234_00C_02_...json (검색)
-        stem = rel_path.stem
-        stem_json = f"{stem}.json"
-        # POSITIONS_ROOT 전체에서 파일명으로 검색 (캐시)
-        _cache = getattr(_candidate_positions_paths, '_mylot_cache', None)
-        if _cache is None:
-            _cache = {}
-            _candidate_positions_paths._mylot_cache = _cache
-        if stem_json in _cache:
-            cached = _cache[stem_json]
-            if cached not in paths:
-                paths.append(cached)
-        else:
-            # 1단계 서브디렉토리만 검색 (빠름)
-            for sub in base_dir.iterdir():
-                if not sub.is_dir():
-                    continue
-                candidate = sub / stem_json
-                if candidate.exists():
-                    _cache[stem_json] = candidate
-                    if candidate not in paths:
-                        paths.append(candidate)
-                    break
+    # (classification/my-lot 전체 스캔 제거 — 동일 경로에 없으면 없는 것)
 
     return paths
 
@@ -9032,34 +8992,10 @@ async def get_chip_positions(path: str, include_fq: int = 0):
         norm_path = path.replace("\\", "/")
         rel_path = norm_path
 
-        # classification 경로 → 파일명으로 POSITIONS_ROOT에서 먼저 검색
-        is_cls_path = any(
-            p in norm_path or norm_path.startswith(p)
-            for p in ("classification/", "classification_chips/")
-        )
-        if is_cls_path:
-            cls_rel = Path(norm_path)
-            stem = cls_rel.stem
-            # 1순위: POSITIONS_ROOT 전체에서 파일명.json 검색
-            positions_file = None
-            for candidate in config.POSITIONS_ROOT.rglob(f"{stem}.json"):
-                # classification 디렉토리 내 복사본은 후순위
-                if "classification" not in str(candidate):
-                    positions_file = candidate
-                    break
-            # 2순위: classification 폴더 내 복사본
-            if not positions_file:
-                for base in (ROOT_DIR, current_folder):
-                    c = base / cls_rel.parent / f"{stem}.json"
-                    if c.exists():
-                        positions_file = c
-                        break
-            if not positions_file:
-                positions_file = config.POSITIONS_ROOT / f"{stem}.json"
-        else:
-            rel_path = _get_relative_path_from_image(path)
-            rel_path_obj = Path(rel_path)
-            positions_file = _resolve_positions_path(rel_path_obj)
+        # 직접 경로만 조회 — 없으면 없는 것 (전체 스캔/역매핑 금지)
+        rel_path = _get_relative_path_from_image(path)
+        rel_path_obj = Path(rel_path)
+        positions_file = _resolve_positions_path(rel_path_obj)
 
         _log(f"[CHIP_POS] {path} → {positions_file.name} (exists={positions_file.exists()})")
 
