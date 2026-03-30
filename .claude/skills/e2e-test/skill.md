@@ -34,6 +34,16 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 - chip 테두리(Normal border, index 10)는 chip 내부 경계이므로 이 규칙과 무관하다.
 - E2E 테스트에서 Composite/Measure 맵 생성 후 chip 외곽에 비배경색이 있으면 FAIL로 판정한다.
 
+## 절대규칙: Positions 파일 전체 스캔 금지
+
+- **POSITIONS_ROOT에서 `rglob`, `iterdir`, `os.walk` 등으로 전체 디렉토리를 재귀/순회 검색하는 행위는 절대 금지한다.**
+- positions 파일은 이미지 경로와 동일한 상대 경로(`POSITIONS_ROOT/제품폴더/stem.json`)에서만 조회한다.
+- 해당 경로에 없으면 추가 검색 없이 즉시 404를 반환한다 — 다른 폴더를 뒤지지 않는다.
+- classification, my-lot 등 어떤 경로든 동일하게 적용: 직접 경로에 없으면 없는 것이다.
+- `_candidate_positions_paths()`는 trimmed 경로 + 레거시 경로 + classification 복사 경로 최대 3개만 `exists()` 체크한다.
+- `get_chip_positions()`에서 classification 분기를 만들어 별도 스캔하는 것도 금지 — `_resolve_positions_path()` 한 줄로 통일한다.
+- 이 규칙 위반 시 async 이벤트 루프를 블로킹하여 모든 HTTP 요청이 수 초간 pending되는 심각한 성능 문제를 유발한다.
+
 ## 절대규칙: Playwright 브라우저 새 창 사용
 
 - **이미 Playwright MCP 인스턴스(playwright, playwright2, ...)가 사용 중이면, 해당 인스턴스를 절대 사용하지 않는다.**

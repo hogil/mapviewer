@@ -41,6 +41,14 @@ The codebase uses environment variables to adapt to both environments. SAML logi
 - 인덱스 빌드 상태는 `/api/index-status` 엔드포인트와 프론트엔드 배너로 사용자에게 표시한다
 - 이 규칙을 위반하는 코드 변경(동기 블로킹 초기화, yield 전 무거운 작업 추가)은 절대 금지한다
 
+**Absolute Rule: Positions 파일 전체 스캔 금지**
+- POSITIONS_ROOT에서 `rglob`, `iterdir`, `os.walk` 등으로 전체 디렉토리를 재귀/순회 검색하는 것은 절대 금지한다
+- positions 파일은 이미지 경로와 동일한 상대 경로(`POSITIONS_ROOT/제품폴더/stem.json`)에서만 조회한다
+- 해당 경로에 없으면 추가 검색 없이 즉시 404 반환 — 다른 폴더를 뒤지지 않는다
+- classification, my-lot 등 어떤 경로든 동일: 직접 경로에 없으면 없는 것이다
+- `get_chip_positions()`에서 classification 분기를 만들어 별도 스캔하는 것도 금지 — `_resolve_positions_path()` 한 줄로 통일
+- 위반 시 async 이벤트 루프를 블로킹하여 모든 HTTP 요청이 수 초간 pending되는 심각한 성능 문제 유발
+
 **Absolute Rule: Playwright는 반드시 새 브라우저 창으로 실행**
 - 이미 열려있는 페이지가 있다면 절대 덮어쓰지 않는다 — 기존 탭에서 `browser_navigate` 금지
 - **1순위: 사용 중이 아닌 다른 Playwright 인스턴스 사용** (playwright, playwright2, ..., playwright10 중 비어있는 것)
