@@ -31,7 +31,7 @@ from .composite_map import (
     ANONYMOUS_LOGIN_ID,
     _sanitize_login_id,
 )
-from .personal_colors import get_composite_gradient_for_scheme, load_color_legends, DEFAULT_BOTTOM_COLORS
+from .personal_colors import get_ratio_gradient_for_scheme, load_color_legends, DEFAULT_BOTTOM_COLORS
 
 MEASURE_CACHE_FILENAME = "measure_composite_data.npz"  # legacy fallback
 
@@ -621,9 +621,9 @@ def create_measure_data_only(
     # 3. Percentile
     pct_map = _percentile_ranks(value_map)
 
-    # 4. Gradient 색상 (composite 탭 색상 사용)
+    # 4. Gradient 색상 (measure 탭 색상 사용)
     resolved = scheme or ANONYMOUS_LOGIN_ID
-    stops = get_composite_gradient_for_scheme(resolved)
+    stops = get_ratio_gradient_for_scheme(resolved)
 
     # 5. Base positions (canvas 크기 + 칩 좌표)
     from .composite_map import _first_image_with_positions, _load_source_positions_data, _resolve_scheme_background_rgb
@@ -676,7 +676,7 @@ def create_measure_data_only(
 
     # 6. 칩별 결과 데이터
     border_rgb = _get_normal_border_rgb(resolved)
-    bg_rgb = _resolve_scheme_background_rgb(resolved, section="composite")
+    bg_rgb = _resolve_scheme_background_rgb(resolved)
     chips_data = []
     for (xa, ya), pct in pct_map.items():
         color = _interpolate_color(pct, stops)

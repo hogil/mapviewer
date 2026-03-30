@@ -6991,9 +6991,9 @@ def _generate_measure_thumb(
     sx = out_w / float(canvas_w)
     sy = out_h / float(canvas_h)
 
-    # 배경 (개인색 적용 — _resolve_scheme_background_rgb 공통 함수 사용)
+    # 배경은 항상 Fail 탭 background를 사용한다.
     from .composite_map import _resolve_scheme_background_rgb
-    bg_rgb = _resolve_scheme_background_rgb(scheme, section="measure")
+    bg_rgb = _resolve_scheme_background_rgb(scheme)
     arr = np.full((out_h, out_w, 3), bg_rgb, dtype=np.uint8)
 
     # 칩 색칠 — _scaled_chip_rect 재사용 (rect/x,y,w,h fallback 지원)
@@ -7134,7 +7134,8 @@ def _generate_measure_thumbs_batch(
                     if val is not None: item_vals[result_key].append((chip_idx, val))
 
     # 공통: gradient 색상, 캔버스 크기, 배경색 (1회만 계산)
-    from .personal_colors import get_ratio_gradient_for_scheme, load_color_legends
+    from .personal_colors import get_ratio_gradient_for_scheme
+    from .composite_map import _resolve_scheme_background_rgb
     gradient_stops = get_ratio_gradient_for_scheme(scheme or ANONYMOUS_LOGIN_ID)
 
     allowed_ranges = None
@@ -7156,16 +7157,7 @@ def _generate_measure_thumbs_batch(
     sx = out_w / float(canvas_w)
     sy = out_h / float(canvas_h)
 
-    bg_rgb = (204, 204, 204)
-    try:
-        legends = load_color_legends()
-        measure_section = legends.get("measure", {})
-        user_entry = measure_section.get(scheme) or measure_section.get("default") or {}
-        bg_hex = str(user_entry.get("background", "#CCCCCC")).strip().lstrip("#")
-        if len(bg_hex) == 6:
-            bg_rgb = (int(bg_hex[0:2], 16), int(bg_hex[2:4], 16), int(bg_hex[4:6], 16))
-    except Exception:
-        pass
+    bg_rgb = _resolve_scheme_background_rgb(scheme)
 
     # 공통: chip rect 사전 계산 (1회)
     scaled_rects = {}

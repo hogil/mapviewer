@@ -173,9 +173,7 @@ def load_measure_color_settings(scheme: Optional[str] = None) -> CompositeColorS
             entry = legacy_entry
 
     if not isinstance(entry, dict):
-        # measure 없으면 composite 값을 fallback
-        composite_settings = load_composite_color_settings(scheme_key)
-        return composite_settings
+        entry = {key: DEFAULT_COMPOSITE_COLORS[key] for key in QUANTILE_KEYS}
 
     colors = _normalize_dict(entry)
     bg = normalize_hex_color(entry.get("background") or DEFAULT_COMPOSITE_BACKGROUND)

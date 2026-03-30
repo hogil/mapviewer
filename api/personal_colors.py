@@ -796,7 +796,7 @@ def get_ratio_gradient_for_scheme(scheme: str) -> List[Tuple[int, int, int]]:
     """Return 11 RGB tuples for quantile 0,10,...100 from measure colors.
 
     Reads from ``legends["measure"][scheme]`` first (FBT/QVL overlay),
-    then falls back to ``legends["composite"][scheme]`` (composite map),
+    then falls back to ``legends["measure"]["default"]``,
     then DEFAULT_RATIO_GRADIENT.
     """
     gradient_dict: Optional[Dict[str, str]] = None
@@ -810,15 +810,6 @@ def get_ratio_gradient_for_scheme(scheme: str) -> List[Tuple[int, int, int]]:
                 entry = measure.get("default")
             if isinstance(entry, dict) and any(k.startswith("quantile") for k in entry):
                 gradient_dict = entry
-        # Fallback: composite[LoginId] → composite["default"]
-        if not gradient_dict:
-            composite = legends.get("composite")
-            if isinstance(composite, dict):
-                entry = composite.get(scheme)
-                if not isinstance(entry, dict):
-                    entry = composite.get("default")
-                if isinstance(entry, dict) and any(k.startswith("quantile") for k in entry):
-                    gradient_dict = entry
     except Exception:
         pass
 
