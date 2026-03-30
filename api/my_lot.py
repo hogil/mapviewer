@@ -23,6 +23,7 @@ MY_LOT_ROOT = IMAGES_ROOT / "my-lot"
 MY_LOT_ROOT.mkdir(parents=True, exist_ok=True)
 PLACEHOLDER_DIR = MY_LOT_ROOT / "_placeholders"
 PLACEHOLDER_DIR.mkdir(parents=True, exist_ok=True)
+_MANUAL_JSON = "_manual.json"
 
 _LOCK = RLock()
 _SAFE_SEGMENT = re.compile(r"[^0-9A-Za-z_\-\.]+")
@@ -223,8 +224,61 @@ def _lot_folder_candidates(value: str) -> List[str]:
     return result
 
 
+def _load_manual_json(group_dir: Path) -> List[Dict]:
+    """group_dir/_manual.json에서 수동 항목 메타데이터를 로드."""
+    import json
+    meta_path = group_dir / _MANUAL_JSON
+    if not meta_path.exists():
+        return []
+    try:
+        with open(meta_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _save_manual_json(group_dir: Path, entries: List[Dict]) -> None:
+    """group_dir/_manual.json에 수동 항목 메타데이터를 저장."""
+    import json
+    meta_path = group_dir / _MANUAL_JSON
+    try:
+        with open(meta_path, 'w', encoding='utf-8') as f:
+            json.dump(entries, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _append_manual_entry(group_dir: Path, lot: str, wafer: str, added_at: str) -> None:
+    """_manual.json에 항목 추가 (중복 방지: lot+wafer 기준)."""
+    existing = _load_manual_json(group_dir)
+    key = (lot.lower(), (wafer or "").lower())
+    for e in existing:
+        if (e.get("lot", "").lower(), e.get("wafer", "").lower()) == key:
+            return  # 이미 존재
+    existing.append({"lot": lot, "wafer": wafer, "added_at": added_at})
+    _save_manual_json(group_dir, existing)
+
+
+def _remove_manual_entries(group_dir: Path, lot: str, wafer: str = None) -> None:
+    """_manual.json에서 항목 제거. wafer=None이면 해당 LOT의 모든 항목 제거."""
+    existing = _load_manual_json(group_dir)
+    if not existing:
+        return
+    lot_lower = lot.lower()
+    if wafer is not None:
+        wafer_lower = wafer.lower()
+        filtered = [e for e in existing
+                    if not (e.get("lot", "").lower() == lot_lower
+                            and e.get("wafer", "").lower() == wafer_lower)]
+    else:
+        filtered = [e for e in existing if e.get("lot", "").lower() != lot_lower]
+    if len(filtered) != len(existing):
+        _save_manual_json(group_dir, filtered)
+
+
 def _load_group_entries(login_id: str, mode: str, group: str) -> List[Dict[str, str]]:
-    """Group 디렉토리에서 항목 목록 로드 (디스크 파일 스캔)."""
+    """Group 디렉토리에서 항목 목록 로드 (디스크 파일 스캔 + 수동 메타데이터 병합)."""
     return _load_group_entries_legacy(login_id, mode, group)
 
 
@@ -335,7 +389,52 @@ def _load_group_entries_legacy(login_id: str, mode: str, group: str) -> List[Dic
     except Exception:
         pass
 
-    # 파일명 기준 정렬
+    # _manual.json에서 수동 항목 병합 (디스크에 이미지 없는 항목만 추가)
+    manual_entries = _load_manual_json(group_dir)
+    if manual_entries:
+        # 디스크에서 이미 발견된 LOT/값 세트 구축
+        if mode == "lot":
+            existing_lots = {e.get("value", "").lower() for e in entries}
+            for me in manual_entries:
+                lot_val = me.get("lot", "")
+                if lot_val.lower() not in existing_lots:
+                    added = me.get("added_at", "")
+                    try:
+                        saved = datetime.fromisoformat(added.replace("Z", "+00:00")).strftime("%y%m%d_%H%M%S")
+                    except Exception:
+                        saved = datetime.now().strftime("%y%m%d_%H%M%S")
+                    entries.append({
+                        "path": "", "value": lot_val, "filename": lot_val,
+                        "root": lot_val, "step": "", "wafer": me.get("wafer", ""),
+                        "saved_at": saved, "file_count": 0, "all_paths": [],
+                    })
+                    existing_lots.add(lot_val.lower())
+        else:
+            # wafer 모드: (lot, wafer) 조합 기준으로 중복 체크
+            existing_keys = set()
+            for e in entries:
+                parsed = _parse_filename(e.get("filename", ""))
+                key = (parsed.get("root", "").lower(), parsed.get("wafer", "").lower())
+                existing_keys.add(key)
+            for me in manual_entries:
+                lot_val = me.get("lot", "")
+                wafer_val = me.get("wafer", "")
+                key = (lot_val.lower(), wafer_val.lower())
+                if key not in existing_keys:
+                    added = me.get("added_at", "")
+                    try:
+                        saved = datetime.fromisoformat(added.replace("Z", "+00:00")).strftime("%y%m%d_%H%M%S")
+                    except Exception:
+                        saved = datetime.now().strftime("%y%m%d_%H%M%S")
+                    fname = f"{lot_val}_{wafer_val}" if wafer_val else lot_val
+                    entries.append({
+                        "path": "", "value": fname, "filename": fname,
+                        "root": lot_val, "step": "", "wafer": wafer_val,
+                        "saved_at": saved, "file_count": 0, "all_paths": [],
+                    })
+                    existing_keys.add(key)
+
+    # ���일명 기준 정렬
     entries.sort(key=lambda e: e.get("filename", ""))
     return entries
 
@@ -497,7 +596,7 @@ def add_entry(login_id: str, mode: str, group: str, src_path: Path) -> Dict[str,
 
 
 def remove_entry(login_id: str, mode: str, group: str, filename: str) -> bool:
-    """디스크에서 항목 제거. LOT 모드는 해당 LOT의 모든 이미지 제거."""
+    """디스크에서 항목 제거. LOT 모드는 해당 LOT의 모든 이미지 제거. _manual.json도 정리."""
     login_segment = _safe_login(login_id)
     mode = _normalize_mode(mode)
     safe_group = _SAFE_SEGMENT.sub("_", (group or "").strip()) or "default"
@@ -518,6 +617,10 @@ def remove_entry(login_id: str, mode: str, group: str, filename: str) -> bool:
                         break
                     except Exception:
                         pass
+            # _manual.json에서도 제거
+            _remove_manual_entries(group_dir, filename)
+            if not removed:
+                removed = True  # manual entry만 있었어도 삭제 성공
         else:
             target_file = group_dir / filename
             if target_file.exists() and target_file.is_file():
@@ -526,6 +629,11 @@ def remove_entry(login_id: str, mode: str, group: str, filename: str) -> bool:
                     removed = True
                 except Exception:
                     pass
+            # wafer 모드: filename에서 lot/wafer 파싱 후 _manual.json 제거
+            parsed = _parse_filename(filename)
+            _remove_manual_entries(group_dir, parsed["root"], parsed.get("wafer", ""))
+            if not removed:
+                removed = True  # manual entry만 있었어도 삭제 성공
     return removed
 
 
@@ -572,12 +680,23 @@ def remove_entries_batch(login_id: str, mode: str, group: str, filenames: List[s
                                     success_count += 1
                                     found = True
                                     break
+                        # _manual.json에서도 제거
+                        _remove_manual_entries(group_dir, filename)
+                        if not found:
+                            found = True  # manual entry만 있었어도 성공
+                            success_count += 1
                     else:
                         target_file = group_dir / filename
                         if target_file.exists() and target_file.is_file():
                             target_file.unlink()
                             success_count += 1
                             found = True
+                        # wafer 모드: _manual.json에서도 제거
+                        parsed = _parse_filename(filename)
+                        _remove_manual_entries(group_dir, parsed["root"], parsed.get("wafer", ""))
+                        if not found:
+                            found = True
+                            success_count += 1
 
                     if not found:
                         error_count += 1
@@ -614,14 +733,15 @@ def create_manual_entry(login_id: str, mode: str, group: str, lot: str, wafer: s
     with _LOCK:
         group_dir = _group_dir(login_segment, mode, safe_group)
         group_dir.mkdir(parents=True, exist_ok=True)
-        
+
         now_iso = __import__('datetime').datetime.utcnow().isoformat() + "Z"
 
-        # 이미지 없이 LOT 폴더만 생성
+        # 이��지 없이 LOT 폴더만 생성
         lot_folder = group_dir / safe_lot
         lot_folder.mkdir(parents=True, exist_ok=True)
 
         if mode == "lot":
+            safe_wafer = ""
             entry = {
                 "path": "",
                 "lot": safe_lot,
@@ -638,6 +758,9 @@ def create_manual_entry(login_id: str, mode: str, group: str, lot: str, wafer: s
                 "filename": f"{safe_lot}_{safe_wafer}" if safe_wafer else safe_lot,
                 "added_at": now_iso,
             }
+
+        # _manual.json에 메타데이터 저장 (이미지 없는 항목도 영구 보존)
+        _append_manual_entry(group_dir, safe_lot, safe_wafer, now_iso)
 
     return {
         "login_id": login_segment,

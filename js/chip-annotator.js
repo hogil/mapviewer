@@ -20,8 +20,8 @@ export class ChipAnnotator {
         this.ctx = canvas.getContext('2d');
 
         // Chip overlay Y 방향 보정 값 (px)
-        // 이미지 캔버스와 오버레이 캔버스가 동일한 위치(top:0)에 있고
-        // 동일한 transform(scale, dx, dy)을 사용하므로 추가 보정 불필요.
+        // draw()에서 overlayCanvas.style.top='0'으로 설정하지만
+        // imageCanvas는 CSS top: var(--filename-bar-height)이므로 위치 차이 보정 필요
         this.Y_OFFSET = 0;
 
         // Chip position data
@@ -136,6 +136,10 @@ export class ChipAnnotator {
         document.addEventListener('keydown', this._onKeyDown);
         document.addEventListener('keyup', this._onKeyUp);
         document.addEventListener('mouseup', this._onDocumentMouseUp);
+
+        // document 레벨 mousemove: 투명 캔버스가 이벤트를 놓치는 환경 대응
+        // canvas 리스너와 중복 시 5ms 디바운스가 자동 필터링
+        document.addEventListener('mousemove', this._onMouseMove);
     }
 
     /** 
@@ -1876,7 +1880,18 @@ export class ChipAnnotator {
      * Mouse move handler
      */
     _handleMouseMove(e) {
+        // mousemove + pointermove 중복 호출 방지 (5ms 이내 동일 좌표면 스킵)
+        const now = e.timeStamp || performance.now();
+        if (this._lastMoveStamp && (now - this._lastMoveStamp) < 5 &&
+            this._lastMoveX === e.clientX && this._lastMoveY === e.clientY) return;
+        this._lastMoveStamp = now;
+        this._lastMoveX = e.clientX;
+        this._lastMoveY = e.clientY;
+
         const rect = this.canvas.getBoundingClientRect();
+        // document 레벨 리스너 대응: 뷰어 영역 밖이면 무시
+        if (e.clientX < rect.left || e.clientX > rect.right ||
+            e.clientY < rect.top || e.clientY > rect.bottom) return;
         // 🔥 CSS 스케일링 고려: 실제 캔버스 픽셀 좌표로 변환
         const scaleX = this.canvas.width / rect.width;
         const scaleY = this.canvas.height / rect.height;

@@ -1475,14 +1475,82 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 4. **저장 확인**: `entries.json`이 디스크에 생성됨 (LOT, Wafer, Path 모두 기록)
 5. **Grid 보기**: 저장된 이미지 20/20 정상 로드, broken=0, 512×512
 
-#### 12-6. 이미지/그룹 삭제
-1. 그룹 내 이미지 삭제 버튼 → 개별 이미지 제거 확인
-2. 그룹 삭제 → 목록에서 제거 확인
+#### 12-6. 디스크 파일 복사 검증 (이미지 + positions)
 
-#### 12-7. 모달 닫기
+**목적**: batch/manual 저장 시 이미지 파일과 positions JSON이 실제로 디스크에 복사되는지 검증
+
+1. **LOT 모드 batch 저장 후 디스크 확인**:
+   - `my-lot/{loginId}/lot/{group}/{LOT}/` 하위에 `.png` 파일 존재
+   - `positions/my-lot/{loginId}/lot/{group}/{LOT}/` 하위에 `.json` 파일 존재
+   - 이미지 수 === positions 수 (1:1 매칭)
+   - **pass 기준**: 이미지 파일 + positions 파일 모두 존재, 개수 일치
+
+2. **Wafer 모드 batch 저장 후 디스크 확인**:
+   - `my-lot/{loginId}/wafer/{group}/` 하위에 `.png` 파일 존재
+   - `positions/my-lot/{loginId}/wafer/{group}/` 하위에 `.json` 파일 존재
+   - **pass 기준**: 동일
+
+3. **Manual 저장 시 `_manual.json` 생성 확인**:
+   - `my-lot/{loginId}/{mode}/{group}/_manual.json` 파일 존재
+   - JSON 배열 형태, 각 항목에 `lot`, `wafer`, `added_at` 필드
+   - 이미지 없는 수동 항목만 포함 (batch로 복사된 항목은 미포함)
+   - **pass 기준**: `_manual.json` 존재 + 수동 항목 수 일치
+
+#### 12-7. 수동 항목 영구 보존 (새로고침 후 유지)
+
+**목적**: `my-lot/manual` API로 생성된 이미지 없는 항목이 새로고침 후에도 사라지지 않는지 검증
+(이전 버그: wafer 모드에서 빈 폴더만 생성 → `_load_group_entries_legacy`가 이미지 파일만 스캔 → 수동 항목 소실)
+
+1. **LOT 모드 수동 항목 새로고침 검증**:
+   - `POST /api/my-lot/manual` → LOT 항목 3개 생성 (이미지 없음)
+   - 페이지 새로고침 → MY LOT 열기 → 해당 그룹 선택
+   - entries 테이블에 3개 항목 모두 표시됨
+   - **pass 기준**: 수동 항목 `file_count: 0`으로 표시, 사라지지 않음
+
+2. **Wafer 모드 수동 항목 새로고침 검증**:
+   - `POST /api/my-lot/manual` → Wafer 항목 3개 생성 (lot:wafer 쌍)
+   - 페이지 새로고침 → Wafer 탭 → 해당 그룹 선택
+   - entries 테이블에 3개 항목 모두 표시됨
+   - **pass 기준**: 수동 항목이 wafer 모드에서도 유지됨
+
+3. **삭제 시 `_manual.json` 정리 검증**:
+   - 수동 항목 1개 삭제 → `_manual.json`에서 해당 항목 제거됨
+   - `GET /api/my-lot/entries` → 삭제된 항목 미포함
+   - **pass 기준**: `_manual.json`과 API 응답 모두에서 제거
+
+#### 12-8. Grid 보기 + Chip 정보 로드
+
+**목적**: MY LOT에서 "보기" 또는 "선택 Grid 보기" 후 그리드 로드 + 단일 이미지 진입 시 chip positions 정상 로드 확인
+
+1. **"보기" 버튼 테스트** (이미지 있는 항목):
+   - 이미지 있는 LOT 항목의 "보기" 클릭 → 그리드에 해당 LOT 이미지 표시
+   - 이미지 수 === 해당 LOT의 `file_count`
+   - **pass 기준**: 그리드 아이템 수 일치
+
+2. **"선택 Grid 보기" 테스트**:
+   - 항목 선택 → "선택 Grid 보기" 클릭 → 그리드에 선택 항목의 이미지 표시
+   - **pass 기준**: 그리드 아이템 수 === 선택 항목의 총 `file_count`
+
+3. **Chip positions 로드 테스트**:
+   - 그리드에서 이미지 더블클릭 → 단일 이미지 모드 진입
+   - 콘솔에 `✅ Loaded N chip positions` 출력
+   - chip_count > 0 (positions JSON이 MY LOT 경로에 복사되어 있으므로)
+   - **pass 기준**: chip positions 정상 로드, N > 0
+
+4. **새로고침 후 Grid 보기 재검증**:
+   - 페이지 새로고침 → MY LOT → 그룹 선택 → "보기" 클릭
+   - 이전과 동일한 이미지 수 표시
+   - **pass 기준**: 새로고침 후에도 동일 결과
+
+#### 12-9. 이미지/그룹 삭제
+1. 그룹 내 이미지 삭제 버튼 → 개별 이미지 제거 확인
+2. 수동 항목 삭제 → `_manual.json`에서도 제거 확인
+3. 그룹 삭제 → 목록에서 제거 + 디스크 폴더 삭제 확인
+
+#### 12-10. 모달 닫기
 1. 닫기 버튼 또는 `#my-lot-btn-top` 다시 클릭 → 모달 닫힘
 
-**pass 기준**: LOT/Wafer 모드 전환, 그룹 CRUD, Wafer Manual 입력(noise 제거 + 토큰 정확매칭 + 현재 폴더 우선 검색 + Grid 보기에서 해당 wafer만 표시), 이미지/그룹 삭제
+**pass 기준**: LOT/Wafer 모드 전환, 그룹 CRUD, Manual 입력(noise 제거 + 토큰 정확매칭 + 현재 폴더 우선 검색 + Grid 보기에서 해당 wafer만 표시), 디스크 파일 복사(이미지+positions), 수동 항목 영구 보존(`_manual.json`), Grid 보기+Chip 로드, 이미지/그룹 삭제
 
 ---
 
@@ -2652,6 +2720,9 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | 10 | Ref Map | pass/fail | z-index, resize |
 | 11 | Measure heatmap | pass/fail | |
 | 12 | MY LOT | pass/fail | CRUD 전체 |
+| 12-6 | MY LOT 디스크 파일 복사 | pass/fail | 이미지+positions 파일 복사 확인 |
+| 12-7 | MY LOT 수동 항목 영구 보존 | pass/fail | _manual.json + 새로고침 후 유지 |
+| 12-8 | MY LOT Grid 보기 + Chip 로드 | pass/fail | 보기/Grid 보기 + 더블클릭 chip positions |
 | 13 | 단일 이미지 — 기본 | pass/fail | 줌/탐색/복귀 |
 | 14 | 단일 이미지 — 피라미드 렌더링 | pass/fail | 줌별 레벨, 선명도 |
 | 15 | 단일 이미지 — 웨이퍼/칩 정보 | pass/fail | 필드 9개+좌표 |
