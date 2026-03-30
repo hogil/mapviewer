@@ -4266,12 +4266,6 @@ const ms = Math.round(performance.now() - t0);
 
 ## 미해결 이슈 (다음 세션)
 
-### Composite recolor 시 Grade 맵만 갱신, BIN/FBT/square 미갱신
-- **현상**: 개인색 변경 후 composite recolor → `square_average`, `square_weighted_average`만 재생성. Grade/BIN/FBT 맵은 이전 색상 유지
-- **원인**: `recolor_saved_sum_maps()`가 square 맵만 처리, Grade 맵은 `create_full_composite_maps`에서만 생성, BIN/FBT는 measure_composite에서 생성
-- **제안**: (1) recolor에서 Grade 맵도 재생성 (base_indices + personal palette) (2) BIN/FBT는 measure_composite_data.npz에서 recolor (3) 장기적: default 색상 생성 → UI 개인색 display 아키텍처
-- **관련 파일**: `api/composite_map.py` (`recolor_saved_sum_maps`), `api/measure_composite.py` (`recolor_measure_composite`)
-
 ### Composite 속도 최적화
 - **현상**: 14개 이미지 composite 생성에 3.7초 (save_heatmaps 2.0초가 병목)
 - **제안**: (1) JPEG 저장 대신 WebP (2) 병렬 저장 (3) base_indices 캐시 재사용
@@ -4399,3 +4393,171 @@ const diskCacheHits = entries.filter(e => e.transferSize === 0 && e.decodedBodyS
 **핵심 파일**:
 - `api/main.py`: 모든 이미지/정적 파일 응답의 `Cache-Control` 헤더 (약 20곳)
 - `js/main.js`: `fetchOptions` — `cache: 'no-cache'`, `Cache-Control: 'no-cache'`
+
+## 버그 수정 이력 (2026-03-30, Composite color editor mapping)
+
+### Composite Map non-grade PNG가 Measure 탭 색을 잘못 참조
+- **버그**: `composite_map` 결과에서 `BIN_*`, `F_*`, `Q_*`, `square_*`가 `Composite` 탭이 아니라 `Measure` 탭 gradient에 반응함
+- **정상 요구사항**: `Grade_*`만 예외로 두고, 그 외 `composite_map` PNG는 전부 `Composite` 탭 색을 따라야 함
+- **원인**: `_resolve_composite_map_gradient_mode()`가 `BIN_/F_/Q_`를 `"measure"`로 분기하여 PLTE gradient patch 시 `measure` 색상 소스를 읽음
+- **수정**: `composite_map` 아래의 non-`Grade_` PNG는 전부 `"composite"`로 통일. 결과적으로 `BIN/F/Q/square`가 모두 `Composite` 탭 gradient를 사용
+- **파일**: `api/main.py` (`_resolve_composite_map_gradient_mode`)
+- **검증 포인트**:
+  - `Measure` 탭 0% 색을 바꿔도 `BIN/F/Q/square` 픽셀이 바뀌지 않아야 함
+  - `Composite` 탭 0% 색을 바꾸면 `BIN/F/Q/square`가 함께 바뀌어야 함
+  - `Grade_*`는 이 검증 대상에서 제외되며 기존 Grade 색 체계를 유지해야 함
+
+### Composite/Measure 탭의 배경 행이 요구사항과 다르게 노출됨
+- **버그**: 색상 편집기 `Composite`/`Measure` 탭에 배경(background) 행이 보여 사용자 요구사항과 충돌함
+- **원인**: gradient row 빌드 시 quantile 11개 뒤에 배경 row를 별도로 생성하고, 변경 감지/저장/복원 payload에도 포함함
+- **수정**: `Composite`/`Measure` 탭에서 배경 row를 제거. gradient 변경 감지와 저장/복원은 quantile 11개만 기준으로 동작. background는 row가 존재할 때만 payload에 포함되도록 방어
+- **파일**: `js/color-editor.js`
+- **검증 포인트**:
+  - `Composite` 탭과 `Measure` 탭 모두 `0%~100%` 11개 row만 보여야 함
+  - `배경` row가 보이면 FAIL
+  - gradient 변경만으로 `적용` 버튼 활성화/비활성화가 정상 동작해야 함
+
+## Phase 46: Composite 탭 색상 매핑 + 배경 행 제거 검증
+
+**목적**: `palette_3k` 기준 실제 composite 생성 결과에서 `BIN/F/Q/square`가 오직 `Composite` 탭 색상만 따르는지, `Measure` 탭 변경에는 영향받지 않는지, 그리고 `Composite`/`Measure` 탭에서 배경 row가 제거되었는지 검증한다.
+
+**배경 — 수정한 버그 2건 (2026-03-30)**:
+
+| # | 버그 | 원인 | 수정 |
+|---|------|------|------|
+| 1 | `BIN/F/Q/square`가 `Measure` 탭 색으로 바뀜 | `composite_map` non-`Grade_` PNG 중 `BIN_/F_/Q_`가 `"measure"` gradient로 분기됨 | `api/main.py`에서 non-`Grade_` PNG를 모두 `"composite"`로 처리 |
+| 2 | `Composite`/`Measure` 탭에 배경 row 노출 | gradient row 빌드 시 background row를 항상 생성하고 payload에도 포함 | `js/color-editor.js`에서 background row 제거, quantile 11개만 저장/복원 |
+
+**테스트 절차**:
+
+1. 새 서버 포트로 앱 접속 후 `palette_3k` 폴더를 로드한다.
+2. 그리드에서 처음 10개 이미지를 선택한다.
+3. Composite 생성 항목으로 `Failbit + BIN389 + FBT1000 + QVL5000`를 동시에 생성한다.
+4. 결과 그리드에 아래 파일이 보여야 한다.
+   - `BIN_389_count.png`
+   - `F_1000_sum.png`
+   - `Q_5000_sum.png`
+   - `square_average.png`
+   - `Grade_0.png` ~ `Grade_7.png`
+5. 색상 편집기를 열고 `Measure` 탭으로 이동한다.
+6. `Measure` 탭의 `0%` 색을 뚜렷한 다른 색으로 변경하고 실시간 미리보기를 기다린다.
+7. `BIN_389_count`, `F_1000_sum`, `Q_5000_sum`, `square_average`의 픽셀/색상이 **그대로인지** 확인한다.
+8. 색상 편집기에서 `Composite` 탭으로 이동한다.
+9. `Composite` 탭의 `0%` 색을 다른 색으로 변경하고 실시간 미리보기를 기다린다.
+10. `BIN_389_count`, `F_1000_sum`, `Q_5000_sum`, `square_average`의 픽셀/색상이 **함께 바뀌는지** 확인한다.
+11. `적용` 버튼을 눌러 모달이 즉시 닫히는지 확인하고, 닫힌 뒤에도 위 4개 이미지 색상이 유지되는지 확인한다.
+12. `Composite`/`Measure` 탭 모두에서 row 목록에 `배경` 행이 없는지 확인한다.
+
+**검증 포인트**:
+- [ ] `Measure` 탭 색 변경 시 `BIN/F/Q/square`가 바뀌지 않음
+- [ ] `Composite` 탭 색 변경 시 `BIN/F/Q/square`가 함께 바뀜
+- [ ] `Grade_*`는 본 검증에서 제외되며 `Composite` 0% 변경만으로 같이 움직이면 FAIL
+- [ ] `Composite` 탭에 `배경` row가 없음
+- [ ] `Measure` 탭에 `배경` row가 없음
+- [ ] `적용` 후 모달이 즉시 닫힘
+- [ ] `적용` 후 `BIN/F/Q/square`의 변경 색상이 유지됨
+
+**권장 확인 코드**:
+```javascript
+const pick = ['BIN_389_count', 'F_1000_sum', 'Q_5000_sum', 'square_average'];
+const rows = [...document.querySelectorAll('#image-grid .grid-thumb-wrap')];
+const readCenterPixel = (img) => {
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth;
+  c.height = img.naturalHeight;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const x = Math.floor(img.naturalWidth * 0.5);
+  const y = Math.floor(img.naturalHeight * 0.5);
+  return Array.from(ctx.getImageData(x, y, 1, 1).data);
+};
+const result = {};
+for (const name of pick) {
+  const wrap = rows.find(w => w.textContent.includes(name));
+  const img = wrap?.querySelector('img');
+  result[name] = img ? {
+    src: img.currentSrc || img.src,
+    pixel: readCenterPixel(img),
+  } : null;
+}
+return result;
+```
+
+**핵심 파일**:
+- `api/main.py`: `_resolve_composite_map_gradient_mode`
+- `js/color-editor.js`: gradient row 구성, 저장/복원 payload, 변경 감지 로직
+
+## 버그 수정 이력 (2026-03-31, Measure map 첫 진입 지연 + 폴더 선택 stale state)
+
+### 새로고침 직후 첫 Measure 적용만 `F/Q`가 늦게 뜨고, 그리드 비운 뒤 반복하면 빨라짐
+- **버그**: 앱 새로고침 직후 `Measure -> Failbit + BIN + F + Q -> 적용` 시 첫 진입에서 `F/Q` 썸네일이 한 박자 늦게 붙음. 같은 세션에서 그리드를 비우고 다시 반복하면 즉시 뜸
+- **원인 1**: `measure` 그리드가 이미 최초 렌더부터 `measure-thumb` URL을 쓰고 있는데도, 뒤에서 `refreshGridThumbnailsWithCurrentParams()`를 다시 호출해 첫 요청을 갈아엎는 2-pass 경로가 남아 있었음
+- **원인 2**: `measure` 그리드에서도 일반 폴더 썸네일 prefetch(`loadCurrentFolderThumbnails`)를 같이 돌려 네트워크/디코드 경합이 발생했음
+- **원인 3**: `measure-colors`와 병합 key 목록을 먼저 기다린 뒤에만 legend/list가 갱신되어, 첫 진입 체감이 더 느려졌음
+- **수정**:
+  - `measure` 그리드는 최초 렌더 결과를 유지하고 delayed refresh를 제거
+  - `measure` 그리드에서는 일반 폴더 썸네일 prefetch를 건너뜀
+  - 선택된 `F/Q` 항목에 대해 `_prefetchCheckedMeasureThumbs()`로 batch prefetch 추가
+  - `measure-colors`는 `_ensureRatioGradientCache()`로 비동기 예열하고, 리스트는 기존 `_cachedMeasureKeys`가 있으면 먼저 즉시 렌더
+- **파일**: `js/main.js`
+
+### 그리드 초기화 후 폴더를 클릭하면 폴더가 아니라 마지막 파일이 다시 선택됨
+- **버그**: `Composite`/`Measure` 생성 후 오른쪽 클릭으로 그리드를 초기화하고 폴더를 클릭하면, 폴더 선택 대신 이전 파일 선택 상태가 되살아남
+- **원인**: `clearWaferMapExplorerSelection()`이 시각적 선택만 지우고 `selectedImagePath`, `currentImagePath`, `contextMenuTargetPath`, `lastSelectedFolderPath` 같은 파일 포인터를 남겨 stale state가 다음 폴더 클릭에 재사용됨
+- **수정**:
+  - `clearWaferMapExplorerSelection()`에 전체 초기화 옵션을 추가해 grid selection과 file pointer를 함께 비움
+  - 일반 폴더 클릭 시 stale 파일 선택을 먼저 지우고 `selectedFolders`, `lastSelectedFolder`, `lastSelectedFolderPath`를 폴더 기준으로 다시 설정
+- **파일**: `js/main.js`
+
+### 검증 시 주의: 8443이 구버전 JS를 계속 서빙하면 수정이 안 된 것처럼 보일 수 있음
+- **증상**: 로컬 `js/main.js`에는 수정이 들어갔는데 UI에서는 예전 Measure 지연 동작이 계속 재현됨
+- **원인**: `8443`에 떠 있는 오래된 `python -m api.main` 프로세스가 구버전 `js/main.js`를 계속 서빙함
+- **대응**:
+  - `8443` 프로세스를 내리고 `start.ps1`로 다시 기동
+  - 검증 전 `https://localhost:8443/js/main.js` 응답에 `_prefetchCheckedMeasureThumbs`와 `Measure 그리드는 최초 렌더부터 올바른 URL을 사용하므로 legend/UI만 동기화` 문자열이 실제 포함되는지 확인
+
+## Phase 47: Measure map 즉시 로드 + 폴더 선택 회귀 검증
+
+**목적**: 새로고침 직후 첫 `Measure` 적용에서도 `BIN/F/Q` 그리드가 즉시 생성되는지, 그리고 그리드 초기화 후 폴더 클릭이 파일 선택으로 새지 않는지 검증한다.
+
+**테스트 절차**:
+
+1. `https://localhost:8443` 접속 후 새로고침한다.
+2. `palette_3k` 폴더를 선택하고 처음 10개 이미지를 체크한다.
+3. 상단 패널에서 `Measure`를 열고 `Failbit`, `BIN`, `FBT1000`, `QVL5000`를 선택한 뒤 `적용`한다.
+4. 적용 직후 활성 페이지가 `measure`로 전환되고, 그리드가 즉시 채워지는지 확인한다.
+5. 첫 4개 타일 URL이 각각 일반 썸네일, `bin_overlay`, `measure-thumb(f)`, `measure-thumb(q)` 패턴으로 바로 잡히는지 확인한다.
+6. 오른쪽 클릭으로 그리드를 초기화한다.
+7. 파일이 아닌 `palette_3k` 폴더를 한 번 클릭한다.
+8. 폴더가 선택 상태로 남고, 마지막 파일 하이라이트가 되살아나지 않는지 확인한다.
+
+**검증 포인트**:
+- [ ] 새로고침 직후 첫 `Measure` 적용에서도 `measure` 그리드가 즉시 보임
+- [ ] `F/Q` 타일이 뒤늦게 한 번 더 갈아끼워지지 않음
+- [ ] 활성 페이지가 즉시 `measure`로 바뀜
+- [ ] 첫 타일 URL들에 `bin_overlay`, `measure-thumb?field=f`, `measure-thumb?field=q`가 바로 포함됨
+- [ ] 그리드 초기화 후 폴더 클릭 시 폴더가 선택되고 파일 선택이 복원되지 않음
+- [ ] `selectedFolders`에는 폴더 경로가 남고 `selectedFiles`/`selectedImagePath`는 비어 있어야 함
+
+**권장 확인 코드**:
+```javascript
+(() => ({
+  activePageRole: window.viewer?.pageManager?.activePage?.role || null,
+  currentGridImages: window.viewer?.currentGridImages?.length || 0,
+  firstSources: [...document.querySelectorAll('#image-grid .grid-thumb-wrap img')]
+    .slice(0, 4)
+    .map(img => img.currentSrc || img.src),
+  selectedFolders: [...(window.viewer?.selectedFolders || [])],
+  selectedFiles: [...(window.viewer?.selectedFiles || [])],
+  selectedImagePath: window.viewer?.selectedImagePath || null,
+}))();
+```
+
+**PASS 기준**:
+- `activePageRole === 'measure'`
+- `currentGridImages > 0`
+- `firstSources`에 `bin_overlay=1`, `measure-thumb`가 즉시 포함
+- 폴더 재선택 직후 `selectedFolders = ['palette_3k']`, `selectedFiles = []`, `selectedImagePath = null`
+
+**핵심 파일**:
+- `js/main.js`: `_ensureRatioGradientCache`, `_prefetchCheckedMeasureThumbs`, `clearWaferMapExplorerSelection`, `_openMeasureTab`, `showGrid`

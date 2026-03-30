@@ -1043,6 +1043,46 @@ class WaferMapViewer {
         return !!m && m !== 'bin' && m !== 'composite';
     }
 
+    async _ensureRatioGradientCache(waitForResult = false, rerenderOnResolve = false) {
+        if (this._ratioGradientCache) {
+            return this._ratioGradientCache;
+        }
+
+        if (!this._ratioGradientCachePromise) {
+            const loginId = this.getCurrentLoginId();
+            this._ratioGradientCachePromise = fetch(`/api/measure-colors?LoginId=${encodeURIComponent(loginId)}`)
+                .then(resp => resp.ok ? resp.json() : null)
+                .then(data => {
+                    const colors = data?.colors || data?.defaultColors || null;
+                    if (colors) {
+                        this._ratioGradientCache = colors;
+                    }
+                    return this._ratioGradientCache;
+                })
+                .catch(() => null)
+                .finally(() => {
+                    this._ratioGradientCachePromise = null;
+                });
+        }
+
+        if (rerenderOnResolve && this._ratioGradientCachePromise) {
+            this._ratioGradientCachePromise
+                .then(() => {
+                    if (!this._ratioGradientCache) return;
+                    this.renderColorLegends?.();
+                    this.renderGridColorLegend?.();
+                    this.updateFailbitButtonUI?.();
+                })
+                .catch(() => {});
+        }
+
+        if (waitForResult && this._ratioGradientCachePromise) {
+            return await this._ratioGradientCachePromise;
+        }
+
+        return this._ratioGradientCache || null;
+    }
+
     bindEvents() {
         this.bindViewerEvents();
 
@@ -2566,7 +2606,10 @@ class WaferMapViewer {
 
         // 모든 선택 해제
 
-        this.clearWaferMapExplorerSelection();
+        this.clearWaferMapExplorerSelection({
+            preserveGridSelection: false,
+            clearFilePointers: true,
+        });
 
         // 그리드 모드 숨기기
 
@@ -9114,6 +9157,9 @@ class WaferMapViewer {
                     this._unpinItem(list, item);
                 }
                 updateBtn();
+                if (isMeasure && this.gridMode) {
+                    this._prefetchCheckedMeasureThumbs();
+                }
             });
             return item;
         };
@@ -11580,7 +11626,11 @@ class WaferMapViewer {
         }
     }
 
-    clearWaferMapExplorerSelection() {
+    clearWaferMapExplorerSelection(options = {}) {
+        const {
+            preserveGridSelection = this.gridMode,
+            clearFilePointers = false,
+        } = options;
         try {
             this.debugLog('🔷 [DEBUG] clearWaferMapExplorerSelection 시작:', {
                 gridMode: this.gridMode,
@@ -11603,13 +11653,24 @@ class WaferMapViewer {
 
             // Wafer Map Explorer 선택 해제
 
-            // 🔥 Grid 모드에서는 selectedImages를 초기화하지 않음 (체크된 이미지 유지)
-
-            if (!this.gridMode) {
+            // 🔥 Grid 모드 선택은 필요 시 유지하지만, 전체 초기화에서는 비운다.
+            if (!preserveGridSelection) {
                 this.selectedImages = [];
+                this.gridSelectedIdxs = [];
+                if (this.gridSelectedSet) {
+                    this.gridSelectedSet.clear();
+                }
             }
 
             this.selectedFolders = new Set();
+            this.lastSelectedFolder = null;
+
+            if (clearFilePointers) {
+                this.selectedImagePath = null;
+                this.currentImagePath = null;
+                this.contextMenuTargetPath = null;
+                this.lastSelectedFolderPath = null;
+            }
 
             // 시각적 선택 상태 제거
 
@@ -11966,6 +12027,7 @@ class WaferMapViewer {
             // 🔥 폴더 클릭 시에도 이전 선택 해제 (Ctrl/Shift가 아닐 때)
 
             if (!e.ctrlKey && !e.shiftKey) {
+                const folderPath = target.dataset.path;
                 // 이전 선택된 모든 항목들의 시각적 표시 해제
 
                 const allLinks = Array.from(this.dom.fileExplorer.querySelectorAll('a[data-path]'));
@@ -12006,11 +12068,18 @@ class WaferMapViewer {
                 if (this.selectedFolders) {
                     this.selectedFolders.clear();
                 }
-                this.lastSelectedFolder = null;
+                this.selectedImages = [];
+                this.selectedImagePath = null;
+                this.contextMenuTargetPath = null;
+                this.lastSelectedFolder = target;
+                this.lastSelectedFolderPath = folderPath || null;
+                if (folderPath) {
+                    this.selectedFolders = new Set([folderPath]);
+                    target.classList.add('selected');
+                }
                 this._unfilteredGridImages = null;
 
-                // 🔥 일반 클릭: expansion/collapse만 수행 (그리드 생성 안 함)
-                // 폴더는 expansion/collapse만 되어야 함
+                // 🔥 일반 클릭: 폴더 선택 + expansion/collapse만 수행 (그리드 생성 안 함)
             }
         } 
 
@@ -18730,18 +18799,23 @@ class WaferMapViewer {
             this.primeRenderedGridThumbnails(40);
             this.loadVisibleGridThumbnails();
         });
-        setTimeout(() => {
-            this.loadCurrentFolderThumbnails(sortedImages);
-        }, 100);
+        const isMeasureThumbGrid =
+            (Array.isArray(this._gridMeasureMap) && this._gridMeasureMap.length > 0) ||
+            ((this.isMeasureGradientMode()) && this._ratioActiveItemKey);
+        if (!isMeasureThumbGrid) {
+            setTimeout(() => {
+                this.loadCurrentFolderThumbnails(sortedImages);
+            }, 100);
+        }
         grid.classList.add('active');
         setTimeout(() => this.updateGridSquaresPixel(), 0);
-        // 🔥 Measure overlay 활성 시 썸네일 URL을 measure-thumb으로 교체
-        if ((this.isMeasureGradientMode()) && this._ratioActiveItemKey) {
+        // 🔥 Measure 그리드는 최초 렌더부터 올바른 URL을 사용하므로 legend/UI만 동기화
+        if (isMeasureThumbGrid) {
             setTimeout(() => {
-                this.refreshGridThumbnailsWithCurrentParams();
                 this.renderGridColorLegend();
                 this.updateFailbitButtonUI();
-            }, 150);
+                this._preCacheMeasureKeys();
+            }, 0);
         }
         if (!this.gridResizeObserver) {
             this.gridResizeObserver = new ResizeObserver(() => this.updateGridSquaresPixel());
@@ -24048,6 +24122,7 @@ class WaferMapViewer {
 
         // 리스트 생성
         this._buildFailbitList(panel);
+        this._ensureRatioGradientCache(false);
 
         // 검색 초기화 & 표시
         const search = panel.querySelector('.failbit-search');
@@ -24120,6 +24195,11 @@ class WaferMapViewer {
                 this._renderMcList(list, { f: [], q: [], bin: [] }, { mode: 'measure' });
             }
             return;
+        }
+
+        // exact cache miss여도 기존 캐시가 있으면 먼저 보여주고, 병합 결과로 비동기 갱신
+        if (this._cachedMeasureKeys) {
+            this._renderMcList(list, this._cachedMeasureKeys, { mode: 'measure' });
         }
 
         // 서버에서 비동기 로드 (Composite _buildMcList와 동일)
@@ -24225,14 +24305,7 @@ class WaferMapViewer {
             } else {
                 // Grid 모드: gradient 캐시 로드 (범례를 gradient로 전환하기 위해)
                 if (!this._ratioGradientCache) {
-                    try {
-                        const loginId = this.currentUser || FALLBACK_LOGIN_ID;
-                        const resp = await fetch(`/api/measure-colors?LoginId=${encodeURIComponent(loginId)}`);
-                        if (resp.ok) {
-                            const data = await resp.json();
-                            this._ratioGradientCache = data.colors || data.defaultColors;
-                        }
-                    } catch (_) {}
+                    this._ensureRatioGradientCache(false, true);
                 }
             }
         }
@@ -24316,12 +24389,10 @@ class WaferMapViewer {
 
         this.showGrid(selectedImages, true); // skipSaveState=true
 
-        // measure-thumb URL로 교체
-        setTimeout(() => {
-            this.refreshGridThumbnailsWithCurrentParams();
-            this.renderColorLegends();
-            this.updateFailbitButtonUI();
-        }, 200);
+        // 최초 렌더부터 measure-thumb URL을 사용하므로 legend/UI만 갱신
+        this.renderColorLegends();
+        this.renderGridColorLegend();
+        this.updateFailbitButtonUI();
     }
 
     /**
@@ -24363,14 +24434,7 @@ class WaferMapViewer {
         // Gradient 캐시 로드 (FBT/QVL 항목 있을 때)
         const hasFQ = this._measureCheckedItems.some(it => it.type === 'f' || it.type === 'q');
         if (hasFQ && !this._ratioGradientCache) {
-            try {
-                const loginId = this.currentUser || FALLBACK_LOGIN_ID;
-                const resp = await fetch(`/api/measure-colors?LoginId=${encodeURIComponent(loginId)}`);
-                if (resp.ok) {
-                    const data = await resp.json();
-                    this._ratioGradientCache = data.colors || data.defaultColors;
-                }
-            } catch (_) {}
+            this._ensureRatioGradientCache(false, true);
         }
 
         this.renderColorLegends();
@@ -24423,15 +24487,18 @@ class WaferMapViewer {
             if (hasGridSelection && (isSingle || isMulti)) {
                 // overlayMode를 먼저 설정 (_openMeasureTab에서 참조)
                 this._syncOverlayModeFromChecked();
+                this._prefetchCheckedMeasureThumbs(selected);
                 this._openMeasureTab();
                 return;
             }
 
             if (isMulti || wasMulti) {
                 // 다중↔단일 전환 또는 다중 항목 변경: 그리드 전체 재생성
+                this._prefetchCheckedMeasureThumbs(targetImages);
                 this.showGrid(targetImages);
             } else {
                 // 단일 선택 유지: URL만 교체
+                this._prefetchCheckedMeasureThumbs(targetImages);
                 this.refreshGridThumbnailsWithCurrentParams();
             }
             this.refreshThumbnailNavigatorWithCurrentParams();
@@ -24543,6 +24610,44 @@ class WaferMapViewer {
             }
         };
         processNext();
+    }
+
+    _prefetchCheckedMeasureThumbs(preferredImages = null) {
+        const checkedItems = Array.isArray(this._measureCheckedItems) ? this._measureCheckedItems : [];
+        const fqItems = checkedItems.filter(it => this.isMeasureGradientMode(it.type));
+        if (fqItems.length === 0) return;
+
+        const selectedImages = this.getSelectedImagesForModal?.() || [];
+        const baseImages = preferredImages?.length ? preferredImages
+            : selectedImages.length ? selectedImages
+            : (this._measureBaseImages?.length ? this._measureBaseImages
+                : (this.currentGridImages?.length ? this.currentGridImages
+                    : (this.selectedImages?.length ? this.selectedImages : [])));
+        if (!baseImages?.length) return;
+
+        const uniqueBaseImages = [...new Set(baseImages)].slice(0, 120);
+        if (uniqueBaseImages.length === 0) return;
+
+        const gradientFilter = this.selectedGradientRanges.size > 0
+            ? Array.from(this.selectedGradientRanges).sort((a, b) => a - b).join(',')
+            : '';
+        const signature = JSON.stringify({
+            images: uniqueBaseImages,
+            items: fqItems.map(it => `${it.type}:${it.key}`).sort(),
+            scheme: this.getCurrentLoginId(),
+            gradientFilter,
+        });
+
+        if (!this._measurePrefetchInFlight) {
+            this._measurePrefetchInFlight = new Set();
+        }
+        if (this._measurePrefetchInFlight.has(signature)) return;
+
+        this._measurePrefetchInFlight.add(signature);
+        this._prefetchMeasureThumbBatch(uniqueBaseImages, fqItems);
+        setTimeout(() => {
+            this._measurePrefetchInFlight?.delete(signature);
+        }, 4000);
     }
 
     /**
@@ -27466,15 +27571,22 @@ class WaferMapViewer {
             this.loadVisibleGridThumbnails();
         }, 0);
 
-        setTimeout(() => {
-            this.loadCurrentFolderThumbnails?.(sortedImages);
-        }, 100);
-
-        // 🔥 Measure overlay 활성 시 썸네일 URL을 measure-thumb으로 교체
-        if ((this.isMeasureGradientMode()) && this._ratioActiveItemKey) {
+        const isMeasureThumbGrid =
+            (Array.isArray(this._gridMeasureMap) && this._gridMeasureMap.length > 0) ||
+            ((this.isMeasureGradientMode()) && this._ratioActiveItemKey);
+        if (!isMeasureThumbGrid) {
             setTimeout(() => {
-                this.refreshGridThumbnailsWithCurrentParams();
-            }, 150);
+                this.loadCurrentFolderThumbnails?.(sortedImages);
+            }, 100);
+        }
+
+        // 🔥 Measure 그리드는 최초 렌더부터 올바른 URL을 사용하므로 추가 refresh를 생략
+        if (isMeasureThumbGrid) {
+            setTimeout(() => {
+                this.renderGridColorLegend?.();
+                this.updateFailbitButtonUI?.();
+                this._preCacheMeasureKeys();
+            }, 0);
         }
 
         // 🔥 LOT 리스트 모달 - 처음 시작 시 첫 번째 LOT 선택
