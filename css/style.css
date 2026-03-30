@@ -805,7 +805,8 @@
             border-bottom: 1px solid #222;
             box-sizing: border-box;
             position: static;
-            overflow: hidden;
+            overflow-x: auto;
+            overflow-y: hidden;
         }
         
         /* Grid Mode Color Legend */
@@ -931,8 +932,8 @@
             align-items: center;
             gap: 6px;
             margin-left: 0;
-            flex: 0 1 auto;
-            min-width: 0;
+            flex: 0 0 auto;
+            min-width: max-content;
         }
         
         #file-search {

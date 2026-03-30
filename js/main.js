@@ -9859,36 +9859,6 @@ class WaferMapViewer {
 
             const startTime = performance.now();
 
-            // 🔥 검색 전 모든 썸네일 캐시 강력 초기화 (404/500 오류 방지)
-
-            if (this.thumbnailManager) {
-                this.thumbnailManager.cache.clear();
-
-                this.thumbnailManager.abortAll();
-            }
-
-            // 🔥 그리드 썸네일 DOM 요소들도 초기화 (이전 검색 결과 완전 제거)
-
-            const grid = document.getElementById('image-grid');
-
-            if (grid) {
-                // 모든 이미지 URL 해제 (메모리 누수 방지)
-
-                const images = grid.querySelectorAll('.grid-thumb-img');
-
-                images.forEach(img => {
-                    if (img.src && img.src.startsWith('blob:')) {
-                        URL.revokeObjectURL(img.src);
-                    }
-
-                    img.src = ''; // 빈 URL로 설정
-                });
-
-                // 그리드 내용 완전 초기화
-
-                grid.innerHTML = '';
-            }
-
             // 서버 검색 API 사용: 프런트는 결과만 표시
             const searchParams = new URLSearchParams();
             searchParams.set('q', fileQuery || '');
@@ -9960,18 +9930,45 @@ class WaferMapViewer {
                 return false;
             }
 
+            // 검색 결과를 그리드 모드로 표시하기 직전에 기존 로더 상태만 안전하게 초기화
+            this.cancelGridImageRequests(true);
+            if (this.thumbnailManager) {
+                this.thumbnailManager.cache.clear();
+                this.thumbnailManager.abortAll();
+            }
+
+            const grid = document.getElementById('image-grid');
+            const scrollWrapper = grid?.closest('.grid-scroll-wrapper') || grid?.parentElement;
+            if (scrollWrapper) {
+                scrollWrapper.scrollTop = 0;
+            }
+            this._lastGridScrollTop = 0;
+            if (this.savedViewState?.type === 'grid') {
+                this.savedViewState.scrollTop = 0;
+            }
+
             // 검색 결과를 그리드 모드로 표시
 
             this.selectedImages = matchedImages;
 
             this.gridSelectedIdxs = [];
-        this.gridSelectedSet = new Set();
-        this._prevGridSelectedIdxs = new Set();
-        this.gridLastClickedIdx = undefined;
-        this.gridThumbWraps = [];
-        this.invalidateGridGeometry();
+            this.gridSelectedSet = new Set();
+            this._prevGridSelectedIdxs = new Set();
+            this.gridLastClickedIdx = undefined;
+            this.gridThumbWraps = [];
+            this.invalidateGridGeometry();
 
-            this.showGrid(matchedImages);
+            const uniqueLotIds = new Set(
+                matchedImages.map(path => this.extractLotIdFromPath(path)).filter(Boolean)
+            );
+            const forceFlatSearchGrid = this.lotMode && uniqueLotIds.size <= 1;
+            if (forceFlatSearchGrid) {
+                console.log(
+                    `[SEARCH] 단일 LOT 검색 결과 ${matchedImages.length}건 → flat grid로 즉시 렌더`
+                );
+            }
+
+            this.showGrid(matchedImages, false, forceFlatSearchGrid);
 
             return true;
         } catch (error) {
