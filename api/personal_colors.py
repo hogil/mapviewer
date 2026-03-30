@@ -876,16 +876,14 @@ def get_composite_gradient_for_scheme(scheme: str) -> List[Tuple[int, int, int]]
     return result
 
 
-def plte_composite_gradient_patch_memory(png_data: bytearray, scheme: str) -> bytearray:
-    """Composite sum map의 palette indices 24-255를 개인색 composite gradient로 패치.
-
-    square_average.png 등 palette-indexed composite 이미지 전용.
-    indices 0-23은 plte_inplace_patch_memory로 별도 패치.
-    """
+def _plte_gradient_patch_memory(
+    png_data: bytearray,
+    stops: List[Tuple[int, int, int]],
+) -> bytearray:
+    """Palette indices 24-255를 전달받은 gradient stop으로 패치."""
     GRAD_START = 24
     GRAD_COUNT = 232  # 24-255
 
-    stops = get_composite_gradient_for_scheme(scheme)
     if len(stops) < 11:
         return png_data
 
@@ -936,6 +934,18 @@ def plte_composite_gradient_patch_memory(png_data: bytearray, scheme: str) -> by
     return png_data
 
 
+def plte_measure_gradient_patch_memory(png_data: bytearray, scheme: str) -> bytearray:
+    """Measure composite의 gradient palette indices 24-255를 measure 색상으로 패치."""
+    stops = get_ratio_gradient_for_scheme(scheme)
+    return _plte_gradient_patch_memory(png_data, stops)
+
+
+def plte_composite_gradient_patch_memory(png_data: bytearray, scheme: str) -> bytearray:
+    """Composite sum map의 gradient palette indices 24-255를 composite 색상으로 패치."""
+    stops = get_composite_gradient_for_scheme(scheme)
+    return _plte_gradient_patch_memory(png_data, stops)
+
+
 __all__ = [
     "load_color_legends",
     "save_color_legends",
@@ -947,6 +957,7 @@ __all__ = [
     "plte_grade_filter_memory",
     "plte_bottom_filter_memory",
     "plte_normalize_border_memory",
+    "plte_measure_gradient_patch_memory",
     "plte_composite_gradient_patch_memory",
     "DEFAULT_RATIO_GRADIENT",
     "get_ratio_gradient_for_scheme",

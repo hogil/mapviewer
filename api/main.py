@@ -111,6 +111,7 @@ from .personal_colors import (
     plte_inplace_patch_memory,
     plte_bottom_filter_memory,
     plte_normalize_border_memory,
+    plte_measure_gradient_patch_memory,
     plte_composite_gradient_patch_memory,
 )
 from .composite_colors import (
@@ -4231,6 +4232,16 @@ def _patch_bin_map_background(png_data: bytearray) -> bytearray:
 BIN_MAP_FILTER_TOKEN = "__BIN_MAP__"
 
 
+def _resolve_composite_map_gradient_mode(image_path: Optional[Path]) -> Optional[Literal["measure", "composite"]]:
+    norm_path = str(image_path).replace("\\", "/") if image_path else ""
+    if "composite_map/" not in norm_path:
+        return None
+    filename = norm_path.rsplit("/", 1)[-1] if norm_path else ""
+    if not filename.endswith(".png") or filename.startswith("Grade_"):
+        return None
+    return "composite"
+
+
 def _apply_png_filters_memory(
     image_path: Path,
     png_data: bytearray,
@@ -4288,19 +4299,27 @@ def _apply_png_filters_memory(
         if personalized and scheme:
             patched = plte_inplace_patch_memory(patched, scheme)
 
-    # 🔥 Composite gradient map: palette indices 24-255 패치
-    # 대상: square_average, square_weighted, BIN_*, F_*, Q_* (Grade_ 히트맵 제외)
-    _norm_path = str(image_path).replace("\\", "/") if image_path else ""
-    _comp_fname = _norm_path.split("/")[-1] if _norm_path else ""
-    _is_composite_gradient = ("composite_map/" in _norm_path and
-                              not _comp_fname.startswith("Grade_") and
-                              _comp_fname.endswith(".png"))
-    if _is_composite_gradient and personalized and scheme:
+    gradient_mode = _resolve_composite_map_gradient_mode(image_path)
+    if gradient_mode and personalized and scheme:
         try:
-            patched = plte_composite_gradient_patch_memory(patched, scheme)
-            logger.info(f"[COMPOSITE_GRADIENT] ✅ gradient PLTE 패치 완료 (scheme={scheme})")
+            gradient_patcher = (
+                plte_measure_gradient_patch_memory
+                if gradient_mode == "measure"
+                else plte_composite_gradient_patch_memory
+            )
+            patched = gradient_patcher(patched, scheme)
+            logger.info(
+                "[COMPOSITE_GRADIENT] ✅ gradient PLTE 패치 완료 (scheme=%s, mode=%s)",
+                scheme,
+                gradient_mode,
+            )
         except Exception as exc:
-            logger.warning("⚠️ [COMPOSITE] gradient PLTE 패치 실패 (scheme=%s): %s", scheme, exc)
+            logger.warning(
+                "⚠️ [COMPOSITE] gradient PLTE 패치 실패 (scheme=%s, mode=%s): %s",
+                scheme,
+                gradient_mode,
+                exc,
+            )
 
     if border_normalize:
         patched = plte_normalize_border_memory(patched)
@@ -4726,13 +4745,17 @@ def _generate_thumbnail_sync(
                     import pyvips as _pv
                     if _is_palette_png and personalized and scheme:
                         # palette PNG + 개인색: PLTE 바이너리 패치 후 thumbnail_buffer
-                        from .personal_colors import plte_inplace_patch_memory, plte_composite_gradient_patch_memory
+                        from .personal_colors import (
+                            plte_inplace_patch_memory,
+                            plte_measure_gradient_patch_memory,
+                            plte_composite_gradient_patch_memory,
+                        )
                         _raw = bytearray(image_path.read_bytes())
                         _raw = plte_inplace_patch_memory(_raw, scheme) or _raw
-                        # 🔥 Composite gradient map: indices 24-255 패치 (Grade_ 히트맵 제외)
-                        _ip = str(image_path).replace("\\", "/")
-                        _fn = _ip.split("/")[-1] if _ip else ""
-                        if "composite_map/" in _ip and not _fn.startswith("Grade_") and _fn.endswith(".png"):
+                        gradient_mode = _resolve_composite_map_gradient_mode(image_path)
+                        if gradient_mode == "measure":
+                            _raw = plte_measure_gradient_patch_memory(bytearray(_raw), scheme) or _raw
+                        elif gradient_mode == "composite":
                             _raw = plte_composite_gradient_patch_memory(bytearray(_raw), scheme) or _raw
                         _vi = _pv.Image.thumbnail_buffer(bytes(_raw), size[0])
                     else:
@@ -4752,18 +4775,25 @@ def _generate_thumbnail_sync(
                 with Image.open(image_path) as img:
                     # palette PNG + 개인색이면 palette 교체 (PIL 경로 — pyvips 폴백)
                     if img.mode == 'P' and personalized and scheme:
-                        from .personal_colors import apply_personalized_palette, get_composite_gradient_for_scheme, load_color_legends
+                        from .personal_colors import (
+                            apply_personalized_palette,
+                            get_composite_gradient_for_scheme,
+                            get_ratio_gradient_for_scheme,
+                            load_color_legends,
+                        )
                         legends = load_color_legends()
                         scheme_data = legends.get(scheme) or legends.get('default')
                         if scheme_data:
                             patched = apply_personalized_palette(img, scheme_data)
                             if patched:
                                 img = patched
-                        # 🔥 Composite gradient map: PIL 경로에서도 gradient palette 패치
-                        _ip2 = str(image_path).replace("\\", "/")
-                        _fn2 = _ip2.split("/")[-1] if _ip2 else ""
-                        if img.mode == 'P' and "composite_map/" in _ip2 and not _fn2.startswith("Grade_") and _fn2.endswith(".png"):
-                            stops = get_composite_gradient_for_scheme(scheme)
+                        gradient_mode = _resolve_composite_map_gradient_mode(image_path)
+                        if img.mode == 'P' and gradient_mode:
+                            stops = (
+                                get_ratio_gradient_for_scheme(scheme)
+                                if gradient_mode == "measure"
+                                else get_composite_gradient_for_scheme(scheme)
+                            )
                             if len(stops) >= 11:
                                 pal = list(img.getpalette() or [])
                                 if len(pal) < 768:
@@ -8450,34 +8480,28 @@ async def classify_delete_batch(request: ClassifyDeleteBatchReq,
 
 # ---------------- Static / Pages ----------------
 
-# 🚀 JS 파일: .min.js 자동 서빙 + pre-gzip (GZipMiddleware 없이 압축)
+# 🚀 JS 파일: 원본 .js 메모리 캐시 + pre-gzip (GZipMiddleware 없이 압축)
 _JS_DIR = Path("js")
-_JS_MIN_CACHE: Dict[str, Tuple[bytes, bytes, str]] = {}  # filename -> (raw, gzipped, etag)
+_JS_CACHE: Dict[str, Tuple[bytes, bytes, str]] = {}  # filename -> (raw, gzipped, etag)
 
-def _preload_minified_js():
-    """서버 시작 시 minified JS를 메모리에 캐시 + gzip 압축."""
+def _preload_js_assets():
+    """서버 시작 시 원본 JS를 메모리에 캐시 + gzip 압축."""
     import gzip as _gzip
     for f in _JS_DIR.iterdir():
         if f.suffix == '.js' and '.min.' not in f.name:
-            min_path = f.with_suffix('').with_suffix('.min.js')
-            # 소스가 min보다 새로우면 소스 사용 (min이 stale인 경우 방지)
-            if min_path.exists() and min_path.stat().st_mtime >= f.stat().st_mtime:
-                target = min_path
-            else:
-                target = f
-            raw = target.read_bytes()
+            raw = f.read_bytes()
             gz = _gzip.compress(raw, compresslevel=6)
             etag = hashlib.md5(raw).hexdigest()[:12]
-            _JS_MIN_CACHE[f.name] = (raw, gz, etag)
-    return len(_JS_MIN_CACHE)
+            _JS_CACHE[f.name] = (raw, gz, etag)
+    return len(_JS_CACHE)
 
-_preload_minified_js()
+_preload_js_assets()
 
 @app.get("/js/{filename:path}")
 async def serve_js(filename: str, request: Request):
-    """Minified JS + pre-gzip 서빙 + ETag 304."""
-    if filename in _JS_MIN_CACHE:
-        raw, gz, etag = _JS_MIN_CACHE[filename]
+    """원본 JS + pre-gzip 서빙 + ETag 304."""
+    if filename in _JS_CACHE:
+        raw, gz, etag = _JS_CACHE[filename]
         if_none = request.headers.get("if-none-match", "").strip('"')
         if if_none == etag:
             return Response(status_code=304, headers={

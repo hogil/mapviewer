@@ -618,15 +618,17 @@ export class ColorSchemeEditor {
                 // gradient 색상 서버 복원
                 for (const tabType of ['measure', 'composite']) {
                     const origData = tabType === 'measure' ? originalMeasureData : originalCompositeData;
-                    const origBg = tabType === 'measure' ? originalMeasureBg : originalCompositeBg;
                     if (origData && Object.keys(origData).length > 0) {
                         const origColors = [];
                         for (let s = 0; s <= 100; s += 10) origColors.push(origData[`quantile${s}`] || '#000000');
                         const apiPath = tabType === 'measure' ? '/api/measure-colors' : '/api/composite-colors';
+                        const payload = { colors: origColors };
+                        const origBg = tabType === 'measure' ? originalMeasureBg : originalCompositeBg;
+                        if (origBg) payload.background = origBg;
                         fetch(`${apiPath}?LoginId=${encodeURIComponent(loginId)}`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ colors: origColors, background: origBg || '#CCCCCC' }),
+                            body: JSON.stringify(payload),
                         }).catch(() => {});
                     }
                 }
@@ -1265,14 +1267,12 @@ export class ColorSchemeEditor {
             if (!this.originalCompositeData) return;
             const currentData = this._getCurrentGradientData('composite');
             const gradChanged = JSON.stringify(currentData) !== JSON.stringify(this.originalCompositeData);
-            const bgChanged = this._getGradientBackground('composite') !== (this._originalCompositeBg || '#CCCCCC');
-            this.updateApplyButtonState(gradChanged || bgChanged);
+            this.updateApplyButtonState(gradChanged);
         } else if (this.activeTab === 'measure') {
             if (!this.originalMeasureData) return;
             const currentData = this._getCurrentGradientData('measure');
             const gradChanged = JSON.stringify(currentData) !== JSON.stringify(this.originalMeasureData);
-            const bgChanged = this._getGradientBackground('measure') !== (this._originalMeasureBg || '#CCCCCC');
-            this.updateApplyButtonState(gradChanged || bgChanged);
+            this.updateApplyButtonState(gradChanged);
         } else {
             if (!this.originalSchemeData) return;
             const currentData = this.getCurrentSchemeData();
@@ -1405,10 +1405,13 @@ export class ColorSchemeEditor {
             const apiPath = tabType === 'measure' ? '/api/measure-colors' : '/api/composite-colors';
             const loginId = this.viewer.getCurrentLoginId?.() || this.viewer.currentUser || '';
             try {
+                const payload = { colors: stops };
+                const background = this._getGradientBackground(tabType);
+                if (background) payload.background = background;
                 await fetch(`${apiPath}?LoginId=${encodeURIComponent(loginId)}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ colors: stops, background: this._getGradientBackground(tabType) }),
+                    body: JSON.stringify(payload),
                 });
             } catch (_) { /* 프리뷰 실패는 무시 */ }
 
@@ -1801,10 +1804,7 @@ export class ColorSchemeEditor {
                 }
                 this[originalKey] = JSON.parse(JSON.stringify(gradData));
                 this._applyGradientToRows(tabType, gradData);
-                // 배경색 로드
-                const bg = normalizeHex(data.background) || '#CCCCCC';
-                this[bgOrigKey] = bg;
-                this._setGradientBackground(tabType, bg);
+                this[bgOrigKey] = null;
                 return;
             }
         } catch (e) {
@@ -1815,8 +1815,7 @@ export class ColorSchemeEditor {
         const gradData = (legends[schemeName] || legends['default'] || {}).ratio || {};
         this[originalKey] = JSON.parse(JSON.stringify(gradData));
         this._applyGradientToRows(tabType, gradData);
-        this[bgOrigKey] = '#CCCCCC';
-        this._setGradientBackground(tabType, '#CCCCCC');
+        this[bgOrigKey] = null;
     }
 
     /** Backward compat alias */
@@ -1920,94 +1919,13 @@ export class ColorSchemeEditor {
 
             rows.push(row);
         }
-        // 🔥 배경색 행 추가
-        const bgTr = document.createElement('tr');
-        bgTr.dataset.key = 'background';
-        bgTr.style.borderTop = '2px solid #555';
-
-        const bgLabelTd = document.createElement('td');
-        bgLabelTd.className = 'color-editor-label';
-        bgLabelTd.textContent = '배경';
-        bgLabelTd.style.fontWeight = 'bold';
-
-        const bgHexTd = document.createElement('td');
-        const bgHexContainer = document.createElement('div');
-        bgHexContainer.className = 'color-editor-hex';
-        const bgHexInput = document.createElement('input');
-        bgHexInput.type = 'text';
-        bgHexInput.maxLength = 7;
-        bgHexInput.placeholder = '#RRGGBB';
-        const bgHexCellId = `${tabType}-bg-hex-${this.cellIdCounter++}`;
-        bgHexInput.dataset.cellId = bgHexCellId;
-        bgHexInput.dataset.cellType = 'hex';
-        bgHexInput.dataset.rowIndex = String(rows.length);
-        bgHexInput.dataset.tabType = tabType;
-        bgHexContainer.appendChild(bgHexInput);
-        bgHexTd.appendChild(bgHexContainer);
-
-        const bgRgbTd = document.createElement('td');
-        const bgRgbContainer = document.createElement('div');
-        bgRgbContainer.className = 'color-editor-rgb';
-        const bgRgbInputs = ['R', 'G', 'B'].map((ch, idx) => {
-            const input = document.createElement('input');
-            input.type = 'number';
-            input.min = '0';
-            input.max = '255';
-            input.placeholder = ch;
-            const rgbCellId = `${tabType}-bg-rgb-${this.cellIdCounter++}`;
-            input.dataset.cellId = rgbCellId;
-            input.dataset.cellType = 'rgb';
-            input.dataset.channelIndex = String(idx);
-            input.dataset.rowIndex = String(rows.length);
-            input.dataset.tabType = tabType;
-            bgRgbContainer.appendChild(input);
-            return input;
-        });
-        bgRgbTd.appendChild(bgRgbContainer);
-
-        const bgPickerTd = document.createElement('td');
-        bgPickerTd.className = 'color-editor-picker';
-        const bgColorPreview = document.createElement('div');
-        bgColorPreview.className = 'color-editor-preview';
-        bgColorPreview.style.cssText = 'width:48px;height:24px;border:1px solid #444;border-radius:4px;cursor:pointer;';
-        const bgColorInput = document.createElement('input');
-        bgColorInput.type = 'color';
-        bgColorInput.value = '#CCCCCC';
-        bgColorInput.style.cssText = 'position:absolute;opacity:0;width:48px;height:24px;cursor:pointer;pointer-events:auto;top:0;left:0;';
-        const bgPickerWrapper = document.createElement('div');
-        bgPickerWrapper.style.cssText = 'position:relative;display:inline-block;';
-        bgPickerWrapper.appendChild(bgColorPreview);
-        bgPickerWrapper.appendChild(bgColorInput);
-        bgColorPreview.addEventListener('click', (e) => { e.stopPropagation(); bgColorInput.click(); });
-        bgPickerTd.appendChild(bgPickerWrapper);
-
-        bgTr.appendChild(bgLabelTd);
-        bgTr.appendChild(bgHexTd);
-        bgTr.appendChild(bgRgbTd);
-        bgTr.appendChild(bgPickerTd);
-        tbody.appendChild(bgTr);
-
-        const bgRow = { key: 'background', hexInput: bgHexInput, rgbInputs: bgRgbInputs, colorInput: bgColorInput, colorPreview: bgColorPreview };
-        bgHexInput.addEventListener('change', () => { this._syncGradientFromHex(tabType, bgRow); this.checkForChanges(); this.updatePreviewRealtime(); });
-        bgHexInput.addEventListener('input', () => { this._clearGradientError(tabType); this.checkForChanges(); this.updatePreviewRealtime(); });
-        bgHexInput.addEventListener('mousedown', (e) => this.handleCellMouseDown(e, bgHexCellId, 'hex'));
-        bgHexInput.addEventListener('keydown', (e) => this.handleInputKeyDown(e, bgHexCellId, 'hex'), true);
-        bgRgbInputs.forEach((input) => {
-            input.addEventListener('change', () => { this._syncGradientFromRgb(tabType, bgRow); this.checkForChanges(); this.updatePreviewRealtime(); });
-            input.addEventListener('input', () => { this._clearGradientError(tabType); this.checkForChanges(); this.updatePreviewRealtime(); });
-            input.addEventListener('mousedown', (e) => this.handleCellMouseDown(e, input.dataset.cellId, 'rgb'));
-            input.addEventListener('keydown', (e) => this.handleInputKeyDown(e, input.dataset.cellId, 'rgb'), true);
-        });
-        bgColorInput.addEventListener('input', () => { this._syncGradientFromPicker(tabType, bgRow); this.checkForChanges(); this.updatePreviewRealtime(); });
-        bgColorInput.addEventListener('change', () => { this.checkForChanges(); this.updatePreviewRealtime(); });
-
         if (tabType === 'measure') {
             this.measureRows = rows;
-            this.measureBackgroundRow = bgRow;
+            this.measureBackgroundRow = null;
         } else {
             this.compositeRows = rows;
             this.ratioRows = rows; // backward compat
-            this.compositeBackgroundRow = bgRow;
+            this.compositeBackgroundRow = null;
         }
     }
 
@@ -2064,8 +1982,8 @@ export class ColorSchemeEditor {
 
     _getGradientBackground(tabType) {
         const bgRow = tabType === 'measure' ? this.measureBackgroundRow : this.compositeBackgroundRow;
-        if (!bgRow) return '#CCCCCC';
-        return normalizeHex(bgRow.hexInput.value) || '#CCCCCC';
+        if (!bgRow) return null;
+        return normalizeHex(bgRow.hexInput.value) || null;
     }
 
     _getGradientErrorEl(tabType) {
@@ -2143,10 +2061,13 @@ export class ColorSchemeEditor {
         try {
             const apiPath = tabType === 'measure' ? '/api/measure-colors' : '/api/composite-colors';
             const loginId = this.viewer?.getCurrentLoginId?.() || this.viewer?.currentUser || '';
+            const payload = { colors: colorsArray };
+            const background = this._getGradientBackground(tabType);
+            if (background) payload.background = background;
             const response = await fetch(`${apiPath}?LoginId=${encodeURIComponent(loginId)}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ colors: colorsArray, background: this._getGradientBackground(tabType) }),
+                body: JSON.stringify(payload),
             });
 
             if (!response.ok) {
@@ -2159,7 +2080,7 @@ export class ColorSchemeEditor {
                 const originalKey = tabType === 'measure' ? 'originalMeasureData' : 'originalCompositeData';
                 const bgOrigKey = tabType === 'measure' ? '_originalMeasureBg' : '_originalCompositeBg';
                 this[originalKey] = JSON.parse(JSON.stringify(gradData));
-                this[bgOrigKey] = this._getGradientBackground(tabType);
+                this[bgOrigKey] = null;
                 this.updateApplyButtonState(false);
 
                 if (this.viewer) {
@@ -2229,7 +2150,6 @@ export class ColorSchemeEditor {
             defaults[`quantile${step}`] = `#FF${hex}${hex}`;
         }
         this._applyGradientToRows(tabType, defaults);
-        this._setGradientBackground(tabType, '#CCCCCC');
         this.updateApplyButtonState(true);
         this._clearGradientError(tabType);
     }
@@ -2309,8 +2229,6 @@ export class ColorSchemeEditor {
                 });
             }
             this._applyGradientToRows(tabType, gradData);
-            const bg = normalizeHex(data.background) || '#CCCCCC';
-            this._setGradientBackground(tabType, bg);
             this.updateApplyButtonState(true);
             this._clearGradientError(tabType);
             this._updateGradientPreview(tabType);

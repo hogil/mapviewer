@@ -6247,13 +6247,24 @@ class WaferMapViewer {
             parts.push(`personalized=true`);
             parts.push(`scheme=${encodeURIComponent(scheme)}`);
 
-            // cacheBuster: 항상 lastModified에서 최신값 사용 (구버전 고정 방지)
-            if (this.colorLegends?.[scheme]?.lastModified) {
-                this._personalizedColorCacheBuster = this.colorLegends[scheme].lastModified.replace(/\D/g, '');
-            }
-            if (!this._personalizedColorCacheBuster) {
+            // cacheBuster: colorLegends.lastModified와 runtime 강제 갱신값 중 더 최신 값을 유지
+            const legendCacheBuster = this.colorLegends?.[scheme]?.lastModified
+                ? this.colorLegends[scheme].lastModified.replace(/\D/g, '')
+                : '';
+            const runtimeCacheBuster = String(this._personalizedColorCacheBuster || '');
+            const legendCacheNum = Number.parseInt(legendCacheBuster, 10);
+            const runtimeCacheNum = Number.parseInt(runtimeCacheBuster, 10);
+
+            if (Number.isFinite(legendCacheNum) && Number.isFinite(runtimeCacheNum)) {
+                this._personalizedColorCacheBuster = String(
+                    Math.max(legendCacheNum, runtimeCacheNum)
+                );
+            } else if (Number.isFinite(legendCacheNum)) {
+                this._personalizedColorCacheBuster = legendCacheBuster;
+            } else if (!runtimeCacheBuster) {
                 this._personalizedColorCacheBuster = Date.now().toString();
             }
+
             parts.push(`_t=${this._personalizedColorCacheBuster}`);
         }
 
