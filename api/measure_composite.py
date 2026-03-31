@@ -840,7 +840,8 @@ def create_measure_composite(
     sum_palette = _build_sum_map_palette(_build_palette_list(source_pal), gradient_scheme="default")
     result_img.putpalette(sum_palette[:768])
     out_file.parent.mkdir(parents=True, exist_ok=True)
-    result_img.save(str(out_file), format='PNG', optimize=False, compress_level=1)
+    # Measure 결과는 생성 직후 바로 보여주는 파일이라 압축보다 저장 지연이 더 크다.
+    result_img.save(str(out_file), format='PNG', optimize=False, compress_level=0)
     actual = out_file
 
     result_rel = actual.relative_to(IMAGES_ROOT).as_posix()
@@ -993,7 +994,7 @@ def recolor_measure_composite(
     result_img.putpalette(sum_palette[:768])
     target = target.with_suffix(".png")
     target.parent.mkdir(parents=True, exist_ok=True)
-    result_img.save(str(target), format='PNG', optimize=False, compress_level=1)
+    result_img.save(str(target), format='PNG', optimize=False, compress_level=0)
 
     # filter 적용 후 range counts 재계산
     # BIN lookup 구성 (O(1) access)

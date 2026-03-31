@@ -435,7 +435,7 @@ COMPOSITE_BG_TASKS: Dict[str, asyncio.Task] = {}
 COMPOSITE_CONCURRENCY_LIMIT = 2
 COMPOSITE_SEMAPHORE: Optional[asyncio.Semaphore] = None
 COMPOSITE_EXECUTOR = ThreadPoolExecutor(max_workers=4)  # composite 전용 (IO_POOL 경합 방지)
-_THUMBNAIL_EXECUTOR_WORKERS = max(4, min(THUMBNAIL_SEM_SIZE, (os.cpu_count() or 4) * 2))
+_THUMBNAIL_EXECUTOR_WORKERS = max(1, config.THUMBNAIL_EXECUTOR_WORKERS)
 THUMBNAIL_EXECUTOR = ThreadPoolExecutor(max_workers=_THUMBNAIL_EXECUTOR_WORKERS)
 
 USER_ACTIVITY_FLAG = False
@@ -1740,6 +1740,28 @@ async def _lifespan_background_init():
             pass
     asyncio.ensure_future(_preload_browse())
 
+    # 0.7) Composite/Measure 모듈 워밍업 — 첫 요청 lazy import/ProcessPool 비용을 사용자 클릭에서 제거
+    async def _warm_composite_modules():
+        await asyncio.sleep(1.5)
+
+        def _warm():
+            from . import composite_map as _composite_map  # noqa: F401
+            from . import measure_composite as _measure_composite  # noqa: F401
+
+            # attribute touch로 lazy globals 초기화를 보장
+            _ = _composite_map.create_composite_heatmaps
+            _ = _composite_map.create_palette_overlay
+            _ = _measure_composite.create_measure_data_only
+            _ = _measure_composite.create_measure_composite
+
+        try:
+            await loop.run_in_executor(COMPOSITE_EXECUTOR, _warm)
+            bootlog.info("✅ [STARTUP] composite/measure 모듈 워밍업 완료")
+        except Exception as exc:
+            bootlog.warning(f"⚠️ [STARTUP] composite/measure 모듈 워밍업 실패: {exc}")
+
+    asyncio.ensure_future(_warm_composite_modules())
+
     await asyncio.sleep(0)  # yield to event loop
 
     # 1) __pycache__ 정리 — 생략 (매 시작마다 불필요, 배포 시점에 수행)
@@ -2322,7 +2344,10 @@ async def api_config():
         "PYRAMID_LEVELS": config.PYRAMID_LEVELS,
         "PYRAMID_ZOOM_THRESHOLDS": config.PYRAMID_ZOOM_THRESHOLDS,
         "THUMB_BATCH_SIZE": config.THUMB_PREFETCH_BATCH,
-        "THUMB_MAX_CONCURRENCY": config.THUMB_CLIENT_MAX_CONCURRENCY
+        "THUMB_MAX_CONCURRENCY": config.THUMB_CLIENT_MAX_CONCURRENCY,
+        "GRID_MAX_CONCURRENCY": config.GRID_MAX_CONCURRENCY,
+        "MEASURE_PREFETCH_CONCURRENCY": config.MEASURE_PREFETCH_CONCURRENCY,
+        "THUMBNAIL_EXECUTOR_WORKERS": _THUMBNAIL_EXECUTOR_WORKERS,
     }
 
 @app.get("/api/index-status")
@@ -4698,6 +4723,53 @@ def _save_with_turbojpeg(vips_image, thumbnail_path: str, quality: int) -> bool:
         # TurboJPEG 실패 시 pyvips 폴백
         return False
 
+
+def _jpegsave_fast_to_file(vips_image, thumbnail_path: Path | str, quality: int) -> None:
+    vips_image.jpegsave(
+        str(thumbnail_path),
+        Q=quality,
+        strip=True,
+        optimize_coding=False,
+        subsample_mode=1,
+        interlace=False,
+        trellis_quant=False,
+        quant_table=0,
+        background=255,
+    )
+
+
+def _jpegsave_fast_buffer(vips_image, quality: int) -> bytes:
+    return vips_image.jpegsave_buffer(
+        Q=quality,
+        strip=True,
+        optimize_coding=False,
+        subsample_mode=1,
+        interlace=False,
+        trellis_quant=False,
+        quant_table=0,
+        background=255,
+    )
+
+
+def _webpsave_fast_to_file(vips_image, thumbnail_path: Path | str, quality: int) -> None:
+    vips_image.webpsave(
+        str(thumbnail_path),
+        Q=quality,
+        lossless=False,
+        effort=0,
+        strip=True,
+        smart_subsample=False,
+    )
+
+
+def _webpsave_fast_buffer(vips_image, quality: int) -> bytes:
+    return vips_image.webpsave_buffer(
+        Q=quality,
+        effort=0,
+        strip=True,
+        smart_subsample=False,
+    )
+
 def _generate_thumbnail_sync(
     image_path: Path,
     thumbnail_path: Path,
@@ -4762,9 +4834,9 @@ def _generate_thumbnail_sync(
                         # palette(개인색 없음) + non-palette(RGBA/RGB/JPEG 등) 모두 pyvips
                         _vi = _pv.Image.thumbnail(str(image_path), size[0])
                     if fmt == "WEBP":
-                        _vi.webpsave(str(thumbnail_path), Q=THUMBNAIL_QUALITY)
+                        _webpsave_fast_to_file(_vi, thumbnail_path, THUMBNAIL_QUALITY)
                     elif fmt == "JPEG":
-                        _vi.jpegsave(str(thumbnail_path), Q=THUMBNAIL_QUALITY)
+                        _jpegsave_fast_to_file(_vi, thumbnail_path, THUMBNAIL_QUALITY)
                     else:
                         _vi.pngsave(str(thumbnail_path))
                     return
@@ -4822,7 +4894,7 @@ def _generate_thumbnail_sync(
                     if fmt == "WEBP":
                         img.save(thumbnail_path, "WEBP", quality=THUMBNAIL_QUALITY, method=1)
                     elif fmt == "JPEG":
-                        img.save(thumbnail_path, "JPEG", quality=THUMBNAIL_QUALITY, optimize=True)
+                        img.save(thumbnail_path, "JPEG", quality=THUMBNAIL_QUALITY, optimize=False)
                     else:
                         img.save(thumbnail_path, "PNG", compress_level=1)
                 return
@@ -4871,11 +4943,9 @@ def _generate_thumbnail_sync(
                                         try:
                                             _cv = pyvips.Image.new_from_buffer(bytes(overlay), "")
                                             if fmt == "WEBP":
-                                                overlay = bytearray(_cv.webpsave_buffer(
-                                                    Q=THUMBNAIL_QUALITY, effort=0, strip=True))
+                                                overlay = bytearray(_webpsave_fast_buffer(_cv, THUMBNAIL_QUALITY))
                                             elif fmt == "JPEG":
-                                                overlay = bytearray(_cv.jpegsave_buffer(
-                                                    Q=THUMBNAIL_QUALITY, strip=True))
+                                                overlay = bytearray(_jpegsave_fast_buffer(_cv, THUMBNAIL_QUALITY))
                                         except Exception:
                                             pass
                                     with open(thumbnail_path, 'wb') as tf:
@@ -4956,14 +5026,7 @@ def _generate_thumbnail_sync(
                         interlace=False
                     )
                 elif fmt == "WEBP":
-                    vips_obj.webpsave(
-                        str(thumbnail_path),
-                        Q=THUMBNAIL_QUALITY,
-                        lossless=False,
-                        effort=1,
-                        strip=True,
-                        smart_subsample=False
-                    )
+                    _webpsave_fast_to_file(vips_obj, thumbnail_path, THUMBNAIL_QUALITY)
                 else:
                     # 최적화 2: JPEG 저장 - TurboJPEG 우선, pyvips 폴백
                     if fmt == "JPEG":
@@ -4975,34 +5038,14 @@ def _generate_thumbnail_sync(
                                 raise RuntimeError("TurboJPEG 저장 실패 (force_jpeg_encoder='turbojpeg')")
                         elif force_jpeg_encoder == 'pyvips':
                             # pyvips 강제 사용
-                            vips_obj.jpegsave(
-                                str(thumbnail_path),
-                                Q=THUMBNAIL_QUALITY,       # Q=100 (최고 품질)
-                                strip=True,                # 메타데이터 제거
-                                optimize_coding=False,     # 속도 우선
-                                subsample_mode=1,          # 4:2:0 (가장 빠름)
-                                interlace=False,           # 인터레이스 비활성화
-                                trellis_quant=False,      # 트렐리스 양자화 비활성화
-                                quant_table=0,             # 기본 양자화 테이블
-                                background=255             # 배경색 설정
-                            )
+                            _jpegsave_fast_to_file(vips_obj, thumbnail_path, THUMBNAIL_QUALITY)
                         else:
                             # 기본 동작: TurboJPEG 시도 → 실패 시 pyvips 폴백
                             saved_with_turbo = _save_with_turbojpeg(vips_obj, str(thumbnail_path), THUMBNAIL_QUALITY)
                             
                             if not saved_with_turbo:
                                 # pyvips 폴백
-                                vips_obj.jpegsave(
-                                    str(thumbnail_path),
-                                    Q=THUMBNAIL_QUALITY,       # Q=100 (최고 품질)
-                                    strip=True,                # 메타데이터 제거
-                                    optimize_coding=False,     # 속도 우선
-                                    subsample_mode=1,          # 4:2:0 (가장 빠름)
-                                    interlace=False,           # 인터레이스 비활성화
-                                    trellis_quant=False,       # 트렐리스 양자화 비활성화
-                                    quant_table=0,             # 기본 양자화 테이블
-                                    background=255             # 배경색 설정
-                                )
+                                _jpegsave_fast_to_file(vips_obj, thumbnail_path, THUMBNAIL_QUALITY)
                     else:
                         vips_obj.write_to_file(
                             str(thumbnail_path),
@@ -5066,11 +5109,9 @@ def _generate_thumbnail_sync(
                                     try:
                                         _cv = pyvips.Image.new_from_buffer(bytes(overlay), "")
                                         if fmt == "WEBP":
-                                            overlay = bytearray(_cv.webpsave_buffer(
-                                                Q=THUMBNAIL_QUALITY, effort=0, strip=True))
+                                            overlay = bytearray(_webpsave_fast_buffer(_cv, THUMBNAIL_QUALITY))
                                         elif fmt == "JPEG":
-                                            overlay = bytearray(_cv.jpegsave_buffer(
-                                                Q=THUMBNAIL_QUALITY, strip=True))
+                                            overlay = bytearray(_jpegsave_fast_buffer(_cv, THUMBNAIL_QUALITY))
                                     except Exception:
                                         pass  # PNG 그대로 저장
                                 with open(thumbnail_path, 'wb') as tf:
@@ -5121,12 +5162,15 @@ def _generate_thumbnail_sync(
                 resized = img.copy()
                 resized.thumbnail((target_w, target_h), Image.Resampling.BICUBIC)
 
-            save_kwargs: Dict[str, Any] = {"optimize": True}
+            save_kwargs: Dict[str, Any] = {}
             if fmt == "PNG":
                 save_kwargs["compress_level"] = config.PNG_COMPRESSION_LEVEL
+            elif fmt == "JPEG":
+                save_kwargs["quality"] = THUMBNAIL_QUALITY
+                save_kwargs["optimize"] = False
             else:
                 save_kwargs["quality"] = THUMBNAIL_QUALITY
-                save_kwargs["method"] = 6
+                save_kwargs["method"] = 1
 
             resized.save(thumbnail_path, fmt, **save_kwargs)
     except Exception as e:
@@ -6767,11 +6811,9 @@ def _generate_bin_map_thumb(image_path: Path, size: int, scheme: Optional[str] =
 
     rel_path = Path(_get_relative_path_from_image(str(image_path)))
     positions_path = _resolve_positions_path(rel_path)
-    if not positions_path.exists():
+    positions_data = _load_positions_cached(positions_path)
+    if positions_data is None:
         return None
-
-    with open(positions_path, "r", encoding="utf-8") as f:
-        positions_data = json.load(f)
     chips = positions_data.get("chips", [])
     if not isinstance(chips, list) or not chips:
         return None
@@ -6847,10 +6889,15 @@ def _generate_bin_map_thumb(image_path: Path, size: int, scheme: Optional[str] =
     if filled == 0:
         return None
 
-    pil_img = Image.fromarray(img_arr, "RGB")
-    buf = io.BytesIO()
-    pil_img.save(buf, format="WEBP", quality=85)
-    return buf.getvalue()
+    try:
+        import pyvips as _pv
+        vout = _pv.Image.new_from_memory(img_arr.data, out_w, out_h, 3, 'uchar')
+        return _webpsave_fast_buffer(vout, 85)
+    except Exception:
+        pil_img = Image.fromarray(img_arr, "RGB")
+        buf = io.BytesIO()
+        pil_img.save(buf, format="WEBP", quality=85, method=1)
+        return buf.getvalue()
 
 
 @app.get("/api/bin-map-thumb")
@@ -6873,7 +6920,7 @@ async def get_bin_map_thumb(
         )
 
     result = await asyncio.get_event_loop().run_in_executor(
-        IO_POOL, _generate_bin_map_thumb, image_path, size, scheme,
+        THUMBNAIL_EXECUTOR, _generate_bin_map_thumb, image_path, size, scheme,
     )
     if result is None:
         raise HTTPException(status_code=404, detail="BIN map generation failed")
@@ -7056,7 +7103,7 @@ async def get_measure_thumb(
                         headers={"Cache-Control": "no-cache"})
 
     result = await asyncio.get_event_loop().run_in_executor(
-        IO_POOL, _generate_measure_thumb, image_path, size, field, key, scheme, gradient_filter,
+        THUMBNAIL_EXECUTOR, _generate_measure_thumb, image_path, size, field, key, scheme, gradient_filter,
     )
     if result is None:
         # 키가 없는 이미지: 빈 회색 placeholder 반환 (404 대신)
@@ -7253,7 +7300,7 @@ async def get_measure_thumb_batch(request: Request, body: dict = Body(...)):
 
     if uncached_items:
         batch_result = await asyncio.get_event_loop().run_in_executor(
-            IO_POOL, _generate_measure_thumbs_batch,
+            THUMBNAIL_EXECUTOR, _generate_measure_thumbs_batch,
             image_path, size, uncached_items, scheme, gradient_filter,
         )
         # 캐시 저장 + base64 변환

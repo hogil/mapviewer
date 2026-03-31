@@ -87,6 +87,12 @@ PYRAMID_LEVELS = [float(x) for x in os.getenv("PYRAMID_LEVELS", "0.2,0.5,0.7,1.0
 PYRAMID_ZOOM_THRESHOLDS = [float(x) for x in os.getenv("PYRAMID_ZOOM_THRESHOLDS", "0.25,0.5,0.75").split(",")]
 THUMB_PREFETCH_BATCH = int(os.getenv("THUMB_PREFETCH_BATCH", "84"))
 THUMB_CLIENT_MAX_CONCURRENCY = int(os.getenv("THUMB_CLIENT_MAX_CONCURRENCY", "42"))
+GRID_MAX_CONCURRENCY = int(os.getenv("GRID_MAX_CONCURRENCY", "48"))
+MEASURE_PREFETCH_CONCURRENCY = int(os.getenv("MEASURE_PREFETCH_CONCURRENCY", "8"))
+_default_thumb_exec_workers = max(8, min(THUMBNAIL_SEM, CPU_COUNT * 4))
+THUMBNAIL_EXECUTOR_WORKERS = int(
+    os.getenv("THUMBNAIL_EXECUTOR_WORKERS", str(_default_thumb_exec_workers))
+)
 PYRAMID_FORMAT = os.getenv("PYRAMID_FORMAT", "WEBP").upper()
 PYRAMID_Q = int(os.getenv("PYRAMID_Q", "100"))
 PYRAMID_PNG_COMPRESSION = int(os.getenv("PYRAMID_PNG_COMPRESSION", "3"))

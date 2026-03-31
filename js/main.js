@@ -81,7 +81,10 @@ let SERVER_CONFIG = {
     PYRAMID_LEVELS: [0.2, 0.5, 0.7, 1.0],  // 기본값
     PYRAMID_ZOOM_THRESHOLDS: [0.25, 0.5, 0.75],  // 기본값
     THUMB_BATCH_SIZE: 32,
-    THUMB_MAX_CONCURRENCY: 20  // 🔥 12 → 20으로 증가 (성능 개선)
+    THUMB_MAX_CONCURRENCY: 20,
+    GRID_MAX_CONCURRENCY: 48,
+    MEASURE_PREFETCH_CONCURRENCY: 8,
+    THUMBNAIL_EXECUTOR_WORKERS: 16,
 };
 
 /**
@@ -915,7 +918,8 @@ class WaferMapViewer {
         this.gridQueuedImages = new Set();
         this.gridPendingIntersecting = new Set();
         this.gridLoadInFlight = 0;
-        this.gridMaxConcurrentLoads = 50; // HTTP/2 멀티플렉싱 활용, cold start burst 처리
+        this.gridMaxConcurrentLoads = SERVER_CONFIG.GRID_MAX_CONCURRENCY ?? 48;
+        this.measurePrefetchConcurrency = SERVER_CONFIG.MEASURE_PREFETCH_CONCURRENCY ?? 8;
         this.gridLoadingPaused = false;
         this.gridIntersectionObserver = null;
         this._gridAbortControllers = null; // 미사용 (img.src 직접 할당 방식)
@@ -6619,6 +6623,17 @@ class WaferMapViewer {
                     this.thumbnailManager.setMaxConcurrentLoads(SERVER_CONFIG.THUMB_MAX_CONCURRENCY);
                 }
             }
+            if (typeof config.GRID_MAX_CONCURRENCY === "number") {
+                SERVER_CONFIG.GRID_MAX_CONCURRENCY = Math.max(1, Math.floor(config.GRID_MAX_CONCURRENCY));
+                this.gridMaxConcurrentLoads = SERVER_CONFIG.GRID_MAX_CONCURRENCY;
+            }
+            if (typeof config.MEASURE_PREFETCH_CONCURRENCY === "number") {
+                SERVER_CONFIG.MEASURE_PREFETCH_CONCURRENCY = Math.max(1, Math.floor(config.MEASURE_PREFETCH_CONCURRENCY));
+                this.measurePrefetchConcurrency = SERVER_CONFIG.MEASURE_PREFETCH_CONCURRENCY;
+            }
+            if (typeof config.THUMBNAIL_EXECUTOR_WORKERS === "number") {
+                SERVER_CONFIG.THUMBNAIL_EXECUTOR_WORKERS = Math.max(1, Math.floor(config.THUMBNAIL_EXECUTOR_WORKERS));
+            }
 
             console.log('[CONFIG] 서버 설정 로드 완료:', SERVER_CONFIG);
         } catch (error) {
@@ -8614,6 +8629,46 @@ class WaferMapViewer {
 
 
     /**
+     * Composite/Measure 백그라운드 task를 짧게 시작하고 점진적으로 backoff하며 폴링한다.
+     * 1초 고정 대기는 1초 이하 작업의 체감 지연을 그대로 만든다.
+     */
+    async _waitForCompositeTask(taskId, {
+        failureMessage = '작업 상태 조회 실패',
+        onStatus = null,
+        initialDelay = 120,
+        maxDelay = 700,
+        backoff = 1.45,
+    } = {}) {
+        let delay = initialDelay;
+
+        while (true) {
+            await new Promise(resolve => setTimeout(resolve, delay));
+
+            const statusRes = await fetch(`/api/composite-map/status/${taskId}`, {
+                cache: 'no-store'
+            });
+            if (!statusRes.ok) {
+                throw new Error(failureMessage);
+            }
+
+            const status = await statusRes.json();
+            if (typeof onStatus === 'function') {
+                await onStatus(status);
+            }
+
+            if (status.status === 'completed') {
+                return status.result;
+            }
+            if (status.status === 'failed') {
+                throw new Error(status.error || failureMessage);
+            }
+
+            delay = Math.min(maxDelay, Math.round(delay * backoff));
+        }
+    }
+
+
+    /**
      * Composite Map 생성 핸들러 (Grid 교체 방식)
      */
     async handleCompositeCreate() {
@@ -8677,20 +8732,9 @@ class WaferMapViewer {
             const startResponse = await res.json();
             const taskId = startResponse.task_id;
 
-            let result = null;
-            while (true) {
-                await new Promise(resolve => setTimeout(resolve, 1000)); // 1초 대기
-
-                const statusRes = await fetch(`/api/composite-map/status/${taskId}`, {
-                    cache: 'no-store'
-                });
-
-                if (!statusRes.ok) {
-                    throw new Error('작업 상태 조회 실패');
-                }
-
-                const status = await statusRes.json();
-
+            const result = await this._waitForCompositeTask(taskId, {
+                failureMessage: '작업 상태 조회 실패',
+                onStatus: async (status) => {
                 const statusText = status.status === 'processing' ? '처리 중...' :
                                  status.status === 'queued' ? '대기 중...' :
                                  status.status === 'completed' ? '완료!' : '실패';
@@ -8706,14 +8750,8 @@ class WaferMapViewer {
                     this.setCompositePageTask(targetPageId, { task: updatedTask, result: null });
                 }
                 this.syncCompositeInlineStatus(targetPageId);
-
-                if (status.status === 'completed') {
-                    result = status.result;
-                    break;
-                } else if (status.status === 'failed') {
-                    throw new Error(status.error || 'Composite Map 생성 실패');
                 }
-            }
+            });
 
             // 결과 반영: 항상 해당 탭으로 전환 후 렌더링
             if (result && targetPageId) {
@@ -9409,61 +9447,55 @@ class WaferMapViewer {
 
             // ── 3) 모든 태스크 완료 대기 (병렬 폴링) ──
             const pollTask = async ({ taskId, item, isGradeComposite }) => {
-                while (true) {
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                    const statusRes = await fetch(`/api/composite-map/status/${taskId}`, { cache: 'no-store' });
-                    if (!statusRes.ok) throw new Error(`작업 상태 조회 실패: ${item.label}`);
-                    const status = await statusRes.json();
+                const result = await this._waitForCompositeTask(taskId, {
+                    failureMessage: `작업 상태 조회 실패: ${item.label}`,
+                    onStatus: async (status) => {
+                        if (status.status === 'completed') return;
 
-                    if (status.status === 'completed') {
-                        const result = status.result;
-                        // Grade Composite: 결과를 개별 이미지로 풀어서 배열 반환
-                        // (Grade 0~7 heatmap + sum_maps average 2개 = 10개)
-                        if (isGradeComposite && result) {
-                            const expanded = [];
-                            // 1) sum_maps (average maps) — 먼저 표시
-                            const sumMaps = result.sum_maps || [];
-                            for (const sm of sumMaps) {
-                                expanded.push({
-                                    ...result,
-                                    image_path: sm.path,
-                                    display_name: sm.display_name || sm.filename?.replace(/\.[^.]+$/, '') || 'Average',
-                                    measure_mode: 'composite',
-                                    is_grade_composite: true,
-                                    range_counts: [],
-                                    chip_count: 0,
-                                });
-                            }
-                            // 2) Grade heatmaps (Grade 0~7)
-                            const heatmaps = result.heatmaps || [];
-                            for (const hm of heatmaps) {
-                                expanded.push({
-                                    ...result,
-                                    image_path: hm.path,
-                                    display_name: `Grade ${hm.index}`,
-                                    measure_mode: 'composite',
-                                    is_grade_composite: true,
-                                    range_counts: [],
-                                    chip_count: hm.pixel_count || 0,
-                                });
-                            }
-                            return expanded;
+                        const updatedTask = {
+                            status: 'processing',
+                            message: `Composite 처리 중... (${items.length}개 항목)`,
+                            selectedCount: selected.length,
+                            startedAt: initialTask.startedAt,
+                        };
+                        if (targetPageId) {
+                            this.setCompositePageTask(targetPageId, { task: updatedTask, result: null });
                         }
-                        return [result];  // Measure Composite는 단일 결과를 배열로 래핑
+                        this.syncCompositeInlineStatus(targetPageId);
                     }
-                    if (status.status === 'failed') throw new Error(status.error || `${item.label} 생성 실패`);
+                });
 
-                    const updatedTask = {
-                        status: 'processing',
-                        message: `Composite 처리 중... (${items.length}개 항목)`,
-                        selectedCount: selected.length,
-                        startedAt: initialTask.startedAt,
-                    };
-                    if (targetPageId) {
-                        this.setCompositePageTask(targetPageId, { task: updatedTask, result: null });
+                // Grade Composite: 결과를 개별 이미지로 풀어서 배열 반환
+                // (Grade 0~7 heatmap + sum_maps average 2개 = 10개)
+                if (isGradeComposite && result) {
+                    const expanded = [];
+                    const sumMaps = result.sum_maps || [];
+                    for (const sm of sumMaps) {
+                        expanded.push({
+                            ...result,
+                            image_path: sm.path,
+                            display_name: sm.display_name || sm.filename?.replace(/\.[^.]+$/, '') || 'Average',
+                            measure_mode: 'composite',
+                            is_grade_composite: true,
+                            range_counts: [],
+                            chip_count: 0,
+                        });
                     }
-                    this.syncCompositeInlineStatus(targetPageId);
+                    const heatmaps = result.heatmaps || [];
+                    for (const hm of heatmaps) {
+                        expanded.push({
+                            ...result,
+                            image_path: hm.path,
+                            display_name: `Grade ${hm.index}`,
+                            measure_mode: 'composite',
+                            is_grade_composite: true,
+                            range_counts: [],
+                            chip_count: hm.pixel_count || 0,
+                        });
+                    }
+                    return expanded;
                 }
+                return [result];  // Measure Composite는 단일 결과를 배열로 래핑
             };
 
             const nestedResults = await Promise.all(allTasks.map(pollTask));
@@ -9555,13 +9587,9 @@ class WaferMapViewer {
             const startResponse = await res.json();
             const taskId = startResponse.task_id;
 
-            let result = null;
-            while (true) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                const statusRes = await fetch(`/api/composite-map/status/${taskId}`, { cache: 'no-store' });
-                if (!statusRes.ok) throw new Error('작업 상태 조회 실패');
-
-                const status = await statusRes.json();
+            const result = await this._waitForCompositeTask(taskId, {
+                failureMessage: '작업 상태 조회 실패',
+                onStatus: async (status) => {
                 const statusText = status.status === 'processing' ? '처리 중...' :
                                    status.status === 'queued' ? '대기 중...' :
                                    status.status === 'completed' ? '완료!' : '실패';
@@ -9575,14 +9603,8 @@ class WaferMapViewer {
                     this.setCompositePageTask(targetPageId, { task: updatedTask, result: null });
                 }
                 this.syncCompositeInlineStatus(targetPageId);
-
-                if (status.status === 'completed') {
-                    result = status.result;
-                    break;
-                } else if (status.status === 'failed') {
-                    throw new Error(status.error || 'Measure Composite 생성 실패');
                 }
-            }
+            });
 
             // Display result — 해당 탭으로 전환 후 렌더링
             if (result && targetPageId) {
@@ -18691,10 +18713,8 @@ class WaferMapViewer {
 
         this.showGridImmediately(sortedImages);
 
-        // 🔥 다중 Measure 배치 프리페치 비활성화 (개별 measure-thumb이 정상 동작, 배치 API 500 에러 방지)
-        // if (mcItems && mcItems.length > 1) {
-        //     this._prefetchMeasureThumbBatch(this._measureBaseImages, mcItems);
-        // }
+        // 🔥 gradient measure는 배치 워밍업으로 먼저 캐시 생성
+        this._prefetchCheckedMeasureThumbs(sortedImages);
 
         // 🔥 새 그리드 진입 시 스크롤 맨 위 (콘텐츠 추가 후 리셋하여 확실히 적용)
         if (!skipSaveState) {
@@ -24460,6 +24480,12 @@ class WaferMapViewer {
             return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${buildBaseParams()}${cacheSuffix}`;
         }
         if (measureItem.type === 'bin') {
+            if (this.selectedGrades.size === 0) {
+                const scheme = this.personalizedColorEnabled
+                    ? this.getActivePersonalizedScheme()
+                    : '';
+                return `/api/bin-map-thumb?path=${encodeURIComponent(imgPath)}&size=512${scheme ? `&scheme=${encodeURIComponent(scheme)}` : ''}${cacheSuffix}`;
+            }
             return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${buildBaseParams()}&bin_overlay=1${cacheSuffix}`;
         }
         // gradient measure (f, q, 향후 추가 모드 전부)
@@ -24484,7 +24510,7 @@ class WaferMapViewer {
 
         // 이미지별로 배치 요청 (동시 최대 8개)
         const uniqueImages = [...new Set(baseImages)];
-        const CONCURRENCY = 8;
+        const CONCURRENCY = Math.max(1, Math.floor(this.measurePrefetchConcurrency || SERVER_CONFIG.MEASURE_PREFETCH_CONCURRENCY || 8));
         let running = 0;
         const queue = [...uniqueImages];
 

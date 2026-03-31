@@ -1229,9 +1229,10 @@ def _save_palette_png(index_array: np.ndarray, palette_list: List[int], path: Pa
     from PIL import Image as _PILImage
     path = path.with_suffix(".png")
     path.parent.mkdir(parents=True, exist_ok=True)
-    img = _PILImage.fromarray(index_array.astype(np.uint8), mode="P")
+    img = _PILImage.fromarray(index_array.astype(np.uint8, copy=False), mode="P")
     img.putpalette(palette_list[:768])
-    img.save(str(path), format="PNG", optimize=True)
+    # optimize=True는 palette PNG에서 CPU 비용이 크고 체감 이득이 작다.
+    img.save(str(path), format="PNG", optimize=False, compress_level=1)
     rel = path.relative_to(IMAGES_ROOT).as_posix()
     return path, rel
 
@@ -2149,29 +2150,14 @@ def create_composite_heatmaps(
         m &= chip_inner_mask
         _heatmap_masks.append(m)
 
-    # 🔥 공유 palette bytes (default_palette_bytes → raw bytes)
-    _pal_bytes_768 = bytes(default_palette_bytes[:768]) if len(default_palette_bytes) >= 768 else bytes(default_palette_bytes)
-
-    # 🔥 히트맵 저장용 RGB palette LUT (palette index → RGB)
-    _pal_lut = np.zeros((256, 3), dtype=np.uint8)
-    for _pi in range(min(256, len(default_palette_bytes) // 3)):
-        _pal_lut[_pi] = default_palette_bytes[_pi*3:_pi*3+3]
-
     def _save_heatmap_task(idx: int) -> Optional[Dict[str, Any]]:
         t_hm = time.perf_counter()
         presence_mask = _heatmap_masks[idx]
         # np.where로 copy 없이 결과 생성 (47MB copy 제거)
         result = np.where(presence_mask, np.uint8(idx), base_indices)
 
-        # 🔥 Palette-indexed PNG로 저장 (default palette)
-        # → /api/thumbnail에서 개인색 PLTE 패치 적용 (display 시점에 개인색 반영)
-        from PIL import Image as PILImage
-        pil_img = PILImage.fromarray(result, mode='P')
-        pil_img.putpalette(_pal_bytes_768 + b'\x00' * (768 - len(_pal_bytes_768)) if len(_pal_bytes_768) < 768 else _pal_bytes_768)
         heatmap_path = output_dir / f"Grade_{idx}.png"
-        pil_img.save(str(heatmap_path), format='PNG', optimize=False)
-        rel_path = heatmap_path.relative_to(IMAGES_ROOT).as_posix()
-        actual_path = heatmap_path
+        actual_path, rel_path = _save_palette_png(result, default_palette_bytes, heatmap_path)
         total_pixels = width * height
         pixel_count = int(np.count_nonzero(presence_mask))
         percentage = round(pixel_count / total_pixels * 100, 2) if total_pixels else 0
