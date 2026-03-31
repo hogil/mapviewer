@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 45개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증, Label Explorer flat-grid 강제 및 positions 없는 palette/PNF 이미지 즉시 로드 회귀, HTTP 캐시 무효화 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 50개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증, Measure 색상 미리보기/적용 회귀, HTTP 캐시 무효화 검증, Composite 색상 매핑/배경 행 제거 검증, Measure 첫 진입 지연/폴더 stale state 회귀, Label Explorer flat-grid 강제 및 positions 없는 palette/PNF 이미지 즉시 로드 회귀, 검색 첫 실행/다중검색/이벤트루프 블로킹 회귀를 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -12,8 +12,8 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 
 ## 절대규칙: 기본 전체 실행
 
-- **인자 없이 `/e2e-test` 실행 시 Phase 1~45 전체를 실행한다.**
-- 특정 Phase만 실행하려면 `/e2e-test 3,9,12` 또는 `/e2e-test 33-44`처럼 명시적으로 지정해야 한다.
+- **인자 없이 `/e2e-test` 실행 시 Phase 1~50 전체를 실행한다.**
+- 특정 Phase만 실행하려면 `/e2e-test 3,9,12` 또는 `/e2e-test 33-50`처럼 명시적으로 지정해야 한다.
 - "전체 테스트", "E2E 테스트" 등 범위 미지정 요청은 전체 실행으로 간주한다.
 - Phase를 건너뛰거나 일부만 실행하는 것은 사용자가 명시적으로 요청한 경우에만 허용된다.
 `browser_evaluate`로 JS를 실행하고, `browser_take_screenshot`으로 시각 확인합니다.
@@ -43,6 +43,13 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 - `_candidate_positions_paths()`는 trimmed 경로 + 레거시 경로 + classification 복사 경로 최대 3개만 `exists()` 체크한다.
 - `get_chip_positions()`에서 classification 분기를 만들어 별도 스캔하는 것도 금지 — `_resolve_positions_path()` 한 줄로 통일한다.
 - 이 규칙 위반 시 async 이벤트 루프를 블로킹하여 모든 HTTP 요청이 수 초간 pending되는 심각한 성능 문제를 유발한다.
+
+## 절대규칙: batch 폴더는 더미 파일 — 이미지 로드 금지
+
+- `wm-811k/batch/` 하위의 모든 파일은 **파일 인덱스 성능 테스트용 0바이트 더미 파일**이다.
+- 실제 서버의 수백만 개 파일 수를 재현하기 위한 것이므로, 유효한 이미지 데이터가 아니다.
+- E2E 테스트에서 batch 폴더 파일을 이미지 로드/썸네일 생성/렌더링 대상으로 사용하지 않는다.
+- batch 경로에서 pyvips/PIL 에러가 발생해도 정상이다 — 버그가 아니므로 수정하지 않는다.
 
 ## 절대규칙: Playwright 브라우저 새 창 사용
 
@@ -224,7 +231,7 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 - 헤더 버튼: "Wafer Map Explorer" / "Label Explorer" 텍스트로 변경
 - 텍스트: "색변경"→"색 변경", "권한"→"권한 변경"
 - Manual 링크: `http://go/failbitmapmanual/`
-- FALLBACK_LOGIN_ID: frontend 'guest'→'notsaml' (backend와 통일)
+- FALLBACK_LOGIN_ID / sentinel 정합성: backend 기본값은 `notsaml`, frontend sentinel은 `guest`이지만 서버가 둘 다 invalid/fallback으로 처리
 - SAML /acs: `session_user` 쿠키 설정 추가
 
 **평가 항목**:
@@ -241,7 +248,7 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 5. 우측 Label Explorer 패널: "Label Explorer" 헤딩, Add/Delete Label 버튼
 6. 콘솔 에러 0개 확인 (favicon 404 제외)
 
-7. **fetch 래핑 LoginId 전달 확인**: SAML 로그인 후 (`viewer.currentUser !== 'guest'`일 때)
+7. **fetch 래핑 LoginId 전달 확인**: SAML 로그인 후 (`viewer.getCurrentLoginId?.()`가 `guest`/`notsaml`이 아닌 실제 사용자일 때)
    - `browser_evaluate`로 `/api/config` fetch 호출 → Network 탭에서 URL에 `LoginId=` 파라미터 포함 확인
    - `viewer.currentUser`가 설정되어 있으면 모든 `/api/` 요청에 `?LoginId=` 자동 추가됨
    - 서버 로그에서 IP 옆에 LoginId가 "—" 대신 실제 ID로 표시되는지 확인
@@ -1121,7 +1128,7 @@ Composite average map 단일 뷰에서 gradient 범례 픽셀 분포 계산이 �
 4. 서브메뉴가 `position:fixed`이고 `bottom` 스타일이 설정되어 있는지 확인
 
 #### 9-8. Composite Map 저장 경로 (LoginId 기반)
-1. `/api/config` 응답에서 FALLBACK_LOGIN_ID 확인 (기본값 "guest")
+1. `/api/config` 응답에서 FALLBACK_LOGIN_ID 확인 (기본값 `"notsaml"`)
 2. Composite Map 생성 API 호출 시 응답의 `output_dir`에 LoginId 포함 확인
 3. `composite_map/{LoginId}/current/` 구조인지 확인 (timestamp 폴더 아님)
 4. 재생성 시 이전 결과가 삭제되고 새 결과로 교체되는지 확인
@@ -2746,6 +2753,21 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | 33 | Measure 다중선택 전체 | pass/fail | UI/라벨/선택필터/단일전환/Navigator/404placeholder |
 | 34 | Measure 탭 분리 + 폴더 전환 유지 | pass/fail | mea 탭 생성/키 교체/원탭 복귀/미선택 바꿔치기/폴더 전환 유지 |
 | 35 | Measure Map + Composite 종합 검증 | pass/fail | 35-1~35-10: 4항목×3회, gradient, Navigator, LOT Mode, 탭 보존, 더블클릭 복귀, MC UI |
+| 36 | 성능 벤치마크 | pass/fail | 페이지/그리드/단일/Composite/Measure 속도 |
+| 37 | 이미지 무결성 검증 | pass/fail | 깨짐/X표시/이상 맵 샘플링 |
+| 38 | 인덱스 빌드 + 검색 벤치마크 | pass/fail | 500만+ 파일 검색/로드 성능 |
+| 39 | Measure Map 다중 생성 + Navigator 전환 | pass/fail | F/B/Q/범례/필터/탭 복원 |
+| 40 | Subset Composite Map | pass/fail | 선택 Grade → Sum Map |
+| 41 | Composite 탭 전환 안정성 | pass/fail | 더블클릭→ESC→탭전환 |
+| 42 | 다중 Measure 더블클릭 overlay 타입 보존 | pass/fail | Navigator/그리드 타입 유지 |
+| 43 | Label Explorer 네비게이션 및 그리드↔단일 전환 | pass/fail | savedViewState/경계 이동/복귀 |
+| 44 | Chip Label Explorer CRUD + 캐시 + 속도 | pass/fail | chip 모드 전용 Label Explorer |
+| 45 | Measure 색상 변경 미리보기/적용 | pass/fail | 실시간 반영/즉시 닫힘/복원 |
+| 46 | HTTP 캐시 무효화 | pass/fail | no-cache/ETag/stale cache 방지 |
+| 47 | Composite 색상 매핑 + 배경 행 제거 | pass/fail | BIN/F/Q/square는 Composite 색만 추종 |
+| 48 | Measure 첫 진입 즉시 로드 + 폴더 stale state | pass/fail | 첫 적용 지연/폴더 클릭 오염 방지 |
+| 49 | Label Explorer 그리드 로드 실패 + chip-positions 404 | pass/fail | flat-grid/positions 없는 palette/PNF/복귀 안정성 |
+| 50 | 검색 첫 실행 + 다중검색 + 이벤트루프 블로킹 | pass/fail | 첫 검색/모달/noise LOT/비동기 검색 |
 
 핵심 단계마다 스크린샷을 촬영하여 첨부하세요.
 
@@ -3969,6 +3991,7 @@ const ms = Math.round(performance.now() - t0);
 - **파일**: `js/main.js` 줄 23459 (수정 전 23471)
 - **테스트**: LOT Mode ON → Label Explorer 클래스 폴더 선택 → 그리드가 LOT 그룹별로 정리되어야 PASS
 - **커밋**: `31b6f89`
+- **후속 정리 (2026-03-31)**: positions 없는 palette/PNF 혼합 클래스는 Phase 49 기준으로 flat-grid 강제가 최신 요구사항이다. 따라서 "일반 Label Explorer LOT 그룹 검증"과 "예외 혼합 클래스 flat-grid 검증"을 분리해서 본다.
 
 ### 그리드 썸네일 5-10초 멈춤 후 일괄 로드 (배치 블로킹 + 서버 POST 블로킹)
 - **버그**: 그리드에서 썸네일이 개별 표시되지 않고 5-10초 멈춘 후 24개가 한번에 표시
@@ -4085,6 +4108,7 @@ const ms = Math.round(performance.now() - t0);
     -d '{"image_paths":["palette_3k/ABC123_00C_04_0003_EE_NORMAL.png"],"mode":"f","item_key":"1000","aggregation":"average"}'
   # PASS: background != [204,204,204] && background == 개인색 RGB
   ```
+- **E2E Phase**: Phase 34-6 (measure-thumb 배경 개인색) 검증
 
 ### 그리드 미선택 + Measure → 단일 이미지 전환 버그
 - **버그**: 그리드에서 이미지 선택 없이 Measure 적용 시 단일 이미지 모드로 전환됨
@@ -4098,21 +4122,25 @@ const ms = Math.round(performance.now() - t0);
   v._applyMeasureSelection(); // 5초 대기
   // PASS: v.gridMode === true && v.overlayMode === 'f'
   ```
+- **E2E Phase**: Phase 34-4 (미선택 + Measure → 현재 탭 바꿔치기) 검증
 
 ### Chip Annotator Y_OFFSET 정렬 오류 + minified JS 버그
 - **버그**: chip overlay가 이미지와 ~55px 어긋남 + chip-annotator.min.js에서 operator precedence 버그
+- **원인**: (1) Y_OFFSET=-55 하드코딩 (positions와 이미지가 동일 좌표계이므로 0이어야 함) (2) minified JS에서 `(a - b) * c`가 우선순위 오류로 잘못 계산됨
 - **수정**: (1) Y_OFFSET=0, pointer-events='auto' (2) chip-annotator.min.js 삭제 → 원본 JS 사용
 - **파일**: `js/chip-annotator.js`, `js/chip-annotator.min.js` (삭제), `index.html`
 - **테스트**: chip overlay 클릭 → chip 선택 가능 + overlay 위치가 이미지와 정렬되면 PASS
 
 ### Label 삭제 후 Chip Annotation 캔버스 잔상
 - **버그**: label 삭제 후 chip overlay에 삭제된 라벨 잔상 남음
+- **원인**: 삭제 후 `chipAnnotator.loadAnnotations()` 미호출 → markedChips와 렌더 캐시 미갱신
 - **수정**: 삭제 후 positions 캐시 클리어 + chipAnnotator annotation 재로드 + render()
 - **파일**: `js/main.js` (label 삭제 핸들러)
 - **테스트**: label 삭제 → chip overlay에서 해당 라벨 즉시 사라지면 PASS
 
 ### 폴더 전환 시 Measure 상태 고착
 - **버그**: Measure 활성 상태에서 폴더 전환 → 이전 measure 그리드 잔존
+- **원인**: `changeFolder()`에서 `_measureBaseImages`, `_gridMeasureMap`, `overlayMode` 등 measure 상태 초기화 누락
 - **수정**: `changeFolder()`에서 measure/overlay 상태 전부 null 초기화
 - **파일**: `js/main.js` (`changeFolder`, `selectAllFolderFiles`)
 - **테스트**: Measure 활성 → 다른 폴더 클릭 → measure 상태 해제되면 PASS
@@ -4179,6 +4207,17 @@ const ms = Math.round(performance.now() - t0);
   - 썸네일 배경 rgb(184,255,224) ≈ 개인색 #B8FFDE ✅
   - 그리드 Grade 0~7 전부 개인 배경색 표시 ✅
 
+### Composite batch 최적화 + numpy 벡터화
+- **개선**: composite 배치 크기 증가 (`effective_batch = max_workers*4`) + grade 카운팅 numpy 벡터화
+- **파일**: `api/composite_map.py`
+- **테스트**: composite 생성 시간 측정 (14개 이미지 < 5초)
+
+### Positions 파일 생성 (테스트 데이터)
+- **작업**: palette_3k에서 빈 파일 2개 + 누락 10개 → 이미지 분석 기반 재생성 (12개 총)
+- **방법**: reference positions 구조 + 실제 이미지 palette index 분석으로 BIN 결정, F/Q는 파일명+좌표 해시 기반 결정적 생성
+- **검증**: 3000 이미지 = 3000 positions, 전부 `ftn_keys` 500개 + `qtn_keys` 500개 + `chips` 384개 + `coord` + `rect`
+- **참고**: `D:/project/fail-map/positions_module.py`의 `save_positions_json()` 로직 참조
+
 ## 미해결 이슈 (다음 세션)
 
 ### Composite 속도 최적화
@@ -4195,89 +4234,7 @@ const ms = Math.round(performance.now() - t0);
 - **구 Phase 43** (Measure 드롭다운 통합 + 이미지 중복 방지) → Phase 33에 33-10~33-13으로 병합
 - **구 Phase 44** (Measure/Composite LOT Mode 유지) → Phase 33-13으로 병합
 
-## 버그 수정 이력 (2026-03-28)
-
-### Chip Annotator Y_OFFSET 정렬 오류 + minified JS 버그
-- **버그**: chip overlay가 이미지와 ~55px 어긋남 + chip-annotator.min.js에서 operator precedence 버그로 클릭 좌표 계산 오류
-- **원인**: (1) Y_OFFSET=-55 하드코딩 (positions와 이미지가 동일 좌표계이므로 0이어야 함) (2) minified JS에서 `(a - b) * c` → `a - b * c`로 변환됨
-- **수정**: (1) `chip-annotator.js` Y_OFFSET=0, pointer-events='auto' (2) `chip-annotator.min.js` 삭제 → 원본 JS 직접 사용 (3) `index.html`에서 원본 js 참조
-- **파일**: `js/chip-annotator.js`, `js/chip-annotator.min.js` (삭제), `index.html`
-- **테스트**: chip overlay 클릭 → chip 선택 가능 + overlay 위치가 이미지와 정렬되면 PASS
-
-### 그리드 미선택 + Measure → 단일 이미지 전환 버그
-- **버그**: 그리드에서 이미지 선택 없이 Measure 적용 시, 이전 `selectedImagePath`가 남아있어 단일 이미지 모드로 전환됨
-- **원인**: `getSelectedImagesForModal()`이 gridMode일 때도 gridSelectedIdxs가 비면 `selectedImagePath`를 반환
-- **수정**: `getSelectedImagesForModal()`에서 `gridMode === true`이면 gridSelectedIdxs 비었을 때 빈 배열 `[]` 반환
-- **파일**: `js/main.js` (`getSelectedImagesForModal` 함수)
-- **테스트**:
-  ```javascript
-  v.loadImagesInFolderAndShowGrid('palette_3k'); // 6초 대기
-  v._measureCheckedItems = [{type:'f', key:'1000', label:'FBT1000'}];
-  v._applyMeasureSelection(); // 5초 대기
-  // PASS: v.gridMode === true && v.overlayMode === 'f'
-  // FAIL: v.gridMode === false (단일 이미지로 전환됨)
-  ```
-- **E2E Phase**: Phase 34-4 (미선택 + Measure → 현재 탭 바꿔치기) 검증
-
-### Measure 배경색 개인색 미적용
-- **버그**: Measure heatmap 배경이 항상 #CCCCCC (회색) — 개인색 배경 무시
-- **원인**: `_resolve_scheme_background_rgb()`에서 measure 섹션의 `background=#CCCCCC` (기본값)를 "명시적 설정"으로 취급하여 개인색 fallback 안 됨
-- **수정**: measure/composite 섹션 background가 기본값 `#CCCCCC`이면 개인색으로 fallback
-- **파일**: `api/composite_map.py` (`_resolve_scheme_background_rgb` 함수)
-- **테스트**:
-  ```bash
-  curl -sk -X POST https://localhost/api/measure-composite-data \
-    -H "Content-Type: application/json" \
-    -d '{"image_paths":["palette_3k/ABC123_00C_04_0003_EE_NORMAL.png"],"mode":"f","item_key":"1000","aggregation":"average"}'
-  # PASS: background != [204,204,204] && background == 개인색 RGB
-  ```
-- **E2E Phase**: Phase 34-6 (measure-thumb 배경 개인색) 검증
-
-### Label 삭제 후 Chip Annotation 캔버스 잔상
-- **버그**: label 삭제 후 chip overlay에 삭제된 라벨 잔상 남음
-- **원인**: 삭제 후 `chipAnnotator.loadAnnotations()` 미호출 → markedChips 미갱신
-- **수정**: 삭제 후 positions 캐시 클리어 + chipAnnotator annotation 재로드 + render()
-- **파일**: `js/main.js` (label 삭제 핸들러, line 16508)
-- **테스트**: label 삭제 → chip overlay에서 해당 라벨 즉시 사라지면 PASS
-
-### 폴더 전환 시 Measure 상태 고착
-- **버그**: Measure 활성 상태에서 폴더 전환 → 이전 measure 그리드 잔존
-- **원인**: `changeFolder()`에서 `_measureBaseImages`, `_gridMeasureMap`, `overlayMode` 초기화 누락
-- **수정**: `changeFolder()`에서 measure/overlay 상태 전부 null 초기화
-- **파일**: `js/main.js` (`changeFolder` line 3254, `selectAllFolderFiles` line 7370)
-- **테스트**: Measure 활성 → 다른 폴더 클릭 → measure 상태 해제되면 PASS
-
-### F/Q Lazy Loading (성능 개선)
-- **개선**: chip-positions API 기본응답에서 f/q 데이터 제거 (경량화), `include_fq=1`일 때만 포함
-- **수정**: `chip-annotator.js`에서 `ensureFqData()` 메서드로 필요 시에만 f/q 로드
-- **파일**: `js/chip-annotator.js` (`loadPositions`, `ensureFqData`)
-- **테스트**: chip-positions 응답 크기 < 100KB (기존 ~2MB → 수십KB), FBT/QVL 사용 시 자동 로드 확인
-
-### Composite batch 최적화 + numpy 벡터화
-- **개선**: composite 배치 크기 증가 (`effective_batch = max_workers*4`) + grade 카운팅 numpy 벡터화
-- **파일**: `api/composite_map.py`
-- **테스트**: composite 생성 시간 측정 (14개 이미지 < 5초)
-
-### Positions 파일 생성 (테스트 데이터)
-- **작업**: palette_3k에서 빈 파일 2개 + 누락 10개 → 이미지 분석 기반 재생성 (12개 총)
-- **방법**: reference positions 구조 + 실제 이미지 palette index 분석으로 BIN 결정, F/Q는 파일명+좌표 해시 기반 결정적 생성
-- **검증**: 3000 이미지 = 3000 positions, 전부 `ftn_keys` 500개 + `qtn_keys` 500개 + `chips` 384개 + `coord` + `rect`
-- **참고**: `D:/project/fail-map/positions_module.py`의 `save_positions_json()` 로직 참조
-
-## 미해결 이슈 (다음 세션)
-
-### Composite 속도 최적화
-- **현상**: 14개 이미지 composite 생성에 3.7초 (save_heatmaps 2.0초가 병목)
-- **제안**: (1) JPEG 저장 대신 WebP (2) 병렬 저장 (3) base_indices 캐시 재사용
-
-### 개인색 편집 "Failed to fetch" 간헐 발생
-- **현상**: 색상 편집기에서 간헐적으로 "Failed to fetch" 에러 표시
-- **원인**: 미확인 (서버 과부하/타임아웃 추정). API 자체는 정상 동작 확인
-- **재현 조건**: composite 생성 직후 색상 편집 시 발생 가능
-
----
-
-## Phase 44: Measure 색상 변경 미리보기/적용 + 모달 즉시 닫기 검증
+## Phase 45: Measure 색상 변경 미리보기/적용 + 모달 즉시 닫기 검증
 
 **목적**: Measure(FBT/QVL) 그리드 모드에서 색상 변경 시 미리보기가 실시간 반영되고, 적용 시 서버에 영구 저장되며, 취소 시 원래 색으로 복원되는지 검증. 모달 닫기 지연 없이 즉시 동작하는지 확인.
 
@@ -4315,7 +4272,7 @@ const ms = Math.round(performance.now() - t0);
 - `js/color-editor.js`: `close()` — 모달 즉시 닫기 + 백그라운드 복원, `_handleApplyGradient()` — 적용 후 복원 방지
 - `api/main.py`: `/api/measure-colors` POST — `_measure_thumb_cache` 클리어, `_generate_measure_thumb` — 배경색 로딩 경로 수정
 
-## Phase 45: HTTP 캐시 무효화 검증 (Cache-Control: no-cache 전수 적용 확인)
+## Phase 46: HTTP 캐시 무효화 검증 (Cache-Control: no-cache 전수 적용 확인)
 
 **목적**: 모든 이미지/썸네일/JS/CSS 응답에 `Cache-Control: no-cache`가 적용되어, 브라우저가 매번 서버에 ETag 검증을 수행하고 stale 캐시를 사용하지 않는지 확인한다.
 
@@ -4417,7 +4374,7 @@ const diskCacheHits = entries.filter(e => e.transferSize === 0 && e.decodedBodyS
   - `배경` row가 보이면 FAIL
   - gradient 변경만으로 `적용` 버튼 활성화/비활성화가 정상 동작해야 함
 
-## Phase 46: Composite 탭 색상 매핑 + 배경 행 제거 검증
+## Phase 47: Composite 탭 색상 매핑 + 배경 행 제거 검증
 
 **목적**: `palette_3k` 기준 실제 composite 생성 결과에서 `BIN/F/Q/square`가 오직 `Composite` 탭 색상만 따르는지, `Measure` 탭 변경에는 영향받지 않는지, 그리고 `Composite`/`Measure` 탭에서 배경 row가 제거되었는지 검증한다.
 
@@ -4516,7 +4473,7 @@ return result;
   - `8443` 프로세스를 내리고 `start.ps1`로 다시 기동
   - 검증 전 `https://localhost:8443/js/main.js` 응답에 `_prefetchCheckedMeasureThumbs`와 `Measure 그리드는 최초 렌더부터 올바른 URL을 사용하므로 legend/UI만 동기화` 문자열이 실제 포함되는지 확인
 
-## Phase 47: Measure map 즉시 로드 + 폴더 선택 회귀 검증
+## Phase 48: Measure map 즉시 로드 + 폴더 선택 회귀 검증
 
 **목적**: 새로고침 직후 첫 `Measure` 적용에서도 `BIN/F/Q` 그리드가 즉시 생성되는지, 그리고 그리드 초기화 후 폴더 클릭이 파일 선택으로 새지 않는지 검증한다.
 
@@ -4562,7 +4519,7 @@ return result;
 **핵심 파일**:
 - `js/main.js`: `_ensureRatioGradientCache`, `_prefetchCheckedMeasureThumbs`, `clearWaferMapExplorerSelection`, `_openMeasureTab`, `showGrid`
 
-## Phase 48: Label Explorer 그리드 이미지 로드 실패 및 chip-positions 404 수정 검증
+## Phase 49: Label Explorer 그리드 이미지 로드 실패 및 chip-positions 404 수정 검증
 
 ### chip-positions 파일 없을 때 404 대신 빈 결과 반환
 - **버그**: classification 경로의 이미지에 positions 파일이 없으면 `/api/chip-positions`가 404를 반환하여 브라우저 콘솔에 `Failed to load resource: 404` 에러가 출력됨
@@ -4641,7 +4598,7 @@ curl -sk "https://localhost:8443/api/chip-positions?path=classification/asDF/non
 
 ---
 
-## Phase 49: 검색 첫 실행 실패 + 다중검색 에러 + 이벤트루프 블로킹 수정 검증
+## Phase 50: 검색 첫 실행 실패 + 다중검색 에러 + 이벤트루프 블로킹 수정 검증
 
 **목적**: 서버 시작 직후 첫 검색이 "결과 없음"으로 실패하던 버그, 다중검색 모달에서 `suppressAlerts is not defined` 에러로 검색이 깨지던 버그, 대량 인덱스에서 동기 순차스캔이 이벤트루프를 블로킹하던 성능 문제가 수정되었는지 검증한다.
 
@@ -4732,6 +4689,39 @@ curl -sk "https://localhost:8443/api/chip-positions?path=classification/asDF/non
 1. 검색 API 호출과 동시에 `/api/index-status` 호출
 2. **pass 기준**: 검색 중에도 다른 API가 1초 이내 응답
 
+### 다중검색 cold flat-grid 렌더 분리 측정 (showGrid vs thumbnail 생성)
+`palette_3k` 다중검색이 느릴 때는 검색/필터링/DOM 렌더링과 썸네일 생성 병목을 반드시 분리해서 측정한다.
+
+1. **진짜 cold 상태 강제**
+   - `D:/project/data/wm-811k/thumbnails` 폴더를 통째로 삭제한다.
+   - `8443` 서버를 완전히 내린 뒤 다시 시작한다.
+   - 기존 Playwright 탭/세션을 재사용하지 말고 **새 브라우저 세션**으로 접속한다.
+2. **썸네일 미존재 확인**
+   - 샘플 512 썸네일 파일 2~3개가 실제로 없는지 확인한다.
+   - 예: `palette_3k/KHN931_00C_02_0001_PE_ENGINEER.png`, `palette_3k/KHN931_00C_02_0025_EE_NORMAL.png`, `palette_3k/TMW067_00C_07_0006_PT_ENGINEER.png`
+3. **LOT Mode 경로 배제**
+   - `v.lotMode = false`로 강제한다.
+   - `await v.changeFolder('D:\\project\\data\\wm-811k\\palette_3k')`로 폴더를 명시적으로 고정한다.
+   - 목적은 `showGridByLot()`이 아니라 **flat-grid `showGrid()` 경로만** 측정하는 것이다.
+4. **다중검색 실행**
+   - `await v.performSearch({ multiLotList: ['khn931', 'tmw067'], suppressAlerts: true })`
+   - 반환 시간과 그리드 이미지 상태를 함께 기록한다.
+5. **즉시/지연 상태를 단계별로 기록**
+   - 반환 직후 `#image-grid .grid-thumb-img`의 `total`, `loaded`, `loading`
+   - 300ms 후 동일 값
+   - 2000ms 후 동일 값
+   - 5000ms 후 동일 값
+6. **판정 기준**
+   - 검색 반환 시간: `< 50ms`
+   - 반환 직후: `total >= 48` 이면 PASS, 이 시점의 `loaded === 0`은 허용
+   - 300ms 후: `total >= 500` 이고 `loaded > 0`
+   - 2000ms 후: `loaded >= 80`
+   - 5000ms 후: `loaded >= 200`
+7. **해석 규칙**
+   - 검색 반환이 빠르고 그리드 셸이 즉시 붙으면 `performSearch()`/필터/`showGrid()` DOM 생성은 병목이 아니다.
+   - 이후 `loaded` 증가가 느리면 병목은 cold `/api/thumbnail` 생성이다.
+   - 이 측정에서 `LOT Mode`, warm 썸네일, 기존 브라우저 캐시가 섞이면 결과를 무효로 본다.
+
 **검증 코드**:
 ```javascript
 // 49-1: 서버 직후 검색 API
@@ -4746,6 +4736,29 @@ document.getElementById('multi-search-btn').click();
 document.getElementById('multi-search-input').value = 'ABC123.J3 04\nDEF456.2\t08\nGHJ789 extra_junk';
 document.getElementById('multi-search-apply').click();
 // → 모달 닫힘, v.selectedImages.length === 1548, 에러 없음
+
+// cold flat-grid 분리 측정
+v.lotMode = false;
+await v.changeFolder('D:\\project\\data\\wm-811k\\palette_3k');
+const t0 = performance.now();
+await v.performSearch({ multiLotList: ['khn931', 'tmw067'], suppressAlerts: true });
+const duration = performance.now() - t0;
+const sampleState = () => {
+  const imgs = Array.from(document.querySelectorAll('#image-grid .grid-thumb-img'));
+  return {
+    total: imgs.length,
+    loaded: imgs.filter(img => img.complete && img.naturalWidth > 0).length,
+    loading: imgs.filter(img => img.dataset.loading === 'true').length
+  };
+};
+const now = sampleState();
+await new Promise(r => setTimeout(r, 300));
+const t300 = sampleState();
+await new Promise(r => setTimeout(r, 1700));
+const t2000 = sampleState();
+await new Promise(r => setTimeout(r, 3000));
+const t5000 = sampleState();
+({ duration, now, t300, t2000, t5000 });
 ```
 
 **결과 요약표**:
@@ -4757,6 +4770,11 @@ document.getElementById('multi-search-apply').click();
 | 다중검색 noise 3줄 | 1548건, 에러 없음 | 1548건 PASS |
 | suppressAlerts 에러 | 콘솔 에러 없음 | PASS |
 | 이벤트루프 블로킹 | 검색 중 타 API 1초 이내 | PASS |
+| cold flat-grid 검색 반환 | < 50ms | 18.7ms PASS |
+| cold 즉시 그리드 셸 | `total >= 48`, `loaded === 0` 허용 | `total=48`, `loaded=0`, `loading=48` PASS |
+| cold 300ms 진행률 | `total >= 500`, `loaded > 0` | `total=1000`, `loaded=8`, `loading=73` PASS |
+| cold 2000ms 진행률 | `loaded >= 80` | `loaded=94`, `loading=50` PASS |
+| cold 5000ms 진행률 | `loaded >= 200` | `loaded=257`, `loading=50` PASS |
 
 **수정된 파일**:
 - `api/index_service.py`: `ensure_ready_for_search()` — timeout 대기 + executor 비동기 캐시 로드

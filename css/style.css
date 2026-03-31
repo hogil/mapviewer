@@ -2155,8 +2155,8 @@
             justify-content: flex-start;
             padding-bottom: 4px;
             aspect-ratio: 1/1;
-            width: 100%;
-            height: auto;
+            width: var(--grid-cell-size, 100%);
+            height: var(--grid-cell-size, auto);
             position: relative;
             overflow: hidden;
             background: #232323;
@@ -2164,6 +2164,8 @@
             border: 2px solid transparent;
             cursor: pointer;
             contain: layout style paint;
+            content-visibility: auto;
+            contain-intrinsic-size: 180px 206px;
             will-change: transform;
         }
         
