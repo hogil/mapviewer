@@ -9016,8 +9016,8 @@ async def get_chip_positions(path: str, include_fq: int = 0):
         _log(f"[CHIP_POS] {path} → {positions_file.name} (exists={positions_file.exists()})")
 
         if not positions_file.exists():
-            _log(f"[CHIP_POS] not found: {positions_file}", level="warning")
-            raise HTTPException(status_code=404, detail=f"Positions file not found: {positions_file}")
+            _log(f"[CHIP_POS] not found: {positions_file} — 빈 결과 반환")
+            return JSONResponse(content={"chips": [], "ftn_keys": [], "qtn_keys": []})
 
         import re as _re
 
