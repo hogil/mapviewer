@@ -1,12 +1,18 @@
 ---
 name: wafer-debug
-description: "L3 Tracker 웨이퍼 맵 렌더링/색상/오버레이/필터 이슈를 디버깅한다. 다음 상황에서 트리거: 웨이퍼 이미지가 안 보일 때, 색상이 이상할 때, 오버레이/BIN/Grade 필터가 동작하지 않을 때, composite map 생성 실패, 그리드/단일 이미지 전환 오류, pyramid 렌더링 문제. '렌더링 이상', '색이 안 맞아', '오버레이 안 돼', '필터 안 먹어', '이미지 안 나와' 등의 표현에도 반응한다."
+description: "L3 Tracker 웨이퍼 맵 렌더링/색상/오버레이/필터 이슈를 디버깅한다. 다음 상황에서 트리거: 웨이퍼 이미지가 안 보일 때, 색상이 이상할 때, 오버레이/BIN/Grade 필터가 동작하지 않을 때, Label Explorer/MY LOT 그리드가 비거나 늦게 뜰 때, composite map 생성 실패, 그리드/단일 이미지 전환 오류, pyramid 렌더링 문제. '렌더링 이상', '색이 안 맞아', '오버레이 안 돼', '필터 안 먹어', '이미지 안 나와' 등의 표현에도 반응한다."
 argument-hint: [증상-설명]
 ---
 
 # Wafer Debug - L3 Tracker 디버깅 가이드
 
 증상: `$ARGUMENTS`
+
+## 절대규칙: batch 폴더는 더미 파일 — 이미지 로드 금지
+
+- `wm-811k/batch/` 하위의 모든 파일은 **파일 인덱스 성능 테스트용 0바이트 더미 파일**이다.
+- batch 경로에서 "not a known file format" / "cannot identify image file" 에러가 나오면 **정상 동작**이다.
+- 이 에러를 버그로 간주하여 수정하려 하지 않는다. 디버깅 대상에서 batch 폴더를 제외한다.
 
 ## 진단 절차
 
@@ -22,6 +28,8 @@ argument-hint: [증상-설명]
 | 필터 | 필터 안 먹힘, 칩 선택, 범례 클릭 | `js/main.js` (filter 관련), `js/color-editor.js` |
 | Composite | 합성맵 생성 실패, 색상 이상 | `api/composite_map.py`, `api/composite_colors.py` |
 | 그리드 | 그리드/단일 전환, 스크롤, 로딩 | `js/grid.js`, `js/main.js` |
+| Label Explorer / MY LOT | 클래스/그룹 그리드 비표시, 복귀 후만 보임, 경로 꼬임 | `js/main.js`, `js/my-lot.js`, `api/my_lot.py` |
+| LoginId / Cache | 개인색/저장 경로/캐시 무효화 이상 | `api/config.py`, `api/main.py`, `api/personal_colors.py`, `js/main.js` |
 | Pyramid | 줌 깨짐, 레벨 전환, 메모리 | `js/semiconductor-renderer.js` |
 
 ### Step 2: 카테고리별 진단
@@ -68,6 +76,20 @@ argument-hint: [증상-설명]
 2. grid ↔ single 전환: `savedViewState` 보존
 3. `labelSelection.selectedClasses` 클리어 타이밍
 4. DOM class 전환: `grid-mode` ↔ `single-image-mode`
+5. LOT Mode와 Label Explorer가 함께 켜졌을 때 `showGridByLot()` / flat-grid 중 어떤 경로를 타는지 확인
+6. positions 없는 palette/PNF 이미지가 초기 로드에서 빠지는지, 단일 이미지 복귀 후에만 채워지는지 확인
+
+#### Label Explorer / MY LOT 문제
+1. `resolveOriginalImagePath`, `resolveLabelExplorerImagePath`, `buildLabelExplorerGridState` 흐름 확인
+2. classification / my-lot 경로가 원본 이미지 경로로 정상 역해석되는지 확인
+3. 단일 이미지 복귀 시 `_transientGridRestoreState`, `savedViewState`, `gridRestoreImages`가 의도대로 보존되는지 확인
+4. `showGrid(..., true, true)` 같은 강제 경로와 LOT Mode 조건이 충돌하지 않는지 확인
+5. MY LOT의 보기/Grid 보기/선택 Grid 보기가 기존 폴더 선택 상태를 오염시키지 않는지 확인
+
+#### LoginId / Cache 문제
+1. `FALLBACK_LOGIN_ID` 실제 값(`notsaml`)과 프론트 sentinel(`guest`)이 서버 쪽 sentinel 처리와 함께 일관되게 동작하는지 확인
+2. `Cache-Control`, `ETag`, `_t=` cache buster, personalized scheme 파라미터가 stale 캐시를 막는지 확인
+3. 색상 변경 후 그리드/단일 이미지/Measure/Composite가 각각 어떤 캐시를 지우는지 추적
 
 #### Pyramid 문제
 1. 현재 줌 레벨 → 선택된 pyramid level 매핑 확인
@@ -86,6 +108,7 @@ argument-hint: [증상-설명]
 - 관련 테스트 수행 (Playwright 또는 수동)
 - `git diff`로 변경 범위 확인
 - 사이드 이펙트 없는지 연관 기능 체크
+- 재현 시나리오, 실제 원인, 수정 후 검증 시나리오를 반드시 분리해서 기록
 
 ### Step 4: 결과 보고
 

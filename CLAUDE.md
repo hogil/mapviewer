@@ -61,6 +61,13 @@ The codebase uses environment variables to adapt to both environments. SAML logi
 - 브라우저 제어가 안 될 경우, 닫지 말고 사용자에게 상황을 보고하고 지시를 기다린다
 - 이 규칙을 위반하여 사용자 허락 없이 브라우저를 닫는 행위는 절대 금지한다
 
+**Absolute Rule: batch 폴더는 더미 파일 — 이미지 로드 절대 금지**
+- `wm-811k/batch/` 하위의 모든 파일은 **파일 인덱스 성능 테스트용 더미 파일**이다 (0바이트 빈 파일)
+- 실제 서버 환경의 수백만 개 파일 수를 재현하기 위해 만들어진 것이므로, 유효한 이미지 데이터가 아니다
+- 이 폴더의 파일에 대해 썸네일 생성, 이미지 열기, PIL/pyvips 로드 등 **이미지 처리를 시도하는 것은 절대 금지**한다
+- E2E 테스트, UI 점검, 디버깅 시 batch 폴더 파일은 테스트 대상에서 제외한다
+- pyvips/PIL에서 "not a known file format" 또는 "cannot identify image file" 에러가 batch 경로에서 발생하면, 이는 정상 동작이다 — 버그가 아니므로 수정하려 하지 않는다
+
 ## Running the Application
 
 ### Start the Server

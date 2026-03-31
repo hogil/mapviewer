@@ -2560,13 +2560,22 @@ class WaferMapViewer {
 
         this.debugLog('🚀 Wafer Map Explorer 오른쪽 클릭 감지됨');
 
-        // 🔥 Composite Mode 종료 (Wafer Map Explorer에서 다른 맵 선택 시)
-        if (this.isCompositeMode) {
+        // 🔥 우클릭 초기화는 composite/measure 잔재도 함께 제거해야
+        // 다음 폴더 클릭이 순수 wafer/folder 흐름으로 시작된다.
+        if (this.isCompositeMode || this.compositeSession) {
             console.log('🔄 Composite Mode 종료 (Wafer Map Explorer 오른쪽 클릭)');
-            this.isCompositeMode = false;
-            this.compositeSession = null;
-            this.updateContextMenuState();
         }
+        this.isCompositeMode = false;
+        this.compositeSession = null;
+        this.lastCompositeSourceImages = [];
+        this._measureCheckedItems = [];
+        this._measureBaseImages = null;
+        this._gridMeasureMap = null;
+        this.overlayMode = null;
+        this._ratioActiveItemKey = null;
+        this._ratioGradientCache = null;
+        this.updateFailbitButtonUI?.();
+        this.updateContextMenuState();
 
         // 🔥 진행 중인 썸네일 로드 즉시 중단
 
@@ -2604,7 +2613,18 @@ class WaferMapViewer {
         this.gridViewImageIndex = -1;
         this.currentGridImages = [];
         this._singleModeRequestId = (this._singleModeRequestId || 0) + 1;
-        if (this.pageViewCache) {
+        const activePage = this.pageManager?.getActivePage?.() || null;
+        const activePageId = activePage?.id || null;
+        if (activePageId) {
+            this.pageViewCache?.delete?.(activePageId);
+            this.pageImageCache?.delete?.(activePageId);
+            if (this.subsetPageUpdates?.has?.(activePageId)) {
+                this.subsetPageUpdates.delete(activePageId);
+            }
+            if (this.compositePageTasks?.has?.(activePageId)) {
+                this.clearCompositePageTask(activePageId);
+            }
+        } else if (this.pageViewCache) {
             this.pageViewCache.clear();
         }
 
@@ -2643,6 +2663,21 @@ class WaferMapViewer {
         if (this.dom.multiSearchInput) {
             this.dom.multiSearchInput.value = '';
         }
+
+        // 🔥 우클릭 초기화는 현재 탭도 wafer 초기 상태로 정규화해야
+        // 다음 폴더 클릭 때 composite/measure의 stale state가 재적용되지 않는다.
+        if (activePage) {
+            const activeRoleBase = String(activePage.role || 'blank').replace(/\d+$/, '');
+            activePage.state = null;
+            if (activeRoleBase !== 'wafer') {
+                activePage.role = 'wafer';
+                if (typeof this.pageManager?.buildTitle === 'function') {
+                    activePage.title = this.pageManager.buildTitle('wafer');
+                }
+                this.pageManager?.renderTabs?.();
+            }
+        }
+        this.activePageRole = 'wafer';
 
         this.debugLog('🚀 Wafer Map Explorer: 오른쪽 클릭으로 모든 선택 해제 및 초기 상태 복귀');
     }
@@ -12027,6 +12062,15 @@ class WaferMapViewer {
 
                     return;
                 }
+            }
+
+            const shouldNormalizeWaferPage =
+                (!this.selectedImages || this.selectedImages.length === 0) &&
+                !this.selectedImagePath &&
+                (!this.selectedFolders || this.selectedFolders.size === 0) &&
+                !this.savedViewState;
+            if (shouldNormalizeWaferPage) {
+                this.ensurePageForRole('wafer');
             }
 
             // 수정키가 아닐 때만 폴더 로드/펼침 처리

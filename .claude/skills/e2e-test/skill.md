@@ -4780,3 +4780,279 @@ const t5000 = sampleState();
 - `api/index_service.py`: `ensure_ready_for_search()` — timeout 대기 + executor 비동기 캐시 로드
 - `api/search_service.py`: 순차스캔/fallback을 executor로 이동
 - `js/main.js`: `performSearch()` — suppressAlerts destructuring 위치 수정
+
+## 2026-04-01 속도 최적화 히스토리 / 병렬 구조 / 병렬 튜닝 벤치
+
+이 섹션은 2026-03-28 ~ 2026-04-01 동안 진행한 성능 작업을 한곳에 정리한 것이다.  
+검색, cold thumbnail, failbit/bin/measure, Composite/Measure Composite의 병목 위치와 병렬 처리 전략을 분리해서 이해해야 한다.
+
+### 1. 병목 구조를 어떻게 분리해서 봐야 하는가
+
+L3 Tracker의 체감 지연은 대략 아래 4단계로 나뉜다.
+
+1. 검색 API / 필터링
+   - `/api/search`
+   - LT/TM/STEP 필터
+   - LOT ID 파싱 / classification 경로 정규화
+2. 그리드 DOM 생성
+   - `showGrid()` / `showGridImmediately()`
+   - wrap/div/img/label 생성
+   - LOT 그룹핑 여부, flat-grid 여부
+3. 썸네일 URL 결정
+   - 일반 thumbnail (`/api/thumbnail`)
+   - failbit/composite 원본
+   - BIN (`/api/bin-map-thumb` 또는 `/api/thumbnail?...bin_overlay=1`)
+   - Measure (`/api/measure-thumb`)
+4. 실제 이미지 생성/인코딩
+   - cold thumbnail 생성
+   - measure-thumb gradient heatmap 생성
+   - bin-map-thumb 생성
+   - composite/measure composite 저장
+
+**핵심 규칙**:
+- 검색이 느린지, DOM이 느린지, 썸네일 생성이 느린지를 반드시 분리해서 측정한다.
+- `performSearch()`가 빠르고 그리드 셸이 즉시 뜨면, 병목은 거의 항상 cold `/api/thumbnail` 또는 overlay 변환이다.
+- `measure-thumb`은 일반 thumbnail과 다른 경로이므로 따로 봐야 한다.
+- `bin`도 이제 경량 전용 경로와 무거운 overlay 경로가 공존하므로 둘을 구분해야 한다.
+
+### 2. 타입별 병렬 처리 구조 (최신 기준)
+
+#### 2-1. failbit / composite 원본
+- URL: 일반적으로 `/api/thumbnail?path=...&size=512`
+- 프런트: 그리드 큐가 동시에 여러 장을 요청한다.
+- 서버: 각 요청이 `THUMBNAIL_EXECUTOR`에서 병렬 처리된다.
+- 특징: **배치 없음, 요청 병렬만 있음**
+
+#### 2-2. BIN
+- 기본 경로:
+  - Grade 필터가 **없으면** `/api/bin-map-thumb`
+  - Grade 필터가 **있으면** `/api/thumbnail?...&bin_overlay=1`
+- 프런트: 그리드 큐가 동시에 여러 장을 요청한다.
+- 서버:
+  - `/api/bin-map-thumb`는 `THUMBNAIL_EXECUTOR`에서 병렬 처리
+  - `/api/thumbnail?...bin_overlay=1`도 일반 thumbnail executor를 탄다
+- 특징: **배치 없음, 요청 병렬만 있음**
+
+#### 2-3. Measure (FBT/QVL)
+- 경로: `/api/measure-thumb?path=...&field=f|q&key=...`
+- 프런트:
+  - visible grid thumbnail 요청은 일반 그리드 큐로 병렬 처리
+  - 추가로 `_prefetchCheckedMeasureThumbs()`가 `/api/measure-thumb-batch`를 이미지별 병렬 워밍업
+- 서버:
+  - 단건 `/api/measure-thumb`는 `THUMBNAIL_EXECUTOR`
+  - 배치 `/api/measure-thumb-batch`도 `THUMBNAIL_EXECUTOR`
+- 특징: **요청 병렬 + 배치 워밍업 있음**
+
+#### 2-4. Composite / Measure Composite 결과 생성
+- 경로:
+  - `/api/composite-map/*`
+  - `/api/measure-composite-data`
+  - `/api/measure-composite`
+- 서버:
+  - `COMPOSITE_EXECUTOR`
+  - 별도 polling / status 경로
+- 특징:
+  - thumbnail executor와 분리된 별도 executor를 사용
+  - 결과 생성 후 PNG/JPEG 저장 속도가 체감 지연을 크게 좌우
+
+### 3. 여태 속도 측면에서 실제로 바꾼 것들
+
+#### 3-1. 검색 / 그리드 렌더
+- `performSearch()`가 검색 완료 전까지 썸네일 로딩을 기다리지 않도록 분리
+- `showGrid()`에서 그리드 셸(DOM)을 먼저 붙이고, 실제 썸네일은 visible 범위부터 뒤에서 로드
+- 그리드 셀 크기 변경 시 1000개 셀에 개별 width/height를 쓰지 않고 CSS 변수 기반으로 갱신
+- `querySelectorAll()` 전체 재스캔을 줄이고 `gridThumbWraps` 배열을 누적 캐시
+- `content-visibility: auto` / intrinsic size 적용으로 offscreen layout 비용 축소
+- offsetTop/offsetHeight 캐시 + 이진 탐색으로 스크롤 시 visible 범위 계산 비용 축소
+
+#### 3-2. cold 일반 thumbnail
+- `showGridImmediately()`의 즉시 로드 경로를 큐/재시도와 맞물리게 조정
+- JPEG/WEBP 저장 옵션을 빠른 설정으로 통일
+- PIL JPEG 폴백의 `optimize=True` 제거
+- pyvips 저장을 공통 fast helper로 통합:
+  - `_jpegsave_fast_to_file`
+  - `_jpegsave_fast_buffer`
+  - `_webpsave_fast_to_file`
+  - `_webpsave_fast_buffer`
+- cold thumbnail 생성 worker 수를 executor 환경변수로 분리 가능하게 변경
+
+#### 3-3. BIN
+- Grade 필터가 없을 때 무거운 `bin_overlay=1` thumbnail 경로를 타지 않고 경량 `/api/bin-map-thumb`로 우회
+- `_generate_bin_map_thumb()`가 positions JSON 캐시(`_load_positions_cached`)를 사용하도록 변경
+- BIN thumbnail도 PIL만 쓰지 않고 pyvips fast WEBP buffer를 우선 사용
+- BIN thumbnail도 `IO_POOL`이 아니라 `THUMBNAIL_EXECUTOR`에서 처리되게 변경
+
+#### 3-4. Measure
+- `/api/measure-thumb`는 원본 이미지 로드 없이 positions-only gradient heatmap 경로 유지
+- `/api/measure-thumb-batch`를 다시 프런트 prefetch에 연결
+- 다중 Measure 그리드 진입 직후 `_prefetchCheckedMeasureThumbs(sortedImages)`를 호출하여 visible 로드 전에 캐시를 먼저 채움
+- 단건/배치 measure 모두 `THUMBNAIL_EXECUTOR`로 이동
+- `measure-thumb` 404는 빈 회색 placeholder로 처리하여 깨진 이미지 아이콘 방지
+
+#### 3-5. Composite / Measure Composite
+- Composite/Measure background task polling을 1초 고정 대기에서 짧은 시작 + backoff로 변경
+- palette PNG 저장 경로에서 `compress_level` / `optimize`를 속도 위주로 조정
+- `measure_composite.py` 저장 경로도 `compress_level=0`으로 변경
+- startup 시 composite/measure 모듈 warmup을 걸어 첫 클릭 lazy import 비용을 줄이는 구조 추가
+
+### 4. 병렬 튜닝용 환경변수 (최신)
+
+이제 아래 4개를 스크립트에서 직접 조절할 수 있다.
+
+| 환경변수 | 역할 | 적용 위치 |
+|---|---|---|
+| `THUMBNAIL_EXECUTOR_WORKERS` | 서버 썸네일 executor worker 수 | `api/main.py` |
+| `THUMB_CLIENT_MAX_CONCURRENCY` | `ThumbnailManager` 동시 요청 수 | `api/config.py` → `/api/config` → `js/main.js` |
+| `GRID_MAX_CONCURRENCY` | grid lazy loader 동시 요청 상한 | `api/config.py` → `/api/config` → `js/main.js` |
+| `MEASURE_PREFETCH_CONCURRENCY` | `/api/measure-thumb-batch` 동시 prefetch 수 | `api/config.py` → `/api/config` → `js/main.js` |
+
+**현재 기본값**:
+
+#### Windows 로컬 (`start.ps1`)
+- `THUMB_CLIENT_MAX_CONCURRENCY=14`
+- `GRID_MAX_CONCURRENCY=48`
+- `MEASURE_PREFETCH_CONCURRENCY=8`
+- `THUMBNAIL_EXECUTOR_WORKERS=32`
+
+#### Ubuntu 운영 (`start.sh`, 32C / 198GB 기준)
+- `THUMB_CLIENT_MAX_CONCURRENCY=14`
+- `GRID_MAX_CONCURRENCY=48`
+- `MEASURE_PREFETCH_CONCURRENCY=8`
+- `THUMBNAIL_EXECUTOR_WORKERS=64`
+
+> 주의:
+> - `start.sh` 값은 **32코어 / 198GB 서버 기준으로 스케일한 추천값**이다.
+> - 로컬 16코어 벤치 결과를 기반으로 올린 값이므로, 실제 Ubuntu 서버에서 1회 이상 실측 검증이 필요하다.
+
+### 5. 병렬 프로필 벤치 (2026-04-01, 로컬 16C, cold)
+
+측정 조건:
+- `D:/project/data/wm-811k/thumbnails` 삭제
+- 8443 서버 재시작
+- `palette_3k`에서 `KHN931` 24장 + `TMW067` 24장
+- generic/failbit 48장 burst
+- bin 24장 burst
+- measure-thumb 24장 burst
+- measure-thumb-batch 12개 이미지 × 2 key
+
+| profile | thumbExec | grid | measurePrefetch | thumbClient | generic total | generic p95 | bin total | measure total | measure-batch total |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| balanced | 24 | 40 | 6 | 12 | 1589.4ms | 972.6ms | 579.5ms | 156.4ms | 7142.3ms |
+| high | 32 | 48 | 8 | 14 | 1530.4ms | 972.6ms | 492.7ms | 194.7ms | 6915.2ms |
+| xhigh | 48 | 64 | 12 | 16 | 1307.6ms | 823.9ms | 615.7ms | 228.2ms | 7078.7ms |
+| hybridA | 48 | 64 | 8 | 14 | 1413.9ms | 937.1ms | 583.0ms | 229.5ms | 7311.9ms |
+| hybridB | 40 | 56 | 8 | 14 | 1494.0ms | 934.0ms | 620.6ms | 173.5ms | 6995.7ms |
+
+**해석**:
+- `generic/failbit`는 공격적으로 올릴수록 빨라지는 경향이 있다.
+- `bin`과 `measure-batch`는 너무 높이면 오히려 흔들린다.
+- 전체 균형은 `high (32 / 48 / 8 / 14)`가 가장 무난했다.
+- 따라서 현재 기본값은 `high` 프로필을 채택했다.
+
+### 6. 최신 cold API 실측 (2026-03-31)
+
+썸네일 폴더 삭제 + 서버 재시작 후 API 직접 측정:
+
+| 항목 | 실측 |
+|---|---:|
+| generic cold 48 total | 1597.7ms |
+| generic cold 48 median | 927.0ms |
+| generic cold 48 p95 | 1204.9ms |
+| generic cold 48 max | 1311.7ms |
+| 구형 BIN overlay (`/api/thumbnail?...bin_overlay=1`) | 169.7ms |
+| 신규 BIN 경량 (`/api/bin-map-thumb`) | 26.3ms |
+| measure-thumb 단건 | 9.1ms |
+| measure-thumb-batch 2 key | 6.7ms |
+
+**결론**:
+- BIN은 전용 경량 경로가 압도적으로 빠르다.
+- Measure는 이미 빠른 편이지만, batch warmup을 통해 그리드 첫 체감을 더 줄인다.
+- generic/failbit는 여전히 cold thumbnail 생성이 가장 큰 비용이다.
+
+### 7. E2E에서 반드시 추가로 검증해야 할 것
+
+#### 7-1. `/api/config` 병렬 설정 반영 확인
+서버를 올린 직후 아래 4개가 기대값과 같은지 본다.
+
+```javascript
+const cfg = await fetch('/api/config').then(r => r.json());
+({
+  THUMB_MAX_CONCURRENCY: cfg.THUMB_MAX_CONCURRENCY,
+  GRID_MAX_CONCURRENCY: cfg.GRID_MAX_CONCURRENCY,
+  MEASURE_PREFETCH_CONCURRENCY: cfg.MEASURE_PREFETCH_CONCURRENCY,
+  THUMBNAIL_EXECUTOR_WORKERS: cfg.THUMBNAIL_EXECUTOR_WORKERS,
+});
+```
+
+**pass 기준**:
+- `start.ps1`로 띄운 로컬: `14 / 48 / 8 / 32`
+- `start.sh` 운영 기준: `14 / 48 / 8 / 64`
+
+#### 7-2. 타입별 URL 라우팅 확인
+
+```javascript
+const v = window.viewer;
+v._measureCheckedItems = [
+  { type: 'failbit', key: null, label: 'Failbit' },
+  { type: 'bin', key: null, label: 'BIN' },
+  { type: 'f', key: '1000', label: 'FBT1000' },
+];
+v._gridMeasureMap = [...v._measureCheckedItems];
+[
+  v._buildMeasureThumbUrl('palette_3k/ABC123_00C_04_0003_EE_NORMAL.png', v._measureCheckedItems[0], ''),
+  v._buildMeasureThumbUrl('palette_3k/ABC123_00C_04_0003_EE_NORMAL.png', v._measureCheckedItems[1], ''),
+  v._buildMeasureThumbUrl('palette_3k/ABC123_00C_04_0003_EE_NORMAL.png', v._measureCheckedItems[2], ''),
+];
+```
+
+**pass 기준**:
+- failbit: `/api/thumbnail`
+- bin: grade filter가 없으면 `/api/bin-map-thumb`
+- f/q: `/api/measure-thumb`
+
+#### 7-3. 병렬도별 재현 벤치
+
+튜닝이 다시 필요하면 아래 순서로 반복한다.
+
+1. `thumbnails` 폴더 삭제
+2. 서버 완전 재시작
+3. 새 브라우저 세션으로 접속
+4. `/api/config`로 병렬 설정 확인
+5. 아래 4개를 각각 측정
+   - generic/failbit 48 burst
+   - bin 24 burst
+   - measure-thumb 24 burst
+   - measure-thumb-batch 12×2 burst
+6. `THUMBNAIL_EXECUTOR_WORKERS`, `GRID_MAX_CONCURRENCY`, `MEASURE_PREFETCH_CONCURRENCY`, `THUMB_CLIENT_MAX_CONCURRENCY`를 한 번에 하나씩만 바꿔 비교
+
+#### 7-4. 해석 규칙
+- generic만 빨라지고 bin/measure가 느려지면 `GRID_MAX_CONCURRENCY` 또는 `THUMBNAIL_EXECUTOR_WORKERS`가 과도한 것일 수 있다.
+- measure batch가 늘어질 때는 `MEASURE_PREFETCH_CONCURRENCY`가 너무 높을 가능성이 크다.
+- bin이 느리면 `/api/bin-map-thumb`를 타는지, grade filter 때문에 무거운 `bin_overlay=1` 경로로 떨어진 건 아닌지 먼저 확인한다.
+- failbit는 아직 전용 batch가 없으므로, 보이는 썸네일의 요청 병렬도와 서버 executor가 전부다.
+
+### 8. 최신 수정 파일 매핑
+
+- `js/main.js`
+  - grid shell 선렌더 + visible lazy load
+  - measure prefetch 재활성화
+  - BIN 경량 API 라우팅
+  - polling backoff
+  - 병렬 설정값 수신 (`/api/config`)
+- `api/main.py`
+  - fast JPEG/WEBP helper
+  - BIN/Measure 단건/배치의 `THUMBNAIL_EXECUTOR` 이동
+  - `/api/bin-map-thumb`
+  - `/api/config`에 병렬 설정 노출
+- `api/config.py`
+  - `GRID_MAX_CONCURRENCY`
+  - `MEASURE_PREFETCH_CONCURRENCY`
+  - `THUMBNAIL_EXECUTOR_WORKERS`
+- `api/composite_map.py`
+  - palette PNG 저장 경로 최적화
+- `api/measure_composite.py`
+  - composite 저장 compress level 최적화
+- `start.ps1`
+  - 로컬 16코어 기준 high profile 기본값
+- `start.sh`
+  - 32코어 / 198GB 기준 스케일된 기본값

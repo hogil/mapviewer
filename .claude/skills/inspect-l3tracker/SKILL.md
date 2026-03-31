@@ -1,6 +1,6 @@
 ---
 name: inspect-l3tracker
-description: "L3 Tracker 웨이퍼 맵 뷰어의 핵심 기능을 체계적으로 점검한다. 색상 매핑, Composite Map, LoginId, stats, 다중선택, 더블클릭 반복 동작, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키를 코드 분석과 Playwright UI 테스트로 검증한다. 'L3 점검', '전체 체크', 'UI 테스트', '기능 확인해줘', '버그 있는지 확인' 등의 요청에 반응한다."
+description: "L3 Tracker 웨이퍼 맵 뷰어의 핵심 기능을 체계적으로 점검한다. 색상 매핑, Composite/Measure, LoginId, stats, Label Explorer, MY LOT, 다중선택, 더블클릭 반복 동작, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키를 코드 분석과 Playwright UI 테스트로 검증한다. 'L3 점검', '전체 체크', 'UI 테스트', '기능 확인해줘', '버그 있는지 확인' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [점검-범위]
@@ -19,6 +19,12 @@ argument-hint: [점검-범위]
 - 인덱스 로드/빌드, `_build_lookup_indices`, `_save_cache`, `__pycache__` 정리, composite cleanup 등 무거운 작업은 반드시 `asyncio.create_task`로 백그라운드 실행
 - CPU/IO 집약적 작업은 반드시 `loop.run_in_executor`로 실행 (이벤트 루프 블로킹 금지)
 - 서버는 인덱스 완료 여부와 무관하게 즉시 웹 요청 처리 가능해야 함
+
+## 절대규칙: batch 폴더는 더미 파일 — 이미지 로드 금지
+
+- `wm-811k/batch/` 하위의 모든 파일은 **파일 인덱스 성능 테스트용 0바이트 더미 파일**이다.
+- 점검 시 batch 폴더 파일을 이미지 로드/썸네일 생성/렌더링 대상으로 사용하지 않는다.
+- batch 경로에서 pyvips/PIL 에러가 발생해도 정상이다 — 버그가 아니므로 수정하지 않는다.
 
 ## 점검 체크리스트
 
@@ -66,12 +72,22 @@ argument-hint: [점검-범위]
 ### 3. LoginId 경로
 
 **코드 점검:**
-- `FALLBACK_LOGIN_ID` = env (기본 "guest") — `api/config.py` 단일 소스
+- `FALLBACK_LOGIN_ID` = env (기본 `"notsaml"`) — `api/config.py` 단일 소스
 - `personal_colors.py`: `ANONYMOUS_SCHEME = FALLBACK_LOGIN_ID`
 - `composite_map.py` / `my_lot.py`: `ANONYMOUS_LOGIN_ID = FALLBACK_LOGIN_ID`
-- JS `main.js`: `FALLBACK_LOGIN_ID = 'guest'`, `INVALID_LOGIN_ID_VALUES`
+- JS `main.js`: `FALLBACK_LOGIN_ID = 'guest'`이지만 서버 sentinel(`notsaml`, `guest`)과 함께 동작하는지 확인
+- 서버 로그/통계/저장 경로에서 SAML 로그인 사용자가 fallback ID로 기록되지 않는지 확인
 
-### 4. 그리드/단일 이미지 전환
+### 4. Label Explorer / MY LOT / 특수 그리드
+
+**Playwright:**
+1. Label Explorer에서 클래스 폴더 클릭/다중선택/Ctrl+클릭이 모두 정상 작동하는지 확인
+2. LOT Mode ON 상태에서 Label Explorer 클래스 그리드가 어떤 경로를 타는지 확인
+3. positions 없는 palette 이미지, PNF/비팔레트 이미지가 첫 진입부터 로드되는지 확인
+4. 더블클릭으로 단일 이미지 진입 후 다시 그리드 복귀 시 이미지 수, 순서, 스크롤, flat-grid/LOT-grid 상태가 유지되는지 확인
+5. MY LOT의 보기/Grid 보기/단일 이미지 진입이 Label Explorer와 충돌하지 않는지 확인
+
+### 5. 그리드/단일 이미지 전환
 
 **Playwright:**
 1. Label Explorer에서 class 다중선택 → 그리드 모드
@@ -79,13 +95,13 @@ argument-hint: [점검-범위]
 3. 단일 이미지에서 더블클릭 → 그리드 복귀
 4. 3~4번 5회 반복 — 버벅임/멈춤/로딩 실패 없는지
 
-### 5. stats.html
+### 6. stats.html
 
 **Playwright:**
 1. https://localhost:8443/stats.html 접속
 2. Chart.js 로딩, /api/stats 응답, 통계 표시 확인
 
-### 6. Measure Overlay / Filter
+### 7. Measure Overlay / Filter
 
 **확인:**
 - Measure overlay 활성 시 gradient 범례 전환
@@ -93,7 +109,7 @@ argument-hint: [점검-범위]
 - BIN chip filter 갯수 표시
 - overlay + filter 동시 작동
 
-### 7. Page Manager (멀티탭)
+### 8. Page Manager (멀티탭)
 
 **UI 점검:**
 1. 하단 `#page-tab-bar`에 탭 표시 확인
@@ -103,7 +119,7 @@ argument-hint: [점검-범위]
 5. 탭 `x` 닫기 → 인접 탭 활성화
 6. PageUp/PageDown → 탭 전환
 
-### 8. Thumbnail Navigator & Minimap
+### 9. Thumbnail Navigator & Minimap
 
 **Thumbnail Navigator:**
 1. 단일 이미지 모드 → `#thumbnail-navigator` 자동 표시
@@ -118,7 +134,7 @@ argument-hint: [점검-범위]
 3. Minimap 클릭 → 메인 뷰 팬 이동
 4. 뷰포트 드래그 → 실시간 팬
 
-### 9. 다중검색 & 권한 관리
+### 10. 다중검색 & 권한 관리
 
 **다중검색:**
 1. "다중검색" 버튼 → `#multi-search-modal` 열기
@@ -131,7 +147,7 @@ argument-hint: [점검-범위]
 3. 사용자 검색 → 결과 드롭다운
 4. 등록 테이블 행 추가/역할 설정
 
-### 10. 컨텍스트 메뉴 복사/다운로드
+### 11. 컨텍스트 메뉴 복사/다운로드
 
 **확인:**
 1. 그리드 이미지 우클릭 → 메뉴 8개 항목 전체 표시
@@ -140,7 +156,14 @@ argument-hint: [점검-범위]
 4. "이미지 복사 (Legend 포함)" → merge+legend 캔버스 → 클립보드
 5. "선택 파일 다운로드" → 배치 다운로드 시작
 
-### 11. 키보드 단축키 & 드래그 선택
+### 12. 키보드 단축키 & 드래그 선택
+
+## 점검 순서 권장
+
+1. 코드에서 상태 플래그/경로/캐시 규칙을 먼저 읽어 현재 요구사항을 확인한다.
+2. Playwright로 재현 가능한 최소 시나리오를 만든다.
+3. 증상이 Label Explorer, MY LOT, Measure, Composite, 단일 이미지, 탭 상태 중 어디에서 시작되는지 분리한다.
+4. 수정이 필요한 경우 관련 파일만 좁혀서 변경하고, 재현 시나리오와 인접 시나리오를 다시 확인한다.
 
 **그리드:**
 - `Ctrl+A` → 전체 선택, `Escape` → 전체 해제
