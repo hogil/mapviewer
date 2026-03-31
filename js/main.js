@@ -9824,8 +9824,8 @@ class WaferMapViewer {
     }
 
     async performSearch(options = {}) {
+        const { multiLotList = [], suppressAlerts = false } = options;
         try {
-            const { multiLotList = [], suppressAlerts = false } = options;
             // 🔥 멀티검색일 때는 일반 검색창 텍스트 무시
             const normalizedLots = this.normalizeLotPayload(multiLotList || []);
             const isMultiSearch = normalizedLots.length > 0;
@@ -19364,7 +19364,10 @@ class WaferMapViewer {
                         }, { once: true });
                         img.addEventListener('error', () => {
                             img.dataset.gridLoaded = 'false';
-                            img.style.opacity = '0';
+                            img.dataset.loading = 'false';
+                            // 🔥 instant load 실패 → 큐 시스템으로 재시도 (최대 3회 retry 지원)
+                            this.enqueueGridThumbnail(img, true);
+                            this.drainGridLoadQueue();
                         }, { once: true });
                     }
                 }
@@ -27499,9 +27502,11 @@ class WaferMapViewer {
                             img.style.opacity = '1';
                         }, { once: true });
                         img.addEventListener('error', () => {
-                            img.dataset.gridLoaded = 'error';
+                            img.dataset.gridLoaded = 'false';
                             img.dataset.loading = 'false';
-                            img.style.backgroundColor = '#444';
+                            // 🔥 instant load 실패 → 큐 시스템으로 재시도 (최대 3회 retry 지원)
+                            this.enqueueGridThumbnail(img, true);
+                            this.drainGridLoadQueue();
                         }, { once: true });
                     }
                 }
@@ -27512,6 +27517,10 @@ class WaferMapViewer {
         setTimeout(() => {
             this.loadVisibleGridThumbnails();
         }, 0);
+        // 🔥 안전망: instant load 실패 이미지 재로드 (스크롤 이벤트 settle 후)
+        setTimeout(() => {
+            this.loadVisibleGridThumbnails();
+        }, 300);
 
         const isMeasureThumbGrid =
             (Array.isArray(this._gridMeasureMap) && this._gridMeasureMap.length > 0) ||

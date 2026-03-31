@@ -819,15 +819,37 @@ class IndexService:
             time.sleep(0.5)
         return self.load_cache(log=not self._cache_loaded)
 
-    async def ensure_ready_for_search(self) -> bool:
-        """검색 전에 인덱스가 준비되도록 캐시 로드 또는 빌드 트리거."""
+    async def ensure_ready_for_search(self, timeout: float = 10.0) -> bool:
+        """검색 전에 인덱스가 준비되도록 캐시 로드 또는 빌드 대기.
+
+        빌드가 진행 중이면 timeout 초까지 대기하여 첫 검색 실패를 방지한다.
+        """
         if self.ready and self._keys:
             return True
-        if self.load_cache(log=not self._cache_loaded) and self._keys:
-            return True
+
+        # 캐시 로드를 executor에서 실행 (이벤트루프 블로킹 방지)
+        loop = asyncio.get_running_loop()
+        try:
+            loaded = await loop.run_in_executor(
+                self._io_pool, lambda: self.load_cache(log=not self._cache_loaded)
+            )
+            if loaded and self._keys:
+                return True
+        except Exception:
+            pass
+
+        # 빌드가 진행 중이 아니면 트리거
         if not self.building:
             asyncio.create_task(self.build(force=True, allow_background=True))
-        return False
+
+        # 빌드/캐시 로드 완료를 대기 (최대 timeout 초)
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
+            if self.ready and self._keys:
+                return True
+            await asyncio.sleep(0.1)
+
+        return bool(self.ready and self._keys)
 
     # ------------- 데이터 스냅샷 -------------
     def slice_with_prefix(self, prefix: str) -> Tuple[List[str], List[str]]:

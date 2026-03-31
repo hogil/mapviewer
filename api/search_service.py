@@ -111,9 +111,9 @@ class SearchService:
         timings["total_indexed_files"] = len(self.index_service.keys)
         timings["lot_filter_count"] = len(lot_filter)
 
-        # 인덱스가 비어 있으면 즉시 재시도 후 폴백
+        # 인덱스가 비어 있으면 대기 후 재시도 (첫 검색 실패 방지)
         if not keys_slice:
-            await self.index_service.ensure_ready_for_search()
+            await self.index_service.ensure_ready_for_search(timeout=10.0)
             keys_slice, names_slice = self.index_service.slice_with_prefix(prefix)
 
         bucket: List[str] = []
@@ -185,9 +185,14 @@ class SearchService:
                                       if i < len(self.index_service._keys)]
                         search_mode = "simple-token"
                     else:
-                        # 폴더 한정: keys_slice가 작으므로 순차 스캔 (빠름)
-                        index_hits = [k for k, n in zip(keys_slice, names_slice)
-                                      if query_for_search in n]
+                        # 순차 스캔 — 대량이면 executor에서 실행 (이벤트루프 블로킹 방지)
+                        _q = query_for_search
+                        def _seq_scan():
+                            return [k for k, n in zip(keys_slice, names_slice) if _q in n]
+                        if len(keys_slice) > 50000:
+                            index_hits = await loop.run_in_executor(self.io_executor, _seq_scan)
+                        else:
+                            index_hits = _seq_scan()
                         search_mode = "simple"
                 elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
             elif lot_filter or lot_wafer_pairs:
@@ -211,9 +216,11 @@ class SearchService:
 
             bucket.extend(index_hits)
         else:
-            # 폴백: 파일시스템 직접 스캔
+            # 폴백: 파일시스템 직접 스캔 (executor에서 실행 — 이벤트루프 블로킹 방지)
             search_mode = "fallback"
-            fallback_results, fallback_meta = self._fallback_scan(scan_root, query_for_search, lot_filter)
+            fallback_results, fallback_meta = await loop.run_in_executor(
+                self.io_executor, self._fallback_scan, scan_root, query_for_search, lot_filter
+            )
             bucket.extend(fallback_results)
             timings.update(fallback_meta)
 
