@@ -19348,18 +19348,20 @@ class WaferMapViewer {
 
                 // 🔥 첫 청크의 뷰포트 이미지: 큐 우회, 바로 src 할당 (캐시 히트 시 0ms)
                 if (rendered === 0 && i < INSTANT_COUNT) {
-                    img.decoding = 'async';  // 캐시 히트 시 동기 디코딩 → 다음 페인트에 즉시 표시
+                    img.decoding = 'async';
                     img.src = img.dataset.src;
                     img.style.opacity = '1';
-                    img.dataset.loading = 'false';
+                    img.dataset.loading = 'true';  // 🔥 로딩 중 표시 (primeRenderedGridThumbnails 중복 로드 방지)
                     // 캐시 히트 확인 (동기 로드 완료)
                     if (img.complete && img.naturalWidth > 0) {
                         img.dataset.gridLoaded = 'true';
+                        img.dataset.loading = 'false';
                     } else {
                         // 캐시 미스 — onload로 후처리
                         img.dataset.gridLoaded = 'false';
                         img.addEventListener('load', () => {
                             img.dataset.gridLoaded = 'true';
+                            img.dataset.loading = 'false';
                             img.style.opacity = '1';
                         }, { once: true });
                         img.addEventListener('error', () => {
