@@ -1706,8 +1706,8 @@ async def _lifespan_background_init():
     bootlog = logging.getLogger("uvicorn.error")
     loop = asyncio.get_running_loop()
 
-    # 🚀 첫 페이지 로드에 GIL/IO 경합 없도록 대기 후 무거운 작업 시작
-    await asyncio.sleep(10)
+    # 첫 페이지 로드 직후 바로 캐시 프리로드를 시작한다.
+    await asyncio.sleep(0)
 
     # 0) 디스크 캐시 워밍 — 3depth까지 폴더+파일 목록을 미리 읽어 OS 캐시에 올림
     def _warm_disk_cache():

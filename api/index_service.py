@@ -389,6 +389,7 @@ class IndexService:
         self._async_build_lock = asyncio.Lock()
         self._io_pool: Optional[Any] = None  # 외부에서 주입 (DEFAULT executor 경합 방지)
         self._cache_loaded = False
+        self.loading_cache = False
 
         self.ready = False
         self.building = False
@@ -397,6 +398,7 @@ class IndexService:
         self.completed_dirs = 0
         self.build_started_at = 0.0
         self.build_completed_at = 0.0
+        self.loading_cache = False
         self._refresh_task: Optional[asyncio.Task] = None
 
     # ------------- 기본 프로퍼티 -------------
@@ -425,8 +427,12 @@ class IndexService:
     def clear(self) -> None:
         with self._lock:
             self._file_index.clear()
-            self._keys.clear()
-            self._names.clear()
+            self._keys = []
+            self._names = []
+            self._lot_index = {}
+            self._folder_index = {}
+            self._token_index = {}
+            self._name_to_paths = {}
         self.ready = False
         self.total_files = 0
         self.total_dirs = 0
@@ -434,42 +440,138 @@ class IndexService:
         self.build_started_at = 0.0
         self.build_completed_at = 0.0
 
+    def _compute_lookup_indices(
+        self,
+        keys: List[str],
+        names: List[str],
+    ) -> Tuple[Dict[str, List[int]], Dict[str, List[int]], Dict[str, List[int]], Dict[str, List[str]], float]:
+        """주어진 keys/names 스냅샷으로 역인덱스를 계산한다."""
+        from collections import defaultdict
+
+        t0 = time.time()
+        lot_idx: Dict[str, List[int]] = {}
+        folder_idx: Dict[str, List[int]] = {}
+        token_idx: Dict[str, List[int]] = defaultdict(list)
+        name_to_paths: Dict[str, List[str]] = {}
+        classification_dir_names = {"classification", "classification_chips"}
+
+        for i, (key, name) in enumerate(zip(keys, names)):
+            # 초기 캐시 로드가 과도하게 길어지지 않도록 yield 빈도를 낮춘다.
+            if i % 50000 == 0 and i > 0:
+                time.sleep(0.001)
+            lot = name.split("_", 1)[0]
+            if lot not in lot_idx:
+                lot_idx[lot] = []
+            lot_idx[lot].append(i)
+
+            slash = key.find("/")
+            folder = key[:slash] if slash > 0 else ""
+            if folder:
+                if folder not in folder_idx:
+                    folder_idx[folder] = []
+                folder_idx[folder].append(i)
+
+            dot = name.rfind(".")
+            stem = name[:dot] if dot > 0 else name
+            for token in stem.split("_"):
+                token_idx[token].append(i)
+
+            if folder not in classification_dir_names:
+                orig_name = key.rsplit("/", 1)[-1]
+                if orig_name not in name_to_paths:
+                    name_to_paths[orig_name] = []
+                name_to_paths[orig_name].append(key)
+
+        elapsed = time.time() - t0
+        return lot_idx, folder_idx, dict(token_idx), name_to_paths, elapsed
+
+    def _compute_basic_indices(
+        self,
+        keys: List[str],
+        names: List[str],
+    ) -> Tuple[Dict[str, List[int]], Dict[str, List[int]], float]:
+        """첫 캐시 로드용 최소 인덱스(LOT/폴더)만 계산한다."""
+        t0 = time.time()
+        lot_idx: Dict[str, List[int]] = {}
+        folder_idx: Dict[str, List[int]] = {}
+
+        for i, (key, name) in enumerate(zip(keys, names)):
+            if i % 50000 == 0 and i > 0:
+                time.sleep(0.001)
+
+            lot = name.split("_", 1)[0]
+            if lot not in lot_idx:
+                lot_idx[lot] = []
+            lot_idx[lot].append(i)
+
+            slash = key.find("/")
+            folder = key[:slash] if slash > 0 else ""
+            if folder:
+                if folder not in folder_idx:
+                    folder_idx[folder] = []
+                folder_idx[folder].append(i)
+
+        elapsed = time.time() - t0
+        return lot_idx, folder_idx, elapsed
+
     def load_cache(self, log: bool = True) -> bool:
         if not self.cache_file.exists():
             return False
-        
+
+        while True:
+            with self._lock:
+                if not self.loading_cache:
+                    self.loading_cache = True
+                    break
+                if self.ready and self._keys:
+                    return True
+            time.sleep(0.05)
+
         load_start = time.time()
         if log:
             self.logger.info("📂 [INDEX] Cache load started: %s", self.cache_file.name)
-        
+
         try:
-            with self.cache_file.open("r", encoding="utf-8") as f:
-                keys = [line.strip() for line in f if line.strip()]
-        except Exception as exc:
-            self.logger.warning(f"[INDEX] 캐시 로드 실패: {exc}")
-            return False
-        if not keys:
-            return False
-        # 파일명만 검색 대상으로 사용 (폴더명 제외)
-        names = [rel.rsplit("/", 1)[-1].lower() for rel in keys]
-        with self._lock:
-            self._keys.clear()
-            self._keys.extend(keys)
-            self._names.clear()
-            self._names.extend(names)
-        self._build_lookup_indices()
-        self.total_files = len(keys)
-        self.total_dirs = 0
-        self.completed_dirs = 0
-        self.build_started_at = time.time()
-        self.build_completed_at = self.build_started_at
-        self.ready = True
-        
-        load_duration = time.time() - load_start
-        if log and not self._cache_loaded:
-            self.logger.info("✅ [INDEX] Cache load complete: %d files (%.2fs)", self.total_files, load_duration)
-        self._cache_loaded = True
-        return True
+            try:
+                with self.cache_file.open("r", encoding="utf-8") as f:
+                    keys = [line.strip() for line in f if line.strip()]
+            except Exception as exc:
+                self.logger.warning(f"[INDEX] 캐시 로드 실패: {exc}")
+                return False
+            if not keys:
+                return False
+            # 파일명만 검색 대상으로 사용 (폴더명 제외)
+            names = [rel.rsplit("/", 1)[-1].lower() for rel in keys]
+            lot_idx, folder_idx, basic_elapsed = self._compute_basic_indices(keys, names)
+            with self._lock:
+                self._keys = keys
+                self._names = names
+                self._lot_index = lot_idx
+                self._folder_index = folder_idx
+                self._token_index = {}
+                self._name_to_paths = {}
+            self.total_files = len(keys)
+            self.total_dirs = 0
+            self.completed_dirs = 0
+            self.build_started_at = time.time()
+            self.build_completed_at = self.build_started_at
+            self.ready = True
+
+            load_duration = time.time() - load_start
+            if log and not self._cache_loaded:
+                self.logger.info("✅ [INDEX] Cache load complete: %d files (%.2fs)", self.total_files, load_duration)
+            if log:
+                self.logger.info(
+                    "✅ [INDEX] Basic indices built from cache: %d LOTs, %d folders (%.2fs)",
+                    len(lot_idx),
+                    len(folder_idx),
+                    basic_elapsed,
+                )
+            self._cache_loaded = True
+            return True
+        finally:
+            with self._lock:
+                self.loading_cache = False
 
     def _save_cache(self, keys: List[str]) -> None:
         """인덱스 캐시 파일 저장 (원자적 쓰기)"""
@@ -661,18 +763,30 @@ class IndexService:
 
                 # _save_cache + _build_lookup_indices 를 executor 에서 실행 (이벤트 루프 블로킹 방지)
                 def _finalize_build():
-                    with self._lock:
-                        self._keys.clear()
-                        self._keys.extend(sorted_keys)
-                        self._names.clear()
-                        self._names.extend(sorted_names)
                     self._save_cache(sorted_keys)
                     if not self.cache_file.exists():
                         self.logger.error(f"❌ [INDEX] 캐시 파일 생성 실패: {self.cache_file}")
                     else:
                         cache_size = self.cache_file.stat().st_size
                         self.logger.info(f"✅ [INDEX] 캐시 파일 확인: {self.cache_file.name}, 크기: {cache_size:,} bytes")
-                    self._build_lookup_indices()
+                    lot_idx, folder_idx, token_idx, name_to_paths, lookup_elapsed = self._compute_lookup_indices(
+                        sorted_keys, sorted_names
+                    )
+                    with self._lock:
+                        self._keys = sorted_keys
+                        self._names = sorted_names
+                        self._lot_index = lot_idx
+                        self._folder_index = folder_idx
+                        self._token_index = token_idx
+                        self._name_to_paths = name_to_paths
+                    self.logger.info(
+                        "✅ [INDEX] Lookup indices built: %d LOTs, %d folders, %d tokens, %d unique names (%.2fs)",
+                        len(lot_idx),
+                        len(folder_idx),
+                        len(token_idx),
+                        len(name_to_paths),
+                        lookup_elapsed,
+                    )
 
                 await loop.run_in_executor(self._io_pool, _finalize_build)
 
@@ -717,12 +831,12 @@ class IndexService:
 
     # ------------- 데이터 스냅샷 -------------
     def slice_with_prefix(self, prefix: str) -> Tuple[List[str], List[str]]:
-        """접두사로 시작하는 경로만 슬라이스. 인덱스 빌드 중이면 복사본 반환."""
+        """접두사로 시작하는 경로만 슬라이스."""
         prefix = prefix or ""
         prefix_with_sep = prefix.rstrip("/") + "/" if prefix else ""
         with self._lock:
-            keys_ref = list(self._keys) if self.building else self._keys
-            names_ref = list(self._names) if self.building else self._names
+            keys_ref = self._keys
+            names_ref = self._names
         if not prefix:
             return keys_ref, names_ref
         start_key = prefix_with_sep
@@ -733,43 +847,11 @@ class IndexService:
 
     def _build_lookup_indices(self) -> None:
         """LOT별/폴더별/토큰별/파일명별 역인덱스 빌드."""
-        from collections import defaultdict
-        t0 = time.time()
-        lot_idx: Dict[str, List[int]] = {}
-        folder_idx: Dict[str, List[int]] = {}
-        token_idx: Dict[str, List[int]] = defaultdict(list)
-        name_to_paths: Dict[str, List[str]] = {}
-        classification_dir_names = {"classification", "classification_chips"}
-        for i, (key, name) in enumerate(zip(self._keys, self._names)):
-            # 🔥 매 5000건마다 GIL 해제 — API 요청 처리 기회 제공
-            if i % 5000 == 0 and i > 0:
-                time.sleep(0.01)
-            lot = name.split("_", 1)[0]
-            if lot not in lot_idx:
-                lot_idx[lot] = []
-            lot_idx[lot].append(i)
-            slash = key.find("/")
-            folder = key[:slash] if slash > 0 else ""
-            if folder:
-                if folder not in folder_idx:
-                    folder_idx[folder] = []
-                folder_idx[folder].append(i)
-            # 토큰 인덱스: 확장자 제거 후 _ split
-            dot = name.rfind(".")
-            stem = name[:dot] if dot > 0 else name
-            for token in stem.split("_"):
-                token_idx[token].append(i)
-            # 파일명 → 경로 인덱스 (classification 디렉토리 제외)
-            if folder not in classification_dir_names:
-                orig_name = key.rsplit("/", 1)[-1]  # 대소문자 원본 유지
-                if orig_name not in name_to_paths:
-                    name_to_paths[orig_name] = []
-                name_to_paths[orig_name].append(key)
+        lot_idx, folder_idx, token_idx, name_to_paths, elapsed = self._compute_lookup_indices(self._keys, self._names)
         self._lot_index = lot_idx
         self._folder_index = folder_idx
-        self._token_index = dict(token_idx)
+        self._token_index = token_idx
         self._name_to_paths = name_to_paths
-        elapsed = time.time() - t0
         self.logger.info("✅ [INDEX] Lookup indices built: %d LOTs, %d folders, %d tokens, %d unique names (%.2fs)",
                          len(lot_idx), len(folder_idx), len(token_idx), len(name_to_paths), elapsed)
 
@@ -839,6 +921,7 @@ class IndexService:
             "indexed_files": len(self._keys),
             "index_ready": self.ready,
             "index_building": self.building,
+            "index_cache_loading": self.loading_cache,
             "indexed_directories": self.completed_dirs,
             "total_directories": self.total_dirs,
             "progress_percent": percent,
