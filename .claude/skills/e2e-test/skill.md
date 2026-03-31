@@ -5056,3 +5056,100 @@ v._gridMeasureMap = [...v._measureCheckedItems];
   - 로컬 16코어 기준 high profile 기본값
 - `start.sh`
   - 32코어 / 198GB 기준 스케일된 기본값
+
+## 버그 수정 이력 (2026-04-01, 생성 탭 복귀 시 wafer 그리드 스크롤 복원)
+
+### Composite/Measure 생성 후 wafer 탭 복귀 시 그리드 스크롤 초기화
+- **버그**: `wafer0` 그리드에서 이미지를 선택한 뒤 `Composite`로 `com0` 또는 `Measure`로 `mea0`를 생성하고 다시 `wafer0`를 클릭하면 그리드 스크롤이 맨 위로 초기화됨
+- **원인**: `buildSavedViewSnapshot()`가 기존 `savedViewState`를 그대로 재사용하여, 생성 직전 DOM의 실제 `scrollTop` 대신 stale snapshot 값을 저장함
+- **수정**: grid snapshot 생성 시 `getGridScrollWrapper()`에서 현재 `scrollTop`을 다시 읽어 저장하고, 기존 grid 이미지 목록은 보존
+- **파일**: `js/main.js` (`buildSavedViewSnapshot`)
+
+### E2E 검증 방법
+1. `palette_3k`를 열고 flat grid 상태(`lotMode=false`)로 맞춘다.
+2. `.grid-scroll-wrapper.scrollTop = 5200`으로 이동하고 임의 이미지 1개를 선택한다.
+3. `window.viewer.handleCompositeCreate()`로 `com0`를 생성한다.
+4. `wafer0` 탭으로 돌아와 `scrollTop === 5200`인지 확인한다.
+5. 다시 `wafer0`에서 `.grid-scroll-wrapper.scrollTop = 6400`으로 이동하고 이미지 1개를 선택한다.
+6. 유효한 measure key를 설정한 뒤 `window.viewer._openMeasureTab()`으로 `mea0`를 생성한다.
+7. `wafer0` 탭으로 돌아와 `scrollTop === 6400`인지 확인한다.
+
+### PASS 기준
+- `com0` 생성 전후 `wafer0`의 `scrollTop`이 동일하다.
+- `mea0` 생성 전후 `wafer0`의 `scrollTop`이 동일하다.
+- 복귀 후 `.grid-scroll-wrapper`가 유지되고 `scrollHeight > 0`이다.
+
+## Daily Cleanup (매일 새벽 2시 자동 정리)
+
+### 개요
+서버가 살아 있는 동안 매일 새벽 2:00 (KST)에 `composite_map`과 `thumbnails` 폴더를 통째로 삭제하고 빈 폴더로 재생성한다.
+thumbnails는 요청 시 자동 재생성되므로 삭제해도 서비스에 영향 없다.
+
+### 코드 위치
+`api/main.py` 한 파일 안에 전부 있다.
+
+#### 설정값 (환경변수)
+```python
+DAILY_CLEANUP_HOUR = 2       # 실행 시각 (시)
+DAILY_CLEANUP_MINUTE = 0     # 실행 시각 (분)
+DAILY_CLEANUP_ENABLED = True  # "0"/"false"/"no"/"off"로 비활성화 가능
+```
+
+#### 삭제 대상
+| 폴더 | 경로 | 설명 |
+|---|---|---|
+| `composite_map` | `{PROJECT_ROOT}/composite_map/` | Composite Map 결과물 (heatmap, NPZ 등) |
+| `thumbnails` | `{PROJECT_ROOT}/thumbnails/` | 썸네일 캐시 (요청 시 자동 재생성) |
+| `positions/composite_map` | `{POSITIONS_ROOT}/composite_map/` | Composite용 positions 데이터 |
+
+#### 핵심 함수
+```
+_wipe_and_recreate(folder)     → shutil.rmtree() + mkdir()
+_daily_cleanup()               → 3개 폴더에 _wipe_and_recreate 실행
+_daily_cleanup_loop(hour, min) → while True: sleep(다음 02:00까지) → _daily_cleanup()
+_start_daily_cleanup()         → lifespan에서 호출, asyncio.create_task로 루프 시작
+_stop_daily_cleanup()          → 서버 종료 시 task cancel
+```
+
+#### 동작 흐름
+```
+서버 시작
+  └→ lifespan yield 전에 _start_daily_cleanup() 호출
+       └→ asyncio.create_task(_daily_cleanup_loop(2, 0))
+            └→ while True:
+                 ├→ 다음 02:00까지 초 계산 → asyncio.sleep()
+                 ├→ run_in_executor로 _daily_cleanup() 실행 (이벤트 루프 비블로킹)
+                 │    ├→ composite_map: rmtree + mkdir
+                 │    ├→ thumbnails: rmtree + mkdir
+                 │    └→ positions/composite_map: rmtree + mkdir
+                 └→ 로그 출력 후 다음 날 02:00까지 다시 sleep
+```
+
+#### E2E 검증 방법
+```python
+# 1. 설정값 확인
+from api.main import DAILY_CLEANUP_ENABLED, DAILY_CLEANUP_HOUR, DAILY_CLEANUP_MINUTE
+assert DAILY_CLEANUP_ENABLED == True
+assert DAILY_CLEANUP_HOUR == 2
+assert DAILY_CLEANUP_MINUTE == 0
+
+# 2. 다음 실행 시각 확인
+from api.main import _seconds_until_next_daily_run
+wait, run_at = _seconds_until_next_daily_run(2, 0)
+assert 0 < wait <= 86400  # 최대 24시간 이내
+
+# 3. 수동 실행 테스트 (실제로 폴더가 비워지는지)
+from api.main import _daily_cleanup
+result = _daily_cleanup()
+for name, info in result.items():
+    assert info['ok'] == True
+```
+
+#### 이전 구조와의 차이
+| 항목 | 이전 | 현재 |
+|---|---|---|
+| 삭제 대상 | composite_map만 | composite_map + thumbnails |
+| 삭제 방식 | dir별 mtime 비교 → 개별 삭제 | 폴더 통째 rmtree |
+| 모드 | daily / interval 2가지 | daily 1가지 |
+| 환경변수 | 6개 | 3개 |
+| 코드 라인 | ~211줄 | ~62줄 |

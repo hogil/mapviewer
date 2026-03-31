@@ -1602,23 +1602,25 @@ class WaferMapViewer {
     }
 
     buildSavedViewSnapshot() {
-        // 이미 savedViewState가 있으면 그대로 사용 (LOT/GRID에서 미리 저장한 scrollTop 보존)
-        if (this.savedViewState) return this.savedViewState;
-
-        // gridMode일 때 페이지 스냅샷이 필요한 경우에만 현재 스크롤을 기준으로 생성
         if (this.gridMode && Array.isArray(this.currentGridImages) && this.currentGridImages.length > 0) {
-            const grid = document.getElementById('image-grid');
-            const scrollWrapper = grid?.parentElement;
+            const scrollWrapper = this.getGridScrollWrapper();
+            const savedGridState = this.savedViewState?.type === 'grid' ? this.savedViewState : null;
+            const savedImages = Array.isArray(savedGridState?.images) && savedGridState.images.length > 0
+                ? [...savedGridState.images]
+                : ((this._measureCheckedItems?.length > 0 && this._measureBaseImages?.length > 0)
+                    ? [...this._measureBaseImages]
+                    : [...this.currentGridImages]);
             return {
                 type: 'grid',
-                images: [...this.currentGridImages],
-                scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
+                images: savedImages,
+                scrollTop: scrollWrapper ? scrollWrapper.scrollTop : (savedGridState?.scrollTop ?? 0),
                 isCompositeMode: this.isCompositeMode,
                 compositeSession: this.isCompositeMode ? this.cloneCompositeSession() : null,
                 selectedFolders: this.selectedFolders ? Array.from(this.selectedFolders) : [],
-                lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || null,
+                lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || this.lastSelectedFolderPath || null,
             };
         }
+        if (this.savedViewState) return this.savedViewState;
         if (this.viewMode === 'single' && this.selectedImagePath) {
             return {
                 type: 'single',
