@@ -4561,3 +4561,66 @@ return result;
 
 **핵심 파일**:
 - `js/main.js`: `_ensureRatioGradientCache`, `_prefetchCheckedMeasureThumbs`, `clearWaferMapExplorerSelection`, `_openMeasureTab`, `showGrid`
+
+## Phase 48: Label Explorer 그리드 이미지 로드 실패 및 chip-positions 404 수정 검증
+
+### chip-positions 파일 없을 때 404 대신 빈 결과 반환
+- **버그**: classification 경로의 이미지에 positions 파일이 없으면 `/api/chip-positions`가 404를 반환하여 브라우저 콘솔에 `Failed to load resource: 404` 에러가 출력됨
+- **원인**: `get_chip_positions` 엔드포인트에서 positions 파일이 없을 때 `HTTPException(404)`를 raise. classification 이미지는 positions 파일이 없을 수 있으므로 404가 아닌 빈 결과를 반환해야 함
+- **수정**: `api/main.py` — positions 파일 미발견 시 `{"chips": [], "ftn_keys": [], "qtn_keys": []}`를 200으로 반환
+- **파일**: `api/main.py`
+
+### 그리드 instant load 실패 시 이미지가 영구히 빈 상태로 남는 버그
+- **버그**: Label Explorer에서 Ctrl+클릭으로 그리드를 표시할 때, 일부 이미지가 로드되지 않고 빈 상태로 남음. 더블클릭으로 단일뷰 진입 후 다시 그리드로 돌아오면 모든 이미지가 정상 로드됨 (때로는 2번 반복 필요)
+- **원인**: `showGridByLot`과 `showGridImmediately`의 instant load 블록에서 `img.src`를 직접 할당하는데, 에러 핸들러에 **재시도 로직이 없음**. 네트워크 타이밍/서버 부하로 실패하면 이미지가 영구히 `gridLoaded='error'` 상태로 남음. 반면 단일뷰 복귀 시 호출되는 `loadVisibleGridThumbnails()` → `startGridThumbnailLoad()`는 최대 3회 재시도 로직이 있어 이미지가 정상 로드됨
+- **수정**:
+  - `showGridImmediately` instant load error handler: `enqueueGridThumbnail()` + `drainGridLoadQueue()` 호출하여 큐 시스템의 재시도 로직 활용
+  - `showGridByLot` instant load error handler: 동일하게 큐 시스템으로 재시도
+  - `showGridByLot`에 300ms 후 `loadVisibleGridThumbnails()` 안전망 호출 추가 (스크롤 이벤트 settle 후 미로드 이미지 재시도)
+- **파일**: `js/main.js`
+
+**테스트 절차**:
+
+1. `https://localhost:8443` 접속 후 새로고침한다.
+2. Label Explorer에서 `asDF` 폴더를 **Ctrl+클릭**하여 그리드에 이미지를 로드한다.
+3. 모든 이미지(16개)가 정상 표시되는지 확인한다.
+4. 브라우저 콘솔에 `chip-positions` 관련 404 에러가 없는지 확인한다.
+5. `asdfasdf` 폴더도 **Ctrl+클릭**하여 두 클래스 모두 그리드에 표시되는지 확인한다.
+6. 그리드에서 아무 이미지를 **더블클릭**하여 단일뷰로 진입한다.
+7. 다시 **더블클릭**하여 그리드로 복귀한다.
+8. 이전에 보이던 이미지가 모두 그대로 정상 표시되는지 확인한다.
+9. 존재하지 않는 이미지 경로로 chip-positions API를 직접 호출하여 200 + 빈 결과가 반환되는지 확인한다.
+
+**검증 포인트**:
+- [ ] Label Explorer Ctrl+클릭 후 모든 그리드 이미지가 즉시 정상 로드됨
+- [ ] 콘솔에 `chip-positions` 404 에러가 없음
+- [ ] 단일뷰 진입→복귀 후에도 모든 이미지가 정상 표시됨
+- [ ] positions 파일이 없는 이미지에 대해 `/api/chip-positions`가 200 + `{"chips":[]}` 반환
+- [ ] 그리드 instant load 실패 시 자동 재시도하여 이미지가 최종 로드됨
+
+**권장 확인 코드**:
+```javascript
+(() => {
+  const imgs = document.querySelectorAll('.grid-thumb-img');
+  const loaded = [...imgs].filter(i => i.dataset.gridLoaded === 'true').length;
+  const failed = [...imgs].filter(i => i.dataset.gridLoaded === 'error' || i.dataset.gridLoaded === 'false').length;
+  return { total: imgs.length, loaded, failed };
+})();
+```
+
+**API 테스트**:
+```bash
+# positions 없는 이미지 → 200 + 빈 결과 (기존: 404)
+curl -sk "https://localhost:8443/api/chip-positions?path=classification/asDF/nonexistent.png"
+# 기대 결과: {"chips":[],"ftn_keys":[],"qtn_keys":[]}
+```
+
+**PASS 기준**:
+- `loaded === total` (모든 이미지 로드 성공)
+- `failed === 0`
+- chip-positions API가 404 대신 200 반환
+- 콘솔에 thumbnail/chip-positions 관련 에러 없음
+
+**핵심 파일**:
+- `api/main.py`: `get_chip_positions` — 404 → 200 빈 결과 반환
+- `js/main.js`: `showGridImmediately`, `showGridByLot` — instant load error handler에 큐 재시도 추가
