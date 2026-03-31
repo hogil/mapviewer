@@ -4624,3 +4624,127 @@ curl -sk "https://localhost:8443/api/chip-positions?path=classification/asDF/non
 **핵심 파일**:
 - `api/main.py`: `get_chip_positions` — 404 → 200 빈 결과 반환
 - `js/main.js`: `showGridImmediately`, `showGridByLot` — instant load error handler에 큐 재시도 추가
+
+---
+
+## Phase 49: 검색 첫 실행 실패 + 다중검색 에러 + 이벤트루프 블로킹 수정 검증
+
+**목적**: 서버 시작 직후 첫 검색이 "결과 없음"으로 실패하던 버그, 다중검색 모달에서 `suppressAlerts is not defined` 에러로 검색이 깨지던 버그, 대량 인덱스에서 동기 순차스캔이 이벤트루프를 블로킹하던 성능 문제가 수정되었는지 검증한다.
+
+**배경 — 발견된 버그 3건**:
+
+### 버그 1: 첫 검색 시 항상 "결과 없음" (ensure_ready_for_search 즉시 반환)
+- **증상**: 서버 시작 후 첫 검색어 입력 → "검색 결과가 없습니다" alert. 새로고침 후 다시 검색하면 정상.
+- **원인**: `IndexService.ensure_ready_for_search()` (api/index_service.py) 가 인덱스 미준비(building 중) 시 즉시 `False` 반환 → `SearchService.search()`에서 빈 `keys_slice` → fallback scan도 부족 → 0건 반환.
+- **수정**: `ensure_ready_for_search(timeout=10.0)` — 빌드/캐시 로드 진행 중이면 최대 10초까지 `await asyncio.sleep(0.1)` 루프로 대기. `load_cache()`를 `loop.run_in_executor`로 비동기 실행하여 이벤트루프 블로킹 방지.
+- **핵심 코드**:
+  ```python
+  # api/index_service.py — ensure_ready_for_search
+  async def ensure_ready_for_search(self, timeout: float = 10.0) -> bool:
+      if self.ready and self._keys:
+          return True
+      loop = asyncio.get_running_loop()
+      loaded = await loop.run_in_executor(
+          self._io_pool, lambda: self.load_cache(log=not self._cache_loaded)
+      )
+      if loaded and self._keys:
+          return True
+      if not self.building:
+          asyncio.create_task(self.build(force=True, allow_background=True))
+      deadline = asyncio.get_event_loop().time() + timeout
+      while asyncio.get_event_loop().time() < deadline:
+          if self.ready and self._keys:
+              return True
+          await asyncio.sleep(0.1)
+      return bool(self.ready and self._keys)
+  ```
+
+### 버그 2: 다중검색 모달 에러 (suppressAlerts ReferenceError)
+- **증상**: 다중검색 모달에서 LOT 입력 → 적용 클릭 → "검색 중 오류가 발생했습니다" 에러 표시. 콘솔: `ReferenceError: suppressAlerts is not defined`.
+- **원인**: `performSearch(options)` (js/main.js) 에서 `const { suppressAlerts } = options` 가 `try` 블록 내부에서 선언됨 → `catch` 블록에서 접근 불가 (블록 스코프).
+- **수정**: destructuring을 `try` 바깥으로 이동.
+- **핵심 코드**:
+  ```javascript
+  // js/main.js — performSearch (수정 후)
+  async performSearch(options = {}) {
+      const { multiLotList = [], suppressAlerts = false } = options; // try 바깥
+      try { /* ... */ } catch (error) {
+          if (!suppressAlerts) alert('검색 중 오류가 발생했습니다.');
+      }
+  }
+  ```
+
+### 버그 3: 대량 인덱스 동기 순차스캔 이벤트루프 블로킹
+- **증상**: 토큰 인덱스 미생성 상태(캐시 로드 직후)에서 501만 파일 검색 시 수 초간 서버 전체 응답 불가.
+- **원인**: `SearchService.search()`에서 단순 검색 순차스캔과 fallback 파일시스템 스캔이 동기 실행 → 이벤트루프 블로킹.
+- **수정**: 50000건 이상 순차스캔은 `run_in_executor`로 실행. fallback `_fallback_scan`도 executor로 이동.
+
+**테스트 절차**:
+
+### 49-1. 서버 재시작 직후 첫 검색 성공 확인
+1. 서버 종료 후 재시작 (`RELOAD=0 HTTPS_PORT=8443 python -m api.main`)
+2. 서버 기동 직후 (인덱스 빌드 중에) `/api/search?q=abc123&limit=100` API 호출
+3. **pass 기준**: `success === true`, `results.length > 0`, alert 없음
+
+### 49-2. UI 단순 검색 (ABC123)
+1. 검색창에 `ABC123` 입력 → 검색 버튼 클릭
+2. **pass 기준**: 그리드에 500건 표시, alert 없음, 이미지 정상 로드
+
+### 49-3. UI AND/OR 논리 검색
+1. 검색창에 `(ABC123 and 04) or (DEF456 and 05)` 입력 → 검색
+2. **pass 기준**: 결과 > 0건, 두 LOT 모두 표시
+
+### 49-4. 다중검색 모달 — noise LOT 파싱
+1. `다중검색` 버튼 클릭 → 모달 열림
+2. textarea에 noise 포함 3줄 입력:
+   ```
+   ABC123.J3 04
+   DEF456.2	08
+   GHJ789 extra_junk
+   ```
+3. `적용` 버튼 클릭
+4. **pass 기준**:
+   - 모달 자동 닫힘 (`display === 'none'`)
+   - 에러 메시지 없음 (`#multi-search-error` 비어있음)
+   - 그리드에 3개 LOT 이미지 표시 (ABC123:500 + DEF456:524 + GHJ789:524 = 1548건)
+   - LOT 패널에 ABC123, DEF456, GHJ789 표시
+   - `suppressAlerts is not defined` 콘솔 에러 없음
+
+### 49-5. 다중검색 에러 처리
+1. 빈 textarea에서 `적용` → "LOT ID를 한 개 이상 입력하세요." 표시
+2. ESC → 모달 닫힘
+
+### 49-6. 검색 성능 (이벤트루프 블로킹 없음)
+1. 검색 API 호출과 동시에 `/api/index-status` 호출
+2. **pass 기준**: 검색 중에도 다른 API가 1초 이내 응답
+
+**검증 코드**:
+```javascript
+// 49-1: 서버 직후 검색 API
+const [status, search] = await Promise.all([
+  fetch('/api/index-status').then(r => r.json()),
+  fetch('/api/search?q=abc123&limit=100').then(r => r.json())
+]);
+console.assert(search.success && search.results.length > 0, '첫 검색 성공');
+
+// 49-4: 다중검색 모달
+document.getElementById('multi-search-btn').click();
+document.getElementById('multi-search-input').value = 'ABC123.J3 04\nDEF456.2\t08\nGHJ789 extra_junk';
+document.getElementById('multi-search-apply').click();
+// → 모달 닫힘, v.selectedImages.length === 1548, 에러 없음
+```
+
+**결과 요약표**:
+
+| 항목 | 기준 | 실측 |
+|------|------|------|
+| 서버 직후 첫 검색 | 결과 > 0 | 100건 (3.8ms) |
+| UI 단순 검색 ABC123 | 500건, alert 없음 | 500건 PASS |
+| 다중검색 noise 3줄 | 1548건, 에러 없음 | 1548건 PASS |
+| suppressAlerts 에러 | 콘솔 에러 없음 | PASS |
+| 이벤트루프 블로킹 | 검색 중 타 API 1초 이내 | PASS |
+
+**수정된 파일**:
+- `api/index_service.py`: `ensure_ready_for_search()` — timeout 대기 + executor 비동기 캐시 로드
+- `api/search_service.py`: 순차스캔/fallback을 executor로 이동
+- `js/main.js`: `performSearch()` — suppressAlerts destructuring 위치 수정
