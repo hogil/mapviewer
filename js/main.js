@@ -12021,63 +12021,8 @@ class WaferMapViewer {
                 });
             }
 
-            // 🔥 폴더 클릭 시에도 이전 선택 해제 (Ctrl/Shift가 아닐 때)
-
-            if (!e.ctrlKey && !e.shiftKey) {
-                const folderPath = target.dataset.path;
-                // 이전 선택된 모든 항목들의 시각적 표시 해제
-
-                const allLinks = Array.from(this.dom.fileExplorer.querySelectorAll('a[data-path]'));
-
-                allLinks.forEach(link => {
-                    link.classList.remove('selected');
-                });
-
-                // 이전 선택된 폴더들의 시각적 표시 해제
-
-                const allFolders = Array.from(this.dom.fileExplorer.querySelectorAll('summary.folder'));
-
-                allFolders.forEach(folder => {
-                    folder.classList.remove('selected');
-                });
-
-                // 🔥 LOT List 모달 초기화 (검색 입력 & 필터 해제)
-                const lotSearchInput = document.getElementById('lot-list-search-input');
-                if (lotSearchInput && lotSearchInput.value) {
-                    lotSearchInput.value = '';
-                    // 필터 해제를 위해 LOT 목록 재생성
-                    if (this.lotMode && this.lotGroups && this.lotGroups.length > 0) {
-                        this.updateLotListContent();
-                    }
-                }
-
-                // 🔥 Label Explorer 선택도 해제
-
-                if (this.labelSelection) {
-                    this.labelSelection.selected = [];
-
-                    this.labelSelection.selectedClasses = [];
-
-                    this.updateLabelExplorerSelection();
-                }
-
-                // 🔥 폴더 선택 상태 초기화
-                if (this.selectedFolders) {
-                    this.selectedFolders.clear();
-                }
-                this.selectedImages = [];
-                this.selectedImagePath = null;
-                this.contextMenuTargetPath = null;
-                this.lastSelectedFolder = target;
-                this.lastSelectedFolderPath = folderPath || null;
-                if (folderPath) {
-                    this.selectedFolders = new Set([folderPath]);
-                    target.classList.add('selected');
-                }
-                this._unfilteredGridImages = null;
-
-                // 🔥 일반 클릭: 폴더 선택 + expansion/collapse만 수행 (그리드 생성 안 함)
-            }
+            // 🔥 일반 클릭은 폴더 expansion/collapse만 수행
+            // 폴더 하이라이트는 Ctrl/Shift 기반의 명시적 폴더 선택일 때만 유지한다.
         } 
 
         // Handle file selection (multi-select)
