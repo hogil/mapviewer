@@ -505,15 +505,10 @@ def _env_int(name: str, default: int, *, min_value: Optional[int] = None, max_va
     return value
 
 
-COMPOSITE_RETENTION_HOURS = _env_int("COMPOSITE_RETENTION_HOURS", 24, min_value=0)
-COMPOSITE_CLEANUP_MODE = (os.getenv("COMPOSITE_CLEANUP_MODE", "daily").strip().lower() or "daily")
-COMPOSITE_CLEANUP_INTERVAL_SECONDS = _env_int("COMPOSITE_CLEANUP_INTERVAL_SECONDS", 86400, min_value=0)
-COMPOSITE_CLEANUP_HOUR = _env_int("COMPOSITE_CLEANUP_HOUR", 2, min_value=0, max_value=23)
-COMPOSITE_CLEANUP_MINUTE = _env_int("COMPOSITE_CLEANUP_MINUTE", 0, min_value=0, max_value=59)
-COMPOSITE_CLEANUP_RUN_ON_STARTUP = (
-    os.getenv("COMPOSITE_CLEANUP_RUN_ON_STARTUP", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
-)
-COMPOSITE_CLEANUP_TASK: Optional[asyncio.Task] = None
+DAILY_CLEANUP_HOUR = _env_int("DAILY_CLEANUP_HOUR", 2, min_value=0, max_value=23)
+DAILY_CLEANUP_MINUTE = _env_int("DAILY_CLEANUP_MINUTE", 0, min_value=0, max_value=59)
+DAILY_CLEANUP_ENABLED = os.getenv("DAILY_CLEANUP_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+_DAILY_CLEANUP_TASK: Optional[asyncio.Task] = None
 
 def _pid_alive(pid: int) -> bool:
     # index_service가 내부에서 관리하므로 이전 호환성을 위해 유지
@@ -528,111 +523,36 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _cleanup_old_composite_dirs(retention_seconds: int) -> Dict[str, Any]:
-    """Delete composite output directories older than retention_seconds.
-    Also cleans up corresponding positions directories and orphaned NPZ tmp files."""
-    stats: Dict[str, Any] = {
-        "scanned_dirs": 0,
-        "deleted_dirs": 0,
-        "skipped_recent": 0,
-        "error_count": 0,
-        "errors": [],
-        "retention_seconds": retention_seconds,
-        "tmp_cleaned": 0,
+def _wipe_and_recreate(folder: Path) -> int:
+    """폴더를 통째로 삭제하고 빈 폴더로 재생성한다. 삭제한 항목 수를 반환."""
+    if not folder.exists():
+        folder.mkdir(parents=True, exist_ok=True)
+        return 0
+    count = sum(1 for _ in folder.rglob("*"))
+    shutil.rmtree(folder, ignore_errors=True)
+    folder.mkdir(parents=True, exist_ok=True)
+    return count
+
+
+def _daily_cleanup() -> Dict[str, Any]:
+    """composite_map + thumbnails 폴더를 통째로 비운다."""
+    targets = {
+        "composite_map": COMPOSITE_ROOT,
+        "thumbnails": config.THUMBNAIL_DIR,
     }
-    if retention_seconds <= 0:
-        return stats
-    if not COMPOSITE_ROOT.exists():
-        return stats
+    # positions/composite_map 도 같이 정리
+    positions_composite = config.POSITIONS_ROOT / "composite_map"
+    if positions_composite.exists():
+        targets["positions_composite_map"] = positions_composite
 
-    # 먼저 잔류 NPZ tmp 파일 정리 (모든 user 디렉터리)
-    for tmp_file in COMPOSITE_ROOT.rglob("*_tmp.npz"):
+    result: Dict[str, Any] = {}
+    for name, path in targets.items():
         try:
-            tmp_file.unlink()
-            stats["tmp_cleaned"] += 1
-        except Exception:
-            pass
-    # 이전 버그 잔류물: .npz.tmp.npz 패턴도 정리
-    for tmp_file in COMPOSITE_ROOT.rglob("*.npz.tmp.npz"):
-        try:
-            tmp_file.unlink()
-            stats["tmp_cleaned"] += 1
-        except Exception:
-            pass
-
-    now = time.time()
-    cutoff = now - retention_seconds
-    positions_composite_root = config.POSITIONS_ROOT / "composite_map"
-
-    for user_dir in COMPOSITE_ROOT.iterdir():
-        if not user_dir.is_dir():
-            continue
-        for output_dir in user_dir.iterdir():
-            if not output_dir.is_dir():
-                continue
-            stats["scanned_dirs"] += 1
-            try:
-                mtime = output_dir.stat().st_mtime
-            except Exception as exc:
-                stats["error_count"] += 1
-                if len(stats["errors"]) < 5:
-                    stats["errors"].append(f"{output_dir}: stat failed ({exc})")
-                continue
-
-            if mtime >= cutoff:
-                stats["skipped_recent"] += 1
-                continue
-
-            try:
-                shutil.rmtree(output_dir)
-                stats["deleted_dirs"] += 1
-                # 대응하는 positions 디렉터리도 삭제
-                pos_dir = positions_composite_root / user_dir.name / output_dir.name
-                if pos_dir.exists():
-                    shutil.rmtree(pos_dir, ignore_errors=True)
-            except Exception as exc:
-                stats["error_count"] += 1
-                if len(stats["errors"]) < 5:
-                    stats["errors"].append(f"{output_dir}: delete failed ({exc})")
-
-        # 빈 user 폴더 정리
-        try:
-            if user_dir.exists() and not any(user_dir.iterdir()):
-                user_dir.rmdir()
-        except Exception:
-            pass
-        # 빈 positions user 폴더 정리
-        pos_user = positions_composite_root / user_dir.name
-        try:
-            if pos_user.exists() and not any(pos_user.iterdir()):
-                pos_user.rmdir()
-        except Exception:
-            pass
-
-    return stats
-
-
-async def _composite_cleanup_loop(interval_seconds: int, retention_seconds: int) -> None:
-    bootlog = logging.getLogger("uvicorn.error")
-    loop_interval = max(60, interval_seconds)
-    try:
-        while True:
-            stats = _cleanup_old_composite_dirs(retention_seconds)
-            if stats["deleted_dirs"] > 0 or stats["error_count"] > 0:
-                bootlog.info(
-                    "[COMPOSITE CLEANUP] scanned=%d deleted=%d skipped_recent=%d errors=%d retention=%ds",
-                    stats["scanned_dirs"],
-                    stats["deleted_dirs"],
-                    stats["skipped_recent"],
-                    stats["error_count"],
-                    stats["retention_seconds"],
-                )
-                for err in stats["errors"]:
-                    bootlog.warning("[COMPOSITE CLEANUP] %s", err)
-            await asyncio.sleep(loop_interval)
-    except asyncio.CancelledError:
-        bootlog.info("[COMPOSITE CLEANUP] loop stopped")
-        raise
+            deleted = _wipe_and_recreate(path)
+            result[name] = {"deleted": deleted, "ok": True}
+        except Exception as exc:
+            result[name] = {"deleted": 0, "ok": False, "error": str(exc)}
+    return result
 
 
 def _seconds_until_next_daily_run(hour: int, minute: int) -> Tuple[float, datetime]:
@@ -640,122 +560,53 @@ def _seconds_until_next_daily_run(hour: int, minute: int) -> Tuple[float, dateti
     run_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if run_at <= now:
         run_at += timedelta(days=1)
-    wait_seconds = max(1.0, (run_at - now).total_seconds())
-    return wait_seconds, run_at
+    return max(1.0, (run_at - now).total_seconds()), run_at
 
 
-async def _composite_cleanup_daily_loop(retention_seconds: int, hour: int, minute: int) -> None:
+async def _daily_cleanup_loop(hour: int, minute: int) -> None:
     bootlog = logging.getLogger("uvicorn.error")
     try:
         while True:
             wait_seconds, run_at = _seconds_until_next_daily_run(hour, minute)
-            bootlog.info(
-                "[COMPOSITE CLEANUP] next daily run=%s retention=%ds",
-                run_at.isoformat(timespec="seconds"),
-                retention_seconds,
-            )
+            bootlog.info("[DAILY CLEANUP] next run=%s", run_at.isoformat(timespec="seconds"))
             await asyncio.sleep(wait_seconds)
-            stats = _cleanup_old_composite_dirs(retention_seconds)
-            bootlog.info(
-                "[COMPOSITE CLEANUP] daily scan=%d deleted=%d skipped_recent=%d errors=%d retention=%ds",
-                stats["scanned_dirs"],
-                stats["deleted_dirs"],
-                stats["skipped_recent"],
-                stats["error_count"],
-                stats["retention_seconds"],
-            )
-            for err in stats["errors"]:
-                bootlog.warning("[COMPOSITE CLEANUP] %s", err)
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, _daily_cleanup)
+            parts = [f"{k}: {v['deleted']}건{'✓' if v['ok'] else '✗ '+v.get('error','')}"
+                     for k, v in result.items()]
+            bootlog.info("[DAILY CLEANUP] %s", " | ".join(parts))
     except asyncio.CancelledError:
-        bootlog.info("[COMPOSITE CLEANUP] daily loop stopped")
+        bootlog.info("[DAILY CLEANUP] loop stopped")
         raise
 
 
-async def _start_composite_cleanup_loop() -> None:
-    global COMPOSITE_CLEANUP_TASK
-    if COMPOSITE_RETENTION_HOURS <= 0:
-        logging.getLogger("uvicorn.error").info(
-            "[COMPOSITE CLEANUP] disabled (COMPOSITE_RETENTION_HOURS=%d)",
-            COMPOSITE_RETENTION_HOURS,
-        )
+async def _start_daily_cleanup() -> None:
+    global _DAILY_CLEANUP_TASK
+    if not DAILY_CLEANUP_ENABLED:
+        logging.getLogger("uvicorn.error").info("[DAILY CLEANUP] disabled")
         return
-    if COMPOSITE_CLEANUP_TASK is not None and not COMPOSITE_CLEANUP_TASK.done():
+    if _DAILY_CLEANUP_TASK is not None and not _DAILY_CLEANUP_TASK.done():
         return
+    logging.getLogger("uvicorn.error").info(
+        "[DAILY CLEANUP] enabled — run_at=%02d:%02d (composite_map + thumbnails)",
+        DAILY_CLEANUP_HOUR, DAILY_CLEANUP_MINUTE,
+    )
+    _DAILY_CLEANUP_TASK = asyncio.create_task(
+        _daily_cleanup_loop(DAILY_CLEANUP_HOUR, DAILY_CLEANUP_MINUTE),
+        name="daily-cleanup-loop",
+    )
 
-    cleanup_mode = COMPOSITE_CLEANUP_MODE
-    if cleanup_mode not in {"daily", "interval"}:
-        logging.getLogger("uvicorn.error").warning(
-            "[COMPOSITE CLEANUP] invalid COMPOSITE_CLEANUP_MODE=%s, fallback=interval",
-            cleanup_mode,
-        )
-        cleanup_mode = "interval"
 
-    if cleanup_mode == "interval" and COMPOSITE_CLEANUP_INTERVAL_SECONDS <= 0:
-        logging.getLogger("uvicorn.error").info(
-            "[COMPOSITE CLEANUP] disabled (COMPOSITE_CLEANUP_INTERVAL_SECONDS=%d)",
-            COMPOSITE_CLEANUP_INTERVAL_SECONDS,
-        )
+async def _stop_daily_cleanup() -> None:
+    global _DAILY_CLEANUP_TASK
+    if _DAILY_CLEANUP_TASK is None:
         return
-
-    retention_seconds = COMPOSITE_RETENTION_HOURS * 3600
-    bootlog = logging.getLogger("uvicorn.error")
-
-    if COMPOSITE_CLEANUP_RUN_ON_STARTUP:
-        loop = asyncio.get_running_loop()
-        initial_stats = await loop.run_in_executor(None, _cleanup_old_composite_dirs, retention_seconds)
-        bootlog.info(
-            "[COMPOSITE CLEANUP] startup scan=%d deleted=%d skipped_recent=%d errors=%d retention_hours=%d",
-            initial_stats["scanned_dirs"],
-            initial_stats["deleted_dirs"],
-            initial_stats["skipped_recent"],
-            initial_stats["error_count"],
-            COMPOSITE_RETENTION_HOURS,
-        )
-        for err in initial_stats["errors"]:
-            bootlog.warning("[COMPOSITE CLEANUP] %s", err)
-    else:
-        bootlog.info(
-            "[COMPOSITE CLEANUP] startup scan skipped (COMPOSITE_CLEANUP_RUN_ON_STARTUP=0)"
-        )
-
-    if cleanup_mode == "daily":
-        bootlog.info(
-            "[COMPOSITE CLEANUP] mode=daily run_at=%02d:%02d retention_hours=%d",
-            COMPOSITE_CLEANUP_HOUR,
-            COMPOSITE_CLEANUP_MINUTE,
-            COMPOSITE_RETENTION_HOURS,
-        )
-        COMPOSITE_CLEANUP_TASK = asyncio.create_task(
-            _composite_cleanup_daily_loop(
-                retention_seconds=retention_seconds,
-                hour=COMPOSITE_CLEANUP_HOUR,
-                minute=COMPOSITE_CLEANUP_MINUTE,
-            ),
-            name="composite-cleanup-daily-loop",
-        )
-    else:
-        interval_seconds = COMPOSITE_CLEANUP_INTERVAL_SECONDS
-        bootlog.info(
-            "[COMPOSITE CLEANUP] mode=interval interval_sec=%d retention_hours=%d",
-            interval_seconds,
-            COMPOSITE_RETENTION_HOURS,
-        )
-        COMPOSITE_CLEANUP_TASK = asyncio.create_task(
-            _composite_cleanup_loop(interval_seconds, retention_seconds),
-            name="composite-cleanup-interval-loop",
-        )
-
-
-async def _stop_composite_cleanup_loop() -> None:
-    global COMPOSITE_CLEANUP_TASK
-    if COMPOSITE_CLEANUP_TASK is None:
-        return
-    COMPOSITE_CLEANUP_TASK.cancel()
+    _DAILY_CLEANUP_TASK.cancel()
     try:
-        await COMPOSITE_CLEANUP_TASK
+        await _DAILY_CLEANUP_TASK
     except asyncio.CancelledError:
         pass
-    COMPOSITE_CLEANUP_TASK = None
+    _DAILY_CLEANUP_TASK = None
 
 def _matches_search_query(filename_lower: str, query: str) -> bool:
     """검색 쿼리와 파일명 매칭 (AND/OR/NOT 지원)
@@ -1688,7 +1539,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logging.getLogger("uvicorn.error").info("🛑 L3Tracker 서버 종료")
 
-    await _stop_composite_cleanup_loop()
+    await _stop_daily_cleanup()
     await index_service.stop_refresh_loop()
 
     try:
@@ -1810,8 +1661,8 @@ async def _lifespan_background_init():
     else:
         bootlog.warning("⚠️ [INDEX] 자동 재빌드 비활성화 (INDEX_REFRESH_INTERVAL_MINUTES=0)")
 
-    # 5) Composite cleanup 루프
-    await _start_composite_cleanup_loop()
+    # 5) 매일 새벽 2시 composite_map + thumbnails 폴더 정리
+    await _start_daily_cleanup()
 
 # ======================== Git 버전 해시 (JS 캐시버스팅용) ========================
 try:
@@ -1868,7 +1719,7 @@ async def startup_event():
 async def shutdown_event():
     """서버 종료 시 정리"""
     print("[SHUTDOWN EVENT] 서버 종료 중...", flush=True)
-    await _stop_composite_cleanup_loop()
+    await _stop_daily_cleanup()
     await index_service.stop_refresh_loop()
 
 
