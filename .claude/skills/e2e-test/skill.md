@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 45개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증, HTTP 캐시 무효화 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 45개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증, Label Explorer flat-grid 강제 및 positions 없는 palette/PNF 이미지 즉시 로드 회귀, HTTP 캐시 무효화 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -4579,6 +4579,16 @@ return result;
   - `showGridByLot`에 300ms 후 `loadVisibleGridThumbnails()` 안전망 호출 추가 (스크롤 이벤트 settle 후 미로드 이미지 재시도)
 - **파일**: `js/main.js`
 
+### Label Explorer 그리드가 LOT 경로를 타면서 positions 없는 palette/PNF 이미지가 초기 미표시되는 회귀
+- **버그**: 오래된 palette 이미지이지만 positions 파일이 없거나, PNF/비팔레트 계열이라 LOT 분류 정보가 맞지 않는 라벨 등록 이미지가 Label Explorer 그리드에서 처음엔 비어 있다가, 더블클릭으로 단일 이미지 뷰에 들어갔다가 다시 그리드로 돌아오면 뒤늦게 보임
+- **재현 조건**: `asDF` 같은 Label Explorer 클래스에서 `filter_test/ABC234_00C_04_20260315_110000_91.5_9_EE_PWQ.png`, `palette_5mb/wafer_palette_15mb_EE_PWQ.png`처럼 positions 없는 palette 이미지를 포함한 상태로 그리드 진입
+- **원인**: Label Explorer가 `showGrid(..., true)`로 진입하면서도 `lotMode`가 켜져 있으면 여전히 `showGridByLot()` 경로를 탔다. 이 경로는 LOT 헤더/지연 로딩 전제를 두고 있어 Label Explorer의 혼합 이미지 집합에서 초기 썸네일 src 할당이 빠질 수 있었고, 단일뷰 복귀 시 재렌더링되며 뒤늦게 채워졌다
+- **수정**:
+  - `buildLabelExplorerGridState()`에 `forceFlatGrid: true` 저장
+  - `showGridFromLabelExplorer()`, `showGridFromClass()`, `showGridFromMultipleClasses()`에서 `showGrid(..., true, true)` 호출
+  - `showGrid()`가 `_transientGridRestoreState.forceFlatGrid`를 읽어 단일 이미지 복귀 시에도 flat-grid 경로를 유지
+- **파일**: `js/main.js`
+
 **테스트 절차**:
 
 1. `https://localhost:8443` 접속 후 새로고침한다.
@@ -4586,15 +4596,19 @@ return result;
 3. 모든 이미지(16개)가 정상 표시되는지 확인한다.
 4. 브라우저 콘솔에 `chip-positions` 관련 404 에러가 없는지 확인한다.
 5. `asdfasdf` 폴더도 **Ctrl+클릭**하여 두 클래스 모두 그리드에 표시되는지 확인한다.
-6. 그리드에서 아무 이미지를 **더블클릭**하여 단일뷰로 진입한다.
-7. 다시 **더블클릭**하여 그리드로 복귀한다.
-8. 이전에 보이던 이미지가 모두 그대로 정상 표시되는지 확인한다.
-9. 존재하지 않는 이미지 경로로 chip-positions API를 직접 호출하여 200 + 빈 결과가 반환되는지 확인한다.
+6. 그리드에 **LOT 헤더가 생성되지 않고 flat-grid**로 바로 표시되는지 확인한다.
+7. `filter_test/ABC234_00C_04_20260315_110000_91.5_9_EE_PWQ.png`, `palette_5mb/wafer_palette_15mb_EE_PWQ.png` 썸네일이 첫 진입에서 즉시 로드되는지 확인한다.
+8. 그리드에서 위 두 이미지 중 하나를 **더블클릭**하여 단일뷰로 진입한다.
+9. 다시 **더블클릭**하여 그리드로 복귀한다.
+10. 이전에 보이던 이미지가 모두 그대로 정상 표시되고, 복귀 후에도 여전히 LOT 헤더 없이 flat-grid 상태인지 확인한다.
+11. 존재하지 않는 이미지 경로로 chip-positions API를 직접 호출하여 200 + 빈 결과가 반환되는지 확인한다.
 
 **검증 포인트**:
 - [ ] Label Explorer Ctrl+클릭 후 모든 그리드 이미지가 즉시 정상 로드됨
 - [ ] 콘솔에 `chip-positions` 404 에러가 없음
-- [ ] 단일뷰 진입→복귀 후에도 모든 이미지가 정상 표시됨
+- [ ] Label Explorer 클래스 그리드는 LOT Mode ON이어도 LOT 헤더 없이 flat-grid로 렌더링됨
+- [ ] positions 없는 palette/PNF 이미지 썸네일이 첫 진입에서 바로 로드됨
+- [ ] 단일뷰 진입→복귀 후에도 모든 이미지가 정상 표시되고 flat-grid 상태가 유지됨
 - [ ] positions 파일이 없는 이미지에 대해 `/api/chip-positions`가 200 + `{"chips":[]}` 반환
 - [ ] 그리드 instant load 실패 시 자동 재시도하여 이미지가 최종 로드됨
 

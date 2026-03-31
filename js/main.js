@@ -12602,6 +12602,7 @@ class WaferMapViewer {
         return {
             type: 'grid',
             source: 'labelExplorer',
+            forceFlatGrid: true,
             images: [...safeImages],
             scrollTop: scrollTop ?? 0,
             selectedIndices: Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : [],
@@ -18496,9 +18497,16 @@ class WaferMapViewer {
             }
         }
 
+        const transientGridRestoreState = skipSaveState ? this._transientGridRestoreState : null;
+        const shouldForceFlatGrid = forceFlatGrid || !!(
+            skipSaveState &&
+            (transientGridRestoreState?.forceFlatGrid || transientGridRestoreState?.source === 'labelExplorer')
+        );
+
         // 📦 Lot 모드가 활성화되어 있으면 Lot별 그리드로 표시
-        // 🔥 forceFlatGrid: Label Explorer 등에서 LOT 분류 없이 즉시 src 할당하는 flat grid 사용
-        if (this.lotMode && !forceFlatGrid) {
+        // 🔥 Label Explorer/legacy label grids는 flat grid를 강제하여
+        //    LOT 헤더/지연 로딩 경로로 인한 썸네일 초기 미표시를 피한다.
+        if (this.lotMode && !shouldForceFlatGrid) {
             this.showGridByLot(images, skipSaveState);
             return;
         }
@@ -18610,7 +18618,6 @@ class WaferMapViewer {
 
         // 🔥 skipSaveState에 따라 스크롤 위치 저장/복원 결정
         const scrollWrapper = grid?.parentElement;  // .grid-scroll-wrapper
-        const transientGridRestoreState = skipSaveState ? this._transientGridRestoreState : null;
         let scrollTopToRestore = null;
 
         if (skipSaveState) {
@@ -23511,7 +23518,7 @@ class WaferMapViewer {
             this.debugLog('🔷 [DEBUG] 그리드 컨테이너 표시 설정 완료');
         }
 
-        this.showGrid(actualPaths, true);  // LOT 모드 활성 시 LOT 그룹 그리드 적용
+        this.showGrid(actualPaths, true, true);  // Label Explorer는 항상 flat grid 사용
 
         // ✅ showGrid가 그리드를 재생성하므로 attribute를 다시 설정
         const gridAfter = document.getElementById('image-grid');
@@ -23575,7 +23582,7 @@ class WaferMapViewer {
             this.labelExplorerGridState = this.buildLabelExplorerGridState(imageFiles, 0);
             this._transientGridRestoreState = { ...this.labelExplorerGridState };
 
-            this.showGrid(imageFiles, true);  // 🔥 라벨 Explorer에서 호출 시 상태 저장 건너뛰기
+            this.showGrid(imageFiles, true, true);  // 🔥 Label Explorer는 항상 flat grid 사용
 
             // 🔥 Label Explorer에서 온 Grid에 우클릭 이벤트 추가
 
@@ -23686,7 +23693,7 @@ class WaferMapViewer {
 
             this.debugLog(`🚀 다중 클래스 그리드 표시 시작: ${allImageFiles.length}개 이미지`);
 
-            this.showGrid(allImageFiles, true);  // 🔥 라벨 Explorer에서 호출 시 상태 저장 건너뛰기
+            this.showGrid(allImageFiles, true, true);  // 🔥 Label Explorer는 항상 flat grid 사용
 
             this.debugLog(`✅ 다중 클래스 그리드 표시 완료`);
 
