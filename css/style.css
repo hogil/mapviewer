@@ -2729,6 +2729,20 @@
             font-size: 13px !important;
         }
 
+        /* Label Explorer 긴 파일명이 패널을 밀어내지 않도록 */
+        #label-explorer-list {
+            overflow-x: hidden;
+        }
+
+        .label-img-name {
+            display: block;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            box-sizing: border-box;
+        }
+
         .class-manager-input-row {
             margin-bottom: 10px;
             display: flex;
