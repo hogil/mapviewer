@@ -6,6 +6,7 @@ BIN/FBT/QVL chip-level 값을 집계하여 gradient heatmap 생성.
 """
 
 import json
+import math
 import os
 import threading
 import time
@@ -31,7 +32,7 @@ from .composite_map import (
     ANONYMOUS_LOGIN_ID,
     _sanitize_login_id,
 )
-from .personal_colors import get_ratio_gradient_for_scheme, load_color_legends, DEFAULT_BOTTOM_COLORS
+from .personal_colors import get_ratio_gradient_for_scheme, get_composite_gradient_for_scheme, load_color_legends, DEFAULT_BOTTOM_COLORS
 
 MEASURE_CACHE_FILENAME = "measure_composite_data.npz"  # legacy fallback
 
@@ -466,7 +467,7 @@ def _render_indexed(
         idx = abs_to_idx.get((xa, ya))
         if idx is None:
             continue
-        if gradient_filter is not None and min(int(pct / 10), 9) not in gradient_filter:
+        if gradient_filter is not None and (0 if pct == 0 else min(math.ceil(pct / 10), 10)) not in gradient_filter:
             continue
         if bin_filter is not None and abs_to_bin.get((xa, ya), "Normal") not in bin_filter:
             continue
@@ -561,6 +562,7 @@ def create_measure_data_only(
     bin_types: Optional[List[str]] = None,
     aggregation: str = "average",
     scheme: Optional[str] = None,
+    color_source: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     이미지 렌더링/저장 없이 칩 좌표+값+색상만 반환.
@@ -621,9 +623,12 @@ def create_measure_data_only(
     # 3. Percentile
     pct_map = _percentile_ranks(value_map)
 
-    # 4. Gradient 색상 (measure 탭 색상 사용)
+    # 4. Gradient 색상 (composite 모드→composite 탭, 그 외→measure 탭)
     resolved = scheme or ANONYMOUS_LOGIN_ID
-    stops = get_ratio_gradient_for_scheme(resolved)
+    if color_source == "composite":
+        stops = get_composite_gradient_for_scheme(resolved)
+    else:
+        stops = get_ratio_gradient_for_scheme(resolved)
 
     # 5. Base positions (canvas 크기 + 칩 좌표)
     from .composite_map import _first_image_with_positions, _load_source_positions_data, _resolve_scheme_background_rgb
@@ -688,6 +693,16 @@ def create_measure_data_only(
             "color": list(color),
         })
 
+    # range_counts (11구간: [0]=exact 0, [1]=0~10, ..., [10]=90~100)
+    range_counts = [0] * 11
+    for cd in chips_data:
+        p = cd["pct"]
+        if p == 0:
+            range_counts[0] += 1
+        else:
+            ri = min(math.ceil(p / 10), 10)  # 1~10 (0~10% ~ 90~100%)
+            range_counts[ri] += 1
+
     elapsed = time.perf_counter() - t0
     return {
         "canvas": {"width": canvas_w, "height": canvas_h},
@@ -702,6 +717,7 @@ def create_measure_data_only(
         "mode": mode,
         "item_key": item_key,
         "aggregation": aggregation,
+        "range_counts": range_counts,
     }
 
 
@@ -858,10 +874,13 @@ def create_measure_composite(
 
     elapsed = time.perf_counter() - t0
 
-    # Range counts (10구간)
-    range_counts = [0] * 10
+    # Range counts (11구간: [0]=exact 0, [1]=0~10, ..., [10]=90~100)
+    range_counts = [0] * 11
     for pct in pct_map.values():
-        range_counts[min(int(pct / 10), 9)] += 1
+        if pct == 0:
+            range_counts[0] += 1
+        else:
+            range_counts[min(math.ceil(pct / 10), 10)] += 1
 
     return {
         "output_dir": out_dir.relative_to(IMAGES_ROOT).as_posix(),
@@ -1007,15 +1026,18 @@ def recolor_measure_composite(
                 if _xa is not None and _ya is not None:
                     bin_lookup[(int(_xa), int(_ya))] = _normalize_bin(c.get("b"))
 
-    range_counts = [0] * 10
+    range_counts = [0] * 11
     for (xa, ya), pct in pct_map.items():
-        ri = min(int(pct / 10), 9)
-        if gf_set is not None and ri not in gf_set:
+        if pct == 0:
+            ri_11 = 0
+        else:
+            ri_11 = min(math.ceil(pct / 10), 10)
+        if gf_set is not None and ri_11 not in gf_set:
             continue
         if bf_set is not None:
             if bin_lookup.get((xa, ya), "Normal") not in bf_set:
                 continue
-        range_counts[ri] += 1
+        range_counts[ri_11] += 1
 
     return {
         "success": True,

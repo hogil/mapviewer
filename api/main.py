@@ -4,6 +4,7 @@ L3Tracker - Wafer Map Viewer API (HTTPS, Pretty Table Logs, Noise-free)
 """
 
 # ======================== UTF-8 Console Setup ========================
+import math
 import sys
 import os
 import subprocess
@@ -3884,7 +3885,7 @@ def _apply_ratio_overlay_memory(
         for chip_idx, val in values:
             pct = max(0.0, min(100.0, _percentile_rank(val)))
             if allowed_ranges is not None:
-                range_idx = min(int(pct / 10), 9)
+                range_idx = 0 if pct == 0 else min(math.ceil(pct / 10), 10)
                 if range_idx not in allowed_ranges:
                     masked_chips.append(chip_idx)
                     continue
@@ -4269,6 +4270,7 @@ def _resolve_pyramid_dir(
     border_normalize: bool = False,
     measure_overlay: Optional[str] = None,
     bin_overlay: bool = False,
+    gradient_filter: Optional[str] = None,
 ) -> Path:
     level_tag = int(level * 100)
     filter_token = _build_filter_variant_token(
@@ -4279,6 +4281,7 @@ def _resolve_pyramid_dir(
         border_normalize=border_normalize,
         measure_overlay=measure_overlay,
         bin_overlay=bin_overlay,
+        gradient_filter=gradient_filter,
     )
 
     # 필터 캐시는 scheme/filter/rev별로 분리해 stale 충돌을 방지한다.
@@ -4662,24 +4665,39 @@ def _generate_thumbnail_sync(
                  bin_overlay or bool(measure_overlay))
             )
 
+            # Average map gradient filter: palette index 24-255 중 비선택 범위를 흰색으로
+            _avg_gradient_filter_set = None
+            if _is_palette_png and gradient_filter:
+                _stem = image_path.stem.lower()
+                if 'square_average' in _stem or 'square_weighted' in _stem or 'square_mean' in _stem:
+                    try:
+                        _avg_gradient_filter_set = set(int(x) for x in gradient_filter.split(",") if x.strip().isdigit())
+                    except Exception:
+                        pass
+
             if not _need_pyvips:
                 # 🔥 pyvips fast path: 모든 이미지 타입에 pyvips.thumbnail 사용 (PIL 대비 1.4~2x 빠름)
                 try:
                     import pyvips as _pv
-                    if _is_palette_png and personalized and scheme:
-                        # palette PNG + 개인색: PLTE 바이너리 패치 후 thumbnail_buffer
+                    _need_plte_patch = (_is_palette_png and personalized and scheme) or _avg_gradient_filter_set
+                    if _need_plte_patch:
+                        # palette PNG: PLTE 바이너리 패치 후 thumbnail_buffer
                         from .personal_colors import (
                             plte_inplace_patch_memory,
                             plte_measure_gradient_patch_memory,
                             plte_composite_gradient_patch_memory,
+                            plte_gradient_filter_patch_memory,
                         )
                         _raw = bytearray(image_path.read_bytes())
-                        _raw = plte_inplace_patch_memory(_raw, scheme) or _raw
+                        if personalized and scheme:
+                            _raw = plte_inplace_patch_memory(_raw, scheme) or _raw
                         gradient_mode = _resolve_composite_map_gradient_mode(image_path)
                         if gradient_mode == "measure":
-                            _raw = plte_measure_gradient_patch_memory(bytearray(_raw), scheme) or _raw
+                            _raw = plte_measure_gradient_patch_memory(bytearray(_raw), scheme or ANONYMOUS_LOGIN_ID) or _raw
                         elif gradient_mode == "composite":
-                            _raw = plte_composite_gradient_patch_memory(bytearray(_raw), scheme) or _raw
+                            _raw = plte_composite_gradient_patch_memory(bytearray(_raw), scheme or ANONYMOUS_LOGIN_ID) or _raw
+                        if _avg_gradient_filter_set:
+                            _raw = plte_gradient_filter_patch_memory(bytearray(_raw), _avg_gradient_filter_set) or _raw
                         _vi = _pv.Image.thumbnail_buffer(bytes(_raw), size[0])
                     else:
                         # palette(개인색 없음) + non-palette(RGBA/RGB/JPEG 등) 모두 pyvips
@@ -5455,7 +5473,7 @@ def _pyramid_path_lock(path: Path):
         lock.release()
 
 
-def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None, border_normalize: bool = False, measure_overlay: Optional[str] = None):
+def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None, border_normalize: bool = False, measure_overlay: Optional[str] = None, gradient_filter: Optional[str] = None):
     """🚀 피라미드 레벨 이미지 생성 (속도 극대화)"""
     import time
     start_time = time.time()
@@ -5543,8 +5561,21 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                     except Exception:
                         pass
 
-                if (grade_filter or bottom_filter or border_normalize or measure_overlay) and _pyr_is_palette:
-                    logger.info(f"🎯 [PYRAMID] 필터 적용: grade_filter={grade_filter}, bottom_filter={bottom_filter}, border_normalize={border_normalize}, measure_overlay={measure_overlay}, path={image_path.name}, target_format={target_format}")
+                # Average map gradient filter 감지
+                _pyr_avg_gf_set = None
+                if _pyr_is_palette and gradient_filter:
+                    _pyr_stem = image_path.stem.lower()
+                    if 'square_average' in _pyr_stem or 'square_weighted' in _pyr_stem or 'square_mean' in _pyr_stem:
+                        try:
+                            _pyr_avg_gf_set = set(int(x) for x in gradient_filter.split(",") if x.strip().isdigit())
+                        except Exception:
+                            pass
+
+                _need_plte_read = (
+                    (grade_filter or bottom_filter or border_normalize or measure_overlay or _pyr_avg_gf_set) and _pyr_is_palette
+                ) or (personalized and scheme and _pyr_is_palette)
+
+                if _need_plte_read:
                     try:
                         with open(image_path, 'rb') as f:
                             png_data = bytearray(f.read())
@@ -5560,31 +5591,23 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                             measure_overlay=measure_overlay,
                         )
 
-                        image = pyvips.Image.new_from_buffer(bytes(png_data), "", access='sequential', fail_on='none', memory=True, unlimited=True)
+                        # Composite gradient 색상 패치 (개인색 gradient)
+                        _pyr_gradient_mode = _resolve_composite_map_gradient_mode(image_path)
+                        if _pyr_gradient_mode == "measure":
+                            from .personal_colors import plte_measure_gradient_patch_memory
+                            png_data = plte_measure_gradient_patch_memory(bytearray(png_data), scheme or ANONYMOUS_LOGIN_ID) or png_data
+                        elif _pyr_gradient_mode == "composite":
+                            from .personal_colors import plte_composite_gradient_patch_memory
+                            png_data = plte_composite_gradient_patch_memory(bytearray(png_data), scheme or ANONYMOUS_LOGIN_ID) or png_data
 
-                        logger.debug(f"✅ [PYRAMID FILTER] 필터링 완료, 리사이즈 시작: {pyramid_path.name}")
-                    except Exception as e:
-                        logger.warning(f"⚠️ [PYRAMID FILTER] 필터링 실패, 폴백: {e}", exc_info=True)
-                        image = None
-                elif personalized and scheme and _pyr_is_palette:
-                    logger.info(f"🎨 [PYRAMID] 개인색 설정 적용: personalized={personalized}, scheme={scheme}, path={image_path.name}, target_format={target_format}")
-                    try:
-                        with open(image_path, 'rb') as f:
-                            png_data = bytearray(f.read())
-
-                        png_data = _apply_png_filters_memory(
-                            image_path=image_path,
-                            png_data=png_data,
-                            personalized=personalized,
-                            scheme=scheme,
-                        )
+                        # Average gradient filter: 비선택 범위 palette → 흰색
+                        if _pyr_avg_gf_set:
+                            from .personal_colors import plte_gradient_filter_patch_memory
+                            png_data = plte_gradient_filter_patch_memory(bytearray(png_data), _pyr_avg_gf_set)
 
                         image = pyvips.Image.new_from_buffer(bytes(png_data), "", access='sequential', fail_on='none', memory=True, unlimited=True)
-
-                        logger.debug(f"✅ [PYRAMID PLTE PATCH] 색 변경 완료, 리사이즈 시작: {pyramid_path.name}")
                     except Exception as e:
-                        logger.warning(f"⚠️ [PYRAMID PLTE] PLTE 인-place 실패, 폴백: {e}", exc_info=True)
-                        # 폴백: 기존 방식 사용
+                        logger.warning(f"⚠️ [PYRAMID FILTER] PLTE 패치 실패, 폴백: {e}", exc_info=True)
                         image = None
                 else:
                     # 개인색 설정이 없거나 PNG가 아닌 경우: pyvips로 바로 로드 (빠름)
@@ -5787,7 +5810,7 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
 _pyramid_bg_executor = ThreadPoolExecutor(max_workers=config.PYRAMID_BG_WORKERS)
 _pyramid_bg_generating = set()  # 현재 생성 중인 파일 경로
 
-async def _generate_other_levels_background(image_path: Path, current_level: float, stem: str, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None, border_normalize: bool = False, measure_overlay: Optional[str] = None):
+async def _generate_other_levels_background(image_path: Path, current_level: float, stem: str, personalized: bool = False, scheme: Optional[str] = None, grade_filter: Optional[str] = None, bottom_filter: Optional[str] = None, border_normalize: bool = False, measure_overlay: Optional[str] = None, gradient_filter: Optional[str] = None):
     """다른 피라미드 레벨들을 background에서 생성 (원본 재사용 파이프라인)"""
     format_ext = config.PYRAMID_FORMAT.lower()
     try:
@@ -6353,6 +6376,7 @@ async def get_image(
     grade_filter: Optional[str] = None,
     bottom_filter: Optional[str] = None,
     border_normalize: bool = False,
+    gradient_filter: Optional[str] = None,
 ):
     try:
         is_head = request.method == "HEAD"
@@ -6436,6 +6460,7 @@ async def get_image(
                 grade_filter=grade_filter,
                 bottom_filter=bottom_filter,
                 border_normalize=border_normalize,
+                gradient_filter=gradient_filter,
             )
             pyramid_dir.mkdir(parents=True, exist_ok=True)
 
@@ -6536,12 +6561,13 @@ async def get_image(
                     personalized=personalized, scheme=scheme,
                     grade_filter=grade_filter, bottom_filter=bottom_filter,
                     border_normalize=border_normalize,
+                    gradient_filter=gradient_filter,
                 ),
             )
 
             # 🔥 Background에서 다른 레벨들도 생성 시작 (사용자 대기 없음)
             # 개인별 설정 또는 필터가 활성화된 경우 background에서도 동일한 설정으로 생성
-            asyncio.create_task(_generate_other_levels_background(image_path, level, stem, personalized=personalized, scheme=scheme, grade_filter=grade_filter, bottom_filter=bottom_filter, border_normalize=border_normalize))
+            asyncio.create_task(_generate_other_levels_background(image_path, level, stem, personalized=personalized, scheme=scheme, grade_filter=grade_filter, bottom_filter=bottom_filter, border_normalize=border_normalize, gradient_filter=gradient_filter))
 
             # 생성된 파일 확인 및 반환
             if pyramid_path.exists():
@@ -6569,6 +6595,16 @@ async def get_image(
             if not is_head:
                 logger.info(f"🎯 [ORIGINAL MODE] {image_path} - personalized={personalized}, scheme={scheme}, grade_filter={grade_filter}, bottom_filter={bottom_filter}")
 
+            # Average map gradient filter: palette index 24-255 중 비선택 범위를 흰색으로
+            _avg_gf_set = None
+            if _is_palette_png and gradient_filter:
+                _stem = image_path.stem.lower()
+                if 'square_average' in _stem or 'square_weighted' in _stem or 'square_mean' in _stem:
+                    try:
+                        _avg_gf_set = set(int(x) for x in gradient_filter.split(",") if x.strip().isdigit())
+                    except Exception:
+                        pass
+
             # 🔥 Grade/Bottom/Border 필터링이 활성화되고 palette PNG인 경우만 PLTE 필터 적용
             if (grade_filter or bottom_filter or border_normalize) and _is_palette_png:
                 try:
@@ -6585,6 +6621,11 @@ async def get_image(
                         bottom_filter=bottom_filter,
                         border_normalize=border_normalize,
                     )
+
+                    # average gradient filter 추가 적용
+                    if _avg_gf_set:
+                        from .personal_colors import plte_gradient_filter_patch_memory
+                        png_data = plte_gradient_filter_patch_memory(bytearray(png_data), _avg_gf_set)
 
                     # 메모리에서 직접 반환
                     headers = {
@@ -6607,8 +6648,8 @@ async def get_image(
                     logger.warning(f"⚠️ [FILTER] PLTE 필터 실패, 원본 반환: {e}", exc_info=True)
                     # 폴백: 원본 이미지 반환
 
-            # 🔥 개인색 설정이 활성화되고 palette PNG인 경우만 PLTE 패치 적용
-            elif (personalized and scheme or border_normalize) and _is_palette_png:
+            # 🔥 개인색/gradient_filter가 활성화되고 palette PNG인 경우 PLTE 패치 적용
+            elif ((personalized and scheme) or border_normalize or _avg_gf_set) and _is_palette_png:
                 try:
                     # 원본 이미지 파일 읽기 및 PLTE 패치
                     with open(image_path, 'rb') as f:
@@ -6622,13 +6663,19 @@ async def get_image(
                         border_normalize=border_normalize,
                     )
 
+                    # average gradient filter 추가 적용
+                    if _avg_gf_set:
+                        from .personal_colors import plte_gradient_filter_patch_memory
+                        png_data = plte_gradient_filter_patch_memory(bytearray(png_data), _avg_gf_set)
+
                     # 메모리에서 직접 반환
                     headers = {
                         "Cache-Control": "no-cache",
                         "Content-Type": "image/png",
-                        "X-Personalized": "true",
-                        "X-Scheme": scheme
                     }
+                    if personalized and scheme:
+                        headers["X-Personalized"] = "true"
+                        headers["X-Scheme"] = scheme
 
                     if not is_head:
                         logger.info(f"✅ [ORIGINAL PLTE] 색 변경 완료: {image_path.name}")
@@ -6809,6 +6856,7 @@ def _get_empty_measure_placeholder(size: int) -> bytes:
 def _generate_measure_thumb(
     image_path: Path, size: int, field: str, item_key: str,
     scheme: Optional[str] = None, gradient_filter: Optional[str] = None,
+    color_source: Optional[str] = None,
 ) -> Optional[bytes]:
     """positions JSON에서 chip f/q 값을 읽어 gradient heatmap 이미지를 생성.
     원본 이미지를 로드하지 않으므로 ~3ms (기존 overlay 18ms 대비 6x 빠름)."""
@@ -6860,9 +6908,12 @@ def _generate_measure_thumb(
     all_sorted = sorted(v for _, v in chip_vals)
     n = len(all_sorted)
 
-    # gradient 색상
-    from .personal_colors import get_ratio_gradient_for_scheme
-    gradient_stops = get_ratio_gradient_for_scheme(scheme or ANONYMOUS_LOGIN_ID)
+    # gradient 색상 (composite 모드→composite 탭, 그 외→measure 탭)
+    from .personal_colors import get_ratio_gradient_for_scheme, get_composite_gradient_for_scheme
+    if color_source == "composite":
+        gradient_stops = get_composite_gradient_for_scheme(scheme or ANONYMOUS_LOGIN_ID)
+    else:
+        gradient_stops = get_ratio_gradient_for_scheme(scheme or ANONYMOUS_LOGIN_ID)
 
     # gradient filter
     allowed_ranges = None
@@ -6905,7 +6956,7 @@ def _generate_measure_thumb(
             continue
         x0, y0, x1, y1 = scaled
         if allowed_ranges is not None:
-            range_idx = min(int(pct / 10), 9)
+            range_idx = 0 if pct == 0 else min(math.ceil(pct / 10), 10)
             if range_idx not in allowed_ranges:
                 arr[y0:y1, x0:x1] = (255, 255, 255)
                 continue
@@ -6941,12 +6992,13 @@ async def get_measure_thumb(
     size: int = Query(256),
     scheme: Optional[str] = Query(None),
     gradient_filter: Optional[str] = Query(None),
+    color_source: Optional[str] = Query(None),
 ):
     """Measure 경량 썸네일 — positions JSON만 읽어 gradient heatmap 생성 (이미지 로드 없음, ~3ms)."""
     if not scheme:
         scheme = get_user_color_scheme(_current_login_id(request))
     image_path = Path(path) if Path(path).is_absolute() else ROOT_DIR / path
-    cache_key = f"{image_path}:{size}:{field}:{key}:{scheme}:{gradient_filter or ''}"
+    cache_key = f"{image_path}:{size}:{field}:{key}:{scheme}:{gradient_filter or ''}:{color_source or ''}"
 
     cached = _measure_thumb_cache.get(cache_key)
     if cached:
@@ -6954,7 +7006,7 @@ async def get_measure_thumb(
                         headers={"Cache-Control": "no-cache"})
 
     result = await asyncio.get_event_loop().run_in_executor(
-        THUMBNAIL_EXECUTOR, _generate_measure_thumb, image_path, size, field, key, scheme, gradient_filter,
+        THUMBNAIL_EXECUTOR, _generate_measure_thumb, image_path, size, field, key, scheme, gradient_filter, color_source,
     )
     if result is None:
         # 키가 없는 이미지: 빈 회색 placeholder 반환 (404 대신)
@@ -6975,6 +7027,7 @@ async def get_measure_thumb(
 def _generate_measure_thumbs_batch(
     image_path: Path, size: int, items: list,
     scheme: Optional[str] = None, gradient_filter: Optional[str] = None,
+    color_source: Optional[str] = None,
 ) -> Dict[str, Optional[bytes]]:
     """한 이미지에 대해 여러 field+key를 chips 1회 순회로 동시 추출 → 각각 heatmap 생성.
     items: [{"field":"f","key":"1000"}, {"field":"q","key":"500"}, ...]
@@ -7032,9 +7085,12 @@ def _generate_measure_thumbs_batch(
                     if val is not None: item_vals[result_key].append((chip_idx, val))
 
     # 공통: gradient 색상, 캔버스 크기, 배경색 (1회만 계산)
-    from .personal_colors import get_ratio_gradient_for_scheme
+    from .personal_colors import get_ratio_gradient_for_scheme, get_composite_gradient_for_scheme
     from .composite_map import _resolve_scheme_background_rgb
-    gradient_stops = get_ratio_gradient_for_scheme(scheme or ANONYMOUS_LOGIN_ID)
+    if color_source == "composite":
+        gradient_stops = get_composite_gradient_for_scheme(scheme or ANONYMOUS_LOGIN_ID)
+    else:
+        gradient_stops = get_ratio_gradient_for_scheme(scheme or ANONYMOUS_LOGIN_ID)
 
     allowed_ranges = None
     if gradient_filter:
@@ -7085,7 +7141,7 @@ def _generate_measure_thumbs_batch(
             lo = bisect.bisect_left(all_sorted, val)
             pct = max(0.0, min(100.0, (lo / (n - 1)) * 100.0 if n > 1 else 50.0))
             if allowed_ranges is not None:
-                range_idx = min(int(pct / 10), 9)
+                range_idx = 0 if pct == 0 else min(math.ceil(pct / 10), 10)
                 if range_idx not in allowed_ranges:
                     arr[y0:y1, x0:x1] = (255, 255, 255)
                     continue
@@ -7126,6 +7182,7 @@ async def get_measure_thumb_batch(request: Request, body: dict = Body(...)):
     size = body.get("size", 256)
     scheme = body.get("scheme")
     gradient_filter = body.get("gradient_filter")
+    color_source = body.get("color_source")
     if not path or not items:
         return JSONResponse({})
 
@@ -7141,7 +7198,7 @@ async def get_measure_thumb_batch(request: Request, body: dict = Body(...)):
     uncached_items = []
     cached_results = {}
     for it in fq_items:
-        cache_key = f"{image_path}:{size}:{it['field']}:{it['key']}:{scheme}:{gradient_filter or ''}"
+        cache_key = f"{image_path}:{size}:{it['field']}:{it['key']}:{scheme}:{gradient_filter or ''}:{color_source or ''}"
         cached = _measure_thumb_cache.get(cache_key)
         rk = f"{it['field']}:{it['key']}"
         if cached:
@@ -7152,7 +7209,7 @@ async def get_measure_thumb_batch(request: Request, body: dict = Body(...)):
     if uncached_items:
         batch_result = await asyncio.get_event_loop().run_in_executor(
             THUMBNAIL_EXECUTOR, _generate_measure_thumbs_batch,
-            image_path, size, uncached_items, scheme, gradient_filter,
+            image_path, size, uncached_items, scheme, gradient_filter, color_source,
         )
         # 캐시 저장 + base64 변환
         for rk, data in batch_result.items():
@@ -7160,7 +7217,7 @@ async def get_measure_thumb_batch(request: Request, body: dict = Body(...)):
                 data = _get_empty_measure_placeholder(size)
             # 개별 캐시에 저장 (기존 /api/measure-thumb에서도 히트)
             parts = rk.split(":", 1)
-            cache_key = f"{image_path}:{size}:{parts[0]}:{parts[1]}:{scheme}:{gradient_filter or ''}"
+            cache_key = f"{image_path}:{size}:{parts[0]}:{parts[1]}:{scheme}:{gradient_filter or ''}:{color_source or ''}"
             if len(_measure_thumb_cache) > 2000:
                 for _ in range(200):
                     try:
@@ -9335,20 +9392,26 @@ async def extract_chip_images(request: ChipImageExtractRequest):
 @app.post("/api/composite-cleanup")
 async def composite_cleanup_endpoint(request: Request):
     """사용자의 composite_map 폴더 전체 삭제 (새 Composite 생성 전 호출)"""
-    import shutil
-    from .composite_map import COMPOSITE_ROOT, _sanitize_login_id, POSITIONS_ROOT
     login_id = _current_login_id(request)
-    safe_login = _sanitize_login_id(login_id)
-    user_dir = COMPOSITE_ROOT / safe_login
-    positions_dir = POSITIONS_ROOT / "composite_map" / safe_login
-    deleted = []
-    for d in [user_dir, positions_dir]:
-        if d.exists():
-            try:
-                shutil.rmtree(d)
-                deleted.append(str(d))
-            except Exception:
-                pass
+
+    def _cleanup_sync():
+        import shutil
+        from .composite_map import COMPOSITE_ROOT, _sanitize_login_id, POSITIONS_ROOT
+        safe_login = _sanitize_login_id(login_id)
+        user_dir = COMPOSITE_ROOT / safe_login
+        positions_dir = POSITIONS_ROOT / "composite_map" / safe_login
+        deleted = []
+        for d in [user_dir, positions_dir]:
+            if d.exists():
+                try:
+                    shutil.rmtree(d)
+                    deleted.append(str(d))
+                except Exception:
+                    pass
+        return deleted
+
+    loop = asyncio.get_running_loop()
+    deleted = await loop.run_in_executor(COMPOSITE_EXECUTOR, _cleanup_sync)
     return JSONResponse({"deleted": deleted})
 
 @app.post("/api/composite-map")
@@ -9377,19 +9440,7 @@ async def create_composite_map_endpoint(
     if len(image_paths) > max_images:
         raise HTTPException(status_code=400, detail=f"최대 {max_images}개의 이미지만 지원합니다.")
 
-    # positions 파일 있는 이미지 우선 사용 (없으면 전체 이미지로 진행)
-    position_filtered = [
-        p for p in image_paths
-        if any(c.exists() for c in _candidate_positions_paths(Path(p)))
-    ]
-    if position_filtered:
-        if len(position_filtered) < len(image_paths):
-            _log(f"[composite-map] positions 필터: {len(image_paths)} → {len(position_filtered)}개 이미지")
-        image_paths = position_filtered
-    else:
-        _log(f"[composite-map] positions 없는 이미지 {len(image_paths)}개 — positions 없이 진행", level="warning")
-
-    # Task ID 생성
+    # Task ID 생성 (먼저 반환하여 프론트엔드 폴링 시작을 빠르게)
     task_id = str(uuid.uuid4())
 
     # 작업 상태 초기화
@@ -9402,20 +9453,38 @@ async def create_composite_map_endpoint(
             "created_at": datetime.now().isoformat()
         }
 
-    # 파라미터 준비
+    # 파라미터 준비 (가벼운 연산만 이벤트 루프에서 실행)
     loader_mode = payload.loader_mode or config.COMPOSITE_LOADER_MODE
     max_workers = payload.max_workers if payload.max_workers is not None else None
     batch_size = payload.batch_size if payload.batch_size is not None else None
     login_id = _current_login_id(req)
     resolved_scheme = login_id or ANONYMOUS_LOGIN_ID
-    _invalidate_composite_thumbnail_caches(login_id=login_id or ANONYMOUS_LOGIN_ID)
 
     # 백그라운드 작업: COMPOSITE_EXECUTOR에서 직접 동기 실행
     # (background_tasks.add_task + async run_in_executor 조합은 event loop 경합으로 stuck 발생)
+    # 🔥 positions 필터링 + 캐시 무효화도 여기서 실행 (이벤트 루프 블로킹 방지)
+    _image_paths_snapshot = list(image_paths)  # closure용 스냅샷
+
     def _run_sync():
+        nonlocal _image_paths_snapshot
         try:
             COMPOSITE_TASKS[task_id]["status"] = "processing"
             COMPOSITE_TASKS[task_id]["started_at"] = datetime.now().isoformat()
+
+            # 🔥 positions 필터링 (동기 I/O — executor 스레드에서 실행)
+            position_filtered = [
+                p for p in _image_paths_snapshot
+                if any(c.exists() for c in _candidate_positions_paths(Path(p)))
+            ]
+            if position_filtered:
+                if len(position_filtered) < len(_image_paths_snapshot):
+                    _log(f"[composite-map] positions 필터: {len(_image_paths_snapshot)} → {len(position_filtered)}개 이미지")
+                _image_paths_snapshot = position_filtered
+            else:
+                _log(f"[composite-map] positions 없는 이미지 {len(_image_paths_snapshot)}개 — positions 없이 진행", level="warning")
+
+            # 🔥 썸네일 캐시 무효화 (동기 I/O — executor 스레드에서 실행)
+            _invalidate_composite_thumbnail_caches(login_id=login_id or ANONYMOUS_LOGIN_ID)
 
             from .composite_map import create_composite_heatmaps, create_palette_overlay
             from functools import partial
@@ -9423,7 +9492,7 @@ async def create_composite_map_endpoint(
             if payload.palette_mode:
                 task_fn = partial(
                     create_palette_overlay,
-                    image_paths=image_paths,
+                    image_paths=_image_paths_snapshot,
                     focus_index=payload.focus_index,
                     highlight_threshold=payload.highlight_threshold,
                     loader_mode=loader_mode,
@@ -9445,7 +9514,7 @@ async def create_composite_map_endpoint(
                 # 🔥 default scheme으로 생성 (개인색은 생성 후 recolor로 적용)
                 task_fn = partial(
                     create_composite_heatmaps,
-                    image_paths=image_paths,
+                    image_paths=_image_paths_snapshot,
                     indices=list(range(8)),
                     create_sum=True,
                     loader_mode=loader_mode,
@@ -9514,6 +9583,7 @@ class MeasureCompositeRequest(BaseModel):
     bin_types: Optional[List[str]] = None               # BIN mode: ["285", "286", ...]
     aggregation: str = "average"                        # 'count' | 'sum' | 'average'
     scheme: Optional[str] = None
+    color_source: Optional[str] = None                  # 'composite' → composite tab colors
 
 
 def _run_measure_composite_sync(
@@ -9530,6 +9600,18 @@ def _run_measure_composite_sync(
     try:
         COMPOSITE_TASKS[task_id]["status"] = "processing"
         COMPOSITE_TASKS[task_id]["started_at"] = datetime.now().isoformat()
+
+        # 🔥 positions 필터링 (동기 I/O — executor 스레드에서 실행, 이벤트 루프 블로킹 방지)
+        position_filtered = [
+            p for p in image_paths
+            if any(c.exists() for c in _candidate_positions_paths(Path(p)))
+        ]
+        if position_filtered:
+            if len(position_filtered) < len(image_paths):
+                _log(f"[measure-composite] positions 필터: {len(image_paths)} → {len(position_filtered)}개 이미지")
+            image_paths = position_filtered
+        else:
+            _log(f"[measure-composite] positions 없는 이미지 {len(image_paths)}개 — positions 없이 진행", level="warning")
 
         from .measure_composite import create_measure_composite
 
@@ -9601,6 +9683,7 @@ async def measure_composite_data_endpoint(
             bin_types=payload.bin_types,
             aggregation=payload.aggregation,
             scheme=resolved_scheme,
+            color_source=payload.color_source,
         )
         return result
     except Exception as e:
@@ -9637,18 +9720,6 @@ async def create_measure_composite_endpoint(
     if len(image_paths) > max_images:
         raise HTTPException(status_code=400, detail=f"최대 {max_images}개의 이미지만 지원합니다.")
 
-    # positions 파일 있는 이미지 우선 사용 (없으면 전체 이미지로 진행)
-    position_filtered = [
-        p for p in image_paths
-        if any(c.exists() for c in _candidate_positions_paths(Path(p)))
-    ]
-    if position_filtered:
-        if len(position_filtered) < len(image_paths):
-            _log(f"[measure-composite] positions 필터: {len(image_paths)} → {len(position_filtered)}개 이미지")
-        image_paths = position_filtered
-    else:
-        _log(f"[measure-composite] positions 없는 이미지 {len(image_paths)}개 — positions 없이 진행", level="warning")
-
     task_id = str(uuid.uuid4())
     COMPOSITE_TASKS[task_id] = {
         "status": "queued",
@@ -9661,6 +9732,7 @@ async def create_measure_composite_endpoint(
     login_id = _current_login_id(req)
     resolved_scheme = login_id or ANONYMOUS_LOGIN_ID
 
+    # 🔥 positions 필터링은 _run_measure_composite_sync 내부에서 실행 (이벤트 루프 블로킹 방지)
     # 🔥 default scheme으로 생성 (개인색은 프론트엔드 display 또는 recolor로 적용)
     COMPOSITE_EXECUTOR.submit(
         _run_measure_composite_sync,
@@ -9685,7 +9757,7 @@ async def create_measure_composite_endpoint(
 class MeasureCompositeRecolorRequest(BaseModel):
     output_dir: str
     scheme: Optional[str] = None
-    gradient_filter: Optional[List[int]] = None   # [0,1,...,9] percentile range
+    gradient_filter: Optional[List[int]] = None   # [0,...,10] — 0=exact zero, 1=0~10%, ..., 10=90~100%
     bin_filter: Optional[List[str]] = None         # ["285","286",...] BIN 타입
     target_filename: Optional[str] = None          # 특정 이미지만 recolor (없으면 첫 번째)
 

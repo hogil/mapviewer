@@ -937,6 +937,56 @@ def plte_composite_gradient_patch_memory(png_data: bytearray, scheme: str) -> by
     return _plte_gradient_patch_memory(png_data, stops)
 
 
+def plte_gradient_filter_patch_memory(
+    png_data: bytearray,
+    allowed_ranges: set,
+) -> bytearray:
+    """Average map gradient filter: 선택되지 않은 범위의 palette 색상을 흰색(255,255,255)으로 변경.
+
+    allowed_ranges: 11-segment indices (0=exact zero, 1=0~10%, ..., 10=90~100%)
+    """
+    GRAD_START = 24
+    GRAD_END = 255
+    GRAD_COUNT = GRAD_END - GRAD_START + 1  # 232
+
+    pos = 8
+    while pos < len(png_data):
+        if pos + 4 > len(png_data):
+            break
+        chunk_length = struct.unpack('>I', png_data[pos:pos + 4])[0]
+        pos += 4
+        if pos + 4 > len(png_data):
+            break
+        chunk_type = png_data[pos:pos + 4]
+        pos += 4
+
+        if chunk_type == b'PLTE':
+            plte_start = pos
+            plte_end = pos + chunk_length
+            import math as _math
+            for i in range(GRAD_COUNT):
+                pct = i / max(GRAD_COUNT - 1, 1) * 100.0
+                # palette level에서 exact 0 구분 불가 — index 24(0%)는 0~10% 범위에만 소속
+                seg = min(_math.ceil(pct / 10), 10) if pct > 0 else 1
+                show = seg in allowed_ranges
+                if not show:
+                    off = plte_start + (GRAD_START + i) * 3
+                    if off + 2 < plte_end:
+                        png_data[off] = 255
+                        png_data[off + 1] = 255
+                        png_data[off + 2] = 255
+            # CRC 재계산
+            crc_data = chunk_type + bytes(png_data[plte_start:plte_end])
+            crc = zlib.crc32(crc_data) & 0xffffffff
+            if plte_end + 4 <= len(png_data):
+                png_data[plte_end:plte_end + 4] = struct.pack('>I', crc)
+            break
+
+        pos += chunk_length + 4
+
+    return png_data
+
+
 __all__ = [
     "load_color_legends",
     "save_color_legends",
@@ -950,6 +1000,7 @@ __all__ = [
     "plte_normalize_border_memory",
     "plte_measure_gradient_patch_memory",
     "plte_composite_gradient_patch_memory",
+    "plte_gradient_filter_patch_memory",
     "DEFAULT_RATIO_GRADIENT",
     "get_ratio_gradient_for_scheme",
     "get_composite_gradient_for_scheme",

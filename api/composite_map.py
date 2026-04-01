@@ -4,9 +4,11 @@ Composite Map 생성 모듈
 """
 import os
 import shutil
+import struct
 import time
 import warnings
 import threading
+import zlib
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from datetime import datetime
@@ -1231,7 +1233,6 @@ def _save_palette_png(index_array: np.ndarray, palette_list: List[int], path: Pa
     path.parent.mkdir(parents=True, exist_ok=True)
     img = _PILImage.fromarray(index_array.astype(np.uint8, copy=False), mode="P")
     img.putpalette(palette_list[:768])
-    # optimize=True는 palette PNG에서 CPU 비용이 크고 체감 이득이 작다.
     img.save(str(path), format="PNG", optimize=False, compress_level=1)
     rel = path.relative_to(IMAGES_ROOT).as_posix()
     return path, rel
@@ -1893,9 +1894,9 @@ def _save_sum_map_variants(
                 "filename": actual_path.name,
             })
 
-    # 🔥 NPZ persist를 render/save 완료 후 실행 (GIL 경쟁 방지)
+    # 🔥 NPZ persist — 백그라운드 스레드 (render/save 후 GIL 경쟁 없음)
     if persist_cache:
-        _persist_square_map_data(
+        _npz_args = dict(
             output_dir=output_dir,
             palette_list=palette,
             base_indices=base_indices,
@@ -1910,6 +1911,7 @@ def _save_sum_map_variants(
             color_scheme=settings.scheme,
             colors=resolved_colors,
         )
+        threading.Thread(target=_persist_square_map_data, kwargs=_npz_args, daemon=True).start()
 
     # 🔥 Gradient 범례용 pixel 분포 JSON 저장 (단일뷰에서 사용)
     _save_gradient_stats(output_dir, variants, _precomputed_ranges)
@@ -2235,6 +2237,8 @@ def create_composite_heatmaps(
     print(f"  - positions_lookup:          {timings.get('positions_lookup', 0):.3f}s")
     print(f"  - mask_and_base:             {timings.get('mask_and_base_setup', 0):.3f}s")
     print(f"  - save_heatmaps+sum_maps:    {timings.get('save_heatmaps_and_sum_maps', 0):.3f}s")
+    if heatmap_times:
+        print(f"    heatmap times:             {[round(t, 3) for t in heatmap_times]}")
     print(f"  - total:                     {total_time:.3f}s ({processed_count} images)\n")
 
     result = {

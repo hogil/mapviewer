@@ -139,9 +139,13 @@ class SearchService:
                         logical_terms = [
                             token for token in raw_tokens if token and token not in {"and", "or", "not"} and token not in ("(", ")")
                         ]
+                        # 🔥 lot_candidates는 글로벌 _keys의 subset → 글로벌 인덱스 사용 불가
+                        # None으로 전달하여 lot_candidates 내 순차 스캔 fallback 사용
                         index_hits = await loop.run_in_executor(
                             self.io_executor, search_index_logical,
                             lot_candidates, lot_names, query_for_search, None, self.search_workers,
+                            None, None,
+                            None, None,
                         )
                     else:
                         index_hits = await loop.run_in_executor(
@@ -165,6 +169,8 @@ class SearchService:
                     # 🔥 token_index는 전체 _keys 기준 글로벌 인덱스 → folder slice와 불일치
                     # prefix가 있으면(폴더 한정) token_index 없이 순차 스캔 fallback 사용
                     tok_idx = self.index_service._token_index if not prefix else None
+                    t0_idx = self.index_service._token0_index if not prefix else None
+                    t2_idx = self.index_service._token2_index if not prefix else None
                     index_hits = await loop.run_in_executor(
                         self.io_executor,
                         search_index_logical,
@@ -175,15 +181,17 @@ class SearchService:
                         self.search_workers,
                         tok_idx,
                         None,
+                        t0_idx,
+                        t2_idx,
                     )
                     effective_workers = self.search_workers
                     search_mode = "logical"
                 else:
-                    # 🔥 전체 검색(prefix 없음)이면 토큰 인덱스, 폴더 한정이면 순차(소규모)
-                    if not prefix and self.index_service._token_index:
+                    # 🔥 전체 검색(prefix 없음)이면 token[0] 인덱스, 폴더 한정이면 순차(소규모)
+                    if not prefix and self.index_service._token0_index:
                         from .index_service import _token_contains_search
                         hit_indices = _token_contains_search(
-                            self.index_service._token_index, query_for_search, self.index_service._keys)
+                            self.index_service._token0_index, query_for_search, self.index_service._keys)
                         index_hits = [self.index_service._keys[i] for i in hit_indices
                                       if i < len(self.index_service._keys)]
                         search_mode = "simple-token"

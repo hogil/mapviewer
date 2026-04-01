@@ -13,7 +13,7 @@
 import { optimizedFetch, fetchOptimizer } from './fetch-optimizer.js';
 // 🚀 코드 스플리팅: 3개 모듈은 lazy import (초기 로드 ~300KB 절감)
 // ColorSchemeEditor, CompositeColorModal, MyLotModal → dynamic import()
-import { ChipAnnotator } from './chip-annotator.js?v=5';
+import { ChipAnnotator } from './chip-annotator.js?v=6';
 import { ThumbnailNavigator } from './thumbnail-navigator.js?v=4';
 import { PageManager } from './page-manager.js';
 import { ContextMenuManager } from './context-menu.js?v=3';
@@ -1048,13 +1048,24 @@ class WaferMapViewer {
     }
 
     async _ensureRatioGradientCache(waitForResult = false, rerenderOnResolve = false) {
+        // Composite 모드(grade 제외): composite-colors 사용, Measure 모드: measure-colors 사용
+        const useCompositeColors = this.isCompositeMode && !this._isGradeCompositeView;
+        const cacheKey = useCompositeColors ? 'composite' : 'measure';
+        // 모드 전환 시 캐시 무효화
+        if (this._ratioGradientCacheKey && this._ratioGradientCacheKey !== cacheKey) {
+            this._ratioGradientCache = null;
+            this._ratioGradientCachePromise = null;
+        }
+        this._ratioGradientCacheKey = cacheKey;
+
         if (this._ratioGradientCache) {
             return this._ratioGradientCache;
         }
 
         if (!this._ratioGradientCachePromise) {
             const loginId = this.getCurrentLoginId();
-            this._ratioGradientCachePromise = fetch(`/api/measure-colors?LoginId=${encodeURIComponent(loginId)}`)
+            const colorApi = useCompositeColors ? 'composite-colors' : 'measure-colors';
+            this._ratioGradientCachePromise = fetch(`/api/${colorApi}?LoginId=${encodeURIComponent(loginId)}`)
                 .then(resp => resp.ok ? resp.json() : null)
                 .then(data => {
                     const colors = data?.colors || data?.defaultColors || null;
@@ -2576,6 +2587,7 @@ class WaferMapViewer {
         this.overlayMode = null;
         this._ratioActiveItemKey = null;
         this._ratioGradientCache = null;
+        this._gradientOriginalRangeCounts = null;
         this.updateFailbitButtonUI?.();
         this.updateContextMenuState();
 
@@ -6384,6 +6396,13 @@ class WaferMapViewer {
                 parts.push(`gradient_filter=${rangeList}`);
             }
         }
+        // Average composite (square_weighted/square_mean): pixel-level gradient filter
+        if (this.isCompositeMode && this._compositeGradientStats && this.selectedGradientRanges.size > 0) {
+            const rangeList = Array.from(this.selectedGradientRanges).sort((a, b) => a - b).join(',');
+            if (!parts.some(p => p.startsWith('gradient_filter='))) {
+                parts.push(`gradient_filter=${rangeList}`);
+            }
+        }
 
         if (this.borderNormalize) {
             parts.push(`border_normalize=1`);
@@ -8650,6 +8669,8 @@ class WaferMapViewer {
         // 🔥 Composite 모드를 showGrid 호출 전에 비활성화 (LOT 모드 복원을 위해)
         this.isCompositeMode = false;
         this.compositeSession = null;
+        this.selectedGradientRanges.clear();
+        this.lastGradientRangeClickIndex = null;
 
         // Grid 복원 — lotMode가 활성화되어 있으면 showGridByLot으로 자동 리다이렉트
         await this.showGrid(session.images, true);  // skipSaveState=true
@@ -9713,11 +9734,11 @@ class WaferMapViewer {
 
         const recolorResults = await Promise.all(recolorPromises);
 
-        // range_counts 합산 업데이트
-        const merged = new Array(10).fill(0);
+        // range_counts 합산 업데이트 (11구간: [0]=exact 0, [1]=(0,10]%, ..., [10]=(90,100]%)
+        const merged = new Array(11).fill(0);
         for (const r of recolorResults) {
             if (r?.range_counts) {
-                for (let i = 0; i < 10; i++) merged[i] += (r.range_counts[i] || 0);
+                for (let i = 0; i < 11; i++) merged[i] += (r.range_counts[i] || 0);
             }
         }
         cs.rangeCounts = merged;
@@ -9757,16 +9778,22 @@ class WaferMapViewer {
         this.isCompositeMode = true;
         this.lastCompositeSourceImages = this._mcSelectedImages || [];
 
-        // compositeSession 최소 설정 (gradient 범례용)
-        const mergedRangeCounts = new Array(10).fill(0);
+        // compositeSession 최소 설정 (gradient 범례용, 11구간)
+        const rcLen = (results[0]?.range_counts?.length) || 11;
+        const mergedRangeCounts = new Array(rcLen).fill(0);
         for (const r of results) {
             const rc = r.range_counts || [];
-            for (let i = 0; i < 10; i++) mergedRangeCounts[i] += (rc[i] || 0);
+            for (let i = 0; i < rc.length; i++) mergedRangeCounts[i] += (rc[i] || 0);
         }
-        if (!this._ratioGradientCache) {
+        // 🔥 Composite 모드 진입 시 항상 composite 탭 색상으로 갱신
+        //    (이전 Measure 모드에서 캐시된 measure 색상을 composite 색상으로 교체)
+        {
+            this._ratioGradientCache = null;
+            this._ratioGradientCachePromise = null;
+            this._ratioGradientCacheKey = 'composite';
             try {
                 const loginId = this.currentUser || FALLBACK_LOGIN_ID;
-                const resp = await fetch(`/api/measure-colors?LoginId=${encodeURIComponent(loginId)}`);
+                const resp = await fetch(`/api/composite-colors?LoginId=${encodeURIComponent(loginId)}`);
                 if (resp.ok) {
                     const data = await resp.json();
                     this._ratioGradientCache = data.colors || data.defaultColors;
@@ -12868,10 +12895,19 @@ class WaferMapViewer {
                 this.hideLotListModal();
             }
 
-            // 그리드 컨테이너 숨기기
+            // 그리드 컨테이너 숨기기 (DOM은 보존 — 복귀 시 재활용)
             if (grid) {
                 grid.style.display = 'none';
+                const sw = grid.parentElement;
+                if (sw && sw.classList.contains('grid-scroll-wrapper')) {
+                    // 🔥 스크롤 위치 저장 (복귀 시 복원용)
+                    if (this.savedViewState?.type === 'grid') {
+                        this.savedViewState.scrollTop = sw.scrollTop;
+                    }
+                    sw.style.display = 'none';
+                }
             }
+            this._gridVisuallyHidden = true;
 
             // 그리드 컨트롤(검색 패널) 숨기기
             const gridControls = document.getElementById('grid-controls');
@@ -13276,22 +13312,40 @@ class WaferMapViewer {
             }
 
             // 🎨 Color Legends 표시 및 렌더링 (Single Image Mode)
-            // 🔥 Measure overlay 또는 Measure Composite 시 gradient 캐시 보장 (그리드→단일 전환 시 유실 방지)
+            // 🔥 Measure overlay 또는 Composite 시 gradient 캐시 보장 (그리드→단일 전환 시 유실 방지)
+            const _isAvgPath = fullPath && (fullPath.includes('square_average') || fullPath.includes('square_weighted') || fullPath.includes('square_mean'));
             const needsGradient = (this.isMeasureGradientMode()) ||
-                                  (this.isCompositeMode && this.compositeSession?.measureMode);
+                                  (this.isCompositeMode && this.compositeSession?.measureMode) ||
+                                  (this.isCompositeMode && _isAvgPath);
             if (needsGradient && !this._ratioGradientCache) {
                 try {
                     const loginId = this.currentUser || FALLBACK_LOGIN_ID;
-                    const gcResp = await fetch(`/api/measure-colors?LoginId=${encodeURIComponent(loginId)}`);
+                    // Composite mode → composite-colors, Measure overlay → measure-colors
+                    const colorApi = this.isCompositeMode ? 'composite-colors' : 'measure-colors';
+                    const gcResp = await fetch(`/api/${colorApi}?LoginId=${encodeURIComponent(loginId)}`);
                     if (gcResp.ok) {
                         const gcData = await gcResp.json();
                         this._ratioGradientCache = gcData.colors || gcData.defaultColors;
                     }
                 } catch (_) {}
             }
-            // Composite average map pixel 분포 로드 (gradient 범례용)
+            // Composite 단일보기: gradient 범례용 데이터 로드
             this._compositeGradientStats = null;
-            if (this.isCompositeMode && fullPath && (fullPath.includes('square_average') || fullPath.includes('square_weighted'))) {
+            this._gradientOriginalRangeCounts = null;  // 이미지 전환 시 range counts 재계산
+            // Average map: pixel 분포 (gradient-stats API)
+            const _isAvgImage = fullPath && (fullPath.includes('square_average') || fullPath.includes('square_weighted') || fullPath.includes('square_mean'));
+            // FBT/BIN composite: 개별 이미지 range_counts (measureResults에서 매칭)
+            if (this.isCompositeMode && fullPath && !_isAvgImage && !fullPath.includes('Grade_') && this.compositeSession?.measureResults) {
+                const stem = fullPath.split('/').pop().replace(/\.[^.]+$/, '');
+                const matchResult = this.compositeSession.measureResults.find(r => {
+                    const rStem = r.filename?.replace(/\.[^.]+$/, '') || '';
+                    return rStem === stem;
+                });
+                if (matchResult?.range_counts) {
+                    this._gradientOriginalRangeCounts = [...matchResult.range_counts];
+                }
+            }
+            if (this.isCompositeMode && fullPath && _isAvgImage) {
                 try {
                     const gsResp = await fetch(`/api/gradient-stats?path=${encodeURIComponent(fullPath)}`);
                     if (gsResp.ok) {
@@ -19333,7 +19387,8 @@ class WaferMapViewer {
                 const loginId = this.getCurrentLoginId();
                 const gf = this.selectedGradientRanges.size > 0
                     ? Array.from(this.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
-                thumbnailUrl = `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=512&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheParam}`;
+                const _cs19 = this.isCompositeMode ? '&color_source=composite' : '';
+                thumbnailUrl = `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=512&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${_cs19}${cacheParam}`;
             } else {
                 thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}${cacheParam}`;
             }
@@ -20661,6 +20716,31 @@ class WaferMapViewer {
         }
 
         if (this.savedViewState.type === 'grid') {
+            // 🔥 Fast path: 그리드 DOM이 보존된 상태면 showGrid() 재빌드 건너뛰기
+            const grid = document.getElementById('image-grid');
+            const canFastRestore = this._gridVisuallyHidden && grid && grid.children.length > 0;
+
+            if (canFastRestore) {
+                this.debugLog('🔷 [RESTORE] Fast grid restore — DOM 재활용');
+                this._showGridVisual();
+                this.showColorLegends();
+                this.renderColorLegends();
+                // 취소된 썸네일 재로드
+                requestAnimationFrame(() => {
+                    this.loadVisibleGridThumbnails();
+                });
+                // 스크롤 위치 복원
+                const scrollWrapper = grid?.parentElement;
+                if (scrollWrapper && this.savedViewState.scrollTop !== undefined) {
+                    setTimeout(() => {
+                        scrollWrapper.scrollTop = this.savedViewState.scrollTop;
+                    }, 30);
+                }
+                // 파일명 패널 숨기기
+                if (this.dom.fileNameDisplay) this.dom.fileNameDisplay.style.display = 'none';
+                return;
+            }
+
             // Grid 모드로 복원 — 🔥 현재 필터 적용
             let gridImages = [...this.savedViewState.images];
             const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
@@ -21951,6 +22031,12 @@ class WaferMapViewer {
             }
         }
         
+        // ✅ Gradient filter 초기화 (단일→그리드 복귀 시 필터 잔류 방지)
+        if (this.selectedGradientRanges.size > 0) {
+            this.selectedGradientRanges.clear();
+            this.lastGradientRangeClickIndex = null;
+        }
+
         // ✅ Step 4: 그리드 복귀 및 스크롤 복원
         if (savedViewMode === 'gridImage') {
             console.log('🔄 [EXIT] 그리드 모드로 복귀');
@@ -23921,7 +24007,7 @@ class WaferMapViewer {
                 const gradientItem = e.target.closest('.legend-item[data-section="gradient"]');
                 if (gradientItem) {
                     const rangeIdx = parseInt(gradientItem.getAttribute('data-index'));
-                    if (!isNaN(rangeIdx) && rangeIdx >= 0 && rangeIdx <= 9) {
+                    if (!isNaN(rangeIdx) && rangeIdx >= 0 && rangeIdx <= 10) {
                         e.preventDefault();
                         this.onGradientRangeClick(rangeIdx, e.ctrlKey || e.metaKey, e.shiftKey);
                     }
@@ -24624,7 +24710,8 @@ class WaferMapViewer {
             return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${buildBaseParams()}&bin_overlay=1${cacheSuffix}`;
         }
         // gradient measure (f, q, 향후 추가 모드 전부)
-        return `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${measureItem.type}&key=${encodeURIComponent(measureItem.key)}&size=512&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheSuffix}`;
+        const cs = this.isCompositeMode ? '&color_source=composite' : '';
+        return `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${measureItem.type}&key=${encodeURIComponent(measureItem.key)}&size=512&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cs}${cacheSuffix}`;
     }
 
     /**
@@ -24662,6 +24749,7 @@ class WaferMapViewer {
                         size: 512,
                         scheme: loginId,
                         gradient_filter: gf || undefined,
+                        color_source: this.isCompositeMode ? 'composite' : undefined,
                     }),
                 }).catch(() => {}).finally(() => {
                     running--;
@@ -24728,6 +24816,7 @@ class WaferMapViewer {
                     mode: field,
                     item_key: String(itemKey),
                     aggregation: 'average',
+                    color_source: this.isCompositeMode ? 'composite' : undefined,
                 }),
             });
             if (!resp.ok) {
@@ -24760,6 +24849,10 @@ class WaferMapViewer {
                 }
                 if (data.gradient_stops) {
                     this._ratioGradientCache = data.gradient_stops;
+                }
+                // 서버 11구간 range_counts 저장 ([0]=exact0, [1]=0~10, ..., [10]=90~100)
+                if (data.range_counts && data.range_counts.length === 11) {
+                    this._gradientOriginalRangeCounts = data.range_counts;
                 }
                 // 🔥 percentile 계산 후 범례 갱신 (gradient count 표시)
                 this.renderColorLegends();
@@ -25078,7 +25171,7 @@ class WaferMapViewer {
             // Gradient percentile range click (grid mode measure overlay)
             if (section === 'gradient') {
                 const rangeIdx = parseInt(indexAttr, 10);
-                if (!Number.isNaN(rangeIdx) && rangeIdx >= 0 && rangeIdx <= 9) {
+                if (!Number.isNaN(rangeIdx) && rangeIdx >= 0 && rangeIdx <= 10) {
                     this.onGradientRangeClick(rangeIdx, e.ctrlKey || e.metaKey, e.shiftKey);
                     // Measure composite: _recolorMeasureComposite가 refresh 처리
                     if (!(this.isCompositeMode && this.compositeSession?.measureMode)) {
@@ -25255,6 +25348,16 @@ class WaferMapViewer {
         // Measure Composite: recolor API로 필터 적용
         if (this.isCompositeMode && this.compositeSession?.measureMode) {
             await this._recolorMeasureComposite();
+            return;
+        }
+        // Average Composite (square_weighted/square_mean): pixel-level gradient filter
+        if (this.isCompositeMode && this._compositeGradientStats) {
+            if (this.gridMode) {
+                this._reloadCurrentImageWithFilters();
+            } else {
+                // 🔥 단일 이미지: loadImage 전체 파이프라인 대신 pyramid 이미지만 경량 교체
+                await this._swapCompositeFilterImage();
+            }
             return;
         }
         if (this.chipAnnotator) {
@@ -25504,7 +25607,8 @@ class WaferMapViewer {
                         ? Array.from(this.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
                     // 🔥 measure-thumb은 personalizedParams를 안 쓰므로 cacheBuster를 직접 추가
                     const measureCacheSuffix = `&_t=${cacheBuster}`;
-                    nextUrl = `/api/measure-thumb?path=${encodeURIComponent(imagePath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=512&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${measureCacheSuffix}`;
+                    const _csRef = this.isCompositeMode ? '&color_source=composite' : '';
+                    nextUrl = `/api/measure-thumb?path=${encodeURIComponent(imagePath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=512&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${_csRef}${measureCacheSuffix}`;
                 } else {
                     nextUrl = `/api/thumbnail?path=${encodeURIComponent(imagePath)}&size=512${personalizedParams}${cacheSuffix}`;
                 }
@@ -25736,6 +25840,81 @@ class WaferMapViewer {
         }
     }
 
+
+    /**
+     * 🔥 Composite 단일 이미지에서 gradient filter 변경 시 경량 이미지 교체.
+     * loadImage() 전체 파이프라인(image/size, gradient-stats, positions, palette-counts 재로드)을
+     * 건너뛰고 현재 pyramid level 이미지만 서버에서 다시 가져와 swap한다.
+     */
+    async _swapCompositeFilterImage() {
+        const path = this.selectedImagePath;
+        if (!path) return;
+
+        const level = this.currentPyramidLevel || 1.0;
+        const personalizedParams = this.getPersonalizedParams();
+        const url = `/api/image?path=${encodeURIComponent(path)}&level=${level}${personalizedParams}`;
+
+        try {
+            const tStart = performance.now();
+            const response = await fetch(url, { cache: 'no-cache' });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            if (path !== this.selectedImagePath) return; // 다른 이미지로 전환됨
+
+            const contentType = response.headers.get('Content-Type') || 'image/jpeg';
+            const arrayBuffer = await response.arrayBuffer();
+
+            let bitmap;
+            if (typeof ImageDecoder !== 'undefined') {
+                try {
+                    const decoder = new ImageDecoder({ data: arrayBuffer, type: contentType });
+                    const { image } = await decoder.decode({ completeFramesOnly: true });
+                    bitmap = await createImageBitmap(image);
+                } catch (_) {
+                    bitmap = await decodeBitmapSmart({ buffer: arrayBuffer, type: contentType });
+                }
+            } else {
+                bitmap = await decodeBitmapSmart({ buffer: arrayBuffer, type: contentType });
+            }
+            if (path !== this.selectedImagePath) {
+                if (typeof bitmap?.close === 'function') bitmap.close();
+                return;
+            }
+
+            // pyramid 캐시 교체 (현재 level만 — 나머지는 background prefetch)
+            this.pyramidLevels = {};
+            this._pyramidLoading = new Set();
+            this.pyramidLevels[level] = bitmap;
+            const scheme = this.getActivePersonalizedScheme();
+            const cacheKey = `${level}_${this.personalizedColorEnabled ? 'p' : 'n'}_${scheme}`;
+            this.pyramidLevels[cacheKey] = bitmap;
+
+            if (this.semiconductorRenderer?.isGpuAvailable()) {
+                this.semiconductorRenderer.uploadLevelBitmap(level, bitmap);
+                this.semiconductorRenderer.setActiveLevel(level);
+            }
+            this.currentImageBitmap = bitmap;
+            this.currentImage = bitmap;
+            this.scheduleDraw();
+
+            // minimap 갱신
+            this.prepareMinimapPreview(bitmap).then(() => {
+                if (this.dom?.minimapContainer?.offsetWidth) {
+                    requestAnimationFrame(() => this.updateMinimap());
+                }
+            }).catch(() => {});
+
+            // 다른 레벨 background prefetch
+            this.prefetchAllPyramidLevels();
+
+            console.log(`[SWAP] Lv${level} gradient filter swap ${Math.round(performance.now() - tStart)}ms`);
+        } catch (e) {
+            console.warn('[SWAP] _swapCompositeFilterImage failed, fallback to full reload:', e);
+            this._reloadCurrentImageWithFilters();
+        }
+
+        // Navigator 썸네일 갱신 (debounced)
+        this.refreshThumbnailNavigatorWithCurrentParams();
+    }
 
     _reloadCurrentImageWithFilters() {
         if (this.gridMode) {
@@ -26012,51 +26191,58 @@ class WaferMapViewer {
         // Render top legend
         const isMeasureOverlay = (this.isMeasureGradientMode()) && this._ratioGradientCache;
         const isMeasureComposite = this.isCompositeMode && this.compositeSession?.measureMode && this._ratioGradientCache;
-        if (isMeasureOverlay || isMeasureComposite) {
-            // 🔥 Measure overlay 활성 시: gradient percentile 범례 표시
+        const isAverageComposite = this.isCompositeMode && this._compositeGradientStats && this._ratioGradientCache;
+        if (isMeasureOverlay || isMeasureComposite || isAverageComposite) {
+            // 🔥 Gradient percentile 범례: 11개 bar — [0] + [0~10, 10~20, ..., 90~100]
             const stops = this._ratioGradientCache;  // 11개 hex (0%,10%,...,100%)
-            const labels = ['0~10', '10~20', '20~30', '30~40', '40~50', '50~60', '60~70', '70~80', '80~90', '90~100'];
-            // Chip counts per range — measure composite uses server-side range_counts
-            let rc;
-            const sessionRC = this.compositeSession?.rangeCounts;
-            const sessionTotal = sessionRC?.length === 10 ? sessionRC.reduce((a, b) => a + b, 0) : 0;
-            if (isMeasureComposite && sessionTotal > 0) {
-                rc = { counts: sessionRC, total: sessionTotal };
-            } else if (this._compositeGradientStats) {
-                // Composite average map: 서버에서 계산된 pixel 분포 사용
-                const gs = this._compositeGradientStats;
-                rc = { counts: gs.map(r => r.count), total: gs.reduce((a, r) => a + r.count, 0) };
+            const rangeLabels = ['0~10', '10~20', '20~30', '30~40', '40~50', '50~60', '60~70', '70~80', '80~90', '~100'];
+            // Chip/pixel counts — 11구간: [0]=exact 0, [1]=(0,10]%, ..., [10]=(90,100]%
+            // 필터 시에도 원본 값 유지
+            let rc11;  // 11-element array
+            const origRC = this._gradientOriginalRangeCounts;
+            if (origRC && origRC.length === 11) {
+                rc11 = origRC;
+            } else if (origRC && origRC.length === 10) {
+                // 기존 10구간 → 11구간 변환 (0 split 불가, exact-0 = 0)
+                rc11 = [0, ...origRC];
             } else {
-                rc = this.chipAnnotator ? this.chipAnnotator.getGradientRangeCounts() : { counts: new Array(10).fill(0), total: 0 };
-            }
-            const topHtml = labels.map((label, i) => {
-                // 구간 중앙 색상 (stops[i]와 stops[i+1]의 중간) — hex 문자열 또는 RGB 배열 지원
-                const c1 = stops[i], c2 = stops[i + 1];
-                const _toRgb = (v) => Array.isArray(v) ? { r: v[0], g: v[1], b: v[2] } : (this.chipAnnotator?._hexToRgb(v) || null);
-                const rgb1 = _toRgb(c1);
-                const rgb2 = _toRgb(c2);
-                let color = Array.isArray(c1) ? `rgb(${c1[0]},${c1[1]},${c1[2]})` : c1;
-                if (rgb1 && rgb2) {
-                    const r = Math.round((rgb1.r + rgb2.r) / 2);
-                    const g = Math.round((rgb1.g + rgb2.g) / 2);
-                    const b = Math.round((rgb1.b + rgb2.b) / 2);
-                    color = `rgb(${r},${g},${b})`;
+                // 새로 계산 — gradientStats(pixel) 우선, 없으면 sessionRC(chip)
+                const sessionRC = this.compositeSession?.rangeCounts;
+                const sessionHasData = sessionRC && sessionRC.some(v => v > 0);
+                if (this._compositeGradientStats) {
+                    const gs = this._compositeGradientStats;
+                    rc11 = [0, ...gs.map(r => r.count)];
+                } else if (sessionHasData && sessionRC.length === 11) {
+                    rc11 = sessionRC;
+                } else if (sessionHasData && sessionRC.length === 10) {
+                    rc11 = [0, ...sessionRC];
+                } else {
+                    const grc = this.chipAnnotator ? this.chipAnnotator.getGradientRangeCounts() : { counts: new Array(11).fill(0) };
+                    rc11 = grc.counts;
                 }
-                const cnt = rc.counts[i] || 0;
-                const pct = rc.total > 0 ? (cnt / rc.total * 100).toFixed(1) : '0.0';
-                const countText = rc.total > 0 ? `${pct}%(${_formatCount(cnt)})` : '0';
-                const isSelected = this.selectedGradientRanges.has(i);
+                this._gradientOriginalRangeCounts = [...rc11];
+            }
+            const rcTotal = rc11.reduce((a, b) => a + b, 0);
+            const _toRgb = (v) => Array.isArray(v) ? { r: v[0], g: v[1], b: v[2] } : (this.chipAnnotator?._hexToRgb(v) || null);
+            // 11개 bar 생성 헬퍼
+            const _bar = (label, c, cnt, filterIdx) => {
+                const rgb = _toRgb(c);
+                const color = rgb ? `rgb(${rgb.r},${rgb.g},${rgb.b})` : (Array.isArray(c) ? `rgb(${c[0]},${c[1]},${c[2]})` : c);
+                const textColor = rgb ? ((0.299*rgb.r + 0.587*rgb.g + 0.114*rgb.b) > 140 ? 'rgba(0,0,0,0.85)' : 'rgba(255,255,255,0.9)') : '#fff';
+                const pct = rcTotal > 0 ? (cnt / rcTotal * 100).toFixed(1) : '0.0';
+                const countText = rcTotal > 0 ? `${pct}%(${_formatCount(cnt)})` : '0';
+                const isSelected = this.selectedGradientRanges.has(filterIdx);
                 const selBorder = isSelected ? 'outline:2px solid #1976d2;outline-offset:-2px;' : '';
                 const opacity = this.selectedGradientRanges.size > 0 && !isSelected ? 'opacity:0.35;' : '';
-                return `
-                    <div class="legend-item" data-section="gradient" data-index="${i}" draggable="true" style="cursor: pointer;${opacity}">
-                        <span class="legend-label" style="font-size:11px;">${label}%</span>
-                        <div class="legend-color-bar" data-section="gradient" data-index="${i}" style="background-color: ${color}; position: relative; overflow: hidden;${selBorder}cursor:pointer;">
-                            <span style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:${rgb1 ? ((0.299*rgb1.r + 0.587*rgb1.g + 0.114*rgb1.b) > 140 ? 'rgba(0,0,0,0.85)' : 'rgba(255,255,255,0.9)') : '#fff'};line-height:1;pointer-events:none;font-weight:600;">${countText}</span>
-                        </div>
-                    </div>
-                `;
-            }).join('');
+                return `<div class="legend-item" data-section="gradient" data-index="${filterIdx}" draggable="true" style="cursor:pointer;${opacity}">
+                    <span class="legend-label" style="font-size:11px;">${label}</span>
+                    <div class="legend-color-bar" data-section="gradient" data-index="${filterIdx}" style="background-color:${color};position:relative;overflow:hidden;${selBorder}cursor:pointer;">
+                        <span style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:${textColor};line-height:1;pointer-events:none;font-weight:600;">${countText}</span>
+                    </div></div>`;
+            };
+            // bar 0: "0" (stops[0])  |  bar 1~10: stops[i+1] 색상 (개인색 설정과 동일)
+            let topHtml = _bar('0', stops[0], rc11[0], 0);
+            topHtml += rangeLabels.map((label, i) => _bar(label + '%', stops[i + 1], rc11[i + 1], i + 1)).join('');
             this.dom.colorLegendTop.innerHTML = topHtml;
         } else if (userData.top && typeof userData.top === 'object') {
             // 🔥 TOP_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
@@ -26250,55 +26436,62 @@ class WaferMapViewer {
         const isMeasureComposite = this.isCompositeMode && this.compositeSession?.measureMode;
         html += '<div class="legend-group-top">';
         if ((isMeasureOverlay || isMeasureComposite) && this._ratioGradientCache) {
-            // Gradient percentile legend (10 ranges: 0~10, 10~20, ..., 90~100)
+            // Gradient percentile legend: 11개 bar — [0] + [0~10, ..., 90~100]
             const stops = this._ratioGradientCache;
-            const labels = ['0~10', '10~20', '20~30', '30~40', '40~50', '50~60', '60~70', '70~80', '80~90', '90~100'];
+            const rangeLabels = ['0~10', '10~20', '20~30', '30~40', '40~50', '50~60', '60~70', '70~80', '80~90', '~100'];
             const hexToRgb = (val) => {
                 if (Array.isArray(val)) return { r: val[0], g: val[1], b: val[2] };
                 if (typeof val !== 'string') return { r: 128, g: 128, b: 128 };
                 const h = val.replace('#', '');
                 return { r: parseInt(h.substring(0, 2), 16), g: parseInt(h.substring(2, 4), 16), b: parseInt(h.substring(4, 6), 16) };
             };
-            // range_counts for measure composite or single-image overlay
-            let gridRc = { counts: new Array(10).fill(0), total: 0 };
-            if (isMeasureComposite && this.compositeSession?.rangeCounts?.length === 10) {
-                const counts = this.compositeSession.rangeCounts;
-                gridRc = { counts, total: counts.reduce((a, b) => a + b, 0) };
-            } else if (this.chipAnnotator) {
-                gridRc = this.chipAnnotator.getGradientRangeCounts();
+            const origRC = this._gradientOriginalRangeCounts;
+            let grc11;
+            if (origRC && origRC.length === 11 && origRC.some(v => v > 0)) {
+                grc11 = origRC;
+            } else if (origRC && origRC.length === 10) {
+                grc11 = [0, ...origRC];
+            } else {
+                const sessionRC = this.compositeSession?.rangeCounts;
+                const sessionHasData = sessionRC && sessionRC.some(v => v > 0);
+                if (this._compositeGradientStats) {
+                    const gs = this._compositeGradientStats;
+                    grc11 = [0, ...gs.map(r => r.count)];
+                } else if (sessionHasData && sessionRC.length === 11) {
+                    grc11 = sessionRC;
+                } else if (sessionHasData && sessionRC.length === 10) {
+                    grc11 = [0, ...sessionRC];
+                } else if (this.chipAnnotator) {
+                    const grc = this.chipAnnotator.getGradientRangeCounts();
+                    grc11 = grc.counts;
+                } else {
+                    grc11 = new Array(11).fill(0);
+                }
+                this._gradientOriginalRangeCounts = [...grc11];
             }
+            const grcTotal = grc11.reduce((a, b) => a + b, 0);
             const _fmtCnt = (n) => {
                 if (n < 1000) return String(n);
                 if (n < 10000) return (n / 1000).toFixed(1) + 'K';
                 if (n < 1000000) return Math.round(n / 1000) + 'K';
                 return (n / 1000000).toFixed(1) + 'M';
             };
-            const _contrastGrid = (r, g, b) => {
-                const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-                return lum > 140 ? 'rgba(0,0,0,0.85)' : 'rgba(255,255,255,0.9)';
-            };
-            const topHtml = labels.map((label, i) => {
-                const c1 = hexToRgb(stops[i]);
-                const c2 = hexToRgb(stops[i + 1]);
-                const r = Math.round((c1.r + c2.r) / 2);
-                const g = Math.round((c1.g + c2.g) / 2);
-                const b = Math.round((c1.b + c2.b) / 2);
-                const color = `rgb(${r},${g},${b})`;
-                const isSelected = this.selectedGradientRanges.has(i);
+            const _gridBar = (label, c, cnt, filterIdx) => {
+                const rgb = hexToRgb(c);
+                const color = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+                const isSelected = this.selectedGradientRanges.has(filterIdx);
                 const selBorder = isSelected ? 'outline:2px solid #1976d2;outline-offset:-2px;' : '';
                 const opacity = this.selectedGradientRanges.size > 0 && !isSelected ? 'opacity:0.35;' : '';
-                const cnt = gridRc.counts[i] || 0;
-                const pct = gridRc.total > 0 ? (cnt / gridRc.total * 100).toFixed(1) : '0.0';
-                const countText = gridRc.total > 0 ? `${pct}%(${_fmtCnt(cnt)})` : '';
-                return `
-                    <div class="legend-item-grid" data-section="gradient" data-index="${i}" style="cursor: pointer;${opacity}">
-                        <div class="legend-color-bar-grid" style="background-color: ${color};${selBorder}"></div>
-                        <span class="legend-label-grid" style="font-size:11px;">${label}%</span>
-                        ${countText ? `<span class="legend-count-grid" style="font-size:9px;color:#aaa;">${countText}</span>` : ''}
-                    </div>
-                `;
-            }).join('');
-            html += topHtml;
+                const pct = grcTotal > 0 ? (cnt / grcTotal * 100).toFixed(1) : '0.0';
+                const countText = grcTotal > 0 ? `${pct}%(${_fmtCnt(cnt)})` : '';
+                return `<div class="legend-item-grid" data-section="gradient" data-index="${filterIdx}" style="cursor:pointer;${opacity}">
+                    <div class="legend-color-bar-grid" style="background-color:${color};${selBorder}"></div>
+                    <span class="legend-label-grid" style="font-size:11px;">${label}</span>
+                    ${countText ? `<span class="legend-count-grid" style="font-size:9px;color:#aaa;">${countText}</span>` : ''}
+                </div>`;
+            };
+            html += _gridBar('0', stops[0], grc11[0], 0);
+            html += rangeLabels.map((label, i) => _gridBar(label + '%', stops[i + 1], grc11[i + 1], i + 1)).join('');
         } else if (userData.top && typeof userData.top === 'object') {
             // 🔥 TOP_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
             const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
@@ -27810,7 +28003,8 @@ class WaferMapViewer {
                 const loginId = this.getCurrentLoginId();
                 const gf = this.selectedGradientRanges.size > 0
                     ? Array.from(this.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
-                thumbnailUrl = `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=512&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${cacheParam}`;
+                const _csLot = this.isCompositeMode ? '&color_source=composite' : '';
+                thumbnailUrl = `/api/measure-thumb?path=${encodeURIComponent(imgPath)}&field=${this.overlayMode}&key=${encodeURIComponent(this._ratioActiveItemKey)}&size=512&scheme=${encodeURIComponent(loginId)}${gf ? '&gradient_filter=' + gf : ''}${_csLot}${cacheParam}`;
             } else {
                 thumbnailUrl = `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${personalizedParams}${cacheParam}`;
             }

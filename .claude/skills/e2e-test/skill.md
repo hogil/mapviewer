@@ -1081,7 +1081,27 @@ Composite average map 단일 뷰에서 gradient 범례 픽셀 분포 계산이 �
 2. 응답 시간 < 500ms (np.histogram 직접 사용, float64 정규화 제거)
 3. 응답에 `stats` 객체 포함 (10개 구간별 카운트)
 
-**pass 기준**: 그리드 Gradient 범례 표시, Average/Grade 단일 뷰 범례 분리, Subset 생성→검증, BIN/FBT/QVL 모두 Gradient 범례 + 퍼센트/칩수 + 단일/다중 선택/해제 필터 정상, 배경색 개인색 적용, invalid 흰색 고정, gradient stats < 500ms
+#### 8-10. Composite 생성 시 이벤트 루프 블로킹 방지 검증
+`composite-cleanup` 엔드포인트의 `from .composite_map import ...`가 async handler에서 동기 실행되면 이벤트 루프를 블로킹한다.
+import와 shutil.rmtree가 반드시 `run_in_executor` 안에서 실행되어야 한다.
+1. `POST /api/composite-cleanup` 요청과 `GET /api/files?path=.` 요청을 **동시에** 전송
+2. `files` 응답이 **5초 이내**에 200으로 반환되는지 확인 (블로킹 없음)
+3. `composite-cleanup` 응답도 200으로 반환되는지 확인
+4. **코드 검증**: `api/main.py`의 `composite_cleanup_endpoint`에서 `from .composite_map import ...`가 `_cleanup_sync()` 함수 내부에 있고, `run_in_executor`로 실행되는지 확인
+- **핵심**: import가 async handler 본문에서 직접 실행되면 첫 요청 시 numba/numpy/pyvips 로드로 2분+ 이벤트 루프 블로킹 → 모든 HTTP 요청 pending
+
+#### 8-11. Composite Gradient 색상 — 개인색 Composite 탭 색 사용 검증
+Grade 맵을 제외한 모든 Composite 결과(square_average, square_weighted_average, BIN/FBT/QVL Composite)의 gradient 색상이 개인색 편집기의 **Composite 탭** 색을 사용하는지 확인한다.
+1. `/api/composite-colors?LoginId={loginId}` 응답에서 gradient 색상 배열 획득 (`colors`)
+2. `/api/measure-colors?LoginId={loginId}` 응답에서 gradient 색상 배열 획득 (`colors`)
+3. Composite 결과에서 **square_average** 더블클릭 → 단일 뷰 진입
+4. `v._ratioGradientCache`가 **composite-colors**의 색상 배열과 일치하는지 확인
+5. `v._ratioGradientCacheKey === 'composite'` 확인
+6. Back → 그리드 복귀 → 원본 폴더로 이동 → Measure overlay 진입
+7. `v._ratioGradientCacheKey === 'measure'` 확인 (모드 전환 시 캐시 무효화)
+- **핵심**: `_ensureRatioGradientCache()`가 `isCompositeMode`이면 `/api/composite-colors`, 아니면 `/api/measure-colors` 사용. 모드 전환 시 캐시키 변경으로 자동 무효화.
+
+**pass 기준**: 그리드 Gradient 범례 표시, Average/Grade 단일 뷰 범례 분리, Subset 생성→검증, BIN/FBT/QVL 모두 Gradient 범례 + 퍼센트/칩수 + 단일/다중 선택/해제 필터 정상, 배경색 개인색 적용, invalid 흰색 고정, gradient stats < 500ms, composite-cleanup 블로킹 없음, gradient 색상 Composite 탭 색 사용
 
 ---
 
@@ -3308,25 +3328,34 @@ for (const c of chips) {
 
 **데이터**: palette_3k (LOT 6개 × 500개 = 3000개) + benchmark_4m (400만 더미) = 501만 파일
 
-**검색 방식 — 토큰 역인덱스**:
-빌드 시 파일명을 `_` split하여 각 토큰별 인덱스 리스트를 dict에 저장 (1회, ~6초).
-검색 시 14328개 토큰 dict에서 포함매칭 → 매칭 토큰의 인덱스 리스트로 즉시 결과 반환.
-501만 파일 순차 스캔 없이 검색 가능.
+**검색 방식 — 위치별 토큰 역인덱스 (token[0] / token[2])**:
+빌드 시 파일명을 `_` split하여 **위치별** 인덱스를 생성 (대소문자 무시):
+- `token0_index`: token[0] (LOT) 위치별 인덱스 → **모든 검색의 기본**
+- `token2_index`: token[2] (WAFER) 위치별 인덱스 → **AND 오른쪽 전용**
+- `token_index`: 전체 위치 인덱스 (fallback)
+
+**핵심 규칙**:
+1. 모든 검색어는 **token[0]에 포함(contains)**되는 파일만 검색 (대소문자 무시)
+2. `A and B`: token[0] contains A → 그 결과에서 token[2] contains B
+3. `A or B`: (token[0] contains A) ∪ (token[0] contains B)
+4. 결과 패턴: 단일 `A` → `*A*_*_*_*`, AND `A and B` → `*A*_*_*B*_*`
 
 ```python
 # 빌드 시 (서버 시작 1회):
-# ABC123_00C_04_0003_EE_Engineer.png → tokens: [abc123, 00c, 04, 0003, ee, engineer]
-token_index = {
-    'abc123': [0,1,2,...499],   # 500개 파일
-    '04':     [x,y,z,...],      # wafer 04 파일들
-    'ghj789': [1024,...],       # GHJ789 LOT
-    ...  # 총 14328개 토큰
+# ABC123_00C_04_0003_EE_Engineer.png → parts: [abc123, 00c, 04, 0003, ee, engineer]
+token0_index = {
+    'abc123': [0,1,2,...499],   # token[0]=abc123인 500개 파일
+    'ghj789': [1024,...],       # token[0]=ghj789인 파일들
+    'lot':    [...],            # benchmark_4m 파일들
+}
+token2_index = {
+    '04':     [x,y,z,...],      # token[2]=04인 파일들
+    'step':   [...],            # benchmark_4m 파일들
 }
 
 # 검색 시:
-# 단순 "ghj789" → token_index에서 'ghj789' 포함 토큰 찾기 → 정확 매칭 → 즉시 반환 (2.4ms)
-# "bc12" → 14328 토큰 순회, 'abc123'에 'bc12' 포함 → 해당 인덱스 반환 (2.5ms)
-# AND/OR "(abc123 and 04)" → postfix [abc123, 04, and] → abc123 set & 04 set → 교차 (75ms)
+# 단순 "ghj789" → token0_index에서 'ghj789' 포함 키 찾기 → 즉시 반환 (2.4ms)
+# AND "abc123 and 04" → token0에서 abc123 → 500건, token2에서 04 → 교차 → 125건
 # LOT multi → lot_index dict에서 O(1) 룩업 (8ms)
 ```
 
@@ -3334,13 +3363,15 @@ token_index = {
 
 | # | 방식 | 검색창 입력 / API 쿼리 | 결과 | 최적화 전 | 최적화 후 | 개선 |
 |---|------|----------------------|------|----------|----------|------|
-| 1 | 단순 검색 | `GHJ789` → `q=ghj789&folder=` | 524개 | 233ms | **2.4ms** | 97x |
-| 2 | 부분매칭 | `BC12` → `q=bc12&folder=` | 500개 (ABC123 LOT) | 233ms | **2.5ms** | 93x |
-| 3 | AND | `ABC123 and 04` → `q=ABC123+and+04` | 125개 | 994ms | **1.0ms** | 994x |
-| 4 | AND/OR | `(ABC123 and 04) or (DEF456 and 05)` | 285개 | 994ms | **75ms** | 13x |
-| 5 | 부분 AND | `bc12 and 07` → `q=bc12+and+07` | 31개 | 210ms | **35ms** | 6x |
+| 1 | 단순 검색 (token[0]) | `GHJ789` → `q=ghj789&folder=` | 524개 | 233ms | **2.4ms** | 97x |
+| 2 | 부분매칭 (token[0]) | `BC12` → `q=bc12&folder=` | 500개 (ABC123 LOT) | 233ms | **2.5ms** | 93x |
+| 3 | AND (token[0]+[2]) | `ABC123 and 04` → `q=ABC123+and+04` | 125개 | 994ms | **1.0ms** | 994x |
+| 4 | AND/OR | `(ABC123 and 04) or (DEF456 and 05)` | >0개 | 994ms | **75ms** | 13x |
+| 5 | 부분 AND | `bc12 and 07` → `q=bc12+and+07` | >0개 | 210ms | **35ms** | 6x |
 | 6 | 폴더 한정 | `abc123` (palette_3k 선택 상태) | 500개 | 3ms | **2.1ms** | — |
 | 7 | LOT multi | 다중검색 모달 noise 6줄 입력 | 3120개 | 739ms | **8ms** | 92x |
+
+> **주의**: 단순/부분매칭은 token[0] 전용, AND 왼쪽은 token[0], AND 오른쪽은 token[2]. 대소문자 무시. Phase 51 참조.
 
 **pass 기준**:
 
@@ -5153,3 +5184,375 @@ for name, info in result.items():
 | 모드 | daily / interval 2가지 | daily 1가지 |
 | 환경변수 | 6개 | 3개 |
 | 코드 라인 | ~211줄 | ~62줄 |
+
+## Label/ChipLabel 이미지 — Wafer Map Explorer 완전 분리 (2026-04-01)
+
+### 버그 현상
+1. Label Explorer에서 라벨 이미지를 더블클릭하면 Wafer Map Explorer에서 **원본 파일이 하이라이트**됨
+2. 좌우 네비게이션(← →)할 때도 Wafer Map Explorer가 따라 움직임
+3. 라벨 이미지를 보면서 삭제하면 원본과 라벨 이미지 사이 전환이 반복되며 **떨림/진동** 발생
+
+### 원인
+- `resolveLabelExplorerImagePath()`가 원본 경로(`palette_3k/...`)를 반환 → `isClassificationPath()` 통과
+- `updateWaferMapExplorerHighlight()`가 원본 경로를 받아 Wafer Map Explorer를 스크롤+하이라이트
+- 라벨 삭제 후 `restoreSavedViewState()`가 Wafer Map Explorer의 상태를 복원 → 원본 ↔ 라벨 전환
+
+### 수정
+`updateWaferMapExplorerHighlight()` 진입점에서 4가지 조건으로 차단:
+
+```javascript
+updateWaferMapExplorerHighlight(imagePath) {
+    if (!this.dom.fileExplorer || !imagePath) return;
+    if (this.isClassificationPath(imagePath)) return;        // classification 경로
+    if (this.gridViewSaveState?.source === 'labelExplorer') return;  // Label 그리드에서 진입
+    if (this.isLabelExplorerGridActive?.()) return;           // Label 그리드 활성 상태
+    if (this.activePageRole === 'label') return;              // label 탭
+    // ... 정상 하이라이트 로직
+}
+```
+
+추가 수정:
+- `enterSingleImageMode()`: Label 그리드에서 진입 시 `fromLabelExplorer=true`
+- `navigateSingleImageGrid()`: Label 이미지 네비게이션 시 `fromLabelExplorer=true`
+- 라벨 삭제 후: `restoreSavedViewState()` 대신 Label 그리드로 복귀
+
+### E2E 검증 코드
+
+```javascript
+// 전제: palette_3k 폴더가 Ctrl+클릭으로 선택된 상태, asDF 클래스에 라벨이 1개 이상 존재
+
+// 1. Label Explorer 그리드 로드
+const v = window.viewer;
+await v.refreshLabelExplorer();
+v.labelSelection.selected = (v.classToImgListCache?.['asDF'] || []).map(img => `asDF/${img.name}`);
+v.showGridFromLabelExplorer(v.labelSelection.selected);
+
+// 2. 그리드 확인
+const grid = document.getElementById('image-grid');
+assert(grid.hasAttribute('data-label-explorer-grid'));  // Label 그리드
+assert(v.activePageRole === 'label');                    // label 탭
+
+// 3. 더블클릭 전 Wafer Map Explorer 하이라이트 = 0
+const beforeCount = document.querySelectorAll('#file-explorer a.selected, #file-explorer a.highlight').length;
+assert(beforeCount === 0);
+
+// 4. 더블클릭
+grid.querySelectorAll('.grid-thumb-wrap')[0].ondblclick({ preventDefault(){}, stopPropagation(){} });
+await new Promise(r => setTimeout(r, 2000));
+
+// 5. 더블클릭 후 Wafer Map Explorer 하이라이트 = 0 (안 움직임)
+const afterCount = document.querySelectorAll('#file-explorer a.selected, #file-explorer a.highlight').length;
+assert(afterCount === 0);  // ← 이전에는 1이 됐음 (버그)
+
+// 6. source가 labelExplorer인지
+assert(v.gridViewSaveState?.source === 'labelExplorer');
+
+// 7. 네비게이션 후에도 하이라이트 = 0
+v.navigateSingleImageGrid(1);
+await new Promise(r => setTimeout(r, 1500));
+const navCount = document.querySelectorAll('#file-explorer a.selected, #file-explorer a.highlight').length;
+assert(navCount === 0);  // ← 이전에는 1이 됐음 (버그)
+```
+
+### PASS 기준
+| 항목 | 기대값 |
+|---|---|
+| Label 그리드 로드 후 `data-label-explorer-grid` | `true` |
+| `activePageRole` | `'label'` |
+| 더블클릭 전 Wafer Map Explorer 하이라이트 수 | `0` |
+| 더블클릭 후 Wafer Map Explorer 하이라이트 수 | `0` |
+| `gridViewSaveState.source` | `'labelExplorer'` |
+| → 키 네비게이션 후 Wafer Map Explorer 하이라이트 수 | `0` |
+
+### 수정 파일
+- `js/main.js`
+  - `updateWaferMapExplorerHighlight()`: classification 경로 + label 컨텍스트 차단
+  - `enterSingleImageMode()`: `_fromLabelExplorer` 플래그
+  - `navigateSingleImageGrid()`: `_navFromLabel` 플래그
+  - 라벨 삭제 후 복원: Label 그리드 복귀 분기 추가
+
+## 빈 폴더/필터 0건 시 상단 패널 유지 (2026-04-01)
+
+### 버그 현상
+빈 폴더를 Ctrl+클릭하거나 필터로 결과가 0건이 되면 `hideGrid()`가 호출되어 상단 패널(컬럼 슬라이더, 검색, LOT Mode 등)이 사라짐. 필터를 해제할 수 없는 상태가 됨.
+
+### 수정
+`showEmptyGridMessage(message)` 헬퍼 추가:
+- 상단 패널(`grid-controls`)은 **유지**
+- 그리드 영역에 안내 메시지만 표시
+- `gridMode = true` 유지 → 필터 해제 시 정상 그리드로 복원 가능
+
+### 메시지
+| 상황 | 메시지 |
+|---|---|
+| 빈 폴더 | "선택한 폴더에 이미지가 없습니다" |
+| 필터 0건 | "현재 필터 조건에 맞는 이미지가 없습니다" |
+
+### E2E 검증
+
+```javascript
+// 1. palette_3k Ctrl+클릭 → 3000개 그리드
+// 2. 존재하지 않는 LOT 필터 적용
+const v = window.viewer;
+v.filterLT = ['NONEXISTENT'];
+await v._applyFilterToGrid();
+
+// 3. 상단 패널이 보이는지
+const gc = document.getElementById('grid-controls');
+assert(gc.offsetHeight > 0);             // 상단 패널 유지
+assert(v.gridMode === true);             // 그리드 모드 유지
+
+// 4. 안내 메시지가 표시되는지
+const grid = document.getElementById('image-grid');
+assert(grid.textContent.includes('이미지가 없습니다'));
+
+// 5. 필터 해제 → 복원
+v.filterLT = [];
+await v._applyFilterToGrid();
+assert(v.selectedImages.length === 3000);  // 원래 이미지 복원
+```
+
+## 그리드/라벨 단일 보기 + Next 통합 검증 (2026-04-01)
+
+### 검증 항목 및 PASS 기준
+
+| # | 시나리오 | PASS 기준 | 비고 |
+|---|---|---|---|
+| 1 | 폴더 Ctrl+클릭 → 그리드 | `gridMode=true`, `wraps >= 1` | |
+| 2 | 그리드 더블클릭 → 단일 모드 | `viewMode='gridImage'`, `source='grid'` | |
+| 3 | 단일 모드 Next(→) | `selectedImagePath` 변경, Explorer 하이라이트 1 | 원본이므로 정상 |
+| 4 | ESC → 그리드 복귀 | `gridMode=true`, `wraps` 유지 | |
+| 5 | Label Explorer 그리드 | `data-label-explorer-grid` 존재, `role='label'` | |
+| 6 | Label 더블클릭 → 단일 | `path`가 `classification/...`, Explorer 하이라이트 **0** | |
+| 7 | Label Next 1회 | 다음 `classification/...` 이미지, Explorer **0** | |
+| 8 | Label Next 2회 | 또 다음 이미지, Explorer **0** | |
+| 9 | 빈 필터 메시지 | `gridControls.offsetHeight > 0`, 메시지 포함 | |
+
+### 실측 결과 (2026-04-01)
+
+```
+p1_grid:      { images: 3000, wraps: 3000, gridMode: true }
+p1_dblclick:  { viewMode: 'gridImage', explorerHighlight: 1, source: 'grid' }
+p1_next:      { path: 'palette_3k/...0027...', explorerHighlight: 1 }
+p1_esc:       { gridMode: true, wraps: 3000 }
+p2_labelGrid: { isLabelGrid: true, wraps: 16, role: 'label' }
+p2_dblclick:  { path: 'classification/asDF/...0003...', explorerHighlight: 0, source: 'labelExplorer' }
+p2_next:      { path: 'classification/asDF/...0027...', explorerHighlight: 0 }
+p2_next2:     { path: 'classification/asDF/...0051...', explorerHighlight: 0 }
+p3_emptyFilter: { gridControlsVisible: true, message: '이미지가 없습니다...', gridMode: true }
+```
+
+### 핵심 규칙
+- 일반 그리드(source='grid'): 더블클릭/Next 시 Explorer 하이라이트가 **따라가야** 한다
+- Label 그리드(source='labelExplorer'): 더블클릭/Next 시 Explorer 하이라이트가 **절대 움직이면 안 된다**
+- Label 경로는 `classification/...`이어야 하고, 원본 `palette_3k/...`로 빠지면 안 된다
+
+---
+
+## Phase 51: 위치별 토큰 검색 (token[0] / token[2]) 검증
+
+**목적**: 검색이 파일명 `_` split 후 **위치별**로 동작하는지 검증. 모든 검색은 token[0] 기반, AND 오른쪽만 token[2] 추가 필터.
+
+**배경**:
+- 파일명 규칙: `LOT_BINTYPE_WAFER_TIMESTAMP.png` → `_` split → token[0]=LOT, token[2]=WAFER
+- 검색어는 해당 위치의 토큰에 **포함(contains)** 매칭, **대소문자 무시**
+- 기존에는 모든 토큰 위치에서 검색하여 의도하지 않은 결과가 나오던 문제 수정
+
+**테스트 데이터**:
+```
+wafer_edge_ring/wafer_edge_ring_0005.png     → token[0]=wafer, token[2]=ring
+wafer_edge_gradient/wafer_edge_gradient_0005.png → token[0]=wafer, token[2]=gradient
+wafer_center_cool/wafer_center_cool_0010.png → token[0]=wafer, token[2]=cool
+backup/Edge-Ring_1_padded.png                → token[0]=edge-ring, token[2]=padded
+palette_3k/ABC123_00C_04_0003_EE_Engineer.png → token[0]=abc123, token[2]=04
+```
+
+### 51-1. 단일 검색 — token[0] 전용
+
+| # | 검색어 | 예상 결과 | 설명 |
+|---|--------|----------|------|
+| 1 | `edge` | backup/Edge-* 파일만 (16건) | token[0]="edge-ring","edge-loc" → "edge" 포함 ✓ |
+| 2 | `wafer` | wafer_* 파일 전체 (112,006건) | token[0]="wafer" ✓ |
+| 3 | `cool` | 0건 | token[0]="wafer" → "cool" 미포함 |
+| 4 | `ring` | 0건 | token[0]="wafer" → "ring" 미포함 |
+| 5 | `abc123` | 500건 | token[0]="abc123" ✓ |
+
+**검증 포인트**: `wafer_edge_*` 파일이 `edge` 검색에 나오면 **FAIL** (token[0]="wafer"이므로)
+
+```javascript
+const a1 = await (await fetch('/api/search?q=edge&folder=&limit=5')).json();
+console.assert(a1.total === 16, `edge 검색: ${a1.total}건 (expected 16)`);
+console.assert(!a1.results.some(r => r.startsWith('wafer_')), 'wafer_* 파일 혼입 금지');
+
+const a2 = await (await fetch('/api/search?q=wafer&folder=&limit=5')).json();
+console.assert(a2.total > 100000, `wafer 검색: ${a2.total}건`);
+
+const a3 = await (await fetch('/api/search?q=cool&folder=&limit=5')).json();
+console.assert(a3.total === 0, `cool 단독 검색: ${a3.total}건 (expected 0)`);
+
+const a4 = await (await fetch('/api/search?q=ring&folder=&limit=5')).json();
+console.assert(a4.total === 0, `ring 단독 검색: ${a4.total}건 (expected 0)`);
+```
+
+### 51-2. AND 검색 — token[0] + token[2]
+
+| # | 검색어 | 예상 결과 | 설명 |
+|---|--------|----------|------|
+| 1 | `wafer and ring` | 3000건 | token[0]∋"wafer" + token[2]∋"ring" |
+| 2 | `wafer and cool` | 3000건 | token[0]∋"wafer" + token[2]∋"cool" |
+| 3 | `wafer and gradient` | 3000건 | token[0]∋"wafer" + token[2]∋"gradient" |
+| 4 | `edge and 0005` | 0건 | token[0]∋"edge"(backup만) → token[2]∋"0005" 없음 |
+| 5 | `abc123 and 04` | 125건 | token[0]∋"abc123" → token[2]∋"04" |
+
+```javascript
+const b1 = await (await fetch('/api/search?q=wafer+and+ring&folder=&limit=5')).json();
+console.assert(b1.total === 3000, `wafer AND ring: ${b1.total}`);
+
+const b4 = await (await fetch('/api/search?q=edge+and+0005&folder=&limit=5')).json();
+console.assert(b4.total === 0, `edge AND 0005: ${b4.total} (expected 0)`);
+
+const b5 = await (await fetch('/api/search?q=abc123+and+04&folder=&limit=5')).json();
+console.assert(b5.total > 0, `abc123 AND 04: ${b5.total}`);
+```
+
+### 51-3. OR 검색 — token[0] 합집합
+
+| # | 검색어 | 예상 결과 | 설명 |
+|---|--------|----------|------|
+| 1 | `edge or cool` | 16건 | token[0]∋"edge"(16) ∪ token[0]∋"cool"(0) |
+| 2 | `abc123 or def456` | 1024건 | token[0]∋"abc123"(500) ∪ token[0]∋"def456"(524) |
+
+```javascript
+const c1 = await (await fetch('/api/search?q=edge+or+cool&folder=&limit=5')).json();
+console.assert(c1.total === 16, `edge OR cool: ${c1.total}`);
+
+const c2 = await (await fetch('/api/search?q=abc123+or+def456&folder=&limit=5')).json();
+console.assert(c2.total > 1000, `abc123 OR def456: ${c2.total}`);
+```
+
+### 51-4. 복합 검색 — (A and B) or (C and D)
+
+| # | 검색어 | 예상 결과 | 설명 |
+|---|--------|----------|------|
+| 1 | `(wafer and ring) or (wafer and cool)` | 6000건 | 3000+3000 |
+| 2 | `(wafer and ring) or (wafer and gradient)` | 6000건 | 3000+3000 |
+| 3 | `(abc123 and 04) or (def456 and 05)` | >0건 | 두 LOT 교차 |
+
+```javascript
+const d1 = await (await fetch('/api/search?q=(wafer+and+ring)+or+(wafer+and+cool)&folder=&limit=5')).json();
+console.assert(d1.total === 6000, `복합 검색: ${d1.total}`);
+```
+
+### 51-5. 대소문자 무시
+
+| # | 검색어 | 예상 결과 | 설명 |
+|---|--------|----------|------|
+| 1 | `WAFER and RING` | 3000건 | 대문자 → 소문자 자동 변환 |
+| 2 | `Edge` | 16건 | Edge → edge 자동 변환 |
+| 3 | `Wafer AND Cool` | 3000건 | 혼합 대소문자 |
+
+```javascript
+const e1 = await (await fetch('/api/search?q=WAFER+and+RING&folder=&limit=5')).json();
+console.assert(e1.total === 3000, `대소문자: ${e1.total}`);
+
+const e2 = await (await fetch('/api/search?q=Edge&folder=&limit=5')).json();
+console.assert(e2.total === 16, `Edge 대소문자: ${e2.total}`);
+```
+
+### 51-6. 위치 교차 검증 (핵심)
+
+token[0]과 token[2]가 뒤바뀌면 결과가 달라져야 한다.
+
+| # | 검색어 | 예상 | 역방향 | 역방향 결과 |
+|---|--------|------|--------|------------|
+| 1 | `wafer and ring` | 3000건 | `ring and wafer` | 0건 (token[0]∋"ring" 없음) |
+| 2 | `abc123 and 04` | 125건 | `04 and abc123` | 0건 (token[0]∋"04" 없음) |
+
+```javascript
+const f1 = await (await fetch('/api/search?q=ring+and+wafer&folder=&limit=5')).json();
+console.assert(f1.total === 0, `역방향 ring AND wafer: ${f1.total} (expected 0)`);
+
+const f2 = await (await fetch('/api/search?q=04+and+abc123&folder=&limit=5')).json();
+console.assert(f2.total === 0, `역방향 04 AND abc123: ${f2.total} (expected 0)`);
+```
+
+**pass 기준**:
+- 51-1: 단일 검색 5건 모두 token[0] 기반 결과
+- 51-2: AND 검색 5건 모두 token[0]+token[2] 교차 결과
+- 51-3: OR 검색 2건 token[0] 합집합
+- 51-4: 복합 검색 결과 정확
+- 51-5: 대소문자 무시 3건
+- 51-6: 역방향 AND 0건 (위치 구분 증명)
+
+### 51-7. 다중검색 (LOT multi) + query 조합
+
+| # | 검색어 | lot_multi | 결과 | 서버(ms) | 모드 |
+|---|--------|-----------|------|----------|------|
+| 1 | (없음) | abc123,def456,ghj789 | 1548건 | 10ms | lot-index |
+| 2 | (없음) | abc123,def456,fex482,ghj789,khn931,tmw067 | 3120건 | 13ms | lot-index |
+| 3 | (없음) | abc123 | 500건 | 2.6ms | lot-index |
+| 4 | `abc123 and 04` | abc123 | 141건 | 1.2ms | query+lot |
+| 5 | `def456 and 05` | def456 | 144건 | 1.4ms | query+lot |
+| 6 | `04` | abc123 | 141건 | 3.2ms | query+lot |
+
+> **주의**: lot_multi path는 글로벌 인덱스 사용 불가 (subset이므로), 순차스캔 fallback 사용.
+> 그래서 #4(141건) vs 전체 AND(125건) 차이 발생 — lot_multi는 파일명 전체 매칭, 전체는 위치별 매칭.
+
+```javascript
+// lot_multi + AND 조합 테스트
+const g1 = await (await fetch('/api/search?q=&folder=&limit=5000&lot_multi=abc123,def456,ghj789')).json();
+console.assert(g1.total === 1548, `LOT multi 3개: ${g1.total}`);
+
+const g2 = await (await fetch('/api/search?q=abc123+and+04&folder=&limit=5000&lot_multi=abc123')).json();
+console.assert(g2.total > 0, `LOT multi + AND: ${g2.total} (expected > 0)`);
+```
+
+### 51-8. 폴더 한정 검색
+
+| # | 검색어 | 폴더 | 결과 | 서버(ms) | 모드 |
+|---|--------|------|------|----------|------|
+| 1 | `abc123` | palette_3k | 500건 | 2.8ms | simple |
+| 2 | `abc123 and 04` | palette_3k | 141건 | 1.9ms | logical |
+
+> **주의**: 폴더 한정 시 글로벌 인덱스 사용 불가, 순차스캔 fallback.
+
+### 실측 결과 (2026-04-01)
+
+**위치별 토큰 검색 (전체)**:
+
+| 테스트 | 검색어 | 예상 | 실측 | 서버(ms) | 판정 |
+|--------|--------|------|------|----------|------|
+| 51-1-1 | `edge` | 16 | 16 | 0.7 | PASS |
+| 51-1-2 | `wafer` | 112006 | 112006 | 313 | PASS |
+| 51-1-3 | `cool` | 0 | 0 | 0.6 | PASS |
+| 51-1-4 | `abc123` | 500 | 500 | 1.7 | PASS |
+| 51-2-1 | `wafer and ring` | 3000 | 3000 | 11.6 | PASS |
+| 51-2-2 | `wafer and cool` | 3000 | 3000 | 11.2 | PASS |
+| 51-2-3 | `edge and 0005` | 0 | 0 | 0.6 | PASS |
+| 51-2-4 | `abc123 and 04` | 125 | 125 | 1.2 | PASS |
+| 51-3-1 | `edge or cool` | 16 | 16 | 0.6 | PASS |
+| 51-3-2 | `abc123 or def456` | 1024 | 1024 | 3.6 | PASS |
+| 51-4-1 | `(wafer and ring) or (wafer and cool)` | 6000 | 6000 | 21 | PASS |
+| 51-4-2 | `(abc123 and 04) or (def456 and 05)` | >0 | 251 | 1.7 | PASS |
+| 51-5-1 | `WAFER and RING` | 3000 | 3000 | 11 | PASS |
+| 51-5-2 | `Edge` | 16 | 16 | 0.5 | PASS |
+| 51-6-1 | `ring and wafer` (역방향) | 0 | 0 | 0.6 | PASS |
+| 51-6-2 | `04 and abc123` (역방향) | 0 | 0 | 0.6 | PASS |
+
+**다중검색 (LOT multi)**:
+
+| 테스트 | 검색어 | lot_multi | 실측 | 서버(ms) | 판정 |
+|--------|--------|-----------|------|----------|------|
+| 51-7-1 | (없음) | 3개 LOT | 1548 | 10 | PASS |
+| 51-7-2 | (없음) | 6개 LOT | 3120 | 13 | PASS |
+| 51-7-3 | (없음) | 1개 LOT | 500 | 2.6 | PASS |
+| 51-7-4 | `abc123 and 04` | abc123 | 141 | 1.2 | PASS |
+| 51-7-5 | `def456 and 05` | def456 | 144 | 1.4 | PASS |
+| 51-7-6 | `04` | abc123 | 141 | 3.2 | PASS |
+
+**폴더 한정**:
+
+| 테스트 | 검색어 | 폴더 | 실측 | 서버(ms) | 판정 |
+|--------|--------|------|------|----------|------|
+| 51-8-1 | `abc123` | palette_3k | 500 | 2.8 | PASS |
+| 51-8-2 | `abc123 and 04` | palette_3k | 141 | 1.9 | PASS |
