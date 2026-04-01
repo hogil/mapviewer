@@ -162,6 +162,9 @@ class SearchService:
                     ]
                 search_start = time.perf_counter()
                 if complex_query:
+                    # 🔥 token_index는 전체 _keys 기준 글로벌 인덱스 → folder slice와 불일치
+                    # prefix가 있으면(폴더 한정) token_index 없이 순차 스캔 fallback 사용
+                    tok_idx = self.index_service._token_index if not prefix else None
                     index_hits = await loop.run_in_executor(
                         self.io_executor,
                         search_index_logical,
@@ -170,7 +173,7 @@ class SearchService:
                         query_for_search,
                         None,
                         self.search_workers,
-                        self.index_service._token_index,
+                        tok_idx,
                         None,
                     )
                     effective_workers = self.search_workers
