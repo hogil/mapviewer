@@ -5784,8 +5784,7 @@ class WaferMapViewer {
             if (this.selectedImages.length > 0) {
                 this.showGrid(this.selectedImages);
             } else {
-                this.hideGrid();
-                this.hideImage();
+                this.showEmptyGridMessage('선택한 폴더에 이미지가 없습니다');
             }
             return;
         }
@@ -5804,8 +5803,7 @@ class WaferMapViewer {
                 this.selectedImages = filtered;
                 this.showGrid(filtered, true);
             } else {
-                this.hideGrid();
-                this.hideImage();
+                this.showEmptyGridMessage('현재 필터 조건에 맞는 이미지가 없습니다');
             }
         }
     }
@@ -12712,9 +12710,19 @@ class WaferMapViewer {
         }
     }
 
+    isLabelExplorerIsolationActive(path = '', fromLabelExplorer = false) {
+        if (fromLabelExplorer) return true;
+        if (this._labelExplorerSingleMode) return true;
+        if (this.gridViewSaveState?.source === 'labelExplorer') return true;
+        if (this.isLabelExplorerGridActive?.()) return true;
+        if (this.activePageRole === 'label') return true;
+        return this.isClassificationPath(path);
+    }
+
     async loadImage(path, fromLabelExplorer = false, loadVersion = null, forceReload = false, options = {}) {
         const { preserveBottomSelection = false, preserveViewport = false } = options || {};
         const loadFromGridSingleMode = this.singleImageFromGrid === true;
+        const labelExplorerIsolated = this.isLabelExplorerIsolationActive(path, fromLabelExplorer);
         this._measureOverlayRendered = false;  // 🔥 새 이미지 로드 시 measure 렌더 플래그 초기화
         const loadRequestSeq = (this._loadImageRequestSeq || 0) + 1;
         this._loadImageRequestSeq = loadRequestSeq;
@@ -12877,8 +12885,11 @@ class WaferMapViewer {
                 this.dom.viewerContainer.classList.add('single-image-mode');
             }
 
-            // 🔥 path는 이미 ROOT_DIR 기준 절대 경로 (모든 depth 포함)
-            const fullPath = this.resolveOriginalImagePath(path) || path;
+            // 🔥 Label Explorer에서는 classification copy 경로를 그대로 사용해
+            //     Wafer Map Explorer 원본 상태와 완전히 분리한다.
+            const fullPath = labelExplorerIsolated
+                ? (this.ensureFolderPrefix(this.normalizeRelativePath(path)) || path)
+                : (this.resolveOriginalImagePath(path) || path);
 
             // 🔥 Wafer Map Explorer에서만 상태 저장, Label Explorer에서는 저장하지 않음
             // Label Explorer Grid 체크 추가
@@ -12888,7 +12899,7 @@ class WaferMapViewer {
             // 🔥 classification 경로 체크 개선 (제품 폴더 고려)
             const isClassificationPath = this.isClassificationPath(path);
             
-            if (!fromLabelExplorer && !isClassificationPath && !isLabelExplorerGrid) {
+            if (!labelExplorerIsolated && !isClassificationPath && !isLabelExplorerGrid) {
                 const scrollWrapper = grid?.parentElement;
                 
                 // Grid 모드에서 전환하는 경우
@@ -12913,6 +12924,7 @@ class WaferMapViewer {
                 }
             }
 
+            this.currentImagePath = fullPath;
             this.selectedImagePath = fullPath;  // 🔥 fullPath 사용 (prefix 포함)
 
             // 🔥 새로운 이미지 로드 시 Bottom 필터 상태 초기화 (필요 시 유지)
@@ -13253,7 +13265,7 @@ class WaferMapViewer {
             // 🔥 singleImageFromGrid일 때는 덮어쓰지 않음 (그리드 상태 복원을 위해)
             const isClassificationPathEnd = this.isClassificationPath(path);
 
-            if (!isClassificationPathEnd && !fromLabelExplorer && !this.singleImageFromGrid) {
+            if (!isClassificationPathEnd && !labelExplorerIsolated && !this.singleImageFromGrid) {
                 this.savedViewState = {
                     type: 'single',
                     imagePath: fullPath,
@@ -13341,7 +13353,7 @@ class WaferMapViewer {
             this.updateArrowButtonVisibility();
 
             // ✅ Wafer Map Explorer 하이라이트 업데이트 (Label Explorer에서 온 경우는 제외 - 독립적 선택)
-            if (!fromLabelExplorer) {
+            if (!labelExplorerIsolated) {
                 this.updateWaferMapExplorerHighlight(fullPath);
             }
         } catch (err) {
@@ -13371,10 +13383,7 @@ class WaferMapViewer {
         // 🔥 Label Explorer 컨텍스트에서는 Wafer Map Explorer를 절대 건드리지 않는다
         // (Label Explorer 그리드의 이미지 경로는 원본 경로로 해석되므로
         //  isClassificationPath만으로는 부족 — 컨텍스트 플래그로 판단)
-        if (this.isClassificationPath(imagePath)) return;
-        if (this.gridViewSaveState?.source === 'labelExplorer') return;
-        if (this.isLabelExplorerGridActive?.()) return;
-        if (this.activePageRole === 'label') return;
+        if (this.isLabelExplorerIsolationActive(imagePath)) return;
 
         this.ensureExplorerPathVisible(imagePath)
             .then(() => this.applyWaferMapExplorerHighlight(imagePath))
@@ -17118,15 +17127,13 @@ class WaferMapViewer {
                                 } else if (range.length === 1) {
                                     // 단일 이미지는 클릭과 동일하게 처리
                                     const selectedKey = range[0];
-                                    const fileName = selectedKey.split('/')[1];
-                                    const imgList = this.classToImgListCache?.[cls] || [];
-                                    const selectedImg = imgList.find(item => item.name === fileName);
-                                    if (selectedImg?.root_relative) {
+                                    const selectedPath = this.resolveLabelExplorerImagePath(selectedKey);
+                                    if (selectedPath) {
                                         this.saveCurrentViewStateForLabelExplorer();
                                         if (this.gridMode) {
                                             this.hideGrid();
                                         }
-                                        this.loadImage(selectedImg.root_relative);
+                                        this.loadImage(selectedPath, true);
                                     }
                                 }
                             }
@@ -17285,7 +17292,9 @@ class WaferMapViewer {
                                 const selectedPath = this.resolveLabelExplorerImagePath(selectedKey);
                                 const imgList = this.classToImgListCache?.[cls] || [];
                                 this.singleViewImageList = imgList
-                                    .map(item => this.ensureFolderPrefix(item?.original_relative || item?.root_relative || ''))
+                                    .map(item => this.resolveLabelExplorerStoredPath(
+                                        item?.root_relative || `${cls}/${item?.name || ''}`
+                                    ) || this.ensureFolderPrefix(item?.original_relative || ''))
                                     .filter(Boolean);
                                 if (this.singleViewImageList.length === 0 && selectedPath) {
                                     this.singleViewImageList = [selectedPath];
@@ -17623,15 +17632,13 @@ class WaferMapViewer {
                                         } else if (range.length === 1) {
                                             // 단일 이미지는 클릭과 동일하게 처리
                                             const selectedKey = range[0];
-                                            const fileName = selectedKey.split('/')[1];
-                                            const imgList = this.classToImgListCache?.[cls] || [];
-                                            const selectedImg = imgList.find(item => item.name === fileName);
-                                            if (selectedImg?.root_relative) {
+                                            const selectedPath = this.resolveLabelExplorerImagePath(selectedKey);
+                                            if (selectedPath) {
                                                 this.saveCurrentViewStateForLabelExplorer();
                                                 if (this.gridMode) {
                                                     this.hideGrid();
                                                 }
-                                                this.loadImage(selectedImg.root_relative);
+                                                this.loadImage(selectedPath, true);
                                             }
                                         }
                                     }
@@ -17745,7 +17752,7 @@ class WaferMapViewer {
                                             this.selectedImages = this.currentGridImages || [];
                                         }
 
-                                        this.loadImage(this.resolveLabelExplorerImagePath(selectedKey));
+                                        this.loadImage(this.resolveLabelExplorerImagePath(selectedKey), true);
                                     } else {
                                         // 다수 선택: 그리드 모드
 
@@ -18010,6 +18017,20 @@ class WaferMapViewer {
                 // prefix 이후가 class/filename
                 key = norm.substring(idx + prefix.length);
                 break;
+            }
+        }
+        if (!key) {
+            for (const [className, items] of Object.entries(this.classToImgListCache || {})) {
+                const matched = (items || []).find(item => {
+                    const rootRelative = this.resolveLabelExplorerStoredPath(item?.root_relative || '');
+                    const originalRelative = item?.original_relative ? this.ensureFolderPrefix(item.original_relative) : '';
+                    return (rootRelative && this.normalizePath(rootRelative) === norm) ||
+                        (originalRelative && this.normalizePath(originalRelative) === norm);
+                });
+                if (matched?.name) {
+                    key = `${className}/${matched.name}`.toLowerCase();
+                    break;
+                }
             }
         }
         if (!key) return;
@@ -19726,6 +19747,44 @@ class WaferMapViewer {
         if (typeof this.hideLotListModal === 'function') this.hideLotListModal();
 
         this._gridVisuallyHidden = true;
+    }
+
+    /**
+     * 🔥 빈 폴더/필터 결과 0건일 때 상단 패널은 유지하고 안내 메시지만 표시.
+     * hideGrid()와 달리 gridControls를 숨기지 않으므로 필터 해제가 가능하다.
+     */
+    showEmptyGridMessage(message = '표시할 이미지가 없습니다') {
+        const grid = document.getElementById('image-grid');
+        const gridControls = document.getElementById('grid-controls');
+
+        // 상단 패널 유지
+        if (gridControls) gridControls.style.display = '';
+
+        // 그리드 영역에 안내 메시지
+        if (grid) {
+            grid.style.display = 'grid';
+            grid.innerHTML = `
+                <div style="grid-column: 1 / -1; text-align: center; padding: 60px 20px; color: #888;">
+                    <p style="font-size: 16px; margin-bottom: 8px;">${message}</p>
+                    <p style="font-size: 13px; opacity: 0.7;">필터를 해제하거나 다른 폴더를 선택해보세요</p>
+                </div>`;
+        }
+
+        // 단일 이미지 관련 요소 숨기기
+        this.dom.imageCanvas.style.display = 'none';
+        this.dom.overlayCanvas.style.display = 'none';
+        this.dom.minimapContainer.style.display = 'none';
+        const viewControls = document.querySelector('.view-controls');
+        if (viewControls) viewControls.style.display = 'none';
+        this.hideFileName();
+
+        // 그리드 모드 유지
+        this.gridMode = true;
+        this.dom.viewerContainer.classList.add('grid-mode');
+        this.dom.viewerContainer.classList.remove('single-image-mode');
+        document.body.classList.add('grid-mode-active');
+        this.currentGridImages = [];
+        this.selectedImages = [];
     }
 
     /**
@@ -22467,6 +22526,8 @@ class WaferMapViewer {
         this.selectedImagePath = nextImagePath;
         this.showFileName(nextImagePath);
 
+        const isLabelExplorerSingleMode = this.isLabelExplorerIsolationActive(nextImagePath, this._labelExplorerSingleMode);
+
         // ✅ 파일 탐색기 선택 상태 동기화
         this.selectedImages = [nextImagePath];
 
@@ -22480,7 +22541,7 @@ class WaferMapViewer {
 
         // ✅ 이미지 로드 (loadImage 완료 시 자동으로 Wafer Map Explorer 하이라이트 업데이트됨)
         // forceReload=true: selectedImagePath가 미리 업데이트되어 early-exit 조건이 잘못 발동하는 것 방지
-        this.loadImage(nextImagePath, false, currentLoadVersion, true)
+        this.loadImage(nextImagePath, isLabelExplorerSingleMode, currentLoadVersion, true)
             .then(() => {
                 // ✅ pyramid level을 즉시 동기적으로 업데이트
                 this.updatePyramidLevel();
@@ -22955,6 +23016,17 @@ class WaferMapViewer {
         return this.ensureFolderPrefix(normalizedPath);
     }
 
+    resolveLabelExplorerStoredPath(path = '') {
+        const normalizedPath = this.normalizeRelativePath(path);
+        if (!normalizedPath) return '';
+
+        if (this.isClassificationPath(normalizedPath)) {
+            return this.ensureFolderPrefix(normalizedPath);
+        }
+
+        return this.buildClassificationPath(normalizedPath);
+    }
+
     resolveLabelExplorerImagePath(key) {
         const normalizedKey = this.normalizeRelativePath(key);
         if (!normalizedKey) return '';
@@ -22974,7 +23046,7 @@ class WaferMapViewer {
                 tailLower.startsWith(`${classDirLower}/`) ||
                 tailLower.includes(`/${classDirLower}/`)
             ) {
-                return this.resolveOriginalImagePath(normalizedKey) || normalizedKey;
+                return this.resolveLabelExplorerStoredPath(normalizedKey) || normalizedKey;
             }
         }
 
@@ -22983,11 +23055,11 @@ class WaferMapViewer {
             normalizedKeyLower.startsWith(`${classDirLower}/`) ||
             normalizedKeyLower.includes(`/${classDirLower}/`)
         ) {
-            const classificationPath = this.ensureFolderPrefix(normalizedKey);
-            return this.resolveOriginalImagePath(classificationPath) || classificationPath;
+            const classificationPath = this.resolveLabelExplorerStoredPath(normalizedKey);
+            return classificationPath || normalizedKey;
         }
 
-        // 일반 key("class/file")는 캐시 original_relative → root_relative 순 사용
+        // 일반 key("class/file")는 classification copy(root_relative) 우선 사용
         const parts = normalizedKey.split('/').filter(Boolean);
         if (parts.length >= 2) {
             const className = parts[0];
@@ -22995,16 +23067,20 @@ class WaferMapViewer {
             const cachedList = this.classToImgListCache?.[className];
             if (Array.isArray(cachedList)) {
                 const matched = cachedList.find(item => item?.name === fileName);
+                if (matched?.root_relative) {
+                    return this.resolveLabelExplorerStoredPath(matched.root_relative);
+                }
+                const builtPath = this.resolveLabelExplorerStoredPath(normalizedKey);
+                if (builtPath) {
+                    return builtPath;
+                }
                 if (matched?.original_relative) {
                     return this.ensureFolderPrefix(matched.original_relative);
-                }
-                if (matched?.root_relative) {
-                    return this.ensureFolderPrefix(matched.root_relative);
                 }
             }
         }
 
-        return this.buildClassificationPath(normalizedKey);
+        return this.resolveLabelExplorerStoredPath(normalizedKey);
     }
 
     /**
@@ -23577,9 +23653,9 @@ class WaferMapViewer {
                 .filter(item => item.type === 'file')
 
                 .map(item => {
-                    return this.resolveOriginalImagePath(
-                        item.root_relative || this.buildClassificationPath(`${className}/${item.name}`)
-                    );
+                    return this.resolveLabelExplorerStoredPath(
+                        item.root_relative || `${className}/${item.name}`
+                    ) || this.ensureFolderPrefix(item?.original_relative || '');
                 });
 
             if (imageFiles.length === 0) {
@@ -23666,9 +23742,9 @@ class WaferMapViewer {
 
                         .filter(item => item.type === 'file')
 
-                        .map(item => this.resolveOriginalImagePath(
-                            item.root_relative || this.buildClassificationPath(`${className}/${item.name}`)
-                        ));
+                        .map(item => this.resolveLabelExplorerStoredPath(
+                            item.root_relative || `${className}/${item.name}`
+                        ) || this.ensureFolderPrefix(item?.original_relative || ''));
 
                     return { className, images: imageFiles };
                 } catch (error) {
