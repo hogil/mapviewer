@@ -5280,6 +5280,7 @@ class WaferMapViewer {
                 const gridColsInput = document.getElementById('grid-cols-input');
                 if (gridColsInput) gridColsInput.value = this.gridCols;
                 this._saveGridColsPref();
+                this._syncGridPrefsAcrossPageStates();
                 if ((this.currentGridImages && this.currentGridImages.length > 0) || (this.selectedImages && this.selectedImages.length > 1)) {
                     this.scheduleShowGrid();
                 }
@@ -5295,6 +5296,7 @@ class WaferMapViewer {
                     document.documentElement.style.setProperty('--grid-cols', this.gridCols);
                     if (gridColsRange) gridColsRange.value = Math.min(10, this.gridCols);
                     this._saveGridColsPref();
+                    this._syncGridPrefsAcrossPageStates();
                     if (this.selectedImages && this.selectedImages.length > 1) {
                         this.scheduleShowGrid();
                     }
@@ -5323,6 +5325,7 @@ class WaferMapViewer {
                 if (inp) inp.value = this.gridCols;
                 document.documentElement.style.setProperty('--grid-cols', this.gridCols);
                 this._saveGridColsPref();
+                this._syncGridPrefsAcrossPageStates();
                 if ((this.currentGridImages && this.currentGridImages.length > 0) || (this.selectedImages && this.selectedImages.length > 1)) {
                     this.scheduleShowGrid();
                 }
@@ -5337,6 +5340,7 @@ class WaferMapViewer {
                 if (inp) inp.value = this.gridCols;
                 document.documentElement.style.setProperty('--grid-cols', this.gridCols);
                 this._saveGridColsPref();
+                this._syncGridPrefsAcrossPageStates();
                 if ((this.currentGridImages && this.currentGridImages.length > 0) || (this.selectedImages && this.selectedImages.length > 1)) {
                     this.scheduleShowGrid();
                 }
@@ -13364,6 +13368,14 @@ class WaferMapViewer {
     updateWaferMapExplorerHighlight(imagePath) {
         if (!this.dom.fileExplorer || !imagePath) return;
 
+        // 🔥 Label Explorer 컨텍스트에서는 Wafer Map Explorer를 절대 건드리지 않는다
+        // (Label Explorer 그리드의 이미지 경로는 원본 경로로 해석되므로
+        //  isClassificationPath만으로는 부족 — 컨텍스트 플래그로 판단)
+        if (this.isClassificationPath(imagePath)) return;
+        if (this.gridViewSaveState?.source === 'labelExplorer') return;
+        if (this.isLabelExplorerGridActive?.()) return;
+        if (this.activePageRole === 'label') return;
+
         this.ensureExplorerPathVisible(imagePath)
             .then(() => this.applyWaferMapExplorerHighlight(imagePath))
             .catch(error => {
@@ -19349,7 +19361,7 @@ class WaferMapViewer {
         // 🔥 뷰포트 크기 계산 — 첫 N개는 큐 우회, DOM 생성 시 바로 img.src 할당
         const scrollWrapper = this.getGridScrollWrapper();
         const viewportHeight = scrollWrapper ? scrollWrapper.clientHeight : 800;
-        const cols = parseInt(document.getElementById('grid-columns')?.value) || 5;
+        const cols = Math.max(1, this.gridCols || 5);
         const rowHeight = Math.ceil(viewportHeight / cols) + 40; // 대략적 행 높이
         const viewportRows = Math.ceil(viewportHeight / rowHeight) + 1;
         const INSTANT_COUNT = cols * viewportRows; // 뷰포트에 보이는 이미지 수
@@ -21518,6 +21530,7 @@ class WaferMapViewer {
         const gridImages = Array.isArray(this.currentGridImages) ? [...this.currentGridImages] : [];
         const gridSelectedIdxs = Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : [];
         const savedSnapshot = this.captureActivePageState();
+        this._syncGridPrefsAcrossPageStates(savedSnapshot.gridCols, savedSnapshot.gridThumbSize);
         const originPage = this.pageManager?.getActivePage ? this.pageManager.getActivePage() : null;
         let originPageId = originPage?.id || null;
 
@@ -25552,6 +25565,37 @@ class WaferMapViewer {
     }
 
     /**
+     * 그리드 열 수는 전역 UI 설정이므로, 재사용되는 detail 탭/page cache에도 같은 값을 동기화한다.
+     */
+    _syncGridPrefsAcrossPageStates(gridCols = this.gridCols, gridThumbSize = this.gridThumbSize) {
+        const normalizedCols = Number.isFinite(gridCols) ? Math.max(1, gridCols) : this.gridCols;
+        const normalizedThumbSize = Number.isFinite(gridThumbSize) ? gridThumbSize : this.gridThumbSize;
+
+        if (Array.isArray(this.pageManager?.pages)) {
+            this.pageManager.pages.forEach(page => {
+                page.state = {
+                    ...(page.state || {}),
+                    gridCols: normalizedCols,
+                    gridThumbSize: normalizedThumbSize,
+                };
+            });
+        }
+
+        if (this.pageViewCache instanceof Map) {
+            this.pageViewCache.forEach(cache => {
+                if (!cache) return;
+                cache.gridCols = normalizedCols;
+                cache.gridThumbSize = normalizedThumbSize;
+            });
+        }
+
+        if (this.gridViewSaveState) {
+            this.gridViewSaveState.gridCols = normalizedCols;
+            this.gridViewSaveState.gridThumbSize = normalizedThumbSize;
+        }
+    }
+
+    /**
      * 🔥 사용자 UI 설정을 서버에 저장 (gridCols, filterLT, filterTM, filterSTEP)
      */
     _saveUserPrefs() {
@@ -25589,6 +25633,7 @@ class WaferMapViewer {
                 if (gridColsRange) gridColsRange.value = Math.min(10, this.gridCols);
                 const gridColsInput = document.getElementById('grid-cols-input');
                 if (gridColsInput) gridColsInput.value = this.gridCols;
+                this._syncGridPrefsAcrossPageStates();
             }
             if (Array.isArray(prefs.filterLT)) {
                 this.filterLT = prefs.filterLT;
