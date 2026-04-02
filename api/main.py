@@ -7230,7 +7230,7 @@ async def get_measure_thumb_batch(request: Request, body: dict = Body(...)):
     return JSONResponse(cached_results)
 
 
-@app.get("/api/thumbnail")
+@app.api_route("/api/thumbnail", methods=["GET", "HEAD"])
 async def get_thumbnail(
     request: Request,
     path: str,
