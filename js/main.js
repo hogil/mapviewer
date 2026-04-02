@@ -11671,6 +11671,12 @@ class WaferMapViewer {
             this.loadImage(this.selectedImages[0]);
 
             this.selectedImagePath = this.selectedImages[0];
+        } else if (this.selectedFolders && this.selectedFolders.size > 0) {
+            // 폴더가 선택되어 있지만 이미지가 0건 → 상단 패널 유지 + 안내 메시지
+            const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
+            this.showEmptyGridMessage(hasFilter
+                ? '현재 필터 조건에 맞는 이미지가 없습니다'
+                : '선택한 폴더에 이미지가 없습니다');
         } else {
             this.hideGrid();
         }
