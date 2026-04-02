@@ -656,12 +656,43 @@ os.walk 디스크 순회 없이 즉시 반환.
 6. `filter_test` 폴더 열기 → 00P 파일만 표시 (00C 숨김)
 7. 폴더 Ctrl+클릭 → 그리드에 00P 파일만 표시
 
+#### 3-18. 필터 0건 시 상단 패널 유지 + 안내 메시지
+**핵심**: 폴더를 Ctrl+클릭했는데 필터로 이미지가 0건이면, 상단 패널(grid-controls)은 유지하고 안내 메시지를 표시해야 한다. `hideGrid()`가 호출되면 FAIL.
+
+1. `palette_3k` 폴더 Ctrl+클릭 → 3000개 그리드 표시 확인
+2. 존재하지 않는 LOT 필터 적용 (`v.filterLT = ['NONEXISTENT']`)
+3. `await v._applyFilterToGrid()`
+4. **검증**: `v.gridMode === true` (그리드 모드 유지)
+5. **검증**: `grid-controls`의 `offsetHeight > 0` (상단 패널 보임)
+6. **검증**: 그리드 영역에 "이미지가 없습니다" 메시지 포함
+7. 필터 해제 (`v.filterLT = []`) → `await v._applyFilterToGrid()`
+8. **검증**: `v.selectedImages.length === 3000` (원래 이미지 복원)
+9. 필터 설정된 상태에서 **새 폴더 Ctrl+클릭** (초기 선택 시에도 동일 동작)
+10. **검증**: `v.gridMode === true`, `grid-controls` visible, 안내 메시지 표시
+
+```javascript
+// 필터 0건 → 상단 패널 유지
+const v = window.viewer;
+v.filterLT = ['NONEXISTENT'];
+await v._applyFilterToGrid();
+const gc = document.getElementById('grid-controls');
+console.assert(v.gridMode === true, 'gridMode should stay true');
+console.assert(gc.offsetHeight > 0, 'grid-controls should be visible');
+const grid = document.getElementById('image-grid');
+console.assert(grid.textContent.includes('이미지가 없습니다'), 'empty message should show');
+
+// 필터 해제 → 복원
+v.filterLT = [];
+await v._applyFilterToGrid();
+console.assert(v.selectedImages.length === 3000, 'images should restore');
+```
+
 **pass 기준**: 필터 시 파일만 숨김(폴더 유지, DOM 교체 없음), 대소문자 무시 매칭,
 열린 폴더 보존, 해제 시 전체 복원, DOM show/hide 50ms 이내, 연속 클릭 마지막만 실행,
 스크롤 보존, Ubuntu 호환, 파일명 _LT_TM 추출 50ms 이내, 폴더선택+그리드 100ms 이내,
 선택 3000개 제한, 검색 연산자(and/or/not/()) 정상 동작, 연산자 시 timestamp 제거 + 단순검색 시 timestamp 포함,
 단어 경계 구분(android≠and), 검색창 화살표 커서, N키 단축키 없음,
-**필터→그리드 반영**, **그리드 중 필터 변경 동적 갱신**, **새로고침 후 필터 유지**
+**필터→그리드 반영**, **그리드 중 필터 변경 동적 갱신**, **새로고침 후 필터 유지**, **필터 0건 시 상단 패널 유지+안내 메시지**
 
 ---
 
