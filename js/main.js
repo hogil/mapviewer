@@ -2626,6 +2626,7 @@ class WaferMapViewer {
         this.gridViewImageList = [];
         this.gridViewImageIndex = -1;
         this.currentGridImages = [];
+        this._unfilteredGridImages = null;
         this._singleModeRequestId = (this._singleModeRequestId || 0) + 1;
         const activePage = this.pageManager?.getActivePage?.() || null;
         const activePageId = activePage?.id || null;
