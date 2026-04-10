@@ -2136,6 +2136,14 @@ class WaferMapViewer {
 
     async applyPageState(page) {
         if (!page) return;
+        // 🔥 페이지 전환 즉시 캔버스/그리드 정리 (이전 페이지 잔상 방지)
+        this._gridVisuallyHidden = false;
+        if (this.ctx && this.dom.imageCanvas) {
+            this.ctx.clearRect(0, 0, this.dom.imageCanvas.width, this.dom.imageCanvas.height);
+        }
+        if (this.overlayCtx && this.dom.overlayCanvas) {
+            this.overlayCtx.clearRect(0, 0, this.dom.overlayCanvas.width, this.dom.overlayCanvas.height);
+        }
         this.hideCompositeInlineStatus();
         const state = page.state || {};
         this.activePageRole = page.role || 'blank';
@@ -8391,13 +8399,14 @@ class WaferMapViewer {
             if (returnItem) returnItem.style.setProperty('display', 'none', 'important');
         }
         if (colorItem) {
-            colorItem.style.setProperty('display', 'block', 'important');
             if (this.isCompositeMode) {
+                colorItem.style.setProperty('display', 'block', 'important');
                 colorItem.textContent = '🎨 Composite 색 변경';
             } else if (this.isMeasureGradientMode()) {
+                colorItem.style.setProperty('display', 'block', 'important');
                 colorItem.textContent = '🎨 Measure 색 변경';
             } else {
-                colorItem.textContent = '🎨 Composite 색 변경';
+                colorItem.style.setProperty('display', 'none', 'important');
             }
         }
 
@@ -10585,14 +10594,15 @@ class WaferMapViewer {
                 // 뷰포트 경계 체크
                 requestAnimationFrame(() => {
                     const rect = mcSubmenu.getBoundingClientRect();
-                    // 아래 넘침 → 생성 버튼이 보이도록 위로 올림
+                    // 아래 넘침 → bottom 고정으로 생성 버튼이 항상 보이도록
                     if (rect.bottom > window.innerHeight) {
-                        const overflowY = rect.bottom - window.innerHeight + 8;
-                        mcSubmenu.style.top = `${Math.max(4, itemRect.top - overflowY)}px`;
-                        // 리스트 높이도 재조정
+                        mcSubmenu.style.top = 'auto';
+                        mcSubmenu.style.bottom = '10px';
+                        // 리스트 높이도 재조정: 서브메뉴 전체가 뷰포트 안에 들어오도록
                         if (mcList) {
-                            const newMaxH = window.innerHeight - 90;
-                            mcList.style.maxHeight = `${Math.max(150, newMaxH)}px`;
+                            const submenuTop = mcSubmenu.getBoundingClientRect().top;
+                            const newMaxH = window.innerHeight - submenuTop - 90;
+                            mcList.style.maxHeight = `${Math.max(120, newMaxH)}px`;
                         }
                     }
                     if (rect.right > window.innerWidth) {
@@ -10646,8 +10656,13 @@ class WaferMapViewer {
                 requestAnimationFrame(() => {
                     const rect = meaSubmenu.getBoundingClientRect();
                     if (rect.bottom > window.innerHeight) {
-                        meaSubmenu.style.top = `${Math.max(4, itemRect.top - (rect.bottom - window.innerHeight) + 8)}px`;
-                        if (meaList) meaList.style.maxHeight = `${Math.max(150, window.innerHeight - 90)}px`;
+                        meaSubmenu.style.top = 'auto';
+                        meaSubmenu.style.bottom = '10px';
+                        if (meaList) {
+                            const submenuTop = meaSubmenu.getBoundingClientRect().top;
+                            const newMaxH = window.innerHeight - submenuTop - 90;
+                            meaList.style.maxHeight = `${Math.max(120, newMaxH)}px`;
+                        }
                     }
                     if (rect.right > window.innerWidth) {
                         meaSubmenu.style.left = `${itemRect.left - rect.width}px`;
@@ -10665,6 +10680,21 @@ class WaferMapViewer {
                 });
                 meaCtxSearch.addEventListener('click', (e) => e.stopPropagation());
             }
+        }
+
+        // 🔥 서브메뉴가 아닌 다른 메뉴 항목에 mouseenter 시 서브메뉴 닫기
+        const contextMenu = document.getElementById('grid-context-menu');
+        if (contextMenu) {
+            const allItems = contextMenu.querySelectorAll('.context-menu-item');
+            allItems.forEach(item => {
+                if (item.id === 'context-mc-create' || item.id === 'context-mea-create') return;
+                item.addEventListener('mouseenter', () => {
+                    const _mcSub = document.getElementById('context-mc-submenu');
+                    const _meaSub = document.getElementById('context-mea-submenu');
+                    if (_mcSub) _mcSub.style.display = 'none';
+                    if (_meaSub) _meaSub.style.display = 'none';
+                });
+            });
         }
 
         if (compositeReturnItem) {
