@@ -766,7 +766,6 @@ class WaferMapViewer {
 
             searchBtn: document.getElementById('search-btn'),
             multiSearchBtn: document.getElementById('multi-search-btn'),
-            multiSearchDropdown: document.getElementById('multi-search-dropdown'),
             multiSearchModal: document.getElementById('multi-search-modal'),
             multiSearchInput: document.getElementById('multi-search-input'),
             multiSearchApply: document.getElementById('multi-search-apply'),
@@ -5384,28 +5383,36 @@ class WaferMapViewer {
             });
         }
 
-        // 다중검색 드롭다운
+        // 다중검색 드롭다운 (body에 직접 append — grid-controls overflow:hidden 회피)
         if (this.dom.multiSearchBtn) {
+            const dd = document.createElement('div');
+            dd.id = 'multi-search-dropdown';
+            dd.style.cssText = 'display:none; position:fixed; z-index:99999; background:#2a2a2a; border:1px solid #555; border-radius:4px; min-width:130px; box-shadow:0 4px 12px rgba(0,0,0,.5);';
+            dd.innerHTML = `
+                <div class="multi-search-dropdown-item" data-mode="lot" style="padding:8px 14px; cursor:pointer; color:#ddd; font-size:13px; white-space:nowrap;">LOT 다중검색</div>
+                <div class="multi-search-dropdown-item" data-mode="wf" style="padding:8px 14px; cursor:pointer; color:#ddd; font-size:13px; border-top:1px solid #444; white-space:nowrap;">WF 다중검색</div>`;
+            document.body.appendChild(dd);
+            this.dom.multiSearchDropdown = dd;
+
             this.dom.multiSearchBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const dd = this.dom.multiSearchDropdown;
-                if (dd) dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+                if (dd.style.display !== 'none') { dd.style.display = 'none'; return; }
+                const rect = this.dom.multiSearchBtn.getBoundingClientRect();
+                dd.style.top = (rect.bottom + 2) + 'px';
+                dd.style.left = rect.left + 'px';
+                dd.style.display = 'block';
             });
-        }
-        if (this.dom.multiSearchDropdown) {
-            this.dom.multiSearchDropdown.querySelectorAll('.multi-search-dropdown-item').forEach(item => {
+
+            dd.querySelectorAll('.multi-search-dropdown-item').forEach(item => {
                 item.addEventListener('mouseenter', () => { item.style.backgroundColor = '#444'; });
                 item.addEventListener('mouseleave', () => { item.style.backgroundColor = ''; });
                 item.addEventListener('click', () => {
-                    this.dom.multiSearchDropdown.style.display = 'none';
+                    dd.style.display = 'none';
                     if (item.dataset.mode === 'lot') this.openMultiSearchModal();
                     else if (item.dataset.mode === 'wf') this.openWfSearchModal();
                 });
             });
-            // 외부 클릭 시 드롭다운 닫기
-            document.addEventListener('click', () => {
-                if (this.dom.multiSearchDropdown) this.dom.multiSearchDropdown.style.display = 'none';
-            });
+            document.addEventListener('click', () => { dd.style.display = 'none'; });
         }
         if (this.dom.multiSearchCancel) {
             this.dom.multiSearchCancel.addEventListener('click', () => this.closeMultiSearchModal());
