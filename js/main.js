@@ -899,7 +899,7 @@ class WaferMapViewer {
         this.invalidateGridGeometry();
         this.gridThumbRectCache = null;
         this.pageViewCache = new Map(); // 페이지 전환 시 그리드 DOM 캐시
-        this.pageViewCacheLimit = 3;    // 캐시 최대 유지 페이지 수 (과도한 메모리 사용 방지)
+        this.pageViewCacheLimit = 10;   // 🔥 탭 전환 이미지 사라짐 수정: 3 → 10 (실사용 탭 수 커버)
         this.chipLabelLegendData = [];
         this.activeChipLabelClasses = null;
         this.gridLayoutCache = null;
@@ -1865,8 +1865,8 @@ class WaferMapViewer {
                 minimapUrl: this.minimapPreview?.src // 미니맵 이미지 소스 (선택적)
             });
             
-            // 캐시 크기 제한 (최근 5개만 유지)
-            if (this.pageImageCache.size > 5) {
+            // 🔥 탭 전환 이미지 사라짐 수정: 5 → 10
+            if (this.pageImageCache.size > 10) {
                 const firstKey = this.pageImageCache.keys().next().value;
                 this.pageImageCache.delete(firstKey);
             }
@@ -1875,12 +1875,43 @@ class WaferMapViewer {
         this.pageManager.persistActivePage(stateOverride ?? this.captureActivePageState());
     }
 
+    // 🔥 탭 전환 이미지 사라짐 수정:
+    // 단일 이미지 모드에서 탭을 떠날 때 bitmap을 pageImageCache에 저장하여
+    // 돌아왔을 때 loadImage() 재fetch 없이 즉시 복원되도록 한다.
+    // (PageManager의 activatePage → onBeforePagePersist 경로에서는
+    //  persistActivePageState가 호출되지 않아 bitmap이 캐시되지 않는 버그 보완)
+    _cacheSingleImageBitmap(pageId) {
+        if (!pageId || this.gridMode || !this.currentImage) return;
+        if (!this.pageImageCache) this.pageImageCache = new Map();
+        const transformState = {
+            scale: this.transform?.scale || 1,
+            dx: this.transform?.dx || 0,
+            dy: this.transform?.dy || 0,
+        };
+        this.pageImageCache.set(pageId, {
+            path: this.selectedImagePath,
+            bitmap: this.currentImage,
+            width: this.originalWidth,
+            height: this.originalHeight,
+            transform: transformState,
+            zoom: this.zoom,
+            pyramid: this.semiconductorRenderer?.imagePyramid,
+            minimapUrl: this.minimapPreview?.src,
+        });
+        if (this.pageImageCache.size > 10) {
+            const firstKey = this.pageImageCache.keys().next().value;
+            if (firstKey !== pageId) this.pageImageCache.delete(firstKey);
+        }
+    }
+
     cachePageView(page) {
         const pageId = page?.id || this.pageManager?.activePageId || null;
         if (!pageId || !this.pageViewCache) return;
 
         const grid = document.getElementById('image-grid');
         if (!grid || !this.gridMode || !grid.childElementCount) {
+            // 🔥 탭 전환 이미지 사라짐 수정: 단일 이미지 모드라면 bitmap 캐싱
+            this._cacheSingleImageBitmap(pageId);
             if (this.pageViewCache.has(pageId)) {
                 this.pageViewCache.delete(pageId);
             }
@@ -2293,6 +2324,33 @@ class WaferMapViewer {
             if (_sw) _sw.style.display = '';
             if (_grid) _grid.style.display = 'grid';
         }
+
+        // 🔥 탭 전환 이미지 사라짐 수정: 그리드 모드인데 실제 렌더된 thumb img가 하나도 없으면 강제 재빌드
+        // (restoreCachedPageView가 evict된 페이지를 복원 못 했을 때, 또는 restoreSavedViewState 경로가 중간에 실패했을 때의 안전망)
+        if (this.gridMode && this.viewMode !== 'gridImage') {
+            const _grid = document.getElementById('image-grid');
+            const _thumbImgs = _grid ? _grid.querySelectorAll('.grid-thumb-wrap') : [];
+            const _expectedImages = Array.isArray(this.savedViewState?.images) ? this.savedViewState.images : [];
+            if (_expectedImages.length > 0 && _thumbImgs.length === 0) {
+                console.warn('[TAB-SWITCH-SAFETY] 그리드 모드인데 thumb 0개 — showGrid 강제 재빌드:', _expectedImages.length);
+                try {
+                    this.showGrid([..._expectedImages], true);
+                } catch (err) {
+                    console.error('[TAB-SWITCH-SAFETY] showGrid 재빌드 실패:', err);
+                }
+            }
+        }
+
+        // 🔥 탭 전환 이미지 사라짐 수정: 단일 이미지 모드인데 canvas가 비어있으면 loadImage 재호출
+        if (!this.gridMode && this.viewMode !== 'gridImage' && this.viewMode === 'single' && this.selectedImagePath) {
+            const _canvas = this.dom?.imageCanvas;
+            if (_canvas && (!this.currentImage || _canvas.width === 0)) {
+                console.warn('[TAB-SWITCH-SAFETY] 단일 이미지 모드인데 canvas 비어있음 — loadImage 재시도:', this.selectedImagePath);
+                this.loadImage(this.selectedImagePath).catch(err => {
+                    console.error('[TAB-SWITCH-SAFETY] loadImage 재시도 실패:', err);
+                });
+            }
+        }
     }
 
     handlePageClosed(page) {
@@ -2300,6 +2358,10 @@ class WaferMapViewer {
         const pageId = page.id;
         if (pageId && this.pageViewCache?.has?.(pageId)) {
             this.pageViewCache.delete(pageId);
+        }
+        // 🔥 탭 전환 이미지 사라짐 수정: bitmap 캐시 엔트리도 정리 (메모리 누수 방지)
+        if (pageId && this.pageImageCache?.has?.(pageId)) {
+            this.pageImageCache.delete(pageId);
         }
         if (pageId && this.compositePageTasks.has(pageId)) {
             this.compositePageTasks.delete(pageId);
