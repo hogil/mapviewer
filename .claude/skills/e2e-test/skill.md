@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 50개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증, Measure 색상 미리보기/적용 회귀, HTTP 캐시 무효화 검증, Composite 색상 매핑/배경 행 제거 검증, Measure 첫 진입 지연/폴더 stale state 회귀, Label Explorer flat-grid 강제 및 positions 없는 palette/PNF 이미지 즉시 로드 회귀, 검색 첫 실행/다중검색/이벤트루프 블로킹 회귀를 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 56개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증, Measure 색상 미리보기/적용 회귀, HTTP 캐시 무효화 검증, Composite 색상 매핑/배경 행 제거 검증, Measure 첫 진입 지연/폴더 stale state 회귀, Label Explorer flat-grid 강제 및 positions 없는 palette/PNF 이미지 즉시 로드 회귀, 검색 첫 실행/다중검색/이벤트루프 블로킹 회귀, 서버 Cold Start 즉시 로딩 속도, 탭 다중 전환 이미지 보존, f/q missing 이미지 그리드 로드 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -20,7 +20,7 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 
 ## 절대규칙: 기본 전체 실행
 
-- **인자 없이 `/e2e-test` 실행 시 Phase 1~51 전체를 실행한다.**
+- **인자 없이 `/e2e-test` 실행 시 Phase 1~56 전체를 실행한다.**
 - 특정 Phase만 실행하려면 `/e2e-test 3,9,12` 또는 `/e2e-test 33-50`처럼 명시적으로 지정해야 한다.
 - "전체 테스트", "E2E 테스트" 등 범위 미지정 요청은 전체 실행으로 간주한다.
 - Phase를 건너뛰거나 일부만 실행하는 것은 사용자가 명시적으로 요청한 경우에만 허용된다.
@@ -52,6 +52,13 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 - `_candidate_positions_paths()`는 trimmed 경로 + 레거시 경로 + classification 복사 경로 최대 3개만 `exists()` 체크한다.
 - `get_chip_positions()`에서 classification 분기를 만들어 별도 스캔하는 것도 금지 — `_resolve_positions_path()` 한 줄로 통일한다.
 - 이 규칙 위반 시 async 이벤트 루프를 블로킹하여 모든 HTTP 요청이 수 초간 pending되는 심각한 성능 문제를 유발한다.
+
+## 절대규칙: 하드링크(os.link) 절대 금지 — 반드시 파일 복사
+
+- 프로젝트 전체에서 `os.link()`, `os.symlink()` 사용은 절대 금지한다.
+- classification, my-lot, 썸네일 등 모든 파일 배치는 `shutil.copy2()`로 실제 복사한다.
+- E2E 테스트에서 classification 폴더의 파일이 원본과 독립적인 복사본인지 검증한다.
+- 코드에 `os.link`를 도입하는 변경은 절대 금지한다.
 
 ## 절대규칙: batch 폴더는 더미 파일 — 이미지 로드 금지
 
@@ -1892,7 +1899,12 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 2. `PageUp` → 이전 탭으로 전환
 3. 입력 필드 포커스 중에는 단축키 비활성 (shouldSkipShortcut)
 
-**pass 기준**: 생성→전환(상태 독립)→역할 색상→닫기→키보드 전체 성공
+#### 21-6. 새 페이지 추가 시 Label Explorer 초기화
+1. 새 페이지 추가 시 Label Explorer 하이라이트/펼침 상태 초기화 확인
+2. `labelSelection.selectedClasses` 빈 배열, `openFolders` 전체 false
+3. `imgItems` 개수 0개 (이전 페이지 데이터 잔류 없음)
+
+**pass 기준**: 생성→전환(상태 독립)→역할 색상→닫기→키보드→Label Explorer 초기화 전체 성공
 
 ---
 
@@ -2096,7 +2108,10 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 #### 25-5. 모달 닫기
 1. 취소 버튼(`#permission-cancel-btn`) 클릭 → 모달 닫힘
 
-**pass 기준**: 모달 열기→필터→검색→테이블 조작→닫기
+#### 25-6. loginId=all 사용자 표시
+1. loginId="all" 와일드카드 사용자가 "모든 사용자 · ROLE_ADMIN"으로 표시되는지 확인 (not "(이름없음) (all)")
+
+**pass 기준**: 모달 열기→필터→검색→테이블 조작→닫기→all 사용자 표시
 
 ---
 
@@ -5596,3 +5611,213 @@ console.assert(g2.total > 0, `LOT multi + AND: ${g2.total} (expected > 0)`);
 |--------|--------|------|------|----------|------|
 | 51-8-1 | `abc123` | palette_3k | 500 | 2.8 | PASS |
 | 51-8-2 | `abc123 and 04` | palette_3k | 141 | 1.9 | PASS |
+
+## Phase 52: 서버 Cold Start 즉시 폴더/이미지 로딩 속도 측정
+
+서버를 새로 시작한 직후 **대기 시간 없이** 페이지 접속 → 폴더 리스트 → Ctrl+클릭으로 이미지 로딩까지의 전체 시간을 측정한다.
+
+### 핵심 원칙: No Sleep — 즉시 재시도
+- `browser_wait_for(time: N)` 같은 대기를 사용하지 않는다.
+- 폴더 리스트가 안 나오면 즉시 재시도 (최대 20회, 간격 0).
+- 이미지가 로드 안 되면 즉시 재확인 (최대 30회, 간격 0).
+- Playwright `browser_evaluate`로 DOM 상태를 폴링하되 JS `setTimeout` 없이 즉시 반복.
+
+### 측정 순서
+
+1. **서버 시작**: `python -m api.main` 백그라운드 실행
+2. **즉시 접속**: `browser_navigate('https://localhost:443')` — 서버가 안 뜨면 즉시 재시도
+3. **폴더 리스트 확인**: `nav` 안의 `summary[data-path]` 개수 > 0 될 때까지 즉시 폴링
+4. **시간 기록**: `performance.timing.loadEventEnd - navigationStart` = 페이지 로드 시간
+5. **폴더 Ctrl+클릭**: `fq_missing_test` (position 있는 폴더) summary 찾아서 click
+6. **그리드 이미지 로드 확인**: `.grid-thumb-img[data-grid-loaded="true"]` 개수 > 0 즉시 폴링
+7. **뷰포트 내 로드 완료 확인**: 뷰포트 안 이미지 중 placeholder 0개 될 때까지 폴링
+
+```javascript
+// 폴더 리스트 즉시 폴링 (no sleep)
+let folders = 0;
+for (let i = 0; i < 20; i++) {
+  folders = document.querySelectorAll('nav[aria-label="폴더 및 파일 목록"] summary[data-path]').length;
+  if (folders > 0) break;
+}
+// 타이밍
+const perf = performance.timing;
+const pageLoadMs = perf.loadEventEnd - perf.navigationStart;
+```
+
+### pass 기준
+| 항목 | 기준 |
+|------|------|
+| 페이지 로드 (서버 시작 직후) | < 8초 |
+| 폴더 리스트 표시 | > 0개 |
+| 그리드 이미지 로드 (뷰포트) | 뷰포트 내 placeholder 0개 (20초 이내) |
+
+## Phase 53: 탭 다중 전환 이미지 보존 안정성
+
+여러 탭에 서로 다른 폴더 이미지를 로드한 후 빠르게 왕복 전환하여 이미지가 사라지지 않는지 검증한다.
+
+### 테스트 순서
+
+1. **탭 0**: `fq_missing_test` 폴더 Ctrl+클릭 → 그리드 이미지 로드 대기
+2. **탭 1 생성**: `+` 버튼 클릭 → `filter_test` 폴더 Ctrl+클릭 → 로드 대기
+3. **탭 2 생성**: `+` 버튼 클릭 → `palette_3k` 폴더 Ctrl+클릭 → 로드 대기
+4. **빠른 전환 10회**: 탭 0→1→2→0→1→2→0→1→2→0 (각 전환 후 `setTimeout` 없이 즉시 확인)
+5. **각 전환 후 검증**: `.grid-thumb-img` 총 개수 > 0 && 뷰포트 내 로드된 이미지 > 0
+
+```javascript
+// 탭 전환 + 즉시 검증 (no sleep)
+const tabs = document.querySelectorAll('.page-tab');
+const results = [];
+for (let i = 0; i < 10; i++) {
+  tabs[i % tabs.length].click();
+  // 즉시 상태 확인
+  const grid = document.querySelector('.image-grid');
+  const imgs = grid ? grid.querySelectorAll('.grid-thumb-img') : [];
+  let loaded = 0;
+  for (const img of imgs) {
+    if (img.dataset.gridLoaded === 'true' && img.naturalWidth > 1) loaded++;
+  }
+  results.push({ tab: i % tabs.length, total: imgs.length, loaded });
+}
+```
+
+### pass 기준
+| 항목 | 기준 |
+|------|------|
+| 모든 전환 후 그리드 이미지 수 | > 0 (빈 그리드 없음) |
+| 각 탭의 이미지 수 일관성 | 같은 탭이면 같은 이미지 수 |
+| 이미지 사라짐 | 0건 (이전 전환 대비 감소 없음) |
+
+## Phase 54: f/q Missing 이미지 그리드 로드 + 뷰포트 placeholder 검증
+
+position JSON에서 f/q 값이 누락된 이미지가 그리드에서 정상 로드되는지 검증한다.
+테스트 데이터: `fq_missing_test` 폴더 (f missing / q missing / both missing / normal 4종 변형).
+
+### 사전 조건
+- `D:/project/data/positions/fq_missing_test/` 에 변형 position JSON 존재
+- `D:/project/data/wm-811k/fq_missing_test/` 에 대응 이미지 PNG 존재
+- 서버가 `fq_missing_test` 폴더를 인덱스에 포함
+
+### 테스트 순서
+
+1. **그리드 로드**: `fq_missing_test` 폴더 Ctrl+클릭
+2. **뷰포트 이미지 로드 확인**: 뷰포트 내 `.grid-thumb-img` 전부 `gridLoaded=true` + `naturalWidth > 1` 즉시 폴링
+3. **스크롤 50%**: `grid-scroll-wrapper.scrollTop = scrollHeight * 0.5`
+4. **스크롤 후 뷰포트 확인**: placeholder 0개 즉시 폴링 (최대 30회)
+5. **스크롤 100%**: 맨 아래까지 스크롤
+6. **스크롤 후 뷰포트 확인**: placeholder 0개 즉시 폴링
+7. **서버 에러 확인**: `/api/thumbnail` 응답에 500 에러 없음
+
+```javascript
+// 뷰포트 내 placeholder 즉시 폴링
+function checkViewportLoaded() {
+  const sw = document.querySelector('.grid-scroll-wrapper');
+  const scrollTop = sw.scrollTop, viewH = sw.clientHeight;
+  const imgs = document.querySelectorAll('.grid-thumb-img');
+  let vpLoaded = 0, vpPlaceholder = 0;
+  for (const img of imgs) {
+    const wrap = img.closest('.grid-thumb-wrap');
+    if (!wrap) continue;
+    const top = wrap.offsetTop, h = wrap.offsetHeight;
+    if (top + h > scrollTop && top < scrollTop + viewH) {
+      if (img.dataset.gridLoaded === 'true' && img.naturalWidth > 1) vpLoaded++;
+      else vpPlaceholder++;
+    }
+  }
+  return { vpLoaded, vpPlaceholder };
+}
+
+// 최대 30회 즉시 재시도
+for (let i = 0; i < 30; i++) {
+  const r = checkViewportLoaded();
+  if (r.vpPlaceholder === 0 && r.vpLoaded > 0) break;
+}
+```
+
+### pass 기준
+| 항목 | 기준 |
+|------|------|
+| 총 이미지 수 | 143개 |
+| 뷰포트 내 placeholder (초기) | 0개 |
+| 스크롤 50% 후 뷰포트 placeholder | 0개 |
+| 스크롤 100% 후 뷰포트 placeholder | 0개 |
+| 서버 500 에러 | 0건 |
+| f/q missing 이미지와 normal 이미지 로드 차이 | 없음 |
+
+## Phase 55: MY LOT / Composite / Label → Explorer 하이라이트 격리 검증
+
+MY LOT, Composite, Label 모드에서 이미지를 열었을 때 Wafer Map Explorer에서 관련 없는 파일이 하이라이트되지 않는지 검증한다.
+
+### 핵심 원칙
+- `applyWaferMapExplorerHighlight`는 전체 경로 exact match만 사용 (partial match 제거됨)
+- MY LOT 경로(`my-lot/...`), Composite 경로(`composite_map/...`), Label 경로(`classification/...`)는 Explorer에 없으므로 자연스럽게 하이라이트 안 됨
+- MY LOT `showGrid` 진입 시 `selectedFolders` + Explorer `summary.selected` 클리어
+
+### 테스트 순서
+
+1. **폴더 선택**: `palette_3k` Ctrl+클릭 → Explorer에 `palette_3k` 하이라이트 확인 (1개)
+2. **MY LOT 그리드 보기**: MY LOT API에서 그룹 조회 → 이미지 경로로 `showGrid` 호출
+3. **하이라이트 확인**: Explorer `summary.selected` 개수 = **0** (MY LOT 진입 시 클리어됨)
+4. **더블클릭 단일 이미지**: MY LOT 그리드에서 첫 이미지 더블클릭 → 단일 이미지 모드
+5. **하이라이트 확인**: Explorer `a.selected` 및 `a[style*="background"]` 개수 = **0** (exact match 실패)
+
+```javascript
+// MY LOT 그리드 보기 후 Explorer 하이라이트 확인
+const nav = document.querySelector('nav[aria-label="폴더 및 파일 목록"]');
+const selectedAfter = nav.querySelectorAll('summary.selected').length;
+const blueLinks = nav.querySelectorAll('a[style*="background"]').length;
+console.assert(selectedAfter === 0, `MY LOT 후 폴더 하이라이트: ${selectedAfter} (expected 0)`);
+console.assert(blueLinks === 0, `MY LOT 후 파일 하이라이트: ${blueLinks} (expected 0)`);
+```
+
+### pass 기준
+| 항목 | 기준 |
+|------|------|
+| 폴더 선택 후 하이라이트 | 1개 (정상) |
+| MY LOT 그리드 진입 후 Explorer 하이라이트 | 0개 |
+| MY LOT 단일 이미지 후 Explorer 하이라이트 | 0개 |
+| 일반 폴더 이미지 더블클릭 후 Explorer 하이라이트 | 1개 (해당 파일, 정상) |
+
+## Phase 56: Composite 비동기 완료 → 탭 보류 + toast 검증
+
+Composite 생성을 시작한 후 다른 탭으로 전환, Composite 완료 시 자동 탭 전환 없이 toast("완성")만 표시되고, 해당 탭을 열면 결과가 렌더링되는지 검증한다.
+
+### 테스트 순서
+
+1. **탭 0**: `palette_3k` 폴더 로드 → 20개 선택
+2. **Composite 시작**: `handleCompositeCreate()` 호출 → composite 탭 자동 생성
+3. **즉시 탭 0으로 전환**: Composite 폴링 진행 중에 원래 탭으로 돌아감
+4. **Composite 완료 대기**: `compositePageTasks`에서 해당 탭의 status 확인
+5. **toast 확인**: DOM에 "완성" 텍스트가 포함된 fixed toast 요소 존재 확인
+6. **탭 0 유지 확인**: 현재 activePageId가 여전히 탭 0인지 확인 (자동 전환 안 됨)
+7. **composite 탭 클릭**: composite 탭으로 전환 → `applyPageState`에서 `pendingResult` 감지 → 자동 렌더링
+8. **결과 확인**: 그리드에 Grade heatmap + sum map 이미지 표시
+
+```javascript
+// Composite 완료 후 탭 0에 머물러 있는지 확인
+const currentPage = viewer.pageManager?.activePageId;
+console.assert(currentPage !== compositePageId, '자동 탭 전환 안 됨');
+
+// toast 확인
+const toast = document.querySelector('[style*="position: fixed"][style*="z-index"]');
+console.assert(toast?.textContent?.includes('완성'), 'toast에 "완성" 포함');
+```
+
+### pass 기준
+| 항목 | 기준 |
+|------|------|
+| Composite 시작 시 탭 생성 | composite 탭 1개 생성 |
+| 다른 탭 전환 후 자동 복귀 | 없음 (탭 0 유지) |
+| "완성" toast 표시 | DOM에 존재 |
+| composite 탭 클릭 시 결과 렌더링 | 그리드에 heatmap 이미지 표시 |
+
+#### BUG-14: Permission Editor "all" 사용자 표시 오류 (2026-04-10)
+**증상**: Permission Editor 모달에서 loginId="all" 와일드카드 사용자가 "(이름없음) (all) · ROLE_ADMIN"으로 표시
+**원인**: `loginId === "all"`일 때 displayName 매핑 로직이 없어 일반 사용자와 동일하게 처리
+**수정**: `loginId === "all"`이면 "모든 사용자 · ROLE_ADMIN"으로 표시 ("(all)" ID 미노출)
+**파일**: `js/main.js`, `js/main.min.js`
+
+#### BUG-15: 새 페이지 추가 시 Label Explorer 이전 상태 잔류 (2026-04-10)
+**증상**: 페이지 탭 추가(+) 시 Label Explorer가 이전 페이지의 폴더 펼침 상태와 하이라이트를 그대로 유지
+**원인**: `restoreLabelExplorerState()`에서 `labelExplorerState === null`(새 빈 페이지)일 때 기존 상태를 초기화하지 않음
+**수정**: `labelExplorerState`가 null이면 `selected`, `selectedClasses`, `lastClicked` 초기화 + `openFolders` 전체 false + `refreshLabelExplorer()` 호출
+**파일**: `js/main.js`, `js/main.min.js`

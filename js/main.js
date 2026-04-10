@@ -899,7 +899,7 @@ class WaferMapViewer {
         this.invalidateGridGeometry();
         this.gridThumbRectCache = null;
         this.pageViewCache = new Map(); // 페이지 전환 시 그리드 DOM 캐시
-        this.pageViewCacheLimit = 3;    // 캐시 최대 유지 페이지 수 (과도한 메모리 사용 방지)
+        this.pageViewCacheLimit = 10;   // 캐시 최대 유지 페이지 수 (탭 전환 시 이미지 유지)
         this.chipLabelLegendData = [];
         this.activeChipLabelClasses = null;
         this.gridLayoutCache = null;
@@ -2243,11 +2243,17 @@ class WaferMapViewer {
         if (pendingResult) {
             state.pendingCompositeResult = null;
             state.pendingCompositeTask = null;
-            await this.switchToCompositeGrid(pendingResult);
+            // Measure Composite는 배열, Failbit Composite는 단일 객체
+            if (Array.isArray(pendingResult)) {
+                await this.switchToMeasureCompositeGrid(pendingResult);
+            } else {
+                await this.switchToCompositeGrid(pendingResult);
+            }
             if (page?.id) {
                 this.clearCompositePageTask(page.id);
             }
             this.persistActivePageState();
+            this.showCenteredToast('완성', 1500);
         } else if (!restoredFromCache && !restoredGridImage) {
             await this.restoreSavedViewState();
         }
@@ -7275,17 +7281,12 @@ class WaferMapViewer {
         const allLinks = Array.from(this.dom.fileExplorer.querySelectorAll('a[data-path]'));
         const normalizedTarget = this.normalizePath(this.getRelativePathFromImageFolder(String(imagePath || '')));
 
-        let targetLink = allLinks.find(link => {
+        // 🔥 전체 경로 exact match만 사용 — partial match(파일명만 비교) 제거
+        // MY LOT/Composite/Label 이미지는 Explorer에 경로가 없으므로 자연스럽게 하이라이트 안 됨
+        const targetLink = allLinks.find(link => {
             const linkPath = link.dataset.path;
             return linkPath && this.normalizePath(linkPath) === normalizedTarget;
         });
-
-        if (!targetLink) {
-            targetLink = allLinks.find(link => {
-                const linkNorm = this.normalizePath(link.dataset.path || '');
-                return linkNorm.endsWith(normalizedTarget) || normalizedTarget.endsWith(linkNorm);
-            });
-        }
 
         if (targetLink) {
             const parentDetails = targetLink.closest('details');
@@ -8036,9 +8037,12 @@ class WaferMapViewer {
             row.className = 'permission-user-row';
             row.dataset.loginId = user.loginId;
             const folders = Array.isArray(user.folders) ? user.folders.map(f => f.path).join(', ') : '';
+            const isAll = user.loginId === 'all';
+            const displayName = isAll ? '모든 사용자' : (user.username || '(이름없음)');
+            const displayId = isAll ? '' : ` <span style="color:#9aa0a6;">(${user.loginId || ''})</span>`;
             row.innerHTML = `
                 <div>
-                    <div style="font-weight:600;">${user.username || '(이름없음)'} <span style="color:#9aa0a6;">(${user.loginId || ''})</span></div>
+                    <div style="font-weight:600;">${displayName}${displayId}</div>
                     <div style="font-size:12px; color:#9aa0a6;">
                         ${user.deptName || ''} · ${user.role || 'ROLE_USER'}${folders ? ' · ' + folders : ''}
                     </div>
@@ -8814,31 +8818,37 @@ class WaferMapViewer {
                 }
             });
 
-            // 결과 반영: 항상 해당 탭으로 전환 후 렌더링
+            // 결과 반영: 현재 해당 탭에 있으면 즉시 렌더링, 아니면 보류 후 toast
             if (result && targetPageId) {
-                // 다른 탭에 있으면 현재 상태 저장 후 composite 탭으로 전환
-                if (this.pageManager?.activePageId !== targetPageId) {
+                const isOnTargetTab = this.pageManager?.activePageId === targetPageId;
+                if (isOnTargetTab) {
+                    // 현재 해당 탭 → 즉시 렌더링
+                    const renderingTask = {
+                        status: 'rendering',
+                        message: 'Composite 결과 표시 중입니다...',
+                        selectedCount: selected.length,
+                        startedAt: initialTask.startedAt,
+                    };
+                    this.setCompositePageTask(targetPageId, { task: renderingTask, result: null });
+                    this.showCompositeInlineStatus(renderingTask.message);
+                    await this.switchToCompositeGrid(result);
+                    this.clearCompositePageTask(targetPageId);
+                    this.hideCompositeInlineStatus();
                     this.persistActivePageState();
-                    this.pageManager?.activatePage(targetPageId, { skipPersist: true });
-                    await new Promise(r => setTimeout(r, 300));
+                    this.showCenteredToast('완성', 1500);
+                } else {
+                    // 다른 탭에 있음 → 결과 보류, 나중에 탭 전환 시 렌더링
+                    this.setCompositePageTask(targetPageId, {
+                        task: { status: 'ready', message: 'Composite 완료 — 탭을 열면 표시됩니다.', selectedCount: selected.length, startedAt: initialTask.startedAt },
+                        result: result,
+                        pendingRender: true,
+                    });
+                    this.hideCompositeInlineStatus();
+                    this.showCenteredToast('완성', 1500);
                 }
-                const renderingTask = {
-                    status: 'rendering',
-                    message: 'Composite 결과 표시 중입니다...',
-                    selectedCount: selected.length,
-                    startedAt: initialTask.startedAt,
-                };
-                this.setCompositePageTask(targetPageId, { task: renderingTask, result: null });
-                this.showCompositeInlineStatus(renderingTask.message);
-                await this.switchToCompositeGrid(result);
-                this.clearCompositePageTask(targetPageId);
-                this.hideCompositeInlineStatus();
-                this.persistActivePageState();
             } else {
                 this.hideCompositeInlineStatus();
             }
-
-            this.showCompositeDoneMessage?.('Composite Map 생성 완료! com 탭에서 확인하세요.', 2400);
 
         } catch (error) {
             console.error('❌ Composite Map 생성 실패:', error);
@@ -9562,25 +9572,29 @@ class WaferMapViewer {
             const nestedResults = await Promise.all(allTasks.map(pollTask));
             const allResults = nestedResults.flat();
 
-            // Display all results in grid — 해당 탭으로 전환 후 렌더링
+            // Display all results in grid — 현재 탭이면 즉시, 아니면 보류
             if (allResults.length && targetPageId) {
-                const wasOnDifferentPage = this.pageManager?.activePageId !== targetPageId;
-                if (wasOnDifferentPage) {
-                    // 현재 탭 상태 먼저 안전하게 저장 후 전환
+                const isOnTargetTab = this.pageManager?.activePageId === targetPageId;
+                if (isOnTargetTab) {
+                    this.showCompositeInlineStatus('Measure Composite 결과 표시 중...');
+                    await this.switchToMeasureCompositeGrid(allResults);
+                    this.clearCompositePageTask(targetPageId);
+                    this.hideCompositeInlineStatus();
                     this.persistActivePageState();
-                    this.pageManager?.activatePage(targetPageId, { skipPersist: true });
-                    await new Promise(r => setTimeout(r, 300));
+                    this.showCenteredToast('완성', 1500);
+                } else {
+                    // 다른 탭에 있음 → 결과 보류 (탭 전환 시 applyPageState에서 렌더링)
+                    this.setCompositePageTask(targetPageId, {
+                        task: { status: 'ready', message: 'Measure Composite 완료', selectedCount: selected.length, startedAt: Date.now() },
+                        result: allResults,
+                        pendingRender: true,
+                    });
+                    this.hideCompositeInlineStatus();
+                    this.showCenteredToast('완성', 1500);
                 }
-                this.showCompositeInlineStatus('Measure Composite 결과 표시 중...');
-                await this.switchToMeasureCompositeGrid(allResults);
-                this.clearCompositePageTask(targetPageId);
-                this.hideCompositeInlineStatus();
-                this.persistActivePageState();
             } else {
                 this.hideCompositeInlineStatus();
             }
-
-            this.showCompositeDoneMessage?.(`Measure Composite ${items.length}개 생성 완료!`, 2400);
         } catch (error) {
             console.error('Measure Composite 다중 생성 실패:', error);
             this.hideCompositeInlineStatus();
@@ -20577,18 +20591,33 @@ class WaferMapViewer {
     // 🔥 Label Explorer 상태 복원
     restoreLabelExplorerState() {
         if (!this.labelExplorerState) {
+            // 새 페이지 등 state가 없으면 Label Explorer 전체 초기화
+            if (this.labelSelection) {
+                this.labelSelection.selected = [];
+                this.labelSelection.lastClicked = null;
+                this.labelSelection.selectedClasses = [];
+                // 폴더 펼침 상태도 초기화 (모두 접기)
+                if (this.labelSelection.openFolders) {
+                    for (const key of Object.keys(this.labelSelection.openFolders)) {
+                        this.labelSelection.openFolders[key] = false;
+                    }
+                }
+                this.updateLabelExplorerSelection();
+                this.refreshLabelExplorer();
+            }
             return;
         }
-        
+
         const state = this.labelExplorerState;
-        
+
         // Label Explorer 상태 복원
         if (this.labelSelection) {
             this.labelSelection.selected = [...state.selected];
             this.labelSelection.lastClicked = state.lastClicked;
             this.labelSelection.openFolders = {...state.openFolders};
             this.labelSelection.selectedClasses = [...state.selectedClasses];
-            
+            this.updateLabelExplorerSelection();
+
             console.log('✅ [RESTORE] Label Explorer 상태 복원 완료');
         }
     }
