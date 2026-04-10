@@ -1666,14 +1666,30 @@ async def _lifespan_background_init():
     # 5) 매일 새벽 2시 composite_map + thumbnails 폴더 정리
     await _start_daily_cleanup()
 
-# ======================== Git 버전 해시 (JS 캐시버스팅용) ========================
-try:
-    _JS_VERSION = subprocess.check_output(
-        ["git", "rev-parse", "--short", "HEAD"],
-        cwd=BASE_DIR, stderr=subprocess.DEVNULL
-    ).decode().strip()
-except Exception:
-    _JS_VERSION = str(int(time.time()))
+# ======================== JS/CSS 캐시버스팅 버전 ========================
+def _compute_js_version() -> str:
+    """JS/CSS 파일들의 최신 mtime을 기반으로 캐시버스팅 버전 생성."""
+    _project_dir = Path(__file__).resolve().parent.parent
+    max_mtime = 0
+    for ext in ("js/*.js", "css/*.css"):
+        for p in _project_dir.glob(ext):
+            try:
+                mt = p.stat().st_mtime_ns
+                if mt > max_mtime:
+                    max_mtime = mt
+            except OSError:
+                pass
+    if max_mtime > 0:
+        return str(max_mtime)
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(_project_dir), stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        return str(int(time.time()))
+
+_JS_VERSION = _compute_js_version()
 
 # ======================== index.html 메모리 캐시 + pre-gzip ========================
 _CACHED_INDEX_HTML: Optional[str] = None
@@ -1703,13 +1719,16 @@ def _build_index_cache():
             _CACHED_INDEX_MTIME_NS = 0
 
 def _refresh_index_cache_if_modified():
-    """index.html 파일 변경 시 lazy reload. 서버 재시작 없이 편집 즉시 반영."""
+    """index.html 또는 JS/CSS 파일 변경 시 lazy reload. 서버 재시작 없이 편집 즉시 반영."""
+    global _JS_VERSION
     html_path = Path("index.html")
     try:
         cur_mtime = html_path.stat().st_mtime_ns
     except OSError:
         return
-    if cur_mtime != _CACHED_INDEX_MTIME_NS:
+    new_ver = _compute_js_version()
+    if cur_mtime != _CACHED_INDEX_MTIME_NS or new_ver != _JS_VERSION:
+        _JS_VERSION = new_ver
         _build_index_cache()
 
 _build_index_cache()
@@ -3298,7 +3317,7 @@ async def cache_control_middleware(request: Request, call_next):
         if p.startswith("/js/") or p.startswith("/css/"):
             response.headers["Cache-Control"] = "no-cache"
             response.headers["Vary"] = "Accept-Encoding"
-            # ETag가 없으면 파일 mtime 기반으로 생성
+            # ETag가 없으면 파일 mtime+size 기반으로 생성
             if "etag" not in response.headers and "ETag" not in response.headers:
                 import hashlib
                 file_path = Path("." + p.replace("/", os.sep))
@@ -3307,6 +3326,8 @@ async def cache_control_middleware(request: Request, call_next):
                     etag_src = f"{stat.st_mtime_ns}-{stat.st_size}"
                     etag = f'W/"{hashlib.md5(etag_src.encode()).hexdigest()[:16]}"'
                     response.headers["ETag"] = etag
+            # index.html/JS/CSS 변경 감지 (lazy)
+            _refresh_index_cache_if_modified()
             return response
         if (
             p.startswith("/api/labels")
