@@ -208,16 +208,17 @@ class SearchService:
                 elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
             elif lot_filter or lot_wafer_pairs:
                 search_start = time.perf_counter()
+                folder_name = prefix.split("/")[0] if prefix else ""
                 if lot_wafer_pairs:
-                    index_hits = await loop.run_in_executor(
-                        self.io_executor,
-                        self._lot_wafer_scan,
-                        keys_slice, names_slice, lot_wafer_pairs, lot_filter,
-                    )
-                    search_mode = "lot-wafer"
+                    # 🔥 LOT 인덱스로 후보 추출 → wafer 필터링 (O(K) not O(N))
+                    all_lots = {lot for lot, _ in lot_wafer_pairs}
+                    if lot_filter:
+                        all_lots |= lot_filter
+                    candidates = self.index_service.lot_search(all_lots, folder_name)
+                    index_hits = self._lot_wafer_filter_indexed(candidates, lot_wafer_pairs, lot_filter)
+                    search_mode = "lot-wafer-indexed"
                 else:
                     # 🔥 LOT 역인덱스로 O(1) 검색 (501만 순차 스캔 제거)
-                    folder_name = prefix.split("/")[0] if prefix else ""
                     index_hits = self.index_service.lot_search(lot_filter, folder_name)
                     search_mode = "lot-index"
                 elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
@@ -333,6 +334,27 @@ class SearchService:
                 continue
 
             # 2단계: LOT 통과 → WAFER 체크 (필요한 파일만)
+            if lot_token in pair_map:
+                parts = name_lower.split("_", 3)
+                file_wafer = parts[2] if len(parts) > 2 else ""
+                if file_wafer in pair_map[lot_token]:
+                    hits.append(rel)
+            elif lot_token in lot_only:
+                hits.append(rel)
+        return hits
+
+    def _lot_wafer_filter_indexed(self, candidates: List[str],
+                                  lot_wafer_pairs: List[tuple],
+                                  lot_filter: Set[str]) -> List[str]:
+        """LOT 인덱스 후보에서 wafer 필터링 (O(K) — 후보 수만큼만 처리)"""
+        pair_map: Dict[str, set] = {}
+        for lot, wafer in lot_wafer_pairs:
+            pair_map.setdefault(lot, set()).add(wafer)
+        lot_only = lot_filter - set(pair_map.keys()) if lot_filter else set()
+        hits: List[str] = []
+        for rel in candidates:
+            name_lower = rel.rsplit("/", 1)[-1].lower() if "/" in rel else rel.lower()
+            lot_token = name_lower.split("_", 1)[0]
             if lot_token in pair_map:
                 parts = name_lower.split("_", 3)
                 file_wafer = parts[2] if len(parts) > 2 else ""

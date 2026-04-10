@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 56개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증, Measure 색상 미리보기/적용 회귀, HTTP 캐시 무효화 검증, Composite 색상 매핑/배경 행 제거 검증, Measure 첫 진입 지연/폴더 stale state 회귀, Label Explorer flat-grid 강제 및 positions 없는 palette/PNF 이미지 즉시 로드 회귀, 검색 첫 실행/다중검색/이벤트루프 블로킹 회귀, 서버 Cold Start 즉시 로딩 속도, 탭 다중 전환 이미지 보존, f/q missing 이미지 그리드 로드 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 59개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증, Measure 색상 미리보기/적용 회귀, HTTP 캐시 무효화 검증, Composite 색상 매핑/배경 행 제거 검증, Measure 첫 진입 지연/폴더 stale state 회귀, Label Explorer flat-grid 강제 및 positions 없는 palette/PNF 이미지 즉시 로드 회귀, 검색 첫 실행/다중검색/이벤트루프 블로킹 회귀, 서버 Cold Start 즉시 로딩 속도, 탭 다중 전환 이미지 보존, f/q missing 이미지 그리드 로드 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -20,7 +20,7 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 
 ## 절대규칙: 기본 전체 실행
 
-- **인자 없이 `/e2e-test` 실행 시 Phase 1~56 전체를 실행한다.**
+- **인자 없이 `/e2e-test` 실행 시 Phase 1~59 전체를 실행한다.**
 - 특정 Phase만 실행하려면 `/e2e-test 3,9,12` 또는 `/e2e-test 33-50`처럼 명시적으로 지정해야 한다.
 - "전체 테스트", "E2E 테스트" 등 범위 미지정 요청은 전체 실행으로 간주한다.
 - Phase를 건너뛰거나 일부만 실행하는 것은 사용자가 명시적으로 요청한 경우에만 허용된다.
@@ -5809,6 +5809,84 @@ console.assert(toast?.textContent?.includes('완성'), 'toast에 "완성" 포함
 | 다른 탭 전환 후 자동 복귀 | 없음 (탭 0 유지) |
 | "완성" toast 표시 | DOM에 존재 |
 | composite 탭 클릭 시 결과 렌더링 | 그리드에 heatmap 이미지 표시 |
+
+## Phase 57: WF 다중검색 (드롭다운 + 모달 + API)
+
+Wafer 다중검색 기능 전체 흐름을 검증한다.
+
+### 테스트 순서
+
+1. **드롭다운 열기**: `#multi-search-btn` 클릭 → `#multi-search-dropdown` 표시 확인
+2. **항목 확인**: "LOT 다중검색", "WF 다중검색" 2개 항목
+3. **WF 모달 열기**: `[data-mode="wf"]` 클릭 → `#wf-search-modal` display=flex
+4. **입력 + 검색**: textarea에 "ABC123 04\nDEF456 01" 입력 → `#wf-search-apply` 클릭
+5. **API 검증**: `/api/search?lot_wafer=abc123:04,def456:01` → 200, total>0
+6. **결과 확인**: 그리드에 결과 이미지 표시, 모달 자동 닫힘
+7. **LOT 모달 확인**: 드롭다운에서 "LOT" 선택 → 기존 `#multi-search-modal` 열림
+
+### pass 기준
+| 항목 | 기준 |
+|------|------|
+| 드롭다운 | 2개 항목 표시 |
+| WF 모달 | 열기/닫기 정상 |
+| WF 검색 | API 200 + 결과 > 0 |
+| LOT 모달 | 기존 동작 유지 |
+
+## Phase 58: JS/CSS ETag 캐시 검증
+
+정적 자산의 ETag 기반 캐시 무효화를 검증한다.
+
+### 테스트 순서
+
+1. **JS ETag 확인**: `fetch('/js/main.js')` → `ETag` 헤더 존재
+2. **JS 304 검증**: `If-None-Match: <etag>` → 304 응답
+3. **CSS ETag 확인**: `fetch('/css/style.css')` → `ETag` 헤더 존재
+4. **Cache-Control**: `no-cache` 확인 (매번 검증 강제)
+
+### pass 기준
+| 항목 | 기준 |
+|------|------|
+| JS ETag | 비어있지 않은 문자열 |
+| JS 304 | If-None-Match → status 304 |
+| CSS ETag | 비어있지 않은 문자열 |
+| Cache-Control | "no-cache" 포함 |
+
+## Phase 59: 성능 벤치마크
+
+주요 작업의 응답 시간을 측정하고 임계값을 초과하면 FAIL 처리한다.
+
+### 측정 항목 및 임계값
+| 항목 | 임계값 | 측정 방법 |
+|------|--------|-----------|
+| 폴더→그리드 로드 | <2000ms | Ctrl+클릭 → .grid-thumb-wrap 2000개 대기 |
+| 더블클릭→단일 이미지 | <1000ms | dblclick → viewMode=gridImage 대기 |
+| ESC→그리드 복귀 | <500ms | ESC → gridMode=true 대기 |
+| WF 검색 API (cold) | <500ms | `/api/search?lot_wafer=...` fetch |
+| WF 검색 API (warm) | <50ms | 2회차 호출 |
+| LOT 검색 API | <100ms | `/api/search?lot_multi=...` fetch |
+
+### 2026-04-11 측정 결과 (RELOAD=0, 인덱스 완료)
+| 항목 | 측정값 | 판정 |
+|------|--------|------|
+| 폴더→그리드 | 287ms | PASS |
+| 더블클릭→단일 | 16ms | PASS |
+| ESC→그리드 | 65ms | PASS |
+| WF 검색 (cold) | 314ms | PASS |
+| WF 검색 (warm) | 5ms | PASS |
+| LOT 검색 | 11ms | PASS |
+
+#### BUG-16: WF 검색 5백만 파일 순차 스캔 (2026-04-11)
+**증상**: WF 다중검색(`lot_wafer`) API가 977ms 소요 (LOT 검색 14ms 대비 70배 느림)
+**원인**: `_lot_wafer_scan()`이 LOT 인덱스 대신 keys_slice 전체(5M)를 순차 스캔
+**수정**: LOT 인덱스(`lot_search`)로 후보 추출 → 후보(~200개)만 wafer 필터링 (`_lot_wafer_filter_indexed`)
+**결과**: 977ms → 5ms (195배 개선)
+**파일**: `api/search_service.py`
+
+#### BUG-17: JS/CSS 파일 ETag 미설정 (2026-04-11)
+**증상**: 일부 유저가 이전 JS 파일 캐시를 사용 (Cache-Control: no-cache는 있지만 ETag 없이 검증 불가)
+**원인**: `cache_control_middleware`에서 JS/CSS에 `no-cache`만 설정, ETag 미생성
+**수정**: 파일 mtime+size 기반 weak ETag(`W/"hash"`) 자동 생성 → 변경 없으면 304, 변경 있으면 200+새 파일
+**파일**: `api/main.py` (cache_control_middleware)
 
 #### BUG-14: Permission Editor "all" 사용자 표시 오류 (2026-04-10)
 **증상**: Permission Editor 모달에서 loginId="all" 와일드카드 사용자가 "(이름없음) (all) · ROLE_ADMIN"으로 표시

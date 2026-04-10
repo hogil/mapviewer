@@ -1677,18 +1677,40 @@ except Exception:
 # ======================== index.html 메모리 캐시 + pre-gzip ========================
 _CACHED_INDEX_HTML: Optional[str] = None
 _CACHED_INDEX_HTML_GZ: Optional[bytes] = None
+_CACHED_INDEX_MTIME_NS: int = 0
 
 def _build_index_cache():
-    """index.html을 메모리에 캐시 + gzip 압축."""
+    """index.html을 메모리에 캐시 + gzip 압축. JS/CSS 모두 캐시버스팅."""
     import gzip as _gzip
-    global _CACHED_INDEX_HTML, _CACHED_INDEX_HTML_GZ
+    global _CACHED_INDEX_HTML, _CACHED_INDEX_HTML_GZ, _CACHED_INDEX_MTIME_NS
     html_path = Path("index.html")
     if html_path.exists():
         content = html_path.read_text(encoding="utf-8")
-        _CACHED_INDEX_HTML = re.sub(
+        # JS 캐시버스팅
+        content = re.sub(
             r'(/js/[^"\']+\.js)(?:\?v=[^"\']*)?', rf'\1?v={_JS_VERSION}', content
         )
+        # CSS 캐시버스팅
+        content = re.sub(
+            r'(/css/[^"\']+\.css)(?:\?v=[^"\']*)?', rf'\1?v={_JS_VERSION}', content
+        )
+        _CACHED_INDEX_HTML = content
         _CACHED_INDEX_HTML_GZ = _gzip.compress(_CACHED_INDEX_HTML.encode("utf-8"), compresslevel=6)
+
+        try:
+            _CACHED_INDEX_MTIME_NS = html_path.stat().st_mtime_ns
+        except OSError:
+            _CACHED_INDEX_MTIME_NS = 0
+
+def _refresh_index_cache_if_modified():
+    """index.html 파일 변경 시 lazy reload. 서버 재시작 없이 편집 즉시 반영."""
+    html_path = Path("index.html")
+    try:
+        cur_mtime = html_path.stat().st_mtime_ns
+    except OSError:
+        return
+    if cur_mtime != _CACHED_INDEX_MTIME_NS:
+        _build_index_cache()
 
 _build_index_cache()
 
@@ -3272,10 +3294,18 @@ async def cache_control_middleware(request: Request, call_next):
     try:
         response = await call_next(request)
         p = request.url.path
-        # JS 파일: no-cache (매번 ETag 검증, 변경 없으면 304)
-        if p.startswith("/js/"):
+        # JS/CSS 파일: no-cache + ETag (매번 검증, 변경 없으면 304)
+        if p.startswith("/js/") or p.startswith("/css/"):
             response.headers["Cache-Control"] = "no-cache"
             response.headers["Vary"] = "Accept-Encoding"
+            # ETag가 없으면 파일 mtime 기반으로 생성
+            if "etag" not in response.headers and "ETag" not in response.headers:
+                file_path = Path("." + p.replace("/", os.sep))
+                if file_path.exists():
+                    stat = file_path.stat()
+                    etag_src = f"{stat.st_mtime_ns}-{stat.st_size}"
+                    etag = f'W/"{hashlib.md5(etag_src.encode()).hexdigest()[:16]}"'
+                    response.headers["ETag"] = etag
             return response
         if (
             p.startswith("/api/labels")
@@ -8428,27 +8458,51 @@ async def classify_delete_batch(request: ClassifyDeleteBatchReq,
 # ---------------- Static / Pages ----------------
 
 # 🚀 JS 파일: 원본 .js 메모리 캐시 + pre-gzip (GZipMiddleware 없이 압축)
+# mtime 기반 lazy reload — 서버 재시작 없이 파일 변경 즉시 반영
 _JS_DIR = Path("js")
-_JS_CACHE: Dict[str, Tuple[bytes, bytes, str]] = {}  # filename -> (raw, gzipped, etag)
+_JS_CACHE: Dict[str, Tuple[bytes, bytes, str, int]] = {}  # filename -> (raw, gzipped, etag, mtime_ns)
+
+def _build_js_entry(path: Path) -> Tuple[bytes, bytes, str, int]:
+    """파일 한 개를 읽어 (raw, gzipped, etag, mtime_ns) 튜플 생성."""
+    import gzip as _gzip
+    raw = path.read_bytes()
+    gz = _gzip.compress(raw, compresslevel=6)
+    etag = hashlib.md5(raw).hexdigest()[:12]
+    mtime_ns = path.stat().st_mtime_ns
+    return (raw, gz, etag, mtime_ns)
 
 def _preload_js_assets():
     """서버 시작 시 원본 JS를 메모리에 캐시 + gzip 압축."""
-    import gzip as _gzip
     for f in _JS_DIR.iterdir():
         if f.suffix == '.js' and '.min.' not in f.name:
-            raw = f.read_bytes()
-            gz = _gzip.compress(raw, compresslevel=6)
-            etag = hashlib.md5(raw).hexdigest()[:12]
-            _JS_CACHE[f.name] = (raw, gz, etag)
+            _JS_CACHE[f.name] = _build_js_entry(f)
     return len(_JS_CACHE)
+
+def _get_js_entry(filename: str):
+    """캐시된 JS 엔트리 반환. 파일 수정 시 lazy reload."""
+    path = _JS_DIR / filename
+    cached = _JS_CACHE.get(filename)
+    try:
+        cur_mtime = path.stat().st_mtime_ns
+    except FileNotFoundError:
+        if cached is not None:
+            _JS_CACHE.pop(filename, None)
+        return None
+    if cached is None or cached[3] != cur_mtime:
+        try:
+            _JS_CACHE[filename] = _build_js_entry(path)
+        except Exception:
+            return cached
+    return _JS_CACHE.get(filename)
 
 _preload_js_assets()
 
 @app.get("/js/{filename:path}")
 async def serve_js(filename: str, request: Request):
-    """원본 JS + pre-gzip 서빙 + ETag 304."""
-    if filename in _JS_CACHE:
-        raw, gz, etag = _JS_CACHE[filename]
+    """원본 JS + pre-gzip 서빙 + ETag 304. mtime 기반 lazy reload."""
+    entry = _get_js_entry(filename)
+    if entry is not None:
+        raw, gz, etag, _mtime = entry
         if_none = request.headers.get("if-none-match", "").strip('"')
         if if_none == etag:
             return Response(status_code=304, headers={
@@ -8483,28 +8537,50 @@ async def serve_js(filename: str, request: Request):
         return FileResponse(path, media_type="application/javascript")
     raise HTTPException(status_code=404, detail="Not found")
 
-# 🚀 CSS 파일: 메모리 캐시 + pre-gzip + ETag 304
+# 🚀 CSS 파일: 메모리 캐시 + pre-gzip + ETag 304 (mtime 기반 lazy reload)
 _CSS_DIR = Path("css")
-_CSS_CACHE: Dict[str, Tuple[bytes, bytes, str]] = {}
+_CSS_CACHE: Dict[str, Tuple[bytes, bytes, str, int]] = {}
+
+def _build_css_entry(path: Path) -> Tuple[bytes, bytes, str, int]:
+    import gzip as _gzip
+    raw = path.read_bytes()
+    gz = _gzip.compress(raw, compresslevel=6)
+    etag = hashlib.md5(raw).hexdigest()[:12]
+    mtime_ns = path.stat().st_mtime_ns
+    return (raw, gz, etag, mtime_ns)
 
 def _preload_css():
     """서버 시작 시 CSS를 메모리에 캐시 + gzip 압축."""
-    import gzip as _gzip
     for f in _CSS_DIR.iterdir():
         if f.suffix == '.css':
-            raw = f.read_bytes()
-            gz = _gzip.compress(raw, compresslevel=6)
-            etag = hashlib.md5(raw).hexdigest()[:12]
-            _CSS_CACHE[f.name] = (raw, gz, etag)
+            _CSS_CACHE[f.name] = _build_css_entry(f)
     return len(_CSS_CACHE)
+
+def _get_css_entry(filename: str):
+    """캐시된 CSS 엔트리. 파일 수정 시 lazy reload."""
+    path = _CSS_DIR / filename
+    cached = _CSS_CACHE.get(filename)
+    try:
+        cur_mtime = path.stat().st_mtime_ns
+    except FileNotFoundError:
+        if cached is not None:
+            _CSS_CACHE.pop(filename, None)
+        return None
+    if cached is None or cached[3] != cur_mtime:
+        try:
+            _CSS_CACHE[filename] = _build_css_entry(path)
+        except Exception:
+            return cached
+    return _CSS_CACHE.get(filename)
 
 _preload_css()
 
 @app.get("/css/{filename:path}")
 async def serve_css(filename: str, request: Request):
-    """CSS pre-gzip 서빙 + ETag 304."""
-    if filename in _CSS_CACHE:
-        raw, gz, etag = _CSS_CACHE[filename]
+    """CSS pre-gzip 서빙 + ETag 304. mtime 기반 lazy reload."""
+    entry = _get_css_entry(filename)
+    if entry is not None:
+        raw, gz, etag, _mtime = entry
         if_none = request.headers.get("if-none-match", "").strip('"')
         if if_none == etag:
             return Response(status_code=304, headers={
@@ -8588,6 +8664,9 @@ async def read_root(request: Request):
                 logger.info("🔐 [AUTO_LOGIN] SAML 인증 미완료 → /saml/login으로 리다이렉트")
                 return RedirectResponse("/saml/login", status_code=302)
             logger.info("✅ [AUTO_LOGIN] SAML 인증 완료 → index.html 제공")
+
+        # index.html이 디스크에서 변경됐으면 lazy reload (서버 재시작 불필요)
+        _refresh_index_cache_if_modified()
 
         # 메모리 캐시된 index.html 즉시 반환 (pre-gzip)
         if _CACHED_INDEX_HTML:
