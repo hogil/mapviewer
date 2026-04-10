@@ -36,6 +36,11 @@ SKIP_DIRS = set(os.getenv(
     "SKIP_DIRS",
     "classification,classification_chips,thumbnails,chip_annotations,chip_images,yolo_datasets,composite_map,composite_cache_v1,my-lot"
 ).split(","))
+# 인덱스 빌드 시 스캔할 폴더: classification/my-lot은 인덱스에 포함 (Label Explorer, MY LOT 즉시 조회용)
+INDEX_SKIP_DIRS = set(os.getenv(
+    "INDEX_SKIP_DIRS",
+    "thumbnails,chip_annotations,chip_images,yolo_datasets,composite_map,composite_cache_v1"
+).split(","))
 
 # ===== 동시성 / 성능 =====
 CPU_COUNT = os.cpu_count() or 8

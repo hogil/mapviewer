@@ -421,6 +421,7 @@ THUMB_STAT_TTL_SECONDS = config.THUMB_STAT_TTL_SECONDS
 THUMB_STAT_CACHE_CAPACITY = config.THUMB_STAT_CACHE_CAPACITY
 INDEX_REFRESH_INTERVAL_SECONDS = max(0, config.INDEX_REFRESH_INTERVAL_MINUTES) * 60
 SKIP_DIRS = {d.strip() for d in config.SKIP_DIRS if d.strip()}
+INDEX_SKIP_DIRS = {d.strip() for d in config.INDEX_SKIP_DIRS if d.strip()}
 
 # ======================== Pools / State / Caches ========================
 IO_POOL = ThreadPoolExecutor(max_workers=IO_THREADS)
@@ -448,7 +449,7 @@ _lock_port = os.getenv("HTTPS_PORT", str(config.HTTPS_PORT))
 INDEX_LOCK_FILE = ROOT_DIR / f".file_index_cache_{_lock_port}.lock"
 index_service = IndexService(
     root_dir=ROOT_DIR,
-    skip_dirs=SKIP_DIRS,
+    skip_dirs=INDEX_SKIP_DIRS,
     cache_file=INDEX_CACHE_FILE,
     lock_file=INDEX_LOCK_FILE,
     index_workers=config.INDEX_WORKERS,
@@ -1696,7 +1697,6 @@ def _build_index_cache():
         )
         _CACHED_INDEX_HTML = content
         _CACHED_INDEX_HTML_GZ = _gzip.compress(_CACHED_INDEX_HTML.encode("utf-8"), compresslevel=6)
-
         try:
             _CACHED_INDEX_MTIME_NS = html_path.stat().st_mtime_ns
         except OSError:
@@ -3300,6 +3300,7 @@ async def cache_control_middleware(request: Request, call_next):
             response.headers["Vary"] = "Accept-Encoding"
             # ETag가 없으면 파일 mtime 기반으로 생성
             if "etag" not in response.headers and "ETag" not in response.headers:
+                import hashlib
                 file_path = Path("." + p.replace("/", os.sep))
                 if file_path.exists():
                     stat = file_path.stat()
@@ -3455,7 +3456,7 @@ def get_thumbnail_path(
     variant: Optional[str] = None,
     cached_stat: "Optional[os.stat_result]" = None,
 ) -> Path:
-    # 🔥 inode 기반 해시 — 하드링크(classification ↔ 원본)는 동일 썸네일 캐시 공유
+    # 🔥 inode 기반 해시 — 동일 원본 파일은 동일 썸네일 캐시 공유
     try:
         st = cached_stat or image_path.stat()
         path_key = f"{st.st_dev}:{st.st_ino}"
@@ -4369,8 +4370,21 @@ def relkey_from_any_path(any_path: str) -> str:
 
 
 def _get_labels_for_image(image_rel_path: str) -> List[str]:
-    """classification 폴더를 스캔하여 이미지가 속한 클래스 목록 반환."""
+    """classification 폴더에서 이미지가 속한 클래스 목록 반환. 인덱스 우선 조회."""
     filename = Path(image_rel_path).name
+
+    # 인덱스 조회 (O(n_classes) — class_to_keys 순회)
+    if index_service.ready and index_service._class_to_keys:
+        labels = []
+        for cls_prefix, keys_list in index_service._class_to_keys.items():
+            parts = cls_prefix.split("/")
+            if len(parts) >= 2 and parts[0] == "classification":
+                if any(k.endswith("/" + filename) for k in keys_list):
+                    labels.append(parts[1])
+        if labels:
+            return sorted(labels)
+
+    # Fallback: 파일시스템 스캔
     class_dir = _classification_dir()
     labels: List[str] = []
     if class_dir.is_dir():
@@ -7797,6 +7811,13 @@ async def rename_class(request: Request,
         # 폴더 이름 변경 (폴더 구조가 source of truth이므로 이것만으로 충분)
         old_class_dir.rename(new_class_dir)
 
+        try:
+            old_rel = str(old_class_dir.relative_to(ROOT_DIR)).replace("\\", "/")
+            new_rel = str(new_class_dir.relative_to(ROOT_DIR)).replace("\\", "/")
+            index_service.rename_classification_prefix(old_rel, new_rel)
+        except Exception:
+            pass
+
         # 캐시 무효화
         for p in (classification_dir, old_class_dir, new_class_dir, ROOT_DIR): _dircache_invalidate(p)
         DIRLIST_CACHE.clear()
@@ -7826,7 +7847,13 @@ async def delete_classes(req: DeleteClassesReq,
                 class_dir = classification_dir / class_name
                 logger.info(f"[DELETE_CLASS] class_dir: {class_dir}, exists: {class_dir.exists()}")
                 if not class_dir.exists() or not class_dir.is_dir(): raise FileNotFoundError("Class not found")
-                shutil.rmtree(class_dir); deleted.append(class_name)
+                shutil.rmtree(class_dir)
+                try:
+                    class_rel = str(class_dir.relative_to(ROOT_DIR)).replace("\\", "/")
+                    index_service.delete_classification_prefix(class_rel)
+                except Exception:
+                    pass
+                deleted.append(class_name)
             except Exception as e:
                 failed.append({"class": class_name, "error": str(e)})
                 logger.exception(f"클래스 {class_name} 삭제 실패: {e}")
@@ -7854,15 +7881,24 @@ async def class_images(class_name: str = PathParam(..., min_length=1, max_length
             logger.warning(f"⚠️ [/api/classes/{{class_name}}/images] class_dir 없음 또는 디렉토리 아님: {class_dir}")
             raise HTTPException(status_code=404, detail="Class not found")
 
+        # 인덱스 조회 우선 (O(1)), 없으면 rglob fallback
+        try:
+            class_rel = str(class_dir.relative_to(ROOT_DIR)).replace("\\", "/")
+        except ValueError:
+            class_rel = None
+
+        if class_rel and index_service.ready:
+            found = index_service.classification_images(class_rel)
+            found = [k for k in found if is_supported_image(Path(k))]
+            return {"success": True, "class": class_name, "results": found[offset: offset + limit], "offset": offset, "limit": limit}
+
+        # Fallback: 인덱스 미준비 시 rglob
         found: List[str] = []; goal = offset + limit
         for p in class_dir.rglob("*"):
             if p.is_file() and is_supported_image(p):
                 rel = str(p.relative_to(ROOT_DIR)).replace("\\", "/")
                 found.append(rel)
                 if len(found) >= goal: break
-
-        # 디버그 로그 제거 (너무 자주 출력됨)
-        # logger.info(f"✅ [/api/classes/{{class_name}}/images] 이미지 조회 완료: {len(found)}개 (offset={offset}, limit={limit})")
         return {"success": True, "class": class_name, "results": found[offset: offset + limit], "offset": offset, "limit": limit}
     except HTTPException:
         raise
@@ -8005,36 +8041,28 @@ async def classify_images(req: Request,
         target_file = class_dir / abs_path.name
         needs_replace = not target_file.exists()
 
-        # 파일 복사 또는 하드링크 생성 (executor로 이벤트 루프 블로킹 방지)
+        # 파일 복사 (executor로 이벤트 루프 블로킹 방지)
         loop = asyncio.get_running_loop()
         if needs_replace:
-            try:
-                if abs_path.stat().st_dev == class_dir.stat().st_dev:
-                    await loop.run_in_executor(IO_POOL, os.link, str(abs_path), str(target_file))
-                    log_access_row(tag="ACTION", note=f"하드링크 생성: {rel_path} -> {class_name}")
-                else:
-                    await loop.run_in_executor(IO_POOL, shutil.copy2, abs_path, target_file)
-                    log_access_row(tag="ACTION", note=f"파일 복사: {rel_path} -> {class_name}")
-            except (OSError, PermissionError):
-                await loop.run_in_executor(IO_POOL, shutil.copy2, abs_path, target_file)
-                log_access_row(tag="ACTION", note=f"복사 폴백: {rel_path} -> {class_name}")
+            await loop.run_in_executor(IO_POOL, shutil.copy2, abs_path, target_file)
+            log_access_row(tag="ACTION", note=f"파일 복사: {rel_path} -> {class_name}")
         elif not _is_same_physical_file(abs_path, target_file):
-            # 같은 파일명이지만 다른 원본이면 반드시 최신 원본으로 교체한다.
             try:
                 target_file.unlink()
             except FileNotFoundError:
                 pass
             except Exception as unlink_err:
                 logger.warning(f"분류 파일 교체 전 삭제 실패: {target_file}, 오류: {unlink_err}")
-            try:
-                if abs_path.stat().st_dev == class_dir.stat().st_dev:
-                    await loop.run_in_executor(IO_POOL, os.link, str(abs_path), str(target_file))
-                else:
-                    await loop.run_in_executor(IO_POOL, shutil.copy2, abs_path, target_file)
-            except (OSError, PermissionError):
-                await loop.run_in_executor(IO_POOL, shutil.copy2, abs_path, target_file)
+            await loop.run_in_executor(IO_POOL, shutil.copy2, abs_path, target_file)
 
         _dircache_invalidate(class_dir)
+
+        # 인덱스에 즉시 반영
+        try:
+            cls_rel = str(target_file.relative_to(ROOT_DIR)).replace("\\", "/")
+            index_service.add_classification_entry(cls_rel)
+        except Exception:
+            pass
 
         # 🔥 positions.json을 POSITIONS_ROOT/classification/class_name/ 에 복사
         try:
@@ -8142,15 +8170,16 @@ async def classify_images_batch(request: BatchClassifyRequest,
                             pass
                         except Exception as unlink_err:
                             logger.warning(f"배치 분류 기존 파일 삭제 실패: {target_file}, 오류: {unlink_err}")
-                    try:
-                        if abs_path.stat().st_dev == class_dir_dev:
-                            os.link(str(abs_path), str(target_file))
-                        else:
-                            shutil.copy2(abs_path, target_file)
-                    except (OSError, PermissionError):
-                        shutil.copy2(abs_path, target_file)
+                    shutil.copy2(abs_path, target_file)
 
                 link_time += time.perf_counter() - link_start
+
+                # 인덱스에 즉시 반영
+                try:
+                    cls_rel = str(target_file.relative_to(ROOT_DIR)).replace("\\", "/")
+                    index_service.add_classification_entry(cls_rel)
+                except Exception:
+                    pass
 
                 # 🔥 positions.json을 POSITIONS_ROOT/classification/class_name/ 에 복사
                 try:
@@ -8401,10 +8430,16 @@ async def delete_classification(request: ClassifyDeleteRequest,
 
         _dircache_invalidate(class_dir)
 
+        # 인덱스에서 즉시 제거
+        try:
+            index_service.remove_classification_entry(classification_rel_path)
+        except Exception:
+            pass
+
         log_access_row(tag="ACTION", note=f"분류 제거: {rel_path} from {class_name}")
 
         return {"success": True, "removed": str(target_file.relative_to(ROOT_DIR)), "class": class_name}
-        
+
     except Exception as e:
         logger.exception(f"분류 제거 실패: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -8438,11 +8473,15 @@ async def classify_delete_batch(request: ClassifyDeleteBatchReq,
                         target_file.unlink()
                     except FileNotFoundError:
                         pass
-                try:
-                    classification_rel_path = str(target_file.relative_to(ROOT_DIR)).replace("\\", "/")
-                except ValueError:
-                    classification_rel_path = target_file.as_posix()
-                removed += 1
+                    try:
+                        classification_rel_path = str(target_file.relative_to(ROOT_DIR)).replace("\\", "/")
+                    except ValueError:
+                        classification_rel_path = target_file.as_posix()
+                    try:
+                        index_service.remove_classification_entry(classification_rel_path)
+                    except Exception:
+                        pass
+                    removed += 1
             except Exception:
                 continue
 

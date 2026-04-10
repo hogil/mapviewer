@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 59개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증, Measure 색상 미리보기/적용 회귀, HTTP 캐시 무효화 검증, Composite 색상 매핑/배경 행 제거 검증, Measure 첫 진입 지연/폴더 stale state 회귀, Label Explorer flat-grid 강제 및 positions 없는 palette/PNF 이미지 즉시 로드 회귀, 검색 첫 실행/다중검색/이벤트루프 블로킹 회귀, 서버 Cold Start 즉시 로딩 속도, 탭 다중 전환 이미지 보존, f/q missing 이미지 그리드 로드 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 61개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증, Measure 색상 미리보기/적용 회귀, HTTP 캐시 무효화 검증, Composite 색상 매핑/배경 행 제거 검증, Measure 첫 진입 지연/폴더 stale state 회귀, Label Explorer flat-grid 강제 및 positions 없는 palette/PNF 이미지 즉시 로드 회귀, 검색 첫 실행/다중검색/이벤트루프 블로킹 회귀, 서버 Cold Start 즉시 로딩 속도, 탭 다중 전환 이미지 보존, f/q missing 이미지 그리드 로드 검증, classification 인덱스 즉시 일관성 검증, 썸네일 캐시 삭제 후 첫 palette_3k 그리드 즉시 로딩 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -20,7 +20,7 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 
 ## 절대규칙: 기본 전체 실행
 
-- **인자 없이 `/e2e-test` 실행 시 Phase 1~59 전체를 실행한다.**
+- **인자 없이 `/e2e-test` 실행 시 Phase 1~61 전체를 실행한다.**
 - 특정 Phase만 실행하려면 `/e2e-test 3,9,12` 또는 `/e2e-test 33-50`처럼 명시적으로 지정해야 한다.
 - "전체 테스트", "E2E 테스트" 등 범위 미지정 요청은 전체 실행으로 간주한다.
 - Phase를 건너뛰거나 일부만 실행하는 것은 사용자가 명시적으로 요청한 경우에만 허용된다.
@@ -5874,6 +5874,73 @@ Wafer 다중검색 기능 전체 흐름을 검증한다.
 | WF 검색 (cold) | 314ms | PASS |
 | WF 검색 (warm) | 5ms | PASS |
 | LOT 검색 | 11ms | PASS |
+
+## Phase 60: Classification 인덱스 즉시 일관성
+
+classification/classification_chips 경로가 인덱스에 포함된 상태에서 추가/이름변경/삭제가 즉시 조회 결과에 반영되는지 검증한다.
+
+### 테스트 순서
+1. **임시 클래스 생성 + 분류 추가**: 임시 클래스(`codex_tmp_*`)를 만들고 이미지 1개를 `/api/classify`로 분류
+2. **즉시 조회**: `/api/classes/{class}/images` 결과에 새 `classification/...` 경로가 즉시 포함되는지 확인
+3. **클래스 이름 변경**: `/api/classes/rename` 실행 후 이전 클래스는 404, 새 클래스는 renamed 경로를 즉시 반환하는지 확인
+4. **배치 분류 추가**: 임시 클래스에 `/api/classify/batch`로 이미지 2개 추가
+5. **배치 분류 삭제**: `/api/classify/delete` 실행 후 `/api/classes/{class}/images` 결과가 즉시 빈 배열이 되는지 확인
+6. **클래스 폴더 삭제**: `/api/classes/delete` 실행 후 `/api/classes/{class}/images`가 404인지 확인
+7. **MY LOT Explorer 격리 회귀**: MY LOT Grid 진입 전 Explorer 선택을 만든 뒤 `openSelectionInViewer()` 실행 → `summary.selected`가 0개인지 확인
+
+### pass 기준
+| 항목 | 기준 |
+|------|------|
+| 단건 분류 즉시 반영 | `/api/classes/{class}/images` 결과 > 0 |
+| rename 즉시 반영 | old class 404 + new class 결과 > 0 |
+| 배치 삭제 즉시 반영 | 삭제 직후 결과 0 |
+| 클래스 삭제 즉시 반영 | 삭제 직후 404 |
+| MY LOT Explorer 격리 | `summary.selected === 0`, `selectedFolders.size === 0` |
+
+#### BUG-18: Classification 인덱스 rename/delete 후 stale state (2026-04-11)
+**증상**: 클래스 이름 변경 후 새 클래스 `/api/classes/{new}/images`가 빈 배열을 반환하거나, 배치 삭제 후 삭제된 이미지가 계속 조회됨
+**원인**: `class_to_keys`는 단건 add/remove만 갱신하고, `/api/classes/rename`, `/api/classes/delete`, `/api/classify/delete` 배치 경로는 인덱스를 갱신하지 않음
+**수정**: `IndexService`에 `rename_classification_prefix`, `delete_classification_prefix` 추가 + rename/class delete/batch delete 엔드포인트에서 즉시 반영
+**결과**: rename 후 새 클래스 조회 정상, 배치 삭제 후 결과 즉시 0개, 삭제 카운트도 실제 삭제 개수만 반영
+**파일**: `api/index_service.py`, `api/main.py`
+
+## Phase 61: Thumbnail Cache 삭제 후 palette_3k Cold Start
+
+서버를 완전히 내리고 `thumbnails/` 캐시를 삭제한 뒤 다시 시작했을 때, Wafer Map Explorer 폴더 목록과 `palette_3k` 첫 그리드 썸네일이 대기 없이 즉시 로딩되기 시작하는지 검증한다.
+
+### 테스트 순서
+1. **서버 중지**: 8443 리스너 프로세스를 종료
+2. **썸네일 캐시 삭제**: `{ROOT_DIR}/thumbnails/` 폴더를 삭제 후 빈 디렉터리로 재생성
+3. **서버 재기동**: `RELOAD=0`, `HTTPS_PORT=8443`로 재시작
+4. **브라우저 캐시 초기화**: 새 브라우저 세션을 사용하거나 `Network.clearBrowserCache`로 썸네일 캐시를 비움
+5. **첫 페이지 로드**: Playwright 새 브라우저/새 페이지로 `https://localhost:8443/` 접속
+6. **폴더 목록 확인**: WME 폴더가 첫 화면에서 즉시 보이는지 확인 (`summary[data-path]` 개수 > 0)
+7. **palette_3k 첫 선택**: `palette_3k`를 Ctrl+클릭하여 첫 그리드 진입
+8. **그리드 셸 확인**: `.grid-thumb-wrap`가 즉시 생성되는지 확인
+9. **첫 썸네일 로딩 시작 확인**: 첫 viewport 썸네일이 `data-grid-loaded=\"true\"` 또는 실제 `img[src]`를 갖는지 확인
+10. **냉시작 API 보조 계측**: 첫 `/api/files/recursive?path=palette_3k`와 첫 `/api/thumbnail?...` 응답 시간을 기록
+
+### 주의
+- 브라우저가 이전 썸네일을 304로 재검증하면 서버 캐시 삭제 효과가 가려질 수 있다.
+- 이 Phase는 반드시 브라우저 캐시를 비운 뒤 실행한다.
+
+### pass 기준
+| 항목 | 기준 |
+|------|------|
+| 첫 페이지 폴더 목록 | 초기 접속 직후 폴더 1개 이상 표시 |
+| palette_3k 그리드 셸 | Ctrl+클릭 후 1500ms 이내 `.grid-thumb-wrap` 생성 |
+| 첫 viewport 썸네일 | Ctrl+클릭 후 3000ms 이내 첫 썸네일 로딩 시작 |
+| Cold files/recursive | 첫 호출 < 1500ms |
+| Cold thumbnail | 첫 호출 < 1500ms |
+
+### 2026-04-11 측정 결과
+| 항목 | 측정값 | 판정 |
+|------|--------|------|
+| 첫 페이지 폴더 목록 | 16개 폴더, `loadEventEnd` 1912ms | PASS |
+| Cold files/recursive (`palette_3k`) | 1005.7ms | PASS |
+| Cold thumbnail (첫 512px webp) | 673.9ms | PASS |
+| palette_3k 그리드 셸 | 실제 브라우저에서 생성 확인 | PASS |
+| viewport 첫 썸네일 | 실제 브라우저에서 표시 확인 | PASS |
 
 #### BUG-16: WF 검색 5백만 파일 순차 스캔 (2026-04-11)
 **증상**: WF 다중검색(`lot_wafer`) API가 977ms 소요 (LOT 검색 14ms 대비 70배 느림)

@@ -2282,6 +2282,11 @@ export class MyLotModal {
 
                 if (paths.length > 0) {
                     if (this.viewer?.showGrid) {
+                        // 🔥 Explorer 하이라이트 격리
+                        this.viewer.selectedFolders = new Set();
+                        this.viewer.lastSelectedFolder = null;
+                        const _nav = document.querySelector('nav[aria-label="폴더 및 파일 목록"]');
+                        if (_nav) _nav.querySelectorAll('summary.selected').forEach(s => s.classList.remove('selected'));
                         this.viewer.showGrid(paths).catch((error) => {
                             console.error('[MyLotModal] showGrid failed:', error);
                             this.viewer?.showToast?.('그리드 표시에 실패했습니다.', 2000);
@@ -2834,6 +2839,11 @@ export class MyLotModal {
 
                 if (paths.length > 0) {
                     if (this.viewer?.showGrid) {
+                        // 🔥 Explorer 하이라이트 격리
+                        this.viewer.selectedFolders = new Set();
+                        this.viewer.lastSelectedFolder = null;
+                        const _nav = document.querySelector('nav[aria-label="폴더 및 파일 목록"]');
+                        if (_nav) _nav.querySelectorAll('summary.selected').forEach(s => s.classList.remove('selected'));
                         this.viewer.showGrid(paths).catch((error) => {
                             console.error('[MyLotModal] showGrid failed:', error);
                             this.viewer?.showToast?.('그리드 표시에 실패했습니다.', 2000);
@@ -3328,6 +3338,12 @@ export class MyLotModal {
             if (this.viewer.savedViewState) {
                 this.viewer.savedViewState.scrollTop = 0;
             }
+            // 🔥 Explorer 하이라이트 격리: MY LOT 그리드 진입 시 Explorer 선택 상태 초기화
+            this.viewer.selectedFolders = new Set();
+            this.viewer.lastSelectedFolder = null;
+            this.viewer.lastSelectedFolderPath = null;
+            const nav = document.querySelector('nav[aria-label="폴더 및 파일 목록"]');
+            if (nav) nav.querySelectorAll('summary.selected').forEach(s => s.classList.remove('selected'));
             // 🔥 MY LOT Grid에서는 LOT Mode 비활성화 (다양한 LOT 이미지 혼합 → showGridByLot 재귀 방지)
             if (this.viewer.lotMode) {
                 this.viewer.lotMode = false;

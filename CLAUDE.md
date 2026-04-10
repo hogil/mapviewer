@@ -61,6 +61,13 @@ The codebase uses environment variables to adapt to both environments. SAML logi
 - 브라우저 제어가 안 될 경우, 닫지 말고 사용자에게 상황을 보고하고 지시를 기다린다
 - 이 규칙을 위반하여 사용자 허락 없이 브라우저를 닫는 행위는 절대 금지한다
 
+**Absolute Rule: 하드링크(os.link) 절대 금지 — 반드시 파일 복사(shutil.copy2)**
+- classification, my-lot, 썸네일 등 어떤 경로에서든 `os.link()`, `os.symlink()` 사용은 절대 금지한다
+- 파일을 다른 경로에 배치할 때는 반드시 `shutil.copy2()`로 실제 파일을 복사한다
+- 하드링크는 원본 삭제/수정 시 예상치 못한 부작용을 유발하므로 프로젝트 전체에서 사용하지 않는다
+- E2E 테스트에서 classification/my-lot 파일이 독립적인 복사본인지 검증한다 (inode 불일치 확인)
+- 이 규칙을 위반하여 하드링크나 심볼릭 링크를 도입하는 행위는 절대 금지한다
+
 **Absolute Rule: batch 폴더는 더미 파일 — 이미지 로드 절대 금지**
 - `wm-811k/batch/` 하위의 모든 파일은 **파일 인덱스 성능 테스트용 더미 파일**이다 (0바이트 빈 파일)
 - 실제 서버 환경의 수백만 개 파일 수를 재현하기 위해 만들어진 것이므로, 유효한 이미지 데이터가 아니다

@@ -406,6 +406,8 @@ class IndexService:
         self._token0_index: Dict[str, List[int]] = {}   # token[0] -> [indices] (LOT 위치)
         self._token2_index: Dict[str, List[int]] = {}   # token[2] -> [indices] (WAFER 위치)
         self._name_to_paths: Dict[str, List[str]] = {}  # filename -> [rel_paths] (classification 제외)
+        self._class_to_keys: Dict[str, List[str]] = {}  # "classification/classname" -> [rel_paths]
+        self._CLASSIFICATION_DIRS = {"classification", "classification_chips"}
         self._lock = RLock()
         self._async_build_lock = asyncio.Lock()
         self._io_pool: Optional[Any] = None  # 외부에서 주입 (DEFAULT executor 경합 방지)
@@ -444,6 +446,71 @@ class IndexService:
         """파일명 → 원본 경로 목록 (classification 디렉토리 제외). 인덱스 빌드 시 구축됨."""
         return self._name_to_paths
 
+    # ------------- classification 인덱스 조회/변경 -------------
+
+    def classification_images(self, class_prefix: str) -> List[str]:
+        """classification prefix로 이미지 경로 목록 조회. e.g. 'classification/myclass' → [rel_paths]"""
+        with self._lock:
+            return list(self._class_to_keys.get(class_prefix, []))
+
+    def add_classification_entry(self, rel_key: str) -> None:
+        """분류 추가 시 인덱스에 즉시 반영."""
+        with self._lock:
+            key_parts = rel_key.split("/")
+            cls_prefix = None
+            if len(key_parts) >= 3 and key_parts[0] in self._CLASSIFICATION_DIRS:
+                cls_prefix = key_parts[0] + "/" + key_parts[1]
+            elif len(key_parts) >= 4 and key_parts[1] in self._CLASSIFICATION_DIRS:
+                cls_prefix = "/".join(key_parts[:3])
+            if cls_prefix:
+                lst = self._class_to_keys.get(cls_prefix)
+                if lst is None:
+                    self._class_to_keys[cls_prefix] = [rel_key]
+                elif rel_key not in lst:
+                    lst.append(rel_key)
+
+    def remove_classification_entry(self, rel_key: str) -> None:
+        """분류 삭제 시 인덱스에서 즉시 제거."""
+        with self._lock:
+            key_parts = rel_key.split("/")
+            cls_prefix = None
+            if len(key_parts) >= 3 and key_parts[0] in self._CLASSIFICATION_DIRS:
+                cls_prefix = key_parts[0] + "/" + key_parts[1]
+            elif len(key_parts) >= 4 and key_parts[1] in self._CLASSIFICATION_DIRS:
+                cls_prefix = "/".join(key_parts[:3])
+            if cls_prefix:
+                lst = self._class_to_keys.get(cls_prefix)
+                if lst:
+                    try:
+                        lst.remove(rel_key)
+                    except ValueError:
+                        pass
+                    if not lst:
+                        del self._class_to_keys[cls_prefix]
+
+    def rename_classification_prefix(self, old_prefix: str, new_prefix: str) -> None:
+        """클래스 폴더 이름 변경 시 prefix 전체를 즉시 갱신."""
+        with self._lock:
+            old_items = self._class_to_keys.pop(old_prefix, [])
+            if not old_items:
+                return
+            renamed_items = []
+            old_base = old_prefix + "/"
+            new_base = new_prefix + "/"
+            for rel_key in old_items:
+                if rel_key.startswith(old_base):
+                    renamed_items.append(new_base + rel_key[len(old_base):])
+                else:
+                    renamed_items.append(rel_key)
+            existing = self._class_to_keys.get(new_prefix, [])
+            merged = existing + [item for item in renamed_items if item not in existing]
+            self._class_to_keys[new_prefix] = merged
+
+    def delete_classification_prefix(self, class_prefix: str) -> None:
+        """클래스 폴더 전체 삭제 시 prefix 인덱스를 즉시 제거."""
+        with self._lock:
+            self._class_to_keys.pop(class_prefix, None)
+
     # ------------- 캐시 -------------
     def clear(self) -> None:
         with self._lock:
@@ -456,6 +523,7 @@ class IndexService:
             self._token0_index = {}
             self._token2_index = {}
             self._name_to_paths = {}
+            self._class_to_keys = {}
         self.ready = False
         self.total_files = 0
         self.total_dirs = 0
@@ -468,7 +536,7 @@ class IndexService:
         keys: List[str],
         names: List[str],
     ) -> Tuple[Dict[str, List[int]], Dict[str, List[int]], Dict[str, List[int]], Dict[str, List[str]], float,
-               Dict[str, List[int]], Dict[str, List[int]]]:
+               Dict[str, List[int]], Dict[str, List[int]], Dict[str, List[str]]]:
         """주어진 keys/names 스냅샷으로 역인덱스를 계산한다."""
         from collections import defaultdict
 
@@ -480,7 +548,8 @@ class IndexService:
         token0_idx: Dict[str, List[int]] = defaultdict(list)
         token2_idx: Dict[str, List[int]] = defaultdict(list)
         name_to_paths: Dict[str, List[str]] = {}
-        classification_dir_names = {"classification", "classification_chips"}
+        class_to_keys: Dict[str, List[str]] = defaultdict(list)
+        classification_dir_names = self._CLASSIFICATION_DIRS
 
         for i, (key, name) in enumerate(zip(keys, names)):
             # 초기 캐시 로드가 과도하게 길어지지 않도록 yield 빈도를 낮춘다.
@@ -509,24 +578,41 @@ class IndexService:
             if len(parts) > 2:
                 token2_idx[parts[2].lower()].append(i)
 
-            if folder not in classification_dir_names:
+            # classification/classification_chips → class_to_keys 인덱스
+            key_parts = key.split("/")
+            is_cls = False
+            if len(key_parts) >= 3 and key_parts[0] in classification_dir_names:
+                # "classification/classname/image.png"
+                cls_prefix = key_parts[0] + "/" + key_parts[1]
+                class_to_keys[cls_prefix].append(key)
+                is_cls = True
+            elif len(key_parts) >= 4 and key_parts[1] in classification_dir_names:
+                # "subfolder/classification/classname/image.png"
+                cls_prefix = "/".join(key_parts[:3])
+                class_to_keys[cls_prefix].append(key)
+                is_cls = True
+
+            if not is_cls and folder not in classification_dir_names:
                 orig_name = key.rsplit("/", 1)[-1]
                 if orig_name not in name_to_paths:
                     name_to_paths[orig_name] = []
                 name_to_paths[orig_name].append(key)
 
         elapsed = time.time() - t0
-        return lot_idx, folder_idx, dict(token_idx), name_to_paths, elapsed, dict(token0_idx), dict(token2_idx)
+        return lot_idx, folder_idx, dict(token_idx), name_to_paths, elapsed, dict(token0_idx), dict(token2_idx), dict(class_to_keys)
 
     def _compute_basic_indices(
         self,
         keys: List[str],
         names: List[str],
-    ) -> Tuple[Dict[str, List[int]], Dict[str, List[int]], float]:
-        """첫 캐시 로드용 최소 인덱스(LOT/폴더)만 계산한다."""
+    ) -> Tuple[Dict[str, List[int]], Dict[str, List[int]], Dict[str, List[str]], float]:
+        """첫 캐시 로드용 최소 인덱스(LOT/폴더/class_to_keys)만 계산한다."""
+        from collections import defaultdict
         t0 = time.time()
         lot_idx: Dict[str, List[int]] = {}
         folder_idx: Dict[str, List[int]] = {}
+        class_to_keys: Dict[str, List[str]] = defaultdict(list)
+        classification_dir_names = self._CLASSIFICATION_DIRS
 
         for i, (key, name) in enumerate(zip(keys, names)):
             if i % 50000 == 0 and i > 0:
@@ -544,8 +630,17 @@ class IndexService:
                     folder_idx[folder] = []
                 folder_idx[folder].append(i)
 
+            # classification → class_to_keys
+            key_parts = key.split("/")
+            if len(key_parts) >= 3 and key_parts[0] in classification_dir_names:
+                cls_prefix = key_parts[0] + "/" + key_parts[1]
+                class_to_keys[cls_prefix].append(key)
+            elif len(key_parts) >= 4 and key_parts[1] in classification_dir_names:
+                cls_prefix = "/".join(key_parts[:3])
+                class_to_keys[cls_prefix].append(key)
+
         elapsed = time.time() - t0
-        return lot_idx, folder_idx, elapsed
+        return lot_idx, folder_idx, dict(class_to_keys), elapsed
 
     def load_cache(self, log: bool = True) -> bool:
         if not self.cache_file.exists():
@@ -575,7 +670,7 @@ class IndexService:
                 return False
             # 파일명만 검색 대상으로 사용 (폴더명 제외)
             names = [rel.rsplit("/", 1)[-1].lower() for rel in keys]
-            lot_idx, folder_idx, basic_elapsed = self._compute_basic_indices(keys, names)
+            lot_idx, folder_idx, class_to_keys, basic_elapsed = self._compute_basic_indices(keys, names)
             with self._lock:
                 self._keys = keys
                 self._names = names
@@ -585,6 +680,7 @@ class IndexService:
                 self._token0_index = {}
                 self._token2_index = {}
                 self._name_to_paths = {}
+                self._class_to_keys = class_to_keys
             self.total_files = len(keys)
             self.total_dirs = 0
             self.completed_dirs = 0
@@ -597,9 +693,10 @@ class IndexService:
                 self.logger.info("✅ [INDEX] Cache load complete: %d files (%.2fs)", self.total_files, load_duration)
             if log:
                 self.logger.info(
-                    "✅ [INDEX] Basic indices built from cache: %d LOTs, %d folders (%.2fs)",
+                    "✅ [INDEX] Basic indices built from cache: %d LOTs, %d folders, %d class prefixes (%.2fs)",
                     len(lot_idx),
                     len(folder_idx),
+                    len(class_to_keys),
                     basic_elapsed,
                 )
             self._cache_loaded = True
@@ -804,7 +901,7 @@ class IndexService:
                     else:
                         cache_size = self.cache_file.stat().st_size
                         self.logger.info(f"✅ [INDEX] 캐시 파일 확인: {self.cache_file.name}, 크기: {cache_size:,} bytes")
-                    lot_idx, folder_idx, token_idx, name_to_paths, lookup_elapsed, token0_idx, token2_idx = self._compute_lookup_indices(
+                    lot_idx, folder_idx, token_idx, name_to_paths, lookup_elapsed, token0_idx, token2_idx, class_to_keys = self._compute_lookup_indices(
                         sorted_keys, sorted_names
                     )
                     with self._lock:
@@ -816,14 +913,16 @@ class IndexService:
                         self._token0_index = token0_idx
                         self._token2_index = token2_idx
                         self._name_to_paths = name_to_paths
+                        self._class_to_keys = class_to_keys
                     self.logger.info(
-                        "✅ [INDEX] Lookup indices built: %d LOTs, %d folders, %d tokens (pos0:%d pos2:%d), %d unique names (%.2fs)",
+                        "✅ [INDEX] Lookup indices built: %d LOTs, %d folders, %d tokens (pos0:%d pos2:%d), %d unique names, %d class prefixes (%.2fs)",
                         len(lot_idx),
                         len(folder_idx),
                         len(token_idx),
                         len(token0_idx),
                         len(token2_idx),
                         len(name_to_paths),
+                        len(class_to_keys),
                         lookup_elapsed,
                     )
 
