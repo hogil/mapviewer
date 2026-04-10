@@ -961,7 +961,7 @@ class WaferMapViewer {
 
         // 파일 필터 상태 — LT (Lot Type), TM (Test Mode) — 다중선택 배열
         this.filterLT = [];              // 빈 배열 = 전체 (필터 없음)
-        this.filterTM = ['Normal'];      // 🔥 초기값: Normal만 표시
+        this.filterTM = [];              // 빈 배열 = 전체 (필터 없음)
         this.filterFileMetadata = {};    // { fileStem: { lt, tm } }
         this.filterLtValues = [];        // 현재 폴더의 고유 LT 값 목록
         this.filterTmValues = [];        // 현재 폴더의 고유 TM 값 목록
@@ -5630,17 +5630,28 @@ class WaferMapViewer {
             }
         }
 
+        // 🔥 메타데이터가 비어있거나 NA인 이미지는 필터 무조건 통과
+        // (position 데이터가 없거나 불완전한 이미지도 그리드에 표시)
+        const ltEmpty = !ltVal || ltVal === 'NA' || ltVal === '';
+        const tmEmpty = !tmVal || tmVal === 'NA' || tmVal === '';
+
         if (hasLT) {
-            const ltMatch = this.filterLT.some(f => {
-                const fUp = f.toUpperCase();
-                if (fUp.endsWith('%')) return ltVal.startsWith(fUp.slice(0, -1));
-                return ltVal === fUp;
-            });
-            if (!ltMatch) return false;
+            if (!ltEmpty) {
+                const ltMatch = this.filterLT.some(f => {
+                    const fUp = f.toUpperCase();
+                    if (fUp.endsWith('%')) return ltVal.startsWith(fUp.slice(0, -1));
+                    return ltVal === fUp;
+                });
+                if (!ltMatch) return false;
+            }
+            // ltEmpty면 통과 (필터 불가 → 제거하지 않음)
         }
 
         if (hasTM) {
-            if (!this.filterTM.some(f => f.toUpperCase() === tmVal)) return false;
+            if (!tmEmpty) {
+                if (!this.filterTM.some(f => f.toUpperCase() === tmVal)) return false;
+            }
+            // tmEmpty면 통과 (필터 불가 → 제거하지 않음)
         }
 
         return true;
@@ -5652,9 +5663,13 @@ class WaferMapViewer {
     _passesStepFilter(fileNameOrPath) {
         if (!this.filterSTEP || this.filterSTEP.length === 0) return true;
         const fname = fileNameOrPath.split('/').pop().split('\\').pop() || fileNameOrPath;
+        // 🔥 00C/00P 어느 쪽에도 해당하지 않는 파일은 통과 (필터 불가 → 제거하지 않음)
+        const hasPLC = fname.includes('00C');
+        const hasPLH = fname.includes('00P');
+        if (!hasPLC && !hasPLH) return true;
         return this.filterSTEP.some(s => {
-            if (s === 'PLC') return fname.includes('00C');
-            if (s === 'PLH') return fname.includes('00P');
+            if (s === 'PLC') return hasPLC;
+            if (s === 'PLH') return hasPLH;
             return false;
         });
     }
@@ -19411,6 +19426,23 @@ class WaferMapViewer {
         img.addEventListener('load', onLoad);
         img.addEventListener('error', onError);
         img.src = img.dataset.src;
+
+        // 🔥 안전장치: 15초 내 load/error 미발생 시 카운터 회수 (큐 멈춤 방지)
+        img._gridTimeout = setTimeout(() => {
+            if (img.dataset.loading === 'true' && img.dataset.gridLoaded !== 'true') {
+                onError();
+            }
+        }, 15000);
+        // load/error 시 타임아웃 취소
+        const origOnLoad = onLoad;
+        const origOnError = onError;
+        const clearTO = () => { if (img._gridTimeout) { clearTimeout(img._gridTimeout); img._gridTimeout = null; } };
+        img._gridOnLoad = () => { clearTO(); origOnLoad(); };
+        img._gridOnError = () => { clearTO(); origOnError(); };
+        img.removeEventListener('load', onLoad);
+        img.removeEventListener('error', onError);
+        img.addEventListener('load', img._gridOnLoad);
+        img.addEventListener('error', img._gridOnError);
     }
 
     drainGridLoadQueue(force = false) {
@@ -19652,27 +19684,8 @@ class WaferMapViewer {
 
             // 🔥 DOM에 추가된 후 instant load 시작 (브라우저가 레이아웃 계산 가능)
             for (const img of instantImgs) {
-                img.decoding = 'async';
-                img.src = img.dataset.src;
-                img.style.opacity = '1';
-                img.dataset.loading = 'true';
-                if (img.complete && img.naturalWidth > 0) {
-                    img.dataset.gridLoaded = 'true';
-                    img.dataset.loading = 'false';
-                } else {
-                    img.dataset.gridLoaded = 'false';
-                    img.addEventListener('load', () => {
-                        img.dataset.gridLoaded = 'true';
-                        img.dataset.loading = 'false';
-                        img.style.opacity = '1';
-                    }, { once: true });
-                    img.addEventListener('error', () => {
-                        img.dataset.gridLoaded = 'false';
-                        img.dataset.loading = 'false';
-                        this.enqueueGridThumbnail(img, true);
-                        this.drainGridLoadQueue();
-                    }, { once: true });
-                }
+                // instant 로드: startGridThumbnailLoad()와 동일한 경로 사용하여 카운터 일관성 보장
+                this.startGridThumbnailLoad(img);
             }
 
             rendered = end;
