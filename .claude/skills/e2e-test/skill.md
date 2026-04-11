@@ -5940,11 +5940,11 @@ classification/classification_chips 경로가 인덱스에 포함된 상태에�
 ### 2026-04-11 측정 결과
 | 항목 | 측정값 | 판정 |
 |------|--------|------|
-| 첫 페이지 폴더 목록 | 16개 폴더, `domContentLoaded` 2375ms / 폴더 표시 2386ms | PASS |
-| Cold files/recursive (`palette_3k`) | 1005.7ms | PASS |
-| Cold thumbnail (첫 512px webp) | 673.9ms | PASS |
-| palette_3k 그리드 셸 | 460ms | PASS |
-| viewport 첫 썸네일 시작 | 488ms | PASS |
+| 첫 페이지 폴더 목록 | 16개 폴더, `domContentLoaded` 135ms / `loadEventEnd` 138ms | PASS |
+| Cold files/recursive (`palette_3k`) | 65ms | PASS |
+| Cold thumbnail (첫 viewport 20개+) | 446ms | PASS |
+| palette_3k 그리드 셸 | 229ms | PASS |
+| viewport 첫 썸네일 시작 | 446ms | PASS |
 
 ## Phase 62: [CRITICAL] Cold Start 3단계 분절 성능 측정
 
@@ -6063,13 +6063,13 @@ return { domMs, folderListMs, fileListMs, fullVpMs };
 
 | Step | 측정값 | 판정 |
 |------|--------|------|
-| DOM loaded | 2375ms | PASS |
-| 폴더 목록 표시 | 2386ms | PASS |
-| 파일 리스트 (3000개) | 136ms | PASS |
-| 그리드 셸 생성 | 460ms | PASS |
-| viewport 전체 썸네일 시작 | 488ms | PASS |
+| DOM loaded | 135ms | PASS |
+| 폴더 목록 표시 | 138ms 이내 (첫 paint 시 즉시 표시) | PASS |
+| `/api/files/recursive?path=palette_3k` | 65ms | PASS |
+| 그리드 셸 생성 | 229ms | PASS |
+| viewport 전체 썸네일 시작 | 446ms | PASS |
 
-**결론**: 현재 cold start는 폴더 목록 2.4초, `palette_3k` 파일 리스트 136ms, 그리드 셸 460ms, 첫 viewport 썸네일 시작 488ms 수준이다. 이전 JS 잔존 이슈는 top-level ETag만으로는 부족하므로, **서빙된 JS 본문에서 상대 import / dynamic import / worker URL까지 동일 `?v=` 서명을 전파**해야 한다.
+**결론**: 현재 cold start는 startup 직후 내부 HTTPS warm + targeted folder warm으로 첫 페이지와 핵심 API를 미리 깨워 둔다. 또한 인덱스 load/build는 **user idle 구간에서만 시작**되므로, 서버 재기동 직후 또는 몇 초 뒤 `palette_3k`를 눌러도 `files/recursive`와 그리드가 build 경합에 막히지 않아야 한다.
 
 ## Phase 63: JS 모듈 그래프 / Worker 캐시 무효화
 
@@ -6096,12 +6096,12 @@ return { domMs, folderListMs, fileListMs, fullVpMs };
 ### 2026-04-11 측정 결과
 | 항목 | 측정값 | 판정 |
 |------|--------|------|
-| `/js/main.js` ETag | `\"491fde02bd2f\"` | PASS |
+| `/js/main.js` ETag | `\"be4abdc51d95\"` | PASS |
 | `/css/style.css` ETag | `\"ae6c305be917\"` | PASS |
 | `/js/main.js` 304 | PASS | PASS |
-| main.js 상대 import | `fetch-optimizer/page-manager/search` 모두 `?v=0ac41d2-a2cdeeb131ee` | PASS |
-| main.js dynamic import | `composite-colors/my-lot` 모두 `?v=0ac41d2-a2cdeeb131ee` | PASS |
-| worker URL | `cache-worker/bitmap-worker` 모두 `?v=0ac41d2-a2cdeeb131ee` | PASS |
+| main.js 상대 import | `fetch-optimizer/page-manager/search` 모두 `?v=d963085-35787b3c9a56` | PASS |
+| main.js dynamic import | `composite-colors/my-lot` 모두 `?v=d963085-35787b3c9a56` | PASS |
+| worker URL | `cache-worker/bitmap-worker` 모두 `?v=d963085-35787b3c9a56` | PASS |
 
 #### BUG-16: WF 검색 5백만 파일 순차 스캔 (2026-04-11)
 **증상**: WF 다중검색(`lot_wafer`) API가 977ms 소요 (LOT 검색 14ms 대비 70배 느림)
@@ -6115,6 +6115,13 @@ return { domMs, folderListMs, fileListMs, fullVpMs };
 **원인**: `cache_control_middleware`에서 JS/CSS에 `no-cache`만 설정, ETag 미생성
 **수정**: 파일 mtime+size 기반 weak ETag(`W/"hash"`) 자동 생성 → 변경 없으면 304, 변경 있으면 200+새 파일
 **파일**: `api/main.py` (cache_control_middleware)
+
+#### BUG-19: 서버 재기동 직후 first-hit 2초대 지연 (2026-04-11)
+**증상**: 서버를 막 재기동한 직후 첫 `GET /`, `/api/config`, `/api/browse-folders`, `/js/main.js`가 공통으로 2~3초 이상 지연됨  
+**원인**: startup 초기에 전체 트리 디스크 워밍과 무거운 인덱스 load/build가 사용자 첫 요청과 겹쳐 same-process 경합을 일으킴  
+**수정**: 전체 3depth 디스크 워밍 제거 → `palette_3k` 중심 targeted warm으로 축소, 로컬 HTTPS self-warm으로 핵심 API/JS first-hit 제거, 인덱스 load/build/후속 캐시 빌드는 `BACKGROUND_TASKS_PAUSED` 해제 후(user idle) 시작하도록 변경  
+**결과**: 서버 재기동 직후 외부 first-hit 기준 `/api/index-status` 9~10ms, `/api/config` 8~9ms, `/api/browse-folders` 25~28ms, `/` 13~15ms  
+**파일**: `api/main.py`
 
 #### BUG-14: Permission Editor "all" 사용자 표시 오류 (2026-04-10)
 **증상**: Permission Editor 모달에서 loginId="all" 와일드카드 사용자가 "(이름없음) (all) · ROLE_ADMIN"으로 표시

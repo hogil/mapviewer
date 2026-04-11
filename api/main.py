@@ -23,7 +23,7 @@ if sys.platform == 'win32':
         pass
 
 # ======================== Imports ========================
-import re, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid, io, math, struct, zlib, stat as stat_module, contextvars  # struct/zlib: PNG PLTE 바이너리 조작용
+import re, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid, io, math, struct, zlib, stat as stat_module, contextvars, ssl  # struct/zlib: PNG PLTE 바이너리 조작용
 from pathlib import Path
 from contextlib import contextmanager, asynccontextmanager
 from typing import List, Optional, Dict, Any, Tuple, Set, Literal, Iterable
@@ -1558,48 +1558,96 @@ async def _lifespan_background_init():
     """서버 시작 후 백그라운드에서 모든 무거운 초기화 수행."""
     bootlog = logging.getLogger("uvicorn.error")
     loop = asyncio.get_running_loop()
+    index_grace_seconds = max(0.0, float(os.getenv("STARTUP_INDEX_GRACE_SECONDS", "3.0")))
+    user_first_seconds = max(0.0, float(os.getenv("STARTUP_USER_FIRST_WINDOW_SECONDS", "1.25")))
     warm_folders = tuple(
         folder.strip() for folder in os.getenv("STARTUP_THUMB_WARM_FOLDERS", "palette_3k").split(",") if folder.strip()
     )
     warm_count = max(1, int(os.getenv("STARTUP_THUMB_WARM_COUNT", "24")))
 
+    async def _wait_for_user_idle(label: str) -> None:
+        waited = 0.0
+        while BACKGROUND_TASKS_PAUSED:
+            await asyncio.sleep(0.1)
+            waited += 0.1
+        if waited >= 0.1:
+            bootlog.info(f"⏸️ [STARTUP] {label} delayed until user idle ({waited:.1f}s)")
+
     # 첫 페이지 로드 직후 바로 캐시 프리로드를 시작한다.
     await asyncio.sleep(0)
 
-    # 0) 디스크 캐시 워밍 — 3depth까지 폴더+파일 목록을 미리 읽어 OS 캐시에 올림
-    def _warm_disk_cache():
-        skip = {'classification', 'classification_chips', 'thumbnails', 'composite_map', '__pycache__'}
-        try:
-            root = str(config.ROOT_DIR)
-            for d1 in os.scandir(root):
-                if not d1.is_dir(follow_symlinks=False) or d1.name in skip:
+    # 0) user-first 윈도우 동안은 최소한의 워밍만 수행한다.
+    async def _warm_startup_routes():
+        await asyncio.sleep(0.15)
+
+        def _hit_local(path: str) -> None:
+            headers = {"X-L3-Startup-Warm": "1", "Connection": "close"}
+            conn = http.client.HTTPSConnection(
+                "127.0.0.1",
+                int(config.HTTPS_PORT),
+                timeout=5,
+                context=ssl._create_unverified_context(),
+            )
+            try:
+                conn.request("GET", path, headers=headers)
+                resp = conn.getresponse()
+                resp.read()
+            finally:
+                conn.close()
+
+        targets = [
+            "/api/index-status",
+            "/api/config",
+            "/api/root-folder",
+            "/api/current-folder",
+            "/api/browse-folders?path=&force_root=true",
+            "/js/main.js",
+        ]
+        targets.extend(
+            f"/api/files/recursive?path={urllib.parse.quote(folder)}"
+            for folder in warm_folders
+        )
+
+        started = time.perf_counter()
+        for path in targets:
+            try:
+                await loop.run_in_executor(IO_POOL, _hit_local, path)
+            except Exception as exc:
+                bootlog.debug(f"[STARTUP WARM] {path} 실패: {exc}")
+        bootlog.info(
+            f"✅ [STARTUP] local HTTPS warm complete: {len(targets)} routes ({(time.perf_counter() - started):.2f}s)"
+        )
+
+    # 0.3) 첫 사용자가 가장 많이 여는 폴더만 선별적으로 캐시 워밍
+    async def _warm_target_folders():
+        await asyncio.sleep(0.2)
+
+        def _warm_folder_entries():
+            try:
+                list(os.scandir(ROOT_DIR))
+            except Exception:
+                pass
+            for folder in warm_folders:
+                folder_path = ROOT_DIR / folder
+                if not folder_path.exists() or not folder_path.is_dir():
                     continue
                 try:
-                    for d2 in os.scandir(d1.path):
-                        if not d2.is_dir(follow_symlinks=False) or d2.name in skip:
-                            continue
-                        try:
-                            list(os.scandir(d2.path))  # 3depth 파일 목록까지 읽기
-                        except Exception:
-                            pass
+                    list(os.scandir(folder_path))
                 except Exception:
                     pass
-        except Exception:
-            pass
-    asyncio.ensure_future(loop.run_in_executor(DIRLIST_EXECUTOR, _warm_disk_cache))
 
-    # 0.5) browse-folders 캐시 프리로드 — 백그라운드 (lifespan 블로킹 방지)
-    async def _preload_browse():
         try:
-            await browse_folders()
-            bootlog.info("✅ [STARTUP] browse-folders 캐시 프리로드 완료")
-        except Exception:
-            pass
-    asyncio.ensure_future(_preload_browse())
+            await loop.run_in_executor(DIRLIST_EXECUTOR, _warm_folder_entries)
+            bootlog.info(f"✅ [STARTUP] target folder warm complete: {', '.join(warm_folders) or '(none)'}")
+        except Exception as exc:
+            bootlog.warning(f"⚠️ [STARTUP] target folder warm 실패: {exc}")
+
+    asyncio.ensure_future(_warm_startup_routes())
+    asyncio.ensure_future(_warm_target_folders())
 
     # 0.7) Composite/Measure 모듈 워밍업 — 첫 요청 lazy import/ProcessPool 비용을 사용자 클릭에서 제거
     async def _warm_composite_modules():
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(max(2.5, user_first_seconds + 1.0))
 
         def _warm():
             from . import composite_map as _composite_map  # noqa: F401
@@ -1621,6 +1669,11 @@ async def _lifespan_background_init():
 
     await asyncio.sleep(0)  # yield to event loop
 
+    if index_grace_seconds > 0:
+        bootlog.info(f"⏳ [STARTUP] user-first grace active: delaying heavy index work for {index_grace_seconds:.1f}s")
+        await asyncio.sleep(index_grace_seconds)
+    await _wait_for_user_idle("index cache load")
+
     # 1) __pycache__ 정리 — 생략 (매 시작마다 불필요, 배포 시점에 수행)
 
     # 2) 인덱스 캐시 로드 (전용 executor — DEFAULT executor 경합 방지)
@@ -1635,6 +1688,7 @@ async def _lifespan_background_init():
     if cache_loaded and index_service.keys:
         bootlog.info(f"📂 [INDEX] Cache loaded: {len(index_service.keys)} files ({cache_duration:.2f}s)")
         try:
+            await _wait_for_user_idle("early folder cache build")
             await loop.run_in_executor(DIRLIST_EXECUTOR, _build_folder_files_cache)
             await loop.run_in_executor(DIRLIST_EXECUTOR, _prime_folder_payload_cache, warm_folders)
             bootlog.info(f"✅ [INDEX] Early folder cache ready: {len(_FOLDER_FILES_CACHE)} folders")
@@ -1648,7 +1702,7 @@ async def _lifespan_background_init():
     async def _warm_startup_thumbnails():
         if not warm_folders or warm_count <= 0:
             return
-        await asyncio.sleep(0.25)
+        await asyncio.sleep(max(0.25, user_first_seconds))
 
         def _collect_targets() -> List[Path]:
             targets: List[Path] = []
@@ -1694,6 +1748,7 @@ async def _lifespan_background_init():
 
     # 3) 인덱스 빌드 (executor 내부에서 scan + finalize)
     index_action = "rebuild" if cache_loaded and index_service.keys else "build"
+    await _wait_for_user_idle(f"index {index_action}")
     bootlog.info(f"🔨 [INDEX] Background {index_action} started")
     build_start = time.time()
     try:
@@ -1705,6 +1760,7 @@ async def _lifespan_background_init():
                 f"files={index_service.total_files}, dirs={index_service.total_dirs} ({build_duration:.2f}s)"
             )
             # 폴더별 파일 캐시 빌드 (executor)
+            await _wait_for_user_idle("post-build folder cache build")
             await loop.run_in_executor(DIRLIST_EXECUTOR, _build_folder_files_cache)
             await loop.run_in_executor(DIRLIST_EXECUTOR, _prime_folder_payload_cache, warm_folders)
             bootlog.info(f"✅ [INDEX] Folder files cache built: {len(_FOLDER_FILES_CACHE)} folders")
@@ -3381,8 +3437,13 @@ def clear_user_activity():
     global USER_ACTIVITY_FLAG
     USER_ACTIVITY_FLAG = False
 
+def _is_internal_startup_warm_request(request: Request) -> bool:
+    return request.headers.get("X-L3-Startup-Warm") == "1"
+
 @app.middleware("http")
 async def user_priority_middleware(request: Request, call_next):
+    if _is_internal_startup_warm_request(request):
+        return await call_next(request)
     set_user_activity()
     try:
         response = await call_next(request)
@@ -3463,6 +3524,8 @@ async def cache_control_middleware(request: Request, call_next):
 class AccessTrackingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         try:
+            if _is_internal_startup_warm_request(request):
+                return await call_next(request)
             # 🔥 ContextVar에 LoginId 설정 → _log()에서 자동 참조
             _req_uid = _current_login_id(request) or "—"
             _REQUEST_LOGIN_ID.set(_req_uid)
