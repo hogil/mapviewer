@@ -313,6 +313,16 @@ class AccessLogger:
         # 추가 정보 추출
         extra_info = self._extract_extra_info(request, endpoint, method)
 
+        # 같은 /api/files 경로가 짧은 시간에 반복되면 access log만 억제한다.
+        if (
+            method == "GET"
+            and endpoint.startswith("/api/files")
+            and 200 <= status_code < 400
+        ):
+            rate_limit_key = self._build_frequent_api_key(request, endpoint, method, status_code)
+            if not self.should_log_frequent_api(client_ip, rate_limit_key):
+                skip_console_log = True
+
         # 🔥 최적화: 이미지/썸네일 제외하고만 테이블 로그 출력
         if not skip_console_log:
             # 테이블 형식 로그 생성 (IP + LoginId 분리 표시)
@@ -352,6 +362,13 @@ class AccessLogger:
                     path_display = path
                 
                 return f"[{path_display}]"
+
+        elif endpoint.startswith('/api/files'):
+            path = query_params.get('path', '')
+            path_display = self._summarize_request_path(path, default_label='ROOT')
+            if endpoint.startswith('/api/files/recursive'):
+                return f"[dir:{path_display}, recursive]"
+            return f"[dir:{path_display}]"
         
         # 클래스 관련 요청
         elif '/api/classes/' in endpoint:
@@ -370,6 +387,22 @@ class AccessLogger:
                 return "[라벨관리]"
         
         return ""
+
+    def _summarize_request_path(self, raw_path: Any, default_label: str = "—") -> str:
+        normalized = str(raw_path or "").replace("\\", "/").strip("/")
+        if not normalized:
+            return default_label
+
+        parts = [part for part in normalized.split("/") if part]
+        if len(parts) <= 4:
+            return "/".join(parts)
+        return "/".join(parts[-4:])
+
+    def _build_frequent_api_key(self, request: Request, endpoint: str, method: str, status_code: int) -> str:
+        if endpoint.startswith('/api/files'):
+            path = self._summarize_request_path(request.query_params.get("path"), default_label="ROOT")
+            return f"{method}:{endpoint}:{status_code}:{path}"
+        return f"{method}:{endpoint}:{status_code}"
     
     def _log_table_format(self, timestamp: str, ip: str, method: str, endpoint: str, status_code: int, extra_info: str = "", login_id: str = ""):
         """완벽한 테이블 형식 로그 출력 - 요청 타입별 구분"""
