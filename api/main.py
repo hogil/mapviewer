@@ -1486,6 +1486,8 @@ def _get_cached_palette(image_path: Path) -> Optional[List[int]]:
         return None
 
 # ======================== Lifecycle ========================
+_LIFESPAN_BG_INIT_STARTED = False
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup — 최소한의 필수 초기화만 수행하고 즉시 yield (서버 즉시 응답 가능)
@@ -1532,7 +1534,10 @@ async def lifespan(app: FastAPI):
 
     # 🔥 모든 무거운 초기화를 백그라운드로 (서버는 즉시 요청 처리 가능)
     bootlog.info("🚀 [STARTUP] 서버 즉시 시작 — 인덱스 로드/빌드는 백그라운드에서 진행")
-    asyncio.create_task(_lifespan_background_init())
+    global _LIFESPAN_BG_INIT_STARTED
+    if not _LIFESPAN_BG_INIT_STARTED:
+        _LIFESPAN_BG_INIT_STARTED = True
+        asyncio.create_task(_lifespan_background_init())
 
     import time as _t
     bootlog.info(f"✅ [STARTUP] 서버 준비 완료 — https://0.0.0.0:{config.HTTPS_PORT} (시각: {_t.strftime('%H:%M:%S')})")
@@ -1559,7 +1564,10 @@ async def _lifespan_background_init():
     bootlog = logging.getLogger("uvicorn.error")
     loop = asyncio.get_running_loop()
     index_grace_seconds = max(0.0, float(os.getenv("STARTUP_INDEX_GRACE_SECONDS", "3.0")))
-    user_first_seconds = max(0.0, float(os.getenv("STARTUP_USER_FIRST_WINDOW_SECONDS", "1.25")))
+    user_first_window = os.getenv("STARTUP_USER_FIRST_WINDOW_SECONDS")
+    if user_first_window is None:
+        user_first_window = os.getenv("STARTUP_USER_FIRST_SECONDS", "1.25")
+    user_first_seconds = max(0.0, float(user_first_window))
     warm_folders = tuple(
         folder.strip() for folder in os.getenv("STARTUP_THUMB_WARM_FOLDERS", "palette_3k").split(",") if folder.strip()
     )
@@ -1888,8 +1896,12 @@ app = FastAPI(title="L3Tracker API", version="2.6.0", lifespan=lifespan)
 async def startup_event():
     """lifespan이 호출되지 않는 경우를 대비한 백업 startup 이벤트"""
     bootlog = logging.getLogger("uvicorn.error")
+    global _LIFESPAN_BG_INIT_STARTED
 
     # lifespan에서 이미 백그라운드 초기화를 시작한 경우 스킵
+    if _LIFESPAN_BG_INIT_STARTED:
+        bootlog.info("ℹ️ [STARTUP] lifespan background init already scheduled")
+        return
     if index_service.ready and index_service.keys:
         bootlog.info(f"ℹ️ [STARTUP] 인덱스 이미 준비됨 (lifespan에서 처리): {len(index_service.keys)}개 파일")
         return
@@ -1899,6 +1911,7 @@ async def startup_event():
 
     # lifespan이 호출되지 않은 경우에만 백그라운드 초기화 시작
     bootlog.info("🚀 [STARTUP] lifespan 미실행 — 백그라운드 초기화 시작")
+    _LIFESPAN_BG_INIT_STARTED = True
     asyncio.create_task(_lifespan_background_init())
 
 

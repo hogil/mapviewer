@@ -3378,7 +3378,7 @@ class WaferMapViewer {
 
                 // 🔥 모든 캐시 초기화 (제품 선택 시마다)
                 console.log('🔍 [CACHE_DEBUG] 제품 선택 시 모든 캐시 삭제 시작');
-                await this.clearParCache();
+                await this.clearParCache({ refreshLabelExplorer: false });
                 
                 // 추가 캐시 삭제
                 if (this.thumbnailManager) {
@@ -3889,7 +3889,7 @@ class WaferMapViewer {
             this.selectedImagePath = '';
             
             // Label 캐시 초기화 (최상위 폴더로 이동 시)
-            this.clearParCache();
+            this.clearParCache({ refreshLabelExplorer: false });
             
             // 그리드 모드와 단일 이미지 모드 숨기기
             this.hideGrid();
@@ -5867,9 +5867,13 @@ class WaferMapViewer {
 
         // 방법 1: 선택된 폴더가 있으면 폴더를 다시 스캔하여 필터 적용
         if (this.selectedFolders?.size > 0) {
+            const folderRequest = this.beginFolderSelectionRequest('filter-refresh');
             this.selectedImages = [];
             for (const folderPath of this.selectedFolders) {
-                await this.selectAllFolderFiles(folderPath);
+                const applied = await this.selectAllFolderFiles(folderPath, { request: folderRequest });
+                if (!applied) {
+                    return;
+                }
             }
             if (this.selectedImages.length > 0) {
                 this.showGrid(this.selectedImages);
@@ -6599,11 +6603,8 @@ class WaferMapViewer {
 
         const [rootPath, serverData] = await Promise.all([
             this.getRootPath().catch(() => ''),
-            (prefetchCF ?? fetch('/api/current-folder').then(r => r.json())).catch(() => ({})),
-            this.loadFolderBrowser('').catch((error) => {
-                console.error('[INIT] Folder browser 초기화 실패:', error);
-            })
-        ]).then(([resolvedRootPath, resolvedServerData]) => [resolvedRootPath, resolvedServerData]);
+            (prefetchCF ?? fetch('/api/current-folder').then(r => r.json())).catch(() => ({}))
+        ]);
 
         Promise.allSettled([configPromise, colorLegendsPromise, userInfoPromise]).then(() => {
             this.renderColorLegends();
@@ -6668,30 +6669,41 @@ class WaferMapViewer {
                 };
                 loadExplorer();
             }
+
         } catch (error) {
             console.error('[INIT] Explorer preload failed:', error);
         }
 
-        // 🔥 3순위: 중요한 초기화 작업들을 병렬로 실행 (하지만 백그라운드)
-        // loadFolderBrowser 이후에 백그라운드로 실행되어 UI 블로킹 없음
-        const initTasks = [
-            this.initClassification().catch(err => console.error('[INIT] Classification 초기화 실패:', err))
-        ];
-        
-        // 🔥 refreshLabelExplorer는 즉시 실행하여 fail list 표시
-        try {
-            await this.refreshLabelExplorer();
-            // 🔥 추가: fail list 표시를 위해 updateLabelExplorerContent 호출
-            this.updateLabelExplorerContent();
-        } catch (err) {
-            console.error('[INIT] Label Explorer 초기화 실패:', err);
-        }
-        
-        // 나머지 작업들은 병렬로 실행하되 에러 발생 시에도 다른 작업은 계속 진행
-        Promise.allSettled(initTasks);
-        
-        // 🔥 updateSubfolderList는 loadFolderBrowser 이후에 캐시가 설정되었으므로 백그라운드로 실행
-        this.updateSubfolderList().catch(err => console.error('[INIT] Subfolder 업데이트 실패:', err));
+        // 첫 화면 3단계 측정과 직접 무관한 패널/라벨 초기화는 뒤로 미룬다.
+        const classificationInitTask = this.initClassification().catch(err => console.error('[INIT] Classification 초기화 실패:', err));
+        const bootstrapNonCriticalPanels = async () => {
+            try {
+                await this.updateSubfolderList();
+            } catch (err) {
+                console.error('[INIT] Subfolder 업데이트 실패:', err);
+            }
+
+            try {
+                await this.loadFolderBrowser('');
+            } catch (error) {
+                console.error('[INIT] Folder browser 초기화 실패:', error);
+            }
+
+            try {
+                await classificationInitTask;
+                await this.refreshLabelExplorer();
+                this.updateLabelExplorerContent();
+            } catch (err) {
+                console.error('[INIT] Label Explorer 초기화 실패:', err);
+            }
+        };
+        setTimeout(() => {
+            if (typeof requestIdleCallback === 'function') {
+                requestIdleCallback(() => { void bootstrapNonCriticalPanels(); }, { timeout: 1000 });
+            } else {
+                void bootstrapNonCriticalPanels();
+            }
+        }, 2500);
 
         // 🔥 개인색 설정은 항상 활성화 (UI 체크박스 제거됨)
         this.personalizedColorEnabled = true;
@@ -6989,26 +7001,65 @@ class WaferMapViewer {
             }
         }
 
+    async getRootExplorerNodes() {
+        let folders = Array.isArray(this.cachedProductFolders) ? this.cachedProductFolders : null;
+
+        if (!folders || folders.length === 0) {
+            let data = null;
+            if (window.__prefetch?.browseFolders) {
+                data = await window.__prefetch.browseFolders;
+                window.__prefetch.browseFolders = null;
+            }
+            if (!data) {
+                const response = await fetch('/api/browse-folders?path=&force_root=true');
+                data = await response.json();
+            }
+            folders = Array.isArray(data?.folders) ? data.folders : [];
+            this.cachedProductFolders = folders;
+        }
+
+        return folders
+            .filter(folder =>
+                folder &&
+                (folder.depth === 1 || folder.depth === undefined) &&
+                !this.isClassificationEntry(folder.name) &&
+                folder.name !== 'thumbnails' &&
+                folder.name !== 'labels'
+            )
+            .map(folder => ({
+                type: 'directory',
+                name: folder.name,
+                root_relative: folder.name
+            }));
+    }
+
     async loadDirectoryContents(path, containerElement, { skipMeta = false } = {}) {
         this.debugLog("[DEBUG] loadDirectoryContents called with path:", path);
 
         try {
-            const url = path ? `/api/files?path=${encodeURIComponent(path)}` : '/api/files';
+            let files = null;
 
-            this.debugLog("[DEBUG] Fetching URL:", url);
+            if (!path) {
+                try {
+                    files = await this.getRootExplorerNodes();
+                } catch (rootError) {
+                    console.warn('[DEBUG] root explorer fast-path failed, fallback to /api/files:', rootError);
+                }
+            }
 
-            const data = await fetchJson(url, {
-                signal: this.globalAbortController?.signal
-            });
+            if (!Array.isArray(files)) {
+                const url = path ? `/api/files?path=${encodeURIComponent(path)}` : '/api/files';
 
-            const files = Array.isArray(data.items) ? data.items : [];
+                this.debugLog("[DEBUG] Fetching URL:", url);
+
+                const data = await fetchJson(url, {
+                    signal: this.globalAbortController?.signal
+                });
+
+                files = Array.isArray(data.items) ? data.items : [];
+            }
 
             const sortedFiles = this.sortExplorerItems(files);
-
-            // 제품 폴더 선택 시 label 캐시 초기화
-            if (path) {
-                this.clearParCache();
-            }
 
             // 🔥 파일이 포함된 폴더 + 필터 활성 → 해당 폴더만 메타 lazy 로드
             if (!skipMeta && path) {
@@ -7586,8 +7637,42 @@ class WaferMapViewer {
         return html + '</ul>';
     }
 
-    async selectAllFolderFiles(folderPath) {
+    beginFolderSelectionRequest(source = '') {
+        if (this._folderSelectionAbortController) {
+            try { this._folderSelectionAbortController.abort(); } catch (_) {}
+        }
+        const controller = new AbortController();
+        const requestId = (this._folderSelectionRequestSeq || 0) + 1;
+        this._folderSelectionRequestSeq = requestId;
+        this._folderSelectionAbortController = controller;
+        this._folderSelectionRequestSource = source || '';
+        return { requestId, signal: controller.signal };
+    }
+
+    isStaleFolderSelectionRequest(requestId) {
+        return requestId !== (this._folderSelectionRequestSeq || 0);
+    }
+
+    beginSearchRequest(source = '') {
+        if (this._searchAbortController) {
+            try { this._searchAbortController.abort(); } catch (_) {}
+        }
+        const controller = new AbortController();
+        const requestId = (this._searchRequestSeq || 0) + 1;
+        this._searchRequestSeq = requestId;
+        this._searchAbortController = controller;
+        this._searchRequestSource = source || '';
+        return { requestId, signal: controller.signal };
+    }
+
+    isStaleSearchRequest(requestId) {
+        return requestId !== (this._searchRequestSeq || 0);
+    }
+
+    async selectAllFolderFiles(folderPath, options = {}) {
         try {
+            const folderRequest = options.request || this.beginFolderSelectionRequest(`folder:${folderPath}`);
+            const requestId = folderRequest.requestId;
             this.debugLog(`폴더 선택: ${folderPath}`);
 
             // 🔥 폴더 전환 시 measure base images 초기화 (이전 폴더 이미지 잔존 방지)
@@ -7600,12 +7685,30 @@ class WaferMapViewer {
             if (hasFilter && (this.filterLT?.length > 0 || this.filterTM?.length > 0)) {
                 if (!this.filterFileMetadata || Object.keys(this.filterFileMetadata).length === 0) {
                     await this.fetchFilterMetadata(folderPath);
+                    if (this.isStaleFolderSelectionRequest(requestId)) {
+                        this.debugLog(`⏭️ [FOLDER_SELECT] stale metadata fetch ignored: ${folderPath}`);
+                        return false;
+                    }
                 }
             }
 
             // API를 통해 폴더 내 모든 파일 가져오기 (재귀적)
 
-            const fileScan = await this.getAllFilesInFolder(folderPath, { limit: MAX_SELECTION });
+            const fileScan = await this.getAllFilesInFolder(folderPath, {
+                limit: MAX_SELECTION,
+                signal: folderRequest.signal,
+            });
+            if (fileScan?.aborted) {
+                if (!this.isStaleFolderSelectionRequest(requestId)) {
+                    this.showToast?.('폴더 스캔 응답이 지연되어 이번 선택을 취소했습니다', 2500);
+                }
+                this.debugLog(`⏭️ [FOLDER_SELECT] aborted recursive scan: ${folderPath}`);
+                return false;
+            }
+            if (this.isStaleFolderSelectionRequest(requestId)) {
+                this.debugLog(`⏭️ [FOLDER_SELECT] stale recursive scan ignored: ${folderPath}`);
+                return false;
+            }
             const allFiles = Array.isArray(fileScan?.files) ? fileScan.files : [];
 
             if (!this.selectedImages) this.selectedImages = [];
@@ -7641,8 +7744,14 @@ class WaferMapViewer {
             if (imageFiles.length > 1) {
                 this.closeChipSelectionPanel();
             }
+            return true;
         } catch (error) {
+            if (error?.name === 'AbortError') {
+                this.debugLog(`⏭️ [FOLDER_SELECT] aborted: ${folderPath}`);
+                return false;
+            }
             console.error(`폴더 파일 선택 실패: ${folderPath}`, error);
+            return false;
         }
     }
 
@@ -7667,6 +7776,7 @@ class WaferMapViewer {
 
     async selectFolderRange(startFolder, endFolder) {
         try {
+            const folderRequest = this.beginFolderSelectionRequest('folder-range');
             // DOM에서 모든 폴더 요소 찾기
 
             const allFolders = Array.from(document.querySelectorAll('#file-explorer summary.folder'));
@@ -7677,7 +7787,7 @@ class WaferMapViewer {
             if (startIndex === -1 || endIndex === -1) {
                 console.error('범위 선택 실패: 폴더를 찾을 수 없음');
 
-                return;
+                return false;
             }
 
             // 시작과 끝 인덱스 정렬
@@ -7696,13 +7806,18 @@ class WaferMapViewer {
 
                     this.selectedFolders.add(path);
 
-                    await this.selectAllFolderFiles(path);
+                    const applied = await this.selectAllFolderFiles(path, { request: folderRequest });
+                    if (!applied) {
+                        return false;
+                    }
                 }
             }
 
             this.debugLog(`범위 선택: ${maxIndex - minIndex + 1}개 폴더 선택됨`);
+            return true;
         } catch (error) {
             console.error('폴더 범위 선택 실패:', error);
+            return false;
         }
     }
 
@@ -10088,7 +10203,12 @@ class WaferMapViewer {
 
     async performSearch(options = {}) {
         const { multiLotList = [], wfPairs = '', suppressAlerts = false } = options;
+        const searchBtn = this.dom.searchBtn;
+        const originalText = searchBtn?.textContent || '검색';
         try {
+            const searchRequest = this.beginSearchRequest(
+                multiLotList?.length || wfPairs ? 'multi-search' : 'file-search'
+            );
             // 🔥 멀티검색일 때는 일반 검색창 텍스트 무시
             const normalizedLots = this.normalizeLotPayload(multiLotList || []);
             const isMultiSearch = normalizedLots.length > 0 || !!wfPairs;
@@ -10103,9 +10223,6 @@ class WaferMapViewer {
             }
 
             // 즉시 버튼 피드백 제공
-
-            const searchBtn = this.dom.searchBtn;
-            const originalText = searchBtn?.textContent || '검색';
 
             if (searchBtn) {
                 searchBtn.textContent = '검색 중...';
@@ -10138,12 +10255,20 @@ class WaferMapViewer {
             }
             const searchUrl = `/api/search?${searchParams.toString()}`;
             console.log(`[SEARCH] 검색 URL:`, searchUrl);
-            const res = await fetch(searchUrl);
+            const res = await fetch(searchUrl, { signal: searchRequest.signal });
+            if (this.isStaleSearchRequest(searchRequest.requestId)) {
+                this.debugLog(`⏭️ [SEARCH] stale response ignored before body parse: ${searchUrl}`);
+                return false;
+            }
             if (!res.ok) {
                 throw new Error(`검색 API 응답 오류: ${res.status}`);
             }
 
             const data = await res.json();
+            if (this.isStaleSearchRequest(searchRequest.requestId)) {
+                this.debugLog(`⏭️ [SEARCH] stale response ignored: ${searchUrl}`);
+                return false;
+            }
             if (!data || !data.success || !Array.isArray(data.results)) {
                 throw new Error('검색 응답 형식이 올바르지 않습니다.');
             }
@@ -10239,24 +10364,21 @@ class WaferMapViewer {
 
             return true;
         } catch (error) {
-            console.error('검색 실패:', error);
-
-            // 오류 시에도 버튼 상태 복원
-
-            const searchBtn = this.dom.searchBtn;
-
-            if (searchBtn) {
-                searchBtn.textContent = '검색';
-
-                searchBtn.disabled = false;
-
-                searchBtn.style.opacity = '1';
+            if (error?.name === 'AbortError') {
+                return false;
             }
+            console.error('검색 실패:', error);
 
             if (!suppressAlerts) {
                 alert('검색 중 오류가 발생했습니다.');
             }
             return false;
+        } finally {
+            if (searchBtn) {
+                searchBtn.textContent = originalText;
+                searchBtn.disabled = false;
+                searchBtn.style.opacity = '1';
+            }
         }
     }
 
@@ -11769,19 +11891,52 @@ class WaferMapViewer {
 
     async getAllFilesInFolder(folderPath, options = {}) {
         // 🔥 재귀 API 사용 - 백엔드에서 os.walk로 모든 파일 한 번에 조회
+        let timeoutId = null;
+        let abortBridge = null;
         try {
+            const {
+                limit = 0,
+                signal = null,
+                timeoutMs = 15000,
+            } = options || {};
             const params = new URLSearchParams({ path: folderPath });
-            if (Number.isFinite(options.limit) && options.limit > 0) {
-                params.set('limit', String(options.limit));
+            if (Number.isFinite(limit) && limit > 0) {
+                params.set('limit', String(limit));
             }
-            const response = await fetch(`/api/files/recursive?${params.toString()}`);
+            const requestController = new AbortController();
+            if (signal) {
+                if (signal.aborted) {
+                    requestController.abort(signal.reason);
+                } else {
+                    abortBridge = () => requestController.abort(signal.reason);
+                    signal.addEventListener('abort', abortBridge, { once: true });
+                }
+            }
+            if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+                timeoutId = setTimeout(() => {
+                    requestController.abort(new DOMException('Folder scan timeout', 'AbortError'));
+                }, timeoutMs);
+            }
+            const response = await fetch(`/api/files/recursive?${params.toString()}`, {
+                signal: requestController.signal,
+            });
             const data = await response.json();
 
             if (data && data.success && Array.isArray(data.files)) {
                 return data;
             }
         } catch (error) {
+            if (error?.name === 'AbortError') {
+                return { success: false, files: [], truncated: false, total: 0, aborted: true };
+            }
             console.error(`폴더 스캔 실패: ${folderPath}`, error);
+        } finally {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
+            if (options?.signal && abortBridge) {
+                options.signal.removeEventListener('abort', abortBridge);
+            }
         }
 
         return { success: false, files: [], truncated: false, total: 0 };
@@ -12262,11 +12417,15 @@ class WaferMapViewer {
                     } else {
                         // 선택 - 폴더는 열지 않고 선택만
 
+                        const folderRequest = this.beginFolderSelectionRequest(`summary-toggle:${path}`);
                         target.classList.add('selected');
 
                         this.selectedFolders.add(path);
 
-                        await this.selectAllFolderFiles(path);
+                        const applied = await this.selectAllFolderFiles(path, { request: folderRequest });
+                        if (!applied) {
+                            return;
+                        }
                     }
 
                     // UI 업데이트
@@ -12294,7 +12453,10 @@ class WaferMapViewer {
                         this.updateLabelExplorerSelection();
                     }
 
-                    await this.selectFolderRange(this.lastSelectedFolder, target);
+                    const applied = await this.selectFolderRange(this.lastSelectedFolder, target);
+                    if (!applied) {
+                        return;
+                    }
 
                     // UI 업데이트
 
@@ -12660,6 +12822,9 @@ class WaferMapViewer {
                 // 폴더 토글 (파일 선택 반영 포함)
 
                 if (!this.selectedFolders) this.selectedFolders = new Set();
+                const folderRequest = hitFolders.length > 0
+                    ? this.beginFolderSelectionRequest('drag-toggle')
+                    : null;
 
                 for (const s of hitFolders) {
                     const path = s.dataset.path;
@@ -12675,7 +12840,10 @@ class WaferMapViewer {
 
                         this.selectedFolders.add(path);
 
-                        await this.selectAllFolderFiles(path);
+                        const applied = await this.selectAllFolderFiles(path, { request: folderRequest });
+                        if (!applied) {
+                            return;
+                        }
                     }
                 }
             } else {
@@ -12693,6 +12861,9 @@ class WaferMapViewer {
 
                 // 폴더 파일 추가 선택
 
+                const folderRequest = hitFolders.length > 0
+                    ? this.beginFolderSelectionRequest('drag-replace')
+                    : null;
                 for (const s of hitFolders) {
                     const path = s.dataset.path;
 
@@ -12700,7 +12871,10 @@ class WaferMapViewer {
 
                     this.selectedFolders.add(path);
 
-                    await this.selectAllFolderFiles(path);
+                    const applied = await this.selectAllFolderFiles(path, { request: folderRequest });
+                    if (!applied) {
+                        return;
+                    }
 
                 }
             }
@@ -12901,6 +13075,22 @@ class WaferMapViewer {
     isLabelExplorerGridActive() {
         const grid = document.getElementById('image-grid');
         return !!(grid && grid.hasAttribute('data-label-explorer-grid'));
+    }
+
+    beginLabelExplorerGridRequest(source = '') {
+        const requestId = (this._labelExplorerGridRequestSeq || 0) + 1;
+        this._labelExplorerGridRequestSeq = requestId;
+        this._labelExplorerGridRequestSource = source || '';
+        return requestId;
+    }
+
+    isStaleLabelExplorerGridRequest(requestId) {
+        return requestId !== (this._labelExplorerGridRequestSeq || 0);
+    }
+
+    invalidateLabelExplorerGridRequests(reason = '') {
+        this._labelExplorerGridRequestSeq = (this._labelExplorerGridRequestSeq || 0) + 1;
+        this._labelExplorerGridRequestSource = reason || '';
     }
 
     buildLabelExplorerGridState(images = this.currentGridImages || [], scrollTop = this.getGridScrollTop()) {
@@ -16978,24 +17168,6 @@ class WaferMapViewer {
 
         this.debugLog('Label Explorer 새로고침 완료');
 
-        // 🔥 백그라운드 프리페치: 캐시 미스 클래스의 이미지 목록 선로드
-        const uncachedClasses = classes.filter(c => !this.classToImgListCache?.[c]);
-        if (uncachedClasses.length > 0) {
-            Promise.all(uncachedClasses.map(async c => {
-                try {
-                    const labelPath = this.buildClassificationPath(c);
-                    const res = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`);
-                    const data = await res.json();
-                    const imgList = (Array.isArray(data.items) ? data.items : [])
-                        .filter(item => item.type === 'file' && this.isImageFile(item.name));
-                    if (!this.classToImgListCache) this.classToImgListCache = {};
-                    this.classToImgListCache[c] = imgList;
-                } catch {}
-            })).then(() => {
-                this.debugLog(`🚀 프리페치 완료: ${uncachedClasses.length}개 클래스`);
-            });
-        }
-
         } catch (error) {
             console.error('Label Explorer 새로고침 실패:', error);
 
@@ -20666,8 +20838,11 @@ class WaferMapViewer {
     }
 
     // 🔥 Label 캐시만 초기화 (제품 선택 시 사용)
-    async clearParCache() {
+    async clearParCache(options = {}) {
         try {
+            const {
+                refreshLabelExplorer = true
+            } = options;
             console.log('🔍 [CACHE_DEBUG] clearParCache 시작');
             this.debugLog('🧹 PAR 캐시 초기화 시작...');
     
@@ -20701,8 +20876,10 @@ class WaferMapViewer {
                 console.warn('⚠️ 서버 캐시 초기화 중 오류 (프론트엔드 캐시는 삭제됨):', serverError);
             }
     
-            // 🔥 UI 새로고침 (refreshLabelExplorer가 내부에서 getClassList() 호출)
-            await this.refreshLabelExplorer();
+            if (refreshLabelExplorer) {
+                // 🔥 UI 새로고침 (refreshLabelExplorer가 내부에서 getClassList() 호출)
+                await this.refreshLabelExplorer();
+            }
     
             // ❌ 파일 인덱스 재구축은 생략 (파일 리스트 유지)
     
@@ -22111,6 +22288,7 @@ class WaferMapViewer {
             .filter(Boolean);
         const isLabelExplorerGrid = this.isLabelExplorerGridActive();
         if (isLabelExplorerGrid) {
+            this.invalidateLabelExplorerGridRequests('enter-single-image');
             this.labelExplorerGridState = this.buildLabelExplorerGridState(currentImages, scrollTop);
         }
 
@@ -22402,7 +22580,11 @@ class WaferMapViewer {
             // ✅ 그리드 복귀: DOM이 살아있으면 즉시 표시, 아니면 재생성
             const existingGrid = document.getElementById('image-grid');
             let usedFastPath = false;
-            if (this._gridVisuallyHidden && existingGrid && existingGrid.children.length > 0) {
+            const canUseFastPath = !isLabelExplorerRestore &&
+                this._gridVisuallyHidden &&
+                existingGrid &&
+                existingGrid.children.length > 0;
+            if (canUseFastPath) {
                 usedFastPath = true;
                 // 🔥 Fast path: 그리드 DOM이 그대로 남아있으므로 시각적 복원만
                 this._showGridVisual();
@@ -23850,6 +24032,7 @@ class WaferMapViewer {
     // Label Explorer에서 그리드 모드 전환
 
     showGridFromLabelExplorer(imageKeys) {
+        this.beginLabelExplorerGridRequest('label-selection');
         console.log('🔷 [GRID_FROM_LABEL] called:', { count: imageKeys?.length, keys: imageKeys?.slice(0,3), prefix: this.currentFolderPrefix, cacheKeys: Object.keys(this.classToImgListCache || {}).length });
         if (!imageKeys || imageKeys.length === 0) return;
         
@@ -23971,6 +24154,7 @@ class WaferMapViewer {
 
     async showGridFromClass(className) {
         try {
+            const requestId = this.beginLabelExplorerGridRequest(`label-class:${className}`);
             // 🔥 showGridFromClass는 Label Explorer 클래스 전체 보기용이므로 savedViewState 저장 안 함
             this.debugLog('🔷 [SKIP] showGridFromClass - Label Explorer 클래스 전체 보기, savedViewState 저장 건너뛰기');
 
@@ -23979,12 +24163,20 @@ class WaferMapViewer {
             
             // 🔥 경로 존재 여부 확인
             const response = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`);
+            if (this.isStaleLabelExplorerGridRequest(requestId)) {
+                this.debugLog(`⏭️ [LABEL_GRID] stale class response ignored before body parse: ${className}`);
+                return;
+            }
             if (!response.ok) {
                 this.debugLog(`클래스 '${className}' 폴더가 존재하지 않습니다.`);
                 return;
             }
             
             const data = await response.json();
+            if (this.isStaleLabelExplorerGridRequest(requestId)) {
+                this.debugLog(`⏭️ [LABEL_GRID] stale class response ignored: ${className}`);
+                return;
+            }
             const imageFiles = (data.items || [])
 
                 .filter(item => item.type === 'file')
@@ -23998,6 +24190,11 @@ class WaferMapViewer {
             if (imageFiles.length === 0) {
                 this.debugLog(`클래스 '${className}'에 이미지가 없습니다.`);
 
+                return;
+            }
+
+            if (this.isStaleLabelExplorerGridRequest(requestId)) {
+                this.debugLog(`⏭️ [LABEL_GRID] stale class grid ignored after mapping: ${className}`);
                 return;
             }
 
@@ -24048,6 +24245,7 @@ class WaferMapViewer {
 
     async showGridFromMultipleClasses(classNames) {
         try {
+            const requestId = this.beginLabelExplorerGridRequest(`label-multi:${(classNames || []).join(',')}`);
             // 🔥 이전 상태 저장 (한 번만 저장)
 
             if (!this.savedViewState) {
@@ -24092,6 +24290,10 @@ class WaferMapViewer {
             });
 
             const results = await Promise.all(fetchPromises);
+            if (this.isStaleLabelExplorerGridRequest(requestId)) {
+                this.debugLog(`⏭️ [LABEL_GRID] stale multi-class response ignored: ${(classNames || []).join(',')}`);
+                return;
+            }
 
             // 모든 이미지를 하나의 배열로 합치기
 
@@ -24104,6 +24306,11 @@ class WaferMapViewer {
             if (allImageFiles.length === 0) {
                 this.debugLog('선택된 클래스들에 이미지가 없습니다.');
 
+                return;
+            }
+
+            if (this.isStaleLabelExplorerGridRequest(requestId)) {
+                this.debugLog(`⏭️ [LABEL_GRID] stale multi-class grid ignored after merge: ${(classNames || []).join(',')}`);
                 return;
             }
 
