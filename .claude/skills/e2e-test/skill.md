@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 62개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증, Measure 색상 미리보기/적용 회귀, HTTP 캐시 무효화 검증, Composite 색상 매핑/배경 행 제거 검증, Measure 첫 진입 지연/폴더 stale state 회귀, Label Explorer flat-grid 강제 및 positions 없는 palette/PNF 이미지 즉시 로드 회귀, 검색 첫 실행/다중검색/이벤트루프 블로킹 회귀, 서버 Cold Start 즉시 로딩 속도, 탭 다중 전환 이미지 보존, f/q missing 이미지 그리드 로드 검증, classification 인덱스 즉시 일관성 검증, 썸네일 캐시 삭제 후 첫 palette_3k 그리드 즉시 로딩 검증, [CRITICAL] Cold Start 3단계 분절 성능 측정(페이지 로드→폴더 확장→그리드 viewport)을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 63개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증, Measure 색상 미리보기/적용 회귀, HTTP 캐시 무효화 검증, Composite 색상 매핑/배경 행 제거 검증, Measure 첫 진입 지연/폴더 stale state 회귀, Label Explorer flat-grid 강제 및 positions 없는 palette/PNF 이미지 즉시 로드 회귀, 검색 첫 실행/다중검색/이벤트루프 블로킹 회귀, 서버 Cold Start 즉시 로딩 속도, 탭 다중 전환 이미지 보존, f/q missing 이미지 그리드 로드 검증, classification 인덱스 즉시 일관성 검증, 썸네일 캐시 삭제 후 첫 palette_3k 그리드 즉시 로딩 검증, [CRITICAL] Cold Start 3단계 분절 성능 측정(페이지 로드→폴더 확장→그리드 viewport), JS 모듈 그래프/worker 캐시 무효화 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -20,7 +20,7 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 
 ## 절대규칙: 기본 전체 실행
 
-- **인자 없이 `/e2e-test` 실행 시 Phase 1~62 전체를 실행한다.**
+- **인자 없이 `/e2e-test` 실행 시 Phase 1~63 전체를 실행한다.**
 - 특정 Phase만 실행하려면 `/e2e-test 3,9,12` 또는 `/e2e-test 33-50`처럼 명시적으로 지정해야 한다.
 - "전체 테스트", "E2E 테스트" 등 범위 미지정 요청은 전체 실행으로 간주한다.
 - Phase를 건너뛰거나 일부만 실행하는 것은 사용자가 명시적으로 요청한 경우에만 허용된다.
@@ -5842,6 +5842,8 @@ Wafer 다중검색 기능 전체 흐름을 검증한다.
 2. **JS 304 검증**: `If-None-Match: <etag>` → 304 응답
 3. **CSS ETag 확인**: `fetch('/css/style.css')` → `ETag` 헤더 존재
 4. **Cache-Control**: `no-cache` 확인 (매번 검증 강제)
+5. **서빙된 main.js 확인**: `/js/main.js` 응답 본문에서 상대 import 경로가 `?v=`를 포함하는지 확인
+6. **worker 경로 확인**: `/js/fetch-optimizer.js`, `/js/bitmap-loader.js` 응답 본문에서 worker URL이 `?v=`를 포함하는지 확인
 
 ### pass 기준
 | 항목 | 기준 |
@@ -5850,6 +5852,8 @@ Wafer 다중검색 기능 전체 흐름을 검증한다.
 | JS 304 | If-None-Match → status 304 |
 | CSS ETag | 비어있지 않은 문자열 |
 | Cache-Control | "no-cache" 포함 |
+| Module import versioning | `./*.js?v=<version>` 포함 |
+| Worker versioning | `/js/*worker.js?v=<version>` 포함 |
 
 ## Phase 59: 성능 벤치마크
 
@@ -5936,11 +5940,11 @@ classification/classification_chips 경로가 인덱스에 포함된 상태에�
 ### 2026-04-11 측정 결과
 | 항목 | 측정값 | 판정 |
 |------|--------|------|
-| 첫 페이지 폴더 목록 | 16개 폴더, `loadEventEnd` 1912ms | PASS |
+| 첫 페이지 폴더 목록 | 16개 폴더, `domContentLoaded` 2375ms / 폴더 표시 2386ms | PASS |
 | Cold files/recursive (`palette_3k`) | 1005.7ms | PASS |
 | Cold thumbnail (첫 512px webp) | 673.9ms | PASS |
-| palette_3k 그리드 셸 | 실제 브라우저에서 생성 확인 | PASS |
-| viewport 첫 썸네일 | 실제 브라우저에서 표시 확인 | PASS |
+| palette_3k 그리드 셸 | 460ms | PASS |
+| viewport 첫 썸네일 시작 | 488ms | PASS |
 
 ## Phase 62: [CRITICAL] Cold Start 3단계 분절 성능 측정
 
@@ -6052,19 +6056,52 @@ return { domMs, folderListMs, fileListMs, fullVpMs };
 
 - **측정은 반드시 3회 이상 반복**하여 평균을 낸다 (1회 측정은 편차가 커서 신뢰도 낮음).
 - 각 측정 전 서버 + 모든 캐시 + 브라우저 HTTP 캐시를 **완전 초기화**한다.
-- `_compute_js_version()`처럼 매 요청마다 파일시스템을 순회하는 로직은 Step 1을 크게 느리게 만든다 — 변경 시 반드시 이 Phase로 회귀 측정 필수.
-- `_refresh_index_cache_if_modified()` 같은 요청마다 호출되는 함수에 `glob()` / `stat()`을 추가하면 전체 응답 지연을 유발한다.
+- 정적 자산 버전 문자열 계산은 **요청 경로가 아니라 초기화/변경 감지 시점**에 끝나 있어야 한다.
+- 요청마다 JS/CSS 전체를 `glob()` / `stat()` 순회하면 Step 1이 바로 느려진다. 변경 시 반드시 이 Phase로 회귀 측정 필수다.
 
-### 2026-04-11 측정 결과 (git hash vs mtime 캐시버스팅 비교)
+### 2026-04-11 측정 결과 (썸네일 삭제 + 브라우저 캐시 초기화 후)
 
-| Step | git hash (A1) | mtime (B1) | git hash (A2) | 차이 |
-|------|---------------|------------|---------------|------|
-| DOM loaded | 3893ms | 9202ms | 3719ms | mtime이 **2.4배 느림** |
-| 폴더 목록 | 5082ms | 11130ms | 6008ms | mtime이 **2.0배 느림** |
-| 파일 리스트 (3000개) | 2442ms | 1421ms | 1355ms | 편차 큼 |
-| viewport 전체 | 1659ms | 3554ms | 3144ms | mtime이 **1.1배 느림** |
+| Step | 측정값 | 판정 |
+|------|--------|------|
+| DOM loaded | 2375ms | PASS |
+| 폴더 목록 표시 | 2386ms | PASS |
+| 파일 리스트 (3000개) | 136ms | PASS |
+| 그리드 셸 생성 | 460ms | PASS |
+| viewport 전체 썸네일 시작 | 488ms | PASS |
 
-**결론**: `_compute_js_version()`이 매 요청마다 JS/CSS 폴더를 `glob()` + `stat()` 순회하는 것이 Step 1을 심각하게 느리게 만든다. 일부 유저가 이전 JS를 받는 문제는 `Cache-Control: no-cache` + ETag weak hash(`BUG-17 수정`)로 해결되므로, JS 버전 문자열은 **git hash 고정**을 유지한다.
+**결론**: 현재 cold start는 폴더 목록 2.4초, `palette_3k` 파일 리스트 136ms, 그리드 셸 460ms, 첫 viewport 썸네일 시작 488ms 수준이다. 이전 JS 잔존 이슈는 top-level ETag만으로는 부족하므로, **서빙된 JS 본문에서 상대 import / dynamic import / worker URL까지 동일 `?v=` 서명을 전파**해야 한다.
+
+## Phase 63: JS 모듈 그래프 / Worker 캐시 무효화
+
+신규 기능이 배포됐는데도 일부 유저가 이전 JS를 계속 쓰는 회귀를 막기 위해, top-level `main.js`뿐 아니라 하위 ES module import와 worker URL까지 동일 버전 문자열이 전파되는지 검증한다.
+
+### 테스트 순서
+1. **index.html 버전 확인**: HTML 응답에서 `/js/main.js?v=<version>` 또는 동일 수준의 버전 쿼리스트링 존재 확인
+2. **main.js 본문 확인**: `/js/main.js` 응답 본문에서 `./fetch-optimizer.js?v=...`, `./page-manager.js?v=...`, `./search.js?v=...` 같은 상대 import가 버전 문자열을 포함하는지 확인
+3. **dynamic import 확인**: `/js/main.js` 응답 본문에서 `./composite-colors.js?v=...`, `./my-lot.js?v=...` 가 버전 문자열을 포함하는지 확인
+4. **worker 경로 확인 1**: `/js/fetch-optimizer.js` 응답 본문에서 `/js/cache-worker.js?v=...` 확인
+5. **worker 경로 확인 2**: `/js/bitmap-loader.js` 응답 본문에서 `/js/bitmap-worker.js?v=...` 확인
+6. **ETag 재검증**: `/js/main.js`, `/css/style.css` 각각 `If-None-Match` 재요청 시 304 확인
+
+### pass 기준
+| 항목 | 기준 |
+|------|------|
+| HTML main.js version | `?v=` 포함 |
+| Static import version | 상대 import 경로 모두 `?v=` 포함 |
+| Dynamic import version | lazy import 경로 모두 `?v=` 포함 |
+| Worker version | worker URL `?v=` 포함 |
+| JS 304 | `If-None-Match` → 304 |
+| CSS 304 | `If-None-Match` → 304 |
+
+### 2026-04-11 측정 결과
+| 항목 | 측정값 | 판정 |
+|------|--------|------|
+| `/js/main.js` ETag | `\"491fde02bd2f\"` | PASS |
+| `/css/style.css` ETag | `\"ae6c305be917\"` | PASS |
+| `/js/main.js` 304 | PASS | PASS |
+| main.js 상대 import | `fetch-optimizer/page-manager/search` 모두 `?v=0ac41d2-a2cdeeb131ee` | PASS |
+| main.js dynamic import | `composite-colors/my-lot` 모두 `?v=0ac41d2-a2cdeeb131ee` | PASS |
+| worker URL | `cache-worker/bitmap-worker` 모두 `?v=0ac41d2-a2cdeeb131ee` | PASS |
 
 #### BUG-16: WF 검색 5백만 파일 순차 스캔 (2026-04-11)
 **증상**: WF 다중검색(`lot_wafer`) API가 977ms 소요 (LOT 검색 14ms 대비 70배 느림)

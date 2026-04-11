@@ -1558,6 +1558,10 @@ async def _lifespan_background_init():
     """서버 시작 후 백그라운드에서 모든 무거운 초기화 수행."""
     bootlog = logging.getLogger("uvicorn.error")
     loop = asyncio.get_running_loop()
+    warm_folders = tuple(
+        folder.strip() for folder in os.getenv("STARTUP_THUMB_WARM_FOLDERS", "palette_3k").split(",") if folder.strip()
+    )
+    warm_count = max(1, int(os.getenv("STARTUP_THUMB_WARM_COUNT", "24")))
 
     # 첫 페이지 로드 직후 바로 캐시 프리로드를 시작한다.
     await asyncio.sleep(0)
@@ -1630,10 +1634,63 @@ async def _lifespan_background_init():
     cache_duration = time.time() - cache_start
     if cache_loaded and index_service.keys:
         bootlog.info(f"📂 [INDEX] Cache loaded: {len(index_service.keys)} files ({cache_duration:.2f}s)")
+        try:
+            await loop.run_in_executor(DIRLIST_EXECUTOR, _build_folder_files_cache)
+            await loop.run_in_executor(DIRLIST_EXECUTOR, _prime_folder_payload_cache, warm_folders)
+            bootlog.info(f"✅ [INDEX] Early folder cache ready: {len(_FOLDER_FILES_CACHE)} folders")
+        except Exception as exc:
+            bootlog.warning(f"⚠️ [INDEX] Early folder cache build 실패: {exc}")
     else:
         bootlog.info("[INDEX] No cache found — full build required")
 
     await asyncio.sleep(0)  # yield to event loop
+
+    async def _warm_startup_thumbnails():
+        if not warm_folders or warm_count <= 0:
+            return
+        await asyncio.sleep(0.25)
+
+        def _collect_targets() -> List[Path]:
+            targets: List[Path] = []
+            for folder in warm_folders:
+                folder_path = ROOT_DIR / folder
+                if not folder_path.exists() or not folder_path.is_dir():
+                    continue
+                candidates: List[str] = []
+                with os.scandir(folder_path) as it:
+                    for entry in it:
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                        if os.path.splitext(entry.name)[1].lower() not in SUPPORTED_EXTENSIONS:
+                            continue
+                        candidates.append(entry.name)
+                candidates.sort(key=str.lower)
+                for name in candidates[:warm_count]:
+                    targets.append(folder_path / name)
+            return targets
+
+        try:
+            targets = await loop.run_in_executor(DIRLIST_EXECUTOR, _collect_targets)
+            if not targets:
+                return
+
+            async def _warm_one(image_path: Path):
+                try:
+                    await generate_thumbnail(
+                        image_path,
+                        (THUMBNAIL_SIZE_DEFAULT, THUMBNAIL_SIZE_DEFAULT),
+                        personalized=True,
+                        scheme=FALLBACK_LOGIN_ID,
+                    )
+                except Exception:
+                    pass
+
+            await asyncio.gather(*(_warm_one(path) for path in targets), return_exceptions=True)
+            bootlog.info(f"✅ [STARTUP] thumbnail prewarm complete: {len(targets)} files ({', '.join(warm_folders)})")
+        except Exception as exc:
+            bootlog.warning(f"⚠️ [STARTUP] thumbnail prewarm 실패: {exc}")
+
+    asyncio.ensure_future(_warm_startup_thumbnails())
 
     # 3) 인덱스 빌드 (executor 내부에서 scan + finalize)
     index_action = "rebuild" if cache_loaded and index_service.keys else "build"
@@ -1649,6 +1706,7 @@ async def _lifespan_background_init():
             )
             # 폴더별 파일 캐시 빌드 (executor)
             await loop.run_in_executor(DIRLIST_EXECUTOR, _build_folder_files_cache)
+            await loop.run_in_executor(DIRLIST_EXECUTOR, _prime_folder_payload_cache, warm_folders)
             bootlog.info(f"✅ [INDEX] Folder files cache built: {len(_FOLDER_FILES_CACHE)} folders")
         else:
             bootlog.warning(f"⚠️ [INDEX] Background {index_action} failed")
@@ -1666,17 +1724,63 @@ async def _lifespan_background_init():
     # 5) 매일 새벽 2시 composite_map + thumbnails 폴더 정리
     await _start_daily_cleanup()
 
-# ======================== Git 버전 해시 (JS 캐시버스팅용) ========================
-# 성능: _compute_js_version()처럼 매 요청마다 glob+stat 순회는 cold-start를 2~3배 느리게 만듦.
-# 유저가 이전 JS를 받는 문제는 Cache-Control: no-cache + ETag weak hash(BUG-17)로 해결됨.
-try:
-    _JS_VERSION = subprocess.check_output(
-        ["git", "rev-parse", "--short", "HEAD"],
-        cwd=str(Path(__file__).resolve().parent.parent),
-        stderr=subprocess.DEVNULL
-    ).decode().strip()
-except Exception:
-    _JS_VERSION = str(int(time.time()))
+# ======================== 정적 자산 버전/캐시버스팅 ========================
+# git HEAD만 쓰면 미커밋 수정이나 하위 module 변경에서 버전이 안 바뀔 수 있다.
+# index.html + js + css의 mtime/size 시그니처를 합쳐 전체 asset version을 만든다.
+def _iter_static_asset_paths() -> Iterable[Path]:
+    yield Path("index.html")
+    for root_name in ("js", "css"):
+        root = Path(root_name)
+        if not root.exists():
+            continue
+        for child in sorted(root.glob("*")):
+            if child.is_file():
+                yield child
+
+
+def _git_short_head() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(Path(__file__).resolve().parent.parent),
+            stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        return "nogit"
+
+
+def _compute_static_asset_signature() -> str:
+    parts: List[str] = []
+    for asset_path in _iter_static_asset_paths():
+        try:
+            st = asset_path.stat()
+        except OSError:
+            continue
+        parts.append(f"{asset_path.as_posix()}:{st.st_mtime_ns}:{st.st_size}")
+    if not parts:
+        return str(int(time.time()))
+    return hashlib.md5("|".join(parts).encode("utf-8")).hexdigest()[:12]
+
+
+def _compose_js_version(signature: str) -> str:
+    return f"{_git_short_head()}-{signature}"
+
+
+_STATIC_ASSET_SIGNATURE = _compute_static_asset_signature()
+_JS_VERSION = _compose_js_version(_STATIC_ASSET_SIGNATURE)
+
+
+def _refresh_static_asset_version_if_modified() -> bool:
+    global _STATIC_ASSET_SIGNATURE, _JS_VERSION
+    new_signature = _compute_static_asset_signature()
+    if new_signature == _STATIC_ASSET_SIGNATURE:
+        return False
+    _STATIC_ASSET_SIGNATURE = new_signature
+    _JS_VERSION = _compose_js_version(new_signature)
+    # JS 응답 본문 안의 import/worker URL에도 버전이 박히므로 전체 JS 캐시를 비운다.
+    if "_JS_CACHE" in globals():
+        _JS_CACHE.clear()
+    return True
 
 # ======================== index.html 메모리 캐시 + pre-gzip ========================
 _CACHED_INDEX_HTML: Optional[str] = None
@@ -1706,13 +1810,14 @@ def _build_index_cache():
             _CACHED_INDEX_MTIME_NS = 0
 
 def _refresh_index_cache_if_modified():
-    """index.html 파일 변경 시 lazy reload. 서버 재시작 없이 편집 즉시 반영."""
+    """index.html 또는 정적 자산 버전 변경 시 lazy reload."""
     html_path = Path("index.html")
     try:
         cur_mtime = html_path.stat().st_mtime_ns
     except OSError:
-        return
-    if cur_mtime != _CACHED_INDEX_MTIME_NS:
+        cur_mtime = 0
+    static_changed = _refresh_static_asset_version_if_modified()
+    if cur_mtime != _CACHED_INDEX_MTIME_NS or static_changed:
         _build_index_cache()
 
 _build_index_cache()
@@ -7617,10 +7722,25 @@ async def get_all_files():
 # 🔥 폴더별 파일 캐시 (인덱스 빌드 후 자동 생성, O(1) 조회)
 _FOLDER_FILES_CACHE: Dict[str, list] = {}
 _FOLDER_FILES_CACHE_BUILT = False
+_FOLDER_FILES_PAYLOAD_CACHE: Dict[str, bytes] = {}
+
+
+def _build_folder_payload(files: List[str]) -> bytes:
+    return b'{"success":true,"files":' + json.dumps(
+        files, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8") + b"}"
+
+
+def _prime_folder_payload_cache(folders: Iterable[str]) -> None:
+    for folder in folders:
+        files = _FOLDER_FILES_CACHE.get(folder)
+        if files is None:
+            continue
+        _FOLDER_FILES_PAYLOAD_CACHE[folder] = _build_folder_payload(files)
 
 def _build_folder_files_cache():
     """인덱스에서 폴더별 파일 목록을 미리 그룹핑"""
-    global _FOLDER_FILES_CACHE, _FOLDER_FILES_CACHE_BUILT
+    global _FOLDER_FILES_CACHE, _FOLDER_FILES_CACHE_BUILT, _FOLDER_FILES_PAYLOAD_CACHE
     skip = {'classification', 'thumbnails', 'composite_map'} | SKIP_DIRS
     cache: Dict[str, list] = {}
     with FILE_INDEX_LOCK:
@@ -7640,6 +7760,7 @@ def _build_folder_files_cache():
     for folder in cache:
         cache[folder].sort(key=lambda x: x.split("/")[-1].lower())
     _FOLDER_FILES_CACHE = cache
+    _FOLDER_FILES_PAYLOAD_CACHE = {}
     _FOLDER_FILES_CACHE_BUILT = True
 
 @app.get("/api/files/recursive")
@@ -7656,11 +7777,11 @@ async def get_files_recursive(path: str):
 
         # 🔥 폴더 캐시에서 O(1) 조회
         if _FOLDER_FILES_CACHE_BUILT and rel_prefix in _FOLDER_FILES_CACHE:
-            files = _FOLDER_FILES_CACHE[rel_prefix]
-            return Response(
-                content=b'{"success":true,"files":' + json.dumps(files, ensure_ascii=False).encode() + b'}',
-                media_type="application/json"
-            )
+            payload = _FOLDER_FILES_PAYLOAD_CACHE.get(rel_prefix)
+            if payload is None:
+                payload = _build_folder_payload(_FOLDER_FILES_CACHE[rel_prefix])
+                _FOLDER_FILES_PAYLOAD_CACHE[rel_prefix] = payload
+            return Response(content=payload, media_type="application/json")
 
         # 캐시 miss → os.walk 폴백
         files = []
@@ -8502,14 +8623,40 @@ async def classify_delete_batch(request: ClassifyDeleteBatchReq,
 # ---------------- Static / Pages ----------------
 
 # 🚀 JS 파일: 원본 .js 메모리 캐시 + pre-gzip (GZipMiddleware 없이 압축)
-# mtime 기반 lazy reload — 서버 재시작 없이 파일 변경 즉시 반영
+# mtime 기반 lazy reload + import/worker version 전파
 _JS_DIR = Path("js")
 _JS_CACHE: Dict[str, Tuple[bytes, bytes, str, int]] = {}  # filename -> (raw, gzipped, etag, mtime_ns)
+
+_JS_IMPORT_FROM_RE = re.compile(r"((?:from\s+))(['\"])((?:\./|\.\./)[^'\"]+\.js(?:\?[^'\"]*)?)(['\"])", re.MULTILINE)
+_JS_DYNAMIC_IMPORT_RE = re.compile(r"((?:import\s*\(\s*))(['\"])((?:\./|\.\./)[^'\"]+\.js(?:\?[^'\"]*)?)(['\"])", re.MULTILINE)
+_JS_WORKER_RE = re.compile(r"((?:new\s+Worker\s*\(\s*))(['\"])((?:/js/|\./|\.\./)[^'\"]+\.js(?:\?[^'\"]*)?)(['\"])", re.MULTILINE)
+_JS_PATH_ASSIGN_RE = re.compile(r"((?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*)(['\"])((?:/js/|\./|\.\./)[^'\"]+\.js(?:\?[^'\"]*)?)(['\"])", re.MULTILINE)
+
+
+def _append_version_query(url: str, version: str) -> str:
+    base, sep, query = url.partition("?")
+    if not sep:
+        return f"{url}?v={version}"
+    kept = [part for part in query.split("&") if part and not part.startswith("v=")]
+    kept.insert(0, f"v={version}")
+    return f"{base}?{'&'.join(kept)}"
+
+
+def _transform_js_source(text: str) -> str:
+    def _repl(match: re.Match[str]) -> str:
+        return f"{match.group(1)}{match.group(2)}{_append_version_query(match.group(3), _JS_VERSION)}{match.group(4)}"
+
+    text = _JS_IMPORT_FROM_RE.sub(_repl, text)
+    text = _JS_DYNAMIC_IMPORT_RE.sub(_repl, text)
+    text = _JS_WORKER_RE.sub(_repl, text)
+    text = _JS_PATH_ASSIGN_RE.sub(_repl, text)
+    return text
 
 def _build_js_entry(path: Path) -> Tuple[bytes, bytes, str, int]:
     """파일 한 개를 읽어 (raw, gzipped, etag, mtime_ns) 튜플 생성."""
     import gzip as _gzip
-    raw = path.read_bytes()
+    text = path.read_text(encoding="utf-8")
+    raw = _transform_js_source(text).encode("utf-8")
     gz = _gzip.compress(raw, compresslevel=6)
     etag = hashlib.md5(raw).hexdigest()[:12]
     mtime_ns = path.stat().st_mtime_ns
