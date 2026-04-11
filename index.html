@@ -8,20 +8,9 @@
     <!-- Favicon 추가 -->
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     
-    <!-- API 프리페치: JS 모듈 로드 전에 API 호출 시작 (워터폴 제거) -->
+    <!-- Explorer-first bootstrap: initial page should render the folder list before any eager API warmup -->
     <script>
-    window.__prefetch = {
-        config: fetch('/api/config').then(r => r.json()).catch(() => null),
-        colorLegends: fetch('/logs/color-legends.json').then(r => r.json()).catch(() => null),
-        rootFolder: fetch('/api/root-folder').then(r => r.json()).catch(() => null),
-        currentFolder: fetch('/api/current-folder').then(r => r.json()).catch(() => null),
-        browseFolders: fetch('/api/browse-folders?path=&force_root=true').then(r => r.json()).catch(() => null),
-        authUser: (() => {
-            const p = new URLSearchParams(location.search);
-            const lid = p.get('LoginId') || '';
-            return fetch(lid ? `/api/auth/user?LoginId=${encodeURIComponent(lid)}` : '/api/auth/user').then(r => r.json()).catch(() => null);
-        })(),
-    };
+    window.__prefetch = window.__prefetch || {};
     </script>
     <link rel="stylesheet" href="/css/style.css">
 </head>
@@ -1029,12 +1018,8 @@
     <!-- Snap Zone Overlay (for window snapping preview) -->
     <div id="snap-zone-overlay" class="snap-zone-overlay" style="display: none;"></div>
 
-    <!-- 반도체 특화 렌더러 로드 -->
-    <script defer src="/js/bitmap-loader.js"></script>
-    <script defer src="/js/semiconductor-renderer.js"></script>
-
     <!-- 🚀 ES6 모듈로 로드 (최적화) -->
-    <script type="module" src="/js/main.js?v=cachebust16"></script>
+    <script type="module" src="/js/boot-explorer.js"></script>
 
     <!-- 리팩토링된 모듈 방식 (디버깅 후 다시 활성화 예정) -->
     <!-- <script type="module" src="/js/main-refactored.js"></script> -->

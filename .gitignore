@@ -39,6 +39,7 @@ Thumbs.db
 # MCP config (local machine specific)
 .mcp.json
 .claude/
+.playwright-cli/
 .playwright-mcp/
 .pytest_cache/
 output/
@@ -62,6 +63,13 @@ package-lock.json
 # Temp files
 temp_snippet.txt
 *.tmp
+.tmp-live-*.log
+.tmp-live-*.err.log
+.codex-*.log
+api_main_import.prof
+cold-bench-*.json
+playwright-*.md
+playwright-*.json
 test_*.py
 mcp.json.example
 

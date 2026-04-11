@@ -13,10 +13,7 @@
 import { optimizedFetch, fetchOptimizer } from './fetch-optimizer.js';
 // 🚀 코드 스플리팅: 3개 모듈은 lazy import (초기 로드 ~300KB 절감)
 // ColorSchemeEditor, CompositeColorModal, MyLotModal → dynamic import()
-import { ChipAnnotator } from './chip-annotator.js?v=6';
-import { ThumbnailNavigator } from './thumbnail-navigator.js?v=4';
 import { PageManager } from './page-manager.js';
-import { ContextMenuManager } from './context-menu.js?v=3';
 import { stripDotSuffix } from './search.js';
 
 // Constants
@@ -32,7 +29,7 @@ const DEBOUNCE_DELAY = 0;
 const GRID_DRAG_CLICK_THRESHOLD = 30; // 스크롤 드래그 시 선택 방지
 const CLASSIFICATION_DIR_NAMES = ['classification', 'classification_chips', 'chips'];
 const GRID_THUMB_PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-const FALLBACK_LOGIN_ID = 'guest';
+const FALLBACK_LOGIN_ID = 'notsaml';
 const INVALID_LOGIN_ID_VALUES = new Set(['', 'default', 'anon', 'anonymous', FALLBACK_LOGIN_ID, 'null', 'undefined', '-']);
 
 // ✅ 미니맵 뷰포트 크기 제한 상수
@@ -460,9 +457,14 @@ class WaferMapViewer {
         this.colorEditor = null;
         this.compositeColorModal = null;
         this.myLotModal = null;
+        this.contextMenuManager = null;
+        this.chipAnnotator = null;
+        this.thumbnailNavigator = null;
+        this._deferredUiBootstrapPromise = null;
+        this._deferredScriptPromises = new Map();
+        this._viewerRuntimePromise = null;
         // MY LOT refreshData는 loadUserInfo() 완료 후 호출 (currentUser 설정 이후)
         // constructor에서 즉시 호출하면 FALLBACK_LOGIN_ID로 요청됨
-        this.contextMenuManager = new ContextMenuManager(this);
         this.initRefMapWindow();
 
         this.bindEvents();
@@ -505,10 +507,6 @@ class WaferMapViewer {
         this.semiconductorRenderer = null;
         this.usingGpuRenderer = false;
         this.minimapPreview = null;
-
-        this.initSemiconductorRenderer();
-        this.initChipAnnotator();
-        this.initThumbnailNavigator();
 
         // ✅ 방법 2: Ctrl 키 상태 안정화를 위한 변수 초기화
         this.wheelTimeout = null;
@@ -814,9 +812,53 @@ class WaferMapViewer {
      */
 
     // 🚀 Lazy module loaders (코드 스플리팅)
+    _getJsVersionTag() {
+        return document.querySelector('script[src*="main.js"]')?.src?.match(/[?&]v=([^&]*)/)?.[1] || Date.now();
+    }
+    _loadDeferredScript(src, globalName) {
+        if (globalName && typeof window[globalName] !== 'undefined') {
+            return Promise.resolve(window[globalName]);
+        }
+        const cacheKey = globalName || src;
+        if (this._deferredScriptPromises.has(cacheKey)) {
+            return this._deferredScriptPromises.get(cacheKey);
+        }
+        const jsVer = this._getJsVersionTag();
+        const scriptUrl = src.includes('?') ? src : `${src}?v=${jsVer}`;
+        const promise = new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = scriptUrl;
+            script.defer = true;
+            script.onload = () => resolve(globalName ? window[globalName] : true);
+            script.onerror = () => reject(new Error(`Failed to load script: ${scriptUrl}`));
+            document.head.appendChild(script);
+        });
+        this._deferredScriptPromises.set(cacheKey, promise);
+        return promise;
+    }
+    async _ensureViewerRuntime() {
+        if (this._viewerRuntimePromise) {
+            return this._viewerRuntimePromise;
+        }
+        this._viewerRuntimePromise = (async () => {
+            await this._loadDeferredScript('/js/bitmap-loader.js', 'BitmapLoader').catch((error) => {
+                console.warn('[INIT] BitmapLoader deferred load failed:', error);
+                return null;
+            });
+            await this._loadDeferredScript('/js/semiconductor-renderer.js', 'SemiconductorRenderer').catch((error) => {
+                console.warn('[INIT] SemiconductorRenderer deferred load failed:', error);
+                return null;
+            });
+            if (!this.semiconductorRenderer) {
+                this.initSemiconductorRenderer();
+            }
+            return this.semiconductorRenderer;
+        })();
+        return this._viewerRuntimePromise;
+    }
     async _getColorEditor() {
         if (!this.colorEditor) {
-            const jsVer = document.querySelector('script[src*="main.js"]')?.src?.match(/[?&]v=([^&]*)/)?.[1] || Date.now();
+            const jsVer = this._getJsVersionTag();
             const { ColorSchemeEditor } = await import(`./color-editor.js?v=${jsVer}`);
             this.colorEditor = new ColorSchemeEditor(this);
         }
@@ -835,6 +877,46 @@ class WaferMapViewer {
             this.myLotModal = new MyLotModal(this);
         }
         return this.myLotModal;
+    }
+    async _getContextMenuManager() {
+        if (!this.contextMenuManager) {
+            const jsVer = this._getJsVersionTag();
+            const { ContextMenuManager } = await import(`./context-menu.js?v=${jsVer}`);
+            this.contextMenuManager = new ContextMenuManager(this);
+        }
+        return this.contextMenuManager;
+    }
+    async _getChipAnnotator() {
+        if (!this.chipAnnotator && this.dom?.overlayCanvas) {
+            const jsVer = this._getJsVersionTag();
+            const { ChipAnnotator } = await import(`./chip-annotator.js?v=${jsVer}`);
+            this.chipAnnotator = new ChipAnnotator(this.dom.overlayCanvas, this);
+            this.debugLog('Chip Annotator 초기화 완료');
+        }
+        return this.chipAnnotator;
+    }
+    async _getThumbnailNavigator() {
+        if (!this.thumbnailNavigator) {
+            const jsVer = this._getJsVersionTag();
+            const { ThumbnailNavigator } = await import(`./thumbnail-navigator.js?v=${jsVer}`);
+            this.thumbnailNavigator = new ThumbnailNavigator(this);
+            this.debugLog('Thumbnail Navigator 초기화 완료');
+        }
+        return this.thumbnailNavigator;
+    }
+    _primeDeferredUiBootstrap() {
+        if (this._deferredUiBootstrapPromise) {
+            return this._deferredUiBootstrapPromise;
+        }
+        this._deferredUiBootstrapPromise = Promise.allSettled([
+            this._getContextMenuManager(),
+            this._getChipAnnotator(),
+            this._getThumbnailNavigator(),
+            this._ensureViewerRuntime()
+        ]).catch((error) => {
+            console.warn('[INIT] Deferred UI bootstrap failed:', error);
+        });
+        return this._deferredUiBootstrapPromise;
     }
 
     initState() {
@@ -5066,6 +5148,13 @@ class WaferMapViewer {
                 });
                 // 항상 UI 업데이트 호출 (드래그 선택 후 즉시 반영)
                 this.updateGridSelection();
+            } else if (e.shiftKey) {
+                newIdxs.forEach(idx => {
+                    this.gridSelectedSet.add(idx);
+                });
+                this.gridSelectedIdxs = Array.from(this.gridSelectedSet).sort((a, b) => a - b);
+                // 항상 UI 업데이트 호출 (드래그 선택 후 즉시 반영)
+                this.updateGridSelection();
             } else {
                 const prevSet = this.gridSelectedSet ? new Set(this.gridSelectedSet) : new Set();
                 const newSet = new Set(newIdxs);
@@ -5180,7 +5269,8 @@ class WaferMapViewer {
          // 키보드 단축키 (grid 모드에서만)
 
         document.addEventListener('keydown', (e) => {
-            if (!this.gridMode) return;
+            const isGridImageView = this.viewMode === 'gridImage' || this.singleImageFromGrid;
+            if (!this.gridMode || isGridImageView || this.isSearchInputFocused()) return;
 
             // 🔥 검색/입력 필드에서 허용되지 않는 단축키는 차단
             if (!this.shouldAllowKeyboardShortcut(e)) return;
@@ -5196,6 +5286,15 @@ class WaferMapViewer {
                 this.clearGridSelection();
 
                 e.preventDefault();
+            } else if (e.key === 'Enter') {
+                const selectedIdx = Array.isArray(this.gridSelectedIdxs) && this.gridSelectedIdxs.length === 1
+                    ? this.gridSelectedIdxs[0]
+                    : -1;
+                if (selectedIdx >= 0) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.enterGridImageViewMode(selectedIdx);
+                }
             } else if (e.ctrlKey && (e.key === 'a' || e.key === 'A')) {
                 this.selectAllGridImages();
 
@@ -5389,6 +5488,12 @@ class WaferMapViewer {
 
         if (this.dom.fileSearch) {
             this.dom.fileSearch.addEventListener('keydown', e => {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.dom.fileSearch.blur();
+                    return;
+                }
                 if (e.key === 'Enter') this.performSearch();
             });
         }
@@ -6584,43 +6689,22 @@ class WaferMapViewer {
             console.error('[RefMap] 초기화 실패:', error);
         }
 
-        // 초기 화면에서 가장 중요한 것은 폴더 목록이다.
-        // 색상/유저/서버 설정은 병렬로 시작하되, 파일 탐색기 표시를 막지 않는다.
-        const prefetchCF = window.__prefetch?.currentFolder;
-        if (prefetchCF) window.__prefetch.currentFolder = null;
-        const configPromise = this.loadServerConfig().catch((error) => {
-            console.error('[INIT] Server config 초기화 실패:', error);
-            return null;
-        });
-        const colorLegendsPromise = this.loadColorLegends().catch((error) => {
-            console.error('[INIT] Color legends 초기화 실패:', error);
-            return null;
-        });
-        const userInfoPromise = this.loadUserInfo().catch((error) => {
-            console.error('[INIT] User info 초기화 실패:', error);
-            return null;
-        });
-
-        const [rootPath, serverData] = await Promise.all([
-            this.getRootPath().catch(() => ''),
-            (prefetchCF ?? fetch('/api/current-folder').then(r => r.json())).catch(() => ({}))
-        ]);
-
-        Promise.allSettled([configPromise, colorLegendsPromise, userInfoPromise]).then(() => {
-            this.renderColorLegends();
-            this.showColorLegends();
-            this.myLotModal?.refreshData?.().catch((error) => {
-                console.error('[WaferMapViewer] MY LOT prefetch failed:', error);
-            });
-        });
-
-        if (this.dom.fileExplorer) {
+        if (this.dom.fileExplorer && this.dom.fileExplorer.dataset.serverPrerendered !== 'true') {
             this.dom.fileExplorer.innerHTML = '';
         }
 
         try {
             // 🔥 사용자 설정: fire-and-forget (gridCols 등은 폴더 클릭 전에 적용됨)
             this._loadUserPrefs().catch(() => {});
+
+            // 초기 화면에서 가장 중요한 것은 폴더 목록이다.
+            // 색상/유저/서버 설정은 병렬로 시작하되, 파일 탐색기 표시를 막지 않는다.
+            const prefetchCF = window.__prefetch?.currentFolder;
+            if (prefetchCF) window.__prefetch.currentFolder = null;
+            const [rootPath, serverData] = await Promise.all([
+                this.getRootPath().catch(() => ''),
+                (prefetchCF ?? fetch('/api/current-folder').then(r => r.json())).catch(() => ({}))
+            ]);
 
             if (rootPath) {
                 this.currentFolderPath = rootPath;
@@ -6653,6 +6737,31 @@ class WaferMapViewer {
 
             this.showInitialState();
 
+            const startAncillaryBootstrap = () => {
+                Promise.allSettled([
+                    this.loadServerConfig().catch((error) => {
+                        console.error('[INIT] Server config 초기화 실패:', error);
+                        return null;
+                    }),
+                    this.loadColorLegends().catch((error) => {
+                        console.error('[INIT] Color legends 초기화 실패:', error);
+                        return null;
+                    }),
+                    this.loadUserInfo().catch((error) => {
+                        console.error('[INIT] User info 초기화 실패:', error);
+                        return null;
+                    })
+                ]).then(() => {
+                    this.renderColorLegends();
+                    this.showColorLegends();
+                    this.myLotModal?.refreshData?.().catch((error) => {
+                        console.error('[WaferMapViewer] MY LOT prefetch failed:', error);
+                    });
+                });
+            };
+
+            let explorerLoadPromise = Promise.resolve();
+
             // File Explorer 로딩 (백그라운드, 실패 시 재시도)
             if (this.dom.fileExplorer) {
                 const loadExplorer = async (retries = 5, delay = 2000) => {
@@ -6667,8 +6776,18 @@ class WaferMapViewer {
                     }
                     console.error('[INIT] File Explorer 로딩 최종 실패');
                 };
-                loadExplorer();
+                explorerLoadPromise = loadExplorer();
             }
+
+            explorerLoadPromise.finally(() => {
+                if (this.dom.fileExplorer) {
+                    delete this.dom.fileExplorer.dataset.serverPrerendered;
+                }
+                setTimeout(() => {
+                    void this._primeDeferredUiBootstrap();
+                    startAncillaryBootstrap();
+                }, 0);
+            });
 
         } catch (error) {
             console.error('[INIT] Explorer preload failed:', error);
@@ -13147,6 +13266,11 @@ class WaferMapViewer {
 
     async loadImage(path, fromLabelExplorer = false, loadVersion = null, forceReload = false, options = {}) {
         const { preserveBottomSelection = false, preserveViewport = false } = options || {};
+        void this._primeDeferredUiBootstrap();
+        await Promise.allSettled([
+            this._ensureViewerRuntime(),
+            this._getChipAnnotator()
+        ]);
         const loadFromGridSingleMode = this.singleImageFromGrid === true;
         const labelExplorerIsolated = this.isLabelExplorerIsolationActive(path, fromLabelExplorer);
         this._measureOverlayRendered = false;  // 🔥 새 이미지 로드 시 measure 렌더 플래그 초기화
@@ -19100,6 +19224,12 @@ class WaferMapViewer {
         } else {
             sortedImages = this._sortGridImages(filteredImages, this._gridSortKey || 'filename');
         }
+        this._primeEntireGridThumbCount = (
+            shouldForceFlatGrid &&
+            transientGridRestoreState?.source === 'labelExplorer' &&
+            sortedImages.length > 0 &&
+            sortedImages.length <= 64
+        ) ? sortedImages.length : 0;
 
         this.selectedImages = sortedImages;
         this.currentGridImages = sortedImages;  // 🔥 currentGridImages 업데이트
@@ -19841,6 +19971,8 @@ class WaferMapViewer {
 
         this.setupGridLazyLoader();
         this.gridThumbWraps = [];
+        const primeEntireGridThumbCount = this._primeEntireGridThumbCount || 0;
+        this._primeEntireGridThumbCount = 0;
 
         // 🔥 뷰포트 크기 계산 — 첫 N개는 큐 우회, DOM 생성 시 바로 img.src 할당
         const scrollWrapper = this.getGridScrollWrapper();
@@ -19903,6 +20035,9 @@ class WaferMapViewer {
                 requestAnimationFrame(() => {
                     this.resumeGridLoading();
                     this.loadVisibleGridThumbnails({ cancelExisting: false });
+                    if (primeEntireGridThumbCount > 0) {
+                        this.primeRenderedGridThumbnails(primeEntireGridThumbCount);
+                    }
                 });
             }
         };
@@ -20959,7 +21094,7 @@ class WaferMapViewer {
             resetExplorerBtn.textContent = 'Label Explorer';
             
             // 🔥 Label Explorer 상태 복원
-            this.restoreLabelExplorerState();
+            this.restoreLabelExplorerState({ forceRefresh: true });
         }
     }
     
@@ -20981,7 +21116,12 @@ class WaferMapViewer {
     }
     
     // 🔥 Label Explorer 상태 복원
-    restoreLabelExplorerState() {
+    restoreLabelExplorerState(options = {}) {
+        const {
+            forceRefresh = false
+        } = options;
+        const shouldRefreshLabelExplorer = forceRefresh || this.activePageRole === 'label';
+
         if (!this.labelExplorerState) {
             // 새 페이지 등 state가 없으면 Label Explorer 전체 초기화
             if (this.labelSelection) {
@@ -20995,7 +21135,9 @@ class WaferMapViewer {
                     }
                 }
                 this.updateLabelExplorerSelection();
-                this.refreshLabelExplorer();
+                if (shouldRefreshLabelExplorer) {
+                    this.refreshLabelExplorer();
+                }
             }
             return;
         }
@@ -21872,6 +22014,10 @@ class WaferMapViewer {
      */
     async enterSingleViewMode(imagePath) {
         console.log('✅ [SINGLE_VIEW] ENTER Single View Mode:', imagePath);
+        await this._getThumbnailNavigator().catch((error) => {
+            console.warn('[SINGLE_VIEW] ThumbnailNavigator deferred load failed:', error);
+            return null;
+        });
 
         // ✅ 네비게이션 큐 리셋
         this._isNavigating = false;
@@ -22579,11 +22725,12 @@ class WaferMapViewer {
 
             // ✅ 그리드 복귀: DOM이 살아있으면 즉시 표시, 아니면 재생성
             const existingGrid = document.getElementById('image-grid');
+            const existingWrapCount = existingGrid?.querySelectorAll?.('.grid-thumb-wrap')?.length || 0;
             let usedFastPath = false;
             const canUseFastPath = !isLabelExplorerRestore &&
                 this._gridVisuallyHidden &&
                 existingGrid &&
-                existingGrid.children.length > 0;
+                existingWrapCount > 0;
             if (canUseFastPath) {
                 usedFastPath = true;
                 // 🔥 Fast path: 그리드 DOM이 그대로 남아있으므로 시각적 복원만
@@ -28984,11 +29131,13 @@ window.addEventListener('wheel', function(e) {
 
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => { 
+        window.__l3FullViewerReady = true;
         window.viewer = new WaferMapViewer(); 
         // AUTO_LOGIN 체크 및 자동 SAML 로그인
         checkAutoLogin();
     });
 } else {
+    window.__l3FullViewerReady = true;
     window.viewer = new WaferMapViewer();
     // AUTO_LOGIN 체크 및 자동 SAML 로그인
     checkAutoLogin();
@@ -29003,8 +29152,7 @@ async function checkAutoLogin() {
         }
 
         // 서버 설정 확인
-        const configResponse = await fetch('/api/config');
-        const config = await configResponse.json();
+        const config = await (window.__prefetch?.config ?? fetch('/api/config').then(r => r.json()));
 
         if (!config.AUTO_LOGIN) {
             return;

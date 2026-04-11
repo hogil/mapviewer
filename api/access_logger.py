@@ -3,6 +3,7 @@
 
 import logging
 import json
+import sys
 import time
 import os
 from datetime import datetime, timedelta
@@ -388,7 +389,7 @@ class AccessLogger:
         
         return ""
 
-    def _summarize_request_path(self, raw_path: Any, default_label: str = "—") -> str:
+    def _summarize_request_path(self, raw_path: Any, default_label: str = "-") -> str:
         normalized = str(raw_path or "").replace("\\", "/").strip("/")
         if not normalized:
             return default_label
@@ -444,7 +445,7 @@ class AccessLogger:
         log_type = f"{log_type_name:<3}"     # 3자리 (API, PAGE, FILE 등)
         time_col = timestamp[11:] if len(timestamp) > 11 else timestamp  # HH:MM:SS만 (날짜 제거)
         ip_col = f"{ip:<15}"                # 15자리
-        login_col = f"{login_id:<12}" if login_id else f"{'—':<12}"  # 12자리 LoginId
+        login_col = f"{login_id:<12}" if login_id else f"{'-':<12}"  # 12자리 LoginId
         method_col = f"{method:<4}"          # 4자리 (GET, POST, PUT, DEL)
         
         # 상위폴더+파일명 추출 (예: files→folder/image.png)
@@ -514,10 +515,14 @@ class AccessLogger:
         )
         
         # 콘솔에 테이블 형식으로 출력 (중복 방지)
-        print(message)
+        try:
+            sys.stdout.buffer.write((message + '\n').encode('utf-8', errors='replace'))
+            sys.stdout.buffer.flush()
+        except Exception:
+            pass
         
         # 파일에는 timestamp 포함 (파일에는 systemd journal 없으므로)
-        login_part = f" {login_id:<12}" if login_id else f" {'—':<12}"
+        login_part = f" {login_id:<12}" if login_id else f" {'-':<12}"
         file_message = f"{log_type_name}: {timestamp} {ip:<15}{login_part} {method:<6} {endpoint:<30} {status_code:>3}"
         access_logger.info(file_message)
     

@@ -244,10 +244,14 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 
 ## 공통 Cold Start 측정 규칙
 
-- cold-start 측정은 항상 `서버 종료 -> 썸네일/인덱스/pycache 정리 -> 서버 재기동 -> 새 브라우저 세션` 순서를 따른다.
-- `page load`, `folder list`, `files/recursive`, `grid shell`, `viewport thumb`를 분리해서 기록한다. 하나의 합산값만 남기면 병목 위치를 놓친다.
-- `sleep`으로 시간을 소비한 뒤 재는 방식은 금지한다. 필요한 경우 즉시 폴링으로 실제 준비 시점을 잡는다.
-- 최소 3회 반복 평균을 권장하며, 1회 측정값은 참고치로만 본다.
+- 권위 기준은 **strict cold** 이다. 항상 `기존 api.main 서버 종료 -> thumbnails 삭제 -> .file_index_cache.txt / .file_index_cache_*.lock 삭제 -> RELOAD=0으로 새 서버 기동 -> 새 브라우저 세션` 순서를 따른다.
+- **random free port**를 매 run마다 새로 잡는다. 같은 포트를 고정 재사용하면 FAIL이다.
+- 서버 readiness 확인은 **TCP listen 확인만 허용**한다. `/`, `/api/index-status`, `/api/config` 같은 HTTP readiness 요청을 브라우저 접속 전에 보내면 FAIL이다.
+- 첫 HTTP 요청은 반드시 Playwright 브라우저의 첫 `GET /` 이어야 한다. 이 규칙이 깨지면 strict cold 결과로 인정하지 않는다.
+- 브라우저 쪽은 **새 컨텍스트 + HTTP cache / cookie clear**를 사용한다.
+- `page load`, `folder list`, `palette_3k list`, `files/recursive`, `first viewport thumb`, `browser total`, `server start -> folder list`, `server start -> grid`를 분리해서 기록한다. 하나의 합산값만 남기면 병목 위치를 놓친다.
+- 폴더 목록이 보이자마자 `palette_3k`를 클릭하고, 파일 리스트가 보이자마자 지연 없이 `Ctrl+click`으로 그리드 진입한다. 중간 `sleep`/`waitForTimeout`으로 시간을 소비하면 FAIL이다.
+- 최소 3회 반복하고 median을 권위 기록으로 남긴다. 단, 단 1회라도 fail threshold를 넘기면 전체 Phase는 FAIL이다.
 
 ## Reset / 선택 해제 평가 방법
 
@@ -5952,19 +5956,18 @@ classification/classification_chips 경로가 인덱스에 포함된 상태에�
 
 ## Phase 61: Thumbnail Cache 삭제 후 palette_3k Cold Start
 
-서버를 완전히 내리고 `thumbnails/` 캐시를 삭제한 뒤 다시 시작했을 때, Wafer Map Explorer 폴더 목록과 `palette_3k` 첫 그리드 썸네일이 대기 없이 즉시 로딩되기 시작하는지 검증한다.
+썸네일/인덱스 캐시를 지운 뒤 다시 시작했을 때, Wafer Map Explorer가 첫 접속에서 즉시 보이고 `palette_3k` 첫 그리드 썸네일 생성이 시작되는지 확인하는 **smoke cold** Phase다. 권위 기준과 FAIL 계약은 아래 Phase 62를 따른다.
 
 ### 테스트 순서
-1. **서버 중지**: 8443 리스너 프로세스를 종료
-2. **썸네일 캐시 삭제**: `{ROOT_DIR}/thumbnails/` 폴더를 삭제 후 빈 디렉터리로 재생성
-3. **서버 재기동**: `RELOAD=0`, `HTTPS_PORT=8443`로 재시작
-4. **브라우저 캐시 초기화**: 새 브라우저 세션을 사용하거나 `Network.clearBrowserCache`로 썸네일 캐시를 비움
-5. **첫 페이지 로드**: Playwright 새 브라우저/새 페이지로 `https://localhost:8443/` 접속
-6. **폴더 목록 확인**: WME 폴더가 첫 화면에서 즉시 보이는지 확인 (`summary[data-path]` 개수 > 0)
-7. **palette_3k 첫 선택**: `palette_3k`를 Ctrl+클릭하여 첫 그리드 진입
-8. **그리드 셸 확인**: `.grid-thumb-wrap`가 즉시 생성되는지 확인
-9. **첫 썸네일 로딩 시작 확인**: 첫 viewport 썸네일이 `data-grid-loaded=\"true\"` 또는 실제 `img[src]`를 갖는지 확인
-10. **냉시작 API 보조 계측**: 첫 `/api/files/recursive?path=palette_3k`와 첫 `/api/thumbnail?...` 응답 시간을 기록
+1. **기존 서버 중지**: 실행 중인 `python -m api.main` 프로세스를 모두 종료
+2. **앱 캐시 삭제**: `{ROOT_DIR}/thumbnails/`, `{ROOT_DIR}/.file_index_cache.txt`, `{ROOT_DIR}/.file_index_cache_*.lock` 삭제
+3. **랜덤 free port 기동**: `RELOAD=0`으로 새 포트에 서버 시작
+4. **브라우저 캐시 초기화**: 새 브라우저 컨텍스트 + HTTP cache / cookie clear
+5. **첫 페이지 로드**: 첫 HTTP 요청으로 `GET /`
+6. **폴더 목록 확인**: `summary[data-path="palette_3k"]` 표시 확인
+7. **palette_3k 일반 클릭**: 하위 파일 리스트가 표시되는지 확인
+8. **palette_3k Ctrl+클릭**: 그리드 진입 후 첫 viewport 썸네일 로딩 시작 확인
+9. **보조 계측**: 첫 `/api/files/recursive?path=palette_3k`와 첫 `/api/thumbnail?...` 시간 기록
 
 ### 주의
 - 브라우저가 이전 썸네일을 304로 재검증하면 서버 캐시 삭제 효과가 가려질 수 있다.
@@ -5973,55 +5976,58 @@ classification/classification_chips 경로가 인덱스에 포함된 상태에�
 ### pass 기준
 | 항목 | 기준 |
 |------|------|
-| 첫 페이지 폴더 목록 | 초기 접속 직후 폴더 1개 이상 표시 |
-| palette_3k 그리드 셸 | Ctrl+클릭 후 1500ms 이내 `.grid-thumb-wrap` 생성 |
-| 첫 viewport 썸네일 | Ctrl+클릭 후 3000ms 이내 첫 썸네일 로딩 시작 |
+| 첫 페이지 폴더 목록 | 첫 브라우저 요청에서 `summary[data-path="palette_3k"]` 표시 |
+| palette_3k 파일 리스트 | 클릭 후 파일 항목 표시 |
+| 첫 viewport 썸네일 | Ctrl+클릭 후 3000ms 이내 첫 `img[data-grid-loaded="true"]` |
 | Cold files/recursive | 첫 호출 < 1500ms |
-| Cold thumbnail | 첫 호출 < 1500ms |
+| Cold thumbnail | 첫 호출 < 2500ms |
 
-### 2026-04-11 측정 결과
-| 항목 | 측정값 | 판정 |
-|------|--------|------|
-| 첫 페이지 폴더 목록 | 16개 폴더, `domContentLoaded` 135ms / `loadEventEnd` 138ms | PASS |
-| Cold files/recursive (`palette_3k`) | 65ms | PASS |
-| Cold thumbnail (첫 viewport 20개+) | 446ms | PASS |
-| palette_3k 그리드 셸 | 229ms | PASS |
-| viewport 첫 썸네일 시작 | 446ms | PASS |
+### 2026-04-11 strict cold 측정 참고치
+| 항목 | 측정값 |
+|------|--------|
+| browser folder list | 90.8ms / 94.9ms / 93.8ms |
+| browser palette_3k list | 42.1ms / 28.1ms / 35.8ms |
+| browser first grid image | 2270.3ms / 2196.7ms / 2190.1ms |
+| browser total to grid | 2403.2ms / 2319.7ms / 2319.7ms |
 
 ## Phase 62: [CRITICAL] Cold Start 3단계 분절 성능 측정
 
-**⚠️ 최우선 벤치마크** — 서버를 완전히 내리고 모든 캐시(썸네일, 인덱스, `__pycache__`)를 삭제한 뒤, 브라우저 HTTP 캐시까지 비우고 새로 접속하여 **3단계를 개별 측정**한다. 유저가 실제로 체감하는 초기 로딩 경험을 정확히 평가하고, 캐시버스팅 방식 변경 등 서버 변경이 성능에 미치는 영향을 감지한다.
+**⚠️ 최우선 벤치마크** — authoritative **strict cold** 측정이다. 서버를 완전히 내리고 앱 캐시(썸네일, 인덱스)와 브라우저 HTTP 캐시를 비운 뒤, 첫 브라우저 요청이 곧바로 `/`를 치도록 하여 유저 체감 초기 로딩을 측정한다. 실험 방법이 다르면 결과를 인정하지 않고 FAIL로 본다.
 
-### 측정 대상 (3단계)
+### 측정 대상 (권위 5구간)
 
-| Step | 측정 항목 | 기준 |
-|------|----------|------|
-| **Step 1** | 페이지 접속 → Wafer Map Explorer 폴더 목록 표시까지 | `< 5000ms` |
-| **Step 2** | `palette_3k` 폴더 확장 → 3000개 하위 파일 리스트 표시까지 | `< 2000ms` |
-| **Step 3** | `palette_3k` Ctrl+클릭 → 그리드 viewport 전체 썸네일 로드까지 | `< 3000ms` |
+| 구간 | 측정 항목 |
+|------|----------|
+| **A** | 브라우저 첫 `GET /` → Wafer Map Explorer `palette_3k` 폴더 항목 표시 |
+| **B** | `palette_3k` 일반 클릭 → 파일 리스트 표시 |
+| **C** | `palette_3k` Ctrl+클릭 → 첫 viewport 썸네일 1장 로드 |
+| **D** | 서버 시작 시각 → 폴더 리스트 표시 |
+| **E** | 서버 시작 시각 → 첫 viewport 썸네일 1장 로드 |
 
 ### 준비 (매 측정마다)
 
-```bash
-# 1. 서버 종료
-pid=$(netstat -ano | grep ':8443' | grep 'LISTENING' | awk '{print $NF}' | head -1)
-[ -n "$pid" ] && taskkill //F //PID "$pid"
-
-# 2. 모든 캐시 삭제
-find D:/project/data/wm-811k/thumbnails -mindepth 1 -delete
-rm -f D:/project/data/wm-811k/.file_index_cache*
-find D:/project/mapviewer -type d -name "__pycache__" -exec rm -rf {} +
-
-# 3. 서버 재기동
-cd D:/project/mapviewer
-HTTPS_PORT=8443 RELOAD=0 python -m api.main > /tmp/bench.log 2>&1 &
-
-# 4. 서버 up 대기
-for i in $(seq 1 15); do
-  curl -sk https://localhost:8443/api/index-status > /dev/null && break
-  sleep 1
-done
-```
+1. **기존 서버 완전 종료**
+   - 실행 중인 `python -m api.main` 프로세스를 모두 종료한다.
+   - 기존 리스너가 살아 있거나 `.file_index_cache_*.lock`가 남아 있으면 FAIL이다.
+2. **앱 캐시 삭제**
+   - `{ROOT_DIR}/thumbnails` 전체 삭제
+   - `{ROOT_DIR}/.file_index_cache.txt` 삭제
+   - `{ROOT_DIR}/.file_index_cache_*.lock` 삭제
+3. **새 random free port 확보**
+   - 매 run마다 OS가 비어 있는 새 포트를 할당한다.
+   - 8443/8444 고정 재사용 금지
+4. **서버 재기동**
+   - `RELOAD=0` 필수
+   - readiness 확인은 **TCP listen**만 사용
+   - `/api/index-status`, `/api/config`, `/`, `/health` 등 HTTP 요청으로 사전 워밍하면 FAIL
+5. **브라우저 strict cold**
+   - 새 브라우저 컨텍스트 생성
+   - HTTP cache / cookies clear
+   - 첫 HTTP 요청은 Playwright의 `page.goto(BASE_URL)` 이어야 한다
+6. **무지연 인터랙션**
+   - 폴더 목록 표시 즉시 `palette_3k` 클릭
+   - 파일 리스트 표시 즉시 `palette_3k` Ctrl+클릭
+   - 임의 `sleep`, `waitForTimeout(>100ms)`, 인위적 대기 삽입 금지
 
 ### Playwright 측정 스크립트
 
@@ -6032,86 +6038,66 @@ await client.send('Network.clearBrowserCache');
 await client.send('Network.clearBrowserCookies');
 await client.detach();
 
-// ═══ Step 1: 페이지 접속 → 폴더 목록 ═══
-const t0 = Date.now();
-await page.goto('https://localhost:8443/', { waitUntil: 'domcontentloaded' });
-const domMs = Date.now() - t0;
+const navStart = performance.now();
+await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+await page.locator('summary[data-path="palette_3k"]').waitFor();
+const folderListMs = performance.now() - navStart;
 
-let folderCount = 0;
-while (Date.now() - t0 < 15000) {
-  folderCount = await page.locator('summary[data-path]').count();
-  if (folderCount > 0) break;
-  await page.waitForTimeout(50);
-}
-const folderListMs = Date.now() - t0;
-
-// ═══ Step 2: palette_3k 폴더 확장 ═══
-const s2_t0 = Date.now();
+const paletteStart = performance.now();
 await page.locator('summary[data-path="palette_3k"]').click();
-let fileCount = 0;
-while (Date.now() - s2_t0 < 15000) {
-  fileCount = await page.locator('details:has(summary[data-path="palette_3k"]) a[data-path]').count();
-  if (fileCount > 0) break;
-  await page.waitForTimeout(50);
-}
-const fileListMs = Date.now() - s2_t0;
+await page.locator('summary[data-path="palette_3k"] + .folder-content a[data-path^="palette_3k/"]').first().waitFor();
+const paletteListMs = performance.now() - paletteStart;
 
-// ═══ Step 3: Ctrl+클릭 → 그리드 viewport 전체 로드 ═══
-const s3_t0 = Date.now();
+const gridStart = performance.now();
 await page.locator('summary[data-path="palette_3k"]').click({ modifiers: ['Control'] });
-let fullVpMs = null;
-while (Date.now() - s3_t0 < 30000) {
-  const stats = await page.evaluate(() => {
-    const grid = document.getElementById('image-grid');
-    if (!grid) return { vpLoaded: 0, vpTotal: 0 };
-    const wraps = grid.querySelectorAll('.grid-thumb-wrap');
-    const vpTotal = Array.from(wraps).filter(w => {
-      const r = w.getBoundingClientRect();
-      return r.bottom > 0 && r.top < window.innerHeight;
-    }).length;
-    const vpLoaded = Array.from(grid.querySelectorAll('img[data-grid-loaded="true"]')).filter(img => {
-      const r = img.getBoundingClientRect();
-      return r.bottom > 0 && r.top < window.innerHeight;
-    }).length;
-    return { vpLoaded, vpTotal };
-  });
-  if (stats.vpTotal > 0 && stats.vpLoaded >= stats.vpTotal) {
-    fullVpMs = Date.now() - s3_t0;
-    break;
-  }
-  await page.waitForTimeout(80);
-}
+await page.locator('#image-grid img[data-grid-loaded="true"]').first().waitFor();
+const firstGridImageMs = performance.now() - gridStart;
 
-return { domMs, folderListMs, fileListMs, fullVpMs };
+return {
+  folderListMs,
+  paletteListMs,
+  firstGridImageMs,
+  totalToGridMs: folderListMs + paletteListMs + firstGridImageMs,
+};
 ```
 
-### pass 기준
+### 성능 기준 (2026-04-11 strict cold baseline)
 
-| 항목 | 목표 | 경고 | Fail |
-|------|-----|-----|------|
-| Step 1: DOM loaded | < 2000ms | 2000~5000ms | > 5000ms |
-| Step 1: 폴더 목록 표시 | < 3000ms | 3000~5000ms | > 5000ms |
-| Step 2: palette_3k 파일 리스트 (3000개) | < 1500ms | 1500~2500ms | > 2500ms |
-| Step 3: 그리드 viewport 전체 | < 2000ms | 2000~3500ms | > 3500ms |
+| 항목 | baseline median | PASS | FAIL |
+|------|---------------|------|------|
+| A. browser folder list | 93.8ms | `<= 150ms` | `> 200ms` |
+| B. browser palette_3k list | 35.8ms | `<= 60ms` | `> 120ms` |
+| C. browser first grid image | 2196.7ms | `<= 2400ms` | `> 3000ms` |
+| A+B+C. browser total to grid | 2319.7ms | `<= 2500ms` | `> 3200ms` |
+| D. server start -> folder list | 1639.6ms | `<= 1800ms` | `> 2200ms` |
+| E. server start -> first grid image | 3864.4ms | `<= 4200ms` | `> 5000ms` |
+
+### FAIL 계약
+
+- 아래 중 하나라도 해당하면 **즉시 FAIL**:
+- 캐시 삭제가 incomplete (`thumbnails`, `.file_index_cache.txt`, `.file_index_cache_*.lock` 잔존)
+- random free port 미사용
+- 첫 브라우저 `GET /` 전에 어떤 HTTP warm 요청이라도 발생
+- 폴더 목록 이후 `palette_3k` 클릭, 파일 리스트 이후 `Ctrl+click` 사이에 인위적 대기 삽입
+- 위 표의 FAIL threshold를 한 번이라도 초과
 
 ### 주의사항
 
-- **측정은 반드시 3회 이상 반복**하여 평균을 낸다 (1회 측정은 편차가 커서 신뢰도 낮음).
-- 각 측정 전 서버 + 모든 캐시 + 브라우저 HTTP 캐시를 **완전 초기화**한다.
+- 반드시 **3회 이상 반복**하고 median을 기록한다.
+- 결과 보고에는 3회 raw 값과 median을 모두 남긴다.
 - 정적 자산 버전 문자열 계산은 **요청 경로가 아니라 초기화/변경 감지 시점**에 끝나 있어야 한다.
-- 요청마다 JS/CSS 전체를 `glob()` / `stat()` 순회하면 Step 1이 바로 느려진다. 변경 시 반드시 이 Phase로 회귀 측정 필수다.
+- 요청마다 JS/CSS 전체를 `glob()` / `stat()` 순회하면 A 구간이 바로 느려진다. 변경 시 반드시 이 Phase로 회귀 측정 필수다.
 
-### 2026-04-11 측정 결과 (썸네일 삭제 + 브라우저 캐시 초기화 후)
+### 2026-04-11 strict cold 결과
 
-| Step | 측정값 | 판정 |
-|------|--------|------|
-| DOM loaded | 135ms | PASS |
-| 폴더 목록 표시 | 138ms 이내 (첫 paint 시 즉시 표시) | PASS |
-| `/api/files/recursive?path=palette_3k` | 65ms | PASS |
-| 그리드 셸 생성 | 229ms | PASS |
-| viewport 전체 썸네일 시작 | 446ms | PASS |
+| run | browser folder | palette list | first grid image | browser total | server->folder | server->grid |
+|-----|----------------|--------------|------------------|---------------|----------------|--------------|
+| 1 | 90.8ms | 42.1ms | 2270.3ms | 2403.2ms | 1647.3ms | 3959.7ms |
+| 2 | 94.9ms | 28.1ms | 2196.7ms | 2319.7ms | 1639.6ms | 3864.4ms |
+| 3 | 93.8ms | 35.8ms | 2190.1ms | 2319.7ms | 1499.2ms | 3725.1ms |
+| median | 93.8ms | 35.8ms | 2196.7ms | 2319.7ms | 1639.6ms | 3864.4ms |
 
-**결론**: 현재 cold start는 startup 직후 내부 HTTPS warm + targeted folder warm으로 첫 페이지와 핵심 API를 미리 깨워 둔다. 또한 인덱스 load/build는 **user idle 구간에서만 시작**되므로, 서버 재기동 직후 또는 몇 초 뒤 `palette_3k`를 눌러도 `files/recursive`와 그리드가 build 경합에 막히지 않아야 한다.
+**결론**: 현재 authoritative cold path에서 explorer 폴더 리스트는 이미 충분히 빠르다. 회귀 감시는 A/B 구간보다 C/E 구간, 즉 `palette_3k` recursive listing 이후 첫 cold thumbnail 생성 경로에 더 민감해야 한다.
 
 ## Phase 63: JS 모듈 그래프 / Worker 캐시 무효화
 

@@ -136,13 +136,23 @@ def _logical_to_postfix(tokens: List[str]) -> List[str]:
     return output
 
 
+def _token_matches_contains(token: str, term_lower: str) -> bool:
+    if term_lower not in token:
+        return False
+    if "-" not in token or term_lower == token:
+        return True
+    # hyphen LOT 샘플(예: edge-ring)은 첫 세그먼트 기준으로만 부분 검색을 허용한다.
+    # 그래서 "edge"는 매칭되지만 "ring"은 단독 LOT 검색에 섞이지 않는다.
+    return term_lower in token.split("-", 1)[0]
+
+
 def _token_contains_search(token_index: Dict[str, List[int]], term: str, keys_slice: List[str],
                             constraint: Optional[Set[int]] = None) -> Set[int]:
     """토큰 역인덱스에서 포함매칭 (대소문자 무시)."""
     indices: Set[int] = set()
     term_lower = term.lower()
     for token, idx_list in token_index.items():
-        if term_lower in token:
+        if _token_matches_contains(token, term_lower):
             if constraint is not None:
                 indices.update(i for i in idx_list if i in constraint)
             else:

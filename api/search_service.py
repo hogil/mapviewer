@@ -48,6 +48,9 @@ class SearchService:
             "thumbnails",
             "composite_map",
         ]
+        # Global search(root 전체)에서는 작업/테스트용 파생 폴더를 기본 검색 결과에서 제외한다.
+        # 폴더 한정 검색에서는 그대로 허용하여 개별 폴더 확인 흐름은 유지한다.
+        self.global_only_excluded_folders = {"my-lot", "fq_missing_test"}
         self.supported_exts = supported_exts or set()
         self.fallback_max_files = fallback_max_files
         self.fallback_timeout_sec = fallback_timeout_sec
@@ -60,12 +63,19 @@ class SearchService:
             prefix = ""
         return prefix, self.index_service.root_dir if not prefix else current_folder
 
-    def _filter_excluded(self, candidates: List[str]) -> Tuple[List[str], int]:
+    def _filter_excluded(
+        self,
+        candidates: List[str],
+        extra_excluded: Optional[Set[str]] = None,
+    ) -> Tuple[List[str], int]:
         filtered: List[str] = []
         removed = 0
+        excluded_parts = set(self.excluded_folders)
+        if extra_excluded:
+            excluded_parts |= set(extra_excluded)
         for rel in candidates:
             parts = rel.replace("\\", "/").split("/")
-            if any(excl in parts for excl in self.excluded_folders):
+            if any(excl in parts for excl in excluded_parts):
                 removed += 1
                 continue
             filtered.append(rel)
@@ -237,7 +247,8 @@ class SearchService:
             timings.update(fallback_meta)
 
         # 제외 폴더 필터링
-        bucket, removed = self._filter_excluded(bucket)
+        extra_excluded = self.global_only_excluded_folders if not prefix else None
+        bucket, removed = self._filter_excluded(bucket, extra_excluded=extra_excluded)
         timings["excluded_folders_filtered"] = removed
 
         # 인덱스 파일 제외
