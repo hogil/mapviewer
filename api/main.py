@@ -1666,30 +1666,17 @@ async def _lifespan_background_init():
     # 5) 매일 새벽 2시 composite_map + thumbnails 폴더 정리
     await _start_daily_cleanup()
 
-# ======================== JS/CSS 캐시버스팅 버전 ========================
-def _compute_js_version() -> str:
-    """JS/CSS 파일들의 최신 mtime을 기반으로 캐시버스팅 버전 생성."""
-    _project_dir = Path(__file__).resolve().parent.parent
-    max_mtime = 0
-    for ext in ("js/*.js", "css/*.css"):
-        for p in _project_dir.glob(ext):
-            try:
-                mt = p.stat().st_mtime_ns
-                if mt > max_mtime:
-                    max_mtime = mt
-            except OSError:
-                pass
-    if max_mtime > 0:
-        return str(max_mtime)
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=str(_project_dir), stderr=subprocess.DEVNULL
-        ).decode().strip()
-    except Exception:
-        return str(int(time.time()))
-
-_JS_VERSION = _compute_js_version()
+# ======================== Git 버전 해시 (JS 캐시버스팅용) ========================
+# 성능: _compute_js_version()처럼 매 요청마다 glob+stat 순회는 cold-start를 2~3배 느리게 만듦.
+# 유저가 이전 JS를 받는 문제는 Cache-Control: no-cache + ETag weak hash(BUG-17)로 해결됨.
+try:
+    _JS_VERSION = subprocess.check_output(
+        ["git", "rev-parse", "--short", "HEAD"],
+        cwd=str(Path(__file__).resolve().parent.parent),
+        stderr=subprocess.DEVNULL
+    ).decode().strip()
+except Exception:
+    _JS_VERSION = str(int(time.time()))
 
 # ======================== index.html 메모리 캐시 + pre-gzip ========================
 _CACHED_INDEX_HTML: Optional[str] = None
@@ -1719,16 +1706,13 @@ def _build_index_cache():
             _CACHED_INDEX_MTIME_NS = 0
 
 def _refresh_index_cache_if_modified():
-    """index.html 또는 JS/CSS 파일 변경 시 lazy reload. 서버 재시작 없이 편집 즉시 반영."""
-    global _JS_VERSION
+    """index.html 파일 변경 시 lazy reload. 서버 재시작 없이 편집 즉시 반영."""
     html_path = Path("index.html")
     try:
         cur_mtime = html_path.stat().st_mtime_ns
     except OSError:
         return
-    new_ver = _compute_js_version()
-    if cur_mtime != _CACHED_INDEX_MTIME_NS or new_ver != _JS_VERSION:
-        _JS_VERSION = new_ver
+    if cur_mtime != _CACHED_INDEX_MTIME_NS:
         _build_index_cache()
 
 _build_index_cache()

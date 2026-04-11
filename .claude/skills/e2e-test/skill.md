@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 61개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증, Measure 색상 미리보기/적용 회귀, HTTP 캐시 무효화 검증, Composite 색상 매핑/배경 행 제거 검증, Measure 첫 진입 지연/폴더 stale state 회귀, Label Explorer flat-grid 강제 및 positions 없는 palette/PNF 이미지 즉시 로드 회귀, 검색 첫 실행/다중검색/이벤트루프 블로킹 회귀, 서버 Cold Start 즉시 로딩 속도, 탭 다중 전환 이미지 보존, f/q missing 이미지 그리드 로드 검증, classification 인덱스 즉시 일관성 검증, 썸네일 캐시 삭제 후 첫 palette_3k 그리드 즉시 로딩 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 62개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증, Measure 색상 미리보기/적용 회귀, HTTP 캐시 무효화 검증, Composite 색상 매핑/배경 행 제거 검증, Measure 첫 진입 지연/폴더 stale state 회귀, Label Explorer flat-grid 강제 및 positions 없는 palette/PNF 이미지 즉시 로드 회귀, 검색 첫 실행/다중검색/이벤트루프 블로킹 회귀, 서버 Cold Start 즉시 로딩 속도, 탭 다중 전환 이미지 보존, f/q missing 이미지 그리드 로드 검증, classification 인덱스 즉시 일관성 검증, 썸네일 캐시 삭제 후 첫 palette_3k 그리드 즉시 로딩 검증, [CRITICAL] Cold Start 3단계 분절 성능 측정(페이지 로드→폴더 확장→그리드 viewport)을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 context: fork
 agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
@@ -20,7 +20,7 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 
 ## 절대규칙: 기본 전체 실행
 
-- **인자 없이 `/e2e-test` 실행 시 Phase 1~61 전체를 실행한다.**
+- **인자 없이 `/e2e-test` 실행 시 Phase 1~62 전체를 실행한다.**
 - 특정 Phase만 실행하려면 `/e2e-test 3,9,12` 또는 `/e2e-test 33-50`처럼 명시적으로 지정해야 한다.
 - "전체 테스트", "E2E 테스트" 등 범위 미지정 요청은 전체 실행으로 간주한다.
 - Phase를 건너뛰거나 일부만 실행하는 것은 사용자가 명시적으로 요청한 경우에만 허용된다.
@@ -5941,6 +5941,130 @@ classification/classification_chips 경로가 인덱스에 포함된 상태에�
 | Cold thumbnail (첫 512px webp) | 673.9ms | PASS |
 | palette_3k 그리드 셸 | 실제 브라우저에서 생성 확인 | PASS |
 | viewport 첫 썸네일 | 실제 브라우저에서 표시 확인 | PASS |
+
+## Phase 62: [CRITICAL] Cold Start 3단계 분절 성능 측정
+
+**⚠️ 최우선 벤치마크** — 서버를 완전히 내리고 모든 캐시(썸네일, 인덱스, `__pycache__`)를 삭제한 뒤, 브라우저 HTTP 캐시까지 비우고 새로 접속하여 **3단계를 개별 측정**한다. 유저가 실제로 체감하는 초기 로딩 경험을 정확히 평가하고, 캐시버스팅 방식 변경 등 서버 변경이 성능에 미치는 영향을 감지한다.
+
+### 측정 대상 (3단계)
+
+| Step | 측정 항목 | 기준 |
+|------|----------|------|
+| **Step 1** | 페이지 접속 → Wafer Map Explorer 폴더 목록 표시까지 | `< 5000ms` |
+| **Step 2** | `palette_3k` 폴더 확장 → 3000개 하위 파일 리스트 표시까지 | `< 2000ms` |
+| **Step 3** | `palette_3k` Ctrl+클릭 → 그리드 viewport 전체 썸네일 로드까지 | `< 3000ms` |
+
+### 준비 (매 측정마다)
+
+```bash
+# 1. 서버 종료
+pid=$(netstat -ano | grep ':8443' | grep 'LISTENING' | awk '{print $NF}' | head -1)
+[ -n "$pid" ] && taskkill //F //PID "$pid"
+
+# 2. 모든 캐시 삭제
+find D:/project/data/wm-811k/thumbnails -mindepth 1 -delete
+rm -f D:/project/data/wm-811k/.file_index_cache*
+find D:/project/mapviewer -type d -name "__pycache__" -exec rm -rf {} +
+
+# 3. 서버 재기동
+cd D:/project/mapviewer
+HTTPS_PORT=8443 RELOAD=0 python -m api.main > /tmp/bench.log 2>&1 &
+
+# 4. 서버 up 대기
+for i in $(seq 1 15); do
+  curl -sk https://localhost:8443/api/index-status > /dev/null && break
+  sleep 1
+done
+```
+
+### Playwright 측정 스크립트
+
+```javascript
+// 브라우저 HTTP 캐시 완전 초기화 (필수)
+const client = await page.context().newCDPSession(page);
+await client.send('Network.clearBrowserCache');
+await client.send('Network.clearBrowserCookies');
+await client.detach();
+
+// ═══ Step 1: 페이지 접속 → 폴더 목록 ═══
+const t0 = Date.now();
+await page.goto('https://localhost:8443/', { waitUntil: 'domcontentloaded' });
+const domMs = Date.now() - t0;
+
+let folderCount = 0;
+while (Date.now() - t0 < 15000) {
+  folderCount = await page.locator('summary[data-path]').count();
+  if (folderCount > 0) break;
+  await page.waitForTimeout(50);
+}
+const folderListMs = Date.now() - t0;
+
+// ═══ Step 2: palette_3k 폴더 확장 ═══
+const s2_t0 = Date.now();
+await page.locator('summary[data-path="palette_3k"]').click();
+let fileCount = 0;
+while (Date.now() - s2_t0 < 15000) {
+  fileCount = await page.locator('details:has(summary[data-path="palette_3k"]) a[data-path]').count();
+  if (fileCount > 0) break;
+  await page.waitForTimeout(50);
+}
+const fileListMs = Date.now() - s2_t0;
+
+// ═══ Step 3: Ctrl+클릭 → 그리드 viewport 전체 로드 ═══
+const s3_t0 = Date.now();
+await page.locator('summary[data-path="palette_3k"]').click({ modifiers: ['Control'] });
+let fullVpMs = null;
+while (Date.now() - s3_t0 < 30000) {
+  const stats = await page.evaluate(() => {
+    const grid = document.getElementById('image-grid');
+    if (!grid) return { vpLoaded: 0, vpTotal: 0 };
+    const wraps = grid.querySelectorAll('.grid-thumb-wrap');
+    const vpTotal = Array.from(wraps).filter(w => {
+      const r = w.getBoundingClientRect();
+      return r.bottom > 0 && r.top < window.innerHeight;
+    }).length;
+    const vpLoaded = Array.from(grid.querySelectorAll('img[data-grid-loaded="true"]')).filter(img => {
+      const r = img.getBoundingClientRect();
+      return r.bottom > 0 && r.top < window.innerHeight;
+    }).length;
+    return { vpLoaded, vpTotal };
+  });
+  if (stats.vpTotal > 0 && stats.vpLoaded >= stats.vpTotal) {
+    fullVpMs = Date.now() - s3_t0;
+    break;
+  }
+  await page.waitForTimeout(80);
+}
+
+return { domMs, folderListMs, fileListMs, fullVpMs };
+```
+
+### pass 기준
+
+| 항목 | 목표 | 경고 | Fail |
+|------|-----|-----|------|
+| Step 1: DOM loaded | < 2000ms | 2000~5000ms | > 5000ms |
+| Step 1: 폴더 목록 표시 | < 3000ms | 3000~5000ms | > 5000ms |
+| Step 2: palette_3k 파일 리스트 (3000개) | < 1500ms | 1500~2500ms | > 2500ms |
+| Step 3: 그리드 viewport 전체 | < 2000ms | 2000~3500ms | > 3500ms |
+
+### 주의사항
+
+- **측정은 반드시 3회 이상 반복**하여 평균을 낸다 (1회 측정은 편차가 커서 신뢰도 낮음).
+- 각 측정 전 서버 + 모든 캐시 + 브라우저 HTTP 캐시를 **완전 초기화**한다.
+- `_compute_js_version()`처럼 매 요청마다 파일시스템을 순회하는 로직은 Step 1을 크게 느리게 만든다 — 변경 시 반드시 이 Phase로 회귀 측정 필수.
+- `_refresh_index_cache_if_modified()` 같은 요청마다 호출되는 함수에 `glob()` / `stat()`을 추가하면 전체 응답 지연을 유발한다.
+
+### 2026-04-11 측정 결과 (git hash vs mtime 캐시버스팅 비교)
+
+| Step | git hash (A1) | mtime (B1) | git hash (A2) | 차이 |
+|------|---------------|------------|---------------|------|
+| DOM loaded | 3893ms | 9202ms | 3719ms | mtime이 **2.4배 느림** |
+| 폴더 목록 | 5082ms | 11130ms | 6008ms | mtime이 **2.0배 느림** |
+| 파일 리스트 (3000개) | 2442ms | 1421ms | 1355ms | 편차 큼 |
+| viewport 전체 | 1659ms | 3554ms | 3144ms | mtime이 **1.1배 느림** |
+
+**결론**: `_compute_js_version()`이 매 요청마다 JS/CSS 폴더를 `glob()` + `stat()` 순회하는 것이 Step 1을 심각하게 느리게 만든다. 일부 유저가 이전 JS를 받는 문제는 `Cache-Control: no-cache` + ETag weak hash(`BUG-17 수정`)로 해결되므로, JS 버전 문자열은 **git hash 고정**을 유지한다.
 
 #### BUG-16: WF 검색 5백만 파일 순차 스캔 (2026-04-11)
 **증상**: WF 다중검색(`lot_wafer`) API가 977ms 소요 (LOT 검색 14ms 대비 70배 느림)

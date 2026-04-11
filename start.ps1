@@ -20,7 +20,7 @@ $env:WORKERS="1"         # FastAPI 워커 단일 고정
 $env:HTTP2="1"           # 🚀 HTTP/2 활성화 (다중 요청 병렬 처리)
 $env:KEEP_ALIVE="1"      # 🚀 Keep-Alive 연결 유지
 $env:SSL_ENABLED="1"
-$env:HTTPS_PORT="8444"
+$env:HTTPS_PORT="8443"
 $env:SSL_CERTFILE="cert/fullchain.pem"
 $env:SSL_KEYFILE="cert/server.key"
 
