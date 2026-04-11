@@ -1,0 +1,21 @@
+- generic [active] [ref=e1]:
+  - main [ref=e2]:
+    - complementary "파일 탐색기" [ref=e3]:
+      - generic [ref=e4]
+      - generic [ref=e9]
+      - navigation "폴더 및 파일 목록" [ref=e24]
+    - generic [ref=e75]:
+      - generic [ref=e76]
+      - generic "그리드 모드 하단 컬러 범례" [ref=e99]
+      - region "이미지 뷰어" [ref=e172]
+      - generic "페이지 탭" [ref=e178]
+    - complementary "클래스 및 라벨 관리" [ref=e186]:
+      - generic [ref=e187]
+      - generic [ref=e214]
+  - generic [ref=e248]:
+    - generic [ref=e249]:
+      - generic [ref=e250]: LOT
+      - generic [ref=e251]: "0"
+      - button "×" [ref=e252] [cursor=pointer]
+    - textbox "Lot 검색..." [ref=e254]
+    - generic [ref=e256]: No Lots

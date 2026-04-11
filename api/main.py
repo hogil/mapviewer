@@ -7788,10 +7788,18 @@ _FOLDER_FILES_CACHE_BUILT = False
 _FOLDER_FILES_PAYLOAD_CACHE: Dict[str, bytes] = {}
 
 
-def _build_folder_payload(files: List[str]) -> bytes:
-    return b'{"success":true,"files":' + json.dumps(
-        files, ensure_ascii=False, separators=(",", ":")
-    ).encode("utf-8") + b"}"
+def _build_folder_payload(
+    files: List[str],
+    *,
+    total: Optional[int] = None,
+    truncated: bool = False,
+) -> bytes:
+    payload = {"success": True, "files": files}
+    if total is not None:
+        payload["total"] = total
+    if truncated:
+        payload["truncated"] = True
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
 def _prime_folder_payload_cache(folders: Iterable[str]) -> None:
@@ -7800,6 +7808,40 @@ def _prime_folder_payload_cache(folders: Iterable[str]) -> None:
         if files is None:
             continue
         _FOLDER_FILES_PAYLOAD_CACHE[folder] = _build_folder_payload(files)
+
+def _collect_files_from_index_prefix(rel_prefix: str, limit: int = 0) -> Tuple[List[str], Optional[int], bool]:
+    """파일 인덱스에서 prefix 범위만 훑어 폴더 파일 목록을 수집한다."""
+    skip = {"classification", "thumbnails", "composite_map"} | SKIP_DIRS
+    prefix_with_sep = rel_prefix.rstrip("/") + "/" if rel_prefix else ""
+    start_key = prefix_with_sep
+    end_key = prefix_with_sep + "\uffff"
+    files: List[str] = []
+    truncated = False
+    total: Optional[int] = 0
+
+    with FILE_INDEX_LOCK:
+        keys_ref = FILE_INDEX_KEYS
+        start_idx = 0 if not prefix_with_sep else bisect_left(keys_ref, start_key)
+        end_idx = len(keys_ref) if not prefix_with_sep else bisect_right(keys_ref, end_key)
+
+        for idx in range(start_idx, end_idx):
+            key = keys_ref[idx]
+            ext = os.path.splitext(key)[1].lower()
+            if ext not in SUPPORTED_EXTENSIONS:
+                continue
+            parts = key.split("/")
+            if any(p in skip for p in parts[:-1]):
+                continue
+            if limit > 0 and len(files) >= limit:
+                truncated = True
+                total = None
+                break
+            files.append(key)
+            if total is not None:
+                total += 1
+
+    files.sort(key=lambda x: x.split("/")[-1].lower())
+    return files, total, truncated
 
 def _build_folder_files_cache():
     """인덱스에서 폴더별 파일 목록을 미리 그룹핑"""
@@ -7827,7 +7869,7 @@ def _build_folder_files_cache():
     _FOLDER_FILES_CACHE_BUILT = True
 
 @app.get("/api/files/recursive")
-async def get_files_recursive(path: str):
+async def get_files_recursive(path: str, limit: int = Query(0, ge=0, le=5000)):
     """폴더 내 모든 파일을 재귀적으로 가져오기 — 폴더 캐시 O(1) 조회"""
     try:
         target = safe_resolve_path(path)
@@ -7840,14 +7882,31 @@ async def get_files_recursive(path: str):
 
         # 🔥 폴더 캐시에서 O(1) 조회
         if _FOLDER_FILES_CACHE_BUILT and rel_prefix in _FOLDER_FILES_CACHE:
-            payload = _FOLDER_FILES_PAYLOAD_CACHE.get(rel_prefix)
-            if payload is None:
-                payload = _build_folder_payload(_FOLDER_FILES_CACHE[rel_prefix])
-                _FOLDER_FILES_PAYLOAD_CACHE[rel_prefix] = payload
+            cached_files = _FOLDER_FILES_CACHE[rel_prefix]
+            if limit > 0:
+                sliced = cached_files[:limit]
+                payload = _build_folder_payload(
+                    sliced,
+                    total=len(cached_files),
+                    truncated=len(cached_files) > len(sliced),
+                )
+            else:
+                payload = _FOLDER_FILES_PAYLOAD_CACHE.get(rel_prefix)
+                if payload is None:
+                    payload = _build_folder_payload(cached_files)
+                    _FOLDER_FILES_PAYLOAD_CACHE[rel_prefix] = payload
             return Response(content=payload, media_type="application/json")
+
+        if FILE_INDEX_KEYS:
+            files, total, truncated = _collect_files_from_index_prefix(rel_prefix, limit=limit)
+            return Response(
+                content=_build_folder_payload(files, total=total, truncated=truncated),
+                media_type="application/json",
+            )
 
         # 캐시 miss → os.walk 폴백
         files = []
+        truncated = False
         for root, dirs, filenames in os.walk(target):
             for s in list(SKIP_DIRS):
                 if s in dirs: dirs.remove(s)
@@ -7860,12 +7919,17 @@ async def get_files_recursive(path: str):
                 try:
                     root_relative = str(full_path.relative_to(ROOT_DIR)).replace('\\', '/')
                     files.append(root_relative)
+                    if limit > 0 and len(files) >= limit:
+                        truncated = True
+                        break
                 except ValueError:
                     continue
+            if truncated:
+                break
 
         files.sort(key=lambda x: x.split('/')[-1].lower())
         return Response(
-            content=json.dumps({"success": True, "files": files}, ensure_ascii=False).encode(),
+            content=_build_folder_payload(files, total=None if truncated else len(files), truncated=truncated),
             media_type="application/json"
         )
     except Exception as e:

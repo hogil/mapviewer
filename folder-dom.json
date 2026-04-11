@@ -1,0 +1,296 @@
+[
+  {
+    "i": 0,
+    "tag": "UL",
+    "text": "📁 wafer_edge_ring📁 wafer_edge_gradient📁 wafer_center_hot📁 wafer_center_cool📁 sort_test📁 palette_5mb📁 palette_3k📁",
+    "cls": ""
+  },
+  {
+    "i": 1,
+    "tag": "LI",
+    "text": "📁 wafer_edge_ring",
+    "cls": ""
+  },
+  {
+    "i": 2,
+    "tag": "DETAILS",
+    "text": "📁 wafer_edge_ring",
+    "cls": ""
+  },
+  {
+    "i": 3,
+    "tag": "SUMMARY",
+    "text": "📁 wafer_edge_ring",
+    "cls": "folder"
+  },
+  {
+    "i": 5,
+    "tag": "LI",
+    "text": "📁 wafer_edge_gradient",
+    "cls": ""
+  },
+  {
+    "i": 6,
+    "tag": "DETAILS",
+    "text": "📁 wafer_edge_gradient",
+    "cls": ""
+  },
+  {
+    "i": 7,
+    "tag": "SUMMARY",
+    "text": "📁 wafer_edge_gradient",
+    "cls": "folder"
+  },
+  {
+    "i": 9,
+    "tag": "LI",
+    "text": "📁 wafer_center_hot",
+    "cls": ""
+  },
+  {
+    "i": 10,
+    "tag": "DETAILS",
+    "text": "📁 wafer_center_hot",
+    "cls": ""
+  },
+  {
+    "i": 11,
+    "tag": "SUMMARY",
+    "text": "📁 wafer_center_hot",
+    "cls": "folder"
+  },
+  {
+    "i": 13,
+    "tag": "LI",
+    "text": "📁 wafer_center_cool",
+    "cls": ""
+  },
+  {
+    "i": 14,
+    "tag": "DETAILS",
+    "text": "📁 wafer_center_cool",
+    "cls": ""
+  },
+  {
+    "i": 15,
+    "tag": "SUMMARY",
+    "text": "📁 wafer_center_cool",
+    "cls": "folder"
+  },
+  {
+    "i": 17,
+    "tag": "LI",
+    "text": "📁 sort_test",
+    "cls": ""
+  },
+  {
+    "i": 18,
+    "tag": "DETAILS",
+    "text": "📁 sort_test",
+    "cls": ""
+  },
+  {
+    "i": 19,
+    "tag": "SUMMARY",
+    "text": "📁 sort_test",
+    "cls": "folder"
+  },
+  {
+    "i": 21,
+    "tag": "LI",
+    "text": "📁 palette_5mb",
+    "cls": ""
+  },
+  {
+    "i": 22,
+    "tag": "DETAILS",
+    "text": "📁 palette_5mb",
+    "cls": ""
+  },
+  {
+    "i": 23,
+    "tag": "SUMMARY",
+    "text": "📁 palette_5mb",
+    "cls": "folder"
+  },
+  {
+    "i": 25,
+    "tag": "LI",
+    "text": "📁 palette_3k",
+    "cls": ""
+  },
+  {
+    "i": 26,
+    "tag": "DETAILS",
+    "text": "📁 palette_3k",
+    "cls": ""
+  },
+  {
+    "i": 27,
+    "tag": "SUMMARY",
+    "text": "📁 palette_3k",
+    "cls": "folder"
+  },
+  {
+    "i": 29,
+    "tag": "LI",
+    "text": "📁 origin",
+    "cls": ""
+  },
+  {
+    "i": 30,
+    "tag": "DETAILS",
+    "text": "📁 origin",
+    "cls": ""
+  },
+  {
+    "i": 31,
+    "tag": "SUMMARY",
+    "text": "📁 origin",
+    "cls": "folder"
+  },
+  {
+    "i": 33,
+    "tag": "LI",
+    "text": "📁 mopology",
+    "cls": ""
+  },
+  {
+    "i": 34,
+    "tag": "DETAILS",
+    "text": "📁 mopology",
+    "cls": ""
+  },
+  {
+    "i": 35,
+    "tag": "SUMMARY",
+    "text": "📁 mopology",
+    "cls": "folder"
+  },
+  {
+    "i": 37,
+    "tag": "LI",
+    "text": "📁 fq_missing_test",
+    "cls": ""
+  },
+  {
+    "i": 38,
+    "tag": "DETAILS",
+    "text": "📁 fq_missing_test",
+    "cls": ""
+  },
+  {
+    "i": 39,
+    "tag": "SUMMARY",
+    "text": "📁 fq_missing_test",
+    "cls": "folder"
+  },
+  {
+    "i": 41,
+    "tag": "LI",
+    "text": "📁 filter_test",
+    "cls": ""
+  },
+  {
+    "i": 42,
+    "tag": "DETAILS",
+    "text": "📁 filter_test",
+    "cls": ""
+  },
+  {
+    "i": 43,
+    "tag": "SUMMARY",
+    "text": "📁 filter_test",
+    "cls": "folder"
+  },
+  {
+    "i": 45,
+    "tag": "LI",
+    "text": "📁 cca",
+    "cls": ""
+  },
+  {
+    "i": 46,
+    "tag": "DETAILS",
+    "text": "📁 cca",
+    "cls": ""
+  },
+  {
+    "i": 47,
+    "tag": "SUMMARY",
+    "text": "📁 cca",
+    "cls": "folder"
+  },
+  {
+    "i": 49,
+    "tag": "LI",
+    "text": "📁 benchmark_4m",
+    "cls": ""
+  },
+  {
+    "i": 50,
+    "tag": "DETAILS",
+    "text": "📁 benchmark_4m",
+    "cls": ""
+  },
+  {
+    "i": 51,
+    "tag": "SUMMARY",
+    "text": "📁 benchmark_4m",
+    "cls": "folder"
+  },
+  {
+    "i": 53,
+    "tag": "LI",
+    "text": "📁 batch",
+    "cls": ""
+  },
+  {
+    "i": 54,
+    "tag": "DETAILS",
+    "text": "📁 batch",
+    "cls": ""
+  },
+  {
+    "i": 55,
+    "tag": "SUMMARY",
+    "text": "📁 batch",
+    "cls": "folder"
+  },
+  {
+    "i": 57,
+    "tag": "LI",
+    "text": "📁 backup2",
+    "cls": ""
+  },
+  {
+    "i": 58,
+    "tag": "DETAILS",
+    "text": "📁 backup2",
+    "cls": ""
+  },
+  {
+    "i": 59,
+    "tag": "SUMMARY",
+    "text": "📁 backup2",
+    "cls": "folder"
+  },
+  {
+    "i": 61,
+    "tag": "LI",
+    "text": "📁 backup",
+    "cls": ""
+  },
+  {
+    "i": 62,
+    "tag": "DETAILS",
+    "text": "📁 backup",
+    "cls": ""
+  },
+  {
+    "i": 63,
+    "tag": "SUMMARY",
+    "text": "📁 backup",
+    "cls": "folder"
+  }
+]

@@ -1,0 +1,89 @@
+{
+  "posA": 90439,
+  "posB": 156530,
+  "targetPaths": [
+    "palette_3k/GHJ789_00C_06_1349_EE_NORMAL.png",
+    "palette_3k/GHJ789_00C_06_1373_EE_ENGINEER.png",
+    "palette_3k/GHJ789_00C_06_1397_PT_ENGINEER.png",
+    "palette_3k/GHJ789_00C_06_1421_PT_ENGINEER.png",
+    "palette_3k/GHJ789_00C_06_1445_EE_ENGINEER.png",
+    "palette_3k/GHJ789_00C_06_1469_PT_NORMAL.png",
+    "palette_3k/GHJ789_00C_06_1493_PE_PWQ.png",
+    "palette_3k/GHJ789_00C_06_1517_PT_PWQ.png",
+    "palette_3k/GHJ789_00C_06_1541_PE_NORMAL.png",
+    "palette_3k/GHJ789_00C_06_1565_PT_NORMAL.png"
+  ],
+  "totalThumbRequests": 48,
+  "visible": [
+    {
+      "path": "palette_3k/GHJ789_00C_06_1349_EE_NORMAL.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCount": 1
+    },
+    {
+      "path": "palette_3k/GHJ789_00C_06_1373_EE_ENGINEER.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCount": 2
+    },
+    {
+      "path": "palette_3k/GHJ789_00C_06_1397_PT_ENGINEER.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCount": 2
+    },
+    {
+      "path": "palette_3k/GHJ789_00C_06_1421_PT_ENGINEER.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCount": 2
+    },
+    {
+      "path": "palette_3k/GHJ789_00C_06_1445_EE_ENGINEER.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCount": 2
+    },
+    {
+      "path": "palette_3k/GHJ789_00C_06_1469_PT_NORMAL.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCount": 2
+    },
+    {
+      "path": "palette_3k/GHJ789_00C_06_1493_PE_PWQ.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCount": 2
+    },
+    {
+      "path": "palette_3k/GHJ789_00C_06_1517_PT_PWQ.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCount": 2
+    },
+    {
+      "path": "palette_3k/GHJ789_00C_06_1541_PE_NORMAL.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCount": 2
+    },
+    {
+      "path": "palette_3k/GHJ789_00C_06_1565_PT_NORMAL.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCount": 2
+    }
+  ]
+}

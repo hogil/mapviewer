@@ -1,0 +1,31 @@
+{
+  "dataset": {
+    "loaded": "true"
+  },
+  "summaryDataset": {
+    "path": "palette_3k"
+  },
+  "firstLinks": [
+    {
+      "text": "📄 ABC123_00C_04_0003_EE_NORMAL.png",
+      "href": "#",
+      "dataset": {
+        "path": "palette_3k/ABC123_00C_04_0003_EE_NORMAL.png"
+      }
+    },
+    {
+      "text": "📄 ABC123_00C_04_0027_EE_NORMAL.png",
+      "href": "#",
+      "dataset": {
+        "path": "palette_3k/ABC123_00C_04_0027_EE_NORMAL.png"
+      }
+    },
+    {
+      "text": "📄 ABC123_00C_04_0051_PE_ENGINEER.png",
+      "href": "#",
+      "dataset": {
+        "path": "palette_3k/ABC123_00C_04_0051_PE_ENGINEER.png"
+      }
+    }
+  ]
+}

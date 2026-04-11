@@ -1,0 +1,921 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    from multiprocessing.spawn import spawn_main; spawn_main(parent_pid=59844, pipe_handle=1252)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\__init__.py", line 16, in <module>
+    from . import context
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\context.py", line 6, in <module>
+    from . import reduction
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\reduction.py", line 16, in <module>
+    import socket
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\socket.py", line 52, in <module>
+    import _socket
+ImportError: DLL load failed while importing _socket: 이 작업을 완료하기 위한 페이징 파일이 너무 작습니다.
+Process SpawnProcess-12:10:
+Process SpawnProcess-12:12:
+Process SpawnProcess-14:7:
+Process SpawnProcess-11:4:
+Process SpawnProcess-12:5:
+Process SpawnProcess-14:16:
+Process SpawnProcess-12:16:
+Process SpawnProcess-12:15:
+Process SpawnProcess-11:16:
+Process SpawnProcess-14:15:
+Process SpawnProcess-14:14:
+Process SpawnProcess-11:14:
+Process SpawnProcess-12:14:
+Process SpawnProcess-14:13:
+Process SpawnProcess-11:13:
+Process SpawnProcess-12:2:
+Process SpawnProcess-12:11:
+Process SpawnProcess-12:13:
+Process SpawnProcess-11:12:
+Process SpawnProcess-14:12:
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 101, in get
+    res = self._recv_bytes()
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\connection.py", line 216, in recv_bytes
+    buf = self._recv_bytes(maxlength)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\connection.py", line 321, in _recv_bytes
+    waitres = _winapi.WaitForMultipleObjects(
+        [ov.event], False, INFINITE)
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+KeyboardInterrupt
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Process SpawnProcess-11:15:
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+Process SpawnProcess-14:2:
+Process SpawnProcess-3:11:
+Process SpawnProcess-4:5:
+Process SpawnProcess-11:11:
+KeyboardInterrupt
+Process SpawnProcess-14:10:
+Process SpawnProcess-11:9:
+Process SpawnProcess-14:8:
+Process SpawnProcess-11:6:
+Process SpawnProcess-11:5:
+Process SpawnProcess-11:3:
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+Process SpawnProcess-2:8:
+Process SpawnProcess-2:16:
+Process SpawnProcess-4:12:
+Process SpawnProcess-2:15:
+Process SpawnProcess-2:14:
+Process SpawnProcess-3:16:
+Process SpawnProcess-2:12:
+Process SpawnProcess-2:13:
+Process SpawnProcess-3:15:
+Process SpawnProcess-2:11:
+Process SpawnProcess-3:14:
+Process SpawnProcess-4:16:
+Process SpawnProcess-2:10:
+Process SpawnProcess-4:15:
+Process SpawnProcess-4:14:
+Process SpawnProcess-3:13:
+Process SpawnProcess-3:12:
+Process SpawnProcess-2:9:
+Process SpawnProcess-4:13:
+Process SpawnProcess-4:11:
+Process SpawnProcess-3:10:
+Process SpawnProcess-2:5:
+Process SpawnProcess-3:9:
+Process SpawnProcess-2:6:
+Process SpawnProcess-3:8:
+Process SpawnProcess-2:4:
+Process SpawnProcess-4:10:
+Process SpawnProcess-4:9:
+Process SpawnProcess-4:7:
+Process SpawnProcess-2:7:
+Process SpawnProcess-3:7:
+Process SpawnProcess-3:6:
+Process SpawnProcess-4:8:
+Process SpawnProcess-3:4:
+Process SpawnProcess-3:5:
+Process SpawnProcess-2:3:
+Process SpawnProcess-4:6:
+Process SpawnProcess-3:3:
+Process SpawnProcess-4:3:
+Process SpawnProcess-4:4:
+Process SpawnProcess-2:2:
+Process SpawnProcess-3:2:
+Process SpawnProcess-4:2:
+Process SpawnProcess-2:1:
+Process SpawnProcess-4:1:
+Process SpawnProcess-3:1:
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 101, in get
+    res = self._recv_bytes()
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\connection.py", line 216, in recv_bytes
+    buf = self._recv_bytes(maxlength)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\connection.py", line 321, in _recv_bytes
+    waitres = _winapi.WaitForMultipleObjects(
+        [ov.event], False, INFINITE)
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+Traceback (most recent call last):
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 313, in _bootstrap
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 101, in get
+    res = self._recv_bytes()
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\connection.py", line 216, in recv_bytes
+    buf = self._recv_bytes(maxlength)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\connection.py", line 321, in _recv_bytes
+    waitres = _winapi.WaitForMultipleObjects(
+        [ov.event], False, INFINITE)
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\process.py", line 242, in _process_worker
+    call_item = call_queue.get(block=True)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\queues.py", line 100, in get
+    with self._rlock:
+         ^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\synchronize.py", line 95, in __enter__
+    return self._semlock.__enter__()
+           ~~~~~~~~~~~~~~~~~~~~~~~^^
+KeyboardInterrupt
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    from multiprocessing.spawn import spawn_main; spawn_main(parent_pid=23724, pipe_handle=724)
+                                                  ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 135, in _main
+    return self._bootstrap(parent_sentinel)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 329, in _bootstrap
+    threading._shutdown()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1536, in _shutdown
+    atexit_call()
+    ~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1507, in <lambda>
+    _threading_atexits.append(lambda: func(*arg, **kwargs))
+                                      ~~~~^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\thread.py", line 31, in _python_exit
+    t.join()
+    ~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1094, in join
+    self._handle.join(timeout)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    from multiprocessing.spawn import spawn_main; spawn_main(parent_pid=23724, pipe_handle=556)
+                                                  ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 135, in _main
+    return self._bootstrap(parent_sentinel)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 329, in _bootstrap
+    threading._shutdown()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1536, in _shutdown
+    atexit_call()
+    ~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1507, in <lambda>
+    _threading_atexits.append(lambda: func(*arg, **kwargs))
+                                      ~~~~^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\thread.py", line 31, in _python_exit
+    t.join()
+    ~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1094, in join
+    self._handle.join(timeout)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    from multiprocessing.spawn import spawn_main; spawn_main(parent_pid=23724, pipe_handle=916)
+                                                  ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 135, in _main
+    return self._bootstrap(parent_sentinel)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 329, in _bootstrap
+    threading._shutdown()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1536, in _shutdown
+    atexit_call()
+    ~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1507, in <lambda>
+    _threading_atexits.append(lambda: func(*arg, **kwargs))
+                                      ~~~~^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\thread.py", line 31, in _python_exit
+    t.join()
+    ~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1094, in join
+    self._handle.join(timeout)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    from multiprocessing.spawn import spawn_main; spawn_main(parent_pid=23724, pipe_handle=888)
+                                                  ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 135, in _main
+    return self._bootstrap(parent_sentinel)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 329, in _bootstrap
+    threading._shutdown()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1536, in _shutdown
+    atexit_call()
+    ~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1507, in <lambda>
+    _threading_atexits.append(lambda: func(*arg, **kwargs))
+                                      ~~~~^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\thread.py", line 31, in _python_exit
+    t.join()
+    ~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1094, in join
+    self._handle.join(timeout)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^
+KeyboardInterrupt
+Traceback (most recent call last):
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    from multiprocessing.spawn import spawn_main; spawn_main(parent_pid=23724, pipe_handle=696)
+                                                  ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 1, in <module>
+    from multiprocessing.spawn import spawn_main; spawn_main(parent_pid=23724, pipe_handle=976)
+                                                  ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 135, in _main
+    return self._bootstrap(parent_sentinel)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 135, in _main
+    return self._bootstrap(parent_sentinel)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 329, in _bootstrap
+    threading._shutdown()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 329, in _bootstrap
+    threading._shutdown()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1536, in _shutdown
+    atexit_call()
+    ~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1536, in _shutdown
+    atexit_call()
+    ~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1507, in <lambda>
+    _threading_atexits.append(lambda: func(*arg, **kwargs))
+                                      ~~~~^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1507, in <lambda>
+    _threading_atexits.append(lambda: func(*arg, **kwargs))
+                                      ~~~~^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\thread.py", line 31, in _python_exit
+    t.join()
+    ~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\thread.py", line 31, in _python_exit
+    t.join()
+    ~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1094, in join
+    self._handle.join(timeout)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1094, in join
+    self._handle.join(timeout)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^
+KeyboardInterrupt
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    from multiprocessing.spawn import spawn_main; spawn_main(parent_pid=23724, pipe_handle=628)
+                                                  ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 135, in _main
+    return self._bootstrap(parent_sentinel)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\process.py", line 329, in _bootstrap
+    threading._shutdown()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1536, in _shutdown
+    atexit_call()
+    ~~~~~~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1507, in <lambda>
+    _threading_atexits.append(lambda: func(*arg, **kwargs))
+                                      ~~~~^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\thread.py", line 31, in _python_exit
+    t.join()
+    ~~~~~~^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 1094, in join
+    self._handle.join(timeout)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^
+KeyboardInterrupt

@@ -223,6 +223,32 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 - alert/confirm 다이얼로그는 `browser_handle_dialog`로 처리
 - Phase 끝마다 정리(cleanup)하여 다음 Phase에 영향 없도록
 
+## 중복 정리 및 권위 기준
+
+같은 주제를 여러 Phase가 다루더라도 역할이 다르다. 아래 기준으로 읽고 실행한다.
+
+| 주제 | 권위 기준 Phase | 보조/레거시 Phase | 정리 원칙 |
+|------|-----------------|-------------------|-----------|
+| Reset / 선택 해제 / 복귀 안정성 | 상단 `Reset / 선택 해제 평가 방법`, Phase 28, Phase 29 | Phase 3 일부 필터 시나리오 | 선택/해제는 "현재 보이는 subset"이 아니라 원본 폴더 집합 기준으로 평가한다 |
+| HTTP 캐시 / 정적 자산 재검증 | Phase 58, Phase 63 | Phase 46 | Phase 46은 API/thumbnail/image 계열 broad header 확인, Phase 58은 JS/CSS ETag, Phase 63은 모듈 그래프/worker 버전 전파 전담 |
+| Cold Start / 첫 로드 성능 | Phase 61, Phase 62 | Phase 52, Phase 36 일부 cold 항목 | Phase 52는 빠른 smoke check, 서버/브라우저 캐시 완전 초기화 후 권위 벤치는 반드시 Phase 61·62를 사용 |
+| 검색 기능 / 성능 | Phase 50, Phase 57, Phase 59 | Phase 38, Phase 51 | 검색 정확도는 Phase 50·51, WF UI 흐름은 Phase 57, latency 회귀는 Phase 59로 분리해 읽는다 |
+| classification / Explorer 상태 일관성 | Phase 21, Phase 55, Phase 60 | Phase 43, Phase 44 | 탭 상태, Explorer 하이라이트, 인덱스 rename/delete 반영은 서로 다른 회귀군으로 구분한다 |
+
+## 공통 캐시 검증 규칙
+
+- 캐시 관련 Phase를 실행할 때는 **새 브라우저 컨텍스트**를 기본으로 사용한다.
+- 정적 자산 회귀는 `HTML URL`만 보면 안 된다. `main.js` 본문, dynamic import, worker URL까지 같이 확인해야 한다.
+- `Cache-Control: no-cache`만으로 PASS 처리하지 않는다. 반드시 `ETag` 존재와 `If-None-Match -> 304`를 같이 본다.
+- 서버 재기동 후 stale JS 회귀를 볼 때는 브라우저 메모리 캐시와 디스크 캐시를 둘 다 비우고 시작한다.
+
+## 공통 Cold Start 측정 규칙
+
+- cold-start 측정은 항상 `서버 종료 -> 썸네일/인덱스/pycache 정리 -> 서버 재기동 -> 새 브라우저 세션` 순서를 따른다.
+- `page load`, `folder list`, `files/recursive`, `grid shell`, `viewport thumb`를 분리해서 기록한다. 하나의 합산값만 남기면 병목 위치를 놓친다.
+- `sleep`으로 시간을 소비한 뒤 재는 방식은 금지한다. 필요한 경우 즉시 폴링으로 실제 준비 시점을 잡는다.
+- 최소 3회 반복 평균을 권장하며, 1회 측정값은 참고치로만 본다.
+
 ## Reset / 선택 해제 평가 방법
 
 - 폴더 1개를 선택해 grid를 연다
@@ -4373,6 +4399,8 @@ const ms = Math.round(performance.now() - t0);
 
 **목적**: 모든 이미지/썸네일/JS/CSS 응답에 `Cache-Control: no-cache`가 적용되어, 브라우저가 매번 서버에 ETag 검증을 수행하고 stale 캐시를 사용하지 않는지 확인한다.
 
+> 역할 분리: 이 Phase는 **API/thumbnail/image 계열의 broad no-cache 적용 여부**를 본다. 정적 자산의 `ETag/304`는 Phase 58, 모듈 그래프/worker 버전 전파는 Phase 63이 권위 기준이다.
+
 **배경 — BUG-12 (2026-03-29)**:
 Chrome이 `max-age=86400~31536000` 응답을 디스크 캐시에 저장 → 개인색 변경/서버 재시작 후에도 구버전 이미지 표시.
 서버 + 프론트엔드 양쪽 모두 `Cache-Control: no-cache`로 변경 (약 20곳).
@@ -5627,6 +5655,8 @@ console.assert(g2.total > 0, `LOT multi + AND: ${g2.total} (expected > 0)`);
 
 서버를 새로 시작한 직후 **대기 시간 없이** 페이지 접속 → 폴더 리스트 → Ctrl+클릭으로 이미지 로딩까지의 전체 시간을 측정한다.
 
+> 역할 분리: 이 Phase는 **빠른 smoke check**다. 썸네일 삭제 + 브라우저 캐시 초기화 + 3단계 분절 계측이 필요한 권위 벤치는 Phase 61, 62를 사용한다.
+
 ### 핵심 원칙: No Sleep — 즉시 재시도
 - `browser_wait_for(time: N)` 같은 대기를 사용하지 않는다.
 - 폴더 리스트가 안 나오면 즉시 재시도 (최대 20회, 간격 0).
@@ -5917,6 +5947,7 @@ classification/classification_chips 경로가 인덱스에 포함된 상태에�
 **원인**: `class_to_keys`는 단건 add/remove만 갱신하고, `/api/classes/rename`, `/api/classes/delete`, `/api/classify/delete` 배치 경로는 인덱스를 갱신하지 않음
 **수정**: `IndexService`에 `rename_classification_prefix`, `delete_classification_prefix` 추가 + rename/class delete/batch delete 엔드포인트에서 즉시 반영
 **결과**: rename 후 새 클래스 조회 정상, 배치 삭제 후 결과 즉시 0개, 삭제 카운트도 실제 삭제 개수만 반영
+**평가**: Phase 60에서 단건 추가 → rename → batch delete → class delete를 순서대로 실행해 각 단계 직후 `/api/classes/{class}/images` 응답이 즉시 바뀌는지 확인한다. stale 결과가 한 번이라도 남으면 FAIL
 **파일**: `api/index_service.py`, `api/main.py`
 
 ## Phase 61: Thumbnail Cache 삭제 후 palette_3k Cold Start
@@ -6119,6 +6150,7 @@ return { domMs, folderListMs, fileListMs, fullVpMs };
 **원인**: `_lot_wafer_scan()`이 LOT 인덱스 대신 keys_slice 전체(5M)를 순차 스캔
 **수정**: LOT 인덱스(`lot_search`)로 후보 추출 → 후보(~200개)만 wafer 필터링 (`_lot_wafer_filter_indexed`)
 **결과**: 977ms → 5ms (195배 개선)
+**평가**: Phase 57로 WF UI/API 결과를 확인하고, Phase 59에서 cold/warm 지연을 측정한다. `lot_wafer`가 cold < 500ms, warm < 50ms를 넘기면 FAIL
 **파일**: `api/search_service.py`
 
 #### BUG-17: JS/CSS 파일 ETag 미설정 (2026-04-11)
@@ -6147,10 +6179,12 @@ return { domMs, folderListMs, fileListMs, fullVpMs };
 **증상**: Permission Editor 모달에서 loginId="all" 와일드카드 사용자가 "(이름없음) (all) · ROLE_ADMIN"으로 표시
 **원인**: `loginId === "all"`일 때 displayName 매핑 로직이 없어 일반 사용자와 동일하게 처리
 **수정**: `loginId === "all"`이면 "모든 사용자 · ROLE_ADMIN"으로 표시 ("(all)" ID 미노출)
+**평가**: Phase 25에서 Permission Editor 첫 행에 "모든 사용자"가 표시되고 `(all)` ID가 노출되지 않는지 확인한다. 둘 중 하나라도 어긋나면 FAIL
 **파일**: `js/main.js`, `js/main.min.js`
 
 #### BUG-15: 새 페이지 추가 시 Label Explorer 이전 상태 잔류 (2026-04-10)
 **증상**: 페이지 탭 추가(+) 시 Label Explorer가 이전 페이지의 폴더 펼침 상태와 하이라이트를 그대로 유지
 **원인**: `restoreLabelExplorerState()`에서 `labelExplorerState === null`(새 빈 페이지)일 때 기존 상태를 초기화하지 않음
 **수정**: `labelExplorerState`가 null이면 `selected`, `selectedClasses`, `lastClicked` 초기화 + `openFolders` 전체 false + `refreshLabelExplorer()` 호출
+**평가**: Phase 21에서 새 탭 생성 직후 Label Explorer의 폴더 열림, 선택 하이라이트, 이미지 항목이 모두 초기 상태인지 확인한다. 이전 탭 흔적이 보이면 FAIL
 **파일**: `js/main.js`, `js/main.min.js`

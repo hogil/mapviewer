@@ -1,0 +1,34 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    from multiprocessing.spawn import spawn_main; spawn_main(parent_pid=47768, pipe_handle=1512)
+                                                  ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 122, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 131, in _main
+    prepare(preparation_data)
+    ~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 244, in prepare
+    _fixup_main_from_name(data['init_main_from_name'])
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\multiprocessing\spawn.py", line 268, in _fixup_main_from_name
+    main_content = runpy.run_module(mod_name,
+                                    run_name="__mp_main__",
+                                    alter_sys=True)
+  File "<frozen runpy>", line 226, in run_module
+  File "<frozen runpy>", line 98, in _run_module_code
+  File "<frozen runpy>", line 88, in _run_code
+  File "D:\project\mapviewer\api\main.py", line 8740, in <module>
+    _preload_js_assets()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "D:\project\mapviewer\api\main.py", line 8720, in _preload_js_assets
+    _JS_CACHE[f.name] = _build_js_entry(f)
+                        ~~~~~~~~~~~~~~~^^^
+  File "D:\project\mapviewer\api\main.py", line 8709, in _build_js_entry
+    text = path.read_text(encoding="utf-8")
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\pathlib\_local.py", line 546, in read_text
+    return PathBase.read_text(self, encoding, errors, newline)
+           ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\hgcho\AppData\Local\Programs\Python\Python313\Lib\pathlib\_abc.py", line 633, in read_text
+    return f.read()
+           ~~~~~~^^
+MemoryError

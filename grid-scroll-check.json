@@ -1,0 +1,106 @@
+{
+  "finalScrollTop": 118267,
+  "finalVisibleCount": 12,
+  "requestsAfterScroll": 53,
+  "visible": [
+    {
+      "path": "palette_3k/KHN931_00C_02_0865_EE_ENGINEER.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCountAfterScroll": 1,
+      "lastRequest": "https://127.0.0.1:8443/api/thumbnail?path=palette_3k%2FKHN931_00C_02_0865_EE_ENGINEER.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/KHN931_00C_02_0889_PE_NORMAL.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCountAfterScroll": 1,
+      "lastRequest": "https://127.0.0.1:8443/api/thumbnail?path=palette_3k%2FKHN931_00C_02_0889_PE_NORMAL.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/KHN931_00C_02_0913_EE_ENGINEER.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCountAfterScroll": 1,
+      "lastRequest": "https://127.0.0.1:8443/api/thumbnail?path=palette_3k%2FKHN931_00C_02_0913_EE_ENGINEER.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/KHN931_00C_02_0937_EE_ENGINEER.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCountAfterScroll": 1,
+      "lastRequest": "https://127.0.0.1:8443/api/thumbnail?path=palette_3k%2FKHN931_00C_02_0937_EE_ENGINEER.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/KHN931_00C_02_0961_PE_ENGINEER.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCountAfterScroll": 1,
+      "lastRequest": "https://127.0.0.1:8443/api/thumbnail?path=palette_3k%2FKHN931_00C_02_0961_PE_ENGINEER.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/KHN931_00C_02_0985_PE_NORMAL.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCountAfterScroll": 1,
+      "lastRequest": "https://127.0.0.1:8443/api/thumbnail?path=palette_3k%2FKHN931_00C_02_0985_PE_NORMAL.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/KHN931_00C_02_1009_EE_NORMAL.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCountAfterScroll": 1,
+      "lastRequest": "https://127.0.0.1:8443/api/thumbnail?path=palette_3k%2FKHN931_00C_02_1009_EE_NORMAL.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/KHN931_00C_02_1033_EE_PWQ.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCountAfterScroll": 1,
+      "lastRequest": "https://127.0.0.1:8443/api/thumbnail?path=palette_3k%2FKHN931_00C_02_1033_EE_PWQ.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/KHN931_00C_02_1057_EE_ENGINEER.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCountAfterScroll": 1,
+      "lastRequest": "https://127.0.0.1:8443/api/thumbnail?path=palette_3k%2FKHN931_00C_02_1057_EE_ENGINEER.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/KHN931_00C_02_1081_PE_PWQ.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCountAfterScroll": 1,
+      "lastRequest": "https://127.0.0.1:8443/api/thumbnail?path=palette_3k%2FKHN931_00C_02_1081_PE_PWQ.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/KHN931_00C_02_1105_EE_NORMAL.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCountAfterScroll": 1,
+      "lastRequest": "https://127.0.0.1:8443/api/thumbnail?path=palette_3k%2FKHN931_00C_02_1105_EE_NORMAL.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/KHN931_00C_02_1129_PE_ENGINEER.png",
+      "loading": "false",
+      "loaded": "true",
+      "isPlaceholder": false,
+      "requestCountAfterScroll": 1,
+      "lastRequest": "https://127.0.0.1:8443/api/thumbnail?path=palette_3k%2FKHN931_00C_02_1129_PE_ENGINEER.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    }
+  ],
+  "inFlight": 0,
+  "queueLength": 0,
+  "queuedSetSize": 0
+}

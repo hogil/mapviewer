@@ -1,0 +1,56 @@
+{
+  "scrollTop": 0,
+  "viewportHeight": 427,
+  "scrollHeight": 173923,
+  "totalThumbs": 3000,
+  "visible": [
+    {
+      "path": "palette_3k/ABC123_00C_04_0003_EE_NORMAL.png",
+      "loading": "false",
+      "loaded": "true",
+      "src": "/api/thumbnail?path=palette_3k%2FABC123_00C_04_0003_EE_NORMAL.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/ABC123_00C_04_0027_EE_NORMAL.png",
+      "loading": "false",
+      "loaded": "true",
+      "src": "/api/thumbnail?path=palette_3k%2FABC123_00C_04_0027_EE_NORMAL.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/ABC123_00C_04_0051_PE_ENGINEER.png",
+      "loading": "false",
+      "loaded": "true",
+      "src": "/api/thumbnail?path=palette_3k%2FABC123_00C_04_0051_PE_ENGINEER.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/ABC123_00C_04_0075_EE_ENGINEER.png",
+      "loading": "false",
+      "loaded": "true",
+      "src": "/api/thumbnail?path=palette_3k%2FABC123_00C_04_0075_EE_ENGINEER.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/ABC123_00C_04_0099_EE_ENGINEER.png",
+      "loading": "false",
+      "loaded": "true",
+      "src": "/api/thumbnail?path=palette_3k%2FABC123_00C_04_0099_EE_ENGINEER.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/ABC123_00C_04_0123_PT_NORMAL.png",
+      "loading": "false",
+      "loaded": "true",
+      "src": "/api/thumbnail?path=palette_3k%2FABC123_00C_04_0123_PT_NORMAL.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/ABC123_00C_04_0147_EE_ENGINEER.png",
+      "loading": "false",
+      "loaded": "true",
+      "src": "/api/thumbnail?path=palette_3k%2FABC123_00C_04_0147_EE_ENGINEER.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    },
+    {
+      "path": "palette_3k/ABC123_00C_04_0171_PE_NORMAL.png",
+      "loading": "false",
+      "loaded": "true",
+      "src": "/api/thumbnail?path=palette_3k%2FABC123_00C_04_0171_PE_NORMAL.png&size=512&personalized=true&scheme=notsaml&_t=260411122208"
+    }
+  ]
+}
