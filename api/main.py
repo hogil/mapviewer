@@ -9024,6 +9024,52 @@ async def change_folder(request: Request):
 _BROWSE_FOLDERS_CACHE: Optional[Dict] = None
 _BROWSE_FOLDERS_CACHE_TIME: float = 0
 
+
+def _scan_browse_folders_tree(target_path: Path) -> Dict[str, list]:
+    folders = []
+    subfolders = []
+    skip_dir_names = {'classification', 'classification_chips', 'thumbnails', 'labels'}
+    skip_dir_names.update(SKIP_DIRS)
+
+    with os.scandir(target_path) as it:
+        for entry in it:
+            if (
+                entry.is_dir(follow_symlinks=False)
+                and not entry.name.startswith('.')
+                and entry.name not in skip_dir_names
+            ):
+                folders.append({
+                    "name": entry.name,
+                    "path": str(entry.path),
+                    "type": "folder",
+                    "depth": 1,
+                })
+
+    for folder in folders:
+        try:
+            with os.scandir(folder["path"]) as sub_it:
+                for sub_entry in sub_it:
+                    if (
+                        sub_entry.is_dir(follow_symlinks=False)
+                        and not sub_entry.name.startswith('.')
+                        and sub_entry.name not in skip_dir_names
+                    ):
+                        subfolders.append({
+                            "name": f"{folder['name']} / {sub_entry.name}",
+                            "path": str(sub_entry.path),
+                            "type": "folder",
+                            "depth": 2,
+                            "parent": folder['name']
+                        })
+        except PermissionError:
+            continue
+        except Exception as e:
+            logger.debug(f"2depth 스캔 오류 ({folder['name']}): {e}")
+
+    all_folders = folders + subfolders
+    all_folders.sort(key=lambda x: x["name"].lower(), reverse=True)
+    return {"folders": all_folders}
+
 @app.get("/api/browse-folders")
 async def browse_folders(path: Optional[str] = None):
     global _BROWSE_FOLDERS_CACHE, _BROWSE_FOLDERS_CACHE_TIME
@@ -9038,74 +9084,11 @@ async def browse_folders(path: Optional[str] = None):
         if not target_path.exists() or not target_path.is_dir():
             raise HTTPException(status_code=404, detail="ROOT_DIR을 찾을 수 없습니다")
 
-        folders = []
-        subfolders = []  # 2depth 폴더들
-        
-        # 🔥 1depth 폴더 수집
-        skip_dir_names = {'classification', 'classification_chips', 'thumbnails', 'labels'}
-        skip_dir_names.update(SKIP_DIRS)
-
+        loop = asyncio.get_running_loop()
         try:
-            with os.scandir(target_path) as it:
-                for entry in it:
-                    if (
-                        entry.is_dir(follow_symlinks=False)
-                        and not entry.name.startswith('.')
-                        and entry.name not in skip_dir_names
-                    ):
-                        folders.append({
-                            "name": entry.name,
-                            "path": str(entry.path),
-                            "type": "folder",
-                            "depth": 1,
-                            "entry": entry  # 2depth 스캔을 위해 entry 전달
-                        })
+            result = await loop.run_in_executor(DIRLIST_EXECUTOR, _scan_browse_folders_tree, target_path)
         except PermissionError:
             raise HTTPException(status_code=403, detail="폴더 접근 권한이 없습니다")
-        
-        # 🔥 2depth 폴더 병렬 처리 (워커 여러 개 사용)
-        def scan_2depth(entry_info):
-            try:
-                subfolders_list = []
-                with os.scandir(entry_info["path"]) as sub_it:
-                    for sub_entry in sub_it:
-                        if (
-                            sub_entry.is_dir(follow_symlinks=False)
-                            and not sub_entry.name.startswith('.')
-                            and sub_entry.name not in skip_dir_names
-                        ):
-                            subfolders_list.append({
-                                "name": f"{entry_info['name']} / {sub_entry.name}", 
-                                "path": str(sub_entry.path), 
-                                "type": "folder", 
-                                "depth": 2,
-                                "parent": entry_info['name']
-                            })
-                return subfolders_list
-            except PermissionError:
-                return []  # 하위 폴더 접근 권한이 없으면 빈 리스트 반환
-            except Exception as e:
-                logger.debug(f"2depth 스캔 오류 ({entry_info['name']}): {e}")
-                return []
-        
-        # 🔥 DIRLIST_EXECUTOR 직접 사용 (중첩 ThreadPool 제거 — GIL 경합 방지)
-        loop = asyncio.get_running_loop()
-        futures = [loop.run_in_executor(DIRLIST_EXECUTOR, scan_2depth, f) for f in folders]
-        results = await asyncio.gather(*futures, return_exceptions=True)
-        subfolders = []
-        for r in results:
-            if isinstance(r, list):
-                subfolders.extend(r)
-        
-        # 🔥 1depth 폴더에서 entry 제거 (반환 시 불필요)
-        for folder in folders:
-            folder.pop("entry", None)
-
-        # 🔥 모든 폴더를 이름 내림차순으로 정렬 (depth 무관)
-        all_folders = folders + subfolders
-        all_folders.sort(key=lambda x: x["name"].lower(), reverse=True)
-        
-        result = {"folders": all_folders}
         _BROWSE_FOLDERS_CACHE = result
         _BROWSE_FOLDERS_CACHE_TIME = time.time()
         return result

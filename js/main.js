@@ -6577,26 +6577,37 @@ class WaferMapViewer {
             console.error('[RefMap] 초기화 실패:', error);
         }
 
-        // 🔥 모든 네트워크 호출을 하나의 Promise.all로 병렬 실행 (기존 2단계 → 1단계)
+        // 초기 화면에서 가장 중요한 것은 폴더 목록이다.
+        // 색상/유저/서버 설정은 병렬로 시작하되, 파일 탐색기 표시를 막지 않는다.
         const prefetchCF = window.__prefetch?.currentFolder;
         if (prefetchCF) window.__prefetch.currentFolder = null;
+        const configPromise = this.loadServerConfig().catch((error) => {
+            console.error('[INIT] Server config 초기화 실패:', error);
+            return null;
+        });
+        const colorLegendsPromise = this.loadColorLegends().catch((error) => {
+            console.error('[INIT] Color legends 초기화 실패:', error);
+            return null;
+        });
+        const userInfoPromise = this.loadUserInfo().catch((error) => {
+            console.error('[INIT] User info 초기화 실패:', error);
+            return null;
+        });
 
-        const [, , , rootPath, serverData] = await Promise.all([
-            this.loadServerConfig(),
-            this.loadColorLegends(),
-            this.loadUserInfo(),
-            this.getRootPath(),
+        const [rootPath, serverData] = await Promise.all([
+            this.getRootPath().catch(() => ''),
             (prefetchCF ?? fetch('/api/current-folder').then(r => r.json())).catch(() => ({})),
-            this.loadFolderBrowser('')
-        ]);
+            this.loadFolderBrowser('').catch((error) => {
+                console.error('[INIT] Folder browser 초기화 실패:', error);
+            })
+        ]).then(([resolvedRootPath, resolvedServerData]) => [resolvedRootPath, resolvedServerData]);
 
-        // 색상 렌더링 (colorLegends + currentUser 필요)
-        this.renderColorLegends();
-        this.showColorLegends();
-
-        // MY LOT prefetch (fire-and-forget)
-        this.myLotModal?.refreshData?.().catch((error) => {
-            console.error('[WaferMapViewer] MY LOT prefetch failed:', error);
+        Promise.allSettled([configPromise, colorLegendsPromise, userInfoPromise]).then(() => {
+            this.renderColorLegends();
+            this.showColorLegends();
+            this.myLotModal?.refreshData?.().catch((error) => {
+                console.error('[WaferMapViewer] MY LOT prefetch failed:', error);
+            });
         });
 
         if (this.dom.fileExplorer) {
