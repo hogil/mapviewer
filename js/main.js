@@ -7646,19 +7646,12 @@ class WaferMapViewer {
 
             if (!this.selectedImages) this.selectedImages = [];
 
-            // 해당 폴더의 파일들을 선택에서 제거
-            const hasFilter = (this.filterLT?.length > 0) || (this.filterTM?.length > 0) || (this.filterSTEP?.length > 0);
-            const imageFiles = allFiles.filter(path => {
-                if (!this.isImageFile(path)) return false;
-                if (!hasFilter) return true;
-                if (!this._passesLtTmFilter(path)) return false;
-                if (!this._passesStepFilter(path)) return false;
-                return true;
-            });
+            // 선택 해제는 현재 필터/가시 상태와 무관하게 폴더의 전체 이미지에 대해 수행한다.
+            const imageFiles = allFiles.filter(path => this.isImageFile(path));
 
             this.selectedImages = this.selectedImages.filter(p => !imageFiles.includes(p));
 
-            this.debugLog(`폴더 ${folderPath}에서 ${imageFiles.length}개 이미지 선택 해제됨`);
+            this.debugLog(`폴더 ${folderPath}에서 ${imageFiles.length}개 이미지 전체 선택 해제됨`);
         } catch (error) {
             console.error(`폴더 파일 선택 해제 실패: ${folderPath}`, error);
         }

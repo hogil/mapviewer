@@ -223,6 +223,17 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 - alert/confirm 다이얼로그는 `browser_handle_dialog`로 처리
 - Phase 끝마다 정리(cleanup)하여 다음 Phase에 영향 없도록
 
+## Reset / 선택 해제 평가 방법
+
+- 폴더 1개를 선택해 grid를 연다
+- LT/TM/STEP 또는 범례 필터를 일부 적용해 현재 보이는 이미지 수를 의도적으로 줄인다
+- 선택된 폴더에서 우클릭 선택 해제를 수행한다
+- PASS 기준:
+  - 선택 해제 후 `selectedImages`에는 해당 폴더 이미지가 1장도 남아 있지 않아야 한다
+  - 선택 해제는 "현재 보이는 subset"이 아니라 폴더 전체 이미지 집합 기준으로 동작해야 한다
+  - 이어서 `Reset`을 눌렀을 때 residual selection 때문에 숨겨져 있던 이미지가 갑자기 튀어나오면 FAIL이다
+  - `Reset`은 단지 필터를 초기화하고 현재 폴더 원본 이미지 목록을 다시 보여줄 뿐, 이전 선택 찌꺼기를 복구하면 안 된다
+
 ---
 
 ### Phase 1: 페이지 로드 & 기본 UI
@@ -6114,6 +6125,7 @@ return { domMs, folderListMs, fileListMs, fullVpMs };
 **증상**: 일부 유저가 이전 JS 파일 캐시를 사용 (Cache-Control: no-cache는 있지만 ETag 없이 검증 불가)
 **원인**: `cache_control_middleware`에서 JS/CSS에 `no-cache`만 설정, ETag 미생성
 **수정**: 파일 mtime+size 기반 weak ETag(`W/"hash"`) 자동 생성 → 변경 없으면 304, 변경 있으면 200+새 파일
+**평가**: Phase 58에서 `/js/main.js`, `/css/style.css` 응답의 `ETag` 존재 여부와 `If-None-Match` 재요청 시 `304`를 확인한다. 둘 중 하나라도 빠지면 FAIL
 **파일**: `api/main.py` (cache_control_middleware)
 
 #### BUG-19: 서버 재기동 직후 first-hit 2초대 지연 (2026-04-11)
@@ -6121,6 +6133,14 @@ return { domMs, folderListMs, fileListMs, fullVpMs };
 **원인**: startup 초기에 전체 트리 디스크 워밍과 무거운 인덱스 load/build가 사용자 첫 요청과 겹쳐 same-process 경합을 일으킴  
 **수정**: 전체 3depth 디스크 워밍 제거 → `palette_3k` 중심 targeted warm으로 축소, 로컬 HTTPS self-warm으로 핵심 API/JS first-hit 제거, 인덱스 load/build/후속 캐시 빌드는 `BACKGROUND_TASKS_PAUSED` 해제 후(user idle) 시작하도록 변경  
 **결과**: 서버 재기동 직후 외부 first-hit 기준 `/api/index-status` 9~10ms, `/api/config` 8~9ms, `/api/browse-folders` 25~28ms, `/` 13~15ms  
+**평가**: Phase 61과 Phase 62를 함께 사용한다. 썸네일 캐시 삭제 + 브라우저 캐시 초기화 + 서버 재기동 후 `palette_3k` 파일 리스트와 첫 viewport 썸네일이 기준 시간 안에 뜨는지 확인한다. Step 1~3 중 하나라도 임계값을 넘기면 FAIL
+**파일**: `api/main.py`
+
+#### BUG-20: top-level main.js만 버전이 바뀌고 하위 모듈/worker는 예전 JS를 유지하던 문제 (2026-04-11)
+**증상**: 신규 기능 배포 후에도 일부 유저 환경에서 main.js는 새 요청을 타지만, 하위 ES module import 또는 worker가 예전 캐시를 사용해 기능이 안 보이거나 동작이 섞임
+**원인**: 버전 문자열이 top-level asset까지만 적용되고, `main.js` 내부의 static import / dynamic import / worker URL에는 동일 버전이 전파되지 않음
+**수정**: `index.html`의 JS/CSS URL에 공통 `?v=`를 부여하고, `/js/{filename}` 서빙 시 JS 본문 내부의 상대 import / dynamic import / worker URL에도 같은 버전 문자열을 주입하도록 변경
+**평가**: Phase 63에서 HTML의 main.js URL, `/js/main.js` 본문의 static import / dynamic import, `/js/fetch-optimizer.js`와 `/js/bitmap-loader.js`의 worker URL까지 모두 동일 `?v=`가 붙는지 확인한다. 모듈 그래프 중 한 군데라도 빠지면 FAIL
 **파일**: `api/main.py`
 
 #### BUG-14: Permission Editor "all" 사용자 표시 오류 (2026-04-10)

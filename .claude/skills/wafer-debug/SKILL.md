@@ -78,6 +78,13 @@ argument-hint: [증상-설명]
 4. DOM class 전환: `grid-mode` ↔ `single-image-mode`
 5. LOT Mode와 Label Explorer가 함께 켜졌을 때 `showGridByLot()` / flat-grid 중 어떤 경로를 타는지 확인
 6. positions 없는 palette/PNF 이미지가 초기 로드에서 빠지는지, 단일 이미지 복귀 후에만 채워지는지 확인
+7. Reset 이후에도 일부 이미지만 남으면 기본 필터값과 `_unfilteredGridImages` 오염을 먼저 본다
+8. `filterSTEP` 기본값은 비어 있어야 한다. Reset은 LT/TM/STEP만 비우는 것이 아니라 원본 그리드 목록도 다시 잡아야 한다
+9. LOT Mode에서 2~3번째 뷰포트 썸네일이 비면 필터만 보지 말고 lazy load 취소/timeout 경로를 같이 본다
+10. 스크롤 중 in-flight 썸네일 취소, 15초 timeout 강제 에러, measure-thumb 무재시도는 특정 이미지군에서 미표시를 만든다
+11. 실패한 썸네일을 `gridLoaded=true`로 확정하면 뷰포트 재진입 시 재요청이 막힌다. 실패 상태는 retry 가능하게 유지해야 한다
+12. 폴더 우클릭 선택 해제는 현재 필터로 보이는 이미지 subset이 아니라 폴더의 전체 이미지 집합에 대해 적용되어야 한다
+13. Reset 후 이미지가 "튀어나오면" reset 자체보다 `deselectFolderFiles()`가 필터된 subset만 지우고 남은 선택이 residual 상태로 남는지 먼저 확인한다
 
 #### Label Explorer / MY LOT 문제
 1. `resolveOriginalImagePath`, `resolveLabelExplorerImagePath`, `buildLabelExplorerGridState` 흐름 확인
@@ -124,3 +131,21 @@ argument-hint: [증상-설명]
 ### 확인 방법
 - [재현/검증 단계]
 ```
+
+## 최근 수정 메모 (2026-04-11)
+
+### palette_3k Cold Start가 늦을 때
+
+- 원인 후보를 폴더 스캔 하나로 단정하지 말고, 서버 재기동 직후 startup warm / index build / 첫 HTTPS hit 경합을 먼저 본다.
+- 실제 수정은 전체 디스크 워밍 제거, `palette_3k` targeted warm, internal self-warm, user-idle 이후 heavy build 시작으로 해결했다.
+- 이 증상은 `api/main.py`의 startup 흐름 문제일 가능성이 높다. `js/main.js`만 보지 말고 서버 warm 경로를 같이 확인한다.
+
+### "배포했는데 예전 JS가 나온다" 증상
+
+- top-level `main.js`만 새 URL이어도 충분하지 않다. 하위 ES module import, dynamic import, worker URL까지 같은 버전 문자열이 전파돼야 한다.
+- 현재 기준 정상 상태:
+  - `index.html`의 JS/CSS URL에 `?v=...`
+  - `/js/main.js` 본문의 상대 import / dynamic import에 `?v=...`
+  - `fetch-optimizer.js`의 `cache-worker.js`, `bitmap-loader.js`의 `bitmap-worker.js`에도 `?v=...`
+  - JS/CSS 응답은 `no-cache + ETag`
+- 신규 기능이 특정 사용자에게만 안 보이면 먼저 네트워크 탭에서 모듈 그래프 전체의 버전 문자열과 `304` 재검증을 확인한다.
