@@ -1,8 +1,6 @@
 ---
 name: e2e-test
 description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 63개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증, Measure 색상 미리보기/적용 회귀, HTTP 캐시 무효화 검증, Composite 색상 매핑/배경 행 제거 검증, Measure 첫 진입 지연/폴더 stale state 회귀, Label Explorer flat-grid 강제 및 positions 없는 palette/PNF 이미지 즉시 로드 회귀, 검색 첫 실행/다중검색/이벤트루프 블로킹 회귀, 서버 Cold Start 즉시 로딩 속도, 탭 다중 전환 이미지 보존, f/q missing 이미지 그리드 로드 검증, classification 인덱스 즉시 일관성 검증, 썸네일 캐시 삭제 후 첫 palette_3k 그리드 즉시 로딩 검증, [CRITICAL] Cold Start 3단계 분절 성능 측정(페이지 로드→폴더 확장→그리드 viewport), JS 모듈 그래프/worker 캐시 무효화 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
-context: fork
-agent: general-purpose
 argument-hint: [Phase 번호 또는 범위]
 ---
 
@@ -10,13 +8,33 @@ argument-hint: [Phase 번호 또는 범위]
 
 Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으로 테스트합니다.
 
+## 절대규칙 #-2: E2E 브라우저는 반드시 새 Playwright 세션 — 기존 창 재사용/덮어쓰기 절대 금지
+
+- **E2E 테스트는 반드시 사용 중이지 않은 새 Playwright MCP 인스턴스를 사용한다** (playwright, playwright2, ..., playwright10 중 비어있는 것 선택).
+- 이미 열려있는 Playwright 탭/창에서 `browser_navigate`로 기존 페이지를 덮어쓰는 행위는 절대 금지한다.
+- 사용자가 열어둔 브라우저 창을 E2E 테스트가 침범하면 사용자 작업이 중단되는 심각한 사고가 발생한다.
+- 모든 Playwright 인스턴스가 사용 중인 경우에만, `browser_evaluate`로 `window.open(url)` 후 `browser_tabs`로 새 탭 전환하는 방식을 사용한다.
+- E2E 테스트가 만든 브라우저/탭은 테스트 완료 후에도 닫지 않는다 — 사용자가 명시적으로 요청한 경우에만 허용.
+- 이 규칙을 위반하여 기존 창을 navigate로 덮어쓰거나 `browser_close`로 닫는 행위는 절대 금지한다.
+
+## 절대규칙 #-1: E2E 서버는 항상 새 빈 포트로 시작 — 기존 서버 절대 종료 금지
+
+- **`start-e2e-server.ps1`는 기존 서버(8443 등)를 절대 종료하지 않는다.**
+- 항상 `Get-FreePort`로 사용 중이지 않은 포트를 찾아 새 서버를 그 포트에서 시작한다.
+- 스크립트 출력 `READY:<port>`에서 실제 포트 번호를 읽어 `BASE_URL=https://localhost:<port>`로 설정한다.
+- 테스트 종료 후에도 E2E 용 서버를 종료하지 않는다 — 사용자가 명시적으로 요청한 경우에만 허용.
+- 기존 사용자 서버를 Kill하여 연결이 끊기는 사고는 절대 금지한다.
+- 이 규칙을 위반하여 `Stop-ApiMainProcesses` 또는 기존 서버 종료를 추가하는 행위는 절대 금지한다.
+
 ## 절대규칙 #0: 반드시 Playwright 브라우저로 전체 UI 검증 — 예외 없음
 
-- **모든 Phase는 반드시 Playwright MCP(`browser_navigate`, `browser_evaluate`, `browser_click`, `browser_take_screenshot` 등)를 사용하여 실제 브라우저에서 UI를 조작·검증해야 한다.**
+- **모든 Phase는 반드시 Playwright 기반 브라우저 자동화로만 검증한다.** 허용 경로는 `scripts/run-e2e-playwright.ps1` 또는 Playwright MCP뿐이다.
+- **사용자가 "브라우저가 안 뜬다" 또는 "먼저 창부터 띄워라"라고 하면, 분석 전에 반드시 `powershell -ExecutionPolicy Bypass -File scripts/run-e2e-visible-smoke.ps1` 를 먼저 실행해 실제 브라우저 창 open + 그리드 동작을 확인한다.** 이 경우 Playwright MCP만으로 시작하는 것은 금지한다.
 - API 레벨(curl, urllib, fetch 등)만으로 테스트를 대체하는 것은 절대 금지한다.
-- Playwright MCP가 사용 불가능한 환경이면 테스트를 실행하지 말고 사용자에게 "Playwright MCP를 사용할 수 없어 E2E 테스트를 실행할 수 없습니다"라고 보고한다.
 - "API로 검증 가능", "브라우저 없이도 확인 가능" 등의 이유로 Playwright를 생략하는 것은 허용하지 않는다.
 - 한 개 Phase라도 Playwright 없이 API만으로 처리하면 전체 테스트를 FAIL로 간주한다.
+- **기본 실행 경로는 `powershell -ExecutionPolicy Bypass -File scripts/run-e2e-playwright.ps1` 이다.**
+- 이 runner는 **질문/실행 1회당 새 Playwright 세션(`E2E_SESSION_ID`)**을 만들고, chunk마다 별도 브라우저를 띄워 이전 질문의 쿠키/캐시/창 상태를 재사용하지 않는다.
 
 ## 절대규칙: 기본 전체 실행
 
@@ -69,11 +87,11 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 
 ## 절대규칙: Playwright 브라우저 새 창 사용
 
-- **이미 Playwright MCP 인스턴스(playwright, playwright2, ...)가 사용 중이면, 해당 인스턴스를 절대 사용하지 않는다.**
-- 반드시 **사용 중이 아닌 다른 Playwright 인스턴스**(playwright3, playwright4, ...)를 사용한다.
-- 기존에 열려있는 브라우저 창/탭을 `browser_navigate`로 덮어쓰는 행위는 **절대 금지**한다.
-- `browser_close`를 사용자 요청 없이 호출하는 것도 **절대 금지**한다.
-- 어떤 Playwright 인스턴스가 사용 중인지 모르면, 가장 높은 번호의 인스턴스(예: playwright10)를 사용한다.
+- 가능하면 **사용 중이 아닌 Playwright MCP 인스턴스**를 우선 사용한다.
+- **현재 환경에 Playwright 인스턴스가 하나만 노출된 경우에는 그 인스턴스를 재사용해도 된다.**
+- 재사용 시에는 기존 사용자 창을 덮어쓰지 말고 **새 탭/새 페이지/새 컨텍스트**를 우선 사용한다.
+- 탭/컨텍스트 분리가 불가능한 도구 구성이라면, 현재 세션을 재사용하되 이 제한을 테스트 로그에 남긴다.
+- `browser_close`는 사용자 세션을 파괴하는 용도로 쓰지 않는다. 단, **이번 E2E 실행이 직접 만든 임시 창/탭 정리**는 허용된다.
 
 ## 사전 조건 (자동 설정)
 
@@ -108,12 +126,16 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 
 **반드시 아래 순서를 정확히 따른다. 서버 접속 확인 전에 테스트를 시작하지 않는다.**
 
-1. **원샷 서버 시작** (프로세스 종료 → 포트 대기 → 시작 → HTTP 200 확인을 한번에):
-   ```bash
-   bash scripts/start-e2e-server.sh 8443
-   ```
-   - 출력이 `READY:8443`이면 → `BASE_URL=https://localhost:8443`
-   - 출력이 `READY:8444`이면 → 포트 8443이 점유 중이어서 8444로 시작됨
+1. **원샷 서버 시작** (프로세스 종료 → free port 확보 → 시작 → TCP listen 확인):
+   - **Windows 로컬**
+     ```powershell
+     powershell -ExecutionPolicy Bypass -File scripts/start-e2e-server.ps1 8443
+     ```
+   - **bash 스크립트가 실제로 존재하는 Unix/Linux 환경에서만**
+     ```bash
+     bash scripts/start-e2e-server.sh 8443
+     ```
+   - 출력이 `READY:<port>`이면 → `BASE_URL=https://localhost:<port>`
    - 출력이 `FAIL`이면 → 사용자에게 안내 후 중단
 
 2. **브라우저 접속 확인** (`browser_navigate`로 실제 페이지 로드):
@@ -123,7 +145,7 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
    ```
    - 타이틀 "Wafer Map Viewer" 확인
    - 폴더 목록 렌더링 확인 (3초 대기)
-   - **실패 시**: `bash scripts/start-e2e-server.sh 8444`로 재시도
+   - **실패 시**: 새 free port로 원샷 서버 시작을 한 번만 재시도
 
 3. **절대 금지**: 서버 접속 + 페이지 타이틀 확인 없이 테스트 Phase 진입하지 않는다
 

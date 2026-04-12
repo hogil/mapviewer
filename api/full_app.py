@@ -9416,6 +9416,31 @@ def _current_username(req: Optional[Request], default: str = "system") -> str:
         return session.get("username", default)
     return default
 
+
+async def _load_positions_json_file(positions_file: Path, include_fq: bool) -> Dict[str, Any]:
+    last_error: Optional[json.JSONDecodeError] = None
+    for attempt in range(3):
+        try:
+            if not include_fq:
+                _RE_FQ = getattr(get_chip_positions, '_RE_FQ', None)
+                if _RE_FQ is None:
+                    _RE_FQ = re.compile(rb'"f"\s*:\s*\[[^\]]*\]\s*,\s*"q"\s*:\s*\[[^\]]*\]\s*,\s*')
+                    get_chip_positions._RE_FQ = _RE_FQ
+                with open(positions_file, 'rb') as f:
+                    raw = f.read()
+                stripped = _RE_FQ.sub(b'', raw)
+                return json.loads(stripped)
+
+            with open(positions_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            if attempt >= 2:
+                raise
+            await anyio.sleep(0.05 * (attempt + 1))
+
+    raise last_error if last_error is not None else ValueError("positions json load failed")
+
 @app.get("/api/chip-positions")
 async def get_chip_positions(path: str, include_fq: int = 0):
     """주어진 이미지 경로에 대응하는 positions.json 반환 (include_fq=1이면 f/q 값 포함)"""
@@ -9434,21 +9459,7 @@ async def get_chip_positions(path: str, include_fq: int = 0):
             _log(f"[CHIP_POS] not found: {positions_file} — 빈 결과 반환")
             return JSONResponse(content={"chips": [], "ftn_keys": [], "qtn_keys": []})
 
-        import re as _re
-
-        # 🔥 include_fq=0이면 f/q 배열을 파싱 전에 문자열에서 제거 (1.9MB → 71KB, 15ms → 1ms)
-        if not include_fq:
-            _RE_FQ = getattr(get_chip_positions, '_RE_FQ', None)
-            if _RE_FQ is None:
-                _RE_FQ = _re.compile(rb'"f"\s*:\s*\[[^\]]*\]\s*,\s*"q"\s*:\s*\[[^\]]*\]\s*,\s*')
-                get_chip_positions._RE_FQ = _RE_FQ
-            with open(positions_file, 'rb') as f:
-                raw = f.read()
-            stripped = _RE_FQ.sub(b'', raw)
-            positions_data = json.loads(stripped)
-        else:
-            with open(positions_file, 'r', encoding='utf-8') as f:
-                positions_data = json.load(f)
+        positions_data = await _load_positions_json_file(positions_file, bool(include_fq))
 
         _normalize_positions_to_chips(positions_data)
         chips = positions_data.get('chips', [])

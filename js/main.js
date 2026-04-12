@@ -20,6 +20,8 @@ import { stripDotSuffix } from './search.js';
 
 const DEFAULT_GRID_COLS = 4;
 const DEFAULT_THUMB_SIZE = 512;
+const BITMAP_LOADER_SCRIPT = '/js/bitmap-loader.js';
+const SEMICONDUCTOR_RENDERER_SCRIPT = '/js/semiconductor-renderer.js';
 const MIN_SIDEBAR_WIDTH = 200;
 const MAX_SIDEBAR_WIDTH_RATIO = 0.5;
 const MIN_DRAG_DISTANCE = 5;
@@ -468,6 +470,7 @@ class WaferMapViewer {
         this.initRefMapWindow();
 
         this.bindEvents();
+        this.updateSearchControlState();
 
         this.init();
         this.debugMode = window.location.hash === "#debug";
@@ -841,11 +844,11 @@ class WaferMapViewer {
             return this._viewerRuntimePromise;
         }
         this._viewerRuntimePromise = (async () => {
-            await this._loadDeferredScript('/js/bitmap-loader.js', 'BitmapLoader').catch((error) => {
+            await this._loadDeferredScript(BITMAP_LOADER_SCRIPT, 'BitmapLoader').catch((error) => {
                 console.warn('[INIT] BitmapLoader deferred load failed:', error);
                 return null;
             });
-            await this._loadDeferredScript('/js/semiconductor-renderer.js', 'SemiconductorRenderer').catch((error) => {
+            await this._loadDeferredScript(SEMICONDUCTOR_RENDERER_SCRIPT, 'SemiconductorRenderer').catch((error) => {
                 console.warn('[INIT] SemiconductorRenderer deferred load failed:', error);
                 return null;
             });
@@ -928,6 +931,11 @@ class WaferMapViewer {
         this.permissionSearchSelectedIndex = -1;
         this.pageManager = null;
         this.activePageRole = 'blank';
+        this.searchBackendReady = false;
+        this.searchBackendStatus = null;
+        this._searchBackendReadyPromise = null;
+        this._searchBusy = false;
+        this._searchWaitingForReady = false;
         // gridDetailPageMap, gridDetailOriginMap은 생성자에서 이미 초기화됨
         this.lastGridOriginPageId = null;
 
@@ -6674,6 +6682,9 @@ class WaferMapViewer {
 
         // 인덱스 빌드 상태 폴링 (init 최초에 시작 — 배너 즉시 표시)
         this._pollIndexStatus();
+        this.ensureSearchBackendReady({ timeoutMs: 45000 }).catch((error) => {
+            console.warn('[SEARCH] 초기 readiness 확인 실패:', error);
+        });
 
         this.hardResetUiCaches(); // 🔥 non-blocking — 캐시 클리어는 API 호출에 영향 없음
 
@@ -7770,6 +7781,82 @@ class WaferMapViewer {
 
     isStaleFolderSelectionRequest(requestId) {
         return requestId !== (this._folderSelectionRequestSeq || 0);
+    }
+
+    updateSearchControlState() {
+        const searchBtn = this.dom?.searchBtn;
+        if (!searchBtn) {
+            return;
+        }
+        const waitingReady = !!this._searchWaitingForReady || !this.searchBackendReady;
+        const busy = !!this._searchBusy;
+        searchBtn.textContent = busy ? '검색 중...' : (waitingReady ? '검색 준비 중...' : '검색');
+        searchBtn.disabled = busy || !!this._searchWaitingForReady;
+        searchBtn.style.opacity = searchBtn.disabled ? '0.6' : '1';
+        searchBtn.dataset.searchReady = this.searchBackendReady ? '1' : '0';
+        if (this.dom?.fileSearch) {
+            this.dom.fileSearch.dataset.searchReady = this.searchBackendReady ? '1' : '0';
+        }
+    }
+
+    _applySearchBackendStatus(status) {
+        if (!status || typeof status !== 'object') {
+            return;
+        }
+        this.searchBackendStatus = status;
+        this.searchBackendReady = !!status.ready;
+        this.updateSearchControlState();
+    }
+
+    async _fetchSearchBackendStatus() {
+        const response = await fetch('/api/search-ready', {
+            cache: 'no-store',
+            headers: {
+                'Accept': 'application/json',
+                'X-L3-Startup-Warm': '1',
+            },
+        });
+        if (!response.ok) {
+            throw new Error(`search-ready 상태 조회 실패: ${response.status}`);
+        }
+        return response.json();
+    }
+
+    async ensureSearchBackendReady(options = {}) {
+        const { timeoutMs = 30000, pollMs = 250 } = options;
+        if (this.searchBackendReady) {
+            return this.searchBackendStatus || { ready: true, backend: 'unknown' };
+        }
+        if (!this._searchBackendReadyPromise) {
+            this._searchBackendReadyPromise = (async () => {
+                const deadline = performance.now() + timeoutMs;
+                let lastStatus = this.searchBackendStatus || {
+                    ready: false,
+                    backend: 'bootstrap',
+                };
+                while (performance.now() < deadline) {
+                    try {
+                        lastStatus = await this._fetchSearchBackendStatus();
+                        this._applySearchBackendStatus(lastStatus);
+                        if (lastStatus.ready) {
+                            return lastStatus;
+                        }
+                    } catch (error) {
+                        console.warn('[SEARCH] readiness poll failed:', error);
+                    }
+                    await new Promise(resolve => setTimeout(resolve, pollMs));
+                }
+                return lastStatus;
+            })();
+        }
+
+        try {
+            const status = await this._searchBackendReadyPromise;
+            this._applySearchBackendStatus(status);
+            return status;
+        } finally {
+            this._searchBackendReadyPromise = null;
+        }
     }
 
     beginSearchRequest(source = '') {
@@ -10323,11 +10410,7 @@ class WaferMapViewer {
     async performSearch(options = {}) {
         const { multiLotList = [], wfPairs = '', suppressAlerts = false } = options;
         const searchBtn = this.dom.searchBtn;
-        const originalText = searchBtn?.textContent || '검색';
         try {
-            const searchRequest = this.beginSearchRequest(
-                multiLotList?.length || wfPairs ? 'multi-search' : 'file-search'
-            );
             // 🔥 멀티검색일 때는 일반 검색창 텍스트 무시
             const normalizedLots = this.normalizeLotPayload(multiLotList || []);
             const isMultiSearch = normalizedLots.length > 0 || !!wfPairs;
@@ -10341,14 +10424,24 @@ class WaferMapViewer {
                 return false;
             }
 
-            // 즉시 버튼 피드백 제공
+            if (!this.searchBackendReady) {
+                this._searchWaitingForReady = true;
+                this.updateSearchControlState();
+                const readiness = await this.ensureSearchBackendReady({ timeoutMs: 30000, pollMs: 250 });
+                if (!readiness?.ready) {
+                    if (!suppressAlerts) {
+                        alert('검색 준비 중입니다. 잠시 후 다시 시도해주세요.');
+                    }
+                    return false;
+                }
+            }
 
+            const searchRequest = this.beginSearchRequest(
+                multiLotList?.length || wfPairs ? 'multi-search' : 'file-search'
+            );
+            this._searchBusy = true;
             if (searchBtn) {
-                searchBtn.textContent = '검색 중...';
-
-                searchBtn.disabled = true;
-
-                searchBtn.style.opacity = '0.6';
+                this.updateSearchControlState();
             }
 
             this.debugLog(`파일명 검색 시작: "${fileQuery}"`);
@@ -10424,17 +10517,15 @@ class WaferMapViewer {
 
             this.debugLog(`검색 완료: ${matchedImages.length}개 이미지 발견 (${(endTime - startTime).toFixed(1)}ms)`);
 
-            // 버튼 상태 복원
-
-            if (searchBtn) {
-                searchBtn.textContent = originalText;
-
-                searchBtn.disabled = false;
-
-                searchBtn.style.opacity = '1';
-            }
-
             if (matchedImages.length === 0) {
+                this.selectedImages = [];
+                this.gridSelectedIdxs = [];
+                this.gridSelectedSet = new Set();
+                this._prevGridSelectedIdxs = new Set();
+                this.gridLastClickedIdx = undefined;
+                this.gridThumbWraps = [];
+                this.invalidateGridGeometry();
+                this.showGrid([], false, true);
                 if (!suppressAlerts) {
                     alert('검색 결과가 없습니다.');
                 }
@@ -10493,10 +10584,10 @@ class WaferMapViewer {
             }
             return false;
         } finally {
+            this._searchBusy = false;
+            this._searchWaitingForReady = false;
             if (searchBtn) {
-                searchBtn.textContent = originalText;
-                searchBtn.disabled = false;
-                searchBtn.style.opacity = '1';
+                this.updateSearchControlState();
             }
         }
     }
@@ -26732,12 +26823,13 @@ class WaferMapViewer {
             return;
         }
         
-        // 그리드 모드일 때는 grid legend만 렌더링
-        if (this.gridMode) {
-            if (this.dom.gridColorLegendBottom) {
-                this.renderGridColorLegend();
-            }
-            return;
+        const isGridMode = !!this.gridMode;
+
+        // 그리드 모드에서도 상단 grid legend는 계속 갱신한다.
+        // 우측 top/bottom legend는 숨겨져 있어도 내용을 동기화해
+        // E2E/상태 복원 시 빈 legend 상태가 남지 않도록 유지한다.
+        if (isGridMode && this.dom.gridColorLegendBottom) {
+            this.renderGridColorLegend();
         }
         
         // 단일 이미지 모드일 때는 기존 legend 렌더링

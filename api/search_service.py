@@ -197,7 +197,9 @@ class SearchService:
                     effective_workers = self.search_workers
                     search_mode = "logical"
                 else:
-                    # 🔥 전체 검색(prefix 없음)이면 token[0] 인덱스, 폴더 한정이면 순차(소규모)
+                    # 🔥 전체 검색(prefix 없음)의 단일 키워드는 LOT 토큰(token[0]) 기준으로만 본다.
+                    # suffix 토큰까지 순차 스캔으로 확장하면 `wafer_edge_ring` 같은 이름에서
+                    # `ring`이 대량 매칭되어 기존 검색 기대값/LOT 의미가 깨진다.
                     if not prefix and self.index_service._token0_index:
                         from .index_service import _token_contains_search
                         hit_indices = _token_contains_search(

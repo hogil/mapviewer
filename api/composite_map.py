@@ -2,6 +2,7 @@
 Composite Map 생성 모듈
 여러 웨이퍼 맵의 인덱스별 빈도를 히트맵으로 시각화
 """
+import json
 import os
 import shutil
 import struct
@@ -134,6 +135,18 @@ _positions_json_cache: Dict[str, Optional[Dict[str, Any]]] = {}
 _POSITIONS_JSON_CACHE_MAX = 256
 
 
+def _atomic_write_json(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(
+        f"{path.suffix}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
+    with tmp_path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    tmp_path.replace(path)
+
+
 try:
     import orjson as _json_fast
     def _json_load_bytes(raw: bytes):
@@ -203,8 +216,6 @@ def _copy_positions_without_bin(
     keep_chip_bin=True면 chip의 'b' 필드를 유지(없으면 Normal로 보정)하고,
     False면 기존처럼 제거한다.
     """
-    import json
-
     positions_data = _load_source_positions_data(first_image_rel_path)
     if not positions_data:
         return
@@ -236,8 +247,7 @@ def _copy_positions_without_bin(
                 positions_data_copy["step"] = img_filename
 
             positions_file_path = positions_output_dir / f"{img_stem}.json"
-            with open(positions_file_path, "w", encoding="utf-8") as f:
-                json.dump(positions_data_copy, f, ensure_ascii=False, indent=2)
+            _atomic_write_json(positions_file_path, positions_data_copy)
     except Exception:
         pass
 
@@ -2628,7 +2638,6 @@ def create_subset_map(
     grade_0_positions = positions_output_dir / "Grade_0.json"
     if grade_0_positions.exists():
         try:
-            import json
             with open(grade_0_positions, 'r', encoding='utf-8') as f:
                 positions_template = json.load(f)
 
@@ -2650,8 +2659,7 @@ def create_subset_map(
 
                 # positions 파일 저장
                 positions_file_path = positions_output_dir / f"{img_stem}.json"
-                with open(positions_file_path, 'w', encoding='utf-8') as f:
-                    json.dump(positions_data_copy, f, ensure_ascii=False, indent=2)
+                _atomic_write_json(positions_file_path, positions_data_copy)
         except Exception:
             pass
 

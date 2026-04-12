@@ -100,7 +100,14 @@ def _tokenize_logical_query(query: str) -> List[str]:
         if token:
             tokens.append(token)
         i = j
-    return tokens
+    # 🔥 암묵적 AND 삽입: 피연산자 뒤에 "not"이 오면 "and"를 자동 삽입
+    # 예: "abc123 not 00c" → ["abc123", "and", "not", "00c"]
+    result: List[str] = []
+    for idx, tok in enumerate(tokens):
+        if tok == "not" and result and result[-1] not in _LOGICAL_OPERATORS and result[-1] != "(":
+            result.append("and")
+        result.append(tok)
+    return result
 
 
 def _logical_to_postfix(tokens: List[str]) -> List[str]:
@@ -214,13 +221,20 @@ def _evaluate_logical_query(
     postfix = _logical_to_postfix(tokens)
 
     # 🔥 토큰 인덱스가 있으면 lazy 평가
-    token_index = names_joined if isinstance(names_joined, dict) else None
+    token_index = names_joined if isinstance(names_joined, dict) and names_joined else None
     n = len(keys_slice)
 
-    if token_index:
+    if token_index or token0_index or token2_index:
         # 🔥 모든 검색은 token[0] 기반, AND 오른쪽만 token[2] 추가 필터
-        t0_idx = token0_index if token0_index is not None else token_index
-        t2_idx = token2_index if token2_index is not None else token_index
+        t0_idx = token0_index if token0_index is not None else (token_index or {})
+        t2_idx = token2_index if token2_index is not None else (token_index or {})
+        any_idx = token_index if token_index else t0_idx
+
+        def _search_any(term_or_set, constraint: Optional[Set[int]] = None):
+            """논리식의 독립 항/OR 검색은 전체 토큰 인덱스에서 빠르게 찾는다."""
+            if isinstance(term_or_set, set):
+                return term_or_set if constraint is None else term_or_set & constraint
+            return _token_contains_search(any_idx, term_or_set, keys_slice, constraint)
 
         def _search_t0(term_or_set, constraint: Optional[Set[int]] = None):
             """기본 검색: token[0] 인덱스에서 포함매칭."""
@@ -234,6 +248,11 @@ def _evaluate_logical_query(
                 return term_or_set if constraint is None else term_or_set & constraint
             return _token_contains_search(t2_idx, term_or_set, keys_slice, constraint)
 
+        def _search_full(term: str) -> Set[int]:
+            """전체 파일명 순차 스캔 (NOT 연산자용 — token0 인덱스는 첫 토큰만 커버하므로 부족)."""
+            term_lower = term.lower()
+            return {i for i, name in enumerate(names_slice) if term_lower in name}
+
         universe: Optional[Set[int]] = None
         if "not" in postfix:
             universe = set(range(n))
@@ -242,33 +261,43 @@ def _evaluate_logical_query(
             if tok in _LOGICAL_OPERATORS:
                 if tok == "not":
                     operand = stack.pop() if stack else set()
-                    op_set = _search_t0(operand)
+                    # 🔥 NOT 연산: 전체 파일명 스캔으로 매칭 (token0 인덱스는 첫 토큰만 커버)
+                    if isinstance(operand, str):
+                        op_set = _search_full(operand)
+                    else:
+                        op_set = operand
                     if universe is None:
                         universe = set(range(n))
                     stack.append(universe - op_set)
                 elif tok == "and":
                     right = stack.pop() if stack else set()
                     left = stack.pop() if stack else set()
-                    # 🔥 AND: left→token[0], right→token[2] 순차 축소
+                    # 🔥 AND: 왼쪽 항(token0)으로 후보를 먼저 좁히고, 오른쪽은 token2 인덱스로 빠르게 필터
                     if isinstance(left, str) and isinstance(right, str):
-                        left_set = _search_t0(left)
-                        stack.append(_search_t2(right, constraint=left_set))
+                        left_set = _search_any(left)
+                        right_set = _search_t2(right, left_set)
+                        stack.append(right_set)
                     elif isinstance(left, str):
-                        left_set = _search_t0(left)
+                        left_set = _search_any(left)
                         stack.append(left_set & right)
                     elif isinstance(right, str):
-                        stack.append(_search_t2(right, constraint=left))
+                        right_set = _search_t2(right, left)
+                        stack.append(right_set)
                     else:
                         stack.append(left & right)
                 elif tok == "or":
                     right = stack.pop() if stack else set()
                     left = stack.pop() if stack else set()
-                    stack.append(_search_t0(left) | _search_t0(right))
+                    # 🔥 OR: 전체 토큰 인덱스로 빠르게 평가한다.
+                    left_set = _search_any(left) if isinstance(left, str) else left
+                    right_set = _search_any(right) if isinstance(right, str) else right
+                    stack.append(left_set | right_set)
             else:
                 stack.append(tok)  # str 그대로 push (lazy)
 
         result_item = stack.pop() if stack else set()
-        result_indices = _search_t0(result_item) if isinstance(result_item, str) else result_item
+        # 🔥 단독 항/괄호 결과는 전체 토큰 인덱스로 빠르게 평가한다.
+        result_indices = _search_any(result_item) if isinstance(result_item, str) else result_item
         ordered = [keys_slice[i] for i in sorted(result_indices) if i < n]
         if limit is not None:
             return ordered[:limit]
@@ -615,12 +644,14 @@ class IndexService:
         self,
         keys: List[str],
         names: List[str],
-    ) -> Tuple[Dict[str, List[int]], Dict[str, List[int]], Dict[str, List[str]], float]:
-        """첫 캐시 로드용 최소 인덱스(LOT/폴더/class_to_keys)만 계산한다."""
+    ) -> Tuple[Dict[str, List[int]], Dict[str, List[int]], Dict[str, List[int]], Dict[str, List[int]], Dict[str, List[str]], float]:
+        """첫 캐시 로드용 최소 인덱스(LOT/폴더/token0/token2/class_to_keys)만 계산한다."""
         from collections import defaultdict
         t0 = time.time()
         lot_idx: Dict[str, List[int]] = {}
         folder_idx: Dict[str, List[int]] = {}
+        token0_idx: Dict[str, List[int]] = defaultdict(list)
+        token2_idx: Dict[str, List[int]] = defaultdict(list)
         class_to_keys: Dict[str, List[str]] = defaultdict(list)
         classification_dir_names = self._CLASSIFICATION_DIRS
 
@@ -640,6 +671,14 @@ class IndexService:
                     folder_idx[folder] = []
                 folder_idx[folder].append(i)
 
+            dot = name.rfind(".")
+            stem = name[:dot] if dot > 0 else name
+            parts = stem.split("_")
+            if len(parts) > 0:
+                token0_idx[parts[0].lower()].append(i)
+            if len(parts) > 2:
+                token2_idx[parts[2].lower()].append(i)
+
             # classification → class_to_keys
             key_parts = key.split("/")
             if len(key_parts) >= 3 and key_parts[0] in classification_dir_names:
@@ -650,7 +689,7 @@ class IndexService:
                 class_to_keys[cls_prefix].append(key)
 
         elapsed = time.time() - t0
-        return lot_idx, folder_idx, dict(class_to_keys), elapsed
+        return lot_idx, folder_idx, dict(token0_idx), dict(token2_idx), dict(class_to_keys), elapsed
 
     def load_cache(self, log: bool = True) -> bool:
         if not self.cache_file.exists():
@@ -680,15 +719,15 @@ class IndexService:
                 return False
             # 파일명만 검색 대상으로 사용 (폴더명 제외)
             names = [rel.rsplit("/", 1)[-1].lower() for rel in keys]
-            lot_idx, folder_idx, class_to_keys, basic_elapsed = self._compute_basic_indices(keys, names)
+            lot_idx, folder_idx, token0_idx, token2_idx, class_to_keys, basic_elapsed = self._compute_basic_indices(keys, names)
             with self._lock:
                 self._keys = keys
                 self._names = names
                 self._lot_index = lot_idx
                 self._folder_index = folder_idx
                 self._token_index = {}
-                self._token0_index = {}
-                self._token2_index = {}
+                self._token0_index = token0_idx
+                self._token2_index = token2_idx
                 self._name_to_paths = {}
                 self._class_to_keys = class_to_keys
             self.total_files = len(keys)
@@ -703,9 +742,11 @@ class IndexService:
                 self.logger.info("✅ [INDEX] Cache load complete: %d files (%.2fs)", self.total_files, load_duration)
             if log:
                 self.logger.info(
-                    "✅ [INDEX] Basic indices built from cache: %d LOTs, %d folders, %d class prefixes (%.2fs)",
+                    "✅ [INDEX] Search-ready indices built from cache: %d LOTs, %d folders, %d token0, %d token2, %d class prefixes (%.2fs)",
                     len(lot_idx),
                     len(folder_idx),
+                    len(token0_idx),
+                    len(token2_idx),
                     len(class_to_keys),
                     basic_elapsed,
                 )
@@ -1017,15 +1058,34 @@ class IndexService:
 
     def _build_lookup_indices(self) -> None:
         """LOT별/폴더별/토큰별/파일명별 역인덱스 빌드."""
-        lot_idx, folder_idx, token_idx, name_to_paths, elapsed, token0_idx, token2_idx = self._compute_lookup_indices(self._keys, self._names)
+        (
+            lot_idx,
+            folder_idx,
+            token_idx,
+            name_to_paths,
+            elapsed,
+            token0_idx,
+            token2_idx,
+            class_to_keys,
+        ) = self._compute_lookup_indices(self._keys, self._names)
         self._lot_index = lot_idx
         self._folder_index = folder_idx
         self._token_index = token_idx
         self._token0_index = token0_idx
         self._token2_index = token2_idx
         self._name_to_paths = name_to_paths
-        self.logger.info("✅ [INDEX] Lookup indices built: %d LOTs, %d folders, %d tokens (pos0:%d pos2:%d), %d unique names (%.2fs)",
-                         len(lot_idx), len(folder_idx), len(token_idx), len(token0_idx), len(token2_idx), len(name_to_paths), elapsed)
+        self._class_to_keys = class_to_keys
+        self.logger.info(
+            "✅ [INDEX] Lookup indices built: %d LOTs, %d folders, %d tokens (pos0:%d pos2:%d), %d unique names, %d class prefixes (%.2fs)",
+            len(lot_idx),
+            len(folder_idx),
+            len(token_idx),
+            len(token0_idx),
+            len(token2_idx),
+            len(name_to_paths),
+            len(class_to_keys),
+            elapsed,
+        )
 
     def lot_search(self, lot_filter: Set[str], folder: str = "") -> List[str]:
         """LOT 필터로 O(1) 검색. folder가 있으면 해당 폴더 내만."""

@@ -25,6 +25,19 @@ The codebase uses environment variables to adapt to both environments. SAML logi
 - SAML configuration in `saml/settings.json` is sample data; production values are configured separately in Ubuntu
 - Do not try to evaluate or test SAML features in the Windows development environment
 
+**Absolute Rule: E2E 테스트 브라우저는 반드시 새 Playwright 세션 — 기존 창 재사용/덮어쓰기 절대 금지**
+- E2E 테스트는 반드시 사용 중이지 않은 새 Playwright MCP 인스턴스를 사용한다 (playwright~playwright10 중 비어있는 것)
+- 이미 열려있는 탭/창에서 `browser_navigate`로 기존 페이지를 덮어쓰는 행위는 절대 금지한다
+- 모든 인스턴스가 사용 중일 때만 `window.open(url)` → `browser_tabs` 전환 방식 허용
+- E2E가 만든 브라우저/탭은 테스트 후에도 닫지 않는다 — 사용자 명시 요청 시에만 허용
+
+**Absolute Rule: E2E 테스트 서버는 항상 새 빈 포트로 시작 — 기존 서버 절대 종료 금지**
+- `scripts/start-e2e-server.ps1`은 기존 서버(8443 등 사용자 서버)를 절대 종료하지 않는다
+- `Stop-ApiMainProcesses`를 호출하거나 기존 프로세스를 종료하는 행위는 절대 금지한다
+- 항상 `Get-FreePort`로 사용 중이지 않은 포트를 탐색하여 그 포트에서 새 서버를 시작한다
+- 스크립트 출력 `READY:<port>`를 읽어 실제 포트로 `BASE_URL=https://localhost:<port>`를 설정한다
+- 이 규칙을 위반하면 사용자의 개발 서버가 강제 종료되어 작업이 중단되는 심각한 사고가 발생한다
+
 **Absolute Rule: 기능 수정/버그 수정 시 반드시 서버 + Playwright UI 검증**
 - 코드 수정 후 반드시 서버를 켜고 (`python -m api.main`) 새 Playwright 인스턴스로 새 브라우저 창을 열어 UI에서 직접 동작을 확인한다
 - 코드 분석만으로 "수정 완료"라고 보고하는 행위는 절대 금지한다

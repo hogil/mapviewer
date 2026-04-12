@@ -32,6 +32,8 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, PlainT
 from starlette.staticfiles import StaticFiles
 
 from . import config
+from .index_service import IndexService
+from .search_service import SearchService
 
 
 def _has_interactive_console() -> bool:
@@ -63,7 +65,38 @@ _THUMBNAIL_EXECUTOR_WORKERS = config.THUMBNAIL_EXECUTOR_WORKERS
 SUPPORTED_EXTS = {ext.lower() for ext in config.SUPPORTED_EXTS}
 SKIP_DIRS = set(config.SKIP_DIRS)
 DIRLIST_EXECUTOR = ThreadPoolExecutor(max_workers=max(4, min(16, (os.cpu_count() or 8))))
+SEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=max(8, min(16, config.SEARCH_WORKERS)))
 _BOOT_HOT_FOLDER = (os.getenv("BOOTSTRAP_HOT_FOLDER", "palette_3k").strip() or "palette_3k")
+
+INDEX_SKIP_DIRS = {d.strip() for d in config.INDEX_SKIP_DIRS if d.strip()}
+INDEX_CACHE_FILE = ROOT_DIR / ".file_index_cache.txt"
+_lock_port = os.getenv("HTTPS_PORT", str(config.HTTPS_PORT))
+INDEX_LOCK_FILE = ROOT_DIR / f".file_index_cache_{_lock_port}.lock"
+SEARCH_FALLBACK_MAX_FILES = int(os.getenv("SEARCH_FALLBACK_MAX_FILES", "2000") or "0")
+SEARCH_FALLBACK_TIMEOUT_MS = int(os.getenv("SEARCH_FALLBACK_TIMEOUT_MS", "5000") or "0")
+_fallback_timeout_sec = SEARCH_FALLBACK_TIMEOUT_MS / 1000 if SEARCH_FALLBACK_TIMEOUT_MS > 0 else 5.0
+
+bootstrap_index_service = IndexService(
+    root_dir=ROOT_DIR,
+    skip_dirs=INDEX_SKIP_DIRS,
+    cache_file=INDEX_CACHE_FILE,
+    lock_file=INDEX_LOCK_FILE,
+    index_workers=config.INDEX_WORKERS,
+    lock_wait_seconds=int(os.getenv("INDEX_LOCK_WAIT_SECONDS", "600")),
+    logger=logging.getLogger("uvicorn.error"),
+)
+bootstrap_index_service._io_pool = SEARCH_EXECUTOR
+bootstrap_search_service = SearchService(
+    index_service=bootstrap_index_service,
+    io_executor=SEARCH_EXECUTOR,
+    logger=logging.getLogger("uvicorn.error"),
+    search_workers=config.SEARCH_WORKERS,
+    excluded_folders=["classification", "classification_chips", "thumbnails", "composite_map"],
+    supported_exts=config.SUPPORTED_EXTS,
+    fallback_max_files=SEARCH_FALLBACK_MAX_FILES,
+    fallback_timeout_sec=_fallback_timeout_sec,
+)
+_BOOTSTRAP_SEARCH_PREWARM_STARTED = False
 
 _DIRLIST_CACHE: Dict[str, Dict[str, Any]] = {}
 _BROWSE_FOLDERS_CACHE: Optional[Dict[str, Any]] = None
@@ -425,7 +458,7 @@ class LazyFullAppManager:
 
     @property
     def loading(self) -> bool:
-        return self._load_task is not None and not self._ready_event.is_set()
+        return self._load_task is not None and not self._load_task.done()
 
     @property
     def load_error(self) -> Optional[BaseException]:
@@ -435,13 +468,16 @@ class LazyFullAppManager:
         return self._module
 
     def ensure_loading(self, immediate: bool = False) -> None:
-        if self._ready_event.is_set():
+        if self._app is not None:
             return
+        if self._ready_event.is_set():
+            self._ready_event.clear()
         desired_mode = "immediate" if immediate else "idle"
         if self._load_task is not None and not self._load_task.done():
             if self._load_mode == desired_mode or (immediate and self._load_started):
                 return
             self._load_task.cancel()
+        self._load_error = None
         self._load_mode = desired_mode
         task_name = "l3-full-app-loader-now" if immediate else "l3-full-app-loader-idle"
         loader = self._load_full_app_now() if immediate else self._load_full_app_when_idle()
@@ -456,7 +492,7 @@ class LazyFullAppManager:
 
     async def _load_full_app_now(self) -> None:
         async with self._lock:
-            if self._ready_event.is_set():
+            if self._app is not None:
                 return
             self._load_started = True
             bootlog = logging.getLogger("uvicorn.error")
@@ -475,21 +511,27 @@ class LazyFullAppManager:
                 self._app = app
                 self._lifespan_cm = lifespan_cm
                 bootlog.info("✅ [BOOTSTRAP] full app ready in %.0fms", (time.perf_counter() - started) * 1000.0)
+                self._ready_event.set()
+            except asyncio.CancelledError:
+                bootlog.warning("⚠️ [BOOTSTRAP] full app load cancelled before ready")
+                raise
             except BaseException as exc:
                 self._load_error = exc
                 bootlog.exception("❌ [BOOTSTRAP] full app load failed: %s", exc)
             finally:
                 self._load_started = False
-                self._ready_event.set()
 
     async def wait_until_ready(self, timeout: Optional[float] = None) -> Optional[Any]:
         self.ensure_loading(immediate=True)
+        task = self._load_task
+        if task is None:
+            return self._app
         try:
             if timeout is None:
-                await self._ready_event.wait()
+                await asyncio.shield(task)
             else:
-                await asyncio.wait_for(self._ready_event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
+                await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
             return None
         return self._app
 
@@ -500,7 +542,7 @@ class LazyFullAppManager:
 
     async def shutdown(self) -> None:
         task = self._load_task
-        if task is not None and not self._ready_event.is_set():
+        if task is not None and not task.done():
             try:
                 task.cancel()
                 await task
@@ -533,6 +575,95 @@ def _parse_int(value: Optional[str], default: int) -> int:
         return default
 
 
+def _parse_lot_filter(raw: Optional[str]) -> List[str]:
+    if not raw:
+        return []
+    parts = re.split(r"[,\n\r\t;/]+", raw)
+    tokens: List[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        cleaned = part.strip().lower()
+        if not cleaned:
+            continue
+        basename = cleaned.replace("\\", "/").split("/")[-1]
+        lot_token = basename.split("_", 1)[0].strip()
+        if "." in lot_token:
+            dot_idx = lot_token.index(".")
+            if dot_idx > 0:
+                lot_token = lot_token[:dot_idx]
+        if not lot_token or lot_token in seen:
+            continue
+        seen.add(lot_token)
+        tokens.append(lot_token)
+        if len(tokens) >= 1000:
+            break
+    return tokens
+
+
+def _parse_lot_wafer(raw: Optional[str]) -> List[Tuple[str, str]]:
+    if not raw:
+        return []
+    pairs: List[Tuple[str, str]] = []
+    seen: set[str] = set()
+    for part in re.split(r"[,\n\r\t;]+", raw):
+        part = part.strip().lower()
+        if not part or ":" not in part:
+            continue
+        lot_raw, wafer_raw = part.split(":", 1)
+        lot = lot_raw.strip()
+        wafer = wafer_raw.strip()
+        if "." in lot:
+            dot_idx = lot.index(".")
+            if dot_idx > 0:
+                lot = lot[:dot_idx]
+        if "." in wafer:
+            dot_idx = wafer.index(".")
+            if dot_idx > 0:
+                wafer = wafer[:dot_idx]
+        if not lot or not wafer:
+            continue
+        key = f"{lot}:{wafer}"
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append((lot, wafer))
+        if len(pairs) >= 1000:
+            break
+    return pairs
+
+
+def _ensure_bootstrap_search_prewarm() -> None:
+    global _BOOTSTRAP_SEARCH_PREWARM_STARTED
+    if _BOOTSTRAP_SEARCH_PREWARM_STARTED:
+        return
+    _BOOTSTRAP_SEARCH_PREWARM_STARTED = True
+
+    async def _run() -> None:
+        bootlog = logging.getLogger("uvicorn.error")
+        loop = asyncio.get_running_loop()
+        started = time.perf_counter()
+        try:
+            loaded = await loop.run_in_executor(
+                SEARCH_EXECUTOR,
+                lambda: bootstrap_index_service.load_cache(log=False),
+            )
+            if loaded and bootstrap_index_service.keys:
+                bootlog.info(
+                    "✅ [BOOTSTRAP] search cache ready: %d files (%.0fms)",
+                    len(bootstrap_index_service.keys),
+                    (time.perf_counter() - started) * 1000.0,
+                )
+            else:
+                bootlog.warning(
+                    "⚠️ [BOOTSTRAP] search cache not ready after preload (%.0fms)",
+                    (time.perf_counter() - started) * 1000.0,
+                )
+        except Exception as exc:
+            bootlog.exception("❌ [BOOTSTRAP] search cache preload failed: %s", exc)
+
+    asyncio.create_task(_run(), name="bootstrap-search-cache-prewarm")
+
+
 def safe_resolve_path(path: Optional[str]) -> Path:
     if not path:
         return current_folder
@@ -558,6 +689,77 @@ async def _maybe_forward_to_full_app(handler_name: str, *args: Any, **kwargs: An
     if asyncio.iscoroutine(result):
         return await result
     return result
+
+
+def _bootstrap_search_state() -> Dict[str, Any]:
+    status = bootstrap_index_service.status()
+    indexed_files = int(status.get("indexed_files") or 0)
+    ready = bool(status.get("index_ready") and indexed_files > 0)
+    return {
+        "backend": "bootstrap",
+        "loaded": True,
+        "ready": ready,
+        "indexed_files": indexed_files,
+        "building": bool(status.get("index_building")),
+        "loading_cache": bool(status.get("index_cache_loading")),
+        "timestamp": status.get("timestamp"),
+    }
+
+
+def _full_app_search_state() -> Dict[str, Any]:
+    module = _FULL_APP.get_loaded_module()
+    if module is None:
+        return {
+            "backend": "full-app",
+            "loaded": False,
+            "ready": False,
+            "indexed_files": 0,
+            "building": _FULL_APP.loading,
+            "loading_cache": False,
+            "load_error": str(_FULL_APP.load_error) if _FULL_APP.load_error is not None else None,
+        }
+
+    index_service = getattr(module, "index_service", None)
+    if index_service is None:
+        return {
+            "backend": "full-app",
+            "loaded": True,
+            "ready": False,
+            "indexed_files": 0,
+            "building": False,
+            "loading_cache": False,
+            "load_error": "full_app.index_service missing",
+        }
+
+    status = index_service.status() if hasattr(index_service, "status") else {}
+    indexed_files = int(status.get("indexed_files") or 0)
+    ready = bool(status.get("index_ready") and indexed_files > 0)
+    return {
+        "backend": "full-app",
+        "loaded": True,
+        "ready": ready,
+        "indexed_files": indexed_files,
+        "building": bool(status.get("index_building")),
+        "loading_cache": bool(status.get("index_cache_loading")),
+        "timestamp": status.get("timestamp"),
+        "load_error": str(_FULL_APP.load_error) if _FULL_APP.load_error is not None else None,
+    }
+
+
+def _active_search_backend_state() -> Dict[str, Any]:
+    full_app_state = _full_app_search_state()
+    bootstrap_state = _bootstrap_search_state()
+    active_backend = "full-app" if full_app_state["ready"] else "bootstrap"
+    active_state = full_app_state if active_backend == "full-app" else bootstrap_state
+    return {
+        "backend": active_backend,
+        "ready": bool(active_state["ready"]),
+        "indexed_files": int(active_state["indexed_files"]),
+        "building": bool(active_state["building"]),
+        "loading_cache": bool(active_state["loading_cache"]),
+        "bootstrap": bootstrap_state,
+        "full_app": full_app_state,
+    }
 
 
 class LazyFullAppProxy:
@@ -592,8 +794,15 @@ async def lifespan(app: Starlette):
     bootlog.info("📍 호스트: %s", config.DEFAULT_HOST)
     bootlog.info("🔌 포트: %s (%s)", port_to_log, scheme)
     bootlog.info("📁 ROOT_DIR: %s", config.ROOT_DIR)
+    _ensure_bootstrap_search_prewarm()
+    _FULL_APP.ensure_loading(immediate=False)
+    bootlog.info("🚀 [BOOTSTRAP] full app idle import scheduled")
     yield
     await _FULL_APP.shutdown()
+    try:
+        SEARCH_EXECUTOR.shutdown(wait=False, cancel_futures=False)
+    except Exception:
+        pass
     try:
         DIRLIST_EXECUTOR.shutdown(wait=False, cancel_futures=False)
     except Exception:
@@ -963,6 +1172,66 @@ async def api_warmup(request: Request):
     return JSONResponse({"warming": True})
 
 
+async def api_search_ready(request: Request):
+    _ensure_bootstrap_search_prewarm()
+    _FULL_APP.ensure_loading(immediate=False)
+    return JSONResponse(
+        _active_search_backend_state(),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
+
+async def api_search(request: Request):
+    params = request.query_params
+    q = params.get("q", "")
+    limit = max(1, min(_parse_int(params.get("limit"), 3000), 200000))
+    offset = max(0, _parse_int(params.get("offset"), 0))
+    lot_multi = params.get("lot_multi")
+    lot_wafer = params.get("lot_wafer")
+    folder = params.get("folder")
+
+    search_backend_state = _active_search_backend_state()
+    if search_backend_state["backend"] == "full-app":
+        forwarded = await _maybe_forward_to_full_app(
+            "search_files",
+            q=q,
+            limit=limit,
+            offset=offset,
+            lot_multi=lot_multi,
+            lot_wafer=lot_wafer,
+            folder=folder,
+        )
+        if forwarded is not None:
+            return forwarded if isinstance(forwarded, Response) else JSONResponse(forwarded)
+
+    lot_filter_values = _parse_lot_filter(lot_multi)
+    lot_filter = set(lot_filter_values) if lot_filter_values else set()
+    lot_wafer_pairs = _parse_lot_wafer(lot_wafer)
+
+    try:
+        if folder is not None:
+            if folder == "":
+                search_root = ROOT_DIR
+            else:
+                folder_path = safe_resolve_path(folder)
+                search_root = folder_path if folder_path.exists() and folder_path.is_dir() else ROOT_DIR
+        else:
+            search_root = current_folder if current_folder.exists() else ROOT_DIR
+
+        result = await bootstrap_search_service.search(
+            query=q or "",
+            lot_filter=lot_filter,
+            lot_wafer_pairs=lot_wafer_pairs,
+            limit=limit,
+            offset=offset,
+            current_folder=search_root,
+        )
+        return JSONResponse(result)
+    except Exception as exc:
+        logging.getLogger("uvicorn.error").exception("검색 중 오류: %s", exc)
+        return JSONResponse({"success": False, "detail": str(exc)}, status_code=500)
+
+
 app.add_route("/api/config", api_config, methods=["GET"])
 app.add_route("/api/index-status", api_index_status, methods=["GET"])
 app.add_route("/api/current-folder", get_current_folder, methods=["GET"])
@@ -971,6 +1240,8 @@ app.add_route("/api/change-folder", change_folder, methods=["POST"])
 app.add_route("/api/cache", clear_cache, methods=["POST"])
 app.add_route("/api/cache/all", clear_all_cache, methods=["POST"])
 app.add_route("/api/warmup", api_warmup, methods=["GET", "POST"])
+app.add_route("/api/search-ready", api_search_ready, methods=["GET"])
+app.add_route("/api/search", api_search, methods=["GET"])
 app.add_route("/api/browse-folders", browse_folders, methods=["GET"])
 app.add_route("/api/files", get_files, methods=["GET"])
 app.add_route("/api/files/recursive", get_files_recursive, methods=["GET"])

@@ -143,9 +143,6 @@ async function selectFolderToGrid(folderPath, detailsElement, contentDiv) {
 }
 
 function attachBootExplorer() {
-    // full_app 로딩을 서버에 즉시 트리거 — 사용자 클릭 전에 미리 준비
-    fetch('/api/warmup').catch(() => {});
-
     const explorer = getExplorer();
     if (!explorer) return;
 

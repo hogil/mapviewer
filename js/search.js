@@ -35,23 +35,24 @@ export function matchesSearchQuery(fileName, query) {
  * @returns {boolean} 평가 결과
  */
 function evaluateExpression(fileName, expression) {
-    // 괄호 처리
+    // 괄호 처리: 가장 안쪽 괄호부터 평가하여 결과를 __TRUE__ / __FALSE__ 플레이스홀더로 대체
     while (expression.includes('(')) {
         const start = expression.lastIndexOf('(');
         const end = expression.indexOf(')', start);
         if (end === -1) break;
-        
+
         const subExpression = expression.substring(start + 1, end);
         const result = evaluateExpression(fileName, subExpression);
-        expression = expression.substring(0, start) + result + expression.substring(end + 1);
+        // 🔥 boolean 결과를 특수 플레이스홀더로 치환 (파일명 검색 오염 방지)
+        expression = expression.substring(0, start) + (result ? '__TRUE__' : '__FALSE__') + expression.substring(end + 1);
     }
-    
+
     // OR 연산자로 분할하여 처리
     const orTerms = splitByOperator(expression, 'or');
     if (orTerms.length > 1) {
         return orTerms.some(term => evaluateAndExpression(fileName, term.trim()));
     }
-    
+
     return evaluateAndExpression(fileName, expression);
 }
 
@@ -63,7 +64,22 @@ function evaluateExpression(fileName, expression) {
  */
 function evaluateAndExpression(fileName, expression) {
     const andTerms = splitByOperator(expression, 'and');
-    return andTerms.every(term => evaluateNotExpression(fileName, term.trim()));
+    // 🔥 Each AND term may also contain implicit "not" (e.g., "abc123 not engineer" without explicit "and")
+    // Split each AND term by \bnot\b to handle: "term1 not term2" → term1 AND NOT term2
+    const allTerms = [];
+    for (const term of andTerms) {
+        const notParts = term.trim().split(/\bnot\b/gi).map(p => p.trim()).filter(p => p);
+        if (notParts.length > 1) {
+            // First part is a positive term, rest are NOT terms
+            allTerms.push(notParts[0]);
+            for (let i = 1; i < notParts.length; i++) {
+                allTerms.push('not ' + notParts[i]);
+            }
+        } else {
+            allTerms.push(term.trim());
+        }
+    }
+    return allTerms.every(term => evaluateNotExpression(fileName, term));
 }
 
 /**
@@ -88,6 +104,9 @@ function evaluateNotExpression(fileName, expression) {
  */
 function evaluateBasicTerm(fileName, term) {
     if (!term) return true;
+    // 🔥 괄호 평가 결과 플레이스홀더 처리
+    if (term === '__TRUE__') return true;
+    if (term === '__FALSE__') return false;
     return fileName.includes(term);
 }
 
