@@ -1722,6 +1722,7 @@ class WaferMapViewer {
                 type: 'grid',
                 images: savedImages,
                 scrollTop: scrollWrapper ? scrollWrapper.scrollTop : (savedGridState?.scrollTop ?? 0),
+                lotMode: this.lotMode,
                 isCompositeMode: this.isCompositeMode,
                 compositeSession: this.isCompositeMode ? this.cloneCompositeSession() : null,
                 selectedFolders: this.selectedFolders ? Array.from(this.selectedFolders) : [],
@@ -2202,6 +2203,7 @@ class WaferMapViewer {
             type: 'grid',
             images: [...images],
             scrollTop: state.scrollTop ?? 0,
+            lotMode: state.lotMode ?? this.lotMode,
             isCompositeMode: state.isCompositeMode,
             compositeSession: state.compositeSession ? this.deepCloneSimple(state.compositeSession) : null,
             selectedFolders: state.selectedFolders ? [...state.selectedFolders] : [],
@@ -13341,7 +13343,8 @@ class WaferMapViewer {
             this.savedViewState = {
                 type: 'grid',
                 images: [...this.selectedImages],
-                scrollTop: currentScrollTop
+                scrollTop: currentScrollTop,
+                lotMode: this.lotMode
             };
         }
     }
@@ -13557,7 +13560,8 @@ class WaferMapViewer {
                     this.savedViewState = {
                         type: 'grid',
                         images: [...this.currentGridImages],
-                        scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0
+                        scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
+                        lotMode: this.lotMode
                     };
                 } 
                 // 단일 이미지를 직접 선택하는 경우 (Wafer Map Explorer에서)
@@ -16294,7 +16298,8 @@ class WaferMapViewer {
             this.savedViewState = {
                 type: 'grid',
                 images: [...this.selectedImages],
-                scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0
+                scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
+                lotMode: this.lotMode
             };
             console.log('💾 [LABEL-SAVE] 라벨 모달 열기 전 savedViewState 저장:', this.selectedImages.length, '개 이미지, scrollTop:', scrollWrapper?.scrollTop);
         } else {
@@ -19375,10 +19380,16 @@ class WaferMapViewer {
                 // 🔥 다중 Measure 모드: base images 저장 (이중 확장 방지)
                 this.savedViewState.images = (this._measureCheckedItems?.length > 0 && this._measureBaseImages?.length > 0)
                     ? [...this._measureBaseImages] : [...sortedImages];
+                this.savedViewState.lotMode = this.lotMode;
             } else {
                 const saveImgs = (this._measureCheckedItems?.length > 0 && this._measureBaseImages?.length > 0)
                     ? [...this._measureBaseImages] : [...sortedImages];
-                this.savedViewState = { type: 'grid', images: saveImgs, scrollTop: 0 };
+                this.savedViewState = {
+                    type: 'grid',
+                    images: saveImgs,
+                    scrollTop: 0,
+                    lotMode: this.lotMode,
+                };
             }
             this._transientGridRestoreState = null;
         } else {
@@ -19391,6 +19402,7 @@ class WaferMapViewer {
                 images: (this._measureCheckedItems?.length > 0 && this._measureBaseImages?.length > 0)
                     ? [...this._measureBaseImages] : [...sortedImages],
                 scrollTop: currentScrollTop,
+                lotMode: this.lotMode,
                 selectedFolders: this.selectedFolders ? Array.from(this.selectedFolders) : [],
                 lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || null,
             };
@@ -19964,10 +19976,12 @@ class WaferMapViewer {
                         type: 'grid',
                         images: [...saveImages],
                         scrollTop: currentScrollTop,
+                        lotMode: this.lotMode,
                     };
                 } else {
                     this.savedViewState.scrollTop = currentScrollTop;
                     this.savedViewState.images = [...saveImages];
+                    this.savedViewState.lotMode = this.lotMode;
                 }
             }
 
@@ -21696,7 +21710,8 @@ class WaferMapViewer {
             this.savedViewState = {
                 type: 'grid',
                 images: [...this.selectedImages],
-                scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0
+                scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
+                lotMode: this.lotMode
             };
         }
         
@@ -22052,7 +22067,8 @@ class WaferMapViewer {
                 this.savedViewState = {
                     type: 'grid',
                     images: [...this.selectedImages],
-                    scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0
+                    scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
+                    lotMode: this.lotMode
                 };
             }
         }
@@ -22467,6 +22483,7 @@ class WaferMapViewer {
                     images: [...gridImages],
                     // LOT/GRID에서 더블클릭 직전에 저장한 scrollTop을 그대로 유지 (undefined면 그대로 남김)
                     scrollTop: preservedScrollTop,
+                    lotMode: this.lotMode,
                     isCompositeMode: this.isCompositeMode,
                     compositeSession: this.isCompositeMode ? this.cloneCompositeSession() : null,
                     selectedFolders: this.selectedFolders ? Array.from(this.selectedFolders) : [],
@@ -22806,11 +22823,13 @@ class WaferMapViewer {
                     this.savedViewState = {
                         type: 'grid',
                         images: imagesToShow,
-                        scrollTop: scrollTopToRestore
+                        scrollTop: scrollTopToRestore,
+                        lotMode: this.lotMode,
                     };
                 } else {
                     // savedViewState에 스크롤 위치 설정
                     this.savedViewState.scrollTop = scrollTopToRestore;
+                    this.savedViewState.lotMode = this.lotMode;
                 }
             }
 
@@ -28585,9 +28604,11 @@ class WaferMapViewer {
                         type: 'grid',
                         images: [...this.currentGridImages],
                         scrollTop: currentScrollTop,
+                        lotMode: this.lotMode,
                     };
                 } else {
                     this.savedViewState.scrollTop = currentScrollTop;
+                    this.savedViewState.lotMode = this.lotMode;
                 }
             }
 
