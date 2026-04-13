@@ -251,6 +251,24 @@ const { createRunner } = require('./e2e_playwright_session');
     });
   }
 
+  async function waitForVisibleGridThumbsLoaded(timeoutMs = 4000, settleMs = 250) {
+    const startedAt = Date.now();
+    let lastSummary = null;
+    while (Date.now() - startedAt < timeoutMs) {
+      lastSummary = await getVisibleGridThumbSummary();
+      if (lastSummary.visibleCount > 0 && lastSummary.badCount === 0) {
+        await sleep(settleMs);
+        const settledSummary = await getVisibleGridThumbSummary();
+        if (settledSummary.visibleCount > 0 && settledSummary.badCount === 0) {
+          return settledSummary;
+        }
+        lastSummary = settledSummary;
+      }
+      await sleep(250);
+    }
+    return lastSummary;
+  }
+
   async function roundTripGridImageByDblClick(index = 0) {
     await page.locator('#image-grid .grid-thumb-wrap').nth(index).dblclick();
     await page.waitForFunction(
@@ -525,8 +543,7 @@ const { createRunner } = require('./e2e_playwright_session');
     });
     await sleep(300);
     const scrollEarly = await getVisibleGridThumbSummary();
-    await sleep(900);
-    const scrollSettled = await getVisibleGridThumbSummary();
+    const scrollSettled = await waitForVisibleGridThumbsLoaded(4500, 300);
     expect(scrollEarly.visibleCount > 0, `scroll visibleCount=${scrollEarly.visibleCount}`);
     expect(
       scrollEarly.loadedCount > 0 || scrollEarly.bad.some((item) => item.loading === 'true'),

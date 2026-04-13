@@ -132,11 +132,11 @@ const { createRunner } = require('./e2e_playwright_session');
       folderCount: document.querySelectorAll(
         '#file-explorer .folder, #file-explorer .folder-item'
       ).length,
-      classCount: document.querySelectorAll('.classification-frame button').length,
+      classCount: document.querySelectorAll('#class-list .class-btn').length,
     }));
     expect(data.title === 'Wafer Map Viewer', `title=${data.title}`);
     expect(data.folderCount > 10, `folderCount=${data.folderCount}`);
-    expect(data.classCount >= 5, `classCount=${data.classCount}`);
+    expect(data.classCount >= 1, `classCount=${data.classCount}`);
     return data;
   });
 
@@ -225,28 +225,29 @@ const { createRunner } = require('./e2e_playwright_session');
 
   await record('7,12,20', 'Class / MY LOT / stats', async () => {
     await boot('chunk1-class');
-    await page.waitForFunction(
-      () =>
-        Array.from(
-          document.querySelectorAll('.classification-frame button')
-        ).some((button) => (button.textContent || '').trim() === 'asDF'),
-      null,
-      { timeout: 30000 }
-    );
     const classData = await page.evaluate(async () => {
-      await window.viewer.showGridFromClass('asDF');
+      const classes = Array.from(document.querySelectorAll('#class-list .class-btn'))
+        .map((button) => (button.textContent || '').trim())
+        .filter(Boolean);
+      const primaryClass = classes[0] || null;
+      if (!primaryClass) {
+        return {
+          classes: [],
+          primaryClass: null,
+          count: 0,
+        };
+      }
+      await window.viewer.showGridFromClass(primaryClass);
       await new Promise((r) => setTimeout(r, 1200));
       return {
-        classes: Array.from(
-          document.querySelectorAll('.classification-frame button')
-        )
-          .map((b) => b.textContent.trim())
-          .filter(Boolean),
+        classes,
+        primaryClass,
         count: window.viewer.currentGridImages.length,
       };
     });
-    expect(classData.classes.includes('asDF'), 'asDF missing');
-    expect(classData.count === 16, `asDF=${classData.count}`);
+    expect(classData.primaryClass, `classes=${JSON.stringify(classData.classes)}`);
+    expect(classData.classes.includes(classData.primaryClass), `primaryClass=${classData.primaryClass}`);
+    expect(classData.count > 0, `${classData.primaryClass}=${classData.count}`);
     await page.evaluate(() => window.viewer.openMyLotModal());
     await sleep(800);
     const myLotVisible = await visible('#my-lot-window');

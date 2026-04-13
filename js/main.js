@@ -12393,6 +12393,20 @@ class WaferMapViewer {
         }
     }
 
+    handleLabelExplorerRightClickClear(event = null) {
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+
+        if (this.dom.fileNameDisplay) {
+            this.dom.fileNameDisplay.style.display = 'none';
+        }
+
+        this.clearLabelExplorerSelection();
+        this.debugLog('Label Explorer: 우클릭으로 선택 해제');
+    }
+
     setupLabelExplorerKeyboardShortcuts(classes, classToImgList, labelSelection) {
         // 이미 바인딩되어 있으면 중복 방지
 
@@ -16937,93 +16951,25 @@ class WaferMapViewer {
 
         this.debugLog(`🚀 Label Explorer: ${classes.length}개 클래스 초기화 완료 (열린 폴더: ${Object.keys(labelSelection.openFolders).filter(k => labelSelection.openFolders[k]).length}개)`);
 
-        // --- 빈 곳 클릭 시 Label Explorer만 선택 해제 (Wafer Map Explorer 선택 유지) ---
+        // --- 빈 곳 좌클릭은 선택 유지 ---
 
         container.onclick = (e) => {
-            // 빈 영역을 클릭했을 때만 (버튼이나 다른 요소가 아닌)
-
-            if (e.target === container || 
-
+            if (e.target === container ||
                 (e.target.tagName === 'UL' && e.target.closest('#label-explorer-list'))) {
-                // Ctrl/Shift 없이 클릭: Label Explorer만 선택 해제 (Wafer Map Explorer 선택 유지)
-
-                if (!e.ctrlKey && !e.shiftKey) {
-                    labelSelection.selected = [];
-
-                    labelSelection.selectedClasses = [];
-
-                    this.updateLabelExplorerSelection();
-
-                    // Wafer Map Explorer 선택은 유지하도록 clearWaferMapExplorerSelection() 호출 제거
-
-                    this.debugLog('Label Explorer: 빈 영역 클릭으로 Label Explorer만 선택 해제 (Wafer Map Explorer 선택 유지)');
-                }
+                return;
             }
         };
 
         // --- 우클릭으로 Label Explorer만 선택 해제 ---
         container.oncontextmenu = (e) => {
-                        e.preventDefault();
-            e.stopPropagation(); // 🚀 이벤트 버블링 방지 (Wafer Map Explorer 우클릭 방해 방지)
-
-            // 🔥 무조건 이미지 정보 패널 숨기기
-            if (this.dom.fileNameDisplay) {
-                this.dom.fileNameDisplay.style.display = 'none';
-            }
-
-            // Label Explorer 선택 해제
-            if (this.labelSelection) {
-                this.labelSelection.selected = [];
-                this.labelSelection.selectedClasses = [];
-            }
-
-            // savedViewState로 복원
-            if (this.savedViewState) {
-                if (this.savedViewState.type === 'grid' && this.savedViewState.images && this.savedViewState.images.length > 0) {
-                    this.selectedImages = [...this.savedViewState.images];
-                    this.showGrid(this.savedViewState.images, true);  // skipSaveState=true로 호출
-
-                    // 파일명 패널 숨기기 (Label Explorer에서 돌아왔으므로)
-                    if (this.dom.fileNameDisplay) {
-                        this.dom.fileNameDisplay.style.display = 'none';
-                    }
-                    
-                    // 스크롤 위치 복원
-                    if (this.savedViewState.scrollTop !== undefined) {
-                        setTimeout(() => {
-                            const grid = document.getElementById('image-grid');
-                            const scrollWrapper = grid?.parentElement;
-                            if (scrollWrapper) {
-                                scrollWrapper.scrollTop = this.savedViewState.scrollTop;
-                            }
-                        }, 100);
-                    }
-                } else if (this.savedViewState.type === 'single') {
-                    this.loadImage(this.savedViewState.imagePath).then(() => {
-                        this.zoom = this.savedViewState.zoom;
-                        this.offsetX = this.savedViewState.offsetX;
-                        this.offsetY = this.savedViewState.offsetY;
-                        // 🔥 loadImage가 자동으로 렌더링하므로 render() 호출 불필요
-                    });
-                }
-            } else {
-                this.hideGrid();
-                this.hideImage();
-                this.selectedImages = [];
-                this.currentImage = null;
-                this.gridMode = false;
-                this.currentGridImages = [];
-                this.showInitialState();
-            }
-
-            this.updateLabelExplorerSelection();
-                    };
+            this.handleLabelExplorerRightClickClear(e);
+        };
 
         // --- 키보드 단축키 (Label Explorer 전용) ---
 
         this.setupLabelExplorerKeyboardShortcuts(classes, classToImgList, labelSelection);
 
-        // Label Explorer 프레임(여백) 클릭 시 전체 선택 해제 (Windows 탐색기 스타일)
+        // Label Explorer 프레임(여백) 좌클릭은 선택 유지
 
         const frame = document.querySelector('.label-explorer-frame');
 
@@ -17031,94 +16977,16 @@ class WaferMapViewer {
             frame.setAttribute('data-click-bound', 'true');
 
             frame.onclick = (e) => {
-                                // 프레임 자체를 클릭하고, Ctrl/Shift가 없을 때만 Label Explorer만 선택 해제
-
-                if (e.target === frame && !e.ctrlKey && !e.shiftKey) {
-                                        // 🔥 무조건 이미지 정보 패널 숨기기
-                    if (this.dom.fileNameDisplay) {
-                        this.dom.fileNameDisplay.style.display = 'none';
-                        console.log('🟢 [HIDE-PANEL] 프레임 클릭 시 파일명 패널 숨김');
-                    }
-
-                    // 🔥 직접 복원 로직 처리 (clearLabelExplorerSelection 사용 안함)
-
-                    // Label Explorer 선택 해제 및 이전 상태 복원
-
-                    if (this.labelSelection) {
-                                                this.labelSelection.selected = [];
-
-                        this.labelSelection.selectedClasses = [];
-                    }
-
-                                        // savedViewState로 복원
-
-                    if (this.savedViewState && this.savedViewState.type === 'grid' && this.savedViewState.images.length > 0) {
-                                                this.selectedImages = [...this.savedViewState.images];
-
-                        this.showGrid(this.savedViewState.images, true);  // skipSaveState=true로 호출
-
-                        // 파일명 패널 숨기기 (Label Explorer에서 돌아왔으므로)
-                        if (this.dom.fileNameDisplay) {
-                            this.dom.fileNameDisplay.style.display = 'none';
-                        }
-
-                        // 스크롤 위치 복원
-                        if (this.savedViewState.scrollTop !== undefined) {
-                            setTimeout(() => {
-                                const grid = document.getElementById('image-grid');
-                                const scrollWrapper = grid?.parentElement;
-                                if (scrollWrapper) {
-                                    scrollWrapper.scrollTop = this.savedViewState.scrollTop;
-                                }
-                            }, 100);
-                        }
-                    } else if (this.savedViewState && this.savedViewState.type === 'single') {
-                                                this.loadImage(this.savedViewState.imagePath).then(() => {
-                            this.zoom = this.savedViewState.zoom;
-
-                            this.offsetX = this.savedViewState.offsetX;
-
-                            this.offsetY = this.savedViewState.offsetY;
-
-                            // 🔥 loadImage가 자동으로 렌더링하므로 render() 호출 불필요
-                        });
-                    } else {
-                                                this.hideGrid();
-
-                        this.hideImage();
-
-                        this.selectedImages = [];
-
-                        this.currentImage = null;
-
-                        this.gridMode = false;
-
-                        this.currentGridImages = [];
-
-                        this.showInitialState();
-                    }
-
-                    this.updateLabelExplorerSelection();
-                                    }
+                if (e.target === frame) {
+                    return;
+                }
             };
 
-            // 프레임 우클릭도 추가 (Windows 탐색기와 일관성)
+            // 프레임 우클릭으로만 선택 해제
 
             frame.oncontextmenu = (e) => {
                 if (e.target === frame) {
-                    e.preventDefault();
-
-                    e.stopPropagation(); // 🚀 이벤트 버블링 방지
-
-                    labelSelection.selected = [];
-
-                    labelSelection.selectedClasses = [];
-
-                    this.updateLabelExplorerSelection();
-
-                    // Wafer Map Explorer 선택은 유지하도록 clearWaferMapExplorerSelection() 호출 제거
-
-                    this.debugLog('Label Explorer 프레임: 우클릭으로 Label Explorer만 선택 해제 (Wafer Map Explorer 선택 유지)');
+                    this.handleLabelExplorerRightClickClear(e);
                 }
             };
         }
@@ -17565,35 +17433,11 @@ class WaferMapViewer {
 
                 imgUl.style.margin = '0';
 
-                // robust: ul 내부 어디든(버튼/텍스트 제외) 클릭 시 선택 해제
+                // ul 빈 공간 좌클릭은 선택 유지
 
                 imgUl.addEventListener('click', (e) => {
-                    // 버튼/텍스트/이미지 아닌 곳만
-
                     if (e.target === imgUl) {
-                        labelSelection.selected = [];
-
-                        labelSelection.selectedClasses = [];
-
-                        // 이전 Grid 상태로 복귀 또는 이미지 숨기기
-
-                        if (this.gridMode) {
-                            this.debugLog('Label Explorer: 선택 해제 → 이전 Grid 상태로 복귀');
-
-                            this.restorePreviousGridState();
-                        } else {
-                            // 단일 이미지 모드에서도 이미지 숨기기
-
-                            this.debugLog('Label Explorer: 선택 해제 → 이미지 숨기기');
-
-                            this.restorePreviousGridState(); // 이전 Grid 상태가 없으면 hideImage() 포함
-                        }
-
-                        // 클래스 매니저 버튼 상태 업데이트
-
-                        this.updateClassManagerButtons();
-
-                        this.updateLabelExplorerContent();
+                        return;
                     }
                 }, true); // capture phase로 등록
 
@@ -24531,11 +24375,9 @@ class WaferMapViewer {
             gridElement.setAttribute('data-label-explorer-grid', 'true');
 
             gridElement.oncontextmenu = (e) => {
-                // Grid item이 아닌 Grid 자체를 클릭한 경우에만
-                if (e.target === gridElement || e.target.classList.contains('grid-thumb-wrap')) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    this.clearLabelExplorerSelection();
+                const clickedThumb = e.target?.closest?.('.grid-thumb-wrap');
+                if (!clickedThumb) {
+                    this.handleLabelExplorerRightClickClear(e);
                     this.debugLog('🔷 Label Explorer Grid: 우클릭으로 선택 해제');
                 }
             };

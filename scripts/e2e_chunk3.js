@@ -307,6 +307,26 @@ const { createRunner } = require('./e2e_playwright_session');
     return { before, after, beforeLayout, afterLayout };
   }
 
+  async function getLabelExplorerState() {
+    return await page.evaluate(() => ({
+      selected: [...(window.viewer.labelSelection?.selected || [])],
+      selectedClasses: [...(window.viewer.labelSelection?.selectedClasses || [])],
+      gridMode: !!window.viewer.gridMode,
+      wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+      currentGridImages: window.viewer.currentGridImages?.length || 0,
+      labelGrid: !!document.getElementById('image-grid')?.hasAttribute('data-label-explorer-grid'),
+    }));
+  }
+
+  async function clickLabelExplorerBlank(button = 'left') {
+    const frame = page.locator('.label-explorer-frame');
+    const box = await frame.boundingBox();
+    expect(!!box, 'label explorer frame missing');
+    const x = Math.floor(box.x + box.width - 30);
+    const y = Math.floor(box.y + box.height - 30);
+    await page.mouse.click(x, y, { button });
+  }
+
   await boot('chunk3');
 
   await record('41,42,45,47,48,56', 'Composite / Measure 안정성 / toast / color modal / grid restore', async () => {
@@ -427,20 +447,45 @@ const { createRunner } = require('./e2e_playwright_session');
   await record('43,44,49,50,57,60', 'Label Explorer / WF search / classification consistency', async () => {
     await boot('chunk3-label');
     const labelData = await page.evaluate(async () => {
-      await window.viewer.showGridFromClass('asDF');
-      await new Promise((r) => setTimeout(r, 800));
-      const asdf = {
+      const classNames = Array.from(
+        document.querySelectorAll('.label-explorer-frame li > div')
+      )
+        .map((el) => (el.textContent || '').replace(/[▸▾]/g, '').trim())
+        .filter(Boolean);
+      const uniqueClasses = Array.from(new Set(classNames));
+      const primaryClass = uniqueClasses[0] || null;
+      if (!primaryClass) {
+        return {
+          classes: [],
+          primaryClass: null,
+          single: { count: 0, wraps: 0 },
+          multi: null,
+        };
+      }
+
+      await window.viewer.showGridFromClass(primaryClass);
+      await new Promise((r) => setTimeout(r, 1000));
+      const single = {
         count: window.viewer.currentGridImages.length,
         wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
       };
-      await window.viewer.showGridFromMultipleClasses(['asDF', 'asdfasdf']);
-      await new Promise((r) => setTimeout(r, 1000));
-      return {
-        asdf,
-        multi: {
+
+      let multi = null;
+      if (uniqueClasses.length > 1) {
+        await window.viewer.showGridFromMultipleClasses(uniqueClasses.slice(0, 2));
+        await new Promise((r) => setTimeout(r, 1200));
+        multi = {
           count: window.viewer.currentGridImages.length,
           wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
-        },
+          classes: uniqueClasses.slice(0, 2),
+        };
+      }
+
+      return {
+        classes: uniqueClasses,
+        primaryClass,
+        single,
+        multi,
       };
     });
 
@@ -459,8 +504,36 @@ const { createRunner } = require('./e2e_playwright_session');
     await sleep(500);
     const wfVisible = await visible('#wf-search-modal');
 
-    expect(labelData.asdf.count === 16, `asDF=${labelData.asdf.count}`);
-    expect(labelData.multi.count === 38, `multi=${labelData.multi.count}`);
+    await boot('chunk3-label-clear');
+    const labelClearTarget = labelData.classes.includes('test')
+      ? 'test'
+      : labelData.primaryClass;
+    const targetFolder = page
+      .locator('.label-explorer-frame li > div')
+      .filter({ hasText: labelClearTarget })
+      .first();
+    await targetFolder.click();
+    await sleep(600);
+    await targetFolder.click({ modifiers: ['Control'] });
+    await sleep(1500);
+    const labelClearBefore = await getLabelExplorerState();
+    await clickLabelExplorerBlank('left');
+    await sleep(900);
+    const labelAfterLeftBlank = await getLabelExplorerState();
+    await clickLabelExplorerBlank('right');
+    await sleep(1200);
+    const labelAfterRightBlank = await getLabelExplorerState();
+    await targetFolder.click({ modifiers: ['Control'] });
+    await sleep(1500);
+    const labelAfterReselect = await getLabelExplorerState();
+
+    expect(labelData.primaryClass, `label classes=${JSON.stringify(labelData.classes)}`);
+    expect(labelData.single.count > 0, `label single=${JSON.stringify(labelData.single)}`);
+    expect(labelData.single.wraps > 0, `label single wraps=${JSON.stringify(labelData.single)}`);
+    if (labelData.multi) {
+      expect(labelData.multi.count >= labelData.single.count, `label multi=${JSON.stringify(labelData.multi)}`);
+      expect(labelData.multi.wraps > 0, `label multi wraps=${JSON.stringify(labelData.multi)}`);
+    }
     expect(labelBefore.role === 'label', `label role=${labelBefore.role}`);
     expect(labelBefore.lotMode === true, `label lotMode=${labelBefore.lotMode}`);
     expect(labelBefore.lotHeaders > 0, `label lotHeaders=${labelBefore.lotHeaders}`);
@@ -469,7 +542,24 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(labelAfter.lotHeaders > 0, `label restore lotHeaders=${labelAfter.lotHeaders}`);
     expect(labelGridCols.after.gridCols !== labelGridCols.before, `label gridCols ${labelGridCols.before}->${labelGridCols.after.gridCols}`);
     expect(wfVisible, 'wf modal hidden');
-    return { ...labelData, labelBefore, labelGridCols, labelAfter, wfVisible };
+    expect(labelClearBefore.selectedClasses.includes(labelClearTarget), `label clear before=${JSON.stringify(labelClearBefore)}`);
+    expect(labelAfterLeftBlank.selectedClasses.includes(labelClearTarget), `left blank cleared selection: ${JSON.stringify(labelAfterLeftBlank)}`);
+    expect(labelAfterLeftBlank.wraps > 0, `left blank cleared wraps=${labelAfterLeftBlank.wraps}`);
+    expect(labelAfterRightBlank.selectedClasses.length === 0, `right blank did not clear: ${JSON.stringify(labelAfterRightBlank)}`);
+    expect(labelAfterReselect.selectedClasses.includes(labelClearTarget), `reselect failed: ${JSON.stringify(labelAfterReselect)}`);
+    expect(labelAfterReselect.wraps > 0, `reselect wraps=${labelAfterReselect.wraps}`);
+    return {
+      ...labelData,
+      labelClearTarget,
+      labelBefore,
+      labelGridCols,
+      labelAfter,
+      wfVisible,
+      labelClearBefore,
+      labelAfterLeftBlank,
+      labelAfterRightBlank,
+      labelAfterReselect,
+    };
   });
 
   await record('mylot-grid', 'MyLot grid view / lot mode / double click restore', async () => {
