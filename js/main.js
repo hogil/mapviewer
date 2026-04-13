@@ -2382,10 +2382,11 @@ class WaferMapViewer {
         }
 
         if (pendingResult) {
+            const isMeasureComposite = Array.isArray(pendingResult);
             state.pendingCompositeResult = null;
             state.pendingCompositeTask = null;
             // Measure Composite는 배열, Failbit Composite는 단일 객체
-            if (Array.isArray(pendingResult)) {
+            if (isMeasureComposite) {
                 await this.switchToMeasureCompositeGrid(pendingResult);
             } else {
                 await this.switchToCompositeGrid(pendingResult);
@@ -2394,7 +2395,10 @@ class WaferMapViewer {
                 this.clearCompositePageTask(page.id);
             }
             this.persistActivePageState();
-            this.showCenteredToast('완성', 1500);
+            this.showCompositeDoneMessage(
+                this._formatCompositeDoneMessage(pendingTask, { measure: isMeasureComposite }),
+                1800
+            );
         } else if (!restoredFromCache && !restoredGridImage) {
             await this.restoreSavedViewState();
         }
@@ -9291,6 +9295,7 @@ class WaferMapViewer {
 
             // 결과 반영: 현재 해당 탭에 있으면 즉시 렌더링, 아니면 보류 후 toast
             if (result && targetPageId) {
+                const doneMessage = this._formatCompositeDoneMessage(initialTask, { measure: false });
                 const isOnTargetTab = this.pageManager?.activePageId === targetPageId;
                 if (isOnTargetTab) {
                     // 현재 해당 탭 → 즉시 렌더링
@@ -9306,7 +9311,7 @@ class WaferMapViewer {
                     this.clearCompositePageTask(targetPageId);
                     this.hideCompositeInlineStatus();
                     this.persistActivePageState();
-                    this.showCenteredToast('완성', 1500);
+                    this.showCompositeDoneMessage(doneMessage, 1800);
                 } else {
                     // 다른 탭에 있음 → 결과 보류, 나중에 탭 전환 시 렌더링
                     this.setCompositePageTask(targetPageId, {
@@ -9315,7 +9320,7 @@ class WaferMapViewer {
                         pendingRender: true,
                     });
                     this.hideCompositeInlineStatus();
-                    this.showCenteredToast('완성', 1500);
+                    this.showCompositeDoneMessage(doneMessage, 1800);
                 }
             } else {
                 this.hideCompositeInlineStatus();
@@ -10045,6 +10050,7 @@ class WaferMapViewer {
 
             // Display all results in grid — 현재 탭이면 즉시, 아니면 보류
             if (allResults.length && targetPageId) {
+                const doneMessage = this._formatCompositeDoneMessage(initialTask, { measure: true });
                 const isOnTargetTab = this.pageManager?.activePageId === targetPageId;
                 if (isOnTargetTab) {
                     this.showCompositeInlineStatus('Measure Composite 결과 표시 중...');
@@ -10052,16 +10058,16 @@ class WaferMapViewer {
                     this.clearCompositePageTask(targetPageId);
                     this.hideCompositeInlineStatus();
                     this.persistActivePageState();
-                    this.showCenteredToast('완성', 1500);
+                    this.showCompositeDoneMessage(doneMessage, 1800);
                 } else {
                     // 다른 탭에 있음 → 결과 보류 (탭 전환 시 applyPageState에서 렌더링)
                     this.setCompositePageTask(targetPageId, {
-                        task: { status: 'ready', message: 'Measure Composite 완료', selectedCount: selected.length, startedAt: Date.now() },
+                        task: { status: 'ready', message: 'Measure Composite 완료', selectedCount: selected.length, startedAt: initialTask.startedAt },
                         result: allResults,
                         pendingRender: true,
                     });
                     this.hideCompositeInlineStatus();
-                    this.showCenteredToast('완성', 1500);
+                    this.showCompositeDoneMessage(doneMessage, 1800);
                 }
             } else {
                 this.hideCompositeInlineStatus();
@@ -10701,6 +10707,23 @@ class WaferMapViewer {
             document.body.appendChild(toast);
             setTimeout(() => toast.remove(), duration);
         } catch {}
+    }
+
+    _formatCompositeDoneMessage(taskState = null, { measure = false } = {}) {
+        const prefix = measure ? 'Measure Composite 생성 완료' : 'Composite Map 생성 완료';
+        const parts = [];
+        const startedAt = Number(taskState?.startedAt);
+        const selectedCount = Number(taskState?.selectedCount);
+
+        if (Number.isFinite(startedAt) && startedAt > 0) {
+            const elapsedSec = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+            parts.push(`${elapsedSec}s`);
+        }
+        if (Number.isFinite(selectedCount) && selectedCount > 0) {
+            parts.push(`${selectedCount}images`);
+        }
+
+        return parts.length > 0 ? `${prefix} (${parts.join(' ')})` : prefix;
     }
 
     showCompositeDoneMessage(message, duration = 2000) {

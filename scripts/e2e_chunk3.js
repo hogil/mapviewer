@@ -441,7 +441,7 @@ const { createRunner } = require('./e2e_playwright_session');
     );
     const toastSeen = await page.evaluate(() =>
       Array.from(document.body.querySelectorAll('div')).some(
-        (el) => el.textContent === '완성'
+        (el) => /Composite Map 생성 완료 \(\d+s \d+images\)/.test(el.textContent || '')
       )
     );
     const compositeBefore = await getVisibleGridThumbSummary();
