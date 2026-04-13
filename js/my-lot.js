@@ -3344,12 +3344,6 @@ export class MyLotModal {
             this.viewer.lastSelectedFolderPath = null;
             const nav = document.querySelector('nav[aria-label="폴더 및 파일 목록"]');
             if (nav) nav.querySelectorAll('summary.selected').forEach(s => s.classList.remove('selected'));
-            // 🔥 MY LOT Grid에서는 LOT Mode 비활성화 (다양한 LOT 이미지 혼합 → showGridByLot 재귀 방지)
-            if (this.viewer.lotMode) {
-                this.viewer.lotMode = false;
-                const lotBtn = document.getElementById('lot-mode-btn') || document.querySelector('[data-action="lot-mode"]');
-                if (lotBtn) lotBtn.classList.remove('active');
-            }
             this.viewer.showGrid(paths);
             return;
         }

@@ -4725,6 +4725,8 @@ class WaferMapViewer {
                 if (gridColsInputEl) gridColsInputEl.value = newCols;
 
                 document.documentElement.style.setProperty('--grid-cols', newCols.toString());
+                this._saveGridColsPref();
+                this._syncGridPrefsAcrossPageStates();
 
                 if ((this.currentGridImages && this.currentGridImages.length > 0) || (this.selectedImages && this.selectedImages.length > 1)) {
                     this.scheduleShowGrid();
@@ -6750,6 +6752,40 @@ class WaferMapViewer {
 
             this.showInitialState();
 
+            // 첫 화면 first paint 이후, 비핵심 패널은 파일 탐색기와 병렬로 초기화한다.
+            const classificationInitTask = this.initClassification().catch(err => console.error('[INIT] Classification 초기화 실패:', err));
+            const bootstrapNonCriticalPanels = async () => {
+                try {
+                    await this.updateSubfolderList();
+                } catch (err) {
+                    console.error('[INIT] Subfolder 업데이트 실패:', err);
+                }
+
+                try {
+                    await this.loadFolderBrowser('');
+                } catch (error) {
+                    console.error('[INIT] Folder browser 초기화 실패:', error);
+                }
+
+                try {
+                    await classificationInitTask;
+                    await Promise.all([
+                        this.refreshLabelExplorer(),
+                        this.refreshClassList(false)
+                    ]);
+                } catch (err) {
+                    console.error('[INIT] Label Explorer 초기화 실패:', err);
+                }
+            };
+            const scheduleNonCriticalPanelsBootstrap = () => {
+                if (typeof requestIdleCallback === 'function') {
+                    requestIdleCallback(() => { void bootstrapNonCriticalPanels(); }, { timeout: 200 });
+                } else {
+                    setTimeout(() => { void bootstrapNonCriticalPanels(); }, 0);
+                }
+            };
+            setTimeout(scheduleNonCriticalPanelsBootstrap, 0);
+
             const startAncillaryBootstrap = () => {
                 Promise.allSettled([
                     this.loadServerConfig().catch((error) => {
@@ -6805,37 +6841,6 @@ class WaferMapViewer {
         } catch (error) {
             console.error('[INIT] Explorer preload failed:', error);
         }
-
-        // 첫 화면 3단계 측정과 직접 무관한 패널/라벨 초기화는 뒤로 미룬다.
-        const classificationInitTask = this.initClassification().catch(err => console.error('[INIT] Classification 초기화 실패:', err));
-        const bootstrapNonCriticalPanels = async () => {
-            try {
-                await this.updateSubfolderList();
-            } catch (err) {
-                console.error('[INIT] Subfolder 업데이트 실패:', err);
-            }
-
-            try {
-                await this.loadFolderBrowser('');
-            } catch (error) {
-                console.error('[INIT] Folder browser 초기화 실패:', error);
-            }
-
-            try {
-                await classificationInitTask;
-                await this.refreshLabelExplorer();
-                this.updateLabelExplorerContent();
-            } catch (err) {
-                console.error('[INIT] Label Explorer 초기화 실패:', err);
-            }
-        };
-        setTimeout(() => {
-            if (typeof requestIdleCallback === 'function') {
-                requestIdleCallback(() => { void bootstrapNonCriticalPanels(); }, { timeout: 1000 });
-            } else {
-                void bootstrapNonCriticalPanels();
-            }
-        }, 2500);
 
         // 🔥 개인색 설정은 항상 활성화 (UI 체크박스 제거됨)
         this.personalizedColorEnabled = true;
@@ -8152,7 +8157,7 @@ class WaferMapViewer {
         const lines = raw.split(/[\n\r]+/);
         const pairs = [];
         const seen = new Set();
-        const MAX = 100;
+        const MAX = 1000;
         for (const line of lines) {
             const trimmed = line.trim();
             if (!trimmed) continue;
@@ -8195,7 +8200,7 @@ class WaferMapViewer {
         const segments = raw.split(/[\n\r,;/]+/);
         const seen = new Set();
         const lots = [];
-        const MAX = 100;
+        const MAX = 300;
         for (const segment of segments) {
             const trimmed = segment.trim();
             if (!trimmed) continue;
@@ -10520,14 +10525,7 @@ class WaferMapViewer {
             this.debugLog(`검색 완료: ${matchedImages.length}개 이미지 발견 (${(endTime - startTime).toFixed(1)}ms)`);
 
             if (matchedImages.length === 0) {
-                this.selectedImages = [];
-                this.gridSelectedIdxs = [];
-                this.gridSelectedSet = new Set();
-                this._prevGridSelectedIdxs = new Set();
-                this.gridLastClickedIdx = undefined;
-                this.gridThumbWraps = [];
-                this.invalidateGridGeometry();
-                this.showGrid([], false, true);
+                this.debugLog('검색 결과 0건 - 현재 화면 유지');
                 if (!suppressAlerts) {
                     alert('검색 결과가 없습니다.');
                 }
@@ -13310,12 +13308,35 @@ class WaferMapViewer {
         return {
             type: 'grid',
             source: 'labelExplorer',
-            forceFlatGrid: true,
+            forceFlatGrid: !this.lotMode,
+            lotMode: this.lotMode,
+            gridCols: this.gridCols,
+            gridThumbSize: this.gridThumbSize,
             images: [...safeImages],
             scrollTop: scrollTop ?? 0,
             selectedIndices: Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : [],
             selectedImagePaths: Array.isArray(this.selectedImages) ? [...this.selectedImages] : [],
         };
+    }
+
+    ensureLabelPageActive() {
+        if (!this.pageManager) return;
+        const activePage = this.pageManager.getActivePage();
+        if (!activePage) return;
+        if (activePage.role === 'blank') {
+            activePage.role = 'label';
+            activePage.title = this.pageManager.buildTitle('label');
+            this.pageManager.renderTabs();
+            this.activePageRole = 'label';
+            return;
+        }
+        if (activePage.role !== 'label') {
+            this.persistActivePageState();
+            const newPage = this.pageManager.createPage('label', null, { activate: false });
+            this.pageManager.activePageId = newPage.id;
+            this.pageManager.renderTabs();
+            this.activePageRole = 'label';
+        }
     }
 
     // 🔥 Label Explorer 진입 전 현재 상태 저장 (더 이상 필요 없음 - showGrid/loadImage에서 자동 저장)
@@ -18610,7 +18631,10 @@ class WaferMapViewer {
         const scrollTop = container.scrollTop;
 
         // 클래스 목록 다시 가져오기
-        this.refreshClassList().then(async () => {
+        const shouldForceClassFetch =
+            !Array.isArray(this.cachedClassList) ||
+            this.cachedClassListVersion !== this.currentFolderVersion;
+        this.refreshClassList(shouldForceClassFetch).then(async () => {
             // 🔥 refreshClassList()에서 캐시된 클래스 목록 사용 (중복 API 호출 제거)
             if (this.cachedClassListVersion !== this.currentFolderVersion) {
                 this.debugLog('Label Explorer content render skipped - context changed');
@@ -19256,7 +19280,7 @@ class WaferMapViewer {
         const transientGridRestoreState = skipSaveState ? this._transientGridRestoreState : null;
         const shouldForceFlatGrid = forceFlatGrid || !!(
             skipSaveState &&
-            (transientGridRestoreState?.forceFlatGrid || transientGridRestoreState?.source === 'labelExplorer')
+            transientGridRestoreState?.forceFlatGrid
         );
 
         // 📦 Lot 모드가 활성화되어 있으면 Lot별 그리드로 표시
@@ -19374,6 +19398,10 @@ class WaferMapViewer {
             if (transientGridRestoreState?.source === 'labelExplorer') {
                 this.labelExplorerGridState = {
                     ...transientGridRestoreState,
+                    forceFlatGrid: transientGridRestoreState.forceFlatGrid ?? !this.lotMode,
+                    lotMode: this.lotMode,
+                    gridCols: this.gridCols,
+                    gridThumbSize: this.gridThumbSize,
                     images: [...sortedImages],
                 };
             } else if (this.savedViewState) {
@@ -20387,6 +20415,51 @@ class WaferMapViewer {
         this._gridOffsetCache = null;
     }
 
+    _collectVisibleGridThumbsByDom(scrollWrapper, wraps, padding = 0) {
+        if (!scrollWrapper || !wraps?.length) {
+            return { viewportImages: [], preloadImages: [] };
+        }
+
+        const wrapperRect = scrollWrapper.getBoundingClientRect();
+        const viewportTop = wrapperRect.top;
+        const viewportBottom = wrapperRect.bottom;
+        const preloadTop = viewportTop - padding;
+        const preloadBottom = viewportBottom + padding;
+        const viewportImages = [];
+        const preloadImages = [];
+
+        for (const wrap of wraps) {
+            const img = wrap?.querySelector?.('.grid-thumb-img');
+            if (!img || !img.dataset?.src) continue;
+
+            if (
+                img.dataset.gridLoaded !== 'true' &&
+                img.complete &&
+                img.naturalWidth > 1 &&
+                img.src === img.dataset.src
+            ) {
+                img.dataset.gridLoaded = 'true';
+                img.dataset.loading = 'false';
+                img.style.opacity = '1';
+            }
+            if (img.dataset.gridLoaded === 'true') continue;
+
+            const rect = wrap.getBoundingClientRect();
+            const inViewport = rect.bottom > viewportTop && rect.top < viewportBottom;
+            if (inViewport) {
+                viewportImages.push(img);
+                continue;
+            }
+
+            const inPreloadBand = rect.bottom > preloadTop && rect.top < preloadBottom;
+            if (inPreloadBand) {
+                preloadImages.push(img);
+            }
+        }
+
+        return { viewportImages, preloadImages };
+    }
+
     /**
      * 🔥 2단계 그리드 로드
      * 1) 뷰포트 내부를 먼저 즉시 로드
@@ -20452,6 +20525,12 @@ class WaferMapViewer {
                     preloadImages.push(img);
                 }
             }
+        }
+
+        if (viewportImages.length === 0) {
+            const fallback = this._collectVisibleGridThumbsByDom(scrollWrapper, wraps, padding);
+            viewportImages.push(...fallback.viewportImages);
+            preloadImages.push(...fallback.preloadImages);
         }
 
         // 🔥 뷰포트 최우선 → 프리로드
@@ -22863,6 +22942,10 @@ class WaferMapViewer {
             if (isLabelExplorerRestore) {
                 this.labelExplorerGridState = {
                     ...this.buildLabelExplorerGridState(imagesToShow, scrollTopToRestore ?? 0),
+                    forceFlatGrid: saveState?.forceFlatGrid ?? !this.lotMode,
+                    lotMode: saveState?.lotMode ?? this.lotMode,
+                    gridCols: saveState?.gridCols ?? this.gridCols,
+                    gridThumbSize: saveState?.gridThumbSize ?? this.gridThumbSize,
                     selectedIndices: Array.isArray(saveState?.selectedIndices) ? [...saveState.selectedIndices] : [],
                     selectedImagePaths: Array.isArray(saveState?.selectedImagePaths) ? [...saveState.selectedImagePaths] : [],
                 };
@@ -22897,8 +22980,7 @@ class WaferMapViewer {
             const existingGrid = document.getElementById('image-grid');
             const existingWrapCount = existingGrid?.querySelectorAll?.('.grid-thumb-wrap')?.length || 0;
             let usedFastPath = false;
-            const canUseFastPath = !isLabelExplorerRestore &&
-                this._gridVisuallyHidden &&
+            const canUseFastPath = this._gridVisuallyHidden &&
                 existingGrid &&
                 existingWrapCount > 0;
             if (canUseFastPath) {
@@ -22926,6 +23008,7 @@ class WaferMapViewer {
                 if (isLabelExplorerRestore) {
                     existingGrid.setAttribute('data-label-explorer-grid', 'true');
                 }
+                this._transientGridRestoreState = null;
             } else {
                 // Slow path: 그리드 재생성 필요 (다른 경로에서 hideGrid가 호출된 경우)
                 // 🔥 다중 Measure 모드: base images 사용 (showGrid에서 다시 확장하므로 이중 확장 방지)
@@ -24353,25 +24436,7 @@ class WaferMapViewer {
         console.log('🔷 [GRID_FROM_LABEL] called:', { count: imageKeys?.length, keys: imageKeys?.slice(0,3), prefix: this.currentFolderPrefix, cacheKeys: Object.keys(this.classToImgListCache || {}).length });
         if (!imageKeys || imageKeys.length === 0) return;
         
-        // 🔥 Label Explorer에서 그리드 표시 시 페이지 변환 처리
-        // ⚠️ applyPageState 트리거 방지 (showGrid 설정 상태 초기화 버그)
-        if (this.pageManager) {
-            const activePage = this.pageManager.getActivePage();
-            if (activePage) {
-                if (activePage.role === 'blank') {
-                    activePage.role = 'label';
-                    activePage.title = this.pageManager.buildTitle('label');
-                    this.pageManager.renderTabs();
-                    this.activePageRole = 'label';
-                } else if (activePage.role !== 'label') {
-                    this.persistActivePageState();
-                    const newPage = this.pageManager.createPage('label', null, { activate: false });
-                    this.pageManager.activePageId = newPage.id;
-                    this.pageManager.renderTabs();
-                    this.activePageRole = 'label';
-                }
-            }
-        }
+        this.ensureLabelPageActive();
 
         // 🔥 savedViewState 백업 (Label Explorer Grid가 덮어쓰지 않도록)
         const savedViewStateBackup = this.savedViewState;
@@ -24455,7 +24520,7 @@ class WaferMapViewer {
             this.debugLog('🔷 [DEBUG] 그리드 컨테이너 표시 설정 완료');
         }
 
-        this.showGrid(actualPaths, true, true);  // Label Explorer는 항상 flat grid 사용
+        this.showGrid(actualPaths, true, !!this.labelExplorerGridState?.forceFlatGrid);
 
         // ✅ showGrid가 그리드를 재생성하므로 attribute를 다시 설정
         const gridAfter = document.getElementById('image-grid');
@@ -24472,6 +24537,7 @@ class WaferMapViewer {
     async showGridFromClass(className) {
         try {
             const requestId = this.beginLabelExplorerGridRequest(`label-class:${className}`);
+            this.ensureLabelPageActive();
             // 🔥 showGridFromClass는 Label Explorer 클래스 전체 보기용이므로 savedViewState 저장 안 함
             this.debugLog('🔷 [SKIP] showGridFromClass - Label Explorer 클래스 전체 보기, savedViewState 저장 건너뛰기');
 
@@ -24533,7 +24599,7 @@ class WaferMapViewer {
             this.labelExplorerGridState = this.buildLabelExplorerGridState(imageFiles, 0);
             this._transientGridRestoreState = { ...this.labelExplorerGridState };
 
-            this.showGrid(imageFiles, true, true);  // 🔥 Label Explorer는 항상 flat grid 사용
+            this.showGrid(imageFiles, true, !!this.labelExplorerGridState?.forceFlatGrid);
 
             // 🔥 Label Explorer에서 온 Grid에 우클릭 이벤트 추가
 
@@ -24563,6 +24629,7 @@ class WaferMapViewer {
     async showGridFromMultipleClasses(classNames) {
         try {
             const requestId = this.beginLabelExplorerGridRequest(`label-multi:${(classNames || []).join(',')}`);
+            this.ensureLabelPageActive();
             // 🔥 이전 상태 저장 (한 번만 저장)
 
             if (!this.savedViewState) {
@@ -24654,7 +24721,7 @@ class WaferMapViewer {
 
             this.debugLog(`🚀 다중 클래스 그리드 표시 시작: ${allImageFiles.length}개 이미지`);
 
-            this.showGrid(allImageFiles, true, true);  // 🔥 Label Explorer는 항상 flat grid 사용
+            this.showGrid(allImageFiles, true, !!this.labelExplorerGridState?.forceFlatGrid);
 
             this.debugLog(`✅ 다중 클래스 그리드 표시 완료`);
 
@@ -29291,12 +29358,18 @@ window.addEventListener('wheel', function(e) {
 
             window.viewer.gridCols = newCols;
 
-            document.getElementById('grid-cols-range').value = newCols;
+            const gridColsRange = document.getElementById('grid-cols-range');
+            if (gridColsRange) gridColsRange.value = newCols;
+            const gridColsInputEl = document.getElementById('grid-cols-input');
+            if (gridColsInputEl) gridColsInputEl.value = newCols;
 
             document.documentElement.style.setProperty('--grid-cols', newCols);
+            window.viewer._saveGridColsPref?.();
+            window.viewer._syncGridPrefsAcrossPageStates?.();
 
-            if (window.viewer.selectedImages && window.viewer.selectedImages.length > 1) {
-                window.viewer.showGrid(window.viewer.selectedImages);
+            if ((window.viewer.currentGridImages && window.viewer.currentGridImages.length > 0) ||
+                (window.viewer.selectedImages && window.viewer.selectedImages.length > 1)) {
+                window.viewer.scheduleShowGrid?.();
             }
         }
     }

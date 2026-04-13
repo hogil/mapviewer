@@ -180,9 +180,109 @@ const { createRunner } = require('./e2e_playwright_session');
     }, selector);
   }
 
+  async function getVisibleGridThumbSummary() {
+    return await page.evaluate(() => {
+      const PLACEHOLDER =
+        'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+      const grid = document.getElementById('image-grid');
+      const scrollWrapper = grid?.parentElement;
+      if (!grid || !scrollWrapper) {
+        return {
+          visibleCount: 0,
+          loadedCount: 0,
+          badCount: 0,
+          lotHeaders: 0,
+          lotMode: false,
+          gridCols: 0,
+          role: null,
+          bad: [],
+        };
+      }
+
+      const wrapperRect = scrollWrapper.getBoundingClientRect();
+      const wraps = Array.from(grid.querySelectorAll('.grid-thumb-wrap'));
+      const visibleThumbs = wraps
+        .map((wrap, idx) => {
+          const rect = wrap.getBoundingClientRect();
+          if (rect.bottom <= wrapperRect.top || rect.top >= wrapperRect.bottom) {
+            return null;
+          }
+          const img = wrap.querySelector('img.grid-thumb-img');
+          if (!img) {
+            return {
+              idx,
+              isLoaded: false,
+              reason: 'no-img',
+            };
+          }
+          const src = img.currentSrc || img.src || '';
+          return {
+            idx,
+            isLoaded:
+              img.complete &&
+              img.naturalWidth > 0 &&
+              img.dataset.gridLoaded === 'true' &&
+              !src.startsWith(PLACEHOLDER),
+            loading: img.dataset.thumbLoading || 'false',
+            gridLoaded: img.dataset.gridLoaded || 'false',
+          };
+        })
+        .filter(Boolean);
+
+      const loadedCount = visibleThumbs.filter((item) => item.isLoaded).length;
+      const bad = visibleThumbs.filter((item) => !item.isLoaded);
+      return {
+        visibleCount: visibleThumbs.length,
+        loadedCount,
+        badCount: bad.length,
+        lotHeaders: document.querySelectorAll('#image-grid .lot-header').length,
+        lotMode: !!window.viewer.lotMode,
+        gridCols: window.viewer.gridCols,
+        role: window.viewer.pageManager?.getActivePage()?.role || null,
+        bad: bad.slice(0, 8),
+      };
+    });
+  }
+
+  async function roundTripGridImageByDblClick(index = 0) {
+    await page.locator('#image-grid .grid-thumb-wrap').nth(index).dblclick();
+    await page.waitForFunction(
+      () => !!window.viewer && window.viewer.viewMode === 'gridImage',
+      null,
+      { timeout: 30000 }
+    );
+    await sleep(800);
+    await page.locator('#viewer-container').dblclick();
+    await page.waitForFunction(
+      () =>
+        !!window.viewer &&
+        window.viewer.gridMode === true &&
+        window.viewer.viewMode !== 'gridImage',
+      null,
+      { timeout: 30000 }
+    );
+    await sleep(1800);
+  }
+
+  async function adjustGridColsByCtrlWheel(deltaY = -120) {
+    await page.locator('#image-grid').dispatchEvent('wheel', { deltaY, ctrlKey: true });
+    await sleep(350);
+    return await page.evaluate(() => ({
+      gridCols: window.viewer.gridCols,
+      range: document.getElementById('grid-cols-range')?.value || null,
+      input: document.getElementById('grid-cols-input')?.value || null,
+    }));
+  }
+
+  async function nudgeGridCols() {
+    const before = await page.evaluate(() => window.viewer.gridCols);
+    const after = await adjustGridColsByCtrlWheel(before >= 10 ? 120 : -120);
+    return { before, after };
+  }
+
   await boot('chunk3');
 
-  await record('41,42,45,47,48,56', 'Composite / Measure 안정성 / toast / color modal', async () => {
+  await record('41,42,45,47,48,56', 'Composite / Measure 안정성 / toast / color modal / grid restore', async () => {
     await loadFolder('filter_test');
     await setSelection([0, 1, 2]);
     await page.evaluate(() => window.viewer.handleCompositeCreate());
@@ -203,8 +303,14 @@ const { createRunner } = require('./e2e_playwright_session');
         (el) => el.textContent === '완성'
       )
     );
-    await enterSingle(0);
-    await backToGrid();
+    const compositeBefore = await getVisibleGridThumbSummary();
+    if (compositeBefore.badCount > 0) {
+      await sleep(1200);
+    }
+    const compositeSettled = await getVisibleGridThumbSummary();
+    const compositeGridCols = await nudgeGridCols();
+    await roundTripGridImageByDblClick(0);
+    const compositeAfter = await getVisibleGridThumbSummary();
 
     await boot('chunk3-measure');
     await loadFolder('palette_3k');
@@ -239,6 +345,15 @@ const { createRunner } = require('./e2e_playwright_session');
       { timeout: 10000 }
     );
     const measureColorVisible = await visible('#color-editor-modal');
+    const measureBefore = await getVisibleGridThumbSummary();
+    const measureGridCols = await nudgeGridCols();
+    await page.evaluate(async () => {
+      const editor = await window.viewer._getColorEditor();
+      editor?.close?.();
+    });
+    await sleep(400);
+    await roundTripGridImageByDblClick(0);
+    const measureAfter = await getVisibleGridThumbSummary();
     const data = await page.evaluate((toastSeenValue) => ({
       compositeRole: window.viewer.pageManager?.getActivePage()?.role || null,
       measureRole: window.viewer.pageManager?.pages?.some((p) => p.role === 'measure'),
@@ -249,7 +364,23 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(data.gridCount > 0 && data.wraps > 0, `grid=${data.gridCount}/${data.wraps}`);
     expect(data.measureRole === true, 'measure page missing');
     expect(measureColorVisible, 'measure color modal hidden');
-    return { ...data, measureColorVisible };
+    expect(compositeSettled.badCount === 0, `composite settled badCount=${compositeSettled.badCount}`);
+    expect(compositeAfter.badCount === 0, `composite after badCount=${compositeAfter.badCount}`);
+    expect(compositeGridCols.after.gridCols !== compositeGridCols.before, `composite gridCols ${compositeGridCols.before}->${compositeGridCols.after.gridCols}`);
+    expect(measureBefore.badCount === 0, `measure before badCount=${measureBefore.badCount}`);
+    expect(measureAfter.badCount === 0, `measure after badCount=${measureAfter.badCount}`);
+    expect(measureGridCols.after.gridCols !== measureGridCols.before, `measure gridCols ${measureGridCols.before}->${measureGridCols.after.gridCols}`);
+    return {
+      ...data,
+      measureColorVisible,
+      compositeBefore,
+      compositeSettled,
+      compositeGridCols,
+      compositeAfter,
+      measureBefore,
+      measureGridCols,
+      measureAfter,
+    };
   });
 
   await record('43,44,49,50,57,60', 'Label Explorer / WF search / classification consistency', async () => {
@@ -269,9 +400,19 @@ const { createRunner } = require('./e2e_playwright_session');
           count: window.viewer.currentGridImages.length,
           wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
         },
-        lotHeaders: document.querySelectorAll('#image-grid .lot-header').length,
       };
     });
+
+    await page.evaluate(async () => {
+      if (!window.viewer.lotMode) {
+        window.viewer.toggleLotMode();
+        await new Promise((r) => setTimeout(r, 1200));
+      }
+    });
+    const labelBefore = await getVisibleGridThumbSummary();
+    const labelGridCols = await nudgeGridCols();
+    await roundTripGridImageByDblClick(0);
+    const labelAfter = await getVisibleGridThumbSummary();
 
     await page.evaluate(() => window.viewer.openWfSearchModal());
     await sleep(500);
@@ -279,9 +420,50 @@ const { createRunner } = require('./e2e_playwright_session');
 
     expect(labelData.asdf.count === 16, `asDF=${labelData.asdf.count}`);
     expect(labelData.multi.count === 38, `multi=${labelData.multi.count}`);
-    expect(labelData.lotHeaders === 0, `lotHeaders=${labelData.lotHeaders}`);
+    expect(labelBefore.role === 'label', `label role=${labelBefore.role}`);
+    expect(labelBefore.lotMode === true, `label lotMode=${labelBefore.lotMode}`);
+    expect(labelBefore.lotHeaders > 0, `label lotHeaders=${labelBefore.lotHeaders}`);
+    expect(labelBefore.badCount === 0, `label before badCount=${labelBefore.badCount}`);
+    expect(labelAfter.badCount === 0, `label after badCount=${labelAfter.badCount}`);
+    expect(labelAfter.lotHeaders > 0, `label restore lotHeaders=${labelAfter.lotHeaders}`);
+    expect(labelGridCols.after.gridCols !== labelGridCols.before, `label gridCols ${labelGridCols.before}->${labelGridCols.after.gridCols}`);
     expect(wfVisible, 'wf modal hidden');
-    return { ...labelData, wfVisible };
+    return { ...labelData, labelBefore, labelGridCols, labelAfter, wfVisible };
+  });
+
+  await record('mylot-grid', 'MyLot grid view / lot mode / double click restore', async () => {
+    await boot('chunk3-mylot');
+    await loadFolder('palette_3k');
+    await page.evaluate(async () => {
+      const v = window.viewer;
+      if (!v.lotMode) {
+        v.toggleLotMode();
+        await new Promise((r) => setTimeout(r, 1200));
+      }
+      const modal = await v._getMyLotModal();
+      const sample = v.currentGridImages.slice(0, 12);
+      modal.activeMode = 'lot';
+      modal.activeGroup = 'probe-group';
+      modal.currentEntries = [
+        { value: 'probe-lot', filename: 'probe-lot', path: sample[0], all_paths: sample },
+      ];
+      modal.selectedKeys = new Set(['probe-lot']);
+      await modal.openSelectionInViewer();
+    });
+    await sleep(1500);
+    const before = await getVisibleGridThumbSummary();
+    const gridCols = await nudgeGridCols();
+    await roundTripGridImageByDblClick(0);
+    const after = await getVisibleGridThumbSummary();
+
+    expect(before.role === 'mylot', `mylot role=${before.role}`);
+    expect(before.lotMode === true, `mylot lotMode=${before.lotMode}`);
+    expect(before.lotHeaders > 0, `mylot lotHeaders=${before.lotHeaders}`);
+    expect(before.badCount === 0, `mylot before badCount=${before.badCount}`);
+    expect(after.badCount === 0, `mylot after badCount=${after.badCount}`);
+    expect(after.lotHeaders > 0, `mylot after lotHeaders=${after.lotHeaders}`);
+    expect(gridCols.after.gridCols !== gridCols.before, `mylot gridCols ${gridCols.before}->${gridCols.after.gridCols}`);
+    return { before, gridCols, after };
   });
 
   await record('46,52,53,54,55,58,59,61,62,63', '캐시 / 성능 / placeholder / highlight / 버전전파', async () => {

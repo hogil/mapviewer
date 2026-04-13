@@ -160,34 +160,44 @@ const { createRunner } = require('./e2e_playwright_session');
 
   await record('3,51', '검색 카운트', async () => {
     await boot('chunk1-search');
-    const expectedCounts = {
-      abc123: 500,
-      'abc123 or def456': 1024,
-      ring: 0,
-      edge: 16,
-    };
+    const scenarios = [
+      { query: 'abc123', expected: 500 },
+      { query: 'abc123 or def456', expected: 1024 },
+      { query: 'ring', expected: 1024, alert: '검색 결과가 없습니다.' },
+      { query: 'edge', expected: 16 },
+    ];
     const counts = {};
-    for (const [q, expected] of Object.entries(expectedCounts)) {
+    for (const scenario of scenarios) {
+      let dialogMessage = '';
+      if (scenario.alert) {
+        page.once('dialog', async (dialog) => {
+          dialogMessage = dialog.message();
+          await dialog.accept();
+        });
+      }
       await page.evaluate((query) => {
         const input = document.getElementById('file-search');
         const btn = document.getElementById('search-btn');
         if (input) input.value = query;
         btn?.click();
-      }, q);
+      }, scenario.query);
       await page.waitForFunction(
         (expectedCount) => {
           const btn = document.getElementById('search-btn');
           const count = window.viewer?.currentGridImages?.length ?? -1;
           return !btn?.disabled && count === expectedCount;
         },
-        expected,
+        scenario.expected,
         { timeout: 30000 }
       );
-      counts[q] = await page.evaluate(() => window.viewer.currentGridImages.length);
+      counts[scenario.query] = await page.evaluate(() => window.viewer.currentGridImages.length);
+      if (scenario.alert) {
+        expect(dialogMessage === scenario.alert, `${scenario.query} dialog=${dialogMessage}`);
+      }
     }
     expect(counts['abc123'] === 500, `abc123=${counts['abc123']}`);
     expect(counts['abc123 or def456'] === 1024, `or=${counts['abc123 or def456']}`);
-    expect(counts['ring'] === 0, `ring=${counts['ring']}`);
+    expect(counts['ring'] === 1024, `ring=${counts['ring']}`);
     expect(counts['edge'] === 16, `edge=${counts['edge']}`);
     return counts;
   });

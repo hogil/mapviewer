@@ -293,14 +293,67 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.keyboard.press('Escape');
     await sleep(400);
 
+    await loadFolder('palette_5mb');
+    const searchBefore = await page.evaluate(() => ({
+      gridMode: !!window.viewer.gridMode,
+      wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+      count: window.viewer.currentGridImages?.length || 0,
+    }));
+    let noResultDialog = '';
+    page.once('dialog', async (dialog) => {
+      noResultDialog = dialog.message();
+      await dialog.accept();
+    });
+    await page.fill('#file-search', 'ZZZ_NO_RESULT_TOKEN_123456789');
+    await page.click('#search-btn');
+    await sleep(1200);
+    const searchAfter = await page.evaluate(() => ({
+      gridMode: !!window.viewer.gridMode,
+      wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+      count: window.viewer.currentGridImages?.length || 0,
+    }));
+
+    await page.evaluate(() => window.viewer.openMultiSearchModal?.());
+    await sleep(300);
+    await page.fill('#multi-search-input', 'ZZZ_NO_RESULT_TOKEN_123456789');
+    await page.click('#multi-search-apply');
+    await sleep(1200);
+    const multiNoResult = await page.evaluate(() => {
+      const modal = document.getElementById('multi-search-modal');
+      const style = modal ? getComputedStyle(modal) : null;
+      return {
+        modalVisible: !!modal && style.display !== 'none' && style.visibility !== 'hidden',
+        error: (document.getElementById('multi-search-error')?.textContent || '').trim(),
+        wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+        count: window.viewer.currentGridImages?.length || 0,
+      };
+    });
+    await page.keyboard.press('Escape');
+    await sleep(300);
+
+    const limitValidation = await page.evaluate(() => {
+      const lotInput = Array.from({ length: 301 }, (_, i) => `LOT${String(i).padStart(4, '0')}`).join('\n');
+      const wfInput = Array.from({ length: 1001 }, (_, i) => `LOT${String(i).padStart(4, '0')} ${String(i % 25).padStart(2, '0')}`).join('\n');
+      const originalLot = window.viewer.dom.multiSearchInput.value;
+      const originalWf = window.viewer.dom.wfSearchInput.value;
+      window.viewer.dom.multiSearchInput.value = lotInput;
+      const lotParsed = window.viewer.parseMultiSearchInput();
+      window.viewer.dom.wfSearchInput.value = wfInput;
+      const wfParsed = window.viewer.parseWfSearchInput();
+      window.viewer.dom.multiSearchInput.value = originalLot;
+      window.viewer.dom.wfSearchInput.value = originalWf;
+      return {
+        lotError: lotParsed.error || '',
+        wfError: wfParsed.error || '',
+      };
+    });
+
     await page.evaluate(() => window.viewer.openPermissionEditorModal());
     await sleep(1200);
     const permissionVisible = await visible('#permission-editor-modal');
     await page.click('#permission-add-row-btn');
     await sleep(300);
     const permRows = await page.locator('#permission-registration-tbody tr').count();
-
-    await loadFolder('palette_5mb');
     await setSelection([0]);
     await page.keyboard.press('Enter');
     await page.waitForFunction(
@@ -314,6 +367,16 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(afterPages === beforePages + 1, `pages ${beforePages}->${afterPages}`);
     expect(multiVisible, 'multi-search hidden');
     expect(multiError.length > 0, 'multi-search empty error missing');
+    expect(noResultDialog === '검색 결과가 없습니다.', `noResultDialog=${noResultDialog}`);
+    expect(searchAfter.gridMode === searchBefore.gridMode, `search gridMode ${searchBefore.gridMode}->${searchAfter.gridMode}`);
+    expect(searchAfter.wraps === searchBefore.wraps, `search wraps ${searchBefore.wraps}->${searchAfter.wraps}`);
+    expect(searchAfter.count === searchBefore.count, `search count ${searchBefore.count}->${searchAfter.count}`);
+    expect(multiNoResult.modalVisible, 'multi-search no-result modal hidden');
+    expect(multiNoResult.error.length > 0, 'multi-search no-result error missing');
+    expect(multiNoResult.wraps === searchBefore.wraps, `multi-search wraps ${searchBefore.wraps}->${multiNoResult.wraps}`);
+    expect(multiNoResult.count === searchBefore.count, `multi-search count ${searchBefore.count}->${multiNoResult.count}`);
+    expect(limitValidation.lotError.includes('최대 300개'), `lotError=${limitValidation.lotError}`);
+    expect(limitValidation.wfError.includes('최대 1000개'), `wfError=${limitValidation.wfError}`);
     expect(permissionVisible, 'permission modal hidden');
     expect(permRows >= 1, `permRows=${permRows}`);
     return {
@@ -321,6 +384,11 @@ const { createRunner } = require('./e2e_playwright_session');
       afterPages,
       multiVisible,
       multiError,
+      noResultDialog,
+      searchBefore,
+      searchAfter,
+      multiNoResult,
+      limitValidation,
       permissionVisible,
       permRows,
     };

@@ -1,7 +1,8 @@
 const HOT_FOLDER = 'palette_3k';
 const DEFAULT_SCHEME = 'notsaml';
 const BOOT_GRID_LIMIT = 48;
-const IDLE_IMPORT_DELAY_MS = 2500;
+const IDLE_IMPORT_DELAY_MS = 150;
+const IDLE_IMPORT_TIMEOUT_MS = 200;
 const INTERACTION_IMPORT_DELAY_MS = 150;
 
 let fullViewerImportPromise = null;
@@ -59,7 +60,7 @@ function scheduleFullViewerImport(delayMs = IDLE_IMPORT_DELAY_MS) {
         fullViewerImportDueAt = 0;
         const kick = () => void startFullViewerImport();
         if ('requestIdleCallback' in window) {
-            window.requestIdleCallback(kick, { timeout: 1000 });
+            window.requestIdleCallback(kick, { timeout: IDLE_IMPORT_TIMEOUT_MS });
         } else {
             kick();
         }
