@@ -441,7 +441,7 @@ const { createRunner } = require('./e2e_playwright_session');
     );
     const toastSeen = await page.evaluate(() =>
       Array.from(document.body.querySelectorAll('div')).some(
-        (el) => /Composite Map 생성 완료 \(\d+s \d+images\)/.test(el.textContent || '')
+        (el) => /Composite Map 생성 완료 \(\d+\.\ds \d+images\)/.test(el.textContent || '')
       )
     );
     const compositeBefore = await getVisibleGridThumbSummary();
@@ -452,6 +452,79 @@ const { createRunner } = require('./e2e_playwright_session');
     await roundTripGridImageByDblClick(0);
     const compositeAfter = await getVisibleGridThumbSummary();
     const compositeGridCols = await nudgeGridCols();
+
+    await boot('chunk3-composite-pending-toast');
+    await loadFolder('filter_test');
+    await setSelection([0, 1, 2]);
+    await page.evaluate(() => {
+      const v = window.viewer;
+      window.__testToastMessages = [];
+      if (!window.__testToastHookInstalled) {
+        const originalShowCenteredToast = v.showCenteredToast.bind(v);
+        v.showCenteredToast = function patchedShowCenteredToast(message, duration) {
+          window.__testToastMessages.push({
+            message,
+            duration,
+            at: Date.now(),
+          });
+          return originalShowCenteredToast(message, duration);
+        };
+        window.__testToastHookInstalled = true;
+      }
+    });
+    await page.evaluate(() => {
+      window.viewer.handleCompositeCreate();
+      return true;
+    });
+    await page.waitForFunction(
+      () => !!window.viewer.pageManager?.pages?.some((p) => p.role === 'composite'),
+      null,
+      { timeout: 30000 }
+    );
+    const pendingCompositePages = await page.evaluate(() => {
+      const v = window.viewer;
+      const compositePage = (v.pageManager?.pages || []).find((p) => p.role === 'composite');
+      const originPage = (v.pageManager?.pages || []).find((p) => p.id !== compositePage?.id);
+      if (originPage?.id) {
+        v.pageManager.activatePage(originPage.id);
+      }
+      return {
+        compositePageId: compositePage?.id || null,
+        originPageId: originPage?.id || null,
+        activeRole: v.pageManager?.getActivePage?.()?.role || null,
+      };
+    });
+    await page.waitForFunction(
+      () => Array.isArray(window.__testToastMessages) && window.__testToastMessages.length >= 1,
+      null,
+      { timeout: 30000 }
+    );
+    await sleep(2200);
+    const pendingToastBeforeActivate = await page.evaluate(() => ({
+      toastCount: window.__testToastMessages?.length || 0,
+      firstToast: window.__testToastMessages?.[0]?.message || null,
+      activeRole: window.viewer.pageManager?.getActivePage?.()?.role || null,
+    }));
+    await page.evaluate((pageId) => {
+      if (pageId) {
+        window.viewer.pageManager.activatePage(pageId);
+      }
+    }, pendingCompositePages.compositePageId);
+    await page.waitForFunction(
+      () =>
+        !!window.viewer &&
+        window.viewer.pageManager?.getActivePage?.()?.role === 'composite' &&
+        (window.viewer.currentGridImages?.length || 0) > 0,
+      null,
+      { timeout: 30000 }
+    );
+    await sleep(2200);
+    const pendingToastAfterActivate = await page.evaluate(() => ({
+      toastCount: window.__testToastMessages?.length || 0,
+      lastToast: window.__testToastMessages?.[window.__testToastMessages.length - 1]?.message || null,
+      activeRole: window.viewer.pageManager?.getActivePage?.()?.role || null,
+      gridCount: window.viewer.currentGridImages?.length || 0,
+    }));
 
     await boot('chunk3-measure');
     await loadFolder('palette_3k');
@@ -573,6 +646,14 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(compositeAfter.badCount === 0, `composite after badCount=${compositeAfter.badCount}`);
     expect(compositeGridCols.after.gridCols !== compositeGridCols.before, `composite gridCols ${compositeGridCols.before}->${compositeGridCols.after.gridCols}`);
     expect(compositeLayoutChanged, `composite layout unchanged: ${JSON.stringify(compositeGridCols)}`);
+    expect(pendingCompositePages.originPageId, `pending composite pages=${JSON.stringify(pendingCompositePages)}`);
+    expect(
+      /Composite Map 생성 완료 \(\d+\.\ds \d+images\)/.test(pendingToastBeforeActivate.firstToast || ''),
+      `pending first toast=${pendingToastBeforeActivate.firstToast}`
+    );
+    expect(pendingToastBeforeActivate.toastCount === 1, `pending toast before activate=${JSON.stringify(pendingToastBeforeActivate)}`);
+    expect(pendingToastAfterActivate.toastCount === 1, `pending toast after activate=${JSON.stringify(pendingToastAfterActivate)}`);
+    expect(pendingToastAfterActivate.gridCount > 0, `pending grid=${JSON.stringify(pendingToastAfterActivate)}`);
     expect(measureBefore.badCount === 0, `measure before badCount=${measureBefore.badCount}`);
     expect(measureAfter.badCount === 0, `measure after badCount=${measureAfter.badCount}`);
     assertAlternatingMeasureSignature(measureAfterRoundTripSignature, 'f');
@@ -591,6 +672,9 @@ const { createRunner } = require('./e2e_playwright_session');
       compositeSettled,
       compositeGridCols,
       compositeAfter,
+      pendingCompositePages,
+      pendingToastBeforeActivate,
+      pendingToastAfterActivate,
       measureBefore,
       measureAfterRoundTripSignature,
       measureAfterTabReturnSignature,

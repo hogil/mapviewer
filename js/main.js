@@ -2395,10 +2395,6 @@ class WaferMapViewer {
                 this.clearCompositePageTask(page.id);
             }
             this.persistActivePageState();
-            this.showCompositeDoneMessage(
-                this._formatCompositeDoneMessage(pendingTask, { measure: isMeasureComposite }),
-                1800
-            );
         } else if (!restoredFromCache && !restoredGridImage) {
             await this.restoreSavedViewState();
         }
@@ -10716,8 +10712,8 @@ class WaferMapViewer {
         const selectedCount = Number(taskState?.selectedCount);
 
         if (Number.isFinite(startedAt) && startedAt > 0) {
-            const elapsedSec = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
-            parts.push(`${elapsedSec}s`);
+            const elapsedSec = Math.max(0.1, Math.round((Date.now() - startedAt) / 100) / 10);
+            parts.push(`${elapsedSec.toFixed(1)}s`);
         }
         if (Number.isFinite(selectedCount) && selectedCount > 0) {
             parts.push(`${selectedCount}images`);
