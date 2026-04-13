@@ -19723,6 +19723,26 @@ class WaferMapViewer {
         };
     }
 
+    _isGridThumbInActiveRange(img, overscanRatio = 0.1) {
+        const wrapper = this.getGridScrollWrapper();
+        const wrap = img?.closest?.('.grid-thumb-wrap');
+        if (!wrapper || !wrap) return false;
+
+        const { activeTop, activeBottom } = this._getGridActiveLoadRange(wrapper, overscanRatio);
+        const top = wrap.offsetTop;
+        const height = wrap.offsetHeight;
+        return top + height > activeTop && top < activeBottom;
+    }
+
+    _scheduleVisibleGridRetry(delay = 0) {
+        if (this._gridVisibleRetryTimer) return;
+        this._gridVisibleRetryTimer = setTimeout(() => {
+            this._gridVisibleRetryTimer = null;
+            if (this._gridIsScrolling || !this.gridMode) return;
+            this.loadVisibleGridThumbnails({ cancelExisting: false });
+        }, delay);
+    }
+
     /**
      * 🔥 진행 중인 그리드 이미지 다운로드 강제 취소 (img.src 리셋)
      */
@@ -19843,12 +19863,34 @@ class WaferMapViewer {
                 img.removeEventListener('error', onError);
                 img._gridOnLoad = null;
                 img._gridOnError = null;
+                const currentSrc = img.currentSrc || img.src || '';
+                let expectedSrc = img.dataset?.src || '';
+                if (expectedSrc) {
+                    try {
+                        expectedSrc = new URL(expectedSrc, window.location.href).href;
+                    } catch (_) {}
+                }
+                const loadedPlaceholder = currentSrc === GRID_THUMB_PLACEHOLDER || img.naturalWidth <= 1;
+                const staleLoad = !!expectedSrc && currentSrc !== expectedSrc;
+                const retries = parseInt(img.dataset.retryCount || '0', 10);
                 img.dataset.loading = 'false';
-                img.dataset.gridLoaded = 'true';
-                img.style.opacity = '1';
+                if (loadedPlaceholder || staleLoad) {
+                    img.dataset.gridLoaded = 'false';
+                    img.dataset.retryCount = String(retries + 1);
+                    img.src = GRID_THUMB_PLACEHOLDER;
+                    img.style.opacity = '0.3';
+                    img.style.backgroundColor = '#3c3c3c';
+                    if (retries < 3 && this._isGridThumbInActiveRange(img, 0.1)) {
+                        this._scheduleVisibleGridRetry(retries === 0 ? 0 : 60);
+                    }
+                } else {
+                    img.dataset.gridLoaded = 'true';
+                    img.dataset.retryCount = '0';
+                    img.style.opacity = '1';
+                }
                 if (this.gridLoadInFlight > 0) this.gridLoadInFlight--;
                 this.drainGridLoadQueue();
-                finish({ status: 'loaded' });
+                finish({ status: loadedPlaceholder || staleLoad ? 'stale' : 'loaded' });
             };
 
             const onError = () => {
@@ -19866,6 +19908,9 @@ class WaferMapViewer {
                 img.src = GRID_THUMB_PLACEHOLDER;
                 img.style.opacity = '0.3';
                 img.style.backgroundColor = '#3c3c3c';
+                if (retries < 3 && this._isGridThumbInActiveRange(img, 0.1)) {
+                    this._scheduleVisibleGridRetry(retries === 0 ? 0 : 80);
+                }
                 this.drainGridLoadQueue();
                 finish({ status: 'error' });
             };
@@ -20427,6 +20472,11 @@ class WaferMapViewer {
         const grid = document.getElementById('image-grid');
         const gridControls = document.getElementById('grid-controls');
         const scrollWrapper = grid?.parentElement;
+        if (this._gridVisibleRetryTimer) {
+            clearTimeout(this._gridVisibleRetryTimer);
+            this._gridVisibleRetryTimer = null;
+        }
+        this.cancelGridImageRequests(true);
         if (grid) grid.style.display = 'none';
         if (gridControls) gridControls.style.display = 'none';
         if (scrollWrapper && scrollWrapper.classList.contains('grid-scroll-wrapper')) {
