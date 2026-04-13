@@ -244,6 +244,30 @@ const { createRunner } = require('./e2e_playwright_session');
     });
   }
 
+  async function getGridLayoutMetrics() {
+    return await page.evaluate(() => {
+      const grid = document.getElementById('image-grid');
+      const wraps = Array.from(grid?.querySelectorAll('.grid-thumb-wrap') || []);
+      const rects = wraps.slice(0, 12).map((wrap, idx) => {
+        const rect = wrap.getBoundingClientRect();
+        return {
+          idx,
+          top: rect.top,
+          width: rect.width,
+        };
+      });
+      const firstTop = rects[0]?.top ?? null;
+      return {
+        template: grid ? getComputedStyle(grid).gridTemplateColumns : '',
+        firstRowCount:
+          firstTop === null
+            ? 0
+            : rects.filter((rect) => Math.abs(rect.top - firstTop) < 2).length,
+        firstCellWidth: rects[0]?.width || 0,
+      };
+    });
+  }
+
   async function roundTripGridImageByDblClick(index = 0) {
     await page.locator('#image-grid .grid-thumb-wrap').nth(index).dblclick();
     await page.waitForFunction(
@@ -276,8 +300,11 @@ const { createRunner } = require('./e2e_playwright_session');
 
   async function nudgeGridCols() {
     const before = await page.evaluate(() => window.viewer.gridCols);
+    const beforeLayout = await getGridLayoutMetrics();
     const after = await adjustGridColsByCtrlWheel(before >= 10 ? 120 : -120);
-    return { before, after };
+    await sleep(900);
+    const afterLayout = await getGridLayoutMetrics();
+    return { before, after, beforeLayout, afterLayout };
   }
 
   await boot('chunk3');
@@ -308,9 +335,9 @@ const { createRunner } = require('./e2e_playwright_session');
       await sleep(1200);
     }
     const compositeSettled = await getVisibleGridThumbSummary();
-    const compositeGridCols = await nudgeGridCols();
     await roundTripGridImageByDblClick(0);
     const compositeAfter = await getVisibleGridThumbSummary();
+    const compositeGridCols = await nudgeGridCols();
 
     await boot('chunk3-measure');
     await loadFolder('palette_3k');
@@ -346,7 +373,6 @@ const { createRunner } = require('./e2e_playwright_session');
     );
     const measureColorVisible = await visible('#color-editor-modal');
     const measureBefore = await getVisibleGridThumbSummary();
-    const measureGridCols = await nudgeGridCols();
     await page.evaluate(async () => {
       const editor = await window.viewer._getColorEditor();
       editor?.close?.();
@@ -354,6 +380,7 @@ const { createRunner } = require('./e2e_playwright_session');
     await sleep(400);
     await roundTripGridImageByDblClick(0);
     const measureAfter = await getVisibleGridThumbSummary();
+    const measureGridCols = await nudgeGridCols();
     const data = await page.evaluate((toastSeenValue) => ({
       compositeRole: window.viewer.pageManager?.getActivePage()?.role || null,
       measureRole: window.viewer.pageManager?.pages?.some((p) => p.role === 'measure'),
@@ -361,15 +388,29 @@ const { createRunner } = require('./e2e_playwright_session');
       wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
       toastSeen: toastSeenValue,
     }), toastSeen);
+    const compositeLayoutChanged =
+      compositeGridCols.afterLayout.template !== compositeGridCols.beforeLayout.template ||
+      compositeGridCols.afterLayout.firstRowCount !== compositeGridCols.beforeLayout.firstRowCount ||
+      Math.abs(
+        compositeGridCols.afterLayout.firstCellWidth - compositeGridCols.beforeLayout.firstCellWidth
+      ) > 1;
+    const measureLayoutChanged =
+      measureGridCols.afterLayout.template !== measureGridCols.beforeLayout.template ||
+      measureGridCols.afterLayout.firstRowCount !== measureGridCols.beforeLayout.firstRowCount ||
+      Math.abs(
+        measureGridCols.afterLayout.firstCellWidth - measureGridCols.beforeLayout.firstCellWidth
+      ) > 1;
     expect(data.gridCount > 0 && data.wraps > 0, `grid=${data.gridCount}/${data.wraps}`);
     expect(data.measureRole === true, 'measure page missing');
     expect(measureColorVisible, 'measure color modal hidden');
     expect(compositeSettled.badCount === 0, `composite settled badCount=${compositeSettled.badCount}`);
     expect(compositeAfter.badCount === 0, `composite after badCount=${compositeAfter.badCount}`);
     expect(compositeGridCols.after.gridCols !== compositeGridCols.before, `composite gridCols ${compositeGridCols.before}->${compositeGridCols.after.gridCols}`);
+    expect(compositeLayoutChanged, `composite layout unchanged: ${JSON.stringify(compositeGridCols)}`);
     expect(measureBefore.badCount === 0, `measure before badCount=${measureBefore.badCount}`);
     expect(measureAfter.badCount === 0, `measure after badCount=${measureAfter.badCount}`);
     expect(measureGridCols.after.gridCols !== measureGridCols.before, `measure gridCols ${measureGridCols.before}->${measureGridCols.after.gridCols}`);
+    expect(measureLayoutChanged, `measure layout unchanged: ${JSON.stringify(measureGridCols)}`);
     return {
       ...data,
       measureColorVisible,

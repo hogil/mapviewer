@@ -4711,26 +4711,8 @@ class WaferMapViewer {
             // Ctrl+휠: grid 갯수 조절
             if (e.ctrlKey) {
                 e.preventDefault();
-
-                let newCols = this.gridCols - Math.sign(e.deltaY);
-
-                newCols = Math.max(1, Math.min(10, newCols));
-
-                this.gridCols = newCols;
-
-                const gridColsRange = document.getElementById('grid-cols-range');
-
-                if(gridColsRange) gridColsRange.value = newCols.toString();
-                const gridColsInputEl = document.getElementById('grid-cols-input');
-                if (gridColsInputEl) gridColsInputEl.value = newCols;
-
-                document.documentElement.style.setProperty('--grid-cols', newCols.toString());
-                this._saveGridColsPref();
-                this._syncGridPrefsAcrossPageStates();
-
-                if ((this.currentGridImages && this.currentGridImages.length > 0) || (this.selectedImages && this.selectedImages.length > 1)) {
-                    this.scheduleShowGrid();
-                }
+                const newCols = this.gridCols - Math.sign(e.deltaY);
+                this.applyGridColsChange(newCols, { maxCols: 10 });
             } else if (e.shiftKey) {
                 // Shift+휠: 가로 스크롤
                 e.preventDefault();
@@ -5420,15 +5402,7 @@ class WaferMapViewer {
 
         if (gridColsRange) {
             gridColsRange.addEventListener('input', e => {
-                this.gridCols = parseInt(e.target.value, 10);
-                document.documentElement.style.setProperty('--grid-cols', this.gridCols);
-                const gridColsInput = document.getElementById('grid-cols-input');
-                if (gridColsInput) gridColsInput.value = this.gridCols;
-                this._saveGridColsPref();
-                this._syncGridPrefsAcrossPageStates();
-                if ((this.currentGridImages && this.currentGridImages.length > 0) || (this.selectedImages && this.selectedImages.length > 1)) {
-                    this.scheduleShowGrid();
-                }
+                this.applyGridColsChange(e.target.value, { maxCols: 10 });
             });
         }
 
@@ -5437,14 +5411,7 @@ class WaferMapViewer {
             const applyGridColsInput = (input) => {
                 const val = parseInt(input.value, 10);
                 if (!isNaN(val) && val >= 1 && val <= 20) {
-                    this.gridCols = val;
-                    document.documentElement.style.setProperty('--grid-cols', this.gridCols);
-                    if (gridColsRange) gridColsRange.value = Math.min(10, this.gridCols);
-                    this._saveGridColsPref();
-                    this._syncGridPrefsAcrossPageStates();
-                    if (this.selectedImages && this.selectedImages.length > 1) {
-                        this.scheduleShowGrid();
-                    }
+                    this.applyGridColsChange(val, { maxCols: 20 });
                 } else {
                     input.value = this.gridCols;
                 }
@@ -5464,31 +5431,13 @@ class WaferMapViewer {
 
         if (minusBtn) {
             minusBtn.onclick = () => {
-                this.gridCols = Math.max(1, this.gridCols - 1);
-                document.getElementById('grid-cols-range').value = Math.min(10, this.gridCols);
-                const inp = document.getElementById('grid-cols-input');
-                if (inp) inp.value = this.gridCols;
-                document.documentElement.style.setProperty('--grid-cols', this.gridCols);
-                this._saveGridColsPref();
-                this._syncGridPrefsAcrossPageStates();
-                if ((this.currentGridImages && this.currentGridImages.length > 0) || (this.selectedImages && this.selectedImages.length > 1)) {
-                    this.scheduleShowGrid();
-                }
+                this.applyGridColsChange(this.gridCols - 1, { maxCols: 20 });
             };
         }
 
         if (plusBtn) {
             plusBtn.onclick = () => {
-                this.gridCols = Math.min(20, this.gridCols + 1);
-                document.getElementById('grid-cols-range').value = Math.min(10, this.gridCols);
-                const inp = document.getElementById('grid-cols-input');
-                if (inp) inp.value = this.gridCols;
-                document.documentElement.style.setProperty('--grid-cols', this.gridCols);
-                this._saveGridColsPref();
-                this._syncGridPrefsAcrossPageStates();
-                if ((this.currentGridImages && this.currentGridImages.length > 0) || (this.selectedImages && this.selectedImages.length > 1)) {
-                    this.scheduleShowGrid();
-                }
+                this.applyGridColsChange(this.gridCols + 1, { maxCols: 20 });
             };
         }
 
@@ -26689,6 +26638,58 @@ class WaferMapViewer {
         this._saveUserPrefs();
     }
 
+    _updateGridColsControls(gridCols = this.gridCols) {
+        const normalizedCols = Number.isFinite(gridCols) ? Math.max(1, Math.min(20, gridCols)) : this.gridCols;
+        const gridColsRange = document.getElementById('grid-cols-range');
+        if (gridColsRange) gridColsRange.value = Math.min(10, normalizedCols);
+        const gridColsInput = document.getElementById('grid-cols-input');
+        if (gridColsInput) gridColsInput.value = normalizedCols;
+        document.documentElement.style.setProperty('--grid-cols', String(normalizedCols));
+    }
+
+    applyGridColsChange(nextCols, { maxCols = 20, rerender = true } = {}) {
+        const parsedCols = Number.parseInt(nextCols, 10);
+        if (!Number.isFinite(parsedCols)) {
+            return {
+                changed: false,
+                previousCols: this.gridCols,
+                gridCols: this.gridCols,
+            };
+        }
+
+        const previousCols = this.gridCols;
+        const normalizedCols = Math.max(1, Math.min(maxCols, parsedCols));
+        const changed = normalizedCols !== previousCols;
+
+        this.gridCols = normalizedCols;
+        this._updateGridColsControls(normalizedCols);
+        this._saveGridColsPref();
+        this._syncGridPrefsAcrossPageStates(normalizedCols, this.gridThumbSize);
+
+        if (this.gridMode) {
+            this.invalidateGridGeometry();
+            this.updateGridSquaresPixel();
+            this.loadVisibleGridThumbnails({ cancelExisting: false });
+            this._scheduleVisibleGridRetry(0);
+            if (this.lotMode) {
+                this.updateLotListContent?.();
+            }
+        }
+
+        const hasGridImages =
+            (this.currentGridImages && this.currentGridImages.length > 0) ||
+            (this.selectedImages && this.selectedImages.length > 1);
+        if (changed && rerender && hasGridImages) {
+            this.scheduleShowGrid();
+        }
+
+        return {
+            changed,
+            previousCols,
+            gridCols: normalizedCols,
+        };
+    }
+
     /**
      * 그리드 열 수는 전역 UI 설정이므로, 재사용되는 detail 탭/page cache에도 같은 값을 동기화한다.
      */
@@ -29459,25 +29460,8 @@ window.addEventListener('wheel', function(e) {
         e.preventDefault();
 
         if (window.viewer && window.viewer.gridMode) {
-            let newCols = window.viewer.gridCols - Math.sign(e.deltaY);
-
-            newCols = Math.max(1, Math.min(10, newCols));
-
-            window.viewer.gridCols = newCols;
-
-            const gridColsRange = document.getElementById('grid-cols-range');
-            if (gridColsRange) gridColsRange.value = newCols;
-            const gridColsInputEl = document.getElementById('grid-cols-input');
-            if (gridColsInputEl) gridColsInputEl.value = newCols;
-
-            document.documentElement.style.setProperty('--grid-cols', newCols);
-            window.viewer._saveGridColsPref?.();
-            window.viewer._syncGridPrefsAcrossPageStates?.();
-
-            if ((window.viewer.currentGridImages && window.viewer.currentGridImages.length > 0) ||
-                (window.viewer.selectedImages && window.viewer.selectedImages.length > 1)) {
-                window.viewer.scheduleShowGrid?.();
-            }
+            const newCols = window.viewer.gridCols - Math.sign(e.deltaY);
+            window.viewer.applyGridColsChange?.(newCols, { maxCols: 10 });
         }
     }
 }, { passive: false });
