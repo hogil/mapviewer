@@ -268,6 +268,41 @@ const { createRunner } = require('./e2e_playwright_session');
     });
   }
 
+  async function scrollGridToRatio(ratio) {
+    await page.evaluate(async (value) => {
+      const scrollWrapper = document.querySelector('#image-grid')?.parentElement;
+      if (!scrollWrapper) return;
+      const maxScrollTop = Math.max(
+        0,
+        scrollWrapper.scrollHeight - scrollWrapper.clientHeight
+      );
+      scrollWrapper.scrollTop = Math.round(maxScrollTop * value);
+      scrollWrapper.dispatchEvent(new Event('scroll', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      await window.viewer.loadVisibleGridThumbnails?.({ cancelExisting: false });
+    }, ratio);
+  }
+
+  async function getMiddleVisibleGridIndex() {
+    return await page.evaluate(() => {
+      const grid = document.getElementById('image-grid');
+      const scrollWrapper = grid?.parentElement;
+      if (!grid || !scrollWrapper) return 0;
+      const wrapperRect = scrollWrapper.getBoundingClientRect();
+      const visible = Array.from(grid.querySelectorAll('.grid-thumb-wrap'))
+        .map((wrap, idx) => {
+          const rect = wrap.getBoundingClientRect();
+          if (rect.bottom <= wrapperRect.top || rect.top >= wrapperRect.bottom) {
+            return null;
+          }
+          return idx;
+        })
+        .filter((idx) => idx !== null);
+      if (visible.length === 0) return 0;
+      return visible[Math.floor(visible.length / 2)];
+    });
+  }
+
   async function roundTripGridImageByDblClick(index = 0) {
     await page.locator('#image-grid .grid-thumb-wrap').nth(index).dblclick();
     await page.waitForFunction(
@@ -527,6 +562,40 @@ const { createRunner } = require('./e2e_playwright_session');
     await sleep(1500);
     const labelAfterReselect = await getLabelExplorerState();
 
+    await boot('chunk3-label-scroll-reset');
+    await loadFolder('palette_3k');
+    await page.evaluate(async () => {
+      const v = window.viewer;
+      if (!v.lotMode) {
+        v.toggleLotMode();
+        await new Promise((r) => setTimeout(r, 1200));
+      }
+    });
+    await page.evaluate(() => window.viewer.applyGridColsChange(3, { maxCols: 20 }));
+    await sleep(1000);
+    await scrollGridToRatio(0.95);
+    await sleep(1200);
+    const labelScrollTargetIndex = await getMiddleVisibleGridIndex();
+    await roundTripGridImageByDblClick(labelScrollTargetIndex);
+    await sleep(1200);
+    await page.evaluate(async (className) => {
+      await window.viewer.showGridFromClass(className);
+    }, labelClearTarget);
+    await sleep(1800);
+    const labelScrollReset = await page.evaluate(() => {
+      const scrollWrapper = document.querySelector('#image-grid')?.parentElement;
+      return {
+        scrollTop: scrollWrapper?.scrollTop || 0,
+        maxScrollTop: Math.max(
+          0,
+          (scrollWrapper?.scrollHeight || 0) - (scrollWrapper?.clientHeight || 0)
+        ),
+        gridCols: window.viewer.gridCols,
+        role: window.viewer.pageManager?.getActivePage()?.role || null,
+        wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+      };
+    });
+
     expect(labelData.primaryClass, `label classes=${JSON.stringify(labelData.classes)}`);
     expect(labelData.single.count > 0, `label single=${JSON.stringify(labelData.single)}`);
     expect(labelData.single.wraps > 0, `label single wraps=${JSON.stringify(labelData.single)}`);
@@ -548,6 +617,10 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(labelAfterRightBlank.selectedClasses.length === 0, `right blank did not clear: ${JSON.stringify(labelAfterRightBlank)}`);
     expect(labelAfterReselect.selectedClasses.includes(labelClearTarget), `reselect failed: ${JSON.stringify(labelAfterReselect)}`);
     expect(labelAfterReselect.wraps > 0, `reselect wraps=${labelAfterReselect.wraps}`);
+    expect(labelScrollReset.role === 'label', `label scroll role=${labelScrollReset.role}`);
+    expect(labelScrollReset.gridCols === 3, `label scroll gridCols=${labelScrollReset.gridCols}`);
+    expect(labelScrollReset.wraps > 0, `label scroll wraps=${labelScrollReset.wraps}`);
+    expect(labelScrollReset.scrollTop < 40, `label scrollTop=${labelScrollReset.scrollTop}`);
     return {
       ...labelData,
       labelClearTarget,
@@ -559,6 +632,7 @@ const { createRunner } = require('./e2e_playwright_session');
       labelAfterLeftBlank,
       labelAfterRightBlank,
       labelAfterReselect,
+      labelScrollReset,
     };
   });
 

@@ -28561,9 +28561,18 @@ class WaferMapViewer {
         this.viewMode = null;
         this.updateArrowButtonVisibility?.();
 
-        // 🔥 스크롤 위치 복원 (_lastGridScrollTop 우선, 없으면 savedViewState.scrollTop)
+        const transientGridRestoreState = this._transientGridRestoreState;
+        const isLabelExplorerRestore = !!(
+            transientGridRestoreState &&
+            transientGridRestoreState.source === 'labelExplorer'
+        );
+
+        // 🔥 Label Explorer 진입/복귀는 transient 상태의 scrollTop을 우선 사용
+        //    새 클래스 선택 시 이전 그리드의 _lastGridScrollTop가 섞이면 안 된다.
         const scrollWrapper = grid?.parentElement;
-        const scrollTopToRestore = this._lastGridScrollTop ?? this.savedViewState?.scrollTop;
+        const scrollTopToRestore = isLabelExplorerRestore
+            ? (transientGridRestoreState.scrollTop ?? 0)
+            : (this._lastGridScrollTop ?? this.savedViewState?.scrollTop);
 
         console.log(`📍 [LOT-GRID] 스크롤 복원 준비: targetScrollTop=`, scrollTopToRestore);
 
@@ -28612,6 +28621,18 @@ class WaferMapViewer {
                 scrollWrapper.scrollTop = 0;
             }
             console.warn(`⚠️ [LOT-GRID] 복원할 스크롤 위치 없음 (scrollTop: ${scrollTopToRestore})`);
+        }
+
+        if (isLabelExplorerRestore && transientGridRestoreState) {
+            this.labelExplorerGridState = {
+                ...transientGridRestoreState,
+                forceFlatGrid: transientGridRestoreState.forceFlatGrid ?? !this.lotMode,
+                lotMode: this.lotMode,
+                gridCols: this.gridCols,
+                gridThumbSize: this.gridThumbSize,
+                images: [...sortedImages],
+            };
+            this._transientGridRestoreState = null;
         }
 
         this.loadVisibleGridThumbnails({ cancelExisting: false });
