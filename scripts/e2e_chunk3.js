@@ -342,6 +342,65 @@ const { createRunner } = require('./e2e_playwright_session');
     return { before, after, beforeLayout, afterLayout };
   }
 
+  async function getMeasureGridSignature(limit = 8) {
+    return await page.evaluate((maxCount) => ({
+      overlayMode: window.viewer.overlayMode,
+      checkedItems: Array.isArray(window.viewer._measureCheckedItems)
+        ? window.viewer._measureCheckedItems.map((item) => ({
+            type: item?.type || null,
+            key: item?.key ?? null,
+            label: item?.label || null,
+          }))
+        : [],
+      mapLen: Array.isArray(window.viewer._gridMeasureMap)
+        ? window.viewer._gridMeasureMap.length
+        : 0,
+      currentLen: Array.isArray(window.viewer.currentGridImages)
+        ? window.viewer.currentGridImages.length
+        : 0,
+      thumbs: Array.from(
+        document.querySelectorAll('#image-grid .grid-thumb-wrap')
+      )
+        .slice(0, maxCount)
+        .map((wrap, idx) => {
+          const img = wrap.querySelector('img.grid-thumb-img');
+          return {
+            idx,
+            label: wrap.querySelector('.grid-thumb-label')?.textContent?.trim() || '',
+            src: img?.dataset?.src || img?.currentSrc || img?.src || '',
+          };
+        }),
+    }), limit);
+  }
+
+  function assertAlternatingMeasureSignature(signature, field = 'f') {
+    expect(signature.overlayMode === 'multi', `measure overlay=${signature.overlayMode}`);
+    expect(
+      signature.mapLen === signature.currentLen,
+      `measure map/current mismatch=${signature.mapLen}/${signature.currentLen}`
+    );
+    expect(signature.thumbs.length >= 4, `measure thumbs=${signature.thumbs.length}`);
+    const upperField = field.toUpperCase();
+    signature.thumbs.forEach((thumb, idx) => {
+      if (idx % 2 === 0) {
+        expect(
+          thumb.src.includes('/api/thumbnail?'),
+          `measure raw src[${idx}]=${thumb.src}`
+        );
+      } else {
+        expect(
+          thumb.src.includes('/api/measure-thumb?') &&
+            thumb.src.includes(`field=${field}`),
+          `measure overlay src[${idx}]=${thumb.src}`
+        );
+        expect(
+          thumb.label.startsWith(upperField),
+          `measure overlay label[${idx}]=${thumb.label}`
+        );
+      }
+    });
+  }
+
   async function getLabelExplorerState() {
     return await page.evaluate(() => ({
       selected: [...(window.viewer.labelSelection?.selected || [])],
@@ -401,7 +460,7 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.evaluate(async (payload) => {
       const v = window.viewer;
       v._measureCheckedItems = [
-        { type: 'bin', key: null, label: 'BIN' },
+        { type: 'failbit', key: null, label: 'Failbit' },
         payload.item,
       ];
       await v._applyMeasureSelection();
@@ -435,7 +494,22 @@ const { createRunner } = require('./e2e_playwright_session');
     await sleep(400);
     await roundTripGridImageByDblClick(0);
     const measureAfter = await getVisibleGridThumbSummary();
+    const measureAfterRoundTripSignature = await getMeasureGridSignature();
+    await page.evaluate(async () => {
+      const v = window.viewer;
+      const measurePageId = v.pageManager?.activePageId || null;
+      const originPageId = (v.pageManager?.pages || []).find(
+        (pageInfo) => pageInfo.id !== measurePageId
+      )?.id || null;
+      if (!measurePageId || !originPageId) return;
+      v.pageManager.activatePage(originPageId);
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      v.pageManager.activatePage(measurePageId);
+      await new Promise((resolve) => setTimeout(resolve, 900));
+    });
+    const measureAfterTabReturnSignature = await getMeasureGridSignature();
     const measureGridCols = await nudgeGridCols();
+    const measureAfterGridColsSignature = await getMeasureGridSignature();
     const data = await page.evaluate((toastSeenValue) => ({
       compositeRole: window.viewer.pageManager?.getActivePage()?.role || null,
       measureRole: window.viewer.pageManager?.pages?.some((p) => p.role === 'measure'),
@@ -443,6 +517,43 @@ const { createRunner } = require('./e2e_playwright_session');
       wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
       toastSeen: toastSeenValue,
     }), toastSeen);
+
+    await boot('chunk3-grid-detail-selection');
+    await loadFolder('palette_3k');
+    const gridSelectionRestore = await page.evaluate(async () => {
+      const v = window.viewer;
+      const firstWrap = document.querySelector('#image-grid .grid-thumb-wrap');
+      if (!firstWrap || typeof firstWrap.ondblclick !== 'function') {
+        return {
+          total: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+          selectedWraps: document.querySelectorAll('#image-grid .grid-thumb-wrap.selected').length,
+          selectedIdxsLen: v.gridSelectedIdxs?.length || 0,
+          pageRoles: (v.pageManager?.pages || []).map((pageInfo) => pageInfo.role),
+        };
+      }
+      firstWrap.ondblclick(new MouseEvent('dblclick', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const detailPageId = v.pageManager?.activePageId || null;
+      const originPageId = (v.pageManager?.pages || []).find(
+        (pageInfo) => pageInfo.id !== detailPageId
+      )?.id || null;
+      if (detailPageId && originPageId) {
+        v.pageManager.activatePage(originPageId);
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        v.pageManager.activatePage(detailPageId);
+        await new Promise((resolve) => setTimeout(resolve, 900));
+      }
+      v.exitSingleImageViewMode();
+      await new Promise((resolve) => setTimeout(resolve, 1300));
+      return {
+        total: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+        selectedWraps: document.querySelectorAll('#image-grid .grid-thumb-wrap.selected').length,
+        selectedIdxsLen: v.gridSelectedIdxs?.length || 0,
+        selectedIdxsSample: (v.gridSelectedIdxs || []).slice(0, 8),
+        pageRoles: (v.pageManager?.pages || []).map((pageInfo) => pageInfo.role),
+      };
+    });
+
     const compositeLayoutChanged =
       compositeGridCols.afterLayout.template !== compositeGridCols.beforeLayout.template ||
       compositeGridCols.afterLayout.firstRowCount !== compositeGridCols.beforeLayout.firstRowCount ||
@@ -464,8 +575,15 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(compositeLayoutChanged, `composite layout unchanged: ${JSON.stringify(compositeGridCols)}`);
     expect(measureBefore.badCount === 0, `measure before badCount=${measureBefore.badCount}`);
     expect(measureAfter.badCount === 0, `measure after badCount=${measureAfter.badCount}`);
+    assertAlternatingMeasureSignature(measureAfterRoundTripSignature, 'f');
+    assertAlternatingMeasureSignature(measureAfterTabReturnSignature, 'f');
     expect(measureGridCols.after.gridCols !== measureGridCols.before, `measure gridCols ${measureGridCols.before}->${measureGridCols.after.gridCols}`);
     expect(measureLayoutChanged, `measure layout unchanged: ${JSON.stringify(measureGridCols)}`);
+    assertAlternatingMeasureSignature(measureAfterGridColsSignature, 'f');
+    expect(
+      gridSelectionRestore.selectedWraps < gridSelectionRestore.total,
+      `grid selection exploded=${JSON.stringify(gridSelectionRestore)}`
+    );
     return {
       ...data,
       measureColorVisible,
@@ -474,8 +592,12 @@ const { createRunner } = require('./e2e_playwright_session');
       compositeGridCols,
       compositeAfter,
       measureBefore,
+      measureAfterRoundTripSignature,
+      measureAfterTabReturnSignature,
       measureGridCols,
+      measureAfterGridColsSignature,
       measureAfter,
+      gridSelectionRestore,
     };
   });
 
