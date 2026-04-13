@@ -19556,6 +19556,9 @@ class WaferMapViewer {
                     currentScrollWrapper.scrollTop = scrollTopToRestore;
                     const afterScroll = currentScrollWrapper.scrollTop;
                     console.log(`✅ [SHOW_GRID] 스크롤 복원: ${beforeScroll}px → ${afterScroll}px (목표: ${scrollTopToRestore}px)`);
+                    this.invalidateGridOffsetCache();
+                    this.loadVisibleGridThumbnails({ cancelExisting: false });
+                    this._scheduleVisibleGridRetry(0);
                 }
             };
 
@@ -19566,6 +19569,7 @@ class WaferMapViewer {
             setTimeout(() => {
                 doRestore();
                 this._restoringScroll = false;
+                this._forceRestartVisibleGridThumbs();
                 console.log(`✅ [SHOW_GRID] 스크롤 복원 완료`);
             }, 500);
         } else {
@@ -19657,6 +19661,13 @@ class WaferMapViewer {
                 const now = Date.now();
 
                 if (currentTop !== lastScrollTop) {
+                    if (this._restoringScroll) {
+                        lastScrollTop = currentTop;
+                        lastChangeTime = 0;
+                        settled = false;
+                        this._gridIsScrolling = false;
+                        return;
+                    }
                     lastScrollTop = currentTop;
                     lastChangeTime = now;
                     settled = false;
@@ -19682,6 +19693,13 @@ class WaferMapViewer {
             const sw = this.getGridScrollWrapper();
             if (!sw) return;
             const currentTop = sw.scrollTop;
+            if (this._restoringScroll) {
+                lastScrollTop = currentTop;
+                lastChangeTime = 0;
+                settled = false;
+                this._gridIsScrolling = false;
+                return;
+            }
             if (currentTop !== lastScrollTop) {
                 lastScrollTop = currentTop;
                 lastChangeTime = Date.now();
@@ -20458,6 +20476,24 @@ class WaferMapViewer {
         }
 
         return { viewportImages, preloadImages };
+    }
+
+    _forceRestartVisibleGridThumbs() {
+        const scrollWrapper = this.getGridScrollWrapper();
+        if (!scrollWrapper || !this.gridThumbWraps?.length || !this.gridMode) return;
+
+        this.invalidateGridOffsetCache();
+        const { viewportImages } = this._collectVisibleGridThumbsByDom(
+            scrollWrapper,
+            this.gridThumbWraps,
+            0
+        );
+        if (viewportImages.length === 0) return;
+
+        for (const img of viewportImages) {
+            this._resetGridThumbLoadState(img);
+            this.startGridThumbnailLoad(img);
+        }
     }
 
     /**
@@ -22980,9 +23016,11 @@ class WaferMapViewer {
             const existingGrid = document.getElementById('image-grid');
             const existingWrapCount = existingGrid?.querySelectorAll?.('.grid-thumb-wrap')?.length || 0;
             let usedFastPath = false;
+            const hasScrolledRestoreTarget = scrollTopToRestore !== undefined && scrollTopToRestore > 0;
             const canUseFastPath = this._gridVisuallyHidden &&
                 existingGrid &&
-                existingWrapCount > 0;
+                existingWrapCount > 0 &&
+                !hasScrolledRestoreTarget;
             if (canUseFastPath) {
                 usedFastPath = true;
                 // 🔥 Fast path: 그리드 DOM이 그대로 남아있으므로 시각적 복원만
@@ -22996,14 +23034,79 @@ class WaferMapViewer {
                     }
                 };
                 const doLoadVisible = () => {
-                    this._ensureGridOffsetCache();
-                    this.loadVisibleGridThumbnails();
+                    this.invalidateGridOffsetCache();
+                    this.loadVisibleGridThumbnails({ cancelExisting: false });
                 };
-                // 🔥 즉시 + rAF + setTimeout 다중 복원 (display:none→grid 전환 후 레이아웃 안정화 대기)
+                const ensureVisibleThumbsLoaded = (attempt = 0) => {
+                    if (!this.gridMode || this.viewMode === 'gridImage') return;
+                    if (!scrollWrapper || !this.gridThumbWraps?.length) return;
+
+                    doScrollRestore();
+                    this.invalidateGridOffsetCache();
+                    const { viewportImages } = this._collectVisibleGridThumbsByDom(
+                        scrollWrapper,
+                        this.gridThumbWraps,
+                        0
+                    );
+                    if (viewportImages.length === 0) return;
+
+                    const hardRestart = attempt >= 2;
+                    for (const img of viewportImages) {
+                        if (!hardRestart && img.dataset.loading === 'true') continue;
+                        if (hardRestart) {
+                            this._resetGridThumbLoadState(img);
+                        }
+                        this.startGridThumbnailLoad(img);
+                    }
+
+                    if (attempt >= 7) return;
+                    const nextDelay = attempt < 2 ? 60 : attempt < 5 ? 150 : 300;
+                    setTimeout(() => ensureVisibleThumbsLoaded(attempt + 1), nextDelay);
+                };
+                const hasPendingVisibleThumbs = () => {
+                    if (!scrollWrapper || !this.gridThumbWraps?.length) return false;
+                    const { viewportImages } = this._collectVisibleGridThumbsByDom(
+                        scrollWrapper,
+                        this.gridThumbWraps,
+                        0
+                    );
+                    return viewportImages.length > 0;
+                };
+                const restoreDelays = [0, 16, 50, 150, 300, 600];
+                const scheduleRestoreAttempt = (delay, useDoubleRaf = false) => {
+                    const run = () => {
+                        doScrollRestore();
+                        doLoadVisible();
+                    };
+                    const start = () => {
+                        if (useDoubleRaf) {
+                            requestAnimationFrame(() => requestAnimationFrame(run));
+                        } else {
+                            requestAnimationFrame(run);
+                        }
+                    };
+                    if (delay === 0) {
+                        start();
+                        return;
+                    }
+                    setTimeout(start, delay);
+                };
+                // 🔥 display:none → grid 전환 직후에는 offset cache가 0으로 굳을 수 있어
+                // 레이아웃 안정화 구간에 여러 번 scroll 복원 + visible reload를 재시도한다.
                 doScrollRestore();
-                requestAnimationFrame(() => { doScrollRestore(); doLoadVisible(); });
-                setTimeout(() => { doScrollRestore(); doLoadVisible(); }, 50);
-                setTimeout(() => { doScrollRestore(); doLoadVisible(); }, 150);
+                scheduleRestoreAttempt(0);
+                scheduleRestoreAttempt(0, true);
+                ensureVisibleThumbsLoaded(0);
+                for (const delay of restoreDelays.slice(2)) {
+                    setTimeout(() => {
+                        if (!this.gridMode || this.viewMode === 'gridImage') return;
+                        doScrollRestore();
+                        doLoadVisible();
+                        if (hasPendingVisibleThumbs()) {
+                            this._scheduleVisibleGridRetry(0);
+                        }
+                    }, delay);
+                }
 
                 if (isLabelExplorerRestore) {
                     existingGrid.setAttribute('data-label-explorer-grid', 'true');
@@ -28642,6 +28745,9 @@ class WaferMapViewer {
                     currentScrollWrapper.scrollTop = scrollTopToRestore;
                     const afterScroll = currentScrollWrapper.scrollTop;
                     console.log(`✅ [LOT-GRID] 스크롤 복원: ${beforeScroll}px → ${afterScroll}px (목표: ${scrollTopToRestore}px)`);
+                    this.invalidateGridOffsetCache();
+                    this.loadVisibleGridThumbnails({ cancelExisting: false });
+                    this._scheduleVisibleGridRetry(0);
                 }
             };
 
@@ -28653,6 +28759,7 @@ class WaferMapViewer {
                 if (this._scrollRestoreId !== restoreId) return;
                 doRestore();
                 this._restoringScroll = false;
+                this._forceRestartVisibleGridThumbs();
                 console.log(`✅ [LOT-GRID] 스크롤 복원 완료`);
             }, 500);  // 🔥 500ms까지 계속 복원
         } else {

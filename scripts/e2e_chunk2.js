@@ -270,6 +270,41 @@ const { createRunner } = require('./e2e_playwright_session');
     );
   }
 
+  async function scrollGridToRatio(ratio) {
+    await page.evaluate(async (value) => {
+      const scrollWrapper = document.querySelector('#image-grid')?.parentElement;
+      if (!scrollWrapper) return;
+      const maxScrollTop = Math.max(
+        0,
+        scrollWrapper.scrollHeight - scrollWrapper.clientHeight
+      );
+      scrollWrapper.scrollTop = Math.round(maxScrollTop * value);
+      scrollWrapper.dispatchEvent(new Event('scroll', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      await window.viewer.loadVisibleGridThumbnails?.({ cancelExisting: false });
+    }, ratio);
+  }
+
+  async function getMiddleVisibleGridIndex() {
+    return await page.evaluate(() => {
+      const grid = document.getElementById('image-grid');
+      const scrollWrapper = grid?.parentElement;
+      if (!grid || !scrollWrapper) return 0;
+      const wrapperRect = scrollWrapper.getBoundingClientRect();
+      const visible = Array.from(grid.querySelectorAll('.grid-thumb-wrap'))
+        .map((wrap, idx) => {
+          const rect = wrap.getBoundingClientRect();
+          if (rect.bottom <= wrapperRect.top || rect.top >= wrapperRect.bottom) {
+            return null;
+          }
+          return idx;
+        })
+        .filter((idx) => idx !== null);
+      if (visible.length === 0) return 0;
+      return visible[Math.floor(visible.length / 2)];
+    });
+  }
+
   await boot('chunk2');
 
   await record('21,24,25,26,27', 'PageManager / MultiSearch / Permission / keyboard', async () => {
@@ -454,6 +489,25 @@ const { createRunner } = require('./e2e_playwright_session');
       expect(summary.badCount === 0, `restore badCount=${summary.badCount}`);
     }
 
+    await boot('chunk2-grid-restore-scrolled');
+    await loadFolder('palette_3k');
+    await scrollGridToRatio(0.82);
+    await sleep(1200);
+    const scrolledRoundTrips = [];
+    for (let i = 0; i < 2; i += 1) {
+      const targetIndex = await getMiddleVisibleGridIndex();
+      await roundTripGridImageByDblClick(targetIndex);
+      await sleep(1800);
+      const summary = await getVisibleGridThumbSummary();
+      scrolledRoundTrips.push({
+        targetIndex,
+        ...summary,
+      });
+      expect(summary.scrollTop > 0, `scrolled restore scrollTop=${summary.scrollTop}`);
+      expect(summary.visibleCount > 0, `scrolled restore visibleCount=${summary.visibleCount}`);
+      expect(summary.badCount === 0, `scrolled restore badCount=${summary.badCount}`);
+    }
+
     await boot('chunk2-grid-scroll-stop');
     await loadFolder('palette_3k');
     await page.evaluate(async () => {
@@ -483,6 +537,7 @@ const { createRunner } = require('./e2e_playwright_session');
     return {
       loops,
       gridRoundTrips,
+      scrolledRoundTrips,
       scrollStop: {
         early: scrollEarly,
         settled: scrollSettled,
