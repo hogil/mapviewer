@@ -180,6 +180,96 @@ const { createRunner } = require('./e2e_playwright_session');
     }, selector);
   }
 
+  async function getVisibleGridThumbSummary() {
+    return await page.evaluate(() => {
+      const PLACEHOLDER =
+        'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+      const grid = document.getElementById('image-grid');
+      const scrollWrapper = grid?.parentElement;
+      if (!grid || !scrollWrapper) {
+        return {
+          scrollTop: 0,
+          visibleCount: 0,
+          loadedCount: 0,
+          loadedRatio: 0,
+          badCount: 0,
+          bad: [],
+        };
+      }
+
+      const wrapperRect = scrollWrapper.getBoundingClientRect();
+      const wraps = Array.from(grid.querySelectorAll('.grid-thumb-wrap'));
+      const visibleThumbs = wraps
+        .map((wrap, idx) => {
+          const rect = wrap.getBoundingClientRect();
+          if (rect.bottom <= wrapperRect.top || rect.top >= wrapperRect.bottom) {
+            return null;
+          }
+          const img = wrap.querySelector('img.grid-thumb-img');
+          if (!img) {
+            return {
+              idx,
+              path: wrap.dataset.path || '',
+              src: '',
+              loading: 'false',
+              gridLoaded: 'false',
+              naturalWidth: 0,
+              complete: false,
+              isLoaded: false,
+            };
+          }
+          const src = img.currentSrc || img.src || '';
+          const isLoaded =
+            img.dataset.gridLoaded === 'true' &&
+            img.complete === true &&
+            img.naturalWidth > 1 &&
+            src !== PLACEHOLDER;
+          return {
+            idx,
+            path: wrap.dataset.path || '',
+            src,
+            loading: img.dataset.loading || 'false',
+            gridLoaded: img.dataset.gridLoaded || 'false',
+            naturalWidth: img.naturalWidth,
+            complete: img.complete,
+            isLoaded,
+          };
+        })
+        .filter(Boolean);
+
+      const loadedCount = visibleThumbs.filter((item) => item.isLoaded).length;
+      const bad = visibleThumbs.filter((item) => !item.isLoaded);
+      return {
+        scrollTop: scrollWrapper.scrollTop || 0,
+        visibleCount: visibleThumbs.length,
+        loadedCount,
+        loadedRatio:
+          visibleThumbs.length > 0 ? loadedCount / visibleThumbs.length : 0,
+        badCount: bad.length,
+        bad: bad.slice(0, 8),
+      };
+    });
+  }
+
+  async function roundTripGridImageByDblClick(index = 0) {
+    await page.locator('#image-grid .grid-thumb-wrap').nth(index).dblclick();
+    await page.waitForFunction(
+      () => !!window.viewer && window.viewer.viewMode === 'gridImage',
+      null,
+      { timeout: 30000 }
+    );
+    await sleep(800);
+    await page.locator('#viewer-container').dblclick();
+    await page.waitForFunction(
+      () =>
+        !!window.viewer &&
+        window.viewer.gridMode === true &&
+        window.viewer.viewMode !== 'gridImage',
+      null,
+      { timeout: 30000 }
+    );
+  }
+
   await boot('chunk2');
 
   await record('21,24,25,26,27', 'PageManager / MultiSearch / Permission / keyboard', async () => {
@@ -283,7 +373,53 @@ const { createRunner } = require('./e2e_playwright_session');
     }
     expect(loops.every((x) => x.navigatorVisible), 'navigator hidden in loop');
     expect(loops.every((x) => x.minimapVisible), 'minimap hidden in loop');
-    return { loops };
+
+    await boot('chunk2-grid-restore');
+    await loadFolder('palette_3k');
+    const gridRoundTrips = [];
+    for (let i = 0; i < 4; i += 1) {
+      await roundTripGridImageByDblClick(0);
+      await sleep(2200);
+      const summary = await getVisibleGridThumbSummary();
+      gridRoundTrips.push(summary);
+      expect(summary.visibleCount > 0, `restore visibleCount=${summary.visibleCount}`);
+      expect(summary.badCount === 0, `restore badCount=${summary.badCount}`);
+    }
+
+    await boot('chunk2-grid-scroll-stop');
+    await loadFolder('palette_3k');
+    await page.evaluate(async () => {
+      const scrollWrapper = document.querySelector('#image-grid')?.parentElement;
+      if (!scrollWrapper) return;
+      const maxScrollTop = Math.max(
+        0,
+        scrollWrapper.scrollHeight - scrollWrapper.clientHeight
+      );
+      for (const ratio of [0.25, 0.5, 0.75, 0.9]) {
+        scrollWrapper.scrollTop = Math.round(maxScrollTop * ratio);
+        scrollWrapper.dispatchEvent(new Event('scroll', { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 35));
+      }
+    });
+    await sleep(300);
+    const scrollEarly = await getVisibleGridThumbSummary();
+    await sleep(900);
+    const scrollSettled = await getVisibleGridThumbSummary();
+    expect(scrollEarly.visibleCount > 0, `scroll visibleCount=${scrollEarly.visibleCount}`);
+    expect(
+      scrollEarly.loadedCount > 0 || scrollEarly.bad.some((item) => item.loading === 'true'),
+      `scroll early no loading progress: ${JSON.stringify(scrollEarly)}`
+    );
+    expect(scrollSettled.badCount === 0, `scroll settled badCount=${scrollSettled.badCount}`);
+
+    return {
+      loops,
+      gridRoundTrips,
+      scrollStop: {
+        early: scrollEarly,
+        settled: scrollSettled,
+      },
+    };
   });
 
   await record('30,33,34,35,39', 'Measure 다중선택 / Measure 탭 / 범례', async () => {

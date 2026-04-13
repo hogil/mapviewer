@@ -20362,7 +20362,15 @@ class WaferMapViewer {
     _ensureGridOffsetCache() {
         const wraps = this.gridThumbWraps;
         if (!wraps || wraps.length === 0) return;
-        if (this._gridOffsetCache && this._gridOffsetCache.length === wraps.length) return;
+        if (this._gridOffsetCache && this._gridOffsetCache.length === wraps.length) {
+            const lastIdx = wraps.length - 1;
+            const last = this._gridOffsetCache[lastIdx];
+            const cacheLooksValid =
+                !!last &&
+                last.height > 0 &&
+                (lastIdx === 0 || last.top > 0);
+            if (cacheLooksValid) return;
+        }
 
         // 1회 layout reflow로 모든 offsetTop/offsetHeight 캐시
         const cache = new Array(wraps.length);
@@ -20472,6 +20480,7 @@ class WaferMapViewer {
         const grid = document.getElementById('image-grid');
         const gridControls = document.getElementById('grid-controls');
         const scrollWrapper = grid?.parentElement;
+        this.invalidateGridOffsetCache();
         if (this._gridVisibleRetryTimer) {
             clearTimeout(this._gridVisibleRetryTimer);
             this._gridVisibleRetryTimer = null;
@@ -20548,6 +20557,7 @@ class WaferMapViewer {
         const grid = document.getElementById('image-grid');
         const gridControls = document.getElementById('grid-controls');
         const scrollWrapper = grid?.parentElement;
+        this.invalidateGridOffsetCache();
         if (grid) grid.style.display = 'grid';
         if (gridControls) gridControls.style.display = '';
         if (scrollWrapper && scrollWrapper.classList.contains('grid-scroll-wrapper')) {
