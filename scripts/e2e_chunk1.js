@@ -271,13 +271,66 @@ const { createRunner } = require('./e2e_playwright_session');
 
   await record('8,9,10,11', 'Composite / Context / RefMap / Measure', async () => {
     await boot('chunk1-cm');
+    await page.evaluate(() => {
+      if (typeof window.viewer?.hideLotListModal === 'function') {
+        window.viewer.hideLotListModal();
+      }
+    });
+    await sleep(150);
     await loadFolder('filter_test');
     await setSelection([0, 1, 2]);
-    await page.evaluate(() =>
-      window.viewer.showContextMenu({ pageX: 200, pageY: 200 }, 0)
+    await sleep(1000);
+    const firstWrap = page.locator('#image-grid .grid-thumb-wrap').first();
+    const firstWrapBox = await firstWrap.boundingBox();
+    expect(!!firstWrapBox, 'first grid wrap missing');
+    await page.mouse.move(
+      firstWrapBox.x + firstWrapBox.width / 2,
+      firstWrapBox.y + firstWrapBox.height / 2
+    );
+    await page.mouse.click(
+      firstWrapBox.x + firstWrapBox.width / 2,
+      firstWrapBox.y + firstWrapBox.height / 2,
+      { button: 'right' }
+    );
+    await page.waitForFunction(
+      () => getComputedStyle(document.getElementById('grid-context-menu')).display !== 'none',
+      null,
+      { timeout: 10000 }
     );
     const ctxComposite = await visible('#context-mc-create');
     expect(ctxComposite, 'ctx composite hidden');
+    const ctxMeasure = await visible('#context-mea-create');
+    expect(ctxMeasure, 'ctx measure hidden');
+    const mcCreate = page.locator('#context-mc-create');
+    const mcBox = await mcCreate.boundingBox();
+    expect(!!mcBox, 'mc context item missing');
+    await page.mouse.move(mcBox.x + mcBox.width / 2, mcBox.y + mcBox.height / 2);
+    await page.waitForFunction(
+      () => getComputedStyle(document.getElementById('context-mc-submenu')).display !== 'none',
+      null,
+      { timeout: 10000 }
+    );
+    const mcSubmenuState = await page.evaluate(() => ({
+      display: getComputedStyle(document.getElementById('context-mc-submenu')).display,
+      itemCount: document.querySelectorAll('#context-mc-submenu .failbit-item').length,
+    }));
+    expect(mcSubmenuState.display !== 'none', `mc submenu hidden=${JSON.stringify(mcSubmenuState)}`);
+    expect(mcSubmenuState.itemCount > 0, `mc submenu empty=${mcSubmenuState.itemCount}`);
+    const meaCreate = page.locator('#context-mea-create');
+    const meaBox = await meaCreate.boundingBox();
+    expect(!!meaBox, 'mea context item missing');
+    await page.mouse.move(meaBox.x + meaBox.width / 2, meaBox.y + meaBox.height / 2);
+    await page.waitForFunction(
+      () => getComputedStyle(document.getElementById('context-mea-submenu')).display !== 'none',
+      null,
+      { timeout: 10000 }
+    );
+    const meaSubmenuState = await page.evaluate(() => ({
+      display: getComputedStyle(document.getElementById('context-mea-submenu')).display,
+      itemCount: document.querySelectorAll('#context-mea-submenu .failbit-item').length,
+    }));
+    expect(meaSubmenuState.display !== 'none', `mea submenu hidden=${JSON.stringify(meaSubmenuState)}`);
+    expect(meaSubmenuState.itemCount > 0, `mea submenu empty=${meaSubmenuState.itemCount}`);
     const path = await page.evaluate(() => window.viewer.currentGridImages[0]);
     await page.evaluate((p) => window.viewer.setRefMap(p), path);
     await sleep(500);
@@ -303,7 +356,15 @@ const { createRunner } = require('./e2e_playwright_session');
       () => window.viewer.currentGridImages.length
     );
     expect(compositeCount > 0, `compositeCount=${compositeCount}`);
-    return { ctxComposite, refVisible, overlay, compositeCount };
+    return {
+      ctxComposite,
+      ctxMeasure,
+      mcSubmenuState,
+      meaSubmenuState,
+      refVisible,
+      overlay,
+      compositeCount,
+    };
   });
 
   await record('13-19', '단일 이미지 기본/피라미드/컨텍스트/라벨모달', async () => {

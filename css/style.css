@@ -3004,11 +3004,17 @@
         .context-menu {
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
             backdrop-filter: blur(8px);
+            z-index: 60000 !important;
         }
         
         .context-menu-item:hover {
             background: #007acc;
             color: #fff;
+        }
+
+        .context-menu-item.context-menu-hover {
+            background: #007acc !important;
+            color: #fff !important;
         }
         
         .context-menu-item:active {

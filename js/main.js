@@ -490,6 +490,8 @@ class WaferMapViewer {
         this.contextMenuJustShown = false;
         this.contextMenuTargetIndex = null;
         this.contextMenuTargetPath = null;
+        this._lastPointerClient = { x: null, y: null };
+        this._contextMenuHoverManagerBound = false;
         this.compositeProgressOverlay = null;
         this.compositeInlineStatusEl = null;
         this.compositeInlineStatusOwner = null;
@@ -551,6 +553,8 @@ class WaferMapViewer {
                 this.isShiftPressed = false;
             }
         });
+
+        this._ensureContextMenuHoverManager();
         // 🔥 포커스 잃었을 때도 Shift 상태 초기화
         window.addEventListener('blur', () => {
             this.isShiftPressed = false;
@@ -10805,6 +10809,150 @@ class WaferMapViewer {
         this.subsetStatusOwner = null;
     }
 
+    _getVisibleContextMenus() {
+        return Array.from(document.querySelectorAll('.context-menu, #single-context-menu, #chip-context-menu'))
+            .filter((menu) => menu && getComputedStyle(menu).display !== 'none');
+    }
+
+    _clearForcedContextMenuHover() {
+        document.querySelectorAll('.context-menu-item.context-menu-hover').forEach((item) => {
+            item.classList.remove('context-menu-hover');
+        });
+    }
+
+    _applyForcedContextHover(target) {
+        const menus = this._getVisibleContextMenus();
+        if (!menus.length) {
+            this._clearForcedContextMenuHover();
+            return;
+        }
+
+        let hoveredItem = target?.closest?.('.context-menu-item') || null;
+        if (hoveredItem && !menus.some((menu) => menu.contains(hoveredItem))) {
+            hoveredItem = null;
+        }
+
+        this._clearForcedContextMenuHover();
+        if (hoveredItem) {
+            hoveredItem.classList.add('context-menu-hover');
+        }
+    }
+
+    _applyForcedContextHoverFromPoint(clientX, clientY) {
+        if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
+        const target = document.elementFromPoint(clientX, clientY);
+        this._applyForcedContextHover(target);
+    }
+
+    _scheduleForcedContextHoverSync(clientX, clientY) {
+        if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
+        this._applyForcedContextHoverFromPoint(clientX, clientY);
+        requestAnimationFrame(() => {
+            this._applyForcedContextHoverFromPoint(clientX, clientY);
+        });
+        setTimeout(() => {
+            this._applyForcedContextHoverFromPoint(clientX, clientY);
+        }, 40);
+    }
+
+    _ensureContextMenuHoverManager() {
+        if (this._contextMenuHoverManagerBound) return;
+
+        const syncHover = (event) => {
+            if (!event) return;
+            this._lastPointerClient = { x: event.clientX, y: event.clientY };
+            this._applyForcedContextHoverFromPoint(event.clientX, event.clientY);
+        };
+
+        document.addEventListener('mousemove', syncHover, true);
+        document.addEventListener('pointermove', syncHover, true);
+        document.addEventListener('mouseover', syncHover, true);
+        document.addEventListener('pointerover', syncHover, true);
+        document.addEventListener('contextmenu', (event) => {
+            this._lastPointerClient = { x: event.clientX, y: event.clientY };
+            this._scheduleForcedContextHoverSync(event.clientX, event.clientY);
+        }, true);
+
+        this._contextMenuHoverManagerBound = true;
+    }
+
+    _closeGridContextSubmenus() {
+        const mcSubmenu = document.getElementById('context-mc-submenu');
+        const meaSubmenu = document.getElementById('context-mea-submenu');
+        if (mcSubmenu) mcSubmenu.style.display = 'none';
+        if (meaSubmenu) meaSubmenu.style.display = 'none';
+    }
+
+    _positionGridContextSubmenu(triggerItem, submenu, listSelector) {
+        if (!triggerItem || !submenu) return;
+
+        if (submenu.parentElement !== document.body) {
+            submenu._origParent = submenu.parentElement;
+            document.body.appendChild(submenu);
+        }
+
+        const itemRect = triggerItem.getBoundingClientRect();
+        const list = listSelector ? submenu.querySelector(listSelector) : null;
+        const availH = window.innerHeight - 80;
+
+        submenu.style.position = 'fixed';
+        submenu.style.zIndex = '50000';
+        submenu.style.display = '';
+        submenu.style.left = `${itemRect.right}px`;
+        submenu.style.top = `${itemRect.top}px`;
+        submenu.style.bottom = 'auto';
+
+        if (list) {
+            list.style.maxHeight = `${Math.max(150, availH - itemRect.top)}px`;
+        }
+
+        requestAnimationFrame(() => {
+            const rect = submenu.getBoundingClientRect();
+            if (rect.bottom > window.innerHeight) {
+                submenu.style.top = 'auto';
+                submenu.style.bottom = '10px';
+                if (list) {
+                    const submenuTop = submenu.getBoundingClientRect().top;
+                    const newMaxH = window.innerHeight - submenuTop - 90;
+                    list.style.maxHeight = `${Math.max(120, newMaxH)}px`;
+                }
+            }
+            if (rect.right > window.innerWidth) {
+                submenu.style.left = `${itemRect.left - rect.width}px`;
+            }
+        });
+    }
+
+    _openMcContextSubmenu() {
+        const mcCreateItem = document.getElementById('context-mc-create');
+        const mcSubmenu = document.getElementById('context-mc-submenu');
+        if (!mcCreateItem || !mcSubmenu) return;
+        if (mcSubmenu.style.display !== 'none' && mcSubmenu.parentElement === document.body) return;
+
+        const meaSubmenu = document.getElementById('context-mea-submenu');
+        if (meaSubmenu) meaSubmenu.style.display = 'none';
+        if (!mcSubmenu._mcBuilt) {
+            this._buildMcContextSubmenu();
+            mcSubmenu._mcBuilt = true;
+        }
+        this._positionGridContextSubmenu(mcCreateItem, mcSubmenu, '.failbit-list, .mc-ctx-list');
+    }
+
+    _openMeaContextSubmenu() {
+        const meaCreateItem = document.getElementById('context-mea-create');
+        const meaSubmenu = document.getElementById('context-mea-submenu');
+        if (!meaCreateItem || !meaSubmenu) return;
+        if (meaSubmenu.style.display !== 'none' && meaSubmenu.parentElement === document.body) return;
+
+        const mcSubmenu = document.getElementById('context-mc-submenu');
+        if (mcSubmenu) mcSubmenu.style.display = 'none';
+        if (!meaSubmenu._meaBuilt) {
+            this._buildMeaContextSubmenu();
+            meaSubmenu._meaBuilt = true;
+        }
+        this._positionGridContextSubmenu(meaCreateItem, meaSubmenu, '.mea-ctx-list');
+    }
+
     syncSubsetStatus(activePageId) {
         if (!this.subsetStatusOwner || !activePageId || this.subsetStatusOwner !== activePageId) {
             this.hideSubsetStatus();
@@ -10844,6 +10992,7 @@ class WaferMapViewer {
         contextMenu.style.display = 'block';
         contextMenu.style.left = event.pageX + 'px';
         contextMenu.style.top = event.pageY + 'px';
+        this._closeGridContextSubmenus();
 
         const rect = contextMenu.getBoundingClientRect();
 
@@ -10855,6 +11004,11 @@ class WaferMapViewer {
             contextMenu.style.top = (event.pageY - rect.height) + 'px';
         }
 
+        this._scheduleForcedContextHoverSync(
+            Number.isFinite(event.clientX) ? event.clientX : (event.pageX - window.scrollX),
+            Number.isFinite(event.clientY) ? event.clientY : (event.pageY - window.scrollY)
+        );
+
         const createItem = document.getElementById('context-composite-create');
         const returnItem = document.getElementById('context-composite-return');
         const refItem = document.getElementById('context-set-ref-map');
@@ -10865,7 +11019,10 @@ class WaferMapViewer {
 
         this.hideContextMenuHandler = (e) => {
             const mcSubmenu = document.getElementById('context-mc-submenu');
-            if (!contextMenu.contains(e.target) && !(mcSubmenu && mcSubmenu.contains(e.target))) {
+            const meaSubmenu = document.getElementById('context-mea-submenu');
+            const insideMc = mcSubmenu && mcSubmenu.contains(e.target);
+            const insideMea = meaSubmenu && meaSubmenu.contains(e.target);
+            if (!contextMenu.contains(e.target) && !insideMc && !insideMea) {
                 this.hideContextMenu();
             }
         };
@@ -10901,6 +11058,8 @@ class WaferMapViewer {
 
             this.hideContextMenuHandler = null;
         }
+
+        this._clearForcedContextMenuHover();
     }
 
     initializeContextMenu() {
@@ -10927,54 +11086,15 @@ class WaferMapViewer {
 
         // Measure Composite 서브메뉴
         if (mcCreateItem && mcSubmenu) {
-            mcCreateItem.addEventListener('mouseenter', () => {
-                // 🔥 Measure 서브메뉴 닫기
-                const _meaSub = document.getElementById('context-mea-submenu');
-                if (_meaSub) _meaSub.style.display = 'none';
-                // 서브메뉴 빌드 (이미 빌드 완료 시 스킵)
-                if (!mcSubmenu._mcBuilt) {
-                    this._buildMcContextSubmenu();
-                    mcSubmenu._mcBuilt = true;
-                }
-                // 🔥 body로 이동하여 부모 overflow/stacking 제약 탈출
-                if (mcSubmenu.parentElement !== document.body) {
-                    mcSubmenu._origParent = mcSubmenu.parentElement;
-                    document.body.appendChild(mcSubmenu);
-                }
-                const itemRect = mcCreateItem.getBoundingClientRect();
-                mcSubmenu.style.position = 'fixed';
-                mcSubmenu.style.zIndex = '50000';
-                mcSubmenu.style.display = '';
-                // 🔥 리스트 max-height를 뷰포트 기준으로 제한 (생성 버튼 + 검색창 + 여백 확보)
-                const mcList = mcSubmenu.querySelector('.failbit-list, .mc-ctx-list');
-                const availH = window.innerHeight - 80; // 검색창(30) + 생성버튼(40) + 여백(10)
-                if (mcList) mcList.style.maxHeight = `${Math.max(150, availH - itemRect.top)}px`;
-                // 위치 계산
-                mcSubmenu.style.left = `${itemRect.right}px`;
-                mcSubmenu.style.top = `${itemRect.top}px`;
-                mcSubmenu.style.bottom = 'auto';
-                // 뷰포트 경계 체크
-                requestAnimationFrame(() => {
-                    const rect = mcSubmenu.getBoundingClientRect();
-                    // 아래 넘침 → bottom 고정으로 생성 버튼이 항상 보이도록
-                    if (rect.bottom > window.innerHeight) {
-                        mcSubmenu.style.top = 'auto';
-                        mcSubmenu.style.bottom = '10px';
-                        // 리스트 높이도 재조정: 서브메뉴 전체가 뷰포트 안에 들어오도록
-                        if (mcList) {
-                            const submenuTop = mcSubmenu.getBoundingClientRect().top;
-                            const newMaxH = window.innerHeight - submenuTop - 90;
-                            mcList.style.maxHeight = `${Math.max(120, newMaxH)}px`;
-                        }
-                    }
-                    if (rect.right > window.innerWidth) {
-                        mcSubmenu.style.left = `${itemRect.left - rect.width}px`;
-                    }
-                });
-            });
+            const openMcSubmenu = () => {
+                this._openMcContextSubmenu();
+            };
+            mcCreateItem.addEventListener('mouseenter', openMcSubmenu);
+            mcCreateItem.addEventListener('pointerenter', openMcSubmenu);
             // mouseleave로 닫지 않음 — hideContextMenu()에서만 닫힘
             // 서브메뉴 내부 클릭이 컨텍스트 메뉴를 닫지 않도록 차단
             mcSubmenu.addEventListener('click', (e) => e.stopPropagation());
+            mcSubmenu.addEventListener('contextmenu', (e) => e.stopPropagation());
             // 서브메뉴 검색 필터
             const mcCtxSearch = mcSubmenu.querySelector('.mc-ctx-search');
             if (mcCtxSearch) {
@@ -10993,45 +11113,13 @@ class WaferMapViewer {
         const meaCreateItem = document.getElementById('context-mea-create');
         const meaSubmenu = document.getElementById('context-mea-submenu');
         if (meaCreateItem && meaSubmenu) {
-            meaCreateItem.addEventListener('mouseenter', () => {
-                // 🔥 Composite 서브메뉴 닫기
-                const _mcSub = document.getElementById('context-mc-submenu');
-                if (_mcSub) _mcSub.style.display = 'none';
-                if (!meaSubmenu._meaBuilt) {
-                    this._buildMeaContextSubmenu();
-                    meaSubmenu._meaBuilt = true;
-                }
-                if (meaSubmenu.parentElement !== document.body) {
-                    meaSubmenu._origParent = meaSubmenu.parentElement;
-                    document.body.appendChild(meaSubmenu);
-                }
-                const itemRect = meaCreateItem.getBoundingClientRect();
-                meaSubmenu.style.position = 'fixed';
-                meaSubmenu.style.zIndex = '50000';
-                meaSubmenu.style.display = '';
-                const meaList = meaSubmenu.querySelector('.mea-ctx-list');
-                const availH = window.innerHeight - 80;
-                if (meaList) meaList.style.maxHeight = `${Math.max(150, availH - itemRect.top)}px`;
-                meaSubmenu.style.left = `${itemRect.right}px`;
-                meaSubmenu.style.top = `${itemRect.top}px`;
-                meaSubmenu.style.bottom = 'auto';
-                requestAnimationFrame(() => {
-                    const rect = meaSubmenu.getBoundingClientRect();
-                    if (rect.bottom > window.innerHeight) {
-                        meaSubmenu.style.top = 'auto';
-                        meaSubmenu.style.bottom = '10px';
-                        if (meaList) {
-                            const submenuTop = meaSubmenu.getBoundingClientRect().top;
-                            const newMaxH = window.innerHeight - submenuTop - 90;
-                            meaList.style.maxHeight = `${Math.max(120, newMaxH)}px`;
-                        }
-                    }
-                    if (rect.right > window.innerWidth) {
-                        meaSubmenu.style.left = `${itemRect.left - rect.width}px`;
-                    }
-                });
-            });
+            const openMeaSubmenu = () => {
+                this._openMeaContextSubmenu();
+            };
+            meaCreateItem.addEventListener('mouseenter', openMeaSubmenu);
+            meaCreateItem.addEventListener('pointerenter', openMeaSubmenu);
             meaSubmenu.addEventListener('click', (e) => e.stopPropagation());
+            meaSubmenu.addEventListener('contextmenu', (e) => e.stopPropagation());
             const meaCtxSearch = meaSubmenu.querySelector('.mea-ctx-search');
             if (meaCtxSearch) {
                 meaCtxSearch.addEventListener('input', (e) => {
@@ -11047,6 +11135,24 @@ class WaferMapViewer {
         // 🔥 서브메뉴가 아닌 다른 메뉴 항목에 mouseenter 시 서브메뉴 닫기
         const contextMenu = document.getElementById('grid-context-menu');
         if (contextMenu) {
+            if (!contextMenu._submenuHoverBound) {
+                const delegatedHover = (event) => {
+                    const item = event.target?.closest?.('.context-menu-item');
+                    if (!item || !contextMenu.contains(item)) return;
+                    if (item.id === 'context-mc-create') {
+                        this._openMcContextSubmenu();
+                        return;
+                    }
+                    if (item.id === 'context-mea-create') {
+                        this._openMeaContextSubmenu();
+                        return;
+                    }
+                    this._closeGridContextSubmenus();
+                };
+                contextMenu.addEventListener('mouseover', delegatedHover);
+                contextMenu.addEventListener('mousemove', delegatedHover);
+                contextMenu._submenuHoverBound = true;
+            }
             const allItems = contextMenu.querySelectorAll('.context-menu-item');
             allItems.forEach(item => {
                 if (item.id === 'context-mc-create' || item.id === 'context-mea-create') return;
@@ -11689,8 +11795,9 @@ class WaferMapViewer {
             menu = document.createElement('div');
 
             menu.id = 'single-context-menu';
+            menu.className = 'context-menu';
 
-            menu.style.cssText = 'position:absolute; display:none; background:#333; border:1px solid #555; border-radius:4px; padding:4px 0; z-index:10000; min-width:180px; color:#fff;';
+            menu.style.cssText = 'position:absolute; display:none; background:#333; border:1px solid #555; border-radius:4px; padding:4px 0; z-index:60000; min-width:180px; color:#fff;';
 
             menu.innerHTML = `
                 <div id="single-download-original" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">💾 원본 다운로드</div>
@@ -11816,6 +11923,11 @@ class WaferMapViewer {
 
         menu.style.display = 'block';
 
+        this._scheduleForcedContextHoverSync(
+            Number.isFinite(event.clientX) ? event.clientX : (event.pageX - window.scrollX),
+            Number.isFinite(event.clientY) ? event.clientY : (event.pageY - window.scrollY)
+        );
+
         this._singleMenuOutsideHandler = (e) => {
             if (!menu.contains(e.target)) this.hideSingleContextMenu();
         };
@@ -11833,6 +11945,8 @@ class WaferMapViewer {
 
             this._singleMenuOutsideHandler = null;
         }
+
+        this._clearForcedContextMenuHover();
     }
 
     async copyCurrentImageToClipboard() {
@@ -27503,7 +27617,7 @@ class WaferMapViewer {
             border: 1px solid #555;
             border-radius: 4px;
             padding: 4px 0;
-            z-index: 10000;
+            z-index: 60000;
             min-width: 200px;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
         `;
@@ -27649,6 +27763,11 @@ class WaferMapViewer {
         menu.style.left = event.pageX + 'px';
         menu.style.top = event.pageY + 'px';
         document.body.appendChild(menu);
+
+        this._scheduleForcedContextHoverSync(
+            Number.isFinite(event.clientX) ? event.clientX : (event.pageX - window.scrollX),
+            Number.isFinite(event.clientY) ? event.clientY : (event.pageY - window.scrollY)
+        );
 
         // 외부 클릭 시 메뉴 제거
         const closeMenu = (e) => {
