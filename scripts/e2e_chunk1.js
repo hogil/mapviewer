@@ -124,6 +124,19 @@ const { createRunner } = require('./e2e_playwright_session');
     }, selector);
   }
 
+  async function fetchJson(targetPage, relativeUrl) {
+    return await targetPage.evaluate(async (url) => {
+      const response = await fetch(url, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+      });
+      if (!response.ok) {
+        throw new Error(`${url} status=${response.status}`);
+      }
+      return await response.json();
+    }, relativeUrl);
+  }
+
   await boot('chunk1');
 
   await record('1', '페이지 로드 & 기본 UI', async () => {
@@ -261,12 +274,130 @@ const { createRunner } = require('./e2e_playwright_session');
       timeout: 60000,
     });
     await statsPage.waitForTimeout(1000);
+    const statsUsers = await fetchJson(statsPage, '/api/stats/users');
+    const statsProbeUser = (statsUsers.users || []).find((user) => {
+      const userId = String(user?.user_id || '').trim();
+      const loginId = String(user?.profile?.LoginId || '').trim();
+      if (!userId || !loginId) return false;
+      const normalized = userId.toLowerCase();
+      return normalized !== 'guest' && normalized !== 'notsaml';
+    });
+    expect(!!statsProbeUser, `statsProbeUser missing from ${JSON.stringify(statsUsers).slice(0, 400)}`);
+
+    const statsProbeUserId = statsProbeUser.user_id;
+    const statsProbePage = await browser.newPage({
+      ignoreHTTPSErrors: true,
+      viewport: { width: 1600, height: 900 },
+    });
+    await statsProbePage.goto(
+      `${base}/?LoginId=${encodeURIComponent(statsProbeUserId)}&e2e_stats_probe=${Date.now()}`,
+      {
+        waitUntil: 'domcontentloaded',
+        timeout: 60000,
+      }
+    );
+    await statsProbePage.waitForFunction(
+      () => !!window.viewer && window.__l3FullViewerReady === true,
+      null,
+      { timeout: 90000 }
+    );
+    await statsProbePage.waitForTimeout(1200);
+
+    const statsAfterInitialLoad = await fetchJson(
+      statsPage,
+      `/api/stats/user/${encodeURIComponent(statsProbeUserId)}`
+    );
+    const today = String(statsAfterInitialLoad.last_seen || new Date().toISOString().slice(0, 10));
+    const baselineTotalRequests = Number(statsAfterInitialLoad.total_requests || 0);
+    const baselineDailyRequests = Number(
+      (statsAfterInitialLoad.daily_requests || {})[today] || 0
+    );
+    const baselineRootEndpointCount = Number((statsAfterInitialLoad.endpoints || {})['/'] || 0);
+
+    await statsProbePage.evaluate(async () => {
+      await window.viewer.loadImagesInFolderAndShowGrid('palette_3k');
+    });
+    await statsProbePage.waitForFunction(
+      () =>
+        !!window.viewer &&
+        window.viewer.gridMode === true &&
+        (window.viewer.currentGridImages?.length || 0) === 3000 &&
+        document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0,
+      null,
+      { timeout: 90000 }
+    );
+    await statsProbePage.waitForTimeout(1500);
+
+    const statsAfterInternalApis = await fetchJson(
+      statsPage,
+      `/api/stats/user/${encodeURIComponent(statsProbeUserId)}`
+    );
+    expect(
+      Number(statsAfterInternalApis.total_requests || 0) === baselineTotalRequests,
+      `internal total changed ${baselineTotalRequests} -> ${statsAfterInternalApis.total_requests}`
+    );
+    expect(
+      Number((statsAfterInternalApis.daily_requests || {})[today] || 0) === baselineDailyRequests,
+      `internal daily changed ${baselineDailyRequests} -> ${(statsAfterInternalApis.daily_requests || {})[today] || 0}`
+    );
+    expect(
+      Number((statsAfterInternalApis.endpoints || {})['/'] || 0) === baselineRootEndpointCount,
+      `internal root endpoint changed ${baselineRootEndpointCount} -> ${(statsAfterInternalApis.endpoints || {})['/'] || 0}`
+    );
+
+    for (let i = 0; i < 2; i += 1) {
+      await statsProbePage.reload({
+        waitUntil: 'domcontentloaded',
+        timeout: 60000,
+      });
+      await statsProbePage.waitForFunction(
+        () => !!window.viewer && window.__l3FullViewerReady === true,
+        null,
+        { timeout: 90000 }
+      );
+      await statsProbePage.waitForTimeout(1200);
+    }
+
+    const statsAfterReloads = await fetchJson(
+      statsPage,
+      `/api/stats/user/${encodeURIComponent(statsProbeUserId)}`
+    );
+    const finalTotalRequests = Number(statsAfterReloads.total_requests || 0);
+    const finalDailyRequests = Number(
+      (statsAfterReloads.daily_requests || {})[today] || 0
+    );
+    const rootEndpointCount = Number((statsAfterReloads.endpoints || {})['/'] || 0);
+    expect(
+      finalTotalRequests - baselineTotalRequests === 2,
+      `reload total delta=${finalTotalRequests - baselineTotalRequests}`
+    );
+    expect(
+      finalDailyRequests - baselineDailyRequests === 2,
+      `reload daily delta=${finalDailyRequests - baselineDailyRequests}`
+    );
+    expect(
+      rootEndpointCount - baselineRootEndpointCount === 2,
+      `reload root delta=${rootEndpointCount - baselineRootEndpointCount}`
+    );
+
     const statsText = await statsPage.evaluate(() =>
       document.body.innerText.slice(0, 120)
     );
+    await statsProbePage.close();
     await statsPage.close();
     expect(statsText.length > 0, 'stats empty');
-    return { classData, myLotVisible, statsText };
+    return {
+      classData,
+      myLotVisible,
+      statsText,
+      statsProbeUserId,
+      baselineTotalRequests,
+      baselineDailyRequests,
+      baselineRootEndpointCount,
+      finalTotalRequests,
+      finalDailyRequests,
+      rootEndpointCount,
+    };
   });
 
   await record('8,9,10,11', 'Composite / Context / RefMap / Measure', async () => {

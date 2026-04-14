@@ -32,6 +32,7 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, PlainT
 from starlette.staticfiles import StaticFiles
 
 from . import config
+from .access_logger import logger_instance
 from .index_service import IndexService
 from .search_service import SearchService
 
@@ -152,6 +153,8 @@ _CACHED_INDEX_MTIME_NS: int = 0
 _BOOTSTRAP_USER_IDLE_SECONDS = max(0.25, float(os.getenv("BOOTSTRAP_USER_IDLE_SECONDS", "1.5") or "1.5"))
 _BOOTSTRAP_FULL_APP_DELAY_SECONDS = max(0.0, float(os.getenv("BOOTSTRAP_FULL_APP_DELAY_SECONDS", "0.3") or "0.3"))
 _USER_ACTIVITY_UNTIL = 0.0
+_ANONYMOUS_LOGIN_ID = (config.FALLBACK_LOGIN_ID or "notsaml").strip() or "notsaml"
+_LOGIN_ID_SENTINELS = {_ANONYMOUS_LOGIN_ID.lower(), "guest"}
 
 
 def _mark_user_activity() -> None:
@@ -165,6 +168,60 @@ def _user_priority_active() -> bool:
 
 def _is_internal_bootstrap_request(request: Request) -> bool:
     return request.headers.get("X-L3-Startup-Warm") == "1"
+
+
+def _normalize_login_id_candidate(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    candidate = str(value).strip()
+    if not candidate:
+        return None
+    if candidate.lower() in _LOGIN_ID_SENTINELS:
+        return None
+    return candidate
+
+
+def _bootstrap_current_login_id(request: Request) -> Optional[str]:
+    loaded_module = _FULL_APP.get_loaded_module()
+    if loaded_module is not None:
+        resolver = getattr(loaded_module, "_current_login_id", None)
+        if callable(resolver):
+            try:
+                login_id = resolver(request)
+            except Exception:
+                login_id = None
+            if login_id:
+                return login_id
+
+    try:
+        for key in ("LoginId", "loginId", "login_id"):
+            candidate = _normalize_login_id_candidate(request.query_params.get(key))
+            if candidate:
+                return candidate
+    except Exception:
+        pass
+
+    for cookie_name in ("session_user", "saml_login_id"):
+        candidate = _normalize_login_id_candidate(request.cookies.get(cookie_name))
+        if candidate:
+            return candidate
+
+    return None
+
+
+def _track_bootstrap_page_visit(request: Request, status_code: int) -> None:
+    if _is_internal_bootstrap_request(request):
+        return
+
+    login_id = _bootstrap_current_login_id(request)
+    if not login_id:
+        return
+
+    try:
+        request.state.session_user = login_id
+        logger_instance.log_access(request, str(request.url.path), status_code, is_page_visit=True)
+    except Exception:
+        logging.getLogger("uvicorn.error").exception("bootstrap page visit logging failed")
 
 
 def _dir_state_signature(path: Path) -> Optional[str]:
@@ -1144,8 +1201,9 @@ async def read_root(request: Request):
         return JSONResponse({"message": "index.html not found"})
 
     accept_encoding = request.headers.get("accept-encoding", "")
+    status_code = 200
     if "gzip" in accept_encoding and _CACHED_INDEX_HTML_GZ:
-        return Response(
+        response = Response(
             content=_CACHED_INDEX_HTML_GZ,
             media_type="text/html; charset=utf-8",
             headers={
@@ -1154,11 +1212,15 @@ async def read_root(request: Request):
                 "Vary": "Accept-Encoding",
             },
         )
+        _track_bootstrap_page_visit(request, status_code)
+        return response
 
-    return HTMLResponse(
+    response = HTMLResponse(
         content=_CACHED_INDEX_HTML,
         headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
     )
+    _track_bootstrap_page_visit(request, status_code)
+    return response
 
 
 async def get_main_js(request: Request):
