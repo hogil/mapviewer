@@ -36,6 +36,27 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 - **기본 실행 경로는 `powershell -ExecutionPolicy Bypass -File scripts/run-e2e-playwright.ps1` 이다.**
 - 이 runner는 **질문/실행 1회당 새 Playwright 세션(`E2E_SESSION_ID`)**을 만들고, chunk마다 별도 브라우저를 띄워 이전 질문의 쿠키/캐시/창 상태를 재사용하지 않는다.
 
+## 절대규칙 #0-1: 상태 플래그만으로 PASS 판정 금지 — 실제 화면 + visible 그리드로 검증
+
+- `gridMode === true`, `viewMode === null`, `selectedImages.length > 0` 같은 **상태값만으로 PASS 판정하는 행위는 절대 금지**한다.
+- 특히 그리드/단일 이미지 전환, ESC 복귀, Ctrl 다중선택, LOT Mode, Label Explorer, Composite/Measure 복귀 검증에서는 **실제 화면이 비어 있지 않은지**를 반드시 본다.
+- 아래 조건을 만족해야만 "그리드 정상 표시"로 판정한다.
+  - `.grid-scroll-wrapper`가 `display:none`이 아님
+  - `#image-grid .grid-thumb-wrap` 중 **실제로 보이는 항목 수**가 1개 이상
+  - 첫 번째 visible `.grid-thumb-wrap`의 `getBoundingClientRect().width > 0` 그리고 `height > 0`
+  - 썸네일 `img.complete && img.naturalWidth > 0` 또는 동일 수준의 실제 렌더 확인
+  - 최종적으로 **스크린샷에서 검은 화면이 아니라 썸네일/그리드 셀이 보임**
+- `LOT Mode`에서는 특히 `#image-grid`만 보이고 `.grid-scroll-wrapper`가 숨겨진 상태를 버그로 본다. 이 경우 `gridMode=true`라도 FAIL이다.
+- 단일 이미지에서 그리드 복귀 검증 시에는 다음을 최소 시나리오로 포함한다.
+  - 이미지 1개 클릭 → 단일 보기 스크린샷
+  - `Escape` 또는 실제 복귀 동작 → 1장 그리드 스크린샷
+  - 같은 상태에서 `Ctrl+클릭`으로 2번째 이미지 추가 → 2장 그리드 스크린샷
+- 결과 보고에는 가능하면 상태값뿐 아니라 아래와 같은 실측값을 같이 남긴다.
+  - `visibleWraps`
+  - 첫 visible wrap의 `width`, `height`
+  - `.grid-scroll-wrapper`의 `display`, `width`, `height`
+  - 캡처 파일 경로
+
 ## 절대규칙: 기본 전체 실행
 
 - **인자 없이 `/e2e-test` 실행 시 Phase 1~63 전체를 실행한다.**
