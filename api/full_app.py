@@ -1574,6 +1574,69 @@ def _get_cached_palette(image_path: Path) -> Optional[List[int]]:
 
 # ======================== Lifecycle ========================
 _LIFESPAN_BG_INIT_STARTED = False
+_LIFESPAN_BG_INIT_TASK: Optional[asyncio.Task[Any]] = None
+_STARTUP_BACKGROUND_TASKS: Set[asyncio.Task[Any]] = set()
+_RUNTIME_SHUTDOWN_STARTED = False
+
+
+def _spawn_startup_task(coro: Any, *, name: str, tracked: bool = True) -> asyncio.Task[Any]:
+    task = asyncio.create_task(coro, name=name)
+    if tracked:
+        _STARTUP_BACKGROUND_TASKS.add(task)
+
+        def _cleanup(done_task: asyncio.Task[Any]) -> None:
+            _STARTUP_BACKGROUND_TASKS.discard(done_task)
+
+        task.add_done_callback(_cleanup)
+    return task
+
+
+async def _cancel_background_task(task: Optional[asyncio.Task[Any]], label: str) -> None:
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        logging.getLogger("uvicorn.error").info("🧹 [SHUTDOWN] cancelled %s", label)
+    except Exception:
+        logging.getLogger("uvicorn.error").exception("⚠️ [SHUTDOWN] %s 종료 중 오류", label)
+
+
+def _shutdown_executor(executor: Any, label: str) -> None:
+    try:
+        executor.shutdown(wait=False, cancel_futures=True)
+    except TypeError:
+        executor.shutdown(wait=False)
+    except Exception:
+        logging.getLogger("uvicorn.error").exception("⚠️ [SHUTDOWN] %s executor 종료 실패", label)
+
+
+async def _shutdown_runtime_resources() -> None:
+    global _RUNTIME_SHUTDOWN_STARTED, _LIFESPAN_BG_INIT_TASK
+    if _RUNTIME_SHUTDOWN_STARTED:
+        return
+    _RUNTIME_SHUTDOWN_STARTED = True
+
+    await _stop_daily_cleanup()
+    await index_service.stop_refresh_loop()
+
+    bg_init_task = _LIFESPAN_BG_INIT_TASK
+    _LIFESPAN_BG_INIT_TASK = None
+    await _cancel_background_task(bg_init_task, "lifespan background init")
+
+    pending_startup_tasks = [task for task in list(_STARTUP_BACKGROUND_TASKS) if not task.done()]
+    for task in pending_startup_tasks:
+        task.cancel()
+    if pending_startup_tasks:
+        await asyncio.gather(*pending_startup_tasks, return_exceptions=True)
+    _STARTUP_BACKGROUND_TASKS.clear()
+
+    _shutdown_executor(THUMBNAIL_EXECUTOR, "thumbnail")
+    _shutdown_executor(DIRLIST_EXECUTOR, "dirlist")
+    _shutdown_executor(IO_POOL, "io-pool")
+    _shutdown_executor(COMPOSITE_EXECUTOR, "composite")
+    _shutdown_executor(_pyramid_bg_executor, "pyramid-bg")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -1621,10 +1684,14 @@ async def lifespan(app: FastAPI):
 
     # 🔥 모든 무거운 초기화를 백그라운드로 (서버는 즉시 요청 처리 가능)
     bootlog.info("🚀 [STARTUP] 서버 즉시 시작 — 인덱스 로드/빌드는 백그라운드에서 진행")
-    global _LIFESPAN_BG_INIT_STARTED
+    global _LIFESPAN_BG_INIT_STARTED, _LIFESPAN_BG_INIT_TASK
     if not _LIFESPAN_BG_INIT_STARTED:
         _LIFESPAN_BG_INIT_STARTED = True
-        asyncio.create_task(_lifespan_background_init())
+        _LIFESPAN_BG_INIT_TASK = _spawn_startup_task(
+            _lifespan_background_init(),
+            name="l3-lifespan-background-init",
+            tracked=False,
+        )
 
     import time as _t
     bootlog.info(f"✅ [STARTUP] 서버 준비 완료 — https://0.0.0.0:{config.HTTPS_PORT} (시각: {_t.strftime('%H:%M:%S')})")
@@ -1633,17 +1700,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logging.getLogger("uvicorn.error").info("🛑 L3Tracker 서버 종료")
 
-    await _stop_daily_cleanup()
-    await index_service.stop_refresh_loop()
-
-    try:
-        THUMBNAIL_EXECUTOR.shutdown(wait=False, cancel_futures=False)
-    except Exception:
-        pass
-    try:
-        DIRLIST_EXECUTOR.shutdown(wait=False, cancel_futures=False)
-    except Exception:
-        pass
+    await _shutdown_runtime_resources()
 
 
 async def _lifespan_background_init():
@@ -1658,7 +1715,8 @@ async def _lifespan_background_init():
     warm_folders = tuple(
         folder.strip() for folder in os.getenv("STARTUP_THUMB_WARM_FOLDERS", "palette_3k").split(",") if folder.strip()
     )
-    warm_count = max(1, int(os.getenv("STARTUP_THUMB_WARM_COUNT", "24")))
+    warm_count = max(0, int(os.getenv("STARTUP_THUMB_WARM_COUNT", "24")))
+    warm_composite_modules = os.getenv("STARTUP_WARM_COMPOSITE_MODULES", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
 
     async def _wait_for_user_idle(label: str) -> None:
         waited = 0.0
@@ -1737,8 +1795,8 @@ async def _lifespan_background_init():
         except Exception as exc:
             bootlog.warning(f"⚠️ [STARTUP] target folder warm 실패: {exc}")
 
-    asyncio.ensure_future(_warm_startup_routes())
-    asyncio.ensure_future(_warm_target_folders())
+    _spawn_startup_task(_warm_startup_routes(), name="l3-startup-warm-routes")
+    _spawn_startup_task(_warm_target_folders(), name="l3-startup-warm-target-folders")
 
     # 0.7) Composite/Measure 모듈 워밍업 — 첫 요청 lazy import/ProcessPool 비용을 사용자 클릭에서 제거
     async def _warm_composite_modules():
@@ -1760,7 +1818,10 @@ async def _lifespan_background_init():
         except Exception as exc:
             bootlog.warning(f"⚠️ [STARTUP] composite/measure 모듈 워밍업 실패: {exc}")
 
-    asyncio.ensure_future(_warm_composite_modules())
+    if warm_composite_modules:
+        _spawn_startup_task(_warm_composite_modules(), name="l3-startup-warm-composite")
+    else:
+        bootlog.info("⏭️ [STARTUP] composite/measure 모듈 워밍업 비활성화")
 
     await asyncio.sleep(0)  # yield to event loop
 
@@ -1839,7 +1900,7 @@ async def _lifespan_background_init():
         except Exception as exc:
             bootlog.warning(f"⚠️ [STARTUP] thumbnail prewarm 실패: {exc}")
 
-    asyncio.ensure_future(_warm_startup_thumbnails())
+    _spawn_startup_task(_warm_startup_thumbnails(), name="l3-startup-warm-thumbnails")
 
     # 3) 인덱스 빌드 (executor 내부에서 scan + finalize)
     index_action = "rebuild" if cache_loaded and index_service.keys else "build"
@@ -1972,7 +2033,7 @@ app = FastAPI(title="L3Tracker API", version="2.6.0", lifespan=lifespan)
 async def startup_event():
     """lifespan이 호출되지 않는 경우를 대비한 백업 startup 이벤트"""
     bootlog = logging.getLogger("uvicorn.error")
-    global _LIFESPAN_BG_INIT_STARTED
+    global _LIFESPAN_BG_INIT_STARTED, _LIFESPAN_BG_INIT_TASK
 
     # lifespan에서 이미 백그라운드 초기화를 시작한 경우 스킵
     if _LIFESPAN_BG_INIT_STARTED:
@@ -1988,15 +2049,18 @@ async def startup_event():
     # lifespan이 호출되지 않은 경우에만 백그라운드 초기화 시작
     bootlog.info("🚀 [STARTUP] lifespan 미실행 — 백그라운드 초기화 시작")
     _LIFESPAN_BG_INIT_STARTED = True
-    asyncio.create_task(_lifespan_background_init())
+    _LIFESPAN_BG_INIT_TASK = _spawn_startup_task(
+        _lifespan_background_init(),
+        name="l3-startup-background-init",
+        tracked=False,
+    )
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """서버 종료 시 정리"""
     print("[SHUTDOWN EVENT] 서버 종료 중...", flush=True)
-    await _stop_daily_cleanup()
-    await index_service.stop_refresh_loop()
+    await _shutdown_runtime_resources()
 
 
 # ======================== SAML SSO (OneLogin python3-saml) ========================
@@ -10805,6 +10869,7 @@ if __name__ == "__main__":
         sys.exit(2)
 
     reload_flag = os.getenv("RELOAD", "0") == "1"
+    timeout_graceful_shutdown = max(1, int(os.getenv("UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN", "15") or "15"))
     logger.info(f"[SSL] HTTPS 모드 활성화: 포트 {config.HTTPS_PORT}")
     logger.info(f"[SSL] CERTFILE={cert_path}")
     logger.info(f"[SSL] KEYFILE={key_path}")
@@ -10901,6 +10966,7 @@ if __name__ == "__main__":
             access_log=access_log_enabled,      # 커스텀 테이블 로그 사용
             use_colors=True,
             log_config=logging_config,          # 🔥 기본 로깅 설정 사용 (None 대신)
+            timeout_graceful_shutdown=timeout_graceful_shutdown,
             ssl_certfile=str(cert_path),
             ssl_keyfile=str(key_path),
         )

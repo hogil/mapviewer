@@ -31,10 +31,10 @@ $outputDir = Join-Path $repoRoot (Join-Path ".codex-tmp/e2e-sessions" $sessionId
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 
 $scripts = switch ($Chunk) {
-    "1" { @("scripts/e2e_chunk1.js") }
-    "2" { @("scripts/e2e_chunk2.js") }
-    "3" { @("scripts/e2e_chunk3.js") }
-    default { @("scripts/e2e_chunk1.js", "scripts/e2e_chunk2.js", "scripts/e2e_chunk3.js") }
+    "1" { @("scripts/e2e_fresh_boot_smoke.js", "scripts/e2e_chunk1.js") }
+    "2" { @("scripts/e2e_fresh_boot_smoke.js", "scripts/e2e_chunk2.js") }
+    "3" { @("scripts/e2e_fresh_boot_smoke.js", "scripts/e2e_chunk3.js") }
+    default { @("scripts/e2e_fresh_boot_smoke.js", "scripts/e2e_chunk1.js", "scripts/e2e_chunk2.js", "scripts/e2e_chunk3.js") }
 }
 
 $env:E2E_BASE_URL = $baseUrl

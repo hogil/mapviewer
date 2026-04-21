@@ -107,6 +107,7 @@ Remove-Item $stdoutPath, $stderrPath, $readyPath -Force -ErrorAction SilentlyCon
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUNBUFFERED = "1"
 $env:UVICORN_LIFESPAN = "on"
+$env:UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN = "15"
 $env:AUTO_LOGIN = "0"
 $env:HOST = "0.0.0.0"
 $env:PORT = "5354"
@@ -120,6 +121,9 @@ $env:SSL_KEYFILE = "cert/server.key"
 $env:IMAGES_ROOT = "D:/project/data/wm-811k"
 $env:POSITIONS_ROOT = "D:/project/data/positions"
 $env:ACCESS_LOG_ENABLED = "0"
+$env:STARTUP_THUMB_WARM_FOLDERS = ""
+$env:STARTUP_THUMB_WARM_COUNT = "0"
+$env:STARTUP_WARM_COMPOSITE_MODULES = "0"
 
 $proc = Start-Process python `
     -ArgumentList "-m", "api.main" `

@@ -1323,6 +1323,7 @@ if __name__ == "__main__":
     cert_path = Path(config.SSL_CERTFILE)
     key_path = Path(config.SSL_KEYFILE)
     reload_flag = config.DEFAULT_RELOAD
+    timeout_graceful_shutdown = max(1, int(os.getenv("UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN", "15") or "15"))
 
     access_log_enabled = os.getenv("ACCESS_LOG_ENABLED", "0").strip().lower() not in ("0", "false", "no", "")
     access_log_level = os.getenv("ACCESS_LOG_LEVEL", "WARNING").upper()
@@ -1375,6 +1376,7 @@ if __name__ == "__main__":
         access_log=access_log_enabled,
         use_colors=True,
         log_config=logging_config,
+        timeout_graceful_shutdown=timeout_graceful_shutdown,
         ssl_certfile=str(cert_path),
         ssl_keyfile=str(key_path),
     )

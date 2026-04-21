@@ -1,5 +1,6 @@
 #!/bin/bash
 # Ubuntu 24 계열 운영 서버용 스크립트 (SAML Auto Login + 운영값) - 32C / 198GB RAM
+set -euo pipefail
 
 # SAML 설정
 export AUTO_LOGIN="0"                      # 0=수동 로그인, 1=자동 SAML 리다이렉트
@@ -8,6 +9,7 @@ export AUTO_LOGIN="0"                      # 0=수동 로그인, 1=자동 SAML �
 export PYTHONIOENCODING="utf-8"
 export PYTHONUNBUFFERED="1"
 export UVICORN_LIFESPAN="on"   # FastAPI lifespan 강제 (인덱스 초기화/재빌드 보장)
+export UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN="15" # restart 시 종료 대기 상한(초)
 
 # 서버 설정
 export HOST="0.0.0.0"
@@ -80,6 +82,12 @@ export SEARCH_FALLBACK_TIMEOUT_MS="0"     # 0=시간 제한 없음
 export INDEX_WORKERS="32"                 # 서버 사양에 맞게 조정 (예: 32~64)
 export INDEX_REFRESH_INTERVAL_MINUTES="30" # 파일 인덱스 자동 재빌드 간격(분)
 
+# startup background warm 완화
+# - restart 직후 초기 self-warm이 AUTO_LOGIN/SAML, recursive warm, composite import와 경합하지 않도록 기본 비활성화
+export STARTUP_THUMB_WARM_FOLDERS=""
+export STARTUP_THUMB_WARM_COUNT="0"
+export STARTUP_WARM_COMPOSITE_MODULES="0"
+
 # Python/시스템 최적화
 export PYTHONUNBUFFERED="1"              # 실시간 로그 출력
 export MALLOC_ARENA_MAX="4"              # 메모리 fragmentation 방지
@@ -131,4 +139,4 @@ echo "✅ 캐시 정리 완료"
 echo ""
 
 # 서버 시작
-python3 -m api.main
+exec python3 -m api.main

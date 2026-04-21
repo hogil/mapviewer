@@ -1,5 +1,7 @@
 # Windows 11 개발 서버 시작 스크립트
 # PowerShell에서 실행: .\start.ps1
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
 
 # UTF-8 인코딩 설정 (한글 로그 깨짐 방지)
 $OutputEncoding = [System.Text.Encoding]::UTF8
@@ -7,6 +9,7 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUNBUFFERED = "1"
 $env:UVICORN_LIFESPAN = "on"   # FastAPI lifespan 강제 (인덱스 초기화/재빌드 보장)
+$env:UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN = "15" # restart 시 종료 대기 상한(초)
 chcp 65001 | Out-Null
 
 # 환경변수 설정
@@ -63,6 +66,11 @@ $env:SEARCH_FALLBACK_TIMEOUT_MS="0"     # 0=시간 제한 없음
 # 인덱스 구축 워커 수 (병렬 디렉터리 스캔 가속)
 $env:INDEX_WORKERS = "4" # CPU 수 대비 2배, 최대 64
 $env:INDEX_REFRESH_INTERVAL_MINUTES="30" # 파일 인덱스 자동 재빌드 간격(분)
+
+# startup background warm 완화
+$env:STARTUP_THUMB_WARM_FOLDERS=""
+$env:STARTUP_THUMB_WARM_COUNT="0"
+$env:STARTUP_WARM_COMPOSITE_MODULES="0"
 
 # 이미지 피라미드 설정
 # 2025-10-23: 피라미드 썸네일 품질 및 속도 최적화
