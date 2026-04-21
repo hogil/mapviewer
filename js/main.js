@@ -989,6 +989,7 @@ class WaferMapViewer {
         
         // 🔥 상태 저장 (Grid/Label Explorer 전환용)
         this.waferMapExplorerState = null;  // Wafer Map Explorer 상태 저장
+        this.singleViewReturnState = null; // Explorer 단일 보기에서 이전 그리드 복귀용 상태
         this.labelExplorerState = null;     // Label Explorer 상태 저장
         this.cachedProductFolders = null;   // 제품 폴더 캐시 (초기 로딩 속도 개선)
         this.productFoldersPromise = null;  // 제품 폴더 로딩 Promise
@@ -1761,6 +1762,7 @@ class WaferMapViewer {
         return {
             savedViewState: savedViewSnapshot,
             waferMapExplorerState: this.deepCloneSimple(this.waferMapExplorerState),
+            singleViewReturnState: this.deepCloneSimple(this.singleViewReturnState),
             labelExplorerState: this.labelSelection ? {
                 selected: [...this.labelSelection.selected],
                 lastClicked: this.labelSelection.lastClicked,
@@ -2263,6 +2265,7 @@ class WaferMapViewer {
         this.activePageRole = page.role || 'blank';
         this.savedViewState = state.savedViewState ? this.deepCloneSimple(state.savedViewState) : null;
         this.waferMapExplorerState = state.waferMapExplorerState ? this.deepCloneSimple(state.waferMapExplorerState) : null;
+        this.singleViewReturnState = state.singleViewReturnState ? this.deepCloneSimple(state.singleViewReturnState) : null;
         this.labelExplorerState = state.labelExplorerState ? this.deepCloneSimple(state.labelExplorerState) : null;
         this.currentFolderPath = state.currentFolderPath ?? this.currentFolderPath;
         this.currentFolderPrefix = state.currentFolderPrefix ?? this.currentFolderPrefix;
@@ -2774,6 +2777,7 @@ class WaferMapViewer {
         this.singleImageFromGrid = false;
         this._gridVisuallyHidden = false;
         this.gridViewSaveState = null;
+        this.singleViewReturnState = null;
         this.gridViewImageList = [];
         this.gridViewImageIndex = -1;
         this.currentGridImages = [];
@@ -13526,6 +13530,8 @@ class WaferMapViewer {
         const preservedViewport = preserveViewport ? this.captureViewportState() : null;
         // 🔥 gridImage 모드에서는 같은 이미지라도 다시 로드 (next/prev 동작 보장)
         const isGridImageMode = this.viewMode === 'gridImage';
+        const preserveExplorerGridState =
+            this.viewMode === 'single' && this.singleViewReturnState?.type === 'grid';
 
         // ✅ 이미지 로드 시 네비게이션 중이면 상태 저장을 지연시킴 (성능 최적화)
         if (this._isNavigating) {
@@ -13718,7 +13724,7 @@ class WaferMapViewer {
                 // 단일 이미지를 직접 선택하는 경우 (Wafer Map Explorer에서)
                 // 🔥 singleImageFromGrid(gridImage 모드 내 탐색)일 때는 savedViewState를 덮어쓰지 않음
                 //    — 그리드 복귀를 위해 기존 grid 상태를 유지해야 함
-                else if (!loadFromGridSingleMode && !this.gridMode && this.selectedImages && this.selectedImages.length === 1) {
+                else if (!loadFromGridSingleMode && !preserveExplorerGridState && !this.gridMode && this.selectedImages && this.selectedImages.length === 1) {
                     this.savedViewState = {
                         type: 'single',
                         imagePath: fullPath,
@@ -14070,7 +14076,7 @@ class WaferMapViewer {
             // 🔥 singleImageFromGrid일 때는 덮어쓰지 않음 (그리드 상태 복원을 위해)
             const isClassificationPathEnd = this.isClassificationPath(path);
 
-            if (!isClassificationPathEnd && !labelExplorerIsolated && !this.singleImageFromGrid) {
+            if (!isClassificationPathEnd && !labelExplorerIsolated && !this.singleImageFromGrid && !preserveExplorerGridState) {
                 this.savedViewState = {
                     type: 'single',
                     imagePath: fullPath,
@@ -22151,6 +22157,7 @@ class WaferMapViewer {
         this.gridViewImageList = [];
         this.gridViewImageIndex = -1;
         this.gridViewSaveState = null;
+        this.singleViewReturnState = null;
 
         // 🔥 LOT 스크롤 타임아웃 정리
         if (this._lotScrollTimeout) {
@@ -22270,6 +22277,43 @@ class WaferMapViewer {
 
         // 🔥 잔류 그리드 상태 정리
         this._gridVisuallyHidden = false;
+
+        const canReturnToGrid =
+            this.gridMode &&
+            Array.isArray(this.currentGridImages) &&
+            this.currentGridImages.length > 0;
+        if (canReturnToGrid) {
+            const grid = document.getElementById('image-grid');
+            const scrollWrapper = grid?.parentElement;
+            const selectedIndices = Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : [];
+            const savedGridState = this.savedViewState?.type === 'grid'
+                ? this.deepCloneSimple(this.savedViewState)
+                : {
+                    type: 'grid',
+                    images: [...this.currentGridImages],
+                    scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
+                    lotMode: this.lotMode,
+                    selectedFolders: this.selectedFolders ? Array.from(this.selectedFolders) : [],
+                    lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || this.lastSelectedFolderPath || null,
+                    selectedIndices,
+                    selectedImagePaths: selectedIndices
+                        .map(idx => this.currentGridImages[idx])
+                        .filter(Boolean),
+                };
+            this.singleViewReturnState = {
+                type: 'grid',
+                gridMode: true,
+                images: [...this.currentGridImages],
+                selectedImages: Array.isArray(this.selectedImages) && this.selectedImages.length > 0
+                    ? [...this.selectedImages]
+                    : [...this.currentGridImages],
+                gridSelectedIdxs: selectedIndices,
+                savedViewState: savedGridState,
+                fileExplorerScrollTop: this.dom.fileExplorer ? this.dom.fileExplorer.scrollTop : 0,
+            };
+        } else {
+            this.singleViewReturnState = null;
+        }
 
         // ✅ viewMode 설정
         this.viewMode = 'single';
@@ -22779,7 +22823,7 @@ class WaferMapViewer {
      * 단일 이미지 뷰 모드 종료 (ESC 또는 X)
      * viewMode에 따라 분기: 'gridImage' → 그리드 복귀, 'single' → 파일 탐색기로
      */
-    exitSingleImageViewMode() {
+    async exitSingleImageViewMode() {
         // ✅ 하위 호환성 체크
         if (!this.viewMode) {
             if (!this.singleImageFromGrid) {
@@ -22814,6 +22858,9 @@ class WaferMapViewer {
         const savedGridViewImageList = this.gridViewImageList;
         const savedGridViewImageIndex = this.gridViewImageIndex;
         const savedGridViewSaveState = this.gridViewSaveState;
+        const savedSingleViewReturnState = this.singleViewReturnState
+            ? this.deepCloneSimple(this.singleViewReturnState)
+            : null;
         const savedGridSelectionIndices = Array.isArray(savedGridViewSaveState?.selectedIndices)
             ? [...savedGridViewSaveState.selectedIndices]
             : null;
@@ -23146,9 +23193,33 @@ class WaferMapViewer {
             // 🔥 스크롤 복원은 showGrid() 또는 showGridByLot() 내부에서 처리됨
             console.log(`🔄 [EXIT] 스크롤 복원은 showGrid/showGridByLot에서 처리 (scrollTop: ${scrollTopToRestore}px)`);
         } else if (savedViewMode === 'single') {
-            // ✅ 파일 탐색기로 복귀
-            console.log('🔄 [EXIT] 파일 탐색기로 복귀');
-            this.hideGrid();
+            const canRestorePreviousGrid =
+                savedSingleViewReturnState?.type === 'grid' &&
+                Array.isArray(savedSingleViewReturnState?.savedViewState?.images) &&
+                savedSingleViewReturnState.savedViewState.images.length > 0;
+            if (canRestorePreviousGrid) {
+                console.log('🔄 [EXIT] Explorer 단일 보기 → 이전 그리드 복귀');
+                const returnImages = Array.isArray(savedSingleViewReturnState.images) && savedSingleViewReturnState.images.length > 0
+                    ? [...savedSingleViewReturnState.images]
+                    : [...savedSingleViewReturnState.savedViewState.images];
+                this.savedViewState = this.deepCloneSimple(savedSingleViewReturnState.savedViewState);
+                this.selectedImages = [...returnImages];
+                this.currentGridImages = [...returnImages];
+                await this.restoreSavedViewState();
+                const restoredIndices = Array.isArray(savedSingleViewReturnState.gridSelectedIdxs)
+                    ? [...savedSingleViewReturnState.gridSelectedIdxs]
+                    : [];
+                this.gridSelectedIdxs = restoredIndices;
+                this.gridSelectedSet = new Set(restoredIndices);
+                this.updateGridSelection();
+                if (this.dom.fileExplorer && Number.isFinite(savedSingleViewReturnState.fileExplorerScrollTop)) {
+                    this.dom.fileExplorer.scrollTop = savedSingleViewReturnState.fileExplorerScrollTop;
+                }
+            } else {
+                // ✅ 파일 탐색기로 복귀
+                console.log('🔄 [EXIT] 파일 탐색기로 복귀');
+                this.hideGrid();
+            }
         }
         
         // ✅ Step 5: 이벤트 리스너 정리
@@ -23172,6 +23243,7 @@ class WaferMapViewer {
         
         // ✅ Step 6: 상태 완전 초기화
         this.gridViewSaveState = null;
+        this.singleViewReturnState = null;
 
         // ✅ Step 7: 그리드 모드이면 캔버스/단일뷰 잔재 강제 정리
         if (this.gridMode) {

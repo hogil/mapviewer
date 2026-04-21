@@ -497,6 +497,69 @@ const { createRunner } = require('./e2e_playwright_session');
 
     await boot('chunk2-grid-restore');
     await loadFolder('palette_3k');
+    await page.locator('summary[data-path="palette_3k"]').click();
+    await page.locator('#file-explorer a[data-path^="palette_3k/"]').first().waitFor({
+      timeout: 30000,
+    });
+    const explorerDirectRoundTrip = await page.evaluate(async () => {
+      const v = window.viewer;
+      const fileLink = document.querySelector('#file-explorer a[data-path^="palette_3k/"]');
+      const before = {
+        gridMode: v.gridMode,
+        viewMode: v.viewMode,
+        count: v.currentGridImages?.length || 0,
+        wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+        firstPath: fileLink?.dataset?.path || null,
+      };
+      fileLink?.click();
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      const single = {
+        gridMode: v.gridMode,
+        viewMode: v.viewMode,
+        savedType: v.savedViewState?.type || null,
+        returnType: v.singleViewReturnState?.type || null,
+        selectedImagePath: v.selectedImagePath || null,
+      };
+      return { before, single };
+    });
+    await backToGrid();
+    await sleep(1000);
+    explorerDirectRoundTrip.after = await page.evaluate(() => ({
+      gridMode: window.viewer.gridMode,
+      viewMode: window.viewer.viewMode,
+      savedType: window.viewer.savedViewState?.type || null,
+      count: window.viewer.currentGridImages?.length || 0,
+      wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+      gridDisplay: getComputedStyle(document.getElementById('image-grid')).display,
+    }));
+    expect(
+      explorerDirectRoundTrip.single.viewMode === 'single',
+      `explorer single viewMode=${JSON.stringify(explorerDirectRoundTrip)}`
+    );
+    expect(
+      explorerDirectRoundTrip.single.returnType === 'grid',
+      `explorer return state missing=${JSON.stringify(explorerDirectRoundTrip)}`
+    );
+    expect(
+      explorerDirectRoundTrip.after.gridMode === true,
+      `explorer after gridMode=${JSON.stringify(explorerDirectRoundTrip.after)}`
+    );
+    expect(
+      explorerDirectRoundTrip.after.savedType === 'grid',
+      `explorer after savedType=${JSON.stringify(explorerDirectRoundTrip.after)}`
+    );
+    expect(
+      explorerDirectRoundTrip.after.count === explorerDirectRoundTrip.before.count,
+      `explorer count ${explorerDirectRoundTrip.before.count}->${explorerDirectRoundTrip.after.count}`
+    );
+    expect(
+      explorerDirectRoundTrip.after.wraps > 0 &&
+        explorerDirectRoundTrip.after.gridDisplay !== 'none',
+      `explorer grid hidden=${JSON.stringify(explorerDirectRoundTrip.after)}`
+    );
+
+    await boot('chunk2-grid-restore');
+    await loadFolder('palette_3k');
     const gridRoundTrips = [];
     for (let i = 0; i < 4; i += 1) {
       await roundTripGridImageByDblClick(0);
@@ -553,6 +616,7 @@ const { createRunner } = require('./e2e_playwright_session');
 
     return {
       loops,
+      explorerDirectRoundTrip,
       gridRoundTrips,
       scrolledRoundTrips,
       scrollStop: {
