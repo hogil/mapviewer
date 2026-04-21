@@ -4658,16 +4658,21 @@ def _resolve_pyramid_dir(
 def safe_resolve_path(path: Optional[str]) -> Path:
     if not path: return current_folder
     try:
-        normalized = os.path.normpath(str(path).lstrip("/\\"))
-        
-        # 🔥 ROOT_DIR 기준으로 경로 해석 (current_folder 무시)
-        # 프론트엔드에서 전달하는 path는 이미 ROOT_DIR 기준 상대경로
-        target = (ROOT_DIR / normalized).resolve()
-        
-        if not str(target).startswith(str(ROOT_DIR)):
-            raise HTTPException(status_code=400, detail="Invalid path")
-        
+        root_resolved = ROOT_DIR.resolve()
+        raw_path = str(path).strip()
+        path_obj = Path(raw_path)
+
+        # 절대경로(ROOT_DIR 하위)와 ROOT_DIR 기준 상대경로를 모두 허용한다.
+        if path_obj.is_absolute():
+            target = path_obj.resolve()
+        else:
+            normalized = os.path.normpath(raw_path.lstrip("/\\"))
+            target = (root_resolved / normalized).resolve()
+
+        target.relative_to(root_resolved)
         return target
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid path")
     except HTTPException:
         raise
     except Exception as e:
@@ -10869,7 +10874,6 @@ if __name__ == "__main__":
         sys.exit(2)
 
     reload_flag = os.getenv("RELOAD", "0") == "1"
-    timeout_graceful_shutdown = max(1, int(os.getenv("UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN", "15") or "15"))
     logger.info(f"[SSL] HTTPS 모드 활성화: 포트 {config.HTTPS_PORT}")
     logger.info(f"[SSL] CERTFILE={cert_path}")
     logger.info(f"[SSL] KEYFILE={key_path}")
@@ -10966,7 +10970,6 @@ if __name__ == "__main__":
             access_log=access_log_enabled,      # 커스텀 테이블 로그 사용
             use_colors=True,
             log_config=logging_config,          # 🔥 기본 로깅 설정 사용 (None 대신)
-            timeout_graceful_shutdown=timeout_graceful_shutdown,
             ssl_certfile=str(cert_path),
             ssl_keyfile=str(key_path),
         )

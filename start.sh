@@ -1,6 +1,5 @@
 #!/bin/bash
 # Ubuntu 24 계열 운영 서버용 스크립트 (SAML Auto Login + 운영값) - 32C / 198GB RAM
-set -euo pipefail
 
 # SAML 설정
 export AUTO_LOGIN="0"                      # 0=수동 로그인, 1=자동 SAML 리다이렉트
@@ -9,7 +8,6 @@ export AUTO_LOGIN="0"                      # 0=수동 로그인, 1=자동 SAML �
 export PYTHONIOENCODING="utf-8"
 export PYTHONUNBUFFERED="1"
 export UVICORN_LIFESPAN="on"   # FastAPI lifespan 강제 (인덱스 초기화/재빌드 보장)
-export UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN="15" # restart 시 종료 대기 상한(초)
 
 # 서버 설정
 export HOST="0.0.0.0"

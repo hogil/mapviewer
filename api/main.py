@@ -725,11 +725,18 @@ def safe_resolve_path(path: Optional[str]) -> Path:
     if not path:
         return current_folder
     try:
-        normalized = os.path.normpath(str(path).lstrip("/\\"))
-        target = (ROOT_DIR / normalized).resolve()
-        if not str(target).startswith(str(ROOT_DIR)):
-            raise ValueError("Invalid path")
+        root_resolved = ROOT_DIR.resolve()
+        raw_path = str(path).strip()
+        path_obj = Path(raw_path)
+        if path_obj.is_absolute():
+            target = path_obj.resolve()
+        else:
+            normalized = os.path.normpath(raw_path.lstrip("/\\"))
+            target = (root_resolved / normalized).resolve()
+        target.relative_to(root_resolved)
         return target
+    except ValueError:
+        raise ValueError("Invalid path")
     except Exception as exc:
         raise ValueError(f"Invalid path: {exc}") from exc
 
@@ -1323,8 +1330,6 @@ if __name__ == "__main__":
     cert_path = Path(config.SSL_CERTFILE)
     key_path = Path(config.SSL_KEYFILE)
     reload_flag = config.DEFAULT_RELOAD
-    timeout_graceful_shutdown = max(1, int(os.getenv("UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN", "15") or "15"))
-
     access_log_enabled = os.getenv("ACCESS_LOG_ENABLED", "0").strip().lower() not in ("0", "false", "no", "")
     access_log_level = os.getenv("ACCESS_LOG_LEVEL", "WARNING").upper()
     logging_config = {
@@ -1376,7 +1381,6 @@ if __name__ == "__main__":
         access_log=access_log_enabled,
         use_colors=True,
         log_config=logging_config,
-        timeout_graceful_shutdown=timeout_graceful_shutdown,
         ssl_certfile=str(cert_path),
         ssl_keyfile=str(key_path),
     )
