@@ -81,26 +81,16 @@ const { createRunner } = require('./e2e_playwright_session');
         loadedVisible,
       };
     });
-    const serverConfig = await page.evaluate(async () => {
-      const res = await fetch('/api/config', { cache: 'no-store' });
-      return res.ok ? res.json() : null;
-    });
-
     expect(summary.title === 'Wafer Map Viewer', `title=${summary.title}`);
     expect(summary.gridCount > 0, `gridCount=${summary.gridCount}`);
     expect(summary.wraps > 0, `wraps=${summary.wraps}`);
     expect(summary.loadedVisible > 0, `loadedVisible=${summary.loadedVisible}`);
-    expect(
-      serverConfig && typeof serverConfig.USE_COMPOSITE_IMAGE_CACHE === 'boolean',
-      `USE_COMPOSITE_IMAGE_CACHE=${serverConfig && serverConfig.USE_COMPOSITE_IMAGE_CACHE}`
-    );
 
     const result = {
       status: 'PASS',
       domLoadedMs,
       viewerReadyMs,
       explorerReadyMs,
-      useCompositeImageCache: serverConfig.USE_COMPOSITE_IMAGE_CACHE,
       ...summary,
     };
     console.log(JSON.stringify(result, null, 2));

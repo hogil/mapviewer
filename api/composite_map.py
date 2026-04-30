@@ -14,7 +14,7 @@ import zipfile
 import copy
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from datetime import datetime
-from functools import partial, lru_cache
+from functools import lru_cache
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional, Sequence, Callable
 import re
@@ -50,7 +50,6 @@ from .config import (
     COMPOSITE_BATCH_SIZE,
     POSITIONS_ROOT,
     FALLBACK_LOGIN_ID,
-    USE_COMPOSITE_IMAGE_CACHE,
 )
 from .personal_colors import load_color_legends, _scheme_to_palette_bytes, normalize_hex_color
 from .composite_colors import load_composite_color_settings
@@ -120,8 +119,6 @@ COMPOSITE_ROOT.mkdir(parents=True, exist_ok=True)
 (COMPOSITE_ROOT / ANONYMOUS_LOGIN_ID).mkdir(parents=True, exist_ok=True)
 COMPOSITE_SESSION_DIRNAME = "current"
 SQUARE_MAP_CACHE_FILENAME = "square_maps_data.npz"
-# composite_cache_v1: PNG→npy 디스크 캐시 (동일 이미지 재사용 시 유효)
-COMPOSITE_CACHE_ROOT = IMAGES_ROOT / "composite_cache_v1" if USE_COMPOSITE_IMAGE_CACHE else None
 _GRADE_RANGE = np.arange(8, dtype=np.uint8)
 _SUBSET_NAME_RE = re.compile(r"^square_(weighted_)?average_([0-7]+)\.(png|jpg|jpeg|webp)$", re.IGNORECASE)
 
@@ -505,65 +502,6 @@ def _summarize_map(values: np.ndarray, mask: Optional[np.ndarray]) -> Dict[str, 
         "mean": float(np.mean(data)),
         "std": float(np.std(data)),
     }
-
-
-def _cache_path_for_image(rel_path: str, width: int, height: int) -> Optional[Path]:
-    """이미지 캐시 경로 반환 (캐시가 비활성화되어 있으면 None)"""
-    if not USE_COMPOSITE_IMAGE_CACHE or COMPOSITE_CACHE_ROOT is None:
-        return None
-    sanitized = rel_path.strip("/\\")
-    cache_rel = Path(sanitized).with_suffix(f".{width}x{height}.npy")
-    cache_path = COMPOSITE_CACHE_ROOT / cache_rel
-    # 캐시 경로를 반환하기 전에 부모 디렉토리만 생성 (필요할 때만)
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    return cache_path
-
-
-# 메모리 캐시: numpy 배열 직접 저장 (bytes 직렬화 제거)
-_pixel_indices_cache: Dict[Tuple[str, int, int], Tuple[float, np.ndarray]] = {}
-_pixel_indices_cache_lock = threading.Lock()
-_PIXEL_CACHE_MAX = 512
-
-
-def _load_pixel_indices_with_cache(image_rel_path: str, width: int, height: int) -> Optional[np.ndarray]:
-    """
-    2단계 캐싱: 메모리(numpy 직접) → 원본 로드.
-    numpy 배열을 bytes 변환 없이 직접 캐시하여 960MB+ 불필요 복사 제거.
-    """
-    full_path = IMAGES_ROOT / image_rel_path
-    if not full_path.exists():
-        return None
-
-    try:
-        mtime = full_path.stat().st_mtime
-    except Exception:
-        return None
-
-    cache_key = (image_rel_path, width, height)
-
-    # 캐시 히트 체크 (lock-free read)
-    cached = _pixel_indices_cache.get(cache_key)
-    if cached is not None:
-        cached_mtime, cached_arr = cached
-        if cached_mtime >= mtime:
-            return cached_arr  # 복사 없이 직접 반환 (read-only 사용)
-
-    # 캐시 미스 → 로드
-    try:
-        result = _load_pixel_indices(image_rel_path, width, height)
-        if result is not None:
-            result.flags.writeable = False  # read-only로 설정하여 안전한 공유
-            with _pixel_indices_cache_lock:
-                if len(_pixel_indices_cache) >= _PIXEL_CACHE_MAX:
-                    # 가장 오래된 항목 제거 (simple eviction)
-                    oldest_key = next(iter(_pixel_indices_cache))
-                    del _pixel_indices_cache[oldest_key]
-                _pixel_indices_cache[cache_key] = (mtime, result)
-            return result
-        return None
-    except Exception as e:
-        print(f"[CACHE] Error loading {image_rel_path}: {e}")
-        return None
 
 
 def _count_low_grade_occurrences(
@@ -1077,20 +1015,6 @@ def _load_pixel_indices(image_rel_path: str, width: int, height: int) -> Optiona
     """Palette PNG → uint8 인덱스 배열 로드. 최소 오버헤드."""
     full_path = IMAGES_ROOT / image_rel_path
 
-    # 디스크 캐시 (활성화 시에만)
-    cache_path: Optional[Path] = None
-    if USE_COMPOSITE_IMAGE_CACHE:
-        try:
-            cache_path = _cache_path_for_image(image_rel_path, width, height)
-            if cache_path and cache_path.exists():
-                try:
-                    if cache_path.stat().st_mtime >= full_path.stat().st_mtime:
-                        return np.load(cache_path)
-                except Exception:
-                    pass
-        except Exception:
-            cache_path = None
-
     # PIL 직접 로드 (가장 빠른 경로 — pyvips는 palette→RGB 확장이라 느림)
     try:
         with Image.open(full_path) as img:
@@ -1107,20 +1031,6 @@ def _load_pixel_indices(image_rel_path: str, width: int, height: int) -> Optiona
     except Exception:
         return None
 
-    # 디스크 캐시 백그라운드 저장
-    if cache_path is not None:
-        _arr = pixel_indices
-        _cp = cache_path
-        def _save():
-            try:
-                _cp.parent.mkdir(parents=True, exist_ok=True)
-                tmp = _cp.with_name(_cp.stem + "_tmp.npy")
-                np.save(tmp, _arr)
-                tmp.replace(_cp)
-            except Exception:
-                pass
-        threading.Thread(target=_save, daemon=True).start()
-
     return pixel_indices
 
 
@@ -1136,7 +1046,6 @@ def _iter_pixel_indices(
     병렬 처리 최적화:
     - ThreadPoolExecutor는 I/O bound 작업에 효율적 (기본값)
     - chunksize로 작업 분배 효율화
-    - 메모리 캐시 (LRU) 사용으로 속도 향상
     - progress_callback: 진행률 콜백 (current, total)
     """
     if not image_paths:
@@ -1145,7 +1054,8 @@ def _iter_pixel_indices(
     max_workers = max_workers or COMPOSITE_MAX_WORKERS
     worker_count = min(max(1, max_workers), len(image_paths))
     # 🔥 fast 모드에서는 워커 수를 조금 더 공격적으로 사용 (이미 상단에서 기본값 상향)
-    loader = partial(_load_pixel_indices_with_cache, width=width, height=height)
+    def loader(rel_path: str) -> Optional[np.ndarray]:
+        return _load_pixel_indices(rel_path, width, height)
 
     total = len(image_paths)
     processed = 0

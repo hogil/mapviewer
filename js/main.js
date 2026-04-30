@@ -2644,9 +2644,6 @@ class WaferMapViewer {
         if (normalized.includes('composite_map/') || normalized.startsWith('composite_map')) {
             return false;
         }
-        if (normalized.includes('composite_cache_v1/')) {
-            return false;
-        }
         return true;
     }
 

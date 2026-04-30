@@ -14,6 +14,43 @@ const { createRunner } = require('./e2e_playwright_session');
     close,
   } = await createRunner(__filename);
 
+  const imagesRoot = path.resolve(
+    process.env.IMAGES_ROOT || (process.platform === 'win32' ? 'D:/project/data/wm-811k' : '/appdata/appuser/images')
+  );
+  const compositeInputCacheDir = path.join(imagesRoot, 'composite_cache_v1');
+
+  function removeCompositeInputCacheDir() {
+    fs.rmSync(compositeInputCacheDir, { recursive: true, force: true });
+  }
+
+  function getCompositeInputCacheState() {
+    const exists = fs.existsSync(compositeInputCacheDir);
+    return {
+      path: compositeInputCacheDir,
+      exists,
+      entries: exists ? fs.readdirSync(compositeInputCacheDir).slice(0, 12) : [],
+    };
+  }
+
+  function resolveImageRootPath(relativePath) {
+    const normalized = String(relativePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    return path.join(imagesRoot, ...normalized.split('/').filter(Boolean));
+  }
+
+  function getSquareMapsDataState(outputDir) {
+    const dir = resolveImageRootPath(outputDir);
+    const squareMapsDataPath = path.join(dir, 'square_maps_data.npz');
+    const exists = fs.existsSync(squareMapsDataPath);
+    return {
+      outputDir,
+      dir,
+      squareMapsDataPath,
+      exists,
+      size: exists ? fs.statSync(squareMapsDataPath).size : 0,
+      files: fs.existsSync(dir) ? fs.readdirSync(dir).slice(0, 24) : [],
+    };
+  }
+
   async function boot(tag) {
     append(`[BOOT] ${tag}\n`);
     await focusWindow();
@@ -430,6 +467,9 @@ const { createRunner } = require('./e2e_playwright_session');
   await boot('chunk3');
 
   await record('41,42,45,47,48,56', 'Composite / Measure 안정성 / toast / color modal / grid restore', async () => {
+    removeCompositeInputCacheDir();
+    const compositeInputCacheBefore = getCompositeInputCacheState();
+
     await loadFolder('filter_test');
     await setSelection([0, 1, 2]);
     await page.evaluate(() => window.viewer.handleCompositeCreate());
@@ -458,6 +498,51 @@ const { createRunner } = require('./e2e_playwright_session');
     await roundTripGridImageByDblClick(0);
     const compositeAfter = await getVisibleGridThumbSummary();
     const compositeGridCols = await nudgeGridCols();
+    const compositeOutputDir = await page.evaluate(() => window.viewer.compositeSession?.outputDir || null);
+    const squareMapsDataBeforeSubset = getSquareMapsDataState(compositeOutputDir);
+    const npzOnlySubsetRecolor = await page.evaluate(async () => {
+      const outputDir = window.viewer.compositeSession?.outputDir || null;
+      const subsetResponse = await fetch('/api/composite-subset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          output_dir: outputDir,
+          selected_grades: [1, 2],
+        }),
+        cache: 'no-store',
+      });
+      const subsetBody = await subsetResponse.json().catch(async () => ({
+        detail: await subsetResponse.text().catch(() => ''),
+      }));
+      const recolorResponse = await fetch('/api/composite-recolor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ output_dir: outputDir }),
+        cache: 'no-store',
+      });
+      const recolorBody = await recolorResponse.json().catch(async () => ({
+        detail: await recolorResponse.text().catch(() => ''),
+      }));
+      return {
+        outputDir,
+        subsetOk: subsetResponse.ok,
+        subsetStatus: subsetResponse.status,
+        subsetCount: Array.isArray(subsetBody?.subset_maps) ? subsetBody.subset_maps.length : 0,
+        subsetPaths: Array.isArray(subsetBody?.subset_maps)
+          ? subsetBody.subset_maps.map((entry) => entry.path)
+          : [],
+        subsetBody,
+        recolorOk: recolorResponse.ok,
+        recolorStatus: recolorResponse.status,
+        recolorCount: Array.isArray(recolorBody?.sum_maps) ? recolorBody.sum_maps.length : 0,
+        recolorPaths: Array.isArray(recolorBody?.sum_maps)
+          ? recolorBody.sum_maps.map((entry) => entry.path)
+          : [],
+        recolorBody,
+      };
+    });
+    const squareMapsDataAfterSubsetRecolor = getSquareMapsDataState(compositeOutputDir);
+    const compositeInputCacheAfterSubsetRecolor = getCompositeInputCacheState();
 
     await boot('chunk3-composite-pending-toast');
     await loadFolder('filter_test');
@@ -582,6 +667,7 @@ const { createRunner } = require('./e2e_playwright_session');
         selectedFolders: [...(v.selectedFolders || [])],
       };
     }, originBeforeComposite);
+    const compositeInputCacheAfter = getCompositeInputCacheState();
 
     await boot('chunk3-measure');
     await loadFolder('palette_3k');
@@ -703,6 +789,26 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(compositeAfter.badCount === 0, `composite after badCount=${compositeAfter.badCount}`);
     expect(compositeGridCols.after.gridCols !== compositeGridCols.before, `composite gridCols ${compositeGridCols.before}->${compositeGridCols.after.gridCols}`);
     expect(compositeLayoutChanged, `composite layout unchanged: ${JSON.stringify(compositeGridCols)}`);
+    expect(
+      squareMapsDataBeforeSubset.exists && squareMapsDataBeforeSubset.size > 0,
+      `square_maps_data missing before subset=${JSON.stringify(squareMapsDataBeforeSubset)}`
+    );
+    expect(
+      npzOnlySubsetRecolor.subsetOk && npzOnlySubsetRecolor.subsetCount >= 2,
+      `subset from square_maps_data failed=${JSON.stringify(npzOnlySubsetRecolor)}`
+    );
+    expect(
+      npzOnlySubsetRecolor.recolorOk && npzOnlySubsetRecolor.recolorCount >= 2,
+      `recolor from square_maps_data failed=${JSON.stringify(npzOnlySubsetRecolor)}`
+    );
+    expect(
+      squareMapsDataAfterSubsetRecolor.exists && squareMapsDataAfterSubsetRecolor.size > 0,
+      `square_maps_data missing after subset/recolor=${JSON.stringify(squareMapsDataAfterSubsetRecolor)}`
+    );
+    expect(
+      compositeInputCacheAfterSubsetRecolor.exists === false,
+      `composite input cache created by subset/recolor=${JSON.stringify(compositeInputCacheAfterSubsetRecolor)}`
+    );
     expect(pendingCompositePages.originPageId, `pending composite pages=${JSON.stringify(pendingCompositePages)}`);
     expect(
       isCompositeDoneToast(pendingToastBeforeActivate.firstToast || ''),
@@ -725,6 +831,10 @@ const { createRunner } = require('./e2e_playwright_session');
         Math.abs(originAfterCompositeReturn.scrollTop - originBeforeComposite.scrollTop) <= 4,
       `origin scroll restore=${JSON.stringify({ before: originBeforeComposite, after: originAfterCompositeReturn })}`
     );
+    expect(
+      compositeInputCacheBefore.exists === false && compositeInputCacheAfter.exists === false,
+      `composite input cache recreated=${JSON.stringify({ before: compositeInputCacheBefore, after: compositeInputCacheAfter })}`
+    );
     expect(measureBefore.badCount === 0, `measure before badCount=${measureBefore.badCount}`);
     expect(measureAfter.badCount === 0, `measure after badCount=${measureAfter.badCount}`);
     assertAlternatingMeasureSignature(measureAfterRoundTripSignature, 'f');
@@ -743,11 +853,17 @@ const { createRunner } = require('./e2e_playwright_session');
       compositeSettled,
       compositeGridCols,
       compositeAfter,
+      squareMapsDataBeforeSubset,
+      npzOnlySubsetRecolor,
+      squareMapsDataAfterSubsetRecolor,
+      compositeInputCacheAfterSubsetRecolor,
       pendingCompositePages,
       pendingToastBeforeActivate,
       pendingToastAfterActivate,
       originBeforeComposite,
       originAfterCompositeReturn,
+      compositeInputCacheBefore,
+      compositeInputCacheAfter,
       measureBefore,
       measureAfterRoundTripSignature,
       measureAfterTabReturnSignature,

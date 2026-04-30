@@ -50,7 +50,7 @@
 
 ## composite와의 관계
 
-현재 프런트는 `composite_map/` 및 `composite_cache_v1/` 경로에 대해서는 서버 피라미드를 사용하지 않고 원본 `/api/image` 경로를 사용합니다.
+현재 프런트는 `composite_map/` 경로에 대해서는 서버 피라미드를 사용하지 않고 원본 `/api/image` 경로를 사용합니다.
 
 ## 관련 엔드포인트
 

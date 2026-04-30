@@ -56,7 +56,6 @@ export COMPOSITE_SAVE_WORKERS="56"       # 저장 워커 (고속 SSD 기준)
 export COMPOSITE_SAVE_BACKEND="vips"     # 저장 백엔드 vips 우선
 export COMPOSITE_FORMAT="JPEG"           # 저장 포맷: JPEG (속도 우선)
 export COMPOSITE_JPEG_QUALITY="95"       # JPEG 품질 (속도/품질 균형)
-export USE_COMPOSITE_IMAGE_CACHE="1"     # composite_cache_v1 디스크 캐시 활성화 (개별 이미지 디코딩 재사용)
 export COMPOSITE_USE_NUMBA="1"
 export COMPOSITE_NUMBA_CACHE="1"
 export OMP_NUM_THREADS="32"              # Numba/OpenMP 스레드
