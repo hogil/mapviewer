@@ -1,7 +1,10 @@
 param(
     [ValidateSet("all", "1", "2", "3")]
     [string]$Chunk = "all",
-    [switch]$Headless
+    [switch]$WithSmoke,
+    [switch]$Headless,
+    [switch]$KeepServer,
+    [switch]$NoCleanBeforeRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,11 +12,64 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-Write-Host "BOOTSTRAP scripts/start-e2e-server.ps1"
 if (-not (Test-Path (Join-Path $repoRoot ".codex-tmp"))) {
     New-Item -ItemType Directory -Path (Join-Path $repoRoot ".codex-tmp") | Out-Null
 }
+
+function Stop-ProcessTree {
+    param([int]$ProcessId)
+
+    if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
+        return
+    }
+
+    try {
+        & taskkill.exe /PID $ProcessId /T /F 1>$null 2>$null
+    } catch {
+    }
+
+    if (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
+        try {
+            Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+        } catch {
+        }
+    }
+}
+
+$script:E2EServerPid = $null
+trap {
+    if (-not $KeepServer -and $script:E2EServerPid) {
+        Stop-ProcessTree -ProcessId ([int]$script:E2EServerPid)
+        & (Join-Path $PSScriptRoot "cleanup-e2e.ps1") -Quiet
+    }
+    Write-Error $_
+    exit 1
+}
+
+function Stop-StaleE2EServers {
+    $pidFiles = @(Get-ChildItem -Path (Join-Path $repoRoot ".codex-tmp") -Filter "e2e-server-*.pid" -File -ErrorAction SilentlyContinue)
+    foreach ($pidFile in $pidFiles) {
+        $pidText = (Get-Content -Path $pidFile.FullName -Raw -ErrorAction SilentlyContinue).Trim()
+        $pidValue = 0
+        if ([int]::TryParse($pidText, [ref]$pidValue) -and $pidValue -gt 0) {
+            $proc = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
+            if ($proc) {
+                Write-Host "CLEAN stale E2E server pid=$pidValue"
+                Stop-ProcessTree -ProcessId $pidValue
+            }
+        }
+        Remove-Item -Path $pidFile.FullName -Force -ErrorAction SilentlyContinue
+    }
+}
+
+if (-not $NoCleanBeforeRun) {
+    & (Join-Path $PSScriptRoot "cleanup-e2e.ps1") -Quiet
+    Stop-StaleE2EServers
+}
+
+Write-Host "BOOTSTRAP scripts/start-e2e-server.ps1"
 $readyPath = Join-Path $repoRoot ".codex-tmp/e2e-server.last-ready.txt"
+$readyJsonPath = Join-Path $repoRoot ".codex-tmp/e2e-server.last-ready.json"
 Remove-Item $readyPath -Force -ErrorAction SilentlyContinue
 $ready = & (Join-Path $PSScriptRoot "start-e2e-server.ps1") 8443
 if ([string]::IsNullOrWhiteSpace($ready) -and (Test-Path $readyPath)) {
@@ -25,35 +81,49 @@ if ($ready -notmatch '^READY:(\d+)$') {
 }
 
 $port = $Matches[1]
+$serverInfo = $null
+if (Test-Path $readyJsonPath) {
+    try {
+        $serverInfo = Get-Content -Path $readyJsonPath -Raw | ConvertFrom-Json
+        if ($serverInfo -and $serverInfo.pid) {
+            $script:E2EServerPid = [int]$serverInfo.pid
+        }
+    } catch {
+        $serverInfo = $null
+    }
+}
+if (-not $script:E2EServerPid) {
+    try {
+        $listenerLine = netstat -ano | Select-String -Pattern (":{0}\s+.*LISTENING\s+(\d+)" -f $port) | Select-Object -First 1
+        if ($listenerLine -and $listenerLine.Matches.Count -gt 0) {
+            $script:E2EServerPid = [int]$listenerLine.Matches[0].Groups[1].Value
+            $serverInfo = [pscustomobject]@{
+                pid = $script:E2EServerPid
+                port = [int]$port
+            }
+        }
+    } catch {
+    }
+}
 $baseUrl = "https://127.0.0.1:$port"
 $sessionId = "{0}-{1}" -f (Get-Date -Format "yyyyMMdd-HHmmss"), ([guid]::NewGuid().ToString("N").Substring(0, 8))
 $outputDir = Join-Path $repoRoot (Join-Path ".codex-tmp/e2e-sessions" $sessionId)
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 
 $scripts = switch ($Chunk) {
-    "1" { @("scripts/e2e_fresh_boot_smoke.js", "scripts/e2e_chunk1.js") }
-    "2" { @("scripts/e2e_fresh_boot_smoke.js", "scripts/e2e_chunk2.js") }
-    "3" { @("scripts/e2e_fresh_boot_smoke.js", "scripts/e2e_chunk3.js") }
-    default { @("scripts/e2e_fresh_boot_smoke.js", "scripts/e2e_chunk1.js", "scripts/e2e_chunk2.js", "scripts/e2e_chunk3.js") }
+    "1" { @("scripts/e2e_chunk1.js") }
+    "2" { @("scripts/e2e_chunk2.js") }
+    "3" { @("scripts/e2e_chunk3.js") }
+    default { @("scripts/e2e_chunk1.js", "scripts/e2e_chunk2.js", "scripts/e2e_chunk3.js") }
+}
+if ($WithSmoke) {
+    $scripts = @("scripts/e2e_fresh_boot_smoke.js") + $scripts
 }
 
 $env:E2E_BASE_URL = $baseUrl
 $env:E2E_SESSION_ID = $sessionId
 $env:E2E_OUTPUT_DIR = $outputDir
 $env:E2E_HEADLESS = if ($Headless) { "1" } else { "0" }
-
-function Stop-ProcessTree {
-    param([int]$Pid)
-
-    try {
-        & taskkill.exe /PID $Pid /T /F | Out-Null
-    } catch {
-        try {
-            Stop-Process -Id $Pid -Force -ErrorAction SilentlyContinue
-        } catch {
-        }
-    }
-}
 
 function Get-NewTailLines {
     param(
@@ -123,6 +193,9 @@ foreach ($script in $scripts) {
     if ($name -eq "e2e_chunk1") {
         Write-Host "WARMUP search cache"
         if (-not (Wait-ForSearchReady -BaseUrl $baseUrl)) {
+            if (-not $KeepServer -and $serverInfo -and $serverInfo.pid) {
+                Stop-ProcessTree -ProcessId ([int]$serverInfo.pid)
+            }
             Write-Error "Search warmup failed for $baseUrl"
             exit 1
         }
@@ -140,6 +213,7 @@ foreach ($script in $scripts) {
     $progressLineCount = 0
     $chunkStartedAt = Get-Date
     $doneSeen = $false
+    $chunkFailedSeen = $false
     $doneGraceDeadline = $null
     while (-not $proc.HasExited) {
         Start-Sleep -Seconds 2
@@ -153,17 +227,19 @@ foreach ($script in $scripts) {
                     if (-not $doneGraceDeadline) {
                         $doneGraceDeadline = (Get-Date).AddSeconds(8)
                     }
+                } elseif ($line -match '^\[FAIL\]') {
+                    $chunkFailedSeen = $true
                 }
             }
         }
         if ($doneSeen -and $doneGraceDeadline -and (Get-Date) -ge $doneGraceDeadline) {
             Write-Host "[$name] forcing process tree shutdown after DONE"
-            Stop-ProcessTree -Pid $proc.Id
+            Stop-ProcessTree -ProcessId $proc.Id
             break
         }
         if (((Get-Date) - $chunkStartedAt).TotalSeconds -ge $maxChunkSeconds) {
             Write-Host "[$name] chunk timeout ${maxChunkSeconds}s"
-            Stop-ProcessTree -Pid $proc.Id
+            Stop-ProcessTree -ProcessId $proc.Id
             break
         }
         $proc.Refresh()
@@ -175,6 +251,8 @@ foreach ($script in $scripts) {
             Write-Host "[$name] $line"
             if ($line -match '^\[DONE\]') {
                 $doneSeen = $true
+            } elseif ($line -match '^\[FAIL\]') {
+                $chunkFailedSeen = $true
             }
         }
     }
@@ -183,7 +261,7 @@ foreach ($script in $scripts) {
     $stdoutText = if (Test-Path $stdoutPath) { Get-Content -Path $stdoutPath -Raw -ErrorAction SilentlyContinue } else { "" }
 
     $exitCode = if ($proc.HasExited) { $proc.ExitCode } else { 1 }
-    if ($progressText -match '\[FAIL\]' -or $stdoutText -match '"status"\s*:\s*"FAIL"') {
+    if ($chunkFailedSeen -or $progressText -match '\[FAIL\]' -or $stdoutText -match '"status"\s*:\s*"FAIL"') {
         $exitCode = 2
     } elseif (-not $proc.HasExited -and $doneSeen) {
         $exitCode = 0
@@ -196,10 +274,19 @@ foreach ($script in $scripts) {
             }
         }
     }
+    if ($exitCode -ne 0 -and [string]::IsNullOrWhiteSpace($progressText) -and [string]::IsNullOrWhiteSpace($stdoutText)) {
+        Write-Host "[$name] failed before progress/stdout was written. stderr=$stderrPath stdout=$stdoutPath"
+    }
     if ($exitCode -ne 0 -and $overallExit -eq 0) {
         $overallExit = $exitCode
     }
     Start-Sleep -Seconds 2
+}
+
+if (-not $KeepServer -and $serverInfo -and $serverInfo.pid) {
+    Write-Host "STOP E2E server pid=$($serverInfo.pid)"
+    Stop-ProcessTree -ProcessId ([int]$serverInfo.pid)
+    & (Join-Path $PSScriptRoot "cleanup-e2e.ps1") -Quiet
 }
 
 Write-Host "SESSION:$sessionId"

@@ -409,6 +409,15 @@ Composite Map is a powerful feature that aggregates multiple wafer maps into a s
 
 See [docs/COMPOSITE_MAP.md](docs/COMPOSITE_MAP.md) for detailed technical comparison.
 
+### E2E Regression Notes (2026-05-01)
+
+- Full E2E session `20260501-051432-1d7e3c8c`: chunk1/chunk2 passed, chunk3 failed in `tab-state-preserve` because measure grid selection restored as `[0]` instead of expected `[1,3]` after switching measure grid/detail tabs.
+- Root cause: the first click event in a double-click changed grid selection to the clicked cell before `enterGridImageViewMode()` captured the origin tab state. Detail-tab creation must preserve the grid selection that existed before the double-click.
+- Composite performance in the same run was healthy: 10 selected `filter_test` images generated in `processingTime=2.24s` with Numba enabled (`accumulator=numba_batch`, `batch_size=10`), and `composite_cache_v1` remained absent.
+- Subset/recolor E2E confirmed `square_maps_data.npz` is sufficient for subset and recolor, without recreating `composite_cache_v1`.
+- E2E cleanup issue found: when `start-e2e-server.ps1` did not write PID JSON/PID files, `run-e2e-playwright.ps1` could finish while leaving the Python E2E server alive on 8443. Runner cleanup must track the server PID and verify Python/browser/node leftovers after each run.
+- Final full visible E2E session `20260501-053905-cb887dc0` passed chunk1/chunk2/chunk3 (`7 + 4 + 5` records). It covered wafer/composite/measure/label/mylot grid vs detail-tab preservation, composite 10-image Numba performance, `square_maps_data.npz` subset/recolor reuse, and post-run cleanup verification. After cleanup there were no E2E server listeners/PID files, no E2E `api.main` Python process, and no Playwright MCP leftovers.
+
 ## Development Guidelines
 
 See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for full development guide.

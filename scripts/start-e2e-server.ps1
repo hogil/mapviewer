@@ -88,10 +88,12 @@ if (-not (Test-Path $logDir)) {
     New-Item -ItemType Directory -Path $logDir | Out-Null
 }
 $readyPath = Join-Path $logDir "e2e-server.last-ready.txt"
+$readyJsonPath = Join-Path $logDir "e2e-server.last-ready.json"
 
 $stdoutPath = Join-Path $logDir ("e2e-server-{0}.out.log" -f $httpsPort)
 $stderrPath = Join-Path $logDir ("e2e-server-{0}.err.log" -f $httpsPort)
-Remove-Item $stdoutPath, $stderrPath, $readyPath -Force -ErrorAction SilentlyContinue
+$pidPath = Join-Path $logDir ("e2e-server-{0}.pid" -f $httpsPort)
+Remove-Item $stdoutPath, $stderrPath, $readyPath, $readyJsonPath, $pidPath -Force -ErrorAction SilentlyContinue
 
 $env:PYTHONIOENCODING = "utf-8"
 $env:PYTHONUNBUFFERED = "1"
@@ -127,6 +129,15 @@ $proc = Start-Process python `
 if (Wait-ForListen -Port $httpsPort) {
     $readyLine = "READY:{0}" -f $httpsPort
     Set-Content -Path $readyPath -Value $readyLine -Encoding ascii
+    Set-Content -Path $pidPath -Value ([string]$proc.Id) -Encoding ascii
+    @{
+        status = "READY"
+        port = $httpsPort
+        pid = $proc.Id
+        stdout = $stdoutPath
+        stderr = $stderrPath
+        startedAt = (Get-Date).ToString("o")
+    } | ConvertTo-Json -Compress | Set-Content -Path $readyJsonPath -Encoding utf8
     Write-Output $readyLine
     exit 0
 }

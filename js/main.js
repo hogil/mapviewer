@@ -2042,6 +2042,22 @@ class WaferMapViewer {
             const cached = this.pageImageCache.get(pageId);
             if (cached.path === this.selectedImagePath && cached.bitmap) {
                 console.log(`⚡ [RESTORE] Restore cached image bitmap for page ${pageId}`);
+                this.gridMode = false;
+                this.viewMode = state.viewMode || this.viewMode || 'single';
+                this.singleImageFromGrid = state.singleImageFromGrid || this.viewMode === 'gridImage';
+
+                const gridEl = document.getElementById('image-grid');
+                const gridControls = document.getElementById('grid-controls');
+                const gridScrollWrapper = gridEl?.closest('.grid-scroll-wrapper') || gridEl?.parentElement;
+                if (gridEl) gridEl.style.display = 'none';
+                if (gridControls) gridControls.style.display = 'none';
+                if (gridScrollWrapper?.classList?.contains('grid-scroll-wrapper')) {
+                    gridScrollWrapper.style.display = 'none';
+                }
+                document.body.classList.remove('grid-mode-active');
+                this.dom.viewerContainer?.classList?.remove('grid-mode');
+                this.dom.viewerContainer?.classList?.add('single-image-mode');
+
                 this.currentImage = cached.bitmap;
                 this.currentImageBitmap = cached.bitmap;
                 this.originalWidth = cached.width;
@@ -2262,6 +2278,10 @@ class WaferMapViewer {
         }
         this.hideCompositeInlineStatus();
         const state = page.state || {};
+        const pageGridScrollTop = (
+            state.savedViewState?.type === 'grid' &&
+            Number.isFinite(Number(state.savedViewState.scrollTop))
+        ) ? Number(state.savedViewState.scrollTop) : null;
         this.activePageRole = page.role || 'blank';
         this.savedViewState = state.savedViewState ? this.deepCloneSimple(state.savedViewState) : null;
         this.waferMapExplorerState = state.waferMapExplorerState ? this.deepCloneSimple(state.waferMapExplorerState) : null;
@@ -2381,11 +2401,11 @@ class WaferMapViewer {
 
         let restoredFromCache = false;
         let restoredGridImage = false;
-        if (!pendingResult && page?.id) {
-            restoredFromCache = this.restoreCachedPageView(page.id, state);
-        }
         if (!pendingResult && this.viewMode === 'gridImage' && this.gridViewSaveState) {
             restoredGridImage = await this.restoreGridImageViewFromState();
+        }
+        if (!pendingResult && !restoredGridImage && page?.id) {
+            restoredFromCache = this.restoreCachedPageView(page.id, state);
         }
 
         if (pendingResult) {
@@ -2406,7 +2426,16 @@ class WaferMapViewer {
             await this.restoreSavedViewState();
         }
 
-        this.restoreWaferMapExplorerState({ skipGrid: restoredFromCache });
+        const skipExplorerGridRestore =
+            restoredFromCache ||
+            restoredGridImage ||
+            state.savedViewState?.type === 'grid' ||
+            this.savedViewState?.type === 'grid' ||
+            this.viewMode === 'gridImage' ||
+            this.viewMode === 'single' ||
+            this.singleImageFromGrid === true ||
+            this.gridMode === false;
+        this.restoreWaferMapExplorerState({ skipGrid: skipExplorerGridRestore });
         this.restoreLabelExplorerState();
         if (!restoredFromCache && !restoredGridImage && this.gridMode && this.gridSelectedIdxs?.length) {
             this.updateGridSelection();
@@ -2446,6 +2475,25 @@ class WaferMapViewer {
             const _sw = _grid?.closest('.grid-scroll-wrapper') || _grid?.parentElement;
             if (_sw) _sw.style.display = '';
             if (_grid) _grid.style.display = 'grid';
+        }
+
+        if (this.gridMode && this.viewMode !== 'gridImage' && pageGridScrollTop !== null && pageGridScrollTop > 0) {
+            const restorePageGridScroll = () => {
+                if (!this.gridMode || this.viewMode === 'gridImage') return;
+                const grid = document.getElementById('image-grid');
+                const scrollWrapper = grid?.closest('.grid-scroll-wrapper') || grid?.parentElement;
+                if (!scrollWrapper) return;
+                scrollWrapper.scrollTop = pageGridScrollTop;
+                if (this.savedViewState?.type === 'grid') {
+                    this.savedViewState.scrollTop = pageGridScrollTop;
+                }
+                this.invalidateGridOffsetCache?.();
+                this.loadVisibleGridThumbnails?.({ cancelExisting: false });
+            };
+            requestAnimationFrame(restorePageGridScroll);
+            setTimeout(restorePageGridScroll, 120);
+            setTimeout(restorePageGridScroll, 350);
+            setTimeout(restorePageGridScroll, 700);
         }
     }
 
@@ -20276,11 +20324,19 @@ class WaferMapViewer {
                         images: [...saveImages],
                         scrollTop: currentScrollTop,
                         lotMode: this.lotMode,
+                        selectedIndices: [...(this.gridSelectedIdxs || [])],
+                        selectedImagePaths: (this.gridSelectedIdxs || [])
+                            .map(selIdx => this.currentGridImages?.[selIdx])
+                            .filter(Boolean),
                     };
                 } else {
                     this.savedViewState.scrollTop = currentScrollTop;
                     this.savedViewState.images = [...saveImages];
                     this.savedViewState.lotMode = this.lotMode;
+                    this.savedViewState.selectedIndices = [...(this.gridSelectedIdxs || [])];
+                    this.savedViewState.selectedImagePaths = (this.gridSelectedIdxs || [])
+                        .map(selIdx => this.currentGridImages?.[selIdx])
+                        .filter(Boolean);
                 }
             }
 
@@ -22485,7 +22541,11 @@ class WaferMapViewer {
                     type: 'grid',
                     images: [...this.selectedImages],
                     scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
-                    lotMode: this.lotMode
+                    lotMode: this.lotMode,
+                    selectedIndices: [...this.gridSelectedIdxs],
+                    selectedImagePaths: this.gridSelectedIdxs
+                        .map(idx => this.currentGridImages?.[idx])
+                        .filter(Boolean),
                 };
             }
         }
@@ -22503,6 +22563,7 @@ class WaferMapViewer {
 
         const isCtrl = e && (e.ctrlKey || e.metaKey);
         const isShift = e && e.shiftKey;
+        const previousSelection = Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : [];
 
         if (isShift && this.gridLastClickedIdx !== undefined) {
             // Shift+클릭: 범위 선택
@@ -22524,6 +22585,11 @@ class WaferMapViewer {
             }
         } else {
             // 단일 클릭: 기존 선택 해제하고 현재 항목만 선택
+            this._gridSelectionBeforeLastPrimaryClick = {
+                idx,
+                timestamp: performance.now(),
+                indices: previousSelection,
+            };
             this.gridSelectedIdxs = [idx];
             this.gridSelectedSet = new Set([idx]);
         }
@@ -22802,7 +22868,22 @@ class WaferMapViewer {
      */
     enterGridImageViewMode(idx) {
         const gridImages = Array.isArray(this.currentGridImages) ? [...this.currentGridImages] : [];
-        const gridSelectedIdxs = Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : [];
+        let gridSelectedIdxs = Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : [];
+        const preDblClickSelection = this._gridSelectionBeforeLastPrimaryClick;
+        if (
+            preDblClickSelection &&
+            preDblClickSelection.idx === idx &&
+            performance.now() - preDblClickSelection.timestamp < 900 &&
+            Array.isArray(preDblClickSelection.indices) &&
+            preDblClickSelection.indices.length > 0
+        ) {
+            gridSelectedIdxs = preDblClickSelection.indices
+                .filter(selIdx => Number.isInteger(selIdx) && selIdx >= 0 && selIdx < gridImages.length)
+                .sort((a, b) => a - b);
+            this.gridSelectedIdxs = [...gridSelectedIdxs];
+            this.gridSelectedSet = new Set(gridSelectedIdxs);
+        }
+        this._gridSelectionBeforeLastPrimaryClick = null;
         const savedSnapshot = this.captureActivePageState();
         this._syncGridPrefsAcrossPageStates(savedSnapshot.gridCols, savedSnapshot.gridThumbSize);
         const originPage = this.pageManager?.getActivePage ? this.pageManager.getActivePage() : null;
@@ -22862,6 +22943,7 @@ class WaferMapViewer {
                 const targetRole = baseRole === 'mylot' ? 'mylot'
                     : baseRole === 'composite' ? 'composite'
                     : baseRole === 'label' ? 'label'
+                    : baseRole === 'measure' ? 'measure'
                     : 'wafer';
 
                 // 현재 페이지 다음에 삽입하기 위해 createPage 직접 호출
@@ -22942,6 +23024,10 @@ class WaferMapViewer {
                     compositeSession: this.isCompositeMode ? this.cloneCompositeSession() : null,
                     selectedFolders: this.selectedFolders ? Array.from(this.selectedFolders) : [],
                     lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || null,
+                    selectedIndices: [...gridSelectedIdxs],
+                    selectedImagePaths: gridSelectedIdxs
+                        .map(selIdx => gridImages[selIdx])
+                        .filter(Boolean),
                 };
                 console.log(`📍 [ENTER_GRID_IMAGE] savedViewState 생성, scrollTop 보존: ${preservedScrollTop}px`);
             } else {
@@ -29249,10 +29335,18 @@ class WaferMapViewer {
                         images: [...this.currentGridImages],
                         scrollTop: currentScrollTop,
                         lotMode: this.lotMode,
+                        selectedIndices: [...(this.gridSelectedIdxs || [])],
+                        selectedImagePaths: (this.gridSelectedIdxs || [])
+                            .map(selIdx => this.currentGridImages?.[selIdx])
+                            .filter(Boolean),
                     };
                 } else {
                     this.savedViewState.scrollTop = currentScrollTop;
                     this.savedViewState.lotMode = this.lotMode;
+                    this.savedViewState.selectedIndices = [...(this.gridSelectedIdxs || [])];
+                    this.savedViewState.selectedImagePaths = (this.gridSelectedIdxs || [])
+                        .map(selIdx => this.currentGridImages?.[selIdx])
+                        .filter(Boolean);
                 }
             }
 

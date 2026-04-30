@@ -48,7 +48,13 @@ async function createRunner(scriptFile) {
 
   const browser = await chromium.launch({
     headless,
-    args: ['--window-size=1920,1080'],
+    args: [
+      '--window-size=1920,1080',
+      '--window-position=40,40',
+      '--start-maximized',
+      '--disable-background-timer-throttling',
+      '--disable-renderer-backgrounding',
+    ],
   });
   const context = await browser.newContext({
     ignoreHTTPSErrors: true,

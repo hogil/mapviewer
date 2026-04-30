@@ -18,6 +18,7 @@ const { createRunner } = require('./e2e_playwright_session');
     process.env.IMAGES_ROOT || (process.platform === 'win32' ? 'D:/project/data/wm-811k' : '/appdata/appuser/images')
   );
   const compositeInputCacheDir = path.join(imagesRoot, 'composite_cache_v1');
+  const COMPOSITE_E2E_TIMEOUT_MS = 90000;
 
   function removeCompositeInputCacheDir() {
     fs.rmSync(compositeInputCacheDir, { recursive: true, force: true });
@@ -221,6 +222,179 @@ const { createRunner } = require('./e2e_playwright_session');
         rect.height > 0
       );
     }, selector);
+  }
+
+  function normalizePathForCompare(value) {
+    return String(value || '').replace(/\\/g, '/');
+  }
+
+  async function getTabVisualState(label = '') {
+    return await page.evaluate((stateLabel) => {
+      const v = window.viewer;
+      const grid = document.getElementById('image-grid');
+      const scrollWrapper = grid?.closest('.grid-scroll-wrapper') || grid?.parentElement || null;
+      const canvas = document.getElementById('image-canvas');
+      const overlay = document.getElementById('overlay-canvas');
+      const gridStyle = grid ? getComputedStyle(grid) : null;
+      const wrapperStyle = scrollWrapper ? getComputedStyle(scrollWrapper) : null;
+      const canvasStyle = canvas ? getComputedStyle(canvas) : null;
+      const gridActuallyVisible =
+        !!grid &&
+        !!scrollWrapper &&
+        gridStyle?.display !== 'none' &&
+        wrapperStyle?.display !== 'none' &&
+        grid.getBoundingClientRect().width > 0 &&
+        scrollWrapper.getBoundingClientRect().height > 0;
+      const visibleGridWraps = gridActuallyVisible
+        ? Array.from(grid.querySelectorAll('.grid-thumb-wrap')).filter((wrap) => {
+            const rect = wrap.getBoundingClientRect();
+            const style = getComputedStyle(wrap);
+            return style.display !== 'none' && rect.width > 0 && rect.height > 0;
+          }).length
+        : 0;
+      const activePage = v.pageManager?.getActivePage?.() || null;
+      return {
+        label: stateLabel,
+        activePageId: v.pageManager?.activePageId || null,
+        activeTitle: activePage?.title || null,
+        role: activePage?.role || null,
+        pages: (v.pageManager?.pages || []).map((p) => ({
+          id: p.id,
+          title: p.title,
+          role: p.role,
+          hasState: !!p.state,
+          stateViewMode: p.state?.viewMode || null,
+          stateGridMode: !!p.state?.gridMode,
+        })),
+        gridMode: !!v.gridMode,
+        viewMode: v.viewMode || null,
+        singleImageFromGrid: !!v.singleImageFromGrid,
+        selectedImagePath: v.selectedImagePath || null,
+        currentGridImagesLen: v.currentGridImages?.length || 0,
+        selectedImagesLen: v.selectedImages?.length || 0,
+        gridSelectedIdxs: [...(v.gridSelectedIdxs || [])],
+        selectedFolders: [...(v.selectedFolders || [])],
+        scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
+        maxScrollTop: scrollWrapper
+          ? Math.max(0, scrollWrapper.scrollHeight - scrollWrapper.clientHeight)
+          : 0,
+        gridDisplay: gridStyle?.display || null,
+        wrapperDisplay: wrapperStyle?.display || null,
+        canvasDisplay: canvasStyle?.display || null,
+        canvasVisible:
+          !!canvas &&
+          canvasStyle?.display !== 'none' &&
+          canvas.getBoundingClientRect().width > 0 &&
+          canvas.getBoundingClientRect().height > 0,
+        overlayDisplay: overlay ? getComputedStyle(overlay).display : null,
+        visibleGridWraps,
+        totalGridWraps: grid?.querySelectorAll('.grid-thumb-wrap').length || 0,
+        labelSelected: [...(v.labelSelection?.selected || [])],
+        labelSelectedClasses: [...(v.labelSelection?.selectedClasses || [])],
+        overlayMode: v.overlayMode || null,
+        measureCheckedItems: Array.isArray(v._measureCheckedItems)
+          ? v._measureCheckedItems.map((item) => ({
+              type: item?.type || null,
+              key: item?.key ?? null,
+              label: item?.label || null,
+            }))
+          : [],
+      };
+    }, label);
+  }
+
+  async function activatePageById(pageId, waitFor = 'any') {
+    await page.evaluate((id) => {
+      window.viewer.pageManager.activatePage(id);
+    }, pageId);
+    if (waitFor === 'grid') {
+      await page.waitForFunction(
+        (id) => {
+          const v = window.viewer;
+          const grid = document.getElementById('image-grid');
+          const sw = grid?.closest('.grid-scroll-wrapper') || grid?.parentElement;
+          return (
+            v.pageManager?.activePageId === id &&
+            v.gridMode === true &&
+            !!grid &&
+            !!sw &&
+            getComputedStyle(grid).display !== 'none' &&
+            getComputedStyle(sw).display !== 'none' &&
+            document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0
+          );
+        },
+        pageId,
+        { timeout: 30000 }
+      );
+    } else if (waitFor === 'single') {
+      await page.waitForFunction(
+        (id) => {
+          const v = window.viewer;
+          const canvas = document.getElementById('image-canvas');
+          return (
+            v.pageManager?.activePageId === id &&
+            v.gridMode === false &&
+            !!v.selectedImagePath &&
+            !!canvas &&
+            getComputedStyle(canvas).display !== 'none'
+          );
+        },
+        pageId,
+        { timeout: 30000 }
+      );
+    } else {
+      await page.waitForFunction(
+        (id) => window.viewer.pageManager?.activePageId === id,
+        pageId,
+        { timeout: 30000 }
+      );
+    }
+    await sleep(900);
+  }
+
+  function expectGridPreserved(state, expected = {}) {
+    expect(state.gridMode === true, `${state.label} gridMode=${state.gridMode}`);
+    expect(state.visibleGridWraps > 0, `${state.label} visibleGridWraps=${state.visibleGridWraps}, display=${state.gridDisplay}/${state.wrapperDisplay}`);
+    expect(state.canvasVisible === false, `${state.label} canvas visible in grid=${JSON.stringify(state)}`);
+    if (expected.selectedIdxs) {
+      expect(
+        JSON.stringify(state.gridSelectedIdxs) === JSON.stringify(expected.selectedIdxs),
+        `${state.label} selectedIdxs=${JSON.stringify(state.gridSelectedIdxs)} expected=${JSON.stringify(expected.selectedIdxs)}`
+      );
+    }
+    if (expected.scrollTopMin && state.maxScrollTop > 0) {
+      expect(state.scrollTop >= expected.scrollTopMin, `${state.label} scrollTop=${state.scrollTop}`);
+    }
+    if (expected.labelClass) {
+      expect(
+        state.labelSelectedClasses.includes(expected.labelClass),
+        `${state.label} labelSelectedClasses=${JSON.stringify(state.labelSelectedClasses)}`
+      );
+    }
+  }
+
+  function expectSinglePreserved(state, expected = {}) {
+    expect(state.gridMode === false, `${state.label} gridMode=${state.gridMode}`);
+    expect(
+      state.viewMode === 'gridImage' || state.viewMode === 'single',
+      `${state.label} viewMode=${state.viewMode}`
+    );
+    expect(state.canvasVisible === true, `${state.label} canvas hidden=${JSON.stringify(state)}`);
+    expect(
+      state.visibleGridWraps === 0,
+      `${state.label} grid leaked into single view=${JSON.stringify({
+        visibleGridWraps: state.visibleGridWraps,
+        totalGridWraps: state.totalGridWraps,
+        gridDisplay: state.gridDisplay,
+        wrapperDisplay: state.wrapperDisplay,
+      })}`
+    );
+    if (expected.path) {
+      expect(
+        normalizePathForCompare(state.selectedImagePath) === normalizePathForCompare(expected.path),
+        `${state.label} selectedImagePath=${state.selectedImagePath} expected=${expected.path}`
+      );
+    }
   }
 
   async function getVisibleGridThumbSummary() {
@@ -471,19 +645,40 @@ const { createRunner } = require('./e2e_playwright_session');
     const compositeInputCacheBefore = getCompositeInputCacheState();
 
     await loadFolder('filter_test');
-    await setSelection([0, 1, 2]);
-    await page.evaluate(() => window.viewer.handleCompositeCreate());
+    const compositeSourceIdxs = Array.from({ length: 10 }, (_, idx) => idx);
+    await setSelection(compositeSourceIdxs);
+    const compositePerf = await page.evaluate(async () => {
+      const startedAt = performance.now();
+      await window.viewer.handleCompositeCreate();
+      const elapsedMs = performance.now() - startedAt;
+      return {
+        elapsedMs,
+        elapsedSec: Math.round(elapsedMs / 100) / 10,
+        sourceImageCount: window.viewer.compositeSession?.sourceImageCount || null,
+        processingTime: window.viewer.compositeSession?.processingTime || null,
+        numba: window.viewer.compositeSession?.numba || null,
+      };
+    });
     await page.waitForFunction(
       () =>
         !!window.viewer.pageManager &&
         window.viewer.pageManager.getActivePage()?.role === 'composite',
       null,
-      { timeout: 30000 }
+      { timeout: COMPOSITE_E2E_TIMEOUT_MS }
     );
     await page.waitForFunction(
       () => window.viewer.currentGridImages?.length > 0,
       null,
-      { timeout: 30000 }
+      { timeout: COMPOSITE_E2E_TIMEOUT_MS }
+    );
+    expect(compositePerf.sourceImageCount === 10, `composite source count=${JSON.stringify(compositePerf)}`);
+    expect(
+      Number(compositePerf.processingTime) > 0 && Number(compositePerf.processingTime) < 10,
+      `10-image composite server time too slow=${JSON.stringify(compositePerf)}`
+    );
+    expect(
+      compositePerf.numba?.enabled === true && String(compositePerf.numba?.accumulator || '').includes('numba'),
+      `composite numba not active=${JSON.stringify(compositePerf)}`
     );
     const toastSeen = await page.evaluate(() =>
       Array.from(document.body.querySelectorAll('div')).some(
@@ -570,7 +765,7 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.waitForFunction(
       () => !!window.viewer.pageManager?.pages?.some((p) => p.role === 'composite'),
       null,
-      { timeout: 30000 }
+      { timeout: COMPOSITE_E2E_TIMEOUT_MS }
     );
     const pendingCompositePages = await page.evaluate(() => {
       const v = window.viewer;
@@ -588,7 +783,7 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.waitForFunction(
       () => Array.isArray(window.__testToastMessages) && window.__testToastMessages.length >= 1,
       null,
-      { timeout: 30000 }
+      { timeout: COMPOSITE_E2E_TIMEOUT_MS }
     );
     await sleep(2200);
     const pendingToastBeforeActivate = await page.evaluate(() => ({
@@ -607,7 +802,7 @@ const { createRunner } = require('./e2e_playwright_session');
         window.viewer.pageManager?.getActivePage?.()?.role === 'composite' &&
         (window.viewer.currentGridImages?.length || 0) > 0,
       null,
-      { timeout: 30000 }
+      { timeout: COMPOSITE_E2E_TIMEOUT_MS }
     );
     await sleep(2200);
     const pendingToastAfterActivate = await page.evaluate(() => ({
@@ -643,7 +838,7 @@ const { createRunner } = require('./e2e_playwright_session');
         window.viewer.pageManager.getActivePage?.()?.role === 'composite' &&
         (window.viewer.currentGridImages?.length || 0) > 0,
       null,
-      { timeout: 30000 }
+      { timeout: COMPOSITE_E2E_TIMEOUT_MS }
     );
     const originAfterCompositeReturn = await page.evaluate(async (before) => {
       const v = window.viewer;
@@ -863,6 +1058,7 @@ const { createRunner } = require('./e2e_playwright_session');
       originBeforeComposite,
       originAfterCompositeReturn,
       compositeInputCacheBefore,
+      compositePerf,
       compositeInputCacheAfter,
       measureBefore,
       measureAfterRoundTripSignature,
@@ -871,6 +1067,229 @@ const { createRunner } = require('./e2e_playwright_session');
       measureAfterGridColsSignature,
       measureAfter,
       gridSelectionRestore,
+    };
+  });
+
+  await record('tab-state-preserve', '탭별 grid/single/selection/scroll/explorer 상태 보존', async () => {
+    await boot('chunk3-tab-preserve-composite');
+    await loadFolder('palette_3k');
+    await page.evaluate(() => window.viewer.applyGridColsChange(3, { maxCols: 20 }));
+    await sleep(800);
+    await scrollGridToRatio(0.55);
+    await sleep(800);
+    await setSelection([2, 4, 6]);
+    const waferBeforeComposite = await getTabVisualState('wafer-before-composite');
+    const waferPageId = waferBeforeComposite.activePageId;
+    await page.evaluate(() => window.viewer.handleCompositeCreate());
+    await page.waitForFunction(
+      () =>
+        window.viewer.pageManager?.getActivePage?.()?.role === 'composite' &&
+        window.viewer.gridMode === true &&
+        (window.viewer.currentGridImages?.length || 0) > 0,
+      null,
+      { timeout: COMPOSITE_E2E_TIMEOUT_MS }
+    );
+    await sleep(1200);
+    const compositeGridBefore = await getTabVisualState('composite-grid-before-detail');
+    const compositeGridPageId = compositeGridBefore.activePageId;
+    await page.locator('#image-grid .grid-thumb-wrap').first().dblclick();
+    await page.waitForFunction(
+      () =>
+        window.viewer.pageManager?.getActivePage?.()?.role === 'composite' &&
+        window.viewer.gridMode === false &&
+        window.viewer.viewMode === 'gridImage' &&
+        !!window.viewer.selectedImagePath,
+      null,
+      { timeout: 30000 }
+    );
+    await sleep(1500);
+    const compositeSingleBefore = await getTabVisualState('composite-single-before-switch');
+    const compositeSinglePageId = compositeSingleBefore.activePageId;
+
+    await activatePageById(waferPageId, 'grid');
+    const waferAfterComposite = await getTabVisualState('wafer-after-composite-switch');
+    await activatePageById(compositeGridPageId, 'grid');
+    const compositeGridAfter = await getTabVisualState('composite-grid-after-switch');
+    await activatePageById(compositeSinglePageId, 'single');
+    const compositeSingleAfter = await getTabVisualState('composite-single-after-switch');
+    append(`[TAB_STATE] composite preserve ok :: ${JSON.stringify({ waferPageId, compositeGridPageId, compositeSinglePageId })}\n`);
+
+    expectGridPreserved(waferAfterComposite, { selectedIdxs: [2, 4, 6] });
+    expect(
+      waferBeforeComposite.maxScrollTop === 0 ||
+        Math.abs(waferAfterComposite.scrollTop - waferBeforeComposite.scrollTop) <= 12,
+      `wafer scroll not preserved=${JSON.stringify({ before: waferBeforeComposite, after: waferAfterComposite })}`
+    );
+    expectGridPreserved(compositeGridAfter);
+    expectSinglePreserved(compositeSingleAfter, { path: compositeSingleBefore.selectedImagePath });
+
+    await boot('chunk3-tab-preserve-measure');
+    await loadFolder('palette_3k');
+    const measureSelection = await findCommonMeasureSelection('f', 4, 24);
+    await setSelection(measureSelection.indices);
+    await page.evaluate(async (payload) => {
+      const v = window.viewer;
+      v._measureCheckedItems = [
+        { type: 'failbit', key: null, label: 'Failbit' },
+        payload.item,
+      ];
+      await v._applyMeasureSelection();
+    }, measureSelection);
+    await page.waitForFunction(
+      () =>
+        window.viewer.pageManager?.getActivePage?.()?.role === 'measure' &&
+        window.viewer.gridMode === true &&
+        (window.viewer.currentGridImages?.length || 0) > 0,
+      null,
+      { timeout: 30000 }
+    );
+    await sleep(1200);
+    await setSelection([1, 3]);
+    const measureGridBefore = await getTabVisualState('measure-grid-before-detail');
+    const measureGridPageId = measureGridBefore.activePageId;
+    await page.locator('#image-grid .grid-thumb-wrap').first().dblclick();
+    await page.waitForFunction(
+      () =>
+        window.viewer.pageManager?.getActivePage?.()?.role === 'measure' &&
+        window.viewer.gridMode === false &&
+        window.viewer.viewMode === 'gridImage' &&
+        !!window.viewer.selectedImagePath,
+      null,
+      { timeout: 30000 }
+    );
+    await sleep(1500);
+    const measureSingleBefore = await getTabVisualState('measure-single-before-switch');
+    const measureSinglePageId = measureSingleBefore.activePageId;
+    await activatePageById(measureGridPageId, 'grid');
+    const measureGridAfter = await getTabVisualState('measure-grid-after-switch');
+    await activatePageById(measureSinglePageId, 'single');
+    const measureSingleAfter = await getTabVisualState('measure-single-after-switch');
+    append(`[TAB_STATE] measure preserve ok :: ${JSON.stringify({ measureGridPageId, measureSinglePageId })}\n`);
+    expectGridPreserved(measureGridAfter, { selectedIdxs: [1, 3] });
+    expect(
+      measureGridAfter.overlayMode === 'multi' && measureGridAfter.measureCheckedItems.length === 2,
+      `measure overlay state lost=${JSON.stringify(measureGridAfter)}`
+    );
+    expectSinglePreserved(measureSingleAfter, { path: measureSingleBefore.selectedImagePath });
+
+    await boot('chunk3-tab-preserve-label');
+    const labelClass = await page.evaluate(() => {
+      const classNames = Array.from(document.querySelectorAll('.label-explorer-frame li > div'))
+        .map((el) => (el.textContent || '').replace(/[▸▾]/g, '').trim())
+        .filter(Boolean);
+      return Array.from(new Set(classNames))[0] || null;
+    });
+    expect(labelClass, 'label class not found');
+    await page.evaluate(async (className) => {
+      const v = window.viewer;
+      await v.showGridFromClass(className);
+      v.labelSelection.selectedClasses = [className];
+      v.updateLabelExplorerSelection?.();
+    }, labelClass);
+    await page.waitForFunction(
+      () =>
+        window.viewer.pageManager?.getActivePage?.()?.role === 'label' &&
+        window.viewer.gridMode === true &&
+        (window.viewer.currentGridImages?.length || 0) > 0,
+      null,
+      { timeout: 30000 }
+    );
+    await sleep(1200);
+    await setSelection([0, 1]);
+    const labelGridBefore = await getTabVisualState('label-grid-before-detail');
+    const labelGridPageId = labelGridBefore.activePageId;
+    await page.locator('#image-grid .grid-thumb-wrap').first().dblclick();
+    await page.waitForFunction(
+      () =>
+        window.viewer.pageManager?.getActivePage?.()?.role === 'label' &&
+        window.viewer.gridMode === false &&
+        window.viewer.viewMode === 'gridImage' &&
+        !!window.viewer.selectedImagePath,
+      null,
+      { timeout: 30000 }
+    );
+    await sleep(1500);
+    const labelSingleBefore = await getTabVisualState('label-single-before-switch');
+    const labelSinglePageId = labelSingleBefore.activePageId;
+    await activatePageById(labelGridPageId, 'grid');
+    const labelGridAfter = await getTabVisualState('label-grid-after-switch');
+    await activatePageById(labelSinglePageId, 'single');
+    const labelSingleAfter = await getTabVisualState('label-single-after-switch');
+    append(`[TAB_STATE] label preserve ok :: ${JSON.stringify({ labelClass, labelGridPageId, labelSinglePageId })}\n`);
+    expectGridPreserved(labelGridAfter, { selectedIdxs: [0, 1], labelClass });
+    expectSinglePreserved(labelSingleAfter, { path: labelSingleBefore.selectedImagePath });
+
+    await boot('chunk3-tab-preserve-mylot');
+    await loadFolder('palette_3k');
+    await page.evaluate(async () => {
+      const v = window.viewer;
+      if (!v.lotMode) {
+        v.toggleLotMode();
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+      }
+      const modal = await v._getMyLotModal();
+      const sample = v.currentGridImages.slice(0, 12);
+      modal.activeMode = 'lot';
+      modal.activeGroup = 'tab-preserve-group';
+      modal.currentEntries = [
+        { value: 'tab-preserve-lot', filename: 'tab-preserve-lot', path: sample[0], all_paths: sample },
+      ];
+      modal.selectedKeys = new Set(['tab-preserve-lot']);
+      await modal.openSelectionInViewer();
+    });
+    await page.waitForFunction(
+      () =>
+        window.viewer.pageManager?.getActivePage?.()?.role === 'mylot' &&
+        window.viewer.gridMode === true &&
+        (window.viewer.currentGridImages?.length || 0) > 0,
+      null,
+      { timeout: 30000 }
+    );
+    await sleep(1200);
+    await setSelection([0, 2]);
+    const mylotGridBefore = await getTabVisualState('mylot-grid-before-detail');
+    const mylotGridPageId = mylotGridBefore.activePageId;
+    await page.locator('#image-grid .grid-thumb-wrap').first().dblclick();
+    await page.waitForFunction(
+      () =>
+        window.viewer.pageManager?.getActivePage?.()?.role === 'mylot' &&
+        window.viewer.gridMode === false &&
+        window.viewer.viewMode === 'gridImage' &&
+        !!window.viewer.selectedImagePath,
+      null,
+      { timeout: 30000 }
+    );
+    await sleep(1500);
+    const mylotSingleBefore = await getTabVisualState('mylot-single-before-switch');
+    const mylotSinglePageId = mylotSingleBefore.activePageId;
+    await activatePageById(mylotGridPageId, 'grid');
+    const mylotGridAfter = await getTabVisualState('mylot-grid-after-switch');
+    await activatePageById(mylotSinglePageId, 'single');
+    const mylotSingleAfter = await getTabVisualState('mylot-single-after-switch');
+    append(`[TAB_STATE] mylot preserve ok :: ${JSON.stringify({ mylotGridPageId, mylotSinglePageId })}\n`);
+    expectGridPreserved(mylotGridAfter, { selectedIdxs: [0, 2] });
+    expectSinglePreserved(mylotSingleAfter, { path: mylotSingleBefore.selectedImagePath });
+
+    return {
+      waferBeforeComposite,
+      waferAfterComposite,
+      compositeGridBefore,
+      compositeGridAfter,
+      compositeSingleBefore,
+      compositeSingleAfter,
+      measureGridBefore,
+      measureGridAfter,
+      measureSingleBefore,
+      measureSingleAfter,
+      labelClass,
+      labelGridBefore,
+      labelGridAfter,
+      labelSingleBefore,
+      labelSingleAfter,
+      mylotGridBefore,
+      mylotGridAfter,
+      mylotSingleBefore,
+      mylotSingleAfter,
     };
   });
 
