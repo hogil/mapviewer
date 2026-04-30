@@ -85,7 +85,6 @@ const { createRunner } = require('./e2e_playwright_session');
       const v = window.viewer;
       v.gridSelectedIdxs = [...idxs];
       v.gridSelectedSet = new Set(idxs);
-      v.selectedImages = idxs.map((i) => v.currentGridImages[i]).filter(Boolean);
       v.updateGridSelection?.();
       v.flushGridSelectionUpdates?.();
     }, indices);
@@ -122,6 +121,151 @@ const { createRunner } = require('./e2e_playwright_session');
         rect.height > 0
       );
     }, selector);
+  }
+
+  async function openLowContextSubmenu(kind) {
+    const submenuSelector = kind === 'mc' ? '#context-mc-submenu' : '#context-mea-submenu';
+    const triggerSelector = kind === 'mc' ? '#context-mc-create' : '#context-mea-create';
+    await page.evaluate(() => window.viewer.hideContextMenu?.());
+    const point = await page.evaluate(() => {
+      const tab = document.getElementById('page-tab-bar')?.getBoundingClientRect();
+      const grid = document.getElementById('image-grid')?.getBoundingClientRect();
+      const limit = tab && tab.height > 0 ? tab.top : window.innerHeight;
+      const x = Math.max(260, Math.min(window.innerWidth - 260, (grid?.left || 220) + 120));
+      const y = Math.max(220, limit - 18);
+      return { x, y };
+    });
+    await page.evaluate(({ x, y }) => {
+      window.viewer.showContextMenu(
+        {
+          pageX: x + window.scrollX,
+          pageY: y + window.scrollY,
+          clientX: x,
+          clientY: y,
+          preventDefault() {},
+          stopPropagation() {},
+        },
+        0
+      );
+    }, point);
+    await page.waitForFunction(
+      () => getComputedStyle(document.getElementById('grid-context-menu')).display !== 'none',
+      null,
+      { timeout: 10000 }
+    );
+    const trigger = page.locator(triggerSelector);
+    const box = await trigger.boundingBox();
+    expect(!!box, `${kind} low trigger missing`);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForFunction(
+      (selector) => getComputedStyle(document.querySelector(selector)).display !== 'none',
+      submenuSelector,
+      { timeout: 10000 }
+    );
+    await page.waitForFunction(
+      (selector) => document.querySelectorAll(`${selector} .failbit-item input[type="checkbox"]`).length > 0,
+      submenuSelector,
+      { timeout: 10000 }
+    );
+    await page.evaluate((selector) => {
+      const item = Array.from(document.querySelectorAll(`${selector} .failbit-item`))
+        .find((el) => el.querySelector('input[type="checkbox"]'));
+      item?.click();
+    }, submenuSelector);
+    await sleep(200);
+    return await page.evaluate((selector) => {
+      const submenu = document.querySelector(selector);
+      const tab = document.getElementById('page-tab-bar')?.getBoundingClientRect();
+      const limit = tab && tab.height > 0 ? tab.top - 10 : window.innerHeight - 10;
+      const rect = submenu.getBoundingClientRect();
+      const button = submenu.querySelector('.mc-generate-btn, .measure-apply-btn');
+      const buttonRect = button?.getBoundingClientRect();
+      return {
+        selector,
+        limit,
+        top: rect.top,
+        bottom: rect.bottom,
+        height: rect.height,
+        buttonText: button?.textContent || '',
+        buttonTop: buttonRect?.top || 0,
+        buttonBottom: buttonRect?.bottom || 0,
+        buttonHeight: buttonRect?.height || 0,
+        display: getComputedStyle(submenu).display,
+      };
+    }, submenuSelector);
+  }
+
+  async function openContextMcStateAtIndex(index) {
+    await page.evaluate(() => window.viewer.hideContextMenu?.());
+    append(`[CM] open mc state index=${index}\n`);
+    const point = await page.evaluate((idx) => {
+      const wrap = document.querySelectorAll('#image-grid .grid-thumb-wrap')[idx];
+      const rect = wrap?.getBoundingClientRect();
+      if (!rect) return null;
+      return {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      };
+    }, index);
+    expect(!!point, `grid wrap missing index=${index}`);
+    await page.evaluate(({ x, y, index: idx }) => {
+      window.viewer.showContextMenu(
+        {
+          pageX: x + window.scrollX,
+          pageY: y + window.scrollY,
+          clientX: x,
+          clientY: y,
+          preventDefault() {},
+          stopPropagation() {},
+        },
+        idx
+      );
+    }, { ...point, index });
+    await page.waitForFunction(
+      () => getComputedStyle(document.getElementById('grid-context-menu')).display !== 'none',
+      null,
+      { timeout: 10000 }
+    );
+    append(`[CM] context opened index=${index}\n`);
+    await page.evaluate(() => window.viewer._openMcContextSubmenu?.());
+    await page.waitForFunction(
+      () => getComputedStyle(document.getElementById('context-mc-submenu')).display !== 'none',
+      null,
+      { timeout: 10000 }
+    );
+    append(`[CM] mc submenu opened index=${index}\n`);
+    const preCheckboxState = await page.evaluate(() => ({
+      selectedForModal: window.viewer.getSelectedImagesForModal?.()?.length || 0,
+      gridSelectedIdxs: [...(window.viewer.gridSelectedIdxs || [])],
+      currentGridImages: window.viewer.currentGridImages?.length || 0,
+      selectedImages: window.viewer.selectedImages?.length || 0,
+      listText: document.querySelector('#context-mc-submenu .mc-ctx-list')?.innerText?.slice(0, 80) || '',
+      itemCount: document.querySelectorAll('#context-mc-submenu .failbit-item').length,
+      checkboxCount: document.querySelectorAll('#context-mc-submenu .failbit-item input[type="checkbox"]').length,
+      cachedMcCtxKey: window.viewer._cachedMcCtxKey || '',
+      cachedMcKeys: !!window.viewer._cachedMcKeys,
+    }));
+    append(`[CM] mc pre-checkbox index=${index} ${JSON.stringify(preCheckboxState)}\n`);
+    await page.waitForFunction(
+      () => document.querySelectorAll('#context-mc-submenu .failbit-item input[type="checkbox"]').length > 0,
+      null,
+      { timeout: 10000 }
+    );
+    append(`[CM] mc submenu checkboxes ready index=${index}\n`);
+    await sleep(150);
+    return await page.evaluate(() => {
+      const panel = document.getElementById('context-mc-submenu');
+      const button = panel?.querySelector('.mc-generate-btn');
+      return {
+        itemCount: document.querySelectorAll('#context-mc-submenu .failbit-item').length,
+        checkedCount: document.querySelectorAll('#context-mc-submenu input[type="checkbox"]:checked').length,
+        buttonText: button?.textContent || '',
+        buttonDisabled: !!button?.disabled,
+        gridSelectedIdxs: [...(window.viewer.gridSelectedIdxs || [])],
+        selectedPanelDisplay: getComputedStyle(document.getElementById('selected-grid-images-panel')).display,
+        selectedPanelCount: document.getElementById('selected-count-badge')?.textContent || '',
+      };
+    });
   }
 
   async function fetchJson(targetPage, relativeUrl) {
@@ -411,6 +555,7 @@ const { createRunner } = require('./e2e_playwright_session');
     await loadFolder('filter_test');
     await setSelection([0, 1, 2]);
     await sleep(1000);
+    append('[CM] open initial context\n');
     const firstWrap = page.locator('#image-grid .grid-thumb-wrap').first();
     const firstWrapBox = await firstWrap.boundingBox();
     expect(!!firstWrapBox, 'first grid wrap missing');
@@ -432,6 +577,7 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(ctxComposite, 'ctx composite hidden');
     const ctxMeasure = await visible('#context-mea-create');
     expect(ctxMeasure, 'ctx measure hidden');
+    append('[CM] initial context visible\n');
     const mcCreate = page.locator('#context-mc-create');
     const mcBox = await mcCreate.boundingBox();
     expect(!!mcBox, 'mc context item missing');
@@ -441,12 +587,19 @@ const { createRunner } = require('./e2e_playwright_session');
       null,
       { timeout: 10000 }
     );
+    await page.waitForFunction(
+      () => document.querySelectorAll('#context-mc-submenu .failbit-item input[type="checkbox"]').length > 0,
+      null,
+      { timeout: 10000 }
+    );
     const mcSubmenuState = await page.evaluate(() => ({
       display: getComputedStyle(document.getElementById('context-mc-submenu')).display,
       itemCount: document.querySelectorAll('#context-mc-submenu .failbit-item').length,
+      checkboxCount: document.querySelectorAll('#context-mc-submenu .failbit-item input[type="checkbox"]').length,
     }));
     expect(mcSubmenuState.display !== 'none', `mc submenu hidden=${JSON.stringify(mcSubmenuState)}`);
-    expect(mcSubmenuState.itemCount > 0, `mc submenu empty=${mcSubmenuState.itemCount}`);
+    expect(mcSubmenuState.checkboxCount > 0, `mc submenu empty=${JSON.stringify(mcSubmenuState)}`);
+    append(`[CM] initial mc ${JSON.stringify(mcSubmenuState)}\n`);
     const meaCreate = page.locator('#context-mea-create');
     const meaBox = await meaCreate.boundingBox();
     expect(!!meaBox, 'mea context item missing');
@@ -456,12 +609,42 @@ const { createRunner } = require('./e2e_playwright_session');
       null,
       { timeout: 10000 }
     );
+    await page.waitForFunction(
+      () => document.querySelectorAll('#context-mea-submenu .failbit-item input[type="checkbox"]').length > 0,
+      null,
+      { timeout: 10000 }
+    );
     const meaSubmenuState = await page.evaluate(() => ({
       display: getComputedStyle(document.getElementById('context-mea-submenu')).display,
       itemCount: document.querySelectorAll('#context-mea-submenu .failbit-item').length,
+      checkboxCount: document.querySelectorAll('#context-mea-submenu .failbit-item input[type="checkbox"]').length,
     }));
     expect(meaSubmenuState.display !== 'none', `mea submenu hidden=${JSON.stringify(meaSubmenuState)}`);
-    expect(meaSubmenuState.itemCount > 0, `mea submenu empty=${meaSubmenuState.itemCount}`);
+    expect(meaSubmenuState.checkboxCount > 0, `mea submenu empty=${JSON.stringify(meaSubmenuState)}`);
+    append(`[CM] initial mea ${JSON.stringify(meaSubmenuState)}\n`);
+    const lowMcSubmenu = await openLowContextSubmenu('mc');
+    expect(lowMcSubmenu.bottom <= lowMcSubmenu.limit + 2, `low mc overlaps tab=${JSON.stringify(lowMcSubmenu)}`);
+    expect(lowMcSubmenu.buttonHeight > 0, `low mc button missing=${JSON.stringify(lowMcSubmenu)}`);
+    expect(lowMcSubmenu.buttonBottom <= lowMcSubmenu.limit + 2, `low mc button overlaps tab=${JSON.stringify(lowMcSubmenu)}`);
+    append(`[CM] low mc ${JSON.stringify(lowMcSubmenu)}\n`);
+    const lowMeaSubmenu = await openLowContextSubmenu('mea');
+    expect(lowMeaSubmenu.bottom <= lowMeaSubmenu.limit + 2, `low mea overlaps tab=${JSON.stringify(lowMeaSubmenu)}`);
+    expect(lowMeaSubmenu.buttonHeight > 0, `low mea button missing=${JSON.stringify(lowMeaSubmenu)}`);
+    expect(lowMeaSubmenu.buttonBottom <= lowMeaSubmenu.limit + 2, `low mea button overlaps tab=${JSON.stringify(lowMeaSubmenu)}`);
+    append(`[CM] low mea ${JSON.stringify(lowMeaSubmenu)}\n`);
+    await page.evaluate(() => window.viewer.hideContextMenu?.());
+    const freshMcState = await openContextMcStateAtIndex(4);
+    expect(freshMcState.itemCount > 1, `fresh mc list missing=${JSON.stringify(freshMcState)}`);
+    expect(freshMcState.checkedCount === 0, `fresh mc has stale checks=${JSON.stringify(freshMcState)}`);
+    expect(freshMcState.buttonText === '생성 (0)', `fresh mc stale button=${JSON.stringify(freshMcState)}`);
+    expect(freshMcState.buttonDisabled === true, `fresh mc button enabled=${JSON.stringify(freshMcState)}`);
+    expect(
+      JSON.stringify(freshMcState.gridSelectedIdxs) === JSON.stringify([4]),
+      `right click did not retarget selection=${JSON.stringify(freshMcState)}`
+    );
+    append(`[CM] fresh mc ${JSON.stringify(freshMcState)}\n`);
+    await page.evaluate(() => window.viewer.hideContextMenu?.());
+    await setSelection([0, 1, 2]);
     const path = await page.evaluate(() => window.viewer.currentGridImages[0]);
     await page.evaluate((p) => window.viewer.setRefMap(p), path);
     await sleep(500);
@@ -473,7 +656,26 @@ const { createRunner } = require('./e2e_playwright_session');
     await sleep(500);
     const overlay = await page.evaluate(() => window.viewer.overlayMode);
     expect(overlay === 'bin', `overlay=${overlay}`);
-    await page.evaluate(() => window.viewer.handleCompositeCreate());
+    append('[CM] bin overlay ready\n');
+    const mcBeforeGenerate = await openContextMcStateAtIndex(0);
+    expect(mcBeforeGenerate.checkedCount === 0, `mc generate opened stale=${JSON.stringify(mcBeforeGenerate)}`);
+    expect(
+      JSON.stringify(mcBeforeGenerate.gridSelectedIdxs) === JSON.stringify([0, 1, 2]),
+      `mc generate did not keep selected group=${JSON.stringify(mcBeforeGenerate)}`
+    );
+    append(`[CM] before generate ${JSON.stringify(mcBeforeGenerate)}\n`);
+    await page.evaluate(() => {
+      const item = Array.from(document.querySelectorAll('#context-mc-submenu .failbit-item'))
+        .find((el) => el.querySelector('input[type="checkbox"]'));
+      item?.click();
+    });
+    await page.waitForFunction(
+      () => document.querySelector('#context-mc-submenu .mc-generate-btn')?.textContent === '생성 (1)',
+      null,
+      { timeout: 10000 }
+    );
+    append('[CM] generate button armed\n');
+    await page.locator('#context-mc-submenu .mc-generate-btn').click();
     await page.waitForFunction(
       () =>
         !!window.viewer.pageManager &&
@@ -487,14 +689,60 @@ const { createRunner } = require('./e2e_playwright_session');
       () => window.viewer.currentGridImages.length
     );
     expect(compositeCount > 0, `compositeCount=${compositeCount}`);
+    const selectedPanelAfterComposite = await page.evaluate(() => {
+      const panel = document.getElementById('selected-grid-images-panel');
+      const style = panel ? getComputedStyle(panel) : null;
+      return {
+        activeRole: window.viewer.pageManager?.getActivePage?.()?.role || null,
+        isCompositeMode: !!window.viewer.isCompositeMode,
+        display: style?.display || null,
+        count: document.getElementById('selected-count-badge')?.textContent || null,
+        gridSelectedIdxs: [...(window.viewer.gridSelectedIdxs || [])],
+      };
+    });
+    const visibleFloatingPanelsAfterComposite = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('.failbit-panel'))
+        .map((panel) => {
+          const rect = panel.getBoundingClientRect();
+          const style = getComputedStyle(panel);
+          return {
+            id: panel.id,
+            display: style.display,
+            left: Math.round(rect.left),
+            top: Math.round(rect.top),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+            text: (panel.innerText || '').trim().slice(0, 80),
+          };
+        })
+        .filter((panel) => panel.display !== 'none' && panel.width > 0 && panel.height > 0)
+    );
+    expect(
+      selectedPanelAfterComposite.display === 'none',
+      `selected panel visible after composite=${JSON.stringify(selectedPanelAfterComposite)}`
+    );
+    expect(
+      selectedPanelAfterComposite.count === '0' && selectedPanelAfterComposite.gridSelectedIdxs.length === 0,
+      `selection not cleared after composite=${JSON.stringify(selectedPanelAfterComposite)}`
+    );
+    expect(
+      visibleFloatingPanelsAfterComposite.length === 0,
+      `floating composite/measure panel left visible=${JSON.stringify(visibleFloatingPanelsAfterComposite)}`
+    );
     return {
       ctxComposite,
       ctxMeasure,
       mcSubmenuState,
       meaSubmenuState,
+      lowMcSubmenu,
+      lowMeaSubmenu,
+      freshMcState,
+      mcBeforeGenerate,
       refVisible,
       overlay,
       compositeCount,
+      selectedPanelAfterComposite,
+      visibleFloatingPanelsAfterComposite,
     };
   });
 

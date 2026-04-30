@@ -1811,6 +1811,8 @@ async def _lifespan_background_init():
             _ = _composite_map.create_palette_overlay
             _ = _measure_composite.create_measure_data_only
             _ = _measure_composite.create_measure_composite
+            if os.getenv("STARTUP_WARM_COMPOSITE_NUMBA", "1").strip().lower() in {"1", "true", "yes", "y", "on"}:
+                _composite_map.warm_numba_kernels()
 
         try:
             await loop.run_in_executor(COMPOSITE_EXECUTOR, _warm)
@@ -2540,6 +2542,7 @@ async def api_config():
         "GRID_MAX_CONCURRENCY": config.GRID_MAX_CONCURRENCY,
         "MEASURE_PREFETCH_CONCURRENCY": config.MEASURE_PREFETCH_CONCURRENCY,
         "THUMBNAIL_EXECUTOR_WORKERS": _THUMBNAIL_EXECUTOR_WORKERS,
+        "USE_COMPOSITE_IMAGE_CACHE": config.USE_COMPOSITE_IMAGE_CACHE,
     }
 
 @app.get("/api/index-status")
@@ -9744,6 +9747,10 @@ async def run_composite_map_task(
                     response["sum_map_path"] = result["sum_map_path"]
                 if "sum_maps" in result:
                     response["sum_maps"] = result["sum_maps"]
+                if "timings" in result:
+                    response["timings"] = result["timings"]
+                if "numba" in result:
+                    response["numba"] = result["numba"]
 
             async with COMPOSITE_TASKS_LOCK:
                 COMPOSITE_TASKS[task_id]["status"] = "completed"
@@ -9936,10 +9943,15 @@ async def composite_cleanup_endpoint(request: Request):
 
     def _cleanup_sync():
         import shutil
-        from .composite_map import COMPOSITE_ROOT, _sanitize_login_id, POSITIONS_ROOT
-        safe_login = _sanitize_login_id(login_id)
+
+        def _sanitize_for_composite_path(value: Optional[str]) -> str:
+            candidate = (value or config.FALLBACK_LOGIN_ID or "notsaml").strip() or "notsaml"
+            safe_chars = [ch if (ch.isalnum() or ch in ("-", "_")) else "_" for ch in candidate]
+            return ("".join(safe_chars).strip("_") or "notsaml")[:64]
+
+        safe_login = _sanitize_for_composite_path(login_id)
         user_dir = COMPOSITE_ROOT / safe_login
-        positions_dir = POSITIONS_ROOT / "composite_map" / safe_login
+        positions_dir = config.POSITIONS_ROOT / "composite_map" / safe_login
         deleted = []
         for d in [user_dir, positions_dir]:
             if d.exists():
@@ -10083,6 +10095,8 @@ async def create_composite_map_endpoint(
                     response["sum_maps"] = result["sum_maps"]
                 if "timings" in result:
                     response["timings"] = result["timings"]
+                if "numba" in result:
+                    response["numba"] = result["numba"]
 
             COMPOSITE_TASKS[task_id]["status"] = "completed"
             COMPOSITE_TASKS[task_id]["progress"] = 100

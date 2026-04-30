@@ -23,24 +23,13 @@ function Stop-ApiMainProcesses {
 function Test-PortFree {
     param([int]$Port)
 
+    $any = $null
     try {
-        $existing = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-        if ($existing) {
-            return $false
-        }
-    } catch {
-    }
-
-    try {
-        $loopback = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
         $any = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $Port)
-        $loopback.Start()
         $any.Start()
-        $loopback.Stop()
         $any.Stop()
         return $true
     } catch {
-        try { $loopback.Stop() } catch {}
         try { $any.Stop() } catch {}
         return $false
     }
@@ -124,12 +113,16 @@ $env:ACCESS_LOG_ENABLED = "0"
 $env:STARTUP_THUMB_WARM_FOLDERS = ""
 $env:STARTUP_THUMB_WARM_COUNT = "0"
 $env:STARTUP_WARM_COMPOSITE_MODULES = "0"
+$env:USE_COMPOSITE_IMAGE_CACHE = "1"
+$env:COMPOSITE_USE_NUMBA = "1"
+$env:COMPOSITE_NUMBA_CACHE = "1"
 
 $proc = Start-Process python `
     -ArgumentList "-m", "api.main" `
     -WorkingDirectory $repoRoot `
     -RedirectStandardOutput $stdoutPath `
     -RedirectStandardError $stderrPath `
+    -WindowStyle Hidden `
     -PassThru
 
 if (Wait-ForListen -Port $httpsPort) {

@@ -11,6 +11,7 @@ import warnings
 import threading
 import zlib
 import zipfile
+import copy
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from datetime import datetime
 from functools import partial, lru_cache
@@ -21,13 +22,25 @@ import numpy as np
 from PIL import Image
 from PIL.Image import DecompressionBombWarning
 
+_USE_NUMBA = os.getenv(
+    "COMPOSITE_USE_NUMBA",
+    "1",
+).strip().lower() in {"1", "true", "yes", "y", "on"}
+_NUMBA_CACHE = os.getenv(
+    "COMPOSITE_NUMBA_CACHE",
+    "1",
+).strip().lower() in {"1", "true", "yes", "y", "on"}
+
 try:
-    from numba import njit, prange
+    if not _USE_NUMBA:
+        raise RuntimeError("COMPOSITE_USE_NUMBA is disabled")
+    from numba import njit, prange, get_num_threads as _numba_get_num_threads
 
     _HAS_NUMBA = True
 except Exception:
     njit = None
     prange = None
+    _numba_get_num_threads = None
     _HAS_NUMBA = False
 
 from .config import (
@@ -37,6 +50,7 @@ from .config import (
     COMPOSITE_BATCH_SIZE,
     POSITIONS_ROOT,
     FALLBACK_LOGIN_ID,
+    USE_COMPOSITE_IMAGE_CACHE,
 )
 from .personal_colors import load_color_legends, _scheme_to_palette_bytes, normalize_hex_color
 from .composite_colors import load_composite_color_settings
@@ -69,7 +83,7 @@ except Exception:
 _SAVE_BACKEND = os.getenv("COMPOSITE_SAVE_BACKEND", "turbo" if _HAS_TURBOJPEG else "pil").lower()
 _SAVE_FORMAT = os.getenv("COMPOSITE_FORMAT", "JPEG" if _HAS_TURBOJPEG else "PNG").upper()
 _JPEG_QUALITY = int(os.getenv("COMPOSITE_JPEG_QUALITY", "95"))
-_CACHE_COMPRESS = os.getenv("COMPOSITE_CACHE_COMPRESS", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
+_CACHE_COMPRESS = os.getenv("COMPOSITE_CACHE_COMPRESS", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
 try:
     _CACHE_COMPRESS_LEVEL = int(os.getenv("COMPOSITE_CACHE_COMPRESS_LEVEL", "1"))
 except ValueError:
@@ -107,7 +121,6 @@ COMPOSITE_ROOT.mkdir(parents=True, exist_ok=True)
 COMPOSITE_SESSION_DIRNAME = "current"
 SQUARE_MAP_CACHE_FILENAME = "square_maps_data.npz"
 # composite_cache_v1: PNG→npy 디스크 캐시 (동일 이미지 재사용 시 유효)
-USE_COMPOSITE_IMAGE_CACHE = os.getenv("USE_COMPOSITE_IMAGE_CACHE", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
 COMPOSITE_CACHE_ROOT = IMAGES_ROOT / "composite_cache_v1" if USE_COMPOSITE_IMAGE_CACHE else None
 _GRADE_RANGE = np.arange(8, dtype=np.uint8)
 _SUBSET_NAME_RE = re.compile(r"^square_(weighted_)?average_([0-7]+)\.(png|jpg|jpeg|webp)$", re.IGNORECASE)
@@ -221,9 +234,11 @@ def _copy_positions_without_bin(
         return
 
     try:
+        positions_template = copy.deepcopy(positions_data)
         chips = positions_data.get("chips")
         if isinstance(chips, list):
-            for chip in chips:
+            template_chips = positions_template.get("chips", [])
+            for chip in template_chips:
                 if not isinstance(chip, dict):
                     continue
                 if keep_chip_bin:
@@ -240,7 +255,7 @@ def _copy_positions_without_bin(
         for img_filename in composite_images:
             img_stem = Path(img_filename).stem
             composite_rel_path = output_dir_rel / img_filename
-            positions_data_copy = positions_data.copy()
+            positions_data_copy = copy.deepcopy(positions_template)
             positions_data_copy["image_path"] = composite_rel_path.as_posix()
             positions_data_copy["wafer"] = img_stem
             if "step" in positions_data_copy:
@@ -576,7 +591,7 @@ def _count_low_grade_occurrences(
 
 
 if _HAS_NUMBA:
-    @njit(parallel=True, fastmath=False, cache=True)
+    @njit(parallel=True, fastmath=False, cache=_NUMBA_CACHE)
     def _numba_count_grades_impl(stacked_indices: np.ndarray) -> np.ndarray:
         total_images, height, width = stacked_indices.shape
         # NumPy zeros with uint32 to avoid overflow during accumulation
@@ -589,7 +604,7 @@ if _HAS_NUMBA:
                         counts[value, y, x] += 1
         return counts
 
-    @njit(parallel=True, cache=True)
+    @njit(parallel=True, cache=_NUMBA_CACHE)
     def _numba_process_masks(stacked):
         """마스크 계산 + 14+→0 변환 + 8-13 only→8 변환을 단일 패스로 처리."""
         N, H, W = stacked.shape
@@ -630,7 +645,7 @@ if _HAS_NUMBA:
 
         return result, has_07, has_813, all_inv
 
-    @njit(parallel=True, cache=True)
+    @njit(parallel=True, cache=_NUMBA_CACHE)
     def _numba_render_composite(base_indices, palette, value_map, mask, lut_colors, v_min, v_max):
         """6912x6912 RGB 렌더링을 단일 패스로 처리 (numpy 대비 50x 빠름)."""
         H, W = base_indices.shape
@@ -652,7 +667,7 @@ if _HAS_NUMBA:
                     rgb[y, x, 2] = palette[idx, 2]
         return rgb
 
-    @njit(parallel=True, cache=True)
+    @njit(parallel=True, cache=_NUMBA_CACHE)
     def _numba_accumulate_image(img, grade_counts, has_0_7, has_8_13, all_invalid):
         """단일 이미지의 마스크 + grade 카운트 누적을 한 패스로 처리.
         grade_counts (8,H,W), has_0_7 (H,W), has_8_13 (H,W), all_invalid (H,W) in-place 갱신."""
@@ -672,10 +687,39 @@ if _HAS_NUMBA:
                     grade_counts[0, y, x] += 1
                     has_0_7[y, x] = True
 
+    @njit(parallel=True, cache=_NUMBA_CACHE)
+    def _numba_accumulate_batch(stacked, grade_counts, has_0_7, has_8_13, all_invalid):
+        """배치 이미지의 mask + grade count를 한 번의 parallel pass로 누적."""
+        N, H, W = stacked.shape
+        for y in prange(H):
+            for x in range(W):
+                batch_has_0_7 = False
+                batch_has_8_13 = False
+                batch_all_invalid = True
+                for i in range(N):
+                    v = stacked[i, y, x]
+                    if v < 8:
+                        grade_counts[v, y, x] += 1
+                        batch_has_0_7 = True
+                        batch_all_invalid = False
+                    elif v < 14:
+                        batch_has_8_13 = True
+                        batch_all_invalid = False
+                    else:
+                        # invalid (>=14) → grade 0으로 카운트하되 all_invalid 판정은 유지
+                        grade_counts[0, y, x] += 1
+                        batch_has_0_7 = True
+                if batch_has_0_7:
+                    has_0_7[y, x] = True
+                if batch_has_8_13:
+                    has_8_13[y, x] = True
+                if not batch_all_invalid:
+                    all_invalid[y, x] = False
+
     _SQ_WEIGHTS = np.array([0, 1, 4, 9, 16, 25, 36, 49], dtype=np.float32)
     _WT_FACTORS = np.array([1, 1, 2, 3, 4, 5, 6, 7], dtype=np.float32)
 
-    @njit(parallel=True, cache=True)
+    @njit(parallel=True, cache=_NUMBA_CACHE)
     def _numba_compute_sum_maps(gc, sq_w, wt_f, img_count):
         """square_mean + weighted_mean + masks를 단일 패스로 계산 (numpy 대비 1.7x)."""
         G, H, W = gc.shape
@@ -703,35 +747,116 @@ if _HAS_NUMBA:
                         weighted[y, x] = sq_sum / w_sum
         return sq_mean, weighted, calc_mask, weighted_mask
 
-    # JIT 워밍업 (서버 시작 시)
-    try:
-        _small = np.zeros((1, 2, 2), dtype=np.uint8)
-        _numba_count_grades_impl(_small)
-        _numba_process_masks(_small)
-        _small_pal = np.zeros((256, 3), dtype=np.uint8)
-        _small_lut = np.zeros((256, 3), dtype=np.uint8)
-        _small_v = np.zeros((2, 2), dtype=np.float32)
-        _small_m = np.zeros((2, 2), dtype=np.bool_)
-        _numba_render_composite(_small[:1, :], _small_pal, _small_v, _small_m, _small_lut, 0.0, 1.0)
-        _small_img = np.zeros((2, 2), dtype=np.uint8)
-        _small_gc = np.zeros((8, 2, 2), dtype=np.uint32)
-        _small_h07 = np.zeros((2, 2), dtype=np.bool_)
-        _small_h813 = np.zeros((2, 2), dtype=np.bool_)
-        _small_inv = np.ones((2, 2), dtype=np.bool_)
-        _numba_accumulate_image(_small_img, _small_gc, _small_h07, _small_h813, _small_inv)
-        _numba_compute_sum_maps(_small_gc, _SQ_WEIGHTS, _WT_FACTORS, 1)
-        del _small, _small_pal, _small_lut, _small_v, _small_m
-        del _small_img, _small_gc, _small_h07, _small_h813, _small_inv
-    except Exception:
-        pass
+    # Import-time JIT warmup can block request paths on Windows when this module is
+    # first loaded by /api/composite-cleanup. Keep it opt-in only.
+    if os.getenv("COMPOSITE_NUMBA_IMPORT_WARMUP", "0").strip().lower() in {"1", "true", "yes", "y", "on"}:
+        try:
+            _small = np.zeros((1, 2, 2), dtype=np.uint8)
+            _numba_count_grades_impl(_small)
+            _numba_process_masks(_small)
+            _small_pal = np.zeros((256, 3), dtype=np.uint8)
+            _small_lut = np.zeros((256, 3), dtype=np.uint8)
+            _small_v = np.zeros((2, 2), dtype=np.float32)
+            _small_m = np.zeros((2, 2), dtype=np.bool_)
+            _numba_render_composite(_small[0], _small_pal, _small_v, _small_m, _small_lut, 0.0, 1.0)
+            _small_img = np.zeros((2, 2), dtype=np.uint8)
+            _small_stack = np.zeros((2, 2, 2), dtype=np.uint8)
+            _small_gc = np.zeros((8, 2, 2), dtype=np.uint32)
+            _small_h07 = np.zeros((2, 2), dtype=np.bool_)
+            _small_h813 = np.zeros((2, 2), dtype=np.bool_)
+            _small_inv = np.ones((2, 2), dtype=np.bool_)
+            _numba_accumulate_image(_small_img, _small_gc, _small_h07, _small_h813, _small_inv)
+            _numba_accumulate_batch(_small_stack, _small_gc, _small_h07, _small_h813, _small_inv)
+            _numba_compute_sum_maps(_small_gc, _SQ_WEIGHTS, _WT_FACTORS, 1)
+            del _small, _small_pal, _small_lut, _small_v, _small_m
+            del _small_img, _small_stack, _small_gc, _small_h07, _small_h813, _small_inv
+        except Exception:
+            pass
 else:
     _numba_count_grades_impl = None
     _numba_process_masks = None
     _numba_render_composite = None
     _numba_accumulate_image = None
+    _numba_accumulate_batch = None
     _numba_compute_sum_maps = None
     _SQ_WEIGHTS = np.array([0, 1, 4, 9, 16, 25, 36, 49], dtype=np.float32)
     _WT_FACTORS = np.array([1, 1, 2, 3, 4, 5, 6, 7], dtype=np.float32)
+
+_NUMBA_WARM_LOCK = threading.Lock()
+_NUMBA_WARMED = False
+_NUMBA_WARM_ERROR: Optional[str] = None
+
+
+def warm_numba_kernels() -> Dict[str, Any]:
+    """Compile Numba kernels once so the first real composite request stays fast."""
+    global _NUMBA_WARMED, _NUMBA_WARM_ERROR
+    if not _HAS_NUMBA:
+        return {"enabled": False, "warmed": False, "error": _NUMBA_WARM_ERROR}
+    if _NUMBA_WARMED:
+        return _numba_runtime_info(warmed=True)
+
+    with _NUMBA_WARM_LOCK:
+        if _NUMBA_WARMED:
+            return _numba_runtime_info(warmed=True)
+        started = time.perf_counter()
+        try:
+            small = np.zeros((2, 2, 2), dtype=np.uint8)
+            small[1, 0, 0] = 15
+            _numba_count_grades_impl(small)
+            _numba_process_masks(small)
+            small_pal = np.zeros((256, 3), dtype=np.uint8)
+            small_lut = np.zeros((256, 3), dtype=np.uint8)
+            small_v = np.zeros((2, 2), dtype=np.float32)
+            small_m = np.zeros((2, 2), dtype=np.bool_)
+            _numba_render_composite(small[0], small_pal, small_v, small_m, small_lut, 0.0, 1.0)
+            small_gc = np.zeros((8, 2, 2), dtype=np.uint32)
+            small_h07 = np.zeros((2, 2), dtype=np.bool_)
+            small_h813 = np.zeros((2, 2), dtype=np.bool_)
+            small_inv = np.ones((2, 2), dtype=np.bool_)
+            _numba_accumulate_image(small[0], small_gc, small_h07, small_h813, small_inv)
+            _numba_accumulate_batch(small, small_gc, small_h07, small_h813, small_inv)
+            _numba_compute_sum_maps(small_gc, _SQ_WEIGHTS, _WT_FACTORS, 2)
+            _NUMBA_WARMED = True
+            _NUMBA_WARM_ERROR = None
+            info = _numba_runtime_info(warmed=True)
+            info["warmup_time"] = round(time.perf_counter() - started, 3)
+            return info
+        except Exception as exc:
+            _NUMBA_WARM_ERROR = str(exc)
+            return _numba_runtime_info(warmed=False, error=_NUMBA_WARM_ERROR)
+
+
+def _numba_runtime_info(
+    *,
+    warmed: Optional[bool] = None,
+    accumulator: Optional[str] = None,
+    batch_size: Optional[int] = None,
+    warmup_time: Optional[float] = None,
+    error: Optional[str] = None,
+) -> Dict[str, Any]:
+    threads = None
+    if _HAS_NUMBA and _numba_get_num_threads is not None:
+        try:
+            threads = int(_numba_get_num_threads())
+        except Exception:
+            threads = None
+    info: Dict[str, Any] = {
+        "enabled": bool(_HAS_NUMBA),
+        "requested": bool(_USE_NUMBA),
+        "cache": bool(_NUMBA_CACHE),
+        "warmed": _NUMBA_WARMED if warmed is None else bool(warmed),
+        "threads": threads,
+    }
+    if accumulator:
+        info["accumulator"] = accumulator
+    if batch_size is not None:
+        info["batch_size"] = int(batch_size)
+    if warmup_time is not None:
+        info["warmup_time"] = round(float(warmup_time), 3)
+    resolved_error = error if error is not None else _NUMBA_WARM_ERROR
+    if resolved_error:
+        info["error"] = resolved_error
+    return info
 
 
 def _count_grades_with_numba(stacked_indices: np.ndarray) -> Optional[np.ndarray]:
@@ -1391,10 +1516,10 @@ def _persist_square_map_data(
     output_dir: Path,
     palette_list: Sequence[int],
     base_indices: np.ndarray,
-    square_mean_map: np.ndarray,
-    weighted_map: np.ndarray,
-    calc_mask: np.ndarray,
-    weighted_mask: np.ndarray,
+    square_mean_map: Optional[np.ndarray] = None,
+    weighted_map: Optional[np.ndarray] = None,
+    calc_mask: Optional[np.ndarray] = None,
+    weighted_mask: Optional[np.ndarray] = None,
     grade_counts: Optional[np.ndarray] = None,
     invalid_mask: Optional[np.ndarray] = None,
     idx_8_mask: Optional[np.ndarray] = None,
@@ -1409,13 +1534,23 @@ def _persist_square_map_data(
     cache_path = output_dir / SQUARE_MAP_CACHE_FILENAME
     palette_array = np.array(palette_list, dtype=np.uint8).reshape(256, 3)
     save_payload: Dict[str, np.ndarray] = {
-        "square_mean": square_mean_map.astype(square_mean_map.dtype, copy=False),
-        "square_weighted": weighted_map.astype(weighted_map.dtype, copy=False),
-        "calc_mask": calc_mask.astype(bool, copy=False),
-        "weighted_mask": weighted_mask.astype(bool, copy=False),
         "base_indices": base_indices.astype(np.uint8, copy=False),
         "palette": palette_array,
     }
+    store_full_maps = (
+        grade_counts is None
+        or os.getenv("COMPOSITE_NPZ_STORE_FULL_MAPS", "0").strip().lower()
+        in {"1", "true", "yes", "y", "on"}
+    )
+    if store_full_maps:
+        if square_mean_map is not None:
+            save_payload["square_mean"] = square_mean_map.astype(square_mean_map.dtype, copy=False)
+        if weighted_map is not None:
+            save_payload["square_weighted"] = weighted_map.astype(weighted_map.dtype, copy=False)
+        if calc_mask is not None:
+            save_payload["calc_mask"] = calc_mask.astype(bool, copy=False)
+        if weighted_mask is not None:
+            save_payload["weighted_mask"] = weighted_mask.astype(bool, copy=False)
     if grade_counts is not None:
         save_payload["grade_counts"] = grade_counts.astype(np.uint16, copy=False)
     if invalid_mask is not None:
@@ -1433,7 +1568,12 @@ def _persist_square_map_data(
         tmp = cache_path.with_name(cache_path.stem + "_tmp.npz")
         try:
             # np.savez는 .npz로 끝나지 않으면 자동 추가 → _tmp.npz 사용 (추가 방지)
-            np.savez(tmp, **save_payload)
+            _save_npz_payload(
+                tmp,
+                save_payload,
+                compress=_CACHE_COMPRESS,
+                compress_level=_CACHE_COMPRESS_LEVEL,
+            )
             try:
                 tmp.replace(cache_path)
             except Exception:
@@ -1510,10 +1650,10 @@ def recolor_saved_sum_maps(
         raise FileNotFoundError(f"Square map cache not found: {cache_path}")
 
     with np.load(cache_path) as data:
-        cached_square_mean = data["square_mean"]
-        cached_weighted = data["square_weighted"]
-        calc_mask = data["calc_mask"].astype(bool)
-        weighted_mask = data["weighted_mask"].astype(bool)
+        cached_square_mean = data["square_mean"] if "square_mean" in data.files else None
+        cached_weighted = data["square_weighted"] if "square_weighted" in data.files else None
+        calc_mask = data["calc_mask"].astype(bool) if "calc_mask" in data.files else None
+        weighted_mask = data["weighted_mask"].astype(bool) if "weighted_mask" in data.files else None
         base_indices = data["base_indices"].astype(np.uint8)
         palette_array = data["palette"].astype(np.uint8)
         grade_counts = data.get("grade_counts")
@@ -1545,9 +1685,13 @@ def recolor_saved_sum_maps(
                 image_count=source_image_count,
             )
         except Exception:
+            if cached_square_mean is None or cached_weighted is None:
+                raise
             square_mean_map = cached_square_mean
             weighted_map = cached_weighted
     else:
+        if cached_square_mean is None or cached_weighted is None or calc_mask is None or weighted_mask is None:
+            raise ValueError("square map cache does not include full maps or grade_counts")
         square_mean_map = cached_square_mean
         weighted_map = cached_weighted
     palette_list = palette_array.reshape(-1).tolist()
@@ -2026,6 +2170,11 @@ def create_composite_heatmaps(
         raise ValueError("image_paths is empty")
 
     t = time.perf_counter()
+    numba_warm_info = warm_numba_kernels() if _HAS_NUMBA else _numba_runtime_info(warmed=False)
+    if _HAS_NUMBA:
+        _mark("numba_warmup", t)
+
+    t = time.perf_counter()
     output_dir, timestamp = _prepare_output_dir(login_id)
     _mark("prepare_output_dir", t)
 
@@ -2053,12 +2202,45 @@ def create_composite_heatmaps(
     has_8_13 = np.zeros((height, width), dtype=np.bool_)
     all_invalid = np.ones((height, width), dtype=np.bool_)
     processed_count = 0
+    _use_numba_batch = _HAS_NUMBA and _numba_accumulate_batch is not None
     _use_numba_accum = _HAS_NUMBA and _numba_accumulate_image is not None
+    accumulator_mode = "numba_batch" if _use_numba_batch else ("numba_image" if _use_numba_accum else "numpy")
 
     t = time.perf_counter()
     # 🔥 batch_size를 max_workers*4로 증가 — 배치 라운드 수 최소화하면서 메모리 안정
     effective_batch = max(batch_size, max_workers * 4)
+    if _use_numba_batch:
+        try:
+            target_batch_bytes = max(32, int(os.getenv("COMPOSITE_NUMBA_BATCH_MB", "512"))) * 1024 * 1024
+        except ValueError:
+            target_batch_bytes = 512 * 1024 * 1024
+        bytes_per_image = max(1, int(width) * int(height))
+        memory_capped_batch = max(1, target_batch_bytes // bytes_per_image)
+        effective_batch = max(1, min(effective_batch, memory_capped_batch, len(image_paths)))
+
     for batch_paths in _batched_paths(image_paths, effective_batch):
+        if _use_numba_batch:
+            batch_arrays: List[np.ndarray] = []
+            for rel_path, raw_indices in _iter_pixel_indices(
+                batch_paths,
+                width=width,
+                height=height,
+                loader_mode=loader_mode,
+                max_workers=max_workers,
+            ):
+                if raw_indices is None:
+                    continue
+                img = raw_indices.astype(np.uint8, copy=False)
+                if not img.flags.c_contiguous:
+                    img = np.ascontiguousarray(img, dtype=np.uint8)
+                batch_arrays.append(img)
+            if batch_arrays:
+                stacked = np.stack(batch_arrays, axis=0)
+                _numba_accumulate_batch(stacked, grade_counts, has_0_7, has_8_13, all_invalid)
+                processed_count += int(stacked.shape[0])
+                del stacked, batch_arrays
+            continue
+
         for rel_path, raw_indices in _iter_pixel_indices(
             batch_paths,
             width=width,
@@ -2081,13 +2263,12 @@ def create_composite_heatmaps(
                 has_0_7 |= (~ge8) | ge14
                 has_8_13 |= mid
                 all_invalid &= ge14
-                safe_img = img.copy() if ge14.any() else img
+                # 0~7은 해당 grade로 누적, invalid(14+)는 grade 0으로 누적.
+                # 8~13은 bottom/border 계열이라 grade count에는 넣지 않는다.
                 if ge14.any():
-                    safe_img[ge14] = 0
-                # 🔥 단일 패스 벡터화 (8-loop 대신 take/put_along_axis)
-                idx = safe_img[np.newaxis, :, :]  # (1, H, W)
-                current = np.take_along_axis(grade_counts, idx, axis=0)
-                np.put_along_axis(grade_counts, idx, current + 1, axis=0)
+                    grade_counts[0] += ge14
+                for grade_idx in range(8):
+                    grade_counts[grade_idx] += (img == grade_idx)
 
             processed_count += 1
     _mark("load_and_accumulate", t)
@@ -2199,7 +2380,7 @@ def create_composite_heatmaps(
                 _save_sum_map_variants,
                 None, output_dir, palette_bytes,
                 invalid_mask, base_indices, idx_8_13_only, scheme,
-                "", True, grade_counts, chip_inner_mask, None, processed_count,
+                "", False, grade_counts, chip_inner_mask, None, processed_count,
             )
 
         # heatmap 결과 수집
@@ -2216,6 +2397,27 @@ def create_composite_heatmaps(
                 sum_map_rel_path = sum_map_entries[0]["path"]
 
     _mark("save_heatmaps_and_sum_maps", t)
+
+    if create_sum and sum_map_entries:
+        def _delayed_persist_square_cache():
+            try:
+                delay_ms = int(os.getenv("COMPOSITE_CACHE_PERSIST_DELAY_MS", "1500"))
+            except ValueError:
+                delay_ms = 1500
+            if delay_ms > 0:
+                time.sleep(delay_ms / 1000.0)
+            _persist_square_map_data(
+                output_dir=output_dir,
+                palette_list=palette_bytes,
+                base_indices=base_indices,
+                grade_counts=grade_counts,
+                invalid_mask=invalid_mask,
+                idx_8_mask=idx_8_13_only,
+                image_count=processed_count,
+                color_scheme=scheme or ANONYMOUS_LOGIN_ID,
+            )
+
+        threading.Thread(target=_delayed_persist_square_cache, daemon=True).start()
 
     # 첫 번째 이미지의 positions.json을 composite 결과에 맞게 복사
     composite_image_filenames = []
@@ -2242,6 +2444,8 @@ def create_composite_heatmaps(
 
     # 시간별 분절 로그 출력
     print(f"\n[COMPOSITE] Timing breakdown (streaming):")
+    if _HAS_NUMBA:
+        print(f"  - numba_warmup:            {timings.get('numba_warmup', 0):.3f}s")
     print(f"  - prepare_output_dir:        {timings.get('prepare_output_dir', 0):.3f}s")
     print(f"  - load_and_accumulate:       {timings.get('load_and_accumulate', 0):.3f}s")
     print(f"  - positions_lookup:          {timings.get('positions_lookup', 0):.3f}s")
@@ -2259,6 +2463,12 @@ def create_composite_heatmaps(
         "image_size": {"width": width, "height": height},
         "processing_time": round(total_time, 2),
         "generated_at": timestamp,
+        "numba": _numba_runtime_info(
+            accumulator=accumulator_mode,
+            batch_size=effective_batch,
+            warmup_time=timings.get("numba_warmup", 0.0),
+            error=numba_warm_info.get("error") if isinstance(numba_warm_info, dict) else None,
+        ),
         "timings": timings,
     }
     if sum_map_rel_path:

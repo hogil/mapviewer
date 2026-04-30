@@ -49,6 +49,8 @@ $env:COMPOSITE_CLEANUP_HOUR="2"          # 매일 AM 2시 실행
 $env:COMPOSITE_CLEANUP_MINUTE="0"
 $env:COMPOSITE_CLEANUP_RUN_ON_STARTUP="0" # 시작 즉시 정리 비활성화 (하루 1회만)
 $env:COMPOSITE_COUNT_MODE="cython"
+$env:COMPOSITE_USE_NUMBA="1"             # Composite mask/count/sum-map Numba fast path
+$env:COMPOSITE_NUMBA_CACHE="1"           # JIT 캐시 사용으로 재시작 후 첫 요청 단축
 $env:OMP_NUM_THREADS="8"                 # Numba/OpenMP 스레드 (물리 코어 수)
 $env:NUMBA_NUM_THREADS="8"               # 명시적으로 numba 스레드 제한
 $env:VIPS_CONCURRENCY="6"                # 개발 PC: 대형 이미지 연산 병렬화 (코어 수에 맞춤)
@@ -70,7 +72,8 @@ $env:INDEX_REFRESH_INTERVAL_MINUTES="30" # 파일 인덱스 자동 재빌드 간
 # startup background warm 완화
 $env:STARTUP_THUMB_WARM_FOLDERS=""
 $env:STARTUP_THUMB_WARM_COUNT="0"
-$env:STARTUP_WARM_COMPOSITE_MODULES="0"
+$env:STARTUP_WARM_COMPOSITE_MODULES="1"
+$env:STARTUP_WARM_COMPOSITE_NUMBA="1"
 
 # 이미지 피라미드 설정
 # 2025-10-23: 피라미드 썸네일 품질 및 속도 최적화

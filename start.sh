@@ -56,7 +56,9 @@ export COMPOSITE_SAVE_WORKERS="56"       # 저장 워커 (고속 SSD 기준)
 export COMPOSITE_SAVE_BACKEND="vips"     # 저장 백엔드 vips 우선
 export COMPOSITE_FORMAT="JPEG"           # 저장 포맷: JPEG (속도 우선)
 export COMPOSITE_JPEG_QUALITY="95"       # JPEG 품질 (속도/품질 균형)
-export USE_COMPOSITE_IMAGE_CACHE="1"     # 🔥 디스크 캐시 활성화 (대용량 이미지 재사용)
+export USE_COMPOSITE_IMAGE_CACHE="1"     # composite_cache_v1 디스크 캐시 활성화 (개별 이미지 디코딩 재사용)
+export COMPOSITE_USE_NUMBA="1"
+export COMPOSITE_NUMBA_CACHE="1"
 export OMP_NUM_THREADS="32"              # Numba/OpenMP 스레드
 export NUMBA_NUM_THREADS="32"
 export SEARCH_WORKERS="24"               # 검색 병렬 워커 수 (32코어 기준, 논리 검색 가속)
@@ -84,7 +86,8 @@ export INDEX_REFRESH_INTERVAL_MINUTES="30" # 파일 인덱스 자동 재빌드 �
 # - restart 직후 초기 self-warm이 AUTO_LOGIN/SAML, recursive warm, composite import와 경합하지 않도록 기본 비활성화
 export STARTUP_THUMB_WARM_FOLDERS=""
 export STARTUP_THUMB_WARM_COUNT="0"
-export STARTUP_WARM_COMPOSITE_MODULES="0"
+export STARTUP_WARM_COMPOSITE_MODULES="1"
+export STARTUP_WARM_COMPOSITE_NUMBA="1"
 
 # Python/시스템 최적화
 export PYTHONUNBUFFERED="1"              # 실시간 로그 출력

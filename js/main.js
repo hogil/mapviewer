@@ -8841,6 +8841,7 @@ class WaferMapViewer {
             alert('생성된 히트맵이 없습니다.');
             return;
         }
+        this._closeCompositeMeasureFloatingPanels();
 
         this._personalizedColorCacheBuster = Date.now();
         this.selectedGrades.clear();
@@ -8853,6 +8854,7 @@ class WaferMapViewer {
             sourceImagePaths: sourceImages,
             imageSize: result.image_size,
             processingTime: result.processing_time,
+            numba: result.numba || null,
             generatedAt: result.generated_at,
             sumMaps: [],
         };
@@ -8873,6 +8875,7 @@ class WaferMapViewer {
         // 🔥 핵심: composite_map/{LoginId} 폴더를 일반 폴더처럼 로드
         await this.loadImagesInFolderAndShowGrid(outputDir);
         if (typeof this.hideLotListModal === 'function') this.hideLotListModal();
+        this.clearGridSelectionMarks({ hidePanel: true });
         this.updateContextMenuState();
     }
 
@@ -9223,12 +9226,16 @@ class WaferMapViewer {
 
         const selected = this.getSelectedImagesForModal();
         if (!selected.length) {
+            this._closeCompositeMeasureFloatingPanels();
             alert('Composite Map을 만들 이미지를 선택하세요.');
             return;
         }
-        this.lastCompositeSourceImages = [...selected];
-
+        this._closeCompositeMeasureFloatingPanels();
         const previousPageState = this.captureActivePageState();
+        this.lastCompositeSourceImages = [...selected];
+        this.clearGridSelectionMarks({ hidePanel: true, updateContext: false });
+        this._resetContextCompositeChecks();
+
         let targetPageId = this.pageManager?.activePageId || null;
         if (this.pageManager) {
             this.persistActivePageState(previousPageState);
@@ -9250,6 +9257,7 @@ class WaferMapViewer {
             selectedCount: selected.length,
             startedAt: Date.now(),
         };
+        this.displaySelectedGridImages([]);
         if (targetPageId) {
             this.setCompositePageTask(targetPageId, { task: initialTask, result: null });
         }
@@ -9299,7 +9307,7 @@ class WaferMapViewer {
 
             // 결과 반영: 현재 해당 탭에 있으면 즉시 렌더링, 아니면 보류 후 toast
             if (result && targetPageId) {
-                const doneMessage = this._formatCompositeDoneMessage(initialTask, { measure: false });
+                const doneMessage = this._formatCompositeDoneMessage(initialTask, { measure: false, result });
                 const isOnTargetTab = this.pageManager?.activePageId === targetPageId;
                 if (isOnTargetTab) {
                     // 현재 해당 탭 → 즉시 렌더링
@@ -9424,6 +9432,83 @@ class WaferMapViewer {
             panel._originalParent.insertBefore(panel, panel._originalNext || null);
             delete panel._originalParent;
             delete panel._originalNext;
+        }
+    }
+
+    _restoreFloatingFailbitPanel(panel) {
+        if (!panel) return;
+        panel.style.display = 'none';
+        panel.style.left = '';
+        panel.style.right = '';
+        panel.style.top = '';
+        panel.style.bottom = '';
+        panel.style.maxHeight = '';
+        panel.querySelectorAll('.failbit-list').forEach(list => {
+            list.style.maxHeight = '';
+        });
+
+        const originalParent = panel._originalParent || panel._origParent;
+        const originalNext = panel._originalNext || panel._origNext || null;
+        if (originalParent && panel.parentElement === document.body) {
+            if (originalNext && originalNext.parentElement === originalParent) {
+                originalParent.insertBefore(panel, originalNext);
+            } else {
+                originalParent.appendChild(panel);
+            }
+        }
+        delete panel._originalParent;
+        delete panel._originalNext;
+        delete panel._origParent;
+        delete panel._origNext;
+    }
+
+    _closeCompositeMeasureFloatingPanels() {
+        if (typeof this._closeMcPanel === 'function') {
+            this._closeMcPanel();
+        }
+        const contextMenu = document.getElementById('grid-context-menu');
+        if (contextMenu) {
+            contextMenu.style.display = 'none';
+        }
+        document.querySelectorAll('.failbit-panel').forEach(panel => {
+            panel.querySelectorAll('.pinned-section, .mc-reset-bar, .mc-generate-wrap, .measure-apply-wrap').forEach(el => el.remove());
+            this._restoreFloatingFailbitPanel(panel);
+            if (panel.id === 'context-mc-submenu') panel._mcBuilt = false;
+            if (panel.id === 'context-mea-submenu') panel._meaBuilt = false;
+        });
+        if (this.hideContextMenuHandler) {
+            document.removeEventListener('click', this.hideContextMenuHandler);
+            this.hideContextMenuHandler = null;
+        }
+        this._clearForcedContextMenuHover?.();
+    }
+
+    _resetContextSubmenuPanel(panel, list, message, { isMeasure = false } = {}) {
+        if (isMeasure) {
+            this._measureCheckedItems = [];
+        } else {
+            this._mcCheckedItems = [];
+        }
+        if (panel) {
+            panel.querySelectorAll('.pinned-section, .mc-reset-bar, .mc-generate-wrap, .measure-apply-wrap').forEach(el => el.remove());
+            const search = panel.querySelector('.mc-ctx-search, .mea-ctx-search, .mc-search, .failbit-search');
+            if (search) search.value = '';
+        }
+        if (list) {
+            list.innerHTML = `<div class="failbit-item" style="color:#888;">${message}</div>`;
+        }
+        if (panel?.id === 'context-mc-submenu' || panel?.id === 'context-mea-submenu') {
+            requestAnimationFrame(() => this._repositionGridContextSubmenuForPanel(panel));
+        }
+    }
+
+    _resetContextCompositeChecks() {
+        this._mcCheckedItems = [];
+        const mcSubmenu = document.getElementById('context-mc-submenu');
+        if (mcSubmenu) {
+            mcSubmenu._mcBuilt = false;
+            const list = mcSubmenu.querySelector('.mc-ctx-list');
+            this._resetContextSubmenuPanel(mcSubmenu, list, '이미지를 선택하세요');
         }
     }
 
@@ -9580,7 +9665,7 @@ class WaferMapViewer {
 
         const sources = this._getContextKeySourceImages();
         if (!sources.length) {
-            list.innerHTML = '<div class="failbit-item" style="color:#888;">이미지를 선택하세요</div>';
+            this._resetContextSubmenuPanel(submenu, list, '이미지를 선택하세요', { isMeasure: true });
             return;
         }
 
@@ -9590,13 +9675,22 @@ class WaferMapViewer {
             return;
         }
 
-        list.innerHTML = '<div class="failbit-item" style="color:#888;">로딩 중...</div>';
+        const fallbackKeys = this._lastGoodMeaCtxKey === cacheKey ? this._lastGoodMeaCtxKeys : null;
+        if (fallbackKeys) {
+            this._renderMeaContextList(list, fallbackKeys.f, fallbackKeys.q, this.getSelectedImagesForModal());
+        } else {
+            list.innerHTML = '<div class="failbit-item" style="color:#888;">로딩 중...</div>';
+        }
         this._fetchMergedKeys(sources).then(keys => {
             this._cachedMeasureKeys = keys;
             this._cachedMeaCtxKey = cacheKey;
+            this._lastGoodMeaCtxKey = cacheKey;
+            this._lastGoodMeaCtxKeys = keys;
             this._renderMeaContextList(list, keys.f, keys.q, this.getSelectedImagesForModal());
         }).catch(() => {
-            list.innerHTML = '<div class="failbit-item" style="color:#888;">로드 실패</div>';
+            if (!fallbackKeys) {
+                this._resetContextSubmenuPanel(submenu, list, '로드 실패', { isMeasure: true });
+            }
         });
     }
 
@@ -9614,7 +9708,8 @@ class WaferMapViewer {
 
         const selected = this.getSelectedImagesForModal();
         if (!selected.length) {
-            list.innerHTML = '<div class="failbit-item" style="color:#888;">이미지를 선택하세요</div>';
+            this._mcSelectedImages = [];
+            this._resetContextSubmenuPanel(submenu, list, '이미지를 선택하세요');
             return;
         }
         this._mcSelectedImages = [...selected];
@@ -9626,13 +9721,22 @@ class WaferMapViewer {
             return;
         }
 
-        list.innerHTML = '<div class="failbit-item" style="color:#888;">로딩 중...</div>';
+        const fallbackKeys = this._lastGoodMcCtxKey === cacheKey ? this._lastGoodMcCtxKeys : null;
+        if (fallbackKeys) {
+            this._renderMcContextList(list, fallbackKeys);
+        } else {
+            list.innerHTML = '<div class="failbit-item" style="color:#888;">로딩 중...</div>';
+        }
         this._fetchMergedKeys(sources).then(keys => {
             this._cachedMcKeys = keys;
             this._cachedMcCtxKey = cacheKey;
+            this._lastGoodMcCtxKey = cacheKey;
+            this._lastGoodMcCtxKeys = keys;
             this._renderMcContextList(list, keys);
         }).catch(() => {
-            list.innerHTML = '<div class="failbit-item" style="color:#888;">로드 실패</div>';
+            if (!fallbackKeys) {
+                this._resetContextSubmenuPanel(submenu, list, '로드 실패');
+            }
         });
     }
 
@@ -9746,6 +9850,9 @@ class WaferMapViewer {
                     this._unpinItem(list, item);
                 }
                 updateBtn();
+                if (panel.id === 'context-mc-submenu' || panel.id === 'context-mea-submenu') {
+                    requestAnimationFrame(() => this._repositionGridContextSubmenuForPanel(panel));
+                }
                 if (isMeasure && this.gridMode) {
                     this._prefetchCheckedMeasureThumbs();
                 }
@@ -9907,6 +10014,9 @@ class WaferMapViewer {
             btnWrap.appendChild(genBtn);
             panel.appendChild(btnWrap);
         }
+        if (panel.id === 'context-mc-submenu' || panel.id === 'context-mea-submenu') {
+            requestAnimationFrame(() => this._repositionGridContextSubmenuForPanel(panel));
+        }
     }
 
     /**
@@ -9915,8 +10025,12 @@ class WaferMapViewer {
      */
     async _startMultipleMeasureComposites(items) {
         if (!items.length) return;
-        const selected = this._mcSelectedImages || [];
+        const selected = [...(this._mcSelectedImages || [])];
         if (!selected.length) return;
+        this._closeCompositeMeasureFloatingPanels();
+        const previousPageState = this.captureActivePageState();
+        this.lastCompositeSourceImages = [...selected];
+        this.clearGridSelectionMarks({ hidePanel: true, updateContext: false });
 
         // Composite Map (Grade) 항목과 Measure Composite 항목 분리
         const compositeMapItems = items.filter(it => it.mode === 'composite');
@@ -9925,7 +10039,6 @@ class WaferMapViewer {
         if (!compositeMapItems.length && !measureItems.length) return;
 
         // Page management — 원래 탭 보존 후 새 composite 탭 생성
-        const previousPageState = this.captureActivePageState();
         let targetPageId = this.pageManager?.activePageId || null;
         if (this.pageManager) {
             this.persistActivePageState(previousPageState);
@@ -9947,6 +10060,7 @@ class WaferMapViewer {
             selectedCount: selected.length,
             startedAt: Date.now(),
         };
+        this.displaySelectedGridImages([]);
         if (targetPageId) {
             this.setCompositePageTask(targetPageId, { task: initialTask, result: null });
         }
@@ -10081,6 +10195,10 @@ class WaferMapViewer {
             this.hideCompositeInlineStatus();
             if (targetPageId) this.clearCompositePageTask(targetPageId);
             alert('Measure Composite 생성에 실패했습니다: ' + error.message);
+        } finally {
+            this._mcCheckedItems = [];
+            this._mcSelectedImages = [];
+            this._markGridContextSubmenusStale();
         }
     }
 
@@ -10088,8 +10206,12 @@ class WaferMapViewer {
      * Measure Composite 생성 실행 (드롭다운에서 항목 선택 시)
      */
     async _startMeasureComposite(mode, itemKey, binType) {
-        const selected = this._mcSelectedImages || [];
+        const selected = [...(this._mcSelectedImages || [])];
         if (!selected.length) return;
+        this._closeCompositeMeasureFloatingPanels();
+        const previousPageState = this.captureActivePageState();
+        this.lastCompositeSourceImages = [...selected];
+        this.clearGridSelectionMarks({ hidePanel: true, updateContext: false });
 
         // BIN: 단일 타입, FBT/QVL: aggregation=sum
         const bin_types = mode === 'bin' ? [binType] : null;
@@ -10100,7 +10222,6 @@ class WaferMapViewer {
                           mode === 'f' ? `FBT_${itemKey}_sum` : `QVL_${itemKey}_sum`;
 
         // Page management
-        const previousPageState = this.captureActivePageState();
         let targetPageId = this.pageManager?.activePageId || null;
         if (this.pageManager) {
             this.persistActivePageState(previousPageState);
@@ -10119,6 +10240,7 @@ class WaferMapViewer {
             selectedCount: selected.length,
             startedAt: Date.now(),
         };
+        this.displaySelectedGridImages([]);
         if (targetPageId) {
             this.setCompositePageTask(targetPageId, { task: initialTask, result: null });
         }
@@ -10184,6 +10306,10 @@ class WaferMapViewer {
             this.hideCompositeInlineStatus();
             if (targetPageId) this.clearCompositePageTask(targetPageId);
             alert('Measure Composite 생성에 실패했습니다: ' + error.message);
+        } finally {
+            this._mcCheckedItems = [];
+            this._mcSelectedImages = [];
+            this._markGridContextSubmenusStale();
         }
     }
 
@@ -10269,10 +10395,14 @@ class WaferMapViewer {
         const results = Array.isArray(result) ? result : [result];
         const firstResult = results.find(r => !r.is_grade_composite) || results[0];
         const outputDir = firstResult?.output_dir;
+        this._closeCompositeMeasureFloatingPanels();
 
         this._personalizedColorCacheBuster = Date.now();
         this.isCompositeMode = true;
-        this.lastCompositeSourceImages = this._mcSelectedImages || [];
+        const sourceImages = this.lastCompositeSourceImages?.length
+            ? [...this.lastCompositeSourceImages]
+            : [...(this._mcSelectedImages || [])];
+        this.lastCompositeSourceImages = sourceImages;
 
         // compositeSession 최소 설정 (gradient 범례용, 11구간)
         const rcLen = (results[0]?.range_counts?.length) || 11;
@@ -10300,7 +10430,7 @@ class WaferMapViewer {
             outputDir,
             measureMode: firstResult?.measure_mode || 'composite',
             rangeCounts: mergedRangeCounts,
-            sourceImagePaths: this._mcSelectedImages || [],
+            sourceImagePaths: sourceImages,
             measureResults: results,
         };
 
@@ -10320,6 +10450,7 @@ class WaferMapViewer {
         if (outputDir) {
             await this.loadImagesInFolderAndShowGrid(outputDir);
             if (typeof this.hideLotListModal === 'function') this.hideLotListModal();
+            this.clearGridSelectionMarks({ hidePanel: true });
         }
     }
 
@@ -10713,18 +10844,26 @@ class WaferMapViewer {
         } catch {}
     }
 
-    _formatCompositeDoneMessage(taskState = null, { measure = false } = {}) {
+    _formatCompositeDoneMessage(taskState = null, { measure = false, result = null } = {}) {
         const prefix = measure ? 'Measure Composite 생성 완료' : 'Composite Map 생성 완료';
         const parts = [];
         const startedAt = Number(taskState?.startedAt);
         const selectedCount = Number(taskState?.selectedCount);
+        const serverTime = Number(result?.processing_time);
 
         if (Number.isFinite(startedAt) && startedAt > 0) {
             const elapsedSec = Math.max(0.1, Math.round((Date.now() - startedAt) / 100) / 10);
             parts.push(`${elapsedSec.toFixed(1)}s`);
         }
+        if (!measure && Number.isFinite(serverTime) && serverTime > 0) {
+            parts.push(`server ${serverTime.toFixed(2)}s`);
+        }
         if (Number.isFinite(selectedCount) && selectedCount > 0) {
             parts.push(`${selectedCount}images`);
+        }
+        if (!measure && result?.numba?.enabled) {
+            const accumulator = result.numba.accumulator === 'numba_batch' ? 'Numba batch' : 'Numba';
+            parts.push(accumulator);
         }
 
         return parts.length > 0 ? `${prefix} (${parts.join(' ')})` : prefix;
@@ -10887,17 +11026,81 @@ class WaferMapViewer {
         if (meaSubmenu) meaSubmenu.style.display = 'none';
     }
 
+    _markGridContextSubmenusStale() {
+        const mcSubmenu = document.getElementById('context-mc-submenu');
+        const meaSubmenu = document.getElementById('context-mea-submenu');
+        if (mcSubmenu) mcSubmenu._mcBuilt = false;
+        if (meaSubmenu) meaSubmenu._meaBuilt = false;
+    }
+
+    _syncSelectionForGridContextTarget(clickedIdx) {
+        if (!this.gridMode || !Number.isInteger(clickedIdx) || !Array.isArray(this.currentGridImages)) return;
+        if (clickedIdx < 0 || clickedIdx >= this.currentGridImages.length) return;
+
+        const selected = Array.isArray(this.gridSelectedIdxs) ? this.gridSelectedIdxs : [];
+        if (selected.includes(clickedIdx)) {
+            this.updateSelectedGridImagesList();
+            return;
+        }
+
+        this.gridSelectedIdxs = [clickedIdx];
+        this.gridSelectedSet = new Set([clickedIdx]);
+        this.gridLastClickedIdx = clickedIdx;
+        this.updateGridSelection();
+    }
+
+    _getGridOverlayBottomLimit(margin = 10) {
+        const candidates = [window.innerHeight - margin];
+        const tabBar = document.getElementById('page-tab-bar');
+        if (tabBar) {
+            const style = getComputedStyle(tabBar);
+            const rect = tabBar.getBoundingClientRect();
+            if (style.display !== 'none' && rect.height > 0 && rect.top > 0) {
+                candidates.push(rect.top - margin);
+            }
+        }
+        const grid = document.getElementById('image-grid');
+        const scrollWrapper = grid?.closest?.('.grid-scroll-wrapper') || grid?.parentElement;
+        if (scrollWrapper) {
+            const style = getComputedStyle(scrollWrapper);
+            const rect = scrollWrapper.getBoundingClientRect();
+            if (style.display !== 'none' && rect.height > 0 && rect.bottom > 0) {
+                candidates.push(rect.bottom - margin);
+            }
+        }
+        return Math.max(140, Math.min(...candidates.filter(Number.isFinite)));
+    }
+
+    _repositionGridContextSubmenuForPanel(panel) {
+        if (!panel || panel.style.display === 'none') return;
+        if (panel.id === 'context-mc-submenu') {
+            this._positionGridContextSubmenu(
+                document.getElementById('context-mc-create'),
+                panel,
+                '.failbit-list, .mc-ctx-list'
+            );
+        } else if (panel.id === 'context-mea-submenu') {
+            this._positionGridContextSubmenu(
+                document.getElementById('context-mea-create'),
+                panel,
+                '.mea-ctx-list'
+            );
+        }
+    }
+
     _positionGridContextSubmenu(triggerItem, submenu, listSelector) {
         if (!triggerItem || !submenu) return;
 
         if (submenu.parentElement !== document.body) {
             submenu._origParent = submenu.parentElement;
+            submenu._origNext = submenu.nextSibling;
             document.body.appendChild(submenu);
         }
 
         const itemRect = triggerItem.getBoundingClientRect();
         const list = listSelector ? submenu.querySelector(listSelector) : null;
-        const availH = window.innerHeight - 80;
+        const bottomLimit = this._getGridOverlayBottomLimit(10);
+        const viewportMargin = 10;
 
         submenu.style.position = 'fixed';
         submenu.style.zIndex = '50000';
@@ -10905,24 +11108,28 @@ class WaferMapViewer {
         submenu.style.left = `${itemRect.right}px`;
         submenu.style.top = `${itemRect.top}px`;
         submenu.style.bottom = 'auto';
+        submenu.style.maxHeight = `${Math.max(80, bottomLimit - itemRect.top)}px`;
 
         if (list) {
-            list.style.maxHeight = `${Math.max(150, availH - itemRect.top)}px`;
+            list.style.maxHeight = `${Math.max(120, bottomLimit - itemRect.top - 92)}px`;
         }
 
         requestAnimationFrame(() => {
             const rect = submenu.getBoundingClientRect();
-            if (rect.bottom > window.innerHeight) {
-                submenu.style.top = 'auto';
-                submenu.style.bottom = '10px';
-                if (list) {
-                    const submenuTop = submenu.getBoundingClientRect().top;
-                    const newMaxH = window.innerHeight - submenuTop - 90;
-                    list.style.maxHeight = `${Math.max(120, newMaxH)}px`;
-                }
+            let top = itemRect.top;
+            if (rect.bottom > bottomLimit) {
+                top = Math.max(viewportMargin, bottomLimit - rect.height);
+                submenu.style.top = `${top}px`;
+                submenu.style.bottom = 'auto';
             }
+            submenu.style.maxHeight = `${Math.max(80, bottomLimit - top)}px`;
             if (rect.right > window.innerWidth) {
                 submenu.style.left = `${itemRect.left - rect.width}px`;
+            }
+            if (list) {
+                const submenuTop = submenu.getBoundingClientRect().top;
+                const newMaxH = bottomLimit - submenuTop - 92;
+                list.style.maxHeight = `${Math.max(120, newMaxH)}px`;
             }
         });
     }
@@ -10931,7 +11138,6 @@ class WaferMapViewer {
         const mcCreateItem = document.getElementById('context-mc-create');
         const mcSubmenu = document.getElementById('context-mc-submenu');
         if (!mcCreateItem || !mcSubmenu) return;
-        if (mcSubmenu.style.display !== 'none' && mcSubmenu.parentElement === document.body) return;
 
         const meaSubmenu = document.getElementById('context-mea-submenu');
         if (meaSubmenu) meaSubmenu.style.display = 'none';
@@ -10946,7 +11152,6 @@ class WaferMapViewer {
         const meaCreateItem = document.getElementById('context-mea-create');
         const meaSubmenu = document.getElementById('context-mea-submenu');
         if (!meaCreateItem || !meaSubmenu) return;
-        if (meaSubmenu.style.display !== 'none' && meaSubmenu.parentElement === document.body) return;
 
         const mcSubmenu = document.getElementById('context-mc-submenu');
         if (mcSubmenu) mcSubmenu.style.display = 'none';
@@ -10972,6 +11177,7 @@ class WaferMapViewer {
 
         if (!contextMenu) return;
 
+        this._syncSelectionForGridContextTarget(clickedIdx);
         this.contextMenuTargetIndex = (typeof clickedIdx === 'number') ? clickedIdx : null;
         let targetPath = null;
         if (typeof clickedIdx === 'number' && this.currentGridImages && this.currentGridImages[clickedIdx]) {
@@ -10992,6 +11198,7 @@ class WaferMapViewer {
         }
 
         this.updateContextMenuState();
+        this._markGridContextSubmenusStale();
 
         contextMenu.style.display = 'block';
         contextMenu.style.left = event.pageX + 'px';
@@ -10999,13 +11206,16 @@ class WaferMapViewer {
         this._closeGridContextSubmenus();
 
         const rect = contextMenu.getBoundingClientRect();
+        const bottomLimit = this._getGridOverlayBottomLimit(10);
 
         if (rect.right > window.innerWidth) {
             contextMenu.style.left = (event.pageX - rect.width) + 'px';
         }
 
-        if (rect.bottom > window.innerHeight) {
-            contextMenu.style.top = (event.pageY - rect.height) + 'px';
+        if (rect.bottom > bottomLimit) {
+            const clientY = Number.isFinite(event.clientY) ? event.clientY : (event.pageY - window.scrollY);
+            const top = Math.max(10, clientY - rect.height);
+            contextMenu.style.top = (top + window.scrollY) + 'px';
         }
 
         this._scheduleForcedContextHoverSync(
@@ -11042,19 +11252,13 @@ class WaferMapViewer {
         }
         const mcSubmenu = document.getElementById('context-mc-submenu');
         if (mcSubmenu) {
-            mcSubmenu.style.display = 'none';
             mcSubmenu._mcBuilt = false;
-            if (mcSubmenu._origParent && mcSubmenu.parentElement === document.body) {
-                mcSubmenu._origParent.appendChild(mcSubmenu);
-            }
+            this._restoreFloatingFailbitPanel(mcSubmenu);
         }
         const meaSubmenu = document.getElementById('context-mea-submenu');
         if (meaSubmenu) {
-            meaSubmenu.style.display = 'none';
             meaSubmenu._meaBuilt = false;
-            if (meaSubmenu._origParent && meaSubmenu.parentElement === document.body) {
-                meaSubmenu._origParent.appendChild(meaSubmenu);
-            }
+            this._restoreFloatingFailbitPanel(meaSubmenu);
         }
 
         if (this.hideContextMenuHandler) {
@@ -16340,7 +16544,7 @@ class WaferMapViewer {
         // 그리드 모드에서 선택된 이미지들 반환
         if (this.gridMode) {
             if (this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0) {
-                const imageList = (this.selectedImages?.length ? this.selectedImages : this.currentGridImages) || [];
+                const imageList = (this.currentGridImages?.length ? this.currentGridImages : this.selectedImages) || [];
                 let paths = this.gridSelectedIdxs
                     .map(idx => imageList[idx])
                     .filter(Boolean);
@@ -19658,19 +19862,36 @@ class WaferMapViewer {
                     settled = false;
                     this._gridIsScrolling = true;
                     this.cancelGridImageRequests(true, true);
+                    scheduleSettledLoad();
                 } else if (lastChangeTime > 0 && !settled && (now - lastChangeTime) >= SETTLE_MS) {
                     // 🔥 스크롤이 멈춘 뒤에만 로드 재개
                     settled = true;
                     lastChangeTime = 0;
-                    this._gridIsScrolling = false;
-                    this.loadVisibleGridThumbnails({ cancelExisting: false });
-                    stopPolling();
+                    runSettledLoad();
                 }
             }, POLL_MS);
         };
 
         const stopPolling = () => {
             if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        };
+
+        const runSettledLoad = () => {
+            if (this._gridScrollSettleTimer) {
+                clearTimeout(this._gridScrollSettleTimer);
+                this._gridScrollSettleTimer = null;
+            }
+            this._gridIsScrolling = false;
+            this.loadVisibleGridThumbnails({ cancelExisting: false });
+            setTimeout(() => this._forceRestartVisibleGridThumbs(), 120);
+            stopPolling();
+        };
+
+        const scheduleSettledLoad = () => {
+            if (this._gridScrollSettleTimer) {
+                clearTimeout(this._gridScrollSettleTimer);
+            }
+            this._gridScrollSettleTimer = setTimeout(runSettledLoad, SETTLE_MS + 120);
         };
 
         // scroll 이벤트에서 폴링 시작 (passive)
@@ -19691,6 +19912,7 @@ class WaferMapViewer {
                 settled = false;
                 this._gridIsScrolling = true;
                 this.cancelGridImageRequests(true, true);
+                scheduleSettledLoad();
             }
             startPolling();
         };
@@ -19707,6 +19929,10 @@ class WaferMapViewer {
 
     _stopGridScrollDetection() {
         if (this._gridPollStop) { this._gridPollStop(); this._gridPollStop = null; }
+        if (this._gridScrollSettleTimer) {
+            clearTimeout(this._gridScrollSettleTimer);
+            this._gridScrollSettleTimer = null;
+        }
         if (this._gridScrollLoadRaf) {
             cancelAnimationFrame(this._gridScrollLoadRaf);
             this._gridScrollLoadRaf = null;
@@ -21854,6 +22080,29 @@ class WaferMapViewer {
         }
     }
 
+    clearGridSelectionMarks({ hidePanel = true, updateContext = true } = {}) {
+        this.gridSelectedIdxs = [];
+        this.gridSelectedSet = new Set();
+        this.gridLastClickedIdx = undefined;
+
+        const grid = document.getElementById('image-grid');
+        if (grid) {
+            grid.querySelectorAll('.grid-thumb-wrap.selected').forEach(wrap => wrap.classList.remove('selected'));
+        }
+
+        if (this.savedViewState?.type === 'grid') {
+            this.savedViewState.selectedIndices = [];
+            this.savedViewState.selectedImagePaths = [];
+        }
+
+        if (hidePanel) {
+            this.displaySelectedGridImages([]);
+        }
+        if (updateContext) {
+            this.updateContextMenuState();
+        }
+    }
+
     updateGridSelection() {
         // 그리드의 선택 상태만 업데이트 (전체 재렌더링 없음)
         const grid = document.getElementById('image-grid');
@@ -21925,10 +22174,20 @@ class WaferMapViewer {
             return;
         }
         
+        const activeRole = this.pageManager?.getActivePage?.()?.role || null;
+        if (this.isCompositeMode || activeRole === 'composite' || activeRole === 'measure') {
+            panel.style.display = 'none';
+            listDiv.innerHTML = '';
+            if (countBadge) countBadge.textContent = '0';
+            this.selectedWafersForCopy = [];
+            return;
+        }
+
         if (selectedList.length === 0) {
             panel.style.display = 'none';
             listDiv.innerHTML = '';
             if (countBadge) countBadge.textContent = '0';
+            this.selectedWafersForCopy = [];
             return;
         }
         
@@ -25515,6 +25774,7 @@ class WaferMapViewer {
         const savedOverlay = this.overlayMode;
         const savedKey = this._ratioActiveItemKey;
         const savedChecked = this._measureCheckedItems ? [...this._measureCheckedItems] : [];
+        this.clearGridSelectionMarks({ hidePanel: true, updateContext: false });
 
         // 🔥 원래 탭에 measure 상태를 저장하지 않도록 해제 후 persist
         this.overlayMode = null;
@@ -25532,6 +25792,7 @@ class WaferMapViewer {
             skipPersist: true,
             insertAfter: originPageId,
         });
+        this.displaySelectedGridImages([]);
 
         // 새 탭에 measure 상태 설정
         this.overlayMode = savedOverlay;
@@ -26074,17 +26335,10 @@ class WaferMapViewer {
      */
     _closeFailbitPanels() {
         document.querySelectorAll('.failbit-panel').forEach(p => {
-            p.style.display = 'none';
             // 동적 생성 요소 모두 제거 (다음 open 시 깨끗하게 재생성)
             p.querySelectorAll('.measure-apply-wrap, .pinned-section, .mc-reset-bar').forEach(el => el.remove());
             // body로 이동했던 패널을 원래 위치로 복원
-            if (p._originalParent && p.parentElement === document.body) {
-                if (p._originalNext) {
-                    p._originalParent.insertBefore(p, p._originalNext);
-                } else {
-                    p._originalParent.appendChild(p);
-                }
-            }
+            this._restoreFloatingFailbitPanel(p);
         });
     }
 

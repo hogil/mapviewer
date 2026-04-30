@@ -134,6 +134,7 @@ foreach ($script in $scripts) {
         -WorkingDirectory $repoRoot `
         -RedirectStandardOutput $stdoutPath `
         -RedirectStandardError $stderrPath `
+        -WindowStyle Hidden `
         -PassThru
 
     $progressLineCount = 0

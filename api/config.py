@@ -52,6 +52,7 @@ COMPOSITE_MAX_WORKERS = int(os.getenv("COMPOSITE_MAX_WORKERS", str(_default_comp
 COMPOSITE_LOADER_MODE = "thread"  # Fixed: loader mode is thread-only for composite pipeline
 _default_composite_batch = max(2, (os.cpu_count() or 8) // 2)
 COMPOSITE_BATCH_SIZE = max(1, int(os.getenv("COMPOSITE_BATCH_SIZE", str(_default_composite_batch))))
+USE_COMPOSITE_IMAGE_CACHE = os.getenv("USE_COMPOSITE_IMAGE_CACHE", "1").strip().lower() not in {"0", "false", "no", "n", "off"}
 
 # SEARCH_WORKERS: CPU 코어수의 2배 (I/O 바운드 작업에 최적)
 # 최소 4개, 최대 CPU_COUNT * 2개

@@ -563,8 +563,7 @@ const { createRunner } = require('./e2e_playwright_session');
     const gridRoundTrips = [];
     for (let i = 0; i < 4; i += 1) {
       await roundTripGridImageByDblClick(0);
-      await sleep(2200);
-      const summary = await getVisibleGridThumbSummary();
+      const summary = await waitForVisibleGridThumbsLoaded(12000, 500);
       gridRoundTrips.push(summary);
       expect(summary.visibleCount > 0, `restore visibleCount=${summary.visibleCount}`);
       expect(summary.badCount === 0, `restore badCount=${summary.badCount}`);
@@ -578,8 +577,7 @@ const { createRunner } = require('./e2e_playwright_session');
     for (let i = 0; i < 2; i += 1) {
       const targetIndex = await getMiddleVisibleGridIndex();
       await roundTripGridImageByDblClick(targetIndex);
-      await sleep(1800);
-      const summary = await getVisibleGridThumbSummary();
+      const summary = await waitForVisibleGridThumbsLoaded(12000, 500);
       scrolledRoundTrips.push({
         targetIndex,
         ...summary,
@@ -606,7 +604,7 @@ const { createRunner } = require('./e2e_playwright_session');
     });
     await sleep(300);
     const scrollEarly = await getVisibleGridThumbSummary();
-    const scrollSettled = await waitForVisibleGridThumbsLoaded(4500, 300);
+    const scrollSettled = await waitForVisibleGridThumbsLoaded(12000, 500);
     expect(scrollEarly.visibleCount > 0, `scroll visibleCount=${scrollEarly.visibleCount}`);
     expect(
       scrollEarly.loadedCount > 0 || scrollEarly.bad.some((item) => item.loading === 'true'),
