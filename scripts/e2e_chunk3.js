@@ -112,6 +112,45 @@ const { createRunner } = require('./e2e_playwright_session');
     append(`[LOAD_FOLDER_OK] ${folder} :: ${JSON.stringify(state)}\n`);
   }
 
+  async function selectWaferExplorerFolder(folder) {
+    append(`[SELECT_WAFER_FOLDER] ${folder}\n`);
+    const folderSelector = `#file-explorer summary.folder[data-path="${folder.replace(/"/g, '\\"')}"]`;
+    await page.waitForSelector(folderSelector, { timeout: 30000 });
+    await page.locator(folderSelector).click({ modifiers: ['Control'] });
+    await page.waitForFunction(
+      (folderName) => {
+        const v = window.viewer;
+        const selectedSummary = Array.from(document.querySelectorAll('#file-explorer summary.folder.selected'))
+          .some((summary) => summary.dataset.path === folderName);
+        return (
+          v.selectedFolders?.has(folderName) &&
+          selectedSummary &&
+          v.gridMode === true &&
+          (v.currentGridImages?.length || 0) > 0 &&
+          document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0
+        );
+      },
+      folder,
+      { timeout: 60000 }
+    );
+    await sleep(900);
+    const state = await page.evaluate((folderName) => {
+      const v = window.viewer;
+      return {
+        folder: folderName,
+        selectedFolders: [...(v.selectedFolders || [])],
+        selectedImagesLen: v.selectedImages?.length || 0,
+        currentGridImagesLen: v.currentGridImages?.length || 0,
+        selectedFolderPaths: Array.from(document.querySelectorAll('#file-explorer summary.folder.selected'))
+          .map((summary) => summary.dataset.path),
+        gridMode: !!v.gridMode,
+        wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+      };
+    }, folder);
+    append(`[SELECT_WAFER_FOLDER_OK] ${folder} :: ${JSON.stringify(state)}\n`);
+    return state;
+  }
+
   async function setSelection(indices) {
     await page.evaluate((idxs) => {
       const v = window.viewer;
@@ -274,6 +313,8 @@ const { createRunner } = require('./e2e_playwright_session');
         selectedImagesLen: v.selectedImages?.length || 0,
         gridSelectedIdxs: [...(v.gridSelectedIdxs || [])],
         selectedFolders: [...(v.selectedFolders || [])],
+        waferSelectedFolderPaths: Array.from(document.querySelectorAll('#file-explorer summary.folder.selected'))
+          .map((summary) => summary.dataset.path),
         scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
         maxScrollTop: scrollWrapper
           ? Math.max(0, scrollWrapper.scrollHeight - scrollWrapper.clientHeight)
@@ -1072,7 +1113,7 @@ const { createRunner } = require('./e2e_playwright_session');
 
   await record('tab-state-preserve', '탭별 grid/single/selection/scroll/explorer 상태 보존', async () => {
     await boot('chunk3-tab-preserve-composite');
-    await loadFolder('palette_3k');
+    await selectWaferExplorerFolder('palette_3k');
     await page.evaluate(() => window.viewer.applyGridColsChange(3, { maxCols: 20 }));
     await sleep(800);
     await scrollGridToRatio(0.55);
@@ -1115,6 +1156,14 @@ const { createRunner } = require('./e2e_playwright_session');
     append(`[TAB_STATE] composite preserve ok :: ${JSON.stringify({ waferPageId, compositeGridPageId, compositeSinglePageId })}\n`);
 
     expectGridPreserved(waferAfterComposite, { selectedIdxs: [2, 4, 6] });
+    expect(
+      waferAfterComposite.selectedFolders.includes('palette_3k'),
+      `wafer selectedFolders lost=${JSON.stringify(waferAfterComposite)}`
+    );
+    expect(
+      waferAfterComposite.waferSelectedFolderPaths.includes('palette_3k'),
+      `wafer explorer selected folder UI lost=${JSON.stringify(waferAfterComposite)}`
+    );
     expect(
       waferBeforeComposite.maxScrollTop === 0 ||
         Math.abs(waferAfterComposite.scrollTop - waferBeforeComposite.scrollTop) <= 12,
