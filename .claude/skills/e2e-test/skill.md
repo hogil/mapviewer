@@ -12,6 +12,7 @@ argument-hint: [Phase 번호 또는 범위]
 
 - **기본 실행은 반드시 로컬 Playwright runner**(`powershell -ExecutionPolicy Bypass -File scripts/run-e2e-playwright.ps1`)로 한다.
 - 사용자가 "내가 보게", "브라우저 띄워서"라고 하면 같은 runner를 **`-Headless` 없이** 실행한다. MCP 브라우저 도구로 대체하지 않는다.
+- 사용자가 "브라우저가 안 뜬다"고 하면 `-Headless` 실행은 금지한다. headful runner로 다시 시작하고, 한 Playwright session에 매달리지 말고 새 browser process/context로 재시도한다.
 - MCP 브라우저는 모델/도구가 직접 제어하는 원격 브라우저 세션이다. 최종 PASS 증명, 성능 측정, 프로세스 정리 검증에는 사용하지 않는다.
 - 로컬 runner는 repo 스크립트가 서버/Python/Node/Chromium 수명주기를 추적하므로, E2E 후 프로세스 정리 검증이 가능하다.
 - 이미 열려있는 사용자 브라우저 창을 navigate로 덮어쓰는 행위는 절대 금지한다.
@@ -22,6 +23,8 @@ argument-hint: [Phase 번호 또는 범위]
 - **`start-e2e-server.ps1`는 기존 서버(8443 등)를 절대 종료하지 않는다.**
 - 항상 `Get-FreePort`로 사용 중이지 않은 포트를 찾아 새 서버를 그 포트에서 시작한다.
 - 스크립트 출력 `READY:<port>`에서 실제 포트 번호를 읽어 `BASE_URL=https://localhost:<port>`로 설정한다.
+- `READY:<port>` 직후에는 5초 이하의 짧은 health check(`/api/config`)로 서버가 실제 응답하는지 확인한다.
+- READY 직후 서버가 죽었거나 warmup이 응답하지 않으면 오래 기다리지 말고, 해당 E2E PID/잔여 pid 파일을 정리한 뒤 다음 fresh port에서 새 서버를 시작한다.
 - `run-e2e-playwright.ps1`는 자신이 시작한 E2E 서버 PID를 추적하고, 테스트 종료 후 반드시 종료한다. 사용자가 `-KeepServer`를 명시한 경우만 예외다.
 - 기존 사용자 서버를 Kill하여 연결이 끊기는 사고는 절대 금지한다.
 - 이 규칙을 위반하여 `Stop-ApiMainProcesses` 또는 기존 서버 종료를 추가하는 행위는 절대 금지한다.
@@ -35,6 +38,7 @@ argument-hint: [Phase 번호 또는 범위]
 - 한 개 Phase라도 Playwright 없이 API만으로 처리하면 전체 테스트를 FAIL로 간주한다.
 - **기본 실행 경로는 `powershell -ExecutionPolicy Bypass -File scripts/run-e2e-playwright.ps1` 이다.**
 - 이 runner는 **질문/실행 1회당 새 Playwright 세션(`E2E_SESSION_ID`)**을 만들고, chunk마다 브라우저를 하나씩 띄워 이전 질문의 쿠키/캐시/창 상태를 재사용하지 않는다.
+- headful 실행에서 브라우저 창 검증이 실패하면 `E2E_BROWSER_SESSION_ATTEMPTS=3` 기준으로 새 Playwright browser process/context를 다시 띄운다. progress log의 `[BROWSER] launch attempt=` 기록으로 확인한다.
 
 ## 절대규칙 #0-1: 상태 플래그만으로 PASS 판정 금지 — 실제 화면 + visible 그리드로 검증
 
@@ -76,6 +80,7 @@ argument-hint: [Phase 번호 또는 범위]
 
 - 전체 실행은 서버 1개를 시작하고 chunk를 순서대로 실행한다. 각 chunk는 Node 1개와 Chromium 1개를 사용한다.
 - E2E runner는 `COMPOSITE_USE_NUMBA=1` 상태의 서버를 시작하고, 실제 서버 프로세스 안에서 Composite Numba warmup을 수행한다.
+- 서버가 READY 후 죽었거나 Composite Numba warmup이 짧은 timeout 안에 응답하지 않으면 즉시 실패 서버를 버리고 다음 fresh port로 재시도한다.
 - 테스트 종료 후 `api.main`/uvicorn Python, Playwright Chromium, E2E Node, E2E PID 파일이 남지 않아야 한다.
 - 실패 로그가 `[FAIL]` 또는 `"status": "FAIL"`을 포함하면 runner exit code는 반드시 non-zero여야 한다.
 - 테스트 결과 보고 전 아래를 확인한다.
@@ -137,6 +142,7 @@ argument-hint: [Phase 번호 또는 범위]
 - 기본은 repo의 로컬 Playwright 스크립트가 Chromium을 직접 띄우는 방식이다.
 - headless 전체 검증: `powershell -ExecutionPolicy Bypass -File scripts/run-e2e-playwright.ps1 -Chunk all -Headless`
 - 사용자가 보는 검증: `powershell -ExecutionPolicy Bypass -File scripts/run-e2e-playwright.ps1 -Chunk 3`처럼 `-Headless` 없이 실행한다.
+- 사용자가 브라우저가 보이지 않는다고 말한 직후의 재검증은 반드시 `-Headless` 없이 실행한다. runner가 headful 창을 `normal -> maximized`로 올리고, 실패 시 새 Playwright session으로 최대 3회 재시도한다.
 - MCP 브라우저는 모델에게 제공되는 별도 원격 제어 브라우저 도구다. 사용자에게 "내 로컬에서 보이는 E2E"를 증명할 때는 MCP가 아니라 로컬 Playwright runner를 사용한다.
 - 로컬 runner가 직접 만든 임시 브라우저/탭만 정리할 수 있다. 사용자 브라우저나 별도 작업 창은 건드리지 않는다.
 
@@ -163,7 +169,8 @@ argument-hint: [Phase 번호 또는 범위]
 1. `node --check scripts/e2e_chunk*.js`로 테스트 스크립트 문법을 먼저 확인한다.
 2. 로컬 Playwright 브라우저 설치가 없으면 `npx playwright install chromium`을 실행한다.
 3. 브라우저가 보여야 하는 요청이면 `-Headless`를 빼고 runner를 실행한다.
-4. MCP 브라우저는 이 단계에서 사용하지 않는다. MCP는 사용자가 명시적으로 "MCP로 봐라"라고 한 경우의 보조 디버깅만 허용한다.
+4. headful인데 창이 안 뜨면 같은 세션을 기다리지 말고 새 Playwright browser process/context로 재시도한다. runner의 기본 headful 재시도 횟수는 3회다.
+5. MCP 브라우저는 이 단계에서 사용하지 않는다. MCP는 사용자가 명시적으로 "MCP로 봐라"라고 한 경우의 보조 디버깅만 허용한다.
 
 ### Step 0-2: 서버 시작 (원샷 스크립트)
 

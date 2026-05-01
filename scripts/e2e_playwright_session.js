@@ -8,9 +8,96 @@ function readBool(name, fallback = false) {
   return ['1', 'true', 'yes', 'on'].includes(String(raw).trim().toLowerCase());
 }
 
+function readInt(name, fallback) {
+  const raw = process.env[name];
+  const value = Number.parseInt(raw || '', 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 function defaultSessionId() {
   const iso = new Date().toISOString().replace(/[:.]/g, '-');
   return `${iso}-${process.pid}`;
+}
+
+async function ensureHeadfulWindow(page, append) {
+  try {
+    await page.bringToFront();
+    const cdp = await page.context().newCDPSession(page);
+    const { windowId } = await cdp.send('Browser.getWindowForTarget');
+    await cdp.send('Browser.setWindowBounds', {
+      windowId,
+      bounds: {
+        windowState: 'normal',
+        left: 40,
+        top: 40,
+        width: 1920,
+        height: 1080,
+      },
+    });
+    await cdp.send('Browser.setWindowBounds', {
+      windowId,
+      bounds: { windowState: 'maximized' },
+    });
+    const visibility = await page.evaluate(() => document.visibilityState).catch(() => 'unknown');
+    append?.(`[BROWSER] headful window visibility=${visibility}\n`);
+    if (visibility !== 'visible') {
+      throw new Error(`headful page visibility=${visibility}`);
+    }
+  } catch (error) {
+    append?.(`[BROWSER] headful window verify failed: ${error.message || error}\n`);
+    throw error;
+  }
+}
+
+async function launchSession({ headless, outputDir, progressFile }) {
+  const attempts = headless ? 1 : readInt('E2E_BROWSER_SESSION_ATTEMPTS', 3);
+  const append = (line) => fs.appendFileSync(progressFile, line, 'utf8');
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    let browser = null;
+    let context = null;
+    try {
+      append(`[BROWSER] launch attempt=${attempt}/${attempts} headless=${headless ? 1 : 0}\n`);
+      browser = await chromium.launch({
+        headless,
+        args: [
+          '--window-size=1920,1080',
+          '--window-position=40,40',
+          '--start-maximized',
+          '--disable-background-timer-throttling',
+          '--disable-renderer-backgrounding',
+        ],
+      });
+      context = await browser.newContext({
+        ignoreHTTPSErrors: true,
+        viewport: { width: 1920, height: 1080 },
+        acceptDownloads: true,
+        locale: 'ko-KR',
+      });
+      const page = await context.newPage();
+      if (!headless) {
+        await ensureHeadfulWindow(page, append);
+      }
+      append(`[BROWSER] launch ok attempt=${attempt}\n`);
+      return { browser, context, page };
+    } catch (error) {
+      lastError = error;
+      append(`[BROWSER] launch failed attempt=${attempt}: ${error.message || error}\n`);
+      try {
+        if (context) await context.close();
+      } catch {
+        // ignore cleanup errors between attempts
+      }
+      try {
+        if (browser) await browser.close();
+      } catch {
+        // ignore cleanup errors between attempts
+      }
+    }
+  }
+
+  throw lastError || new Error('Playwright browser launch failed');
 }
 
 async function createRunner(scriptFile) {
@@ -46,23 +133,7 @@ async function createRunner(scriptFile) {
     'utf8'
   );
 
-  const browser = await chromium.launch({
-    headless,
-    args: [
-      '--window-size=1920,1080',
-      '--window-position=40,40',
-      '--start-maximized',
-      '--disable-background-timer-throttling',
-      '--disable-renderer-backgrounding',
-    ],
-  });
-  const context = await browser.newContext({
-    ignoreHTTPSErrors: true,
-    viewport: { width: 1920, height: 1080 },
-    acceptDownloads: true,
-    locale: 'ko-KR',
-  });
-  const page = await context.newPage();
+  const { browser, context, page } = await launchSession({ headless, outputDir, progressFile });
   const results = [];
   const focusWindow = async () => {
     try {

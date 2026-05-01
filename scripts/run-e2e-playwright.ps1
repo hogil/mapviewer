@@ -67,61 +67,128 @@ if (-not $NoCleanBeforeRun) {
     Stop-StaleE2EServers
 }
 
-Write-Host "BOOTSTRAP scripts/start-e2e-server.ps1"
 $readyPath = Join-Path $repoRoot ".codex-tmp/e2e-server.last-ready.txt"
 $readyJsonPath = Join-Path $repoRoot ".codex-tmp/e2e-server.last-ready.json"
-Remove-Item $readyPath -Force -ErrorAction SilentlyContinue
-$ready = & (Join-Path $PSScriptRoot "start-e2e-server.ps1") 8443
-if ([string]::IsNullOrWhiteSpace($ready) -and (Test-Path $readyPath)) {
-    $ready = (Get-Content -Path $readyPath -Raw -ErrorAction SilentlyContinue).Trim()
-}
-if ($ready -notmatch '^READY:(\d+)$') {
-    Write-Error "E2E server bootstrap failed: $ready"
-    exit 1
-}
 
-$port = $Matches[1]
-$serverInfo = $null
-if (Test-Path $readyJsonPath) {
-    try {
-        $serverInfo = Get-Content -Path $readyJsonPath -Raw | ConvertFrom-Json
-        if ($serverInfo -and $serverInfo.pid) {
-            $script:E2EServerPid = [int]$serverInfo.pid
+function Get-E2EServerInfo {
+    param(
+        [string]$ReadyJsonPath,
+        [int]$Port
+    )
+
+    $info = $null
+    if (Test-Path $ReadyJsonPath) {
+        try {
+            $info = Get-Content -Path $ReadyJsonPath -Raw | ConvertFrom-Json
+        } catch {
+            $info = $null
         }
-    } catch {
-        $serverInfo = $null
     }
-}
-if (-not $script:E2EServerPid) {
+    if ($info -and $info.pid) {
+        return $info
+    }
+
     try {
-        $listenerLine = netstat -ano | Select-String -Pattern (":{0}\s+.*LISTENING\s+(\d+)" -f $port) | Select-Object -First 1
+        $listenerLine = netstat -ano | Select-String -Pattern (":{0}\s+.*LISTENING\s+(\d+)" -f $Port) | Select-Object -First 1
         if ($listenerLine -and $listenerLine.Matches.Count -gt 0) {
-            $script:E2EServerPid = [int]$listenerLine.Matches[0].Groups[1].Value
-            $serverInfo = [pscustomobject]@{
-                pid = $script:E2EServerPid
-                port = [int]$port
+            return [pscustomobject]@{
+                pid = [int]$listenerLine.Matches[0].Groups[1].Value
+                port = [int]$Port
             }
         }
     } catch {
     }
+
+    return $null
 }
-$baseUrl = "https://127.0.0.1:$port"
+
+function Test-E2EServerAlive {
+    param(
+        [string]$BaseUrl,
+        [int]$ProcessId,
+        [int]$TimeoutSeconds = 5
+    )
+
+    if ($ProcessId -gt 0 -and -not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    try {
+        $raw = & curl.exe -s -k --max-time $TimeoutSeconds "$BaseUrl/api/config"
+        return ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($raw))
+    } catch {
+        return $false
+    }
+}
 
 function Invoke-ServerCompositeNumbaWarm {
     param([string]$BaseUrl)
 
     Write-Host "WARMUP composite numba"
-    $raw = & curl.exe -s -k --max-time 120 `
+    $raw = & curl.exe -s -k --max-time 45 `
         -H "X-L3-Startup-Warm: 1" `
         -X POST "$BaseUrl/api/internal/composite-numba-warmup"
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($raw)) {
-        Write-Error "Composite Numba warmup failed for $BaseUrl"
-        exit 1
+        Write-Host "WARN Composite Numba warmup failed for $BaseUrl"
+        return $false
     }
     Write-Host "COMPOSITE_NUMBA_WARM $raw"
+    return $true
 }
 
-Invoke-ServerCompositeNumbaWarm -BaseUrl $baseUrl
+$port = $null
+$serverInfo = $null
+$baseUrl = $null
+$preferredPort = 8443
+$maxServerAttempts = 3
+for ($serverAttempt = 1; $serverAttempt -le $maxServerAttempts; $serverAttempt++) {
+    Write-Host "BOOTSTRAP scripts/start-e2e-server.ps1 (attempt=$serverAttempt preferred=$preferredPort)"
+    Remove-Item $readyPath, $readyJsonPath -Force -ErrorAction SilentlyContinue
+    $ready = & (Join-Path $PSScriptRoot "start-e2e-server.ps1") $preferredPort
+    if ([string]::IsNullOrWhiteSpace($ready) -and (Test-Path $readyPath)) {
+        $ready = (Get-Content -Path $readyPath -Raw -ErrorAction SilentlyContinue).Trim()
+    }
+    if ($ready -notmatch '^READY:(\d+)$') {
+        Write-Host "WARN E2E server bootstrap failed: $ready"
+        $preferredPort += 1
+        continue
+    }
+
+    $candidatePort = [int]$Matches[1]
+    $candidateInfo = Get-E2EServerInfo -ReadyJsonPath $readyJsonPath -Port $candidatePort
+    $candidatePid = if ($candidateInfo -and $candidateInfo.pid) { [int]$candidateInfo.pid } else { 0 }
+    $candidateBaseUrl = "https://127.0.0.1:$candidatePort"
+
+    if (-not (Test-E2EServerAlive -BaseUrl $candidateBaseUrl -ProcessId $candidatePid -TimeoutSeconds 5)) {
+        Write-Host "WARN E2E server died or did not answer after READY: $candidateBaseUrl pid=$candidatePid"
+        if (-not $KeepServer -and $candidatePid -gt 0) {
+            Stop-ProcessTree -ProcessId $candidatePid
+        }
+        & (Join-Path $PSScriptRoot "cleanup-e2e.ps1") -Quiet
+        $preferredPort = $candidatePort + 1
+        continue
+    }
+
+    if (-not (Invoke-ServerCompositeNumbaWarm -BaseUrl $candidateBaseUrl)) {
+        if (-not $KeepServer -and $candidatePid -gt 0) {
+            Stop-ProcessTree -ProcessId $candidatePid
+        }
+        & (Join-Path $PSScriptRoot "cleanup-e2e.ps1") -Quiet
+        $preferredPort = $candidatePort + 1
+        continue
+    }
+
+    $port = $candidatePort
+    $serverInfo = $candidateInfo
+    $script:E2EServerPid = $candidatePid
+    $baseUrl = $candidateBaseUrl
+    break
+}
+
+if (-not $baseUrl) {
+    Write-Error "E2E server bootstrap failed after $maxServerAttempts attempts"
+    exit 1
+}
 
 $sessionId = "{0}-{1}" -f (Get-Date -Format "yyyyMMdd-HHmmss"), ([guid]::NewGuid().ToString("N").Substring(0, 8))
 $outputDir = Join-Path $repoRoot (Join-Path ".codex-tmp/e2e-sessions" $sessionId)
@@ -141,6 +208,12 @@ $env:E2E_BASE_URL = $baseUrl
 $env:E2E_SESSION_ID = $sessionId
 $env:E2E_OUTPUT_DIR = $outputDir
 $env:E2E_HEADLESS = if ($Headless) { "1" } else { "0" }
+$env:E2E_BROWSER_SESSION_ATTEMPTS = if ($Headless) { "1" } else { "3" }
+if ($Headless) {
+    Write-Host "BROWSER headless=1 (no visible browser window expected)"
+} else {
+    Write-Host "BROWSER headless=0 (visible browser expected, session attempts=$($env:E2E_BROWSER_SESSION_ATTEMPTS))"
+}
 
 function Get-NewTailLines {
     param(
@@ -231,6 +304,7 @@ foreach ($script in $scripts) {
     $chunkStartedAt = Get-Date
     $doneSeen = $false
     $chunkFailedSeen = $false
+    $chunkTimedOut = $false
     $doneGraceDeadline = $null
     while (-not $proc.HasExited) {
         Start-Sleep -Seconds 2
@@ -256,6 +330,8 @@ foreach ($script in $scripts) {
         }
         if (((Get-Date) - $chunkStartedAt).TotalSeconds -ge $maxChunkSeconds) {
             Write-Host "[$name] chunk timeout ${maxChunkSeconds}s"
+            Add-Content -Path $progressPath -Value "[FAIL] $name timeout ${maxChunkSeconds}s"
+            $chunkTimedOut = $true
             Stop-ProcessTree -ProcessId $proc.Id
             break
         }
@@ -284,7 +360,9 @@ foreach ($script in $scripts) {
         $stdoutText.Contains('"status":"FAIL"') -or
         ($stdoutText -match '"status"\s*:\s*"FAIL"')
     )
-    if ($chunkFailedSeen -or $progressHasFail -or $stdoutHasFail) {
+    if ($chunkTimedOut) {
+        $exitCode = 124
+    } elseif ($chunkFailedSeen -or $progressHasFail -or $stdoutHasFail) {
         $exitCode = 2
     } elseif (-not $proc.HasExited -and $doneSeen) {
         $exitCode = 0
