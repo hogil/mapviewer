@@ -4,7 +4,8 @@ param(
     [switch]$WithSmoke,
     [switch]$Headless,
     [switch]$KeepServer,
-    [switch]$NoCleanBeforeRun
+    [switch]$NoCleanBeforeRun,
+    [switch]$ColdCache
 )
 
 $ErrorActionPreference = "Stop"
@@ -121,9 +122,54 @@ function Stop-StaleE2EServers {
     }
 }
 
+function Clear-E2EColdCache {
+    $imagesRoot = $env:IMAGES_ROOT
+    if ([string]::IsNullOrWhiteSpace($imagesRoot)) {
+        $imagesRoot = if ($IsWindows -or $env:OS -eq "Windows_NT") { "D:/project/data/wm-811k" } else { "/appdata/appuser/images" }
+    }
+
+    $root = (Resolve-Path -LiteralPath $imagesRoot -ErrorAction Stop).Path
+    if ((Split-Path -Leaf $root).ToLowerInvariant() -ne "wm-811k") {
+        throw "Refusing to clear E2E cold cache outside wm-811k root: $root"
+    }
+
+    $removed = New-Object System.Collections.Generic.List[string]
+    $thumbnailDir = Join-Path $root "thumbnails"
+    if (Test-Path -LiteralPath $thumbnailDir) {
+        Remove-Item -LiteralPath $thumbnailDir -Recurse -Force -ErrorAction Stop
+        $removed.Add($thumbnailDir)
+    }
+
+    $indexCache = Join-Path $root ".file_index_cache.txt"
+    if (Test-Path -LiteralPath $indexCache) {
+        Remove-Item -LiteralPath $indexCache -Force -ErrorAction Stop
+        $removed.Add($indexCache)
+    }
+
+    Get-ChildItem -LiteralPath $root -Filter ".file_index_cache_*.lock" -File -ErrorAction SilentlyContinue | ForEach-Object {
+        Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
+        $removed.Add($_.FullName)
+    }
+
+    $compositeInputCache = Join-Path $root "composite_cache_v1"
+    if (Test-Path -LiteralPath $compositeInputCache) {
+        Remove-Item -LiteralPath $compositeInputCache -Recurse -Force -ErrorAction Stop
+        $removed.Add($compositeInputCache)
+    }
+
+    Write-Host ("COLD_CACHE cleared root={0} removed={1}" -f $root, ($removed.Count))
+    foreach ($item in $removed) {
+        Write-Host ("COLD_CACHE removed {0}" -f $item)
+    }
+}
+
 if (-not $NoCleanBeforeRun) {
     & (Join-Path $PSScriptRoot "cleanup-e2e.ps1") -Quiet
     Stop-StaleE2EServers
+}
+
+if ($ColdCache) {
+    Clear-E2EColdCache
 }
 
 $readyPath = Join-Path $repoRoot ".codex-tmp/e2e-server.last-ready.txt"
