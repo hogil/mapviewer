@@ -1713,7 +1713,7 @@ async def _lifespan_background_init():
         user_first_window = os.getenv("STARTUP_USER_FIRST_SECONDS", "1.25")
     user_first_seconds = max(0.0, float(user_first_window))
     warm_folders = tuple(
-        folder.strip() for folder in os.getenv("STARTUP_THUMB_WARM_FOLDERS", "palette_3k").split(",") if folder.strip()
+        folder.strip() for folder in os.getenv("STARTUP_THUMB_WARM_FOLDERS", "unknown").split(",") if folder.strip()
     )
     warm_count = max(0, int(os.getenv("STARTUP_THUMB_WARM_COUNT", "24")))
     warm_composite_modules = os.getenv("STARTUP_WARM_COMPOSITE_MODULES", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -4841,7 +4841,7 @@ def list_dir_fast(target: Path) -> List[Dict[str, str]]:
         # 프론트엔드가 썸네일 요청 시 원본 경로를 사용할 수 있도록
         target_str = str(target).replace('\\', '/')
         if '/classification/' in target_str or '/classification_chips/' in target_str:
-            # source_prefix 추출: classification 앞의 경로 (예: "palette_3k")
+            # source_prefix 추출: classification 앞의 경로 (예: "unknown")
             _target_rel = target_str[root_dir_len:].lstrip('/') if target_str.startswith(root_dir_str) else ''
             _parts = _target_rel.split('/')
             _cls_idx = next((i for i, x in enumerate(_parts) if x in ('classification', 'classification_chips')), -1)
@@ -7859,7 +7859,7 @@ async def get_index_status():
 
 @app.get("/api/search")
 async def search_files(q: str = Query("", description="파일명 검색(대소문자 무시, 부분일치)"),
-                       limit: int = Query(3000, ge=1, le=200000),
+                       limit: int = Query(3000, ge=1, le=10000),
                        offset: int = Query(0, ge=0),
                        lot_multi: Optional[str] = Query(None, alias="lot_multi"),
                        lot_wafer: Optional[str] = Query(None, description="LOT:WAFER 쌍 (쉼표 구분, 예: abc123:04,def456:08)"),
@@ -8682,6 +8682,7 @@ async def classify_chips(request: ChipClassifyRequest,
 
         saved_count = 0
         errors = []
+        saved_files = []
 
         # 각 chip 크롭 및 저장
         for chip_coord in request.chip_coords:
@@ -8709,13 +8710,30 @@ async def classify_chips(request: ChipClassifyRequest,
                 # 칩 크롭
                 chip_img = wafer_img.crop((x0, y0, x1, y1))
 
-                # 파일명 생성: 원본파일명_x{x}_y{y}.png
-                chip_filename = f"{wafer_name}_x{abs(chip_coord.x_abs)}_y{abs(chip_coord.y_abs)}.png"
+                abs_x = abs(chip_coord.x_abs)
+                abs_y = abs(chip_coord.y_abs)
+                bottom_token = _chip_bottom_filename_token(chip.get('b'))
+
+                # 파일명 생성: 원본파일명_x{x}_y{y}_b{bottom}.png
+                chip_filename = f"{wafer_name}_x{abs_x}_y{abs_y}_b{bottom_token}.png"
                 chip_path = class_dir / chip_filename
+                legacy_prefix = f"{wafer_name}_x{abs_x}_y{abs_y}"
+                for legacy_path in class_dir.glob(f"{legacy_prefix}*.png"):
+                    if legacy_path.name != chip_filename:
+                        try:
+                            legacy_path.unlink()
+                        except FileNotFoundError:
+                            pass
 
                 # 저장
                 chip_img.save(chip_path, format='PNG')
                 saved_count += 1
+                saved_files.append({
+                    "filename": chip_filename,
+                    "x_abs": chip_coord.x_abs,
+                    "y_abs": chip_coord.y_abs,
+                    "b": bottom_token,
+                })
 
             except Exception as e:
                 errors.append(f"Chip ({chip_coord.x_abs}, {chip_coord.y_abs}): {str(e)}")
@@ -8730,6 +8748,7 @@ async def classify_chips(request: ChipClassifyRequest,
             "success": True,
             "class": class_name,
             "saved_count": saved_count,
+            "saved_files": saved_files,
             "errors": errors,
             "error_count": len(errors)
         }
@@ -8771,13 +8790,14 @@ async def get_chip_labels(
                     parsed = _parse_chip_filename(chip_file.stem)
                     if not parsed:
                         continue
-                    wafer_stem, x_abs, y_abs = parsed
+                    wafer_stem, x_abs, y_abs, bottom = parsed
                     if wafer_stem != wafer_name:
                         continue
 
                     chip_labels.append({
                         "x_abs": x_abs,
                         "y_abs": y_abs,
+                        "b": bottom,
                         "class": class_name,
                         "filename": chip_file.name
                     })
@@ -9398,11 +9418,17 @@ def _get_relative_path_from_image(image_path: str) -> str:
 def _chip_id_from_coords(x_abs: int, y_abs: int) -> str:
     return f"abs:{x_abs}:{y_abs}"
 
-_CHIP_COORD_RE = re.compile(r"^(?P<wafer>.+)_x(?P<x>-?\d+)_y(?P<y>-?\d+)$")
+def _chip_bottom_filename_token(raw_value: Any) -> str:
+    if raw_value is None:
+        return "Normal"
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", str(raw_value).strip()).strip("_")
+    return safe or "Normal"
 
-def _parse_chip_filename(stem: str) -> Optional[Tuple[str, int, int]]:
+_CHIP_COORD_RE = re.compile(r"^(?P<wafer>.+)_x(?P<x>-?\d+)_y(?P<y>-?\d+)(?:_b(?P<b>[A-Za-z0-9_-]+))?$")
+
+def _parse_chip_filename(stem: str) -> Optional[Tuple[str, int, int, Optional[str]]]:
     """
-    filename_x12_y34 → (filename, 12, 34)
+    filename_x12_y34[_bBottom] → (filename, 12, 34, Bottom)
     과거 음수 좌표도 허용하기 위해 - 기호 허용
     """
     match = _CHIP_COORD_RE.match(stem)
@@ -9413,6 +9439,7 @@ def _parse_chip_filename(stem: str) -> Optional[Tuple[str, int, int]]:
             match.group("wafer"),
             int(match.group("x")),
             int(match.group("y")),
+            match.group("b"),
         )
     except ValueError:
         return None
@@ -9609,12 +9636,13 @@ async def get_chip_annotations(path: str, folder: Optional[str] = Query(None)):
                     parsed = _parse_chip_filename(chip_file.stem)
                     if not parsed:
                         continue
-                    parsed_stem, x_abs, y_abs = parsed
+                    parsed_stem, x_abs, y_abs, bottom = parsed
                     if parsed_stem != wafer_stem:
                         continue
                     marked_chips.append({
                         "x_abs": x_abs,
                         "y_abs": y_abs,
+                        "b": bottom,
                         "class": class_name,
                         "filename": chip_file.name,
                         "chip_id": _chip_id_from_coords(x_abs, y_abs),

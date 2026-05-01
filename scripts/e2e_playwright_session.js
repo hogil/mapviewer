@@ -1,6 +1,137 @@
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const { chromium } = require('playwright');
+
+const trackedBrowserProcesses = new Map();
+let cleanupHandlersRegistered = false;
+
+function removeFile(filePath) {
+  if (!filePath) return;
+  try {
+    fs.rmSync(filePath, { force: true });
+  } catch {
+    // Best-effort cleanup.
+  }
+}
+
+function killProcessTree(pid) {
+  if (!pid || !Number.isFinite(Number(pid))) return;
+  try {
+    if (process.platform === 'win32') {
+      spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    } else {
+      process.kill(Number(pid), 'SIGKILL');
+    }
+  } catch {
+    // The process may already be gone.
+  }
+}
+
+function cleanupTrackedBrowsersSync() {
+  for (const [pid, pidFile] of trackedBrowserProcesses.entries()) {
+    killProcessTree(pid);
+    removeFile(pidFile);
+  }
+  trackedBrowserProcesses.clear();
+}
+
+function registerCleanupHandlers() {
+  if (cleanupHandlersRegistered) return;
+  cleanupHandlersRegistered = true;
+  process.once('exit', cleanupTrackedBrowsersSync);
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.once(signal, () => {
+      cleanupTrackedBrowsersSync();
+      process.exit(signal === 'SIGINT' ? 130 : 143);
+    });
+  }
+}
+
+function registerBrowserPid(browser, pidFile) {
+  const browserProcess =
+    browser && typeof browser.process === 'function' ? browser.process() : null;
+  let pid = browserProcess && browserProcess.pid ? Number(browserProcess.pid) : 0;
+  if (!(pid > 0)) {
+    pid = findBrowserChildPid();
+  }
+  if (pid > 0) {
+    fs.writeFileSync(pidFile, String(pid), 'ascii');
+    trackedBrowserProcesses.set(pid, pidFile);
+  }
+  return pid;
+}
+
+function findBrowserChildPid() {
+  try {
+    if (process.platform === 'win32') {
+      const script = [
+        '$p = Get-CimInstance Win32_Process | Where-Object {',
+        ('  $_.ParentProcessId -eq {0} -and' ).replace('{0}', String(process.pid)),
+        '  $_.Name -in @("chrome.exe","chromium.exe","chrome-headless-shell.exe","chromium-headless-shell.exe")',
+        '} | Select-Object -First 1 -ExpandProperty ProcessId;',
+        'if ($p) { Write-Output $p }',
+      ].join(' ');
+      const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', script], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const pid = Number.parseInt(String(result.stdout || '').trim(), 10);
+      return Number.isFinite(pid) && pid > 0 ? pid : 0;
+    }
+  } catch {
+    // Fall through to unknown PID.
+  }
+  return 0;
+}
+
+function unregisterBrowserPid(pid, pidFile) {
+  if (pid > 0) {
+    trackedBrowserProcesses.delete(pid);
+  }
+  removeFile(pidFile);
+}
+
+async function withTimeout(promise, timeoutMs, label) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timeout`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function closeBrowserResources({ context, browser, browserPid, browserPidFile, append }) {
+  let hadCloseError = false;
+  try {
+    if (context) {
+      await withTimeout(context.close(), 5000, 'context.close');
+    }
+  } catch (error) {
+    hadCloseError = true;
+    append?.(`[BROWSER] context close failed: ${error.message || error}\n`);
+  }
+
+  try {
+    if (browser) {
+      await withTimeout(browser.close(), 5000, 'browser.close');
+    }
+  } catch (error) {
+    hadCloseError = true;
+    append?.(`[BROWSER] browser close failed: ${error.message || error}\n`);
+  }
+
+  if (hadCloseError && browserPid > 0) {
+    append?.(`[BROWSER] killing browser process tree pid=${browserPid}\n`);
+    killProcessTree(browserPid);
+  }
+  unregisterBrowserPid(browserPid, browserPidFile);
+}
 
 function readBool(name, fallback = false) {
   const raw = process.env[name];
@@ -49,7 +180,8 @@ async function ensureHeadfulWindow(page, append) {
   }
 }
 
-async function launchSession({ headless, outputDir, progressFile }) {
+async function launchSession({ headless, outputDir, progressFile, browserPidFile }) {
+  registerCleanupHandlers();
   const attempts = headless ? 1 : readInt('E2E_BROWSER_SESSION_ATTEMPTS', 3);
   const append = (line) => fs.appendFileSync(progressFile, line, 'utf8');
   let lastError = null;
@@ -57,6 +189,7 @@ async function launchSession({ headless, outputDir, progressFile }) {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     let browser = null;
     let context = null;
+    let browserPid = 0;
     try {
       append(`[BROWSER] launch attempt=${attempt}/${attempts} headless=${headless ? 1 : 0}\n`);
       browser = await chromium.launch({
@@ -69,6 +202,10 @@ async function launchSession({ headless, outputDir, progressFile }) {
           '--disable-renderer-backgrounding',
         ],
       });
+      browserPid = registerBrowserPid(browser, browserPidFile);
+      if (browserPid > 0) {
+        append(`[BROWSER] pid=${browserPid} pidFile=${browserPidFile}\n`);
+      }
       context = await browser.newContext({
         ignoreHTTPSErrors: true,
         viewport: { width: 1920, height: 1080 },
@@ -84,16 +221,7 @@ async function launchSession({ headless, outputDir, progressFile }) {
     } catch (error) {
       lastError = error;
       append(`[BROWSER] launch failed attempt=${attempt}: ${error.message || error}\n`);
-      try {
-        if (context) await context.close();
-      } catch {
-        // ignore cleanup errors between attempts
-      }
-      try {
-        if (browser) await browser.close();
-      } catch {
-        // ignore cleanup errors between attempts
-      }
+      await closeBrowserResources({ context, browser, browserPid, browserPidFile, append });
     }
   }
 
@@ -117,6 +245,12 @@ async function createRunner(scriptFile) {
   fs.writeFileSync(progressFile, '', 'utf8');
 
   const metaPath = path.join(outputDir, `${scriptName}.meta.json`);
+  const tmpRoot = path.resolve(__dirname, '..', '.codex-tmp');
+  fs.mkdirSync(tmpRoot, { recursive: true });
+  const browserPidFile = path.join(
+    tmpRoot,
+    `e2e-browser-${sessionId}-${scriptName}-${process.pid}.pid`
+  );
   fs.writeFileSync(
     metaPath,
     JSON.stringify(
@@ -133,7 +267,13 @@ async function createRunner(scriptFile) {
     'utf8'
   );
 
-  const { browser, context, page } = await launchSession({ headless, outputDir, progressFile });
+  const { browser, context, page } = await launchSession({
+    headless,
+    outputDir,
+    progressFile,
+    browserPidFile,
+  });
+  const browserPid = registerBrowserPid(browser, browserPidFile);
   const results = [];
   const focusWindow = async () => {
     try {
@@ -155,9 +295,11 @@ async function createRunner(scriptFile) {
   };
   const sleep = (ms) => page.waitForTimeout(ms);
   const append = (line) => fs.appendFileSync(progressFile, line, 'utf8');
+  let closeStarted = false;
   const close = async () => {
-    await context.close();
-    await browser.close();
+    if (closeStarted) return;
+    closeStarted = true;
+    await closeBrowserResources({ context, browser, browserPid, browserPidFile, append });
   };
 
   return {

@@ -9,12 +9,18 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = $utf8NoBom
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
 if (-not (Test-Path (Join-Path $repoRoot ".codex-tmp"))) {
     New-Item -ItemType Directory -Path (Join-Path $repoRoot ".codex-tmp") | Out-Null
 }
+$tmpRoot = Join-Path $repoRoot ".codex-tmp"
 
 function Stop-ProcessTree {
     param([int]$ProcessId)
@@ -37,11 +43,64 @@ function Stop-ProcessTree {
 }
 
 $script:E2EServerPid = $null
+$script:E2ECurrentNodePid = $null
+
+function Start-E2EProcessWatchdog {
+    param(
+        [int]$TargetProcessId,
+        [string]$PidFile,
+        [string]$Reason,
+        [string]$LogPath
+    )
+
+    if ($TargetProcessId -le 0) {
+        return
+    }
+
+    $watchScript = Join-Path $PSScriptRoot "watch-e2e-process.ps1"
+    if (-not (Test-Path $watchScript)) {
+        return
+    }
+
+    $hostPath = $null
+    try {
+        $hostPath = (Get-Process -Id $PID -ErrorAction Stop).Path
+    } catch {
+        $hostPath = "powershell.exe"
+    }
+    if ([string]::IsNullOrWhiteSpace($hostPath)) {
+        $hostPath = "powershell.exe"
+    }
+
+    if ([string]::IsNullOrWhiteSpace($LogPath)) {
+        $LogPath = Join-Path $tmpRoot ("e2e-watch-{0}.log" -f $TargetProcessId)
+    }
+
+    $arguments = @(
+        "-NoProfile",
+        "-ExecutionPolicy Bypass",
+        ('-File "{0}"' -f $watchScript),
+        ('-OwnerPid {0}' -f $PID),
+        ('-TargetPid {0}' -f $TargetProcessId),
+        ('-PidFile "{0}"' -f $PidFile),
+        ('-Reason "{0}"' -f $Reason),
+        ('-LogPath "{0}"' -f $LogPath)
+    ) -join " "
+
+    try {
+        Start-Process -FilePath $hostPath -ArgumentList $arguments -WorkingDirectory $repoRoot -WindowStyle Hidden | Out-Null
+    } catch {
+    }
+}
+
 trap {
+    if (-not $KeepServer -and $script:E2ECurrentNodePid) {
+        Stop-ProcessTree -ProcessId ([int]$script:E2ECurrentNodePid)
+    }
     if (-not $KeepServer -and $script:E2EServerPid) {
         Stop-ProcessTree -ProcessId ([int]$script:E2EServerPid)
-        & (Join-Path $PSScriptRoot "cleanup-e2e.ps1") -Quiet
     }
+    & (Join-Path $PSScriptRoot "cleanup-e2e.ps1") -Quiet
     Write-Error $_
     exit 1
 }
@@ -125,11 +184,11 @@ function Invoke-ServerCompositeNumbaWarm {
     param([string]$BaseUrl)
 
     Write-Host "WARMUP composite numba"
-    $raw = & curl.exe -s -k --max-time 45 `
+    $raw = & curl.exe -s -k --max-time 10 `
         -H "X-L3-Startup-Warm: 1" `
         -X POST "$BaseUrl/api/internal/composite-numba-warmup"
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($raw)) {
-        Write-Host "WARN Composite Numba warmup failed for $BaseUrl"
+        Write-Host "WARN Composite Numba warmup did not finish within 10s for $BaseUrl"
         return $false
     }
     Write-Host "COMPOSITE_NUMBA_WARM $raw"
@@ -144,7 +203,7 @@ $maxServerAttempts = 3
 for ($serverAttempt = 1; $serverAttempt -le $maxServerAttempts; $serverAttempt++) {
     Write-Host "BOOTSTRAP scripts/start-e2e-server.ps1 (attempt=$serverAttempt preferred=$preferredPort)"
     Remove-Item $readyPath, $readyJsonPath -Force -ErrorAction SilentlyContinue
-    $ready = & (Join-Path $PSScriptRoot "start-e2e-server.ps1") $preferredPort
+    $ready = & (Join-Path $PSScriptRoot "start-e2e-server.ps1") -PreferredPort $preferredPort -OwnerPid $PID
     if ([string]::IsNullOrWhiteSpace($ready) -and (Test-Path $readyPath)) {
         $ready = (Get-Content -Path $readyPath -Raw -ErrorAction SilentlyContinue).Trim()
     }
@@ -169,14 +228,7 @@ for ($serverAttempt = 1; $serverAttempt -le $maxServerAttempts; $serverAttempt++
         continue
     }
 
-    if (-not (Invoke-ServerCompositeNumbaWarm -BaseUrl $candidateBaseUrl)) {
-        if (-not $KeepServer -and $candidatePid -gt 0) {
-            Stop-ProcessTree -ProcessId $candidatePid
-        }
-        & (Join-Path $PSScriptRoot "cleanup-e2e.ps1") -Quiet
-        $preferredPort = $candidatePort + 1
-        continue
-    }
+    [void](Invoke-ServerCompositeNumbaWarm -BaseUrl $candidateBaseUrl)
 
     $port = $candidatePort
     $serverInfo = $candidateInfo
@@ -225,7 +277,7 @@ function Get-NewTailLines {
         return @{ Lines = @(); Count = $Skip }
     }
 
-    $lines = @(Get-Content -Path $Path)
+    $lines = @(Get-Content -Path $Path -Encoding UTF8)
     $count = $lines.Count
     if ($count -le $Skip) {
         return @{ Lines = @(); Count = $count }
@@ -234,6 +286,124 @@ function Get-NewTailLines {
     return @{
         Lines = @($lines[$Skip..($count - 1)])
         Count = $count
+    }
+}
+
+function Get-MedianNumber {
+    param([double[]]$Values)
+
+    $sorted = @($Values | Where-Object { $_ -ne $null -and -not [double]::IsNaN($_) } | Sort-Object)
+    if ($sorted.Count -eq 0) {
+        return $null
+    }
+
+    $middle = [int][Math]::Floor($sorted.Count / 2)
+    if (($sorted.Count % 2) -eq 1) {
+        return [Math]::Round([double]$sorted[$middle], 3)
+    }
+    return [Math]::Round((([double]$sorted[$middle - 1] + [double]$sorted[$middle]) / 2.0), 3)
+}
+
+function Convert-ProgressDetail {
+    param([string]$Text)
+
+    try {
+        return ($Text | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        return $Text
+    }
+}
+
+function Get-ProgressRecords {
+    param([string]$OutputDir)
+
+    $records = @()
+    $progressFiles = @(Get-ChildItem -Path $OutputDir -Filter "*.progress.log" -File -ErrorAction SilentlyContinue | Sort-Object Name)
+    foreach ($progressFile in $progressFiles) {
+        $lines = @(Get-Content -Path $progressFile.FullName -Encoding UTF8 -ErrorAction SilentlyContinue)
+        foreach ($line in $lines) {
+            if ($line -match '^\[(PASS|FAIL)\]\s+(\S+)\s+(.+?)\s+::\s+(.*)$') {
+                $status = $Matches[1]
+                $phase = $Matches[2]
+                $name = $Matches[3]
+                $detailText = $Matches[4]
+                $records += [pscustomobject]@{
+                    status = $status
+                    phase = $phase
+                    name = $name
+                    detail = Convert-ProgressDetail -Text $detailText
+                    log = $progressFile.Name
+                }
+            }
+        }
+    }
+    return $records
+}
+
+function Write-E2ESummaryFiles {
+    param(
+        [string]$OutputDir,
+        [string]$SessionId,
+        [string]$BaseUrl,
+        [string]$Chunk,
+        [bool]$Headless,
+        [int]$ExitCode
+    )
+
+    $records = @(Get-ProgressRecords -OutputDir $OutputDir)
+    $passCount = @($records | Where-Object { $_.status -eq "PASS" }).Count
+    $failCount = @($records | Where-Object { $_.status -eq "FAIL" }).Count
+    $summary = [pscustomobject]@{
+        sessionId = $SessionId
+        baseUrl = $BaseUrl
+        chunk = $Chunk
+        headless = $Headless
+        status = if ($ExitCode -eq 0 -and $failCount -eq 0) { "PASS" } else { "FAIL" }
+        exitCode = $ExitCode
+        generatedAt = (Get-Date).ToString("o")
+        totals = [pscustomobject]@{
+            records = $records.Count
+            pass = $passCount
+            fail = $failCount
+        }
+        records = $records
+    }
+    $summaryPath = Join-Path $OutputDir "e2e-summary.json"
+    $summary | ConvertTo-Json -Depth 40 | Set-Content -Path $summaryPath -Encoding UTF8
+
+    $coldPath = Join-Path $OutputDir "cold-start-summary.json"
+    if (-not (Test-Path $coldPath)) {
+        $coldRecords = @(
+            $records | Where-Object {
+                $_.phase -match '(^|,)6[12](,|$)' -or
+                $_.name -match 'Cold|cold|캐시|성능'
+            }
+        )
+        $fqValues = @()
+        foreach ($record in $coldRecords) {
+            if ($record.detail -isnot [string] -and $record.detail.PSObject.Properties.Name -contains "fqLoadMs") {
+                $fqValues += [double]$record.detail.fqLoadMs
+            }
+        }
+        $coldSummary = [pscustomobject]@{
+            sessionId = $SessionId
+            baseUrl = $BaseUrl
+            status = if (@($coldRecords | Where-Object { $_.status -eq "FAIL" }).Count -eq 0) { "PASS" } else { "FAIL" }
+            generatedAt = (Get-Date).ToString("o")
+            source = "runner-progress-fallback"
+            strictCold = $false
+            note = "No dedicated cold-start artifact was produced by the chunk. This fallback summarizes matching progress records only."
+            runs = $coldRecords
+            median = [pscustomobject]@{
+                fqLoadMs = Get-MedianNumber -Values $fqValues
+            }
+        }
+        $coldSummary | ConvertTo-Json -Depth 40 | Set-Content -Path $coldPath -Encoding UTF8
+    }
+
+    return [pscustomobject]@{
+        summary = $summaryPath
+        coldStart = $coldPath
     }
 }
 
@@ -271,6 +441,108 @@ function Wait-ForSearchReady {
     return $false
 }
 
+function Test-TcpPortListening {
+    param([int]$Port)
+
+    if ($Port -le 0) {
+        return $false
+    }
+
+    $client = $null
+    try {
+        $client = [System.Net.Sockets.TcpClient]::new()
+        $iar = $client.BeginConnect("127.0.0.1", $Port, $null, $null)
+        if (-not $iar.AsyncWaitHandle.WaitOne(500)) {
+            return $false
+        }
+        $client.EndConnect($iar)
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($client) {
+            $client.Dispose()
+        }
+    }
+}
+
+function Get-E2ETrackedPidProcesses {
+    param([string[]]$PidFilters)
+
+    $tracked = @()
+    foreach ($pidFilter in $PidFilters) {
+        Get-ChildItem -Path $tmpRoot -Filter $pidFilter -File -ErrorAction SilentlyContinue | ForEach-Object {
+            $pidText = (Get-Content -Path $_.FullName -Raw -ErrorAction SilentlyContinue).Trim()
+            $pidValue = 0
+            if ([int]::TryParse($pidText, [ref]$pidValue) -and $pidValue -gt 0) {
+                $proc = Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $pidValue) -ErrorAction SilentlyContinue
+                if ($proc) {
+                    $tracked += [pscustomobject]@{
+                        ProcessId = [int]$proc.ProcessId
+                        ParentProcessId = [int]$proc.ParentProcessId
+                        Name = $proc.Name
+                        CommandLine = $proc.CommandLine
+                        PidFile = $_.FullName
+                    }
+                }
+            }
+        }
+    }
+    return $tracked
+}
+
+function Stop-E2ETrackedPidProcesses {
+    param(
+        [string[]]$PidFilters,
+        [string]$Reason
+    )
+
+    foreach ($tracked in @(Get-E2ETrackedPidProcesses -PidFilters $PidFilters)) {
+        Write-Host ("CLEAN {0} pid={1} name={2}" -f $Reason, $tracked.ProcessId, $tracked.Name)
+        Stop-ProcessTree -ProcessId ([int]$tracked.ProcessId)
+    }
+
+    foreach ($pidFilter in $PidFilters) {
+        Get-ChildItem -Path $tmpRoot -Filter $pidFilter -File -ErrorAction SilentlyContinue | ForEach-Object {
+            Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Get-E2EResidualProcesses {
+    $e2eNodePattern = 'scripts[\\/](e2e_chunk[123]|e2e_fresh_boot_smoke|e2e_visible_smoke)\.js'
+    $tracked = @(Get-E2ETrackedPidProcesses -PidFilters @("e2e-node-*.pid", "e2e-browser-*.pid"))
+    $patternMatches = @(Get-CimInstance Win32_Process | Where-Object {
+        ($_.Name -eq "node.exe" -and $_.CommandLine -match $e2eNodePattern) -or
+        ($_.CommandLine -match "playwright_chromiumdev_profile" -and $_.Name -in @(
+            "chrome.exe",
+            "chromium.exe",
+            "chrome-headless-shell.exe",
+            "chromium-headless-shell.exe"
+        ))
+    } | Select-Object ProcessId, ParentProcessId, Name, CommandLine)
+
+    return @($tracked + $patternMatches) | Sort-Object ProcessId -Unique
+}
+
+function Test-E2EProcessCleanup {
+    param([int]$ServerPort)
+
+    $pidFiles = @()
+    foreach ($pidFilter in @("e2e-server-*.pid", "e2e-node-*.pid", "e2e-browser-*.pid")) {
+        $pidFiles += @(Get-ChildItem -Path $tmpRoot -Filter $pidFilter -File -ErrorAction SilentlyContinue)
+    }
+
+    $residualProcesses = @(Get-E2EResidualProcesses)
+    $portListening = Test-TcpPortListening -Port $ServerPort
+    return [pscustomobject]@{
+        ok = ($pidFiles.Count -eq 0 -and $residualProcesses.Count -eq 0 -and -not $portListening)
+        pidFiles = $pidFiles
+        processes = $residualProcesses
+        portListening = $portListening
+    }
+}
+
 $overallExit = 0
 $maxChunkSeconds = 420
 foreach ($script in $scripts) {
@@ -299,6 +571,14 @@ foreach ($script in $scripts) {
         -RedirectStandardError $stderrPath `
         -WindowStyle Hidden `
         -PassThru
+    $script:E2ECurrentNodePid = $proc.Id
+    $nodePidPath = Join-Path $tmpRoot ("e2e-node-{0}-{1}.pid" -f $sessionId, $name)
+    Set-Content -Path $nodePidPath -Value ([string]$proc.Id) -Encoding ascii
+    Start-E2EProcessWatchdog `
+        -TargetProcessId $proc.Id `
+        -PidFile $nodePidPath `
+        -Reason ("e2e-node-{0}" -f $name) `
+        -LogPath (Join-Path $outputDir ("{0}.watch.log" -f $name))
 
     $progressLineCount = 0
     $chunkStartedAt = Get-Date
@@ -330,7 +610,7 @@ foreach ($script in $scripts) {
         }
         if (((Get-Date) - $chunkStartedAt).TotalSeconds -ge $maxChunkSeconds) {
             Write-Host "[$name] chunk timeout ${maxChunkSeconds}s"
-            Add-Content -Path $progressPath -Value "[FAIL] $name timeout ${maxChunkSeconds}s"
+            Add-Content -Path $progressPath -Encoding UTF8 -Value "[FAIL] $name timeout ${maxChunkSeconds}s"
             $chunkTimedOut = $true
             Stop-ProcessTree -ProcessId $proc.Id
             break
@@ -350,8 +630,8 @@ foreach ($script in $scripts) {
         }
     }
 
-    $progressText = if (Test-Path $progressPath) { Get-Content -Path $progressPath -Raw -ErrorAction SilentlyContinue } else { "" }
-    $stdoutText = if (Test-Path $stdoutPath) { Get-Content -Path $stdoutPath -Raw -ErrorAction SilentlyContinue } else { "" }
+    $progressText = if (Test-Path $progressPath) { Get-Content -Path $progressPath -Encoding UTF8 -Raw -ErrorAction SilentlyContinue } else { "" }
+    $stdoutText = if (Test-Path $stdoutPath) { Get-Content -Path $stdoutPath -Encoding UTF8 -Raw -ErrorAction SilentlyContinue } else { "" }
 
     $exitCode = if ($proc.HasExited) { $proc.ExitCode } else { 1 }
     $progressHasFail = -not [string]::IsNullOrEmpty($progressText) -and $progressText.Contains('[FAIL]')
@@ -368,7 +648,7 @@ foreach ($script in $scripts) {
         $exitCode = 0
     }
     if ($exitCode -ne 0 -and (Test-Path $stderrPath)) {
-        $stderrTail = Get-Content -Path $stderrPath -Tail 20 -ErrorAction SilentlyContinue
+        $stderrTail = Get-Content -Path $stderrPath -Encoding UTF8 -Tail 20 -ErrorAction SilentlyContinue
         foreach ($line in $stderrTail) {
             if ($line) {
                 Write-Host "[$name][stderr] $line"
@@ -381,6 +661,10 @@ foreach ($script in $scripts) {
     if ($exitCode -ne 0 -and $overallExit -eq 0) {
         $overallExit = $exitCode
     }
+    Remove-Item -Path $nodePidPath -Force -ErrorAction SilentlyContinue
+    $script:E2ECurrentNodePid = $null
+    Stop-E2ETrackedPidProcesses -PidFilters @("e2e-node-*.pid", "e2e-browser-*.pid") -Reason ("post-{0}" -f $name)
+    & (Join-Path $PSScriptRoot "cleanup-e2e.ps1") -Quiet -SkipServers
     Start-Sleep -Seconds 2
 }
 
@@ -390,7 +674,51 @@ if (-not $KeepServer -and $serverInfo -and $serverInfo.pid) {
     & (Join-Path $PSScriptRoot "cleanup-e2e.ps1") -Quiet
 }
 
+$cleanupCheck = Test-E2EProcessCleanup -ServerPort $port
+if ($cleanupCheck.ok) {
+    Write-Host "PROCESS_CLEANUP status=PASS"
+} else {
+    Write-Host ("PROCESS_CLEANUP status=FAIL pidFiles={0} processes={1} portListening={2}" -f $cleanupCheck.pidFiles.Count, $cleanupCheck.processes.Count, $cleanupCheck.portListening)
+    foreach ($pidFile in $cleanupCheck.pidFiles) {
+        Write-Host ("PROCESS_CLEANUP pidFile={0}" -f $pidFile.FullName)
+    }
+    foreach ($residual in $cleanupCheck.processes) {
+        Write-Host ("PROCESS_CLEANUP process pid={0} name={1}" -f $residual.ProcessId, $residual.Name)
+    }
+    if ($overallExit -eq 0) {
+        $overallExit = 3
+    }
+}
+
+$summaryFiles = Write-E2ESummaryFiles `
+    -OutputDir $outputDir `
+    -SessionId $sessionId `
+    -BaseUrl $baseUrl `
+    -Chunk $Chunk `
+    -Headless ([bool]$Headless) `
+    -ExitCode $overallExit
+
+try {
+    $summaryObject = Get-Content -Path $summaryFiles.summary -Encoding UTF8 -Raw | ConvertFrom-Json
+    Write-Host ("RESULT_SUMMARY status={0} pass={1} fail={2}" -f $summaryObject.status, $summaryObject.totals.pass, $summaryObject.totals.fail)
+    foreach ($record in $summaryObject.records) {
+        Write-Host ("RESULT [{0}] {1} {2}" -f $record.status, $record.phase, $record.name)
+    }
+    if (Test-Path $summaryFiles.coldStart) {
+        $coldObject = Get-Content -Path $summaryFiles.coldStart -Encoding UTF8 -Raw | ConvertFrom-Json
+        $fqMedian = $null
+        if ($coldObject.median -and ($coldObject.median.PSObject.Properties.Name -contains "fqLoadMs")) {
+            $fqMedian = $coldObject.median.fqLoadMs
+        }
+        Write-Host ("PERF_SUMMARY coldStartStatus={0} strictCold={1} fqLoadMsMedian={2}" -f $coldObject.status, $coldObject.strictCold, $fqMedian)
+    }
+} catch {
+    Write-Host "WARN summary print failed: $($_.Exception.Message)"
+}
+
 Write-Host "SESSION:$sessionId"
 Write-Host "BASE_URL:$baseUrl"
 Write-Host "OUTPUT_DIR:$outputDir"
+Write-Host "SUMMARY:$($summaryFiles.summary)"
+Write-Host "COLD_START_SUMMARY:$($summaryFiles.coldStart)"
 exit $overallExit

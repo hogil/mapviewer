@@ -67,7 +67,7 @@ SUPPORTED_EXTS = {ext.lower() for ext in config.SUPPORTED_EXTS}
 SKIP_DIRS = set(config.SKIP_DIRS)
 DIRLIST_EXECUTOR = ThreadPoolExecutor(max_workers=max(4, min(16, (os.cpu_count() or 8))))
 SEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=max(8, min(16, config.SEARCH_WORKERS)))
-_BOOT_HOT_FOLDER = (os.getenv("BOOTSTRAP_HOT_FOLDER", "palette_3k").strip() or "palette_3k")
+_BOOT_HOT_FOLDER = (os.getenv("BOOTSTRAP_HOT_FOLDER", "unknown").strip() or "unknown")
 
 INDEX_SKIP_DIRS = {d.strip() for d in config.INDEX_SKIP_DIRS if d.strip()}
 INDEX_CACHE_FILE = ROOT_DIR / ".file_index_cache.txt"
@@ -1280,7 +1280,7 @@ async def api_search_ready(request: Request):
 async def api_search(request: Request):
     params = request.query_params
     q = params.get("q", "")
-    limit = max(1, min(_parse_int(params.get("limit"), 3000), 200000))
+    limit = max(1, min(_parse_int(params.get("limit"), 3000), 10000))
     offset = max(0, _parse_int(params.get("offset"), 0))
     lot_multi = params.get("lot_multi")
     lot_wafer = params.get("lot_wafer")

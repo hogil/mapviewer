@@ -1,4 +1,4 @@
-const HOT_FOLDER = 'palette_3k';
+const HOT_FOLDER = 'unknown';
 const DEFAULT_SCHEME = 'notsaml';
 const BOOT_GRID_LIMIT = 48;
 const IDLE_IMPORT_DELAY_MS = 150;

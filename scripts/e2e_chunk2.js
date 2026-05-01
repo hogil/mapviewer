@@ -54,15 +54,33 @@ const { createRunner } = require('./e2e_playwright_session');
   async function loadFolder(folder) {
     append(`[LOAD_FOLDER] ${folder}\n`);
     await page.evaluate(async (folderName) => {
-      await window.viewer.loadImagesInFolderAndShowGrid(folderName);
+      const v = window.viewer;
+      v.selectedImages = [];
+      v.selectedFolders = new Set([folderName]);
+      v.lastSelectedFolderPath = folderName;
+      v._unfilteredGridImages = [];
+      const applied = await v.selectAllFolderFiles(folderName);
+      if (applied && Array.isArray(v.selectedImages) && v.selectedImages.length > 0) {
+        v.showGrid(v.selectedImages);
+      } else {
+        await v.loadImagesInFolderAndShowGrid(folderName);
+      }
     }, folder);
     await page.waitForFunction(
-      () =>
-        !!window.viewer &&
-        window.viewer.gridMode &&
-        window.viewer.currentGridImages?.length > 0 &&
-        document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0,
-      null,
+      (folderName) => {
+        const v = window.viewer;
+        const normalized = String(folderName || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        const prefix = normalized ? `${normalized}/` : '';
+        const images = Array.isArray(v?.currentGridImages) ? v.currentGridImages : [];
+        return (
+          !!v &&
+          v.gridMode &&
+          images.length > 0 &&
+          images.some((imagePath) => String(imagePath || '').replace(/\\/g, '/').startsWith(prefix)) &&
+          document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0
+        );
+      },
+      folder,
       { timeout: 90000 }
     );
     await sleep(800);
@@ -70,6 +88,7 @@ const { createRunner } = require('./e2e_playwright_session');
       prefix: window.viewer.currentFolderPrefix || '',
       count: window.viewer.currentGridImages?.length || 0,
       wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+      firstPath: window.viewer.currentGridImages?.[0] || '',
     }));
     append(`[LOAD_FOLDER_OK] ${folder} :: ${JSON.stringify(state)}\n`);
   }
@@ -496,23 +515,68 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(loops.every((x) => x.minimapVisible), 'minimap hidden in loop');
 
     await boot('chunk2-grid-restore');
-    await loadFolder('palette_3k');
-    await page.locator('summary[data-path="palette_3k"]').click();
-    await page.locator('#file-explorer a[data-path^="palette_3k/"]').first().waitFor({
-      timeout: 30000,
-    });
-    const explorerDirectRoundTrip = await page.evaluate(async () => {
+    await loadFolder('unknown');
+    const explorerDirectTarget = await page.evaluate(async () => {
       const v = window.viewer;
-      const fileLink = document.querySelector('#file-explorer a[data-path^="palette_3k/"]');
+      const firstPath = (Array.isArray(v.currentGridImages) ? v.currentGridImages : [])
+        .find((imagePath) => String(imagePath || '').replace(/\\/g, '/').startsWith('unknown/'));
+      if (!firstPath) {
+        return { firstPath: null, folderPath: null, linkFound: false };
+      }
+      const normalized = String(firstPath).replace(/\\/g, '/');
+      const folderPath = normalized.split('/').slice(0, -1).join('/');
+      const rootSummary = document.querySelector('summary.folder[data-path="unknown"]');
+      if (rootSummary) {
+        const rootDetails = rootSummary.parentElement;
+        const rootContent = rootSummary.nextElementSibling;
+        if (rootContent && rootDetails?.dataset.loaded !== 'true') {
+          await v.loadDirectoryContents('unknown', rootContent);
+          rootDetails.dataset.loaded = 'true';
+        }
+        if (rootDetails) {
+          rootDetails.open = true;
+        }
+      }
+      const folderSummary = Array.from(document.querySelectorAll('summary.folder'))
+        .find((summary) => summary.dataset.path === folderPath);
+      if (folderSummary) {
+        const folderDetails = folderSummary.parentElement;
+        const folderContent = folderSummary.nextElementSibling;
+        if (folderContent && folderDetails?.dataset.loaded !== 'true') {
+          await v.loadDirectoryContents(folderPath, folderContent);
+          folderDetails.dataset.loaded = 'true';
+        }
+        if (folderDetails) {
+          folderDetails.open = true;
+        }
+      }
+      const fileLink = Array.from(document.querySelectorAll('#file-explorer a[data-path]'))
+        .find((link) => link.dataset.path === normalized);
+      return { firstPath: normalized, folderPath, linkFound: !!fileLink };
+    });
+    expect(
+      explorerDirectTarget.linkFound,
+      `unknown explorer file link missing=${JSON.stringify(explorerDirectTarget)}`
+    );
+    const explorerDirectRoundTrip = await page.evaluate(async (targetPath) => {
+      const v = window.viewer;
+      const fileLink = Array.from(document.querySelectorAll('#file-explorer a[data-path]'))
+        .find((link) => link.dataset.path === targetPath);
       const before = {
         gridMode: v.gridMode,
         viewMode: v.viewMode,
         count: v.currentGridImages?.length || 0,
         wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
-        firstPath: fileLink?.dataset?.path || null,
+        firstPath: targetPath,
       };
       fileLink?.click();
-      await new Promise((resolve) => setTimeout(resolve, 1200));
+      const deadline = Date.now() + 30000;
+      while (Date.now() < deadline) {
+        if (v.viewMode === 'single' && v.selectedImagePath === targetPath) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
       const single = {
         gridMode: v.gridMode,
         viewMode: v.viewMode,
@@ -521,7 +585,7 @@ const { createRunner } = require('./e2e_playwright_session');
         selectedImagePath: v.selectedImagePath || null,
       };
       return { before, single };
-    });
+    }, explorerDirectTarget.firstPath);
     await backToGrid();
     await sleep(1000);
     explorerDirectRoundTrip.after = await page.evaluate(() => ({
@@ -559,7 +623,7 @@ const { createRunner } = require('./e2e_playwright_session');
     );
 
     await boot('chunk2-grid-restore');
-    await loadFolder('palette_3k');
+    await loadFolder('unknown');
     const gridRoundTrips = [];
     for (let i = 0; i < 4; i += 1) {
       await roundTripGridImageByDblClick(0);
@@ -570,7 +634,7 @@ const { createRunner } = require('./e2e_playwright_session');
     }
 
     await boot('chunk2-grid-restore-scrolled');
-    await loadFolder('palette_3k');
+    await loadFolder('unknown');
     await scrollGridToRatio(0.82);
     await sleep(1200);
     const scrolledRoundTrips = [];
@@ -588,7 +652,7 @@ const { createRunner } = require('./e2e_playwright_session');
     }
 
     await boot('chunk2-grid-scroll-stop');
-    await loadFolder('palette_3k');
+    await loadFolder('unknown');
     await page.evaluate(async () => {
       const scrollWrapper = document.querySelector('#image-grid')?.parentElement;
       if (!scrollWrapper) return;
@@ -626,7 +690,7 @@ const { createRunner } = require('./e2e_playwright_session');
 
   await record('30,33,34,35,39', 'Measure 다중선택 / Measure 탭 / 범례', async () => {
     await boot('chunk2-measure');
-    await loadFolder('palette_3k');
+    await loadFolder('unknown');
     const measureSelection = await findCommonMeasureSelection('f', 4, 24);
     await setSelection(measureSelection.indices);
     await page.evaluate(async (payload) => {

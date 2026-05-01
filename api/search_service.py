@@ -49,6 +49,7 @@ class SearchService:
             "composite_map",
         ]
         # Global search(root 전체)에서는 작업/테스트용 파생 폴더를 기본 검색 결과에서 제외한다.
+        # unknown은 실제 failbit 기준 데이터이므로 전역 LOT 검색 결과에 포함한다.
         # 폴더 한정 검색에서는 그대로 허용하여 개별 폴더 확인 흐름은 유지한다.
         self.global_only_excluded_folders = {"my-lot", "fq_missing_test"}
         self.supported_exts = supported_exts or set()
@@ -292,32 +293,51 @@ class SearchService:
         """
         if not lot_filter:
             return []
-        # 🔥 속도 최적화: LOT 목록을 / 로 연결하여 단일 문자열로 만듦
-        lot_joined = "/" + "/".join(lot_filter) + "/"
-        
         hits: List[str] = []
         for rel, name_lower in zip(keys_slice, names_slice):
             # 파일명을 _ 로 split하고 첫 번째 토큰 추출
             lot_token = name_lower.split("_", 1)[0]
-            # 토큰이 연결 문자열에 포함되는지 확인 (/token/ 형태로 검색)
-            if f"/{lot_token}/" in lot_joined:
+            if self._lot_matches_filter(lot_token, lot_filter):
                 hits.append(rel)
         return hits
+
+    @staticmethod
+    def _lot_matches_filter(lot_token: str, lot_filter: Set[str]) -> bool:
+        return any(lot_token == lot or lot_token.startswith(lot) for lot in lot_filter)
+
+    @staticmethod
+    def _wafer_matches_filter(file_wafer: str, wafer_filter: str) -> bool:
+        return file_wafer == wafer_filter or file_wafer.startswith(wafer_filter)
+
+    def _matching_pair_lots(self, lot_token: str, pair_map: Dict[str, set]) -> List[str]:
+        return [
+            lot
+            for lot in pair_map.keys()
+            if lot_token == lot or lot_token.startswith(lot)
+        ]
+
+    @staticmethod
+    def _filter_to_prefix(candidates: List[str], prefix: str) -> List[str]:
+        if not prefix:
+            return candidates
+        normalized_prefix = prefix.replace("\\", "/").strip("/")
+        if not normalized_prefix:
+            return candidates
+        base = normalized_prefix + "/"
+        return [rel for rel in candidates if rel == normalized_prefix or rel.startswith(base)]
 
     def _apply_lot_filter(self, hits: List[str], lot_filter: Set[str]) -> List[str]:
         """검색 결과에 LOT 필터 적용 (속도 최적화: 문자열 포함 검사 한 번)"""
         if not lot_filter:
             return hits
-        # 🔥 속도 최적화: LOT 목록을 / 로 연결하여 단일 문자열로 만듦
-        lot_joined = "/" + "/".join(lot_filter) + "/"
-        
+
         filtered: List[str] = []
         for rel in hits:
             name_lower = Path(rel).name.lower()
             # 파일명을 _ 로 split하고 첫 번째 토큰 추출
             lot_token = name_lower.split("_", 1)[0]
             # 토큰이 연결 문자열에 포함되는지 확인
-            if f"/{lot_token}/" in lot_joined:
+            if self._lot_matches_filter(lot_token, lot_filter):
                 filtered.append(rel)
         return filtered
 
@@ -335,24 +355,26 @@ class SearchService:
 
         lot_only = lot_filter - set(pair_map.keys()) if lot_filter else set()
 
-        # 🔥 속도 최적화: 모든 LOT을 합쳐서 LOT 프리필터용 문자열 생성
-        all_lots = set(pair_map.keys()) | lot_only
-        lot_joined = "/" + "/".join(all_lots) + "/"
-
         hits: List[str] = []
         for rel, name_lower in zip(keys_slice, names_slice):
             # 🔥 1단계: LOT 빠른 프리필터 (split("_", 1)로 최소 분할)
             lot_token = name_lower.split("_", 1)[0]
-            if f"/{lot_token}/" not in lot_joined:
+            matching_pair_lots = self._matching_pair_lots(lot_token, pair_map)
+            lot_only_match = self._lot_matches_filter(lot_token, lot_only) if lot_only else False
+            if not matching_pair_lots and not lot_only_match:
                 continue
 
             # 2단계: LOT 통과 → WAFER 체크 (필요한 파일만)
-            if lot_token in pair_map:
+            if matching_pair_lots:
                 parts = name_lower.split("_", 3)
                 file_wafer = parts[2] if len(parts) > 2 else ""
-                if file_wafer in pair_map[lot_token]:
+                if any(
+                    self._wafer_matches_filter(file_wafer, wafer)
+                    for lot in matching_pair_lots
+                    for wafer in pair_map[lot]
+                ):
                     hits.append(rel)
-            elif lot_token in lot_only:
+            elif lot_only_match:
                 hits.append(rel)
         return hits
 
@@ -368,12 +390,18 @@ class SearchService:
         for rel in candidates:
             name_lower = rel.rsplit("/", 1)[-1].lower() if "/" in rel else rel.lower()
             lot_token = name_lower.split("_", 1)[0]
-            if lot_token in pair_map:
+            matching_pair_lots = self._matching_pair_lots(lot_token, pair_map)
+            lot_only_match = self._lot_matches_filter(lot_token, lot_only) if lot_only else False
+            if matching_pair_lots:
                 parts = name_lower.split("_", 3)
                 file_wafer = parts[2] if len(parts) > 2 else ""
-                if file_wafer in pair_map[lot_token]:
+                if any(
+                    self._wafer_matches_filter(file_wafer, wafer)
+                    for lot in matching_pair_lots
+                    for wafer in pair_map[lot]
+                ):
                     hits.append(rel)
-            elif lot_token in lot_only:
+            elif lot_only_match:
                 hits.append(rel)
         return hits
 
@@ -385,22 +413,26 @@ class SearchService:
             pair_map.setdefault(lot, set()).add(wafer)
 
         lot_only = lot_filter - set(pair_map.keys()) if lot_filter else set()
-        all_lots = set(pair_map.keys()) | lot_only
-        lot_joined = "/" + "/".join(all_lots) + "/"
 
         filtered: List[str] = []
         for rel in hits:
             name_lower = Path(rel).name.lower()
             lot_token = name_lower.split("_", 1)[0]
-            if f"/{lot_token}/" not in lot_joined:
+            matching_pair_lots = self._matching_pair_lots(lot_token, pair_map)
+            lot_only_match = self._lot_matches_filter(lot_token, lot_only) if lot_only else False
+            if not matching_pair_lots and not lot_only_match:
                 continue
 
-            if lot_token in pair_map:
+            if matching_pair_lots:
                 parts = name_lower.split("_", 3)
                 file_wafer = parts[2] if len(parts) > 2 else ""
-                if file_wafer in pair_map[lot_token]:
+                if any(
+                    self._wafer_matches_filter(file_wafer, wafer)
+                    for lot in matching_pair_lots
+                    for wafer in pair_map[lot]
+                ):
                     filtered.append(rel)
-            elif lot_token in lot_only:
+            elif lot_only_match:
                 filtered.append(rel)
         return filtered
 
@@ -426,9 +458,6 @@ class SearchService:
         # 인덱스 파일 제외
         index_file_names = {".file_index_cache.txt", ".file_index_cache.lock"}
         
-        # 🔥 속도 최적화: LOT 목록을 / 로 연결하여 단일 문자열로 만듦
-        lot_joined = "/" + "/".join(lot_filter) + "/" if lot_filter else ""
-        
         for root, dirs, files in os.walk(scan_root):
             dirs[:] = [d for d in dirs if d not in self.excluded_folders]
             scanned_dirs += 1
@@ -444,7 +473,7 @@ class SearchService:
                 if lot_filter:
                     # 🔥 속도 최적화: 파일명 _ split 후 첫 번째 토큰이 LOT 목록에 있는지 확인
                     lot_token = name_lower.split("_", 1)[0]
-                    if f"/{lot_token}/" not in lot_joined:
+                    if not self._lot_matches_filter(lot_token, lot_filter):
                         continue
                 if query:
                     # 🔥 포함 검색: 파일명에 검색어가 포함되면 매칭

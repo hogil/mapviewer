@@ -440,6 +440,7 @@ class IndexService:
         self._keys: List[str] = []
         self._names: List[str] = []
         self._lot_index: Dict[str, List[int]] = {}   # lot_token -> [indices]
+        self._lot_keys_sorted: List[str] = []         # sorted lot tokens for prefix fallback
         self._folder_index: Dict[str, List[int]] = {} # folder_name -> [indices]
         self._token_index: Dict[str, List[int]] = {}    # token -> [indices] (파일명 _ split)
         self._token0_index: Dict[str, List[int]] = {}   # token[0] -> [indices] (LOT 위치)
@@ -557,6 +558,7 @@ class IndexService:
             self._keys = []
             self._names = []
             self._lot_index = {}
+            self._lot_keys_sorted = []
             self._folder_index = {}
             self._token_index = {}
             self._token0_index = {}
@@ -724,6 +726,7 @@ class IndexService:
                 self._keys = keys
                 self._names = names
                 self._lot_index = lot_idx
+                self._lot_keys_sorted = sorted(lot_idx)
                 self._folder_index = folder_idx
                 self._token_index = {}
                 self._token0_index = token0_idx
@@ -959,6 +962,7 @@ class IndexService:
                         self._keys = sorted_keys
                         self._names = sorted_names
                         self._lot_index = lot_idx
+                        self._lot_keys_sorted = sorted(lot_idx)
                         self._folder_index = folder_idx
                         self._token_index = token_idx
                         self._token0_index = token0_idx
@@ -1069,6 +1073,7 @@ class IndexService:
             class_to_keys,
         ) = self._compute_lookup_indices(self._keys, self._names)
         self._lot_index = lot_idx
+        self._lot_keys_sorted = sorted(lot_idx)
         self._folder_index = folder_idx
         self._token_index = token_idx
         self._token0_index = token0_idx
@@ -1087,15 +1092,29 @@ class IndexService:
             elapsed,
         )
 
+    def _lot_keys_for_filter(self, lot: str) -> List[str]:
+        """Return exact LOT key, or prefix-matched keys when exact LOT is absent."""
+        if lot in self._lot_index:
+            return [lot]
+        lot_keys = self._lot_keys_sorted or sorted(self._lot_index)
+        if not lot_keys:
+            return []
+        start = bisect_left(lot_keys, lot)
+        end = bisect_left(lot_keys, lot + chr(0x10FFFF))
+        return [key for key in lot_keys[start:end] if key.startswith(lot)]
+
     def lot_search(self, lot_filter: Set[str], folder: str = "") -> List[str]:
-        """LOT 필터로 O(1) 검색. folder가 있으면 해당 폴더 내만."""
+        """LOT 필터 검색. exact LOT이 없으면 prefix LOT으로 fallback한다."""
         if not lot_filter:
             return []
         indices = []
+        seen_indices = set()
         for lot in lot_filter:
-            idx_list = self._lot_index.get(lot)
-            if idx_list:
-                indices.extend(idx_list)
+            for lot_key in self._lot_keys_for_filter(lot):
+                for idx in self._lot_index.get(lot_key, []):
+                    if idx not in seen_indices:
+                        seen_indices.add(idx)
+                        indices.append(idx)
         if not indices:
             return []
         if folder:

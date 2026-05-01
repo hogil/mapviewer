@@ -1,5 +1,6 @@
 param(
-    [int]$PreferredPort = 8443
+    [int]$PreferredPort = 8443,
+    [int]$OwnerPid = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -79,6 +80,51 @@ function Wait-ForListen {
     return $false
 }
 
+function Start-E2EProcessWatchdog {
+    param(
+        [int]$OwnerProcessId,
+        [int]$TargetProcessId,
+        [string]$PidFile,
+        [string]$Reason
+    )
+
+    if ($OwnerProcessId -le 0 -or $TargetProcessId -le 0) {
+        return
+    }
+
+    $watchScript = Join-Path $PSScriptRoot "watch-e2e-process.ps1"
+    if (-not (Test-Path $watchScript)) {
+        return
+    }
+
+    $hostPath = $null
+    try {
+        $hostPath = (Get-Process -Id $PID -ErrorAction Stop).Path
+    } catch {
+        $hostPath = "powershell.exe"
+    }
+    if ([string]::IsNullOrWhiteSpace($hostPath)) {
+        $hostPath = "powershell.exe"
+    }
+
+    $logPath = Join-Path $logDir ("e2e-watch-server-{0}.log" -f $TargetProcessId)
+    $arguments = @(
+        "-NoProfile",
+        "-ExecutionPolicy Bypass",
+        ('-File "{0}"' -f $watchScript),
+        ('-OwnerPid {0}' -f $OwnerProcessId),
+        ('-TargetPid {0}' -f $TargetProcessId),
+        ('-PidFile "{0}"' -f $PidFile),
+        ('-Reason "{0}"' -f $Reason),
+        ('-LogPath "{0}"' -f $logPath)
+    ) -join " "
+
+    try {
+        Start-Process -FilePath $hostPath -ArgumentList $arguments -WorkingDirectory $repoRoot -WindowStyle Hidden | Out-Null
+    } catch {
+    }
+}
+
 # 기존 서버를 절대 종료하지 않는다 — 항상 빈 포트를 찾아 새 서버를 시작한다
 # Stop-ApiMainProcesses 는 제거됨: 사용자 서버(8443 등)를 건드리지 않음
 
@@ -130,10 +176,12 @@ if (Wait-ForListen -Port $httpsPort) {
     $readyLine = "READY:{0}" -f $httpsPort
     Set-Content -Path $readyPath -Value $readyLine -Encoding ascii
     Set-Content -Path $pidPath -Value ([string]$proc.Id) -Encoding ascii
+    Start-E2EProcessWatchdog -OwnerProcessId $OwnerPid -TargetProcessId $proc.Id -PidFile $pidPath -Reason ("e2e-server-{0}" -f $httpsPort)
     @{
         status = "READY"
         port = $httpsPort
         pid = $proc.Id
+        ownerPid = $OwnerPid
         stdout = $stdoutPath
         stderr = $stderrPath
         startedAt = (Get-Date).ToString("o")

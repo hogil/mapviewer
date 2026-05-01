@@ -1089,9 +1089,9 @@ export class MyLotModal {
         
         const searchParams = new URLSearchParams();
         searchParams.set('lot_multi', normalizedLots.join(','));
-        searchParams.set('limit', '3000');
-        // 🔥 전체 검색: folder를 빈 문자열로 설정하여 모든 하위폴더 검색
-        searchParams.set('folder', '');
+        searchParams.set('limit', '10000');
+        const folderParam = this.viewer?.getSearchFolderParam?.() || '';
+        searchParams.set('folder', folderParam);
         const searchUrl = `/api/search?${searchParams.toString()}`;
 
         console.log(`[MyLotModal] 이미지 검색: LOT=[${normalizedLots.join(', ')}], Wafer=${waferFilter || '없음'}`);
@@ -1190,7 +1190,9 @@ export class MyLotModal {
                 }
                 if (pairs.length > 0) params.set('lot_wafer', pairs.join(','));
             }
-            params.set('limit', '3000');
+            params.set('limit', '10000');
+            const folderParam = this.viewer?.getSearchFolderParam?.() || '';
+            params.set('folder', folderParam);
 
             console.log(`[MyLotModal] 배치 검색: ${uniqueLots.length}개 LOT, mode=${this.activeMode}`);
             const res = await fetch(`/api/search?${params.toString()}`);
@@ -1224,13 +1226,21 @@ export class MyLotModal {
                 const lotLower = (row.lot || '').trim().toLowerCase();
                 const waferFilter = (row.wafer || '').trim().toLowerCase();
                 let paths = lotResultsMap.get(lotLower) || [];
+                if (!paths.length) {
+                    paths = [];
+                    for (const [lotKey, lotPaths] of lotResultsMap.entries()) {
+                        if (lotKey.startsWith(lotLower)) {
+                            paths.push(...lotPaths);
+                        }
+                    }
+                }
 
                 // Wafer 필터 (서버에서 이미 필터링하지만 클라이언트에서도 보장)
                 if (waferFilter && paths.length > 0) {
                     paths = paths.filter(p => {
                         const fn = p.split('/').pop().split('\\').pop().toLowerCase();
                         const tokens = fn.replace(/\.[^.]+$/, '').split('_');
-                        return tokens.some(t => t === waferFilter);
+                        return tokens.some(t => t === waferFilter || t.startsWith(waferFilter));
                     });
                 }
 
@@ -1293,7 +1303,7 @@ export class MyLotModal {
                 filteredPaths = validPaths.filter((p) => {
                     const fn = p.split('/').pop()?.split('\\').pop()?.toLowerCase() || '';
                     const tokens = fn.replace(/\.[^.]+$/, '').split('_');
-                    return tokens.some(t => t === waferLower);
+                    return tokens.some(t => t === waferLower || t.startsWith(waferLower));
                 });
             }
 

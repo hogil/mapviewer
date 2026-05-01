@@ -5,6 +5,8 @@ const { createRunner } = require('./e2e_playwright_session');
 (async () => {
   const {
     base,
+    sessionId,
+    outputDir,
     page,
     results,
     expect,
@@ -19,6 +21,25 @@ const { createRunner } = require('./e2e_playwright_session');
   );
   const compositeInputCacheDir = path.join(imagesRoot, 'composite_cache_v1');
   const COMPOSITE_E2E_TIMEOUT_MS = 90000;
+  const PHASE_61_62_SUMMARY_FILE = 'cold-start-summary.json';
+
+  function median(values) {
+    const nums = values
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => a - b);
+    if (!nums.length) return null;
+    const mid = Math.floor(nums.length / 2);
+    if (nums.length % 2 === 1) return Math.round(nums[mid] * 1000) / 1000;
+    return Math.round(((nums[mid - 1] + nums[mid]) / 2) * 1000) / 1000;
+  }
+
+  function writeJsonArtifact(filename, payload) {
+    const target = path.join(outputDir, filename);
+    fs.writeFileSync(target, JSON.stringify(payload, null, 2), 'utf8');
+    append(`[ARTIFACT] ${filename} :: ${target}\n`);
+    return target;
+  }
 
   function removeCompositeInputCacheDir() {
     fs.rmSync(compositeInputCacheDir, { recursive: true, force: true });
@@ -133,15 +154,33 @@ const { createRunner } = require('./e2e_playwright_session');
   async function loadFolder(folder) {
     append(`[LOAD_FOLDER] ${folder}\n`);
     await page.evaluate(async (folderName) => {
-      await window.viewer.loadImagesInFolderAndShowGrid(folderName);
+      const v = window.viewer;
+      v.selectedImages = [];
+      v.selectedFolders = new Set([folderName]);
+      v.lastSelectedFolderPath = folderName;
+      v._unfilteredGridImages = [];
+      const applied = await v.selectAllFolderFiles(folderName);
+      if (applied && Array.isArray(v.selectedImages) && v.selectedImages.length > 0) {
+        v.showGrid(v.selectedImages);
+      } else {
+        await v.loadImagesInFolderAndShowGrid(folderName);
+      }
     }, folder);
     await page.waitForFunction(
-      () =>
-        !!window.viewer &&
-        window.viewer.gridMode &&
-        window.viewer.currentGridImages?.length > 0 &&
-        document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0,
-      null,
+      (folderName) => {
+        const v = window.viewer;
+        const normalized = String(folderName || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        const prefix = normalized ? `${normalized}/` : '';
+        const images = Array.isArray(v?.currentGridImages) ? v.currentGridImages : [];
+        return (
+          !!v &&
+          v.gridMode &&
+          images.length > 0 &&
+          images.some((imagePath) => String(imagePath || '').replace(/\\/g, '/').startsWith(prefix)) &&
+          document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0
+        );
+      },
+      folder,
       { timeout: 90000 }
     );
     await sleep(800);
@@ -149,6 +188,7 @@ const { createRunner } = require('./e2e_playwright_session');
       prefix: window.viewer.currentFolderPrefix || '',
       count: window.viewer.currentGridImages?.length || 0,
       wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+      firstPath: window.viewer.currentGridImages?.[0] || '',
     }));
     append(`[LOAD_FOLDER_OK] ${folder} :: ${JSON.stringify(state)}\n`);
   }
@@ -727,9 +767,16 @@ const { createRunner } = require('./e2e_playwright_session');
     removeCompositeInputCacheDir();
     const compositeInputCacheBefore = getCompositeInputCacheState();
 
-    await loadFolder('filter_test');
+    await loadFolder('unknown');
     const compositeSourceIdxs = Array.from({ length: 10 }, (_, idx) => idx);
     await setSelection(compositeSourceIdxs);
+    const compositeSourcePaths = await page.evaluate((indices) => (
+      indices.map((idx) => window.viewer.currentGridImages?.[idx] || null)
+    ), compositeSourceIdxs);
+    expect(
+      compositeSourcePaths.every((imagePath) => String(imagePath || '').replace(/\\/g, '/').startsWith('unknown/')),
+      `composite source paths=${JSON.stringify(compositeSourcePaths)}`
+    );
     const compositePerf = await page.evaluate(async () => {
       const startedAt = performance.now();
       await window.viewer.handleCompositeCreate();
@@ -758,6 +805,10 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(
       Number(compositePerf.processingTime) > 0 && Number(compositePerf.processingTime) < 10,
       `10-image composite server time too slow=${JSON.stringify(compositePerf)}`
+    );
+    expect(
+      Number(compositePerf.elapsedMs) > 0 && Number(compositePerf.elapsedMs) < 10000,
+      `10-image composite elapsed time too slow=${JSON.stringify(compositePerf)}`
     );
     expect(
       compositePerf.numba?.enabled === true && String(compositePerf.numba?.accumulator || '').includes('numba'),
@@ -823,7 +874,7 @@ const { createRunner } = require('./e2e_playwright_session');
     const compositeInputCacheAfterSubsetRecolor = getCompositeInputCacheState();
 
     await boot('chunk3-composite-pending-toast');
-    await loadFolder('filter_test');
+    await loadFolder('unknown');
     await setSelection([0, 1, 2]);
     await page.evaluate(() => {
       const v = window.viewer;
@@ -896,7 +947,7 @@ const { createRunner } = require('./e2e_playwright_session');
     }));
 
     await boot('chunk3-composite-origin-restore');
-    await loadFolder('filter_test');
+    await loadFolder('unknown');
     await setSelection([4, 7, 9]);
     const originBeforeComposite = await page.evaluate(() => {
       const v = window.viewer;
@@ -948,7 +999,7 @@ const { createRunner } = require('./e2e_playwright_session');
     const compositeInputCacheAfter = getCompositeInputCacheState();
 
     await boot('chunk3-measure');
-    await loadFolder('palette_3k');
+    await loadFolder('unknown');
     const measureSelection = await findCommonMeasureSelection('f', 4, 24);
     await setSelection(measureSelection.indices);
     await page.evaluate(async (payload) => {
@@ -1013,7 +1064,7 @@ const { createRunner } = require('./e2e_playwright_session');
     }), toastSeen);
 
     await boot('chunk3-grid-detail-selection');
-    await loadFolder('palette_3k');
+    await loadFolder('unknown');
     const gridSelectionRestore = await page.evaluate(async () => {
       const v = window.viewer;
       const firstWrap = document.querySelector('#image-grid .grid-thumb-wrap');
@@ -1142,6 +1193,7 @@ const { createRunner } = require('./e2e_playwright_session');
       originAfterCompositeReturn,
       compositeInputCacheBefore,
       compositePerf,
+      compositeSourcePaths,
       compositeInputCacheAfter,
       measureBefore,
       measureAfterRoundTripSignature,
@@ -1155,7 +1207,7 @@ const { createRunner } = require('./e2e_playwright_session');
 
   await record('tab-state-preserve', '탭별 grid/single/selection/scroll/explorer 상태 보존', async () => {
     await boot('chunk3-tab-preserve-composite');
-    await selectWaferExplorerFolder('palette_3k');
+    await selectWaferExplorerFolder('unknown');
     await page.evaluate(() => window.viewer.applyGridColsChange(3, { maxCols: 20 }));
     await sleep(800);
     await scrollGridToRatio(0.55);
@@ -1199,11 +1251,11 @@ const { createRunner } = require('./e2e_playwright_session');
 
     expectGridPreserved(waferAfterComposite, { selectedIdxs: [2, 4, 6] });
     expect(
-      waferAfterComposite.selectedFolders.includes('palette_3k'),
+      waferAfterComposite.selectedFolders.includes('unknown'),
       `wafer selectedFolders lost=${JSON.stringify(waferAfterComposite)}`
     );
     expect(
-      waferAfterComposite.waferSelectedFolderPaths.includes('palette_3k'),
+      waferAfterComposite.waferSelectedFolderPaths.includes('unknown'),
       `wafer explorer selected folder UI lost=${JSON.stringify(waferAfterComposite)}`
     );
     expect(
@@ -1215,7 +1267,7 @@ const { createRunner } = require('./e2e_playwright_session');
     expectSinglePreserved(compositeSingleAfter, { path: compositeSingleBefore.selectedImagePath });
 
     await boot('chunk3-tab-preserve-measure');
-    await loadFolder('palette_3k');
+    await loadFolder('unknown');
     const measureSelection = await findCommonMeasureSelection('f', 4, 24);
     await setSelection(measureSelection.indices);
     await page.evaluate(async (payload) => {
@@ -1306,7 +1358,7 @@ const { createRunner } = require('./e2e_playwright_session');
     expectSinglePreserved(labelSingleAfter, { path: labelSingleBefore.selectedImagePath });
 
     await boot('chunk3-tab-preserve-mylot');
-    await loadFolder('palette_3k');
+    await loadFolder('unknown');
     await page.evaluate(async () => {
       const v = window.viewer;
       if (!v.lotMode) {
@@ -1425,7 +1477,7 @@ const { createRunner } = require('./e2e_playwright_session');
     }
 
     await boot('chunk3-tab-preserve-10tabs');
-    await selectWaferExplorerFolder('palette_3k');
+    await selectWaferExplorerFolder('unknown');
     await page.evaluate(() => window.viewer.applyGridColsChange(3, { maxCols: 20 }));
     await scrollGridToRatio(0.55);
     await sleep(800);
@@ -1526,8 +1578,8 @@ const { createRunner } = require('./e2e_playwright_session');
 
     expectGridPreserved(waferGridAfter, { selectedIdxs: [2, 4, 6] });
     expect(
-      waferGridAfter.selectedFolders.includes('palette_3k') &&
-        waferGridAfter.waferSelectedFolderPaths.includes('palette_3k'),
+      waferGridAfter.selectedFolders.includes('unknown') &&
+        waferGridAfter.waferSelectedFolderPaths.includes('unknown'),
       `10tab wafer explorer selection lost=${JSON.stringify(waferGridAfter)}`
     );
     expect(
@@ -1643,7 +1695,7 @@ const { createRunner } = require('./e2e_playwright_session');
     const labelAfterReselect = await getLabelExplorerState();
 
     await boot('chunk3-label-scroll-reset');
-    await loadFolder('palette_3k');
+    await loadFolder('unknown');
     await page.evaluate(async () => {
       const v = window.viewer;
       if (!v.lotMode) {
@@ -1718,7 +1770,7 @@ const { createRunner } = require('./e2e_playwright_session');
 
   await record('mylot-grid', 'MyLot grid view / lot mode / double click restore', async () => {
     await boot('chunk3-mylot');
-    await loadFolder('palette_3k');
+    await loadFolder('unknown');
     await page.evaluate(async () => {
       const v = window.viewer;
       if (!v.lotMode) {
@@ -1798,9 +1850,63 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(data.fqCount === 143, `fqCount=${data.fqCount}`);
     expect(data.wraps === 143, `wraps=${data.wraps}`);
     expect(data.placeholders === 0, `placeholders=${data.placeholders}`);
+    expect(fqLoadMs < 3000, `fqLoadMs too slow=${fqLoadMs}`);
     expect(!!data.mainEtag && !!data.cssEtag, `etag main=${data.mainEtag} css=${data.cssEtag}`);
     expect(data.mainHasVersionedImports, 'main versioned imports missing');
-    return { ...data, fqLoadMs };
+    const phase61_62Runs = [
+      {
+        run: 1,
+        mode: 'existing-server-cache-performance-smoke',
+        fqLoadMs,
+        fqCount: data.fqCount,
+        wraps: data.wraps,
+        placeholders: data.placeholders,
+        highlighted: data.highlighted,
+        mainEtagPresent: !!data.mainEtag,
+        cssEtagPresent: !!data.cssEtag,
+        mainHasVersionedImports: data.mainHasVersionedImports,
+        fetchOptimizerHasWorkerVersion: data.fetchOptimizerHasWorkerVersion,
+        bitmapLoaderHasWorkerVersion: data.bitmapLoaderHasWorkerVersion,
+      },
+    ];
+    const phase61_62Median = {
+      fqLoadMs: median(phase61_62Runs.map((run) => run.fqLoadMs)),
+    };
+    const coldStartSummaryPath = writeJsonArtifact(PHASE_61_62_SUMMARY_FILE, {
+      sessionId,
+      baseUrl: base,
+      generatedAt: new Date().toISOString(),
+      source: path.basename(__filename),
+      phase: '46,52,53,54,55,58,59,61,62,63',
+      status: 'PASS',
+      strictCold: false,
+      note:
+        'This summarizes the existing grouped cache/performance Phase that includes 61/62. It does not replace a separate 3-run strict cold restart benchmark.',
+      runs: phase61_62Runs,
+      median: phase61_62Median,
+      thresholds: {
+        fqLoadMs: {
+          passMaxMs: 3000,
+          reason: 'Grouped E2E smoke gate for immediate grid load in fq_missing_test.',
+        },
+      },
+      assetCache: {
+        mainScript: data.mainScript,
+        cssHref: data.cssHref,
+        mainEtag: data.mainEtag,
+        cssEtag: data.cssEtag,
+      },
+    });
+    return {
+      ...data,
+      fqLoadMs,
+      coldStartSummary: {
+        path: coldStartSummaryPath,
+        strictCold: false,
+        runs: phase61_62Runs.length,
+        median: phase61_62Median,
+      },
+    };
   });
 
   console.log(JSON.stringify(results, null, 2));

@@ -45,6 +45,12 @@ The codebase uses environment variables to adapt to both environments. SAML logi
 - 서버가 이미 실행 중이면 재시작 없이 기존 서버 사용, 꺼져 있으면 먼저 시작한다
 - 이 규칙은 모든 기능 구현, 버그 수정, UI 관련 변경에 예외 없이 적용된다
 
+**Absolute Rule: 사용자가 창부터 보자고 하면 로컬 Playwright CLI로 즉시 연다**
+- 사용자가 "서버부터 키고 브라우저 띄워라", "창부터 보이게", "브라우저가 안 뜬다"고 하면 먼저 `powershell -ExecutionPolicy Bypass -File scripts/open-e2e-browser.ps1`를 실행한다
+- 이 스크립트는 `start-e2e-server.ps1`로 서버를 먼저 띄운 뒤 `npx playwright open --browser=chromium --ignore-https-errors --viewport-size=1920,1080`로 새 로컬 Chromium 창을 연다
+- 열린 창은 Windows API로 최대화한다. 출력의 `BASE_URL`, `SERVER_PID`, `PLAYWRIGHT_OPEN_PID`, `WINDOW_MAXIMIZED`를 확인한다
+- MCP 브라우저나 기존 사용자 브라우저 탭을 이 용도로 사용하지 않는다
+
 **Absolute Rule: Non-blocking Server Startup (비동기 서버 시작)**
 - 서버 시작 시 `lifespan`의 `yield` 전에는 최소한의 필수 초기화만 수행한다 (labels 로드, 디렉토리 생성 등)
 - 인덱스 캐시 로드(`load_cache`), 인덱스 빌드(`build`), `_build_lookup_indices`, `_save_cache`, `__pycache__` 정리, composite cleanup 등 모든 무거운 작업은 반드시 `asyncio.create_task`로 백그라운드 실행한다

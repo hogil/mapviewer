@@ -12,6 +12,7 @@ argument-hint: [Phase 번호 또는 범위]
 
 - **기본 실행은 반드시 로컬 Playwright runner**(`powershell -ExecutionPolicy Bypass -File scripts/run-e2e-playwright.ps1`)로 한다.
 - 사용자가 "내가 보게", "브라우저 띄워서"라고 하면 같은 runner를 **`-Headless` 없이** 실행한다. MCP 브라우저 도구로 대체하지 않는다.
+- 사용자가 "서버부터 키고 브라우저 띄워라", "창부터 보이게 해라", "브라우저가 안 뜬다"라고 하면 테스트 분석 전에 반드시 `powershell -ExecutionPolicy Bypass -File scripts/open-e2e-browser.ps1`를 먼저 실행한다. 이 스크립트는 서버를 먼저 시작한 뒤 `npx playwright open --browser=chromium --ignore-https-errors --viewport-size=1920,1080`로 새 로컬 Chromium 창을 열고 최대화한다.
 - 사용자가 "브라우저가 안 뜬다"고 하면 `-Headless` 실행은 금지한다. headful runner로 다시 시작하고, 한 Playwright session에 매달리지 말고 새 browser process/context로 재시도한다.
 - MCP 브라우저는 모델/도구가 직접 제어하는 원격 브라우저 세션이다. 최종 PASS 증명, 성능 측정, 프로세스 정리 검증에는 사용하지 않는다.
 - 로컬 runner는 repo 스크립트가 서버/Python/Node/Chromium 수명주기를 추적하므로, E2E 후 프로세스 정리 검증이 가능하다.
@@ -24,7 +25,8 @@ argument-hint: [Phase 번호 또는 범위]
 - 항상 `Get-FreePort`로 사용 중이지 않은 포트를 찾아 새 서버를 그 포트에서 시작한다.
 - 스크립트 출력 `READY:<port>`에서 실제 포트 번호를 읽어 `BASE_URL=https://localhost:<port>`로 설정한다.
 - `READY:<port>` 직후에는 5초 이하의 짧은 health check(`/api/config`)로 서버가 실제 응답하는지 확인한다.
-- READY 직후 서버가 죽었거나 warmup이 응답하지 않으면 오래 기다리지 말고, 해당 E2E PID/잔여 pid 파일을 정리한 뒤 다음 fresh port에서 새 서버를 시작한다.
+- READY 직후 서버가 죽었으면 해당 E2E PID/잔여 pid 파일을 정리한 뒤 다음 fresh port에서 새 서버를 시작한다.
+- Composite Numba warmup은 `COMPOSITE_USE_NUMBA=1` 서버에서 짧게 시도하되, 빨리 끝나지 않으면 경고만 남기고 브라우저 테스트를 즉시 진행한다. warmup 때문에 브라우저 표시를 막지 않는다.
 - `run-e2e-playwright.ps1`는 자신이 시작한 E2E 서버 PID를 추적하고, 테스트 종료 후 반드시 종료한다. 사용자가 `-KeepServer`를 명시한 경우만 예외다.
 - 기존 사용자 서버를 Kill하여 연결이 끊기는 사고는 절대 금지한다.
 - 이 규칙을 위반하여 `Stop-ApiMainProcesses` 또는 기존 서버 종료를 추가하는 행위는 절대 금지한다.
@@ -32,7 +34,7 @@ argument-hint: [Phase 번호 또는 범위]
 ## 절대규칙 #0: 반드시 Playwright 브라우저로 전체 UI 검증 — 예외 없음
 
 - **모든 Phase는 반드시 Playwright 기반 브라우저 자동화로만 검증한다.** 기본 허용 경로는 `scripts/run-e2e-playwright.ps1`이다.
-- **사용자가 "브라우저가 안 뜬다" 또는 "먼저 창부터 띄워라"라고 하면, 분석 전에 반드시 `powershell -ExecutionPolicy Bypass -File scripts/run-e2e-visible-smoke.ps1` 또는 `scripts/run-e2e-playwright.ps1`(headful)을 먼저 실행해 실제 브라우저 창 open + 그리드 동작을 확인한다.** 이 경우 MCP 브라우저만으로 시작하는 것은 금지한다.
+- **사용자가 "브라우저가 안 뜬다" 또는 "먼저 창부터 띄워라"라고 하면, 분석 전에 반드시 `powershell -ExecutionPolicy Bypass -File scripts/open-e2e-browser.ps1`를 먼저 실행해 서버가 켜진 뒤 `npx playwright open`으로 실제 브라우저 창이 열린 것을 확인한다.** 이 경우 MCP 브라우저만으로 시작하는 것은 금지한다.
 - API 레벨(curl, urllib, fetch 등)만으로 테스트를 대체하는 것은 절대 금지한다.
 - "API로 검증 가능", "브라우저 없이도 확인 가능" 등의 이유로 Playwright를 생략하는 것은 허용하지 않는다.
 - 한 개 Phase라도 Playwright 없이 API만으로 처리하면 전체 테스트를 FAIL로 간주한다.
@@ -80,7 +82,8 @@ argument-hint: [Phase 번호 또는 범위]
 
 - 전체 실행은 서버 1개를 시작하고 chunk를 순서대로 실행한다. 각 chunk는 Node 1개와 Chromium 1개를 사용한다.
 - E2E runner는 `COMPOSITE_USE_NUMBA=1` 상태의 서버를 시작하고, 실제 서버 프로세스 안에서 Composite Numba warmup을 수행한다.
-- 서버가 READY 후 죽었거나 Composite Numba warmup이 짧은 timeout 안에 응답하지 않으면 즉시 실패 서버를 버리고 다음 fresh port로 재시도한다.
+- 서버가 READY 후 죽었으면 즉시 실패 서버를 버리고 다음 fresh port로 재시도한다.
+- Composite Numba warmup이 짧은 timeout 안에 응답하지 않아도 서버가 살아 있으면 테스트를 계속한다. Numba 사용 여부와 실제 성능은 Composite E2E 결과에서 검증한다.
 - 테스트 종료 후 `api.main`/uvicorn Python, Playwright Chromium, E2E Node, E2E PID 파일이 남지 않아야 한다.
 - 실패 로그가 `[FAIL]` 또는 `"status": "FAIL"`을 포함하면 runner exit code는 반드시 non-zero여야 한다.
 - 테스트 결과 보고 전 아래를 확인한다.
@@ -140,6 +143,7 @@ argument-hint: [Phase 번호 또는 범위]
 ## 절대규칙: Playwright 브라우저 실행 방식
 
 - 기본은 repo의 로컬 Playwright 스크립트가 Chromium을 직접 띄우는 방식이다.
+- 사용자가 브라우저 창부터 보기를 요구하면 기본 수동 가시화 경로는 `powershell -ExecutionPolicy Bypass -File scripts/open-e2e-browser.ps1`이다. 이 스크립트는 `start-e2e-server.ps1`로 서버를 먼저 띄우고, 그 다음 `npx playwright open`으로 새 브라우저를 열며, 창을 1920×1080 기준으로 최대화한다.
 - headless 전체 검증: `powershell -ExecutionPolicy Bypass -File scripts/run-e2e-playwright.ps1 -Chunk all -Headless`
 - 사용자가 보는 검증: `powershell -ExecutionPolicy Bypass -File scripts/run-e2e-playwright.ps1 -Chunk 3`처럼 `-Headless` 없이 실행한다.
 - 사용자가 브라우저가 보이지 않는다고 말한 직후의 재검증은 반드시 `-Headless` 없이 실행한다. runner가 headful 창을 `normal -> maximized`로 올리고, 실패 시 새 Playwright session으로 최대 3회 재시도한다.
@@ -195,8 +199,23 @@ argument-hint: [Phase 번호 또는 범위]
 
 3. **절대 금지**: 서버 접속 + 페이지 타이틀 확인 없이 테스트 Phase 진입하지 않는다
 
+### Step 0-2a: 사용자가 창을 먼저 보겠다고 한 경우
+
+아래 한 줄을 먼저 실행한다. 이 방식이 기본 수동 가시화 경로이며 MCP 브라우저를 사용하지 않는다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/open-e2e-browser.ps1
+```
+
+- 내부 순서: `start-e2e-server.ps1` → `/api/config` 짧은 확인 → `npx playwright open --browser=chromium --ignore-https-errors --viewport-size=1920,1080 <BASE_URL>` → Windows 창 최대화.
+- 출력의 `BASE_URL`, `SERVER_PID`, `PLAYWRIGHT_OPEN_PID`, `WINDOW_MAXIMIZED`를 확인한다.
+- 이 단계는 사용자에게 실제 창을 즉시 보여주는 용도다. 자동 PASS/FAIL 판정은 이후 `run-e2e-playwright.ps1` headful/headless 실행 결과로 한다.
+
 ### Step 0-3: 테스트 데이터 확인
-- 테스트 데이터 폴더: `palette_3k` (3000장), `palette_5mb` (대용량), `wafer_folder`, `wafer_edge_ring`
+- 테스트 데이터 폴더: `unknown` (실제 failbit map 기준 폴더), `palette_3k` (3000장 synthetic/성능), `palette_5mb` (대용량), `wafer_folder`, `wafer_edge_ring`
+- **`unknown` 폴더는 failbit/bin/measure/composite 시각 검증의 기본 기준이다.** `unknown` 루트는 하위 패턴 폴더를 포함하므로 E2E에서는 일반 `/api/files` 단일 depth가 아니라 실제 UI의 Ctrl+폴더 선택 경로처럼 재귀 스캔(`/api/files/recursive`)으로 이미지를 로드해야 한다.
+- 그리드 선택 → 단일 이미지 보기, reference map, label modal, composite, measure, MyLot 검증은 기본적으로 `unknown` 폴더 이미지를 사용한다. 예외가 필요한 성능/대용량 전용 케이스만 별도 폴더를 쓴다.
+- 전역 검색 검증은 `folder=`를 명시해 ROOT 전체 검색으로 실행하고, `unknown` LOT 검색 결과가 `unknown/...` 이미지로 반환되는지 확인한다. 이 검증은 `folder=unknown` 같은 폴더 범위 제한 검색으로 대체하지 않는다.
 - 서버 접속 후 파일 탐색기에 위 폴더가 표시되는지 확인 (없으면 경고 후 계속 진행)
 
 ### 테스트 데이터 제약 사항 (절대 위반 금지)
@@ -1348,6 +1367,7 @@ Grade 맵을 제외한 모든 Composite 결과(square_average, square_weighted_a
 - `rect.quad` 필드 응답에서 제거
 
 **테스트 데이터 기준**:
+- unknown: 실제 failbit map 기준 폴더. 하위 패턴 폴더까지 재귀 선택하여 검증한다. failbit/bin/measure/composite/reference/label/MyLot/단일 이미지 보기와 전역 LOT 검색의 화면 정확성은 `palette_3k`가 아니라 `unknown`을 우선 기준으로 삼는다.
 - palette_3k: ftn_keys 500개, qtn_keys 500개, chips 384개/파일, 3000파일
 - palette_5mb: ftn_keys 500개, qtn_keys 500개, chips 812개/파일, 6파일
 - ftn_keys 예시: `["2824","1409","5506","5012","4657","3286",...]` (500개)

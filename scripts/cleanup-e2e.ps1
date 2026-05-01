@@ -2,6 +2,9 @@ param(
     [switch]$AllPython,
     [switch]$AllChrome,
     [switch]$AllApiMain,
+    [switch]$SkipServers,
+    [switch]$McpChromium,
+    [switch]$AllMcp,
     [switch]$Quiet
 )
 
@@ -48,13 +51,64 @@ function Stop-ProcessTreeSafe {
 }
 
 if (Test-Path $tmpRoot) {
-    Get-ChildItem -Path $tmpRoot -Filter "e2e-server-*.pid" -File -ErrorAction SilentlyContinue | ForEach-Object {
-        $pidText = (Get-Content -Path $_.FullName -Raw -ErrorAction SilentlyContinue).Trim()
-        $pidValue = 0
-        if ([int]::TryParse($pidText, [ref]$pidValue)) {
-            Stop-ProcessTreeSafe -ProcessId $pidValue -Reason "stale e2e server"
+    $pidFilters = @("e2e-node-*.pid", "e2e-browser-*.pid")
+    if (-not $SkipServers) {
+        $pidFilters = @("e2e-server-*.pid") + $pidFilters
+    }
+
+    foreach ($pidFilter in $pidFilters) {
+        Get-ChildItem -Path $tmpRoot -Filter $pidFilter -File -ErrorAction SilentlyContinue | ForEach-Object {
+            $pidText = (Get-Content -Path $_.FullName -Raw -ErrorAction SilentlyContinue).Trim()
+            $pidValue = 0
+            if ([int]::TryParse($pidText, [ref]$pidValue)) {
+                Stop-ProcessTreeSafe -ProcessId $pidValue -Reason ("stale {0}" -f $_.BaseName)
+            }
+            Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
         }
-        Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
+    }
+}
+
+$e2eNodePattern = 'scripts[\\/](e2e_chunk[123]|e2e_fresh_boot_smoke|e2e_visible_smoke)\.js'
+Get-CimInstance Win32_Process | Where-Object {
+    $_.Name -eq "node.exe" -and $_.CommandLine -match $e2eNodePattern
+} | ForEach-Object {
+    Stop-ProcessTreeSafe -ProcessId ([int]$_.ProcessId) -Reason "orphan e2e node"
+}
+
+Get-CimInstance Win32_Process | Where-Object {
+    $_.Name -eq "chrome-headless-shell.exe" -and $_.CommandLine -match "playwright_chromiumdev_profile"
+} | ForEach-Object {
+    Stop-ProcessTreeSafe -ProcessId ([int]$_.ProcessId) -Reason "orphan e2e chromium"
+}
+
+Get-CimInstance Win32_Process | Where-Object {
+    $_.CommandLine -match "playwright_chromiumdev_profile" -and
+    $_.Name -in @(
+        "chrome.exe",
+        "chromium.exe",
+        "chrome-headless-shell.exe",
+        "chromium-headless-shell.exe"
+    )
+} | ForEach-Object {
+    Stop-ProcessTreeSafe -ProcessId ([int]$_.ProcessId) -Reason "orphan e2e chromium"
+}
+
+$mcpPattern = '(@playwright[\\/]mcp|@playwright/mcp|playwright-mcp)'
+
+if ($McpChromium) {
+    Get-CimInstance Win32_Process | Where-Object {
+        $_.CommandLine -match $mcpPattern -and
+        $_.CommandLine -match "mcp-chromium-"
+    } | ForEach-Object {
+        Stop-ProcessTreeSafe -ProcessId ([int]$_.ProcessId) -Reason "stale playwright mcp chromium"
+    }
+}
+
+if ($AllMcp) {
+    Get-CimInstance Win32_Process | Where-Object {
+        $_.Name -in @("cmd.exe", "node.exe") -and $_.CommandLine -match $mcpPattern
+    } | Sort-Object ParentProcessId, ProcessId | ForEach-Object {
+        Stop-ProcessTreeSafe -ProcessId ([int]$_.ProcessId) -Reason "playwright mcp"
     }
 }
 
@@ -81,7 +135,7 @@ if ($AllChrome) {
     }
 }
 
-if (Test-Path $tmpRoot) {
+if ((Test-Path $tmpRoot) -and -not $SkipServers) {
     Remove-Item -Path (Join-Path $tmpRoot "e2e-server.last-ready.txt") -Force -ErrorAction SilentlyContinue
     Remove-Item -Path (Join-Path $tmpRoot "e2e-server.last-ready.json") -Force -ErrorAction SilentlyContinue
 }

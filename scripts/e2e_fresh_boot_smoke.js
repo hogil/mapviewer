@@ -40,7 +40,7 @@ const { createRunner } = require('./e2e_playwright_session');
     const explorerReadyMs = Date.now() - navStartedAt;
 
     await page.evaluate(async () => {
-      await window.viewer.loadImagesInFolderAndShowGrid('palette_3k');
+      await window.viewer.loadImagesInFolderAndShowGrid('unknown');
     });
     await page.waitForFunction(
       () =>

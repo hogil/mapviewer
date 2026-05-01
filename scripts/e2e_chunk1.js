@@ -15,28 +15,56 @@ const { createRunner } = require('./e2e_playwright_session');
     close,
   } = await createRunner(__filename);
 
+  const imagesRoot = path.resolve(
+    process.env.IMAGES_ROOT || (process.platform === 'win32' ? 'D:/project/data/wm-811k' : '/appdata/appuser/images')
+  );
+  const unknownFolderAbs = path.join(imagesRoot, 'unknown');
+
   async function boot(tag) {
     append(`[BOOT] ${tag}\n`);
-    await focusWindow();
-    await page.goto(`${base}/?${tag}=${Date.now()}`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000,
-    });
-    await page.waitForFunction(
-      () => !!window.viewer && window.__l3FullViewerReady === true,
-      null,
-      { timeout: 90000 }
-    );
-    await page.waitForFunction(
-      () =>
-        document.querySelectorAll(
-          '#file-explorer .folder, #file-explorer .folder-item'
-        ).length > 10,
-      null,
-      { timeout: 90000 }
-    );
-    await focusWindow();
-    await sleep(1800);
+    let lastError = null;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        await focusWindow();
+        await page.goto(`${base}/?${tag}=${Date.now()}&attempt=${attempt}`, {
+          waitUntil: 'domcontentloaded',
+          timeout: 60000,
+        });
+        await page.waitForFunction(
+          () => !!window.viewer && window.__l3FullViewerReady === true,
+          null,
+          { timeout: 90000 }
+        );
+        await page.waitForFunction(
+          () =>
+            document.querySelectorAll(
+              '#file-explorer .folder, #file-explorer .folder-item'
+            ).length > 10,
+          null,
+          { timeout: 90000 }
+        );
+        await focusWindow();
+        await sleep(1800);
+        return;
+      } catch (err) {
+        lastError = err;
+        const state = await page.evaluate(() => ({
+          href: location.href,
+          hasViewer: !!window.viewer,
+          ready: window.__l3FullViewerReady === true,
+          folderCount: document.querySelectorAll(
+            '#file-explorer .folder, #file-explorer .folder-item'
+          ).length,
+          bodyText: document.body?.innerText?.slice(0, 160) || '',
+        })).catch((stateErr) => ({ evaluateError: String(stateErr?.message || stateErr) }));
+        append(`[BOOT_RETRY] ${tag} attempt=${attempt} state=${JSON.stringify(state)} err=${String(err?.message || err)}\n`);
+        if (attempt >= 2) {
+          break;
+        }
+        await sleep(1200);
+      }
+    }
+    throw lastError;
   }
 
   async function record(phase, name, fn) {
@@ -60,15 +88,33 @@ const { createRunner } = require('./e2e_playwright_session');
   async function loadFolder(folder) {
     append(`[LOAD_FOLDER] ${folder}\n`);
     await page.evaluate(async (folderName) => {
-      await window.viewer.loadImagesInFolderAndShowGrid(folderName);
+      const v = window.viewer;
+      v.selectedImages = [];
+      v.selectedFolders = new Set([folderName]);
+      v.lastSelectedFolderPath = folderName;
+      v._unfilteredGridImages = [];
+      const applied = await v.selectAllFolderFiles(folderName);
+      if (applied && Array.isArray(v.selectedImages) && v.selectedImages.length > 0) {
+        v.showGrid(v.selectedImages);
+      } else {
+        await v.loadImagesInFolderAndShowGrid(folderName);
+      }
     }, folder);
     await page.waitForFunction(
-      () =>
-        !!window.viewer &&
-        window.viewer.gridMode &&
-        window.viewer.currentGridImages?.length > 0 &&
-        document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0,
-      null,
+      (folderName) => {
+        const v = window.viewer;
+        const normalized = String(folderName || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        const prefix = normalized ? `${normalized}/` : '';
+        const images = Array.isArray(v?.currentGridImages) ? v.currentGridImages : [];
+        return (
+          !!v &&
+          v.gridMode &&
+          images.length > 0 &&
+          images.some((imagePath) => String(imagePath || '').replace(/\\/g, '/').startsWith(prefix)) &&
+          document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0
+        );
+      },
+      folder,
       { timeout: 90000 }
     );
     await sleep(800);
@@ -76,6 +122,7 @@ const { createRunner } = require('./e2e_playwright_session');
       prefix: window.viewer.currentFolderPrefix || '',
       count: window.viewer.currentGridImages?.length || 0,
       wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+      firstPath: window.viewer.currentGridImages?.[0] || '',
     }));
     append(`[LOAD_FOLDER_OK] ${folder} :: ${JSON.stringify(state)}\n`);
   }
@@ -281,6 +328,105 @@ const { createRunner } = require('./e2e_playwright_session');
     }, relativeUrl);
   }
 
+  function encodeParams(params) {
+    const searchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      searchParams.set(key, value);
+    }
+    return searchParams.toString();
+  }
+
+  function parseLotWaferFromPath(imagePath) {
+    const name = String(imagePath || '').replace(/\\/g, '/').split('/').pop() || '';
+    const parts = name.split('_');
+    return {
+      path: imagePath,
+      lot: (parts[0] || '').toLowerCase(),
+      wafer: (parts[2] || '').toLowerCase(),
+    };
+  }
+
+  function normalizeResultPath(rawPath) {
+    const normalized = String(rawPath || '').replace(/\\/g, '/');
+    if (!normalized.includes(':/')) {
+      return normalized;
+    }
+    const parts = normalized.split('/');
+    const markerIdx = parts.indexOf('wm-811k');
+    return markerIdx >= 0 && markerIdx + 1 < parts.length
+      ? parts.slice(markerIdx + 1).join('/')
+      : normalized;
+  }
+
+  function resultLots(results) {
+    return Array.from(new Set(
+      (results || []).map((imagePath) => parseLotWaferFromPath(imagePath).lot).filter(Boolean)
+    )).sort();
+  }
+
+  function assertUnknownSearchResult(scenario, data, expectedLots = []) {
+    expect(data.success === true, `${scenario} success=${JSON.stringify(data).slice(0, 500)}`);
+    const results = (data.results || []).map(normalizeResultPath);
+    expect(results.length > 0, `${scenario} empty results`);
+    expect(
+      results.every((imagePath) => imagePath.startsWith('unknown/')),
+      `${scenario} non-unknown=${JSON.stringify(results.filter((imagePath) => !imagePath.startsWith('unknown/')).slice(0, 8))}`
+    );
+    expect(
+      (data.timings?.search_prefix || '') === '',
+      `${scenario} not global prefix=${JSON.stringify(data.timings || {})}`
+    );
+    const lots = resultLots(results);
+    for (const lot of expectedLots) {
+      expect(lots.includes(lot), `${scenario} missing lot=${lot} lots=${JSON.stringify(lots)}`);
+    }
+    return {
+      count: results.length,
+      total: data.total,
+      firstPath: results[0],
+      lots,
+      searchMode: data.timings?.search_mode || null,
+      searchPrefix: data.timings?.search_prefix || '',
+    };
+  }
+
+  async function findUnknownGlobalSearchFixtures(limit = 3) {
+    const recursive = await fetchJson(page, '/api/files/recursive?path=unknown&limit=5000');
+    const candidates = Array.from(new Map(
+      (recursive.files || [])
+        .filter((imagePath) => String(imagePath || '').replace(/\\/g, '/').startsWith('unknown/'))
+        .map((imagePath) => {
+          const fixture = parseLotWaferFromPath(imagePath);
+          return fixture.lot && fixture.wafer ? [fixture.lot, fixture] : null;
+        })
+        .filter(Boolean)
+    ).values());
+    const fixtures = [];
+    for (const candidate of candidates) {
+      const data = await fetchJson(
+        page,
+        `/api/search?${encodeParams({ q: candidate.lot, folder: '', limit: '10000' })}`
+      );
+      const results = (data.results || []).map(normalizeResultPath);
+      if (
+        data.success === true &&
+        results.length > 0 &&
+        results.every((imagePath) => imagePath.startsWith('unknown/'))
+      ) {
+        fixtures.push({
+          ...candidate,
+          globalCount: results.length,
+          firstGlobalPath: results[0],
+        });
+      }
+      if (fixtures.length >= limit) {
+        break;
+      }
+    }
+    expect(fixtures.length >= limit, `unknown global search fixtures=${JSON.stringify(fixtures)}`);
+    return fixtures;
+  }
+
   await boot('chunk1');
 
   await record('1', '페이지 로드 & 기본 UI', async () => {
@@ -297,17 +443,21 @@ const { createRunner } = require('./e2e_playwright_session');
     return data;
   });
 
-  await record('2,5,31', 'palette_3k 그리드/범례', async () => {
-    await loadFolder('palette_3k');
+  await record('2,5,31', 'unknown 그리드/범례', async () => {
+    await loadFolder('unknown');
     const data = await page.evaluate(() => ({
       count: window.viewer.currentGridImages.length,
       wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+      firstPath: window.viewer.currentGridImages?.[0] || '',
+      unknownCount: window.viewer.currentGridImages
+        .filter((imagePath) => String(imagePath || '').replace(/\\/g, '/').startsWith('unknown/')).length,
       legendTop: (
         document.getElementById('color-legend-top')?.innerText || ''
       ).replace(/\s+/g, ' '),
     }));
-    expect(data.count === 3000, `count=${data.count}`);
-    expect(data.wraps === 3000, `wraps=${data.wraps}`);
+    expect(data.count > 0, `count=${data.count}`);
+    expect(data.wraps === data.count, `wraps=${data.wraps} count=${data.count}`);
+    expect(data.unknownCount === data.count, `unknownCount=${data.unknownCount} count=${data.count}`);
     expect(
       /(Grade0|G0)/.test(data.legendTop) && /(Grade7|G7)/.test(data.legendTop),
       `legend=${data.legendTop}`
@@ -359,8 +509,109 @@ const { createRunner } = require('./e2e_playwright_session');
     return counts;
   });
 
+  await record('3u', 'unknown LOT 전역 검색', async () => {
+    await boot('chunk1-search-unknown-global');
+    const fixtures = await findUnknownGlobalSearchFixtures(3);
+    const [a, b, c] = fixtures;
+    const scenarios = [
+      {
+        name: 'api exact q',
+        params: { q: a.lot, folder: '', limit: '10000' },
+        expectedLots: [a.lot],
+      },
+      {
+        name: 'api logical or',
+        params: { q: `${a.lot} or ${b.lot}`, folder: '', limit: '10000' },
+        expectedLots: [a.lot, b.lot],
+      },
+      {
+        name: 'api whitespace multi',
+        params: { q: `${a.lot} ${b.lot}`, folder: '', limit: '10000' },
+        expectedLots: [a.lot, b.lot],
+      },
+      {
+        name: 'api comma multi',
+        params: { q: `${a.lot},${b.lot},${c.lot}`, folder: '', limit: '10000' },
+        expectedLots: [a.lot, b.lot, c.lot],
+      },
+      {
+        name: 'api lot_multi',
+        params: { q: '', lot_multi: `${a.lot},${b.lot}`, folder: '', limit: '10000' },
+        expectedLots: [a.lot, b.lot],
+      },
+      {
+        name: 'api lot_wafer',
+        params: { q: '', lot_wafer: `${a.lot}:${a.wafer},${b.lot}:${b.wafer}`, folder: '', limit: '10000' },
+        expectedLots: [a.lot, b.lot],
+      },
+    ];
+    const apiResults = {};
+    for (const scenario of scenarios) {
+      const data = await fetchJson(page, `/api/search?${encodeParams(scenario.params)}`);
+      apiResults[scenario.name] = assertUnknownSearchResult(
+        scenario.name,
+        data,
+        scenario.expectedLots
+      );
+    }
+
+    await page.evaluate(() => {
+      const v = window.viewer;
+      v.selectedImages = [];
+      v.selectedFolders = new Set();
+      v.lastSelectedFolder = null;
+      v.lastSelectedFolderPath = null;
+      v.lastLoadedGridFolderPath = '';
+      v.currentFolderPrefix = '';
+      const input = document.getElementById('file-search');
+      if (input) input.value = '';
+    });
+    await page.fill('#file-search', a.lot);
+    await page.click('#search-btn');
+    await page.waitForFunction(
+      (expectedLot) => {
+        const btn = document.getElementById('search-btn');
+        const images = Array.isArray(window.viewer?.currentGridImages)
+          ? window.viewer.currentGridImages.map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+          : [];
+        return (
+          !btn?.disabled &&
+          window.viewer?.gridMode === true &&
+          images.length > 0 &&
+          images.every((imagePath) => imagePath.startsWith('unknown/')) &&
+          images.some((imagePath) => imagePath.split('/').pop().toLowerCase().startsWith(`${expectedLot}_`)) &&
+          document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0
+        );
+      },
+      a.lot,
+      { timeout: 45000 }
+    );
+    const uiResult = await page.evaluate(() => {
+      const images = (window.viewer.currentGridImages || [])
+        .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'));
+      return {
+        count: images.length,
+        firstPath: images[0],
+        unknownCount: images.filter((imagePath) => imagePath.startsWith('unknown/')).length,
+        lots: Array.from(new Set(images.map((imagePath) => (
+          (imagePath.split('/').pop() || '').split('_')[0].toLowerCase()
+        )).filter(Boolean))).sort(),
+        wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+        selectedFolders: [...(window.viewer.selectedFolders || [])],
+        lastLoadedGridFolderPath: window.viewer.lastLoadedGridFolderPath || '',
+      };
+    });
+    expect(uiResult.unknownCount === uiResult.count, `ui non-unknown=${JSON.stringify(uiResult)}`);
+    expect(uiResult.lots.includes(a.lot), `ui lots=${JSON.stringify(uiResult)}`);
+    return {
+      fixtures,
+      apiResults,
+      uiResult,
+    };
+  });
+
   await record('6,32', 'LOT Mode / 폴더전환 스크롤', async () => {
-    await loadFolder('palette_3k');
+    await loadFolder('unknown');
     const lotHeaders = await page.evaluate(async () => {
       const w = document.querySelector('#image-grid')?.parentElement;
       if (w) w.scrollTop = 1000;
@@ -459,14 +710,31 @@ const { createRunner } = require('./e2e_playwright_session');
     const baselineRootEndpointCount = Number((statsAfterInitialLoad.endpoints || {})['/'] || 0);
 
     await statsProbePage.evaluate(async () => {
-      await window.viewer.loadImagesInFolderAndShowGrid('palette_3k');
+      const v = window.viewer;
+      v.selectedImages = [];
+      v.selectedFolders = new Set(['unknown']);
+      v.lastSelectedFolderPath = 'unknown';
+      v._unfilteredGridImages = [];
+      const applied = await v.selectAllFolderFiles('unknown');
+      if (applied && Array.isArray(v.selectedImages) && v.selectedImages.length > 0) {
+        v.showGrid(v.selectedImages);
+      } else {
+        await v.loadImagesInFolderAndShowGrid('unknown');
+      }
     });
     await statsProbePage.waitForFunction(
-      () =>
-        !!window.viewer &&
-        window.viewer.gridMode === true &&
-        (window.viewer.currentGridImages?.length || 0) === 3000 &&
-        document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0,
+      () => {
+        const images = Array.isArray(window.viewer?.currentGridImages)
+          ? window.viewer.currentGridImages
+          : [];
+        return (
+          !!window.viewer &&
+          window.viewer.gridMode === true &&
+          images.length > 0 &&
+          images.some((imagePath) => String(imagePath || '').replace(/\\/g, '/').startsWith('unknown/')) &&
+          document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0
+        );
+      },
       null,
       { timeout: 90000 }
     );
@@ -552,8 +820,15 @@ const { createRunner } = require('./e2e_playwright_session');
       }
     });
     await sleep(150);
-    await loadFolder('filter_test');
+    await loadFolder('unknown');
     await setSelection([0, 1, 2]);
+    const selectedUnknownPaths = await page.evaluate(() => (
+      (window.viewer.gridSelectedIdxs || []).map((idx) => window.viewer.currentGridImages?.[idx] || null)
+    ));
+    expect(
+      selectedUnknownPaths.every((imagePath) => String(imagePath || '').replace(/\\/g, '/').startsWith('unknown/')),
+      `selectedUnknownPaths=${JSON.stringify(selectedUnknownPaths)}`
+    );
     await sleep(1000);
     append('[CM] open initial context\n');
     const firstWrap = page.locator('#image-grid .grid-thumb-wrap').first();
@@ -646,6 +921,7 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.evaluate(() => window.viewer.hideContextMenu?.());
     await setSelection([0, 1, 2]);
     const path = await page.evaluate(() => window.viewer.currentGridImages[0]);
+    expect(String(path || '').replace(/\\/g, '/').startsWith('unknown/'), `ref path=${path}`);
     await page.evaluate((p) => window.viewer.setRefMap(p), path);
     await sleep(500);
     const refVisible = await visible('#ref-map-window');
@@ -736,9 +1012,11 @@ const { createRunner } = require('./e2e_playwright_session');
       meaSubmenuState,
       lowMcSubmenu,
       lowMeaSubmenu,
+      selectedUnknownPaths,
       freshMcState,
       mcBeforeGenerate,
       refVisible,
+      refPath: path,
       overlay,
       compositeCount,
       selectedPanelAfterComposite,
@@ -748,7 +1026,7 @@ const { createRunner } = require('./e2e_playwright_session');
 
   await record('13-19', '단일 이미지 기본/피라미드/컨텍스트/라벨모달', async () => {
     await boot('chunk1-single');
-    await loadFolder('palette_5mb');
+    await loadFolder('unknown');
     await setSelection([0]);
     await page.keyboard.press('Enter');
     await page.waitForFunction(
@@ -769,8 +1047,12 @@ const { createRunner } = require('./e2e_playwright_session');
     await sleep(500);
     const data = await page.evaluate(() => ({
       selectedImagePath: window.viewer.selectedImagePath,
+      selectedImagesForLabel: window.viewer.getSelectedImagesForModal?.() || [],
       pyramidLevel: window.viewer.currentPyramidLevel,
       fileName: (document.getElementById('file-name-text')?.textContent || '').trim(),
+      currentImageInfo: (
+        document.getElementById('current-image-info')?.textContent || ''
+      ).trim(),
       chipInfoLen: (
         document.getElementById('chip-info-container')?.innerText || ''
       )
@@ -783,12 +1065,167 @@ const { createRunner } = require('./e2e_playwright_session');
         getComputedStyle(document.getElementById('add-label-modal')).display !==
         'none',
     }));
+    expect(
+      String(data.selectedImagePath || '').replace(/\\/g, '/').startsWith('unknown/'),
+      `single selectedImagePath=${data.selectedImagePath}`
+    );
+    expect(
+      data.selectedImagesForLabel.length > 0 &&
+        data.selectedImagesForLabel.every((imagePath) =>
+          String(imagePath || '').replace(/\\/g, '/').startsWith('unknown/')
+        ),
+      `label modal selectedImages=${JSON.stringify(data.selectedImagesForLabel)}`
+    );
     expect(!!data.selectedImagePath, 'no selected image');
     expect(data.pyramidLevel !== undefined, `pyramid=${data.pyramidLevel}`);
     expect(data.fileName.length > 0, 'empty filename');
     expect(data.chipInfoLen > 0, 'empty chip info');
     expect(data.singleCtxVisible, 'single ctx hidden');
     expect(data.addLabelVisible, 'add label hidden');
+    await backToGrid();
+    return data;
+  });
+
+  await record('chip-label-b', 'Chip label 파일명 b suffix', async () => {
+    await boot('chunk1-chip-label-b');
+    const className = `e2e_chip_bfmt_${Date.now()}`;
+    await page.evaluate(async (folderPath) => {
+      const res = await fetch('/api/change-folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: folderPath }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(`change-folder failed: ${JSON.stringify(data)}`);
+      }
+      const v = window.viewer;
+      v.currentFolderPath = data.current_folder;
+      v.currentFolderPrefix = data.current_folder_prefix || '';
+      v.productFolderPath = data.current_folder;
+      v.markFolderContextChanged?.('e2e-chip-label-b');
+    }, unknownFolderAbs);
+    await loadFolder('unknown');
+    await setSelection([0]);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(
+      () =>
+        !!window.viewer &&
+        !window.viewer.gridMode &&
+        String(window.viewer.selectedImagePath || '').replace(/\\/g, '/').startsWith('unknown/') &&
+        Array.isArray(window.viewer.chipAnnotator?.chips) &&
+        window.viewer.chipAnnotator.chips.length > 0,
+      null,
+      { timeout: 60000 }
+    );
+
+    const data = await page.evaluate(async (targetClass) => {
+      const v = window.viewer;
+      const annotator = v.chipAnnotator;
+      const chips = annotator.chips || [];
+      const chipIndex = chips.findIndex((chip) =>
+        chip &&
+        chip.rect &&
+        chip.x_abs !== undefined &&
+        chip.y_abs !== undefined
+      );
+      if (chipIndex < 0) {
+        throw new Error('labelable chip not found');
+      }
+      const chip = chips[chipIndex];
+      const expectedB = String(chip.b ?? 'Normal')
+        .trim()
+        .replace(/[^A-Za-z0-9_-]+/g, '_')
+        .replace(/^_+|_+$/g, '') || 'Normal';
+      annotator.selectedChips = new Set([chipIndex]);
+      annotator.selectedChipsOrder = [chipIndex];
+      annotator.render?.();
+
+      const coords = annotator.getSelectedChipCoords();
+      const classifyRes = await fetch('/api/classify/chips', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          class_name: targetClass,
+          image_path: v.selectedImagePath,
+          chip_coords: coords,
+          folder_prefix: v.currentFolderPrefix || '',
+        }),
+      });
+      const classifyBody = await classifyRes.json();
+      if (!classifyRes.ok || !classifyBody.success) {
+        throw new Error(`chip classify failed: ${JSON.stringify(classifyBody)}`);
+      }
+
+      await annotator.loadAnnotations(v.selectedImagePath);
+      const annotationRes = await fetch(`/api/chip-annotations?path=${encodeURIComponent(v.selectedImagePath)}`);
+      const annotations = await annotationRes.json();
+      const previousClassMode = v.classMode;
+      v.classMode = 'chip';
+      const classPath = v.buildClassificationPath(targetClass);
+      v.classMode = previousClassMode;
+      const filesRes = await fetch(`/api/files?path=${encodeURIComponent(classPath)}`);
+      const filesText = await filesRes.text();
+      let filesBody = {};
+      try {
+        filesBody = filesText ? JSON.parse(filesText) : {};
+      } catch (err) {
+        throw new Error(`chip files response is not JSON status=${filesRes.status} body=${filesText.slice(0, 160)}`);
+      }
+      if (!filesRes.ok || filesBody.success === false) {
+        throw new Error(`chip files failed status=${filesRes.status} body=${filesText.slice(0, 320)}`);
+      }
+      const savedFilename = classifyBody.saved_files?.[0]?.filename || '';
+
+      return {
+        className: targetClass,
+        imagePath: v.selectedImagePath,
+        chip: {
+          index: chipIndex,
+          x_abs: chip.x_abs,
+          y_abs: chip.y_abs,
+          b: chip.b ?? null,
+        },
+        expectedB,
+        coords,
+        classifyBody,
+        savedFilename,
+        classPath,
+        files: (filesBody.items || []).map((item) => item.name),
+        marked: annotations.marked_chips || [],
+      };
+    }, className).finally(async () => {
+      await page.evaluate(async (targetClass) => {
+        await fetch('/api/classes/delete?mode=chip', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ names: [targetClass] }),
+        }).catch(() => {});
+      }, className).catch(() => {});
+    });
+
+    expect(data.classifyBody.saved_count === 1, `saved_count=${JSON.stringify(data.classifyBody)}`);
+    expect(
+      /^.+_x\d+_y\d+_b[A-Za-z0-9_-]+\.png$/.test(data.savedFilename),
+      `chip filename missing b suffix: ${data.savedFilename}`
+    );
+    expect(
+      data.savedFilename.endsWith(`_b${data.expectedB}.png`),
+      `chip filename b mismatch expected=${data.expectedB} actual=${data.savedFilename}`
+    );
+    expect(
+      data.classifyBody.saved_files?.[0]?.b === data.expectedB,
+      `saved_files b mismatch: ${JSON.stringify(data.classifyBody)}`
+    );
+    expect(data.files.includes(data.savedFilename), `saved file missing: ${JSON.stringify(data)}`);
+    expect(
+      data.marked.some((chip) =>
+        chip.class === data.className &&
+        chip.filename === data.savedFilename &&
+        chip.b === data.expectedB
+      ),
+      `annotation missing saved filename: ${JSON.stringify(data)}`
+    );
     await backToGrid();
     return data;
   });

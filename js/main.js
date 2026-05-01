@@ -8307,7 +8307,7 @@ class WaferMapViewer {
             return { lots: [], error: 'LOT 입력 영역을 찾을 수 없습니다.' };
         }
         const raw = this.dom.multiSearchInput.value || '';
-        const segments = raw.split(/[\n\r,;/]+/);
+        const segments = raw.split(/[\s,;/]+/);
         const seen = new Set();
         const lots = [];
         const MAX = 300;
@@ -10657,6 +10657,19 @@ class WaferMapViewer {
             .filter(Boolean);
     }
 
+    getSearchFolderParam() {
+        const normalize = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        if (this.selectedFolders && this.selectedFolders.size === 1) {
+            const [folder] = Array.from(this.selectedFolders);
+            const normalized = normalize(folder);
+            if (normalized) return normalized;
+        }
+        const loadedFolder = normalize(this.lastLoadedGridFolderPath || '');
+        if (loadedFolder) return loadedFolder;
+        const prefix = normalize(this.currentFolderPrefix || '');
+        return prefix || '';
+    }
+
     async performSearch(options = {}) {
         const { multiLotList = [], wfPairs = '', suppressAlerts = false } = options;
         const searchBtn = this.dom.searchBtn;
@@ -10704,7 +10717,11 @@ class WaferMapViewer {
             // 서버 검색 API 사용: 프런트는 결과만 표시
             const searchParams = new URLSearchParams();
             searchParams.set('q', fileQuery || '');
-            searchParams.set('limit', '5000');  // 🔥 검색 결과 최대 5000개
+            searchParams.set('limit', '10000');  // 검색 결과 최대 10000개
+            const folderParam = this.getSearchFolderParam();
+            if (folderParam) {
+                searchParams.set('folder', folderParam);
+            }
             if (normalizedLots.length) {
                 // 🔥 여러 LOT를 쉼표로 구분하여 전달
                 const lotMultiValue = normalizedLots.join(',');
@@ -10814,6 +10831,9 @@ class WaferMapViewer {
             }
 
             this.showGrid(matchedImages, false, forceFlatSearchGrid);
+            if (folderParam) {
+                this.lastLoadedGridFolderPath = folderParam;
+            }
 
             return true;
         } catch (error) {
@@ -24288,6 +24308,7 @@ class WaferMapViewer {
     }
 
     async loadImagesInFolderAndShowGrid(folderPath) {
+        this.lastLoadedGridFolderPath = String(folderPath || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
         // 새 폴더 로드 시 measure 상태 초기화 (이전 세션 잔재 방지)
         this._measureCheckedItems = [];
         this._gridMeasureMap = null;
