@@ -76,6 +76,47 @@ const { createRunner } = require('./e2e_playwright_session');
     await sleep(1200);
   }
 
+  async function getPrimaryLabelClass() {
+    return await page.evaluate(async () => {
+      const readDomClasses = () =>
+        Array.from(document.querySelectorAll('.label-explorer-frame li > div'))
+          .map((el) => (el.textContent || '').replace(/[▸▾]/g, '').trim())
+          .filter(Boolean)
+          .filter((value, index, arr) => arr.indexOf(value) === index);
+
+      const pickClass = (classes) => {
+        if (!Array.isArray(classes) || classes.length === 0) return null;
+        return classes.includes('test') ? 'test' : classes[0];
+      };
+
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        const domClass = pickClass(readDomClasses());
+        if (domClass) return domClass;
+
+        try {
+          const classes = await window.viewer?.getClassList?.(true);
+          const className = pickClass(classes);
+          if (className) {
+            await window.viewer?.refreshLabelExplorer?.();
+            return className;
+          }
+        } catch (_) {
+        }
+
+        try {
+          const response = await fetch('/api/classes?mode=wafer', { cache: 'no-store' });
+          const data = await response.json();
+          const className = pickClass(data?.classes);
+          if (className) return className;
+        } catch (_) {
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+      return null;
+    });
+  }
+
   async function record(phase, name, fn) {
     append(`[START] ${phase} ${name}\n`);
     try {
@@ -528,7 +569,8 @@ const { createRunner } = require('./e2e_playwright_session');
 
   async function scrollGridToRatio(ratio) {
     await page.evaluate(async (value) => {
-      const scrollWrapper = document.querySelector('#image-grid')?.parentElement;
+      const grid = document.querySelector('#image-grid');
+      const scrollWrapper = grid?.closest('.grid-scroll-wrapper') || grid?.parentElement;
       if (!scrollWrapper) return;
       const maxScrollTop = Math.max(
         0,
@@ -544,7 +586,7 @@ const { createRunner } = require('./e2e_playwright_session');
   async function getMiddleVisibleGridIndex() {
     return await page.evaluate(() => {
       const grid = document.getElementById('image-grid');
-      const scrollWrapper = grid?.parentElement;
+      const scrollWrapper = grid?.closest('.grid-scroll-wrapper') || grid?.parentElement;
       if (!grid || !scrollWrapper) return 0;
       const wrapperRect = scrollWrapper.getBoundingClientRect();
       const visible = Array.from(grid.querySelectorAll('.grid-thumb-wrap'))
@@ -1222,12 +1264,7 @@ const { createRunner } = require('./e2e_playwright_session');
     expectSinglePreserved(measureSingleAfter, { path: measureSingleBefore.selectedImagePath });
 
     await boot('chunk3-tab-preserve-label');
-    const labelClass = await page.evaluate(() => {
-      const classNames = Array.from(document.querySelectorAll('.label-explorer-frame li > div'))
-        .map((el) => (el.textContent || '').replace(/[▸▾]/g, '').trim())
-        .filter(Boolean);
-      return Array.from(new Set(classNames))[0] || null;
-    });
+    const labelClass = await getPrimaryLabelClass();
     expect(labelClass, 'label class not found');
     await page.evaluate(async (className) => {
       const v = window.viewer;
@@ -1339,6 +1376,186 @@ const { createRunner } = require('./e2e_playwright_session');
       mylotGridAfter,
       mylotSingleBefore,
       mylotSingleAfter,
+    };
+  });
+
+  await record('tab-state-preserve-10-tabs', '10개 탭 cross-role grid/single 상태 격리', async () => {
+    async function waitGridRole(role, timeout = 60000) {
+      await page.waitForFunction(
+        (expectedRole) => {
+          const v = window.viewer;
+          const grid = document.getElementById('image-grid');
+          const sw = grid?.closest('.grid-scroll-wrapper') || grid?.parentElement;
+          return (
+            v.pageManager?.getActivePage?.()?.role === expectedRole &&
+            v.gridMode === true &&
+            !!grid &&
+            !!sw &&
+            getComputedStyle(grid).display !== 'none' &&
+            getComputedStyle(sw).display !== 'none' &&
+            document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0
+          );
+        },
+        role,
+        { timeout }
+      );
+      await sleep(900);
+    }
+
+    async function openGridDetail(role, label, idx = 0) {
+      await page.locator('#image-grid .grid-thumb-wrap').nth(idx).dblclick();
+      await page.waitForFunction(
+        (expectedRole) => {
+          const v = window.viewer;
+          const canvas = document.getElementById('image-canvas');
+          return (
+            v.pageManager?.getActivePage?.()?.role === expectedRole &&
+            v.gridMode === false &&
+            (v.viewMode === 'gridImage' || v.viewMode === 'single') &&
+            !!v.selectedImagePath &&
+            !!canvas &&
+            getComputedStyle(canvas).display !== 'none'
+          );
+        },
+        role,
+        { timeout: 30000 }
+      );
+      await sleep(1200);
+      return await getTabVisualState(label);
+    }
+
+    await boot('chunk3-tab-preserve-10tabs');
+    await selectWaferExplorerFolder('palette_3k');
+    await page.evaluate(() => window.viewer.applyGridColsChange(3, { maxCols: 20 }));
+    await scrollGridToRatio(0.55);
+    await sleep(800);
+    await setSelection([2, 4, 6]);
+    const waferGridInitial = await getTabVisualState('10tab-wafer-grid-initial');
+    const waferGridPageId = waferGridInitial.activePageId;
+    const waferSingleBefore = await openGridDetail('wafer', '10tab-wafer-single-before', 0);
+    const waferSinglePageId = waferSingleBefore.activePageId;
+
+    await activatePageById(waferGridPageId, 'grid');
+    await page.evaluate(() => window.viewer.handleCompositeCreate());
+    await waitGridRole('composite', COMPOSITE_E2E_TIMEOUT_MS);
+    const compositeGridBefore = await getTabVisualState('10tab-composite-grid-before');
+    const compositeGridPageId = compositeGridBefore.activePageId;
+    const compositeSingleBefore = await openGridDetail('composite', '10tab-composite-single-before', 0);
+    const compositeSinglePageId = compositeSingleBefore.activePageId;
+
+    await activatePageById(waferGridPageId, 'grid');
+    const measureSelection = await findCommonMeasureSelection('f', 4, 24);
+    await setSelection(measureSelection.indices);
+    await page.evaluate(async (payload) => {
+      const v = window.viewer;
+      v._measureCheckedItems = [
+        { type: 'failbit', key: null, label: 'Failbit' },
+        payload.item,
+      ];
+      await v._applyMeasureSelection();
+    }, measureSelection);
+    await waitGridRole('measure');
+    await setSelection([1, 3]);
+    const measureGridBefore = await getTabVisualState('10tab-measure-grid-before');
+    const measureGridPageId = measureGridBefore.activePageId;
+    const measureSingleBefore = await openGridDetail('measure', '10tab-measure-single-before', 0);
+    const measureSinglePageId = measureSingleBefore.activePageId;
+
+    const labelClass = await getPrimaryLabelClass();
+    expect(labelClass, '10tab label class not found');
+    await page.evaluate(async (className) => {
+      const v = window.viewer;
+      await v.showGridFromClass(className);
+      v.labelSelection.selectedClasses = [className];
+      v.updateLabelExplorerSelection?.();
+    }, labelClass);
+    await waitGridRole('label');
+    await setSelection([0, 1]);
+    const labelGridBefore = await getTabVisualState('10tab-label-grid-before');
+    const labelGridPageId = labelGridBefore.activePageId;
+    const labelSingleBefore = await openGridDetail('label', '10tab-label-single-before', 0);
+    const labelSinglePageId = labelSingleBefore.activePageId;
+
+    await activatePageById(waferGridPageId, 'grid');
+    await setSelection([2, 4, 6]);
+    await scrollGridToRatio(0.55);
+    await sleep(800);
+    const waferGridExpected = await getTabVisualState('10tab-wafer-grid-expected');
+    await page.evaluate(async () => {
+      const v = window.viewer;
+      const modal = await v._getMyLotModal();
+      const sample = v.currentGridImages.slice(0, 12);
+      modal.activeMode = 'lot';
+      modal.activeGroup = 'tab-preserve-10tabs-group';
+      modal.currentEntries = [
+        { value: 'tab-preserve-10tabs-lot', filename: 'tab-preserve-10tabs-lot', path: sample[0], all_paths: sample },
+      ];
+      modal.selectedKeys = new Set(['tab-preserve-10tabs-lot']);
+      await modal.openSelectionInViewer();
+    });
+    await waitGridRole('mylot');
+    await setSelection([0, 2]);
+    const mylotGridBefore = await getTabVisualState('10tab-mylot-grid-before');
+    const mylotGridPageId = mylotGridBefore.activePageId;
+    const mylotSingleBefore = await openGridDetail('mylot', '10tab-mylot-single-before', 0);
+    const mylotSinglePageId = mylotSingleBefore.activePageId;
+
+    const tabCountState = await getTabVisualState('10tab-count');
+    expect(tabCountState.pages.length === 10, `10tab count=${tabCountState.pages.length}`);
+
+    await activatePageById(waferGridPageId, 'grid');
+    const waferGridAfter = await getTabVisualState('10tab-wafer-grid-after');
+    await activatePageById(waferSinglePageId, 'single');
+    const waferSingleAfter = await getTabVisualState('10tab-wafer-single-after');
+    await activatePageById(compositeGridPageId, 'grid');
+    const compositeGridAfter = await getTabVisualState('10tab-composite-grid-after');
+    await activatePageById(compositeSinglePageId, 'single');
+    const compositeSingleAfter = await getTabVisualState('10tab-composite-single-after');
+    await activatePageById(measureGridPageId, 'grid');
+    const measureGridAfter = await getTabVisualState('10tab-measure-grid-after');
+    await activatePageById(measureSinglePageId, 'single');
+    const measureSingleAfter = await getTabVisualState('10tab-measure-single-after');
+    await activatePageById(labelGridPageId, 'grid');
+    const labelGridAfter = await getTabVisualState('10tab-label-grid-after');
+    await activatePageById(labelSinglePageId, 'single');
+    const labelSingleAfter = await getTabVisualState('10tab-label-single-after');
+    await activatePageById(mylotGridPageId, 'grid');
+    const mylotGridAfter = await getTabVisualState('10tab-mylot-grid-after');
+    await activatePageById(mylotSinglePageId, 'single');
+    const mylotSingleAfter = await getTabVisualState('10tab-mylot-single-after');
+
+    expectGridPreserved(waferGridAfter, { selectedIdxs: [2, 4, 6] });
+    expect(
+      waferGridAfter.selectedFolders.includes('palette_3k') &&
+        waferGridAfter.waferSelectedFolderPaths.includes('palette_3k'),
+      `10tab wafer explorer selection lost=${JSON.stringify(waferGridAfter)}`
+    );
+    expect(
+      waferGridExpected.maxScrollTop === 0 ||
+        Math.abs(waferGridAfter.scrollTop - waferGridExpected.scrollTop) <= 12,
+      `10tab wafer scroll changed=${JSON.stringify({ before: waferGridExpected, after: waferGridAfter })}`
+    );
+    expectSinglePreserved(waferSingleAfter, { path: waferSingleBefore.selectedImagePath });
+    expectGridPreserved(compositeGridAfter);
+    expectSinglePreserved(compositeSingleAfter, { path: compositeSingleBefore.selectedImagePath });
+    expectGridPreserved(measureGridAfter, { selectedIdxs: [1, 3] });
+    expect(
+      measureGridAfter.overlayMode === 'multi' && measureGridAfter.measureCheckedItems.length === 2,
+      `10tab measure overlay lost=${JSON.stringify(measureGridAfter)}`
+    );
+    expectSinglePreserved(measureSingleAfter, { path: measureSingleBefore.selectedImagePath });
+    expectGridPreserved(labelGridAfter, { selectedIdxs: [0, 1], labelClass });
+    expectSinglePreserved(labelSingleAfter, { path: labelSingleBefore.selectedImagePath });
+    expectGridPreserved(mylotGridAfter, { selectedIdxs: [0, 2] });
+    expectSinglePreserved(mylotSingleAfter, { path: mylotSingleBefore.selectedImagePath });
+
+    return {
+      tabCount: tabCountState.pages.length,
+      wafer: { before: waferGridExpected, after: waferGridAfter, single: waferSingleAfter.selectedImagePath },
+      composite: { grid: compositeGridAfter.role, single: compositeSingleAfter.selectedImagePath },
+      measure: { selectedIdxs: measureGridAfter.gridSelectedIdxs, overlayMode: measureGridAfter.overlayMode },
+      label: { selectedIdxs: labelGridAfter.gridSelectedIdxs, labelClass },
+      mylot: { selectedIdxs: mylotGridAfter.gridSelectedIdxs },
     };
   });
 

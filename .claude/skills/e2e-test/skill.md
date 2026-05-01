@@ -6,35 +6,35 @@ argument-hint: [Phase 번호 또는 범위]
 
 # L3 Tracker E2E 기능 점검
 
-Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으로 테스트합니다.
+기본은 로컬 Playwright runner(`scripts/run-e2e-playwright.ps1`)로 L3 Tracker의 모든 주요 기능을 자동 테스트합니다. MCP 브라우저는 최종 E2E 증명 경로가 아니며, 사용자가 명시적으로 MCP를 요구한 경우의 보조 디버깅에만 사용합니다.
 
-## 절대규칙 #-2: E2E 브라우저는 반드시 새 Playwright 세션 — 기존 창 재사용/덮어쓰기 절대 금지
+## 절대규칙 #-2: E2E 브라우저는 로컬 Playwright runner 우선 — MCP 브라우저로 최종 증명 금지
 
-- **E2E 테스트는 반드시 사용 중이지 않은 새 Playwright MCP 인스턴스를 사용한다** (playwright, playwright2, ..., playwright10 중 비어있는 것 선택).
-- 이미 열려있는 Playwright 탭/창에서 `browser_navigate`로 기존 페이지를 덮어쓰는 행위는 절대 금지한다.
-- 사용자가 열어둔 브라우저 창을 E2E 테스트가 침범하면 사용자 작업이 중단되는 심각한 사고가 발생한다.
-- 모든 Playwright 인스턴스가 사용 중인 경우에만, `browser_evaluate`로 `window.open(url)` 후 `browser_tabs`로 새 탭 전환하는 방식을 사용한다.
-- E2E 테스트가 만든 브라우저/탭은 테스트 완료 후에도 닫지 않는다 — 사용자가 명시적으로 요청한 경우에만 허용.
-- 이 규칙을 위반하여 기존 창을 navigate로 덮어쓰거나 `browser_close`로 닫는 행위는 절대 금지한다.
+- **기본 실행은 반드시 로컬 Playwright runner**(`powershell -ExecutionPolicy Bypass -File scripts/run-e2e-playwright.ps1`)로 한다.
+- 사용자가 "내가 보게", "브라우저 띄워서"라고 하면 같은 runner를 **`-Headless` 없이** 실행한다. MCP 브라우저 도구로 대체하지 않는다.
+- MCP 브라우저는 모델/도구가 직접 제어하는 원격 브라우저 세션이다. 최종 PASS 증명, 성능 측정, 프로세스 정리 검증에는 사용하지 않는다.
+- 로컬 runner는 repo 스크립트가 서버/Python/Node/Chromium 수명주기를 추적하므로, E2E 후 프로세스 정리 검증이 가능하다.
+- 이미 열려있는 사용자 브라우저 창을 navigate로 덮어쓰는 행위는 절대 금지한다.
+- 테스트 완료 후 runner가 만든 임시 브라우저/서버는 정리되어야 한다. 사용자가 `-KeepServer`를 명시한 경우만 예외다.
 
-## 절대규칙 #-1: E2E 서버는 항상 새 빈 포트로 시작 — 기존 서버 절대 종료 금지
+## 절대규칙 #-1: E2E 서버는 항상 새 빈 포트로 시작 — 기존 서버 절대 종료 금지, 자기 서버는 정리
 
 - **`start-e2e-server.ps1`는 기존 서버(8443 등)를 절대 종료하지 않는다.**
 - 항상 `Get-FreePort`로 사용 중이지 않은 포트를 찾아 새 서버를 그 포트에서 시작한다.
 - 스크립트 출력 `READY:<port>`에서 실제 포트 번호를 읽어 `BASE_URL=https://localhost:<port>`로 설정한다.
-- 테스트 종료 후에도 E2E 용 서버를 종료하지 않는다 — 사용자가 명시적으로 요청한 경우에만 허용.
+- `run-e2e-playwright.ps1`는 자신이 시작한 E2E 서버 PID를 추적하고, 테스트 종료 후 반드시 종료한다. 사용자가 `-KeepServer`를 명시한 경우만 예외다.
 - 기존 사용자 서버를 Kill하여 연결이 끊기는 사고는 절대 금지한다.
 - 이 규칙을 위반하여 `Stop-ApiMainProcesses` 또는 기존 서버 종료를 추가하는 행위는 절대 금지한다.
 
 ## 절대규칙 #0: 반드시 Playwright 브라우저로 전체 UI 검증 — 예외 없음
 
-- **모든 Phase는 반드시 Playwright 기반 브라우저 자동화로만 검증한다.** 허용 경로는 `scripts/run-e2e-playwright.ps1` 또는 Playwright MCP뿐이다.
-- **사용자가 "브라우저가 안 뜬다" 또는 "먼저 창부터 띄워라"라고 하면, 분석 전에 반드시 `powershell -ExecutionPolicy Bypass -File scripts/run-e2e-visible-smoke.ps1` 를 먼저 실행해 실제 브라우저 창 open + 그리드 동작을 확인한다.** 이 경우 Playwright MCP만으로 시작하는 것은 금지한다.
+- **모든 Phase는 반드시 Playwright 기반 브라우저 자동화로만 검증한다.** 기본 허용 경로는 `scripts/run-e2e-playwright.ps1`이다.
+- **사용자가 "브라우저가 안 뜬다" 또는 "먼저 창부터 띄워라"라고 하면, 분석 전에 반드시 `powershell -ExecutionPolicy Bypass -File scripts/run-e2e-visible-smoke.ps1` 또는 `scripts/run-e2e-playwright.ps1`(headful)을 먼저 실행해 실제 브라우저 창 open + 그리드 동작을 확인한다.** 이 경우 MCP 브라우저만으로 시작하는 것은 금지한다.
 - API 레벨(curl, urllib, fetch 등)만으로 테스트를 대체하는 것은 절대 금지한다.
 - "API로 검증 가능", "브라우저 없이도 확인 가능" 등의 이유로 Playwright를 생략하는 것은 허용하지 않는다.
 - 한 개 Phase라도 Playwright 없이 API만으로 처리하면 전체 테스트를 FAIL로 간주한다.
 - **기본 실행 경로는 `powershell -ExecutionPolicy Bypass -File scripts/run-e2e-playwright.ps1` 이다.**
-- 이 runner는 **질문/실행 1회당 새 Playwright 세션(`E2E_SESSION_ID`)**을 만들고, chunk마다 별도 브라우저를 띄워 이전 질문의 쿠키/캐시/창 상태를 재사용하지 않는다.
+- 이 runner는 **질문/실행 1회당 새 Playwright 세션(`E2E_SESSION_ID`)**을 만들고, chunk마다 브라우저를 하나씩 띄워 이전 질문의 쿠키/캐시/창 상태를 재사용하지 않는다.
 
 ## 절대규칙 #0-1: 상태 플래그만으로 PASS 판정 금지 — 실제 화면 + visible 그리드로 검증
 
@@ -57,6 +57,32 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
   - `.grid-scroll-wrapper`의 `display`, `width`, `height`
   - 캡처 파일 경로
 
+## 절대규칙 #0-2: 탭 상태 보존 회귀 테스트는 grid/detail을 모두 만든 뒤 왕복 검증
+
+- wafer, measure, composite, label, mylot 각각에서 **grid 탭과 detail/single 탭을 모두 만든다**.
+- 최소 10개 탭 시나리오를 유지한다: `wafer0`, `wafer1`, `mea0`, `mea1`, `com0`, `com1`, `label0`, `label1`, `mylot0`, `mylot1`.
+- 각 grid 탭은 다음을 캡처하고, 다른 role 탭과 single 탭을 왕복한 뒤 같은 값인지 확인한다.
+  - `currentGridImages.length`, `selectedImages.length`
+  - `gridSelectedIdxs`
+  - `.grid-scroll-wrapper.scrollTop`
+  - Wafer Map Explorer의 `selectedFolders` / 선택 폴더 하이라이트
+  - Label Explorer의 `selectedClasses`
+  - Measure의 `overlayMode`, `_measureCheckedItems`, `_gridMeasureMap`
+- 각 detail/single 탭은 `viewMode === 'gridImage'` 또는 `viewMode === 'single'`, canvas 표시, `selectedImagePath`가 보존되는지 확인한다.
+- **파일 탐색기 직접 이미지 클릭 회귀**를 반드시 포함한다: `palette_3k` 3000장 그리드에서 Wafer Map Explorer 파일 1개 클릭 → single 보기 → ESC/복귀 후 `currentGridImages.length === 3000`, `.grid-thumb-wrap === 3000`이어야 한다. `3000 -> 1`이면 FAIL.
+- 단일 label detail만 따로 건드리는 방식으로 PASS 처리하지 않는다. label은 label grid/detail 보존 검증에 포함하되, wafer/composite/measure/mylot과 같은 cross-role 왕복 안에서 같이 검증한다.
+
+## 절대규칙 #0-3: E2E 프로세스 정리 검증
+
+- 전체 실행은 서버 1개를 시작하고 chunk를 순서대로 실행한다. 각 chunk는 Node 1개와 Chromium 1개를 사용한다.
+- E2E runner는 `COMPOSITE_USE_NUMBA=1` 상태의 서버를 시작하고, 실제 서버 프로세스 안에서 Composite Numba warmup을 수행한다.
+- 테스트 종료 후 `api.main`/uvicorn Python, Playwright Chromium, E2E Node, E2E PID 파일이 남지 않아야 한다.
+- 실패 로그가 `[FAIL]` 또는 `"status": "FAIL"`을 포함하면 runner exit code는 반드시 non-zero여야 한다.
+- 테스트 결과 보고 전 아래를 확인한다.
+  - E2E 서버 포트 listener 없음
+  - `.codex-tmp/e2e-server-*.pid` 없음
+  - repo 경로를 command line에 포함한 E2E Python/Node/Chromium 프로세스 없음
+
 ## 절대규칙: 기본 전체 실행
 
 - **인자 없이 `/e2e-test` 실행 시 Phase 1~63 전체를 실행한다.**
@@ -64,7 +90,7 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 - "전체 테스트", "E2E 테스트" 등 범위 미지정 요청은 전체 실행으로 간주한다.
 - Phase를 건너뛰거나 일부만 실행하는 것은 사용자가 명시적으로 요청한 경우에만 허용된다.
 - 별도 지령이 없으면 단 한 개 Phase도 skip하지 않고 전부 실행한다.
-`browser_evaluate`로 JS를 실행하고, `browser_take_screenshot`으로 시각 확인합니다.
+로컬 Playwright `page.evaluate`와 screenshot으로 실제 UI를 확인한다.
 
 ## 절대규칙: Non-blocking Server Startup
 
@@ -106,13 +132,13 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 - E2E 테스트에서 batch 폴더 파일을 이미지 로드/썸네일 생성/렌더링 대상으로 사용하지 않는다.
 - batch 경로에서 pyvips/PIL 에러가 발생해도 정상이다 — 버그가 아니므로 수정하지 않는다.
 
-## 절대규칙: Playwright 브라우저 새 창 사용
+## 절대규칙: Playwright 브라우저 실행 방식
 
-- 가능하면 **사용 중이 아닌 Playwright MCP 인스턴스**를 우선 사용한다.
-- **현재 환경에 Playwright 인스턴스가 하나만 노출된 경우에는 그 인스턴스를 재사용해도 된다.**
-- 재사용 시에는 기존 사용자 창을 덮어쓰지 말고 **새 탭/새 페이지/새 컨텍스트**를 우선 사용한다.
-- 탭/컨텍스트 분리가 불가능한 도구 구성이라면, 현재 세션을 재사용하되 이 제한을 테스트 로그에 남긴다.
-- `browser_close`는 사용자 세션을 파괴하는 용도로 쓰지 않는다. 단, **이번 E2E 실행이 직접 만든 임시 창/탭 정리**는 허용된다.
+- 기본은 repo의 로컬 Playwright 스크립트가 Chromium을 직접 띄우는 방식이다.
+- headless 전체 검증: `powershell -ExecutionPolicy Bypass -File scripts/run-e2e-playwright.ps1 -Chunk all -Headless`
+- 사용자가 보는 검증: `powershell -ExecutionPolicy Bypass -File scripts/run-e2e-playwright.ps1 -Chunk 3`처럼 `-Headless` 없이 실행한다.
+- MCP 브라우저는 모델에게 제공되는 별도 원격 제어 브라우저 도구다. 사용자에게 "내 로컬에서 보이는 E2E"를 증명할 때는 MCP가 아니라 로컬 Playwright runner를 사용한다.
+- 로컬 runner가 직접 만든 임시 브라우저/탭만 정리할 수 있다. 사용자 브라우저나 별도 작업 창은 건드리지 않는다.
 
 ## 사전 조건 (자동 설정)
 
@@ -129,19 +155,15 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
 > - 서버 시작 후 첫 요청에서 썸네일이 새로 생성되므로 cold start 성능을 정확히 측정 가능
 
 > **필수**: 브라우저는 **항상 1920×1080 최대화** 상태로 동작해야 한다. 모든 Phase에서 UI 요소가 뷰포트 안에 보여야 한다.
-> - MCP 서버 설정(`~/.claude.json`)에 `--viewport-size 1920,1080` 옵션이 반드시 포함되어야 한다.
-> - 페이지 접속 직후 `browser_resize(1920, 1080)`도 반드시 실행한다 (이중 보장).
+> - 로컬 Playwright runner는 컨텍스트/viewport를 1920×1080 기준으로 생성해야 한다.
+> - 수동 MCP 디버깅을 명시적으로 하는 경우에만 페이지 접속 직후 `browser_resize(1920, 1080)`도 실행한다.
 > - 페이지 새로고침이나 네비게이션 후에도 뷰포트 크기를 재확인한다.
 
-### Step 0-1: Playwright MCP 설치 확인 및 브라우저 최대화
-1. `browser_navigate` 등 Playwright MCP 도구 호출을 시도하여 연결 확인
-2. 실패 시 `npx @playwright/mcp@latest --install` 실행하여 브라우저 설치
-3. 재시도하여 MCP 연결 확인 — 실패 시 사용자에게 안내 후 중단
-4. **브라우저 창 최대화**: 페이지 접속 직후 `browser_resize`로 **width: 1920, height: 1080** 설정 (전체 화면으로 UI 테스트)
-5. **MCP 설정 확인**: `~/.claude.json`의 playwright args에 `--viewport-size 1920,1080`이 포함되어야 한다:
-   ```json
-   "args": ["...", "@playwright/mcp@latest", "--browser", "chromium", "--viewport-size", "1920,1080"]
-   ```
+### Step 0-1: 로컬 Playwright runner 확인
+1. `node --check scripts/e2e_chunk*.js`로 테스트 스크립트 문법을 먼저 확인한다.
+2. 로컬 Playwright 브라우저 설치가 없으면 `npx playwright install chromium`을 실행한다.
+3. 브라우저가 보여야 하는 요청이면 `-Headless`를 빼고 runner를 실행한다.
+4. MCP 브라우저는 이 단계에서 사용하지 않는다. MCP는 사용자가 명시적으로 "MCP로 봐라"라고 한 경우의 보조 디버깅만 허용한다.
 
 ### Step 0-2: 서버 시작 (원샷 스크립트)
 
@@ -159,11 +181,7 @@ Playwright MCP를 사용하여 L3 Tracker의 모든 주요 기능을 자동으�
    - 출력이 `READY:<port>`이면 → `BASE_URL=https://localhost:<port>`
    - 출력이 `FAIL`이면 → 사용자에게 안내 후 중단
 
-2. **브라우저 접속 확인** (`browser_navigate`로 실제 페이지 로드):
-   ```
-   browser_navigate(BASE_URL)
-   browser_resize(1920, 1080)
-   ```
+2. **브라우저 접속 확인** (로컬 Playwright page로 실제 페이지 로드):
    - 타이틀 "Wafer Map Viewer" 확인
    - 폴더 목록 렌더링 확인 (3초 대기)
    - **실패 시**: 새 free port로 원샷 서버 시작을 한 번만 재시도
@@ -260,10 +278,10 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 
 ## 테스트 실행 방법
 
-각 Phase를 순서대로 `browser_evaluate`로 실행합니다.
+각 Phase를 로컬 Playwright runner에서 순서대로 실행합니다.
 - 각 단계에서 결과 객체를 반환받아 pass/fail 판정
 - 실패 시 스크린샷 촬영 후 원인 분석
-- alert/confirm 다이얼로그는 `browser_handle_dialog`로 처리
+- alert/confirm 다이얼로그는 Playwright dialog handler로 처리
 - Phase 끝마다 정리(cleanup)하여 다음 Phase에 영향 없도록
 
 ## 중복 정리 및 권위 기준
@@ -349,7 +367,7 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 6. 콘솔 에러 0개 확인 (favicon 404 제외)
 
 7. **fetch 래핑 LoginId 전달 확인**: SAML 로그인 후 (`viewer.getCurrentLoginId?.()`가 `guest`/`notsaml`이 아닌 실제 사용자일 때)
-   - `browser_evaluate`로 `/api/config` fetch 호출 → Network 탭에서 URL에 `LoginId=` 파라미터 포함 확인
+   - 로컬 Playwright `page.evaluate`로 `/api/config` fetch 호출 → Network 탭에서 URL에 `LoginId=` 파라미터 포함 확인
    - `viewer.currentUser`가 설정되어 있으면 모든 `/api/` 요청에 `?LoginId=` 자동 추가됨
    - 서버 로그에서 IP 옆에 LoginId가 "—" 대신 실제 ID로 표시되는지 확인
 
@@ -1419,7 +1437,7 @@ compact_array 포맷에서 FBT/QVL 키가 배열 인덱스(0,1,2...)로 표시�
 1. palette_3k 그리드 로드 → 전체선택
 2. Measure 패널 열기 (`#failbit-btn-top` 클릭)
 3. **인덱스 방지 검증**: FBT 항목 텍스트에 `FBT0`, `FBT1`, `FBT2` 등 순차 인덱스가 **없는지** 확인
-   - `browser_evaluate`로 `.failbit-item` 텍스트 목록 수집
+   - 로컬 Playwright `page.evaluate`로 `.failbit-item` 텍스트 목록 수집
    - `FBT0` 텍스트가 포함된 항목이 0개인지 확인 (인덱스가 아닌 실제 키: `FBT2824` 등)
 4. FBT 항목 중 하나 클릭 (예: 첫 번째 FBT 항목) → 그리드 썸네일이 measure-thumb heatmap으로 교체
 5. `viewer.overlayMode === 'f'` 확인
@@ -1440,7 +1458,7 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 1. palette_3k 단일 이미지 로드 (wafer_p3k_0001_EE_Engineer.png)
 2. Measure 패널에서 FBT2824 클릭 → 오버레이 적용
 3. **단일 이미지 칩 텍스트 확인**: `chipAnnotator.ratioOverlayColors.size > 0` (칩 색상 계산됨)
-4. **칩 텍스트 값 검증**: `browser_evaluate`로 chipAnnotator 렌더 시 compact_array 인덱스 접근 확인
+4. **칩 텍스트 값 검증**: 로컬 Playwright `page.evaluate`로 chipAnnotator 렌더 시 compact_array 인덱스 접근 확인
    - `chipAnnotator.overlayItemKey`가 `"2824"`
    - `chipAnnotator.positionsData.ftn_keys` 배열에 `"2824"` 포함
    - `chipAnnotator.chips[0].f`가 Array (compact_array 포맷)
@@ -1464,7 +1482,7 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 
 1. palette_5mb 단일 이미지 로드 (wafer_palette_5mb_PE_Engineer.png)
 2. Measure 패널에서 FBT2824 클릭 → 클라이언트 사이드 chipAnnotator heatmap 적용
-3. `browser_evaluate`로 gradient 캐시 확인: `viewer._ratioGradientCache` 11개 색상 존재
+3. 로컬 Playwright `page.evaluate`로 gradient 캐시 확인: `viewer._ratioGradientCache` 11개 색상 존재
 4. Navigator 썸네일 URL에 `measure_overlay=f%3A2824` 포함 확인
 5. Navigator 첫 번째 썸네일 이미지를 canvas에 그려 픽셀 샘플링 (칩 영역 + 배경)
 6. 칩 영역 픽셀이 원본 Grade 색상과 **다름** 확인 (heatmap gradient 색상)
@@ -1899,7 +1917,7 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 
 #### 20-1. 페이지 로드 & API 응답
 1. `BASE_URL/stats` 접속 → 타이틀 "웨이퍼맵 뷰어 접속 분석" 확인
-2. Stats API 엔드포인트 호출 확인 (browser_evaluate로 fetch):
+2. Stats API 엔드포인트 호출 확인 (로컬 Playwright `page.evaluate`로 fetch):
    - `GET /api/stats/daily` → 200 응답, `total_users` 필드 존재 (숫자 >= 0)
    - `GET /api/stats/trend?days=14` → 200 응답, 객체 키가 날짜 형식 (YYYY-MM-DD)
    - `GET /api/stats/monthly?months=6` → 200 응답, 객체 키가 월 형식 (YYYY-MM)
@@ -2431,7 +2449,7 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 2. `chipAnnotator.chips`에서 각 chip의 BIN 값 분포 확인 (다양한 BIN 존재)
 3. `/api/image?path=palette_3k/wafer_p3k_0001_...` 원본 이미지 요청
 4. **핵심 검증**: 이미지 pixel에서 grade 0~7 각각의 pixel 수가 전체의 5% 이상 (8 grade 모두 존재)
-5. 또는 browser_evaluate로 canvas에 이미지를 그려 pixel color 분석
+5. 또는 로컬 Playwright `page.evaluate`로 canvas에 이미지를 그려 pixel color 분석
 6. 대안: 그리드 스크린샷에서 이미지들이 시각적으로 다양한 색상을 가지는지 확인
 
 **pass 기준**: grade 0~7이 모두 이미지에 존재하고, 단일 grade만 있지 않음
@@ -2680,6 +2698,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | 14 | Composite 결과가 LOT Mode 무시하고 flat 그리드 표시 | 598026f | `showGrid`에서 `!isCompositeMode` 조건 제거 |
 | 15 | 다중 Composite 경로에서 FBT/QVL aggregation이 `average`로 전송 | e767169 | `_startMultipleMeasureComposites`에서도 `sum`으로 통일 |
 | 16 | Measure Composite 재생성 시 이전 파일 미삭제 | e767169 | 같은 prefix(FBT/QVL/BIN)의 이전 .png/.jpg/.webp/.npz 자동 삭제 |
+| 17 | Wafer Map Explorer 파일 직접 클릭 후 single 복귀 시 3000장 그리드가 1장으로 축소 | 2026-05-01 | 파일 클릭 전 이전 grid return state 저장, single exit에서 더 큰 saved grid list 우선, fast restore에서 `currentGridImages/selectedImages` 재주입 |
 
 **정상 확인된 기능 (수정 후 검증 완료)**:
 
@@ -4454,7 +4473,7 @@ Chrome이 `max-age=86400~31536000` 응답을 디스크 캐시에 저장 → 개�
 
 **테스트 절차**:
 
-1. **서버 응답 헤더 검증** — `browser_evaluate`로 API 호출 후 헤더 확인:
+1. **서버 응답 헤더 검증** — 로컬 Playwright `page.evaluate`로 API 호출 후 헤더 확인:
 ```javascript
 // 썸네일 응답 헤더 확인
 const thumbRes = await fetch('/api/thumbnail?path=palette_3k/' + firstImage + '&size=256');
@@ -5708,12 +5727,12 @@ console.assert(g2.total > 0, `LOT multi + AND: ${g2.total} (expected > 0)`);
 - `browser_wait_for(time: N)` 같은 대기를 사용하지 않는다.
 - 폴더 리스트가 안 나오면 즉시 재시도 (최대 20회, 간격 0).
 - 이미지가 로드 안 되면 즉시 재확인 (최대 30회, 간격 0).
-- Playwright `browser_evaluate`로 DOM 상태를 폴링하되 JS `setTimeout` 없이 즉시 반복.
+- 로컬 Playwright `page.evaluate`로 DOM 상태를 폴링하되 JS `setTimeout` 없이 즉시 반복.
 
 ### 측정 순서
 
 1. **서버 시작**: `python -m api.main` 백그라운드 실행
-2. **즉시 접속**: `browser_navigate('https://localhost:443')` — 서버가 안 뜨면 즉시 재시도
+2. **즉시 접속**: 로컬 Playwright `page.goto('https://localhost:443')` — 서버가 안 뜨면 즉시 재시도
 3. **폴더 리스트 확인**: `nav` 안의 `summary[data-path]` 개수 > 0 될 때까지 즉시 폴링
 4. **시간 기록**: `performance.timing.loadEventEnd - navigationStart` = 페이지 로드 시간
 5. **폴더 Ctrl+클릭**: `fq_missing_test` (position 있는 폴더) summary 찾아서 click

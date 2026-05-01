@@ -106,6 +106,23 @@ if (-not $script:E2EServerPid) {
     }
 }
 $baseUrl = "https://127.0.0.1:$port"
+
+function Invoke-ServerCompositeNumbaWarm {
+    param([string]$BaseUrl)
+
+    Write-Host "WARMUP composite numba"
+    $raw = & curl.exe -s -k --max-time 120 `
+        -H "X-L3-Startup-Warm: 1" `
+        -X POST "$BaseUrl/api/internal/composite-numba-warmup"
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($raw)) {
+        Write-Error "Composite Numba warmup failed for $BaseUrl"
+        exit 1
+    }
+    Write-Host "COMPOSITE_NUMBA_WARM $raw"
+}
+
+Invoke-ServerCompositeNumbaWarm -BaseUrl $baseUrl
+
 $sessionId = "{0}-{1}" -f (Get-Date -Format "yyyyMMdd-HHmmss"), ([guid]::NewGuid().ToString("N").Substring(0, 8))
 $outputDir = Join-Path $repoRoot (Join-Path ".codex-tmp/e2e-sessions" $sessionId)
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
@@ -227,7 +244,7 @@ foreach ($script in $scripts) {
                     if (-not $doneGraceDeadline) {
                         $doneGraceDeadline = (Get-Date).AddSeconds(8)
                     }
-                } elseif ($line -match '^\[FAIL\]') {
+                } elseif ($line.Contains('[FAIL]')) {
                     $chunkFailedSeen = $true
                 }
             }
@@ -251,7 +268,7 @@ foreach ($script in $scripts) {
             Write-Host "[$name] $line"
             if ($line -match '^\[DONE\]') {
                 $doneSeen = $true
-            } elseif ($line -match '^\[FAIL\]') {
+            } elseif ($line.Contains('[FAIL]')) {
                 $chunkFailedSeen = $true
             }
         }
@@ -261,7 +278,13 @@ foreach ($script in $scripts) {
     $stdoutText = if (Test-Path $stdoutPath) { Get-Content -Path $stdoutPath -Raw -ErrorAction SilentlyContinue } else { "" }
 
     $exitCode = if ($proc.HasExited) { $proc.ExitCode } else { 1 }
-    if ($chunkFailedSeen -or $progressText -match '\[FAIL\]' -or $stdoutText -match '"status"\s*:\s*"FAIL"') {
+    $progressHasFail = -not [string]::IsNullOrEmpty($progressText) -and $progressText.Contains('[FAIL]')
+    $stdoutHasFail = -not [string]::IsNullOrEmpty($stdoutText) -and (
+        $stdoutText.Contains('"status": "FAIL"') -or
+        $stdoutText.Contains('"status":"FAIL"') -or
+        ($stdoutText -match '"status"\s*:\s*"FAIL"')
+    )
+    if ($chunkFailedSeen -or $progressHasFail -or $stdoutHasFail) {
         $exitCode = 2
     } elseif (-not $proc.HasExited -and $doneSeen) {
         $exitCode = 0

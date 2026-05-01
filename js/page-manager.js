@@ -166,6 +166,7 @@ export class PageManager {
     activatePage(id, options = {}) {
         if (id === this.activePageId) return;
         if (!options.skipPersist) {
+            this.persistActivePage();
             if (typeof this.onBeforePagePersist === 'function') {
                 try {
                     this.onBeforePagePersist(this.getActivePage());
@@ -173,7 +174,6 @@ export class PageManager {
                     console.error('[PageManager] onBeforePagePersist error', err);
                 }
             }
-            this.persistActivePage();
         }
         this.activePageId = id;
         this.renderTabs();

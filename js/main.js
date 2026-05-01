@@ -1999,14 +1999,16 @@ class WaferMapViewer {
             return;
         }
 
-        const scrollWrapper = grid.parentElement;
+        const scrollWrapper = this.getGridScrollWrapper();
+        const scrollTop = scrollWrapper ? scrollWrapper.scrollTop : 0;
+        const scrollLeft = scrollWrapper ? scrollWrapper.scrollLeft : 0;
         const fragment = document.createDocumentFragment();
         fragment.append(...Array.from(grid.children));
 
         const cacheEntry = {
             fragment,
-            scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
-            scrollLeft: scrollWrapper ? scrollWrapper.scrollLeft : 0,
+            scrollTop,
+            scrollLeft,
             selectedIdxs: Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : [],
             selectedSet: this.gridSelectedSet ? Array.from(this.gridSelectedSet) : (Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : []),
             currentImages: this.currentGridImages ? [...this.currentGridImages] : [],
@@ -2020,6 +2022,12 @@ class WaferMapViewer {
             gridMeasureMap: Array.isArray(this._gridMeasureMap) ? this.deepCloneSimple(this._gridMeasureMap) : null,
             measureBaseImages: Array.isArray(this._measureBaseImages) ? [...this._measureBaseImages] : null,
         };
+        if (this.savedViewState?.type === 'grid') {
+            this.savedViewState.scrollTop = cacheEntry.scrollTop;
+        }
+        if (page?.state?.savedViewState?.type === 'grid') {
+            page.state.savedViewState.scrollTop = cacheEntry.scrollTop;
+        }
 
         this.pageViewCache.set(pageId, cacheEntry);
 
@@ -2163,10 +2171,12 @@ class WaferMapViewer {
         this.gridThumbWraps = Array.from(grid.querySelectorAll('.grid-thumb-wrap'));
         this.invalidateGridGeometry();
 
-        const scrollWrapper = grid.parentElement;
+        const scrollWrapper = this.getGridScrollWrapper();
+        const cachedScrollTop = cache.scrollTop ?? 0;
+        const cachedScrollLeft = cache.scrollLeft ?? 0;
         if (scrollWrapper) {
-            scrollWrapper.scrollTop = cache.scrollTop ?? 0;
-            scrollWrapper.scrollLeft = cache.scrollLeft ?? 0;
+            scrollWrapper.scrollTop = cachedScrollTop;
+            scrollWrapper.scrollLeft = cachedScrollLeft;
         }
 
         this.savedViewState = cache.savedViewState
@@ -2185,6 +2195,22 @@ class WaferMapViewer {
 
         grid.style.display = 'grid';
         grid.classList.add('active');
+        const restoreCachedScroll = () => {
+            const currentScrollWrapper = this.getGridScrollWrapper();
+            if (!currentScrollWrapper) return;
+            currentScrollWrapper.scrollTop = cachedScrollTop;
+            currentScrollWrapper.scrollLeft = cachedScrollLeft;
+            if (this.savedViewState?.type === 'grid') {
+                this.savedViewState.scrollTop = cachedScrollTop;
+            }
+            this.invalidateGridOffsetCache?.();
+            this.loadVisibleGridThumbnails?.({ cancelExisting: false });
+        };
+        restoreCachedScroll();
+        requestAnimationFrame(restoreCachedScroll);
+        setTimeout(restoreCachedScroll, 80);
+        setTimeout(restoreCachedScroll, 220);
+        setTimeout(restoreCachedScroll, 500);
 
         if (!this.gridResizeObserver) {
             this.gridResizeObserver = new ResizeObserver(() => this.updateGridSquaresPixel());
@@ -2214,11 +2240,29 @@ class WaferMapViewer {
         const selectedIndices = Array.isArray(state.selectedIndices) && state.selectedIndices.length
             ? [...state.selectedIndices]
             : images.map((_, index) => index);
-        const targetIndex = Math.max(0, Math.min(selectedIndices[0] ?? 0, images.length - 1));
+        const normalizePathForMatch = (value) => String(value || '').replace(/\\/g, '/');
+        const findImageIndex = (imagePath) => {
+            const normalizedTarget = normalizePathForMatch(imagePath);
+            if (!normalizedTarget) return -1;
+            return images.findIndex((candidate) => normalizePathForMatch(candidate) === normalizedTarget);
+        };
+        let targetIndex = findImageIndex(this.selectedImagePath || state.currentImagePath);
+        if (targetIndex < 0 && Number.isInteger(state.gridViewImageIndex)) {
+            targetIndex = state.gridViewImageIndex;
+        }
+        if (targetIndex < 0 && Array.isArray(state.selectedImagePaths) && state.selectedImagePaths.length > 0) {
+            targetIndex = findImageIndex(state.selectedImagePaths[0]);
+        }
+        if (targetIndex < 0) {
+            targetIndex = selectedIndices[0] ?? 0;
+        }
+        targetIndex = Math.max(0, Math.min(targetIndex, images.length - 1));
+        const targetImagePath = images[targetIndex];
 
         this.gridMode = false;
         this.viewMode = 'gridImage';
         this.singleImageFromGrid = true;
+        this.selectedImagePath = targetImagePath;
 
         this.hideGrid(false);
 
@@ -2253,10 +2297,10 @@ class WaferMapViewer {
             this.compositeSession = state.compositeSession ? this.deepCloneSimple(state.compositeSession) : null;
         }
         try {
-            await this.loadImage(images[targetIndex]);
+            await this.loadImage(targetImagePath);
             if (this.thumbnailNavigator) {
                 this.thumbnailNavigator.show();
-                this.thumbnailNavigator.setImages(this.gridViewImageList, images[targetIndex]);
+                this.thumbnailNavigator.setImages(this.gridViewImageList, targetImagePath);
             }
             this.updateArrowButtonVisibility();
             return true;
@@ -2382,7 +2426,9 @@ class WaferMapViewer {
         // 🔥 단, 이미 명시적인 그리드 선택이 있는 경우(state.gridSelectedIdxs)에는 덮어쓰지 않음
         if (this.selectedFolders && this.selectedFolders.size > 0 && this.savedViewState?.type === 'grid') {
             const folderImages = Array.isArray(this.savedViewState.images) ? this.savedViewState.images : [];
-            const hasExplicitSelection = state.gridSelectedIdxs && state.gridSelectedIdxs.length > 0;
+            const hasExplicitSelection =
+                (Array.isArray(state.gridSelectedIdxs) && state.gridSelectedIdxs.length > 0) ||
+                (Array.isArray(this.savedViewState.selectedIndices) && this.savedViewState.selectedIndices.length > 0);
             
             if (folderImages.length > 0 && !hasExplicitSelection) {
                 this.selectedImages = [...folderImages];
@@ -2475,6 +2521,34 @@ class WaferMapViewer {
             const _sw = _grid?.closest('.grid-scroll-wrapper') || _grid?.parentElement;
             if (_sw) _sw.style.display = '';
             if (_grid) _grid.style.display = 'grid';
+        }
+
+        if (this.gridMode && this.viewMode !== 'gridImage') {
+            const pageSelectionSource = Array.isArray(state.gridSelectedIdxs)
+                ? state.gridSelectedIdxs
+                : (Array.isArray(state.savedViewState?.selectedIndices) ? state.savedViewState.selectedIndices : null);
+            if (pageSelectionSource) {
+                const applyPageGridSelection = () => {
+                    if (page?.id && this.pageManager?.activePageId !== page.id) return;
+                    if (!this.gridMode || this.viewMode === 'gridImage') return;
+                    const maxLen = Array.isArray(this.currentGridImages) ? this.currentGridImages.length : 0;
+                    const normalizedSelection = pageSelectionSource
+                        .filter(idx => Number.isInteger(idx) && idx >= 0 && (maxLen === 0 || idx < maxLen));
+                    this.gridSelectedIdxs = [...normalizedSelection];
+                    this.gridSelectedSet = new Set(normalizedSelection);
+                    this.updateGridSelection?.();
+                    this.flushGridSelectionUpdates?.();
+                    if (this.savedViewState?.type === 'grid') {
+                        this.savedViewState.selectedIndices = [...normalizedSelection];
+                        this.savedViewState.selectedImagePaths = normalizedSelection
+                            .map(idx => this.currentGridImages?.[idx])
+                            .filter(Boolean);
+                    }
+                };
+                applyPageGridSelection();
+                requestAnimationFrame(applyPageGridSelection);
+                setTimeout(applyPageGridSelection, 120);
+            }
         }
 
         if (this.gridMode && this.viewMode !== 'gridImage' && pageGridScrollTop !== null && pageGridScrollTop > 0) {
@@ -8861,7 +8935,7 @@ class WaferMapViewer {
      */
     saveCurrentGridSession() {
         const grid = document.getElementById('image-grid');
-        const scrollWrapper = grid?.parentElement;  // .grid-scroll-wrapper
+        const scrollWrapper = this.getGridScrollWrapper();
 
         const session = {
             type: 'normal-grid',
@@ -13191,6 +13265,52 @@ class WaferMapViewer {
             } else {
                 // 단일 클릭 - 이전 선택 모두 해제 후 새 항목 선택
 
+                const previousGridReturnState = (() => {
+                    if (!this.gridMode || !Array.isArray(this.currentGridImages) || this.currentGridImages.length === 0) {
+                        return null;
+                    }
+                    const currentGridImages = [...this.currentGridImages];
+                    const savedGridImages = Array.isArray(this.savedViewState?.images)
+                        ? [...this.savedViewState.images]
+                        : [];
+                    const returnImages = savedGridImages.length > currentGridImages.length
+                        ? savedGridImages
+                        : currentGridImages;
+                    if (returnImages.length === 0) {
+                        return null;
+                    }
+                    const scrollWrapper = this.getGridScrollWrapper();
+                    const selectedIndices = Array.isArray(this.gridSelectedIdxs)
+                        ? this.gridSelectedIdxs.filter(idx => Number.isInteger(idx) && idx >= 0 && idx < returnImages.length)
+                        : [];
+                    const savedGridState = (this.savedViewState?.type === 'grid' && savedGridImages.length >= returnImages.length)
+                        ? this.deepCloneSimple(this.savedViewState)
+                        : {
+                            type: 'grid',
+                            images: [...returnImages],
+                            scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
+                            lotMode: this.lotMode,
+                            selectedFolders: this.selectedFolders ? Array.from(this.selectedFolders) : [],
+                            lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || this.lastSelectedFolderPath || null,
+                        };
+                    savedGridState.images = [...returnImages];
+                    savedGridState.scrollTop = scrollWrapper ? scrollWrapper.scrollTop : (savedGridState.scrollTop || 0);
+                    savedGridState.lotMode = this.lotMode;
+                    savedGridState.selectedIndices = [...selectedIndices];
+                    savedGridState.selectedImagePaths = selectedIndices
+                        .map(idx => returnImages[idx])
+                        .filter(Boolean);
+                    return {
+                        type: 'grid',
+                        gridMode: true,
+                        images: [...returnImages],
+                        selectedImages: [...returnImages],
+                        gridSelectedIdxs: [...selectedIndices],
+                        savedViewState: savedGridState,
+                        fileExplorerScrollTop: this.dom.fileExplorer ? this.dom.fileExplorer.scrollTop : 0,
+                    };
+                })();
+
                 // 🔥 이전 선택된 모든 항목들의 시각적 표시 해제 (인라인 스타일 포함)
                 const allLinks = Array.from(this.dom.fileExplorer.querySelectorAll('a[data-path]'));
 
@@ -13238,6 +13358,10 @@ class WaferMapViewer {
                     // ✅ 파일 탐색기에서 클릭: enterSingleViewMode() 호출
                     console.log('✅ [FILE_CLICK] 이미지 파일 확인됨, enterSingleViewMode 호출');
                     await this.enterSingleViewMode(path);
+                    if (previousGridReturnState) {
+                        this.singleViewReturnState = this.deepCloneSimple(previousGridReturnState);
+                        this.savedViewState = this.deepCloneSimple(previousGridReturnState.savedViewState);
+                    }
                 } else {
                     // 이미지가 아니면 그리드 모드
                     console.log('ℹ️ [FILE_CLICK] 이미지 파일 아님, 그리드 모드로 전환');
@@ -13679,8 +13803,7 @@ class WaferMapViewer {
     // --- IMAGE LOADING ---
 
     getGridScrollTop() {
-        const grid = document.getElementById('image-grid');
-        const scrollWrapper = grid?.parentElement;
+        const scrollWrapper = this.getGridScrollWrapper();
         return scrollWrapper ? scrollWrapper.scrollTop : 0;
     }
 
@@ -13978,7 +14101,7 @@ class WaferMapViewer {
             const isClassificationPath = this.isClassificationPath(path);
             
             if (!labelExplorerIsolated && !isClassificationPath && !isLabelExplorerGrid) {
-                const scrollWrapper = grid?.parentElement;
+                const scrollWrapper = this.getGridScrollWrapper();
                 
                 // Grid 모드에서 전환하는 경우
                 if (wasGridMode && this.currentGridImages && this.currentGridImages.length > 0) {
@@ -19615,7 +19738,7 @@ class WaferMapViewer {
         }
 
         // 🔥 skipSaveState에 따라 스크롤 위치 저장/복원 결정
-        const scrollWrapper = grid?.parentElement;  // .grid-scroll-wrapper
+        const scrollWrapper = this.getGridScrollWrapper();
         let scrollTopToRestore = null;
 
         if (skipSaveState) {
@@ -19674,7 +19797,7 @@ class WaferMapViewer {
         if (grid) {
             grid.style.display = 'grid';
             // 🔥 scroll wrapper도 복원 (_hideGridVisual에서 숨겨진 경우)
-            const sw = grid.parentElement;
+            const sw = this.getGridScrollWrapper();
             if (sw && sw.classList.contains('grid-scroll-wrapper')) {
                 sw.style.display = '';
             }
@@ -19727,13 +19850,13 @@ class WaferMapViewer {
 
         // 🔥 새 그리드 진입 시 스크롤 맨 위 (콘텐츠 추가 후 리셋하여 확실히 적용)
         if (!skipSaveState) {
-            const sw = grid?.parentElement;
+            const sw = this.getGridScrollWrapper();
             if (sw) sw.scrollTop = 0;
         }
         requestAnimationFrame(() => {
             // 🔥 rAF에서 한 번 더 스크롤 리셋 (브라우저 레이아웃 이후 확실히 적용)
             if (!skipSaveState) {
-                const sw = grid?.parentElement;
+                const sw = this.getGridScrollWrapper();
                 if (sw) sw.scrollTop = 0;
             }
             this.loadVisibleGridThumbnails({ cancelExisting: false });
@@ -19784,7 +19907,7 @@ class WaferMapViewer {
 
             // 🔥 모든 DOM 조작이 끝난 후 스크롤 복원 (여러 번 강제 복원)
             const doRestore = () => {
-                const currentScrollWrapper = document.querySelector('.grid-scroll-wrapper');
+                const currentScrollWrapper = this.getGridScrollWrapper();
                 if (currentScrollWrapper) {
                     const beforeScroll = currentScrollWrapper.scrollTop;
                     currentScrollWrapper.scrollTop = scrollTopToRestore;
@@ -20633,7 +20756,7 @@ class WaferMapViewer {
 
     getGridScrollWrapper() {
         const grid = document.getElementById('image-grid');
-        return document.querySelector('.grid-scroll-wrapper') || grid?.parentElement || null;
+        return grid?.closest('.grid-scroll-wrapper') || grid?.parentElement || document.querySelector('.grid-scroll-wrapper') || null;
     }
 
     cancelGridImageRequests(resetQueue = true, keepPaused = false) {
@@ -21403,7 +21526,7 @@ class WaferMapViewer {
     saveWaferMapExplorerState() {
         const grid = document.getElementById('image-grid');
         const scrollWrapper = document.querySelector('.viewer-scroll-wrapper');
-        const gridScrollWrapper = document.querySelector('.grid-scroll-wrapper');
+        const gridScrollWrapper = grid?.closest('.grid-scroll-wrapper') || grid?.parentElement || document.querySelector('.grid-scroll-wrapper');
         
         // Grid 스크롤 요소 찾기
         const gridScrollElement = gridScrollWrapper || grid;
@@ -21467,7 +21590,7 @@ class WaferMapViewer {
             // Grid 스크롤 복원
             setTimeout(() => {
                 const grid = document.getElementById('image-grid');
-                const gridScrollWrapper = document.querySelector('.grid-scroll-wrapper');
+                const gridScrollWrapper = grid?.closest('.grid-scroll-wrapper') || grid?.parentElement || document.querySelector('.grid-scroll-wrapper');
                 const gridScrollElement = gridScrollWrapper || grid;
                 
                 if (gridScrollElement) {
@@ -21836,6 +21959,19 @@ class WaferMapViewer {
 
             if (canFastRestore) {
                 this.debugLog('🔷 [RESTORE] Fast grid restore — DOM 재활용');
+                const restoreImages = Array.isArray(this.savedViewState.images)
+                    ? [...this.savedViewState.images]
+                    : [];
+                if (restoreImages.length > 0) {
+                    this.selectedImages = [...restoreImages];
+                    this.currentGridImages = [...restoreImages];
+                }
+                const selectedIndices = Array.isArray(this.savedViewState.selectedIndices)
+                    ? this.savedViewState.selectedIndices
+                        .filter(idx => Number.isInteger(idx) && idx >= 0 && idx < restoreImages.length)
+                    : [];
+                this.gridSelectedIdxs = [...selectedIndices];
+                this.gridSelectedSet = new Set(selectedIndices);
                 this._showGridVisual();
                 this.showColorLegends();
                 this.renderColorLegends();
@@ -21844,7 +21980,7 @@ class WaferMapViewer {
                     this.loadVisibleGridThumbnails();
                 });
                 // 스크롤 위치 복원
-                const scrollWrapper = grid?.parentElement;
+                const scrollWrapper = this.getGridScrollWrapper() || grid?.parentElement;
                 if (scrollWrapper && this.savedViewState.scrollTop !== undefined) {
                     setTimeout(() => {
                         scrollWrapper.scrollTop = this.savedViewState.scrollTop;
@@ -21852,6 +21988,7 @@ class WaferMapViewer {
                 }
                 // 파일명 패널 숨기기
                 if (this.dom.fileNameDisplay) this.dom.fileNameDisplay.style.display = 'none';
+                this.updateGridSelection?.();
                 return;
             }
 
@@ -21861,6 +21998,22 @@ class WaferMapViewer {
             if (hasFilter) {
                 this._unfilteredGridImages = [...gridImages];
                 gridImages = gridImages.filter(p => this._passesLtTmFilter(p) && this._passesStepFilter(p));
+            }
+
+            const normalizeGridPath = (value) => String(value || '').replace(/\\/g, '/');
+            const savedSelectedPaths = Array.isArray(this.savedViewState.selectedImagePaths)
+                ? this.savedViewState.selectedImagePaths.map(normalizeGridPath).filter(Boolean)
+                : [];
+            let savedSelectedIndices = [];
+            if (savedSelectedPaths.length > 0) {
+                const normalizedImages = gridImages.map(normalizeGridPath);
+                savedSelectedIndices = savedSelectedPaths
+                    .map(path => normalizedImages.findIndex(imgPath => imgPath === path))
+                    .filter(idx => idx >= 0);
+            }
+            if (savedSelectedIndices.length === 0 && Array.isArray(this.savedViewState.selectedIndices)) {
+                savedSelectedIndices = this.savedViewState.selectedIndices
+                    .filter(idx => Number.isInteger(idx) && idx >= 0 && idx < gridImages.length);
             }
 
             this.selectedImages = gridImages;
@@ -21875,14 +22028,28 @@ class WaferMapViewer {
 
             this.showGrid(gridImages, true);  // ✅ skipSaveState=true로 호출
 
+            if (savedSelectedIndices.length > 0) {
+                this.gridSelectedIdxs = [...savedSelectedIndices];
+                this.gridSelectedSet = new Set(savedSelectedIndices);
+                if (this.savedViewState) {
+                    this.savedViewState.selectedIndices = [...savedSelectedIndices];
+                    this.savedViewState.selectedImagePaths = savedSelectedIndices
+                        .map(idx => gridImages[idx])
+                        .filter(Boolean);
+                }
+                requestAnimationFrame(() => {
+                    this.updateGridSelection?.();
+                    this.flushGridSelectionUpdates?.();
+                });
+            }
+
             // ✅ 폴더 선택 시각 상태 복원
             this.restoreFolderSelection();
 
             // 스크롤 위치 복원
 
             setTimeout(() => {
-                const grid = document.getElementById('image-grid');
-                const scrollWrapper = grid?.parentElement;  // .grid-scroll-wrapper
+                const scrollWrapper = this.getGridScrollWrapper();
 
                 if (scrollWrapper && this.savedViewState && this.savedViewState.scrollTop !== undefined) {
                     scrollWrapper.scrollTop = this.savedViewState.scrollTop;
@@ -22168,12 +22335,20 @@ class WaferMapViewer {
         // 🔥 Wafer Map Explorer에서만 savedViewState 업데이트 (Label Explorer 제외)
         const isLabelExplorerGrid = grid && grid.hasAttribute('data-label-explorer-grid');
         if (!isLabelExplorerGrid && this.gridMode && this.selectedImages && this.selectedImages.length > 0) {
-            const scrollWrapper = grid?.parentElement;
+            const scrollWrapper = this.getGridScrollWrapper();
+            const selectedIndices = Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : [];
+            const selectedImagePaths = selectedIndices
+                .map(idx => this.currentGridImages?.[idx])
+                .filter(Boolean);
             this.savedViewState = {
                 type: 'grid',
                 images: [...this.selectedImages],
                 scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
-                lotMode: this.lotMode
+                lotMode: this.lotMode,
+                selectedFolders: this.selectedFolders ? Array.from(this.selectedFolders) : [],
+                lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || this.lastSelectedFolderPath || null,
+                selectedIndices,
+                selectedImagePaths,
             };
         }
         
@@ -22625,29 +22800,39 @@ class WaferMapViewer {
             this.currentGridImages.length > 0;
         if (canReturnToGrid) {
             const grid = document.getElementById('image-grid');
-            const scrollWrapper = grid?.parentElement;
-            const selectedIndices = Array.isArray(this.gridSelectedIdxs) ? [...this.gridSelectedIdxs] : [];
-            const savedGridState = this.savedViewState?.type === 'grid'
+            const scrollWrapper = this.getGridScrollWrapper() || grid?.parentElement;
+            const currentGridImages = [...this.currentGridImages];
+            const savedGridImages = Array.isArray(this.savedViewState?.images)
+                ? [...this.savedViewState.images]
+                : [];
+            const returnImages = savedGridImages.length > currentGridImages.length
+                ? savedGridImages
+                : currentGridImages;
+            const selectedIndices = Array.isArray(this.gridSelectedIdxs)
+                ? this.gridSelectedIdxs.filter(idx => Number.isInteger(idx) && idx >= 0 && idx < returnImages.length)
+                : [];
+            const savedGridState = this.savedViewState?.type === 'grid' && savedGridImages.length >= returnImages.length
                 ? this.deepCloneSimple(this.savedViewState)
                 : {
                     type: 'grid',
-                    images: [...this.currentGridImages],
+                    images: [...returnImages],
                     scrollTop: scrollWrapper ? scrollWrapper.scrollTop : 0,
                     lotMode: this.lotMode,
                     selectedFolders: this.selectedFolders ? Array.from(this.selectedFolders) : [],
                     lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || this.lastSelectedFolderPath || null,
-                    selectedIndices,
-                    selectedImagePaths: selectedIndices
-                        .map(idx => this.currentGridImages[idx])
-                        .filter(Boolean),
                 };
+            savedGridState.images = [...returnImages];
+            savedGridState.scrollTop = scrollWrapper ? scrollWrapper.scrollTop : (savedGridState.scrollTop || 0);
+            savedGridState.lotMode = this.lotMode;
+            savedGridState.selectedIndices = [...selectedIndices];
+            savedGridState.selectedImagePaths = selectedIndices
+                .map(idx => returnImages[idx])
+                .filter(Boolean);
             this.singleViewReturnState = {
                 type: 'grid',
                 gridMode: true,
-                images: [...this.currentGridImages],
-                selectedImages: Array.isArray(this.selectedImages) && this.selectedImages.length > 0
-                    ? [...this.selectedImages]
-                    : [...this.currentGridImages],
+                images: [...returnImages],
+                selectedImages: [...returnImages],
                 gridSelectedIdxs: selectedIndices,
                 savedViewState: savedGridState,
                 fileExplorerScrollTop: this.dom.fileExplorer ? this.dom.fileExplorer.scrollTop : 0,
@@ -23096,6 +23281,8 @@ class WaferMapViewer {
             images: [...currentImages],
             selectedIndices,
             selectedImagePaths,
+            currentImagePath: currentList[idx] || null,
+            gridViewImageIndex: actualGridIndex !== -1 ? actualGridIndex : idx,
             scrollTop,
             isCompositeMode: this.isCompositeMode,
             compositeSession: this.isCompositeMode ? this.cloneCompositeSession() : null,
@@ -23560,10 +23747,17 @@ class WaferMapViewer {
                 savedSingleViewReturnState.savedViewState.images.length > 0;
             if (canRestorePreviousGrid) {
                 console.log('🔄 [EXIT] Explorer 단일 보기 → 이전 그리드 복귀');
-                const returnImages = Array.isArray(savedSingleViewReturnState.images) && savedSingleViewReturnState.images.length > 0
+                const savedStateImages = Array.isArray(savedSingleViewReturnState.savedViewState.images)
+                    ? [...savedSingleViewReturnState.savedViewState.images]
+                    : [];
+                const returnStateImages = Array.isArray(savedSingleViewReturnState.images)
                     ? [...savedSingleViewReturnState.images]
-                    : [...savedSingleViewReturnState.savedViewState.images];
+                    : [];
+                const returnImages = savedStateImages.length >= returnStateImages.length
+                    ? savedStateImages
+                    : returnStateImages;
                 this.savedViewState = this.deepCloneSimple(savedSingleViewReturnState.savedViewState);
+                this.savedViewState.images = [...returnImages];
                 this.selectedImages = [...returnImages];
                 this.currentGridImages = [...returnImages];
                 await this.restoreSavedViewState();

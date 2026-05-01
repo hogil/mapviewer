@@ -1241,6 +1241,33 @@ async def api_warmup(request: Request):
     return JSONResponse({"warming": True})
 
 
+async def api_internal_composite_numba_warmup(request: Request):
+    if not _is_internal_bootstrap_request(request):
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
+    started = time.perf_counter()
+
+    def _warm() -> Dict[str, Any]:
+        from . import composite_map
+
+        return composite_map.warm_numba_kernels()
+
+    try:
+        loop = asyncio.get_running_loop()
+        info = await loop.run_in_executor(None, _warm)
+        return JSONResponse(
+            {
+                "success": True,
+                "numba": info,
+                "elapsed": round(time.perf_counter() - started, 3),
+            },
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+        )
+    except Exception as exc:
+        logging.getLogger("uvicorn.error").exception("composite numba warmup failed")
+        return JSONResponse({"success": False, "detail": str(exc)}, status_code=500)
+
+
 async def api_search_ready(request: Request):
     _ensure_bootstrap_search_prewarm()
     _FULL_APP.ensure_loading(immediate=False)
@@ -1309,6 +1336,7 @@ app.add_route("/api/change-folder", change_folder, methods=["POST"])
 app.add_route("/api/cache", clear_cache, methods=["POST"])
 app.add_route("/api/cache/all", clear_all_cache, methods=["POST"])
 app.add_route("/api/warmup", api_warmup, methods=["GET", "POST"])
+app.add_route("/api/internal/composite-numba-warmup", api_internal_composite_numba_warmup, methods=["POST"])
 app.add_route("/api/search-ready", api_search_ready, methods=["GET"])
 app.add_route("/api/search", api_search, methods=["GET"])
 app.add_route("/api/browse-folders", browse_folders, methods=["GET"])
