@@ -365,7 +365,7 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.keyboard.press('Escape');
     await sleep(400);
 
-    await loadFolder('palette_5mb');
+    await loadFolder('unknown');
     const searchBefore = await page.evaluate(() => ({
       gridMode: !!window.viewer.gridMode,
       wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
@@ -468,7 +468,7 @@ const { createRunner } = require('./e2e_playwright_session');
 
   await record('22,23,28,29', 'Navigator / Minimap / 반복 진입 복귀', async () => {
     await boot('chunk2-nav');
-    await loadFolder('palette_5mb');
+    await loadFolder('unknown');
     const loops = [];
     for (let i = 0; i < 3; i += 1) {
       await enterSingle(0);
@@ -723,7 +723,7 @@ const { createRunner } = require('./e2e_playwright_session');
   await record('36,37,38,40', '성능 / 이미지 무결성 / 인덱스', async () => {
     await boot('chunk2-perf');
     const t0 = Date.now();
-    await loadFolder('filter_test');
+    await loadFolder('unknown');
     const loadMs = Date.now() - t0;
     const data = await page.evaluate(async () => {
       const imgs = Array.from(document.querySelectorAll('#image-grid img')).slice(0, 40);
@@ -735,8 +735,8 @@ const { createRunner } = require('./e2e_playwright_session');
         status,
       };
     });
-    expect(data.count === 144, `count=${data.count}`);
-    expect(data.wraps === 144, `wraps=${data.wraps}`);
+    expect(data.count === 5000, `count=${data.count}`);
+    expect(data.wraps === 5000, `wraps=${data.wraps}`);
     expect(data.broken === 0, `broken=${data.broken}`);
     expect(data.status.ready === true, `status=${JSON.stringify(data.status)}`);
     return { ...data, loadMs };

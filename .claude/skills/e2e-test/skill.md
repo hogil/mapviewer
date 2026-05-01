@@ -75,7 +75,7 @@ argument-hint: [Phase 번호 또는 범위]
   - Label Explorer의 `selectedClasses`
   - Measure의 `overlayMode`, `_measureCheckedItems`, `_gridMeasureMap`
 - 각 detail/single 탭은 `viewMode === 'gridImage'` 또는 `viewMode === 'single'`, canvas 표시, `selectedImagePath`가 보존되는지 확인한다.
-- **파일 탐색기 직접 이미지 클릭 회귀**를 반드시 포함한다: `palette_3k` 3000장 그리드에서 Wafer Map Explorer 파일 1개 클릭 → single 보기 → ESC/복귀 후 `currentGridImages.length === 3000`, `.grid-thumb-wrap === 3000`이어야 한다. `3000 -> 1`이면 FAIL.
+- **파일 탐색기 직접 이미지 클릭 회귀**를 반드시 포함한다: `unknown` 5000장 그리드에서 Wafer Map Explorer 파일 1개 클릭 → single 보기 → ESC/복귀 후 `currentGridImages.length === 5000`, `.grid-thumb-wrap === 5000`이어야 한다. `5000 -> 1`이면 FAIL.
 - 단일 label detail만 따로 건드리는 방식으로 PASS 처리하지 않는다. label은 label grid/detail 보존 검증에 포함하되, wafer/composite/measure/mylot과 같은 cross-role 왕복 안에서 같이 검증한다.
 
 ## 절대규칙 #0-3: E2E 프로세스 정리 검증
@@ -212,9 +212,10 @@ powershell -ExecutionPolicy Bypass -File scripts/open-e2e-browser.ps1
 - 이 단계는 사용자에게 실제 창을 즉시 보여주는 용도다. 자동 PASS/FAIL 판정은 이후 `run-e2e-playwright.ps1` headful/headless 실행 결과로 한다.
 
 ### Step 0-3: 테스트 데이터 확인
-- 테스트 데이터 폴더: `unknown` (실제 failbit map 기준 폴더), `palette_3k` (3000장 synthetic/성능), `palette_5mb` (대용량), `wafer_folder`, `wafer_edge_ring`
+- 테스트 데이터 폴더: `unknown` (실제 failbit map 기준 폴더)
+- 전체 E2E runner의 폴더 기반 UI 검증은 예외 없이 `unknown` 폴더를 사용한다. `palette_3k`, `palette_5mb`, `filter_test`, `fq_missing_test` 같은 레거시/합성 폴더는 사용자가 명시적으로 해당 폴더 검증을 요청한 경우에만 별도 테스트로 사용한다.
 - **`unknown` 폴더는 failbit/bin/measure/composite 시각 검증의 기본 기준이다.** `unknown` 루트는 하위 패턴 폴더를 포함하므로 E2E에서는 일반 `/api/files` 단일 depth가 아니라 실제 UI의 Ctrl+폴더 선택 경로처럼 재귀 스캔(`/api/files/recursive`)으로 이미지를 로드해야 한다.
-- 그리드 선택 → 단일 이미지 보기, reference map, label modal, composite, measure, MyLot 검증은 기본적으로 `unknown` 폴더 이미지를 사용한다. 예외가 필요한 성능/대용량 전용 케이스만 별도 폴더를 쓴다.
+- 그리드 선택 → 단일 이미지 보기, reference map, label modal, composite, measure, MyLot, 성능/캐시 검증은 기본적으로 `unknown` 폴더 이미지를 사용한다.
 - 전역 검색 검증은 `folder=`를 명시해 ROOT 전체 검색으로 실행하고, `unknown` LOT 검색 결과가 `unknown/...` 이미지로 반환되는지 확인한다. 이 검증은 `folder=unknown` 같은 폴더 범위 제한 검색으로 대체하지 않는다.
 - 서버 접속 후 파일 탐색기에 위 폴더가 표시되는지 확인 (없으면 경고 후 계속 진행)
 

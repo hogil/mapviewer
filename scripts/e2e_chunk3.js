@@ -1806,7 +1806,7 @@ const { createRunner } = require('./e2e_playwright_session');
   await record('46,52,53,54,55,58,59,61,62,63', '캐시 / 성능 / placeholder / highlight / 버전전파', async () => {
     await boot('chunk3-cache');
     const t0 = Date.now();
-    await loadFolder('fq_missing_test');
+    await loadFolder('unknown');
     const fqLoadMs = Date.now() - t0;
     await page.evaluate(() => {
       const w = document.querySelector('#image-grid')?.parentElement;
@@ -1847,8 +1847,8 @@ const { createRunner } = require('./e2e_playwright_session');
           bitmapText.includes('?v=') || bitmapText.includes('new URL('),
       };
     });
-    expect(data.fqCount === 143, `fqCount=${data.fqCount}`);
-    expect(data.wraps === 143, `wraps=${data.wraps}`);
+    expect(data.fqCount === 5000, `fqCount=${data.fqCount}`);
+    expect(data.wraps === 5000, `wraps=${data.wraps}`);
     expect(data.placeholders === 0, `placeholders=${data.placeholders}`);
     expect(fqLoadMs < 3000, `fqLoadMs too slow=${fqLoadMs}`);
     expect(!!data.mainEtag && !!data.cssEtag, `etag main=${data.mainEtag} css=${data.cssEtag}`);
@@ -1887,7 +1887,7 @@ const { createRunner } = require('./e2e_playwright_session');
       thresholds: {
         fqLoadMs: {
           passMaxMs: 3000,
-          reason: 'Grouped E2E smoke gate for immediate grid load in fq_missing_test.',
+          reason: 'Grouped E2E smoke gate for immediate grid load in unknown.',
         },
       },
       assetCache: {

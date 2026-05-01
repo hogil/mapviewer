@@ -622,7 +622,7 @@ const { createRunner } = require('./e2e_playwright_session');
       await new Promise((r) => setTimeout(r, 1200));
       return document.querySelectorAll('#image-grid .lot-header').length;
     });
-    await loadFolder('filter_test');
+    await loadFolder('unknown');
     const scrollTop = await page.evaluate(
       () => document.querySelector('#image-grid')?.parentElement?.scrollTop || 0
     );
