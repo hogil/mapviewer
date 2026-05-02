@@ -45,8 +45,11 @@ class SearchService:
             "classification",
             "classification_chips",
             "chip_annotations",
+            "chip-object-v1",
+            "obj_id_maps",
             "thumbnails",
             "composite_map",
+            "yolo_datasets",
         ]
         # Global search(root 전체)에서는 작업/테스트용 파생 폴더를 기본 검색 결과에서 제외한다.
         # unknown은 실제 failbit 기준 데이터이므로 전역 LOT 검색 결과에 포함한다.

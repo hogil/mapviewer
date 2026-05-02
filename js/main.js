@@ -1002,7 +1002,11 @@ class WaferMapViewer {
         this.pageViewCacheLimit = 10;   // 캐시 최대 유지 페이지 수 (탭 전환 시 이미지 유지)
         this.chipLabelLegendData = [];
         this.activeChipLabelClasses = null;
+        this.lastChipLabelLegendClass = null;
+        this.chipLabelLegendDrag = null;
+        this.skipNextChipLabelLegendClick = false;
         this.gridLayoutCache = null;
+        this.currentPyramidCacheKey = null;
         this.gridDragIntentThreshold = GRID_DRAG_CLICK_THRESHOLD;
         this.gridSelectionPending = new Set();
         this.gridSelectionNeedsFullRefresh = false;
@@ -1233,6 +1237,7 @@ class WaferMapViewer {
 
             this.dom.viewerContainer.addEventListener('wheel', e => {
                 if (this.gridMode) return; // grid 모드에서는 팬/줌 비활성화
+                if (e.target.closest?.('#chip-label-legend')) return;
 
                 e.preventDefault(); // 스크롤 방지
                 this.handleWheel(e);
@@ -1242,6 +1247,7 @@ class WaferMapViewer {
 
             this.dom.viewerContainer.addEventListener('mousedown', e => {
                 if (this.gridMode) return; // grid 모드에서는 팬(이동) 비활성화
+                if (e.target.closest?.('#chip-label-legend')) return;
 
                 this.handleMouseDown(e);
             });
@@ -1255,7 +1261,8 @@ class WaferMapViewer {
                 e.preventDefault();
                 e.stopPropagation();
                 // 칩 컨텍스트 메뉴 (선택 여부 무관하게 항상 표시)
-                if (preferChipMenu && this.chipAnnotator && this.chipAnnotator.positionsData) {
+                const isChipLabelImage = this.isChipLabelPath?.(this.selectedImagePath);
+                if (!isChipLabelImage && preferChipMenu && this.chipAnnotator && this.chipAnnotator.positionsData) {
                     const chips = this.chipAnnotator.getSelectedChipData?.() || [];
                     this.showChipContextMenu(e, chips);
                     return;
@@ -1277,6 +1284,7 @@ class WaferMapViewer {
         if (this.dom.overlayCanvas) {
             this.dom.overlayCanvas.addEventListener('contextmenu', e => {
                 if (this.gridMode) return; // 그리드 모드에서는 처리 안 함
+                if (this.isChipLabelPath?.(this.selectedImagePath)) return;
                 if (!this.chipAnnotator || !this.chipAnnotator.positionsData) return;
 
                 e.preventDefault();
@@ -1699,12 +1707,21 @@ class WaferMapViewer {
             if (this.gridMode || this.selectedImagePath !== this.currentImagePath) return;
 
             if (currentPyramidLevel) {
-                if (!this.pyramidLevels[currentPyramidLevel]) {
+                const personalizedParams = this.getPersonalizedParams();
+                const cacheKey = this.getPyramidCacheKey(currentPyramidLevel, personalizedParams);
+                const cachedBitmap = this.pyramidLevels?.[cacheKey] ||
+                    (this.canUseLegacyPyramidLevelCache(personalizedParams) ? this.pyramidLevels?.[currentPyramidLevel] : null);
+                if (!cachedBitmap) {
                     await this.updatePyramidLevel();
                 } else {
+                    this.currentImage = cachedBitmap;
                     this.currentPyramidLevel = currentPyramidLevel;
+                    this.currentPyramidCacheKey = cacheKey;
                     if (this.semiconductorRenderer?.isGpuAvailable()) {
-                        this.semiconductorRenderer.setActiveLevel(currentPyramidLevel);
+                        if (!this.semiconductorRenderer.hasLevelTexture?.(cacheKey)) {
+                            this.semiconductorRenderer.uploadLevelBitmap(currentPyramidLevel, cachedBitmap, cacheKey);
+                        }
+                        this.semiconductorRenderer.setActiveLevel(currentPyramidLevel, cacheKey);
                     }
                     this.scheduleDraw();
                 }
@@ -2090,10 +2107,13 @@ class WaferMapViewer {
                     // We need to use 'loadImage' logic but skip fetch
                     // But renderer needs 'loadImage' to be called or we call renderer methods directly
                     // To avoid full reload, let's manually setup renderer
+                    const cacheKey = this.getPyramidCacheKey(1);
+                    this.currentPyramidLevel = 1;
+                    this.currentPyramidCacheKey = cacheKey;
                     if (this.semiconductorRenderer.isGpuAvailable()) {
                         this.semiconductorRenderer.setImageSize(this.originalWidth, this.originalHeight);
-                        this.semiconductorRenderer.uploadLevelBitmap(1, this.currentImage);
-                        this.semiconductorRenderer.setActiveLevel(1);
+                        this.semiconductorRenderer.uploadLevelBitmap(1, this.currentImage, cacheKey);
+                        this.semiconductorRenderer.setActiveLevel(1, cacheKey);
                     }
                     this.semiconductorRenderer.currentImage = this.currentImage;
                     // Restore pyramid if cached
@@ -3064,11 +3084,13 @@ class WaferMapViewer {
             const parts = path.replace(/\\/g, '/').split('/');
             const fileName = parts.pop() || path;
 
-            // 🔥 Line 1: 2depth_folder만 표시 (2depth가 없으면 비워둠)
+            // 🔥 Line 1: chip label은 숨기고, wafer 단일 보기에서는 소속 폴더명 표시
             let folderInfo = '';
-            if (parts.length >= 2) {
-                const folder2depth = parts[parts.length - 2]; // 2depth (그 위 폴더)
-                folderInfo = folder2depth;
+            const normalizedPath = path.replace(/\\/g, '/');
+            const isChipLabelImage = this.isChipLabelPath?.(normalizedPath) ||
+                normalizedPath.toLowerCase().split('/').includes('classification_chips');
+            if (!isChipLabelImage && parts.length >= 1) {
+                folderInfo = parts[parts.length - 1];
             }
             this.dom.filePathText.textContent = folderInfo;
 
@@ -6725,6 +6747,17 @@ class WaferMapViewer {
         return `&${parts.join("&")}`;
     }
 
+    getPyramidCacheKey(level, params = null) {
+        const normalizedLevel = String(level);
+        const activeParams = params === null ? this.getPersonalizedParams() : String(params || '');
+        return `${normalizedLevel}_${activeParams || 'base'}`;
+    }
+
+    canUseLegacyPyramidLevelCache(params = null) {
+        const activeParams = params === null ? this.getPersonalizedParams() : String(params || '');
+        return activeParams.length === 0;
+    }
+
     async hardResetUiCaches(options = {}) {
         const { clearPersistentStorage = true } = options || {};
 
@@ -8889,6 +8922,9 @@ class WaferMapViewer {
         const isGridMode = this.gridMode === true;
         const myLotAddItem = document.getElementById('context-my-lot-add');
         const myLotAddSelectedItem = document.getElementById('context-my-lot-add-selected');
+        const chipWaferViewItem = document.getElementById('context-chip-wafer-view');
+        const chipLotViewItem = document.getElementById('context-chip-lot-view');
+        const hasChipLabelContext = this.getChipLabelContextPaths().length > 0;
         
         // MY LOT 메뉴 항목은 Grid 모드에서만 표시
         if (myLotAddItem) {
@@ -8896,6 +8932,12 @@ class WaferMapViewer {
         }
         if (myLotAddSelectedItem) {
             myLotAddSelectedItem.style.setProperty('display', isGridMode ? 'block' : 'none', 'important');
+        }
+        if (chipWaferViewItem) {
+            chipWaferViewItem.style.setProperty('display', hasChipLabelContext ? 'block' : 'none', 'important');
+        }
+        if (chipLotViewItem) {
+            chipLotViewItem.style.setProperty('display', hasChipLabelContext ? 'block' : 'none', 'important');
         }
     }
 
@@ -11423,6 +11465,8 @@ class WaferMapViewer {
         const mcSubmenu = document.getElementById('context-mc-submenu');
         const myLotAddItem = document.getElementById('context-my-lot-add');
         const myLotAddSelectedItem = document.getElementById('context-my-lot-add-selected');
+        const chipWaferViewItem = document.getElementById('context-chip-wafer-view');
+        const chipLotViewItem = document.getElementById('context-chip-lot-view');
 
         if (compositeCreateItem) {
             compositeCreateItem.onclick = () => {
@@ -11533,6 +11577,18 @@ class WaferMapViewer {
         if (refMapContextItem) {
             refMapContextItem.onclick = () => {
                 this.handleSetRefMapFromContext();
+            };
+        }
+        if (chipWaferViewItem) {
+            chipWaferViewItem.onclick = async () => {
+                this.hideContextMenu();
+                await this.openSelectedChipLabelRelatedView('wafer');
+            };
+        }
+        if (chipLotViewItem) {
+            chipLotViewItem.onclick = async () => {
+                this.hideContextMenu();
+                await this.openSelectedChipLabelRelatedView('lot');
             };
         }
 
@@ -12153,6 +12209,8 @@ class WaferMapViewer {
                 <div id="single-my-lot-add" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📁 MY LOT 추가</div>
                 <div id="single-copy-yms" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📋 파일명복사 (YMS)</div>
                 <div id="single-set-ref-map" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px;">📌 Ret Map 등록</div>
+                <div id="single-chip-wafer-view" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px; display:none;">Wafer 보기</div>
+                <div id="single-chip-lot-view" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px; display:none;">Lot 보기</div>
                 <hr style="margin: 4px 0; border: none; border-top: 1px solid #555;">
                 <div id="single-composite-color" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px; display:none;">🎨 Ratio 색상</div>
                 <div id="single-composite-subset" class="context-menu-item" style="padding:8px 12px; cursor:pointer; font-size:14px; display:none;">🎯 선택 Grade Composite Map</div>
@@ -12227,6 +12285,16 @@ class WaferMapViewer {
                 this.handleSetRefMapFromContext();
             });
 
+            menu.querySelector('#single-chip-wafer-view')?.addEventListener('click', async () => {
+                this.hideSingleContextMenu();
+                await this.openSelectedChipLabelRelatedView('wafer');
+            });
+
+            menu.querySelector('#single-chip-lot-view')?.addEventListener('click', async () => {
+                this.hideSingleContextMenu();
+                await this.openSelectedChipLabelRelatedView('lot');
+            });
+
             menu.querySelector('#single-composite-color').addEventListener('click', () => {
                 this.hideSingleContextMenu();
                 if (this.isCompositeMode) {
@@ -12262,6 +12330,15 @@ class WaferMapViewer {
         const refItem = menu.querySelector('#single-set-ref-map');
         if (refItem) {
             refItem.style.display = this.selectedImagePath ? 'block' : 'none';
+        }
+        const hasChipLabelContext = this.getChipLabelContextPaths().length > 0;
+        const singleChipWaferItem = menu.querySelector('#single-chip-wafer-view');
+        const singleChipLotItem = menu.querySelector('#single-chip-lot-view');
+        if (singleChipWaferItem) {
+            singleChipWaferItem.style.display = hasChipLabelContext ? 'block' : 'none';
+        }
+        if (singleChipLotItem) {
+            singleChipLotItem.style.display = hasChipLabelContext ? 'block' : 'none';
         }
 
         menu.style.left = event.pageX + 'px';
@@ -14166,6 +14243,7 @@ class WaferMapViewer {
 
             this.pyramidLevels = {}; // 레벨별 캐시 초기화
             this.pyramidLoadingLevels = new Set(); // 로딩 중인 레벨 추적
+            this.currentPyramidCacheKey = null;
             // 🔥 피라미드 로딩 세트도 초기화
             this._pyramidLoading = new Set();
 
@@ -14264,9 +14342,10 @@ class WaferMapViewer {
                 
                 // 렌더러에 썸네일을 해당 레벨로 업로드 (임시)
                 if (this.semiconductorRenderer?.isGpuAvailable()) {
+                    const thumbCacheKey = this.getPyramidCacheKey(initialLevel, pParams);
                     console.log('✅ [PLACEHOLDER] 썸네일 미리보기 표시 (High-res 로딩 중)');
-                    this.semiconductorRenderer.uploadLevelBitmap(initialLevel, thumbBitmap);
-                    this.semiconductorRenderer.setActiveLevel(initialLevel);
+                    this.semiconductorRenderer.uploadLevelBitmap(initialLevel, thumbBitmap, thumbCacheKey);
+                    this.semiconductorRenderer.setActiveLevel(initialLevel, thumbCacheKey);
                     this.requestRender();
                 }
             } catch (e) {
@@ -14347,12 +14426,12 @@ class WaferMapViewer {
         highResLoaded = true; // 🔥 Mark as loaded to stop placeholder
         this.pyramidLevels[initialLevel] = bitmap;
         // 🔥 캐시 키에도 저장 (개인색 설정별로 구분)
-        const initialScheme = this.getActivePersonalizedScheme();
-        const initialCacheKey = `${initialLevel}_${this.personalizedColorEnabled ? 'p' : 'n'}_${initialScheme}`;
+        const initialCacheKey = this.getPyramidCacheKey(initialLevel, personalizedParams);
         this.pyramidLevels[initialCacheKey] = bitmap;
+        this.currentPyramidCacheKey = initialCacheKey;
         if (this.semiconductorRenderer?.isGpuAvailable()) {
-            this.semiconductorRenderer.uploadLevelBitmap(initialLevel, bitmap);
-            this.semiconductorRenderer.setActiveLevel(initialLevel);
+            this.semiconductorRenderer.uploadLevelBitmap(initialLevel, bitmap, initialCacheKey);
+            this.semiconductorRenderer.setActiveLevel(initialLevel, initialCacheKey);
             this.usingGpuRenderer = true;
         }
         this.currentImageBitmap = bitmap;
@@ -14689,14 +14768,16 @@ class WaferMapViewer {
             return;
         }
 
-        // 🔥 개인색 설정이 변경되면 기존 캐시 무효화
-        // 캐시 키에 개인색 설정 정보 포함하여 다른 설정의 캐시와 구분
-        const activeScheme = this.getActivePersonalizedScheme();
-        const cacheKey = `${level}_${this.personalizedColorEnabled ? 'p' : 'n'}_${activeScheme}`;
-        const cachedBitmap = this.pyramidLevels[cacheKey];
+        const personalizedParams = this.getPersonalizedParams();
+        const cacheKey = this.getPyramidCacheKey(level, personalizedParams);
+        const cachedBitmap = this.pyramidLevels[cacheKey] ||
+            (this.canUseLegacyPyramidLevelCache(personalizedParams) ? this.pyramidLevels[level] : null);
         if (cachedBitmap) {
             // 캐시된 레벨이 현재 설정과 일치하면 사용
             this.pyramidLevels[level] = cachedBitmap; // 기존 코드 호환성 유지
+            if (this.semiconductorRenderer?.isGpuAvailable() && !this.semiconductorRenderer.hasLevelTexture?.(cacheKey)) {
+                this.semiconductorRenderer.uploadLevelBitmap(level, cachedBitmap, cacheKey);
+            }
             return;
         }
 
@@ -14710,7 +14791,6 @@ class WaferMapViewer {
         }
         this._pyramidLoading.add(loadingKey);
 
-        const personalizedParams = this.getPersonalizedParams();
         const url = `/api/image?path=${encodeURIComponent(requestPath)}&level=${level}${personalizedParams}`;
         let cacheStatus = 'MISS';
 
@@ -14800,7 +14880,7 @@ class WaferMapViewer {
             // 🔥 캐시 키에도 저장 (개인색 설정별로 구분)
             this.pyramidLevels[cacheKey] = bitmap;
             if (this.semiconductorRenderer?.isGpuAvailable()) {
-                this.semiconductorRenderer.uploadLevelBitmap(level, bitmap);
+                this.semiconductorRenderer.uploadLevelBitmap(level, bitmap, cacheKey);
             }
 
             // 현재 줌에 적합하면 즉시 교체
@@ -14823,8 +14903,9 @@ class WaferMapViewer {
                 // draw 함수에서 피라미드 이미지를 원본 크기로 확대해서 그리므로 위치는 동일하게 유지됨
                 this.currentImage = bitmap;
                 this.currentPyramidLevel = level;
+                this.currentPyramidCacheKey = cacheKey;
                 if (this.semiconductorRenderer?.isGpuAvailable()) {
-                    this.semiconductorRenderer.setActiveLevel(level);
+                    this.semiconductorRenderer.setActiveLevel(level, cacheKey);
                 }
                 
                 // 🔥 이미지가 표시되어 있을 때는 view-controls 패널이 보이도록 보장
@@ -14893,15 +14974,16 @@ class WaferMapViewer {
 
                 const bestLevel = this.getBestPyramidLevel(this.transform.scale);
                 
-                // 🔥 캐시 키 생성 (개인색 설정별로 구분)
-                const activeScheme = this.getActivePersonalizedScheme();
-                const cacheKey = `${bestLevel}_${this.personalizedColorEnabled ? 'p' : 'n'}_${activeScheme}`;
+                const personalizedParams = this.getPersonalizedParams();
+                const cacheKey = this.getPyramidCacheKey(bestLevel, personalizedParams);
+                const cacheChanged = this.currentPyramidCacheKey !== cacheKey;
 
                 // 현재 레벨과 다르면 교체
 
-        if (bestLevel !== this.currentPyramidLevel) {
+        if (bestLevel !== this.currentPyramidLevel || cacheChanged) {
                         // 🔥 캐시 키와 일반 키 모두 확인
-                        const cachedBitmap = this.pyramidLevels[cacheKey] || this.pyramidLevels[bestLevel];
+                        const cachedBitmap = this.pyramidLevels[cacheKey] ||
+                            (this.canUseLegacyPyramidLevelCache(personalizedParams) ? this.pyramidLevels[bestLevel] : null);
                         
                         if (cachedBitmap) {
                                 // 🔥 피라미드 레벨 변경 시 transform은 변경하지 않음
@@ -14910,8 +14992,12 @@ class WaferMapViewer {
                                 this.currentImage = cachedBitmap;
 
                 this.currentPyramidLevel = bestLevel;
+                this.currentPyramidCacheKey = cacheKey;
                 if (this.semiconductorRenderer?.isGpuAvailable()) {
-                    this.semiconductorRenderer.setActiveLevel(bestLevel);
+                    if (!this.semiconductorRenderer.hasLevelTexture?.(cacheKey)) {
+                        this.semiconductorRenderer.uploadLevelBitmap(bestLevel, cachedBitmap, cacheKey);
+                    }
+                    this.semiconductorRenderer.setActiveLevel(bestLevel, cacheKey);
                 }
 
                 // 🔥 이미지가 표시되어 있을 때는 view-controls 패널이 보이도록 보장
@@ -15019,6 +15105,7 @@ class WaferMapViewer {
         if (this.semiconductorRenderer && this.usingGpuRenderer) {
             usedGpu = this.semiconductorRenderer.drawGpu({
                 level: this.currentPyramidLevel,
+                textureKey: this.currentPyramidCacheKey,
                 viewportWidth: width,
                 viewportHeight: height,
                 scale: this.transform.scale,
@@ -18078,7 +18165,7 @@ class WaferMapViewer {
                     imgBtn.oncontextmenu = (e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        this.clearLabelExplorerSelection();
+                        this.showLabelExplorerChipContextMenu(e, `${cls}/${img.name}`);
                     };
 
                     // 🔥 Drag 범위 선택 이벤트 추가
@@ -18590,6 +18677,12 @@ class WaferMapViewer {
                             imgBtn.style.margin = '0 4px';
 
                             imgBtn.style.fontSize = '13px';
+
+                            imgBtn.oncontextmenu = (e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                this.showLabelExplorerChipContextMenu(e, labelKey);
+                            };
 
                             // 🔥 Drag 범위 선택 이벤트 추가 (동적 생성된 버튼)
                             imgBtn.draggable = true;
@@ -24635,6 +24728,368 @@ class WaferMapViewer {
         return `${prefix}/${normalizedPath}`;
     }
 
+    hideLabelExplorerChipContextMenu() {
+        const existingMenu = document.getElementById('label-chip-context-menu');
+        if (existingMenu) {
+            existingMenu.remove();
+        }
+    }
+
+    showLabelExplorerChipContextMenu(event, key) {
+        if (this.classMode !== 'chip') {
+            this.clearLabelExplorerSelection();
+            return;
+        }
+
+        this.hideLabelExplorerChipContextMenu();
+
+        const menu = document.createElement('div');
+        menu.id = 'label-chip-context-menu';
+        menu.className = 'context-menu';
+        menu.style.cssText = `
+            position: fixed;
+            left: ${event.clientX}px;
+            top: ${event.clientY}px;
+            z-index: 10000;
+            background: #2b2b2b;
+            border: 1px solid #555;
+            border-radius: 4px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            min-width: 130px;
+            color: #fff;
+        `;
+
+        const appendItem = (text, onClick) => {
+            const item = document.createElement('div');
+            item.className = 'context-menu-item';
+            item.textContent = text;
+            item.style.cssText = 'padding: 8px 12px; cursor: pointer; font-size: 14px;';
+            item.onmouseenter = () => { item.style.background = '#3a3a3a'; };
+            item.onmouseleave = () => { item.style.background = ''; };
+            item.onclick = async () => {
+                this.hideLabelExplorerChipContextMenu();
+                await onClick();
+            };
+            menu.appendChild(item);
+        };
+
+        appendItem('Wafer 보기', () => this.openChipLabelWaferView(key));
+        appendItem('Lot 보기', () => this.openChipLabelLotView(key));
+
+        document.body.appendChild(menu);
+
+        const rect = menu.getBoundingClientRect();
+        if (rect.right > window.innerWidth) {
+            menu.style.left = `${Math.max(0, event.clientX - rect.width)}px`;
+        }
+        if (rect.bottom > window.innerHeight) {
+            menu.style.top = `${Math.max(0, event.clientY - rect.height)}px`;
+        }
+
+        setTimeout(() => {
+            const close = (e) => {
+                if (!menu.contains(e.target)) {
+                    this.hideLabelExplorerChipContextMenu();
+                    document.removeEventListener('mousedown', close);
+                }
+            };
+            document.addEventListener('mousedown', close);
+        }, 0);
+    }
+
+    isChipLabelPath(path = '') {
+        const normalized = this.normalizeRelativePath(path).toLowerCase();
+        if (!normalized) return false;
+        return normalized.split('/').includes('classification_chips');
+    }
+
+    parseChipLabelPath(path = '') {
+        const normalized = this.normalizeRelativePath(path);
+        if (!this.isChipLabelPath(normalized)) return null;
+        const fileName = normalized.split('/').pop() || '';
+        const stem = fileName.replace(/\.[^.]+$/, '');
+        const match = stem.match(/^(.+)_[xX](-?\d+)_[yY](-?\d+)(?:_[bB]([A-Za-z0-9_-]+))?$/);
+        if (!match) return null;
+
+        const waferStem = match[1];
+        const parts = waferStem.split('_').filter(Boolean);
+        const lot = parts[0] || '';
+        const wafer = parts[2] || '';
+        if (!lot || !wafer) return null;
+
+        return {
+            path: normalized,
+            waferStem,
+            waferKey: parts.length >= 5 ? parts.slice(0, 5).join('_') : waferStem,
+            lot,
+            wafer,
+            x: Number.parseInt(match[2], 10),
+            y: Number.parseInt(match[3], 10),
+            b: match[4] || null,
+        };
+    }
+
+    getChipLabelContextPaths(extraPaths = []) {
+        const candidates = [];
+        if (Array.isArray(extraPaths)) {
+            candidates.push(...extraPaths);
+        } else if (extraPaths) {
+            candidates.push(extraPaths);
+        }
+
+        try {
+            candidates.push(...(this.getSelectedImagesForModal?.() || []));
+        } catch (error) {
+            // 선택 상태 조회 실패는 컨텍스트 대상 경로로 폴백한다.
+        }
+        if (this.contextMenuTargetPath) candidates.push(this.contextMenuTargetPath);
+        if (!this.gridMode && this.selectedImagePath) candidates.push(this.selectedImagePath);
+
+        const seen = new Set();
+        const paths = [];
+        for (const candidate of candidates) {
+            const normalized = this.normalizeRelativePath(candidate || '');
+            if (!normalized || !this.isChipLabelPath(normalized)) continue;
+            const key = normalized.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            paths.push(normalized);
+        }
+        return paths;
+    }
+
+    getChipLabelSourcePrefix(paths = []) {
+        const prefixes = new Set();
+        for (const path of paths) {
+            const parts = this.normalizeRelativePath(path).split('/').filter(Boolean);
+            const idx = parts.findIndex(part => part.toLowerCase() === 'classification_chips');
+            if (idx < 0) continue;
+            prefixes.add(idx > 0 ? parts.slice(0, idx).join('/') : '');
+        }
+        return prefixes.size === 1 ? Array.from(prefixes)[0] : '';
+    }
+
+    buildChipLabelSearchPayload(paths = [], mode = 'wafer') {
+        const lots = [];
+        const lotSeen = new Set();
+        const pairs = [];
+        const pairSeen = new Set();
+        const parsed = [];
+
+        for (const path of paths) {
+            const info = this.parseChipLabelPath(path);
+            if (!info) continue;
+            parsed.push(info);
+
+            const lotKey = info.lot.toLowerCase();
+            if (lotKey && !lotSeen.has(lotKey)) {
+                lotSeen.add(lotKey);
+                lots.push(info.lot);
+            }
+
+            const pairKey = `${info.lot.toLowerCase()}:${info.wafer.toLowerCase()}`;
+            if (!pairSeen.has(pairKey)) {
+                pairSeen.add(pairKey);
+                pairs.push({ lot: info.lot, wafer: info.wafer });
+            }
+        }
+
+        const folder = this.getChipLabelSourcePrefix(paths);
+        return {
+            mode,
+            parsed,
+            lots,
+            pairs,
+            folder,
+            pairString: pairs.map(pair => `${pair.lot}:${pair.wafer}`).join(','),
+            lotString: lots.join(','),
+        };
+    }
+
+    normalizeSearchResultPath(rawPath) {
+        if (typeof rawPath !== 'string') return '';
+        const normalizedPath = rawPath.replace(/\\/g, '/');
+        if (!normalizedPath.includes(':/')) {
+            return normalizedPath;
+        }
+        const parts = normalizedPath.split('/');
+        const markerIdx = parts.indexOf('wm-811k');
+        if (markerIdx >= 0 && markerIdx + 1 < parts.length) {
+            return parts.slice(markerIdx + 1).join('/');
+        }
+        return normalizedPath;
+    }
+
+    isDerivedWaferSearchPath(path = '') {
+        const derived = new Set([
+            'classification',
+            'classification_chips',
+            'chip_annotations',
+            'chip-object-v1',
+            'obj_id_maps',
+            'thumbnails',
+            'composite_map',
+            'yolo_datasets',
+        ]);
+        return this.normalizeRelativePath(path)
+            .split('/')
+            .some(part => derived.has(part.toLowerCase()));
+    }
+
+    dedupePathsByLotWafer(paths = []) {
+        const seen = new Set();
+        const deduped = [];
+        for (const path of paths) {
+            const normalized = this.normalizeRelativePath(path);
+            if (!normalized || this.isDerivedWaferSearchPath(normalized)) continue;
+            const tokens = this.extractLotTokensFromPath(normalized);
+            const key = tokens.lotValue && tokens.waferValue
+                ? `${tokens.lotValue.toLowerCase()}:${tokens.waferValue.toLowerCase()}`
+                : normalized.toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            deduped.push(normalized);
+        }
+        return deduped;
+    }
+
+    async searchChipLabelRelatedImages(paths = [], mode = 'wafer') {
+        const payload = this.buildChipLabelSearchPayload(paths, mode);
+        if (!payload.parsed.length) {
+            throw new Error('chip label filename parse failed');
+        }
+
+        const params = new URLSearchParams();
+        params.set('q', '');
+        params.set('limit', '10000');
+        params.set('folder', payload.folder || '');
+        if (mode === 'lot') {
+            if (!payload.lots.length) throw new Error('LOT key missing');
+            params.set('lot_multi', payload.lotString);
+        } else {
+            if (!payload.pairs.length) throw new Error('LOT/Wafer key missing');
+            params.set('lot_wafer', payload.pairString);
+        }
+
+        const response = await fetch(`/api/search?${params.toString()}`);
+        if (!response.ok) {
+            const message = await response.text().catch(() => response.statusText);
+            throw new Error(message || `HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        if (!data?.success || !Array.isArray(data.results)) {
+            throw new Error('search response invalid');
+        }
+
+        const results = data.results
+            .map(path => this.normalizeSearchResultPath(path))
+            .filter(Boolean);
+
+        return {
+            ...payload,
+            total: data.total || results.length,
+            timings: data.timings || {},
+            results: this.dedupePathsByLotWafer(results),
+        };
+    }
+
+    async openWaferGridResultsInNewPage(images = []) {
+        const dedupedImages = this.dedupePathsByLotWafer(images);
+        if (!dedupedImages.length) {
+            this.showToast?.('표시할 wafer가 없습니다.', 1800);
+            return false;
+        }
+
+        const originPage = this.pageManager?.getActivePage?.();
+        if (this.pageManager) {
+            this.persistActivePageState();
+            this.pageManager.createPage('wafer', null, {
+                activate: true,
+                skipPersist: true,
+                insertAfter: originPage?.id,
+            });
+        }
+
+        this.activePageRole = 'wafer';
+        this.isCompositeMode = false;
+        this.selectedFolders = new Set();
+        this.lastSelectedFolderPath = null;
+        this.lastSelectedFolder = null;
+        this.selectedImagePath = '';
+        this.selectedImages = [...dedupedImages];
+        this.gridSelectedIdxs = [];
+        this.gridSelectedSet = new Set();
+        this._prevGridSelectedIdxs = new Set();
+        this.gridLastClickedIdx = undefined;
+        this.showGrid(dedupedImages, false, true);
+        this.updateFileExplorerSelection?.({ highlightOnly: true, skipEnsurePage: true });
+        return true;
+    }
+
+    async openChipLabelRelatedViewFromPaths(paths = [], mode = 'wafer') {
+        const explicitPaths = Array.isArray(paths) ? paths : (paths ? [paths] : []);
+        const chipLabelPaths = explicitPaths.length
+            ? this.getChipLabelContextPaths(explicitPaths).filter(path =>
+                explicitPaths.some(explicit => this.normalizeRelativePath(explicit).toLowerCase() === path.toLowerCase())
+            )
+            : this.getChipLabelContextPaths();
+        if (!chipLabelPaths.length) {
+            this.showToast?.('Chip label 이미지를 선택해주세요.', 1800);
+            return false;
+        }
+
+        try {
+            const search = await this.searchChipLabelRelatedImages(chipLabelPaths, mode);
+            if (!search.results.length) {
+                this.showToast?.('연관 wafer 검색 결과가 없습니다.', 2200);
+                return false;
+            }
+            const opened = await this.openWaferGridResultsInNewPage(search.results);
+            if (opened) {
+                const label = mode === 'lot' ? 'Lot 보기' : 'Wafer 보기';
+                this.showToast?.(`${label}: ${search.results.length}개 wafer`, 1600);
+            }
+            return opened;
+        } catch (error) {
+            console.error('[ChipLabel] related wafer view failed:', error);
+            this.showToast?.('연관 wafer를 찾을 수 없습니다.', 2200);
+            return false;
+        }
+    }
+
+    async openSelectedChipLabelRelatedView(mode = 'wafer') {
+        return this.openChipLabelRelatedViewFromPaths(this.getChipLabelContextPaths(), mode);
+    }
+
+    async openChipLabelRelatedViewForKeys(keys = [], mode = 'wafer') {
+        const paths = (Array.isArray(keys) ? keys : [keys])
+            .map(key => this.resolveLabelExplorerImagePath(key))
+            .filter(Boolean);
+        return this.openChipLabelRelatedViewFromPaths(paths, mode);
+    }
+
+    async openChipLabelWaferView(key) {
+        return this.openChipLabelRelatedViewForKeys([key], 'wafer');
+    }
+
+    async openChipLabelLotView(key) {
+        return this.openChipLabelRelatedViewForKeys([key], 'lot');
+    }
+
+    async openWaferSingleViewInNewPage(waferPath) {
+        const originPage = this.pageManager?.getActivePage?.();
+        if (this.pageManager) {
+            this.persistActivePageState();
+            this.pageManager.createPage('wafer', null, {
+                activate: true,
+                skipPersist: true,
+                insertAfter: originPage?.id,
+            });
+        }
+        this.activePageRole = 'wafer';
+        await this.enterSingleViewMode(waferPath);
+    }
+
     resolveOriginalImagePath(path = '') {
         const normalizedPath = this.normalizeRelativePath(path);
         if (!normalizedPath) return '';
@@ -25565,6 +26020,14 @@ class WaferMapViewer {
     bindChipLegendEvents() {
         if (!this.dom.chipLabelLegend) return;
         this.dom.chipLabelLegend.addEventListener('click', (event) => this.handleChipLabelLegendClick(event));
+        this.dom.chipLabelLegend.addEventListener('contextmenu', (event) => this.handleChipLabelLegendContextMenu(event));
+        this.dom.chipLabelLegend.addEventListener('pointerdown', (event) => this.handleChipLabelLegendPointerDown(event));
+        this.dom.chipLabelLegend.addEventListener('mousedown', (event) => event.stopPropagation());
+        this.dom.chipLabelLegend.addEventListener('dragstart', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        });
+        this.dom.chipLabelLegend.addEventListener('wheel', (event) => event.stopPropagation(), { passive: true });
     }
 
     /**
@@ -26537,8 +27000,9 @@ class WaferMapViewer {
             this.semiconductorRenderer.setImageSize(w, h);
             if (this.semiconductorRenderer.isGpuAvailable()) {
                 this.semiconductorRenderer.resetTextures();
-                this.semiconductorRenderer.uploadLevelBitmap(1, bitmap);
-                this.semiconductorRenderer.setActiveLevel(1);
+                this.currentPyramidCacheKey = 'measure-overlay-1';
+                this.semiconductorRenderer.uploadLevelBitmap(1, bitmap, this.currentPyramidCacheKey);
+                this.semiconductorRenderer.setActiveLevel(1, this.currentPyramidCacheKey);
             }
             this.semiconductorRenderer.currentImage = bitmap;
             this.semiconductorRenderer.imagePyramid = { '1': bitmap };
@@ -26546,6 +27010,7 @@ class WaferMapViewer {
 
         this.pyramidLevels = { '1': bitmap };
         this.currentPyramidLevel = 1;
+        this.currentPyramidCacheKey = this.currentPyramidCacheKey || 'measure-overlay-1';
         this.resetView(false);
         this.scheduleDraw();
 
@@ -27505,13 +27970,13 @@ class WaferMapViewer {
             this.pyramidLevels = {};
             this._pyramidLoading = new Set();
             this.pyramidLevels[level] = bitmap;
-            const scheme = this.getActivePersonalizedScheme();
-            const cacheKey = `${level}_${this.personalizedColorEnabled ? 'p' : 'n'}_${scheme}`;
+            const cacheKey = this.getPyramidCacheKey(level, personalizedParams);
             this.pyramidLevels[cacheKey] = bitmap;
+            this.currentPyramidCacheKey = cacheKey;
 
             if (this.semiconductorRenderer?.isGpuAvailable()) {
-                this.semiconductorRenderer.uploadLevelBitmap(level, bitmap);
-                this.semiconductorRenderer.setActiveLevel(level);
+                this.semiconductorRenderer.uploadLevelBitmap(level, bitmap, cacheKey);
+                this.semiconductorRenderer.setActiveLevel(level, cacheKey);
             }
             this.currentImageBitmap = bitmap;
             this.currentImage = bitmap;
@@ -27590,9 +28055,9 @@ class WaferMapViewer {
                 Array.from(this.activeChipLabelClasses).filter(cls => availableClasses.has(cls))
             );
         }
-        // 기본값: 모든 클래스 활성화 (null이면 전체 표시)
+        // 기본값: invalid_main은 시야를 많이 가리므로 기본 overlay에서 제외한다.
         if (!(this.activeChipLabelClasses instanceof Set) && availableClasses.size > 0) {
-            this.activeChipLabelClasses = null;
+            this.activeChipLabelClasses = this.getDefaultChipLabelActiveClassSet(Array.from(availableClasses));
         }
 
         this.renderChipLabelLegend();
@@ -27627,6 +28092,7 @@ class WaferMapViewer {
         this.chipLabelLegendData.forEach(({ className, count }) => {
             const btn = document.createElement('button');
             btn.type = 'button';
+            btn.draggable = false;
             const isActive = !this.activeChipLabelClasses || this.activeChipLabelClasses.has(className);
             btn.className = 'chip-label-pill' + (isActive ? ' is-active' : '');
             btn.setAttribute('data-chip-label', className);
@@ -27652,47 +28118,211 @@ class WaferMapViewer {
     }
 
 
+    getChipLabelLegendClasses() {
+        return (this.chipLabelLegendData || [])
+            .map(item => item.className)
+            .filter(Boolean);
+    }
+
+    isDefaultHiddenChipLabelClass(className) {
+        return String(className || '').toLowerCase() === 'invalid_main';
+    }
+
+    getDefaultChipLabelActiveClassSet(classNames = null) {
+        const classes = Array.isArray(classNames) ? classNames : this.getChipLabelLegendClasses();
+        return new Set(classes.filter(className => !this.isDefaultHiddenChipLabelClass(className)));
+    }
+
+    getChipLabelActiveClassSet() {
+        const classes = this.getChipLabelLegendClasses();
+        if (this.activeChipLabelClasses instanceof Set) {
+            return new Set(this.activeChipLabelClasses);
+        }
+        return new Set(classes);
+    }
+
+    setChipLabelLegendClasses(classSet) {
+        const classes = this.getChipLabelLegendClasses();
+        let nextSet;
+        if (classSet instanceof Set) {
+            nextSet = new Set(classSet);
+        } else if (Array.isArray(classSet)) {
+            nextSet = new Set(classSet);
+        } else {
+            nextSet = this.getDefaultChipLabelActiveClassSet(classes);
+        }
+        this.activeChipLabelClasses = nextSet;
+        if (this.chipAnnotator) {
+            this.chipAnnotator.setLegendFilterClasses(this.activeChipLabelClasses);
+        }
+        this.renderChipLabelLegend();
+    }
+
     handleChipLabelLegendClick(event) {
+        if (this.skipNextChipLabelLegendClick) {
+            this.skipNextChipLabelLegendClick = false;
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+        }
+
         const target = event.target.closest('button[data-chip-label]');
         if (!target || !this.chipAnnotator) {
             return;
         }
+
+        event.stopPropagation();
 
         const className = target.getAttribute('data-chip-label');
         if (!className) {
             return;
         }
 
-        if (!this.activeChipLabelClasses) {
-            this.activeChipLabelClasses = new Set(this.chipLabelLegendData.map(item => item.className));
-        }
-
-        if (this.activeChipLabelClasses.has(className)) {
-            this.activeChipLabelClasses.delete(className);
+        const nextSet = this.getChipLabelActiveClassSet();
+        if (event.shiftKey && this.lastChipLabelLegendClass) {
+            const classes = this.getChipLabelLegendClasses();
+            const startIdx = classes.indexOf(this.lastChipLabelLegendClass);
+            const endIdx = classes.indexOf(className);
+            if (startIdx !== -1 && endIdx !== -1) {
+                const [from, to] = [startIdx, endIdx].sort((a, b) => a - b);
+                const range = classes.slice(from, to + 1);
+                const allRangeActive = range.every(cls => nextSet.has(cls));
+                range.forEach(cls => {
+                    if (allRangeActive) {
+                        nextSet.delete(cls);
+                    } else {
+                        nextSet.add(cls);
+                    }
+                });
+            }
+        } else if (nextSet.has(className)) {
+            nextSet.delete(className);
         } else {
-            this.activeChipLabelClasses.add(className);
+            nextSet.add(className);
         }
 
-        this.chipAnnotator.setLegendFilterClasses(this.activeChipLabelClasses);
-        this.renderChipLabelLegend();
+        this.lastChipLabelLegendClass = className;
+        this.setChipLabelLegendClasses(nextSet);
+    }
+
+    handleChipLabelLegendContextMenu(event) {
+        if (!this.dom.chipLabelLegend) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        if (!this.chipLabelLegendData || this.chipLabelLegendData.length === 0) return;
+        this.lastChipLabelLegendClass = null;
+        this.setChipLabelLegendClasses(new Set());
+    }
+
+    handleChipLabelLegendPointerDown(event) {
+        event.stopPropagation();
+        if (event.button !== 0) return;
+
+        const target = event.target.closest('button[data-chip-label]');
+        if (!target || !this.dom.chipLabelLegend?.contains(target)) return;
+        if (!event.ctrlKey && !event.metaKey && !event.shiftKey) return;
+
+        const startClass = target.getAttribute('data-chip-label');
+        const mode = event.shiftKey
+            ? ((event.ctrlKey || event.metaKey) ? 'add-range' : 'range')
+            : 'toggle';
+        const startX = event.clientX;
+        const startY = event.clientY;
+        let dragStarted = false;
+
+        const beginDrag = () => {
+            if (dragStarted) return;
+            dragStarted = true;
+            this.skipNextChipLabelLegendClick = true;
+            this.chipLabelLegendDrag = {
+                startClass,
+                mode,
+                initialActiveClasses: this.activeChipLabelClasses instanceof Set
+                    ? new Set(this.activeChipLabelClasses)
+                    : null,
+                visitedClasses: new Set()
+            };
+            this.applyChipLabelLegendDrag(startClass);
+        };
+
+        const applyFromPoint = (clientX, clientY) => {
+            const el = document.elementFromPoint(clientX, clientY);
+            const pill = el?.closest?.('button[data-chip-label]');
+            if (!pill || !this.dom.chipLabelLegend.contains(pill)) return;
+            const className = pill.getAttribute('data-chip-label');
+            if (className) {
+                this.applyChipLabelLegendDrag(className);
+            }
+        };
+
+        const onPointerMove = (moveEvent) => {
+            const dx = moveEvent.clientX - startX;
+            const dy = moveEvent.clientY - startY;
+            if (!dragStarted && Math.sqrt(dx * dx + dy * dy) <= 4) return;
+            beginDrag();
+            moveEvent.preventDefault();
+            applyFromPoint(moveEvent.clientX, moveEvent.clientY);
+        };
+
+        const stopDrag = (stopEvent) => {
+            document.removeEventListener('pointermove', onPointerMove);
+            document.removeEventListener('pointerup', stopDrag);
+            document.removeEventListener('pointercancel', stopDrag);
+            if (dragStarted) {
+                stopEvent?.preventDefault?.();
+            }
+            this.chipLabelLegendDrag = null;
+        };
+
+        document.addEventListener('pointermove', onPointerMove, { passive: false });
+        document.addEventListener('pointerup', stopDrag);
+        document.addEventListener('pointercancel', stopDrag);
+    }
+
+    applyChipLabelLegendDrag(className) {
+        const drag = this.chipLabelLegendDrag;
+        if (!drag || !className) return;
+
+        const classes = this.getChipLabelLegendClasses();
+        const initialSet = drag.initialActiveClasses;
+        let nextSet;
+
+        if (drag.mode === 'toggle') {
+            drag.visitedClasses.add(className);
+            nextSet = initialSet === null ? new Set(classes) : new Set(initialSet);
+            drag.visitedClasses.forEach(cls => {
+                const wasActive = initialSet === null ? true : initialSet.has(cls);
+                if (wasActive) {
+                    nextSet.delete(cls);
+                } else {
+                    nextSet.add(cls);
+                }
+            });
+        } else {
+            const startIdx = classes.indexOf(drag.startClass);
+            const endIdx = classes.indexOf(className);
+            if (startIdx === -1 || endIdx === -1) return;
+            const [from, to] = [startIdx, endIdx].sort((a, b) => a - b);
+            const range = classes.slice(from, to + 1);
+            nextSet = drag.mode === 'add-range'
+                ? (initialSet === null ? new Set(classes) : new Set(initialSet))
+                : new Set();
+            range.forEach(cls => nextSet.add(cls));
+        }
+
+        this.lastChipLabelLegendClass = className;
+        this.setChipLabelLegendClasses(nextSet);
     }
 
     onManualChipSelection() {
-        if (!this.activeChipLabelClasses) return;
-        this.activeChipLabelClasses = null;
-        if (this.chipAnnotator) {
-            this.chipAnnotator.setLegendFilterClasses(null);
-        }
-        this.renderChipLabelLegend();
+        if (!this.getChipLabelLegendClasses().length) return;
+        this.setChipLabelLegendClasses(null);
     }
 
     handleChipSelectionCleared() {
-        if (!this.activeChipLabelClasses) return;
-        this.activeChipLabelClasses = null;
-        if (this.chipAnnotator) {
-            this.chipAnnotator.setLegendFilterClasses(null);
-        }
-        this.renderChipLabelLegend();
+        if (!this.getChipLabelLegendClasses().length) return;
+        this.setChipLabelLegendClasses(null);
     }
 
     // --- COLOR LEGENDS ---

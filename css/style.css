@@ -2566,7 +2566,7 @@
 
         .chip-label-legend {
             position: relative;
-            width: 264px; /* 🔥 240px × 1.1 = 264px */
+            width: 224px; /* 264px에서 15% 축소, 좌측 기준선은 유지 */
             max-height: 250px;
             display: none;
             flex-direction: column;
@@ -2577,6 +2577,7 @@
             background-color: rgba(24, 24, 24, 0.9);
             overflow-y: auto;
             box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+            user-select: none;
         }
 
         .chip-label-legend.is-visible {
@@ -2603,6 +2604,7 @@
             font-size: 13px;
             cursor: pointer;
             transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+            user-select: none;
         }
 
         .chip-label-pill:hover {

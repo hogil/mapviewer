@@ -557,7 +557,16 @@ search_service = SearchService(
     io_executor=IO_POOL,
     logger=logging.getLogger("uvicorn.error"),
     search_workers=config.SEARCH_WORKERS,
-    excluded_folders=["classification", "classification_chips", "thumbnails", "composite_map"],
+    excluded_folders=[
+        "classification",
+        "classification_chips",
+        "chip_annotations",
+        "chip-object-v1",
+        "obj_id_maps",
+        "thumbnails",
+        "composite_map",
+        "yolo_datasets",
+    ],
     supported_exts=config.SUPPORTED_EXTS,
     fallback_max_files=SEARCH_FALLBACK_MAX_FILES,
     fallback_timeout_sec=_fallback_timeout_sec,
@@ -3809,6 +3818,7 @@ def get_thumbnail_path(
 
 # 필터 동작(특히 bottom/grade 매핑) 변경 시 캐시 충돌 방지를 위해 버전을 올린다.
 FILTER_CACHE_REV = "8"
+PERSONALIZED_PYRAMID_CACHE_REV = "4"
 
 FILTER_WHITE_INDEX = 31
 FILTER_BOTTOM_BIN_VALUES = {"285", "286", "287", "288", "290", "291", "300", "385", "386", "388", "389", "390"}
@@ -4652,8 +4662,8 @@ def _resolve_pyramid_dir(
         timestamp = scheme_data.get('lastModified')
 
         if timestamp:
-            return config.THUMBNAIL_DIR / scheme / timestamp / f"pyramid_{level_tag}"
-        return config.THUMBNAIL_DIR / f"pyramid_{scheme}_{level_tag}"
+            return config.THUMBNAIL_DIR / scheme / timestamp / f"pyramid_v{PERSONALIZED_PYRAMID_CACHE_REV}_{level_tag}"
+        return config.THUMBNAIL_DIR / f"pyramid_v{PERSONALIZED_PYRAMID_CACHE_REV}_{scheme}_{level_tag}"
 
     return config.THUMBNAIL_DIR / f"pyramid_{level_tag}"
 
@@ -5895,6 +5905,9 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
         _safe_unlink(temp_path)
         expected_w: Optional[int] = None
         expected_h: Optional[int] = None
+        _pyr_is_palette = False
+        _pyr_avg_gf_set = None
+        _need_plte_read = False
 
         try:
             try:
@@ -5917,7 +5930,6 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                 # Grade 필터가 우선, 그 다음 개인색 설정
                 # 원본 이미지가 PNG이면 팔레트 필터링 적용 (저장 포맷과 무관 - JPEG로 저장해도 적용)
                 # 🔥 palette PNG 판별
-                _pyr_is_palette = False
                 if image_path.suffix.lower() == '.png':
                     try:
                         with open(image_path, 'rb') as _pyf:
@@ -5927,7 +5939,6 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                         pass
 
                 # Average map gradient filter 감지
-                _pyr_avg_gf_set = None
                 if _pyr_is_palette and gradient_filter:
                     _pyr_stem = image_path.stem.lower()
                     if 'square_average' in _pyr_stem or 'square_weighted' in _pyr_stem or 'square_mean' in _pyr_stem:
@@ -6102,8 +6113,42 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
                         logger.exception(f"⚠️ [PYVIPS] 예기치 않은 오류 - Pillow 폴백: {vips_generic}")
 
             from PIL import Image
+            import io as _io
 
-            with Image.open(image_path) as img:
+            pillow_source: Any = image_path
+            if _need_plte_read:
+                try:
+                    with open(image_path, 'rb') as f:
+                        png_data = bytearray(f.read())
+
+                    png_data = _apply_png_filters_memory(
+                        image_path=image_path,
+                        png_data=png_data,
+                        personalized=personalized,
+                        scheme=scheme,
+                        grade_filter=grade_filter,
+                        bottom_filter=bottom_filter,
+                        border_normalize=border_normalize,
+                        measure_overlay=measure_overlay,
+                    )
+
+                    _pyr_gradient_mode = _resolve_composite_map_gradient_mode(image_path)
+                    if _pyr_gradient_mode == "measure":
+                        from .personal_colors import plte_measure_gradient_patch_memory
+                        png_data = plte_measure_gradient_patch_memory(bytearray(png_data), scheme or ANONYMOUS_LOGIN_ID) or png_data
+                    elif _pyr_gradient_mode == "composite":
+                        from .personal_colors import plte_composite_gradient_patch_memory
+                        png_data = plte_composite_gradient_patch_memory(bytearray(png_data), scheme or ANONYMOUS_LOGIN_ID) or png_data
+
+                    if _pyr_avg_gf_set:
+                        from .personal_colors import plte_gradient_filter_patch_memory
+                        png_data = plte_gradient_filter_patch_memory(bytearray(png_data), _pyr_avg_gf_set)
+
+                    pillow_source = _io.BytesIO(bytes(png_data))
+                except Exception as pillow_patch_err:
+                    logger.warning(f"⚠️ [PYRAMID PILLOW FILTER] PLTE 패치 실패, 원본 fallback: {pillow_patch_err}", exc_info=True)
+
+            with Image.open(pillow_source) as img:
                 orig_w, orig_h = img.size
                 expected_w = max(1, int(orig_w * level))
                 expected_h = max(1, int(orig_h * level))
@@ -6152,6 +6197,47 @@ def _generate_pyramid_sync(image_path: Path, pyramid_path: Path, level: float, p
             logger.error(f"❌ [PYRAMID] 오류: {e} - {elapsed:.2f}초")
 
             try:
+                if _need_plte_read:
+                    try:
+                        with open(image_path, 'rb') as f:
+                            png_data = bytearray(f.read())
+
+                        png_data = _apply_png_filters_memory(
+                            image_path=image_path,
+                            png_data=png_data,
+                            personalized=personalized,
+                            scheme=scheme,
+                            grade_filter=grade_filter,
+                            bottom_filter=bottom_filter,
+                            border_normalize=border_normalize,
+                            measure_overlay=measure_overlay,
+                        )
+
+                        _pyr_gradient_mode = _resolve_composite_map_gradient_mode(image_path)
+                        if _pyr_gradient_mode == "measure":
+                            from .personal_colors import plte_measure_gradient_patch_memory
+                            png_data = plte_measure_gradient_patch_memory(bytearray(png_data), scheme or ANONYMOUS_LOGIN_ID) or png_data
+                        elif _pyr_gradient_mode == "composite":
+                            from .personal_colors import plte_composite_gradient_patch_memory
+                            png_data = plte_composite_gradient_patch_memory(bytearray(png_data), scheme or ANONYMOUS_LOGIN_ID) or png_data
+
+                        if _pyr_avg_gf_set:
+                            from .personal_colors import plte_gradient_filter_patch_memory
+                            png_data = plte_gradient_filter_patch_memory(bytearray(png_data), _pyr_avg_gf_set)
+
+                        temp_path.write_bytes(bytes(png_data))
+                        _atomic_replace(temp_path, pyramid_path)
+                        logger.info(f"🚑 [SPEED FALLBACK] PLTE 패치 원본 저장: {pyramid_path}")
+                        try:
+                            from PIL import Image as _ImageForFallback
+                            with _ImageForFallback.open(pyramid_path) as orig_img:
+                                _log_completion(orig_img.width, orig_img.height)
+                        except Exception as size_err:
+                            logger.debug(f"⚠️ [PYRAMID] 패치 원본 크기 확인 실패: {size_err}")
+                        return
+                    except Exception as patched_copy_error:
+                        logger.warning(f"⚠️ [SPEED FALLBACK] PLTE 패치 원본 저장 실패, 원본 복사로 fallback: {patched_copy_error}", exc_info=True)
+
                 shutil.copy2(image_path, str(temp_path))
                 _atomic_replace(temp_path, pyramid_path)
                 logger.info(f"🚑 [SPEED FALLBACK] 원본 복사: {pyramid_path}")
@@ -8783,15 +8869,13 @@ async def get_chip_labels(
                 continue
 
             class_name = class_dir.name
-            pattern = f"{wafer_name}_x*_y*.png"
-
-            for chip_file in class_dir.glob(pattern):
+            for chip_file in _iter_chip_label_files(class_dir, wafer_name):
                 try:
                     parsed = _parse_chip_filename(chip_file.stem)
                     if not parsed:
                         continue
                     wafer_stem, x_abs, y_abs, bottom = parsed
-                    if wafer_stem != wafer_name:
+                    if not _chip_wafer_stem_matches(wafer_stem, wafer_name):
                         continue
 
                     chip_labels.append({
@@ -9424,7 +9508,7 @@ def _chip_bottom_filename_token(raw_value: Any) -> str:
     safe = re.sub(r"[^A-Za-z0-9_-]+", "_", str(raw_value).strip()).strip("_")
     return safe or "Normal"
 
-_CHIP_COORD_RE = re.compile(r"^(?P<wafer>.+)_x(?P<x>-?\d+)_y(?P<y>-?\d+)(?:_b(?P<b>[A-Za-z0-9_-]+))?$")
+_CHIP_COORD_RE = re.compile(r"^(?P<wafer>.+)_[xX](?P<x>-?\d+)_[yY](?P<y>-?\d+)(?:_[bB](?P<b>[A-Za-z0-9_-]+))?$")
 
 def _parse_chip_filename(stem: str) -> Optional[Tuple[str, int, int, Optional[str]]]:
     """
@@ -9443,6 +9527,118 @@ def _parse_chip_filename(stem: str) -> Optional[Tuple[str, int, int, Optional[st
         )
     except ValueError:
         return None
+
+
+def _chip_wafer_match_key(wafer_stem: str) -> str:
+    parts = wafer_stem.split("_")
+    if _chip_wafer_has_datetime_key(parts):
+        return "_".join(parts[:5])
+    return wafer_stem
+
+
+def _chip_wafer_has_datetime_key(parts: List[str]) -> bool:
+    return (
+        len(parts) >= 5
+        and re.fullmatch(r"\d{8}", parts[3] or "")
+        and re.fullmatch(r"\d{6}", parts[4] or "")
+    )
+
+
+def _iter_chip_label_files(class_path: Path, wafer_stem: str) -> Iterable[Path]:
+    parts = wafer_stem.split("_")
+    if not _chip_wafer_has_datetime_key(parts):
+        yield from class_path.glob(f"{wafer_stem}_x*_y*.png")
+        return
+
+    match_key = _chip_wafer_match_key(wafer_stem)
+    prefix = f"{match_key}_"
+    try:
+        with os.scandir(class_path) as entries:
+            for entry in entries:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                name = entry.name
+                if name.startswith(prefix) and name.lower().endswith(".png"):
+                    yield Path(entry.path)
+    except FileNotFoundError:
+        return
+
+
+def _chip_wafer_stem_matches(candidate_stem: str, target_stem: str) -> bool:
+    return _chip_wafer_match_key(candidate_stem) == _chip_wafer_match_key(target_stem)
+
+
+def _is_derived_wafer_lookup_relpath(rel_path: str) -> bool:
+    derived_dirs = {
+        "classification",
+        "classification_chips",
+        "obj_id_maps",
+        "thumbnails",
+        "chip_annotations",
+        "chip-object-v1",
+        "composite_map",
+        "yolo_datasets",
+    }
+    parts = [part.lower() for part in rel_path.replace("\\", "/").split("/")]
+    return any(part in derived_dirs for part in parts)
+
+
+def _classification_source_prefix(rel_path: str) -> str:
+    parts = rel_path.replace("\\", "/").split("/")
+    idx = next((i for i, part in enumerate(parts) if part in ("classification", "classification_chips")), -1)
+    return "/".join(parts[:idx]) if idx > 0 else ""
+
+
+def _find_wafer_relpath_for_chip_label(chip_label_relpath: str) -> Optional[str]:
+    parsed = _parse_chip_filename(Path(chip_label_relpath).stem)
+    if not parsed:
+        return None
+
+    label_wafer_stem = parsed[0]
+    match_key = _chip_wafer_match_key(label_wafer_stem)
+    lot_key = match_key.split("_", 1)[0].lower()
+    source_prefix = _classification_source_prefix(chip_label_relpath)
+
+    with index_service.lock:
+        keys = list(index_service.keys)
+        token0 = getattr(index_service, "_token0_index", {}) or {}
+        candidate_indices = list(token0.get(lot_key, []))
+
+    if not candidate_indices:
+        candidate_indices = list(range(len(keys)))
+
+    candidates: List[str] = []
+    for idx in candidate_indices:
+        if idx < 0 or idx >= len(keys):
+            continue
+        key = keys[idx]
+        if _is_derived_wafer_lookup_relpath(key) or not is_supported_image(Path(key)):
+            continue
+        if source_prefix and not key.startswith(source_prefix + "/"):
+            continue
+        if _chip_wafer_stem_matches(Path(key).stem, label_wafer_stem):
+            candidates.append(key)
+
+    if not candidates and source_prefix:
+        for idx in candidate_indices:
+            if idx < 0 or idx >= len(keys):
+                continue
+            key = keys[idx]
+            if _is_derived_wafer_lookup_relpath(key) or not is_supported_image(Path(key)):
+                continue
+            if _chip_wafer_stem_matches(Path(key).stem, label_wafer_stem):
+                candidates.append(key)
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda key: (
+        0 if Path(key).stem == label_wafer_stem else 1,
+        len(key),
+        key.lower(),
+    ))
+    return candidates[0]
+
 
 def _trim_leading_component(path_obj: Path) -> Path:
     parts = [p for p in path_obj.parts if p not in (".", "")]
@@ -9632,12 +9828,12 @@ async def get_chip_annotations(path: str, folder: Optional[str] = Query(None)):
                     continue
                 class_name = class_entry.name
                 class_path = Path(class_entry.path)
-                for chip_file in class_path.glob(f"{wafer_stem}_x*_y*.png"):
+                for chip_file in _iter_chip_label_files(class_path, wafer_stem):
                     parsed = _parse_chip_filename(chip_file.stem)
                     if not parsed:
                         continue
                     parsed_stem, x_abs, y_abs, bottom = parsed
-                    if parsed_stem != wafer_stem:
+                    if not _chip_wafer_stem_matches(parsed_stem, wafer_stem):
                         continue
                     marked_chips.append({
                         "x_abs": x_abs,
@@ -9663,6 +9859,34 @@ async def get_chip_annotations(path: str, folder: Optional[str] = Query(None)):
     except Exception as e:
         logger.exception(f"Failed to load chip annotations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/chip-label-wafer")
+async def get_chip_label_wafer(path: str):
+    """classification_chips crop 파일에서 원본 wafer 이미지를 찾는다."""
+    try:
+        rel_path = relkey_from_any_path(path)
+        parsed = _parse_chip_filename(Path(rel_path).stem)
+        if not parsed:
+            raise HTTPException(status_code=400, detail="Not a chip label filename")
+
+        await index_service.ensure_ready_for_search()
+        wafer_relpath = _find_wafer_relpath_for_chip_label(rel_path)
+        if not wafer_relpath:
+            raise HTTPException(status_code=404, detail="Related wafer image not found")
+
+        return {
+            "success": True,
+            "chip_label": rel_path,
+            "wafer_path": wafer_relpath,
+            "wafer_key": _chip_wafer_match_key(parsed[0]),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Chip label wafer lookup failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 class FolderPermission(BaseModel):
     path: str

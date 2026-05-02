@@ -6264,3 +6264,29 @@ return {
 **수정**: `labelExplorerState`가 null이면 `selected`, `selectedClasses`, `lastClicked` 초기화 + `openFolders` 전체 false + `refreshLabelExplorer()` 호출
 **평가**: Phase 21에서 새 탭 생성 직후 Label Explorer의 폴더 열림, 선택 하이라이트, 이미지 항목이 모두 초기 상태인지 확인한다. 이전 탭 흔적이 보이면 FAIL
 **파일**: `js/main.js`, `js/main.min.js`
+
+#### BUG-21: Chip Label ↔ Wafer 연결/오버레이/선택 회귀 묶음 (2026-05-02)
+**증상**: chip label 이미지와 원본 wafer가 파일명 suffix 차이 때문에 연결되지 않거나, chip label에서 wafer/lot 보기가 빠지고, wafer 단일 보기의 chip label overlay/legend/폴더 표시 및 label 선택 동작이 서로 어긋남. 줌 레벨 전환 시 개인색 PLTE가 깨지는 회귀도 함께 발생.
+
+**계약**
+- chip wafer key는 파일명 앞 5개 토큰 `product/bottom/wafer/date/time`이다. 예: `AAU220_00P_13_20260501_010000`. 이 prefix가 같으면 wafer filename에 `96.0_2` 같은 추가 토큰이 있어도 같은 wafer label로 판단한다.
+- chip label 관련 wafer/lot 보기는 Label Explorer, chip-label grid 다중 선택 context menu, chip-label single image context menu에서 모두 보여야 한다.
+- chip label → wafer/lot 보기 결과는 새 wafer tab으로 열고, lot/wafer 기준으로 중복 제거한다. 결과 경로는 원본 wafer여야 하며 `classification_chips` 또는 `obj_id_maps` 파생 경로가 나오면 FAIL.
+- chip label에서 열린 wafer single view는 상단 filename panel에 소속 folder를 보여야 하고, 좌하단 chip label legend/overlay가 보여야 한다. 반대로 chip label image single view는 folder line/separator를 숨겨야 한다.
+- chip label overlay 기본 active label은 `invalid_main`을 제외한다. overlay alpha는 `0.15`이고, fill은 chip interior에만 들어가 wafer chip boundary가 남아야 한다. legend width는 기존 264px 대비 약 15% 줄인 220~230px 범위로 유지한다.
+- chip label legend 우클릭은 모든 label을 끈다. legend 위 drag는 wafer image pan을 일으키면 FAIL.
+- `scratch` 클릭 후 Shift+`particle_blast` 클릭은 contiguous range인 `scratch`, `bank_boundary`, `scratch_21deg`, `particle_blast` 전체를 선택해야 한다. particle_blast 1개만 선택되면 FAIL.
+- legend Ctrl-drag는 지나간 label을 toggle하고, Ctrl+Shift-drag는 기존 선택에 range를 add한다. wafer canvas Ctrl+Shift-drag는 Shift rectangle-add path를 타서 chip을 2개 이상 multi-select해야 한다.
+- 개인색 pyramid는 모든 `SERVER_CONFIG.PYRAMID_LEVELS`에서 PLTE/background color가 유지되어야 한다. pyvips, Pillow fallback, speed fallback 모두 personal palette patch를 보존해야 하며 현재 personalized pyramid cache rev는 `pyramid_v4`이다.
+
+**평가**
+- `scripts/e2e_chunk1.js`의 `chip-label-prefix-wafer` record에서 위 계약을 모두 검사한다.
+- prefix lookup path/speed, wafer/lot context menu, grid/single right-click path, folder display, legend default/clear/range/drag, overlay alpha/interior/zoom consistency, personalized pyramid all-level pixel sample이 하나라도 실패하면 FAIL.
+- 대표 fixture:
+  - wafer: `unknown/Center_scratch/AAU220_00P_13_20260501_010000_96.0_2_EE_PWQ.PNG`
+  - chip: `classification_chips/bank_boundary/AAU220_00P_13_20260501_010000_EE_PWQ_X13_Y11_B285.PNG`
+
+**파일**
+- API/cache: `api/full_app.py`, `api/main.py`, `api/search_service.py`
+- UI: `js/main.js`, `js/chip-annotator.js`, `js/semiconductor-renderer.js`, `js/thumbnail-navigator.js`, `css/style.css`, `index.html`
+- E2E: `scripts/e2e_chunk1.js`, `scripts/run-e2e-playwright.ps1`

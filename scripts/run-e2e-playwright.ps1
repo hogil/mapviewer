@@ -421,8 +421,12 @@ function Write-E2ESummaryFiles {
     if (-not (Test-Path $coldPath)) {
         $coldRecords = @(
             $records | Where-Object {
+                $recordName = [string]$_.name
+                $recordNameLower = $recordName.ToLowerInvariant()
                 $_.phase -match '(^|,)6[12](,|$)' -or
-                $_.name -match 'Cold|cold|캐시|성능'
+                $recordNameLower.Contains('cold') -or
+                $recordName.Contains('캐시') -or
+                $recordName.Contains('성능')
             }
         )
         $fqValues = @()

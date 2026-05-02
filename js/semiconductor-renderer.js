@@ -325,11 +325,12 @@ void main() {
         ]), this.gl.DYNAMIC_DRAW);
     }
 
-    uploadLevelBitmap(level, bitmap) {
+    uploadLevelBitmap(level, bitmap, textureKey = level) {
         if (!this.isGpuAvailable()) {
             return;
         }
-        const existing = this.levelTextures.get(level);
+        const key = textureKey ?? level;
+        const existing = this.levelTextures.get(key);
         if (existing) {
             this.gl.deleteTexture(existing.texture);
         }
@@ -343,26 +344,34 @@ void main() {
         this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.NEAREST);
         this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, bitmap);
 
-        this.levelTextures.set(level, {
+        this.levelTextures.set(key, {
             texture,
             width: bitmap.width,
-            height: bitmap.height
+            height: bitmap.height,
+            level
         });
     }
 
-    setActiveLevel(level) {
-        this._lastLevelKey = String(level);
+    hasLevelTexture(textureKey) {
+        return this.levelTextures.has(textureKey);
     }
 
-    drawGpu({ level, viewportWidth, viewportHeight, scale, translateX, translateY, originalWidth, originalHeight }) {
+    setActiveLevel(level, textureKey = null) {
+        this._lastLevelKey = String(textureKey ?? level);
+    }
+
+    drawGpu({ level, textureKey = null, viewportWidth, viewportHeight, scale, translateX, translateY, originalWidth, originalHeight }) {
         if (!this.isGpuAvailable()) {
             return false;
         }
-        const info = this.levelTextures.get(level) || this.levelTextures.get(Number(this._lastLevelKey)) || null;
+        const key = textureKey ?? level;
+        const info = textureKey != null
+            ? (this.levelTextures.get(key) || null)
+            : (this.levelTextures.get(level) || this.levelTextures.get(Number(this._lastLevelKey)) || this.levelTextures.get(this._lastLevelKey) || null);
         if (!info) {
             return false;
         }
-        this._lastLevelKey = String(level);
+        this._lastLevelKey = String(key);
 
         if (this.canvas.width !== viewportWidth || this.canvas.height !== viewportHeight) {
             this.canvas.width = viewportWidth;

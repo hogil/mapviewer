@@ -43,6 +43,7 @@ export class ChipAnnotator {
         this.selectedChips = new Set(); // Set of chip indices
         this.selectedChipsOrder = []; // 🔥 선택 순서 추적 (항상 맨 밑에 추가)
         this.legendFilterClasses = null;
+        this.chipLabelOverlayAlpha = 0.15;
         this.bottomFilterSet = new Set(); // 🔥 Bottom Filter (Chip b-value based mask)
 
         // Overlay mode: null = normal (white mask), 'bin' = bin color fill+text, 'f'/'q' = ratio gradient
@@ -1567,10 +1568,10 @@ export class ChipAnnotator {
                 return;
             }
             const isVisible = !activeSet || activeSet.has(chipClass);
-            const alpha = isVisible ? 0.6 : 0;
+            const alpha = isVisible ? this.chipLabelOverlayAlpha : 0;
             if (alpha > 0) {
                 const fillColor = this.getClassColor(chipClass, alpha);
-                this._drawChipRect(chip, fillColor);
+                this._drawChipInterior(chip, fillColor);
             }
         });
 
@@ -1709,6 +1710,33 @@ export class ChipAnnotator {
         
         // ✅ transform 복원
         ctx.restore();
+    }
+
+    /**
+     * Draw only the chip interior so the wafer chip boundary remains visible.
+     */
+    _drawChipInterior(chip, color) {
+        const transform = this.viewer.transform;
+        const rect = chip.rect;
+        const Y_OFFSET = this.Y_OFFSET || 0;
+
+        const chipWidth = rect.x1 - rect.x0;
+        const chipHeight = rect.y1 - rect.y0;
+        const inset = chipWidth > 2 && chipHeight > 2 ? 1 : 0;
+        const x = rect.x0 + inset;
+        const y = rect.y0 + inset;
+        const w = chipWidth - inset * 2;
+        const h = chipHeight - inset * 2;
+        if (w <= 0 || h <= 0) return;
+
+        this.ctx.save();
+        this.ctx.resetTransform();
+        this.ctx.translate(transform.dx, transform.dy + Y_OFFSET);
+        this.ctx.scale(transform.scale, transform.scale);
+        this.ctx.globalAlpha = 1.0;
+        this.ctx.fillStyle = color;
+        this.ctx.fillRect(x, y, w, h);
+        this.ctx.restore();
     }
 
     /**
@@ -2032,8 +2060,8 @@ export class ChipAnnotator {
 
         const chip = this.findChipAtPixel(canvasX, canvasY);
 
-        // 🔥 Shift+드래그: 범위 선택
-        if (e.shiftKey && !e.ctrlKey && !e.altKey) {
+        // 🔥 Shift/Ctrl+Shift+드래그: 범위 추가 선택
+        if (e.shiftKey && !e.altKey) {
             this.shiftClickPos = { x: canvasX, y: canvasY };
             this.isDragging = false; // 드래그 시작 전
             this.render();

@@ -955,11 +955,18 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.waitForFunction(
       () =>
         !!window.viewer.pageManager &&
+        window.viewer.pageManager.getActivePage()?.role === 'composite',
+      null,
+      { timeout: 10000 }
+    );
+    await page.waitForFunction(
+      () =>
+        !!window.viewer.pageManager &&
         window.viewer.pageManager.getActivePage()?.role === 'composite' &&
         Array.isArray(window.viewer.currentGridImages) &&
         window.viewer.currentGridImages.length > 0,
       null,
-      { timeout: 60000 }
+      { timeout: 180000 }
     );
     const compositeCount = await page.evaluate(
       () => window.viewer.currentGridImages.length
@@ -1228,6 +1235,981 @@ const { createRunner } = require('./e2e_playwright_session');
     );
     await backToGrid();
     return data;
+  });
+
+  await record('chip-label-prefix-wafer', 'Chip label 5토큰 wafer 매칭/우클릭 Wafer 보기', async () => {
+    await boot('chunk1-chip-label-prefix-wafer');
+    const waferPath = 'unknown/Center_scratch/AAU220_00P_13_20260501_010000_96.0_2_EE_PWQ.PNG';
+    const chipPath = 'classification_chips/bank_boundary/AAU220_00P_13_20260501_010000_EE_PWQ_X13_Y11_B285.PNG';
+    const labelKey = 'bank_boundary/AAU220_00P_13_20260501_010000_EE_PWQ_X13_Y11_B285.PNG';
+    const fullStem = 'AAU220_00P_13_20260501_010000_96.0_2_EE_PWQ';
+    const chipPaths = [
+      chipPath,
+      'classification_chips/scratch/AAU220_00P_13_20260501_010000_EE_PWQ_X11_Y17_B285.PNG',
+    ];
+
+    const data = await page.evaluate(async ({ waferPath, chipPath, labelKey }) => {
+      const annotationTimings = [];
+      let marked = [];
+      let metadata = {};
+      for (let i = 0; i < 5; i += 1) {
+        const t0 = performance.now();
+        const res = await fetch(`/api/chip-annotations?path=${encodeURIComponent(waferPath)}`);
+        const body = await res.json();
+        const t1 = performance.now();
+        if (!res.ok) {
+          throw new Error(`chip annotations failed status=${res.status} body=${JSON.stringify(body)}`);
+        }
+        annotationTimings.push(Math.round((t1 - t0) * 10) / 10);
+        marked = body.marked_chips || [];
+        metadata = body.metadata || {};
+      }
+
+      const lookupStart = performance.now();
+      const waferRes = await fetch(`/api/chip-label-wafer?path=${encodeURIComponent(chipPath)}`);
+      const waferLookup = await waferRes.json();
+      const lookupMs = Math.round((performance.now() - lookupStart) * 10) / 10;
+      if (!waferRes.ok) {
+        throw new Error(`chip label wafer lookup failed status=${waferRes.status} body=${JSON.stringify(waferLookup)}`);
+      }
+
+      const v = window.viewer;
+      const beforeUi = {
+        pageCount: v.pageManager?.pages?.length || 0,
+        activeRole: v.pageManager?.getActivePage?.()?.role || null,
+      };
+      v.classMode = 'chip';
+      v.showLabelExplorerChipContextMenu({ clientX: 160, clientY: 140 }, labelKey);
+      const menuEl = document.getElementById('label-chip-context-menu');
+      const rect = menuEl?.getBoundingClientRect?.();
+
+      return {
+        annotationTimings,
+        annotationAvgMs: Math.round((annotationTimings.reduce((a, b) => a + b, 0) / annotationTimings.length) * 10) / 10,
+        markedHit: marked.some((chip) =>
+          chip.class === 'bank_boundary' &&
+          chip.x_abs === 13 &&
+          chip.y_abs === 11 &&
+          String(chip.b) === '285'
+        ),
+        markedCount: marked.length,
+        metadata,
+        waferLookup,
+        lookupMs,
+        beforeUi,
+        menu: {
+          text: menuEl?.innerText || '',
+          visible: !!menuEl && rect.width > 0 && rect.height > 0,
+        },
+      };
+    }, { waferPath, chipPath, labelKey });
+
+    expect(data.markedHit, `5-token prefix chip annotation missing: ${JSON.stringify(data)}`);
+    expect(data.markedCount >= 1, `marked chip count invalid: ${JSON.stringify(data)}`);
+    expect(data.annotationAvgMs < 500, `chip annotation prefix lookup too slow: ${JSON.stringify(data)}`);
+    expect(
+      String(data.waferLookup?.wafer_path || '').replace(/\\/g, '/').toLowerCase() === waferPath.toLowerCase(),
+      `related wafer path mismatch: ${JSON.stringify(data.waferLookup)}`
+    );
+    expect(
+      data.waferLookup?.wafer_key === 'AAU220_00P_13_20260501_010000',
+      `wafer key mismatch: ${JSON.stringify(data.waferLookup)}`
+    );
+    expect(
+      data.menu.visible && data.menu.text.includes('Wafer 보기') && data.menu.text.includes('Lot 보기'),
+      `chip label explorer context menu invalid: ${JSON.stringify(data.menu)}`
+    );
+    await page.evaluate(() => window.viewer.hideLabelExplorerChipContextMenu?.());
+
+    const gridMenu = await page.evaluate(async ({ chipPaths }) => {
+      const v = window.viewer;
+      v.showGrid(chipPaths, false, true);
+      v.gridSelectedIdxs = [0, 1];
+      v.gridSelectedSet = new Set([0, 1]);
+      v.updateGridSelection?.();
+      v.updateSelectedGridImagesList?.();
+      return { before: { pageCount: v.pageManager?.pages?.length || 0 } };
+    }, { chipPaths });
+    await page.waitForSelector('#image-grid .grid-thumb-wrap', { timeout: 30000 });
+    await page.locator('#image-grid .grid-thumb-wrap').first().click({
+      button: 'right',
+      position: { x: 20, y: 20 },
+      timeout: 10000,
+    });
+    await page.waitForFunction(() => {
+      const menu = document.getElementById('grid-context-menu');
+      const waferItem = document.getElementById('context-chip-wafer-view');
+      const lotItem = document.getElementById('context-chip-lot-view');
+      return menu && getComputedStyle(menu).display !== 'none' &&
+        waferItem && getComputedStyle(waferItem).display !== 'none' &&
+        lotItem && getComputedStyle(lotItem).display !== 'none';
+    }, null, { timeout: 10000 });
+
+    const gridMenuAfterRightClick = await page.evaluate(() => {
+      const waferItem = document.getElementById('context-chip-wafer-view');
+      const lotItem = document.getElementById('context-chip-lot-view');
+
+      return {
+        selected: window.viewer.getSelectedImagesForModal(),
+        contextPaths: window.viewer.getChipLabelContextPaths(),
+        menuText: document.getElementById('grid-context-menu')?.innerText || '',
+        waferDisplay: waferItem ? getComputedStyle(waferItem).display : null,
+        lotDisplay: lotItem ? getComputedStyle(lotItem).display : null,
+      };
+    });
+    expect(gridMenuAfterRightClick.selected.length === 2, `chip label grid multi-select failed: ${JSON.stringify(gridMenuAfterRightClick)}`);
+    expect(gridMenuAfterRightClick.contextPaths.length === 2, `chip label grid context paths invalid: ${JSON.stringify(gridMenuAfterRightClick)}`);
+    expect(
+      gridMenuAfterRightClick.menuText.includes('Wafer 보기') &&
+        gridMenuAfterRightClick.menuText.includes('Lot 보기') &&
+        gridMenuAfterRightClick.waferDisplay !== 'none' &&
+        gridMenuAfterRightClick.lotDisplay !== 'none',
+      `chip label grid right-click menu hidden: ${JSON.stringify(gridMenuAfterRightClick)}`
+    );
+
+    await page.locator('#context-chip-wafer-view').click({ timeout: 10000 });
+    await page.waitForFunction((expectedStemLower) => {
+      const v = window.viewer;
+      const images = Array.isArray(v.currentGridImages) ? v.currentGridImages : [];
+      return !!v &&
+        v.gridMode === true &&
+        v.pageManager?.getActivePage?.()?.role === 'wafer' &&
+        images.length === 1 &&
+        images[0].toLowerCase().includes(expectedStemLower) &&
+        document.querySelectorAll('#image-grid .grid-thumb-wrap').length >= 1;
+    }, fullStem.toLowerCase(), { timeout: 90000 });
+    await sleep(800);
+
+    const waferGrid = await page.evaluate(() => ({
+      activeRole: window.viewer.pageManager?.getActivePage?.()?.role || null,
+      pageCount: window.viewer.pageManager?.pages?.length || 0,
+      gridMode: window.viewer.gridMode,
+      images: window.viewer.currentGridImages || [],
+      wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+    }));
+    expect(waferGrid.pageCount === gridMenu.before.pageCount + 1, `wafer grid tab was not created: before=${JSON.stringify(gridMenu.before)} after=${JSON.stringify(waferGrid)}`);
+    expect(waferGrid.activeRole === 'wafer' && waferGrid.gridMode === true, `wafer view should be wafer grid: ${JSON.stringify(waferGrid)}`);
+    expect(waferGrid.images.length === 1, `wafer results should be lot/wafer deduped: ${JSON.stringify(waferGrid)}`);
+    expect(
+      String(waferGrid.images[0] || '').replace(/\\/g, '/').toLowerCase() === waferPath.toLowerCase(),
+      `wafer grid result mismatch: ${JSON.stringify(waferGrid)}`
+    );
+    expect(!waferGrid.images.some(path => /classification_chips|obj_id_maps/i.test(path)), `derived path in wafer results: ${JSON.stringify(waferGrid)}`);
+
+    await page.evaluate((targetPath) => window.viewer.enterSingleViewMode(targetPath), waferGrid.images[0]);
+    await page.waitForFunction((expectedStemLower) => {
+      const v = window.viewer;
+      return !!v &&
+        v.viewMode === 'single' &&
+        v.gridMode === false &&
+        String(v.selectedImagePath || '').toLowerCase().includes(expectedStemLower);
+    }, fullStem.toLowerCase(), { timeout: 90000 });
+    await sleep(1200);
+
+    const waferSinglePanel = await page.evaluate(() => {
+      const legendText = document.getElementById('chip-label-legend')?.innerText || document.body.innerText || '';
+      const marked = window.viewer.chipAnnotator?.markedChips ||
+        window.viewer.chipAnnotator?.annotations ||
+        window.viewer.chipAnnotator?.chipAnnotations ||
+        [];
+      return {
+        selectedImagePath: window.viewer.selectedImagePath,
+        folderText: document.getElementById('file-path-text')?.textContent || '',
+        fileNameText: document.getElementById('file-name-text')?.textContent || '',
+        separatorDisplay: getComputedStyle(document.getElementById('separator-text')).display,
+        markedCount: Array.isArray(marked) ? marked.length : null,
+        legendHasLabels: /bank_boundary|scratch|invalid_main|particle_blast/.test(legendText),
+        legendSnippet: legendText.slice(0, 300),
+      };
+    });
+    expect(waferSinglePanel.folderText === 'Center_scratch', `wafer single folder missing: ${JSON.stringify(waferSinglePanel)}`);
+    expect(waferSinglePanel.separatorDisplay !== 'none', `wafer single separator hidden: ${JSON.stringify(waferSinglePanel)}`);
+    expect(waferSinglePanel.fileNameText.toLowerCase() === fullStem.toLowerCase(), `wafer single filename mismatch: ${JSON.stringify(waferSinglePanel)}`);
+    expect(
+      waferSinglePanel.legendHasLabels || (waferSinglePanel.markedCount && waferSinglePanel.markedCount > 0),
+      `wafer single chip labels missing: ${JSON.stringify(waferSinglePanel)}`
+    );
+
+    const legendBefore = await page.evaluate(() => {
+      const legend = document.getElementById('chip-label-legend');
+      const pills = Array.from(legend?.querySelectorAll('button[data-chip-label]') || []);
+      return {
+        visible: !!legend && getComputedStyle(legend).display !== 'none',
+        count: pills.length,
+        activeCount: pills.filter((pill) => pill.classList.contains('is-active')).length,
+        invalidMainActive: !!pills.find((pill) =>
+          pill.getAttribute('data-chip-label') === 'invalid_main' && pill.classList.contains('is-active')
+        ),
+        overlayAlpha: window.viewer.chipAnnotator?.chipLabelOverlayAlpha ?? null,
+      };
+    });
+    expect(legendBefore.visible && legendBefore.count >= 2, `chip label legend not ready: ${JSON.stringify(legendBefore)}`);
+    expect(legendBefore.overlayAlpha === 0.15, `chip label overlay alpha should be 15%: ${JSON.stringify(legendBefore)}`);
+    expect(!legendBefore.invalidMainActive, `invalid_main should be inactive by default: ${JSON.stringify(legendBefore)}`);
+
+    const legendSizing = await page.evaluate(() => {
+      const legend = document.getElementById('chip-label-legend');
+      const fileBar = document.getElementById('file-name-display');
+      const legendRect = legend?.getBoundingClientRect?.();
+      const fileRect = fileBar?.getBoundingClientRect?.();
+      return {
+        width: legendRect ? Math.round(legendRect.width) : 0,
+        left: legendRect ? Math.round(legendRect.left) : null,
+        fileBarLeft: fileRect ? Math.round(fileRect.left) : null,
+        visible: !!legend && getComputedStyle(legend).display !== 'none',
+      };
+    });
+    expect(
+      legendSizing.visible && legendSizing.width >= 220 && legendSizing.width <= 230,
+      `chip label legend width should be reduced by 15% from 264px: ${JSON.stringify(legendSizing)}`
+    );
+
+    const titleBox = await page.locator('#chip-label-legend .chip-label-legend__title').boundingBox();
+    expect(!!titleBox, 'chip label legend title missing');
+    const transformBeforeLegendDrag = await page.evaluate(() => ({
+      dx: window.viewer.transform.dx,
+      dy: window.viewer.transform.dy,
+    }));
+    await page.mouse.move(titleBox.x + 8, titleBox.y + 8);
+    await page.mouse.down();
+    await page.mouse.move(titleBox.x + 96, titleBox.y + 22, { steps: 6 });
+    await page.mouse.up();
+    const transformAfterLegendDrag = await page.evaluate(() => ({
+      dx: window.viewer.transform.dx,
+      dy: window.viewer.transform.dy,
+    }));
+    expect(
+      Math.abs(transformAfterLegendDrag.dx - transformBeforeLegendDrag.dx) < 0.1 &&
+        Math.abs(transformAfterLegendDrag.dy - transformBeforeLegendDrag.dy) < 0.1,
+      `chip label legend drag should not pan image: before=${JSON.stringify(transformBeforeLegendDrag)} after=${JSON.stringify(transformAfterLegendDrag)}`
+    );
+
+    const legendBox = await page.locator('#chip-label-legend').boundingBox();
+    expect(!!legendBox, 'chip label legend box missing');
+    await page.mouse.click(legendBox.x + 12, legendBox.y + 12, { button: 'right' });
+    await page.waitForFunction(() => {
+      const active = window.viewer.activeChipLabelClasses;
+      const filter = window.viewer.chipAnnotator?.legendFilterClasses;
+      return active instanceof Set && filter instanceof Set && active.size === 0 && filter.size === 0;
+    }, null, { timeout: 5000 });
+
+    const pillBoxes = await page.locator('#chip-label-legend button[data-chip-label]').evaluateAll((els) =>
+      els.slice(0, Math.min(3, els.length)).map((el) => {
+        const rect = el.getBoundingClientRect();
+        return {
+          className: el.getAttribute('data-chip-label'),
+          cx: rect.left + rect.width / 2,
+          cy: rect.top + rect.height / 2,
+        };
+      })
+    );
+    expect(pillBoxes.length >= 2, `not enough chip label pills for drag selection: ${JSON.stringify(pillBoxes)}`);
+
+    const rangeClickPillBoxes = await page.locator('#chip-label-legend button[data-chip-label]').evaluateAll((els) =>
+      els.map((el) => el.getAttribute('data-chip-label'))
+    );
+    const scratchIdx = rangeClickPillBoxes.indexOf('scratch');
+    const particleBlastIdx = rangeClickPillBoxes.indexOf('particle_blast');
+    expect(
+      scratchIdx !== -1 && particleBlastIdx !== -1 && scratchIdx < particleBlastIdx,
+      `scratch -> particle_blast range setup failed: ${JSON.stringify(rangeClickPillBoxes)}`
+    );
+    const expectedShiftClickRange = rangeClickPillBoxes.slice(scratchIdx, particleBlastIdx + 1);
+    await page.locator('#chip-label-legend button[data-chip-label="scratch"]').click({ timeout: 10000 });
+    await page.waitForFunction(() => {
+      const active = window.viewer.activeChipLabelClasses;
+      return active instanceof Set && active.size === 1 && active.has('scratch');
+    }, null, { timeout: 5000 });
+    await page.keyboard.down('Shift');
+    await page.locator('#chip-label-legend button[data-chip-label="particle_blast"]').click({ timeout: 10000 });
+    await page.keyboard.up('Shift');
+    await page.waitForFunction((expected) => {
+      const active = window.viewer.activeChipLabelClasses;
+      return active instanceof Set &&
+        active.size === expected.length &&
+        expected.every(cls => active.has(cls));
+    }, expectedShiftClickRange, { timeout: 5000 });
+    const shiftClickRangeState = await page.evaluate(() => ({
+      active: Array.from(window.viewer.activeChipLabelClasses || []),
+      filter: Array.from(window.viewer.chipAnnotator?.legendFilterClasses || []),
+    }));
+    expect(
+      expectedShiftClickRange.every((className) => shiftClickRangeState.active.includes(className)) &&
+        shiftClickRangeState.active.length === expectedShiftClickRange.length &&
+        shiftClickRangeState.filter.length === expectedShiftClickRange.length,
+      `shift click range should select scratch through particle_blast: expected=${JSON.stringify(expectedShiftClickRange)} actual=${JSON.stringify(shiftClickRangeState)}`
+    );
+
+    await page.mouse.click(legendBox.x + 12, legendBox.y + 12, { button: 'right' });
+    await page.waitForFunction(() => window.viewer.activeChipLabelClasses instanceof Set && window.viewer.activeChipLabelClasses.size === 0, null, { timeout: 5000 });
+
+    await page.keyboard.down('Shift');
+    await page.mouse.move(pillBoxes[0].cx, pillBoxes[0].cy);
+    await page.mouse.down();
+    await page.mouse.move(pillBoxes[pillBoxes.length - 1].cx, pillBoxes[pillBoxes.length - 1].cy, { steps: 8 });
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+    await page.waitForFunction((expectedCount) => {
+      const active = window.viewer.activeChipLabelClasses;
+      return active instanceof Set && active.size === expectedCount;
+    }, pillBoxes.length, { timeout: 5000 });
+
+    const shiftDragState = await page.evaluate(() => ({
+      active: Array.from(window.viewer.activeChipLabelClasses || []),
+      activePills: Array.from(document.querySelectorAll('#chip-label-legend .chip-label-pill.is-active'))
+        .map((pill) => pill.getAttribute('data-chip-label')),
+    }));
+    expect(
+      pillBoxes.every((pill) => shiftDragState.active.includes(pill.className)),
+      `shift drag did not activate expected chip labels: expected=${JSON.stringify(pillBoxes)} actual=${JSON.stringify(shiftDragState)}`
+    );
+
+    await page.mouse.click(legendBox.x + 12, legendBox.y + 12, { button: 'right' });
+    await page.waitForFunction(() => window.viewer.activeChipLabelClasses instanceof Set && window.viewer.activeChipLabelClasses.size === 0, null, { timeout: 5000 });
+    await page.keyboard.down('Control');
+    await page.mouse.move(pillBoxes[0].cx, pillBoxes[0].cy);
+    await page.mouse.down();
+    await page.mouse.move(pillBoxes[1].cx, pillBoxes[1].cy, { steps: 6 });
+    await page.mouse.up();
+    await page.keyboard.up('Control');
+    await page.waitForFunction(() => {
+      const active = window.viewer.activeChipLabelClasses;
+      return active instanceof Set && active.size === 2;
+    }, null, { timeout: 5000 });
+
+    const ctrlDragState = await page.evaluate(() => ({
+      active: Array.from(window.viewer.activeChipLabelClasses || []),
+      filter: Array.from(window.viewer.chipAnnotator?.legendFilterClasses || []),
+    }));
+    expect(
+      pillBoxes.slice(0, 2).every((pill) => ctrlDragState.active.includes(pill.className)) &&
+        ctrlDragState.filter.length === ctrlDragState.active.length,
+      `ctrl drag did not toggle expected chip labels: expected=${JSON.stringify(pillBoxes.slice(0, 2))} actual=${JSON.stringify(ctrlDragState)}`
+    );
+
+    await page.keyboard.down('Control');
+    await page.keyboard.down('Shift');
+    await page.mouse.move(pillBoxes[1].cx, pillBoxes[1].cy);
+    await page.mouse.down();
+    await page.mouse.move(pillBoxes[pillBoxes.length - 1].cx, pillBoxes[pillBoxes.length - 1].cy, { steps: 8 });
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+    await page.keyboard.up('Control');
+    await page.waitForFunction((expectedCount) => {
+      const active = window.viewer.activeChipLabelClasses;
+      return active instanceof Set && active.size === expectedCount;
+    }, pillBoxes.length, { timeout: 5000 });
+
+    const ctrlShiftDragState = await page.evaluate(() => ({
+      active: Array.from(window.viewer.activeChipLabelClasses || []),
+      filter: Array.from(window.viewer.chipAnnotator?.legendFilterClasses || []),
+    }));
+    expect(
+      pillBoxes.every((pill) => ctrlShiftDragState.active.includes(pill.className)) &&
+        ctrlShiftDragState.filter.length === ctrlShiftDragState.active.length,
+      `ctrl+shift drag did not add range to chip labels: expected=${JSON.stringify(pillBoxes)} actual=${JSON.stringify(ctrlShiftDragState)}`
+    );
+
+    const ctrlShiftChipDragState = await (async () => {
+      const dragBox = await page.evaluate(() => {
+        const v = window.viewer;
+        const ca = v.chipAnnotator;
+        if (!ca || !ca.canvas || !Array.isArray(ca.chips)) return { ok: false, reason: 'chip annotator missing' };
+        v.setChipLabelLegendClasses?.(null);
+        ca.clearSelection?.(false);
+        const canvasRect = ca.canvas.getBoundingClientRect();
+        const active = ca.legendFilterClasses instanceof Set ? ca.legendFilterClasses : null;
+        const candidateChips = (ca.markedChips || [])
+          .filter(marked => !active || active.has(marked.class || marked.label))
+          .map(marked => (ca.chips || []).find(chip =>
+            chip && chip.x_abs === marked.x_abs && chip.y_abs === marked.y_abs && chip.rect
+          ))
+          .filter(Boolean);
+        if (candidateChips.length < 2) return { ok: false, reason: 'not enough marked chips', count: candidateChips.length };
+
+        let pair = null;
+        let bestDistance = Infinity;
+        for (let i = 0; i < candidateChips.length; i += 1) {
+          for (let j = i + 1; j < candidateChips.length; j += 1) {
+            const a = candidateChips[i];
+            const b = candidateChips[j];
+            const ax = (a.rect.x0 + a.rect.x1) / 2;
+            const ay = (a.rect.y0 + a.rect.y1) / 2;
+            const bx = (b.rect.x0 + b.rect.x1) / 2;
+            const by = (b.rect.y0 + b.rect.y1) / 2;
+            const distance = Math.hypot(ax - bx, ay - by);
+            if (distance > 10 && distance < bestDistance) {
+              bestDistance = distance;
+              pair = [a, b];
+            }
+          }
+        }
+        if (!pair) return { ok: false, reason: 'marked chip pair missing', count: candidateChips.length };
+
+        const pairCenters = pair.map(chip => ({
+          x: (chip.rect.x0 + chip.rect.x1) / 2,
+          y: (chip.rect.y0 + chip.rect.y1) / 2,
+        }));
+        const scale = 1.25;
+        const yOffset = ca.Y_OFFSET || 0;
+        const centerImgX = (pairCenters[0].x + pairCenters[1].x) / 2;
+        const centerImgY = (pairCenters[0].y + pairCenters[1].y) / 2;
+        v.transform.scale = scale;
+        v.zoom = scale;
+        v.transform.dx = Math.round(ca.canvas.width / 2 - centerImgX * scale);
+        v.transform.dy = Math.round(ca.canvas.height / 2 - centerImgY * scale - yOffset);
+        v.updatePyramidLevel?.();
+        ca.render?.();
+
+        const centers = pairCenters.map(center => ({
+          x: center.x * scale + v.transform.dx,
+          y: center.y * scale + v.transform.dy + yOffset,
+        }));
+        const minX = Math.max(24, Math.min(...centers.map(center => center.x)) - 8);
+        const maxX = Math.min(ca.canvas.width - 24, Math.max(...centers.map(center => center.x)) + 8);
+        const minY = Math.max(24, Math.min(...centers.map(center => center.y)) - 8);
+        const maxY = Math.min(ca.canvas.height - 24, Math.max(...centers.map(center => center.y)) + 8);
+        const toClient = (x, y) => ({
+          x: canvasRect.left + x * canvasRect.width / ca.canvas.width,
+          y: canvasRect.top + y * canvasRect.height / ca.canvas.height,
+        });
+        return {
+          ok: true,
+          expectedMin: 2,
+          pairDistance: bestDistance,
+          start: toClient(minX, minY),
+          end: toClient(maxX, maxY),
+        };
+      });
+      expect(dragBox.ok, `ctrl+shift chip drag setup failed: ${JSON.stringify(dragBox)}`);
+      await page.keyboard.down('Control');
+      await page.keyboard.down('Shift');
+      await page.mouse.move(dragBox.start.x, dragBox.start.y);
+      await page.mouse.down();
+      await page.mouse.move(dragBox.end.x, dragBox.end.y, { steps: 10 });
+      await page.mouse.up();
+      await page.keyboard.up('Shift');
+      await page.keyboard.up('Control');
+      await page.waitForFunction((expectedMin) => {
+        const selected = window.viewer.chipAnnotator?.selectedChips;
+        return selected instanceof Set && selected.size >= expectedMin;
+      }, dragBox.expectedMin, { timeout: 5000 });
+      return await page.evaluate(() => ({
+        selectedCount: window.viewer.chipAnnotator?.selectedChips?.size || 0,
+        selectedOrderCount: window.viewer.chipAnnotator?.selectedChipsOrder?.length || 0,
+      }));
+    })();
+    expect(
+      ctrlShiftChipDragState.selectedCount >= 2,
+      `ctrl+shift drag did not multi-select chips on wafer: ${JSON.stringify(ctrlShiftChipDragState)}`
+    );
+
+    await page.evaluate(() => window.viewer.setChipLabelLegendClasses?.(null));
+    const overlayInteriorCheck = await page.evaluate(() => {
+      const v = window.viewer;
+      const ca = v.chipAnnotator;
+      ca.render();
+      const active = ca.legendFilterClasses instanceof Set ? ca.legendFilterClasses : null;
+      const marked = (ca.markedChips || []).find((chip) => !active || active.has(chip.class || chip.label));
+      if (!marked) return { ok: false, reason: 'active marked chip missing' };
+      const chip = (ca.chips || []).find((candidate) =>
+        candidate && candidate.x_abs === marked.x_abs && candidate.y_abs === marked.y_abs
+      );
+      if (!chip || !chip.rect) return { ok: false, reason: 'chip rect missing', marked };
+
+      const transform = v.transform;
+      const yOffset = ca.Y_OFFSET || 0;
+      const left = chip.rect.x0 * transform.scale + transform.dx;
+      const top = chip.rect.y0 * transform.scale + transform.dy + yOffset;
+      const right = chip.rect.x1 * transform.scale + transform.dx;
+      const bottom = chip.rect.y1 * transform.scale + transform.dy + yOffset;
+      const inset = Math.min(
+        Math.abs(right - left) / 2,
+        Math.abs(bottom - top) / 2,
+        Math.max(1, transform.scale)
+      );
+      const clamp = (value, max) => Math.max(0, Math.min(max - 1, Math.round(value)));
+      const insideX = clamp(Math.ceil(left + inset) + 1, ca.canvas.width);
+      const insideY = clamp(Math.ceil(top + inset) + 1, ca.canvas.height);
+      const boundaryX = clamp(Math.floor(left), ca.canvas.width);
+      const boundaryY = clamp(Math.floor(top + Math.min(inset, Math.abs(bottom - top) / 2)), ca.canvas.height);
+      const insideAlpha = ca.ctx.getImageData(insideX, insideY, 1, 1).data[3];
+      const boundaryAlpha = ca.ctx.getImageData(boundaryX, boundaryY, 1, 1).data[3];
+      return {
+        ok: true,
+        overlayAlpha: ca.chipLabelOverlayAlpha,
+        active: active ? Array.from(active) : null,
+        markedClass: marked.class || marked.label,
+        insideAlpha,
+        boundaryAlpha,
+        points: { insideX, insideY, boundaryX, boundaryY },
+        rect: { left, top, right, bottom, inset },
+      };
+    });
+    expect(overlayInteriorCheck.ok, `chip label overlay check setup failed: ${JSON.stringify(overlayInteriorCheck)}`);
+    expect(overlayInteriorCheck.markedClass !== 'invalid_main', `invalid_main should be excluded from default overlay: ${JSON.stringify(overlayInteriorCheck)}`);
+    expect(overlayInteriorCheck.insideAlpha >= 30, `chip label overlay interior not filled: ${JSON.stringify(overlayInteriorCheck)}`);
+    expect(overlayInteriorCheck.boundaryAlpha <= 8, `chip label overlay should leave boundary transparent: ${JSON.stringify(overlayInteriorCheck)}`);
+    await page.evaluate(() => window.viewer.setChipLabelLegendClasses?.(null));
+
+    const overlayZoomConsistency = await page.evaluate(() => {
+      const v = window.viewer;
+      const ca = v.chipAnnotator;
+      if (!v || !ca || !ca.canvas || !ca.ctx) return { ok: false, reason: 'chip annotator missing' };
+      v.setChipLabelLegendClasses?.(null);
+
+      const active = ca.legendFilterClasses instanceof Set ? ca.legendFilterClasses : null;
+      const marked = (ca.markedChips || []).find((candidate) => {
+        if (active && !active.has(candidate.class || candidate.label)) return false;
+        const chip = (ca.chips || []).find((item) =>
+          item && item.x_abs === candidate.x_abs && item.y_abs === candidate.y_abs && item.rect
+        );
+        return !!chip;
+      });
+      if (!marked) return { ok: false, reason: 'marked chip missing' };
+      const chip = (ca.chips || []).find((candidate) =>
+        candidate && candidate.x_abs === marked.x_abs && candidate.y_abs === marked.y_abs && candidate.rect
+      );
+      if (!chip) return { ok: false, reason: 'chip rect missing', marked };
+
+      const original = {
+        scale: v.transform.scale,
+        dx: v.transform.dx,
+        dy: v.transform.dy,
+        zoom: v.zoom,
+      };
+      const centerX = (chip.rect.x0 + chip.rect.x1) / 2;
+      const centerY = (chip.rect.y0 + chip.rect.y1) / 2;
+      const yOffset = ca.Y_OFFSET || 0;
+      const clamp = (value, max) => Math.max(0, Math.min(max - 1, Math.round(value)));
+      const sample = (scale) => {
+        v.transform.scale = scale;
+        v.transform.dx = Math.round(ca.canvas.width / 2 - centerX * scale);
+        v.transform.dy = Math.round(ca.canvas.height / 2 - centerY * scale - yOffset);
+        v.zoom = scale;
+        ca.render();
+        const cx = clamp(centerX * scale + v.transform.dx, ca.canvas.width);
+        const cy = clamp(centerY * scale + v.transform.dy + yOffset, ca.canvas.height);
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        let a = 0;
+        let count = 0;
+        for (let oy = -1; oy <= 1; oy += 1) {
+          for (let ox = -1; ox <= 1; ox += 1) {
+            const x = clamp(cx + ox, ca.canvas.width);
+            const y = clamp(cy + oy, ca.canvas.height);
+            const data = ca.ctx.getImageData(x, y, 1, 1).data;
+            r += data[0];
+            g += data[1];
+            b += data[2];
+            a += data[3];
+            count += 1;
+          }
+        }
+        return {
+          scale,
+          rgba: [
+            Math.round(r / count),
+            Math.round(g / count),
+            Math.round(b / count),
+            Math.round(a / count),
+          ],
+          point: { x: cx, y: cy },
+        };
+      };
+
+      const small = sample(0.45);
+      const large = sample(1.6);
+      v.transform.scale = original.scale;
+      v.transform.dx = original.dx;
+      v.transform.dy = original.dy;
+      v.zoom = original.zoom;
+      ca.render();
+
+      const colorDiff = Math.max(
+        Math.abs(small.rgba[0] - large.rgba[0]),
+        Math.abs(small.rgba[1] - large.rgba[1]),
+        Math.abs(small.rgba[2] - large.rgba[2])
+      );
+      const alphaDiff = Math.abs(small.rgba[3] - large.rgba[3]);
+      return {
+        ok: true,
+        markedClass: marked.class || marked.label,
+        overlayAlpha: ca.chipLabelOverlayAlpha,
+        small,
+        large,
+        colorDiff,
+        alphaDiff,
+      };
+    });
+    expect(overlayZoomConsistency.ok, `chip label overlay zoom setup failed: ${JSON.stringify(overlayZoomConsistency)}`);
+    expect(overlayZoomConsistency.small.rgba[3] >= 30 && overlayZoomConsistency.large.rgba[3] >= 30, `chip label overlay zoom alpha missing: ${JSON.stringify(overlayZoomConsistency)}`);
+    expect(overlayZoomConsistency.colorDiff <= 8 && overlayZoomConsistency.alphaDiff <= 8, `chip label overlay color changes by zoom: ${JSON.stringify(overlayZoomConsistency)}`);
+
+    const personalizedZoomState = await page.evaluate(async ({ waferPath }) => {
+      const sleepInPage = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+      const v = window.viewer;
+      if (!v) return { ok: false, reason: 'viewer missing' };
+
+      v.personalizedColorEnabled = true;
+      v.currentUser = 'notsaml';
+      await v.loadColorLegends?.();
+      v._personalizedColorCacheBuster = String(Date.now());
+      await v.loadImage(waferPath, false, null, true);
+
+      const waitDeadline = performance.now() + 30000;
+      while (performance.now() < waitDeadline) {
+        if (v.currentImage && !v.gridMode && String(v.selectedImagePath || '').replace(/\\/g, '/').toLowerCase() === waferPath.toLowerCase()) {
+          break;
+        }
+        await sleepInPage(100);
+      }
+
+      const levels = window.SERVER_CONFIG?.PYRAMID_LEVELS || [0.2, 0.5, 0.7, 1];
+      const thresholds = window.SERVER_CONFIG?.PYRAMID_ZOOM_THRESHOLDS || [0.25, 0.5, 0.75];
+      const currentLevel = v.currentPyramidLevel;
+      const targetLevel = String(currentLevel) === String(levels[levels.length - 1])
+        ? levels[0]
+        : levels[levels.length - 1];
+      const targetScale = String(targetLevel) === String(levels[0])
+        ? Math.max(0.05, thresholds[0] * 0.5)
+        : thresholds[thresholds.length - 1] + 0.35;
+      const expectedKey = v.getPyramidCacheKey(targetLevel);
+      const personalizedParams = v.getPersonalizedParams();
+      const nudgeWithinRange = (start, end) => {
+        const gap = Number.isFinite(end - start) && end > start ? end - start : 0.25;
+        return Math.min(Math.max(gap * 0.04, 0.005), 0.02);
+      };
+      const sampleScaleForLevelIndex = (index) => {
+        if (index === 0) {
+          return Math.max(0.05, (thresholds[0] || 0.25) * 0.8);
+        }
+        const prevThreshold = thresholds[index - 1];
+        if (index >= levels.length - 1 || index >= thresholds.length) {
+          return (Number.isFinite(prevThreshold) ? prevThreshold : thresholds[thresholds.length - 1] || 0.75) + 0.05;
+        }
+        const nextThreshold = thresholds[index];
+        const nudge = nudgeWithinRange(prevThreshold, nextThreshold);
+        return index === 1 ? nextThreshold - nudge : prevThreshold + nudge;
+      };
+      const levelScales = levels.map((level, index) => ({
+        label: `level-${level}`,
+        level,
+        scale: sampleScaleForLevelIndex(index),
+      }));
+      const warmPersonalizedLevel = async (level) => {
+        const url = `/api/image?path=${encodeURIComponent(waferPath)}&level=${encodeURIComponent(level)}${personalizedParams}`;
+        const deadline = performance.now() + 90000;
+        let attempts = 0;
+        let lastStatus = null;
+        let lastError = null;
+        while (performance.now() < deadline) {
+          attempts += 1;
+          try {
+            const response = await fetch(url, {
+              cache: 'no-cache',
+              headers: {
+                Accept: 'image/png,image/apng,image/*;q=0.8',
+                'Cache-Control': 'no-cache',
+              },
+            });
+            lastStatus = response.status;
+            if (response.ok) {
+              const blob = await response.blob();
+              return { ok: true, level, attempts, status: response.status, bytes: blob.size };
+            }
+          } catch (err) {
+            lastError = err?.message || String(err);
+          }
+          await sleepInPage(500);
+        }
+        return { ok: false, level, attempts, lastStatus, lastError };
+      };
+      const warmResults = [];
+      for (const item of levelScales) {
+        warmResults.push({ label: item.label, ...(await warmPersonalizedLevel(item.level)) });
+      }
+
+      const poisonCanvas = document.createElement('canvas');
+      poisonCanvas.width = 1;
+      poisonCanvas.height = 1;
+      const poisonCtx = poisonCanvas.getContext('2d');
+      poisonCtx.fillStyle = '#ff00ff';
+      poisonCtx.fillRect(0, 0, 1, 1);
+      const poisonBitmap = await createImageBitmap(poisonCanvas);
+
+      delete v.pyramidLevels[expectedKey];
+      v.pyramidLevels[targetLevel] = poisonBitmap;
+      v._pyramidLoading = new Set();
+      v.transform.scale = targetScale;
+      v.zoom = targetScale;
+      v.updatePyramidLevel();
+
+      const immediate = {
+        usedLegacyPoison: v.currentImage === poisonBitmap,
+        currentLevel: v.currentPyramidLevel,
+        currentKey: v.currentPyramidCacheKey,
+      };
+
+      const loadDeadline = performance.now() + 45000;
+      while (performance.now() < loadDeadline) {
+        if (v.pyramidLevels?.[expectedKey]) {
+          v.updatePyramidLevel();
+          if (v.currentPyramidCacheKey === expectedKey && v.currentImage === v.pyramidLevels[expectedKey]) {
+            break;
+          }
+        }
+        await sleepInPage(150);
+      }
+
+      const finalState = {
+        hasExpectedCache: !!v.pyramidLevels?.[expectedKey],
+        currentLevel: v.currentPyramidLevel,
+        currentKey: v.currentPyramidCacheKey,
+        usedLegacyPoison: v.currentImage === poisonBitmap,
+        gpuAvailable: !!v.semiconductorRenderer?.isGpuAvailable?.(),
+        gpuHasExpectedTexture: v.semiconductorRenderer?.isGpuAvailable?.()
+          ? !!v.semiconductorRenderer?.hasLevelTexture?.(expectedKey)
+          : null,
+      };
+      if (typeof poisonBitmap.close === 'function') {
+        poisonBitmap.close();
+      }
+
+      const expectedBackground = (() => {
+        const hex = v.colorLegends?.notsaml?.background || '#FAB8FF';
+        const clean = String(hex).replace('#', '');
+        return [
+          Number.parseInt(clean.slice(0, 2), 16),
+          Number.parseInt(clean.slice(2, 4), 16),
+          Number.parseInt(clean.slice(4, 6), 16),
+        ];
+      })();
+      const samplePersonalizedBackground = async (item) => {
+        const scale = item.scale;
+        const canvas = v.dom?.imageCanvas;
+        const ctx = canvas?.getContext?.('2d');
+        if (!canvas || !ctx) return { ok: false, reason: 'image canvas missing', scale };
+        const imgX = 100;
+        const imgY = 100;
+        v.transform.scale = scale;
+        v.transform.dx = Math.round(canvas.width / 2 - imgX * scale);
+        v.transform.dy = Math.round(canvas.height / 2 - imgY * scale);
+        v.zoom = scale;
+        const levelForScale = v.getBestPyramidLevel(scale);
+        const keyForScale = v.getPyramidCacheKey(levelForScale);
+        let loadError = null;
+        v.updatePyramidLevel();
+        if (!v.pyramidLevels?.[keyForScale]) {
+          try {
+            await v.loadPyramidLevel(levelForScale, false);
+          } catch (err) {
+            loadError = err?.message || String(err);
+          }
+        }
+        const deadline = performance.now() + 90000;
+        while (performance.now() < deadline) {
+          v.updatePyramidLevel();
+          if (v.currentPyramidCacheKey === keyForScale && v.currentImage === v.pyramidLevels?.[keyForScale]) {
+            break;
+          }
+          if (!v.pyramidLevels?.[keyForScale]) {
+            try {
+              await v.loadPyramidLevel(levelForScale, false);
+            } catch (err) {
+              loadError = err?.message || String(err);
+            }
+          }
+          await sleepInPage(150);
+        }
+        v.scheduleDraw();
+        await sleepInPage(250);
+        const x = Math.round(imgX * scale + v.transform.dx);
+        const y = Math.round(imgY * scale + v.transform.dy);
+        const pixel = Array.from(ctx.getImageData(x, y, 1, 1).data);
+        return {
+          ok: true,
+          scale,
+          expectedLevel: levelForScale,
+          configuredLevel: item.level,
+          levelMatches: String(levelForScale) === String(item.level),
+          expectedKey: keyForScale,
+          currentLevel: v.currentPyramidLevel,
+          currentKey: v.currentPyramidCacheKey,
+          pixel,
+          loadError,
+          point: { x, y },
+        };
+      };
+      const personalizedLevelSamples = [];
+      for (const item of levelScales) {
+        const sample = await samplePersonalizedBackground(item);
+        personalizedLevelSamples.push({ ...item, ...sample });
+      }
+
+      return {
+        ok: true,
+        currentLevel,
+        targetLevel,
+        targetScale,
+        personalizedParams,
+        expectedKey,
+        expectedBackground,
+        levelScales,
+        warmResults,
+        immediate,
+        finalState,
+        personalizedLevelSamples,
+      };
+    }, { waferPath });
+    expect(personalizedZoomState.ok, `personalized zoom setup failed: ${JSON.stringify(personalizedZoomState)}`);
+    expect(personalizedZoomState.expectedKey.includes('personalized=true') && personalizedZoomState.expectedKey.includes('scheme=notsaml'), `personalized pyramid cache key missing params: ${JSON.stringify(personalizedZoomState)}`);
+    expect(!personalizedZoomState.immediate.usedLegacyPoison, `personalized zoom reused legacy level cache immediately: ${JSON.stringify(personalizedZoomState)}`);
+    expect(personalizedZoomState.finalState.hasExpectedCache, `personalized zoom expected cache not loaded: ${JSON.stringify(personalizedZoomState)}`);
+    expect(personalizedZoomState.finalState.currentKey === personalizedZoomState.expectedKey, `personalized zoom did not switch to keyed cache: ${JSON.stringify(personalizedZoomState)}`);
+    expect(!personalizedZoomState.finalState.usedLegacyPoison, `personalized zoom stayed on legacy poison cache: ${JSON.stringify(personalizedZoomState)}`);
+    expect(
+      personalizedZoomState.finalState.gpuHasExpectedTexture !== false,
+      `personalized zoom missing keyed GPU texture: ${JSON.stringify(personalizedZoomState)}`
+    );
+    const maxRgbDiff = (pixel, expected) => Math.max(
+      Math.abs(pixel[0] - expected[0]),
+      Math.abs(pixel[1] - expected[1]),
+      Math.abs(pixel[2] - expected[2])
+    );
+    const samples = personalizedZoomState.personalizedLevelSamples || [];
+    expect(
+      personalizedZoomState.warmResults?.length === samples.length && personalizedZoomState.warmResults.every(item => item.ok),
+      `personalized pyramid warmup failed for one or more levels: ${JSON.stringify(personalizedZoomState)}`
+    );
+    expect(samples.length === personalizedZoomState.levelScales?.length && samples.every(sample => sample.ok && sample.levelMatches), `personalized background sampling failed for all levels: ${JSON.stringify(personalizedZoomState)}`);
+    expect(
+      samples.every(sample => sample.currentKey === sample.expectedKey),
+      `personalized pyramid did not switch to expected level cache: ${JSON.stringify(personalizedZoomState)}`
+    );
+    expect(
+      samples.every(sample => maxRgbDiff(sample.pixel, personalizedZoomState.expectedBackground) <= 12),
+      `personalized color missing in one or more pyramid levels: ${JSON.stringify(personalizedZoomState)}`
+    );
+
+    const singleMenu = await page.evaluate(async ({ chipPath }) => {
+      const v = window.viewer;
+      await v.enterSingleViewMode(chipPath);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      return {
+        before: { pageCount: v.pageManager?.pages?.length || 0 },
+        selectedImagePath: v.selectedImagePath,
+        viewMode: v.viewMode,
+      };
+    }, { chipPath });
+    await page.waitForFunction(() => window.viewer.viewMode === 'single' && !window.viewer.gridMode, null, { timeout: 60000 });
+    await sleep(800);
+    const canvasBox = await page.locator('#image-canvas').boundingBox();
+    expect(!!canvasBox, 'chip label single image canvas missing');
+    await page.mouse.click(
+      canvasBox.x + Math.min(80, canvasBox.width / 2),
+      canvasBox.y + Math.min(80, canvasBox.height / 2),
+      { button: 'right' }
+    );
+    await page.waitForFunction(() => {
+      const singleMenuEl = document.getElementById('single-context-menu');
+      const waferItem = document.getElementById('single-chip-wafer-view');
+      const lotItem = document.getElementById('single-chip-lot-view');
+      return singleMenuEl && getComputedStyle(singleMenuEl).display !== 'none' &&
+        waferItem && getComputedStyle(waferItem).display !== 'none' &&
+        lotItem && getComputedStyle(lotItem).display !== 'none';
+    }, null, { timeout: 10000 });
+
+    const singleMenuAfterRightClick = await page.evaluate(() => {
+      const waferItem = document.getElementById('single-chip-wafer-view');
+      const lotItem = document.getElementById('single-chip-lot-view');
+      return {
+        contextPaths: window.viewer.getChipLabelContextPaths(),
+        menuText: document.getElementById('single-context-menu')?.innerText || '',
+        waferDisplay: waferItem ? getComputedStyle(waferItem).display : null,
+        lotDisplay: lotItem ? getComputedStyle(lotItem).display : null,
+      };
+    });
+    expect(singleMenu.viewMode === 'single', `chip label single mode failed: ${JSON.stringify(singleMenu)}`);
+    expect(singleMenuAfterRightClick.contextPaths[0]?.toLowerCase().includes('classification_chips/'), `chip label single context path invalid: ${JSON.stringify(singleMenuAfterRightClick)}`);
+    expect(singleMenuAfterRightClick.contextPaths.length === 1, `chip label single context paths invalid: ${JSON.stringify(singleMenuAfterRightClick)}`);
+    const chipSinglePanel = await page.evaluate(() => ({
+      folderText: document.getElementById('file-path-text')?.textContent || '',
+      separatorDisplay: getComputedStyle(document.getElementById('separator-text')).display,
+    }));
+    expect(chipSinglePanel.folderText.trim() === '', `chip label folder should stay hidden: ${JSON.stringify(chipSinglePanel)}`);
+    expect(chipSinglePanel.separatorDisplay === 'none', `chip label separator should stay hidden: ${JSON.stringify(chipSinglePanel)}`);
+    expect(
+      singleMenuAfterRightClick.menuText.includes('Wafer 보기') &&
+        singleMenuAfterRightClick.menuText.includes('Lot 보기') &&
+        singleMenuAfterRightClick.waferDisplay !== 'none' &&
+        singleMenuAfterRightClick.lotDisplay !== 'none',
+      `chip label single right-click menu hidden: ${JSON.stringify(singleMenuAfterRightClick)}`
+    );
+
+    await page.locator('#single-chip-lot-view').click({ timeout: 10000 });
+    await page.waitForFunction(() => {
+      const v = window.viewer;
+      const images = Array.isArray(v.currentGridImages) ? v.currentGridImages : [];
+      return !!v &&
+        v.gridMode === true &&
+        v.pageManager?.getActivePage?.()?.role === 'wafer' &&
+        images.length >= 1 &&
+        document.querySelectorAll('#image-grid .grid-thumb-wrap').length >= 1;
+    }, null, { timeout: 90000 });
+    await sleep(800);
+
+    const lotGrid = await page.evaluate(() => {
+      const images = window.viewer.currentGridImages || [];
+      const uniqueKeys = Array.from(new Set(images.map(path => {
+        const file = String(path || '').replace(/\\/g, '/').split('/').pop() || '';
+        const parts = file.replace(/\.[^.]+$/, '').split('_');
+        return `${(parts[0] || '').toLowerCase()}:${(parts[2] || '').toLowerCase()}`;
+      })));
+      return {
+        activeRole: window.viewer.pageManager?.getActivePage?.()?.role || null,
+        pageCount: window.viewer.pageManager?.pages?.length || 0,
+        gridMode: window.viewer.gridMode,
+        images,
+        count: images.length,
+        uniqueKeys,
+        wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+      };
+    });
+    expect(lotGrid.pageCount === singleMenu.before.pageCount + 1, `lot grid tab was not created: before=${JSON.stringify(singleMenu.before)} after=${JSON.stringify(lotGrid)}`);
+    expect(lotGrid.activeRole === 'wafer' && lotGrid.gridMode === true, `lot view should be wafer grid: ${JSON.stringify(lotGrid)}`);
+    expect(lotGrid.count === lotGrid.uniqueKeys.length, `lot results should be lot/wafer deduped: ${JSON.stringify(lotGrid)}`);
+    expect(!lotGrid.images.some(path => /classification_chips|obj_id_maps/i.test(path)), `derived path in lot results: ${JSON.stringify(lotGrid)}`);
+
+    return {
+      annotationAvgMs: data.annotationAvgMs,
+      annotationTimings: data.annotationTimings,
+      lookupMs: data.lookupMs,
+      markedCount: data.markedCount,
+      waferPath: data.waferLookup.wafer_path,
+      waferKey: data.waferLookup.wafer_key,
+      gridMenu,
+      gridMenuAfterRightClick,
+      waferGrid,
+      waferSinglePanel,
+      legendBefore,
+      legendSizing,
+      transformBeforeLegendDrag,
+      transformAfterLegendDrag,
+      shiftDragState,
+      shiftClickRangeState,
+      ctrlDragState,
+      ctrlShiftDragState,
+      ctrlShiftChipDragState,
+      overlayInteriorCheck,
+      overlayZoomConsistency,
+      personalizedZoomState,
+      singleMenu,
+      singleMenuAfterRightClick,
+      chipSinglePanel,
+      lotGrid,
+    };
   });
 
   console.log(JSON.stringify(results, null, 2));
