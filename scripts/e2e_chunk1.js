@@ -1708,31 +1708,63 @@ const { createRunner } = require('./e2e_playwright_session');
     const overlayInteriorCheck = await page.evaluate(() => {
       const v = window.viewer;
       const ca = v.chipAnnotator;
+      ca.clearSelection?.(false);
+      ca.hoveredChip = null;
+      ca._tempDragSelection = null;
+      ca.shiftClickPos = null;
+      ca.dragStartChip = null;
+      ca.ctrlClickStartPos = null;
+      ca.clickStartPos = null;
       ca.render();
       const active = ca.legendFilterClasses instanceof Set ? ca.legendFilterClasses : null;
-      const marked = (ca.markedChips || []).find((chip) => !active || active.has(chip.class || chip.label));
-      if (!marked) return { ok: false, reason: 'active marked chip missing' };
-      const chip = (ca.chips || []).find((candidate) =>
-        candidate && candidate.x_abs === marked.x_abs && candidate.y_abs === marked.y_abs
-      );
-      if (!chip || !chip.rect) return { ok: false, reason: 'chip rect missing', marked };
-
       const transform = v.transform;
       const yOffset = ca.Y_OFFSET || 0;
-      const left = chip.rect.x0 * transform.scale + transform.dx;
-      const top = chip.rect.y0 * transform.scale + transform.dy + yOffset;
-      const right = chip.rect.x1 * transform.scale + transform.dx;
-      const bottom = chip.rect.y1 * transform.scale + transform.dy + yOffset;
-      const inset = Math.min(
-        Math.abs(right - left) / 2,
-        Math.abs(bottom - top) / 2,
-        Math.max(1, transform.scale)
-      );
       const clamp = (value, max) => Math.max(0, Math.min(max - 1, Math.round(value)));
-      const insideX = clamp(Math.ceil(left + inset) + 1, ca.canvas.width);
-      const insideY = clamp(Math.ceil(top + inset) + 1, ca.canvas.height);
-      const boundaryX = clamp(Math.floor(left), ca.canvas.width);
-      const boundaryY = clamp(Math.floor(top + Math.min(inset, Math.abs(bottom - top) / 2)), ca.canvas.height);
+      const samplePointsForChip = (chip) => {
+        const left = chip.rect.x0 * transform.scale + transform.dx;
+        const top = chip.rect.y0 * transform.scale + transform.dy + yOffset;
+        const right = chip.rect.x1 * transform.scale + transform.dx;
+        const bottom = chip.rect.y1 * transform.scale + transform.dy + yOffset;
+        const inset = Math.min(
+          Math.abs(right - left) / 2,
+          Math.abs(bottom - top) / 2,
+          Math.max(1, transform.scale)
+        );
+        const insideX = Math.ceil(left + inset) + 1;
+        const insideY = Math.ceil(top + inset) + 1;
+        const boundaryX = Math.floor(left);
+        const boundaryY = Math.floor(top + Math.min(inset, Math.abs(bottom - top) / 2));
+        const pointsInCanvas =
+          insideX >= 0 && insideX < ca.canvas.width &&
+          insideY >= 0 && insideY < ca.canvas.height &&
+          boundaryX >= 0 && boundaryX < ca.canvas.width &&
+          boundaryY >= 0 && boundaryY < ca.canvas.height &&
+          (insideX !== boundaryX || insideY !== boundaryY);
+        return {
+          pointsInCanvas,
+          insideX: clamp(insideX, ca.canvas.width),
+          insideY: clamp(insideY, ca.canvas.height),
+          boundaryX: clamp(boundaryX, ca.canvas.width),
+          boundaryY: clamp(boundaryY, ca.canvas.height),
+          rect: { left, top, right, bottom, inset },
+        };
+      };
+
+      const markedEntries = (ca.markedChips || [])
+        .filter((markedChip) => !active || active.has(markedChip.class || markedChip.label))
+        .map((markedChip) => {
+          const chip = (ca.chips || []).find((candidate) =>
+            candidate && candidate.x_abs === markedChip.x_abs && candidate.y_abs === markedChip.y_abs
+          );
+          return { marked: markedChip, chip, sample: chip?.rect ? samplePointsForChip(chip) : null };
+        });
+      const entry = markedEntries.find((item) => item.chip && item.sample?.pointsInCanvas);
+      const marked = entry?.marked;
+      if (!marked) return { ok: false, reason: 'active marked chip missing' };
+      const chip = entry?.chip;
+      if (!chip || !chip.rect) return { ok: false, reason: 'chip rect missing', marked };
+
+      const { insideX, insideY, boundaryX, boundaryY, rect } = entry.sample;
       const insideAlpha = ca.ctx.getImageData(insideX, insideY, 1, 1).data[3];
       const boundaryAlpha = ca.ctx.getImageData(boundaryX, boundaryY, 1, 1).data[3];
       return {
@@ -1740,10 +1772,11 @@ const { createRunner } = require('./e2e_playwright_session');
         overlayAlpha: ca.chipLabelOverlayAlpha,
         active: active ? Array.from(active) : null,
         markedClass: marked.class || marked.label,
+        markedChip: { x_abs: marked.x_abs, y_abs: marked.y_abs },
         insideAlpha,
         boundaryAlpha,
         points: { insideX, insideY, boundaryX, boundaryY },
-        rect: { left, top, right, bottom, inset },
+        rect,
       };
     });
     expect(overlayInteriorCheck.ok, `chip label overlay check setup failed: ${JSON.stringify(overlayInteriorCheck)}`);
