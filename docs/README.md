@@ -25,6 +25,7 @@
 
 | 문서 | 설명 |
 |------|------|
+| [TECHNICAL_OVERVIEW.md](TECHNICAL_OVERVIEW.md) | Frontend/Backend/Search 전체 기술 구성 요약 |
 | [API_REFERENCE.md](API_REFERENCE.md) | 전체 API 엔드포인트 목록 (100+) |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | 개발 가이드, 프로젝트 구조, 코드 스타일, 엔드포인트 추가 방법 |
 | [PERFORMANCE.md](PERFORMANCE.md) | 런타임 기준 성능/캐시/워커/압축 동작 |

@@ -99,6 +99,7 @@ python -m api.main                # HTTPS 서버 (기본 포트 8443)
 | 문서 | 설명 |
 |------|------|
 | [docs/README.md](docs/README.md) | 문서 인덱스 |
+| [docs/TECHNICAL_OVERVIEW.md](docs/TECHNICAL_OVERVIEW.md) | Frontend/Backend/Search 전체 기술 구성 요약 |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 개발 가이드, 프로젝트 구조, 코드 스타일 |
 | [docs/API_REFERENCE.md](docs/API_REFERENCE.md) | 전체 API 엔드포인트 목록 |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | 문제 진단 및 배포 점검 |
