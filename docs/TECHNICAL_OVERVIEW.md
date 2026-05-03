@@ -12,7 +12,7 @@ L3 Tracker는 대용량 반도체 wafer map 이미지를 빠르게 탐색하고,
 | Rendering | Canvas 2D + WebGL2 지원 renderer | wafer map 확대/축소, overlay, minimap, chip annotation을 canvas 기반으로 처리합니다. |
 | Backend | Python + FastAPI/Starlette + Uvicorn HTTPS | 첫 화면은 가벼운 bootstrap 서버가 처리하고, 전체 기능은 FastAPI app을 lazy-load해서 제공합니다. |
 | Image Processing | pyvips, Pillow, TurboJPEG 옵션 | 썸네일, 피라미드 이미지, palette 색상 변경, composite 결과 생성을 서버에서 처리합니다. |
-| Search | File index + SearchService | 이미지 폴더 전체를 매번 스캔하지 않고 인덱스 캐시를 만들어 LOT/파일명 검색을 빠르게 처리합니다. |
+| Search | Custom Python file index | Elasticsearch/DB 없이 파일 경로 인덱스 캐시를 만들어 LOT/파일명 검색을 빠르게 처리합니다. |
 | Storage | File system + JSON | 이미지, thumbnail/cache, 사용자 색상, 권한, 로그를 파일 시스템 중심으로 관리합니다. |
 | Runtime | 단일 Uvicorn worker + 내부 worker pool | 서버 프로세스는 하나로 유지하고, 썸네일/검색/Composite 작업만 내부 worker로 병렬 처리합니다. |
 
