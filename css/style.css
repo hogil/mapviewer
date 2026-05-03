@@ -2566,12 +2566,12 @@
 
         .chip-label-legend {
             position: relative;
-            width: 224px; /* 264px에서 15% 축소, 좌측 기준선은 유지 */
+            width: 180px; /* 224px 기준 80% */
             max-height: 250px;
             display: none;
             flex-direction: column;
-            gap: 8px;
-            padding: 10px;
+            gap: 7px;
+            padding: 9px;
             border-radius: 6px;
             border: 1px solid rgba(255, 255, 255, 0.08);
             background-color: rgba(24, 24, 24, 0.9);
@@ -2592,11 +2592,32 @@
             text-transform: uppercase;
         }
 
+        .chip-label-legend__title-row {
+            display: flex;
+            align-items: center;
+            min-width: 0;
+        }
+
+        .chip-label-legend__toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+            cursor: pointer;
+        }
+
+        .chip-label-legend__toggle input {
+            width: 13px;
+            height: 13px;
+            margin: 0;
+            flex: 0 0 auto;
+        }
+
         .chip-label-pill {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 6px 10px;
+            padding: 6px 8px;
             border-radius: 6px;
             border: 1px solid rgba(255, 255, 255, 0.12);
             background: rgba(255, 255, 255, 0.04);
@@ -2605,6 +2626,10 @@
             cursor: pointer;
             transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
             user-select: none;
+        }
+
+        .chip-label-legend__title-row + .chip-label-pill {
+            margin-top: 3px;
         }
 
         .chip-label-pill:hover {
@@ -2625,6 +2650,9 @@
             font-weight: 500;
             color: var(--text-color);
             text-align: left;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .chip-label-pill__count {

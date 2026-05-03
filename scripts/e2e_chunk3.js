@@ -20,6 +20,7 @@ const { createRunner } = require('./e2e_playwright_session');
     process.env.IMAGES_ROOT || (process.platform === 'win32' ? 'D:/project/data/wm-811k' : '/appdata/appuser/images')
   );
   const compositeInputCacheDir = path.join(imagesRoot, 'composite_cache_v1');
+  const E2E_UNKNOWN_LABEL_CLASSES = ['e2e_unknown_label', 'e2e_unknown_label_alt'];
   const COMPOSITE_E2E_TIMEOUT_MS = 90000;
   const PHASE_61_62_SUMMARY_FILE = 'cold-start-summary.json';
 
@@ -97,45 +98,129 @@ const { createRunner } = require('./e2e_playwright_session');
     await sleep(1200);
   }
 
-  async function getPrimaryLabelClass() {
-    return await page.evaluate(async () => {
-      const readDomClasses = () =>
-        Array.from(document.querySelectorAll('.label-explorer-frame li > div'))
-          .map((el) => (el.textContent || '').replace(/[▸▾]/g, '').trim())
-          .filter(Boolean)
-          .filter((value, index, arr) => arr.indexOf(value) === index);
-
-      const pickClass = (classes) => {
-        if (!Array.isArray(classes) || classes.length === 0) return null;
-        return classes.includes('test') ? 'test' : classes[0];
+  async function ensureUnknownWaferLabelClasses() {
+    return await page.evaluate(async ({ imagesRoot, classNames }) => {
+      const jsonRequest = async (url, options = {}) => {
+        const headers = { ...(options.headers || {}) };
+        if (options.body && !headers['Content-Type']) {
+          headers['Content-Type'] = 'application/json';
+        }
+        const response = await fetch(url, {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          ...options,
+          headers,
+        });
+        const text = await response.text();
+        let body = {};
+        try {
+          body = text ? JSON.parse(text) : {};
+        } catch (_) {
+          body = { raw: text };
+        }
+        if (!response.ok || body.success === false) {
+          throw new Error(`${url} status=${response.status} body=${JSON.stringify(body).slice(0, 500)}`);
+        }
+        return body;
       };
 
-      for (let attempt = 0; attempt < 12; attempt += 1) {
-        const domClass = pickClass(readDomClasses());
-        if (domClass) return domClass;
+      await jsonRequest('/api/change-folder', {
+        method: 'POST',
+        body: JSON.stringify({ path: imagesRoot }),
+      });
 
-        try {
-          const classes = await window.viewer?.getClassList?.(true);
-          const className = pickClass(classes);
-          if (className) {
-            await window.viewer?.refreshLabelExplorer?.();
-            return className;
-          }
-        } catch (_) {
-        }
+      await fetch('/api/classes/delete?mode=wafer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ names: classNames }),
+        cache: 'no-store',
+        credentials: 'same-origin',
+      }).catch(() => null);
 
-        try {
-          const response = await fetch('/api/classes?mode=wafer', { cache: 'no-store' });
-          const data = await response.json();
-          const className = pickClass(data?.classes);
-          if (className) return className;
-        } catch (_) {
-        }
+      const recursive = await jsonRequest('/api/files/recursive?path=unknown&limit=5000');
+      const supported = /\.(png|jpe?g|bmp|webp|tif|tiff)$/i;
+      const blockedParts = new Set([
+        'classification',
+        'classification_chips',
+        'chips',
+        'thumbnails',
+        'composite_map',
+        'my-lot',
+      ]);
+      const files = (recursive.files || [])
+        .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+        .filter((imagePath) => imagePath.startsWith('unknown/') && supported.test(imagePath))
+        .filter((imagePath) => !imagePath.split('/').some((part) => blockedParts.has(part)))
+        .filter((value, index, arr) => arr.indexOf(value) === index);
 
-        await new Promise((resolve) => setTimeout(resolve, 400));
+      const preferredLots = ['AAU220', 'ABM792', 'AAV489', 'AAD534', 'AAI158', 'AAI216'];
+      const ordered = [];
+      const pushUnique = (imagePath) => {
+        if (imagePath && !ordered.includes(imagePath)) ordered.push(imagePath);
+      };
+      for (const lot of preferredLots) {
+        const found = files.find((imagePath) =>
+          (imagePath.split('/').pop() || '').toUpperCase().startsWith(`${lot}_`)
+        );
+        pushUnique(found);
       }
-      return null;
-    });
+      for (const imagePath of files) {
+        pushUnique(imagePath);
+      }
+      if (ordered.length < 4) {
+        throw new Error(`unknown label fixtures too small: ${JSON.stringify({ total: files.length, ordered })}`);
+      }
+
+      const primaryImages = ordered.slice(0, Math.min(6, ordered.length));
+      const secondaryImages = ordered.slice(primaryImages.length, primaryImages.length + 6);
+      while (secondaryImages.length < Math.min(3, ordered.length)) {
+        secondaryImages.push(ordered[secondaryImages.length]);
+      }
+
+      const seeded = [];
+      for (const [index, className] of classNames.entries()) {
+        const createResponse = await fetch('/api/classes?mode=wafer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: className }),
+          cache: 'no-store',
+          credentials: 'same-origin',
+        });
+        if (!createResponse.ok && createResponse.status !== 409) {
+          const body = await createResponse.text();
+          throw new Error(`/api/classes create ${className} status=${createResponse.status} body=${body.slice(0, 500)}`);
+        }
+
+        const images = index === 0 ? primaryImages : secondaryImages;
+        const batch = await jsonRequest('/api/classify/batch?mode=wafer', {
+          method: 'POST',
+          body: JSON.stringify({ images, class_name: className, mode: 'wafer' }),
+        });
+        if ((batch.processed || 0) < images.length || batch.errors) {
+          throw new Error(`classify ${className} incomplete: ${JSON.stringify(batch).slice(0, 500)}`);
+        }
+        seeded.push({ className, sourceImages: images, results: batch.results || [] });
+      }
+
+      await window.viewer?.refreshLabelExplorer?.();
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const classList = await jsonRequest('/api/classes?mode=wafer');
+      const missing = classNames.filter((className) => !(classList.classes || []).includes(className));
+      if (missing.length) {
+        throw new Error(`seeded unknown classes missing: ${JSON.stringify({ missing, classList })}`);
+      }
+      return {
+        primaryClass: classNames[0],
+        secondaryClass: classNames[1],
+        seeded,
+        classes: classList.classes || [],
+      };
+    }, { imagesRoot, classNames: E2E_UNKNOWN_LABEL_CLASSES });
+  }
+
+  async function getPrimaryLabelClass() {
+    const data = await ensureUnknownWaferLabelClasses();
+    return data.primaryClass;
   }
 
   async function record(phase, name, fn) {
@@ -1613,14 +1698,14 @@ const { createRunner } = require('./e2e_playwright_session');
 
   await record('43,44,49,50,57,60', 'Label Explorer / WF search / classification consistency', async () => {
     await boot('chunk3-label');
-    const labelData = await page.evaluate(async () => {
+    const labelSeed = await ensureUnknownWaferLabelClasses();
+    const labelData = await page.evaluate(async ({ primaryClass, secondaryClass }) => {
       const classNames = Array.from(
         document.querySelectorAll('.label-explorer-frame li > div')
       )
         .map((el) => (el.textContent || '').replace(/[▸▾]/g, '').trim())
         .filter(Boolean);
       const uniqueClasses = Array.from(new Set(classNames));
-      const primaryClass = uniqueClasses[0] || null;
       if (!primaryClass) {
         return {
           classes: [],
@@ -1635,16 +1720,19 @@ const { createRunner } = require('./e2e_playwright_session');
       const single = {
         count: window.viewer.currentGridImages.length,
         wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+        images: (window.viewer.currentGridImages || []).slice(0, 12),
       };
 
       let multi = null;
-      if (uniqueClasses.length > 1) {
-        await window.viewer.showGridFromMultipleClasses(uniqueClasses.slice(0, 2));
+      if (secondaryClass) {
+        const targetClasses = [primaryClass, secondaryClass];
+        await window.viewer.showGridFromMultipleClasses(targetClasses);
         await new Promise((r) => setTimeout(r, 1200));
         multi = {
           count: window.viewer.currentGridImages.length,
           wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
-          classes: uniqueClasses.slice(0, 2),
+          classes: targetClasses,
+          images: (window.viewer.currentGridImages || []).slice(0, 12),
         };
       }
 
@@ -1654,7 +1742,7 @@ const { createRunner } = require('./e2e_playwright_session');
         single,
         multi,
       };
-    });
+    }, labelSeed);
 
     await page.evaluate(async () => {
       if (!window.viewer.lotMode) {
@@ -1672,9 +1760,7 @@ const { createRunner } = require('./e2e_playwright_session');
     const wfVisible = await visible('#wf-search-modal');
 
     await boot('chunk3-label-clear');
-    const labelClearTarget = labelData.classes.includes('test')
-      ? 'test'
-      : labelData.primaryClass;
+    const labelClearTarget = await getPrimaryLabelClass();
     const targetFolder = page
       .locator('.label-explorer-frame li > div')
       .filter({ hasText: labelClearTarget })
@@ -1729,11 +1815,22 @@ const { createRunner } = require('./e2e_playwright_session');
     });
 
     expect(labelData.primaryClass, `label classes=${JSON.stringify(labelData.classes)}`);
+    expect(labelData.primaryClass === labelSeed.primaryClass, `label primary should use seeded unknown class=${JSON.stringify({ labelData, labelSeed })}`);
     expect(labelData.single.count > 0, `label single=${JSON.stringify(labelData.single)}`);
     expect(labelData.single.wraps > 0, `label single wraps=${JSON.stringify(labelData.single)}`);
+    expect(
+      labelData.single.images.every((imagePath) =>
+        String(imagePath || '').replace(/\\/g, '/').includes(`classification/${labelSeed.primaryClass}/`)
+      ),
+      `label single used non-e2e class images=${JSON.stringify(labelData.single)}`
+    );
     if (labelData.multi) {
       expect(labelData.multi.count >= labelData.single.count, `label multi=${JSON.stringify(labelData.multi)}`);
       expect(labelData.multi.wraps > 0, `label multi wraps=${JSON.stringify(labelData.multi)}`);
+      expect(
+        labelData.multi.classes.every((className) => E2E_UNKNOWN_LABEL_CLASSES.includes(className)),
+        `label multi used non-e2e classes=${JSON.stringify(labelData.multi)}`
+      );
     }
     expect(labelBefore.role === 'label', `label role=${labelBefore.role}`);
     expect(labelBefore.lotMode === true, `label lotMode=${labelBefore.lotMode}`);
@@ -1754,6 +1851,7 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(labelScrollReset.wraps > 0, `label scroll wraps=${labelScrollReset.wraps}`);
     expect(labelScrollReset.scrollTop < 40, `label scrollTop=${labelScrollReset.scrollTop}`);
     return {
+      labelSeed,
       ...labelData,
       labelClearTarget,
       labelBefore,

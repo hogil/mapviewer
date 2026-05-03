@@ -1,6 +1,6 @@
 ---
 name: e2e-test
-description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 63개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증, Measure 색상 미리보기/적용 회귀, HTTP 캐시 무효화 검증, Composite 색상 매핑/배경 행 제거 검증, Measure 첫 진입 지연/폴더 stale state 회귀, Label Explorer flat-grid 강제 및 positions 없는 palette/PNF 이미지 즉시 로드 회귀, 검색 첫 실행/다중검색/이벤트루프 블로킹 회귀, 서버 Cold Start 즉시 로딩 속도, 탭 다중 전환 이미지 보존, f/q missing 이미지 그리드 로드 검증, classification 인덱스 즉시 일관성 검증, 썸네일 캐시 삭제 후 첫 palette_3k 그리드 즉시 로딩 검증, [CRITICAL] Cold Start 3단계 분절 성능 측정(페이지 로드→폴더 확장→그리드 viewport), JS 모듈 그래프/worker 캐시 무효화 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
+description: "L3 Tracker 전체 기능 E2E 테스트 (Playwright 브라우저 자동화). 63개 Phase로 페이지 로드, 그리드, 검색/필터, 색상, 범례, LOT Mode, Class Manager, Composite, Ref Map, Measure, MY LOT, 단일 이미지 모드, Page Manager, Thumbnail Navigator, Minimap, 다중검색, 권한 관리, 컨텍스트 메뉴 복사/다운로드, 키보드 단축키, 그리드 상태 복구 안정성, 그리드↔단일 이미지 전환 스크롤/로딩 안정성, Measure 다중선택 사이드바이사이드, 성능 벤치마크, 이미지 무결성 검증, Measure Map Navigator 전환, Subset Composite Map 검증, Measure 드롭다운 통합+이미지 중복 방지, 다중 Measure 더블클릭 Navigator overlay 타입 보존, Chip Label Explorer CRUD+캐시+속도 검증, Measure 색상 미리보기/적용 회귀, HTTP 캐시 무효화 검증, Composite 색상 매핑/배경 행 제거 검증, Measure 첫 진입 지연/폴더 stale state 회귀, Label Explorer flat-grid 강제 및 positions 없는 unknown/PNF 이미지 즉시 로드 회귀, 검색 첫 실행/다중검색/이벤트루프 블로킹 회귀, 서버 Cold Start 즉시 로딩 속도, 탭 다중 전환 이미지 보존, f/q missing 이미지 그리드 로드 검증, classification 인덱스 즉시 일관성 검증, 썸네일 캐시 삭제 후 첫 unknown 그리드 즉시 로딩 검증, [CRITICAL] Cold Start 3단계 분절 성능 측정(페이지 로드→폴더 확장→그리드 viewport), JS 모듈 그래프/worker 캐시 무효화 검증을 자동 점검한다. '/e2e-test', 'E2E 테스트', '전체 테스트', '기능 테스트 돌려줘' 등의 요청에 반응한다."
 argument-hint: [Phase 번호 또는 범위]
 ---
 
@@ -213,7 +213,7 @@ powershell -ExecutionPolicy Bypass -File scripts/open-e2e-browser.ps1
 
 ### Step 0-3: 테스트 데이터 확인
 - 테스트 데이터 폴더: `unknown` (실제 failbit map 기준 폴더)
-- 전체 E2E runner의 폴더 기반 UI 검증은 예외 없이 `unknown` 폴더를 사용한다. `palette_3k`, `palette_5mb`, `filter_test`, `fq_missing_test` 같은 레거시/합성 폴더는 사용자가 명시적으로 해당 폴더 검증을 요청한 경우에만 별도 테스트로 사용한다.
+- 전체 E2E runner의 폴더 기반 UI 검증은 예외 없이 `unknown` 폴더를 사용한다. `unknown` 외 레거시/합성 폴더는 사용자가 명시적으로 해당 폴더 검증을 요청한 경우에만 별도 테스트로 사용한다.
 - **`unknown` 폴더는 failbit/bin/measure/composite 시각 검증의 기본 기준이다.** `unknown` 루트는 하위 패턴 폴더를 포함하므로 E2E에서는 일반 `/api/files` 단일 depth가 아니라 실제 UI의 Ctrl+폴더 선택 경로처럼 재귀 스캔(`/api/files/recursive`)으로 이미지를 로드해야 한다.
 - 그리드 선택 → 단일 이미지 보기, reference map, label modal, composite, measure, MyLot, 성능/캐시 검증은 기본적으로 `unknown` 폴더 이미지를 사용한다.
 - 전역 검색 검증은 `folder=`를 명시해 ROOT 전체 검색으로 실행하고, `unknown` LOT 검색 결과가 `unknown/...` 이미지로 반환되는지 확인한다. 이 검증은 `folder=unknown` 같은 폴더 범위 제한 검색으로 대체하지 않는다.
@@ -230,10 +230,10 @@ powershell -ExecutionPolicy Bypass -File scripts/open-e2e-browser.ps1
 
 3. **테스트 이미지 규격**:
    - 해상도: 최소 6000×6000 pixels (현재 6912×6912, scale=3)
-   - palette_5mb: 파일명대로 5~30MB (PNG padding chunk)
+   - unknown: 파일명대로 5~30MB (PNG padding chunk)
    - Grade: 0~7 각각 chip 전체의 5%+ 점유, 각 chip 내부 pixel의 95%+ 단일 grade
    - BIN: 285~291 + Normal + Invalid 등 다양한 BIN이 이미지마다 존재
-   - chip 테두리: BIN에 따른 palette index (Normal=10, Invalid=11, BIN별 12~23)
+   - chip 테두리: BIN에 따른 indexed-color index (Normal=10, Invalid=11, BIN별 12~23)
 
 ### Positions 파일 양식 (compact_array 포맷)
 
@@ -242,7 +242,7 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 
 ```json
 {
-  "bucket_b_key": "20260122/wafer_palette_5mb_PE_Engineer.gz",
+  "bucket_b_key": "20260122/wafer_unknown_PE_Engineer.gz",
   "root": "LOTBIG05",        // LOT ID
   "step": "S01",
   "wafer": "W06",
@@ -298,8 +298,8 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 **데이터 규모 (테스트 환경)**:
 | 폴더 | 파일 수 | chips/파일 | ftn_keys | qtn_keys | 파일 크기 |
 |------|---------|-----------|----------|----------|----------|
-| palette_3k | 3000 | 384 | 500 | 500 | ~1.9MB |
-| palette_5mb | 6 | 812 | 500 | 500 | ~4MB |
+| unknown | 3000 | 384 | 500 | 500 | ~1.9MB |
+| unknown | 6 | 812 | 500 | 500 | ~4MB |
 
 > **참고**: 이후 모든 Phase에서 `https://localhost/` 대신 `BASE_URL`을 사용합니다.
 
@@ -337,8 +337,8 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 - 서버 readiness 확인은 **TCP listen 확인만 허용**한다. `/`, `/api/index-status`, `/api/config` 같은 HTTP readiness 요청을 브라우저 접속 전에 보내면 FAIL이다.
 - 첫 HTTP 요청은 반드시 Playwright 브라우저의 첫 `GET /` 이어야 한다. 이 규칙이 깨지면 strict cold 결과로 인정하지 않는다.
 - 브라우저 쪽은 **새 컨텍스트 + HTTP cache / cookie clear**를 사용한다.
-- `page load`, `folder list`, `palette_3k list`, `files/recursive`, `first viewport thumb`, `browser total`, `server start -> folder list`, `server start -> grid`를 분리해서 기록한다. 하나의 합산값만 남기면 병목 위치를 놓친다.
-- 폴더 목록이 보이자마자 `palette_3k`를 클릭하고, 파일 리스트가 보이자마자 지연 없이 `Ctrl+click`으로 그리드 진입한다. 중간 `sleep`/`waitForTimeout`으로 시간을 소비하면 FAIL이다.
+- `page load`, `folder list`, `unknown list`, `files/recursive`, `first viewport thumb`, `browser total`, `server start -> folder list`, `server start -> grid`를 분리해서 기록한다. 하나의 합산값만 남기면 병목 위치를 놓친다.
+- 폴더 목록이 보이자마자 `unknown`를 클릭하고, 파일 리스트가 보이자마자 지연 없이 `Ctrl+click`으로 그리드 진입한다. 중간 `sleep`/`waitForTimeout`으로 시간을 소비하면 FAIL이다.
 - 최소 3회 반복하고 median을 권위 기록으로 남긴다. 단, 단 1회라도 fail threshold를 넘기면 전체 Phase는 FAIL이다.
 
 ## Reset / 선택 해제 평가 방법
@@ -409,7 +409,7 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 **평가 항목**:
 
 #### 2-1. 기본 그리드 로드
-1. `v.loadImagesInFolderAndShowGrid('palette_3k')` → `v.currentGridImages.length === 3000`
+1. `v.loadImagesInFolderAndShowGrid('unknown')` → `v.currentGridImages.length === 3000`
 2. `#image-grid`에 `.grid-thumb-wrap` 요소 존재 (가상 스크롤이므로 전체 3000개는 아닐 수 있음)
 3. 첫 번째 이미지의 `<img>` 태그 `complete === true`, `naturalWidth > 0`
 
@@ -421,7 +421,7 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 1. `#grid-select-all` 클릭 → `v.gridSelectedIdxs.length === 3000`, `v.gridSelectedSet.size === 3000`
 2. `#grid-deselect-all` 클릭 → `v.gridSelectedIdxs.length === 0`, `v.gridSelectedSet.size === 0`
 
-#### 2-4. 스크롤 성능 (palette_3k, 3000장)
+#### 2-4. 스크롤 성능 (unknown, 3000장)
 1. 스크롤 래퍼 찾기: `document.querySelector('.viewer-scroll-wrapper')` 또는 `#image-grid`의 parentElement
 2. `wrapper.scrollTop = wrapper.scrollHeight` (맨 아래로 즉시 스크롤)
 3. 500ms 대기 후 뷰포트 내 보이는 이미지 확인:
@@ -436,25 +436,25 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 5. 추가 500ms 대기 후 다시 측정 → 100% 로드 확인
 6. 스크롤을 중간 지점 (`scrollHeight / 2`)으로 이동 → 동일 측정 반복
 
-#### 2-5. 스크롤 성능 (palette_5mb, 대용량)
-1. `v.loadImagesInFolderAndShowGrid('palette_5mb')` → 폴더 로드 확인
+#### 2-5. 스크롤 성능 (unknown, 대용량)
+1. `v.loadImagesInFolderAndShowGrid('unknown')` → 폴더 로드 확인
 2. 맨 아래 스크롤 → 500ms 후 이미지 로드율 측정
-3. 다시 `palette_3k`로 전환 → 캐시 히트로 즉시 로드 확인 (로드율 95%+)
+3. 다시 `unknown`로 전환 → 캐시 히트로 즉시 로드 확인 (로드율 95%+)
 
 #### 2-6. 여러 폴더 전환
-1. `wafer_folder` 로드 → `v.currentGridImages` 내용이 이전 폴더와 다른지 확인
-2. `wafer_edge_ring` 로드 → 동일 확인
-3. `palette_3k` 로드 → 복귀 확인
+1. `unknown` 로드 → `v.currentGridImages` 내용이 이전 폴더와 다른지 확인
+2. `unknown` 로드 → 동일 확인
+3. `unknown` 로드 → 복귀 확인
 4. 각 전환 시 이전 폴더 이미지가 그리드에 남아있지 않은지 확인
    - `#image-grid img[src*="이전폴더명"]` → length === 0
 
 **스크린샷**: 맨 아래 스크롤 후 그리드 상태
 
-#### 2-7. 그리드 정렬 (`sort_test` 폴더, 12장)
+#### 2-7. 그리드 정렬 (`unknown` 폴더, 12장)
 파일명 형식: `{root}_{step}_{wafer}_{date}_{time}_{yield}_{sys}.png`
 (인덱스: 0=LOT, 1=step, 2=wafer, 3=date, 4=time, 5=yield, 6=sys)
 
-1. `v.loadImagesInFolderAndShowGrid('sort_test')` → 12개 이미지 로드 확인
+1. `v.loadImagesInFolderAndShowGrid('unknown')` → 12개 이미지 로드 확인
 2. **정렬 드롭다운 존재 확인**: `#grid-sort-select` 요소 존재, 7개 옵션 (파일명, LOT↑↓, Yield↑↓, Sys↑↓)
 3. **파일명 정렬** (기본값): 첫 이미지 파일명이 자연 정렬 순서 확인
 4. **LOT ↑ (오름차순)**:
@@ -479,7 +479,7 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 #### 2-8. LOT Mode + 정렬 연동
 LOT Mode 활성 상태에서 정렬 변경 시 LOT 그룹핑이 유지되고 그룹 내부 순서만 바뀌는지 확인.
 
-1. `v.loadImagesInFolderAndShowGrid('sort_test')` → LOT Mode ON 확인 (`#lot-mode-btn.active`)
+1. `v.loadImagesInFolderAndShowGrid('unknown')` → LOT Mode ON 확인 (`#lot-mode-btn.active`)
 2. LOT 그룹 헤더 존재 확인 (LOTA, LOTB, LOTC, LOTD 그룹)
 3. **LOT ↓ (내림차순)**: `lot_desc` 선택
    - LOT 그룹 순서: LOTD → LOTC → LOTB → LOTA (그룹 헤더 순서 확인)
@@ -504,8 +504,8 @@ LOT Mode 활성 상태에서 정렬 변경 시 LOT 그룹핑이 유지되고 그
 **평가 항목**:
 
 #### 3-1. 제품 검색
-1. 검색 입력창 `input[placeholder*="제품 검색"]`에 "palette" 입력
-2. 파일 탐색기에 "palette" 포함 폴더만 표시되는지 확인
+1. 검색 입력창 `input[placeholder*="제품 검색"]`에 "unknown" 입력
+2. 파일 탐색기에 "unknown" 포함 폴더만 표시되는지 확인
 3. 검색어 지우기 → 전체 폴더 복원
 
 #### 3-2. LOT/TEST/STEP 필터 — 전체 동작 라이프사이클
@@ -597,7 +597,7 @@ LOT Mode 활성 상태에서 정렬 변경 시 LOT 그룹핑이 유지되고 그
 필터는 `_applyFilterToExplorer()`로 DOM의 `<li>` 요소를 `display:none`/`''` 토글.
 API 재호출이나 innerHTML 교체가 **없어야** 한다 (폴더 닫힘 금지).
 
-1. 폴더 3개 열기: `palette_3k`, `palette_5mb`, `wafer_folder`
+1. 폴더 3개 열기: `unknown`, `unknown`, `unknown`
    - `details[open] > summary[data-path]` 로 열린 폴더 3개 확인
 2. TEST 필터에서 NORMAL 체크 (change 이벤트 발생)
 3. 필터 적용 후 확인:
@@ -606,10 +606,10 @@ API 재호출이나 innerHTML 교체가 **없어야** 한다 (폴더 닫힘 금�
    - 보이는 파일 수만 변경: `filter(a => a.closest('li')?.style.display !== 'none').length` < 전체
 4. 필터 해제 후에도 폴더 열림 상태 유지 확인
 
-#### 3-5. 필터 성능 — DOM show/hide 속도 (palette_3k, 3000파일)
+#### 3-5. 필터 성능 — DOM show/hide 속도 (unknown, 3000파일)
 메타 로드 후 필터 전환은 API 호출 없이 DOM만 조작하므로 즉시 반영되어야 한다.
 
-1. `palette_3k` 폴더에서 메타 로드 완료 확인 (`Object.keys(v.filterFileMetadata).length === 3000`)
+1. `unknown` 폴더에서 메타 로드 완료 확인 (`Object.keys(v.filterFileMetadata).length === 3000`)
 2. LOT=EE 적용:
    ```javascript
    v.filterLT = ['EE'];
@@ -655,11 +655,11 @@ API 재호출이나 innerHTML 교체가 **없어야** 한다 (폴더 닫힘 금�
 **서버 시작 흐름 (1회)**:
 ```
 1. 파일 인덱스 빌드 (100만개 파일명 스캔, 3.8초)
-   → 파일명 예: "palette_3k/wafer_0001_EE_Normal.png"
+   → 파일명 예: "unknown/wafer_0001_EE_Normal.png"
    → 파일명 안에 이미 LT=EE, TM=Normal이 들어있음
 
 2. 인덱스 완료 → 폴더별 캐시 자동 생성 (_FOLDER_FILES_CACHE)
-   → { "palette_3k": ["palette_3k/wafer_0001_EE_Normal.png", ...3000개] }
+   → { "unknown": ["unknown/wafer_0001_EE_Normal.png", ...3000개] }
    → 미리 정렬됨, dict[폴더명] O(1) 조회
 ```
 
@@ -685,7 +685,7 @@ API 재호출이나 innerHTML 교체가 **없어야** 한다 (폴더 닫힘 금�
 ```
 
 **운영 파일명 형식**: `{LOT}_{STEP}_{WAFER}_{stime}_{yield}_{sys}_{LT}_{TM}.png`
-예: `ABC123_00P_W01_20260122_022718_87.35_3.21_EE_Normal.png`
+예: `AAU220_00P_W01_20260122_022718_87.35_3.21_EE_Normal.png`
 → `rsplit("_", 2)` → `["..._3.21", "EE", "Normal"]` → LT=`EE`, TM=`Normal`
 
 **검증 항목**:
@@ -724,25 +724,25 @@ os.walk 디스크 순회 없이 즉시 반환.
 단순 문자열 검색(연산자 없음)은 timestamp 포함 전체 파일명에서 검색.
 
 ##### 3-12-1. and 연산자
-1. `ABC123 and 03` → 파일명에 "ABC123" 포함 AND "03" 포함 (timestamp 제거됨)
-   - timestamp의 "03"에 매칭되지 않음 확인
-2. `ABC123 and 00P and 03` → LOT, STEP, WAFER 3개 조건 AND
+1. `AAU220 and 13` → 파일명에 "AAU220" 포함 AND "13" 포함 (timestamp 제거됨)
+   - timestamp에 매칭되지 않고 실제 wafer 토큰에 매칭되는지 확인
+2. `AAU220 and 00P and 13` → LOT, STEP, WAFER 3개 조건 AND
 3. 결과 파일 수가 개별 검색보다 적은지 확인
 
 ##### 3-12-2. or 연산자
-1. `ABC123 or DEF456` → 둘 중 하나라도 포함된 파일
+1. `AAU220 or ABM792` → 둘 중 하나라도 포함된 파일
 2. 결과 파일 수가 개별 검색의 합과 같거나 적은지 확인 (중복 제거)
 
 ##### 3-12-3. not 연산자
-1. `ABC123 not 00C` → "ABC123" 포함하지만 "00C" 없는 파일
+1. `AAU220 not 00C` → "AAU220" 포함하지만 "00C" 없는 파일
 2. 결과에 "00C" 포함 파일이 없는지 확인
 
 ##### 3-12-4. () 그룹핑
-1. `(ABC123 or DEF456) and 03` → (ABC123 또는 DEF456) 이면서 03 포함
-2. 괄호 없이 `ABC123 or DEF456 and 03`과 결과가 다른지 확인 (우선순위)
+1. `(AAU220 or ABM792) and 13` → (AAU220 또는 ABM792) 이면서 13 포함
+2. 괄호 없이 `AAU220 or ABM792 and 13`과 결과가 다른지 확인 (우선순위)
 
 ##### 3-12-5. 단순 문자열 검색 (연산자 없음)
-1. `ABC123_00P_03` → 전체 파일명에서 부분 일치 (timestamp 포함)
+1. `AAU220_00P_13` → 전체 파일명에서 부분 일치 (timestamp 포함)
 2. `20260122` → 날짜로 검색 가능 (timestamp 제거 안 됨)
 3. `022718` → 시간으로 검색 가능
 
@@ -764,9 +764,9 @@ os.walk 디스크 순회 없이 즉시 반환.
 #### 3-15. 필터 적용 후 폴더 Ctrl+클릭 → 그리드에 필터 반영
 **핵심**: 탐색기에서 필터로 숨겨진 파일은 폴더 Ctrl+클릭 그리드에도 표시되지 않아야 한다.
 
-1. `filter_test` 폴더 열기 (10개 파일: 00P 5개 + 00C 5개)
+1. `unknown` 폴더 열기 (10개 파일: 00P 5개 + 00C 5개)
 2. STEP > PLH 체크 → 탐색기에 00P 파일 5개만 보임
-3. `filter_test` 폴더 Ctrl+클릭 (폴더 선택 → 그리드 표시)
+3. `unknown` 폴더 Ctrl+클릭 (폴더 선택 → 그리드 표시)
 4. **검증**: `v.currentGridImages`에 00P 파일만 포함 (5개)
 5. **검증**: 00C 파일(`LOT001_W01_00C.png` 등)이 그리드에 없음
 6. Reset 클릭 → 그리드 10개로 복원
@@ -774,7 +774,7 @@ os.walk 디스크 순회 없이 즉시 반환.
 #### 3-16. 그리드 활성 상태에서 필터 변경 → 그리드 동적 갱신
 **핵심**: 그리드가 표시된 상태에서 필터를 변경하면 그리드도 즉시 갱신되어야 한다.
 
-1. `filter_test` 폴더를 필터 없이 Ctrl+클릭 → 그리드 10개
+1. `unknown` 폴더를 필터 없이 Ctrl+클릭 → 그리드 10개
 2. STEP > PLH 체크 → **그리드가 00P 파일 5개로 줄어듦**
 3. STEP > PLC 추가 체크 → **그리드가 10개로 복원**
 4. STEP > PLH 해제 → **그리드가 00C 파일 5개만**
@@ -789,13 +789,13 @@ os.walk 디스크 순회 없이 즉시 반환.
 3. 페이지 새로고침 (`page.reload`)
 4. 5초 대기 후 `v.filterTM`, `v.filterSTEP` 확인 — 설정값 유지
 5. NORMAL 체크박스 checked 확인, PLH 체크박스 checked 확인
-6. `filter_test` 폴더 열기 → 00P 파일만 표시 (00C 숨김)
+6. `unknown` 폴더 열기 → 00P 파일만 표시 (00C 숨김)
 7. 폴더 Ctrl+클릭 → 그리드에 00P 파일만 표시
 
 #### 3-18. 필터 0건 시 상단 패널 유지 + 안내 메시지
 **핵심**: 폴더를 Ctrl+클릭했는데 필터로 이미지가 0건이면, 상단 패널(grid-controls)은 유지하고 안내 메시지를 표시해야 한다. `hideGrid()`가 호출되면 FAIL.
 
-1. `palette_3k` 폴더 Ctrl+클릭 → 3000개 그리드 표시 확인
+1. `unknown` 폴더 Ctrl+클릭 → 3000개 그리드 표시 확인
 2. 존재하지 않는 LOT 필터 적용 (`v.filterLT = ['NONEXISTENT']`)
 3. `await v._applyFilterToGrid()`
 4. **검증**: `v.gridMode === true` (그리드 모드 유지)
@@ -839,7 +839,7 @@ console.assert(v.selectedImages.length === 3000, 'images should restore');
 **배경 (개인색 아키텍처)**:
 - `personalizedColorEnabled = true` (항상 활성화, 체크박스 UI 숨김)
 - 프론트: `getPersonalizedParams()` → `&personalized=true&scheme=LoginId&_t=timestamp` URL 파라미터 추가
-- 서버: `/api/thumbnail`에서 `personalized=true&scheme=LoginId` 수신 → palette PNG의 PLTE 청크를 개인색으로 패치
+- 서버: `/api/thumbnail`에서 `personalized=true&scheme=LoginId` 수신 → indexed-color PNG의 PLTE 청크를 개인색으로 패치
 - 캐시: 서버 디스크 캐시 `thumbnails/{scheme}/` 하위, 프론트 `thumbnailManager.cache` Map
 - 색상 변경 시: 서버 `_invalidate_scheme_thumbnail_caches()` 디스크 삭제 + 프론트 `_personalizedColorCacheBuster` + `thumbnailManager.cache.clear()`
 
@@ -868,7 +868,7 @@ console.assert(v.selectedImages.length === 3000, 'images should restore');
 5. `v.colorLegends[scheme]`에 `background`, `top`, `bottom` 키 존재
 
 #### 4-3. 그리드 썸네일에 개인색 적용 확인
-1. palette_3k 그리드 로드
+1. unknown 그리드 로드
 2. 첫 번째 `<img>` src에 `personalized=true&scheme=` 포함 확인
 3. **pixel 검증**: 첫 번째 썸네일의 배경 픽셀(5,5)이 `colorLegends[scheme].background` RGB와 ±10 이내 일치
 4. **핵심**: 배경색이 default `#CCCCCC` `rgb(204,204,204)`가 아닌 개인 배경색
@@ -918,7 +918,7 @@ console.assert(v.selectedImages.length === 3000, 'images should restore');
 #### 5-1. Grade 범례 (Top Legend) — **pixel 필터**
 1. 그리드 모드에서 상단 범례 영역에 G0~G7 항목 존재 확인
    - `document.querySelectorAll('.top-legend-item, [data-grade]')` → length >= 8
-2. G0 클릭 → **pixel 필터 적용**: 해당 palette index(0)를 가진 pixel만 남기고, 나머지 Grade pixel은 Grade0 색상으로 변경하여 표시
+2. G0 클릭 → **pixel 필터 적용**: 해당 indexed-color index(0)를 가진 pixel만 남기고, 나머지 Grade pixel은 Grade0 색상으로 변경하여 표시
    - 서버 API `/api/image` 또는 `/api/thumbnail`에 `grade_filter` 파라미터 전달
    - 스크린샷으로 시각 확인 (선택 Grade만 원래 색, 나머지는 G0 색)
 3. G0 다시 클릭 → 필터 해제, 원래 이미지로 복원
@@ -1016,7 +1016,7 @@ Composite에서 Failbit이 아닌 모든 항목(BIN/FBT/QVL)은 gradient 범례�
 
 #### 6-3. `loadImagesInFolderAndShowGrid` 필터 적용
 1. `v.filterLT = ["PT"]` 설정
-2. `v.loadImagesInFolderAndShowGrid('palette_3k')` 호출
+2. `v.loadImagesInFolderAndShowGrid('unknown')` 호출
 3. `v.currentGridImages`에 PT 파일만 포함 확인
 4. 전체 3000개보다 적은 수 확인
 5. 필터 해제 후 재호출 → 3000개 전체 로드 확인
@@ -1044,7 +1044,7 @@ Composite에서 Failbit이 아닌 모든 항목(BIN/FBT/QVL)은 gradient 범례�
 4. 총 4개 e2e 클래스 존재 확인 (a, b, c, d)
 
 #### 7-3. Class 버튼 클릭으로 라벨 즉시 추가
-1. 원본 폴더(palette_3k)로 이동 → 이미지 5개 Ctrl+클릭 선택
+1. 원본 폴더(unknown)로 이동 → 이미지 5개 Ctrl+클릭 선택
 2. Fail List에서 "e2e_class_a" 버튼 직접 클릭
 3. alert "5 images successfully!" 확인 → `browser_handle_dialog(accept: true)`
 4. Label Explorer에서 "e2e_class_a" 아래 5개 이미지 확인
@@ -1076,8 +1076,8 @@ Composite에서 Failbit이 아닌 모든 항목(BIN/FBT/QVL)은 gradient 범례�
 3. Fail List에 e2e_ 접두사 클래스 모두 없음 확인
 4. Label Explorer에서도 모두 제거 확인
 
-#### 7-9. 기존 라벨 클래스 로드 (non-palette 이미지 폴백)
-기존에 라벨링된 클래스의 이미지가 RGBA/RGB 등 non-palette 포맷이어도 에러 없이 표시되는지 확인.
+#### 7-9. 기존 라벨 클래스 로드 (non-indexed-color 이미지 폴백)
+기존에 라벨링된 클래스의 이미지가 RGBA/RGB 등 non-indexed-color 포맷이어도 에러 없이 표시되는지 확인.
 1. Label Explorer에서 기존 클래스 폴더 클릭 (예: `afwefaw`) → 폴더 열림 확인
 2. 이미지 목록 표시 확인 (Center.png, Donut.png 등)
 3. **서버 생존 확인**: 폴더 열기 후 `/api/classes` 응답 200 확인
@@ -1085,12 +1085,12 @@ Composite에서 Failbit이 아닌 모든 항목(BIN/FBT/QVL)은 gradient 범례�
 5. Label Explorer에서 이미지 클릭 → 그리드에 해당 클래스 이미지만 표시
 6. **서버 생존 재확인**: 그리드 로드 후 `/api/classes` 응답 200 확인
 7. 이미지 더블클릭 → 단일 뷰 진입 (RGBA/RGB 이미지도 정상 렌더링)
-8. **범례**: non-palette 이미지는 Grade 범례가 비어있거나 기본값 표시 (에러 아님)
+8. **범례**: non-indexed-color 이미지는 Grade 범례가 비어있거나 기본값 표시 (에러 아님)
 9. ESC → 그리드 복귀
-- **핵심**: non-palette(RGBA/RGB) 이미지에 `personalized=true` 요청 시 서버가 죽지 않고 원본 이미지로 폴백
+- **핵심**: non-indexed-color(RGBA/RGB) 이미지에 `personalized=true` 요청 시 서버가 죽지 않고 원본 이미지로 폴백
 - **핵심**: positions JSON이 없는 이미지에서 chip annotator 에러가 발생하지 않음
 
-**pass 기준**: 단건/다중 추가 → 버튼 클릭 라벨 → Add Label 라벨 → 탐색 → 단일뷰 → 다중 삭제 → 기존 라벨 non-palette 로드 전체 성공
+**pass 기준**: 단건/다중 추가 → 버튼 클릭 라벨 → Add Label 라벨 → 탐색 → 단일뷰 → 다중 삭제 → 기존 라벨 non-indexed-color 로드 전체 성공
 
 #### 7-10. Label Explorer 단일/다중 선택 전환
 Label Explorer에서 이미지 클릭으로 단일 뷰/다중 그리드 전환이 정상 동작하는지 확인.
@@ -1127,7 +1127,7 @@ Ctrl+클릭으로 클래스 폴더를 선택한 뒤, 이미지 버튼 위에 마
 - **핵심**: `onmouseover`/`onmouseout`에서 `labelSelection.selectedClasses.includes(cls)` 체크로 클래스 선택 상태의 하이라이트 보호
 - **회귀 방지**: 수정 전에는 `labelSelection.selected`만 체크하여 클래스 폴더 선택 시 mouseout에서 `#222`로 리셋되던 버그
 
-**pass 기준**: 단건/다중 추가 → 버튼 클릭 라벨 → Add Label 라벨 → 탐색 → 단일뷰 → 다중 삭제 → 기존 라벨 non-palette 로드 → 단일/다중 전환 → UI 안정성 → 경로 폴백 → hover 하이라이트 유지 전체 성공
+**pass 기준**: 단건/다중 추가 → 버튼 클릭 라벨 → Add Label 라벨 → 탐색 → 단일뷰 → 다중 삭제 → 기존 라벨 non-indexed-color 로드 → 단일/다중 전환 → UI 안정성 → 경로 폴백 → hover 하이라이트 유지 전체 성공
 
 ---
 
@@ -1242,11 +1242,11 @@ Composite 생성 결과의 모든 이미지(Grade 0~7, square_average, square_we
 4. Grade와 Average 모두 동일한 배경색 사용 확인
 5. 배경색이 `color-legends.json`의 해당 사용자 background 색상과 일치
 - **핵심**: composite_map.py `base_indices` 배경 = index 8 (개인색), index 31 = invalid fill (흰색 고정)
-- **핵심**: `_apply_personal_palette`에서 index 8은 개인색, index 31은 항상 (255,255,255)
+- **핵심**: `personal PLTE 적용 경로`에서 index 8은 개인색, index 31은 항상 (255,255,255)
 
 #### 8-8. Invalid Fill 흰색 고정 검증
 투명 영역/잘못된 데이터가 있는 이미지에서 invalid 영역이 항상 흰색(index 31)으로 표시되는지 확인.
-1. palette 이미지에서 투명 픽셀이 있으면 index 31 → 흰색 (255,255,255)
+1. unknown 이미지에서 투명 픽셀이 있으면 index 31 → 흰색 (255,255,255)
 2. 개인색 배경을 변경해도 invalid 영역은 흰색 유지
 3. `personal_colors.py`에서 index 31 = 흰색 고정 확인
 - **핵심**: index 8 (배경) vs index 31 (invalid) 역할 분리
@@ -1368,9 +1368,9 @@ Grade 맵을 제외한 모든 Composite 결과(square_average, square_weighted_a
 - `rect.quad` 필드 응답에서 제거
 
 **테스트 데이터 기준**:
-- unknown: 실제 failbit map 기준 폴더. 하위 패턴 폴더까지 재귀 선택하여 검증한다. failbit/bin/measure/composite/reference/label/MyLot/단일 이미지 보기와 전역 LOT 검색의 화면 정확성은 `palette_3k`가 아니라 `unknown`을 우선 기준으로 삼는다.
-- palette_3k: ftn_keys 500개, qtn_keys 500개, chips 384개/파일, 3000파일
-- palette_5mb: ftn_keys 500개, qtn_keys 500개, chips 812개/파일, 6파일
+- unknown: 실제 failbit map 기준 폴더. 하위 패턴 폴더까지 재귀 선택하여 검증한다. failbit/bin/measure/composite/reference/label/MyLot/단일 이미지 보기와 전역 LOT 검색의 화면 정확성은 `unknown`을 기준으로 삼는다.
+- unknown: ftn_keys 500개, qtn_keys 500개, chips 384개/파일, 3000파일
+- unknown: ftn_keys 500개, qtn_keys 500개, chips 812개/파일, 6파일
 - ftn_keys 예시: `["2824","1409","5506","5012","4657","3286",...]` (500개)
 - qtn_keys 예시: `["5445","5180","5751","5534","5988",...]` (500개)
 - f 값 범위: 25~9976 (정수 문자열), q 값 범위: 0~100
@@ -1378,7 +1378,7 @@ Grade 맵을 제외한 모든 Composite 결과(square_average, square_weighted_a
 **평가 항목**:
 
 #### 11-0. `/api/chip-positions` 응답 구조 검증
-1. `fetch('/api/chip-positions?path=palette_3k/wafer_p3k_0001_EE_Engineer.png')` 호출
+1. `fetch('/api/chip-positions?path=unknown/unknown_wafer_0001_EE_Engineer.png')` 호출
 2. 응답에 `ftn_keys` 배열 존재, **길이 500** 확인
 3. 응답에 `qtn_keys` 배열 존재, **길이 500** 확인
 4. `ftn_keys` 첫 번째 키가 문자열인지 확인 (예: `"2824"`)
@@ -1389,7 +1389,7 @@ Grade 맵을 제외한 모든 Composite 결과(square_average, square_weighted_a
 9. 응답 크기 측정 (경량화 전 ~2MB → 경량화 후 수십KB 기대)
 
 #### 11-1. Measure 패널 열기 & FBT/QVL/BIN 키 표시
-1. palette_3k 그리드 로드 (`loadImagesInFolderAndShowGrid`) → 전체선택
+1. unknown 그리드 로드 (`loadImagesInFolderAndShowGrid`) → 전체선택
 2. `#failbit-btn-top` 클릭 → `#failbit-panel-top` display !== 'none'
 3. 패널에 **"FBT" 섹션 헤더** 존재, FBT 항목 **500개** 표시 (ftn_keys 기반)
 4. 패널에 **"QVL" 섹션 헤더** 존재, QVL 항목 **500개** 표시 (qtn_keys 기반)
@@ -1434,7 +1434,7 @@ Grade 맵을 제외한 모든 Composite 결과(square_average, square_weighted_a
 #### 11-6. Measure Composite 생성 (서버 compact_array f/q 처리 검증)
 서버가 compact_array 포맷(f가 list, ftn_keys로 인덱스 매핑)의 positions 파일을 읽어 Measure Composite 이미지를 정상 생성하는지 검증.
 
-1. palette_3k 그리드 → 이미지 10개 이상 선택
+1. unknown 그리드 → 이미지 10개 이상 선택
 2. Composite 버튼(`#measure-composite-btn-top`) 클릭 → MC 패널 열기
 3. MC 패널에서 FBT 항목(아무거나) + QVL 항목(아무거나) + BIN285 체크
 4. "생성" 버튼 클릭 → 생성 시작
@@ -1453,8 +1453,8 @@ Grade 맵을 제외한 모든 Composite 결과(square_average, square_weighted_a
 12. 뒤로가기 → QVL Composite 결과 이미지 더블클릭
 13. **Gradient 범례** 표시 확인
 
-#### 11-7. palette_5mb 대용량 positions 처리 검증
-1. palette_5mb 그리드 로드 → `/api/chip-positions` 호출
+#### 11-7. unknown 대용량 positions 처리 검증
+1. unknown 그리드 로드 → `/api/chip-positions` 호출
 2. 응답에 `ftn_keys` 500개, `qtn_keys` 500개, chips **812개** 확인
 3. Measure 패널에서 FBT/QVL 키 목록 정상 표시 확인
 4. FBT heatmap 적용 → gradient 범례 표시 확인
@@ -1462,7 +1462,7 @@ Grade 맵을 제외한 모든 Composite 결과(square_average, square_weighted_a
 #### 11-8. Measure 키 인덱스 방지 & 그리드→단일 전환 시 오버레이 보존
 compact_array 포맷에서 FBT/QVL 키가 배열 인덱스(0,1,2...)로 표시되지 않고 실제 키 이름으로 표시되는지, 그리드→단일 전환 시 measure 오버레이가 유지되는지 검증.
 
-1. palette_3k 그리드 로드 → 전체선택
+1. unknown 그리드 로드 → 전체선택
 2. Measure 패널 열기 (`#failbit-btn-top` 클릭)
 3. **인덱스 방지 검증**: FBT 항목 텍스트에 `FBT0`, `FBT1`, `FBT2` 등 순차 인덱스가 **없는지** 확인
    - 로컬 Playwright `page.evaluate`로 `.failbit-item` 텍스트 목록 수집
@@ -1483,7 +1483,7 @@ compact_array 포맷에서 FBT/QVL 키가 배열 인덱스(0,1,2...)로 표시�
 #### 11-9. 단일 이미지 compact_array 텍스트 & 그리드 Measure 항목 전환 & 범례 칩 수
 compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정상 표시, 그리드에서 FBT 항목 변경 시 맵 갱신, 그리드 gradient 범례 퍼센트/칩수 표시 검증.
 
-1. palette_3k 단일 이미지 로드 (wafer_p3k_0001_EE_Engineer.png)
+1. unknown 단일 이미지 로드 (unknown_wafer_0001_EE_Engineer.png)
 2. Measure 패널에서 FBT2824 클릭 → 오버레이 적용
 3. **단일 이미지 칩 텍스트 확인**: `chipAnnotator.ratioOverlayColors.size > 0` (칩 색상 계산됨)
 4. **칩 텍스트 값 검증**: 로컬 Playwright `page.evaluate`로 chipAnnotator 렌더 시 compact_array 인덱스 접근 확인
@@ -1508,13 +1508,13 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 그리드 및 네비게이터 썸네일에 서버사이드 `/api/measure-thumb` heatmap이 정확히 적용되는지 픽셀 수준으로 검증.
 단일 이미지(클라이언트 사이드 chipAnnotator 렌더링)와 그리드/네비게이터(서버사이드 이미지 생성)가 동일한 gradient/ftn_key/scheme을 사용하는지 확인.
 
-1. palette_5mb 단일 이미지 로드 (wafer_palette_5mb_PE_Engineer.png)
+1. unknown 단일 이미지 로드 (wafer_unknown_PE_Engineer.png)
 2. Measure 패널에서 FBT2824 클릭 → 클라이언트 사이드 chipAnnotator heatmap 적용
 3. 로컬 Playwright `page.evaluate`로 gradient 캐시 확인: `viewer._ratioGradientCache` 11개 색상 존재
 4. Navigator 썸네일 URL에 `measure_overlay=f%3A2824` 포함 확인
 5. Navigator 첫 번째 썸네일 이미지를 canvas에 그려 픽셀 샘플링 (칩 영역 + 배경)
 6. 칩 영역 픽셀이 원본 Grade 색상과 **다름** 확인 (heatmap gradient 색상)
-7. 그리드 모드 진입 (`loadImagesInFolderAndShowGrid('palette_5mb')`)
+7. 그리드 모드 진입 (`loadImagesInFolderAndShowGrid('unknown')`)
 8. Measure 패널에서 FBT2824 클릭 → 서버사이드 `/api/measure-thumb` heatmap 적용
 9. 그리드 첫 번째 이미지 URL에 `measure_overlay=f%3A2824` 포함 확인
 10. 그리드 첫 번째 이미지를 canvas에 그려 칩 영역 픽셀 샘플링
@@ -1529,7 +1529,7 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 그리드 Measure overlay가 `/api/measure-thumb` (positions-only, 이미지 로드 없음)를 사용하는지,
 속도가 기존 `/api/thumbnail` overlay 대비 빠른지 검증.
 
-1. palette_5mb 그리드 로드 → FBT2824 선택
+1. unknown 그리드 로드 → FBT2824 선택
 2. 그리드 첫 번째 이미지 `img.src` 또는 `img.dataset.src`에 `/api/measure-thumb` 포함 확인
    (NOT `/api/thumbnail?...measure_overlay=`)
 3. URL에 `field=f`, `key=2824`, `scheme={LoginId}` 파라미터 존재 확인
@@ -1537,10 +1537,10 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 5. 응답 크기 **< 15KB** 확인 (기존 thumbnail overlay ~40KB 대비 경량)
 6. `performance.now()` 기준 FBT 선택→visible 이미지 로드 완료: **< 500ms** (6장 기준)
 7. 초기화 → 그리드 이미지 src가 `/api/thumbnail` (기존 방식)으로 복귀 확인
-8. palette_3k 3000장 로드 → FBT2824 선택
+8. unknown 3000장 로드 → FBT2824 선택
 9. visible 16장 로드 완료: **< 200ms** (positions 캐시 히트)
 10. 스크롤 → 새 이미지 lazy load 시에도 `/api/measure-thumb` 사용 확인
-11. Measure 선택 상태에서 폴더 전환 (palette_3k → palette_5mb)
+11. Measure 선택 상태에서 폴더 전환 (unknown → unknown)
 12. 전환 후 그리드 이미지에 measure heatmap 적용 확인 (overlayMode 유지)
 13. `browser_take_screenshot` → 그리드 heatmap 시각 확인
 
@@ -1552,7 +1552,7 @@ compact_array 포맷에서 단일 이미지 모드 칩 내 수치 텍스트 정�
 - 11-4: BIN heatmap → BIN 범례
 - 11-5: 초기화 → Grade 범례 복원, measure-thumb URL 제거
 - 11-6: Measure Composite 생성 → FBT/QVL/BIN 결과 이미지 + gradient 범례 + 텍스트
-- 11-7: palette_5mb 대용량 정상 처리
+- 11-7: unknown 대용량 정상 처리
 - 11-8: FBT/QVL 키 인덱스 미표시 + 그리드→단일 전환 시 measure heatmap 보존
 - 11-9: compact_array 칩 텍스트 정상 표시 + FBT 항목 전환 시 그리드 갱신 + 범례 칩 수
 - 11-10: 그리드/네비게이터 썸네일에 measure heatmap 픽셀 적용 확인 + 포맷 일관성
@@ -1600,7 +1600,7 @@ const lines = ['wafer.J1', 'wafer.2', 'wafer\textra', 'wafer.abc junk', 'wafer']
 
 **목적**: Wafer 모드에서 noise 포함 입력 → dot 제거 파싱 → 토큰 정확매칭 → 현재 폴더 우선 검색 → 저장 → Grid 보기까지 전체 흐름 검증
 
-1. `palette_3k` 그리드 로드 상태에서 MY LOT → Wafer 탭 → 새 그룹 생성
+1. `unknown` 그리드 로드 상태에서 MY LOT → Wafer 탭 → 새 그룹 생성
 2. 다음 형식으로 `handleManualPaste` 호출 (noise 포함):
    ```
    wafer.J3 0001
@@ -1615,8 +1615,8 @@ const lines = ['wafer.J1', 'wafer.2', 'wafer\textra', 'wafer.abc junk', 'wafer']
    - **pass 기준**: dot 이후 noise가 모두 제거되고 LOT/Wafer가 정확히 분리됨
 
 4. **검색 결과 검증**: 각 행의 `searchResults.length > 0`
-   - preview 파일명이 `wafer_p3k_XXXX` 패턴 (현재 폴더 `palette_3k`에서 검색됨)
-   - **pass 기준**: 5개 행 모두 paths > 0, preview에 `p3k` 포함
+   - preview 파일명이 `unknown_wafer_XXXX` 패턴 (현재 폴더 `unknown`에서 검색됨)
+   - **pass 기준**: 5개 행 모두 paths > 0, preview에 `unknown` 포함
 
 5. **저장** (`#my-lot-manual-submit` 클릭) → 성공 메시지 확인
 6. **전체 선택** (`#my-lot-select-all` 클릭) → 3개 이상 항목 선택됨
@@ -1642,11 +1642,11 @@ const lines = ['wafer.J1', 'wafer.2', 'wafer\textra', 'wafer.abc junk', 'wafer']
 
 | 입력 | LOT | Wafer | 비고 |
 |------|-----|-------|------|
-| `ABC123.1 03` | ABC123 | 03 | dot+숫자 제거 |
-| `ABC123.J1 03` | ABC123 | 03 | dot+영숫자 제거 |
-| `ABC123.abc 03` | ABC123 | 03 | dot+영문 제거 |
-| `ABC123.12.3 04` | ABC123 | 04 | 다중 dot 제거 |
-| `ABC123 03` | ABC123 | 03 | 정상 (noise 없음) |
+| `AAU220.1 13` | AAU220 | 13 | dot+숫자 제거 |
+| `AAU220.J1 13` | AAU220 | 13 | dot+영숫자 제거 |
+| `AAU220.abc 13` | AAU220 | 13 | dot+영문 제거 |
+| `ABM792.12.3 05` | ABM792 | 05 | 다중 dot 제거 |
+| `AAU220 13` | AAU220 | 13 | 정상 (noise 없음) |
 | `LOT001.2\t05` | LOT001 | 05 | tab 구분 |
 | `LOT002.X 06` | LOT002 | 06 | dot+영문 |
 | `wafer.J3` | wafer | (없음) | LOT 모드용 |
@@ -1659,7 +1659,7 @@ modal.handleManualPaste('wafer.J3 0001\nwafer.J2 0005\nwafer 0010', true);
 modal.manualRows.forEach(r => {
     assert(r.lot === 'wafer');           // noise 제거
     assert(r.searchResults.length > 0);  // 검색 매칭
-    assert(r.path?.includes('p3k'));     // 현재 폴더 결과
+    assert(r.path?.includes('unknown'));     // 현재 폴더 결과
 });
 // 저장 → 전체선택 → Grid 보기
 document.getElementById('my-lot-manual-submit').click();
@@ -2011,8 +2011,8 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 1. 첫 번째 탭 클릭 → `active` 클래스가 첫 번째 탭으로 이동
 2. 두 번째 탭 클릭 → `active` 클래스가 두 번째 탭으로 이동
 3. 전환 시 뷰어 상태(그리드/단일/폴더 경로)가 독립적으로 유지되는지 확인
-   - 탭1에서 palette_3k 그리드 → 탭2로 전환 → 빈 화면(또는 별도 상태)
-   - 탭1로 복귀 → palette_3k 그리드 복원
+   - 탭1에서 unknown 그리드 → 탭2로 전환 → 빈 화면(또는 별도 상태)
+   - 탭1로 복귀 → unknown 그리드 복원
 
 #### 21-3. 탭 역할 색상
 1. 단일 이미지 진입 시 탭에 `data-role="wafer"` 설정, 파란색 하단 보더
@@ -2073,12 +2073,12 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 2. 다른 이미지 진입 시 Navigator 다시 표시
 
 #### 22-7. 가상 스크롤 (300+ 이미지)
-1. palette_3k(3000장) 단일 모드 진입
+1. unknown(3000장) 단일 모드 진입
 2. Navigator에 모든 3000개를 DOM에 넣지 않고 가상 스크롤 적용 확인
 3. 빠른 스크롤 시 끊김 없이 렌더링
 
 #### 22-8. Measure heatmap 반영
-1. palette_3k 그리드 → 전체선택 → Measure FBT 항목 클릭 → heatmap 적용
+1. unknown 그리드 → 전체선택 → Measure FBT 항목 클릭 → heatmap 적용
 2. 그리드 이미지 더블클릭 → 단일 모드 진입
 3. Navigator 썸네일 URL에 `measure_overlay=f:` 파라미터 포함 확인
 4. 다른 FBT 항목으로 전환 → Navigator 썸네일 URL이 새 키로 갱신 확인
@@ -2158,16 +2158,16 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 입력에 `.숫자` 또는 `.문자`가 포함되면 dot 이후를 제거하고 검색한다.
 **stripDotSuffix 규칙**: 각 공백 구분 토큰에서 첫 번째 `.` 이후 제거 (`.`으로 시작하면 유지).
 
-1. **일반 검색**: `wafer_palette_5mb.3` 입력 → `wafer_palette_5mb`로 검색 → 결과 있음
-2. **일반 검색 복합**: `wafer.1 palette.2` 입력 → `wafer palette`로 검색 → 결과 있음
-3. **다중검색**: `ABC123.1\nDEF456.2\nGHI789` → LOT 파싱: `[ABC123, DEF456, GHI789]`
-4. **다중검색 중복 제거**: `ABC123.1\nABC123.2` → 둘 다 `ABC123` → 중복 제거 → 1개 LOT
-5. **AND/OR/NOT + dot**: `palette.1 and 5mb.2` → `palette and 5mb` → 결과 있음
+1. **일반 검색**: `wafer_unknown.3` 입력 → `wafer_unknown`로 검색 → 결과 있음
+2. **일반 검색 복합**: `wafer.1 AAU220.2` 입력 → `unknown AAU220`로 검색 → 결과 있음
+3. **다중검색**: `AAU220.1\nABM792.2\nAAV489` → LOT 파싱: `[AAU220, ABM792, AAV489]`
+4. **다중검색 중복 제거**: `AAU220.1\nAAU220.2` → 둘 다 `AAU220` → 중복 제거 → 1개 LOT
+5. **AND/OR/NOT + dot**: `AAU220.1 and EE.7` → `AAU220 and EE` → 결과 있음
 6. **dot 시작 유지**: `.hidden` → `.hidden` (변환 안 함)
 7. 다양한 케이스 검증:
    ```
-   ABC123.1 → ABC123
-   ABC123.1 09 → ABC123 09
+   AAU220.1 → AAU220
+   AAU220.1 09 → AAU220 09
    LOT001.2 LOT002.3 → LOT001 LOT002
    A.1 B.2 C → A B C
    .hidden → .hidden (유지)
@@ -2377,14 +2377,14 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 #### 28-6. 3000개 폴더 반복 선택/해제/더블클릭 안정성 (5회)
 대량 이미지(3000장) 폴더에서 반복 조작 후에도 그리드가 정상 표시되는지 검증.
 
-1. `v.loadImagesInFolderAndShowGrid('palette_3k')` → 3000개 로드 확인
+1. `v.loadImagesInFolderAndShowGrid('unknown')` → 3000개 로드 확인
 2. 전체선택 (`v.selectAllGridImages()`) → `v.gridSelectedIdxs.length === 3000`
 3. 더블클릭 단일 모드 (`v.enterGridImageViewMode(0, v.currentGridImages)`) → `v.viewMode === 'gridImage'`
 4. 그리드 복귀 (`v.exitSingleImageViewMode()`) → `v.gridMode === true`, grid visible
 5. 전체해제 (`v.clearGridSelection()`) → `v.gridSelectedIdxs.length === 0`
 6. 상태 확인: `v._gridVisuallyHidden === false`, `v.viewMode === null`
 7. 1~6을 **5회 반복** — 매 라운드 모든 조건 통과
-8. 최종: `v.loadImagesInFolderAndShowGrid('palette_3k')` → 그리드 정상 표시 확인
+8. 최종: `v.loadImagesInFolderAndShowGrid('unknown')` → 그리드 정상 표시 확인
 
 **pass 기준**: 28-1~28-6 모든 항목에서 폴더 클릭 후 `grid.children.length > 0`이고 `v.gridMode === true`, `v.selectedImages.length > 0`
 
@@ -2403,7 +2403,7 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 **평가 항목**:
 
 #### 29-1. 그리드 복귀 시 스크롤 위치 복원
-1. Ctrl+클릭 폴더(wafer_edge_ring) → 그리드 로드 (3000개)
+1. Ctrl+클릭 폴더(unknown) → 그리드 로드 (3000개)
 2. 그리드 스크롤을 8000px로 설정, 1초 대기
 3. `v.enterSingleImageMode(80)` → 단일 이미지 모드 진입
 4. 상태 확인: `v._gridVisuallyHidden === true`, `v.gridViewSaveState.scrollTop === 8000`
@@ -2427,12 +2427,12 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 3. `v.exitSingleImageViewMode()` → 그리드 복귀 (스크롤 8000px)
 4. `v.handleFileRightClick({preventDefault:()=>{}, stopPropagation:()=>{}})` → 전체 해제
 5. **핵심 검증**: `document.querySelector('.grid-scroll-wrapper').scrollTop === 0` (스크롤 초기화)
-6. 다른 폴더(wafer_folder) Ctrl+클릭 → 그리드 로드
+6. 다른 폴더(unknown) Ctrl+클릭 → 그리드 로드
 7. **핵심 검증**: `document.querySelector('.grid-scroll-wrapper').scrollTop === 0` (새 폴더 맨 위)
 8. **핵심 검증**: `v.currentGridImages.length > 0` (그리드 정상 표시)
 
 #### 29-4. 그리드 복귀 시 보이는 영역 썸네일 즉시 로드
-1. Ctrl+클릭 폴더(wafer_edge_ring) → 그리드 로드 (3000개)
+1. Ctrl+클릭 폴더(unknown) → 그리드 로드 (3000개)
 2. 그리드 스크롤을 5000px로 설정, 2초 대기 (스크롤 영역 썸네일 로드)
 3. `v.enterSingleImageMode(50)` → 단일 이미지 모드
 4. `v.exitSingleImageViewMode()` → 그리드 복귀, 1초 대기
@@ -2452,7 +2452,7 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 - 수정: 이미 로드된 이미지(`img.src`가 `data:`로 시작하지 않는 경우)는 opacity를 유지
 
 **평가 항목**:
-1. palette_3k 폴더 로드 → Measure 버튼 클릭 → MC 패널 열기
+1. unknown 폴더 로드 → Measure 버튼 클릭 → MC 패널 열기
 2. FBT 키 하나 클릭 → Measure heatmap 적용 (이미지에 gradient 표시)
 3. 5초 대기 (이미지 로드 완료)
 4. 다른 FBT 키 클릭 → Measure 맵 전환
@@ -2464,18 +2464,18 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 
 ---
 
-### Phase 31: palette_3k grade 다양성 검증
+### Phase 31: unknown grade 다양성 검증
 
-**목적**: palette_3k 이미지들의 grade가 0~7로 다양하게 분포되어 있는지 검증
+**목적**: unknown 이미지들의 grade가 0~7로 다양하게 분포되어 있는지 검증
 
 **배경**:
 - positions JSON에 `g` 필드가 없어서 모든 chip이 grade 0으로 렌더링됨
 - 수정: `_assign_grade()` 함수로 chip 좌표 기반 해시 → grade 0~7 균등 분배
 
 **평가 항목**:
-1. palette_3k 폴더의 첫 이미지를 단일 이미지 모드로 열기
+1. unknown 폴더의 첫 이미지를 단일 이미지 모드로 열기
 2. `chipAnnotator.chips`에서 각 chip의 BIN 값 분포 확인 (다양한 BIN 존재)
-3. `/api/image?path=palette_3k/wafer_p3k_0001_...` 원본 이미지 요청
+3. `/api/image?path=unknown/unknown_wafer_0001_...` 원본 이미지 요청
 4. **핵심 검증**: 이미지 pixel에서 grade 0~7 각각의 pixel 수가 전체의 5% 이상 (8 grade 모두 존재)
 5. 또는 로컬 Playwright `page.evaluate`로 canvas에 이미지를 그려 pixel color 분석
 6. 대안: 그리드 스크린샷에서 이미지들이 시각적으로 다양한 색상을 가지는지 확인
@@ -2496,21 +2496,21 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 **평가 항목**:
 
 #### 32-1. loadImagesInFolderAndShowGrid 경로
-1. `v.loadImagesInFolderAndShowGrid('palette_3k')` → 4초 대기
+1. `v.loadImagesInFolderAndShowGrid('unknown')` → 4초 대기
 2. 스크롤을 8000px로 설정
-3. `v.loadImagesInFolderAndShowGrid('sort_test')` → 3초 대기
+3. `v.loadImagesInFolderAndShowGrid('unknown')` → 3초 대기
 4. **핵심 검증**: `scrollWrapper.scrollTop === 0`
 
 #### 32-2. updateFileExplorerSelection 경로 (Ctrl+클릭 시뮬레이션)
-1. `v.loadImagesInFolderAndShowGrid('palette_3k')` → 4초 대기
+1. `v.loadImagesInFolderAndShowGrid('unknown')` → 4초 대기
 2. 스크롤을 8000px로 설정
-3. `fetch('/api/files?path=sort_test')` → `v.selectedImages = files` → `v.updateFileExplorerSelection()`
+3. `fetch('/api/files?path=unknown')` → `v.selectedImages = files` → `v.updateFileExplorerSelection()`
 4. 700ms 대기
 5. **핵심 검증**: `scrollWrapper.scrollTop === 0`
 
 #### 32-3. 연속 폴더 전환
-1. palette_3k 로드 → 스크롤 5000px → sort_test 로드 → 스크롤 확인
-2. sort_test 로드 → 스크롤 3000px → palette_3k 로드 → 스크롤 확인
+1. unknown 로드 → 스크롤 5000px → unknown 로드 → 스크롤 확인
+2. unknown 로드 → 스크롤 3000px → unknown 로드 → 스크롤 확인
 3. **핵심 검증**: 모든 전환에서 `scrollTop === 0`
 
 **pass 기준**: 32-1~32-3 모든 핵심 검증 통과 (새 폴더 진입 시 항상 scrollTop === 0)
@@ -2532,7 +2532,7 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 **사전 준비** (모든 하위 테스트 공통):
 ```javascript
 v.lotMode = false;
-v.loadImagesInFolderAndShowGrid('palette_3k');
+v.loadImagesInFolderAndShowGrid('unknown');
 // 6초 대기 후 v.currentGridImages.length > 0 확인
 ```
 
@@ -2558,9 +2558,9 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 
 #### 33-3. 라벨 포맷 검증
 1. 33-2 상태에서 `.grid-thumb-label` 텍스트 확인
-2. **핵심 검증**: Failbit 라벨 = 파일명만 (접두사 없음, 예: `wafer_p3k_0001_EE_Engineer`)
-3. **핵심 검증**: BIN 라벨 = `BIN_` 접두사 (예: `BIN_wafer_p3k_0001_EE_Engineer`)
-4. **핵심 검증**: FBT 라벨 = 대문자 + 4자리 패딩 (예: `F0085_wafer_p3k_0001_EE_Engineer`)
+2. **핵심 검증**: Failbit 라벨 = 파일명만 (접두사 없음, 예: `unknown_wafer_0001_EE_Engineer`)
+3. **핵심 검증**: BIN 라벨 = `BIN_` 접두사 (예: `BIN_unknown_wafer_0001_EE_Engineer`)
+4. **핵심 검증**: FBT 라벨 = 대문자 + 4자리 패딩 (예: `F0085_unknown_wafer_0001_EE_Engineer`)
 5. **핵심 검증**: 같은 이미지의 3개 라벨에서 파일명 부분 동일
 
 #### 33-4. 선택 이미지만 measure 적용
@@ -2643,7 +2643,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 **평가 항목**:
 
 #### 34-1. 선택 + Measure → 새 mea 탭
-1. palette_3k 로드 → 5개 이미지 Ctrl+클릭 선택
+1. unknown 로드 → 5개 이미지 Ctrl+클릭 선택
 2. Measure 드롭다운에서 FBT 키 클릭
 3. **핵심 검증**: 새 탭 생성, `title === 'mea0'`, `role === 'measure'`
 4. **핵심 검증**: 그리드에 5개 이미지만 표시, 모두 measure-thumb URL
@@ -2664,7 +2664,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 3. **핵심 검증**: 현재 탭(page0)에서 measure-thumb으로 바꿔치기
 
 #### 34-5. Measure 활성 상태 폴더 전환
-1. Measure가 활성인 상태에서 `loadImagesInFolderAndShowGrid('palette_3k')` 재호출
+1. Measure가 활성인 상태에서 `loadImagesInFolderAndShowGrid('unknown')` 재호출
 2. **핵심 검증**: `overlayMode === 'f'` 유지
 3. **핵심 검증**: 뷰포트 이미지가 measure-thumb URL
 
@@ -2760,7 +2760,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 **평가 항목**:
 
 #### 35-1. 그리드 모드 4개 항목 순차 전환 (3회 반복)
-1. palette_3k 폴더 로드 → 3000개 이미지 확인
+1. unknown 폴더 로드 → 3000개 이미지 확인
 2. 아래 순서를 **3회 반복** (Round 1~3):
    - `v._selectFailbitItem('failbit')` → 2초 대기
      - **검증**: `overlayMode === null`, 썸네일 URL에 `/api/thumbnail` 포함
@@ -2809,7 +2809,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 7. **핵심 검증**: gradient 범례 count가 "0"이 아닌 값 포함 (새 이미지에서도 갱신됨)
 
 #### 35-6. Composite Map 생성 + LOT Mode + 탭 보존 + 파일명 검증
-1. palette_3k 전체 선택, **LOT Mode ON** 상태에서 Composite Map 생성 (20개 이미지)
+1. unknown 전체 선택, **LOT Mode ON** 상태에서 Composite Map 생성 (20개 이미지)
 2. 12초 대기 (서버 생성 완료)
 3. **핵심 검증**: `isCompositeMode === true`, 그리드에 결과 이미지 10개 표시
 4. **핵심 검증**: gradient 범례 10개 존재 (grid-color-legend-bottom)
@@ -2834,14 +2834,14 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 6. **핵심 검증**: `savedViewState.images`가 현재 Composite 그리드(10개)로 갱신됨
 
 #### 35-8. Measure 탭 생성 후 원래 탭 상태 해제
-1. palette_3k 그리드에서 이미지 5개 선택
+1. unknown 그리드에서 이미지 5개 선택
 2. FBT1000 measure 클릭 → mea0 탭 생성
 3. 원래 그리드 탭으로 전환
 4. **핵심 검증**: 원래 탭에서 `overlayMode === null`, `_measureCheckedItems.length === 0`
 5. **핵심 검증**: 원래 탭의 썸네일이 일반 `/api/thumbnail` URL (measure-thumb 아님)
 
 #### 35-9. 다중 Measure 초기화 시 이미지 갯수 복원
-1. palette_3k 그리드에서 Failbit + BIN + FBT1000 3개 체크
+1. unknown 그리드에서 Failbit + BIN + FBT1000 3개 체크
 2. `_applyMeasureSelection()` → 이미지 갯수 = baseImages × 3 확인
 3. 초기화 (`_measureCheckedItems = []` + `_measureBaseImages` 복원)
 4. **핵심 검증**: 이미지 갯수 = 원본 baseImages 갯수 (확장 해제)
@@ -2849,7 +2849,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 6. **핵심 검증**: gradient 범례 → Grade 범례로 복원
 
 #### 35-10. Measure Composite 서버 파일 생성/삭제/교체 검증
-1. palette_3k 20개 선택 → Grade Composite + FBT1000 + BIN285 동시 생성
+1. unknown 20개 선택 → Grade Composite + FBT1000 + BIN285 동시 생성
 2. 15초 대기 (서버 생성 완료)
 3. **핵심 검증**: `composite_map/{LoginId}/` 디렉터리에 파일 존재 확인
    - `Grade_0.jpg` ~ `Grade_7.jpg` (8개)
@@ -2863,7 +2863,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 6. **핵심 검증**: `QVL_5000_sum.jpg` **새로 생성**
 7. **핵심 검증**: `BIN_285_count.jpg`는 **그대로 유지** (다른 prefix)
 8. **"No chip values found" 에러**: `item_key`가 positions 파일의 `ftn_keys`에 없으면 발생
-   - 테스트 데이터(palette_3k)의 ftn_keys 범위: `1000~1499` (500개)
+   - 테스트 데이터(unknown)의 ftn_keys 범위: `1000~1499` (500개)
    - 존재하지 않는 key (예: `9001`) 요청 시 서버 에러 정상 반환 확인
    - 프론트엔드에서 `alert('Measure Composite 생성에 실패했습니다: ...')` 표시 확인
 
@@ -2875,7 +2875,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 5. **핵심 검증**: QVL 항목 라벨이 `QVL5000` 형태 (Count 없음)
 
 #### 35-12. 더블클릭 반복 그리드↔단일 전환 안정성 (3회 이상)
-1. palette_3k 폴더 로드 → 3000개 이미지 확인
+1. unknown 폴더 로드 → 3000개 이미지 확인
 2. **3회 반복**: 더블클릭 → 단일 이미지 진입 → 더블클릭 → 그리드 복귀
 3. **핵심 검증**: 매 복귀 시 `currentGridImages.length === 3000` (이미지 사라지지 않음)
 4. **핵심 검증**: 매 복귀 시 `gridMode === true`, 그리드 DOM children > 0
@@ -2888,7 +2888,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 수정: 복귀 후 `gridViewImageList = [...imagesToShow]`로 재설정.
 
 #### 35-13. Composite 비동기 생성 + 탭 전환 안정성
-1. palette_3k 전체 선택 → Grade + FBT1000 Composite 생성 시작
+1. unknown 전체 선택 → Grade + FBT1000 Composite 생성 시작
 2. **즉시** page0 탭으로 전환 (생성 완료 전)
 3. 15초 대기 (서버 비동기 생성 완료)
 4. **핵심 검증**: JS 에러 없음 (alert 미발생)
@@ -2896,7 +2896,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 6. **핵심 검증**: 결과 이미지 정상 표시 (검은 화면 없음)
 
 #### 35-14. 단일 Measure 선택 시 LOT Mode 유지
-1. palette_3k LOT Mode ON → FBT1000 단일 선택
+1. unknown LOT Mode ON → FBT1000 단일 선택
 2. **핵심 검증**: `lotMode === true`, LOT 헤더 존재
 3. **핵심 검증**: LOT 그룹 레이아웃 깨지지 않음 (lot-header + lot-spacer)
 4. Measure 초기화 → LOT Mode 유지, Grade 범례 복원
@@ -2905,7 +2905,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 수정: LOT Mode에서는 `showGridByLot(currentGridImages)` 호출
 
 #### 35-15. 더블클릭 반복 5회 + Navigator/Minimap 안정성
-1. palette_3k 그리드 → **5회 반복**: 더블클릭 단일 → 더블클릭 그리드 복귀
+1. unknown 그리드 → **5회 반복**: 더블클릭 단일 → 더블클릭 그리드 복귀
 2. **핵심 검증**: 매 단일 진입 시 Navigator visible, imageList.length > 0
 3. **핵심 검증**: 매 단일 진입 시 Minimap canvas visible
 4. **핵심 검증**: 매 복귀 시 currentGridImages.length === 3000, gridViewImageList.length > 0
@@ -2954,7 +2954,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | 28 | 그리드 상태 복구 안정성 | pass/fail | 반복 선택/해제/더블클릭 후 그리드 재표시 |
 | 29 | 그리드↔단일 이미지 스크롤/로딩 | pass/fail | 스크롤 복원, 폴더선택 복원, 썸네일 즉시 로드 |
 | 30 | Measure 맵 전환 회색 배경 | pass/fail | 이전 이미지 유지, 회색 미발생 |
-| 31 | palette_3k grade 다양성 | pass/fail | grade 0~7 균등, 다양한 색상 |
+| 31 | unknown grade 다양성 | pass/fail | grade 0~7 균등, 다양한 색상 |
 | 32 | 폴더 전환 스크롤 리셋 | pass/fail | 모든 경로에서 scrollTop===0 |
 | 33 | Measure 다중선택 전체 | pass/fail | UI/라벨/선택필터/단일전환/Navigator/404placeholder |
 | 34 | Measure 탭 분리 + 폴더 전환 유지 | pass/fail | mea 탭 생성/키 교체/원탭 복귀/미선택 바꿔치기/폴더 전환 유지 |
@@ -2972,7 +2972,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | 46 | HTTP 캐시 무효화 | pass/fail | no-cache/ETag/stale cache 방지 |
 | 47 | Composite 색상 매핑 + 배경 행 제거 | pass/fail | BIN/F/Q/square는 Composite 색만 추종 |
 | 48 | Measure 첫 진입 즉시 로드 + 폴더 stale state | pass/fail | 첫 적용 지연/폴더 클릭 오염 방지 |
-| 49 | Label Explorer 그리드 로드 실패 + chip-positions 404 | pass/fail | flat-grid/positions 없는 palette/PNF/복귀 안정성 |
+| 49 | Label Explorer 그리드 로드 실패 + chip-positions 404 | pass/fail | flat-grid/positions 없는 unknown/PNF/복귀 안정성 |
 | 50 | 검색 첫 실행 + 다중검색 + 이벤트루프 블로킹 | pass/fail | 첫 검색/모달/noise LOT/비동기 검색 |
 
 핵심 단계마다 스크린샷을 촬영하여 첨부하세요.
@@ -2986,7 +2986,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | 항목 | 측정 방법 | 기준 |
 |------|----------|------|
 | 페이지 초기 로드 | `navigate` ~ `.folder-item` DOM attached | < 500ms |
-| palette_3k (3000장) 그리드 로드 | `loadImagesInFolderAndShowGrid` ~ grid children 생성 | < 300ms |
+| unknown (3000장) 그리드 로드 | `loadImagesInFolderAndShowGrid` ~ grid children 생성 | < 300ms |
 | 뷰포트 썸네일 로드 (첫 화면) | grid 로드 ~ 뷰포트 내 `img.complete` > 80% | < 5초 |
 | 단일 이미지 로드 + 피라미드 | 더블클릭 ~ `[PREFETCH] 모든 레벨 다운로드 완료` | < 3초 |
 | Composite Map 생성 (5장) | POST ~ status=completed | < 5초 |
@@ -3001,7 +3001,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 | 항목 | 소요 시간 | 판정 |
 |------|----------|------|
 | 페이지 초기 로드 | 458ms | FAST |
-| palette_3k 그리드 로드 | 205ms | FAST |
+| unknown 그리드 로드 | 205ms | FAST |
 | ... | ... | ... |
 ```
 
@@ -3071,7 +3071,7 @@ v.loadImagesInFolderAndShowGrid('palette_3k');
 
 ```javascript
 // 1. 폴더 로드 + 20장 선택
-await v.loadImagesInFolderAndShowGrid('palette_3k');
+await v.loadImagesInFolderAndShowGrid('unknown');
 const paths = v.currentGridImages.slice(0, 20);
 v.selectedImages = paths;
 
@@ -3108,7 +3108,7 @@ const elapsed = Math.round(performance.now() - t0);
 - Level 1.0 body stream 버그 수정 (arrayBuffer 선읽기)
 
 **품질 보장**
-- pyvips palette PNG 깨짐 발견 → PIL 유지 (palette 인덱스 보존)
+- pyvips indexed-color PNG 깨짐 발견 → PIL 유지 (indexed-color index 보존)
 - JPEG Q=95, TJSAMP_444 동일 (1월 커밋 대비 검증)
 - 단일 이미지 Measure: Canvas에서 개인색 배경 + gradient 칩 + bold 숫자 텍스트
 
@@ -3185,7 +3185,7 @@ BEFORE vs AFTER 비교:
 19:33:45.478  측정 시작              +15ms (준비 직후)
 19:33:46.233  페이지 리소스 완료     +755ms (HTML 11KB + JS 122KB + CSS 14KB, 모두 gzip)
 19:33:46.995  초기 API 완료          +762ms (config + color-legends + browse-folders)
-19:33:47.305  palette_3k 파일목록    +310ms (3000개, 575KB)
+19:33:47.305  unknown 파일목록    +310ms (3000개, 575KB)
 19:33:51.774  그리드 썸네일 16장     +4,469ms (순차 curl, 각각 TLS 210ms 포함)
 ```
 
@@ -3290,9 +3290,9 @@ BEFORE vs AFTER 비교:
 - **프론트엔드 fetch**: `cache: 'no-cache'`, `Cache-Control: 'no-cache'` 항상 적용 (조건부 제거)
 - **cacheBuster**: `if (!val)` 조건 제거 → 항상 `lastModified`에서 최신값 갱신 (`getPersonalizedParams`, `loadColorLegends` 2곳)
 **테스트**:
-1. thumbnails 삭제 → 서버 재시작 → palette_3k 로드 → `cacheBuster === lastModified` 일치 확인
+1. thumbnails 삭제 → 서버 재시작 → unknown 로드 → `cacheBuster === lastModified` 일치 확인
 2. background #FF0000 적용 → 모든 이미지 빨간 배경
-3. 페이지 새로고침 → palette_3k 재로드 → **빨간 배경 100% 유지** (혼합 없음)
+3. 페이지 새로고침 → unknown 재로드 → **빨간 배경 100% 유지** (혼합 없음)
 **결과**: cacheBuster=260329130912 = lastModified → PASS
 **파일**: `api/main.py` (약 20곳), `js/main.js` + `js/main.min.js` (`getPersonalizedParams`, `loadColorLegends`, `fetchOptions`)
 
@@ -3306,7 +3306,7 @@ BEFORE vs AFTER 비교:
 ✓ Composite create (14 imgs):     outputDir=composite_map/notsaml
 ✓ Non-image filter:               10 files, 0 nonImage
 ✓ Composite default→recolor:      "default → notsaml recolor 완료: 2개"
-✓ Composite grid 개인색:           Grade=개인 palette, Square=개인 gradient
+✓ Composite grid 개인색:           Grade=개인색, Square=개인 gradient
 ✓ Composite 색 변경 적용:          gradient → recolor 2개 → 그리드 즉시 반영
 ✓ Measure composite (BIN/FBT/QVL): 3개 전부 default→recolor 완료
 ✓ Measure 더블클릭 overlay:        overlayMode='f', measure_overlay URL 포함
@@ -3332,7 +3332,7 @@ Result: 17/17 PASS
 테스트 방법:
 ```
 서버 kill → rm -rf composite_map thumbnails → 서버 시작 → 새 Playwright 접속
-→ palette_3k 그리드 → 14개 선택 → Composite 생성
+→ unknown 그리드 → 14개 선택 → Composite 생성
 → composite 그리드 → 색 변경 모달 → gradient/background 변경 → 미리보기 → 적용 → 반영 확인
 → 새로고침 → 변경색 유지 확인
 → 취소 → 원복 확인
@@ -3355,7 +3355,7 @@ Result: 17/17 PASS
 
 ### 36-1. 그리드 썸네일 무결성
 
-1. `palette_3k` 로드 → 뷰포트 내 이미지 30개 대기 (최대 20초)
+1. `unknown` 로드 → 뷰포트 내 이미지 30개 대기 (최대 20초)
 2. 첫 30개 `img.complete && img.naturalWidth > 10 && !img.src.startsWith('data:')` 확인
 3. **pass 기준**: broken === 0
 
@@ -3485,7 +3485,7 @@ for (const c of chips) {
 
 ### 37-3. 빌드 중 서비스 유지 검증
 
-1. 서버 시작 직후 (인덱스 빌드 중) `palette_3k` 그리드 로드
+1. 서버 시작 직후 (인덱스 빌드 중) `unknown` 그리드 로드
 2. **pass 기준**: `v.currentGridImages.length === 3000`, 썸네일 30개 즉시 로드
 3. 빌드 중에도 `/api/files`, `/api/thumbnail` 정상 응답
 4. 이전 캐시가 있으면 `ready=true` 유지 (빌드 중에도 검색 가능)
@@ -3512,7 +3512,7 @@ for (const c of chips) {
 
 **검색 API**: `GET /api/search?q={검색어}&limit=5000&folder={폴더}&lot_multi={LOT목록}`
 
-**데이터**: palette_3k (LOT 6개 × 500개 = 3000개) + benchmark_4m (400만 더미) = 501만 파일
+**데이터**: unknown (LOT 6개 × 500개 = 3000개) + benchmark_4m (400만 더미) = 501만 파일
 
 **검색 방식 — 위치별 토큰 역인덱스 (token[0] / token[2])**:
 빌드 시 파일명을 `_` split하여 **위치별** 인덱스를 생성 (대소문자 무시):
@@ -3528,20 +3528,20 @@ for (const c of chips) {
 
 ```python
 # 빌드 시 (서버 시작 1회):
-# ABC123_00C_04_0003_EE_Engineer.png → parts: [abc123, 00c, 04, 0003, ee, engineer]
+# AAU220_00P_13_20260501_010000_96.0_2_EE_PWQ.png → parts: [aau220, 00p, 13, 20260501, 010000, 96.0, 2, ee, pwq]
 token0_index = {
-    'abc123': [0,1,2,...499],   # token[0]=abc123인 500개 파일
-    'ghj789': [1024,...],       # token[0]=ghj789인 파일들
+    'aau220': [...],            # token[0]=aau220인 unknown 파일
+    'aai216': [...],            # token[0]=aai216인 unknown 파일
     'lot':    [...],            # benchmark_4m 파일들
 }
 token2_index = {
-    '04':     [x,y,z,...],      # token[2]=04인 파일들
+    '13':     [x,y,z,...],      # token[2]=13인 unknown 파일
     'step':   [...],            # benchmark_4m 파일들
 }
 
 # 검색 시:
-# 단순 "ghj789" → token0_index에서 'ghj789' 포함 키 찾기 → 즉시 반환 (2.4ms)
-# AND "abc123 and 04" → token0에서 abc123 → 500건, token2에서 04 → 교차 → 125건
+# 단순 "aai216" → token0_index에서 'aai216' 포함 키 찾기 → 즉시 반환 (2.4ms)
+# AND "aau220 and 13" → token0에서 aau220, token2에서 13 → 교차
 # LOT multi → lot_index dict에서 O(1) 룩업 (8ms)
 ```
 
@@ -3549,13 +3549,13 @@ token2_index = {
 
 | # | 방식 | 검색창 입력 / API 쿼리 | 결과 | 최적화 전 | 최적화 후 | 개선 |
 |---|------|----------------------|------|----------|----------|------|
-| 1 | 단순 검색 (token[0]) | `GHJ789` → `q=ghj789&folder=` | 524개 | 233ms | **2.4ms** | 97x |
-| 2 | 부분매칭 (token[0]) | `BC12` → `q=bc12&folder=` | 500개 (ABC123 LOT) | 233ms | **2.5ms** | 93x |
-| 3 | AND (token[0]+[2]) | `ABC123 and 04` → `q=ABC123+and+04` | 125개 | 994ms | **1.0ms** | 994x |
-| 4 | AND/OR | `(ABC123 and 04) or (DEF456 and 05)` | >0개 | 994ms | **75ms** | 13x |
-| 5 | 부분 AND | `bc12 and 07` → `q=bc12+and+07` | >0개 | 210ms | **35ms** | 6x |
-| 6 | 폴더 한정 | `abc123` (palette_3k 선택 상태) | 500개 | 3ms | **2.1ms** | — |
-| 7 | LOT multi | 다중검색 모달 noise 6줄 입력 | 3120개 | 739ms | **8ms** | 92x |
+| 1 | 단순 검색 (token[0]) | `AAV489` → `q=AAV489&folder=` | >0개 | 233ms | **2.4ms** | 97x |
+| 2 | 부분매칭 (token[0]) | `AU22` → `q=au22&folder=` | >0개 (AAU220 LOT) | 233ms | **2.5ms** | 93x |
+| 3 | AND (token[0]+[2]) | `AAU220 and 13` → `q=AAU220+and+13` | >0개 | 994ms | **1.0ms** | 994x |
+| 4 | AND/OR | `(AAU220 and 13) or (ABM792 and 05)` | >0개 | 994ms | **75ms** | 13x |
+| 5 | 부분 AND | `au22 and 07` → `q=au22+and+07` | >0개 | 210ms | **35ms** | 6x |
+| 6 | 폴더 한정 | `aau220` (unknown 선택 상태) | >0개 | 3ms | **2.1ms** | — |
+| 7 | LOT multi | 다중검색 모달 noise 6줄 입력 | >0개 | 739ms | **8ms** | 92x |
 
 > **주의**: 단순/부분매칭은 token[0] 전용, AND 왼쪽은 token[0], AND 오른쪽은 token[2]. 대소문자 무시. Phase 51 참조.
 
@@ -3574,7 +3574,7 @@ token2_index = {
 ```javascript
 // API 직접 호출로 서버 응답 시간 측정
 const t0 = performance.now();
-const resp = await fetch('/api/search?q=ghj789&limit=3000&folder=');
+const resp = await fetch('/api/search?q=aai216&limit=3000&folder=');
 const data = await resp.json();
 const ms = Math.round(performance.now() - t0);
 // data.total > 0, data.timings.total_ms < 기준값
@@ -3584,28 +3584,28 @@ const ms = Math.round(performance.now() - t0);
 
 1. 다중검색 모달에서 noise 포함 6개 LOT 입력:
    ```
-   ABC123.J1 04
-   DEF456.2\t08
-   FEX482.abc W03
-   GHJ789 extra_junk
-   KHN931.X2\tW05.1
-   TMW067.99 0010
+   AAU220.J1 13
+   ABM792.2\t05
+   AAI216.abc 13
+   AAV489 11
+   AAU220.X2\t13.1
+   ABM792.99 05
    ```
-2. **파싱 검증**: 콘솔에서 `LOT 목록 전달: 6개 - abc123,def456,fex482,ghj789,khn931,tmw067` 확인
-3. **결과 검증**: `v.currentGridImages.length === 3000`, 6개 LOT 표시
+2. **파싱 검증**: 콘솔에서 `LOT 목록 전달: 6개 - aau220,abm792,aav489,aai216,aad534,aai158` 확인
+3. **결과 검증**: 현재 `unknown`에 존재하는 LOT 결과만 표시
 4. **pass 기준**: noise 전부 제거, 6 LOT 정확 추출, 이미지 정상 표시
 
 ### 37-7. 텍스트 검색 UI (스크린샷 검증)
 
-1. 검색창에 `(ABC123 and 04) or (DEF456 and 05)` 입력 → 검색 버튼 클릭
-2. **결과 검증**: 그리드에 이미지 표시, LOT 패널에 ABC123 + DEF456
-3. 스크롤하여 ABC123 영역과 DEF456 영역 각각 스크린샷
-4. ABC123 파일명에 `_04_` 포함, DEF456 파일명에 `_05_` 포함 확인
+1. 검색창에 `(AAU220 and 13) or (ABM792 and 05)` 입력 → 검색 버튼 클릭
+2. **결과 검증**: 그리드에 이미지 표시, LOT 패널에 AAU220 + ABM792
+3. 스크롤하여 AAU220 영역과 ABM792 영역 각각 스크린샷
+4. AAU220 파일명에 `_13_` 포함, ABM792 파일명에 `_05_` 포함 확인
 5. **pass 기준**: 결과 > 0, 두 LOT 모두 표시, 이미지 정상
 
 ### 37-8. 텍스트 단순 검색 UI
 
-1. 검색창에 LOT ID 입력 (예: `DEF456`) → 검색 버튼 클릭
+1. 검색창에 LOT ID 입력 (예: `ABM792`) → 검색 버튼 클릭
 2. **pass 기준**: 해당 LOT 이미지만 표시, 개수 > 0
 
 ### 결과 요약표
@@ -3639,7 +3639,7 @@ const ms = Math.round(performance.now() - t0);
 
 ### 38-1. Measure Map 다중 생성 (Failbit + BIN + FBT + QVL)
 
-1. filter_test 폴더 24개 이미지 그리드 로드 → 전체선택
+1. unknown 폴더 24개 이미지 그리드 로드 → 전체선택
 2. Measure 패널 열기 → 패널 구조 확인:
    - MAP 섹션: Failbit (1개)
    - BIN 섹션: NORMAL, BIN285~BIN390 (11+개)
@@ -3745,7 +3745,7 @@ const ms = Math.round(performance.now() - t0);
 
 ### 39-1. Failbit Composite 생성 + Grade 선택
 
-1. filter_test 24개 이미지 → 전체선택 → Measure 패널에서 Failbit만 체크 → 생성
+1. unknown 24개 이미지 → 전체선택 → Measure 패널에서 Failbit만 체크 → 생성
 2. 결과 그리드: square_average, square_weighted_average, Grade_0~7 (10개)
 3. `v.isCompositeMode === true` 확인
 4. 전체선택 (`v.selectAllGridImages()`) → `gridSelectedIdxs.length === 10`
@@ -3870,7 +3870,7 @@ const ms = Math.round(performance.now() - t0);
 **테스트 절차**:
 
 #### 42-1. 다중 Measure 그리드 설정
-1. `palette_3k` 폴더 로드, 3개 이미지 선택
+1. `unknown` 폴더 로드, 3개 이미지 선택
 2. `_measureCheckedItems = [failbit, bin, f(FBT1001), q(QVL5000)]` 설정
 3. `_applyMeasureSelection()` 호출
 4. **핵심 검증**: `currentGridImages.length === 12`, `_gridMeasureMap.length === 12`
@@ -3922,12 +3922,12 @@ const ms = Math.round(performance.now() - t0);
 
 **목적**: Label Explorer에서 Wafer Map Explorer와 동일한 그리드/단일이미지 동작이 정상 작동하는지 검증
 
-**사전 조건**: 기존 라벨 클래스가 존재 (test_class 등 2개 이상 이미지를 가진 클래스)
+**사전 조건**: `unknown` 원본 이미지로 생성한 `e2e_unknown_label` 클래스가 존재
 
 **평가 항목**:
 
 #### 43-1. Label Explorer 단일 이미지 모드 진입
-1. Label Explorer에서 클래스 폴더 열기 (예: test_class)
+1. Label Explorer에서 클래스 폴더 열기 (예: `e2e_unknown_label`)
 2. 이미지 1개 클릭 → `viewMode='single'`, 캔버스 표시
 3. Navigator에 클래스 내 전체 이미지 리스트 표시 확인
 4. ◀ ▶ 화살표 버튼 표시 확인
@@ -3978,7 +3978,7 @@ const ms = Math.round(performance.now() - t0);
 4. `getSelectedImagesForModal()` 반환값에 원본 경로 포함 확인
 
 #### 43-10. Label Explorer 라벨 추가 + Position 파일 복사
-1. filter_test 등 position JSON이 있는 폴더에서 이미지 5개 선택
+1. unknown 등 position JSON이 있는 폴더에서 이미지 5개 선택
 2. Fail List 클래스 버튼 클릭 → 라벨 추가
 3. `/api/files?path=classification/{class}` 확인: PNG 5개 + JSON(position) 5개 존재
 4. Label Explorer에서 해당 클래스 열기 → **모든 파일 표시** (PNG + JSON 포함)
@@ -3999,18 +3999,18 @@ const ms = Math.round(performance.now() - t0);
 2. Delete Label 버튼으로 다중 삭제 확인
 3. Delete Class로 테스트 클래스 정리
 
-#### 43-14. 혼합 이미지 유형 클래스 (no-palette/palette/position)
+#### 43-14. 혼합 이미지 유형 클래스 (no-indexed-color/indexed-color/position)
 **사전 준비**: `e2e_mixed_test` 클래스에 3가지 유형 이미지 배치:
-- `rgba_no_pos_*.png`: RGBA non-palette, position 없음
-- `palette_no_pos_*.png`: palette PNG, position 없음
-- `ABC234_00C_*.png`: palette PNG, position은 `POSITIONS_ROOT/e2e_mixed_test/` 에 JSON 배치
+- `rgba_no_pos_*.png`: RGBA non-indexed-color, position 없음
+- `unknown_no_pos_*.png`: indexed-color PNG, position 없음
+- `AAD534_00C_*.png`: indexed-color PNG, position은 `POSITIONS_ROOT/e2e_mixed_test/` 에 JSON 배치
 
 1. Label Explorer에서 `e2e_mixed_test` 폴더 열기 → 모든 파일 표시 (필터 없음)
 2. Ctrl+Click → 폴더 자동 열림 + 파일 버튼 하이라이트 + 그리드 아이템 표시
 3. 이미지 썸네일 정상 로딩 (비이미지 파일은 썸네일 실패 정상)
-4. palette+pos 이미지 더블클릭 → 단일 뷰 정상, `POSITIONS_ROOT`에서 384 chips 로드 확인
+4. indexed-color+pos 이미지 더블클릭 → 단일 뷰 정상, `POSITIONS_ROOT`에서 384 chips 로드 확인
 5. RGBA 이미지 더블클릭 → 단일 뷰 정상, `currentImageBitmap` 존재
-6. → 키로 6개 전체 순회: palette_no_pos → palette_pos → rgba_no_pos 순서로 정상 전환
+6. → 키로 6개 전체 순회: unknown_no_pos → unknown_pos → rgba_no_pos 순서로 정상 전환
 7. 서버 생존 확인
 
 #### 43-15. 프리페치 + dirty 캐시 무효화 속도
@@ -4065,7 +4065,7 @@ const ms = Math.round(performance.now() - t0);
 2. 이미지 렌더링 확인 (`currentImageBitmap` 존재, overlay canvas > 0)
 3. Navigator에 같은 클래스 내 chip 이미지 리스트 표시
 4. ◀ ▶ 버튼 표시
-5. Grade 범례 표시 (palette PNG인 경우)
+5. Grade 범례 표시 (indexed-color PNG인 경우)
 6. ESC → 초기 화면 복귀
 
 #### 44-5. Chip 클래스 생성 + 폴더 상태 보존
@@ -4208,7 +4208,7 @@ const ms = Math.round(performance.now() - t0);
 - **파일**: `js/main.js` 줄 23459 (수정 전 23471)
 - **테스트**: LOT Mode ON → Label Explorer 클래스 폴더 선택 → 그리드가 LOT 그룹별로 정리되어야 PASS
 - **커밋**: `31b6f89`
-- **후속 정리 (2026-03-31)**: positions 없는 palette/PNF 혼합 클래스는 Phase 49 기준으로 flat-grid 강제가 최신 요구사항이다. 따라서 "일반 Label Explorer LOT 그룹 검증"과 "예외 혼합 클래스 flat-grid 검증"을 분리해서 본다.
+- **후속 정리 (2026-03-31)**: positions 없는 unknown/PNF 혼합 클래스는 Phase 49 기준으로 flat-grid 강제가 최신 요구사항이다. 따라서 "일반 Label Explorer LOT 그룹 검증"과 "예외 혼합 클래스 flat-grid 검증"을 분리해서 본다.
 
 ### 그리드 썸네일 5-10초 멈춤 후 일괄 로드 (배치 블로킹 + 서버 POST 블로킹)
 - **버그**: 그리드에서 썸네일이 개별 표시되지 않고 5-10초 멈춘 후 24개가 한번에 표시
@@ -4225,7 +4225,7 @@ const ms = Math.round(performance.now() - t0);
 - **커밋**: `31b6f89` → `2eb9fc2`
 
 ### 그리드 뷰포트 외 3000개 전체 로드 (백그라운드 프리로드 무제한)
-- **버그**: palette_3k 등 3000개 이미지 폴더에서 그리드 표시 시 뷰포트에 보이는 ~50개뿐 아니라 전체 3000개를 순차 로드
+- **버그**: unknown 등 3000개 이미지 폴더에서 그리드 표시 시 뷰포트에 보이는 ~50개뿐 아니라 전체 3000개를 순차 로드
 - **원인**: `_feedBackgroundGridBatch()`가 `grid.querySelectorAll('.grid-thumb-img:not([data-grid-loaded])')` — **전체 DOM 3000개**에서 미로드 이미지 선택 → 24개씩 계속 큐잉 → drainQueue → 다시 feed → 무한 반복으로 3000개 전부 로드
 - **수정**: `_feedBackgroundGridBatch()`에서 `scrollParent.scrollTop ± vpH*0.5` 범위 내 이미지만 큐잉. `wrap.offsetTop` 기반 범위 체크, 범위 밖이면 skip/break
 - **파일**: `js/main.js` 줄 19080-19110 (_feedBackgroundGridBatch)
@@ -4249,11 +4249,11 @@ const ms = Math.round(performance.now() - t0);
 - **커밋**: `c6b2c1c`
 
 ### Label Explorer 이미지 경로가 classification 심링크 경로 사용
-- **버그**: Label Explorer에서 이미지/썸네일 요청 시 `classification/test_class/file.png` 경로 사용 → 서버에서 심링크 해석에 stat 5+회 필요
+- **버그**: Label Explorer에서 이미지/썸네일 요청 시 `classification/e2e_unknown_label/file.png` 경로 사용 → 서버에서 심링크 해석에 stat 5+회 필요
 - **원인**: (1) `singleViewImageList`가 `item.root_relative` (classification 경로)만 사용 (2) `/api/files` 응답에 `original_relative` 필드 없음 (3) `resolveOriginalImagePath`/`resolveLabelExplorerImagePath`에서 `original_relative` 미참조
 - **수정**: (1) 백엔드 `/api/files`에서 classification 디렉토리 파일에 `original_relative` 추가 (IndexService O(1) 조회) (2) 프론트 `singleViewImageList` 구성 시 `item.original_relative || item.root_relative` 우선 (3) `resolveOriginalImagePath`/`resolveLabelExplorerImagePath`에서 `original_relative` 우선 반환 (4) 백엔드 `_resolve_and_generate`에서 stat 결과 캐싱 + `get_thumbnail_path`에 `cached_stat` 전달
 - **파일**: `api/main.py` (stat 캐싱, original_relative), `js/main.js` 줄 17188, 22864-22867, 22917-22919
-- **테스트**: Label Explorer 이미지 클릭 → `viewer.currentImagePath`가 `wafer_edge_ring/...` 형태 (classification 아님)이면 PASS
+- **테스트**: Label Explorer 이미지 클릭 → `viewer.currentImagePath`가 `unknown/...` 형태 (classification 아님)이면 PASS
 - **커밋**: `c6b2c1c`
 
 ### JS/CSS/HTML pre-gzip 서빙 (성능 개선)
@@ -4285,7 +4285,7 @@ const ms = Math.round(performance.now() - t0);
 - **테스트**:
   ```javascript
   // 서버 재시작 + 썸네일 캐시 삭제 후 첫 로드
-  v.loadImagesInFolderAndShowGrid('palette_3k'); // 8초 대기
+  v.loadImagesInFolderAndShowGrid('unknown'); // 8초 대기
   const params = v.getPersonalizedParams();
   // PASS: params.includes('_t=') === true
   // PASS: v._personalizedColorCacheBuster !== undefined
@@ -4300,7 +4300,7 @@ const ms = Math.round(performance.now() - t0);
 - **파일**: `js/color-editor.js` (Fail 탭 저장 후 그리드 리로드 로직)
 - **테스트**:
   ```javascript
-  // palette_3k 폴더 클릭 → 그리드 표시
+  // unknown 폴더 클릭 → 그리드 표시
   // 색상 편집 → 배경 #FF00FF → 적용
   // PASS: 그리드 썸네일 배경이 마젠타로 변경
   // FAIL: 이전 색상 유지 (그리드 미갱신)
@@ -4322,7 +4322,7 @@ const ms = Math.round(performance.now() - t0);
   ```bash
   curl -sk -X POST https://localhost/api/measure-composite-data \
     -H "Content-Type: application/json" \
-    -d '{"image_paths":["palette_3k/ABC123_00C_04_0003_EE_NORMAL.png"],"mode":"f","item_key":"1000","aggregation":"average"}'
+    -d '{"image_paths":["unknown/AAU220_00P_13_20260501_010000_96.0_2_EE_PWQ.png"],"mode":"f","item_key":"1000","aggregation":"average"}'
   # PASS: background != [204,204,204] && background == 개인색 RGB
   ```
 - **E2E Phase**: Phase 34-6 (measure-thumb 배경 개인색) 검증
@@ -4334,7 +4334,7 @@ const ms = Math.round(performance.now() - t0);
 - **파일**: `js/main.js` (`getSelectedImagesForModal` 함수)
 - **테스트**:
   ```javascript
-  v.loadImagesInFolderAndShowGrid('palette_3k'); // 6초 대기
+  v.loadImagesInFolderAndShowGrid('unknown'); // 6초 대기
   v._measureCheckedItems = [{type:'f', key:'1000', label:'FBT1000'}];
   v._applyMeasureSelection(); // 5초 대기
   // PASS: v.gridMode === true && v.overlayMode === 'f'
@@ -4368,7 +4368,7 @@ const ms = Math.round(performance.now() - t0);
 - **테스트**: chip-positions 응답 크기 < 100KB
 
 ### Positions 파일 이미지 분석 기반 재생성 (테스트 데이터)
-- **작업**: palette_3k 빈 파일 2개 + 누락 10개 → 이미지 palette index 분석 기반 재생성
+- **작업**: unknown 빈 파일 2개 + 누락 10개 → 이미지 indexed-color index 분석 기반 재생성
 - **방법**: reference positions 구조 + `determine_bin()` 이미지 칩 영역 분석으로 BIN 결정, F/Q는 파일명+좌표 해시 기반 결정적 생성
 - **검증**: `3000 이미지 = 3000 positions, 전부 ftn_keys 500개 + qtn_keys 500개 + chips 384개 + coord + rect`
 - **참고**: `D:/project/fail-map/positions_module.py` (`save_positions_json`)
@@ -4397,23 +4397,23 @@ const ms = Math.round(performance.now() - t0);
 
 ### Composite 이미지 default 색상 생성 → display 개인색 적용 (해결)
 - **버그**: Composite Grade/BIN/FBT/square 맵이 생성 시점 개인색으로 baking → 색상 변경 시 재생성 필요, 즉시 반영 불가
-- **원인**: `create_full_composite_maps()`에서 개인 palette 적용 후 RGB/JPEG 저장 → PLTE 패치 불가
+- **원인**: `create_full_composite_maps()`에서 개인색 적용 후 RGB/JPEG 저장 → PLTE 패치 불가
 - **수정**:
-  1. Grade 맵: palette-indexed PNG(mode=P)로 default palette 저장 → `/api/thumbnail`에서 개인색 PLTE 패치
+  1. Grade 맵: indexed-color PNG(mode=P)로 default PLTE 저장 → `/api/thumbnail`에서 개인색 PLTE 패치
   2. Square 맵: `_save_sum_map_variants(scheme=ANONYMOUS_LOGIN_ID)` default gradient 사용
   3. BIN/FBT 맵: `_render(scheme=ANONYMOUS_LOGIN_ID)` default gradient 사용
   4. 개인색은 display 시점에 `/api/thumbnail?personalized=true&scheme=<user>` 파라미터로 적용
 - **파일**:
-  - `api/composite_map.py`: `_save_heatmap_task` (palette PNG), `_save_sum_map_variants` 호출 (scheme=default), `_apply_personal_palette` 제거
+  - `api/composite_map.py`: `_save_heatmap_task` (indexed-color PNG), `_save_sum_map_variants` 호출 (scheme=default), `personal PLTE 적용 경로` 제거
   - `api/measure_composite.py`: `create_measure_composite` (default gradient)
 - **테스트**:
   ```python
-  # 1. Grade 맵이 palette PNG(mode=P)로 저장되는지
+  # 1. Grade 맵이 indexed-color PNG(mode=P)로 저장되는지
   from PIL import Image
   img = Image.open('composite_map/notsaml/Grade_6.png')
-  assert img.mode == 'P'  # palette-indexed
-  pal = img.getpalette()
-  assert pal[8*3:8*3+3] == [204,204,204]  # default bg
+  assert img.mode == 'P'  # indexed-color
+  colors = img.getcolors(maxcolors=256)
+  assert colors
 
   # 2. 썸네일 API에서 개인색 적용
   # GET /api/thumbnail?path=composite_map/notsaml/Grade_6.png&personalized=true&scheme=notsaml
@@ -4430,8 +4430,8 @@ const ms = Math.round(performance.now() - t0);
 - **테스트**: composite 생성 시간 측정 (14개 이미지 < 5초)
 
 ### Positions 파일 생성 (테스트 데이터)
-- **작업**: palette_3k에서 빈 파일 2개 + 누락 10개 → 이미지 분석 기반 재생성 (12개 총)
-- **방법**: reference positions 구조 + 실제 이미지 palette index 분석으로 BIN 결정, F/Q는 파일명+좌표 해시 기반 결정적 생성
+- **작업**: unknown에서 빈 파일 2개 + 누락 10개 → 이미지 분석 기반 재생성 (12개 총)
+- **방법**: reference positions 구조 + 실제 이미지 indexed-color index 분석으로 BIN 결정, F/Q는 파일명+좌표 해시 기반 결정적 생성
 - **검증**: 3000 이미지 = 3000 positions, 전부 `ftn_keys` 500개 + `qtn_keys` 500개 + `chips` 384개 + `coord` + `rect`
 - **참고**: `D:/project/fail-map/positions_module.py`의 `save_positions_json()` 로직 참조
 
@@ -4466,7 +4466,7 @@ const ms = Math.round(performance.now() - t0);
 
 **테스트 절차**:
 
-1. palette_3k 폴더 이미지 로드 → `showGrid(images.slice(0,30))`
+1. unknown 폴더 이미지 로드 → `showGrid(images.slice(0,30))`
 2. FBT1001 선택 → `_applyMeasureSelection()` → gradient heatmap 그리드 확인
 3. FBT1005로 전환 → 이미지 패턴 변경 확인
 4. QVL5000으로 전환 → 이미지 패턴 변경 확인
@@ -4504,19 +4504,19 @@ Chrome이 `max-age=86400~31536000` 응답을 디스크 캐시에 저장 → 개�
 1. **서버 응답 헤더 검증** — 로컬 Playwright `page.evaluate`로 API 호출 후 헤더 확인:
 ```javascript
 // 썸네일 응답 헤더 확인
-const thumbRes = await fetch('/api/thumbnail?path=palette_3k/' + firstImage + '&size=256');
+const thumbRes = await fetch('/api/thumbnail?path=unknown/' + firstImage + '&size=256');
 const thumbCC = thumbRes.headers.get('Cache-Control');
 // PASS: thumbCC === 'no-cache'
 // FAIL: thumbCC에 'max-age' 포함 (max-age=0 제외)
 
 // 이미지 응답 헤더 확인
-const imgRes = await fetch('/api/image?path=palette_3k/' + firstImage);
+const imgRes = await fetch('/api/image?path=unknown/' + firstImage);
 const imgCC = imgRes.headers.get('Cache-Control');
 // PASS: imgCC가 'no-cache' 또는 'no-store' 포함
 // FAIL: imgCC에 'max-age' > 0 포함
 
 // measure-thumb 응답 헤더 확인
-const mRes = await fetch('/api/measure-thumb?path=palette_3k/' + firstImage + '&size=256&field=f&key=1001');
+const mRes = await fetch('/api/measure-thumb?path=unknown/' + firstImage + '&size=256&field=f&key=1001');
 const mCC = mRes.headers.get('Cache-Control');
 // PASS: mCC === 'no-cache'
 
@@ -4529,9 +4529,9 @@ const jsCC = jsRes.headers.get('Cache-Control');
 
 2. **ETag 304 동작 검증** — 같은 리소스를 두 번 요청 시 304 반환:
 ```javascript
-const res1 = await fetch('/api/thumbnail?path=palette_3k/' + firstImage + '&size=256');
+const res1 = await fetch('/api/thumbnail?path=unknown/' + firstImage + '&size=256');
 const etag = res1.headers.get('ETag');
-const res2 = await fetch('/api/thumbnail?path=palette_3k/' + firstImage + '&size=256', {
+const res2 = await fetch('/api/thumbnail?path=unknown/' + firstImage + '&size=256', {
     headers: { 'If-None-Match': etag }
 });
 // PASS: res2.status === 304
@@ -4595,7 +4595,7 @@ const diskCacheHits = entries.filter(e => e.transferSize === 0 && e.decodedBodyS
 
 ## Phase 47: Composite 탭 색상 매핑 + 배경 행 제거 검증
 
-**목적**: `palette_3k` 기준 실제 composite 생성 결과에서 `BIN/F/Q/square`가 오직 `Composite` 탭 색상만 따르는지, `Measure` 탭 변경에는 영향받지 않는지, 그리고 `Composite`/`Measure` 탭에서 배경 row가 제거되었는지 검증한다.
+**목적**: `unknown` 기준 실제 composite 생성 결과에서 `BIN/F/Q/square`가 오직 `Composite` 탭 색상만 따르는지, `Measure` 탭 변경에는 영향받지 않는지, 그리고 `Composite`/`Measure` 탭에서 배경 row가 제거되었는지 검증한다.
 
 **배경 — 수정한 버그 2건 (2026-03-30)**:
 
@@ -4606,7 +4606,7 @@ const diskCacheHits = entries.filter(e => e.transferSize === 0 && e.decodedBodyS
 
 **테스트 절차**:
 
-1. 새 서버 포트로 앱 접속 후 `palette_3k` 폴더를 로드한다.
+1. 새 서버 포트로 앱 접속 후 `unknown` 폴더를 로드한다.
 2. 그리드에서 처음 10개 이미지를 선택한다.
 3. Composite 생성 항목으로 `Failbit + BIN389 + FBT1000 + QVL5000`를 동시에 생성한다.
 4. 결과 그리드에 아래 파일이 보여야 한다.
@@ -4699,12 +4699,12 @@ return result;
 **테스트 절차**:
 
 1. `https://localhost:8443` 접속 후 새로고침한다.
-2. `palette_3k` 폴더를 선택하고 처음 10개 이미지를 체크한다.
+2. `unknown` 폴더를 선택하고 처음 10개 이미지를 체크한다.
 3. 상단 패널에서 `Measure`를 열고 `Failbit`, `BIN`, `FBT1000`, `QVL5000`를 선택한 뒤 `적용`한다.
 4. 적용 직후 활성 페이지가 `measure`로 전환되고, 그리드가 즉시 채워지는지 확인한다.
 5. 첫 4개 타일 URL이 각각 일반 썸네일, `bin_overlay`, `measure-thumb(f)`, `measure-thumb(q)` 패턴으로 바로 잡히는지 확인한다.
 6. 오른쪽 클릭으로 그리드를 초기화한다.
-7. 파일이 아닌 `palette_3k` 폴더를 한 번 클릭한다.
+7. 파일이 아닌 `unknown` 폴더를 한 번 클릭한다.
 8. 폴더가 선택 상태로 남고, 마지막 파일 하이라이트가 되살아나지 않는지 확인한다.
 
 **검증 포인트**:
@@ -4733,7 +4733,7 @@ return result;
 - `activePageRole === 'measure'`
 - `currentGridImages > 0`
 - `firstSources`에 `bin_overlay=1`, `measure-thumb`가 즉시 포함
-- 폴더 재선택 직후 `selectedFolders = ['palette_3k']`, `selectedFiles = []`, `selectedImagePath = null`
+- 폴더 재선택 직후 `selectedFolders = ['unknown']`, `selectedFiles = []`, `selectedImagePath = null`
 
 **핵심 파일**:
 - `js/main.js`: `_ensureRatioGradientCache`, `_prefetchCheckedMeasureThumbs`, `clearWaferMapExplorerSelection`, `_openMeasureTab`, `showGrid`
@@ -4755,9 +4755,9 @@ return result;
   - `showGridByLot`에 300ms 후 `loadVisibleGridThumbnails()` 안전망 호출 추가 (스크롤 이벤트 settle 후 미로드 이미지 재시도)
 - **파일**: `js/main.js`
 
-### Label Explorer 그리드가 LOT 경로를 타면서 positions 없는 palette/PNF 이미지가 초기 미표시되는 회귀
-- **버그**: 오래된 palette 이미지이지만 positions 파일이 없거나, PNF/비팔레트 계열이라 LOT 분류 정보가 맞지 않는 라벨 등록 이미지가 Label Explorer 그리드에서 처음엔 비어 있다가, 더블클릭으로 단일 이미지 뷰에 들어갔다가 다시 그리드로 돌아오면 뒤늦게 보임
-- **재현 조건**: `asDF` 같은 Label Explorer 클래스에서 `filter_test/ABC234_00C_04_20260315_110000_91.5_9_EE_PWQ.png`, `palette_5mb/wafer_palette_15mb_EE_PWQ.png`처럼 positions 없는 palette 이미지를 포함한 상태로 그리드 진입
+### Label Explorer 그리드가 LOT 경로를 타면서 positions 없는 unknown/PNF 이미지가 초기 미표시되는 회귀
+- **버그**: 오래된 unknown 이미지이지만 positions 파일이 없거나, PNF/non-indexed-color 계열이라 LOT 분류 정보가 맞지 않는 라벨 등록 이미지가 Label Explorer 그리드에서 처음엔 비어 있다가, 더블클릭으로 단일 이미지 뷰에 들어갔다가 다시 그리드로 돌아오면 뒤늦게 보임
+- **재현 조건**: `asDF` 같은 Label Explorer 클래스에서 `unknown/Donut_invalid_main/AAD534_00C_07_20260501_010000_95.2_0_PT_NORMAL.png`, `unknown/Center_scratch/AAU220_00P_13_20260501_010000_96.0_2_EE_PWQ.PNG`처럼 positions 없는 unknown 이미지를 포함한 상태로 그리드 진입
 - **원인**: Label Explorer가 `showGrid(..., true)`로 진입하면서도 `lotMode`가 켜져 있으면 여전히 `showGridByLot()` 경로를 탔다. 이 경로는 LOT 헤더/지연 로딩 전제를 두고 있어 Label Explorer의 혼합 이미지 집합에서 초기 썸네일 src 할당이 빠질 수 있었고, 단일뷰 복귀 시 재렌더링되며 뒤늦게 채워졌다
 - **수정**:
   - `buildLabelExplorerGridState()`에 `forceFlatGrid: true` 저장
@@ -4773,7 +4773,7 @@ return result;
 4. 브라우저 콘솔에 `chip-positions` 관련 404 에러가 없는지 확인한다.
 5. `asdfasdf` 폴더도 **Ctrl+클릭**하여 두 클래스 모두 그리드에 표시되는지 확인한다.
 6. 그리드에 **LOT 헤더가 생성되지 않고 flat-grid**로 바로 표시되는지 확인한다.
-7. `filter_test/ABC234_00C_04_20260315_110000_91.5_9_EE_PWQ.png`, `palette_5mb/wafer_palette_15mb_EE_PWQ.png` 썸네일이 첫 진입에서 즉시 로드되는지 확인한다.
+7. `unknown/Donut_invalid_main/AAD534_00C_07_20260501_010000_95.2_0_PT_NORMAL.png`, `unknown/Center_scratch/AAU220_00P_13_20260501_010000_96.0_2_EE_PWQ.PNG` 썸네일이 첫 진입에서 즉시 로드되는지 확인한다.
 8. 그리드에서 위 두 이미지 중 하나를 **더블클릭**하여 단일뷰로 진입한다.
 9. 다시 **더블클릭**하여 그리드로 복귀한다.
 10. 이전에 보이던 이미지가 모두 그대로 정상 표시되고, 복귀 후에도 여전히 LOT 헤더 없이 flat-grid 상태인지 확인한다.
@@ -4783,7 +4783,7 @@ return result;
 - [ ] Label Explorer Ctrl+클릭 후 모든 그리드 이미지가 즉시 정상 로드됨
 - [ ] 콘솔에 `chip-positions` 404 에러가 없음
 - [ ] Label Explorer 클래스 그리드는 LOT Mode ON이어도 LOT 헤더 없이 flat-grid로 렌더링됨
-- [ ] positions 없는 palette/PNF 이미지 썸네일이 첫 진입에서 바로 로드됨
+- [ ] positions 없는 unknown/PNF 이미지 썸네일이 첫 진입에서 바로 로드됨
 - [ ] 단일뷰 진입→복귀 후에도 모든 이미지가 정상 표시되고 flat-grid 상태가 유지됨
 - [ ] positions 파일이 없는 이미지에 대해 `/api/chip-positions`가 200 + `{"chips":[]}` 반환
 - [ ] 그리드 instant load 실패 시 자동 재시도하여 이미지가 최종 로드됨
@@ -4873,31 +4873,31 @@ curl -sk "https://localhost:8443/api/chip-positions?path=classification/asDF/non
 
 ### 49-1. 서버 재시작 직후 첫 검색 성공 확인
 1. 서버 종료 후 재시작 (`RELOAD=0 HTTPS_PORT=8443 python -m api.main`)
-2. 서버 기동 직후 (인덱스 빌드 중에) `/api/search?q=abc123&limit=100` API 호출
+2. 서버 기동 직후 (인덱스 빌드 중에) `/api/search?q=aau220&limit=100` API 호출
 3. **pass 기준**: `success === true`, `results.length > 0`, alert 없음
 
-### 49-2. UI 단순 검색 (ABC123)
-1. 검색창에 `ABC123` 입력 → 검색 버튼 클릭
-2. **pass 기준**: 그리드에 500건 표시, alert 없음, 이미지 정상 로드
+### 49-2. UI 단순 검색 (AAU220)
+1. 검색창에 `AAU220` 입력 → 검색 버튼 클릭
+2. **pass 기준**: 그리드에 현재 `unknown`의 AAU220 결과가 표시되고, alert 없음, 이미지 정상 로드
 
 ### 49-3. UI AND/OR 논리 검색
-1. 검색창에 `(ABC123 and 04) or (DEF456 and 05)` 입력 → 검색
+1. 검색창에 `(AAU220 and 13) or (ABM792 and 05)` 입력 → 검색
 2. **pass 기준**: 결과 > 0건, 두 LOT 모두 표시
 
 ### 49-4. 다중검색 모달 — noise LOT 파싱
 1. `다중검색` 버튼 클릭 → 모달 열림
 2. textarea에 noise 포함 3줄 입력:
    ```
-   ABC123.J3 04
-   DEF456.2	08
-   GHJ789 extra_junk
+   AAU220.J3 13
+   ABM792.2	05
+   AAV489 11
    ```
 3. `적용` 버튼 클릭
 4. **pass 기준**:
    - 모달 자동 닫힘 (`display === 'none'`)
    - 에러 메시지 없음 (`#multi-search-error` 비어있음)
-   - 그리드에 3개 LOT 이미지 표시 (ABC123:500 + DEF456:524 + GHJ789:524 = 1548건)
-   - LOT 패널에 ABC123, DEF456, GHJ789 표시
+   - 그리드에 현재 `unknown`에 존재하는 3개 LOT 이미지 표시
+   - LOT 패널에 AAU220, ABM792, AAV489 표시
    - `suppressAlerts is not defined` 콘솔 에러 없음
 
 ### 49-5. 다중검색 에러 처리
@@ -4909,7 +4909,7 @@ curl -sk "https://localhost:8443/api/chip-positions?path=classification/asDF/non
 2. **pass 기준**: 검색 중에도 다른 API가 1초 이내 응답
 
 ### 다중검색 cold flat-grid 렌더 분리 측정 (showGrid vs thumbnail 생성)
-`palette_3k` 다중검색이 느릴 때는 검색/필터링/DOM 렌더링과 썸네일 생성 병목을 반드시 분리해서 측정한다.
+`unknown` 다중검색이 느릴 때는 검색/필터링/DOM 렌더링과 썸네일 생성 병목을 반드시 분리해서 측정한다.
 
 1. **진짜 cold 상태 강제**
    - `D:/project/data/wm-811k/thumbnails` 폴더를 통째로 삭제한다.
@@ -4917,13 +4917,13 @@ curl -sk "https://localhost:8443/api/chip-positions?path=classification/asDF/non
    - 기존 Playwright 탭/세션을 재사용하지 말고 **새 브라우저 세션**으로 접속한다.
 2. **썸네일 미존재 확인**
    - 샘플 512 썸네일 파일 2~3개가 실제로 없는지 확인한다.
-   - 예: `palette_3k/KHN931_00C_02_0001_PE_ENGINEER.png`, `palette_3k/KHN931_00C_02_0025_EE_NORMAL.png`, `palette_3k/TMW067_00C_07_0006_PT_ENGINEER.png`
+   - 예: `unknown/Center_scratch/AAU220_00P_13_20260501_010000_96.0_2_EE_PWQ.png`, `unknown/Full_scratch/ABM792_00C_05_20260501_010000_68.2_30_EE_PWQ.png`, `unknown/Center_scratch/AAV489_00C_11_20260501_010000_96.0_2_EE_PWQ.png`
 3. **LOT Mode 경로 배제**
    - `v.lotMode = false`로 강제한다.
-   - `await v.changeFolder('D:\\project\\data\\wm-811k\\palette_3k')`로 폴더를 명시적으로 고정한다.
+   - `await v.changeFolder('D:\\project\\data\\wm-811k\\unknown')`로 폴더를 명시적으로 고정한다.
    - 목적은 `showGridByLot()`이 아니라 **flat-grid `showGrid()` 경로만** 측정하는 것이다.
 4. **다중검색 실행**
-   - `await v.performSearch({ multiLotList: ['khn931', 'tmw067'], suppressAlerts: true })`
+   - `await v.performSearch({ multiLotList: ['aad534', 'aai158'], suppressAlerts: true })`
    - 반환 시간과 그리드 이미지 상태를 함께 기록한다.
 5. **즉시/지연 상태를 단계별로 기록**
    - 반환 직후 `#image-grid .grid-thumb-img`의 `total`, `loaded`, `loading`
@@ -4946,21 +4946,21 @@ curl -sk "https://localhost:8443/api/chip-positions?path=classification/asDF/non
 // 49-1: 서버 직후 검색 API
 const [status, search] = await Promise.all([
   fetch('/api/index-status').then(r => r.json()),
-  fetch('/api/search?q=abc123&limit=100').then(r => r.json())
+  fetch('/api/search?q=aau220&limit=100').then(r => r.json())
 ]);
 console.assert(search.success && search.results.length > 0, '첫 검색 성공');
 
 // 49-4: 다중검색 모달
 document.getElementById('multi-search-btn').click();
-document.getElementById('multi-search-input').value = 'ABC123.J3 04\nDEF456.2\t08\nGHJ789 extra_junk';
+document.getElementById('multi-search-input').value = 'AAU220.J3 13\nABM792.2\t05\nAAV489 11';
 document.getElementById('multi-search-apply').click();
 // → 모달 닫힘, v.selectedImages.length === 1548, 에러 없음
 
 // cold flat-grid 분리 측정
 v.lotMode = false;
-await v.changeFolder('D:\\project\\data\\wm-811k\\palette_3k');
+await v.changeFolder('D:\\project\\data\\wm-811k\\unknown');
 const t0 = performance.now();
-await v.performSearch({ multiLotList: ['khn931', 'tmw067'], suppressAlerts: true });
+await v.performSearch({ multiLotList: ['aad534', 'aai158'], suppressAlerts: true });
 const duration = performance.now() - t0;
 const sampleState = () => {
   const imgs = Array.from(document.querySelectorAll('#image-grid .grid-thumb-img'));
@@ -4985,8 +4985,8 @@ const t5000 = sampleState();
 | 항목 | 기준 | 실측 |
 |------|------|------|
 | 서버 직후 첫 검색 | 결과 > 0 | 100건 (3.8ms) |
-| UI 단순 검색 ABC123 | 500건, alert 없음 | 500건 PASS |
-| 다중검색 noise 3줄 | 1548건, 에러 없음 | 1548건 PASS |
+| UI 단순 검색 AAU220 | 결과 > 0, alert 없음 | PASS |
+| 다중검색 noise 3줄 | 결과 > 0, 에러 없음 | PASS |
 | suppressAlerts 에러 | 콘솔 에러 없음 | PASS |
 | 이벤트루프 블로킹 | 검색 중 타 API 1초 이내 | PASS |
 | cold flat-grid 검색 반환 | < 50ms | 18.7ms PASS |
@@ -5110,7 +5110,7 @@ L3 Tracker의 체감 지연은 대략 아래 4단계로 나뉜다.
 
 #### 3-5. Composite / Measure Composite
 - Composite/Measure background task polling을 1초 고정 대기에서 짧은 시작 + backoff로 변경
-- palette PNG 저장 경로에서 `compress_level` / `optimize`를 속도 위주로 조정
+- indexed-color PNG 저장 경로에서 `compress_level` / `optimize`를 속도 위주로 조정
 - `measure_composite.py` 저장 경로도 `compress_level=0`으로 변경
 - startup 시 composite/measure 모듈 warmup을 걸어 첫 클릭 lazy import 비용을 줄이는 구조 추가
 
@@ -5148,7 +5148,7 @@ L3 Tracker의 체감 지연은 대략 아래 4단계로 나뉜다.
 측정 조건:
 - `D:/project/data/wm-811k/thumbnails` 삭제
 - 8443 서버 재시작
-- `palette_3k`에서 `KHN931` 24장 + `TMW067` 24장
+- `unknown`에 실제 존재하는 `AAU220`, `ABM792`, `AAV489` 샘플
 - generic/failbit 48장 burst
 - bin 24장 burst
 - measure-thumb 24장 burst
@@ -5218,9 +5218,9 @@ v._measureCheckedItems = [
 ];
 v._gridMeasureMap = [...v._measureCheckedItems];
 [
-  v._buildMeasureThumbUrl('palette_3k/ABC123_00C_04_0003_EE_NORMAL.png', v._measureCheckedItems[0], ''),
-  v._buildMeasureThumbUrl('palette_3k/ABC123_00C_04_0003_EE_NORMAL.png', v._measureCheckedItems[1], ''),
-  v._buildMeasureThumbUrl('palette_3k/ABC123_00C_04_0003_EE_NORMAL.png', v._measureCheckedItems[2], ''),
+  v._buildMeasureThumbUrl('unknown/AAU220_00P_13_20260501_010000_96.0_2_EE_PWQ.png', v._measureCheckedItems[0], ''),
+  v._buildMeasureThumbUrl('unknown/AAU220_00P_13_20260501_010000_96.0_2_EE_PWQ.png', v._measureCheckedItems[1], ''),
+  v._buildMeasureThumbUrl('unknown/AAU220_00P_13_20260501_010000_96.0_2_EE_PWQ.png', v._measureCheckedItems[2], ''),
 ];
 ```
 
@@ -5268,7 +5268,7 @@ v._gridMeasureMap = [...v._measureCheckedItems];
   - `MEASURE_PREFETCH_CONCURRENCY`
   - `THUMBNAIL_EXECUTOR_WORKERS`
 - `api/composite_map.py`
-  - palette PNG 저장 경로 최적화
+  - indexed-color PNG 저장 경로 최적화
 - `api/measure_composite.py`
   - composite 저장 compress level 최적화
 - `start.ps1`
@@ -5285,7 +5285,7 @@ v._gridMeasureMap = [...v._measureCheckedItems];
 - **파일**: `js/main.js` (`buildSavedViewSnapshot`)
 
 ### E2E 검증 방법
-1. `palette_3k`를 열고 flat grid 상태(`lotMode=false`)로 맞춘다.
+1. `unknown`를 열고 flat grid 상태(`lotMode=false`)로 맞춘다.
 2. `.grid-scroll-wrapper.scrollTop = 5200`으로 이동하고 임의 이미지 1개를 선택한다.
 3. `window.viewer.handleCompositeCreate()`로 `com0`를 생성한다.
 4. `wafer0` 탭으로 돌아와 `scrollTop === 5200`인지 확인한다.
@@ -5381,7 +5381,7 @@ for name, info in result.items():
 3. 라벨 이미지를 보면서 삭제하면 원본과 라벨 이미지 사이 전환이 반복되며 **떨림/진동** 발생
 
 ### 원인
-- `resolveLabelExplorerImagePath()`가 원본 경로(`palette_3k/...`)를 반환 → `isClassificationPath()` 통과
+- `resolveLabelExplorerImagePath()`가 원본 경로(`unknown/...`)를 반환 → `isClassificationPath()` 통과
 - `updateWaferMapExplorerHighlight()`가 원본 경로를 받아 Wafer Map Explorer를 스크롤+하이라이트
 - 라벨 삭제 후 `restoreSavedViewState()`가 Wafer Map Explorer의 상태를 복원 → 원본 ↔ 라벨 전환
 
@@ -5407,7 +5407,7 @@ updateWaferMapExplorerHighlight(imagePath) {
 ### E2E 검증 코드
 
 ```javascript
-// 전제: palette_3k 폴더가 Ctrl+클릭으로 선택된 상태, asDF 클래스에 라벨이 1개 이상 존재
+// 전제: unknown 폴더가 Ctrl+클릭으로 선택된 상태, asDF 클래스에 라벨이 1개 이상 존재
 
 // 1. Label Explorer 그리드 로드
 const v = window.viewer;
@@ -5479,7 +5479,7 @@ assert(navCount === 0);  // ← 이전에는 1이 됐음 (버그)
 ### E2E 검증
 
 ```javascript
-// 1. palette_3k Ctrl+클릭 → 3000개 그리드
+// 1. unknown Ctrl+클릭 → 3000개 그리드
 // 2. 존재하지 않는 LOT 필터 적용
 const v = window.viewer;
 v.filterLT = ['NONEXISTENT'];
@@ -5521,7 +5521,7 @@ assert(v.selectedImages.length === 3000);  // 원래 이미지 복원
 ```
 p1_grid:      { images: 3000, wraps: 3000, gridMode: true }
 p1_dblclick:  { viewMode: 'gridImage', explorerHighlight: 1, source: 'grid' }
-p1_next:      { path: 'palette_3k/...0027...', explorerHighlight: 1 }
+p1_next:      { path: 'unknown/...0027...', explorerHighlight: 1 }
 p1_esc:       { gridMode: true, wraps: 3000 }
 p2_labelGrid: { isLabelGrid: true, wraps: 16, role: 'label' }
 p2_dblclick:  { path: 'classification/asDF/...0003...', explorerHighlight: 0, source: 'labelExplorer' }
@@ -5533,7 +5533,7 @@ p3_emptyFilter: { gridControlsVisible: true, message: '이미지가 없습니다
 ### 핵심 규칙
 - 일반 그리드(source='grid'): 더블클릭/Next 시 Explorer 하이라이트가 **따라가야** 한다
 - Label 그리드(source='labelExplorer'): 더블클릭/Next 시 Explorer 하이라이트가 **절대 움직이면 안 된다**
-- Label 경로는 `classification/...`이어야 하고, 원본 `palette_3k/...`로 빠지면 안 된다
+- Label 경로는 `classification/...`이어야 하고, 원본 `unknown/...`로 빠지면 안 된다
 
 ---
 
@@ -5548,11 +5548,11 @@ p3_emptyFilter: { gridControlsVisible: true, message: '이미지가 없습니다
 
 **테스트 데이터**:
 ```
-wafer_edge_ring/wafer_edge_ring_0005.png     → token[0]=wafer, token[2]=ring
-wafer_edge_gradient/wafer_edge_gradient_0005.png → token[0]=wafer, token[2]=gradient
-wafer_center_cool/wafer_center_cool_0010.png → token[0]=wafer, token[2]=cool
+unknown/unknown_0005.png     → token[0]=wafer, token[2]=ring
+unknown/unknown_0005.png → token[0]=wafer, token[2]=gradient
+unknown/unknown_0010.png → token[0]=wafer, token[2]=cool
 backup/Edge-Ring_1_padded.png                → token[0]=edge-ring, token[2]=padded
-palette_3k/ABC123_00C_04_0003_EE_Engineer.png → token[0]=abc123, token[2]=04
+unknown/AAU220_00P_13_20260501_010000_96.0_2_EE_PWQ.png → token[0]=AAU220, token[2]=13
 ```
 
 ### 51-1. 단일 검색 — token[0] 전용
@@ -5563,9 +5563,9 @@ palette_3k/ABC123_00C_04_0003_EE_Engineer.png → token[0]=abc123, token[2]=04
 | 2 | `wafer` | wafer_* 파일 전체 (112,006건) | token[0]="wafer" ✓ |
 | 3 | `cool` | 0건 | token[0]="wafer" → "cool" 미포함 |
 | 4 | `ring` | 0건 | token[0]="wafer" → "ring" 미포함 |
-| 5 | `abc123` | 500건 | token[0]="abc123" ✓ |
+| 5 | `aau220` | >0건 | token[0]="aau220" ✓ |
 
-**검증 포인트**: `wafer_edge_*` 파일이 `edge` 검색에 나오면 **FAIL** (token[0]="wafer"이므로)
+**검증 포인트**: `unknown_*` 파일이 `edge` 검색에 나오면 **FAIL** (token[0]="wafer"이므로)
 
 ```javascript
 const a1 = await (await fetch('/api/search?q=edge&folder=&limit=5')).json();
@@ -5590,7 +5590,7 @@ console.assert(a4.total === 0, `ring 단독 검색: ${a4.total}건 (expected 0)`
 | 2 | `wafer and cool` | 3000건 | token[0]∋"wafer" + token[2]∋"cool" |
 | 3 | `wafer and gradient` | 3000건 | token[0]∋"wafer" + token[2]∋"gradient" |
 | 4 | `edge and 0005` | 0건 | token[0]∋"edge"(backup만) → token[2]∋"0005" 없음 |
-| 5 | `abc123 and 04` | 125건 | token[0]∋"abc123" → token[2]∋"04" |
+| 5 | `aau220 and 13` | 125건 | token[0]∋"aau220" → token[2]∋"04" |
 
 ```javascript
 const b1 = await (await fetch('/api/search?q=wafer+and+ring&folder=&limit=5')).json();
@@ -5599,8 +5599,8 @@ console.assert(b1.total === 3000, `wafer AND ring: ${b1.total}`);
 const b4 = await (await fetch('/api/search?q=edge+and+0005&folder=&limit=5')).json();
 console.assert(b4.total === 0, `edge AND 0005: ${b4.total} (expected 0)`);
 
-const b5 = await (await fetch('/api/search?q=abc123+and+04&folder=&limit=5')).json();
-console.assert(b5.total > 0, `abc123 AND 04: ${b5.total}`);
+const b5 = await (await fetch('/api/search?q=aau220+and+13&folder=&limit=5')).json();
+console.assert(b5.total > 0, `aau220 AND 04: ${b5.total}`);
 ```
 
 ### 51-3. OR 검색 — token[0] 합집합
@@ -5608,14 +5608,14 @@ console.assert(b5.total > 0, `abc123 AND 04: ${b5.total}`);
 | # | 검색어 | 예상 결과 | 설명 |
 |---|--------|----------|------|
 | 1 | `edge or cool` | 16건 | token[0]∋"edge"(16) ∪ token[0]∋"cool"(0) |
-| 2 | `abc123 or def456` | 1024건 | token[0]∋"abc123"(500) ∪ token[0]∋"def456"(524) |
+| 2 | `aau220 or abm792` | 1024건 | token[0]∋"aau220"(500) ∪ token[0]∋"abm792"(524) |
 
 ```javascript
 const c1 = await (await fetch('/api/search?q=edge+or+cool&folder=&limit=5')).json();
 console.assert(c1.total === 16, `edge OR cool: ${c1.total}`);
 
-const c2 = await (await fetch('/api/search?q=abc123+or+def456&folder=&limit=5')).json();
-console.assert(c2.total > 1000, `abc123 OR def456: ${c2.total}`);
+const c2 = await (await fetch('/api/search?q=aau220+or+abm792&folder=&limit=5')).json();
+console.assert(c2.total > 1000, `aau220 OR abm792: ${c2.total}`);
 ```
 
 ### 51-4. 복합 검색 — (A and B) or (C and D)
@@ -5624,7 +5624,7 @@ console.assert(c2.total > 1000, `abc123 OR def456: ${c2.total}`);
 |---|--------|----------|------|
 | 1 | `(wafer and ring) or (wafer and cool)` | 6000건 | 3000+3000 |
 | 2 | `(wafer and ring) or (wafer and gradient)` | 6000건 | 3000+3000 |
-| 3 | `(abc123 and 04) or (def456 and 05)` | >0건 | 두 LOT 교차 |
+| 3 | `(aau220 and 13) or (abm792 and 05)` | >0건 | 두 LOT 교차 |
 
 ```javascript
 const d1 = await (await fetch('/api/search?q=(wafer+and+ring)+or+(wafer+and+cool)&folder=&limit=5')).json();
@@ -5654,14 +5654,14 @@ token[0]과 token[2]가 뒤바뀌면 결과가 달라져야 한다.
 | # | 검색어 | 예상 | 역방향 | 역방향 결과 |
 |---|--------|------|--------|------------|
 | 1 | `wafer and ring` | 3000건 | `ring and wafer` | 0건 (token[0]∋"ring" 없음) |
-| 2 | `abc123 and 04` | 125건 | `04 and abc123` | 0건 (token[0]∋"04" 없음) |
+| 2 | `aau220 and 13` | 125건 | `13 and aau220` | 0건 (token[0]∋"04" 없음) |
 
 ```javascript
 const f1 = await (await fetch('/api/search?q=ring+and+wafer&folder=&limit=5')).json();
 console.assert(f1.total === 0, `역방향 ring AND wafer: ${f1.total} (expected 0)`);
 
-const f2 = await (await fetch('/api/search?q=04+and+abc123&folder=&limit=5')).json();
-console.assert(f2.total === 0, `역방향 04 AND abc123: ${f2.total} (expected 0)`);
+const f2 = await (await fetch('/api/search?q=13+and+aau220&folder=&limit=5')).json();
+console.assert(f2.total === 0, `역방향 04 AND aau220: ${f2.total} (expected 0)`);
 ```
 
 **pass 기준**:
@@ -5676,22 +5676,22 @@ console.assert(f2.total === 0, `역방향 04 AND abc123: ${f2.total} (expected 0
 
 | # | 검색어 | lot_multi | 결과 | 서버(ms) | 모드 |
 |---|--------|-----------|------|----------|------|
-| 1 | (없음) | abc123,def456,ghj789 | 1548건 | 10ms | lot-index |
-| 2 | (없음) | abc123,def456,fex482,ghj789,khn931,tmw067 | 3120건 | 13ms | lot-index |
-| 3 | (없음) | abc123 | 500건 | 2.6ms | lot-index |
-| 4 | `abc123 and 04` | abc123 | 141건 | 1.2ms | query+lot |
-| 5 | `def456 and 05` | def456 | 144건 | 1.4ms | query+lot |
-| 6 | `04` | abc123 | 141건 | 3.2ms | query+lot |
+| 1 | (없음) | aau220,abm792,aai216 | >0건 | 10ms | lot-index |
+| 2 | (없음) | aau220,abm792,aav489,aai216,aad534,aai158 | 3120건 | 13ms | lot-index |
+| 3 | (없음) | aau220 | >0건 | 2.6ms | lot-index |
+| 4 | `aau220 and 13` | aau220 | 141건 | 1.2ms | query+lot |
+| 5 | `abm792 and 05` | abm792 | 144건 | 1.4ms | query+lot |
+| 6 | `04` | aau220 | 141건 | 3.2ms | query+lot |
 
 > **주의**: lot_multi path는 글로벌 인덱스 사용 불가 (subset이므로), 순차스캔 fallback 사용.
 > 그래서 #4(141건) vs 전체 AND(125건) 차이 발생 — lot_multi는 파일명 전체 매칭, 전체는 위치별 매칭.
 
 ```javascript
 // lot_multi + AND 조합 테스트
-const g1 = await (await fetch('/api/search?q=&folder=&limit=5000&lot_multi=abc123,def456,ghj789')).json();
+const g1 = await (await fetch('/api/search?q=&folder=&limit=5000&lot_multi=aau220,abm792,aai216')).json();
 console.assert(g1.total === 1548, `LOT multi 3개: ${g1.total}`);
 
-const g2 = await (await fetch('/api/search?q=abc123+and+04&folder=&limit=5000&lot_multi=abc123')).json();
+const g2 = await (await fetch('/api/search?q=aau220+and+13&folder=&limit=5000&lot_multi=aau220')).json();
 console.assert(g2.total > 0, `LOT multi + AND: ${g2.total} (expected > 0)`);
 ```
 
@@ -5699,8 +5699,8 @@ console.assert(g2.total > 0, `LOT multi + AND: ${g2.total} (expected > 0)`);
 
 | # | 검색어 | 폴더 | 결과 | 서버(ms) | 모드 |
 |---|--------|------|------|----------|------|
-| 1 | `abc123` | palette_3k | 500건 | 2.8ms | simple |
-| 2 | `abc123 and 04` | palette_3k | 141건 | 1.9ms | logical |
+| 1 | `aau220` | unknown | >0건 | 2.8ms | simple |
+| 2 | `aau220 and 13` | unknown | 141건 | 1.9ms | logical |
 
 > **주의**: 폴더 한정 시 글로벌 인덱스 사용 불가, 순차스캔 fallback.
 
@@ -5713,19 +5713,19 @@ console.assert(g2.total > 0, `LOT multi + AND: ${g2.total} (expected > 0)`);
 | 51-1-1 | `edge` | 16 | 16 | 0.7 | PASS |
 | 51-1-2 | `wafer` | 112006 | 112006 | 313 | PASS |
 | 51-1-3 | `cool` | 0 | 0 | 0.6 | PASS |
-| 51-1-4 | `abc123` | 500 | 500 | 1.7 | PASS |
+| 51-1-4 | `aau220` | 500 | 500 | 1.7 | PASS |
 | 51-2-1 | `wafer and ring` | 3000 | 3000 | 11.6 | PASS |
 | 51-2-2 | `wafer and cool` | 3000 | 3000 | 11.2 | PASS |
 | 51-2-3 | `edge and 0005` | 0 | 0 | 0.6 | PASS |
-| 51-2-4 | `abc123 and 04` | 125 | 125 | 1.2 | PASS |
+| 51-2-4 | `aau220 and 13` | 125 | 125 | 1.2 | PASS |
 | 51-3-1 | `edge or cool` | 16 | 16 | 0.6 | PASS |
-| 51-3-2 | `abc123 or def456` | 1024 | 1024 | 3.6 | PASS |
+| 51-3-2 | `aau220 or abm792` | 1024 | 1024 | 3.6 | PASS |
 | 51-4-1 | `(wafer and ring) or (wafer and cool)` | 6000 | 6000 | 21 | PASS |
-| 51-4-2 | `(abc123 and 04) or (def456 and 05)` | >0 | 251 | 1.7 | PASS |
+| 51-4-2 | `(aau220 and 13) or (abm792 and 05)` | >0 | 251 | 1.7 | PASS |
 | 51-5-1 | `WAFER and RING` | 3000 | 3000 | 11 | PASS |
 | 51-5-2 | `Edge` | 16 | 16 | 0.5 | PASS |
 | 51-6-1 | `ring and wafer` (역방향) | 0 | 0 | 0.6 | PASS |
-| 51-6-2 | `04 and abc123` (역방향) | 0 | 0 | 0.6 | PASS |
+| 51-6-2 | `13 and aau220` (역방향) | 0 | 0 | 0.6 | PASS |
 
 **다중검색 (LOT multi)**:
 
@@ -5734,16 +5734,16 @@ console.assert(g2.total > 0, `LOT multi + AND: ${g2.total} (expected > 0)`);
 | 51-7-1 | (없음) | 3개 LOT | 1548 | 10 | PASS |
 | 51-7-2 | (없음) | 6개 LOT | 3120 | 13 | PASS |
 | 51-7-3 | (없음) | 1개 LOT | 500 | 2.6 | PASS |
-| 51-7-4 | `abc123 and 04` | abc123 | 141 | 1.2 | PASS |
-| 51-7-5 | `def456 and 05` | def456 | 144 | 1.4 | PASS |
-| 51-7-6 | `04` | abc123 | 141 | 3.2 | PASS |
+| 51-7-4 | `aau220 and 13` | aau220 | 141 | 1.2 | PASS |
+| 51-7-5 | `abm792 and 05` | abm792 | 144 | 1.4 | PASS |
+| 51-7-6 | `04` | aau220 | 141 | 3.2 | PASS |
 
 **폴더 한정**:
 
 | 테스트 | 검색어 | 폴더 | 실측 | 서버(ms) | 판정 |
 |--------|--------|------|------|----------|------|
-| 51-8-1 | `abc123` | palette_3k | 500 | 2.8 | PASS |
-| 51-8-2 | `abc123 and 04` | palette_3k | 141 | 1.9 | PASS |
+| 51-8-1 | `aau220` | unknown | 500 | 2.8 | PASS |
+| 51-8-2 | `aau220 and 13` | unknown | 141 | 1.9 | PASS |
 
 ## Phase 52: 서버 Cold Start 즉시 폴더/이미지 로딩 속도 측정
 
@@ -5763,7 +5763,7 @@ console.assert(g2.total > 0, `LOT multi + AND: ${g2.total} (expected > 0)`);
 2. **즉시 접속**: 로컬 Playwright `page.goto('https://localhost:443')` — 서버가 안 뜨면 즉시 재시도
 3. **폴더 리스트 확인**: `nav` 안의 `summary[data-path]` 개수 > 0 될 때까지 즉시 폴링
 4. **시간 기록**: `performance.timing.loadEventEnd - navigationStart` = 페이지 로드 시간
-5. **폴더 Ctrl+클릭**: `fq_missing_test` (position 있는 폴더) summary 찾아서 click
+5. **폴더 Ctrl+클릭**: `unknown` (position 있는 폴더) summary 찾아서 click
 6. **그리드 이미지 로드 확인**: `.grid-thumb-img[data-grid-loaded="true"]` 개수 > 0 즉시 폴링
 7. **뷰포트 내 로드 완료 확인**: 뷰포트 안 이미지 중 placeholder 0개 될 때까지 폴링
 
@@ -5792,9 +5792,9 @@ const pageLoadMs = perf.loadEventEnd - perf.navigationStart;
 
 ### 테스트 순서
 
-1. **탭 0**: `fq_missing_test` 폴더 Ctrl+클릭 → 그리드 이미지 로드 대기
-2. **탭 1 생성**: `+` 버튼 클릭 → `filter_test` 폴더 Ctrl+클릭 → 로드 대기
-3. **탭 2 생성**: `+` 버튼 클릭 → `palette_3k` 폴더 Ctrl+클릭 → 로드 대기
+1. **탭 0**: `unknown` 폴더 Ctrl+클릭 → 그리드 이미지 로드 대기
+2. **탭 1 생성**: `+` 버튼 클릭 → `unknown` 폴더 Ctrl+클릭 → 로드 대기
+3. **탭 2 생성**: `+` 버튼 클릭 → `unknown` 폴더 Ctrl+클릭 → 로드 대기
 4. **빠른 전환 10회**: 탭 0→1→2→0→1→2→0→1→2→0 (각 전환 후 `setTimeout` 없이 즉시 확인)
 5. **각 전환 후 검증**: `.grid-thumb-img` 총 개수 > 0 && 뷰포트 내 로드된 이미지 > 0
 
@@ -5825,16 +5825,16 @@ for (let i = 0; i < 10; i++) {
 ## Phase 54: f/q Missing 이미지 그리드 로드 + 뷰포트 placeholder 검증
 
 position JSON에서 f/q 값이 누락된 이미지가 그리드에서 정상 로드되는지 검증한다.
-테스트 데이터: `fq_missing_test` 폴더 (f missing / q missing / both missing / normal 4종 변형).
+테스트 데이터: `unknown` 폴더 (f missing / q missing / both missing / normal 4종 변형).
 
 ### 사전 조건
-- `D:/project/data/positions/fq_missing_test/` 에 변형 position JSON 존재
-- `D:/project/data/wm-811k/fq_missing_test/` 에 대응 이미지 PNG 존재
-- 서버가 `fq_missing_test` 폴더를 인덱스에 포함
+- `D:/project/data/positions/unknown/` 에 변형 position JSON 존재
+- `D:/project/data/wm-811k/unknown/` 에 대응 이미지 PNG 존재
+- 서버가 `unknown` 폴더를 인덱스에 포함
 
 ### 테스트 순서
 
-1. **그리드 로드**: `fq_missing_test` 폴더 Ctrl+클릭
+1. **그리드 로드**: `unknown` 폴더 Ctrl+클릭
 2. **뷰포트 이미지 로드 확인**: 뷰포트 내 `.grid-thumb-img` 전부 `gridLoaded=true` + `naturalWidth > 1` 즉시 폴링
 3. **스크롤 50%**: `grid-scroll-wrapper.scrollTop = scrollHeight * 0.5`
 4. **스크롤 후 뷰포트 확인**: placeholder 0개 즉시 폴링 (최대 30회)
@@ -5889,7 +5889,7 @@ MY LOT, Composite, Label 모드에서 이미지를 열었을 때 Wafer Map Explo
 
 ### 테스트 순서
 
-1. **폴더 선택**: `palette_3k` Ctrl+클릭 → Explorer에 `palette_3k` 하이라이트 확인 (1개)
+1. **폴더 선택**: `unknown` Ctrl+클릭 → Explorer에 `unknown` 하이라이트 확인 (1개)
 2. **MY LOT 그리드 보기**: MY LOT API에서 그룹 조회 → 이미지 경로로 `showGrid` 호출
 3. **하이라이트 확인**: Explorer `summary.selected` 개수 = **0** (MY LOT 진입 시 클리어됨)
 4. **더블클릭 단일 이미지**: MY LOT 그리드에서 첫 이미지 더블클릭 → 단일 이미지 모드
@@ -5918,7 +5918,7 @@ Composite 생성을 시작한 후 다른 탭으로 전환, Composite 완료 시 
 
 ### 테스트 순서
 
-1. **탭 0**: `palette_3k` 폴더 로드 → 20개 선택
+1. **탭 0**: `unknown` 폴더 로드 → 20개 선택
 2. **Composite 시작**: `handleCompositeCreate()` 호출 → composite 탭 자동 생성
 3. **즉시 탭 0으로 전환**: Composite 폴링 진행 중에 원래 탭으로 돌아감
 4. **Composite 완료 대기**: `compositePageTasks`에서 해당 탭의 status 확인
@@ -5954,8 +5954,8 @@ Wafer 다중검색 기능 전체 흐름을 검증한다.
 1. **드롭다운 열기**: `#multi-search-btn` 클릭 → `#multi-search-dropdown` 표시 확인
 2. **항목 확인**: "LOT 다중검색", "WF 다중검색" 2개 항목
 3. **WF 모달 열기**: `[data-mode="wf"]` 클릭 → `#wf-search-modal` display=flex
-4. **입력 + 검색**: textarea에 "ABC123 04\nDEF456 01" 입력 → `#wf-search-apply` 클릭
-5. **API 검증**: `/api/search?lot_wafer=abc123:04,def456:01` → 200, total>0
+4. **입력 + 검색**: textarea에 "AAU220 13\nABM792 05" 입력 → `#wf-search-apply` 클릭
+5. **API 검증**: `/api/search?lot_wafer=aau220:04,abm792:01` → 200, total>0
 6. **결과 확인**: 그리드에 결과 이미지 표시, 모달 자동 닫힘
 7. **LOT 모달 확인**: 드롭다운에서 "LOT" 선택 → 기존 `#multi-search-modal` 열림
 
@@ -6044,9 +6044,9 @@ classification/classification_chips 경로가 인덱스에 포함된 상태에�
 **평가**: Phase 60에서 단건 추가 → rename → batch delete → class delete를 순서대로 실행해 각 단계 직후 `/api/classes/{class}/images` 응답이 즉시 바뀌는지 확인한다. stale 결과가 한 번이라도 남으면 FAIL
 **파일**: `api/index_service.py`, `api/main.py`
 
-## Phase 61: Thumbnail Cache 삭제 후 palette_3k Cold Start
+## Phase 61: Thumbnail Cache 삭제 후 unknown Cold Start
 
-썸네일/인덱스 캐시를 지운 뒤 다시 시작했을 때, Wafer Map Explorer가 첫 접속에서 즉시 보이고 `palette_3k` 첫 그리드 썸네일 생성이 시작되는지 확인하는 **smoke cold** Phase다. 권위 기준과 FAIL 계약은 아래 Phase 62를 따른다.
+썸네일/인덱스 캐시를 지운 뒤 다시 시작했을 때, Wafer Map Explorer가 첫 접속에서 즉시 보이고 `unknown` 첫 그리드 썸네일 생성이 시작되는지 확인하는 **smoke cold** Phase다. 권위 기준과 FAIL 계약은 아래 Phase 62를 따른다.
 
 ### 테스트 순서
 1. **기존 서버 중지**: 실행 중인 `python -m api.main` 프로세스를 모두 종료
@@ -6054,10 +6054,10 @@ classification/classification_chips 경로가 인덱스에 포함된 상태에�
 3. **랜덤 free port 기동**: `RELOAD=0`으로 새 포트에 서버 시작
 4. **브라우저 캐시 초기화**: 새 브라우저 컨텍스트 + HTTP cache / cookie clear
 5. **첫 페이지 로드**: 첫 HTTP 요청으로 `GET /`
-6. **폴더 목록 확인**: `summary[data-path="palette_3k"]` 표시 확인
-7. **palette_3k 일반 클릭**: 하위 파일 리스트가 표시되는지 확인
-8. **palette_3k Ctrl+클릭**: 그리드 진입 후 첫 viewport 썸네일 로딩 시작 확인
-9. **보조 계측**: 첫 `/api/files/recursive?path=palette_3k`와 첫 `/api/thumbnail?...` 시간 기록
+6. **폴더 목록 확인**: `summary[data-path="unknown"]` 표시 확인
+7. **unknown 일반 클릭**: 하위 파일 리스트가 표시되는지 확인
+8. **unknown Ctrl+클릭**: 그리드 진입 후 첫 viewport 썸네일 로딩 시작 확인
+9. **보조 계측**: 첫 `/api/files/recursive?path=unknown`와 첫 `/api/thumbnail?...` 시간 기록
 
 ### 주의
 - 브라우저가 이전 썸네일을 304로 재검증하면 서버 캐시 삭제 효과가 가려질 수 있다.
@@ -6066,8 +6066,8 @@ classification/classification_chips 경로가 인덱스에 포함된 상태에�
 ### pass 기준
 | 항목 | 기준 |
 |------|------|
-| 첫 페이지 폴더 목록 | 첫 브라우저 요청에서 `summary[data-path="palette_3k"]` 표시 |
-| palette_3k 파일 리스트 | 클릭 후 파일 항목 표시 |
+| 첫 페이지 폴더 목록 | 첫 브라우저 요청에서 `summary[data-path="unknown"]` 표시 |
+| unknown 파일 리스트 | 클릭 후 파일 항목 표시 |
 | 첫 viewport 썸네일 | Ctrl+클릭 후 3000ms 이내 첫 `img[data-grid-loaded="true"]` |
 | Cold files/recursive | 첫 호출 < 1500ms |
 | Cold thumbnail | 첫 호출 < 2500ms |
@@ -6076,7 +6076,7 @@ classification/classification_chips 경로가 인덱스에 포함된 상태에�
 | 항목 | 측정값 |
 |------|--------|
 | browser folder list | 90.8ms / 94.9ms / 93.8ms |
-| browser palette_3k list | 42.1ms / 28.1ms / 35.8ms |
+| browser unknown list | 42.1ms / 28.1ms / 35.8ms |
 | browser first grid image | 2270.3ms / 2196.7ms / 2190.1ms |
 | browser total to grid | 2403.2ms / 2319.7ms / 2319.7ms |
 
@@ -6088,9 +6088,9 @@ classification/classification_chips 경로가 인덱스에 포함된 상태에�
 
 | 구간 | 측정 항목 |
 |------|----------|
-| **A** | 브라우저 첫 `GET /` → Wafer Map Explorer `palette_3k` 폴더 항목 표시 |
-| **B** | `palette_3k` 일반 클릭 → 파일 리스트 표시 |
-| **C** | `palette_3k` Ctrl+클릭 → 첫 viewport 썸네일 1장 로드 |
+| **A** | 브라우저 첫 `GET /` → Wafer Map Explorer `unknown` 폴더 항목 표시 |
+| **B** | `unknown` 일반 클릭 → 파일 리스트 표시 |
+| **C** | `unknown` Ctrl+클릭 → 첫 viewport 썸네일 1장 로드 |
 | **D** | 서버 시작 시각 → 폴더 리스트 표시 |
 | **E** | 서버 시작 시각 → 첫 viewport 썸네일 1장 로드 |
 
@@ -6115,8 +6115,8 @@ classification/classification_chips 경로가 인덱스에 포함된 상태에�
    - HTTP cache / cookies clear
    - 첫 HTTP 요청은 Playwright의 `page.goto(BASE_URL)` 이어야 한다
 6. **무지연 인터랙션**
-   - 폴더 목록 표시 즉시 `palette_3k` 클릭
-   - 파일 리스트 표시 즉시 `palette_3k` Ctrl+클릭
+   - 폴더 목록 표시 즉시 `unknown` 클릭
+   - 파일 리스트 표시 즉시 `unknown` Ctrl+클릭
    - 임의 `sleep`, `waitForTimeout(>100ms)`, 인위적 대기 삽입 금지
 
 ### Playwright 측정 스크립트
@@ -6130,24 +6130,24 @@ await client.detach();
 
 const navStart = performance.now();
 await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
-await page.locator('summary[data-path="palette_3k"]').waitFor();
+await page.locator('summary[data-path="unknown"]').waitFor();
 const folderListMs = performance.now() - navStart;
 
-const paletteStart = performance.now();
-await page.locator('summary[data-path="palette_3k"]').click();
-await page.locator('summary[data-path="palette_3k"] + .folder-content a[data-path^="palette_3k/"]').first().waitFor();
-const paletteListMs = performance.now() - paletteStart;
+const unknownStart = performance.now();
+await page.locator('summary[data-path="unknown"]').click();
+await page.locator('summary[data-path="unknown"] + .folder-content a[data-path^="unknown/"]').first().waitFor();
+const unknownListMs = performance.now() - unknownStart;
 
 const gridStart = performance.now();
-await page.locator('summary[data-path="palette_3k"]').click({ modifiers: ['Control'] });
+await page.locator('summary[data-path="unknown"]').click({ modifiers: ['Control'] });
 await page.locator('#image-grid img[data-grid-loaded="true"]').first().waitFor();
 const firstGridImageMs = performance.now() - gridStart;
 
 return {
   folderListMs,
-  paletteListMs,
+  unknownListMs,
   firstGridImageMs,
-  totalToGridMs: folderListMs + paletteListMs + firstGridImageMs,
+  totalToGridMs: folderListMs + unknownListMs + firstGridImageMs,
 };
 ```
 
@@ -6156,7 +6156,7 @@ return {
 | 항목 | baseline median | PASS | FAIL |
 |------|---------------|------|------|
 | A. browser folder list | 93.8ms | `<= 150ms` | `> 200ms` |
-| B. browser palette_3k list | 35.8ms | `<= 60ms` | `> 120ms` |
+| B. browser unknown list | 35.8ms | `<= 60ms` | `> 120ms` |
 | C. browser first grid image | 2196.7ms | `<= 2400ms` | `> 3000ms` |
 | A+B+C. browser total to grid | 2319.7ms | `<= 2500ms` | `> 3200ms` |
 | D. server start -> folder list | 1639.6ms | `<= 1800ms` | `> 2200ms` |
@@ -6168,7 +6168,7 @@ return {
 - 캐시 삭제가 incomplete (`thumbnails`, `.file_index_cache.txt`, `.file_index_cache_*.lock` 잔존)
 - random free port 미사용
 - 첫 브라우저 `GET /` 전에 어떤 HTTP warm 요청이라도 발생
-- 폴더 목록 이후 `palette_3k` 클릭, 파일 리스트 이후 `Ctrl+click` 사이에 인위적 대기 삽입
+- 폴더 목록 이후 `unknown` 클릭, 파일 리스트 이후 `Ctrl+click` 사이에 인위적 대기 삽입
 - 위 표의 FAIL threshold를 한 번이라도 초과
 
 ### 주의사항
@@ -6180,14 +6180,14 @@ return {
 
 ### 2026-04-11 strict cold 결과
 
-| run | browser folder | palette list | first grid image | browser total | server->folder | server->grid |
+| run | browser folder | unknown list | first grid image | browser total | server->folder | server->grid |
 |-----|----------------|--------------|------------------|---------------|----------------|--------------|
 | 1 | 90.8ms | 42.1ms | 2270.3ms | 2403.2ms | 1647.3ms | 3959.7ms |
 | 2 | 94.9ms | 28.1ms | 2196.7ms | 2319.7ms | 1639.6ms | 3864.4ms |
 | 3 | 93.8ms | 35.8ms | 2190.1ms | 2319.7ms | 1499.2ms | 3725.1ms |
 | median | 93.8ms | 35.8ms | 2196.7ms | 2319.7ms | 1639.6ms | 3864.4ms |
 
-**결론**: 현재 authoritative cold path에서 explorer 폴더 리스트는 이미 충분히 빠르다. 회귀 감시는 A/B 구간보다 C/E 구간, 즉 `palette_3k` recursive listing 이후 첫 cold thumbnail 생성 경로에 더 민감해야 한다.
+**결론**: 현재 authoritative cold path에서 explorer 폴더 리스트는 이미 충분히 빠르다. 회귀 감시는 A/B 구간보다 C/E 구간, 즉 `unknown` recursive listing 이후 첫 cold thumbnail 생성 경로에 더 민감해야 한다.
 
 ## Phase 63: JS 모듈 그래프 / Worker 캐시 무효화
 
@@ -6239,9 +6239,9 @@ return {
 #### BUG-19: 서버 재기동 직후 first-hit 2초대 지연 (2026-04-11)
 **증상**: 서버를 막 재기동한 직후 첫 `GET /`, `/api/config`, `/api/browse-folders`, `/js/main.js`가 공통으로 2~3초 이상 지연됨  
 **원인**: startup 초기에 전체 트리 디스크 워밍과 무거운 인덱스 load/build가 사용자 첫 요청과 겹쳐 same-process 경합을 일으킴  
-**수정**: 전체 3depth 디스크 워밍 제거 → `palette_3k` 중심 targeted warm으로 축소, 로컬 HTTPS self-warm으로 핵심 API/JS first-hit 제거, 인덱스 load/build/후속 캐시 빌드는 `BACKGROUND_TASKS_PAUSED` 해제 후(user idle) 시작하도록 변경  
+**수정**: 전체 3depth 디스크 워밍 제거 → `unknown` 중심 targeted warm으로 축소, 로컬 HTTPS self-warm으로 핵심 API/JS first-hit 제거, 인덱스 load/build/후속 캐시 빌드는 `BACKGROUND_TASKS_PAUSED` 해제 후(user idle) 시작하도록 변경
 **결과**: 서버 재기동 직후 외부 first-hit 기준 `/api/index-status` 9~10ms, `/api/config` 8~9ms, `/api/browse-folders` 25~28ms, `/` 13~15ms  
-**평가**: Phase 61과 Phase 62를 함께 사용한다. 썸네일 캐시 삭제 + 브라우저 캐시 초기화 + 서버 재기동 후 `palette_3k` 파일 리스트와 첫 viewport 썸네일이 기준 시간 안에 뜨는지 확인한다. Step 1~3 중 하나라도 임계값을 넘기면 FAIL
+**평가**: Phase 61과 Phase 62를 함께 사용한다. 썸네일 캐시 삭제 + 브라우저 캐시 초기화 + 서버 재기동 후 `unknown` 파일 리스트와 첫 viewport 썸네일이 기준 시간 안에 뜨는지 확인한다. Step 1~3 중 하나라도 임계값을 넘기면 FAIL
 **파일**: `api/main.py`
 
 #### BUG-20: top-level main.js만 버전이 바뀌고 하위 모듈/worker는 예전 JS를 유지하던 문제 (2026-04-11)
@@ -6277,7 +6277,7 @@ return {
 - chip label legend 우클릭은 모든 label을 끈다. legend 위 drag는 wafer image pan을 일으키면 FAIL.
 - `scratch` 클릭 후 Shift+`particle_blast` 클릭은 contiguous range인 `scratch`, `bank_boundary`, `scratch_21deg`, `particle_blast` 전체를 선택해야 한다. particle_blast 1개만 선택되면 FAIL.
 - legend Ctrl-drag는 지나간 label을 toggle하고, Ctrl+Shift-drag는 기존 선택에 range를 add한다. wafer canvas Ctrl+Shift-drag는 Shift rectangle-add path를 타서 chip을 2개 이상 multi-select해야 한다.
-- 개인색 pyramid는 모든 `SERVER_CONFIG.PYRAMID_LEVELS`에서 PLTE/background color가 유지되어야 한다. pyvips, Pillow fallback, speed fallback 모두 personal palette patch를 보존해야 하며 현재 personalized pyramid cache rev는 `pyramid_v4`이다.
+- 개인색 pyramid는 모든 `SERVER_CONFIG.PYRAMID_LEVELS`에서 PLTE/background color가 유지되어야 한다. pyvips, Pillow fallback, speed fallback 모두 personal PLTE patch를 보존해야 하며 현재 personalized pyramid cache rev는 `pyramid_v4`이다.
 
 **평가**
 - `scripts/e2e_chunk1.js`의 `chip-label-prefix-wafer` record에서 위 계약을 모두 검사한다.

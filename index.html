@@ -407,7 +407,12 @@
                         </div>
                     </div>
                     <div id="chip-label-legend" class="chip-label-legend" aria-label="Chip label filters">
-                        <div class="chip-label-legend__title">Chip Labels</div>
+                        <div class="chip-label-legend__title-row">
+                            <label class="chip-label-legend__toggle">
+                                <input type="checkbox" id="chip-label-overlay-toggle" checked>
+                                <span class="chip-label-legend__title">Chip Labels</span>
+                            </label>
+                        </div>
                         <div class="chip-label-empty">No chip labels</div>
                     </div>
                 </div>
@@ -557,7 +562,7 @@
                 <p style="color: #cccccc; margin: 0;">
                     한 줄에 LOT ID + Wafer 번호를 입력하세요. (공백/탭 구분, 최대 100개)
                 </p>
-                <textarea id="wf-search-input" class="multi-search-textarea" rows="12" wrap="off" placeholder="ABC123 03&#10;DEF456 01&#10;GHJ789 21"></textarea>
+                <textarea id="wf-search-input" class="multi-search-textarea" rows="12" wrap="off" placeholder="AAU220 13&#10;ABM792 05&#10;AAV489 11"></textarea>
                 <small style="color: #aaaaaa;">Enter → 검색 실행 / Shift+Enter 또는 Ctrl+Enter → 다음 행 입력</small>
                 <div id="wf-search-error" class="modal-error"></div>
             </div>

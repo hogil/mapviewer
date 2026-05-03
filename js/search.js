@@ -64,7 +64,7 @@ function evaluateExpression(fileName, expression) {
  */
 function evaluateAndExpression(fileName, expression) {
     const andTerms = splitByOperator(expression, 'and');
-    // 🔥 Each AND term may also contain implicit "not" (e.g., "abc123 not engineer" without explicit "and")
+    // 🔥 Each AND term may also contain implicit "not" (e.g., "AAU220 not engineer" without explicit "and")
     // Split each AND term by \bnot\b to handle: "term1 not term2" → term1 AND NOT term2
     const allTerms = [];
     for (const term of andTerms) {
@@ -242,7 +242,7 @@ function escapeRegExp(string) {
 
 /**
  * 각 토큰에서 dot(.) 이후 접미사를 제거
- * 예: "ABC123.1 09" → "ABC123 09", "ABC123.1" → "ABC123"
+ * 예: "AAU220.1 09" → "AAU220 09", "AAU220.1" → "AAU220"
  * LOT ID에 붙는 .1, .2 등의 서브 넘버를 제거하기 위한 용도
  * @param {string} text 입력 텍스트
  * @returns {string} dot 접미사가 제거된 텍스트

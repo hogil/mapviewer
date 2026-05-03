@@ -315,7 +315,7 @@ export class ChipAnnotator {
             this.legendFilterClasses = new Set([className]);
         }
         this.render();
-        this.updateSelectedChipsList();
+        this.updateSelectedChipsList({ notifyViewer: false });
     }
 
     setLegendFilterClasses(classSet) {
@@ -329,7 +329,7 @@ export class ChipAnnotator {
             this.legendFilterClasses = null;
         }
         this.render();
-        this.updateSelectedChipsList();
+        this.updateSelectedChipsList({ notifyViewer: false });
     }
 
     /**
@@ -961,8 +961,9 @@ export class ChipAnnotator {
     /**
      * 선택된 칩 리스트 업데이트
      */
-    updateSelectedChipsList() {
+    updateSelectedChipsList(options = {}) {
         if (!this.viewer || !this.viewer.dom) return;
+        const notifyViewer = options?.notifyViewer !== false;
 
         const viewer = this.viewer;
 
@@ -1305,11 +1306,17 @@ export class ChipAnnotator {
                     listItems.scrollTop = listItems.scrollHeight;
                 }
             }, 0);
+            if (notifyViewer && typeof viewer.onManualChipSelection === 'function') {
+                viewer.onManualChipSelection();
+            }
             
         } else {
             // 선택된 칩이 없으면 숨김
             listContainer.style.display = 'none';
             listItems.innerHTML = '';
+            if (notifyViewer && typeof viewer.handleChipSelectionCleared === 'function') {
+                viewer.handleChipSelectionCleared();
+            }
         }
     }
     
@@ -2052,10 +2059,6 @@ export class ChipAnnotator {
             e.preventDefault();
             e.stopPropagation();
             return;
-        }
-
-        if ((!this.legendFilterClasses || this.legendFilterClasses.size === 0) && this.viewer && typeof this.viewer.onManualChipSelection === 'function') {
-            this.viewer.onManualChipSelection();
         }
 
         const chip = this.findChipAtPixel(canvasX, canvasY);

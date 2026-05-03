@@ -21,7 +21,7 @@ function splitLotWaferValue(value = "") {
     if (parts.length > 2) {
         wafer = parts[2];
     } else if (parts.length > 1) {
-        // parts[2]가 없으면 W로 시작하는 부분을 역순으로 찾기 (예: ABC123_W01 → W01)
+        // parts[2]가 없으면 W로 시작하는 부분을 역순으로 찾기 (예: AAU220_W01 → W01)
         for (let i = parts.length - 1; i >= 0; i--) {
             const part = parts[i];
             if (part && (part[0] === 'W' || part[0] === 'w')) {

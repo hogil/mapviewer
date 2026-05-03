@@ -19,6 +19,7 @@ const { createRunner } = require('./e2e_playwright_session');
     process.env.IMAGES_ROOT || (process.platform === 'win32' ? 'D:/project/data/wm-811k' : '/appdata/appuser/images')
   );
   const unknownFolderAbs = path.join(imagesRoot, 'unknown');
+  const E2E_UNKNOWN_LABEL_CLASSES = ['e2e_unknown_label', 'e2e_unknown_label_alt'];
 
   async function boot(tag) {
     append(`[BOOT] ${tag}\n`);
@@ -370,7 +371,7 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(results.length > 0, `${scenario} empty results`);
     expect(
       results.every((imagePath) => imagePath.startsWith('unknown/')),
-      `${scenario} non-unknown=${JSON.stringify(results.filter((imagePath) => !imagePath.startsWith('unknown/')).slice(0, 8))}`
+      `${scenario} outsideUnknown=${JSON.stringify(results.filter((imagePath) => !imagePath.startsWith('unknown/')).slice(0, 8))}`
     );
     expect(
       (data.timings?.search_prefix || '') === '',
@@ -427,6 +428,124 @@ const { createRunner } = require('./e2e_playwright_session');
     return fixtures;
   }
 
+  async function ensureUnknownWaferLabelClasses() {
+    return await page.evaluate(async ({ imagesRoot, classNames }) => {
+      const jsonRequest = async (url, options = {}) => {
+        const headers = { ...(options.headers || {}) };
+        if (options.body && !headers['Content-Type']) {
+          headers['Content-Type'] = 'application/json';
+        }
+        const response = await fetch(url, {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          ...options,
+          headers,
+        });
+        const text = await response.text();
+        let body = {};
+        try {
+          body = text ? JSON.parse(text) : {};
+        } catch (_) {
+          body = { raw: text };
+        }
+        if (!response.ok || body.success === false) {
+          throw new Error(`${url} status=${response.status} body=${JSON.stringify(body).slice(0, 500)}`);
+        }
+        return body;
+      };
+
+      await jsonRequest('/api/change-folder', {
+        method: 'POST',
+        body: JSON.stringify({ path: imagesRoot }),
+      });
+      await fetch('/api/classes/delete?mode=wafer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ names: classNames }),
+        cache: 'no-store',
+        credentials: 'same-origin',
+      }).catch(() => null);
+
+      const recursive = await jsonRequest('/api/files/recursive?path=unknown&limit=5000');
+      const supported = /\.(png|jpe?g|bmp|webp|tif|tiff)$/i;
+      const blockedParts = new Set([
+        'classification',
+        'classification_chips',
+        'chips',
+        'thumbnails',
+        'composite_map',
+        'my-lot',
+      ]);
+      const files = (recursive.files || [])
+        .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+        .filter((imagePath) => imagePath.startsWith('unknown/') && supported.test(imagePath))
+        .filter((imagePath) => !imagePath.split('/').some((part) => blockedParts.has(part)))
+        .filter((value, index, arr) => arr.indexOf(value) === index);
+
+      const preferredLots = ['AAU220', 'ABM792', 'AAV489', 'AAD534', 'AAI158', 'AAI216'];
+      const ordered = [];
+      const pushUnique = (imagePath) => {
+        if (imagePath && !ordered.includes(imagePath)) ordered.push(imagePath);
+      };
+      for (const lot of preferredLots) {
+        pushUnique(files.find((imagePath) =>
+          (imagePath.split('/').pop() || '').toUpperCase().startsWith(`${lot}_`)
+        ));
+      }
+      for (const imagePath of files) {
+        pushUnique(imagePath);
+      }
+      if (ordered.length < 4) {
+        throw new Error(`unknown label fixtures too small: ${JSON.stringify({ total: files.length, ordered })}`);
+      }
+
+      const primaryImages = ordered.slice(0, Math.min(6, ordered.length));
+      const secondaryImages = ordered.slice(primaryImages.length, primaryImages.length + 6);
+      while (secondaryImages.length < Math.min(3, ordered.length)) {
+        secondaryImages.push(ordered[secondaryImages.length]);
+      }
+
+      const seeded = [];
+      for (const [index, className] of classNames.entries()) {
+        const createResponse = await fetch('/api/classes?mode=wafer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: className }),
+          cache: 'no-store',
+          credentials: 'same-origin',
+        });
+        if (!createResponse.ok && createResponse.status !== 409) {
+          const body = await createResponse.text();
+          throw new Error(`/api/classes create ${className} status=${createResponse.status} body=${body.slice(0, 500)}`);
+        }
+
+        const images = index === 0 ? primaryImages : secondaryImages;
+        const batch = await jsonRequest('/api/classify/batch?mode=wafer', {
+          method: 'POST',
+          body: JSON.stringify({ images, class_name: className, mode: 'wafer' }),
+        });
+        if ((batch.processed || 0) < images.length || batch.errors) {
+          throw new Error(`classify ${className} incomplete: ${JSON.stringify(batch).slice(0, 500)}`);
+        }
+        seeded.push({ className, sourceImages: images, results: batch.results || [] });
+      }
+
+      await window.viewer?.refreshLabelExplorer?.();
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const classList = await jsonRequest('/api/classes?mode=wafer');
+      const missing = classNames.filter((className) => !(classList.classes || []).includes(className));
+      if (missing.length) {
+        throw new Error(`seeded unknown classes missing: ${JSON.stringify({ missing, classList })}`);
+      }
+      return {
+        primaryClass: classNames[0],
+        secondaryClass: classNames[1],
+        seeded,
+        classes: classList.classes || [],
+      };
+    }, { imagesRoot, classNames: E2E_UNKNOWN_LABEL_CLASSES });
+  }
+
   await boot('chunk1');
 
   await record('1', '페이지 로드 & 기본 UI', async () => {
@@ -467,21 +586,19 @@ const { createRunner } = require('./e2e_playwright_session');
 
   await record('3,51', '검색 카운트', async () => {
     await boot('chunk1-search');
+    const [a, b] = await findUnknownGlobalSearchFixtures(2);
     const scenarios = [
-      { query: 'abc123', expected: 500 },
-      { query: 'abc123 or def456', expected: 1024 },
-      { query: 'ring', expected: 1024, alert: '검색 결과가 없습니다.' },
-      { query: 'edge', expected: 16 },
+      { query: a.lot, expectedLots: [a.lot] },
+      { query: `${a.lot} or ${b.lot}`, expectedLots: [a.lot, b.lot] },
+      { query: `${a.lot} and ${a.wafer}`, expectedLots: [a.lot] },
     ];
     const counts = {};
     for (const scenario of scenarios) {
-      let dialogMessage = '';
-      if (scenario.alert) {
-        page.once('dialog', async (dialog) => {
-          dialogMessage = dialog.message();
-          await dialog.accept();
-        });
-      }
+      const expected = assertUnknownSearchResult(
+        `search-count api ${scenario.query}`,
+        await fetchJson(page, `/api/search?${encodeParams({ q: scenario.query, folder: '', limit: '10000' })}`),
+        scenario.expectedLots
+      );
       await page.evaluate((query) => {
         const input = document.getElementById('file-search');
         const btn = document.getElementById('search-btn');
@@ -494,18 +611,21 @@ const { createRunner } = require('./e2e_playwright_session');
           const count = window.viewer?.currentGridImages?.length ?? -1;
           return !btn?.disabled && count === expectedCount;
         },
-        scenario.expected,
+        expected.count,
         { timeout: 30000 }
       );
-      counts[scenario.query] = await page.evaluate(() => window.viewer.currentGridImages.length);
-      if (scenario.alert) {
-        expect(dialogMessage === scenario.alert, `${scenario.query} dialog=${dialogMessage}`);
+      const images = (await page.evaluate(() => window.viewer.currentGridImages || []))
+        .map(normalizeResultPath);
+      expect(
+        images.every((imagePath) => imagePath.startsWith('unknown/')),
+        `${scenario.query} outsideUnknown=${JSON.stringify(images.filter((imagePath) => !imagePath.startsWith('unknown/')).slice(0, 8))}`
+      );
+      const lots = resultLots(images);
+      for (const lot of scenario.expectedLots) {
+        expect(lots.includes(lot), `${scenario.query} missing lot=${lot} lots=${JSON.stringify(lots)}`);
       }
+      counts[scenario.query] = images.length;
     }
-    expect(counts['abc123'] === 500, `abc123=${counts['abc123']}`);
-    expect(counts['abc123 or def456'] === 1024, `or=${counts['abc123 or def456']}`);
-    expect(counts['ring'] === 1024, `ring=${counts['ring']}`);
-    expect(counts['edge'] === 16, `edge=${counts['edge']}`);
     return counts;
   });
 
@@ -601,7 +721,7 @@ const { createRunner } = require('./e2e_playwright_session');
         lastLoadedGridFolderPath: window.viewer.lastLoadedGridFolderPath || '',
       };
     });
-    expect(uiResult.unknownCount === uiResult.count, `ui non-unknown=${JSON.stringify(uiResult)}`);
+    expect(uiResult.unknownCount === uiResult.count, `ui outsideUnknown=${JSON.stringify(uiResult)}`);
     expect(uiResult.lots.includes(a.lot), `ui lots=${JSON.stringify(uiResult)}`);
     return {
       fixtures,
@@ -633,11 +753,23 @@ const { createRunner } = require('./e2e_playwright_session');
 
   await record('7,12,20', 'Class / MY LOT / stats', async () => {
     await boot('chunk1-class');
-    const classData = await page.evaluate(async () => {
-      const classes = Array.from(document.querySelectorAll('#class-list .class-btn'))
+    const labelSeed = await ensureUnknownWaferLabelClasses();
+    await page.waitForFunction(
+      async (className) => {
+        const response = await fetch('/api/classes?mode=wafer', { cache: 'no-store' });
+        const data = await response.json();
+        return (data.classes || []).includes(className);
+      },
+      labelSeed.primaryClass,
+      { timeout: 30000 }
+    );
+    const classData = await page.evaluate(async (primaryClass) => {
+      const domClasses = Array.from(document.querySelectorAll('#class-list .class-btn'))
         .map((button) => (button.textContent || '').trim())
         .filter(Boolean);
-      const primaryClass = classes[0] || null;
+      const response = await fetch('/api/classes?mode=wafer', { cache: 'no-store' });
+      const data = await response.json();
+      const classes = (data.classes || domClasses).filter(Boolean);
       if (!primaryClass) {
         return {
           classes: [],
@@ -651,11 +783,19 @@ const { createRunner } = require('./e2e_playwright_session');
         classes,
         primaryClass,
         count: window.viewer.currentGridImages.length,
+        images: (window.viewer.currentGridImages || []).slice(0, 12),
       };
-    });
+    }, labelSeed.primaryClass);
     expect(classData.primaryClass, `classes=${JSON.stringify(classData.classes)}`);
     expect(classData.classes.includes(classData.primaryClass), `primaryClass=${classData.primaryClass}`);
+    expect(classData.primaryClass === labelSeed.primaryClass, `primaryClass should be seeded unknown class: ${JSON.stringify({ classData, labelSeed })}`);
     expect(classData.count > 0, `${classData.primaryClass}=${classData.count}`);
+    expect(
+      classData.images.every((imagePath) =>
+        String(imagePath || '').replace(/\\/g, '/').includes(`classification/${labelSeed.primaryClass}/`)
+      ),
+      `class grid used non-e2e class images=${JSON.stringify(classData)}`
+    );
     await page.evaluate(() => window.viewer.openMyLotModal());
     await sleep(800);
     const myLotVisible = await visible('#my-lot-window');
@@ -1319,7 +1459,37 @@ const { createRunner } = require('./e2e_playwright_session');
       data.menu.visible && data.menu.text.includes('Wafer 보기') && data.menu.text.includes('Lot 보기'),
       `chip label explorer context menu invalid: ${JSON.stringify(data.menu)}`
     );
-    await page.evaluate(() => window.viewer.hideLabelExplorerChipContextMenu?.());
+    await page.locator('#label-chip-context-menu .context-menu-item', { hasText: 'Wafer 보기' }).click({ timeout: 10000 });
+    await page.waitForFunction((expectedStemLower) => {
+      const v = window.viewer;
+      return !!v &&
+        v.viewMode === 'single' &&
+        v.gridMode === false &&
+        v.pageManager?.getActivePage?.()?.role === 'wafer' &&
+        String(v.selectedImagePath || '').toLowerCase().includes(expectedStemLower);
+    }, fullStem.toLowerCase(), { timeout: 90000 });
+    const labelExplorerWaferSingle = await page.evaluate(() => ({
+      activeRole: window.viewer.pageManager?.getActivePage?.()?.role || null,
+      pageCount: window.viewer.pageManager?.pages?.length || 0,
+      gridMode: window.viewer.gridMode,
+      viewMode: window.viewer.viewMode,
+      selectedImagePath: window.viewer.selectedImagePath || '',
+      wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+    }));
+    expect(
+      labelExplorerWaferSingle.pageCount === data.beforeUi.pageCount + 1,
+      `label explorer wafer single tab was not created: before=${JSON.stringify(data.beforeUi)} after=${JSON.stringify(labelExplorerWaferSingle)}`
+    );
+    expect(
+      labelExplorerWaferSingle.activeRole === 'wafer' &&
+        labelExplorerWaferSingle.gridMode === false &&
+        labelExplorerWaferSingle.viewMode === 'single',
+      `label explorer wafer should open single view directly: ${JSON.stringify(labelExplorerWaferSingle)}`
+    );
+    expect(
+      String(labelExplorerWaferSingle.selectedImagePath || '').replace(/\\/g, '/').toLowerCase() === waferPath.toLowerCase(),
+      `label explorer wafer single result mismatch: ${JSON.stringify(labelExplorerWaferSingle)}`
+    );
 
     const gridMenu = await page.evaluate(async ({ chipPaths }) => {
       const v = window.viewer;
@@ -1370,40 +1540,29 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.locator('#context-chip-wafer-view').click({ timeout: 10000 });
     await page.waitForFunction((expectedStemLower) => {
       const v = window.viewer;
-      const images = Array.isArray(v.currentGridImages) ? v.currentGridImages : [];
-      return !!v &&
-        v.gridMode === true &&
-        v.pageManager?.getActivePage?.()?.role === 'wafer' &&
-        images.length === 1 &&
-        images[0].toLowerCase().includes(expectedStemLower) &&
-        document.querySelectorAll('#image-grid .grid-thumb-wrap').length >= 1;
-    }, fullStem.toLowerCase(), { timeout: 90000 });
-    await sleep(800);
-
-    const waferGrid = await page.evaluate(() => ({
-      activeRole: window.viewer.pageManager?.getActivePage?.()?.role || null,
-      pageCount: window.viewer.pageManager?.pages?.length || 0,
-      gridMode: window.viewer.gridMode,
-      images: window.viewer.currentGridImages || [],
-      wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
-    }));
-    expect(waferGrid.pageCount === gridMenu.before.pageCount + 1, `wafer grid tab was not created: before=${JSON.stringify(gridMenu.before)} after=${JSON.stringify(waferGrid)}`);
-    expect(waferGrid.activeRole === 'wafer' && waferGrid.gridMode === true, `wafer view should be wafer grid: ${JSON.stringify(waferGrid)}`);
-    expect(waferGrid.images.length === 1, `wafer results should be lot/wafer deduped: ${JSON.stringify(waferGrid)}`);
-    expect(
-      String(waferGrid.images[0] || '').replace(/\\/g, '/').toLowerCase() === waferPath.toLowerCase(),
-      `wafer grid result mismatch: ${JSON.stringify(waferGrid)}`
-    );
-    expect(!waferGrid.images.some(path => /classification_chips|obj_id_maps/i.test(path)), `derived path in wafer results: ${JSON.stringify(waferGrid)}`);
-
-    await page.evaluate((targetPath) => window.viewer.enterSingleViewMode(targetPath), waferGrid.images[0]);
-    await page.waitForFunction((expectedStemLower) => {
-      const v = window.viewer;
       return !!v &&
         v.viewMode === 'single' &&
         v.gridMode === false &&
+        v.pageManager?.getActivePage?.()?.role === 'wafer' &&
         String(v.selectedImagePath || '').toLowerCase().includes(expectedStemLower);
     }, fullStem.toLowerCase(), { timeout: 90000 });
+    await sleep(800);
+
+    const waferSingle = await page.evaluate(() => ({
+      activeRole: window.viewer.pageManager?.getActivePage?.()?.role || null,
+      pageCount: window.viewer.pageManager?.pages?.length || 0,
+      gridMode: window.viewer.gridMode,
+      viewMode: window.viewer.viewMode,
+      selectedImagePath: window.viewer.selectedImagePath || '',
+      wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+    }));
+    expect(waferSingle.pageCount === gridMenu.before.pageCount + 1, `wafer single tab was not created: before=${JSON.stringify(gridMenu.before)} after=${JSON.stringify(waferSingle)}`);
+    expect(waferSingle.activeRole === 'wafer' && waferSingle.gridMode === false && waferSingle.viewMode === 'single', `single wafer result should open directly: ${JSON.stringify(waferSingle)}`);
+    expect(
+      String(waferSingle.selectedImagePath || '').replace(/\\/g, '/').toLowerCase() === waferPath.toLowerCase(),
+      `wafer single result mismatch: ${JSON.stringify(waferSingle)}`
+    );
+    expect(!/classification_chips|obj_id_maps/i.test(waferSingle.selectedImagePath), `derived path in wafer result: ${JSON.stringify(waferSingle)}`);
     await sleep(1200);
 
     const waferSinglePanel = await page.evaluate(() => {
@@ -1430,9 +1589,10 @@ const { createRunner } = require('./e2e_playwright_session');
       `wafer single chip labels missing: ${JSON.stringify(waferSinglePanel)}`
     );
 
-    const legendBefore = await page.evaluate(() => {
+    const readChipLabelLegendState = () => page.evaluate(() => {
       const legend = document.getElementById('chip-label-legend');
       const pills = Array.from(legend?.querySelectorAll('button[data-chip-label]') || []);
+      const toggle = document.getElementById('chip-label-overlay-toggle');
       return {
         visible: !!legend && getComputedStyle(legend).display !== 'none',
         count: pills.length,
@@ -1440,12 +1600,199 @@ const { createRunner } = require('./e2e_playwright_session');
         invalidMainActive: !!pills.find((pill) =>
           pill.getAttribute('data-chip-label') === 'invalid_main' && pill.classList.contains('is-active')
         ),
+        toggleChecked: !!toggle?.checked,
+        overlayEnabled: window.viewer.chipLabelOverlayEnabled,
         overlayAlpha: window.viewer.chipAnnotator?.chipLabelOverlayAlpha ?? null,
       };
     });
+    let legendBefore = await readChipLabelLegendState();
     expect(legendBefore.visible && legendBefore.count >= 2, `chip label legend not ready: ${JSON.stringify(legendBefore)}`);
+    if (!legendBefore.toggleChecked || !legendBefore.overlayEnabled || legendBefore.activeCount !== legendBefore.count) {
+      if (!legendBefore.toggleChecked || !legendBefore.overlayEnabled) {
+        await page.locator('#chip-label-overlay-toggle').check({ timeout: 10000 });
+      } else {
+        await page.evaluate(() => window.viewer.setChipLabelOverlayEnabled?.(true, { persist: true }));
+      }
+      await page.waitForFunction(() => {
+        const pills = document.querySelectorAll('#chip-label-legend .chip-label-pill');
+        const activePills = document.querySelectorAll('#chip-label-legend .chip-label-pill.is-active');
+        const filter = window.viewer.chipAnnotator?.legendFilterClasses;
+        return window.viewer.chipLabelOverlayEnabled === true &&
+          document.getElementById('chip-label-overlay-toggle')?.checked === true &&
+          pills.length > 0 &&
+          activePills.length === pills.length &&
+          filter instanceof Set &&
+          filter.size === pills.length;
+      }, null, { timeout: 5000 });
+      legendBefore = await readChipLabelLegendState();
+    }
+    expect(legendBefore.toggleChecked === true && legendBefore.overlayEnabled === true, `chip label overlay toggle should be on before selection checks: ${JSON.stringify(legendBefore)}`);
     expect(legendBefore.overlayAlpha === 0.15, `chip label overlay alpha should be 15%: ${JSON.stringify(legendBefore)}`);
-    expect(!legendBefore.invalidMainActive, `invalid_main should be inactive by default: ${JSON.stringify(legendBefore)}`);
+    expect(legendBefore.activeCount === legendBefore.count, `chip label classes should all be active by default: ${JSON.stringify(legendBefore)}`);
+    expect(legendBefore.invalidMainActive, `invalid_main should be active by default: ${JSON.stringify(legendBefore)}`);
+
+    const selectedChipClassFilter = await page.evaluate(async () => {
+      const v = window.viewer;
+      const annotator = v.chipAnnotator;
+      const marked = (annotator.markedChips || []).find(chip => chip.class === 'bank_boundary') ||
+        (annotator.markedChips || [])[0];
+      if (!marked) {
+        throw new Error('marked chip for selection filter not found');
+      }
+      const selectedIndex = (annotator.chips || []).findIndex(chip =>
+        chip &&
+        String(chip.x_abs) === String(marked.x_abs) &&
+        String(chip.y_abs) === String(marked.y_abs)
+      );
+      if (selectedIndex < 0) {
+        throw new Error(`marked chip index not found: ${JSON.stringify(marked)}`);
+      }
+      annotator.selectedChips = new Set([selectedIndex]);
+      annotator.selectedChipsOrder = [selectedIndex];
+      annotator.updateSelectedChipsList?.();
+      await new Promise(resolve => setTimeout(resolve, 250));
+      const active = Array.from(document.querySelectorAll('#chip-label-legend .chip-label-pill.is-active'))
+        .map(pill => pill.getAttribute('data-chip-label'));
+      const filter = annotator.legendFilterClasses instanceof Set
+        ? Array.from(annotator.legendFilterClasses)
+        : null;
+      return {
+        markedClass: marked.class || marked.label,
+        selectedIndex,
+        active,
+        filter,
+        activeCount: active.length,
+        filterSize: filter ? filter.length : null,
+      };
+    });
+    expect(
+      selectedChipClassFilter.active.length === 1 &&
+        selectedChipClassFilter.active[0] === selectedChipClassFilter.markedClass &&
+        selectedChipClassFilter.filter?.length === 1 &&
+        selectedChipClassFilter.filter[0] === selectedChipClassFilter.markedClass,
+      `chip selection should narrow chip labels to selected object class: ${JSON.stringify(selectedChipClassFilter)}`
+    );
+    await page.evaluate(() => {
+      const v = window.viewer;
+      const annotator = v.chipAnnotator;
+      annotator.selectedChips?.clear?.();
+      annotator.selectedChipsOrder = [];
+      v.handleChipSelectionCleared?.();
+    });
+    await page.waitForFunction(() => {
+      const pills = document.querySelectorAll('#chip-label-legend .chip-label-pill');
+      const activePills = document.querySelectorAll('#chip-label-legend .chip-label-pill.is-active');
+      return pills.length > 0 && activePills.length === pills.length;
+    }, null, { timeout: 5000 });
+
+    await page.locator('#chip-label-overlay-toggle').uncheck({ timeout: 10000 });
+    await page.waitForFunction(() => {
+      const activePills = document.querySelectorAll('#chip-label-legend .chip-label-pill.is-active').length;
+      const filter = window.viewer.chipAnnotator?.legendFilterClasses;
+      return window.viewer.chipLabelOverlayEnabled === false &&
+        document.getElementById('chip-label-overlay-toggle')?.checked === false &&
+        activePills === 0 &&
+        filter instanceof Set &&
+        filter.size === 0;
+    }, null, { timeout: 5000 });
+    await page.waitForFunction(async () => {
+      const res = await fetch(`/api/user-prefs?LoginId=${encodeURIComponent(window.viewer.getCurrentLoginId())}`);
+      const body = await res.json();
+      return body?.prefs?.chipLabelOverlayEnabled === false;
+    }, null, { timeout: 5000 });
+    const legendToggleOff = await page.evaluate(async () => {
+      const res = await fetch(`/api/user-prefs?LoginId=${encodeURIComponent(window.viewer.getCurrentLoginId())}`);
+      const body = await res.json();
+      return {
+        overlayEnabled: window.viewer.chipLabelOverlayEnabled,
+        toggleChecked: document.getElementById('chip-label-overlay-toggle')?.checked,
+        activePills: document.querySelectorAll('#chip-label-legend .chip-label-pill.is-active').length,
+        prefValue: body?.prefs?.chipLabelOverlayEnabled,
+      };
+    });
+    expect(
+      legendToggleOff.overlayEnabled === false &&
+        legendToggleOff.toggleChecked === false &&
+        legendToggleOff.activePills === 0 &&
+        legendToggleOff.prefValue === false,
+      `chip label overlay toggle off failed: ${JSON.stringify(legendToggleOff)}`
+    );
+
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForFunction(
+      () => !!window.viewer && window.__l3FullViewerReady === true,
+      null,
+      { timeout: 90000 }
+    );
+    await page.evaluate(async (targetPath) => {
+      await window.viewer.enterSingleViewMode(targetPath);
+    }, waferPath);
+    await page.waitForFunction((expectedStemLower) => {
+      const v = window.viewer;
+      return !!v &&
+        v.viewMode === 'single' &&
+        v.gridMode === false &&
+        String(v.selectedImagePath || '').toLowerCase().includes(expectedStemLower);
+    }, fullStem.toLowerCase(), { timeout: 90000 });
+    await page.waitForFunction(() => {
+      const legend = document.getElementById('chip-label-legend');
+      const pills = document.querySelectorAll('#chip-label-legend .chip-label-pill');
+      const activePills = document.querySelectorAll('#chip-label-legend .chip-label-pill.is-active').length;
+      const toggle = document.getElementById('chip-label-overlay-toggle');
+      const filter = window.viewer.chipAnnotator?.legendFilterClasses;
+      return !!legend &&
+        getComputedStyle(legend).display !== 'none' &&
+        pills.length > 0 &&
+        window.viewer.chipLabelOverlayEnabled === false &&
+        toggle?.checked === false &&
+        activePills === 0 &&
+        filter instanceof Set &&
+        filter.size === 0;
+    }, null, { timeout: 30000 });
+    const legendReloadOff = await page.evaluate(() => ({
+      overlayEnabled: window.viewer.chipLabelOverlayEnabled,
+      toggleChecked: document.getElementById('chip-label-overlay-toggle')?.checked,
+      count: document.querySelectorAll('#chip-label-legend .chip-label-pill').length,
+      activePills: document.querySelectorAll('#chip-label-legend .chip-label-pill.is-active').length,
+      filterSize: window.viewer.chipAnnotator?.legendFilterClasses?.size ?? null,
+    }));
+
+    await page.locator('#chip-label-overlay-toggle').check({ timeout: 10000 });
+    await page.waitForFunction(() => {
+      const pills = document.querySelectorAll('#chip-label-legend .chip-label-pill');
+      const activePills = document.querySelectorAll('#chip-label-legend .chip-label-pill.is-active').length;
+      const filter = window.viewer.chipAnnotator?.legendFilterClasses;
+      return window.viewer.chipLabelOverlayEnabled === true &&
+        document.getElementById('chip-label-overlay-toggle')?.checked === true &&
+        activePills === pills.length &&
+        filter instanceof Set &&
+        filter.size === pills.length &&
+        pills.length > 0;
+    }, null, { timeout: 5000 });
+    await page.waitForFunction(async () => {
+      const res = await fetch(`/api/user-prefs?LoginId=${encodeURIComponent(window.viewer.getCurrentLoginId())}`);
+      const body = await res.json();
+      return body?.prefs?.chipLabelOverlayEnabled === true;
+    }, null, { timeout: 5000 });
+    const legendReloadToggleOn = await page.evaluate(async () => {
+      const res = await fetch(`/api/user-prefs?LoginId=${encodeURIComponent(window.viewer.getCurrentLoginId())}`);
+      const body = await res.json();
+      return {
+        overlayEnabled: window.viewer.chipLabelOverlayEnabled,
+        toggleChecked: document.getElementById('chip-label-overlay-toggle')?.checked,
+        count: document.querySelectorAll('#chip-label-legend .chip-label-pill').length,
+        activePills: document.querySelectorAll('#chip-label-legend .chip-label-pill.is-active').length,
+        filterSize: window.viewer.chipAnnotator?.legendFilterClasses?.size ?? null,
+        prefValue: body?.prefs?.chipLabelOverlayEnabled,
+      };
+    });
+    expect(
+      legendReloadToggleOn.count > 0 &&
+        legendReloadToggleOn.activePills === legendReloadToggleOn.count &&
+        legendReloadToggleOn.filterSize === legendReloadToggleOn.count &&
+        legendReloadToggleOn.prefValue === true,
+      `chip label overlay reload-on should select all classes: off=${JSON.stringify(legendReloadOff)} on=${JSON.stringify(legendReloadToggleOn)}`
+    );
 
     const legendSizing = await page.evaluate(() => {
       const legend = document.getElementById('chip-label-legend');
@@ -1460,8 +1807,8 @@ const { createRunner } = require('./e2e_playwright_session');
       };
     });
     expect(
-      legendSizing.visible && legendSizing.width >= 220 && legendSizing.width <= 230,
-      `chip label legend width should be reduced by 15% from 264px: ${JSON.stringify(legendSizing)}`
+      legendSizing.visible && legendSizing.width >= 178 && legendSizing.width <= 182,
+      `chip label legend width should be 80% of previous 224px width: ${JSON.stringify(legendSizing)}`
     );
 
     const titleBox = await page.locator('#chip-label-legend .chip-label-legend__title').boundingBox();
@@ -2167,12 +2514,30 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(singleMenu.viewMode === 'single', `chip label single mode failed: ${JSON.stringify(singleMenu)}`);
     expect(singleMenuAfterRightClick.contextPaths[0]?.toLowerCase().includes('classification_chips/'), `chip label single context path invalid: ${JSON.stringify(singleMenuAfterRightClick)}`);
     expect(singleMenuAfterRightClick.contextPaths.length === 1, `chip label single context paths invalid: ${JSON.stringify(singleMenuAfterRightClick)}`);
-    const chipSinglePanel = await page.evaluate(() => ({
-      folderText: document.getElementById('file-path-text')?.textContent || '',
-      separatorDisplay: getComputedStyle(document.getElementById('separator-text')).display,
-    }));
+    const chipSinglePanel = await page.evaluate(() => {
+      const legend = document.getElementById('chip-label-legend');
+      const legendStyle = legend ? getComputedStyle(legend) : null;
+      const legendRect = legend?.getBoundingClientRect?.();
+      const legendVisible = !!legend &&
+        legendStyle?.display !== 'none' &&
+        legendStyle?.visibility !== 'hidden' &&
+        (legendRect?.width || 0) > 0 &&
+        (legendRect?.height || 0) > 0;
+      return {
+        folderText: document.getElementById('file-path-text')?.textContent || '',
+        separatorDisplay: getComputedStyle(document.getElementById('separator-text')).display,
+        legendDisplay: legendStyle?.display || null,
+        legendVisible,
+        legendPillCount: legend?.querySelectorAll('button[data-chip-label]').length || 0,
+        selectedImagePath: window.viewer.selectedImagePath || '',
+      };
+    });
     expect(chipSinglePanel.folderText.trim() === '', `chip label folder should stay hidden: ${JSON.stringify(chipSinglePanel)}`);
     expect(chipSinglePanel.separatorDisplay === 'none', `chip label separator should stay hidden: ${JSON.stringify(chipSinglePanel)}`);
+    expect(
+      !chipSinglePanel.legendVisible && chipSinglePanel.legendDisplay === 'none',
+      `chip label image should not show wafer chip label legend: ${JSON.stringify(chipSinglePanel)}`
+    );
     expect(
       singleMenuAfterRightClick.menuText.includes('Wafer 보기') &&
         singleMenuAfterRightClick.menuText.includes('Lot 보기') &&
@@ -2222,11 +2587,16 @@ const { createRunner } = require('./e2e_playwright_session');
       markedCount: data.markedCount,
       waferPath: data.waferLookup.wafer_path,
       waferKey: data.waferLookup.wafer_key,
+      labelExplorerWaferSingle,
       gridMenu,
       gridMenuAfterRightClick,
-      waferGrid,
+      waferSingle,
       waferSinglePanel,
       legendBefore,
+      selectedChipClassFilter,
+      legendToggleOff,
+      legendReloadOff,
+      legendReloadToggleOn,
       legendSizing,
       transformBeforeLegendDrag,
       transformAfterLegendDrag,

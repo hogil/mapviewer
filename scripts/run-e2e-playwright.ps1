@@ -473,7 +473,7 @@ function Wait-ForSearchReady {
                 $null
             }
             if ($status.ready) {
-                $raw = & curl.exe -s -k --max-time 10 "$BaseUrl/api/search?q=abc123&limit=1"
+                $raw = & curl.exe -s -k --max-time 10 "$BaseUrl/api/search?q=AAU220&limit=1"
                 $response = if (-not [string]::IsNullOrWhiteSpace($raw)) {
                     $raw | ConvertFrom-Json
                 } else {

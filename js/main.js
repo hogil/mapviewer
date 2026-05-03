@@ -413,6 +413,7 @@ class ThumbnailManager {
             queued: this.loadQueue.length
         };
     }
+
 }
 
 /**
@@ -1002,6 +1003,8 @@ class WaferMapViewer {
         this.pageViewCacheLimit = 10;   // 캐시 최대 유지 페이지 수 (탭 전환 시 이미지 유지)
         this.chipLabelLegendData = [];
         this.activeChipLabelClasses = null;
+        this.chipLabelOverlayEnabled = true;
+        this._chipLabelSelectAllOnNextLegend = false;
         this.lastChipLabelLegendClass = null;
         this.chipLabelLegendDrag = null;
         this.skipNextChipLabelLegendClick = false;
@@ -3079,16 +3082,17 @@ class WaferMapViewer {
     // 파일명 표시
 
     showFileName(path) {
+        const normalizedPath = String(path || '').replace(/\\/g, '/');
+        const isChipLabelImage = this.isChipLabelPath?.(normalizedPath) ||
+            normalizedPath.toLowerCase().split('/').includes('classification_chips');
+
         if (this.dom.fileNameDisplay && this.dom.fileNameText && this.dom.filePathText) {
             // 🔥 경로 파싱
-            const parts = path.replace(/\\/g, '/').split('/');
-            const fileName = parts.pop() || path;
+            const parts = normalizedPath.split('/');
+            const fileName = parts.pop() || normalizedPath;
 
             // 🔥 Line 1: chip label은 숨기고, wafer 단일 보기에서는 소속 폴더명 표시
             let folderInfo = '';
-            const normalizedPath = path.replace(/\\/g, '/');
-            const isChipLabelImage = this.isChipLabelPath?.(normalizedPath) ||
-                normalizedPath.toLowerCase().split('/').includes('classification_chips');
             if (!isChipLabelImage && parts.length >= 1) {
                 folderInfo = parts[parts.length - 1];
             }
@@ -3121,8 +3125,8 @@ class WaferMapViewer {
 
         // ⭐ Chip Labels 표시 (단일 이미지 모드에서만)
         if (this.dom.chipLabelLegend) {
-            this.dom.chipLabelLegend.style.display = 'block';
-            this.debugLog('🟢 [DEBUG] chipLabelLegend 표시');
+            this.dom.chipLabelLegend.style.display = isChipLabelImage ? 'none' : 'block';
+            this.debugLog(isChipLabelImage ? '🔷 [DEBUG] chipLabelLegend 숨김 (chip label image)' : '🟢 [DEBUG] chipLabelLegend 표시');
         }
     }
 
@@ -14516,8 +14520,9 @@ class WaferMapViewer {
 
             // ⭐ Chip Labels 표시 (단일 이미지 모드에서)
             if (this.dom.chipLabelLegend) {
-                this.dom.chipLabelLegend.style.display = 'block';
-                console.log('🟢 [SHOW_IMAGE] chipLabelLegend 표시');
+                const showChipLabelLegend = !this.isChipLabelPath?.(fullPath);
+                this.dom.chipLabelLegend.style.display = showChipLabelLegend ? 'block' : 'none';
+                console.log(showChipLabelLegend ? '🟢 [SHOW_IMAGE] chipLabelLegend 표시' : '🔷 [SHOW_IMAGE] chipLabelLegend 숨김 (chip label image)');
             }
             const chipInfoContainer = document.getElementById('chip-info-container');
             if (chipInfoContainer) {
@@ -22490,7 +22495,7 @@ class WaferMapViewer {
 
                     // ✅ 인덱스 0과 2 추출
                     let index0 = parts[0] || '';      // wafer
-                    let index2 = parts[2] ? parts[2].replace(/\.(png|jpg|jpeg|gif)$/i, '') : ''; // 5mb
+                    let index2 = parts[2] ? parts[2].replace(/\.(png|jpg|jpeg|gif)$/i, '') : ''; // wafer
 
                     if (index0 && index2) {
                         // 중복 처리를 위해 imagePath도 포함
@@ -25044,7 +25049,9 @@ class WaferMapViewer {
                 this.showToast?.('연관 wafer 검색 결과가 없습니다.', 2200);
                 return false;
             }
-            const opened = await this.openWaferGridResultsInNewPage(search.results);
+            const opened = mode === 'wafer' && search.results.length === 1
+                ? await this.openWaferSingleViewInNewPage(search.results[0])
+                : await this.openWaferGridResultsInNewPage(search.results);
             if (opened) {
                 const label = mode === 'lot' ? 'Lot 보기' : 'Wafer 보기';
                 this.showToast?.(`${label}: ${search.results.length}개 wafer`, 1600);
@@ -25088,6 +25095,7 @@ class WaferMapViewer {
         }
         this.activePageRole = 'wafer';
         await this.enterSingleViewMode(waferPath);
+        return true;
     }
 
     resolveOriginalImagePath(path = '') {
@@ -27876,7 +27884,8 @@ class WaferMapViewer {
                 filterTM: this.filterTM,
                 filterSTEP: [...(this.filterSTEP || [])],
                 borderNormalize: this.borderNormalize,
-                lastProductFolder: this.productFolderPath || '',
+                lastProductFolder: this.productFolderPath || this._savedLastProductFolder || '',
+                chipLabelOverlayEnabled: this.chipLabelOverlayEnabled,
             }),
         }).catch(() => {});
     }
@@ -27892,6 +27901,7 @@ class WaferMapViewer {
             if (!res.ok) return;
             const data = await res.json();
             const prefs = data?.prefs || {};
+            let shouldPersistChipLabelPref = false;
             if (typeof prefs.gridCols === 'number' && prefs.gridCols >= 1) {
                 this.gridCols = prefs.gridCols;
                 document.documentElement.style.setProperty('--grid-cols', this.gridCols);
@@ -27917,9 +27927,19 @@ class WaferMapViewer {
                 this.borderNormalize = prefs.borderNormalize;
                 this._syncBorderCheckboxUI();
             }
+            if (typeof prefs.chipLabelOverlayEnabled === 'boolean') {
+                this.chipLabelOverlayEnabled = prefs.chipLabelOverlayEnabled;
+            } else {
+                shouldPersistChipLabelPref = true;
+            }
+            this.applyChipLabelLegendFilter();
+            this.renderChipLabelLegend();
             // 🔥 마지막 제품 폴더 경로 복원 (필터 메타데이터 로드용)
             if (typeof prefs.lastProductFolder === 'string' && prefs.lastProductFolder) {
                 this._savedLastProductFolder = prefs.lastProductFolder;
+            }
+            if (shouldPersistChipLabelPref) {
+                this._saveUserPrefs();
             }
         } catch (e) {
             // noop
@@ -28050,19 +28070,21 @@ class WaferMapViewer {
             .sort((a, b) => b.count - a.count || a.className.localeCompare(b.className));
 
         const availableClasses = new Set(this.chipLabelLegendData.map(item => item.className));
-        if (this.activeChipLabelClasses instanceof Set) {
+        if (this._chipLabelSelectAllOnNextLegend && availableClasses.size > 0) {
+            this.activeChipLabelClasses = this.getDefaultChipLabelActiveClassSet(Array.from(availableClasses));
+            this._chipLabelSelectAllOnNextLegend = false;
+        } else if (this.activeChipLabelClasses instanceof Set) {
             this.activeChipLabelClasses = new Set(
                 Array.from(this.activeChipLabelClasses).filter(cls => availableClasses.has(cls))
             );
         }
-        // 기본값: invalid_main은 시야를 많이 가리므로 기본 overlay에서 제외한다.
         if (!(this.activeChipLabelClasses instanceof Set) && availableClasses.size > 0) {
             this.activeChipLabelClasses = this.getDefaultChipLabelActiveClassSet(Array.from(availableClasses));
         }
 
         this.renderChipLabelLegend();
         if (this.chipAnnotator) {
-            this.chipAnnotator.setLegendFilterClasses(this.activeChipLabelClasses);
+            this.applyChipLabelLegendFilter();
         }
     }
 
@@ -28076,25 +28098,45 @@ class WaferMapViewer {
         if (!hasData) {
             legendEl.classList.remove('is-visible');
             legendEl.innerHTML = `
-                <div class="chip-label-legend__title">Chip Labels</div>
+                <div class="chip-label-legend__title-row">
+                    <label class="chip-label-legend__toggle">
+                        <input type="checkbox" id="chip-label-overlay-toggle" ${this.chipLabelOverlayEnabled ? 'checked' : ''}>
+                        <span class="chip-label-legend__title">Chip Labels</span>
+                    </label>
+                </div>
                 <div class="chip-label-empty">No chip labels</div>
             `;
+            this.bindChipLabelOverlayToggle();
             return;
         }
 
         legendEl.classList.add('is-visible');
 
-        const title = document.createElement('div');
+        const titleRow = document.createElement('div');
+        titleRow.className = 'chip-label-legend__title-row';
+
+        const toggleLabel = document.createElement('label');
+        toggleLabel.className = 'chip-label-legend__toggle';
+
+        const toggle = document.createElement('input');
+        toggle.type = 'checkbox';
+        toggle.id = 'chip-label-overlay-toggle';
+        toggle.checked = this.chipLabelOverlayEnabled;
+
+        const title = document.createElement('span');
         title.className = 'chip-label-legend__title';
         title.textContent = 'Chip Labels';
-        legendEl.appendChild(title);
+        toggleLabel.appendChild(toggle);
+        toggleLabel.appendChild(title);
+        titleRow.appendChild(toggleLabel);
+        legendEl.appendChild(titleRow);
 
         this.chipLabelLegendData.forEach(({ className, count }) => {
             const btn = document.createElement('button');
             btn.type = 'button';
             btn.draggable = false;
             const isActive = !this.activeChipLabelClasses || this.activeChipLabelClasses.has(className);
-            btn.className = 'chip-label-pill' + (isActive ? ' is-active' : '');
+            btn.className = 'chip-label-pill' + (this.chipLabelOverlayEnabled && isActive ? ' is-active' : '');
             btn.setAttribute('data-chip-label', className);
             const colorDot = document.createElement('span');
             colorDot.className = 'chip-label-pill__dot';
@@ -28115,6 +28157,8 @@ class WaferMapViewer {
 
             legendEl.appendChild(btn);
         });
+
+        this.bindChipLabelOverlayToggle();
     }
 
 
@@ -28124,13 +28168,9 @@ class WaferMapViewer {
             .filter(Boolean);
     }
 
-    isDefaultHiddenChipLabelClass(className) {
-        return String(className || '').toLowerCase() === 'invalid_main';
-    }
-
     getDefaultChipLabelActiveClassSet(classNames = null) {
         const classes = Array.isArray(classNames) ? classNames : this.getChipLabelLegendClasses();
-        return new Set(classes.filter(className => !this.isDefaultHiddenChipLabelClass(className)));
+        return new Set(classes);
     }
 
     getChipLabelActiveClassSet() {
@@ -28152,10 +28192,52 @@ class WaferMapViewer {
             nextSet = this.getDefaultChipLabelActiveClassSet(classes);
         }
         this.activeChipLabelClasses = nextSet;
-        if (this.chipAnnotator) {
-            this.chipAnnotator.setLegendFilterClasses(this.activeChipLabelClasses);
-        }
+        this.applyChipLabelLegendFilter();
         this.renderChipLabelLegend();
+    }
+
+    bindChipLabelOverlayToggle() {
+        const toggle = document.getElementById('chip-label-overlay-toggle');
+        if (!toggle || toggle.dataset.bound === '1') return;
+        toggle.dataset.bound = '1';
+        toggle.addEventListener('change', (event) => {
+            event.stopPropagation();
+            this.setChipLabelOverlayEnabled(event.target.checked, { persist: true });
+        });
+        toggle.addEventListener('click', (event) => event.stopPropagation());
+        toggle.addEventListener('pointerdown', (event) => event.stopPropagation());
+    }
+
+    setChipLabelOverlayEnabled(enabled, options = {}) {
+        const nextEnabled = !!enabled;
+        const wasEnabled = this.chipLabelOverlayEnabled;
+        this.chipLabelOverlayEnabled = nextEnabled;
+        if (nextEnabled && (
+            !wasEnabled ||
+            !(this.activeChipLabelClasses instanceof Set) ||
+            this.activeChipLabelClasses.size === 0
+        )) {
+            const classes = this.getChipLabelLegendClasses();
+            this.activeChipLabelClasses = this.getDefaultChipLabelActiveClassSet(classes);
+            this._chipLabelSelectAllOnNextLegend = classes.length === 0;
+            this.lastChipLabelLegendClass = null;
+        } else if (!nextEnabled) {
+            this._chipLabelSelectAllOnNextLegend = false;
+        }
+        this.applyChipLabelLegendFilter();
+        this.renderChipLabelLegend();
+        if (options.persist) {
+            this._saveUserPrefs();
+        }
+    }
+
+    applyChipLabelLegendFilter() {
+        if (!this.chipAnnotator) return;
+        if (!this.chipLabelOverlayEnabled) {
+            this.chipAnnotator.setLegendFilterClasses(new Set());
+            return;
+        }
+        this.chipAnnotator.setLegendFilterClasses(this.activeChipLabelClasses);
     }
 
     handleChipLabelLegendClick(event) {
@@ -28315,9 +28397,46 @@ class WaferMapViewer {
         this.setChipLabelLegendClasses(nextSet);
     }
 
+    getSelectedChipLabelClassSet() {
+        const annotator = this.chipAnnotator;
+        if (!annotator || !(annotator.selectedChips instanceof Set) || annotator.selectedChips.size === 0) {
+            return null;
+        }
+
+        const selectedKeys = new Set();
+        annotator.selectedChips.forEach(index => {
+            const chip = annotator.chips?.[index];
+            if (!chip) return;
+            if (chip.chip_id) selectedKeys.add(String(chip.chip_id));
+            if (chip.x_abs !== undefined && chip.y_abs !== undefined) {
+                selectedKeys.add(`abs:${chip.x_abs}:${chip.y_abs}`);
+                selectedKeys.add(`${chip.x_abs}:${chip.y_abs}`);
+            }
+        });
+
+        const classSet = new Set();
+        (annotator.markedChips || []).forEach(marked => {
+            const className = marked?.class || marked?.label;
+            if (!className) return;
+            const keys = [];
+            if (marked.chip_id) keys.push(String(marked.chip_id));
+            if (marked.x_abs !== undefined && marked.y_abs !== undefined) {
+                keys.push(`abs:${marked.x_abs}:${marked.y_abs}`);
+                keys.push(`${marked.x_abs}:${marked.y_abs}`);
+            }
+            if (keys.some(key => selectedKeys.has(key))) {
+                classSet.add(className);
+            }
+        });
+        return classSet;
+    }
+
     onManualChipSelection() {
         if (!this.getChipLabelLegendClasses().length) return;
-        this.setChipLabelLegendClasses(null);
+        const selectedClassSet = this.getSelectedChipLabelClassSet();
+        if (selectedClassSet instanceof Set) {
+            this.setChipLabelLegendClasses(selectedClassSet);
+        }
     }
 
     handleChipSelectionCleared() {
@@ -30800,6 +30919,99 @@ class WaferMapViewer {
         setTimeout(() => {
             header.style.background = '';
         }, 1000);
+    }
+
+    getSelectedChipLabelClassSet() {
+        const annotator = this.chipAnnotator;
+        if (!annotator || !(annotator.selectedChips instanceof Set) || annotator.selectedChips.size === 0) {
+            return null;
+        }
+
+        const chips = annotator.chips || [];
+        const selectedChips = Array.from(annotator.selectedChips)
+            .map(idx => chips[idx])
+            .filter(Boolean);
+        if (selectedChips.length === 0) {
+            return new Set();
+        }
+
+        const coordKey = (x, y) => {
+            if (x === null || x === undefined || y === null || y === undefined) return null;
+            return `${Number(x)}:${Number(y)}`;
+        };
+        const normalizeRect = (rect) => {
+            if (!rect) return null;
+            const x0 = Number(rect.x0 ?? rect.left);
+            const y0 = Number(rect.y0 ?? rect.top);
+            const x1 = Number(rect.x1 ?? rect.right);
+            const y1 = Number(rect.y1 ?? rect.bottom);
+            if (![x0, y0, x1, y1].every(Number.isFinite)) return null;
+            return {
+                x0: Math.min(x0, x1),
+                y0: Math.min(y0, y1),
+                x1: Math.max(x0, x1),
+                y1: Math.max(y0, y1),
+            };
+        };
+        const rectContainsCenter = (outer, inner) => {
+            if (!outer || !inner) return false;
+            const cx = (inner.x0 + inner.x1) / 2;
+            const cy = (inner.y0 + inner.y1) / 2;
+            return cx >= outer.x0 && cx <= outer.x1 && cy >= outer.y0 && cy <= outer.y1;
+        };
+        const rectOverlaps = (a, b) => {
+            if (!a || !b) return false;
+            return Math.max(a.x0, b.x0) < Math.min(a.x1, b.x1) &&
+                Math.max(a.y0, b.y0) < Math.min(a.y1, b.y1);
+        };
+
+        const selectedKeys = new Set();
+        const selectedRects = [];
+        selectedChips.forEach(chip => {
+            [
+                coordKey(chip.x_abs, chip.y_abs),
+                coordKey(chip.x, chip.y),
+                coordKey(chip.x_cal, chip.y_cal),
+            ].filter(Boolean).forEach(key => selectedKeys.add(key));
+            const rect = normalizeRect(chip.rect);
+            if (rect) selectedRects.push(rect);
+        });
+
+        const classSet = new Set();
+        (annotator.markedChips || []).forEach(marked => {
+            const className = marked?.class || marked?.label;
+            if (!className) return;
+
+            const markedKeys = [
+                coordKey(marked.x_abs, marked.y_abs),
+                coordKey(marked.x, marked.y),
+                coordKey(marked.x_cal, marked.y_cal),
+            ].filter(Boolean);
+            if (markedKeys.some(key => selectedKeys.has(key))) {
+                classSet.add(className);
+                return;
+            }
+
+            const markedRect = normalizeRect(marked.rect);
+            if (selectedRects.some(rect => rectContainsCenter(rect, markedRect) || rectOverlaps(rect, markedRect))) {
+                classSet.add(className);
+            }
+        });
+
+        return classSet;
+    }
+
+    onManualChipSelection() {
+        const selectedClassSet = this.getSelectedChipLabelClassSet();
+        if (selectedClassSet === null) {
+            this.setChipLabelLegendClasses(null);
+            return;
+        }
+        this.setChipLabelLegendClasses(selectedClassSet);
+    }
+
+    handleChipSelectionCleared() {
+        this.setChipLabelLegendClasses(null);
     }
 }
 
