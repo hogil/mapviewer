@@ -24,39 +24,63 @@ L3 Tracker는 대용량 반도체 wafer map 이미지를 웹에서 빠르게 탐
 앱의 핵심 흐름은 브라우저 UI가 사용자 조작을 API 요청으로 바꾸고, Backend API가 인증과 분기를 맡은 뒤, Search/Image/Compute 모듈이 파일 시스템과 캐시를 사용해 결과를 돌려주는 구조입니다.
 
 ```text
-+----------------------------+   request: query / path / filters / job params   +----------------------------+
-| Browser UI                 | -----------------------------------------------> | Backend API                |
-| - 검색어, 클릭, 분석 실행  |                                                  | - SAML/session 인증 확인   |
-| - fetch()로 API 호출       | <----------------------------------------------- | - endpoint별 기능 분기     |
-| - grid/canvas 화면 갱신    |   response: result JSON / image bytes / status   | - 응답 포맷 조립           |
-+----------------------------+                                                  +----------------------------+
+[1] UI <-> API
 
-+----------------------------+   auth request: SAML login / session cookie      +----------------------------+
-| Backend API                | -----------------------------------------------> | SAML Auth                  |
-| - 보호 API 진입점 관리     | <----------------------------------------------- | - SSO 사용자 확인          |
-| - 사용자 권한 context 생성 |   auth response: user id / role / session state  | - 세션 상태 반환           |
-+----------------------------+                                                  +----------------------------+
++--------------------+   q,path,filters,job   +--------------------+
+| Browser UI         | ---------------------> | Backend API        |
+| - collect actions  |                        | - auth + routing   |
+| - fetch + render   | <--------------------- | - build response   |
++--------------------+   JSON,image,status    +--------------------+
 
-+----------------------------+   search input: q / folder / AND,OR,NOT tokens   +----------------------------+   lookup: LOT key / file path map   +----------------------------+
-| Backend API                | -----------------------------------------------> | Search Service             | ---------------------------------> | File Index / Cache        |
-| - /api/search 요청 수신    |                                                  | - 검색어 정규화            |                                    | - 사전 생성 파일 인덱스   |
-| - folder scope 적용        | <----------------------------------------------- | - LOT/파일명/논리조건 매칭 | <--------------------------------- | - 인덱스 ready/status     |
-| - 결과 응답 조립           |   search output: matched files / folders / meta  | - 결과 정렬/제한           |   lookup result: candidate paths   | - 경로 후보 반환          |
-+----------------------------+                                                  +----------------------------+                                    +----------------------------+
+[2] API <-> Auth
 
-+----------------------------+   image input: path / level / scheme / filters   +----------------------------+   read/write: original / thumbnail / pyramid   +----------------------------+
-| Backend API                | -----------------------------------------------> | Image Pipeline             | --------------------------------> | File System / Cache       |
-| - image API 요청 수신      |                                                  | - 캐시 hit 먼저 확인       |                                   | - 원본 이미지 보관        |
-| - cache header 조립        | <----------------------------------------------- | - pyvips/Pillow 변환       | <-------------------------------- | - 썸네일/피라미드 캐시    |
-| - 이미지 응답 반환         |   image output: PNG/JPEG/WebP bytes / ETag       | - 화면 크기에 맞게 생성    |   cached output: image bytes/key   | - 생성 이미지 재사용      |
-+----------------------------+                                                  +----------------------------+                                   +----------------------------+
++--------------------+   login,cookie,session  +--------------------+
+| Backend API        | ---------------------> | SAML Auth          |
+| - guard endpoints  |                        | - SSO login        |
+| - user context     | <--------------------- | - session state    |
++--------------------+   user,role,status      +--------------------+
 
-+----------------------------+   compute input: image set / positions / options +----------------------------+   read/write: source data / result cache       +----------------------------+
-| Backend API                | -----------------------------------------------> | Compute Worker             | --------------------------------> | File System / Cache       |
-| - Composite/Measure 분기   |                                                  | - 원본/positions 로드      |                                   | - 원본 이미지, positions  |
-| - 작업 상태/결과 응답      | <----------------------------------------------- | - 집계/계산 수행           | <-------------------------------- | - 계산 결과 JSON/cache    |
-| - 화면용 결과 정리         |   compute output: status / result JSON / cache   | - 결과 캐시 저장           |   stored output: artifact path/key | - 재계산 최소화           |
-+----------------------------+                                                  +----------------------------+                                   +----------------------------+
+[3] API <-> Search
+
++--------------------+   q,folder,AND/OR/NOT   +--------------------+
+| Backend API        | ---------------------> | Search Service     |
+| - accept /search   |                        | - normalize query  |
+| - apply scope      | <--------------------- | - match + rank     |
++--------------------+   files,folders,meta    +--------------------+
+
++--------------------+   lot key,path token    +--------------------+
+| Search Service     | ---------------------> | File Index         |
+| - ask candidates   |                        | - path map         |
+| - merge results    | <--------------------- | - ready status     |
++--------------------+   candidate paths       +--------------------+
+
+[4] API <-> Image Pipeline
+
++--------------------+   path,level,scheme     +--------------------+
+| Backend API        | ---------------------> | Image Pipeline     |
+| - accept image API |                        | - cache first      |
+| - set cache header | <--------------------- | - resize/convert   |
++--------------------+   PNG,JPEG,WebP,ETag    +--------------------+
+
++--------------------+   read/write image      +--------------------+
+| Image Pipeline     | ---------------------> | File/Cache         |
+| - make thumbnails  |                        | - originals        |
+| - make pyramids    | <--------------------- | - thumbs,pyramids  |
++--------------------+   image bytes,key       +--------------------+
+
+[5] API <-> Compute
+
++--------------------+   image set,options     +--------------------+
+| Backend API        | ---------------------> | Compute Worker     |
+| - dispatch job     |                        | - load positions   |
+| - format result    | <--------------------- | - aggregate/cache  |
++--------------------+   status,result,cache   +--------------------+
+
++--------------------+   source,result cache   +--------------------+
+| Compute Worker     | ---------------------> | File/Cache         |
+| - read source data |                        | - images,positions |
+| - store artifacts  | <--------------------- | - result JSON      |
++--------------------+   artifact path,key     +--------------------+
 ```
 
 | 구성 | 맡는 역할 |
