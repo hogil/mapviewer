@@ -19,41 +19,54 @@ L3 Tracker는 대용량 반도체 wafer map 이미지를 웹에서 빠르게 탐
 | Runtime & Ops | systemd, Bash, Uvicorn | 운영 실행, SSL, worker/concurrency 튜닝 | 단일 서버 프로세스와 내부 worker 설정으로 상태 일관성과 성능을 관리 |
 | Test Automation | Playwright | 주요 UI/기능 회귀 테스트 | 브라우저 자동화로 실제 사용자 흐름 검증 |
 
-## Key Flow
+## Workflow Diagram
 
-1. 브라우저가 HTML/CSS/JavaScript 모듈을 받아 초기 탐색 화면을 먼저 표시합니다.
-2. 사용자 상호작용 또는 idle 시점에 전체 viewer 모듈을 로딩합니다.
-3. Python API 서버는 bootstrap layer로 초기 요청을 빠르게 처리하고, 전체 FastAPI 기능을 lazy-load합니다.
-4. 이미지 요청은 thumbnail/pyramid/cache 계층을 통해 필요한 크기만 내려받습니다.
-5. 검색은 파일 시스템 전체를 매번 스캔하지 않고, 사전에 만든 파일 경로 인덱스를 사용합니다.
-6. Composite/Measure 같은 고비용 분석은 서버 worker와 가속 옵션을 사용해 백그라운드로 처리합니다.
-
-이 구조의 핵심 장점은 배포 구성이 단순하고, 사내 파일 서버 형태의 대용량 이미지 데이터에 직접 맞춰져 있으며, 초기 화면 속도와 이미지 처리 성능을 별도로 튜닝할 수 있다는 점입니다.
-
-## 한 줄 구조
-
-브라우저는 `index.html`에서 Vanilla JS 앱을 로딩하고, 서버는 `api/main.py`의 bootstrap 앱으로 빠르게 뜬 뒤 `api/full_app.py`의 전체 FastAPI 앱을 lazy-load합니다. 이미지/검색/분류/Composite 처리는 파일 시스템 기반 캐시와 백그라운드 worker로 처리합니다.
+앱의 핵심 흐름은 브라우저 UI가 사용자 조작을 API 요청으로 바꾸고, Backend API가 인증과 분기를 맡은 뒤, Search/Image/Compute 모듈이 파일 시스템과 캐시를 사용해 결과를 돌려주는 구조입니다.
 
 ```text
-Browser
-  index.html
-  js/boot-explorer.js
-  js/main.js + feature modules
-        |
-        | HTTPS JSON / image / thumbnail APIs
-        v
-api/main.py bootstrap app
-        |
-        | lazy-load
-        v
-api/full_app.py full FastAPI app
-        |
-        +-- api/index_service.py   file index
-        +-- api/search_service.py  search
-        +-- api/thumbnail_service.py / pyvips
-        +-- api/composite_map.py
-        +-- logs/*.json, data files, image cache
++----------------------------+   request: query / path / filters / job params   +----------------------------+
+| Browser UI                 | -----------------------------------------------> | Backend API                |
+| - 검색어, 클릭, 분석 실행  |                                                  | - SAML/session 인증 확인   |
+| - fetch()로 API 호출       | <----------------------------------------------- | - endpoint별 기능 분기     |
+| - grid/canvas 화면 갱신    |   response: result JSON / image bytes / status   | - 응답 포맷 조립           |
++----------------------------+                                                  +----------------------------+
+
++----------------------------+   auth request: SAML login / session cookie      +----------------------------+
+| Backend API                | -----------------------------------------------> | SAML Auth                  |
+| - 보호 API 진입점 관리     | <----------------------------------------------- | - SSO 사용자 확인          |
+| - 사용자 권한 context 생성 |   auth response: user id / role / session state  | - 세션 상태 반환           |
++----------------------------+                                                  +----------------------------+
+
++----------------------------+   search input: q / folder / AND,OR,NOT tokens   +----------------------------+   lookup: LOT key / file path map   +----------------------------+
+| Backend API                | -----------------------------------------------> | Search Service             | ---------------------------------> | File Index / Cache        |
+| - /api/search 요청 수신    |                                                  | - 검색어 정규화            |                                    | - 사전 생성 파일 인덱스   |
+| - folder scope 적용        | <----------------------------------------------- | - LOT/파일명/논리조건 매칭 | <--------------------------------- | - 인덱스 ready/status     |
+| - 결과 응답 조립           |   search output: matched files / folders / meta  | - 결과 정렬/제한           |   lookup result: candidate paths   | - 경로 후보 반환          |
++----------------------------+                                                  +----------------------------+                                    +----------------------------+
+
++----------------------------+   image input: path / level / scheme / filters   +----------------------------+   read/write: original / thumbnail / pyramid   +----------------------------+
+| Backend API                | -----------------------------------------------> | Image Pipeline             | --------------------------------> | File System / Cache       |
+| - image API 요청 수신      |                                                  | - 캐시 hit 먼저 확인       |                                   | - 원본 이미지 보관        |
+| - cache header 조립        | <----------------------------------------------- | - pyvips/Pillow 변환       | <-------------------------------- | - 썸네일/피라미드 캐시    |
+| - 이미지 응답 반환         |   image output: PNG/JPEG/WebP bytes / ETag       | - 화면 크기에 맞게 생성    |   cached output: image bytes/key   | - 생성 이미지 재사용      |
++----------------------------+                                                  +----------------------------+                                   +----------------------------+
+
++----------------------------+   compute input: image set / positions / options +----------------------------+   read/write: source data / result cache       +----------------------------+
+| Backend API                | -----------------------------------------------> | Compute Worker             | --------------------------------> | File System / Cache       |
+| - Composite/Measure 분기   |                                                  | - 원본/positions 로드      |                                   | - 원본 이미지, positions  |
+| - 작업 상태/결과 응답      | <----------------------------------------------- | - 집계/계산 수행           | <-------------------------------- | - 계산 결과 JSON/cache    |
+| - 화면용 결과 정리         |   compute output: status / result JSON / cache   | - 결과 캐시 저장           |   stored output: artifact path/key | - 재계산 최소화           |
++----------------------------+                                                  +----------------------------+                                   +----------------------------+
 ```
+
+| 구성 | 맡는 역할 |
+|------|-----------|
+| Browser UI | 검색, 이미지 보기, 그리드 탐색, Composite 실행을 화면 이벤트와 API 요청으로 연결 |
+| Backend API | SAML 인증 확인, 요청 분기, 결과 응답 조립 |
+| Search | LOT/파일명/논리 조건을 파일 인덱스로 검색 |
+| Image Pipeline | thumbnail, pyramid, cache 이미지를 생성하거나 재사용 |
+| Compute | Composite/Measure 계산을 수행하고 결과를 캐시 |
+| File System / Cache | 원본 이미지, positions, JSON 설정, 로그, 생성 결과 저장 |
 
 ## Frontend
 
