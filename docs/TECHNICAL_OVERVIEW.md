@@ -26,73 +26,75 @@ L3 Tracker는 대용량 반도체 wafer map 이미지를 웹에서 빠르게 탐
 ```text
 [1] Initial Screen / Basic Request
 
-+-------------+   q/path    +-------------+
-| Client      |  ------>   | Server API  |
-| Browser UI  |             | Backend API |
-| render view |  <------   | auth,route  |
-+-------------+ json/status +-------------+
++-------------+    q/path     +-------------+
+| Client      |  -------->    | Server API  |
+| Browser UI  |               | Backend API |
+| render view |  <--------    | auth/route  |
++-------------+  json/status  +-------------+
               click/job
 
 [2] Authentication
 
-+-------------+ login/cookie +-------------+ saml login  +-------------+
-| Client      |  ------>   | Server API  |  ------>   | Auth        |
-| Browser UI  |             | Backend API |             | OneLogin    |
-| show login  |  <------   | user ctx    |  <------   | sso result  |
-+-------------+ user/status +-------------+ claims      +-------------+
-              role                         status
++-------------+ login/cookie  +-------------+  saml login   +-------------+
+| Client      |  -------->    | Server API  |  -------->    | Auth        |
+| Browser UI  |               | Backend API |               | OneLogin    |
+| show login  |  <--------    | user ctx    |  <--------    | sso result  |
++-------------+  user/status  +-------------+    claims     +-------------+
+              role                           status
 
 [3] Search
 
-+-------------+ q/folder    +-------------+ parsed qry  +-------------+
-| Client      |  ------>   | Server API  |  ------>   | Service     |
-| Browser UI  |             | Backend API |             | Search      |
-| show list   |  <------   | format list |  <------   | match/rank  |
-+-------------+ files/list  +-------------+ result rows +-------------+
-              tokens                                      |
-                                                          | lot key
-                                                          | path token
-                                                          v
-                                                  +-------------+
-                                                  | Storage     |
-                                                  | File Index  |
-                                                  | path map    |
-                                                  +-------------+
++-------------+   q/folder    +-------------+  parsed qry   +-------------+
+| Client      |  -------->    | Server API  |  -------->    | Service     |
+| Browser UI  |               | Backend API |               | Search      |
+| show list   |  <--------    | format list |  <--------    | match/rank  |
++-------------+  files/list   +-------------+  result rows  +-------------+
+                                                               |     ^
+                                                               |     |
+                                                     query key |     | paths
+                                                               |     |
+                                                               v     |
+                                                            +-------------+
+                                                            | Storage     |
+                                                            | File Index  |
+                                                            | path map    |
+                                                            +-------------+
 
 [4] Image View / Grid
 
-+-------------+ path/level  +-------------+ image args  +-------------+
-| Client      |  ------>   | Server API  |  ------>   | Service     |
-| Browser UI  |             | Backend API |             | Image Pipe  |
-| draw canvas |  <------   | image resp  |  <------   | resize/cache|
-+-------------+ image/stat  +-------------+ bytes/etag  +-------------+
-              filter                                      |
-                                                          | original
-                                                          | thumb/pyr
-                                                          v
-                                                  +-------------+
-                                                  | Storage     |
-                                                  | File/Cache  |
-                                                  | images      |
-                                                  +-------------+
++-------------+  path/level   +-------------+  image args   +-------------+
+| Client      |  -------->    | Server API  |  -------->    | Service     |
+| Browser UI  |               | Backend API |               | Image Pipe  |
+| draw canvas |  <--------    | image resp  |  <--------    | resize/cache|
++-------------+  image/stat   +-------------+  bytes/etag   +-------------+
+                                                               |     ^
+                                                               |     |
+                                                     path/key  |     | bytes
+                                                               |     |
+                                                               v     |
+                                                            +-------------+
+                                                            | Storage     |
+                                                            | File/Cache  |
+                                                            | images      |
+                                                            +-------------+
 
 [5] Composite / Measure
 
-+-------------+ image set   +-------------+ job params  +-------------+
-| Client      |  ------>   | Server API  |  ------>   | Worker      |
-| Browser UI  |             | Backend API |             | Compute     |
-| show result |  <------   | job result  |  <------   | aggregate   |
-+-------------+ status/res  +-------------+ cache key   +-------------+
-              options                       result        |
-                                                          | images
-                                                          | positions
-                                                          | artifacts
-                                                          v
-                                                  +-------------+
-                                                  | Storage     |
-                                                  | File/Cache  |
-                                                  | results     |
-                                                  +-------------+
++-------------+  image set    +-------------+  job params   +-------------+
+| Client      |  -------->    | Server API  |  -------->    | Worker      |
+| Browser UI  |               | Backend API |               | Compute     |
+| show result |  <--------    | job result  |  <--------    | aggregate   |
++-------------+  status/res   +-------------+   cache key   +-------------+
+                                                               |     ^
+                                                               |     |
+                                                     artifact  |     | source
+                                                               |     |
+                                                               v     |
+                                                            +-------------+
+                                                            | Storage     |
+                                                            | File/Cache  |
+                                                            | results     |
+                                                            +-------------+
 ```
 
 | 구성 | 맡는 역할 |
