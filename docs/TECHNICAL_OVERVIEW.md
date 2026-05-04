@@ -27,25 +27,25 @@ L3 Tracker는 대용량 반도체 wafer map 이미지를 웹에서 빠르게 탐
 [1] Initial Screen / Basic Request
 
 +-------------+   q/path    +-------------+
-| CLIENT      |    ---->    | SERVER API  |
+| Client      |    ---->    | Server API  |
 | Browser UI  |             | Backend API |
 | render view |    <----    | auth,route  |
-+-------------+ JSON/status +-------------+
++-------------+ json/status +-------------+
               click/job
 
 [2] Authentication
 
-+-------------+ login/cookie +-------------+ SAML login  +-------------+
-| CLIENT      |    ---->    | SERVER API  |    ---->    | AUTH        |
++-------------+ login/cookie +-------------+ saml login  +-------------+
+| Client      |    ---->    | Server API  |    ---->    | Auth        |
 | Browser UI  |             | Backend API |             | OneLogin    |
-| show login  |    <----    | user ctx    |    <----    | SSO result  |
+| show login  |    <----    | user ctx    |    <----    | sso result  |
 +-------------+ user/status +-------------+ claims      +-------------+
               role                         status
 
 [3] Search
 
 +-------------+ q/folder    +-------------+ parsed qry  +-------------+
-| CLIENT      |    ---->    | SERVER API  |    ---->    | SERVICE     |
+| Client      |    ---->    | Server API  |    ---->    | Service     |
 | Browser UI  |             | Backend API |             | Search      |
 | show list   |    <----    | format list |    <----    | match/rank  |
 +-------------+ files/list  +-------------+ result rows +-------------+
@@ -54,7 +54,7 @@ L3 Tracker는 대용량 반도체 wafer map 이미지를 웹에서 빠르게 탐
                                                           | path token
                                                           v
                                                   +-------------+
-                                                  | STORAGE     |
+                                                  | Storage     |
                                                   | File Index  |
                                                   | path map    |
                                                   +-------------+
@@ -62,16 +62,16 @@ L3 Tracker는 대용량 반도체 wafer map 이미지를 웹에서 빠르게 탐
 [4] Image View / Grid
 
 +-------------+ path/level  +-------------+ image args  +-------------+
-| CLIENT      |    ---->    | SERVER API  |    ---->    | SERVICE     |
+| Client      |    ---->    | Server API  |    ---->    | Service     |
 | Browser UI  |             | Backend API |             | Image Pipe  |
 | draw canvas |    <----    | image resp  |    <----    | resize/cache|
-+-------------+ image/stat  +-------------+ bytes/ETag  +-------------+
++-------------+ image/stat  +-------------+ bytes/etag  +-------------+
               filter                                      |
                                                           | original
                                                           | thumb/pyr
                                                           v
                                                   +-------------+
-                                                  | STORAGE     |
+                                                  | Storage     |
                                                   | File/Cache  |
                                                   | images      |
                                                   +-------------+
@@ -79,7 +79,7 @@ L3 Tracker는 대용량 반도체 wafer map 이미지를 웹에서 빠르게 탐
 [5] Composite / Measure
 
 +-------------+ image set   +-------------+ job params  +-------------+
-| CLIENT      |    ---->    | SERVER API  |    ---->    | WORKER      |
+| Client      |    ---->    | Server API  |    ---->    | Worker      |
 | Browser UI  |             | Backend API |             | Compute     |
 | show result |    <----    | job result  |    <----    | aggregate   |
 +-------------+ status/res  +-------------+ cache key   +-------------+
@@ -89,7 +89,7 @@ L3 Tracker는 대용량 반도체 wafer map 이미지를 웹에서 빠르게 탐
                                                           | artifacts
                                                           v
                                                   +-------------+
-                                                  | STORAGE     |
+                                                  | Storage     |
                                                   | File/Cache  |
                                                   | results     |
                                                   +-------------+
