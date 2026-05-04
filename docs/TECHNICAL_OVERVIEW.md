@@ -12,11 +12,11 @@ L3 Tracker는 대용량 반도체 wafer map 이미지를 웹에서 빠르게 탐
 |------|-----------|------|-----------|
 | Backend API | Python, FastAPI, Uvicorn | API, 이미지/검색/분류/Composite 기능 제공 | Python 기반 API 서버로 주요 업무 로직을 처리하고, 초기 응답은 가볍게 유지 |
 | Frontend UI | Vanilla JavaScript | 화면, 폴더 탐색, 검색, 그리드, 라벨링 UI | 별도 프론트엔드 프레임워크나 빌드 파이프라인 없이 브라우저 표준 기술로 운영 |
-| Auth | SAML SP | 사내 SSO 인증 | 운영 환경은 SAML 기반 접근 제어를 사용하고, 개발/테스트에는 fallback 로그인 가능 |
+| Auth | OneLogin python3-saml | 사내 SAML SSO 인증 | 앱이 SAML SP로 동작해 사내 IdP 인증 결과를 처리하고, 개발/테스트에는 fallback 로그인 가능 |
 | Image & Compute | pyvips, Pillow, Numba | 썸네일, 피라미드 이미지, Composite/Measure 계산 | 대용량 이미지 변환과 반복 계산 병목을 서버에서 처리 |
 | Search | Custom file index | LOT/파일명/논리 검색 | Elasticsearch나 DB 없이 이미지 파일 경로 인덱스로 검색 처리 |
 | Storage & Cache | File system, JSON | 이미지 원본, 색상/권한 설정, 로그, 생성 캐시 저장 | 중앙 DB 없이 파일 기반으로 운영하고, 대용량 이미지는 캐시로 재사용 |
-| Runtime & Ops | systemd, Bash, Uvicorn | 운영 실행, SSL, worker/concurrency 튜닝 | 단일 서버 프로세스와 내부 worker 설정으로 상태 일관성과 성능을 관리 |
+| Server Runtime | Ubuntu 24, systemd, Conda, Uvicorn | 운영 실행, SSL, SAML 로그인 토글, worker 튜닝 | systemd로 `start.sh`를 실행하고, conda 환경에서 단일 Uvicorn 서버를 운영 |
 | Test Automation | Playwright | 주요 UI/기능 회귀 테스트 | 브라우저 자동화로 실제 사용자 흐름 검증 |
 
 ## Workflow Diagram
@@ -117,7 +117,7 @@ L3 Tracker는 대용량 반도체 wafer map 이미지를 웹에서 빠르게 탐
 | Full app | FastAPI endpoint 본체 | `api/full_app.py` |
 | 이미지 처리 | pyvips, Pillow, TurboJPEG 옵션 | `api/thumbnail_service.py`, `api/full_app.py` |
 | 검색/인덱스 | 파일 시스템 인덱스 + executor 기반 검색 | `api/index_service.py`, `api/search_service.py` |
-| 인증 | SAML SP / fallback login | `api/full_app.py`, `api/config.py` |
+| 인증 | OneLogin python3-saml / fallback login | `api/full_app.py`, `api/config.py` |
 | 저장소 | DB 중심이 아니라 파일 시스템과 JSON | `logs/*.json`, 이미지 루트, 캐시 디렉터리 |
 
 운영에서 FastAPI worker는 `UVICORN_WORKERS=1`이 전제입니다. 여러 Uvicorn worker를 띄우면 인덱스와 캐시가 프로세스별로 갈라져 중복 빌드와 상태 불일치가 생길 수 있습니다. 동시성은 `IO_THREADS`, `THUMBNAIL_SEM`, `THUMBNAIL_EXECUTOR_WORKERS`, `SEARCH_WORKERS`, `COMPOSITE_*` 환경변수로 조절합니다.
@@ -186,8 +186,10 @@ L3 Tracker는 대용량 반도체 wafer map 이미지를 웹에서 빠르게 탐
 | 파일 | 용도 |
 |------|------|
 | `start.ps1` | Windows 개발 실행값 |
-| `start.sh` | Ubuntu 운영 실행값 |
+| `start.sh` | Ubuntu 24 운영 실행 스크립트, systemd에서 호출 |
 | `api/config.py` | 환경변수 기본값과 공통 설정 |
+
+운영 Ubuntu 24 서버는 systemd service가 conda 환경에서 `start.sh`를 호출하는 구조입니다. `start.sh`는 `AUTO_LOGIN` 같은 운영 토글과 시작 전 캐시 정리를 처리한 뒤 `python -m api.main` 또는 `python3 -m api.main`으로 Uvicorn 기반 API 서버를 실행합니다.
 
 운영 32C 서버 기준으로 `start.sh`는 단일 Uvicorn worker를 유지하고 내부 worker만 조절합니다. 예를 들어 `INDEX_WORKERS=24`는 인덱스 작업이 API 응답/썸네일/Composite와 CPU를 모두 놓고 경쟁하지 않도록 32코어의 75% 수준으로 둔 값입니다.
 
