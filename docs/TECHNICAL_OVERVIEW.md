@@ -4,25 +4,33 @@ L3 Tracker의 전체 기술 구성과 검색 사용 규칙을 빠르게 공유�
 
 ## Executive Summary
 
-L3 Tracker는 대용량 반도체 wafer map 이미지를 빠르게 탐색하고, 검색/분류/개인색/Composite 분석을 제공하는 웹 기반 이미지 뷰어입니다. 전체 구조는 별도 프론트엔드 프레임워크 없이 브라우저 기본 기술을 활용하고, Python API 서버가 이미지 처리와 파일 검색을 담당하는 방식입니다.
+L3 Tracker는 대용량 반도체 wafer map 이미지를 웹에서 빠르게 탐색하고, 검색/분류/개인색/Composite 분석까지 처리하는 내부 업무용 이미지 뷰어입니다. 기술 방향은 "외부 검색엔진이나 DB 의존을 늘리지 않고, 파일 시스템 기반 데이터를 Python 서버와 브라우저 기본 기술로 고속 처리"하는 것입니다.
 
-| 구분 | 사용하는 기술 | 간략 설명 |
-|------|---------------|-----------|
-| Frontend | Vanilla JavaScript ES modules | React/Vue 없이 브라우저 기본 모듈로 화면, 검색, 그리드, 라벨링 UI를 구성합니다. |
-| Rendering | Canvas 2D + WebGL2 지원 renderer | wafer map 확대/축소, overlay, minimap, chip annotation을 canvas 기반으로 처리합니다. |
-| Backend | Python + FastAPI/Starlette + Uvicorn HTTPS | 첫 화면은 가벼운 bootstrap 서버가 처리하고, 전체 기능은 FastAPI app을 lazy-load해서 제공합니다. |
-| Image Processing | pyvips, Pillow, TurboJPEG 옵션 | 썸네일, 피라미드 이미지, palette 색상 변경, composite 결과 생성을 서버에서 처리합니다. |
-| Search | Custom Python file index | Elasticsearch/DB 없이 파일 경로 인덱스 캐시를 만들어 LOT/파일명 검색을 빠르게 처리합니다. |
-| Storage | File system + JSON | 이미지, thumbnail/cache, 사용자 색상, 권한, 로그를 파일 시스템 중심으로 관리합니다. |
-| Runtime | 단일 Uvicorn worker + 내부 worker pool | 서버 프로세스는 하나로 유지하고, 썸네일/검색/Composite 작업만 내부 worker로 병렬 처리합니다. |
+## Technology Stack For Reporting
 
-핵심 flow는 다음과 같습니다.
+| 영역 | 기술 스택 | 역할 | 보고 포인트 |
+|------|-----------|------|-------------|
+| Frontend UI | HTML5, CSS3, Vanilla JavaScript ES modules | 화면, 폴더 탐색, 검색, 그리드, 라벨링 UI | React/Vue 같은 프레임워크와 별도 빌드 파이프라인 없이 브라우저 표준 기술로 운영 |
+| Rendering | Canvas 2D, WebGL2 지원 renderer, OffscreenCanvas 옵션 | wafer map 확대/축소, overlay, minimap, chip annotation | 대용량 이미지 뷰어에 맞춘 canvas 중심 렌더링 |
+| Backend API | Python 3, Starlette bootstrap, FastAPI full app, Uvicorn HTTPS | API, 인증, 이미지/검색/분류/Composite 기능 제공 | 첫 화면 응답은 가볍게, 전체 기능은 lazy-load하는 구조 |
+| Image Processing | pyvips, Pillow, TurboJPEG 옵션 | 썸네일, 피라미드 이미지, palette 색상 변경, 이미지 캐시 생성 | 대용량 이미지 I/O와 변환을 서버에서 병렬 처리 |
+| Compute Acceleration | Numba/Cython 옵션 | Composite/Measure 집계와 고비용 계산 가속 | 반복 계산 병목을 Python 순수 루프에만 의존하지 않도록 보완 |
+| Search | Custom Python file index, in-memory lookup, disk cache | LOT/파일명/논리 검색 | Elasticsearch나 DB 없이 이미지 파일 경로 인덱스로 검색 처리 |
+| Auth | SAML SP, fallback login | 사내 SSO 연동 및 개발/운영 fallback | 운영은 SAML 기반 접근, 로컬/테스트는 fallback 가능 |
+| Storage & Cache | File system, JSON, thumbnail/pyramid disk cache | 이미지 원본, 색상/권한 설정, 로그, 생성 캐시 저장 | 중앙 DB 없이 파일 기반 운영, 대용량 이미지는 캐시로 재사용 |
+| Runtime & Ops | Ubuntu/Windows scripts, single Uvicorn worker, internal worker pools | 운영 환경변수, SSL, worker/concurrency 튜닝 | 서버 프로세스는 1개로 상태 일관성을 유지하고 내부 병렬도로 성능 확보 |
+| Test Automation | Playwright E2E scripts | 주요 UI/기능 회귀 테스트 | 브라우저 자동화로 실제 사용자 흐름 검증 |
 
-1. 브라우저가 `index.html`과 `js/boot-explorer.js`로 빠른 초기 화면을 먼저 표시합니다.
-2. 사용자가 접근하거나 브라우저가 idle 상태가 되면 `js/main.js` 전체 viewer를 로딩합니다.
-3. API 서버는 `api/main.py` bootstrap layer로 빠르게 응답하고, 이후 `api/full_app.py`의 전체 FastAPI 기능을 lazy-load합니다.
-4. 이미지 요청은 thumbnail/pyramid/cache를 통해 필요한 해상도만 내려받습니다.
-5. 검색은 `api/index_service.py`의 파일 인덱스를 기반으로 `api/search_service.py`가 처리합니다.
+## Key Flow
+
+1. 브라우저가 HTML/CSS/JavaScript 모듈을 받아 초기 탐색 화면을 먼저 표시합니다.
+2. 사용자 상호작용 또는 idle 시점에 전체 viewer 모듈을 로딩합니다.
+3. Python API 서버는 bootstrap layer로 초기 요청을 빠르게 처리하고, 전체 FastAPI 기능을 lazy-load합니다.
+4. 이미지 요청은 thumbnail/pyramid/cache 계층을 통해 필요한 크기만 내려받습니다.
+5. 검색은 파일 시스템 전체를 매번 스캔하지 않고, 사전에 만든 파일 경로 인덱스를 사용합니다.
+6. Composite/Measure 같은 고비용 분석은 서버 worker와 가속 옵션을 사용해 백그라운드로 처리합니다.
+
+이 구조의 핵심 장점은 배포 구성이 단순하고, 사내 파일 서버 형태의 대용량 이미지 데이터에 직접 맞춰져 있으며, 초기 화면 속도와 이미지 처리 성능을 별도로 튜닝할 수 있다는 점입니다.
 
 ## 한 줄 구조
 
