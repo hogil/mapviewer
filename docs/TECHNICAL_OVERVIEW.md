@@ -8,18 +8,16 @@ L3 Tracker는 대용량 반도체 wafer map 이미지를 웹에서 빠르게 탐
 
 ## Technology Stack For Reporting
 
-| 영역 | 기술 스택 | 역할 | 보고 포인트 |
-|------|-----------|------|-------------|
-| Frontend UI | HTML5, CSS3, Vanilla JavaScript ES modules | 화면, 폴더 탐색, 검색, 그리드, 라벨링 UI | React/Vue 같은 프레임워크와 별도 빌드 파이프라인 없이 브라우저 표준 기술로 운영 |
-| Rendering | Canvas 2D, WebGL2 지원 renderer, OffscreenCanvas 옵션 | wafer map 확대/축소, overlay, minimap, chip annotation | 대용량 이미지 뷰어에 맞춘 canvas 중심 렌더링 |
-| Backend API | Python 3, Starlette bootstrap, FastAPI full app, Uvicorn HTTPS | API, 인증, 이미지/검색/분류/Composite 기능 제공 | 첫 화면 응답은 가볍게, 전체 기능은 lazy-load하는 구조 |
-| Image Processing | pyvips, Pillow, TurboJPEG 옵션 | 썸네일, 피라미드 이미지, palette 색상 변경, 이미지 캐시 생성 | 대용량 이미지 I/O와 변환을 서버에서 병렬 처리 |
-| Compute Acceleration | Numba/Cython 옵션 | Composite/Measure 집계와 고비용 계산 가속 | 반복 계산 병목을 Python 순수 루프에만 의존하지 않도록 보완 |
-| Search | Custom Python file index, in-memory lookup, disk cache | LOT/파일명/논리 검색 | Elasticsearch나 DB 없이 이미지 파일 경로 인덱스로 검색 처리 |
-| Auth | SAML SP, fallback login | 사내 SSO 연동 및 개발/운영 fallback | 운영은 SAML 기반 접근, 로컬/테스트는 fallback 가능 |
-| Storage & Cache | File system, JSON, thumbnail/pyramid disk cache | 이미지 원본, 색상/권한 설정, 로그, 생성 캐시 저장 | 중앙 DB 없이 파일 기반 운영, 대용량 이미지는 캐시로 재사용 |
-| Runtime & Ops | Ubuntu/Windows scripts, single Uvicorn worker, internal worker pools | 운영 환경변수, SSL, worker/concurrency 튜닝 | 서버 프로세스는 1개로 상태 일관성을 유지하고 내부 병렬도로 성능 확보 |
-| Test Automation | Playwright E2E scripts | 주요 UI/기능 회귀 테스트 | 브라우저 자동화로 실제 사용자 흐름 검증 |
+| 영역 | 핵심 기술 | 역할 | 핵심 설명 |
+|------|-----------|------|-----------|
+| Backend API | Python, FastAPI, Uvicorn | API, 이미지/검색/분류/Composite 기능 제공 | Python 기반 API 서버로 주요 업무 로직을 처리하고, 초기 응답은 가볍게 유지 |
+| Frontend UI | Vanilla JavaScript | 화면, 폴더 탐색, 검색, 그리드, 라벨링 UI | 별도 프론트엔드 프레임워크나 빌드 파이프라인 없이 브라우저 표준 기술로 운영 |
+| Auth | SAML SP | 사내 SSO 인증 | 운영 환경은 SAML 기반 접근 제어를 사용하고, 개발/테스트에는 fallback 로그인 가능 |
+| Image & Compute | pyvips, Pillow, Numba | 썸네일, 피라미드 이미지, Composite/Measure 계산 | 대용량 이미지 변환과 반복 계산 병목을 서버에서 처리 |
+| Search | Custom file index | LOT/파일명/논리 검색 | Elasticsearch나 DB 없이 이미지 파일 경로 인덱스로 검색 처리 |
+| Storage & Cache | File system, JSON | 이미지 원본, 색상/권한 설정, 로그, 생성 캐시 저장 | 중앙 DB 없이 파일 기반으로 운영하고, 대용량 이미지는 캐시로 재사용 |
+| Runtime & Ops | systemd, Bash, Uvicorn | 운영 실행, SSL, worker/concurrency 튜닝 | 단일 서버 프로세스와 내부 worker 설정으로 상태 일관성과 성능을 관리 |
+| Test Automation | Playwright | 주요 UI/기능 회귀 테스트 | 브라우저 자동화로 실제 사용자 흐름 검증 |
 
 ## Key Flow
 
