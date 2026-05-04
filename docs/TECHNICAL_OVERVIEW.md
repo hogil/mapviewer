@@ -27,27 +27,27 @@ L3 Tracker는 대용량 반도체 wafer map 이미지를 웹에서 빠르게 탐
 [1] Initial Screen / Basic Request
 
 +-------------+   q/path    +-------------+
-| Client      |    ---->    | Server API  |
+| Client      |  ------>   | Server API  |
 | Browser UI  |             | Backend API |
-| render view |    <----    | auth,route  |
+| render view |  <------   | auth,route  |
 +-------------+ json/status +-------------+
               click/job
 
 [2] Authentication
 
 +-------------+ login/cookie +-------------+ saml login  +-------------+
-| Client      |    ---->    | Server API  |    ---->    | Auth        |
+| Client      |  ------>   | Server API  |  ------>   | Auth        |
 | Browser UI  |             | Backend API |             | OneLogin    |
-| show login  |    <----    | user ctx    |    <----    | sso result  |
+| show login  |  <------   | user ctx    |  <------   | sso result  |
 +-------------+ user/status +-------------+ claims      +-------------+
               role                         status
 
 [3] Search
 
 +-------------+ q/folder    +-------------+ parsed qry  +-------------+
-| Client      |    ---->    | Server API  |    ---->    | Service     |
+| Client      |  ------>   | Server API  |  ------>   | Service     |
 | Browser UI  |             | Backend API |             | Search      |
-| show list   |    <----    | format list |    <----    | match/rank  |
+| show list   |  <------   | format list |  <------   | match/rank  |
 +-------------+ files/list  +-------------+ result rows +-------------+
               tokens                                      |
                                                           | lot key
@@ -62,9 +62,9 @@ L3 Tracker는 대용량 반도체 wafer map 이미지를 웹에서 빠르게 탐
 [4] Image View / Grid
 
 +-------------+ path/level  +-------------+ image args  +-------------+
-| Client      |    ---->    | Server API  |    ---->    | Service     |
+| Client      |  ------>   | Server API  |  ------>   | Service     |
 | Browser UI  |             | Backend API |             | Image Pipe  |
-| draw canvas |    <----    | image resp  |    <----    | resize/cache|
+| draw canvas |  <------   | image resp  |  <------   | resize/cache|
 +-------------+ image/stat  +-------------+ bytes/etag  +-------------+
               filter                                      |
                                                           | original
@@ -79,9 +79,9 @@ L3 Tracker는 대용량 반도체 wafer map 이미지를 웹에서 빠르게 탐
 [5] Composite / Measure
 
 +-------------+ image set   +-------------+ job params  +-------------+
-| Client      |    ---->    | Server API  |    ---->    | Worker      |
+| Client      |  ------>   | Server API  |  ------>   | Worker      |
 | Browser UI  |             | Backend API |             | Compute     |
-| show result |    <----    | job result  |    <----    | aggregate   |
+| show result |  <------   | job result  |  <------   | aggregate   |
 +-------------+ status/res  +-------------+ cache key   +-------------+
               options                       result        |
                                                           | images
