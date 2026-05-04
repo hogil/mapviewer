@@ -24,63 +24,75 @@ L3 Tracker는 대용량 반도체 wafer map 이미지를 웹에서 빠르게 탐
 앱의 핵심 흐름은 브라우저 UI가 사용자 조작을 API 요청으로 바꾸고, Backend API가 인증과 분기를 맡은 뒤, Search/Image/Compute 모듈이 파일 시스템과 캐시를 사용해 결과를 돌려주는 구조입니다.
 
 ```text
-[1] UI <-> API
+[1] Initial Screen / Basic Request
 
-+--------------------+   q,path,filters,job   +--------------------+
-| Browser UI         | ---------------------> | Backend API        |
-| - collect actions  |                        | - auth + routing   |
-| - fetch + render   | <--------------------- | - build response   |
-+--------------------+   JSON,image,status    +--------------------+
++-------------+   q/path    +-------------+
+| CLIENT      |    ---->    | SERVER API  |
+| Browser UI  |             | Backend API |
+| render view |    <----    | auth,route  |
++-------------+ JSON/status +-------------+
+              click/job
 
-[2] API <-> Auth
+[2] Authentication
 
-+--------------------+   login,cookie,session  +--------------------+
-| Backend API        | ---------------------> | SAML Auth          |
-| - guard endpoints  |                        | - SSO login        |
-| - user context     | <--------------------- | - session state    |
-+--------------------+   user,role,status      +--------------------+
++-------------+ login/cookie +-------------+ SAML login  +-------------+
+| CLIENT      |    ---->    | SERVER API  |    ---->    | AUTH        |
+| Browser UI  |             | Backend API |             | OneLogin    |
+| show login  |    <----    | user ctx    |    <----    | SSO result  |
++-------------+ user/status +-------------+ claims      +-------------+
+              role                         status
 
-[3] API <-> Search
+[3] Search
 
-+--------------------+   q,folder,AND/OR/NOT   +--------------------+
-| Backend API        | ---------------------> | Search Service     |
-| - accept /search   |                        | - normalize query  |
-| - apply scope      | <--------------------- | - match + rank     |
-+--------------------+   files,folders,meta    +--------------------+
++-------------+ q/folder    +-------------+ parsed qry  +-------------+
+| CLIENT      |    ---->    | SERVER API  |    ---->    | SERVICE     |
+| Browser UI  |             | Backend API |             | Search      |
+| show list   |    <----    | format list |    <----    | match/rank  |
++-------------+ files/list  +-------------+ result rows +-------------+
+              tokens                                      |
+                                                          | lot key
+                                                          | path token
+                                                          v
+                                                  +-------------+
+                                                  | STORAGE     |
+                                                  | File Index  |
+                                                  | path map    |
+                                                  +-------------+
 
-+--------------------+   lot key,path token    +--------------------+
-| Search Service     | ---------------------> | File Index         |
-| - ask candidates   |                        | - path map         |
-| - merge results    | <--------------------- | - ready status     |
-+--------------------+   candidate paths       +--------------------+
+[4] Image View / Grid
 
-[4] API <-> Image Pipeline
++-------------+ path/level  +-------------+ image args  +-------------+
+| CLIENT      |    ---->    | SERVER API  |    ---->    | SERVICE     |
+| Browser UI  |             | Backend API |             | Image Pipe  |
+| draw canvas |    <----    | image resp  |    <----    | resize/cache|
++-------------+ image/stat  +-------------+ bytes/ETag  +-------------+
+              filter                                      |
+                                                          | original
+                                                          | thumb/pyr
+                                                          v
+                                                  +-------------+
+                                                  | STORAGE     |
+                                                  | File/Cache  |
+                                                  | images      |
+                                                  +-------------+
 
-+--------------------+   path,level,scheme     +--------------------+
-| Backend API        | ---------------------> | Image Pipeline     |
-| - accept image API |                        | - cache first      |
-| - set cache header | <--------------------- | - resize/convert   |
-+--------------------+   PNG,JPEG,WebP,ETag    +--------------------+
+[5] Composite / Measure
 
-+--------------------+   read/write image      +--------------------+
-| Image Pipeline     | ---------------------> | File/Cache         |
-| - make thumbnails  |                        | - originals        |
-| - make pyramids    | <--------------------- | - thumbs,pyramids  |
-+--------------------+   image bytes,key       +--------------------+
-
-[5] API <-> Compute
-
-+--------------------+   image set,options     +--------------------+
-| Backend API        | ---------------------> | Compute Worker     |
-| - dispatch job     |                        | - load positions   |
-| - format result    | <--------------------- | - aggregate/cache  |
-+--------------------+   status,result,cache   +--------------------+
-
-+--------------------+   source,result cache   +--------------------+
-| Compute Worker     | ---------------------> | File/Cache         |
-| - read source data |                        | - images,positions |
-| - store artifacts  | <--------------------- | - result JSON      |
-+--------------------+   artifact path,key     +--------------------+
++-------------+ image set   +-------------+ job params  +-------------+
+| CLIENT      |    ---->    | SERVER API  |    ---->    | WORKER      |
+| Browser UI  |             | Backend API |             | Compute     |
+| show result |    <----    | job result  |    <----    | aggregate   |
++-------------+ status/res  +-------------+ cache key   +-------------+
+              options                       result        |
+                                                          | images
+                                                          | positions
+                                                          | artifacts
+                                                          v
+                                                  +-------------+
+                                                  | STORAGE     |
+                                                  | File/Cache  |
+                                                  | results     |
+                                                  +-------------+
 ```
 
 | 구성 | 맡는 역할 |
