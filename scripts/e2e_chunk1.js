@@ -1019,6 +1019,13 @@ const { createRunner } = require('./e2e_playwright_session');
           totalMs: data.timings?.total_ms ?? null,
           logicalEvalMs: data.timings?.logical_eval_ms ?? null,
           searchMode: data.timings?.search_mode || null,
+          liveFallbackInvoked: !!data.timings?.live_fallback_invoked,
+          liveFallbackHits: data.timings?.live_fallback_hits ?? 0,
+          liveFallbackScanMs: data.timings?.live_fallback_scan_ms ?? null,
+          liveFallbackFilesScanned: data.timings?.live_fallback_files_scanned ?? null,
+          liveFallbackDirsScanned: data.timings?.live_fallback_dirs_scanned ?? null,
+          liveFallbackMissingLots: data.timings?.live_fallback_missing_lots || [],
+          liveFallbackFoundLots: data.timings?.live_fallback_found_lots || [],
           firstPath: summary.firstPath,
         });
       }
@@ -1034,6 +1041,15 @@ const { createRunner } = require('./e2e_playwright_session');
         firstPath: runs[0].firstPath,
         apiTotalMs: summarizeNumbers(runs.map((run) => run.totalMs)),
         logicalEvalMs: summarizeNumbers(runs.map((run) => run.logicalEvalMs)),
+        liveFallback: {
+          invoked: runs.some((run) => run.liveFallbackInvoked),
+          hits: Math.max(...runs.map((run) => Number(run.liveFallbackHits || 0))),
+          scanMs: summarizeNumbers(runs.map((run) => run.liveFallbackScanMs)),
+          filesScanned: summarizeNumbers(runs.map((run) => run.liveFallbackFilesScanned)),
+          dirsScanned: summarizeNumbers(runs.map((run) => run.liveFallbackDirsScanned)),
+          missingLots: Array.from(new Set(runs.flatMap((run) => run.liveFallbackMissingLots || []))).sort(),
+          foundLots: Array.from(new Set(runs.flatMap((run) => run.liveFallbackFoundLots || []))).sort(),
+        },
       };
     };
     const runUiTextRepeated = async (scenario) => {

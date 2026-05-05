@@ -317,8 +317,8 @@ const { createRunner } = require('./e2e_playwright_session');
     return state;
   }
 
-  async function setSelection(indices) {
-    await page.evaluate((idxs) => {
+  async function setSelection(indices, options = {}) {
+    const state = await page.evaluate(({ idxs, label }) => {
       const v = window.viewer;
       v.gridSelectedIdxs = [...idxs];
       v.gridSelectedSet = new Set(idxs);
@@ -327,8 +327,90 @@ const { createRunner } = require('./e2e_playwright_session');
       }
       v.updateGridSelection?.();
       v.flushGridSelectionUpdates?.();
-    }, indices);
+      const modalSelection = typeof v.getSelectedImagesForModal === 'function'
+        ? v.getSelectedImagesForModal()
+        : [];
+      return {
+        label,
+        requestedIdxs: [...idxs],
+        gridSelectedIdxs: [...(v.gridSelectedIdxs || [])],
+        selectedSetSize: v.gridSelectedSet?.size || 0,
+        currentGridImagesLen: v.currentGridImages?.length || 0,
+        selectedImagesLen: v.selectedImages?.length || 0,
+        modalCount: modalSelection.length,
+        modalSample: modalSelection.slice(0, 12),
+        hasGridMeasureMap: !!v._gridMeasureMap,
+      };
+    }, { idxs: indices, label: options.label || 'selection' });
     await sleep(300);
+    append(`[SET_SELECTION] ${state.label} :: ${JSON.stringify(state)}\n`);
+    if (Number.isFinite(options.expectedCount)) {
+      expect(
+        state.modalCount === options.expectedCount,
+        `selection count ${state.modalCount} != ${options.expectedCount}: ${JSON.stringify(state)}`
+      );
+    }
+    return state;
+  }
+
+  async function findCompositeSourceSelection(minCount = 10, sampleLimit = 120) {
+    const result = await page.evaluate(async ({ requiredCount, maxImages }) => {
+      const images = Array.isArray(window.viewer?.currentGridImages)
+        ? window.viewer.currentGridImages
+        : [];
+      const selected = [];
+      const seen = new Set();
+      const rejected = [];
+
+      for (let idx = 0; idx < images.length && idx < maxImages && selected.length < requiredCount; idx += 1) {
+        const imagePath = String(images[idx] || '').replace(/\\/g, '/');
+        if (!imagePath) {
+          rejected.push({ idx, reason: 'empty' });
+          continue;
+        }
+        if (seen.has(imagePath)) {
+          rejected.push({ idx, imagePath, reason: 'duplicate' });
+          continue;
+        }
+        seen.add(imagePath);
+
+        try {
+          const resp = await fetch(
+            `/api/chip-positions?path=${encodeURIComponent(imagePath)}&include_fq=0`,
+            { cache: 'no-store' }
+          );
+          if (!resp.ok) {
+            rejected.push({ idx, imagePath, reason: `status_${resp.status}` });
+            continue;
+          }
+          const data = await resp.json();
+          const chipCount = Array.isArray(data.chips) ? data.chips.length : 0;
+          if (chipCount <= 0) {
+            rejected.push({ idx, imagePath, reason: 'no_positions' });
+            continue;
+          }
+          selected.push({ idx, imagePath, chipCount });
+        } catch (err) {
+          rejected.push({ idx, imagePath, reason: String(err && err.message ? err.message : err).slice(0, 160) });
+        }
+      }
+
+      return {
+        requested: requiredCount,
+        sampled: Math.min(images.length, maxImages),
+        selectedCount: selected.length,
+        indices: selected.map((item) => item.idx),
+        paths: selected.map((item) => item.imagePath),
+        selectedSample: selected.slice(0, 12),
+        rejectedSample: rejected.slice(0, 12),
+      };
+    }, { requiredCount: minCount, maxImages: sampleLimit });
+    append(`[COMPOSITE_SOURCE_SELECTION] ${JSON.stringify(result)}\n`);
+    expect(
+      result.selectedCount >= minCount,
+      `not enough composite sources with positions: ${JSON.stringify(result)}`
+    );
+    return result;
   }
 
   function isCompositeDoneToast(text) {
@@ -668,6 +750,27 @@ const { createRunner } = require('./e2e_playwright_session');
     });
   }
 
+  async function waitForVisibleGridThumbsLoaded(timeoutMs = 12000, settleMs = 500) {
+    const startedAt = Date.now();
+    let lastSummary = null;
+    while (Date.now() - startedAt < timeoutMs) {
+      await page.evaluate(() =>
+        window.viewer?.loadVisibleGridThumbnails?.({ cancelExisting: false })
+      ).catch(() => {});
+      lastSummary = await getVisibleGridThumbSummary();
+      if (lastSummary.visibleCount > 0 && lastSummary.badCount === 0) {
+        await sleep(settleMs);
+        const settledSummary = await getVisibleGridThumbSummary();
+        if (settledSummary.visibleCount > 0 && settledSummary.badCount === 0) {
+          return settledSummary;
+        }
+        lastSummary = settledSummary;
+      }
+      await sleep(250);
+    }
+    return lastSummary;
+  }
+
   async function getGridLayoutMetrics() {
     return await page.evaluate(() => {
       const grid = document.getElementById('image-grid');
@@ -853,11 +956,10 @@ const { createRunner } = require('./e2e_playwright_session');
     const compositeInputCacheBefore = getCompositeInputCacheState();
 
     await loadFolder('unknown');
-    const compositeSourceIdxs = Array.from({ length: 10 }, (_, idx) => idx);
-    await setSelection(compositeSourceIdxs);
-    const compositeSourcePaths = await page.evaluate((indices) => (
-      indices.map((idx) => window.viewer.currentGridImages?.[idx] || null)
-    ), compositeSourceIdxs);
+    const compositeSourceSelection = await findCompositeSourceSelection(10, 160);
+    const compositeSourceIdxs = compositeSourceSelection.indices.slice(0, 10);
+    await setSelection(compositeSourceIdxs, { label: 'composite-10-with-positions', expectedCount: 10 });
+    const compositeSourcePaths = compositeSourceSelection.paths.slice(0, 10);
     expect(
       compositeSourcePaths.every((imagePath) => String(imagePath || '').replace(/\\/g, '/').startsWith('unknown/')),
       `composite source paths=${JSON.stringify(compositeSourcePaths)}`
@@ -904,13 +1006,10 @@ const { createRunner } = require('./e2e_playwright_session');
         (el) => /Composite Map 생성 완료 \([^)]*\d+images(?: [^)]+)?\)/.test(el.textContent || '')
       )
     );
-    const compositeBefore = await getVisibleGridThumbSummary();
-    if (compositeBefore.badCount > 0) {
-      await sleep(1200);
-    }
-    const compositeSettled = await getVisibleGridThumbSummary();
+    const compositeBefore = await waitForVisibleGridThumbsLoaded(12000, 500);
+    const compositeSettled = await waitForVisibleGridThumbsLoaded(12000, 500);
     await roundTripGridImageByDblClick(0);
-    const compositeAfter = await getVisibleGridThumbSummary();
+    const compositeAfter = await waitForVisibleGridThumbsLoaded(12000, 500);
     const compositeGridCols = await nudgeGridCols();
     const compositeOutputDir = await page.evaluate(() => window.viewer.compositeSession?.outputDir || null);
     const squareMapsDataBeforeSubset = getSquareMapsDataState(compositeOutputDir);
@@ -1116,14 +1215,14 @@ const { createRunner } = require('./e2e_playwright_session');
       { timeout: 10000 }
     );
     const measureColorVisible = await visible('#color-editor-modal');
-    const measureBefore = await getVisibleGridThumbSummary();
+    const measureBefore = await waitForVisibleGridThumbsLoaded(12000, 500);
     await page.evaluate(async () => {
       const editor = await window.viewer._getColorEditor();
       editor?.close?.();
     });
     await sleep(400);
     await roundTripGridImageByDblClick(0);
-    const measureAfter = await getVisibleGridThumbSummary();
+    const measureAfter = await waitForVisibleGridThumbsLoaded(12000, 500);
     const measureAfterRoundTripSignature = await getMeasureGridSignature();
     await page.evaluate(async () => {
       const v = window.viewer;
@@ -1199,8 +1298,8 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(data.gridCount > 0 && data.wraps > 0, `grid=${data.gridCount}/${data.wraps}`);
     expect(data.measureRole === true, 'measure page missing');
     expect(measureColorVisible, 'measure color modal hidden');
-    expect(compositeSettled.badCount === 0, `composite settled badCount=${compositeSettled.badCount}`);
-    expect(compositeAfter.badCount === 0, `composite after badCount=${compositeAfter.badCount}`);
+    expect(compositeSettled.badCount === 0, `composite settled=${JSON.stringify(compositeSettled)}`);
+    expect(compositeAfter.badCount === 0, `composite after=${JSON.stringify(compositeAfter)}`);
     expect(compositeGridCols.after.gridCols !== compositeGridCols.before, `composite gridCols ${compositeGridCols.before}->${compositeGridCols.after.gridCols}`);
     expect(compositeLayoutChanged, `composite layout unchanged: ${JSON.stringify(compositeGridCols)}`);
     expect(
@@ -1249,8 +1348,8 @@ const { createRunner } = require('./e2e_playwright_session');
       compositeInputCacheBefore.exists === false && compositeInputCacheAfter.exists === false,
       `composite input cache recreated=${JSON.stringify({ before: compositeInputCacheBefore, after: compositeInputCacheAfter })}`
     );
-    expect(measureBefore.badCount === 0, `measure before badCount=${measureBefore.badCount}`);
-    expect(measureAfter.badCount === 0, `measure after badCount=${measureAfter.badCount}`);
+    expect(measureBefore.badCount === 0, `measure before=${JSON.stringify(measureBefore)}`);
+    expect(measureAfter.badCount === 0, `measure after=${JSON.stringify(measureAfter)}`);
     assertAlternatingMeasureSignature(measureAfterRoundTripSignature, 'f');
     assertAlternatingMeasureSignature(measureAfterTabReturnSignature, 'f');
     expect(measureGridCols.after.gridCols !== measureGridCols.before, `measure gridCols ${measureGridCols.before}->${measureGridCols.after.gridCols}`);
@@ -1750,10 +1849,10 @@ const { createRunner } = require('./e2e_playwright_session');
         await new Promise((r) => setTimeout(r, 1200));
       }
     });
-    const labelBefore = await getVisibleGridThumbSummary();
+    const labelBefore = await waitForVisibleGridThumbsLoaded(12000, 500);
     const labelGridCols = await nudgeGridCols();
     await roundTripGridImageByDblClick(0);
-    const labelAfter = await getVisibleGridThumbSummary();
+    const labelAfter = await waitForVisibleGridThumbsLoaded(12000, 500);
 
     await page.evaluate(() => window.viewer.openWfSearchModal());
     await sleep(500);
@@ -1835,8 +1934,8 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(labelBefore.role === 'label', `label role=${labelBefore.role}`);
     expect(labelBefore.lotMode === true, `label lotMode=${labelBefore.lotMode}`);
     expect(labelBefore.lotHeaders > 0, `label lotHeaders=${labelBefore.lotHeaders}`);
-    expect(labelBefore.badCount === 0, `label before badCount=${labelBefore.badCount}`);
-    expect(labelAfter.badCount === 0, `label after badCount=${labelAfter.badCount}`);
+    expect(labelBefore.badCount === 0, `label before=${JSON.stringify(labelBefore)}`);
+    expect(labelAfter.badCount === 0, `label after=${JSON.stringify(labelAfter)}`);
     expect(labelAfter.lotHeaders > 0, `label restore lotHeaders=${labelAfter.lotHeaders}`);
     expect(labelGridCols.after.gridCols !== labelGridCols.before, `label gridCols ${labelGridCols.before}->${labelGridCols.after.gridCols}`);
     expect(wfVisible, 'wf modal hidden');
@@ -1886,16 +1985,16 @@ const { createRunner } = require('./e2e_playwright_session');
       await modal.openSelectionInViewer();
     });
     await sleep(1500);
-    const before = await getVisibleGridThumbSummary();
+    const before = await waitForVisibleGridThumbsLoaded(12000, 500);
     const gridCols = await nudgeGridCols();
     await roundTripGridImageByDblClick(0);
-    const after = await getVisibleGridThumbSummary();
+    const after = await waitForVisibleGridThumbsLoaded(12000, 500);
 
     expect(before.role === 'mylot', `mylot role=${before.role}`);
     expect(before.lotMode === true, `mylot lotMode=${before.lotMode}`);
     expect(before.lotHeaders > 0, `mylot lotHeaders=${before.lotHeaders}`);
-    expect(before.badCount === 0, `mylot before badCount=${before.badCount}`);
-    expect(after.badCount === 0, `mylot after badCount=${after.badCount}`);
+    expect(before.badCount === 0, `mylot before=${JSON.stringify(before)}`);
+    expect(after.badCount === 0, `mylot after=${JSON.stringify(after)}`);
     expect(after.lotHeaders > 0, `mylot after lotHeaders=${after.lotHeaders}`);
     expect(gridCols.after.gridCols !== gridCols.before, `mylot gridCols ${gridCols.before}->${gridCols.after.gridCols}`);
     return { before, gridCols, after };

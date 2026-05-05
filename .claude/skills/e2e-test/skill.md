@@ -8,6 +8,39 @@ argument-hint: [Phase 번호 또는 범위]
 
 기본은 로컬 Playwright runner(`scripts/run-e2e-playwright.ps1`)로 L3 Tracker의 모든 주요 기능을 자동 테스트합니다. MCP 브라우저는 최종 E2E 증명 경로가 아니며, 사용자가 명시적으로 MCP를 요구한 경우의 보조 디버깅에만 사용합니다.
 
+## 절대규칙 #-5: 장시간 E2E는 중간 보고 필수
+
+전체 E2E처럼 오래 도는 작업은 실행 중에도 사용자에게 중간 보고를 남긴다. runner 출력만 보고 끝까지 침묵하지 않는다.
+
+중간 보고 기준:
+- 시작 직후: 실행 명령, `Chunk`, `Headless` 여부, 새 서버 `BASE_URL`, session/output 경로가 확인되면 보고한다.
+- 각 chunk 시작 시: 어떤 chunk/script를 돌리는지와 해당 chunk가 주로 검증하는 기능 범위를 짧게 말한다.
+- 각 chunk 종료 시: `CHUNK_SUMMARY` 또는 progress log를 기준으로 pass/fail 개수, 실패 여부, 주요 phase 이름, 핵심 성능 숫자(`loadMs`, `fqLoadMs`, 검색 평균, composite 시간, annotation 평균 등)를 보고한다.
+- 성능 지표가 나오면 그 지표가 무엇을 의미하는지 한 줄로 같이 적는다. 특히 `loadMs`와 `total_files`는 작업 시간과 상태값을 분리해서 설명한다.
+- 실패/timeout/warning이 나오면 즉시 보고하고, 전체 PASS 여부와 별개로 원인 분석 대상으로 분리한다.
+- 최소 30~60초마다 현재 어디까지 진행됐는지, 마지막으로 통과한 phase 또는 대기 중인 작업이 무엇인지 업데이트한다.
+
+## 절대규칙 #-4: E2E 종료 후 최종 보고 생략 금지
+
+E2E 실행이 끝나면 최종 답변에 반드시 "무엇을 어떻게 실행했고, 결과가 무엇이며, 성능은 어땠는지"를 남긴다. 단순히 "통과했습니다" 또는 "끝났습니다"로 끝내면 안 된다.
+
+최소 보고 항목:
+- **수행 항목**: 이번 요청에서 실제로 한 일과 검증한 기능을 먼저 적는다. 예: "검색 query 다양화", "100개 LOT/WF 다중검색", "인덱스 재생성/캐시 로드", "chip label overlay", "전체 E2E 재실행", "Git push"처럼 사용자가 어떤 작업이 처리됐는지 바로 알 수 있어야 한다.
+- **변경 파일/범위**: 코드나 테스트를 수정했다면 파일명과 변경 목적을 적는다. 수정이 없고 검증만 했다면 "코드 변경 없음, 검증만 수행"이라고 적는다.
+- **실행 범위/명령**: `-Chunk all` 또는 특정 chunk/phase, `-Headless` 여부, 사용한 runner 명령.
+- **세션 정보**: `SESSION`, `BASE_URL`, `SUMMARY`, `OUTPUT_DIR`, `COLD_START_SUMMARY`가 있으면 경로까지.
+- **최종 판정**: `RESULT_SUMMARY status=... pass=... fail=...`, runner exit code, 실패 phase 목록. 실패가 있으면 첫 실패 원인과 다음 조치까지 적는다.
+- **프로세스 정리**: `PROCESS_CLEANUP status=PASS/FAIL`, 남은 E2E 서버/브라우저/Node/Python 프로세스 확인 결과.
+- **핵심 기능 결과**: 이번 요청과 관련된 주요 phase 이름, 검증한 기능, 결과 개수/이미지 수/그리드 wraps/인덱스 파일 수 등 사용자가 판단할 수 있는 숫자.
+- **Phase별 수행/통과 근거**: `e2e-summary.json`의 `records`를 순서대로 읽고 모든 `phase`/`name`/`status`를 빠짐없이 적는다. 각 항목에는 "무엇을 검증했는지"와 통과 근거 수치(count, wraps, broken, timing, 선택 개수, annotation 수 등)를 붙인다. 여러 Phase가 하나의 record로 묶여 있어도 생략하지 않는다.
+- **성능 요약**: `COMPOSITE_NUMBA_WARM`, `PERF_SUMMARY`, cold start, `fqLoadMs`, 폴더 loadMs, 검색 평균/표준편차/spread, chip label annotation 평균, composite/measure 생성 시간 등 summary/detail에 있는 실측치를 우선 보고한다.
+- **성능 지표 의미 설명**: `fqLoadMs`, `loadMs`, `lookupMs`처럼 이름만으로 오해되는 지표는 무엇을 잰 시간인지, 무엇이 아닌지, PASS 기준과 현재 값을 같이 설명한다. 예: `fqLoadMs`는 Phase `46,52,53,54,55,58,59,61,62,63`에서 unknown 5000장 그리드/FQ-missing/cache/placeholder/asset version 검증을 위해 폴더를 로드한 wall time이지 단일 F/Q 이미지 생성 시간이 아니다. `index loadMs`는 Phase `36,37,38,40`에서 unknown 5000장 그리드 로드와 이미지 무결성/인덱스 ready 확인에 걸린 wall time이지 인덱스 build 시간이 아니다.
+- **오해 방지 문장 분리**: `loadMs`와 `total_files`를 한 문장에 붙여 "402만 파일을 1.8초에 스캔"처럼 읽히게 쓰지 않는다. 반드시 아래처럼 분리해서 적는다. "`loadMs=1799ms`: unknown 5000장 그리드를 화면 상태와 DOM까지 로드한 시간. `total_files=4,022,499`: 이미 준비된 인덱스의 전체 파일 수 상태값. 둘은 같은 phase에서 기록됐지만 같은 작업 시간이 아니다."
+- **로그 위치**: stdout/stderr 로그, `e2e-summary.json`, `cold-start-summary.json` 위치.
+- **미실행/부분 실행 고지**: 전체가 아니라 일부만 돌렸거나, 성능 항목이 없거나, 테스트를 못 돌린 경우 그 사실을 명확히 적는다.
+
+보고는 짧아도 되지만 숫자는 빼지 않는다. Phase가 많으면 전체 Phase 체크리스트를 먼저 적고, 각 Phase의 핵심 숫자를 붙인 뒤 상세 로그 경로를 덧붙인다. 특히 사용자가 검색/인덱스/성능/오버레이를 물은 직후라면 해당 phase detail에서 count, timing 평균, 표준편차, spread를 뽑아 함께 적는다. 성능 경고가 있으면 PASS와 별도로 경고 원인을 분석 대상으로 분리해서 보고한다.
+
 ## 절대규칙 #-3: 성능 경고는 원인 분석 대상 — timeout 완화로 덮지 않는다
 
 - Composite Numba warmup, cold start, 검색, 썸네일 생성, 그리드 로딩, Measure/Composite 생성 등에서 느림 또는 timeout warning이 나오면 **timeout을 늘리거나 경고를 무시하는 방식으로 해결했다고 말하지 않는다.**

@@ -178,6 +178,19 @@ class SearchService:
                     effective_workers = self.search_workers
                 else:
                     index_hits = []
+                live_hits, live_meta = await self._live_lot_fallback(
+                    loop,
+                    scan_root,
+                    index_hits,
+                    lot_filter,
+                    query_for_search,
+                    lot_filter,
+                    [],
+                )
+                if live_hits:
+                    seen = set(index_hits)
+                    index_hits.extend([rel for rel in live_hits if rel not in seen])
+                timings.update(live_meta)
                 search_mode = "query+lot-index"
                 elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
             elif query_for_search:
@@ -220,6 +233,20 @@ class SearchService:
                         index_hits = [self.index_service._keys[i] for i in hit_indices
                                       if i < len(self.index_service._keys)]
                         search_mode = "simple-token"
+                        if re.fullmatch(r"[a-z0-9]{3,32}", query_for_search):
+                            live_hits, live_meta = await self._live_lot_fallback(
+                                loop,
+                                scan_root,
+                                index_hits,
+                                {query_for_search},
+                                query_for_search,
+                                {query_for_search},
+                                [],
+                            )
+                            if live_hits:
+                                seen = set(index_hits)
+                                index_hits.extend([rel for rel in live_hits if rel not in seen])
+                            timings.update(live_meta)
                     else:
                         # 순차 스캔 — 대량이면 executor에서 실행 (이벤트루프 블로킹 방지)
                         _q = query_for_search
@@ -241,10 +268,36 @@ class SearchService:
                         all_lots |= lot_filter
                     candidates = self.index_service.lot_search(all_lots, folder_name)
                     index_hits = self._lot_wafer_filter_indexed(candidates, lot_wafer_pairs, lot_filter)
+                    live_hits, live_meta = await self._live_lot_fallback(
+                        loop,
+                        scan_root,
+                        index_hits,
+                        all_lots,
+                        query_for_search,
+                        lot_filter,
+                        lot_wafer_pairs,
+                    )
+                    if live_hits:
+                        seen = set(index_hits)
+                        index_hits.extend([rel for rel in live_hits if rel not in seen])
+                    timings.update(live_meta)
                     search_mode = "lot-wafer-indexed"
                 else:
                     # 🔥 LOT 역인덱스로 O(1) 검색 (501만 순차 스캔 제거)
                     index_hits = self.index_service.lot_search(lot_filter, folder_name)
+                    live_hits, live_meta = await self._live_lot_fallback(
+                        loop,
+                        scan_root,
+                        index_hits,
+                        lot_filter,
+                        query_for_search,
+                        lot_filter,
+                        [],
+                    )
+                    if live_hits:
+                        seen = set(index_hits)
+                        index_hits.extend([rel for rel in live_hits if rel not in seen])
+                    timings.update(live_meta)
                     search_mode = "lot-index"
                 elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
             else:
@@ -337,6 +390,127 @@ class SearchService:
             return candidates
         base = normalized_prefix + "/"
         return [rel for rel in candidates if rel == normalized_prefix or rel.startswith(base)]
+
+    @staticmethod
+    def _lot_token_from_rel(rel: str) -> str:
+        name_lower = rel.rsplit("/", 1)[-1].lower() if "/" in rel else rel.lower()
+        return name_lower.split("_", 1)[0]
+
+    def _missing_lot_filters(self, hits: List[str], lot_filter: Set[str]) -> Set[str]:
+        if not lot_filter:
+            return set()
+        existing_lots = {self._lot_token_from_rel(rel) for rel in hits}
+        missing: Set[str] = set()
+        for lot in lot_filter:
+            if len(lot) < 3:
+                continue
+            if not any(self._lot_matches_filter(existing, {lot}) for existing in existing_lots):
+                missing.add(lot)
+        return missing
+
+    async def _live_lot_fallback(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        scan_root: Path,
+        current_hits: List[str],
+        expected_lots: Set[str],
+        query: str,
+        lot_filter: Set[str],
+        lot_wafer_pairs: List[tuple],
+    ) -> Tuple[List[str], Dict[str, Any]]:
+        """인덱스 직후 추가된 실제 파일이 있으면 누락 LOT만 실파일에서 보강한다."""
+        missing_lots = self._missing_lot_filters(current_hits, expected_lots)
+        if not missing_lots:
+            return [], {}
+
+        live_hits, meta = await loop.run_in_executor(
+            self.io_executor,
+            self._live_lot_scan,
+            scan_root,
+            missing_lots,
+            query,
+            lot_filter,
+            lot_wafer_pairs,
+        )
+        return live_hits, meta
+
+    def _live_lot_scan(
+        self,
+        scan_root: Path,
+        missing_lots: Set[str],
+        query: str,
+        lot_filter: Set[str],
+        lot_wafer_pairs: List[tuple],
+    ) -> Tuple[List[str], Dict[str, Any]]:
+        start = time.perf_counter()
+        hits: List[str] = []
+        scanned_files = 0
+        scanned_dirs = 0
+        found_lots: Set[str] = set()
+        skip_dirs = set(self.excluded_folders) | set(self.global_only_excluded_folders) | {"benchmark_4m"}
+        index_file_names = {".file_index_cache.txt", ".file_index_cache.lock"}
+
+        pair_map: Dict[str, set] = {}
+        for lot, wafer in lot_wafer_pairs:
+            pair_map.setdefault(lot, set()).add(wafer)
+        lot_only = lot_filter - set(pair_map.keys()) if lot_filter else set()
+
+        for root, dirs, files in os.walk(scan_root):
+            dirs[:] = [d for d in dirs if d not in skip_dirs and not d.startswith(".")]
+            scanned_dirs += 1
+            for fn in files:
+                scanned_files += 1
+                if fn in index_file_names:
+                    continue
+                ext = Path(fn).suffix.lower()
+                if self.supported_exts and ext not in self.supported_exts:
+                    continue
+
+                name_lower = fn.lower()
+                lot_token = name_lower.split("_", 1)[0]
+                if not self._lot_matches_filter(lot_token, missing_lots):
+                    continue
+                if query and not _evaluate_expression(name_lower, query):
+                    continue
+
+                if pair_map:
+                    matching_pair_lots = self._matching_pair_lots(lot_token, pair_map)
+                    lot_only_match = self._lot_matches_filter(lot_token, lot_only) if lot_only else False
+                    if matching_pair_lots:
+                        parts = name_lower.split("_", 3)
+                        file_wafer = parts[2] if len(parts) > 2 else ""
+                        if not any(
+                            self._wafer_matches_filter(file_wafer, wafer)
+                            for lot in matching_pair_lots
+                            for wafer in pair_map[lot]
+                        ):
+                            continue
+                    elif not lot_only_match:
+                        continue
+
+                try:
+                    rel = Path(root).joinpath(fn).relative_to(self.index_service.root_dir)
+                except ValueError:
+                    continue
+                rel_key = str(rel).replace("\\", "/")
+                hits.append(rel_key)
+                for missing in missing_lots:
+                    if self._lot_matches_filter(lot_token, {missing}):
+                        found_lots.add(missing)
+                if found_lots >= missing_lots:
+                    break
+            if found_lots >= missing_lots:
+                break
+
+        return hits, {
+            "live_fallback_invoked": True,
+            "live_fallback_missing_lots": sorted(missing_lots),
+            "live_fallback_found_lots": sorted(found_lots),
+            "live_fallback_hits": len(hits),
+            "live_fallback_scan_ms": round((time.perf_counter() - start) * 1000, 3),
+            "live_fallback_files_scanned": scanned_files,
+            "live_fallback_dirs_scanned": scanned_dirs,
+        }
 
     def _apply_lot_filter(self, hits: List[str], lot_filter: Set[str]) -> List[str]:
         """검색 결과에 LOT 필터 적용 (속도 최적화: 문자열 포함 검사 한 번)"""
