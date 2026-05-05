@@ -8,11 +8,13 @@ argument-hint: [증상-설명]
 
 증상: `$ARGUMENTS`
 
-## 절대규칙: batch 폴더는 더미 파일 — 이미지 로드 금지
+## 절대규칙: batch / benchmark_4m 폴더는 더미 파일 — 이미지 로드 금지
 
 - `wm-811k/batch/` 하위의 모든 파일은 **파일 인덱스 성능 테스트용 0바이트 더미 파일**이다.
-- batch 경로에서 "not a known file format" / "cannot identify image file" 에러가 나오면 **정상 동작**이다.
-- 이 에러를 버그로 간주하여 수정하려 하지 않는다. 디버깅 대상에서 batch 폴더를 제외한다.
+- `wm-811k/benchmark_4m/` 하위의 모든 파일도 **파일 인덱스/검색 성능 테스트용 0바이트 더미 파일**이다.
+- `benchmark_4m`의 기대 구조는 400개 lot 폴더 × 10000개 PNG 이름 빈 파일 = 400만 파일이다.
+- batch / benchmark_4m 경로에서 "not a known file format" / "cannot identify image file" 에러가 나오면 **정상 동작**이다.
+- 이 에러를 버그로 간주하여 수정하려 하지 않는다. 디버깅 대상에서 batch / benchmark_4m 폴더를 제외한다.
 
 ## 진단 절차
 

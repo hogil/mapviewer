@@ -1417,6 +1417,7 @@ class TTLCache:
         with self._lock: self._data.clear()
 
 THUMB_STAT_CACHE = TTLCache(THUMB_STAT_TTL_SECONDS, THUMB_STAT_CACHE_CAPACITY)
+CHIP_LABEL_PREFIX_CACHE = LRUCache(512)
 
 # 🔥 positions JSON 캐시 (measure overlay 시 같은 폴더의 파일을 반복 로드 방지)
 _positions_json_cache: Dict[str, dict] = {}  # path_str → parsed JSON
@@ -4780,6 +4781,11 @@ def _dircache_invalidate(path: Path):
     except Exception: pass
     try: DIRLIST_CACHE.delete(str(path.resolve()))
     except Exception: pass
+    try:
+        if "classification_chips" in path.parts:
+            CHIP_LABEL_PREFIX_CACHE.clear()
+    except Exception:
+        pass
 
 
 def _dir_state_signature(path: Path) -> Optional[str]:
@@ -8255,6 +8261,11 @@ async def delete_class(request: Request,
             if any(class_dir.iterdir()): raise HTTPException(status_code=409, detail="Class directory not empty")
             class_dir.rmdir()
             log_access_row(tag="INFO", note=f"클래스 삭제: {class_name}")
+        try:
+            class_rel = str(class_dir.relative_to(ROOT_DIR)).replace("\\", "/")
+            index_service.delete_classification_prefix(class_rel)
+        except Exception:
+            pass
         for p in (classification_dir, class_dir, ROOT_DIR): _dircache_invalidate(p)
         DIRLIST_CACHE.clear()
         log_access_row(tag="INFO", note=f"클래스 '{class_name}' 삭제 완료")
@@ -8808,6 +8819,11 @@ async def classify_chips(request: ChipClassifyRequest,
                     if legacy_path.name != chip_filename:
                         try:
                             legacy_path.unlink()
+                            try:
+                                legacy_rel = str(legacy_path.relative_to(ROOT_DIR)).replace("\\", "/")
+                                index_service.remove_classification_entry(legacy_rel)
+                            except Exception:
+                                pass
                         except FileNotFoundError:
                             pass
 
@@ -8820,6 +8836,11 @@ async def classify_chips(request: ChipClassifyRequest,
                     "y_abs": chip_coord.y_abs,
                     "b": bottom_token,
                 })
+                try:
+                    chip_rel = str(chip_path.relative_to(ROOT_DIR)).replace("\\", "/")
+                    index_service.add_classification_entry(chip_rel)
+                except Exception:
+                    pass
 
             except Exception as e:
                 errors.append(f"Chip ({chip_coord.x_abs}, {chip_coord.y_abs}): {str(e)}")
@@ -8862,16 +8883,12 @@ async def get_chip_labels(
             return {"chips": []}
 
         chip_labels = []
+        indexed_records = _chip_label_records_from_index(classification_dir, wafer_name)
 
-        # 모든 클래스 폴더 순회
-        for class_dir in classification_dir.iterdir():
-            if not class_dir.is_dir():
-                continue
-
-            class_name = class_dir.name
-            for chip_file in _iter_chip_label_files(class_dir, wafer_name):
+        if indexed_records is not None:
+            for class_name, filename in indexed_records:
                 try:
-                    parsed = _parse_chip_filename(chip_file.stem)
+                    parsed = _parse_chip_filename(Path(filename).stem)
                     if not parsed:
                         continue
                     wafer_stem, x_abs, y_abs, bottom = parsed
@@ -8883,11 +8900,37 @@ async def get_chip_labels(
                         "y_abs": y_abs,
                         "b": bottom,
                         "class": class_name,
-                        "filename": chip_file.name
+                        "filename": filename
                     })
                 except Exception as e:
-                    logger.warning(f"Failed to parse chip filename {chip_file.name}: {e}")
+                    logger.warning(f"Failed to parse chip filename {filename}: {e}")
                     continue
+        else:
+            # 모든 클래스 폴더 순회
+            for class_dir in classification_dir.iterdir():
+                if not class_dir.is_dir():
+                    continue
+
+                class_name = class_dir.name
+                for chip_file in _iter_chip_label_files(class_dir, wafer_name):
+                    try:
+                        parsed = _parse_chip_filename(chip_file.stem)
+                        if not parsed:
+                            continue
+                        wafer_stem, x_abs, y_abs, bottom = parsed
+                        if not _chip_wafer_stem_matches(wafer_stem, wafer_name):
+                            continue
+
+                        chip_labels.append({
+                            "x_abs": x_abs,
+                            "y_abs": y_abs,
+                            "b": bottom,
+                            "class": class_name,
+                            "filename": chip_file.name
+                        })
+                    except Exception as e:
+                        logger.warning(f"Failed to parse chip filename {chip_file.name}: {e}")
+                        continue
 
         return {"chips": chip_labels}
 
@@ -9564,6 +9607,50 @@ def _iter_chip_label_files(class_path: Path, wafer_stem: str) -> Iterable[Path]:
         return
 
 
+def _chip_label_records_from_index(
+    classification_dir: Path,
+    wafer_stem: str,
+) -> Optional[List[Tuple[str, str]]]:
+    try:
+        base_prefix = str(classification_dir.relative_to(ROOT_DIR)).replace("\\", "/").strip("/")
+    except ValueError:
+        return None
+    if not base_prefix:
+        return None
+
+    match_key = _chip_wafer_match_key(wafer_stem)
+    cache_key = f"{base_prefix}|{match_key}"
+    cached = CHIP_LABEL_PREFIX_CACHE.get(cache_key)
+    if cached is not None:
+        return list(cached)
+
+    class_prefix_start = base_prefix + "/"
+    class_items: List[Tuple[str, List[str]]] = []
+    with index_service.lock:
+        class_to_keys = getattr(index_service, "_class_to_keys", {}) or {}
+        for class_prefix, rel_keys in class_to_keys.items():
+            if not class_prefix.startswith(class_prefix_start):
+                continue
+            class_name = class_prefix[len(class_prefix_start):]
+            if not class_name or "/" in class_name:
+                continue
+            class_items.append((class_name, list(rel_keys)))
+
+    if not class_items:
+        return None
+
+    prefix = f"{match_key}_"
+    records: List[Tuple[str, str]] = []
+    for class_name, rel_keys in class_items:
+        for rel_key in rel_keys:
+            filename = rel_key.rsplit("/", 1)[-1]
+            if filename.startswith(prefix) and filename.lower().endswith(".png"):
+                records.append((class_name, filename))
+
+    CHIP_LABEL_PREFIX_CACHE.set(cache_key, records)
+    return list(records)
+
+
 def _chip_wafer_stem_matches(candidate_stem: str, target_stem: str) -> bool:
     return _chip_wafer_match_key(candidate_stem) == _chip_wafer_match_key(target_stem)
 
@@ -9580,7 +9667,10 @@ def _is_derived_wafer_lookup_relpath(rel_path: str) -> bool:
         "yolo_datasets",
     }
     parts = [part.lower() for part in rel_path.replace("\\", "/").split("/")]
-    return any(part in derived_dirs for part in parts)
+    return any(
+        part in derived_dirs or any(part.startswith(f"{derived}_") for derived in derived_dirs)
+        for part in parts
+    )
 
 
 def _classification_source_prefix(rel_path: str) -> str:
@@ -9823,13 +9913,10 @@ async def get_chip_annotations(path: str, folder: Optional[str] = Query(None)):
         marked_chips: list = []
 
         if classification_dir.exists():
-            for class_entry in os.scandir(classification_dir):
-                if not class_entry.is_dir():
-                    continue
-                class_name = class_entry.name
-                class_path = Path(class_entry.path)
-                for chip_file in _iter_chip_label_files(class_path, wafer_stem):
-                    parsed = _parse_chip_filename(chip_file.stem)
+            indexed_records = _chip_label_records_from_index(classification_dir, wafer_stem)
+            if indexed_records is not None:
+                for class_name, filename in indexed_records:
+                    parsed = _parse_chip_filename(Path(filename).stem)
                     if not parsed:
                         continue
                     parsed_stem, x_abs, y_abs, bottom = parsed
@@ -9840,9 +9927,30 @@ async def get_chip_annotations(path: str, folder: Optional[str] = Query(None)):
                         "y_abs": y_abs,
                         "b": bottom,
                         "class": class_name,
-                        "filename": chip_file.name,
+                        "filename": filename,
                         "chip_id": _chip_id_from_coords(x_abs, y_abs),
                     })
+            else:
+                for class_entry in os.scandir(classification_dir):
+                    if not class_entry.is_dir():
+                        continue
+                    class_name = class_entry.name
+                    class_path = Path(class_entry.path)
+                    for chip_file in _iter_chip_label_files(class_path, wafer_stem):
+                        parsed = _parse_chip_filename(chip_file.stem)
+                        if not parsed:
+                            continue
+                        parsed_stem, x_abs, y_abs, bottom = parsed
+                        if not _chip_wafer_stem_matches(parsed_stem, wafer_stem):
+                            continue
+                        marked_chips.append({
+                            "x_abs": x_abs,
+                            "y_abs": y_abs,
+                            "b": bottom,
+                            "class": class_name,
+                            "filename": chip_file.name,
+                            "chip_id": _chip_id_from_coords(x_abs, y_abs),
+                        })
 
         from collections import Counter
         class_counts = Counter(c["class"] for c in marked_chips)

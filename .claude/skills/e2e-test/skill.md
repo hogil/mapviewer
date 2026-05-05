@@ -8,6 +8,15 @@ argument-hint: [Phase 번호 또는 범위]
 
 기본은 로컬 Playwright runner(`scripts/run-e2e-playwright.ps1`)로 L3 Tracker의 모든 주요 기능을 자동 테스트합니다. MCP 브라우저는 최종 E2E 증명 경로가 아니며, 사용자가 명시적으로 MCP를 요구한 경우의 보조 디버깅에만 사용합니다.
 
+## 절대규칙 #-3: 성능 경고는 원인 분석 대상 — timeout 완화로 덮지 않는다
+
+- Composite Numba warmup, cold start, 검색, 썸네일 생성, 그리드 로딩, Measure/Composite 생성 등에서 느림 또는 timeout warning이 나오면 **timeout을 늘리거나 경고를 무시하는 방식으로 해결했다고 말하지 않는다.**
+- E2E 전체가 PASS여도 성능 warning은 별도 분석 대상이다. PASS 요약과 성능 warning 원인 분석을 분리해서 보고한다.
+- 먼저 확인할 것: runner 호출 지점, 서버 access/app 로그, endpoint별 elapsed time, 이벤트루프 블로킹 여부, background task 상태, 인덱스/캐시 준비 상태, 첫 요청 lazy import/compile 여부, CPU/IO 포화 여부.
+- Composite Numba warmup warning이 나오면 `/api/internal/composite-numba-warmup` 구현, `scripts/run-e2e-playwright.ps1`의 warmup 호출, 서버 시작 직후 background 작업 경합, 실제 Composite E2E의 `detail.compositePerf.numba` 값을 함께 확인한다.
+- 원인이 확인되기 전에는 "정책상 경고라 문제 없음", "timeout을 늘리면 됨", "실제 테스트는 PASS라 괜찮음"처럼 결론내리지 않는다.
+- timeout 변경은 마지막 수단이다. 변경하려면 먼저 병목 근거와 개선안을 제시하고, 사용자가 명시적으로 동의한 경우에만 한다.
+
 ## 절대규칙 #-2: E2E 브라우저는 로컬 Playwright runner 우선 — MCP 브라우저로 최종 증명 금지
 
 - **기본 실행은 반드시 로컬 Playwright runner**(`powershell -ExecutionPolicy Bypass -File scripts/run-e2e-playwright.ps1`)로 한다.
@@ -26,7 +35,7 @@ argument-hint: [Phase 번호 또는 범위]
 - 스크립트 출력 `READY:<port>`에서 실제 포트 번호를 읽어 `BASE_URL=https://localhost:<port>`로 설정한다.
 - `READY:<port>` 직후에는 5초 이하의 짧은 health check(`/api/config`)로 서버가 실제 응답하는지 확인한다.
 - READY 직후 서버가 죽었으면 해당 E2E PID/잔여 pid 파일을 정리한 뒤 다음 fresh port에서 새 서버를 시작한다.
-- Composite Numba warmup은 `COMPOSITE_USE_NUMBA=1` 서버에서 짧게 시도하되, 빨리 끝나지 않으면 경고만 남기고 브라우저 테스트를 즉시 진행한다. warmup 때문에 브라우저 표시를 막지 않는다.
+- Composite Numba warmup은 `COMPOSITE_USE_NUMBA=1` 서버에서 짧게 시도하되, 빨리 끝나지 않으면 경고를 남기고 브라우저 테스트를 즉시 진행한다. 단, 이 경고를 정상으로 덮지 말고 별도 성능 병목으로 분석한다. warmup 때문에 브라우저 표시를 막지 않는다.
 - `run-e2e-playwright.ps1`는 자신이 시작한 E2E 서버 PID를 추적하고, 테스트 종료 후 반드시 종료한다. 사용자가 `-KeepServer`를 명시한 경우만 예외다.
 - 기존 사용자 서버를 Kill하여 연결이 끊기는 사고는 절대 금지한다.
 - 이 규칙을 위반하여 `Stop-ApiMainProcesses` 또는 기존 서버 종료를 추가하는 행위는 절대 금지한다.
@@ -83,7 +92,7 @@ argument-hint: [Phase 번호 또는 범위]
 - 전체 실행은 서버 1개를 시작하고 chunk를 순서대로 실행한다. 각 chunk는 Node 1개와 Chromium 1개를 사용한다.
 - E2E runner는 `COMPOSITE_USE_NUMBA=1` 상태의 서버를 시작하고, 실제 서버 프로세스 안에서 Composite Numba warmup을 수행한다.
 - 서버가 READY 후 죽었으면 즉시 실패 서버를 버리고 다음 fresh port로 재시도한다.
-- Composite Numba warmup이 짧은 timeout 안에 응답하지 않아도 서버가 살아 있으면 테스트를 계속한다. Numba 사용 여부와 실제 성능은 Composite E2E 결과에서 검증한다.
+- Composite Numba warmup이 짧은 timeout 안에 응답하지 않아도 서버가 살아 있으면 테스트를 계속한다. 단, timeout 완화로 해결하지 말고 원인 분석을 남긴다. Numba 사용 여부와 실제 성능은 Composite E2E 결과에서 검증한다.
 - 테스트 종료 후 `api.main`/uvicorn Python, Playwright Chromium, E2E Node, E2E PID 파일이 남지 않아야 한다.
 - 실패 로그가 `[FAIL]` 또는 `"status": "FAIL"`을 포함하면 runner exit code는 반드시 non-zero여야 한다.
 - 테스트 결과 보고 전 아래를 확인한다.
@@ -133,12 +142,15 @@ argument-hint: [Phase 번호 또는 범위]
 - E2E 테스트에서 classification 폴더의 파일이 원본과 독립적인 복사본인지 검증한다.
 - 코드에 `os.link`를 도입하는 변경은 절대 금지한다.
 
-## 절대규칙: batch 폴더는 더미 파일 — 이미지 로드 금지
+## 절대규칙: batch / benchmark_4m 폴더는 더미 파일 — 이미지 로드 금지
 
 - `wm-811k/batch/` 하위의 모든 파일은 **파일 인덱스 성능 테스트용 0바이트 더미 파일**이다.
+- `wm-811k/benchmark_4m/` 하위의 모든 파일도 **파일 인덱스/검색 성능 테스트용 0바이트 더미 파일**이다.
+- `benchmark_4m`의 기대 구조는 400개 lot 폴더 × 10000개 PNG 이름 빈 파일 = 400만 파일이다.
 - 실제 서버의 수백만 개 파일 수를 재현하기 위한 것이므로, 유효한 이미지 데이터가 아니다.
-- E2E 테스트에서 batch 폴더 파일을 이미지 로드/썸네일 생성/렌더링 대상으로 사용하지 않는다.
-- batch 경로에서 pyvips/PIL 에러가 발생해도 정상이다 — 버그가 아니므로 수정하지 않는다.
+- E2E 테스트에서 batch / benchmark_4m 폴더 파일을 이미지 로드/썸네일 생성/렌더링 대상으로 사용하지 않는다.
+- 단, 인덱스 빌드/캐시 로드/검색 성능 E2E에서는 `benchmark_4m`를 의도적으로 포함해 대용량 환경을 재현할 수 있다.
+- batch / benchmark_4m 경로에서 pyvips/PIL 에러가 발생해도 정상이다 — 버그가 아니므로 수정하지 않는다.
 
 ## 절대규칙: Playwright 브라우저 실행 방식
 

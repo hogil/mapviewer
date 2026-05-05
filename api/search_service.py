@@ -77,9 +77,18 @@ class SearchService:
         excluded_parts = set(self.excluded_folders)
         if extra_excluded:
             excluded_parts |= set(extra_excluded)
+
+        def _is_excluded_part(part: str) -> bool:
+            part_lower = part.lower()
+            for excl in excluded_parts:
+                excl_lower = str(excl).lower()
+                if part_lower == excl_lower or part_lower.startswith(f"{excl_lower}_"):
+                    return True
+            return False
+
         for rel in candidates:
             parts = rel.replace("\\", "/").split("/")
-            if any(excl in parts for excl in excluded_parts):
+            if any(_is_excluded_part(part) for part in parts):
                 removed += 1
                 continue
             filtered.append(rel)

@@ -473,15 +473,19 @@ function Wait-ForSearchReady {
                 $null
             }
             if ($status.ready) {
-                $raw = & curl.exe -s -k --max-time 10 "$BaseUrl/api/search?q=AAU220&limit=1"
-                $response = if (-not [string]::IsNullOrWhiteSpace($raw)) {
-                    $raw | ConvertFrom-Json
-                } else {
-                    $null
-                }
-                if ($response.success -and $response.total -ge 1) {
-                    Write-Host "SEARCH_READY backend=$($status.backend) total=$($response.total)"
-                    return $true
+                $warmupQueries = @("AAB301", "AAN585", "AAK170", "AAS114", "AAV840", "AAU220")
+                foreach ($query in $warmupQueries) {
+                    $encodedQuery = [System.Uri]::EscapeDataString($query)
+                    $raw = & curl.exe -s -k --max-time 10 "$BaseUrl/api/search?q=$encodedQuery&limit=1"
+                    $response = if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                        $raw | ConvertFrom-Json
+                    } else {
+                        $null
+                    }
+                    if ($response.success -and $response.total -ge 1) {
+                        Write-Host "SEARCH_READY backend=$($status.backend) query=$query total=$($response.total)"
+                        return $true
+                    }
                 }
             }
         } catch {
@@ -682,6 +686,7 @@ foreach ($script in $scripts) {
 
     $progressText = if (Test-Path $progressPath) { Get-Content -Path $progressPath -Encoding UTF8 -Raw -ErrorAction SilentlyContinue } else { "" }
     $stdoutText = if (Test-Path $stdoutPath) { Get-Content -Path $stdoutPath -Encoding UTF8 -Raw -ErrorAction SilentlyContinue } else { "" }
+    $stderrText = if (Test-Path $stderrPath) { Get-Content -Path $stderrPath -Encoding UTF8 -Raw -ErrorAction SilentlyContinue } else { "" }
 
     $exitCode = if ($proc.HasExited) { $proc.ExitCode } else { 1 }
     $progressHasFail = -not [string]::IsNullOrEmpty($progressText) -and $progressText.Contains('[FAIL]')
@@ -690,9 +695,16 @@ foreach ($script in $scripts) {
         $stdoutText.Contains('"status":"FAIL"') -or
         ($stdoutText -match '"status"\s*:\s*"FAIL"')
     )
+    $stderrHasCrash = -not [string]::IsNullOrEmpty($stderrText) -and (
+        $stderrText.Contains('triggerUncaughtException') -or
+        $stderrText.Contains('TimeoutError') -or
+        ($stderrText -match '^\s*Error:|^\s*page\..+Timeout')
+    )
     if ($chunkTimedOut) {
         $exitCode = 124
-    } elseif ($chunkFailedSeen -or $progressHasFail -or $stdoutHasFail) {
+    } elseif ($chunkFailedSeen -or $progressHasFail -or $stdoutHasFail -or $stderrHasCrash) {
+        $exitCode = 2
+    } elseif (-not $doneSeen) {
         $exitCode = 2
     } elseif (-not $proc.HasExited -and $doneSeen) {
         $exitCode = 0

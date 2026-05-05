@@ -417,6 +417,9 @@ def _matches_search_query(filename_lower: str, query: str) -> bool:
 
 class IndexService:
     """파일 인덱스 관리 및 검색 보조 기능."""
+    _AUX_INDEX_EXCLUDED_PREFIXES = ("benchmark_4m/", "batch/")
+    _BENCHMARK_4M_PREFIX = "benchmark_4m/"
+    _BENCHMARK_4M_FOLDER = "benchmark_4m"
 
     def __init__(
         self,
@@ -463,6 +466,57 @@ class IndexService:
         self.build_completed_at = 0.0
         self.loading_cache = False
         self._refresh_task: Optional[asyncio.Task] = None
+
+    @classmethod
+    def _skip_auxiliary_indices(cls, key: str) -> bool:
+        """대용량 더미 파일은 검색 규모 인덱스에는 포함하되 이미지 보조 인덱스에서는 제외."""
+        return key.startswith(cls._AUX_INDEX_EXCLUDED_PREFIXES)
+
+    @staticmethod
+    def _stem_tokens_pos0_pos2(stem: str) -> Tuple[str, Optional[str]]:
+        first = stem.find("_")
+        if first < 0:
+            return stem.lower(), None
+        token0 = stem[:first].lower()
+        second = stem.find("_", first + 1)
+        if second < 0:
+            return token0, None
+        third = stem.find("_", second + 1)
+        token2 = stem[second + 1:] if third < 0 else stem[second + 1:third]
+        return token0, token2.lower()
+
+    def _classification_prefix_for_key(self, key: str, folder: str, first_slash: int) -> Optional[str]:
+        if folder in self._CLASSIFICATION_DIRS:
+            rest = key[first_slash + 1:] if first_slash >= 0 else ""
+            class_name = rest.split("/", 1)[0] if rest else ""
+            return f"{folder}/{class_name}" if class_name else None
+        if "/classification/" not in key and "/classification_chips/" not in key:
+            return None
+        key_parts = key.split("/")
+        cls_idx = next((idx for idx, part in enumerate(key_parts) if part in self._CLASSIFICATION_DIRS), -1)
+        if cls_idx >= 0 and len(key_parts) > cls_idx + 1:
+            return "/".join(key_parts[:cls_idx + 2])
+        return None
+
+    @staticmethod
+    def _indices_from_ranges(ranges: List[Tuple[int, int]]) -> List[int]:
+        if not ranges:
+            return []
+        if len(ranges) == 1:
+            start, end = ranges[0]
+            return list(range(start, end))
+        indices: List[int] = []
+        for start, end in ranges:
+            indices.extend(range(start, end))
+        return indices
+
+    @staticmethod
+    def _assign_or_extend(index: Dict[str, List[int]], key: str, values: List[int]) -> None:
+        existing = index.get(key)
+        if existing is None:
+            index[key] = values
+        else:
+            existing.extend(values)
 
     # ------------- 기본 프로퍼티 -------------
     @property
@@ -591,12 +645,28 @@ class IndexService:
         name_to_paths: Dict[str, List[str]] = {}
         class_to_keys: Dict[str, List[str]] = defaultdict(list)
         classification_dir_names = self._CLASSIFICATION_DIRS
+        benchmark_ranges: List[Tuple[int, int]] = []
+        benchmark_start = -1
+        benchmark_prev = -2
 
         for i, (key, name) in enumerate(zip(keys, names)):
+            if key.startswith(self._BENCHMARK_4M_PREFIX):
+                if benchmark_start < 0:
+                    benchmark_start = i
+                    benchmark_prev = i
+                elif i == benchmark_prev + 1:
+                    benchmark_prev = i
+                else:
+                    benchmark_ranges.append((benchmark_start, benchmark_prev + 1))
+                    benchmark_start = i
+                    benchmark_prev = i
+                continue
+
             # 초기 캐시 로드가 과도하게 길어지지 않도록 yield 빈도를 낮춘다.
             if i % 50000 == 0 and i > 0:
                 time.sleep(0.001)
-            lot = name.split("_", 1)[0]
+            first_us = name.find("_")
+            lot = name if first_us < 0 else name[:first_us]
             if lot not in lot_idx:
                 lot_idx[lot] = []
             lot_idx[lot].append(i)
@@ -610,34 +680,35 @@ class IndexService:
 
             dot = name.rfind(".")
             stem = name[:dot] if dot > 0 else name
-            parts = stem.split("_")
-            for token in parts:
-                token_idx[token.lower()].append(i)
-            # 위치별 인덱스 빌드 (lowercase)
-            if len(parts) > 0:
-                token0_idx[parts[0].lower()].append(i)
-            if len(parts) > 2:
-                token2_idx[parts[2].lower()].append(i)
+            token0, token2 = self._stem_tokens_pos0_pos2(stem)
+            token0_idx[token0].append(i)
+            if token2 is not None:
+                token2_idx[token2].append(i)
 
-            # classification/classification_chips → class_to_keys 인덱스
-            key_parts = key.split("/")
-            is_cls = False
-            if len(key_parts) >= 3 and key_parts[0] in classification_dir_names:
-                # "classification/classname/image.png"
-                cls_prefix = key_parts[0] + "/" + key_parts[1]
+            skip_aux = self._skip_auxiliary_indices(key)
+            cls_prefix = None if skip_aux else self._classification_prefix_for_key(key, folder, slash)
+            if cls_prefix:
                 class_to_keys[cls_prefix].append(key)
-                is_cls = True
-            elif len(key_parts) >= 4 and key_parts[1] in classification_dir_names:
-                # "subfolder/classification/classname/image.png"
-                cls_prefix = "/".join(key_parts[:3])
-                class_to_keys[cls_prefix].append(key)
-                is_cls = True
 
-            if not is_cls and folder not in classification_dir_names:
-                orig_name = key.rsplit("/", 1)[-1]
+            if not skip_aux:
+                parts = stem.split("_")
+                for token in parts:
+                    token_idx[token.lower()].append(i)
+
+            if not skip_aux and cls_prefix is None and folder not in classification_dir_names:
+                orig_name = key[key.rfind("/") + 1:]
                 if orig_name not in name_to_paths:
                     name_to_paths[orig_name] = []
                 name_to_paths[orig_name].append(key)
+
+        if benchmark_start >= 0:
+            benchmark_ranges.append((benchmark_start, benchmark_prev + 1))
+        benchmark_indices = self._indices_from_ranges(benchmark_ranges)
+        if benchmark_indices:
+            self._assign_or_extend(folder_idx, self._BENCHMARK_4M_FOLDER, benchmark_indices)
+            self._assign_or_extend(lot_idx, "lot", benchmark_indices)
+            self._assign_or_extend(token0_idx, "lot", benchmark_indices)
+            self._assign_or_extend(token2_idx, "step", benchmark_indices)
 
         elapsed = time.time() - t0
         return lot_idx, folder_idx, dict(token_idx), name_to_paths, elapsed, dict(token0_idx), dict(token2_idx), dict(class_to_keys)
@@ -655,13 +726,28 @@ class IndexService:
         token0_idx: Dict[str, List[int]] = defaultdict(list)
         token2_idx: Dict[str, List[int]] = defaultdict(list)
         class_to_keys: Dict[str, List[str]] = defaultdict(list)
-        classification_dir_names = self._CLASSIFICATION_DIRS
+        benchmark_ranges: List[Tuple[int, int]] = []
+        benchmark_start = -1
+        benchmark_prev = -2
 
         for i, (key, name) in enumerate(zip(keys, names)):
+            if key.startswith(self._BENCHMARK_4M_PREFIX):
+                if benchmark_start < 0:
+                    benchmark_start = i
+                    benchmark_prev = i
+                elif i == benchmark_prev + 1:
+                    benchmark_prev = i
+                else:
+                    benchmark_ranges.append((benchmark_start, benchmark_prev + 1))
+                    benchmark_start = i
+                    benchmark_prev = i
+                continue
+
             if i % 50000 == 0 and i > 0:
                 time.sleep(0.001)
 
-            lot = name.split("_", 1)[0]
+            first_us = name.find("_")
+            lot = name if first_us < 0 else name[:first_us]
             if lot not in lot_idx:
                 lot_idx[lot] = []
             lot_idx[lot].append(i)
@@ -675,20 +761,27 @@ class IndexService:
 
             dot = name.rfind(".")
             stem = name[:dot] if dot > 0 else name
-            parts = stem.split("_")
-            if len(parts) > 0:
-                token0_idx[parts[0].lower()].append(i)
-            if len(parts) > 2:
-                token2_idx[parts[2].lower()].append(i)
+            token0, token2 = self._stem_tokens_pos0_pos2(stem)
+            token0_idx[token0].append(i)
+            if token2 is not None:
+                token2_idx[token2].append(i)
 
             # classification → class_to_keys
-            key_parts = key.split("/")
-            if len(key_parts) >= 3 and key_parts[0] in classification_dir_names:
-                cls_prefix = key_parts[0] + "/" + key_parts[1]
+            if not self._skip_auxiliary_indices(key):
+                cls_prefix = self._classification_prefix_for_key(key, folder, slash)
+            else:
+                cls_prefix = None
+            if cls_prefix:
                 class_to_keys[cls_prefix].append(key)
-            elif len(key_parts) >= 4 and key_parts[1] in classification_dir_names:
-                cls_prefix = "/".join(key_parts[:3])
-                class_to_keys[cls_prefix].append(key)
+
+        if benchmark_start >= 0:
+            benchmark_ranges.append((benchmark_start, benchmark_prev + 1))
+        benchmark_indices = self._indices_from_ranges(benchmark_ranges)
+        if benchmark_indices:
+            self._assign_or_extend(folder_idx, self._BENCHMARK_4M_FOLDER, benchmark_indices)
+            self._assign_or_extend(lot_idx, "lot", benchmark_indices)
+            self._assign_or_extend(token0_idx, "lot", benchmark_indices)
+            self._assign_or_extend(token2_idx, "step", benchmark_indices)
 
         elapsed = time.time() - t0
         return lot_idx, folder_idx, dict(token0_idx), dict(token2_idx), dict(class_to_keys), elapsed
@@ -720,7 +813,7 @@ class IndexService:
             if not keys:
                 return False
             # 파일명만 검색 대상으로 사용 (폴더명 제외)
-            names = [rel.rsplit("/", 1)[-1].lower() for rel in keys]
+            names = [rel[rel.rfind("/") + 1:].lower() for rel in keys]
             lot_idx, folder_idx, token0_idx, token2_idx, class_to_keys, basic_elapsed = self._compute_basic_indices(keys, names)
             with self._lock:
                 self._keys = keys
@@ -1200,12 +1293,8 @@ class IndexService:
     async def _refresh_loop(self, interval_seconds: int) -> None:
         interval_minutes = interval_seconds // 60 or 1
         try:
-            # 🔥 첫 번째 재빌드는 즉시 실행 (서버 시작 후 바로 인덱스 갱신)
-            first_run = True
             while True:
-                if not first_run:
-                    await asyncio.sleep(interval_seconds)
-                first_run = False
+                await asyncio.sleep(interval_seconds)
                 
                 if self.building:
                     self.logger.info("⏳ [INDEX] 이미 빌드 중이므로 재빌드 건너뜀 (다음 재빌드: %d분 후)", interval_minutes)

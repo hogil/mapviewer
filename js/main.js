@@ -24938,7 +24938,11 @@ class WaferMapViewer {
         ]);
         return this.normalizeRelativePath(path)
             .split('/')
-            .some(part => derived.has(part.toLowerCase()));
+            .some(part => {
+                const normalizedPart = part.toLowerCase();
+                return derived.has(normalizedPart) ||
+                    Array.from(derived).some(name => normalizedPart.startsWith(`${name}_`));
+            });
     }
 
     dedupePathsByLotWafer(paths = []) {

@@ -38,9 +38,9 @@ const { createRunner } = require('./e2e_playwright_session');
         );
         await page.waitForFunction(
           () =>
-            document.querySelectorAll(
+            Array.from(document.querySelectorAll(
               '#file-explorer .folder, #file-explorer .folder-item'
-            ).length > 10,
+            )).some((node) => (node.textContent || '').includes('unknown')),
           null,
           { timeout: 90000 }
         );
@@ -347,6 +347,22 @@ const { createRunner } = require('./e2e_playwright_session');
     };
   }
 
+  function parseUnknownFileRow(imagePath) {
+    const normalized = normalizeResultPath(imagePath);
+    const name = String(normalized || '').replace(/\\/g, '/').split('/').pop() || '';
+    const stem = name.replace(/\.[^.]+$/, '');
+    const parts = stem.split('_');
+    return {
+      path: normalized,
+      lot: (parts[0] || '').toLowerCase(),
+      bintype: (parts[1] || '').toLowerCase(),
+      wafer: (parts[2] || '').toLowerCase(),
+      grade: (parts[6] || '').toLowerCase(),
+      type: (parts[7] || '').toLowerCase(),
+      status: (parts[8] || '').toLowerCase(),
+    };
+  }
+
   function normalizeResultPath(rawPath) {
     const normalized = String(rawPath || '').replace(/\\/g, '/');
     if (!normalized.includes(':/')) {
@@ -365,7 +381,7 @@ const { createRunner } = require('./e2e_playwright_session');
     )).sort();
   }
 
-  function assertUnknownSearchResult(scenario, data, expectedLots = []) {
+  function assertUnknownSearchResult(scenario, data, expectedLots = [], expectedPrefix = '') {
     expect(data.success === true, `${scenario} success=${JSON.stringify(data).slice(0, 500)}`);
     const results = (data.results || []).map(normalizeResultPath);
     expect(results.length > 0, `${scenario} empty results`);
@@ -374,7 +390,7 @@ const { createRunner } = require('./e2e_playwright_session');
       `${scenario} outsideUnknown=${JSON.stringify(results.filter((imagePath) => !imagePath.startsWith('unknown/')).slice(0, 8))}`
     );
     expect(
-      (data.timings?.search_prefix || '') === '',
+      (data.timings?.search_prefix || '') === expectedPrefix,
       `${scenario} not global prefix=${JSON.stringify(data.timings || {})}`
     );
     const lots = resultLots(results);
@@ -388,6 +404,8 @@ const { createRunner } = require('./e2e_playwright_session');
       lots,
       searchMode: data.timings?.search_mode || null,
       searchPrefix: data.timings?.search_prefix || '',
+      totalMs: data.timings?.total_ms ?? null,
+      logicalEvalMs: data.timings?.logical_eval_ms ?? null,
     };
   }
 
@@ -546,6 +564,175 @@ const { createRunner } = require('./e2e_playwright_session');
     }, { imagesRoot, classNames: E2E_UNKNOWN_LABEL_CLASSES });
   }
 
+  async function ensureChipLabelPrefixFixture() {
+    return await page.evaluate(async ({ imagesRoot }) => {
+      const jsonRequest = async (url, options = {}) => {
+        const headers = { ...(options.headers || {}) };
+        if (options.body && !headers['Content-Type']) {
+          headers['Content-Type'] = 'application/json';
+        }
+        const response = await fetch(url, {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          ...options,
+          headers,
+        });
+        const text = await response.text();
+        let body = {};
+        try {
+          body = text ? JSON.parse(text) : {};
+        } catch (_) {
+          body = { raw: text };
+        }
+        if (!response.ok || body.success === false) {
+          throw new Error(`${url} status=${response.status} body=${JSON.stringify(body).slice(0, 500)}`);
+        }
+        return body;
+      };
+
+      const folderData = await jsonRequest('/api/change-folder', {
+        method: 'POST',
+        body: JSON.stringify({ path: imagesRoot }),
+      });
+      const v = window.viewer;
+      if (v) {
+        v.currentFolderPath = folderData.current_folder;
+        v.currentFolderPrefix = folderData.current_folder_prefix || '';
+        v.productFolderPath = folderData.current_folder;
+        v.markFolderContextChanged?.('e2e-chip-label-prefix-fixture');
+      }
+
+      const recursive = await jsonRequest('/api/files/recursive?path=unknown&limit=5000');
+      const supported = /\.(png|jpe?g|bmp|webp|tif|tiff)$/i;
+      const blockedParts = new Set([
+        'classification',
+        'classification_chips',
+        'chips',
+        'thumbnails',
+        'composite_map',
+        'my-lot',
+      ]);
+      const files = (recursive.files || [])
+        .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+        .filter((imagePath) => imagePath.startsWith('unknown/') && supported.test(imagePath))
+        .filter((imagePath) => !imagePath.split('/').some((part) => blockedParts.has(part)))
+        .filter((value, index, arr) => arr.indexOf(value) === index);
+
+      const preferredLots = ['AAB301', 'AAK170', 'AAN585', 'AAS114', 'AAV840'];
+      const ordered = [];
+      const pushUnique = (imagePath) => {
+        if (imagePath && !ordered.includes(imagePath)) ordered.push(imagePath);
+      };
+      for (const lot of preferredLots) {
+        pushUnique(files.find((imagePath) =>
+          (imagePath.split('/').pop() || '').toUpperCase().startsWith(`${lot}_`)
+        ));
+      }
+      for (const imagePath of files) {
+        pushUnique(imagePath);
+      }
+
+      const requiredChipCount = 15;
+      let fixture = null;
+      for (const imagePath of ordered) {
+        const positions = await jsonRequest(`/api/chip-positions?path=${encodeURIComponent(imagePath)}`);
+        const chips = (positions.chips || [])
+          .filter((chip) =>
+            Number.isFinite(Number(chip?.x_abs)) &&
+            Number.isFinite(Number(chip?.y_abs)) &&
+            chip?.rect
+          )
+          .slice(0, requiredChipCount);
+        if (chips.length >= requiredChipCount) {
+          fixture = { imagePath, chips };
+          break;
+        }
+      }
+      if (!fixture) {
+        throw new Error(`chip label prefix fixture unavailable: ${JSON.stringify({ files: files.length })}`);
+      }
+
+      const classSpecs = [
+        { name: 'scratch', count: 5 },
+        { name: 'bank_boundary', count: 4 },
+        { name: 'scratch_21deg', count: 3 },
+        { name: 'particle_blast', count: 2 },
+        { name: 'invalid_main', count: 1 },
+      ];
+
+      let cursor = 0;
+      const seeded = [];
+      for (const spec of classSpecs) {
+        const coords = fixture.chips.slice(cursor, cursor + spec.count)
+          .map((chip) => ({ x_abs: Number(chip.x_abs), y_abs: Number(chip.y_abs) }));
+        cursor += spec.count;
+        const body = await jsonRequest('/api/classify/chips', {
+          method: 'POST',
+          body: JSON.stringify({
+            class_name: spec.name,
+            image_path: fixture.imagePath,
+            chip_coords: coords,
+          }),
+        });
+        if ((body.saved_count || 0) !== coords.length || body.error_count) {
+          throw new Error(`chip fixture seed incomplete ${spec.name}: ${JSON.stringify(body).slice(0, 500)}`);
+        }
+        seeded.push({
+          className: spec.name,
+          coords,
+          savedFiles: body.saved_files || [],
+        });
+      }
+
+      const bank = seeded.find((item) => item.className === 'bank_boundary');
+      const scratch = seeded.find((item) => item.className === 'scratch');
+      const bankFile = bank?.savedFiles?.[0];
+      const scratchFile = scratch?.savedFiles?.[0];
+      if (!bankFile || !scratchFile) {
+        throw new Error(`chip fixture missing saved files: ${JSON.stringify(seeded).slice(0, 500)}`);
+      }
+
+      const waferName = fixture.imagePath.split('/').pop() || '';
+      const fullStem = waferName.replace(/\.[^.]+$/, '');
+      const waferKey = fullStem.split('_').slice(0, 5).join('_');
+      const folderName = fixture.imagePath.split('/').slice(-2, -1)[0] || '';
+      const withPrefix = (className, filename) => `classification_chips/${className}/${filename}`;
+      const labelKey = `bank_boundary/${bankFile.filename}`;
+      const chipPath = withPrefix('bank_boundary', bankFile.filename);
+      const chipPaths = [
+        chipPath,
+        withPrefix('scratch', scratchFile.filename),
+      ];
+
+      const annotations = await jsonRequest(`/api/chip-annotations?path=${encodeURIComponent(fixture.imagePath)}`);
+      const marked = annotations.marked_chips || [];
+      const missingClasses = classSpecs
+        .map((spec) => spec.name)
+        .filter((className) => !marked.some((chip) => chip.class === className));
+      if (missingClasses.length) {
+        throw new Error(`chip fixture annotations missing: ${JSON.stringify({ missingClasses, markedCount: marked.length })}`);
+      }
+
+      return {
+        waferPath: fixture.imagePath,
+        chipPath,
+        labelKey,
+        fullStem,
+        waferKey,
+        folderName,
+        chipPaths,
+        primary: {
+          className: 'bank_boundary',
+          x_abs: bankFile.x_abs,
+          y_abs: bankFile.y_abs,
+          b: String(bankFile.b),
+        },
+        seeded,
+        markedCount: marked.length,
+      };
+    }, { imagesRoot });
+  }
+
   await boot('chunk1');
 
   await record('1', '페이지 로드 & 기본 UI', async () => {
@@ -554,11 +741,15 @@ const { createRunner } = require('./e2e_playwright_session');
       folderCount: document.querySelectorAll(
         '#file-explorer .folder, #file-explorer .folder-item'
       ).length,
+      hasUnknownFolder: Array.from(document.querySelectorAll(
+        '#file-explorer .folder, #file-explorer .folder-item'
+      )).some((node) => (node.textContent || '').includes('unknown')),
+      classListExists: !!document.querySelector('#class-list'),
       classCount: document.querySelectorAll('#class-list .class-btn').length,
     }));
     expect(data.title === 'Wafer Map Viewer', `title=${data.title}`);
-    expect(data.folderCount > 10, `folderCount=${data.folderCount}`);
-    expect(data.classCount >= 1, `classCount=${data.classCount}`);
+    expect(data.hasUnknownFolder, `folder explorer missing unknown: ${JSON.stringify(data)}`);
+    expect(data.classListExists, 'class-list missing');
     return data;
   });
 
@@ -727,6 +918,479 @@ const { createRunner } = require('./e2e_playwright_session');
       fixtures,
       apiResults,
       uiResult,
+    };
+  });
+
+  await record('3v', 'unknown 실제 파일명 기반 text 검색', async () => {
+    await boot('chunk1-search-diverse-text');
+    const recursive = await fetchJson(page, '/api/files/recursive?path=unknown&limit=10000');
+    const rows = (recursive.files || [])
+      .map(parseUnknownFileRow)
+      .filter((row) => row.path.startsWith('unknown/') && row.lot && row.wafer);
+    expect(rows.length >= 1000, `unknown rows too small=${rows.length}`);
+
+    const rowsByLot = new Map();
+    for (const row of rows) {
+      if (!rowsByLot.has(row.lot)) {
+        rowsByLot.set(row.lot, row);
+      }
+    }
+
+    const fixtures = await findUnknownGlobalSearchFixtures(3);
+    const [a, b, c] = fixtures.map((fixture) => ({
+      ...(rowsByLot.get(fixture.lot) || {}),
+      ...fixture,
+    }));
+    expect(a?.lot && b?.lot && c?.lot, `fixtures=${JSON.stringify(fixtures)}`);
+
+    const byPrefix = new Map();
+    for (const row of rowsByLot.values()) {
+      if (!row.lot || row.lot.length < 3) continue;
+      const prefix = row.lot.slice(0, 3);
+      const list = byPrefix.get(prefix) || [];
+      list.push(row);
+      byPrefix.set(prefix, list);
+    }
+    const prefixEntry = Array.from(byPrefix.entries())
+      .filter(([, list]) => list.length >= 2 && list.length <= 50)
+      .sort((left, right) => left[1].length - right[1].length || left[0].localeCompare(right[0]))[0];
+    expect(prefixEntry, `prefixEntry missing prefixCount=${byPrefix.size}`);
+    const [prefix, prefixRows] = prefixEntry;
+    const prefixLots = prefixRows.map((row) => row.lot).sort();
+    const excludedPrefixLot = prefixLots[0];
+    const keptPrefixLots = prefixLots.filter((lot) => lot !== excludedPrefixLot);
+
+    const RUNS = 3;
+    const roundMs = (value) => Math.round(Number(value || 0) * 10) / 10;
+    const summarizeNumbers = (values) => {
+      const nums = values.map(Number).filter((value) => Number.isFinite(value));
+      if (!nums.length) {
+        return { n: 0, avg: null, stddev: null, min: null, max: null, spread: null, values: [] };
+      }
+      const avg = nums.reduce((sum, value) => sum + value, 0) / nums.length;
+      const variance = nums.reduce((sum, value) => sum + ((value - avg) ** 2), 0) / nums.length;
+      const min = Math.min(...nums);
+      const max = Math.max(...nums);
+      return {
+        n: nums.length,
+        avg: roundMs(avg),
+        stddev: roundMs(Math.sqrt(variance)),
+        min: roundMs(min),
+        max: roundMs(max),
+        spread: roundMs(max - min),
+        values: nums.map(roundMs),
+      };
+    };
+    const compactResult = (results) => {
+      const normalized = (results || []).map(normalizeResultPath);
+      const lots = resultLots(normalized);
+      return {
+        count: normalized.length,
+        firstPath: normalized[0] || '',
+        lotsSample: lots.slice(0, 8),
+        lotCount: lots.length,
+      };
+    };
+    const validateExpectedLots = (label, results, expectedLots) => {
+      const lots = resultLots(results);
+      const missing = expectedLots.filter((lot) => !lots.includes(lot));
+      expect(missing.length === 0, `${label} missing lots=${JSON.stringify(missing.slice(0, 12))}`);
+      expect(
+        results.every((imagePath) => imagePath.startsWith('unknown/')),
+        `${label} outsideUnknown=${JSON.stringify(results.filter((imagePath) => !imagePath.startsWith('unknown/')).slice(0, 8))}`
+      );
+      return { lots, missing };
+    };
+    const runApiRepeated = async (scenario) => {
+      const runs = [];
+      for (let i = 0; i < RUNS; i += 1) {
+        const data = await fetchJson(page, `/api/search?${encodeParams(scenario.params)}`);
+        const results = (data.results || []).map(normalizeResultPath);
+        const summary = assertUnknownSearchResult(
+          `${scenario.name} run=${i + 1}`,
+          data,
+          scenario.expectedLots,
+          scenario.expectedPrefix
+        );
+        scenario.validate?.(results, data);
+        runs.push({
+          count: summary.count,
+          total: summary.total,
+          totalMs: data.timings?.total_ms ?? null,
+          logicalEvalMs: data.timings?.logical_eval_ms ?? null,
+          searchMode: data.timings?.search_mode || null,
+          firstPath: summary.firstPath,
+        });
+      }
+      const counts = runs.map((run) => run.count);
+      expect(
+        counts.every((count) => count === counts[0]),
+        `${scenario.name} unstable counts=${JSON.stringify(counts)}`
+      );
+      return {
+        count: runs[0].count,
+        total: runs[0].total,
+        searchMode: runs[0].searchMode,
+        firstPath: runs[0].firstPath,
+        apiTotalMs: summarizeNumbers(runs.map((run) => run.totalMs)),
+        logicalEvalMs: summarizeNumbers(runs.map((run) => run.logicalEvalMs)),
+      };
+    };
+    const runUiTextRepeated = async (scenario) => {
+      const runs = [];
+      for (let i = 0; i < RUNS; i += 1) {
+        const data = await page.evaluate(async ({ query, folder }) => {
+          const v = window.viewer;
+          if (!v) return { success: false, error: 'viewer missing', elapsedMs: 0, images: [] };
+          const normalizedFolder = String(folder || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+          if (normalizedFolder) {
+            v.selectedFolders = new Set([normalizedFolder]);
+            v.lastSelectedFolder = normalizedFolder;
+            v.lastSelectedFolderPath = normalizedFolder;
+            v.lastLoadedGridFolderPath = normalizedFolder;
+            v.currentFolderPrefix = normalizedFolder;
+          } else {
+            v.selectedFolders = new Set();
+            v.lastSelectedFolder = null;
+            v.lastSelectedFolderPath = null;
+            v.lastLoadedGridFolderPath = '';
+            v.currentFolderPrefix = '';
+          }
+          const input = document.getElementById('file-search');
+          if (!input) return { success: false, error: 'file-search missing', elapsedMs: 0, images: [] };
+          input.value = query;
+          const start = performance.now();
+          const success = await v.performSearch({ suppressAlerts: true });
+          const elapsedMs = performance.now() - start;
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          const images = (v.currentGridImages || []).map((imagePath) =>
+            String(imagePath || '').replace(/\\/g, '/')
+          );
+          return {
+            success,
+            elapsedMs,
+            images,
+            wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+            folderParam: v.getSearchFolderParam?.() || '',
+          };
+        }, { query: scenario.query, folder: scenario.folder || '' });
+        expect(data.success === true, `${scenario.name} UI failed run=${i + 1} data=${JSON.stringify(data).slice(0, 500)}`);
+        expect(data.images.length > 0 && data.wraps > 0, `${scenario.name} empty UI run=${i + 1} data=${JSON.stringify(data).slice(0, 500)}`);
+        expect(
+          data.images.every((imagePath) => imagePath.startsWith('unknown/')),
+          `${scenario.name} UI outsideUnknown=${JSON.stringify(data.images.filter((imagePath) => !imagePath.startsWith('unknown/')).slice(0, 8))}`
+        );
+        validateExpectedLots(`${scenario.name} UI run=${i + 1}`, data.images, scenario.expectedLots || []);
+        scenario.validate?.(data.images);
+        runs.push({
+          elapsedMs: data.elapsedMs,
+          count: data.images.length,
+          wraps: data.wraps,
+          folderParam: data.folderParam,
+          compact: compactResult(data.images),
+        });
+      }
+      const counts = runs.map((run) => run.count);
+      expect(
+        counts.every((count) => count === counts[0]),
+        `${scenario.name} UI unstable counts=${JSON.stringify(counts)}`
+      );
+      return {
+        query: scenario.query,
+        folder: scenario.folder || '',
+        count: counts[0],
+        wraps: runs[0].wraps,
+        folderParam: runs[0].folderParam,
+        wallMs: summarizeNumbers(runs.map((run) => run.elapsedMs)),
+        sample: runs[0].compact,
+      };
+    };
+    const runUiMultiRepeated = async ({ name, inputText, expectedLots, kind }) => {
+      const runs = [];
+      for (let i = 0; i < RUNS; i += 1) {
+        const data = await page.evaluate(async ({ inputText: rawInput, kind: searchKind }) => {
+          const v = window.viewer;
+          if (!v) return { success: false, error: 'viewer missing', elapsedMs: 0, images: [] };
+          v.selectedFolders = new Set();
+          v.lastSelectedFolder = null;
+          v.lastSelectedFolderPath = null;
+          v.lastLoadedGridFolderPath = '';
+          v.currentFolderPrefix = '';
+
+          let success = false;
+          let parsed = {};
+          const start = performance.now();
+          if (searchKind === 'lot') {
+            const input = document.getElementById('multi-search-input');
+            if (!input) return { success: false, error: 'multi-search-input missing', elapsedMs: 0, images: [] };
+            input.value = rawInput;
+            parsed = v.parseMultiSearchInput();
+            if (!parsed.error) {
+              success = await v.performSearch({
+                multiLotList: [...(parsed.lots || [])],
+                suppressAlerts: true,
+              });
+            }
+          } else {
+            const input = document.getElementById('wf-search-input');
+            if (!input) return { success: false, error: 'wf-search-input missing', elapsedMs: 0, images: [] };
+            input.value = rawInput;
+            parsed = v.parseWfSearchInput();
+            if (!parsed.error) {
+              const pairStr = (parsed.pairs || []).map((pair) => `${pair.lot}:${pair.wf}`).join(',');
+              success = await v.performSearch({ wfPairs: pairStr, suppressAlerts: true });
+            }
+          }
+          const elapsedMs = performance.now() - start;
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          const images = (v.currentGridImages || []).map((imagePath) =>
+            String(imagePath || '').replace(/\\/g, '/')
+          );
+          return {
+            success,
+            error: parsed.error || '',
+            parsedCount: searchKind === 'lot' ? (parsed.lots || []).length : (parsed.pairs || []).length,
+            elapsedMs,
+            images,
+            wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+          };
+        }, { inputText, kind });
+        expect(data.success === true, `${name} failed run=${i + 1} data=${JSON.stringify(data).slice(0, 700)}`);
+        expect(data.parsedCount === expectedLots.length, `${name} parsedCount=${data.parsedCount} expected=${expectedLots.length}`);
+        expect(data.images.length >= expectedLots.length, `${name} count=${data.images.length} expected>=${expectedLots.length}`);
+        validateExpectedLots(`${name} run=${i + 1}`, data.images, expectedLots);
+        runs.push({
+          elapsedMs: data.elapsedMs,
+          count: data.images.length,
+          wraps: data.wraps,
+          parsedCount: data.parsedCount,
+          compact: compactResult(data.images),
+        });
+      }
+      const counts = runs.map((run) => run.count);
+      expect(counts.every((count) => count === counts[0]), `${name} unstable counts=${JSON.stringify(counts)}`);
+      return {
+        inputCount: expectedLots.length,
+        count: counts[0],
+        parsedCount: runs[0].parsedCount,
+        wraps: runs[0].wraps,
+        wallMs: summarizeNumbers(runs.map((run) => run.elapsedMs)),
+        sample: runs[0].compact,
+      };
+    };
+
+    const statusRows = prefixRows.filter((row) => row.status);
+    const statusTerms = Array.from(new Set(statusRows.map((row) => row.status))).slice(0, 2);
+    while (statusTerms.length < 2) {
+      statusTerms.push(statusTerms[0] || a.status || 'pwq');
+    }
+
+    const textScenarios = [
+      {
+        name: 'global exact uppercase LOT',
+        params: { q: a.lot.toUpperCase(), folder: '', limit: '10000' },
+        query: a.lot.toUpperCase(),
+        folder: '',
+        expectedLots: [a.lot],
+        expectedPrefix: '',
+      },
+      {
+        name: 'global mixed case OR LOTs',
+        params: { q: `${a.lot.toUpperCase()} Or ${b.lot}`, folder: '', limit: '10000' },
+        query: `${a.lot.toUpperCase()} Or ${b.lot}`,
+        folder: '',
+        expectedLots: [a.lot, b.lot],
+        expectedPrefix: '',
+      },
+      {
+        name: 'unknown partial LOT prefix',
+        params: { q: prefix.toUpperCase(), folder: 'unknown', limit: '10000' },
+        query: prefix.toUpperCase(),
+        folder: 'unknown',
+        expectedLots: prefixLots.slice(0, 2),
+        expectedPrefix: 'unknown',
+        validate: (results) => {
+          const lots = resultLots(results);
+          expect(
+            lots.every((lot) => lot.startsWith(prefix)),
+            `partial prefix ${prefix} outside lots=${JSON.stringify(lots.slice(0, 20))}`
+          );
+        },
+      },
+      {
+        name: 'unknown tab space multi LOTs',
+        params: { q: `${a.lot.toUpperCase()}\t  ${b.lot}\t${c.lot.toUpperCase()}`, folder: 'unknown', limit: '10000' },
+        query: `${a.lot.toUpperCase()}\t  ${b.lot}\t${c.lot.toUpperCase()}`,
+        folder: 'unknown',
+        expectedLots: [a.lot, b.lot, c.lot],
+        expectedPrefix: 'unknown',
+      },
+      {
+        name: 'unknown comma semicolon LOTs',
+        params: { q: `${a.lot}, ${b.lot}; ${c.lot}`, folder: 'unknown', limit: '10000' },
+        query: `${a.lot}, ${b.lot}; ${c.lot}`,
+        folder: 'unknown',
+        expectedLots: [a.lot, b.lot, c.lot],
+        expectedPrefix: 'unknown',
+      },
+      {
+        name: 'unknown grouped LOT wafer logical',
+        params: { q: `(${a.lot.toUpperCase()} AnD ${a.wafer}) OR (${b.lot}\tand\t${b.wafer})`, folder: 'unknown', limit: '10000' },
+        query: `(${a.lot.toUpperCase()} AnD ${a.wafer}) OR (${b.lot}\tand\t${b.wafer})`,
+        folder: 'unknown',
+        expectedLots: [a.lot, b.lot],
+        expectedPrefix: 'unknown',
+        validate: (results) => {
+          const allowed = new Set([`${a.lot}:${a.wafer}`, `${b.lot}:${b.wafer}`]);
+          const pairs = results.map(parseLotWaferFromPath).map((row) => `${row.lot}:${row.wafer}`);
+          expect(
+            pairs.every((pair) => allowed.has(pair)),
+            `unexpected pairs=${JSON.stringify(pairs.slice(0, 20))}`
+          );
+        },
+      },
+      {
+        name: 'unknown bintype wafer AND',
+        params: { q: `${a.bintype} and _${a.wafer}_`, folder: 'unknown', limit: '10000' },
+        query: `${a.bintype.toUpperCase()}   and\t_${a.wafer}_`,
+        folder: 'unknown',
+        expectedLots: [],
+        expectedPrefix: 'unknown',
+        validate: (results) => {
+          expect(
+            results.every((imagePath) => {
+              const name = imagePath.split('/').pop().toLowerCase();
+              return name.includes(`_${a.bintype}_`) && name.includes(`_${a.wafer}_`);
+            }),
+            `bintype wafer mismatch=${JSON.stringify(results.slice(0, 20))}`
+          );
+        },
+      },
+      {
+        name: 'unknown nested status OR prefix',
+        params: { q: `(${statusTerms[0].toUpperCase()} or ${statusTerms[1]}) and ${prefix}`, folder: 'unknown', limit: '10000' },
+        query: `(${statusTerms[0].toUpperCase()} or ${statusTerms[1]}) and ${prefix.toUpperCase()}`,
+        expectedLots: [],
+        folder: 'unknown',
+        expectedPrefix: 'unknown',
+        validate: (results) => {
+          const allowedStatus = new Set(statusTerms);
+          expect(
+            results.every((imagePath) => {
+              const row = parseUnknownFileRow(imagePath);
+              return row.lot.startsWith(prefix) && allowedStatus.has(row.status);
+            }),
+            `nested status OR prefix mismatch=${JSON.stringify(results.slice(0, 20))}`
+          );
+        },
+      },
+      {
+        name: 'unknown prefix NOT one LOT',
+        params: { q: `${prefix} NoT ${excludedPrefixLot.toUpperCase()}`, folder: 'unknown', limit: '10000' },
+        query: `${prefix.toUpperCase()} NoT ${excludedPrefixLot.toUpperCase()}`,
+        folder: 'unknown',
+        expectedLots: keptPrefixLots.slice(0, 2),
+        expectedPrefix: 'unknown',
+        validate: (results) => {
+          const lots = resultLots(results);
+          expect(!lots.includes(excludedPrefixLot), `excluded lot present lots=${JSON.stringify(lots)}`);
+          expect(
+            lots.every((lot) => lot.startsWith(prefix)),
+            `NOT prefix ${prefix} outside lots=${JSON.stringify(lots.slice(0, 20))}`
+          );
+        },
+      },
+    ];
+
+    const lotCounts = new Map();
+    for (const row of rows) {
+      lotCounts.set(row.lot, (lotCounts.get(row.lot) || 0) + 1);
+    }
+    const stableRows = Array.from(rowsByLot.values())
+      .filter((row) => lotCounts.get(row.lot) === 1)
+      .slice(0, 100);
+    expect(stableRows.length === 100, `stableRows=${stableRows.length}`);
+    const multiLots100 = stableRows.map((row) => row.lot);
+    const mixedLot100Input = stableRows.map((row, index) => {
+      const token = index % 2 === 0 ? row.lot.toUpperCase() : row.lot;
+      const sep = index % 4 === 0 ? '\n' : (index % 4 === 1 ? ', ' : (index % 4 === 2 ? '; ' : '\t'));
+      return index === stableRows.length - 1 ? token : `${token}${sep}`;
+    }).join('');
+    const mixedWf100Input = stableRows
+      .map((row, index) => {
+        const lot = index % 2 === 0 ? row.lot.toUpperCase() : row.lot;
+        const gap = index % 3 === 0 ? '\t' : '   ';
+        return `${lot}${gap}${row.wafer}`;
+      })
+      .join('\n');
+    const apiMultiScenarios = [
+      {
+        name: 'global lot_multi 100 mixed separators',
+        params: { q: '', lot_multi: mixedLot100Input, folder: '', limit: '10000' },
+        expectedLots: multiLots100,
+        expectedPrefix: '',
+      },
+      {
+        name: 'global lot_wafer 100 mixed case',
+        params: {
+          q: '',
+          lot_wafer: stableRows.map((row, index) => {
+            const lot = index % 2 === 0 ? row.lot.toUpperCase() : row.lot;
+            const suffix = index === stableRows.length - 1 ? '' : (index % 3 === 0 ? '\n' : (index % 3 === 1 ? ';' : ','));
+            return `${lot}:${row.wafer}${suffix}`;
+          }).join(''),
+          folder: '',
+          limit: '10000',
+        },
+        expectedLots: multiLots100,
+        expectedPrefix: '',
+      },
+    ];
+
+    const apiResults = {};
+    for (const scenario of [...textScenarios, ...apiMultiScenarios]) {
+      apiResults[scenario.name] = await runApiRepeated(scenario);
+    }
+
+    const uiTextResults = {};
+    for (const scenario of textScenarios) {
+      uiTextResults[scenario.name] = await runUiTextRepeated(scenario);
+    }
+    const uiMultiResults = {
+      lot100: await runUiMultiRepeated({
+        name: 'UI multi LOT 100',
+        inputText: mixedLot100Input,
+        expectedLots: multiLots100,
+        kind: 'lot',
+      }),
+      wf100: await runUiMultiRepeated({
+        name: 'UI multi WF 100',
+        inputText: mixedWf100Input,
+        expectedLots: multiLots100,
+        kind: 'wf',
+      }),
+    };
+
+    return {
+      runsPerScenario: RUNS,
+      unknownFileCount: rows.length,
+      uniqueLotCount: rowsByLot.size,
+      sampleRows: [a, b, c].map((row) => ({
+        lot: row.lot,
+        bintype: row.bintype,
+        wafer: row.wafer,
+        status: row.status,
+        path: row.path || row.firstGlobalPath,
+      })),
+      prefixScenario: { prefix, prefixLots, excludedPrefixLot },
+      multi100: {
+        lotCount: multiLots100.length,
+        firstLots: multiLots100.slice(0, 5),
+        lastLots: multiLots100.slice(-5),
+      },
+      apiResults,
+      uiTextResults,
+      uiMultiResults,
     };
   });
 
@@ -1377,18 +2041,123 @@ const { createRunner } = require('./e2e_playwright_session');
     return data;
   });
 
+  await record('chip-label-index-live', 'Chip label 인덱스 즉시 반영/삭제 stale 방지', async () => {
+    await boot('chunk1-chip-label-index-live');
+    const fixture = await ensureChipLabelPrefixFixture();
+    const className = `e2e_chip_idx_${Date.now()}`;
+    const coord = fixture.seeded?.[0]?.coords?.[0] || fixture.primary;
+
+    let data = null;
+    try {
+      data = await page.evaluate(async ({ className, coord, waferPath }) => {
+        const jsonRequest = async (url, options = {}) => {
+          const headers = { ...(options.headers || {}) };
+          if (options.body && !headers['Content-Type']) {
+            headers['Content-Type'] = 'application/json';
+          }
+          const response = await fetch(url, {
+            cache: 'no-store',
+            credentials: 'same-origin',
+            ...options,
+            headers,
+          });
+          const text = await response.text();
+          let body = {};
+          try {
+            body = text ? JSON.parse(text) : {};
+          } catch (_) {
+            body = { raw: text };
+          }
+          if (!response.ok || body.success === false) {
+            throw new Error(`${url} status=${response.status} body=${JSON.stringify(body).slice(0, 500)}`);
+          }
+          return body;
+        };
+
+        const readAnnotations = async () => {
+          const t0 = performance.now();
+          const body = await jsonRequest(`/api/chip-annotations?path=${encodeURIComponent(waferPath)}`);
+          return {
+            ms: Math.round((performance.now() - t0) * 10) / 10,
+            marked: body.marked_chips || [],
+            metadata: body.metadata || {},
+          };
+        };
+
+        const before = await readAnnotations();
+        const classifyBody = await jsonRequest('/api/classify/chips', {
+          method: 'POST',
+          body: JSON.stringify({
+            class_name: className,
+            image_path: waferPath,
+            chip_coords: [{ x_abs: Number(coord.x_abs), y_abs: Number(coord.y_abs) }],
+          }),
+        });
+        const savedFile = classifyBody.saved_files?.[0]?.filename || '';
+
+        const afterReads = [];
+        for (let i = 0; i < 3; i += 1) {
+          afterReads.push(await readAnnotations());
+        }
+
+        const deleteBody = await jsonRequest('/api/classes/delete?mode=chip', {
+          method: 'POST',
+          body: JSON.stringify({ names: [className] }),
+        });
+
+        const deletedReads = [];
+        for (let i = 0; i < 2; i += 1) {
+          deletedReads.push(await readAnnotations());
+        }
+
+        const hasClass = (read) => read.marked.some((chip) =>
+          chip.class === className &&
+          chip.filename === savedFile &&
+          Number(chip.x_abs) === Number(coord.x_abs) &&
+          Number(chip.y_abs) === Number(coord.y_abs)
+        );
+
+        return {
+          className,
+          waferPath,
+          coord,
+          beforeHit: hasClass(before),
+          classifyBody,
+          savedFile,
+          afterHits: afterReads.map(hasClass),
+          afterTimings: afterReads.map((read) => read.ms),
+          afterCounts: afterReads.map((read) => read.marked.length),
+          deleteBody,
+          deletedHits: deletedReads.map(hasClass),
+          deletedTimings: deletedReads.map((read) => read.ms),
+          deletedCounts: deletedReads.map((read) => read.marked.length),
+        };
+      }, { className, coord, waferPath: fixture.waferPath });
+    } finally {
+      await page.evaluate(async (targetClass) => {
+        await fetch('/api/classes/delete?mode=chip', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ names: [targetClass] }),
+        }).catch(() => {});
+      }, className).catch(() => {});
+    }
+
+    expect(data.beforeHit === false, `index class should not exist before classify: ${JSON.stringify(data)}`);
+    expect(data.classifyBody.saved_count === 1, `chip classify failed: ${JSON.stringify(data)}`);
+    expect(data.afterHits.every(Boolean), `new chip label not visible through annotations immediately: ${JSON.stringify(data)}`);
+    expect(Math.max(...data.afterTimings, ...data.deletedTimings) < 500, `chip annotation index lookup too slow: ${JSON.stringify(data)}`);
+    expect(data.deleteBody.deleted?.includes(className), `chip class delete did not report target: ${JSON.stringify(data)}`);
+    expect(data.deletedHits.every((hit) => hit === false), `deleted chip class still visible through annotations: ${JSON.stringify(data)}`);
+    return data;
+  });
+
   await record('chip-label-prefix-wafer', 'Chip label 5토큰 wafer 매칭/우클릭 Wafer 보기', async () => {
     await boot('chunk1-chip-label-prefix-wafer');
-    const waferPath = 'unknown/Center_scratch/AAU220_00P_13_20260501_010000_96.0_2_EE_PWQ.PNG';
-    const chipPath = 'classification_chips/bank_boundary/AAU220_00P_13_20260501_010000_EE_PWQ_X13_Y11_B285.PNG';
-    const labelKey = 'bank_boundary/AAU220_00P_13_20260501_010000_EE_PWQ_X13_Y11_B285.PNG';
-    const fullStem = 'AAU220_00P_13_20260501_010000_96.0_2_EE_PWQ';
-    const chipPaths = [
-      chipPath,
-      'classification_chips/scratch/AAU220_00P_13_20260501_010000_EE_PWQ_X11_Y17_B285.PNG',
-    ];
+    const fixture = await ensureChipLabelPrefixFixture();
+    const { waferPath, chipPath, labelKey, fullStem, chipPaths } = fixture;
 
-    const data = await page.evaluate(async ({ waferPath, chipPath, labelKey }) => {
+    const data = await page.evaluate(async ({ waferPath, chipPath, labelKey, primary }) => {
       const annotationTimings = [];
       let marked = [];
       let metadata = {};
@@ -1427,10 +2196,10 @@ const { createRunner } = require('./e2e_playwright_session');
         annotationTimings,
         annotationAvgMs: Math.round((annotationTimings.reduce((a, b) => a + b, 0) / annotationTimings.length) * 10) / 10,
         markedHit: marked.some((chip) =>
-          chip.class === 'bank_boundary' &&
-          chip.x_abs === 13 &&
-          chip.y_abs === 11 &&
-          String(chip.b) === '285'
+          chip.class === primary.className &&
+          Number(chip.x_abs) === Number(primary.x_abs) &&
+          Number(chip.y_abs) === Number(primary.y_abs) &&
+          String(chip.b) === String(primary.b)
         ),
         markedCount: marked.length,
         metadata,
@@ -1442,7 +2211,7 @@ const { createRunner } = require('./e2e_playwright_session');
           visible: !!menuEl && rect.width > 0 && rect.height > 0,
         },
       };
-    }, { waferPath, chipPath, labelKey });
+    }, { waferPath, chipPath, labelKey, primary: fixture.primary });
 
     expect(data.markedHit, `5-token prefix chip annotation missing: ${JSON.stringify(data)}`);
     expect(data.markedCount >= 1, `marked chip count invalid: ${JSON.stringify(data)}`);
@@ -1452,7 +2221,7 @@ const { createRunner } = require('./e2e_playwright_session');
       `related wafer path mismatch: ${JSON.stringify(data.waferLookup)}`
     );
     expect(
-      data.waferLookup?.wafer_key === 'AAU220_00P_13_20260501_010000',
+      data.waferLookup?.wafer_key === fixture.waferKey,
       `wafer key mismatch: ${JSON.stringify(data.waferLookup)}`
     );
     expect(
@@ -1581,7 +2350,10 @@ const { createRunner } = require('./e2e_playwright_session');
         legendSnippet: legendText.slice(0, 300),
       };
     });
-    expect(waferSinglePanel.folderText === 'Center_scratch', `wafer single folder missing: ${JSON.stringify(waferSinglePanel)}`);
+    expect(
+      waferSinglePanel.folderText === fixture.folderName,
+      `wafer single folder missing: expected=${fixture.folderName} actual=${JSON.stringify(waferSinglePanel)}`
+    );
     expect(waferSinglePanel.separatorDisplay !== 'none', `wafer single separator hidden: ${JSON.stringify(waferSinglePanel)}`);
     expect(waferSinglePanel.fileNameText.toLowerCase() === fullStem.toLowerCase(), `wafer single filename mismatch: ${JSON.stringify(waferSinglePanel)}`);
     expect(
@@ -2585,6 +3357,7 @@ const { createRunner } = require('./e2e_playwright_session');
       annotationTimings: data.annotationTimings,
       lookupMs: data.lookupMs,
       markedCount: data.markedCount,
+      fixture,
       waferPath: data.waferLookup.wafer_path,
       waferKey: data.waferLookup.wafer_key,
       labelExplorerWaferSingle,

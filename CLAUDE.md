@@ -87,12 +87,15 @@ The codebase uses environment variables to adapt to both environments. SAML logi
 - E2E 테스트에서 classification/my-lot 파일이 독립적인 복사본인지 검증한다 (inode 불일치 확인)
 - 이 규칙을 위반하여 하드링크나 심볼릭 링크를 도입하는 행위는 절대 금지한다
 
-**Absolute Rule: batch 폴더는 더미 파일 — 이미지 로드 절대 금지**
+**Absolute Rule: batch / benchmark_4m 폴더는 더미 파일 — 이미지 로드 절대 금지**
 - `wm-811k/batch/` 하위의 모든 파일은 **파일 인덱스 성능 테스트용 더미 파일**이다 (0바이트 빈 파일)
+- `wm-811k/benchmark_4m/` 하위의 모든 파일도 **파일 인덱스/검색 성능 테스트용 더미 파일**이다 (0바이트 빈 파일)
+- `benchmark_4m`의 기대 구조는 400개 lot 폴더 × 10000개 PNG 이름 빈 파일 = 400만 파일이다
 - 실제 서버 환경의 수백만 개 파일 수를 재현하기 위해 만들어진 것이므로, 유효한 이미지 데이터가 아니다
 - 이 폴더의 파일에 대해 썸네일 생성, 이미지 열기, PIL/pyvips 로드 등 **이미지 처리를 시도하는 것은 절대 금지**한다
-- E2E 테스트, UI 점검, 디버깅 시 batch 폴더 파일은 테스트 대상에서 제외한다
-- pyvips/PIL에서 "not a known file format" 또는 "cannot identify image file" 에러가 batch 경로에서 발생하면, 이는 정상 동작이다 — 버그가 아니므로 수정하려 하지 않는다
+- E2E 테스트, UI 점검, 디버깅 시 batch / benchmark_4m 폴더 파일은 이미지 테스트 대상에서 제외한다
+- 단, 인덱스 빌드/캐시 로드/검색 성능 테스트에서는 `benchmark_4m`를 의도적으로 포함해 대용량 환경을 재현한다
+- pyvips/PIL에서 "not a known file format" 또는 "cannot identify image file" 에러가 batch / benchmark_4m 경로에서 발생하면, 이는 정상 동작이다 — 버그가 아니므로 수정하려 하지 않는다
 
 ## Running the Application
 

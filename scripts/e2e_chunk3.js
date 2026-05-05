@@ -88,9 +88,9 @@ const { createRunner } = require('./e2e_playwright_session');
     );
     await page.waitForFunction(
       () =>
-        document.querySelectorAll(
+        Array.from(document.querySelectorAll(
           '#file-explorer .folder, #file-explorer .folder-item'
-        ).length > 10,
+        )).some((node) => (node.textContent || '').includes('unknown')),
       null,
       { timeout: 90000 }
     );
