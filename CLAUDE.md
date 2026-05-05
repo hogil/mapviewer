@@ -97,6 +97,15 @@ The codebase uses environment variables to adapt to both environments. SAML logi
 - 단, 인덱스 빌드/캐시 로드/검색 성능 테스트에서는 `benchmark_4m`를 의도적으로 포함해 대용량 환경을 재현한다
 - pyvips/PIL에서 "not a known file format" 또는 "cannot identify image file" 에러가 batch / benchmark_4m 경로에서 발생하면, 이는 정상 동작이다 — 버그가 아니므로 수정하려 하지 않는다
 
+**Absolute Rule: UI 회귀는 예외 처리로 숨기지 말고 원인과 E2E 신호를 기록**
+- UI 회귀가 잠깐 보였다 사라져도 정상 처리하지 않는다. broad exception, timeout 완화, "transient라 무시" 같은 방식으로 덮지 않는다.
+- 수정 후에는 원인, 관련 함수/파일, 다시 잡을 E2E 신호를 `CLAUDE.md`와 관련 skill에 남긴다. 이 프로젝트에서 `AGENTS.md`는 로컬 ignore 대상이므로 원격 보존이 필요한 규칙은 반드시 추적되는 문서에도 기록한다.
+- Composite context-menu orphan panel 회귀:
+  - 증상: `Composite 만들기` 또는 `handleCompositeCreate()` 직후 좌상단에 `검색...` / `이미지를 선택하세요` chooser가 순간 노출됨.
+  - 원인: `_resetContextCompositeChecks()`가 닫힌 `#context-mc-submenu`에 empty-selection 문구를 다시 렌더했고, `#context-mc-submenu` / `#context-mea-submenu`가 일반 `.failbit-panel` cleanup과 섞여 context-menu lifecycle 밖에서 이동/복원될 수 있었음.
+  - 수정 패턴: context submenu는 `#grid-context-menu`가 보일 때만 열고 `_hideGridContextSubmenuPanel()`로 정리한다. composite 시작 시 닫힌 submenu에 `이미지를 선택하세요`를 렌더하지 않는다. `_openMcContextSubmenu()` / `_openMeaContextSubmenu()`는 context menu visibility와 trigger rect를 확인한다.
+  - E2E 신호: `scripts/e2e_chunk1.js`는 버튼 경로에서 `orphanContextChooserEvents.length === 0`, `scripts/e2e_chunk3.js`는 직접 10장 composite 경로에서 `directCompositeOrphanContextChooserEvents.length === 0`이어야 한다.
+
 ## Running the Application
 
 ### Start the Server

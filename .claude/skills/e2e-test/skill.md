@@ -158,6 +158,14 @@ E2E 실행이 끝나면 최종 답변에 반드시 "무엇을 어떻게 실행�
 - chip 테두리(Normal border, index 10)는 chip 내부 경계이므로 이 규칙과 무관하다.
 - E2E 테스트에서 Composite/Measure 맵 생성 후 chip 외곽에 비배경색이 있으면 FAIL로 판정한다.
 
+## 절대규칙: Composite context submenu orphan panel 금지
+
+- Composite 생성 직후 `검색...` / `이미지를 선택하세요`가 들어 있는 작은 context chooser panel이 보이면 FAIL이다. 잠깐 보였다 사라지는 것도 정상 처리하지 않는다.
+- 이 현상은 예외 처리나 timeout으로 덮지 않는다. 먼저 `#grid-context-menu`, `#context-mc-submenu`, `#context-mea-submenu`의 lifecycle과 `_resetContextCompositeChecks()`, `_openMcContextSubmenu()`, `_openMeaContextSubmenu()`, `_closeCompositeMeasureFloatingPanels()`를 확인한다.
+- 정상 구현은 context submenu를 `#grid-context-menu`가 보이는 동안에만 열고, 닫을 때는 `_hideGridContextSubmenuPanel()`로 원래 부모/위치/동적 버튼/빌드 플래그를 정리한다.
+- Composite 생성 시작 시 닫힌 `#context-mc-submenu`에 `_resetContextSubmenuPanel(..., '이미지를 선택하세요')`를 호출하면 안 된다. 선택 상태만 clear하고 hidden submenu 내용을 다시 렌더하지 않는다.
+- E2E는 app 예외처리가 아니라 회귀 검출로 `MutationObserver`를 사용할 수 있다. `scripts/e2e_chunk1.js`의 context-menu 버튼 경로는 `orphanContextChooserEvents.length === 0`, `scripts/e2e_chunk3.js`의 직접 10장 composite 경로는 `directCompositeOrphanContextChooserEvents.length === 0`이어야 한다.
+
 ## 절대규칙: Positions 파일 전체 스캔 금지
 
 - **POSITIONS_ROOT에서 `rglob`, `iterdir`, `os.walk` 등으로 전체 디렉토리를 재귀/순회 검색하는 행위는 절대 금지한다.**
@@ -1368,6 +1376,13 @@ Grade 맵을 제외한 모든 Composite 결과(square_average, square_weighted_a
 3. 서브메뉴 `getBoundingClientRect().bottom <= window.innerHeight` 확인 (뷰포트 안에 수렴)
 4. 서브메뉴가 `position:fixed`이고 `bottom` 스타일이 설정되어 있는지 확인
 
+#### 9-7a. Composite 생성 직후 orphan chooser 금지
+1. `#context-mc-submenu .mc-generate-btn` 클릭 직전 orphan chooser monitor 시작
+2. 버튼 클릭 후 Composite 탭 전환과 결과 그리드 렌더링 대기
+3. `#grid-context-menu`가 닫힌 상태에서 `#context-mc-submenu` 또는 `#context-mea-submenu`가 보이면 FAIL
+4. 특히 `input[placeholder="검색..."]`와 `이미지를 선택하세요`가 함께 보인 event가 없어야 함
+5. PASS 기준: `orphanContextChooserEvents.length === 0`, `visibleFloatingPanelsAfterComposite.length === 0`, `selectedPanelAfterComposite.display === 'none'`
+
 #### 9-8. Composite Map 저장 경로 (LoginId 기반)
 1. `/api/config` 응답에서 FALLBACK_LOGIN_ID 확인 (기본값 `"notsaml"`)
 2. Composite Map 생성 API 호출 시 응답의 `output_dir`에 LoginId 포함 확인
@@ -1379,7 +1394,7 @@ Grade 맵을 제외한 모든 Composite 결과(square_average, square_weighted_a
 2. 동일 사용자로 재생성 시 이전 `*_measure/` 폴더가 삭제되는지 확인
 3. `current/` 디렉토리는 삭제되지 않는지 확인
 
-**pass 기준**: 9-1 ~ 9-9 전체 pass
+**pass 기준**: 9-1 ~ 9-9 전체 pass, Composite 생성 직후 orphan chooser event 0
 
 ---
 
