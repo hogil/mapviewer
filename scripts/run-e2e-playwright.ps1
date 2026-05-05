@@ -755,7 +755,7 @@ function Get-E2EDetailMetrics {
         Add-E2EMetricIfPresent -Metrics $metrics -Object $Detail.coldStartSummary.median -Key "fqLoadMs" -Label "cold.median.fqLoadMs"
     }
 
-    return @($metrics | Select-Object -First 32)
+    return @($metrics | Select-Object -First 96)
 }
 
 function Format-E2EDetailMetrics {
@@ -773,7 +773,8 @@ function Get-E2EMetricNoteLines {
         "index.loadMs: wall time for loadFolder('unknown') to load the 5000-image unknown grid into viewer state and DOM in Phase 36,37,38,40. It is not index build time and not a 4M-file scan time.",
         "index.total_files/index.total_dirs: current full index size returned by /api/index-status. These are status counters, not files processed during the loadMs interval.",
         "fqLoadMs: wall time for the grouped unknown 5000-image grid/cache/FQ-missing/placeholder/asset-version phase. It is not single F/Q image generation time.",
-        "search apiTotalMs/logicalEvalMs/UI wallMs: API timings measure indexed lookup/logical evaluation; UI wallMs includes browser input and result rendering."
+        "search apiTotalMs/logicalEvalMs/UI wallMs: API timings measure indexed lookup/logical evaluation; UI wallMs includes browser input and result rendering.",
+        "composite.elapsedMs/processingTime: browser-observed composite creation wall time and server-reported processing time for the selected source images."
     )
 }
 
