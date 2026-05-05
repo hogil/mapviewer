@@ -9627,6 +9627,36 @@ class WaferMapViewer {
         delete panel._origNext;
     }
 
+    _hideGridContextSubmenuPanel(panel) {
+        if (!panel) return;
+        panel.style.display = 'none';
+        panel.style.left = '';
+        panel.style.right = '';
+        panel.style.top = '';
+        panel.style.bottom = '';
+        panel.style.maxHeight = '';
+        panel.querySelectorAll('.failbit-list, .mc-ctx-list, .mea-ctx-list').forEach(list => {
+            list.style.maxHeight = '';
+        });
+        panel.querySelectorAll('.pinned-section, .mc-reset-bar, .mc-generate-wrap, .measure-apply-wrap').forEach(el => el.remove());
+
+        const originalParent = panel._originalParent || panel._origParent;
+        const originalNext = panel._originalNext || panel._origNext || null;
+        if (originalParent && panel.parentElement === document.body) {
+            if (originalNext && originalNext.parentElement === originalParent) {
+                originalParent.insertBefore(panel, originalNext);
+            } else {
+                originalParent.appendChild(panel);
+            }
+        }
+        delete panel._originalParent;
+        delete panel._originalNext;
+        delete panel._origParent;
+        delete panel._origNext;
+        if (panel.id === 'context-mc-submenu') panel._mcBuilt = false;
+        if (panel.id === 'context-mea-submenu') panel._meaBuilt = false;
+    }
+
     _closeCompositeMeasureFloatingPanels() {
         if (typeof this._closeMcPanel === 'function') {
             this._closeMcPanel();
@@ -9635,11 +9665,12 @@ class WaferMapViewer {
         if (contextMenu) {
             contextMenu.style.display = 'none';
         }
+        this._hideGridContextSubmenuPanel(document.getElementById('context-mc-submenu'));
+        this._hideGridContextSubmenuPanel(document.getElementById('context-mea-submenu'));
         document.querySelectorAll('.failbit-panel').forEach(panel => {
+            if (panel.id === 'context-mc-submenu' || panel.id === 'context-mea-submenu') return;
             panel.querySelectorAll('.pinned-section, .mc-reset-bar, .mc-generate-wrap, .measure-apply-wrap').forEach(el => el.remove());
             this._restoreFloatingFailbitPanel(panel);
-            if (panel.id === 'context-mc-submenu') panel._mcBuilt = false;
-            if (panel.id === 'context-mea-submenu') panel._meaBuilt = false;
         });
         if (this.hideContextMenuHandler) {
             document.removeEventListener('click', this.hideContextMenuHandler);
@@ -9669,11 +9700,10 @@ class WaferMapViewer {
 
     _resetContextCompositeChecks() {
         this._mcCheckedItems = [];
+        this._mcSelectedImages = [];
         const mcSubmenu = document.getElementById('context-mc-submenu');
         if (mcSubmenu) {
             mcSubmenu._mcBuilt = false;
-            const list = mcSubmenu.querySelector('.mc-ctx-list');
-            this._resetContextSubmenuPanel(mcSubmenu, list, '이미지를 선택하세요');
         }
     }
 
@@ -11205,10 +11235,8 @@ class WaferMapViewer {
     }
 
     _closeGridContextSubmenus() {
-        const mcSubmenu = document.getElementById('context-mc-submenu');
-        const meaSubmenu = document.getElementById('context-mea-submenu');
-        if (mcSubmenu) mcSubmenu.style.display = 'none';
-        if (meaSubmenu) meaSubmenu.style.display = 'none';
+        this._hideGridContextSubmenuPanel(document.getElementById('context-mc-submenu'));
+        this._hideGridContextSubmenuPanel(document.getElementById('context-mea-submenu'));
     }
 
     _markGridContextSubmenusStale() {
@@ -11323,9 +11351,20 @@ class WaferMapViewer {
         const mcCreateItem = document.getElementById('context-mc-create');
         const mcSubmenu = document.getElementById('context-mc-submenu');
         if (!mcCreateItem || !mcSubmenu) return;
+        const contextMenu = document.getElementById('grid-context-menu');
+        const contextVisible = contextMenu && getComputedStyle(contextMenu).display !== 'none';
+        if (!contextVisible) {
+            this._hideGridContextSubmenuPanel(mcSubmenu);
+            return;
+        }
+        const itemRect = mcCreateItem.getBoundingClientRect();
+        if (itemRect.width <= 0 || itemRect.height <= 0) {
+            this._hideGridContextSubmenuPanel(mcSubmenu);
+            return;
+        }
 
         const meaSubmenu = document.getElementById('context-mea-submenu');
-        if (meaSubmenu) meaSubmenu.style.display = 'none';
+        if (meaSubmenu) this._hideGridContextSubmenuPanel(meaSubmenu);
         if (!mcSubmenu._mcBuilt) {
             this._buildMcContextSubmenu();
             mcSubmenu._mcBuilt = true;
@@ -11337,9 +11376,20 @@ class WaferMapViewer {
         const meaCreateItem = document.getElementById('context-mea-create');
         const meaSubmenu = document.getElementById('context-mea-submenu');
         if (!meaCreateItem || !meaSubmenu) return;
+        const contextMenu = document.getElementById('grid-context-menu');
+        const contextVisible = contextMenu && getComputedStyle(contextMenu).display !== 'none';
+        if (!contextVisible) {
+            this._hideGridContextSubmenuPanel(meaSubmenu);
+            return;
+        }
+        const itemRect = meaCreateItem.getBoundingClientRect();
+        if (itemRect.width <= 0 || itemRect.height <= 0) {
+            this._hideGridContextSubmenuPanel(meaSubmenu);
+            return;
+        }
 
         const mcSubmenu = document.getElementById('context-mc-submenu');
-        if (mcSubmenu) mcSubmenu.style.display = 'none';
+        if (mcSubmenu) this._hideGridContextSubmenuPanel(mcSubmenu);
         if (!meaSubmenu._meaBuilt) {
             this._buildMeaContextSubmenu();
             meaSubmenu._meaBuilt = true;
@@ -11435,16 +11485,8 @@ class WaferMapViewer {
         if (contextMenu) {
             contextMenu.style.display = 'none';
         }
-        const mcSubmenu = document.getElementById('context-mc-submenu');
-        if (mcSubmenu) {
-            mcSubmenu._mcBuilt = false;
-            this._restoreFloatingFailbitPanel(mcSubmenu);
-        }
-        const meaSubmenu = document.getElementById('context-mea-submenu');
-        if (meaSubmenu) {
-            meaSubmenu._meaBuilt = false;
-            this._restoreFloatingFailbitPanel(meaSubmenu);
-        }
+        this._hideGridContextSubmenuPanel(document.getElementById('context-mc-submenu'));
+        this._hideGridContextSubmenuPanel(document.getElementById('context-mea-submenu'));
 
         if (this.hideContextMenuHandler) {
             document.removeEventListener('click', this.hideContextMenuHandler);
@@ -27109,7 +27151,10 @@ class WaferMapViewer {
      * 모든 Measure 패널 닫기
      */
     _closeFailbitPanels() {
+        this._hideGridContextSubmenuPanel(document.getElementById('context-mc-submenu'));
+        this._hideGridContextSubmenuPanel(document.getElementById('context-mea-submenu'));
         document.querySelectorAll('.failbit-panel').forEach(p => {
+            if (p.id === 'context-mc-submenu' || p.id === 'context-mea-submenu') return;
             // 동적 생성 요소 모두 제거 (다음 open 시 깨끗하게 재생성)
             p.querySelectorAll('.measure-apply-wrap, .pinned-section, .mc-reset-bar').forEach(el => el.remove());
             // body로 이동했던 패널을 원래 위치로 복원

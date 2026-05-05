@@ -316,6 +316,80 @@ const { createRunner } = require('./e2e_playwright_session');
     });
   }
 
+  async function startOrphanContextChooserMonitor(label) {
+    await page.evaluate((monitorLabel) => {
+      if (typeof window.__e2eStopOrphanContextChooserMonitor === 'function') {
+        window.__e2eStopOrphanContextChooserMonitor();
+      }
+      const events = [];
+      const readVisibleOrphans = () => {
+        const contextMenu = document.getElementById('grid-context-menu');
+        const contextVisible = !!contextMenu && getComputedStyle(contextMenu).display !== 'none';
+        return Array.from(document.querySelectorAll('#context-mc-submenu, #context-mea-submenu'))
+          .map((panel) => {
+            const rect = panel.getBoundingClientRect();
+            const style = getComputedStyle(panel);
+            const search = panel.querySelector('input[placeholder="검색..."]');
+            return {
+              id: panel.id,
+              display: style.display,
+              left: Math.round(rect.left),
+              top: Math.round(rect.top),
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+              text: (panel.innerText || '').trim(),
+              hasSearch: !!search,
+              contextVisible,
+            };
+          })
+          .filter((panel) =>
+            !panel.contextVisible &&
+            panel.display !== 'none' &&
+            panel.width > 0 &&
+            panel.height > 0 &&
+            panel.hasSearch &&
+            panel.text.includes('이미지를 선택하세요')
+          );
+      };
+      const check = () => {
+        const visible = readVisibleOrphans();
+        if (visible.length) {
+          events.push({
+            label: monitorLabel,
+            at: Math.round(performance.now()),
+            visible,
+          });
+        }
+      };
+      const observer = new MutationObserver(check);
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['style', 'class'],
+      });
+      const interval = setInterval(check, 25);
+      window.__e2eStopOrphanContextChooserMonitor = () => {
+        observer.disconnect();
+        clearInterval(interval);
+        check();
+        const copy = events.slice();
+        delete window.__e2eStopOrphanContextChooserMonitor;
+        return copy;
+      };
+      check();
+    }, label);
+  }
+
+  async function stopOrphanContextChooserMonitor() {
+    return await page.evaluate(() => {
+      if (typeof window.__e2eStopOrphanContextChooserMonitor !== 'function') {
+        return [];
+      }
+      return window.__e2eStopOrphanContextChooserMonitor();
+    });
+  }
+
   async function fetchJson(targetPage, relativeUrl) {
     return await targetPage.evaluate(async (url) => {
       const response = await fetch(url, {
@@ -1771,6 +1845,7 @@ const { createRunner } = require('./e2e_playwright_session');
       { timeout: 10000 }
     );
     append('[CM] generate button armed\n');
+    await startOrphanContextChooserMonitor('context-composite-generate');
     await page.locator('#context-mc-submenu .mc-generate-btn').click();
     await page.waitForFunction(
       () =>
@@ -1820,6 +1895,7 @@ const { createRunner } = require('./e2e_playwright_session');
         })
         .filter((panel) => panel.display !== 'none' && panel.width > 0 && panel.height > 0)
     );
+    const orphanContextChooserEvents = await stopOrphanContextChooserMonitor();
     expect(
       selectedPanelAfterComposite.display === 'none',
       `selected panel visible after composite=${JSON.stringify(selectedPanelAfterComposite)}`
@@ -1831,6 +1907,10 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(
       visibleFloatingPanelsAfterComposite.length === 0,
       `floating composite/measure panel left visible=${JSON.stringify(visibleFloatingPanelsAfterComposite)}`
+    );
+    expect(
+      orphanContextChooserEvents.length === 0,
+      `orphan context chooser visible after composite generate=${JSON.stringify(orphanContextChooserEvents)}`
     );
     return {
       ctxComposite,
@@ -1848,6 +1928,7 @@ const { createRunner } = require('./e2e_playwright_session');
       compositeCount,
       selectedPanelAfterComposite,
       visibleFloatingPanelsAfterComposite,
+      orphanContextChooserEvents,
     };
   });
 

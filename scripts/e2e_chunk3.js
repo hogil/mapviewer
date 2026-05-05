@@ -929,6 +929,80 @@ const { createRunner } = require('./e2e_playwright_session');
     });
   }
 
+  async function startOrphanContextChooserMonitor(label) {
+    await page.evaluate((monitorLabel) => {
+      if (typeof window.__e2eStopOrphanContextChooserMonitor === 'function') {
+        window.__e2eStopOrphanContextChooserMonitor();
+      }
+      const events = [];
+      const readVisibleOrphans = () => {
+        const contextMenu = document.getElementById('grid-context-menu');
+        const contextVisible = !!contextMenu && getComputedStyle(contextMenu).display !== 'none';
+        return Array.from(document.querySelectorAll('#context-mc-submenu, #context-mea-submenu'))
+          .map((panel) => {
+            const rect = panel.getBoundingClientRect();
+            const style = getComputedStyle(panel);
+            const search = panel.querySelector('input[placeholder="검색..."]');
+            return {
+              id: panel.id,
+              display: style.display,
+              left: Math.round(rect.left),
+              top: Math.round(rect.top),
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+              text: (panel.innerText || '').trim(),
+              hasSearch: !!search,
+              contextVisible,
+            };
+          })
+          .filter((panel) =>
+            !panel.contextVisible &&
+            panel.display !== 'none' &&
+            panel.width > 0 &&
+            panel.height > 0 &&
+            panel.hasSearch &&
+            panel.text.includes('이미지를 선택하세요')
+          );
+      };
+      const check = () => {
+        const visible = readVisibleOrphans();
+        if (visible.length) {
+          events.push({
+            label: monitorLabel,
+            at: Math.round(performance.now()),
+            visible,
+          });
+        }
+      };
+      const observer = new MutationObserver(check);
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['style', 'class'],
+      });
+      const interval = setInterval(check, 25);
+      window.__e2eStopOrphanContextChooserMonitor = () => {
+        observer.disconnect();
+        clearInterval(interval);
+        check();
+        const copy = events.slice();
+        delete window.__e2eStopOrphanContextChooserMonitor;
+        return copy;
+      };
+      check();
+    }, label);
+  }
+
+  async function stopOrphanContextChooserMonitor() {
+    return await page.evaluate(() => {
+      if (typeof window.__e2eStopOrphanContextChooserMonitor !== 'function') {
+        return [];
+      }
+      return window.__e2eStopOrphanContextChooserMonitor();
+    });
+  }
+
   async function getLabelExplorerState() {
     return await page.evaluate(() => ({
       selected: [...(window.viewer.labelSelection?.selected || [])],
@@ -964,6 +1038,7 @@ const { createRunner } = require('./e2e_playwright_session');
       compositeSourcePaths.every((imagePath) => String(imagePath || '').replace(/\\/g, '/').startsWith('unknown/')),
       `composite source paths=${JSON.stringify(compositeSourcePaths)}`
     );
+    await startOrphanContextChooserMonitor('direct-composite-10');
     const compositePerf = await page.evaluate(async () => {
       const startedAt = performance.now();
       await window.viewer.handleCompositeCreate();
@@ -1008,6 +1083,11 @@ const { createRunner } = require('./e2e_playwright_session');
     );
     const compositeBefore = await waitForVisibleGridThumbsLoaded(12000, 500);
     const compositeSettled = await waitForVisibleGridThumbsLoaded(12000, 500);
+    const directCompositeOrphanContextChooserEvents = await stopOrphanContextChooserMonitor();
+    expect(
+      directCompositeOrphanContextChooserEvents.length === 0,
+      `direct composite orphan context chooser=${JSON.stringify(directCompositeOrphanContextChooserEvents)}`
+    );
     await roundTripGridImageByDblClick(0);
     const compositeAfter = await waitForVisibleGridThumbsLoaded(12000, 500);
     const compositeGridCols = await nudgeGridCols();
@@ -1378,6 +1458,7 @@ const { createRunner } = require('./e2e_playwright_session');
       compositeInputCacheBefore,
       compositePerf,
       compositeSourcePaths,
+      directCompositeOrphanContextChooserEvents,
       compositeInputCacheAfter,
       measureBefore,
       measureAfterRoundTripSignature,
