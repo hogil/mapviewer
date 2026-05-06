@@ -13,8 +13,8 @@ export UVICORN_LIFESPAN="on"   # FastAPI lifespan 강제 (인덱스 초기화/�
 export HOST="0.0.0.0"
 export PORT="5354"
 export UVICORN_WORKERS="1"              # 메인 워커 1개 (인덱스/캐시 공유)
-export HTTP2="1"                        # 🚀 HTTP/2 활성화 (다중 요청 병렬 처리)
-export KEEP_ALIVE="1"                   # 🚀 Keep-Alive 연결 유지
+export HTTP2="1"                        # legacy marker: 현재 python uvicorn.run 경로의 HTTP/2 스위치로는 사용되지 않음
+export KEEP_ALIVE="1"                   # legacy marker: keep-alive는 uvicorn 기본 동작에 맡김
 
 # SSL/TLS 설정
 export SSL_ENABLED="1"
@@ -44,12 +44,9 @@ export COMPOSITE_FAST_MODE="1"           # ✅ Fast 모드 활성화 (워커 자
 export COMPOSITE_MAX_WORKERS="56"        # Composite 로더: CPU당 ~1.7 스레드
 export COMPOSITE_LOADER_MODE="thread"
 export COMPOSITE_BATCH_SIZE="20"         # 대용량 이미지용 배치 상향
-export COMPOSITE_RETENTION_HOURS="24"    # Composite 결과 보관: 24시간
-export COMPOSITE_CLEANUP_INTERVAL_SECONDS="86400" # 정리 주기: 24시간마다
-export COMPOSITE_CLEANUP_MODE="daily"    # 정리 스케줄: daily | interval
-export COMPOSITE_CLEANUP_HOUR="2"        # 매일 AM 2시 실행
-export COMPOSITE_CLEANUP_MINUTE="0"
-export COMPOSITE_CLEANUP_RUN_ON_STARTUP="0" # 시작 즉시 정리 비활성화 (하루 1회만)
+export DAILY_CLEANUP_ENABLED="1"          # 매일 composite_map + thumbnails 정리 활성화
+export DAILY_CLEANUP_HOUR="2"             # 매일 AM 2시 실행
+export DAILY_CLEANUP_MINUTE="0"
 export COMPOSITE_COUNT_MODE="cython"
 export COMPOSITE_RENDER_WORKERS="36"     # 렌더링 병렬도 ↑ (fast 모드와 맞춤)
 export COMPOSITE_SAVE_WORKERS="56"       # 저장 워커 (고속 SSD 기준)
@@ -73,7 +70,6 @@ export VIPS_MAX_CACHE_MEM="20000m"       # 메모리 캐시 20GB (198GB 중)
 export VIPS_MAX_CACHE_FILES="800"        # 열린 파일 캐시 (누락 보완)
 
 # 검색 폴백 비활성화 (인덱스 결과만 활용)
-export SEARCH_FALLBACK_LIMIT="0"          # 0=폴백 결과 제한 없음 → 폴백 비활성화
 export SEARCH_FALLBACK_MAX_FILES="0"      # 0=폴백 탐색 비활성화
 export SEARCH_FALLBACK_TIMEOUT_MS="0"     # 0=시간 제한 없음
 

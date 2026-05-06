@@ -20,8 +20,8 @@ $env:PORT="5354"
 $env:RELOAD="0"          # PowerShell 스크립트 실행 시 uvicorn reload 비활성화 (이중 실행 방지)
 $env:UVICORN_WORKERS="1" # 개발 환경: 단일 워커 (중복 인덱스 방지)
 $env:WORKERS="1"         # FastAPI 워커 단일 고정
-$env:HTTP2="1"           # 🚀 HTTP/2 활성화 (다중 요청 병렬 처리)
-$env:KEEP_ALIVE="1"      # 🚀 Keep-Alive 연결 유지
+$env:HTTP2="1"           # legacy marker: 현재 python uvicorn.run 경로의 HTTP/2 스위치로는 사용되지 않음
+$env:KEEP_ALIVE="1"      # legacy marker: keep-alive는 uvicorn 기본 동작에 맡김
 $env:SSL_ENABLED="1"
 $env:HTTPS_PORT="8443"
 $env:SSL_CERTFILE="cert/fullchain.pem"
@@ -42,12 +42,9 @@ $env:THUMB_CLIENT_MAX_CONCURRENCY="12"   # 클라이언트 동시 요청 (grid.j
 $env:COMPOSITE_MAX_WORKERS="24"          # Composite: fast path 워커 상향
 $env:COMPOSITE_LOADER_MODE="thread"
 $env:COMPOSITE_BATCH_SIZE="12"
-$env:COMPOSITE_RETENTION_HOURS="24"      # Composite 결과 보관: 24시간
-$env:COMPOSITE_CLEANUP_INTERVAL_SECONDS="86400" # 정리 주기: 24시간마다
-$env:COMPOSITE_CLEANUP_MODE="daily"      # 정리 스케줄: daily | interval
-$env:COMPOSITE_CLEANUP_HOUR="2"          # 매일 AM 2시 실행
-$env:COMPOSITE_CLEANUP_MINUTE="0"
-$env:COMPOSITE_CLEANUP_RUN_ON_STARTUP="0" # 시작 즉시 정리 비활성화 (하루 1회만)
+$env:DAILY_CLEANUP_ENABLED="1"           # 매일 composite_map + thumbnails 정리 활성화
+$env:DAILY_CLEANUP_HOUR="2"              # 매일 AM 2시 실행
+$env:DAILY_CLEANUP_MINUTE="0"
 $env:COMPOSITE_COUNT_MODE="cython"
 $env:COMPOSITE_USE_NUMBA="1"             # Composite mask/count/sum-map Numba fast path
 $env:COMPOSITE_NUMBA_CACHE="1"           # JIT 캐시 사용으로 재시작 후 첫 요청 단축
@@ -61,7 +58,6 @@ $env:VIPS_DISC_THRESHOLD="1500m"         # 디스크 스필 기준 (SSD 전제)
 
 # 검색 폴백 비활성화 (인덱스 결과만 사용)
 $env:SEARCH_WORKERS="4"                  # 검색 병렬 워커 수 (AND/OR 최적화)
-$env:SEARCH_FALLBACK_LIMIT="0"          # 0=폴백 결과 제한 없음(실제로 폴백 비활성화)
 $env:SEARCH_FALLBACK_MAX_FILES="0"      # 0=폴백 탐색 비활성화
 $env:SEARCH_FALLBACK_TIMEOUT_MS="0"     # 0=시간 제한 없음
 
