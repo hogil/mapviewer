@@ -21,6 +21,16 @@ const { createRunner } = require('./e2e_playwright_session');
   );
   const compositeInputCacheDir = path.join(imagesRoot, 'composite_cache_v1');
   const E2E_UNKNOWN_LABEL_CLASSES = ['e2e_unknown_label', 'e2e_unknown_label_alt'];
+  const E2E_WAFER_LABEL_CRUD_CLASSES = [
+    'e2e_wf_class_single',
+    'e2e_wf_class_multi_a',
+    'e2e_wf_class_multi_b',
+    'e2e_wf_label_add',
+    'e2e_wf_label_single_delete',
+    'e2e_wf_label_multi_delete',
+    'e2e_wf_label_folder_a',
+    'e2e_wf_label_folder_b',
+  ];
   const COMPOSITE_E2E_TIMEOUT_MS = 90000;
   const PHASE_61_62_SUMMARY_FILE = 'cold-start-summary.json';
 
@@ -1023,6 +1033,519 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.mouse.click(x, y, { button });
   }
 
+  function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  async function withAutoDialogs(fn) {
+    const dialogs = [];
+    const handler = async (dialog) => {
+      dialogs.push({
+        type: dialog.type(),
+        message: dialog.message(),
+      });
+      await dialog.accept();
+    };
+    page.on('dialog', handler);
+    try {
+      const result = await fn(dialogs);
+      return { result, dialogs };
+    } finally {
+      page.off('dialog', handler);
+    }
+  }
+
+  async function setClassModeUi(mode) {
+    const selector = mode === 'chip' ? '#class-mode-chip-btn' : '#class-mode-wafer-btn';
+    const currentMode = await page.evaluate(() => window.viewer?.classMode || null);
+    if (currentMode !== mode) {
+      await page.locator(selector).click({ timeout: 10000 });
+    }
+    await page.waitForFunction(
+      (expectedMode) => window.viewer?.classMode === expectedMode,
+      mode,
+      { timeout: 15000 }
+    );
+    await sleep(800);
+  }
+
+  async function refreshClassificationUi(mode, dirtyClasses = []) {
+    await page.evaluate(async ({ expectedMode, dirty }) => {
+      const v = window.viewer;
+      v.classMode = expectedMode;
+      v.cachedClassList = null;
+      v.classListPromise = null;
+      v.classToImgListCache = v.classToImgListCache || {};
+      v.labelSelection = v.labelSelection || {
+        selected: [],
+        selectedClasses: [],
+        openFolders: {},
+      };
+      await v.refreshClassList?.(true);
+      await v.refreshLabelExplorer?.(dirty);
+    }, { expectedMode: mode, dirty: dirtyClasses });
+    await sleep(1000);
+  }
+
+  async function cleanupClassFixtures(mode, classNames) {
+    await page.evaluate(async ({ expectedMode, names, root }) => {
+      const jsonRequest = async (url, options = {}) => {
+        const headers = { ...(options.headers || {}) };
+        if (options.body && !headers['Content-Type']) {
+          headers['Content-Type'] = 'application/json';
+        }
+        const response = await fetch(url, {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          ...options,
+          headers,
+        });
+        const text = await response.text();
+        let body = {};
+        try {
+          body = text ? JSON.parse(text) : {};
+        } catch (_) {
+          body = { raw: text };
+        }
+        if (!response.ok || body.success === false) {
+          throw new Error(`${url} status=${response.status} body=${JSON.stringify(body).slice(0, 500)}`);
+        }
+        return body;
+      };
+
+      const folderData = await jsonRequest('/api/change-folder', {
+        method: 'POST',
+        body: JSON.stringify({ path: root }),
+      });
+      const v = window.viewer;
+      if (v) {
+        v.currentFolderPath = folderData.current_folder;
+        v.currentFolderPrefix = folderData.current_folder_prefix || '';
+        v.productFolderPath = folderData.current_folder;
+        v.classMode = expectedMode;
+        v.markFolderContextChanged?.('e2e-label-crud-cleanup');
+      }
+      await jsonRequest(`/api/classes/delete?mode=${encodeURIComponent(expectedMode)}`, {
+        method: 'POST',
+        body: JSON.stringify({ names }),
+      });
+      if (v) {
+        v.cachedClassList = null;
+        v.classListPromise = null;
+        v.classToImgListCache = {};
+        v.labelSelection = {
+          selected: [],
+          selectedClasses: [],
+          openFolders: {},
+        };
+      }
+    }, { expectedMode: mode, names: classNames, root: imagesRoot });
+    await sleep(500);
+  }
+
+  async function addClassesViaUi(mode, classNames) {
+    await setClassModeUi(mode);
+    await page.locator('#new-class-input').fill(classNames.join(','));
+    const addDialogs = await withAutoDialogs(async () => {
+      await page.locator('#add-class-btn').click({ timeout: 10000 });
+    });
+    await page.waitForFunction(
+      async ({ expectedMode, names }) => {
+        const classButtons = Array.from(document.querySelectorAll('#class-list button'))
+          .map((button) => (button.textContent || '').trim());
+        const response = await fetch(`/api/classes?mode=${encodeURIComponent(expectedMode)}`, { cache: 'no-store' });
+        if (!response.ok) return false;
+        const body = await response.json();
+        const apiClasses = Array.isArray(body.classes) ? body.classes : [];
+        return names.every((name) => classButtons.includes(name) && apiClasses.includes(name));
+      },
+      { expectedMode: mode, names: classNames },
+      { timeout: 20000 }
+    );
+    await refreshClassificationUi(mode, classNames);
+    return {
+      ...(await getClassificationUiState(classNames)),
+      addDialogs: addDialogs.dialogs,
+    };
+  }
+
+  async function getClassificationUiState(classNames = []) {
+    return await page.evaluate((names) => {
+      const classButtons = Array.from(document.querySelectorAll('#class-list button'))
+        .map((button) => ({
+          text: (button.textContent || '').trim(),
+          selected: button.style.background.includes('0, 153, 255') ||
+            button.style.background === '#09f' ||
+            button.classList.contains('selected'),
+        }));
+      const labelFolders = Array.from(document.querySelectorAll('#label-explorer-list li > div'))
+        .map((node) => (node.textContent || '').replace(/[▸▾]/g, '').trim());
+      return {
+        classMode: window.viewer?.classMode || null,
+        selectedClasses: [...(window.viewer?.classSelection?.selected || [])],
+        labelSelectedClasses: [...(window.viewer?.labelSelection?.selectedClasses || [])],
+        present: names.filter((name) => classButtons.some((button) => button.text === name)),
+        absent: names.filter((name) => !classButtons.some((button) => button.text === name)),
+        labelPresent: names.filter((name) => labelFolders.includes(name)),
+        classButtons: classButtons
+          .filter((button) => names.includes(button.text))
+          .map((button) => button.text),
+      };
+    }, classNames);
+  }
+
+  async function clickClassButton(className, modifiers = []) {
+    const locator = page
+      .locator('#class-list button')
+      .filter({ hasText: new RegExp(`^${escapeRegExp(className)}$`) })
+      .first();
+    await locator.click({ modifiers, timeout: 10000 });
+  }
+
+  async function deleteClassesViaUiSelection(mode, classNames) {
+    await setClassModeUi(mode);
+    await page.evaluate(() => {
+      const v = window.viewer;
+      if (v?.classSelection) {
+        v.classSelection.selected = [];
+        v.classSelection.lastClicked = null;
+        v.selectedClass = null;
+        v.updateClassListSelection?.();
+      }
+    });
+    for (const className of classNames) {
+      await clickClassButton(className, ['Control']);
+      await sleep(250);
+    }
+    const selectedBeforeDelete = await page.evaluate(() => [...(window.viewer?.classSelection?.selected || [])]);
+    await page.waitForFunction(
+      () => document.getElementById('delete-class-btn')?.disabled === false,
+      null,
+      { timeout: 10000 }
+    );
+    await withAutoDialogs(async () => {
+      await page.locator('#delete-class-btn').click({ timeout: 10000 });
+    });
+    await page.waitForFunction(
+      ({ names }) => {
+        const classButtons = Array.from(document.querySelectorAll('#class-list button'))
+          .map((button) => (button.textContent || '').trim());
+        const labelFolders = Array.from(document.querySelectorAll('#label-explorer-list li > div'))
+          .map((node) => (node.textContent || '').replace(/[▸▾]/g, '').trim());
+        return names.every((name) => !classButtons.includes(name) && !labelFolders.includes(name));
+      },
+      { names: classNames },
+      { timeout: 20000 }
+    );
+    return {
+      selectedBeforeDelete,
+      after: await getClassificationUiState(classNames),
+    };
+  }
+
+  async function getUnknownSampleImages(count) {
+    return await page.evaluate(async ({ requiredCount }) => {
+      const jsonRequest = async (url) => {
+        const response = await fetch(url, { cache: 'no-store', credentials: 'same-origin' });
+        const body = await response.json();
+        if (!response.ok || body.success === false) {
+          throw new Error(`${url} status=${response.status} body=${JSON.stringify(body).slice(0, 500)}`);
+        }
+        return body;
+      };
+      const recursive = await jsonRequest('/api/files/recursive?path=unknown&limit=5000');
+      const blockedParts = new Set(['classification', 'classification_chips', 'chips', 'thumbnails', 'composite_map', 'my-lot']);
+      const files = (recursive.files || [])
+        .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+        .filter((imagePath) => imagePath.startsWith('unknown/') && /\.(png|jpe?g|bmp|webp|tif|tiff)$/i.test(imagePath))
+        .filter((imagePath) => !imagePath.split('/').some((part) => blockedParts.has(part)))
+        .filter((value, index, arr) => arr.indexOf(value) === index);
+      if (files.length < requiredCount) {
+        throw new Error(`not enough unknown sample images: ${JSON.stringify({ requiredCount, count: files.length })}`);
+      }
+      return files.slice(0, requiredCount);
+    }, { requiredCount: count });
+  }
+
+  async function seedWaferLabelClasses(classToImages) {
+    await page.evaluate(async ({ classMap }) => {
+      const jsonRequest = async (url, options = {}) => {
+        const headers = { ...(options.headers || {}) };
+        if (options.body && !headers['Content-Type']) {
+          headers['Content-Type'] = 'application/json';
+        }
+        const response = await fetch(url, {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          ...options,
+          headers,
+        });
+        const text = await response.text();
+        let body = {};
+        try {
+          body = text ? JSON.parse(text) : {};
+        } catch (_) {
+          body = { raw: text };
+        }
+        if (!response.ok || body.success === false) {
+          throw new Error(`${url} status=${response.status} body=${JSON.stringify(body).slice(0, 500)}`);
+        }
+        return body;
+      };
+      for (const [className, images] of Object.entries(classMap)) {
+        const createResponse = await fetch('/api/classes?mode=wafer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: className }),
+          cache: 'no-store',
+          credentials: 'same-origin',
+        });
+        if (!createResponse.ok && createResponse.status !== 409) {
+          throw new Error(`/api/classes create ${className} status=${createResponse.status}`);
+        }
+        if (images.length > 0) {
+          await jsonRequest('/api/classify/batch?mode=wafer', {
+            method: 'POST',
+            body: JSON.stringify({ class_name: className, images, mode: 'wafer' }),
+          });
+        }
+      }
+      const v = window.viewer;
+      if (v) {
+        v.classMode = 'wafer';
+        v.cachedClassList = null;
+        v.classListPromise = null;
+        v.classToImgListCache = {};
+        await v.refreshClassList?.(true);
+        await v.refreshLabelExplorer?.(Object.keys(classMap));
+      }
+    }, { classMap: classToImages });
+    await sleep(1000);
+  }
+
+  async function getClassFiles(mode, className) {
+    return await page.evaluate(async ({ expectedMode, targetClass }) => {
+      const labelPath = `${expectedMode === 'chip' ? 'classification_chips' : 'classification'}/${targetClass}`;
+      const response = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+      });
+      const body = await response.json().catch(async () => ({ raw: await response.text().catch(() => '') }));
+      if (!response.ok || body.success === false) {
+        return { ok: false, status: response.status, files: [], body };
+      }
+      const files = (body.items || [])
+        .filter((item) => item.type === 'file')
+        .map((item) => item.name);
+      return { ok: true, status: response.status, files, count: files.length };
+    }, { expectedMode: mode, targetClass: className });
+  }
+
+  async function waitForClassFileCount(mode, className, expectedCount, comparator = 'eq') {
+    await page.waitForFunction(
+      async ({ expectedMode, targetClass, count, op }) => {
+        const labelPath = `${expectedMode === 'chip' ? 'classification_chips' : 'classification'}/${targetClass}`;
+        const response = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`, { cache: 'no-store' });
+        if (!response.ok) return false;
+        const body = await response.json();
+        const fileCount = (body.items || []).filter((item) => item.type === 'file').length;
+        if (op === 'gte') return fileCount >= count;
+        return fileCount === count;
+      },
+      { expectedMode: mode, targetClass: className, count: expectedCount, op: comparator },
+      { timeout: 30000 }
+    );
+    return await getClassFiles(mode, className);
+  }
+
+  async function getLabelFolderLocator(className) {
+    return page
+      .locator('#label-explorer-list li > div')
+      .filter({ hasText: new RegExp(`^[\\s▸▾]*${escapeRegExp(className)}\\s*$`) })
+      .first();
+  }
+
+  async function clickLabelFolder(className, modifiers = []) {
+    const locator = await getLabelFolderLocator(className);
+    await locator.click({ modifiers, timeout: 10000 });
+  }
+
+  async function ensureLabelFolderOpen(className, minFiles = 0) {
+    const isOpen = await page.evaluate((targetClass) =>
+      !!window.viewer?.labelSelection?.openFolders?.[targetClass],
+    className);
+    if (!isOpen) {
+      await clickLabelFolder(className);
+    }
+    await page.waitForFunction(
+      ({ targetClass, minimum }) => {
+        const v = window.viewer;
+        if (!v?.labelSelection?.openFolders?.[targetClass]) return false;
+        const cached = v.classToImgListCache?.[targetClass] || [];
+        const fileCount = cached.filter((item) => item.type === 'file').length;
+        if (fileCount < minimum) return false;
+        const folderDiv = Array.from(document.querySelectorAll('#label-explorer-list li > div'))
+          .find((node) => (node.textContent || '').replace(/[▸▾]/g, '').trim() === targetClass);
+        const classLi = folderDiv?.closest('li');
+        const buttons = classLi ? classLi.querySelectorAll('button.label-img-name').length : 0;
+        return buttons >= minimum;
+      },
+      { targetClass: className, minimum: minFiles },
+      { timeout: 30000 }
+    );
+  }
+
+  async function getOpenLabelFolderState(className) {
+    return await page.evaluate((targetClass) => {
+      const folderDiv = Array.from(document.querySelectorAll('#label-explorer-list li > div'))
+        .find((node) => (node.textContent || '').replace(/[▸▾]/g, '').trim() === targetClass);
+      const classLi = folderDiv?.closest('li');
+      const buttons = classLi ? Array.from(classLi.querySelectorAll('button.label-img-name')) : [];
+      const files = buttons.map((button) => (button.textContent || '').trim()).filter(Boolean);
+      return {
+        exists: !!folderDiv,
+        open: !!window.viewer?.labelSelection?.openFolders?.[targetClass],
+        selectedClass: !!window.viewer?.labelSelection?.selectedClasses?.includes(targetClass),
+        arrow: folderDiv?.querySelector('span')?.textContent || '',
+        count: files.length,
+        files,
+      };
+    }, className);
+  }
+
+  async function waitForOpenLabelFolderCount(className, expectedCount, comparator = 'eq') {
+    try {
+      await page.waitForFunction(
+        ({ targetClass, count, op }) => {
+          const folderDiv = Array.from(document.querySelectorAll('#label-explorer-list li > div'))
+            .find((node) => (node.textContent || '').replace(/[▸▾]/g, '').trim() === targetClass);
+          const classLi = folderDiv?.closest('li');
+          const fileCount = classLi ? classLi.querySelectorAll('button.label-img-name').length : -1;
+          const isOpen = !!window.viewer?.labelSelection?.openFolders?.[targetClass];
+          if (!folderDiv || !isOpen) return false;
+          if (op === 'gte') return fileCount >= count;
+          return fileCount === count;
+        },
+        { targetClass: className, count: expectedCount, op: comparator },
+        { timeout: 30000 }
+      );
+    } catch (error) {
+      const state = await getOpenLabelFolderState(className);
+      throw new Error(`open label folder count timeout class=${className} expected=${comparator}:${expectedCount} state=${JSON.stringify(state)} cause=${String(error?.message || error)}`);
+    }
+    return await getOpenLabelFolderState(className);
+  }
+
+  async function getLabelImageButtonBox(className, index = 0, deleteButton = false) {
+    return await page.evaluate(({ targetClass, targetIndex, del }) => {
+      const folderDiv = Array.from(document.querySelectorAll('#label-explorer-list li > div'))
+        .find((node) => (node.textContent || '').replace(/[▸▾]/g, '').trim() === targetClass);
+      const classLi = folderDiv?.closest('li');
+      const selector = del ? 'button.label-img-del-btn' : 'button.label-img-name';
+      const button = classLi ? Array.from(classLi.querySelectorAll(selector))[targetIndex] : null;
+      if (!button) return null;
+      const rect = button.getBoundingClientRect();
+      return {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+        text: button.textContent || '',
+      };
+    }, { targetClass: className, targetIndex: index, del: deleteButton });
+  }
+
+  async function clickLabelImageButton(className, index = 0, modifiers = []) {
+    const box = await getLabelImageButtonBox(className, index, false);
+    expect(!!box, `label image button missing: ${className}[${index}]`);
+    try {
+      for (const modifier of modifiers) {
+        await page.keyboard.down(modifier);
+      }
+      await page.mouse.click(box.x, box.y);
+    } finally {
+      for (const modifier of [...modifiers].reverse()) {
+        await page.keyboard.up(modifier);
+      }
+    }
+    await sleep(700);
+    return box;
+  }
+
+  async function clickLabelDeleteButton(className, index = 0) {
+    const box = await getLabelImageButtonBox(className, index, true);
+    expect(!!box, `label delete button missing: ${className}[${index}]`);
+    await page.mouse.click(box.x, box.y);
+    await sleep(1200);
+    return box;
+  }
+
+  async function selectLabelFoldersViaUi(mode, classNames) {
+    await setClassModeUi(mode);
+    await refreshClassificationUi(mode, classNames);
+    await page.evaluate(() => {
+      const v = window.viewer;
+      v.labelSelection = v.labelSelection || { selected: [], selectedClasses: [], openFolders: {} };
+      v.labelSelection.selected = [];
+      v.labelSelection.selectedClasses = [];
+      v.labelSelection.lastClicked = null;
+      v.labelSelection.lastClickedClass = null;
+      v.updateLabelExplorerSelection?.();
+    });
+    for (const className of classNames) {
+      await clickLabelFolder(className, ['Control']);
+      await sleep(900);
+    }
+    await page.waitForFunction(
+      ({ names }) => {
+        const v = window.viewer;
+        const selectedClasses = v?.labelSelection?.selectedClasses || [];
+        const grid = document.getElementById('image-grid');
+        const wrapper = grid?.closest('.grid-scroll-wrapper') || grid?.parentElement;
+        return names.every((name) => selectedClasses.includes(name)) &&
+          v?.gridMode === true &&
+          v?.pageManager?.getActivePage?.()?.role === 'label' &&
+          (v.currentGridImages?.length || 0) >= names.length &&
+          !!grid &&
+          !!wrapper &&
+          grid.hasAttribute('data-label-explorer-grid') &&
+          getComputedStyle(grid).display !== 'none' &&
+          getComputedStyle(wrapper).display !== 'none' &&
+          document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0;
+      },
+      { names: classNames },
+      { timeout: 30000 }
+    );
+    await sleep(900);
+    const visible = await waitForVisibleGridThumbsLoaded(15000, 500);
+    return {
+      selected: await getLabelExplorerState(),
+      visible,
+    };
+  }
+
+  async function addLabelToCurrentSelectionViaModal(mode, className) {
+    await setClassModeUi(mode);
+    const result = await withAutoDialogs(async () => {
+      await page.locator('#label-explorer-batch-label-btn').click({ timeout: 10000 });
+      await page.waitForFunction(() => {
+        const modal = document.getElementById('add-label-modal');
+        return modal && getComputedStyle(modal).display !== 'none';
+      }, null, { timeout: 15000 });
+      await page.waitForFunction(
+        (targetClass) => Array.from(document.querySelectorAll('#modal-class-select option'))
+          .some((option) => option.value === targetClass),
+        className,
+        { timeout: 15000 }
+      );
+      await page.locator('#modal-class-select').selectOption(className);
+      await page.locator('#modal-add-label').click({ timeout: 10000 });
+      await page.waitForFunction(() => {
+        const modal = document.getElementById('add-label-modal');
+        return !modal || getComputedStyle(modal).display === 'none';
+      }, null, { timeout: 30000 });
+    });
+    return result;
+  }
+
   await boot('chunk3');
 
   await record('41,42,45,47,48,56', 'Composite / Measure 안정성 / toast / color modal / grid restore', async () => {
@@ -1874,6 +2397,229 @@ const { createRunner } = require('./e2e_playwright_session');
       label: { selectedIdxs: labelGridAfter.gridSelectedIdxs, labelClass },
       mylot: { selectedIdxs: mylotGridAfter.gridSelectedIdxs },
     };
+  });
+
+  await record('label-wafer-crud', 'Wafer label Class Manager CRUD / Label Explorer 다중선택 삭제+상세보기', async () => {
+    await boot('chunk3-wafer-label-crud');
+    const classes = {
+      classSingle: 'e2e_wf_class_single',
+      classMultiA: 'e2e_wf_class_multi_a',
+      classMultiB: 'e2e_wf_class_multi_b',
+      labelAdd: 'e2e_wf_label_add',
+      labelSingleDelete: 'e2e_wf_label_single_delete',
+      labelMultiDelete: 'e2e_wf_label_multi_delete',
+      folderA: 'e2e_wf_label_folder_a',
+      folderB: 'e2e_wf_label_folder_b',
+    };
+
+    await cleanupClassFixtures('wafer', E2E_WAFER_LABEL_CRUD_CLASSES);
+    try {
+      await refreshClassificationUi('wafer');
+
+      const classSingleAdd = await addClassesViaUi('wafer', [classes.classSingle]);
+      expect(classSingleAdd.present.includes(classes.classSingle), `wafer single class add failed=${JSON.stringify(classSingleAdd)}`);
+      const classSingleDelete = await deleteClassesViaUiSelection('wafer', [classes.classSingle]);
+      expect(
+        classSingleDelete.after.absent.includes(classes.classSingle),
+        `wafer single class delete failed=${JSON.stringify(classSingleDelete)}`
+      );
+
+      const classMultiAdd = await addClassesViaUi('wafer', [classes.classMultiA, classes.classMultiB]);
+      expect(
+        [classes.classMultiA, classes.classMultiB].every((name) => classMultiAdd.present.includes(name)),
+        `wafer multi class add failed=${JSON.stringify(classMultiAdd)}`
+      );
+      const classMultiDelete = await deleteClassesViaUiSelection('wafer', [classes.classMultiA, classes.classMultiB]);
+      expect(
+        [classes.classMultiA, classes.classMultiB].every((name) => classMultiDelete.after.absent.includes(name)),
+        `wafer multi class delete failed=${JSON.stringify(classMultiDelete)}`
+      );
+
+      const sampleImages = await getUnknownSampleImages(10);
+      const classMap = {
+        [classes.labelAdd]: [],
+        [classes.labelSingleDelete]: [sampleImages[0]],
+        [classes.labelMultiDelete]: [sampleImages[1], sampleImages[2]],
+        [classes.folderA]: [sampleImages[3], sampleImages[4]],
+        [classes.folderB]: [sampleImages[5], sampleImages[6]],
+      };
+      await seedWaferLabelClasses(classMap);
+
+      await loadFolder('unknown');
+      await setSelection([7, 8], { label: 'wafer-label-add-ui', expectedCount: 2 });
+      const addLabelDialogs = await addLabelToCurrentSelectionViaModal('wafer', classes.labelAdd);
+      const labelAddFiles = await waitForClassFileCount('wafer', classes.labelAdd, 2, 'gte');
+      expect(labelAddFiles.count >= 2, `wafer label add failed=${JSON.stringify(labelAddFiles)}`);
+
+      await ensureLabelFolderOpen(classes.folderA, 2);
+      const folderAOpenBeforeAdd = await waitForOpenLabelFolderCount(classes.folderA, 2);
+      await setSelection([7, 8], { label: 'wafer-label-open-folder-add-ui', expectedCount: 2 });
+      const openFolderAddDialogs = await addLabelToCurrentSelectionViaModal('wafer', classes.folderA);
+      const folderAOpenAfterAdd = await waitForOpenLabelFolderCount(classes.folderA, 4, 'gte');
+      expect(
+        folderAOpenBeforeAdd.open &&
+          folderAOpenAfterAdd.open &&
+          folderAOpenAfterAdd.count >= folderAOpenBeforeAdd.count + 2,
+        `wafer open label folder add did not preserve/update list=${JSON.stringify({
+          folderAOpenBeforeAdd,
+          openFolderAddDialogs,
+          folderAOpenAfterAdd,
+        })}`
+      );
+
+      const singleFolderGrid = await selectLabelFoldersViaUi('wafer', [classes.folderA]);
+      expect(
+        singleFolderGrid.selected.selectedClasses.includes(classes.folderA) &&
+          singleFolderGrid.selected.currentGridImages >= 2 &&
+          singleFolderGrid.visible.badCount === 0,
+        `wafer single label folder grid failed=${JSON.stringify(singleFolderGrid)}`
+      );
+
+      const multiFolderGrid = await selectLabelFoldersViaUi('wafer', [classes.folderA, classes.folderB]);
+      expect(
+        [classes.folderA, classes.folderB].every((name) => multiFolderGrid.selected.selectedClasses.includes(name)) &&
+          multiFolderGrid.selected.currentGridImages >= 4 &&
+          multiFolderGrid.visible.badCount === 0,
+        `wafer multi label folder grid failed=${JSON.stringify(multiFolderGrid)}`
+      );
+
+      await page.locator('#image-grid .grid-thumb-wrap').first().dblclick();
+      await page.waitForFunction(
+        ({ expectedClasses }) => {
+          const v = window.viewer;
+          const canvas = document.getElementById('image-canvas');
+          const path = String(v?.selectedImagePath || '').replace(/\\/g, '/');
+          return v?.pageManager?.getActivePage?.()?.role === 'label' &&
+            v.gridMode === false &&
+            (v.viewMode === 'gridImage' || v.viewMode === 'single') &&
+            expectedClasses.some((className) => path.includes(`classification/${className}/`)) &&
+            !!canvas &&
+            getComputedStyle(canvas).display !== 'none';
+        },
+        { expectedClasses: [classes.folderA, classes.folderB] },
+        { timeout: 30000 }
+      );
+      await sleep(1000);
+      const multiFolderDetail = await page.evaluate(() => ({
+        role: window.viewer.pageManager?.getActivePage?.()?.role || null,
+        gridMode: window.viewer.gridMode,
+        viewMode: window.viewer.viewMode,
+        selectedImagePath: window.viewer.selectedImagePath || '',
+        canvasVisible: getComputedStyle(document.getElementById('image-canvas')).display !== 'none',
+      }));
+      expect(multiFolderDetail.canvasVisible, `wafer label detail canvas hidden=${JSON.stringify(multiFolderDetail)}`);
+
+      await page.evaluate(() => window.viewer.exitSingleImageViewMode?.());
+      await sleep(1000);
+      await refreshClassificationUi('wafer', Object.keys(classMap));
+
+      await ensureLabelFolderOpen(classes.labelSingleDelete, 1);
+      const singleDeleteOpenBefore = await waitForOpenLabelFolderCount(classes.labelSingleDelete, 1);
+      const singleDeleteButton = await clickLabelDeleteButton(classes.labelSingleDelete, 0);
+      const singleDeleteOpenAfter = await waitForOpenLabelFolderCount(classes.labelSingleDelete, 0);
+      const singleDeleteFiles = await waitForClassFileCount('wafer', classes.labelSingleDelete, 0);
+      expect(
+        singleDeleteOpenBefore.open &&
+          singleDeleteOpenAfter.open &&
+          singleDeleteOpenAfter.count === 0 &&
+          singleDeleteFiles.count === 0,
+        `wafer single open folder label delete failed=${JSON.stringify({
+          singleDeleteOpenBefore,
+          singleDeleteButton,
+          singleDeleteOpenAfter,
+          singleDeleteFiles,
+        })}`
+      );
+
+      await ensureLabelFolderOpen(classes.labelMultiDelete, 2);
+      const firstMultiLabel = await clickLabelImageButton(classes.labelMultiDelete, 0);
+      const secondMultiLabel = await clickLabelImageButton(classes.labelMultiDelete, 1, ['Control']);
+      const multiLabelSelectedBeforeDelete = await getLabelExplorerState();
+      expect(
+        multiLabelSelectedBeforeDelete.selected.length >= 2,
+        `wafer label multi-select failed=${JSON.stringify({ firstMultiLabel, secondMultiLabel, multiLabelSelectedBeforeDelete })}`
+      );
+      const multiDeleteDialogs = await withAutoDialogs(async () => {
+        await page.locator('#label-explorer-batch-delete-btn').click({ timeout: 10000 });
+      });
+      const multiDeleteOpenAfter = await waitForOpenLabelFolderCount(classes.labelMultiDelete, 0);
+      const multiDeleteFiles = await waitForClassFileCount('wafer', classes.labelMultiDelete, 0);
+      expect(
+        multiDeleteOpenAfter.open &&
+          multiDeleteOpenAfter.count === 0 &&
+          multiDeleteFiles.count === 0,
+        `wafer multi open folder label delete failed=${JSON.stringify({ multiDeleteDialogs, multiDeleteOpenAfter, multiDeleteFiles })}`
+      );
+
+      await ensureLabelFolderOpen(classes.folderA, 2);
+      await ensureLabelFolderOpen(classes.folderB, 2);
+      const folderAOpenBeforeFolderDelete = await waitForOpenLabelFolderCount(classes.folderA, 2, 'gte');
+      const folderBOpenBeforeFolderDelete = await waitForOpenLabelFolderCount(classes.folderB, 2);
+      const folderDeleteSelection = await selectLabelFoldersViaUi('wafer', [classes.folderA, classes.folderB]);
+      const folderAOpenSelectedBeforeDelete = await waitForOpenLabelFolderCount(classes.folderA, 2, 'gte');
+      const folderBOpenSelectedBeforeDelete = await waitForOpenLabelFolderCount(classes.folderB, 2);
+      const folderDeleteDialogs = await withAutoDialogs(async () => {
+        await page.locator('#label-explorer-batch-delete-btn').click({ timeout: 10000 });
+      });
+      const folderAFilesAfterDelete = await waitForClassFileCount('wafer', classes.folderA, 0);
+      const folderBFilesAfterDelete = await waitForClassFileCount('wafer', classes.folderB, 0);
+      const folderAOpenAfterFolderDelete = await waitForOpenLabelFolderCount(classes.folderA, 0);
+      const folderBOpenAfterFolderDelete = await waitForOpenLabelFolderCount(classes.folderB, 0);
+      const folderClassesAfterLabelDelete = await getClassificationUiState([classes.folderA, classes.folderB, classes.labelAdd]);
+      expect(
+        folderAFilesAfterDelete.count === 0 &&
+          folderBFilesAfterDelete.count === 0 &&
+          folderAOpenAfterFolderDelete.open &&
+          folderBOpenAfterFolderDelete.open &&
+          folderAOpenAfterFolderDelete.count === 0 &&
+          folderBOpenAfterFolderDelete.count === 0 &&
+          [classes.folderA, classes.folderB, classes.labelAdd].every((name) => folderClassesAfterLabelDelete.present.includes(name)),
+        `wafer folder label delete failed=${JSON.stringify({
+          folderAFilesAfterDelete,
+          folderBFilesAfterDelete,
+          folderAOpenBeforeFolderDelete,
+          folderBOpenBeforeFolderDelete,
+          folderAOpenSelectedBeforeDelete,
+          folderBOpenSelectedBeforeDelete,
+          folderAOpenAfterFolderDelete,
+          folderBOpenAfterFolderDelete,
+          folderClassesAfterLabelDelete,
+        })}`
+      );
+
+      return {
+        classSingleAdd,
+        classSingleDelete,
+        classMultiAdd,
+        classMultiDelete,
+        labelAddFiles,
+        addLabelDialogs: addLabelDialogs.dialogs,
+        folderAOpenBeforeAdd,
+        openFolderAddDialogs: openFolderAddDialogs.dialogs,
+        folderAOpenAfterAdd,
+        singleFolderGrid,
+        multiFolderGrid,
+        multiFolderDetail,
+        singleDeleteOpenBefore,
+        singleDeleteButton,
+        singleDeleteOpenAfter,
+        singleDeleteFiles,
+        multiLabelSelectedBeforeDelete,
+        multiDeleteDialogs: multiDeleteDialogs.dialogs,
+        multiDeleteFiles,
+        folderDeleteSelection,
+        folderDeleteDialogs: folderDeleteDialogs.dialogs,
+        folderAFilesAfterDelete,
+        folderBFilesAfterDelete,
+        folderAOpenAfterFolderDelete,
+        folderBOpenAfterFolderDelete,
+        folderClassesAfterLabelDelete,
+      };
+    } finally {
+      await cleanupClassFixtures('wafer', E2E_WAFER_LABEL_CRUD_CLASSES).catch((error) => {
+        append(`[WARN] wafer label CRUD cleanup failed :: ${String(error?.message || error)}\n`);
+      });
+    }
   });
 
   await record('43,44,49,50,57,60', 'Label Explorer / WF search / classification consistency', async () => {

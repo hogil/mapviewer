@@ -166,6 +166,20 @@ E2E 실행이 끝나면 최종 답변에 반드시 "무엇을 어떻게 실행�
 - Composite 생성 시작 시 닫힌 `#context-mc-submenu`에 `_resetContextSubmenuPanel(..., '이미지를 선택하세요')`를 호출하면 안 된다. 선택 상태만 clear하고 hidden submenu 내용을 다시 렌더하지 않는다.
 - E2E는 app 예외처리가 아니라 회귀 검출로 `MutationObserver`를 사용할 수 있다. `scripts/e2e_chunk1.js`의 context-menu 버튼 경로는 `orphanContextChooserEvents.length === 0`, `scripts/e2e_chunk3.js`의 직접 10장 composite 경로는 `directCompositeOrphanContextChooserEvents.length === 0`이어야 한다.
 
+## 절대규칙: Wafer Map Explorer 스크롤바/폴더 선택 회귀 금지
+
+- 폴더 선택으로 만든 grid 또는 gridImage single 상태에서 Wafer Map Explorer의 스크롤바를 드래그해도 Explorer rectangle selection이 시작되면 안 된다.
+- 스크롤바 드래그 뒤 `selectedFolders`, folder DOM highlight, `currentGridImages.length`, visible grid/canvas, `selectedImagePath`가 바뀌면 FAIL이다.
+- 폴더-origin `gridImage` single view에서는 현재 파일 링크 하이라이트가 폴더 선택을 대체하면 안 된다. 파일 하이라이트가 생기거나 폴더 하이라이트가 사라지면 FAIL이다.
+- E2E guard는 `scripts/e2e_chunk2.js`의 `22,23,28,29` record에 포함한다.
+
+## 절대규칙: Label Explorer CRUD와 열린 폴더 리스트 보존
+
+- wafer와 chip 모두 Class Manager의 class add, multi-add, delete, multi-select delete를 실제 UI 버튼과 `/api/classes` 최신 목록으로 검증한다.
+- Label Explorer는 label add, label 단일 delete, label 다중선택 delete, class folder 선택 delete, folder 다중선택 image grid, 여러 folder image grid, grid에서 1개 detail view까지 포함한다.
+- 특정 class folder 파일 리스트가 열린 상태에서 label add/delete를 하면 폴더는 계속 열려 있어야 하며 `button.label-img-name` sample 행만 증가/감소해야 한다. 상태 플래그만 보지 말고 실제 DOM count와 API file count를 같이 확인한다.
+- E2E guard는 chip은 `scripts/e2e_chunk1.js`의 `chip-label-crud-ui`, wafer는 `scripts/e2e_chunk3.js`의 `label-wafer-crud` record다. 열린 폴더 add는 `2 -> 4`, 단일/다중/folder delete는 `1/2 -> 0`과 `open === true`를 요구한다.
+
 ## 절대규칙: Positions 파일 전체 스캔 금지
 
 - **POSITIONS_ROOT에서 `rglob`, `iterdir`, `os.walk` 등으로 전체 디렉토리를 재귀/순회 검색하는 행위는 절대 금지한다.**

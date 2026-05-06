@@ -13583,10 +13583,34 @@ class WaferMapViewer {
             };
         };
 
+        const isScrollbarEvent = (event) => {
+            const rect = container.getBoundingClientRect();
+            const scrollbarWidth = container.offsetWidth - container.clientWidth;
+            const scrollbarHeight = container.offsetHeight - container.clientHeight;
+            const verticalHitWidth = Math.max(scrollbarWidth, 16);
+            const horizontalHitHeight = Math.max(scrollbarHeight, 16);
+            const hasVerticalScrollbar =
+                container.scrollHeight > container.clientHeight + 1;
+            const hasHorizontalScrollbar =
+                container.scrollWidth > container.clientWidth + 1;
+
+            return (
+                (hasVerticalScrollbar && event.clientX >= rect.right - verticalHitWidth) ||
+                (hasHorizontalScrollbar && event.clientY >= rect.bottom - horizontalHitHeight)
+            );
+        };
+
         let dragging = false;
         let start = null;
         const onMouseDown = (e) => {
             if (e.button !== 0) return;
+
+            if (isScrollbarEvent(e)) {
+                dragging = false;
+                start = null;
+                overlay.style.display = 'none';
+                return;
+            }
 
             // draggable 파일 링크 위에서는 박스 선택을 시작하지 않음
             const target = e.target;
@@ -14750,6 +14774,21 @@ class WaferMapViewer {
         // (Label Explorer 그리드의 이미지 경로는 원본 경로로 해석되므로
         //  isClassificationPath만으로는 부족 — 컨텍스트 플래그로 판단)
         if (this.isLabelExplorerIsolationActive(imagePath)) return;
+
+        // 폴더 선택으로 만든 그리드에서 단일 이미지 탭에 들어간 경우에는
+        // Explorer의 선택 기준을 현재 파일이 아니라 원래 폴더로 유지한다.
+        if (
+            this.selectedFolders &&
+            this.selectedFolders.size > 0 &&
+            (this.viewMode === 'gridImage' || this.singleImageFromGrid)
+        ) {
+            this.dom.fileExplorer.querySelectorAll('a.selected').forEach(link => {
+                link.classList.remove('selected');
+                link.style.removeProperty('background');
+            });
+            this.restoreFolderSelection();
+            return;
+        }
 
         this.ensureExplorerPathVisible(imagePath)
             .then(() => this.applyWaferMapExplorerHighlight(imagePath))
@@ -16501,11 +16540,9 @@ class WaferMapViewer {
             this.cachedClassList = null;
             this.classListPromise = null;
 
-            // 🔥 Label Explorer가 내부에서 getClassList()를 호출하므로 refreshClassList() 불필요
-            await this.refreshLabelExplorer();
-            
-            // 🔥 추가: Fail List와 Label Explorer 즉시 업데이트
-            this.updateLabelExplorerContent();
+            // Class Manager 버튼 목록과 Label Explorer를 같은 최신 클래스 목록으로 즉시 동기화
+            await this.refreshClassList(true);
+            await this.refreshLabelExplorer(successfulClasses);
 
             // 성능 측정 완료
             const endTime = performance.now();
@@ -16760,12 +16797,14 @@ class WaferMapViewer {
         this.classSelection.selected = [];
         this.classSelection.lastClicked = null;
 
-        // 삭제된 클래스만 캐시 무효화
-        for (const n of names) delete this.classToImgListCache?.[n];
-        await this.refreshLabelExplorer(names);
+        // 삭제 후 클래스 목록과 라벨 폴더가 stale cache를 재사용하지 않도록 갱신한다.
+        this.cachedClassList = null;
+        this.classListPromise = null;
 
-        // 🔥 추가: Fail List와 Label Explorer 즉시 업데이트
-        this.updateLabelExplorerContent();
+        // 삭제된 클래스만 이미지 캐시 무효화
+        for (const n of names) delete this.classToImgListCache?.[n];
+        await this.refreshClassList(true);
+        await this.refreshLabelExplorer(names);
 
         // 🔥 삭제된 class의 이미지가 그리드/단일뷰에 남아있으면 초기화
         if (this.gridMode || this.selectedImagePath) {
@@ -17740,12 +17779,16 @@ class WaferMapViewer {
 
             if (labelSelection.selectedClasses.length) {
                 for (const cls of labelSelection.selectedClasses) {
-                    // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
-                    const labelPath = this.buildClassificationPath(cls);
-                    const imgRes = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`);
-                    const imgData = await imgRes.json();
-                    const imgList = Array.isArray(imgData.items) ? imgData.items : [];
-                    const files = imgList.filter(f => f.type === 'file');
+                    let files = (this.classToImgListCache?.[cls] || []).filter(f => f.type === 'file');
+
+                    if (files.length === 0) {
+                        // 🔥 현재 제품 폴더를 고려한 라벨 경로 생성
+                        const labelPath = this.buildClassificationPath(cls);
+                        const imgRes = await fetch(`/api/files?path=${encodeURIComponent(labelPath)}`);
+                        const imgData = await imgRes.json();
+                        const imgList = Array.isArray(imgData.items) ? imgData.items : [];
+                        files = imgList.filter(f => f.type === 'file');
+                    }
 
                     if (files.length > 0) {
                         classToDel[cls] = files.map(f => f.name);

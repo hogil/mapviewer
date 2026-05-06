@@ -199,6 +199,143 @@ const { createRunner } = require('./e2e_playwright_session');
     }, selector);
   }
 
+  async function selectWaferExplorerFolder(folder) {
+    const folderSelector = `#file-explorer summary.folder[data-path="${folder.replace(/"/g, '\\"')}"]`;
+    await page.waitForSelector(folderSelector, { timeout: 30000 });
+    await page.locator(folderSelector).click({ modifiers: ['Control'] });
+    await page.waitForFunction(
+      (folderName) => {
+        const v = window.viewer;
+        const selectedSummary = Array.from(document.querySelectorAll('#file-explorer summary.folder.selected'))
+          .some((summary) => summary.dataset.path === folderName);
+        return (
+          v?.selectedFolders?.has(folderName) &&
+          selectedSummary &&
+          v.gridMode === true &&
+          (v.currentGridImages?.length || 0) > 0 &&
+          document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0
+        );
+      },
+      folder,
+      { timeout: 60000 }
+    );
+    await sleep(900);
+  }
+
+  async function openExplorerForCurrentGridImage() {
+    return await page.evaluate(async () => {
+      const v = window.viewer;
+      const explorer = document.getElementById('file-explorer');
+      const firstPath = (Array.isArray(v.currentGridImages) ? v.currentGridImages : [])
+        .find((imagePath) => String(imagePath || '').replace(/\\/g, '/').startsWith('unknown/'));
+      if (!explorer || !firstPath) {
+        return { firstPath: firstPath || null, folderPath: null, linkFound: false };
+      }
+
+      const normalized = String(firstPath).replace(/\\/g, '/');
+      const segments = normalized.split('/').slice(0, -1);
+      let currentPath = '';
+      for (const segment of segments) {
+        currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+        const summary = Array.from(document.querySelectorAll('#file-explorer summary.folder'))
+          .find((node) => node.dataset.path === currentPath);
+        if (!summary) continue;
+        const details = summary.parentElement;
+        const content = summary.nextElementSibling;
+        if (content && details?.dataset.loaded !== 'true') {
+          await v.loadDirectoryContents(currentPath, content);
+          details.dataset.loaded = 'true';
+        }
+        if (details) details.open = true;
+      }
+
+      v.restoreFolderSelection?.();
+      const link = Array.from(document.querySelectorAll('#file-explorer a[data-path]'))
+        .find((node) => node.dataset.path === normalized);
+      return {
+        firstPath: normalized,
+        folderPath: segments.join('/'),
+        linkFound: !!link,
+        explorerScrollable: explorer.scrollHeight > explorer.clientHeight,
+      };
+    });
+  }
+
+  async function getExplorerSelectionState(label = '') {
+    return await page.evaluate((stateLabel) => {
+      const v = window.viewer;
+      const grid = document.getElementById('image-grid');
+      const gridWrapper = grid?.closest('.grid-scroll-wrapper') || grid?.parentElement || null;
+      const canvas = document.getElementById('image-canvas');
+      const canvasStyle = canvas ? getComputedStyle(canvas) : null;
+      const gridStyle = grid ? getComputedStyle(grid) : null;
+      const wrapperStyle = gridWrapper ? getComputedStyle(gridWrapper) : null;
+      return {
+        label: stateLabel,
+        gridMode: !!v?.gridMode,
+        viewMode: v?.viewMode || null,
+        selectedFolders: [...(v?.selectedFolders || [])],
+        selectedImagesLen: v?.selectedImages?.length || 0,
+        currentGridImagesLen: v?.currentGridImages?.length || 0,
+        selectedImagePath: v?.selectedImagePath || null,
+        folderSelectedPaths: Array.from(document.querySelectorAll('#file-explorer summary.folder.selected'))
+          .map((summary) => summary.dataset.path),
+        fileSelectedPaths: Array.from(document.querySelectorAll('#file-explorer a.selected'))
+          .map((link) => link.dataset.path),
+        explorerScrollTop: document.getElementById('file-explorer')?.scrollTop || 0,
+        gridDisplay: gridStyle?.display || null,
+        wrapperDisplay: wrapperStyle?.display || null,
+        gridWraps: grid?.querySelectorAll('.grid-thumb-wrap').length || 0,
+        canvasVisible:
+          !!canvas &&
+          canvasStyle?.display !== 'none' &&
+          canvas.getBoundingClientRect().width > 0 &&
+          canvas.getBoundingClientRect().height > 0,
+      };
+    }, label);
+  }
+
+  async function dragWaferExplorerScrollbar() {
+    return await page.evaluate(async () => {
+      const explorer = document.getElementById('file-explorer');
+      if (!explorer) return { ok: false, reason: 'missing explorer' };
+      const rect = explorer.getBoundingClientRect();
+      const startY = rect.top + Math.min(80, Math.max(10, rect.height * 0.25));
+      const endY = Math.min(rect.bottom - 4, startY + Math.min(260, rect.height * 0.5));
+      const clientX = rect.right - 2;
+      const beforeTop = explorer.scrollTop;
+      const maxTop = Math.max(0, explorer.scrollHeight - explorer.clientHeight);
+
+      const mouseEvent = (type, target, clientY, buttons) => {
+        target.dispatchEvent(new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          button: 0,
+          buttons,
+          clientX,
+          clientY,
+        }));
+      };
+
+      mouseEvent('mousedown', explorer, startY, 1);
+      explorer.scrollTop = Math.min(maxTop, beforeTop + Math.max(120, Math.round(explorer.clientHeight * 0.8)));
+      explorer.dispatchEvent(new Event('scroll', { bubbles: true }));
+      mouseEvent('mousemove', document, endY, 1);
+      mouseEvent('mouseup', document, endY, 0);
+      await new Promise((resolve) => setTimeout(resolve, 180));
+
+      return {
+        ok: true,
+        beforeTop,
+        afterTop: explorer.scrollTop,
+        maxTop,
+        scrollHeight: explorer.scrollHeight,
+        clientHeight: explorer.clientHeight,
+      };
+    });
+  }
+
   async function getVisibleGridThumbSummary() {
     return await page.evaluate(() => {
       const PLACEHOLDER =
@@ -622,6 +759,54 @@ const { createRunner } = require('./e2e_playwright_session');
       `explorer grid hidden=${JSON.stringify(explorerDirectRoundTrip.after)}`
     );
 
+    await boot('chunk2-explorer-scrollbar-selection');
+    await selectWaferExplorerFolder('unknown');
+    const explorerOpen = await openExplorerForCurrentGridImage();
+    expect(explorerOpen.linkFound, `explorer current file link missing=${JSON.stringify(explorerOpen)}`);
+
+    const folderGridBeforeScrollbar = await getExplorerSelectionState('folder-grid-before-scrollbar');
+    const folderGridScrollbarDrag = await dragWaferExplorerScrollbar();
+    await sleep(500);
+    const folderGridAfterScrollbar = await getExplorerSelectionState('folder-grid-after-scrollbar');
+    expect(
+      folderGridAfterScrollbar.gridMode === true &&
+        folderGridAfterScrollbar.currentGridImagesLen === folderGridBeforeScrollbar.currentGridImagesLen &&
+        folderGridAfterScrollbar.selectedImagesLen === folderGridBeforeScrollbar.selectedImagesLen,
+      `Explorer scrollbar changed grid selection=${JSON.stringify({ before: folderGridBeforeScrollbar, after: folderGridAfterScrollbar, drag: folderGridScrollbarDrag })}`
+    );
+    expect(
+      folderGridAfterScrollbar.selectedFolders.includes('unknown') &&
+        folderGridAfterScrollbar.folderSelectedPaths.includes('unknown'),
+      `Explorer scrollbar lost folder selection=${JSON.stringify({ before: folderGridBeforeScrollbar, after: folderGridAfterScrollbar, drag: folderGridScrollbarDrag })}`
+    );
+
+    await enterSingle(0);
+    await sleep(500);
+    const folderSingleBeforeScrollbar = await getExplorerSelectionState('folder-single-before-scrollbar');
+    expect(
+      folderSingleBeforeScrollbar.viewMode === 'gridImage' &&
+        folderSingleBeforeScrollbar.selectedFolders.includes('unknown') &&
+        folderSingleBeforeScrollbar.folderSelectedPaths.includes('unknown') &&
+        folderSingleBeforeScrollbar.fileSelectedPaths.length === 0,
+      `folder single explorer selection degraded=${JSON.stringify(folderSingleBeforeScrollbar)}`
+    );
+    const folderSingleScrollbarDrag = await dragWaferExplorerScrollbar();
+    await sleep(500);
+    const folderSingleAfterScrollbar = await getExplorerSelectionState('folder-single-after-scrollbar');
+    expect(
+      folderSingleAfterScrollbar.viewMode === 'gridImage' &&
+        folderSingleAfterScrollbar.selectedImagePath === folderSingleBeforeScrollbar.selectedImagePath &&
+        folderSingleAfterScrollbar.canvasVisible,
+      `Explorer scrollbar hid single image=${JSON.stringify({ before: folderSingleBeforeScrollbar, after: folderSingleAfterScrollbar, drag: folderSingleScrollbarDrag })}`
+    );
+    expect(
+      folderSingleAfterScrollbar.selectedFolders.includes('unknown') &&
+        folderSingleAfterScrollbar.folderSelectedPaths.includes('unknown') &&
+        folderSingleAfterScrollbar.fileSelectedPaths.length === 0,
+      `Explorer scrollbar changed single explorer selection=${JSON.stringify({ before: folderSingleBeforeScrollbar, after: folderSingleAfterScrollbar, drag: folderSingleScrollbarDrag })}`
+    );
+    await backToGrid();
+
     await boot('chunk2-grid-restore');
     await loadFolder('unknown');
     const gridRoundTrips = [];
@@ -679,6 +864,15 @@ const { createRunner } = require('./e2e_playwright_session');
     return {
       loops,
       explorerDirectRoundTrip,
+      explorerScrollbarSelection: {
+        explorerOpen,
+        folderGridBeforeScrollbar,
+        folderGridScrollbarDrag,
+        folderGridAfterScrollbar,
+        folderSingleBeforeScrollbar,
+        folderSingleScrollbarDrag,
+        folderSingleAfterScrollbar,
+      },
       gridRoundTrips,
       scrolledRoundTrips,
       scrollStop: {

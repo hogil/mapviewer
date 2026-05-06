@@ -105,6 +105,16 @@ The codebase uses environment variables to adapt to both environments. SAML logi
   - 원인: `_resetContextCompositeChecks()`가 닫힌 `#context-mc-submenu`에 empty-selection 문구를 다시 렌더했고, `#context-mc-submenu` / `#context-mea-submenu`가 일반 `.failbit-panel` cleanup과 섞여 context-menu lifecycle 밖에서 이동/복원될 수 있었음.
   - 수정 패턴: context submenu는 `#grid-context-menu`가 보일 때만 열고 `_hideGridContextSubmenuPanel()`로 정리한다. composite 시작 시 닫힌 submenu에 `이미지를 선택하세요`를 렌더하지 않는다. `_openMcContextSubmenu()` / `_openMeaContextSubmenu()`는 context menu visibility와 trigger rect를 확인한다.
   - E2E 신호: `scripts/e2e_chunk1.js`는 버튼 경로에서 `orphanContextChooserEvents.length === 0`, `scripts/e2e_chunk3.js`는 직접 10장 composite 경로에서 `directCompositeOrphanContextChooserEvents.length === 0`이어야 한다.
+- Wafer Map Explorer scrollbar/folder-selection 회귀:
+  - 증상: 폴더 선택으로 grid/gridImage single을 띄운 뒤 Explorer 폴더 리스트가 열려 있으면 폴더 대신 하단 파일 링크가 하이라이트되거나, Explorer 스크롤바 드래그 후 이미지/그리드가 사라짐.
+  - 원인: `setupFileExplorerDragSelect()`가 스크롤바 gutter의 `mousedown`을 rectangle selection으로 처리해 `selectedFolders`/`selectedImages`를 파일 교차 결과 또는 빈 선택으로 덮어썼고, `updateWaferMapExplorerHighlight()`가 폴더-origin `gridImage` single view에서 현재 파일 하이라이트를 적용했음.
+  - 수정 패턴: Explorer 스크롤바 영역은 드래그 선택 시작 대상에서 제외한다. 폴더-origin `gridImage` single view는 파일 하이라이트를 지우고 `restoreFolderSelection()`으로 폴더 선택을 유지한다.
+  - E2E 신호: `scripts/e2e_chunk2.js`의 `22,23,28,29` record에서 폴더-origin grid/single 상태로 Explorer 스크롤바를 드래그하고 folder highlight, grid count, single canvas/path가 변하지 않아야 한다.
+- Label Explorer class/label CRUD 및 열린 폴더 리스트 회귀:
+  - 증상: wafer/chip Class Manager에서 class add/delete API는 성공했지만 Class Manager 또는 Label Explorer가 stale class list를 보여주거나, class 폴더 파일 리스트를 열어둔 상태에서 label add/delete 후 파일 리스트가 닫히거나 sample 행이 갱신되지 않음.
+  - 원인: `addClass()` / `deleteSelectedClasses()`가 `cachedClassList` / `classListPromise`를 무효화한 뒤 `refreshClassList(true)`를 await하지 않고 Label Explorer만 갱신할 수 있었음. Label Explorer class-folder batch delete는 열린 폴더 cache가 있는데도 `buildClassificationPath(cls)` fallback을 먼저 믿어 prefix/context mismatch에서 삭제 대상이 0개가 될 수 있었음.
+  - 수정 패턴: class add/delete 후 `cachedClassList` / `classListPromise`를 무효화하고 `refreshClassList(true)`를 await한 다음 dirty class 기준으로 `refreshLabelExplorer()`를 호출한다. class-folder label delete는 열린 폴더의 `classToImgListCache[cls]`를 우선 사용하고 `labelSelection.openFolders`는 유지한다.
+  - E2E 신호: `scripts/e2e_chunk1.js`의 `chip-label-crud-ui`, `scripts/e2e_chunk3.js`의 `label-wafer-crud`는 wafer/chip class add/multi-add/delete/multi-delete, label add/delete/multi-delete, folder multi-select grid/detail, 열린 폴더 add/delete count(`2 -> 4`, `1/2 -> 0`)를 실제 DOM `button.label-img-name`으로 검증한다.
 
 ## Running the Application
 

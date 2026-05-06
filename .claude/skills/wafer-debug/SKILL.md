@@ -87,6 +87,7 @@ argument-hint: [증상-설명]
 11. 실패한 썸네일을 `gridLoaded=true`로 확정하면 뷰포트 재진입 시 재요청이 막힌다. 실패 상태는 retry 가능하게 유지해야 한다
 12. 폴더 우클릭 선택 해제는 현재 필터로 보이는 이미지 subset이 아니라 폴더의 전체 이미지 집합에 대해 적용되어야 한다
 13. Reset 후 이미지가 "튀어나오면" reset 자체보다 `deselectFolderFiles()`가 필터된 subset만 지우고 남은 선택이 residual 상태로 남는지 먼저 확인한다
+14. Wafer Map Explorer 스크롤바 드래그 후 그리드/단일 이미지가 사라지거나 폴더 선택이 파일 하이라이트로 바뀌면 `setupFileExplorerDragSelect()`가 스크롤바 `mousedown`을 rectangle selection으로 처리했는지 먼저 확인한다. 폴더-origin `gridImage` 단일 보기에서는 `updateWaferMapExplorerHighlight()`가 현재 파일을 하이라이트하지 않고 폴더 선택을 유지해야 한다.
 
 #### Label Explorer / MY LOT 문제
 1. `resolveOriginalImagePath`, `resolveLabelExplorerImagePath`, `buildLabelExplorerGridState` 흐름 확인
@@ -161,3 +162,10 @@ argument-hint: [증상-설명]
 - legend 우클릭은 all-off, legend drag는 wafer pan 금지, `scratch` 클릭 후 Shift+`particle_blast` 클릭은 `scratch/bank_boundary/scratch_21deg/particle_blast` range 전체 선택이 정상이다.
 - Ctrl-drag는 legend label toggle, Ctrl+Shift-drag는 legend range add와 wafer canvas chip multi-select 모두 동작해야 한다.
 - 줌 레벨 전환 색상 문제는 personalized pyramid cache key/rev와 PLTE patch를 먼저 본다. 모든 `SERVER_CONFIG.PYRAMID_LEVELS`에서 개인색 pixel sample이 유지되어야 하며 pyvips/Pillow/speed fallback 모두 palette patch를 유지해야 한다.
+
+### Wafer Map Explorer 스크롤바/폴더 선택 회귀 (2026-05-06)
+
+- 증상: 폴더 선택으로 그리드/단일 이미지를 띄운 상태에서 Explorer 폴더 리스트가 열려 있으면 현재 폴더 대신 파일 리스트 하단 항목이 하이라이트되거나, Explorer 스크롤바를 마우스로 드래그한 뒤 이미지/그리드가 사라졌다.
+- 원인: `js/main.js`의 `setupFileExplorerDragSelect()`가 스크롤바 gutter의 `mousedown`을 드래그 선택 시작으로 처리했고, mouseup에서 `selectedFolders`/`selectedImages`를 파일 교차 결과 또는 빈 선택으로 덮어썼다. 또한 `updateWaferMapExplorerHighlight()`가 폴더-origin `gridImage` 단일 보기에서 현재 파일 하이라이트를 적용했다.
+- 수정 패턴: Explorer 스크롤바 영역은 드래그 선택 시작 대상에서 제외하고, 폴더 선택에서 진입한 `gridImage` 단일 보기에서는 파일 하이라이트를 지운 뒤 `restoreFolderSelection()`으로 폴더 하이라이트를 유지한다.
+- E2E 신호: `scripts/e2e_chunk2.js`의 `22,23,28,29` record는 폴더-origin grid/single 상태에서 Explorer 스크롤바 드래그 후 `selectedFolders`, folder DOM highlight, grid count, single canvas/path가 그대로인지 확인한다.
