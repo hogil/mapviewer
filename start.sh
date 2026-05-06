@@ -41,13 +41,19 @@ export GRID_MAX_CONCURRENCY="48"         # 그리드 썸네일 동시 요청 상
 export MEASURE_PREFETCH_CONCURRENCY="8"  # measure-thumb-batch 동시 워밍업 상한
 export THUMBNAIL_EXECUTOR_WORKERS="64"   # 32C 운영 서버 기준 2x core
 export COMPOSITE_FAST_MODE="1"           # ✅ Fast 모드 활성화 (워커 자동 상향 + vips 저장)
+# Composite 로더 병렬도. 32C/고속 SSD 기준 56 유지 권장.
+# 더 빠르게 실험하려면 64 또는 72까지 올려볼 수 있지만, 이미지 로딩 I/O와 Numba CPU 작업이 경합하면 오히려 느려질 수 있다.
 export COMPOSITE_MAX_WORKERS="56"        # Composite 로더: CPU당 ~1.7 스레드
 export COMPOSITE_LOADER_MODE="thread"
 export COMPOSITE_BATCH_SIZE="20"         # 대용량 이미지용 배치 상향
+export COMPOSITE_NUMBA_BATCH_MB="4096"   # Numba batch 메모리 cap. 198GB RAM 서버에서 batch round-trip을 줄여 composite 누적 계산 속도 우선.
 export DAILY_CLEANUP_ENABLED="1"          # 매일 composite_map + thumbnails 정리 활성화
 export DAILY_CLEANUP_HOUR="2"             # 매일 AM 2시 실행
 export DAILY_CLEANUP_MINUTE="0"
 export COMPOSITE_COUNT_MODE="cython"
+# 참고: 현재 main composite heatmap/sum-map 저장 경로는 내부 pool이 일부 고정되어 있어
+# COMPOSITE_RENDER_WORKERS/COMPOSITE_SAVE_WORKERS가 모든 단계에 직접 반영되지는 않는다.
+# 최고속으로 더 밀려면 해당 코드 경로가 이 두 값을 읽도록 별도 수정이 필요하다.
 export COMPOSITE_RENDER_WORKERS="36"     # 렌더링 병렬도 ↑ (fast 모드와 맞춤)
 export COMPOSITE_SAVE_WORKERS="56"       # 저장 워커 (고속 SSD 기준)
 export COMPOSITE_SAVE_BACKEND="vips"     # 저장 백엔드 vips 우선
@@ -56,6 +62,8 @@ export COMPOSITE_JPEG_QUALITY="95"       # JPEG 품질 (속도/품질 균형)
 export COMPOSITE_USE_NUMBA="1"
 export COMPOSITE_NUMBA_CACHE="1"
 export OMP_NUM_THREADS="32"              # Numba/OpenMP 스레드
+# 32C 서버에서 단일 composite 요청 기준 전체 코어를 쓰도록 32 유지 권장.
+# 40/48로 올려도 물리 코어를 넘어가면 context switching과 I/O 경합으로 흔들릴 수 있으니, 올릴 경우 실제 composite 시간을 비교해야 한다.
 export NUMBA_NUM_THREADS="32"
 export SEARCH_WORKERS="24"               # 검색 병렬 워커 수 (32코어 기준, 논리 검색 가속)
 
