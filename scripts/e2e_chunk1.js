@@ -739,8 +739,8 @@ const { createRunner } = require('./e2e_playwright_session');
       const classSpecs = [
         { name: 'scratch', count: 5 },
         { name: 'bank_boundary', count: 4 },
-        { name: 'scratch_21deg', count: 3 },
-        { name: 'particle_blast', count: 2 },
+        { name: 'scratch_rot', count: 3 },
+        { name: 'fork', count: 2 },
         { name: 'invalid_main', count: 1 },
       ];
 
@@ -3283,7 +3283,7 @@ const { createRunner } = require('./e2e_playwright_session');
         fileNameText: document.getElementById('file-name-text')?.textContent || '',
         separatorDisplay: getComputedStyle(document.getElementById('separator-text')).display,
         markedCount: Array.isArray(marked) ? marked.length : null,
-        legendHasLabels: /bank_boundary|scratch|invalid_main|particle_blast/.test(legendText),
+        legendHasLabels: /bank_boundary|scratch|invalid_main|fork/.test(legendText),
         legendSnippet: legendText.slice(0, 300),
       };
     });
@@ -3565,19 +3565,19 @@ const { createRunner } = require('./e2e_playwright_session');
       els.map((el) => el.getAttribute('data-chip-label'))
     );
     const scratchIdx = rangeClickPillBoxes.indexOf('scratch');
-    const particleBlastIdx = rangeClickPillBoxes.indexOf('particle_blast');
+    const forkIdx = rangeClickPillBoxes.indexOf('fork');
     expect(
-      scratchIdx !== -1 && particleBlastIdx !== -1 && scratchIdx < particleBlastIdx,
-      `scratch -> particle_blast range setup failed: ${JSON.stringify(rangeClickPillBoxes)}`
+      scratchIdx !== -1 && forkIdx !== -1 && scratchIdx < forkIdx,
+      `scratch -> fork range setup failed: ${JSON.stringify(rangeClickPillBoxes)}`
     );
-    const expectedShiftClickRange = rangeClickPillBoxes.slice(scratchIdx, particleBlastIdx + 1);
+    const expectedShiftClickRange = rangeClickPillBoxes.slice(scratchIdx, forkIdx + 1);
     await page.locator('#chip-label-legend button[data-chip-label="scratch"]').click({ timeout: 10000 });
     await page.waitForFunction(() => {
       const active = window.viewer.activeChipLabelClasses;
       return active instanceof Set && active.size === 1 && active.has('scratch');
     }, null, { timeout: 5000 });
     await page.keyboard.down('Shift');
-    await page.locator('#chip-label-legend button[data-chip-label="particle_blast"]').click({ timeout: 10000 });
+    await page.locator('#chip-label-legend button[data-chip-label="fork"]').click({ timeout: 10000 });
     await page.keyboard.up('Shift');
     await page.waitForFunction((expected) => {
       const active = window.viewer.activeChipLabelClasses;
@@ -3593,7 +3593,7 @@ const { createRunner } = require('./e2e_playwright_session');
       expectedShiftClickRange.every((className) => shiftClickRangeState.active.includes(className)) &&
         shiftClickRangeState.active.length === expectedShiftClickRange.length &&
         shiftClickRangeState.filter.length === expectedShiftClickRange.length,
-      `shift click range should select scratch through particle_blast: expected=${JSON.stringify(expectedShiftClickRange)} actual=${JSON.stringify(shiftClickRangeState)}`
+      `shift click range should select scratch through fork: expected=${JSON.stringify(expectedShiftClickRange)} actual=${JSON.stringify(shiftClickRangeState)}`
     );
 
     await page.mouse.click(legendBox.x + 12, legendBox.y + 12, { button: 'right' });

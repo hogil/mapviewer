@@ -54,7 +54,12 @@ class SearchService:
         # Global search(root 전체)에서는 작업/테스트용 파생 폴더를 기본 검색 결과에서 제외한다.
         # unknown은 실제 failbit 기준 데이터이므로 전역 LOT 검색 결과에 포함한다.
         # 폴더 한정 검색에서는 그대로 허용하여 개별 폴더 확인 흐름은 유지한다.
-        self.global_only_excluded_folders = {"my-lot", "fq_missing_test"}
+        self.global_only_excluded_folders = {
+            "my-lot",
+            "fq_missing_test",
+            "unknown_pre",
+            "unknown_normal_pre",
+        }
         self.supported_exts = supported_exts or set()
         self.fallback_max_files = fallback_max_files
         self.fallback_timeout_sec = fallback_timeout_sec

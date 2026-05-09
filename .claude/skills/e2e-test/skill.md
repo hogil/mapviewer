@@ -6349,7 +6349,7 @@ return {
 - chip label에서 열린 wafer single view는 상단 filename panel에 소속 folder를 보여야 하고, 좌하단 chip label legend/overlay가 보여야 한다. 반대로 chip label image single view는 folder line/separator를 숨겨야 한다.
 - chip label overlay 기본 active label은 `invalid_main`을 제외한다. overlay alpha는 `0.15`이고, fill은 chip interior에만 들어가 wafer chip boundary가 남아야 한다. legend width는 기존 264px 대비 약 15% 줄인 220~230px 범위로 유지한다.
 - chip label legend 우클릭은 모든 label을 끈다. legend 위 drag는 wafer image pan을 일으키면 FAIL.
-- `scratch` 클릭 후 Shift+`particle_blast` 클릭은 contiguous range인 `scratch`, `bank_boundary`, `scratch_21deg`, `particle_blast` 전체를 선택해야 한다. particle_blast 1개만 선택되면 FAIL.
+- `scratch` 클릭 후 Shift+`fork` 클릭은 contiguous range인 `scratch`, `bank_boundary`, `scratch_rot`, `fork` 전체를 선택해야 한다. fork 1개만 선택되면 FAIL.
 - legend Ctrl-drag는 지나간 label을 toggle하고, Ctrl+Shift-drag는 기존 선택에 range를 add한다. wafer canvas Ctrl+Shift-drag는 Shift rectangle-add path를 타서 chip을 2개 이상 multi-select해야 한다.
 - 개인색 pyramid는 모든 `SERVER_CONFIG.PYRAMID_LEVELS`에서 PLTE/background color가 유지되어야 한다. pyvips, Pillow fallback, speed fallback 모두 personal PLTE patch를 보존해야 하며 현재 personalized pyramid cache rev는 `pyramid_v4`이다.
 
@@ -6364,3 +6364,17 @@ return {
 - API/cache: `api/full_app.py`, `api/main.py`, `api/search_service.py`
 - UI: `js/main.js`, `js/chip-annotator.js`, `js/semiconductor-renderer.js`, `js/thumbnail-navigator.js`, `css/style.css`, `index.html`
 - E2E: `scripts/e2e_chunk1.js`, `scripts/run-e2e-playwright.ps1`
+
+#### BUG-22: unknown archive 폴더가 전역 검색 결과에 섞이는 회귀 (2026-05-09)
+**증상**: 전체 E2E가 `WARMUP search cache`에서 멈추거나, Phase `3v unknown 실제 파일명 기반 text 검색`이 `unknown_pre_v5_260507/...` 같은 archive 경로를 `outsideUnknown`으로 보고 FAIL.
+**원인**: `scripts/run-e2e-playwright.ps1`의 검색 warmup LOT 목록이 현재 전역 검색에서 제외되는 파생 폴더에만 남은 샘플을 사용했고, `SearchService.global_only_excluded_folders`가 `unknown_pre*`, `unknown_Normal_pre*` archive 스냅샷을 루트 전역 검색에서 제외하지 않음.
+**수정**: warmup LOT 목록 앞에 현재 검색 가능한 `unknown`/실데이터 LOT를 추가하고, `api/search_service.py`에서 archive unknown 스냅샷을 global-only exclusion에 추가한다. 명시적 `folder=unknown_pre_v5_260507` 검색은 계속 허용한다.
+**평가**: runner 로그에 `SEARCH_READY ... total>=1`이 찍혀야 하며, Phase `3v`의 global text/LOT/WF 검색에서 `outsideUnknown=[]`이어야 한다.
+**파일**: `api/search_service.py`, `scripts/run-e2e-playwright.ps1`
+
+#### BUG-23: Chip label legend range 테스트가 round-25 이름을 참조 (2026-05-09)
+**증상**: Phase `chip-label-prefix-wafer`가 `scratch -> particle_blast range setup failed`로 FAIL. 실제 legend는 `scratch`, `bank_boundary`, `scratch_rot`, `fork`, `invalid_main`.
+**원인**: round 26에서 `particle_blast`는 `fork`, `scratch_21deg`는 `scratch_rot`로 rename되었고 API도 legacy class를 거부하지만, E2E Shift-click range 기대값이 old class name을 계속 참조함.
+**수정**: `scripts/e2e_chunk1.js`의 range-click 대상과 실패 메시지를 `scratch -> fork`로 갱신한다.
+**평가**: Phase `chip-label-prefix-wafer`에서 Shift+`fork` 클릭 후 active/filter가 `scratch`, `bank_boundary`, `scratch_rot`, `fork` contiguous range와 일치해야 한다.
+**파일**: `scripts/e2e_chunk1.js`, `api/full_app.py`

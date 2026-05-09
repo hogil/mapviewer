@@ -901,7 +901,7 @@ function Wait-ForSearchReady {
                 $null
             }
             if ($status.ready) {
-                $warmupQueries = @("AAB301", "AAN585", "AAK170", "AAS114", "AAV840", "AAU220")
+                $warmupQueries = @("AIN134", "AJO429", "ADM968", "AAB301", "AAN585", "AAK170", "AAS114", "AAV840", "AAU220")
                 foreach ($query in $warmupQueries) {
                     $encodedQuery = [System.Uri]::EscapeDataString($query)
                     $raw = & curl.exe -s -k --max-time 10 "$BaseUrl/api/search?q=$encodedQuery&limit=1"

@@ -8745,6 +8745,12 @@ async def classify_chips(request: ChipClassifyRequest,
         class_name = request.class_name.strip()
         if not class_name or not _CLASS_NAME_RE.match(class_name):
             raise HTTPException(status_code=400, detail="Invalid class name")
+        # Reject round-25 legacy chip classes (renamed in round 26: particle_blast→fork, scratch_21deg→scratch_rot)
+        if class_name in {"particle_blast", "scratch_21deg"}:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Legacy class '{class_name}' rejected — use 'fork' (was particle_blast) or 'scratch_rot' (was scratch_21deg)"
+            )
 
         # 🔥 Chip classification 폴더 사용
         class_dir = _classification_dir(mode="chip") / class_name
