@@ -641,13 +641,53 @@ def _parse_int(value: Optional[str], default: int) -> int:
         return default
 
 
+_LOT_FILE_TOKEN_EXT_RE = re.compile(r"\.(?:png|jpe?g|bmp|tiff?|webp)$", re.IGNORECASE)
+
+
+def _looks_like_lot_file_token(value: str) -> bool:
+    return (
+        "/" in value
+        or "\\" in value
+        or "_" in value
+        or bool(_LOT_FILE_TOKEN_EXT_RE.search(value))
+    )
+
+
+def _split_simple_lot_slash_list(value: str) -> List[str]:
+    if "/" not in value or "\\" in value:
+        return []
+    parts = [part.strip() for part in value.split("/") if part.strip()]
+    if len(parts) < 2:
+        return []
+    if all("_" not in part and not _LOT_FILE_TOKEN_EXT_RE.search(part) for part in parts):
+        return parts
+    return []
+
+
+def _iter_lot_filter_candidates(raw: str):
+    for part in re.split(r"[,\n\r;]+", raw):
+        cleaned = re.sub(r"[\t ]+", " ", part.strip())
+        if not cleaned:
+            continue
+        fields = [field for field in cleaned.split(" ") if field]
+        if len(fields) == 1:
+            slash_lots = _split_simple_lot_slash_list(fields[0])
+            if slash_lots:
+                yield from slash_lots
+                continue
+        if len(fields) > 1 and _looks_like_lot_file_token(fields[0]):
+            file_fields = [field for field in fields if _looks_like_lot_file_token(field)]
+            yield from (file_fields or fields[:1])
+        else:
+            yield from fields
+
+
 def _parse_lot_filter(raw: Optional[str]) -> List[str]:
     if not raw:
         return []
-    parts = re.split(r"[,\n\r\t;/]+", raw)
     tokens: List[str] = []
     seen: set[str] = set()
-    for part in parts:
+    for part in _iter_lot_filter_candidates(raw):
         cleaned = part.strip().lower()
         if not cleaned:
             continue

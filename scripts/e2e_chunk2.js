@@ -540,6 +540,73 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.keyboard.press('Escape');
     await sleep(300);
 
+    const multiLotApiNormalization = await page.evaluate(async () => {
+      const v = window.viewer;
+      const samples = [];
+      const seen = new Set();
+      for (const imagePath of v.currentGridImages || []) {
+        const tokens = v.extractLotTokensFromPath(imagePath);
+        const lot = tokens?.lotValue || '';
+        const key = lot.toLowerCase();
+        if (!lot || seen.has(key)) continue;
+        seen.add(key);
+        samples.push({
+          lot,
+          path: String(imagePath || '').replace(/\\/g, '/'),
+          filename: String(imagePath || '').replace(/\\/g, '/').split('/').pop(),
+        });
+        if (samples.length >= 3) break;
+      }
+      if (samples.length < 3) {
+        return { ok: false, error: `samples=${samples.length}` };
+      }
+
+      const input = document.getElementById('multi-search-input');
+      const originalValue = input?.value || '';
+      const originalFetch = window.fetch;
+      const captured = [];
+      window.fetch = async (...args) => {
+        const url = String(args[0] || '');
+        if (url.startsWith('/api/search?')) captured.push(url);
+        return originalFetch.apply(window, args);
+      };
+
+      try {
+        input.value = [
+          `${samples[0].path}\tignored-column`,
+          `${samples[1].filename}    ignored-column`,
+          samples[2].lot,
+        ].join('\n');
+        const parsed = v.parseMultiSearchInput();
+        const success = parsed.error
+          ? false
+          : await v.performSearch({ multiLotList: [...(parsed.lots || [])], suppressAlerts: true });
+        const searchUrl = captured.find((url) => url.startsWith('/api/search?')) || '';
+        const lotMulti = searchUrl
+          ? new URL(searchUrl, window.location.origin).searchParams.get('lot_multi') || ''
+          : '';
+        const lotParts = lotMulti.split(',').filter(Boolean);
+        const expectedLots = samples.map((sample) => sample.lot.toLowerCase());
+        const resultLots = Array.from(new Set((v.currentGridImages || [])
+          .map((imagePath) => v.extractLotTokensFromPath(imagePath)?.lotValue || '')
+          .filter(Boolean)
+          .map((lot) => lot.toLowerCase())));
+        return {
+          ok: success === true,
+          parsedLots: parsed.lots || [],
+          parsedError: parsed.error || '',
+          lotParts,
+          expectedLots,
+          resultLots,
+          resultCount: v.currentGridImages?.length || 0,
+          searchUrl,
+        };
+      } finally {
+        window.fetch = originalFetch;
+        if (input) input.value = originalValue;
+      }
+    });
+
     const limitValidation = await page.evaluate(() => {
       const lotInput = Array.from({ length: 301 }, (_, i) => `LOT${String(i).padStart(4, '0')}`).join('\n');
       const wfInput = Array.from({ length: 1001 }, (_, i) => `LOT${String(i).padStart(4, '0')} ${String(i % 25).padStart(2, '0')}`).join('\n');
@@ -584,6 +651,15 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(multiNoResult.error.length > 0, 'multi-search no-result error missing');
     expect(multiNoResult.wraps === searchBefore.wraps, `multi-search wraps ${searchBefore.wraps}->${multiNoResult.wraps}`);
     expect(multiNoResult.count === searchBefore.count, `multi-search count ${searchBefore.count}->${multiNoResult.count}`);
+    expect(multiLotApiNormalization.ok, `multi LOT normalization failed ${JSON.stringify(multiLotApiNormalization)}`);
+    expect(
+      JSON.stringify(multiLotApiNormalization.lotParts) === JSON.stringify(multiLotApiNormalization.expectedLots),
+      `lot_multi=${JSON.stringify(multiLotApiNormalization.lotParts)} expected=${JSON.stringify(multiLotApiNormalization.expectedLots)}`
+    );
+    expect(
+      multiLotApiNormalization.expectedLots.every((lot) => multiLotApiNormalization.resultLots.includes(lot)),
+      `resultLots=${JSON.stringify(multiLotApiNormalization.resultLots)} expected=${JSON.stringify(multiLotApiNormalization.expectedLots)}`
+    );
     expect(limitValidation.lotError.includes('최대 300개'), `lotError=${limitValidation.lotError}`);
     expect(limitValidation.wfError.includes('최대 1000개'), `wfError=${limitValidation.wfError}`);
     expect(permissionVisible, 'permission modal hidden');
@@ -597,6 +673,7 @@ const { createRunner } = require('./e2e_playwright_session');
       searchBefore,
       searchAfter,
       multiNoResult,
+      multiLotApiNormalization,
       limitValidation,
       permissionVisible,
       permRows,

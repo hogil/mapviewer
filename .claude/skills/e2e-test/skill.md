@@ -174,6 +174,12 @@ E2E 실행이 끝나면 최종 답변에 반드시 "무엇을 어떻게 실행�
 - E2E guard는 `scripts/e2e_chunk1.js` record `grid-context-actions`다. 최소 검증: `선택 wafer 리스트 복사(YMS 방식)` 라벨, YMS text clipboard rows, wafer info table without bucket columns, `선택 파일 다운로드`, `선택한 이미지 복사 (Legend 포함)`, `MY LOT에 추가`.
 - Single image context menu는 실제 보이는 `#single-context-menu` 또는 chip 우클릭에서 생성되는 `#chip-context-menu`를 대상으로 검증한다. Record `13-19`는 `파일명복사 (YMS)`, `이미지 복사`, `캔버스 전체 복사`, `원본 다운로드`, `MY LOT 추가`를 모두 실제 메뉴 클릭으로 검증해야 한다.
 
+## 절대규칙: Multi LOT 검색 입력 정규화
+
+- LOT multi-search는 파일 경로, 파일명, 일반 LOT 목록을 붙여 넣어도 `/api/search`의 `lot_multi`에는 filename basename의 `_` index 0 LOT 토큰만 전달해야 한다.
+- `/` 또는 `\`는 경로 구분자로 보존한 뒤 basename 추출에만 사용한다. 공백/탭은 후보 셀을 고를 때만 정규화하고, ignored column이 `lot_multi`로 들어가면 FAIL이다.
+- E2E guard는 `scripts/e2e_chunk2.js` record `21,24,25,26,27`이다. 실제 `fetch('/api/search?...')` URL을 캡처해 mixed path/filename/LOT 입력의 `lot_multi` 값이 기대 LOT 배열과 정확히 일치해야 한다.
+
 ## 절대규칙: Wafer Map Explorer 스크롤바/폴더 선택 회귀 금지
 
 - 폴더 선택으로 만든 grid 또는 gridImage single 상태에서 Wafer Map Explorer의 스크롤바를 드래그해도 Explorer rectangle selection이 시작되면 안 된다.

@@ -8344,14 +8344,11 @@ class WaferMapViewer {
             return { lots: [], error: 'LOT 입력 영역을 찾을 수 없습니다.' };
         }
         const raw = this.dom.multiSearchInput.value || '';
-        const segments = raw.split(/[\s,;/]+/);
         const seen = new Set();
         const lots = [];
         const MAX = 300;
-        for (const segment of segments) {
-            const trimmed = segment.trim();
-            if (!trimmed) continue;
-            const lotToken = stripDotSuffix(trimmed.split('_', 1)[0].split(/\s+/)[0].trim());
+        for (const segment of this.collectLotSearchCandidates(raw)) {
+            const lotToken = this.extractLotTokenForMultiSearch(segment);
             if (!lotToken) continue;
             const key = lotToken.toLowerCase();
             if (seen.has(key)) continue;
@@ -8365,6 +8362,56 @@ class WaferMapViewer {
             return { lots: [], error: 'LOT ID를 한 개 이상 입력하세요.' };
         }
         return { lots };
+    }
+
+    looksLikeLotFileToken(token) {
+        const value = String(token || '').trim();
+        return /[\\/]/.test(value) ||
+            value.includes('_') ||
+            /\.(png|jpe?g|bmp|tiff?|webp)$/i.test(value);
+    }
+
+    splitSimpleLotSlashList(token) {
+        const value = String(token || '').trim();
+        if (!value.includes('/') || value.includes('\\')) return [];
+        const parts = value.split('/').map(part => part.trim()).filter(Boolean);
+        if (parts.length < 2) return [];
+        if (parts.every(part => !part.includes('_') && !/\.(png|jpe?g|bmp|tiff?|webp)$/i.test(part))) {
+            return parts;
+        }
+        return [];
+    }
+
+    collectLotSearchCandidates(raw) {
+        const chunks = String(raw || '').split(/[\n\r,;]+/);
+        const candidates = [];
+        for (const chunk of chunks) {
+            const normalized = chunk.replace(/[\t ]+/g, ' ').trim();
+            if (!normalized) continue;
+            const fields = normalized.split(' ').filter(Boolean);
+            if (fields.length === 1) {
+                const slashLots = this.splitSimpleLotSlashList(fields[0]);
+                if (slashLots.length) {
+                    candidates.push(...slashLots);
+                    continue;
+                }
+            }
+            if (fields.length > 1 && this.looksLikeLotFileToken(fields[0])) {
+                const fileFields = fields.filter(field => this.looksLikeLotFileToken(field));
+                candidates.push(...(fileFields.length ? fileFields : [fields[0]]));
+            } else {
+                candidates.push(...fields);
+            }
+        }
+        return candidates;
+    }
+
+    extractLotTokenForMultiSearch(value) {
+        const trimmed = String(value || '').trim();
+        if (!trimmed) return '';
+        const basename = trimmed.replace(/\\/g, '/').split('/').pop() || trimmed;
+        const lotToken = basename.split('_', 1)[0].trim();
+        return stripDotSuffix(lotToken).trim();
     }
 
     async handleMultiSearchApply() {
@@ -10728,9 +10775,17 @@ class WaferMapViewer {
     }
 
     normalizeLotPayload(lots) {
-        return (lots || [])
-            .map(lot => (lot || '').trim().toLowerCase())
-            .filter(Boolean);
+        const normalized = [];
+        const seen = new Set();
+        for (const lot of lots || []) {
+            for (const candidate of this.collectLotSearchCandidates(lot)) {
+                const lotToken = this.extractLotTokenForMultiSearch(candidate).toLowerCase();
+                if (!lotToken || seen.has(lotToken)) continue;
+                seen.add(lotToken);
+                normalized.push(lotToken);
+            }
+        }
+        return normalized;
     }
 
     getSearchFolderParam() {
