@@ -11502,6 +11502,7 @@ class WaferMapViewer {
         const mergeCopyItem = document.getElementById('context-merge-copy');
         const mergeSaveItem = document.getElementById('context-merge-save');
         const listCopyItem = document.getElementById('context-list-copy');
+        const waferInfoCopyItem = document.getElementById('context-wafer-info-copy');
         const cancelItem = document.getElementById('context-cancel');
         const compositeCreateItem = document.getElementById('context-composite-create');
         const compositeReturnItem = document.getElementById('context-composite-return');
@@ -11670,14 +11671,27 @@ class WaferMapViewer {
             };
         }
 
+        if (waferInfoCopyItem) {
+            waferInfoCopyItem.onclick = async () => {
+                this.hideContextMenu();
+                const manager = await this._getContextMenuManager();
+                await manager.copyWaferInfoAsTable();
+            };
+        }
+
+        if (myLotAddItem) {
+            myLotAddItem.onclick = async () => {
+                this.hideContextMenu();
+                const manager = await this._getContextMenuManager();
+                await manager.addToMyLot();
+            };
+        }
+
         if (cancelItem) {
             cancelItem.onclick = () => {
                 this.hideContextMenu();
             };
         }
-
-        // 🔥 MY LOT 관련 이벤트는 ContextMenuManager에서 처리
-        // (중복 등록 방지)
 
         this.updateContextMenuState();
     }
@@ -12267,33 +12281,29 @@ class WaferMapViewer {
             // 원본 다운로드
             menu.querySelector('#single-download-original')?.addEventListener('click', async () => {
                 this.hideSingleContextMenu();
-                if (this.contextMenuManager) {
-                    await this.contextMenuManager.downloadOriginalImage();
-                }
+                const manager = await this._getContextMenuManager();
+                await manager.downloadOriginalImage();
             });
 
             // 이미지 복사
             menu.querySelector('#single-copy-image')?.addEventListener('click', async () => {
                 this.hideSingleContextMenu();
-                if (this.contextMenuManager) {
-                    await this.contextMenuManager.copyImageToClipboard();
-                }
+                const manager = await this._getContextMenuManager();
+                await manager.copyImageToClipboard();
             });
 
             // 캔버스 전체 복사
             menu.querySelector('#single-copy-canvas')?.addEventListener('click', async () => {
                 this.hideSingleContextMenu();
-                if (this.contextMenuManager) {
-                    await this.contextMenuManager.copyCanvasToClipboard();
-                }
+                const manager = await this._getContextMenuManager();
+                await manager.copyCanvasToClipboard();
             });
 
             // MY LOT 추가
             menu.querySelector('#single-my-lot-add')?.addEventListener('click', async () => {
                 this.hideSingleContextMenu();
-                if (this.contextMenuManager) {
-                    await this.contextMenuManager.addToMyLot();
-                }
+                const manager = await this._getContextMenuManager();
+                await manager.addToMyLot();
             });
 
             // 파일명복사 (YMS)
@@ -29194,27 +29204,23 @@ class WaferMapViewer {
         const singleMenuItems = [
             { id: 'download-original', text: '💾 원본 다운로드', handler: async () => {
                 menu.remove();
-                if (this.contextMenuManager) {
-                    await this.contextMenuManager.downloadOriginalImage();
-                }
+                const manager = await this._getContextMenuManager();
+                await manager.downloadOriginalImage();
             }},
             { id: 'copy-image', text: '📋 이미지 복사', handler: async () => {
                 menu.remove();
-                if (this.contextMenuManager) {
-                    await this.contextMenuManager.copyImageToClipboard();
-                }
+                const manager = await this._getContextMenuManager();
+                await manager.copyImageToClipboard();
             }},
             { id: 'copy-canvas', text: '🎨 캔버스 전체 복사', handler: async () => {
                 menu.remove();
-                if (this.contextMenuManager) {
-                    await this.contextMenuManager.copyCanvasToClipboard();
-                }
+                const manager = await this._getContextMenuManager();
+                await manager.copyCanvasToClipboard();
             }},
             { id: 'my-lot-add', text: '📁 MY LOT 추가', handler: async () => {
                 menu.remove();
-                if (this.contextMenuManager) {
-                    await this.contextMenuManager.addToMyLot();
-                }
+                const manager = await this._getContextMenuManager();
+                await manager.addToMyLot();
             }},
             { id: 'copy-yms', text: '📋 파일명복사 (YMS)', handler: async () => {
                 menu.remove();

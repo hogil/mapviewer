@@ -493,7 +493,8 @@ export class ContextMenuManager {
                 const row = {};
                 for (const key of Object.keys(pos)) {
                     if (key === STOP_KEY) break;
-                    if (SKIP_KEYS.has(key)) continue;
+                    const keyLower = String(key).toLowerCase();
+                    if (SKIP_KEYS.has(key) || keyLower.includes('bucket')) continue;
                     const val = pos[key];
                     if (val === null || val === undefined || typeof val === 'object') continue;
                     if (/^wafer$/i.test(key)) {
@@ -581,11 +582,12 @@ export class ContextMenuManager {
      * 원본 이미지 다운로드
      */
     async downloadOriginalImage() {
-        if (!this.viewer.currentImagePath) {
+        const targetPath = this.viewer.currentImagePath || this.viewer.selectedImagePath || this.viewer.detailImagePath;
+        if (!targetPath) {
             alert('다운로드할 이미지가 없습니다.');
             return;
         }
-        await this.downloadImage(this.viewer.currentImagePath);
+        await this.downloadImage(targetPath);
         alert('원본 이미지가 다운로드되었습니다.');
     }
     
@@ -949,12 +951,13 @@ export class ContextMenuManager {
             return;
         }
 
-        if (!this.viewer.myLotModal) {
+        const myLotModal = this.viewer.myLotModal || await this.viewer._getMyLotModal?.();
+        if (!myLotModal) {
             this.viewer.showToast?.('MY LOT을 열 수 없습니다.', 2000);
             return;
         }
 
-        await this.viewer.myLotModal.open(pathsToAdd);
+        await myLotModal.open(pathsToAdd);
         this.viewer.showToast?.(`${pathsToAdd.length}개 항목이 대기 중입니다.`, 4000);
     }
 }

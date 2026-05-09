@@ -839,6 +839,183 @@ const { createRunner } = require('./e2e_playwright_session');
     }
   }
 
+  async function installClipboardCapture() {
+    await page.evaluate(() => {
+      window.__e2eClipboard = {
+        textWrites: [],
+        imageWrites: [],
+      };
+
+      if (!window.ClipboardItem) {
+        window.ClipboardItem = class ClipboardItem {
+          constructor(items) {
+            this._items = items || {};
+            this.types = Object.keys(this._items);
+          }
+
+          async getType(type) {
+            return this._items[type];
+          }
+        };
+      }
+
+      const clipboard = {
+        async writeText(text) {
+          window.__e2eClipboard.textWrites.push(String(text ?? ''));
+        },
+        async write(items) {
+          const records = [];
+          for (const item of items || []) {
+            const types = Array.from(item?.types || []);
+            const type = types[0] || 'image/png';
+            let blob = null;
+            if (typeof item?.getType === 'function') {
+              blob = await item.getType(type);
+            } else if (item?._items && item._items[type]) {
+              blob = await Promise.resolve(item._items[type]);
+            }
+            records.push({
+              types,
+              type: blob?.type || type,
+              size: Number(blob?.size || 0),
+            });
+          }
+          window.__e2eClipboard.imageWrites.push(...records);
+        },
+      };
+
+      try {
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: clipboard,
+        });
+      } catch (_) {
+        navigator.clipboard = clipboard;
+      }
+    });
+  }
+
+  async function readClipboardCapture() {
+    return await page.evaluate(() => ({
+      textWrites: [...(window.__e2eClipboard?.textWrites || [])],
+      imageWrites: [...(window.__e2eClipboard?.imageWrites || [])],
+    }));
+  }
+
+  async function installHtml2CanvasStub() {
+    await page.evaluate(() => {
+      window.html2canvas = async (_element, options = {}) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(Number(options.width) || 96));
+        canvas.height = Math.max(1, Math.round(Number(options.height) || 96));
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#39a8ff';
+        ctx.fillRect(0, 0, Math.min(24, canvas.width), Math.min(24, canvas.height));
+        return canvas;
+      };
+    });
+  }
+
+  async function openGridContextAtIndex(index = 0) {
+    await page.evaluate(() => window.viewer?.hideContextMenu?.());
+    const wrap = page.locator('#image-grid .grid-thumb-wrap').nth(index);
+    const box = await wrap.boundingBox({ timeout: 10000 }).catch(() => null);
+    expect(!!box, `grid context target missing index=${index}`);
+    await page.mouse.move(box.x + Math.min(40, box.width / 2), box.y + Math.min(40, box.height / 2));
+    await page.mouse.click(
+      box.x + Math.min(40, box.width / 2),
+      box.y + Math.min(40, box.height / 2),
+      { button: 'right' }
+    );
+    await page.waitForFunction(
+      () => getComputedStyle(document.getElementById('grid-context-menu')).display !== 'none',
+      null,
+      { timeout: 10000 }
+    );
+    await sleep(150);
+    return await page.evaluate(() => ({
+      text: document.getElementById('grid-context-menu')?.innerText || '',
+      targetPath: window.viewer?.contextMenuTargetPath || null,
+      gridSelectedIdxs: [...(window.viewer?.gridSelectedIdxs || [])],
+    }));
+  }
+
+  async function openSingleContextMenuOnCanvas() {
+    await page.evaluate(() => {
+      window.viewer?.hideSingleContextMenu?.();
+      document.getElementById('chip-context-menu')?.remove();
+    });
+    const canvasBox = await page.locator('#image-canvas').boundingBox({ timeout: 10000 }).catch(() => null);
+    expect(!!canvasBox, 'single context target canvas missing');
+    const x = canvasBox.x + Math.min(80, canvasBox.width / 2);
+    const y = canvasBox.y + Math.min(80, canvasBox.height / 2);
+    await page.mouse.move(x, y);
+    await page.mouse.click(x, y, { button: 'right' });
+    await page.waitForFunction(
+      () => {
+        const isVisible = (el) => {
+          if (!el) return false;
+          const style = getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+        };
+        return isVisible(document.getElementById('single-context-menu')) || isVisible(document.getElementById('chip-context-menu'));
+      },
+      null,
+      { timeout: 10000 }
+    );
+    await sleep(150);
+    return await page.evaluate(() => ({
+      ...(() => {
+        const isVisible = (el) => {
+          if (!el) return false;
+          const style = getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+        };
+        const singleMenu = document.getElementById('single-context-menu');
+        const chipMenu = document.getElementById('chip-context-menu');
+        const menu = isVisible(singleMenu) ? singleMenu : chipMenu;
+        return {
+          menuId: menu?.id || null,
+          text: menu?.innerText || '',
+        };
+      })(),
+      selectedImagePath: window.viewer?.selectedImagePath || null,
+      currentImagePath: window.viewer?.currentImagePath || null,
+      visible: true,
+    }));
+  }
+
+  async function clickVisibleContextMenuItem(text) {
+    await page.locator('.context-menu:visible .context-menu-item', { hasText: text }).last().click({ timeout: 10000 });
+  }
+
+  async function collectDownloadsForAction(expectedCount, action, timeoutMs = 45000) {
+    const downloads = [];
+    const handler = (download) => {
+      downloads.push(download);
+    };
+    page.on('download', handler);
+    try {
+      await action();
+      const started = Date.now();
+      while (downloads.length < expectedCount && Date.now() - started < timeoutMs) {
+        await sleep(200);
+      }
+      return await Promise.all(
+        downloads.map(async (download) => ({
+          suggestedFilename: download.suggestedFilename(),
+          pathExists: !!(await download.path().catch(() => null)),
+        }))
+      );
+    } finally {
+      page.off('download', handler);
+    }
+  }
+
   async function setClassModeUi(mode) {
     const selector = mode === 'chip' ? '#class-mode-chip-btn' : '#class-mode-wafer-btn';
     const currentMode = await page.evaluate(() => window.viewer?.classMode || null);
@@ -2524,6 +2701,159 @@ const { createRunner } = require('./e2e_playwright_session');
     };
   });
 
+  await record('grid-context-actions', 'Grid context copy/download/MY LOT', async () => {
+    await boot('chunk1-grid-context-actions');
+    await loadFolder('unknown');
+    await setSelection([0, 1]);
+    await page.evaluate(async () => {
+      await window.viewer?._getContextMenuManager?.();
+    });
+
+    const selectedPaths = await page.evaluate(() => (
+      (window.viewer.gridSelectedIdxs || []).map((idx) => window.viewer.currentGridImages?.[idx] || null).filter(Boolean)
+    ));
+    expect(selectedPaths.length === 2, `grid context selectedPaths=${JSON.stringify(selectedPaths)}`);
+    const selectedParsed = selectedPaths.map(parseLotWaferFromPath);
+
+    const menuState = await openGridContextAtIndex(0);
+    expect(
+      menuState.text.includes('선택 wafer 리스트 복사(YMS 방식)'),
+      `grid context wafer-list label missing=${JSON.stringify(menuState)}`
+    );
+    expect(
+      !menuState.text.includes('선택 LOT 리스트 복사'),
+      `grid context old LOT label remains=${JSON.stringify(menuState)}`
+    );
+    await page.evaluate(() => window.viewer.hideContextMenu?.());
+
+    await installClipboardCapture();
+    const ymsCopy = await withAutoDialogs(async () => {
+      await openGridContextAtIndex(0);
+      await page.locator('#context-list-copy').click({ timeout: 10000 });
+      await page.waitForFunction(
+        () => (window.__e2eClipboard?.textWrites || []).length >= 1,
+        null,
+        { timeout: 10000 }
+      );
+      return await readClipboardCapture();
+    });
+    const ymsText = ymsCopy.result.textWrites.at(-1) || '';
+    const ymsRows = ymsText.trim().split(/\r?\n/).filter(Boolean).map((line) => line.split('\t'));
+    expect(ymsRows.length === selectedPaths.length, `YMS row count mismatch text=${JSON.stringify(ymsText)}`);
+    expect(
+      ymsRows.every((row, index) =>
+        row.length === 2 &&
+        row[0].toLowerCase() === selectedParsed[index].lot &&
+        row[1].replace(/^W/i, '').toLowerCase() === selectedParsed[index].wafer
+      ),
+      `YMS rows invalid rows=${JSON.stringify(ymsRows)} parsed=${JSON.stringify(selectedParsed)}`
+    );
+
+    await installClipboardCapture();
+    const waferInfoCopy = await withAutoDialogs(async () => {
+      await openGridContextAtIndex(0);
+      await page.locator('#context-wafer-info-copy').click({ timeout: 10000 });
+      await page.waitForFunction(
+        () => (window.__e2eClipboard?.textWrites || []).length >= 1,
+        null,
+        { timeout: 20000 }
+      );
+      return await readClipboardCapture();
+    });
+    const waferTable = waferInfoCopy.result.textWrites.at(-1) || '';
+    const waferTableLines = waferTable.trim().split(/\r?\n/).filter(Boolean);
+    const waferHeader = (waferTableLines[0] || '').split('\t');
+    const waferHeaderLower = waferHeader.map((key) => key.toLowerCase());
+    expect(waferTableLines.length >= 2, `wafer info table empty=${JSON.stringify(waferTable)}`);
+    expect(
+      waferHeaderLower.includes('wafer'),
+      `wafer info header missing wafer=${JSON.stringify(waferHeader)}`
+    );
+    expect(
+      !waferHeaderLower.some((key) => key.includes('bucket')),
+      `wafer info bucket column remains=${JSON.stringify(waferHeader)}`
+    );
+    const waferColumnIndex = waferHeaderLower.indexOf('wafer');
+    const firstWaferValue = (waferTableLines[1] || '').split('\t')[waferColumnIndex] || '';
+    expect(firstWaferValue && !/^W/i.test(firstWaferValue), `wafer value not normalized=${firstWaferValue}`);
+
+    await installClipboardCapture();
+    const mergeCopy = await withAutoDialogs(async () => {
+      await openGridContextAtIndex(0);
+      await page.locator('#context-merge-copy').click({ timeout: 10000 });
+      await page.waitForFunction(
+        () => (window.__e2eClipboard?.imageWrites || []).length >= 1,
+        null,
+        { timeout: 45000 }
+      );
+      return await readClipboardCapture();
+    });
+    const mergeImageWrite = mergeCopy.result.imageWrites.at(-1) || {};
+    expect(
+      mergeImageWrite.types?.includes('image/png') && mergeImageWrite.size > 0,
+      `merged image clipboard write invalid=${JSON.stringify(mergeImageWrite)}`
+    );
+
+    const expectedDownloadNames = selectedPaths.map((imagePath) => (
+      String(imagePath || '').replace(/\\/g, '/').split('/').pop()
+    ));
+    const downloadCopy = await withAutoDialogs(async () => {
+      const downloads = await collectDownloadsForAction(selectedPaths.length, async () => {
+        await openGridContextAtIndex(0);
+        await page.locator('#context-download').click({ timeout: 10000 });
+      });
+      await sleep(1800);
+      return downloads;
+    });
+    const downloadedNames = downloadCopy.result.map((item) => item.suggestedFilename);
+    expect(
+      downloadedNames.length === selectedPaths.length &&
+        expectedDownloadNames.every((name) => downloadedNames.includes(name)),
+      `download filenames invalid expected=${JSON.stringify(expectedDownloadNames)} actual=${JSON.stringify(downloadedNames)}`
+    );
+
+    const myLotAdd = await withAutoDialogs(async () => {
+      await openGridContextAtIndex(0);
+      await page.locator('#context-my-lot-add').click({ timeout: 10000 });
+      await page.waitForFunction(
+        () => getComputedStyle(document.getElementById('my-lot-window')).display !== 'none',
+        null,
+        { timeout: 15000 }
+      );
+      await sleep(500);
+      return await page.evaluate(() => ({
+        visible: getComputedStyle(document.getElementById('my-lot-window')).display !== 'none',
+        pendingCount: window.viewer?.myLotModal?.pendingPaths?.length || 0,
+        pendingPaths: [...(window.viewer?.myLotModal?.pendingPaths || [])],
+        savePendingText: document.getElementById('my-lot-save-pending-btn')?.textContent || '',
+      }));
+    });
+    expect(myLotAdd.result.visible, `MY LOT modal hidden=${JSON.stringify(myLotAdd.result)}`);
+    expect(
+      myLotAdd.result.pendingCount === selectedPaths.length &&
+        selectedPaths.every((imagePath) => myLotAdd.result.pendingPaths.includes(imagePath)),
+      `MY LOT pending paths invalid=${JSON.stringify(myLotAdd.result)} selected=${JSON.stringify(selectedPaths)}`
+    );
+    await page.evaluate(() => window.viewer?.myLotModal?.close?.());
+    await sleep(300);
+
+    return {
+      selectedPaths,
+      menuState,
+      ymsRows,
+      ymsDialogs: ymsCopy.dialogs,
+      waferHeader,
+      waferInfoRows: waferTableLines.length - 1,
+      waferInfoDialogs: waferInfoCopy.dialogs,
+      mergeImageWrite,
+      mergeDialogs: mergeCopy.dialogs,
+      downloads: downloadCopy.result,
+      downloadDialogs: downloadCopy.dialogs,
+      myLotAdd: myLotAdd.result,
+      myLotDialogs: myLotAdd.dialogs,
+    };
+  });
+
   await record('13-19', '단일 이미지 기본/피라미드/컨텍스트/라벨모달', async () => {
     await boot('chunk1-single');
     await loadFolder('unknown');
@@ -2535,14 +2865,116 @@ const { createRunner } = require('./e2e_playwright_session');
       { timeout: 30000 }
     );
     await sleep(1500);
-    await page.evaluate(() =>
-      window.viewer.showSingleContextMenu({
-        pageX: 320,
-        pageY: 240,
-        preventDefault() {},
-        stopPropagation() {},
-      })
+
+    const initialSingleMenu = await openSingleContextMenuOnCanvas();
+    expect(initialSingleMenu.visible, `single context menu hidden=${JSON.stringify(initialSingleMenu)}`);
+    expect(
+      initialSingleMenu.text.includes('원본 다운로드') &&
+        initialSingleMenu.text.includes('이미지 복사') &&
+        initialSingleMenu.text.includes('캔버스 전체 복사') &&
+        initialSingleMenu.text.includes('MY LOT 추가') &&
+        initialSingleMenu.text.includes('파일명복사 (YMS)'),
+      `single context menu items missing=${JSON.stringify(initialSingleMenu)}`
     );
+    await page.evaluate(() => window.viewer.hideSingleContextMenu?.());
+
+    const singleParsed = parseLotWaferFromPath(initialSingleMenu.selectedImagePath);
+
+    await installClipboardCapture();
+    const singleYmsCopy = await withAutoDialogs(async () => {
+      await openSingleContextMenuOnCanvas();
+      await clickVisibleContextMenuItem('파일명복사 (YMS)');
+      await page.waitForFunction(
+        () => (window.__e2eClipboard?.textWrites || []).length >= 1,
+        null,
+        { timeout: 10000 }
+      );
+      return await readClipboardCapture();
+    });
+    const singleYmsText = singleYmsCopy.result.textWrites.at(-1) || '';
+    const singleYmsRow = singleYmsText.trim().split('\t');
+    expect(
+      singleYmsRow.length === 2 &&
+        singleYmsRow[0].toLowerCase() === singleParsed.lot &&
+        singleYmsRow[1].replace(/^W/i, '').toLowerCase() === singleParsed.wafer,
+      `single YMS copy invalid row=${JSON.stringify(singleYmsRow)} parsed=${JSON.stringify(singleParsed)}`
+    );
+
+    await installClipboardCapture();
+    const singleImageCopy = await withAutoDialogs(async () => {
+      await openSingleContextMenuOnCanvas();
+      await clickVisibleContextMenuItem('이미지 복사');
+      await page.waitForFunction(
+        () => (window.__e2eClipboard?.imageWrites || []).length >= 1,
+        null,
+        { timeout: 30000 }
+      );
+      return await readClipboardCapture();
+    });
+    const singleImageWrite = singleImageCopy.result.imageWrites.at(-1) || {};
+    expect(
+      singleImageWrite.types?.includes('image/png') && singleImageWrite.size > 0,
+      `single image clipboard write invalid=${JSON.stringify(singleImageWrite)}`
+    );
+
+    await installClipboardCapture();
+    await installHtml2CanvasStub();
+    const singleCanvasCopy = await withAutoDialogs(async () => {
+      await openSingleContextMenuOnCanvas();
+      await clickVisibleContextMenuItem('캔버스 전체 복사');
+      await page.waitForFunction(
+        () => (window.__e2eClipboard?.imageWrites || []).length >= 1,
+        null,
+        { timeout: 30000 }
+      );
+      return await readClipboardCapture();
+    });
+    const singleCanvasWrite = singleCanvasCopy.result.imageWrites.at(-1) || {};
+    expect(
+      singleCanvasWrite.types?.includes('image/png') && singleCanvasWrite.size > 0,
+      `single canvas clipboard write invalid=${JSON.stringify(singleCanvasWrite)}`
+    );
+
+    const singleDownload = await withAutoDialogs(async () => {
+      const downloads = await collectDownloadsForAction(1, async () => {
+        await openSingleContextMenuOnCanvas();
+        await clickVisibleContextMenuItem('원본 다운로드');
+      }, 30000);
+      await sleep(800);
+      return downloads;
+    });
+    const expectedSingleDownloadName = String(initialSingleMenu.selectedImagePath || '').replace(/\\/g, '/').split('/').pop();
+    expect(
+      singleDownload.result.length === 1 &&
+        singleDownload.result[0].suggestedFilename === expectedSingleDownloadName,
+      `single download invalid expected=${expectedSingleDownloadName} actual=${JSON.stringify(singleDownload.result)}`
+    );
+
+    const singleMyLotAdd = await withAutoDialogs(async () => {
+      await openSingleContextMenuOnCanvas();
+      await clickVisibleContextMenuItem('MY LOT 추가');
+      await page.waitForFunction(
+        () => getComputedStyle(document.getElementById('my-lot-window')).display !== 'none',
+        null,
+        { timeout: 15000 }
+      );
+      await sleep(500);
+      return await page.evaluate(() => ({
+        visible: getComputedStyle(document.getElementById('my-lot-window')).display !== 'none',
+        pendingCount: window.viewer?.myLotModal?.pendingPaths?.length || 0,
+        pendingPaths: [...(window.viewer?.myLotModal?.pendingPaths || [])],
+      }));
+    });
+    expect(
+      singleMyLotAdd.result.visible &&
+        singleMyLotAdd.result.pendingCount === 1 &&
+        singleMyLotAdd.result.pendingPaths[0] === initialSingleMenu.selectedImagePath,
+      `single MY LOT pending invalid=${JSON.stringify(singleMyLotAdd.result)} selected=${initialSingleMenu.selectedImagePath}`
+    );
+    await page.evaluate(() => window.viewer?.myLotModal?.close?.());
+    await sleep(300);
+
+    const finalSingleMenu = await openSingleContextMenuOnCanvas();
     await page.evaluate(() => window.viewer.openAddLabelModal?.());
     await sleep(500);
     const data = await page.evaluate(() => ({
@@ -2558,9 +2990,15 @@ const { createRunner } = require('./e2e_playwright_session');
       )
         .trim()
         .length,
-      singleCtxVisible:
-        getComputedStyle(document.getElementById('single-context-menu')).display !==
-        'none',
+      singleCtxVisible: (() => {
+        const isVisible = (el) => {
+          if (!el) return false;
+          const style = getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+        };
+        return isVisible(document.getElementById('single-context-menu')) || isVisible(document.getElementById('chip-context-menu'));
+      })(),
       addLabelVisible:
         getComputedStyle(document.getElementById('add-label-modal')).display !==
         'none',
@@ -2582,8 +3020,27 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(data.chipInfoLen > 0, 'empty chip info');
     expect(data.singleCtxVisible, 'single ctx hidden');
     expect(data.addLabelVisible, 'add label hidden');
+    await page.evaluate(() => {
+      window.viewer.hideSingleContextMenu?.();
+      document.getElementById('chip-context-menu')?.remove();
+      window.viewer.closeAddLabelModal?.();
+    });
     await backToGrid();
-    return data;
+    return {
+      ...data,
+      initialSingleMenu,
+      finalSingleMenu,
+      singleYmsRow,
+      singleYmsDialogs: singleYmsCopy.dialogs,
+      singleImageWrite,
+      singleImageDialogs: singleImageCopy.dialogs,
+      singleCanvasWrite,
+      singleCanvasDialogs: singleCanvasCopy.dialogs,
+      singleDownload: singleDownload.result,
+      singleDownloadDialogs: singleDownload.dialogs,
+      singleMyLotAdd: singleMyLotAdd.result,
+      singleMyLotDialogs: singleMyLotAdd.dialogs,
+    };
   });
 
   await record('chip-label-b', 'Chip label 파일명 b suffix', async () => {

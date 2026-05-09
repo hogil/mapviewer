@@ -166,6 +166,14 @@ E2E 실행이 끝나면 최종 답변에 반드시 "무엇을 어떻게 실행�
 - Composite 생성 시작 시 닫힌 `#context-mc-submenu`에 `_resetContextSubmenuPanel(..., '이미지를 선택하세요')`를 호출하면 안 된다. 선택 상태만 clear하고 hidden submenu 내용을 다시 렌더하지 않는다.
 - E2E는 app 예외처리가 아니라 회귀 검출로 `MutationObserver`를 사용할 수 있다. `scripts/e2e_chunk1.js`의 context-menu 버튼 경로는 `orphanContextChooserEvents.length === 0`, `scripts/e2e_chunk3.js`의 직접 10장 composite 경로는 `directCompositeOrphanContextChooserEvents.length === 0`이어야 한다.
 
+## 절대규칙: Context menu copy/download/MY LOT 실동작 검증
+
+- Grid context menu의 복사/다운로드/MY LOT 항목은 라벨이나 상태 플래그만 보지 말고 실제 우클릭 메뉴 클릭으로 검증한다.
+- `ContextMenuManager`와 `MyLotModal`은 lazy 초기화될 수 있으므로, 앱 코드는 context handler 안에서 `_getContextMenuManager()` / `_getMyLotModal()`을 호출해 첫 사용도 동작해야 한다.
+- Wafer 정보 TSV 복사는 `bucket` 계열 header가 없어야 하며, `wafer` 값은 `W` prefix 없이 복사되어야 한다.
+- E2E guard는 `scripts/e2e_chunk1.js` record `grid-context-actions`다. 최소 검증: `선택 wafer 리스트 복사(YMS 방식)` 라벨, YMS text clipboard rows, wafer info table without bucket columns, `선택 파일 다운로드`, `선택한 이미지 복사 (Legend 포함)`, `MY LOT에 추가`.
+- Single image context menu는 실제 보이는 `#single-context-menu` 또는 chip 우클릭에서 생성되는 `#chip-context-menu`를 대상으로 검증한다. Record `13-19`는 `파일명복사 (YMS)`, `이미지 복사`, `캔버스 전체 복사`, `원본 다운로드`, `MY LOT 추가`를 모두 실제 메뉴 클릭으로 검증해야 한다.
+
 ## 절대규칙: Wafer Map Explorer 스크롤바/폴더 선택 회귀 금지
 
 - 폴더 선택으로 만든 grid 또는 gridImage single 상태에서 Wafer Map Explorer의 스크롤바를 드래그해도 Explorer rectangle selection이 시작되면 안 된다.
