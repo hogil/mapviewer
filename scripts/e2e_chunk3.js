@@ -25,11 +25,14 @@ const { createRunner } = require('./e2e_playwright_session');
     'e2e_wf_class_single',
     'e2e_wf_class_multi_a',
     'e2e_wf_class_multi_b',
+    'e2e_wf_class_rename_old',
+    'e2e_wf_class_rename_new',
     'e2e_wf_label_add',
     'e2e_wf_label_single_delete',
     'e2e_wf_label_multi_delete',
     'e2e_wf_label_folder_a',
     'e2e_wf_label_folder_b',
+    'e2e_wf_chip_from_wafer_label',
   ];
   const COMPOSITE_E2E_TIMEOUT_MS = 90000;
   const PHASE_61_62_SUMMARY_FILE = 'cold-start-summary.json';
@@ -1151,13 +1154,20 @@ const { createRunner } = require('./e2e_playwright_session');
     });
     await page.waitForFunction(
       async ({ expectedMode, names }) => {
+        if (window.viewer?.classMode !== expectedMode) return false;
         const classButtons = Array.from(document.querySelectorAll('#class-list button'))
           .map((button) => (button.textContent || '').trim());
+        const labelFolders = Array.from(document.querySelectorAll('#label-explorer-list li > div'))
+          .map((node) => (node.textContent || '').replace(/[▸▾]/g, '').trim());
         const response = await fetch(`/api/classes?mode=${encodeURIComponent(expectedMode)}`, { cache: 'no-store' });
         if (!response.ok) return false;
         const body = await response.json();
         const apiClasses = Array.isArray(body.classes) ? body.classes : [];
-        return names.every((name) => classButtons.includes(name) && apiClasses.includes(name));
+        return names.every((name) =>
+          classButtons.includes(name) &&
+          apiClasses.includes(name) &&
+          labelFolders.includes(name)
+        );
       },
       { expectedMode: mode, names: classNames },
       { timeout: 20000 }
@@ -1240,6 +1250,59 @@ const { createRunner } = require('./e2e_playwright_session');
     return {
       selectedBeforeDelete,
       after: await getClassificationUiState(classNames),
+    };
+  }
+
+  async function renameClassViaUi(mode, oldName, newName) {
+    await setClassModeUi(mode);
+    await refreshClassificationUi(mode, [oldName, newName]);
+    await page.evaluate(() => {
+      const v = window.viewer;
+      if (v?.classSelection) {
+        v.classSelection.selected = [];
+        v.classSelection.lastClicked = null;
+        v.selectedClass = null;
+        v.updateClassListSelection?.();
+      }
+    });
+    await clickClassButton(oldName, ['Control']);
+    await page.waitForFunction(
+      () => document.getElementById('rename-class-btn')?.disabled === false,
+      null,
+      { timeout: 10000 }
+    );
+    const renameDialogs = [];
+    const handler = async (dialog) => {
+      renameDialogs.push({ type: dialog.type(), message: dialog.message() });
+      if (dialog.type() === 'prompt') {
+        await dialog.accept(newName);
+      } else {
+        await dialog.accept();
+      }
+    };
+    page.on('dialog', handler);
+    try {
+      await page.locator('#rename-class-btn').click({ timeout: 10000 });
+      await page.waitForFunction(
+        ({ oldClass, renamedClass }) => {
+          const classButtons = Array.from(document.querySelectorAll('#class-list button'))
+            .map((button) => (button.textContent || '').trim());
+          const labelFolders = Array.from(document.querySelectorAll('#label-explorer-list li > div'))
+            .map((node) => (node.textContent || '').replace(/[▸▾]/g, '').trim());
+          return classButtons.includes(renamedClass) &&
+            !classButtons.includes(oldClass) &&
+            labelFolders.includes(renamedClass) &&
+            !labelFolders.includes(oldClass);
+        },
+        { oldClass: oldName, renamedClass: newName },
+        { timeout: 30000 }
+      );
+    } finally {
+      page.off('dialog', handler);
+    }
+    return {
+      dialogs: renameDialogs,
+      after: await getClassificationUiState([oldName, newName]),
     };
   }
 
@@ -2405,11 +2468,14 @@ const { createRunner } = require('./e2e_playwright_session');
       classSingle: 'e2e_wf_class_single',
       classMultiA: 'e2e_wf_class_multi_a',
       classMultiB: 'e2e_wf_class_multi_b',
+      classRenameOld: 'e2e_wf_class_rename_old',
+      classRenameNew: 'e2e_wf_class_rename_new',
       labelAdd: 'e2e_wf_label_add',
       labelSingleDelete: 'e2e_wf_label_single_delete',
       labelMultiDelete: 'e2e_wf_label_multi_delete',
       folderA: 'e2e_wf_label_folder_a',
       folderB: 'e2e_wf_label_folder_b',
+      chipFromWaferLabel: 'e2e_wf_chip_from_wafer_label',
     };
 
     await cleanupClassFixtures('wafer', E2E_WAFER_LABEL_CRUD_CLASSES);
@@ -2435,6 +2501,19 @@ const { createRunner } = require('./e2e_playwright_session');
         `wafer multi class delete failed=${JSON.stringify(classMultiDelete)}`
       );
 
+      const classRenameAdd = await addClassesViaUi('wafer', [classes.classRenameOld]);
+      expect(
+        classRenameAdd.present.includes(classes.classRenameOld),
+        `wafer rename source class add failed=${JSON.stringify(classRenameAdd)}`
+      );
+      const classRename = await renameClassViaUi('wafer', classes.classRenameOld, classes.classRenameNew);
+      expect(
+        classRename.after.present.includes(classes.classRenameNew) &&
+          classRename.after.absent.includes(classes.classRenameOld) &&
+          classRename.after.labelPresent.includes(classes.classRenameNew),
+        `wafer class rename did not refresh UI immediately=${JSON.stringify(classRename)}`
+      );
+
       const sampleImages = await getUnknownSampleImages(10);
       const classMap = {
         [classes.labelAdd]: [],
@@ -2450,6 +2529,79 @@ const { createRunner } = require('./e2e_playwright_session');
       const addLabelDialogs = await addLabelToCurrentSelectionViaModal('wafer', classes.labelAdd);
       const labelAddFiles = await waitForClassFileCount('wafer', classes.labelAdd, 2, 'gte');
       expect(labelAddFiles.count >= 2, `wafer label add failed=${JSON.stringify(labelAddFiles)}`);
+
+      await ensureLabelFolderOpen(classes.labelAdd, 2);
+      const waferLabelClick = await clickLabelImageButton(classes.labelAdd, 0);
+      await page.waitForFunction(
+        (targetClass) => {
+          const v = window.viewer;
+          const path = String(v?.selectedImagePath || '').replace(/\\/g, '/');
+          return v?.gridMode === false &&
+            /\/?classification\//i.test(path) &&
+            path.includes(`classification/${targetClass}/`) &&
+            Array.isArray(v.chipAnnotator?.chips) &&
+            v.chipAnnotator.chips.length > 0;
+        },
+        classes.labelAdd,
+        { timeout: 90000 }
+      );
+      const waferLabelPositions = await page.evaluate(() => ({
+        selectedImagePath: String(window.viewer?.selectedImagePath || '').replace(/\\/g, '/'),
+        chipCount: window.viewer?.chipAnnotator?.chips?.length || 0,
+      }));
+      const chipClassFromWaferAdd = await addClassesViaUi('chip', [classes.chipFromWaferLabel]);
+      expect(
+        chipClassFromWaferAdd.present.includes(classes.chipFromWaferLabel),
+        `chip class for wafer-label source add failed=${JSON.stringify(chipClassFromWaferAdd)}`
+      );
+      const selectedChipsFromWaferLabel = await page.evaluate((requiredCount) => {
+        const v = window.viewer;
+        const annotator = v?.chipAnnotator;
+        const chips = annotator?.chips || [];
+        const selected = [];
+        for (let i = 0; i < chips.length && selected.length < requiredCount; i += 1) {
+          const chip = chips[i];
+          if (Number.isFinite(Number(chip?.x_abs)) && Number.isFinite(Number(chip?.y_abs))) {
+            selected.push(i);
+          }
+        }
+        if (selected.length < requiredCount) {
+          return { ok: false, selected, chipCount: chips.length };
+        }
+        annotator.selectedChips = new Set(selected);
+        annotator.selectedChipsOrder = selected;
+        annotator.updateSelectedChipsList?.();
+        annotator.render?.();
+        return {
+          ok: true,
+          selected,
+          chipCount: chips.length,
+          coords: selected.map((idx) => ({
+            x_abs: Number(chips[idx].x_abs),
+            y_abs: Number(chips[idx].y_abs),
+          })),
+          selectedImagePath: String(v.selectedImagePath || '').replace(/\\/g, '/'),
+        };
+      }, 2);
+      expect(
+        selectedChipsFromWaferLabel.ok,
+        `wafer label copy did not expose selectable chips=${JSON.stringify({ waferLabelClick, waferLabelPositions, selectedChipsFromWaferLabel })}`
+      );
+      await clickClassButton(classes.chipFromWaferLabel);
+      const chipFilesFromWaferLabel = await waitForClassFileCount(
+        'chip',
+        classes.chipFromWaferLabel,
+        selectedChipsFromWaferLabel.selected.length,
+        'gte'
+      );
+      expect(
+        chipFilesFromWaferLabel.count >= selectedChipsFromWaferLabel.selected.length,
+        `chip label from wafer label copy failed=${JSON.stringify({ selectedChipsFromWaferLabel, chipFilesFromWaferLabel })}`
+      );
+
+      await setClassModeUi('wafer');
+      await loadFolder('unknown');
+      await refreshClassificationUi('wafer', [classes.labelAdd, classes.folderA, classes.folderB]);
 
       await ensureLabelFolderOpen(classes.folderA, 2);
       const folderAOpenBeforeAdd = await waitForOpenLabelFolderCount(classes.folderA, 2);
@@ -2592,8 +2744,15 @@ const { createRunner } = require('./e2e_playwright_session');
         classSingleDelete,
         classMultiAdd,
         classMultiDelete,
+        classRenameAdd,
+        classRename,
         labelAddFiles,
         addLabelDialogs: addLabelDialogs.dialogs,
+        waferLabelClick,
+        waferLabelPositions,
+        chipClassFromWaferAdd,
+        selectedChipsFromWaferLabel,
+        chipFilesFromWaferLabel,
         folderAOpenBeforeAdd,
         openFolderAddDialogs: openFolderAddDialogs.dialogs,
         folderAOpenAfterAdd,
@@ -2618,6 +2777,9 @@ const { createRunner } = require('./e2e_playwright_session');
     } finally {
       await cleanupClassFixtures('wafer', E2E_WAFER_LABEL_CRUD_CLASSES).catch((error) => {
         append(`[WARN] wafer label CRUD cleanup failed :: ${String(error?.message || error)}\n`);
+      });
+      await cleanupClassFixtures('chip', [classes.chipFromWaferLabel]).catch((error) => {
+        append(`[WARN] wafer label chip cleanup failed :: ${String(error?.message || error)}\n`);
       });
     }
   });

@@ -57,6 +57,7 @@ class SearchService:
         self.global_only_excluded_folders = {
             "my-lot",
             "fq_missing_test",
+            "chip_multilabel",
             "unknown_pre",
             "unknown_normal_pre",
         }

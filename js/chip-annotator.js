@@ -43,7 +43,7 @@ export class ChipAnnotator {
         this.selectedChips = new Set(); // Set of chip indices
         this.selectedChipsOrder = []; // 🔥 선택 순서 추적 (항상 맨 밑에 추가)
         this.legendFilterClasses = null;
-        this.chipLabelOverlayAlpha = 0.15;
+        this.chipLabelOverlayAlpha = 0.2;
         this.bottomFilterSet = new Set(); // 🔥 Bottom Filter (Chip b-value based mask)
 
         // Overlay mode: null = normal (white mask), 'bin' = bin color fill+text, 'f'/'q' = ratio gradient
@@ -58,14 +58,14 @@ export class ChipAnnotator {
 
         this.classColors = new Map();
         this.classColorPalette = [
-            [239, 83, 80],
-            [255, 160, 67],
-            [255, 214, 102],
-            [102, 187, 106],
-            [38, 166, 154],
             [41, 182, 246],
+            [102, 187, 106],
+            [255, 160, 67],
             [126, 87, 194],
+            [38, 166, 154],
+            [255, 214, 102],
             [171, 71, 188],
+            [239, 83, 80],
             [255, 112, 67],
             [158, 158, 158]
         ];

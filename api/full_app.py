@@ -30,7 +30,7 @@ if sys.platform == 'win32' and _has_interactive_console():
         pass
 
 # ======================== Imports ========================
-import re, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid, io, math, struct, zlib, stat as stat_module, contextvars, ssl  # struct/zlib: PNG PLTE 바이너리 조작용
+import re, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid, io, math, struct, zlib, stat as stat_module, contextvars, ssl, functools  # struct/zlib: PNG PLTE 바이너리 조작용
 from pathlib import Path
 from contextlib import contextmanager, asynccontextmanager
 from typing import List, Optional, Dict, Any, Tuple, Set, Literal, Iterable
@@ -8292,10 +8292,12 @@ async def delete_class(request: Request,
         if not class_dir.exists() or not class_dir.is_dir(): raise HTTPException(status_code=404, detail="Class not found")
         if force:
             shutil.rmtree(class_dir)
+            _delete_class_positions_dir(class_dir)
             log_access_row(tag="INFO", note=f"클래스 삭제(force): {class_name}")
         else:
             if any(class_dir.iterdir()): raise HTTPException(status_code=409, detail="Class directory not empty")
             class_dir.rmdir()
+            _delete_class_positions_dir(class_dir)
             log_access_row(tag="INFO", note=f"클래스 삭제: {class_name}")
         try:
             class_rel = str(class_dir.relative_to(ROOT_DIR)).replace("\\", "/")
@@ -8344,6 +8346,7 @@ async def rename_class(request: Request,
 
         # 폴더 이름 변경 (폴더 구조가 source of truth이므로 이것만으로 충분)
         old_class_dir.rename(new_class_dir)
+        positions_renamed = _rename_class_positions_dir(old_class_dir, new_class_dir)
 
         try:
             old_rel = str(old_class_dir.relative_to(ROOT_DIR)).replace("\\", "/")
@@ -8357,7 +8360,15 @@ async def rename_class(request: Request,
         DIRLIST_CACHE.clear()
 
         log_access_row(tag="INFO", note=f"클래스 '{old_name}' → '{new_name}' 이름 변경 완료")
-        return {"success": True, "old_name": old_name, "new_name": new_name, "refresh_required": True}
+        renamed_count = sum(1 for p in new_class_dir.iterdir() if p.is_file() and is_supported_image(p))
+        return {
+            "success": True,
+            "old_name": old_name,
+            "new_name": new_name,
+            "renamed_count": renamed_count,
+            "positions_renamed": positions_renamed,
+            "refresh_required": True,
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -8382,6 +8393,7 @@ async def delete_classes(req: DeleteClassesReq,
                 logger.info(f"[DELETE_CLASS] class_dir: {class_dir}, exists: {class_dir.exists()}")
                 if not class_dir.exists() or not class_dir.is_dir(): raise FileNotFoundError("Class not found")
                 shutil.rmtree(class_dir)
+                _delete_class_positions_dir(class_dir)
                 try:
                     class_rel = str(class_dir.relative_to(ROOT_DIR)).replace("\\", "/")
                     index_service.delete_classification_prefix(class_rel)
@@ -8598,17 +8610,19 @@ async def classify_images(req: Request,
         except Exception:
             pass
 
-        # 🔥 positions.json을 POSITIONS_ROOT/classification/class_name/ 에 복사
+        # 🔥 positions.json을 classification copy와 같은 상대 경로 후보에 복사
         try:
-            pos_path = _resolve_positions_path(Path(rel_path))
-            if pos_path.exists():
-                pos_target_dir = config.POSITIONS_ROOT / "classification" / class_name
-                pos_target_dir.mkdir(parents=True, exist_ok=True)
-                target_pos = pos_target_dir / f"{abs_path.stem}.json"
-                should_copy = not target_pos.exists() or needs_replace
-                if should_copy:
-                    await loop.run_in_executor(IO_POOL, shutil.copy2, str(pos_path), str(target_pos))
-                    log_access_row(tag="ACTION", note=f"positions 복사: {pos_path.name} -> positions/classification/{class_name}/")
+            copied_positions = await loop.run_in_executor(
+                IO_POOL,
+                functools.partial(
+                    _copy_positions_for_classified_file,
+                    Path(rel_path),
+                    target_file,
+                    force=needs_replace,
+                ),
+            )
+            if copied_positions:
+                log_access_row(tag="ACTION", note=f"positions 복사: {rel_path} -> {class_name} ({copied_positions})")
         except Exception as pos_err:
             logger.debug(f"positions 복사 건너뜀 ({rel_path}): {pos_err}")
 
@@ -8715,15 +8729,9 @@ async def classify_images_batch(request: BatchClassifyRequest,
                 except Exception:
                     pass
 
-                # 🔥 positions.json을 POSITIONS_ROOT/classification/class_name/ 에 복사
+                # 🔥 positions.json을 classification copy와 같은 상대 경로 후보에 복사
                 try:
-                    pos_path = _resolve_positions_path(Path(rel_path))
-                    if pos_path.exists():
-                        pos_target_dir = config.POSITIONS_ROOT / "classification" / class_name
-                        pos_target_dir.mkdir(parents=True, exist_ok=True)
-                        target_pos = pos_target_dir / f"{abs_path.stem}.json"
-                        if not target_pos.exists() or needs_replace:
-                            shutil.copy2(str(pos_path), str(target_pos))
+                    _copy_positions_for_classified_file(Path(rel_path), target_file, force=needs_replace)
                 except Exception:
                     pass
 
@@ -9824,6 +9832,72 @@ def _resolve_positions_path(rel_path: Path) -> Path:
         if candidate.exists():
             return candidate
     return _candidate_positions_paths(rel_path)[0]
+
+def _positions_dirs_for_class_dir(class_dir: Path) -> List[Path]:
+    try:
+        rel_dir = class_dir.relative_to(ROOT_DIR)
+    except ValueError:
+        return []
+    dummy_rel = rel_dir / "__positions_dir_probe__.png"
+    dirs: List[Path] = []
+    for candidate in _candidate_positions_paths(dummy_rel):
+        parent = candidate.parent
+        if parent not in dirs:
+            dirs.append(parent)
+    return dirs
+
+def _copy_positions_for_classified_file(source_rel: Path, target_file: Path, *, force: bool = False) -> int:
+    source_positions = _resolve_positions_path(source_rel)
+    if not source_positions.exists():
+        return 0
+    try:
+        target_rel = target_file.relative_to(ROOT_DIR)
+    except ValueError:
+        return 0
+    copied = 0
+    for candidate in _candidate_positions_paths(target_rel):
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        if force or not candidate.exists():
+            shutil.copy2(str(source_positions), str(candidate))
+            copied += 1
+    return copied
+
+def _merge_move_positions_dir(src_dir: Path, dst_dir: Path) -> int:
+    if not src_dir.exists() or not src_dir.is_dir():
+        return 0
+    moved = 0
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    for child in src_dir.iterdir():
+        target = dst_dir / child.name
+        if child.is_dir():
+            moved += _merge_move_positions_dir(child, target)
+            continue
+        if target.exists():
+            try:
+                target.unlink()
+            except Exception:
+                pass
+        shutil.move(str(child), str(target))
+        moved += 1
+    try:
+        src_dir.rmdir()
+    except Exception:
+        pass
+    return moved
+
+def _rename_class_positions_dir(old_class_dir: Path, new_class_dir: Path) -> int:
+    moved = 0
+    for old_pos_dir, new_pos_dir in zip(
+        _positions_dirs_for_class_dir(old_class_dir),
+        _positions_dirs_for_class_dir(new_class_dir),
+    ):
+        moved += _merge_move_positions_dir(old_pos_dir, new_pos_dir)
+    return moved
+
+def _delete_class_positions_dir(class_dir: Path) -> None:
+    for pos_dir in _positions_dirs_for_class_dir(class_dir):
+        if pos_dir.exists() and pos_dir.is_dir():
+            shutil.rmtree(pos_dir, ignore_errors=True)
 
 def _current_username(req: Optional[Request], default: str = "system") -> str:
     if req is None:

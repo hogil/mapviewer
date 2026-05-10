@@ -1157,13 +1157,20 @@ const { createRunner } = require('./e2e_playwright_session');
     try {
       await page.waitForFunction(
         async ({ expectedMode, names }) => {
+          if (window.viewer?.classMode !== expectedMode) return false;
           const classButtons = Array.from(document.querySelectorAll('#class-list button'))
             .map((button) => (button.textContent || '').trim());
+          const labelFolders = Array.from(document.querySelectorAll('#label-explorer-list li > div'))
+            .map((node) => (node.textContent || '').replace(/[▸▾]/g, '').trim());
           const response = await fetch(`/api/classes?mode=${encodeURIComponent(expectedMode)}`, { cache: 'no-store' });
           if (!response.ok) return false;
           const body = await response.json();
           const apiClasses = Array.isArray(body.classes) ? body.classes : [];
-          return names.every((name) => classButtons.includes(name) && apiClasses.includes(name));
+          return names.every((name) =>
+            classButtons.includes(name) &&
+            apiClasses.includes(name) &&
+            labelFolders.includes(name)
+          );
         },
         { expectedMode: mode, names: classNames },
         { timeout: 20000 }
@@ -1576,6 +1583,109 @@ const { createRunner } = require('./e2e_playwright_session');
     return result;
   }
 
+  async function readChipLabelOverlayProbe(className, coordCandidates = []) {
+    await page.waitForFunction(
+      (targetClass) => {
+        const ca = window.viewer?.chipAnnotator;
+        return Array.isArray(ca?.markedChips) &&
+          ca.markedChips.some((chip) => (chip.class || chip.label) === targetClass);
+      },
+      className,
+      { timeout: 20000 }
+    );
+    await sleep(300);
+    return await page.evaluate(({ className: targetClass, coordCandidates: candidates }) => {
+      const v = window.viewer;
+      const ca = v?.chipAnnotator;
+      if (!v || !ca || !ca.canvas || !ca.ctx) {
+        return { ok: false, reason: 'chip annotator missing' };
+      }
+
+      const num = (value) => {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : null;
+      };
+      const key = (x, y) => {
+        const nx = num(x);
+        const ny = num(y);
+        return nx === null || ny === null ? null : `${nx}:${ny}`;
+      };
+      const coordKeys = new Set(
+        (Array.isArray(candidates) ? candidates : [])
+          .map((coord) => key(coord?.x_abs, coord?.y_abs))
+          .filter(Boolean)
+      );
+      const markedCandidates = (ca.markedChips || [])
+        .filter((chip) => (chip.class || chip.label) === targetClass);
+      let marked = markedCandidates.find((chip) => {
+        if (coordKeys.size === 0) return true;
+        return coordKeys.has(key(chip.x_abs, chip.y_abs));
+      }) || markedCandidates[0];
+      if (!marked) {
+        return { ok: false, reason: 'marked class missing', targetClass, markedCount: ca.markedChips?.length || 0 };
+      }
+
+      const chip = (ca.chips || []).find((candidate) =>
+        candidate &&
+        Number(candidate.x_abs) === Number(marked.x_abs) &&
+        Number(candidate.y_abs) === Number(marked.y_abs) &&
+        candidate.rect
+      );
+      if (!chip) {
+        return { ok: false, reason: 'matching chip missing', targetClass, marked };
+      }
+
+      const legend = document.getElementById('chip-label-legend');
+      const pill = Array.from(legend?.querySelectorAll('button[data-chip-label]') || [])
+        .find((button) => button.getAttribute('data-chip-label') === targetClass);
+      const activeSet = ca.legendFilterClasses instanceof Set ? ca.legendFilterClasses : null;
+      const activeClasses = activeSet ? Array.from(activeSet) : null;
+
+      const original = {
+        scale: v.transform.scale,
+        dx: v.transform.dx,
+        dy: v.transform.dy,
+        zoom: v.zoom,
+      };
+      const centerX = (chip.rect.x0 + chip.rect.x1) / 2;
+      const centerY = (chip.rect.y0 + chip.rect.y1) / 2;
+      const yOffset = ca.Y_OFFSET || 0;
+      const scale = Math.max(1.25, Number(v.transform.scale) || 1.25);
+      const clamp = (value, max) => Math.max(0, Math.min(max - 1, Math.round(value)));
+
+      v.transform.scale = scale;
+      v.zoom = scale;
+      v.transform.dx = Math.round(ca.canvas.width / 2 - centerX * scale);
+      v.transform.dy = Math.round(ca.canvas.height / 2 - centerY * scale - yOffset);
+      ca.render();
+
+      const x = clamp(centerX * scale + v.transform.dx, ca.canvas.width);
+      const y = clamp(centerY * scale + v.transform.dy + yOffset, ca.canvas.height);
+      const rgba = Array.from(ca.ctx.getImageData(x, y, 1, 1).data);
+
+      v.transform.scale = original.scale;
+      v.transform.dx = original.dx;
+      v.transform.dy = original.dy;
+      v.zoom = original.zoom;
+      ca.render();
+
+      return {
+        ok: true,
+        targetClass,
+        markedCount: markedCandidates.length,
+        overlayEnabled: v.chipLabelOverlayEnabled === true,
+        toggleChecked: document.getElementById('chip-label-overlay-toggle')?.checked === true,
+        pillActive: pill?.classList.contains('is-active') || false,
+        legendFilterHasClass: !activeSet || activeSet.has(targetClass),
+        activeClasses,
+        point: { x, y },
+        rgba,
+        alpha: rgba[3],
+        marked: { x_abs: marked.x_abs, y_abs: marked.y_abs, class: marked.class || marked.label },
+      };
+    }, { className, coordCandidates });
+  }
+
   await boot('chunk1');
 
   await record('1', '페이지 로드 & 기본 UI', async () => {
@@ -1589,10 +1699,30 @@ const { createRunner } = require('./e2e_playwright_session');
       )).some((node) => (node.textContent || '').includes('unknown')),
       classListExists: !!document.querySelector('#class-list'),
       classCount: document.querySelectorAll('#class-list .class-btn').length,
+      filterBadges: ['lt', 'tm', 'step'].map((type) => {
+        const panel = document.getElementById(`filter-${type}-panel`);
+        const badge = panel?.querySelector('.filter-count-badge');
+        const labels = Array.from(panel?.children || [])
+          .slice(0, 2)
+          .map((node) => (node.textContent || '').trim());
+        return {
+          type,
+          text: badge?.textContent || '',
+          firstChildClass: panel?.firstElementChild?.className || '',
+          firstLabels: labels,
+        };
+      }),
     }));
     expect(data.title === 'Wafer Map Viewer', `title=${data.title}`);
     expect(data.hasUnknownFolder, `folder explorer missing unknown: ${JSON.stringify(data)}`);
     expect(data.classListExists, 'class-list missing');
+    expect(
+      data.filterBadges.every((badge) =>
+        badge.text === '0개 선택중' &&
+        String(badge.firstChildClass || '').includes('filter-count-badge')
+      ),
+      `filter badges should be pre-rendered to avoid panel shift: ${JSON.stringify(data.filterBadges)}`
+    );
     return data;
   });
 
@@ -3357,6 +3487,20 @@ const { createRunner } = require('./e2e_playwright_session');
         labelAddFiles.count >= 2,
         `chip label add failed=${JSON.stringify({ selectedChipsForAdd, addLabelDialogs, labelAddFiles })}`
       );
+      const labelAddOverlayProbe = await readChipLabelOverlayProbe(classes.labelAdd, selectedChipsForAdd.coords);
+      expect(
+        labelAddOverlayProbe.ok &&
+          labelAddOverlayProbe.overlayEnabled &&
+          labelAddOverlayProbe.toggleChecked &&
+          labelAddOverlayProbe.pillActive &&
+          labelAddOverlayProbe.legendFilterHasClass &&
+          labelAddOverlayProbe.alpha >= 30,
+        `chip label overlay did not render immediately after add=${JSON.stringify({
+          selectedChipsForAdd,
+          labelAddFiles,
+          labelAddOverlayProbe,
+        })}`
+      );
 
       await ensureLabelFolderOpen(classes.folderA, 2);
       const folderAOpenBeforeAdd = await waitForOpenLabelFolderCount(classes.folderA, 2);
@@ -3516,6 +3660,7 @@ const { createRunner } = require('./e2e_playwright_session');
         classMultiDelete,
         selectedChipsForAdd,
         labelAddFiles,
+        labelAddOverlayProbe,
         addLabelDialogs: addLabelDialogs.dialogs,
         folderAOpenBeforeAdd,
         selectedChipsForOpenFolderAdd,
@@ -3763,6 +3908,8 @@ const { createRunner } = require('./e2e_playwright_session');
         visible: !!legend && getComputedStyle(legend).display !== 'none',
         count: pills.length,
         activeCount: pills.filter((pill) => pill.classList.contains('is-active')).length,
+        firstClass: pills[0]?.getAttribute('data-chip-label') || null,
+        firstDotColor: pills[0]?.querySelector('.chip-label-pill__dot')?.style.background || '',
         invalidMainActive: !!pills.find((pill) =>
           pill.getAttribute('data-chip-label') === 'invalid_main' && pill.classList.contains('is-active')
         ),
@@ -3793,11 +3940,12 @@ const { createRunner } = require('./e2e_playwright_session');
       legendBefore = await readChipLabelLegendState();
     }
     expect(legendBefore.toggleChecked === true && legendBefore.overlayEnabled === true, `chip label overlay toggle should be on before selection checks: ${JSON.stringify(legendBefore)}`);
-    expect(legendBefore.overlayAlpha === 0.15, `chip label overlay alpha should be 15%: ${JSON.stringify(legendBefore)}`);
+    expect(legendBefore.overlayAlpha === 0.2, `chip label overlay alpha should be 20%: ${JSON.stringify(legendBefore)}`);
+    expect(!/rgb\(239,\s*83,\s*80\)/.test(legendBefore.firstDotColor), `first chip label color should not be red: ${JSON.stringify(legendBefore)}`);
     expect(legendBefore.activeCount === legendBefore.count, `chip label classes should all be active by default: ${JSON.stringify(legendBefore)}`);
     expect(legendBefore.invalidMainActive, `invalid_main should be active by default: ${JSON.stringify(legendBefore)}`);
 
-    const selectedChipClassFilter = await page.evaluate(async () => {
+    const selectedChipOverlayState = await page.evaluate(async () => {
       const v = window.viewer;
       const annotator = v.chipAnnotator;
       const marked = (annotator.markedChips || []).find(chip => chip.class === 'bank_boundary') ||
@@ -3832,11 +3980,11 @@ const { createRunner } = require('./e2e_playwright_session');
       };
     });
     expect(
-      selectedChipClassFilter.active.length === 1 &&
-        selectedChipClassFilter.active[0] === selectedChipClassFilter.markedClass &&
-        selectedChipClassFilter.filter?.length === 1 &&
-        selectedChipClassFilter.filter[0] === selectedChipClassFilter.markedClass,
-      `chip selection should narrow chip labels to selected object class: ${JSON.stringify(selectedChipClassFilter)}`
+      selectedChipOverlayState.active.length === legendBefore.count &&
+        selectedChipOverlayState.active.includes(selectedChipOverlayState.markedClass) &&
+        selectedChipOverlayState.filter?.length === legendBefore.count &&
+        selectedChipOverlayState.filter.includes(selectedChipOverlayState.markedClass),
+      `chip selection should preserve active chip label overlay classes: ${JSON.stringify({ legendBefore, selectedChipOverlayState })}`
     );
     await page.evaluate(() => {
       const v = window.viewer;
@@ -4760,7 +4908,7 @@ const { createRunner } = require('./e2e_playwright_session');
       waferSingle,
       waferSinglePanel,
       legendBefore,
-      selectedChipClassFilter,
+        selectedChipOverlayState,
       legendToggleOff,
       legendReloadOff,
       legendReloadToggleOn,

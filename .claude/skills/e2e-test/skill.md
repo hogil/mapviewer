@@ -190,8 +190,13 @@ E2E 실행이 끝나면 최종 답변에 반드시 "무엇을 어떻게 실행�
 ## 절대규칙: Label Explorer CRUD와 열린 폴더 리스트 보존
 
 - wafer와 chip 모두 Class Manager의 class add, multi-add, delete, multi-select delete를 실제 UI 버튼과 `/api/classes` 최신 목록으로 검증한다.
+- Class Manager rename은 prompt 확인 뒤 새로고침 없이 Class Manager와 Label Explorer 모두에서 old class가 사라지고 new class가 즉시 보여야 한다.
+- Chip/Wafer class 목록과 Label Explorer는 mode별 캐시를 섞으면 안 된다. Chip class 추가 직후 새로고침이나 wafer/chip 탭 재선택 없이 `classMode === 'chip'`, Class Manager, Label Explorer가 모두 chip class 목록을 보여야 한다.
 - Label Explorer는 label add, label 단일 delete, label 다중선택 delete, class folder 선택 delete, folder 다중선택 image grid, 여러 folder image grid, grid에서 1개 detail view까지 포함한다.
 - 특정 class folder 파일 리스트가 열린 상태에서 label add/delete를 하면 폴더는 계속 열려 있어야 하며 `button.label-img-name` sample 행만 증가/감소해야 한다. 상태 플래그만 보지 말고 실제 DOM count와 API file count를 같이 확인한다.
+- Chip label 저장 직후에는 Chip Labels 체크박스나 class pill을 다시 토글하지 않아도 새 class pill이 active이고 overlay canvas 내부 alpha가 즉시 표시되어야 한다.
+- Chip을 추가로 선택하거나 선택 해제해도 사용자가 켜둔 Chip Labels active class set을 자동으로 좁히거나 초기화하면 안 된다.
+- Wafer label 등록 파일은 corresponding positions.json을 classification copy 경로에도 가져야 한다. Label Explorer에서 해당 wafer label copy를 열면 chip positions가 로드되고, 그 chip들을 선택해 chip label로 저장할 수 있어야 한다.
 - E2E guard는 chip은 `scripts/e2e_chunk1.js`의 `chip-label-crud-ui`, wafer는 `scripts/e2e_chunk3.js`의 `label-wafer-crud` record다. 열린 폴더 add는 `2 -> 4`, 단일/다중/folder delete는 `1/2 -> 0`과 `open === true`를 요구한다.
 
 ## 절대규칙: Positions 파일 전체 스캔 금지
@@ -452,7 +457,7 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 - **서버 미들웨어에서 `_effective_login_id()` 사용 금지**: `AccessTrackingMiddleware`의 `request.state.session_user`에는 `_current_login_id()`만 사용. `_effective_login_id()`는 fallback을 포함하므로 stats.json 오염 원인.
 
 **변경사항 (2026-03-17)**:
-- 필터 버튼 UI: LOT/TEST/STEP 선택 시 `.filter-active` 파란색, 드롭다운에 "N개 선택됨" 배지
+- 필터 버튼 UI: LOT/TEST/STEP 선택 시 `.filter-active` 파란색, 드롭다운에는 처음 열기 전부터 "0개 선택중" 배지를 렌더링하고 선택 후 "N개 선택중"으로 갱신한다.
 - Reset 버튼: `↺` → `Reset` 텍스트, 필터 활성 시 파란색
 - 헤더 버튼: "Wafer Map Explorer" / "Label Explorer" 텍스트로 변경
 - 텍스트: "색변경"→"색 변경", "권한"→"권한 변경"
@@ -644,7 +649,7 @@ LOT Mode 활성 상태에서 정렬 변경 시 LOT 그룹핑이 유지되고 그
 1. 필터 선택 시 해당 버튼(LOT/TEST/STEP)에 `filter-active` 클래스 추가 → 파란색
 2. 필터 해제 시 `filter-active` 클래스 제거 → 원래 색
 3. Reset 버튼도 필터 활성 시 파란색, 전부 해제 시 원래 색
-4. 드롭다운 패널 상단에 "N개 선택됨" 배지 표시/제거
+4. 드롭다운 패널 상단에 항상 "0개 선택중" 배지를 먼저 렌더링하고 선택 시 "N개 선택중"으로 갱신
 
 **검증 단계** (LOT과 TEST 둘 다 해야 함):
 1. LOT 단독 (EE → PT → PE → E% 와일드카드) + TEST 단독 (NORMAL → ENGINEER)
@@ -6361,7 +6366,7 @@ return {
 - chip label 관련 wafer/lot 보기는 Label Explorer, chip-label grid 다중 선택 context menu, chip-label single image context menu에서 모두 보여야 한다.
 - chip label → wafer/lot 보기 결과는 새 wafer tab으로 열고, lot/wafer 기준으로 중복 제거한다. 결과 경로는 원본 wafer여야 하며 `classification_chips` 또는 `obj_id_maps` 파생 경로가 나오면 FAIL.
 - chip label에서 열린 wafer single view는 상단 filename panel에 소속 folder를 보여야 하고, 좌하단 chip label legend/overlay가 보여야 한다. 반대로 chip label image single view는 folder line/separator를 숨겨야 한다.
-- chip label overlay 기본 active label은 `invalid_main`을 제외한다. overlay alpha는 `0.15`이고, fill은 chip interior에만 들어가 wafer chip boundary가 남아야 한다. legend width는 기존 264px 대비 약 15% 줄인 220~230px 범위로 유지한다.
+- chip label overlay 기본 active label은 `invalid_main`을 제외한다. overlay alpha는 `0.2`이고, fill은 chip interior에만 들어가 wafer chip boundary가 남아야 한다. legend width는 기존 264px 대비 약 15% 줄인 220~230px 범위로 유지한다.
 - chip label legend 우클릭은 모든 label을 끈다. legend 위 drag는 wafer image pan을 일으키면 FAIL.
 - `scratch` 클릭 후 Shift+`fork` 클릭은 contiguous range인 `scratch`, `bank_boundary`, `scratch_rot`, `fork` 전체를 선택해야 한다. fork 1개만 선택되면 FAIL.
 - legend Ctrl-drag는 지나간 label을 toggle하고, Ctrl+Shift-drag는 기존 선택에 range를 add한다. wafer canvas Ctrl+Shift-drag는 Shift rectangle-add path를 타서 chip을 2개 이상 multi-select해야 한다.

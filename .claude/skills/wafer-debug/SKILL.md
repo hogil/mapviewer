@@ -158,7 +158,7 @@ argument-hint: [증상-설명]
 - chip wafer key는 파일명 앞 5개 토큰 `product/bottom/wafer/date/time`이다. 예: `AAU220_00P_13_20260501_010000`. 이 prefix가 같으면 wafer filename에 `96.0_2` 같은 추가 토큰이 있어도 같은 wafer label로 매칭한다.
 - chip label에서 원본 wafer/lot 보기는 Label Explorer, chip-label grid context menu, chip-label single image context menu 모두에서 가능해야 한다. 결과는 새 wafer tab으로 열고 lot/wafer 기준으로 dedupe하며, 원본 wafer path만 포함한다.
 - chip label → wafer single view는 상단 folder와 좌하단 chip label legend/overlay가 보여야 한다. chip label image single view에서는 folder line/separator를 숨긴다.
-- chip label overlay 기본 active label은 `invalid_main` 제외, alpha는 `0.15`, fill은 chip interior만 칠해 chip boundary가 남아야 한다.
+- chip label overlay 기본 active label은 `invalid_main` 제외, alpha는 `0.2`, fill은 chip interior만 칠해 chip boundary가 남아야 한다.
 - legend 우클릭은 all-off, legend drag는 wafer pan 금지, `scratch` 클릭 후 Shift+`particle_blast` 클릭은 `scratch/bank_boundary/scratch_21deg/particle_blast` range 전체 선택이 정상이다.
 - Ctrl-drag는 legend label toggle, Ctrl+Shift-drag는 legend range add와 wafer canvas chip multi-select 모두 동작해야 한다.
 - 줌 레벨 전환 색상 문제는 personalized pyramid cache key/rev와 PLTE patch를 먼저 본다. 모든 `SERVER_CONFIG.PYRAMID_LEVELS`에서 개인색 pixel sample이 유지되어야 하며 pyvips/Pillow/speed fallback 모두 palette patch를 유지해야 한다.

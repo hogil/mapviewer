@@ -1112,6 +1112,8 @@ class WaferMapViewer {
         this.currentFolderVersion = 0;
         this.cachedClassListVersion = -1;
         this.classListPromiseVersion = -1;
+        this.cachedClassListMode = null;
+        this.classListPromiseMode = null;
 
         // Bind 'this' for event handlers that are dynamically added/removed
 
@@ -6202,17 +6204,13 @@ class WaferMapViewer {
         // 드롭다운 패널 상단에 선택 갯수 표시
         if (panel) {
             let badge = panel.querySelector('.filter-count-badge');
-            if (count > 0) {
-                if (!badge) {
-                    badge = document.createElement('div');
-                    badge.className = 'filter-count-badge';
-                    badge.style.cssText = 'padding:4px 10px;font-size:10px;color:#7ab;border-bottom:1px solid #444;';
-                    panel.prepend(badge);
-                }
-                badge.textContent = `${count}개 선택됨`;
-            } else if (badge) {
-                badge.remove();
+            if (!badge) {
+                badge = document.createElement('div');
+                badge.className = 'filter-count-badge';
+                badge.style.cssText = 'padding:4px 10px;font-size:10px;color:#7ab;border-bottom:1px solid #444;';
+                panel.prepend(badge);
             }
+            badge.textContent = `${count}개 선택중`;
         }
         // Reset 버튼 활성 상태
         const resetBtn = document.getElementById('filter-reset-btn');
@@ -6250,6 +6248,9 @@ class WaferMapViewer {
         this._bindMultiSelectFilter('lt');
         this._bindMultiSelectFilter('tm');
         this._bindMultiSelectFilter('step');
+        this._updateMultiSelectBtn('lt');
+        this._updateMultiSelectBtn('tm');
+        this._updateMultiSelectBtn('step');
 
         // 필터 리셋 버튼
         const filterResetBtn = document.getElementById('filter-reset-btn');
@@ -6491,6 +6492,8 @@ class WaferMapViewer {
     resetClassModeState() {
         this.cachedClassList = null;
         this.classListPromise = null;
+        this.cachedClassListMode = null;
+        this.classListPromiseMode = null;
         this.classToImgListCache = {};
         this.classSelection = { selected: [], lastClicked: null };
         this.selectedClass = null;
@@ -6546,6 +6549,8 @@ class WaferMapViewer {
         this.classListPromiseVersion = -1;
         this.cachedClassList = null;
         this.classListPromise = null;
+        this.cachedClassListMode = null;
+        this.classListPromiseMode = null;
         if (reason) {
             this.debugLog(`🔥 [CTX] folder version -> ${this.currentFolderVersion} (${reason})`);
         }
@@ -16166,11 +16171,12 @@ class WaferMapViewer {
 
     async getClassList(force = false) {
         const version = this.currentFolderVersion || 0;
+        const mode = this.classMode || 'wafer';
 
-        if (!force && this.cachedClassList && this.cachedClassListVersion === version) {
+        if (!force && this.cachedClassList && this.cachedClassListVersion === version && this.cachedClassListMode === mode) {
             return this.cachedClassList;
         }
-        if (!force && this.classListPromise && this.classListPromiseVersion === version) {
+        if (!force && this.classListPromise && this.classListPromiseVersion === version && this.classListPromiseMode === mode) {
             return this.classListPromise;
         }
 
@@ -16186,19 +16192,22 @@ class WaferMapViewer {
                     ? data.classes.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
                     : [];
 
-                if (this.currentFolderVersion !== version) {
+                if (this.currentFolderVersion !== version || this.classMode !== mode) {
                     this.debugLog('⚠️ [CLASS_LIST] 컨텍스트 변경으로 결과 무시');
-                    return this.cachedClassList && this.cachedClassListVersion === this.currentFolderVersion
+                    return this.cachedClassList &&
+                        this.cachedClassListVersion === this.currentFolderVersion &&
+                        this.cachedClassListMode === this.classMode
                         ? this.cachedClassList
                         : [];
                 }
 
                 this.cachedClassList = classes;
                 this.cachedClassListVersion = version;
+                this.cachedClassListMode = mode;
                 return classes;
             } catch (error) {
                 console.error('클래스 목록 조회 실패:', error);
-                if (this.cachedClassList && this.cachedClassListVersion === version) {
+                if (this.cachedClassList && this.cachedClassListVersion === version && this.cachedClassListMode === mode) {
                     return this.cachedClassList;
                 }
                 if (!this.cachedClassList) {
@@ -16206,19 +16215,21 @@ class WaferMapViewer {
                 }
                 throw error;
             } finally {
-                if (this.classListPromiseVersion === version) {
+                if (this.classListPromiseVersion === version && this.classListPromiseMode === mode) {
                     this.classListPromise = null;
                     this.classListPromiseVersion = -1;
+                    this.classListPromiseMode = null;
                 }
             }
         })();
 
         this.classListPromise = fetchPromise;
         this.classListPromiseVersion = version;
+        this.classListPromiseMode = mode;
         try {
             return await fetchPromise;
         } catch (error) {
-            if (!force && this.cachedClassList && this.cachedClassListVersion === version) {
+            if (!force && this.cachedClassList && this.cachedClassListVersion === version && this.cachedClassListMode === mode) {
                 return this.cachedClassList;
             }
             throw error;
@@ -16775,12 +16786,20 @@ class WaferMapViewer {
             const data = await response.json();
 
             if (data.success) {
-                alert(`Class "${oldName}" renamed to "${trimmedNewName}" (${data.renamed_count} images updated)`);
+                this.remapClassStateAfterRename(oldName, trimmedNewName);
 
-                // Label Explorer 새로고침 (내부에서 getClassList() 호출)
-                await this.refreshLabelExplorer();
-                
-                // 🔥 추가: Fail List와 Label Explorer 즉시 업데이트
+                // Rename 후 stale class/image cache를 쓰지 않도록 강제 무효화한다.
+                this.cachedClassList = null;
+                this.classListPromise = null;
+                this.cachedClassListVersion = -1;
+                this.classListPromiseVersion = -1;
+                if (this.classToImgListCache) {
+                    delete this.classToImgListCache[oldName];
+                    delete this.classToImgListCache[trimmedNewName];
+                }
+
+                await this.refreshClassList(true);
+                await this.refreshLabelExplorer([oldName, trimmedNewName]);
                 this.updateLabelExplorerContent();
 
                 // 입력 필드 초기화
@@ -16792,12 +16811,48 @@ class WaferMapViewer {
                 if (this.dom.deleteClassBtn) this.dom.deleteClassBtn.disabled = true;
                 if (this.dom.renameClassBtn) this.dom.renameClassBtn.disabled = true;
                 this.updateClassListSelection();
+                alert(`Class "${oldName}" renamed to "${trimmedNewName}" (${data.renamed_count || 0} images updated)`);
             } else {
                 throw new Error('Rename failed');
             }
         } catch (error) {
             console.error('Class rename error:', error);
             alert(`Failed to rename class: ${error.message}`);
+        }
+    }
+
+    remapClassStateAfterRename(oldName, newName) {
+        if (!oldName || !newName || oldName === newName) return;
+
+        const remapClassList = (values = []) => Array.from(new Set(
+            (values || []).map(value => value === oldName ? newName : value)
+        ));
+        const remapLabelKey = (key) => {
+            const prefix = `${oldName}/`;
+            return typeof key === 'string' && key.startsWith(prefix)
+                ? `${newName}/${key.slice(prefix.length)}`
+                : key;
+        };
+
+        if (this.classSelection) {
+            this.classSelection.selected = remapClassList(this.classSelection.selected);
+            if (this.classSelection.lastClicked === oldName) {
+                this.classSelection.lastClicked = newName;
+            }
+        }
+        if (this.selectedClass === oldName) this.selectedClass = newName;
+
+        const selection = this.labelSelection;
+        if (selection) {
+            if (selection.openFolders?.[oldName] !== undefined) {
+                selection.openFolders[newName] = selection.openFolders[oldName];
+                delete selection.openFolders[oldName];
+            }
+            selection.selectedClasses = remapClassList(selection.selectedClasses);
+            selection.selected = (selection.selected || []).map(remapLabelKey);
+            if (selection.lastClicked) selection.lastClicked = remapLabelKey(selection.lastClicked);
+            if (selection.lastSelectedKey) selection.lastSelectedKey = remapLabelKey(selection.lastSelectedKey);
+            if (selection.lastClickedClass === oldName) selection.lastClickedClass = newName;
         }
     }
 
@@ -17609,20 +17664,37 @@ class WaferMapViewer {
         // 🔥 중복 호출 방지
         if (this._isRefreshingLabelExplorer) {
             this._pendingLabelExplorerRefresh = true;
-            this._pendingDirtyClasses = dirtyClasses; // dirty 정보 보존
+            if (this._pendingDirtyClasses && dirtyClasses) {
+                this._pendingDirtyClasses = Array.from(new Set([
+                    ...this._pendingDirtyClasses,
+                    ...dirtyClasses
+                ]));
+            } else {
+                this._pendingDirtyClasses = dirtyClasses || this._pendingDirtyClasses;
+            }
+            if (this._labelExplorerRefreshPromise) {
+                await this._labelExplorerRefreshPromise.catch(() => {});
+            }
             return;
         }
 
         this._isRefreshingLabelExplorer = true;
+        let resolveRefreshPromise = null;
+        const ownRefreshPromise = new Promise(resolve => {
+            resolveRefreshPromise = resolve;
+        });
+        this._labelExplorerRefreshPromise = ownRefreshPromise;
         const refreshContext = {
             folderPath: this.currentFolderPath,
             folderPrefix: this.currentFolderPrefix,
-            folderVersion: this.currentFolderVersion
+            folderVersion: this.currentFolderVersion,
+            classMode: this.classMode
         };
         const isContextChanged = () =>
             refreshContext.folderPath !== this.currentFolderPath ||
             refreshContext.folderPrefix !== this.currentFolderPrefix ||
-            refreshContext.folderVersion !== this.currentFolderVersion;
+            refreshContext.folderVersion !== this.currentFolderVersion ||
+            refreshContext.classMode !== this.classMode;
 
         try {
             const container = document.getElementById('label-explorer-list');
@@ -18066,11 +18138,24 @@ class WaferMapViewer {
             // 🔥 중복 호출 방지 플래그 해제
             this._isRefreshingLabelExplorer = false;
 
+            let pendingPromise = null;
             if (this._pendingLabelExplorerRefresh || isContextChanged()) {
                 this._pendingLabelExplorerRefresh = false;
                 const pendingDirty = this._pendingDirtyClasses;
                 this._pendingDirtyClasses = null;
-                return this.refreshLabelExplorer(pendingDirty);
+                pendingPromise = this.refreshLabelExplorer(pendingDirty);
+            }
+
+            if (pendingPromise) {
+                await pendingPromise.catch(error => {
+                    console.error('Label Explorer pending refresh failed:', error);
+                });
+            }
+            if (resolveRefreshPromise) {
+                resolveRefreshPromise();
+            }
+            if (this._labelExplorerRefreshPromise === ownRefreshPromise) {
+                this._labelExplorerRefreshPromise = null;
             }
         }
     }
@@ -19258,10 +19343,16 @@ class WaferMapViewer {
         // 클래스 목록 다시 가져오기
         const shouldForceClassFetch =
             !Array.isArray(this.cachedClassList) ||
-            this.cachedClassListVersion !== this.currentFolderVersion;
+            this.cachedClassListVersion !== this.currentFolderVersion ||
+            this.cachedClassListMode !== this.classMode;
+        const renderClassMode = this.classMode;
         this.refreshClassList(shouldForceClassFetch).then(async () => {
             // 🔥 refreshClassList()에서 캐시된 클래스 목록 사용 (중복 API 호출 제거)
-            if (this.cachedClassListVersion !== this.currentFolderVersion) {
+            if (
+                this.cachedClassListVersion !== this.currentFolderVersion ||
+                this.cachedClassListMode !== renderClassMode ||
+                this.classMode !== renderClassMode
+            ) {
                 this.debugLog('Label Explorer content render skipped - context changed');
                 return;
             }
@@ -28215,6 +28306,12 @@ class WaferMapViewer {
     updateChipLabelLegend(markedChips = []) {
         const chips = Array.isArray(markedChips) ? markedChips : [];
         const counts = new Map();
+        const previousClasses = new Set(this.getChipLabelLegendClasses());
+        const previousActiveClasses = this.activeChipLabelClasses instanceof Set
+            ? new Set(this.activeChipLabelClasses)
+            : null;
+        const previousWasAllActive = !previousActiveClasses ||
+            Array.from(previousClasses).every(cls => previousActiveClasses.has(cls));
 
         chips.forEach(chip => {
             const className = chip?.class || chip?.label;
@@ -28231,9 +28328,17 @@ class WaferMapViewer {
             this.activeChipLabelClasses = this.getDefaultChipLabelActiveClassSet(Array.from(availableClasses));
             this._chipLabelSelectAllOnNextLegend = false;
         } else if (this.activeChipLabelClasses instanceof Set) {
-            this.activeChipLabelClasses = new Set(
+            const nextActiveClasses = new Set(
                 Array.from(this.activeChipLabelClasses).filter(cls => availableClasses.has(cls))
             );
+            if (this.chipLabelOverlayEnabled && previousWasAllActive) {
+                availableClasses.forEach(cls => {
+                    if (!previousClasses.has(cls)) {
+                        nextActiveClasses.add(cls);
+                    }
+                });
+            }
+            this.activeChipLabelClasses = nextActiveClasses;
         }
         if (!(this.activeChipLabelClasses instanceof Set) && availableClasses.size > 0) {
             this.activeChipLabelClasses = this.getDefaultChipLabelActiveClassSet(Array.from(availableClasses));
@@ -28590,15 +28695,12 @@ class WaferMapViewer {
 
     onManualChipSelection() {
         if (!this.getChipLabelLegendClasses().length) return;
-        const selectedClassSet = this.getSelectedChipLabelClassSet();
-        if (selectedClassSet instanceof Set) {
-            this.setChipLabelLegendClasses(selectedClassSet);
-        }
+        this.applyChipLabelLegendFilter();
     }
 
     handleChipSelectionCleared() {
         if (!this.getChipLabelLegendClasses().length) return;
-        this.setChipLabelLegendClasses(null);
+        this.applyChipLabelLegendFilter();
     }
 
     // --- COLOR LEGENDS ---
@@ -31155,16 +31257,13 @@ class WaferMapViewer {
     }
 
     onManualChipSelection() {
-        const selectedClassSet = this.getSelectedChipLabelClassSet();
-        if (selectedClassSet === null) {
-            this.setChipLabelLegendClasses(null);
-            return;
-        }
-        this.setChipLabelLegendClasses(selectedClassSet);
+        if (!this.getChipLabelLegendClasses().length) return;
+        this.applyChipLabelLegendFilter();
     }
 
     handleChipSelectionCleared() {
-        this.setChipLabelLegendClasses(null);
+        if (!this.getChipLabelLegendClasses().length) return;
+        this.applyChipLabelLegendFilter();
     }
 }
 
