@@ -10837,7 +10837,7 @@ class WaferMapViewer {
             const searchParams = new URLSearchParams();
             searchParams.set('q', fileQuery || '');
             searchParams.set('limit', '10000');  // 검색 결과 최대 10000개
-            const folderParam = this.getSearchFolderParam();
+            const folderParam = '';
             if (folderParam) {
                 searchParams.set('folder', folderParam);
             }
@@ -10904,7 +10904,18 @@ class WaferMapViewer {
             this.debugLog(`검색 완료: ${matchedImages.length}개 이미지 발견 (${(endTime - startTime).toFixed(1)}ms)`);
 
             if (matchedImages.length === 0) {
-                this.debugLog('검색 결과 0건 - 현재 화면 유지');
+                this.debugLog('검색 결과 0건 - 빈 검색 결과 표시');
+                this.cancelGridImageRequests(true);
+                if (this.thumbnailManager) {
+                    this.thumbnailManager.abortAll();
+                }
+                this.gridSelectedIdxs = [];
+                this.gridSelectedSet = new Set();
+                this._prevGridSelectedIdxs = new Set();
+                this.gridLastClickedIdx = undefined;
+                this.gridThumbWraps = [];
+                this.invalidateGridGeometry();
+                this.showEmptyGridMessage('검색 결과가 없습니다');
                 if (!suppressAlerts) {
                     alert('검색 결과가 없습니다.');
                 }

@@ -178,7 +178,9 @@ E2E 실행이 끝나면 최종 답변에 반드시 "무엇을 어떻게 실행�
 
 - LOT multi-search는 파일 경로, 파일명, 일반 LOT 목록을 붙여 넣어도 `/api/search`의 `lot_multi`에는 filename basename의 `_` index 0 LOT 토큰만 전달해야 한다.
 - `/` 또는 `\`는 경로 구분자로 보존한 뒤 basename 추출에만 사용한다. 공백/탭은 한 줄/청크 안의 컬럼 구분으로만 보고 index 0만 LOT 후보로 사용한다. `ABC123 05`에서 `05`나 ignored column이 `lot_multi`로 들어가면 FAIL이다.
-- E2E guard는 `scripts/e2e_chunk2.js` record `21,24,25,26,27`이다. 실제 `fetch('/api/search?...')` URL을 캡처해 mixed path/filename/LOT 입력의 `lot_multi` 값이 기대 LOT 배열과 정확히 일치해야 한다. 서버 직접 호출도 `lot_multi=LOT1 LOT2`에서 두 번째 whitespace 토큰을 무시하는지 확인해야 한다.
+- UI 검색은 폴더 선택 그리드 상태여도 `folder` 파라미터를 보내면 안 된다.
+- 검색 0건일 때 기존 그리드를 그대로 두면 이전 폴더 이미지가 검색 결과처럼 보이므로 FAIL이다. `currentGridImages.length === 0`, visible `.grid-thumb-wrap === 0`, 빈 결과 메시지가 보여야 한다.
+- E2E guard는 `scripts/e2e_chunk2.js` record `21,24,25,26,27`이다. 실제 `fetch('/api/search?...')` URL을 캡처해 mixed path/filename/LOT 입력의 `lot_multi` 값이 기대 LOT 배열과 정확히 일치하고, UI 검색 URL에 `folder`가 없으며, 일반/다중/WF no-result가 빈 그리드로 표시되는지 확인해야 한다. 서버 직접 호출도 `lot_multi=LOT1 LOT2`에서 두 번째 whitespace 토큰을 무시하는지 확인해야 한다.
 
 ## 절대규칙: Wafer Map Explorer 스크롤바/폴더 선택 회귀 금지
 

@@ -513,6 +513,15 @@ const { createRunner } = require('./e2e_playwright_session');
       noResultDialog = dialog.message();
       await dialog.accept();
     });
+    await page.evaluate(() => {
+      window.__e2eSearchUrls = [];
+      window.__e2eOriginalFetch = window.fetch;
+      window.fetch = async (...args) => {
+        const url = String(args[0] || '');
+        if (url.startsWith('/api/search?')) window.__e2eSearchUrls.push(url);
+        return window.__e2eOriginalFetch.apply(window, args);
+      };
+    });
     await page.fill('#file-search', 'ZZZ_NO_RESULT_TOKEN_123456789');
     await page.click('#search-btn');
     await sleep(1200);
@@ -520,8 +529,20 @@ const { createRunner } = require('./e2e_playwright_session');
       gridMode: !!window.viewer.gridMode,
       wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
       count: window.viewer.currentGridImages?.length || 0,
+      message: (document.getElementById('image-grid')?.textContent || '').trim(),
+      searchUrl: (window.__e2eSearchUrls || []).find((url) => url.startsWith('/api/search?')) || '',
+      folderParam: (() => {
+        const url = (window.__e2eSearchUrls || []).find((item) => item.startsWith('/api/search?')) || '';
+        return url ? new URL(url, window.location.origin).searchParams.get('folder') : null;
+      })(),
     }));
+    await page.evaluate(() => {
+      if (window.__e2eOriginalFetch) window.fetch = window.__e2eOriginalFetch;
+      delete window.__e2eOriginalFetch;
+      delete window.__e2eSearchUrls;
+    });
 
+    await loadFolder('unknown');
     await page.evaluate(() => window.viewer.openMultiSearchModal?.());
     await sleep(300);
     await page.fill('#multi-search-input', 'ZZZ_NO_RESULT_TOKEN_123456789');
@@ -535,10 +556,12 @@ const { createRunner } = require('./e2e_playwright_session');
         error: (document.getElementById('multi-search-error')?.textContent || '').trim(),
         wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
         count: window.viewer.currentGridImages?.length || 0,
+        message: (document.getElementById('image-grid')?.textContent || '').trim(),
       };
     });
     await page.keyboard.press('Escape');
     await sleep(300);
+    await loadFolder('unknown');
 
     const multiLotApiNormalization = await page.evaluate(async () => {
       const v = window.viewer;
@@ -547,11 +570,13 @@ const { createRunner } = require('./e2e_playwright_session');
       for (const imagePath of v.currentGridImages || []) {
         const tokens = v.extractLotTokensFromPath(imagePath);
         const lot = tokens?.lotValue || '';
+        const wafer = tokens?.waferValue || '';
         const key = lot.toLowerCase();
-        if (!lot || seen.has(key)) continue;
+        if (!lot || !wafer || seen.has(key)) continue;
         seen.add(key);
         samples.push({
           lot,
+          wafer,
           path: String(imagePath || '').replace(/\\/g, '/'),
           filename: String(imagePath || '').replace(/\\/g, '/').split('/').pop(),
         });
@@ -572,6 +597,9 @@ const { createRunner } = require('./e2e_playwright_session');
       };
 
       try {
+        v.selectedFolders = new Set(['unknown']);
+        v.lastLoadedGridFolderPath = 'unknown';
+        v.currentFolderPrefix = 'unknown/';
         input.value = [
           `${samples[0].lot} 05`,
           `${samples[1].path}\tignored-column`,
@@ -581,9 +609,10 @@ const { createRunner } = require('./e2e_playwright_session');
         const success = parsed.error
           ? false
           : await v.performSearch({ multiLotList: [...(parsed.lots || [])], suppressAlerts: true });
-        const searchUrl = captured.find((url) => url.startsWith('/api/search?')) || '';
-        const lotMulti = searchUrl
-          ? new URL(searchUrl, window.location.origin).searchParams.get('lot_multi') || ''
+        const lotSearchUrl = captured.find((url) => url.startsWith('/api/search?') && url.includes('lot_multi=')) || '';
+        const lotSearchParams = lotSearchUrl ? new URL(lotSearchUrl, window.location.origin).searchParams : null;
+        const lotMulti = lotSearchParams
+          ? lotSearchParams.get('lot_multi') || ''
           : '';
         const lotParts = lotMulti.split(',').filter(Boolean);
         const expectedLots = samples.map((sample) => sample.lot.toLowerCase());
@@ -591,6 +620,29 @@ const { createRunner } = require('./e2e_playwright_session');
           .map((imagePath) => v.extractLotTokensFromPath(imagePath)?.lotValue || '')
           .filter(Boolean)
           .map((lot) => lot.toLowerCase())));
+        v.selectedFolders = new Set(['unknown']);
+        v.lastLoadedGridFolderPath = 'unknown';
+        v.currentFolderPrefix = 'unknown/';
+        const pairStr = samples.slice(0, 2).map((sample) => `${sample.lot}:${sample.wafer}`).join(',');
+        const wfSuccess = await v.performSearch({ wfPairs: pairStr, suppressAlerts: true });
+        const wfSearchUrl = captured.find((url) => url.startsWith('/api/search?') && url.includes('lot_wafer=')) || '';
+        const wfSearchParams = wfSearchUrl ? new URL(wfSearchUrl, window.location.origin).searchParams : null;
+        const wfNoResultStart = captured.length;
+        const wfNoResultSuccess = await v.performSearch({
+          wfPairs: 'ZZZ_NO_RESULT_TOKEN_123456789:99',
+          suppressAlerts: true,
+        });
+        const wfNoResultUrl = captured
+          .slice(wfNoResultStart)
+          .find((url) => url.startsWith('/api/search?') && url.includes('lot_wafer=')) || '';
+        const wfNoResultParams = wfNoResultUrl ? new URL(wfNoResultUrl, window.location.origin).searchParams : null;
+        const wfNoResult = {
+          success: wfNoResultSuccess === true,
+          wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+          count: v.currentGridImages?.length || 0,
+          message: (document.getElementById('image-grid')?.textContent || '').trim(),
+          folderParam: wfNoResultParams ? wfNoResultParams.get('folder') : null,
+        };
         const serverWhitespaceInput = `${samples[0].lot} ${samples[1].lot}`;
         const serverWhitespaceUrl = `/api/search?q=&limit=10000&folder=unknown&lot_multi=${encodeURIComponent(serverWhitespaceInput)}`;
         const serverResponse = await originalFetch.call(window, serverWhitespaceUrl);
@@ -607,7 +659,12 @@ const { createRunner } = require('./e2e_playwright_session');
           expectedLots,
           resultLots,
           resultCount: v.currentGridImages?.length || 0,
-          searchUrl,
+          searchUrl: lotSearchUrl,
+          lotFolderParam: lotSearchParams ? lotSearchParams.get('folder') : null,
+          wfOk: wfSuccess === true,
+          wfSearchUrl,
+          wfFolderParam: wfSearchParams ? wfSearchParams.get('folder') : null,
+          wfNoResult,
           serverWhitespaceInput,
           serverWhitespaceUrl,
           serverWhitespaceLots,
@@ -635,6 +692,7 @@ const { createRunner } = require('./e2e_playwright_session');
       };
     });
 
+    await loadFolder('unknown');
     await page.evaluate(() => window.viewer.openPermissionEditorModal());
     await sleep(1200);
     const permissionVisible = await visible('#permission-editor-modal');
@@ -656,12 +714,15 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(multiError.length > 0, 'multi-search empty error missing');
     expect(noResultDialog === '검색 결과가 없습니다.', `noResultDialog=${noResultDialog}`);
     expect(searchAfter.gridMode === searchBefore.gridMode, `search gridMode ${searchBefore.gridMode}->${searchAfter.gridMode}`);
-    expect(searchAfter.wraps === searchBefore.wraps, `search wraps ${searchBefore.wraps}->${searchAfter.wraps}`);
-    expect(searchAfter.count === searchBefore.count, `search count ${searchBefore.count}->${searchAfter.count}`);
+    expect(searchAfter.wraps === 0, `search no-result should clear wraps ${searchBefore.wraps}->${searchAfter.wraps}`);
+    expect(searchAfter.count === 0, `search no-result should clear count ${searchBefore.count}->${searchAfter.count}`);
+    expect(searchAfter.message.includes('검색 결과가 없습니다'), `search no-result message=${searchAfter.message}`);
+    expect(!searchAfter.folderParam, `file search leaked folder param: ${JSON.stringify(searchAfter)}`);
     expect(multiNoResult.modalVisible, 'multi-search no-result modal hidden');
     expect(multiNoResult.error.length > 0, 'multi-search no-result error missing');
-    expect(multiNoResult.wraps === searchBefore.wraps, `multi-search wraps ${searchBefore.wraps}->${multiNoResult.wraps}`);
-    expect(multiNoResult.count === searchBefore.count, `multi-search count ${searchBefore.count}->${multiNoResult.count}`);
+    expect(multiNoResult.wraps === 0, `multi-search no-result should clear wraps ${multiNoResult.wraps}`);
+    expect(multiNoResult.count === 0, `multi-search no-result should clear count ${multiNoResult.count}`);
+    expect(multiNoResult.message.includes('검색 결과가 없습니다'), `multi-search no-result message=${multiNoResult.message}`);
     expect(multiLotApiNormalization.ok, `multi LOT normalization failed ${JSON.stringify(multiLotApiNormalization)}`);
     expect(
       JSON.stringify(multiLotApiNormalization.lotParts) === JSON.stringify(multiLotApiNormalization.expectedLots),
@@ -674,6 +735,23 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(
       multiLotApiNormalization.expectedLots.every((lot) => multiLotApiNormalization.resultLots.includes(lot)),
       `resultLots=${JSON.stringify(multiLotApiNormalization.resultLots)} expected=${JSON.stringify(multiLotApiNormalization.expectedLots)}`
+    );
+    expect(
+      !multiLotApiNormalization.lotFolderParam,
+      `multi LOT search leaked folder param: ${JSON.stringify(multiLotApiNormalization)}`
+    );
+    expect(
+      multiLotApiNormalization.wfOk && !multiLotApiNormalization.wfFolderParam,
+      `multi WF search leaked folder param or failed: ${JSON.stringify(multiLotApiNormalization)}`
+    );
+    expect(
+      multiLotApiNormalization.wfNoResult &&
+        multiLotApiNormalization.wfNoResult.success === false &&
+        multiLotApiNormalization.wfNoResult.wraps === 0 &&
+        multiLotApiNormalization.wfNoResult.count === 0 &&
+        !multiLotApiNormalization.wfNoResult.folderParam &&
+        multiLotApiNormalization.wfNoResult.message.includes('검색 결과가 없습니다'),
+      `multi WF no-result should clear stale grid: ${JSON.stringify(multiLotApiNormalization)}`
     );
     expect(
       multiLotApiNormalization.serverWhitespaceLots.includes(multiLotApiNormalization.expectedLots[0]) &&
