@@ -2302,8 +2302,9 @@ const { createRunner } = require('./e2e_playwright_session');
     const multiLots100 = stableRows.map((row) => row.lot);
     const mixedLot100Input = stableRows.map((row, index) => {
       const token = index % 2 === 0 ? row.lot.toUpperCase() : row.lot;
-      const sep = index % 4 === 0 ? '\n' : (index % 4 === 1 ? ', ' : (index % 4 === 2 ? '; ' : '\t'));
-      return index === stableRows.length - 1 ? token : `${token}${sep}`;
+      const ignoredColumn = index % 5 === 0 ? ` ${row.wafer}` : (index % 5 === 1 ? '\tignored-column' : '');
+      const sep = index % 3 === 0 ? '\n' : (index % 3 === 1 ? ', ' : '; ');
+      return index === stableRows.length - 1 ? `${token}${ignoredColumn}` : `${token}${ignoredColumn}${sep}`;
     }).join('');
     const mixedWf100Input = stableRows
       .map((row, index) => {

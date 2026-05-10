@@ -573,9 +573,9 @@ const { createRunner } = require('./e2e_playwright_session');
 
       try {
         input.value = [
-          `${samples[0].path}\tignored-column`,
-          `${samples[1].filename}    ignored-column`,
-          samples[2].lot,
+          `${samples[0].lot} 05`,
+          `${samples[1].path}\tignored-column`,
+          `${samples[2].filename}    ignored-column`,
         ].join('\n');
         const parsed = v.parseMultiSearchInput();
         const success = parsed.error
@@ -591,6 +591,14 @@ const { createRunner } = require('./e2e_playwright_session');
           .map((imagePath) => v.extractLotTokensFromPath(imagePath)?.lotValue || '')
           .filter(Boolean)
           .map((lot) => lot.toLowerCase())));
+        const serverWhitespaceInput = `${samples[0].lot} ${samples[1].lot}`;
+        const serverWhitespaceUrl = `/api/search?q=&limit=10000&folder=unknown&lot_multi=${encodeURIComponent(serverWhitespaceInput)}`;
+        const serverResponse = await originalFetch.call(window, serverWhitespaceUrl);
+        const serverData = await serverResponse.json();
+        const serverWhitespaceLots = Array.from(new Set((serverData.results || [])
+          .map((imagePath) => v.extractLotTokensFromPath(imagePath)?.lotValue || '')
+          .filter(Boolean)
+          .map((lot) => lot.toLowerCase())));
         return {
           ok: success === true,
           parsedLots: parsed.lots || [],
@@ -600,6 +608,9 @@ const { createRunner } = require('./e2e_playwright_session');
           resultLots,
           resultCount: v.currentGridImages?.length || 0,
           searchUrl,
+          serverWhitespaceInput,
+          serverWhitespaceUrl,
+          serverWhitespaceLots,
         };
       } finally {
         window.fetch = originalFetch;
@@ -657,8 +668,17 @@ const { createRunner } = require('./e2e_playwright_session');
       `lot_multi=${JSON.stringify(multiLotApiNormalization.lotParts)} expected=${JSON.stringify(multiLotApiNormalization.expectedLots)}`
     );
     expect(
+      !multiLotApiNormalization.lotParts.includes('05'),
+      `wafer/index token leaked into lot_multi=${JSON.stringify(multiLotApiNormalization.lotParts)}`
+    );
+    expect(
       multiLotApiNormalization.expectedLots.every((lot) => multiLotApiNormalization.resultLots.includes(lot)),
       `resultLots=${JSON.stringify(multiLotApiNormalization.resultLots)} expected=${JSON.stringify(multiLotApiNormalization.expectedLots)}`
+    );
+    expect(
+      multiLotApiNormalization.serverWhitespaceLots.includes(multiLotApiNormalization.expectedLots[0]) &&
+        !multiLotApiNormalization.serverWhitespaceLots.includes(multiLotApiNormalization.expectedLots[1]),
+      `server whitespace lot_multi leaked second token: ${JSON.stringify(multiLotApiNormalization)}`
     );
     expect(limitValidation.lotError.includes('최대 300개'), `lotError=${limitValidation.lotError}`);
     expect(limitValidation.wfError.includes('최대 1000개'), `wfError=${limitValidation.wfError}`);

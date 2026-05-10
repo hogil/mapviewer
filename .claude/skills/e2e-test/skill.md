@@ -177,8 +177,8 @@ E2E 실행이 끝나면 최종 답변에 반드시 "무엇을 어떻게 실행�
 ## 절대규칙: Multi LOT 검색 입력 정규화
 
 - LOT multi-search는 파일 경로, 파일명, 일반 LOT 목록을 붙여 넣어도 `/api/search`의 `lot_multi`에는 filename basename의 `_` index 0 LOT 토큰만 전달해야 한다.
-- `/` 또는 `\`는 경로 구분자로 보존한 뒤 basename 추출에만 사용한다. 공백/탭은 후보 셀을 고를 때만 정규화하고, ignored column이 `lot_multi`로 들어가면 FAIL이다.
-- E2E guard는 `scripts/e2e_chunk2.js` record `21,24,25,26,27`이다. 실제 `fetch('/api/search?...')` URL을 캡처해 mixed path/filename/LOT 입력의 `lot_multi` 값이 기대 LOT 배열과 정확히 일치해야 한다.
+- `/` 또는 `\`는 경로 구분자로 보존한 뒤 basename 추출에만 사용한다. 공백/탭은 한 줄/청크 안의 컬럼 구분으로만 보고 index 0만 LOT 후보로 사용한다. `ABC123 05`에서 `05`나 ignored column이 `lot_multi`로 들어가면 FAIL이다.
+- E2E guard는 `scripts/e2e_chunk2.js` record `21,24,25,26,27`이다. 실제 `fetch('/api/search?...')` URL을 캡처해 mixed path/filename/LOT 입력의 `lot_multi` 값이 기대 LOT 배열과 정확히 일치해야 한다. 서버 직접 호출도 `lot_multi=LOT1 LOT2`에서 두 번째 whitespace 토큰을 무시하는지 확인해야 한다.
 
 ## 절대규칙: Wafer Map Explorer 스크롤바/폴더 선택 회귀 금지
 
@@ -2261,7 +2261,7 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
    ```
    AAU220.1 → AAU220
    AAU220.1 09 → AAU220 09
-   LOT001.2 LOT002.3 → LOT001 LOT002
+   LOT001.2 LOT002.3 → LOT001
    A.1 B.2 C → A B C
    .hidden → .hidden (유지)
    ```

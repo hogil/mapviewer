@@ -8369,13 +8369,6 @@ class WaferMapViewer {
         return { lots };
     }
 
-    looksLikeLotFileToken(token) {
-        const value = String(token || '').trim();
-        return /[\\/]/.test(value) ||
-            value.includes('_') ||
-            /\.(png|jpe?g|bmp|tiff?|webp)$/i.test(value);
-    }
-
     splitSimpleLotSlashList(token) {
         const value = String(token || '').trim();
         if (!value.includes('/') || value.includes('\\')) return [];
@@ -8394,18 +8387,13 @@ class WaferMapViewer {
             const normalized = chunk.replace(/[\t ]+/g, ' ').trim();
             if (!normalized) continue;
             const fields = normalized.split(' ').filter(Boolean);
-            if (fields.length === 1) {
-                const slashLots = this.splitSimpleLotSlashList(fields[0]);
-                if (slashLots.length) {
-                    candidates.push(...slashLots);
-                    continue;
-                }
-            }
-            if (fields.length > 1 && this.looksLikeLotFileToken(fields[0])) {
-                const fileFields = fields.filter(field => this.looksLikeLotFileToken(field));
-                candidates.push(...(fileFields.length ? fileFields : [fields[0]]));
+            if (!fields.length) continue;
+            const first = fields[0];
+            const slashLots = this.splitSimpleLotSlashList(first);
+            if (slashLots.length) {
+                candidates.push(...slashLots);
             } else {
-                candidates.push(...fields);
+                candidates.push(first);
             }
         }
         return candidates;
