@@ -8986,17 +8986,12 @@ class WaferMapViewer {
     }
 
     async openCompositeColorModal(skipModeCheck = false) {
-        if (!this.compositeColorModal) {
-            this.showToast?.('Ratio 색상 설정을 열 수 없습니다.', 2000);
-            return;
-        }
         if (!skipModeCheck && !this.isCompositeMode) {
             this.showToast?.('Composite 모드에서만 설정할 수 있습니다.', 2000);
             return;
         }
-        const previewContext = this.isCompositeMode ? this.compositeSession : null;
-        const modal = await this._getCompositeColorModal();
-        modal.open(previewContext);
+        const editor = await this._getColorEditor();
+        await editor.open('composite');
     }
 
     async openMyLotWindow() {

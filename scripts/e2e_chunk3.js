@@ -1674,6 +1674,52 @@ const { createRunner } = require('./e2e_playwright_session');
       directCompositeOrphanContextChooserEvents.length === 0,
       `direct composite orphan context chooser=${JSON.stringify(directCompositeOrphanContextChooserEvents)}`
     );
+    const compositeContextColorModal = await (async () => {
+      await page.locator('#image-grid .grid-thumb-wrap').first().click({ button: 'right' });
+      await page.waitForFunction(() => {
+        const menu = document.getElementById('grid-context-menu');
+        const item = document.getElementById('context-composite-colors');
+        if (!menu || !item) return false;
+        const menuStyle = getComputedStyle(menu);
+        const itemStyle = getComputedStyle(item);
+        return (
+          menuStyle.display !== 'none' &&
+          itemStyle.display !== 'none' &&
+          /Composite 색 변경/.test(item.textContent || '')
+        );
+      }, null, { timeout: 10000 });
+      const itemText = await page.locator('#context-composite-colors').innerText();
+      await page.locator('#context-composite-colors').click();
+      await page.waitForFunction(() => {
+        const modal = document.getElementById('color-editor-modal');
+        const activeTab = document.querySelector('#color-editor-tabs .color-editor-tab.active');
+        const compositeContent = document.getElementById('color-editor-composite-content');
+        if (!modal || !activeTab || !compositeContent) return false;
+        return (
+          modal.classList.contains('is-open') &&
+          activeTab.dataset.tab === 'composite' &&
+          getComputedStyle(compositeContent).display !== 'none'
+        );
+      }, null, { timeout: 10000 });
+      const state = await page.evaluate(() => {
+        const modal = document.getElementById('color-editor-modal');
+        const activeTab = document.querySelector('#color-editor-tabs .color-editor-tab.active');
+        const compositeContent = document.getElementById('color-editor-composite-content');
+        const legacyModal = document.getElementById('composite-color-modal');
+        return {
+          colorEditorOpen: !!modal?.classList.contains('is-open'),
+          activeTab: activeTab?.dataset.tab || null,
+          compositeContentDisplay: compositeContent ? getComputedStyle(compositeContent).display : null,
+          legacyCompositeOpen: !!legacyModal?.classList.contains('is-open'),
+        };
+      });
+      await page.evaluate(async () => {
+        const editor = await window.viewer._getColorEditor();
+        await editor.close();
+      });
+      await sleep(300);
+      return { itemText, ...state };
+    })();
     await roundTripGridImageByDblClick(0);
     const compositeAfter = await waitForVisibleGridThumbsLoaded(12000, 500);
     const compositeGridCols = await nudgeGridCols();
@@ -1964,6 +2010,13 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(data.gridCount > 0 && data.wraps > 0, `grid=${data.gridCount}/${data.wraps}`);
     expect(data.measureRole === true, 'measure page missing');
     expect(measureColorVisible, 'measure color modal hidden');
+    expect(
+      compositeContextColorModal.colorEditorOpen &&
+        compositeContextColorModal.activeTab === 'composite' &&
+        compositeContextColorModal.compositeContentDisplay !== 'none' &&
+        compositeContextColorModal.legacyCompositeOpen === false,
+      `composite context color modal did not open Composite tab=${JSON.stringify(compositeContextColorModal)}`
+    );
     expect(compositeSettled.badCount === 0, `composite settled=${JSON.stringify(compositeSettled)}`);
     expect(compositeAfter.badCount === 0, `composite after=${JSON.stringify(compositeAfter)}`);
     expect(compositeGridCols.after.gridCols !== compositeGridCols.before, `composite gridCols ${compositeGridCols.before}->${compositeGridCols.after.gridCols}`);
@@ -2028,6 +2081,7 @@ const { createRunner } = require('./e2e_playwright_session');
     return {
       ...data,
       measureColorVisible,
+      compositeContextColorModal,
       compositeBefore,
       compositeSettled,
       compositeGridCols,
