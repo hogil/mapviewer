@@ -184,6 +184,150 @@ const { createRunner } = require('./e2e_playwright_session');
     );
   }
 
+  async function verifyRapidNextPrevUnknown() {
+    const rapidNav = await page.evaluate(async () => {
+      const v = window.viewer;
+      const waitFor = async (predicate, timeoutMs = 30000, intervalMs = 50) => {
+        const startedAt = performance.now();
+        while (performance.now() - startedAt < timeoutMs) {
+          if (predicate()) return Math.round(performance.now() - startedAt);
+          await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        }
+        return -1;
+      };
+      const canvasVisible = () => {
+        const canvas = document.getElementById('image-canvas');
+        if (!canvas) return false;
+        const style = getComputedStyle(canvas);
+        const rect = canvas.getBoundingClientRect();
+        return style.display !== 'none' && rect.width > 0 && rect.height > 0;
+      };
+      const files = (Array.isArray(v.currentGridImages) ? v.currentGridImages : [])
+        .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+        .filter((imagePath, index, arr) => imagePath.startsWith('unknown/') && arr.indexOf(imagePath) === index)
+        .slice(0, 80);
+      if (files.length < 20) {
+        return { ok: false, reason: `unknown files=${files.length}`, filesCount: files.length };
+      }
+
+      v.selectedFolders = new Set(['unknown']);
+      v.selectedImages = files.slice();
+      v.lastSelectedFolderPath = 'unknown';
+      v.currentFolderPrefix = 'unknown/';
+      v.showGrid(files, true);
+      await waitFor(
+        () =>
+          v.gridMode === true &&
+          (v.currentGridImages?.length || 0) === files.length &&
+          document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0,
+        30000
+      );
+
+      const runRapid = async (mode, commands) => {
+        const steps = [];
+        for (const direction of commands) {
+          const list = mode === 'gridImage' ? v.gridViewImageList : v.singleViewImageList;
+          const beforePath = v.selectedImagePath || '';
+          const beforeIndex = list.indexOf(beforePath);
+          const startedAt = performance.now();
+          if (direction > 0) v.navigateNext();
+          else v.navigatePrevious();
+          const callMs = performance.now() - startedAt;
+          const afterPath = v.selectedImagePath || '';
+          const afterIndex = list.indexOf(afterPath);
+          steps.push({
+            direction,
+            beforeIndex,
+            afterIndex,
+            beforePath,
+            afterPath,
+            callMs: Math.round(callMs * 10) / 10,
+            changed: beforeIndex !== afterIndex,
+            unknown: afterPath.startsWith('unknown/'),
+          });
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        const list = mode === 'gridImage' ? v.gridViewImageList : v.singleViewImageList;
+        const expectedIndex = commands.reduce((idx, direction) => {
+          const next = idx + direction;
+          if (next < 0) return list.length - 1;
+          if (next >= list.length) return 0;
+          return next;
+        }, 0);
+        const waitMs = await waitFor(
+          () =>
+            v._isNavigating === false &&
+            v.selectedImagePath === list[expectedIndex] &&
+            canvasVisible(),
+          30000
+        );
+        return {
+          mode,
+          steps,
+          expectedIndex,
+          finalIndex: list.indexOf(v.selectedImagePath || ''),
+          finalPath: v.selectedImagePath || '',
+          waitMs,
+          immediateChangedEveryClick: steps.every((step) => step.changed && step.unknown && step.callMs < 50),
+        };
+      };
+
+      v.enterSingleImageMode(0);
+      const gridEnterWaitMs = await waitFor(
+        () => v.viewMode === 'gridImage' && v.selectedImagePath === files[0] && canvasVisible(),
+        30000
+      );
+      const commands = [1, 1, 1, -1, 1, -1, 1];
+      const grid = await runRapid('gridImage', commands);
+
+      if (v.imageLoadAbortController) v.imageLoadAbortController.abort();
+      v._isNavigating = false;
+      v.viewMode = 'single';
+      v.gridMode = false;
+      v.singleImageFromGrid = false;
+      v.singleViewImageList = files.slice();
+      v.singleViewImageIndex = 0;
+      await v.loadImage(files[0], false, null, true);
+      const singleEnterWaitMs = await waitFor(
+        () => v.viewMode === 'single' && v.selectedImagePath === files[0] && canvasVisible(),
+        30000
+      );
+      const single = await runRapid('single', commands);
+
+      return {
+        ok: true,
+        filesCount: files.length,
+        firstPath: files[0],
+        gridEnterWaitMs,
+        singleEnterWaitMs,
+        grid,
+        single,
+        pendingNavDirection: v._pendingNavDirection || 0,
+        isNavigating: !!v._isNavigating,
+      };
+    });
+
+    append(`[RAPID_NAV_UNKNOWN] ${JSON.stringify(rapidNav)}\n`);
+    expect(rapidNav.ok, `rapid nav setup failed=${JSON.stringify(rapidNav)}`);
+    expect(
+      rapidNav.grid?.immediateChangedEveryClick === true,
+      `grid next/prev did not react immediately=${JSON.stringify(rapidNav.grid)}`
+    );
+    expect(
+      rapidNav.single?.immediateChangedEveryClick === true,
+      `single next/prev did not react immediately=${JSON.stringify(rapidNav.single)}`
+    );
+    expect(
+      rapidNav.grid?.finalIndex === rapidNav.grid?.expectedIndex && rapidNav.grid?.waitMs >= 0,
+      `grid rapid nav final mismatch=${JSON.stringify(rapidNav.grid)}`
+    );
+    expect(
+      rapidNav.single?.finalIndex === rapidNav.single?.expectedIndex && rapidNav.single?.waitMs >= 0,
+      `single rapid nav final mismatch=${JSON.stringify(rapidNav.single)}`
+    );
+    return rapidNav;
+  }
+
   async function visible(selector) {
     return await page.evaluate((sel) => {
       const el = document.querySelector(sel);
@@ -825,6 +969,7 @@ const { createRunner } = require('./e2e_playwright_session');
     }
     expect(loops.every((x) => x.navigatorVisible), 'navigator hidden in loop');
     expect(loops.every((x) => x.minimapVisible), 'minimap hidden in loop');
+    const rapidNextPrevUnknown = await verifyRapidNextPrevUnknown();
 
     await boot('chunk2-grid-restore');
     await loadFolder('unknown');
@@ -1038,6 +1183,7 @@ const { createRunner } = require('./e2e_playwright_session');
 
     return {
       loops,
+      rapidNextPrevUnknown,
       explorerDirectRoundTrip,
       explorerScrollbarSelection: {
         explorerOpen,

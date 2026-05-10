@@ -1725,20 +1725,70 @@ const { createRunner } = require('./e2e_playwright_session');
     const compositeGridCols = await nudgeGridCols();
     const compositeOutputDir = await page.evaluate(() => window.viewer.compositeSession?.outputDir || null);
     const squareMapsDataBeforeSubset = getSquareMapsDataState(compositeOutputDir);
-    const npzOnlySubsetRecolor = await page.evaluate(async () => {
+    const npzOnlySubsetRecolor = await page.evaluate(async (sourcePaths) => {
       const outputDir = window.viewer.compositeSession?.outputDir || null;
-      const subsetResponse = await fetch('/api/composite-subset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          output_dir: outputDir,
-          selected_grades: [1, 2],
-        }),
-        cache: 'no-store',
+      const unknownSourcePath = (Array.isArray(sourcePaths) ? sourcePaths : [])
+        .map((imagePath) => String(imagePath || '').replace(/\\/g, '/'))
+        .find((imagePath) => imagePath.startsWith('unknown/')) || null;
+      const order = [];
+      const timed = async (label, fn) => {
+        const startedAt = performance.now();
+        const value = await fn();
+        const endedAt = performance.now();
+        order.push({
+          label,
+          atMs: Math.round(endedAt),
+          elapsedMs: Math.round(endedAt - startedAt),
+        });
+        return { value, elapsedMs: endedAt - startedAt };
+      };
+      const subsetTask = timed('subset', async () => {
+        const response = await fetch('/api/composite-subset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            output_dir: outputDir,
+            selected_grades: [1, 2],
+          }),
+          cache: 'no-store',
+        });
+        const body = await response.json().catch(async () => ({
+          detail: await response.text().catch(() => ''),
+        }));
+        return { ok: response.ok, status: response.status, body };
       });
-      const subsetBody = await subsetResponse.json().catch(async () => ({
-        detail: await subsetResponse.text().catch(() => ''),
-      }));
+      const imageSizeTask = timed('image-size', async () => {
+        if (!unknownSourcePath) return { ok: false, status: 0, body: null };
+        const response = await fetch(`/api/image/size?path=${encodeURIComponent(unknownSourcePath)}`, {
+          cache: 'no-store',
+        });
+        const body = await response.json().catch(async () => ({
+          detail: await response.text().catch(() => ''),
+        }));
+        return { ok: response.ok, status: response.status, body };
+      });
+      const imageTask = timed('image-level', async () => {
+        if (!unknownSourcePath) return { ok: false, status: 0, byteLength: 0 };
+        const level = window.SERVER_CONFIG?.PYRAMID_LEVELS?.[0] || 0.2;
+        const response = await fetch(
+          `/api/image?path=${encodeURIComponent(unknownSourcePath)}&level=${encodeURIComponent(level)}`,
+          { cache: 'no-store' }
+        );
+        const buffer = await response.arrayBuffer().catch(() => new ArrayBuffer(0));
+        return { ok: response.ok, status: response.status, byteLength: buffer.byteLength, level };
+      });
+      const [subsetTimed, imageSizeTimed, imageTimed] = await Promise.all([
+        subsetTask,
+        imageSizeTask,
+        imageTask,
+      ]);
+      const subsetResponse = subsetTimed.value;
+      const imageSizeResponse = imageSizeTimed.value;
+      const imageResponse = imageTimed.value;
+      const subsetBody = subsetResponse.body || {};
+      const subsetOrder = order.findIndex((item) => item.label === 'subset');
+      const imageSizeOrder = order.findIndex((item) => item.label === 'image-size');
+      const imageOrder = order.findIndex((item) => item.label === 'image-level');
       const recolorResponse = await fetch('/api/composite-recolor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1750,6 +1800,19 @@ const { createRunner } = require('./e2e_playwright_session');
       }));
       return {
         outputDir,
+        unknownSourcePath,
+        nonBlockingOrder: order,
+        imageSizeBeforeSubset: imageSizeOrder >= 0 && subsetOrder >= 0 && imageSizeOrder < subsetOrder,
+        imageBeforeSubset: imageOrder >= 0 && subsetOrder >= 0 && imageOrder < subsetOrder,
+        imageSizeOk: imageSizeResponse.ok,
+        imageSizeStatus: imageSizeResponse.status,
+        imageOk: imageResponse.ok,
+        imageStatus: imageResponse.status,
+        imageBytes: imageResponse.byteLength || 0,
+        imageLevel: imageResponse.level || null,
+        subsetMs: Math.round(subsetTimed.elapsedMs),
+        imageSizeMs: Math.round(imageSizeTimed.elapsedMs),
+        imageMs: Math.round(imageTimed.elapsedMs),
         subsetOk: subsetResponse.ok,
         subsetStatus: subsetResponse.status,
         subsetCount: Array.isArray(subsetBody?.subset_maps) ? subsetBody.subset_maps.length : 0,
@@ -1765,7 +1828,7 @@ const { createRunner } = require('./e2e_playwright_session');
           : [],
         recolorBody,
       };
-    });
+    }, compositeSourcePaths);
     const squareMapsDataAfterSubsetRecolor = getSquareMapsDataState(compositeOutputDir);
     const compositeInputCacheAfterSubsetRecolor = getCompositeInputCacheState();
 
@@ -2032,6 +2095,20 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(
       npzOnlySubsetRecolor.recolorOk && npzOnlySubsetRecolor.recolorCount >= 2,
       `recolor from square_maps_data failed=${JSON.stringify(npzOnlySubsetRecolor)}`
+    );
+    expect(
+      npzOnlySubsetRecolor.unknownSourcePath?.startsWith('unknown/'),
+      `subset nonblocking source is not unknown=${JSON.stringify(npzOnlySubsetRecolor)}`
+    );
+    expect(
+      npzOnlySubsetRecolor.imageSizeOk && npzOnlySubsetRecolor.imageSizeBeforeSubset,
+      `subset blocked image-size request=${JSON.stringify(npzOnlySubsetRecolor)}`
+    );
+    expect(
+      npzOnlySubsetRecolor.imageOk &&
+        npzOnlySubsetRecolor.imageBytes > 0 &&
+        npzOnlySubsetRecolor.imageBeforeSubset,
+      `subset blocked image request=${JSON.stringify(npzOnlySubsetRecolor)}`
     );
     expect(
       squareMapsDataAfterSubsetRecolor.exists && squareMapsDataAfterSubsetRecolor.size > 0,

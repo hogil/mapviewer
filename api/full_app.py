@@ -10861,7 +10861,6 @@ async def create_subset_map_endpoint(payload: SubsetMapRequest, req: Request):
             raise HTTPException(status_code=400, detail=f"Grade는 0-7 범위여야 합니다: {grade}")
 
     try:
-        from .composite_map import create_subset_map
         from .config import IMAGES_ROOT
 
         # output_dir을 절대 경로로 변환
@@ -10871,15 +10870,21 @@ async def create_subset_map_endpoint(payload: SubsetMapRequest, req: Request):
 
         login_id = _current_login_id(req)
         resolved_scheme = login_id or ANONYMOUS_LOGIN_ID
-        _invalidate_composite_thumbnail_caches(output_dir=output_dir, login_id=login_id or ANONYMOUS_LOGIN_ID)
 
-        # Subset Map 생성
-        subset_maps = create_subset_map(
-            output_dir=output_dir,
-            selected_grades=payload.selected_grades,
-            scheme=resolved_scheme,
-            override_colors=payload.override_colors,
-        )
+        def _create_subset_sync():
+            from .composite_map import create_subset_map
+
+            _invalidate_composite_thumbnail_caches(output_dir=output_dir, login_id=login_id or ANONYMOUS_LOGIN_ID)
+            return create_subset_map(
+                output_dir=output_dir,
+                selected_grades=payload.selected_grades,
+                scheme=resolved_scheme,
+                override_colors=payload.override_colors,
+            )
+
+        # Subset 생성은 NPZ load/render/write를 포함하므로 event loop에서 직접 실행하지 않는다.
+        loop = asyncio.get_running_loop()
+        subset_maps = await loop.run_in_executor(COMPOSITE_EXECUTOR, _create_subset_sync)
 
         return {
             "success": True,

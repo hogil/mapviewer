@@ -88,6 +88,7 @@ argument-hint: [증상-설명]
 12. 폴더 우클릭 선택 해제는 현재 필터로 보이는 이미지 subset이 아니라 폴더의 전체 이미지 집합에 대해 적용되어야 한다
 13. Reset 후 이미지가 "튀어나오면" reset 자체보다 `deselectFolderFiles()`가 필터된 subset만 지우고 남은 선택이 residual 상태로 남는지 먼저 확인한다
 14. Wafer Map Explorer 스크롤바 드래그 후 그리드/단일 이미지가 사라지거나 폴더 선택이 파일 하이라이트로 바뀌면 `setupFileExplorerDragSelect()`가 스크롤바 `mousedown`을 rectangle selection으로 처리했는지 먼저 확인한다. 폴더-origin `gridImage` 단일 보기에서는 `updateWaferMapExplorerHighlight()`가 현재 파일을 하이라이트하지 않고 폴더 선택을 유지해야 한다.
+15. `unknown` 단일 이미지 보기에서 Next/Prev가 가끔 늦게 반응하면 `navigateSingleImageGrid()`의 `_isNavigating` 큐잉, 이전 `loadImage()` callback의 stale state 반영, 그리고 즉시 pyramid prefetch가 서버 작업을 남기는지 확인한다. 최신 Next/Prev 입력은 이전 로드를 abort하고 즉시 `selectedImagePath`/index를 바꿔야 하며, background prefetch는 현재 이미지가 짧게 안정된 뒤 시작해야 한다.
 
 #### Label Explorer / MY LOT 문제
 1. `resolveOriginalImagePath`, `resolveLabelExplorerImagePath`, `buildLabelExplorerGridState` 흐름 확인
@@ -169,3 +170,10 @@ argument-hint: [증상-설명]
 - 원인: `js/main.js`의 `setupFileExplorerDragSelect()`가 스크롤바 gutter의 `mousedown`을 드래그 선택 시작으로 처리했고, mouseup에서 `selectedFolders`/`selectedImages`를 파일 교차 결과 또는 빈 선택으로 덮어썼다. 또한 `updateWaferMapExplorerHighlight()`가 폴더-origin `gridImage` 단일 보기에서 현재 파일 하이라이트를 적용했다.
 - 수정 패턴: Explorer 스크롤바 영역은 드래그 선택 시작 대상에서 제외하고, 폴더 선택에서 진입한 `gridImage` 단일 보기에서는 파일 하이라이트를 지운 뒤 `restoreFolderSelection()`으로 폴더 하이라이트를 유지한다.
 - E2E 신호: `scripts/e2e_chunk2.js`의 `22,23,28,29` record는 폴더-origin grid/single 상태에서 Explorer 스크롤바 드래그 후 `selectedFolders`, folder DOM highlight, grid count, single canvas/path가 그대로인지 확인한다.
+
+### Next/Prev 빠른 클릭 반응 지연 (2026-05-11)
+
+- 증상: `unknown` 이미지 단일 보기에서 Next/Prev를 빠르게 누르면 두 번째 이후 클릭이 이전 이미지 로드 완료 뒤에야 반영되는 것처럼 보일 수 있었다.
+- 원인: `js/main.js`의 `navigateSingleImageGrid()`가 `_isNavigating` 중 입력을 `_pendingNavDirection`에 큐잉했고, 이전 `loadImage()` callback이 최신 navigation 상태를 덮을 수 있었다. 이미지 로드 직후 pyramid prefetch도 quick navigation 중 서버 작업을 남길 수 있었다.
+- 수정 패턴: 최신 Next/Prev 입력은 즉시 이전 image load를 abort하고 index/path를 갱신한다. `.then/.catch`는 `_imageLoadVersion`과 `selectedImagePath`로 stale callback을 무시한다. `prefetchAllPyramidLevels()`는 짧은 디바운스 후 현재 이미지가 유지될 때만 시작한다.
+- E2E 신호: `unknown` 재귀 이미지 80장으로 grid single-image와 file single-image 모드에서 연속 Next/Prev를 호출했을 때 모든 클릭이 즉시 다른 path/index로 바뀌고 call time이 50ms 미만이어야 한다.

@@ -498,6 +498,7 @@ class WaferMapViewer {
         this.compositeInlineStatusOwner = null;
         this.subsetStatusEl = null;
         this.subsetStatusOwner = null
+        this._pyramidPrefetchTimer = null;
         
         // 전역 AbortController 초기화 (모든 API 요청 중단용)
         this.globalAbortController = new AbortController();
@@ -14196,6 +14197,7 @@ class WaferMapViewer {
             console.log('🛑 [LOAD_IMAGE] 이전 로딩 요청 중단');
             this.imageLoadAbortController.abort();
         }
+        this.cancelPyramidPrefetch();
 
         // 현재 이미지 경로 추적 (컨텍스트 메뉴/다운로드용)
         this.currentImagePath = path;
@@ -14631,8 +14633,8 @@ class WaferMapViewer {
                 this.updatePyramidLevel();
             }, 50);
 
-            // 🚀 모든 피라미드 레벨 background pre-fetch (사용자 대기 없음)
-            this.prefetchAllPyramidLevels();
+            // 🚀 모든 피라미드 레벨 background pre-fetch (next/prev 직후에는 잠시 보류)
+            this.schedulePyramidPrefetch(loadRequestSeq, fullPath);
         }
 
             if (signal.aborted || isStaleLoad() || this.gridMode) {
@@ -14872,6 +14874,28 @@ class WaferMapViewer {
      * 예: 초기=0.7 → 0.2, 0.5, 1.0 순서
      *     초기=0.2 → 0.5, 0.7, 1.0 순서
      */
+    cancelPyramidPrefetch() {
+        if (this._pyramidPrefetchTimer) {
+            clearTimeout(this._pyramidPrefetchTimer);
+            this._pyramidPrefetchTimer = null;
+        }
+    }
+
+    schedulePyramidPrefetch(loadRequestSeq, imagePath, delayMs = 350) {
+        this.cancelPyramidPrefetch();
+        this._pyramidPrefetchTimer = setTimeout(() => {
+            this._pyramidPrefetchTimer = null;
+            if (
+                loadRequestSeq !== this._loadImageRequestSeq ||
+                this.selectedImagePath !== imagePath ||
+                this.gridMode
+            ) {
+                return;
+            }
+            this.prefetchAllPyramidLevels();
+        }, delayMs);
+    }
+
     async prefetchAllPyramidLevels() {
         if (!this.selectedImagePath) return;
 
@@ -24255,23 +24279,26 @@ class WaferMapViewer {
             return;
         }
 
-        // ✅ 네비게이션 큐: 로딩 중이면 누적
+        // 로딩 중 새 입력은 이전 요청 완료를 기다리지 않고 최신 클릭을 즉시 처리한다.
         if (this._isNavigating) {
-            this._pendingNavDirection = (this._pendingNavDirection || 0) + direction;
-            console.log('⚠️ [NAV] Queuing navigation:', this._pendingNavDirection);
-
-            // 🔥 즉시 피라미드 생성 취소 (빠른 반응)
-            if (this.renderer && typeof this.renderer.cancelPyramid === 'function') {
-                this.renderer.cancelPyramid();
+            console.log('🛑 [NAV] 이전 그리드 네비게이션 중단, 새 요청 시작');
+            this._pendingNavDirection = 0;
+            this._isNavigating = false;
+            if (this.imageLoadAbortController) {
+                this.imageLoadAbortController.abort();
             }
-            return;
+            const activeRenderer = this.semiconductorRenderer || this.renderer;
+            if (activeRenderer && typeof activeRenderer.cancelPyramid === 'function') {
+                activeRenderer.cancelPyramid();
+            }
         }
 
         this._isNavigating = true;
 
         // 🔥 피라미드 생성 즉시 취소
-        if (this.renderer && typeof this.renderer.cancelPyramid === 'function') {
-            this.renderer.cancelPyramid();
+        const activeRenderer = this.semiconductorRenderer || this.renderer;
+        if (activeRenderer && typeof activeRenderer.cancelPyramid === 'function') {
+            activeRenderer.cancelPyramid();
         }
         
         // ✅ 현재 인덱스 찾기 (정규화된 경로 사용)
@@ -24331,10 +24358,12 @@ class WaferMapViewer {
         // 🔥 이미지 로드 버전 증가 (이전 로딩 작업 무효화)
         this._imageLoadVersion += 1;
         const currentLoadVersion = this._imageLoadVersion;
+        const isCurrentNavigation = () =>
+            currentLoadVersion === this._imageLoadVersion && this.selectedImagePath === nextImagePath;
 
         // 🔥 피라미드 생성 즉시 취소
-        if (this.renderer && typeof this.renderer.cancelPyramid === 'function') {
-            this.renderer.cancelPyramid();
+        if (activeRenderer && typeof activeRenderer.cancelPyramid === 'function') {
+            activeRenderer.cancelPyramid();
         }
 
         // 🔥 다중 Measure 모드: 다음 인덱스의 measure item에 맞게 overlay 전환
@@ -24365,8 +24394,14 @@ class WaferMapViewer {
             this.thumbnailNavigator.updateCurrentImage(nextImagePath);
         }
 
+        if (this.imageLoadAbortController) {
+            this.imageLoadAbortController.abort();
+        }
+
         this.loadImage(nextImagePath, false, currentLoadVersion)
             .then(() => {
+                if (!isCurrentNavigation()) return;
+
                 // ✅ pyramid level을 즉시 동기적으로 업데이트
                 // resetView(false)에서 설정한 zoom 상태를 확정
                 this.updatePyramidLevel();
@@ -24412,6 +24447,8 @@ class WaferMapViewer {
                 }
             })
             .catch(err => {
+                if (!isCurrentNavigation()) return;
+
                 console.error('❌ [NAV] Failed to load image:', err);
                 this._isNavigating = false;
 
@@ -24506,6 +24543,8 @@ class WaferMapViewer {
         // 🔥 이미지 로드 버전 증가 (이전 로딩 작업 무효화)
         this._imageLoadVersion += 1;
         const currentLoadVersion = this._imageLoadVersion;
+        const isCurrentNavigation = () =>
+            currentLoadVersion === this._imageLoadVersion && this.selectedImagePath === nextImagePath;
 
         // 🔥 UI 즉시 업데이트 (0.001ms 반응)
         this.selectedImagePath = nextImagePath;
@@ -24526,8 +24565,14 @@ class WaferMapViewer {
 
         // ✅ 이미지 로드 (loadImage 완료 시 자동으로 Wafer Map Explorer 하이라이트 업데이트됨)
         // forceReload=true: selectedImagePath가 미리 업데이트되어 early-exit 조건이 잘못 발동하는 것 방지
+        if (this.imageLoadAbortController) {
+            this.imageLoadAbortController.abort();
+        }
+
         this.loadImage(nextImagePath, isLabelExplorerSingleMode, currentLoadVersion, true)
             .then(() => {
+                if (!isCurrentNavigation()) return;
+
                 // ✅ pyramid level을 즉시 동기적으로 업데이트
                 this.updatePyramidLevel();
 
@@ -24536,6 +24581,8 @@ class WaferMapViewer {
                 this._isNavigating = false;
             })
             .catch(err => {
+                if (!isCurrentNavigation()) return;
+
                 // 🔥 AbortError는 정상 (next/prev 연속 클릭)
                 if (err?.name === 'AbortError') {
                     console.log('🛑 [NAV] 로딩 중단됨 (다음 요청 시작)');
