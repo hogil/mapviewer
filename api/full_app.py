@@ -11392,12 +11392,17 @@ if __name__ == "__main__":
 
     access_log_enabled = os.getenv("ACCESS_LOG_ENABLED", "0").strip().lower() not in ("0", "false", "no", "")
     access_log_level = os.getenv("ACCESS_LOG_LEVEL", "WARNING").upper()
+    try:
+        graceful_shutdown_timeout = int(os.getenv("UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN", "15"))
+    except ValueError:
+        graceful_shutdown_timeout = 15
 
     print(f"[DEBUG] Starting uvicorn with reload={reload_flag}", flush=True)
     print(f"[DEBUG] Port: {config.HTTPS_PORT}", flush=True)
     print(f"[DEBUG] SSL Cert: {cert_path}", flush=True)
     print(f"[DEBUG] SSL Key: {key_path}", flush=True)
     print(f"[DEBUG] Access log enabled={access_log_enabled} level={access_log_level}", flush=True)
+    print(f"[DEBUG] Graceful shutdown timeout={graceful_shutdown_timeout}s", flush=True)
 
     # 🔥 로깅 설정: uvicorn의 기본 로깅을 사용하되, 필요한 로거만 설정
     # log_config=None 제거 - 이 설정이 lifespan 로그를 숨기는 원인이었음
@@ -11444,7 +11449,7 @@ if __name__ == "__main__":
     try:
         uvicorn.run(
             "api.main:app",
-            host="0.0.0.0",
+            host=config.DEFAULT_HOST,
             port=int(config.HTTPS_PORT),        # 기본 8443
             reload=reload_flag,                 # 개발 편의
             reload_excludes=_reload_excludes if reload_flag else None,
@@ -11456,6 +11461,7 @@ if __name__ == "__main__":
             log_config=logging_config,          # 🔥 기본 로깅 설정 사용 (None 대신)
             ssl_certfile=str(cert_path),
             ssl_keyfile=str(key_path),
+            timeout_graceful_shutdown=graceful_shutdown_timeout,
         )
     except Exception as e:
         print(f"[ERROR] Failed to start uvicorn: {e}", flush=True)

@@ -230,11 +230,24 @@ def _evaluate_logical_query(
         t2_idx = token2_index if token2_index is not None else (token_index or {})
         any_idx = token_index if token_index else t0_idx
 
+        def _search_full(term: str, constraint: Optional[Set[int]] = None) -> Set[int]:
+            """전체 파일명 순차 스캔 (NOT 및 basic-index 보강용)."""
+            term_lower = term.lower()
+            if constraint is None:
+                return {i for i, name in enumerate(names_slice) if term_lower in name}
+            return {
+                i for i in constraint
+                if 0 <= i < n and term_lower in names_slice[i]
+            }
+
         def _search_any(term_or_set, constraint: Optional[Set[int]] = None):
             """논리식의 독립 항/OR 검색은 전체 토큰 인덱스에서 빠르게 찾는다."""
             if isinstance(term_or_set, set):
                 return term_or_set if constraint is None else term_or_set & constraint
-            return _token_contains_search(any_idx, term_or_set, keys_slice, constraint)
+            hits = _token_contains_search(any_idx, term_or_set, keys_slice, constraint)
+            if hits or (token_index and "_" not in term_or_set):
+                return hits
+            return _search_full(term_or_set, constraint)
 
         def _search_t0(term_or_set, constraint: Optional[Set[int]] = None):
             """기본 검색: token[0] 인덱스에서 포함매칭."""
@@ -246,12 +259,14 @@ def _evaluate_logical_query(
             """AND 오른쪽: token[2] 인덱스에서 포함매칭."""
             if isinstance(term_or_set, set):
                 return term_or_set if constraint is None else term_or_set & constraint
-            return _token_contains_search(t2_idx, term_or_set, keys_slice, constraint)
-
-        def _search_full(term: str) -> Set[int]:
-            """전체 파일명 순차 스캔 (NOT 연산자용 — token0 인덱스는 첫 토큰만 커버하므로 부족)."""
-            term_lower = term.lower()
-            return {i for i, name in enumerate(names_slice) if term_lower in name}
+            hits = _token_contains_search(t2_idx, term_or_set, keys_slice, constraint)
+            if hits:
+                return hits
+            if token_index:
+                any_hits = _token_contains_search(token_index, term_or_set, keys_slice, constraint)
+                if any_hits or "_" not in term_or_set:
+                    return any_hits
+            return _search_full(term_or_set, constraint)
 
         universe: Optional[Set[int]] = None
         if "not" in postfix:

@@ -34,18 +34,21 @@ $env:POSITIONS_ROOT="D:/project/data/positions"     # Positions 루트 경로
 $env:THUMBNAIL_SIZE="512"
 $env:THUMBNAIL_FORMAT="JPEG"
 $env:THUMBNAIL_QUALITY="100"
-$env:PNG_COMPRESSION_LEVEL="1"           # PNG 경로 최속값
+$env:PNG_COMPRESSION_LEVEL="0"           # PNG 경로 최고속값
 $env:IO_THREADS="128"                    # 8C dev 박스 기준 초고속 I/O
 $env:THUMBNAIL_SEM="64"                  # 썸네일 동시 생성 상향
 $env:THUMB_PREFETCH_BATCH="48"           # 프리페치 버스트 상향
 $env:THUMB_CLIENT_MAX_CONCURRENCY="12"   # 클라이언트 동시 요청 (grid.js 큐와 맞춤)
-$env:COMPOSITE_MAX_WORKERS="24"          # Composite: fast path 워커 상향
-$env:COMPOSITE_LOADER_MODE="thread"
-$env:COMPOSITE_BATCH_SIZE="12"
+$env:COMPOSITE_FAST_MODE="1"             # Composite fast path 명시
+$env:COMPOSITE_MAX_WORKERS="32"          # Composite: 개발 PC 최고속 로더 워커
+$env:COMPOSITE_LOADER_MODE="thread"      # 현재 composite loader는 thread-only
+$env:COMPOSITE_BATCH_SIZE="32"
+$env:COMPOSITE_NUMBA_BATCH_MB="2048"     # 개발 PC 메모리 cap: batch round-trip 완화
+$env:COMPOSITE_PALETTE_PNG_COMPRESSION_LEVEL="0" # Composite palette PNG 저장 최고속
+$env:COMPOSITE_CACHE_COMPRESS="0"        # subset용 NPZ persist 최고속(파일 크기 증가 허용)
 $env:DAILY_CLEANUP_ENABLED="1"           # 매일 composite_map + thumbnails 정리 활성화
 $env:DAILY_CLEANUP_HOUR="2"              # 매일 AM 2시 실행
 $env:DAILY_CLEANUP_MINUTE="0"
-$env:COMPOSITE_COUNT_MODE="cython"
 $env:COMPOSITE_USE_NUMBA="1"             # Composite mask/count/sum-map Numba fast path
 $env:COMPOSITE_NUMBA_CACHE="1"           # JIT 캐시 사용으로 재시작 후 첫 요청 단축
 $env:OMP_NUM_THREADS="8"                 # Numba/OpenMP 스레드 (물리 코어 수)
@@ -80,11 +83,11 @@ $env:PYRAMID_LEVELS="0.2,0.5,0.7,1.0"
 $env:PYRAMID_ZOOM_THRESHOLDS="0.25,0.5,0.75"
 $env:PYRAMID_FORMAT="JPEG"
 $env:PYRAMID_Q="100"                  # JPEG 품질 Q=100 (최고 품질)
-$env:PYRAMID_PNG_COMPRESSION="3"       # 무손실 유지, 네트워크 전송량과 생성시간 밸런스
+$env:PYRAMID_PNG_COMPRESSION="0"       # PNG pyramid 경로 최고속
 $env:PYRAMID_PNG_EFFORT="1"            # PNG effort (1=가장 빠름)
 $env:PYRAMID_KERNEL="cubic"            # 리사이즈 커널 (cubic, 최고 품질)
 $env:PYRAMID_LOADER_MODE="random"      # 로더 모드 (random=스트리밍, seq_early_copy=메모리 복사)
-$env:PYRAMID_BG_WORKERS="4"            # 개발 환경 백그라운드 피라미드 워커
+$env:PYRAMID_BG_WORKERS="8"            # 개발 환경 백그라운드 피라미드 최고속
 
 # 접근 로그 최소화
 $env:ACCESS_LOG_ENABLED="0"            # uvicorn access log 비활성화 (필요 시 1로)

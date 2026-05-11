@@ -10778,16 +10778,7 @@ class WaferMapViewer {
     }
 
     getSearchFolderParam() {
-        const normalize = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
-        if (this.selectedFolders && this.selectedFolders.size === 1) {
-            const [folder] = Array.from(this.selectedFolders);
-            const normalized = normalize(folder);
-            if (normalized) return normalized;
-        }
-        const loadedFolder = normalize(this.lastLoadedGridFolderPath || '');
-        if (loadedFolder) return loadedFolder;
-        const prefix = normalize(this.currentFolderPrefix || '');
-        return prefix || '';
+        return '';
     }
 
     async performSearch(options = {}) {

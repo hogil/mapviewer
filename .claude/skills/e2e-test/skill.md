@@ -182,6 +182,12 @@ E2E 실행이 끝나면 최종 답변에 반드시 "무엇을 어떻게 실행�
 - 검색 0건일 때 기존 그리드를 그대로 두면 이전 폴더 이미지가 검색 결과처럼 보이므로 FAIL이다. `currentGridImages.length === 0`, visible `.grid-thumb-wrap === 0`, 빈 결과 메시지가 보여야 한다.
 - E2E guard는 `scripts/e2e_chunk2.js` record `21,24,25,26,27`이다. 실제 `fetch('/api/search?...')` URL을 캡처해 mixed path/filename/LOT 입력의 `lot_multi` 값이 기대 LOT 배열과 정확히 일치하고, UI 검색 URL에 `folder`가 없으며, 일반/다중/WF no-result가 빈 그리드로 표시되는지 확인해야 한다. 서버 직접 호출도 `lot_multi=LOT1 LOT2`에서 두 번째 whitespace 토큰을 무시하는지 확인해야 한다.
 
+## 절대규칙: Global logical search는 basic-index 상태에서도 파일명 필드를 찾아야 함
+
+- Cold/basic cache load 직후에는 full token index가 아직 비어 있고 token0/token2 index만 있을 수 있다. 이 상태에서도 UI 전역 검색은 `folder` 파라미터 없이 `unknown` 실제 파일명 기반 논리 검색을 통과해야 한다.
+- `bintype AND _wafer_`, status/prefix OR, prefix NOT LOT 같은 Phase `3v` 시나리오는 API `folder=unknown` 경로와 UI global 경로가 모두 non-empty `unknown/` 결과를 내야 한다.
+- 회귀가 나면 timeout 완화가 아니라 `api/index_service.py::_evaluate_logical_query()`의 token0/token2 fast path와 full filename fallback, `js/main.js::getSearchFolderParam()`의 stale folder scope 노출 여부를 먼저 확인한다.
+
 ## 절대규칙: Wafer Map Explorer 스크롤바/폴더 선택 회귀 금지
 
 - 폴더 선택으로 만든 grid 또는 gridImage single 상태에서 Wafer Map Explorer의 스크롤바를 드래그해도 Explorer rectangle selection이 시작되면 안 된다.
@@ -6387,9 +6393,9 @@ return {
 - E2E: `scripts/e2e_chunk1.js`, `scripts/run-e2e-playwright.ps1`
 
 #### BUG-22: unknown archive 폴더가 전역 검색 결과에 섞이는 회귀 (2026-05-09)
-**증상**: 전체 E2E가 `WARMUP search cache`에서 멈추거나, Phase `3v unknown 실제 파일명 기반 text 검색`이 `unknown_pre_v5_260507/...` 같은 archive 경로를 `outsideUnknown`으로 보고 FAIL.
-**원인**: `scripts/run-e2e-playwright.ps1`의 검색 warmup LOT 목록이 현재 전역 검색에서 제외되는 파생 폴더에만 남은 샘플을 사용했고, `SearchService.global_only_excluded_folders`가 `unknown_pre*`, `unknown_Normal_pre*` archive 스냅샷을 루트 전역 검색에서 제외하지 않음.
-**수정**: warmup LOT 목록 앞에 현재 검색 가능한 `unknown`/실데이터 LOT를 추가하고, `api/search_service.py`에서 archive unknown 스냅샷을 global-only exclusion에 추가한다. 명시적 `folder=unknown_pre_v5_260507` 검색은 계속 허용한다.
+**증상**: 전체 E2E가 `WARMUP search cache`에서 멈추거나, Phase `3v unknown 실제 파일명 기반 text 검색`이 `unknown_pre_v5_260507/...` 또는 `unknown_multi/...` 같은 archive/generated 경로를 `outsideUnknown`으로 보고 FAIL.
+**원인**: `scripts/run-e2e-playwright.ps1`의 검색 warmup LOT 목록이 현재 전역 검색에서 제외되는 파생 폴더에만 남은 샘플을 사용했고, `SearchService.global_only_excluded_folders`가 `unknown_pre*`, `unknown_Normal_pre*` archive 스냅샷과 `unknown_multi` generated fixture를 루트 전역 검색에서 제외하지 않음.
+**수정**: warmup LOT 목록 앞에 현재 검색 가능한 `unknown`/실데이터 LOT를 추가하고, `api/search_service.py`에서 archive/generated unknown 스냅샷을 global-only exclusion에 추가한다. 명시적 `folder=unknown_pre_v5_260507` 검색은 계속 허용한다.
 **평가**: runner 로그에 `SEARCH_READY ... total>=1`이 찍혀야 하며, Phase `3v`의 global text/LOT/WF 검색에서 `outsideUnknown=[]`이어야 한다.
 **파일**: `api/search_service.py`, `scripts/run-e2e-playwright.ps1`
 

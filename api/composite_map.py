@@ -82,6 +82,11 @@ except Exception:
 _SAVE_BACKEND = os.getenv("COMPOSITE_SAVE_BACKEND", "turbo" if _HAS_TURBOJPEG else "pil").lower()
 _SAVE_FORMAT = os.getenv("COMPOSITE_FORMAT", "JPEG" if _HAS_TURBOJPEG else "PNG").upper()
 _JPEG_QUALITY = int(os.getenv("COMPOSITE_JPEG_QUALITY", "95"))
+try:
+    _PALETTE_PNG_COMPRESSION_LEVEL = int(os.getenv("COMPOSITE_PALETTE_PNG_COMPRESSION_LEVEL", "1"))
+except ValueError:
+    _PALETTE_PNG_COMPRESSION_LEVEL = 1
+_PALETTE_PNG_COMPRESSION_LEVEL = max(0, min(9, _PALETTE_PNG_COMPRESSION_LEVEL))
 _CACHE_COMPRESS = os.getenv("COMPOSITE_CACHE_COMPRESS", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
 try:
     _CACHE_COMPRESS_LEVEL = int(os.getenv("COMPOSITE_CACHE_COMPRESS_LEVEL", "1"))
@@ -1278,7 +1283,7 @@ def _save_palette_png(index_array: np.ndarray, palette_list: List[int], path: Pa
     path.parent.mkdir(parents=True, exist_ok=True)
     img = _PILImage.fromarray(index_array.astype(np.uint8, copy=False), mode="P")
     img.putpalette(palette_list[:768])
-    img.save(str(path), format="PNG", optimize=False, compress_level=1)
+    img.save(str(path), format="PNG", optimize=False, compress_level=_PALETTE_PNG_COMPRESSION_LEVEL)
     rel = path.relative_to(IMAGES_ROOT).as_posix()
     return path, rel
 

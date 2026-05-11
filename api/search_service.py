@@ -58,6 +58,7 @@ class SearchService:
             "my-lot",
             "fq_missing_test",
             "chip_multilabel",
+            "unknown_multi",
             "unknown_pre",
             "unknown_normal_pre",
         }

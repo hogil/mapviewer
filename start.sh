@@ -8,6 +8,7 @@ export AUTO_LOGIN="0"                      # 0=수동 로그인, 1=자동 SAML �
 export PYTHONIOENCODING="utf-8"
 export PYTHONUNBUFFERED="1"
 export UVICORN_LIFESPAN="on"   # FastAPI lifespan 강제 (인덱스 초기화/재빌드 보장)
+export UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN="15" # restart 시 종료 대기 상한(초)
 
 # 서버 설정
 export HOST="0.0.0.0"
@@ -27,38 +28,35 @@ export IMAGES_ROOT="/appdata/appuser/images"        # 이미지 루트 경로
 export POSITIONS_ROOT="/appdata/appuser/positions"  # Positions 루트 경로
 
 # 성능 설정 (Ubuntu 24, 32코어, 198GB RAM)
-# - 벤치마크 기반 중간값 (원본 고성능 vs 보수적 최적화 사이)
-# - 실제 워크로드에 따라 조정 권장
+# - 32C/고속 SSD/대용량 RAM 기준 최고속 우선값
+# - CPU/IO 포화가 보이면 실제 composite/thumbnail 시간을 비교해 낮춘다.
 export THUMBNAIL_SIZE="512"
 export THUMBNAIL_FORMAT="JPEG"           # JPEG가 PNG보다 훨씬 빠름 (139ms vs 수백ms)
 export THUMBNAIL_QUALITY="100"           # Q=100 최고 품질
-export PNG_COMPRESSION_LEVEL="1"
-export IO_THREADS="256"                  # 32C 서버에서 I/O 대기시간 숨김 (8x CPU)
-export THUMBNAIL_SEM="384"               # 여유 메모리 활용해 썸네일 동시 생성 확대
-export THUMB_PREFETCH_BATCH="80"
-export THUMB_CLIENT_MAX_CONCURRENCY="14" # 클라이언트/ThumbnailManager 동시 요청
-export GRID_MAX_CONCURRENCY="48"         # 그리드 썸네일 동시 요청 상한
+export PNG_COMPRESSION_LEVEL="0"          # PNG 경로 최고속값
+export IO_THREADS="384"                  # 32C 서버에서 I/O 대기시간 숨김 (12x CPU)
+export THUMBNAIL_SEM="512"               # 여유 메모리 활용해 썸네일 동시 생성 확대
+export THUMB_PREFETCH_BATCH="128"
+export THUMB_CLIENT_MAX_CONCURRENCY="20" # 클라이언트/ThumbnailManager 동시 요청
+export GRID_MAX_CONCURRENCY="64"         # 그리드 썸네일 동시 요청 상한
 export MEASURE_PREFETCH_CONCURRENCY="8"  # measure-thumb-batch 동시 워밍업 상한
-export THUMBNAIL_EXECUTOR_WORKERS="64"   # 32C 운영 서버 기준 2x core
-export COMPOSITE_FAST_MODE="1"           # ✅ Fast 모드 활성화 (워커 자동 상향 + vips 저장)
-# Composite 로더 병렬도. 32C/고속 SSD 기준 56 유지 권장.
-# 더 빠르게 실험하려면 64 또는 72까지 올려볼 수 있지만, 이미지 로딩 I/O와 Numba CPU 작업이 경합하면 오히려 느려질 수 있다.
-export COMPOSITE_MAX_WORKERS="56"        # Composite 로더: CPU당 ~1.7 스레드
+export THUMBNAIL_EXECUTOR_WORKERS="96"   # 32C 운영 서버 기준 3x core 최고속
+export COMPOSITE_FAST_MODE="1"           # ✅ Fast 모드 활성화 (워커 자동 상향 + 비-palette 저장 vips 우선)
+# Composite 로더 병렬도. 최고속 설정은 32C/고속 SSD에서 I/O 대기시간을 최대한 숨긴다.
+export COMPOSITE_MAX_WORKERS="72"        # Composite 로더: 32C 서버 최고속 실험값
 export COMPOSITE_LOADER_MODE="thread"
-export COMPOSITE_BATCH_SIZE="20"         # 대용량 이미지용 배치 상향
-export COMPOSITE_NUMBA_BATCH_MB="4096"   # Numba batch 메모리 cap. 198GB RAM 서버에서 batch round-trip을 줄여 composite 누적 계산 속도 우선.
+export COMPOSITE_BATCH_SIZE="72"         # 대용량 이미지용 배치 상향
+export COMPOSITE_NUMBA_BATCH_MB="8192"   # 198GB RAM 서버에서 256장 composite를 단일 batch에 가깝게 처리
+export COMPOSITE_PALETTE_PNG_COMPRESSION_LEVEL="0" # Composite palette PNG 저장 최고속
+export COMPOSITE_CACHE_COMPRESS="0"      # subset용 NPZ persist 최고속(파일 크기 증가 허용)
 export DAILY_CLEANUP_ENABLED="1"          # 매일 composite_map + thumbnails 정리 활성화
 export DAILY_CLEANUP_HOUR="2"             # 매일 AM 2시 실행
 export DAILY_CLEANUP_MINUTE="0"
-export COMPOSITE_COUNT_MODE="cython"
-# 참고: 현재 main composite heatmap/sum-map 저장 경로는 내부 pool이 일부 고정되어 있어
-# COMPOSITE_RENDER_WORKERS/COMPOSITE_SAVE_WORKERS가 모든 단계에 직접 반영되지는 않는다.
-# 최고속으로 더 밀려면 해당 코드 경로가 이 두 값을 읽도록 별도 수정이 필요하다.
-export COMPOSITE_RENDER_WORKERS="36"     # 렌더링 병렬도 ↑ (fast 모드와 맞춤)
-export COMPOSITE_SAVE_WORKERS="56"       # 저장 워커 (고속 SSD 기준)
-export COMPOSITE_SAVE_BACKEND="vips"     # 저장 백엔드 vips 우선
-export COMPOSITE_FORMAT="JPEG"           # 저장 포맷: JPEG (속도 우선)
-export COMPOSITE_JPEG_QUALITY="95"       # JPEG 품질 (속도/품질 균형)
+# 참고: main Composite heatmap/sum-map은 개인색 PLTE 패치를 위해 palette PNG로 저장한다.
+# 아래 저장 설정은 palette overlay 등 비-palette 저장 경로에만 적용된다.
+export COMPOSITE_SAVE_BACKEND="vips"     # 비-palette 저장 백엔드 vips 우선
+export COMPOSITE_FORMAT="JPEG"           # 비-palette 저장 포맷: JPEG (속도 우선)
+export COMPOSITE_JPEG_QUALITY="95"       # 비-palette JPEG 품질 (속도/품질 균형)
 export COMPOSITE_USE_NUMBA="1"
 export COMPOSITE_NUMBA_CACHE="1"
 export OMP_NUM_THREADS="32"              # Numba/OpenMP 스레드
@@ -70,8 +68,8 @@ export SEARCH_WORKERS="24"               # 검색 병렬 워커 수 (32코어 �
 # libvips 최적화 (32C/198GB — 대형 이미지 연산 가속)
 # VIPS_CONCURRENCY: 단일 이미지 연산의 내부 병렬 스레드 수
 # 28 = 4000x4000 리사이즈를 28스레드로 분할 처리 (단일 스레드 대비 ~10x 빠름)
-# 동시 요청 경합은 THUMBNAIL_SEM(384)으로 제어
-export VIPS_CONCURRENCY="28"             # 32C 서버: 대형 이미지 연산 병렬화
+# 동시 요청 경합은 THUMBNAIL_SEM(512)으로 제어
+export VIPS_CONCURRENCY="32"             # 32C 서버: 대형 이미지 연산 최고속
 export VIPS_DISC_THRESHOLD="10000m"      # 198GB RAM → 디스크 스필 기준 상향
 export VIPS_MAX_CACHE="10000"            # 캐시 항목 수 (고성능 서버)
 export VIPS_MAX_CACHE_MEM="20000m"       # 메모리 캐시 20GB (198GB 중)
@@ -117,11 +115,11 @@ export PYRAMID_LEVELS="0.2,0.5,0.7,1.0"      # 피라미드 레벨
 export PYRAMID_ZOOM_THRESHOLDS="0.25,0.5,0.75"  # zoom 기준 (≤0.25→0.2, ≤0.5→0.5, ≤0.75→0.7, >0.75→1.0)
 export PYRAMID_FORMAT="JPEG"                 # JPEG 포맷
 export PYRAMID_Q="100"                       # JPEG 품질 Q=100 (최고 품질)
-export PYRAMID_PNG_COMPRESSION="3"           # PNG 압축 레벨
+export PYRAMID_PNG_COMPRESSION="0"           # PNG pyramid 경로 최고속
 export PYRAMID_PNG_EFFORT="1"                # PNG effort (1=가장 빠름)
 export PYRAMID_KERNEL="cubic"                # 리사이즈 커널 (cubic, 최고 품질)
 export PYRAMID_LOADER_MODE="random"          # 로더 모드 (random=스트리밍, copy_memory 오버헤드 없음)
-export PYRAMID_BG_WORKERS="24"                # 백그라운드 피라미드 워커
+export PYRAMID_BG_WORKERS="32"                # 백그라운드 피라미드 최고속
 
 # 접근 로그 최소화
 export ACCESS_LOG_ENABLED="0"                # uvicorn access log 비활성화 (필요 시 1로 전환)
