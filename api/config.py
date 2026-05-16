@@ -4,7 +4,7 @@ from math import floor
 
 # ===== 경로 / 포맷 =====
 # Windows 개발환경과 Ubuntu 운영환경 모두 지원
-_images_root_default = "D:/project/data/wm-811k" if os.name == "nt" else "/appdata/appuser/images"
+_images_root_default = "E:/data/images" if os.name == "nt" else "/appdata/appuser/images"
 IMAGES_ROOT = Path(os.getenv("IMAGES_ROOT", _images_root_default)).resolve()
 ROOT_DIR = IMAGES_ROOT
 
@@ -12,7 +12,7 @@ ROOT_DIR = IMAGES_ROOT
 FALLBACK_LOGIN_ID = (os.getenv("FALLBACK_LOGIN_ID", "notsaml").strip() or "notsaml")
 
 # Positions는 별도 경로로 관리 (이미지와 분리)
-_positions_root_default = "D:/project/data/positions" if os.name == "nt" else "/appdata/appuser/positions"
+_positions_root_default = "E:/data/positions" if os.name == "nt" else "/appdata/appuser/positions"
 POSITIONS_ROOT = Path(os.getenv("POSITIONS_ROOT", _positions_root_default)).resolve()
 
 # IMAGES_ROOT 하위 경로

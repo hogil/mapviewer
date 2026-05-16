@@ -125,12 +125,15 @@ function Stop-StaleE2EServers {
 function Clear-E2EColdCache {
     $imagesRoot = $env:IMAGES_ROOT
     if ([string]::IsNullOrWhiteSpace($imagesRoot)) {
-        $imagesRoot = if ($IsWindows -or $env:OS -eq "Windows_NT") { "D:/project/data/wm-811k" } else { "/appdata/appuser/images" }
+        $imagesRoot = if ($IsWindows -or $env:OS -eq "Windows_NT") { "E:/data/images" } else { "/appdata/appuser/images" }
     }
 
     $root = (Resolve-Path -LiteralPath $imagesRoot -ErrorAction Stop).Path
-    if ((Split-Path -Leaf $root).ToLowerInvariant() -ne "wm-811k") {
-        throw "Refusing to clear E2E cold cache outside wm-811k root: $root"
+    $rootLeaf = (Split-Path -Leaf $root).ToLowerInvariant()
+    $parentLeaf = (Split-Path -Leaf (Split-Path -Parent $root)).ToLowerInvariant()
+    $knownImageRoot = ($rootLeaf -eq "wm-811k") -or ($rootLeaf -eq "images" -and @("data", "appuser") -contains $parentLeaf)
+    if (-not $knownImageRoot) {
+        throw "Refusing to clear E2E cold cache outside known image root: $root"
     }
 
     $removed = New-Object System.Collections.Generic.List[string]

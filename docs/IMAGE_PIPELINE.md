@@ -7,8 +7,8 @@
 기본 루트는 `api/config.py` 기준이며, 시작 스크립트가 이를 override할 수 있습니다.
 
 - Windows 기본값
-  - `IMAGES_ROOT=D:/project/data/wm-811k`
-  - `POSITIONS_ROOT=D:/project/data/positions`
+  - `IMAGES_ROOT=E:/data/images`
+  - `POSITIONS_ROOT=E:/data/positions`
 - Linux 기본값
   - `IMAGES_ROOT=/appdata/appuser/images`
   - `POSITIONS_ROOT=/appdata/appuser/positions`
@@ -154,10 +154,10 @@ Chip Annotation은 positions를 직접 참조합니다.
 
 현재 사내 로컬 PC에서 사용하는 샘플 데이터는 아래 경로를 기준으로 유지합니다.
 
-- `D:/project/data/wm-811k/palette_5mb`
-- `D:/project/data/wm-811k/palette_3k`
-- `D:/project/data/positions/palette_5mb`
-- `D:/project/data/positions/palette_3k`
+- `E:/data/images/palette_5mb`
+- `E:/data/images/palette_3k`
+- `E:/data/positions/palette_5mb`
+- `E:/data/positions/palette_3k`
 
 이 로컬 더미 데이터셋은 아래 추가 규칙을 따릅니다.
 

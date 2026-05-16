@@ -16,7 +16,7 @@ const { createRunner } = require('./e2e_playwright_session');
   } = await createRunner(__filename);
 
   const imagesRoot = path.resolve(
-    process.env.IMAGES_ROOT || (process.platform === 'win32' ? 'D:/project/data/wm-811k' : '/appdata/appuser/images')
+    process.env.IMAGES_ROOT || (process.platform === 'win32' ? 'E:/data/images' : '/appdata/appuser/images')
   );
   const unknownFolderAbs = path.join(imagesRoot, 'unknown');
   const E2E_UNKNOWN_LABEL_CLASSES = ['e2e_unknown_label', 'e2e_unknown_label_alt'];

@@ -652,6 +652,7 @@ const { createRunner } = require('./e2e_playwright_session');
       wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
       count: window.viewer.currentGridImages?.length || 0,
     }));
+    const noResultToken = `NOE2ENORESULT${Date.now()}`;
     let noResultDialog = '';
     page.once('dialog', async (dialog) => {
       noResultDialog = dialog.message();
@@ -666,7 +667,7 @@ const { createRunner } = require('./e2e_playwright_session');
         return window.__e2eOriginalFetch.apply(window, args);
       };
     });
-    await page.fill('#file-search', 'ZZZ_NO_RESULT_TOKEN_123456789');
+    await page.fill('#file-search', noResultToken);
     await page.click('#search-btn');
     await sleep(1200);
     const searchAfter = await page.evaluate(() => ({
@@ -689,7 +690,7 @@ const { createRunner } = require('./e2e_playwright_session');
     await loadFolder('unknown');
     await page.evaluate(() => window.viewer.openMultiSearchModal?.());
     await sleep(300);
-    await page.fill('#multi-search-input', 'ZZZ_NO_RESULT_TOKEN_123456789');
+    await page.fill('#multi-search-input', noResultToken);
     await page.click('#multi-search-apply');
     await sleep(1200);
     const multiNoResult = await page.evaluate(() => {
@@ -707,7 +708,7 @@ const { createRunner } = require('./e2e_playwright_session');
     await sleep(300);
     await loadFolder('unknown');
 
-    const multiLotApiNormalization = await page.evaluate(async () => {
+    const multiLotApiNormalization = await page.evaluate(async (noResultLot) => {
       const v = window.viewer;
       const samples = [];
       const seen = new Set();
@@ -773,7 +774,7 @@ const { createRunner } = require('./e2e_playwright_session');
         const wfSearchParams = wfSearchUrl ? new URL(wfSearchUrl, window.location.origin).searchParams : null;
         const wfNoResultStart = captured.length;
         const wfNoResultSuccess = await v.performSearch({
-          wfPairs: 'ZZZ_NO_RESULT_TOKEN_123456789:99',
+          wfPairs: `${noResultLot}:99`,
           suppressAlerts: true,
         });
         const wfNoResultUrl = captured
@@ -817,7 +818,7 @@ const { createRunner } = require('./e2e_playwright_session');
         window.fetch = originalFetch;
         if (input) input.value = originalValue;
       }
-    });
+    }, noResultToken);
 
     const limitValidation = await page.evaluate(() => {
       const lotInput = Array.from({ length: 301 }, (_, i) => `LOT${String(i).padStart(4, '0')}`).join('\n');

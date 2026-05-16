@@ -28,8 +28,8 @@ $env:SSL_CERTFILE="cert/fullchain.pem"
 $env:SSL_KEYFILE="cert/server.key"
 
 # 경로 설정
-$env:IMAGES_ROOT="D:/project/data/wm-811k"          # 이미지 루트 경로
-$env:POSITIONS_ROOT="D:/project/data/positions"     # Positions 루트 경로
+$env:IMAGES_ROOT="E:/data/images"          # 이미지 루트 경로
+$env:POSITIONS_ROOT="E:/data/positions"    # Positions 루트 경로
 
 $env:THUMBNAIL_SIZE="512"
 $env:THUMBNAIL_FORMAT="JPEG"
