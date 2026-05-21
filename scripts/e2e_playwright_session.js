@@ -75,7 +75,11 @@ function findBrowserChildPid() {
       const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', script], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 3000,
       });
+      if (result.error || result.status === null) {
+        return 0;
+      }
       const pid = Number.parseInt(String(result.stdout || '').trim(), 10);
       return Number.isFinite(pid) && pid > 0 ? pid : 0;
     }
@@ -217,7 +221,7 @@ async function launchSession({ headless, outputDir, progressFile, browserPidFile
         await ensureHeadfulWindow(page, append);
       }
       append(`[BROWSER] launch ok attempt=${attempt}\n`);
-      return { browser, context, page };
+      return { browser, context, page, browserPid };
     } catch (error) {
       lastError = error;
       append(`[BROWSER] launch failed attempt=${attempt}: ${error.message || error}\n`);
@@ -267,13 +271,12 @@ async function createRunner(scriptFile) {
     'utf8'
   );
 
-  const { browser, context, page } = await launchSession({
+  const { browser, context, page, browserPid } = await launchSession({
     headless,
     outputDir,
     progressFile,
     browserPidFile,
   });
-  const browserPid = registerBrowserPid(browser, browserPidFile);
   const results = [];
   const focusWindow = async () => {
     try {

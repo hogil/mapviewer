@@ -3254,6 +3254,119 @@ def _resolve_my_lot_login(request: Request) -> str:
     return _effective_login_id(request)
 
 
+def _my_lot_destination_paths(
+    storage_path: str,
+    mode: str,
+    source_paths: List[Path],
+    path_lot_wafer: Optional[Dict[str, Any]] = None,
+) -> List[Path]:
+    group_dir = Path(storage_path)
+    image_root = IMAGES_ROOT.resolve()
+    image_root_str = str(image_root)
+    destinations: List[Path] = []
+
+    for src_path in source_paths:
+        if "_NO_IMAGE_" in str(src_path):
+            continue
+        try:
+            resolved = str(src_path.resolve())
+            rel_path = (
+                resolved[len(image_root_str):].lstrip("/\\").replace("\\", "/")
+                if resolved.startswith(image_root_str)
+                else src_path.as_posix()
+            )
+        except Exception:
+            rel_path = src_path.as_posix()
+
+        if mode == "wafer":
+            destinations.append(group_dir / src_path.name)
+            continue
+
+        mapping = (path_lot_wafer or {}).get(rel_path) or {}
+        lot_val = mapping.get("lot")
+        if not lot_val:
+            parts = src_path.stem.split("_")
+            lot_val = parts[0] if parts else src_path.stem
+        destinations.append(group_dir / str(lot_val) / src_path.name)
+
+    return destinations
+
+
+def _clone_my_lot_thumbnail_caches(
+    source_paths: List[Path],
+    destination_paths: List[Path],
+    scheme: Optional[str],
+) -> int:
+    """이미지 원본은 복사하되, 이미 만들어진 파생 썸네일 캐시만 복제한다."""
+    cloned = 0
+    schemes: List[Optional[str]] = [None]
+    if scheme:
+        schemes.append(scheme)
+
+    for index, (src_path, dst_path) in enumerate(zip(source_paths, destination_paths)):
+        if index >= 512:
+            break
+        try:
+            if not src_path.exists() or not dst_path.exists():
+                continue
+            src_stat = src_path.stat()
+            dst_stat = dst_path.stat()
+            for thumb_scheme in schemes:
+                src_thumb = get_thumbnail_path(
+                    src_path,
+                    (THUMBNAIL_SIZE_DEFAULT, THUMBNAIL_SIZE_DEFAULT),
+                    scheme=thumb_scheme,
+                    cached_stat=src_stat,
+                )
+                if not src_thumb.exists() or src_thumb.stat().st_size <= 0:
+                    continue
+                dst_thumb = get_thumbnail_path(
+                    dst_path,
+                    (THUMBNAIL_SIZE_DEFAULT, THUMBNAIL_SIZE_DEFAULT),
+                    scheme=thumb_scheme,
+                    cached_stat=dst_stat,
+                )
+                if dst_thumb.exists() and dst_thumb.stat().st_size > 0:
+                    continue
+                dst_thumb.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(str(src_thumb), str(dst_thumb))
+                cloned += 1
+        except Exception:
+            continue
+
+    return cloned
+
+
+async def _clone_my_lot_thumbnail_caches_async(
+    login_id: str,
+    mode: str,
+    result: Dict[str, Any],
+    source_paths: List[Path],
+    path_lot_wafer: Optional[Dict[str, Any]] = None,
+) -> int:
+    try:
+        storage_path = str(result.get("storage_path") or "")
+        if not storage_path or not source_paths:
+            return 0
+
+        destination_paths = _my_lot_destination_paths(storage_path, mode, source_paths, path_lot_wafer)
+        if not destination_paths:
+            return 0
+
+        scheme = get_user_color_scheme(login_id)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            IO_POOL,
+            _clone_my_lot_thumbnail_caches,
+            source_paths,
+            destination_paths,
+            scheme,
+        )
+    except Exception as exc:
+        logger.warning(f"MY LOT 썸네일 캐시 복제 실패: {exc}")
+        return 0
+
+
 @app.get("/api/my-lot")
 async def get_my_lot_entries(request: Request):
     login_id = _resolve_my_lot_login(request)
@@ -3488,6 +3601,13 @@ async def add_my_lot_batch_endpoint(request: Request):
                 login_id, mode, group, collected_paths, path_lot_wafer,
             )
             result["placeholder_count"] = len(placeholder_paths)
+            result["thumbnail_cache_cloned"] = await _clone_my_lot_thumbnail_caches_async(
+                login_id,
+                mode,
+                result,
+                collected_paths,
+                path_lot_wafer,
+            )
             return {"success": True, **result}
 
         # collected_paths가 비어있지만 manual_values가 제공된 경우 (placeholder 생성 실패)
@@ -3535,6 +3655,13 @@ async def add_my_lot_batch_endpoint(request: Request):
         result = await loop.run_in_executor(
             IO_POOL, my_lot_add_lot_batch,
             login_id, mode, group, matched_paths, None,
+        )
+        result["thumbnail_cache_cloned"] = await _clone_my_lot_thumbnail_caches_async(
+            login_id,
+            mode,
+            result,
+            matched_paths,
+            None,
         )
         return {"success": True, **result}
 
@@ -9907,22 +10034,35 @@ def _current_username(req: Optional[Request], default: str = "system") -> str:
     return default
 
 
+_CHIP_POSITIONS_FQ_RE = re.compile(rb'"f"\s*:\s*\[[^\]]*\]\s*,\s*"q"\s*:\s*\[[^\]]*\]\s*,\s*')
+_CHIP_POSITIONS_NETD_RE = re.compile(rb'"netd"\s*:\s*(\d+)')
+
+
+def _read_positions_json_file(positions_file: Path, include_fq: bool) -> Dict[str, Any]:
+    if not include_fq:
+        with open(positions_file, 'rb') as f:
+            raw = f.read()
+        stripped = _CHIP_POSITIONS_FQ_RE.sub(b'', raw)
+        return json.loads(stripped)
+
+    with open(positions_file, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def _read_positions_chip_count_file(positions_file: Path) -> int:
+    with open(positions_file, 'rb') as f:
+        head = f.read(8192)
+    match = _CHIP_POSITIONS_NETD_RE.search(head)
+    if match:
+        return int(match.group(1))
+    return _count_position_chips(_read_positions_json_file(positions_file, False))
+
+
 async def _load_positions_json_file(positions_file: Path, include_fq: bool) -> Dict[str, Any]:
     last_error: Optional[json.JSONDecodeError] = None
     for attempt in range(3):
         try:
-            if not include_fq:
-                _RE_FQ = getattr(get_chip_positions, '_RE_FQ', None)
-                if _RE_FQ is None:
-                    _RE_FQ = re.compile(rb'"f"\s*:\s*\[[^\]]*\]\s*,\s*"q"\s*:\s*\[[^\]]*\]\s*,\s*')
-                    get_chip_positions._RE_FQ = _RE_FQ
-                with open(positions_file, 'rb') as f:
-                    raw = f.read()
-                stripped = _RE_FQ.sub(b'', raw)
-                return json.loads(stripped)
-
-            with open(positions_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
+            return await anyio.to_thread.run_sync(_read_positions_json_file, positions_file, include_fq)
         except json.JSONDecodeError as exc:
             last_error = exc
             if attempt >= 2:
@@ -9931,8 +10071,21 @@ async def _load_positions_json_file(positions_file: Path, include_fq: bool) -> D
 
     raise last_error if last_error is not None else ValueError("positions json load failed")
 
+
+def _count_position_chips(positions_data: Dict[str, Any]) -> int:
+    chips = positions_data.get('chips')
+    if isinstance(chips, list):
+        return len(chips)
+    positions = positions_data.get('positions')
+    if isinstance(positions, dict):
+        return len(positions)
+    if isinstance(positions, list):
+        return len(positions)
+    return 0
+
+
 @app.get("/api/chip-positions")
-async def get_chip_positions(path: str, include_fq: int = 0):
+async def get_chip_positions(path: str, include_fq: int = 0, count_only: int = 0):
     """주어진 이미지 경로에 대응하는 positions.json 반환 (include_fq=1이면 f/q 값 포함)"""
     try:
         norm_path = path.replace("\\", "/")
@@ -9943,11 +10096,17 @@ async def get_chip_positions(path: str, include_fq: int = 0):
         rel_path_obj = Path(rel_path)
         positions_file = _resolve_positions_path(rel_path_obj)
 
-        _log(f"[CHIP_POS] {path} → {positions_file.name} (exists={positions_file.exists()})")
+        if not count_only:
+            _log(f"[CHIP_POS] {path} → {positions_file.name} (exists={positions_file.exists()})")
 
         if not positions_file.exists():
-            _log(f"[CHIP_POS] not found: {positions_file} — 빈 결과 반환")
+            if not count_only:
+                _log(f"[CHIP_POS] not found: {positions_file} — 빈 결과 반환")
             return JSONResponse(content={"chips": [], "ftn_keys": [], "qtn_keys": []})
+
+        if count_only:
+            chip_count = await anyio.to_thread.run_sync(_read_positions_chip_count_file, positions_file)
+            return JSONResponse(content={"chip_count": chip_count})
 
         positions_data = await _load_positions_json_file(positions_file, bool(include_fq))
 

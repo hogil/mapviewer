@@ -459,20 +459,28 @@ const { createRunner } = require('./e2e_playwright_session');
       : normalized;
   }
 
+  function isChipCropPath(imagePath) {
+    const name = String(imagePath || '').replace(/\\/g, '/').split('/').pop() || '';
+    const stem = name.replace(/\.[^.]+$/, '');
+    return /(?:^|_)x-?\d+_y-?\d+(?:_b[A-Za-z0-9_-]+)?$/i.test(stem);
+  }
+
   function resultLots(results) {
     return Array.from(new Set(
       (results || []).map((imagePath) => parseLotWaferFromPath(imagePath).lot).filter(Boolean)
     )).sort();
   }
 
-  function assertUnknownSearchResult(scenario, data, expectedLots = [], expectedPrefix = '') {
+  function assertUnknownSearchResult(scenario, data, expectedLots = [], expectedPrefix = '', options = {}) {
     expect(data.success === true, `${scenario} success=${JSON.stringify(data).slice(0, 500)}`);
     const results = (data.results || []).map(normalizeResultPath);
     expect(results.length > 0, `${scenario} empty results`);
-    expect(
-      results.every((imagePath) => imagePath.startsWith('unknown/')),
-      `${scenario} outsideUnknown=${JSON.stringify(results.filter((imagePath) => !imagePath.startsWith('unknown/')).slice(0, 8))}`
-    );
+    if (!options.allowOutsideUnknown) {
+      expect(
+        results.every((imagePath) => imagePath.startsWith('unknown/')),
+        `${scenario} outsideUnknown=${JSON.stringify(results.filter((imagePath) => !imagePath.startsWith('unknown/')).slice(0, 8))}`
+      );
+    }
     expect(
       (data.timings?.search_prefix || '') === expectedPrefix,
       `${scenario} not global prefix=${JSON.stringify(data.timings || {})}`
@@ -1964,14 +1972,16 @@ const { createRunner } = require('./e2e_playwright_session');
         lotCount: lots.length,
       };
     };
-    const validateExpectedLots = (label, results, expectedLots) => {
+    const validateExpectedLots = (label, results, expectedLots, options = {}) => {
       const lots = resultLots(results);
       const missing = expectedLots.filter((lot) => !lots.includes(lot));
       expect(missing.length === 0, `${label} missing lots=${JSON.stringify(missing.slice(0, 12))}`);
-      expect(
-        results.every((imagePath) => imagePath.startsWith('unknown/')),
-        `${label} outsideUnknown=${JSON.stringify(results.filter((imagePath) => !imagePath.startsWith('unknown/')).slice(0, 8))}`
-      );
+      if (!options.allowOutsideUnknown) {
+        expect(
+          results.every((imagePath) => imagePath.startsWith('unknown/')),
+          `${label} outsideUnknown=${JSON.stringify(results.filter((imagePath) => !imagePath.startsWith('unknown/')).slice(0, 8))}`
+        );
+      }
       return { lots, missing };
     };
     const runApiRepeated = async (scenario) => {
@@ -1983,7 +1993,8 @@ const { createRunner } = require('./e2e_playwright_session');
           `${scenario.name} run=${i + 1}`,
           data,
           scenario.expectedLots,
-          scenario.expectedPrefix
+          scenario.expectedPrefix,
+          { allowOutsideUnknown: !!scenario.allowOutsideUnknown }
         );
         scenario.validate?.(results, data);
         runs.push({
@@ -2065,11 +2076,15 @@ const { createRunner } = require('./e2e_playwright_session');
         }, { query: scenario.query, folder: scenario.folder || '' });
         expect(data.success === true, `${scenario.name} UI failed run=${i + 1} data=${JSON.stringify(data).slice(0, 500)}`);
         expect(data.images.length > 0 && data.wraps > 0, `${scenario.name} empty UI run=${i + 1} data=${JSON.stringify(data).slice(0, 500)}`);
-        expect(
-          data.images.every((imagePath) => imagePath.startsWith('unknown/')),
-          `${scenario.name} UI outsideUnknown=${JSON.stringify(data.images.filter((imagePath) => !imagePath.startsWith('unknown/')).slice(0, 8))}`
-        );
-        validateExpectedLots(`${scenario.name} UI run=${i + 1}`, data.images, scenario.expectedLots || []);
+        if (!scenario.allowOutsideUnknown) {
+          expect(
+            data.images.every((imagePath) => imagePath.startsWith('unknown/')),
+            `${scenario.name} UI outsideUnknown=${JSON.stringify(data.images.filter((imagePath) => !imagePath.startsWith('unknown/')).slice(0, 8))}`
+          );
+        }
+        validateExpectedLots(`${scenario.name} UI run=${i + 1}`, data.images, scenario.expectedLots || [], {
+          allowOutsideUnknown: !!scenario.allowOutsideUnknown,
+        });
         scenario.validate?.(data.images);
         runs.push({
           elapsedMs: data.elapsedMs,
@@ -2094,7 +2109,7 @@ const { createRunner } = require('./e2e_playwright_session');
         sample: runs[0].compact,
       };
     };
-    const runUiMultiRepeated = async ({ name, inputText, expectedLots, kind }) => {
+    const runUiMultiRepeated = async ({ name, inputText, expectedLots, kind, allowOutsideUnknown = false }) => {
       const runs = [];
       for (let i = 0; i < RUNS; i += 1) {
         const data = await page.evaluate(async ({ inputText: rawInput, kind: searchKind }) => {
@@ -2147,7 +2162,7 @@ const { createRunner } = require('./e2e_playwright_session');
         expect(data.success === true, `${name} failed run=${i + 1} data=${JSON.stringify(data).slice(0, 700)}`);
         expect(data.parsedCount === expectedLots.length, `${name} parsedCount=${data.parsedCount} expected=${expectedLots.length}`);
         expect(data.images.length >= expectedLots.length, `${name} count=${data.images.length} expected>=${expectedLots.length}`);
-        validateExpectedLots(`${name} run=${i + 1}`, data.images, expectedLots);
+        validateExpectedLots(`${name} run=${i + 1}`, data.images, expectedLots, { allowOutsideUnknown });
         runs.push({
           elapsedMs: data.elapsedMs,
           count: data.images.length,
@@ -2245,6 +2260,7 @@ const { createRunner } = require('./e2e_playwright_session');
         folder: 'unknown',
         expectedLots: [],
         expectedPrefix: 'unknown',
+        allowOutsideUnknown: true,
         validate: (results) => {
           expect(
             results.every((imagePath) => {
@@ -2319,6 +2335,7 @@ const { createRunner } = require('./e2e_playwright_session');
         params: { q: '', lot_multi: mixedLot100Input, folder: '', limit: '10000' },
         expectedLots: multiLots100,
         expectedPrefix: '',
+        allowOutsideUnknown: true,
       },
       {
         name: 'global lot_wafer 100 mixed case',
@@ -2334,6 +2351,7 @@ const { createRunner } = require('./e2e_playwright_session');
         },
         expectedLots: multiLots100,
         expectedPrefix: '',
+        allowOutsideUnknown: true,
       },
     ];
 
@@ -2352,12 +2370,14 @@ const { createRunner } = require('./e2e_playwright_session');
         inputText: mixedLot100Input,
         expectedLots: multiLots100,
         kind: 'lot',
+        allowOutsideUnknown: true,
       }),
       wf100: await runUiMultiRepeated({
         name: 'UI multi WF 100',
         inputText: mixedWf100Input,
         expectedLots: multiLots100,
         kind: 'wf',
+        allowOutsideUnknown: true,
       }),
     };
 
@@ -3723,6 +3743,13 @@ const { createRunner } = require('./e2e_playwright_session');
       }
 
       const v = window.viewer;
+      const timingNumber = (value) => {
+        const numberValue = Number(value);
+        return Number.isFinite(numberValue) ? Math.round(numberValue * 10) / 10 : null;
+      };
+      const relatedSearchStart = performance.now();
+      const relatedSearch = await v.searchChipLabelRelatedImages([chipPath], 'wafer');
+      const relatedSearchMs = Math.round((performance.now() - relatedSearchStart) * 10) / 10;
       const beforeUi = {
         pageCount: v.pageManager?.pages?.length || 0,
         activeRole: v.pageManager?.getActivePage?.()?.role || null,
@@ -3745,6 +3772,17 @@ const { createRunner } = require('./e2e_playwright_session');
         metadata,
         waferLookup,
         lookupMs,
+        relatedSearch: {
+          elapsedMs: relatedSearchMs,
+          apiTotalMs: timingNumber(relatedSearch.timings?.totalMs ?? relatedSearch.timings?.total_ms),
+          logicalEvalMs: timingNumber(relatedSearch.timings?.logicalEvalMs ?? relatedSearch.timings?.logical_eval_ms),
+          total: relatedSearch.total || 0,
+          resultCount: relatedSearch.results?.length || 0,
+          filteredOrDedupedCount: Math.max(0, Number(relatedSearch.total || 0) - Number(relatedSearch.results?.length || 0)),
+          firstPath: relatedSearch.results?.[0] || '',
+          results: (relatedSearch.results || []).slice(0, 8),
+          timings: relatedSearch.timings || {},
+        },
         beforeUi,
         menu: {
           text: menuEl?.innerText || '',
@@ -3765,9 +3803,22 @@ const { createRunner } = require('./e2e_playwright_session');
       `wafer key mismatch: ${JSON.stringify(data.waferLookup)}`
     );
     expect(
+      data.relatedSearch?.resultCount >= 1,
+      `related wafer search empty: ${JSON.stringify(data.relatedSearch)}`
+    );
+    expect(
+      String(data.relatedSearch?.firstPath || '').replace(/\\/g, '/').toLowerCase() === waferPath.toLowerCase(),
+      `related wafer search first result mismatch: ${JSON.stringify(data.relatedSearch)}`
+    );
+    expect(
+      !(data.relatedSearch?.results || []).some(isChipCropPath),
+      `related wafer search still contains chip crops: ${JSON.stringify(data.relatedSearch)}`
+    );
+    expect(
       data.menu.visible && data.menu.text.includes('Wafer 보기') && data.menu.text.includes('Lot 보기'),
       `chip label explorer context menu invalid: ${JSON.stringify(data.menu)}`
     );
+    const labelExplorerWaferClickStart = Date.now();
     await page.locator('#label-chip-context-menu .context-menu-item', { hasText: 'Wafer 보기' }).click({ timeout: 10000 });
     await page.waitForFunction((expectedStemLower) => {
       const v = window.viewer;
@@ -3777,12 +3828,37 @@ const { createRunner } = require('./e2e_playwright_session');
         v.pageManager?.getActivePage?.()?.role === 'wafer' &&
         String(v.selectedImagePath || '').toLowerCase().includes(expectedStemLower);
     }, fullStem.toLowerCase(), { timeout: 90000 });
+    const labelExplorerWaferStateMs = Date.now() - labelExplorerWaferClickStart;
+    await page.waitForFunction((expectedPathLower) => {
+      const v = window.viewer;
+      const canvas = document.getElementById('image-canvas');
+      const rect = canvas?.getBoundingClientRect?.();
+      const style = canvas ? getComputedStyle(canvas) : null;
+      const normalize = (value) => String(value || '').replace(/\\/g, '/').toLowerCase();
+      return !!v &&
+        v.viewMode === 'single' &&
+        v.gridMode === false &&
+        v.pageManager?.getActivePage?.()?.role === 'wafer' &&
+        normalize(v.selectedImagePath) === expectedPathLower &&
+        normalize(v.currentImagePath).endsWith(expectedPathLower) &&
+        !!v.currentImage &&
+        Number(v.currentImage.width || 0) > 0 &&
+        Number(v.currentImage.height || 0) > 0 &&
+        !!canvas &&
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        rect.width > 0 &&
+        rect.height > 0;
+    }, waferPath.toLowerCase(), { timeout: 90000 });
+    const labelExplorerWaferVisibleMs = Date.now() - labelExplorerWaferClickStart;
     const labelExplorerWaferSingle = await page.evaluate(() => ({
       activeRole: window.viewer.pageManager?.getActivePage?.()?.role || null,
       pageCount: window.viewer.pageManager?.pages?.length || 0,
       gridMode: window.viewer.gridMode,
       viewMode: window.viewer.viewMode,
       selectedImagePath: window.viewer.selectedImagePath || '',
+      currentImagePath: window.viewer.currentImagePath || '',
+      canvasReady: !!window.viewer.currentImage,
       wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
     }));
     expect(
@@ -3846,6 +3922,7 @@ const { createRunner } = require('./e2e_playwright_session');
       `chip label grid right-click menu hidden: ${JSON.stringify(gridMenuAfterRightClick)}`
     );
 
+    const gridContextWaferClickStart = Date.now();
     await page.locator('#context-chip-wafer-view').click({ timeout: 10000 });
     await page.waitForFunction((expectedStemLower) => {
       const v = window.viewer;
@@ -3855,6 +3932,29 @@ const { createRunner } = require('./e2e_playwright_session');
         v.pageManager?.getActivePage?.()?.role === 'wafer' &&
         String(v.selectedImagePath || '').toLowerCase().includes(expectedStemLower);
     }, fullStem.toLowerCase(), { timeout: 90000 });
+    const gridContextWaferStateMs = Date.now() - gridContextWaferClickStart;
+    await page.waitForFunction((expectedPathLower) => {
+      const v = window.viewer;
+      const canvas = document.getElementById('image-canvas');
+      const rect = canvas?.getBoundingClientRect?.();
+      const style = canvas ? getComputedStyle(canvas) : null;
+      const normalize = (value) => String(value || '').replace(/\\/g, '/').toLowerCase();
+      return !!v &&
+        v.viewMode === 'single' &&
+        v.gridMode === false &&
+        v.pageManager?.getActivePage?.()?.role === 'wafer' &&
+        normalize(v.selectedImagePath) === expectedPathLower &&
+        normalize(v.currentImagePath).endsWith(expectedPathLower) &&
+        !!v.currentImage &&
+        Number(v.currentImage.width || 0) > 0 &&
+        Number(v.currentImage.height || 0) > 0 &&
+        !!canvas &&
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        rect.width > 0 &&
+        rect.height > 0;
+    }, waferPath.toLowerCase(), { timeout: 90000 });
+    const gridContextWaferVisibleMs = Date.now() - gridContextWaferClickStart;
     await sleep(800);
 
     const waferSingle = await page.evaluate(() => ({
@@ -3863,6 +3963,8 @@ const { createRunner } = require('./e2e_playwright_session');
       gridMode: window.viewer.gridMode,
       viewMode: window.viewer.viewMode,
       selectedImagePath: window.viewer.selectedImagePath || '',
+      currentImagePath: window.viewer.currentImagePath || '',
+      canvasReady: !!window.viewer.currentImage,
       wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
     }));
     expect(waferSingle.pageCount === gridMenu.before.pageCount + 1, `wafer single tab was not created: before=${JSON.stringify(gridMenu.before)} after=${JSON.stringify(waferSingle)}`);
@@ -4899,10 +5001,20 @@ const { createRunner } = require('./e2e_playwright_session');
       annotationAvgMs: data.annotationAvgMs,
       annotationTimings: data.annotationTimings,
       lookupMs: data.lookupMs,
+      relatedSearchMs: data.relatedSearch.elapsedMs,
+      relatedSearchApiTotalMs: data.relatedSearch.apiTotalMs,
+      relatedSearchLogicalEvalMs: data.relatedSearch.logicalEvalMs,
+      relatedSearchResultCount: data.relatedSearch.resultCount,
+      relatedSearchFilteredOrDedupedCount: data.relatedSearch.filteredOrDedupedCount,
+      labelExplorerWaferStateMs,
+      labelExplorerWaferVisibleMs,
+      gridContextWaferStateMs,
+      gridContextWaferVisibleMs,
       markedCount: data.markedCount,
       fixture,
       waferPath: data.waferLookup.wafer_path,
       waferKey: data.waferLookup.wafer_key,
+      relatedSearch: data.relatedSearch,
       labelExplorerWaferSingle,
       gridMenu,
       gridMenuAfterRightClick,

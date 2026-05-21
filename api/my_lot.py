@@ -171,6 +171,11 @@ def _copy_position_file(src_image_path: Path, dst_image_path: Path,
         pass
 
 
+def _copy_image_file(src_image_path: Path, dst_image_path: Path) -> None:
+    """MY LOT은 영구 저장소이므로 원본 폴더 삭제와 무관하게 실제 이미지 bytes를 복사한다."""
+    shutil.copyfile(str(src_image_path), str(dst_image_path))
+
+
 def _parse_filename(path: str) -> Dict[str, str]:
     """파일명을 _로 split하여 ROOT(LOT), STEP, WAFER 추출."""
     if not path:
@@ -574,7 +579,7 @@ def add_entry(login_id: str, mode: str, group: str, src_path: Path) -> Dict[str,
             dst_file = lot_folder / src_path.name
         if dst_file.exists():
             raise ValueError(f"이미 등록된 항목입니다: {src_path.name}")
-        shutil.copy2(str(src_path), str(dst_file))
+        _copy_image_file(src_path, dst_file)
         _copy_position_file(src_path, dst_file)
 
     entry = {
@@ -786,8 +791,13 @@ def delete_group(login_id: str, mode: str, group: str) -> bool:
     safe_group = _SAFE_SEGMENT.sub("_", (group or "").strip()) or "default"
     deleted = False
     with _LOCK:
-        group_dir = _group_dir(login_segment, mode, safe_group)
-        if group_dir.exists() and group_dir.is_dir():
+        group_dirs = [
+            _group_dir(login_segment, mode, safe_group),
+            POSITIONS_ROOT / "my-lot" / login_segment / mode / safe_group,
+        ]
+        for group_dir in group_dirs:
+            if not group_dir.exists() or not group_dir.is_dir():
+                continue
             try:
                 shutil.rmtree(str(group_dir))
                 deleted = True
@@ -899,14 +909,14 @@ def add_lot_batch(login_id: str, mode: str, group: str, image_paths: List[Path],
         copy_tasks.append((src_path, dst_image))
 
     # 2. 병렬 파일 복사 (이미지 + position)
-    #    - 이미지: shutil.copyfile (가벼움, 메타데이터 스킵)
+    #    - 이미지: 실제 bytes 복사 (MY LOT은 원본 폴더 삭제 이후에도 보존)
     #    - position: 원본 bytes 캐시 + regex image_path 치환 (JSON parse/dump 제거)
     _pos_cache = {}  # position 원본 bytes 캐시 (같은 파일 반복 읽기 방지)
 
     def _copy_one(task):
         src, dst = task
         try:
-            shutil.copyfile(str(src), str(dst))
+            _copy_image_file(src, dst)
             _copy_position_file(src, dst, _pos_cache=_pos_cache)
             return None
         except Exception as exc:

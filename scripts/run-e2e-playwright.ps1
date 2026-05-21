@@ -777,7 +777,9 @@ function Get-E2EMetricNoteLines {
         "index.total_files/index.total_dirs: current full index size returned by /api/index-status. These are status counters, not files processed during the loadMs interval.",
         "fqLoadMs: wall time for the grouped unknown 5000-image grid/cache/FQ-missing/placeholder/asset-version phase. It is not single F/Q image generation time.",
         "search apiTotalMs/logicalEvalMs/UI wallMs: API timings measure indexed lookup/logical evaluation; UI wallMs includes browser input and result rendering.",
-        "composite.elapsedMs/processingTime: browser-observed composite creation wall time and server-reported processing time for the selected source images."
+        "composite.elapsedMs/processingTime: browser-observed composite creation wall time and server-reported processing time for the selected source images.",
+        "mylot *PasteSearchMs/*SaveMs/*GridReadyMs/*GridVisibleMs: browser-observed MY LOT manual paste search, image-copy save, grid state activation, and visible-thumbnail load times.",
+        "mylot waferPositionVerifyMs: E2E-only copied-position verification time; this is not MY LOT save/copy time."
     )
 }
 

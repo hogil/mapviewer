@@ -20,6 +20,7 @@ const { createRunner } = require('./e2e_playwright_session');
     process.env.IMAGES_ROOT || (process.platform === 'win32' ? 'E:/data/images' : '/appdata/appuser/images')
   );
   const compositeInputCacheDir = path.join(imagesRoot, 'composite_cache_v1');
+  const recordFilter = String(process.env.E2E_RECORD_FILTER || '').trim().toLowerCase();
   const E2E_UNKNOWN_LABEL_CLASSES = ['e2e_unknown_label', 'e2e_unknown_label_alt'];
   const E2E_WAFER_LABEL_CRUD_CLASSES = [
     'e2e_wf_class_single',
@@ -237,6 +238,10 @@ const { createRunner } = require('./e2e_playwright_session');
   }
 
   async function record(phase, name, fn) {
+    if (recordFilter && !`${phase} ${name}`.toLowerCase().includes(recordFilter)) {
+      append(`[SKIP] ${phase} ${name} filter=${recordFilter}\n`);
+      return;
+    }
     append(`[START] ${phase} ${name}\n`);
     try {
       const detail = await fn();
@@ -3118,6 +3123,520 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(after.lotHeaders > 0, `mylot after lotHeaders=${after.lotHeaders}`);
     expect(gridCols.after.gridCols !== gridCols.before, `mylot gridCols ${gridCols.before}->${gridCols.after.gridCols}`);
     return { before, gridCols, after };
+  });
+
+  await record('mylot-wafer30-lot10-perf', 'MY LOT wafer 30 / LOT 10 paste-save-grid speed', async () => {
+    await boot('chunk3-mylot-bulk-paste');
+    const totalStartedAt = Date.now();
+    const stamp = `${Date.now()}`;
+    const waferGroup = `e2e_wafer30_${stamp}`;
+    const lotGroup = `e2e_lot10_${stamp}`;
+    let cleanupDone = false;
+
+    const cleanup = async () => {
+      if (cleanupDone) return [];
+      cleanupDone = true;
+      return await page.evaluate(async ({ waferGroupName, lotGroupName }) => {
+        try {
+          window.stop?.();
+          const grid = document.getElementById('image-grid');
+          if (grid) grid.innerHTML = '';
+          if (window.viewer) {
+            window.viewer.currentGridImages = [];
+            window.viewer.selectedImages = [];
+          }
+        } catch (_) {
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const results = [];
+        const loginId = window.viewer?.getCurrentLoginId?.() || 'notsaml';
+        const loginParam = loginId ? `?LoginId=${encodeURIComponent(loginId)}` : '';
+        for (const [mode, group] of [['wafer', waferGroupName], ['lot', lotGroupName]]) {
+          try {
+            const response = await fetch(`/api/my-lot/group${loginParam}`, {
+              method: 'DELETE',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ mode, group }),
+              credentials: 'same-origin',
+              cache: 'no-store',
+            });
+            const text = await response.text();
+            results.push({ mode, group, status: response.status, ok: response.ok, text });
+          } catch (error) {
+            results.push({ mode, group, status: 0, ok: false, text: error?.message || String(error) });
+          }
+        }
+        return results;
+      }, { waferGroupName: waferGroup, lotGroupName: lotGroup });
+    };
+
+    try {
+      const loadStartedAt = Date.now();
+      await loadFolder('unknown');
+      const unknownLoadMs = Date.now() - loadStartedAt;
+
+      const sampleStartedAt = Date.now();
+      const samples = await page.evaluate(async () => {
+        const v = window.viewer;
+        const waferCandidates = [];
+        const lotRows = [];
+        const seenPairs = new Set();
+        const seenLots = new Set();
+        for (const imagePath of v.currentGridImages || []) {
+          const normalized = String(imagePath || '').replace(/\\/g, '/');
+          if (!normalized.startsWith('unknown/')) continue;
+          const tokens = v.extractLotTokensFromPath(normalized);
+          if (!tokens?.lotValue || !tokens?.waferValue) continue;
+          const pairKey = `${tokens.lotValue.toLowerCase()}:${tokens.waferValue.toLowerCase()}`;
+          if (!seenPairs.has(pairKey) && waferCandidates.length < 120) {
+            seenPairs.add(pairKey);
+            waferCandidates.push({ path: normalized, lot: tokens.lotValue, wafer: tokens.waferValue });
+          }
+          const lotKey = tokens.lotValue.toLowerCase();
+          if (!seenLots.has(lotKey) && lotRows.length < 10) {
+            seenLots.add(lotKey);
+            lotRows.push({ path: normalized, lot: tokens.lotValue, wafer: tokens.waferValue });
+          }
+          if (waferCandidates.length >= 120 && lotRows.length >= 10) break;
+        }
+
+        const modal = await v._getMyLotModal();
+        modal.activeMode = 'wafer';
+        const searchRows = waferCandidates.map((sample, rowIndex) => ({
+          rowIndex,
+          lot: sample.lot,
+          wafer: sample.wafer,
+        }));
+        const resultMap = await modal.searchImagesByLotsBatch(searchRows);
+        const waferRows = [];
+        for (let i = 0; i < waferCandidates.length; i += 1) {
+          const result = resultMap.get(i);
+          if (result?.paths?.length !== 1) continue;
+          const sample = waferCandidates[i];
+          const response = await fetch(`/api/chip-positions?path=${encodeURIComponent(sample.path)}&include_fq=0&count_only=1`, {
+            cache: 'no-store',
+            credentials: 'same-origin',
+          });
+          const body = await response.json().catch(() => ({}));
+          const chipCount = Number.isFinite(body.chip_count)
+            ? body.chip_count
+            : (Array.isArray(body.chips) ? body.chips.length : 0);
+          if (chipCount > 0) {
+            waferRows.push({ ...sample, chipCount });
+          }
+          if (waferRows.length >= 30) break;
+        }
+        return { waferRows, lotRows };
+      });
+      const sampleMs = Date.now() - sampleStartedAt;
+      expect(samples.waferRows.length === 30, `wafer sample count=${samples.waferRows.length}`);
+      expect(samples.lotRows.length === 10, `lot sample count=${samples.lotRows.length}`);
+
+      const saveManualRows = async (mode, groupName, pasteText) => {
+        return await page.evaluate(async ({ modeName, groupNameInner, text }) => {
+          const requestJson = async (url, options = {}) => {
+            const headers = { ...(options.headers || {}) };
+            if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+            const response = await fetch(url, {
+              cache: 'no-store',
+              credentials: 'same-origin',
+              ...options,
+              headers,
+            });
+            const raw = await response.text();
+            let body = {};
+            try {
+              body = raw ? JSON.parse(raw) : {};
+            } catch (_) {
+              body = { raw };
+            }
+            if (!response.ok || body.success === false) {
+              throw new Error(`${url} status=${response.status} body=${JSON.stringify(body).slice(0, 700)}`);
+            }
+            return body;
+          };
+
+          const v = window.viewer;
+          const modal = await v._getMyLotModal();
+          await requestJson('/api/my-lot/group', {
+            method: 'POST',
+            body: JSON.stringify({ mode: modeName, group: groupNameInner }),
+          });
+          modal.open();
+          modal.activeMode = modeName;
+          modal.activeGroup = groupNameInner;
+          modal.manualRows = [];
+          modal.selectedKeys = new Set();
+          await modal.refreshData();
+          modal.activeMode = modeName;
+          modal.activeGroup = groupNameInner;
+          await modal.loadActiveGroupEntriesAndRender();
+
+          const pasteStartedAt = performance.now();
+          await modal.handleManualPaste(text, true);
+          const pasteSearchMs = performance.now() - pasteStartedAt;
+          const rowsAfterPaste = modal.manualRows.map((row) => ({
+            lot: row.lot,
+            wafer: row.wafer,
+            resultCount: row.searchResults?.length || 0,
+            previewPath: row.path || '',
+          }));
+
+          const saveStartedAt = performance.now();
+          await modal.handleManualSubmit();
+          const saveMs = performance.now() - saveStartedAt;
+
+          const entriesStartedAt = performance.now();
+          await modal.refreshData();
+          modal.activeMode = modeName;
+          modal.activeGroup = groupNameInner;
+          const entriesResponse = await requestJson(
+            `/api/my-lot/entries?mode=${encodeURIComponent(modeName)}&group=${encodeURIComponent(groupNameInner)}`
+          );
+          const entriesMs = performance.now() - entriesStartedAt;
+          return {
+            rowsAfterPaste,
+            entries: Array.isArray(entriesResponse) ? entriesResponse : [],
+            pasteSearchMs: Math.round(pasteSearchMs * 10) / 10,
+            saveMs: Math.round(saveMs * 10) / 10,
+            entriesMs: Math.round(entriesMs * 10) / 10,
+          };
+        }, { modeName: mode, groupNameInner: groupName, text: pasteText });
+      };
+
+      const openMyLotGrid = async (mode, groupName, expectedPrefix) => {
+        const openStartedAt = Date.now();
+        const openProfile = await page.evaluate(async ({ modeName, groupNameInner }) => {
+          const v = window.viewer;
+          const modal = await v._getMyLotModal();
+          const profile = {};
+          let startedAt = performance.now();
+          modal.activeMode = modeName;
+          modal.activeGroup = groupNameInner;
+          modal.currentEntries = await fetch(
+            `/api/my-lot/entries?mode=${encodeURIComponent(modeName)}&group=${encodeURIComponent(groupNameInner)}`,
+            { cache: 'no-store', credentials: 'same-origin' }
+          ).then((response) => response.json());
+          profile.fetchEntriesMs = Math.round((performance.now() - startedAt) * 10) / 10;
+
+          startedAt = performance.now();
+          modal.selectedKeys = new Set(
+            modal.currentEntries.map((entry) => entry.value || entry.filename).filter(Boolean)
+          );
+          profile.selectKeysMs = Math.round((performance.now() - startedAt) * 10) / 10;
+
+          const originalEnsureMyLotPage = modal.ensureMyLotPage?.bind(modal);
+          const originalShowGrid = v.showGrid?.bind(v);
+          const originalShowGridByLot = v.showGridByLot?.bind(v);
+          const originalPersistActivePageState = v.persistActivePageState?.bind(v);
+          const originalCaptureActivePageState = v.captureActivePageState?.bind(v);
+          const pageManager = v.pageManager || null;
+          const originalPmPersistActivePage = pageManager?.persistActivePage?.bind(pageManager);
+          const originalPmEnsurePageForRole = pageManager?.ensurePageForRole?.bind(pageManager);
+          const originalPmCreatePage = pageManager?.createPage?.bind(pageManager);
+          const originalPmActivatePage = pageManager?.activatePage?.bind(pageManager);
+          let showGridProfile = null;
+          let showGridByLotProfile = null;
+          const timedCalls = {};
+          const addTimedCall = (key, ms, extra = {}) => {
+            timedCalls[key] = { ms: Math.round(ms * 10) / 10, ...extra };
+          };
+          if (originalCaptureActivePageState) {
+            v.captureActivePageState = function instrumentedCaptureActivePageState(...args) {
+              const t0 = performance.now();
+              const result = originalCaptureActivePageState(...args);
+              addTimedCall('captureActivePageState', performance.now() - t0, {
+                compact: !!args[0]?.compactGridArrays,
+                savedImages: Array.isArray(result?.savedViewState?.images) ? result.savedViewState.images.length : null,
+                selectedImages: Array.isArray(result?.selectedImages) ? result.selectedImages.length : null,
+                currentGridImages: Array.isArray(result?.currentGridImages) ? result.currentGridImages.length : null,
+                measureBaseImages: Array.isArray(result?._measureBaseImages) ? result._measureBaseImages.length : null,
+              });
+              return result;
+            };
+          }
+          if (originalPmPersistActivePage) {
+            pageManager.persistActivePage = function instrumentedPmPersistActivePage(...args) {
+              const t0 = performance.now();
+              const result = originalPmPersistActivePage(...args);
+              addTimedCall('pageManager.persistActivePage', performance.now() - t0, {
+                hasOverride: args[0] !== undefined,
+              });
+              return result;
+            };
+          }
+          if (originalPersistActivePageState) {
+            v.persistActivePageState = function instrumentedPersistActivePageState(...args) {
+              const t0 = performance.now();
+              const result = originalPersistActivePageState(...args);
+              addTimedCall('persistActivePageState', performance.now() - t0, {
+                compact: !!args[1]?.compactGridArrays,
+              });
+              return result;
+            };
+          }
+          if (originalPmCreatePage) {
+            pageManager.createPage = function instrumentedPmCreatePage(...args) {
+              const t0 = performance.now();
+              const result = originalPmCreatePage(...args);
+              addTimedCall('pageManager.createPage', performance.now() - t0, {
+                role: args[0] || '',
+                skipPersist: !!args[2]?.skipPersist,
+                skipApply: !!args[2]?.skipApply,
+              });
+              return result;
+            };
+          }
+          if (originalPmActivatePage) {
+            pageManager.activatePage = function instrumentedPmActivatePage(...args) {
+              const t0 = performance.now();
+              const result = originalPmActivatePage(...args);
+              addTimedCall('pageManager.activatePage', performance.now() - t0, {
+                skipPersist: !!args[1]?.skipPersist,
+                skipApply: !!args[1]?.skipApply,
+              });
+              return result;
+            };
+          }
+          if (originalPmEnsurePageForRole) {
+            pageManager.ensurePageForRole = function instrumentedPmEnsurePageForRole(...args) {
+              const t0 = performance.now();
+              const result = originalPmEnsurePageForRole(...args);
+              addTimedCall('pageManager.ensurePageForRole', performance.now() - t0, {
+                role: args[0] || '',
+                forceNew: !!args[1]?.forceNew,
+                skipPersist: !!args[1]?.skipPersist,
+                skipApply: !!args[1]?.skipApply,
+              });
+              return result;
+            };
+          }
+          if (originalEnsureMyLotPage) {
+            modal.ensureMyLotPage = function instrumentedEnsureMyLotPage(...args) {
+              const t0 = performance.now();
+              const result = originalEnsureMyLotPage(...args);
+              profile.ensureMyLotPageMs = Math.round((performance.now() - t0) * 10) / 10;
+              return result;
+            };
+          }
+          if (originalShowGridByLot) {
+            v.showGridByLot = function instrumentedShowGridByLot(images, ...args) {
+              const t0 = performance.now();
+              const result = originalShowGridByLot(images, ...args);
+              showGridByLotProfile = {
+                count: Array.isArray(images) ? images.length : 0,
+                lotMode: !!this.lotMode,
+                ms: Math.round((performance.now() - t0) * 10) / 10,
+                wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+                lotHeaders: document.querySelectorAll('#image-grid .lot-header').length,
+              };
+              return result;
+            };
+          }
+          if (originalShowGrid) {
+            v.showGrid = function instrumentedShowGrid(images, ...args) {
+              const t0 = performance.now();
+              const result = originalShowGrid(images, ...args);
+              showGridProfile = {
+                count: Array.isArray(images) ? images.length : 0,
+                lotMode: !!this.lotMode,
+                ms: Math.round((performance.now() - t0) * 10) / 10,
+                wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+                lotHeaders: document.querySelectorAll('#image-grid .lot-header').length,
+              };
+              return result;
+            };
+          }
+
+          startedAt = performance.now();
+          await modal.openSelectionInViewer();
+          profile.openSelectionMs = Math.round((performance.now() - startedAt) * 10) / 10;
+          if (originalEnsureMyLotPage) modal.ensureMyLotPage = originalEnsureMyLotPage;
+          if (originalShowGrid) v.showGrid = originalShowGrid;
+          if (originalShowGridByLot) v.showGridByLot = originalShowGridByLot;
+          if (originalPersistActivePageState) v.persistActivePageState = originalPersistActivePageState;
+          if (originalCaptureActivePageState) v.captureActivePageState = originalCaptureActivePageState;
+          if (originalPmPersistActivePage) pageManager.persistActivePage = originalPmPersistActivePage;
+          if (originalPmEnsurePageForRole) pageManager.ensurePageForRole = originalPmEnsurePageForRole;
+          if (originalPmCreatePage) pageManager.createPage = originalPmCreatePage;
+          if (originalPmActivatePage) pageManager.activatePage = originalPmActivatePage;
+          profile.timedCalls = timedCalls;
+          profile.showGrid = showGridProfile;
+          profile.showGridByLot = showGridByLotProfile;
+          profile.afterEvaluate = {
+            activeRole: v?.pageManager?.getActivePage?.()?.role || null,
+            gridMode: !!v.gridMode,
+            currentGridImagesLen: Array.isArray(v.currentGridImages) ? v.currentGridImages.length : 0,
+            wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+            lotHeaders: document.querySelectorAll('#image-grid .lot-header').length,
+          };
+          return profile;
+        }, { modeName: mode, groupNameInner: groupName });
+        const waitStartedAt = Date.now();
+        await page.waitForFunction(
+          ({ groupNameInner, prefixTemplate }) => {
+            const v = window.viewer;
+            const images = Array.isArray(v?.currentGridImages) ? v.currentGridImages : [];
+            const prefix = prefixTemplate.replace('{group}', groupNameInner);
+            return (
+              v?.pageManager?.getActivePage?.()?.role === 'mylot' &&
+              v.gridMode === true &&
+              images.length > 0 &&
+              images.every((imagePath) => String(imagePath || '').replace(/\\/g, '/').startsWith(prefix)) &&
+              document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0
+            );
+          },
+          { groupNameInner: groupName, prefixTemplate: expectedPrefix },
+          { timeout: 60000 }
+        );
+        openProfile.waitForGridStateMs = Date.now() - waitStartedAt;
+        const gridReadyMs = Date.now() - openStartedAt;
+        const visibleStartedAt = Date.now();
+        const top = await waitForVisibleGridThumbsLoaded(60000, 0);
+        const visibleMs = Date.now() - visibleStartedAt;
+        const state = await getTabVisualState(`${mode}-mylot-bulk`);
+        await scrollGridToRatio(1);
+        const bottom = await waitForVisibleGridThumbsLoaded(60000, 0);
+        return { gridReadyMs, visibleMs, top, bottom, state, openProfile };
+      };
+
+      const lotPasteText = samples.lotRows.map((sample) => sample.lot).join('\n');
+      const lotSave = await saveManualRows('lot', lotGroup, lotPasteText);
+      expect(lotSave.rowsAfterPaste.length === 10, `lot rows=${JSON.stringify(lotSave.rowsAfterPaste)}`);
+      expect(
+        lotSave.rowsAfterPaste.every((row) => row.resultCount > 0 && row.previewPath),
+        `lot paste search failed=${JSON.stringify(lotSave.rowsAfterPaste)}`
+      );
+      expect(lotSave.entries.length === 10, `lot entries=${JSON.stringify(lotSave.entries)}`);
+      expect(
+        lotSave.entries.every((entry) => (entry.file_count || 0) > 0 && Array.isArray(entry.all_paths) && entry.all_paths.length > 0),
+        `lot entry images missing=${JSON.stringify(lotSave.entries)}`
+      );
+      const expectedLotImages = lotSave.entries.reduce((sum, entry) => sum + (entry.all_paths?.length || 0), 0);
+      const lotGrid = await openMyLotGrid('lot', lotGroup, 'my-lot/notsaml/lot/{group}/');
+      expect(lotGrid.state.currentGridImagesLen === expectedLotImages, `lot grid count=${JSON.stringify({ expectedLotImages, lotGrid })}`);
+      expect(lotGrid.state.totalGridWraps === expectedLotImages, `lot wraps=${JSON.stringify(lotGrid.state)}`);
+      expect(lotGrid.top.visibleCount > 0 && lotGrid.top.badCount === 0, `lot grid top=${JSON.stringify(lotGrid.top)}`);
+      expect(lotGrid.bottom.visibleCount > 0 && lotGrid.bottom.badCount === 0, `lot grid bottom=${JSON.stringify(lotGrid.bottom)}`);
+
+      const waferPasteText = samples.waferRows.map((sample) => `${sample.lot}\t${sample.wafer}`).join('\n');
+      const waferSave = await saveManualRows('wafer', waferGroup, waferPasteText);
+      expect(waferSave.rowsAfterPaste.length === 30, `wafer rows=${JSON.stringify(waferSave.rowsAfterPaste)}`);
+      expect(
+        waferSave.rowsAfterPaste.every((row) => row.resultCount === 1 && row.previewPath),
+        `wafer paste search failed=${JSON.stringify(waferSave.rowsAfterPaste)}`
+      );
+      expect(waferSave.entries.length === 30, `wafer entries=${JSON.stringify(waferSave.entries)}`);
+      expect(
+        waferSave.entries.every((entry) => String(entry.path || '').startsWith(`my-lot/notsaml/wafer/${waferGroup}/`)),
+        `wafer entry paths=${JSON.stringify(waferSave.entries)}`
+      );
+
+      const positionsStartedAt = Date.now();
+      const waferPositions = await page.evaluate(async ({ sourceRows, savedEntries }) => {
+        const byFilename = new Map(savedEntries.map((entry) => [String(entry.filename || '').toLowerCase(), entry]));
+        const fetchPositions = async (imagePath) => {
+          const response = await fetch(`/api/chip-positions?path=${encodeURIComponent(imagePath)}&include_fq=0&count_only=1`, {
+            cache: 'no-store',
+            credentials: 'same-origin',
+          });
+          const body = await response.json();
+          const chipCount = Number.isFinite(body.chip_count)
+            ? body.chip_count
+            : (Array.isArray(body.chips) ? body.chips.length : 0);
+          return { status: response.status, chips: chipCount };
+        };
+        return await Promise.all(sourceRows.map(async (source) => {
+          const filename = source.path.split('/').pop().toLowerCase();
+          const entry = byFilename.get(filename);
+          const [sourcePositions, copyPositions] = await Promise.all([
+            fetchPositions(source.path),
+            entry?.path ? fetchPositions(entry.path) : Promise.resolve({ status: 0, chips: 0 }),
+          ]);
+          return {
+            source: source.path,
+            copy: entry?.path || '',
+            sourcePositions,
+            copyPositions,
+          };
+        }));
+      }, { sourceRows: samples.waferRows, savedEntries: waferSave.entries });
+      const positionVerifyMs = Date.now() - positionsStartedAt;
+      const positionMismatches = waferPositions.filter(
+        (row) => row.copyPositions.chips <= 0 || row.copyPositions.chips !== row.sourcePositions.chips
+      );
+      expect(positionMismatches.length === 0, `wafer positions mismatch=${JSON.stringify(positionMismatches)}`);
+
+      const waferGrid = await openMyLotGrid('wafer', waferGroup, 'my-lot/notsaml/wafer/{group}/');
+      expect(waferGrid.state.currentGridImagesLen === 30, `wafer grid count=${JSON.stringify(waferGrid.state)}`);
+      expect(waferGrid.state.totalGridWraps === 30, `wafer wraps=${JSON.stringify(waferGrid.state)}`);
+      expect(waferGrid.top.visibleCount > 0 && waferGrid.top.badCount === 0, `wafer grid top=${JSON.stringify(waferGrid.top)}`);
+      expect(waferGrid.bottom.visibleCount > 0 && waferGrid.bottom.badCount === 0, `wafer grid bottom=${JSON.stringify(waferGrid.bottom)}`);
+
+      const totalMs = Date.now() - totalStartedAt;
+      const cleanupResult = await cleanup();
+
+      const lotPasteSearchMs = lotSave.pasteSearchMs;
+      const lotSaveMs = lotSave.saveMs;
+      const lotEntriesMs = lotSave.entriesMs;
+      const lotGridReadyMs = lotGrid.gridReadyMs;
+      const lotGridVisibleMs = lotGrid.visibleMs;
+      const waferPasteSearchMs = waferSave.pasteSearchMs;
+      const waferSaveMs = waferSave.saveMs;
+      const waferEntriesMs = waferSave.entriesMs;
+      const waferGridReadyMs = waferGrid.gridReadyMs;
+      const waferGridVisibleMs = waferGrid.visibleMs;
+
+      expect(sampleMs < 10000, `sampleMs too slow=${sampleMs}`);
+      expect(lotPasteSearchMs < 5000, `lotPasteSearchMs too slow=${lotPasteSearchMs}`);
+      expect(lotSaveMs < 15000, `lotSaveMs too slow=${lotSaveMs}`);
+      expect(lotGridReadyMs < 10000, `lotGridReadyMs too slow=${lotGridReadyMs}`);
+      expect(lotGridVisibleMs < 10000, `lotGridVisibleMs too slow=${lotGridVisibleMs}`);
+      expect(waferPasteSearchMs < 5000, `waferPasteSearchMs too slow=${waferPasteSearchMs}`);
+      expect(waferSaveMs < 20000, `waferSaveMs too slow=${waferSaveMs}`);
+      expect(positionVerifyMs < 5000, `positionVerifyMs too slow=${positionVerifyMs}`);
+      expect(waferGridReadyMs < 10000, `waferGridReadyMs too slow=${waferGridReadyMs}`);
+      expect(waferGridVisibleMs < 10000, `waferGridVisibleMs too slow=${waferGridVisibleMs}`);
+
+      return {
+        unknownLoadMs,
+        sampleMs,
+        lotCount: lotSave.entries.length,
+        lotImageCount: expectedLotImages,
+        lotPasteSearchMs,
+        lotSaveMs,
+        lotEntriesMs,
+        lotGridReadyMs,
+        lotGridVisibleMs,
+        lotOpenProfile: lotGrid.openProfile,
+        lotGridCount: lotGrid.state.currentGridImagesLen,
+        lotGridWraps: lotGrid.state.totalGridWraps,
+        lotGridTopVisible: lotGrid.top.visibleCount,
+        lotGridBottomVisible: lotGrid.bottom.visibleCount,
+        waferCount: waferSave.entries.length,
+        waferPasteSearchMs,
+        waferSaveMs,
+        waferEntriesMs,
+        waferPositionVerifyMs: positionVerifyMs,
+        waferPositionsChecked: waferPositions.length,
+        waferGridReadyMs,
+        waferGridVisibleMs,
+        waferOpenProfile: waferGrid.openProfile,
+        waferGridCount: waferGrid.state.currentGridImagesLen,
+        waferGridWraps: waferGrid.state.totalGridWraps,
+        waferGridTopVisible: waferGrid.top.visibleCount,
+        waferGridBottomVisible: waferGrid.bottom.visibleCount,
+        totalMs,
+        sampleLots: samples.lotRows.map((sample) => sample.lot),
+        sampleWafers: samples.waferRows.slice(0, 6).map((sample) => `${sample.lot}:${sample.wafer}`),
+        lotFileCounts: lotSave.entries.map((entry) => entry.file_count || 0),
+        waferPositionFirst: waferPositions[0] || null,
+        cleanup: cleanupResult,
+      };
+    } catch (error) {
+      await cleanup().catch(() => null);
+      throw error;
+    }
   });
 
   await record('46,52,53,54,55,58,59,61,62,63', '캐시 / 성능 / placeholder / highlight / 버전전파', async () => {

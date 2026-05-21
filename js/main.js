@@ -1776,15 +1776,45 @@ class WaferMapViewer {
         return null;
     }
 
-    captureActivePageState() {
+    compactGridRestoreStateForPersist(state) {
+        if (!state || typeof state !== 'object') return state;
+        const compact = { ...state };
+        if (Array.isArray(compact.selectedImages)) compact.selectedImages = [];
+        if (Array.isArray(compact.currentGridImages)) compact.currentGridImages = [];
+        if (compact.savedViewState && compact.savedViewState.type === 'grid') {
+            compact.savedViewState = {
+                ...compact.savedViewState,
+                images: [],
+                selectedImagePaths: [],
+            };
+        }
+        return compact;
+    }
+
+    captureActivePageState(options = {}) {
+        const compactGridArrays = options.compactGridArrays === true;
         const savedViewSnapshot = this.deepCloneSimple(this.buildSavedViewSnapshot());
         const activePageId = this.pageManager?.activePageId;
         const compositeTaskState = activePageId ? this.compositePageTasks.get(activePageId) : null;
         const normalizedViewMode = this.gridMode ? null : this.viewMode;
         const normalizedSingleImageFromGrid = this.gridMode ? false : this.singleImageFromGrid;
+        const canCompactGridArrays = !!(
+            compactGridArrays &&
+            this.gridMode &&
+            savedViewSnapshot &&
+            savedViewSnapshot.type === 'grid' &&
+            Array.isArray(savedViewSnapshot.images)
+        );
+        const waferMapExplorerState = canCompactGridArrays
+            ? this.compactGridRestoreStateForPersist(this.waferMapExplorerState)
+            : this.deepCloneSimple(this.waferMapExplorerState);
+        const gridViewSaveState = canCompactGridArrays
+            ? this.compactGridRestoreStateForPersist(this.gridViewSaveState)
+            : this.deepCloneSimple(this.gridViewSaveState);
+        const hasMeasureItems = Array.isArray(this._measureCheckedItems) && this._measureCheckedItems.length > 0;
         return {
             savedViewState: savedViewSnapshot,
-            waferMapExplorerState: this.deepCloneSimple(this.waferMapExplorerState),
+            waferMapExplorerState,
             singleViewReturnState: this.deepCloneSimple(this.singleViewReturnState),
             labelExplorerState: this.labelSelection ? {
                 selected: [...this.labelSelection.selected],
@@ -1803,13 +1833,13 @@ class WaferMapViewer {
             viewMode: normalizedViewMode,
             singleImageFromGrid: normalizedSingleImageFromGrid,
             lotMode: this.lotMode,
-            selectedImages: this.selectedImages ? [...this.selectedImages] : [],
+            selectedImages: canCompactGridArrays ? [] : (this.selectedImages ? [...this.selectedImages] : []),
             selectedImagePath: this.selectedImagePath || null,
-            currentGridImages: this.currentGridImages ? [...this.currentGridImages] : [],
+            currentGridImages: canCompactGridArrays ? [] : (this.currentGridImages ? [...this.currentGridImages] : []),
             gridSelectedIdxs: this.gridSelectedIdxs ? [...this.gridSelectedIdxs] : [],
             selectedFolders: this.selectedFolders ? Array.from(this.selectedFolders) : [],
             lastSelectedFolderPath: this.lastSelectedFolder?.dataset?.path || null,
-            gridViewSaveState: this.deepCloneSimple(this.gridViewSaveState),
+            gridViewSaveState,
             gridViewImageList: this.gridViewImageList ? [...this.gridViewImageList] : [],
             gridViewImageIndex: typeof this.gridViewImageIndex === 'number' ? this.gridViewImageIndex : -1,
             isCompositeMode: this.isCompositeMode,
@@ -1825,8 +1855,12 @@ class WaferMapViewer {
             _ratioActiveItemKey: this._ratioActiveItemKey || null,
             _ratioGradientCache: this._ratioGradientCache ? [...this._ratioGradientCache] : null,
             _measureCheckedItems: this._measureCheckedItems ? [...this._measureCheckedItems] : [],
-            _gridMeasureMap: Array.isArray(this._gridMeasureMap) ? this.deepCloneSimple(this._gridMeasureMap) : null,
-            _measureBaseImages: Array.isArray(this._measureBaseImages) ? [...this._measureBaseImages] : null,
+            _gridMeasureMap: canCompactGridArrays && !hasMeasureItems
+                ? null
+                : (Array.isArray(this._gridMeasureMap) ? this.deepCloneSimple(this._gridMeasureMap) : null),
+            _measureBaseImages: canCompactGridArrays && !hasMeasureItems
+                ? null
+                : (Array.isArray(this._measureBaseImages) ? [...this._measureBaseImages] : null),
             selectedBottoms: this.selectedBottoms ? [...this.selectedBottoms] : [],
             selectedGrades: this.selectedGrades ? [...this.selectedGrades] : [],
             selectedGradientRanges: this.selectedGradientRanges ? [...this.selectedGradientRanges] : [],
@@ -1974,7 +2008,7 @@ class WaferMapViewer {
         this.compositeInlineStatusOwner = null;
     }
 
-    persistActivePageState(stateOverride) {
+    persistActivePageState(stateOverride, options = {}) {
         if (!this.pageManager) return;
         
         // 🔥 현재 페이지의 이미지 상태를 메모리 캐시에 저장 (DOM 유지 효과)
@@ -2007,7 +2041,7 @@ class WaferMapViewer {
             }
         }
 
-        this.pageManager.persistActivePage(stateOverride ?? this.captureActivePageState());
+        this.pageManager.persistActivePage(stateOverride ?? this.captureActivePageState(options));
     }
 
     cachePageView(page) {
@@ -25199,6 +25233,13 @@ class WaferMapViewer {
     }
 
     isDerivedWaferSearchPath(path = '') {
+        const normalizedPath = this.normalizeRelativePath(path);
+        const fileName = normalizedPath.split('/').pop() || '';
+        const stem = fileName.replace(/\.[^.]+$/, '');
+        if (/(?:^|_)x-?\d+_y-?\d+(?:_b[A-Za-z0-9_-]+)?$/i.test(stem)) {
+            return true;
+        }
+
         const derived = new Set([
             'classification',
             'classification_chips',
@@ -25209,7 +25250,7 @@ class WaferMapViewer {
             'composite_map',
             'yolo_datasets',
         ]);
-        return this.normalizeRelativePath(path)
+        return normalizedPath
             .split('/')
             .some(part => {
                 const normalizedPart = part.toLowerCase();

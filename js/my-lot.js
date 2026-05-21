@@ -307,10 +307,19 @@ export class MyLotModal {
     }
 
     ensureMyLotPage() {
-        if (this.viewer?.ensurePageForRole) {
-            const forceNew = this.viewer.activePageRole !== 'mylot';
-            this.viewer.ensurePageForRole('mylot', { forceNew, skipPersist: true });
+        const viewer = this.viewer;
+        if (!viewer?.pageManager) return null;
+        const forceNew = viewer.activePageRole !== 'mylot';
+        if (forceNew) {
+            viewer.persistActivePageState?.(undefined, { compactGridArrays: true });
         }
+        const target = viewer.pageManager.ensurePageForRole('mylot', {
+            forceNew,
+            skipPersist: true,
+            skipApply: true,
+        });
+        viewer.activePageRole = target?.role || 'mylot';
+        return target;
     }
 
     ensureManualRows(reset = false) {

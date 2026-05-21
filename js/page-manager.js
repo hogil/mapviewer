@@ -128,7 +128,10 @@ export class PageManager {
         }
         this.renderTabs();
         if (options.activate !== false) {
-            this.activatePage(page.id, { skipPersist: options.skipPersist });
+            this.activatePage(page.id, {
+                skipPersist: options.skipPersist,
+                skipApply: options.skipApply,
+            });
         }
         return page;
     }
@@ -204,7 +207,7 @@ export class PageManager {
     ensurePageForRole(role, options = {}) {
         const active = this.pages.find(p => p.id === this.activePageId);
         if (active) {
-            if (active.role === 'blank') {
+            if (active.role === 'blank' && !options.forceNew) {
                 return this.convertPage(active.id, role, options.state);
             }
             if (active.role === role && !options.forceNew) {
@@ -215,12 +218,19 @@ export class PageManager {
             for (let i = this.pages.length - 1; i >= 0; i -= 1) {
                 const page = this.pages[i];
                 if (page.role === role) {
-                    this.activatePage(page.id, { skipPersist: options.skipPersist });
+                    this.activatePage(page.id, {
+                        skipPersist: options.skipPersist,
+                        skipApply: options.skipApply,
+                    });
                     return page;
                 }
             }
         }
-        return this.createPage(role, options.state, { activate: options.activate !== false });
+        return this.createPage(role, options.state, {
+            activate: options.activate !== false,
+            skipPersist: options.skipPersist,
+            skipApply: options.skipApply,
+        });
     }
 
     closePage(id) {

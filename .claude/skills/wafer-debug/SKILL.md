@@ -96,6 +96,7 @@ argument-hint: [증상-설명]
 3. 단일 이미지 복귀 시 `_transientGridRestoreState`, `savedViewState`, `gridRestoreImages`가 의도대로 보존되는지 확인
 4. `showGrid(..., true, true)` 같은 강제 경로와 LOT Mode 조건이 충돌하지 않는지 확인
 5. MY LOT의 보기/Grid 보기/선택 Grid 보기가 기존 폴더 선택 상태를 오염시키지 않는지 확인
+6. MY LOT은 영구 보관 폴더이므로 이미지와 positions JSON은 항상 실제 파일로 복사해야 한다. 하드링크로 저장하지 않는다. 첫 MY LOT 그리드가 느릴 때는 원본/복사본 inode 차이로 썸네일 캐시가 미스나는지 확인하고, 실제 이미지 복사는 유지한 채 파생 썸네일 캐시 복제 여부를 확인한다.
 
 #### LoginId / Cache 문제
 1. `FALLBACK_LOGIN_ID` 실제 값(`notsaml`)과 프론트 sentinel(`guest`)이 서버 쪽 sentinel 처리와 함께 일관되게 동작하는지 확인
@@ -177,3 +178,10 @@ argument-hint: [증상-설명]
 - 원인: `js/main.js`의 `navigateSingleImageGrid()`가 `_isNavigating` 중 입력을 `_pendingNavDirection`에 큐잉했고, 이전 `loadImage()` callback이 최신 navigation 상태를 덮을 수 있었다. 이미지 로드 직후 pyramid prefetch도 quick navigation 중 서버 작업을 남길 수 있었다.
 - 수정 패턴: 최신 Next/Prev 입력은 즉시 이전 image load를 abort하고 index/path를 갱신한다. `.then/.catch`는 `_imageLoadVersion`과 `selectedImagePath`로 stale callback을 무시한다. `prefetchAllPyramidLevels()`는 짧은 디바운스 후 현재 이미지가 유지될 때만 시작한다.
 - E2E 신호: `unknown` 재귀 이미지 80장으로 grid single-image와 file single-image 모드에서 연속 Next/Prev를 호출했을 때 모든 클릭이 즉시 다른 path/index로 바뀌고 call time이 50ms 미만이어야 한다.
+
+### MY LOT wafer/LOT paste-save-grid 속도 (2026-05-20)
+
+- 증상: wafer 30개 copied-position check가 2초 이상으로 보이고, MY LOT 저장 후 LOT/wafer 그리드의 첫 visible thumbnail 시간이 느릴 수 있었다.
+- 원인: 2초 값은 저장 복사가 아니라 E2E가 full positions JSON을 여러 번 다운로드/파싱한 검증 비용이었다. MY LOT 이미지 복사본은 실제 파일이어야 하므로 원본 inode 기반 썸네일 캐시를 그대로 hit하지 못한다. 첫 LOT grid `ready`가 500ms 이상이면 LOT grid 생성보다 `PageManager.ensurePageForRole()`이 active `blank` 페이지를 `mylot`으로 convert하며 `applyPageState()`를 실행하는지 확인한다.
+- 수정 패턴: 이미지와 positions JSON은 항상 실제 복사한다. `/api/chip-positions?count_only=1`은 `netd` fast path와 thread offload로 chip 수만 빠르게 반환한다. MY LOT batch 저장 후에는 원본 썸네일 캐시가 이미 있을 때만 복사본 inode 캐시 키로 파생 썸네일 파일을 복제한다. MY LOT grid open은 `forceNew=true`일 때 blank page convert를 피하고, PageManager create/activate에 `skipPersist`/`skipApply`를 전달하며, 5000장 source grid state는 `savedViewState.images` 한 곳만 저장하도록 compact persist를 사용한다.
+- E2E 신호: `scripts/e2e_chunk3.js` record `mylot-wafer30-lot10-perf`가 10 LOT/30 wafer paste, save, copied-position count, LOT/wafer grid ready/visible thumbnail 시간을 측정한다.
