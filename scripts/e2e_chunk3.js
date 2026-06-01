@@ -3231,6 +3231,18 @@ const { createRunner } = require('./e2e_playwright_session');
       const sampleMs = Date.now() - sampleStartedAt;
       expect(samples.waferRows.length === 30, `wafer sample count=${samples.waferRows.length}`);
       expect(samples.lotRows.length === 10, `lot sample count=${samples.lotRows.length}`);
+      const normalizeWaferToken = (value) => {
+        const token = String(value || '').trim().toLowerCase();
+        if (/^\d+$/.test(token)) return token.replace(/^0+/, '') || '0';
+        return token;
+      };
+      const waferPairKey = (lot, wafer) => `${String(lot || '').trim().toLowerCase()}:${normalizeWaferToken(wafer)}`;
+      const aliasWaferIndex = samples.waferRows.findIndex((sample) =>
+        /^0+[1-9]\d*$/.test(String(sample.wafer || '').trim())
+      );
+      expect(aliasWaferIndex >= 0, `no leading-zero wafer sample for unpadded MY LOT guard=${JSON.stringify(samples.waferRows)}`);
+      const aliasSource = samples.waferRows[aliasWaferIndex];
+      const aliasInputWafer = normalizeWaferToken(aliasSource.wafer);
 
       const saveManualRows = async (mode, groupName, pasteText) => {
         return await page.evaluate(async ({ modeName, groupNameInner, text }) => {
@@ -3543,12 +3555,27 @@ const { createRunner } = require('./e2e_playwright_session');
       expect(lotGrid.top.visibleCount > 0 && lotGrid.top.badCount === 0, `lot grid top=${JSON.stringify(lotGrid.top)}`);
       expect(lotGrid.bottom.visibleCount > 0 && lotGrid.bottom.badCount === 0, `lot grid bottom=${JSON.stringify(lotGrid.bottom)}`);
 
-      const waferPasteText = samples.waferRows.map((sample) => `${sample.lot}\t${sample.wafer}`).join('\n');
+      const waferPasteText = samples.waferRows.map((sample, index) => {
+        const waferInput = index === aliasWaferIndex ? aliasInputWafer : sample.wafer;
+        return `${sample.lot}\t${waferInput}`;
+      }).join('\n');
       const waferSave = await saveManualRows('wafer', waferGroup, waferPasteText);
       expect(waferSave.rowsAfterPaste.length === 30, `wafer rows=${JSON.stringify(waferSave.rowsAfterPaste)}`);
       expect(
         waferSave.rowsAfterPaste.every((row) => row.resultCount === 1 && row.previewPath),
         `wafer paste search failed=${JSON.stringify(waferSave.rowsAfterPaste)}`
+      );
+      const aliasPasteRow = waferSave.rowsAfterPaste[aliasWaferIndex];
+      expect(
+        aliasPasteRow?.wafer === aliasInputWafer && aliasPasteRow.resultCount === 1,
+        `unpadded wafer input failed=${JSON.stringify({ aliasInputWafer, aliasSource, aliasPasteRow })}`
+      );
+      expect(
+        waferSave.pasteSearchUrls.some((url) => {
+          const lotWafer = new URL(url, 'https://localhost').searchParams.get('lot_wafer') || '';
+          return lotWafer.toLowerCase().split(',').includes(`${aliasSource.lot.toLowerCase()}:${aliasInputWafer}`);
+        }),
+        `unpadded wafer lot_wafer search URL missing=${JSON.stringify({ aliasSource, aliasInputWafer, urls: waferSave.pasteSearchUrls })}`
       );
       expect(
         waferSave.pasteSearchFolderParams.length > 0 &&
@@ -3559,6 +3586,16 @@ const { createRunner } = require('./e2e_playwright_session');
       expect(
         waferSave.entries.every((entry) => String(entry.path || '').startsWith(`my-lot/notsaml/wafer/${waferGroup}/`)),
         `wafer entry paths=${JSON.stringify(waferSave.entries)}`
+      );
+      const selectedPairKeys = new Set(samples.waferRows.map((sample) => waferPairKey(sample.lot, sample.wafer)));
+      const savedPairKeys = waferSave.entries.map((entry) => waferPairKey(entry.root, entry.wafer));
+      const unexpectedSavedPairs = savedPairKeys.filter((key) => !selectedPairKeys.has(key));
+      expect(unexpectedSavedPairs.length === 0, `wafer save widened beyond selected pairs=${JSON.stringify({ unexpectedSavedPairs, savedPairKeys, selectedPairKeys: Array.from(selectedPairKeys) })}`);
+      const aliasFilename = aliasSource.path.split('/').pop().toLowerCase();
+      const aliasEntry = waferSave.entries.find((entry) => String(entry.filename || '').toLowerCase() === aliasFilename);
+      expect(
+        aliasEntry && waferPairKey(aliasEntry.root, aliasEntry.wafer) === waferPairKey(aliasSource.lot, aliasSource.wafer),
+        `unpadded wafer saved wrong entry=${JSON.stringify({ aliasSource, aliasInputWafer, aliasEntry })}`
       );
 
       const positionsStartedAt = Date.now();
@@ -3643,6 +3680,12 @@ const { createRunner } = require('./e2e_playwright_session');
         lotGridTopVisible: lotGrid.top.visibleCount,
         lotGridBottomVisible: lotGrid.bottom.visibleCount,
         waferCount: waferSave.entries.length,
+        waferUnpaddedInput: {
+          lot: aliasSource.lot,
+          sourceWafer: aliasSource.wafer,
+          inputWafer: aliasInputWafer,
+          savedWafer: aliasEntry?.wafer || '',
+        },
         waferPasteSearchMs,
         waferSaveMs,
         waferEntriesMs,

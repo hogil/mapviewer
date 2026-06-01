@@ -156,11 +156,14 @@ class SearchService:
 
         # 실제 검색
         if keys_slice:
-            if query_for_search and lot_filter:
+            if query_for_search and (lot_filter or lot_wafer_pairs):
                 search_start = time.perf_counter()
                 # 🔥 LOT 인덱스로 먼저 후보 축소 → query 필터 적용 (501만 전체 스캔 제거)
                 folder_name = prefix.split("/")[0] if prefix else ""
-                lot_candidates = self.index_service.lot_search(lot_filter, folder_name)
+                candidate_lots = set(lot_filter)
+                if lot_wafer_pairs:
+                    candidate_lots |= {lot for lot, _ in lot_wafer_pairs}
+                lot_candidates = self.index_service.lot_search(candidate_lots, folder_name)
                 if lot_candidates:
                     lot_names = [k.rsplit("/", 1)[-1].lower() for k in lot_candidates]
                     complex_query = is_complex_query(query_for_search)
@@ -183,22 +186,24 @@ class SearchService:
                             lot_candidates, lot_names, query_for_search, None, max(1, self.search_workers),
                         )
                     effective_workers = self.search_workers
+                    if lot_wafer_pairs:
+                        index_hits = self._apply_lot_wafer_filter(index_hits, lot_wafer_pairs, lot_filter)
                 else:
                     index_hits = []
                 live_hits, live_meta = await self._live_lot_fallback(
                     loop,
                     scan_root,
                     index_hits,
-                    lot_filter,
+                    candidate_lots,
                     query_for_search,
                     lot_filter,
-                    [],
+                    lot_wafer_pairs,
                 )
                 if live_hits:
                     seen = set(index_hits)
                     index_hits.extend([rel for rel in live_hits if rel not in seen])
                 timings.update(live_meta)
-                search_mode = "query+lot-index"
+                search_mode = "query+lot-wafer-index" if lot_wafer_pairs else "query+lot-index"
                 elapsed_ms = round((time.perf_counter() - search_start) * 1000, 3)
             elif query_for_search:
                 complex_query = is_complex_query(query_for_search)
@@ -379,7 +384,17 @@ class SearchService:
 
     @staticmethod
     def _wafer_matches_filter(file_wafer: str, wafer_filter: str) -> bool:
-        return file_wafer == wafer_filter or file_wafer.startswith(wafer_filter)
+        file_value = str(file_wafer or "").strip().lower()
+        filter_value = str(wafer_filter or "").strip().lower()
+        if not file_value or not filter_value:
+            return False
+        if file_value == filter_value:
+            return True
+        if file_value.isdigit() and filter_value.isdigit():
+            return file_value.lstrip("0") == filter_value.lstrip("0")
+        if file_value.isdigit() or filter_value.isdigit():
+            return False
+        return file_value.startswith(filter_value)
 
     def _matching_pair_lots(self, lot_token: str, pair_map: Dict[str, set]) -> List[str]:
         return [

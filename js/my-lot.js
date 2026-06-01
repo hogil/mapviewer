@@ -946,8 +946,13 @@ export class MyLotModal {
         const seen = new Set();
         const validRows = [];
         let dupCount = 0;
+        let missingWaferCount = 0;
         for (const row of this.manualRows) {
             if (!row.lot || !row.lot.trim()) continue;
+            if (this.activeMode === 'wafer' && !(row.wafer || '').trim()) {
+                missingWaferCount++;
+                continue;
+            }
             const key = this.activeMode === 'wafer'
                 ? `${row.lot.trim().toLowerCase()}_${(row.wafer || '').trim().toLowerCase()}`
                 : row.lot.trim().toLowerCase();
@@ -959,8 +964,12 @@ export class MyLotModal {
             validRows.push(row);
         }
         if (validRows.length === 0) {
-            this.viewer?.showToast?.('입력된 내용이 없습니다.', 1800);
+            const message = missingWaferCount > 0 ? 'Wafer 값을 입력해주세요.' : '입력된 내용이 없습니다.';
+            this.viewer?.showToast?.(message, 1800);
             return;
+        }
+        if (missingWaferCount > 0) {
+            this.viewer?.showToast?.(`Wafer 값이 없는 ${missingWaferCount}개 행은 제외했습니다.`, 1800);
         }
         if (dupCount > 0) {
             console.log(`[MyLotModal] 중복 제거: ${dupCount}개 항목 제외`);
@@ -978,15 +987,18 @@ export class MyLotModal {
             for (const row of validRows) {
                 const lot = (row.lot || '').trim();
                 const wafer = (row.wafer || '').trim();
-                if (row.searchResults && row.searchResults.length > 0) {
-                    row.searchResults.forEach(p => {
+                const searchResults = this.activeMode === 'wafer'
+                    ? (row.searchResults || []).filter(p => this.pathMatchesWafer(p, wafer))
+                    : (row.searchResults || []);
+                if (searchResults.length > 0) {
+                    searchResults.forEach(p => {
                         const fname = p.split('/').pop().split('\\').pop();
                         if (seenFilenames.has(fname)) return;
                         seenFilenames.add(fname);
                         allPaths.push(p);
                         pathLotWaferMap[p] = { lot, wafer };
                     });
-                } else if (row.path) {
+                } else if (row.path && (this.activeMode !== 'wafer' || this.pathMatchesWafer(row.path, wafer))) {
                     const fname = row.path.split('/').pop().split('\\').pop();
                     if (!seenFilenames.has(fname)) {
                         seenFilenames.add(fname);
@@ -1115,13 +1127,9 @@ export class MyLotModal {
 
         let results = searchData.results;
 
-        // 🔥 Wafer 필터가 있으면 파일명에 wafer 값이 포함된 것만 필터링
+        // 🔥 Wafer 필터가 있으면 wafer token만 비교한다. "5"와 "05"는 같은 wafer다.
         if (waferFilter) {
-            const waferLower = waferFilter.trim().toLowerCase();
-            results = results.filter(path => {
-                const filename = path.split('/').pop().split('\\').pop().toLowerCase();
-                return filename.includes(waferLower);
-            });
+            results = results.filter(path => this.pathMatchesWafer(path, waferFilter));
             console.log(`[MyLotModal] Wafer 필터 적용 후: ${results.length}개`);
         }
 
@@ -1162,6 +1170,21 @@ export class MyLotModal {
         return Array.from(seen.values()).sort((a, b) =>
             a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
         );
+    }
+
+    pathMatchesWafer(path, wafer) {
+        const waferFilter = String(wafer || '').trim().toLowerCase();
+        if (!waferFilter) return false;
+        const fileWafer = this.extractWaferTokenFromPath(path).toLowerCase();
+        if (!fileWafer) return false;
+        if (fileWafer === waferFilter) return true;
+        if (/^\d+$/.test(fileWafer) && /^\d+$/.test(waferFilter)) {
+            return fileWafer.replace(/^0+/, '') === waferFilter.replace(/^0+/, '');
+        }
+        if (/^\d+$/.test(fileWafer) || /^\d+$/.test(waferFilter)) {
+            return false;
+        }
+        return fileWafer.startsWith(waferFilter);
     }
 
     /**
@@ -1230,6 +1253,10 @@ export class MyLotModal {
             for (const row of rows) {
                 const lotLower = (row.lot || '').trim().toLowerCase();
                 const waferFilter = (row.wafer || '').trim().toLowerCase();
+                if (isWaferMode && !waferFilter) {
+                    resultMap.set(row.rowIndex, { paths: [], previewPath: null });
+                    continue;
+                }
                 let paths = lotResultsMap.get(lotLower) || [];
                 if (!paths.length) {
                     paths = [];
@@ -1242,11 +1269,7 @@ export class MyLotModal {
 
                 // Wafer 필터 (서버에서 이미 필터링하지만 클라이언트에서도 보장)
                 if (waferFilter && paths.length > 0) {
-                    paths = paths.filter(p => {
-                        const fn = p.split('/').pop().split('\\').pop().toLowerCase();
-                        const tokens = fn.replace(/\.[^.]+$/, '').split('_');
-                        return tokens.some(t => t === waferFilter || t.startsWith(waferFilter));
-                    });
+                    paths = paths.filter(p => this.pathMatchesWafer(p, waferFilter));
                 }
 
                 resultMap.set(row.rowIndex, { paths, previewPath: paths[0] || null });
@@ -1291,7 +1314,7 @@ export class MyLotModal {
 
             if (this.activeMode === 'wafer' && !wafer) {
                 // wafer 모드에서는 lot만으로는 보기/미리보기 확정 금지
-                this.manualRows[rowIndex].searchResults = validPaths;
+                this.manualRows[rowIndex].searchResults = [];
                 this.manualRows[rowIndex].path = null;
                 return {
                     paths: [],
@@ -1304,12 +1327,7 @@ export class MyLotModal {
 
             let filteredPaths = validPaths;
             if (wafer) {
-                const waferLower = wafer.toLowerCase();
-                filteredPaths = validPaths.filter((p) => {
-                    const fn = p.split('/').pop()?.split('\\').pop()?.toLowerCase() || '';
-                    const tokens = fn.replace(/\.[^.]+$/, '').split('_');
-                    return tokens.some(t => t === waferLower || t.startsWith(waferLower));
-                });
+                filteredPaths = validPaths.filter((p) => this.pathMatchesWafer(p, wafer));
             }
 
             // 첫 번째 이미지를 미리보기용으로 선택
@@ -3985,7 +4003,66 @@ export class MyLotModal {
                 return;
             }
 
-            // 해당 그룹의 LOT 값들 추출 (LOT/Wafer 모드 모두 LOT 기준으로 검색)
+            if (this.activeMode === 'wafer') {
+                const rows = [];
+                const seenPairs = new Set();
+                group.entries.forEach((entry) => {
+                    const parsed = splitLotWaferValue(entry.value || entry.filename || '');
+                    const lot = (entry.root || parsed.lot || '').trim();
+                    const wafer = (entry.wafer || parsed.wafer || '').trim();
+                    if (!lot || !wafer) return;
+                    const key = `${lot.toLowerCase()}:${wafer.toLowerCase()}`;
+                    if (seenPairs.has(key)) return;
+                    seenPairs.add(key);
+                    rows.push({ rowIndex: rows.length, lot, wafer });
+                });
+                if (!rows.length) {
+                    return;
+                }
+
+                const resultMap = await this.searchImagesByLotsBatch(rows);
+                const searchResults = [];
+                const pathLotWaferMap = {};
+                const seenPaths = new Set();
+                for (const row of rows) {
+                    const result = resultMap.get(row.rowIndex);
+                    const paths = (result?.paths || []).filter(p => this.pathMatchesWafer(p, row.wafer));
+                    for (const imagePath of paths) {
+                        if (seenPaths.has(imagePath)) continue;
+                        seenPaths.add(imagePath);
+                        searchResults.push(imagePath);
+                        pathLotWaferMap[imagePath] = { lot: row.lot, wafer: row.wafer };
+                    }
+                }
+                if (searchResults.length === 0) {
+                    return;
+                }
+
+                const res = await fetch(this._withLogin('/api/my-lot/batch'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mode: this.activeMode,
+                        group: groupName,
+                        paths: searchResults,
+                        path_lot_wafer: pathLotWaferMap,
+                    }),
+                });
+
+                if (!res.ok) {
+                    throw new Error(`그룹 "${groupName}" 업데이트 실패: ${res.status}`);
+                }
+
+                const result = await res.json();
+                console.log(`[MyLotModal] [${this.activeMode}] 그룹 "${groupName}" 업데이트: ${result.success_count || 0}개 추가, ${result.duplicate_count || 0}개 중복`);
+                await this.refreshData();
+                if (this.activeGroup === groupName) {
+                    await this.loadActiveGroupEntriesAndRender();
+                }
+                return;
+            }
+
+            // LOT 모드는 LOT 값만으로 그룹 전체 이미지를 갱신한다.
             const groupLots = new Set();
             group.entries.forEach(entry => {
                 const { lot } = splitLotWaferValue(entry.value || entry.filename || '');
