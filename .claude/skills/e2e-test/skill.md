@@ -182,6 +182,21 @@ E2E 실행이 끝나면 최종 답변에 반드시 "무엇을 어떻게 실행�
 - 검색 0건일 때 기존 그리드를 그대로 두면 이전 폴더 이미지가 검색 결과처럼 보이므로 FAIL이다. `currentGridImages.length === 0`, visible `.grid-thumb-wrap === 0`, 빈 결과 메시지가 보여야 한다.
 - E2E guard는 `scripts/e2e_chunk2.js` record `21,24,25,26,27`이다. 실제 `fetch('/api/search?...')` URL을 캡처해 mixed path/filename/LOT 입력의 `lot_multi` 값이 기대 LOT 배열과 정확히 일치하고, UI 검색 URL에 `folder`가 없으며, 일반/다중/WF no-result가 빈 그리드로 표시되는지 확인해야 한다. 서버 직접 호출도 `lot_multi=LOT1 LOT2`에서 두 번째 whitespace 토큰을 무시하는지 확인해야 한다.
 
+## 절대규칙: 검색 결과 그리드 키보드 선택 회귀 금지
+
+- 검색 텍스트창(`#file-search`)에 입력하고 검색 버튼/Enter로 결과 그리드가 뜨면, 키보드 포커스는 그리드 단축키가 동작 가능한 상태로 넘어가야 한다.
+- 검색 성공 직후 `Ctrl+A`는 검색창 텍스트 선택이 아니라 현재 결과 그리드의 모든 이미지 선택이어야 한다. `gridSelectedIdxs.length`, visible `.grid-thumb-wrap.selected` 수, `currentGridImages.length`가 모두 일치해야 한다.
+- 검색 결과 그리드에서 `Ctrl+클릭`은 선택 토글/추가, `Shift+클릭`은 anchor부터 범위 선택을 실제 DOM selected class와 상태 배열 양쪽으로 검증한다.
+- E2E guard는 `scripts/e2e_chunk2.js` record `21,24,25,26,27`이다. 단순 상태값만 보지 말고 실제 `page.keyboard.press('Control+A')`, `Ctrl+click`, `Shift+click`을 수행한 뒤 화면 selection class와 상태 배열을 같이 비교한다.
+
+## 절대규칙: MY LOT 그룹/붙여넣기/미리보기/그리드/파일 복사 전수 검증
+
+- MY LOT은 LOT 모드와 Wafer 모드를 모두 검증한다. 새 그룹 생성, 기존 그룹 선택, 붙여넣기 행 생성, 검색 결과 수, preview path, 저장 후 `/api/my-lot/entries`, 실제 `my-lot/<LoginId>/<mode>/<group>/...` 파일 존재, positions 복사까지 확인한다.
+- 붙여넣기 검색은 UI 검색과 동일하게 전역 검색이어야 하며 `/api/search` URL에 `folder` 파라미터가 있으면 FAIL이다. 기존 폴더 선택/검색 상태가 MY LOT paste lookup에 섞이면 안 된다.
+- 저장 후 `보기`/`선택 Grid 보기`는 상태 플래그만 보지 말고 실제 그리드 wraps, visible thumbnail load, LOT header 수, `currentGridImages`의 `my-lot/...` prefix를 확인한다.
+- 그룹 삭제 후 다시 하면 정상처럼 보이는 증상은 기존 그룹 상태를 지우는 workaround로 처리하지 않는다. 같은 그룹에 붙여넣고 저장해도 preview와 실제 이미지 복사가 정상이어야 한다.
+- E2E guard는 `scripts/e2e_chunk3.js` record `mylot-wafer30-lot10-perf`다. LOT 10개/wafer 30개 paste-save-grid와 copied positions count, paste search URL의 `folder === null`, entries의 image path/file count를 모두 요구한다.
+
 ## 절대규칙: Global logical search는 basic-index 상태에서도 파일명 필드를 찾아야 함
 
 - Cold/basic cache load 직후에는 full token index가 아직 비어 있고 token0/token2 index만 있을 수 있다. 이 상태에서도 UI 전역 검색은 `folder` 파라미터 없이 `unknown` 실제 파일명 기반 논리 검색을 통과해야 한다.

@@ -882,7 +882,8 @@ class WaferMapViewer {
     }
     async _getMyLotModal() {
         if (!this.myLotModal) {
-            const { MyLotModal } = await import('./my-lot.js');
+            const jsVer = this._getJsVersionTag();
+            const { MyLotModal } = await import(`./my-lot.js?v=${jsVer}`);
             this.myLotModal = new MyLotModal(this);
         }
         return this.myLotModal;
@@ -10987,6 +10988,9 @@ class WaferMapViewer {
             }
 
             this.showGrid(matchedImages, false, forceFlatSearchGrid);
+            if (this.dom.fileSearch && document.activeElement === this.dom.fileSearch) {
+                this.dom.fileSearch.blur();
+            }
             if (folderParam) {
                 this.lastLoadedGridFolderPath = folderParam;
             }

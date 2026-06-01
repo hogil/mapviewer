@@ -185,3 +185,10 @@ argument-hint: [증상-설명]
 - 원인: 2초 값은 저장 복사가 아니라 E2E가 full positions JSON을 여러 번 다운로드/파싱한 검증 비용이었다. MY LOT 이미지 복사본은 실제 파일이어야 하므로 원본 inode 기반 썸네일 캐시를 그대로 hit하지 못한다. 첫 LOT grid `ready`가 500ms 이상이면 LOT grid 생성보다 `PageManager.ensurePageForRole()`이 active `blank` 페이지를 `mylot`으로 convert하며 `applyPageState()`를 실행하는지 확인한다.
 - 수정 패턴: 이미지와 positions JSON은 항상 실제 복사한다. `/api/chip-positions?count_only=1`은 `netd` fast path와 thread offload로 chip 수만 빠르게 반환한다. MY LOT batch 저장 후에는 원본 썸네일 캐시가 이미 있을 때만 복사본 inode 캐시 키로 파생 썸네일 파일을 복제한다. MY LOT grid open은 `forceNew=true`일 때 blank page convert를 피하고, PageManager create/activate에 `skipPersist`/`skipApply`를 전달하며, 5000장 source grid state는 `savedViewState.images` 한 곳만 저장하도록 compact persist를 사용한다.
 - E2E 신호: `scripts/e2e_chunk3.js` record `mylot-wafer30-lot10-perf`가 10 LOT/30 wafer paste, save, copied-position count, LOT/wafer grid ready/visible thumbnail 시간을 측정한다.
+
+### 검색 결과 Ctrl+A / MY LOT 붙여넣기 미리보기 누락 (2026-06-01)
+
+- 증상: 검색창에 입력 후 결과 그리드가 떠도 `Ctrl+A`가 그리드 전체 선택이 아니라 검색창 텍스트 선택으로 남을 수 있었다. Edge에서는 MY LOT 기존 그룹에 붙여넣은 LOT/Wafer가 미리보기 없이 저장되고, 그룹을 삭제 후 재생성하면 정상처럼 보일 수 있었다.
+- 원인: 성공한 `performSearch()` 뒤에도 `#file-search` 포커스가 유지되어 그리드 단축키 핸들러가 입력 필드 보호 로직으로 빠졌다. `js/my-lot.js`의 붙여넣기 검색 URL은 `folder` 파라미터를 계속 구성해 stale folder scope가 섞일 여지를 남겼고, MY LOT lazy import도 소스상 명시 버전 태그가 없었다.
+- 수정 패턴: 검색 성공 후 결과 그리드를 렌더링하면 `#file-search`를 blur한다. MY LOT의 LOT/Wafer 검색은 UI 검색과 동일하게 전역 검색으로 보내며 `folder`를 아예 생략한다. `main.js::_getMyLotModal()`은 `./my-lot.js?v=${jsVer}`로 import한다.
+- E2E 신호: `scripts/e2e_chunk2.js` record `21,24,25,26,27`는 검색 후 `Ctrl+A` 전체 선택을 확인한다. `scripts/e2e_chunk3.js` record `mylot-wafer30-lot10-perf`는 MY LOT paste 검색 URL에 `folder`가 없고 모든 붙여넣기 행의 preview/path가 채워지는지 확인한다.

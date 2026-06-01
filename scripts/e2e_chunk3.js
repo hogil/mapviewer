@@ -3273,7 +3273,21 @@ const { createRunner } = require('./e2e_playwright_session');
           await modal.loadActiveGroupEntriesAndRender();
 
           const pasteStartedAt = performance.now();
-          await modal.handleManualPaste(text, true);
+          const originalFetch = window.fetch;
+          const pasteSearchUrls = [];
+          window.fetch = async (...args) => {
+            const rawUrl = args[0]?.url || args[0] || '';
+            const url = String(rawUrl);
+            if (url.startsWith('/api/search?')) {
+              pasteSearchUrls.push(url);
+            }
+            return originalFetch.apply(window, args);
+          };
+          try {
+            await modal.handleManualPaste(text, true);
+          } finally {
+            window.fetch = originalFetch;
+          }
           const pasteSearchMs = performance.now() - pasteStartedAt;
           const rowsAfterPaste = modal.manualRows.map((row) => ({
             lot: row.lot,
@@ -3281,6 +3295,9 @@ const { createRunner } = require('./e2e_playwright_session');
             resultCount: row.searchResults?.length || 0,
             previewPath: row.path || '',
           }));
+          const pasteSearchFolderParams = pasteSearchUrls.map((url) =>
+            new URL(url, window.location.origin).searchParams.get('folder')
+          );
 
           const saveStartedAt = performance.now();
           await modal.handleManualSubmit();
@@ -3297,6 +3314,8 @@ const { createRunner } = require('./e2e_playwright_session');
           return {
             rowsAfterPaste,
             entries: Array.isArray(entriesResponse) ? entriesResponse : [],
+            pasteSearchUrls,
+            pasteSearchFolderParams,
             pasteSearchMs: Math.round(pasteSearchMs * 10) / 10,
             saveMs: Math.round(saveMs * 10) / 10,
             entriesMs: Math.round(entriesMs * 10) / 10,
@@ -3507,6 +3526,11 @@ const { createRunner } = require('./e2e_playwright_session');
         lotSave.rowsAfterPaste.every((row) => row.resultCount > 0 && row.previewPath),
         `lot paste search failed=${JSON.stringify(lotSave.rowsAfterPaste)}`
       );
+      expect(
+        lotSave.pasteSearchFolderParams.length > 0 &&
+          lotSave.pasteSearchFolderParams.every((folder) => folder === null),
+        `lot MY LOT paste search leaked folder=${JSON.stringify(lotSave.pasteSearchUrls)}`
+      );
       expect(lotSave.entries.length === 10, `lot entries=${JSON.stringify(lotSave.entries)}`);
       expect(
         lotSave.entries.every((entry) => (entry.file_count || 0) > 0 && Array.isArray(entry.all_paths) && entry.all_paths.length > 0),
@@ -3525,6 +3549,11 @@ const { createRunner } = require('./e2e_playwright_session');
       expect(
         waferSave.rowsAfterPaste.every((row) => row.resultCount === 1 && row.previewPath),
         `wafer paste search failed=${JSON.stringify(waferSave.rowsAfterPaste)}`
+      );
+      expect(
+        waferSave.pasteSearchFolderParams.length > 0 &&
+          waferSave.pasteSearchFolderParams.every((folder) => folder === null),
+        `wafer MY LOT paste search leaked folder=${JSON.stringify(waferSave.pasteSearchUrls)}`
       );
       expect(waferSave.entries.length === 30, `wafer entries=${JSON.stringify(waferSave.entries)}`);
       expect(

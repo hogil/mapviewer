@@ -1099,8 +1099,6 @@ export class MyLotModal {
         const searchParams = new URLSearchParams();
         searchParams.set('lot_multi', normalizedLots.join(','));
         searchParams.set('limit', '10000');
-        const folderParam = this.viewer?.getSearchFolderParam?.() || '';
-        searchParams.set('folder', folderParam);
         const searchUrl = `/api/search?${searchParams.toString()}`;
 
         console.log(`[MyLotModal] 이미지 검색: LOT=[${normalizedLots.join(', ')}], Wafer=${waferFilter || '없음'}`);
@@ -1200,8 +1198,6 @@ export class MyLotModal {
                 if (pairs.length > 0) params.set('lot_wafer', pairs.join(','));
             }
             params.set('limit', '10000');
-            const folderParam = this.viewer?.getSearchFolderParam?.() || '';
-            params.set('folder', folderParam);
 
             console.log(`[MyLotModal] 배치 검색: ${uniqueLots.length}개 LOT, mode=${this.activeMode}`);
             const res = await fetch(`/api/search?${params.toString()}`);

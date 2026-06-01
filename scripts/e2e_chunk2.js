@@ -653,14 +653,14 @@ const { createRunner } = require('./e2e_playwright_session');
       count: window.viewer.currentGridImages?.length || 0,
     }));
     const noResultToken = `NOE2ENORESULT${Date.now()}`;
-    let noResultDialog = '';
-    page.once('dialog', async (dialog) => {
-      noResultDialog = dialog.message();
-      await dialog.accept();
-    });
     await page.evaluate(() => {
       window.__e2eSearchUrls = [];
       window.__e2eOriginalFetch = window.fetch;
+      window.__e2eAlerts = [];
+      window.__e2eOriginalAlert = window.alert;
+      window.alert = (message) => {
+        window.__e2eAlerts.push(String(message || ''));
+      };
       window.fetch = async (...args) => {
         const url = String(args[0] || '');
         if (url.startsWith('/api/search?')) window.__e2eSearchUrls.push(url);
@@ -669,13 +669,26 @@ const { createRunner } = require('./e2e_playwright_session');
     });
     await page.fill('#file-search', noResultToken);
     await page.click('#search-btn');
-    await sleep(1200);
+    await page.waitForFunction(
+      () => {
+        const gridText = (document.getElementById('image-grid')?.textContent || '').trim();
+        return (
+          (window.__e2eSearchUrls || []).some((url) => String(url || '').startsWith('/api/search?')) &&
+          (window.viewer?.currentGridImages?.length || 0) === 0 &&
+          document.querySelectorAll('#image-grid .grid-thumb-wrap').length === 0 &&
+          gridText.includes('검색 결과가 없습니다')
+        );
+      },
+      null,
+      { timeout: 30000 }
+    );
     const searchAfter = await page.evaluate(() => ({
       gridMode: !!window.viewer.gridMode,
       wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
       count: window.viewer.currentGridImages?.length || 0,
       message: (document.getElementById('image-grid')?.textContent || '').trim(),
       searchUrl: (window.__e2eSearchUrls || []).find((url) => url.startsWith('/api/search?')) || '',
+      alerts: [...(window.__e2eAlerts || [])],
       folderParam: (() => {
         const url = (window.__e2eSearchUrls || []).find((item) => item.startsWith('/api/search?')) || '';
         return url ? new URL(url, window.location.origin).searchParams.get('folder') : null;
@@ -683,8 +696,11 @@ const { createRunner } = require('./e2e_playwright_session');
     }));
     await page.evaluate(() => {
       if (window.__e2eOriginalFetch) window.fetch = window.__e2eOriginalFetch;
+      if (window.__e2eOriginalAlert) window.alert = window.__e2eOriginalAlert;
       delete window.__e2eOriginalFetch;
+      delete window.__e2eOriginalAlert;
       delete window.__e2eSearchUrls;
+      delete window.__e2eAlerts;
     });
 
     await loadFolder('unknown');
@@ -692,7 +708,20 @@ const { createRunner } = require('./e2e_playwright_session');
     await sleep(300);
     await page.fill('#multi-search-input', noResultToken);
     await page.click('#multi-search-apply');
-    await sleep(1200);
+    await page.waitForFunction(
+      () => {
+        const error = (document.getElementById('multi-search-error')?.textContent || '').trim();
+        const gridText = (document.getElementById('image-grid')?.textContent || '').trim();
+        return (
+          error.length > 0 &&
+          (window.viewer?.currentGridImages?.length || 0) === 0 &&
+          document.querySelectorAll('#image-grid .grid-thumb-wrap').length === 0 &&
+          gridText.includes('검색 결과가 없습니다')
+        );
+      },
+      null,
+      { timeout: 30000 }
+    );
     const multiNoResult = await page.evaluate(() => {
       const modal = document.getElementById('multi-search-modal');
       const style = modal ? getComputedStyle(modal) : null;
@@ -838,6 +867,56 @@ const { createRunner } = require('./e2e_playwright_session');
     });
 
     await loadFolder('unknown');
+    const searchCtrlASampleLot = await page.evaluate(() => {
+      const v = window.viewer;
+      const counts = new Map();
+      for (const imagePath of v.currentGridImages || []) {
+        if (!String(imagePath || '').startsWith('unknown/')) continue;
+        const lot = v.extractLotTokensFromPath(imagePath)?.lotValue || '';
+        if (!lot) continue;
+        counts.set(lot, (counts.get(lot) || 0) + 1);
+      }
+      for (const [lot, count] of counts.entries()) {
+        if (count >= 5) return lot;
+      }
+      return counts.keys().next().value || '';
+    });
+    expect(searchCtrlASampleLot, 'search Ctrl+A sample LOT missing');
+    await page.fill('#file-search', searchCtrlASampleLot);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(
+      () => (
+        !!window.viewer &&
+        window.viewer.gridMode === true &&
+        (window.viewer.currentGridImages?.length || 0) > 0 &&
+        document.activeElement?.id !== 'file-search'
+      ),
+      null,
+      { timeout: 30000 }
+    );
+    await page.keyboard.press('Control+A');
+    await sleep(300);
+    const searchCtrlA = await page.evaluate(() => ({
+      activeElementId: document.activeElement?.id || '',
+      selectedCount: window.viewer.gridSelectedIdxs?.length || 0,
+      totalCount: window.viewer.currentGridImages?.length || 0,
+      selectedWraps: document.querySelectorAll('#image-grid .grid-thumb-wrap.selected').length,
+      searchValue: document.getElementById('file-search')?.value || '',
+    }));
+    await page.evaluate(() => window.viewer.clearGridSelection?.());
+    await page.locator('#image-grid .grid-thumb-wrap').nth(0).click();
+    await page.locator('#image-grid .grid-thumb-wrap').nth(2).click({ modifiers: ['Control'] });
+    await page.locator('#image-grid .grid-thumb-wrap').nth(4).click({ modifiers: ['Shift'] });
+    await sleep(300);
+    const searchCtrlShift = await page.evaluate(() => ({
+      selectedIdxs: [...(window.viewer.gridSelectedIdxs || [])].sort((a, b) => a - b),
+      selectedWraps: Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap.selected'))
+        .map((wrap) => Number(wrap.dataset.index))
+        .sort((a, b) => a - b),
+      totalCount: window.viewer.currentGridImages?.length || 0,
+    }));
+
+    await loadFolder('unknown');
     await page.evaluate(() => window.viewer.openPermissionEditorModal());
     await sleep(1200);
     const permissionVisible = await visible('#permission-editor-modal');
@@ -857,7 +936,7 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(afterPages === beforePages + 1, `pages ${beforePages}->${afterPages}`);
     expect(multiVisible, 'multi-search hidden');
     expect(multiError.length > 0, 'multi-search empty error missing');
-    expect(noResultDialog === '검색 결과가 없습니다.', `noResultDialog=${noResultDialog}`);
+    expect(searchAfter.alerts.includes('검색 결과가 없습니다.'), `noResultAlert=${JSON.stringify(searchAfter.alerts)}`);
     expect(searchAfter.gridMode === searchBefore.gridMode, `search gridMode ${searchBefore.gridMode}->${searchAfter.gridMode}`);
     expect(searchAfter.wraps === 0, `search no-result should clear wraps ${searchBefore.wraps}->${searchAfter.wraps}`);
     expect(searchAfter.count === 0, `search no-result should clear count ${searchBefore.count}->${searchAfter.count}`);
@@ -905,6 +984,19 @@ const { createRunner } = require('./e2e_playwright_session');
     );
     expect(limitValidation.lotError.includes('최대 300개'), `lotError=${limitValidation.lotError}`);
     expect(limitValidation.wfError.includes('최대 1000개'), `wfError=${limitValidation.wfError}`);
+    expect(
+      searchCtrlA.totalCount > 0 &&
+        searchCtrlA.selectedCount === searchCtrlA.totalCount &&
+        searchCtrlA.selectedWraps === searchCtrlA.totalCount &&
+        searchCtrlA.activeElementId !== 'file-search',
+      `search Ctrl+A did not select grid: ${JSON.stringify(searchCtrlA)}`
+    );
+    expect(
+      searchCtrlShift.totalCount >= 5 &&
+        JSON.stringify(searchCtrlShift.selectedIdxs) === JSON.stringify([0, 2, 3, 4]) &&
+        JSON.stringify(searchCtrlShift.selectedWraps) === JSON.stringify([0, 2, 3, 4]),
+      `search Ctrl/Shift selection failed: ${JSON.stringify(searchCtrlShift)}`
+    );
     expect(permissionVisible, 'permission modal hidden');
     expect(permRows >= 1, `permRows=${permRows}`);
     return {
@@ -912,12 +1004,13 @@ const { createRunner } = require('./e2e_playwright_session');
       afterPages,
       multiVisible,
       multiError,
-      noResultDialog,
       searchBefore,
       searchAfter,
       multiNoResult,
       multiLotApiNormalization,
       limitValidation,
+      searchCtrlA,
+      searchCtrlShift,
       permissionVisible,
       permRows,
     };
