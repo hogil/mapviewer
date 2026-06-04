@@ -104,7 +104,7 @@ return Response(content=data, headers={
   - SAML runtime은 요청 처리 시점에 import한다. 실패 시 PID, `sys.executable`, `sys.prefix`, 실제 exception을 로그와 HTTP detail에 남긴다.
   - `/saml/login`과 `/saml/acs` 로그에는 PID/Python 경로를 남겨 성공/실패가 다른 worker에서 나는지 즉시 비교할 수 있게 한다.
 - 구현 위치: `api/main.py::saml_login()`, `saml_acs()`, `saml_metadata()`를 catch-all `LazyFullAppProxy`보다 먼저 등록한다. 요청마다 로컬 SAML auth 객체를 만들고 executor에서 처리한다. `/api/auth/user`는 bootstrap SAML 성공 메타가 있으면 즉시 반환하고, 없으면 준비된 full app에만 non-blocking forward한다. `api/full_app.py::_import_saml_runtime()`은 direct full-app 경로의 전역 import 실패 캐시를 제거한다.
-- 평가: 서버 시작 직후 브라우저 `GET /`가 `AUTO_LOGIN=1`일 때 `/saml/login`으로 즉시 넘어가야 하고, `/saml/login`은 explorer/full-app/composite 준비를 기다리지 않고 IdP redirect를 시작해야 한다. `BOOTSTRAP_FULL_APP_DELAY_SECONDS=30`을 강제로 넣고 `/saml/login` 동시 요청을 보내도 `503 full app is still warming up`이 나오면 안 된다. 반복 로그인 시 `/saml/login`/`/saml/acs` 로그의 PID와 runtime import 성공 여부가 일관되어야 한다.
+- 평가: 서버 시작 직후 브라우저 `GET /`가 `AUTO_LOGIN=1`일 때 `/saml/login`으로 즉시 넘어가야 하고, `/saml/login`은 explorer/full-app/composite 준비를 기다리지 않고 IdP redirect를 시작해야 한다. `BOOTSTRAP_FULL_APP_DELAY_SECONDS=30`을 강제로 넣고 `/saml/login` 동시 요청을 보내도 `503 full app is still warming up`이 나오면 안 된다. 반복 로그인 시 `/saml/login`/`/saml/acs` 로그의 PID와 runtime import 성공 여부가 일관되어야 한다. `scripts/e2e_saml_bootstrap_smoke.js`와 `scripts/run-e2e-saml-bootstrap-smoke.ps1 -Iterations 10`으로 서버 재시작 후 웹 접속/SAML login 시도 회귀를 잡는다.
 
 ### Cold Start first-hit 2~3초 지연
 

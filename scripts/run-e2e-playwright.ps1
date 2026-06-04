@@ -302,7 +302,7 @@ $scripts = switch ($Chunk) {
     default { @("scripts/e2e_chunk1.js", "scripts/e2e_chunk2.js", "scripts/e2e_chunk3.js") }
 }
 if ($WithSmoke) {
-    $scripts = @("scripts/e2e_fresh_boot_smoke.js") + $scripts
+    $scripts = @("scripts/e2e_saml_bootstrap_smoke.js", "scripts/e2e_fresh_boot_smoke.js") + $scripts
 }
 
 $env:E2E_BASE_URL = $baseUrl
