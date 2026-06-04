@@ -874,9 +874,7 @@ class LazyFullAppProxy:
             await response(scope, receive, send)
             return
 
-        request_path = str(scope.get("path") or "")
-        is_saml_request = request_path.startswith("/saml/")
-        app = await self.manager.wait_until_ready(timeout=60.0 if is_saml_request else 15.0)
+        app = await self.manager.wait_until_ready(timeout=15.0)
         if app is None:
             detail = "full app is still warming up"
             if self.manager.load_error is not None:

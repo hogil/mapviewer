@@ -61,50 +61,17 @@ def _get_normal_border_rgb(scheme: Optional[str] = None) -> Tuple[int, int, int]
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 _MAX_WORKERS = int(os.getenv("MEASURE_COMPOSITE_WORKERS", "8"))
 
-# JSON 병렬 파싱용 ProcessPool. 웹서버 시작 시 만들지 않고 첫 사용 시 생성한다.
+# 미리 워밍업된 ProcessPool (JSON 병렬 파싱용, 서버 시작 시 1회 생성)
 from concurrent.futures import ProcessPoolExecutor as _ProcPool
-_MEASURE_PROC_POOL: Optional[_ProcPool] = None
-_MEASURE_PROC_POOL_LOCK = threading.Lock()
-
-def _measure_proc_pool_enabled() -> bool:
-    return os.getenv("MEASURE_COMPOSITE_PROCESS_POOL", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
-
-def _get_measure_proc_pool() -> Optional[_ProcPool]:
-    """Create the JSON parsing process pool lazily, not during web server startup."""
-    global _MEASURE_PROC_POOL
-    if not _measure_proc_pool_enabled():
-        return None
-    if _MEASURE_PROC_POOL is not None:
-        return _MEASURE_PROC_POOL
-    with _MEASURE_PROC_POOL_LOCK:
-        if _MEASURE_PROC_POOL is not None:
-            return _MEASURE_PROC_POOL
-        try:
-            default_workers = min(os.cpu_count() or 8, 16)
-            proc_workers = max(1, int(os.getenv("MEASURE_COMPOSITE_PROC_WORKERS", str(default_workers))))
-            if proc_workers <= 1:
-                return None
-            pool = _ProcPool(max_workers=proc_workers)
-            if os.getenv("MEASURE_COMPOSITE_PROC_WARMUP", "0").strip().lower() in {"1", "true", "yes", "y", "on"}:
-                from api._parallel_json import extract_chip_values as _warmup_fn
-                list(pool.map(_warmup_fn, [("__dummy__", "f", "0", None)] * proc_workers))
-            _MEASURE_PROC_POOL = pool
-        except Exception:
-            _MEASURE_PROC_POOL = None
-        return _MEASURE_PROC_POOL
-
-def shutdown_measure_proc_pool() -> None:
-    global _MEASURE_PROC_POOL
-    pool = _MEASURE_PROC_POOL
+_MEASURE_PROC_POOL: _ProcPool = None
+try:
+    _PROC_WORKERS = min(os.cpu_count() or 8, 16)
+    _MEASURE_PROC_POOL = _ProcPool(max_workers=_PROC_WORKERS)
+    # 모든 워커 워밍업 (1개만 깨우면 첫 호출 시 나머지 스폰으로 느림)
+    from api._parallel_json import extract_chip_values as _warmup_fn
+    list(_MEASURE_PROC_POOL.map(_warmup_fn, [("__dummy__", "f", "0", None)] * _PROC_WORKERS))
+except Exception:
     _MEASURE_PROC_POOL = None
-    if pool is None:
-        return
-    try:
-        pool.shutdown(wait=False, cancel_futures=True)
-    except TypeError:
-        pool.shutdown(wait=False)
-    except Exception:
-        pass
 
 # ── 숫자 추출 (문자 혼합값 "0C", "123R" 등 지원) ────────────
 import re as _re
@@ -625,9 +592,8 @@ def create_measure_data_only(
                 if c.exists():
                     pos_args.append((str(c), mode, item_key, bin_types))
                     break
-        proc_pool = _get_measure_proc_pool()
-        if proc_pool is not None and pos_args:
-            all_chip_results = list(proc_pool.map(extract_chip_values, pos_args))
+        if _MEASURE_PROC_POOL is not None and pos_args:
+            all_chip_results = list(_MEASURE_PROC_POOL.map(extract_chip_values, pos_args))
         else:
             all_chip_results = [extract_chip_values(a) for a in pos_args]
 
@@ -812,9 +778,8 @@ def create_measure_composite(
             proc_indices.append(i)
 
     # ProcessPool로 캐시 미스 파일 병렬 처리
-    proc_pool = _get_measure_proc_pool()
-    if proc_args and proc_pool is not None:
-        proc_results = list(proc_pool.map(extract_chip_values, proc_args))
+    if proc_args and _MEASURE_PROC_POOL is not None:
+        proc_results = list(_MEASURE_PROC_POOL.map(extract_chip_values, proc_args))
         for idx, result in zip(proc_indices, proc_results):
             all_chip_results[idx] = result
     elif proc_args:
