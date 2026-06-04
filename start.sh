@@ -87,8 +87,8 @@ export INDEX_REFRESH_INTERVAL_MINUTES="30" # 파일 인덱스 자동 재빌드 �
 # - restart 직후 초기 self-warm이 AUTO_LOGIN/SAML, recursive warm, composite import와 경합하지 않도록 기본 비활성화
 export STARTUP_THUMB_WARM_FOLDERS=""
 export STARTUP_THUMB_WARM_COUNT="0"
-export STARTUP_WARM_COMPOSITE_MODULES="1"
-export STARTUP_WARM_COMPOSITE_NUMBA="1"
+export STARTUP_WARM_COMPOSITE_MODULES="0"
+export STARTUP_WARM_COMPOSITE_NUMBA="0"
 
 # Python/시스템 최적화
 export PYTHONUNBUFFERED="1"              # 실시간 로그 출력

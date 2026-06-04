@@ -154,27 +154,31 @@ def _get_turbo_jpeg():
     return TURBO_JPEG
 
 
-OneLogin_Saml2_Auth = None
-OneLogin_Saml2_Settings = None
-_SAML_RUNTIME_READY = False
-
-
-def _ensure_saml_runtime() -> bool:
-    global OneLogin_Saml2_Auth, OneLogin_Saml2_Settings, _SAML_RUNTIME_READY
-    if _SAML_RUNTIME_READY:
-        return OneLogin_Saml2_Auth is not None and OneLogin_Saml2_Settings is not None
-    _SAML_RUNTIME_READY = True
+def _import_saml_runtime() -> Tuple[Any, Any]:
+    """Import python3-saml at request time instead of caching a failed startup state."""
     try:
-        from onelogin.saml2.auth import OneLogin_Saml2_Auth as _OneLogin_Saml2_Auth
-        from onelogin.saml2.settings import OneLogin_Saml2_Settings as _OneLogin_Saml2_Settings
-    except Exception:
-        OneLogin_Saml2_Auth = None
-        OneLogin_Saml2_Settings = None
-        return False
-
-    OneLogin_Saml2_Auth = _OneLogin_Saml2_Auth
-    OneLogin_Saml2_Settings = _OneLogin_Saml2_Settings
-    return True
+        from onelogin.saml2.auth import OneLogin_Saml2_Auth as auth_cls
+        from onelogin.saml2.settings import OneLogin_Saml2_Settings as settings_cls
+        return auth_cls, settings_cls
+    except Exception as exc:
+        logger.exception(
+            "[SAML RUNTIME] runtime import failed "
+            "pid=%s executable=%s prefix=%s error=%r",
+            os.getpid(),
+            sys.executable,
+            sys.prefix,
+            exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "python3-saml runtime import 실패. "
+                f"pid={os.getpid()}, "
+                f"sys.executable={sys.executable}, "
+                f"sys.prefix={sys.prefix}, "
+                f"error={repr(exc)}"
+            ),
+        ) from exc
 
 from .index_service import (
     IndexService,
@@ -1672,6 +1676,13 @@ async def _shutdown_runtime_resources() -> None:
     _shutdown_executor(DIRLIST_EXECUTOR, "dirlist")
     _shutdown_executor(IO_POOL, "io-pool")
     _shutdown_executor(COMPOSITE_EXECUTOR, "composite")
+    measure_module = sys.modules.get("api.measure_composite")
+    shutdown_measure_pool = getattr(measure_module, "shutdown_measure_proc_pool", None) if measure_module else None
+    if callable(shutdown_measure_pool):
+        try:
+            shutdown_measure_pool()
+        except Exception:
+            logging.getLogger("uvicorn.error").exception("⚠️ [SHUTDOWN] measure composite pool 종료 실패")
     _shutdown_executor(_pyramid_bg_executor, "pyramid-bg")
 
 @asynccontextmanager
@@ -1752,7 +1763,7 @@ async def _lifespan_background_init():
         folder.strip() for folder in os.getenv("STARTUP_THUMB_WARM_FOLDERS", "unknown").split(",") if folder.strip()
     )
     warm_count = max(0, int(os.getenv("STARTUP_THUMB_WARM_COUNT", "24")))
-    warm_composite_modules = os.getenv("STARTUP_WARM_COMPOSITE_MODULES", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
+    warm_composite_modules = os.getenv("STARTUP_WARM_COMPOSITE_MODULES", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
 
     async def _wait_for_user_idle(label: str) -> None:
         waited = 0.0
@@ -2164,26 +2175,14 @@ def _prepare_fastapi_request(req: Request) -> Dict[str, Any]:
     }
 
 def _saml_auth(req: Request) -> Any:
-    """SAML 인증 객체 생성
-    
-    OneLogin_Saml2_Auth가 None인 경우에만 '미설치' 오류 발생
-    """
-    _ensure_saml_runtime()
-    if OneLogin_Saml2_Auth is None:
-        raise HTTPException(
-            status_code=500, 
-            detail="python3-saml 라이브러리가 설치되지 않았습니다. pip install python3-saml 실행 필요"
-        )
-    return OneLogin_Saml2_Auth(_prepare_fastapi_request(req), custom_base_path=str(SAML_DIR))
+    """SAML 인증 객체 생성."""
+    auth_cls, _ = _import_saml_runtime()
+    return auth_cls(_prepare_fastapi_request(req), custom_base_path=str(SAML_DIR))
 
 @app.get("/saml/metadata")
 async def saml_metadata():
     try:
-        if not _ensure_saml_runtime() or OneLogin_Saml2_Settings is None:
-            return PlainTextResponse(
-                "python3-saml 라이브러리가 설치되지 않았습니다. pip install python3-saml 실행 필요",
-                status_code=500
-            )
+        _, settings_cls = _import_saml_runtime()
         base, adv = _load_saml_files()
         combined = dict(base)
         try:
@@ -2192,7 +2191,7 @@ async def saml_metadata():
                 combined[k] = v
         except Exception:
             pass
-        settings = OneLogin_Saml2_Settings(settings=combined, custom_base_path=str(SAML_DIR))
+        settings = settings_cls(settings=combined, custom_base_path=str(SAML_DIR))
         settings.set_strict(False)
         metadata = settings.get_sp_metadata()
         return Response(content=metadata, media_type="application/xml")
@@ -2213,6 +2212,9 @@ async def saml_login(request: Request):
         logger.info(f"  - Path: {request.url.path}")
         logger.info(f"  - Method: {request.method}")
         logger.info(f"  - Client: {request.client}")
+        logger.info(f"  - PID: {os.getpid()}")
+        logger.info(f"  - Python: {sys.executable}")
+        logger.info(f"  - Prefix: {sys.prefix}")
         logger.info(f"  - AUTO_LOGIN: {AUTO_LOGIN}")
         logger.info("=" * 100)
         
@@ -2298,16 +2300,15 @@ async def saml_acs(request: Request):
     logger.info(f"  - Path: {request.url.path}")
     logger.info(f"  - Method: {request.method}")
     logger.info(f"  - Client: {request.client}")
+    logger.info(f"  - PID: {os.getpid()}")
+    logger.info(f"  - Python: {sys.executable}")
+    logger.info(f"  - Prefix: {sys.prefix}")
     logger.info(f"  - Headers:")
     for key, value in request.headers.items():
         logger.info(f"    {key}: {value}")
     logger.info("=" * 100)
     
-    if not _ensure_saml_runtime() or OneLogin_Saml2_Auth is None:
-        return PlainTextResponse(
-            "python3-saml 라이브러리가 설치되지 않았습니다. pip install python3-saml 실행 필요",
-            status_code=500
-        )
+    auth_cls, _ = _import_saml_runtime()
     form = dict(await request.form())
     logger.info(f"📋 [SAML ACS] Form 데이터 수신: {list(form.keys())}")
     
@@ -2320,7 +2321,7 @@ async def saml_acs(request: Request):
     
     req_dict = _prepare_fastapi_request(request)
     req_dict["post_data"] = form
-    auth = OneLogin_Saml2_Auth(req_dict, custom_base_path=str(SAML_DIR))
+    auth = auth_cls(req_dict, custom_base_path=str(SAML_DIR))
 
     try:
         auth.process_response()
