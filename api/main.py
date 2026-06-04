@@ -19,6 +19,7 @@ import os
 import re
 import sys
 import time
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -164,6 +165,8 @@ _BOOTSTRAP_FULL_APP_DELAY_SECONDS = max(0.0, float(os.getenv("BOOTSTRAP_FULL_APP
 _USER_ACTIVITY_UNTIL = 0.0
 _ANONYMOUS_LOGIN_ID = (config.FALLBACK_LOGIN_ID or "notsaml").strip() or "notsaml"
 _LOGIN_ID_SENTINELS = {_ANONYMOUS_LOGIN_ID.lower(), "guest"}
+SAML_DIR = Path("saml")
+_BOOTSTRAP_SAML_SESSIONS: Dict[str, Dict[str, Any]] = {}
 
 
 def _mark_user_activity() -> None:
@@ -216,6 +219,115 @@ def _bootstrap_current_login_id(request: Request) -> Optional[str]:
             return candidate
 
     return None
+
+
+def _load_bootstrap_saml_files() -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    base: Dict[str, Any] = {}
+    adv: Dict[str, Any] = {}
+    bootlog = logging.getLogger("uvicorn.error")
+    try:
+        settings_path = SAML_DIR / "settings.json"
+        if settings_path.exists():
+            base = json.loads(settings_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        bootlog.warning("SAML settings.json 로드 실패: %s", exc)
+    try:
+        adv_path = SAML_DIR / "advanced_settings.json"
+        if adv_path.exists():
+            adv = json.loads(adv_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        bootlog.warning("SAML advanced_settings.json 로드 실패: %s", exc)
+
+    try:
+        idp_pem = SAML_DIR / "certs" / "idp_x509.pem"
+        if idp_pem.exists():
+            base.setdefault("idp", {})["x509cert"] = idp_pem.read_text(encoding="utf-8")
+    except Exception as exc:
+        bootlog.warning("SAML IdP 인증서 로드 실패: %s", exc)
+
+    try:
+        sp_crt = SAML_DIR / "certs" / "sp.crt"
+        sp_key = SAML_DIR / "certs" / "sp.key"
+        if sp_crt.exists() and sp_key.exists():
+            base.setdefault("sp", {})["x509cert"] = sp_crt.read_text(encoding="utf-8")
+            base["sp"]["privateKey"] = sp_key.read_text(encoding="utf-8")
+    except Exception as exc:
+        bootlog.warning("SAML SP 키/증서 로드 실패: %s", exc)
+
+    return base, adv
+
+
+def _prepare_bootstrap_saml_request(request: Request) -> Dict[str, Any]:
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if not host and request.client:
+        host = request.client.host
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    return {
+        "http_host": host or "",
+        "server_port": "443" if proto == "https" else "80",
+        "script_name": request.url.path,
+        "get_data": dict(request.query_params or {}),
+        "post_data": {},
+        "https": "on" if proto == "https" else "off",
+    }
+
+
+def _import_bootstrap_saml_runtime() -> Tuple[Any, Any]:
+    try:
+        from onelogin.saml2.auth import OneLogin_Saml2_Auth as auth_cls
+        from onelogin.saml2.settings import OneLogin_Saml2_Settings as settings_cls
+        return auth_cls, settings_cls
+    except Exception as exc:
+        logging.getLogger("uvicorn.error").exception(
+            "[BOOTSTRAP SAML] runtime import failed pid=%s executable=%s prefix=%s error=%r",
+            os.getpid(),
+            sys.executable,
+            sys.prefix,
+            exc,
+        )
+        raise
+
+
+def _pick_saml_attr(attrs: Dict[str, Any], key: str) -> Optional[str]:
+    value = attrs.get(key)
+    if value:
+        if isinstance(value, list):
+            return str(value[0]) if value else None
+        return str(value)
+    for attr_key, attr_value in attrs.items():
+        if "/" in attr_key or "#" in attr_key:
+            last_part = attr_key.split("/")[-1].split("#")[-1]
+            if last_part == key:
+                if isinstance(attr_value, list):
+                    return str(attr_value[0]) if attr_value else None
+                return str(attr_value)
+    return None
+
+
+def _auth_user_payload_from_meta(meta: Dict[str, Any]) -> Dict[str, Any]:
+    login_id = str(meta.get("LoginId") or "").strip()
+    username = str(meta.get("Username") or "").strip()
+    dept_name = str(meta.get("DeptName") or "").strip()
+    try:
+        from .personal_colors import get_user_color_scheme
+        color_scheme = get_user_color_scheme(login_id or None, username or None, dept_name or None)
+    except Exception:
+        color_scheme = login_id or _ANONYMOUS_LOGIN_ID
+    return {
+        "authenticated": bool(login_id),
+        "LoginId": login_id or None,
+        "Username": username,
+        "DeptName": dept_name,
+        "GrdName_EN": meta.get("GrdName_EN", ""),
+        "GrdName": meta.get("GrdName", ""),
+        "metadata": meta.get("metadata", {}),
+        "saml_attributes": meta.get("saml_attributes", {}),
+        "colorScheme": color_scheme,
+    }
+
+
+def _saml_failure_response(message: str, status_code: int = 500) -> PlainTextResponse:
+    return PlainTextResponse(message, status_code=status_code)
 
 
 def _track_bootstrap_page_visit(request: Request, status_code: int) -> None:
@@ -1268,6 +1380,191 @@ async def read_root(request: Request):
     return response
 
 
+async def saml_metadata(request: Request):
+    started = time.perf_counter()
+
+    def _metadata_sync() -> str:
+        _, settings_cls = _import_bootstrap_saml_runtime()
+        base, adv = _load_bootstrap_saml_files()
+        combined = dict(base)
+        for key, value in (adv or {}).items():
+            combined[key] = value
+        settings = settings_cls(settings=combined, custom_base_path=str(SAML_DIR))
+        settings.set_strict(False)
+        return settings.get_sp_metadata()
+
+    try:
+        loop = asyncio.get_running_loop()
+        metadata = await loop.run_in_executor(None, _metadata_sync)
+        logging.getLogger("uvicorn.error").info(
+            "[BOOTSTRAP SAML METADATA] pid=%s elapsed=%.0fms",
+            os.getpid(),
+            (time.perf_counter() - started) * 1000.0,
+        )
+        return Response(content=metadata, media_type="application/xml")
+    except Exception as exc:
+        logging.getLogger("uvicorn.error").exception("[BOOTSTRAP SAML METADATA] failed: %s", exc)
+        return _saml_failure_response(f"metadata error: {exc}", status_code=500)
+
+
+async def saml_login(request: Request):
+    started = time.perf_counter()
+    bootlog = logging.getLogger("uvicorn.error")
+    bootlog.info(
+        "[BOOTSTRAP SAML LOGIN] start pid=%s path=%s client=%s python=%s prefix=%s",
+        os.getpid(),
+        request.url.path,
+        request.client,
+        sys.executable,
+        sys.prefix,
+    )
+
+    req_dict = _prepare_bootstrap_saml_request(request)
+
+    def _login_sync() -> str:
+        auth_cls, _ = _import_bootstrap_saml_runtime()
+        auth = auth_cls(req_dict, custom_base_path=str(SAML_DIR))
+        return auth.login(return_to="/")
+
+    try:
+        loop = asyncio.get_running_loop()
+        idp_login_url = await loop.run_in_executor(None, _login_sync)
+        bootlog.info(
+            "[BOOTSTRAP SAML LOGIN] redirect ready pid=%s elapsed=%.0fms",
+            os.getpid(),
+            (time.perf_counter() - started) * 1000.0,
+        )
+        return RedirectResponse(idp_login_url, status_code=302)
+    except Exception as exc:
+        bootlog.exception("[BOOTSTRAP SAML LOGIN] failed: %s", exc)
+        return _saml_failure_response(f"SAML 로그인 실패: {exc}", status_code=500)
+
+
+def _record_bootstrap_saml_success(client_ip: str, meta: Dict[str, Any]) -> None:
+    try:
+        from .detail_access_logger import detail_access_logger
+        detail_access_logger.log_saml_access(meta, client_ip)
+    except Exception:
+        logging.getLogger("uvicorn.error").exception("[BOOTSTRAP SAML] detail access log failed")
+    try:
+        logger_instance._update_stats(
+            ip=client_ip,
+            endpoint="/saml/acs",
+            method="POST",
+            user_id_override=meta.get("LoginId"),
+            meta=meta,
+        )
+    except Exception:
+        logging.getLogger("uvicorn.error").exception("[BOOTSTRAP SAML] stats update failed")
+
+
+async def saml_acs(request: Request):
+    started = time.perf_counter()
+    bootlog = logging.getLogger("uvicorn.error")
+    bootlog.info(
+        "[BOOTSTRAP SAML ACS] start pid=%s path=%s client=%s python=%s prefix=%s",
+        os.getpid(),
+        request.url.path,
+        request.client,
+        sys.executable,
+        sys.prefix,
+    )
+
+    try:
+        form = dict(await request.form())
+    except Exception as exc:
+        bootlog.exception("[BOOTSTRAP SAML ACS] form parse failed: %s", exc)
+        return _saml_failure_response("ACS error: invalid form data", status_code=400)
+
+    req_dict = _prepare_bootstrap_saml_request(request)
+    req_dict["post_data"] = form
+
+    def _process_sync() -> Tuple[List[str], Dict[str, Any]]:
+        auth_cls, _ = _import_bootstrap_saml_runtime()
+        auth = auth_cls(req_dict, custom_base_path=str(SAML_DIR))
+        auth.process_response()
+        return list(auth.get_errors() or []), dict(auth.get_attributes() or {})
+
+    try:
+        loop = asyncio.get_running_loop()
+        errors, attrs = await loop.run_in_executor(None, _process_sync)
+    except Exception as exc:
+        bootlog.exception("[BOOTSTRAP SAML ACS] process_response failed: %s", exc)
+        return _saml_failure_response("ACS error: exception during processing", status_code=400)
+
+    meta: Dict[str, Any] = {}
+    for field in ("Username", "LoginId", "Sabun", "DeptName", "GrdName_EN", "GrdName", "x-ms-forwarded-client-ip"):
+        value = _pick_saml_attr(attrs, field)
+        if value:
+            meta[field] = value
+
+    login_id = str(meta.get("LoginId") or "").strip()
+    if not login_id:
+        bootlog.error("[BOOTSTRAP SAML ACS] LoginId missing errors=%s attrs=%s", errors, list(attrs.keys()))
+        base_settings, _ = _load_bootstrap_saml_files()
+        idp_sso_url = base_settings.get("idp", {}).get("singleSignOnService", {}).get("url")
+        if idp_sso_url:
+            return RedirectResponse(idp_sso_url, status_code=302)
+        return _saml_failure_response(
+            "SAML 인증 실패\n\n오류: LoginId not found\n상세: SAML 응답에 LoginId attribute가 없습니다.\n\n관리자에게 문의하세요.",
+            status_code=400,
+        )
+
+    meta["saml_attributes"] = attrs
+    meta["last_saml_auth_time"] = time.time()
+    _BOOTSTRAP_SAML_SESSIONS[login_id] = meta
+
+    client_ip = logger_instance.get_client_ip(request)
+    asyncio.create_task(asyncio.to_thread(_record_bootstrap_saml_success, client_ip, dict(meta)))
+
+    username = str(meta.get("Username") or "")
+    dept_name = str(meta.get("DeptName") or "")
+    query = urllib.parse.urlencode(
+        {
+            "saml_success": "true",
+            "LoginId": login_id,
+            "Username": username,
+            "DeptName": dept_name,
+        }
+    )
+    redirect_url = f"/?{query}"
+    bootlog.info(
+        "[BOOTSTRAP SAML ACS] success pid=%s login_id=%s elapsed=%.0fms redirect=%s",
+        os.getpid(),
+        login_id,
+        (time.perf_counter() - started) * 1000.0,
+        redirect_url,
+    )
+    return RedirectResponse(redirect_url, status_code=302)
+
+
+async def api_auth_user(request: Request):
+    login_id = _normalize_login_id_candidate(request.query_params.get("LoginId"))
+    if login_id and login_id in _BOOTSTRAP_SAML_SESSIONS:
+        return JSONResponse(_auth_user_payload_from_meta(_BOOTSTRAP_SAML_SESSIONS[login_id]))
+
+    forwarded = await _maybe_forward_to_full_app("api_auth_user", request, LoginId=login_id)
+    if forwarded is not None:
+        return JSONResponse(forwarded)
+
+    if login_id:
+        return JSONResponse(_auth_user_payload_from_meta({"LoginId": login_id}))
+
+    return JSONResponse(
+        {
+            "authenticated": False,
+            "LoginId": None,
+            "Username": "",
+            "DeptName": "",
+            "GrdName_EN": "",
+            "GrdName": "",
+            "metadata": {},
+            "saml_attributes": {},
+            "colorScheme": _ANONYMOUS_LOGIN_ID,
+        }
+    )
+
+
 async def get_main_js(request: Request):
     request.scope["path_params"] = {"filename": "main.js"}
     return await serve_js(request)
@@ -1377,10 +1674,14 @@ app.add_route("/api/warmup", api_warmup, methods=["GET", "POST"])
 app.add_route("/api/internal/composite-numba-warmup", api_internal_composite_numba_warmup, methods=["POST"])
 app.add_route("/api/search-ready", api_search_ready, methods=["GET"])
 app.add_route("/api/search", api_search, methods=["GET"])
+app.add_route("/api/auth/user", api_auth_user, methods=["GET"])
 app.add_route("/api/browse-folders", browse_folders, methods=["GET"])
 app.add_route("/api/files", get_files, methods=["GET"])
 app.add_route("/api/files/recursive", get_files_recursive, methods=["GET"])
 app.add_route("/api/thumbnail", get_thumbnail, methods=["GET", "HEAD"])
+app.add_route("/saml/metadata", saml_metadata, methods=["GET"])
+app.add_route("/saml/login", saml_login, methods=["GET"])
+app.add_route("/saml/acs", saml_acs, methods=["POST"])
 app.add_route("/js/{filename:path}", serve_js, methods=["GET"])
 app.add_route("/css/{filename:path}", serve_css, methods=["GET"])
 app.add_route("/", read_root, methods=["GET"])
