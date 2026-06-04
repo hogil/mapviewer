@@ -1,0 +1,132 @@
+# AGENTS.md
+
+## Skills
+A skill is a set of local instructions stored in a `SKILL.md` file. This repository provides the following project-local skill in addition to globally installed skills.
+
+## Project Data Fixtures
+
+- `D:/project/data/wm-811k/benchmark_4m/` is a deliberate 0-byte dummy dataset for file index and search performance testing.
+- Expected shape: 400 lot folders (`lot_0000`..`lot_0399`) × 10000 PNG-named empty files = 4,000,000 files.
+- These files are not valid images. Do not treat PIL/pyvips image load failures from this folder as bugs.
+- Do not delete or move this folder as "unused" unless the user explicitly asks. It exists to reproduce multi-million-file indexing speed and cold-cache behavior.
+- UI/E2E/image-rendering tests should not use `benchmark_4m` files as visual images. Index/search performance tests may intentionally include them.
+
+## Regression Notes
+
+- Do not hide UI regressions with broad exception handling, timeout relaxation, or "ignore if transient" logic. Find the lifecycle or state mismatch that made the UI appear.
+- When a bug is fixed, record the root cause, the files/functions involved, and the E2E signal that would catch it again in `AGENTS.md` plus the relevant skill file.
+- Intermittent SAML login worker-state regression:
+  - Symptom: Ubuntu production login could alternate between success and `python3-saml 라이브러리가 설치되지 않았습니다` failures even though startup import checks passed.
+  - Root cause: `api/full_app.py` cached one failed OneLogin import in module globals (`OneLogin_Saml2_Auth`, `_SAML_RUNTIME_READY`) and returned a misleading "not installed" message without the actual import exception. Multiple `python -m api.main` child processes can also confuse diagnosis, so verify the serving PID before assuming requests are load-balanced across Uvicorn workers.
+  - SAML isolation contract: `/saml/login`, `/saml/acs`, and `/saml/metadata` must be independent from full-app lazy import, index build/load, thumbnail warmup, composite warmup, and measure/composite modules. SAML routes must not wait for `api.full_app` readiness before starting the IdP redirect or processing ACS.
+  - SAML handoff contract: this app hands successful SAML identity to the frontend through the existing redirect URL only: `/?saml_success=true&LoginId=...&Username=...&DeptName=...`. Do not add `session_user`, `saml_login_id`, `saml_user_meta`, or other cookies as part of SAML login handoff unless the auth design is explicitly changed.
+  - Correct fix pattern: keep FastAPI/Uvicorn process workers at 1; concurrency belongs in thread/executor settings. Do not cache failed SAML imports globally. Import `OneLogin_Saml2_Auth` / `OneLogin_Saml2_Settings` at request time, and log PID, `sys.executable`, `sys.prefix`, and the real import exception. Do not change `api/measure_composite.py`, composite startup warmup, or image/composite worker settings as part of a SAML-only fix unless separately requested.
+  - Production guard: immediately after server start, a browser `GET /` with `AUTO_LOGIN=1` must redirect to `/saml/login`, and `/saml/login` must begin the IdP redirect without waiting for explorer/full-app/composite readiness. Repeated `/saml/login` and `/saml/acs` attempts should log the serving PID/runtime import result consistently.
+- Composite context-menu orphan panel regression:
+  - Symptom: after `Composite 만들기` / `handleCompositeCreate()`, a small top-left panel briefly shows `검색...` and `이미지를 선택하세요` even though the context menu is closed.
+  - Root cause: `_resetContextCompositeChecks()` repopulated the hidden `#context-mc-submenu` with the empty-selection message during composite creation, while `#context-mc-submenu` / `#context-mea-submenu` were also treated as generic `.failbit-panel` elements and could be moved/restored outside the context-menu lifecycle.
+  - Correct fix pattern: keep context submenus tied to `#grid-context-menu` visibility, hide them through `_hideGridContextSubmenuPanel()`, do not render empty chooser text during composite creation, and guard `_openMcContextSubmenu()` / `_openMeaContextSubmenu()` with context-menu visibility and nonzero trigger rect checks.
+  - E2E guard: `scripts/e2e_chunk1.js` checks the real button path and `scripts/e2e_chunk3.js` checks direct `handleCompositeCreate()`; both must keep orphan context chooser event counts at 0.
+- Composite subset event-loop blocking regression:
+  - Symptom: after creating a Composite Map from `unknown` images, running `Subset 만들기` and switching to other work could delay already-requested image loads until subset generation finished.
+  - Root cause: `/api/composite-subset` was declared `async` but called `create_subset_map()` and composite thumbnail invalidation directly on the event loop. NPZ load/render/write blocked unrelated `/api/image` and thumbnail requests.
+  - Correct fix pattern: keep the existing response contract, but run subset cache invalidation and `create_subset_map()` through `COMPOSITE_EXECUTOR` with `run_in_executor`. Do not add timeout relaxation or ignore slow image loads.
+  - E2E guard: use `unknown` recursive images, create a Composite Map, start `/api/composite-subset`, then issue `/api/image` or next/prev navigation while subset is still pending; the image request must complete before subset completion.
+- Wafer Map Explorer scrollbar/folder-selection regression:
+  - Symptom: after selecting a folder and entering a grid single-image tab, opening the folder list or switching away could leave the bottom file highlighted instead of preserving the folder selection. Dragging the Wafer Map Explorer scrollbar while a grid or single image was visible could clear the image/grid entirely.
+  - Root cause: `setupFileExplorerDragSelect()` treated scrollbar `mousedown`/drag gestures as Explorer rectangle selection, so scrollbar movement replaced `selectedFolders`/`selectedImages` with intersected file links or an empty set. Separately, `updateWaferMapExplorerHighlight()` applied current-file highlighting during folder-origin `gridImage` single view.
+  - Correct fix pattern: scrollbar gutter events must not start Explorer drag selection; folder-origin `gridImage` single view must keep the selected folder highlight and clear stale file-link highlights instead of applying current-file highlight.
+  - E2E guard: `scripts/e2e_chunk2.js` record `22,23,28,29` opens a folder-origin grid/single flow, drags the Wafer Map Explorer scrollbar, and requires folder selection, grid count, and single-image canvas/path to stay unchanged.
+- Next/Prev rapid navigation latency regression:
+  - Symptom: in `unknown` single-image flows, rapid Next/Prev could feel delayed because a second click waited for the previous image load to finish before changing the selected path.
+  - Root cause: `navigateSingleImageGrid()` queued `_pendingNavDirection` while `_isNavigating` was true. Older `loadImage()` callbacks could also clear navigation state after a newer click. Immediate pyramid prefetch after image load could add background server work during quick navigation.
+  - Correct fix pattern: latest Next/Prev input wins immediately, abort the prior image load, guard old callbacks with `_imageLoadVersion` and selected path checks, and debounce background pyramid prefetch until the image remains current briefly.
+  - E2E guard: with `unknown` recursive images, enter grid single-image mode and file single-image mode, fire rapid Next/Prev clicks, and require `selectedImagePath`/index to change on every click with sub-50ms call time while the final image still loads successfully.
+- Label Explorer class/label CRUD and open-folder list regression:
+  - Symptom: wafer/chip Class Manager add/delete could succeed through the API while the Class Manager or Label Explorer reused a stale class list; class-folder label delete could also leave visible samples behind or close the file list the user had opened.
+  - Root cause: `addClass()` / `deleteSelectedClasses()` did not force a fresh, awaited `refreshClassList(true)` before rebuilding Label Explorer, so `cachedClassList` / `classListPromise` could win the race. The class list cache was also not keyed by wafer/chip mode, so a wafer refresh could render wafer folders after adding a chip class. In Label Explorer batch delete, selected class folders were resolved through `buildClassificationPath(cls)` even when the already-open folder cache held the visible samples, so prefix/context mismatch could produce an empty delete set.
+  - Correct fix pattern: invalidate `cachedClassList` / `classListPromise`, key class cache/promise by `classMode`, await `refreshClassList(true)`, then refresh Label Explorer with dirty class names. For rename, remap open/selected class state to the new name before forced refresh. For selected class-folder label delete, use `classToImgListCache[cls]` from the open folder before falling back to `/api/files`, and preserve `labelSelection.openFolders` while only the sample rows change.
+  - E2E guard: `scripts/e2e_chunk1.js` record `chip-label-crud-ui` and `scripts/e2e_chunk3.js` record `label-wafer-crud` cover wafer/chip class add, multi-add, rename, delete, multi-delete, label add/delete, multi-select delete, folder multi-select image grids, grid detail view, and open-folder add/delete counts (`2 -> 4`, `1/2 -> 0`) with the folder still open.
+- Wafer label copy positions/chip-label regression:
+  - Symptom: wafer images copied into `classification/<class>/` could open from Label Explorer without chip positions, so users could not select chips and save chip labels from a wafer label copy.
+  - Root cause: class image copies and class renames did not consistently keep the corresponding positions JSON in the same classification-relative candidate paths that `/api/chip-positions` checks.
+  - Correct fix pattern: when classifying wafer images, copy positions to the classification copy's candidate positions paths; when renaming/deleting classes, rename/delete the corresponding positions class directories too. Do not scan `POSITIONS_ROOT`.
+  - E2E guard: `scripts/e2e_chunk3.js` record `label-wafer-crud` opens a wafer label copy from Label Explorer, requires chip positions to load, selects chips, and saves them as a chip label.
+- Chip label immediate overlay regression:
+  - Symptom: after saving chip labels in single-image view, the bottom-left Chip Labels legend showed the class, but the transparent overlay fill did not appear until the user toggled the Chip Labels checkbox or disabled/enabled the class pill.
+  - Root cause: `addChipLabels()` cleared chip selection before reloading annotations; `handleChipSelectionCleared()` restored the active legend filter from the old legend class list, and `updateChipLabelLegend()` then filtered the active set without adding newly available classes. Manual chip selection also narrowed the active legend set to the selected chip's class, making already-active transparent overlays disappear.
+  - Correct fix pattern: when the legend was previously all-active, newly available chip label classes must be added to `activeChipLabelClasses` before applying `chipAnnotator.setLegendFilterClasses()`. Manual chip selection/clear must not change the user's active Chip Labels class set. Overlay alpha is 0.2, and red must not be the first assigned class color.
+  - E2E guard: `scripts/e2e_chunk1.js` record `chip-label-crud-ui` saves a chip label and samples overlay canvas alpha immediately, without toggling the Chip Labels checkbox or class pill.
+- LOT/TEST/STEP filter dropdown layout regression:
+  - Symptom: opening a top-left LOT/TEST/STEP filter and selecting the first item inserted a new selection-count row, shifting the option list.
+  - Root cause: `_updateMultiSelectBtn()` only created `.filter-count-badge` when selected count was greater than zero.
+  - Correct fix pattern: create the badge during initial filter binding and keep it visible as `0개 선택중`, then update to `N개 선택중` without changing panel layout.
+  - E2E guard: `scripts/e2e_chunk1.js` record `1` requires the first child of every filter panel to be `.filter-count-badge` with `0개 선택중`.
+- Global search archive-folder regression:
+  - Symptom: full E2E could fail before chunk execution because `Wait-ForSearchReady()` warmed with LOTs that now exist only in globally excluded derivative folders, or Phase `3v` could return derivative/archive rows such as `unknown_pre_v5_260507/...`, `unknown_multi/...`, or `chip_multilabel_v15direct_n1000/...` for LOTs selected from `unknown/...`.
+  - Root cause: `scripts/run-e2e-playwright.ps1` used stale warmup LOTs, and `SearchService.global_only_excluded_folders` did not exclude archived unknown snapshots (`unknown_pre*`, `unknown_Normal_pre*`), generated unknown multi-label fixtures, or generated chip multilabel fixture folders from root/global search.
+  - Correct fix pattern: keep warmup LOTs pointed at currently searchable real data, and exclude archived/derived fixture folders only for global search while preserving explicit folder searches such as `folder=unknown_pre_v5_260507`.
+  - E2E guard: runner output must show `SEARCH_READY ... total>=1`; `scripts/e2e_chunk1.js` Phase `3v unknown 실제 파일명 기반 text 검색` must keep expected unknown LOTs/conditions present and stable. Do not fail solely because the global result set also includes valid matching chip-training paths such as `train_n50/...`.
+- Global logical search basic-index regression:
+  - Symptom: Phase `3v unknown 실제 파일명 기반 text 검색` could pass explicit `folder=unknown` API checks but fail UI global logical search for file-name fields such as `bintype AND _wafer_` with 0 results.
+  - Root cause: cold/basic cache load builds token0/token2 indices before the full token index; `_evaluate_logical_query()` treated the token0 index as the whole-token index for independent logical terms, so non-LOT filename fields were never matched until lookup indices finished.
+  - Correct fix pattern: keep the token0/token2 fast path, but when a logical term has no token-index hits or contains literal underscore delimiters, fall back to constrained full filename matching inside `api/index_service.py::_evaluate_logical_query()`. UI searches in `js/main.js::performSearch()` must remain global and `getSearchFolderParam()` must not expose stale folder scope as active search scope.
+  - E2E guard: `scripts/e2e_chunk1.js` Phase `3v` must repeat API and UI searches for `unknown` fixtures, including `bintype AND _wafer_`, and return non-empty `unknown/` results with stable counts.
+- Multi LOT search pasted-path normalization regression:
+  - Symptom: LOT multi-search input pasted from paths or filename rows could send folder names or ignored tab/space columns as `lot_multi` values instead of only the filename LOT token. Plain rows such as `ABC123 05` could also search both `ABC123` and `05`.
+  - Root cause: `parseMultiSearchInput()` split raw input on `/` and whitespace before extracting `_` index 0, so `unknown/.../AAA111_...png` could produce non-LOT candidates such as `unknown`; `_parse_lot_filter()` in the server also yielded every whitespace field when the first field was not file-like.
+  - Correct fix pattern: split candidate chunks only by newline/comma/semicolon, collapse spaces/tabs inside each chunk, and use only whitespace index 0 as the LOT candidate. Keep path separators intact until basename extraction, extract basename `_` index 0, and send only deduped LOT tokens to `/api/search`.
+  - E2E guard: `scripts/e2e_chunk2.js` record `21,24,25,26,27` captures the actual `/api/search` URL after mixed path/filename/LOT input, requires `LOT 05` not to leak `05` into `lot_multi`, and directly calls server `lot_multi=LOT1 LOT2` to verify the second whitespace token is ignored server-side.
+- Chip label round-26 class rename regression:
+  - Symptom: `scripts/e2e_chunk1.js` record `chip-label-prefix-wafer` could fail at legend range setup with `scratch -> particle_blast range setup failed` while the actual legend contained `scratch`, `bank_boundary`, `scratch_rot`, `fork`, and `invalid_main`.
+  - Root cause: round-25 chip classes were renamed (`particle_blast` -> `fork`, `scratch_21deg` -> `scratch_rot`) but the E2E range-click expectation still targeted the old `particle_blast` label.
+  - Correct fix pattern: keep chip-label legend range tests aligned with the current round-26 class vocabulary and keep old class names rejected at the API boundary.
+  - E2E guard: `scripts/e2e_chunk1.js` record `chip-label-prefix-wafer` must Shift-click `scratch` through `fork` and verify the contiguous active/filter class set.
+- Chip label Wafer 보기 chip-crop selection regression:
+  - Symptom: from a chip label sample, `Wafer 보기` could open a chip crop path such as `train_n50/..._x16_y19_b285.png` instead of the original wafer image.
+  - Root cause: the frontend wafer lookup reused global `/api/search` results and deduped by lot/wafer, but `isDerivedWaferSearchPath()` filtered derived folders only and did not reject chip-crop filename suffixes.
+  - Correct fix pattern: keep the existing search call, filter returned paths with chip-crop suffixes like `_xN_yN(_b...)` before lot/wafer dedupe, and avoid adding a slower backend full-scan lookup.
+  - E2E guard: `scripts/e2e_chunk1.js` record `chip-label-prefix-wafer` must open an original wafer path for `labelExplorerWaferSingle`, grid-context `Wafer 보기`, and single-chip-context `Wafer 보기`.
+- Search stale-grid and folder-scope regression:
+  - Symptom: after selecting a folder into grid mode, search requests could silently inherit that folder as scope. When a search returned no results, the old grid stayed visible and looked like the search result.
+  - Root cause: `performSearch()` applied `getSearchFolderParam()` to UI search requests, and the zero-result path returned `false` without clearing the current grid.
+  - Correct fix pattern: UI search requests must omit `folder`; no-result searches must show an empty search-result grid instead of stale images.
+  - E2E guard: `scripts/e2e_chunk2.js` record `21,24,25,26,27` must capture real `/api/search` URLs after a folder grid is selected and require no `folder` param, and zero-result grid count/wraps equal 0.
+- Search-result Ctrl+A / MY LOT paste-search regression:
+  - Symptom: after typing in the search text box and rendering search results, pressing `Ctrl+A` could select the search text instead of selecting all result-grid images. In Edge, MY LOT paste into an existing group could show no preview and save image-less manual entries until the group was deleted and recreated.
+  - Root cause: `performSearch()` left `#file-search` focused after a successful grid render, while the grid keyboard handler exits for focused inputs. MY LOT LOT/Wafer lookup still built `/api/search` URLs with a `folder` parameter path, so stale scoped search state could make paste lookup return no image paths; `_getMyLotModal()` also lacked an explicit versioned dynamic import in source.
+  - Correct fix pattern: successful search grid render must blur `#file-search` before returning so grid shortcuts own `Ctrl+A`. MY LOT paste/update lookup must omit `folder` entirely and dynamically import `my-lot.js` with the same version tag as other modules.
+  - E2E guard: `scripts/e2e_chunk2.js` record `21,24,25,26,27` must run a real text search, press `Ctrl+A`, and require selected grid count/wraps to equal current result count. `scripts/e2e_chunk3.js` record `mylot-wafer30-lot10-perf` must capture MY LOT paste `/api/search` URLs and require no `folder` param while previews and copied entries are non-empty.
+- Grid/single context-menu copy/download/MY LOT regression:
+  - Symptom: grid context menu actions for wafer info copy or MY LOT add could be unavailable when `ContextMenuManager` had not finished lazy initialization; single-image right-click copy/download/MY LOT actions could also no-op from the chip context menu when the manager or MY LOT modal was still lazy.
+  - Root cause: `initializeContextMenu()` left `#context-wafer-info-copy` / `#context-my-lot-add` to `ContextMenuManager` only, while `showSingleContextMenu()` / `showChipContextMenu()` called `this.contextMenuManager` directly instead of lazy-loading it. `ContextMenuManager.addToMyLot()` also required a pre-existing `viewer.myLotModal`.
+  - Correct fix pattern: grid and single context handlers must call `_getContextMenuManager()` and MY LOT add must call `_getMyLotModal()` when needed. Wafer info TSV export must filter bucket-like keys before building headers.
+  - E2E guard: `scripts/e2e_chunk1.js` record `grid-context-actions` verifies wafer-list label, YMS clipboard rows, wafer info table without bucket columns, selected file downloads, merged image copy with Legend, and MY LOT pending paths. Record `13-19` verifies single-image context YMS/image/canvas copy, original download, and MY LOT pending path.
+- MY LOT physical-copy / copied-position speed regression:
+  - Symptom: MY LOT wafer 30 copied-position verification looked like a 2s save cost, and first MY LOT grid thumbnail display could be slower than expected after paste/save.
+  - Root cause: the slow 2s number was E2E verification repeatedly downloading/parsing full positions JSON, not MY LOT image copy. Separately, MY LOT images are permanent physical copies, so their new inode misses the original thumbnail cache on first grid view. The first LOT grid `ready` time could also include a 450ms+ page transition cost because `PageManager.ensurePageForRole(forceNew=true)` still converted an active `blank` page to `mylot`, ignoring the intended new-page/skip-apply path.
+  - Correct fix pattern: MY LOT must keep physical image and positions copies; do not use hardlinks. For verification, use `/api/chip-positions?count_only=1` with non-blocking file reads and a `netd` fast path. For first grid view, clone only already-existing derived thumbnail cache files from source to copied image cache keys after the physical copy succeeds. For MY LOT grid open, skip blank-page conversion when `forceNew=true`, pass `skipPersist`/`skipApply` through PageManager create/activate paths, and compact current 5000-image grid state so it is stored once in `savedViewState.images`.
+  - E2E guard: `scripts/e2e_chunk3.js` record `mylot-wafer30-lot10-perf` pastes 10 LOTs and 30 wafers, saves them to MY LOT, checks copied positions count, opens LOT/wafer grids, and records paste/save/grid/visible-thumbnail timing.
+- MY LOT wafer pair search widening regression:
+  - Symptom: registering a wafer-mode MY LOT group with specific LOT/Wafer pairs could save or show every wafer from that LOT, behaving like a LOT group.
+  - Root cause: MY LOT batch paste/search sent `/api/search` with `q`, `lot_multi`, and `lot_wafer`, but `SearchService.search()` handled the `q + lot_multi` branch before wafer-pair filtering and ignored `lot_wafer` there. The API could therefore return the full LOT candidate set. In the frontend, wafer-mode manual rows could also retain stale LOT-wide `searchResults` when the wafer value was empty or still being re-searched, and `updateGroupEntries()` re-expanded wafer groups by LOT only.
+  - Correct fix pattern: when `query_for_search` is combined with either `lot_filter` or `lot_wafer_pairs`, build LOT candidates from both, apply `_apply_lot_wafer_filter()` before live fallback, and pass `lot_wafer_pairs` into `_live_lot_fallback()` so indexed and live results obey the same pair filter. In `js/my-lot.js`, wafer-mode save/update paths must require a wafer value and re-filter row paths with `pathMatchesWafer()` immediately before posting `/api/my-lot/batch`; `updateGroupEntries()` must search saved LOT/Wafer pairs, not LOT-only groups. Numeric wafer matching trims leading zeros, so `5` matches wafer `05`.
+  - E2E guard: `scripts/e2e_chunk3.js` record `mylot-wafer30-lot10-perf` pastes multiple LOT/Wafer pairs, deliberately enters one leading-zero wafer such as `05` as `5`, captures `/api/search?...lot_wafer=LOT:5...`, saves, opens the wafer group grid, and requires no same-LOT wafers outside the selected normalized pairs.
+
+### Available skills
+- deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)
+- e2e-test: L3 Tracker 전체 기능 E2E 테스트를 Playwright 브라우저 자동화로 수행한다. `/e2e-test`, `E2E 테스트`, `전체 테스트`, `기능 테스트 돌려줘` 같은 요청에 반응한다. (file: D:/project/mapviewer/.claude/skills/e2e-test/skill.md)
+- inspect-l3tracker: L3 Tracker 핵심 기능을 코드 분석과 Playwright UI 테스트로 폭넓게 점검한다. 전체 체크, 버그 탐색, UI/동작 확인 요청에 사용한다. (file: D:/project/mapviewer/.claude/skills/inspect-l3tracker/SKILL.md)
+- l3-api: L3 Tracker FastAPI 엔드포인트와 서버 로직을 개발·수정할 때 사용한다. 엔드포인트 추가, 캐시/썸네일/이미지 처리 수정 요청에 반응한다. (file: D:/project/mapviewer/.claude/skills/l3-api/SKILL.md)
+- wafer-debug: 웨이퍼 맵 렌더링/색상/오버레이/필터/그리드 전환/피라미드 관련 이슈를 디버깅할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/wafer-debug/SKILL.md)
+
+### How to use skills
+- Trigger rules:
+  - `/e2e-test`, `E2E 테스트`, `전체 테스트`, `기능 테스트 돌려줘` → `e2e-test`
+  - `배포 전 확인`, `프로덕션 체크`, `deploy 준비` → `deploy-check`
+  - `L3 점검`, `전체 체크`, `버그 있는지 확인`, `UI 테스트` → `inspect-l3tracker`
+  - `엔드포인트 추가`, `API 만들어`, `서버 로직 수정`, `캐시 설정`, `썸네일 처리` → `l3-api`
+  - `이미지 안 나와`, `색이 안 맞아`, `오버레이 안 돼`, `필터 안 먹어` → `wafer-debug`
+- Progressive disclosure: 각 스킬 파일을 열 때는 필요한 범위만 읽고, 특히 `e2e-test`는 요청된 Phase 또는 관련 섹션만 부분적으로 읽는다.
+- Fallback: 해당 skill 파일이 누락되었거나 읽을 수 없으면 그 사실을 짧게 알리고, 같은 목적의 직접 워크플로우(코드 분석, Playwright, 서버/API 점검)로 계속 진행한다.
+- e2e-test 성능 경고 대응: Composite Numba warmup, cold start, 검색/썸네일/그리드 로딩 등 성능 경고가 나오면 timeout 완화나 경고 무시를 해결책으로 제안하지 않는다. 먼저 runner 호출 지점, 서버 로그, endpoint timing, 이벤트루프 블로킹, 캐시/인덱스 상태를 분석해 느린 원인을 확인한다.
