@@ -69,6 +69,7 @@ function compact(text) {
     };
     console.log(JSON.stringify(result, null, 2));
     append(`[PASS] saml-bootstrap SAML login immediate :: ${JSON.stringify(result)}\n`);
+    append('[DONE] total=1\n');
   } catch (err) {
     const detail = String(err && err.message ? err.message : err);
     console.error(detail);

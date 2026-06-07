@@ -94,10 +94,13 @@ const { createRunner } = require('./e2e_playwright_session');
       ...summary,
     };
     console.log(JSON.stringify(result, null, 2));
+    append(`[PASS] fresh-boot Fresh boot page and grid readiness :: ${JSON.stringify(result)}\n`);
     append(`[BOOT_SMOKE_PASS] ${JSON.stringify(result)}\n`);
+    append('[DONE] total=1\n');
   } catch (err) {
     const detail = String(err && err.message ? err.message : err);
     console.error(detail);
+    append(`[FAIL] fresh-boot Fresh boot page and grid readiness :: ${detail}\n`);
     append(`[BOOT_SMOKE_FAIL] ${detail}\n`);
     finalExitCode = 2;
   } finally {

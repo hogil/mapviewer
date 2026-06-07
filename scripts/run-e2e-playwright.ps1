@@ -295,6 +295,91 @@ $sessionId = "{0}-{1}" -f (Get-Date -Format "yyyyMMdd-HHmmss"), ([guid]::NewGuid
 $outputDir = Join-Path $repoRoot (Join-Path ".codex-tmp/e2e-sessions" $sessionId)
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 
+$overallExit = 0
+
+function Invoke-SamlBootstrapRestartSmoke {
+    param(
+        [string]$OutputDir,
+        [bool]$Headless
+    )
+
+    $progressPath = Join-Path $OutputDir "e2e_saml_bootstrap_restart_smoke.progress.log"
+    Remove-Item $progressPath -Force -ErrorAction SilentlyContinue
+
+    $scriptPath = Join-Path $PSScriptRoot "run-e2e-saml-bootstrap-smoke.ps1"
+    $psHostPath = $null
+    try {
+        $psHostPath = (Get-Process -Id $PID -ErrorAction Stop).Path
+    } catch {
+        $psHostPath = "powershell.exe"
+    }
+    if ([string]::IsNullOrWhiteSpace($psHostPath)) {
+        $psHostPath = "powershell.exe"
+    }
+
+    $args = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", $scriptPath,
+        "-Iterations", "10",
+        "-PreferredPort", "18443"
+    )
+    if ($Headless) {
+        $args += "-Headless"
+    }
+
+    Write-Host "RUN scripts/run-e2e-saml-bootstrap-smoke.ps1 -Iterations 10"
+    $smokeOutput = @(& $psHostPath @args 2>&1)
+    $exitCode = $LASTEXITCODE
+    foreach ($line in $smokeOutput) {
+        if ($line) {
+            Write-Host ("[saml-bootstrap-restart] {0}" -f $line)
+        }
+    }
+
+    $summaryLine = @($smokeOutput | ForEach-Object { "$_" } | Where-Object { $_ -match '^SAML_BOOTSTRAP_SUMMARY\s+' } | Select-Object -Last 1)
+    $summaryPathLine = @($smokeOutput | ForEach-Object { "$_" } | Where-Object { $_ -match '^SAML_BOOTSTRAP_SUMMARY_PATH\s+' } | Select-Object -Last 1)
+    $summary = $null
+    $summaryPath = $null
+    if ($summaryPathLine -and "$summaryPathLine" -match '^SAML_BOOTSTRAP_SUMMARY_PATH\s+(.+)$') {
+        $summaryPath = $Matches[1].Trim()
+    }
+    if ($summaryLine -and "$summaryLine" -match '^SAML_BOOTSTRAP_SUMMARY\s+(.+)$') {
+        try {
+            $summary = $Matches[1] | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            $summary = $null
+        }
+    }
+
+    $iterations = if ($summary -and $null -ne $summary.iterations) { [int]$summary.iterations } else { 10 }
+    $failures = if ($summary -and $null -ne $summary.failures) { [int]$summary.failures } else { if ($exitCode -eq 0) { 0 } else { 1 } }
+    $status = if ($exitCode -eq 0 -and $failures -eq 0) { "PASS" } else { "FAIL" }
+    $passCount = [Math]::Max(0, $iterations - $failures)
+    $detail = [ordered]@{
+        status = $status
+        iterations = $iterations
+        pass = $passCount
+        failures = $failures
+        exitCode = $exitCode
+        summaryPath = $summaryPath
+    }
+    $detailJson = $detail | ConvertTo-Json -Compress
+    Add-Content -Path $progressPath -Encoding UTF8 -Value ("[{0}] saml-bootstrap-restart-10 SAML restart bootstrap 10x :: {1}" -f $status, $detailJson)
+    Add-Content -Path $progressPath -Encoding UTF8 -Value "[DONE] total=1"
+    Write-Host ("CHUNK_SUMMARY name=e2e_saml_bootstrap_restart_smoke status={0} pass={1} fail={2} elapsedSec=n/a" -f $status, $(if ($status -eq "PASS") { 1 } else { 0 }), $(if ($status -eq "PASS") { 0 } else { 1 }))
+    Write-Host ("CHUNK_RESULT_DETAIL name=e2e_saml_bootstrap_restart_smoke [{0}] phase=saml-bootstrap-restart-10 title=SAML restart bootstrap 10x metrics: iterations={1}, pass={2}, failures={3}, exitCode={4}" -f $status, $iterations, $passCount, $failures, $exitCode)
+
+    return $exitCode
+}
+
+if ($WithSmoke) {
+    $samlRestartExit = Invoke-SamlBootstrapRestartSmoke -OutputDir $outputDir -Headless ([bool]$Headless)
+    if ($samlRestartExit -ne 0 -and $overallExit -eq 0) {
+        $overallExit = $samlRestartExit
+    }
+}
+
 $scripts = switch ($Chunk) {
     "1" { @("scripts/e2e_chunk1.js") }
     "2" { @("scripts/e2e_chunk2.js") }
@@ -997,7 +1082,7 @@ function Stop-E2ETrackedPidProcesses {
 }
 
 function Get-E2EResidualProcesses {
-    $e2eNodePattern = 'scripts[\\/](e2e_chunk[123]|e2e_fresh_boot_smoke|e2e_visible_smoke)\.js'
+    $e2eNodePattern = 'scripts[\\/](e2e_chunk[123]|e2e_saml_bootstrap_smoke|e2e_fresh_boot_smoke|e2e_visible_smoke)\.js'
     $tracked = @(Get-E2ETrackedPidProcesses -PidFilters @("e2e-node-*.pid", "e2e-browser-*.pid"))
     $patternMatches = @(Get-CimInstance Win32_Process | Where-Object {
         ($_.Name -eq "node.exe" -and $_.CommandLine -match $e2eNodePattern) -or
@@ -1030,7 +1115,6 @@ function Test-E2EProcessCleanup {
     }
 }
 
-$overallExit = 0
 $maxChunkSeconds = 420
 foreach ($script in $scripts) {
     $name = [System.IO.Path]::GetFileNameWithoutExtension($script)
