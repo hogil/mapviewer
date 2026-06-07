@@ -105,6 +105,13 @@ E2E 실행이 끝나면 최종 답변에 반드시 "무엇을 어떻게 실행�
   - `.grid-scroll-wrapper`의 `display`, `width`, `height`
   - 캡처 파일 경로
 
+### Fresh Boot 정식 E2E 회귀 기록
+
+- `scripts/e2e_chunk1.js` phase `0`은 첫 페이지 접속 직후 `window.viewer`와 `window.__l3FullViewerReady`만 보지 않는다. `boot-explorer.js`의 lazy `main.js` import 상태(`window.__l3MainImportState`, `window.__l3MainImportError`)와 `window.__l3FullViewerError`를 결과 detail에 남겨야 한다. 이 검증은 `-WithSmoke` 없이 실행되는 정식 전체 E2E 경로에 포함되어야 한다.
+- `unknown` 폴더 검증은 `loadImagesInFolderAndShowGrid('unknown')` 단독 호출로 하면 안 된다. `unknown`의 실제 이미지는 recursive subfolder에 있으므로 chunk boot와 같이 `selectAllFolderFiles('unknown')` 후 `showGrid(selectedImages)`를 사용하고, `gridCount=5000`, `.grid-thumb-wrap=5000`, visible loaded thumbnail `>0`을 확인한다.
+- `js/main.js`의 readiness contract는 `new WaferMapViewer()` 성공 후에만 `window.__l3FullViewerReady=true`다. ready flag를 먼저 올려 constructor/import 실패를 숨기면 정식 fresh boot E2E가 잘못된 신호를 본다.
+- 2026-06-08 formal E2E baseline은 `docs/PERFORMANCE.md`에 기록된 session `20260608-075006-6b0cd897` 값이다. Fresh boot 성능을 비교할 때는 `domLoadedMs`, `viewerReadyMs`, `explorerReadyMs`, `viewerReadyMs - domLoadedMs`, 그리고 `gridCount/wraps/loadedVisible`을 같이 본다.
+
 ## 절대규칙 #0-2: 탭 상태 보존 회귀 테스트는 grid/detail을 모두 만든 뒤 왕복 검증
 
 - wafer, measure, composite, label, mylot 각각에서 **grid 탭과 detail/single 탭을 모두 만든다**.

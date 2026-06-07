@@ -114,6 +114,55 @@
 - composite는 별도 결과 경로와 캐시를 사용
 - grid 썸네일은 TurboJPEG 사용 가능 시 해당 경로를 활용
 
+## 2026-06-08 formal E2E 성능 기준값
+
+실행 명령:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run-e2e-playwright.ps1 -Headless
+```
+
+세션:
+
+- `SESSION=20260608-075006-6b0cd897`
+- `BASE_URL=https://127.0.0.1:8443`
+- `SUMMARY=D:\project\mapviewer\.codex-tmp\e2e-sessions\20260608-075006-6b0cd897\e2e-summary.json`
+- `COLD_START_SUMMARY=D:\project\mapviewer\.codex-tmp\e2e-sessions\20260608-075006-6b0cd897\cold-start-summary.json`
+- `REPORT=D:\project\mapviewer\.codex-tmp\e2e-sessions\20260608-075006-6b0cd897\e2e-report.txt`
+
+최종 판정:
+
+- `RESULT_SUMMARY status=PASS pass=27 fail=0`
+- `PROCESS_CLEANUP status=PASS`
+- stderr는 비어 있었고, timeout/warning/runtime exception은 없었다.
+
+핵심 성능값:
+
+| 항목 | 값 | 의미 |
+|------|----|------|
+| Fresh boot `domLoadedMs` | `1043ms` | 첫 `GET /`부터 `DOMContentLoaded`까지 |
+| Fresh boot `viewerReadyMs` | `1644ms` | 첫 `GET /`부터 `window.viewer` 및 `window.__l3FullViewerReady=true`까지 |
+| Fresh boot `explorerReadyMs` | `1657ms` | 첫 `GET /`부터 Explorer folder DOM 준비까지 |
+| Viewer init after DOM | `601ms` | `viewerReadyMs - domLoadedMs`; DOM 이후 full viewer 준비 구간 |
+| Fresh boot grid | `gridCount=5000`, `wraps=5000`, `visibleWraps=4`, `loadedVisible=4` | recursive `unknown` 5000장 그리드가 실제 DOM/visible thumbnail까지 뜬 상태 |
+| Unknown grid/index phase | `loadMs=2030ms`, `count=5000`, `wraps=5000`, `broken=0` | phase `36,37,38,40`; 인덱스 build 시간이 아니라 unknown 5000장 그리드/DOM/무결성 확인 wall time |
+| Cache/FQ grouped phase | `fqLoadMs=1921ms`, `fqCount=5000`, `wraps=5000`, `placeholders=0` | phase `46,52,53,54,55,58,59,61,62,63`; 단일 F/Q 생성 시간이 아니라 grouped grid/cache/FQ-missing/asset-version 검증 wall time |
+| Search exact | `5.119ms` | `api exact q` |
+| Search logical OR | `30.34ms` | `api logical or` |
+| Search `lot_multi` | `0.886ms` | indexed LOT multi-search |
+| Search `lot_wafer` | `0.625ms` | indexed LOT/Wafer search |
+| Composite 10장 | `elapsedSec=3.9`, `processingTime=2.94`, `numba.warmed=true`, `threads=16` | browser wall time 및 server-reported composite processing time |
+| Chip label wafer lookup | `annotationAvgMs=2.6`, `lookupMs=70.1` | chip label annotation 평균 및 wafer lookup |
+| MY LOT lot 10 | `lotSaveMs=114.4`, `lotGridReadyMs=68`, `lotGridVisibleMs=16` | LOT 10개 paste/save/grid visible |
+| MY LOT wafer 30 | `waferSaveMs=287.4`, `waferPositionVerifyMs=148`, `waferGridReadyMs=47`, `waferGridVisibleMs=42` | wafer 30개 save/grid visible; `waferPositionVerifyMs`는 E2E 검증 시간이지 save/copy 시간이 아님 |
+| MY LOT total | `3160ms` | `mylot-wafer30-lot10-perf` 전체 wall time |
+
+Fresh boot 비교 참고:
+
+- 저장된 과거 boot smoke 51개 기준 `viewerReadyMs` 평균은 `1154ms`, median은 `1053ms`, P75는 `1292ms`, 범위는 `648~1894ms`.
+- 2026-06-08 formal phase `0`의 `viewerReadyMs=1644ms`는 과거 평균/median보다 느린 쪽이지만 과거 범위 밖은 아니다.
+- 이번 측정에서 증가분은 `WaferMapViewer` 생성보다 `domLoadedMs=1043ms` 구간 영향이 크다. 성능 회귀를 판단할 때 `domLoadedMs`와 `viewerReadyMs - domLoadedMs`를 분리해서 본다.
+
 ## 문서에서 제거해야 하는 오래된 설명
 
 현재 기준으로 아래 설명은 정본이 아닙니다.

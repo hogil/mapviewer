@@ -31355,18 +31355,25 @@ window.addEventListener('wheel', function(e) {
     }
 }, { passive: false });
 
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => { 
+function initializeFullViewer() {
+    try {
+        window.viewer = new WaferMapViewer();
         window.__l3FullViewerReady = true;
-        window.viewer = new WaferMapViewer(); 
+        window.__l3FullViewerError = null;
         // AUTO_LOGIN 체크 및 자동 SAML 로그인
         checkAutoLogin();
-    });
+    } catch (error) {
+        window.__l3FullViewerReady = false;
+        window.__l3FullViewerError = String(error?.stack || error?.message || error);
+        console.error('[main] WaferMapViewer initialization failed', error);
+        throw error;
+    }
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeFullViewer, { once: true });
 } else {
-    window.__l3FullViewerReady = true;
-    window.viewer = new WaferMapViewer();
-    // AUTO_LOGIN 체크 및 자동 SAML 로그인
-    checkAutoLogin();
+    initializeFullViewer();
 }
 
 // AUTO_LOGIN 체크 함수

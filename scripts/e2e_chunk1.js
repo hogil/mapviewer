@@ -36,16 +36,19 @@ const { createRunner } = require('./e2e_playwright_session');
     let lastError = null;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
+        const navStartedAt = Date.now();
         await focusWindow();
         await page.goto(`${base}/?${tag}=${Date.now()}&attempt=${attempt}`, {
           waitUntil: 'domcontentloaded',
           timeout: 60000,
         });
+        const domLoadedMs = Date.now() - navStartedAt;
         await page.waitForFunction(
           () => !!window.viewer && window.__l3FullViewerReady === true,
           null,
           { timeout: 90000 }
         );
+        const viewerReadyMs = Date.now() - navStartedAt;
         await page.waitForFunction(
           () =>
             Array.from(document.querySelectorAll(
@@ -54,9 +57,10 @@ const { createRunner } = require('./e2e_playwright_session');
           null,
           { timeout: 90000 }
         );
+        const explorerReadyMs = Date.now() - navStartedAt;
         await focusWindow();
         await sleep(1800);
-        return;
+        return { domLoadedMs, viewerReadyMs, explorerReadyMs };
       } catch (err) {
         lastError = err;
         const state = await page.evaluate(() => ({
@@ -136,6 +140,40 @@ const { createRunner } = require('./e2e_playwright_session');
       firstPath: window.viewer.currentGridImages?.[0] || '',
     }));
     append(`[LOAD_FOLDER_OK] ${folder} :: ${JSON.stringify(state)}\n`);
+    return state;
+  }
+
+  async function getVisibleLoadedGridState() {
+    return await page.evaluate(() => {
+      const wraps = Array.from(document.querySelectorAll('#image-grid .grid-thumb-wrap'));
+      const visibleWraps = wraps.filter((wrap) => {
+        const rect = wrap.getBoundingClientRect();
+        const style = getComputedStyle(wrap);
+        return (
+          style.display !== 'none' &&
+          style.visibility !== 'hidden' &&
+          rect.width > 0 &&
+          rect.height > 0 &&
+          rect.bottom > 0 &&
+          rect.top < window.innerHeight
+        );
+      });
+      const loadedVisible = visibleWraps.filter((wrap) => {
+        const img = wrap.querySelector('img');
+        return !!img && img.complete && img.naturalWidth > 0;
+      }).length;
+      return {
+        gridCount: window.viewer?.currentGridImages?.length || 0,
+        wraps: wraps.length,
+        visibleWraps: visibleWraps.length,
+        loadedVisible,
+        gridMode: window.viewer?.gridMode === true,
+        firstPath: window.viewer?.currentGridImages?.[0] || '',
+        mainImportState: window.__l3MainImportState || null,
+        mainImportError: window.__l3MainImportError || null,
+        fullViewerError: window.__l3FullViewerError || null,
+      };
+    });
   }
 
   async function setSelection(indices) {
@@ -1694,7 +1732,29 @@ const { createRunner } = require('./e2e_playwright_session');
     }, { className, coordCandidates });
   }
 
-  await boot('chunk1');
+  const initialBoot = await boot('chunk1');
+
+  await record('0', 'Fresh boot recursive unknown grid readiness', async () => {
+    const folderState = await loadFolder('unknown');
+    const data = {
+      ...initialBoot,
+      ...await getVisibleLoadedGridState(),
+      folderState,
+    };
+    expect(data.domLoadedMs >= 0, `domLoadedMs=${data.domLoadedMs}`);
+    expect(data.gridMode === true, `gridMode=${data.gridMode}`);
+    expect(data.gridCount === 5000, `gridCount=${data.gridCount}`);
+    expect(data.wraps === 5000, `wraps=${data.wraps}`);
+    expect(data.visibleWraps > 0, `visibleWraps=${data.visibleWraps}`);
+    expect(data.loadedVisible > 0, `loadedVisible=${data.loadedVisible}`);
+    expect(
+      String(data.firstPath || '').replace(/\\/g, '/').startsWith('unknown/'),
+      `firstPath=${data.firstPath}`
+    );
+    expect(!data.mainImportError, `mainImportError=${data.mainImportError}`);
+    expect(!data.fullViewerError, `fullViewerError=${data.fullViewerError}`);
+    return data;
+  });
 
   await record('1', '페이지 로드 & 기본 UI', async () => {
     const data = await page.evaluate(() => ({

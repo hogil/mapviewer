@@ -2,12 +2,13 @@ const HOT_FOLDER = 'unknown';
 const DEFAULT_SCHEME = 'notsaml';
 const BOOT_GRID_LIMIT = 48;
 const IDLE_IMPORT_DELAY_MS = 150;
-const IDLE_IMPORT_TIMEOUT_MS = 200;
 const INTERACTION_IMPORT_DELAY_MS = 150;
 
 let fullViewerImportPromise = null;
 let fullViewerImportTimer = null;
 let fullViewerImportDueAt = 0;
+window.__l3MainImportState = window.__l3MainImportState || 'idle';
+window.__l3MainImportError = null;
 
 function ensureBootPrefetch(key, url) {
     window.__prefetch = window.__prefetch || {};
@@ -33,14 +34,22 @@ function startFullViewerImport() {
     }
     if (!fullViewerImportPromise) {
         primeMainPrefetch();
+        window.__l3MainImportState = 'loading';
         fullViewerImportPromise = import('./main.js').catch((error) => {
+            window.__l3MainImportState = 'failed';
+            window.__l3MainImportError = String(error?.stack || error?.message || error);
             console.error('[boot-explorer] failed to import main viewer', error);
             throw error;
+        }).then((module) => {
+            window.__l3MainImportState = 'loaded';
+            return module;
         });
         window.__l3MainImportPromise = fullViewerImportPromise;
     }
     return fullViewerImportPromise;
 }
+
+window.__l3StartFullViewerImport = startFullViewerImport;
 
 function scheduleFullViewerImport(delayMs = IDLE_IMPORT_DELAY_MS) {
     if (fullViewerImportPromise) return;
@@ -58,12 +67,7 @@ function scheduleFullViewerImport(delayMs = IDLE_IMPORT_DELAY_MS) {
     fullViewerImportTimer = window.setTimeout(() => {
         fullViewerImportTimer = null;
         fullViewerImportDueAt = 0;
-        const kick = () => void startFullViewerImport();
-        if ('requestIdleCallback' in window) {
-            window.requestIdleCallback(kick, { timeout: IDLE_IMPORT_TIMEOUT_MS });
-        } else {
-            kick();
-        }
+        void startFullViewerImport();
     }, Math.max(0, delayMs));
 }
 
