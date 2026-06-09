@@ -26,16 +26,36 @@ function compact(text) {
 
   try {
     const stamp = Date.now();
-    append(`[SAML_BOOTSTRAP] goto ${base}\n`);
-    const rootStartedAt = Date.now();
-    const rootResponse = await page.goto(`${base}/?saml-bootstrap-smoke=${stamp}`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000,
-    });
-    const rootMs = Date.now() - rootStartedAt;
-    await focusWindow();
-    const title = await page.title();
-    expect(title === 'Wafer Map Viewer', `title=${title}`);
+    const expectAutoLoginRedirect = process.env.E2E_EXPECT_AUTO_LOGIN_REDIRECT === '1';
+    let rootResponse;
+    let rootMs;
+    let title = '';
+
+    if (expectAutoLoginRedirect) {
+      const rootUrl = `${base}/?saml-bootstrap-smoke=${stamp}`;
+      append(`[SAML_BOOTSTRAP] request root redirect ${rootUrl}\n`);
+      const rootStartedAt = Date.now();
+      rootResponse = await page.request.get(rootUrl, {
+        maxRedirects: 0,
+        timeout: 8000,
+      });
+      rootMs = Date.now() - rootStartedAt;
+      const rootStatus = rootResponse.status();
+      const location = rootResponse.headers().location || '';
+      expect(rootStatus === 302 || rootStatus === 307, `root redirect status=${rootStatus}`);
+      expect(location.startsWith('/saml/login'), `root redirect location=${location}`);
+    } else {
+      append(`[SAML_BOOTSTRAP] goto ${base}\n`);
+      const rootStartedAt = Date.now();
+      rootResponse = await page.goto(`${base}/?saml-bootstrap-smoke=${stamp}`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 60000,
+      });
+      rootMs = Date.now() - rootStartedAt;
+      await focusWindow();
+      title = await page.title();
+      expect(title === 'Wafer Map Viewer', `title=${title}`);
+    }
 
     const loginUrl = `${base}/saml/login?e2e_saml_bootstrap=${stamp}`;
     append(`[SAML_BOOTSTRAP] request ${loginUrl}\n`);
@@ -53,7 +73,9 @@ function compact(text) {
       lowerBody.includes(snippet.toLowerCase())
     );
 
-    expect(rootResponse && rootResponse.status() === 200, `root status=${rootResponse?.status()}`);
+    if (!expectAutoLoginRedirect) {
+      expect(rootResponse && rootResponse.status() === 200, `root status=${rootResponse?.status()}`);
+    }
     expect(!forbiddenHit, `forbidden SAML bootstrap text=${forbiddenHit} body=${loginBodyCompact}`);
     expect(loginStatus !== 503, `saml login returned 503 body=${loginBodyCompact}`);
     expect(loginMs <= maxLoginMs, `saml login too slow ${loginMs}ms > ${maxLoginMs}ms`);
@@ -63,6 +85,7 @@ function compact(text) {
       rootStatus: rootResponse.status(),
       rootMs,
       title,
+      expectAutoLoginRedirect,
       loginStatus,
       loginMs,
       loginBody: loginBodyCompact,

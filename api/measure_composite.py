@@ -73,6 +73,18 @@ try:
 except Exception:
     _MEASURE_PROC_POOL = None
 
+
+def shutdown_measure_process_pool() -> None:
+    global _MEASURE_PROC_POOL
+    pool = _MEASURE_PROC_POOL
+    _MEASURE_PROC_POOL = None
+    if pool is None:
+        return
+    try:
+        pool.shutdown(wait=False, cancel_futures=True)
+    except TypeError:
+        pool.shutdown(wait=False)
+
 # ── 숫자 추출 (문자 혼합값 "0C", "123R" 등 지원) ────────────
 import re as _re
 _NUM_RE = _re.compile(r'-?\d+\.?\d*')

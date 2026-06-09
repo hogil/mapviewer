@@ -68,6 +68,7 @@ SUPPORTED_EXTS = {ext.lower() for ext in config.SUPPORTED_EXTS}
 SKIP_DIRS = set(config.SKIP_DIRS)
 DIRLIST_EXECUTOR = ThreadPoolExecutor(max_workers=max(4, min(16, (os.cpu_count() or 8))))
 SEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=max(8, min(16, config.SEARCH_WORKERS)))
+SAML_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="l3-saml")
 _BOOT_HOT_FOLDER = (os.getenv("BOOTSTRAP_HOT_FOLDER", "unknown").strip() or "unknown")
 
 INDEX_SKIP_DIRS = {d.strip() for d in config.INDEX_SKIP_DIRS if d.strip()}
@@ -194,6 +195,17 @@ def _normalize_login_id_candidate(value: Any) -> Optional[str]:
 
 
 def _bootstrap_current_login_id(request: Request) -> Optional[str]:
+    try:
+        for key in ("LoginId", "loginId", "login_id"):
+            candidate = _normalize_login_id_candidate(request.query_params.get(key))
+            if candidate and candidate in _BOOTSTRAP_SAML_SESSIONS:
+                return candidate
+    except Exception:
+        pass
+
+    if AUTO_LOGIN:
+        return None
+
     loaded_module = _FULL_APP.get_loaded_module()
     if loaded_module is not None:
         resolver = getattr(loaded_module, "_current_login_id", None)
@@ -1008,9 +1020,12 @@ async def lifespan(app: Starlette):
     bootlog.info("📍 호스트: %s", config.DEFAULT_HOST)
     bootlog.info("🔌 포트: %s (%s)", port_to_log, scheme)
     bootlog.info("📁 ROOT_DIR: %s", config.ROOT_DIR)
-    _ensure_bootstrap_search_prewarm()
-    _FULL_APP.ensure_loading(immediate=False)
-    bootlog.info("🚀 [BOOTSTRAP] full app idle import scheduled")
+    if AUTO_LOGIN:
+        bootlog.info("🚀 [BOOTSTRAP] AUTO_LOGIN active: SAML routes first, full app warmup delayed")
+    else:
+        _ensure_bootstrap_search_prewarm()
+        _FULL_APP.ensure_loading(immediate=False)
+        bootlog.info("🚀 [BOOTSTRAP] full app idle import scheduled")
     yield
     await _FULL_APP.shutdown()
     try:
@@ -1019,6 +1034,10 @@ async def lifespan(app: Starlette):
         pass
     try:
         DIRLIST_EXECUTOR.shutdown(wait=False, cancel_futures=False)
+    except Exception:
+        pass
+    try:
+        SAML_EXECUTOR.shutdown(wait=False, cancel_futures=True)
     except Exception:
         pass
 
@@ -1349,10 +1368,14 @@ async def serve_css(request: Request):
 
 
 async def read_root(request: Request):
-    if AUTO_LOGIN and not request.query_params.get("saml_success"):
-        return RedirectResponse("/saml/login", status_code=302)
+    if AUTO_LOGIN:
+        login_id = _normalize_login_id_candidate(request.query_params.get("LoginId"))
+        saml_success = request.query_params.get("saml_success") == "true"
+        if not (saml_success and login_id and login_id in _BOOTSTRAP_SAML_SESSIONS):
+            return RedirectResponse("/saml/login", status_code=302)
 
     _refresh_index_cache_if_modified()
+    _ensure_bootstrap_search_prewarm()
     _FULL_APP.ensure_loading(immediate=False)
     if _CACHED_INDEX_HTML is None:
         return JSONResponse({"message": "index.html not found"})
@@ -1395,7 +1418,7 @@ async def saml_metadata(request: Request):
 
     try:
         loop = asyncio.get_running_loop()
-        metadata = await loop.run_in_executor(None, _metadata_sync)
+        metadata = await loop.run_in_executor(SAML_EXECUTOR, _metadata_sync)
         logging.getLogger("uvicorn.error").info(
             "[BOOTSTRAP SAML METADATA] pid=%s elapsed=%.0fms",
             os.getpid(),
@@ -1428,7 +1451,7 @@ async def saml_login(request: Request):
 
     try:
         loop = asyncio.get_running_loop()
-        idp_login_url = await loop.run_in_executor(None, _login_sync)
+        idp_login_url = await loop.run_in_executor(SAML_EXECUTOR, _login_sync)
         bootlog.info(
             "[BOOTSTRAP SAML LOGIN] redirect ready pid=%s elapsed=%.0fms",
             os.getpid(),
@@ -1487,7 +1510,7 @@ async def saml_acs(request: Request):
 
     try:
         loop = asyncio.get_running_loop()
-        errors, attrs = await loop.run_in_executor(None, _process_sync)
+        errors, attrs = await loop.run_in_executor(SAML_EXECUTOR, _process_sync)
     except Exception as exc:
         bootlog.exception("[BOOTSTRAP SAML ACS] process_response failed: %s", exc)
         return _saml_failure_response("ACS error: exception during processing", status_code=400)
@@ -1547,7 +1570,7 @@ async def api_auth_user(request: Request):
     if forwarded is not None:
         return JSONResponse(forwarded)
 
-    if login_id:
+    if login_id and not AUTO_LOGIN:
         return JSONResponse(_auth_user_payload_from_meta({"LoginId": login_id}))
 
     return JSONResponse(

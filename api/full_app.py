@@ -1650,6 +1650,18 @@ def _shutdown_executor(executor: Any, label: str) -> None:
         logging.getLogger("uvicorn.error").exception("⚠️ [SHUTDOWN] %s executor 종료 실패", label)
 
 
+def _shutdown_measure_process_pool() -> None:
+    module = sys.modules.get(f"{__package__}.measure_composite") or sys.modules.get("api.measure_composite")
+    shutdown = getattr(module, "shutdown_measure_process_pool", None) if module is not None else None
+    if not callable(shutdown):
+        return
+    try:
+        shutdown()
+        logging.getLogger("uvicorn.error").info("🧹 [SHUTDOWN] measure process pool 종료 요청")
+    except Exception:
+        logging.getLogger("uvicorn.error").exception("⚠️ [SHUTDOWN] measure process pool 종료 실패")
+
+
 async def _shutdown_runtime_resources() -> None:
     global _RUNTIME_SHUTDOWN_STARTED, _LIFESPAN_BG_INIT_TASK
     if _RUNTIME_SHUTDOWN_STARTED:
@@ -1670,6 +1682,7 @@ async def _shutdown_runtime_resources() -> None:
         await asyncio.gather(*pending_startup_tasks, return_exceptions=True)
     _STARTUP_BACKGROUND_TASKS.clear()
 
+    _shutdown_measure_process_pool()
     _shutdown_executor(THUMBNAIL_EXECUTOR, "thumbnail")
     _shutdown_executor(DIRLIST_EXECUTOR, "dirlist")
     _shutdown_executor(IO_POOL, "io-pool")
@@ -9429,7 +9442,9 @@ async def read_root(request: Request):
     try:
         # AUTO_LOGIN=True일 때: SAML 인증 완료 후가 아니면 무조건 /saml/login으로 리다이렉트
         if AUTO_LOGIN:
-            if not request.query_params.get("saml_success"):
+            login_id = _normalize_login_id_candidate(request.query_params.get("LoginId"))
+            saml_success = request.query_params.get("saml_success") == "true"
+            if not (saml_success and login_id and login_id in SAML_USER_SESSIONS):
                 logger.info("🔐 [AUTO_LOGIN] SAML 인증 미완료 → /saml/login으로 리다이렉트")
                 return RedirectResponse("/saml/login", status_code=302)
             logger.info("✅ [AUTO_LOGIN] SAML 인증 완료 → index.html 제공")

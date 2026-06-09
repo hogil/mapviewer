@@ -106,6 +106,13 @@ return Response(content=data, headers={
 - 구현 위치: `api/main.py::saml_login()`, `saml_acs()`, `saml_metadata()`를 catch-all `LazyFullAppProxy`보다 먼저 등록한다. 요청마다 로컬 SAML auth 객체를 만들고 executor에서 처리한다. `/api/auth/user`는 bootstrap SAML 성공 메타가 있으면 즉시 반환하고, 없으면 준비된 full app에만 non-blocking forward한다. `api/full_app.py::_import_saml_runtime()`은 direct full-app 경로의 전역 import 실패 캐시를 제거한다.
 - 평가: 서버 시작 직후 브라우저 `GET /`가 `AUTO_LOGIN=1`일 때 `/saml/login`으로 즉시 넘어가야 하고, `/saml/login`은 explorer/full-app/composite 준비를 기다리지 않고 IdP redirect를 시작해야 한다. `BOOTSTRAP_FULL_APP_DELAY_SECONDS=30`을 강제로 넣고 `/saml/login` 동시 요청을 보내도 `503 full app is still warming up`이 나오면 안 된다. 반복 로그인 시 `/saml/login`/`/saml/acs` 로그의 PID와 runtime import 성공 여부가 일관되어야 한다. `scripts/e2e_saml_bootstrap_smoke.js`와 `scripts/run-e2e-saml-bootstrap-smoke.ps1 -Iterations 10`으로 서버 재시작 후 웹 접속/SAML login 시도 회귀를 잡는다.
 
+### SAML restart priority and stale install-message guard (2026-06-10)
+
+- 증상: 서버 재시작 후 새 접속에서 SAML 시작이 지연되거나, 운영 로그에 옛 `python3-saml 라이브러리가 설치되지 않았습니다` 문구가 다시 보일 수 있었다.
+- 원인: SAML이 full-app/bootstrap warmup 순서와 섞이면 새 인증 시작이 우선 처리되지 않을 수 있고, 구형 full-app SAML import guard는 import 실패를 한 번 캐시한 뒤 실제 예외 없이 "설치 안 됨"으로 포장했다. `measure_composite` import-time ProcessPool도 stop/restart 때 다수 `python -m api.main` 자식 프로세스로 보여 원인 판단을 흐렸다.
+- 수정 패턴: `AUTO_LOGIN=1`에서 `GET /`는 현재 프로세스의 즉시 ACS 성공 handoff가 아니면 무조건 `/saml/login`으로 보낸다. `/saml/login`/`acs`/`metadata`는 SAML 전용 executor에서 실행하고, full_app, search index, thumbnails, composite, 이전 LoginId query/cookie/cache 상태를 보지 않는다. full_app/search warmup은 ACS handoff page 제공 뒤로 미룬다. measure ProcessPool은 shutdown 시 명시적으로 닫는다.
+- 평가: `systemctl restart uvicorn` 직후 첫 접속 로그가 `[BOOTSTRAP SAML LOGIN]`으로 시작해야 하며, old Korean install message가 보이면 최신 bootstrap 경로가 배포되지 않았거나 `api.full_app`를 직접 타는 것이다.
+
 ### Cold Start first-hit 2~3초 지연
 
 - 증상: 서버 재기동 직후 첫 `GET /`, `/api/config`, `/api/browse-folders`, `/js/main.js`가 함께 2~3초대까지 느려짐

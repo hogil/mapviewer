@@ -1,6 +1,7 @@
 param(
     [int]$Iterations = 10,
     [int]$PreferredPort = 18443,
+    [switch]$AutoLogin,
     [switch]$Headless
 )
 
@@ -73,12 +74,16 @@ $oldBootstrapDelay = $env:BOOTSTRAP_FULL_APP_DELAY_SECONDS
 $oldHeadless = $env:E2E_HEADLESS
 $oldLoginMax = $env:E2E_SAML_LOGIN_MAX_MS
 $oldLoginTimeout = $env:E2E_SAML_LOGIN_TIMEOUT_MS
+$oldAutoLogin = $env:E2E_AUTO_LOGIN
+$oldExpectAutoLoginRedirect = $env:E2E_EXPECT_AUTO_LOGIN_REDIRECT
 
 try {
     $env:BOOTSTRAP_FULL_APP_DELAY_SECONDS = "30"
     $env:E2E_HEADLESS = if ($Headless) { "1" } else { "0" }
     $env:E2E_SAML_LOGIN_MAX_MS = "5000"
     $env:E2E_SAML_LOGIN_TIMEOUT_MS = "8000"
+    $env:E2E_AUTO_LOGIN = if ($AutoLogin) { "1" } else { "0" }
+    $env:E2E_EXPECT_AUTO_LOGIN_REDIRECT = if ($AutoLogin) { "1" } else { "0" }
 
     for ($i = 1; $i -le $Iterations; $i++) {
         $serverInfo = $null
@@ -151,6 +156,8 @@ try {
     $env:E2E_HEADLESS = $oldHeadless
     $env:E2E_SAML_LOGIN_MAX_MS = $oldLoginMax
     $env:E2E_SAML_LOGIN_TIMEOUT_MS = $oldLoginTimeout
+    $env:E2E_AUTO_LOGIN = $oldAutoLogin
+    $env:E2E_EXPECT_AUTO_LOGIN_REDIRECT = $oldExpectAutoLoginRedirect
 }
 
 $summary = [pscustomobject]@{
