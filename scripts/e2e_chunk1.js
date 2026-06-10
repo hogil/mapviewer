@@ -2497,6 +2497,55 @@ const { createRunner } = require('./e2e_playwright_session');
       labelSeed.primaryClass,
       { timeout: 30000 }
     );
+    let delayedLabelFilesRequests = 0;
+    await page.route('**/api/files?**', async (route) => {
+      const requestUrl = new URL(route.request().url());
+      const requestedPath = (requestUrl.searchParams.get('path') || '').replace(/\\/g, '/');
+      if (
+        requestUrl.pathname.endsWith('/api/files') &&
+        requestedPath.includes(`classification/${labelSeed.primaryClass}`)
+      ) {
+        delayedLabelFilesRequests += 1;
+        await sleep(1200);
+      }
+      await route.continue();
+    });
+    let progressiveLabelState;
+    try {
+      progressiveLabelState = await page.evaluate(async (primaryClass) => {
+        const v = window.viewer;
+        v.labelSelection = v.labelSelection || { selected: [], selectedClasses: [], openFolders: {} };
+        v.classToImgListCache = v.classToImgListCache || {};
+        delete v.classToImgListCache[primaryClass];
+        v.labelSelection.openFolders[primaryClass] = true;
+        const startedAt = performance.now();
+        const refreshPromise = v.refreshLabelExplorer?.([primaryClass]);
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const earlyText = document.querySelector('#label-explorer-list')?.innerText || '';
+        const earlyMs = performance.now() - startedAt;
+        await refreshPromise;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const finalText = document.querySelector('#label-explorer-list')?.innerText || '';
+        return {
+          earlyMs,
+          earlyHasClass: earlyText.includes(primaryClass),
+          earlyLoading: earlyText.includes('로딩 중'),
+          finalHasClass: finalText.includes(primaryClass),
+          finalHasLoading: finalText.includes('로딩 중'),
+        };
+      }, labelSeed.primaryClass);
+    } finally {
+      await page.unroute('**/api/files?**');
+    }
+    expect(delayedLabelFilesRequests > 0, `delayedLabelFilesRequests=${delayedLabelFilesRequests}`);
+    expect(
+      progressiveLabelState.earlyHasClass && progressiveLabelState.earlyLoading,
+      `label explorer did not render before delayed folder response: ${JSON.stringify(progressiveLabelState)}`
+    );
+    expect(
+      progressiveLabelState.finalHasClass && !progressiveLabelState.finalHasLoading,
+      `label explorer did not settle after delayed folder response: ${JSON.stringify(progressiveLabelState)}`
+    );
     const classData = await page.evaluate(async (primaryClass) => {
       const domClasses = Array.from(document.querySelectorAll('#class-list .class-btn'))
         .map((button) => (button.textContent || '').trim())

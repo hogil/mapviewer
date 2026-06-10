@@ -6957,10 +6957,8 @@ class WaferMapViewer {
 
                 try {
                     await classificationInitTask;
-                    await Promise.all([
-                        this.refreshLabelExplorer(),
-                        this.refreshClassList(false)
-                    ]);
+                    await this.refreshLabelExplorer();
+                    await this.refreshClassList(false);
                 } catch (err) {
                     console.error('[INIT] Label Explorer 초기화 실패:', err);
                 }
@@ -6997,6 +6995,8 @@ class WaferMapViewer {
                 });
             };
 
+            setTimeout(startAncillaryBootstrap, 0);
+
             let explorerLoadPromise = Promise.resolve();
 
             // File Explorer 로딩 (백그라운드, 실패 시 재시도)
@@ -7022,7 +7022,6 @@ class WaferMapViewer {
                 }
                 setTimeout(() => {
                     void this._primeDeferredUiBootstrap();
-                    startAncillaryBootstrap();
                 }, 0);
             });
 
@@ -17841,7 +17840,13 @@ class WaferMapViewer {
 
         {
             const openFolders = classes.filter(cls => labelSelection.openFolders[cls] && needRefetch(cls));
-            if (openFolders.length > 0) this.debugLog(`🔷 [DEBUG] 열린 폴더 re-fetch: ${openFolders.join(', ')}`);
+            if (openFolders.length > 0) {
+                this.debugLog(`🔷 [DEBUG] 열린 폴더 re-fetch: ${openFolders.join(', ')}`);
+                if (!this._labelExplorerLoadingClasses) this._labelExplorerLoadingClasses = new Set();
+                for (const cls of openFolders) this._labelExplorerLoadingClasses.add(cls);
+                this.renderLabelExplorerContent(container, classes, classToImgList, labelSelection);
+                if (container) container.scrollTop = scrollTop;
+            }
             
             // 🔥 모든 폴더를 병렬로 처리 (배치 제한 제거)
             const folderPromises = openFolders.map(async (cls) => {
@@ -17879,6 +17884,8 @@ class WaferMapViewer {
                         this.debugLog(`🔷 [DEBUG] 폴더 '${cls}' - ${imgList.length}개 이미지 새로고침 완료`);
                     } catch (error) {
                         console.error(`폴더 '${cls}' 새로고침 실패:`, error);
+                    } finally {
+                        this._labelExplorerLoadingClasses?.delete(cls);
                     }
                 });
                 
@@ -18290,6 +18297,9 @@ class WaferMapViewer {
                         if (cached) {
                             this._updateLabelExplorerContentFast();
                         } else {
+                            if (!this._labelExplorerLoadingClasses) this._labelExplorerLoadingClasses = new Set();
+                            this._labelExplorerLoadingClasses.add(cls);
+                            this._updateLabelExplorerContentFast();
                             const labelPath = this.buildClassificationPath(cls);
                             fetch(`/api/files?path=${encodeURIComponent(labelPath)}`)
                                 .then(res => res.json())
@@ -18297,14 +18307,16 @@ class WaferMapViewer {
                                     const imgList = (Array.isArray(data.items) ? data.items : [])
                                         .filter(item => item.type === 'file');
                                     this.classToImgListCache[cls] = imgList;
-                                    if (labelSelection.openFolders[cls]) {
-                                        this._updateLabelExplorerContentFast();
-                                    }
                                 })
                                 .catch(err => {
                                     console.error(`폴더 '${cls}' 이미지 로드 실패:`, err);
                                     this.classToImgListCache[cls] = [];
-                                    this._updateLabelExplorerContentFast();
+                                })
+                                .finally(() => {
+                                    this._labelExplorerLoadingClasses?.delete(cls);
+                                    if (labelSelection.openFolders[cls]) {
+                                        this._updateLabelExplorerContentFast();
+                                    }
                                 });
                         }
                     } else {
@@ -18410,6 +18422,16 @@ class WaferMapViewer {
                     // 숫자를 고려한 자연 정렬 (natural sort)
                     return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
                 });
+
+                if (sortedImgList.length === 0) {
+                    const emptyLi = document.createElement('li');
+                    emptyLi.style.color = '#888';
+                    emptyLi.style.padding = '4px 12px';
+                    emptyLi.textContent = this._labelExplorerLoadingClasses?.has(cls)
+                        ? '로딩 중...'
+                        : '라벨된 이미지 없음';
+                    imgUl.appendChild(emptyLi);
+                }
 
                 for (let i = 0; i < sortedImgList.length; ++i) {
                     const img = sortedImgList[i];

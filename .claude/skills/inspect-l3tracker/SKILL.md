@@ -90,6 +90,12 @@ argument-hint: [점검-범위]
 4. 더블클릭으로 단일 이미지 진입 후 다시 그리드 복귀 시 이미지 수, 순서, 스크롤, flat-grid/LOT-grid 상태가 유지되는지 확인
 5. MY LOT의 보기/Grid 보기/단일 이미지 진입이 Label Explorer와 충돌하지 않는지 확인
 
+**Cold restart perceived-load guard (2026-06-10):**
+- `js/main.js::refreshLabelExplorer()`는 열린 label class 폴더의 `/api/files` 응답을 모두 기다린 뒤 처음 렌더하면 안 된다.
+- `/api/classes`가 끝나면 class tree를 즉시 그리고, 아직 늦는 열린 폴더는 `로딩 중...`으로 표시한 뒤 응답 완료 시 파일 목록으로 교체한다.
+- 초기 bootstrap에서 `loadServerConfig()`, `loadColorLegends()`, `loadUserInfo()`는 File Explorer 로딩 완료를 기다리지 않는다. top legend/user bar가 `loadDirectoryContents()` cold path에 묶이면 회귀다.
+- E2E 신호: `scripts/e2e_chunk1.js` record `7,12,20 Class / MY LOT / stats`가 Playwright route로 primary label class `/api/files`를 지연시키고, 지연 중에도 `#label-explorer-list`에 class name과 `로딩 중...`이 보여야 한다.
+
 ### 5. 그리드/단일 이미지 전환
 
 **Playwright:**
