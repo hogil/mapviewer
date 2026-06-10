@@ -2666,6 +2666,48 @@ const { createRunner } = require('./e2e_playwright_session');
       `reload root delta=${rootEndpointCount - baselineRootEndpointCount}`
     );
 
+    const concurrentPageCount = 6;
+    const concurrentPages = [];
+    try {
+      const raceToken = Date.now();
+      await Promise.all(
+        Array.from({ length: concurrentPageCount }, async (_, index) => {
+          const racePage = await browser.newPage({
+            ignoreHTTPSErrors: true,
+            viewport: { width: 1200, height: 800 },
+          });
+          concurrentPages.push(racePage);
+          await racePage.goto(
+            `${base}/?LoginId=${encodeURIComponent(statsProbeUserId)}&e2e_stats_race=${raceToken}_${index}`,
+            {
+              waitUntil: 'domcontentloaded',
+              timeout: 60000,
+            }
+          );
+        })
+      );
+    } finally {
+      await Promise.all(concurrentPages.map((racePage) => racePage.close().catch(() => {})));
+    }
+    await statsProbePage.waitForTimeout(1500);
+
+    const statsAfterConcurrentLoads = await fetchJson(
+      statsPage,
+      `/api/stats/user/${encodeURIComponent(statsProbeUserId)}`
+    );
+    const concurrentTotalDelta =
+      Number(statsAfterConcurrentLoads.total_requests || 0) - finalTotalRequests;
+    const concurrentRootDelta =
+      Number((statsAfterConcurrentLoads.endpoints || {})['/'] || 0) - rootEndpointCount;
+    expect(
+      concurrentTotalDelta >= concurrentPageCount,
+      `concurrent total delta=${concurrentTotalDelta}, expected>=${concurrentPageCount}`
+    );
+    expect(
+      concurrentRootDelta >= concurrentPageCount,
+      `concurrent root delta=${concurrentRootDelta}, expected>=${concurrentPageCount}`
+    );
+
     const statsText = await statsPage.evaluate(() =>
       document.body.innerText.slice(0, 120)
     );
@@ -2683,6 +2725,9 @@ const { createRunner } = require('./e2e_playwright_session');
       finalTotalRequests,
       finalDailyRequests,
       rootEndpointCount,
+      concurrentPageCount,
+      concurrentTotalDelta,
+      concurrentRootDelta,
     };
   });
 

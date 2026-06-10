@@ -6,6 +6,8 @@ import json
 import sys
 import time
 import os
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict, Counter
@@ -20,6 +22,55 @@ LOG_DIR.mkdir(exist_ok=True)
 ACCESS_LOG_FILE = LOG_DIR / "access.log"
 STATS_LOG_FILE = LOG_DIR / "stats.json"
 ALLOW_LOCAL_STATS = os.getenv("ALLOW_LOCAL_STATS", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
+_STATS_SAVE_LOCK = threading.Lock()
+
+
+@contextmanager
+def _stats_file_lock(timeout: float = 10.0, stale_after: float = 30.0):
+    """여러 Python 프로세스가 stats.json을 동시에 병합/교체하지 않도록 막는다."""
+    lock_path = STATS_LOG_FILE.with_name(f"{STATS_LOG_FILE.name}.lock")
+    deadline = time.time() + timeout
+    fd = None
+    while True:
+        try:
+            LOG_DIR.mkdir(exist_ok=True)
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, f"{os.getpid()} {time.time():.6f}\n".encode("ascii", errors="ignore"))
+            break
+        except FileExistsError:
+            try:
+                if time.time() - lock_path.stat().st_mtime > stale_after:
+                    lock_path.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                pass
+            if time.time() >= deadline:
+                raise TimeoutError(f"stats lock timeout: {lock_path}")
+            time.sleep(0.05)
+
+    try:
+        yield
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _replace_stats_file(tmp_path: Path, target_path: Path, attempts: int = 20) -> None:
+    for attempt in range(attempts):
+        try:
+            os.replace(tmp_path, target_path)
+            return
+        except PermissionError:
+            if attempt >= attempts - 1:
+                raise
+            time.sleep(0.05)
 
 # 로거 설정 - main.py의 dictConfig("access") 충돌을 피하기 위해 전용 로거 사용
 access_logger = logging.getLogger("access.file")
@@ -103,91 +154,102 @@ class AccessLogger:
             if current_time - self._last_save_time < self._save_interval:
                 return
 
-        try:
-            # 🔥 멀티워커 환경: 저장 전에 파일에서 최신 데이터를 읽어와서 병합
-            # 다른 워커가 추가한 유저 정보도 보존됨!
-            file_data = self._load_stats()
+        with _STATS_SAVE_LOCK, _stats_file_lock():
+            tmp_path = None
+            try:
+                LOG_DIR.mkdir(exist_ok=True)
 
-            # users 병합: 파일의 유저와 메모리의 유저를 모두 유지
-            for user_id, user_data in self.stats_data.get("users", {}).items():
-                if user_id in file_data.get("users", {}):
-                    # 기존 유저: 병합 (더 최신 정보 우선)
-                    file_user = file_data["users"][user_id]
+                # 🔥 멀티워커 환경: 저장 전에 파일에서 최신 데이터를 읽어와서 병합
+                # 다른 워커가 추가한 유저 정보도 보존됨!
+                file_data = self._load_stats()
 
-                    # 요청 수는 더 큰 값 사용
-                    if user_data.get("total_requests", 0) > file_user.get("total_requests", 0):
-                        file_user["total_requests"] = user_data["total_requests"]
+                # users 병합: 파일의 유저와 메모리의 유저를 모두 유지
+                for user_id, user_data in self.stats_data.get("users", {}).items():
+                    if user_id in file_data.get("users", {}):
+                        # 기존 유저: 병합 (더 최신 정보 우선)
+                        file_user = file_data["users"][user_id]
 
-                    # IP 주소 병합 (중복 제거)
-                    file_ips = set(file_user.get("ip_addresses", []))
-                    memory_ips = set(user_data.get("ip_addresses", []))
-                    file_user["ip_addresses"] = list(file_ips | memory_ips)
+                        # 요청 수는 더 큰 값 사용
+                        if user_data.get("total_requests", 0) > file_user.get("total_requests", 0):
+                            file_user["total_requests"] = user_data["total_requests"]
 
-                    # 날짜 병합 (중복 제거)
-                    file_days = set(file_user.get("unique_days", []))
-                    memory_days = set(user_data.get("unique_days", []))
-                    file_user["unique_days"] = sorted(list(file_days | memory_days))
+                        # IP 주소 병합 (중복 제거)
+                        file_ips = set(file_user.get("ip_addresses", []))
+                        memory_ips = set(user_data.get("ip_addresses", []))
+                        file_user["ip_addresses"] = list(file_ips | memory_ips)
 
-                    # 최신 정보 우선
-                    if user_data.get("last_seen", "") > file_user.get("last_seen", ""):
-                        file_user["last_seen"] = user_data["last_seen"]
-                        file_user["last_access_time"] = user_data.get("last_access_time", user_data["last_seen"])
+                        # 날짜 병합 (중복 제거)
+                        file_days = set(file_user.get("unique_days", []))
+                        memory_days = set(user_data.get("unique_days", []))
+                        file_user["unique_days"] = sorted(list(file_days | memory_days))
 
-                    # daily_requests 병합
-                    for day, count in user_data.get("daily_requests", {}).items():
-                        if day in file_user.get("daily_requests", {}):
-                            file_user["daily_requests"][day] = max(file_user["daily_requests"][day], count)
-                        else:
-                            if "daily_requests" not in file_user:
-                                file_user["daily_requests"] = {}
-                            file_user["daily_requests"][day] = count
+                        # 최신 정보 우선
+                        if user_data.get("last_seen", "") > file_user.get("last_seen", ""):
+                            file_user["last_seen"] = user_data["last_seen"]
+                            file_user["last_access_time"] = user_data.get("last_access_time", user_data["last_seen"])
 
-                    # endpoints 병합
-                    for endpoint, count in user_data.get("endpoints", {}).items():
-                        if endpoint in file_user.get("endpoints", {}):
-                            file_user["endpoints"][endpoint] = max(file_user["endpoints"][endpoint], count)
-                        else:
-                            if "endpoints" not in file_user:
-                                file_user["endpoints"] = {}
-                            file_user["endpoints"][endpoint] = count
+                        # daily_requests 병합
+                        for day, count in user_data.get("daily_requests", {}).items():
+                            if day in file_user.get("daily_requests", {}):
+                                file_user["daily_requests"][day] = max(file_user["daily_requests"][day], count)
+                            else:
+                                if "daily_requests" not in file_user:
+                                    file_user["daily_requests"] = {}
+                                file_user["daily_requests"][day] = count
 
-                    # profile 정보 업데이트 (더 많은 정보 우선)
-                    memory_profile = user_data.get("profile", {})
-                    if memory_profile:
-                        if "profile" not in file_user:
-                            file_user["profile"] = {}
-                        for k, v in memory_profile.items():
-                            if v:
-                                file_user["profile"][k] = v
-                else:
-                    # 새로운 유저: 추가
-                    file_data["users"][user_id] = user_data
+                        # endpoints 병합
+                        for endpoint, count in user_data.get("endpoints", {}).items():
+                            if endpoint in file_user.get("endpoints", {}):
+                                file_user["endpoints"][endpoint] = max(file_user["endpoints"][endpoint], count)
+                            else:
+                                if "endpoints" not in file_user:
+                                    file_user["endpoints"] = {}
+                                file_user["endpoints"][endpoint] = count
 
-            # daily_stats, monthly_stats, department_stats도 병합
-            for stat_key in ["daily_stats", "monthly_stats", "department_stats"]:
-                if stat_key in self.stats_data:
-                    if stat_key not in file_data:
-                        file_data[stat_key] = {}
-                    for key, value in self.stats_data[stat_key].items():
-                        if key not in file_data[stat_key]:
-                            file_data[stat_key][key] = value
-                        else:
-                            # 병합 로직 (간단하게 덮어쓰기)
-                            file_data[stat_key][key] = value
+                        # profile 정보 업데이트 (더 많은 정보 우선)
+                        memory_profile = user_data.get("profile", {})
+                        if memory_profile:
+                            if "profile" not in file_user:
+                                file_user["profile"] = {}
+                            for k, v in memory_profile.items():
+                                if v:
+                                    file_user["profile"][k] = v
+                    else:
+                        # 새로운 유저: 추가
+                        file_data["users"][user_id] = user_data
 
-            # 병합된 데이터 저장 (원자적 교체: 읽기 중 깨진 JSON 방지)
-            tmp_path = STATS_LOG_FILE.with_suffix(".json.tmp")
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(file_data, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, STATS_LOG_FILE)
+                # daily_stats, monthly_stats, department_stats도 병합
+                for stat_key in ["daily_stats", "monthly_stats", "department_stats"]:
+                    if stat_key in self.stats_data:
+                        if stat_key not in file_data:
+                            file_data[stat_key] = {}
+                        for key, value in self.stats_data[stat_key].items():
+                            if key not in file_data[stat_key]:
+                                file_data[stat_key][key] = value
+                            else:
+                                # 병합 로직 (간단하게 덮어쓰기)
+                                file_data[stat_key][key] = value
 
-            # 🔥 중요: 메모리 데이터도 병합된 데이터로 업데이트 (동기화)
-            self.stats_data = file_data
+                # 병합된 데이터 저장 (원자적 교체: 읽기 중 깨진 JSON 방지)
+                tmp_path = STATS_LOG_FILE.with_name(
+                    f"{STATS_LOG_FILE.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
+                )
+                with open(tmp_path, 'w', encoding='utf-8') as f:
+                    json.dump(file_data, f, ensure_ascii=False, indent=2)
+                _replace_stats_file(tmp_path, STATS_LOG_FILE)
 
-            self._stats_dirty = False
-            self._last_save_time = current_time
-        except Exception as e:
-            print(f"통계 저장 실패: {e}")
+                # 🔥 중요: 메모리 데이터도 병합된 데이터로 업데이트 (동기화)
+                self.stats_data = file_data
+
+                self._stats_dirty = False
+                self._last_save_time = current_time
+            except Exception as e:
+                if tmp_path is not None:
+                    try:
+                        tmp_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                print(f"통계 저장 실패: {e}")
     
     def get_user_by_ip(self, ip: str) -> tuple:
         """IP로 사용자 찾기 - 🔥 접속 제어용이 아니라 통계 누적용으로만 사용"""

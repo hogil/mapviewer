@@ -113,6 +113,13 @@ return Response(content=data, headers={
 - 수정 패턴: `AUTO_LOGIN=1`에서 `GET /`는 현재 프로세스의 즉시 ACS 성공 handoff가 아니면 무조건 `/saml/login`으로 보낸다. `/saml/login`/`acs`/`metadata`는 SAML 전용 executor에서 실행하고, full_app, search index, thumbnails, composite, 이전 LoginId query/cookie/cache 상태를 보지 않는다. full_app/search warmup은 ACS handoff page 제공 뒤로 미룬다. measure ProcessPool은 shutdown 시 명시적으로 닫는다.
 - 평가: `systemctl restart uvicorn` 직후 첫 접속 로그가 `[BOOTSTRAP SAML LOGIN]`으로 시작해야 하며, old Korean install message가 보이면 최신 bootstrap 경로가 배포되지 않았거나 `api.full_app`를 직접 타는 것이다.
 
+### stats.json concurrent save guard (2026-06-10)
+
+- 증상: `logs/stats.json` 파일이 있는데도 `통계 저장 실패: [Errno 2] No such file or directory: 'logs/stats.json.tmp' -> 'logs/stats.json'`가 서버 로그에 찍힐 수 있었다.
+- 원인: `api/access_logger.py::AccessLogger._save_stats()`가 모든 저장에 같은 임시 파일명 `stats.json.tmp`를 사용했다. 새로고침/동시 접속 또는 여러 Python 프로세스 저장이 겹치면 한 저장이 tmp를 `stats.json`으로 옮긴 뒤 다른 저장이 같은 tmp를 다시 `os.replace()`하려고 해서 실패했다.
+- 수정 패턴: stats 저장은 프로세스 내부 thread lock과 `stats.json.lock` 파일 lock을 동시에 잡고, 파일에서 최신 stats를 다시 읽은 뒤 병합/저장/replace까지 한 critical section 안에서 끝낸다. 임시 파일은 pid/thread/time을 포함한 고유 파일명만 사용하고 실패 시 자기 tmp만 정리한다.
+- 평가: `scripts/e2e_chunk1.js`의 `7,12,20 Class / MY LOT / stats`는 동일 LoginId로 root page를 동시 오픈해 page-visit 저장 race를 만든다. `scripts/e2e_stats_save_race.py`는 `AccessLogger._save_stats()`를 thread/process 동시성으로 직접 stress 한다. `scripts/run-e2e-playwright.ps1`는 `stats-save-race`와 `server-log-guards` progress record를 항상 만들고, 서버 stdout/stderr에 `통계 저장 실패` 또는 기존 `stats.json.tmp` 실패 문구가 있으면 전체 E2E를 FAIL 처리한다.
+
 ### Cold Start first-hit 2~3초 지연
 
 - 증상: 서버 재기동 직후 첫 `GET /`, `/api/config`, `/api/browse-folders`, `/js/main.js`가 함께 2~3초대까지 느려짐

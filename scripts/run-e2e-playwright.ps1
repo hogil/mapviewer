@@ -373,6 +373,68 @@ function Invoke-SamlBootstrapRestartSmoke {
     return $exitCode
 }
 
+function Invoke-StatsSaveRaceGuard {
+    param([string]$OutputDir)
+
+    $progressPath = Join-Path $OutputDir "e2e_stats_save_race.progress.log"
+    $stdoutPath = Join-Path $OutputDir "e2e_stats_save_race.out.log"
+    $stderrPath = Join-Path $OutputDir "e2e_stats_save_race.err.log"
+    Remove-Item $progressPath, $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+
+    $scriptPath = Join-Path $PSScriptRoot "e2e_stats_save_race.py"
+    Write-Host "RUN stats save race guard"
+    Push-Location $repoRoot
+    try {
+        & python $scriptPath 1> $stdoutPath 2> $stderrPath
+        $guardExitCode = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 1 }
+    } finally {
+        Pop-Location
+    }
+
+    $stdoutRaw = if (Test-Path $stdoutPath) { Get-Content -Path $stdoutPath -Encoding UTF8 -Raw -ErrorAction SilentlyContinue } else { "" }
+    $stderrRaw = if (Test-Path $stderrPath) { Get-Content -Path $stderrPath -Encoding UTF8 -Raw -ErrorAction SilentlyContinue } else { "" }
+    $stdoutText = if ($null -eq $stdoutRaw) { "" } else { [string]$stdoutRaw }
+    $stderrText = if ($null -eq $stderrRaw) { "" } else { [string]$stderrRaw }
+    $stdoutHasPass = $stdoutText -like "*PASS stats_save_race*"
+    $stdoutHasFailure = ($stdoutText -like "*통계 저장 실패*") -or ($stdoutText -like "*stats.json.tmp*")
+    $stderrHasFailure = ($stderrText -like "*통계 저장 실패*") -or ($stderrText -like "*stats.json.tmp*")
+    $status = if (
+        $guardExitCode -eq 0 -and
+        $stdoutHasPass -and
+        -not $stdoutHasFailure -and
+        -not $stderrHasFailure
+    ) { "PASS" } else { "FAIL" }
+
+    $stdoutTail = if ($stdoutText.Length -gt 500) { $stdoutText.Substring($stdoutText.Length - 500) } else { $stdoutText }
+    $stderrTail = if ($stderrText.Length -gt 500) { $stderrText.Substring($stderrText.Length - 500) } else { $stderrText }
+    $detail = [pscustomobject]@{
+        exitCode = $guardExitCode
+        stdout = $stdoutPath
+        stderr = $stderrPath
+        stdoutTail = $stdoutTail
+        stderrTail = $stderrTail
+    }
+    $detailJson = $detail | ConvertTo-Json -Compress
+    Add-Content -Path $progressPath -Encoding UTF8 -Value ("[{0}] stats-save-race Stats save concurrent tmp guard :: {1}" -f $status, $detailJson)
+    Add-Content -Path $progressPath -Encoding UTF8 -Value "[DONE] total=1"
+
+    Write-Host ("STATS_SAVE_RACE status={0} exitCode={1}" -f $status, $guardExitCode)
+    if (-not [string]::IsNullOrWhiteSpace($stdoutText)) {
+        foreach ($line in @($stdoutText -split "`r?`n" | Where-Object { $_ } | Select-Object -Last 5)) {
+            Write-Host ("STATS_SAVE_RACE stdout {0}" -f $line)
+        }
+    }
+    if ($status -eq "PASS") {
+        return 0
+    }
+    if (-not [string]::IsNullOrWhiteSpace($stderrText)) {
+        foreach ($line in @($stderrText -split "`r?`n" | Where-Object { $_ } | Select-Object -Last 10)) {
+            Write-Host ("STATS_SAVE_RACE stderr {0}" -f $line)
+        }
+    }
+    return 2
+}
+
 if ($WithSmoke) {
     $samlRestartExit = Invoke-SamlBootstrapRestartSmoke -OutputDir $outputDir -Headless ([bool]$Headless)
     if ($samlRestartExit -ne 0 -and $overallExit -eq 0) {
@@ -1115,6 +1177,82 @@ function Test-E2EProcessCleanup {
     }
 }
 
+function Invoke-E2EServerLogGuards {
+    param(
+        [object]$ServerInfo,
+        [string]$OutputDir
+    )
+
+    $progressPath = Join-Path $OutputDir "e2e_server_log_guards.progress.log"
+    Remove-Item $progressPath -Force -ErrorAction SilentlyContinue
+
+    $logPaths = @()
+    if ($ServerInfo) {
+        foreach ($propertyName in @("stdout", "stderr")) {
+            if ($ServerInfo.PSObject.Properties.Name -contains $propertyName) {
+                $value = [string]$ServerInfo.$propertyName
+                if (-not [string]::IsNullOrWhiteSpace($value)) {
+                    $logPaths += $value
+                }
+            }
+        }
+    }
+
+    $checked = @()
+    $copied = @()
+    $matches = @()
+    foreach ($logPath in @($logPaths | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $logPath)) {
+            $matches += [pscustomobject]@{
+                file = $logPath
+                pattern = "missing-log"
+            }
+            continue
+        }
+
+        $checked += $logPath
+        $destPath = Join-Path $OutputDir ("server-" + [System.IO.Path]::GetFileName($logPath))
+        Copy-Item -LiteralPath $logPath -Destination $destPath -Force -ErrorAction SilentlyContinue
+        $copied += $destPath
+
+        $text = Get-Content -LiteralPath $logPath -Encoding UTF8 -Raw -ErrorAction SilentlyContinue
+        if (-not [string]::IsNullOrEmpty($text)) {
+            if ($text.Contains("통계 저장 실패")) {
+                $matches += [pscustomobject]@{
+                    file = $logPath
+                    pattern = "통계 저장 실패"
+                }
+            }
+            if ($text.Contains("stats.json.tmp")) {
+                $matches += [pscustomobject]@{
+                    file = $logPath
+                    pattern = "stats.json.tmp"
+                }
+            }
+        }
+    }
+
+    $status = if ($matches.Count -eq 0) { "PASS" } else { "FAIL" }
+    $detail = [pscustomobject]@{
+        checked = $checked
+        copied = $copied
+        matches = $matches
+    }
+    $detailJson = $detail | ConvertTo-Json -Compress -Depth 8
+    Add-Content -Path $progressPath -Encoding UTF8 -Value ("[{0}] server-log-guards Server log regression guards :: {1}" -f $status, $detailJson)
+    Add-Content -Path $progressPath -Encoding UTF8 -Value "[DONE] total=1"
+
+    Write-Host ("SERVER_LOG_GUARD status={0} checked={1} matches={2}" -f $status, $checked.Count, $matches.Count)
+    foreach ($match in $matches) {
+        Write-Host ("SERVER_LOG_GUARD match file={0} pattern={1}" -f $match.file, $match.pattern)
+    }
+
+    if ($status -eq "PASS") {
+        return 0
+    }
+    return 2
+}
+
 $maxChunkSeconds = 420
 foreach ($script in $scripts) {
     $name = [System.IO.Path]::GetFileNameWithoutExtension($script)
@@ -1266,6 +1404,16 @@ foreach ($script in $scripts) {
     Stop-E2ETrackedPidProcesses -PidFilters @("e2e-node-*.pid", "e2e-browser-*.pid") -Reason ("post-{0}" -f $name)
     & (Join-Path $PSScriptRoot "cleanup-e2e.ps1") -Quiet -SkipServers
     Start-Sleep -Seconds 2
+}
+
+$statsSaveRaceExit = Invoke-StatsSaveRaceGuard -OutputDir $outputDir
+if ($statsSaveRaceExit -ne 0 -and $overallExit -eq 0) {
+    $overallExit = $statsSaveRaceExit
+}
+
+$serverLogGuardExit = Invoke-E2EServerLogGuards -ServerInfo $serverInfo -OutputDir $outputDir
+if ($serverLogGuardExit -ne 0 -and $overallExit -eq 0) {
+    $overallExit = $serverLogGuardExit
 }
 
 if (-not $KeepServer -and $serverInfo -and $serverInfo.pid) {
