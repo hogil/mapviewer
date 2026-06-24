@@ -12,6 +12,7 @@ import gzip
 import hashlib
 import html
 import importlib
+import importlib.util
 import io
 import json
 import logging
@@ -168,6 +169,7 @@ _ANONYMOUS_LOGIN_ID = (config.FALLBACK_LOGIN_ID or "notsaml").strip() or "notsam
 _LOGIN_ID_SENTINELS = {_ANONYMOUS_LOGIN_ID.lower(), "guest"}
 SAML_DIR = Path("saml")
 _BOOTSTRAP_SAML_SESSIONS: Dict[str, Dict[str, Any]] = {}
+_BOOTSTRAP_SAML_RUNTIME_PRELOADED = False
 
 
 def _mark_user_activity() -> None:
@@ -284,6 +286,41 @@ def _prepare_bootstrap_saml_request(request: Request) -> Dict[str, Any]:
     }
 
 
+def _saml_runtime_module_origins() -> Dict[str, str]:
+    origins: Dict[str, str] = {}
+    for name in ("onelogin.saml2.auth", "lxml.etree", "xmlsec", "pyvips"):
+        try:
+            spec = importlib.util.find_spec(name)
+            origins[name] = str(getattr(spec, "origin", "") or "(no origin)") if spec else "(not found)"
+        except Exception as exc:
+            origins[name] = f"(lookup failed: {exc!r})"
+    return origins
+
+
+def _loaded_native_library_paths() -> List[str]:
+    maps_path = Path(f"/proc/{os.getpid()}/maps")
+    if not maps_path.exists():
+        return []
+
+    needles = ("libxml2", "libxmlsec", "libxslt", "libvips")
+    paths: List[str] = []
+    seen = set()
+    try:
+        for line in maps_path.read_text(errors="ignore").splitlines():
+            path = line.rsplit(" ", 1)[-1].strip()
+            if "/" not in path:
+                continue
+            if not any(needle in path for needle in needles):
+                continue
+            if path in seen:
+                continue
+            seen.add(path)
+            paths.append(path)
+    except Exception:
+        return []
+    return paths[:40]
+
+
 def _import_bootstrap_saml_runtime() -> Tuple[Any, Any]:
     try:
         from onelogin.saml2.auth import OneLogin_Saml2_Auth as auth_cls
@@ -297,7 +334,43 @@ def _import_bootstrap_saml_runtime() -> Tuple[Any, Any]:
             sys.prefix,
             exc,
         )
+        logging.getLogger("uvicorn.error").error(
+            "[BOOTSTRAP SAML] runtime module origins=%s loaded_native_libs=%s",
+            _saml_runtime_module_origins(),
+            _loaded_native_library_paths(),
+        )
         raise
+
+
+def _preload_bootstrap_saml_runtime(reason: str) -> None:
+    global _BOOTSTRAP_SAML_RUNTIME_PRELOADED
+    if _BOOTSTRAP_SAML_RUNTIME_PRELOADED:
+        return
+    if os.getenv("SAML_PRELOAD_RUNTIME", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return
+
+    bootlog = logging.getLogger("uvicorn.error")
+    started = time.perf_counter()
+    try:
+        _import_bootstrap_saml_runtime()
+        _BOOTSTRAP_SAML_RUNTIME_PRELOADED = True
+        bootlog.info(
+            "[BOOTSTRAP SAML] runtime preloaded reason=%s pid=%s elapsed=%.0fms origins=%s loaded_native_libs=%s",
+            reason,
+            os.getpid(),
+            (time.perf_counter() - started) * 1000.0,
+            _saml_runtime_module_origins(),
+            _loaded_native_library_paths(),
+        )
+    except Exception as exc:
+        bootlog.error(
+            "[BOOTSTRAP SAML] runtime preload failed reason=%s pid=%s error=%r origins=%s loaded_native_libs=%s",
+            reason,
+            os.getpid(),
+            exc,
+            _saml_runtime_module_origins(),
+            _loaded_native_library_paths(),
+        )
 
 
 def _pick_saml_attr(attrs: Dict[str, Any], key: str) -> Optional[str]:
@@ -1020,6 +1093,7 @@ async def lifespan(app: Starlette):
     bootlog.info("📍 호스트: %s", config.DEFAULT_HOST)
     bootlog.info("🔌 포트: %s (%s)", port_to_log, scheme)
     bootlog.info("📁 ROOT_DIR: %s", config.ROOT_DIR)
+    _preload_bootstrap_saml_runtime("bootstrap-startup-before-full-app")
     if AUTO_LOGIN:
         bootlog.info("🚀 [BOOTSTRAP] AUTO_LOGIN active: SAML routes first, full app warmup delayed")
     else:

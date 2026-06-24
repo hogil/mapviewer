@@ -109,9 +109,9 @@ return Response(content=data, headers={
 ### SAML restart priority and stale install-message guard (2026-06-10)
 
 - 증상: 서버 재시작 후 새 접속에서 SAML 시작이 지연되거나, 운영 로그에 옛 `python3-saml 라이브러리가 설치되지 않았습니다` 문구가 다시 보일 수 있었다.
-- 원인: SAML이 full-app/bootstrap warmup 순서와 섞이면 새 인증 시작이 우선 처리되지 않을 수 있고, 구형 full-app SAML import guard는 import 실패를 한 번 캐시한 뒤 실제 예외 없이 "설치 안 됨"으로 포장했다. `measure_composite` import-time ProcessPool도 stop/restart 때 다수 `python -m api.main` 자식 프로세스로 보여 원인 판단을 흐렸다.
-- 수정 패턴: `AUTO_LOGIN=1`에서 `GET /`는 현재 프로세스의 즉시 ACS 성공 handoff가 아니면 무조건 `/saml/login`으로 보낸다. `/saml/login`/`acs`/`metadata`는 SAML 전용 executor에서 실행하고, full_app, search index, thumbnails, composite, 이전 LoginId query/cookie/cache 상태를 보지 않는다. full_app/search warmup은 ACS handoff page 제공 뒤로 미룬다. measure ProcessPool은 shutdown 시 명시적으로 닫는다.
-- 평가: `systemctl restart uvicorn` 직후 첫 접속 로그가 `[BOOTSTRAP SAML LOGIN]`으로 시작해야 하며, old Korean install message가 보이면 최신 bootstrap 경로가 배포되지 않았거나 `api.full_app`를 직접 타는 것이다.
+- 원인: SAML이 full-app/bootstrap warmup 순서와 섞이면 새 인증 시작이 우선 처리되지 않을 수 있고, 구형 full-app SAML import guard는 import 실패를 한 번 캐시한 뒤 실제 예외 없이 "설치 안 됨"으로 포장했다. `AUTO_LOGIN=0`/수동 로그인 재시작 흐름에서는 full-app idle import와 composite/thumbnail warmup이 첫 SAML 요청보다 먼저 native image/XML 라이브러리를 import할 수 있다. 이 PID에서 `pyvips`/시스템 라이브러리가 먼저 incompatible `libxml2`를 잡으면 이후 `xmlsec` import가 `lxml & xmlsec libxml2 library version mismatch`로 실패하고, 다음 service restart에서 import 순서가 바뀌면 사라져 랜덤처럼 보인다. `measure_composite` import-time ProcessPool도 stop/restart 때 다수 `python -m api.main` 자식 프로세스로 보여 원인 판단을 흐렸다.
+- 수정 패턴: `AUTO_LOGIN=1`에서 `GET /`는 현재 프로세스의 즉시 ACS 성공 handoff가 아니면 무조건 `/saml/login`으로 보낸다. `/saml/login`/`acs`/`metadata`는 SAML 전용 executor에서 실행하고, full_app, search index, thumbnails, composite, 이전 LoginId query/cookie/cache 상태를 보지 않는다. bootstrap startup은 full-app idle import를 예약하기 전에 SAML runtime을 preload해서 `OneLogin`/`xmlsec` native libraries가 `pyvips`/composite warmup보다 먼저 로드되게 한다. measure ProcessPool은 shutdown 시 명시적으로 닫는다.
+- 평가: `systemctl restart uvicorn` 직후 startup 로그에 `[BOOTSTRAP SAML] runtime preloaded reason=bootstrap-startup-before-full-app`가 full-app/composite warmup보다 먼저 보여야 한다. 첫 접속 로그가 `[BOOTSTRAP SAML LOGIN]`으로 시작해야 하며, old Korean install message가 보이면 최신 bootstrap 경로가 배포되지 않았거나 `api.full_app`를 직접 타는 것이다. `lxml & xmlsec libxml2 library version mismatch`가 다시 나오면 로그의 `origins`와 `loaded_native_libs`에서 conda env와 `/usr/lib` native library mixing을 확인한다.
 
 ### stats.json concurrent save guard (2026-06-10)
 
