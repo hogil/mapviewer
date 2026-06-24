@@ -4,6 +4,7 @@ const FORBIDDEN_SNIPPETS = [
   'python3-saml 라이브러리가 설치되지 않았습니다',
   'pip install python3-saml',
   'python-saml3',
+  'lxml & xmlsec libxml2 library version mismatch',
   'full app is still warming up',
 ];
 
