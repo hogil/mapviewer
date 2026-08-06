@@ -1391,8 +1391,12 @@ export class ThumbnailNavigator {
                 newUrl = v._buildMeasureThumbUrl(imagePath, measureItem, cacheSuffix);
                 newUrl = newUrl.replace('size=512', 'size=256');
             } else {
+                const systematic = v?._measureCheckedItems?.find((item) => item.type === 'systematic');
                 const isMeasure = v && (v.isMeasureGradientMode()) && v._ratioActiveItemKey;
-                if (isMeasure) {
+                if (systematic && v._buildMeasureThumbUrl) {
+                    newUrl = v._buildMeasureThumbUrl(imagePath, systematic, cacheSuffix)
+                        .replace('size=512', 'size=256');
+                } else if (isMeasure) {
                     const loginId = v.getCurrentLoginId();
                     const gf = v.selectedGradientRanges?.size > 0
                         ? Array.from(v.selectedGradientRanges).sort((a,b)=>a-b).join(',') : '';
@@ -1458,6 +1462,10 @@ export class ThumbnailNavigator {
             thumbnailUrl = v._buildMeasureThumbUrl(imagePath, measureItem, cacheSuffix);
             // Navigator용 size=256으로 변경
             thumbnailUrl = thumbnailUrl.replace('size=512', 'size=256');
+        } else if (v?._measureCheckedItems?.some((item) => item.type === 'systematic') && v._buildMeasureThumbUrl) {
+            const systematic = v._measureCheckedItems.find((item) => item.type === 'systematic');
+            thumbnailUrl = v._buildMeasureThumbUrl(imagePath, systematic, cacheSuffix)
+                .replace('size=512', 'size=256');
         } else if (v && (v.isMeasureGradientMode()) && v._ratioActiveItemKey) {
             const loginId = v.getCurrentLoginId();
             const gf = v.selectedGradientRanges?.size > 0

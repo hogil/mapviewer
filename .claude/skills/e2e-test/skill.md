@@ -13,6 +13,7 @@ argument-hint: [Phase 번호 또는 범위]
 | 우선순위 | 기능 | 필수 브라우저 증명 |
 |---|---|---|
 | P0 | 단일 이미지 Measure 단일선택, F/Q stale 응답 차단, 캔버스/네비게이터 동기화 | `scripts/e2e_chunk2.js` `measure-single-consistency` |
+| P0 | AAI633/08 SYSTEMATIC 단일보기 raw-map 제거, 본 이미지/오버레이/네비게이터 필터 정합성 | `scripts/e2e_chunk2.js` `systematic-measure-single-lot-wafer` |
 | P1 | 시간 정렬, `H%(PA,TD)` root LOT wildcard, 그리드/단일 네비게이션 순서 | `scripts/e2e_chunk1.js` `sort-lot-filter` |
 | P1 | Composite/Measure fixed 12-BIN SYSTEMATIC grouping and filtered render | `scripts/e2e_chunk1.js` `systematic-bin-group` |
 | P1 | 기존 Measure 다중선택/탭 복귀/썸네일 무결성 | `30,33,34,35,39`, `41,42,45,47,48,56` |
@@ -2753,6 +2754,13 @@ v.loadImagesInFolderAndShowGrid('unknown');
 3. 서로 다른 두 Measure 요청을 빠르게 발생시켜 늦은 첫 응답이 현재 bitmap을 덮어쓰지 않는지 확인
 4. Navigator의 `currentImageIndex`가 `selectedImagePath`의 정규화된 목록 인덱스와 일치하는지 확인
 5. 첫 Measure → 다른 Measure → 원본/초기화 순서에서 흰 화면, 배경만 보이는 화면, 늦은 minimap 갱신이 없는지 확인
+
+#### 33-7b. SYSTEMATIC 단일 이미지 raw-map/네비게이터 정합성
+1. `unknown/CenterDonut/AAI633_00P_08_20260501_010000_99.6_0_PE_PWQ.png`를 단일보기로 연다.
+2. SYSTEMATIC을 적용하고 `285,286,287,288,290,291,300,385,386,388,389,390`만 필터되는지 확인한다.
+3. **핵심 검증**: 본 이미지 `/api/image` 요청과 pyramid cache key에 `bin_overlay=1` 및 동일한 `bottom_filter`가 포함되고, raw-map 요청으로 덮어써지지 않는다.
+4. **핵심 검증**: SYSTEMATIC을 ETC/검정 단일색으로 강제하지 않고 오버레이에 실제 BIN별 색상이 표시된다.
+5. **핵심 검증**: Navigator URL은 `/api/thumbnail`의 동일한 `bin_overlay=1&bottom_filter=...` 표현이며 `/api/bin-map-thumb`가 아니고, 선택 인덱스/색상 픽셀이 본 이미지와 일치한다.
 
 #### 33-8. 초기화 복원
 1. `v._measureCheckedItems = []` → `v._applyMeasureSelection()` → 4초 대기

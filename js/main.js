@@ -6790,12 +6790,18 @@ class WaferMapViewer {
         // 🔥 Measure Composite 결과는 이미 gradient 렌더링된 RGB PNG
         // overlay/filter를 보내면 서버가 palette 조작/재오버레이를 시도하여 깨짐
         const isMeasureCompositeView = this.isCompositeMode && this.compositeSession?.measureMode;
+        const systematicBins = !isMeasureCompositeView && this.overlayMode === 'bin'
+            ? this._getActiveSystematicBinFilter()
+            : null;
 
         // 🔥 BIN overlay / bottom filter / measure overlay — 모두 독립 전송 (동시 사용 가능)
         if (!isMeasureCompositeView && this.overlayMode === 'bin') {
             parts.push('bin_overlay=1');
+            if (systematicBins?.length) {
+                parts.push(`bottom_filter=${encodeURIComponent(systematicBins.join(','))}`);
+            }
         }
-        if (!isMeasureCompositeView && hasBottomFilter) {
+        if (!isMeasureCompositeView && hasBottomFilter && !systematicBins?.length) {
             const bottomList = Array.from(this.selectedBottoms).sort().join(',');
             parts.push(`bottom_filter=${encodeURIComponent(bottomList)}`);
         }
@@ -6826,6 +6832,11 @@ class WaferMapViewer {
         }
 
         return `&${parts.join("&")}`;
+    }
+
+    _getActiveSystematicBinFilter() {
+        const active = this._measureCheckedItems?.some((item) => item.type === 'systematic');
+        return active ? [...SYSTEMATIC_BIN_TYPES] : null;
     }
 
     getPyramidCacheKey(level, params = null) {
@@ -27020,7 +27031,7 @@ class WaferMapViewer {
                 this.chipAnnotator.setOverlayMode('bin', {
                     binColors,
                     binFilter: binTypes,
-                    binFilterColor: type === 'systematic' ? (binColors.get('ETC') || '#C0C0C0') : null,
+                    binFilterColor: null,
                 });
                 this.refreshThumbnailNavigatorWithCurrentParams();
             }
@@ -27262,7 +27273,8 @@ class WaferMapViewer {
             const firstApplicable = this._measureCheckedItems.find(it => it.type !== 'failbit');
             const currentPath = this.selectedImagePath || this.currentImagePath;
             const needsOriginalReload = previousMeasureCanvas ||
-                previousOverlayMode === 'f' || previousOverlayMode === 'q';
+                previousOverlayMode === 'f' || previousOverlayMode === 'q' ||
+                previousOverlayMode === 'bin';
             if (!firstApplicable) {
                 this._invalidateMeasureRender();
                 if (this.chipAnnotator) this.chipAnnotator.setOverlayMode(null);
@@ -27272,7 +27284,7 @@ class WaferMapViewer {
                     });
                 }
             } else if (firstApplicable.type === 'bin' || firstApplicable.type === 'systematic') {
-                if (needsOriginalReload && currentPath) {
+                if ((needsOriginalReload || firstApplicable.type === 'systematic') && currentPath) {
                     this._invalidateMeasureRender();
                     await this.loadImage(currentPath, false, null, true, {
                         preserveBottomSelection: this.selectedBottoms.size > 0,
@@ -27283,9 +27295,7 @@ class WaferMapViewer {
                     this.chipAnnotator.setOverlayMode('bin', {
                         binColors,
                         binFilter: firstApplicable.type === 'systematic' ? firstApplicable.binTypes : null,
-                        binFilterColor: firstApplicable.type === 'systematic'
-                            ? (binColors.get('ETC') || '#C0C0C0')
-                            : null,
+                        binFilterColor: null,
                     });
                 }
             } else if (firstApplicable.type === 'f' || firstApplicable.type === 'q') {
@@ -27327,15 +27337,13 @@ class WaferMapViewer {
             return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${buildBaseParams()}${cacheSuffix}`;
         }
         if (measureItem.type === 'systematic') {
-            const binFilter = Array.isArray(measureItem.binTypes)
-                ? measureItem.binTypes.map(String).join(',')
-                : '';
+            const binFilter = SYSTEMATIC_BIN_TYPES.join(',');
             const scheme = this.personalizedColorEnabled
                 ? this.getActivePersonalizedScheme()
                 : '';
             const schemeParam = scheme ? `&scheme=${encodeURIComponent(scheme)}` : '';
-            const filterParam = binFilter ? `&bin_filter=${encodeURIComponent(binFilter)}` : '';
-            return `/api/bin-map-thumb?path=${encodeURIComponent(imgPath)}&size=512${schemeParam}${filterParam}${cacheSuffix}`;
+            const filterParam = binFilter ? `&bottom_filter=${encodeURIComponent(binFilter)}` : '';
+            return `/api/thumbnail?path=${encodeURIComponent(imgPath)}&size=512${schemeParam}&bin_overlay=1${filterParam}${cacheSuffix}`;
         }
         if (measureItem.type === 'bin') {
             if (this.selectedGrades.size === 0) {
@@ -27698,7 +27706,7 @@ class WaferMapViewer {
             this.chipAnnotator.setOverlayMode('bin', {
                 binColors,
                 binFilter: systematic?.binTypes || null,
-                binFilterColor: systematic ? (binColors.get('ETC') || '#C0C0C0') : null,
+                binFilterColor: null,
             });
         } else if (this.isMeasureGradientMode()) {
             // 🔥 F/Q 데이터 lazy 로드 (칩 텍스트 표시용)

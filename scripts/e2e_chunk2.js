@@ -1547,6 +1547,180 @@ const { createRunner } = require('./e2e_playwright_session');
     return { initial, race: { ...race, delayedMeasureRequests }, singleSelectionGuard };
   });
 
+  await record('systematic-measure-single-lot-wafer', 'AAI633 / wafer 08 SYSTEMATIC Measure 단일보기와 네비게이터', async () => {
+    const expectedBins = [
+      '285', '286', '287', '288', '290', '291',
+      '300', '385', '386', '388', '389', '390',
+    ];
+    const targetFile = 'AAI633_00P_08_20260501_010000_99.6_0_PE_PWQ.png';
+    await boot('chunk2-systematic-measure-single-lot-wafer');
+    await loadFolder('unknown/CenterDonut');
+
+    const target = await page.evaluate(({ targetFile, expectedBins }) => {
+      const v = window.viewer;
+      const index = (v.currentGridImages || []).findIndex((imagePath) =>
+        String(imagePath || '').replace(/\\/g, '/').endsWith(`/CenterDonut/${targetFile}`)
+      );
+      if (index < 0) {
+        return {
+          ok: false,
+          reason: 'target LOT/Wafer fixture missing',
+          gridCount: v.currentGridImages?.length || 0,
+          sample: (v.currentGridImages || []).slice(0, 5),
+        };
+      }
+      const imagePath = v.currentGridImages[index];
+      const item = {
+        type: 'systematic',
+        key: null,
+        label: 'SYSTEMATIC',
+        binTypes: [...expectedBins],
+      };
+      v.gridSelectedIdxs = [index];
+      v.gridSelectedSet = new Set([index]);
+      v.selectedImages = [imagePath];
+      v._measureCheckedItems = [item];
+      return { ok: true, index, imagePath, item };
+    }, { targetFile, expectedBins });
+    expect(target.ok, JSON.stringify(target));
+
+    await page.evaluate(async () => {
+      await window.viewer._applyMeasureSelection();
+    });
+    await page.waitForFunction(
+      ({ imagePath }) => {
+        const v = window.viewer;
+        return !!v &&
+          v.gridMode === false &&
+          v.viewMode === 'gridImage' &&
+          v.selectedImagePath === imagePath &&
+          v.overlayMode === 'bin' &&
+          v.chipAnnotator?.overlayMode === 'bin' &&
+          v.chipAnnotator?.positionsData &&
+          v.chipAnnotator?.binOverlayFilterSet?.size === 12;
+      },
+      { imagePath: target.imagePath },
+      { timeout: 90000 }
+    );
+    await sleep(1500);
+
+    const data = await page.evaluate(({ expectedBins, imagePath }) => {
+      const v = window.viewer;
+      const toRgb = (hex) => {
+        const value = String(hex || '').replace('#', '');
+        if (!/^[0-9a-f]{6}$/i.test(value)) return null;
+        return [
+          Number.parseInt(value.slice(0, 2), 16),
+          Number.parseInt(value.slice(2, 4), 16),
+          Number.parseInt(value.slice(4, 6), 16),
+        ];
+      };
+      const selectedColors = expectedBins
+        .map((bin) => toRgb(v.chipAnnotator?.binOverlayColors?.get(bin)))
+        .filter(Boolean)
+        .map((rgb) => rgb.join(','));
+      const countSelectedPixels = (canvas) => {
+        if (!canvas || canvas.width <= 0 || canvas.height <= 0) return 0;
+        const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+        let count = 0;
+        for (let i = 0; i < pixels.length; i += 4) {
+          if (selectedColors.includes(`${pixels[i]},${pixels[i + 1]},${pixels[i + 2]}`)) count += 1;
+        }
+        return count;
+      };
+      const navImage = document.querySelector('#thumbnail-navigator-list img');
+      let navigatorSelectedPixels = 0;
+      let navigatorAccentPixels = 0;
+      if (navImage?.complete && navImage.naturalWidth > 0) {
+        const canvas = document.createElement('canvas');
+        canvas.width = navImage.naturalWidth;
+        canvas.height = navImage.naturalHeight;
+        const navContext = canvas.getContext('2d');
+        navContext.drawImage(navImage, 0, 0);
+        const navPixels = navContext.getImageData(0, 0, canvas.width, canvas.height).data;
+        navigatorSelectedPixels = countSelectedPixels(canvas);
+        for (let i = 0; i < navPixels.length; i += 4) {
+          const r = navPixels[i];
+          const g = navPixels[i + 1];
+          const b = navPixels[i + 2];
+          const max = Math.max(r, g, b);
+          const min = Math.min(r, g, b);
+          if (max - min >= 90 && max >= 150) navigatorAccentPixels += 1;
+        }
+      }
+      const overlayCanvas = document.getElementById('overlay-canvas');
+      const imageCanvas = document.getElementById('image-canvas');
+      const selectedItem = v._measureCheckedItems?.[0];
+      const navigatorUrl = navImage?.currentSrc || navImage?.src || navImage?.dataset?.src || '';
+      const normalizePath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\/+/, '');
+      const mainFilteredRequest = performance.getEntriesByType('resource').some((entry) => {
+        try {
+          const url = new URL(entry.name, location.href);
+          if (url.pathname !== '/api/image') return false;
+          if (normalizePath(url.searchParams.get('path')) !== normalizePath(imagePath)) return false;
+          if (url.searchParams.get('bin_overlay') !== '1') return false;
+          return url.searchParams.get('bottom_filter') === expectedBins.join(',');
+        } catch (_) {
+          return false;
+        }
+      });
+      return {
+        lot: imagePath.split('/').pop()?.split('_')[0] || '',
+        wafer: imagePath.split('/').pop()?.split('_')[2] || '',
+        path: v.selectedImagePath,
+        gridMode: v.gridMode,
+        viewMode: v.viewMode,
+        overlayMode: v.overlayMode,
+        selectedItem,
+        filterBins: [...(v.chipAnnotator?.binOverlayFilterSet || [])],
+        filterColor: v.chipAnnotator?.binOverlayFilterColor,
+        filteredChipCount: (v.chipAnnotator?.chips || []).filter((chip) =>
+          expectedBins.includes(String(v.chipAnnotator._normalizeSystematicBinValue(chip?.b)))
+        ).length,
+        mainSelectedPixels: countSelectedPixels(imageCanvas),
+        overlaySelectedPixels: countSelectedPixels(overlayCanvas),
+        navigatorSelectedPixels,
+        navigatorAccentPixels,
+        mainFilteredRequest,
+        mainPyramidCacheKey: String(v.currentPyramidCacheKey || ''),
+        navigator: {
+          index: v.thumbnailNavigator?.currentImageIndex ?? -1,
+          expectedIndex: (v.gridViewImageList || []).findIndex((path) => path === imagePath),
+          naturalWidth: navImage?.naturalWidth || 0,
+          naturalHeight: navImage?.naturalHeight || 0,
+          url: navigatorUrl,
+        },
+      };
+    }, { expectedBins, imagePath: target.imagePath });
+
+    expect(data.lot === 'AAI633' && data.wafer === '08', `LOT/Wafer=${data.lot}/${data.wafer}`);
+    expect(data.gridMode === false && data.viewMode === 'gridImage', `single=${JSON.stringify(data)}`);
+    expect(data.overlayMode === 'bin', `overlayMode=${data.overlayMode}`);
+    expect(data.selectedItem?.type === 'systematic' && data.selectedItem?.label === 'SYSTEMATIC', `item=${JSON.stringify(data.selectedItem)}`);
+    expect(JSON.stringify(data.selectedItem?.binTypes) === JSON.stringify(expectedBins), `item bins=${JSON.stringify(data.selectedItem?.binTypes)}`);
+    expect(JSON.stringify(data.filterBins) === JSON.stringify(expectedBins), `filter bins=${JSON.stringify(data.filterBins)}`);
+    expect(data.filterColor == null, `systematic forced color=${data.filterColor}`);
+    expect(data.filteredChipCount >= 3, `filtered chips=${data.filteredChipCount}`);
+    expect(data.mainFilteredRequest, `single main image was not filtered=${JSON.stringify(data)}`);
+    expect(data.mainPyramidCacheKey.includes('bottom_filter='), `single pyramid cache is raw=${JSON.stringify(data)}`);
+    expect(data.overlaySelectedPixels > 0, `single systematic overlay colors=${JSON.stringify(data)}`);
+    expect(data.navigator.index === data.navigator.expectedIndex && data.navigator.index >= 0, `navigator index=${JSON.stringify(data.navigator)}`);
+    expect(data.navigator.naturalWidth > 0 && data.navigator.naturalHeight > 0, `navigator image=${JSON.stringify(data.navigator)}`);
+    expect(data.navigator.url.includes('/api/thumbnail?') && data.navigator.url.includes('bin_overlay=1') && data.navigator.url.includes('bottom_filter='), `navigator url=${data.navigator.url}`);
+    expect(!data.navigator.url.includes('/api/bin-map-thumb'), `navigator should use filtered thumbnail=${data.navigator.url}`);
+    expect(data.navigatorAccentPixels > 0, `navigator systematic colors=${JSON.stringify(data)}`);
+
+    await page.evaluate(() => {
+      const v = window.viewer;
+      v._measureCheckedItems = [];
+      v.overlayMode = null;
+      v._ratioActiveItemKey = null;
+      v._gridMeasureMap = null;
+      v.chipAnnotator?.setOverlayMode(null);
+    });
+    return data;
+  });
+
   await record('36,37,38,40', '성능 / 이미지 무결성 / 인덱스', async () => {
     await boot('chunk2-perf');
     const t0 = Date.now();

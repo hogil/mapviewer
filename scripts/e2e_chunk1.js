@@ -2010,8 +2010,9 @@ const { createRunner } = require('./e2e_playwright_session');
       `Measure bins=${JSON.stringify(data.measureEntry)}`
     );
     expect(
-      data.systematicUrl.includes('/api/bin-map-thumb?') &&
-        data.systematicUrl.includes(`bin_filter=${encodeURIComponent(data.expectedSystematicBins.join(','))}`),
+      data.systematicUrl.includes('/api/thumbnail?') &&
+        data.systematicUrl.includes('bin_overlay=1') &&
+        data.systematicUrl.includes(`bottom_filter=${encodeURIComponent(data.expectedSystematicBins.join(','))}`),
       `systematic thumbnail URL=${data.systematicUrl}`
     );
     expect(data.apiStatus === 200, `systematic API status=${data.apiStatus}`);
