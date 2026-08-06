@@ -4057,6 +4057,13 @@ def _classify_chip_bottom_value(raw_value: Any) -> str:
     return "Normal"
 
 
+def _normalize_systematic_bin_value(raw_value: Any) -> str:
+    """Systematic BIN 비교용 정규화. 표준 BIN 목록 밖의 숫자도 보존한다."""
+    if raw_value is None or not str(raw_value).strip():
+        return "Normal"
+    return _normalize_bottom_filter_key_local(raw_value) or "Normal"
+
+
 def _scaled_chip_rect(
     chip: Dict[str, Any],
     scale_x: float,
@@ -7311,7 +7318,12 @@ async def get_image(
 # ── BIN MAP 경량 썸네일 (positions JSON만 사용, 이미지 로드 없음) ──────────
 _bin_map_thumb_cache: Dict[str, bytes] = {}
 
-def _generate_bin_map_thumb(image_path: Path, size: int, scheme: Optional[str] = None) -> Optional[bytes]:
+def _generate_bin_map_thumb(
+    image_path: Path,
+    size: int,
+    scheme: Optional[str] = None,
+    bin_filter: Optional[str] = None,
+) -> Optional[bytes]:
     """positions JSON에서 chip BIN 값을 읽어 순수 색상 맵 이미지를 생성한다.
     원본 이미지를 로드하지 않으므로 매우 빠르다."""
     import numpy as np
@@ -7324,6 +7336,7 @@ def _generate_bin_map_thumb(image_path: Path, size: int, scheme: Optional[str] =
     chips = positions_data.get("chips", [])
     if not isinstance(chips, list) or not chips:
         return None
+    selected_bins = set(_parse_bottom_filter_values(bin_filter)) if bin_filter else None
 
     coord = positions_data.get("coord", {})
     canvas = coord.get("canvas", {}) if isinstance(coord, dict) else {}
@@ -7368,7 +7381,9 @@ def _generate_bin_map_thumb(image_path: Path, size: int, scheme: Optional[str] =
     for chip in chips:
         if not isinstance(chip, dict):
             continue
-        b_val = _classify_chip_bottom_value(chip.get("b"))
+        b_val = _normalize_systematic_bin_value(chip.get("b"))
+        if selected_bins is not None and b_val not in selected_bins:
+            continue
         # BIN 값을 color key로 변환
         if b_val == "Normal":
             color_key = "Normal"
@@ -7376,7 +7391,7 @@ def _generate_bin_map_thumb(image_path: Path, size: int, scheme: Optional[str] =
             color_key = "Invalid"
         else:
             color_key = f"B{b_val}"
-        rgb = bin_color_map.get(color_key)
+        rgb = bin_color_map.get(color_key) or bin_color_map.get("ETC")
         if rgb is None:
             continue
 
@@ -7413,10 +7428,11 @@ async def get_bin_map_thumb(
     path: str = Query(...),
     size: int = Query(256),
     scheme: Optional[str] = Query(None),
+    bin_filter: Optional[str] = Query(None),
 ):
     """BIN 맵 경량 썸네일 — positions JSON만 읽어 색상 맵 생성 (이미지 로드 없음)."""
     image_path = Path(path) if Path(path).is_absolute() else ROOT_DIR / path
-    cache_key = f"{image_path}:{size}:{scheme or ''}"
+    cache_key = f"{image_path}:{size}:{scheme or ''}:{_normalize_filter_value(bin_filter)}"
 
     cached = _bin_map_thumb_cache.get(cache_key)
     if cached:
@@ -7427,7 +7443,7 @@ async def get_bin_map_thumb(
         )
 
     result = await asyncio.get_event_loop().run_in_executor(
-        THUMBNAIL_EXECUTOR, _generate_bin_map_thumb, image_path, size, scheme,
+        THUMBNAIL_EXECUTOR, _generate_bin_map_thumb, image_path, size, scheme, bin_filter,
     )
     if result is None:
         raise HTTPException(status_code=404, detail="BIN map generation failed")
@@ -10757,7 +10773,7 @@ async def get_composite_map_status(task_id: str):
 
 class MeasureCompositeRequest(BaseModel):
     image_paths: List[str]
-    mode: str                                           # 'bin' | 'f' | 'q'
+    mode: str                                           # 'bin' | 'systematic' | 'f' | 'q'
     item_key: Optional[str] = None                      # FBT/QVL item key (e.g., "2342")
     bin_types: Optional[List[str]] = None               # BIN mode: ["285", "286", ...]
     aggregation: str = "average"                        # 'count' | 'sum' | 'average'
@@ -10883,8 +10899,11 @@ async def create_measure_composite_endpoint(
     if not image_paths:
         raise HTTPException(status_code=400, detail="image_paths가 필요합니다.")
 
-    if payload.mode not in ("bin", "f", "q"):
-        raise HTTPException(status_code=400, detail="mode는 'bin', 'f', 'q' 중 하나여야 합니다.")
+    if payload.mode not in ("bin", "systematic", "f", "q"):
+        raise HTTPException(status_code=400, detail="mode는 'bin', 'systematic', 'f', 'q' 중 하나여야 합니다.")
+
+    if payload.mode == "systematic" and not payload.bin_types:
+        raise HTTPException(status_code=400, detail="Systematic 모드에서는 bin_types가 필요합니다.")
 
     if payload.mode in ("f", "q") and not payload.item_key:
         raise HTTPException(status_code=400, detail="FBT/QVL 모드에서는 item_key가 필요합니다.")

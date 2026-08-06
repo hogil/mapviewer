@@ -6,7 +6,29 @@ argument-hint: [Phase 번호 또는 범위]
 
 # L3 Tracker E2E 기능 점검
 
+## 기능 우선순위와 반복 실행 순서
+
+이번 회귀군은 테스트 수보다 사용자 장애 영향으로 우선순위를 고정한다. P0가 실패하면 P1/P2 결과와 무관하게 원인 분석 후 해당 P0를 다시 통과시킨다.
+
+| 우선순위 | 기능 | 필수 브라우저 증명 |
+|---|---|---|
+| P0 | 단일 이미지 Measure 단일선택, F/Q stale 응답 차단, 캔버스/네비게이터 동기화 | `scripts/e2e_chunk2.js` `measure-single-consistency` |
+| P1 | 시간 정렬, `H%(PA,TD)` root LOT wildcard, 그리드/단일 네비게이션 순서 | `scripts/e2e_chunk1.js` `sort-lot-filter` |
+| P1 | Composite/Measure SYSTEMATIC numeric BIN grouping and filtered render | `scripts/e2e_chunk1.js` `systematic-bin-group` |
+| P1 | 기존 Measure 다중선택/탭 복귀/썸네일 무결성 | `30,33,34,35,39`, `41,42,45,47,48,56` |
+| P2 | 전체 63개 Phase와 성능/프로세스 정리 | `run-e2e-playwright.ps1 -Chunk all` |
+
+각 P0/P1 수정 사이클은 코드 정적 검사 → 새 Playwright 세션의 해당 chunk → 실패 로그 원인 수정 → 같은 chunk 재실행 순서로 반복한다. 상태 플래그만 확인하지 말고 실제 bitmap/canvas, visible thumbnail, navigator index를 함께 확인한다.
+
 기본은 로컬 Playwright runner(`scripts/run-e2e-playwright.ps1`)로 L3 Tracker의 모든 주요 기능을 자동 테스트합니다. MCP 브라우저는 최종 E2E 증명 경로가 아니며, 사용자가 명시적으로 MCP를 요구한 경우의 보조 디버깅에만 사용합니다.
+
+## E2E 역할 구성과 실행 게이트
+
+- **Master gate**: 현재 Codex 세션이 변경 범위, P0/P1 우선순위, 전체 summary, 실패 원인과 재실행 여부를 최종 판정한다.
+- **저비용 worker lanes**: 정적 문법/공백 검사, API 계약 검사, P0 Measure 브라우저 검사, P1 Composite/Measure/BIN 브라우저 검사, 전체 chunk 성능·프로세스 로그 검사를 독립 작업으로 나눈다.
+- 이 실행 환경에는 별도 LLM sub-agent를 호출하는 도구가 노출되어 있지 않다. 따라서 위 worker는 모델을 가장한 프로세스가 아니라 `node --check`, 서버 API 계약, Playwright chunk, PowerShell runner로 실제 실행한다. 별도 sub-agent provider가 연결된 환경에서는 Master가 각 lane에 저비용 모델을 배정하되, PASS/FAIL 판정과 재실행은 Master가 단독으로 맡는다.
+- 순서는 `static -> P0/P1 targeted chunk -> failure triage -> same chunk rerun -> Chunk all`이다. targeted guard가 실패한 상태로 전체 E2E를 PASS 처리하지 않는다.
+- `systematic-bin-group`는 Composite와 Measure 각각의 `binTypes` 배열, 단일/그리드 filtered render URL, 실제 `mode=systematic` API 응답과 matched chip 수를 함께 확인한다.
 
 ## 절대규칙 #-5: 장시간 E2E는 중간 보고 필수
 
@@ -571,7 +593,7 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 (인덱스: 0=LOT, 1=step, 2=wafer, 3=date, 4=time, 5=yield, 6=sys)
 
 1. `v.loadImagesInFolderAndShowGrid('unknown')` → 12개 이미지 로드 확인
-2. **정렬 드롭다운 존재 확인**: `#grid-sort-select` 요소 존재, 7개 옵션 (파일명, LOT↑↓, Yield↑↓, Sys↑↓)
+2. **정렬 드롭다운 존재 확인**: `#grid-sort-select` 요소 존재, 9개 옵션 (파일명, LOT↑↓, 시간↑↓, Yield↑↓, Sys↑↓)
 3. **파일명 정렬** (기본값): 첫 이미지 파일명이 자연 정렬 순서 확인
 4. **LOT ↑ (오름차순)**:
    - `#grid-sort-select` 값을 `lot_asc`로 변경 → change 이벤트 발생
@@ -585,12 +607,16 @@ positions 파일은 `{POSITIONS_ROOT}/{폴더}/{이미지stem}.json`에 위치�
 7. **Yield ↓ (내림차순)**:
    - `yield_desc` 선택 → 첫 번째 = 최대 Yield (99.1)
    - `v._getFilenameParts(v.currentGridImages[0])[5]` === "99.1"
-8. **Sys ↑ (오름차순)**:
+8. **time ↑ (오름차순)**:
+   - `time_asc` 선택 → `_` index 3+4 (`YYYYMMDD_HHMMSS`)가 가장 이른 항목부터 표시
+9. **time ↓ (내림차순)**:
+   - `time_desc` 선택 → `_` index 3+4가 가장 늦은 항목부터 표시
+10. **Sys ↑ (오름차순)**:
    - `sys_asc` 선택 → 첫 번째 = 최소 Sys (0.5)
-9. **Sys ↓ (내림차순)**:
+11. **Sys ↓ (내림차순)**:
    - `sys_desc` 선택 → 첫 번째 = 최대 Sys (22.1)
-10. **파일명 복원**: `filename` 선택 → 원래 자연 정렬 순서 복원
-11. 각 정렬 변경 시 그리드가 즉시 리렌더되고 이미지가 정상 표시되는지 확인
+12. **파일명 복원**: `filename` 선택 → 원래 자연 정렬 순서 복원
+13. 각 정렬 변경 시 그리드가 즉시 리렌더되고 이미지가 정상 표시되는지 확인
 
 #### 2-8. LOT Mode + 정렬 연동
 LOT Mode 활성 상태에서 정렬 변경 시 LOT 그룹핑이 유지되고 그룹 내부 순서만 바뀌는지 확인.
@@ -609,7 +635,7 @@ LOT Mode 활성 상태에서 정렬 변경 시 LOT 그룹핑이 유지되고 그
 7. LOT Mode OFF → 정렬 상태 유지 확인 (flat 그리드에서도 동일 순서)
 8. LOT Mode ON → 다시 그룹핑 + 정렬 유지
 
-**pass 기준**: 7개 정렬 옵션 모두 LOT 그룹핑 유지, 그룹 내 정렬 정확, 모드 전환 시 정렬 유지
+**pass 기준**: 9개 정렬 옵션 모두 LOT 그룹핑 유지, 그룹 내 정렬 정확, 모드 전환 시 정렬 유지
 
 ---
 
@@ -680,6 +706,13 @@ LOT Mode 활성 상태에서 정렬 변경 시 LOT 그룹핑이 유지되고 그
 2. 필터 해제 시 `filter-active` 클래스 제거 → 원래 색
 3. Reset 버튼도 필터 활성 시 파란색, 전부 해제 시 원래 색
 4. 드롭다운 패널 상단에 항상 "0개 선택중" 배지를 먼저 렌더링하고 선택 시 "N개 선택중"으로 갱신
+
+##### 3-2-8. `H%(PA,TD)` root LOT wildcard
+1. LOT 드롭다운 Wildcard에 `H%(PA,TD)` 항목이 존재하는지 확인
+2. `v.filterLT = ['H%(PA,TD)']`로 설정하고 `_passesLtTmFilter()`를 실제 파일명 형식으로 호출
+3. root LOT 길이 8, index 6이 `H`, index 7이 숫자인 파일만 통과해야 한다.
+4. 길이 7/9, index 6이 H가 아님, index 7이 숫자가 아님인 파일은 숨겨져야 한다.
+5. 현재 규칙에서는 괄호의 `PA,TD`는 표시명이며 LT 메타데이터 AND 조건으로 사용하지 않는다. 조건이 바뀌면 이 E2E와 필터 판정을 함께 수정한다.
 
 **검증 단계** (LOT과 TEST 둘 다 해야 함):
 1. LOT 단독 (EE → PT → PE → E% 와일드카드) + TEST 단독 (NORMAL → ENGINEER)
@@ -2707,12 +2740,19 @@ v.loadImagesInFolderAndShowGrid('unknown');
 2. **핵심 검증**: Navigator 썸네일 URL에 `/api/measure-thumb` 포함
 3. **핵심 검증**: Navigator 썸네일이 measure heatmap으로 표시 (원본 아님)
 
-#### 33-7. 단일 이미지 모드에서 다중 선택 → 그리드 전환
-1. 33-5 상태(단일 이미지)에서 Failbit + BIN + FBT0069 3개 적용
-2. `v._applyMeasureSelection()` → 5초 대기
-3. **핵심 검증**: `v.gridMode === true` (그리드 모드 전환)
-4. **핵심 검증**: `v.overlayMode === 'multi'`
-5. **핵심 검증**: 그리드 이미지 정상 로드
+#### 33-7. 단일 이미지 모드의 다중 상태 차단
+1. 33-5 상태(단일 이미지)에서 레거시처럼 `v._measureCheckedItems`에 2개 이상을 주입
+2. `v._applyMeasureSelection()` 실행
+3. **핵심 검증**: `v.gridMode === false` (단일 이미지를 그리드로 강제 전환하지 않음)
+4. **핵심 검증**: `v._measureCheckedItems.length === 1`
+5. Measure 패널을 다시 열어 체크된 Measure가 1개이고 다른 항목 선택 시 기존 항목이 해제되는지 확인
+
+#### 33-7a. 단일 이미지 Measure stale 응답/bitmap/navigator
+1. 실제 unknown 이미지 1장을 단일 보기로 진입하고 FBT 또는 QVL을 적용
+2. `v._measureOverlayRendered === true`, `currentImageBitmap`의 크기와 pixel sample을 확인
+3. 서로 다른 두 Measure 요청을 빠르게 발생시켜 늦은 첫 응답이 현재 bitmap을 덮어쓰지 않는지 확인
+4. Navigator의 `currentImageIndex`가 `selectedImagePath`의 정규화된 목록 인덱스와 일치하는지 확인
+5. 첫 Measure → 다른 Measure → 원본/초기화 순서에서 흰 화면, 배경만 보이는 화면, 늦은 minimap 갱신이 없는지 확인
 
 #### 33-8. 초기화 복원
 1. `v._measureCheckedItems = []` → `v._applyMeasureSelection()` → 4초 대기
@@ -3045,7 +3085,7 @@ v.loadImagesInFolderAndShowGrid('unknown');
 | Phase | 항목 | 결과 | 비고 |
 |-------|------|------|------|
 | 1 | 페이지 로드 & 기본 UI | pass/fail | |
-| 2 | 폴더 & 그리드 + 스크롤 성능 + 정렬 | pass/fail | 로드 시간, 로드율, 7개 정렬 검증 |
+| 2 | 폴더 & 그리드 + 스크롤 성능 + 정렬 | pass/fail | 로드 시간, 로드율, 9개 정렬 검증 |
 | 3 | 제품 검색 & 필터 + 대소문자/폴더보존 | pass/fail | 대소문자 무시, 폴더 상태 보존 |
 | 4 | 색상 편집 | pass/fail | |
 | 5 | 상단 컬러 범례 (Grade/BIN/Gradient) — 퍼센트/칩수/클릭 | pass/fail | 스크린샷 첨부 |
@@ -6416,8 +6456,8 @@ return {
 
 #### BUG-22: unknown archive 폴더가 전역 검색 결과에 섞이는 회귀 (2026-05-09)
 **증상**: 전체 E2E가 `WARMUP search cache`에서 멈추거나, Phase `3v unknown 실제 파일명 기반 text 검색`이 `unknown_pre_v5_260507/...` 또는 `unknown_multi/...` 같은 archive/generated 경로를 `outsideUnknown`으로 보고 FAIL.
-**원인**: `scripts/run-e2e-playwright.ps1`의 검색 warmup LOT 목록이 현재 전역 검색에서 제외되는 파생 폴더에만 남은 샘플을 사용했고, `SearchService.global_only_excluded_folders`가 `unknown_pre*`, `unknown_Normal_pre*` archive 스냅샷과 `unknown_multi` generated fixture를 루트 전역 검색에서 제외하지 않음.
-**수정**: warmup LOT 목록 앞에 현재 검색 가능한 `unknown`/실데이터 LOT를 추가하고, `api/search_service.py`에서 archive/generated unknown 스냅샷을 global-only exclusion에 추가한다. 명시적 `folder=unknown_pre_v5_260507` 검색은 계속 허용한다.
+**원인**: `scripts/run-e2e-playwright.ps1`의 검색 warmup LOT 목록이 현재 전역 검색에서 제외되는 파생 폴더에만 남은 샘플을 사용했고, `SearchService.global_only_excluded_folders`가 `unknown_pre*`, `unknown_Normal_pre*`, `unknown_384`, `unknown_448` archive/generated 스냅샷을 루트 전역 검색에서 제외하지 않음.
+**수정**: warmup LOT 목록 앞에 현재 검색 가능한 `unknown`/실데이터 LOT를 추가하고, `api/search_service.py`에서 archive/generated unknown 스냅샷을 global-only exclusion에 추가한다. 명시적 `folder=unknown_pre_v5_260507`, `folder=unknown_384`, `folder=unknown_448` 검색은 계속 허용한다.
 **평가**: runner 로그에 `SEARCH_READY ... total>=1`이 찍혀야 하며, Phase `3v`의 global text/LOT/WF 검색에서 `outsideUnknown=[]`이어야 한다.
 **파일**: `api/search_service.py`, `scripts/run-e2e-playwright.ps1`
 

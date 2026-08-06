@@ -867,23 +867,59 @@ const { createRunner } = require('./e2e_playwright_session');
     });
 
     await loadFolder('unknown');
-    const searchCtrlASampleLot = await page.evaluate(() => {
+    const searchCtrlAQueryCandidates = await page.evaluate(() => {
       const v = window.viewer;
       const counts = new Map();
       for (const imagePath of v.currentGridImages || []) {
         if (!String(imagePath || '').startsWith('unknown/')) continue;
-        const lot = v.extractLotTokensFromPath(imagePath)?.lotValue || '';
-        if (!lot) continue;
-        counts.set(lot, (counts.get(lot) || 0) + 1);
+        const filename = String(imagePath || '').replace(/\\/g, '/').split('/').pop() || '';
+        const tokens = filename.replace(/\.[^.]+$/, '').split('_').filter(Boolean);
+        for (const token of tokens) {
+          if (token.length < 3) continue;
+          counts.set(token, (counts.get(token) || 0) + 1);
+        }
       }
-      for (const [lot, count] of counts.entries()) {
-        if (count >= 5) return lot;
-      }
-      return counts.keys().next().value || '';
+      const candidates = [...counts.entries()]
+        .filter(([, count]) => count >= 5)
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+      const preferred = ['20260501', '010000'];
+      return [...new Set([
+        ...preferred.filter((token) => counts.has(token)),
+        ...candidates.map(([token]) => token),
+        ...counts.keys(),
+      ])].slice(0, 30);
     });
-    expect(searchCtrlASampleLot, 'search Ctrl+A sample LOT missing');
-    await page.fill('#file-search', searchCtrlASampleLot);
-    await page.keyboard.press('Enter');
+    expect(searchCtrlAQueryCandidates.length > 0, 'search Ctrl+A sample query missing');
+    let searchCtrlASampleQuery = '';
+    let searchCtrlASampleCount = 0;
+    for (const query of searchCtrlAQueryCandidates) {
+      await page.fill('#file-search', query);
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(
+        () => {
+          const message = (document.getElementById('image-grid')?.textContent || '').trim();
+          return (
+            document.activeElement?.id !== 'file-search' &&
+            ((window.viewer?.currentGridImages?.length || 0) > 0 || message.includes('검색 결과가 없습니다'))
+          );
+        },
+        null,
+        { timeout: 15000 }
+      ).catch(() => {});
+      const candidateState = await page.evaluate(() => ({
+        count: window.viewer?.currentGridImages?.length || 0,
+        wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+      }));
+      if (candidateState.count >= 5 && candidateState.wraps >= 5) {
+        searchCtrlASampleQuery = query;
+        searchCtrlASampleCount = candidateState.count;
+        break;
+      }
+    }
+    expect(
+      searchCtrlASampleQuery && searchCtrlASampleCount >= 5,
+      `search Ctrl+A query candidates produced fewer than 5 results: ${JSON.stringify({ searchCtrlAQueryCandidates, searchCtrlASampleQuery, searchCtrlASampleCount })}`
+    );
     await page.waitForFunction(
       () => (
         !!window.viewer &&
@@ -1329,16 +1365,223 @@ const { createRunner } = require('./e2e_playwright_session');
     return data;
   });
 
+  await record('measure-single-consistency', '단일 Measure 단일선택 / stale render / 네비게이터 동기화', async () => {
+    await boot('chunk2-measure-single');
+    await loadFolder('unknown');
+    const measureSelection = await findCommonMeasureSelection('f', 1, 24);
+    await setSelection([measureSelection.indices[0]]);
+    await page.evaluate(async (payload) => {
+      const v = window.viewer;
+      v._measureCheckedItems = [payload.item];
+      await v._applyMeasureSelection();
+    }, measureSelection);
+    await page.waitForFunction(
+      () => {
+        const v = window.viewer;
+        return v.gridMode === false &&
+          (v.viewMode === 'single' || v.viewMode === 'gridImage') &&
+          v._measureOverlayRendered === true &&
+          !!v.currentImageBitmap;
+      },
+      null,
+      { timeout: 90000 }
+    );
+
+    const initial = await page.evaluate(async () => {
+      const v = window.viewer;
+      const bitmap = v.currentImageBitmap;
+      const sampleCanvas = document.createElement('canvas');
+      sampleCanvas.width = 64;
+      sampleCanvas.height = 64;
+      const ctx = sampleCanvas.getContext('2d');
+      ctx.drawImage(bitmap, 0, 0, 64, 64);
+      const pixels = ctx.getImageData(0, 0, 64, 64).data;
+      const colors = new Set();
+      for (let i = 0; i < pixels.length; i += 16) {
+        colors.add(`${pixels[i]},${pixels[i + 1]},${pixels[i + 2]}`);
+      }
+      const nav = v.thumbnailNavigator;
+      const currentPath = v.selectedImagePath || v.currentImagePath || '';
+      const normalized = v.normalizePath(currentPath);
+      const expectedIndex = (v.gridViewImageList || []).findIndex((path) => {
+        const candidate = v.normalizePath(path);
+        return candidate === normalized || candidate.endsWith(`/${normalized}`) || normalized.endsWith(`/${candidate}`);
+      });
+      const positions = await fetch(
+        `/api/chip-positions?path=${encodeURIComponent(currentPath)}&include_fq=1`,
+        { cache: 'no-store' }
+      ).then((response) => response.ok ? response.json() : null);
+      const fKeys = (positions?.ftn_keys || []).map(String);
+      const qKeys = (positions?.qtn_keys || []).map(String);
+      const field = fKeys.length >= 2 ? 'f' : 'q';
+      const keys = field === 'f' ? fKeys.slice(0, 2) : qKeys.slice(0, 2);
+      return {
+        path: currentPath,
+        gridMode: v.gridMode,
+        viewMode: v.viewMode,
+        measureItems: v._measureCheckedItems.length,
+        overlayMode: v.overlayMode,
+        measureOverlayRendered: v._measureOverlayRendered,
+        bitmapSize: { width: bitmap.width, height: bitmap.height },
+        uniqueSampleColors: colors.size,
+        navigatorIndex: nav?.currentImageIndex ?? -1,
+        expectedNavigatorIndex: expectedIndex,
+        field,
+        keys,
+      };
+    });
+    expect(initial.gridMode === false, `single gridMode=${initial.gridMode}`);
+    expect(initial.measureItems === 1, `single measureItems=${initial.measureItems}`);
+    expect(initial.measureOverlayRendered === true, `measure overlay=${initial.measureOverlayRendered}`);
+    expect(initial.bitmapSize.width > 0 && initial.bitmapSize.height > 0, `bitmap=${JSON.stringify(initial.bitmapSize)}`);
+    expect(initial.uniqueSampleColors > 2, `measure bitmap looks flat/white colors=${initial.uniqueSampleColors}`);
+    expect(
+      initial.navigatorIndex === initial.expectedNavigatorIndex && initial.navigatorIndex >= 0,
+      `navigator=${JSON.stringify({ current: initial.navigatorIndex, expected: initial.expectedNavigatorIndex })}`
+    );
+    expect(initial.keys.length >= 2, `same-image measure keys=${JSON.stringify(initial)}`);
+
+    let delayedMeasureRequests = 0;
+    const measureRoute = '**/api/measure-composite-data';
+    await page.route(measureRoute, async (route) => {
+      delayedMeasureRequests += 1;
+      await sleep(delayedMeasureRequests === 1 ? 450 : 10);
+      try {
+        await route.continue();
+      } catch {
+        // The first request may already be stale; the browser abort is the expected path.
+      }
+    });
+    let race;
+    try {
+      race = await page.evaluate(async ({ field, keys }) => {
+        const v = window.viewer;
+        const apply = (key) => {
+          v._measureCheckedItems = [{ type: field, key, label: `${field}${key}` }];
+          v.overlayMode = field;
+          v._ratioActiveItemKey = key;
+          return v._applyMeasureSelection();
+        };
+        const first = apply(keys[0]);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        const second = apply(keys[1]);
+        await Promise.allSettled([first, second]);
+        return {
+          activeKey: v._ratioActiveItemKey,
+          checkedItems: v._measureCheckedItems.length,
+          overlayMode: v.overlayMode,
+          measureOverlayRendered: v._measureOverlayRendered,
+        };
+      }, initial);
+    } finally {
+      await page.unroute(measureRoute);
+    }
+    expect(race.activeKey === initial.keys[1], `stale measure won=${JSON.stringify(race)}`);
+    expect(race.checkedItems === 1 && race.measureOverlayRendered === true, `race state=${JSON.stringify(race)}`);
+
+    const singleSelectionGuard = await page.evaluate(({ field, keys }) => {
+      const v = window.viewer;
+      const panel = document.getElementById('failbit-panel-filename');
+      const list = panel?.querySelector('.failbit-list');
+      const measureKeys = field === 'f' ? { f: keys, q: [], bin: [] } : { f: [], q: keys, bin: [] };
+      if (!list) return { ok: false, reason: 'measure list missing' };
+      v._measureCheckedItems = keys.map((key) => ({ type: field, key, label: `${field}${key}` }));
+      v._renderMcList(list, measureKeys, { mode: 'measure' });
+      const inputs = Array.from(panel.querySelectorAll('input[type="checkbox"]'))
+        .filter((input) => input._measureEntry?.type === field);
+      if (inputs.length < 2) {
+        return {
+          ok: false,
+          reason: `measure input count=${inputs.length}`,
+          field,
+          keys,
+          labels: Array.from(panel.querySelectorAll('input[type="checkbox"]')).map((input) => ({
+            type: input._measureEntry?.type || null,
+            key: input._measureEntry?.key || null,
+            label: input.closest('.failbit-item')?.textContent?.trim() || '',
+          })),
+        };
+      }
+      const initiallyChecked = inputs.filter((input) => input.checked);
+      if (initiallyChecked.length !== 1 || v._measureCheckedItems.length !== 1) {
+        return {
+          ok: false,
+          reason: 'single view render restored multiple Measure items',
+          initiallyChecked: initiallyChecked.length,
+          measureItems: v._measureCheckedItems.map((item) => `${item.type}:${item.key}`),
+        };
+      }
+      const nextInput = inputs.find((input) => !input.checked);
+      if (initiallyChecked.length > 0 && nextInput) {
+        // 기존 선택을 유지한 채 새 항목을 선택해야 pinned 영역의 중복 체크를 검출할 수 있다.
+        nextInput.click();
+      } else {
+        inputs[0].click();
+        inputs[1].click();
+      }
+      const checkedInputs = inputs.filter((input) => input.checked).length;
+      const checkedItems = v._measureCheckedItems.map((item) => `${item.type}:${item.key}`);
+      v._closeFailbitPanels?.();
+      return {
+        ok: true,
+        checkedInputs,
+        checkedItems,
+        measureItems: v._measureCheckedItems.length,
+        gridMode: v.gridMode,
+      };
+    }, initial);
+    expect(singleSelectionGuard.ok === true, JSON.stringify(singleSelectionGuard));
+    expect(
+      singleSelectionGuard.checkedInputs === 1 &&
+        singleSelectionGuard.measureItems === 1 &&
+        singleSelectionGuard.gridMode === false,
+      `single selection guard=${JSON.stringify(singleSelectionGuard)}`
+    );
+
+    await page.evaluate(({ field, key }) => {
+      const v = window.viewer;
+      v._measureCheckedItems = [{ type: field, key, label: `${field}${key}` }];
+      v.overlayMode = field;
+      v._ratioActiveItemKey = key;
+    }, { field: initial.field, key: initial.keys[1] });
+    return { initial, race: { ...race, delayedMeasureRequests }, singleSelectionGuard };
+  });
+
   await record('36,37,38,40', '성능 / 이미지 무결성 / 인덱스', async () => {
     await boot('chunk2-perf');
     const t0 = Date.now();
     await loadFolder('unknown');
     const loadMs = Date.now() - t0;
     const data = await page.evaluate(async () => {
-      const imgs = Array.from(document.querySelectorAll('#image-grid img')).slice(0, 40);
+      const wrapper = document.querySelector('.grid-scroll-wrapper');
+      const wrapperRect = wrapper?.getBoundingClientRect();
+      const imgs = Array.from(document.querySelectorAll('#image-grid img'))
+        .filter((img) => {
+          const rect = img.getBoundingClientRect();
+          const style = getComputedStyle(img);
+          const viewport = wrapperRect || {
+            top: 0,
+            right: window.innerWidth,
+            bottom: window.innerHeight,
+            left: 0,
+          };
+          return (
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            rect.width > 0 &&
+            rect.height > 0 &&
+            rect.bottom > viewport.top &&
+            rect.top < viewport.bottom &&
+            rect.right > viewport.left &&
+            rect.left < viewport.right
+          );
+        })
+        .slice(0, 40);
       const status = await fetch('/api/index-status', { cache: 'no-store' }).then((r) => r.json());
       return {
         broken: imgs.filter((img) => !img.complete || img.naturalWidth === 0).length,
+        visibleImages: imgs.length,
+        loadedVisible: imgs.filter((img) => img.complete && img.naturalWidth > 0).length,
         count: window.viewer.currentGridImages.length,
         wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
         status,

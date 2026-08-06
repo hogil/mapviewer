@@ -1816,6 +1816,177 @@ const { createRunner } = require('./e2e_playwright_session');
     return data;
   });
 
+  await record('sort-lot-filter', '시간 정렬 / H%(PA,TD) LOT wildcard', async () => {
+    await boot('chunk1-sort-lot-filter');
+    const data = await page.evaluate(() => {
+      const v = window.viewer;
+      const sample = [
+        'LOTA_STEP_W01_20260103_090000_80.0_1.0.png',
+        'LOTA_STEP_W01_20260102_235959_80.0_1.0.png',
+        'LOTA_STEP_W01_20260102_000001_80.0_1.0.png',
+      ];
+      const names = (items) => items.map((item) => v.getFilenameOnly(item));
+      const timeAsc = names(v._sortGridImages(sample, 'time_asc'));
+      const timeDesc = names(v._sortGridImages(sample, 'time_desc'));
+      const sortOptions = Array.from(document.querySelectorAll('#grid-sort-select option'))
+        .map((option) => option.value);
+
+      const previousFilterLt = v.filterLT;
+      const previousFilterTm = v.filterTM;
+      const previousMetadata = v.filterFileMetadata;
+      v.filterLT = ['H%(PA,TD)'];
+      v.filterTM = [];
+      v.filterFileMetadata = {};
+      const wildcard = {
+        valid: v._passesLtTmFilter('ABCDEFH1_STEP_W01_20260102_000001_PA_NORMAL.png'),
+        wrongLength: v._passesLtTmFilter('ABCDEH1_STEP_W01_20260102_000001_PA_NORMAL.png'),
+        wrongPosition: v._passesLtTmFilter('ABCDEF81_STEP_W01_20260102_000001_PA_NORMAL.png'),
+        nonNumericSuffix: v._passesLtTmFilter('ABCDEFHX_STEP_W01_20260102_000001_PA_NORMAL.png'),
+      };
+      v.filterLT = previousFilterLt;
+      v.filterTM = previousFilterTm;
+      v.filterFileMetadata = previousMetadata;
+
+      return { sortOptions, timeAsc, timeDesc, wildcard };
+    });
+    expect(data.sortOptions.length === 9, `sort option count=${data.sortOptions.length}`);
+    expect(
+      data.sortOptions.includes('time_asc') && data.sortOptions.includes('time_desc'),
+      `time options missing=${JSON.stringify(data.sortOptions)}`
+    );
+    expect(
+      data.timeAsc[0].includes('20260102_000001') && data.timeAsc[2].includes('20260103_090000'),
+      `time asc=${JSON.stringify(data.timeAsc)}`
+    );
+    expect(
+      data.timeDesc[0].includes('20260103_090000') && data.timeDesc[2].includes('20260102_000001'),
+      `time desc=${JSON.stringify(data.timeDesc)}`
+    );
+    expect(data.wildcard.valid === true, `wildcard valid=${JSON.stringify(data.wildcard)}`);
+    expect(
+      data.wildcard.wrongLength === false &&
+        data.wildcard.wrongPosition === false &&
+        data.wildcard.nonNumericSuffix === false,
+      `wildcard rejects=${JSON.stringify(data.wildcard)}`
+    );
+    return data;
+  });
+
+  await record('systematic-bin-group', 'Composite / Measure SYSTEMATIC BIN 그룹', async () => {
+    await boot('chunk1-systematic-bin-group');
+    await loadFolder('unknown');
+    const data = await page.evaluate(async () => {
+      const v = window.viewer;
+      const candidates = [...new Set([
+        ...(v.currentGridImages || []).slice(0, 50),
+        ...(v.selectedImages || []).slice(0, 10),
+      ])];
+      let source = null;
+      let actualBins = [];
+      for (const candidate of candidates) {
+        const positionsResponse = await fetch(`/api/chip-positions?path=${encodeURIComponent(candidate)}`, {
+          cache: 'no-store',
+        });
+        if (!positionsResponse.ok) continue;
+        const positions = await positionsResponse.json();
+        const candidateBins = [...new Set((positions.chips || [])
+          .map((chip) => String(chip?.b ?? '').trim().replace(/^b/i, ''))
+          .filter((value) => /^\d+$/.test(value) && Number(value) >= 280))]
+          .sort((a, b) => Number(a) - Number(b));
+        if (candidateBins.length >= 2) {
+          source = candidate;
+          actualBins = candidateBins;
+          break;
+        }
+      }
+      if (!source) {
+        throw new Error(`systematic fixture needs a grid image with at least 2 numeric BINs; candidates=${candidates.length}`);
+      }
+
+      const keys = { f: [], q: [], bin: ['Normal', 'Invalid', 'ETC', '285', '336'] };
+      const panel = document.createElement('div');
+      panel.className = 'failbit-panel';
+      const search = document.createElement('input');
+      search.className = 'failbit-search';
+      panel.appendChild(search);
+      const list = document.createElement('div');
+      list.className = 'failbit-list';
+      panel.appendChild(list);
+      document.body.appendChild(panel);
+
+      const previousMeasure = [...(v._measureCheckedItems || [])];
+      const previousMc = [...(v._mcCheckedItems || [])];
+      try {
+        v._mcCheckedItems = [];
+        v._renderMcList(list, keys, { mode: 'composite' });
+        const compositeItem = [...list.querySelectorAll('.failbit-item')]
+          .find((item) => item.dataset.label?.startsWith('SYSTEMATIC'));
+        const compositeCheckbox = compositeItem?.querySelector('input[type="checkbox"]');
+        compositeCheckbox?.click();
+        const compositeEntry = compositeCheckbox?._mcEntry || null;
+
+        v._measureCheckedItems = [];
+        v._renderMcList(list, keys, { mode: 'measure' });
+        const measureItem = [...list.querySelectorAll('.failbit-item')]
+          .find((item) => item.dataset.label?.startsWith('SYSTEMATIC'));
+        const measureCheckbox = measureItem?.querySelector('input[type="checkbox"]');
+        measureCheckbox?.click();
+        const measureEntry = measureCheckbox?._measureEntry || null;
+        const systematicUrl = v._buildMeasureThumbUrl(
+          source,
+          measureEntry || { type: 'systematic', binTypes: ['285', '336'] },
+          '&_t=e2e'
+        );
+
+        const apiResponse = await fetch('/api/measure-composite-data', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image_paths: [source],
+            mode: 'systematic',
+            bin_types: actualBins.slice(0, 2),
+            aggregation: 'count',
+          }),
+          cache: 'no-store',
+        });
+        const apiData = await apiResponse.json();
+        return {
+          source,
+          actualBins,
+          compositeEntry,
+          measureEntry,
+          systematicUrl,
+          apiStatus: apiResponse.status,
+          apiMode: apiData.mode,
+          apiChipCount: apiData.chip_count,
+          apiMatchedChipCount: (apiData.chips || []).filter((chip) => Number(chip?.val) > 0).length,
+        };
+      } finally {
+        v._measureCheckedItems = previousMeasure;
+        v._mcCheckedItems = previousMc;
+        panel.remove();
+      }
+    });
+    expect(data.compositeEntry?.mode === 'systematic', `Composite entry=${JSON.stringify(data)}`);
+    expect(
+      JSON.stringify(data.compositeEntry?.binTypes) === JSON.stringify(['285', '336']),
+      `Composite bins=${JSON.stringify(data.compositeEntry)}`
+    );
+    expect(data.measureEntry?.type === 'systematic', `Measure entry=${JSON.stringify(data)}`);
+    expect(
+      JSON.stringify(data.measureEntry?.binTypes) === JSON.stringify(['285', '336']),
+      `Measure bins=${JSON.stringify(data.measureEntry)}`
+    );
+    expect(
+      data.systematicUrl.includes('/api/bin-map-thumb?') && data.systematicUrl.includes('bin_filter=285%2C336'),
+      `systematic thumbnail URL=${data.systematicUrl}`
+    );
+    expect(data.apiStatus === 200, `systematic API status=${data.apiStatus}`);
+    expect(data.apiMode === 'systematic', `systematic API mode=${data.apiMode}`);
+    expect(data.apiChipCount > 0 && data.apiMatchedChipCount > 0, `systematic API chips=${JSON.stringify(data)}`);
+    return data;
+  });
+
   await record('3,51', '검색 카운트', async () => {
     await boot('chunk1-search');
     const [a, b] = await findUnknownGlobalSearchFixtures(2);

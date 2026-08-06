@@ -61,6 +61,8 @@ class SearchService:
             "unknown_multi",
             "unknown_pre",
             "unknown_normal_pre",
+            "unknown_384",
+            "unknown_448",
         }
         self.supported_exts = supported_exts or set()
         self.fallback_max_files = fallback_max_files

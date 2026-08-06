@@ -35,6 +35,7 @@ from .composite_map import (
 from .personal_colors import get_ratio_gradient_for_scheme, get_composite_gradient_for_scheme, load_color_legends, DEFAULT_BOTTOM_COLORS
 
 MEASURE_CACHE_FILENAME = "measure_composite_data.npz"  # legacy fallback
+_BIN_MODES = {"bin", "systematic"}
 
 def _measure_cache_filename(mode: str = "", item_key: str = "") -> str:
     """mode+key별 고유 NPZ 파일명 생성 (BIN/FBT/QVL 동시 생성 시 충돌 방지)"""
@@ -130,6 +131,31 @@ def _normalize_bin(b) -> str:
     return s
 
 
+def _normalize_systematic_bin(b) -> str:
+    """Systematic BIN 비교용 정규화. 표준 BIN 목록 밖의 숫자도 보존한다."""
+    if b is None:
+        return "Normal"
+    s = str(b).strip()
+    if not s:
+        return "Normal"
+    low = s.lower()
+    if low in ("normal", "nor", "border"):
+        return "Normal"
+    if low in ("invalid", "inv"):
+        return "Invalid"
+    if low.startswith("b") and low[1:].isdigit():
+        num = int(low[1:])
+    elif s.isdigit():
+        num = int(s)
+    else:
+        return s
+    if num < 200:
+        return "Normal"
+    if num < 280:
+        return "Invalid"
+    return str(num)
+
+
 # ── compact_array 포맷 지원: ftn_keys/qtn_keys 인덱스 조회 ──
 
 _compact_key_index_cache: Dict[str, Dict[str, int]] = {}
@@ -161,8 +187,9 @@ def _extract_value(
     - BIN: 선택 BIN이면 1.0, 아니면 0.0 (모든 chip에 값 부여)
     - FBT/QVL: chip[mode][item_key] → float, 없으면 None (skip)
     """
-    if mode == "bin":
-        norm = _normalize_bin(chip.get("b"))
+    if mode in _BIN_MODES:
+        normalizer = _normalize_systematic_bin if mode == "systematic" else _normalize_bin
+        norm = normalizer(chip.get("b"))
         return 1.0 if norm in bin_set else 0.0
 
     data = chip.get(mode)
@@ -183,7 +210,7 @@ def _extract_values_from_data(data, mode, item_key, bin_types):
     if not isinstance(chips, list):
         return None
     key_idx = None
-    if mode != "bin":
+    if mode not in _BIN_MODES:
         key_name = f"{mode}tn_keys"
         keys = data.get(key_name, [])
         for i, k in enumerate(keys):
@@ -197,9 +224,10 @@ def _extract_values_from_data(data, mode, item_key, bin_types):
         ya = chip.get("y_abs") if chip.get("y_abs") is not None else chip.get("y")
         if xa is None or ya is None:
             continue
-        if mode == "bin":
+        if mode in _BIN_MODES:
             b = chip.get("b")
-            norm = _normalize_bin(b)
+            normalizer = _normalize_systematic_bin if mode == "systematic" else _normalize_bin
+            norm = normalizer(b)
             val = 1.0 if (bin_set and norm in bin_set) else 0.0
         else:
             fd = chip.get(mode)
@@ -250,7 +278,7 @@ def _collect_and_aggregate(
     )
 
     # BIN + count → sum 으로 변환 (1/0의 sum = match count)
-    eff_agg = "sum" if (mode == "bin" and aggregation == "count") else aggregation
+    eff_agg = "sum" if (mode in _BIN_MODES and aggregation == "count") else aggregation
 
     values_by_pos: Dict[Tuple[int, int], List[float]] = {}
 
@@ -397,6 +425,7 @@ def _render_indexed(
     value_map: Optional[Dict[Tuple[int, int], float]] = None,
     gradient_filter: Optional[Set[int]] = None,
     bin_filter: Optional[Set[str]] = None,
+    bin_normalizer=None,
 ) -> Image.Image:
     """Palette-indexed 렌더링 (default palette로 저장, PLTE 패치로 개인색 적용).
 
@@ -447,6 +476,7 @@ def _render_indexed(
     chip_rects = []
     abs_to_idx: Dict[Tuple[int, int], int] = {}
     abs_to_bin: Dict[Tuple[int, int], str] = {}
+    normalize_for_filter = bin_normalizer or _normalize_bin
     for i, c in enumerate(chips):
         if not isinstance(c, dict):
             chip_rects.append(None)
@@ -459,7 +489,7 @@ def _render_indexed(
         ya = c.get("y_abs") if c.get("y_abs") is not None else c.get("y")
         if xa is not None and ya is not None:
             abs_to_idx[(int(xa), int(ya))] = i
-            abs_to_bin[(int(xa), int(ya))] = _normalize_bin(c.get("b"))
+            abs_to_bin[(int(xa), int(ya))] = normalize_for_filter(c.get("b"))
 
     img = Image.new("P", (w, h), IDX_BG)
     draw = ImageDraw.Draw(img)
@@ -552,7 +582,7 @@ def _save_cache(
         "chip_positions": positions_arr,
         "aggregated_values": values_arr,
         "percentiles": percentiles_arr,
-        "mode": np.array([mode], dtype="U8"),
+        "mode": np.array([mode], dtype="U16"),
         "item_key": np.array([item_key or ""], dtype="U32"),
         "aggregation": np.array([aggregation], dtype="U16"),
         "source_image_count": np.array(source_count, dtype=np.uint32),
@@ -619,7 +649,7 @@ def create_measure_data_only(
         for xa, ya, val in chip_vals:
             values_by_pos.setdefault((xa, ya), []).append(val)
 
-    eff_agg = "sum" if (mode == "bin" and aggregation == "count") else aggregation
+    eff_agg = "sum" if (mode in _BIN_MODES and aggregation == "count") else aggregation
     value_map: Dict[Tuple[int, int], float] = {}
     for key, vals in values_by_pos.items():
         if eff_agg == "sum":
@@ -808,7 +838,7 @@ def create_measure_composite(
         for xa, ya, val in chip_vals:
             values_by_pos.setdefault((xa, ya), []).append(val)
 
-    eff_agg = "sum" if (mode == "bin" and aggregation == "count") else aggregation
+    eff_agg = "sum" if (mode in _BIN_MODES and aggregation == "count") else aggregation
     value_map: Dict[Tuple[int, int], float] = {}
     for key, vals in values_by_pos.items():
         if eff_agg == "sum":
@@ -849,9 +879,10 @@ def create_measure_composite(
     result_img = _render_indexed(base_path, base_pos, pct_map, value_map=value_map)
 
     # 8. 저장 (palette-indexed PNG)
-    if mode == "bin":
+    if mode in _BIN_MODES:
         bins_label = ",".join(sorted(bin_types)) if bin_types else "all"
-        display_name = f"BIN_{bins_label}_{aggregation}"
+        prefix = "SYSTEMATIC" if mode == "systematic" else "BIN"
+        display_name = f"{prefix}_{bins_label}_{aggregation}"
     else:
         display_name = f"{mode.upper()}_{item_key}_{aggregation}"
 
@@ -966,7 +997,7 @@ def recolor_measure_composite(
     _mode = parts[0].lower() if parts else ""
     # BIN은 item_key=None으로 저장되므로 key 없이 mode만 사용
     # F/Q는 parts[1]이 item_key
-    if _mode == "bin":
+    if _mode in _BIN_MODES:
         _key = ""  # BIN은 key 없음 (bin_types는 파일명에만 포함)
     elif _mode in ("f", "q") and len(parts) > 1:
         _key = parts[1]
@@ -1010,6 +1041,7 @@ def recolor_measure_composite(
         value_map=val_map,
         gradient_filter=gf_set,
         bin_filter=bf_set,
+        bin_normalizer=_normalize_systematic_bin if _mode == "systematic" else None,
     )
     # 기존 JPEG/WEBP 삭제
     for old_ext in (".jpg", ".webp"):
@@ -1036,7 +1068,8 @@ def recolor_measure_composite(
                 _xa = c.get("x_abs") if c.get("x_abs") is not None else c.get("x")
                 _ya = c.get("y_abs") if c.get("y_abs") is not None else c.get("y")
                 if _xa is not None and _ya is not None:
-                    bin_lookup[(int(_xa), int(_ya))] = _normalize_bin(c.get("b"))
+                    normalizer = _normalize_systematic_bin if _mode == "systematic" else _normalize_bin
+                    bin_lookup[(int(_xa), int(_ya))] = normalizer(c.get("b"))
 
     range_counts = [0] * 11
     for (xa, ya), pct in pct_map.items():

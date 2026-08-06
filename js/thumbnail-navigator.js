@@ -1055,11 +1055,11 @@ export class ThumbnailNavigator {
 
         // ✅ 정규화된 경로로 비교 (백슬래시, 대소문자 등 처리)
 
-        const normalizedCurrent = currentImagePath.replace(/\\/g, '/');
+        const normalizedCurrent = String(currentImagePath || '').replace(/\\/g, '/').toLowerCase();
 
         this.currentImageIndex = this.imageList.findIndex(path => {
 
-            const normalized = path.replace(/\\/g, '/');
+            const normalized = String(path || '').replace(/\\/g, '/').toLowerCase();
 
             return normalized === normalizedCurrent ||
 
@@ -1883,9 +1883,17 @@ export class ThumbnailNavigator {
 
     updateCurrentImage(imagePath) {
 
-        const index = this.imageList.indexOf(imagePath);
+        const normalizedTarget = String(imagePath || '').replace(/\\/g, '/').toLowerCase();
+        const index = this.imageList.findIndex(path => {
+            const normalized = String(path || '').replace(/\\/g, '/').toLowerCase();
+            return normalized === normalizedTarget ||
+                normalized.endsWith(`/${normalizedTarget}`) ||
+                normalizedTarget.endsWith(`/${normalized}`);
+        });
 
         if (index >= 0) {
+
+            this.currentImageIndex = index;
 
             this.updateHighlight(index);
 

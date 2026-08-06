@@ -50,6 +50,8 @@ export class ChipAnnotator {
         this.overlayMode = null;
         this.overlayItemKey = null;        // selected f/q sub-item key (e.g., "2342")
         this.binOverlayColors = new Map(); // normalized b-value string -> hex color
+        this.binOverlayFilterSet = new Set(); // Systematic overlay BIN subset
+        this.binOverlayFilterColor = null;
         this.ratioOverlayColors = null;    // Map<chipIndex, rgbaColor> or null
         this.ratioPercentiles = null;      // Map<chipIndex, percentile(0~100)> for gradient range filtering
         this.gradientFilterSet = new Set(); // Selected gradient range indices (0~10): 0=exact 0, 1=0~10%, ..., 10=90~100%
@@ -363,6 +365,23 @@ export class ChipAnnotator {
         return str;
     }
 
+    _normalizeSystematicBinValue(b) {
+        if (b === null || b === undefined) return 'Normal';
+        const str = String(b).trim();
+        if (!str) return 'Normal';
+        const lower = str.toLowerCase();
+        if (lower === 'normal' || lower === 'nor' || lower === 'border') return 'Normal';
+        if (lower === 'invalid' || lower === 'inv') return 'Invalid';
+        const match = lower.match(/^b?(\d+)$/);
+        if (match) {
+            const num = Number(match[1]);
+            if (num < 200) return 'Normal';
+            if (num < 280) return 'Invalid';
+            return String(num);
+        }
+        return str;
+    }
+
     /**
      * Set Bottom Filter (Chip b-value based mask)
      * @param {Set|Array} filterSet - Set of b-values to keep visible (others masked white)
@@ -383,24 +402,32 @@ export class ChipAnnotator {
     /**
      * Set overlay mode for chip rendering.
      * @param {'bin'|'f'|'q'|null} mode
-     * @param {Object} options - { binColors?: Map, gradientStops?: string[] }
+     * @param {Object} options - { binColors?: Map, binFilter?: string[], binFilterColor?: string, gradientStops?: string[] }
      */
     setOverlayMode(mode, options = {}) {
         this.overlayMode = mode;
 
         if (mode === 'bin') {
             this.binOverlayColors = options.binColors || new Map();
+            this.binOverlayFilterSet = new Set(
+                (options.binFilter || []).map((value) => this._normalizeSystematicBinValue(value))
+            );
+            this.binOverlayFilterColor = options.binFilterColor || null;
             this.ratioOverlayColors = null;
             this.ratioPercentiles = null;
             this.gradientFilterSet.clear();
             this.overlayItemKey = null;
         } else if (mode === 'f' || mode === 'q') {
             this.binOverlayColors.clear();
+            this.binOverlayFilterSet.clear();
+            this.binOverlayFilterColor = null;
             this.gradientStops = options.gradientStops || null;
             this.overlayItemKey = options.itemKey || null;
             this._computeRatioOverlay(mode, this.overlayItemKey);
         } else {
             this.binOverlayColors.clear();
+            this.binOverlayFilterSet.clear();
+            this.binOverlayFilterColor = null;
             this.ratioOverlayColors = null;
             this.ratioPercentiles = null;
             this.gradientFilterSet.clear();
@@ -1473,8 +1500,10 @@ export class ChipAnnotator {
             this.chips.forEach(chip => {
                 if (!chip) return;
                 if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) return;
+                const systematicBin = this._normalizeSystematicBinValue(chip.b);
+                if (this.binOverlayFilterSet.size > 0 && !this.binOverlayFilterSet.has(systematicBin)) return;
                 const norm = this._normalizeBottomValue(chip.b);
-                const hexColor = this.binOverlayColors.get(norm);
+                const hexColor = this.binOverlayFilterColor || this.binOverlayColors.get(norm);
                 if (!hexColor) return;
                 const rawText = chip.b != null ? String(chip.b) : '';
                 this._drawChipRectWithText(chip, hexColor, rawText);

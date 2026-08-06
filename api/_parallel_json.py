@@ -14,6 +14,7 @@ except ImportError:
 
 # BIN 정규화 (measure_composite._normalize_bin 과 동일 로직)
 _KNOWN_BINS = {285, 286, 287, 288, 290, 291, 300, 385, 386, 388, 389, 390}
+_BIN_MODES = {"bin", "systematic"}
 
 def _normalize_bin(b) -> str:
     if b is None:
@@ -38,6 +39,31 @@ def _normalize_bin(b) -> str:
             return "Invalid"
         return str(num) if num in _KNOWN_BINS else "ETC"
     return s
+
+
+def _normalize_systematic_bin(b) -> str:
+    """Systematic BIN 비교용 정규화. 표준 BIN 목록 밖의 숫자도 보존한다."""
+    if b is None:
+        return "Normal"
+    s = str(b).strip()
+    if not s:
+        return "Normal"
+    low = s.lower()
+    if low in ("normal", "nor", "border"):
+        return "Normal"
+    if low in ("invalid", "inv"):
+        return "Invalid"
+    if low.startswith("b") and low[1:].isdigit():
+        num = int(low[1:])
+    elif s.isdigit():
+        num = int(s)
+    else:
+        return s
+    if num < 200:
+        return "Normal"
+    if num < 280:
+        return "Invalid"
+    return str(num)
 
 
 def _normalize_positions_to_chips(data: dict):
@@ -78,7 +104,7 @@ def extract_chip_values(args: tuple) -> Optional[List[Tuple[int, int, float]]]:
 
     # item 인덱스 찾기
     key_idx = None
-    if mode != "bin":
+    if mode not in _BIN_MODES:
         key_name = f"{mode}tn_keys"
         keys = data.get(key_name, [])
         for i, k in enumerate(keys):
@@ -96,9 +122,10 @@ def extract_chip_values(args: tuple) -> Optional[List[Tuple[int, int, float]]]:
         if xa is None or ya is None:
             continue
 
-        if mode == "bin":
+        if mode in _BIN_MODES:
             b = chip.get("b")
-            norm = _normalize_bin(b)
+            normalizer = _normalize_systematic_bin if mode == "systematic" else _normalize_bin
+            norm = normalizer(b)
             val = 1.0 if (bin_set and norm in bin_set) else 0.0
         else:
             fd = chip.get(mode)
