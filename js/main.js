@@ -10260,7 +10260,7 @@ class WaferMapViewer {
 
         // BIN
         const systematicBins = this._getSystematicBinTypes(keys);
-        const systematicLabel = `SYSTEMATIC (${systematicBins.length})`;
+        const systematicLabel = 'SYSTEMATIC';
         const systematicTitle = systematicBins.map((bin) => `BIN${bin}`).join(' + ');
 
         if (isMeasure) {

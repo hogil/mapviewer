@@ -157,7 +157,7 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - Systematic BIN grouping regression:
   - Symptom: Composite/Measure could only treat BIN entries independently or as the unfiltered `BIN` map, and SYSTEMATIC could incorrectly absorb arbitrary numeric BINs such as `BIN336`.
   - Root cause: SYSTEMATIC was initially derived from every numeric BIN at or above 280, instead of using the fixed PLH/PLC BIN contract.
-  - Correct fix pattern: expose one `SYSTEMATIC (12)` entry containing only `285, 286, 287, 288, 290, 291, 300, 385, 386, 388, 389, 390`; send that full list with `mode=systematic`; and use the same fixed filter for single-image overlay, grid thumbnails, and Measure/Composite APIs. Keep ordinary `BIN`, `Normal`, `Invalid`, and `ETC` behavior unchanged. `PLH` is filename `00P` and maps to the first six BINs; `PLC` is filename `00C` and maps to the latter six BINs.
+  - Correct fix pattern: expose one `SYSTEMATIC` entry containing only `285, 286, 287, 288, 290, 291, 300, 385, 386, 388, 389, 390`; send that full list with `mode=systematic`; and use the same fixed filter for single-image overlay, grid thumbnails, and Measure/Composite APIs. Keep ordinary `BIN`, `Normal`, `Invalid`, and `ETC` behavior unchanged. `PLH` is filename `00P` and maps to the first six BINs; `PLC` is filename `00C` and maps to the latter six BINs.
   - E2E guard: `scripts/e2e_chunk1.js` record `systematic-bin-group` must verify the exact 12-item `binTypes` array, SYSTEMATIC-before-NORMAL/INVALID ordering, the fixed filtered thumbnail URL, and a successful `mode=systematic` API response with matched chips.
 
 ### Available skills

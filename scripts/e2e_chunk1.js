@@ -1983,6 +1983,7 @@ const { createRunner } = require('./e2e_playwright_session');
       }
     });
     expect(data.compositeEntry?.mode === 'systematic', `Composite entry=${JSON.stringify(data)}`);
+    expect(data.compositeEntry?.label === 'SYSTEMATIC', `Composite label=${JSON.stringify(data.compositeEntry)}`);
     const compositeSystematicIndex = data.compositeBinLabels?.findIndex((label) => label.startsWith('SYSTEMATIC')) ?? -1;
     const compositeNormalIndex = data.compositeBinLabels?.indexOf('NORMAL') ?? -1;
     const compositeInvalidIndex = data.compositeBinLabels?.indexOf('INVALID') ?? -1;
@@ -1997,6 +1998,7 @@ const { createRunner } = require('./e2e_playwright_session');
       `Composite bins=${JSON.stringify(data.compositeEntry)}`
     );
     expect(data.measureEntry?.type === 'systematic', `Measure entry=${JSON.stringify(data)}`);
+    expect(data.measureEntry?.label === 'SYSTEMATIC', `Measure label=${JSON.stringify(data.measureEntry)}`);
     const measureSystematicIndex = data.measureBinLabels?.findIndex((label) => label.startsWith('SYSTEMATIC')) ?? -1;
     const measureBinIndex = data.measureBinLabels?.indexOf('BIN') ?? -1;
     expect(
