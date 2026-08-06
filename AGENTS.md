@@ -155,10 +155,10 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
   - Root LOT wildcard `H%(PA,TD)` is currently an explicit root-name rule: exactly 8 characters, character 7 is `H`, and character 8 is a digit. The parenthesized `PA,TD` label does not add an LT metadata restriction until that requirement is specified.
   - E2E guard: `scripts/e2e_chunk1.js` record `sort-lot-filter` must verify the 9 sort options, indexes 3+4 as `YYYYMMDD_HHMMSS` for ascending/descending time order, and accept/reject synthetic root LOT names according to the rule above.
 - Systematic BIN grouping regression:
-  - Symptom: Composite/Measure could only treat BIN entries independently or as the unfiltered `BIN` map, so explicitly assigned numeric BINs such as `BIN285` and `BIN336` could not be generated/rendered as one group.
-  - Root cause: the shared `_renderMcList()` entry contract had no grouped BIN type, and the measure backend normalized non-standard numeric BINs into `ETC`, losing the requested numeric membership.
-  - Correct fix pattern: expose one `SYSTEMATIC` entry whose `binTypes` contains the numeric BIN union, preserve non-standard numeric values for systematic comparisons, send `mode=systematic` with the full `bin_types` array, and use the same filter for single-image overlay and grid thumbnails. Keep ordinary `BIN`, `Normal`, `Invalid`, and `ETC` behavior unchanged.
-  - E2E guard: `scripts/e2e_chunk1.js` record `systematic-bin-group` must verify Composite/Measure entries contain one `systematic` item with multiple `binTypes`, the filtered thumbnail URL, and a successful `/api/measure-composite-data` response with matched chips.
+  - Symptom: Composite/Measure could only treat BIN entries independently or as the unfiltered `BIN` map, and SYSTEMATIC could incorrectly absorb arbitrary numeric BINs such as `BIN336`.
+  - Root cause: SYSTEMATIC was initially derived from every numeric BIN at or above 280, instead of using the fixed PLH/PLC BIN contract.
+  - Correct fix pattern: expose one `SYSTEMATIC (12)` entry containing only `285, 286, 287, 288, 290, 291, 300, 385, 386, 388, 389, 390`; send that full list with `mode=systematic`; and use the same fixed filter for single-image overlay, grid thumbnails, and Measure/Composite APIs. Keep ordinary `BIN`, `Normal`, `Invalid`, and `ETC` behavior unchanged. `PLH` is filename `00P` and maps to the first six BINs; `PLC` is filename `00C` and maps to the latter six BINs.
+  - E2E guard: `scripts/e2e_chunk1.js` record `systematic-bin-group` must verify the exact 12-item `binTypes` array, SYSTEMATIC-before-NORMAL/INVALID ordering, the fixed filtered thumbnail URL, and a successful `mode=systematic` API response with matched chips.
 
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)

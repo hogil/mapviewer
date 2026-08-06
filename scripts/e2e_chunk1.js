@@ -1877,6 +1877,10 @@ const { createRunner } = require('./e2e_playwright_session');
     await loadFolder('unknown');
     const data = await page.evaluate(async () => {
       const v = window.viewer;
+      const expectedSystematicBins = [
+        '285', '286', '287', '288', '290', '291',
+        '300', '385', '386', '388', '389', '390',
+      ];
       const candidates = [...new Set([
         ...(v.currentGridImages || []).slice(0, 50),
         ...(v.selectedImages || []).slice(0, 10),
@@ -1891,7 +1895,7 @@ const { createRunner } = require('./e2e_playwright_session');
         const positions = await positionsResponse.json();
         const candidateBins = [...new Set((positions.chips || [])
           .map((chip) => String(chip?.b ?? '').trim().replace(/^b/i, ''))
-          .filter((value) => /^\d+$/.test(value) && Number(value) >= 280))]
+          .filter((value) => expectedSystematicBins.includes(value)))]
           .sort((a, b) => Number(a) - Number(b));
         if (candidateBins.length >= 2) {
           source = candidate;
@@ -1903,7 +1907,11 @@ const { createRunner } = require('./e2e_playwright_session');
         throw new Error(`systematic fixture needs a grid image with at least 2 numeric BINs; candidates=${candidates.length}`);
       }
 
-      const keys = { f: [], q: [], bin: ['Normal', 'Invalid', 'ETC', '285', '336'] };
+      const keys = {
+        f: [],
+        q: [],
+        bin: ['Normal', 'Invalid', 'ETC', ...expectedSystematicBins, '336'],
+      };
       const panel = document.createElement('div');
       panel.className = 'failbit-panel';
       const search = document.createElement('input');
@@ -1919,6 +1927,8 @@ const { createRunner } = require('./e2e_playwright_session');
       try {
         v._mcCheckedItems = [];
         v._renderMcList(list, keys, { mode: 'composite' });
+        const compositeBinLabels = [...list.querySelectorAll('.failbit-item')]
+          .map((item) => item.dataset.label || item.textContent.trim());
         const compositeItem = [...list.querySelectorAll('.failbit-item')]
           .find((item) => item.dataset.label?.startsWith('SYSTEMATIC'));
         const compositeCheckbox = compositeItem?.querySelector('input[type="checkbox"]');
@@ -1927,6 +1937,8 @@ const { createRunner } = require('./e2e_playwright_session');
 
         v._measureCheckedItems = [];
         v._renderMcList(list, keys, { mode: 'measure' });
+        const measureBinLabels = [...list.querySelectorAll('.failbit-item')]
+          .map((item) => item.dataset.label || item.textContent.trim());
         const measureItem = [...list.querySelectorAll('.failbit-item')]
           .find((item) => item.dataset.label?.startsWith('SYSTEMATIC'));
         const measureCheckbox = measureItem?.querySelector('input[type="checkbox"]');
@@ -1934,7 +1946,7 @@ const { createRunner } = require('./e2e_playwright_session');
         const measureEntry = measureCheckbox?._measureEntry || null;
         const systematicUrl = v._buildMeasureThumbUrl(
           source,
-          measureEntry || { type: 'systematic', binTypes: ['285', '336'] },
+          measureEntry || { type: 'systematic', binTypes: expectedSystematicBins },
           '&_t=e2e'
         );
 
@@ -1944,7 +1956,7 @@ const { createRunner } = require('./e2e_playwright_session');
           body: JSON.stringify({
             image_paths: [source],
             mode: 'systematic',
-            bin_types: actualBins.slice(0, 2),
+            bin_types: expectedSystematicBins,
             aggregation: 'count',
           }),
           cache: 'no-store',
@@ -1953,6 +1965,9 @@ const { createRunner } = require('./e2e_playwright_session');
         return {
           source,
           actualBins,
+          expectedSystematicBins,
+          compositeBinLabels,
+          measureBinLabels,
           compositeEntry,
           measureEntry,
           systematicUrl,
@@ -1968,17 +1983,33 @@ const { createRunner } = require('./e2e_playwright_session');
       }
     });
     expect(data.compositeEntry?.mode === 'systematic', `Composite entry=${JSON.stringify(data)}`);
+    const compositeSystematicIndex = data.compositeBinLabels?.findIndex((label) => label.startsWith('SYSTEMATIC')) ?? -1;
+    const compositeNormalIndex = data.compositeBinLabels?.indexOf('NORMAL') ?? -1;
+    const compositeInvalidIndex = data.compositeBinLabels?.indexOf('INVALID') ?? -1;
     expect(
-      JSON.stringify(data.compositeEntry?.binTypes) === JSON.stringify(['285', '336']),
+      compositeSystematicIndex >= 0 &&
+        (compositeNormalIndex < 0 || compositeSystematicIndex < compositeNormalIndex) &&
+        (compositeInvalidIndex < 0 || compositeSystematicIndex < compositeInvalidIndex),
+      `Composite BIN order=${JSON.stringify(data.compositeBinLabels)}`
+    );
+    expect(
+      JSON.stringify(data.compositeEntry?.binTypes) === JSON.stringify(data.expectedSystematicBins),
       `Composite bins=${JSON.stringify(data.compositeEntry)}`
     );
     expect(data.measureEntry?.type === 'systematic', `Measure entry=${JSON.stringify(data)}`);
+    const measureSystematicIndex = data.measureBinLabels?.findIndex((label) => label.startsWith('SYSTEMATIC')) ?? -1;
+    const measureBinIndex = data.measureBinLabels?.indexOf('BIN') ?? -1;
     expect(
-      JSON.stringify(data.measureEntry?.binTypes) === JSON.stringify(['285', '336']),
+      measureSystematicIndex >= 0 && measureBinIndex >= 0 && measureSystematicIndex < measureBinIndex,
+      `Measure BIN order=${JSON.stringify(data.measureBinLabels)}`
+    );
+    expect(
+      JSON.stringify(data.measureEntry?.binTypes) === JSON.stringify(data.expectedSystematicBins),
       `Measure bins=${JSON.stringify(data.measureEntry)}`
     );
     expect(
-      data.systematicUrl.includes('/api/bin-map-thumb?') && data.systematicUrl.includes('bin_filter=285%2C336'),
+      data.systematicUrl.includes('/api/bin-map-thumb?') &&
+        data.systematicUrl.includes(`bin_filter=${encodeURIComponent(data.expectedSystematicBins.join(','))}`),
       `systematic thumbnail URL=${data.systematicUrl}`
     );
     expect(data.apiStatus === 200, `systematic API status=${data.apiStatus}`);

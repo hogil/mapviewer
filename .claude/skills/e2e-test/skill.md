@@ -14,7 +14,7 @@ argument-hint: [Phase 번호 또는 범위]
 |---|---|---|
 | P0 | 단일 이미지 Measure 단일선택, F/Q stale 응답 차단, 캔버스/네비게이터 동기화 | `scripts/e2e_chunk2.js` `measure-single-consistency` |
 | P1 | 시간 정렬, `H%(PA,TD)` root LOT wildcard, 그리드/단일 네비게이션 순서 | `scripts/e2e_chunk1.js` `sort-lot-filter` |
-| P1 | Composite/Measure SYSTEMATIC numeric BIN grouping and filtered render | `scripts/e2e_chunk1.js` `systematic-bin-group` |
+| P1 | Composite/Measure fixed 12-BIN SYSTEMATIC grouping and filtered render | `scripts/e2e_chunk1.js` `systematic-bin-group` |
 | P1 | 기존 Measure 다중선택/탭 복귀/썸네일 무결성 | `30,33,34,35,39`, `41,42,45,47,48,56` |
 | P2 | 전체 63개 Phase와 성능/프로세스 정리 | `run-e2e-playwright.ps1 -Chunk all` |
 
@@ -28,7 +28,7 @@ argument-hint: [Phase 번호 또는 범위]
 - **저비용 worker lanes**: 정적 문법/공백 검사, API 계약 검사, P0 Measure 브라우저 검사, P1 Composite/Measure/BIN 브라우저 검사, 전체 chunk 성능·프로세스 로그 검사를 독립 작업으로 나눈다.
 - 이 실행 환경에는 별도 LLM sub-agent를 호출하는 도구가 노출되어 있지 않다. 따라서 위 worker는 모델을 가장한 프로세스가 아니라 `node --check`, 서버 API 계약, Playwright chunk, PowerShell runner로 실제 실행한다. 별도 sub-agent provider가 연결된 환경에서는 Master가 각 lane에 저비용 모델을 배정하되, PASS/FAIL 판정과 재실행은 Master가 단독으로 맡는다.
 - 순서는 `static -> P0/P1 targeted chunk -> failure triage -> same chunk rerun -> Chunk all`이다. targeted guard가 실패한 상태로 전체 E2E를 PASS 처리하지 않는다.
-- `systematic-bin-group`는 Composite와 Measure 각각의 `binTypes` 배열, 단일/그리드 filtered render URL, 실제 `mode=systematic` API 응답과 matched chip 수를 함께 확인한다.
+- `systematic-bin-group`는 Composite와 Measure 각각에 `285,286,287,288,290,291,300,385,386,388,389,390`만 들어가는지, SYSTEMATIC이 NORMAL/INVALID보다 먼저 표시되는지, 단일/그리드 filtered render URL, 실제 `mode=systematic` API 응답과 matched chip 수를 함께 확인한다. `BIN336` 같은 비계약 숫자는 SYSTEMATIC에 포함되면 안 된다.
 
 ## 절대규칙 #-5: 장시간 E2E는 중간 보고 필수
 

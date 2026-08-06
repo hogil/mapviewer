@@ -33,6 +33,10 @@ const CLASSIFICATION_DIR_NAMES = ['classification', 'classification_chips', 'chi
 const GRID_THUMB_PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 const FALLBACK_LOGIN_ID = 'notsaml';
 const INVALID_LOGIN_ID_VALUES = new Set(['', 'default', 'anon', 'anonymous', FALLBACK_LOGIN_ID, 'null', 'undefined', '-']);
+const SYSTEMATIC_BIN_TYPES = Object.freeze([
+    '285', '286', '287', '288', '290', '291',
+    '300', '385', '386', '388', '389', '390',
+]);
 
 // ✅ 미니맵 뷰포트 크기 제한 상수
 const MINIMAP_VIEWPORT_MIN_SIZE = 0.05;  // 최소 5%
@@ -9957,9 +9961,9 @@ class WaferMapViewer {
 
     _getSystematicBinTypes(keys) {
         const bins = Array.isArray(keys?.bin) ? keys.bin : [];
-        return [...new Set(bins.map((value) => String(value).trim()))]
-            .filter((value) => /^\d+$/.test(value))
-            .sort((a, b) => Number(a) - Number(b));
+        const available = new Set(bins.map((value) => String(value).trim()));
+        if (!SYSTEMATIC_BIN_TYPES.some((value) => available.has(value))) return [];
+        return [...SYSTEMATIC_BIN_TYPES];
     }
 
     _buildMeaContextSubmenu() {
@@ -10265,16 +10269,19 @@ class WaferMapViewer {
             binHeader.className = 'failbit-section';
             binHeader.textContent = 'BIN';
             list.appendChild(binHeader);
-            list.appendChild(makeItem('BIN', 'bin', null, null));
             if (systematicBins.length > 0) {
                 list.appendChild(makeItem(systematicLabel, 'systematic', null, null, systematicBins, systematicTitle));
             }
+            list.appendChild(makeItem('BIN', 'bin', null, null));
         } else if (keys.bin && keys.bin.length > 0) {
             // Composite: BIN 타입별 개별 항목
             const header = document.createElement('div');
             header.className = 'failbit-section';
             header.textContent = 'BIN';
             list.appendChild(header);
+            if (systematicBins.length > 0) {
+                list.appendChild(makeItem(systematicLabel, 'systematic', null, null, systematicBins, systematicTitle));
+            }
             const _headOrder = { 'Normal': 1, 'Invalid': 2, 'ETC': 3 };
             const sortedBins = [...keys.bin].sort((a, b) => {
                 const ha = _headOrder[a] || 99, hb = _headOrder[b] || 99;
@@ -10284,9 +10291,6 @@ class WaferMapViewer {
             const _displayName = { 'Normal': 'NORMAL', 'Invalid': 'INVALID', 'ETC': 'ETC' };
             for (const bin of sortedBins) {
                 list.appendChild(makeItem(_displayName[bin] || `BIN${bin}`, 'bin', null, bin));
-            }
-            if (systematicBins.length > 0) {
-                list.appendChild(makeItem(systematicLabel, 'systematic', null, null, systematicBins, systematicTitle));
             }
         }
 

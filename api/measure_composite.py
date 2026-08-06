@@ -104,6 +104,11 @@ def _safe_float(raw) -> Optional[float]:
 # ── BIN 정규화 (JS _normalizeBottomValue 동일) ──────────────
 
 _KNOWN_BINS = {285, 286, 287, 288, 290, 291, 300, 385, 386, 388, 389, 390}
+SYSTEMATIC_BIN_TYPES = (
+    "285", "286", "287", "288", "290", "291",
+    "300", "385", "386", "388", "389", "390",
+)
+_SYSTEMATIC_BIN_SET = set(SYSTEMATIC_BIN_TYPES)
 
 
 def _normalize_bin(b) -> str:
@@ -132,7 +137,7 @@ def _normalize_bin(b) -> str:
 
 
 def _normalize_systematic_bin(b) -> str:
-    """Systematic BIN 비교용 정규화. 표준 BIN 목록 밖의 숫자도 보존한다."""
+    """Systematic은 고정된 12개 BIN만 비교 대상으로 허용한다."""
     if b is None:
         return "Normal"
     s = str(b).strip()
@@ -153,7 +158,7 @@ def _normalize_systematic_bin(b) -> str:
         return "Normal"
     if num < 280:
         return "Invalid"
-    return str(num)
+    return str(num) if str(num) in _SYSTEMATIC_BIN_SET else "ETC"
 
 
 # ── compact_array 포맷 지원: ftn_keys/qtn_keys 인덱스 조회 ──
@@ -217,7 +222,9 @@ def _extract_values_from_data(data, mode, item_key, bin_types):
             if str(k) == str(item_key):
                 key_idx = i
                 break
-    bin_set = set(str(b) for b in bin_types) if bin_types else None
+    bin_set = _SYSTEMATIC_BIN_SET if mode == "systematic" else (
+        set(str(b) for b in bin_types) if bin_types else None
+    )
     results = []
     for chip in chips:
         xa = chip.get("x_abs") if chip.get("x_abs") is not None else chip.get("x")
@@ -272,10 +279,13 @@ def _collect_and_aggregate(
     모든 wafer에서 chip 값 수집 → (x_abs, y_abs)별 집계.
     BIN 모드: 1/0 전처리 후 동일 파이프라인.
     """
-    bin_set = (
-        {str(b) for b in bin_types} if bin_types
-        else {str(b) for b in _KNOWN_BINS}
-    )
+    if mode == "systematic":
+        bin_set = _SYSTEMATIC_BIN_SET
+    else:
+        bin_set = (
+            {str(b) for b in bin_types} if bin_types
+            else {str(b) for b in _KNOWN_BINS}
+        )
 
     # BIN + count → sum 으로 변환 (1/0의 sum = match count)
     eff_agg = "sum" if (mode in _BIN_MODES and aggregation == "count") else aggregation
@@ -611,6 +621,8 @@ def create_measure_data_only(
     브라우저에서 Canvas로 직접 그림.
     """
     t0 = time.perf_counter()
+    if mode == "systematic":
+        bin_types = list(SYSTEMATIC_BIN_TYPES)
 
     # 1. Positions 파싱 + 값 추출
     #    1개: 순차 (13ms), 여러 개: ProcessPool 병렬 (GIL-free 병렬 파싱)
@@ -758,6 +770,7 @@ def create_measure_data_only(
         "processing_time": round(elapsed, 3),
         "mode": mode,
         "item_key": item_key,
+        "bin_types": list(SYSTEMATIC_BIN_TYPES) if mode == "systematic" else bin_types,
         "aggregation": aggregation,
         "range_counts": range_counts,
     }
@@ -779,6 +792,8 @@ def create_measure_composite(
     BIN: 전처리(1/0) → FBT/QVL과 동일 파이프라인.
     """
     t0 = time.perf_counter()
+    if mode == "systematic":
+        bin_types = list(SYSTEMATIC_BIN_TYPES)
 
     # 1+2. Positions 로드 + 값 추출을 ProcessPool 병렬로 한 번에 처리
     # (JSON 2.7MB 파싱이 GIL-bound → ProcessPool로 진짜 병렬)

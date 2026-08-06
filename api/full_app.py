@@ -3975,6 +3975,10 @@ PERSONALIZED_PYRAMID_CACHE_REV = "4"
 
 FILTER_WHITE_INDEX = 31
 FILTER_BOTTOM_BIN_VALUES = {"285", "286", "287", "288", "290", "291", "300", "385", "386", "388", "389", "390"}
+SYSTEMATIC_BIN_TYPES = (
+    "285", "286", "287", "288", "290", "291",
+    "300", "385", "386", "388", "389", "390",
+)
 
 
 def _normalize_bottom_filter_key_local(raw_value: Any) -> Optional[str]:
@@ -4058,10 +4062,13 @@ def _classify_chip_bottom_value(raw_value: Any) -> str:
 
 
 def _normalize_systematic_bin_value(raw_value: Any) -> str:
-    """Systematic BIN 비교용 정규화. 표준 BIN 목록 밖의 숫자도 보존한다."""
+    """Systematic은 고정된 12개 BIN만 비교 대상으로 허용한다."""
     if raw_value is None or not str(raw_value).strip():
         return "Normal"
-    return _normalize_bottom_filter_key_local(raw_value) or "Normal"
+    normalized = _normalize_bottom_filter_key_local(raw_value) or "Normal"
+    if normalized in ("Normal", "Invalid") or normalized in FILTER_BOTTOM_BIN_VALUES:
+        return normalized
+    return "ETC"
 
 
 def _scaled_chip_rect(
@@ -7337,6 +7344,8 @@ def _generate_bin_map_thumb(
     if not isinstance(chips, list) or not chips:
         return None
     selected_bins = set(_parse_bottom_filter_values(bin_filter)) if bin_filter else None
+    if selected_bins is not None:
+        selected_bins.intersection_update(SYSTEMATIC_BIN_TYPES)
 
     coord = positions_data.get("coord", {})
     canvas = coord.get("canvas", {}) if isinstance(coord, dict) else {}
@@ -10868,6 +10877,7 @@ async def measure_composite_data_endpoint(
 
     login_id = _current_login_id(req)
     resolved_scheme = login_id or ANONYMOUS_LOGIN_ID
+    bin_types = list(SYSTEMATIC_BIN_TYPES) if payload.mode == "systematic" else payload.bin_types
 
     try:
         from .measure_composite import create_measure_data_only
@@ -10875,7 +10885,7 @@ async def measure_composite_data_endpoint(
             image_paths=image_paths,
             mode=payload.mode,
             item_key=payload.item_key,
-            bin_types=payload.bin_types,
+            bin_types=bin_types,
             aggregation=payload.aggregation,
             scheme=resolved_scheme,
             color_source=payload.color_source,
@@ -10929,6 +10939,7 @@ async def create_measure_composite_endpoint(
 
     login_id = _current_login_id(req)
     resolved_scheme = login_id or ANONYMOUS_LOGIN_ID
+    bin_types = list(SYSTEMATIC_BIN_TYPES) if payload.mode == "systematic" else payload.bin_types
 
     # 🔥 positions 필터링은 _run_measure_composite_sync 내부에서 실행 (이벤트 루프 블로킹 방지)
     # 🔥 default scheme으로 생성 (개인색은 프론트엔드 display 또는 recolor로 적용)
@@ -10938,7 +10949,7 @@ async def create_measure_composite_endpoint(
         image_paths=image_paths,
         mode=payload.mode,
         item_key=payload.item_key,
-        bin_types=payload.bin_types,
+        bin_types=bin_types,
         aggregation=payload.aggregation,
         scheme="default",
         login_id=login_id,

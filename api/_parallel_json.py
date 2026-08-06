@@ -14,6 +14,10 @@ except ImportError:
 
 # BIN 정규화 (measure_composite._normalize_bin 과 동일 로직)
 _KNOWN_BINS = {285, 286, 287, 288, 290, 291, 300, 385, 386, 388, 389, 390}
+_SYSTEMATIC_BIN_TYPES = {
+    "285", "286", "287", "288", "290", "291",
+    "300", "385", "386", "388", "389", "390",
+}
 _BIN_MODES = {"bin", "systematic"}
 
 def _normalize_bin(b) -> str:
@@ -42,7 +46,7 @@ def _normalize_bin(b) -> str:
 
 
 def _normalize_systematic_bin(b) -> str:
-    """Systematic BIN 비교용 정규화. 표준 BIN 목록 밖의 숫자도 보존한다."""
+    """Systematic은 고정된 12개 BIN만 비교 대상으로 허용한다."""
     if b is None:
         return "Normal"
     s = str(b).strip()
@@ -63,7 +67,7 @@ def _normalize_systematic_bin(b) -> str:
         return "Normal"
     if num < 280:
         return "Invalid"
-    return str(num)
+    return str(num) if str(num) in _SYSTEMATIC_BIN_TYPES else "ETC"
 
 
 def _normalize_positions_to_chips(data: dict):
@@ -113,7 +117,9 @@ def extract_chip_values(args: tuple) -> Optional[List[Tuple[int, int, float]]]:
                 break
 
     results = []
-    bin_set = set(str(b) for b in bin_types) if bin_types else None
+    bin_set = _SYSTEMATIC_BIN_TYPES if mode == "systematic" else (
+        set(str(b) for b in bin_types) if bin_types else None
+    )
 
     for chip in chips:
         # x_abs/y_abs 우선, 없으면 x/y fallback
