@@ -1910,7 +1910,7 @@ const { createRunner } = require('./e2e_playwright_session');
       const keys = {
         f: [],
         q: [],
-        bin: ['Normal', 'Invalid', 'ETC', ...expectedSystematicBins, '336'],
+        bin: ['Normal', 'Invalid', 'ETC', ...expectedSystematicBins],
       };
       const panel = document.createElement('div');
       panel.className = 'failbit-panel';

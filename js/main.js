@@ -9943,7 +9943,7 @@ class WaferMapViewer {
                 const num = Number(match[1]);
                 if (num < 200) return 'Normal';
                 if (num < 280) return 'Invalid';
-                return String(num);
+                return SYSTEMATIC_BIN_TYPES.includes(String(num)) ? String(num) : 'ETC';
             }
             return s;
         };
