@@ -50,10 +50,10 @@ IMAGES_ROOT/composite_map/{login_id}/current
 
 단일 이미지 보기에서 Chip 또는 Shot을 선택하면 컨텍스트 메뉴의 `선택 Chip/Shot Composite Map 만들기`로 현재 이미지의 선택 영역만 Composite Map으로 생성할 수 있습니다.
 
-- Chip 모드: 선택한 `x_abs/y_abs` chip만 결과에 포함
-- Shot 모드: 선택한 Shot에 속한 모든 chip 좌표를 포함
-- 선택 영역 결과는 전체 wafer 캔버스를 유지하지 않고 chip 사각형의 최소 영역으로 crop하며, 외곽 여백은 4px만 둔다
-- 결과 positions도 같은 좌표만 복사하고 crop 원점만큼 `rect`/`coord.canvas`를 이동하여 단일보기 경계와 이미지가 일치
+- Chip 모드: 선택한 여러 `x_abs/y_abs` chip을 첫 Chip 크기의 canonical 한 칸에 누적한다. 결과 positions에는 canonical Chip 1개만 남고 `selected_chip_count`/`composite_sample_count`에 실제 선택 수를 기록한다
+- Shot 모드: 선택한 Shot에 속한 모든 chip 좌표를 같은 상대 chip 격자에 누적한다
+- 선택 영역 결과는 전체 wafer 캔버스를 유지하지 않고 canonical Chip 또는 Shot의 정확한 사각형 크기로 생성한다
+- Shot 결과 positions는 첫 번째 canonical Shot의 chip 격자를 사용하고, Chip 결과 positions는 canonical Chip 1개를 사용한다
 - Shot의 chip 수는 요청 목록이 아니라 원본 positions에 실제 존재하는 해당 Shot chip 수로 확정
 - 기존 그리드 이미지 선택 기반 `Composite 만들기` 동작은 변경하지 않음
 
@@ -185,7 +185,32 @@ Recolor는 원본 이미지를 다시 읽지 않고 `square_maps_data.npz`를 �
 }
 ```
 
-`selection_mode`는 `chip` 또는 `shot`이며, Shot인 경우 프론트엔드가 해당 Shot의 모든 chip 좌표를 전송합니다.
+`selection_mode`는 `chip` 또는 `shot`입니다. Chip 선택은 선택한 좌표만 tight crop으로 만들고, Shot 선택은 아래처럼 Shot별 chip 묶음을 함께 전송합니다.
+
+```json
+{
+  "selection_mode": "shot",
+  "selected_chip_coords": [
+    {"x_abs": 10, "y_abs": 0},
+    {"x_abs": 11, "y_abs": 0}
+  ],
+  "selected_shot_groups": [
+    {
+      "shot_id": "4",
+      "chip_coords": [
+        {"x_abs": 10, "y_abs": 0},
+        {"x_abs": 11, "y_abs": 0}
+      ]
+    }
+  ]
+}
+```
+
+여러 Shot은 각 Shot의 EDS chip 좌표 최소값을 상대 원점으로 맞춰 같은 chip 격자에 누적합니다. 선택한 Shot의 chip 가로×세로 격자가 다르면 왜곡된 결과를 만들지 않고 작업을 실패시킵니다. 결과 positions는 첫 번째 canonical Shot의 chip 수와 상대 rect를 사용하며, `selected_shot_count`, `selected_source_chip_count`, `selected_shot_shape`, `composite_sample_count`를 반환합니다.
+
+선택 영역 Composite 결과의 `image_size`와 positions canvas는 canonical Shot 크기와 일치해야 합니다. 현재 E2E fixture P001 Shot 4/5는 각각 24 chip, 4×6이며 두 Shot을 합친 결과도 24 chip, 4×6입니다.
+
+단일 이미지 Chip/Shot context menu export는 공통 TSV 필드를 사용합니다. `PROCESS_ID`, `CHIP_ID`, `X_ABS`, `Y_ABS`, `BIN`, `CHIP_COORD_X(mm)`, `CHIP_COORD_Y(mm)`, `RADIUS(mm)`, `SHOT`, `SHOT_ID`, `SHOT_X`, `SHOT_Y`, `FULL_SHOT_TYPE`가 포함됩니다. Shot 선택에서는 선택 Shot별 crop PNG 다운로드와 TSV 저장을 제공합니다.
 
 ## 관련 설정
 

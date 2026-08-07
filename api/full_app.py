@@ -8873,6 +8873,10 @@ class ChipCoord(BaseModel):
     x_abs: int
     y_abs: int
 
+class CompositeShotGroup(BaseModel):
+    shot_id: str
+    chip_coords: List[ChipCoord]
+
 class ChipClassifyRequest(BaseModel):
     class_name: str
     image_path: str
@@ -10505,6 +10509,7 @@ class CompositeMapRequest(BaseModel):
     scheme: Optional[str] = None
     selection_mode: Optional[Literal["chip", "shot"]] = None
     selected_chip_coords: Optional[List[ChipCoord]] = None
+    selected_shot_groups: Optional[List[CompositeShotGroup]] = None
 
 
 async def run_composite_map_task(
@@ -10836,6 +10841,7 @@ async def create_composite_map_endpoint(
     image_paths = [_to_relative_path(p) for p in image_paths]
 
     selected_chip_coords = None
+    selected_shot_groups = None
     if payload.selected_chip_coords is not None:
         if not payload.selected_chip_coords:
             raise HTTPException(status_code=400, detail="selected_chip_coords가 비어 있습니다.")
@@ -10845,6 +10851,39 @@ async def create_composite_map_endpoint(
             (int(coord.x_abs), int(coord.y_abs))
             for coord in payload.selected_chip_coords
         ]
+
+    if payload.selected_shot_groups is not None:
+        if payload.palette_mode:
+            raise HTTPException(status_code=400, detail="선택 영역 Composite는 heatmap 모드만 지원합니다.")
+        if payload.selection_mode != "shot":
+            raise HTTPException(status_code=400, detail="selected_shot_groups는 shot 선택 모드에서만 사용할 수 있습니다.")
+        if not payload.selected_shot_groups:
+            raise HTTPException(status_code=400, detail="selected_shot_groups가 비어 있습니다.")
+
+        selected_shot_groups = []
+        grouped_coords = set()
+        for group in payload.selected_shot_groups:
+            shot_id = str(group.shot_id or "").strip()
+            if not shot_id:
+                raise HTTPException(status_code=400, detail="Shot ID가 비어 있습니다.")
+            if not group.chip_coords:
+                raise HTTPException(status_code=400, detail=f"Shot {shot_id}에 chip이 없습니다.")
+            coords = []
+            seen_coords = set()
+            for coord in group.chip_coords:
+                key = (int(coord.x_abs), int(coord.y_abs))
+                if key in seen_coords:
+                    continue
+                seen_coords.add(key)
+                grouped_coords.add(key)
+                coords.append({"x_abs": key[0], "y_abs": key[1]})
+            if not coords:
+                raise HTTPException(status_code=400, detail=f"Shot {shot_id}에 유효한 chip이 없습니다.")
+            selected_shot_groups.append({"shot_id": shot_id, "chip_coords": coords})
+
+        # Shot payload는 선택된 Shot 전체를 포함해야 하므로, 별도 chip 좌표가
+        # 일부만 들어온 오래된 호출도 그룹 좌표를 기준으로 보정한다.
+        selected_chip_coords = list(dict.fromkeys((selected_chip_coords or []) + list(grouped_coords)))
 
     max_images = 256
     if len(image_paths) > max_images:
@@ -10886,7 +10925,7 @@ async def create_composite_map_endpoint(
                 p for p in _image_paths_snapshot
                 if any(c.exists() for c in _candidate_positions_paths(Path(p)))
             ]
-            if selected_chip_coords and not position_filtered:
+            if (selected_chip_coords or selected_shot_groups) and not position_filtered:
                 raise ValueError("선택 영역 Composite에는 positions 파일이 필요합니다.")
             if position_filtered:
                 if len(position_filtered) < len(_image_paths_snapshot):
@@ -10935,6 +10974,7 @@ async def create_composite_map_endpoint(
                     scheme="default",
                     login_id=login_id,
                     selected_chip_coords=selected_chip_coords,
+                    selected_shot_groups=selected_shot_groups,
                 )
                 result = task_fn()
 
@@ -10947,6 +10987,7 @@ async def create_composite_map_endpoint(
                     "heatmaps": result["heatmaps"],
                     "width": result["image_size"]["width"],
                     "height": result["image_size"]["height"],
+                    "composite_sample_count": result.get("composite_sample_count", result["source_images"]),
                     "processing_time": result["processing_time"],
                     "generated_at": result.get("generated_at") or result["output_dir"].split("/")[-1]
                 }
@@ -10958,7 +10999,7 @@ async def create_composite_map_endpoint(
                     response["timings"] = result["timings"]
                 if "numba" in result:
                     response["numba"] = result["numba"]
-                if selected_chip_coords:
+                if selected_chip_coords or selected_shot_groups:
                     response["selection_mode"] = payload.selection_mode or "chip"
                     response["selected_chip_count"] = result.get(
                         "selected_chip_count",
@@ -10968,6 +11009,14 @@ async def create_composite_map_endpoint(
                         response["selection_crop"] = result["selection_crop"]
                     if result.get("source_image_size"):
                         response["source_image_size"] = result["source_image_size"]
+                    for key in (
+                        "selected_shot_count",
+                        "selected_source_chip_count",
+                        "selected_shot_shape",
+                        "composite_sample_count",
+                    ):
+                        if key in result:
+                            response[key] = result[key]
 
             COMPOSITE_TASKS[task_id]["status"] = "completed"
             COMPOSITE_TASKS[task_id]["progress"] = 100

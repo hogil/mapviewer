@@ -1,0 +1,36 @@
+{
+  "name": "L3 Tracker E2E agent cycle",
+  "interval_minutes": 60,
+  "stop_when_clean": true,
+  "roles": {
+    "scout": {
+      "tier": "cheap",
+      "provider": "claude",
+      "model_env": "E2E_SCOUT_MODELS",
+      "default_models": ["sonnet"],
+      "count": 1
+    },
+    "planner": {
+      "tier": "top",
+      "provider": "claude",
+      "model_env": "E2E_PLANNER_MODELS",
+      "default_models": ["opus", "opus", "opus"],
+      "count": 3
+    },
+    "reviewer": {
+      "tier": "top",
+      "provider": "claude",
+      "model_env": "E2E_REVIEWER_MODELS",
+      "default_models": ["opus", "opus", "opus"],
+      "count": 3
+    },
+    "master": {
+      "tier": "top",
+      "provider": "claude",
+      "model_env": "E2E_MASTER_MODELS",
+      "default_models": ["opus", "opus", "opus"],
+      "count": 3,
+      "rotation": "one-per-cycle"
+    }
+  }
+}

@@ -9195,6 +9195,10 @@ class WaferMapViewer {
             generatedAt: result.generated_at,
             selectionMode: result.selection_mode || this.lastCompositeSelection?.mode || null,
             selectedChipCount: result.selected_chip_count || this.lastCompositeSelection?.chipCoords?.length || 0,
+            selectedShotCount: result.selected_shot_count || this.lastCompositeSelection?.shotGroups?.length || 0,
+            selectedSourceChipCount: result.selected_source_chip_count || null,
+            shotShape: result.selected_shot_shape || null,
+            compositeSampleCount: result.composite_sample_count || null,
             selectionCrop: result.selection_crop || null,
             sumMaps: [],
         };
@@ -9564,11 +9568,31 @@ class WaferMapViewer {
             return;
         }
 
-        const hasRegionSelection = Array.isArray(options.selectedChips);
+        const hasRegionSelection = Array.isArray(options.selectedChips) || Array.isArray(options.selectedShotGroups);
         const selectionMode = options.selectionMode === 'shot' ? 'shot' : 'chip';
-        const selectedChipCoords = hasRegionSelection
+        const selectedShotGroups = selectionMode === 'shot' && Array.isArray(options.selectedShotGroups)
+            ? options.selectedShotGroups
+                .map((group) => {
+                    const shotId = String(group?.shot_id ?? group?.shotId ?? '').trim();
+                    const coords = Array.isArray(group?.chip_coords || group?.chipCoords)
+                        ? [...new Map(
+                            (group.chip_coords || group.chipCoords)
+                                .filter((chip) => chip && Number.isFinite(Number(chip.x_abs ?? chip.xAbs)) && Number.isFinite(Number(chip.y_abs ?? chip.yAbs)))
+                                .map((chip) => {
+                                    const x = Number(chip.x_abs ?? chip.xAbs);
+                                    const y = Number(chip.y_abs ?? chip.yAbs);
+                                    return [`${x}:${y}`, { x_abs: x, y_abs: y }];
+                                })
+                        ).values()]
+                        : [];
+                    return shotId && coords.length > 0 ? { shot_id: shotId, chip_coords: coords } : null;
+                })
+                .filter(Boolean)
+            : [];
+        let selectedChipCoords = hasRegionSelection
             ? [...new Map(
-                options.selectedChips
+                (Array.isArray(options.selectedChips) ? options.selectedChips : [])
+                    .filter(Boolean)
                     .filter((chip) => chip && Number.isFinite(Number(chip.x_abs)) && Number.isFinite(Number(chip.y_abs)))
                     .map((chip) => [`${chip.x_abs}:${chip.y_abs}`, {
                         x_abs: Number(chip.x_abs),
@@ -9576,6 +9600,12 @@ class WaferMapViewer {
                     }])
             ).values()]
             : [];
+        if (selectedShotGroups.length > 0) {
+            selectedChipCoords = [...new Map(
+                [...selectedChipCoords, ...selectedShotGroups.flatMap((group) => group.chip_coords)]
+                    .map((chip) => [`${chip.x_abs}:${chip.y_abs}`, chip])
+            ).values()];
+        }
         const selected = hasRegionSelection
             ? (this.selectedImagePath ? [this.selectedImagePath] : [])
             : this.getSelectedImagesForModal();
@@ -9595,13 +9625,13 @@ class WaferMapViewer {
         const previousPageState = this.captureActivePageState();
         this.lastCompositeSourceImages = [...selected];
         this.lastCompositeSelection = hasRegionSelection
-            ? { mode: selectionMode, chipCoords: selectedChipCoords }
+            ? { mode: selectionMode, chipCoords: selectedChipCoords, shotGroups: selectedShotGroups }
             : null;
         this.clearGridSelectionMarks({ hidePanel: true, updateContext: false });
         this._resetContextCompositeChecks();
 
         const selectionLabel = hasRegionSelection
-            ? `선택 ${selectionMode === 'shot' ? 'Shot' : 'Chip'} (${selectedChipCoords.length}개 Chip)`
+            ? `선택 ${selectionMode === 'shot' ? 'Shot' : 'Chip'} (${selectionMode === 'shot' && selectedShotGroups.length > 0 ? selectedShotGroups.length : selectedChipCoords.length}개, ${selectedChipCoords.length}개 Chip)`
             : null;
         const inputLabel = selectionLabel || `${selected.length}개 이미지`;
 
@@ -9647,6 +9677,7 @@ class WaferMapViewer {
                     ...(hasRegionSelection ? {
                         selection_mode: selectionMode,
                         selected_chip_coords: selectedChipCoords,
+                        ...(selectedShotGroups.length > 0 ? { selected_shot_groups: selectedShotGroups } : {}),
                     } : {}),
                 }),
                 cache: 'no-store'  // 캐시 사용 안 함
@@ -29884,9 +29915,20 @@ class WaferMapViewer {
 
         if (selectedChips.length > 0) {
             const selectedMode = this.chipAnnotator?.selectionMode === 'shot' ? 'shot' : 'chip';
-            const selectedShotCount = selectedMode === 'shot'
-                ? (this.chipAnnotator?._getSelectedShotGroups?.().size || 0)
-                : 0;
+            const selectedShotGroups = selectedMode === 'shot'
+                ? [...(this.chipAnnotator?._getSelectedShotGroups?.() || [])]
+                    .map((group) => ({
+                        shot_id: String(group?.shotId ?? '').trim(),
+                        chip_coords: (Array.isArray(group?.chips) ? group.chips : [])
+                            .map((chip) => ({
+                                x_abs: Number(chip?.x_abs),
+                                y_abs: Number(chip?.y_abs),
+                            }))
+                            .filter((chip) => Number.isFinite(chip.x_abs) && Number.isFinite(chip.y_abs)),
+                    }))
+                    .filter((group) => group.shot_id && group.chip_coords.length > 0)
+                : [];
+            const selectedShotCount = selectedShotGroups.length;
             const selectedUnit = selectedMode === 'shot' ? 'Shot' : 'Chip';
             const selectedUnitCount = selectedMode === 'shot' && selectedShotCount > 0
                 ? selectedShotCount
@@ -29911,6 +29953,7 @@ class WaferMapViewer {
                 this.handleCompositeCreate({
                     selectedChips: selectedSnapshot,
                     selectionMode: selectedMode,
+                    selectedShotGroups,
                 });
             };
             compositeItem.onmouseenter = () => { compositeItem.style.background = '#3a3a3a'; };
@@ -29945,12 +29988,16 @@ class WaferMapViewer {
             separator.style.cssText = 'height: 1px; background: #555; margin: 4px 0;';
             menu.appendChild(separator);
 
-            // 1) 선택 Chip 정보복사
+            // 1) 선택 Chip/Shot 정보복사
             if (selectedChips.length > 0) {
                 const copyChipInfoItem = document.createElement('div');
                 copyChipInfoItem.className = 'context-menu-item';
                 copyChipInfoItem.style.cssText = 'padding: 8px 16px; cursor: pointer; color: #fff; font-size: 14px;';
-                copyChipInfoItem.textContent = `선택 Chip 정보복사 (${selectedChips.length}개)`;
+                const selectedUnit = this.chipAnnotator?.selectionMode === 'shot' ? 'Shot' : 'Chip';
+                const selectedUnitCount = selectedUnit === 'Shot'
+                    ? (this.chipAnnotator?._getSelectedShotGroups?.().size || 0)
+                    : selectedChips.length;
+                copyChipInfoItem.textContent = `선택 ${selectedUnit} 정보복사 (${selectedUnitCount}개)`;
                 copyChipInfoItem.onclick = () => {
                     this.copySelectedChipInfo(selectedChips);
                     menu.remove();
@@ -29958,6 +30005,32 @@ class WaferMapViewer {
                 copyChipInfoItem.onmouseenter = () => { copyChipInfoItem.style.background = '#3a3a3a'; };
                 copyChipInfoItem.onmouseleave = () => { copyChipInfoItem.style.background = ''; };
                 menu.appendChild(copyChipInfoItem);
+
+                const saveTableItem = document.createElement('div');
+                saveTableItem.className = 'context-menu-item';
+                saveTableItem.style.cssText = 'padding: 8px 16px; cursor: pointer; color: #fff; font-size: 14px;';
+                saveTableItem.textContent = `📊 선택 ${selectedUnit} 값 저장 (TSV)`;
+                saveTableItem.onclick = () => {
+                    this.saveSelectedChipInfoAsTsv(selectedChips, selectedUnit);
+                    menu.remove();
+                };
+                saveTableItem.onmouseenter = () => { saveTableItem.style.background = '#3a3a3a'; };
+                saveTableItem.onmouseleave = () => { saveTableItem.style.background = ''; };
+                menu.appendChild(saveTableItem);
+
+                if (selectedUnit === 'Shot') {
+                    const saveShotImagesItem = document.createElement('div');
+                    saveShotImagesItem.className = 'context-menu-item';
+                    saveShotImagesItem.style.cssText = 'padding: 8px 16px; cursor: pointer; color: #fff; font-size: 14px;';
+                    saveShotImagesItem.textContent = '💾 선택 Shot 이미지 저장';
+                    saveShotImagesItem.onclick = () => {
+                        this.downloadSelectedShotImages();
+                        menu.remove();
+                    };
+                    saveShotImagesItem.onmouseenter = () => { saveShotImagesItem.style.background = '#3a3a3a'; };
+                    saveShotImagesItem.onmouseleave = () => { saveShotImagesItem.style.background = ''; };
+                    menu.appendChild(saveShotImagesItem);
+                }
             }
 
             // 2) Wafer 전체 정보복사
@@ -30469,49 +30542,156 @@ class WaferMapViewer {
         };
     }
 
+    _buildChipExportTable(chips) {
+        const m = this._getWaferMetaInfo();
+        const headers = [
+            'LOT', 'WAFER', 'STEP', 'Device', 'PartID', 'PGM', 'TM', 'LT', 'NET', 'GOOD', 'YIELD', 'SYS',
+            'PROCESS_ID', 'CHIP_ID', 'X_ABS', 'Y_ABS', 'BIN', 'G/B',
+            'CHIP_COORD_X(mm)', 'CHIP_COORD_Y(mm)', 'RADIUS(mm)',
+            'SHOT', 'SHOT_ID', 'SHOT_X', 'SHOT_Y', 'FULL_SHOT_TYPE',
+        ];
+        const numberOrNull = (value) => {
+            if (value === null || value === undefined || String(value).trim() === '') return null;
+            const number = Number(value);
+            return Number.isFinite(number) ? number : null;
+        };
+        const formatMm = (value) => {
+            const number = numberOrNull(value);
+            return number === null ? '-' : (number / 1000).toFixed(2);
+        };
+        const safeCell = (value, fallback = '-') => {
+            if (value === null || value === undefined || String(value) === '') return fallback;
+            return String(value).replace(/[\t\r\n]/g, ' ');
+        };
+        const rows = (Array.isArray(chips) ? chips : []).map((chip) => {
+            const layout = this.chipAnnotator?.getLayoutRowForChip(chip) || null;
+            const coordX = numberOrNull(layout?.chip_center_x_pos);
+            const coordY = numberOrNull(layout?.chip_center_y_pos);
+            const radius = coordX === null || coordY === null
+                ? '-'
+                : Math.hypot(coordX / 1000, coordY / 1000).toFixed(2);
+            const bin = chip?.b ?? '';
+            const binNumber = numberOrNull(bin);
+            const chipId = layout?.chip_id ?? chip?.chip_id ?? '';
+            const shotX = layout?.shot_x_pos ?? '';
+            const shotY = layout?.shot_y_pos ?? '';
+            const shot = this.chipAnnotator?.formatShotOrder(shotX, shotY) || '-';
+            return [
+                m.lot, m.wafer, m.step, m.device, m.partId, m.pgm, m.tm, m.lt, m.net, m.good, m.yield, m.sys,
+                this.chipAnnotator?.layoutProcessId || '', chipId, chip?.x_abs ?? '', chip?.y_abs ?? '', bin,
+                binNumber === null ? '' : (binNumber < 200 ? 'G' : 'B'),
+                formatMm(coordX), formatMm(coordY), radius,
+                shot, layout?.shot_id ?? '', shotX, shotY, layout?.full_shot_type ?? '',
+            ].map((value) => safeCell(value, ''));
+        });
+        const text = [headers, ...rows].map((row) => row.join('\t')).join('\n');
+        return { headers, rows, text };
+    }
+
+    _downloadTextFile(text, filename, mimeType = 'text/tab-separated-values;charset=utf-8') {
+        const blob = new Blob([text], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
     /**
-     * 선택 Chip 정보복사 - 헤더 + 선택 chip 행 (TSV)
+     * 선택 Chip/Shot 정보복사 - layout 좌표와 Shot 필드를 포함한 TSV
      */
     async copySelectedChipInfo(selectedChips) {
         if (!selectedChips || selectedChips.length === 0) {
             alert('복사할 chip이 없습니다.');
             return;
         }
-        const m = this._getWaferMetaInfo();
-        const header = ['LOT', 'WAFER', 'STEP', 'Device', 'PartID', 'PGM', 'TM', 'LT', 'NET', 'GOOD', 'YIELD', 'SYS', 'X_ABS', 'Y_ABS', 'BIN', 'G/B'].join('\t');
-        const rows = selectedChips.map(chip => {
-            const bin = chip.b ?? '';
-            const gb = Number(bin) < 200 ? 'G' : 'B';
-            return [m.lot, m.wafer, m.step, m.device, m.partId, m.pgm, m.tm, m.lt, m.net, m.good, m.yield, m.sys, chip.x_abs, chip.y_abs, bin, gb].join('\t');
-        });
-        const text = [header, ...rows].join('\n');
+        const table = this._buildChipExportTable(selectedChips);
         try {
-            await navigator.clipboard.writeText(text);
-            this.showToast?.(`${selectedChips.length}개 Chip 정보가 클립보드에 복사되었습니다.`, 2000);
+            await navigator.clipboard.writeText(table.text);
+            const unit = this.chipAnnotator?.selectionMode === 'shot' ? 'Shot' : 'Chip';
+            const count = unit === 'Shot'
+                ? (this.chipAnnotator?._getSelectedShotGroups?.().size || 0)
+                : selectedChips.length;
+            this.showToast?.(`${count}개 ${unit} 정보가 클립보드에 복사되었습니다.`, 2000);
         } catch (error) {
             console.error('클립보드 복사 실패:', error);
             alert('클립보드 복사에 실패했습니다.');
         }
     }
 
+    saveSelectedChipInfoAsTsv(selectedChips, unitLabel = 'Chip') {
+        if (!selectedChips || selectedChips.length === 0) {
+            alert('저장할 chip이 없습니다.');
+            return;
+        }
+        const table = this._buildChipExportTable(selectedChips);
+        const sourceName = (this.selectedImagePath || 'wafer')
+            .replace(/\\/g, '/')
+            .split('/')
+            .pop()
+            .replace(/\.[^.]+$/, '')
+            .replace(/[^a-zA-Z0-9._-]+/g, '_');
+        this._downloadTextFile(table.text, `${sourceName}_${String(unitLabel).toLowerCase()}_values.tsv`);
+        this.showToast?.(`${unitLabel} 값 TSV 저장을 시작했습니다.`, 1800);
+    }
+
+    async downloadSelectedShotImages() {
+        const groups = [...(this.chipAnnotator?._getSelectedShotGroups?.() || [])];
+        const sourcePath = this.chipAnnotator?.currentImagePath || this.selectedImagePath;
+        if (!sourcePath || groups.length === 0) {
+            alert('저장할 Shot이 없습니다.');
+            return;
+        }
+
+        const sourceName = sourcePath.replace(/\\/g, '/').split('/').pop().replace(/\.[^.]+$/, '') || 'wafer';
+        let savedCount = 0;
+        try {
+            for (const group of groups) {
+                const boundary = this.chipAnnotator?._getShotBoundaryRect?.(group);
+                if (!boundary) continue;
+                const params = new URLSearchParams({
+                    path: sourcePath,
+                    x: String(Math.floor(boundary.minX)),
+                    y: String(Math.floor(boundary.minY)),
+                    width: String(Math.ceil(boundary.width)),
+                    height: String(Math.ceil(boundary.height)),
+                });
+                const response = await fetch(`/api/image/crop?${params.toString()}`);
+                if (!response.ok) throw new Error(`Shot crop failed: ${response.status}`);
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `${sourceName}_shot_${String(group.shotId).replace(/[^a-zA-Z0-9._-]+/g, '_')}.png`;
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+                savedCount += 1;
+                await new Promise((resolve) => setTimeout(resolve, 60));
+            }
+            this.showToast?.(`${savedCount}개 Shot 이미지 저장을 시작했습니다.`, 1800);
+        } catch (error) {
+            console.error('Shot 이미지 저장 실패:', error);
+            alert('Shot 이미지 저장에 실패했습니다.');
+        }
+    }
+
     /**
-     * Wafer 전체 정보복사 - 헤더 + 전체 chip 행 (TSV)
+     * Wafer 전체 정보복사 - 선택 Chip/Shot과 동일한 전체 필드 TSV
      */
     async copyWaferFullInfo() {
         if (!this.selectedImagePath) {
             alert('이미지가 로드되지 않았습니다.');
             return;
         }
-        const m = this._getWaferMetaInfo();
         const allChips = this.chipAnnotator?.chips || [];
-        const header = ['LOT', 'WAFER', 'STEP', 'Device', 'PartID', 'PGM', 'TM', 'LT', 'NET', 'GOOD', 'YIELD', 'SYS', 'X_ABS', 'Y_ABS', 'BIN'].join('\t');
-        const rows = allChips.map(chip => {
-            const bin = chip.b !== undefined && chip.b !== null ? chip.b : '-';
-            return [m.lot, m.wafer, m.step, m.device, m.partId, m.pgm, m.tm, m.lt, m.net, m.good, m.yield, m.sys, chip.x_abs, chip.y_abs, bin].join('\t');
-        });
-        const text = [header, ...rows].join('\n');
+        const table = this._buildChipExportTable(allChips);
         try {
-            await navigator.clipboard.writeText(text);
+            await navigator.clipboard.writeText(table.text);
             this.showToast?.(`Wafer 전체 정보 (${allChips.length}개 Chip)가 클립보드에 복사되었습니다.`, 2000);
         } catch (error) {
             console.error('클립보드 복사 실패:', error);

@@ -137,7 +137,11 @@ def _normalize_selected_chip_coords(
     normalized: set[Tuple[int, int]] = set()
     for coord in selected_chip_coords:
         try:
-            x_abs, y_abs = coord
+            if isinstance(coord, dict):
+                x_abs = coord.get("x_abs", coord.get("xAbs"))
+                y_abs = coord.get("y_abs", coord.get("yAbs"))
+            else:
+                x_abs, y_abs = coord
             normalized.add((int(x_abs), int(y_abs)))
         except (TypeError, ValueError):
             continue
@@ -241,6 +245,9 @@ def _copy_positions_without_bin(
     keep_chip_bin: bool = False,
     selected_chip_coords: Optional[Sequence[Tuple[int, int]]] = None,
     selection_crop: Optional[Dict[str, Any]] = None,
+    position_rect_overrides: Optional[Dict[Tuple[int, int], Dict[str, Any]]] = None,
+    position_canvas_size: Optional[Tuple[int, int]] = None,
+    position_grid_edges: Optional[Dict[str, List[int]]] = None,
 ) -> None:
     """
     첫 번째 이미지의 positions.json을 찾아 composite 결과 이미지들에 대응하는
@@ -289,6 +296,37 @@ def _copy_positions_without_bin(
                         chip["b"] = "Normal"
                 elif "b" in chip:
                     del chip["b"]
+
+            if position_rect_overrides:
+                def apply_rect_override(chip: Any) -> None:
+                    if not isinstance(chip, dict):
+                        return
+                    coord_key = _coord_key_from_chip(chip)
+                    override = position_rect_overrides.get(coord_key)
+                    if override is not None:
+                        chip["rect"] = copy.deepcopy(override)
+
+                for chip in template_chips:
+                    apply_rect_override(chip)
+                positions = positions_template.get("positions")
+                if isinstance(positions, dict):
+                    for chip in positions.values():
+                        apply_rect_override(chip)
+
+            if position_canvas_size or position_grid_edges:
+                coord = positions_template.get("coord")
+                if not isinstance(coord, dict):
+                    coord = {}
+                    positions_template["coord"] = coord
+                if position_canvas_size:
+                    canvas = coord.get("canvas")
+                    if not isinstance(canvas, dict):
+                        canvas = {}
+                        coord["canvas"] = canvas
+                    canvas["width"] = int(position_canvas_size[0])
+                    canvas["height"] = int(position_canvas_size[1])
+                if position_grid_edges:
+                    coord["grid_edges"] = copy.deepcopy(position_grid_edges)
 
             if selection_crop:
                 _translate_positions_for_selection_crop(positions_template, selection_crop)
@@ -437,6 +475,337 @@ def _find_selected_region_crop(
     if x1 <= x0 or y1 <= y0:
         return None
     return {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "padding": padding}
+
+
+def _normalize_selected_shot_groups(
+    selected_shot_groups: Optional[Sequence[Dict[str, Any]]],
+) -> Optional[List[Dict[str, Any]]]:
+    if not selected_shot_groups:
+        return None
+    normalized: List[Dict[str, Any]] = []
+    for group in selected_shot_groups:
+        if not isinstance(group, dict):
+            continue
+        shot_id = str(group.get("shot_id") or "").strip()
+        coords = _normalize_selected_chip_coords(
+            group.get("chip_coords") or group.get("selected_chip_coords")
+        )
+        if shot_id and coords:
+            normalized.append({"shot_id": shot_id, "coords": coords})
+    return normalized or None
+
+
+def _chip_pixel_rect_from_positions(
+    chip: Dict[str, Any],
+    positions_data: Dict[str, Any],
+    width: int,
+    height: int,
+) -> Optional[Tuple[int, int, int, int]]:
+    coord = positions_data.get("coord", {})
+    canvas = coord.get("canvas", {}) if isinstance(coord, dict) else {}
+    canvas_w = float(canvas.get("width") or width) if isinstance(canvas, dict) else float(width)
+    canvas_h = float(canvas.get("height") or height) if isinstance(canvas, dict) else float(height)
+    scale_x = width / canvas_w if canvas_w > 0 else 1.0
+    scale_y = height / canvas_h if canvas_h > 0 else 1.0
+    rect = chip.get("rect") if isinstance(chip, dict) else None
+    x0_raw = rect.get("x0") if isinstance(rect, dict) else None
+    y0_raw = rect.get("y0") if isinstance(rect, dict) else None
+    x1_raw = rect.get("x1") if isinstance(rect, dict) else None
+    y1_raw = rect.get("y1") if isinstance(rect, dict) else None
+    if None in (x0_raw, y0_raw, x1_raw, y1_raw):
+        x_raw = chip.get("x")
+        y_raw = chip.get("y")
+        w_raw = chip.get("w", chip.get("width"))
+        h_raw = chip.get("h", chip.get("height"))
+        if None in (x_raw, y_raw, w_raw, h_raw):
+            return None
+        x0_raw, y0_raw = x_raw, y_raw
+        x1_raw = float(x_raw) + float(w_raw)
+        y1_raw = float(y_raw) + float(h_raw)
+    try:
+        x0, y0, x1, y1 = float(x0_raw), float(y0_raw), float(x1_raw), float(y1_raw)
+    except (TypeError, ValueError):
+        return None
+    if x1 < x0:
+        x0, x1 = x1, x0
+    if y1 < y0:
+        y0, y1 = y1, y0
+    sx0 = max(0, min(width, int(x0 * scale_x)))
+    sy0 = max(0, min(height, int(y0 * scale_y)))
+    sx1 = max(0, min(width, int(x1 * scale_x + 0.9999)))
+    sy1 = max(0, min(height, int(y1 * scale_y + 0.9999)))
+    return (sx0, sy0, sx1, sy1) if sx1 > sx0 and sy1 > sy0 else None
+
+
+def _build_selected_shot_geometry(
+    positions_data: Dict[str, Any],
+    selected_shot_groups: Sequence[Dict[str, Any]],
+    width: int,
+    height: int,
+    show_normal_border: bool = True,
+) -> Dict[str, Any]:
+    """Build one canonical chip grid for several same-shaped Shot groups."""
+    chips_by_coord = {
+        key: chip
+        for chip in positions_data.get("chips", [])
+        if isinstance(chip, dict)
+        for key in [_coord_key_from_chip(chip)]
+        if key is not None
+    }
+    groups: List[Dict[str, Any]] = []
+    signature = None
+    source_chip_count = 0
+
+    for group in selected_shot_groups:
+        group_chips = [
+            (coord, chips_by_coord[coord])
+            for coord in sorted(group["coords"], key=lambda value: (value[1], value[0]))
+            if coord in chips_by_coord
+        ]
+        if not group_chips:
+            continue
+        min_x = min(coord[0] for coord, _ in group_chips)
+        max_x = max(coord[0] for coord, _ in group_chips)
+        min_y = min(coord[1] for coord, _ in group_chips)
+        max_y = max(coord[1] for coord, _ in group_chips)
+        group_signature = (max_x - min_x + 1, max_y - min_y + 1)
+        if signature is None:
+            signature = group_signature
+        elif signature != group_signature:
+            raise ValueError(
+                "서로 다른 chip 가로×세로 Shot은 하나의 Composite Map으로 합칠 수 없습니다."
+            )
+
+        source_rects = []
+        for coord, chip in group_chips:
+            rect = _chip_pixel_rect_from_positions(chip, positions_data, width, height)
+            if rect is None:
+                continue
+            source_rects.append((coord, chip, rect))
+        if not source_rects:
+            continue
+        cell_width = int(round(np.median([r[2] - r[0] for _, _, r in source_rects])))
+        cell_height = int(round(np.median([r[3] - r[1] for _, _, r in source_rects])))
+        if cell_width <= 0 or cell_height <= 0:
+            continue
+        groups.append({
+            "shot_id": group["shot_id"],
+            "min_x": min_x,
+            "min_y": min_y,
+            "placements": [
+                {
+                    "coord": coord,
+                    "chip": chip,
+                    "source_rect": rect,
+                    "target_rect": (
+                        (coord[0] - min_x) * cell_width,
+                        (coord[1] - min_y) * cell_height,
+                        (coord[0] - min_x + 1) * cell_width,
+                        (coord[1] - min_y + 1) * cell_height,
+                    ),
+                }
+                for coord, chip, rect in source_rects
+            ],
+            "cell_width": cell_width,
+            "cell_height": cell_height,
+        })
+        source_chip_count += len(source_rects)
+
+    if not groups or signature is None:
+        raise ValueError("선택한 Shot에 원본 positions chip이 없습니다.")
+
+    cols, rows = signature
+    cell_width = groups[0]["cell_width"]
+    cell_height = groups[0]["cell_height"]
+    target_width = cols * cell_width
+    target_height = rows * cell_height
+    base_indices = np.full((target_height, target_width), 8, dtype=np.uint8)
+    output_coords: set[Tuple[int, int]] = set()
+    position_rect_overrides: Dict[Tuple[int, int], Dict[str, Any]] = {}
+
+    # Output positions represent one canonical Shot (the first selected group).
+    for placement in groups[0]["placements"]:
+        coord = placement["coord"]
+        tx0, ty0, tx1, ty1 = placement["target_rect"]
+        output_coords.add(coord)
+        base_indices[ty0:ty1, tx0:tx1] = 0
+        if show_normal_border:
+            base_indices[ty0, tx0:tx1] = 10
+            base_indices[ty1 - 1, tx0:tx1] = 10
+            base_indices[ty0:ty1, tx0] = 10
+            base_indices[ty0:ty1, tx1 - 1] = 10
+        position_rect_overrides[coord] = {
+            "x0": tx0,
+            "y0": ty0,
+            "x1": tx1,
+            "y1": ty1,
+            "quad": [[tx0, ty0], [tx1, ty0], [tx1, ty1], [tx0, ty1]],
+        }
+
+    return {
+        "groups": groups,
+        "shot_count": len(groups),
+        "source_chip_count": source_chip_count,
+        "output_chip_count": len(output_coords),
+        "shot_shape": {"cols": cols, "rows": rows},
+        "width": target_width,
+        "height": target_height,
+        "base_indices": base_indices,
+        "output_coords": output_coords,
+        "position_rect_overrides": position_rect_overrides,
+        "position_canvas_size": (target_width, target_height),
+        "position_grid_edges": {
+            "xs": [index * cell_width for index in range(cols + 1)],
+            "ys": [index * cell_height for index in range(rows + 1)],
+        },
+    }
+
+
+def _build_selected_chip_geometry(
+    positions_data: Dict[str, Any],
+    selected_coords: Sequence[Tuple[int, int]],
+    width: int,
+    height: int,
+    show_normal_border: bool = True,
+) -> Dict[str, Any]:
+    """Normalize several selected Chips into one canonical Chip canvas."""
+    chips_by_coord = {
+        key: chip
+        for chip in positions_data.get("chips", [])
+        if isinstance(chip, dict)
+        for key in [_coord_key_from_chip(chip)]
+        if key is not None
+    }
+    source_rects = []
+    for coord in sorted(set(selected_coords), key=lambda value: (value[1], value[0])):
+        chip = chips_by_coord.get(coord)
+        if chip is None:
+            continue
+        rect = _chip_pixel_rect_from_positions(chip, positions_data, width, height)
+        if rect is not None:
+            source_rects.append((coord, chip, rect))
+    if not source_rects:
+        raise ValueError("선택한 Chip에 원본 positions rect가 없습니다.")
+
+    cell_width = int(round(np.median([rect[2] - rect[0] for _, _, rect in source_rects])))
+    cell_height = int(round(np.median([rect[3] - rect[1] for _, _, rect in source_rects])))
+    if cell_width <= 0 or cell_height <= 0:
+        raise ValueError("선택한 Chip의 크기를 계산할 수 없습니다.")
+
+    canonical_coord = source_rects[0][0]
+    target_rect = (0, 0, cell_width, cell_height)
+    base_indices = np.full((cell_height, cell_width), 8, dtype=np.uint8)
+    base_indices[:, :] = 0
+    if show_normal_border:
+        base_indices[0, :] = 10
+        base_indices[-1, :] = 10
+        base_indices[:, 0] = 10
+        base_indices[:, -1] = 10
+
+    return {
+        "placements": [
+            {
+                "coord": coord,
+                "chip": chip,
+                "source_rect": rect,
+                "target_rect": target_rect,
+            }
+            for coord, chip, rect in source_rects
+        ],
+        "source_chip_count": len(source_rects),
+        "output_chip_count": 1,
+        "width": cell_width,
+        "height": cell_height,
+        "base_indices": base_indices,
+        "output_coords": {canonical_coord},
+        "position_rect_overrides": {
+            canonical_coord: {
+                "x0": 0,
+                "y0": 0,
+                "x1": cell_width,
+                "y1": cell_height,
+                "quad": [[0, 0], [cell_width, 0], [cell_width, cell_height], [0, cell_height]],
+            }
+        },
+        "position_canvas_size": (cell_width, cell_height),
+        "position_grid_edges": {
+            "xs": [0, cell_width],
+            "ys": [0, cell_height],
+        },
+    }
+
+
+def _remap_selected_shot_accumulators(
+    grade_counts: np.ndarray,
+    has_0_7: np.ndarray,
+    has_8_13: np.ndarray,
+    all_invalid: np.ndarray,
+    shot_geometry: Dict[str, Any],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    target_counts = np.zeros(
+        (grade_counts.shape[0], shot_geometry["height"], shot_geometry["width"]),
+        dtype=grade_counts.dtype,
+    )
+    target_has_0_7 = np.zeros((shot_geometry["height"], shot_geometry["width"]), dtype=np.bool_)
+    target_has_8_13 = np.zeros((shot_geometry["height"], shot_geometry["width"]), dtype=np.bool_)
+    target_all_invalid = np.ones((shot_geometry["height"], shot_geometry["width"]), dtype=np.bool_)
+
+    for group in shot_geometry["groups"]:
+        for placement in group["placements"]:
+            sx0, sy0, sx1, sy1 = placement["source_rect"]
+            tx0, ty0, tx1, ty1 = placement["target_rect"]
+            source_width = sx1 - sx0
+            source_height = sy1 - sy0
+            target_width = tx1 - tx0
+            target_height = ty1 - ty0
+            copy_width = min(source_width, target_width)
+            copy_height = min(source_height, target_height)
+            if copy_width <= 0 or copy_height <= 0:
+                continue
+            sx1 = sx0 + copy_width
+            sy1 = sy0 + copy_height
+            tx1 = tx0 + copy_width
+            ty1 = ty0 + copy_height
+            target_counts[:, ty0:ty1, tx0:tx1] += grade_counts[:, sy0:sy1, sx0:sx1]
+            target_has_0_7[ty0:ty1, tx0:tx1] |= has_0_7[sy0:sy1, sx0:sx1]
+            target_has_8_13[ty0:ty1, tx0:tx1] |= has_8_13[sy0:sy1, sx0:sx1]
+            target_all_invalid[ty0:ty1, tx0:tx1] &= all_invalid[sy0:sy1, sx0:sx1]
+
+    return target_counts, target_has_0_7, target_has_8_13, target_all_invalid
+
+
+def _remap_selected_chip_accumulators(
+    grade_counts: np.ndarray,
+    has_0_7: np.ndarray,
+    has_8_13: np.ndarray,
+    all_invalid: np.ndarray,
+    chip_geometry: Dict[str, Any],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    target_counts = np.zeros(
+        (grade_counts.shape[0], chip_geometry["height"], chip_geometry["width"]),
+        dtype=grade_counts.dtype,
+    )
+    target_has_0_7 = np.zeros((chip_geometry["height"], chip_geometry["width"]), dtype=np.bool_)
+    target_has_8_13 = np.zeros((chip_geometry["height"], chip_geometry["width"]), dtype=np.bool_)
+    target_all_invalid = np.ones((chip_geometry["height"], chip_geometry["width"]), dtype=np.bool_)
+
+    for placement in chip_geometry["placements"]:
+        sx0, sy0, sx1, sy1 = placement["source_rect"]
+        tx0, ty0, tx1, ty1 = placement["target_rect"]
+        copy_width = min(sx1 - sx0, tx1 - tx0)
+        copy_height = min(sy1 - sy0, ty1 - ty0)
+        if copy_width <= 0 or copy_height <= 0:
+            continue
+        sx1 = sx0 + copy_width
+        sy1 = sy0 + copy_height
+        tx1 = tx0 + copy_width
+        ty1 = ty0 + copy_height
+        target_counts[:, ty0:ty1, tx0:tx1] += grade_counts[:, sy0:sy1, sx0:sx1]
+        target_has_0_7[ty0:ty1, tx0:tx1] |= has_0_7[sy0:sy1, sx0:sx1]
+        target_has_8_13[ty0:ty1, tx0:tx1] |= has_8_13[sy0:sy1, sx0:sx1]
+        target_all_invalid[ty0:ty1, tx0:tx1] &= all_invalid[sy0:sy1, sx0:sx1]
+
+    return target_counts, target_has_0_7, target_has_8_13, target_all_invalid
 
 
 def _count_unique_devices(image_paths: List[str], max_sample: int = 64) -> int:
@@ -2249,6 +2618,7 @@ def create_composite_heatmaps(
     scheme: Optional[str] = None,
     login_id: Optional[str] = None,
     selected_chip_coords: Optional[Sequence[Tuple[int, int]]] = None,
+    selected_shot_groups: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     start_time = time.perf_counter()
     trace = _trace_enabled()
@@ -2260,6 +2630,14 @@ def create_composite_heatmaps(
         raise ValueError("image_paths is empty")
 
     selected_coord_set = _normalize_selected_chip_coords(selected_chip_coords)
+    normalized_shot_groups = _normalize_selected_shot_groups(selected_shot_groups)
+    if normalized_shot_groups:
+        grouped_coords = {
+            coord
+            for group in normalized_shot_groups
+            for coord in group["coords"]
+        }
+        selected_coord_set = (selected_coord_set or set()) | grouped_coords
 
     t = time.perf_counter()
     numba_warm_info = warm_numba_kernels() if _HAS_NUMBA else _numba_runtime_info(warmed=False)
@@ -2376,7 +2754,16 @@ def create_composite_heatmaps(
     # positions_source_path 탐색과 통합
     t = time.perf_counter()
     positions_source_path = _first_image_with_positions(image_paths)
+    if normalized_shot_groups and not positions_source_path:
+        raise ValueError("여러 Shot Composite에는 positions 파일이 필요합니다.")
     show_normal_border = True
+    shot_geometry = None
+    chip_geometry = None
+    position_rect_overrides = None
+    position_canvas_size = None
+    position_grid_edges = None
+    composite_sample_count = processed_count
+    selected_chip_count_result = None
     if positions_source_path:
         # device 개수 확인: 첫 번째와 두 번째만 비교 (전체 스캔 대신)
         first_pos = _load_source_positions_data(positions_source_path)
@@ -2397,6 +2784,38 @@ def create_composite_heatmaps(
                 if alt_device and alt_device != first_device:
                     show_normal_border = False
                     break
+        if normalized_shot_groups:
+            if not isinstance(first_pos, dict):
+                raise ValueError("여러 Shot Composite에는 positions 파일이 필요합니다.")
+            shot_geometry = _build_selected_shot_geometry(
+                first_pos,
+                normalized_shot_groups,
+                width=width,
+                height=height,
+                show_normal_border=show_normal_border,
+            )
+            selected_coord_set = set(shot_geometry["output_coords"])
+            position_rect_overrides = shot_geometry["position_rect_overrides"]
+            position_canvas_size = shot_geometry["position_canvas_size"]
+            position_grid_edges = shot_geometry["position_grid_edges"]
+            composite_sample_count = processed_count * shot_geometry["shot_count"]
+            selected_chip_count_result = shot_geometry["output_chip_count"]
+        elif selected_coord_set is not None:
+            if not isinstance(first_pos, dict):
+                raise ValueError("선택 Chip Composite에는 positions 파일이 필요합니다.")
+            chip_geometry = _build_selected_chip_geometry(
+                first_pos,
+                selected_coord_set,
+                width=width,
+                height=height,
+                show_normal_border=show_normal_border,
+            )
+            selected_coord_set = set(chip_geometry["output_coords"])
+            position_rect_overrides = chip_geometry["position_rect_overrides"]
+            position_canvas_size = chip_geometry["position_canvas_size"]
+            position_grid_edges = chip_geometry["position_grid_edges"]
+            composite_sample_count = processed_count * chip_geometry["source_chip_count"]
+            selected_chip_count_result = chip_geometry["source_chip_count"]
     _mark("positions_lookup", t)
 
     # (idx_8_13_only를 제외한 포인트 중 0-7이 있는 것)
@@ -2409,7 +2828,29 @@ def create_composite_heatmaps(
         chip_area &= ~invalid_mask_bool
 
     base_indices = None
-    if positions_source_path:
+    if shot_geometry:
+        grade_counts, has_0_7, has_8_13, all_invalid = _remap_selected_shot_accumulators(
+            grade_counts,
+            has_0_7,
+            has_8_13,
+            all_invalid,
+            shot_geometry,
+        )
+        width = shot_geometry["width"]
+        height = shot_geometry["height"]
+        base_indices = shot_geometry["base_indices"]
+    elif chip_geometry:
+        grade_counts, has_0_7, has_8_13, all_invalid = _remap_selected_chip_accumulators(
+            grade_counts,
+            has_0_7,
+            has_8_13,
+            all_invalid,
+            chip_geometry,
+        )
+        width = chip_geometry["width"]
+        height = chip_geometry["height"]
+        base_indices = chip_geometry["base_indices"]
+    elif positions_source_path:
         base_indices = _build_chip_base_indices_from_positions(
             positions_source_path,
             width=width,
@@ -2423,12 +2864,12 @@ def create_composite_heatmaps(
         base_indices[chip_area] = 0
 
     selection_crop = None
-    if selected_coord_set is not None and positions_source_path:
+    if selected_coord_set is not None and positions_source_path and not (shot_geometry or chip_geometry):
         selection_crop = _find_selected_region_crop(base_indices)
         if selection_crop:
             selection_crop.update({
-                "source_width": source_width,
-                "source_height": source_height,
+                "source_width": width,
+                "source_height": height,
             })
             crop_x = selection_crop["x"]
             crop_y = selection_crop["y"]
@@ -2487,7 +2928,7 @@ def create_composite_heatmaps(
             "index": idx,
             "path": rel_path,
             "pixel_count": pixel_count,
-            "max_count": processed_count,
+            "max_count": composite_sample_count,
             "percentage": percentage,
             "heatmap_time": heatmap_time,
         }
@@ -2508,7 +2949,7 @@ def create_composite_heatmaps(
                 _save_sum_map_variants,
                 None, output_dir, palette_bytes,
                 invalid_mask, base_indices, idx_8_13_only, scheme,
-                "", False, grade_counts, chip_inner_mask, None, processed_count,
+                "", False, grade_counts, chip_inner_mask, None, composite_sample_count,
             )
 
         # heatmap 결과 수집
@@ -2541,7 +2982,7 @@ def create_composite_heatmaps(
                 grade_counts=grade_counts,
                 invalid_mask=invalid_mask,
                 idx_8_mask=idx_8_13_only,
-                image_count=processed_count,
+                image_count=composite_sample_count,
                 color_scheme=scheme or ANONYMOUS_LOGIN_ID,
             )
 
@@ -2566,6 +3007,9 @@ def create_composite_heatmaps(
                 "keep_chip_bin": show_normal_border,
                 "selected_chip_coords": selected_coord_set,
                 "selection_crop": selection_crop,
+                "position_rect_overrides": position_rect_overrides,
+                "position_canvas_size": position_canvas_size,
+                "position_grid_edges": position_grid_edges,
             },
             daemon=True,
         ).start()
@@ -2585,12 +3029,13 @@ def create_composite_heatmaps(
     print(f"  - save_heatmaps+sum_maps:    {timings.get('save_heatmaps_and_sum_maps', 0):.3f}s")
     if heatmap_times:
         print(f"    heatmap times:             {[round(t, 3) for t in heatmap_times]}")
-    print(f"  - total:                     {total_time:.3f}s ({processed_count} images)\n")
+    print(f"  - total:                     {total_time:.3f}s ({processed_count} images, {composite_sample_count} aligned samples)\n")
 
     result = {
         "output_dir": output_dir.relative_to(IMAGES_ROOT).as_posix(),
         "heatmaps": heatmaps,
         "source_images": processed_count,
+        "composite_sample_count": composite_sample_count,
         "source_image_paths": image_paths,
         "image_size": {"width": width, "height": height},
         "source_image_size": {"width": source_width, "height": source_height},
@@ -2605,8 +3050,12 @@ def create_composite_heatmaps(
         "timings": timings,
     }
     if selected_coord_set is not None:
-        result["selected_chip_count"] = len(selected_coord_set)
+        result["selected_chip_count"] = selected_chip_count_result or len(selected_coord_set)
         result["selection_crop"] = selection_crop
+    if shot_geometry:
+        result["selected_shot_count"] = shot_geometry["shot_count"]
+        result["selected_source_chip_count"] = shot_geometry["source_chip_count"]
+        result["selected_shot_shape"] = shot_geometry["shot_shape"]
     if sum_map_rel_path:
         result["sum_map_path"] = sum_map_rel_path
     if sum_map_entries:

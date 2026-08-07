@@ -27,10 +27,14 @@ argument-hint: [Phase 번호 또는 범위]
 
 ## E2E 역할 구성과 실행 게이트
 
-- **Master gate**: 현재 Codex 세션이 변경 범위, P0/P1 우선순위, 전체 summary, 실패 원인과 재실행 여부를 최종 판정한다.
-- **저비용 worker lanes**: 정적 문법/공백 검사, API 계약 검사, P0 Measure 브라우저 검사, P1 Composite/Measure/BIN 브라우저 검사, 전체 chunk 성능·프로세스 로그 검사를 독립 작업으로 나눈다.
-- 이 실행 환경에는 별도 LLM sub-agent를 호출하는 도구가 노출되어 있지 않다. 따라서 위 worker는 모델을 가장한 프로세스가 아니라 `node --check`, 서버 API 계약, Playwright chunk, PowerShell runner로 실제 실행한다. 별도 sub-agent provider가 연결된 환경에서는 Master가 각 lane에 저비용 모델을 배정하되, PASS/FAIL 판정과 재실행은 Master가 단독으로 맡는다.
-- 순서는 `static -> P0/P1 targeted chunk -> failure triage -> same chunk rerun -> Chunk all`이다. targeted guard가 실패한 상태로 전체 E2E를 PASS 처리하지 않는다.
+- **결정론적 browser lane**: `scripts/run-e2e-playwright.ps1 -Chunk all -Headless`가 실제 Playwright UI, bitmap, request body, 다운로드, 성능, 프로세스 정리를 수행한다. LLM이 브라우저를 임의로 클릭해 PASS를 만드는 구조가 아니다.
+- **Scout**: 저비용 read-only agent 1개가 evidence/log/diff를 읽고 사실, 첫 실패, 누락 검증을 추출한다.
+- **Planner**: 상위 모델 3개가 독립적으로 P0/P1 재현·수정 계획을 작성한다.
+- **Reviewer/Judge**: 상위 모델 3개가 실제 E2E 결과, output image dimensions, positions, export TSV, UI request body를 각각 점수화하고 토론용 근거를 남긴다.
+- **Master**: 상위 모델 3개 슬롯 중 한 모델을 cycle마다 순환 사용해 최종 PASS/FAIL을 판정한다. `E2E exit=0`과 master PASS가 모두 충족되면 hourly cycle을 즉시 중지한다.
+- 실행기는 `scripts/e2e-agent-cycle.ps1`, 역할/모델 설정은 `scripts/e2e-agent-config.json`, 결과는 `D:\project\mapviewer\.codex-tmp\e2e-agent-cycles\`에 저장한다. 기본 모델 alias는 scout=`sonnet`, 상위 슬롯=`opus`이며 `E2E_*_MODELS` 환경변수로 교체할 수 있다.
+- 순서는 `static -> P0/P1 targeted chunk -> failure triage -> same chunk rerun -> Chunk all -> scout -> planner 3개 -> reviewer 3개 -> rotating master`이다. targeted guard가 실패한 상태로 전체 E2E를 PASS 처리하지 않는다.
+- `-Mode hourly-until-clean`은 실패/미판정일 때만 60분 후 새 세션을 시작하고, 이상이 없으면 반복하지 않는다. `-PlanOnly`는 agent 호출과 browser 실행 없이 구성을 검증한다.
 - `systematic-bin-group`는 Composite와 Measure 각각에 `285,286,287,288,290,291,300,385,386,388,389,390`만 들어가는지, SYSTEMATIC이 NORMAL/INVALID보다 먼저 표시되는지, 단일/그리드 filtered render URL, 실제 `mode=systematic` API 응답과 matched chip 수를 함께 확인한다. `BIN336` 같은 비계약 숫자는 SYSTEMATIC에 포함되면 안 된다.
 
 ## 절대규칙 #-5: 장시간 E2E는 중간 보고 필수
@@ -6496,3 +6500,11 @@ return {
 **수정**: `scripts/e2e_chunk1.js`의 range-click 대상과 실패 메시지를 `scratch -> fork`로 갱신한다.
 **평가**: Phase `chip-label-prefix-wafer`에서 Shift+`fork` 클릭 후 active/filter가 `scratch`, `bank_boundary`, `scratch_rot`, `fork` contiguous range와 일치해야 한다.
 **파일**: `scripts/e2e_chunk1.js`, `api/full_app.py`
+
+#### BUG-24: 다중 Shot/Chip Composite와 export 정합성 회귀 (2026-08-07)
+- `scripts/e2e_chunk2.js`의 `selected-region-composite`는 실제 P001 fixture에서 단일 Shot, 다중 Chip, 동일 형상 Shot 4/5 두 개를 검사한다.
+- 두 Shot 결과는 단일 Shot 결과와 `width`, `height`, canonical chip 격자 `4×6`이 같아야 한다. positions chip 수는 canonical 첫 Shot의 24개, `selected_source_chip_count`는 두 Shot 합계 48개, `composite_sample_count`는 source image 수×Shot 수여야 한다.
+- `selected_shot_groups`가 없는 기존 Chip 요청도 유지해야 하며, positions가 결과 output canvas로 비동기 복사된 뒤 `/api/chip-positions`에서 chip rect/canvas를 다시 확인한다.
+- `selected-region-export`는 Chip/Shot context menu를 실제로 열고, Shot 이미지 PNG 다운로드, Shot TSV 다운로드, clipboard TSV header의 `CHIP_COORD_X(mm)`, `CHIP_COORD_Y(mm)`, `RADIUS(mm)`, `SHOT_ID`, `SHOT_X`, `SHOT_Y`를 확인한다. Chip export도 같은 schema와 선택 행 수를 확인한다.
+- UI 상태 플래그만으로 PASS 처리하지 않는다. API request body의 `selected_shot_groups`, output image dimensions, positions count, 다운로드 suggested filename을 모두 기록한다.
+- Chip Composite는 선택 Chip 3개를 한 Chip 크기의 canonical canvas에 누적해야 한다. 선택 Chip을 원래 Shot 위치에 여러 개 배치한 결과가 나오면 FAIL이다. output image와 positions canvas는 첫 Chip 크기, positions chip 수는 1, `selected_chip_count=3`, `composite_sample_count=3`이어야 한다.

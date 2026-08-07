@@ -2137,6 +2137,83 @@ const { createRunner } = require('./e2e_playwright_session');
       { timeout: 30000 }
     );
 
+    const uiShotSelection = await page.evaluate(() => {
+      const v = window.viewer;
+      const annotator = v?.chipAnnotator;
+      const canvas = annotator?.canvas;
+      const box = canvas?.getBoundingClientRect?.();
+      if (!annotator || !canvas || !box || !v.transform) return null;
+      const groups = ['4', '5'].map((shotId) => {
+        const group = Array.from(annotator.shotBoundaryGroups?.values?.() || [])
+          .find((candidate) => String(candidate?.shotId) === shotId);
+        const chip = group?.chips?.[0];
+        if (!group || !chip?.rect) return null;
+        const x = ((chip.rect.x0 + chip.rect.x1) / 2) * v.transform.scale + v.transform.dx;
+        const y = ((chip.rect.y0 + chip.rect.y1) / 2) * v.transform.scale + v.transform.dy + (annotator.Y_OFFSET || 0);
+        return {
+          shotId,
+          chipCount: group.chips.length,
+          x: box.left + (x / canvas.width) * box.width,
+          y: box.top + (y / canvas.height) * box.height,
+        };
+      });
+      return groups.every(Boolean) ? groups : null;
+    });
+    expect(uiShotSelection?.every((group) => group.chipCount === 24),
+      `UI shot groups=${JSON.stringify(uiShotSelection)}`);
+    await page.evaluate(() => window.viewer?.chipAnnotator?.setSelectionMode('shot'));
+    for (const group of uiShotSelection) {
+      await page.keyboard.down('Control');
+      try {
+        await page.mouse.click(group.x, group.y);
+      } finally {
+        await page.keyboard.up('Control');
+      }
+    }
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.selectedChips?.size === 48 &&
+        window.viewer.chipAnnotator?._getSelectedShotGroups?.().size === 2,
+      null,
+      { timeout: 10000 }
+    );
+    const uiShotRequestPromise = page.waitForRequest(
+      (request) => request.url().includes('/api/composite-map') && request.method() === 'POST',
+      { timeout: 10000 }
+    );
+    await page.mouse.click(uiShotSelection[1].x, uiShotSelection[1].y, { button: 'right' });
+    await page.waitForFunction(
+      () => !!document.querySelector('#chip-context-menu #chip-composite-create'),
+      null,
+      { timeout: 10000 }
+    );
+    const uiShotMenuText = await page.locator('#chip-context-menu').innerText();
+    expect(uiShotMenuText.includes('선택 Shot Composite Map 만들기 (2개)'),
+      `UI shot menu=${uiShotMenuText}`);
+    await page.locator('#chip-context-menu #chip-composite-create').click();
+    const uiShotRequest = await uiShotRequestPromise;
+    const uiShotRequestBody = JSON.parse(uiShotRequest.postData() || '{}');
+    expect(uiShotRequestBody.selection_mode === 'shot' &&
+      Array.isArray(uiShotRequestBody.selected_shot_groups) &&
+      uiShotRequestBody.selected_shot_groups.length === 2 &&
+      uiShotRequestBody.selected_shot_groups.every((group) => group.chip_coords?.length === 24),
+      `UI shot payload=${JSON.stringify(uiShotRequestBody)}`);
+    await page.waitForFunction(
+      () => window.viewer?.isCompositeMode === true &&
+        window.viewer.compositeSession?.selectionMode === 'shot',
+      null,
+      { timeout: 180000 }
+    );
+    await boot('chunk2-selected-region-composite-after-ui-shot');
+    await loadFolder(folder);
+    await setSelection([target.index]);
+    await enterSingle(target.index);
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.layoutProcessId === 'P001' &&
+        window.viewer.chipAnnotator?.shotBoundaryGroups?.size === 43,
+      null,
+      { timeout: 30000 }
+    );
+
     const selectionTarget = await page.evaluate(() => {
       const v = window.viewer;
       const annotator = v.chipAnnotator;
@@ -2158,6 +2235,10 @@ const { createRunner } = require('./e2e_playwright_session');
         selectedPoint: {
           x: (Number(chip.rect.x0) + Number(chip.rect.x1)) / 2,
           y: (Number(chip.rect.y0) + Number(chip.rect.y1)) / 2,
+        },
+        chipSize: {
+          width: Number(chip.rect.x1) - Number(chip.rect.x0),
+          height: Number(chip.rect.y1) - Number(chip.rect.y0),
         },
         outsidePoint: outsideChip?.rect ? {
           x: (Number(outsideChip.rect.x0) + Number(outsideChip.rect.x1)) / 2,
@@ -2277,7 +2358,9 @@ const { createRunner } = require('./e2e_playwright_session');
       }
     }, {
       imagePath: chipResult.imagePath,
-      selectedPoint: selectionTarget.selectedPoint,
+      selectedPoint: chipResult.compositeSession?.selectionMode === 'chip'
+        ? { x: selectionTarget.chipSize.width / 2, y: selectionTarget.chipSize.height / 2 }
+        : selectionTarget.selectedPoint,
       selectionCrop: chipResult.compositeSession?.selectionCrop,
     });
     chipResult.pixels = chipPixels;
@@ -2295,7 +2378,7 @@ const { createRunner } = require('./e2e_playwright_session');
       chipResult.pixels.selected?.join(',') !== chipResult.pixels.background?.join(','),
     `chip mask pixels=${JSON.stringify(chipResult)}`);
 
-    const shotResult = await page.evaluate(async ({ imagePath, shotCoords }) => {
+    const shotResult = await page.evaluate(async ({ imagePath, shotCoords, shotId }) => {
       await fetch('/api/composite-cleanup', { method: 'POST', cache: 'no-store' });
       const startResponse = await fetch('/api/composite-map', {
         method: 'POST',
@@ -2304,6 +2387,7 @@ const { createRunner } = require('./e2e_playwright_session');
           image_paths: [imagePath],
           selection_mode: 'shot',
           selected_chip_coords: shotCoords,
+          selected_shot_groups: [{ shot_id: shotId, chip_coords: shotCoords }],
         }),
         cache: 'no-store',
       });
@@ -2381,16 +2465,168 @@ const { createRunner } = require('./e2e_playwright_session');
         imageInfo,
         positionsChipCount: Array.isArray(positions?.chips) ? positions.chips.length : 0,
       };
-    }, { imagePath: target.imagePath, shotCoords: selectionTarget.shotCoords });
+    }, { imagePath: target.imagePath, shotCoords: selectionTarget.shotCoords, shotId: selectionTarget.shotId });
     expect(shotResult.result.selection_mode === 'shot' &&
-      shotResult.result.selected_chip_count === selectionTarget.shotCoords.length,
+      shotResult.result.selected_chip_count === selectionTarget.shotCoords.length &&
+      shotResult.result.selected_shot_count === 1 &&
+      shotResult.result.selected_shot_shape?.cols === 4 &&
+      shotResult.result.selected_shot_shape?.rows === 6,
       `shot result metadata=${JSON.stringify({ selectionTarget, shotResult })}`);
     expect(shotResult.positionsChipCount === selectionTarget.shotCoords.length &&
-      shotResult.result.selection_crop &&
+      shotResult.result.width === 800 &&
+      shotResult.result.height === 1200 &&
       shotResult.imageInfo?.width < 6400 &&
       shotResult.imageInfo?.height < 6400 &&
       shotResult.imageInfo?.backgroundRatio < 0.25,
       `shot positions=${JSON.stringify({ selectionTarget, shotResult })}`);
+
+    const multiChipResult = await page.evaluate(async ({ imagePath, coords }) => {
+      await fetch('/api/composite-cleanup', { method: 'POST', cache: 'no-store' });
+      const startResponse = await fetch('/api/composite-map', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image_paths: [imagePath],
+          selection_mode: 'chip',
+          selected_chip_coords: coords,
+        }),
+        cache: 'no-store',
+      });
+      if (!startResponse.ok) throw new Error(await startResponse.text());
+      const started = await startResponse.json();
+      const deadline = Date.now() + 180000;
+      let status = null;
+      while (Date.now() < deadline) {
+        const response = await fetch(`/api/composite-map/status/${encodeURIComponent(started.task_id)}`, { cache: 'no-store' });
+        status = await response.json();
+        if (status.status === 'completed' || status.status === 'failed') break;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      if (status?.status !== 'completed') throw new Error(`multi-chip status=${JSON.stringify(status)}`);
+      const result = status.result || {};
+      const image = result.heatmaps?.[0]?.path || result.sum_map_path || '';
+      const imageResponse = await fetch(`/api/image?path=${encodeURIComponent(image)}`, { cache: 'no-store' });
+      if (!imageResponse.ok) throw new Error(`multi-chip output image status=${imageResponse.status}`);
+      const imageBlob = await imageResponse.blob();
+      const imageUrl = URL.createObjectURL(imageBlob);
+      let imageInfo = null;
+      try {
+        const outputImage = new Image();
+        outputImage.src = imageUrl;
+        await new Promise((resolve, reject) => {
+          outputImage.onload = resolve;
+          outputImage.onerror = reject;
+        });
+        imageInfo = { width: outputImage.naturalWidth, height: outputImage.naturalHeight };
+      } finally {
+        URL.revokeObjectURL(imageUrl);
+      }
+      let positions = null;
+      const positionsDeadline = Date.now() + 30000;
+      while (Date.now() < positionsDeadline) {
+        const response = await fetch(`/api/chip-positions?path=${encodeURIComponent(image)}&include_fq=0`, { cache: 'no-store' });
+        if (response.ok) {
+          const candidate = await response.json();
+          if (Array.isArray(candidate?.chips)) {
+            positions = candidate;
+            break;
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      return {
+        result,
+        imageInfo,
+        positionsChipCount: Array.isArray(positions?.chips) ? positions.chips.length : 0,
+        positionsCanvas: positions?.coord?.canvas || null,
+      };
+    }, { imagePath: target.imagePath, coords: selectionTarget.shotCoords.slice(0, 3) });
+    expect(multiChipResult.result.selection_mode === 'chip' &&
+      multiChipResult.result.selected_chip_count === 3 &&
+      multiChipResult.result.composite_sample_count === 3 &&
+      multiChipResult.result.width === selectionTarget.chipSize.width &&
+      multiChipResult.result.height === selectionTarget.chipSize.height &&
+      multiChipResult.imageInfo?.width === selectionTarget.chipSize.width &&
+      multiChipResult.imageInfo?.height === selectionTarget.chipSize.height &&
+      multiChipResult.positionsChipCount === 1 &&
+      multiChipResult.positionsCanvas?.width === selectionTarget.chipSize.width &&
+      multiChipResult.positionsCanvas?.height === selectionTarget.chipSize.height,
+      `multi-chip result=${JSON.stringify(multiChipResult)}`);
+
+    const multiShotResult = await page.evaluate(async ({ imagePath }) => {
+      const layoutResponse = await fetch('/api/layout?process_id=P001', { cache: 'no-store' });
+      if (!layoutResponse.ok) throw new Error(`layout status=${layoutResponse.status}`);
+      const layout = await layoutResponse.json();
+      const groups = ['4', '5'].map((shotId) => ({
+        shot_id: shotId,
+        chip_coords: (layout.rows || [])
+          .filter((row) => String(row.shot_id) === shotId)
+          .map((row) => ({ x_abs: Number(row.eds_chip_x_pos), y_abs: Number(row.eds_chip_y_pos) })),
+      }));
+      if (groups.some((group) => group.chip_coords.length !== 24)) {
+        throw new Error(`full shot fixture changed=${JSON.stringify(groups.map((group) => [group.shot_id, group.chip_coords.length]))}`);
+      }
+      const selectedChipCoords = [...new Map(
+        groups.flatMap((group) => group.chip_coords).map((chip) => [`${chip.x_abs}:${chip.y_abs}`, chip])
+      ).values()];
+      await fetch('/api/composite-cleanup', { method: 'POST', cache: 'no-store' });
+      const startResponse = await fetch('/api/composite-map', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image_paths: [imagePath],
+          selection_mode: 'shot',
+          selected_chip_coords: selectedChipCoords,
+          selected_shot_groups: groups,
+        }),
+        cache: 'no-store',
+      });
+      if (!startResponse.ok) throw new Error(await startResponse.text());
+      const started = await startResponse.json();
+      const deadline = Date.now() + 180000;
+      let status = null;
+      while (Date.now() < deadline) {
+        const response = await fetch(`/api/composite-map/status/${encodeURIComponent(started.task_id)}`, { cache: 'no-store' });
+        status = await response.json();
+        if (status.status === 'completed' || status.status === 'failed') break;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      if (status?.status !== 'completed') throw new Error(`multi-shot status=${JSON.stringify(status)}`);
+      const result = status.result || {};
+      const image = result.heatmaps?.[0]?.path || result.sum_map_path || '';
+      let positions = null;
+      const positionsDeadline = Date.now() + 30000;
+      while (Date.now() < positionsDeadline) {
+        const response = await fetch(`/api/chip-positions?path=${encodeURIComponent(image)}&include_fq=0`, { cache: 'no-store' });
+        if (response.ok) {
+          const candidate = await response.json();
+          if (Array.isArray(candidate?.chips)) {
+            positions = candidate;
+            break;
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      return {
+        groups: groups.map((group) => ({ shotId: group.shot_id, chipCount: group.chip_coords.length })),
+        result,
+        positionsChipCount: Array.isArray(positions?.chips) ? positions.chips.length : 0,
+        positionsCanvas: positions?.coord?.canvas || null,
+      };
+    }, { imagePath: target.imagePath });
+    expect(multiShotResult.result.selection_mode === 'shot' &&
+      multiShotResult.result.selected_shot_count === 2 &&
+      multiShotResult.result.selected_source_chip_count === 48 &&
+      multiShotResult.result.selected_chip_count === 24 &&
+      multiShotResult.result.selected_shot_shape?.cols === 4 &&
+      multiShotResult.result.selected_shot_shape?.rows === 6 &&
+      multiShotResult.result.composite_sample_count === 2 &&
+      multiShotResult.result.width === shotResult.result.width &&
+      multiShotResult.result.height === shotResult.result.height &&
+      multiShotResult.positionsChipCount === 24 &&
+      multiShotResult.positionsCanvas?.width === multiShotResult.result.width &&
+      multiShotResult.positionsCanvas?.height === multiShotResult.result.height,
+      `multi-shot canonical result=${JSON.stringify(multiShotResult)}`);
 
     return {
       target,
@@ -2399,9 +2635,167 @@ const { createRunner } = require('./e2e_playwright_session');
         chipCount: selectionTarget.shotCoords.length,
       },
       menuText,
+      uiShotMenuText,
+      uiShotRequestBody,
       chipRequestBody,
       chipResult,
+      selectedChipImageWidth: chipResult.pixels?.imageSize?.width || 0,
+      selectedChipImageHeight: chipResult.pixels?.imageSize?.height || 0,
+      selectedChipPositionsCount: chipResult.positionsChipCount || 0,
       shotResult,
+      selectedShotImageWidth: shotResult.imageInfo?.width || 0,
+      selectedShotImageHeight: shotResult.imageInfo?.height || 0,
+      selectedShotPositionsCount: shotResult.positionsChipCount || 0,
+      multiChipResult,
+      multiChipImageWidth: multiChipResult.imageInfo?.width || 0,
+      multiChipImageHeight: multiChipResult.imageInfo?.height || 0,
+      multiChipPositionsCount: multiChipResult.positionsChipCount || 0,
+      multiShotResult,
+      multiShotImageWidth: multiShotResult.result?.width || 0,
+      multiShotImageHeight: multiShotResult.result?.height || 0,
+      multiShotPositionsCount: multiShotResult.positionsChipCount || 0,
+    };
+  });
+
+  await record('selected-region-export', 'Chip/Shot export 필드와 이미지 저장 메뉴', async () => {
+    const targetFile = 'AAI633_00P_08_20260501_010000_99.6_0_PE_PWQ.png';
+    const folder = 'PW/P001/20260501';
+    await boot('chunk2-selected-region-export');
+    await loadFolder(folder);
+    const target = await page.evaluate(({ targetFile, folder }) => {
+      const images = window.viewer?.currentGridImages || [];
+      const index = images.findIndex((imagePath) => String(imagePath || '').replace(/\\/g, '/').endsWith(`${folder}/${targetFile}`));
+      return index < 0 ? null : { index, imagePath: images[index] };
+    }, { targetFile, folder });
+    expect(target, 'export target missing');
+    await setSelection([target.index]);
+    await enterSingle(target.index);
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.layoutProcessId === 'P001' &&
+        window.viewer.chipAnnotator?.shotBoundaryGroups?.size === 43,
+      null,
+      { timeout: 30000 }
+    );
+
+    const shotPoint = await page.evaluate(() => {
+      const v = window.viewer;
+      const annotator = v?.chipAnnotator;
+      annotator?.setSelectionMode('shot');
+      const group = Array.from(annotator?.shotBoundaryGroups?.values?.() || []).find((candidate) => candidate.chips.length >= 20);
+      const chip = group?.chips?.[0];
+      const canvas = annotator?.canvas;
+      const box = canvas?.getBoundingClientRect?.();
+      if (!group || !chip || !canvas || !box || !v.transform) return null;
+      const x = ((chip.rect.x0 + chip.rect.x1) / 2) * v.transform.scale + v.transform.dx;
+      const y = ((chip.rect.y0 + chip.rect.y1) / 2) * v.transform.scale + v.transform.dy + (annotator.Y_OFFSET || 0);
+      return {
+        x: box.left + (x / canvas.width) * box.width,
+        y: box.top + (y / canvas.height) * box.height,
+        shotCount: group.chips.length,
+      };
+    });
+    expect(shotPoint, 'export shot point missing');
+    await page.keyboard.down('Control');
+    try {
+      await page.mouse.click(shotPoint.x, shotPoint.y);
+    } finally {
+      await page.keyboard.up('Control');
+    }
+    await page.waitForFunction(
+      (expected) => window.viewer?.chipAnnotator?.selectedChips?.size === expected,
+      shotPoint.shotCount,
+      { timeout: 10000 }
+    );
+    await page.evaluate(() => {
+      window.__e2eClipboardTexts = [];
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: async (value) => window.__e2eClipboardTexts.push(String(value)) },
+      });
+    });
+
+    async function openChipMenu() {
+      await page.mouse.click(shotPoint.x, shotPoint.y, { button: 'right' });
+      await page.waitForFunction(() => !!document.querySelector('#chip-context-menu'), null, { timeout: 10000 });
+      return page.locator('#chip-context-menu');
+    }
+
+    let menu = await openChipMenu();
+    const shotMenuText = await menu.innerText();
+    expect(shotMenuText.includes('선택 Shot 값 저장 (TSV)') &&
+      shotMenuText.includes('선택 Shot 이미지 저장') &&
+      shotMenuText.includes('선택 Shot 정보복사'), `shot export menu=${shotMenuText}`);
+    await menu.locator('.context-menu-item').filter({ hasText: '선택 Shot 정보복사' }).click();
+    await page.waitForFunction(() => (window.__e2eClipboardTexts || []).length > 0, null, { timeout: 10000 });
+    const shotClipboard = await page.evaluate(() => window.__e2eClipboardTexts.at(-1) || '');
+    expect(shotClipboard.includes('SHOT_ID') &&
+      shotClipboard.includes('SHOT_X') &&
+      shotClipboard.includes('SHOT_Y') &&
+      shotClipboard.includes('CHIP_COORD_X(mm)') &&
+      shotClipboard.includes('CHIP_COORD_Y(mm)') &&
+      shotClipboard.includes('RADIUS(mm)'), `shot clipboard header=${shotClipboard.split('\n')[0]}`);
+
+    menu = await openChipMenu();
+    const tableDownloadPromise = page.waitForEvent('download', { timeout: 10000 });
+    await menu.locator('.context-menu-item').filter({ hasText: '선택 Shot 값 저장 (TSV)' }).click();
+    const tableDownload = await tableDownloadPromise;
+    expect(tableDownload.suggestedFilename().includes('_shot_values.tsv'),
+      `shot table filename=${tableDownload.suggestedFilename()}`);
+
+    menu = await openChipMenu();
+    const imageDownloadPromise = page.waitForEvent('download', { timeout: 15000 });
+    await menu.locator('.context-menu-item').filter({ hasText: '선택 Shot 이미지 저장' }).click();
+    const imageDownload = await imageDownloadPromise;
+    expect(/_shot_[^/]+\.png$/i.test(imageDownload.suggestedFilename()),
+      `shot image filename=${imageDownload.suggestedFilename()}`);
+
+    await page.mouse.click(shotPoint.x, shotPoint.y);
+    await page.waitForTimeout(100);
+    await page.mouse.click(shotPoint.x, shotPoint.y, { button: 'right' });
+    await page.waitForFunction(() => !!document.querySelector('#chip-context-menu'), null, { timeout: 10000 });
+    await page.locator('#chip-context-menu #chip-selection-mode-chip').click();
+    const chipPoints = await page.evaluate(() => {
+      const v = window.viewer;
+      const chips = (v?.chipAnnotator?.chips || []).slice(0, 2);
+      const canvas = v?.chipAnnotator?.canvas;
+      const box = canvas?.getBoundingClientRect?.();
+      if (!canvas || !box || !v.transform || chips.length < 2) return [];
+      return chips.map((chip) => {
+        const x = ((chip.rect.x0 + chip.rect.x1) / 2) * v.transform.scale + v.transform.dx;
+        const y = ((chip.rect.y0 + chip.rect.y1) / 2) * v.transform.scale + v.transform.dy + (v.chipAnnotator.Y_OFFSET || 0);
+        return { x: box.left + (x / canvas.width) * box.width, y: box.top + (y / canvas.height) * box.height };
+      });
+    });
+    expect(chipPoints.length === 2, 'chip export points missing');
+    for (const point of chipPoints) {
+      await page.keyboard.down('Control');
+      try {
+        await page.mouse.click(point.x, point.y);
+      } finally {
+        await page.keyboard.up('Control');
+      }
+    }
+    await page.waitForFunction(() => window.viewer?.chipAnnotator?.selectedChips?.size === 2, null, { timeout: 10000 });
+    await page.mouse.click(chipPoints[1].x, chipPoints[1].y, { button: 'right' });
+    await page.waitForFunction(() => !!document.querySelector('#chip-context-menu'), null, { timeout: 10000 });
+    menu = page.locator('#chip-context-menu');
+    const chipMenuText = await menu.innerText();
+    expect(chipMenuText.includes('선택 Chip 값 저장 (TSV)') && chipMenuText.includes('선택 Chip 정보복사'),
+      `chip export menu=${chipMenuText}`);
+    await menu.locator('.context-menu-item').filter({ hasText: '선택 Chip 정보복사' }).click();
+    const chipClipboard = await page.evaluate(() => window.__e2eClipboardTexts.at(-1) || '');
+    expect(chipClipboard.includes('CHIP_COORD_X(mm)') && chipClipboard.includes('RADIUS(mm)') &&
+      chipClipboard.split('\n').length === 3,
+      `chip clipboard=${chipClipboard}`);
+
+    return {
+      target,
+      shotChipCount: shotPoint.shotCount,
+      shotMenuText,
+      shotClipboardHeader: shotClipboard.split('\n')[0],
+      shotTableFilename: tableDownload.suggestedFilename(),
+      shotImageFilename: imageDownload.suggestedFilename(),
+      chipMenuText,
     };
   });
 

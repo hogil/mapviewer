@@ -170,6 +170,13 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
   - Correct fix pattern: when SYSTEMATIC is active, reload the main pyramid with `bin_overlay=1` plus the exact 12-bin `bottom_filter`, let each BIN retain its palette color, and build the Navigator thumbnail from the same filtered `/api/thumbnail` representation. Verify the request/cache key as well as the overlay pixels because the large image canvas and chip overlay are separate render layers.
   - E2E guard: `scripts/e2e_chunk2.js` record `systematic-measure-single-lot-wafer` must use `AAI633_00P_08_20260501_010000_99.6_0_PE_PWQ.png`, require LOT/Wafer `AAI633/08`, exact 12-bin filter state, filtered main-image request/cache key, colored overlay pixels, synchronized Navigator index, and colored Navigator pixels.
 
+#### BUG-24: 다중 Shot/Chip Composite와 export 정합성 회귀 (2026-08-07)
+- 증상: 여러 Shot을 선택해 Composite를 만들 때 원본 wafer 좌표가 그대로 남거나 Shot별 chip 수가 서로 다른 위치에 누적되어 단일 Shot과 다른 모양이 될 수 있다. Chip/Shot context menu의 TSV와 이미지 저장도 layout의 Chip(Coord), Radius, Shot 필드를 빠뜨릴 수 있다.
+- 원인: 기존 선택 영역 Composite는 `selected_chip_coords`를 source canvas에서 필터링하고 crop하는 경로만 있었으며, Shot별 상대 격자 정렬 정보와 공통 export schema가 없었다.
+- 수정 계약: `selected_shot_groups`는 Shot별 EDS chip 좌표를 전달하고, `api/composite_map.py`는 각 그룹의 최소 좌표를 상대 원점으로 정렬한다. chip 가로×세로 signature가 다른 Shot 조합은 실패시킨다. 결과 positions는 첫 번째 canonical Shot의 chip rect/canvas를 사용하고, 누적 분모는 `source_images × selected_shot_count`다. Chip/Shot/Wafer export는 공통 TSV 생성기를 사용해 `CHIP_COORD_X(mm)`, `CHIP_COORD_Y(mm)`, `RADIUS(mm)`, `SHOT`, `SHOT_ID`, `SHOT_X`, `SHOT_Y`, `FULL_SHOT_TYPE`를 포함한다. Shot 선택 context menu는 Shot crop PNG와 TSV를 제공한다.
+- E2E guard: `scripts/e2e_chunk2.js`의 `selected-region-composite`는 단일 Shot, canonical 한 Chip에 누적하는 다중 Chip, P001 Shot 4/5 두 개를 검사한다. Chip 결과는 첫 Chip 크기·positions 1개·`selected_chip_count=3`·`composite_sample_count=3`, Shot 결과는 동일한 image width/height, `selected_chip_count=24`, `selected_shot_shape=4×6`, positions chip 24개인지 확인한다. `selected-region-export`는 실제 Chip/Shot context menu, clipboard TSV header, TSV 다운로드 filename, Shot crop PNG 다운로드를 검증한다.
+- 파일: `api/composite_map.py`, `api/full_app.py`, `js/main.js`, `scripts/e2e_chunk2.js`, `docs/COMPOSITE_MAP.md`
+
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)
 - e2e-test: L3 Tracker 전체 기능 E2E 테스트를 Playwright 브라우저 자동화로 수행한다. `/e2e-test`, `E2E 테스트`, `전체 테스트`, `기능 테스트 돌려줘` 같은 요청에 반응한다. (file: D:/project/mapviewer/.claude/skills/e2e-test/skill.md)
