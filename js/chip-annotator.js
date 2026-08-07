@@ -96,7 +96,7 @@ export class ChipAnnotator {
         // Colors
         this.gridColor = 'rgba(0, 255, 255, 0.3)';
         this.hoverColor = 'rgba(238, 238, 238, 0.85)';
-        this.selectedColor = 'rgba(225, 225, 225, 0.38)';
+        this.selectedColor = 'rgba(225, 225, 225, 0.65)';
         this.selectionPreviewColor = 'rgba(215, 215, 215, 0.26)';
         this.shotHoverFillColor = 'rgba(225, 225, 225, 0.12)';
         this.markedColor = 'rgba(255, 0, 0, 0.4)';
@@ -2477,7 +2477,7 @@ export class ChipAnnotator {
             return;
         }
 
-        // 일반 클릭/드래그 (Ctrl/Shift/Alt 없음): 선택을 변경하지 않고 패닝만 허용
+        // 일반 클릭/드래그 (Ctrl/Shift/Alt 없음): 선택 전에는 선택하지 않고, 선택 후에는 해제
         if (!e.ctrlKey && !e.shiftKey && !e.altKey && this.clickStartPos) {
             const dragDistance = Math.sqrt(
                 Math.pow(canvasX - this.clickStartPos.x, 2) +
@@ -2488,8 +2488,14 @@ export class ChipAnnotator {
             if (dragDistance > 5) {
                 // 패닝 중이므로 아무것도 하지 않음
             } else {
-                // 일반 클릭은 hover만 갱신하고 선택 상태는 유지한다.
-                console.log('🖱️ [CLICK] 선택 상태 유지 (Ctrl/Shift/Alt 필요)');
+                if (this.selectedChips.size > 0) {
+                    this.selectedChips.clear();
+                    this.selectedChipsOrder = [];
+                    this.updateSelectedChipsList();
+                    console.log('🖱️ [CLICK] 일반 클릭으로 선택 해제');
+                } else {
+                    console.log('🖱️ [CLICK] 선택 상태 없음 - 유지');
+                }
             }
 
             // 상태 초기화

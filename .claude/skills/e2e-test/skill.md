@@ -2023,9 +2023,10 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 1. 칩 영역 hover → Chip 모드에서는 해당 칩만 하이라이트되는지 확인
 2. 칩 우클릭 메뉴에서 `Shot 선택` 클릭 → `selectionMode === 'shot'` 확인
    - hover 시 개별 칩이 아니라 같은 `layout.txt shot_id`의 실제 전체 범위가 표시
-   - 일반 클릭은 선택 상태를 바꾸지 않음
+   - 선택 전 일반 클릭은 선택하지 않음
    - Ctrl-click으로 같은 `shot_id`의 칩만 전체 선택
    - 선택 결과가 edge partial shot의 실제 칩 수와 일치
+   - 선택 후 일반 왼쪽 클릭으로 전체 선택 해제
 3. 선택 하이라이트가 노란색이 아닌 은백색 계열인지 확인
 4. 우클릭 메뉴에서 `Chip 선택` 클릭 → 기본 선택 모드로 복귀하고 선택 상태 초기화
 5. 선택된 칩의 좌표가 정보 패널에 표시:

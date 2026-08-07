@@ -1924,6 +1924,8 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(![shotHover.selectedColor, shotHover.previewColor, shotHover.hoverColor]
       .some((color) => String(color).includes('255, 255, 0')),
     `selection colors must not be yellow=${JSON.stringify(shotHover)}`);
+    expect(shotHover.selectedColor === 'rgba(225, 225, 225, 0.65)',
+      `selected highlight is too light=${JSON.stringify(shotHover)}`);
 
     await page.mouse.click(shotSelectionTarget.x, shotSelectionTarget.y);
     await page.waitForTimeout(100);
@@ -1965,6 +1967,20 @@ const { createRunner } = require('./e2e_playwright_session');
       shotSelection.selectedShotIds[0] === shotSelectionTarget.shotId,
       `shot selection=${JSON.stringify({ shotSelectionTarget, shotSelection })}`);
 
+    await page.mouse.click(shotSelectionTarget.x, shotSelectionTarget.y);
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.selectedChips?.size === 0 &&
+        window.viewer.chipAnnotator.selectedChipsOrder?.length === 0,
+      null,
+      { timeout: 10000 }
+    );
+    const plainClickClearSelection = await page.evaluate(() => ({
+      selectedCount: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+      selectedOrderCount: window.viewer?.chipAnnotator?.selectedChipsOrder?.length || 0,
+    }));
+    expect(plainClickClearSelection.selectedCount === 0 && plainClickClearSelection.selectedOrderCount === 0,
+      `plain click did not clear selection=${JSON.stringify(plainClickClearSelection)}`);
+
     await page.mouse.click(shotSelectionTarget.x, shotSelectionTarget.y, { button: 'right' });
     await page.waitForFunction(
       () => !!document.querySelector('#chip-context-menu #chip-selection-mode-chip'),
@@ -1995,6 +2011,7 @@ const { createRunner } = require('./e2e_playwright_session');
       shotHover,
       plainClickSelection,
       shotSelection,
+      plainClickClearSelection,
       chipModeAfter,
     };
   });
