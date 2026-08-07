@@ -2020,9 +2020,10 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 **목적**: 칩 클릭/다중선택/해제 시 하이라이트와 좌표 표시가 정확한지
 
 **평가 항목**:
-1. 칩 영역 hover → Chip 모드에서는 해당 칩만 하이라이트되는지 확인
+1. 칩 영역 hover → Chip 모드에서는 해당 칩만 은백색 하이라이트되는지 확인
 2. 칩 우클릭 메뉴에서 `Shot 선택` 클릭 → `selectionMode === 'shot'` 확인
    - hover 시 개별 칩이 아니라 같은 `layout.txt shot_id`의 실제 전체 범위가 표시
+   - Shot 내부 원본 맵은 그대로 보이고 경계만 표시
    - 선택 전 일반 클릭은 선택하지 않음
    - Ctrl-click으로 같은 `shot_id`의 칩만 전체 선택
    - 선택 결과가 edge partial shot의 실제 칩 수와 일치

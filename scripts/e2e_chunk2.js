@@ -1876,6 +1876,7 @@ const { createRunner } = require('./e2e_playwright_session');
         shotId: group.shotId,
         expectedChipCount: group.indices?.length || group.chips.length,
         chipKey: `${chip.x_abs}:${chip.y_abs}`,
+        boundary: annotator._getShotBoundaryRect(group),
         x: box.left + (canvasX / canvas.width) * box.width,
         y: box.top + (canvasY / canvas.height) * box.height,
       };
@@ -1895,6 +1896,17 @@ const { createRunner } = require('./e2e_playwright_session');
       { timeout: 10000 }
     );
 
+    const shotInteriorBefore = await page.evaluate((target) => {
+      const annotator = window.viewer?.chipAnnotator;
+      const canvas = annotator?.canvas;
+      const transform = window.viewer?.transform;
+      const boundary = target?.boundary;
+      if (!canvas || !transform || !boundary) return null;
+      const x = Math.round(((boundary.minX + boundary.maxX) / 2) * transform.scale + transform.dx);
+      const y = Math.round(((boundary.minY + boundary.maxY) / 2) * transform.scale + transform.dy + (annotator.Y_OFFSET || 0));
+      const pixel = canvas.getContext('2d').getImageData(x, y, 1, 1).data;
+      return { x, y, pixel: Array.from(pixel) };
+    }, shotSelectionTarget);
     await page.mouse.move(shotSelectionTarget.x, shotSelectionTarget.y);
     await page.waitForFunction(
       (expectedChipKey) => {
@@ -1921,6 +1933,15 @@ const { createRunner } = require('./e2e_playwright_session');
       shotHover.hoverSelectionCount === shotSelectionTarget.expectedChipCount &&
       shotHover.hoverBoundary?.width > 0 && shotHover.hoverBoundary?.height > 0,
       `shot hover=${JSON.stringify({ shotSelectionTarget, shotHover })}`);
+    const shotInteriorAfter = await page.evaluate((probe) => {
+      if (!probe) return null;
+      const canvas = window.viewer?.chipAnnotator?.canvas;
+      if (!canvas) return null;
+      const pixel = canvas.getContext('2d').getImageData(probe.x, probe.y, 1, 1).data;
+      return Array.from(pixel);
+    }, shotInteriorBefore);
+    expect(shotInteriorBefore?.pixel?.join(',') === shotInteriorAfter?.join(','),
+      `shot interior was filled=${JSON.stringify({ shotInteriorBefore, shotInteriorAfter })}`);
     expect(![shotHover.selectedColor, shotHover.previewColor, shotHover.hoverColor]
       .some((color) => String(color).includes('255, 255, 0')),
     `selection colors must not be yellow=${JSON.stringify(shotHover)}`);
@@ -2011,6 +2032,8 @@ const { createRunner } = require('./e2e_playwright_session');
       shotSelectionTarget,
       shotMenuText,
       shotHover,
+      shotInteriorBefore,
+      shotInteriorAfter,
       plainClickSelection,
       shotSelection,
       plainClickClearSelection,

@@ -98,7 +98,6 @@ export class ChipAnnotator {
         this.hoverColor = 'rgba(238, 238, 238, 0.55)';
         this.selectedColor = this.hoverColor;
         this.selectionPreviewColor = 'rgba(215, 215, 215, 0.26)';
-        this.shotHoverFillColor = 'rgba(225, 225, 225, 0.12)';
         this.markedColor = 'rgba(255, 0, 0, 0.4)';
 
         // Coordinate display elements
@@ -318,8 +317,6 @@ export class ChipAnnotator {
 
         ctx.save();
         ctx.resetTransform();
-        ctx.fillStyle = this.shotHoverFillColor;
-        ctx.fillRect(x, y, width, height);
         ctx.strokeStyle = this.hoverColor;
         ctx.lineWidth = Math.max(1.5, 2 * transform.scale);
         ctx.setLineDash([]);
