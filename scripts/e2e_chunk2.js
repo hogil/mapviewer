@@ -2123,6 +2123,196 @@ const { createRunner } = require('./e2e_playwright_session');
     };
   });
 
+  await record('coordinate-selection-cells', '표 셀 붙여넣기 / Shot 범위 내 Chip ID 추가·해제 / Chip Pos 선택', async () => {
+    const targetFile = 'AAI633_00P_08_20260501_010000_99.6_0_PE_PWQ.png';
+    const folder = 'PW/P001/20260501';
+    await boot('chunk2-coordinate-selection-cells');
+    await loadFolder(folder);
+
+    const target = await page.evaluate(({ targetFile, folder }) => {
+      const v = window.viewer;
+      const index = (v.currentGridImages || []).findIndex((imagePath) =>
+        String(imagePath || '').replace(/\\/g, '/').endsWith(`${folder}/${targetFile}`)
+      );
+      return index < 0 ? null : { index, imagePath: v.currentGridImages[index] };
+    }, { targetFile, folder });
+    expect(target, 'coordinate selection target missing');
+    await setSelection([target.index]);
+    await enterSingle(target.index);
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.layoutProcessId === 'P001' &&
+        window.viewer.chipAnnotator.layoutByEdsChip?.size === 833,
+      null,
+      { timeout: 30000 }
+    );
+
+    const selectionTarget = await page.evaluate(() => {
+      const annotator = window.viewer.chipAnnotator;
+      const groups = [...annotator.shotBoundaryGroups.values()]
+        .filter((group) => group.chips.length === 24)
+        .slice(0, 2);
+      const shotRows = groups.map((group) => {
+        const row = annotator.getLayoutRowForChip(group.chips[0]);
+        return { x: Number(row.shot_x_pos), y: Number(row.shot_y_pos), id: String(row.shot_id) };
+      });
+      const firstChip = groups[0]?.chips[0];
+      const firstLayout = annotator.getLayoutRowForChip(firstChip);
+      const pos = firstLayout
+        ? { x: (Number(firstLayout.chip_center_x_pos) / 1000).toFixed(3), y: (Number(firstLayout.chip_center_y_pos) / 1000).toFixed(3) }
+        : null;
+      return {
+        shotRows,
+        chipId: firstLayout?.chip_id == null ? '' : String(firstLayout.chip_id),
+        pos,
+      };
+    });
+    expect(selectionTarget.shotRows.length === 2 && selectionTarget.pos, `selection target=${JSON.stringify(selectionTarget)}`);
+
+    const overlay = page.locator('#overlay-canvas');
+    const overlayBox = await overlay.boundingBox();
+    expect(overlayBox && overlayBox.width > 0 && overlayBox.height > 0, 'overlay canvas is not visible');
+    const openCoordinateModal = async () => {
+      await page.mouse.click(
+        overlayBox.x + overlayBox.width / 2,
+        overlayBox.y + overlayBox.height / 2,
+        { button: 'right' }
+      );
+      await page.locator('#chip-coordinate-select-open').click();
+      await page.waitForFunction(
+        () => getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display !== 'none',
+        null,
+        { timeout: 10000 }
+      );
+    };
+    const pasteIntoFirstCell = async (text) => {
+      await page.locator('#chip-coordinate-select-tbody input[data-coordinate-row="0"][data-coordinate-col="0"]').evaluate((element, value) => {
+        const dataTransfer = new DataTransfer();
+        dataTransfer.setData('text/plain', value);
+        element.dispatchEvent(new ClipboardEvent('paste', {
+          clipboardData: dataTransfer,
+          bubbles: true,
+          cancelable: true,
+        }));
+      }, text);
+    };
+
+    await openCoordinateModal();
+    const initialModal = await page.evaluate(() => ({
+      visible: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display !== 'none',
+      columns: document.querySelectorAll('#chip-coordinate-select-head th').length - 1,
+      summary: document.getElementById('chip-coordinate-select-summary')?.textContent || '',
+    }));
+    await pasteIntoFirstCell(
+      `${selectionTarget.shotRows[0].x}\t${selectionTarget.shotRows[0].y}\n${selectionTarget.shotRows[1].x},${selectionTarget.shotRows[1].y}`
+    );
+    const shotCells = await page.locator('#chip-coordinate-select-tbody input').evaluateAll((elements) => elements.map((element) => element.value));
+    expect(
+      shotCells.slice(0, 4).join('|') === [
+        selectionTarget.shotRows[0].x,
+        selectionTarget.shotRows[0].y,
+        selectionTarget.shotRows[1].x,
+        selectionTarget.shotRows[1].y,
+      ].join('|'),
+      `shot cells=${JSON.stringify(shotCells)}`
+    );
+    await page.locator('#chip-coordinate-select-apply').click();
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.selectionMode === 'shot' &&
+        window.viewer.chipAnnotator.selectedChips?.size === 48 &&
+        window.viewer.chipAnnotator._getSelectedShotGroups?.().size === 2,
+      null,
+      { timeout: 10000 }
+    );
+    const afterShot = await page.evaluate(() => ({
+      mode: window.viewer.chipAnnotator.selectionMode,
+      chips: window.viewer.chipAnnotator.selectedChips.size,
+      shots: window.viewer.chipAnnotator._getSelectedShotGroups().size,
+    }));
+
+    await openCoordinateModal();
+    await page.locator('#chip-coordinate-select-target').selectOption('chip-id');
+    await page.waitForFunction(
+      () => (document.getElementById('chip-coordinate-select-hint')?.textContent || '').includes('현재 선택된 Shot 안에서만'),
+      null,
+      { timeout: 10000 }
+    );
+    const shotScopeUi = await page.evaluate(() => ({
+      hint: document.getElementById('chip-coordinate-select-hint')?.textContent || '',
+      summary: document.getElementById('chip-coordinate-select-summary')?.textContent || '',
+    }));
+    expect(
+      shotScopeUi.summary.includes('Shot ID:') &&
+        shotScopeUi.summary.includes('Shot별 YIELD: 개별 YIELD 데이터 없음') &&
+        shotScopeUi.summary.includes('Chip ID별 YIELD: 개별 YIELD 데이터 없음') &&
+        shotScopeUi.summary.includes('Wafer YIELD:'),
+      `shot scope summary=${JSON.stringify(shotScopeUi)}`
+    );
+    await page.locator('#chip-coordinate-select-operation').selectOption('remove');
+    await page.locator('#chip-coordinate-select-tbody input[data-coordinate-row="0"][data-coordinate-col="0"]').fill(selectionTarget.chipId);
+    await page.locator('#chip-coordinate-select-apply').click();
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.selectionMode === 'shot' &&
+        window.viewer.chipAnnotator.selectedChips?.size === 47 &&
+        window.viewer.chipAnnotator._getSelectedShotGroups?.().size === 2,
+      null,
+      { timeout: 10000 }
+    );
+    const afterRemove = await page.evaluate(() => ({
+      mode: window.viewer.chipAnnotator.selectionMode,
+      chips: window.viewer.chipAnnotator.selectedChips.size,
+      shots: window.viewer.chipAnnotator._getSelectedShotGroups().size,
+    }));
+    const partialShotSelection = await page.evaluate(() =>
+      window.viewer.chipAnnotator.getSelectedShotGroupSelections().map((group) => ({
+        shotId: String(group.shotId),
+        selectedChipCount: group.selectedChips.length,
+      }))
+    );
+    expect(
+      partialShotSelection.length === 2 &&
+        partialShotSelection.every((group) => [23, 24].includes(group.selectedChipCount)),
+      `partial shot selection=${JSON.stringify(partialShotSelection)}`
+    );
+
+    await openCoordinateModal();
+    await page.locator('#chip-coordinate-select-target').selectOption('chip-id');
+    await page.locator('#chip-coordinate-select-operation').selectOption('add');
+    await page.locator('#chip-coordinate-select-tbody input[data-coordinate-row="0"][data-coordinate-col="0"]').fill(selectionTarget.chipId);
+    await page.locator('#chip-coordinate-select-apply').click();
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.selectionMode === 'shot' &&
+        window.viewer.chipAnnotator.selectedChips?.size === 48 &&
+        window.viewer.chipAnnotator._getSelectedShotGroups?.().size === 2,
+      null,
+      { timeout: 10000 }
+    );
+    const afterAdd = await page.evaluate(() => ({
+      mode: window.viewer.chipAnnotator.selectionMode,
+      chips: window.viewer.chipAnnotator.selectedChips.size,
+      shots: window.viewer.chipAnnotator._getSelectedShotGroups().size,
+    }));
+
+    await openCoordinateModal();
+    await page.locator('#chip-coordinate-select-target').selectOption('chip-pos');
+    await page.locator('#chip-coordinate-select-operation').selectOption('replace');
+    await pasteIntoFirstCell(`${selectionTarget.pos.x},${selectionTarget.pos.y}`);
+    const posCells = await page.locator('#chip-coordinate-select-tbody input').evaluateAll((elements) => elements.map((element) => element.value));
+    expect(posCells.slice(0, 2).join('|') === `${selectionTarget.pos.x}|${selectionTarget.pos.y}`, `pos cells=${JSON.stringify(posCells)}`);
+    await page.locator('#chip-coordinate-select-apply').click();
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.selectionMode === 'chip' &&
+        window.viewer.chipAnnotator.selectedChips?.size === 1,
+      null,
+      { timeout: 10000 }
+    );
+    const afterPos = await page.evaluate(() => ({
+      mode: window.viewer.chipAnnotator.selectionMode,
+      chips: window.viewer.chipAnnotator.selectedChips.size,
+      chipId: [...window.viewer.chipAnnotator.selectedChips][0],
+    }));
+    return { initialModal, selectionTarget, shotCells, posCells, afterShot, afterRemove, partialShotSelection, shotScopeUi, afterAdd, afterPos };
+  });
+
   await record('selected-region-composite', '선택 Chip/Shot Composite Map 및 결과 positions 정합성', async () => {
     const targetFile = 'AAI633_00P_08_20260501_010000_99.6_0_PE_PWQ.png';
     const folder = 'PW/P001/20260501';

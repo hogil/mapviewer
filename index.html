@@ -584,6 +584,54 @@
         </div>
     </div>
 
+    <!-- Chip/Shot coordinate selection modal -->
+    <div id="chip-coordinate-select-modal" class="modal-overlay modal-center" style="display:none;">
+        <div class="modal-content coordinate-select-modal-content" role="dialog" aria-modal="true" aria-labelledby="chip-coordinate-select-title">
+            <div class="modal-header">
+                <div id="chip-coordinate-select-title" class="modal-title">Chip/Shot 좌표 선택</div>
+                <button id="chip-coordinate-select-close" class="modal-close" type="button" aria-label="닫기">×</button>
+            </div>
+            <div class="modal-body coordinate-select-body">
+                <div class="coordinate-select-controls">
+                    <label>
+                        <span>선택 기준</span>
+                        <select id="chip-coordinate-select-target" class="coordinate-select-select">
+                            <option value="shot-grid">Shot(Grid)</option>
+                            <option value="chip-id">Chip ID</option>
+                            <option value="chip-grid">Chip(Grid)</option>
+                            <option value="chip-pos">Chip(Pos)</option>
+                        </select>
+                    </label>
+                    <label>
+                        <span>동작</span>
+                        <select id="chip-coordinate-select-operation" class="coordinate-select-select">
+                            <option value="replace">교체</option>
+                            <option value="add">추가</option>
+                            <option value="remove">해제</option>
+                        </select>
+                    </label>
+                </div>
+                <div id="chip-coordinate-select-hint" class="coordinate-select-hint"></div>
+                <div id="chip-coordinate-select-summary" class="coordinate-select-summary"></div>
+                <div class="coordinate-select-table-wrap">
+                    <table id="chip-coordinate-select-table" class="coordinate-select-table">
+                        <thead><tr id="chip-coordinate-select-head"></tr></thead>
+                        <tbody id="chip-coordinate-select-tbody"></tbody>
+                    </table>
+                </div>
+                <div class="coordinate-select-table-actions">
+                    <button id="chip-coordinate-select-add-row" class="grid-btn" type="button">+ 행</button>
+                    <span>셀을 클릭한 뒤 Tab, 쉼표, 줄바꿈 형식으로 붙여넣을 수 있습니다.</span>
+                </div>
+                <div id="chip-coordinate-select-error" class="modal-error"></div>
+            </div>
+            <div class="modal-buttons coordinate-select-buttons">
+                <button id="chip-coordinate-select-cancel" class="grid-btn" type="button">취소</button>
+                <button id="chip-coordinate-select-apply" class="grid-btn" type="button">선택 적용</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Ref Map Modal -->
     <div id="ref-map-window" class="ref-map-window" style="display: none;">
         <div class="ref-map-modal-header">

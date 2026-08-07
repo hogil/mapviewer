@@ -6513,3 +6513,10 @@ return {
 #### BUG-25: Composite 요청의 SAML LoginId 전달
 - bootstrap SAML은 성공 후 URL handoff만 사용하므로 Composite/Measure Composite 요청에도 `LoginId` query가 전달되어야 한다. 결과가 `composite_map/notsaml`에 생기면 FAIL이다.
 - `selected-region-composite`는 non-fallback LoginId가 `/api/composite-map` POST URL에 포함되는지 확인하고, export는 `SHOT` 튜플 컬럼 제거와 mm 3자리 값을 확인한다.
+
+#### BUG-27: 표형 좌표 선택과 Shot 내부 Chip ID 부분 선택
+- P001 단일 이미지에서 `#chip-coordinate-select-modal`을 실제 context menu 경로로 열고, 자유형 textarea 대신 visible input cell table을 사용해야 한다.
+- `Shot(Grid)`, `Chip ID`, `Chip(Grid)`, `Chip(Pos)`별 열 수/헤더를 확인하고, Tab/쉼표/줄바꿈 붙여넣기가 시작 cell부터 여러 행으로 채워지며 입력값이 셀에 남는지 확인한다.
+- Shot 두 개를 먼저 표로 선택한 뒤 `Chip ID` + `해제`/`추가`를 적용했을 때 selected Chip 수가 `48 -> 47 -> 48`이고 Shot 모드/Shot 수가 유지되어야 한다. Chip ID는 현재 선택 Shot 범위 밖의 같은 ID를 건드리면 안 된다.
+- per-chip/per-shot `yld`가 실제 positions/layout 데이터에 있을 때만 상세 YIELD를 검증한다. wafer-level `yield`만 있는 fixture에서는 UI가 개별 YIELD를 복제하지 않고 `개별 YIELD 데이터 없음`과 wafer YIELD를 분리해 표시해야 한다.
+- Guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells`. DOM visibility, cell values, selection Set, `_getSelectedShotGroups()`를 함께 확인하고 상태 플래그만으로 PASS 처리하지 않는다.

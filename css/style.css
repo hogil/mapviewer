@@ -2885,6 +2885,169 @@
             max-height: 80vh;
             overflow-y: auto;
         }
+
+        .coordinate-select-modal-content {
+            width: min(560px, 92vw);
+            min-width: 0;
+            max-width: 560px;
+            max-height: 82vh;
+        }
+
+        .coordinate-select-body {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .coordinate-select-controls {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 10px;
+        }
+
+        .coordinate-select-controls label {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            color: #ccc;
+            font-size: 12px;
+        }
+
+        .coordinate-select-select {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 7px 9px;
+            background: #1b1b1b;
+            color: #f2f2f2;
+            border: 1px solid #555;
+            border-radius: 3px;
+            font-size: 13px;
+        }
+
+        .coordinate-select-hint,
+        .coordinate-select-summary {
+            color: #aaa;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        .coordinate-select-summary {
+            min-height: 18px;
+            padding: 6px 8px;
+            background: #202020;
+            border: 1px solid #3d3d3d;
+            border-radius: 3px;
+            overflow-wrap: anywhere;
+        }
+
+        .coordinate-select-table-wrap {
+            max-height: 360px;
+            overflow: auto;
+            border: 1px solid #4a4a4a;
+            background: #171717;
+        }
+
+        .coordinate-select-table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+
+        .coordinate-select-table th,
+        .coordinate-select-table td {
+            height: 34px;
+            padding: 3px;
+            border-right: 1px solid #3e3e3e;
+            border-bottom: 1px solid #3e3e3e;
+            box-sizing: border-box;
+        }
+
+        .coordinate-select-table th {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            background: #2c2c2c;
+            color: #ddd;
+            font-size: 12px;
+            font-weight: 600;
+            text-align: left;
+        }
+
+        .coordinate-select-table td {
+            background: #1e1e1e;
+        }
+
+        .coordinate-select-cell {
+            width: 100%;
+            height: 27px;
+            box-sizing: border-box;
+            padding: 3px 6px;
+            background: #111;
+            color: #f5f5f5;
+            border: 1px solid #555;
+            border-radius: 2px;
+            font: 13px Consolas, "Courier New", monospace;
+        }
+
+        .coordinate-select-cell:focus {
+            outline: 2px solid #5b9bd5;
+            outline-offset: -1px;
+            border-color: #9ecbff;
+        }
+
+        .coordinate-select-action-column,
+        .coordinate-select-action-cell {
+            width: 38px;
+            text-align: center;
+        }
+
+        .coordinate-select-remove-row {
+            width: 26px;
+            height: 25px;
+            padding: 0;
+            background: transparent;
+            color: #aaa;
+            border: 1px solid transparent;
+            border-radius: 2px;
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+        }
+
+        .coordinate-select-remove-row:hover {
+            color: #fff;
+            border-color: #777;
+            background: #3a3a3a;
+        }
+
+        .coordinate-select-table-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #888;
+            font-size: 11px;
+        }
+
+        .coordinate-select-table-actions .grid-btn {
+            padding: 4px 9px;
+            white-space: nowrap;
+        }
+
+        .coordinate-select-buttons {
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        @media (max-width: 560px) {
+            .coordinate-select-controls {
+                grid-template-columns: 1fr;
+            }
+
+            .coordinate-select-table-actions {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+        }
         
         .modal-header {
             display: flex;

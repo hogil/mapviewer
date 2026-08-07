@@ -193,6 +193,13 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - E2E guard: `scripts/e2e_chunk2.js`의 `selected-region-composite`는 P001 single-chip partial Shot 8도 full `4×6` canvas/positions로 유지되는지 확인하고, `layout-chip-coordinates`는 label 순서, partial edge Shot 경계가 실제 chip extents와 일치하는지, `(-5, -16)`, `-27.5, 77.5`, `82.2`, `(-2, 3)` 표기를 확인한다.
 - 파일: `api/composite_map.py`, `api/full_app.py`, `js/chip-annotator.js`, `js/main.js`, `index.html`, `scripts/e2e_chunk2.js`, `docs/COMPOSITE_MAP.md`
 
+#### BUG-27: 표형 좌표 선택과 Shot 내부 Chip ID 부분 선택 회귀 (2026-08-08)
+- 증상: 단일 이미지에서 Shot을 먼저 선택한 뒤 특정 Chip ID만 선택 해제/추가하거나, Shot/Grid/Chip(Grid)/Chip(Pos) 좌표를 여러 행으로 붙여넣어 선택할 수 없다. 자유형 입력창은 붙여넣은 행을 다시 확인하기 어렵다.
+- 원인: 기존 context menu는 Chip/Shot 마우스 선택만 제공했고, `ChipAnnotator`에는 layout의 `shot_id`, `chip_id`, grid 좌표, mm 좌표를 표 행 단위로 매칭하고 현재 Shot 범위에 한정해 부분 수정하는 경로가 없었다.
+- 수정 계약: `#chip-coordinate-select-modal`은 실제 input cell table을 사용한다. Tab/쉼표/줄바꿈 붙여넣기는 시작 cell부터 행/열로 채우고, `Chip ID` 입력은 현재 Shot 선택이 있으면 그 Shot들의 visible Chip만 대상으로 `교체/추가/해제`한다. Shot 모드는 부분 Chip을 제거한 뒤에도 Shot context와 canonical Shot shape를 유지한다. per-chip/per-shot `yld` 필드가 있을 때만 평균/목록을 표시하고, 현재 fixture처럼 wafer-level `yield`만 있으면 이를 개별 값으로 복제하지 않는다.
+- E2E guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells`는 P001에서 Shot 두 개를 Tab/쉼표로 붙여넣어 48 Chip을 선택하고, Chip ID를 Shot 범위에서 48→47→48로 해제/추가하며, Chip Pos 쉼표 입력 셀과 visible input 값을 확인한다.
+- 파일: `index.html`, `css/style.css`, `js/main.js`, `js/chip-annotator.js`, `scripts/e2e_chunk2.js`
+
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)
 - e2e-test: L3 Tracker 전체 기능 E2E 테스트를 Playwright 브라우저 자동화로 수행한다. `/e2e-test`, `E2E 테스트`, `전체 테스트`, `기능 테스트 돌려줘` 같은 요청에 반응한다. (file: D:/project/mapviewer/.claude/skills/e2e-test/skill.md)
