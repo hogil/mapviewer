@@ -50,6 +50,7 @@ In Chip mode, hover shows one chip; in Shot mode, hover shows the complete
 matched `shot_id` extent. Plain clicks do not create a selection; when a
 selection already exists, a plain
 left click clears it.
+Hover and selected highlights use the same bright silver-white color.
 Ctrl-click/drag, Shift-drag, and Alt-drag are the selection interactions; Shot
 mode expands those interactions to all matched chips with the same `shot_id`.
 The default mode is Chip.
