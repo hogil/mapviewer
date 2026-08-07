@@ -2114,6 +2114,237 @@ const { createRunner } = require('./e2e_playwright_session');
     };
   });
 
+  await record('selected-region-composite', '선택 Chip/Shot Composite Map 및 결과 positions 정합성', async () => {
+    const targetFile = 'AAI633_00P_08_20260501_010000_99.6_0_PE_PWQ.png';
+    const folder = 'PW/P001/20260501';
+    await boot('chunk2-selected-region-composite');
+    await loadFolder(folder);
+
+    const target = await page.evaluate(({ targetFile, folder }) => {
+      const v = window.viewer;
+      const index = (v.currentGridImages || []).findIndex((imagePath) =>
+        String(imagePath || '').replace(/\\/g, '/').endsWith(`${folder}/${targetFile}`)
+      );
+      return index < 0 ? null : { index, imagePath: v.currentGridImages[index] };
+    }, { targetFile, folder });
+    expect(target, 'selected-region target missing');
+    await setSelection([target.index]);
+    await enterSingle(target.index);
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.layoutProcessId === 'P001' &&
+        window.viewer.chipAnnotator?.shotBoundaryGroups?.size === 43,
+      null,
+      { timeout: 30000 }
+    );
+
+    const selectionTarget = await page.evaluate(() => {
+      const v = window.viewer;
+      const annotator = v.chipAnnotator;
+      const chip = (annotator.chips || []).find((item) =>
+        Number(item?.x_abs) === 10 && Number(item?.y_abs) === 0
+      );
+      const group = chip ? annotator._getShotGroupForChip(chip) : null;
+      const outsideChip = (annotator.chips || []).find((item) => item !== chip);
+      const canvas = annotator.canvas;
+      const box = canvas?.getBoundingClientRect?.();
+      if (!chip || !group || !canvas || !box) return null;
+      const transform = v.transform;
+      const x = ((chip.rect.x0 + chip.rect.x1) / 2) * transform.scale + transform.dx;
+      const y = ((chip.rect.y0 + chip.rect.y1) / 2) * transform.scale + transform.dy + (annotator.Y_OFFSET || 0);
+      return {
+        x: box.left + (x / canvas.width) * box.width,
+        y: box.top + (y / canvas.height) * box.height,
+        chipCoords: [{ x_abs: Number(chip.x_abs), y_abs: Number(chip.y_abs) }],
+        selectedPoint: {
+          x: (Number(chip.rect.x0) + Number(chip.rect.x1)) / 2,
+          y: (Number(chip.rect.y0) + Number(chip.rect.y1)) / 2,
+        },
+        outsidePoint: outsideChip?.rect ? {
+          x: (Number(outsideChip.rect.x0) + Number(outsideChip.rect.x1)) / 2,
+          y: (Number(outsideChip.rect.y0) + Number(outsideChip.rect.y1)) / 2,
+        } : null,
+        shotCoords: group.chips.map((item) => ({
+          x_abs: Number(item.x_abs),
+          y_abs: Number(item.y_abs),
+        })),
+        shotId: String(group.shotId),
+      };
+    });
+    expect(selectionTarget, 'selected-region chip/shot target missing');
+
+    await page.keyboard.down('Control');
+    try {
+      await page.mouse.click(selectionTarget.x, selectionTarget.y);
+    } finally {
+      await page.keyboard.up('Control');
+    }
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.selectedChips?.size === 1,
+      null,
+      { timeout: 10000 }
+    );
+
+    const compositeRequestPromise = page.waitForRequest(
+      (request) => request.url().includes('/api/composite-map') && request.method() === 'POST',
+      { timeout: 10000 }
+    );
+    await page.mouse.click(selectionTarget.x, selectionTarget.y, { button: 'right' });
+    await page.waitForFunction(
+      () => !!document.querySelector('#chip-context-menu #chip-composite-create'),
+      null,
+      { timeout: 10000 }
+    );
+    const menuText = await page.locator('#chip-context-menu').innerText();
+    await page.locator('#chip-context-menu #chip-composite-create').click();
+    const compositeRequest = await compositeRequestPromise;
+    const chipRequestBody = JSON.parse(compositeRequest.postData() || '{}');
+    await page.waitForFunction(
+      () => window.viewer?.isCompositeMode === true &&
+        window.viewer.compositeSession?.selectionMode === 'chip' &&
+        window.viewer.compositeSession?.selectedChipCount === 1 &&
+        Array.isArray(window.viewer.currentGridImages) &&
+        window.viewer.currentGridImages.length > 0 &&
+        String(window.viewer.currentGridImages[0] || '').includes('composite_map/'),
+      null,
+      { timeout: 180000 }
+    );
+    const chipResult = await page.evaluate(async () => {
+      const v = window.viewer;
+      const imagePath = v.currentGridImages?.[0] || '';
+      const deadline = Date.now() + 30000;
+      let responseOk = false;
+      let positions = null;
+      while (Date.now() < deadline) {
+        const response = await fetch(
+          `/api/chip-positions?path=${encodeURIComponent(imagePath)}&include_fq=0`,
+          { cache: 'no-store' }
+        );
+        responseOk = response.ok;
+        positions = response.ok ? await response.json() : null;
+        if (Array.isArray(positions?.chips) && positions.chips.length === 1) break;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      return {
+        imagePath,
+        responseOk,
+        positionsChipCount: Array.isArray(positions?.chips) ? positions.chips.length : 0,
+        compositeSession: v.compositeSession,
+      };
+    });
+    const chipPixels = await page.evaluate(async ({ imagePath, selectedPoint, outsidePoint }) => {
+      if (!imagePath || !selectedPoint || !outsidePoint) return null;
+      const response = await fetch(`/api/image?path=${encodeURIComponent(imagePath)}`, { cache: 'no-store' });
+      if (!response.ok) return { responseOk: false };
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      try {
+        const image = new Image();
+        image.src = url;
+        await new Promise((resolve, reject) => {
+          image.onload = resolve;
+          image.onerror = reject;
+        });
+        const canvas = document.createElement('canvas');
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        canvas.getContext('2d').drawImage(image, 0, 0);
+        const context = canvas.getContext('2d');
+        return {
+          responseOk: true,
+          selected: Array.from(context.getImageData(Math.round(selectedPoint.x), Math.round(selectedPoint.y), 1, 1).data),
+          outside: Array.from(context.getImageData(Math.round(outsidePoint.x), Math.round(outsidePoint.y), 1, 1).data),
+        };
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }, {
+      imagePath: chipResult.imagePath,
+      selectedPoint: selectionTarget.selectedPoint,
+      outsidePoint: selectionTarget.outsidePoint,
+    });
+    chipResult.pixels = chipPixels;
+    expect(chipRequestBody.selection_mode === 'chip', `chip mode=${JSON.stringify(chipRequestBody)}`);
+    expect(Array.isArray(chipRequestBody.selected_chip_coords) &&
+      chipRequestBody.selected_chip_coords.length === 1,
+    `chip payload=${JSON.stringify(chipRequestBody)}`);
+    expect(menuText.includes('선택 Chip Composite Map 만들기'), `chip menu=${menuText}`);
+    expect(chipResult.responseOk && chipResult.positionsChipCount === 1,
+      `chip result=${JSON.stringify(chipResult)}`);
+    expect(chipResult.pixels?.responseOk &&
+      chipResult.pixels.selected?.join(',') !== chipResult.pixels.outside?.join(','),
+    `chip mask pixels=${JSON.stringify(chipResult)}`);
+
+    const shotResult = await page.evaluate(async ({ imagePath, shotCoords }) => {
+      await fetch('/api/composite-cleanup', { method: 'POST', cache: 'no-store' });
+      const startResponse = await fetch('/api/composite-map', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image_paths: [imagePath],
+          selection_mode: 'shot',
+          selected_chip_coords: shotCoords,
+        }),
+        cache: 'no-store',
+      });
+      if (!startResponse.ok) throw new Error(await startResponse.text());
+      const started = await startResponse.json();
+      const deadline = Date.now() + 180000;
+      let status = null;
+      while (Date.now() < deadline) {
+        const statusResponse = await fetch(
+          `/api/composite-map/status/${encodeURIComponent(started.task_id)}`,
+          { cache: 'no-store' }
+        );
+        status = await statusResponse.json();
+        if (status.status === 'completed' || status.status === 'failed') break;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      if (!status || status.status !== 'completed') {
+        throw new Error(`shot composite status=${JSON.stringify(status)}`);
+      }
+      const result = status.result || {};
+      const image = result.heatmaps?.[0]?.path || result.sum_map_path || '';
+      const positionsDeadline = Date.now() + 30000;
+      let positions = null;
+      while (Date.now() < positionsDeadline) {
+        const positionsResponse = await fetch(
+          `/api/chip-positions?path=${encodeURIComponent(image)}&include_fq=0`,
+          { cache: 'no-store' }
+        );
+        if (positionsResponse.ok) {
+          const candidate = await positionsResponse.json();
+          if (Array.isArray(candidate?.chips)) {
+            positions = candidate;
+            break;
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      return {
+        result,
+        outputImage: image,
+        positionsChipCount: Array.isArray(positions?.chips) ? positions.chips.length : 0,
+      };
+    }, { imagePath: target.imagePath, shotCoords: selectionTarget.shotCoords });
+    expect(shotResult.result.selection_mode === 'shot' &&
+      shotResult.result.selected_chip_count === selectionTarget.shotCoords.length,
+    `shot result metadata=${JSON.stringify({ selectionTarget, shotResult })}`);
+    expect(shotResult.positionsChipCount === selectionTarget.shotCoords.length,
+      `shot positions=${JSON.stringify({ selectionTarget, shotResult })}`);
+
+    return {
+      target,
+      selectionTarget: {
+        shotId: selectionTarget.shotId,
+        chipCount: selectionTarget.shotCoords.length,
+      },
+      menuText,
+      chipRequestBody,
+      chipResult,
+      shotResult,
+    };
+  });
+
   await record('36,37,38,40', '성능 / 이미지 무결성 / 인덱스', async () => {
     await boot('chunk2-perf');
     const t0 = Date.now();

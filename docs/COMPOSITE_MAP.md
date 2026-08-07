@@ -46,6 +46,16 @@ IMAGES_ROOT/composite_map/{login_id}/current
   → 필요 시 subset / recolor 재생성
 ```
 
+## 선택 Chip/Shot Composite
+
+단일 이미지 보기에서 Chip 또는 Shot을 선택하면 컨텍스트 메뉴의 `선택 Chip/Shot Composite Map 만들기`로 현재 이미지의 선택 영역만 Composite Map으로 생성할 수 있습니다.
+
+- Chip 모드: 선택한 `x_abs/y_abs` chip만 결과에 포함
+- Shot 모드: 선택한 Shot에 속한 모든 chip 좌표를 포함
+- 선택 영역 밖은 Composite 배경으로 유지
+- 결과 positions도 같은 좌표만 복사하여 단일보기 경계와 이미지가 일치
+- 기존 그리드 이미지 선택 기반 `Composite 만들기` 동작은 변경하지 않음
+
 ## 입력 이미지 규칙
 
 - `POST /api/composite-map`는 최대 256장까지 허용합니다.
@@ -164,6 +174,17 @@ Recolor는 원본 이미지를 다시 읽지 않고 `square_maps_data.npz`를 �
 - `POST /api/composite-recolor`
 - `GET /api/composite-colors`
 - `POST /api/composite-colors`
+
+선택 영역 요청은 기존 요청에 아래 필드를 추가합니다.
+
+```json
+{
+  "selection_mode": "chip",
+  "selected_chip_coords": [{"x_abs": 10, "y_abs": 0}]
+}
+```
+
+`selection_mode`는 `chip` 또는 `shot`이며, Shot인 경우 프론트엔드가 해당 Shot의 모든 chip 좌표를 전송합니다.
 
 ## 관련 설정
 

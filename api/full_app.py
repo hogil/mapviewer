@@ -9026,6 +9026,7 @@ async def classify_chips(request: ChipClassifyRequest,
 
         # 원본 이미지 경로
         rel_path = relkey_from_any_path(request.image_path)
+        source_rel_path = _lookup_original_relpath_from_classification_path(request.image_path) or rel_path
         wafer_path = ROOT_DIR / rel_path
         rel_path_obj = Path(rel_path)
 
@@ -9054,6 +9055,7 @@ async def classify_chips(request: ChipClassifyRequest,
         saved_count = 0
         errors = []
         saved_files = []
+        source_by_filename: Dict[str, str] = {}
 
         # 각 chip 크롭 및 저장
         for chip_coord in request.chip_coords:
@@ -9110,6 +9112,7 @@ async def classify_chips(request: ChipClassifyRequest,
                     "y_abs": chip_coord.y_abs,
                     "b": bottom_token,
                 })
+                source_by_filename[chip_filename] = source_rel_path
                 try:
                     chip_rel = str(chip_path.relative_to(ROOT_DIR)).replace("\\", "/")
                     index_service.add_classification_entry(chip_rel)
@@ -9121,6 +9124,10 @@ async def classify_chips(request: ChipClassifyRequest,
 
         if saved_count > 0:
             _dircache_invalidate(class_dir)
+            try:
+                _record_chip_label_sources(class_dir.parent, class_name, source_by_filename)
+            except Exception as source_map_error:
+                logger.warning(f"Chip 원본 경로 manifest 저장 실패: {source_map_error}")
 
         chip_time = time.perf_counter() - chip_start_time
         log_access_row(tag="ACTION", note=f"Chip 분류: {saved_count}개 성공, {len(errors)}개 실패 -> {class_name} (소요시간: {chip_time*1000:.1f}ms)")
@@ -9828,6 +9835,8 @@ def _chip_bottom_filename_token(raw_value: Any) -> str:
     return safe or "Normal"
 
 _CHIP_COORD_RE = re.compile(r"^(?P<wafer>.+)_[xX](?P<x>-?\d+)_[yY](?P<y>-?\d+)(?:_[bB](?P<b>[A-Za-z0-9_-]+))?$")
+_CHIP_LABEL_SOURCE_MAP_NAME = ".chip_source_map.json"
+_CHIP_LABEL_SOURCE_MAP_LOCK = RLock()
 
 def _parse_chip_filename(stem: str) -> Optional[Tuple[str, int, int, Optional[str]]]:
     """
@@ -9955,10 +9964,98 @@ def _classification_source_prefix(rel_path: str) -> str:
     return "/".join(parts[:idx]) if idx > 0 else ""
 
 
+def _chip_label_source_map_location(chip_label_relpath: str) -> Tuple[Optional[Path], str]:
+    parts = [part for part in chip_label_relpath.replace("\\", "/").split("/") if part]
+    classification_idx = next(
+        (idx for idx, part in enumerate(parts) if part.lower() == "classification_chips"),
+        -1,
+    )
+    if classification_idx < 0 or len(parts) <= classification_idx + 2:
+        return None, ""
+
+    manifest_dir = ROOT_DIR.joinpath(*parts[:classification_idx], "classification_chips")
+    key = "/".join(parts[classification_idx + 1:])
+    return manifest_dir / _CHIP_LABEL_SOURCE_MAP_NAME, key
+
+
+def _read_chip_label_source(chip_label_relpath: str) -> Optional[str]:
+    manifest_path, key = _chip_label_source_map_location(chip_label_relpath)
+    if manifest_path is None or not key:
+        return None
+    try:
+        with _CHIP_LABEL_SOURCE_MAP_LOCK:
+            with manifest_path.open("r", encoding="utf-8") as handle:
+                source_map = json.load(handle)
+        if not isinstance(source_map, dict):
+            return None
+        source = source_map.get(key) or source_map.get(key.lower())
+        if not isinstance(source, str) or not source.strip():
+            return None
+        return source.replace("\\", "/").strip()
+    except (FileNotFoundError, OSError, ValueError, TypeError):
+        return None
+
+
+def _record_chip_label_sources(
+    classification_dir: Path,
+    class_name: str,
+    source_by_filename: Dict[str, str],
+) -> None:
+    if not source_by_filename:
+        return
+
+    manifest_path = classification_dir / _CHIP_LABEL_SOURCE_MAP_NAME
+    with _CHIP_LABEL_SOURCE_MAP_LOCK:
+        source_map: Dict[str, str] = {}
+        try:
+            with manifest_path.open("r", encoding="utf-8") as handle:
+                existing = json.load(handle)
+            if isinstance(existing, dict):
+                source_map = {
+                    str(key): str(value).replace("\\", "/")
+                    for key, value in existing.items()
+                    if isinstance(key, str) and isinstance(value, str) and value.strip()
+                }
+        except (FileNotFoundError, OSError, ValueError, TypeError):
+            pass
+
+        for filename, source in source_by_filename.items():
+            source_map[f"{class_name}/{filename}"] = source.replace("\\", "/")
+
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = manifest_path.with_name(
+            f"{manifest_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+        )
+        try:
+            with temp_path.open("w", encoding="utf-8") as handle:
+                json.dump(source_map, handle, ensure_ascii=True, separators=(",", ":"))
+            os.replace(temp_path, manifest_path)
+        finally:
+            try:
+                temp_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def _find_wafer_relpath_for_chip_label(chip_label_relpath: str) -> Optional[str]:
     parsed = _parse_chip_filename(Path(chip_label_relpath).stem)
     if not parsed:
         return None
+
+    mapped_source = _read_chip_label_source(chip_label_relpath)
+    if mapped_source:
+        try:
+            mapped_relpath = _lookup_original_relpath_from_classification_path(mapped_source) or relkey_from_any_path(mapped_source)
+            mapped_path = ROOT_DIR / mapped_relpath
+            if (
+                mapped_path.exists()
+                and mapped_path.is_file()
+                and is_supported_image(mapped_path)
+                and not _is_derived_wafer_lookup_relpath(mapped_relpath)
+            ):
+                return mapped_relpath
+        except (HTTPException, OSError, ValueError):
+            pass
 
     label_wafer_stem = parsed[0]
     match_key = _chip_wafer_match_key(label_wafer_stem)
@@ -10406,6 +10503,8 @@ class CompositeMapRequest(BaseModel):
     focus_index: Optional[int] = 3
     highlight_threshold: int = 8
     scheme: Optional[str] = None
+    selection_mode: Optional[Literal["chip", "shot"]] = None
+    selected_chip_coords: Optional[List[ChipCoord]] = None
 
 
 async def run_composite_map_task(
@@ -10736,6 +10835,17 @@ async def create_composite_map_endpoint(
     # 절대경로 → 상대경로 변환
     image_paths = [_to_relative_path(p) for p in image_paths]
 
+    selected_chip_coords = None
+    if payload.selected_chip_coords is not None:
+        if not payload.selected_chip_coords:
+            raise HTTPException(status_code=400, detail="selected_chip_coords가 비어 있습니다.")
+        if payload.palette_mode:
+            raise HTTPException(status_code=400, detail="선택 영역 Composite는 heatmap 모드만 지원합니다.")
+        selected_chip_coords = [
+            (int(coord.x_abs), int(coord.y_abs))
+            for coord in payload.selected_chip_coords
+        ]
+
     max_images = 256
     if len(image_paths) > max_images:
         raise HTTPException(status_code=400, detail=f"최대 {max_images}개의 이미지만 지원합니다.")
@@ -10776,6 +10886,8 @@ async def create_composite_map_endpoint(
                 p for p in _image_paths_snapshot
                 if any(c.exists() for c in _candidate_positions_paths(Path(p)))
             ]
+            if selected_chip_coords and not position_filtered:
+                raise ValueError("선택 영역 Composite에는 positions 파일이 필요합니다.")
             if position_filtered:
                 if len(position_filtered) < len(_image_paths_snapshot):
                     _log(f"[composite-map] positions 필터: {len(_image_paths_snapshot)} → {len(position_filtered)}개 이미지")
@@ -10821,7 +10933,8 @@ async def create_composite_map_endpoint(
                     max_workers=max_workers,
                     batch_size=batch_size,
                     scheme="default",
-                    login_id=login_id
+                    login_id=login_id,
+                    selected_chip_coords=selected_chip_coords,
                 )
                 result = task_fn()
 
@@ -10845,6 +10958,9 @@ async def create_composite_map_endpoint(
                     response["timings"] = result["timings"]
                 if "numba" in result:
                     response["numba"] = result["numba"]
+                if selected_chip_coords:
+                    response["selection_mode"] = payload.selection_mode or "chip"
+                    response["selected_chip_count"] = len(selected_chip_coords)
 
             COMPOSITE_TASKS[task_id]["status"] = "completed"
             COMPOSITE_TASKS[task_id]["progress"] = 100

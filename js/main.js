@@ -9193,6 +9193,8 @@ class WaferMapViewer {
             processingTime: result.processing_time,
             numba: result.numba || null,
             generatedAt: result.generated_at,
+            selectionMode: result.selection_mode || this.lastCompositeSelection?.mode || null,
+            selectedChipCount: result.selected_chip_count || this.lastCompositeSelection?.chipCoords?.length || 0,
             sumMaps: [],
         };
         this.lastCompositeSourceImages = sourceImages;
@@ -9555,23 +9557,52 @@ class WaferMapViewer {
     /**
      * Composite Map 생성 핸들러 (Grid 교체 방식)
      */
-    async handleCompositeCreate() {
+    async handleCompositeCreate(options = {}) {
         if (this.isCompositeMode) {
             this.showToast?.('Composite 모드에서 나간 후 다시 시도하세요.', 1800);
             return;
         }
 
-        const selected = this.getSelectedImagesForModal();
+        const hasRegionSelection = Array.isArray(options.selectedChips);
+        const selectionMode = options.selectionMode === 'shot' ? 'shot' : 'chip';
+        const selectedChipCoords = hasRegionSelection
+            ? [...new Map(
+                options.selectedChips
+                    .filter((chip) => chip && Number.isFinite(Number(chip.x_abs)) && Number.isFinite(Number(chip.y_abs)))
+                    .map((chip) => [`${chip.x_abs}:${chip.y_abs}`, {
+                        x_abs: Number(chip.x_abs),
+                        y_abs: Number(chip.y_abs),
+                    }])
+            ).values()]
+            : [];
+        const selected = hasRegionSelection
+            ? (this.selectedImagePath ? [this.selectedImagePath] : [])
+            : this.getSelectedImagesForModal();
         if (!selected.length) {
             this._closeCompositeMeasureFloatingPanels();
-            alert('Composite Map을 만들 이미지를 선택하세요.');
+            alert(hasRegionSelection
+                ? 'Composite Map을 만들 현재 이미지가 없습니다.'
+                : 'Composite Map을 만들 이미지를 선택하세요.');
+            return;
+        }
+        if (hasRegionSelection && selectedChipCoords.length === 0) {
+            this._closeCompositeMeasureFloatingPanels();
+            alert('Composite Map을 만들 Chip 또는 Shot을 선택하세요.');
             return;
         }
         this._closeCompositeMeasureFloatingPanels();
         const previousPageState = this.captureActivePageState();
         this.lastCompositeSourceImages = [...selected];
+        this.lastCompositeSelection = hasRegionSelection
+            ? { mode: selectionMode, chipCoords: selectedChipCoords }
+            : null;
         this.clearGridSelectionMarks({ hidePanel: true, updateContext: false });
         this._resetContextCompositeChecks();
+
+        const selectionLabel = hasRegionSelection
+            ? `선택 ${selectionMode === 'shot' ? 'Shot' : 'Chip'} (${selectedChipCoords.length}개 Chip)`
+            : null;
+        const inputLabel = selectionLabel || `${selected.length}개 이미지`;
 
         let targetPageId = this.pageManager?.activePageId || null;
         if (this.pageManager) {
@@ -9590,8 +9621,10 @@ class WaferMapViewer {
 
         const initialTask = {
             status: 'queued',
-            message: `Composite Map 생성 준비 중... (${selected.length}개 이미지)`,
+            message: `Composite Map 생성 준비 중... (${inputLabel})`,
             selectedCount: selected.length,
+            selectionLabel,
+            selectedChipCount: selectedChipCoords.length,
             startedAt: Date.now(),
         };
         this.displaySelectedGridImages([]);
@@ -9609,7 +9642,11 @@ class WaferMapViewer {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     image_paths: selected,
-                    lot_mode: this.lotMode  // 🔥 LOT Mode 파라미터 추가
+                    lot_mode: this.lotMode,
+                    ...(hasRegionSelection ? {
+                        selection_mode: selectionMode,
+                        selected_chip_coords: selectedChipCoords,
+                    } : {}),
                 }),
                 cache: 'no-store'  // 캐시 사용 안 함
             });
@@ -9628,8 +9665,10 @@ class WaferMapViewer {
                                  status.status === 'queued' ? '대기 중...' :
                                  status.status === 'completed' ? '완료!' : '실패';
                 const baseTask = {
-                    message: `Composite Map ${statusText} (${selected.length}개 이미지)`,
+                    message: `Composite Map ${statusText} (${inputLabel})`,
                     selectedCount: selected.length,
+                    selectionLabel,
+                    selectedChipCount: selectedChipCoords.length,
                     startedAt: initialTask.startedAt,
                 };
                 const updatedTask = status.status === 'completed'
@@ -9652,6 +9691,8 @@ class WaferMapViewer {
                         status: 'rendering',
                         message: 'Composite 결과 표시 중입니다...',
                         selectedCount: selected.length,
+                        selectionLabel,
+                        selectedChipCount: selectedChipCoords.length,
                         startedAt: initialTask.startedAt,
                     };
                     this.setCompositePageTask(targetPageId, { task: renderingTask, result: null });
@@ -9664,7 +9705,14 @@ class WaferMapViewer {
                 } else {
                     // 다른 탭에 있음 → 결과 보류, 나중에 탭 전환 시 렌더링
                     this.setCompositePageTask(targetPageId, {
-                        task: { status: 'ready', message: 'Composite 완료 — 탭을 열면 표시됩니다.', selectedCount: selected.length, startedAt: initialTask.startedAt },
+                        task: {
+                            status: 'ready',
+                            message: 'Composite 완료 — 탭을 열면 표시됩니다.',
+                            selectedCount: selected.length,
+                            selectionLabel,
+                            selectedChipCount: selectedChipCoords.length,
+                            startedAt: initialTask.startedAt,
+                        },
                         result: result,
                         pendingRender: true,
                     });
@@ -11338,7 +11386,9 @@ class WaferMapViewer {
         if (!measure && Number.isFinite(serverTime) && serverTime > 0) {
             parts.push(`server ${serverTime.toFixed(2)}s`);
         }
-        if (Number.isFinite(selectedCount) && selectedCount > 0) {
+        if (taskState?.selectionLabel) {
+            parts.push(taskState.selectionLabel);
+        } else if (Number.isFinite(selectedCount) && selectedCount > 0) {
             parts.push(`${selectedCount}images`);
         }
         if (!measure && result?.numba?.enabled) {
@@ -25565,12 +25615,29 @@ class WaferMapViewer {
         const results = data.results
             .map(path => this.normalizeSearchResultPath(path))
             .filter(Boolean);
+        const mappedWaferPaths = mode === 'wafer'
+            ? (await Promise.all(payload.parsed.map(async (info) => {
+                try {
+                    const mappingResponse = await fetch(
+                        `/api/chip-label-wafer?path=${encodeURIComponent(info.path)}`,
+                        { cache: 'no-store' },
+                    );
+                    if (!mappingResponse.ok) return '';
+                    const mapping = await mappingResponse.json();
+                    return mapping?.success
+                        ? this.normalizeSearchResultPath(mapping.wafer_path)
+                        : '';
+                } catch (error) {
+                    return '';
+                }
+            }))).filter(Boolean)
+            : [];
 
         return {
             ...payload,
             total: data.total || results.length,
             timings: data.timings || {},
-            results: this.dedupePathsByLotWafer(results),
+            results: this.dedupePathsByLotWafer([...mappedWaferPaths, ...results]),
         };
     }
 
@@ -29813,6 +29880,42 @@ class WaferMapViewer {
             modeItem.onmouseleave = () => { modeItem.style.background = ''; };
             menu.appendChild(modeItem);
         });
+
+        if (selectedChips.length > 0) {
+            const selectedMode = this.chipAnnotator?.selectionMode === 'shot' ? 'shot' : 'chip';
+            const selectedShotCount = selectedMode === 'shot'
+                ? (this.chipAnnotator?._getSelectedShotGroups?.().size || 0)
+                : 0;
+            const selectedUnit = selectedMode === 'shot' ? 'Shot' : 'Chip';
+            const selectedUnitCount = selectedMode === 'shot' && selectedShotCount > 0
+                ? selectedShotCount
+                : selectedChips.length;
+            const compositeItem = document.createElement('div');
+            compositeItem.id = 'chip-composite-create';
+            compositeItem.className = 'context-menu-item';
+            compositeItem.style.cssText = `
+                padding: 8px 16px;
+                cursor: pointer;
+                color: #fff;
+                font-size: 14px;
+            `;
+            compositeItem.textContent = `선택 ${selectedUnit} Composite Map 만들기 (${selectedUnitCount}개)`;
+            compositeItem.title = '현재 선택 영역만 Composite Map으로 만듭니다.';
+            compositeItem.onclick = () => {
+                const selectedSnapshot = selectedChips.map((chip) => ({
+                    x_abs: chip.x_abs,
+                    y_abs: chip.y_abs,
+                }));
+                menu.remove();
+                this.handleCompositeCreate({
+                    selectedChips: selectedSnapshot,
+                    selectionMode: selectedMode,
+                });
+            };
+            compositeItem.onmouseenter = () => { compositeItem.style.background = '#3a3a3a'; };
+            compositeItem.onmouseleave = () => { compositeItem.style.background = ''; };
+            menu.appendChild(compositeItem);
+        }
 
         // Chip 1개 선택 시: Chip 보기
         if (selectedChips.length === 1) {

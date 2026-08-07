@@ -128,6 +128,21 @@ _GRADE_RANGE = np.arange(8, dtype=np.uint8)
 _SUBSET_NAME_RE = re.compile(r"^square_(weighted_)?average_([0-7]+)\.(png|jpg|jpeg|webp)$", re.IGNORECASE)
 
 
+def _normalize_selected_chip_coords(
+    selected_chip_coords: Optional[Sequence[Tuple[int, int]]],
+) -> Optional[set[Tuple[int, int]]]:
+    if not selected_chip_coords:
+        return None
+    normalized: set[Tuple[int, int]] = set()
+    for coord in selected_chip_coords:
+        try:
+            x_abs, y_abs = coord
+            normalized.add((int(x_abs), int(y_abs)))
+        except (TypeError, ValueError):
+            continue
+    return normalized or None
+
+
 def _candidate_source_positions_paths(image_rel_path: str) -> List[Path]:
     image_path = Path(image_rel_path)
     image_stem = image_path.stem
@@ -223,6 +238,7 @@ def _copy_positions_without_bin(
     output_dir: Path,
     composite_images: List[str],
     keep_chip_bin: bool = False,
+    selected_chip_coords: Optional[Sequence[Tuple[int, int]]] = None,
 ) -> None:
     """
     첫 번째 이미지의 positions.json을 찾아 composite 결과 이미지들에 대응하는
@@ -237,9 +253,31 @@ def _copy_positions_without_bin(
 
     try:
         positions_template = copy.deepcopy(positions_data)
+        selected_coord_set = _normalize_selected_chip_coords(selected_chip_coords)
         chips = positions_data.get("chips")
         if isinstance(chips, list):
             template_chips = positions_template.get("chips", [])
+            if selected_coord_set is not None:
+                filtered_chips = []
+                for chip in template_chips:
+                    if not isinstance(chip, dict):
+                        continue
+                    try:
+                        chip_key = (int(chip.get("x_abs")), int(chip.get("y_abs")))
+                    except (TypeError, ValueError):
+                        continue
+                    if chip_key in selected_coord_set:
+                        filtered_chips.append(chip)
+                positions_template["chips"] = filtered_chips
+                template_chips = filtered_chips
+                positions = positions_template.get("positions")
+                if isinstance(positions, dict):
+                    positions_template["positions"] = {
+                        key: value
+                        for key, value in positions.items()
+                        if isinstance(value, dict)
+                        and _coord_key_from_chip(value) in selected_coord_set
+                    }
             for chip in template_chips:
                 if not isinstance(chip, dict):
                     continue
@@ -265,8 +303,23 @@ def _copy_positions_without_bin(
 
             positions_file_path = positions_output_dir / f"{img_stem}.json"
             _atomic_write_json(positions_file_path, positions_data_copy)
+            # A previous Composite view may have cached the full source positions
+            # under the same output image path.  Invalidate that entry after the
+            # filtered file is atomically replaced.
+            _positions_json_cache.pop(composite_rel_path.as_posix(), None)
     except Exception:
         pass
+
+
+def _coord_key_from_chip(chip: Any) -> Optional[Tuple[int, int]]:
+    if not isinstance(chip, dict):
+        return None
+    try:
+        x_abs = chip.get("x_abs") if chip.get("x_abs") is not None else chip.get("x")
+        y_abs = chip.get("y_abs") if chip.get("y_abs") is not None else chip.get("y")
+        return int(x_abs), int(y_abs)
+    except (TypeError, ValueError):
+        return None
 
 
 def _count_unique_devices(image_paths: List[str], max_sample: int = 64) -> int:
@@ -332,6 +385,7 @@ def _build_chip_base_indices_from_positions(
     width: int,
     height: int,
     show_normal_border: bool = True,
+    selected_chip_coords: Optional[Sequence[Tuple[int, int]]] = None,
 ) -> Optional[np.ndarray]:
     """
     positions.json의 chip 좌표로 base_indices 배열 생성.
@@ -365,9 +419,12 @@ def _build_chip_base_indices_from_positions(
     scale_y = height / float(canvas_h)
 
     base = np.full((height, width), 8, dtype=np.uint8)  # 전체 = 배경색 (index 8, 개인색 적용)
+    selected_coord_set = _normalize_selected_chip_coords(selected_chip_coords)
 
     for chip in chips:
         if not isinstance(chip, dict):
+            continue
+        if selected_coord_set is not None and _coord_key_from_chip(chip) not in selected_coord_set:
             continue
         rect = chip.get("rect", {})
         x0_raw = rect.get("x0") if isinstance(rect, dict) else None
@@ -2074,6 +2131,7 @@ def create_composite_heatmaps(
     batch_size: Optional[int] = None,
     scheme: Optional[str] = None,
     login_id: Optional[str] = None,
+    selected_chip_coords: Optional[Sequence[Tuple[int, int]]] = None,
 ) -> Dict[str, Any]:
     start_time = time.perf_counter()
     trace = _trace_enabled()
@@ -2083,6 +2141,8 @@ def create_composite_heatmaps(
         timings[label] = time.perf_counter() - started
     if not image_paths:
         raise ValueError("image_paths is empty")
+
+    selected_coord_set = _normalize_selected_chip_coords(selected_chip_coords)
 
     t = time.perf_counter()
     numba_warm_info = warm_numba_kernels() if _HAS_NUMBA else _numba_runtime_info(warmed=False)
@@ -2228,6 +2288,7 @@ def create_composite_heatmaps(
             width=width,
             height=height,
             show_normal_border=show_normal_border,
+            selected_chip_coords=selected_coord_set,
         )
     if base_indices is None:
         # positions.json 없을 때 fallback: chip 영역은 grade0, 나머지는 배경색
@@ -2349,7 +2410,10 @@ def create_composite_heatmaps(
         threading.Thread(
             target=_copy_positions_without_bin,
             args=(positions_source_path, output_dir, composite_image_filenames),
-            kwargs={"keep_chip_bin": show_normal_border},
+            kwargs={
+                "keep_chip_bin": show_normal_border,
+                "selected_chip_coords": selected_coord_set,
+            },
             daemon=True,
         ).start()
         _mark("copy_positions_async", t)

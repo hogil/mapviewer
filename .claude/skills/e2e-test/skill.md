@@ -17,6 +17,7 @@ argument-hint: [Phase 번호 또는 범위]
 | P1 | 시간 정렬, `H%(PA,TD)` root LOT wildcard, 그리드/단일 네비게이션 순서 | `scripts/e2e_chunk1.js` `sort-lot-filter` |
 | P1 | Composite/Measure fixed 12-BIN SYSTEMATIC grouping and filtered render | `scripts/e2e_chunk1.js` `systematic-bin-group` |
 | P1 | Layout `layout.txt` EDS chip 매칭, Chip Coord/Radious/Shot 순서, Shot 토글/선택 및 shot_id 경계 표시 | `scripts/e2e_chunk2.js` `layout-chip-coordinates` |
+| P1 | 선택 Chip/Shot 영역 Composite Map 및 결과 positions 정합성 | `scripts/e2e_chunk2.js` `selected-region-composite` |
 | P1 | 기존 Measure 다중선택/탭 복귀/썸네일 무결성 | `30,33,34,35,39`, `41,42,45,47,48,56` |
 | P2 | 전체 63개 Phase와 성능/프로세스 정리 | `run-e2e-playwright.ps1 -Chunk all` |
 
@@ -2031,12 +2032,16 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
    - 선택 후 일반 왼쪽 클릭으로 전체 선택 해제
 3. hover와 선택 하이라이트가 같은 밝은 은백색이고 노란색이 아닌지 확인
 4. 우클릭 메뉴에서 `Chip 선택` 클릭 → 기본 선택 모드로 복귀하고 선택 상태 초기화
-5. 선택된 칩의 좌표가 정보 패널에 표시:
+5. 선택 상태에서 컨텍스트 메뉴의 `선택 Chip Composite Map 만들기`를 실행하고 `/api/composite-map` payload에 선택 좌표 1개가 포함되는지 확인
+   - 완료 결과의 `selection_mode === "chip"`, `selected_chip_count === 1` 확인
+   - 결과 positions의 chip 수가 1인지 확인
+6. 같은 P001 fixture의 한 Shot 좌표 전체를 직접 API 요청하고 완료 결과 positions의 chip 수가 해당 Shot의 실제 chip 수와 같은지 확인
+7. 선택된 칩의 좌표가 정보 패널에 표시:
    - Chip(Coord) 행에 `"x_abs, y_abs"` 형태의 실제 숫자 값
    - Chip(Rel) 행에 실제 칩 격자 인덱스, Radious 행에 소수점 2자리 거리값, Shot 행에 signed order pair
-6. Ctrl+클릭으로 추가 칩 선택 → 다중 선택 확인
+8. Ctrl+클릭으로 추가 칩 선택 → 다중 선택 확인
    - 선택 칩 수 2개 이상
-7. Shift+드래그와 Alt+드래그도 modifier가 눌린 경우에만 선택 범위를 변경하는지 확인
+9. Shift+드래그와 Alt+드래그도 modifier가 눌린 경우에만 선택 범위를 변경하는지 확인
 
 **pass 기준**: hover 범위→일반 클릭 무변경→modifier 선택→좌표표시→모드 복귀→초기화
 
@@ -6456,6 +6461,7 @@ return {
 - chip wafer key는 파일명 앞 5개 토큰 `product/bottom/wafer/date/time`이다. 예: `AAU220_00P_13_20260501_010000`. 이 prefix가 같으면 wafer filename에 `96.0_2` 같은 추가 토큰이 있어도 같은 wafer label로 판단한다.
 - chip label 관련 wafer/lot 보기는 Label Explorer, chip-label grid 다중 선택 context menu, chip-label single image context menu에서 모두 보여야 한다.
 - chip label → wafer/lot 보기 결과는 새 wafer tab으로 열고, lot/wafer 기준으로 중복 제거한다. 결과 경로는 원본 wafer여야 하며 `classification_chips` 또는 `obj_id_maps` 파생 경로가 나오면 FAIL.
+- 동일 wafer filename이 여러 원본 폴더에 존재해도 `/api/classify/chips`가 기록한 `.chip_source_map.json` 원본 경로를 우선 사용해 label을 만든 wafer로 돌아가야 한다. manifest가 없거나 원본이 삭제된 기존 label만 후보 검색 fallback을 사용한다.
 - chip label에서 열린 wafer single view는 상단 filename panel에 소속 folder를 보여야 하고, 좌하단 chip label legend/overlay가 보여야 한다. 반대로 chip label image single view는 folder line/separator를 숨겨야 한다.
 - chip label overlay 기본 active label은 `invalid_main`을 제외한다. overlay alpha는 `0.2`이고, fill은 chip interior에만 들어가 wafer chip boundary가 남아야 한다. legend width는 기존 264px 대비 약 15% 줄인 220~230px 범위로 유지한다.
 - chip label legend 우클릭은 모든 label을 끈다. legend 위 drag는 wafer image pan을 일으키면 FAIL.
