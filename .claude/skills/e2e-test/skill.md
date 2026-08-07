@@ -6503,6 +6503,7 @@ return {
 
 #### BUG-24: 다중 Shot/Chip Composite와 export 정합성 회귀 (2026-08-07)
 - `scripts/e2e_chunk2.js`의 `selected-region-composite`는 실제 P001 fixture에서 단일 Shot, 다중 Chip, 동일 형상 Shot 4/5 두 개, chip 1개인 partial Shot 8을 검사한다. Partial Shot도 canonical `4×6` canvas와 동일한 chip cell 크기를 유지해야 하며, 보이는 chip 수만 positions에 남겨야 한다.
+- `layout-chip-coordinates`는 단일 보기 좌표 box가 `Chip(Grid)`, `CHIP_COORD_X(mm)`, `CHIP_COORD_Y(mm)`, `Radious`, `Shot(Grid)` 순서이고 X/Y/Radius가 소수 1자리인지 확인한다. Shot 버튼의 partial edge 경계는 실제 visible chip rect extents와 일치해야 하며, full Shot shape로 chip 크기를 축소/확장하지 않아야 한다.
 - 두 Shot 결과는 단일 Shot 결과와 `width`, `height`, canonical chip 격자 `4×6`이 같아야 한다. positions chip 수는 canonical 첫 Shot의 24개, `selected_source_chip_count`는 두 Shot 합계 48개, `composite_sample_count`는 source image 수×Shot 수여야 한다.
 - `selected_shot_groups`가 없는 기존 Chip 요청도 유지해야 하며, positions가 결과 output canvas로 비동기 복사된 뒤 `/api/chip-positions`에서 chip rect/canvas를 다시 확인한다.
 - `selected-region-export`는 Chip/Shot context menu를 실제로 열고, Shot 이미지 PNG 다운로드, Shot TSV 다운로드, clipboard TSV header의 `CHIP_COORD_X(mm)`, `CHIP_COORD_Y(mm)`, `RADIUS(mm)`, `SHOT_ID`, `SHOT_X`, `SHOT_Y`를 확인한다. `SHOT` 튜플 컬럼은 없어야 하며, 세 mm 값은 소수 셋째 자리까지 기록되어야 한다. Chip export도 같은 schema와 선택 행 수를 확인한다.
