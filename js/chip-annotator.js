@@ -317,8 +317,8 @@ export class ChipAnnotator {
 
         ctx.save();
         ctx.resetTransform();
-        ctx.strokeStyle = this.hoverColor;
-        ctx.lineWidth = Math.max(1.5, 2 * transform.scale);
+        ctx.strokeStyle = this.hoverColor.replace(/[\d.]+\)$/, '0.95)');
+        ctx.lineWidth = Math.max(2.5, 3 * transform.scale);
         ctx.setLineDash([]);
         ctx.strokeRect(x, y, width, height);
         ctx.restore();
@@ -1860,7 +1860,7 @@ export class ChipAnnotator {
             if (this.selectionMode === 'shot') {
                 this._renderHoveredShotBoundary();
             } else if (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(this._normalizeBottomValue(this.hoveredChip.b))) {
-                this._drawChipRect(this.hoveredChip, this.hoverColor);
+                this._drawChipOutline(this.hoveredChip, this.hoverColor);
             }
         }
 
@@ -2026,6 +2026,27 @@ export class ChipAnnotator {
         // 🔥 밝은 테두리 (줌아웃에서도 칩 마크가 확실히 보이도록)
         this.ctx.strokeStyle = color.replace(/[\d.]+\)$/, '0.9)');
         this.ctx.lineWidth = Math.max(1.5, 2 * transform.scale);
+        this.ctx.strokeRect(topLeftX, topLeftY, w, h);
+
+        this.ctx.restore();
+    }
+
+    _drawChipOutline(chip, color) {
+        const transform = this.viewer.transform;
+        const rect = chip.rect;
+        const Y_OFFSET = this.Y_OFFSET || 0;
+
+        this.ctx.save();
+        this.ctx.resetTransform();
+        this.ctx.globalAlpha = 1.0;
+
+        const topLeftX = rect.x0 * transform.scale + transform.dx;
+        const topLeftY = rect.y0 * transform.scale + transform.dy + Y_OFFSET;
+        const w = (rect.x1 - rect.x0) * transform.scale;
+        const h = (rect.y1 - rect.y0) * transform.scale;
+
+        this.ctx.strokeStyle = color.replace(/[\d.]+\)$/, '0.95)');
+        this.ctx.lineWidth = Math.max(2.5, 3 * transform.scale);
         this.ctx.strokeRect(topLeftX, topLeftY, w, h);
 
         this.ctx.restore();

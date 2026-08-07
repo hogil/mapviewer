@@ -1876,6 +1876,12 @@ const { createRunner } = require('./e2e_playwright_session');
         shotId: group.shotId,
         expectedChipCount: group.indices?.length || group.chips.length,
         chipKey: `${chip.x_abs}:${chip.y_abs}`,
+        chipRect: {
+          x0: chip.rect.x0,
+          y0: chip.rect.y0,
+          x1: chip.rect.x1,
+          y1: chip.rect.y1,
+        },
         boundary: annotator._getShotBoundaryRect(group),
         x: box.left + (canvasX / canvas.width) * box.width,
         y: box.top + (canvasY / canvas.height) * box.height,
@@ -2021,6 +2027,43 @@ const { createRunner } = require('./e2e_playwright_session');
       mode: window.viewer?.chipAnnotator?.selectionMode || null,
       selectedCount: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
     }));
+    const chipInteriorBefore = await page.evaluate((target) => {
+      const annotator = window.viewer?.chipAnnotator;
+      const canvas = annotator?.canvas;
+      const transform = window.viewer?.transform;
+      const rect = target?.chipRect;
+      if (!canvas || !transform || !rect) return null;
+      const x = Math.round(((rect.x0 + rect.x1) / 2) * transform.scale + transform.dx);
+      const y = Math.round(((rect.y0 + rect.y1) / 2) * transform.scale + transform.dy + (annotator.Y_OFFSET || 0));
+      const pixel = canvas.getContext('2d').getImageData(x, y, 1, 1).data;
+      return { x, y, pixel: Array.from(pixel) };
+    }, shotSelectionTarget);
+    await page.mouse.move(shotSelectionTarget.x, shotSelectionTarget.y);
+    await page.waitForFunction(
+      (expectedChipKey) => {
+        const chip = window.viewer?.chipAnnotator?.hoveredChip;
+        return chip && `${chip.x_abs}:${chip.y_abs}` === expectedChipKey;
+      },
+      shotSelectionTarget.chipKey,
+      { timeout: 10000 }
+    );
+    const chipHover = await page.evaluate(() => ({
+      mode: window.viewer?.chipAnnotator?.selectionMode || null,
+      hoveredChip: window.viewer?.chipAnnotator?.hoveredChip
+        ? `${window.viewer.chipAnnotator.hoveredChip.x_abs}:${window.viewer.chipAnnotator.hoveredChip.y_abs}`
+        : null,
+    }));
+    const chipInteriorAfter = await page.evaluate((probe) => {
+      if (!probe) return null;
+      const canvas = window.viewer?.chipAnnotator?.canvas;
+      if (!canvas) return null;
+      const pixel = canvas.getContext('2d').getImageData(probe.x, probe.y, 1, 1).data;
+      return Array.from(pixel);
+    }, chipInteriorBefore);
+    expect(chipHover.mode === 'chip' && chipHover.hoveredChip === shotSelectionTarget.chipKey,
+      `chip hover=${JSON.stringify({ shotSelectionTarget, chipHover })}`);
+    expect(chipInteriorBefore?.pixel?.join(',') === chipInteriorAfter?.join(','),
+      `chip interior was filled=${JSON.stringify({ chipInteriorBefore, chipInteriorAfter })}`);
     expect(data.chip?.x_abs === 10 && data.chip?.y_abs === 0, `chip=${JSON.stringify(data.chip)}`);
     expect(data.coord === '(-27.50, 77.50)', `coord=${data.coord}`);
     expect(data.rel === '(-5, -16)', `rel=${data.rel}`);
@@ -2038,6 +2081,9 @@ const { createRunner } = require('./e2e_playwright_session');
       shotSelection,
       plainClickClearSelection,
       chipModeAfter,
+      chipHover,
+      chipInteriorBefore,
+      chipInteriorAfter,
     };
   });
 
