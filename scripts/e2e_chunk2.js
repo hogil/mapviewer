@@ -1865,7 +1865,9 @@ const { createRunner } = require('./e2e_playwright_session');
       const annotator = v.chipAnnotator;
       const group = Array.from(annotator?.shotBoundaryGroups?.values?.() || [])
         .find((candidate) => candidate.chips.length >= 20);
-      const chip = group?.chips?.[0];
+      const groupBoundary = group ? annotator._getShotBoundaryRect(group) : null;
+      const chip = group?.chips?.find((candidate) => groupBoundary &&
+        candidate.rect.x0 > groupBoundary.minX && candidate.rect.x0 < groupBoundary.maxX) || group?.chips?.[0];
       const canvas = annotator?.canvas;
       const box = canvas?.getBoundingClientRect?.();
       const transform = v.transform;
@@ -1882,7 +1884,7 @@ const { createRunner } = require('./e2e_playwright_session');
           x1: chip.rect.x1,
           y1: chip.rect.y1,
         },
-        boundary: annotator._getShotBoundaryRect(group),
+        boundary: groupBoundary,
         x: box.left + (canvasX / canvas.width) * box.width,
         y: box.top + (canvasY / canvas.height) * box.height,
       };
@@ -1956,6 +1958,19 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(shotHover.selectedColor === 'rgba(238, 238, 238, 0.55)',
       `selection highlight is too opaque=${JSON.stringify(shotHover)}`);
 
+    const chipEdgeBeforeSelection = await page.evaluate((target) => {
+      const annotator = window.viewer?.chipAnnotator;
+      const canvas = annotator?.canvas;
+      const transform = window.viewer?.transform;
+      const rect = target?.chipRect;
+      if (!canvas || !transform || !rect) return null;
+      // Sample just outside the chip so Shot's interior fill cannot look like a chip border.
+      const x = Math.round(rect.x0 * transform.scale + transform.dx) - 1;
+      const y = Math.round(((rect.y0 + rect.y1) / 2) * transform.scale + transform.dy + (annotator.Y_OFFSET || 0));
+      const pixel = canvas.getContext('2d').getImageData(x, y, 1, 1).data;
+      return { x, y, pixel: Array.from(pixel) };
+    }, shotSelectionTarget);
+
     await page.mouse.click(shotSelectionTarget.x, shotSelectionTarget.y);
     await page.waitForTimeout(100);
     const plainClickSelection = await page.evaluate(() => ({
@@ -1995,6 +2010,16 @@ const { createRunner } = require('./e2e_playwright_session');
       shotSelection.selectedShotIds.length === 1 &&
       shotSelection.selectedShotIds[0] === shotSelectionTarget.shotId,
       `shot selection=${JSON.stringify({ shotSelectionTarget, shotSelection })}`);
+
+    const chipEdgeAfterSelection = await page.evaluate((probe) => {
+      if (!probe) return null;
+      const canvas = window.viewer?.chipAnnotator?.canvas;
+      if (!canvas) return null;
+      const pixel = canvas.getContext('2d').getImageData(probe.x, probe.y, 1, 1).data;
+      return Array.from(pixel);
+    }, chipEdgeBeforeSelection);
+    expect(chipEdgeBeforeSelection?.pixel?.join(',') === chipEdgeAfterSelection?.join(','),
+      `shot selection drew chip boundary=${JSON.stringify({ chipEdgeBeforeSelection, chipEdgeAfterSelection })}`);
 
     await page.mouse.click(shotSelectionTarget.x, shotSelectionTarget.y);
     await page.waitForFunction(
@@ -2077,6 +2102,8 @@ const { createRunner } = require('./e2e_playwright_session');
       shotHover,
       shotInteriorBefore,
       shotInteriorAfter,
+      chipEdgeBeforeSelection,
+      chipEdgeAfterSelection,
       plainClickSelection,
       shotSelection,
       plainClickClearSelection,

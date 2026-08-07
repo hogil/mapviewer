@@ -2027,6 +2027,7 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
    - 선택 전 일반 클릭은 선택하지 않음
    - Ctrl-click으로 같은 `shot_id`의 칩만 전체 선택
    - 선택 결과가 edge partial shot의 실제 칩 수와 일치
+   - Shot 선택 후 개별 Chip 경계는 숨기거나 약하게 보이고, Shot 외곽선이 주로 보임
    - 선택 후 일반 왼쪽 클릭으로 전체 선택 해제
 3. hover와 선택 하이라이트가 같은 밝은 은백색이고 노란색이 아닌지 확인
 4. 우클릭 메뉴에서 `Chip 선택` 클릭 → 기본 선택 모드로 복귀하고 선택 상태 초기화

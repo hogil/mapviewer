@@ -52,7 +52,8 @@ selection already exists, a plain
 left click clears it.
 Chip hover and Shot boundary hover use the same bright silver-white color; Shot
 hover draws only the boundary and leaves the shot interior unchanged. Selected
-chips use that same color.
+chips use that same color; in Shot mode their individual outlines are suppressed
+and the selected Shot boundary is emphasized instead.
 Ctrl-click/drag, Shift-drag, and Alt-drag are the selection interactions; Shot
 mode expands those interactions to all matched chips with the same `shot_id`.
 The default mode is Chip.

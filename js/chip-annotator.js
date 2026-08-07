@@ -231,6 +231,16 @@ export class ChipAnnotator {
             .filter((index) => index >= 0);
     }
 
+    _getSelectedShotGroups() {
+        const groups = new Set();
+        if (this.selectionMode !== 'shot') return groups;
+        this.selectedChips.forEach((chipIndex) => {
+            const group = this._getShotGroupForChip(this.chips[chipIndex]);
+            if (group) groups.add(group);
+        });
+        return groups;
+    }
+
     _getSelectionIndicesForChip(chip) {
         if (!chip) return [];
         const chipIndex = Number.isInteger(chip.index)
@@ -321,6 +331,34 @@ export class ChipAnnotator {
         ctx.lineWidth = Math.max(2.5, 3 * transform.scale);
         ctx.setLineDash([]);
         ctx.strokeRect(x, y, width, height);
+        ctx.restore();
+    }
+
+    _renderSelectedShotBoundaries() {
+        if (this.selectionMode !== 'shot' || this.viewer?.gridMode === true) return;
+
+        const groups = this._getSelectedShotGroups();
+        if (groups.size === 0) return;
+
+        const transform = this.viewer.transform;
+        const Y_OFFSET = this.Y_OFFSET || 0;
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.resetTransform();
+        ctx.strokeStyle = this.hoverColor.replace(/[\d.]+\)$/, '0.95)');
+        ctx.lineWidth = Math.max(3, 4 * transform.scale);
+        ctx.setLineDash([]);
+
+        groups.forEach((group) => {
+            const boundary = this._getShotBoundaryRect(group);
+            if (!boundary) return;
+            const x = boundary.minX * transform.scale + transform.dx;
+            const y = boundary.minY * transform.scale + transform.dy + Y_OFFSET;
+            const width = boundary.width * transform.scale;
+            const height = boundary.height * transform.scale;
+            ctx.strokeRect(x, y, width, height);
+        });
+
         ctx.restore();
     }
 
@@ -1835,7 +1873,7 @@ export class ChipAnnotator {
             this.selectedChips.forEach(chipIdx => {
                 const chip = this.chips[chipIdx];
                 if (chip && (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(this._normalizeBottomValue(chip.b)))) {
-                    this._drawChipRect(chip, this.selectedColor);
+                    this._drawSelectionHighlight(chip, this.selectedColor);
                 }
             });
         }
@@ -1850,7 +1888,7 @@ export class ChipAnnotator {
                     (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(this._normalizeBottomValue(chip.b)))
                 ) {
                     // 이미 선택된 chip은 제외 (중복 표시 방지)
-                    this._drawChipRect(chip, this.selectionPreviewColor);
+                    this._drawSelectionHighlight(chip, this.selectionPreviewColor);
                 }
             });
         }
@@ -1866,6 +1904,7 @@ export class ChipAnnotator {
 
         // Draw one boundary around all chips that share the same layout shot_id.
         this._renderShotBoundaries();
+        this._renderSelectedShotBoundaries();
 
         // Draw Alt+Drag free-form selection polygon
         if (this.isAltDrag && this.polygonPath.length > 0) {
@@ -2050,6 +2089,14 @@ export class ChipAnnotator {
         this.ctx.strokeRect(topLeftX, topLeftY, w, h);
 
         this.ctx.restore();
+    }
+
+    _drawSelectionHighlight(chip, color) {
+        if (this.selectionMode === 'shot') {
+            this._drawChipInterior(chip, color);
+        } else {
+            this._drawChipRect(chip, color);
+        }
     }
 
     _extractMetadataValue(keys = []) {
