@@ -42,6 +42,7 @@ export class ChipAnnotator {
         this.chipIndexMap = new Map(); // (x_abs,y_abs) -> chip index
         this.selectedChips = new Set(); // Set of chip indices
         this.selectedChipsOrder = []; // 🔥 선택 순서 추적 (항상 맨 밑에 추가)
+        this.selectionMode = 'chip'; // 'chip' or 'shot'
         this.legendFilterClasses = null;
         this.chipLabelOverlayAlpha = 0.2;
         this.bottomFilterSet = new Set(); // 🔥 Bottom Filter (Chip b-value based mask)
@@ -180,11 +181,22 @@ export class ChipAnnotator {
         this.render();
     }
 
+    setSelectionMode(mode) {
+        const nextMode = mode === 'shot' ? 'shot' : 'chip';
+        if (this.selectionMode === nextMode) {
+            this.render();
+            return this.selectionMode;
+        }
+        this.selectionMode = nextMode;
+        this.clearSelection();
+        return this.selectionMode;
+    }
+
     _buildShotBoundaryGroups() {
         this.shotBoundaryGroups.clear();
         if (!Array.isArray(this.chips) || this.chips.length === 0) return;
 
-        this.chips.forEach((chip) => {
+        this.chips.forEach((chip, index) => {
             const layoutRow = this.getLayoutRowForChip(chip);
             if (!layoutRow || layoutRow.shot_id === undefined || layoutRow.shot_id === null) return;
             const shotId = String(layoutRow.shot_id).trim();
@@ -192,11 +204,47 @@ export class ChipAnnotator {
 
             let group = this.shotBoundaryGroups.get(shotId);
             if (!group) {
-                group = { shotId, chips: [] };
+                group = { shotId, chips: [], indices: [] };
                 this.shotBoundaryGroups.set(shotId, group);
             }
             group.chips.push(chip);
+            group.indices.push(index);
         });
+    }
+
+    _getShotChipIndices(chip) {
+        const layoutRow = this.getLayoutRowForChip(chip);
+        if (!layoutRow || layoutRow.shot_id === undefined || layoutRow.shot_id === null) {
+            return [];
+        }
+        const shotId = String(layoutRow.shot_id).trim();
+        if (!shotId) return [];
+        const group = this.shotBoundaryGroups.get(shotId);
+        if (!group) return [];
+        if (Array.isArray(group.indices)) return [...group.indices];
+        return group.chips
+            .map((groupChip) => this.chips.indexOf(groupChip))
+            .filter((index) => index >= 0);
+    }
+
+    _getSelectionIndicesForChip(chip) {
+        if (!chip) return [];
+        const chipIndex = Number.isInteger(chip.index)
+            ? chip.index
+            : this._getChipIndexFromCoords(Number(chip.x_abs), Number(chip.y_abs));
+        if (chipIndex < 0) return [];
+        if (this.selectionMode !== 'shot') return [chipIndex];
+        const shotIndices = this._getShotChipIndices(chip);
+        return shotIndices.length > 0 ? shotIndices : [chipIndex];
+    }
+
+    _expandSelectionToShots(indices) {
+        const expanded = new Set();
+        for (const index of Array.isArray(indices) ? indices : []) {
+            const chip = this.chips[index];
+            this._getSelectionIndicesForChip(chip).forEach((chipIndex) => expanded.add(chipIndex));
+        }
+        return Array.from(expanded);
     }
 
     _getShotBoundaryRect(group) {
@@ -2148,12 +2196,12 @@ export class ChipAnnotator {
             );
             // 드래그가 발생했으면 미리보기 표시
             if (dragDistance > 5) {
-                const selected = this._getChipsInCanvasRect(
+                const selected = this._expandSelectionToShots(this._getChipsInCanvasRect(
                     this.shiftClickPos.x,
                     this.shiftClickPos.y,
                     canvasX,
                     canvasY
-                );
+                ));
                 this._tempDragSelection = selected;
                 this.render();
                 return;
@@ -2173,7 +2221,7 @@ export class ChipAnnotator {
             if (dragDistance > 5) {
                 const chipAtPos = this.findChipAtPixel(canvasX, canvasY);
                 if (chipAtPos && chipAtPos !== this.dragStartChip) {
-                    const selected = this.getChipsInRect(this.dragStartChip, chipAtPos);
+                    const selected = this._expandSelectionToShots(this.getChipsInRect(this.dragStartChip, chipAtPos));
                     this._tempDragSelection = selected;
                     this.render();
                     return;
@@ -2289,7 +2337,7 @@ export class ChipAnnotator {
         if (this.isAltDrag) {
             // 🔥 polygon path가 최소 3개 이상일 때만 선택 처리 (원 그리기가 충분히 진행된 경우)
             if (this.polygonPath.length >= 3) {
-                const selected = this._getChipsInPolygon(this.polygonPath);
+                const selected = this._expandSelectionToShots(this._getChipsInPolygon(this.polygonPath));
 
                 // 🔥 Alt+Drag 시작 시 저장된 선택 상태를 기반으로 처리
                 // mouseup 시점의 키 상태를 우선 체크
@@ -2368,12 +2416,12 @@ export class ChipAnnotator {
             );
             // 드래그가 발생했으면 범위 선택
             if (dragDistance > 5) {
-                const selected = this._getChipsInCanvasRect(
+                const selected = this._expandSelectionToShots(this._getChipsInCanvasRect(
                     this.shiftClickPos.x,
                     this.shiftClickPos.y,
                     canvasX,
                     canvasY
-                );
+                ));
                 // 🔥 Shift+드래그: 범위 내 chip 추가 선택 (배치 처리로 성능 향상)
                 const toAdd = selected.filter(idx => !this.selectedChips.has(idx));
                 toAdd.forEach(idx => {
@@ -2411,10 +2459,11 @@ export class ChipAnnotator {
                 // 🔥 드래그가 없는 일반 클릭: 클릭한 chip 하나를 선택
                 const clickedChip = this.findChipAtPixel(canvasX, canvasY);
                 if (clickedChip) {
+                    const selectionIndices = this._getSelectionIndicesForChip(clickedChip);
                     this.selectedChips.clear();
-                    this.selectedChips.add(clickedChip.index);
-                    this.selectedChipsOrder = [clickedChip.index];
-                    console.log('🖱️ [CLICK] plain 클릭으로 단일 선택:', clickedChip.index);
+                    selectionIndices.forEach((chipIndex) => this.selectedChips.add(chipIndex));
+                    this.selectedChipsOrder = [...selectionIndices];
+                    console.log(`🖱️ [CLICK] ${this.selectionMode} 선택:`, selectionIndices.length, '개');
                 } else {
                     const hadSelection = this.selectedChips.size > 0;
                     this.selectedChips.clear();
@@ -2447,7 +2496,7 @@ export class ChipAnnotator {
                 // 드래그 발생: 범위 선택 토글
                 const chip = this.findChipAtPixel(canvasX, canvasY);
                 if (chip && chip !== this.dragStartChip) {
-                    const selected = this.getChipsInRect(this.dragStartChip, chip);
+                    const selected = this._expandSelectionToShots(this.getChipsInRect(this.dragStartChip, chip));
                     // 🔥 Ctrl+드래그: 범위 내 chip 토글 (배치 처리로 성능 향상)
                     // 대량 선택 시 Set 연산 최적화
                     const toRemove = new Set();
@@ -2479,23 +2528,26 @@ export class ChipAnnotator {
                     console.log('🖱️ [CTRL+DRAG] 범위 선택 토글:', selected.length, '개 (제거:', toRemove.size, ', 추가:', toAdd.size, ')');
                 }
             } else {
-                // 단순 클릭 (5px 이하 이동): 단일 chip 토글
+                // 단순 클릭 (5px 이하 이동): chip 또는 shot 단위 토글
                 if (this.dragStartChip) {
-                    if (this.selectedChips.has(this.dragStartChip.index)) {
-                        this.selectedChips.delete(this.dragStartChip.index);
-                        // 🔥 선택 순서 배열에서도 제거
-                        const orderIndex = this.selectedChipsOrder.indexOf(this.dragStartChip.index);
-                        if (orderIndex !== -1) {
-                            this.selectedChipsOrder.splice(orderIndex, 1);
-                        }
-                        console.log('🖱️ [CTRL+CLICK] chip 선택 해제:', this.dragStartChip.index);
+                    const selectionIndices = this._getSelectionIndicesForChip(this.dragStartChip);
+                    const shouldRemove = selectionIndices.length > 0 &&
+                        selectionIndices.every((chipIndex) => this.selectedChips.has(chipIndex));
+                    if (shouldRemove) {
+                        selectionIndices.forEach((chipIndex) => {
+                            this.selectedChips.delete(chipIndex);
+                            const orderIndex = this.selectedChipsOrder.indexOf(chipIndex);
+                            if (orderIndex !== -1) this.selectedChipsOrder.splice(orderIndex, 1);
+                        });
+                        console.log(`🖱️ [CTRL+CLICK] ${this.selectionMode} 선택 해제:`, selectionIndices.length, '개');
                     } else {
-                        this.selectedChips.add(this.dragStartChip.index);
-                        // 🔥 선택 순서 배열에 추가 (맨 밑에 추가)
-                        if (!this.selectedChipsOrder.includes(this.dragStartChip.index)) {
-                            this.selectedChipsOrder.push(this.dragStartChip.index);
-                        }
-                        console.log('🖱️ [CTRL+CLICK] chip 선택 추가:', this.dragStartChip.index);
+                        selectionIndices.forEach((chipIndex) => {
+                            this.selectedChips.add(chipIndex);
+                            if (!this.selectedChipsOrder.includes(chipIndex)) {
+                                this.selectedChipsOrder.push(chipIndex);
+                            }
+                        });
+                        console.log(`🖱️ [CTRL+CLICK] ${this.selectionMode} 선택 추가:`, selectionIndices.length, '개');
                     }
                     this.updateSelectedChipsList();
                 }
@@ -2752,6 +2804,7 @@ export class ChipAnnotator {
         this.sys = null;
         this.selectedChips.clear();
         this.selectedChipsOrder = []; // 🔥 선택 순서도 초기화
+        this.selectionMode = 'chip';
         if (this.viewer && typeof this.viewer.handleChipSelectionCleared === 'function') {
             this.viewer.handleChipSelectionCleared();
         }

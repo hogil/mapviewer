@@ -1721,7 +1721,7 @@ const { createRunner } = require('./e2e_playwright_session');
     return data;
   });
 
-  await record('layout-chip-coordinates', 'P001 layout EDS 매칭 / Chip Coord / Shot 순서 / 경계', async () => {
+  await record('layout-chip-coordinates', 'P001 layout EDS 매칭 / Chip Coord / Shot 순서 / Shot 토글·선택 / 경계', async () => {
     const targetFile = 'AAI633_00P_08_20260501_010000_99.6_0_PE_PWQ.png';
     const folder = 'PW/P001/20260501';
     await boot('chunk2-layout-chip-coordinates');
@@ -1859,13 +1859,90 @@ const { createRunner } = require('./e2e_playwright_session');
       `shot toggle=${JSON.stringify(data)}`);
     expect(data.shotBoundaryPixelsBefore < 10 && data.shotBoundaryPixels > 50 && data.shotBoundaryPixelsAfter < 10,
       `shot boundary pixels=${JSON.stringify(data)}`);
+
+    const shotSelectionTarget = await page.evaluate(() => {
+      const v = window.viewer;
+      const annotator = v.chipAnnotator;
+      const group = Array.from(annotator?.shotBoundaryGroups?.values?.() || [])
+        .find((candidate) => candidate.chips.length >= 20);
+      const chip = group?.chips?.[0];
+      const canvas = annotator?.canvas;
+      const box = canvas?.getBoundingClientRect?.();
+      const transform = v.transform;
+      if (!group || !chip || !canvas || !box || !transform) return null;
+      const canvasX = ((chip.rect.x0 + chip.rect.x1) / 2) * transform.scale + transform.dx;
+      const canvasY = ((chip.rect.y0 + chip.rect.y1) / 2) * transform.scale + transform.dy + (annotator.Y_OFFSET || 0);
+      return {
+        shotId: group.shotId,
+        expectedChipCount: group.indices?.length || group.chips.length,
+        x: box.left + (canvasX / canvas.width) * box.width,
+        y: box.top + (canvasY / canvas.height) * box.height,
+      };
+    });
+    expect(!!shotSelectionTarget, 'shot selection target missing');
+    await page.mouse.click(shotSelectionTarget.x, shotSelectionTarget.y, { button: 'right' });
+    await page.waitForFunction(
+      () => !!document.querySelector('#chip-context-menu #chip-selection-mode-shot'),
+      null,
+      { timeout: 10000 }
+    );
+    const shotMenuText = await page.locator('#chip-context-menu').innerText();
+    await page.locator('#chip-context-menu #chip-selection-mode-shot').click();
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.selectionMode === 'shot',
+      null,
+      { timeout: 10000 }
+    );
+    await page.mouse.click(shotSelectionTarget.x, shotSelectionTarget.y);
+    await page.waitForFunction(
+      (expectedCount) => window.viewer?.chipAnnotator?.selectedChips?.size === expectedCount,
+      shotSelectionTarget.expectedChipCount,
+      { timeout: 10000 }
+    );
+    const shotSelection = await page.evaluate(() => {
+      const annotator = window.viewer.chipAnnotator;
+      const selected = Array.from(annotator.selectedChips);
+      const selectedShotIds = new Set(selected.map((index) => {
+        const row = annotator.getLayoutRowForChip(annotator.chips[index]);
+        return row?.shot_id == null ? null : String(row.shot_id);
+      }).filter(Boolean));
+      return {
+        mode: annotator.selectionMode,
+        selectedCount: selected.length,
+        selectedShotIds: Array.from(selectedShotIds),
+      };
+    });
+    expect(shotMenuText.includes('Shot 선택') && shotSelection.mode === 'shot',
+      `shot menu/mode=${JSON.stringify({ shotMenuText, shotSelection })}`);
+    expect(shotSelection.selectedCount === shotSelectionTarget.expectedChipCount &&
+      shotSelection.selectedShotIds.length === 1 &&
+      shotSelection.selectedShotIds[0] === shotSelectionTarget.shotId,
+      `shot selection=${JSON.stringify({ shotSelectionTarget, shotSelection })}`);
+
+    await page.mouse.click(shotSelectionTarget.x, shotSelectionTarget.y, { button: 'right' });
+    await page.waitForFunction(
+      () => !!document.querySelector('#chip-context-menu #chip-selection-mode-chip'),
+      null,
+      { timeout: 10000 }
+    );
+    await page.locator('#chip-context-menu #chip-selection-mode-chip').click();
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.selectionMode === 'chip' &&
+        window.viewer.chipAnnotator.selectedChips?.size === 0,
+      null,
+      { timeout: 10000 }
+    );
+    const chipModeAfter = await page.evaluate(() => ({
+      mode: window.viewer?.chipAnnotator?.selectionMode || null,
+      selectedCount: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+    }));
     expect(data.chip?.x_abs === 10 && data.chip?.y_abs === 0, `chip=${JSON.stringify(data.chip)}`);
     expect(data.coord === '(-27.50, 77.50)', `coord=${data.coord}`);
     expect(data.rel === '(-5, -16)', `rel=${data.rel}`);
     expect(data.radious === '82.23', `radious=${data.radious}`);
     expect(data.shot === '(-2, 3)', `shot=${data.shot}`);
     expect(!data.oldAbsElement && data.layoutRequest, `layout display/request=${JSON.stringify(data)}`);
-    return data;
+    return { ...data, shotSelectionTarget, shotMenuText, shotSelection, chipModeAfter };
   });
 
   await record('36,37,38,40', '성능 / 이미지 무결성 / 인덱스', async () => {

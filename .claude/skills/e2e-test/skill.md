@@ -16,7 +16,7 @@ argument-hint: [Phase 번호 또는 범위]
 | P0 | AAI633/08 SYSTEMATIC 단일보기 raw-map 제거, 본 이미지/오버레이/네비게이터 필터 정합성 | `scripts/e2e_chunk2.js` `systematic-measure-single-lot-wafer` |
 | P1 | 시간 정렬, `H%(PA,TD)` root LOT wildcard, 그리드/단일 네비게이션 순서 | `scripts/e2e_chunk1.js` `sort-lot-filter` |
 | P1 | Composite/Measure fixed 12-BIN SYSTEMATIC grouping and filtered render | `scripts/e2e_chunk1.js` `systematic-bin-group` |
-| P1 | Layout `layout.txt` EDS chip 매칭, Chip Coord/Radious/Shot 순서 및 Shot 토글/shot_id 경계 표시 | `scripts/e2e_chunk2.js` `layout-chip-coordinates` |
+| P1 | Layout `layout.txt` EDS chip 매칭, Chip Coord/Radious/Shot 순서, Shot 토글/선택 및 shot_id 경계 표시 | `scripts/e2e_chunk2.js` `layout-chip-coordinates` |
 | P1 | 기존 Measure 다중선택/탭 복귀/썸네일 무결성 | `30,33,34,35,39`, `41,42,45,47,48,56` |
 | P2 | 전체 63개 Phase와 성능/프로세스 정리 | `run-e2e-playwright.ps1 -Chunk all` |
 
@@ -2022,12 +2022,16 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 **평가 항목**:
 1. 칩 영역 클릭 → 칩 선택 하이라이트 (테두리 또는 색상 변경) 확인
    - `v.chipAnnotator.selectedChips` 또는 유사 프로퍼티 length > 0
-2. 선택된 칩의 좌표가 정보 패널에 표시:
+2. 칩 우클릭 메뉴에서 `Shot 선택` 클릭 → `selectionMode === 'shot'` 확인
+   - 칩 하나를 클릭하면 같은 `layout.txt shot_id`의 칩만 전체 선택
+   - 선택 결과가 edge partial shot의 실제 칩 수와 일치
+3. 우클릭 메뉴에서 `Chip 선택` 클릭 → 기본 선택 모드로 복귀하고 선택 상태 초기화
+4. 선택된 칩의 좌표가 정보 패널에 표시:
    - Chip(Coord) 행에 `"x_abs, y_abs"` 형태의 실제 숫자 값
    - Chip(Rel) 행에 실제 칩 격자 인덱스, Radious 행에 소수점 2자리 거리값, Shot 행에 signed order pair
-3. Ctrl+클릭으로 추가 칩 선택 → 다중 선택 확인
+5. Ctrl+클릭으로 추가 칩 선택 → 다중 선택 확인
    - 선택 칩 수 2개 이상
-4. 빈 영역 클릭 → 선택 해제
+6. 빈 영역 클릭 → 선택 해제
    - 정보 패널 BIN, Chip(Coord), Chip(Rel), Radious, Shot 모두 "-"로 리셋
    - 하이라이트 제거
 

@@ -29784,6 +29784,36 @@ class WaferMapViewer {
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
         `;
 
+        const selectionModeSeparator = document.createElement('div');
+        selectionModeSeparator.style.cssText = 'height: 1px; background: #555; margin: 4px 0;';
+        menu.appendChild(selectionModeSeparator);
+
+        const selectionModeItems = [
+            { id: 'chip-selection-mode-chip', mode: 'chip', label: 'Chip 선택' },
+            { id: 'chip-selection-mode-shot', mode: 'shot', label: 'Shot 선택' },
+        ];
+        selectionModeItems.forEach(({ id, mode, label }) => {
+            const modeItem = document.createElement('div');
+            modeItem.id = id;
+            modeItem.className = 'context-menu-item';
+            modeItem.style.cssText = `
+                padding: 8px 16px;
+                cursor: pointer;
+                color: #fff;
+                font-size: 14px;
+            `;
+            const active = this.chipAnnotator?.selectionMode === mode;
+            modeItem.textContent = active ? `${label} (현재)` : label;
+            modeItem.title = `${label} 모드로 전환`;
+            modeItem.onclick = () => {
+                this.chipAnnotator?.setSelectionMode(mode);
+                menu.remove();
+            };
+            modeItem.onmouseenter = () => { modeItem.style.background = '#3a3a3a'; };
+            modeItem.onmouseleave = () => { modeItem.style.background = ''; };
+            menu.appendChild(modeItem);
+        });
+
         // Chip 1개 선택 시: Chip 보기
         if (selectedChips.length === 1) {
             const viewItem = document.createElement('div');
