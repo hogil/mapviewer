@@ -2557,8 +2557,7 @@
             min-width: 0;
         }
 
-        #chip-coordinate-box #coord-chip-coord-x,
-        #chip-coordinate-box #coord-chip-coord-y,
+        #chip-coordinate-box #coord-chip-coord,
         #chip-coordinate-box #coord-chip-rel,
         #chip-coordinate-box #coord-radious,
         #chip-coordinate-box #coord-shot {

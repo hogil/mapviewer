@@ -102,8 +102,7 @@ export class ChipAnnotator {
 
         // Coordinate display elements
         this.coordBox = document.getElementById('chip-coordinate-box');
-        this.coordChipCoordX = document.getElementById('coord-chip-coord-x');
-        this.coordChipCoordY = document.getElementById('coord-chip-coord-y');
+        this.coordChipCoord = document.getElementById('coord-chip-coord');
         this.coordChipRel = document.getElementById('coord-chip-rel');
         this.coordRadious = document.getElementById('coord-radious');
         this.coordShot = document.getElementById('coord-shot');
@@ -399,11 +398,6 @@ export class ChipAnnotator {
         return `${values[0].toFixed(1)}, ${values[1].toFixed(1)}`;
     }
 
-    formatLayoutValue(value) {
-        const number = Number(value) / 1000;
-        return Number.isFinite(number) ? number.toFixed(1) : '-';
-    }
-
     formatLayoutRadius(x, y) {
         const values = [Number(x) / 1000, Number(y) / 1000];
         if (!values.every(Number.isFinite)) return '-';
@@ -426,9 +420,7 @@ export class ChipAnnotator {
     }
 
     _resetChipCoordinateDisplay() {
-        for (const element of [this.coordChipCoordX, this.coordChipCoordY]) {
-            if (element) element.textContent = '-';
-        }
+        if (this.coordChipCoord) this.coordChipCoord.textContent = '-';
         if (this.coordChipRel) this.coordChipRel.textContent = '-';
         this._resetLayoutCoordinateDisplay();
     }
@@ -2227,14 +2219,9 @@ export class ChipAnnotator {
         if (chip) {
             // Match the current EDS chip (positions x_abs/y_abs) to layout.txt.
             const layoutRow = this.getLayoutRowForChip(chip);
-            if (this.coordChipCoordX) {
-                this.coordChipCoordX.textContent = layoutRow
-                    ? this.formatLayoutValue(layoutRow.chip_center_x_pos)
-                    : '-';
-            }
-            if (this.coordChipCoordY) {
-                this.coordChipCoordY.textContent = layoutRow
-                    ? this.formatLayoutValue(layoutRow.chip_center_y_pos)
+            if (this.coordChipCoord) {
+                this.coordChipCoord.textContent = layoutRow
+                    ? this.formatLayoutPair(layoutRow.chip_center_x_pos, layoutRow.chip_center_y_pos)
                     : '-';
             }
             if (this.coordChipRel) {

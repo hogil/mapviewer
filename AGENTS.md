@@ -188,9 +188,9 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 #### BUG-26: Partial Shot Composite canvas 축소 및 좌표 정보 표기 회귀 (2026-08-08)
 - 증상: edge에서 chip이 1개뿐인 Shot을 Composite하면 선택 chip의 tight bounds만 사용해 canvas가 `1×1 chip`으로 줄어들고, 단일 보기 좌표 정보가 `Chip(Coord)`, `Chip(Rel)`, 2자리 형식으로 표시됐다.
 - 원인: `api/composite_map.py::_build_selected_shot_geometry()`가 선택된 chip들의 min/max 범위를 Shot shape로 사용했으며, 좌표 box가 layout 위치와 grid 위치의 표시 순서/명칭을 구분하지 않았다.
-- 수정 계약: layout에서 계산한 canonical `shot_shape`를 선택 Shot payload에 전달하고, backend는 EDS 좌표의 Shot 내부 위치를 canonical cell에 배치한다. 실제 chip이 1개여도 full canvas 크기와 chip 크기를 유지하고 보이는 chip만 채운다. 좌표 box 순서는 `Chip(Grid)`, `CHIP_COORD_X(mm)`, `CHIP_COORD_Y(mm)`, `Radious`, `Shot(Grid)`이며 Grid/Shot은 정수, X/Y/Radius는 소수 1자리 mm로 표시한다.
+- 수정 계약: layout에서 계산한 canonical `shot_shape`를 선택 Shot payload에 전달하고, backend는 EDS 좌표의 Shot 내부 위치를 canonical cell에 배치한다. 실제 chip이 1개여도 full canvas 크기와 chip 크기를 유지하고 보이는 chip만 채운다. 좌표 box 순서는 `Chip(Grid)`, `Chip(Pos)`, `Radious`, `Shot(Grid)`이며 Grid/Shot은 정수, Pos/Radius는 소수 1자리 mm로 표시한다. TSV export의 X/Y 컬럼은 별도로 `CHIP_COORD_X(mm)`, `CHIP_COORD_Y(mm)`를 사용한다.
 - Shot 버튼의 점선 경계는 full Shot shape로 chip을 늘리거나 축소하지 않고 실제 layout에 매칭된 visible chip rect의 min/max만 사용한다. 따라서 partial edge Shot도 cell 크기는 원래와 같고 보이는 영역까지만 그려지며, 일반 점선은 chip 경계보다 얇은 0.75px로 표시한다.
-- E2E guard: `scripts/e2e_chunk2.js`의 `selected-region-composite`는 P001 single-chip partial Shot 8도 full `4×6` canvas/positions로 유지되는지 확인하고, `layout-chip-coordinates`는 label 순서, partial edge Shot 경계가 실제 chip extents와 일치하는지, `(-5, -16)`, `-27.5`, `77.5`, `82.2`, `(-2, 3)` 표기를 확인한다.
+- E2E guard: `scripts/e2e_chunk2.js`의 `selected-region-composite`는 P001 single-chip partial Shot 8도 full `4×6` canvas/positions로 유지되는지 확인하고, `layout-chip-coordinates`는 label 순서, partial edge Shot 경계가 실제 chip extents와 일치하는지, `(-5, -16)`, `-27.5, 77.5`, `82.2`, `(-2, 3)` 표기를 확인한다.
 - 파일: `api/composite_map.py`, `api/full_app.py`, `js/chip-annotator.js`, `js/main.js`, `index.html`, `scripts/e2e_chunk2.js`, `docs/COMPOSITE_MAP.md`
 
 ### Available skills

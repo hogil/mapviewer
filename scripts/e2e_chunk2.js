@@ -1840,13 +1840,12 @@ const { createRunner } = require('./e2e_playwright_session');
         shotBoundaryVisibleOn: boundaryOn.visible,
         shotBoundaryVisibleAfter: boundaryAfter.visible,
         chip: chip ? { x_abs: chip.x_abs, y_abs: chip.y_abs } : null,
-        coordX: document.getElementById('coord-chip-coord-x')?.textContent || '',
-        coordY: document.getElementById('coord-chip-coord-y')?.textContent || '',
+        coord: document.getElementById('coord-chip-coord')?.textContent || '',
         rel: document.getElementById('coord-chip-rel')?.textContent || '',
         radious: document.getElementById('coord-radious')?.textContent || '',
         shot: document.getElementById('coord-shot')?.textContent || '',
         coordinateLabels: Array.from(document.querySelectorAll('#chip-coordinate-box .coord-label'))
-          .slice(-5)
+          .slice(-4)
           .map((element) => element.textContent?.trim() || ''),
         oldAbsElement: !!document.getElementById('coord-chip-abs'),
         layoutRequest,
@@ -1863,10 +1862,9 @@ const { createRunner } = require('./e2e_playwright_session');
       `shot toggle=${JSON.stringify(data)}`);
     expect(data.shotBoundaryPixelsBefore < 10 && data.shotBoundaryPixels > 50 && data.shotBoundaryPixelsAfter < 10,
       `shot boundary pixels=${JSON.stringify(data)}`);
-    expect(data.coordinateLabels.join('|') === 'Chip(Grid)|CHIP_COORD_X(mm)|CHIP_COORD_Y(mm)|Radious|Shot(Grid)' &&
+    expect(data.coordinateLabels.join('|') === 'Chip(Grid)|Chip(Pos)|Radious|Shot(Grid)' &&
       data.rel === '(-5, -16)' &&
-      data.coordX === '-27.5' &&
-      data.coordY === '77.5' &&
+      data.coord === '-27.5, 77.5' &&
       data.radious === '82.2' &&
       data.shot === '(-2, 3)',
     `coordinate display=${JSON.stringify(data)}`);
@@ -2101,8 +2099,7 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(chipInteriorBefore?.pixel?.join(',') === chipInteriorAfter?.join(','),
       `chip interior was filled=${JSON.stringify({ chipInteriorBefore, chipInteriorAfter })}`);
     expect(data.chip?.x_abs === 10 && data.chip?.y_abs === 0, `chip=${JSON.stringify(data.chip)}`);
-    expect(data.coordX === '-27.5' && data.coordY === '77.5',
-      `coord=${data.coordX}, ${data.coordY}`);
+    expect(data.coord === '-27.5, 77.5', `coord=${data.coord}`);
     expect(data.rel === '(-5, -16)', `rel=${data.rel}`);
     expect(data.radious === '82.2', `radious=${data.radious}`);
     expect(data.shot === '(-2, 3)', `shot=${data.shot}`);
