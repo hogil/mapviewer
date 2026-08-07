@@ -1926,6 +1926,8 @@ const { createRunner } = require('./e2e_playwright_session');
     `selection colors must not be yellow=${JSON.stringify(shotHover)}`);
     expect(shotHover.selectedColor === shotHover.hoverColor,
       `selected/hover colors differ=${JSON.stringify(shotHover)}`);
+    expect(shotHover.selectedColor === 'rgba(238, 238, 238, 0.55)',
+      `selection highlight is too opaque=${JSON.stringify(shotHover)}`);
 
     await page.mouse.click(shotSelectionTarget.x, shotSelectionTarget.y);
     await page.waitForTimeout(100);

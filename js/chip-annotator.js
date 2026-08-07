@@ -95,7 +95,7 @@ export class ChipAnnotator {
 
         // Colors
         this.gridColor = 'rgba(0, 255, 255, 0.3)';
-        this.hoverColor = 'rgba(238, 238, 238, 0.85)';
+        this.hoverColor = 'rgba(238, 238, 238, 0.55)';
         this.selectedColor = this.hoverColor;
         this.selectionPreviewColor = 'rgba(215, 215, 215, 0.26)';
         this.shotHoverFillColor = 'rgba(225, 225, 225, 0.12)';
