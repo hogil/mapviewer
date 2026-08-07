@@ -1844,6 +1844,9 @@ const { createRunner } = require('./e2e_playwright_session');
         rel: document.getElementById('coord-chip-rel')?.textContent || '',
         radious: document.getElementById('coord-radious')?.textContent || '',
         shot: document.getElementById('coord-shot')?.textContent || '',
+        coordinateLabels: Array.from(document.querySelectorAll('#chip-coordinate-box .coord-label'))
+          .slice(-4)
+          .map((element) => element.textContent?.trim() || ''),
         oldAbsElement: !!document.getElementById('coord-chip-abs'),
         layoutRequest,
       };
@@ -1859,6 +1862,12 @@ const { createRunner } = require('./e2e_playwright_session');
       `shot toggle=${JSON.stringify(data)}`);
     expect(data.shotBoundaryPixelsBefore < 10 && data.shotBoundaryPixels > 50 && data.shotBoundaryPixelsAfter < 10,
       `shot boundary pixels=${JSON.stringify(data)}`);
+    expect(data.coordinateLabels.join('|') === 'Chip(Grid)|Chip(Pos)|Radious|Shot(Grid)' &&
+      data.rel === '(-5, -16)' &&
+      data.coord === '-27.5, 77.5' &&
+      data.radious === '82.2' &&
+      data.shot === '(-2, 3)',
+    `coordinate display=${JSON.stringify(data)}`);
 
     const shotSelectionTarget = await page.evaluate(() => {
       const v = window.viewer;
@@ -2090,9 +2099,9 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(chipInteriorBefore?.pixel?.join(',') === chipInteriorAfter?.join(','),
       `chip interior was filled=${JSON.stringify({ chipInteriorBefore, chipInteriorAfter })}`);
     expect(data.chip?.x_abs === 10 && data.chip?.y_abs === 0, `chip=${JSON.stringify(data.chip)}`);
-    expect(data.coord === '(-27.50, 77.50)', `coord=${data.coord}`);
+    expect(data.coord === '-27.5, 77.5', `coord=${data.coord}`);
     expect(data.rel === '(-5, -16)', `rel=${data.rel}`);
-    expect(data.radious === '82.23', `radious=${data.radious}`);
+    expect(data.radious === '82.2', `radious=${data.radious}`);
     expect(data.shot === '(-2, 3)', `shot=${data.shot}`);
     expect(!data.oldAbsElement && data.layoutRequest, `layout display/request=${JSON.stringify(data)}`);
     return {
@@ -2176,6 +2185,10 @@ const { createRunner } = require('./e2e_playwright_session');
       null,
       { timeout: 10000 }
     );
+    const uiLoginId = 'e2e_composite_login';
+    await page.evaluate((loginId) => {
+      window.viewer.currentUser = loginId;
+    }, uiLoginId);
     const uiShotRequestPromise = page.waitForRequest(
       (request) => request.url().includes('/api/composite-map') && request.method() === 'POST',
       { timeout: 10000 }
@@ -2192,17 +2205,23 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.locator('#chip-context-menu #chip-composite-create').click();
     const uiShotRequest = await uiShotRequestPromise;
     const uiShotRequestBody = JSON.parse(uiShotRequest.postData() || '{}');
+    const uiShotRequestUrl = new URL(uiShotRequest.url());
     expect(uiShotRequestBody.selection_mode === 'shot' &&
       Array.isArray(uiShotRequestBody.selected_shot_groups) &&
       uiShotRequestBody.selected_shot_groups.length === 2 &&
-      uiShotRequestBody.selected_shot_groups.every((group) => group.chip_coords?.length === 24),
+      uiShotRequestBody.selected_shot_groups.every((group) => group.chip_coords?.length === 24 &&
+        group.shot_shape?.cols === 4 && group.shot_shape?.rows === 6),
       `UI shot payload=${JSON.stringify(uiShotRequestBody)}`);
+    expect(uiShotRequestUrl.searchParams.get('LoginId') === uiLoginId,
+      `UI shot LoginId=${uiShotRequestUrl.searchParams.get('LoginId')}`);
     await page.waitForFunction(
       () => window.viewer?.isCompositeMode === true &&
-        window.viewer.compositeSession?.selectionMode === 'shot',
+        window.viewer.compositeSession?.selectionMode === 'shot' &&
+        window.viewer.compositeSession?.outputDir === 'composite_map/e2e_composite_login',
       null,
       { timeout: 180000 }
     );
+    const uiShotOutputDir = await page.evaluate(() => window.viewer?.compositeSession?.outputDir || '');
     await boot('chunk2-selected-region-composite-after-ui-shot');
     await loadFolder(folder);
     await setSelection([target.index]);
@@ -2387,7 +2406,11 @@ const { createRunner } = require('./e2e_playwright_session');
           image_paths: [imagePath],
           selection_mode: 'shot',
           selected_chip_coords: shotCoords,
-          selected_shot_groups: [{ shot_id: shotId, chip_coords: shotCoords }],
+          selected_shot_groups: [{
+            shot_id: shotId,
+            chip_coords: shotCoords,
+            shot_shape: { cols: 4, rows: 6 },
+          }],
         }),
         cache: 'no-store',
       });
@@ -2480,6 +2503,99 @@ const { createRunner } = require('./e2e_playwright_session');
       shotResult.imageInfo?.backgroundRatio < 0.25,
       `shot positions=${JSON.stringify({ selectionTarget, shotResult })}`);
 
+    const partialShotResult = await page.evaluate(async ({ imagePath }) => {
+      const layoutResponse = await fetch('/api/layout?process_id=P001', { cache: 'no-store' });
+      if (!layoutResponse.ok) throw new Error(`layout status=${layoutResponse.status}`);
+      const layout = await layoutResponse.json();
+      const row = (layout.rows || []).find((candidate) => String(candidate.shot_id) === '8');
+      if (!row) throw new Error('single-chip partial Shot fixture missing');
+      const shotCoords = [{ x_abs: Number(row.eds_chip_x_pos), y_abs: Number(row.eds_chip_y_pos) }];
+      await fetch('/api/composite-cleanup', { method: 'POST', cache: 'no-store' });
+      const startResponse = await fetch('/api/composite-map', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image_paths: [imagePath],
+          selection_mode: 'shot',
+          selected_chip_coords: shotCoords,
+          selected_shot_groups: [{
+            shot_id: '8',
+            chip_coords: shotCoords,
+            shot_shape: { cols: 4, rows: 6 },
+          }],
+        }),
+        cache: 'no-store',
+      });
+      if (!startResponse.ok) throw new Error(await startResponse.text());
+      const started = await startResponse.json();
+      const deadline = Date.now() + 180000;
+      let status = null;
+      while (Date.now() < deadline) {
+        const response = await fetch(`/api/composite-map/status/${encodeURIComponent(started.task_id)}`, { cache: 'no-store' });
+        status = await response.json();
+        if (status.status === 'completed' || status.status === 'failed') break;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      if (status?.status !== 'completed') throw new Error(`partial shot status=${JSON.stringify(status)}`);
+      const result = status.result || {};
+      const image = result.heatmaps?.[0]?.path || result.sum_map_path || '';
+      const imageResponse = await fetch(`/api/image?path=${encodeURIComponent(image)}`, { cache: 'no-store' });
+      if (!imageResponse.ok) throw new Error(`partial shot output status=${imageResponse.status}`);
+      const blob = await imageResponse.blob();
+      const url = URL.createObjectURL(blob);
+      let imageSize;
+      try {
+        const outputImage = new Image();
+        outputImage.src = url;
+        await new Promise((resolve, reject) => {
+          outputImage.onload = resolve;
+          outputImage.onerror = reject;
+        });
+        imageSize = { width: outputImage.naturalWidth, height: outputImage.naturalHeight };
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+      let positions = null;
+      const positionsDeadline = Date.now() + 30000;
+      while (Date.now() < positionsDeadline) {
+        const response = await fetch(`/api/chip-positions?path=${encodeURIComponent(image)}&include_fq=0`, { cache: 'no-store' });
+        if (response.ok) {
+          const candidate = await response.json();
+          if (Array.isArray(candidate?.chips)) {
+            positions = candidate;
+            break;
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      return {
+        shotId: '8',
+        sourceChipCount: shotCoords.length,
+        result: {
+          width: result.width,
+          height: result.height,
+          selected_chip_count: result.selected_chip_count,
+          selected_shot_count: result.selected_shot_count,
+          selected_shot_shape: result.selected_shot_shape,
+        },
+        imageSize,
+        positionsChipCount: Array.isArray(positions?.chips) ? positions.chips.length : 0,
+        positionsCanvas: positions?.coord?.canvas || null,
+      };
+    }, { imagePath: target.imagePath });
+    expect(partialShotResult.result.width === shotResult.result.width &&
+      partialShotResult.result.height === shotResult.result.height &&
+      partialShotResult.result.selected_chip_count === 1 &&
+      partialShotResult.result.selected_shot_count === 1 &&
+      partialShotResult.result.selected_shot_shape?.cols === 4 &&
+      partialShotResult.result.selected_shot_shape?.rows === 6 &&
+      partialShotResult.imageSize?.width === shotResult.imageInfo?.width &&
+      partialShotResult.imageSize?.height === shotResult.imageInfo?.height &&
+      partialShotResult.positionsChipCount === 1 &&
+      partialShotResult.positionsCanvas?.width === shotResult.result.width &&
+      partialShotResult.positionsCanvas?.height === shotResult.result.height,
+    `partial shot must keep canonical canvas=${JSON.stringify(partialShotResult)}`);
+
     const multiChipResult = await page.evaluate(async ({ imagePath, coords }) => {
       await fetch('/api/composite-cleanup', { method: 'POST', cache: 'no-store' });
       const startResponse = await fetch('/api/composite-map', {
@@ -2562,6 +2678,7 @@ const { createRunner } = require('./e2e_playwright_session');
         chip_coords: (layout.rows || [])
           .filter((row) => String(row.shot_id) === shotId)
           .map((row) => ({ x_abs: Number(row.eds_chip_x_pos), y_abs: Number(row.eds_chip_y_pos) })),
+        shot_shape: { cols: 4, rows: 6 },
       }));
       if (groups.some((group) => group.chip_coords.length !== 24)) {
         throw new Error(`full shot fixture changed=${JSON.stringify(groups.map((group) => [group.shot_id, group.chip_coords.length]))}`);
@@ -2637,6 +2754,8 @@ const { createRunner } = require('./e2e_playwright_session');
       menuText,
       uiShotMenuText,
       uiShotRequestBody,
+      uiShotRequestLoginId: uiShotRequestUrl.searchParams.get('LoginId'),
+      uiShotOutputDir,
       chipRequestBody,
       chipResult,
       selectedChipImageWidth: chipResult.pixels?.imageSize?.width || 0,
@@ -2728,12 +2847,27 @@ const { createRunner } = require('./e2e_playwright_session');
     await menu.locator('.context-menu-item').filter({ hasText: '선택 Shot 정보복사' }).click();
     await page.waitForFunction(() => (window.__e2eClipboardTexts || []).length > 0, null, { timeout: 10000 });
     const shotClipboard = await page.evaluate(() => window.__e2eClipboardTexts.at(-1) || '');
-    expect(shotClipboard.includes('SHOT_ID') &&
-      shotClipboard.includes('SHOT_X') &&
-      shotClipboard.includes('SHOT_Y') &&
-      shotClipboard.includes('CHIP_COORD_X(mm)') &&
-      shotClipboard.includes('CHIP_COORD_Y(mm)') &&
-      shotClipboard.includes('RADIUS(mm)'), `shot clipboard header=${shotClipboard.split('\n')[0]}`);
+    const shotClipboardRows = shotClipboard.trim().split(/\r?\n/).map((row) => row.split('\t'));
+    const shotClipboardHeaders = shotClipboardRows[0] || [];
+    const shotClipboardFirstRow = shotClipboardRows[1] || [];
+    const shotCoordX = shotClipboardFirstRow[shotClipboardHeaders.indexOf('CHIP_COORD_X(mm)')] || '';
+    const shotCoordY = shotClipboardFirstRow[shotClipboardHeaders.indexOf('CHIP_COORD_Y(mm)')] || '';
+    const shotRadius = shotClipboardFirstRow[shotClipboardHeaders.indexOf('RADIUS(mm)')] || '';
+    const shotXValue = shotClipboardFirstRow[shotClipboardHeaders.indexOf('SHOT_X')] || '';
+    const shotYValue = shotClipboardFirstRow[shotClipboardHeaders.indexOf('SHOT_Y')] || '';
+    expect(shotClipboardHeaders.includes('SHOT_ID') &&
+      shotClipboardHeaders.includes('SHOT_X') &&
+      shotClipboardHeaders.includes('SHOT_Y') &&
+      !shotClipboardHeaders.includes('SHOT') &&
+      shotClipboardHeaders.includes('CHIP_COORD_X(mm)') &&
+      shotClipboardHeaders.includes('CHIP_COORD_Y(mm)') &&
+      shotClipboardHeaders.includes('RADIUS(mm)') &&
+      /^-?\d+\.\d{3}$/.test(shotCoordX) &&
+      /^-?\d+\.\d{3}$/.test(shotCoordY) &&
+      /^\d+\.\d{3}$/.test(shotRadius) &&
+      Number.isInteger(Number(shotXValue)) &&
+      Number.isInteger(Number(shotYValue)),
+    `shot clipboard=${JSON.stringify({ headers: shotClipboardHeaders, firstRow: shotClipboardFirstRow })}`);
 
     menu = await openChipMenu();
     const tableDownloadPromise = page.waitForEvent('download', { timeout: 10000 });
@@ -2793,6 +2927,7 @@ const { createRunner } = require('./e2e_playwright_session');
       shotChipCount: shotPoint.shotCount,
       shotMenuText,
       shotClipboardHeader: shotClipboard.split('\n')[0],
+      shotClipboardCoordinates: { shotXValue, shotYValue, shotCoordX, shotCoordY, shotRadius },
       shotTableFilename: tableDownload.suggestedFilename(),
       shotImageFilename: imageDownload.suggestedFilename(),
       chipMenuText,

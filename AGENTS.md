@@ -173,9 +173,24 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 #### BUG-24: 다중 Shot/Chip Composite와 export 정합성 회귀 (2026-08-07)
 - 증상: 여러 Shot을 선택해 Composite를 만들 때 원본 wafer 좌표가 그대로 남거나 Shot별 chip 수가 서로 다른 위치에 누적되어 단일 Shot과 다른 모양이 될 수 있다. Chip/Shot context menu의 TSV와 이미지 저장도 layout의 Chip(Coord), Radius, Shot 필드를 빠뜨릴 수 있다.
 - 원인: 기존 선택 영역 Composite는 `selected_chip_coords`를 source canvas에서 필터링하고 crop하는 경로만 있었으며, Shot별 상대 격자 정렬 정보와 공통 export schema가 없었다.
-- 수정 계약: `selected_shot_groups`는 Shot별 EDS chip 좌표를 전달하고, `api/composite_map.py`는 각 그룹의 최소 좌표를 상대 원점으로 정렬한다. chip 가로×세로 signature가 다른 Shot 조합은 실패시킨다. 결과 positions는 첫 번째 canonical Shot의 chip rect/canvas를 사용하고, 누적 분모는 `source_images × selected_shot_count`다. Chip/Shot/Wafer export는 공통 TSV 생성기를 사용해 `CHIP_COORD_X(mm)`, `CHIP_COORD_Y(mm)`, `RADIUS(mm)`, `SHOT`, `SHOT_ID`, `SHOT_X`, `SHOT_Y`, `FULL_SHOT_TYPE`를 포함한다. Shot 선택 context menu는 Shot crop PNG와 TSV를 제공한다.
+- 수정 계약: `selected_shot_groups`는 Shot별 EDS chip 좌표를 전달하고, `api/composite_map.py`는 각 그룹의 최소 좌표를 상대 원점으로 정렬한다. chip 가로×세로 signature가 다른 Shot 조합은 실패시킨다. 결과 positions는 첫 번째 canonical Shot의 chip rect/canvas를 사용하고, 누적 분모는 `source_images × selected_shot_count`다. Chip/Shot/Wafer export는 공통 TSV 생성기를 사용해 `CHIP_COORD_X(mm)`, `CHIP_COORD_Y(mm)`, `RADIUS(mm)`, `SHOT_ID`, `SHOT_X`, `SHOT_Y`, `FULL_SHOT_TYPE`를 포함하고, 세 mm 값은 소수 셋째 자리까지 기록한다. Shot 선택 context menu는 Shot crop PNG와 TSV를 제공한다.
 - E2E guard: `scripts/e2e_chunk2.js`의 `selected-region-composite`는 단일 Shot, canonical 한 Chip에 누적하는 다중 Chip, P001 Shot 4/5 두 개를 검사한다. Chip 결과는 첫 Chip 크기·positions 1개·`selected_chip_count=3`·`composite_sample_count=3`, Shot 결과는 동일한 image width/height, `selected_chip_count=24`, `selected_shot_shape=4×6`, positions chip 24개인지 확인한다. `selected-region-export`는 실제 Chip/Shot context menu, clipboard TSV header, TSV 다운로드 filename, Shot crop PNG 다운로드를 검증한다.
 - 파일: `api/composite_map.py`, `api/full_app.py`, `js/main.js`, `scripts/e2e_chunk2.js`, `docs/COMPOSITE_MAP.md`
+
+#### BUG-25: SAML LoginId가 Composite output 경로에서 유실되는 회귀 (2026-08-08)
+- 증상: 서버가 SAML `LoginId`를 알고 있어도 Composite/Measure Composite 결과가 `composite_map/notsaml`에 저장된다.
+- 원인: bootstrap SAML 성공 후 URL의 `LoginId`를 프론트엔드가 내부 사용자 상태로 복원하더라도, Composite 요청에는 `LoginId` query가 없었다. `full_app._current_login_id()`가 쿠키/세션/IP 매핑을 찾지 못하면 `notsaml`로 fallback했다.
+- 수정 계약: `js/main.js::_withCurrentLoginId()`가 현재 사용자 또는 최초 SAML URL의 LoginId를 Composite cleanup/map/measure/recolor/subset 요청에 전달한다. 기존 서버 `_current_login_id()` query fallback을 사용하므로 SAML cookie를 새로 만들지 않는다.
+- E2E guard: `scripts/e2e_chunk2.js`의 `selected-region-composite`는 실제 Composite POST URL에 non-fallback `LoginId`가 전달되는지 확인해야 한다.
+- 같은 변경에서 export의 `SHOT` 튜플 컬럼은 제거하고 `SHOT_ID`, `SHOT_X`, `SHOT_Y`를 독립 컬럼으로 유지한다. Chip Coord/Radius mm는 모두 소수 셋째 자리까지 확인한다.
+- 파일: `js/main.js`, `scripts/e2e_chunk2.js`, `api/full_app.py`
+
+#### BUG-26: Partial Shot Composite canvas 축소 및 좌표 정보 표기 회귀 (2026-08-08)
+- 증상: edge에서 chip이 1개뿐인 Shot을 Composite하면 선택 chip의 tight bounds만 사용해 canvas가 `1×1 chip`으로 줄어들고, 단일 보기 좌표 정보가 `Chip(Coord)`, `Chip(Rel)`, 2자리 형식으로 표시됐다.
+- 원인: `api/composite_map.py::_build_selected_shot_geometry()`가 선택된 chip들의 min/max 범위를 Shot shape로 사용했으며, 좌표 box가 layout 위치와 grid 위치의 표시 순서/명칭을 구분하지 않았다.
+- 수정 계약: layout에서 계산한 canonical `shot_shape`를 선택 Shot payload에 전달하고, backend는 EDS 좌표의 Shot 내부 위치를 canonical cell에 배치한다. 실제 chip이 1개여도 full canvas 크기와 chip 크기를 유지하고 보이는 chip만 채운다. 좌표 box 순서는 `Chip(Grid)`, `Chip(Pos)`, `Radious`, `Shot(Grid)`이며 Grid는 정수, Pos/Radius는 소수 1자리로 표시한다.
+- E2E guard: `scripts/e2e_chunk2.js`의 `selected-region-composite`는 P001 single-chip partial Shot 8도 full `4×6` canvas/positions로 유지되는지 확인하고, `layout-chip-coordinates`는 label 순서와 `(-5, -16)`, `-27.5, 77.5`, `82.2`, `(-2, 3)` 표기를 확인한다.
+- 파일: `api/composite_map.py`, `api/full_app.py`, `js/chip-annotator.js`, `js/main.js`, `index.html`, `scripts/e2e_chunk2.js`, `docs/COMPOSITE_MAP.md`
 
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)

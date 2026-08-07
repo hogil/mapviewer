@@ -6502,9 +6502,13 @@ return {
 **파일**: `scripts/e2e_chunk1.js`, `api/full_app.py`
 
 #### BUG-24: 다중 Shot/Chip Composite와 export 정합성 회귀 (2026-08-07)
-- `scripts/e2e_chunk2.js`의 `selected-region-composite`는 실제 P001 fixture에서 단일 Shot, 다중 Chip, 동일 형상 Shot 4/5 두 개를 검사한다.
+- `scripts/e2e_chunk2.js`의 `selected-region-composite`는 실제 P001 fixture에서 단일 Shot, 다중 Chip, 동일 형상 Shot 4/5 두 개, chip 1개인 partial Shot 8을 검사한다. Partial Shot도 canonical `4×6` canvas와 동일한 chip cell 크기를 유지해야 하며, 보이는 chip 수만 positions에 남겨야 한다.
 - 두 Shot 결과는 단일 Shot 결과와 `width`, `height`, canonical chip 격자 `4×6`이 같아야 한다. positions chip 수는 canonical 첫 Shot의 24개, `selected_source_chip_count`는 두 Shot 합계 48개, `composite_sample_count`는 source image 수×Shot 수여야 한다.
 - `selected_shot_groups`가 없는 기존 Chip 요청도 유지해야 하며, positions가 결과 output canvas로 비동기 복사된 뒤 `/api/chip-positions`에서 chip rect/canvas를 다시 확인한다.
-- `selected-region-export`는 Chip/Shot context menu를 실제로 열고, Shot 이미지 PNG 다운로드, Shot TSV 다운로드, clipboard TSV header의 `CHIP_COORD_X(mm)`, `CHIP_COORD_Y(mm)`, `RADIUS(mm)`, `SHOT_ID`, `SHOT_X`, `SHOT_Y`를 확인한다. Chip export도 같은 schema와 선택 행 수를 확인한다.
+- `selected-region-export`는 Chip/Shot context menu를 실제로 열고, Shot 이미지 PNG 다운로드, Shot TSV 다운로드, clipboard TSV header의 `CHIP_COORD_X(mm)`, `CHIP_COORD_Y(mm)`, `RADIUS(mm)`, `SHOT_ID`, `SHOT_X`, `SHOT_Y`를 확인한다. `SHOT` 튜플 컬럼은 없어야 하며, 세 mm 값은 소수 셋째 자리까지 기록되어야 한다. Chip export도 같은 schema와 선택 행 수를 확인한다.
 - UI 상태 플래그만으로 PASS 처리하지 않는다. API request body의 `selected_shot_groups`, output image dimensions, positions count, 다운로드 suggested filename을 모두 기록한다.
 - Chip Composite는 선택 Chip 3개를 한 Chip 크기의 canonical canvas에 누적해야 한다. 선택 Chip을 원래 Shot 위치에 여러 개 배치한 결과가 나오면 FAIL이다. output image와 positions canvas는 첫 Chip 크기, positions chip 수는 1, `selected_chip_count=3`, `composite_sample_count=3`이어야 한다.
+
+#### BUG-25: Composite 요청의 SAML LoginId 전달
+- bootstrap SAML은 성공 후 URL handoff만 사용하므로 Composite/Measure Composite 요청에도 `LoginId` query가 전달되어야 한다. 결과가 `composite_map/notsaml`에 생기면 FAIL이다.
+- `selected-region-composite`는 non-fallback LoginId가 `/api/composite-map` POST URL에 포함되는지 확인하고, export는 `SHOT` 튜플 컬럼 제거와 mm 3자리 값을 확인한다.

@@ -197,6 +197,7 @@ Recolor는 원본 이미지를 다시 읽지 않고 `square_maps_data.npz`를 �
   "selected_shot_groups": [
     {
       "shot_id": "4",
+      "shot_shape": {"cols": 4, "rows": 6},
       "chip_coords": [
         {"x_abs": 10, "y_abs": 0},
         {"x_abs": 11, "y_abs": 0}
@@ -206,11 +207,13 @@ Recolor는 원본 이미지를 다시 읽지 않고 `square_maps_data.npz`를 �
 }
 ```
 
-여러 Shot은 각 Shot의 EDS chip 좌표 최소값을 상대 원점으로 맞춰 같은 chip 격자에 누적합니다. 선택한 Shot의 chip 가로×세로 격자가 다르면 왜곡된 결과를 만들지 않고 작업을 실패시킵니다. 결과 positions는 첫 번째 canonical Shot의 chip 수와 상대 rect를 사용하며, `selected_shot_count`, `selected_source_chip_count`, `selected_shot_shape`, `composite_sample_count`를 반환합니다.
+여러 Shot은 layout의 canonical `shot_shape`(예: `4×6`)와 EDS chip 좌표의 Shot 내부 위치를 사용해 같은 chip 격자에 누적합니다. Partial Shot이나 chip이 1개뿐인 edge Shot도 canvas를 `1×1`로 줄이지 않고 canonical cell 크기를 유지하며, 실제 보이는 chip만 해당 위치에 그리고 나머지는 배경으로 둡니다. 결과 positions는 첫 번째 canonical Shot의 실제 chip 수와 상대 rect를 사용하며, `selected_shot_count`, `selected_source_chip_count`, `selected_shot_shape`, `composite_sample_count`를 반환합니다.
 
 선택 영역 Composite 결과의 `image_size`와 positions canvas는 canonical Shot 크기와 일치해야 합니다. 현재 E2E fixture P001 Shot 4/5는 각각 24 chip, 4×6이며 두 Shot을 합친 결과도 24 chip, 4×6입니다.
 
-단일 이미지 Chip/Shot context menu export는 공통 TSV 필드를 사용합니다. `PROCESS_ID`, `CHIP_ID`, `X_ABS`, `Y_ABS`, `BIN`, `CHIP_COORD_X(mm)`, `CHIP_COORD_Y(mm)`, `RADIUS(mm)`, `SHOT`, `SHOT_ID`, `SHOT_X`, `SHOT_Y`, `FULL_SHOT_TYPE`가 포함됩니다. Shot 선택에서는 선택 Shot별 crop PNG 다운로드와 TSV 저장을 제공합니다.
+단일 이미지 Chip/Shot context menu export는 공통 TSV 필드를 사용합니다. `PROCESS_ID`, `CHIP_ID`, `X_ABS`, `Y_ABS`, `BIN`, `CHIP_COORD_X(mm)`, `CHIP_COORD_Y(mm)`, `RADIUS(mm)`, `SHOT_ID`, `SHOT_X`, `SHOT_Y`, `FULL_SHOT_TYPE`가 포함됩니다. `SHOT` 튜플 컬럼은 사용하지 않으며 Shot 순서는 `SHOT_X`, `SHOT_Y`로 분리합니다. 세 mm 값은 소수 셋째 자리까지 기록합니다. Shot 선택에서는 선택 Shot별 crop PNG 다운로드와 TSV 저장을 제공합니다.
+
+Composite/Measure Composite 요청은 bootstrap SAML handoff로 확보한 현재 `LoginId`를 query parameter로 전달합니다. 서버의 `_current_login_id()`가 이 값을 사용하므로 결과는 `composite_map/{LoginId}`에 저장되고 `composite_map/notsaml`로 섞이지 않습니다.
 
 ## 관련 설정
 

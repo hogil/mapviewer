@@ -241,6 +241,29 @@ export class ChipAnnotator {
         return groups;
     }
 
+    getShotGridShape() {
+        const groups = new Map();
+        for (const row of this.layoutByEdsChip.values()) {
+            const shotId = String(row?.shot_id ?? '').trim();
+            const x = Number(row?.eds_chip_x_pos);
+            const y = Number(row?.eds_chip_y_pos);
+            if (!shotId || !Number.isInteger(x) || !Number.isInteger(y)) continue;
+            const group = groups.get(shotId) || { xs: [], ys: [] };
+            group.xs.push(x);
+            group.ys.push(y);
+            groups.set(shotId, group);
+        }
+
+        let cols = 0;
+        let rows = 0;
+        for (const group of groups.values()) {
+            if (!group.xs.length || !group.ys.length) continue;
+            cols = Math.max(cols, Math.max(...group.xs) - Math.min(...group.xs) + 1);
+            rows = Math.max(rows, Math.max(...group.ys) - Math.min(...group.ys) + 1);
+        }
+        return cols > 0 && rows > 0 ? { cols, rows } : null;
+    }
+
     _getSelectionIndicesForChip(chip) {
         if (!chip) return [];
         const chipIndex = Number.isInteger(chip.index)
@@ -372,13 +395,13 @@ export class ChipAnnotator {
     formatLayoutPair(x, y) {
         const values = [Number(x) / 1000, Number(y) / 1000];
         if (!values.every(Number.isFinite)) return '-';
-        return `(${values[0].toFixed(2)}, ${values[1].toFixed(2)})`;
+        return `${values[0].toFixed(1)}, ${values[1].toFixed(1)}`;
     }
 
     formatLayoutRadius(x, y) {
         const values = [Number(x) / 1000, Number(y) / 1000];
         if (!values.every(Number.isFinite)) return '-';
-        return Math.hypot(values[0], values[1]).toFixed(2);
+        return Math.hypot(values[0], values[1]).toFixed(1);
     }
 
     formatShotOrder(x, y) {

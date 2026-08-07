@@ -8873,9 +8873,14 @@ class ChipCoord(BaseModel):
     x_abs: int
     y_abs: int
 
+class CompositeShotShape(BaseModel):
+    cols: int = Field(..., ge=1, le=256)
+    rows: int = Field(..., ge=1, le=256)
+
 class CompositeShotGroup(BaseModel):
     shot_id: str
     chip_coords: List[ChipCoord]
+    shot_shape: Optional[CompositeShotShape] = None
 
 class ChipClassifyRequest(BaseModel):
     class_name: str
@@ -10879,7 +10884,14 @@ async def create_composite_map_endpoint(
                 coords.append({"x_abs": key[0], "y_abs": key[1]})
             if not coords:
                 raise HTTPException(status_code=400, detail=f"Shot {shot_id}에 유효한 chip이 없습니다.")
-            selected_shot_groups.append({"shot_id": shot_id, "chip_coords": coords})
+            selected_shot_groups.append({
+                "shot_id": shot_id,
+                "chip_coords": coords,
+                "shot_shape": (
+                    {"cols": int(group.shot_shape.cols), "rows": int(group.shot_shape.rows)}
+                    if group.shot_shape is not None else None
+                ),
+            })
 
         # Shot payload는 선택된 Shot 전체를 포함해야 하므로, 별도 chip 좌표가
         # 일부만 들어온 오래된 호출도 그룹 좌표를 기준으로 보정한다.

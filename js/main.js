@@ -1215,6 +1215,20 @@ class WaferMapViewer {
         return this.currentUser;
     }
 
+    _withCurrentLoginId(url) {
+        let loginId = this.getCurrentLoginId();
+        if (INVALID_LOGIN_ID_VALUES.has(String(loginId).trim().toLowerCase()) &&
+            initialLoginIdFromUrl &&
+            !INVALID_LOGIN_ID_VALUES.has(String(initialLoginIdFromUrl).trim().toLowerCase())) {
+            loginId = String(initialLoginIdFromUrl).trim();
+        }
+        if (!loginId || INVALID_LOGIN_ID_VALUES.has(String(loginId).trim().toLowerCase())) {
+            return url;
+        }
+        const separator = String(url).includes('?') ? '&' : '?';
+        return `${url}${separator}LoginId=${encodeURIComponent(loginId)}`;
+    }
+
     /** 현재 overlayMode가 gradient measure 모드인지 (positions chip 값 기반 렌더링)
      *  bin/composite/null 이외의 모든 모드가 gradient measure */
     isMeasureGradientMode(mode) {
@@ -9314,7 +9328,7 @@ class WaferMapViewer {
                     payload.colors = [...options.colors];
                 }
 
-                const res = await fetch('/api/composite-recolor', {
+                const res = await fetch(this._withCurrentLoginId('/api/composite-recolor'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload),
@@ -9585,7 +9599,20 @@ class WaferMapViewer {
                                 })
                         ).values()]
                         : [];
-                    return shotId && coords.length > 0 ? { shot_id: shotId, chip_coords: coords } : null;
+                    const rawShape = group?.shot_shape || group?.shotShape;
+                    const cols = Number(rawShape?.cols);
+                    const rows = Number(rawShape?.rows);
+                    const shotShape = Number.isInteger(cols) && cols > 0 &&
+                        Number.isInteger(rows) && rows > 0
+                        ? { cols, rows }
+                        : null;
+                    return shotId && coords.length > 0
+                        ? {
+                            shot_id: shotId,
+                            chip_coords: coords,
+                            ...(shotShape ? { shot_shape: shotShape } : {}),
+                        }
+                        : null;
                 })
                 .filter(Boolean)
             : [];
@@ -9666,9 +9693,9 @@ class WaferMapViewer {
 
         try {
             // 🔥 이전 Composite 결과 전체 삭제 (새 생성 전 cleanup)
-            await fetch('/api/composite-cleanup', { method: 'POST', cache: 'no-store' }).catch(() => {});
+            await fetch(this._withCurrentLoginId('/api/composite-cleanup'), { method: 'POST', cache: 'no-store' }).catch(() => {});
 
-            const res = await fetch('/api/composite-map', {
+            const res = await fetch(this._withCurrentLoginId('/api/composite-map'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -10587,12 +10614,12 @@ class WaferMapViewer {
 
         try {
             // 🔥 이전 Composite 결과 전체 삭제 (새 생성 전 cleanup)
-            await fetch('/api/composite-cleanup', { method: 'POST', cache: 'no-store' }).catch(() => {});
+            await fetch(this._withCurrentLoginId('/api/composite-cleanup'), { method: 'POST', cache: 'no-store' }).catch(() => {});
 
             // ── 1) Composite Map (Grade heatmap) API 호출 ──
             const compositeTaskIds = [];
             if (compositeMapItems.length > 0) {
-                const res = await fetch('/api/composite-map', {
+                const res = await fetch(this._withCurrentLoginId('/api/composite-map'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ image_paths: selected }),
@@ -10612,7 +10639,7 @@ class WaferMapViewer {
                 const item_key = isBinMode ? null : item.itemKey;
                 const aggregation = isBinMode ? 'count' : 'sum';
 
-                const res = await fetch('/api/measure-composite', {
+                const res = await fetch(this._withCurrentLoginId('/api/measure-composite'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -10774,7 +10801,7 @@ class WaferMapViewer {
         this.syncCompositeInlineStatus(targetPageId);
 
         try {
-            const res = await fetch('/api/measure-composite', {
+            const res = await fetch(this._withCurrentLoginId('/api/measure-composite'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -10863,7 +10890,7 @@ class WaferMapViewer {
         // 모든 결과에 대해 recolor (병렬) — target_filename으로 개별 이미지 지정
         const recolorPromises = measureOnly.map(async (r) => {
             try {
-                const res = await fetch('/api/measure-composite-recolor', {
+                const res = await fetch(this._withCurrentLoginId('/api/measure-composite-recolor'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -27615,7 +27642,7 @@ class WaferMapViewer {
 
         try {
             const t0 = performance.now();
-            const resp = await fetch('/api/measure-composite-data', {
+            const resp = await fetch(this._withCurrentLoginId('/api/measure-composite-data'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -29917,15 +29944,19 @@ class WaferMapViewer {
             const selectedMode = this.chipAnnotator?.selectionMode === 'shot' ? 'shot' : 'chip';
             const selectedShotGroups = selectedMode === 'shot'
                 ? [...(this.chipAnnotator?._getSelectedShotGroups?.() || [])]
-                    .map((group) => ({
-                        shot_id: String(group?.shotId ?? '').trim(),
-                        chip_coords: (Array.isArray(group?.chips) ? group.chips : [])
-                            .map((chip) => ({
-                                x_abs: Number(chip?.x_abs),
-                                y_abs: Number(chip?.y_abs),
-                            }))
-                            .filter((chip) => Number.isFinite(chip.x_abs) && Number.isFinite(chip.y_abs)),
-                    }))
+                    .map((group) => {
+                        const shotShape = this.chipAnnotator?.getShotGridShape?.();
+                        return {
+                            shot_id: String(group?.shotId ?? '').trim(),
+                            chip_coords: (Array.isArray(group?.chips) ? group.chips : [])
+                                .map((chip) => ({
+                                    x_abs: Number(chip?.x_abs),
+                                    y_abs: Number(chip?.y_abs),
+                                }))
+                                .filter((chip) => Number.isFinite(chip.x_abs) && Number.isFinite(chip.y_abs)),
+                            ...(shotShape ? { shot_shape: shotShape } : {}),
+                        };
+                    })
                     .filter((group) => group.shot_id && group.chip_coords.length > 0)
                 : [];
             const selectedShotCount = selectedShotGroups.length;
@@ -30548,7 +30579,7 @@ class WaferMapViewer {
             'LOT', 'WAFER', 'STEP', 'Device', 'PartID', 'PGM', 'TM', 'LT', 'NET', 'GOOD', 'YIELD', 'SYS',
             'PROCESS_ID', 'CHIP_ID', 'X_ABS', 'Y_ABS', 'BIN', 'G/B',
             'CHIP_COORD_X(mm)', 'CHIP_COORD_Y(mm)', 'RADIUS(mm)',
-            'SHOT', 'SHOT_ID', 'SHOT_X', 'SHOT_Y', 'FULL_SHOT_TYPE',
+            'SHOT_ID', 'SHOT_X', 'SHOT_Y', 'FULL_SHOT_TYPE',
         ];
         const numberOrNull = (value) => {
             if (value === null || value === undefined || String(value).trim() === '') return null;
@@ -30557,7 +30588,7 @@ class WaferMapViewer {
         };
         const formatMm = (value) => {
             const number = numberOrNull(value);
-            return number === null ? '-' : (number / 1000).toFixed(2);
+            return number === null ? '-' : (number / 1000).toFixed(3);
         };
         const safeCell = (value, fallback = '-') => {
             if (value === null || value === undefined || String(value) === '') return fallback;
@@ -30569,19 +30600,18 @@ class WaferMapViewer {
             const coordY = numberOrNull(layout?.chip_center_y_pos);
             const radius = coordX === null || coordY === null
                 ? '-'
-                : Math.hypot(coordX / 1000, coordY / 1000).toFixed(2);
+                : Math.hypot(coordX / 1000, coordY / 1000).toFixed(3);
             const bin = chip?.b ?? '';
             const binNumber = numberOrNull(bin);
             const chipId = layout?.chip_id ?? chip?.chip_id ?? '';
             const shotX = layout?.shot_x_pos ?? '';
             const shotY = layout?.shot_y_pos ?? '';
-            const shot = this.chipAnnotator?.formatShotOrder(shotX, shotY) || '-';
             return [
                 m.lot, m.wafer, m.step, m.device, m.partId, m.pgm, m.tm, m.lt, m.net, m.good, m.yield, m.sys,
                 this.chipAnnotator?.layoutProcessId || '', chipId, chip?.x_abs ?? '', chip?.y_abs ?? '', bin,
                 binNumber === null ? '' : (binNumber < 200 ? 'G' : 'B'),
                 formatMm(coordX), formatMm(coordY), radius,
-                shot, layout?.shot_id ?? '', shotX, shotY, layout?.full_shot_type ?? '',
+                layout?.shot_id ?? '', shotX, shotY, layout?.full_shot_type ?? '',
             ].map((value) => safeCell(value, ''));
         });
         const text = [headers, ...rows].map((row) => row.join('\t')).join('\n');
@@ -30832,7 +30862,7 @@ class WaferMapViewer {
                 lot_mode: this.lotMode  // 🔥 LOT Mode 파라미터 추가
             };
 
-            const res = await fetch('/api/composite-subset', {
+            const res = await fetch(this._withCurrentLoginId('/api/composite-subset'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),

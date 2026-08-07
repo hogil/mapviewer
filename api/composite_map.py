@@ -490,8 +490,18 @@ def _normalize_selected_shot_groups(
         coords = _normalize_selected_chip_coords(
             group.get("chip_coords") or group.get("selected_chip_coords")
         )
+        raw_shape = group.get("shot_shape") or group.get("shape")
+        shot_shape = None
+        if isinstance(raw_shape, dict):
+            try:
+                cols = int(raw_shape.get("cols"))
+                rows = int(raw_shape.get("rows"))
+                if cols > 0 and rows > 0:
+                    shot_shape = {"cols": cols, "rows": rows}
+            except (TypeError, ValueError):
+                shot_shape = None
         if shot_id and coords:
-            normalized.append({"shot_id": shot_id, "coords": coords})
+            normalized.append({"shot_id": shot_id, "coords": coords, "shot_shape": shot_shape})
     return normalized or None
 
 
@@ -544,7 +554,7 @@ def _build_selected_shot_geometry(
     height: int,
     show_normal_border: bool = True,
 ) -> Dict[str, Any]:
-    """Build one canonical chip grid for several same-shaped Shot groups."""
+    """Build one canonical chip grid while preserving partial Shot positions."""
     chips_by_coord = {
         key: chip
         for chip in positions_data.get("chips", [])
@@ -553,7 +563,8 @@ def _build_selected_shot_geometry(
         if key is not None
     }
     groups: List[Dict[str, Any]] = []
-    signature = None
+    explicit_signature = None
+    observed_signatures: List[Tuple[int, int]] = []
     source_chip_count = 0
 
     for group in selected_shot_groups:
@@ -568,13 +579,21 @@ def _build_selected_shot_geometry(
         max_x = max(coord[0] for coord, _ in group_chips)
         min_y = min(coord[1] for coord, _ in group_chips)
         max_y = max(coord[1] for coord, _ in group_chips)
-        group_signature = (max_x - min_x + 1, max_y - min_y + 1)
-        if signature is None:
-            signature = group_signature
-        elif signature != group_signature:
-            raise ValueError(
-                "서로 다른 chip 가로×세로 Shot은 하나의 Composite Map으로 합칠 수 없습니다."
-            )
+        observed_signature = (max_x - min_x + 1, max_y - min_y + 1)
+        observed_signatures.append(observed_signature)
+        raw_shape = group.get("shot_shape")
+        if isinstance(raw_shape, dict):
+            try:
+                group_signature = (int(raw_shape["cols"]), int(raw_shape["rows"]))
+            except (KeyError, TypeError, ValueError):
+                group_signature = None
+            if group_signature and group_signature[0] > 0 and group_signature[1] > 0:
+                if explicit_signature is None:
+                    explicit_signature = group_signature
+                elif explicit_signature != group_signature:
+                    raise ValueError(
+                        "서로 다른 chip 가로×세로 Shot은 하나의 Composite Map으로 합칠 수 없습니다."
+                    )
 
         source_rects = []
         for coord, chip in group_chips:
@@ -592,28 +611,20 @@ def _build_selected_shot_geometry(
             "shot_id": group["shot_id"],
             "min_x": min_x,
             "min_y": min_y,
-            "placements": [
-                {
-                    "coord": coord,
-                    "chip": chip,
-                    "source_rect": rect,
-                    "target_rect": (
-                        (coord[0] - min_x) * cell_width,
-                        (coord[1] - min_y) * cell_height,
-                        (coord[0] - min_x + 1) * cell_width,
-                        (coord[1] - min_y + 1) * cell_height,
-                    ),
-                }
-                for coord, chip, rect in source_rects
-            ],
+            "source_rects": source_rects,
+            "observed_signature": observed_signature,
             "cell_width": cell_width,
             "cell_height": cell_height,
         })
         source_chip_count += len(source_rects)
 
-    if not groups or signature is None:
+    if not groups:
         raise ValueError("선택한 Shot에 원본 positions chip이 없습니다.")
 
+    # The frontend supplies the full Shot shape from layout.txt. For older API
+    # callers, use the largest observed group so a partial group cannot shrink
+    # a Composite when a complete group is part of the same request.
+    signature = explicit_signature or max(observed_signatures, key=lambda value: value[0] * value[1])
     cols, rows = signature
     cell_width = groups[0]["cell_width"]
     cell_height = groups[0]["cell_height"]
@@ -622,6 +633,38 @@ def _build_selected_shot_geometry(
     base_indices = np.full((target_height, target_width), 8, dtype=np.uint8)
     output_coords: set[Tuple[int, int]] = set()
     position_rect_overrides: Dict[Tuple[int, int], Dict[str, Any]] = {}
+
+    for group in groups:
+        observed_cols, observed_rows = group["observed_signature"]
+        if observed_cols > cols or observed_rows > rows:
+            raise ValueError(
+                "선택한 Shot의 chip 배치가 canonical Shot 크기를 초과합니다."
+            )
+        origin_x = group["min_x"] - (group["min_x"] % cols)
+        origin_y = group["min_y"] - (group["min_y"] % rows)
+        placements = []
+        target_keys = set()
+        for coord, chip, rect in group["source_rects"]:
+            local_x = coord[0] - origin_x
+            local_y = coord[1] - origin_y
+            if not (0 <= local_x < cols and 0 <= local_y < rows):
+                raise ValueError("선택한 Shot chip 좌표가 canonical Shot 범위를 벗어났습니다.")
+            target_key = (local_x, local_y)
+            if target_key in target_keys:
+                raise ValueError("선택한 Shot에 중복 chip 위치가 있습니다.")
+            target_keys.add(target_key)
+            placements.append({
+                "coord": coord,
+                "chip": chip,
+                "source_rect": rect,
+                "target_rect": (
+                    local_x * group["cell_width"],
+                    local_y * group["cell_height"],
+                    (local_x + 1) * group["cell_width"],
+                    (local_y + 1) * group["cell_height"],
+                ),
+            })
+        group["placements"] = placements
 
     # Output positions represent one canonical Shot (the first selected group).
     for placement in groups[0]["placements"]:
