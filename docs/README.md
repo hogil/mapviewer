@@ -9,6 +9,7 @@
 | 문서 | 설명 |
 |------|------|
 | [IMAGE_PIPELINE.md](IMAGE_PIPELINE.md) | 이미지 응답, 팔레트 인덱스, positions.json, 개인색/필터 적용의 공통 계약 |
+| [LAYOUT_FEATURE.md](LAYOUT_FEATURE.md) | [NEW] Layout CSV 데이터 경로와 더미 데이터 계약 |
 | [PERSONALIZED_COLORS.md](PERSONALIZED_COLORS.md) | 개인색 스킴 저장소와 PLTE 패치 방식 |
 | [COMPOSITE_MAP.md](COMPOSITE_MAP.md) | Composite 생성, recolor, subset, positions 복사 규칙 |
 

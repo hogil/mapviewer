@@ -2522,7 +2522,7 @@
             border: 1px solid rgba(255, 255, 255, 0.1);
             border-radius: 4px;
             padding: 8px 10px;
-            width: 165px; /* 🔥 150px × 1.1 = 165px */
+            width: 165px;
             font-family: 'Consolas', 'Courier New', monospace;
             font-size: 11px;
             box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
@@ -2557,7 +2557,10 @@
             min-width: 0;
         }
 
-        #chip-coordinate-box #coord-chip-rel {
+        #chip-coordinate-box #coord-chip-coord,
+        #chip-coordinate-box #coord-chip-rel,
+        #chip-coordinate-box #coord-radious,
+        #chip-coordinate-box #coord-shot {
             font-family: 'Consolas', 'Courier New', monospace;
             text-align: right;
             min-width: 3ch;

@@ -30,7 +30,7 @@ if sys.platform == 'win32' and _has_interactive_console():
         pass
 
 # ======================== Imports ========================
-import re, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid, io, math, struct, zlib, stat as stat_module, contextvars, ssl, functools  # struct/zlib: PNG PLTE 바이너리 조작용
+import re, csv, json, time, shutil, asyncio, logging, logging.config, hashlib, errno, queue, threading, uuid, io, math, struct, zlib, stat as stat_module, contextvars, ssl, functools  # struct/zlib: PNG PLTE 바이너리 조작용
 from pathlib import Path
 from contextlib import contextmanager, asynccontextmanager
 from typing import List, Optional, Dict, Any, Tuple, Set, Literal, Iterable
@@ -69,6 +69,89 @@ from . import config
 
 _NP_MODULE = None
 _HAS_NUMPY: Optional[bool] = None
+
+_LAYOUT_COLUMNS = (
+    "process_id",
+    "shot_id",
+    "chip_id",
+    "shot_x_pos",
+    "shot_y_pos",
+    "full_shot_type",
+    "eds_chip_x_pos",
+    "eds_chip_y_pos",
+    "chip_center_x_pos",
+    "chip_center_y_pos",
+)
+_LAYOUT_INT_COLUMNS = {
+    "shot_id",
+    "chip_id",
+    "shot_x_pos",
+    "shot_y_pos",
+    "eds_chip_x_pos",
+    "eds_chip_y_pos",
+}
+_LAYOUT_FLOAT_COLUMNS = {"chip_center_x_pos", "chip_center_y_pos"}
+_LAYOUT_PROCESS_ID_RE = re.compile(r"^[A-Za-z0-9]{4}$")
+_LAYOUT_CACHE_LOCK = RLock()
+_LAYOUT_CACHE_SIGNATURE: Optional[Tuple[int, int]] = None
+_LAYOUT_CACHE_BY_PROCESS: Dict[str, List[Dict[str, Any]]] = {}
+
+
+def _read_layout_index() -> Dict[str, List[Dict[str, Any]]]:
+    """Read the shared layout.txt once per file version and index it by process."""
+    global _LAYOUT_CACHE_SIGNATURE, _LAYOUT_CACHE_BY_PROCESS
+
+    layout_file = config.LAYOUT_FILE
+    try:
+        stat_result = layout_file.stat()
+    except FileNotFoundError:
+        with _LAYOUT_CACHE_LOCK:
+            _LAYOUT_CACHE_SIGNATURE = None
+            _LAYOUT_CACHE_BY_PROCESS = {}
+        return {}
+
+    signature = (stat_result.st_mtime_ns, stat_result.st_size)
+    with _LAYOUT_CACHE_LOCK:
+        if _LAYOUT_CACHE_SIGNATURE == signature:
+            return _LAYOUT_CACHE_BY_PROCESS
+
+        index: Dict[str, List[Dict[str, Any]]] = {}
+        invalid_rows = 0
+        with layout_file.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            fieldnames = tuple(reader.fieldnames or ())
+            if not set(_LAYOUT_COLUMNS).issubset(fieldnames):
+                raise ValueError(
+                    f"layout file header mismatch: expected {_LAYOUT_COLUMNS}, got {fieldnames}"
+                )
+
+            for row in reader:
+                process_id = str(row.get("process_id") or "").strip()
+                if not _LAYOUT_PROCESS_ID_RE.fullmatch(process_id):
+                    invalid_rows += 1
+                    continue
+                try:
+                    parsed = {"process_id": process_id}
+                    for column in _LAYOUT_INT_COLUMNS:
+                        parsed[column] = int(str(row.get(column) or "").strip())
+                    for column in _LAYOUT_FLOAT_COLUMNS:
+                        parsed[column] = float(str(row.get(column) or "").strip())
+                    parsed["full_shot_type"] = str(row.get("full_shot_type") or "").strip()
+                except (TypeError, ValueError):
+                    invalid_rows += 1
+                    continue
+                index.setdefault(process_id, []).append(parsed)
+
+        if invalid_rows:
+            logger.warning("[LAYOUT] skipped invalid rows file=%s count=%s", layout_file, invalid_rows)
+        _LAYOUT_CACHE_SIGNATURE = signature
+        _LAYOUT_CACHE_BY_PROCESS = index
+        return index
+
+
+def _get_layout_rows(process_id: str) -> List[Dict[str, Any]]:
+    rows = _read_layout_index().get(process_id, [])
+    return list(rows)
 
 
 def _get_numpy():
@@ -10160,6 +10243,21 @@ async def get_chip_positions(path: str, include_fq: int = 0, count_only: int = 0
     except Exception as e:
         logger.exception(f"Failed to load chip positions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/layout")
+async def get_layout(process_id: str):
+    """Return rows from the shared layout.txt for one four-character process."""
+    normalized_process_id = str(process_id or "").strip()
+    if not _LAYOUT_PROCESS_ID_RE.fullmatch(normalized_process_id):
+        raise HTTPException(status_code=400, detail="process_id must be exactly four alphanumeric characters")
+
+    rows = await anyio.to_thread.run_sync(_get_layout_rows, normalized_process_id)
+    return {
+        "process_id": normalized_process_id,
+        "source": config.LAYOUT_FILE.name,
+        "rows": rows,
+    }
 
 @app.get("/api/palette-counts")
 async def get_palette_counts(path: str):

@@ -15,6 +15,11 @@ FALLBACK_LOGIN_ID = (os.getenv("FALLBACK_LOGIN_ID", "notsaml").strip() or "notsa
 _positions_root_default = "E:/data/positions" if os.name == "nt" else "/appdata/appuser/positions"
 POSITIONS_ROOT = Path(os.getenv("POSITIONS_ROOT", _positions_root_default)).resolve()
 
+# [NEW] Layout feature data lives beside images/ and positions/.
+_layout_root_default = POSITIONS_ROOT.parent / "layout"
+LAYOUT_ROOT = Path(os.getenv("LAYOUT_ROOT", str(_layout_root_default))).resolve()
+LAYOUT_FILE = LAYOUT_ROOT / "layout.txt"
+
 # IMAGES_ROOT 하위 경로
 THUMBNAIL_DIR = IMAGES_ROOT / "thumbnails"
 LABELS_DIR = IMAGES_ROOT / "classification"              # Wafer 모드

@@ -466,6 +466,8 @@ class WaferMapViewer {
         this.myLotModal = null;
         this.contextMenuManager = null;
         this.chipAnnotator = null;
+        this._layoutByProcess = new Map();
+        this._layoutLoadPromises = new Map();
         this.thumbnailNavigator = null;
         this._deferredUiBootstrapPromise = null;
         this._deferredScriptPromises = new Map();
@@ -909,6 +911,59 @@ class WaferMapViewer {
         }
         return this.chipAnnotator;
     }
+
+    _getLayoutProcessId(imagePath) {
+        const parts = String(imagePath || '').replace(/\\/g, '/').split('/').filter(Boolean);
+        for (let index = 0; index + 2 < parts.length; index += 1) {
+            if (/^[A-Za-z0-9]{4}$/.test(parts[index]) && /^\d{8}$/.test(parts[index + 1])) {
+                return parts[index];
+            }
+        }
+        return null;
+    }
+
+    async _loadLayoutForImage(imagePath, signal = null, isStaleLoad = () => false) {
+        const annotator = this.chipAnnotator;
+        if (!annotator) return;
+
+        // Clear the previous process immediately so an image switch cannot
+        // show the prior wafer's center/shot coordinates during the fetch.
+        annotator.clearLayoutData();
+        const processId = this._getLayoutProcessId(imagePath);
+        if (!processId) return;
+
+        let pending = this._layoutLoadPromises.get(processId);
+        if (!pending) {
+            pending = fetch(`/api/layout?process_id=${encodeURIComponent(processId)}`)
+                .then((response) => {
+                    if (!response.ok) throw new Error(`layout load failed: ${response.status}`);
+                    return response.json();
+                })
+                .then((data) => {
+                    const rows = Array.isArray(data?.rows) ? data.rows : [];
+                    this._layoutByProcess.set(processId, rows);
+                    return rows;
+                });
+            this._layoutLoadPromises.set(processId, pending);
+        }
+
+        try {
+            const rows = this._layoutByProcess.has(processId)
+                ? this._layoutByProcess.get(processId)
+                : await pending;
+            if (signal?.aborted || isStaleLoad()) return;
+            annotator.setLayoutData(processId, rows);
+        } catch (error) {
+            if (!signal?.aborted && !isStaleLoad()) {
+                console.warn(`Failed to load layout for process ${processId}:`, error);
+            }
+        } finally {
+            if (this._layoutLoadPromises.get(processId) === pending) {
+                this._layoutLoadPromises.delete(processId);
+            }
+        }
+    }
+
     async _getThumbnailNavigator() {
         if (!this.thumbnailNavigator) {
             const jsVer = this._getJsVersionTag();
@@ -14927,7 +14982,9 @@ class WaferMapViewer {
             // 🔬 Chip Positions 자동 로드 (annotations도 자동으로 로드됨)
             if (this.chipAnnotator) {
                 try {
+                    this.chipAnnotator.clearLayoutData();
                     const loaded = await this.chipAnnotator.loadPositions(fullPath);
+                    await this._loadLayoutForImage(fullPath, signal, isStaleLoad);
                     if (signal.aborted || isStaleLoad() || this.gridMode) {
                         return;
                     }
@@ -29337,6 +29394,16 @@ class WaferMapViewer {
             // Get Normal color for the Border button
             let normalColor = userData.bottom['Normal'] || userData.bottom['Border'] || '#BEBEBE';
             const borderBtnActive = this.borderNormalize;
+            const shotBtnActive = this.chipAnnotator?.shotBoundaryVisible === true;
+            const shotBtnHtml = `
+                <button id="single-shot-boundary-btn" class="grid-btn"
+                    style="display:block;width:100%;margin-bottom:4px;padding:6px 12px;font-size:12px;
+                           border:1px solid ${shotBtnActive ? '#8b55bd' : '#444'};border-radius:4px;cursor:pointer;text-align:center;
+                           background:${shotBtnActive ? '#5e2f82' : '#222'};
+                           color:${shotBtnActive ? '#fff' : '#ccc'};
+                           outline:none;flex-shrink:0;"
+                    title="Shot: shot 경계 표시/숨김">Shot</button>
+            `;
             const borderBtnHtml = `
                 <button id="single-border-normalize-btn" class="grid-btn"
                     style="display:block;width:100%;margin-bottom:4px;padding:6px 12px;font-size:12px;
@@ -29386,7 +29453,17 @@ class WaferMapViewer {
                 }
                 return '';
             }).filter(html => html).join('');
-            this.dom.colorLegendBottom.innerHTML = borderBtnHtml + bottomHtml;
+            this.dom.colorLegendBottom.innerHTML = shotBtnHtml + borderBtnHtml + bottomHtml;
+            const shotBtn = document.getElementById('single-shot-boundary-btn');
+            if (shotBtn) {
+                shotBtn.addEventListener('click', () => {
+                    if (!this.chipAnnotator) return;
+                    this.chipAnnotator.setShotBoundaryVisible(
+                        !this.chipAnnotator.shotBoundaryVisible
+                    );
+                    this.renderColorLegends();
+                });
+            }
             // Attach border button click handler
             const borderBtn = document.getElementById('single-border-normalize-btn');
             if (borderBtn) {
@@ -29866,14 +29943,16 @@ class WaferMapViewer {
     async showChipViewModal(chipData) {
         const modal = document.getElementById('chip-view-modal');
         const canvas = document.getElementById('chip-view-canvas');
-        const absCoords = document.getElementById('chip-view-abs-coords');
+        const coordCoords = document.getElementById('chip-view-coord-coords');
         const relCoords = document.getElementById('chip-view-rel-coords');
+        const radious = document.getElementById('chip-view-radious');
+        const shotCoords = document.getElementById('chip-view-shot-coords');
         const bValue = document.getElementById('chip-view-b-value');
         const filePath = document.getElementById('chip-view-file-path');
         const colorLegend = document.getElementById('chip-view-color-legend');
         const closeBtn = document.getElementById('chip-view-close');
 
-        if (!modal || !canvas || !absCoords || !relCoords || !bValue || !filePath || !colorLegend) {
+        if (!modal || !canvas || !coordCoords || !relCoords || !radious || !shotCoords || !bValue || !filePath || !colorLegend) {
             console.error('Chip view modal elements not found');
             return;
         }
@@ -29885,20 +29964,23 @@ class WaferMapViewer {
             return;
         }
 
-        // 좌표 정보 표시 (chip 객체에서 직접 가져오기)
-        // 절대 좌표: JSON 파일의 x_abs, y_abs 값 사용 (cal 값 절대 사용 안 함)
-        if (chip.x_abs !== undefined && chip.y_abs !== undefined) {
-            absCoords.textContent = `(${chip.x_abs}, ${chip.y_abs})`;
-        } else {
-            absCoords.textContent = '-';
-        }
-        
-        // 상대 좌표: JSON 파일의 x_cal, y_cal 값 사용
-        if (chip.x_cal !== undefined && chip.y_cal !== undefined) {
-            relCoords.textContent = `(${chip.x_cal}, ${chip.y_cal})`;
-        } else {
-            relCoords.textContent = '-';
-        }
+        const layoutRow = this.chipAnnotator.getLayoutRowForChip?.(chip);
+        const formatLayoutPair = (x, y) => this.chipAnnotator.formatLayoutPair?.(x, y) || '-';
+        const formatLayoutRadius = (x, y) => this.chipAnnotator.formatLayoutRadius?.(x, y) || '-';
+        const formatShotOrder = (x, y) => this.chipAnnotator.formatShotOrder?.(x, y) || '-';
+        coordCoords.textContent = layoutRow
+            ? formatLayoutPair(layoutRow.chip_center_x_pos, layoutRow.chip_center_y_pos)
+            : '-';
+        relCoords.textContent = chip.x_cal !== undefined && chip.x_cal !== null &&
+            chip.y_cal !== undefined && chip.y_cal !== null
+            ? `(${chip.x_cal}, ${chip.y_cal})`
+            : '-';
+        radious.textContent = layoutRow
+            ? formatLayoutRadius(layoutRow.chip_center_x_pos, layoutRow.chip_center_y_pos)
+            : '-';
+        shotCoords.textContent = layoutRow
+            ? formatShotOrder(layoutRow.shot_x_pos, layoutRow.shot_y_pos)
+            : '-';
         
         // b 값 표시 (JSON에서 숫자만 저장됨)
         if (chip.b !== undefined && chip.b !== null) {

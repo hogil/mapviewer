@@ -100,8 +100,10 @@ export class ChipAnnotator {
 
         // Coordinate display elements
         this.coordBox = document.getElementById('chip-coordinate-box');
-        this.coordChipAbs = document.getElementById('coord-chip-abs');
+        this.coordChipCoord = document.getElementById('coord-chip-coord');
         this.coordChipRel = document.getElementById('coord-chip-rel');
+        this.coordRadious = document.getElementById('coord-radious');
+        this.coordShot = document.getElementById('coord-shot');
         this.coordPartId = document.getElementById('coord-partid');
         this.coordDevice = document.getElementById('coord-device');
         this.coordPgm = document.getElementById('coord-pgm');
@@ -115,6 +117,11 @@ export class ChipAnnotator {
 
         // Current image path
         this.currentImagePath = null;
+        this.layoutProcessId = null;
+        this.layoutByEdsChip = new Map();
+        this.shotBoundaryGroups = new Map();
+        this.shotBoundaryVisible = false;
+        this.shotBoundaryColor = 'rgba(170, 85, 210, 0.95)';
 
         // Event handlers (bind once)
         this._onMouseMove = this._handleMouseMove.bind(this);
@@ -143,6 +150,143 @@ export class ChipAnnotator {
         // document 레벨 mousemove: 투명 캔버스가 이벤트를 놓치는 환경 대응
         // canvas 리스너와 중복 시 5ms 디바운스가 자동 필터링
         document.addEventListener('mousemove', this._onMouseMove);
+    }
+
+    setLayoutData(processId, rows) {
+        this.layoutProcessId = processId || null;
+        this.layoutByEdsChip.clear();
+        for (const row of Array.isArray(rows) ? rows : []) {
+            const x = Number(row?.eds_chip_x_pos);
+            const y = Number(row?.eds_chip_y_pos);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+            this.layoutByEdsChip.set(`${x}:${y}`, row);
+        }
+        this._buildShotBoundaryGroups();
+        if (this.hoveredChip) {
+            this._updateCoordinateBox(0, 0, this.hoveredChip);
+        }
+    }
+
+    clearLayoutData() {
+        this.layoutProcessId = null;
+        this.layoutByEdsChip.clear();
+        this.shotBoundaryGroups.clear();
+        this.hoveredChip = null;
+        this._resetChipCoordinateDisplay();
+    }
+
+    setShotBoundaryVisible(visible) {
+        this.shotBoundaryVisible = Boolean(visible);
+        this.render();
+    }
+
+    _buildShotBoundaryGroups() {
+        this.shotBoundaryGroups.clear();
+        if (!Array.isArray(this.chips) || this.chips.length === 0) return;
+
+        this.chips.forEach((chip) => {
+            const layoutRow = this.getLayoutRowForChip(chip);
+            if (!layoutRow || layoutRow.shot_id === undefined || layoutRow.shot_id === null) return;
+            const shotId = String(layoutRow.shot_id).trim();
+            if (!shotId || !chip?.rect) return;
+
+            let group = this.shotBoundaryGroups.get(shotId);
+            if (!group) {
+                group = { shotId, chips: [] };
+                this.shotBoundaryGroups.set(shotId, group);
+            }
+            group.chips.push(chip);
+        });
+    }
+
+    _getShotBoundaryRect(group) {
+        if (!group?.chips?.length) return null;
+
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        group.chips.forEach((chip) => {
+            const rect = chip?.rect;
+            if (!rect) return;
+            minX = Math.min(minX, Number(rect.x0));
+            minY = Math.min(minY, Number(rect.y0));
+            maxX = Math.max(maxX, Number(rect.x1));
+            maxY = Math.max(maxY, Number(rect.y1));
+        });
+        if (![minX, minY, maxX, maxY].every(Number.isFinite)) return null;
+
+        const width = maxX - minX;
+        const height = maxY - minY;
+        if (width <= 0 || height <= 0) return null;
+        return { minX, minY, maxX, maxY, width, height };
+    }
+
+    _renderShotBoundaries() {
+        if (!this.shotBoundaryVisible || this.viewer?.gridMode === true || this.shotBoundaryGroups.size === 0) return;
+
+        const transform = this.viewer.transform;
+        const Y_OFFSET = this.Y_OFFSET || 0;
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.resetTransform();
+        ctx.strokeStyle = this.shotBoundaryColor;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+
+        this.shotBoundaryGroups.forEach((group) => {
+            // Use only the actual matched chip rects. Edge shots stay partial.
+            const boundary = this._getShotBoundaryRect(group);
+            if (!boundary) return;
+
+            const x = boundary.minX * transform.scale + transform.dx;
+            const y = boundary.minY * transform.scale + transform.dy + Y_OFFSET;
+            const width = boundary.width * transform.scale;
+            const height = boundary.height * transform.scale;
+            ctx.strokeRect(x, y, width, height);
+        });
+
+        ctx.restore();
+    }
+
+    getLayoutRowForChip(chip) {
+        const x = Number(chip?.x_abs);
+        const y = Number(chip?.y_abs);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        return this.layoutByEdsChip.get(`${x}:${y}`) || null;
+    }
+
+    formatLayoutPair(x, y) {
+        const values = [Number(x) / 1000, Number(y) / 1000];
+        if (!values.every(Number.isFinite)) return '-';
+        return `(${values[0].toFixed(2)}, ${values[1].toFixed(2)})`;
+    }
+
+    formatLayoutRadius(x, y) {
+        const values = [Number(x) / 1000, Number(y) / 1000];
+        if (!values.every(Number.isFinite)) return '-';
+        return Math.hypot(values[0], values[1]).toFixed(2);
+    }
+
+    formatShotOrder(x, y) {
+        const values = [Number(x), Number(y)];
+        if (!values.every(Number.isFinite)) return '-';
+        const formatValue = (value) => Number.isInteger(value)
+            ? String(value)
+            : value.toFixed(2);
+        return `(${formatValue(values[0])}, ${formatValue(values[1])})`;
+    }
+
+    _resetLayoutCoordinateDisplay() {
+        for (const element of [this.coordRadious, this.coordShot]) {
+            if (element) element.textContent = '-';
+        }
+    }
+
+    _resetChipCoordinateDisplay() {
+        if (this.coordChipCoord) this.coordChipCoord.textContent = '-';
+        if (this.coordChipRel) this.coordChipRel.textContent = '-';
+        this._resetLayoutCoordinateDisplay();
     }
 
     /** 
@@ -1643,6 +1787,9 @@ export class ChipAnnotator {
             }
         }
 
+        // Draw one boundary around all chips that share the same layout shot_id.
+        this._renderShotBoundaries();
+
         // Draw Alt+Drag free-form selection polygon
         if (this.isAltDrag && this.polygonPath.length > 0) {
             ctx.save(); // ✅ transform 누적 방지
@@ -1899,29 +2046,28 @@ export class ChipAnnotator {
      */
     _updateCoordinateBox(imgX, imgY, chip) {
         if (chip) {
-            // 절대 좌표: JSON 파일의 x_abs, y_abs 값 사용 (cal 값 사용 안 함)
-            if (this.coordChipAbs) {
-                const x_abs = chip.x_abs;
-                const y_abs = chip.y_abs;
-                
-                if (x_abs !== undefined && y_abs !== undefined && x_abs !== null && y_abs !== null) {
-                    this.coordChipAbs.textContent = `(${x_abs}, ${y_abs})`;
-                } else {
-                    this.coordChipAbs.textContent = '-';
-                }
+            // Match the current EDS chip (positions x_abs/y_abs) to layout.txt.
+            const layoutRow = this.getLayoutRowForChip(chip);
+            if (this.coordChipCoord) {
+                this.coordChipCoord.textContent = layoutRow
+                    ? this.formatLayoutPair(layoutRow.chip_center_x_pos, layoutRow.chip_center_y_pos)
+                    : '-';
             }
-
-            // 상대 좌표: JSON 파일의 x_cal, y_cal 값 사용
-            // 🔥 중심 기준 좌표: 오른쪽 +x, 위쪽 +y (짝수일 때 좌측 아래 기준)
             if (this.coordChipRel) {
-                const x_cal = chip.x_cal;
-                const y_cal = chip.y_cal;
-
-                if (x_cal !== undefined && y_cal !== undefined && x_cal !== null && y_cal !== null) {
-                    this.coordChipRel.textContent = `(${x_cal}, ${y_cal})`;
-                } else {
-                    this.coordChipRel.textContent = '-';
-                }
+                const x = chip.x_cal;
+                const y = chip.y_cal;
+                this.coordChipRel.textContent = x !== undefined && x !== null &&
+                    y !== undefined && y !== null ? `(${x}, ${y})` : '-';
+            }
+            if (this.coordRadious) {
+                this.coordRadious.textContent = layoutRow
+                    ? this.formatLayoutRadius(layoutRow.chip_center_x_pos, layoutRow.chip_center_y_pos)
+                    : '-';
+            }
+            if (this.coordShot) {
+                this.coordShot.textContent = layoutRow
+                    ? this.formatShotOrder(layoutRow.shot_x_pos, layoutRow.shot_y_pos)
+                    : '-';
             }
             if (this.coordBin) {
                 const raw = chip.b != null ? String(chip.b).trim() : '';
@@ -1930,12 +2076,7 @@ export class ChipAnnotator {
             }
         } else {
             // Chip 위에 없으면 "-" 표시
-            if (this.coordChipAbs) {
-                this.coordChipAbs.textContent = '-';
-            }
-            if (this.coordChipRel) {
-                this.coordChipRel.textContent = '-';
-            }
+            this._resetChipCoordinateDisplay();
             if (this.coordBin) {
                 this.coordBin.textContent = '-';
             }
@@ -2473,12 +2614,7 @@ export class ChipAnnotator {
      */
     _handleMouseLeave(e) {
         // Reset coordinate box
-        if (this.coordChipAbs) {
-            this.coordChipAbs.textContent = '-';
-        }
-        if (this.coordChipRel) {
-            this.coordChipRel.textContent = '-';
-        }
+        this._resetChipCoordinateDisplay();
 
         // Clear hover
         this.hoveredChip = null;
@@ -2621,6 +2757,9 @@ export class ChipAnnotator {
         }
         this.hoveredChip = null;
         this.currentImagePath = null;
+        this.layoutProcessId = null;
+        this.layoutByEdsChip.clear();
+        this.shotBoundaryGroups.clear();
 
         // Clear selection state
         this.isDragging = false;
@@ -2639,12 +2778,7 @@ export class ChipAnnotator {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
         // Reset coordinate box
-        if (this.coordChipAbs) {
-            this.coordChipAbs.textContent = '-';
-        }
-        if (this.coordChipRel) {
-            this.coordChipRel.textContent = '-';
-        }
+        this._resetChipCoordinateDisplay();
         if (this.coordPartId) {
             this.coordPartId.textContent = '-';
         }

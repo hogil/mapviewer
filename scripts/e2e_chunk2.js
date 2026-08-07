@@ -1721,6 +1721,153 @@ const { createRunner } = require('./e2e_playwright_session');
     return data;
   });
 
+  await record('layout-chip-coordinates', 'P001 layout EDS 매칭 / Chip Coord / Shot 순서 / 경계', async () => {
+    const targetFile = 'AAI633_00P_08_20260501_010000_99.6_0_PE_PWQ.png';
+    const folder = 'PW/P001/20260501';
+    await boot('chunk2-layout-chip-coordinates');
+    await loadFolder(folder);
+
+    const target = await page.evaluate(({ targetFile, folder }) => {
+      const v = window.viewer;
+      const index = (v.currentGridImages || []).findIndex((imagePath) =>
+        String(imagePath || '').replace(/\\/g, '/').endsWith(`${folder}/${targetFile}`)
+      );
+      if (index < 0) {
+        return {
+          ok: false,
+          reason: 'layout dummy target missing',
+          gridCount: v.currentGridImages?.length || 0,
+          sample: (v.currentGridImages || []).slice(0, 5),
+        };
+      }
+      return { ok: true, index, imagePath: v.currentGridImages[index] };
+    }, { targetFile, folder });
+    expect(target.ok, JSON.stringify(target));
+
+    await setSelection([target.index]);
+    await enterSingle(target.index);
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.layoutProcessId === 'P001' &&
+        window.viewer.chipAnnotator.layoutByEdsChip?.size === 833 &&
+        window.viewer.chipAnnotator.shotBoundaryGroups?.size === 43 &&
+        document.getElementById('single-shot-boundary-btn') &&
+        window.viewer.chipAnnotator.shotBoundaryVisible === false,
+      null,
+      { timeout: 30000 }
+    );
+
+    const readShotBoundaryPixels = async () => page.evaluate(() => {
+      const annotator = window.viewer?.chipAnnotator;
+      annotator?.render();
+      const overlay = window.viewer?.dom?.overlayCanvas;
+      const pixels = overlay?.width && overlay?.height
+        ? overlay.getContext('2d').getImageData(0, 0, overlay.width, overlay.height).data
+        : null;
+      let shotBoundaryPixels = 0;
+      if (pixels) {
+        for (let index = 0; index < pixels.length; index += 4) {
+          const red = pixels[index];
+          const green = pixels[index + 1];
+          const blue = pixels[index + 2];
+          if (red > 100 && blue > 120 && red > green * 1.2 && blue > green * 1.2) {
+            shotBoundaryPixels += 1;
+          }
+        }
+      }
+      return {
+        visible: annotator?.shotBoundaryVisible === true,
+        shotBoundaryPixels,
+      };
+    });
+
+    const boundaryBefore = await readShotBoundaryPixels();
+    await page.locator('#single-shot-boundary-btn').click();
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.shotBoundaryVisible === true,
+      null,
+      { timeout: 10000 }
+    );
+    const boundaryOn = await readShotBoundaryPixels();
+    await page.locator('#single-shot-boundary-btn').click();
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.shotBoundaryVisible === false,
+      null,
+      { timeout: 10000 }
+    );
+    const boundaryAfter = await readShotBoundaryPixels();
+
+    const data = await page.evaluate(({ boundaryBefore, boundaryOn, boundaryAfter }) => {
+      const v = window.viewer;
+      const chip = (v.chipAnnotator?.chips || []).find((item) =>
+        Number(item?.x_abs) === 10 && Number(item?.y_abs) === 0
+      );
+      v.chipAnnotator?._updateCoordinateBox(0, 0, chip || null);
+      const shotBoundaryGroups = Array.from(v.chipAnnotator?.shotBoundaryGroups?.entries?.() || [])
+        .map(([shotId, group]) => ({
+          shotId,
+          chipCount: group.chips.length,
+          rect: v.chipAnnotator?._getShotBoundaryRect(group),
+          firstChipRect: group.chips[0]?.rect || null,
+        }));
+      const singleChipBoundary = shotBoundaryGroups.find((group) => group.chipCount === 1);
+      const edgeBoundaryMatchesActual = Boolean(
+        singleChipBoundary?.rect && singleChipBoundary?.firstChipRect &&
+        Math.abs(singleChipBoundary.rect.minX - singleChipBoundary.firstChipRect.x0) < 1e-6 &&
+        Math.abs(singleChipBoundary.rect.minY - singleChipBoundary.firstChipRect.y0) < 1e-6 &&
+        Math.abs(singleChipBoundary.rect.maxX - singleChipBoundary.firstChipRect.x1) < 1e-6 &&
+        Math.abs(singleChipBoundary.rect.maxY - singleChipBoundary.firstChipRect.y1) < 1e-6
+      );
+      const layoutRequest = performance.getEntriesByType('resource').some((entry) => {
+        try {
+          const url = new URL(entry.name, location.href);
+          return url.pathname === '/api/layout' && url.searchParams.get('process_id') === 'P001';
+        } catch (_) {
+          return false;
+        }
+      });
+      return {
+        path: v.selectedImagePath,
+        processId: v.chipAnnotator?.layoutProcessId || null,
+        layoutRows: v.chipAnnotator?.layoutByEdsChip?.size || 0,
+        shotBoundaryGroupCount: shotBoundaryGroups.length,
+        shotBoundaryChipCount: shotBoundaryGroups.reduce((sum, group) => sum + group.chipCount, 0),
+        partialShotCount: shotBoundaryGroups.filter((group) => group.chipCount < 24).length,
+        edgeBoundaryMatchesActual,
+        shotBoundaryPixelsBefore: boundaryBefore.shotBoundaryPixels,
+        shotBoundaryPixels: boundaryOn.shotBoundaryPixels,
+        shotBoundaryPixelsAfter: boundaryAfter.shotBoundaryPixels,
+        shotBoundaryVisibleBefore: boundaryBefore.visible,
+        shotBoundaryVisibleOn: boundaryOn.visible,
+        shotBoundaryVisibleAfter: boundaryAfter.visible,
+        chip: chip ? { x_abs: chip.x_abs, y_abs: chip.y_abs } : null,
+        coord: document.getElementById('coord-chip-coord')?.textContent || '',
+        rel: document.getElementById('coord-chip-rel')?.textContent || '',
+        radious: document.getElementById('coord-radious')?.textContent || '',
+        shot: document.getElementById('coord-shot')?.textContent || '',
+        oldAbsElement: !!document.getElementById('coord-chip-abs'),
+        layoutRequest,
+      };
+    }, { boundaryBefore, boundaryOn, boundaryAfter });
+
+    expect(data.path.endsWith(`${folder}/${targetFile}`), `path=${data.path}`);
+    expect(data.processId === 'P001' && data.layoutRows === 833, `layout=${JSON.stringify(data)}`);
+    expect(data.shotBoundaryGroupCount === 43 && data.shotBoundaryChipCount === 833,
+      `shot boundaries=${JSON.stringify(data)}`);
+    expect(data.partialShotCount > 0 && data.edgeBoundaryMatchesActual,
+      `edge shot boundary should use actual chip extents=${JSON.stringify(data)}`);
+    expect(!data.shotBoundaryVisibleBefore && data.shotBoundaryVisibleOn && !data.shotBoundaryVisibleAfter,
+      `shot toggle=${JSON.stringify(data)}`);
+    expect(data.shotBoundaryPixelsBefore < 10 && data.shotBoundaryPixels > 50 && data.shotBoundaryPixelsAfter < 10,
+      `shot boundary pixels=${JSON.stringify(data)}`);
+    expect(data.chip?.x_abs === 10 && data.chip?.y_abs === 0, `chip=${JSON.stringify(data.chip)}`);
+    expect(data.coord === '(-27.50, 77.50)', `coord=${data.coord}`);
+    expect(data.rel === '(-5, -16)', `rel=${data.rel}`);
+    expect(data.radious === '82.23', `radious=${data.radious}`);
+    expect(data.shot === '(-2, 3)', `shot=${data.shot}`);
+    expect(!data.oldAbsElement && data.layoutRequest, `layout display/request=${JSON.stringify(data)}`);
+    return data;
+  });
+
   await record('36,37,38,40', '성능 / 이미지 무결성 / 인덱스', async () => {
     await boot('chunk2-perf');
     const t0 = Date.now();
