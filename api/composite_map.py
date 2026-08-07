@@ -126,6 +126,7 @@ COMPOSITE_SESSION_DIRNAME = "current"
 SQUARE_MAP_CACHE_FILENAME = "square_maps_data.npz"
 _GRADE_RANGE = np.arange(8, dtype=np.uint8)
 _SUBSET_NAME_RE = re.compile(r"^square_(weighted_)?average_([0-7]+)\.(png|jpg|jpeg|webp)$", re.IGNORECASE)
+_SELECTED_REGION_PADDING_PX = 4
 
 
 def _normalize_selected_chip_coords(
@@ -239,6 +240,7 @@ def _copy_positions_without_bin(
     composite_images: List[str],
     keep_chip_bin: bool = False,
     selected_chip_coords: Optional[Sequence[Tuple[int, int]]] = None,
+    selection_crop: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     첫 번째 이미지의 positions.json을 찾아 composite 결과 이미지들에 대응하는
@@ -288,6 +290,9 @@ def _copy_positions_without_bin(
                 elif "b" in chip:
                     del chip["b"]
 
+            if selection_crop:
+                _translate_positions_for_selection_crop(positions_template, selection_crop)
+
         output_dir_rel = output_dir.relative_to(IMAGES_ROOT)
         positions_output_dir = POSITIONS_ROOT / output_dir_rel
         positions_output_dir.mkdir(parents=True, exist_ok=True)
@@ -320,6 +325,118 @@ def _coord_key_from_chip(chip: Any) -> Optional[Tuple[int, int]]:
         return int(x_abs), int(y_abs)
     except (TypeError, ValueError):
         return None
+
+
+def _position_number(value: float) -> Any:
+    """Keep translated positions compact while preserving non-integer scale values."""
+    rounded = round(float(value), 6)
+    return int(rounded) if rounded.is_integer() else rounded
+
+
+def _translate_positions_for_selection_crop(
+    positions_data: Dict[str, Any],
+    selection_crop: Dict[str, Any],
+) -> None:
+    """Translate filtered chip rectangles into a cropped Composite canvas."""
+    coord = positions_data.get("coord")
+    if not isinstance(coord, dict):
+        return
+
+    canvas = coord.get("canvas")
+    if not isinstance(canvas, dict):
+        canvas = {}
+        coord["canvas"] = canvas
+
+    source_width = float(selection_crop.get("source_width") or 0)
+    source_height = float(selection_crop.get("source_height") or 0)
+    crop_x = float(selection_crop.get("x") or 0)
+    crop_y = float(selection_crop.get("y") or 0)
+    crop_width = float(selection_crop.get("width") or 0)
+    crop_height = float(selection_crop.get("height") or 0)
+    canvas_width = float(canvas.get("width") or source_width or 1)
+    canvas_height = float(canvas.get("height") or source_height or 1)
+    scale_x = source_width / canvas_width if source_width > 0 and canvas_width > 0 else 1.0
+    scale_y = source_height / canvas_height if source_height > 0 and canvas_height > 0 else 1.0
+    origin_x = crop_x / scale_x if scale_x else crop_x
+    origin_y = crop_y / scale_y if scale_y else crop_y
+
+    def translate_rect(rect: Any) -> None:
+        if not isinstance(rect, dict):
+            return
+        for key, offset in (("x0", origin_x), ("x1", origin_x), ("y0", origin_y), ("y1", origin_y)):
+            if key not in rect:
+                continue
+            try:
+                rect[key] = _position_number(float(rect[key]) - offset)
+            except (TypeError, ValueError):
+                continue
+        quad = rect.get("quad")
+        if isinstance(quad, list):
+            for point in quad:
+                if not isinstance(point, list) or len(point) < 2:
+                    continue
+                try:
+                    point[0] = _position_number(float(point[0]) - origin_x)
+                    point[1] = _position_number(float(point[1]) - origin_y)
+                except (TypeError, ValueError):
+                    continue
+
+    def translate_chip(chip: Any) -> None:
+        if not isinstance(chip, dict):
+            return
+        translate_rect(chip.get("rect"))
+        # Some legacy positions use x/y/w/h instead of rect.
+        if "rect" not in chip and "x" in chip and "y" in chip:
+            try:
+                chip["x"] = _position_number(float(chip["x"]) - origin_x)
+                chip["y"] = _position_number(float(chip["y"]) - origin_y)
+            except (TypeError, ValueError):
+                pass
+
+    for chip in positions_data.get("chips", []):
+        translate_chip(chip)
+    positions = positions_data.get("positions")
+    if isinstance(positions, dict):
+        for chip in positions.values():
+            translate_chip(chip)
+
+    canvas["width"] = _position_number(crop_width / scale_x if scale_x else crop_width)
+    canvas["height"] = _position_number(crop_height / scale_y if scale_y else crop_height)
+
+    grid_edges = coord.get("grid_edges")
+    if isinstance(grid_edges, dict):
+        for key, origin, limit in (("xs", origin_x, canvas["width"]), ("ys", origin_y, canvas["height"])):
+            values = grid_edges.get(key)
+            if not isinstance(values, list):
+                continue
+            translated = []
+            for value in values:
+                try:
+                    translated.append(_position_number(min(max(float(value) - origin, 0), float(limit))))
+                except (TypeError, ValueError):
+                    continue
+            grid_edges[key] = sorted(set(translated))
+
+
+def _find_selected_region_crop(
+    base_indices: np.ndarray,
+    padding_px: int = _SELECTED_REGION_PADDING_PX,
+) -> Optional[Dict[str, int]]:
+    """Return a tight pixel crop around selected chip rectangles only."""
+    selected_pixels = base_indices != 8
+    ys, xs = np.nonzero(selected_pixels)
+    if xs.size == 0 or ys.size == 0:
+        return None
+
+    height, width = base_indices.shape[:2]
+    padding = max(0, int(padding_px))
+    x0 = max(0, int(xs.min()) - padding)
+    y0 = max(0, int(ys.min()) - padding)
+    x1 = min(width, int(xs.max()) + 1 + padding)
+    y1 = min(height, int(ys.max()) + 1 + padding)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "padding": padding}
 
 
 def _count_unique_devices(image_paths: List[str], max_sample: int = 64) -> int:
@@ -2157,6 +2274,7 @@ def create_composite_heatmaps(
     with Image.open(first_path) as first_img:
         width, height = first_img.size
         source_palette = first_img.getpalette() if first_img.mode == 'P' else None
+    source_width, source_height = width, height
 
     loader_mode = loader_mode or COMPOSITE_LOADER_MODE
     max_workers = max_workers or COMPOSITE_MAX_WORKERS
@@ -2262,6 +2380,15 @@ def create_composite_heatmaps(
     if positions_source_path:
         # device 개수 확인: 첫 번째와 두 번째만 비교 (전체 스캔 대신)
         first_pos = _load_source_positions_data(positions_source_path)
+        if selected_coord_set is not None and isinstance(first_pos, dict):
+            available_coords = {
+                _coord_key_from_chip(chip)
+                for chip in first_pos.get("chips", [])
+                if _coord_key_from_chip(chip) is not None
+            }
+            selected_coord_set &= available_coords
+            if not selected_coord_set:
+                raise ValueError("선택한 Chip/Shot이 원본 positions에 없습니다.")
         first_device = str((first_pos or {}).get("device", "")).strip() if first_pos else ""
         if first_device and len(image_paths) > 1:
             for alt_path in image_paths[1:min(4, len(image_paths))]:
@@ -2294,6 +2421,31 @@ def create_composite_heatmaps(
         # positions.json 없을 때 fallback: chip 영역은 grade0, 나머지는 배경색
         base_indices = np.full((height, width), 8, dtype=np.uint8)
         base_indices[chip_area] = 0
+
+    selection_crop = None
+    if selected_coord_set is not None and positions_source_path:
+        selection_crop = _find_selected_region_crop(base_indices)
+        if selection_crop:
+            selection_crop.update({
+                "source_width": source_width,
+                "source_height": source_height,
+            })
+            crop_x = selection_crop["x"]
+            crop_y = selection_crop["y"]
+            crop_x1 = crop_x + selection_crop["width"]
+            crop_y1 = crop_y + selection_crop["height"]
+            grade_counts = grade_counts[:, crop_y:crop_y1, crop_x:crop_x1].copy()
+            has_0_7 = has_0_7[crop_y:crop_y1, crop_x:crop_x1].copy()
+            has_8_13 = has_8_13[crop_y:crop_y1, crop_x:crop_x1].copy()
+            all_invalid = all_invalid[crop_y:crop_y1, crop_x:crop_x1].copy()
+            base_indices = base_indices[crop_y:crop_y1, crop_x:crop_x1].copy()
+            height, width = base_indices.shape[:2]
+
+    # Recompute masks after a selected-region crop so every output variant uses
+    # the same selected Shot/Chip dimensions.
+    idx_8_13_only = has_8_13 & ~has_0_7
+    invalid_mask = all_invalid
+    invalid_mask_bool = invalid_mask.astype(bool, copy=False) if invalid_mask is not None else None
     chip_inner_mask = (base_indices == 0)
     _mark("mask_and_base_setup", t)
 
@@ -2413,6 +2565,7 @@ def create_composite_heatmaps(
             kwargs={
                 "keep_chip_bin": show_normal_border,
                 "selected_chip_coords": selected_coord_set,
+                "selection_crop": selection_crop,
             },
             daemon=True,
         ).start()
@@ -2440,6 +2593,7 @@ def create_composite_heatmaps(
         "source_images": processed_count,
         "source_image_paths": image_paths,
         "image_size": {"width": width, "height": height},
+        "source_image_size": {"width": source_width, "height": source_height},
         "processing_time": round(total_time, 2),
         "generated_at": timestamp,
         "numba": _numba_runtime_info(
@@ -2450,6 +2604,9 @@ def create_composite_heatmaps(
         ),
         "timings": timings,
     }
+    if selected_coord_set is not None:
+        result["selected_chip_count"] = len(selected_coord_set)
+        result["selection_crop"] = selection_crop
     if sum_map_rel_path:
         result["sum_map_path"] = sum_map_rel_path
     if sum_map_entries:

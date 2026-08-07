@@ -52,8 +52,9 @@ IMAGES_ROOT/composite_map/{login_id}/current
 
 - Chip 모드: 선택한 `x_abs/y_abs` chip만 결과에 포함
 - Shot 모드: 선택한 Shot에 속한 모든 chip 좌표를 포함
-- 선택 영역 밖은 Composite 배경으로 유지
-- 결과 positions도 같은 좌표만 복사하여 단일보기 경계와 이미지가 일치
+- 선택 영역 결과는 전체 wafer 캔버스를 유지하지 않고 chip 사각형의 최소 영역으로 crop하며, 외곽 여백은 4px만 둔다
+- 결과 positions도 같은 좌표만 복사하고 crop 원점만큼 `rect`/`coord.canvas`를 이동하여 단일보기 경계와 이미지가 일치
+- Shot의 chip 수는 요청 목록이 아니라 원본 positions에 실제 존재하는 해당 Shot chip 수로 확정
 - 기존 그리드 이미지 선택 기반 `Composite 만들기` 동작은 변경하지 않음
 
 ## 입력 이미지 규칙

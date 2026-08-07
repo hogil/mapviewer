@@ -1134,7 +1134,10 @@ export class ChipAnnotator {
      */
     getSelectedChipData() {
         const chips = [];
-        this.selectedChips.forEach(chipIdx => {
+        const selectedIndices = this.selectionMode === 'shot'
+            ? this._expandSelectionToShots(Array.from(this.selectedChips))
+            : Array.from(this.selectedChips);
+        selectedIndices.forEach(chipIdx => {
             const chip = this.chips[chipIdx];
             if (chip) {
                 chips.push({

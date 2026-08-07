@@ -10960,7 +10960,14 @@ async def create_composite_map_endpoint(
                     response["numba"] = result["numba"]
                 if selected_chip_coords:
                     response["selection_mode"] = payload.selection_mode or "chip"
-                    response["selected_chip_count"] = len(selected_chip_coords)
+                    response["selected_chip_count"] = result.get(
+                        "selected_chip_count",
+                        len(selected_chip_coords),
+                    )
+                    if result.get("selection_crop"):
+                        response["selection_crop"] = result["selection_crop"]
+                    if result.get("source_image_size"):
+                        response["source_image_size"] = result["source_image_size"]
 
             COMPOSITE_TASKS[task_id]["status"] = "completed"
             COMPOSITE_TASKS[task_id]["progress"] = 100

@@ -17,7 +17,7 @@ argument-hint: [Phase 번호 또는 범위]
 | P1 | 시간 정렬, `H%(PA,TD)` root LOT wildcard, 그리드/단일 네비게이션 순서 | `scripts/e2e_chunk1.js` `sort-lot-filter` |
 | P1 | Composite/Measure fixed 12-BIN SYSTEMATIC grouping and filtered render | `scripts/e2e_chunk1.js` `systematic-bin-group` |
 | P1 | Layout `layout.txt` EDS chip 매칭, Chip Coord/Radious/Shot 순서, Shot 토글/선택 및 shot_id 경계 표시 | `scripts/e2e_chunk2.js` `layout-chip-coordinates` |
-| P1 | 선택 Chip/Shot 영역 Composite Map 및 결과 positions 정합성 | `scripts/e2e_chunk2.js` `selected-region-composite` |
+| P1 | 선택 Chip/Shot 영역 Composite Map 및 결과 positions 정합성, Shot chip 수/선택영역 crop | `scripts/e2e_chunk2.js` `selected-region-composite` |
 | P1 | 기존 Measure 다중선택/탭 복귀/썸네일 무결성 | `30,33,34,35,39`, `41,42,45,47,48,56` |
 | P2 | 전체 63개 Phase와 성능/프로세스 정리 | `run-e2e-playwright.ps1 -Chunk all` |
 
@@ -2035,7 +2035,9 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 5. 선택 상태에서 컨텍스트 메뉴의 `선택 Chip Composite Map 만들기`를 실행하고 `/api/composite-map` payload에 선택 좌표 1개가 포함되는지 확인
    - 완료 결과의 `selection_mode === "chip"`, `selected_chip_count === 1` 확인
    - 결과 positions의 chip 수가 1인지 확인
+   - 결과 이미지가 원본 6400×6400 전체 wafer가 아니라 선택 chip 주변으로 crop되고, 배경 픽셀 비율이 25% 미만인지 확인
 6. 같은 P001 fixture의 한 Shot 좌표 전체를 직접 API 요청하고 완료 결과 positions의 chip 수가 해당 Shot의 실제 chip 수와 같은지 확인
+   - edge partial Shot도 layout이 정의한 실제 chip 수만 포함하고, 결과 crop/positions canvas 원점이 일치하는지 확인
 7. 선택된 칩의 좌표가 정보 패널에 표시:
    - Chip(Coord) 행에 `"x_abs, y_abs"` 형태의 실제 숫자 값
    - Chip(Rel) 행에 실제 칩 격자 인덱스, Radious 행에 소수점 2자리 거리값, Shot 행에 signed order pair

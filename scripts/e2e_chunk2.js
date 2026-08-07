@@ -2231,8 +2231,8 @@ const { createRunner } = require('./e2e_playwright_session');
         compositeSession: v.compositeSession,
       };
     });
-    const chipPixels = await page.evaluate(async ({ imagePath, selectedPoint, outsidePoint }) => {
-      if (!imagePath || !selectedPoint || !outsidePoint) return null;
+    const chipPixels = await page.evaluate(async ({ imagePath, selectedPoint, selectionCrop }) => {
+      if (!imagePath || !selectedPoint) return null;
       const response = await fetch(`/api/image?path=${encodeURIComponent(imagePath)}`, { cache: 'no-store' });
       if (!response.ok) return { responseOk: false };
       const blob = await response.blob();
@@ -2249,10 +2249,28 @@ const { createRunner } = require('./e2e_playwright_session');
         canvas.height = image.naturalHeight;
         canvas.getContext('2d').drawImage(image, 0, 0);
         const context = canvas.getContext('2d');
+        const cropX = Number(selectionCrop?.x) || 0;
+        const cropY = Number(selectionCrop?.y) || 0;
+        const selectedX = Math.round(Number(selectedPoint.x) - cropX);
+        const selectedY = Math.round(Number(selectedPoint.y) - cropY);
+        if (selectedX < 0 || selectedY < 0 || selectedX >= image.naturalWidth || selectedY >= image.naturalHeight) {
+          return { responseOk: false, reason: 'selected point outside cropped image' };
+        }
+        const pixels = context.getImageData(0, 0, image.naturalWidth, image.naturalHeight).data;
+        const background = Array.from(pixels.slice(0, 4));
+        let backgroundCount = 0;
+        for (let i = 0; i < pixels.length; i += 4) {
+          if (pixels[i] === background[0] && pixels[i + 1] === background[1] &&
+              pixels[i + 2] === background[2] && pixels[i + 3] === background[3]) {
+            backgroundCount += 1;
+          }
+        }
         return {
           responseOk: true,
-          selected: Array.from(context.getImageData(Math.round(selectedPoint.x), Math.round(selectedPoint.y), 1, 1).data),
-          outside: Array.from(context.getImageData(Math.round(outsidePoint.x), Math.round(outsidePoint.y), 1, 1).data),
+          imageSize: { width: image.naturalWidth, height: image.naturalHeight },
+          backgroundRatio: backgroundCount / (image.naturalWidth * image.naturalHeight),
+          selected: Array.from(context.getImageData(selectedX, selectedY, 1, 1).data),
+          background,
         };
       } finally {
         URL.revokeObjectURL(url);
@@ -2260,7 +2278,7 @@ const { createRunner } = require('./e2e_playwright_session');
     }, {
       imagePath: chipResult.imagePath,
       selectedPoint: selectionTarget.selectedPoint,
-      outsidePoint: selectionTarget.outsidePoint,
+      selectionCrop: chipResult.compositeSession?.selectionCrop,
     });
     chipResult.pixels = chipPixels;
     expect(chipRequestBody.selection_mode === 'chip', `chip mode=${JSON.stringify(chipRequestBody)}`);
@@ -2271,7 +2289,10 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(chipResult.responseOk && chipResult.positionsChipCount === 1,
       `chip result=${JSON.stringify(chipResult)}`);
     expect(chipResult.pixels?.responseOk &&
-      chipResult.pixels.selected?.join(',') !== chipResult.pixels.outside?.join(','),
+      chipResult.pixels.imageSize?.width < 6400 &&
+      chipResult.pixels.imageSize?.height < 6400 &&
+      chipResult.pixels.backgroundRatio < 0.25 &&
+      chipResult.pixels.selected?.join(',') !== chipResult.pixels.background?.join(','),
     `chip mask pixels=${JSON.stringify(chipResult)}`);
 
     const shotResult = await page.evaluate(async ({ imagePath, shotCoords }) => {
@@ -2304,6 +2325,40 @@ const { createRunner } = require('./e2e_playwright_session');
       }
       const result = status.result || {};
       const image = result.heatmaps?.[0]?.path || result.sum_map_path || '';
+      const imageResponse = await fetch(`/api/image?path=${encodeURIComponent(image)}`, { cache: 'no-store' });
+      if (!imageResponse.ok) throw new Error(`shot output image status=${imageResponse.status}`);
+      const imageBlob = await imageResponse.blob();
+      const imageUrl = URL.createObjectURL(imageBlob);
+      let imageInfo;
+      try {
+        const outputImage = new Image();
+        outputImage.src = imageUrl;
+        await new Promise((resolve, reject) => {
+          outputImage.onload = resolve;
+          outputImage.onerror = reject;
+        });
+        const outputCanvas = document.createElement('canvas');
+        outputCanvas.width = outputImage.naturalWidth;
+        outputCanvas.height = outputImage.naturalHeight;
+        const outputContext = outputCanvas.getContext('2d');
+        outputContext.drawImage(outputImage, 0, 0);
+        const pixels = outputContext.getImageData(0, 0, outputCanvas.width, outputCanvas.height).data;
+        const background = Array.from(pixels.slice(0, 4));
+        let backgroundCount = 0;
+        for (let i = 0; i < pixels.length; i += 4) {
+          if (pixels[i] === background[0] && pixels[i + 1] === background[1] &&
+              pixels[i + 2] === background[2] && pixels[i + 3] === background[3]) {
+            backgroundCount += 1;
+          }
+        }
+        imageInfo = {
+          width: outputCanvas.width,
+          height: outputCanvas.height,
+          backgroundRatio: backgroundCount / (outputCanvas.width * outputCanvas.height),
+        };
+      } finally {
+        URL.revokeObjectURL(imageUrl);
+      }
       const positionsDeadline = Date.now() + 30000;
       let positions = null;
       while (Date.now() < positionsDeadline) {
@@ -2323,13 +2378,18 @@ const { createRunner } = require('./e2e_playwright_session');
       return {
         result,
         outputImage: image,
+        imageInfo,
         positionsChipCount: Array.isArray(positions?.chips) ? positions.chips.length : 0,
       };
     }, { imagePath: target.imagePath, shotCoords: selectionTarget.shotCoords });
     expect(shotResult.result.selection_mode === 'shot' &&
       shotResult.result.selected_chip_count === selectionTarget.shotCoords.length,
-    `shot result metadata=${JSON.stringify({ selectionTarget, shotResult })}`);
-    expect(shotResult.positionsChipCount === selectionTarget.shotCoords.length,
+      `shot result metadata=${JSON.stringify({ selectionTarget, shotResult })}`);
+    expect(shotResult.positionsChipCount === selectionTarget.shotCoords.length &&
+      shotResult.result.selection_crop &&
+      shotResult.imageInfo?.width < 6400 &&
+      shotResult.imageInfo?.height < 6400 &&
+      shotResult.imageInfo?.backgroundRatio < 0.25,
       `shot positions=${JSON.stringify({ selectionTarget, shotResult })}`);
 
     return {

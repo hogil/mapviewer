@@ -9195,6 +9195,7 @@ class WaferMapViewer {
             generatedAt: result.generated_at,
             selectionMode: result.selection_mode || this.lastCompositeSelection?.mode || null,
             selectedChipCount: result.selected_chip_count || this.lastCompositeSelection?.chipCoords?.length || 0,
+            selectionCrop: result.selection_crop || null,
             sumMaps: [],
         };
         this.lastCompositeSourceImages = sourceImages;
