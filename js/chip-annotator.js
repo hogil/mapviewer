@@ -95,8 +95,10 @@ export class ChipAnnotator {
 
         // Colors
         this.gridColor = 'rgba(0, 255, 255, 0.3)';
-        this.hoverColor = 'rgba(255, 255, 255, 0.3)';
-        this.selectedColor = 'rgba(255, 255, 0, 0.25)'; // 🔥 더 투명하게 (0.5 -> 0.25)
+        this.hoverColor = 'rgba(238, 238, 238, 0.85)';
+        this.selectedColor = 'rgba(225, 225, 225, 0.38)';
+        this.selectionPreviewColor = 'rgba(215, 215, 215, 0.26)';
+        this.shotHoverFillColor = 'rgba(225, 225, 225, 0.12)';
         this.markedColor = 'rgba(255, 0, 0, 0.4)';
 
         // Coordinate display elements
@@ -212,14 +214,17 @@ export class ChipAnnotator {
         });
     }
 
-    _getShotChipIndices(chip) {
+    _getShotGroupForChip(chip) {
         const layoutRow = this.getLayoutRowForChip(chip);
         if (!layoutRow || layoutRow.shot_id === undefined || layoutRow.shot_id === null) {
-            return [];
+            return null;
         }
         const shotId = String(layoutRow.shot_id).trim();
-        if (!shotId) return [];
-        const group = this.shotBoundaryGroups.get(shotId);
+        return shotId ? this.shotBoundaryGroups.get(shotId) || null : null;
+    }
+
+    _getShotChipIndices(chip) {
+        const group = this._getShotGroupForChip(chip);
         if (!group) return [];
         if (Array.isArray(group.indices)) return [...group.indices];
         return group.chips
@@ -294,6 +299,31 @@ export class ChipAnnotator {
             ctx.strokeRect(x, y, width, height);
         });
 
+        ctx.restore();
+    }
+
+    _renderHoveredShotBoundary() {
+        if (this.selectionMode !== 'shot' || !this.hoveredChip || this.viewer?.gridMode === true) return;
+
+        const boundary = this._getShotBoundaryRect(this._getShotGroupForChip(this.hoveredChip));
+        if (!boundary) return;
+
+        const transform = this.viewer.transform;
+        const Y_OFFSET = this.Y_OFFSET || 0;
+        const ctx = this.ctx;
+        const x = boundary.minX * transform.scale + transform.dx;
+        const y = boundary.minY * transform.scale + transform.dy + Y_OFFSET;
+        const width = boundary.width * transform.scale;
+        const height = boundary.height * transform.scale;
+
+        ctx.save();
+        ctx.resetTransform();
+        ctx.fillStyle = this.shotHoverFillColor;
+        ctx.fillRect(x, y, width, height);
+        ctx.strokeStyle = this.hoverColor;
+        ctx.lineWidth = Math.max(1.5, 2 * transform.scale);
+        ctx.setLineDash([]);
+        ctx.strokeRect(x, y, width, height);
         ctx.restore();
     }
 
@@ -1822,15 +1852,17 @@ export class ChipAnnotator {
                     !this.selectedChips.has(chipIdx) &&
                     (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(this._normalizeBottomValue(chip.b)))
                 ) {
-                    // 🔥 이미 선택된 chip은 제외 (중복 표시 방지)
-                    this._drawChipRect(chip, 'rgba(255, 255, 0, 0.2)'); // 🔥 더 투명하게 미리보기 (0.3 -> 0.2)
+                    // 이미 선택된 chip은 제외 (중복 표시 방지)
+                    this._drawChipRect(chip, this.selectionPreviewColor);
                 }
             });
         }
 
-        // Draw hovered chip
+        // Chip mode hovers one chip; Shot mode hovers the complete shot extent.
         if (this.hoveredChip) {
-            if (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(this._normalizeBottomValue(this.hoveredChip.b))) {
+            if (this.selectionMode === 'shot') {
+                this._renderHoveredShotBoundary();
+            } else if (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(this._normalizeBottomValue(this.hoveredChip.b))) {
                 this._drawChipRect(this.hoveredChip, this.hoverColor);
             }
         }
@@ -2445,7 +2477,7 @@ export class ChipAnnotator {
             return;
         }
 
-        // 🔥 일반 클릭/드래그 (Ctrl/Shift/Alt 없음): 클릭은 선택, 드래그는 패닝이므로 무시
+        // 일반 클릭/드래그 (Ctrl/Shift/Alt 없음): 선택을 변경하지 않고 패닝만 허용
         if (!e.ctrlKey && !e.shiftKey && !e.altKey && this.clickStartPos) {
             const dragDistance = Math.sqrt(
                 Math.pow(canvasX - this.clickStartPos.x, 2) +
@@ -2456,25 +2488,8 @@ export class ChipAnnotator {
             if (dragDistance > 5) {
                 // 패닝 중이므로 아무것도 하지 않음
             } else {
-                // 🔥 드래그가 없는 일반 클릭: 클릭한 chip 하나를 선택
-                const clickedChip = this.findChipAtPixel(canvasX, canvasY);
-                if (clickedChip) {
-                    const selectionIndices = this._getSelectionIndicesForChip(clickedChip);
-                    this.selectedChips.clear();
-                    selectionIndices.forEach((chipIndex) => this.selectedChips.add(chipIndex));
-                    this.selectedChipsOrder = [...selectionIndices];
-                    console.log(`🖱️ [CLICK] ${this.selectionMode} 선택:`, selectionIndices.length, '개');
-                } else {
-                    const hadSelection = this.selectedChips.size > 0;
-                    this.selectedChips.clear();
-                    this.selectedChipsOrder = [];
-                    if (hadSelection) {
-                        console.log('🖱️ [CLICK] 빈 영역 클릭으로 선택 해제');
-                    } else {
-                        console.log('🖱️ [CLICK] 선택 상태 없음 - 유지');
-                    }
-                }
-                this.updateSelectedChipsList(); // 🔥 Selection 패널 즉시 업데이트
+                // 일반 클릭은 hover만 갱신하고 선택 상태는 유지한다.
+                console.log('🖱️ [CLICK] 선택 상태 유지 (Ctrl/Shift/Alt 필요)');
             }
 
             // 상태 초기화

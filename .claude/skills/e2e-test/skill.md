@@ -2020,22 +2020,22 @@ assert(v.currentGridImages.length === 3);  // 입력한 wafer만
 **목적**: 칩 클릭/다중선택/해제 시 하이라이트와 좌표 표시가 정확한지
 
 **평가 항목**:
-1. 칩 영역 클릭 → 칩 선택 하이라이트 (테두리 또는 색상 변경) 확인
-   - `v.chipAnnotator.selectedChips` 또는 유사 프로퍼티 length > 0
+1. 칩 영역 hover → Chip 모드에서는 해당 칩만 하이라이트되는지 확인
 2. 칩 우클릭 메뉴에서 `Shot 선택` 클릭 → `selectionMode === 'shot'` 확인
-   - 칩 하나를 클릭하면 같은 `layout.txt shot_id`의 칩만 전체 선택
+   - hover 시 개별 칩이 아니라 같은 `layout.txt shot_id`의 실제 전체 범위가 표시
+   - 일반 클릭은 선택 상태를 바꾸지 않음
+   - Ctrl-click으로 같은 `shot_id`의 칩만 전체 선택
    - 선택 결과가 edge partial shot의 실제 칩 수와 일치
-3. 우클릭 메뉴에서 `Chip 선택` 클릭 → 기본 선택 모드로 복귀하고 선택 상태 초기화
-4. 선택된 칩의 좌표가 정보 패널에 표시:
+3. 선택 하이라이트가 노란색이 아닌 은백색 계열인지 확인
+4. 우클릭 메뉴에서 `Chip 선택` 클릭 → 기본 선택 모드로 복귀하고 선택 상태 초기화
+5. 선택된 칩의 좌표가 정보 패널에 표시:
    - Chip(Coord) 행에 `"x_abs, y_abs"` 형태의 실제 숫자 값
    - Chip(Rel) 행에 실제 칩 격자 인덱스, Radious 행에 소수점 2자리 거리값, Shot 행에 signed order pair
-5. Ctrl+클릭으로 추가 칩 선택 → 다중 선택 확인
+6. Ctrl+클릭으로 추가 칩 선택 → 다중 선택 확인
    - 선택 칩 수 2개 이상
-6. 빈 영역 클릭 → 선택 해제
-   - 정보 패널 BIN, Chip(Coord), Chip(Rel), Radious, Shot 모두 "-"로 리셋
-   - 하이라이트 제거
+7. Shift+드래그와 Alt+드래그도 modifier가 눌린 경우에만 선택 범위를 변경하는지 확인
 
-**pass 기준**: 단일선택→좌표표시→다중선택→해제→초기화
+**pass 기준**: hover 범위→일반 클릭 무변경→modifier 선택→좌표표시→모드 복귀→초기화
 
 ---
 

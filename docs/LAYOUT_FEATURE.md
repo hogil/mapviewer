@@ -46,8 +46,11 @@ overlay and is off by default; grid mode does not draw these boundaries.
 Boundary extents come only from the matched chip rectangles, so an edge shot
 with 3x4 chips remains 3x4 instead of being padded to the nominal shot size.
 The single-image chip context menu provides `Chip 선택` and `Shot 선택` modes.
-In Shot mode, click, Ctrl-click, rectangle selection, and lasso selection are
-expanded to all matched chips with the same `shot_id`; the default mode is Chip.
+In Chip mode, hover shows one chip; in Shot mode, hover shows the complete
+matched `shot_id` extent. Plain clicks do not change selection in either mode.
+Ctrl-click/drag, Shift-drag, and Alt-drag are the selection interactions; Shot
+mode expands those interactions to all matched chips with the same `shot_id`.
+The default mode is Chip.
 `Chip(Coord)` and `Radious` are calculated in millimetres and formatted to two
 decimal places, but the UI omits the unit suffix. `Shot` shows the signed
 integer shot order `(x, y)` without a physical-distance unit.

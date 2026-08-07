@@ -1875,6 +1875,7 @@ const { createRunner } = require('./e2e_playwright_session');
       return {
         shotId: group.shotId,
         expectedChipCount: group.indices?.length || group.chips.length,
+        chipKey: `${chip.x_abs}:${chip.y_abs}`,
         x: box.left + (canvasX / canvas.width) * box.width,
         y: box.top + (canvasY / canvas.height) * box.height,
       };
@@ -1893,7 +1894,52 @@ const { createRunner } = require('./e2e_playwright_session');
       null,
       { timeout: 10000 }
     );
+
+    await page.mouse.move(shotSelectionTarget.x, shotSelectionTarget.y);
+    await page.waitForFunction(
+      (expectedChipKey) => {
+        const annotator = window.viewer?.chipAnnotator;
+        const chip = annotator?.hoveredChip;
+        return chip && `${chip.x_abs}:${chip.y_abs}` === expectedChipKey;
+      },
+      shotSelectionTarget.chipKey,
+      { timeout: 10000 }
+    );
+    const shotHover = await page.evaluate(() => {
+      const annotator = window.viewer.chipAnnotator;
+      const group = annotator._getShotGroupForChip(annotator.hoveredChip);
+      return {
+        hoverSelectionCount: annotator._getSelectionIndicesForChip(annotator.hoveredChip).length,
+        hoverBoundary: annotator._getShotBoundaryRect(group),
+        hoverMode: annotator.selectionMode,
+        selectedColor: annotator.selectedColor,
+        previewColor: annotator.selectionPreviewColor,
+        hoverColor: annotator.hoverColor,
+      };
+    });
+    expect(shotHover.hoverMode === 'shot' &&
+      shotHover.hoverSelectionCount === shotSelectionTarget.expectedChipCount &&
+      shotHover.hoverBoundary?.width > 0 && shotHover.hoverBoundary?.height > 0,
+      `shot hover=${JSON.stringify({ shotSelectionTarget, shotHover })}`);
+    expect(![shotHover.selectedColor, shotHover.previewColor, shotHover.hoverColor]
+      .some((color) => String(color).includes('255, 255, 0')),
+    `selection colors must not be yellow=${JSON.stringify(shotHover)}`);
+
     await page.mouse.click(shotSelectionTarget.x, shotSelectionTarget.y);
+    await page.waitForTimeout(100);
+    const plainClickSelection = await page.evaluate(() => ({
+      selectedCount: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+      selectedOrderCount: window.viewer?.chipAnnotator?.selectedChipsOrder?.length || 0,
+    }));
+    expect(plainClickSelection.selectedCount === 0 && plainClickSelection.selectedOrderCount === 0,
+      `plain click changed selection=${JSON.stringify(plainClickSelection)}`);
+
+    await page.keyboard.down('Control');
+    try {
+      await page.mouse.click(shotSelectionTarget.x, shotSelectionTarget.y);
+    } finally {
+      await page.keyboard.up('Control');
+    }
     await page.waitForFunction(
       (expectedCount) => window.viewer?.chipAnnotator?.selectedChips?.size === expectedCount,
       shotSelectionTarget.expectedChipCount,
@@ -1942,7 +1988,15 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(data.radious === '82.23', `radious=${data.radious}`);
     expect(data.shot === '(-2, 3)', `shot=${data.shot}`);
     expect(!data.oldAbsElement && data.layoutRequest, `layout display/request=${JSON.stringify(data)}`);
-    return { ...data, shotSelectionTarget, shotMenuText, shotSelection, chipModeAfter };
+    return {
+      ...data,
+      shotSelectionTarget,
+      shotMenuText,
+      shotHover,
+      plainClickSelection,
+      shotSelection,
+      chipModeAfter,
+    };
   });
 
   await record('36,37,38,40', '성능 / 이미지 무결성 / 인덱스', async () => {
