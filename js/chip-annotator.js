@@ -679,28 +679,34 @@ export class ChipAnnotator {
         return `${positiveModulo(x, cols)}:${positiveModulo(y, rows)}`;
     }
 
-    toggleShotChipSelection(chipIndex) {
-        const index = Number(chipIndex);
-        if (!Number.isInteger(index) || index < 0 || index >= this.chips.length) return null;
+    setShotChipSelections(chipIndices, selected = null) {
+        const indices = [...new Set((Array.isArray(chipIndices) ? chipIndices : [chipIndices])
+            .map(Number)
+            .filter((index) => Number.isInteger(index) && index >= 0 && index < this.chips.length))];
+        const index = indices[0];
+        if (!Number.isInteger(index)) return null;
         const group = this._getShotGroupForChip(this.chips[index]);
         if (!group) return null;
 
         this.selectionMode = 'shot';
         const selectedGroups = [...this._getSelectedShotGroups()];
-        const groups = selectedGroups.length ? selectedGroups : [group];
+        const groups = selectedGroups.length ? selectedGroups : [...this.shotBoundaryGroups.values()];
         const shape = this.getShotGridShape?.() || { cols: 4, rows: 6 };
-        const slot = this._getShotGridSlot(this.chips[index], shape);
         const affectedIndices = new Set();
-        groups.forEach((candidate) => {
-            (candidate.indices || []).forEach((candidateIndex) => {
-                if (slot && this._getShotGridSlot(this.chips[candidateIndex], shape) === slot) {
-                    affectedIndices.add(candidateIndex);
-                }
+        indices.forEach((referenceIndex) => {
+            const slot = this._getShotGridSlot(this.chips[referenceIndex], shape);
+            groups.forEach((candidate) => {
+                (candidate.indices || []).forEach((candidateIndex) => {
+                    if (slot && this._getShotGridSlot(this.chips[candidateIndex], shape) === slot) {
+                        affectedIndices.add(candidateIndex);
+                    }
+                });
             });
         });
         if (affectedIndices.size === 0) affectedIndices.add(index);
 
-        const nextSelected = !this.selectedChips.has(index);
+        const currentlySelected = [...affectedIndices].every((affectedIndex) => this.selectedChips.has(affectedIndex));
+        const nextSelected = typeof selected === 'boolean' ? selected : !currentlySelected;
         affectedIndices.forEach((affectedIndex) => {
             if (nextSelected) {
                 this.selectedChips.add(affectedIndex);
@@ -711,10 +717,6 @@ export class ChipAnnotator {
                 if (orderIndex !== -1) this.selectedChipsOrder.splice(orderIndex, 1);
             }
         });
-        if (!this.selectedChips.has(index) && nextSelected) {
-            this.selectedChips.add(index);
-            if (!this.selectedChipsOrder.includes(index)) this.selectedChipsOrder.push(index);
-        }
         this.render();
         this.updateSelectedChipsList();
         return {
@@ -725,6 +727,10 @@ export class ChipAnnotator {
             affectedShotIds: groups.map((candidate) => String(candidate.shotId)),
             affectedChipCount: affectedIndices.size,
         };
+    }
+
+    toggleShotChipSelection(chipIndex) {
+        return this.setShotChipSelections([chipIndex]);
     }
 
     formatLayoutPair(x, y) {

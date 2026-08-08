@@ -2781,6 +2781,41 @@ const { createRunner } = require('./e2e_playwright_session');
       quickPickerInitial.selectedChips === 0 && quickPickerInitial.initialShotGroups === 1 &&
       quickPickerInitial.initialShotCells === 24 && quickPickerInitial.initialShotChecked === 0,
     `quick picker initial=${JSON.stringify(quickPickerInitial)}`);
+    const initialShotChipButtons = page.locator('#chip-coordinate-select-shot-picker button[data-coordinate-shot-chip-index]');
+    await initialShotChipButtons.first().click();
+    await page.waitForFunction(
+      () => {
+        const annotator = window.viewer?.chipAnnotator;
+        return annotator?.selectionMode === 'shot' &&
+          annotator._getSelectedShotGroups?.().size === annotator.shotBoundaryGroups?.size;
+      },
+      null,
+      { timeout: 10000 }
+    );
+    await initialShotChipButtons.first().click({ button: 'right' });
+    await page.waitForFunction(() => window.viewer?.chipAnnotator?.selectedChips?.size === 0, null, { timeout: 10000 });
+    await initialShotChipButtons.first().focus();
+    await page.keyboard.press('Control+A');
+    await page.waitForFunction(
+      () => {
+        const annotator = window.viewer?.chipAnnotator;
+        return annotator?.selectionMode === 'shot' &&
+          annotator._getSelectedShotGroups?.().size === annotator.shotBoundaryGroups?.size;
+      },
+      null,
+      { timeout: 10000 }
+    );
+    await initialShotChipButtons.first().click({ button: 'right' });
+    await page.waitForFunction(() => window.viewer?.chipAnnotator?.selectedChips?.size === 0, null, { timeout: 10000 });
+    await initialShotChipButtons.first().click();
+    await initialShotChipButtons.nth(3).click({ modifiers: ['Shift'] });
+    await page.waitForFunction(
+      () => document.querySelectorAll('#chip-coordinate-select-shot-picker button[aria-checked="true"]').length === 4,
+      null,
+      { timeout: 10000 }
+    );
+    await initialShotChipButtons.first().click({ button: 'right' });
+    await page.waitForFunction(() => window.viewer?.chipAnnotator?.selectedChips?.size === 0, null, { timeout: 10000 });
     await page.locator('[data-coordinate-quick-search="shot"]').fill(
       `(${selectionTarget.shotRows[0].x}, ${selectionTarget.shotRows[0].y})`
     );

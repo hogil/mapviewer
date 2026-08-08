@@ -3085,7 +3085,7 @@
 
         .coordinate-select-list-panels {
             display: grid;
-            grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) minmax(0, 1fr);
+            grid-template-columns: minmax(0, 7fr) minmax(0, 7fr) minmax(0, 6fr);
             gap: 8px;
         }
 
@@ -3467,16 +3467,6 @@
             color: #eaf3f8;
             font-size: 11px;
             font-weight: 600;
-        }
-
-        .coordinate-select-shot-picker-heading strong {
-            flex: 0 0 auto;
-            padding: 3px 7px;
-            background: #273842;
-            color: #d8edf8;
-            border: 1px solid #607b8a;
-            border-radius: 3px;
-            font: 600 10px/1.2 Consolas, "Courier New", monospace;
         }
 
         .coordinate-select-shot-group {

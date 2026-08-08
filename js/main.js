@@ -1061,6 +1061,7 @@ class WaferMapViewer {
         };
         this.coordinateSelectionActiveList = 'shot';
         this.coordinateSelectionActiveShotId = null;
+        this.coordinateSelectionShotPickerAnchorIndex = null;
         this.coordinateSelectionRadiusMm = null;
         this.coordinateSelectionTarget = 'shot-grid';
         this.coordinateSelectionOperation = 'replace';
@@ -9951,9 +9952,41 @@ class WaferMapViewer {
         dom.coordinateSelectShotPicker?.addEventListener('click', (event) => {
             const button = event.target.closest?.('button[data-coordinate-shot-chip-index]');
             if (!button) return;
-            const result = this.chipAnnotator?.toggleShotChipSelection?.(button.dataset.coordinateShotChipIndex);
+            const buttons = [...dom.coordinateSelectShotPicker.querySelectorAll('button[data-coordinate-shot-chip-index]')];
+            const index = Number(button.dataset.coordinateShotChipIndex);
+            const anchorPosition = buttons.findIndex((candidate) =>
+                Number(candidate.dataset.coordinateShotChipIndex) === this.coordinateSelectionShotPickerAnchorIndex);
+            const targetPosition = buttons.indexOf(button);
+            const selectedIndices = event.shiftKey && anchorPosition !== -1 && targetPosition !== -1
+                ? buttons.slice(Math.min(anchorPosition, targetPosition), Math.max(anchorPosition, targetPosition) + 1)
+                    .map((candidate) => Number(candidate.dataset.coordinateShotChipIndex))
+                : [index];
+            const result = this.chipAnnotator?.setShotChipSelections?.(
+                selectedIndices,
+                event.shiftKey && anchorPosition !== -1 ? true : null
+            );
             if (!result) return;
-            this.coordinateSelectionActiveShotId = String(result.shotId);
+            if (!event.shiftKey) this.coordinateSelectionShotPickerAnchorIndex = index;
+            this._setCoordinateSelectionError('');
+            this._updateCoordinateSelectionSummary();
+            this._renderCoordinateSelectionShotPicker();
+        });
+        dom.coordinateSelectShotPicker?.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+            this.coordinateSelectionShotPickerAnchorIndex = null;
+            this.chipAnnotator?.clearSelection?.();
+            this._setCoordinateSelectionError('');
+            this._updateCoordinateSelectionSummary();
+            this._renderCoordinateSelectionShotPicker();
+        });
+        dom.coordinateSelectShotPicker?.addEventListener('keydown', (event) => {
+            if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'a') return;
+            event.preventDefault();
+            const indices = [...dom.coordinateSelectShotPicker.querySelectorAll('button[data-coordinate-shot-chip-index]')]
+                .map((button) => Number(button.dataset.coordinateShotChipIndex));
+            const result = this.chipAnnotator?.setShotChipSelections?.(indices, true);
+            if (!result) return;
+            this.coordinateSelectionShotPickerAnchorIndex = indices[0] ?? null;
             this._setCoordinateSelectionError('');
             this._updateCoordinateSelectionSummary();
             this._renderCoordinateSelectionShotPicker();
@@ -10004,6 +10037,7 @@ class WaferMapViewer {
         const dom = this.dom;
         if (!dom?.coordinateSelectModal) return;
         this.chipAnnotator?.clearSelection?.();
+        this.coordinateSelectionShotPickerAnchorIndex = null;
         this.coordinateSelectionLists = {
             shot: { rows: this._newCoordinateSelectionListRows('shot'), hasInput: false },
             chip: { rows: this._newCoordinateSelectionListRows('chip'), hasInput: false },
