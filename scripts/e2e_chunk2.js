@@ -2797,13 +2797,13 @@ const { createRunner } = require('./e2e_playwright_session');
       quickPickerInitial.shotParent === 'shot' && quickPickerInitial.chipParent === 'chip' &&
       quickPickerInitial.selectedChips === 0 && quickPickerInitial.initialShotGroups === 1 &&
       quickPickerInitial.initialShotCells === 24 &&
-      quickPickerInitial.initialShotLabels.join(',') === Array.from({ length: 24 }, (_, index) => String(index + 1)).join(',') &&
+      quickPickerInitial.initialShotLabels.join(',') === Array.from({ length: 24 }, (_, index) => String(index)).join(',') &&
       quickPickerInitial.initialShotChecked === 0,
     `quick picker initial=${JSON.stringify(quickPickerInitial)}`);
-    const initialShotChipOne = page.locator('#chip-coordinate-select-shot-picker button[data-coordinate-shot-chip-id="1"]');
-    const initialShotChipFour = page.locator('#chip-coordinate-select-shot-picker button[data-coordinate-shot-chip-id="4"]');
-    const initialShotChipSeven = page.locator('#chip-coordinate-select-shot-picker button[data-coordinate-shot-chip-id="7"]');
-    await initialShotChipOne.click();
+    const initialShotChipZero = page.locator('#chip-coordinate-select-shot-picker button[data-coordinate-shot-position="0"]');
+    const initialShotChipThree = page.locator('#chip-coordinate-select-shot-picker button[data-coordinate-shot-position="3"]');
+    const initialShotChipSix = page.locator('#chip-coordinate-select-shot-picker button[data-coordinate-shot-position="6"]');
+    await initialShotChipZero.click();
     await page.waitForFunction(
       () => {
         const annotator = window.viewer?.chipAnnotator;
@@ -2829,9 +2829,9 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(paletteLinked.selected > 0 && paletteLinked.shotRows.length === paletteLinked.selectedShots * 2 &&
       paletteLinked.chipRows.length === paletteLinked.selected * 2 && paletteLinked.chipIds.length === 1,
     `palette linked lists=${JSON.stringify(paletteLinked)}`);
-    await initialShotChipOne.click({ button: 'right' });
+    await initialShotChipZero.click({ button: 'right' });
     await page.waitForFunction(() => window.viewer?.chipAnnotator?.selectedChips?.size === 0, null, { timeout: 10000 });
-    await initialShotChipOne.focus();
+    await initialShotChipZero.focus();
     await page.keyboard.press('Control+A');
     await page.waitForFunction(
       () => {
@@ -2842,20 +2842,20 @@ const { createRunner } = require('./e2e_playwright_session');
       null,
       { timeout: 10000 }
     );
-    await initialShotChipOne.click({ button: 'right' });
+    await initialShotChipZero.click({ button: 'right' });
     await page.waitForFunction(() => window.viewer?.chipAnnotator?.selectedChips?.size === 0, null, { timeout: 10000 });
-    await initialShotChipOne.click();
-    await initialShotChipFour.click({ modifiers: ['Shift'] });
+    await initialShotChipZero.click();
+    await initialShotChipThree.click({ modifiers: ['Shift'] });
     await page.waitForFunction(
       () => document.querySelectorAll('#chip-coordinate-select-shot-picker button[aria-checked="true"]').length === 4,
       null,
       { timeout: 10000 }
     );
-    await initialShotChipOne.click({ button: 'right' });
+    await initialShotChipZero.click({ button: 'right' });
     await page.waitForFunction(() => window.viewer?.chipAnnotator?.selectedChips?.size === 0, null, { timeout: 10000 });
-    await initialShotChipOne.click();
-    const dragStart = await initialShotChipOne.boundingBox();
-    const dragEnd = await initialShotChipSeven.boundingBox();
+    await initialShotChipZero.click();
+    const dragStart = await initialShotChipZero.boundingBox();
+    const dragEnd = await initialShotChipSix.boundingBox();
     expect(dragStart && dragEnd, 'Shot picker Shift-drag cells need visible bounds');
     await page.keyboard.down('Shift');
     await page.mouse.move(dragStart.x + dragStart.width / 2, dragStart.y + dragStart.height / 2);
@@ -2874,7 +2874,7 @@ const { createRunner } = require('./e2e_playwright_session');
     );
     expect(dragPreview.marquee === 1 && dragPreview.previewed === 6,
       `Shot picker partial-intersection marquee=${JSON.stringify(dragPreview)}`);
-    await initialShotChipOne.click({ button: 'right' });
+    await initialShotChipZero.click({ button: 'right' });
     await page.waitForFunction(() => window.viewer?.chipAnnotator?.selectedChips?.size === 0, null, { timeout: 10000 });
     await page.locator('[data-coordinate-quick-search="shot"]').fill(`X=${selectionTarget.shotRows[0].x}`);
     const wildcardBatch = page.locator('[data-coordinate-quick-dropdown="shot"] .coordinate-select-quick-option-batch');
@@ -2907,7 +2907,7 @@ const { createRunner } = require('./e2e_playwright_session');
       selectionTarget.shotRows[0].x,
       { timeout: 10000 }
     );
-    await initialShotChipOne.click({ button: 'right' });
+    await initialShotChipZero.click({ button: 'right' });
     await page.waitForFunction(() => window.viewer?.chipAnnotator?.selectedChips?.size === 0, null, { timeout: 10000 });
     await page.locator('[data-coordinate-quick-search="shot"]').fill(
       `(${selectionTarget.shotRows[0].x}, ${selectionTarget.shotRows[0].y})`
@@ -2960,7 +2960,7 @@ const { createRunner } = require('./e2e_playwright_session');
       null,
       { timeout: 10000 }
     );
-    await initialShotChipOne.click({ button: 'right' });
+    await initialShotChipZero.click({ button: 'right' });
     await page.waitForFunction(() => window.viewer?.chipAnnotator?.selectedChips?.size === 0, null, { timeout: 10000 });
     const quickShotClearState = await page.evaluate(() => ({
       shot: [...document.querySelectorAll('#chip-coordinate-select-shot-tbody input[data-coordinate-row]')]
@@ -3007,6 +3007,9 @@ const { createRunner } = require('./e2e_playwright_session');
       coordinateListViewportMaxHeights: ['shot', 'chip'].map((name) => getComputedStyle(document.querySelector(
         `[data-coordinate-list-panel="${name}"] .coordinate-select-list-table-wrap`
       )).maxHeight),
+      coordinateListViewportOverflow: ['shot', 'chip'].map((name) => getComputedStyle(document.querySelector(
+        `[data-coordinate-list-panel="${name}"] .coordinate-select-list-table-wrap`
+      )).overflowY),
       hasSummary: !!document.getElementById('chip-coordinate-select-summary'),
       hasHint: !!document.getElementById('chip-coordinate-select-hint'),
       modeless: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).pointerEvents === 'none',
@@ -3014,7 +3017,8 @@ const { createRunner } = require('./e2e_playwright_session');
       ariaModal: document.querySelector('.coordinate-select-modal-content')?.getAttribute('aria-modal'),
     }));
     expect(initialModal.listPanels === 3 && initialModal.listColumnCounts.join(',') === '3,3,2' &&
-      initialModal.coordinateListViewportMaxHeights.every((height) => height === 'none') &&
+      initialModal.coordinateListViewportMaxHeights.every((height) => height === '96px') &&
+      initialModal.coordinateListViewportOverflow.every((overflow) => overflow === 'auto') &&
       !initialModal.hasSummary && !initialModal.hasHint && initialModal.modeless &&
       initialModal.position === 'fixed' && initialModal.ariaModal === 'false', `initial modal=${JSON.stringify(initialModal)}`);
     await pasteIntoList('shot',
@@ -3070,15 +3074,15 @@ const { createRunner } = require('./e2e_playwright_session');
         checked: document.querySelectorAll('#chip-coordinate-select-shot-picker button[aria-checked="true"]').length,
         shape,
         activeShotId,
-        firstChipId: firstButton?.dataset.coordinateShotChipId || '',
-        expectedFirstChipId: expectedFirst?.layout?.chip_id == null ? '' : String(expectedFirst.layout.chip_id),
+        firstPosition: firstButton?.dataset.coordinateShotPosition || '',
+        expectedFirstPosition: expectedFirst ? String(annotator.getShotPositionForChip?.(annotator.chips[expectedFirst.index]) ?? '') : '',
       };
     });
     expect(
       shotPicker.visible && shotPicker.groupCount === 1 &&
         shotPicker.grids.length === 1 && shotPicker.grids.every((grid) => grid.cells === 24 && grid.chips === 24 && grid.empty === 0) &&
         shotPicker.checked === 24 && shotPicker.shape?.cols === 4 && shotPicker.shape?.rows === 6 &&
-        shotPicker.firstChipId === shotPicker.expectedFirstChipId,
+        shotPicker.firstPosition === shotPicker.expectedFirstPosition,
       `shot picker=${JSON.stringify(shotPicker)}`
     );
     const pickerPlacement = await page.evaluate(() => {

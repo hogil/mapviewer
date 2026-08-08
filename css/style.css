@@ -2978,6 +2978,8 @@
             display: flex;
             flex-direction: column;
             gap: 7px;
+            flex-shrink: 0;
+            scroll-margin-top: 8px;
             padding: 8px;
             background: #191919;
             border: 1px solid #3d3d3d;
@@ -3019,7 +3021,7 @@
 
         .coordinate-select-range-axis {
             display: grid;
-            grid-template-columns: 46px minmax(0, 1fr) 66px minmax(0, 1fr) 66px;
+            grid-template-columns: 78px minmax(0, 1fr) 66px minmax(0, 1fr) 66px;
             align-items: center;
             gap: 6px;
             color: #aaa;
@@ -3027,6 +3029,10 @@
         }
 
         .coordinate-select-range-axis > span:first-child {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
             color: #ddd;
             font-weight: 600;
         }
@@ -3092,8 +3098,9 @@
 
         .coordinate-select-list-panels {
             display: grid;
-            grid-template-columns: minmax(0, 3fr) minmax(0, 3fr) minmax(0, 4fr);
+            grid-template-columns: minmax(88px, 14fr) minmax(88px, 14fr) minmax(0, 72fr);
             gap: 8px;
+            align-items: start;
         }
 
         .coordinate-select-list-panel {
@@ -3101,6 +3108,7 @@
             flex-direction: column;
             gap: 5px;
             min-width: 0;
+            min-height: 0;
             padding: 6px;
             background: #191919;
             border: 1px solid #454545;
@@ -3249,7 +3257,8 @@
         }
 
         .coordinate-select-list-table-wrap {
-            max-height: 82px;
+            height: 112px;
+            max-height: 112px;
             overflow: auto;
             border: 1px solid #414141;
             background: #171717;
@@ -3257,14 +3266,22 @@
 
         .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table-wrap,
         .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table-wrap {
-            flex: 1 1 auto;
+            flex: 0 0 96px;
+            height: 96px;
             min-height: 0;
-            max-height: none;
+            max-height: 96px;
+        }
+
+        .coordinate-select-list-panel[data-coordinate-list-panel="chipId"] .coordinate-select-list-table-wrap {
+            flex: 0 0 126px;
+            height: 126px;
+            min-height: 0;
+            max-height: 126px;
         }
 
         .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table,
         .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table {
-            width: 126px;
+            width: 100%;
         }
 
         .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table th:nth-child(1),
@@ -3275,7 +3292,21 @@
         .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table td:nth-child(1),
         .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table th:nth-child(2),
         .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table td:nth-child(2) {
-            width: 44px;
+            width: 37%;
+        }
+
+        .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table th:nth-child(1),
+        .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table td:nth-child(1),
+        .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table th:nth-child(1),
+        .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table td:nth-child(1) {
+            width: 37%;
+        }
+
+        .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table th:nth-child(3),
+        .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table td:nth-child(3),
+        .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table th:nth-child(3),
+        .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table td:nth-child(3) {
+            width: 26%;
         }
 
         .coordinate-select-table.coordinate-select-list-table th:nth-child(1),
@@ -3419,7 +3450,8 @@
             display: flex;
             flex-direction: column;
             gap: 9px;
-            max-height: 390px;
+            max-height: 300px;
+            min-height: 0;
             overflow: auto;
             margin-top: 2px;
             padding: 9px;
@@ -3550,7 +3582,7 @@
             }
 
             .coordinate-select-range-axis {
-                grid-template-columns: 40px minmax(0, 1fr) 58px minmax(0, 1fr) 58px;
+                grid-template-columns: 70px minmax(0, 1fr) 58px minmax(0, 1fr) 58px;
             }
 
             .coordinate-select-table-actions {

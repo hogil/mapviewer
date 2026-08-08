@@ -622,6 +622,18 @@ export class ChipAnnotator {
         return `${positiveModulo(x, cols)}:${positiveModulo(y, rows)}`;
     }
 
+    getShotPositionForChip(chip, shape = this.getShotGridShape?.()) {
+        const cols = Math.max(1, Number(shape?.cols) || 4);
+        const rows = Math.max(1, Number(shape?.rows) || 6);
+        const slot = String(this._getShotGridSlot(chip, { cols, rows }) || '');
+        const [slotX, slotY] = slot.split(':').map(Number);
+        if (!Number.isInteger(slotX) || !Number.isInteger(slotY) ||
+            slotX < 0 || slotX >= cols || slotY < 0 || slotY >= rows) {
+            return null;
+        }
+        return (rows - slotY - 1) * cols + slotX;
+    }
+
     setShotChipSelections(chipIndices, selected = null) {
         const indices = [...new Set((Array.isArray(chipIndices) ? chipIndices : [chipIndices])
             .map(Number)
@@ -746,10 +758,13 @@ export class ChipAnnotator {
                     coordinateMatched = near(Number(row.x), x, 0.051) && near(Number(row.y), y, 0.051);
                 }
                 const chipId = layout?.chip_id ?? chip?.chip_id;
-                const chipIdMatched = !hasChipId || normalizeId(chipId) === normalizeId(row.value);
-                const isScopedChipId = hasChipId && !hasCoordinate && restrictToSelectedShots;
-                if (isScopedChipId && !shotScope.has(chipIndex)) return;
-                if (coordinateMatched && chipIdMatched) rowMatches.push(chipIndex);
+                const shotPosition = this.getShotPositionForChip(chip);
+                const valueMatched = !hasChipId || (target === 'shot-position'
+                    ? Number.isInteger(Number(row.value)) && shotPosition === Number(row.value)
+                    : normalizeId(chipId) === normalizeId(row.value));
+                const isScopedShotValue = hasChipId && !hasCoordinate && restrictToSelectedShots;
+                if (isScopedShotValue && !shotScope.has(chipIndex)) return;
+                if (coordinateMatched && valueMatched) rowMatches.push(chipIndex);
             });
             if (rowMatches.length > 0) {
                 matchedRows.push(rowIndex);
@@ -816,6 +831,8 @@ export class ChipAnnotator {
                 y = Number(layout?.chip_center_y_pos) / 1000;
             } else if (target === 'chip-id') {
                 x = Number(layout?.chip_id ?? chip?.chip_id);
+            } else if (target === 'shot-position') {
+                x = Number(this.getShotPositionForChip(chip));
             } else if (target === 'radius') {
                 const centerX = Number(layout?.chip_center_x_pos) / 1000;
                 const centerY = Number(layout?.chip_center_y_pos) / 1000;

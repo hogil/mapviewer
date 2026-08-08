@@ -9252,7 +9252,7 @@ class WaferMapViewer {
         this.closeCoordinateSelectionModal();
     }
 
-    // Coordinate selection v2: independent Shot, Chip, and Chip ID lists.
+    // Coordinate selection v2: independent Shot, Chip, and Shot Position lists.
     // The older single-table implementation remains above for compatibility with
     // persisted pages, but these methods are the active definitions.
     _coordinateSelectionListConfig(listName = this.coordinateSelectionActiveList) {
@@ -9273,9 +9273,9 @@ class WaferMapViewer {
             },
             chipId: {
                 columns: 1,
-                headers: ['ID'],
-                label: 'Chip ID',
-                target: 'chip-id',
+                headers: ['Pos'],
+                label: 'Shot Position',
+                target: 'shot-position',
                 integer: true,
             },
         };
@@ -9402,7 +9402,7 @@ class WaferMapViewer {
         const seen = new Set();
         annotator.chips.forEach((chip) => {
             const layout = annotator.getLayoutRowForChip?.(chip);
-            const chipId = String(layout?.chip_id ?? chip?.chip_id ?? '').trim();
+            const shotPosition = annotator.getShotPositionForChip?.(chip);
             const gridX = Number(chip?.x_abs);
             const gridY = Number(chip?.y_abs);
             if (Number.isInteger(gridX) && Number.isInteger(gridY)) {
@@ -9410,8 +9410,8 @@ class WaferMapViewer {
                 if (!seen.has(key)) {
                     seen.add(key);
                     options.push({
-                        label: `(${gridX}, ${gridY}) · ID ${chipId || '-'}`,
-                        searchText: `grid ${gridX} ${gridY} ${chipId}`,
+                        label: `(${gridX}, ${gridY}) · Pos ${shotPosition ?? '-'}`,
+                        searchText: `grid ${gridX} ${gridY} ${shotPosition ?? ''}`,
                         group: 'Chip(Grid)',
                         values: [String(gridX), String(gridY)],
                     });
@@ -9426,8 +9426,8 @@ class WaferMapViewer {
                 if (!seen.has(key)) {
                     seen.add(key);
                     options.push({
-                        label: `(${formattedX}, ${formattedY}) mm · ID ${chipId || '-'}`,
-                        searchText: `pos ${formattedX} ${formattedY} ${chipId}`,
+                        label: `(${formattedX}, ${formattedY}) mm · Pos ${shotPosition ?? '-'}`,
+                        searchText: `pos ${formattedX} ${formattedY} ${shotPosition ?? ''}`,
                         group: 'Chip(Pos) mm',
                         values: [formattedX, formattedY],
                     });
@@ -9626,11 +9626,11 @@ class WaferMapViewer {
             if (values.every((value) => !value)) return;
             if (listName === 'chipId') {
                 if (!values[0]) {
-                    error ||= `${index + 1}행: Chip ID를 입력하세요.`;
+                    error ||= `${index + 1}행: Shot Position을 입력하세요.`;
                     return;
                 }
                 if (!integerPattern.test(values[0])) {
-                    error ||= `${index + 1}행: Chip ID는 정수여야 합니다.`;
+                    error ||= `${index + 1}행: Shot Position은 정수여야 합니다.`;
                     return;
                 }
                 rows.push({ value: values[0], rowNumber: index + 1 });
@@ -9816,7 +9816,6 @@ class WaferMapViewer {
                     index,
                     chip,
                     layout,
-                    chipId: String(layout?.chip_id ?? chip.chip_id ?? '').trim(),
                     slotX: positiveModulo(x, cols),
                     slotY: positiveModulo(y, rows),
                 };
@@ -9825,7 +9824,6 @@ class WaferMapViewer {
                 index,
                 chip,
                 layout,
-                chipId: String(layout?.chip_id ?? chip.chip_id ?? '').trim(),
                 slotX,
                 slotY,
             };
@@ -9855,7 +9853,7 @@ class WaferMapViewer {
         if (!template) return null;
 
         // A 0,0 reference may be partial on an edge wafer. Fill missing standard slots
-        // from other Shots so this remains a complete Chip ID palette, never a partial Shot view.
+        // from other Shots so this remains a complete Shot Position palette, never a partial Shot view.
         const slots = new Map(template.slots);
         [...candidates].sort(orderByOrigin).forEach((candidate) => {
             candidate.slots.forEach((entry, key) => {
@@ -9876,7 +9874,7 @@ class WaferMapViewer {
         if (!fullShot) {
             const empty = document.createElement('div');
             empty.className = 'coordinate-select-shot-picker-empty';
-            empty.textContent = 'Chip ID 배치를 만들 layout 데이터가 없습니다.';
+            empty.textContent = 'Shot Position 배치를 만들 layout 데이터가 없습니다.';
             picker.appendChild(empty);
             return;
         }
@@ -9918,13 +9916,13 @@ class WaferMapViewer {
                 button.type = 'button';
                 button.className = 'coordinate-select-shot-chip';
                 button.dataset.coordinateShotChipIndex = String(entry.index);
-                const slotChipId = (rows - slotY - 1) * cols + slotX + 1;
-                button.dataset.coordinateShotChipId = String(slotChipId);
+                const shotPosition = (rows - slotY - 1) * cols + slotX;
+                button.dataset.coordinateShotPosition = String(shotPosition);
                 button.dataset.coordinateShotSlot = `${slotX}:${slotY}`;
                 button.style.gridColumn = String(slotX + 1);
                 button.style.gridRow = String(slotY + 1);
-                button.textContent = String(slotChipId);
-                button.title = `Chip ID ${slotChipId}`;
+                button.textContent = String(shotPosition);
+                button.title = `Shot Position ${shotPosition}`;
                 button.setAttribute('role', 'checkbox');
                 button.setAttribute('aria-checked', isSlotSelected(entry) ? 'true' : 'false');
                 grid.appendChild(button);
@@ -9973,10 +9971,10 @@ class WaferMapViewer {
                     rowsByList.chip.push([String(chipX), String(chipY)]);
                 }
             }
-            const chipId = String(layout?.chip_id ?? chip?.chip_id ?? '').trim();
-            if (chipId && !seen.chipId.has(chipId)) {
-                seen.chipId.add(chipId);
-                rowsByList.chipId.push([chipId]);
+            const shotPosition = annotator.getShotPositionForChip?.(chip);
+            if (Number.isInteger(shotPosition) && !seen.chipId.has(shotPosition)) {
+                seen.chipId.add(shotPosition);
+                rowsByList.chipId.push([String(shotPosition)]);
             }
         });
         rowsByList.shot.sort((left, right) => Number(left[1]) - Number(right[1]) || Number(left[0]) - Number(right[0]));
@@ -10121,7 +10119,7 @@ class WaferMapViewer {
         });
         const shotPicker = dom.coordinateSelectShotPicker;
         const shotPickerButtons = () => [...(shotPicker?.querySelectorAll('button[data-coordinate-shot-chip-index]') || [])]
-            .sort((left, right) => Number(left.dataset.coordinateShotChipId) - Number(right.dataset.coordinateShotChipId));
+            .sort((left, right) => Number(left.dataset.coordinateShotPosition) - Number(right.dataset.coordinateShotPosition));
         const applyShotPickerRange = (anchorIndex, targetIndex) => {
             const buttons = shotPickerButtons();
             const anchorPosition = buttons.findIndex((candidate) =>
@@ -32077,7 +32075,7 @@ class WaferMapViewer {
         coordinateSelectItem.className = 'context-menu-item';
         coordinateSelectItem.style.cssText = 'padding: 8px 16px; cursor: pointer; color: #fff; font-size: 14px;';
         coordinateSelectItem.textContent = '⌗ 좌표로 선택...';
-        coordinateSelectItem.title = 'Shot(Grid), Chip ID, Chip(Grid), Chip(Pos)를 표에 입력해 선택';
+        coordinateSelectItem.title = 'Shot(Grid), Shot Position, Chip(Grid), Chip(Pos)를 표에 입력해 선택';
         coordinateSelectItem.onclick = () => {
             menu.remove();
             this.openCoordinateSelectionModal();

@@ -229,6 +229,7 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - 파일: `scripts/generate_layout_dummy.py`, `api/full_app.py`, `docs/LAYOUT_FEATURE.md`, `scripts/e2e_chunk2.js`
 
 #### BUG-30: Shot 경계 지연/좌표계 불일치와 Border 잔류 색 회귀 (2026-08-08)
+- 현재 Shot Position 팔레트 계약: 실제 layout `chip_id`를 화면에 표시하지 않는다. 좌하단 위치 `(0,0)`부터 오른쪽, 다음 행 위 순서로 0-based 위치를 표시한다. Shot/Chip X/Y 목록은 각각 96px 내부 스크롤을 사용하고, 하단 Chip 범위/Radius 범위 패널을 가리지 않는다.
 - 증상: partial Shot의 경계, Shot 선택 영역, 하단 Shot(Grid) 표기가 서로 다른 위치를 가리키거나 Shot 버튼을 누른 뒤 경계가 늦게 나타났다. Border를 켜면 경계색만 바뀌어야 하는데 client overlay 선이 추가되어 확대 시 더 굵고 진하게 보였다. Chip Pos 셀에 소수 좌표를 붙여넣으면 정수 검증에서 거부됐다.
 - 원인: Shot 경계는 `x_abs/y_abs` modulo, Shot 선택은 `shot_id`, Shot 표기는 layout `shot_x_pos/shot_y_pos`를 각각 독립 계산했고, 경계를 그릴 때 Shot shape를 매 그룹마다 다시 계산했다. Border는 서버의 PLTE 치환에 더해 `_renderNormalizedChipBorders()`가 확대율에 따라 최대 3px의 불투명 선을 다시 그렸다. 좌표 목록 검증은 Chip Pos 전환 전에 Chip X/Y를 정수로 강제했다.
 - 수정 계약: layout의 canonical geometry를 한 번 계산하고 Shot별 경계를 캐시해 경계/hover/선택/Chip ID 슬롯이 같은 원점을 사용한다. partial Shot도 canonical 4x6 크기를 유지한다. Chip ID 팔레트의 screen row는 Chip X/Y 실시간 선택과 같은 Y 방향을 사용하고, 숫자만 좌하단부터 오른쪽, 다음 줄 위 순서로 매긴다. Border는 서버 PNG의 Normal 팔레트 인덱스 10 색을 경계 인덱스 11~23에 복사하는 PLTE 치환만 수행하며, client overlay에 선이나 채움을 추가하지 않는다. Chip X/Y 셀은 정수 grid와 소수 Chip(Pos) mm 입력을 모두 허용한다.
