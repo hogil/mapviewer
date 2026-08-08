@@ -9751,15 +9751,7 @@ class WaferMapViewer {
             return;
         }
 
-        const heading = document.createElement('div');
-        heading.className = 'coordinate-select-shot-picker-heading';
-        const headingLabel = document.createElement('span');
-        const selectedGroupCount = Math.max(1, annotator._getSelectedShotGroups?.().size || 0);
-        headingLabel.textContent = 'Full Shot Chip ID 선택';
-        heading.appendChild(headingLabel);
-        picker.appendChild(heading);
-
-        const { cols, rows, totalSlots, entries } = fullShot;
+        const { cols, rows, entries } = fullShot;
         const slots = new Map();
         entries.forEach((entry) => {
             const key = `${entry.slotX}:${entry.slotY}`;
@@ -9768,11 +9760,6 @@ class WaferMapViewer {
         const groupPanel = document.createElement('div');
         groupPanel.className = 'coordinate-select-shot-group';
         groupPanel.dataset.coordinateShotId = 'full';
-        const title = document.createElement('div');
-        title.className = 'coordinate-select-shot-group-heading';
-        const titleMain = document.createElement('span');
-        titleMain.textContent = 'Full Shot';
-        const titleCount = document.createElement('span');
         const selectedGroups = [...(annotator._getSelectedShotGroups?.() || [])];
         const isSlotSelected = (entry) => {
             if (!selectedGroups.length) return annotator.selectedChips?.has(entry.index);
@@ -9782,9 +9769,6 @@ class WaferMapViewer {
             }));
             return matchingIndices.length > 0 && matchingIndices.every((index) => annotator.selectedChips?.has(index));
         };
-        const selectedCount = entries.filter(isSlotSelected).length;
-        titleCount.textContent = `${selectedCount}/${totalSlots} Chip ID`;
-        title.append(titleMain, titleCount);
         const grid = document.createElement('div');
         grid.className = 'coordinate-select-shot-grid';
         grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
@@ -9804,19 +9788,18 @@ class WaferMapViewer {
                 button.type = 'button';
                 button.className = 'coordinate-select-shot-chip';
                 button.dataset.coordinateShotChipIndex = String(entry.index);
-                button.dataset.coordinateShotChipId = entry.chipId;
+                const slotChipId = slotY * cols + slotX + 1;
+                button.dataset.coordinateShotChipId = String(slotChipId);
                 button.style.gridColumn = String(slotX + 1);
                 button.style.gridRow = String(rows - slotY);
-                button.textContent = entry.chipId || '-';
-                button.title = selectedGroupCount > 1
-                    ? `Chip ID ${entry.chipId || '-'} · 선택된 ${selectedGroupCount}개 Shot의 같은 영역`
-                    : `Chip ID ${entry.chipId || '-'}`;
+                button.textContent = String(slotChipId);
+                button.title = `Chip ID ${slotChipId}`;
                 button.setAttribute('role', 'checkbox');
                 button.setAttribute('aria-checked', isSlotSelected(entry) ? 'true' : 'false');
                 grid.appendChild(button);
             }
         }
-        groupPanel.append(title, grid);
+        groupPanel.appendChild(grid);
         picker.appendChild(groupPanel);
     }
 
