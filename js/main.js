@@ -808,6 +808,9 @@ class WaferMapViewer {
             coordinateSelectRangeStatus: document.getElementById('chip-coordinate-select-range-status'),
             coordinateSelectLiveStatus: document.getElementById('chip-coordinate-select-live-status'),
             coordinateSelectShotPicker: document.getElementById('chip-coordinate-select-shot-picker'),
+            coordinateSelectRadius: document.getElementById('chip-coordinate-select-radius'),
+            coordinateSelectRadiusClear: document.getElementById('chip-coordinate-select-radius-clear'),
+            coordinateSelectRadiusStatus: document.getElementById('chip-coordinate-select-radius-status'),
             compositeOverlay: document.getElementById('composite-overlay'),
             compositeHeatmapGrid: document.getElementById('composite-heatmap-grid'),
             compositeInfoText: document.getElementById('composite-info-text'),
@@ -1017,6 +1020,7 @@ class WaferMapViewer {
         };
         this.coordinateSelectionActiveList = 'shot';
         this.coordinateSelectionActiveShotId = null;
+        this.coordinateSelectionRadiusMm = null;
         this.coordinateSelectionTarget = 'shot-grid';
         this.coordinateSelectionOperation = 'replace';
         this.coordinateSelectionEscapeHandler = null;
@@ -8973,7 +8977,7 @@ class WaferMapViewer {
             const shotScope = this.chipAnnotator?.selectionMode === 'shot' &&
                 this.chipAnnotator?.selectedChips?.size > 0;
             dom.coordinateSelectHint.textContent = shotScope
-                ? `${config.hint} Chip ID만 입력한 행은 현재 선택된 Shot 안에서만 적용됩니다.`
+                ? `${config.hint} Chip ID만 입력한 행은 선택된 Shot들의 같은 영역에 적용됩니다.`
                 : config.hint;
         }
         this._updateCoordinateSelectionSummary();
@@ -9070,6 +9074,10 @@ class WaferMapViewer {
         const panel = this.dom?.coordinateSelectModal?.querySelector('.coordinate-select-modal-content');
         panel?.classList.remove('is-dragging');
         this.coordinateSelectionDrag = null;
+        this.coordinateSelectionRadiusMm = null;
+        this.chipAnnotator?.clearCoordinateRadiusGuide?.();
+        if (this.dom?.coordinateSelectRadius) this.dom.coordinateSelectRadius.value = '';
+        if (this.dom?.coordinateSelectRadiusStatus) this.dom.coordinateSelectRadiusStatus.textContent = '값을 입력하면 wafer 원점에서 가이드가 표시됩니다.';
         this._setCoordinateSelectionError('');
         if (this.coordinateSelectionEscapeHandler) {
             document.removeEventListener('keydown', this.coordinateSelectionEscapeHandler, true);
@@ -9206,9 +9214,10 @@ class WaferMapViewer {
         this.dom?.coordinateSelectListPanels?.querySelectorAll('[data-coordinate-list-panel]')
             .forEach((panel) => panel.classList.toggle('is-active', panel.dataset.coordinateListPanel === listName));
         if (this.dom?.coordinateSelectHint) {
-            this.dom.coordinateSelectHint.textContent = `${config.label} 목록은 독립적으로 입력합니다. Chip ID는 선택된 Shot이 있으면 해당 Shot 안에서만 적용됩니다.`;
+            this.dom.coordinateSelectHint.textContent = `${config.label} 목록은 독립적으로 입력합니다. Chip ID는 선택된 Shot들이 있으면 각 Shot의 같은 영역에 적용됩니다.`;
         }
         this._updateCoordinateSelectionRangeStatus();
+        this._renderCoordinateSelectionShotPicker();
     }
 
     _renderCoordinateSelectionList(listName, focus = null) {
@@ -9269,7 +9278,7 @@ class WaferMapViewer {
         });
         const activeConfig = this._coordinateSelectionListConfig(this.coordinateSelectionActiveList);
         if (this.dom?.coordinateSelectHint) {
-            this.dom.coordinateSelectHint.textContent = `${activeConfig.label} 목록은 독립적으로 입력합니다. Chip ID는 현재 선택된 Shot 안에서만 적용됩니다.`;
+            this.dom.coordinateSelectHint.textContent = `${activeConfig.label} 목록은 독립적으로 입력합니다. Chip ID는 선택된 Shot들이 있으면 각 Shot의 같은 영역에 적용됩니다.`;
         }
         this.dom?.coordinateSelectListPanels?.querySelectorAll('[data-coordinate-list-panel]')
             .forEach((panel) => panel.classList.toggle('is-active', panel.dataset.coordinateListPanel === this.coordinateSelectionActiveList));
@@ -9441,6 +9450,15 @@ class WaferMapViewer {
             }
             this.coordinateSelectionTarget = parsed.target;
             if (!parsed.rows.length && !(forceClear && parsed.hasInput)) return;
+            if (listName === 'shot' && parsed.rows.length) {
+                const firstShot = parsed.rows[0];
+                const matchingGroup = [...(this.chipAnnotator.shotBoundaryGroups?.values?.() || [])].find((group) => {
+                    const layout = this.chipAnnotator.getLayoutRowForChip?.(group.chips?.[0]);
+                    return Number(layout?.shot_x_pos) === Number(firstShot.x) &&
+                        Number(layout?.shot_y_pos) === Number(firstShot.y);
+                });
+                if (matchingGroup) this.coordinateSelectionActiveShotId = String(matchingGroup.shotId);
+            }
             result = this.chipAnnotator.selectByCoordinateRows(parsed.target, parsed.rows, { operation });
         }
         const groups = [...(this.chipAnnotator._getSelectedShotGroups?.() || [])];
@@ -9463,59 +9481,67 @@ class WaferMapViewer {
         return parsed;
     }
 
+    _getCoordinateSelectionPickerGroup() {
+        const annotator = this.chipAnnotator;
+        if (!annotator) return null;
+        const allGroups = [...(annotator.shotBoundaryGroups?.values?.() || [])];
+        const selectedGroups = [...(annotator._getSelectedShotGroups?.() || [])];
+        let activeShotId = this.coordinateSelectionActiveShotId;
+
+        if (!activeShotId && selectedGroups.length) activeShotId = String(selectedGroups[0].shotId);
+        if (!activeShotId) {
+            for (const chipIndex of annotator.selectedChips || []) {
+                const group = annotator._getShotGroupForChip?.(annotator.chips?.[chipIndex]);
+                if (group) {
+                    activeShotId = String(group.shotId);
+                    break;
+                }
+            }
+        }
+        if (!activeShotId) {
+            const shotRow = this._getLiveCoordinateSelectionList('shot')?.rows?.[0];
+            if (shotRow && Number.isFinite(shotRow.x) && Number.isFinite(shotRow.y)) {
+                const matchingGroup = allGroups.find((group) => {
+                    const layout = annotator.getLayoutRowForChip?.(group.chips?.[0]);
+                    return Number(layout?.shot_x_pos) === Number(shotRow.x) &&
+                        Number(layout?.shot_y_pos) === Number(shotRow.y);
+                });
+                if (matchingGroup) activeShotId = String(matchingGroup.shotId);
+            }
+        }
+
+        const group = allGroups.find((candidate) => String(candidate.shotId) === String(activeShotId)) || null;
+        if (group) this.coordinateSelectionActiveShotId = String(group.shotId);
+        return group;
+    }
+
     _renderCoordinateSelectionShotPicker() {
         const picker = this.dom?.coordinateSelectShotPicker;
         const annotator = this.chipAnnotator;
         if (!picker) return;
         picker.replaceChildren();
-        if (annotator?.selectionMode !== 'shot') {
-            picker.hidden = true;
-            return;
-        }
-
         picker.hidden = false;
-        const groups = [...(annotator?._getSelectedShotGroups?.() || [])];
-        if (!groups.length) {
+
+        const activeGroup = this._getCoordinateSelectionPickerGroup();
+        if (!activeGroup) {
             const empty = document.createElement('div');
             empty.className = 'coordinate-select-shot-picker-empty';
-            empty.textContent = 'Shot X/Y를 입력하면 내부 Chip 배치가 여기에 표시됩니다.';
+            empty.textContent = 'Shot X/Y를 입력하거나 선택하면 내부 Chip ID가 여기에 표시됩니다.';
             picker.appendChild(empty);
             return;
-        }
-
-        let activeGroup = groups.find((group) => String(group.shotId) === String(this.coordinateSelectionActiveShotId));
-        if (!activeGroup) {
-            activeGroup = groups[0];
-            this.coordinateSelectionActiveShotId = String(activeGroup.shotId);
         }
 
         const heading = document.createElement('div');
         heading.className = 'coordinate-select-shot-picker-heading';
         const headingLabel = document.createElement('span');
-        headingLabel.textContent = '선택된 Shot의 Chip ID';
+        const selectedGroupCount = Math.max(1, annotator._getSelectedShotGroups?.().size || 0);
+        headingLabel.textContent = selectedGroupCount > 1
+            ? `Shot 내부 Chip ID 선택 (${selectedGroupCount}개 Shot에 적용)`
+            : 'Shot 내부 Chip ID 선택';
         heading.appendChild(headingLabel);
-        if (groups.length > 1) {
-            const select = document.createElement('select');
-            select.id = 'chip-coordinate-select-shot-picker-shot-select';
-            select.className = 'coordinate-select-select';
-            select.setAttribute('aria-label', 'Shot 선택');
-            groups.forEach((group) => {
-                const option = document.createElement('option');
-                option.value = String(group.shotId);
-                option.textContent = `Shot ${group.shotId}`;
-                option.selected = String(group.shotId) === String(activeGroup.shotId);
-                select.appendChild(option);
-            });
-            select.addEventListener('change', () => {
-                this.coordinateSelectionActiveShotId = select.value;
-                this._renderCoordinateSelectionShotPicker();
-            });
-            heading.appendChild(select);
-        } else {
-            const shotLabel = document.createElement('strong');
-            shotLabel.textContent = `Shot ${activeGroup.shotId}`;
-            heading.appendChild(shotLabel);
-        }
+        const shotLabel = document.createElement('strong');
+        shotLabel.textContent = `Shot ${activeGroup.shotId}`;
+        heading.appendChild(shotLabel);
         picker.appendChild(heading);
 
         const shape = annotator.getShotGridShape?.() || { cols: 4, rows: 6 };
@@ -9545,10 +9571,15 @@ class WaferMapViewer {
         groupPanel.dataset.coordinateShotId = String(activeGroup.shotId);
         const title = document.createElement('div');
         title.className = 'coordinate-select-shot-group-heading';
+        const titleMain = document.createElement('span');
+        const firstLayout = annotator.getLayoutRowForChip?.(activeGroup.chips?.[0]);
+        titleMain.textContent = Number.isFinite(Number(firstLayout?.shot_x_pos)) && Number.isFinite(Number(firstLayout?.shot_y_pos))
+            ? `(${firstLayout.shot_x_pos}, ${firstLayout.shot_y_pos})`
+            : '';
         const titleCount = document.createElement('span');
         const selectedCount = entries.filter((entry) => annotator.selectedChips?.has(entry.index)).length;
-        titleCount.textContent = `${selectedCount}/${cols * rows} Chip`;
-        title.appendChild(titleCount);
+        titleCount.textContent = `${selectedCount}/${cols * rows} Chip ID`;
+        title.append(titleMain, titleCount);
         const grid = document.createElement('div');
         grid.className = 'coordinate-select-shot-grid';
         grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
@@ -9572,7 +9603,9 @@ class WaferMapViewer {
                 button.style.gridColumn = String(slotX + 1);
                 button.style.gridRow = String(rows - slotY);
                 button.textContent = entry.chipId || '-';
-                button.title = `Chip ID ${entry.chipId || '-'} · (${entry.chip.x_abs}, ${entry.chip.y_abs})`;
+                button.title = selectedGroupCount > 1
+                    ? `Chip ID ${entry.chipId || '-'} · 선택된 ${selectedGroupCount}개 Shot의 같은 영역 · (${entry.chip.x_abs}, ${entry.chip.y_abs})`
+                    : `Chip ID ${entry.chipId || '-'} · (${entry.chip.x_abs}, ${entry.chip.y_abs})`;
                 button.setAttribute('role', 'checkbox');
                 button.setAttribute('aria-checked', annotator.selectedChips?.has(entry.index) ? 'true' : 'false');
                 grid.appendChild(button);
@@ -9580,6 +9613,31 @@ class WaferMapViewer {
         }
         groupPanel.append(title, grid);
         picker.appendChild(groupPanel);
+    }
+
+    _setCoordinateSelectionRadiusGuide(rawValue = '') {
+        const text = String(rawValue ?? '').trim();
+        if (!text) {
+            this.coordinateSelectionRadiusMm = null;
+            this.chipAnnotator?.clearCoordinateRadiusGuide?.();
+            if (this.dom?.coordinateSelectRadiusStatus) {
+                this.dom.coordinateSelectRadiusStatus.textContent = '값을 입력하면 wafer 원점에서 가이드가 표시됩니다.';
+            }
+            return true;
+        }
+        const value = Number(text);
+        if (!Number.isFinite(value) || value < 0 || value > 150) {
+            if (this.dom?.coordinateSelectRadiusStatus) {
+                this.dom.coordinateSelectRadiusStatus.textContent = 'Radius는 0.000 ~ 150.000 mm 범위입니다.';
+            }
+            return false;
+        }
+        this.coordinateSelectionRadiusMm = value;
+        this.chipAnnotator?.setCoordinateRadiusGuide?.(value);
+        if (this.dom?.coordinateSelectRadiusStatus) {
+            this.dom.coordinateSelectRadiusStatus.textContent = `Radius ${value.toFixed(3)} mm 가이드 표시 중`;
+        }
+        return true;
     }
 
     bindCoordinateSelectionEvents() {
@@ -9661,6 +9719,13 @@ class WaferMapViewer {
             this._updateCoordinateSelectionSummary();
             this._renderCoordinateSelectionShotPicker();
         });
+        dom.coordinateSelectRadius?.addEventListener('input', () => {
+            this._setCoordinateSelectionRadiusGuide(dom.coordinateSelectRadius.value);
+        });
+        dom.coordinateSelectRadiusClear?.addEventListener('click', () => {
+            if (dom.coordinateSelectRadius) dom.coordinateSelectRadius.value = '';
+            this._setCoordinateSelectionRadiusGuide('');
+        });
 
         const dragHandle = dom.coordinateSelectDragHandle;
         const panel = dom.coordinateSelectModal.querySelector('.coordinate-select-modal-content');
@@ -9707,11 +9772,15 @@ class WaferMapViewer {
         this.coordinateSelectionActiveList = 'shot';
         const selectedGroups = [...(this.chipAnnotator?._getSelectedShotGroups?.() || [])];
         this.coordinateSelectionActiveShotId = selectedGroups.length ? String(selectedGroups[0].shotId) : null;
+        this.coordinateSelectionRadiusMm = null;
         this.coordinateSelectionTarget = 'shot-grid';
         this.coordinateSelectionOperation = 'replace';
         this.coordinateSelectionRange = { enabled: false, xMin: null, xMax: null, yMin: null, yMax: null };
         if (dom.coordinateSelectOperation) dom.coordinateSelectOperation.value = this.coordinateSelectionOperation;
         if (dom.coordinateSelectRangeEnabled) dom.coordinateSelectRangeEnabled.checked = false;
+        if (dom.coordinateSelectRadius) dom.coordinateSelectRadius.value = '';
+        if (dom.coordinateSelectRadiusStatus) dom.coordinateSelectRadiusStatus.textContent = '값을 입력하면 wafer 원점에서 가이드가 표시됩니다.';
+        this.chipAnnotator?.clearCoordinateRadiusGuide?.();
         this._setCoordinateSelectionError('');
         dom.coordinateSelectModal.style.display = 'flex';
         this.isCoordinateSelectionOpen = true;

@@ -1811,12 +1811,30 @@ const { createRunner } = require('./e2e_playwright_session');
           firstChipRect: group.chips[0]?.rect || null,
         }));
       const singleChipBoundary = shotBoundaryGroups.find((group) => group.chipCount === 1);
-      const edgeBoundaryMatchesActual = Boolean(
-        singleChipBoundary?.rect && singleChipBoundary?.firstChipRect &&
-        Math.abs(singleChipBoundary.rect.minX - singleChipBoundary.firstChipRect.x0) < 1e-6 &&
-        Math.abs(singleChipBoundary.rect.minY - singleChipBoundary.firstChipRect.y0) < 1e-6 &&
-        Math.abs(singleChipBoundary.rect.maxX - singleChipBoundary.firstChipRect.x1) < 1e-6 &&
-        Math.abs(singleChipBoundary.rect.maxY - singleChipBoundary.firstChipRect.y1) < 1e-6
+      const shotShape = v.chipAnnotator?.getShotGridShape?.() || { cols: 4, rows: 6 };
+      const edgeLayout = v.chipAnnotator?.getLayoutRowForChip?.(singleChipBoundary?.firstChipRect ?
+        v.chipAnnotator.chips.find((chip) => chip?.rect === singleChipBoundary.firstChipRect) : null);
+      const edgeChipWidth = singleChipBoundary?.firstChipRect
+        ? singleChipBoundary.firstChipRect.x1 - singleChipBoundary.firstChipRect.x0
+        : 0;
+      const edgeChipHeight = singleChipBoundary?.firstChipRect
+        ? singleChipBoundary.firstChipRect.y1 - singleChipBoundary.firstChipRect.y0
+        : 0;
+      const positiveModulo = (value, size) => ((value % size) + size) % size;
+      const edgeBaseX = edgeLayout ? Number(edgeLayout.eds_chip_x_pos) - positiveModulo(Number(edgeLayout.eds_chip_x_pos), shotShape.cols) : NaN;
+      const edgeBaseY = edgeLayout ? Number(edgeLayout.eds_chip_y_pos) - positiveModulo(Number(edgeLayout.eds_chip_y_pos), shotShape.rows) : NaN;
+      const edgeExpectedMinX = edgeLayout && singleChipBoundary?.firstChipRect
+        ? singleChipBoundary.firstChipRect.x0 - (Number(edgeLayout.eds_chip_x_pos) - edgeBaseX) * edgeChipWidth
+        : NaN;
+      const edgeExpectedMinY = edgeLayout && singleChipBoundary?.firstChipRect
+        ? singleChipBoundary.firstChipRect.y0 - (Number(edgeLayout.eds_chip_y_pos) - edgeBaseY) * edgeChipHeight
+        : NaN;
+      const edgeBoundaryMatchesNominal = Boolean(
+        singleChipBoundary?.rect && edgeLayout &&
+        Math.abs(singleChipBoundary.rect.minX - edgeExpectedMinX) < 1e-6 &&
+        Math.abs(singleChipBoundary.rect.minY - edgeExpectedMinY) < 1e-6 &&
+        Math.abs(singleChipBoundary.rect.width - edgeChipWidth * shotShape.cols) < 1e-6 &&
+        Math.abs(singleChipBoundary.rect.height - edgeChipHeight * shotShape.rows) < 1e-6
       );
       const layoutRequest = performance.getEntriesByType('resource').some((entry) => {
         try {
@@ -1833,7 +1851,7 @@ const { createRunner } = require('./e2e_playwright_session');
         shotBoundaryGroupCount: shotBoundaryGroups.length,
         shotBoundaryChipCount: shotBoundaryGroups.reduce((sum, group) => sum + group.chipCount, 0),
         partialShotCount: shotBoundaryGroups.filter((group) => group.chipCount < 24).length,
-        edgeBoundaryMatchesActual,
+        edgeBoundaryMatchesNominal,
         shotBoundaryPixelsBefore: boundaryBefore.shotBoundaryPixels,
         shotBoundaryPixels: boundaryOn.shotBoundaryPixels,
         shotBoundaryPixelsAfter: boundaryAfter.shotBoundaryPixels,
@@ -1861,8 +1879,8 @@ const { createRunner } = require('./e2e_playwright_session');
       `circle zone columns=${JSON.stringify(data)}`);
     expect(data.shotBoundaryGroupCount === 43 && data.shotBoundaryChipCount === 833,
       `shot boundaries=${JSON.stringify(data)}`);
-    expect(data.partialShotCount > 0 && data.edgeBoundaryMatchesActual,
-      `edge shot boundary should use actual chip extents=${JSON.stringify(data)}`);
+    expect(data.partialShotCount > 0 && data.edgeBoundaryMatchesNominal,
+      `edge shot boundary should keep the nominal Shot grid=${JSON.stringify(data)}`);
     expect(!data.shotBoundaryVisibleBefore && data.shotBoundaryVisibleOn && !data.shotBoundaryVisibleAfter,
       `shot toggle=${JSON.stringify(data)}`);
     expect(data.shotBoundaryPixelsBefore < 10 && data.shotBoundaryPixels > 50 && data.shotBoundaryPixelsAfter < 10,
@@ -2128,7 +2146,7 @@ const { createRunner } = require('./e2e_playwright_session');
     };
   });
 
-  await record('coordinate-selection-cells', '독립 Shot/Chip/Chip ID 셀 붙여넣기 / Shot picker / Chip Pos 선택', async () => {
+  await record('coordinate-selection-cells', '독립 Shot/Chip/Chip ID 셀 / Shot 내부 Chip ID 선택 / Radius 가이드 / Chip Pos', async () => {
     const targetFile = 'AAI633_00P_08_20260501_010000_99.6_0_PE_PWQ.png';
     const folder = 'PW/P001/20260501';
     await boot('chunk2-coordinate-selection-cells');
@@ -2168,16 +2186,21 @@ const { createRunner } = require('./e2e_playwright_session');
       const pos = firstLayout
         ? { x: (Number(firstLayout.chip_center_x_pos) / 1000).toFixed(3), y: (Number(firstLayout.chip_center_y_pos) / 1000).toFixed(3) }
         : null;
+      const radius = firstLayout
+        ? Math.hypot(Number(firstLayout.chip_center_x_pos) / 1000, Number(firstLayout.chip_center_y_pos) / 1000).toFixed(3)
+        : null;
       return {
         shotRows,
         chipId: firstLayout?.chip_id == null ? '' : String(firstLayout.chip_id),
         pos,
+        radius,
         partialShot: partialLayout && partialGroup
           ? { x: Number(partialLayout.shot_x_pos), y: Number(partialLayout.shot_y_pos), chipCount: partialGroup.chips.length }
           : null,
       };
     });
-    expect(selectionTarget.shotRows.length === 2 && selectionTarget.pos && selectionTarget.partialShot, `selection target=${JSON.stringify(selectionTarget)}`);
+    expect(selectionTarget.shotRows.length === 2 && selectionTarget.pos && selectionTarget.radius && selectionTarget.partialShot,
+      `selection target=${JSON.stringify(selectionTarget)}`);
 
     const overlay = page.locator('#overlay-canvas');
     const overlayBox = await overlay.boundingBox();
@@ -2265,7 +2288,10 @@ const { createRunner } = require('./e2e_playwright_session');
         chips: group.querySelectorAll('button[data-coordinate-shot-chip-index]').length,
         empty: group.querySelectorAll('.coordinate-select-shot-empty-cell').length,
       }));
-      const firstGroup = [...annotator._getSelectedShotGroups()][0];
+      const pickerGroup = groups[0];
+      const activeShotId = pickerGroup?.dataset.coordinateShotId || '';
+      const firstGroup = [...annotator._getSelectedShotGroups()]
+        .find((group) => String(group.shotId) === String(activeShotId)) || [...annotator._getSelectedShotGroups()][0];
       const expectedFirst = (firstGroup?.indices || [])
         .map((index) => ({
           index,
@@ -2281,6 +2307,7 @@ const { createRunner } = require('./e2e_playwright_session');
         grids,
         checked: document.querySelectorAll('#chip-coordinate-select-shot-picker button[aria-checked="true"]').length,
         shape,
+        activeShotId,
         firstChipId: firstButton?.dataset.coordinateShotChipId || '',
         expectedFirstChipId: expectedFirst?.layout?.chip_id == null ? '' : String(expectedFirst.layout.chip_id),
       };
@@ -2292,11 +2319,60 @@ const { createRunner } = require('./e2e_playwright_session');
         shotPicker.firstChipId === shotPicker.expectedFirstChipId,
       `shot picker=${JSON.stringify(shotPicker)}`
     );
+    const pickerPlacement = await page.evaluate(() => {
+      const picker = document.getElementById('chip-coordinate-select-shot-picker');
+      const buttons = [...picker.querySelectorAll('button[data-coordinate-shot-chip-index]')];
+      return {
+        parentPanel: picker.closest('[data-coordinate-list-panel]')?.dataset.coordinateListPanel || '',
+        hasOuterShotBox: !!picker.querySelector('.coordinate-select-shot-group'),
+        borderedChipCells: buttons.filter((button) => getComputedStyle(button).borderStyle !== 'none').length,
+        labeledChipIds: buttons.filter((button) => (button.textContent || '').trim()).length,
+      };
+    });
+    expect(
+      pickerPlacement.parentPanel === 'chip' && pickerPlacement.hasOuterShotBox &&
+        pickerPlacement.borderedChipCells === 24 && pickerPlacement.labeledChipIds === 24,
+      `Shot picker placement=${JSON.stringify(pickerPlacement)}`
+    );
+
+    await page.locator('#chip-coordinate-select-radius').fill(selectionTarget.radius);
+    await page.waitForFunction(
+      (expectedRadius) => window.viewer?.chipAnnotator?.coordinateRadiusGuideMm === Number(expectedRadius),
+      selectionTarget.radius,
+      { timeout: 10000 }
+    );
+    const radiusGuide = await page.evaluate(() => {
+      const annotator = window.viewer?.chipAnnotator;
+      const canvas = annotator?.canvas;
+      const pixels = canvas?.getContext('2d')?.getImageData(0, 0, canvas.width, canvas.height).data;
+      let guidePixels = 0;
+      if (pixels) {
+        for (let index = 0; index < pixels.length; index += 4) {
+          const red = pixels[index];
+          const green = pixels[index + 1];
+          const blue = pixels[index + 2];
+          if (blue > 210 && green > 120 && red < 150) guidePixels += 1;
+        }
+      }
+      return {
+        value: annotator?.coordinateRadiusGuideMm,
+        status: document.getElementById('chip-coordinate-select-radius-status')?.textContent || '',
+        guidePixels,
+      };
+    });
+    expect(radiusGuide.value === Number(selectionTarget.radius) && radiusGuide.guidePixels > 0,
+      `radius guide=${JSON.stringify(radiusGuide)}`);
+    await page.locator('#chip-coordinate-select-radius-clear').click();
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.coordinateRadiusGuideMm === null,
+      null,
+      { timeout: 10000 }
+    );
     const pickerChip = page.locator('#chip-coordinate-select-shot-picker button[data-coordinate-shot-chip-index]').first();
     await pickerChip.click();
     await page.waitForFunction(
       () => window.viewer?.chipAnnotator?.selectionMode === 'shot' &&
-        window.viewer.chipAnnotator.selectedChips?.size === 47 &&
+        window.viewer.chipAnnotator.selectedChips?.size === 46 &&
         window.viewer.chipAnnotator._getSelectedShotGroups?.().size === 2,
       null,
       { timeout: 10000 }
@@ -2304,8 +2380,18 @@ const { createRunner } = require('./e2e_playwright_session');
     const pickerAfterRemove = await page.evaluate(() => ({
       checked: document.querySelectorAll('#chip-coordinate-select-shot-picker button[aria-checked="true"]').length,
       chips: window.viewer.chipAnnotator.selectedChips.size,
+      selectedPerShot: window.viewer.chipAnnotator.getSelectedShotGroupSelections?.().map((group) => ({
+        shotId: group.shotId,
+        selectedChipCount: group.selectedIndices.length,
+      })) || [],
     }));
-    expect(pickerAfterRemove.checked === 23 && pickerAfterRemove.chips === 47, `picker remove=${JSON.stringify(pickerAfterRemove)}`);
+    expect(
+      pickerAfterRemove.checked === 23 &&
+        pickerAfterRemove.chips === 46 &&
+        pickerAfterRemove.selectedPerShot.length === 2 &&
+        pickerAfterRemove.selectedPerShot.every((group) => group.selectedChipCount === 23),
+      `picker remove=${JSON.stringify(pickerAfterRemove)}`
+    );
     await pickerChip.click();
     await page.waitForFunction(
       () => window.viewer?.chipAnnotator?.selectionMode === 'shot' &&
@@ -2370,7 +2456,12 @@ const { createRunner } = require('./e2e_playwright_session');
       mode: window.viewer.chipAnnotator.selectionMode,
       chips: window.viewer.chipAnnotator.selectedChips.size,
       shots: window.viewer.chipAnnotator._getSelectedShotGroups().size,
+      pickerVisible: !document.getElementById('chip-coordinate-select-shot-picker')?.hidden,
+      pickerParent: document.getElementById('chip-coordinate-select-shot-picker')?.closest('[data-coordinate-list-panel]')?.dataset.coordinateListPanel || '',
+      pickerChecked: document.querySelectorAll('#chip-coordinate-select-shot-picker button[aria-checked="true"]').length,
     }));
+    expect(combinedRow.pickerVisible && combinedRow.pickerParent === 'chip' && combinedRow.pickerChecked === 1,
+      `Shot picker after Chip ID scope=${JSON.stringify(combinedRow)}`);
     await page.locator('#chip-coordinate-select-close').click();
     await openCoordinateModal();
     await pasteIntoList('shot',
@@ -2396,7 +2487,7 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.locator('#chip-coordinate-select-close').click();
     await openCoordinateModal();
     await page.waitForFunction(
-      () => (document.getElementById('chip-coordinate-select-hint')?.textContent || '').includes('현재 선택된 Shot 안에서만'),
+      () => (document.getElementById('chip-coordinate-select-hint')?.textContent || '').includes('선택된 Shot들이 있으면 각 Shot의 같은 영역'),
       null,
       { timeout: 10000 }
     );

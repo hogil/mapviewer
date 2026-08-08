@@ -124,6 +124,7 @@ export class ChipAnnotator {
         this.shotBoundaryGroups = new Map();
         this.shotBoundaryVisible = false;
         this.shotBoundaryColor = 'rgba(170, 85, 210, 0.95)';
+        this.coordinateRadiusGuideMm = null;
 
         // Event handlers (bind once)
         this._onMouseMove = this._handleMouseMove.bind(this);
@@ -173,12 +174,24 @@ export class ChipAnnotator {
         this.layoutProcessId = null;
         this.layoutByEdsChip.clear();
         this.shotBoundaryGroups.clear();
+        this.coordinateRadiusGuideMm = null;
         this.hoveredChip = null;
         this._resetChipCoordinateDisplay();
     }
 
     setShotBoundaryVisible(visible) {
         this.shotBoundaryVisible = Boolean(visible);
+        this.render();
+    }
+
+    setCoordinateRadiusGuide(radiusMm) {
+        const value = Number(radiusMm);
+        this.coordinateRadiusGuideMm = Number.isFinite(value) && value >= 0 ? value : null;
+        this.render();
+    }
+
+    clearCoordinateRadiusGuide() {
+        this.coordinateRadiusGuideMm = null;
         this.render();
     }
 
@@ -301,10 +314,116 @@ export class ChipAnnotator {
         });
         if (![minX, minY, maxX, maxY].every(Number.isFinite)) return null;
 
+        const shape = this.getShotGridShape?.();
+        const layoutEntries = (group.indices || [])
+            .map((index) => {
+                const chip = this.chips[index];
+                const layout = this.getLayoutRowForChip(chip);
+                if (!chip?.rect || !layout) return null;
+                const x = Number(layout.eds_chip_x_pos);
+                const y = Number(layout.eds_chip_y_pos);
+                return Number.isInteger(x) && Number.isInteger(y)
+                    ? { chip, layout, x, y }
+                    : null;
+            })
+            .filter(Boolean);
+        if (shape?.cols > 0 && shape?.rows > 0 && layoutEntries.length > 0) {
+            const positiveModulo = (value, size) => ((value % size) + size) % size;
+            const minGridX = Math.min(...layoutEntries.map((entry) => entry.x));
+            const minGridY = Math.min(...layoutEntries.map((entry) => entry.y));
+            const baseGridX = minGridX - positiveModulo(minGridX, shape.cols);
+            const baseGridY = minGridY - positiveModulo(minGridY, shape.rows);
+            const reference = layoutEntries[0];
+            const chipWidth = Number(reference.chip.rect.x1) - Number(reference.chip.rect.x0);
+            const chipHeight = Number(reference.chip.rect.y1) - Number(reference.chip.rect.y0);
+            if (chipWidth > 0 && chipHeight > 0) {
+                minX = reference.chip.rect.x0 - (reference.x - baseGridX) * chipWidth;
+                minY = reference.chip.rect.y0 - (reference.y - baseGridY) * chipHeight;
+                maxX = minX + shape.cols * chipWidth;
+                maxY = minY + shape.rows * chipHeight;
+            }
+        }
+
         const width = maxX - minX;
         const height = maxY - minY;
         if (width <= 0 || height <= 0) return null;
         return { minX, minY, maxX, maxY, width, height };
+    }
+
+    _getLayoutCanvasPhysicalTransform() {
+        const samples = (this.chips || []).map((chip) => {
+            const layout = this.getLayoutRowForChip(chip);
+            const rect = chip?.rect;
+            if (!layout || !rect) return null;
+            const xMm = Number(layout.chip_center_x_pos) / 1000;
+            const yMm = Number(layout.chip_center_y_pos) / 1000;
+            const xPx = (Number(rect.x0) + Number(rect.x1)) / 2;
+            const yPx = (Number(rect.y0) + Number(rect.y1)) / 2;
+            return [xMm, yMm, xPx, yPx].every(Number.isFinite) ? { xMm, yMm, xPx, yPx } : null;
+        }).filter(Boolean);
+        if (samples.length < 2) return null;
+
+        const fit = (valueKey, pixelKey) => {
+            const valueMean = samples.reduce((sum, sample) => sum + sample[valueKey], 0) / samples.length;
+            const pixelMean = samples.reduce((sum, sample) => sum + sample[pixelKey], 0) / samples.length;
+            let variance = 0;
+            let covariance = 0;
+            samples.forEach((sample) => {
+                const valueDelta = sample[valueKey] - valueMean;
+                variance += valueDelta * valueDelta;
+                covariance += valueDelta * (sample[pixelKey] - pixelMean);
+            });
+            if (variance <= 0) return null;
+            const scale = covariance / variance;
+            return { scale, offset: pixelMean - scale * valueMean };
+        };
+        const x = fit('xMm', 'xPx');
+        const y = fit('yMm', 'yPx');
+        return x && y ? { x, y } : null;
+    }
+
+    _renderCoordinateRadiusGuide() {
+        const radiusMm = Number(this.coordinateRadiusGuideMm);
+        if (!Number.isFinite(radiusMm) || radiusMm < 0) return;
+        const physicalTransform = this._getLayoutCanvasPhysicalTransform();
+        if (!physicalTransform || !this.viewer?.transform) return;
+
+        const transform = this.viewer.transform;
+        const Y_OFFSET = this.Y_OFFSET || 0;
+        const originX = physicalTransform.x.offset;
+        const originY = physicalTransform.y.offset;
+        const radiusX = Math.abs(physicalTransform.x.scale) * radiusMm;
+        const radiusY = Math.abs(physicalTransform.y.scale) * radiusMm;
+        const canvasOriginX = originX * transform.scale + transform.dx;
+        const canvasOriginY = originY * transform.scale + transform.dy + Y_OFFSET;
+
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.resetTransform();
+        ctx.strokeStyle = 'rgba(95, 190, 255, 0.95)';
+        ctx.fillStyle = 'rgba(95, 190, 255, 0.95)';
+        ctx.lineWidth = Math.max(1.5, 2 * transform.scale);
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        ctx.ellipse(
+            canvasOriginX,
+            canvasOriginY,
+            radiusX * transform.scale,
+            radiusY * transform.scale,
+            0,
+            0,
+            Math.PI * 2,
+        );
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(canvasOriginX, canvasOriginY);
+        ctx.lineTo(canvasOriginX + radiusX * transform.scale, canvasOriginY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.arc(canvasOriginX, canvasOriginY, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
     }
 
     _renderShotBoundaries() {
@@ -320,7 +439,7 @@ export class ChipAnnotator {
         ctx.setLineDash([3, 3]);
 
         this.shotBoundaryGroups.forEach((group) => {
-            // Use only the actual matched chip rects. Edge shots stay partial.
+            // Keep the canonical Shot extent. Missing edge chips stay empty and the canvas clips the visible part.
             const boundary = this._getShotBoundaryRect(group);
             if (!boundary) return;
 
@@ -404,6 +523,17 @@ export class ChipAnnotator {
         }).filter((group) => group.selectedChips.length > 0);
     }
 
+    _getShotGridSlot(chip, shape = this.getShotGridShape?.()) {
+        const layout = this.getLayoutRowForChip(chip);
+        const x = Number(layout?.eds_chip_x_pos);
+        const y = Number(layout?.eds_chip_y_pos);
+        const cols = Math.max(1, Number(shape?.cols) || 4);
+        const rows = Math.max(1, Number(shape?.rows) || 6);
+        if (!Number.isInteger(x) || !Number.isInteger(y)) return null;
+        const positiveModulo = (value, size) => ((value % size) + size) % size;
+        return `${positiveModulo(x, cols)}:${positiveModulo(y, rows)}`;
+    }
+
     toggleShotChipSelection(chipIndex) {
         const index = Number(chipIndex);
         if (!Number.isInteger(index) || index < 0 || index >= this.chips.length) return null;
@@ -411,11 +541,32 @@ export class ChipAnnotator {
         if (!group) return null;
 
         this.selectionMode = 'shot';
-        if (this.selectedChips.has(index)) {
-            this.selectedChips.delete(index);
-            const orderIndex = this.selectedChipsOrder.indexOf(index);
-            if (orderIndex !== -1) this.selectedChipsOrder.splice(orderIndex, 1);
-        } else {
+        const selectedGroups = [...this._getSelectedShotGroups()];
+        const groups = selectedGroups.length ? selectedGroups : [group];
+        const shape = this.getShotGridShape?.() || { cols: 4, rows: 6 };
+        const slot = this._getShotGridSlot(this.chips[index], shape);
+        const affectedIndices = new Set();
+        groups.forEach((candidate) => {
+            (candidate.indices || []).forEach((candidateIndex) => {
+                if (slot && this._getShotGridSlot(this.chips[candidateIndex], shape) === slot) {
+                    affectedIndices.add(candidateIndex);
+                }
+            });
+        });
+        if (affectedIndices.size === 0) affectedIndices.add(index);
+
+        const nextSelected = !this.selectedChips.has(index);
+        affectedIndices.forEach((affectedIndex) => {
+            if (nextSelected) {
+                this.selectedChips.add(affectedIndex);
+                if (!this.selectedChipsOrder.includes(affectedIndex)) this.selectedChipsOrder.push(affectedIndex);
+            } else {
+                this.selectedChips.delete(affectedIndex);
+                const orderIndex = this.selectedChipsOrder.indexOf(affectedIndex);
+                if (orderIndex !== -1) this.selectedChipsOrder.splice(orderIndex, 1);
+            }
+        });
+        if (!this.selectedChips.has(index) && nextSelected) {
             this.selectedChips.add(index);
             if (!this.selectedChipsOrder.includes(index)) this.selectedChipsOrder.push(index);
         }
@@ -423,9 +574,11 @@ export class ChipAnnotator {
         this.updateSelectedChipsList();
         return {
             chipIndex: index,
-            selected: this.selectedChips.has(index),
+            selected: nextSelected,
             selectedCount: this.selectedChips.size,
             shotId: group.shotId,
+            affectedShotIds: groups.map((candidate) => String(candidate.shotId)),
+            affectedChipCount: affectedIndices.size,
         };
     }
 
@@ -2120,6 +2273,7 @@ export class ChipAnnotator {
         // Draw one boundary around all chips that share the same layout shot_id.
         this._renderShotBoundaries();
         this._renderSelectedShotBoundaries();
+        this._renderCoordinateRadiusGuide();
 
         // Draw Alt+Drag free-form selection polygon
         if (this.isAltDrag && this.polygonPath.length > 0) {
