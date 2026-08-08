@@ -3444,17 +3444,37 @@
             height: 22px;
             box-sizing: border-box;
             padding: 2px 4px;
-            background: #111;
+            background: #101010;
             color: #f5f5f5;
-            border: 1px solid #555;
-            border-radius: 2px;
+            border: 1px solid #4a4a4a;
+            border-radius: 0;
             font: 11px Consolas, "Courier New", monospace;
+            cursor: cell;
+            user-select: none;
         }
 
         .coordinate-select-cell:focus {
             outline: 2px solid #5b9bd5;
             outline-offset: -1px;
             border-color: #9ecbff;
+        }
+
+        .coordinate-select-cell[readonly] {
+            caret-color: transparent;
+        }
+
+        .coordinate-select-cell.is-cell-selected {
+            background: #16324a;
+            border-color: #9ecbff;
+            box-shadow: inset 0 0 0 1px #5b9bd5;
+        }
+
+        .coordinate-select-cell.is-editing {
+            background: #0b0b0b;
+            color: #fff;
+            cursor: text;
+            user-select: text;
+            caret-color: auto;
         }
 
         .coordinate-select-action-column,

@@ -1061,6 +1061,13 @@ class WaferMapViewer {
         this.coordinateSelectionShotPickerAnchorIndex = null;
         this.coordinateSelectionShotPickerDrag = null;
         this.coordinateSelectionShotPickerSuppressClickAt = 0;
+        this.coordinateSelectionCellState = {
+            selectedKeys: new Set(),
+            anchorKey: null,
+            activeKey: null,
+            dragPointerId: null,
+            dragStartKey: null,
+        };
         this.coordinateSelectionTarget = 'shot-grid';
         this.coordinateSelectionEscapeHandler = null;
         this.coordinateSelectionLiveTimer = null;
@@ -9310,7 +9317,9 @@ class WaferMapViewer {
                 input.dataset.coordinateList = listName;
                 input.dataset.coordinateRow = String(rowIndex);
                 input.dataset.coordinateCol = String(colIndex);
+                input.dataset.coordinateCellKey = this._coordinateSelectionCellKey(listName, rowIndex, colIndex);
                 input.value = rowValues?.[colIndex] ?? '';
+                input.readOnly = true;
                 input.autocomplete = 'off';
                 input.spellcheck = false;
                 input.inputMode = listName === 'chip' ? 'decimal' : 'numeric';
@@ -9332,10 +9341,18 @@ class WaferMapViewer {
             row.appendChild(actionCell);
             tbody.appendChild(row);
         });
+        this._updateCoordinateSelectionCellClasses();
         if (focus) {
-            setTimeout(() => tbody.querySelector(
-                `input[data-coordinate-row="${focus.row}"][data-coordinate-col="${focus.col}"]`
-            )?.focus(), 0);
+            const focusKey = this._coordinateSelectionCellKey(listName, focus.row, focus.col);
+            const cellState = this._ensureCoordinateSelectionCellState();
+            cellState.selectedKeys = new Set([focusKey]);
+            cellState.anchorKey = focusKey;
+            cellState.activeKey = focusKey;
+            setTimeout(() => {
+                const input = this._getCoordinateSelectionCellInput(focusKey);
+                input?.focus?.({ preventScroll: true });
+                this._updateCoordinateSelectionCellClasses();
+            }, 0);
         }
     }
 
@@ -9348,6 +9365,215 @@ class WaferMapViewer {
         this._updateCoordinateSelectionSummary();
         this._renderCoordinateSelectionShotPicker();
         this._renderCoordinateSelectionQuickPickers();
+    }
+
+    _ensureCoordinateSelectionCellState() {
+        if (!this.coordinateSelectionCellState) {
+            this.coordinateSelectionCellState = {
+                selectedKeys: new Set(),
+                anchorKey: null,
+                activeKey: null,
+                dragPointerId: null,
+                dragStartKey: null,
+            };
+        }
+        if (!(this.coordinateSelectionCellState.selectedKeys instanceof Set)) {
+            this.coordinateSelectionCellState.selectedKeys = new Set(this.coordinateSelectionCellState.selectedKeys || []);
+        }
+        return this.coordinateSelectionCellState;
+    }
+
+    _resetCoordinateSelectionCellState() {
+        this.coordinateSelectionCellState = {
+            selectedKeys: new Set(),
+            anchorKey: null,
+            activeKey: null,
+            dragPointerId: null,
+            dragStartKey: null,
+        };
+    }
+
+    _coordinateSelectionCellKey(listName, row, col) {
+        return `${listName}:${row}:${col}`;
+    }
+
+    _parseCoordinateSelectionCellKey(key) {
+        const [listName, rowText, colText] = String(key || '').split(':');
+        const row = Number(rowText);
+        const col = Number(colText);
+        if (!this.coordinateSelectionLists?.[listName] || !Number.isInteger(row) || !Number.isInteger(col)) return null;
+        return { listName, row, col };
+    }
+
+    _getCoordinateSelectionCellInput(key) {
+        const parsed = this._parseCoordinateSelectionCellKey(key);
+        if (!parsed) return null;
+        return this.dom?.coordinateSelectListPanels?.querySelector(
+            `input[data-coordinate-list="${parsed.listName}"][data-coordinate-row="${parsed.row}"][data-coordinate-col="${parsed.col}"]`
+        ) || null;
+    }
+
+    _getCoordinateSelectionCellInputFromEvent(event) {
+        const input = event?.target?.closest?.('input[data-coordinate-list][data-coordinate-row][data-coordinate-col]');
+        return this.dom?.coordinateSelectListPanels?.contains(input) ? input : null;
+    }
+
+    _coordinateSelectionCellRangeKeys(startKey, endKey) {
+        const start = this._parseCoordinateSelectionCellKey(startKey);
+        const end = this._parseCoordinateSelectionCellKey(endKey);
+        if (!start || !end || start.listName !== end.listName) return end ? [endKey] : [];
+        const keys = [];
+        const minRow = Math.min(start.row, end.row);
+        const maxRow = Math.max(start.row, end.row);
+        const minCol = Math.min(start.col, end.col);
+        const maxCol = Math.max(start.col, end.col);
+        const columns = this._coordinateSelectionListConfig(start.listName).columns;
+        for (let row = minRow; row <= maxRow; row += 1) {
+            for (let col = minCol; col <= maxCol && col < columns; col += 1) {
+                keys.push(this._coordinateSelectionCellKey(start.listName, row, col));
+            }
+        }
+        return keys;
+    }
+
+    _selectCoordinateSelectionCell(input, event = {}) {
+        if (!input) return;
+        const key = input.dataset.coordinateCellKey || this._coordinateSelectionCellKey(
+            input.dataset.coordinateList,
+            Number(input.dataset.coordinateRow),
+            Number(input.dataset.coordinateCol)
+        );
+        const cellState = this._ensureCoordinateSelectionCellState();
+        if (event.shiftKey && cellState.anchorKey &&
+            this._parseCoordinateSelectionCellKey(cellState.anchorKey)?.listName === input.dataset.coordinateList) {
+            cellState.selectedKeys = new Set(this._coordinateSelectionCellRangeKeys(cellState.anchorKey, key));
+        } else if (event.ctrlKey || event.metaKey) {
+            const selected = new Set(cellState.selectedKeys);
+            if (selected.has(key)) selected.delete(key);
+            else selected.add(key);
+            cellState.selectedKeys = selected;
+            cellState.anchorKey ||= key;
+        } else {
+            cellState.selectedKeys = new Set([key]);
+            cellState.anchorKey = key;
+        }
+        cellState.activeKey = key;
+        input.focus?.({ preventScroll: true });
+        this._updateCoordinateSelectionCellClasses();
+    }
+
+    _setCoordinateSelectionCellRange(startKey, endKey) {
+        const cellState = this._ensureCoordinateSelectionCellState();
+        cellState.selectedKeys = new Set(this._coordinateSelectionCellRangeKeys(startKey, endKey));
+        cellState.anchorKey = startKey;
+        cellState.activeKey = endKey;
+        this._updateCoordinateSelectionCellClasses();
+    }
+
+    _selectAllCoordinateSelectionCells(listName) {
+        const inputs = [...(this.dom?.coordinateSelectListPanels?.querySelectorAll(
+            `input[data-coordinate-list="${listName}"][data-coordinate-row][data-coordinate-col]`
+        ) || [])];
+        const keys = inputs.map((input) => input.dataset.coordinateCellKey).filter(Boolean);
+        if (!keys.length) return;
+        const cellState = this._ensureCoordinateSelectionCellState();
+        cellState.selectedKeys = new Set(keys);
+        cellState.anchorKey = keys[0];
+        cellState.activeKey = keys[keys.length - 1];
+        this._updateCoordinateSelectionCellClasses();
+    }
+
+    _updateCoordinateSelectionCellClasses() {
+        const cellState = this._ensureCoordinateSelectionCellState();
+        const liveKeys = new Set();
+        this.dom?.coordinateSelectListPanels?.querySelectorAll('input[data-coordinate-cell-key]').forEach((input) => {
+            const key = input.dataset.coordinateCellKey;
+            liveKeys.add(key);
+            const selected = cellState.selectedKeys.has(key);
+            input.classList.toggle('is-cell-selected', selected);
+            input.setAttribute('aria-selected', selected ? 'true' : 'false');
+            if (input.dataset.coordinateEditing !== 'true') {
+                input.readOnly = true;
+                input.classList.remove('is-editing');
+            }
+        });
+        cellState.selectedKeys = new Set([...cellState.selectedKeys].filter((key) => liveKeys.has(key)));
+        if (!liveKeys.has(cellState.anchorKey)) cellState.anchorKey = cellState.selectedKeys.values().next().value || null;
+        if (!liveKeys.has(cellState.activeKey)) cellState.activeKey = cellState.anchorKey;
+    }
+
+    _enterCoordinateSelectionCellEdit(input, { replaceValue = null } = {}) {
+        if (!input) return;
+        this._selectCoordinateSelectionCell(input);
+        input.readOnly = false;
+        input.dataset.coordinateEditing = 'true';
+        input.classList.add('is-editing');
+        input.focus?.({ preventScroll: true });
+        if (replaceValue !== null) {
+            input.value = replaceValue;
+            this._syncCoordinateSelectionListInput(input);
+        }
+        const position = String(input.value || '').length;
+        try {
+            input.setSelectionRange(position, position);
+        } catch (error) {
+            // Ignore selection failures for non-text-capable browser states.
+        }
+    }
+
+    _finishCoordinateSelectionCellEdit(input) {
+        if (!input || input.dataset.coordinateEditing !== 'true') return;
+        this._syncCoordinateSelectionListInput(input, { preserveSynced: true });
+        input.dataset.coordinateEditing = 'false';
+        delete input.dataset.coordinateEditing;
+        input.readOnly = true;
+        input.classList.remove('is-editing');
+        this._updateCoordinateSelectionCellClasses();
+    }
+
+    _syncCoordinateSelectionListInput(input, { preserveSynced = false } = {}) {
+        if (!input) return;
+        const listName = input.dataset.coordinateList;
+        const state = this.coordinateSelectionLists?.[listName];
+        const row = Number(input.dataset.coordinateRow);
+        const col = Number(input.dataset.coordinateCol);
+        if (!state || !Number.isInteger(row) || !Number.isInteger(col)) return;
+        const columns = this._coordinateSelectionListConfig(listName).columns;
+        if (state.synced && !preserveSynced) {
+            state.rows = this._newCoordinateSelectionListRows(listName);
+        }
+        state.synced = false;
+        while (state.rows.length <= row) state.rows.push(Array(columns).fill(''));
+        state.rows[row][col] = input.value;
+        state.hasInput = true;
+        this._activateCoordinateSelectionList(listName);
+        this._setCoordinateSelectionError('');
+        this._scheduleCoordinateSelectionLiveApply({ forceClear: true });
+    }
+
+    _clearSelectedCoordinateSelectionCells(fallbackInput = null) {
+        const cellState = this._ensureCoordinateSelectionCellState();
+        if (fallbackInput && cellState.selectedKeys.size === 0) this._selectCoordinateSelectionCell(fallbackInput);
+        const keys = [...cellState.selectedKeys];
+        if (!keys.length) return;
+        const touchedLists = new Set();
+        keys.forEach((key) => {
+            const input = this._getCoordinateSelectionCellInput(key);
+            if (!input) return;
+            input.value = '';
+            this._syncCoordinateSelectionListInput(input, { preserveSynced: true });
+            touchedLists.add(input.dataset.coordinateList);
+        });
+        const activeList = fallbackInput?.dataset?.coordinateList || this._parseCoordinateSelectionCellKey(keys[0])?.listName;
+        if (activeList) this._activateCoordinateSelectionList(activeList);
+        touchedLists.forEach((listName) => {
+            const state = this.coordinateSelectionLists?.[listName];
+            if (state) {
+                state.hasInput = true;
+                state.synced = false;
+            }
+        });
+        this._updateCoordinateSelectionCellClasses();
     }
 
     _getCoordinateSelectionQuickOptions(listName) {
@@ -9681,7 +9907,19 @@ class WaferMapViewer {
         state.hasInput = true;
         this._activateCoordinateSelectionList(listName);
         this._setCoordinateSelectionError('');
-        this._renderCoordinateSelectionLists({ listName, row: startRow, col: Math.min(startCol, columns - 1) });
+        const pastedWidth = Math.max(1, ...matrix.map((values) => values.length));
+        const startKey = this._coordinateSelectionCellKey(listName, startRow, Math.min(startCol, columns - 1));
+        const endKey = this._coordinateSelectionCellKey(
+            listName,
+            startRow + matrix.length - 1,
+            Math.min(columns - 1, startCol + pastedWidth - 1)
+        );
+        const cellState = this._ensureCoordinateSelectionCellState();
+        cellState.selectedKeys = new Set(this._coordinateSelectionCellRangeKeys(startKey, endKey));
+        cellState.anchorKey = startKey;
+        cellState.activeKey = endKey;
+        this._renderCoordinateSelectionLists();
+        setTimeout(() => this._getCoordinateSelectionCellInput(startKey)?.focus?.({ preventScroll: true }), 0);
         this._scheduleCoordinateSelectionLiveApply({ forceClear: true });
     }
 
@@ -10031,22 +10269,87 @@ class WaferMapViewer {
         dom.coordinateSelectListPanels?.addEventListener('input', (event) => {
             const input = event.target.closest?.('input[data-coordinate-list][data-coordinate-row]');
             if (!input) return;
-            const listName = input.dataset.coordinateList;
-            const state = this.coordinateSelectionLists?.[listName];
-            const row = Number(input.dataset.coordinateRow);
-            const col = Number(input.dataset.coordinateCol);
-            if (!state || !Number.isInteger(row) || !Number.isInteger(col)) return;
-            const columns = this._coordinateSelectionListConfig(listName).columns;
-            if (state.synced) {
-                state.rows = this._newCoordinateSelectionListRows(listName);
-                state.synced = false;
+            this._syncCoordinateSelectionListInput(input);
+        });
+        dom.coordinateSelectListPanels?.addEventListener('pointerdown', (event) => {
+            const input = this._getCoordinateSelectionCellInputFromEvent(event);
+            if (!input || event.button !== 0 || input.dataset.coordinateEditing === 'true') return;
+            this._selectCoordinateSelectionCell(input, event);
+            const key = input.dataset.coordinateCellKey;
+            const cellState = this._ensureCoordinateSelectionCellState();
+            cellState.dragPointerId = event.pointerId;
+            cellState.dragStartKey = event.shiftKey && cellState.anchorKey ? cellState.anchorKey : key;
+            dom.coordinateSelectListPanels.setPointerCapture?.(event.pointerId);
+            event.preventDefault();
+        });
+        dom.coordinateSelectListPanels?.addEventListener('pointermove', (event) => {
+            const cellState = this._ensureCoordinateSelectionCellState();
+            if (cellState.dragPointerId !== event.pointerId || !cellState.dragStartKey) return;
+            const target = document.elementFromPoint(event.clientX, event.clientY);
+            const input = target?.closest?.('input[data-coordinate-list][data-coordinate-row][data-coordinate-col]');
+            if (!input || !dom.coordinateSelectListPanels.contains(input)) return;
+            this._setCoordinateSelectionCellRange(cellState.dragStartKey, input.dataset.coordinateCellKey);
+        });
+        const stopCoordinateCellDrag = (event) => {
+            const cellState = this._ensureCoordinateSelectionCellState();
+            if (cellState.dragPointerId !== event.pointerId) return;
+            dom.coordinateSelectListPanels.releasePointerCapture?.(event.pointerId);
+            cellState.dragPointerId = null;
+            cellState.dragStartKey = null;
+        };
+        dom.coordinateSelectListPanels?.addEventListener('pointerup', stopCoordinateCellDrag);
+        dom.coordinateSelectListPanels?.addEventListener('pointercancel', stopCoordinateCellDrag);
+        dom.coordinateSelectListPanels?.addEventListener('dblclick', (event) => {
+            const input = this._getCoordinateSelectionCellInputFromEvent(event);
+            if (!input) return;
+            this._enterCoordinateSelectionCellEdit(input);
+            event.preventDefault();
+        });
+        dom.coordinateSelectListPanels?.addEventListener('keydown', (event) => {
+            const input = this._getCoordinateSelectionCellInputFromEvent(event);
+            if (!input) return;
+            const editing = input.dataset.coordinateEditing === 'true';
+            if (editing) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    this._finishCoordinateSelectionCellEdit(input);
+                } else if (event.key === 'Escape') {
+                    event.preventDefault();
+                    this._finishCoordinateSelectionCellEdit(input);
+                }
+                return;
             }
-            while (state.rows.length <= row) state.rows.push(Array(columns).fill(''));
-            state.rows[row][col] = input.value;
-            state.hasInput = true;
-            this._activateCoordinateSelectionList(listName);
-            this._setCoordinateSelectionError('');
-            this._scheduleCoordinateSelectionLiveApply({ forceClear: true });
+            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
+                event.preventDefault();
+                this._selectAllCoordinateSelectionCells(input.dataset.coordinateList);
+                return;
+            }
+            if (event.key === 'F2') {
+                event.preventDefault();
+                this._enterCoordinateSelectionCellEdit(input);
+                return;
+            }
+            if (event.key === 'Delete' || event.key === 'Backspace') {
+                event.preventDefault();
+                this._clearSelectedCoordinateSelectionCells(input);
+                return;
+            }
+            if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.length === 1) {
+                event.preventDefault();
+                this._enterCoordinateSelectionCellEdit(input, { replaceValue: event.key });
+            }
+        });
+        dom.coordinateSelectListPanels?.addEventListener('focusin', (event) => {
+            const input = this._getCoordinateSelectionCellInputFromEvent(event);
+            if (!input || input.dataset.coordinateEditing === 'true') return;
+            const cellState = this._ensureCoordinateSelectionCellState();
+            if (!cellState.selectedKeys.has(input.dataset.coordinateCellKey)) {
+                this._selectCoordinateSelectionCell(input);
+            }
+        });
+        dom.coordinateSelectListPanels?.addEventListener('focusout', (event) => {
+            const input = this._getCoordinateSelectionCellInputFromEvent(event);
+            if (input?.dataset.coordinateEditing === 'true') this._finishCoordinateSelectionCellEdit(input);
         });
         dom.coordinateSelectListPanels?.addEventListener('click', (event) => {
             const clearButton = event.target.closest?.('[data-coordinate-list-clear]');
@@ -10299,6 +10602,7 @@ class WaferMapViewer {
         this.coordinateSelectionShotPickerAnchorIndex = null;
         this.coordinateSelectionShotPickerDrag = null;
         this.coordinateSelectionShotPickerSuppressClickAt = 0;
+        this._resetCoordinateSelectionCellState();
         this.coordinateSelectionLists = {
             shot: { rows: this._newCoordinateSelectionListRows('shot'), hasInput: false, synced: false },
             chip: { rows: this._newCoordinateSelectionListRows('chip'), hasInput: false, synced: false },
