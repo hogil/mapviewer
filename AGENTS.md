@@ -11,6 +11,12 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - Do not delete or move this folder as "unused" unless the user explicitly asks. It exists to reproduce multi-million-file indexing speed and cold-cache behavior.
 - UI/E2E/image-rendering tests should not use `benchmark_4m` files as visual images. Index/search performance tests may intentionally include them.
 
+## E2E Execution Policy
+
+- Do not run Playwright E2E, `run-e2e-playwright.ps1`, or `e2e-agent-cycle.ps1` unless the user explicitly requests E2E execution in the current request.
+- A prior request to run E2E is not continuing consent for later changes. Ordinary fixes, including small UI changes, must not automatically trigger E2E.
+- Adding or updating an E2E guard does not authorize executing it. Report the test change as unexecuted unless the user separately asks to run E2E.
+
 ## Regression Notes
 
 - Do not hide UI regressions with broad exception handling, timeout relaxation, or "ignore if transient" logic. Find the lifecycle or state mismatch that made the UI appear.
@@ -203,7 +209,7 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - 파일: `index.html`, `css/style.css`, `js/main.js`, `js/chip-annotator.js`, `scripts/e2e_chunk2.js`
 
 #### BUG-28: layout zone 컬럼 계약 회귀 (2026-08-08)
-- BUG-29: Parquet numeric dtype와 partial Shot 경계/선택 회귀를 추가로 기록한다. 정수 의미의 float64 값은 허용하고, invalid row는 예시와 함께 로그한다. partial Shot은 canonical 4x6 크기와 cell 크기를 유지하며 누락 슬롯은 배경으로 둔다. Shot 선택은 canonical 영역 전체를 선택색으로 칠하고 hover는 외곽선만 그린다. Chip(Grid)은 x_cal/y_cal이 아니라 positions의 x_abs/y_abs를 표시한다.
+- BUG-29: Parquet numeric dtype와 partial Shot 경계/선택 회귀를 추가로 기록한다. 정수 의미의 float64 값은 허용하고, invalid row는 예시와 함께 로그한다. partial Shot은 canonical 4x6 크기와 cell 크기를 유지하며 누락 슬롯은 배경으로 둔다. Shot 선택 외곽선은 canonical 영역 전체를 표시하되 선택색 채움은 실제로 존재하는 Chip 사각형에만 적용한다. Chip(Grid)은 x_cal/y_cal이 아니라 positions의 x_abs/y_abs를 표시한다.
 - E2E guard: scripts/e2e_chunk2.js layout-chip-coordinates가 partial group의 경계 누락/비정규 크기, hover와 선택 geometry 일치, 선택 영역 pixel 변화, Chip(Grid) 값을 검사한다.
 - BUG-29 추가 원인: 새 Parquet가 zone_type을 edge/area/circle pivot 컬럼으로 저장하면서 zone_id/zone_type을 제거하면, 고정 컬럼 선택이 `FieldRef.Name(zone_id)`에서 실패해 첫 Shot의 layout 매칭이 중단된다. `api/full_app.py::_read_layout_source_rows()`는 스키마를 먼저 확인하고 pivot의 비어 있지 않은 값을 canonical zone_type/zone_id로 정규화한다.
 - E2E/unit guard: layout-chip-coordinates는 정규화된 circle zone을 확인하고, pivot Parquet fixture는 833개 row와 `circle:E20` 매칭을 확인한다.
@@ -213,11 +219,18 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - 파일: `scripts/generate_layout_dummy.py`, `api/full_app.py`, `docs/LAYOUT_FEATURE.md`, `scripts/e2e_chunk2.js`
 
 #### BUG-30: Shot 경계 지연/좌표계 불일치와 Border 잔류 색 회귀 (2026-08-08)
-- 증상: partial Shot의 경계, Shot 선택 영역, 하단 Shot(Grid) 표기가 서로 다른 위치를 가리키거나 Shot 버튼을 누른 뒤 경계가 늦게 나타났다. Border를 켜도 BIN/ratio overlay의 색이 칩 외곽에 남을 수 있었다. Chip Pos 셀에 소수 좌표를 붙여넣으면 정수 검증에서 거부됐다.
-- 원인: Shot 경계는 `x_abs/y_abs` modulo, Shot 선택은 `shot_id`, Shot 표기는 layout `shot_x_pos/shot_y_pos`를 각각 독립 계산했고, 경계를 그릴 때 Shot shape를 매 그룹마다 다시 계산했다. Border는 서버 이미지 외에 클라이언트 overlay가 칩 색을 다시 그려 fractional stroke 가장자리에 BIN 색이 남았다. 좌표 목록 검증은 Chip Pos 전환 전에 Chip X/Y를 정수로 강제했다.
-- 수정 계약: layout의 canonical geometry를 한 번 계산하고 Shot별 경계를 캐시해 경계/hover/선택/Chip ID 슬롯이 같은 원점을 사용한다. partial Shot도 canonical 4x6 크기를 유지한다. Border는 client overlay의 칩 네 변을 pixel-snap한 Normal 색으로 덮고, Chip X/Y 셀은 정수 grid와 소수 Chip(Pos) mm 입력을 모두 허용한다.
-- E2E guard: `scripts/e2e_chunk2.js`의 `layout-chip-coordinates`는 P001 833개 layout row, 43개 Shot, partial 경계 canonical 4x6, hover/선택 영역 일치, 실제 Shot 토글 첫 표시 `firstOnMs < 10` 및 경계 픽셀 `> 50`을 확인한다. `systematic-measure-single-lot-wafer`는 SYSTEMATIC 단일보기에서 833개 칩 경계의 Normal RGB와 잔류 색을 픽셀 검사한다. `coordinate-selection-cells`는 소수 Chip Pos 붙여넣기 후 단일 Chip 선택을 확인한다.
+- 증상: partial Shot의 경계, Shot 선택 영역, 하단 Shot(Grid) 표기가 서로 다른 위치를 가리키거나 Shot 버튼을 누른 뒤 경계가 늦게 나타났다. Border를 켜면 경계색만 바뀌어야 하는데 client overlay 선이 추가되어 확대 시 더 굵고 진하게 보였다. Chip Pos 셀에 소수 좌표를 붙여넣으면 정수 검증에서 거부됐다.
+- 원인: Shot 경계는 `x_abs/y_abs` modulo, Shot 선택은 `shot_id`, Shot 표기는 layout `shot_x_pos/shot_y_pos`를 각각 독립 계산했고, 경계를 그릴 때 Shot shape를 매 그룹마다 다시 계산했다. Border는 서버의 PLTE 치환에 더해 `_renderNormalizedChipBorders()`가 확대율에 따라 최대 3px의 불투명 선을 다시 그렸다. 좌표 목록 검증은 Chip Pos 전환 전에 Chip X/Y를 정수로 강제했다.
+- 수정 계약: layout의 canonical geometry를 한 번 계산하고 Shot별 경계를 캐시해 경계/hover/선택/Chip ID 슬롯이 같은 원점을 사용한다. partial Shot도 canonical 4x6 크기를 유지한다. Border는 서버 PNG의 Normal 팔레트 인덱스 10 색을 경계 인덱스 11~23에 복사하는 PLTE 치환만 수행하며, client overlay에 선이나 채움을 추가하지 않는다. Chip X/Y 셀은 정수 grid와 소수 Chip(Pos) mm 입력을 모두 허용한다.
+- E2E guard: `scripts/e2e_chunk2.js`의 `layout-chip-coordinates`는 P001 833개 layout row, 43개 Shot, partial 경계 canonical 4x6, hover/선택 영역 일치, 실제 Shot 토글 첫 표시 `firstOnMs < 10` 및 경계 픽셀 `> 50`을 확인한다. `systematic-measure-single-lot-wafer`는 Border 전후 PNG의 IDAT와 client overlay hash가 동일하고, PLTE 변경이 11~23에만 한정되며 모두 인덱스 10 색과 같은지 검사한다. `coordinate-selection-cells`는 소수 Chip Pos 붙여넣기 후 단일 Chip 선택을 확인한다.
 - 파일: `js/chip-annotator.js`, `js/main.js`, `scripts/e2e_chunk2.js`, `scripts/generate_layout_dummy.py`
+
+#### BUG-31: 단일보기 고정 패널 더블클릭 소실과 partial Shot 빈 슬롯 채움 회귀 (2026-08-08)
+- 증상: 단일 이미지에서 Grade, Chip/Border, 좌하단 상태, 미니맵 패널을 더블클릭하거나 확대·이동 중 빠르게 클릭하면 네 패널이 함께 사라질 수 있었다. 그리드 썸네일을 더블클릭해 상세 탭에 들어갔다가 그리드로 돌아온 후 다시 진입해도 일부 패널이 숨김 상태로 남을 수 있었다. Edge partial Shot을 선택하면 실제 Chip이 없는 canonical 슬롯까지 선택색으로 채워졌다.
+- 원인: `js/main.js`의 `viewerContainer` `dblclick` 핸들러가 대상 요소를 구분하지 않고 `gridImage`를 종료해 grid CSS가 모든 단일보기 패널을 숨겼다. 또한 `enterGridImageViewMode()`가 상세 탭을 활성화할 때 `PageManager.applyPageState()`도 병렬로 실행돼 stale detail state의 `hideGrid()`가 새 단일 보기의 패널 표시를 다시 지웠다. `ChipAnnotator._renderSelectedShotAreas()`는 그룹의 기존 Chip이 모두 선택되면 실제 Chip rect 대신 canonical Shot 전체에 `fillRect()`를 호출했다.
+- 수정 계약: `#color-legend-top`, `#color-legend-bottom`, `#chip-info-container`, `#minimap-container` 내부의 더블클릭은 탐색 이벤트로 전파하지 않는다. 캔버스 더블클릭의 기존 그리드 복귀는 유지한다. `enterGridImageViewMode()`는 이미 보존한 상태로 상세 탭을 직접 구성하므로 target tab activation/create에서 `skipApply`를 사용한다. Shot 선택 경계는 canonical 크기로 유지하되 내부 선택색은 `group.indices`의 실제 선택 Chip rect에만 칠한다.
+- E2E guard: `scripts/e2e_chunk2.js` record `layout-chip-coordinates`는 네 패널 각각을 실제 더블클릭하고 6회의 확대·pan을 수행한 뒤 동일 path, `gridMode=false`, 네 패널 visible을 매회 확인한다. 이어서 실제 그리드 썸네일을 더블클릭해 상세 보기로 들어가고 그리드 복귀 후 다시 썸네일 더블클릭한 뒤에도 네 패널 visible을 확인한다. Chip 1개짜리 partial Shot 8에서는 실제 Chip 중심 픽셀만 선택색으로 변하고 빈 슬롯 중심 RGBA는 전후 동일해야 한다.
+- 파일: `js/main.js`, `js/chip-annotator.js`, `scripts/e2e_chunk2.js`
 
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)

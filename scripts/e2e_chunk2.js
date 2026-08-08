@@ -1716,10 +1716,20 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(!data.navigator.url.includes('/api/bin-map-thumb'), `navigator should use filtered thumbnail=${data.navigator.url}`);
     expect(data.navigatorAccentPixels > 0, `navigator systematic colors=${JSON.stringify(data)}`);
 
-    await page.evaluate(() => {
+    const overlayHashBeforeBorder = await page.evaluate(() => {
       const v = window.viewer;
       v.borderNormalize = false;
       v.chipAnnotator?.render();
+      const canvas = v.chipAnnotator?.canvas;
+      const pixels = canvas?.width && canvas?.height
+        ? canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data
+        : new Uint8ClampedArray();
+      let hash = 2166136261;
+      for (let index = 0; index < pixels.length; index += 1) {
+        hash ^= pixels[index];
+        hash = Math.imul(hash, 16777619);
+      }
+      return { hash: hash >>> 0, width: canvas?.width || 0, height: canvas?.height || 0 };
     });
     await page.locator('#single-border-normalize-btn').click();
     await page.waitForFunction(
@@ -1727,70 +1737,99 @@ const { createRunner } = require('./e2e_playwright_session');
       null,
       { timeout: 10000 }
     );
-    const borderNormalization = await page.evaluate(({ expectedBins }) => {
+    await sleep(1000);
+    const borderNormalization = await page.evaluate(async ({ imagePath, overlayHashBeforeBorder }) => {
       const v = window.viewer;
       const annotator = v.chipAnnotator;
-      const hexToRgb = (value) => {
-        const hex = String(value || '').replace('#', '');
-        return /^[0-9a-f]{6}$/i.test(hex)
-          ? [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)]
-          : null;
+      const parsePng = (buffer) => {
+        const bytes = new Uint8Array(buffer);
+        const chunks = [];
+        let offset = 8;
+        while (offset + 12 <= bytes.length) {
+          const length = ((bytes[offset] << 24) | (bytes[offset + 1] << 16) |
+            (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0;
+          const type = String.fromCharCode(...bytes.slice(offset + 4, offset + 8));
+          const data = bytes.slice(offset + 8, offset + 8 + length);
+          chunks.push({ type, data });
+          offset += 12 + length;
+          if (type === 'IEND') break;
+        }
+        const palette = chunks.find((chunk) => chunk.type === 'PLTE')?.data || new Uint8Array();
+        const idatParts = chunks.filter((chunk) => chunk.type === 'IDAT').map((chunk) => chunk.data);
+        const idatLength = idatParts.reduce((sum, part) => sum + part.length, 0);
+        const idat = new Uint8Array(idatLength);
+        let cursor = 0;
+        idatParts.forEach((part) => {
+          idat.set(part, cursor);
+          cursor += part.length;
+        });
+        return { palette, idat, byteLength: bytes.length };
       };
-      const normal = hexToRgb(
-        annotator.binOverlayColors?.get('Normal') ||
-        annotator.binOverlayColors?.get('Border') ||
-        '#BDBDBD'
-      );
-      const context = annotator.canvas?.getContext('2d');
-      const transform = v.transform;
-      const sample = (x, y) => {
-        const pixelX = Math.round(x);
-        const pixelY = Math.round(y);
-        if (pixelX < 0 || pixelY < 0 || pixelX >= annotator.canvas.width || pixelY >= annotator.canvas.height) return null;
-        return Array.from(context.getImageData(pixelX, pixelY, 1, 1).data).slice(0, 3);
+      const equalBytes = (left, right) => {
+        if (left.length !== right.length) return false;
+        for (let index = 0; index < left.length; index += 1) {
+          if (left[index] !== right[index]) return false;
+        }
+        return true;
       };
-      if (!context || !transform || !normal) {
-        return { rows: [], normal, failures: ['canvas/transform missing'] };
+
+      const baseUrl = `/api/image?path=${encodeURIComponent(imagePath)}`;
+      const [baseResponse, normalizedResponse] = await Promise.all([
+        fetch(`${baseUrl}&e2e_border=base`, { cache: 'no-store' }),
+        fetch(`${baseUrl}&border_normalize=1&e2e_border=normalized`, { cache: 'no-store' }),
+      ]);
+      const base = parsePng(await baseResponse.arrayBuffer());
+      const normalized = parsePng(await normalizedResponse.arrayBuffer());
+      const paletteEntries = Math.min(base.palette.length, normalized.palette.length) / 3;
+      const entry = (palette, index) => Array.from(palette.slice(index * 3, index * 3 + 3));
+      const changedIndices = [];
+      for (let index = 0; index < paletteEntries; index += 1) {
+        if (!equalBytes(base.palette.slice(index * 3, index * 3 + 3),
+          normalized.palette.slice(index * 3, index * 3 + 3))) changedIndices.push(index);
       }
+      const normal = entry(normalized.palette, 10);
+      const normalizedBorderIndices = [];
+      for (let index = 11; index < Math.min(24, paletteEntries); index += 1) {
+        if (equalBytes(normalized.palette.slice(index * 3, index * 3 + 3),
+          normalized.palette.slice(30, 33))) normalizedBorderIndices.push(index);
+      }
+
       annotator.render();
-      const inspectChip = (chip) => {
-        if (!chip) return null;
-        const rect = chip.rect;
-        const centerX = ((rect.x0 + rect.x1) / 2) * transform.scale + transform.dx;
-        const centerY = ((rect.y0 + rect.y1) / 2) * transform.scale + transform.dy + (annotator.Y_OFFSET || 0);
-        const top = rect.y0 * transform.scale + transform.dy + (annotator.Y_OFFSET || 0);
-        const left = rect.x0 * transform.scale + transform.dx;
-        const edgePixels = [sample(centerX, top), sample(left, centerY)];
-        if (edgePixels.some((pixel) => !pixel)) return null;
-        const distances = edgePixels.map((pixel) => Math.hypot(
-          pixel[0] - normal[0], pixel[1] - normal[1], pixel[2] - normal[2]
-        ));
-        return {
-          bin: annotator._normalizeBottomValue(chip.b),
-          chip: [chip.x_abs, chip.y_abs],
-          edgePixels,
-          distances,
-        };
-      };
-      const allRows = (annotator.chips || []).map(inspectChip).filter(Boolean);
-      const rows = expectedBins.map((bin) => inspectChip((annotator.chips || []).find((candidate) =>
-        annotator._normalizeBottomValue(candidate?.b) === bin
-      ))).filter(Boolean);
+      const canvas = annotator.canvas;
+      const pixels = canvas?.width && canvas?.height
+        ? canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data
+        : new Uint8ClampedArray();
+      let overlayHash = 2166136261;
+      for (let index = 0; index < pixels.length; index += 1) {
+        overlayHash ^= pixels[index];
+        overlayHash = Math.imul(overlayHash, 16777619);
+      }
       return {
         border: v.borderNormalize,
+        baseStatus: baseResponse.status,
+        normalizedStatus: normalizedResponse.status,
+        contentTypes: [baseResponse.headers.get('content-type'), normalizedResponse.headers.get('content-type')],
+        byteLengths: [base.byteLength, normalized.byteLength],
+        paletteEntries,
         normal,
-        rows,
-        allSampledChipCount: allRows.length,
-        allFailures: allRows.filter((row) => row.distances.some((distance) => distance > 2))
-          .slice(0, 20)
-          .map((row) => ({ bin: row.bin, chip: row.chip, distances: row.distances })),
-        failures: rows.filter((row) => row.distances.some((distance) => distance > 2))
-          .map((row) => row.bin),
+        changedIndices,
+        normalizedBorderIndices,
+        outsideBorderChanges: changedIndices.filter((index) => index < 11 || index >= 24),
+        idatEqual: equalBytes(base.idat, normalized.idat),
+        overlayBefore: overlayHashBeforeBorder,
+        overlayAfter: { hash: overlayHash >>> 0, width: canvas?.width || 0, height: canvas?.height || 0 },
+        clientBorderRenderer: typeof annotator._renderNormalizedChipBorders,
       };
-    }, { expectedBins });
-    expect(borderNormalization.rows.length > 0 && borderNormalization.failures.length === 0 &&
-      borderNormalization.allSampledChipCount > 800 && borderNormalization.allFailures.length === 0,
-      `border normalized edge pixels=${JSON.stringify(borderNormalization)}`);
+    }, { imagePath: target.imagePath, overlayHashBeforeBorder });
+    expect(borderNormalization.border && borderNormalization.baseStatus === 200 &&
+      borderNormalization.normalizedStatus === 200 && borderNormalization.paletteEntries >= 24 &&
+      borderNormalization.normalizedBorderIndices.length === 13 &&
+      borderNormalization.outsideBorderChanges.length === 0 && borderNormalization.idatEqual &&
+      borderNormalization.overlayBefore.hash === borderNormalization.overlayAfter.hash &&
+      borderNormalization.overlayBefore.width === borderNormalization.overlayAfter.width &&
+      borderNormalization.overlayBefore.height === borderNormalization.overlayAfter.height &&
+      borderNormalization.clientBorderRenderer === 'undefined',
+      `border should change palette colors only=${JSON.stringify(borderNormalization)}`);
 
     await page.evaluate(() => {
       const v = window.viewer;
@@ -1866,6 +1905,114 @@ const { createRunner } = require('./e2e_playwright_session');
         }
       }).length,
     }));
+
+    const readSinglePanelState = (label) => page.evaluate(({ label, imagePath }) => {
+      const v = window.viewer;
+      const selectors = [
+        '#color-legend-top',
+        '#color-legend-bottom',
+        '#chip-info-container',
+        '#minimap-container',
+      ];
+      const panels = Object.fromEntries(selectors.map((selector) => {
+        const element = document.querySelector(selector);
+        const style = element ? getComputedStyle(element) : null;
+        const rect = element?.getBoundingClientRect?.();
+        return [selector, {
+          display: style?.display || '',
+          visibility: style?.visibility || '',
+          width: rect?.width || 0,
+          height: rect?.height || 0,
+          visible: Boolean(element && style?.display !== 'none' && style?.visibility !== 'hidden' &&
+            rect?.width > 0 && rect?.height > 0),
+        }];
+      }));
+      return {
+        label,
+        expectedPath: imagePath,
+        path: v?.selectedImagePath || '',
+        gridMode: v?.gridMode,
+        viewMode: v?.viewMode,
+        panels,
+      };
+    }, { label, imagePath: target.imagePath });
+    const assertSinglePanelState = (state) => {
+      const hidden = Object.entries(state.panels)
+        .filter(([, panel]) => !panel.visible)
+        .map(([selector]) => selector);
+      expect(state.gridMode === false && state.viewMode === 'gridImage' &&
+        state.path === target.imagePath && hidden.length === 0,
+      `single panels=${JSON.stringify(state)}`);
+    };
+
+    const singlePanelStability = {
+      initial: await readSinglePanelState('initial'),
+      doubleClicks: [],
+      zoomPan: [],
+    };
+    assertSinglePanelState(singlePanelStability.initial);
+    for (const selector of [
+      '#color-legend-top',
+      '#color-legend-bottom',
+      '#chip-info-container',
+      '#minimap-container',
+    ]) {
+      await page.locator(selector).dblclick({ position: { x: 3, y: 3 }, delay: 30 });
+      await sleep(100);
+      const state = await readSinglePanelState(`doubleclick:${selector}`);
+      assertSinglePanelState(state);
+      singlePanelStability.doubleClicks.push(state);
+    }
+
+    const panelGridRoundTrip = {
+      afterGridReturn: null,
+      afterThumbnailDblClick: null,
+    };
+    await page.evaluate(() => window.viewer.exitSingleImageViewMode());
+    await page.waitForFunction(
+      () => {
+        const v = window.viewer;
+        return v?.gridMode === true && v?.viewMode !== 'gridImage' &&
+          document.querySelectorAll('#image-grid .grid-thumb-wrap').length > 0;
+      },
+      null,
+      { timeout: 30000 }
+    );
+    panelGridRoundTrip.afterGridReturn = await page.evaluate(() => ({
+      gridMode: window.viewer?.gridMode,
+      viewMode: window.viewer?.viewMode,
+      wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+    }));
+    await page.locator('#image-grid .grid-thumb-wrap').nth(target.index).dblclick();
+    await page.waitForFunction(
+      ({ imagePath }) => {
+        const v = window.viewer;
+        return v?.gridMode === false && v?.viewMode === 'gridImage' &&
+          v.selectedImagePath === imagePath;
+      },
+      { imagePath: target.imagePath },
+      { timeout: 30000 }
+    );
+    await sleep(300);
+    panelGridRoundTrip.afterThumbnailDblClick = await readSinglePanelState('grid-return-thumbnail-dblclick');
+    assertSinglePanelState(panelGridRoundTrip.afterThumbnailDblClick);
+
+    const overlayBox = await page.locator('#overlay-canvas').boundingBox();
+    expect(!!overlayBox, 'single overlay canvas missing for zoom/pan panel guard');
+    for (let cycle = 0; cycle < 6; cycle += 1) {
+      await page.locator(cycle % 2 === 0 ? '#zoom-in-btn' : '#zoom-out-btn').click();
+      const startX = overlayBox.x + overlayBox.width * 0.52;
+      const startY = overlayBox.y + overlayBox.height * 0.52;
+      await page.mouse.move(startX, startY);
+      await page.mouse.down();
+      await page.mouse.move(startX + 24 + cycle, startY + 14 + cycle, { steps: 4 });
+      await page.mouse.up();
+      await sleep(80);
+      const state = await readSinglePanelState(`zoom-pan:${cycle + 1}`);
+      assertSinglePanelState(state);
+      singlePanelStability.zoomPan.push(state);
+    }
+    await page.locator('#reset-view-btn').click();
 
     const layoutApi = await page.evaluate(async () => {
       const response = await fetch('/api/layout?process_id=P001', { cache: 'no-store' });
@@ -2089,6 +2236,71 @@ const { createRunner } = require('./e2e_playwright_session');
       data.radious === '82.2' &&
       data.shot === '(-2, 3)',
     `coordinate display=${JSON.stringify(data)}`);
+
+    const partialShotSelectionFill = await page.evaluate(() => {
+      const v = window.viewer;
+      const annotator = v?.chipAnnotator;
+      const group = Array.from(annotator?.shotBoundaryGroups?.values?.() || [])
+        .filter((candidate) => candidate.indices?.length > 0 && candidate.indices.length < 24)
+        .sort((left, right) => left.indices.length - right.indices.length)[0];
+      const boundary = group ? annotator._getShotBoundaryRect(group) : null;
+      const firstChip = group?.chips?.[0];
+      const transform = v?.transform;
+      const canvas = annotator?.canvas;
+      if (!group || !boundary || !firstChip?.rect || !transform || !canvas) return null;
+
+      const chipWidth = firstChip.rect.x1 - firstChip.rect.x0;
+      const chipHeight = firstChip.rect.y1 - firstChip.rect.y0;
+      let emptyPoint = null;
+      for (let row = 0; row < 6 && !emptyPoint; row += 1) {
+        for (let col = 0; col < 4 && !emptyPoint; col += 1) {
+          const point = {
+            x: boundary.minX + (col + 0.5) * chipWidth,
+            y: boundary.minY + (row + 0.5) * chipHeight,
+          };
+          const occupied = group.chips.some((chip) => point.x > chip.rect.x0 && point.x < chip.rect.x1 &&
+            point.y > chip.rect.y0 && point.y < chip.rect.y1);
+          if (!occupied) emptyPoint = point;
+        }
+      }
+      if (!emptyPoint) return null;
+
+      const chipPoint = {
+        x: (firstChip.rect.x0 + firstChip.rect.x1) / 2,
+        y: (firstChip.rect.y0 + firstChip.rect.y1) / 2,
+      };
+      const sample = (point) => {
+        const x = Math.round(point.x * transform.scale + transform.dx);
+        const y = Math.round(point.y * transform.scale + transform.dy + (annotator.Y_OFFSET || 0));
+        return {
+          x,
+          y,
+          rgba: Array.from(canvas.getContext('2d').getImageData(x, y, 1, 1).data),
+        };
+      };
+
+      annotator.setSelectionMode('shot');
+      annotator.render();
+      const before = { chip: sample(chipPoint), empty: sample(emptyPoint) };
+      annotator.selectedChips = new Set(group.indices);
+      annotator.selectedChipsOrder = [...group.indices];
+      annotator.hoveredChip = null;
+      annotator.render();
+      const after = { chip: sample(chipPoint), empty: sample(emptyPoint) };
+      const result = {
+        shotId: group.shotId,
+        chipCount: group.indices.length,
+        boundary,
+        before,
+        after,
+      };
+      annotator.setSelectionMode('chip');
+      return result;
+    });
+    expect(partialShotSelectionFill && partialShotSelectionFill.chipCount < 24 &&
+      partialShotSelectionFill.before.chip.rgba.join(',') !== partialShotSelectionFill.after.chip.rgba.join(',') &&
+      partialShotSelectionFill.before.empty.rgba.join(',') === partialShotSelectionFill.after.empty.rgba.join(','),
+      `partial Shot should fill existing chips only=${JSON.stringify(partialShotSelectionFill)}`);
 
     const shotSelectionTarget = await page.evaluate(() => {
       const v = window.viewer;
@@ -2391,6 +2603,9 @@ const { createRunner } = require('./e2e_playwright_session');
       chipHover,
       chipInteriorBefore,
       chipInteriorAfter,
+      singlePanelStability,
+      panelGridRoundTrip,
+      partialShotSelectionFill,
       layoutCacheBeforeClear,
       layoutCacheAfterClear,
     };

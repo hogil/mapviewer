@@ -6,6 +6,12 @@ argument-hint: [Phase 번호 또는 범위]
 
 # L3 Tracker E2E 기능 점검
 
+## 실행 승인 규칙
+
+- 현재 사용자 요청에 E2E 실행 지시가 명시된 경우에만 이 runner와 agent cycle을 실행한다.
+- 이전 대화의 E2E 요청은 이후 코드 변경에 대한 지속 승인이 아니다.
+- E2E guard를 추가하거나 수정하는 작업과 실제 E2E 실행은 별개다. 실행 요청이 없으면 테스트 파일만 변경하고 미실행으로 보고한다.
+
 ## 기능 우선순위와 반복 실행 순서
 
 이번 회귀군은 테스트 수보다 사용자 장애 영향으로 우선순위를 고정한다. P0가 실패하면 P1/P2 결과와 무관하게 원인 분석 후 해당 P0를 다시 통과시킨다.
@@ -6524,7 +6530,7 @@ return {
 - Guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells`. DOM visibility, 세 list의 cell values, Chip list 내부의 선택된 한 Shot 4×6 picker 실제 셀/경계/Chip ID/aria-checked/순서, selection Set, `_getSelectedShotGroups()`, Radius guide pixel을 함께 확인하고 상태 플래그만으로 PASS 처리하지 않는다.
 
 #### BUG-28: layout zone 컬럼 계약
-- BUG-29: Parquet가 integer 의미 컬럼을 float64로 반환해 문자열 1.0 변환 실패가 발생하지 않는지 확인한다. partial Shot은 canonical 4x6 경계와 cell 크기를 유지하고, Shot 선택은 그 canonical 영역 전체를 칠하며 hover는 외곽선만 표시한다. layout-chip-coordinates는 모든 partial group의 경계 존재/크기, hover/선택 geometry 일치, 선택 영역 pixel 변화, Chip(Grid)=x_abs/y_abs를 확인한다.
+- BUG-29: Parquet가 integer 의미 컬럼을 float64로 반환해 문자열 1.0 변환 실패가 발생하지 않는지 확인한다. partial Shot은 canonical 4x6 경계와 cell 크기를 유지하고, 선택 외곽선은 canonical 크기로 표시하되 선택색은 실제 존재하는 Chip만 채운다. layout-chip-coordinates는 모든 partial group의 경계 존재/크기, hover/선택 geometry 일치, 실제 Chip pixel 변화와 빈 슬롯 pixel 불변, Chip(Grid)=x_abs/y_abs를 확인한다.
 - `layout.txt` 끝에 `zone_id`, `zone_type`을 유지한다. 현재 circle fixture는 `C20`, `C80`, `E1`, `E20`과 `zone_type=circle`을 사용하며, area/edge family는 각각 `TOP_LEFT/CENTER/RIGHT/BOTTOM`, `INNER/EDGE`로 예약한다.
 - `layout-chip-coordinates`는 API로 로드된 P001 row에서 zone 값을 확인한다.
 - Pivot layout guard: `zone_id`/`zone_type`이 없는 새 Parquet에서 `edge`, `area`, `circle` 중 비어 있지 않은 zone 값을 API의 canonical `zone_type`/`zone_id`로 복원하고, 첫 Shot load가 `FieldRef.Name(zone_id)` 오류 없이 완료되는지 확인한다.
@@ -6532,5 +6538,11 @@ return {
 #### BUG-30: Shot geometry, immediate boundary, and Border pixel guard
 - `layout-chip-coordinates` must use the real P001 single-image flow and verify that layout-driven canonical geometry is shared by Shot boundary, Shot hover/selection, Shot(Grid), and Shot picker slots. Partial groups must keep the nominal 4x6 boundary and never disappear.
 - The same phase must clear the boundary cache, call the real `#single-shot-boundary-btn`, and record both the synchronous first-on render time and actual purple boundary pixels. PASS requires `firstOnMs < 10`, `firstOnPixels > 50`, and the cached boundary count to equal the 43 Shot groups. This is a client render-time guard, not a locator-click or network-load time.
-- `systematic-measure-single-lot-wafer` must enable the real Border state and pixel-sample all 833 P001 chips. Every sampled top/left edge must equal the Normal palette RGB within tolerance and `allFailures=[]`; checking only one BIN is insufficient because the client overlay can repaint other BIN/ratio edges.
+- `systematic-measure-single-lot-wafer` must enable the real Border state and fetch the original PNG both with and without `border_normalize=1`. PASS requires identical IDAT bytes and client overlay hash, no client border renderer, PLTE changes only in indices 11~23, and every index 11~23 equal to Normal index 10.
 - `coordinate-selection-cells` must paste decimal Chip(Pos) values into the Chip X/Y cells and require `selectionMode=chip` with one selected Chip. Integer Shot X/Y remains strict; Chip X/Y accepts both integer grid coordinates and decimal position coordinates.
+
+#### BUG-31: Single-image fixed panel and partial Shot fill guard
+- In the real P001 `gridImage` view, double-click `#color-legend-top`, `#color-legend-bottom`, `#chip-info-container`, and `#minimap-container` one by one. Each action must keep the same selected path, `gridMode=false`, `viewMode=gridImage`, and all four panels visibly sized.
+- Repeat zoom-button input and canvas pan six times and apply the same four-panel assertion after every cycle. This catches a navigation event that accidentally switches to grid and hides all single-view chrome.
+- Exit that detail view to its source grid, then use the real thumbnail `dblclick` handler to enter it again. The re-entry must keep `gridMode=false`, `viewMode=gridImage`, the same image path, and all four fixed panels visibly sized. This guards the `PageManager.applyPageState()` versus `enterGridImageViewMode()` transition race; the detail-tab activation must not apply stale state during the new single-view setup.
+- Select the smallest partial Shot. Its canonical outline remains 4x6, the existing Chip center must change to the selection RGBA, and a missing slot center must remain byte-for-byte unchanged.

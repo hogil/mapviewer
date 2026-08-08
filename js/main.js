@@ -1006,7 +1006,7 @@ class WaferMapViewer {
         this._layoutCacheScope.clear();
     }
 
-    async _loadLayoutForImage(imagePath, signal = null, isStaleLoad = () => false) {
+    async _loadLayoutForImage(imagePath, signal = null, isStaleLoad = () => false, layoutRowsPromise = null) {
         const annotator = this.chipAnnotator;
         if (!annotator) return;
 
@@ -1017,7 +1017,7 @@ class WaferMapViewer {
         if (!processId) return;
 
         try {
-            const rows = await this._getLayoutRowsForProcess(processId);
+            const rows = await (layoutRowsPromise || this._getLayoutRowsForProcess(processId));
             if (signal?.aborted || isStaleLoad()) return;
             annotator.setLayoutData(processId, rows);
         } catch (error) {
@@ -1489,6 +1489,15 @@ class WaferMapViewer {
                     isNavigating: this._isNavigating,
                     target: e.target
                 });
+
+                const protectedPanel = e.target?.closest?.(
+                    '#minimap-container, #color-legend-top, #color-legend-bottom, #chip-info-container'
+                );
+                if (protectedPanel) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                }
                 
                 // 🔥 Step 0: Next/Prev 버튼 위에서는 더블클릭 무시 (버튼 클릭이 우선)
                 const prevBtn = document.getElementById('prev-btn');
@@ -16372,6 +16381,18 @@ class WaferMapViewer {
             this.currentImagePath = fullPath;
             this.selectedImagePath = fullPath;  // 🔥 fullPath 사용 (prefix 포함)
 
+            // Shot layout is keyed entirely by the path's process_id. Start it
+            // now, in parallel with image decoding and positions loading.
+            const layoutProcessId = this._getLayoutProcessId(fullPath);
+            const layoutRowsPromise = layoutProcessId
+                ? this._getLayoutRowsForProcess(layoutProcessId)
+                : null;
+            if (layoutRowsPromise) {
+                // _loadLayoutForImage awaits this later; attach a handler now
+                // so a fast failure is not reported as an unhandled rejection.
+                void layoutRowsPromise.catch(() => {});
+            }
+
             // 🔥 새로운 이미지 로드 시 Bottom 필터 상태 초기화 (필요 시 유지)
             // overlayMode는 이미지 네비게이션 시에도 유지 (Measure 선택 상태 보존)
             if (!preserveBottomSelection) {
@@ -16783,7 +16804,7 @@ class WaferMapViewer {
                 try {
                     this.chipAnnotator.clearLayoutData();
                     const loaded = await this.chipAnnotator.loadPositions(fullPath);
-                    await this._loadLayoutForImage(fullPath, signal, isStaleLoad);
+                    await this._loadLayoutForImage(fullPath, signal, isStaleLoad, layoutRowsPromise);
                     if (signal.aborted || isStaleLoad() || this.gridMode) {
                         return;
                     }
@@ -25543,7 +25564,11 @@ class WaferMapViewer {
                 const candidateId = this.gridDetailPageMap.get(originPageId);
                 const exists = Array.isArray(this.pageManager.pages) && this.pageManager.pages.some(p => p.id === candidateId);
                 if (exists) {
-                    this.pageManager.activatePage(candidateId, { skipPersist: true });
+                    // enterGridImageViewMode owns this transition. Applying the
+                    // detail tab's stale state here can call hideGrid() after
+                    // the new single view has started, leaving fixed panels
+                    // hidden behind the grid-mode state.
+                    this.pageManager.activatePage(candidateId, { skipPersist: true, skipApply: true });
                     targetPage = this.pageManager.getActivePage();
                 } else {
                     this.gridDetailPageMap.delete(originPageId);
@@ -25569,9 +25594,14 @@ class WaferMapViewer {
                 const newPage = this.pageManager.createPage(targetRole, null, {
                     activate: true,
                     skipPersist: true,
+                    skipApply: true,
                     insertAfter: originPageId  // 현재 페이지 바로 다음에 삽입
                 });
                 targetPage = newPage;
+            }
+
+            if (targetPage?.role) {
+                this.activePageRole = targetPage.role;
             }
 
             if (originPageId && targetPage?.id) {
@@ -31210,8 +31240,15 @@ class WaferMapViewer {
         // Render bottom legend
         // 🔥 BOTTOM_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
         if (userData.bottom && typeof userData.bottom === 'object') {
-            const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
-                                 'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
+            const currentLegendPath = String(this.selectedImagePath || this.currentImagePath || '');
+            const isPlhImage = currentLegendPath.includes('00P');
+            const isPlcImage = currentLegendPath.includes('00C');
+            const BOTTOM_KEYS = isPlhImage
+                ? ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291', 'ETC']
+                : isPlcImage
+                    ? ['Normal', 'Invalid', 'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC']
+                    : ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
+                       'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
 
             // 🔥 Position 데이터에서 BIN별 chip 갯수 계산
             const binCounts = {};

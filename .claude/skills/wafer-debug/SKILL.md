@@ -192,3 +192,10 @@ argument-hint: [증상-설명]
 - 원인: 성공한 `performSearch()` 뒤에도 `#file-search` 포커스가 유지되어 그리드 단축키 핸들러가 입력 필드 보호 로직으로 빠졌다. `js/my-lot.js`의 붙여넣기 검색 URL은 `folder` 파라미터를 계속 구성해 stale folder scope가 섞일 여지를 남겼고, MY LOT lazy import도 소스상 명시 버전 태그가 없었다.
 - 수정 패턴: 검색 성공 후 결과 그리드를 렌더링하면 `#file-search`를 blur한다. MY LOT의 LOT/Wafer 검색은 UI 검색과 동일하게 전역 검색으로 보내며 `folder`를 아예 생략한다. `main.js::_getMyLotModal()`은 `./my-lot.js?v=${jsVer}`로 import한다.
 - E2E 신호: `scripts/e2e_chunk2.js` record `21,24,25,26,27`는 검색 후 `Ctrl+A` 전체 선택을 확인한다. `scripts/e2e_chunk3.js` record `mylot-wafer30-lot10-perf`는 MY LOT paste 검색 URL에 `folder`가 없고 모든 붙여넣기 행의 preview/path가 채워지는지 확인한다.
+
+### 단일보기 패널 소실 / Border 두께 / partial Shot 빈 슬롯 (2026-08-08)
+
+- 증상: Grade, Chip/Border, 좌하단 상태, 미니맵 위 더블클릭이나 확대·pan 중 빠른 클릭 뒤 단일보기 패널이 함께 사라졌다. Border를 켜면 색만 바뀌지 않고 선이 굵어졌고, partial Shot 선택은 빈 canonical 슬롯까지 채웠다.
+- 원인: `viewerContainer`의 `dblclick`이 패널 자식 이벤트까지 받아 `gridImage` 종료를 실행했다. Border는 서버 PLTE 치환 뒤 client overlay에서 최대 3px 선을 추가했다. Shot의 기존 Chip이 전부 선택된 경우 canonical boundary 전체를 채우는 shortcut이 있었다.
+- 수정 패턴: 네 고정 패널 내부 더블클릭을 navigation 전에 차단한다. Border는 PNG PLTE 인덱스 10을 11~23에 복사하는 서버 경로만 사용하고 client geometry를 만들지 않는다. Shot 외곽선은 canonical 크기를 유지하되 선택 채움은 실제 선택 Chip rect만 순회한다.
+- E2E 신호: `layout-chip-coordinates`가 네 패널 더블클릭과 확대·pan 6회 후 visibility/path/mode를 확인하고, Chip 1개 partial Shot의 빈 슬롯 픽셀이 변하지 않는지 검사한다. `systematic-measure-single-lot-wafer`는 Border 전후 IDAT와 overlay hash 동일, PLTE 11~23만 Normal 색으로 바뀌는지 검사한다.

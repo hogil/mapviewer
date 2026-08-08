@@ -172,6 +172,7 @@ export class ChipAnnotator {
         if (this.hoveredChip) {
             this._updateCoordinateBox(0, 0, this.hoveredChip);
         }
+        if (this.shotBoundaryVisible) this._renderShotBoundaries();
     }
 
     clearLayoutData() {
@@ -186,7 +187,13 @@ export class ChipAnnotator {
 
     setShotBoundaryVisible(visible) {
         this.shotBoundaryVisible = Boolean(visible);
-        this.render();
+        if (this.shotBoundaryVisible) {
+            // The existing overlay is already on the canvas; adding boundaries
+            // must not redraw every chip and label.
+            this._renderShotBoundaries();
+        } else {
+            this.render();
+        }
     }
 
     setCoordinateRadiusGuide(radiusMm) {
@@ -469,7 +476,7 @@ export class ChipAnnotator {
 
     _renderCoordinateRadiusGuide() {
         const radiusMm = Number(this.coordinateRadiusGuideMm);
-        if (!Number.isFinite(radiusMm) || radiusMm < 0) return;
+        if (!Number.isFinite(radiusMm) || radiusMm <= 0) return;
         const physicalTransform = this._getLayoutCanvasPhysicalTransform();
         if (!physicalTransform || !this.viewer?.transform) return;
 
@@ -615,21 +622,17 @@ export class ChipAnnotator {
             ctx.clip();
 
             const selectedIndices = (group.indices || []).filter((index) => this.selectedChips.has(index));
-            if (selectedIndices.length === (group.indices || []).length) {
-                ctx.fillRect(x, y, width, height);
-            } else {
-                selectedIndices.forEach((index) => {
-                    const chip = this.chips[index];
-                    const rect = chip?.rect;
-                    if (!rect) return;
-                    ctx.fillRect(
-                        rect.x0 * transform.scale + transform.dx,
-                        rect.y0 * transform.scale + transform.dy + Y_OFFSET,
-                        (rect.x1 - rect.x0) * transform.scale,
-                        (rect.y1 - rect.y0) * transform.scale,
-                    );
-                });
-            }
+            selectedIndices.forEach((index) => {
+                const chip = this.chips[index];
+                const rect = chip?.rect;
+                if (!rect) return;
+                ctx.fillRect(
+                    rect.x0 * transform.scale + transform.dx,
+                    rect.y0 * transform.scale + transform.dy + Y_OFFSET,
+                    (rect.x1 - rect.x0) * transform.scale,
+                    (rect.y1 - rect.y0) * transform.scale,
+                );
+            });
             ctx.restore();
         });
 
@@ -952,6 +955,7 @@ export class ChipAnnotator {
             this.chips = this.positionsData.chips || [];
             this._invalidateShotGeometry();
             if (this.layoutByChip.size > 0) this._buildShotBoundaryGroups();
+            if (this.shotBoundaryVisible) this._renderShotBoundaries();
             this._buildChipIndexMap();
             this._buildSpatialGrid();
 
@@ -2366,13 +2370,6 @@ export class ChipAnnotator {
             ctx.restore();
         }
 
-        // Border mode is also applied to the client overlay. The server can
-        // normalize the source palette, but BIN/ratio fills are rendered here
-        // and would otherwise leave colored chip edges visible.
-        if (this.viewer?.borderNormalize) {
-            this._renderNormalizedChipBorders();
-        }
-
         // Draw grid if enabled
         if (this.showGrid) {
             this._renderGrid();
@@ -2397,8 +2394,8 @@ export class ChipAnnotator {
             }
         });
 
-        // A Shot selection covers the canonical Shot extent, including empty
-        // edge slots; actual chip fills below keep the same selection state.
+        // Shot selection fills only existing chips; the canonical extent is
+        // represented separately by the selected Shot boundary.
         this._renderSelectedShotAreas();
 
         // Draw selected chips (manual selections override filters). Shot mode
@@ -2491,42 +2488,6 @@ export class ChipAnnotator {
     /**
      * Render die grid
      */
-    _renderNormalizedChipBorders() {
-        if (!this.chips?.length || !this.viewer?.transform) return;
-        const transform = this.viewer.transform;
-        const normalColor = this.binOverlayColors?.get('Normal') || '#BEBEBE';
-        const ctx = this.ctx;
-        ctx.save();
-        ctx.resetTransform();
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = normalColor;
-        const lineWidth = Math.max(1, Math.min(3, Math.round(transform.scale)));
-        this.chips.forEach((chip) => {
-            const rect = chip?.rect;
-            if (!rect) return;
-            const x = rect.x0 * transform.scale + transform.dx;
-            const y = rect.y0 * transform.scale + transform.dy + (this.Y_OFFSET || 0);
-            const width = (rect.x1 - rect.x0) * transform.scale;
-            const height = (rect.y1 - rect.y0) * transform.scale;
-            if (width <= 0 || height <= 0) return;
-
-            // Snap the four sides to device pixels. A fractional stroke blends
-            // the BIN fill into the border, leaving colored edge pixels behind.
-            const left = Math.round(x);
-            const top = Math.round(y);
-            const right = Math.max(left + 1, Math.round(x + width));
-            const bottom = Math.max(top + 1, Math.round(y + height));
-            const horizontalWidth = right - left;
-            const horizontalHeight = Math.min(lineWidth, bottom - top);
-            const verticalWidth = Math.min(lineWidth, horizontalWidth);
-            ctx.fillRect(left, top, horizontalWidth, horizontalHeight);
-            ctx.fillRect(left, bottom - horizontalHeight, horizontalWidth, horizontalHeight);
-            ctx.fillRect(left, top, verticalWidth, bottom - top);
-            ctx.fillRect(right - verticalWidth, top, verticalWidth, bottom - top);
-        });
-        ctx.restore();
-    }
-
     _renderGrid() {
         if (!this.positionsData || !this.viewer.transform) return;
 
