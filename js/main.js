@@ -8844,8 +8844,8 @@ class WaferMapViewer {
                 const chip = annotator.chips?.[index];
                 const layout = annotator.getLayoutRowForChip?.(chip);
                 if (!chip) return null;
-                const x = Number(layout?.eds_chip_x_pos ?? chip.x_abs);
-                const y = Number(layout?.eds_chip_y_pos ?? chip.y_abs);
+                const x = Number(layout?.chip_x_pos ?? chip.x_abs);
+                const y = Number(layout?.chip_y_pos ?? chip.y_abs);
                 const chipId = layout?.chip_id ?? chip.chip_id ?? '';
                 return { index, chip, layout, x, y, chipId: String(chipId).trim() };
             })
@@ -9693,8 +9693,8 @@ class WaferMapViewer {
             return {
                 index,
                 chip,
-                x: Number(layout?.eds_chip_x_pos ?? chip.x_abs),
-                y: Number(layout?.eds_chip_y_pos ?? chip.y_abs),
+                x: Number(layout?.chip_x_pos ?? chip.x_abs),
+                y: Number(layout?.chip_y_pos ?? chip.y_abs),
                 chipId: String(layout?.chip_id ?? chip.chip_id ?? '').trim(),
             };
         }).filter(Boolean);

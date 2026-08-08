@@ -16,7 +16,7 @@ argument-hint: [Phase 번호 또는 범위]
 | P0 | AAI633/08 SYSTEMATIC 단일보기 raw-map 제거, 본 이미지/오버레이/네비게이터 필터 정합성 | `scripts/e2e_chunk2.js` `systematic-measure-single-lot-wafer` |
 | P1 | 시간 정렬, `H%(PA,TD)` root LOT wildcard, 그리드/단일 네비게이션 순서 | `scripts/e2e_chunk1.js` `sort-lot-filter` |
 | P1 | Composite/Measure fixed 12-BIN SYSTEMATIC grouping and filtered render | `scripts/e2e_chunk1.js` `systematic-bin-group` |
-| P1 | Layout `layout.txt` EDS chip 매칭, Chip Coord/Radious/Shot 순서, Shot 토글/선택 및 shot_id 경계 표시 | `scripts/e2e_chunk2.js` `layout-chip-coordinates` |
+| P1 | Layout `layout.txt` chip 매칭, Chip Coord/Radious/Shot 순서, Shot 토글/선택 및 shot_id 경계 표시 | `scripts/e2e_chunk2.js` `layout-chip-coordinates` |
 | P1 | 선택 Chip/Shot 영역 Composite Map 및 결과 positions 정합성, Shot chip 수/선택영역 crop | `scripts/e2e_chunk2.js` `selected-region-composite` |
 | P1 | 기존 Measure 다중선택/탭 복귀/썸네일 무결성 | `30,33,34,35,39`, `41,42,45,47,48,56` |
 | P2 | 전체 63개 Phase와 성능/프로세스 정리 | `run-e2e-playwright.ps1 -Chunk all` |

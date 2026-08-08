@@ -77,8 +77,8 @@ _LAYOUT_COLUMNS = (
     "shot_x_pos",
     "shot_y_pos",
     "full_shot_type",
-    "eds_chip_x_pos",
-    "eds_chip_y_pos",
+    "chip_x_pos",
+    "chip_y_pos",
     "chip_center_x_pos",
     "chip_center_y_pos",
     "zone_id",
@@ -89,8 +89,8 @@ _LAYOUT_INT_COLUMNS = {
     "chip_id",
     "shot_x_pos",
     "shot_y_pos",
-    "eds_chip_x_pos",
-    "eds_chip_y_pos",
+    "chip_x_pos",
+    "chip_y_pos",
 }
 _LAYOUT_FLOAT_COLUMNS = {"chip_center_x_pos", "chip_center_y_pos"}
 _LAYOUT_TEXT_COLUMNS = {"full_shot_type", "zone_id", "zone_type"}

@@ -1721,7 +1721,7 @@ const { createRunner } = require('./e2e_playwright_session');
     return data;
   });
 
-  await record('layout-chip-coordinates', 'P001 layout EDS 매칭 / Chip Coord / Shot 순서 / Shot 토글·선택 / 경계', async () => {
+  await record('layout-chip-coordinates', 'P001 layout chip 매칭 / Chip Coord / Shot 순서 / Shot 토글·선택 / 경계', async () => {
     const targetFile = 'AAI633_00P_08_20260501_010000_99.6_0_PE_PWQ.png';
     const folder = 'PW/P001/20260501';
     await boot('chunk2-layout-chip-coordinates');
@@ -1748,7 +1748,7 @@ const { createRunner } = require('./e2e_playwright_session');
     await enterSingle(target.index);
     await page.waitForFunction(
       () => window.viewer?.chipAnnotator?.layoutProcessId === 'P001' &&
-        window.viewer.chipAnnotator.layoutByEdsChip?.size === 833 &&
+        window.viewer.chipAnnotator.layoutByChip?.size === 833 &&
         window.viewer.chipAnnotator.shotBoundaryGroups?.size === 43 &&
         document.getElementById('single-shot-boundary-btn') &&
         window.viewer.chipAnnotator.shotBoundaryVisible === false,
@@ -1821,13 +1821,13 @@ const { createRunner } = require('./e2e_playwright_session');
         ? singleChipBoundary.firstChipRect.y1 - singleChipBoundary.firstChipRect.y0
         : 0;
       const positiveModulo = (value, size) => ((value % size) + size) % size;
-      const edgeBaseX = edgeLayout ? Number(edgeLayout.eds_chip_x_pos) - positiveModulo(Number(edgeLayout.eds_chip_x_pos), shotShape.cols) : NaN;
-      const edgeBaseY = edgeLayout ? Number(edgeLayout.eds_chip_y_pos) - positiveModulo(Number(edgeLayout.eds_chip_y_pos), shotShape.rows) : NaN;
+      const edgeBaseX = edgeLayout ? Number(edgeLayout.chip_x_pos) - positiveModulo(Number(edgeLayout.chip_x_pos), shotShape.cols) : NaN;
+      const edgeBaseY = edgeLayout ? Number(edgeLayout.chip_y_pos) - positiveModulo(Number(edgeLayout.chip_y_pos), shotShape.rows) : NaN;
       const edgeExpectedMinX = edgeLayout && singleChipBoundary?.firstChipRect
-        ? singleChipBoundary.firstChipRect.x0 - (Number(edgeLayout.eds_chip_x_pos) - edgeBaseX) * edgeChipWidth
+        ? singleChipBoundary.firstChipRect.x0 - (Number(edgeLayout.chip_x_pos) - edgeBaseX) * edgeChipWidth
         : NaN;
       const edgeExpectedMinY = edgeLayout && singleChipBoundary?.firstChipRect
-        ? singleChipBoundary.firstChipRect.y0 - (Number(edgeLayout.eds_chip_y_pos) - edgeBaseY) * edgeChipHeight
+        ? singleChipBoundary.firstChipRect.y0 - (Number(edgeLayout.chip_y_pos) - edgeBaseY) * edgeChipHeight
         : NaN;
       const edgeBoundaryMatchesNominal = Boolean(
         singleChipBoundary?.rect && edgeLayout &&
@@ -1847,7 +1847,7 @@ const { createRunner } = require('./e2e_playwright_session');
       return {
         path: v.selectedImagePath,
         processId: v.chipAnnotator?.layoutProcessId || null,
-        layoutRows: v.chipAnnotator?.layoutByEdsChip?.size || 0,
+        layoutRows: v.chipAnnotator?.layoutByChip?.size || 0,
         shotBoundaryGroupCount: shotBoundaryGroups.length,
         shotBoundaryChipCount: shotBoundaryGroups.reduce((sum, group) => sum + group.chipCount, 0),
         partialShotCount: shotBoundaryGroups.filter((group) => group.chipCount < 24).length,
@@ -2164,7 +2164,7 @@ const { createRunner } = require('./e2e_playwright_session');
     await enterSingle(target.index);
     await page.waitForFunction(
       () => window.viewer?.chipAnnotator?.layoutProcessId === 'P001' &&
-        window.viewer.chipAnnotator.layoutByEdsChip?.size === 833,
+        window.viewer.chipAnnotator.layoutByChip?.size === 833,
       null,
       { timeout: 30000 }
     );
@@ -2328,8 +2328,8 @@ const { createRunner } = require('./e2e_playwright_session');
           index,
           layout: annotator.getLayoutRowForChip(annotator.chips[index]),
         }))
-        .sort((left, right) => Number(left.layout?.eds_chip_y_pos) - Number(right.layout?.eds_chip_y_pos) ||
-          Number(left.layout?.eds_chip_x_pos) - Number(right.layout?.eds_chip_x_pos))[0];
+        .sort((left, right) => Number(left.layout?.chip_y_pos) - Number(right.layout?.chip_y_pos) ||
+          Number(left.layout?.chip_x_pos) - Number(right.layout?.chip_x_pos))[0];
       const firstButton = document.querySelector('#chip-coordinate-select-shot-picker button[data-coordinate-shot-chip-index]');
       const shape = annotator.getShotGridShape?.();
       return {
@@ -3023,7 +3023,7 @@ const { createRunner } = require('./e2e_playwright_session');
       const layout = await layoutResponse.json();
       const row = (layout.rows || []).find((candidate) => String(candidate.shot_id) === '8');
       if (!row) throw new Error('single-chip partial Shot fixture missing');
-      const shotCoords = [{ x_abs: Number(row.eds_chip_x_pos), y_abs: Number(row.eds_chip_y_pos) }];
+      const shotCoords = [{ x_abs: Number(row.chip_x_pos), y_abs: Number(row.chip_y_pos) }];
       await fetch('/api/composite-cleanup', { method: 'POST', cache: 'no-store' });
       const startResponse = await fetch('/api/composite-map', {
         method: 'POST',
@@ -3191,7 +3191,7 @@ const { createRunner } = require('./e2e_playwright_session');
         shot_id: shotId,
         chip_coords: (layout.rows || [])
           .filter((row) => String(row.shot_id) === shotId)
-          .map((row) => ({ x_abs: Number(row.eds_chip_x_pos), y_abs: Number(row.eds_chip_y_pos) })),
+          .map((row) => ({ x_abs: Number(row.chip_x_pos), y_abs: Number(row.chip_y_pos) })),
         shot_shape: { cols: 4, rows: 6 },
       }));
       if (groups.some((group) => group.chip_coords.length !== 24)) {

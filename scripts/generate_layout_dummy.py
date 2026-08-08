@@ -23,8 +23,8 @@ LAYOUT_COLUMNS = [
     "shot_x_pos",
     "shot_y_pos",
     "full_shot_type",
-    "eds_chip_x_pos",
-    "eds_chip_y_pos",
+    "chip_x_pos",
+    "chip_y_pos",
     "chip_center_x_pos",
     "chip_center_y_pos",
     "zone_id",
@@ -157,11 +157,11 @@ def _build_rows(
                 "shot_x_pos": shot_x_order,
                 "shot_y_pos": shot_y_order,
                 "full_shot_type": full_shot_type,
-                # The viewer's positions x_abs/y_abs are the EDS chip key.
+                # The viewer's positions x_abs/y_abs are the chip matching key.
                 # Keep the key in the same integer coordinate system so the
                 # layout row can be matched directly while hovering a chip.
-                "eds_chip_x_pos": x_abs,
-                "eds_chip_y_pos": y_abs,
+                "chip_x_pos": x_abs,
+                "chip_y_pos": y_abs,
                 "chip_center_x_pos": round(chip_x, 3),
                 "chip_center_y_pos": round(chip_y, 3),
                 "zone_id": zone_id,

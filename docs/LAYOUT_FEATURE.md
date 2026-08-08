@@ -36,7 +36,7 @@ E:/data/layout/layout.txt
 ```
 
 The viewer loads the process rows lazily through `/api/layout` and uses the
-positions JSON `x_abs/y_abs` values as the EDS chip key. Matching rows provide
+positions JSON `x_abs/y_abs` values as the chip matching key. Matching rows provide
 the chip center and shot order in the single-image coordinate panel. `Chip(Rel)`
 is the discrete chip-grid index from positions `x_cal/y_cal`; `Chip(Coord)` is
 the continuous wafer coordinate from `chip_center_x_pos/y_pos`. In that view,
@@ -67,14 +67,14 @@ The file uses ordinary CSV formatting with commas as delimiters. The header is
 fixed and must remain in this order:
 
 ```text
-process_id,shot_id,chip_id,shot_x_pos,shot_y_pos,full_shot_type,eds_chip_x_pos,eds_chip_y_pos,chip_center_x_pos,chip_center_y_pos,zone_id,zone_type
+process_id,shot_id,chip_id,shot_x_pos,shot_y_pos,full_shot_type,chip_x_pos,chip_y_pos,chip_center_x_pos,chip_center_y_pos,zone_id,zone_type
 ```
 
 - `process_id`: four-character process key, such as `P001`
 - `shot_id`, `chip_id`: integer dummy identifiers
 - `shot_x_pos`, `shot_y_pos`: signed integer shot order positions
 - `full_shot_type`: `FULL` or `PARTIAL`
-- `eds_chip_x_pos`, `eds_chip_y_pos`: integer EDS chip coordinates matching
+- `chip_x_pos`, `chip_y_pos`: integer chip coordinates matching
   the positions JSON `x_abs`, `y_abs` values used by the viewer
 - `chip_center_x_pos`, `chip_center_y_pos`: real micrometre coordinates,
   displayed as millimetre values in the UI

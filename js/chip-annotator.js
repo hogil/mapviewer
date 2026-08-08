@@ -120,7 +120,7 @@ export class ChipAnnotator {
         // Current image path
         this.currentImagePath = null;
         this.layoutProcessId = null;
-        this.layoutByEdsChip = new Map();
+        this.layoutByChip = new Map();
         this.shotBoundaryGroups = new Map();
         this.shotBoundaryVisible = false;
         this.shotBoundaryColor = 'rgba(170, 85, 210, 0.95)';
@@ -157,12 +157,12 @@ export class ChipAnnotator {
 
     setLayoutData(processId, rows) {
         this.layoutProcessId = processId || null;
-        this.layoutByEdsChip.clear();
+        this.layoutByChip.clear();
         for (const row of Array.isArray(rows) ? rows : []) {
-            const x = Number(row?.eds_chip_x_pos);
-            const y = Number(row?.eds_chip_y_pos);
+            const x = Number(row?.chip_x_pos);
+            const y = Number(row?.chip_y_pos);
             if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-            this.layoutByEdsChip.set(`${x}:${y}`, row);
+            this.layoutByChip.set(`${x}:${y}`, row);
         }
         this._buildShotBoundaryGroups();
         if (this.hoveredChip) {
@@ -172,7 +172,7 @@ export class ChipAnnotator {
 
     clearLayoutData() {
         this.layoutProcessId = null;
-        this.layoutByEdsChip.clear();
+        this.layoutByChip.clear();
         this.shotBoundaryGroups.clear();
         this.coordinateRadiusGuideMm = null;
         this.hoveredChip = null;
@@ -256,10 +256,10 @@ export class ChipAnnotator {
 
     getShotGridShape() {
         const groups = new Map();
-        for (const row of this.layoutByEdsChip.values()) {
+        for (const row of this.layoutByChip.values()) {
             const shotId = String(row?.shot_id ?? '').trim();
-            const x = Number(row?.eds_chip_x_pos);
-            const y = Number(row?.eds_chip_y_pos);
+            const x = Number(row?.chip_x_pos);
+            const y = Number(row?.chip_y_pos);
             if (!shotId || !Number.isInteger(x) || !Number.isInteger(y)) continue;
             const group = groups.get(shotId) || { xs: [], ys: [] };
             group.xs.push(x);
@@ -320,8 +320,8 @@ export class ChipAnnotator {
                 const chip = this.chips[index];
                 const layout = this.getLayoutRowForChip(chip);
                 if (!chip?.rect || !layout) return null;
-                const x = Number(layout.eds_chip_x_pos);
-                const y = Number(layout.eds_chip_y_pos);
+                const x = Number(layout.chip_x_pos);
+                const y = Number(layout.chip_y_pos);
                 return Number.isInteger(x) && Number.isInteger(y)
                     ? { chip, layout, x, y }
                     : null;
@@ -508,7 +508,7 @@ export class ChipAnnotator {
         const x = Number(chip?.x_abs);
         const y = Number(chip?.y_abs);
         if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-        return this.layoutByEdsChip.get(`${x}:${y}`) || null;
+        return this.layoutByChip.get(`${x}:${y}`) || null;
     }
 
     getSelectedShotGroupSelections() {
@@ -525,8 +525,8 @@ export class ChipAnnotator {
 
     _getShotGridSlot(chip, shape = this.getShotGridShape?.()) {
         const layout = this.getLayoutRowForChip(chip);
-        const x = Number(layout?.eds_chip_x_pos);
-        const y = Number(layout?.eds_chip_y_pos);
+        const x = Number(layout?.chip_x_pos);
+        const y = Number(layout?.chip_y_pos);
         const cols = Math.max(1, Number(shape?.cols) || 4);
         const rows = Math.max(1, Number(shape?.rows) || 6);
         if (!Number.isInteger(x) || !Number.isInteger(y)) return null;
@@ -2560,7 +2560,7 @@ export class ChipAnnotator {
      */
     _updateCoordinateBox(imgX, imgY, chip) {
         if (chip) {
-            // Match the current EDS chip (positions x_abs/y_abs) to layout.txt.
+            // Match the current chip (positions x_abs/y_abs) to layout.txt.
             const layoutRow = this.getLayoutRowForChip(chip);
             if (this.coordChipCoord) {
                 this.coordChipCoord.textContent = layoutRow
@@ -3266,7 +3266,7 @@ export class ChipAnnotator {
         this.hoveredChip = null;
         this.currentImagePath = null;
         this.layoutProcessId = null;
-        this.layoutByEdsChip.clear();
+        this.layoutByChip.clear();
         this.shotBoundaryGroups.clear();
 
         // Clear selection state
