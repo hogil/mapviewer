@@ -3098,7 +3098,7 @@
 
         .coordinate-select-list-panels {
             display: grid;
-            grid-template-columns: minmax(88px, 14fr) minmax(88px, 14fr) minmax(0, 72fr);
+            grid-template-columns: minmax(88px, 14fr) minmax(120px, 20fr) minmax(0, 66fr);
             gap: 8px;
             align-items: start;
         }
