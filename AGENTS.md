@@ -194,10 +194,12 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - 파일: `api/composite_map.py`, `api/full_app.py`, `js/chip-annotator.js`, `js/main.js`, `index.html`, `scripts/e2e_chunk2.js`, `docs/COMPOSITE_MAP.md`
 
 #### BUG-27: 표형 좌표 선택과 Shot 내부 Chip ID 부분 선택 회귀 (2026-08-08)
-- 증상: 단일 이미지에서 Shot을 먼저 선택한 뒤 특정 Chip ID만 선택 해제/추가하거나, Shot/Grid/Chip(Grid)/Chip(Pos) 좌표를 여러 행으로 붙여넣어 선택할 수 없다. 자유형 입력창은 붙여넣은 행을 다시 확인하기 어렵다.
+- 증상: 단일 이미지에서 Shot을 먼저 선택한 뒤 특정 Chip ID만 선택 해제/추가하거나, Shot/Grid/Chip(Grid)/Chip(Pos) 좌표를 여러 행으로 붙여넣어 선택할 수 없다. 자유형 입력창은 붙여넣은 행을 다시 확인하기 어렵고, 선택 패널이 지도 조작을 막는다.
 - 원인: 기존 context menu는 Chip/Shot 마우스 선택만 제공했고, `ChipAnnotator`에는 layout의 `shot_id`, `chip_id`, grid 좌표, mm 좌표를 표 행 단위로 매칭하고 현재 Shot 범위에 한정해 부분 수정하는 경로가 없었다.
-- 수정 계약: `#chip-coordinate-select-modal`은 실제 input cell table을 사용한다. Tab/쉼표/줄바꿈 붙여넣기는 시작 cell부터 행/열로 채우고, `Chip ID` 입력은 현재 Shot 선택이 있으면 그 Shot들의 visible Chip만 대상으로 `교체/추가/해제`한다. Shot 모드는 부분 Chip을 제거한 뒤에도 Shot context와 canonical Shot shape를 유지한다. per-chip/per-shot `yld` 필드가 있을 때만 평균/목록을 표시하고, 현재 fixture처럼 wafer-level `yield`만 있으면 이를 개별 값으로 복제하지 않는다.
-- E2E guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells`는 P001에서 Shot 두 개를 Tab/쉼표로 붙여넣어 48 Chip을 선택하고, Chip ID를 Shot 범위에서 48→47→48로 해제/추가하며, Chip Pos 쉼표 입력 셀과 visible input 값을 확인한다.
+- 수정 계약: `#chip-coordinate-select-modal`은 실제 input cell table의 고정 3열(`Shot/Chip X`, `Shot/Chip Y`, `Chip ID`)을 사용한다. 좌표 해석 기준만 Shot/Grid, Chip/Grid, Chip/Pos로 바꾸며 Chip ID 열은 항상 보인다. X/Y만 입력하면 해당 단위 전체, X/Y+Chip ID를 같은 행에 입력하면 해당 단위 내부의 특정 Chip, Chip ID만 입력하면 현재 선택 Shot 범위의 ID만 대상으로 한다. Tab/쉼표/줄바꿈 붙여넣기는 시작 cell부터 행/열로 채운다. 선택은 `기존 선택 바꾸기/현재 선택에 추가/현재 선택에서 해제`로 명시하고 셀 입력 즉시 지도에 반영한다. Shot 좌표로 선택하면 같은 패널에 canonical Shot 격자(현재 P001은 4×6)를 표시하고, 실제 layout의 `eds_chip_x_pos/y_pos` 슬롯을 기준으로 아래 왼쪽부터 오른쪽, 다음 행 위 순서로 Chip ID를 배치한다. 가장자리에서 없는 Chip은 빈 칸으로 유지하며, 각 Chip 셀은 클릭으로 현재 Shot 선택을 즉시 토글한다.
+- 패널 계약: 좌표 패널은 modal backdrop/`aria-modal=true`를 사용하지 않는 modeless fixed panel이어야 하고 지도 이벤트를 막지 않아야 한다. 헤더 드래그로 이동 가능하며 처음부터 화면 중앙에 고정하지 않는다. 범위 선택을 켜면 X/Y 두 경계의 HTML range slider와 숫자 입력을 사용해 실시간으로 선택한다.
+- YIELD 계약: per-chip/per-shot `yld` 필드가 있을 때만 평균/목록을 표시하고, 현재 fixture처럼 wafer-level `yield`만 있으면 이를 개별 값으로 복제하지 않는다.
+- E2E guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells`는 P001에서 3열 표에 Shot 두 개를 Tab/쉼표로 붙여넣어 적용 버튼 없이 48 Chip을 선택하고, 실제 4×6 Shot picker의 48개 셀/체크 상태와 bottom-left→right→up Chip ID 순서를 확인한다. Picker 셀 클릭으로 48→47→48을 토글한 뒤, 같은 행의 Shot+Chip ID 선택, Chip ID 단독 해제/추가, 드래그, 범위 slider/숫자 입력, Chip Pos 셀과 visible input 값을 확인한다.
 - 파일: `index.html`, `css/style.css`, `js/main.js`, `js/chip-annotator.js`, `scripts/e2e_chunk2.js`
 
 ### Available skills

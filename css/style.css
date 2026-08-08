@@ -2887,10 +2887,44 @@
         }
 
         .coordinate-select-modal-content {
+            position: fixed;
+            top: 88px;
+            right: 24px;
+            left: auto;
             width: min(560px, 92vw);
             min-width: 0;
             max-width: 560px;
             max-height: 82vh;
+        }
+
+        .coordinate-select-overlay {
+            justify-content: flex-start;
+            align-items: flex-start;
+            background: transparent;
+            pointer-events: none;
+            z-index: 30000;
+        }
+
+        .coordinate-select-overlay > .coordinate-select-modal-content {
+            pointer-events: auto;
+        }
+
+        .coordinate-select-drag-handle {
+            margin: -20px -20px 14px;
+            padding: 12px 14px;
+            cursor: move;
+            user-select: none;
+            touch-action: none;
+        }
+
+        .coordinate-select-drag-handle .modal-close {
+            cursor: pointer;
+            user-select: auto;
+        }
+
+        .coordinate-select-modal-content.is-dragging {
+            opacity: 0.94;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
         }
 
         .coordinate-select-body {
@@ -2940,6 +2974,102 @@
             overflow-wrap: anywhere;
         }
 
+        .coordinate-select-range-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+            padding: 8px;
+            background: #191919;
+            border: 1px solid #3d3d3d;
+            border-radius: 3px;
+        }
+
+        .coordinate-select-range-heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            color: #ddd;
+            font-size: 12px;
+        }
+
+        .coordinate-select-range-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+        }
+
+        .coordinate-select-range-toggle input {
+            accent-color: #78a9d6;
+        }
+
+        .coordinate-select-range-fields {
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+        }
+
+        .coordinate-select-range-axis {
+            display: grid;
+            grid-template-columns: 46px minmax(0, 1fr) 66px minmax(0, 1fr) 66px;
+            align-items: center;
+            gap: 6px;
+            color: #aaa;
+            font-size: 11px;
+        }
+
+        .coordinate-select-range-axis > span:first-child {
+            color: #ddd;
+            font-weight: 600;
+        }
+
+        .coordinate-select-range-axis input[type="range"] {
+            width: 100%;
+            min-width: 0;
+            accent-color: #8caecc;
+        }
+
+        .coordinate-select-range-axis input[type="number"] {
+            width: 100%;
+            min-width: 0;
+            box-sizing: border-box;
+            padding: 4px 5px;
+            background: #111;
+            color: #f5f5f5;
+            border: 1px solid #555;
+            border-radius: 2px;
+            font: 12px Consolas, "Courier New", monospace;
+        }
+
+        .coordinate-select-range-axis input:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .coordinate-select-range-status {
+            min-height: 15px;
+            color: #888;
+            font-size: 11px;
+        }
+
+        .coordinate-select-input-heading {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 8px;
+            color: #ddd;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .coordinate-select-input-heading span:last-child {
+            color: #888;
+            font-size: 11px;
+            font-weight: 400;
+            text-align: right;
+        }
+
         .coordinate-select-table-wrap {
             max-height: 360px;
             overflow: auto;
@@ -2951,6 +3081,18 @@
             width: 100%;
             border-collapse: collapse;
             table-layout: fixed;
+        }
+
+        .coordinate-select-table th:nth-child(1),
+        .coordinate-select-table td:nth-child(1),
+        .coordinate-select-table th:nth-child(2),
+        .coordinate-select-table td:nth-child(2) {
+            width: 25%;
+        }
+
+        .coordinate-select-table th:nth-child(3),
+        .coordinate-select-table td:nth-child(3) {
+            width: 42%;
         }
 
         .coordinate-select-table th,
@@ -3033,6 +3175,102 @@
             white-space: nowrap;
         }
 
+        .coordinate-select-shot-picker {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 300px;
+            overflow: auto;
+            padding: 8px;
+            background: #191919;
+            border: 1px solid #4a4a4a;
+            border-radius: 3px;
+        }
+
+        .coordinate-select-shot-picker[hidden] {
+            display: none;
+        }
+
+        .coordinate-select-shot-picker-empty {
+            color: #888;
+            font-size: 11px;
+            line-height: 1.4;
+        }
+
+        .coordinate-select-shot-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #363636;
+        }
+
+        .coordinate-select-shot-group:last-child {
+            padding-bottom: 0;
+            border-bottom: 0;
+        }
+
+        .coordinate-select-shot-group-heading {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 8px;
+            color: #ddd;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .coordinate-select-shot-group-heading span:last-child {
+            color: #888;
+            font-weight: 400;
+        }
+
+        .coordinate-select-shot-grid {
+            display: grid;
+            gap: 3px;
+            width: 100%;
+        }
+
+        .coordinate-select-shot-chip,
+        .coordinate-select-shot-empty-cell {
+            min-width: 0;
+            height: 32px;
+            box-sizing: border-box;
+            border-radius: 2px;
+        }
+
+        .coordinate-select-shot-chip {
+            padding: 0 3px;
+            overflow: hidden;
+            background: #34383c;
+            color: #d8dde2;
+            border: 1px solid #69737c;
+            cursor: pointer;
+            font: 11px Consolas, "Courier New", monospace;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .coordinate-select-shot-chip:hover,
+        .coordinate-select-shot-chip:focus-visible {
+            background: #59636d;
+            border-color: #d8e0e7;
+            color: #fff;
+            outline: none;
+        }
+
+        .coordinate-select-shot-chip[aria-checked="true"] {
+            background: #86939f;
+            color: #fff;
+            border-color: #f0f4f7;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+        }
+
+        .coordinate-select-shot-empty-cell {
+            background: rgba(255, 255, 255, 0.025);
+            border: 1px dashed #343434;
+        }
+
         .coordinate-select-buttons {
             justify-content: flex-end;
             gap: 8px;
@@ -3041,6 +3279,18 @@
         @media (max-width: 560px) {
             .coordinate-select-controls {
                 grid-template-columns: 1fr;
+            }
+
+            .coordinate-select-modal-content {
+                top: 12px;
+                right: 12px;
+                left: 12px;
+                width: auto;
+                max-width: none;
+            }
+
+            .coordinate-select-range-axis {
+                grid-template-columns: 40px minmax(0, 1fr) 58px minmax(0, 1fr) 58px;
             }
 
             .coordinate-select-table-actions {

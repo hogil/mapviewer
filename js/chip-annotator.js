@@ -404,6 +404,31 @@ export class ChipAnnotator {
         }).filter((group) => group.selectedChips.length > 0);
     }
 
+    toggleShotChipSelection(chipIndex) {
+        const index = Number(chipIndex);
+        if (!Number.isInteger(index) || index < 0 || index >= this.chips.length) return null;
+        const group = this._getShotGroupForChip(this.chips[index]);
+        if (!group) return null;
+
+        this.selectionMode = 'shot';
+        if (this.selectedChips.has(index)) {
+            this.selectedChips.delete(index);
+            const orderIndex = this.selectedChipsOrder.indexOf(index);
+            if (orderIndex !== -1) this.selectedChipsOrder.splice(orderIndex, 1);
+        } else {
+            this.selectedChips.add(index);
+            if (!this.selectedChipsOrder.includes(index)) this.selectedChipsOrder.push(index);
+        }
+        this.render();
+        this.updateSelectedChipsList();
+        return {
+            chipIndex: index,
+            selected: this.selectedChips.has(index),
+            selectedCount: this.selectedChips.size,
+            shotId: group.shotId,
+        };
+    }
+
     formatLayoutPair(x, y) {
         const values = [Number(x) / 1000, Number(y) / 1000];
         if (!values.every(Number.isFinite)) return '-';
@@ -440,8 +465,8 @@ export class ChipAnnotator {
         const matchedIndices = new Set();
         const matchedRows = [];
         const unmatchedRows = [];
-        const shotScope = target === 'chip-id' ? this._getSelectedShotScopeIndices() : new Set();
-        const restrictToSelectedShots = target === 'chip-id' && shotScope.size > 0;
+        const shotScope = this._getSelectedShotScopeIndices();
+        const restrictToSelectedShots = shotScope.size > 0;
         const normalizeId = (value) => String(value ?? '').trim().toLowerCase();
         const near = (left, right, tolerance = 0.0001) => Number.isFinite(left) &&
             Number.isFinite(right) && Math.abs(left - right) <= tolerance;
@@ -449,26 +474,29 @@ export class ChipAnnotator {
         inputRows.forEach((row, rowIndex) => {
             const rowMatches = [];
             this.chips.forEach((chip, chipIndex) => {
-                if (!chip || (restrictToSelectedShots && !shotScope.has(chipIndex))) return;
+                if (!chip) return;
                 const layout = this.getLayoutRowForChip(chip);
-                let matched = false;
-                if (target === 'shot-grid') {
-                    matched = Number(layout?.shot_x_pos) === Number(row?.x) &&
-                        Number(layout?.shot_y_pos) === Number(row?.y);
-                } else if (target === 'chip-id') {
-                    const chipId = layout?.chip_id ?? chip?.chip_id;
-                    matched = normalizeId(chipId) === normalizeId(row?.value);
+                const hasCoordinate = row?.x !== undefined && row?.y !== undefined;
+                const hasChipId = row?.value !== undefined && String(row.value).trim() !== '';
+                let coordinateMatched = !hasCoordinate;
+                if (hasCoordinate && target === 'shot-grid') {
+                    coordinateMatched = Number(layout?.shot_x_pos) === Number(row.x) &&
+                        Number(layout?.shot_y_pos) === Number(row.y);
                 } else if (target === 'chip-grid') {
-                    matched = Number(chip?.x_cal) === Number(row?.x) &&
-                        Number(chip?.y_cal) === Number(row?.y);
+                    coordinateMatched = Number(chip?.x_cal) === Number(row.x) &&
+                        Number(chip?.y_cal) === Number(row.y);
                 } else if (target === 'chip-pos') {
                     const x = Number(layout?.chip_center_x_pos) / 1000;
                     const y = Number(layout?.chip_center_y_pos) / 1000;
                     // Chip(Pos) is displayed at one decimal; accept both that display value
                     // and more precise pasted mm coordinates without crossing chip pitch.
-                    matched = near(Number(row?.x), x, 0.051) && near(Number(row?.y), y, 0.051);
+                    coordinateMatched = near(Number(row.x), x, 0.051) && near(Number(row.y), y, 0.051);
                 }
-                if (matched) rowMatches.push(chipIndex);
+                const chipId = layout?.chip_id ?? chip?.chip_id;
+                const chipIdMatched = !hasChipId || normalizeId(chipId) === normalizeId(row.value);
+                const isScopedChipId = hasChipId && !hasCoordinate && restrictToSelectedShots;
+                if (isScopedChipId && !shotScope.has(chipIndex)) return;
+                if (coordinateMatched && chipIdMatched) rowMatches.push(chipIndex);
             });
             if (rowMatches.length > 0) {
                 matchedRows.push(rowIndex);
@@ -487,7 +515,7 @@ export class ChipAnnotator {
             matchedIndices.forEach((index) => nextSelection.add(index));
         }
 
-        const preserveShotMode = target === 'shot-grid' || restrictToSelectedShots;
+        const preserveShotMode = target === 'shot-grid' || (restrictToSelectedShots && inputRows.some((row) => row?.value !== undefined));
         this.selectionMode = preserveShotMode ? 'shot' : 'chip';
         this.selectedChips = nextSelection;
         const previousOrder = Array.isArray(this.selectedChipsOrder) ? this.selectedChipsOrder : [];
@@ -507,6 +535,64 @@ export class ChipAnnotator {
             unmatchedRows,
             matchedIndices: Array.from(matchedIndices),
             restrictedToSelectedShots: restrictToSelectedShots,
+        };
+    }
+
+    selectByCoordinateRange(target, range, options = {}) {
+        const operation = ['add', 'remove'].includes(options.operation) ? options.operation : 'replace';
+        const finite = (value) => Number.isFinite(Number(value));
+        const xMin = Number(range?.xMin);
+        const xMax = Number(range?.xMax);
+        const yMin = Number(range?.yMin);
+        const yMax = Number(range?.yMax);
+        const hasY = target !== 'chip-id' && finite(yMin) && finite(yMax);
+        const matchedIndices = new Set();
+        this.chips.forEach((chip, chipIndex) => {
+            if (!chip) return;
+            const layout = this.getLayoutRowForChip(chip);
+            let x = NaN;
+            let y = NaN;
+            if (target === 'shot-grid') {
+                x = Number(layout?.shot_x_pos);
+                y = Number(layout?.shot_y_pos);
+            } else if (target === 'chip-grid') {
+                x = Number(chip?.x_cal);
+                y = Number(chip?.y_cal);
+            } else if (target === 'chip-pos') {
+                x = Number(layout?.chip_center_x_pos) / 1000;
+                y = Number(layout?.chip_center_y_pos) / 1000;
+            } else if (target === 'chip-id') {
+                x = Number(layout?.chip_id ?? chip?.chip_id);
+            }
+            if (!finite(x) || !finite(xMin) || !finite(xMax) || x < xMin || x > xMax) return;
+            if (hasY && (!finite(y) || y < yMin || y > yMax)) return;
+            matchedIndices.add(chipIndex);
+        });
+
+        const nextSelection = operation === 'replace'
+            ? new Set()
+            : new Set(this.selectedChips);
+        if (operation === 'remove') {
+            matchedIndices.forEach((index) => nextSelection.delete(index));
+        } else {
+            matchedIndices.forEach((index) => nextSelection.add(index));
+        }
+        this.selectionMode = target === 'shot-grid' ? 'shot' : 'chip';
+        this.selectedChips = nextSelection;
+        const previousOrder = Array.isArray(this.selectedChipsOrder) ? this.selectedChipsOrder : [];
+        const orderedMatches = Array.from(matchedIndices);
+        this.selectedChipsOrder = operation === 'replace'
+            ? orderedMatches.filter((index) => nextSelection.has(index))
+            : [
+                ...previousOrder.filter((index) => nextSelection.has(index)),
+                ...orderedMatches.filter((index) => nextSelection.has(index) && !previousOrder.includes(index)),
+            ];
+        this.render();
+        this.updateSelectedChipsList();
+        return {
+            selectedCount: nextSelection.size,
+            selectedShotCount: this.selectionMode === 'shot' ? this._getSelectedShotGroups().size : 0,
+            matchedCount: matchedIndices.size,
         };
     }
 
@@ -1375,6 +1461,10 @@ export class ChipAnnotator {
         const notifyViewer = options?.notifyViewer !== false;
 
         const viewer = this.viewer;
+        if (viewer.isCoordinateSelectionOpen) {
+            viewer._updateCoordinateSelectionSummary?.();
+            viewer._renderCoordinateSelectionShotPicker?.();
+        }
 
         // 1. gridMode이면 모든 칩 관련 UI 숨김
         if (viewer.gridMode) {
