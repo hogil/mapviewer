@@ -70,7 +70,7 @@ from . import config
 _NP_MODULE = None
 _HAS_NUMPY: Optional[bool] = None
 
-_LAYOUT_COLUMNS = (
+_LAYOUT_BASE_COLUMNS = (
     "process_id",
     "shot_id",
     "chip_id",
@@ -81,9 +81,12 @@ _LAYOUT_COLUMNS = (
     "chip_y_pos",
     "chip_center_x_pos",
     "chip_center_y_pos",
+)
+_LAYOUT_COLUMNS = _LAYOUT_BASE_COLUMNS + (
     "zone_id",
     "zone_type",
 )
+_LAYOUT_ZONE_PIVOT_TYPES = ("edge", "area", "circle")
 _LAYOUT_INT_COLUMNS = {
     "shot_id",
     "chip_id",
@@ -106,14 +109,51 @@ def _read_layout_source_rows(layout_file: Path) -> List[Dict[str, Any]]:
         import pyarrow.parquet as parquet
     except ImportError as exc:
         raise RuntimeError("layout.parquet를 읽으려면 pyarrow가 필요합니다.") from exc
-    table = parquet.read_table(layout_file, columns=list(_LAYOUT_COLUMNS))
-    fieldnames = tuple(table.column_names)
+
+    # New layout files pivot zone_type into edge/area/circle columns. Inspect
+    # the schema before selecting columns so PyArrow does not fail with
+    # FieldRef.Name(zone_id) when the canonical columns are absent.
+    fieldnames = tuple(parquet.read_schema(layout_file).names)
+    field_by_normalized_name = {
+        re.sub(r"[^a-z0-9]+", "_", str(name).strip().lower()).strip("_"): name
+        for name in fieldnames
+    }
+    missing = [column for column in _LAYOUT_BASE_COLUMNS if column not in fieldnames]
+    if missing:
+        raise ValueError(
+            f"layout file header mismatch: missing required columns {missing}, got {fieldnames}"
+        )
+
+    selected_columns = list(_LAYOUT_BASE_COLUMNS)
+    for column in ("zone_id", "zone_type"):
+        if column in fieldnames:
+            selected_columns.append(column)
+    for zone_type in _LAYOUT_ZONE_PIVOT_TYPES:
+        pivot_column = field_by_normalized_name.get(zone_type)
+        if pivot_column and pivot_column not in selected_columns:
+            selected_columns.append(pivot_column)
+
+    table = parquet.read_table(layout_file, columns=selected_columns)
     rows = table.to_pylist()
 
-    if not set(_LAYOUT_COLUMNS).issubset(fieldnames):
-        raise ValueError(
-            f"layout file header mismatch: expected {_LAYOUT_COLUMNS}, got {fieldnames}"
-        )
+    pivot_columns = {
+        zone_type: field_by_normalized_name.get(zone_type)
+        for zone_type in _LAYOUT_ZONE_PIVOT_TYPES
+    }
+    for row in rows:
+        zone_id = _layout_value_text(row, "zone_id")
+        zone_type = _layout_value_text(row, "zone_type")
+        if not zone_id or not zone_type:
+            for pivot_type in _LAYOUT_ZONE_PIVOT_TYPES:
+                pivot_column = pivot_columns.get(pivot_type)
+                pivot_value = _layout_value_text(row, pivot_column) if pivot_column else ""
+                if not pivot_value:
+                    continue
+                zone_id = zone_id or pivot_value
+                zone_type = zone_type or pivot_type
+                break
+        row["zone_id"] = zone_id
+        row["zone_type"] = zone_type
     return rows
 
 

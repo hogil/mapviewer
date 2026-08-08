@@ -1852,6 +1852,9 @@ const { createRunner } = require('./e2e_playwright_session');
         Math.abs(singleChipBoundary.rect.width - edgeChipWidth * shotShape.cols) < 1e-6 &&
         Math.abs(singleChipBoundary.rect.height - edgeChipHeight * shotShape.rows) < 1e-6
       );
+      const expectedBoundaryWidth = edgeChipWidth * Number(shotShape.cols || 0);
+      const expectedBoundaryHeight = edgeChipHeight * Number(shotShape.rows || 0);
+      const partialGroups = shotBoundaryGroups.filter((group) => group.chipCount < 24);
       const layoutRequest = performance.getEntriesByType('resource').some((entry) => {
         try {
           const url = new URL(entry.name, location.href);
@@ -1866,7 +1869,11 @@ const { createRunner } = require('./e2e_playwright_session');
         layoutRows: v.chipAnnotator?.layoutByChip?.size || 0,
         shotBoundaryGroupCount: shotBoundaryGroups.length,
         shotBoundaryChipCount: shotBoundaryGroups.reduce((sum, group) => sum + group.chipCount, 0),
-        partialShotCount: shotBoundaryGroups.filter((group) => group.chipCount < 24).length,
+        partialShotCount: partialGroups.length,
+        partialBoundaryMissingCount: partialGroups.filter((group) => !group.rect || group.rect.width <= 0 || group.rect.height <= 0).length,
+        partialBoundaryNonCanonicalCount: partialGroups.filter((group) => !group.rect ||
+          Math.abs(group.rect.width - expectedBoundaryWidth) > 1e-6 ||
+          Math.abs(group.rect.height - expectedBoundaryHeight) > 1e-6).length,
         edgeBoundaryMatchesNominal,
         shotBoundaryPixelsBefore: boundaryBefore.shotBoundaryPixels,
         shotBoundaryPixels: boundaryOn.shotBoundaryPixels,
@@ -1878,7 +1885,7 @@ const { createRunner } = require('./e2e_playwright_session');
         zoneId: layoutRow?.zone_id || '',
         zoneType: layoutRow?.zone_type || '',
         coord: document.getElementById('coord-chip-coord')?.textContent || '',
-        rel: document.getElementById('coord-chip-rel')?.textContent || '',
+        grid: document.getElementById('coord-chip-rel')?.textContent || '',
         radious: document.getElementById('coord-radious')?.textContent || '',
         shot: document.getElementById('coord-shot')?.textContent || '',
         coordinateLabels: Array.from(document.querySelectorAll('#chip-coordinate-box .coord-label'))
@@ -1896,14 +1903,15 @@ const { createRunner } = require('./e2e_playwright_session');
       `circle zone columns=${JSON.stringify(data)}`);
     expect(data.shotBoundaryGroupCount === 43 && data.shotBoundaryChipCount === 833,
       `shot boundaries=${JSON.stringify(data)}`);
-    expect(data.partialShotCount > 0 && data.edgeBoundaryMatchesNominal,
+    expect(data.partialShotCount > 0 && data.edgeBoundaryMatchesNominal &&
+      data.partialBoundaryMissingCount === 0 && data.partialBoundaryNonCanonicalCount === 0,
       `edge shot boundary should keep the nominal Shot grid=${JSON.stringify(data)}`);
     expect(!data.shotBoundaryVisibleBefore && data.shotBoundaryVisibleOn && !data.shotBoundaryVisibleAfter,
       `shot toggle=${JSON.stringify(data)}`);
     expect(data.shotBoundaryPixelsBefore < 10 && data.shotBoundaryPixels > 50 && data.shotBoundaryPixelsAfter < 10,
       `shot boundary pixels=${JSON.stringify(data)}`);
     expect(data.coordinateLabels.join('|') === 'Chip(Grid)|Chip(Pos)|Radious|Shot(Grid)' &&
-      data.rel === '(-5, -16)' &&
+      data.grid === '(10, 0)' &&
       data.coord === '-27.5, 77.5' &&
       data.radious === '82.2' &&
       data.shot === '(-2, 3)',
@@ -1974,21 +1982,30 @@ const { createRunner } = require('./e2e_playwright_session');
       shotSelectionTarget.chipKey,
       { timeout: 10000 }
     );
-    const shotHover = await page.evaluate(() => {
+    const shotHover = await page.evaluate((expectedBoundary) => {
       const annotator = window.viewer.chipAnnotator;
       const group = annotator._getShotGroupForChip(annotator.hoveredChip);
+      const hoverBoundary = annotator._getShotBoundaryRect(group);
+      const boundaryMatchesTarget = Boolean(
+        hoverBoundary && expectedBoundary &&
+        ['minX', 'minY', 'maxX', 'maxY', 'width', 'height'].every((key) =>
+          Math.abs(Number(hoverBoundary[key]) - Number(expectedBoundary[key])) < 1e-6
+        )
+      );
       return {
         hoverSelectionCount: annotator._getSelectionIndicesForChip(annotator.hoveredChip).length,
-        hoverBoundary: annotator._getShotBoundaryRect(group),
+        hoverBoundary,
+        boundaryMatchesTarget,
         hoverMode: annotator.selectionMode,
         selectedColor: annotator.selectedColor,
         previewColor: annotator.selectionPreviewColor,
         hoverColor: annotator.hoverColor,
       };
-    });
+    }, shotSelectionTarget.boundary);
     expect(shotHover.hoverMode === 'shot' &&
       shotHover.hoverSelectionCount === shotSelectionTarget.expectedChipCount &&
-      shotHover.hoverBoundary?.width > 0 && shotHover.hoverBoundary?.height > 0,
+      shotHover.hoverBoundary?.width > 0 && shotHover.hoverBoundary?.height > 0 &&
+      shotHover.boundaryMatchesTarget,
       `shot hover=${JSON.stringify({ shotSelectionTarget, shotHover })}`);
     const shotInteriorAfter = await page.evaluate((probe) => {
       if (!probe) return null;
@@ -1999,25 +2016,31 @@ const { createRunner } = require('./e2e_playwright_session');
     }, shotInteriorBefore);
     expect(shotInteriorBefore?.pixel?.join(',') === shotInteriorAfter?.join(','),
       `shot interior was filled=${JSON.stringify({ shotInteriorBefore, shotInteriorAfter })}`);
-    expect(![shotHover.selectedColor, shotHover.previewColor, shotHover.hoverColor]
-      .some((color) => String(color).includes('255, 255, 0')),
-    `selection colors must not be yellow=${JSON.stringify(shotHover)}`);
-    expect(shotHover.selectedColor === shotHover.hoverColor,
-      `selected/hover colors differ=${JSON.stringify(shotHover)}`);
-    expect(shotHover.selectedColor === 'rgba(238, 238, 238, 0.55)',
-      `selection highlight is too opaque=${JSON.stringify(shotHover)}`);
+    expect(shotHover.selectedColor === 'rgba(255, 255, 0, 0.25)' &&
+      shotHover.selectedColor !== shotHover.hoverColor &&
+      shotHover.hoverColor === 'rgba(238, 238, 238, 0.55)',
+      `selection colors=${JSON.stringify(shotHover)}`);
 
-    const chipEdgeBeforeSelection = await page.evaluate((target) => {
+    const shotSelectionAreaBefore = await page.evaluate((target) => {
       const annotator = window.viewer?.chipAnnotator;
       const canvas = annotator?.canvas;
       const transform = window.viewer?.transform;
-      const rect = target?.chipRect;
-      if (!canvas || !transform || !rect) return null;
-      // Sample just outside the chip so Shot's interior fill cannot look like a chip border.
-      const x = Math.round(rect.x0 * transform.scale + transform.dx) - 1;
-      const y = Math.round(((rect.y0 + rect.y1) / 2) * transform.scale + transform.dy + (annotator.Y_OFFSET || 0));
-      const pixel = canvas.getContext('2d').getImageData(x, y, 1, 1).data;
-      return { x, y, pixel: Array.from(pixel) };
+      const boundary = target?.boundary;
+      if (!canvas || !transform || !boundary) return null;
+      const toCanvas = (imageX, imageY) => ({
+        x: Math.max(0, Math.min(canvas.width - 1, Math.round(imageX * transform.scale + transform.dx))),
+        y: Math.max(0, Math.min(canvas.height - 1, Math.round(imageY * transform.scale + transform.dy + (annotator.Y_OFFSET || 0)))),
+      });
+      const inside = toCanvas((boundary.minX + boundary.maxX) / 2, (boundary.minY + boundary.maxY) / 2);
+      const outsideImageX = boundary.minX > 150 ? boundary.minX - 150 : boundary.maxX + 150;
+      const outside = toCanvas(outsideImageX, (boundary.minY + boundary.maxY) / 2);
+      const context = canvas.getContext('2d');
+      return {
+        inside,
+        insidePixel: Array.from(context.getImageData(inside.x, inside.y, 1, 1).data),
+        outside,
+        outsidePixel: Array.from(context.getImageData(outside.x, outside.y, 1, 1).data),
+      };
     }, shotSelectionTarget);
 
     await page.mouse.click(shotSelectionTarget.x, shotSelectionTarget.y);
@@ -2040,35 +2063,54 @@ const { createRunner } = require('./e2e_playwright_session');
       shotSelectionTarget.expectedChipCount,
       { timeout: 10000 }
     );
-    const shotSelection = await page.evaluate(() => {
+    const shotSelection = await page.evaluate((expectedBoundary) => {
       const annotator = window.viewer.chipAnnotator;
       const selected = Array.from(annotator.selectedChips);
       const selectedShotIds = new Set(selected.map((index) => {
         const row = annotator.getLayoutRowForChip(annotator.chips[index]);
         return row?.shot_id == null ? null : String(row.shot_id);
       }).filter(Boolean));
+      const selectedBoundaries = Array.from(annotator._getSelectedShotGroups?.() || [])
+        .map((group) => annotator._getShotBoundaryRect(group))
+        .filter(Boolean);
+      const selectedBoundary = selectedBoundaries[0] || null;
+      const boundaryMatchesTarget = Boolean(
+        selectedBoundaries.length === 1 && selectedBoundary && expectedBoundary &&
+        ['minX', 'minY', 'maxX', 'maxY', 'width', 'height'].every((key) =>
+          Math.abs(Number(selectedBoundary[key]) - Number(expectedBoundary[key])) < 1e-6
+        )
+      );
       return {
         mode: annotator.selectionMode,
         selectedCount: selected.length,
         selectedShotIds: Array.from(selectedShotIds),
+        selectedBoundary,
+        selectedBoundaryCount: selectedBoundaries.length,
+        boundaryMatchesTarget,
       };
-    });
+    }, shotSelectionTarget.boundary);
     expect(shotMenuText.includes('Shot 선택') && shotSelection.mode === 'shot',
       `shot menu/mode=${JSON.stringify({ shotMenuText, shotSelection })}`);
     expect(shotSelection.selectedCount === shotSelectionTarget.expectedChipCount &&
       shotSelection.selectedShotIds.length === 1 &&
-      shotSelection.selectedShotIds[0] === shotSelectionTarget.shotId,
+      shotSelection.selectedShotIds[0] === shotSelectionTarget.shotId &&
+      shotSelection.selectedBoundaryCount === 1 &&
+      shotSelection.boundaryMatchesTarget,
       `shot selection=${JSON.stringify({ shotSelectionTarget, shotSelection })}`);
 
-    const chipEdgeAfterSelection = await page.evaluate((probe) => {
+    const shotSelectionAreaAfter = await page.evaluate((probe) => {
       if (!probe) return null;
       const canvas = window.viewer?.chipAnnotator?.canvas;
       if (!canvas) return null;
-      const pixel = canvas.getContext('2d').getImageData(probe.x, probe.y, 1, 1).data;
-      return Array.from(pixel);
-    }, chipEdgeBeforeSelection);
-    expect(chipEdgeBeforeSelection?.pixel?.join(',') === chipEdgeAfterSelection?.join(','),
-      `shot selection drew chip boundary=${JSON.stringify({ chipEdgeBeforeSelection, chipEdgeAfterSelection })}`);
+      const context = canvas.getContext('2d');
+      return {
+        insidePixel: Array.from(context.getImageData(probe.inside.x, probe.inside.y, 1, 1).data),
+        outsidePixel: Array.from(context.getImageData(probe.outside.x, probe.outside.y, 1, 1).data),
+      };
+    }, shotSelectionAreaBefore);
+    expect(shotSelectionAreaBefore?.insidePixel?.join(',') !== shotSelectionAreaAfter?.insidePixel?.join(',') &&
+      shotSelectionAreaBefore?.outsidePixel?.join(',') === shotSelectionAreaAfter?.outsidePixel?.join(','),
+      `shot selection area/boundary mismatch=${JSON.stringify({ shotSelectionAreaBefore, shotSelectionAreaAfter })}`);
 
     await page.mouse.click(shotSelectionTarget.x, shotSelectionTarget.y);
     await page.waitForFunction(
@@ -2140,7 +2182,7 @@ const { createRunner } = require('./e2e_playwright_session');
       `chip interior was filled=${JSON.stringify({ chipInteriorBefore, chipInteriorAfter })}`);
     expect(data.chip?.x_abs === 10 && data.chip?.y_abs === 0, `chip=${JSON.stringify(data.chip)}`);
     expect(data.coord === '-27.5, 77.5', `coord=${data.coord}`);
-    expect(data.rel === '(-5, -16)', `rel=${data.rel}`);
+    expect(data.grid === '(10, 0)', `grid=${data.grid}`);
     expect(data.radious === '82.2', `radious=${data.radious}`);
     expect(data.shot === '(-2, 3)', `shot=${data.shot}`);
     expect(!data.oldAbsElement && data.layoutRequest, `layout display/request=${JSON.stringify(data)}`);
@@ -2151,8 +2193,8 @@ const { createRunner } = require('./e2e_playwright_session');
       shotHover,
       shotInteriorBefore,
       shotInteriorAfter,
-      chipEdgeBeforeSelection,
-      chipEdgeAfterSelection,
+      shotSelectionAreaBefore,
+      shotSelectionAreaAfter,
       plainClickSelection,
       shotSelection,
       plainClickClearSelection,

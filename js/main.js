@@ -8543,7 +8543,7 @@ class WaferMapViewer {
     _getCoordinateSelectionRangeValue(chip, target, axis) {
         const layout = this.chipAnnotator?.getLayoutRowForChip?.(chip);
         if (target === 'shot-grid') return Number(layout?.[axis === 'x' ? 'shot_x_pos' : 'shot_y_pos']);
-        if (target === 'chip-grid') return Number(chip?.[axis === 'x' ? 'x_cal' : 'y_cal']);
+        if (target === 'chip-grid') return Number(chip?.[axis === 'x' ? 'x_abs' : 'y_abs']);
         if (target === 'chip-pos') {
             return Number(layout?.[axis === 'x' ? 'chip_center_x_pos' : 'chip_center_y_pos']) / 1000;
         }
@@ -8844,8 +8844,8 @@ class WaferMapViewer {
                 const chip = annotator.chips?.[index];
                 const layout = annotator.getLayoutRowForChip?.(chip);
                 if (!chip) return null;
-                const x = Number(layout?.chip_x_pos ?? chip.x_abs);
-                const y = Number(layout?.chip_y_pos ?? chip.y_abs);
+                const x = Number(chip.x_abs);
+                const y = Number(chip.y_abs);
                 const chipId = layout?.chip_id ?? chip.chip_id ?? '';
                 return { index, chip, layout, x, y, chipId: String(chipId).trim() };
             })
@@ -9183,7 +9183,7 @@ class WaferMapViewer {
                 headers: ['X', 'Y'],
                 label: 'Chip X/Y',
                 target: 'chip-grid',
-                integer: false,
+                integer: true,
             },
             chipId: {
                 columns: 1,
@@ -9322,8 +9322,8 @@ class WaferMapViewer {
         annotator.chips.forEach((chip) => {
             const layout = annotator.getLayoutRowForChip?.(chip);
             const chipId = String(layout?.chip_id ?? chip?.chip_id ?? '').trim();
-            const gridX = Number(chip?.x_cal);
-            const gridY = Number(chip?.y_cal);
+            const gridX = Number(chip?.x_abs);
+            const gridY = Number(chip?.y_abs);
             if (Number.isInteger(gridX) && Number.isInteger(gridY)) {
                 const key = `grid:${gridX}:${gridY}`;
                 if (!seen.has(key)) {
@@ -9693,8 +9693,8 @@ class WaferMapViewer {
             return {
                 index,
                 chip,
-                x: Number(layout?.chip_x_pos ?? chip.x_abs),
-                y: Number(layout?.chip_y_pos ?? chip.y_abs),
+                x: Number(chip.x_abs),
+                y: Number(chip.y_abs),
                 chipId: String(layout?.chip_id ?? chip.chip_id ?? '').trim(),
             };
         }).filter(Boolean);
@@ -31870,10 +31870,7 @@ class WaferMapViewer {
         coordCoords.textContent = layoutRow
             ? formatLayoutPair(layoutRow.chip_center_x_pos, layoutRow.chip_center_y_pos)
             : '-';
-        relCoords.textContent = chip.x_cal !== undefined && chip.x_cal !== null &&
-            chip.y_cal !== undefined && chip.y_cal !== null
-            ? `(${chip.x_cal}, ${chip.y_cal})`
-            : '-';
+        relCoords.textContent = this.chipAnnotator.formatGridPair?.(chip.x_abs, chip.y_abs) || '-';
         radious.textContent = layoutRow
             ? formatLayoutRadius(layoutRow.chip_center_x_pos, layoutRow.chip_center_y_pos)
             : '-';

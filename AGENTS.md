@@ -203,6 +203,10 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - 파일: `index.html`, `css/style.css`, `js/main.js`, `js/chip-annotator.js`, `scripts/e2e_chunk2.js`
 
 #### BUG-28: layout zone 컬럼 계약 회귀 (2026-08-08)
+- BUG-29: Parquet numeric dtype와 partial Shot 경계/선택 회귀를 추가로 기록한다. 정수 의미의 float64 값은 허용하고, invalid row는 예시와 함께 로그한다. partial Shot은 canonical 4x6 크기와 cell 크기를 유지하며 누락 슬롯은 배경으로 둔다. Shot 선택은 canonical 영역 전체를 선택색으로 칠하고 hover는 외곽선만 그린다. Chip(Grid)은 x_cal/y_cal이 아니라 positions의 x_abs/y_abs를 표시한다.
+- E2E guard: scripts/e2e_chunk2.js layout-chip-coordinates가 partial group의 경계 누락/비정규 크기, hover와 선택 geometry 일치, 선택 영역 pixel 변화, Chip(Grid) 값을 검사한다.
+- BUG-29 추가 원인: 새 Parquet가 zone_type을 edge/area/circle pivot 컬럼으로 저장하면서 zone_id/zone_type을 제거하면, 고정 컬럼 선택이 `FieldRef.Name(zone_id)`에서 실패해 첫 Shot의 layout 매칭이 중단된다. `api/full_app.py::_read_layout_source_rows()`는 스키마를 먼저 확인하고 pivot의 비어 있지 않은 값을 canonical zone_type/zone_id로 정규화한다.
+- E2E/unit guard: layout-chip-coordinates는 정규화된 circle zone을 확인하고, pivot Parquet fixture는 833개 row와 `circle:E20` 매칭을 확인한다.
 - 증상: shared `layout.parquet`가 EDS/Shot/Chip 좌표만 제공해 이후 zone별 pivot을 추가할 수 없다.
 - 수정 계약: `zone_id`, `zone_type` 컬럼을 layout 끝에 추가한다. 현재 더미 fixture는 `zone_type=circle`과 `zone_id=C20/C80/E1/E20` 반경 band를 사용한다. `area`의 `TOP_LEFT/CENTER/RIGHT/BOTTOM`, `edge`의 `INNER/EDGE`는 후속 zone family로 예약한다.
 - E2E guard: `layout-chip-coordinates`는 P001 row의 `zone_id`가 네 circle ID 중 하나이고 `zone_type=circle`인지 확인하며 API source가 `layout.parquet`인지 확인한다.

@@ -257,10 +257,11 @@ export class ChipAnnotator {
 
     getShotGridShape() {
         const groups = new Map();
-        for (const row of this.layoutByChip.values()) {
+        for (const chip of this.chips || []) {
+            const row = this.getLayoutRowForChip(chip);
             const shotId = String(row?.shot_id ?? '').trim();
-            const x = Number(row?.chip_x_pos);
-            const y = Number(row?.chip_y_pos);
+            const x = Number(chip?.x_abs);
+            const y = Number(chip?.y_abs);
             if (!shotId || !Number.isInteger(x) || !Number.isInteger(y)) continue;
             const group = groups.get(shotId) || { xs: [], ys: [] };
             group.xs.push(x);
@@ -321,8 +322,8 @@ export class ChipAnnotator {
                 const chip = this.chips[index];
                 const layout = this.getLayoutRowForChip(chip);
                 if (!chip?.rect || !layout) return null;
-                const x = Number(layout.chip_x_pos);
-                const y = Number(layout.chip_y_pos);
+                const x = Number(chip.x_abs);
+                const y = Number(chip.y_abs);
                 return Number.isInteger(x) && Number.isInteger(y)
                     ? { chip, layout, x, y }
                     : null;
@@ -505,6 +506,53 @@ export class ChipAnnotator {
         ctx.restore();
     }
 
+    _renderSelectedShotAreas() {
+        if (this.selectionMode !== 'shot' || this.viewer?.gridMode === true) return;
+
+        const groups = this._getSelectedShotGroups();
+        if (groups.size === 0) return;
+
+        const transform = this.viewer.transform;
+        const Y_OFFSET = this.Y_OFFSET || 0;
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.resetTransform();
+        ctx.fillStyle = this.selectedColor;
+
+        groups.forEach((group) => {
+            const boundary = this._getShotBoundaryRect(group);
+            if (!boundary) return;
+            const x = boundary.minX * transform.scale + transform.dx;
+            const y = boundary.minY * transform.scale + transform.dy + Y_OFFSET;
+            const width = boundary.width * transform.scale;
+            const height = boundary.height * transform.scale;
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(x, y, width, height);
+            ctx.clip();
+
+            const selectedIndices = (group.indices || []).filter((index) => this.selectedChips.has(index));
+            if (selectedIndices.length === (group.indices || []).length) {
+                ctx.fillRect(x, y, width, height);
+            } else {
+                selectedIndices.forEach((index) => {
+                    const chip = this.chips[index];
+                    const rect = chip?.rect;
+                    if (!rect) return;
+                    ctx.fillRect(
+                        rect.x0 * transform.scale + transform.dx,
+                        rect.y0 * transform.scale + transform.dy + Y_OFFSET,
+                        (rect.x1 - rect.x0) * transform.scale,
+                        (rect.y1 - rect.y0) * transform.scale,
+                    );
+                });
+            }
+            ctx.restore();
+        });
+
+        ctx.restore();
+    }
+
     getLayoutRowForChip(chip) {
         const x = Number(chip?.x_abs);
         const y = Number(chip?.y_abs);
@@ -525,9 +573,8 @@ export class ChipAnnotator {
     }
 
     _getShotGridSlot(chip, shape = this.getShotGridShape?.()) {
-        const layout = this.getLayoutRowForChip(chip);
-        const x = Number(layout?.chip_x_pos);
-        const y = Number(layout?.chip_y_pos);
+        const x = Number(chip?.x_abs);
+        const y = Number(chip?.y_abs);
         const cols = Math.max(1, Number(shape?.cols) || 4);
         const rows = Math.max(1, Number(shape?.rows) || 6);
         if (!Number.isInteger(x) || !Number.isInteger(y)) return null;
@@ -589,6 +636,12 @@ export class ChipAnnotator {
         return `${values[0].toFixed(1)}, ${values[1].toFixed(1)}`;
     }
 
+    formatGridPair(x, y) {
+        const values = [Number(x), Number(y)];
+        if (!values.every(Number.isInteger)) return '-';
+        return `(${values[0]}, ${values[1]})`;
+    }
+
     formatLayoutRadius(x, y) {
         const values = [Number(x) / 1000, Number(y) / 1000];
         if (!values.every(Number.isFinite)) return '-';
@@ -637,8 +690,8 @@ export class ChipAnnotator {
                     coordinateMatched = Number(layout?.shot_x_pos) === Number(row.x) &&
                         Number(layout?.shot_y_pos) === Number(row.y);
                 } else if (target === 'chip-grid') {
-                    coordinateMatched = Number(chip?.x_cal) === Number(row.x) &&
-                        Number(chip?.y_cal) === Number(row.y);
+                    coordinateMatched = Number(chip?.x_abs) === Number(row.x) &&
+                        Number(chip?.y_abs) === Number(row.y);
                 } else if (target === 'chip-pos') {
                     const x = Number(layout?.chip_center_x_pos) / 1000;
                     const y = Number(layout?.chip_center_y_pos) / 1000;
@@ -710,8 +763,8 @@ export class ChipAnnotator {
                 x = Number(layout?.shot_x_pos);
                 y = Number(layout?.shot_y_pos);
             } else if (target === 'chip-grid') {
-                x = Number(chip?.x_cal);
-                y = Number(chip?.y_cal);
+                x = Number(chip?.x_abs);
+                y = Number(chip?.y_abs);
             } else if (target === 'chip-pos') {
                 x = Number(layout?.chip_center_x_pos) / 1000;
                 y = Number(layout?.chip_center_y_pos) / 1000;
@@ -2237,8 +2290,14 @@ export class ChipAnnotator {
             }
         });
 
-        // Draw selected chips (manual selections override filters)
-        if (this.selectedChips.size > 0) {
+        // A Shot selection covers the canonical Shot extent, including empty
+        // edge slots; actual chip fills below keep the same selection state.
+        this._renderSelectedShotAreas();
+
+        // Draw selected chips (manual selections override filters). Shot mode
+        // is rendered above as one clipped Shot area so no chip can spill out
+        // of its Shot boundary.
+        if (this.selectionMode !== 'shot' && this.selectedChips.size > 0) {
             this.selectedChips.forEach(chipIdx => {
                 const chip = this.chips[chipIdx];
                 if (chip && (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(this._normalizeBottomValue(chip.b)))) {
@@ -2569,10 +2628,7 @@ export class ChipAnnotator {
                     : '-';
             }
             if (this.coordChipRel) {
-                const x = chip.x_cal;
-                const y = chip.y_cal;
-                this.coordChipRel.textContent = x !== undefined && x !== null &&
-                    y !== undefined && y !== null ? `(${x}, ${y})` : '-';
+                this.coordChipRel.textContent = this.formatGridPair(chip.x_abs, chip.y_abs);
             }
             if (this.coordRadious) {
                 this.coordRadious.textContent = layoutRow

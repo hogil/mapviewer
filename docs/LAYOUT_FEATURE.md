@@ -40,14 +40,15 @@ the Windows `start.ps1` path is `E:/data/layout/layout.parquet`.
 
 The viewer loads the process rows lazily through `/api/layout` and uses the
 positions JSON `x_abs/y_abs` values as the chip matching key. Matching rows provide
-the chip center and shot order in the single-image coordinate panel. `Chip(Rel)`
-is the discrete chip-grid index from positions `x_cal/y_cal`; `Chip(Coord)` is
+the chip center and shot order in the single-image coordinate panel. `Chip(Grid)`
+is the discrete chip-grid index from positions `x_abs/y_abs`; `Chip(Pos)` is
 the continuous wafer coordinate from `chip_center_x_pos/y_pos`. In that view,
 chips with the same `shot_id` can be enclosed by one thin purple dotted shot
 boundary in single-image mode. The `Shot` button above `Border` controls this
 overlay and is off by default; grid mode does not draw these boundaries.
-Boundary extents come only from the matched chip rectangles, so an edge shot
-with 3x4 chips remains 3x4 instead of being padded to the nominal shot size.
+Boundary extents use the matched positions `x_abs/y_abs` grid and the canonical
+Shot shape (4x6 in the dummy data), so an edge shot is not shrunk when it has
+missing chips; only the visible canvas portion is drawn.
 The single-image chip context menu provides `Chip 선택` and `Shot 선택` modes.
 In Chip mode, hover shows one chip; in Shot mode, hover shows the complete
 matched `shot_id` extent. Plain clicks do not create a selection; when a
@@ -86,6 +87,11 @@ process_id,shot_id,chip_id,shot_x_pos,shot_y_pos,full_shot_type,chip_x_pos,chip_
 - `zone_type`: zone family. The current fixture uses `circle`; the supported
   future families are `area` (`TOP_LEFT`, `CENTER`, `RIGHT`, `BOTTOM`) and
   `edge` (`INNER`, `EDGE`).
+
+The API also accepts the pivoted Parquet form in which `zone_type` is represented
+by `edge`, `area`, and `circle` columns. The non-empty value in one of those
+columns is normalized to the API response pair `zone_type`/`zone_id`, so both
+legacy and pivoted files have the same frontend contract.
 
 The API reads the Parquet file lazily and caches the parsed index until the
 file modification time or size changes. `pyarrow` is required by the API.

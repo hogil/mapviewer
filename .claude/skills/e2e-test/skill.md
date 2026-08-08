@@ -6524,5 +6524,7 @@ return {
 - Guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells`. DOM visibility, 세 list의 cell values, Chip list 내부의 선택된 한 Shot 4×6 picker 실제 셀/경계/Chip ID/aria-checked/순서, selection Set, `_getSelectedShotGroups()`, Radius guide pixel을 함께 확인하고 상태 플래그만으로 PASS 처리하지 않는다.
 
 #### BUG-28: layout zone 컬럼 계약
+- BUG-29: Parquet가 integer 의미 컬럼을 float64로 반환해 문자열 1.0 변환 실패가 발생하지 않는지 확인한다. partial Shot은 canonical 4x6 경계와 cell 크기를 유지하고, Shot 선택은 그 canonical 영역 전체를 칠하며 hover는 외곽선만 표시한다. layout-chip-coordinates는 모든 partial group의 경계 존재/크기, hover/선택 geometry 일치, 선택 영역 pixel 변화, Chip(Grid)=x_abs/y_abs를 확인한다.
 - `layout.txt` 끝에 `zone_id`, `zone_type`을 유지한다. 현재 circle fixture는 `C20`, `C80`, `E1`, `E20`과 `zone_type=circle`을 사용하며, area/edge family는 각각 `TOP_LEFT/CENTER/RIGHT/BOTTOM`, `INNER/EDGE`로 예약한다.
 - `layout-chip-coordinates`는 API로 로드된 P001 row에서 zone 값을 확인한다.
+- Pivot layout guard: `zone_id`/`zone_type`이 없는 새 Parquet에서 `edge`, `area`, `circle` 중 비어 있지 않은 zone 값을 API의 canonical `zone_type`/`zone_id`로 복원하고, 첫 Shot load가 `FieldRef.Name(zone_id)` 오류 없이 완료되는지 확인한다.
