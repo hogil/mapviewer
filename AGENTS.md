@@ -13,6 +13,13 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - Absolute rule: at the end of every completed task, ensure this project's local server is running. Reuse an already-running verified project server when available; otherwise start it without opening a browser window.
 - Verify the local HTTP(S) endpoint responds, then include its clickable address in the final response.
 
+## Surgical Change Absolute Rule
+
+- Absolute rule: do not modify any file, UI area, layout container, behavior, test, config, or documentation section that the user did not explicitly ask to change.
+- When the user asks for a narrow change, preserve surrounding structure and change only the directly named selector/function/field/value. Do not "improve" parent containers, modal sizing, flex/grid layout, event flow, cache behavior, or adjacent controls unless the user explicitly names those parts.
+- If the requested change appears to require touching adjacent behavior, stop and state the dependency before editing instead of silently expanding scope.
+- Before commit, compare the final diff against the user's exact words and remove any line that cannot be traced directly to the request.
+
 ## Project Data Fixtures
 
 - `D:/project/data/wm-811k/benchmark_4m/` is a deliberate 0-byte dummy dataset for file index and search performance testing.
