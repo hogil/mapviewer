@@ -8,6 +8,11 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - Absolute rule: when a response needs to report one or more local paths, do not place paths inline in the body.
 - Put all reported paths on the final response line only, using absolute paths in one line: `Paths: D:/project/mapviewer/file-a, D:/project/mapviewer/file-b`.
 
+## Server Completion Rule
+
+- Absolute rule: at the end of every completed task, ensure this project's local server is running. Reuse an already-running verified project server when available; otherwise start it without opening a browser window.
+- Verify the local HTTP(S) endpoint responds, then include its clickable address in the final response.
+
 ## Project Data Fixtures
 
 - `D:/project/data/wm-811k/benchmark_4m/` is a deliberate 0-byte dummy dataset for file index and search performance testing.
