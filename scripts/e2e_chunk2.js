@@ -2767,29 +2767,34 @@ const { createRunner } = require('./e2e_playwright_session');
 
     await openCoordinateModal();
     const quickPickerInitial = await page.evaluate(() => ({
-      shotOptions: document.querySelectorAll('select[data-coordinate-quick-select="shot"] option').length,
-      chipOptions: document.querySelectorAll('select[data-coordinate-quick-select="chip"] option').length,
+      shotOptions: document.querySelectorAll('button[data-coordinate-quick-picker="shot"]').length,
+      chipOptions: document.querySelectorAll('button[data-coordinate-quick-picker="chip"]').length,
       shotParent: document.querySelector('[data-coordinate-quick-picker="shot"]')?.closest('[data-coordinate-list-panel]')?.dataset.coordinateListPanel || '',
       chipParent: document.querySelector('[data-coordinate-quick-picker="chip"]')?.closest('[data-coordinate-list-panel]')?.dataset.coordinateListPanel || '',
+      selectedChips: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+      initialShotGroups: document.querySelectorAll('#chip-coordinate-select-shot-picker .coordinate-select-shot-group').length,
+      initialShotChecked: document.querySelectorAll('#chip-coordinate-select-shot-picker button[aria-checked="true"]').length,
     }));
-    expect(quickPickerInitial.shotOptions > 1 && quickPickerInitial.chipOptions > 1 &&
-      quickPickerInitial.shotParent === 'shot' && quickPickerInitial.chipParent === 'chip',
+    expect(quickPickerInitial.shotOptions > 0 && quickPickerInitial.chipOptions > 0 &&
+      quickPickerInitial.shotParent === 'shot' && quickPickerInitial.chipParent === 'chip' &&
+      quickPickerInitial.selectedChips === 0 && quickPickerInitial.initialShotGroups === 1 &&
+      quickPickerInitial.initialShotChecked === 0,
     `quick picker initial=${JSON.stringify(quickPickerInitial)}`);
     await page.locator('[data-coordinate-quick-search="shot"]').fill(
       `(${selectionTarget.shotRows[0].x}, ${selectionTarget.shotRows[0].y})`
     );
-    const filteredShotValue = await page.locator('select[data-coordinate-quick-select="shot"] option').nth(1).getAttribute('value');
-    expect(filteredShotValue, 'filtered Shot dropdown option missing');
-    await page.locator('select[data-coordinate-quick-select="shot"]').selectOption(filteredShotValue);
+    const filteredShot = page.locator('button[data-coordinate-quick-picker="shot"]').first();
+    await filteredShot.waitFor({ state: 'visible', timeout: 10000 });
+    await filteredShot.click();
     await page.waitForFunction(
       () => window.viewer?.chipAnnotator?.selectionMode === 'shot' && window.viewer.chipAnnotator.selectedChips?.size === 24,
       null,
       { timeout: 10000 }
     );
     await page.locator('[data-coordinate-quick-search="chip"]').fill('Grid');
-    const filteredChipValue = await page.locator('select[data-coordinate-quick-select="chip"] option').nth(1).getAttribute('value');
-    expect(filteredChipValue, 'filtered Chip dropdown option missing');
-    await page.locator('select[data-coordinate-quick-select="chip"]').selectOption(filteredChipValue);
+    const filteredChip = page.locator('button[data-coordinate-quick-picker="chip"]').first();
+    await filteredChip.waitFor({ state: 'visible', timeout: 10000 });
+    await filteredChip.click();
     await page.waitForFunction(
       () => window.viewer?.chipAnnotator?.selectionMode === 'chip' && window.viewer.chipAnnotator.selectedChips?.size === 1,
       null,
@@ -2802,12 +2807,15 @@ const { createRunner } = require('./e2e_playwright_session');
       listPanels: document.querySelectorAll('#chip-coordinate-select-list-panels [data-coordinate-list-panel]').length,
       shotColumns: document.querySelectorAll('#chip-coordinate-select-shot-tbody').length ? document.querySelectorAll('#chip-coordinate-select-shot-tbody').length : 0,
       listColumnCounts: [...document.querySelectorAll('#chip-coordinate-select-list-panels thead tr')].map((row) => row.querySelectorAll('th').length),
-      summary: document.getElementById('chip-coordinate-select-summary')?.textContent || '',
+      hasSummary: !!document.getElementById('chip-coordinate-select-summary'),
+      hasHint: !!document.getElementById('chip-coordinate-select-hint'),
       modeless: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).pointerEvents === 'none',
       position: getComputedStyle(document.querySelector('.coordinate-select-modal-content')).position,
       ariaModal: document.querySelector('.coordinate-select-modal-content')?.getAttribute('aria-modal'),
     }));
-    expect(initialModal.listPanels === 3 && initialModal.listColumnCounts.join(',') === '3,3,2' && initialModal.modeless && initialModal.position === 'fixed' && initialModal.ariaModal === 'false', `initial modal=${JSON.stringify(initialModal)}`);
+    expect(initialModal.listPanels === 3 && initialModal.listColumnCounts.join(',') === '3,3,2' &&
+      !initialModal.hasSummary && !initialModal.hasHint && initialModal.modeless &&
+      initialModal.position === 'fixed' && initialModal.ariaModal === 'false', `initial modal=${JSON.stringify(initialModal)}`);
     await pasteIntoList('shot',
       `${selectionTarget.shotRows[0].x}\t${selectionTarget.shotRows[0].y}\n${selectionTarget.shotRows[1].x},${selectionTarget.shotRows[1].y}`
     );
@@ -3039,21 +3047,27 @@ const { createRunner } = require('./e2e_playwright_session');
 
     await page.locator('#chip-coordinate-select-close').click();
     await openCoordinateModal();
-    await page.waitForFunction(
-      () => (document.getElementById('chip-coordinate-select-hint')?.textContent || '').includes('선택된 Shot들이 있으면 각 Shot의 같은 영역'),
-      null,
-      { timeout: 10000 }
-    );
-    const shotScopeUi = await page.evaluate(() => ({
-      hint: document.getElementById('chip-coordinate-select-hint')?.textContent || '',
-      summary: document.getElementById('chip-coordinate-select-summary')?.textContent || '',
+    const reopenedModal = await page.evaluate(() => ({
+      selectedChips: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
+      pickerGroups: document.querySelectorAll('#chip-coordinate-select-shot-picker .coordinate-select-shot-group').length,
+      pickerChecked: document.querySelectorAll('#chip-coordinate-select-shot-picker button[aria-checked="true"]').length,
+      hasHint: !!document.getElementById('chip-coordinate-select-hint'),
+      hasSummary: !!document.getElementById('chip-coordinate-select-summary'),
     }));
     expect(
-      shotScopeUi.summary.includes('Shot ID:') &&
-        shotScopeUi.summary.includes('Shot별 YIELD: 개별 YIELD 데이터 없음') &&
-        shotScopeUi.summary.includes('Chip ID별 YIELD: 개별 YIELD 데이터 없음') &&
-        shotScopeUi.summary.includes('Wafer YIELD:'),
-      `shot scope summary=${JSON.stringify(shotScopeUi)}`
+      reopenedModal.selectedChips === 0 && reopenedModal.pickerGroups === 1 &&
+        reopenedModal.pickerChecked === 0 && !reopenedModal.hasHint && !reopenedModal.hasSummary,
+      `reopened coordinate modal=${JSON.stringify(reopenedModal)}`
+    );
+    await pasteIntoList('shot',
+      `${selectionTarget.shotRows[0].x}\t${selectionTarget.shotRows[0].y}\n${selectionTarget.shotRows[1].x},${selectionTarget.shotRows[1].y}`
+    );
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.selectionMode === 'shot' &&
+        window.viewer.chipAnnotator.selectedChips?.size === 48 &&
+        window.viewer.chipAnnotator._getSelectedShotGroups?.().size === 2,
+      null,
+      { timeout: 10000 }
     );
     await page.locator('#chip-coordinate-select-operation').selectOption('remove');
     await fillListCell('chipId', 0, 0, selectionTarget.chipId);
@@ -3083,6 +3097,16 @@ const { createRunner } = require('./e2e_playwright_session');
 
     await page.locator('#chip-coordinate-select-close').click();
     await openCoordinateModal();
+    await pasteIntoList('shot',
+      `${selectionTarget.shotRows[0].x}\t${selectionTarget.shotRows[0].y}\n${selectionTarget.shotRows[1].x},${selectionTarget.shotRows[1].y}`
+    );
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.selectionMode === 'shot' &&
+        window.viewer.chipAnnotator.selectedChips?.size === 48 &&
+        window.viewer.chipAnnotator._getSelectedShotGroups?.().size === 2,
+      null,
+      { timeout: 10000 }
+    );
     await page.locator('#chip-coordinate-select-operation').selectOption('add');
     await fillListCell('chipId', 0, 0, selectionTarget.chipId);
     await page.waitForFunction(

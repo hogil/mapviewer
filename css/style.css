@@ -2891,9 +2891,9 @@
             top: 88px;
             right: 24px;
             left: auto;
-            width: min(560px, 92vw);
+            width: min(680px, 92vw);
             min-width: 0;
-            max-width: 560px;
+            max-width: 680px;
             max-height: 82vh;
         }
 
@@ -3085,16 +3085,23 @@
 
         .coordinate-select-list-panels {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(205px, 1.25fr);
+            grid-template-columns: minmax(180px, 0.82fr) minmax(300px, 1.45fr);
             gap: 8px;
+        }
+
+        .coordinate-select-coordinate-panels {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            min-width: 0;
         }
 
         .coordinate-select-list-panel {
             display: flex;
             flex-direction: column;
-            gap: 6px;
+            gap: 5px;
             min-width: 0;
-            padding: 7px;
+            padding: 6px;
             background: #191919;
             border: 1px solid #454545;
             border-radius: 3px;
@@ -3118,13 +3125,7 @@
         }
 
         .coordinate-select-quick-picker {
-            display: flex;
-            flex-direction: column;
-            gap: 5px;
-            padding: 6px;
-            background: #151b1f;
-            border: 1px solid #3e515d;
-            border-radius: 4px;
+            min-width: 0;
         }
 
         .coordinate-select-quick-heading {
@@ -3149,13 +3150,10 @@
         }
 
         .coordinate-select-quick-controls {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr);
-            gap: 4px;
+            position: relative;
         }
 
-        .coordinate-select-quick-search,
-        .coordinate-select-quick-select {
+        .coordinate-select-quick-search {
             width: 100%;
             min-width: 0;
             height: 27px;
@@ -3172,12 +3170,55 @@
             font: 11px Consolas, "Courier New", monospace;
         }
 
-        .coordinate-select-quick-select {
-            cursor: pointer;
+        .coordinate-select-quick-dropdown {
+            position: absolute;
+            top: calc(100% + 2px);
+            right: 0;
+            left: 0;
+            z-index: 12;
+            max-height: 180px;
+            overflow: auto;
+            background: #171d21;
+            border: 1px solid #638091;
+            border-radius: 3px;
+            box-shadow: 0 8px 18px rgba(0, 0, 0, 0.36);
         }
 
-        .coordinate-select-quick-search:focus,
-        .coordinate-select-quick-select:focus {
+        .coordinate-select-quick-dropdown[hidden] {
+            display: none;
+        }
+
+        .coordinate-select-quick-option-group {
+            padding: 5px 7px 3px;
+            color: #93aebb;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        .coordinate-select-quick-option {
+            display: block;
+            width: 100%;
+            padding: 5px 7px;
+            overflow: hidden;
+            background: transparent;
+            color: #e5eef2;
+            border: 0;
+            border-top: 1px solid rgba(120, 148, 162, 0.16);
+            cursor: pointer;
+            font: 11px Consolas, "Courier New", monospace;
+            text-align: left;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .coordinate-select-quick-option:hover,
+        .coordinate-select-quick-option:focus-visible {
+            background: #30424d;
+            color: #fff;
+            outline: none;
+        }
+
+        .coordinate-select-quick-search:focus {
             outline: 2px solid #6eabc8;
             outline-offset: -1px;
             border-color: #b8e4f7;
@@ -3202,7 +3243,7 @@
         }
 
         .coordinate-select-list-table-wrap {
-            max-height: 154px;
+            max-height: 82px;
             overflow: auto;
             border: 1px solid #414141;
             background: #171717;
@@ -3237,7 +3278,7 @@
             display: flex;
             align-items: center;
             gap: 5px;
-            min-height: 25px;
+            min-height: 20px;
             color: #888;
             font-size: 10px;
             line-height: 1.2;
@@ -3245,7 +3286,8 @@
 
         .coordinate-select-list-actions .grid-btn {
             flex: 0 0 auto;
-            padding: 4px 7px;
+            min-width: 24px;
+            padding: 2px 6px;
             white-space: nowrap;
         }
 
@@ -3263,8 +3305,8 @@
 
         .coordinate-select-table th,
         .coordinate-select-table td {
-            height: 34px;
-            padding: 3px;
+            height: 27px;
+            padding: 2px;
             border-right: 1px solid #3e3e3e;
             border-bottom: 1px solid #3e3e3e;
             box-sizing: border-box;
@@ -3276,7 +3318,7 @@
             z-index: 1;
             background: #2c2c2c;
             color: #ddd;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 600;
             text-align: left;
         }
@@ -3287,14 +3329,14 @@
 
         .coordinate-select-cell {
             width: 100%;
-            height: 27px;
+            height: 22px;
             box-sizing: border-box;
-            padding: 3px 6px;
+            padding: 2px 4px;
             background: #111;
             color: #f5f5f5;
             border: 1px solid #555;
             border-radius: 2px;
-            font: 13px Consolas, "Courier New", monospace;
+            font: 11px Consolas, "Courier New", monospace;
         }
 
         .coordinate-select-cell:focus {
@@ -3305,20 +3347,23 @@
 
         .coordinate-select-action-column,
         .coordinate-select-action-cell {
-            width: 38px;
+            width: 26px;
             text-align: center;
+            vertical-align: middle;
         }
 
         .coordinate-select-remove-row {
-            width: 26px;
-            height: 25px;
+            display: inline-grid;
+            width: 22px;
+            height: 22px;
+            place-items: center;
             padding: 0;
             background: transparent;
             color: #aaa;
             border: 1px solid transparent;
             border-radius: 2px;
             cursor: pointer;
-            font-size: 16px;
+            font-size: 15px;
             line-height: 1;
         }
 
