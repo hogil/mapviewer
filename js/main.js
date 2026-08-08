@@ -9661,48 +9661,77 @@ class WaferMapViewer {
         return parsed;
     }
 
-    _getCoordinateSelectionPickerGroup() {
+    _getCoordinateSelectionFullShotPicker() {
         const annotator = this.chipAnnotator;
         if (!annotator) return null;
+        const shape = annotator.getShotGridShape?.() || { cols: 4, rows: 6 };
+        const cols = Math.max(1, Number(shape.cols) || 4);
+        const rows = Math.max(1, Number(shape.rows) || 6);
+        const totalSlots = cols * rows;
         const allGroups = [...(annotator.shotBoundaryGroups?.values?.() || [])];
-        const selectedGroups = [...(annotator._getSelectedShotGroups?.() || [])];
-        let activeShotId = this.coordinateSelectionActiveShotId;
-
-        if (!activeShotId && selectedGroups.length) activeShotId = String(selectedGroups[0].shotId);
-        if (!activeShotId) {
-            for (const chipIndex of annotator.selectedChips || []) {
-                const group = annotator._getShotGroupForChip?.(annotator.chips?.[chipIndex]);
-                if (group) {
-                    activeShotId = String(group.shotId);
-                    break;
-                }
+        const positiveModulo = (value, size) => ((value % size) + size) % size;
+        const entryForIndex = (index) => {
+            const chip = annotator.chips?.[index];
+            const layout = annotator.getLayoutRowForChip?.(chip);
+            if (!chip) return null;
+            const slot = String(annotator._getShotGridSlot?.(chip, { cols, rows }) || '');
+            const [slotX, slotY] = slot.split(':').map(Number);
+            if (!Number.isInteger(slotX) || !Number.isInteger(slotY) ||
+                slotX < 0 || slotX >= cols || slotY < 0 || slotY >= rows) {
+                const x = Number(chip.x_abs);
+                const y = Number(chip.y_abs);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+                return {
+                    index,
+                    chip,
+                    layout,
+                    chipId: String(layout?.chip_id ?? chip.chip_id ?? '').trim(),
+                    slotX: positiveModulo(x, cols),
+                    slotY: positiveModulo(y, rows),
+                };
             }
-        }
-        if (!activeShotId) {
-            const shotRow = this._getLiveCoordinateSelectionList('shot')?.rows?.[0];
-            if (shotRow && Number.isFinite(shotRow.x) && Number.isFinite(shotRow.y)) {
-                const matchingGroup = allGroups.find((group) => {
-                    const layout = annotator.getLayoutRowForChip?.(group.chips?.[0]);
-                    return Number(layout?.shot_x_pos) === Number(shotRow.x) &&
-                        Number(layout?.shot_y_pos) === Number(shotRow.y);
-                });
-                if (matchingGroup) activeShotId = String(matchingGroup.shotId);
-            }
-        }
+            return {
+                index,
+                chip,
+                layout,
+                chipId: String(layout?.chip_id ?? chip.chip_id ?? '').trim(),
+                slotX,
+                slotY,
+            };
+        };
+        const candidates = allGroups.map((group) => {
+            const entries = (group.indices || []).map(entryForIndex).filter(Boolean);
+            const slots = new Map(entries.map((entry) => [`${entry.slotX}:${entry.slotY}`, entry]));
+            const layout = annotator.getLayoutRowForChip?.(group.chips?.[0]);
+            return {
+                group,
+                entries,
+                slots,
+                shotX: Number(layout?.shot_x_pos),
+                shotY: Number(layout?.shot_y_pos),
+            };
+        }).filter((candidate) => candidate.entries.length > 0);
+        const orderByOrigin = (left, right) => {
+            const leftDistance = Math.abs(left.shotX) + Math.abs(left.shotY);
+            const rightDistance = Math.abs(right.shotX) + Math.abs(right.shotY);
+            return leftDistance - rightDistance || left.shotY - right.shotY || left.shotX - right.shotX;
+        };
+        const origin = candidates.filter((candidate) => candidate.shotX === 0 && candidate.shotY === 0);
+        const full = candidates.filter((candidate) => candidate.slots.size === totalSlots);
+        const template = origin.find((candidate) => candidate.slots.size === totalSlots) ||
+            full.sort(orderByOrigin)[0] || origin[0] ||
+            [...candidates].sort((left, right) => right.slots.size - left.slots.size || orderByOrigin(left, right))[0];
+        if (!template) return null;
 
-        if (!activeShotId) {
-            const firstGroup = [...allGroups].sort((left, right) => {
-                const leftLayout = annotator.getLayoutRowForChip?.(left.chips?.[0]);
-                const rightLayout = annotator.getLayoutRowForChip?.(right.chips?.[0]);
-                return Number(leftLayout?.shot_y_pos) - Number(rightLayout?.shot_y_pos) ||
-                    Number(leftLayout?.shot_x_pos) - Number(rightLayout?.shot_x_pos);
-            })[0];
-            if (firstGroup) activeShotId = String(firstGroup.shotId);
-        }
-
-        const group = allGroups.find((candidate) => String(candidate.shotId) === String(activeShotId)) || null;
-        if (group) this.coordinateSelectionActiveShotId = String(group.shotId);
-        return group;
+        // A 0,0 reference may be partial on an edge wafer. Fill missing standard slots
+        // from other Shots so this remains a complete Chip ID palette, never a partial Shot view.
+        const slots = new Map(template.slots);
+        [...candidates].sort(orderByOrigin).forEach((candidate) => {
+            candidate.slots.forEach((entry, key) => {
+                if (!slots.has(key)) slots.set(key, entry);
+            });
+        });
+        return { cols, rows, totalSlots, entries: [...slots.values()] };
     }
 
     _renderCoordinateSelectionShotPicker() {
@@ -9712,11 +9741,11 @@ class WaferMapViewer {
         picker.replaceChildren();
         picker.hidden = false;
 
-        const activeGroup = this._getCoordinateSelectionPickerGroup();
-        if (!activeGroup) {
+        const fullShot = this._getCoordinateSelectionFullShotPicker();
+        if (!fullShot) {
             const empty = document.createElement('div');
             empty.className = 'coordinate-select-shot-picker-empty';
-            empty.textContent = 'Shot X/Y를 입력하거나 선택하면 내부 Chip ID가 여기에 표시됩니다.';
+            empty.textContent = 'Chip ID 배치를 만들 layout 데이터가 없습니다.';
             picker.appendChild(empty);
             return;
         }
@@ -9726,49 +9755,36 @@ class WaferMapViewer {
         const headingLabel = document.createElement('span');
         const selectedGroupCount = Math.max(1, annotator._getSelectedShotGroups?.().size || 0);
         headingLabel.textContent = selectedGroupCount > 1
-            ? `Shot 내부 Chip ID 선택 (${selectedGroupCount}개 Shot에 적용)`
-            : 'Shot 내부 Chip ID 선택';
+            ? `Full Shot Chip ID 선택 (${selectedGroupCount}개 Shot에 적용)`
+            : 'Full Shot Chip ID 선택';
         heading.appendChild(headingLabel);
-        const shotLabel = document.createElement('strong');
-        shotLabel.textContent = `Shot ${activeGroup.shotId}`;
-        heading.appendChild(shotLabel);
         picker.appendChild(heading);
 
-        const shape = annotator.getShotGridShape?.() || { cols: 4, rows: 6 };
-        const cols = Math.max(1, Number(shape.cols) || 4);
-        const rows = Math.max(1, Number(shape.rows) || 6);
-        const entries = (activeGroup.indices || []).map((index) => {
-            const chip = annotator.chips?.[index];
-            const layout = annotator.getLayoutRowForChip?.(chip);
-            if (!chip) return null;
-            return {
-                index,
-                chip,
-                x: Number(chip.x_abs),
-                y: Number(chip.y_abs),
-                chipId: String(layout?.chip_id ?? chip.chip_id ?? '').trim(),
-            };
-        }).filter(Boolean);
-        const positiveModulo = (value, size) => ((value % size) + size) % size;
+        const { cols, rows, totalSlots, entries } = fullShot;
         const slots = new Map();
         entries.forEach((entry) => {
-            if (!Number.isFinite(entry.x) || !Number.isFinite(entry.y)) return;
-            const key = `${positiveModulo(entry.x, cols)}:${positiveModulo(entry.y, rows)}`;
+            const key = `${entry.slotX}:${entry.slotY}`;
             if (!slots.has(key)) slots.set(key, entry);
         });
         const groupPanel = document.createElement('div');
         groupPanel.className = 'coordinate-select-shot-group';
-        groupPanel.dataset.coordinateShotId = String(activeGroup.shotId);
+        groupPanel.dataset.coordinateShotId = 'full';
         const title = document.createElement('div');
         title.className = 'coordinate-select-shot-group-heading';
         const titleMain = document.createElement('span');
-        const firstLayout = annotator.getLayoutRowForChip?.(activeGroup.chips?.[0]);
-        titleMain.textContent = Number.isFinite(Number(firstLayout?.shot_x_pos)) && Number.isFinite(Number(firstLayout?.shot_y_pos))
-            ? `(${firstLayout.shot_x_pos}, ${firstLayout.shot_y_pos})`
-            : '';
+        titleMain.textContent = 'Full Shot';
         const titleCount = document.createElement('span');
-        const selectedCount = entries.filter((entry) => annotator.selectedChips?.has(entry.index)).length;
-        titleCount.textContent = `${selectedCount}/${cols * rows} Chip ID`;
+        const selectedGroups = [...(annotator._getSelectedShotGroups?.() || [])];
+        const isSlotSelected = (entry) => {
+            if (!selectedGroups.length) return annotator.selectedChips?.has(entry.index);
+            const matchingIndices = selectedGroups.flatMap((group) => (group.indices || []).filter((index) => {
+                const chip = annotator.chips?.[index];
+                return annotator._getShotGridSlot?.(chip, { cols, rows }) === `${entry.slotX}:${entry.slotY}`;
+            }));
+            return matchingIndices.length > 0 && matchingIndices.every((index) => annotator.selectedChips?.has(index));
+        };
+        const selectedCount = entries.filter(isSlotSelected).length;
+        titleCount.textContent = `${selectedCount}/${totalSlots} Chip ID`;
         title.append(titleMain, titleCount);
         const grid = document.createElement('div');
         grid.className = 'coordinate-select-shot-grid';
@@ -9794,10 +9810,10 @@ class WaferMapViewer {
                 button.style.gridRow = String(rows - slotY);
                 button.textContent = entry.chipId || '-';
                 button.title = selectedGroupCount > 1
-                    ? `Chip ID ${entry.chipId || '-'} · 선택된 ${selectedGroupCount}개 Shot의 같은 영역 · (${entry.chip.x_abs}, ${entry.chip.y_abs})`
-                    : `Chip ID ${entry.chipId || '-'} · (${entry.chip.x_abs}, ${entry.chip.y_abs})`;
+                    ? `Chip ID ${entry.chipId || '-'} · 선택된 ${selectedGroupCount}개 Shot의 같은 영역`
+                    : `Chip ID ${entry.chipId || '-'}`;
                 button.setAttribute('role', 'checkbox');
-                button.setAttribute('aria-checked', annotator.selectedChips?.has(entry.index) ? 'true' : 'false');
+                button.setAttribute('aria-checked', isSlotSelected(entry) ? 'true' : 'false');
                 grid.appendChild(button);
             }
         }

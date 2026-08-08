@@ -2773,12 +2773,13 @@ const { createRunner } = require('./e2e_playwright_session');
       chipParent: document.querySelector('[data-coordinate-quick-picker="chip"]')?.closest('[data-coordinate-list-panel]')?.dataset.coordinateListPanel || '',
       selectedChips: window.viewer?.chipAnnotator?.selectedChips?.size || 0,
       initialShotGroups: document.querySelectorAll('#chip-coordinate-select-shot-picker .coordinate-select-shot-group').length,
+      initialShotCells: document.querySelectorAll('#chip-coordinate-select-shot-picker button[data-coordinate-shot-chip-index]').length,
       initialShotChecked: document.querySelectorAll('#chip-coordinate-select-shot-picker button[aria-checked="true"]').length,
     }));
     expect(quickPickerInitial.shotOptions > 0 && quickPickerInitial.chipOptions > 0 &&
       quickPickerInitial.shotParent === 'shot' && quickPickerInitial.chipParent === 'chip' &&
       quickPickerInitial.selectedChips === 0 && quickPickerInitial.initialShotGroups === 1 &&
-      quickPickerInitial.initialShotChecked === 0,
+      quickPickerInitial.initialShotCells === 24 && quickPickerInitial.initialShotChecked === 0,
     `quick picker initial=${JSON.stringify(quickPickerInitial)}`);
     await page.locator('[data-coordinate-quick-search="shot"]').fill(
       `(${selectionTarget.shotRows[0].x}, ${selectionTarget.shotRows[0].y})`
