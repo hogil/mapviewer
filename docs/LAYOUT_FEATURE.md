@@ -67,7 +67,7 @@ The file uses ordinary CSV formatting with commas as delimiters. The header is
 fixed and must remain in this order:
 
 ```text
-process_id,shot_id,chip_id,shot_x_pos,shot_y_pos,full_shot_type,eds_chip_x_pos,eds_chip_y_pos,chip_center_x_pos,chip_center_y_pos
+process_id,shot_id,chip_id,shot_x_pos,shot_y_pos,full_shot_type,eds_chip_x_pos,eds_chip_y_pos,chip_center_x_pos,chip_center_y_pos,zone_id,zone_type
 ```
 
 - `process_id`: four-character process key, such as `P001`
@@ -78,12 +78,19 @@ process_id,shot_id,chip_id,shot_x_pos,shot_y_pos,full_shot_type,eds_chip_x_pos,e
   the positions JSON `x_abs`, `y_abs` values used by the viewer
 - `chip_center_x_pos`, `chip_center_y_pos`: real micrometre coordinates,
   displayed as millimetre values in the UI
+- `zone_id`: zone label. The current dummy circle fixture uses `C20`, `C80`,
+  `E1`, and `E20`.
+- `zone_type`: zone family. The current fixture uses `circle`; the supported
+  future families are `area` (`TOP_LEFT`, `CENTER`, `RIGHT`, `BOTTOM`) and
+  `edge` (`INNER`, `EDGE`).
 
 The API reads the 70k-row file lazily and caches the parsed index until the
 file modification time or size changes.
 
 The wafer centre is `(0, 0)`. A 300 mm wafer is validated as a radius of
 `150000.0 um`; generated chip centres must remain inside that circle.
+The current dummy `circle` labels are deterministic radial bands only and are
+not a production zone-boundary definition.
 The dummy generator groups chips into shots of approximately 4 columns by 6
 rows; edge shots can be partial because the source wafer mask is not full.
 

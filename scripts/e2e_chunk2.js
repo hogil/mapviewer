@@ -1801,6 +1801,7 @@ const { createRunner } = require('./e2e_playwright_session');
       const chip = (v.chipAnnotator?.chips || []).find((item) =>
         Number(item?.x_abs) === 10 && Number(item?.y_abs) === 0
       );
+      const layoutRow = v.chipAnnotator?.getLayoutRowForChip?.(chip);
       v.chipAnnotator?._updateCoordinateBox(0, 0, chip || null);
       const shotBoundaryGroups = Array.from(v.chipAnnotator?.shotBoundaryGroups?.entries?.() || [])
         .map(([shotId, group]) => ({
@@ -1840,6 +1841,8 @@ const { createRunner } = require('./e2e_playwright_session');
         shotBoundaryVisibleOn: boundaryOn.visible,
         shotBoundaryVisibleAfter: boundaryAfter.visible,
         chip: chip ? { x_abs: chip.x_abs, y_abs: chip.y_abs } : null,
+        zoneId: layoutRow?.zone_id || '',
+        zoneType: layoutRow?.zone_type || '',
         coord: document.getElementById('coord-chip-coord')?.textContent || '',
         rel: document.getElementById('coord-chip-rel')?.textContent || '',
         radious: document.getElementById('coord-radious')?.textContent || '',
@@ -1854,6 +1857,8 @@ const { createRunner } = require('./e2e_playwright_session');
 
     expect(data.path.endsWith(`${folder}/${targetFile}`), `path=${data.path}`);
     expect(data.processId === 'P001' && data.layoutRows === 833, `layout=${JSON.stringify(data)}`);
+    expect(['C20', 'C80', 'E1', 'E20'].includes(data.zoneId) && data.zoneType === 'circle',
+      `circle zone columns=${JSON.stringify(data)}`);
     expect(data.shotBoundaryGroupCount === 43 && data.shotBoundaryChipCount === 833,
       `shot boundaries=${JSON.stringify(data)}`);
     expect(data.partialShotCount > 0 && data.edgeBoundaryMatchesActual,
@@ -2123,7 +2128,7 @@ const { createRunner } = require('./e2e_playwright_session');
     };
   });
 
-  await record('coordinate-selection-cells', '표 셀 붙여넣기 / Shot 범위 내 Chip ID 추가·해제 / Chip Pos 선택', async () => {
+  await record('coordinate-selection-cells', '독립 Shot/Chip/Chip ID 셀 붙여넣기 / Shot picker / Chip Pos 선택', async () => {
     const targetFile = 'AAI633_00P_08_20260501_010000_99.6_0_PE_PWQ.png';
     const folder = 'PW/P001/20260501';
     await boot('chunk2-coordinate-selection-cells');
@@ -2190,8 +2195,13 @@ const { createRunner } = require('./e2e_playwright_session');
         { timeout: 10000 }
       );
     };
-    const pasteIntoFirstCell = async (text) => {
-      await page.locator('#chip-coordinate-select-tbody input[data-coordinate-row="0"][data-coordinate-col="0"]').evaluate((element, value) => {
+    const pasteIntoList = async (listName, text) => {
+      const tbodyId = listName === 'shot'
+        ? 'chip-coordinate-select-shot-tbody'
+        : listName === 'chip'
+          ? 'chip-coordinate-select-chip-tbody'
+          : 'chip-coordinate-select-id-tbody';
+      await page.locator(`#${tbodyId} input[data-coordinate-row="0"][data-coordinate-col="0"]`).evaluate((element, value) => {
         const dataTransfer = new DataTransfer();
         dataTransfer.setData('text/plain', value);
         element.dispatchEvent(new ClipboardEvent('paste', {
@@ -2201,32 +2211,37 @@ const { createRunner } = require('./e2e_playwright_session');
         }));
       }, text);
     };
-    const fillCoordinateCell = async (row, col, value) => {
-      await page.locator(`#chip-coordinate-select-tbody input[data-coordinate-row="${row}"][data-coordinate-col="${col}"]`).fill(String(value));
+    const fillListCell = async (listName, row, col, value) => {
+      const tbodyId = listName === 'shot'
+        ? 'chip-coordinate-select-shot-tbody'
+        : listName === 'chip'
+          ? 'chip-coordinate-select-chip-tbody'
+          : 'chip-coordinate-select-id-tbody';
+      await page.locator(`#${tbodyId} input[data-coordinate-row="${row}"][data-coordinate-col="${col}"]`).fill(String(value));
     };
 
     await openCoordinateModal();
     const initialModal = await page.evaluate(() => ({
       visible: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display !== 'none',
-      columns: document.querySelectorAll('#chip-coordinate-select-head th').length - 1,
+      listPanels: document.querySelectorAll('#chip-coordinate-select-list-panels [data-coordinate-list-panel]').length,
+      shotColumns: document.querySelectorAll('#chip-coordinate-select-shot-tbody').length ? document.querySelectorAll('#chip-coordinate-select-shot-tbody').length : 0,
+      listColumnCounts: [...document.querySelectorAll('#chip-coordinate-select-list-panels thead tr')].map((row) => row.querySelectorAll('th').length),
       summary: document.getElementById('chip-coordinate-select-summary')?.textContent || '',
       modeless: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).pointerEvents === 'none',
       position: getComputedStyle(document.querySelector('.coordinate-select-modal-content')).position,
       ariaModal: document.querySelector('.coordinate-select-modal-content')?.getAttribute('aria-modal'),
     }));
-    expect(initialModal.columns === 3 && initialModal.modeless && initialModal.position === 'fixed' && initialModal.ariaModal === 'false', `initial modal=${JSON.stringify(initialModal)}`);
-    await pasteIntoFirstCell(
+    expect(initialModal.listPanels === 3 && initialModal.listColumnCounts.join(',') === '3,3,2' && initialModal.modeless && initialModal.position === 'fixed' && initialModal.ariaModal === 'false', `initial modal=${JSON.stringify(initialModal)}`);
+    await pasteIntoList('shot',
       `${selectionTarget.shotRows[0].x}\t${selectionTarget.shotRows[0].y}\n${selectionTarget.shotRows[1].x},${selectionTarget.shotRows[1].y}`
     );
-    const shotCells = await page.locator('#chip-coordinate-select-tbody input').evaluateAll((elements) => elements.map((element) => element.value));
+    const shotCells = await page.locator('#chip-coordinate-select-shot-tbody input').evaluateAll((elements) => elements.map((element) => element.value));
     expect(
       shotCells.slice(0, 6).join('|') === [
         selectionTarget.shotRows[0].x,
         selectionTarget.shotRows[0].y,
-        '',
         selectionTarget.shotRows[1].x,
         selectionTarget.shotRows[1].y,
-        '',
       ].join('|'),
       `shot cells=${JSON.stringify(shotCells)}`
     );
@@ -2271,9 +2286,9 @@ const { createRunner } = require('./e2e_playwright_session');
       };
     });
     expect(
-      shotPicker.visible && shotPicker.groupCount === 2 &&
-        shotPicker.grids.length === 2 && shotPicker.grids.every((grid) => grid.cells === 24 && grid.chips === 24 && grid.empty === 0) &&
-        shotPicker.checked === 48 && shotPicker.shape?.cols === 4 && shotPicker.shape?.rows === 6 &&
+      shotPicker.visible && shotPicker.groupCount === 1 &&
+        shotPicker.grids.length === 1 && shotPicker.grids.every((grid) => grid.cells === 24 && grid.chips === 24 && grid.empty === 0) &&
+        shotPicker.checked === 24 && shotPicker.shape?.cols === 4 && shotPicker.shape?.rows === 6 &&
         shotPicker.firstChipId === shotPicker.expectedFirstChipId,
       `shot picker=${JSON.stringify(shotPicker)}`
     );
@@ -2290,7 +2305,7 @@ const { createRunner } = require('./e2e_playwright_session');
       checked: document.querySelectorAll('#chip-coordinate-select-shot-picker button[aria-checked="true"]').length,
       chips: window.viewer.chipAnnotator.selectedChips.size,
     }));
-    expect(pickerAfterRemove.checked === 47 && pickerAfterRemove.chips === 47, `picker remove=${JSON.stringify(pickerAfterRemove)}`);
+    expect(pickerAfterRemove.checked === 23 && pickerAfterRemove.chips === 47, `picker remove=${JSON.stringify(pickerAfterRemove)}`);
     await pickerChip.click();
     await page.waitForFunction(
       () => window.viewer?.chipAnnotator?.selectionMode === 'shot' &&
@@ -2300,7 +2315,7 @@ const { createRunner } = require('./e2e_playwright_session');
     );
     await page.locator('#chip-coordinate-select-close').click();
     await openCoordinateModal();
-    await pasteIntoFirstCell(`${selectionTarget.partialShot.x},${selectionTarget.partialShot.y}`);
+    await pasteIntoList('shot', `${selectionTarget.partialShot.x},${selectionTarget.partialShot.y}`);
     await page.waitForFunction(
       (expectedCount) => window.viewer?.chipAnnotator?.selectionMode === 'shot' &&
         window.viewer.chipAnnotator.selectedChips?.size === expectedCount &&
@@ -2329,7 +2344,7 @@ const { createRunner } = require('./e2e_playwright_session');
     );
     await page.locator('#chip-coordinate-select-close').click();
     await openCoordinateModal();
-    await pasteIntoFirstCell(
+    await pasteIntoList('shot',
       `${selectionTarget.shotRows[0].x}\t${selectionTarget.shotRows[0].y}\n${selectionTarget.shotRows[1].x},${selectionTarget.shotRows[1].y}`
     );
     await page.waitForFunction(
@@ -2341,9 +2356,9 @@ const { createRunner } = require('./e2e_playwright_session');
     );
     await page.locator('#chip-coordinate-select-close').click();
     await openCoordinateModal();
-    await fillCoordinateCell(0, 0, selectionTarget.shotRows[0].x);
-    await fillCoordinateCell(0, 1, selectionTarget.shotRows[0].y);
-    await fillCoordinateCell(0, 2, selectionTarget.chipId);
+    await fillListCell('shot', 0, 0, selectionTarget.shotRows[0].x);
+    await fillListCell('shot', 0, 1, selectionTarget.shotRows[0].y);
+    await fillListCell('chipId', 0, 0, selectionTarget.chipId);
     await page.waitForFunction(
       () => window.viewer?.chipAnnotator?.selectionMode === 'shot' &&
         window.viewer.chipAnnotator.selectedChips?.size === 1 &&
@@ -2358,7 +2373,7 @@ const { createRunner } = require('./e2e_playwright_session');
     }));
     await page.locator('#chip-coordinate-select-close').click();
     await openCoordinateModal();
-    await pasteIntoFirstCell(
+    await pasteIntoList('shot',
       `${selectionTarget.shotRows[0].x}\t${selectionTarget.shotRows[0].y}\n${selectionTarget.shotRows[1].x},${selectionTarget.shotRows[1].y}`
     );
     await page.waitForFunction(
@@ -2397,7 +2412,7 @@ const { createRunner } = require('./e2e_playwright_session');
       `shot scope summary=${JSON.stringify(shotScopeUi)}`
     );
     await page.locator('#chip-coordinate-select-operation').selectOption('remove');
-    await fillCoordinateCell(0, 2, selectionTarget.chipId);
+    await fillListCell('chipId', 0, 0, selectionTarget.chipId);
     await page.waitForFunction(
       () => window.viewer?.chipAnnotator?.selectionMode === 'shot' &&
         window.viewer.chipAnnotator.selectedChips?.size === 47 &&
@@ -2425,7 +2440,7 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.locator('#chip-coordinate-select-close').click();
     await openCoordinateModal();
     await page.locator('#chip-coordinate-select-operation').selectOption('add');
-    await fillCoordinateCell(0, 2, selectionTarget.chipId);
+    await fillListCell('chipId', 0, 0, selectionTarget.chipId);
     await page.waitForFunction(
       () => window.viewer?.chipAnnotator?.selectionMode === 'shot' &&
         window.viewer.chipAnnotator.selectedChips?.size === 48 &&
@@ -2469,7 +2484,7 @@ const { createRunner } = require('./e2e_playwright_session');
 
     await page.locator('#chip-coordinate-select-range-enabled').uncheck();
     await page.locator('#chip-coordinate-select-operation').selectOption('replace');
-    await pasteIntoFirstCell(
+    await pasteIntoList('shot',
       `${selectionTarget.shotRows[0].x}\t${selectionTarget.shotRows[0].y}\n${selectionTarget.shotRows[1].x},${selectionTarget.shotRows[1].y}`
     );
     await page.waitForFunction(
@@ -2482,10 +2497,9 @@ const { createRunner } = require('./e2e_playwright_session');
 
     await page.locator('#chip-coordinate-select-close').click();
     await openCoordinateModal();
-    await page.locator('#chip-coordinate-select-target').selectOption('chip-pos');
     await page.locator('#chip-coordinate-select-operation').selectOption('replace');
-    await pasteIntoFirstCell(`${selectionTarget.pos.x},${selectionTarget.pos.y}`);
-    const posCells = await page.locator('#chip-coordinate-select-tbody input').evaluateAll((elements) => elements.map((element) => element.value));
+    await pasteIntoList('chip', `${selectionTarget.pos.x},${selectionTarget.pos.y}`);
+    const posCells = await page.locator('#chip-coordinate-select-chip-tbody input').evaluateAll((elements) => elements.map((element) => element.value));
     expect(posCells.slice(0, 2).join('|') === `${selectionTarget.pos.x}|${selectionTarget.pos.y}`, `pos cells=${JSON.stringify(posCells)}`);
     await page.waitForFunction(
       () => window.viewer?.chipAnnotator?.selectionMode === 'chip' &&

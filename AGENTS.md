@@ -193,14 +193,20 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - E2E guard: `scripts/e2e_chunk2.js`의 `selected-region-composite`는 P001 single-chip partial Shot 8도 full `4×6` canvas/positions로 유지되는지 확인하고, `layout-chip-coordinates`는 label 순서, partial edge Shot 경계가 실제 chip extents와 일치하는지, `(-5, -16)`, `-27.5, 77.5`, `82.2`, `(-2, 3)` 표기를 확인한다.
 - 파일: `api/composite_map.py`, `api/full_app.py`, `js/chip-annotator.js`, `js/main.js`, `index.html`, `scripts/e2e_chunk2.js`, `docs/COMPOSITE_MAP.md`
 
-#### BUG-27: 표형 좌표 선택과 Shot 내부 Chip ID 부분 선택 회귀 (2026-08-08)
+#### BUG-27: 독립 좌표 목록과 Shot 내부 Chip ID 부분 선택 회귀 (2026-08-08)
 - 증상: 단일 이미지에서 Shot을 먼저 선택한 뒤 특정 Chip ID만 선택 해제/추가하거나, Shot/Grid/Chip(Grid)/Chip(Pos) 좌표를 여러 행으로 붙여넣어 선택할 수 없다. 자유형 입력창은 붙여넣은 행을 다시 확인하기 어렵고, 선택 패널이 지도 조작을 막는다.
 - 원인: 기존 context menu는 Chip/Shot 마우스 선택만 제공했고, `ChipAnnotator`에는 layout의 `shot_id`, `chip_id`, grid 좌표, mm 좌표를 표 행 단위로 매칭하고 현재 Shot 범위에 한정해 부분 수정하는 경로가 없었다.
-- 수정 계약: `#chip-coordinate-select-modal`은 실제 input cell table의 고정 3열(`Shot/Chip X`, `Shot/Chip Y`, `Chip ID`)을 사용한다. 좌표 해석 기준만 Shot/Grid, Chip/Grid, Chip/Pos로 바꾸며 Chip ID 열은 항상 보인다. X/Y만 입력하면 해당 단위 전체, X/Y+Chip ID를 같은 행에 입력하면 해당 단위 내부의 특정 Chip, Chip ID만 입력하면 현재 선택 Shot 범위의 ID만 대상으로 한다. Tab/쉼표/줄바꿈 붙여넣기는 시작 cell부터 행/열로 채운다. 선택은 `기존 선택 바꾸기/현재 선택에 추가/현재 선택에서 해제`로 명시하고 셀 입력 즉시 지도에 반영한다. Shot 좌표로 선택하면 같은 패널에 canonical Shot 격자(현재 P001은 4×6)를 표시하고, 실제 layout의 `eds_chip_x_pos/y_pos` 슬롯을 기준으로 아래 왼쪽부터 오른쪽, 다음 행 위 순서로 Chip ID를 배치한다. 가장자리에서 없는 Chip은 빈 칸으로 유지하며, 각 Chip 셀은 클릭으로 현재 Shot 선택을 즉시 토글한다.
+- 수정 계약: `#chip-coordinate-select-modal`은 `Shot X/Y`, `Chip X/Y`, `Chip ID` 세 개의 독립 input cell list를 가로로 표시한다. 각 목록은 정수 행을 여러 개 붙여넣을 수 있고, Chip X/Y는 소수 입력을 `Chip(Pos)` mm 좌표로 해석한다. 선택은 `기존 선택 바꾸기/현재 선택에 추가/현재 선택에서 해제`로 명시하고 셀 입력 즉시 지도에 반영한다. Chip ID만 입력하면 현재 선택 Shot 범위의 ID만 대상으로 한다. Shot 좌표로 선택하면 같은 패널에 canonical Shot 격자(현재 P001은 4×6) 하나를 표시하고, 실제 layout의 `eds_chip_x_pos/y_pos` 슬롯을 기준으로 아래 왼쪽부터 오른쪽, 다음 행 위 순서로 Chip ID를 배치한다. 여러 Shot이 선택되면 picker의 Shot 선택으로 하나만 표시하고, 가장자리에서 없는 Chip은 빈 칸으로 유지하며, 각 Chip 셀은 클릭으로 현재 Shot 선택을 즉시 토글한다.
 - 패널 계약: 좌표 패널은 modal backdrop/`aria-modal=true`를 사용하지 않는 modeless fixed panel이어야 하고 지도 이벤트를 막지 않아야 한다. 헤더 드래그로 이동 가능하며 처음부터 화면 중앙에 고정하지 않는다. 범위 선택을 켜면 X/Y 두 경계의 HTML range slider와 숫자 입력을 사용해 실시간으로 선택한다.
 - YIELD 계약: per-chip/per-shot `yld` 필드가 있을 때만 평균/목록을 표시하고, 현재 fixture처럼 wafer-level `yield`만 있으면 이를 개별 값으로 복제하지 않는다.
-- E2E guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells`는 P001에서 3열 표에 Shot 두 개를 Tab/쉼표로 붙여넣어 적용 버튼 없이 48 Chip을 선택하고, 실제 4×6 Shot picker의 48개 셀/체크 상태와 bottom-left→right→up Chip ID 순서를 확인한다. Picker 셀 클릭으로 48→47→48을 토글한 뒤, 같은 행의 Shot+Chip ID 선택, Chip ID 단독 해제/추가, 드래그, 범위 slider/숫자 입력, Chip Pos 셀과 visible input 값을 확인한다.
+- E2E guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells`는 P001에서 세 독립 list에 Shot 두 개를 Tab/쉼표로 붙여넣어 적용 버튼 없이 48 Chip을 선택하고, 실제 4×6 Shot picker의 선택된 한 Shot 24개 셀/체크 상태와 bottom-left→right→up Chip ID 순서를 확인한다. Picker 셀 클릭으로 48→47→48을 토글한 뒤, Chip ID 독립 list 해제/추가, 드래그, 범위 slider/숫자 입력, Chip Pos list와 visible input 값을 확인한다.
 - 파일: `index.html`, `css/style.css`, `js/main.js`, `js/chip-annotator.js`, `scripts/e2e_chunk2.js`
+
+#### BUG-28: layout zone 컬럼 계약 회귀 (2026-08-08)
+- 증상: shared `layout.txt`가 EDS/Shot/Chip 좌표만 제공해 이후 zone별 pivot을 추가할 수 없다.
+- 수정 계약: `zone_id`, `zone_type` 컬럼을 layout 끝에 추가한다. 현재 더미 fixture는 `zone_type=circle`과 `zone_id=C20/C80/E1/E20` 반경 band를 사용한다. `area`의 `TOP_LEFT/CENTER/RIGHT/BOTTOM`, `edge`의 `INNER/EDGE`는 후속 zone family로 예약한다.
+- E2E guard: `layout-chip-coordinates`는 P001 row의 `zone_id`가 네 circle ID 중 하나이고 `zone_type=circle`인지 확인한다.
+- 파일: `scripts/generate_layout_dummy.py`, `api/full_app.py`, `docs/LAYOUT_FEATURE.md`, `scripts/e2e_chunk2.js`
 
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)

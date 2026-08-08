@@ -27,6 +27,8 @@ LAYOUT_COLUMNS = [
     "eds_chip_y_pos",
     "chip_center_x_pos",
     "chip_center_y_pos",
+    "zone_id",
+    "zone_type",
 ]
 LAYOUT_FILENAME = "layout.txt"
 
@@ -40,6 +42,22 @@ CHIP_PITCH_UM = 5_000
 # Keep dummy shots small enough to make the shot boundaries visible.
 SHOT_WIDTH = 4
 SHOT_HEIGHT = 6
+
+
+def _circle_zone(radius_um: float) -> tuple[str, str]:
+    """Return deterministic dummy circle bands for the layout fixture.
+
+    The production zone boundaries are not defined by this fixture yet. These
+    bands keep all four requested circle IDs represented without changing the
+    existing chip/shot coordinate contract.
+    """
+    if radius_um <= 10_000:
+        return "C20", "circle"
+    if radius_um <= 40_000:
+        return "C80", "circle"
+    if radius_um <= 80_000:
+        return "E1", "circle"
+    return "E20", "circle"
 
 
 def _default_positions_root() -> Path:
@@ -125,6 +143,7 @@ def _build_rows(
                 f"chip {chip_index} is outside 300 mm wafer: "
                 f"({chip_x}, {chip_y}) radius={radius}"
             )
+        zone_id, zone_type = _circle_zone(radius)
 
         expected_shot_chips = min(SHOT_WIDTH, grid_width - shot_column * SHOT_WIDTH) * min(
             SHOT_HEIGHT, grid_height - shot_row * SHOT_HEIGHT
@@ -145,6 +164,8 @@ def _build_rows(
                 "eds_chip_y_pos": y_abs,
                 "chip_center_x_pos": round(chip_x, 3),
                 "chip_center_y_pos": round(chip_y, 3),
+                "zone_id": zone_id,
+                "zone_type": zone_type,
             }
         )
     return rows

@@ -793,13 +793,13 @@ class WaferMapViewer {
             coordinateSelectClose: document.getElementById('chip-coordinate-select-close'),
             coordinateSelectCancel: document.getElementById('chip-coordinate-select-cancel'),
             coordinateSelectApply: document.getElementById('chip-coordinate-select-apply'),
-            coordinateSelectTarget: document.getElementById('chip-coordinate-select-target'),
             coordinateSelectOperation: document.getElementById('chip-coordinate-select-operation'),
             coordinateSelectHint: document.getElementById('chip-coordinate-select-hint'),
             coordinateSelectSummary: document.getElementById('chip-coordinate-select-summary'),
-            coordinateSelectHead: document.getElementById('chip-coordinate-select-head'),
-            coordinateSelectTbody: document.getElementById('chip-coordinate-select-tbody'),
-            coordinateSelectAddRow: document.getElementById('chip-coordinate-select-add-row'),
+            coordinateSelectListPanels: document.getElementById('chip-coordinate-select-list-panels'),
+            coordinateSelectShotTbody: document.getElementById('chip-coordinate-select-shot-tbody'),
+            coordinateSelectChipTbody: document.getElementById('chip-coordinate-select-chip-tbody'),
+            coordinateSelectIdTbody: document.getElementById('chip-coordinate-select-id-tbody'),
             coordinateSelectError: document.getElementById('chip-coordinate-select-error'),
             coordinateSelectDragHandle: document.getElementById('chip-coordinate-select-drag-handle'),
             coordinateSelectRangeEnabled: document.getElementById('chip-coordinate-select-range-enabled'),
@@ -1010,12 +1010,17 @@ class WaferMapViewer {
     initState() {
         this.isMultiSearchOpen = false;
         this.isCoordinateSelectionOpen = false;
-        this.coordinateSelectionRows = [];
+        this.coordinateSelectionLists = {
+            shot: { rows: [['', '']], hasInput: false },
+            chip: { rows: [['', '']], hasInput: false },
+            chipId: { rows: [['']], hasInput: false },
+        };
+        this.coordinateSelectionActiveList = 'shot';
+        this.coordinateSelectionActiveShotId = null;
         this.coordinateSelectionTarget = 'shot-grid';
         this.coordinateSelectionOperation = 'replace';
         this.coordinateSelectionEscapeHandler = null;
         this.coordinateSelectionLiveTimer = null;
-        this.coordinateSelectionHasLiveInput = false;
         this.coordinateSelectionDrag = null;
         this.coordinateSelectionRange = {
             enabled: false,
@@ -9150,6 +9155,609 @@ class WaferMapViewer {
         const action = operation === 'add' ? '추가' : operation === 'remove' ? '해제' : '변경';
         const shotSuffix = result.selectedShotCount ? ` / ${result.selectedShotCount}개 Shot` : '';
         this.showToast?.(`${result.selectedCount}개 Chip${shotSuffix} ${action} (${result.matchedRows}행${skipped})`, 2200);
+        this.closeCoordinateSelectionModal();
+    }
+
+    // Coordinate selection v2: independent Shot, Chip, and Chip ID lists.
+    // The older single-table implementation remains above for compatibility with
+    // persisted pages, but these methods are the active definitions.
+    _coordinateSelectionListConfig(listName = this.coordinateSelectionActiveList) {
+        const configs = {
+            shot: {
+                columns: 2,
+                headers: ['X', 'Y'],
+                label: 'Shot X/Y',
+                target: 'shot-grid',
+                integer: true,
+            },
+            chip: {
+                columns: 2,
+                headers: ['X', 'Y'],
+                label: 'Chip X/Y',
+                target: 'chip-grid',
+                integer: false,
+            },
+            chipId: {
+                columns: 1,
+                headers: ['ID'],
+                label: 'Chip ID',
+                target: 'chip-id',
+                integer: true,
+            },
+        };
+        return configs[listName] || configs.shot;
+    }
+
+    _newCoordinateSelectionListRows(listName, count = 1) {
+        const columns = this._coordinateSelectionListConfig(listName).columns;
+        return Array.from({ length: Math.max(1, count) }, () => Array(columns).fill(''));
+    }
+
+    _activateCoordinateSelectionList(listName) {
+        if (!this.coordinateSelectionLists?.[listName]) return;
+        this.coordinateSelectionActiveList = listName;
+        const config = this._coordinateSelectionListConfig(listName);
+        this.coordinateSelectionTarget = config.target;
+        if (this.coordinateSelectionRange.enabled) {
+            this.coordinateSelectionRange.enabled = false;
+            if (this.dom?.coordinateSelectRangeEnabled) this.dom.coordinateSelectRangeEnabled.checked = false;
+            this._renderCoordinateSelectionRange();
+        }
+        this.dom?.coordinateSelectListPanels?.querySelectorAll('[data-coordinate-list-panel]')
+            .forEach((panel) => panel.classList.toggle('is-active', panel.dataset.coordinateListPanel === listName));
+        if (this.dom?.coordinateSelectHint) {
+            this.dom.coordinateSelectHint.textContent = `${config.label} 목록은 독립적으로 입력합니다. Chip ID는 선택된 Shot이 있으면 해당 Shot 안에서만 적용됩니다.`;
+        }
+        this._updateCoordinateSelectionRangeStatus();
+    }
+
+    _renderCoordinateSelectionList(listName, focus = null) {
+        const state = this.coordinateSelectionLists?.[listName];
+        const tbody = listName === 'shot'
+            ? this.dom?.coordinateSelectShotTbody
+            : listName === 'chip'
+                ? this.dom?.coordinateSelectChipTbody
+                : this.dom?.coordinateSelectIdTbody;
+        if (!state || !tbody) return;
+        const config = this._coordinateSelectionListConfig(listName);
+        if (!Array.isArray(state.rows) || state.rows.length === 0) {
+            state.rows = this._newCoordinateSelectionListRows(listName);
+        }
+        tbody.replaceChildren();
+        state.rows.forEach((rowValues, rowIndex) => {
+            const row = document.createElement('tr');
+            for (let colIndex = 0; colIndex < config.columns; colIndex += 1) {
+                const cell = document.createElement('td');
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.className = 'coordinate-select-cell';
+                input.dataset.coordinateList = listName;
+                input.dataset.coordinateRow = String(rowIndex);
+                input.dataset.coordinateCol = String(colIndex);
+                input.value = rowValues?.[colIndex] ?? '';
+                input.autocomplete = 'off';
+                input.spellcheck = false;
+                input.inputMode = listName === 'chip' ? 'decimal' : 'numeric';
+                input.setAttribute('aria-label', `${config.label} ${rowIndex + 1}행 ${config.headers[colIndex]}`);
+                cell.appendChild(input);
+                row.appendChild(cell);
+            }
+            const actionCell = document.createElement('td');
+            actionCell.className = 'coordinate-select-action-cell';
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'coordinate-select-remove-row';
+            remove.dataset.coordinateList = listName;
+            remove.dataset.coordinateRemoveRow = String(rowIndex);
+            remove.textContent = '×';
+            remove.title = `${rowIndex + 1}행 삭제`;
+            remove.setAttribute('aria-label', `${config.label} ${rowIndex + 1}행 삭제`);
+            actionCell.appendChild(remove);
+            row.appendChild(actionCell);
+            tbody.appendChild(row);
+        });
+        if (focus) {
+            setTimeout(() => tbody.querySelector(
+                `input[data-coordinate-row="${focus.row}"][data-coordinate-col="${focus.col}"]`
+            )?.focus(), 0);
+        }
+    }
+
+    _renderCoordinateSelectionLists(focus = null) {
+        ['shot', 'chip', 'chipId'].forEach((listName) => {
+            this._renderCoordinateSelectionList(listName, focus?.listName === listName ? focus : null);
+        });
+        const activeConfig = this._coordinateSelectionListConfig(this.coordinateSelectionActiveList);
+        if (this.dom?.coordinateSelectHint) {
+            this.dom.coordinateSelectHint.textContent = `${activeConfig.label} 목록은 독립적으로 입력합니다. Chip ID는 현재 선택된 Shot 안에서만 적용됩니다.`;
+        }
+        this.dom?.coordinateSelectListPanels?.querySelectorAll('[data-coordinate-list-panel]')
+            .forEach((panel) => panel.classList.toggle('is-active', panel.dataset.coordinateListPanel === this.coordinateSelectionActiveList));
+        this._updateCoordinateSelectionSummary();
+        this._renderCoordinateSelectionShotPicker();
+    }
+
+    _parseCoordinateListPaste(text, listName) {
+        const raw = String(text || '').replace(/\r\n?/g, '\n');
+        if (listName === 'chipId') {
+            return raw.split(/[\n,;\t\s]+/)
+                .map((value) => value.trim().replace(/^[([{]|[)\]}]$/g, ''))
+                .filter(Boolean)
+                .map((value) => [value]);
+        }
+        return raw.split('\n').filter((line) => line.trim()).map((line) => {
+            const normalized = line.trim().replace(/^[([{]\s*/, '').replace(/\s*[)\]}]$/, '');
+            let parts = normalized.split(/[\t,]+/).map((value) => value.trim()).filter(Boolean);
+            if (parts.length < 2) parts = normalized.split(/\s+/).map((value) => value.trim()).filter(Boolean);
+            return parts.slice(0, 2);
+        }).filter((parts) => parts.length > 0);
+    }
+
+    _readCoordinateSelectionList(listName) {
+        const state = this.coordinateSelectionLists?.[listName];
+        const tbody = listName === 'shot'
+            ? this.dom?.coordinateSelectShotTbody
+            : listName === 'chip'
+                ? this.dom?.coordinateSelectChipTbody
+                : this.dom?.coordinateSelectIdTbody;
+        const columns = this._coordinateSelectionListConfig(listName).columns;
+        const rows = Array.isArray(state?.rows)
+            ? state.rows.map((row) => Array.from({ length: columns }, (_, index) => String(row?.[index] ?? '').trim()))
+            : [];
+        tbody?.querySelectorAll('input[data-coordinate-row]').forEach((input) => {
+            const rowIndex = Number(input.dataset.coordinateRow);
+            const colIndex = Number(input.dataset.coordinateCol);
+            if (!Number.isInteger(rowIndex) || !Number.isInteger(colIndex) || colIndex >= columns) return;
+            if (!rows[rowIndex]) rows[rowIndex] = Array(columns).fill('');
+            rows[rowIndex][colIndex] = String(input.value || '').trim();
+        });
+        return rows.map((row) => row || Array(columns).fill(''));
+    }
+
+    _getLiveCoordinateSelectionList(listName = this.coordinateSelectionActiveList) {
+        const config = this._coordinateSelectionListConfig(listName);
+        const rawRows = this._readCoordinateSelectionList(listName);
+        const rows = [];
+        let error = '';
+        let hasDecimalChipCoordinate = false;
+        const integerPattern = /^[+-]?\d+$/;
+
+        rawRows.forEach((rawRow, index) => {
+            const values = rawRow.map((value) => String(value || '').trim());
+            if (values.every((value) => !value)) return;
+            if (listName === 'chipId') {
+                if (!values[0]) {
+                    error ||= `${index + 1}행: Chip ID를 입력하세요.`;
+                    return;
+                }
+                if (!integerPattern.test(values[0])) {
+                    error ||= `${index + 1}행: Chip ID는 정수여야 합니다.`;
+                    return;
+                }
+                rows.push({ value: values[0], rowNumber: index + 1 });
+                return;
+            }
+            if (!values[0] || !values[1]) {
+                error ||= `${index + 1}행: X/Y를 함께 입력하세요.`;
+                return;
+            }
+            const x = Number(values[0]);
+            const y = Number(values[1]);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                error ||= `${index + 1}행: X/Y는 숫자여야 합니다.`;
+                return;
+            }
+            if (config.integer && (!integerPattern.test(values[0]) || !integerPattern.test(values[1]))) {
+                error ||= `${index + 1}행: ${config.label}는 정수여야 합니다.`;
+                return;
+            }
+            if (listName === 'chip' && (!Number.isInteger(x) || !Number.isInteger(y))) {
+                hasDecimalChipCoordinate = true;
+            }
+            rows.push({ x, y, rowNumber: index + 1 });
+        });
+
+        if (rows.length > 1000) error ||= '최대 1000행까지 입력할 수 있습니다.';
+        const target = listName === 'chip' && hasDecimalChipCoordinate ? 'chip-pos' : config.target;
+        return {
+            rows,
+            target,
+            error,
+            ready: !error,
+            hasInput: !!this.coordinateSelectionLists?.[listName]?.hasInput || rows.length > 0,
+        };
+    }
+
+    _handleCoordinateSelectionListPaste(event) {
+        const input = event.target.closest?.('input[data-coordinate-list][data-coordinate-row]');
+        if (!input) return;
+        const listName = input.dataset.coordinateList;
+        if (!this.coordinateSelectionLists?.[listName]) return;
+        const text = event.clipboardData?.getData('text/plain') || '';
+        const startRow = Number(input.dataset.coordinateRow);
+        const startCol = Number(input.dataset.coordinateCol);
+        if (!Number.isInteger(startRow) || !Number.isInteger(startCol)) return;
+        const matrix = this._parseCoordinateListPaste(text, listName);
+        if (!matrix.length) return;
+        event.preventDefault();
+        const state = this.coordinateSelectionLists[listName];
+        const columns = this._coordinateSelectionListConfig(listName).columns;
+        while (state.rows.length < startRow + matrix.length) state.rows.push(Array(columns).fill(''));
+        matrix.forEach((values, rowOffset) => {
+            const row = state.rows[startRow + rowOffset];
+            values.forEach((value, colOffset) => {
+                const col = startCol + colOffset;
+                if (col < columns) row[col] = value;
+            });
+        });
+        state.hasInput = true;
+        this._activateCoordinateSelectionList(listName);
+        this._setCoordinateSelectionError('');
+        this._renderCoordinateSelectionLists({ listName, row: startRow, col: Math.min(startCol, columns - 1) });
+        this._scheduleCoordinateSelectionLiveApply({ forceClear: true });
+    }
+
+    _updateCoordinateSelectionRangeStatus() {
+        const status = this.dom?.coordinateSelectRangeStatus;
+        if (!status) return;
+        const config = this._getCoordinateSelectionRangeConfig();
+        if (!config.available) {
+            status.textContent = '현재 이미지에서 범위 좌표를 계산할 수 없습니다.';
+            if (this.dom?.coordinateSelectLiveStatus) this.dom.coordinateSelectLiveStatus.textContent = '현재 이미지의 좌표 정보가 준비되면 실시간 선택을 사용할 수 있습니다.';
+            return;
+        }
+        const range = this.coordinateSelectionRange;
+        const xText = `X ${this._formatCoordinateRangeValue(range.xMin, config.decimals)} ~ ${this._formatCoordinateRangeValue(range.xMax, config.decimals)}`;
+        const yText = config.y
+            ? `Y ${this._formatCoordinateRangeValue(range.yMin, config.decimals)} ~ ${this._formatCoordinateRangeValue(range.yMax, config.decimals)}`
+            : '';
+        const action = this.coordinateSelectionOperation === 'add'
+            ? '현재 선택에 추가'
+            : this.coordinateSelectionOperation === 'remove'
+                ? '현재 선택에서 해제'
+                : '기존 선택 바꾸기';
+        status.textContent = range.enabled
+            ? `${xText}${yText ? ` / ${yText}` : ''} · 실시간 범위 선택 중`
+            : `${this._coordinateSelectionListConfig().label} 목록 입력 또는 범위 선택을 사용합니다.`;
+        if (this.dom?.coordinateSelectLiveStatus) {
+            this.dom.coordinateSelectLiveStatus.textContent = range.enabled
+                ? `${action} · 슬라이더/범위 입력 사용 중`
+                : `${action} · ${this._coordinateSelectionListConfig().label} 셀 입력 사용 중`;
+        }
+    }
+
+    _applyCoordinateSelectionLive({ forceClear = false } = {}) {
+        if (!this.isCoordinateSelectionOpen || !this.chipAnnotator?.positionsData) return;
+        const operation = this.coordinateSelectionOperation;
+        let result = null;
+        if (this.coordinateSelectionRange.enabled) {
+            result = this.chipAnnotator.selectByCoordinateRange(this.coordinateSelectionTarget, this.coordinateSelectionRange, { operation });
+        } else {
+            const listName = this.coordinateSelectionActiveList;
+            const parsed = this._getLiveCoordinateSelectionList(listName);
+            if (!parsed.ready) {
+                this._setCoordinateSelectionError(parsed.error);
+                return;
+            }
+            this.coordinateSelectionTarget = parsed.target;
+            if (!parsed.rows.length && !(forceClear && parsed.hasInput)) return;
+            result = this.chipAnnotator.selectByCoordinateRows(parsed.target, parsed.rows, { operation });
+        }
+        const groups = [...(this.chipAnnotator._getSelectedShotGroups?.() || [])];
+        if (groups.length && (!this.coordinateSelectionActiveShotId || !groups.some((group) => String(group.shotId) === String(this.coordinateSelectionActiveShotId)))) {
+            this.coordinateSelectionActiveShotId = String(groups[0].shotId);
+        }
+        this._updateCoordinateSelectionSummary();
+        this._renderCoordinateSelectionShotPicker();
+        if (result && (result.matchedCount === 0 || result.matchedRows === 0) && operation === 'replace') {
+            this._setCoordinateSelectionError('일치하는 Shot/Chip이 없습니다. 입력값과 현재 이미지의 좌표를 확인하세요.');
+        } else {
+            this._setCoordinateSelectionError('');
+        }
+    }
+
+    _validateCoordinateSelectionList(listName = this.coordinateSelectionActiveList) {
+        const parsed = this._getLiveCoordinateSelectionList(listName);
+        if (parsed.error) return { error: parsed.error };
+        if (!parsed.rows.length) return { error: `${this._coordinateSelectionListConfig(listName).label} 값을 한 개 이상 입력하세요.` };
+        return parsed;
+    }
+
+    _renderCoordinateSelectionShotPicker() {
+        const picker = this.dom?.coordinateSelectShotPicker;
+        const annotator = this.chipAnnotator;
+        if (!picker) return;
+        picker.replaceChildren();
+        if (annotator?.selectionMode !== 'shot') {
+            picker.hidden = true;
+            return;
+        }
+
+        picker.hidden = false;
+        const groups = [...(annotator?._getSelectedShotGroups?.() || [])];
+        if (!groups.length) {
+            const empty = document.createElement('div');
+            empty.className = 'coordinate-select-shot-picker-empty';
+            empty.textContent = 'Shot X/Y를 입력하면 내부 Chip 배치가 여기에 표시됩니다.';
+            picker.appendChild(empty);
+            return;
+        }
+
+        let activeGroup = groups.find((group) => String(group.shotId) === String(this.coordinateSelectionActiveShotId));
+        if (!activeGroup) {
+            activeGroup = groups[0];
+            this.coordinateSelectionActiveShotId = String(activeGroup.shotId);
+        }
+
+        const heading = document.createElement('div');
+        heading.className = 'coordinate-select-shot-picker-heading';
+        const headingLabel = document.createElement('span');
+        headingLabel.textContent = '선택된 Shot의 Chip ID';
+        heading.appendChild(headingLabel);
+        if (groups.length > 1) {
+            const select = document.createElement('select');
+            select.id = 'chip-coordinate-select-shot-picker-shot-select';
+            select.className = 'coordinate-select-select';
+            select.setAttribute('aria-label', 'Shot 선택');
+            groups.forEach((group) => {
+                const option = document.createElement('option');
+                option.value = String(group.shotId);
+                option.textContent = `Shot ${group.shotId}`;
+                option.selected = String(group.shotId) === String(activeGroup.shotId);
+                select.appendChild(option);
+            });
+            select.addEventListener('change', () => {
+                this.coordinateSelectionActiveShotId = select.value;
+                this._renderCoordinateSelectionShotPicker();
+            });
+            heading.appendChild(select);
+        } else {
+            const shotLabel = document.createElement('strong');
+            shotLabel.textContent = `Shot ${activeGroup.shotId}`;
+            heading.appendChild(shotLabel);
+        }
+        picker.appendChild(heading);
+
+        const shape = annotator.getShotGridShape?.() || { cols: 4, rows: 6 };
+        const cols = Math.max(1, Number(shape.cols) || 4);
+        const rows = Math.max(1, Number(shape.rows) || 6);
+        const entries = (activeGroup.indices || []).map((index) => {
+            const chip = annotator.chips?.[index];
+            const layout = annotator.getLayoutRowForChip?.(chip);
+            if (!chip) return null;
+            return {
+                index,
+                chip,
+                x: Number(layout?.eds_chip_x_pos ?? chip.x_abs),
+                y: Number(layout?.eds_chip_y_pos ?? chip.y_abs),
+                chipId: String(layout?.chip_id ?? chip.chip_id ?? '').trim(),
+            };
+        }).filter(Boolean);
+        const positiveModulo = (value, size) => ((value % size) + size) % size;
+        const slots = new Map();
+        entries.forEach((entry) => {
+            if (!Number.isFinite(entry.x) || !Number.isFinite(entry.y)) return;
+            const key = `${positiveModulo(entry.x, cols)}:${positiveModulo(entry.y, rows)}`;
+            if (!slots.has(key)) slots.set(key, entry);
+        });
+        const groupPanel = document.createElement('div');
+        groupPanel.className = 'coordinate-select-shot-group';
+        groupPanel.dataset.coordinateShotId = String(activeGroup.shotId);
+        const title = document.createElement('div');
+        title.className = 'coordinate-select-shot-group-heading';
+        const titleCount = document.createElement('span');
+        const selectedCount = entries.filter((entry) => annotator.selectedChips?.has(entry.index)).length;
+        titleCount.textContent = `${selectedCount}/${cols * rows} Chip`;
+        title.appendChild(titleCount);
+        const grid = document.createElement('div');
+        grid.className = 'coordinate-select-shot-grid';
+        grid.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+        for (let slotY = 0; slotY < rows; slotY += 1) {
+            for (let slotX = 0; slotX < cols; slotX += 1) {
+                const entry = slots.get(`${slotX}:${slotY}`);
+                if (!entry) {
+                    const empty = document.createElement('div');
+                    empty.className = 'coordinate-select-shot-empty-cell';
+                    empty.style.gridColumn = String(slotX + 1);
+                    empty.style.gridRow = String(rows - slotY);
+                    empty.setAttribute('aria-hidden', 'true');
+                    grid.appendChild(empty);
+                    continue;
+                }
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'coordinate-select-shot-chip';
+                button.dataset.coordinateShotChipIndex = String(entry.index);
+                button.dataset.coordinateShotChipId = entry.chipId;
+                button.style.gridColumn = String(slotX + 1);
+                button.style.gridRow = String(rows - slotY);
+                button.textContent = entry.chipId || '-';
+                button.title = `Chip ID ${entry.chipId || '-'} · (${entry.chip.x_abs}, ${entry.chip.y_abs})`;
+                button.setAttribute('role', 'checkbox');
+                button.setAttribute('aria-checked', annotator.selectedChips?.has(entry.index) ? 'true' : 'false');
+                grid.appendChild(button);
+            }
+        }
+        groupPanel.append(title, grid);
+        picker.appendChild(groupPanel);
+    }
+
+    bindCoordinateSelectionEvents() {
+        const dom = this.dom;
+        if (!dom?.coordinateSelectModal || dom.coordinateSelectModal.dataset.boundV2 === 'true') return;
+        dom.coordinateSelectModal.dataset.boundV2 = 'true';
+        dom.coordinateSelectOperation?.addEventListener('change', () => {
+            this.coordinateSelectionOperation = dom.coordinateSelectOperation.value || 'replace';
+            this._setCoordinateSelectionError('');
+            this._updateCoordinateSelectionSummary();
+            this._updateCoordinateSelectionRangeStatus();
+            this._scheduleCoordinateSelectionLiveApply();
+        });
+        dom.coordinateSelectListPanels?.addEventListener('input', (event) => {
+            const input = event.target.closest?.('input[data-coordinate-list][data-coordinate-row]');
+            if (!input) return;
+            const listName = input.dataset.coordinateList;
+            const state = this.coordinateSelectionLists?.[listName];
+            const row = Number(input.dataset.coordinateRow);
+            const col = Number(input.dataset.coordinateCol);
+            if (!state || !Number.isInteger(row) || !Number.isInteger(col)) return;
+            const columns = this._coordinateSelectionListConfig(listName).columns;
+            while (state.rows.length <= row) state.rows.push(Array(columns).fill(''));
+            state.rows[row][col] = input.value;
+            state.hasInput = true;
+            this._activateCoordinateSelectionList(listName);
+            this._setCoordinateSelectionError('');
+            this._scheduleCoordinateSelectionLiveApply({ forceClear: true });
+        });
+        dom.coordinateSelectListPanels?.addEventListener('click', (event) => {
+            const addButton = event.target.closest?.('[data-coordinate-list-add-row]');
+            if (addButton) {
+                const listName = addButton.dataset.coordinateListAddRow;
+                const state = this.coordinateSelectionLists?.[listName];
+                if (!state) return;
+                this._activateCoordinateSelectionList(listName);
+                state.rows.push(Array(this._coordinateSelectionListConfig(listName).columns).fill(''));
+                this._renderCoordinateSelectionList(listName, { row: state.rows.length - 1, col: 0 });
+                return;
+            }
+            const removeButton = event.target.closest?.('button[data-coordinate-remove-row]');
+            if (!removeButton) return;
+            const listName = removeButton.dataset.coordinateList;
+            const state = this.coordinateSelectionLists?.[listName];
+            const row = Number(removeButton.dataset.coordinateRemoveRow);
+            if (!state || !Number.isInteger(row)) return;
+            this._activateCoordinateSelectionList(listName);
+            state.rows.splice(row, 1);
+            if (!state.rows.length) state.rows = this._newCoordinateSelectionListRows(listName);
+            state.hasInput = true;
+            this._renderCoordinateSelectionList(listName);
+            this._scheduleCoordinateSelectionLiveApply({ forceClear: true });
+        });
+        dom.coordinateSelectListPanels?.addEventListener('paste', (event) => this._handleCoordinateSelectionListPaste(event));
+        dom.coordinateSelectClose?.addEventListener('click', () => this.closeCoordinateSelectionModal());
+        dom.coordinateSelectCancel?.addEventListener('click', () => this.closeCoordinateSelectionModal());
+        dom.coordinateSelectApply?.addEventListener('click', () => this.applyCoordinateSelection());
+        dom.coordinateSelectRangeEnabled?.addEventListener('change', () => {
+            this.coordinateSelectionRange.enabled = !!dom.coordinateSelectRangeEnabled.checked;
+            if (this.coordinateSelectionRange.enabled) this._resetCoordinateSelectionRange();
+            this._renderCoordinateSelectionRange();
+            this._scheduleCoordinateSelectionLiveApply();
+        });
+        dom.coordinateSelectRangeReset?.addEventListener('click', () => {
+            this._resetCoordinateSelectionRange();
+            this._renderCoordinateSelectionRange();
+            this._scheduleCoordinateSelectionLiveApply();
+        });
+        dom.coordinateSelectRangeFields?.addEventListener('input', (event) => {
+            if (event.target.matches('[data-coordinate-range-axis][data-coordinate-range-bound]')) this._handleCoordinateSelectionRangeInput(event.target);
+        });
+        dom.coordinateSelectShotPicker?.addEventListener('click', (event) => {
+            const button = event.target.closest?.('button[data-coordinate-shot-chip-index]');
+            if (!button) return;
+            const result = this.chipAnnotator?.toggleShotChipSelection?.(button.dataset.coordinateShotChipIndex);
+            if (!result) return;
+            this.coordinateSelectionActiveShotId = String(result.shotId);
+            this._setCoordinateSelectionError('');
+            this._updateCoordinateSelectionSummary();
+            this._renderCoordinateSelectionShotPicker();
+        });
+
+        const dragHandle = dom.coordinateSelectDragHandle;
+        const panel = dom.coordinateSelectModal.querySelector('.coordinate-select-modal-content');
+        if (dragHandle && panel) {
+            dragHandle.addEventListener('pointerdown', (event) => {
+                if (event.button !== 0 || event.target.closest('button, input, select')) return;
+                const rect = panel.getBoundingClientRect();
+                this.coordinateSelectionDrag = { pointerId: event.pointerId, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top };
+                panel.style.left = `${rect.left}px`;
+                panel.style.top = `${rect.top}px`;
+                panel.style.right = 'auto';
+                panel.classList.add('is-dragging');
+                dragHandle.setPointerCapture?.(event.pointerId);
+                event.preventDefault();
+            });
+            dragHandle.addEventListener('pointermove', (event) => {
+                const drag = this.coordinateSelectionDrag;
+                if (!drag || drag.pointerId !== event.pointerId) return;
+                const rect = panel.getBoundingClientRect();
+                const left = Math.min(Math.max(8, window.innerWidth - rect.width - 8), Math.max(8, event.clientX - drag.offsetX));
+                const top = Math.min(Math.max(8, window.innerHeight - rect.height - 8), Math.max(8, event.clientY - drag.offsetY));
+                panel.style.left = `${left}px`;
+                panel.style.top = `${top}px`;
+            });
+            const stopDragging = (event) => {
+                if (!this.coordinateSelectionDrag || this.coordinateSelectionDrag.pointerId !== event.pointerId) return;
+                panel.classList.remove('is-dragging');
+                this.coordinateSelectionDrag = null;
+                dragHandle.releasePointerCapture?.(event.pointerId);
+            };
+            dragHandle.addEventListener('pointerup', stopDragging);
+            dragHandle.addEventListener('pointercancel', stopDragging);
+        }
+    }
+
+    openCoordinateSelectionModal() {
+        const dom = this.dom;
+        if (!dom?.coordinateSelectModal) return;
+        this.coordinateSelectionLists = {
+            shot: { rows: this._newCoordinateSelectionListRows('shot'), hasInput: false },
+            chip: { rows: this._newCoordinateSelectionListRows('chip'), hasInput: false },
+            chipId: { rows: this._newCoordinateSelectionListRows('chipId'), hasInput: false },
+        };
+        this.coordinateSelectionActiveList = 'shot';
+        const selectedGroups = [...(this.chipAnnotator?._getSelectedShotGroups?.() || [])];
+        this.coordinateSelectionActiveShotId = selectedGroups.length ? String(selectedGroups[0].shotId) : null;
+        this.coordinateSelectionTarget = 'shot-grid';
+        this.coordinateSelectionOperation = 'replace';
+        this.coordinateSelectionRange = { enabled: false, xMin: null, xMax: null, yMin: null, yMax: null };
+        if (dom.coordinateSelectOperation) dom.coordinateSelectOperation.value = this.coordinateSelectionOperation;
+        if (dom.coordinateSelectRangeEnabled) dom.coordinateSelectRangeEnabled.checked = false;
+        this._setCoordinateSelectionError('');
+        dom.coordinateSelectModal.style.display = 'flex';
+        this.isCoordinateSelectionOpen = true;
+        this._renderCoordinateSelectionLists({ listName: 'shot', row: 0, col: 0 });
+        this._renderCoordinateSelectionRange();
+        this.coordinateSelectionEscapeHandler = (event) => {
+            if (event.key === 'Escape' && this.isCoordinateSelectionOpen) {
+                event.preventDefault();
+                event.stopPropagation();
+                this.closeCoordinateSelectionModal();
+            }
+        };
+        document.addEventListener('keydown', this.coordinateSelectionEscapeHandler, true);
+    }
+
+    async applyCoordinateSelection() {
+        const annotator = this.chipAnnotator;
+        if (!annotator?.positionsData || !Array.isArray(annotator.chips) || annotator.chips.length === 0) {
+            this._setCoordinateSelectionError('현재 이미지의 Chip 위치 정보가 아직 준비되지 않았습니다.');
+            return;
+        }
+        const operation = this.coordinateSelectionOperation;
+        let result;
+        if (this.coordinateSelectionRange.enabled) {
+            result = annotator.selectByCoordinateRange(this.coordinateSelectionTarget, this.coordinateSelectionRange, { operation });
+            if (!result || result.matchedCount === 0) {
+                this._setCoordinateSelectionError('범위에 일치하는 Shot/Chip이 없습니다. 범위를 확인하세요.');
+                return;
+            }
+        } else {
+            const parsed = this._validateCoordinateSelectionList();
+            if (parsed.error) {
+                this._setCoordinateSelectionError(parsed.error);
+                return;
+            }
+            this.coordinateSelectionTarget = parsed.target;
+            result = annotator.selectByCoordinateRows(parsed.target, parsed.rows, { operation });
+            if (!result || result.matchedRows === 0) {
+                this._setCoordinateSelectionError('일치하는 Shot/Chip이 없습니다. 입력값과 현재 이미지의 layout을 확인하세요.');
+                return;
+            }
+        }
+        const skipped = result.unmatchedRows?.length ? `, ${result.unmatchedRows.length}행 미일치` : '';
+        const action = operation === 'add' ? '추가' : operation === 'remove' ? '해제' : '변경';
+        const shotSuffix = result.selectedShotCount ? ` / ${result.selectedShotCount}개 Shot` : '';
+        this.showToast?.(`${result.selectedCount}개 Chip${shotSuffix} ${action}${skipped}`, 2200);
         this.closeCoordinateSelectionModal();
     }
 

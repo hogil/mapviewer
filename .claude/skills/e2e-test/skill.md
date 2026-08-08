@@ -6514,11 +6514,15 @@ return {
 - bootstrap SAML은 성공 후 URL handoff만 사용하므로 Composite/Measure Composite 요청에도 `LoginId` query가 전달되어야 한다. 결과가 `composite_map/notsaml`에 생기면 FAIL이다.
 - `selected-region-composite`는 non-fallback LoginId가 `/api/composite-map` POST URL에 포함되는지 확인하고, export는 `SHOT` 튜플 컬럼 제거와 mm 3자리 값을 확인한다.
 
-#### BUG-27: 표형 좌표 선택과 Shot 내부 Chip ID 부분 선택
+#### BUG-27: 독립 좌표 목록과 Shot 내부 Chip ID 부분 선택
 - P001 단일 이미지에서 `#chip-coordinate-select-modal`을 실제 context menu 경로로 열고, 자유형 textarea 대신 visible input cell table을 사용해야 한다.
-- 표가 `Shot/Chip X`, `Shot/Chip Y`, `Chip ID` 3열을 한 번에 보여주는지 확인한다. 좌표 해석 기준만 Shot/Grid, Chip/Grid, Chip/Pos로 변경되며 Chip ID 열은 항상 유지되어야 한다. Tab/쉼표/줄바꿈 붙여넣기가 시작 cell부터 여러 행으로 채워지고 입력값이 셀에 남아야 한다.
+- 패널이 `Shot X/Y`, `Chip X/Y`, `Chip ID` 세 독립 list를 가로로 보여주는지 확인한다. Shot과 Chip은 X/Y 두 열, Chip ID는 ID 한 열이며 Chip X/Y 소수 입력은 Chip Pos(mm)로 해석한다. Tab/쉼표/줄바꿈 붙여넣기가 각 list의 시작 cell부터 여러 행으로 채워지고 입력값이 셀에 남아야 한다.
 - X/Y만 입력하면 해당 단위 전체, X/Y+Chip ID를 같은 행에 입력하면 해당 단위 내부의 특정 Chip, Chip ID만 입력하면 현재 선택 Shot 범위의 ID만 대상으로 해야 한다. 동작 표시는 `기존 선택 바꾸기`, `현재 선택에 추가`, `현재 선택에서 해제`처럼 모호하지 않아야 한다.
-- 셀 입력은 `완료` 클릭 전에도 지도에 즉시 반영되어야 하고, 패널은 modeless fixed/드래그 가능하며 overlay backdrop이나 지도 입력 차단이 없어야 한다. 범위 선택을 켜면 X/Y range slider와 숫자 범위 입력이 같은 선택 상태를 실시간으로 갱신해야 한다. Shot 좌표 입력 시 canonical 4×6 picker를 같은 패널에 표시하고, layout의 EDS 위치에 따라 bottom-left→right→up 순서로 Chip ID를 배치하며, 없는 edge Chip은 빈 칸으로 둔다. 셀 클릭은 Shot 모드를 유지한 채 해당 Chip만 즉시 토글해야 한다.
+- 셀 입력은 `완료` 클릭 전에도 지도에 즉시 반영되어야 하고, 패널은 modeless fixed/드래그 가능하며 overlay backdrop이나 지도 입력 차단이 없어야 한다. 범위 선택을 켜면 X/Y range slider와 숫자 범위 입력이 같은 선택 상태를 실시간으로 갱신해야 한다. Shot 좌표 입력 시 canonical 4×6 picker 하나를 같은 패널에 표시하고, 여러 Shot이면 Shot selector로 하나를 고른다. layout의 EDS 위치에 따라 bottom-left→right→up 순서로 Chip ID를 배치하며, 없는 edge Chip은 빈 칸으로 둔다. 셀 클릭은 Shot 모드를 유지한 채 해당 Chip만 즉시 토글해야 한다.
 - Shot 두 개를 먼저 표로 선택한 뒤 `Chip ID` + `해제`/`추가`를 적용했을 때 selected Chip 수가 `48 -> 47 -> 48`이고 Shot 모드/Shot 수가 유지되어야 한다. Chip ID는 현재 선택 Shot 범위 밖의 같은 ID를 건드리면 안 된다.
 - per-chip/per-shot `yld`가 실제 positions/layout 데이터에 있을 때만 상세 YIELD를 검증한다. wafer-level `yield`만 있는 fixture에서는 UI가 개별 YIELD를 복제하지 않고 `개별 YIELD 데이터 없음`과 wafer YIELD를 분리해 표시해야 한다.
-- Guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells`. DOM visibility, cell values, 4×6 picker의 실제 셀/aria-checked/순서, selection Set, `_getSelectedShotGroups()`를 함께 확인하고 상태 플래그만으로 PASS 처리하지 않는다.
+- Guard: `scripts/e2e_chunk2.js` record `coordinate-selection-cells`. DOM visibility, 세 list의 cell values, 선택된 한 Shot의 4×6 picker 실제 셀/aria-checked/순서, selection Set, `_getSelectedShotGroups()`를 함께 확인하고 상태 플래그만으로 PASS 처리하지 않는다.
+
+#### BUG-28: layout zone 컬럼 계약
+- `layout.txt` 끝에 `zone_id`, `zone_type`을 유지한다. 현재 circle fixture는 `C20`, `C80`, `E1`, `E20`과 `zone_type=circle`을 사용하며, area/edge family는 각각 `TOP_LEFT/CENTER/RIGHT/BOTTOM`, `INNER/EDGE`로 예약한다.
+- `layout-chip-coordinates`는 API로 로드된 P001 row에서 zone 값을 확인한다.

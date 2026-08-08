@@ -81,6 +81,8 @@ _LAYOUT_COLUMNS = (
     "eds_chip_y_pos",
     "chip_center_x_pos",
     "chip_center_y_pos",
+    "zone_id",
+    "zone_type",
 )
 _LAYOUT_INT_COLUMNS = {
     "shot_id",
@@ -91,6 +93,7 @@ _LAYOUT_INT_COLUMNS = {
     "eds_chip_y_pos",
 }
 _LAYOUT_FLOAT_COLUMNS = {"chip_center_x_pos", "chip_center_y_pos"}
+_LAYOUT_TEXT_COLUMNS = {"full_shot_type", "zone_id", "zone_type"}
 _LAYOUT_PROCESS_ID_RE = re.compile(r"^[A-Za-z0-9]{4}$")
 _LAYOUT_CACHE_LOCK = RLock()
 _LAYOUT_CACHE_SIGNATURE: Optional[Tuple[int, int]] = None
@@ -136,7 +139,8 @@ def _read_layout_index() -> Dict[str, List[Dict[str, Any]]]:
                         parsed[column] = int(str(row.get(column) or "").strip())
                     for column in _LAYOUT_FLOAT_COLUMNS:
                         parsed[column] = float(str(row.get(column) or "").strip())
-                    parsed["full_shot_type"] = str(row.get("full_shot_type") or "").strip()
+                    for column in _LAYOUT_TEXT_COLUMNS:
+                        parsed[column] = str(row.get(column) or "").strip()
                 except (TypeError, ValueError):
                     invalid_rows += 1
                     continue
