@@ -3,6 +3,11 @@
 ## Skills
 A skill is a set of local instructions stored in a `SKILL.md` file. This repository provides the following project-local skill in addition to globally installed skills.
 
+## Response Path Format
+
+- Absolute rule: when a response needs to report one or more local paths, do not place paths inline in the body.
+- Put all reported paths on the final response line only, using absolute paths in one line: `Paths: D:/project/mapviewer/file-a, D:/project/mapviewer/file-b`.
+
 ## Project Data Fixtures
 
 - `D:/project/data/wm-811k/benchmark_4m/` is a deliberate 0-byte dummy dataset for file index and search performance testing.
