@@ -855,7 +855,7 @@ export class ChipAnnotator {
         const xMax = Number(range?.xMax);
         const yMin = Number(range?.yMin);
         const yMax = Number(range?.yMax);
-        const hasY = target !== 'chip-id' && finite(yMin) && finite(yMax);
+        const hasY = target !== 'chip-id' && target !== 'radius' && finite(yMin) && finite(yMax);
         const matchedIndices = new Set();
         this.chips.forEach((chip, chipIndex) => {
             if (!chip) return;
@@ -873,6 +873,12 @@ export class ChipAnnotator {
                 y = Number(layout?.chip_center_y_pos) / 1000;
             } else if (target === 'chip-id') {
                 x = Number(layout?.chip_id ?? chip?.chip_id);
+            } else if (target === 'radius') {
+                const centerX = Number(layout?.chip_center_x_pos) / 1000;
+                const centerY = Number(layout?.chip_center_y_pos) / 1000;
+                x = Number.isFinite(centerX) && Number.isFinite(centerY)
+                    ? Math.hypot(centerX, centerY)
+                    : NaN;
             }
             if (!finite(x) || !finite(xMin) || !finite(xMax) || x < xMin || x > xMax) return;
             if (hasY && (!finite(y) || y < yMin || y > yMax)) return;

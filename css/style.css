@@ -2993,6 +2993,13 @@
             font-size: 12px;
         }
 
+        .coordinate-select-range-toggles {
+            display: inline-flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+        }
+
         .coordinate-select-range-toggle {
             display: inline-flex;
             align-items: center;
@@ -3085,7 +3092,7 @@
 
         .coordinate-select-list-panels {
             display: grid;
-            grid-template-columns: minmax(0, 7fr) minmax(0, 7fr) minmax(0, 6fr);
+            grid-template-columns: minmax(0, 3fr) minmax(0, 3fr) minmax(0, 4fr);
             gap: 8px;
         }
 
@@ -3211,6 +3218,12 @@
             outline: none;
         }
 
+        .coordinate-select-quick-option.is-selected {
+            background: #27546a;
+            color: #fff;
+            border-color: #6eabc8;
+        }
+
         .coordinate-select-quick-search:focus {
             outline: 2px solid #6eabc8;
             outline-offset: -1px;
@@ -3240,6 +3253,29 @@
             overflow: auto;
             border: 1px solid #414141;
             background: #171717;
+        }
+
+        .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table-wrap,
+        .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table-wrap {
+            flex: 1 1 auto;
+            min-height: 0;
+            max-height: none;
+        }
+
+        .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table,
+        .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table {
+            width: 126px;
+        }
+
+        .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table th:nth-child(1),
+        .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table td:nth-child(1),
+        .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table th:nth-child(2),
+        .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table td:nth-child(2),
+        .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table th:nth-child(1),
+        .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table td:nth-child(1),
+        .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table th:nth-child(2),
+        .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table td:nth-child(2) {
+            width: 44px;
         }
 
         .coordinate-select-table.coordinate-select-list-table th:nth-child(1),
@@ -3478,6 +3514,7 @@
             width: 100%;
             padding: 2px;
             box-sizing: border-box;
+            user-select: none;
             background: #0d1113;
             border: 1px solid #536975;
             border-radius: 3px;
