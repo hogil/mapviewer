@@ -2894,7 +2894,10 @@
             width: min(520px, 92vw);
             min-width: 0;
             max-width: 520px;
+            height: min(720px, calc(100vh - 120px));
             max-height: 82vh;
+            display: flex;
+            flex-direction: column;
         }
 
         .coordinate-select-overlay {
@@ -2931,6 +2934,9 @@
             display: flex;
             flex-direction: column;
             gap: 10px;
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: hidden;
         }
 
         .coordinate-select-controls {
@@ -3100,7 +3106,9 @@
             display: grid;
             grid-template-columns: minmax(0, 3fr) minmax(0, 3fr) minmax(0, 4fr);
             gap: 8px;
-            align-items: start;
+            flex: 1 1 auto;
+            min-height: 0;
+            align-items: stretch;
         }
 
         .coordinate-select-list-panel {
@@ -3109,6 +3117,7 @@
             gap: 5px;
             min-width: 0;
             min-height: 0;
+            height: 100%;
             padding: 6px;
             background: #191919;
             border: 1px solid #454545;
@@ -3277,8 +3286,8 @@
         }
 
         .coordinate-select-list-table-wrap {
-            height: 112px;
-            max-height: 112px;
+            flex: 1 1 auto;
+            min-height: 0;
             overflow: auto;
             border: 1px solid #414141;
             background: #171717;
@@ -3286,10 +3295,8 @@
 
         .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table-wrap,
         .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table-wrap {
-            flex: 0 0 96px;
-            height: 96px;
+            flex: 1 1 auto;
             min-height: 0;
-            max-height: 96px;
         }
 
         .coordinate-select-list-panel[data-coordinate-list-panel="chipId"] .coordinate-select-list-table-wrap {
