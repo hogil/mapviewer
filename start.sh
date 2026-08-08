@@ -26,6 +26,8 @@ export SSL_KEYFILE="cert/server.key"
 # 경로 설정
 export IMAGES_ROOT="/appdata/appuser/images"        # 이미지 루트 경로
 export POSITIONS_ROOT="/appdata/appuser/positions"  # Positions 루트 경로
+export LAYOUT_ROOT="/appdata/appuser/project"       # Layout 루트 경로
+export LAYOUT_FILE="/appdata/appuser/project/layout.parquet" # Layout Parquet 단일 파일
 
 # 성능 설정 (Ubuntu 24, 32코어, 198GB RAM)
 # - 32C/고속 SSD/대용량 RAM 기준 최고속 우선값

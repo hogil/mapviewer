@@ -621,7 +621,7 @@ def _build_selected_shot_geometry(
     if not groups:
         raise ValueError("선택한 Shot에 원본 positions chip이 없습니다.")
 
-    # The frontend supplies the full Shot shape from layout.txt. For older API
+    # The frontend supplies the full Shot shape from layout.parquet. For older API
     # callers, use the largest observed group so a partial group cannot shrink
     # a Composite when a complete group is part of the same request.
     signature = explicit_signature or max(observed_signatures, key=lambda value: value[0] * value[1])

@@ -107,7 +107,7 @@ L3 Tracker의 전체 API 엔드포인트 목록입니다. 정본: `api/main.py`.
 | Method | Path | 설명 |
 |--------|------|------|
 | GET | `/api/chip-positions` | positions.json 조회 |
-| GET | `/api/layout?process_id=P001` | shared layout.txt 조회 |
+| GET | `/api/layout?process_id=P001` | shared layout.parquet 조회 |
 | GET | `/api/chip-annotations` | chip annotation 조회 |
 | POST | `/api/classify/chips` | chip crop + annotation 저장 |
 | GET | `/api/classify/chips/{wafer_name}` | wafer별 chip 분류 조회 |

@@ -18,7 +18,7 @@ POSITIONS_ROOT = Path(os.getenv("POSITIONS_ROOT", _positions_root_default)).reso
 # [NEW] Layout feature data lives beside images/ and positions/.
 _layout_root_default = POSITIONS_ROOT.parent / "layout"
 LAYOUT_ROOT = Path(os.getenv("LAYOUT_ROOT", str(_layout_root_default))).resolve()
-LAYOUT_FILE = LAYOUT_ROOT / "layout.txt"
+LAYOUT_FILE = Path(os.getenv("LAYOUT_FILE", str(LAYOUT_ROOT / "layout.parquet"))).resolve()
 
 # IMAGES_ROOT 하위 경로
 THUMBNAIL_DIR = IMAGES_ROOT / "thumbnails"

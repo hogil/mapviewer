@@ -96,13 +96,35 @@ _LAYOUT_FLOAT_COLUMNS = {"chip_center_x_pos", "chip_center_y_pos"}
 _LAYOUT_TEXT_COLUMNS = {"full_shot_type", "zone_id", "zone_type"}
 _LAYOUT_PROCESS_ID_RE = re.compile(r"^[A-Za-z0-9]{4}$")
 _LAYOUT_CACHE_LOCK = RLock()
-_LAYOUT_CACHE_SIGNATURE: Optional[Tuple[int, int]] = None
+_LAYOUT_CACHE_SIGNATURE: Optional[Tuple[str, int, int]] = None
 _LAYOUT_CACHE_BY_PROCESS: Dict[str, List[Dict[str, Any]]] = {}
+_LAYOUT_CACHE_SOURCE_NAME: Optional[str] = None
+
+
+def _read_layout_source_rows(layout_file: Path) -> List[Dict[str, Any]]:
+    try:
+        import pyarrow.parquet as parquet
+    except ImportError as exc:
+        raise RuntimeError("layout.parquet를 읽으려면 pyarrow가 필요합니다.") from exc
+    table = parquet.read_table(layout_file, columns=list(_LAYOUT_COLUMNS))
+    fieldnames = tuple(table.column_names)
+    rows = table.to_pylist()
+
+    if not set(_LAYOUT_COLUMNS).issubset(fieldnames):
+        raise ValueError(
+            f"layout file header mismatch: expected {_LAYOUT_COLUMNS}, got {fieldnames}"
+        )
+    return rows
+
+
+def _layout_value_text(row: Dict[str, Any], column: str) -> str:
+    value = row.get(column)
+    return "" if value is None else str(value).strip()
 
 
 def _read_layout_index() -> Dict[str, List[Dict[str, Any]]]:
-    """Read the shared layout.txt once per file version and index it by process."""
-    global _LAYOUT_CACHE_SIGNATURE, _LAYOUT_CACHE_BY_PROCESS
+    """Read the shared layout.parquet once per file version."""
+    global _LAYOUT_CACHE_SIGNATURE, _LAYOUT_CACHE_BY_PROCESS, _LAYOUT_CACHE_SOURCE_NAME
 
     layout_file = config.LAYOUT_FILE
     try:
@@ -111,51 +133,52 @@ def _read_layout_index() -> Dict[str, List[Dict[str, Any]]]:
         with _LAYOUT_CACHE_LOCK:
             _LAYOUT_CACHE_SIGNATURE = None
             _LAYOUT_CACHE_BY_PROCESS = {}
+            _LAYOUT_CACHE_SOURCE_NAME = None
         return {}
 
-    signature = (stat_result.st_mtime_ns, stat_result.st_size)
+    signature = (str(layout_file), stat_result.st_mtime_ns, stat_result.st_size)
     with _LAYOUT_CACHE_LOCK:
         if _LAYOUT_CACHE_SIGNATURE == signature:
             return _LAYOUT_CACHE_BY_PROCESS
 
+        source_rows = _read_layout_source_rows(layout_file)
+
         index: Dict[str, List[Dict[str, Any]]] = {}
         invalid_rows = 0
-        with layout_file.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.DictReader(handle)
-            fieldnames = tuple(reader.fieldnames or ())
-            if not set(_LAYOUT_COLUMNS).issubset(fieldnames):
-                raise ValueError(
-                    f"layout file header mismatch: expected {_LAYOUT_COLUMNS}, got {fieldnames}"
-                )
-
-            for row in reader:
-                process_id = str(row.get("process_id") or "").strip()
-                if not _LAYOUT_PROCESS_ID_RE.fullmatch(process_id):
-                    invalid_rows += 1
-                    continue
-                try:
-                    parsed = {"process_id": process_id}
-                    for column in _LAYOUT_INT_COLUMNS:
-                        parsed[column] = int(str(row.get(column) or "").strip())
-                    for column in _LAYOUT_FLOAT_COLUMNS:
-                        parsed[column] = float(str(row.get(column) or "").strip())
-                    for column in _LAYOUT_TEXT_COLUMNS:
-                        parsed[column] = str(row.get(column) or "").strip()
-                except (TypeError, ValueError):
-                    invalid_rows += 1
-                    continue
-                index.setdefault(process_id, []).append(parsed)
+        for row in source_rows:
+            process_id = _layout_value_text(row, "process_id")
+            if not _LAYOUT_PROCESS_ID_RE.fullmatch(process_id):
+                invalid_rows += 1
+                continue
+            try:
+                parsed = {"process_id": process_id}
+                for column in _LAYOUT_INT_COLUMNS:
+                    parsed[column] = int(_layout_value_text(row, column))
+                for column in _LAYOUT_FLOAT_COLUMNS:
+                    parsed[column] = float(_layout_value_text(row, column))
+                for column in _LAYOUT_TEXT_COLUMNS:
+                    parsed[column] = _layout_value_text(row, column)
+            except (TypeError, ValueError):
+                invalid_rows += 1
+                continue
+            index.setdefault(process_id, []).append(parsed)
 
         if invalid_rows:
             logger.warning("[LAYOUT] skipped invalid rows file=%s count=%s", layout_file, invalid_rows)
         _LAYOUT_CACHE_SIGNATURE = signature
         _LAYOUT_CACHE_BY_PROCESS = index
+        _LAYOUT_CACHE_SOURCE_NAME = layout_file.name
         return index
 
 
 def _get_layout_rows(process_id: str) -> List[Dict[str, Any]]:
     rows = _read_layout_index().get(process_id, [])
     return list(rows)
+
+
+def _get_layout_source_name() -> str:
+    with _LAYOUT_CACHE_LOCK:
+        return _LAYOUT_CACHE_SOURCE_NAME or config.LAYOUT_FILE.name
 
 
 def _get_numpy():
@@ -10357,7 +10380,7 @@ async def get_chip_positions(path: str, include_fq: int = 0, count_only: int = 0
 
 @app.get("/api/layout")
 async def get_layout(process_id: str):
-    """Return rows from the shared layout.txt for one four-character process."""
+    """Return rows from the shared Parquet layout."""
     normalized_process_id = str(process_id or "").strip()
     if not _LAYOUT_PROCESS_ID_RE.fullmatch(normalized_process_id):
         raise HTTPException(status_code=400, detail="process_id must be exactly four alphanumeric characters")
@@ -10365,7 +10388,7 @@ async def get_layout(process_id: str):
     rows = await anyio.to_thread.run_sync(_get_layout_rows, normalized_process_id)
     return {
         "process_id": normalized_process_id,
-        "source": config.LAYOUT_FILE.name,
+        "source": _get_layout_source_name(),
         "rows": rows,
     }
 

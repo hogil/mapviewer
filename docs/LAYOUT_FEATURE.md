@@ -32,8 +32,11 @@ Layout is shared by process, so it is resolved by the four-character
 `process_id`:
 
 ```text
-E:/data/layout/layout.txt
+E:/data/layout/layout.parquet
 ```
+
+The Linux `start.sh` deployment path is `/appdata/appuser/project/layout.parquet`;
+the Windows `start.ps1` path is `E:/data/layout/layout.parquet`.
 
 The viewer loads the process rows lazily through `/api/layout` and uses the
 positions JSON `x_abs/y_abs` values as the chip matching key. Matching rows provide
@@ -84,8 +87,8 @@ process_id,shot_id,chip_id,shot_x_pos,shot_y_pos,full_shot_type,chip_x_pos,chip_
   future families are `area` (`TOP_LEFT`, `CENTER`, `RIGHT`, `BOTTOM`) and
   `edge` (`INNER`, `EDGE`).
 
-The API reads the 70k-row file lazily and caches the parsed index until the
-file modification time or size changes.
+The API reads the Parquet file lazily and caches the parsed index until the
+file modification time or size changes. `pyarrow` is required by the API.
 
 The wafer centre is `(0, 0)`. A 300 mm wafer is validated as a radius of
 `150000.0 um`; generated chip centres must remain inside that circle.
@@ -96,7 +99,8 @@ rows; edge shots can be partial because the source wafer mask is not full.
 
 ## Dummy generator
 
-Generate the representative process layout directly:
+Generate the representative process layout directly. This writes
+`layout.parquet`:
 
 ```powershell
 python scripts/generate_layout_dummy.py

@@ -30,6 +30,8 @@ $env:SSL_KEYFILE="cert/server.key"
 # 경로 설정
 $env:IMAGES_ROOT="E:/data/images"          # 이미지 루트 경로
 $env:POSITIONS_ROOT="E:/data/positions"    # Positions 루트 경로
+$env:LAYOUT_ROOT="E:/data/layout"          # Layout 루트 경로
+$env:LAYOUT_FILE="E:/data/layout/layout.parquet" # Layout Parquet 단일 파일
 
 $env:THUMBNAIL_SIZE="512"
 $env:THUMBNAIL_FORMAT="JPEG"

@@ -1756,6 +1756,22 @@ const { createRunner } = require('./e2e_playwright_session');
       { timeout: 30000 }
     );
 
+    const layoutApi = await page.evaluate(async () => {
+      const response = await fetch('/api/layout?process_id=P001', { cache: 'no-store' });
+      if (!response.ok) throw new Error(`layout status=${response.status}`);
+      const payload = await response.json();
+      const row = Array.isArray(payload.rows) ? payload.rows[0] : null;
+      return {
+        source: payload.source || '',
+        rowCount: Array.isArray(payload.rows) ? payload.rows.length : 0,
+        hasNewChipFields: Boolean(row && row.chip_x_pos !== undefined && row.chip_y_pos !== undefined),
+        hasOldChipFields: Boolean(row && Object.keys(row).some((key) => key.startsWith('eds_'))),
+      };
+    });
+    expect(layoutApi.source === 'layout.parquet' && layoutApi.rowCount === 833 &&
+      layoutApi.hasNewChipFields && !layoutApi.hasOldChipFields,
+    `layout parquet API=${JSON.stringify(layoutApi)}`);
+
     const readShotBoundaryPixels = async () => page.evaluate(() => {
       const annotator = window.viewer?.chipAnnotator;
       annotator?.render();
@@ -1796,7 +1812,7 @@ const { createRunner } = require('./e2e_playwright_session');
     );
     const boundaryAfter = await readShotBoundaryPixels();
 
-    const data = await page.evaluate(({ boundaryBefore, boundaryOn, boundaryAfter }) => {
+    const data = await page.evaluate(({ boundaryBefore, boundaryOn, boundaryAfter, layoutSource }) => {
       const v = window.viewer;
       const chip = (v.chipAnnotator?.chips || []).find((item) =>
         Number(item?.x_abs) === 10 && Number(item?.y_abs) === 0
@@ -1870,8 +1886,9 @@ const { createRunner } = require('./e2e_playwright_session');
           .map((element) => element.textContent?.trim() || ''),
         oldAbsElement: !!document.getElementById('coord-chip-abs'),
         layoutRequest,
+        layoutSource,
       };
-    }, { boundaryBefore, boundaryOn, boundaryAfter });
+    }, { boundaryBefore, boundaryOn, boundaryAfter, layoutSource: layoutApi.source });
 
     expect(data.path.endsWith(`${folder}/${targetFile}`), `path=${data.path}`);
     expect(data.processId === 'P001' && data.layoutRows === 833, `layout=${JSON.stringify(data)}`);

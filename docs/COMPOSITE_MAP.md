@@ -207,7 +207,7 @@ Recolor는 원본 이미지를 다시 읽지 않고 `square_maps_data.npz`를 �
 }
 ```
 
-여러 Shot은 layout의 canonical `shot_shape`(예: `4×6`)와 chip 좌표의 Shot 내부 위치를 사용해 같은 chip 격자에 누적합니다. Partial Shot이나 chip이 1개뿐인 edge Shot도 canvas를 `1×1`로 줄이지 않고 canonical cell 크기를 유지하며, 실제 보이는 chip만 해당 위치에 그리고 나머지는 배경으로 둡니다. 결과 positions는 첫 번째 canonical Shot의 실제 chip 수와 상대 rect를 사용하며, `selected_shot_count`, `selected_source_chip_count`, `selected_shot_shape`, `composite_sample_count`를 반환합니다.
+여러 Shot은 layout의 canonical `shot_shape`(예: `4×6`)와 chip 좌표의 Shot 내부 위치를 사용해 같은 chip 격자에 누적합니다. Layout은 `layout.parquet`에서 읽습니다. Partial Shot이나 chip이 1개뿐인 edge Shot도 canvas를 `1×1`로 줄이지 않고 canonical cell 크기를 유지하며, 실제 보이는 chip만 해당 위치에 그리고 나머지는 배경으로 둡니다. 결과 positions는 첫 번째 canonical Shot의 실제 chip 수와 상대 rect를 사용하며, `selected_shot_count`, `selected_source_chip_count`, `selected_shot_shape`, `composite_sample_count`를 반환합니다.
 
 선택 영역 Composite 결과의 `image_size`와 positions canvas는 canonical Shot 크기와 일치해야 합니다. 현재 E2E fixture P001 Shot 4/5는 각각 24 chip, 4×6이며 두 Shot을 합친 결과도 24 chip, 4×6입니다.
 

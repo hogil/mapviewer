@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate deterministic process-level dummy wafer-layout CSV-format text.
+"""Generate deterministic process-level dummy wafer-layout Parquet data.
 
 The generated layout is keyed by a four-character process_id and uses
 micrometres with the wafer centre as the origin.
@@ -8,7 +8,6 @@ micrometres with the wafer centre as the origin.
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import math
 import os
@@ -30,7 +29,7 @@ LAYOUT_COLUMNS = [
     "zone_id",
     "zone_type",
 ]
-LAYOUT_FILENAME = "layout.txt"
+LAYOUT_FILENAME = "layout.parquet"
 
 DEFAULT_SOURCE = (
     "unknown/CenterDonut/"
@@ -171,6 +170,31 @@ def _build_rows(
     return rows
 
 
+def _write_layout_parquet(target: Path, rows: list[dict[str, Any]]) -> None:
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as parquet
+    except ImportError as exc:
+        raise RuntimeError("layout.parquet 생성에는 pyarrow가 필요합니다.") from exc
+
+    schema = pa.schema([
+        pa.field("process_id", pa.string()),
+        pa.field("shot_id", pa.int64()),
+        pa.field("chip_id", pa.int64()),
+        pa.field("shot_x_pos", pa.int64()),
+        pa.field("shot_y_pos", pa.int64()),
+        pa.field("full_shot_type", pa.string()),
+        pa.field("chip_x_pos", pa.int64()),
+        pa.field("chip_y_pos", pa.int64()),
+        pa.field("chip_center_x_pos", pa.float64()),
+        pa.field("chip_center_y_pos", pa.float64()),
+        pa.field("zone_id", pa.string()),
+        pa.field("zone_type", pa.string()),
+    ])
+    table = pa.Table.from_pylist(rows, schema=schema)
+    parquet.write_table(table, target, compression="zstd")
+
+
 def generate(
     source: Path,
     positions_root: Path,
@@ -182,10 +206,7 @@ def generate(
     rows = _build_rows(payload, chips, process_id)
     target = layout_root / LAYOUT_FILENAME
     target.parent.mkdir(parents=True, exist_ok=True)
-    with target.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=LAYOUT_COLUMNS)
-        writer.writeheader()
-        writer.writerows(rows)
+    _write_layout_parquet(target, rows)
     return target
 
 
@@ -218,8 +239,8 @@ def main() -> int:
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     target = generate(source, positions_root, layout_root, process_id)
-    with target.open("r", encoding="utf-8", newline="") as handle:
-        row_count = sum(1 for _ in csv.DictReader(handle))
+    import pyarrow.parquet as parquet
+    row_count = parquet.read_metadata(target).num_rows
     print(f"generated={target}")
     print(f"process_id={process_id}")
     print(f"rows={row_count}")

@@ -2560,7 +2560,7 @@ export class ChipAnnotator {
      */
     _updateCoordinateBox(imgX, imgY, chip) {
         if (chip) {
-            // Match the current chip (positions x_abs/y_abs) to layout.txt.
+            // Match the current chip (positions x_abs/y_abs) to layout.parquet.
             const layoutRow = this.getLayoutRowForChip(chip);
             if (this.coordChipCoord) {
                 this.coordChipCoord.textContent = layoutRow

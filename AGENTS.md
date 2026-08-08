@@ -203,9 +203,9 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - 파일: `index.html`, `css/style.css`, `js/main.js`, `js/chip-annotator.js`, `scripts/e2e_chunk2.js`
 
 #### BUG-28: layout zone 컬럼 계약 회귀 (2026-08-08)
-- 증상: shared `layout.txt`가 EDS/Shot/Chip 좌표만 제공해 이후 zone별 pivot을 추가할 수 없다.
+- 증상: shared `layout.parquet`가 EDS/Shot/Chip 좌표만 제공해 이후 zone별 pivot을 추가할 수 없다.
 - 수정 계약: `zone_id`, `zone_type` 컬럼을 layout 끝에 추가한다. 현재 더미 fixture는 `zone_type=circle`과 `zone_id=C20/C80/E1/E20` 반경 band를 사용한다. `area`의 `TOP_LEFT/CENTER/RIGHT/BOTTOM`, `edge`의 `INNER/EDGE`는 후속 zone family로 예약한다.
-- E2E guard: `layout-chip-coordinates`는 P001 row의 `zone_id`가 네 circle ID 중 하나이고 `zone_type=circle`인지 확인한다.
+- E2E guard: `layout-chip-coordinates`는 P001 row의 `zone_id`가 네 circle ID 중 하나이고 `zone_type=circle`인지 확인하며 API source가 `layout.parquet`인지 확인한다.
 - 파일: `scripts/generate_layout_dummy.py`, `api/full_app.py`, `docs/LAYOUT_FEATURE.md`, `scripts/e2e_chunk2.js`
 
 ### Available skills
