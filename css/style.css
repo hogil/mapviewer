@@ -3286,10 +3286,10 @@
 
         .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table-wrap,
         .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table-wrap {
-            flex: 0 0 400px;
-            height: 400px;
+            flex: 0 0 360px;
+            height: 360px;
             min-height: 0;
-            max-height: 400px;
+            max-height: 360px;
         }
 
         .coordinate-select-list-panel[data-coordinate-list-panel="chipId"] .coordinate-select-list-table-wrap {
