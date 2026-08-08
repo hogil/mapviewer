@@ -3355,6 +3355,32 @@
             width: 22%;
         }
 
+        .coordinate-select-id-list-panel .coordinate-select-table.coordinate-select-list-table {
+            display: block;
+        }
+
+        .coordinate-select-id-list-panel .coordinate-select-table.coordinate-select-list-table thead {
+            display: none;
+        }
+
+        .coordinate-select-id-list-panel .coordinate-select-table.coordinate-select-list-table tbody {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 2px;
+            padding: 2px;
+        }
+
+        .coordinate-select-id-list-panel .coordinate-select-table.coordinate-select-list-table tr {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 24px;
+            min-width: 0;
+        }
+
+        .coordinate-select-id-list-panel .coordinate-select-table.coordinate-select-list-table td:nth-child(1),
+        .coordinate-select-id-list-panel .coordinate-select-table.coordinate-select-list-table td:nth-child(2) {
+            width: auto;
+        }
+
         .coordinate-select-list-actions {
             display: flex;
             align-items: center;
