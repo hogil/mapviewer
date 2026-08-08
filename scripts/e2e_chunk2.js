@@ -1850,6 +1850,12 @@ const { createRunner } = require('./e2e_playwright_session');
     const folder = 'PW/P001/20260501';
     await boot('chunk2-layout-chip-coordinates');
     await loadFolder(folder);
+    if (process.env.E2E_CAPTURE_PANEL_ROUNDTRIP === '1') {
+      await page.screenshot({
+        path: path.join(outputDir, 'layout-chip-panel-grid-before-single.png'),
+        fullPage: false,
+      });
+    }
 
     const target = await page.evaluate(({ targetFile, folder }) => {
       const v = window.viewer;
@@ -1954,7 +1960,7 @@ const { createRunner } = require('./e2e_playwright_session');
     assertSinglePanelState(singlePanelStability.initial);
     if (process.env.E2E_CAPTURE_PANEL_ROUNDTRIP === '1') {
       await page.screenshot({
-        path: path.join(outputDir, 'layout-chip-panel-initial.png'),
+        path: path.join(outputDir, 'layout-chip-panel-single-after-thumbnail-dblclick.png'),
         fullPage: false,
       });
     }
@@ -1975,7 +1981,15 @@ const { createRunner } = require('./e2e_playwright_session');
       afterGridReturn: null,
       afterThumbnailDblClick: null,
     };
-    await page.evaluate(() => window.viewer.exitSingleImageViewMode());
+    // Exercise the real canvas double-click path, not the method directly.
+    // The canvas origin sits behind the minimap, so click its unobstructed center.
+    const returnCanvasBox = await page.locator('#overlay-canvas').boundingBox();
+    expect(!!returnCanvasBox, 'single overlay canvas missing for real grid-return double-click');
+    await page.mouse.dblclick(
+      returnCanvasBox.x + returnCanvasBox.width * 0.5,
+      returnCanvasBox.y + returnCanvasBox.height * 0.5,
+      { delay: 30 }
+    );
     await page.waitForFunction(
       () => {
         const v = window.viewer;
@@ -1989,7 +2003,36 @@ const { createRunner } = require('./e2e_playwright_session');
       gridMode: window.viewer?.gridMode,
       viewMode: window.viewer?.viewMode,
       wraps: document.querySelectorAll('#image-grid .grid-thumb-wrap').length,
+      panels: Object.fromEntries([
+        '#grid-color-legend-bottom',
+        '#color-legend-top',
+        '#color-legend-bottom',
+        '#chip-info-container',
+        '#minimap-container',
+      ].map((selector) => {
+        const element = document.querySelector(selector);
+        const style = element ? getComputedStyle(element) : null;
+        const rect = element?.getBoundingClientRect?.();
+        return [selector, {
+          display: style?.display || '',
+          visibility: style?.visibility || '',
+          width: rect?.width || 0,
+          height: rect?.height || 0,
+        }];
+      })),
     }));
+    if (process.env.E2E_CAPTURE_PANEL_ROUNDTRIP === '1') {
+      await page.screenshot({
+        path: path.join(outputDir, 'layout-chip-panel-grid-after-single-dblclick.png'),
+        fullPage: false,
+      });
+    }
+    const gridLegend = panelGridRoundTrip.afterGridReturn.panels['#grid-color-legend-bottom'];
+    expect(
+      gridLegend.display !== 'none' && gridLegend.visibility !== 'hidden' &&
+        gridLegend.width > 0 && gridLegend.height > 0,
+      `grid legend missing after real single-image double-click return: ${JSON.stringify(panelGridRoundTrip.afterGridReturn)}`
+    );
     await page.locator('#image-grid .grid-thumb-wrap').nth(target.index).dblclick();
     await page.waitForFunction(
       ({ imagePath }) => {

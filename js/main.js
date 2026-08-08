@@ -23518,6 +23518,9 @@ class WaferMapViewer {
         document.body.classList.add('grid-mode-active');
 
         this.gridMode = true;
+        // A grid-image detail view hides this legend for the single view.
+        // Restore it before the fast-path grid return is presented.
+        this.showColorLegends();
         this.enforceGridModeUiState();
         this._gridVisuallyHidden = false;
 
@@ -25790,6 +25793,7 @@ class WaferMapViewer {
             this.dom.minimapContainer.style.display = 'block';
             this.dom.minimapContainer.style.pointerEvents = 'auto';
         }
+        this.showColorLegends();
 
         const targetImagePath = this.selectedImages[idx];
         if (targetImagePath) {
