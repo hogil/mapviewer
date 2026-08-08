@@ -2922,6 +2922,11 @@
             user-select: auto;
         }
 
+        .modal-header.coordinate-select-drag-handle {
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+        }
+
         .coordinate-select-modal-content.is-dragging {
             opacity: 0.94;
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
@@ -2930,7 +2935,7 @@
         .coordinate-select-body {
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 8px;
         }
 
         .coordinate-select-controls {
@@ -3098,7 +3103,7 @@
 
         .coordinate-select-list-panels {
             display: grid;
-            grid-template-columns: minmax(144px, 3fr) minmax(160px, 3fr) minmax(0, 4fr);
+            grid-template-columns: minmax(144px, 3fr) minmax(160px, 3fr) minmax(0, 4.4fr);
             gap: 8px;
             align-items: start;
         }
@@ -3605,6 +3610,10 @@
         .coordinate-select-buttons {
             justify-content: flex-end;
             gap: 8px;
+        }
+
+        .modal-buttons.coordinate-select-buttons {
+            margin-top: 8px;
         }
 
         @media (max-width: 560px) {
