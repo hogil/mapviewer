@@ -25774,8 +25774,22 @@ class WaferMapViewer {
         // 2. 키보드 좌우 키 네비게이션 설정
         this.setupGridImageNavigation();
 
-        // 3. 그리드 숨김 (DOM 파괴 없이 시각적으로만 숨김 → 복귀 시 즉시 표시)
+        // 3. Hide the grid while it is still in grid mode so stale canvas
+        // pixels never flash before the next image bitmap is ready.
         this._hideGridVisual();
+
+        // Commit the panel mode before image I/O. Otherwise fixed panels
+        // remain in their grid-hidden state until the image request finishes.
+        this.gridMode = false;
+        document.body.classList.remove('grid-mode-active');
+        if (this.dom.viewerContainer) {
+            this.dom.viewerContainer.classList.remove('grid-mode');
+            this.dom.viewerContainer.classList.add('single-image-mode');
+        }
+        if (this.dom.minimapContainer) {
+            this.dom.minimapContainer.style.display = 'block';
+            this.dom.minimapContainer.style.pointerEvents = 'auto';
+        }
 
         const targetImagePath = this.selectedImages[idx];
         if (targetImagePath) {

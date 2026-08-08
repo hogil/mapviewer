@@ -7,6 +7,7 @@ const { createRunner } = require('./e2e_playwright_session');
     base,
     page,
     results,
+    outputDir,
     expect,
     sleep,
     append,
@@ -1951,6 +1952,12 @@ const { createRunner } = require('./e2e_playwright_session');
       zoomPan: [],
     };
     assertSinglePanelState(singlePanelStability.initial);
+    if (process.env.E2E_CAPTURE_PANEL_ROUNDTRIP === '1') {
+      await page.screenshot({
+        path: path.join(outputDir, 'layout-chip-panel-initial.png'),
+        fullPage: false,
+      });
+    }
     for (const selector of [
       '#color-legend-top',
       '#color-legend-bottom',
@@ -1996,6 +2003,13 @@ const { createRunner } = require('./e2e_playwright_session');
     await sleep(300);
     panelGridRoundTrip.afterThumbnailDblClick = await readSinglePanelState('grid-return-thumbnail-dblclick');
     assertSinglePanelState(panelGridRoundTrip.afterThumbnailDblClick);
+    if (process.env.E2E_CAPTURE_PANEL_ROUNDTRIP === '1') {
+      await sleep(1200);
+      await page.screenshot({
+        path: path.join(outputDir, 'layout-chip-panel-grid-roundtrip.png'),
+        fullPage: false,
+      });
+    }
 
     const overlayBox = await page.locator('#overlay-canvas').boundingBox();
     expect(!!overlayBox, 'single overlay canvas missing for zoom/pan panel guard');
