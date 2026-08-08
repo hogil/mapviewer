@@ -3038,9 +3038,18 @@ const { createRunner } = require('./e2e_playwright_session');
       const layoutResponse = await fetch('/api/layout?process_id=P001', { cache: 'no-store' });
       if (!layoutResponse.ok) throw new Error(`layout status=${layoutResponse.status}`);
       const layout = await layoutResponse.json();
-      const row = (layout.rows || []).find((candidate) => String(candidate.shot_id) === '8');
+      const shotRows = (layout.rows || []).filter((candidate) => String(candidate.shot_id) === '8');
+      const row = shotRows[0];
       if (!row) throw new Error('single-chip partial Shot fixture missing');
-      const shotCoords = [{ x_abs: Number(row.chip_x_pos), y_abs: Number(row.chip_y_pos) }];
+      const originX = Number(row.chip_x_pos) - ((Number(row.chip_x_pos) % 4 + 4) % 4);
+      const originY = Number(row.chip_y_pos) - ((Number(row.chip_y_pos) % 6 + 6) % 6);
+      const shotCoords = [];
+      for (let y = 0; y < 6; y += 1) {
+        for (let x = 0; x < 4; x += 1) {
+          shotCoords.push({ x_abs: originX + x, y_abs: originY + y });
+        }
+      }
+      const availableCoords = new Set(shotRows.map((candidate) => `${candidate.chip_x_pos}:${candidate.chip_y_pos}`));
       await fetch('/api/composite-cleanup', { method: 'POST', cache: 'no-store' });
       const startResponse = await fetch('/api/composite-map', {
         method: 'POST',
@@ -3101,11 +3110,14 @@ const { createRunner } = require('./e2e_playwright_session');
       }
       return {
         shotId: '8',
-        sourceChipCount: shotCoords.length,
+        requestedChipCount: shotCoords.length,
+        sourceChipCount: availableCoords.size,
         result: {
           width: result.width,
           height: result.height,
           selected_chip_count: result.selected_chip_count,
+          selected_source_chip_count: result.selected_source_chip_count,
+          selected_missing_chip_count: result.selected_missing_chip_count,
           selected_shot_count: result.selected_shot_count,
           selected_shot_shape: result.selected_shot_shape,
         },
@@ -3117,6 +3129,8 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(partialShotResult.result.width === shotResult.result.width &&
       partialShotResult.result.height === shotResult.result.height &&
       partialShotResult.result.selected_chip_count === 1 &&
+      partialShotResult.result.selected_source_chip_count === 1 &&
+      partialShotResult.result.selected_missing_chip_count === 23 &&
       partialShotResult.result.selected_shot_count === 1 &&
       partialShotResult.result.selected_shot_shape?.cols === 4 &&
       partialShotResult.result.selected_shot_shape?.rows === 6 &&

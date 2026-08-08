@@ -96,7 +96,8 @@ export class ChipAnnotator {
         // Colors
         this.gridColor = 'rgba(0, 255, 255, 0.3)';
         this.hoverColor = 'rgba(238, 238, 238, 0.55)';
-        this.selectedColor = this.hoverColor;
+        // Keep selection distinct from the silver-white hover on bright wafer cells.
+        this.selectedColor = 'rgba(255, 255, 0, 0.25)';
         this.selectionPreviewColor = 'rgba(215, 215, 215, 0.26)';
         this.markedColor = 'rgba(255, 0, 0, 0.4)';
 
@@ -487,7 +488,7 @@ export class ChipAnnotator {
         const ctx = this.ctx;
         ctx.save();
         ctx.resetTransform();
-        ctx.strokeStyle = this.hoverColor.replace(/[\d.]+\)$/, '0.95)');
+        ctx.strokeStyle = this.selectedColor.replace(/[\d.]+\)$/, '0.95)');
         ctx.lineWidth = Math.max(3, 4 * transform.scale);
         ctx.setLineDash([]);
 

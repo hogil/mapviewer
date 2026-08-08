@@ -122,6 +122,46 @@ def _layout_value_text(row: Dict[str, Any], column: str) -> str:
     return "" if value is None else str(value).strip()
 
 
+def _layout_value_int(row: Dict[str, Any], column: str) -> int:
+    """Parse an integer layout field from native Parquet or CSV-like values."""
+    value = row.get(column)
+    if value is None or isinstance(value, bool):
+        raise ValueError(f"{column} is empty")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise ValueError(f"{column} is not an integer: {value!r}")
+        return int(value)
+
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{column} is empty")
+    if re.fullmatch(r"[+-]?\d+", text):
+        return int(text)
+    try:
+        numeric = float(text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{column} is not numeric: {text!r}") from exc
+    if not math.isfinite(numeric) or not numeric.is_integer():
+        raise ValueError(f"{column} is not an integer: {text!r}")
+    return int(numeric)
+
+
+def _layout_value_float(row: Dict[str, Any], column: str) -> float:
+    """Parse a finite real-valued layout field."""
+    value = row.get(column)
+    if value is None or isinstance(value, bool):
+        raise ValueError(f"{column} is empty")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{column} is not numeric: {value!r}") from exc
+    if not math.isfinite(numeric):
+        raise ValueError(f"{column} is not finite: {value!r}")
+    return numeric
+
+
 def _read_layout_index() -> Dict[str, List[Dict[str, Any]]]:
     """Read the shared layout.parquet once per file version."""
     global _LAYOUT_CACHE_SIGNATURE, _LAYOUT_CACHE_BY_PROCESS, _LAYOUT_CACHE_SOURCE_NAME
@@ -145,26 +185,36 @@ def _read_layout_index() -> Dict[str, List[Dict[str, Any]]]:
 
         index: Dict[str, List[Dict[str, Any]]] = {}
         invalid_rows = 0
-        for row in source_rows:
+        invalid_examples: List[str] = []
+        for row_index, row in enumerate(source_rows):
             process_id = _layout_value_text(row, "process_id")
             if not _LAYOUT_PROCESS_ID_RE.fullmatch(process_id):
                 invalid_rows += 1
+                if len(invalid_examples) < 3:
+                    invalid_examples.append(f"row={row_index} process_id={process_id!r}")
                 continue
             try:
                 parsed = {"process_id": process_id}
                 for column in _LAYOUT_INT_COLUMNS:
-                    parsed[column] = int(_layout_value_text(row, column))
+                    parsed[column] = _layout_value_int(row, column)
                 for column in _LAYOUT_FLOAT_COLUMNS:
-                    parsed[column] = float(_layout_value_text(row, column))
+                    parsed[column] = _layout_value_float(row, column)
                 for column in _LAYOUT_TEXT_COLUMNS:
                     parsed[column] = _layout_value_text(row, column)
             except (TypeError, ValueError):
                 invalid_rows += 1
+                if len(invalid_examples) < 3:
+                    invalid_examples.append(f"row={row_index} numeric/text conversion failed")
                 continue
             index.setdefault(process_id, []).append(parsed)
 
         if invalid_rows:
-            logger.warning("[LAYOUT] skipped invalid rows file=%s count=%s", layout_file, invalid_rows)
+            logger.warning(
+                "[LAYOUT] skipped invalid rows file=%s count=%s examples=%s",
+                layout_file,
+                invalid_rows,
+                invalid_examples,
+            )
         _LAYOUT_CACHE_SIGNATURE = signature
         _LAYOUT_CACHE_BY_PROCESS = index
         _LAYOUT_CACHE_SOURCE_NAME = layout_file.name
@@ -11051,6 +11101,7 @@ async def create_composite_map_endpoint(
                     for key in (
                         "selected_shot_count",
                         "selected_source_chip_count",
+                        "selected_missing_chip_count",
                         "selected_shot_shape",
                         "composite_sample_count",
                     ):

@@ -10853,6 +10853,7 @@ class WaferMapViewer {
             selectedChipCount: result.selected_chip_count || this.lastCompositeSelection?.chipCoords?.length || 0,
             selectedShotCount: result.selected_shot_count || this.lastCompositeSelection?.shotGroups?.length || 0,
             selectedSourceChipCount: result.selected_source_chip_count || null,
+            selectedMissingChipCount: result.selected_missing_chip_count || 0,
             shotShape: result.selected_shot_shape || null,
             compositeSampleCount: result.composite_sample_count || null,
             selectionCrop: result.selection_crop || null,

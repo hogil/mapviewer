@@ -567,18 +567,34 @@ def _build_selected_shot_geometry(
     observed_signatures: List[Tuple[int, int]] = []
     source_chip_count = 0
 
+    # Edge/partial Shots may have no usable rect in the selected group. Keep a
+    # cell-size fallback from the source wafer so the canonical Shot canvas can
+    # still be rendered with missing cells left as background.
+    fallback_rects = []
+    for chip in positions_data.get("chips", []):
+        if not isinstance(chip, dict):
+            continue
+        rect = _chip_pixel_rect_from_positions(chip, positions_data, width, height)
+        if rect is not None:
+            fallback_rects.append(rect)
+
     for group in selected_shot_groups:
+        requested_coords = sorted(
+            set(group.get("coords") or []),
+            key=lambda value: (value[1], value[0]),
+        )
         group_chips = [
             (coord, chips_by_coord[coord])
-            for coord in sorted(group["coords"], key=lambda value: (value[1], value[0]))
+            for coord in requested_coords
             if coord in chips_by_coord
         ]
-        if not group_chips:
+        reference_coords = [coord for coord, _ in group_chips] or requested_coords
+        if not reference_coords:
             continue
-        min_x = min(coord[0] for coord, _ in group_chips)
-        max_x = max(coord[0] for coord, _ in group_chips)
-        min_y = min(coord[1] for coord, _ in group_chips)
-        max_y = max(coord[1] for coord, _ in group_chips)
+        min_x = min(coord[0] for coord in reference_coords)
+        max_x = max(coord[0] for coord in reference_coords)
+        min_y = min(coord[1] for coord in reference_coords)
+        max_y = max(coord[1] for coord in reference_coords)
         observed_signature = (max_x - min_x + 1, max_y - min_y + 1)
         observed_signatures.append(observed_signature)
         raw_shape = group.get("shot_shape")
@@ -601,10 +617,11 @@ def _build_selected_shot_geometry(
             if rect is None:
                 continue
             source_rects.append((coord, chip, rect))
-        if not source_rects:
+        size_rects = [entry[2] for entry in source_rects] or fallback_rects
+        if not size_rects:
             continue
-        cell_width = int(round(np.median([r[2] - r[0] for _, _, r in source_rects])))
-        cell_height = int(round(np.median([r[3] - r[1] for _, _, r in source_rects])))
+        cell_width = int(round(np.median([rect[2] - rect[0] for rect in size_rects])))
+        cell_height = int(round(np.median([rect[3] - rect[1] for rect in size_rects])))
         if cell_width <= 0 or cell_height <= 0:
             continue
         groups.append({
@@ -690,6 +707,7 @@ def _build_selected_shot_geometry(
         "shot_count": len(groups),
         "source_chip_count": source_chip_count,
         "output_chip_count": len(output_coords),
+        "missing_chip_count": max(0, len(groups) * cols * rows - source_chip_count),
         "shot_shape": {"cols": cols, "rows": rows},
         "width": target_width,
         "height": target_height,
@@ -2817,7 +2835,7 @@ def create_composite_heatmaps(
                 if _coord_key_from_chip(chip) is not None
             }
             selected_coord_set &= available_coords
-            if not selected_coord_set:
+            if not selected_coord_set and not normalized_shot_groups:
                 raise ValueError("선택한 Chip/Shot이 원본 positions에 없습니다.")
         first_device = str((first_pos or {}).get("device", "")).strip() if first_pos else ""
         if first_device and len(image_paths) > 1:
@@ -3098,6 +3116,7 @@ def create_composite_heatmaps(
     if shot_geometry:
         result["selected_shot_count"] = shot_geometry["shot_count"]
         result["selected_source_chip_count"] = shot_geometry["source_chip_count"]
+        result["selected_missing_chip_count"] = shot_geometry["missing_chip_count"]
         result["selected_shot_shape"] = shot_geometry["shot_shape"]
     if sum_map_rel_path:
         result["sum_map_path"] = sum_map_rel_path
