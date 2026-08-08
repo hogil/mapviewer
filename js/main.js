@@ -8505,18 +8505,6 @@ class WaferMapViewer {
             this._setCoordinateSelectionError('');
             this._scheduleCoordinateSelectionLiveApply({ forceClear: true });
         });
-        dom.coordinateSelectTbody?.addEventListener('click', (event) => {
-            const button = event.target.closest?.('button[data-coordinate-remove-row]');
-            if (!button) return;
-            const row = Number(button.dataset.coordinateRemoveRow);
-            if (!Number.isInteger(row)) return;
-            this.coordinateSelectionRows.splice(row, 1);
-            if (this.coordinateSelectionRows.length === 0) {
-                this.coordinateSelectionRows = this._newCoordinateSelectionRows();
-            }
-            this._renderCoordinateSelectionTable();
-            this._scheduleCoordinateSelectionLiveApply({ forceClear: true });
-        });
         dom.coordinateSelectTbody?.addEventListener('paste', (event) => this._handleCoordinateSelectionPaste(event));
         dom.coordinateSelectShotPicker?.addEventListener('click', (event) => {
             const button = event.target.closest?.('button[data-coordinate-shot-chip-index]');
@@ -9021,11 +9009,6 @@ class WaferMapViewer {
             th.textContent = header;
             dom.coordinateSelectHead.appendChild(th);
         });
-        const actionHeader = document.createElement('th');
-        actionHeader.className = 'coordinate-select-action-column';
-        actionHeader.textContent = '';
-        dom.coordinateSelectHead.appendChild(actionHeader);
-
         dom.coordinateSelectTbody.replaceChildren();
         this.coordinateSelectionRows.forEach((rowValues, rowIndex) => {
             const row = document.createElement('tr');
@@ -9043,17 +9026,6 @@ class WaferMapViewer {
                 cell.appendChild(input);
                 row.appendChild(cell);
             }
-            const actionCell = document.createElement('td');
-            actionCell.className = 'coordinate-select-action-cell';
-            const remove = document.createElement('button');
-            remove.type = 'button';
-            remove.className = 'coordinate-select-remove-row';
-            remove.dataset.coordinateRemoveRow = String(rowIndex);
-            remove.textContent = '×';
-            remove.title = `${rowIndex + 1}행 삭제`;
-            remove.setAttribute('aria-label', `${rowIndex + 1}행 삭제`);
-            actionCell.appendChild(remove);
-            row.appendChild(actionCell);
             dom.coordinateSelectTbody.appendChild(row);
         });
         if (dom.coordinateSelectHint) {
@@ -9271,9 +9243,14 @@ class WaferMapViewer {
         return configs[listName] || configs.shot;
     }
 
-    _newCoordinateSelectionListRows(listName, count = 1) {
+    _coordinateSelectionDefaultRowCount(listName) {
+        return listName === 'chipId' ? 16 : 12;
+    }
+
+    _newCoordinateSelectionListRows(listName, count = null) {
         const columns = this._coordinateSelectionListConfig(listName).columns;
-        return Array.from({ length: Math.max(1, count) }, () => Array(columns).fill(''));
+        const rowCount = Number.isInteger(count) ? count : this._coordinateSelectionDefaultRowCount(listName);
+        return Array.from({ length: Math.max(1, rowCount) }, () => Array(columns).fill(''));
     }
 
     _activateCoordinateSelectionList(listName) {
@@ -9327,18 +9304,6 @@ class WaferMapViewer {
                 cell.appendChild(input);
                 row.appendChild(cell);
             }
-            const actionCell = document.createElement('td');
-            actionCell.className = 'coordinate-select-action-cell';
-            const remove = document.createElement('button');
-            remove.type = 'button';
-            remove.className = 'coordinate-select-remove-row';
-            remove.dataset.coordinateList = listName;
-            remove.dataset.coordinateRemoveRow = String(rowIndex);
-            remove.textContent = '×';
-            remove.title = `${rowIndex + 1}행 삭제`;
-            remove.setAttribute('aria-label', `${config.label} ${rowIndex + 1}행 삭제`);
-            actionCell.appendChild(remove);
-            row.appendChild(actionCell);
             tbody.appendChild(row);
         });
         this._updateCoordinateSelectionCellClasses();
@@ -9391,6 +9356,20 @@ class WaferMapViewer {
             dragPointerId: null,
             dragStartKey: null,
         };
+    }
+
+    _clearCoordinateSelectionCellSelection() {
+        const cellState = this._ensureCoordinateSelectionCellState();
+        const activeInput = this._getCoordinateSelectionCellInput(cellState.activeKey) ||
+            this.dom?.coordinateSelectListPanels?.querySelector('input[data-coordinate-editing="true"]');
+        if (activeInput?.dataset.coordinateEditing === 'true') {
+            this._finishCoordinateSelectionCellEdit(activeInput);
+        }
+        this._resetCoordinateSelectionCellState();
+        this._updateCoordinateSelectionCellClasses();
+        if (this.dom?.coordinateSelectListPanels?.contains(document.activeElement)) {
+            document.activeElement?.blur?.();
+        }
     }
 
     _coordinateSelectionCellKey(listName, row, col) {
@@ -10367,19 +10346,6 @@ class WaferMapViewer {
                 this._renderCoordinateSelectionList(listName, { row: state.rows.length - 1, col: 0 });
                 return;
             }
-            const removeButton = event.target.closest?.('button[data-coordinate-remove-row]');
-            if (!removeButton) return;
-            const listName = removeButton.dataset.coordinateList;
-            const state = this.coordinateSelectionLists?.[listName];
-            const row = Number(removeButton.dataset.coordinateRemoveRow);
-            if (!state || !Number.isInteger(row)) return;
-            this._activateCoordinateSelectionList(listName);
-            state.synced = false;
-            state.rows.splice(row, 1);
-            if (!state.rows.length) state.rows = this._newCoordinateSelectionListRows(listName);
-            state.hasInput = true;
-            this._renderCoordinateSelectionList(listName);
-            this._scheduleCoordinateSelectionLiveApply({ forceClear: true });
         });
         dom.coordinateSelectListPanels?.addEventListener('paste', (event) => this._handleCoordinateSelectionListPaste(event));
         dom.coordinateSelectClose?.addEventListener('click', () => this.closeCoordinateSelectionModal());
@@ -10632,13 +10598,13 @@ class WaferMapViewer {
         this._setCoordinateSelectionError('');
         dom.coordinateSelectModal.style.display = 'flex';
         this.isCoordinateSelectionOpen = true;
-        this._renderCoordinateSelectionLists({ listName: 'shot', row: 0, col: 0 });
+        this._renderCoordinateSelectionLists();
         this._renderCoordinateSelectionRange();
         this.coordinateSelectionEscapeHandler = (event) => {
             if (event.key === 'Escape' && this.isCoordinateSelectionOpen) {
                 event.preventDefault();
                 event.stopPropagation();
-                this.closeCoordinateSelectionModal();
+                this._clearCoordinateSelectionCellSelection();
             }
         };
         document.addEventListener('keydown', this.coordinateSelectionEscapeHandler, true);

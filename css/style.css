@@ -3305,13 +3305,13 @@
         }
 
         .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table {
-            width: 130px;
-            min-width: 130px;
+            width: 104px;
+            min-width: 104px;
         }
 
         .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table {
-            width: 146px;
-            min-width: 146px;
+            width: 120px;
+            min-width: 120px;
         }
 
         .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table th:nth-child(1),
@@ -3328,36 +3328,19 @@
             width: 60px;
         }
 
-        .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table th:nth-child(3),
-        .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table td:nth-child(3),
-        .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table th:nth-child(3),
-        .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table td:nth-child(3) {
-            width: 26px;
-        }
-
         .coordinate-select-table.coordinate-select-list-table th:nth-child(1),
         .coordinate-select-table.coordinate-select-list-table td:nth-child(1) {
-            width: 42%;
+            width: 50%;
         }
 
         .coordinate-select-table.coordinate-select-list-table th:nth-child(2),
         .coordinate-select-table.coordinate-select-list-table td:nth-child(2) {
-            width: 42%;
-        }
-
-        .coordinate-select-table.coordinate-select-list-table th:nth-child(3),
-        .coordinate-select-table.coordinate-select-list-table td:nth-child(3) {
-            width: 16%;
+            width: 50%;
         }
 
         .coordinate-select-id-list-panel .coordinate-select-table.coordinate-select-list-table th:nth-child(1),
         .coordinate-select-id-list-panel .coordinate-select-table.coordinate-select-list-table td:nth-child(1) {
-            width: 78%;
-        }
-
-        .coordinate-select-id-list-panel .coordinate-select-table.coordinate-select-list-table th:nth-child(2),
-        .coordinate-select-id-list-panel .coordinate-select-table.coordinate-select-list-table td:nth-child(2) {
-            width: 22%;
+            width: 100%;
         }
 
         .coordinate-select-id-list-panel .coordinate-select-table.coordinate-select-list-table {
@@ -3377,12 +3360,11 @@
 
         .coordinate-select-id-list-panel .coordinate-select-table.coordinate-select-list-table tr {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) 24px;
+            grid-template-columns: minmax(0, 1fr);
             min-width: 0;
         }
 
-        .coordinate-select-id-list-panel .coordinate-select-table.coordinate-select-list-table td:nth-child(1),
-        .coordinate-select-id-list-panel .coordinate-select-table.coordinate-select-list-table td:nth-child(2) {
+        .coordinate-select-id-list-panel .coordinate-select-table.coordinate-select-list-table td:nth-child(1) {
             width: auto;
         }
 
@@ -3475,34 +3457,6 @@
             cursor: text;
             user-select: text;
             caret-color: auto;
-        }
-
-        .coordinate-select-action-column,
-        .coordinate-select-action-cell {
-            width: 26px;
-            text-align: center;
-            vertical-align: middle;
-        }
-
-        .coordinate-select-remove-row {
-            display: inline-grid;
-            width: 22px;
-            height: 22px;
-            place-items: center;
-            padding: 0;
-            background: transparent;
-            color: #aaa;
-            border: 1px solid transparent;
-            border-radius: 2px;
-            cursor: pointer;
-            font-size: 15px;
-            line-height: 1;
-        }
-
-        .coordinate-select-remove-row:hover {
-            color: #fff;
-            border-color: #777;
-            background: #3a3a3a;
         }
 
         .coordinate-select-table-actions {
