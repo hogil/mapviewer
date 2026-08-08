@@ -9755,9 +9755,7 @@ class WaferMapViewer {
         heading.className = 'coordinate-select-shot-picker-heading';
         const headingLabel = document.createElement('span');
         const selectedGroupCount = Math.max(1, annotator._getSelectedShotGroups?.().size || 0);
-        headingLabel.textContent = selectedGroupCount > 1
-            ? `Full Shot Chip ID 선택 (${selectedGroupCount}개 Shot에 적용)`
-            : 'Full Shot Chip ID 선택';
+        headingLabel.textContent = 'Full Shot Chip ID 선택';
         heading.appendChild(headingLabel);
         picker.appendChild(heading);
 
