@@ -3085,15 +3085,8 @@
 
         .coordinate-select-list-panels {
             display: grid;
-            grid-template-columns: minmax(180px, 0.82fr) minmax(300px, 1.45fr);
+            grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) minmax(0, 1fr);
             gap: 8px;
-        }
-
-        .coordinate-select-coordinate-panels {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            min-width: 0;
         }
 
         .coordinate-select-list-panel {
