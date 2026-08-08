@@ -3612,8 +3612,12 @@
             gap: 8px;
         }
 
+        #chip-coordinate-select-error:empty {
+            display: none;
+        }
+
         .modal-buttons.coordinate-select-buttons {
-            margin-top: 8px;
+            margin-top: 0;
         }
 
         @media (max-width: 560px) {
