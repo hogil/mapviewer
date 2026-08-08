@@ -2244,6 +2244,37 @@ const { createRunner } = require('./e2e_playwright_session');
     };
 
     await openCoordinateModal();
+    const quickPickerInitial = await page.evaluate(() => ({
+      shotOptions: document.querySelectorAll('select[data-coordinate-quick-select="shot"] option').length,
+      chipOptions: document.querySelectorAll('select[data-coordinate-quick-select="chip"] option').length,
+      shotParent: document.querySelector('[data-coordinate-quick-picker="shot"]')?.closest('[data-coordinate-list-panel]')?.dataset.coordinateListPanel || '',
+      chipParent: document.querySelector('[data-coordinate-quick-picker="chip"]')?.closest('[data-coordinate-list-panel]')?.dataset.coordinateListPanel || '',
+    }));
+    expect(quickPickerInitial.shotOptions > 1 && quickPickerInitial.chipOptions > 1 &&
+      quickPickerInitial.shotParent === 'shot' && quickPickerInitial.chipParent === 'chip',
+    `quick picker initial=${JSON.stringify(quickPickerInitial)}`);
+    await page.locator('[data-coordinate-quick-search="shot"]').fill(
+      `(${selectionTarget.shotRows[0].x}, ${selectionTarget.shotRows[0].y})`
+    );
+    const filteredShotValue = await page.locator('select[data-coordinate-quick-select="shot"] option').nth(1).getAttribute('value');
+    expect(filteredShotValue, 'filtered Shot dropdown option missing');
+    await page.locator('select[data-coordinate-quick-select="shot"]').selectOption(filteredShotValue);
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.selectionMode === 'shot' && window.viewer.chipAnnotator.selectedChips?.size === 24,
+      null,
+      { timeout: 10000 }
+    );
+    await page.locator('[data-coordinate-quick-search="chip"]').fill('Grid');
+    const filteredChipValue = await page.locator('select[data-coordinate-quick-select="chip"] option').nth(1).getAttribute('value');
+    expect(filteredChipValue, 'filtered Chip dropdown option missing');
+    await page.locator('select[data-coordinate-quick-select="chip"]').selectOption(filteredChipValue);
+    await page.waitForFunction(
+      () => window.viewer?.chipAnnotator?.selectionMode === 'chip' && window.viewer.chipAnnotator.selectedChips?.size === 1,
+      null,
+      { timeout: 10000 }
+    );
+    await page.locator('#chip-coordinate-select-close').click();
+    await openCoordinateModal();
     const initialModal = await page.evaluate(() => ({
       visible: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).display !== 'none',
       listPanels: document.querySelectorAll('#chip-coordinate-select-list-panels [data-coordinate-list-panel]').length,
@@ -2330,7 +2361,7 @@ const { createRunner } = require('./e2e_playwright_session');
       };
     });
     expect(
-      pickerPlacement.parentPanel === 'chip' && pickerPlacement.hasOuterShotBox &&
+      pickerPlacement.parentPanel === 'chipId' && pickerPlacement.hasOuterShotBox &&
         pickerPlacement.borderedChipCells === 24 && pickerPlacement.labeledChipIds === 24,
       `Shot picker placement=${JSON.stringify(pickerPlacement)}`
     );
@@ -2460,7 +2491,7 @@ const { createRunner } = require('./e2e_playwright_session');
       pickerParent: document.getElementById('chip-coordinate-select-shot-picker')?.closest('[data-coordinate-list-panel]')?.dataset.coordinateListPanel || '',
       pickerChecked: document.querySelectorAll('#chip-coordinate-select-shot-picker button[aria-checked="true"]').length,
     }));
-    expect(combinedRow.pickerVisible && combinedRow.pickerParent === 'chip' && combinedRow.pickerChecked === 1,
+    expect(combinedRow.pickerVisible && combinedRow.pickerParent === 'chipId' && combinedRow.pickerChecked === 1,
       `Shot picker after Chip ID scope=${JSON.stringify(combinedRow)}`);
     await page.locator('#chip-coordinate-select-close').click();
     await openCoordinateModal();
@@ -2603,7 +2634,7 @@ const { createRunner } = require('./e2e_playwright_session');
       chips: window.viewer.chipAnnotator.selectedChips.size,
       chipId: [...window.viewer.chipAnnotator.selectedChips][0],
     }));
-    return { initialModal, selectionTarget, shotCells, posCells, afterShot, shotPicker, pickerAfterRemove, partialShotPicker, combinedRow, afterRemove, partialShotSelection, shotScopeUi, afterAdd, rangeControls, rangeSelection, afterPos };
+    return { initialModal, selectionTarget, quickPickerInitial, shotCells, posCells, afterShot, shotPicker, pickerAfterRemove, partialShotPicker, combinedRow, afterRemove, partialShotSelection, shotScopeUi, afterAdd, rangeControls, rangeSelection, afterPos };
   });
 
   await record('selected-region-composite', '선택 Chip/Shot Composite Map 및 결과 positions 정합성', async () => {

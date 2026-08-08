@@ -9284,6 +9284,145 @@ class WaferMapViewer {
             .forEach((panel) => panel.classList.toggle('is-active', panel.dataset.coordinateListPanel === this.coordinateSelectionActiveList));
         this._updateCoordinateSelectionSummary();
         this._renderCoordinateSelectionShotPicker();
+        this._renderCoordinateSelectionQuickPickers();
+    }
+
+    _getCoordinateSelectionQuickOptions(listName) {
+        const annotator = this.chipAnnotator;
+        if (!annotator?.chips?.length) return [];
+        const formatMm = (value) => Number(value).toFixed(3);
+        if (listName === 'shot') {
+            const seen = new Set();
+            return [...(annotator.shotBoundaryGroups?.values?.() || [])]
+                .map((group) => {
+                    const chip = annotator.chips?.[group?.indices?.[0]];
+                    const layout = annotator.getLayoutRowForChip?.(chip);
+                    const x = Number(layout?.shot_x_pos);
+                    const y = Number(layout?.shot_y_pos);
+                    if (!Number.isInteger(x) || !Number.isInteger(y)) return null;
+                    const key = `${x}:${y}`;
+                    if (seen.has(key)) return null;
+                    seen.add(key);
+                    const shotId = String(layout?.shot_id ?? group?.shotId ?? '').trim();
+                    const chipCount = Array.isArray(group?.indices) ? group.indices.length : 0;
+                    return {
+                        label: `(${x}, ${y}) · Shot ${shotId || '-'} · ${chipCount} Chip`,
+                        searchText: `${x} ${y} ${shotId}`,
+                        group: 'Shot X/Y',
+                        values: [String(x), String(y)],
+                    };
+                })
+                .filter(Boolean)
+                .sort((left, right) => Number(left.values[1]) - Number(right.values[1]) || Number(left.values[0]) - Number(right.values[0]));
+        }
+        if (listName !== 'chip') return [];
+
+        const options = [];
+        const seen = new Set();
+        annotator.chips.forEach((chip) => {
+            const layout = annotator.getLayoutRowForChip?.(chip);
+            const chipId = String(layout?.chip_id ?? chip?.chip_id ?? '').trim();
+            const gridX = Number(chip?.x_cal);
+            const gridY = Number(chip?.y_cal);
+            if (Number.isInteger(gridX) && Number.isInteger(gridY)) {
+                const key = `grid:${gridX}:${gridY}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    options.push({
+                        label: `(${gridX}, ${gridY}) · ID ${chipId || '-'}`,
+                        searchText: `grid ${gridX} ${gridY} ${chipId}`,
+                        group: 'Chip(Grid)',
+                        values: [String(gridX), String(gridY)],
+                    });
+                }
+            }
+            const posX = Number(layout?.chip_center_x_pos) / 1000;
+            const posY = Number(layout?.chip_center_y_pos) / 1000;
+            if (Number.isFinite(posX) && Number.isFinite(posY)) {
+                const formattedX = formatMm(posX);
+                const formattedY = formatMm(posY);
+                const key = `pos:${formattedX}:${formattedY}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    options.push({
+                        label: `(${formattedX}, ${formattedY}) mm · ID ${chipId || '-'}`,
+                        searchText: `pos ${formattedX} ${formattedY} ${chipId}`,
+                        group: 'Chip(Pos) mm',
+                        values: [formattedX, formattedY],
+                    });
+                }
+            }
+        });
+        return options.sort((left, right) => left.group.localeCompare(right.group) || left.label.localeCompare(right.label, undefined, { numeric: true }));
+    }
+
+    _renderCoordinateSelectionQuickPicker(listName) {
+        const root = this.dom?.coordinateSelectModal?.querySelector(`[data-coordinate-quick-picker="${listName}"]`);
+        if (!root) return;
+        const search = root.querySelector('[data-coordinate-quick-search]');
+        const select = root.querySelector('[data-coordinate-quick-select]');
+        if (!select) return;
+        const query = String(search?.value || '').trim().toLowerCase();
+        const options = this._getCoordinateSelectionQuickOptions(listName)
+            .filter((option) => !query || `${option.label} ${option.searchText}`.toLowerCase().includes(query));
+        select.replaceChildren();
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = options.length ? '좌표 선택...' : '일치하는 좌표 없음';
+        placeholder.disabled = !options.length;
+        placeholder.selected = true;
+        select.appendChild(placeholder);
+        if (listName === 'chip') {
+            const groups = new Map();
+            options.forEach((option) => {
+                const group = groups.get(option.group) || document.createElement('optgroup');
+                group.label = option.group;
+                const item = document.createElement('option');
+                item.value = JSON.stringify({ values: option.values });
+                item.textContent = option.label;
+                group.appendChild(item);
+                groups.set(option.group, group);
+            });
+            groups.forEach((group) => select.appendChild(group));
+        } else {
+            options.forEach((option) => {
+                const item = document.createElement('option');
+                item.value = JSON.stringify({ values: option.values });
+                item.textContent = option.label;
+                select.appendChild(item);
+            });
+        }
+        select.disabled = options.length === 0;
+    }
+
+    _renderCoordinateSelectionQuickPickers() {
+        ['shot', 'chip'].forEach((listName) => this._renderCoordinateSelectionQuickPicker(listName));
+    }
+
+    _applyCoordinateSelectionQuickPick(listName, rawValue) {
+        let payload;
+        try {
+            payload = JSON.parse(String(rawValue || ''));
+        } catch (error) {
+            return;
+        }
+        const values = Array.isArray(payload?.values) ? payload.values.map((value) => String(value)) : [];
+        const columns = this._coordinateSelectionListConfig(listName).columns;
+        if (values.length !== columns) return;
+        const state = this.coordinateSelectionLists?.[listName];
+        if (!state) return;
+        const rows = this._readCoordinateSelectionList(listName);
+        let rowIndex = rows.findIndex((row) => row.every((value) => !String(value || '').trim()));
+        if (rowIndex < 0) rowIndex = rows.length;
+        while (rows.length <= rowIndex) rows.push(Array(columns).fill(''));
+        rows[rowIndex] = values;
+        state.rows = rows;
+        state.hasInput = true;
+        const search = this.dom?.coordinateSelectModal?.querySelector(`[data-coordinate-quick-search="${listName}"]`);
+        if (search) search.value = '';
+        this._activateCoordinateSelectionList(listName);
+        this._renderCoordinateSelectionLists({ listName, row: rowIndex, col: 0 });
+        this._scheduleCoordinateSelectionLiveApply({ forceClear: true });
     }
 
     _parseCoordinateListPaste(text, listName) {
@@ -9650,6 +9789,16 @@ class WaferMapViewer {
             this._updateCoordinateSelectionSummary();
             this._updateCoordinateSelectionRangeStatus();
             this._scheduleCoordinateSelectionLiveApply();
+        });
+        dom.coordinateSelectModal?.addEventListener('input', (event) => {
+            const search = event.target.closest?.('input[data-coordinate-quick-search]');
+            if (!search) return;
+            this._renderCoordinateSelectionQuickPicker(search.dataset.coordinateQuickSearch);
+        });
+        dom.coordinateSelectModal?.addEventListener('change', (event) => {
+            const select = event.target.closest?.('select[data-coordinate-quick-select]');
+            if (!select || !select.value) return;
+            this._applyCoordinateSelectionQuickPick(select.dataset.coordinateQuickSelect, select.value);
         });
         dom.coordinateSelectListPanels?.addEventListener('input', (event) => {
             const input = event.target.closest?.('input[data-coordinate-list][data-coordinate-row]');

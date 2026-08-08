@@ -610,6 +610,18 @@
                             <span>Shot X/Y</span>
                             <span>정수</span>
                         </div>
+                        <div class="coordinate-select-quick-picker" data-coordinate-quick-picker="shot">
+                            <div class="coordinate-select-quick-heading">
+                                <span>빠른 Shot 선택</span>
+                                <span>검색 후 선택</span>
+                            </div>
+                            <div class="coordinate-select-quick-controls">
+                                <input class="coordinate-select-quick-search" data-coordinate-quick-search="shot" type="search" placeholder="Shot X/Y 검색" aria-label="Shot X/Y 검색" autocomplete="off" spellcheck="false">
+                                <select class="coordinate-select-quick-select" data-coordinate-quick-select="shot" aria-label="Shot X/Y 빠른 선택">
+                                    <option value="">좌표 선택...</option>
+                                </select>
+                            </div>
+                        </div>
                         <div class="coordinate-select-list-table-wrap">
                             <table class="coordinate-select-table coordinate-select-list-table">
                                 <thead><tr><th>X</th><th>Y</th><th></th></tr></thead>
@@ -626,6 +638,18 @@
                             <span>Chip X/Y</span>
                             <span>정수 · mm도 지원</span>
                         </div>
+                        <div class="coordinate-select-quick-picker" data-coordinate-quick-picker="chip">
+                            <div class="coordinate-select-quick-heading">
+                                <span>빠른 Chip 선택</span>
+                                <span>Grid / Pos</span>
+                            </div>
+                            <div class="coordinate-select-quick-controls">
+                                <input class="coordinate-select-quick-search" data-coordinate-quick-search="chip" type="search" placeholder="Grid/Pos 좌표 검색" aria-label="Chip X/Y 검색" autocomplete="off" spellcheck="false">
+                                <select class="coordinate-select-quick-select" data-coordinate-quick-select="chip" aria-label="Chip X/Y 빠른 선택">
+                                    <option value="">좌표 선택...</option>
+                                </select>
+                            </div>
+                        </div>
                         <div class="coordinate-select-list-table-wrap">
                             <table class="coordinate-select-table coordinate-select-list-table">
                                 <thead><tr><th>X</th><th>Y</th><th></th></tr></thead>
@@ -636,7 +660,6 @@
                             <button class="grid-btn" type="button" data-coordinate-list-add-row="chip">+ 행</button>
                             <span>소수 X/Y는 Chip Pos(mm)</span>
                         </div>
-                        <div id="chip-coordinate-select-shot-picker" class="coordinate-select-shot-picker" aria-live="polite"></div>
                         <div class="coordinate-select-radius-guide">
                             <label class="coordinate-select-radius-field">
                                 <span>Radius(mm)</span>
@@ -649,7 +672,7 @@
                     <section class="coordinate-select-list-panel coordinate-select-id-list-panel" data-coordinate-list-panel="chipId">
                         <div class="coordinate-select-list-heading">
                             <span>Chip ID</span>
-                            <span>정수</span>
+                            <span>정수 · Shot 내부</span>
                         </div>
                         <div class="coordinate-select-list-table-wrap">
                             <table class="coordinate-select-table coordinate-select-list-table">
@@ -659,8 +682,9 @@
                         </div>
                         <div class="coordinate-select-list-actions">
                             <button class="grid-btn" type="button" data-coordinate-list-add-row="chipId">+ 행</button>
-                            <span>선택 Shot 안에서 적용</span>
+                            <span>같은 영역에 적용</span>
                         </div>
+                        <div id="chip-coordinate-select-shot-picker" class="coordinate-select-shot-picker" aria-live="polite"></div>
                     </section>
                 </div>
                 <div class="coordinate-select-input-heading">

@@ -3085,7 +3085,7 @@
 
         .coordinate-select-list-panels {
             display: grid;
-            grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.1fr) minmax(96px, 0.8fr);
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(205px, 1.25fr);
             gap: 8px;
         }
 
@@ -3115,6 +3115,90 @@
             font-size: 10px;
             font-weight: 400;
             text-align: right;
+        }
+
+        .coordinate-select-quick-picker {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            padding: 6px;
+            background: #151b1f;
+            border: 1px solid #3e515d;
+            border-radius: 4px;
+        }
+
+        .coordinate-select-quick-heading {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 6px;
+            white-space: nowrap;
+            color: #dceaf1;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        .coordinate-select-quick-heading span:last-child {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: #91a8b5;
+            font-size: 9px;
+            font-weight: 400;
+        }
+
+        .coordinate-select-quick-controls {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr);
+            gap: 4px;
+        }
+
+        .coordinate-select-quick-search,
+        .coordinate-select-quick-select {
+            width: 100%;
+            min-width: 0;
+            height: 27px;
+            box-sizing: border-box;
+            padding: 3px 6px;
+            background: #0e1214;
+            color: #edf5fa;
+            border: 1px solid #526873;
+            border-radius: 3px;
+            font-size: 11px;
+        }
+
+        .coordinate-select-quick-search {
+            font: 11px Consolas, "Courier New", monospace;
+        }
+
+        .coordinate-select-quick-select {
+            cursor: pointer;
+        }
+
+        .coordinate-select-quick-search:focus,
+        .coordinate-select-quick-select:focus {
+            outline: 2px solid #6eabc8;
+            outline-offset: -1px;
+            border-color: #b8e4f7;
+        }
+
+        .coordinate-select-id-list-panel {
+            background: #151a1e;
+            border-color: #596a76;
+            box-shadow: inset 0 0 0 1px rgba(166, 190, 207, 0.06);
+        }
+
+        .coordinate-select-id-list-panel .coordinate-select-list-heading span:first-child {
+            color: #edf5fa;
+        }
+
+        .coordinate-select-id-list-panel .coordinate-select-list-heading span:last-child {
+            max-width: 90px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: #a7bbc8;
         }
 
         .coordinate-select-list-table-wrap {
@@ -3260,13 +3344,15 @@
         .coordinate-select-shot-picker {
             display: flex;
             flex-direction: column;
-            gap: 8px;
-            max-height: 300px;
+            gap: 9px;
+            max-height: 390px;
             overflow: auto;
-            padding: 8px;
-            background: #191919;
-            border: 1px solid #4a4a4a;
-            border-radius: 3px;
+            margin-top: 2px;
+            padding: 9px;
+            background: #101417;
+            border: 1px solid #566773;
+            border-radius: 5px;
+            box-shadow: inset 0 1px 0 rgba(220, 236, 245, 0.06);
         }
 
         .coordinate-select-shot-picker[hidden] {
@@ -3274,7 +3360,8 @@
         }
 
         .coordinate-select-shot-picker-empty {
-            color: #888;
+            padding: 8px 2px;
+            color: #9aabb5;
             font-size: 11px;
             line-height: 1.4;
         }
@@ -3337,29 +3424,32 @@
             align-items: center;
             justify-content: space-between;
             gap: 8px;
-            color: #ddd;
+            padding-bottom: 7px;
+            border-bottom: 1px solid #34434c;
+            color: #eaf3f8;
             font-size: 11px;
             font-weight: 600;
         }
 
-        .coordinate-select-shot-picker-heading select {
-            min-width: 100px;
-            max-width: 170px;
-            padding: 3px 5px;
-            background: #111;
-            color: #eee;
-            border: 1px solid #555;
-            border-radius: 2px;
-            font-size: 11px;
+        .coordinate-select-shot-picker-heading strong {
+            flex: 0 0 auto;
+            padding: 3px 7px;
+            background: #273842;
+            color: #d8edf8;
+            border: 1px solid #607b8a;
+            border-radius: 3px;
+            font: 600 10px/1.2 Consolas, "Courier New", monospace;
         }
 
         .coordinate-select-shot-group {
             display: flex;
             flex-direction: column;
-            gap: 5px;
-            padding: 6px;
-            background: #101010;
-            border: 1px solid #7e8b96;
+            gap: 7px;
+            padding: 8px;
+            background: #1a2227;
+            border: 1px solid #627783;
+            border-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
         }
 
         .coordinate-select-shot-group:last-child {
@@ -3368,66 +3458,73 @@
 
         .coordinate-select-shot-group-heading {
             display: flex;
-            align-items: baseline;
+            align-items: center;
             justify-content: space-between;
             gap: 8px;
-            color: #ddd;
+            color: #dceaf1;
             font-size: 11px;
             font-weight: 600;
         }
 
         .coordinate-select-shot-group-heading span:last-child {
-            color: #888;
-            font-weight: 400;
+            padding: 2px 6px;
+            background: #29363e;
+            color: #b9ccd7;
+            border: 1px solid #4c626e;
+            border-radius: 3px;
+            font: 600 10px/1.2 Consolas, "Courier New", monospace;
         }
 
         .coordinate-select-shot-grid {
             display: grid;
-            gap: 0;
+            gap: 2px;
             width: 100%;
-            border: 1px solid #69737c;
+            padding: 2px;
+            box-sizing: border-box;
+            background: #0d1113;
+            border: 1px solid #536975;
+            border-radius: 3px;
         }
 
         .coordinate-select-shot-chip,
         .coordinate-select-shot-empty-cell {
             min-width: 0;
-            height: 32px;
+            height: 34px;
             box-sizing: border-box;
-            border-radius: 0;
+            border-radius: 2px;
         }
 
         .coordinate-select-shot-chip {
-            padding: 0 3px;
+            padding: 0 2px;
             overflow: hidden;
-            background: #34383c;
-            color: #d8dde2;
-            border: 1px solid #69737c;
-            margin: -0.5px;
+            background: #2b343a;
+            color: #d8e3e9;
+            border: 1px solid #61727c;
             cursor: pointer;
-            font: 11px Consolas, "Courier New", monospace;
+            font: 600 11px Consolas, "Courier New", monospace;
             text-overflow: ellipsis;
             white-space: nowrap;
+            transition: background-color 100ms ease, border-color 100ms ease, color 100ms ease;
         }
 
         .coordinate-select-shot-chip:hover,
         .coordinate-select-shot-chip:focus-visible {
-            background: #59636d;
-            border-color: #d8e0e7;
+            background: #52636e;
+            border-color: #e4f1f7;
             color: #fff;
             outline: none;
         }
 
         .coordinate-select-shot-chip[aria-checked="true"] {
-            background: #86939f;
+            background: #7d929f;
             color: #fff;
-            border-color: #f0f4f7;
-            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+            border-color: #e7f4fb;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3), 0 0 0 1px rgba(164, 207, 229, 0.16);
         }
 
         .coordinate-select-shot-empty-cell {
-            background: rgba(255, 255, 255, 0.025);
-            border: 1px solid #343434;
-            margin: -0.5px;
+            background: #12181b;
+            border: 1px dashed #35434a;
         }
 
         .coordinate-select-buttons {
@@ -3442,6 +3539,10 @@
 
             .coordinate-select-list-panels {
                 grid-template-columns: 1fr;
+            }
+
+            .coordinate-select-id-list-panel {
+                grid-column: auto;
             }
 
             .coordinate-select-modal-content {
