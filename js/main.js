@@ -9943,6 +9943,17 @@ class WaferMapViewer {
         this._renderCoordinateSelectionLists();
     }
 
+    _clearCoordinateSelectionList(listName) {
+        const state = this.coordinateSelectionLists?.[listName];
+        if (!state) return;
+        this._activateCoordinateSelectionList(listName);
+        state.rows = this._newCoordinateSelectionListRows(listName);
+        state.hasInput = true;
+        state.synced = false;
+        this._renderCoordinateSelectionLists();
+        this._scheduleCoordinateSelectionLiveApply({ forceClear: true });
+    }
+
     _syncCoordinateSelectionListsFromSelectedChips() {
         if (!this.isCoordinateSelectionOpen || !this.coordinateSelectionLists || !this.chipAnnotator) return;
         const annotator = this.chipAnnotator;
@@ -10068,6 +10079,11 @@ class WaferMapViewer {
             this._scheduleCoordinateSelectionLiveApply({ forceClear: true });
         });
         dom.coordinateSelectListPanels?.addEventListener('click', (event) => {
+            const clearButton = event.target.closest?.('[data-coordinate-list-clear]');
+            if (clearButton) {
+                this._clearCoordinateSelectionList(clearButton.dataset.coordinateListClear);
+                return;
+            }
             const addButton = event.target.closest?.('[data-coordinate-list-add-row]');
             if (addButton) {
                 const listName = addButton.dataset.coordinateListAddRow;
