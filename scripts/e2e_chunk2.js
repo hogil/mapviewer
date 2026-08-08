@@ -2668,7 +2668,7 @@ const { createRunner } = require('./e2e_playwright_session');
     };
   });
 
-  await record('coordinate-selection-cells', '독립 Shot/Chip/Chip ID 셀 / Shot 내부 Chip ID 선택 / Radius 가이드 / Chip Pos', async () => {
+  await record('coordinate-selection-cells', '연동 Shot/Chip/Chip ID 셀 / Shift marquee / wildcard / Chip·Radius AND 범위 / Chip Pos', async () => {
     const targetFile = 'AAI633_00P_08_20260501_010000_99.6_0_PE_PWQ.png';
     const folder = 'PW/P001/20260501';
     await boot('chunk2-coordinate-selection-cells');
@@ -2708,6 +2708,9 @@ const { createRunner } = require('./e2e_playwright_session');
       const pos = firstLayout
         ? { x: (Number(firstLayout.chip_center_x_pos) / 1000).toFixed(3), y: (Number(firstLayout.chip_center_y_pos) / 1000).toFixed(3) }
         : null;
+      const grid = firstChip
+        ? { x: Number(firstChip.x_abs), y: Number(firstChip.y_abs) }
+        : null;
       const radius = firstLayout
         ? Math.hypot(Number(firstLayout.chip_center_x_pos) / 1000, Number(firstLayout.chip_center_y_pos) / 1000).toFixed(3)
         : null;
@@ -2718,6 +2721,7 @@ const { createRunner } = require('./e2e_playwright_session');
         shotRows,
         chipId: firstLayout?.chip_id == null ? '' : String(firstLayout.chip_id),
         pos,
+        grid,
         radius,
         radiusExact,
         partialShot: partialLayout && partialGroup
@@ -2725,7 +2729,7 @@ const { createRunner } = require('./e2e_playwright_session');
           : null,
       };
     });
-    expect(selectionTarget.shotRows.length === 2 && selectionTarget.pos && selectionTarget.radius &&
+    expect(selectionTarget.shotRows.length === 2 && selectionTarget.pos && selectionTarget.grid && selectionTarget.radius &&
       Number.isFinite(selectionTarget.radiusExact) && selectionTarget.partialShot,
       `selection target=${JSON.stringify(selectionTarget)}`);
 
@@ -2798,7 +2802,7 @@ const { createRunner } = require('./e2e_playwright_session');
     `quick picker initial=${JSON.stringify(quickPickerInitial)}`);
     const initialShotChipOne = page.locator('#chip-coordinate-select-shot-picker button[data-coordinate-shot-chip-id="1"]');
     const initialShotChipFour = page.locator('#chip-coordinate-select-shot-picker button[data-coordinate-shot-chip-id="4"]');
-    const initialShotChipEight = page.locator('#chip-coordinate-select-shot-picker button[data-coordinate-shot-chip-id="8"]');
+    const initialShotChipSeven = page.locator('#chip-coordinate-select-shot-picker button[data-coordinate-shot-chip-id="7"]');
     await initialShotChipOne.click();
     await page.waitForFunction(
       () => {
@@ -2809,6 +2813,22 @@ const { createRunner } = require('./e2e_playwright_session');
       null,
       { timeout: 10000 }
     );
+    const paletteLinked = await page.evaluate(() => {
+      const annotator = window.viewer?.chipAnnotator;
+      const rows = (id) => [...document.querySelectorAll(`#${id} input[data-coordinate-row]`)]
+        .map((input) => input.value)
+        .filter(Boolean);
+      return {
+        selected: annotator?.selectedChips?.size || 0,
+        selectedShots: annotator?._getSelectedShotGroups?.().size || 0,
+        shotRows: rows('chip-coordinate-select-shot-tbody'),
+        chipRows: rows('chip-coordinate-select-chip-tbody'),
+        chipIds: rows('chip-coordinate-select-id-tbody'),
+      };
+    });
+    expect(paletteLinked.selected > 0 && paletteLinked.shotRows.length === paletteLinked.selectedShots * 2 &&
+      paletteLinked.chipRows.length === paletteLinked.selected * 2 && paletteLinked.chipIds.length === 1,
+    `palette linked lists=${JSON.stringify(paletteLinked)}`);
     await initialShotChipOne.click({ button: 'right' });
     await page.waitForFunction(() => window.viewer?.chipAnnotator?.selectedChips?.size === 0, null, { timeout: 10000 });
     await initialShotChipOne.focus();
@@ -2835,17 +2855,56 @@ const { createRunner } = require('./e2e_playwright_session');
     await page.waitForFunction(() => window.viewer?.chipAnnotator?.selectedChips?.size === 0, null, { timeout: 10000 });
     await initialShotChipOne.click();
     const dragStart = await initialShotChipOne.boundingBox();
-    const dragEnd = await initialShotChipEight.boundingBox();
+    const dragEnd = await initialShotChipSeven.boundingBox();
     expect(dragStart && dragEnd, 'Shot picker Shift-drag cells need visible bounds');
     await page.keyboard.down('Shift');
     await page.mouse.move(dragStart.x + dragStart.width / 2, dragStart.y + dragStart.height / 2);
     await page.mouse.down();
-    await page.mouse.move(dragEnd.x + dragEnd.width / 2, dragEnd.y + dragEnd.height / 2, { steps: 6 });
+    await page.mouse.move(dragEnd.x + 2, dragEnd.y + 2, { steps: 6 });
+    const dragPreview = await page.evaluate(() => ({
+      marquee: document.querySelectorAll('#chip-coordinate-select-shot-picker .coordinate-select-shot-drag-box').length,
+      previewed: document.querySelectorAll('#chip-coordinate-select-shot-picker .coordinate-select-shot-chip.is-drag-preview').length,
+    }));
     await page.mouse.up();
     await page.keyboard.up('Shift');
     await page.waitForFunction(
-      () => document.querySelectorAll('#chip-coordinate-select-shot-picker button[aria-checked="true"]').length === 8,
+      () => document.querySelectorAll('#chip-coordinate-select-shot-picker button[aria-checked="true"]').length === 6,
       null,
+      { timeout: 10000 }
+    );
+    expect(dragPreview.marquee === 1 && dragPreview.previewed === 6,
+      `Shot picker partial-intersection marquee=${JSON.stringify(dragPreview)}`);
+    await initialShotChipOne.click({ button: 'right' });
+    await page.waitForFunction(() => window.viewer?.chipAnnotator?.selectedChips?.size === 0, null, { timeout: 10000 });
+    await page.locator('[data-coordinate-quick-search="shot"]').fill(`X=${selectionTarget.shotRows[0].x}`);
+    const wildcardBatch = page.locator('[data-coordinate-quick-dropdown="shot"] .coordinate-select-quick-option-batch');
+    await wildcardBatch.waitFor({ state: 'visible', timeout: 10000 });
+    const wildcardShotState = await page.evaluate(() => {
+      const options = [...document.querySelectorAll('[data-coordinate-quick-dropdown="shot"] button[data-coordinate-quick-option]')]
+        .filter((button) => !button.classList.contains('coordinate-select-quick-option-batch'))
+        .map((button) => JSON.parse(button.dataset.coordinateQuickOption || '{}').values || []);
+      return {
+        optionCount: options.length,
+        xValues: [...new Set(options.map((values) => values[0]))],
+      };
+    });
+    expect(wildcardShotState.optionCount > 1 && wildcardShotState.xValues.length === 1 &&
+      wildcardShotState.xValues[0] === String(selectionTarget.shotRows[0].x),
+    `Shot X wildcard=${JSON.stringify(wildcardShotState)}`);
+    await wildcardBatch.click();
+    await page.waitForFunction(
+      (expectedX) => {
+        const annotator = window.viewer?.chipAnnotator;
+        const selected = [...(annotator?.selectedChips || [])];
+        const shotCells = [...document.querySelectorAll('#chip-coordinate-select-shot-tbody input[data-coordinate-row]')]
+          .map((input) => input.value)
+          .filter(Boolean);
+        return annotator?.selectionMode === 'shot' && selected.length > 24 && selected.every((index) => {
+          const layout = annotator.getLayoutRowForChip(annotator.chips[index]);
+          return Number(layout?.shot_x_pos) === Number(expectedX);
+        }) && shotCells.every((value, index) => index % 2 === 1 || Number(value) === Number(expectedX));
+      },
+      selectionTarget.shotRows[0].x,
       { timeout: 10000 }
     );
     await initialShotChipOne.click({ button: 'right' });
@@ -2886,13 +2945,16 @@ const { createRunner } = require('./e2e_playwright_session');
         .map((input) => input.value)
         .filter(Boolean),
     }));
+    const quickShotPairs = [];
+    for (let index = 0; index < quickShotMultiRows.rows.length; index += 2) {
+      quickShotPairs.push(quickShotMultiRows.rows.slice(index, index + 2).join(','));
+    }
+    const expectedQuickShotPairs = selectionTarget.shotRows
+      .map((row) => `${row.x},${row.y}`)
+      .sort();
     expect(quickShotMultiRows.dropdownOpen && quickShotMultiRows.selectedOptions === 1 &&
-      quickShotMultiRows.rows.join(',') === [
-        selectionTarget.shotRows[0].x,
-        selectionTarget.shotRows[0].y,
-        selectionTarget.shotRows[1].x,
-        selectionTarget.shotRows[1].y,
-      ].join(','), `Shot quick multi rows=${JSON.stringify(quickShotMultiRows)}`);
+      quickShotPairs.sort().join('|') === expectedQuickShotPairs.join('|'),
+    `Shot quick multi rows=${JSON.stringify(quickShotMultiRows)}`);
     await page.waitForFunction(
       () => window.viewer?.chipAnnotator?.selectionMode === 'shot' && window.viewer.chipAnnotator.selectedChips?.size === 48,
       null,
@@ -2905,8 +2967,10 @@ const { createRunner } = require('./e2e_playwright_session');
         .map((input) => input.value).filter(Boolean),
       chip: [...document.querySelectorAll('#chip-coordinate-select-chip-tbody input[data-coordinate-row]')]
         .map((input) => input.value).filter(Boolean),
+      chipId: [...document.querySelectorAll('#chip-coordinate-select-id-tbody input[data-coordinate-row]')]
+        .map((input) => input.value).filter(Boolean),
     }));
-    expect(quickShotClearState.shot.length === 0 && quickShotClearState.chip.length === 0,
+    expect(quickShotClearState.shot.length === 0 && quickShotClearState.chip.length === 0 && quickShotClearState.chipId.length === 0,
       `coordinate lists were not cleared=${JSON.stringify(quickShotClearState)}`);
     await page.locator('[data-coordinate-quick-search="chip"]').fill('Grid');
     const filteredChip = page.locator('button[data-coordinate-quick-picker="chip"]').first();
@@ -3033,39 +3097,6 @@ const { createRunner } = require('./e2e_playwright_session');
       `Shot picker placement=${JSON.stringify(pickerPlacement)}`
     );
 
-    await page.locator('#chip-coordinate-select-radius').fill(selectionTarget.radius);
-    await page.waitForFunction(
-      (expectedRadius) => window.viewer?.chipAnnotator?.coordinateRadiusGuideMm === Number(expectedRadius),
-      selectionTarget.radius,
-      { timeout: 10000 }
-    );
-    const radiusGuide = await page.evaluate(() => {
-      const annotator = window.viewer?.chipAnnotator;
-      const canvas = annotator?.canvas;
-      const pixels = canvas?.getContext('2d')?.getImageData(0, 0, canvas.width, canvas.height).data;
-      let guidePixels = 0;
-      if (pixels) {
-        for (let index = 0; index < pixels.length; index += 4) {
-          const red = pixels[index];
-          const green = pixels[index + 1];
-          const blue = pixels[index + 2];
-          if (blue > 210 && green > 120 && red < 150) guidePixels += 1;
-        }
-      }
-      return {
-        value: annotator?.coordinateRadiusGuideMm,
-        status: document.getElementById('chip-coordinate-select-radius-status')?.textContent || '',
-        guidePixels,
-      };
-    });
-    expect(radiusGuide.value === Number(selectionTarget.radius) && radiusGuide.guidePixels > 0,
-      `radius guide=${JSON.stringify(radiusGuide)}`);
-    await page.locator('#chip-coordinate-select-radius-clear').click();
-    await page.waitForFunction(
-      () => window.viewer?.chipAnnotator?.coordinateRadiusGuideMm === null,
-      null,
-      { timeout: 10000 }
-    );
     const pickerChip = page.locator('#chip-coordinate-select-shot-picker button[data-coordinate-shot-chip-index]').first();
     await pickerChip.click();
     await page.waitForFunction(
@@ -3263,43 +3294,46 @@ const { createRunner } = require('./e2e_playwright_session');
     await openCoordinateModal();
     await page.locator('#chip-coordinate-select-range-enabled').check();
     const rangeControls = await page.locator('#chip-coordinate-select-range-fields [data-coordinate-range-axis]').count();
-    const setRangeNumber = async (axis, bound, value) => {
-      await page.locator(`#chip-coordinate-select-range-fields input[type="number"][data-coordinate-range-axis="${axis}"][data-coordinate-range-bound="${bound}"]`).fill(String(value));
+    const setRangeNumber = async (kind, axis, bound, value) => {
+      await page.locator(`#chip-coordinate-select-range-fields input[type="number"][data-coordinate-range-kind="${kind}"][data-coordinate-range-axis="${axis}"][data-coordinate-range-bound="${bound}"]`).fill(String(value));
     };
-    await page.locator(`#chip-coordinate-select-range-fields input[type="range"][data-coordinate-range-axis="x"][data-coordinate-range-bound="min"]`).evaluate((element, value) => {
+    await page.locator(`#chip-coordinate-select-range-fields input[type="range"][data-coordinate-range-kind="chip"][data-coordinate-range-axis="x"][data-coordinate-range-bound="min"]`).evaluate((element, value) => {
       element.value = String(value);
       element.dispatchEvent(new Event('input', { bubbles: true }));
-    }, selectionTarget.shotRows[0].x);
-    await setRangeNumber('x', 'max', selectionTarget.shotRows[0].x);
-    await setRangeNumber('y', 'min', selectionTarget.shotRows[0].y);
-    await setRangeNumber('y', 'max', selectionTarget.shotRows[0].y);
+    }, selectionTarget.grid.x);
+    await setRangeNumber('chip', 'x', 'max', selectionTarget.grid.x);
+    await setRangeNumber('chip', 'y', 'min', selectionTarget.grid.y);
+    await setRangeNumber('chip', 'y', 'max', selectionTarget.grid.y);
     await page.waitForFunction(
-      () => window.viewer?.chipAnnotator?.selectionMode === 'shot' &&
-        window.viewer.chipAnnotator.selectedChips?.size === 24 &&
-        window.viewer.chipAnnotator._getSelectedShotGroups?.().size === 1,
-      null,
+      ({ x, y }) => {
+        const annotator = window.viewer?.chipAnnotator;
+        const selected = [...(annotator?.selectedChips || [])];
+        const chip = annotator?.chips?.[selected[0]];
+        return annotator?.selectionMode === 'chip' && selected.length === 1 &&
+          Number(chip?.x_abs) === x && Number(chip?.y_abs) === y;
+      },
+      selectionTarget.grid,
       { timeout: 10000 }
     );
     const rangeSelection = await page.evaluate(() => ({
       enabled: document.getElementById('chip-coordinate-select-range-enabled')?.checked,
       status: document.getElementById('chip-coordinate-select-range-status')?.textContent || '',
       chips: window.viewer.chipAnnotator.selectedChips.size,
-      shots: window.viewer.chipAnnotator._getSelectedShotGroups().size,
+      mode: window.viewer.chipAnnotator.selectionMode,
     }));
 
-    await page.locator('#chip-coordinate-select-range-enabled').uncheck();
     await page.locator('#chip-coordinate-select-radius-range-enabled').check();
     const radiusRangeControls = await page.evaluate(() => ({
       chipRangeEnabled: document.getElementById('chip-coordinate-select-range-enabled')?.checked,
       radiusRangeEnabled: document.getElementById('chip-coordinate-select-radius-range-enabled')?.checked,
-      axisCount: document.querySelectorAll('#chip-coordinate-select-range-fields [data-coordinate-range-axis="x"]').length,
-      yAxisCount: document.querySelectorAll('#chip-coordinate-select-range-fields [data-coordinate-range-axis="y"]').length,
-      label: document.querySelector('#chip-coordinate-select-range-fields .coordinate-select-range-axis span')?.textContent || '',
+      chipAxisCount: document.querySelectorAll('#chip-coordinate-select-range-fields [data-coordinate-range-kind="chip"]').length,
+      radiusAxisCount: document.querySelectorAll('#chip-coordinate-select-range-fields [data-coordinate-range-kind="radius"]').length,
+      labels: [...document.querySelectorAll('#chip-coordinate-select-range-fields .coordinate-select-range-axis span')].map((element) => element.textContent),
     }));
     const radiusRangeMin = Number((selectionTarget.radiusExact - 0.01).toFixed(3));
     const radiusRangeMax = Number((selectionTarget.radiusExact + 0.01).toFixed(3));
-    await setRangeNumber('x', 'min', radiusRangeMin);
-    await setRangeNumber('x', 'max', radiusRangeMax);
+    await setRangeNumber('radius', 'x', 'min', radiusRangeMin);
+    await setRangeNumber('radius', 'x', 'max', radiusRangeMax);
     await page.waitForFunction(
       ({ min, max }) => {
         const annotator = window.viewer?.chipAnnotator;
@@ -3318,11 +3352,12 @@ const { createRunner } = require('./e2e_playwright_session');
       mode: window.viewer?.chipAnnotator?.selectionMode || '',
       status: document.getElementById('chip-coordinate-select-range-status')?.textContent || '',
     }));
-    expect(!radiusRangeControls.chipRangeEnabled && radiusRangeControls.radiusRangeEnabled &&
-      radiusRangeControls.axisCount === 4 && radiusRangeControls.yAxisCount === 0 &&
-      radiusRangeControls.label === 'Radius(mm)' && radiusRangeSelection.selected > 0 &&
+    expect(radiusRangeControls.chipRangeEnabled && radiusRangeControls.radiusRangeEnabled &&
+      radiusRangeControls.chipAxisCount === 8 && radiusRangeControls.radiusAxisCount === 4 &&
+      radiusRangeControls.labels.join('|') === 'Chip X|Chip Y|Radius(mm)' && radiusRangeSelection.selected === 1 &&
       radiusRangeSelection.mode === 'chip',
-    `Radius range=${JSON.stringify({ radiusRangeControls, radiusRangeSelection })}`);
+    `Combined chip/radius range=${JSON.stringify({ radiusRangeControls, radiusRangeSelection })}`);
+    await page.locator('#chip-coordinate-select-range-enabled').uncheck();
     await page.locator('#chip-coordinate-select-radius-range-enabled').uncheck();
     await page.locator('#chip-coordinate-select-operation').selectOption('replace');
     await pasteIntoList('shot',
@@ -3353,7 +3388,7 @@ const { createRunner } = require('./e2e_playwright_session');
       chips: window.viewer.chipAnnotator.selectedChips.size,
       chipId: [...window.viewer.chipAnnotator.selectedChips][0],
     }));
-    return { initialModal, selectionTarget, quickPickerInitial, quickShotMultiState, quickShotMultiRows, quickShotClearState, shotCells, posCells, afterShot, shotPicker, pickerAfterRemove, partialShotPicker, combinedRow, afterRemove, partialShotSelection, shotScopeUi, afterAdd, rangeControls, rangeSelection, radiusRangeControls, radiusRangeSelection, afterPos };
+    return { initialModal, selectionTarget, quickPickerInitial, paletteLinked, dragPreview, wildcardShotState, quickShotMultiState, quickShotMultiRows, quickShotClearState, shotCells, posCells, afterShot, shotPicker, pickerAfterRemove, partialShotPicker, combinedRow, afterRemove, partialShotSelection, shotScopeUi, afterAdd, rangeControls, rangeSelection, radiusRangeControls, radiusRangeSelection, afterPos };
   });
 
   await record('selected-region-composite', '선택 Chip/Shot Composite Map 및 결과 positions 정합성', async () => {

@@ -127,7 +127,6 @@ export class ChipAnnotator {
         this._shotBoundaryCache = new Map();
         this.shotBoundaryVisible = false;
         this.shotBoundaryColor = 'rgba(170, 85, 210, 0.95)';
-        this.coordinateRadiusGuideMm = null;
 
         // Event handlers (bind once)
         this._onMouseMove = this._handleMouseMove.bind(this);
@@ -180,7 +179,6 @@ export class ChipAnnotator {
         this.layoutByChip.clear();
         this.shotBoundaryGroups.clear();
         this._invalidateShotGeometry();
-        this.coordinateRadiusGuideMm = null;
         this.hoveredChip = null;
         this._resetChipCoordinateDisplay();
     }
@@ -194,17 +192,6 @@ export class ChipAnnotator {
         } else {
             this.render();
         }
-    }
-
-    setCoordinateRadiusGuide(radiusMm) {
-        const value = Number(radiusMm);
-        this.coordinateRadiusGuideMm = Number.isFinite(value) && value >= 0 ? value : null;
-        this.render();
-    }
-
-    clearCoordinateRadiusGuide() {
-        this.coordinateRadiusGuideMm = null;
-        this.render();
     }
 
     _invalidateShotGeometry() {
@@ -472,50 +459,6 @@ export class ChipAnnotator {
         const x = fit('xMm', 'xPx');
         const y = fit('yMm', 'yPx');
         return x && y ? { x, y } : null;
-    }
-
-    _renderCoordinateRadiusGuide() {
-        const radiusMm = Number(this.coordinateRadiusGuideMm);
-        if (!Number.isFinite(radiusMm) || radiusMm <= 0) return;
-        const physicalTransform = this._getLayoutCanvasPhysicalTransform();
-        if (!physicalTransform || !this.viewer?.transform) return;
-
-        const transform = this.viewer.transform;
-        const Y_OFFSET = this.Y_OFFSET || 0;
-        const originX = physicalTransform.x.offset;
-        const originY = physicalTransform.y.offset;
-        const radiusX = Math.abs(physicalTransform.x.scale) * radiusMm;
-        const radiusY = Math.abs(physicalTransform.y.scale) * radiusMm;
-        const canvasOriginX = originX * transform.scale + transform.dx;
-        const canvasOriginY = originY * transform.scale + transform.dy + Y_OFFSET;
-
-        const ctx = this.ctx;
-        ctx.save();
-        ctx.resetTransform();
-        ctx.strokeStyle = 'rgba(95, 190, 255, 0.95)';
-        ctx.fillStyle = 'rgba(95, 190, 255, 0.95)';
-        ctx.lineWidth = Math.max(1.5, 2 * transform.scale);
-        ctx.setLineDash([5, 4]);
-        ctx.beginPath();
-        ctx.ellipse(
-            canvasOriginX,
-            canvasOriginY,
-            radiusX * transform.scale,
-            radiusY * transform.scale,
-            0,
-            0,
-            Math.PI * 2,
-        );
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(canvasOriginX, canvasOriginY);
-        ctx.lineTo(canvasOriginX + radiusX * transform.scale, canvasOriginY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.beginPath();
-        ctx.arc(canvasOriginX, canvasOriginY, 3, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
     }
 
     _renderShotBoundaries() {
@@ -908,6 +851,57 @@ export class ChipAnnotator {
         return {
             selectedCount: nextSelection.size,
             selectedShotCount: this.selectionMode === 'shot' ? this._getSelectedShotGroups().size : 0,
+            matchedCount: matchedIndices.size,
+        };
+    }
+
+    selectByCoordinateConstraints(filters = {}, options = {}) {
+        const operation = ['add', 'remove'].includes(options.operation) ? options.operation : 'replace';
+        const chipRange = filters?.chipRange?.enabled ? filters.chipRange : null;
+        const radiusRange = filters?.radiusRange?.enabled ? filters.radiusRange : null;
+        const finite = (value) => Number.isFinite(Number(value));
+        const inRange = (value, min, max) => finite(value) && finite(min) && finite(max) &&
+            Number(value) >= Number(min) && Number(value) <= Number(max);
+        const matchedIndices = new Set();
+
+        this.chips.forEach((chip, chipIndex) => {
+            if (!chip) return;
+            if (chipRange && (!inRange(chip.x_abs, chipRange.xMin, chipRange.xMax) ||
+                !inRange(chip.y_abs, chipRange.yMin, chipRange.yMax))) {
+                return;
+            }
+            if (radiusRange) {
+                const layout = this.getLayoutRowForChip(chip);
+                const centerX = Number(layout?.chip_center_x_pos) / 1000;
+                const centerY = Number(layout?.chip_center_y_pos) / 1000;
+                if (!inRange(Math.hypot(centerX, centerY), radiusRange.xMin, radiusRange.xMax)) return;
+            }
+            matchedIndices.add(chipIndex);
+        });
+
+        const nextSelection = operation === 'replace'
+            ? new Set()
+            : new Set(this.selectedChips);
+        if (operation === 'remove') {
+            matchedIndices.forEach((index) => nextSelection.delete(index));
+        } else {
+            matchedIndices.forEach((index) => nextSelection.add(index));
+        }
+        this.selectionMode = 'chip';
+        this.selectedChips = nextSelection;
+        const previousOrder = Array.isArray(this.selectedChipsOrder) ? this.selectedChipsOrder : [];
+        const orderedMatches = Array.from(matchedIndices);
+        this.selectedChipsOrder = operation === 'replace'
+            ? orderedMatches.filter((index) => nextSelection.has(index))
+            : [
+                ...previousOrder.filter((index) => nextSelection.has(index)),
+                ...orderedMatches.filter((index) => nextSelection.has(index) && !previousOrder.includes(index)),
+            ];
+        this.render();
+        this.updateSelectedChipsList();
+        return {
+            selectedCount: nextSelection.size,
+            selectedShotCount: 0,
             matchedCount: matchedIndices.size,
         };
     }
@@ -1785,8 +1779,7 @@ export class ChipAnnotator {
 
         const viewer = this.viewer;
         if (viewer.isCoordinateSelectionOpen) {
-            viewer._updateCoordinateSelectionSummary?.();
-            viewer._renderCoordinateSelectionShotPicker?.();
+            viewer._syncCoordinateSelectionListsFromSelectedChips?.();
         }
 
         // 1. gridMode이면 모든 칩 관련 UI 숨김
@@ -2449,7 +2442,6 @@ export class ChipAnnotator {
         // Draw one boundary around all chips that share the same layout shot_id.
         this._renderShotBoundaries();
         this._renderSelectedShotBoundaries();
-        this._renderCoordinateRadiusGuide();
 
         // Draw Alt+Drag free-form selection polygon
         if (this.isAltDrag && this.polygonPath.length > 0) {
@@ -3226,13 +3218,14 @@ export class ChipAnnotator {
                 continue;
             }
 
-            // Convert chip center to canvas coordinates (Y_OFFSET 적용)
-            const chipCenterX = ((rect.x0 + rect.x1) / 2) * transform.scale + transform.dx;
-            const chipCenterY = ((rect.y0 + rect.y1) / 2) * transform.scale + transform.dy + Y_OFFSET;
+            const chipLeft = rect.x0 * transform.scale + transform.dx;
+            const chipRight = rect.x1 * transform.scale + transform.dx;
+            const chipTop = rect.y0 * transform.scale + transform.dy + Y_OFFSET;
+            const chipBottom = rect.y1 * transform.scale + transform.dy + Y_OFFSET;
 
-            // Check if chip center is in rectangle
-            if (chipCenterX >= minX && chipCenterX <= maxX &&
-                chipCenterY >= minY && chipCenterY <= maxY) {
+            // Keep any chip whose rendered rectangle intersects the Shift marquee.
+            if (chipLeft < maxX && chipRight > minX &&
+                chipTop < maxY && chipBottom > minY) {
                 selected.push(i);
             }
         }

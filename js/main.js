@@ -811,9 +811,6 @@ class WaferMapViewer {
             coordinateSelectRangeStatus: document.getElementById('chip-coordinate-select-range-status'),
             coordinateSelectLiveStatus: document.getElementById('chip-coordinate-select-live-status'),
             coordinateSelectShotPicker: document.getElementById('chip-coordinate-select-shot-picker'),
-            coordinateSelectRadius: document.getElementById('chip-coordinate-select-radius'),
-            coordinateSelectRadiusClear: document.getElementById('chip-coordinate-select-radius-clear'),
-            coordinateSelectRadiusStatus: document.getElementById('chip-coordinate-select-radius-status'),
             compositeOverlay: document.getElementById('composite-overlay'),
             compositeHeatmapGrid: document.getElementById('composite-heatmap-grid'),
             compositeInfoText: document.getElementById('composite-info-text'),
@@ -1065,19 +1062,22 @@ class WaferMapViewer {
         this.coordinateSelectionShotPickerAnchorIndex = null;
         this.coordinateSelectionShotPickerDrag = null;
         this.coordinateSelectionShotPickerSuppressClickAt = 0;
-        this.coordinateSelectionRadiusMm = null;
         this.coordinateSelectionTarget = 'shot-grid';
         this.coordinateSelectionOperation = 'replace';
         this.coordinateSelectionEscapeHandler = null;
         this.coordinateSelectionLiveTimer = null;
         this.coordinateSelectionDrag = null;
-        this.coordinateSelectionRangeMode = 'chip';
         this.coordinateSelectionRange = {
             enabled: false,
             xMin: null,
             xMax: null,
             yMin: null,
             yMax: null,
+        };
+        this.coordinateSelectionRadiusRange = {
+            enabled: false,
+            xMin: null,
+            xMax: null,
         };
         this.permissionUsers = [];
         this.permissionSelectedUser = null;
@@ -8472,26 +8472,19 @@ class WaferMapViewer {
         dom.coordinateSelectApply?.addEventListener('click', () => this.applyCoordinateSelection());
         dom.coordinateSelectRangeEnabled?.addEventListener('change', () => {
             this.coordinateSelectionRange.enabled = !!dom.coordinateSelectRangeEnabled.checked;
-            this.coordinateSelectionRangeMode = 'chip';
-            if (this.coordinateSelectionRange.enabled && dom.coordinateSelectRadiusRangeEnabled) {
-                dom.coordinateSelectRadiusRangeEnabled.checked = false;
-            }
             if (this.coordinateSelectionRange.enabled) this._resetCoordinateSelectionRange();
             this._renderCoordinateSelectionRange();
             this._scheduleCoordinateSelectionLiveApply();
         });
         dom.coordinateSelectRadiusRangeEnabled?.addEventListener('change', () => {
-            this.coordinateSelectionRange.enabled = !!dom.coordinateSelectRadiusRangeEnabled.checked;
-            this.coordinateSelectionRangeMode = this.coordinateSelectionRange.enabled ? 'radius' : 'chip';
-            if (this.coordinateSelectionRange.enabled && dom.coordinateSelectRangeEnabled) {
-                dom.coordinateSelectRangeEnabled.checked = false;
-            }
-            if (this.coordinateSelectionRange.enabled) this._resetCoordinateSelectionRange();
+            this.coordinateSelectionRadiusRange.enabled = !!dom.coordinateSelectRadiusRangeEnabled.checked;
+            if (this.coordinateSelectionRadiusRange.enabled) this._resetCoordinateSelectionRadiusRange();
             this._renderCoordinateSelectionRange();
             this._scheduleCoordinateSelectionLiveApply();
         });
         dom.coordinateSelectRangeReset?.addEventListener('click', () => {
             this._resetCoordinateSelectionRange();
+            this._resetCoordinateSelectionRadiusRange();
             this._renderCoordinateSelectionRange();
             this._scheduleCoordinateSelectionLiveApply();
         });
@@ -8625,11 +8618,7 @@ class WaferMapViewer {
         return NaN;
     }
 
-    _getCoordinateSelectionRangeTarget() {
-        return this.coordinateSelectionRangeMode === 'radius' ? 'radius' : this.coordinateSelectionTarget;
-    }
-
-    _getCoordinateSelectionRangeConfig(target = this._getCoordinateSelectionRangeTarget()) {
+    _getCoordinateSelectionRangeConfig(target = 'chip-grid') {
         const isChipId = target === 'chip-id';
         const isRadius = target === 'radius';
         const axes = isChipId || isRadius ? ['x'] : ['x', 'y'];
@@ -8661,12 +8650,19 @@ class WaferMapViewer {
     }
 
     _resetCoordinateSelectionRange() {
-        const config = this._getCoordinateSelectionRangeConfig();
+        const config = this._getCoordinateSelectionRangeConfig('chip-grid');
         if (!config.available) return;
         this.coordinateSelectionRange.xMin = config.x?.min ?? null;
         this.coordinateSelectionRange.xMax = config.x?.max ?? null;
         this.coordinateSelectionRange.yMin = config.y?.min ?? null;
         this.coordinateSelectionRange.yMax = config.y?.max ?? null;
+    }
+
+    _resetCoordinateSelectionRadiusRange() {
+        const config = this._getCoordinateSelectionRangeConfig('radius');
+        if (!config.available) return;
+        this.coordinateSelectionRadiusRange.xMin = config.x?.min ?? null;
+        this.coordinateSelectionRadiusRange.xMax = config.x?.max ?? null;
     }
 
     _formatCoordinateRangeValue(value, decimals) {
@@ -8708,18 +8704,19 @@ class WaferMapViewer {
     _renderCoordinateSelectionRange() {
         const fields = this.dom?.coordinateSelectRangeFields;
         if (!fields) return;
-        const config = this._getCoordinateSelectionRangeConfig();
         fields.replaceChildren();
-        if (!config.available) {
-            this._updateCoordinateSelectionRangeStatus();
-            return;
-        }
-        if (!Number.isFinite(this.coordinateSelectionRange.xMin) ||
-            !Number.isFinite(this.coordinateSelectionRange.xMax)) {
+        const chipConfig = this._getCoordinateSelectionRangeConfig('chip-grid');
+        const radiusConfig = this._getCoordinateSelectionRangeConfig('radius');
+        if (chipConfig.available && (!Number.isFinite(this.coordinateSelectionRange.xMin) ||
+            !Number.isFinite(this.coordinateSelectionRange.xMax))) {
             this._resetCoordinateSelectionRange();
         }
-        const range = this.coordinateSelectionRange;
-        const addAxis = (axis, label, meta) => {
+        if (radiusConfig.available && (!Number.isFinite(this.coordinateSelectionRadiusRange.xMin) ||
+            !Number.isFinite(this.coordinateSelectionRadiusRange.xMax))) {
+            this._resetCoordinateSelectionRadiusRange();
+        }
+        const addAxis = (kind, axis, label, meta, range, enabled, config) => {
+            if (!meta) return;
             const row = document.createElement('div');
             row.className = 'coordinate-select-range-axis';
             const axisLabel = document.createElement('span');
@@ -8729,13 +8726,14 @@ class WaferMapViewer {
             const makeControl = (bound, type) => {
                 const input = document.createElement('input');
                 input.type = type;
+                input.dataset.coordinateRangeKind = kind;
                 input.dataset.coordinateRangeAxis = axis;
                 input.dataset.coordinateRangeBound = bound;
                 input.step = String(config.step);
                 input.min = String(meta.min);
                 input.max = String(meta.max);
                 input.value = String(range[`${axis}${bound === 'min' ? 'Min' : 'Max'}`]);
-                input.disabled = !range.enabled;
+                input.disabled = !enabled;
                 if (type === 'number') input.setAttribute('aria-label', `${label} ${bound === 'min' ? '시작' : '끝'}`);
                 return input;
             };
@@ -8745,32 +8743,38 @@ class WaferMapViewer {
             row.appendChild(makeControl('max', 'number'));
             fields.appendChild(row);
         };
-        addAxis('x', config.xLabel, config.x);
-        if (config.y) addAxis('y', 'Y', config.y);
+        addAxis('chip', 'x', 'Chip X', chipConfig.x, this.coordinateSelectionRange,
+            this.coordinateSelectionRange.enabled, chipConfig);
+        addAxis('chip', 'y', 'Chip Y', chipConfig.y, this.coordinateSelectionRange,
+            this.coordinateSelectionRange.enabled, chipConfig);
+        addAxis('radius', 'x', 'Radius(mm)', radiusConfig.x, this.coordinateSelectionRadiusRange,
+            this.coordinateSelectionRadiusRange.enabled, radiusConfig);
         this._updateCoordinateSelectionRangeStatus();
     }
 
     _handleCoordinateSelectionRangeInput(input) {
+        const kind = input.dataset.coordinateRangeKind === 'radius' ? 'radius' : 'chip';
         const axis = input.dataset.coordinateRangeAxis;
         const bound = input.dataset.coordinateRangeBound;
-        const config = this._getCoordinateSelectionRangeConfig();
+        const config = this._getCoordinateSelectionRangeConfig(kind === 'radius' ? 'radius' : 'chip-grid');
+        const range = kind === 'radius' ? this.coordinateSelectionRadiusRange : this.coordinateSelectionRange;
         const meta = config[axis];
         if (!meta || !['x', 'y'].includes(axis) || !['min', 'max'].includes(bound)) return;
         const value = Number(input.value);
         if (!Number.isFinite(value)) return;
         const key = `${axis}${bound === 'min' ? 'Min' : 'Max'}`;
         const otherKey = `${axis}${bound === 'min' ? 'Max' : 'Min'}`;
-        this.coordinateSelectionRange[key] = Math.min(meta.max, Math.max(meta.min, value));
-        if (bound === 'min' && this.coordinateSelectionRange[key] > this.coordinateSelectionRange[otherKey]) {
-            this.coordinateSelectionRange[otherKey] = this.coordinateSelectionRange[key];
+        range[key] = Math.min(meta.max, Math.max(meta.min, value));
+        if (bound === 'min' && range[key] > range[otherKey]) {
+            range[otherKey] = range[key];
         }
-        if (bound === 'max' && this.coordinateSelectionRange[key] < this.coordinateSelectionRange[otherKey]) {
-            this.coordinateSelectionRange[otherKey] = this.coordinateSelectionRange[key];
+        if (bound === 'max' && range[key] < range[otherKey]) {
+            range[otherKey] = range[key];
         }
-        const selector = `[data-coordinate-range-axis="${axis}"]`;
+        const selector = `[data-coordinate-range-kind="${kind}"][data-coordinate-range-axis="${axis}"]`;
         this.dom.coordinateSelectRangeFields?.querySelectorAll(selector).forEach((control) => {
             const controlKey = `${axis}${control.dataset.coordinateRangeBound === 'min' ? 'Min' : 'Max'}`;
-            control.value = String(this.coordinateSelectionRange[controlKey]);
+            control.value = String(range[controlKey]);
         });
         this._updateCoordinateSelectionRangeStatus();
         this._scheduleCoordinateSelectionLiveApply();
@@ -9160,10 +9164,6 @@ class WaferMapViewer {
         const panel = this.dom?.coordinateSelectModal?.querySelector('.coordinate-select-modal-content');
         panel?.classList.remove('is-dragging');
         this.coordinateSelectionDrag = null;
-        this.coordinateSelectionRadiusMm = null;
-        this.chipAnnotator?.clearCoordinateRadiusGuide?.();
-        if (this.dom?.coordinateSelectRadius) this.dom.coordinateSelectRadius.value = '';
-        if (this.dom?.coordinateSelectRadiusStatus) this.dom.coordinateSelectRadiusStatus.textContent = '값을 입력하면 wafer 원점에서 가이드가 표시됩니다.';
         this._setCoordinateSelectionError('');
         if (this.coordinateSelectionEscapeHandler) {
             document.removeEventListener('keydown', this.coordinateSelectionEscapeHandler, true);
@@ -9292,9 +9292,9 @@ class WaferMapViewer {
         this.coordinateSelectionActiveList = listName;
         const config = this._coordinateSelectionListConfig(listName);
         this.coordinateSelectionTarget = config.target;
-        if (this.coordinateSelectionRange.enabled) {
+        if (this.coordinateSelectionRange.enabled || this.coordinateSelectionRadiusRange?.enabled) {
             this.coordinateSelectionRange.enabled = false;
-            this.coordinateSelectionRangeMode = 'chip';
+            if (this.coordinateSelectionRadiusRange) this.coordinateSelectionRadiusRange.enabled = false;
             if (this.dom?.coordinateSelectRangeEnabled) this.dom.coordinateSelectRangeEnabled.checked = false;
             if (this.dom?.coordinateSelectRadiusRangeEnabled) this.dom.coordinateSelectRadiusRangeEnabled.checked = false;
             this._renderCoordinateSelectionRange();
@@ -9444,12 +9444,36 @@ class WaferMapViewer {
         const dropdown = root.querySelector('[data-coordinate-quick-dropdown]');
         if (!dropdown) return;
         const query = String(search?.value || '').trim().toLowerCase();
+        const coordinateFilter = this._parseCoordinateQuickFilter(query);
         const options = this._getCoordinateSelectionQuickOptions(listName)
-            .filter((option) => !query || `${option.label} ${option.searchText}`.toLowerCase().includes(query));
+            .filter((option) => {
+                if (coordinateFilter) {
+                    const x = Number(option.values?.[0]);
+                    const y = Number(option.values?.[1]);
+                    const matches = (actual, expected) => expected === undefined || expected === null ||
+                        (Number.isFinite(actual) && Math.abs(actual - expected) <= 0.0001);
+                    return matches(x, coordinateFilter.x) && matches(y, coordinateFilter.y);
+                }
+                return !query || `${option.label} ${option.searchText}`.toLowerCase().includes(query);
+            });
         const selectedKeys = new Set(this._readCoordinateSelectionList(listName)
             .filter((row) => row.some((value) => String(value || '').trim()))
             .map((row) => row.map((value) => String(value || '').trim()).join('\u001f')));
         dropdown.replaceChildren();
+        if (coordinateFilter && options.length > 1) {
+            const allValues = options.map((option) => option.values.map((value) => String(value)));
+            const allSelected = allValues.every((values) => selectedKeys.has(values.join('\u001f')));
+            const all = document.createElement('button');
+            all.type = 'button';
+            all.className = 'coordinate-select-quick-option coordinate-select-quick-option-batch';
+            all.dataset.coordinateQuickPicker = listName;
+            all.dataset.coordinateQuickOption = JSON.stringify({ valuesList: allValues });
+            all.setAttribute('role', 'option');
+            all.classList.toggle('is-selected', allSelected);
+            all.setAttribute('aria-selected', allSelected ? 'true' : 'false');
+            all.textContent = `검색 결과 전체 선택 (${allValues.length})`;
+            dropdown.appendChild(all);
+        }
         let previousGroup = null;
         options.slice(0, 160).forEach((option) => {
             if (option.group && option.group !== previousGroup) {
@@ -9479,6 +9503,26 @@ class WaferMapViewer {
         ['shot', 'chip'].forEach((listName) => this._renderCoordinateSelectionQuickPicker(listName));
     }
 
+    _parseCoordinateQuickFilter(rawQuery) {
+        const query = String(rawQuery || '').trim();
+        if (!query) return null;
+        const valuePattern = '(?:\\*|[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+))';
+        const parseValue = (value) => value === '*' ? null : Number(value);
+        const named = [...query.matchAll(new RegExp(`\\b([xy])\\s*[:=]\\s*(${valuePattern})`, 'gi'))];
+        if (named.length) {
+            const filter = { x: undefined, y: undefined };
+            named.forEach((match) => { filter[match[1].toLowerCase()] = parseValue(match[2]); });
+            if (Object.values(filter).some((value) => value !== undefined && value !== null && !Number.isFinite(value))) return null;
+            return filter;
+        }
+        const pair = query.match(new RegExp(`^\\s*(${valuePattern})\\s*,\\s*(${valuePattern})\\s*$`, 'i'));
+        if (!pair) return null;
+        const x = parseValue(pair[1]);
+        const y = parseValue(pair[2]);
+        if ((x !== null && !Number.isFinite(x)) || (y !== null && !Number.isFinite(y))) return null;
+        return { x, y };
+    }
+
     _applyCoordinateSelectionQuickPick(listName, rawValue) {
         let payload;
         try {
@@ -9486,25 +9530,41 @@ class WaferMapViewer {
         } catch (error) {
             return;
         }
-        const values = Array.isArray(payload?.values) ? payload.values.map((value) => String(value)) : [];
         const columns = this._coordinateSelectionListConfig(listName).columns;
-        if (values.length !== columns) return;
+        const optionRows = Array.isArray(payload?.valuesList)
+            ? payload.valuesList
+            : [payload?.values];
+        const valuesList = optionRows
+            .filter((values) => Array.isArray(values) && values.length === columns)
+            .map((values) => values.map((value) => String(value)));
+        if (!valuesList.length) return;
         const state = this.coordinateSelectionLists?.[listName];
         if (!state) return;
         const rows = this._readCoordinateSelectionList(listName);
-        const selectedRow = rows.findIndex((row) => row.length === columns && row.every((value, index) =>
-            String(value || '').trim() === values[index]));
-        let rowIndex = selectedRow;
-        if (selectedRow >= 0) {
-            rows.splice(selectedRow, 1);
-            if (!rows.length) rows.push(Array(columns).fill(''));
-            rowIndex = Math.min(selectedRow, rows.length - 1);
+        state.synced = false;
+        const keyFor = (values) => values.map((value) => String(value || '').trim()).join('\u001f');
+        const keys = new Set(valuesList.map(keyFor));
+        const selectedKeys = new Set(rows
+            .filter((row) => row.some((value) => String(value || '').trim()))
+            .map(keyFor));
+        const allSelected = [...keys].every((key) => selectedKeys.has(key));
+        let rowIndex = -1;
+        if (allSelected) {
+            const firstRemoved = rows.findIndex((row) => keys.has(keyFor(row)));
+            const remaining = rows.filter((row) => !keys.has(keyFor(row)));
+            rows.splice(0, rows.length, ...(remaining.length ? remaining : [Array(columns).fill('')]));
+            rowIndex = Math.max(0, Math.min(firstRemoved, rows.length - 1));
         } else {
-            rowIndex = rows.findIndex((row) => row.every((value) => !String(value || '').trim()));
-            if (rowIndex < 0) rowIndex = rows.length;
-            while (rows.length <= rowIndex) rows.push(Array(columns).fill(''));
-            rows[rowIndex] = values;
+            valuesList.forEach((values) => {
+                if (selectedKeys.has(keyFor(values))) return;
+                let insertAt = rows.findIndex((row) => row.every((value) => !String(value || '').trim()));
+                if (insertAt < 0) insertAt = rows.length;
+                while (rows.length <= insertAt) rows.push(Array(columns).fill(''));
+                rows[insertAt] = values;
+                if (rowIndex < 0) rowIndex = insertAt;
+            });
         }
+        if (rowIndex < 0) rowIndex = 0;
         state.rows = rows;
         // Keep the live-apply clear signal when the last quick option is toggled off.
         state.hasInput = true;
@@ -9624,6 +9684,10 @@ class WaferMapViewer {
         event.preventDefault();
         const state = this.coordinateSelectionLists[listName];
         const columns = this._coordinateSelectionListConfig(listName).columns;
+        if (state.synced) {
+            state.rows = this._newCoordinateSelectionListRows(listName);
+            state.synced = false;
+        }
         while (state.rows.length < startRow + matrix.length) state.rows.push(Array(columns).fill(''));
         matrix.forEach((values, rowOffset) => {
             const row = state.rows[startRow + rowOffset];
@@ -9642,27 +9706,35 @@ class WaferMapViewer {
     _updateCoordinateSelectionRangeStatus() {
         const status = this.dom?.coordinateSelectRangeStatus;
         if (!status) return;
-        const config = this._getCoordinateSelectionRangeConfig();
-        if (!config.available) {
+        const chipConfig = this._getCoordinateSelectionRangeConfig('chip-grid');
+        const radiusConfig = this._getCoordinateSelectionRangeConfig('radius');
+        if (!chipConfig.available && !radiusConfig.available) {
             status.textContent = '현재 이미지에서 범위 좌표를 계산할 수 없습니다.';
             if (this.dom?.coordinateSelectLiveStatus) this.dom.coordinateSelectLiveStatus.textContent = '현재 이미지의 좌표 정보가 준비되면 실시간 선택을 사용할 수 있습니다.';
             return;
         }
-        const range = this.coordinateSelectionRange;
-        const xText = `${config.xLabel} ${this._formatCoordinateRangeValue(range.xMin, config.decimals)} ~ ${this._formatCoordinateRangeValue(range.xMax, config.decimals)}`;
-        const yText = config.y
-            ? `Y ${this._formatCoordinateRangeValue(range.yMin, config.decimals)} ~ ${this._formatCoordinateRangeValue(range.yMax, config.decimals)}`
-            : '';
         const action = this.coordinateSelectionOperation === 'add'
             ? '현재 선택에 추가'
             : this.coordinateSelectionOperation === 'remove'
                 ? '현재 선택에서 해제'
                 : '기존 선택 바꾸기';
-        status.textContent = range.enabled
-            ? `${xText}${yText ? ` / ${yText}` : ''} · 실시간 범위 선택 중`
-            : `${this._coordinateSelectionListConfig().label} 목록 입력 또는 Chip 범위 선택을 사용합니다.`;
+        const activeFilters = [];
+        if (this.coordinateSelectionRange.enabled && chipConfig.available) {
+            activeFilters.push(
+                `Chip X ${this._formatCoordinateRangeValue(this.coordinateSelectionRange.xMin, chipConfig.decimals)} ~ ${this._formatCoordinateRangeValue(this.coordinateSelectionRange.xMax, chipConfig.decimals)} / ` +
+                `Y ${this._formatCoordinateRangeValue(this.coordinateSelectionRange.yMin, chipConfig.decimals)} ~ ${this._formatCoordinateRangeValue(this.coordinateSelectionRange.yMax, chipConfig.decimals)}`
+            );
+        }
+        if (this.coordinateSelectionRadiusRange?.enabled && radiusConfig.available) {
+            activeFilters.push(
+                `Radius(mm) ${this._formatCoordinateRangeValue(this.coordinateSelectionRadiusRange.xMin, radiusConfig.decimals)} ~ ${this._formatCoordinateRangeValue(this.coordinateSelectionRadiusRange.xMax, radiusConfig.decimals)}`
+            );
+        }
+        status.textContent = activeFilters.length
+            ? `${activeFilters.join(' AND ')} · 실시간 범위 선택 중`
+            : 'Chip 범위 선택과 Radius 범위 선택을 함께 켜면 AND 조건으로 적용됩니다.';
         if (this.dom?.coordinateSelectLiveStatus) {
-            this.dom.coordinateSelectLiveStatus.textContent = range.enabled
+            this.dom.coordinateSelectLiveStatus.textContent = activeFilters.length
                 ? `${action} · 슬라이더/범위 입력 사용 중`
                 : `${action} · ${this._coordinateSelectionListConfig().label} 셀 입력 사용 중`;
         }
@@ -9672,10 +9744,12 @@ class WaferMapViewer {
         if (!this.isCoordinateSelectionOpen || !this.chipAnnotator?.positionsData) return;
         const operation = this.coordinateSelectionOperation;
         let result = null;
-        if (this.coordinateSelectionRange.enabled) {
-            result = this.chipAnnotator.selectByCoordinateRange(
-                this._getCoordinateSelectionRangeTarget(),
-                this.coordinateSelectionRange,
+        if (this.coordinateSelectionRange.enabled || this.coordinateSelectionRadiusRange?.enabled) {
+            result = this.chipAnnotator.selectByCoordinateConstraints(
+                {
+                    chipRange: this.coordinateSelectionRange,
+                    radiusRange: this.coordinateSelectionRadiusRange,
+                },
                 { operation }
             );
         } else {
@@ -9860,37 +9934,62 @@ class WaferMapViewer {
         picker.appendChild(groupPanel);
     }
 
-    _setCoordinateSelectionRadiusGuide(rawValue = '') {
-        const text = String(rawValue ?? '').trim();
-        if (!text) {
-            this.coordinateSelectionRadiusMm = null;
-            this.chipAnnotator?.clearCoordinateRadiusGuide?.();
-            if (this.dom?.coordinateSelectRadiusStatus) {
-                this.dom.coordinateSelectRadiusStatus.textContent = '값을 입력하면 wafer 원점에서 가이드가 표시됩니다.';
-            }
-            return true;
-        }
-        const value = Number(text);
-        if (!Number.isFinite(value) || value < 0 || value > 150) {
-            if (this.dom?.coordinateSelectRadiusStatus) {
-                this.dom.coordinateSelectRadiusStatus.textContent = 'Radius는 0.000 ~ 150.000 mm 범위입니다.';
-            }
-            return false;
-        }
-        this.coordinateSelectionRadiusMm = value;
-        this.chipAnnotator?.setCoordinateRadiusGuide?.(value);
-        if (this.dom?.coordinateSelectRadiusStatus) {
-            this.dom.coordinateSelectRadiusStatus.textContent = `Radius ${value.toFixed(3)} mm 가이드 표시 중`;
-        }
-        return true;
-    }
-
     _clearCoordinateSelectionCoordinateLists() {
-        ['shot', 'chip'].forEach((listName) => {
+        ['shot', 'chip', 'chipId'].forEach((listName) => {
             const state = this.coordinateSelectionLists?.[listName];
             if (!state) return;
             state.rows = this._newCoordinateSelectionListRows(listName);
             state.hasInput = false;
+            state.synced = false;
+        });
+        this._renderCoordinateSelectionLists();
+    }
+
+    _syncCoordinateSelectionListsFromSelectedChips() {
+        if (!this.isCoordinateSelectionOpen || !this.coordinateSelectionLists || !this.chipAnnotator) return;
+        const annotator = this.chipAnnotator;
+        const selected = [...(annotator.selectedChips || [])]
+            .map((index) => ({ index, chip: annotator.chips?.[index] }))
+            .filter(({ chip }) => !!chip);
+        const rowsByList = { shot: [], chip: [], chipId: [] };
+        const seen = { shot: new Set(), chip: new Set(), chipId: new Set() };
+        selected.forEach(({ chip }) => {
+            const layout = annotator.getLayoutRowForChip?.(chip);
+            const shotX = Number(layout?.shot_x_pos);
+            const shotY = Number(layout?.shot_y_pos);
+            if (Number.isInteger(shotX) && Number.isInteger(shotY)) {
+                const key = `${shotX}:${shotY}`;
+                if (!seen.shot.has(key)) {
+                    seen.shot.add(key);
+                    rowsByList.shot.push([String(shotX), String(shotY)]);
+                }
+            }
+            const chipX = Number(chip.x_abs);
+            const chipY = Number(chip.y_abs);
+            if (Number.isInteger(chipX) && Number.isInteger(chipY)) {
+                const key = `${chipX}:${chipY}`;
+                if (!seen.chip.has(key)) {
+                    seen.chip.add(key);
+                    rowsByList.chip.push([String(chipX), String(chipY)]);
+                }
+            }
+            const chipId = String(layout?.chip_id ?? chip?.chip_id ?? '').trim();
+            if (chipId && !seen.chipId.has(chipId)) {
+                seen.chipId.add(chipId);
+                rowsByList.chipId.push([chipId]);
+            }
+        });
+        rowsByList.shot.sort((left, right) => Number(left[1]) - Number(right[1]) || Number(left[0]) - Number(right[0]));
+        rowsByList.chip.sort((left, right) => Number(left[1]) - Number(right[1]) || Number(left[0]) - Number(right[0]));
+        rowsByList.chipId.sort((left, right) => Number(left[0]) - Number(right[0]));
+        ['shot', 'chip', 'chipId'].forEach((listName) => {
+            const state = this.coordinateSelectionLists[listName];
+            if (!state) return;
+            state.rows = rowsByList[listName].length
+                ? rowsByList[listName]
+                : this._newCoordinateSelectionListRows(listName);
+            state.hasInput = false;
+            state.synced = true;
         });
         this._renderCoordinateSelectionLists();
     }
@@ -9959,6 +10058,10 @@ class WaferMapViewer {
             const col = Number(input.dataset.coordinateCol);
             if (!state || !Number.isInteger(row) || !Number.isInteger(col)) return;
             const columns = this._coordinateSelectionListConfig(listName).columns;
+            if (state.synced) {
+                state.rows = this._newCoordinateSelectionListRows(listName);
+                state.synced = false;
+            }
             while (state.rows.length <= row) state.rows.push(Array(columns).fill(''));
             state.rows[row][col] = input.value;
             state.hasInput = true;
@@ -9984,6 +10087,7 @@ class WaferMapViewer {
             const row = Number(removeButton.dataset.coordinateRemoveRow);
             if (!state || !Number.isInteger(row)) return;
             this._activateCoordinateSelectionList(listName);
+            state.synced = false;
             state.rows.splice(row, 1);
             if (!state.rows.length) state.rows = this._newCoordinateSelectionListRows(listName);
             state.hasInput = true;
@@ -9996,26 +10100,19 @@ class WaferMapViewer {
         dom.coordinateSelectApply?.addEventListener('click', () => this.applyCoordinateSelection());
         dom.coordinateSelectRangeEnabled?.addEventListener('change', () => {
             this.coordinateSelectionRange.enabled = !!dom.coordinateSelectRangeEnabled.checked;
-            this.coordinateSelectionRangeMode = 'chip';
-            if (this.coordinateSelectionRange.enabled && dom.coordinateSelectRadiusRangeEnabled) {
-                dom.coordinateSelectRadiusRangeEnabled.checked = false;
-            }
             if (this.coordinateSelectionRange.enabled) this._resetCoordinateSelectionRange();
             this._renderCoordinateSelectionRange();
             this._scheduleCoordinateSelectionLiveApply();
         });
         dom.coordinateSelectRadiusRangeEnabled?.addEventListener('change', () => {
-            this.coordinateSelectionRange.enabled = !!dom.coordinateSelectRadiusRangeEnabled.checked;
-            this.coordinateSelectionRangeMode = this.coordinateSelectionRange.enabled ? 'radius' : 'chip';
-            if (this.coordinateSelectionRange.enabled && dom.coordinateSelectRangeEnabled) {
-                dom.coordinateSelectRangeEnabled.checked = false;
-            }
-            if (this.coordinateSelectionRange.enabled) this._resetCoordinateSelectionRange();
+            this.coordinateSelectionRadiusRange.enabled = !!dom.coordinateSelectRadiusRangeEnabled.checked;
+            if (this.coordinateSelectionRadiusRange.enabled) this._resetCoordinateSelectionRadiusRange();
             this._renderCoordinateSelectionRange();
             this._scheduleCoordinateSelectionLiveApply();
         });
         dom.coordinateSelectRangeReset?.addEventListener('click', () => {
             this._resetCoordinateSelectionRange();
+            this._resetCoordinateSelectionRadiusRange();
             this._renderCoordinateSelectionRange();
             this._scheduleCoordinateSelectionLiveApply();
         });
@@ -10038,45 +10135,107 @@ class WaferMapViewer {
                 true
             );
         };
+        const getShotPickerDragArea = (drag, event) => {
+            const rect = drag.grid?.getBoundingClientRect?.();
+            if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+            const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+            const startX = clamp(drag.startX - rect.left, 0, rect.width);
+            const startY = clamp(drag.startY - rect.top, 0, rect.height);
+            const endX = clamp(event.clientX - rect.left, 0, rect.width);
+            const endY = clamp(event.clientY - rect.top, 0, rect.height);
+            const left = Math.min(startX, endX);
+            const top = Math.min(startY, endY);
+            const width = Math.abs(endX - startX);
+            const height = Math.abs(endY - startY);
+            return {
+                left,
+                top,
+                width,
+                height,
+                right: rect.left + left + width,
+                bottom: rect.top + top + height,
+                clientLeft: rect.left + left,
+                clientTop: rect.top + top,
+            };
+        };
+        const clearShotPickerDragPreview = (drag) => {
+            drag?.grid?.querySelectorAll?.('.coordinate-select-shot-chip.is-drag-preview')
+                .forEach((button) => button.classList.remove('is-drag-preview'));
+            drag?.box?.remove?.();
+        };
+        const updateShotPickerDragPreview = (drag, event) => {
+            const area = getShotPickerDragArea(drag, event);
+            if (!area || Math.hypot(area.width, area.height) <= 5) return false;
+            if (!drag.box) {
+                drag.box = document.createElement('div');
+                drag.box.className = 'coordinate-select-shot-drag-box';
+                drag.box.setAttribute('aria-hidden', 'true');
+                drag.grid.appendChild(drag.box);
+            }
+            Object.assign(drag.box.style, {
+                left: `${area.left}px`,
+                top: `${area.top}px`,
+                width: `${area.width}px`,
+                height: `${area.height}px`,
+            });
+            drag.indices = [...drag.grid.querySelectorAll('button[data-coordinate-shot-chip-index]')]
+                .filter((button) => {
+                    const rect = button.getBoundingClientRect();
+                    return rect.left < area.right && rect.right > area.clientLeft &&
+                        rect.top < area.bottom && rect.bottom > area.clientTop;
+                })
+                .map((button) => Number(button.dataset.coordinateShotChipIndex))
+                .filter(Number.isInteger);
+            const previewed = new Set(drag.indices);
+            drag.grid.querySelectorAll('button[data-coordinate-shot-chip-index]').forEach((button) => {
+                button.classList.toggle('is-drag-preview', previewed.has(Number(button.dataset.coordinateShotChipIndex)));
+            });
+            drag.didDrag = true;
+            return true;
+        };
         shotPicker?.addEventListener('pointerdown', (event) => {
             const button = event.target.closest?.('button[data-coordinate-shot-chip-index]');
             if (event.button !== 0 || !event.shiftKey || !button) return;
             const index = Number(button.dataset.coordinateShotChipIndex);
             if (!Number.isInteger(index)) return;
-            const anchorIndex = Number.isInteger(this.coordinateSelectionShotPickerAnchorIndex)
-                ? this.coordinateSelectionShotPickerAnchorIndex
-                : index;
-            this.coordinateSelectionShotPickerAnchorIndex = anchorIndex;
+            const grid = button.closest('.coordinate-select-shot-grid');
+            if (!grid) return;
+            if (!Number.isInteger(this.coordinateSelectionShotPickerAnchorIndex)) {
+                this.coordinateSelectionShotPickerAnchorIndex = index;
+            }
             this.coordinateSelectionShotPickerDrag = {
                 pointerId: event.pointerId,
-                anchorIndex,
-                lastIndex: null,
+                grid,
+                startX: event.clientX,
+                startY: event.clientY,
+                indices: [],
+                didDrag: false,
+                box: null,
             };
             shotPicker.setPointerCapture?.(event.pointerId);
             event.preventDefault();
-            if (applyShotPickerRange(anchorIndex, index)) {
-                this.coordinateSelectionShotPickerDrag.lastIndex = index;
-            }
         });
         shotPicker?.addEventListener('pointermove', (event) => {
             const drag = this.coordinateSelectionShotPickerDrag;
             if (!drag || drag.pointerId !== event.pointerId) return;
-            const element = document.elementFromPoint(event.clientX, event.clientY);
-            const button = element?.closest?.('button[data-coordinate-shot-chip-index]');
-            if (!button || !shotPicker.contains(button)) return;
-            const index = Number(button.dataset.coordinateShotChipIndex);
-            if (!Number.isInteger(index) || drag.lastIndex === index) return;
-            if (applyShotPickerRange(drag.anchorIndex, index)) drag.lastIndex = index;
+            updateShotPickerDragPreview(drag, event);
         });
-        const stopShotPickerDrag = (event) => {
+        const stopShotPickerDrag = (event, commitSelection) => {
             const drag = this.coordinateSelectionShotPickerDrag;
             if (!drag || drag.pointerId !== event.pointerId) return;
+            if (commitSelection) updateShotPickerDragPreview(drag, event);
+            const indices = [...drag.indices];
+            const didDrag = drag.didDrag && indices.length > 0;
+            clearShotPickerDragPreview(drag);
             shotPicker.releasePointerCapture?.(event.pointerId);
             this.coordinateSelectionShotPickerDrag = null;
+            if (!didDrag) return;
             this.coordinateSelectionShotPickerSuppressClickAt = performance.now();
+            const result = this._applyCoordinateSelectionShotPickerSelection(indices, true);
+            if (result) this.coordinateSelectionShotPickerAnchorIndex = indices[0] ?? null;
         };
-        shotPicker?.addEventListener('pointerup', stopShotPickerDrag);
-        shotPicker?.addEventListener('pointercancel', stopShotPickerDrag);
+        shotPicker?.addEventListener('pointerup', (event) => stopShotPickerDrag(event, true));
+        shotPicker?.addEventListener('pointercancel', (event) => stopShotPickerDrag(event, false));
         shotPicker?.addEventListener('click', (event) => {
             const button = event.target.closest?.('button[data-coordinate-shot-chip-index]');
             if (!button) return;
@@ -10115,14 +10274,6 @@ class WaferMapViewer {
             if (!result) return;
             this.coordinateSelectionShotPickerAnchorIndex = indices[0] ?? null;
         });
-        dom.coordinateSelectRadius?.addEventListener('input', () => {
-            this._setCoordinateSelectionRadiusGuide(dom.coordinateSelectRadius.value);
-        });
-        dom.coordinateSelectRadiusClear?.addEventListener('click', () => {
-            if (dom.coordinateSelectRadius) dom.coordinateSelectRadius.value = '';
-            this._setCoordinateSelectionRadiusGuide('');
-        });
-
         const dragHandle = dom.coordinateSelectDragHandle;
         const panel = dom.coordinateSelectModal.querySelector('.coordinate-select-modal-content');
         if (dragHandle && panel) {
@@ -10165,9 +10316,9 @@ class WaferMapViewer {
         this.coordinateSelectionShotPickerDrag = null;
         this.coordinateSelectionShotPickerSuppressClickAt = 0;
         this.coordinateSelectionLists = {
-            shot: { rows: this._newCoordinateSelectionListRows('shot'), hasInput: false },
-            chip: { rows: this._newCoordinateSelectionListRows('chip'), hasInput: false },
-            chipId: { rows: this._newCoordinateSelectionListRows('chipId'), hasInput: false },
+            shot: { rows: this._newCoordinateSelectionListRows('shot'), hasInput: false, synced: false },
+            chip: { rows: this._newCoordinateSelectionListRows('chip'), hasInput: false, synced: false },
+            chipId: { rows: this._newCoordinateSelectionListRows('chipId'), hasInput: false, synced: false },
         };
         this.coordinateSelectionActiveList = 'shot';
         const firstGroup = [...(this.chipAnnotator?.shotBoundaryGroups?.values?.() || [])]
@@ -10178,16 +10329,13 @@ class WaferMapViewer {
                     Number(leftLayout?.shot_x_pos) - Number(rightLayout?.shot_x_pos);
             })[0];
         this.coordinateSelectionActiveShotId = firstGroup ? String(firstGroup.shotId) : null;
-        this.coordinateSelectionRadiusMm = null;
         this.coordinateSelectionTarget = 'shot-grid';
         this.coordinateSelectionOperation = 'replace';
-        this.coordinateSelectionRangeMode = 'chip';
         this.coordinateSelectionRange = { enabled: false, xMin: null, xMax: null, yMin: null, yMax: null };
+        this.coordinateSelectionRadiusRange = { enabled: false, xMin: null, xMax: null };
         if (dom.coordinateSelectOperation) dom.coordinateSelectOperation.value = this.coordinateSelectionOperation;
         if (dom.coordinateSelectRangeEnabled) dom.coordinateSelectRangeEnabled.checked = false;
         if (dom.coordinateSelectRadiusRangeEnabled) dom.coordinateSelectRadiusRangeEnabled.checked = false;
-        if (dom.coordinateSelectRadius) dom.coordinateSelectRadius.value = '';
-        if (dom.coordinateSelectRadiusStatus) dom.coordinateSelectRadiusStatus.textContent = '값을 입력하면 wafer 원점에서 가이드가 표시됩니다.';
         dom.coordinateSelectModal.querySelectorAll('[data-coordinate-quick-picker]').forEach((picker) => {
             picker.dataset.coordinateQuickOpen = 'false';
         });
@@ -10195,7 +10343,6 @@ class WaferMapViewer {
             input.value = '';
             input.setAttribute('aria-expanded', 'false');
         });
-        this.chipAnnotator?.clearCoordinateRadiusGuide?.();
         this._setCoordinateSelectionError('');
         dom.coordinateSelectModal.style.display = 'flex';
         this.isCoordinateSelectionOpen = true;
@@ -10219,10 +10366,12 @@ class WaferMapViewer {
         }
         const operation = this.coordinateSelectionOperation;
         let result;
-        if (this.coordinateSelectionRange.enabled) {
-            result = annotator.selectByCoordinateRange(
-                this._getCoordinateSelectionRangeTarget(),
-                this.coordinateSelectionRange,
+        if (this.coordinateSelectionRange.enabled || this.coordinateSelectionRadiusRange?.enabled) {
+            result = annotator.selectByCoordinateConstraints(
+                {
+                    chipRange: this.coordinateSelectionRange,
+                    radiusRange: this.coordinateSelectionRadiusRange,
+                },
                 { operation }
             );
             if (!result || result.matchedCount === 0) {
