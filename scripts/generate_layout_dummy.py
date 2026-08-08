@@ -113,6 +113,16 @@ def _build_rows(
     grid_width, grid_height = _grid_dimensions(payload, chips)
     shot_columns = math.ceil(grid_width / SHOT_WIDTH)
     shot_rows = math.ceil(grid_height / SHOT_HEIGHT)
+    shot_specs: dict[tuple[int, int], dict[str, int]] = {}
+    for shot_row in range(shot_rows):
+        for shot_column in range(shot_columns):
+            shot_specs[(shot_column, shot_row)] = {
+                "shot_id": shot_row * shot_columns + shot_column + 1,
+                "shot_x_pos": shot_column - shot_columns // 2,
+                "shot_y_pos": shot_rows // 2 - shot_row,
+                "expected_chip_count": min(SHOT_WIDTH, grid_width - shot_column * SHOT_WIDTH)
+                * min(SHOT_HEIGHT, grid_height - shot_row * SHOT_HEIGHT),
+            }
     grouped: dict[tuple[int, int], int] = {}
     for chip in chips:
         x_abs = _int_value(chip.get("x_abs"), "x_abs")
@@ -126,11 +136,7 @@ def _build_rows(
         y_abs = _int_value(chip.get("y_abs"), "y_abs")
         shot_column = x_abs // SHOT_WIDTH
         shot_row = y_abs // SHOT_HEIGHT
-        shot_id = shot_row * shot_columns + shot_column + 1
-        # shot_x_pos/shot_y_pos are signed shot order positions around the
-        # wafer center, not physical micrometre coordinates.
-        shot_x_order = shot_column - shot_columns // 2
-        shot_y_order = shot_rows // 2 - shot_row
+        shot = shot_specs[(shot_column, shot_row)]
 
         # Synthetic physical layout: 32x32 logical cells at a 5 mm pitch,
         # centred on the wafer. The source positions provide the chip mask.
@@ -144,17 +150,18 @@ def _build_rows(
             )
         zone_id, zone_type = _circle_zone(radius)
 
-        expected_shot_chips = min(SHOT_WIDTH, grid_width - shot_column * SHOT_WIDTH) * min(
-            SHOT_HEIGHT, grid_height - shot_row * SHOT_HEIGHT
+        full_shot_type = (
+            "FULL"
+            if grouped[(shot_column, shot_row)] == shot["expected_chip_count"]
+            else "PARTIAL"
         )
-        full_shot_type = "FULL" if grouped[(shot_column, shot_row)] == expected_shot_chips else "PARTIAL"
         rows.append(
             {
                 "process_id": process_id,
-                "shot_id": shot_id,
+                "shot_id": shot["shot_id"],
                 "chip_id": chip_index,
-                "shot_x_pos": shot_x_order,
-                "shot_y_pos": shot_y_order,
+                "shot_x_pos": shot["shot_x_pos"],
+                "shot_y_pos": shot["shot_y_pos"],
                 "full_shot_type": full_shot_type,
                 # The viewer's positions x_abs/y_abs are the chip matching key.
                 # Keep the key in the same integer coordinate system so the

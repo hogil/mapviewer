@@ -123,6 +123,8 @@ export class ChipAnnotator {
         this.layoutProcessId = null;
         this.layoutByChip = new Map();
         this.shotBoundaryGroups = new Map();
+        this._shotGridGeometry = null;
+        this._shotBoundaryCache = new Map();
         this.shotBoundaryVisible = false;
         this.shotBoundaryColor = 'rgba(170, 85, 210, 0.95)';
         this.coordinateRadiusGuideMm = null;
@@ -165,6 +167,7 @@ export class ChipAnnotator {
             if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
             this.layoutByChip.set(`${x}:${y}`, row);
         }
+        this._invalidateShotGeometry();
         this._buildShotBoundaryGroups();
         if (this.hoveredChip) {
             this._updateCoordinateBox(0, 0, this.hoveredChip);
@@ -175,6 +178,7 @@ export class ChipAnnotator {
         this.layoutProcessId = null;
         this.layoutByChip.clear();
         this.shotBoundaryGroups.clear();
+        this._invalidateShotGeometry();
         this.coordinateRadiusGuideMm = null;
         this.hoveredChip = null;
         this._resetChipCoordinateDisplay();
@@ -194,6 +198,11 @@ export class ChipAnnotator {
     clearCoordinateRadiusGuide() {
         this.coordinateRadiusGuideMm = null;
         this.render();
+    }
+
+    _invalidateShotGeometry() {
+        this._shotGridGeometry = null;
+        this._shotBoundaryCache.clear();
     }
 
     setSelectionMode(mode) {
@@ -256,27 +265,84 @@ export class ChipAnnotator {
     }
 
     getShotGridShape() {
-        const groups = new Map();
-        for (const chip of this.chips || []) {
-            const row = this.getLayoutRowForChip(chip);
-            const shotId = String(row?.shot_id ?? '').trim();
-            const x = Number(chip?.x_abs);
-            const y = Number(chip?.y_abs);
-            if (!shotId || !Number.isInteger(x) || !Number.isInteger(y)) continue;
-            const group = groups.get(shotId) || { xs: [], ys: [] };
-            group.xs.push(x);
-            group.ys.push(y);
-            groups.set(shotId, group);
-        }
+        return this._getShotGridGeometry()?.shape || null;
+    }
 
+    _getShotGridGeometry() {
+        if (this._shotGridGeometry) return this._shotGridGeometry;
+
+        const groups = [];
+        const entries = [];
+        const shotXValues = [];
+        const shotYValues = [];
         let cols = 0;
         let rows = 0;
-        for (const group of groups.values()) {
-            if (!group.xs.length || !group.ys.length) continue;
-            cols = Math.max(cols, Math.max(...group.xs) - Math.min(...group.xs) + 1);
-            rows = Math.max(rows, Math.max(...group.ys) - Math.min(...group.ys) + 1);
+
+        for (const group of this.shotBoundaryGroups.values()) {
+            const groupEntries = (group.indices || []).map((index) => {
+                const chip = this.chips[index];
+                const layout = this.getLayoutRowForChip(chip);
+                const x = Number(chip?.x_abs);
+                const y = Number(chip?.y_abs);
+                const shotX = Number(layout?.shot_x_pos);
+                const shotY = Number(layout?.shot_y_pos);
+                if (!chip?.rect || !Number.isInteger(x) || !Number.isInteger(y)) return null;
+                return {
+                    chip,
+                    layout,
+                    x,
+                    y,
+                    shotX: Number.isInteger(shotX) ? shotX : null,
+                    shotY: Number.isInteger(shotY) ? shotY : null,
+                };
+            }).filter(Boolean);
+            if (groupEntries.length === 0) continue;
+
+            const xs = groupEntries.map((entry) => entry.x);
+            const ys = groupEntries.map((entry) => entry.y);
+            cols = Math.max(cols, Math.max(...xs) - Math.min(...xs) + 1);
+            rows = Math.max(rows, Math.max(...ys) - Math.min(...ys) + 1);
+            const shotX = groupEntries.find((entry) => entry.shotX !== null)?.shotX;
+            const shotY = groupEntries.find((entry) => entry.shotY !== null)?.shotY;
+            if (shotX !== undefined && shotX !== null) shotXValues.push(shotX);
+            if (shotY !== undefined && shotY !== null) shotYValues.push(shotY);
+            groups.push({ group, entries: groupEntries, shotX, shotY });
+            entries.push(...groupEntries);
         }
-        return cols > 0 && rows > 0 ? { cols, rows } : null;
+
+        if (cols <= 0 || rows <= 0 || entries.length === 0) {
+            this._shotGridGeometry = null;
+            return null;
+        }
+
+        const minShotX = shotXValues.length ? Math.min(...shotXValues) : null;
+        const maxShotX = shotXValues.length ? Math.max(...shotXValues) : null;
+        const minShotY = shotYValues.length ? Math.min(...shotYValues) : null;
+        const maxShotY = shotYValues.length ? Math.max(...shotYValues) : null;
+        let originX = null;
+        let originY = null;
+        if (minShotX !== null && maxShotY !== null) {
+            const xOrigins = entries
+                .filter((entry) => entry.shotX !== null)
+                .map((entry) => entry.x - (entry.shotX - minShotX) * cols);
+            const yOrigins = entries
+                .filter((entry) => entry.shotY !== null)
+                .map((entry) => entry.y - (maxShotY - entry.shotY) * rows);
+            if (xOrigins.length) originX = Math.min(...xOrigins);
+            if (yOrigins.length) originY = Math.min(...yOrigins);
+        }
+
+        this._shotGridGeometry = {
+            shape: { cols, rows },
+            groups,
+            minShotX,
+            maxShotX,
+            minShotY,
+            maxShotY,
+            originX,
+            originY,
+        };
+        return this._shotGridGeometry;
     }
 
     _getSelectionIndicesForChip(chip) {
@@ -301,6 +367,10 @@ export class ChipAnnotator {
 
     _getShotBoundaryRect(group) {
         if (!group?.chips?.length) return null;
+        const cacheKey = String(group.shotId ?? '');
+        if (cacheKey && this._shotBoundaryCache.has(cacheKey)) {
+            return this._shotBoundaryCache.get(cacheKey);
+        }
 
         let minX = Infinity;
         let minY = Infinity;
@@ -316,7 +386,8 @@ export class ChipAnnotator {
         });
         if (![minX, minY, maxX, maxY].every(Number.isFinite)) return null;
 
-        const shape = this.getShotGridShape?.();
+        const geometry = this._getShotGridGeometry?.();
+        const shape = geometry?.shape;
         const layoutEntries = (group.indices || [])
             .map((index) => {
                 const chip = this.chips[index];
@@ -330,15 +401,25 @@ export class ChipAnnotator {
             })
             .filter(Boolean);
         if (shape?.cols > 0 && shape?.rows > 0 && layoutEntries.length > 0) {
-            const positiveModulo = (value, size) => ((value % size) + size) % size;
             const minGridX = Math.min(...layoutEntries.map((entry) => entry.x));
             const minGridY = Math.min(...layoutEntries.map((entry) => entry.y));
-            const baseGridX = minGridX - positiveModulo(minGridX, shape.cols);
-            const baseGridY = minGridY - positiveModulo(minGridY, shape.rows);
             const reference = layoutEntries[0];
             const chipWidth = Number(reference.chip.rect.x1) - Number(reference.chip.rect.x0);
             const chipHeight = Number(reference.chip.rect.y1) - Number(reference.chip.rect.y0);
             if (chipWidth > 0 && chipHeight > 0) {
+                const shotX = Number(reference.layout.shot_x_pos);
+                const shotY = Number(reference.layout.shot_y_pos);
+                const hasLayoutShotGrid = geometry &&
+                    Number.isInteger(shotX) && Number.isInteger(shotY) &&
+                    Number.isInteger(geometry.originX) && Number.isInteger(geometry.originY) &&
+                    Number.isInteger(geometry.minShotX) && Number.isInteger(geometry.maxShotY);
+                const positiveModulo = (value, size) => ((value % size) + size) % size;
+                const baseGridX = hasLayoutShotGrid
+                    ? geometry.originX + (shotX - geometry.minShotX) * shape.cols
+                    : minGridX - positiveModulo(minGridX, shape.cols);
+                const baseGridY = hasLayoutShotGrid
+                    ? geometry.originY + (geometry.maxShotY - shotY) * shape.rows
+                    : minGridY - positiveModulo(minGridY, shape.rows);
                 minX = reference.chip.rect.x0 - (reference.x - baseGridX) * chipWidth;
                 minY = reference.chip.rect.y0 - (reference.y - baseGridY) * chipHeight;
                 maxX = minX + shape.cols * chipWidth;
@@ -349,7 +430,9 @@ export class ChipAnnotator {
         const width = maxX - minX;
         const height = maxY - minY;
         if (width <= 0 || height <= 0) return null;
-        return { minX, minY, maxX, maxY, width, height };
+        const boundary = { minX, minY, maxX, maxY, width, height };
+        if (cacheKey) this._shotBoundaryCache.set(cacheKey, boundary);
+        return boundary;
     }
 
     _getLayoutCanvasPhysicalTransform() {
@@ -578,6 +661,17 @@ export class ChipAnnotator {
         const cols = Math.max(1, Number(shape?.cols) || 4);
         const rows = Math.max(1, Number(shape?.rows) || 6);
         if (!Number.isInteger(x) || !Number.isInteger(y)) return null;
+        const layout = this.getLayoutRowForChip(chip);
+        const geometry = this._getShotGridGeometry?.();
+        if (geometry && Number.isInteger(geometry.originX) && Number.isInteger(geometry.originY) &&
+            Number.isInteger(geometry.minShotX) && Number.isInteger(geometry.maxShotY) &&
+            Number.isInteger(Number(layout?.shot_x_pos)) && Number.isInteger(Number(layout?.shot_y_pos))) {
+            const baseX = geometry.originX +
+                (Number(layout.shot_x_pos) - geometry.minShotX) * cols;
+            const baseY = geometry.originY +
+                (geometry.maxShotY - Number(layout.shot_y_pos)) * rows;
+            return `${x - baseX}:${y - baseY}`;
+        }
         const positiveModulo = (value, size) => ((value % size) + size) % size;
         return `${positiveModulo(x, cols)}:${positiveModulo(y, rows)}`;
     }
@@ -842,6 +936,8 @@ export class ChipAnnotator {
                     this.chips = [];
                     this.chipIndexMap.clear();
                     this._spatialGrid = null;
+                    this.shotBoundaryGroups.clear();
+                    this._invalidateShotGeometry();
                     this._notifyLegendUpdate([]);
                     return false;
                 }
@@ -854,6 +950,8 @@ export class ChipAnnotator {
                 _positionsCache.set(cacheKey, this.positionsData);
             }
             this.chips = this.positionsData.chips || [];
+            this._invalidateShotGeometry();
+            if (this.layoutByChip.size > 0) this._buildShotBoundaryGroups();
             this._buildChipIndexMap();
             this._buildSpatialGrid();
 
@@ -890,6 +988,8 @@ export class ChipAnnotator {
             this.positionsData = null;
             this.chips = [];
             this.chipIndexMap.clear();
+            this.shotBoundaryGroups.clear();
+            this._invalidateShotGeometry();
             this._notifyLegendUpdate([]);
             this.partId = null;
             this.device = null;
@@ -2266,6 +2366,13 @@ export class ChipAnnotator {
             ctx.restore();
         }
 
+        // Border mode is also applied to the client overlay. The server can
+        // normalize the source palette, but BIN/ratio fills are rendered here
+        // and would otherwise leave colored chip edges visible.
+        if (this.viewer?.borderNormalize) {
+            this._renderNormalizedChipBorders();
+        }
+
         // Draw grid if enabled
         if (this.showGrid) {
             this._renderGrid();
@@ -2384,6 +2491,42 @@ export class ChipAnnotator {
     /**
      * Render die grid
      */
+    _renderNormalizedChipBorders() {
+        if (!this.chips?.length || !this.viewer?.transform) return;
+        const transform = this.viewer.transform;
+        const normalColor = this.binOverlayColors?.get('Normal') || '#BEBEBE';
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.resetTransform();
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = normalColor;
+        const lineWidth = Math.max(1, Math.min(3, Math.round(transform.scale)));
+        this.chips.forEach((chip) => {
+            const rect = chip?.rect;
+            if (!rect) return;
+            const x = rect.x0 * transform.scale + transform.dx;
+            const y = rect.y0 * transform.scale + transform.dy + (this.Y_OFFSET || 0);
+            const width = (rect.x1 - rect.x0) * transform.scale;
+            const height = (rect.y1 - rect.y0) * transform.scale;
+            if (width <= 0 || height <= 0) return;
+
+            // Snap the four sides to device pixels. A fractional stroke blends
+            // the BIN fill into the border, leaving colored edge pixels behind.
+            const left = Math.round(x);
+            const top = Math.round(y);
+            const right = Math.max(left + 1, Math.round(x + width));
+            const bottom = Math.max(top + 1, Math.round(y + height));
+            const horizontalWidth = right - left;
+            const horizontalHeight = Math.min(lineWidth, bottom - top);
+            const verticalWidth = Math.min(lineWidth, horizontalWidth);
+            ctx.fillRect(left, top, horizontalWidth, horizontalHeight);
+            ctx.fillRect(left, bottom - horizontalHeight, horizontalWidth, horizontalHeight);
+            ctx.fillRect(left, top, verticalWidth, bottom - top);
+            ctx.fillRect(right - verticalWidth, top, verticalWidth, bottom - top);
+        });
+        ctx.restore();
+    }
+
     _renderGrid() {
         if (!this.positionsData || !this.viewer.transform) return;
 

@@ -212,6 +212,13 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - E2E guard: `layout-chip-coordinates`는 P001 row의 `zone_id`가 네 circle ID 중 하나이고 `zone_type=circle`인지 확인하며 API source가 `layout.parquet`인지 확인한다.
 - 파일: `scripts/generate_layout_dummy.py`, `api/full_app.py`, `docs/LAYOUT_FEATURE.md`, `scripts/e2e_chunk2.js`
 
+#### BUG-30: Shot 경계 지연/좌표계 불일치와 Border 잔류 색 회귀 (2026-08-08)
+- 증상: partial Shot의 경계, Shot 선택 영역, 하단 Shot(Grid) 표기가 서로 다른 위치를 가리키거나 Shot 버튼을 누른 뒤 경계가 늦게 나타났다. Border를 켜도 BIN/ratio overlay의 색이 칩 외곽에 남을 수 있었다. Chip Pos 셀에 소수 좌표를 붙여넣으면 정수 검증에서 거부됐다.
+- 원인: Shot 경계는 `x_abs/y_abs` modulo, Shot 선택은 `shot_id`, Shot 표기는 layout `shot_x_pos/shot_y_pos`를 각각 독립 계산했고, 경계를 그릴 때 Shot shape를 매 그룹마다 다시 계산했다. Border는 서버 이미지 외에 클라이언트 overlay가 칩 색을 다시 그려 fractional stroke 가장자리에 BIN 색이 남았다. 좌표 목록 검증은 Chip Pos 전환 전에 Chip X/Y를 정수로 강제했다.
+- 수정 계약: layout의 canonical geometry를 한 번 계산하고 Shot별 경계를 캐시해 경계/hover/선택/Chip ID 슬롯이 같은 원점을 사용한다. partial Shot도 canonical 4x6 크기를 유지한다. Border는 client overlay의 칩 네 변을 pixel-snap한 Normal 색으로 덮고, Chip X/Y 셀은 정수 grid와 소수 Chip(Pos) mm 입력을 모두 허용한다.
+- E2E guard: `scripts/e2e_chunk2.js`의 `layout-chip-coordinates`는 P001 833개 layout row, 43개 Shot, partial 경계 canonical 4x6, hover/선택 영역 일치, 실제 Shot 토글 첫 표시 `firstOnMs < 10` 및 경계 픽셀 `> 50`을 확인한다. `systematic-measure-single-lot-wafer`는 SYSTEMATIC 단일보기에서 833개 칩 경계의 Normal RGB와 잔류 색을 픽셀 검사한다. `coordinate-selection-cells`는 소수 Chip Pos 붙여넣기 후 단일 Chip 선택을 확인한다.
+- 파일: `js/chip-annotator.js`, `js/main.js`, `scripts/e2e_chunk2.js`, `scripts/generate_layout_dummy.py`
+
 ### Available skills
 - deploy-check: Ubuntu 프로덕션 배포 전 점검을 수행한다. 배포 전 민감정보, 설정, SSL/SAML, 환경변수, 운영 체크리스트를 확인할 때 사용한다. (file: D:/project/mapviewer/.claude/skills/deploy-check/SKILL.md)
 - e2e-test: L3 Tracker 전체 기능 E2E 테스트를 Playwright 브라우저 자동화로 수행한다. `/e2e-test`, `E2E 테스트`, `전체 테스트`, `기능 테스트 돌려줘` 같은 요청에 반응한다. (file: D:/project/mapviewer/.claude/skills/e2e-test/skill.md)

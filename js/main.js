@@ -468,6 +468,8 @@ class WaferMapViewer {
         this.chipAnnotator = null;
         this._layoutByProcess = new Map();
         this._layoutLoadPromises = new Map();
+        this._layoutCacheScope = new Set();
+        this._layoutCacheGeneration = 0;
         this.thumbnailNavigator = null;
         this._deferredUiBootstrapPromise = null;
         this._deferredScriptPromises = new Map();
@@ -944,6 +946,66 @@ class WaferMapViewer {
         return null;
     }
 
+    _getLayoutRowsForProcess(processId) {
+        const key = String(processId || '').trim();
+        if (!key) return Promise.resolve([]);
+        if (this._layoutByProcess.has(key)) {
+            return Promise.resolve(this._layoutByProcess.get(key));
+        }
+        let pending = this._layoutLoadPromises.get(key);
+        if (pending) return pending;
+
+        const generation = this._layoutCacheGeneration;
+        pending = fetch(`/api/layout?process_id=${encodeURIComponent(key)}`)
+            .then((response) => {
+                if (!response.ok) throw new Error(`layout load failed: ${response.status}`);
+                return response.json();
+            })
+            .then((data) => {
+                const rows = Array.isArray(data?.rows) ? data.rows : [];
+                if (generation === this._layoutCacheGeneration) {
+                    this._layoutByProcess.set(key, rows);
+                }
+                return rows;
+            })
+            .finally(() => {
+                if (this._layoutLoadPromises.get(key) === pending) {
+                    this._layoutLoadPromises.delete(key);
+                }
+            });
+        this._layoutLoadPromises.set(key, pending);
+        return pending;
+    }
+
+    _primeLayoutCacheForImages(images) {
+        const processIds = new Set(
+            (Array.isArray(images) ? images : [])
+                .map((imagePath) => this._getLayoutProcessId(imagePath))
+                .filter(Boolean)
+        );
+        const sameScope = this._layoutCacheScope.size === processIds.size &&
+            [...processIds].every((key) => this._layoutCacheScope.has(key));
+        if (!sameScope) {
+            this._layoutCacheGeneration += 1;
+            this._layoutByProcess.clear();
+            this._layoutLoadPromises.clear();
+        }
+        this._layoutCacheScope = processIds;
+        return Promise.all([...processIds].map((key) =>
+            this._getLayoutRowsForProcess(key).catch((error) => {
+                console.warn(`Failed to prime layout for process ${key}:`, error);
+                return [];
+            })
+        ));
+    }
+
+    _clearLayoutCache() {
+        this._layoutCacheGeneration += 1;
+        this._layoutByProcess.clear();
+        this._layoutLoadPromises.clear();
+        this._layoutCacheScope.clear();
+    }
+
     async _loadLayoutForImage(imagePath, signal = null, isStaleLoad = () => false) {
         const annotator = this.chipAnnotator;
         if (!annotator) return;
@@ -954,34 +1016,13 @@ class WaferMapViewer {
         const processId = this._getLayoutProcessId(imagePath);
         if (!processId) return;
 
-        let pending = this._layoutLoadPromises.get(processId);
-        if (!pending) {
-            pending = fetch(`/api/layout?process_id=${encodeURIComponent(processId)}`)
-                .then((response) => {
-                    if (!response.ok) throw new Error(`layout load failed: ${response.status}`);
-                    return response.json();
-                })
-                .then((data) => {
-                    const rows = Array.isArray(data?.rows) ? data.rows : [];
-                    this._layoutByProcess.set(processId, rows);
-                    return rows;
-                });
-            this._layoutLoadPromises.set(processId, pending);
-        }
-
         try {
-            const rows = this._layoutByProcess.has(processId)
-                ? this._layoutByProcess.get(processId)
-                : await pending;
+            const rows = await this._getLayoutRowsForProcess(processId);
             if (signal?.aborted || isStaleLoad()) return;
             annotator.setLayoutData(processId, rows);
         } catch (error) {
             if (!signal?.aborted && !isStaleLoad()) {
                 console.warn(`Failed to load layout for process ${processId}:`, error);
-            }
-        } finally {
-            if (this._layoutLoadPromises.get(processId) === pending) {
-                this._layoutLoadPromises.delete(processId);
             }
         }
     }
@@ -9495,7 +9536,10 @@ class WaferMapViewer {
                 error ||= `${index + 1}행: X/Y는 숫자여야 합니다.`;
                 return;
             }
-            if (config.integer && (!integerPattern.test(values[0]) || !integerPattern.test(values[1]))) {
+            // Chip X/Y accepts both integer grid coordinates and decimal
+            // Chip(Pos) millimetre coordinates. Shot X/Y remains integer-only.
+            if (config.integer && listName !== 'chip' &&
+                (!integerPattern.test(values[0]) || !integerPattern.test(values[1]))) {
                 error ||= `${index + 1}행: ${config.label}는 정수여야 합니다.`;
                 return;
             }
@@ -14932,6 +14976,9 @@ class WaferMapViewer {
                 if (this.gridSelectedSet) {
                     this.gridSelectedSet.clear();
                 }
+            }
+            if (!preserveGridSelection || clearFilePointers) {
+                this._clearLayoutCache();
             }
 
             this.selectedFolders = new Set();
@@ -22009,6 +22056,10 @@ class WaferMapViewer {
             transientGridRestoreState?.forceFlatGrid
         );
 
+        // Prime layout before LOT-mode dispatch; that branch returns before
+        // the flat-grid state is assigned.
+        this._primeLayoutCacheForImages(images);
+
         // 📦 Lot 모드가 활성화되어 있으면 Lot별 그리드로 표시
         // 🔥 Label Explorer/legacy label grids는 flat grid를 강제하여
         //    LOT 헤더/지연 로딩 경로로 인한 썸네일 초기 미표시를 피한다.
@@ -22079,6 +22130,10 @@ class WaferMapViewer {
 
         this.selectedImages = sortedImages;
         this.currentGridImages = sortedImages;  // 🔥 currentGridImages 업데이트
+        // A selected folder normally maps to one process/product. Prime its
+        // small layout table while the grid renders so single-image clicks
+        // can apply Chip/Shot coordinates without waiting for Parquet I/O.
+        this._primeLayoutCacheForImages(sortedImages);
         if (!this.gridSelectedIdxs) this.gridSelectedIdxs = [];
 
         // 🔥 M.Comp 드롭다운 캐시 소스 검증 → 이미지 변경 시 갱신
@@ -25033,6 +25088,7 @@ class WaferMapViewer {
         this.gridViewImageIndex = -1;
         this.gridViewSaveState = null;
         this.singleViewReturnState = null;
+        this._clearLayoutCache();
 
         // 🔥 LOT 스크롤 타임아웃 정리
         if (this._lotScrollTimeout) {
@@ -30540,6 +30596,15 @@ class WaferMapViewer {
         }
     }
 
+    _syncShotBoundaryButtonUI() {
+        const button = document.getElementById('single-shot-boundary-btn');
+        if (!button) return;
+        const active = this.chipAnnotator?.shotBoundaryVisible === true;
+        button.style.border = `1px solid ${active ? '#8b55bd' : '#444'}`;
+        button.style.background = active ? '#5e2f82' : '#222';
+        button.style.color = active ? '#fff' : '#ccc';
+    }
+
     updateChipLabelLegend(markedChips = []) {
         const chips = Array.isArray(markedChips) ? markedChips : [];
         const counts = new Map();
@@ -31230,7 +31295,7 @@ class WaferMapViewer {
                     this.chipAnnotator.setShotBoundaryVisible(
                         !this.chipAnnotator.shotBoundaryVisible
                     );
-                    this.renderColorLegends();
+                    this._syncShotBoundaryButtonUI();
                 });
             }
             // Attach border button click handler

@@ -39,13 +39,19 @@ const { createRunner } = require('./e2e_playwright_session');
   }
 
   async function record(phase, name, fn) {
+    const onlyPhase = String(process.env.E2E_ONLY_PHASE || '').trim();
+    if (onlyPhase && !phase.includes(onlyPhase)) return;
     append(`[START] ${phase} ${name}\n`);
     try {
       const detail = await fn();
       results.push({ status: 'PASS', phase, name, detail });
       append(`[PASS] ${phase} ${name} :: ${JSON.stringify(detail)}\n`);
     } catch (err) {
-      const detail = String(err && err.message ? err.message : err);
+      const message = String(err && err.message ? err.message : err);
+      const stackLine = String(err?.stack || '')
+        .split('\n')
+        .find((line) => line.includes('e2e_chunk2.js:'));
+      const detail = stackLine ? `${message} @ ${stackLine.trim()}` : message;
       results.push({ status: 'FAIL', phase, name, detail });
       append(`[FAIL] ${phase} ${name} :: ${detail}\n`);
     }
@@ -1712,12 +1718,90 @@ const { createRunner } = require('./e2e_playwright_session');
 
     await page.evaluate(() => {
       const v = window.viewer;
+      v.borderNormalize = false;
+      v.chipAnnotator?.render();
+    });
+    await page.locator('#single-border-normalize-btn').click();
+    await page.waitForFunction(
+      () => window.viewer?.borderNormalize === true,
+      null,
+      { timeout: 10000 }
+    );
+    const borderNormalization = await page.evaluate(({ expectedBins }) => {
+      const v = window.viewer;
+      const annotator = v.chipAnnotator;
+      const hexToRgb = (value) => {
+        const hex = String(value || '').replace('#', '');
+        return /^[0-9a-f]{6}$/i.test(hex)
+          ? [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)]
+          : null;
+      };
+      const normal = hexToRgb(
+        annotator.binOverlayColors?.get('Normal') ||
+        annotator.binOverlayColors?.get('Border') ||
+        '#BDBDBD'
+      );
+      const context = annotator.canvas?.getContext('2d');
+      const transform = v.transform;
+      const sample = (x, y) => {
+        const pixelX = Math.round(x);
+        const pixelY = Math.round(y);
+        if (pixelX < 0 || pixelY < 0 || pixelX >= annotator.canvas.width || pixelY >= annotator.canvas.height) return null;
+        return Array.from(context.getImageData(pixelX, pixelY, 1, 1).data).slice(0, 3);
+      };
+      if (!context || !transform || !normal) {
+        return { rows: [], normal, failures: ['canvas/transform missing'] };
+      }
+      annotator.render();
+      const inspectChip = (chip) => {
+        if (!chip) return null;
+        const rect = chip.rect;
+        const centerX = ((rect.x0 + rect.x1) / 2) * transform.scale + transform.dx;
+        const centerY = ((rect.y0 + rect.y1) / 2) * transform.scale + transform.dy + (annotator.Y_OFFSET || 0);
+        const top = rect.y0 * transform.scale + transform.dy + (annotator.Y_OFFSET || 0);
+        const left = rect.x0 * transform.scale + transform.dx;
+        const edgePixels = [sample(centerX, top), sample(left, centerY)];
+        if (edgePixels.some((pixel) => !pixel)) return null;
+        const distances = edgePixels.map((pixel) => Math.hypot(
+          pixel[0] - normal[0], pixel[1] - normal[1], pixel[2] - normal[2]
+        ));
+        return {
+          bin: annotator._normalizeBottomValue(chip.b),
+          chip: [chip.x_abs, chip.y_abs],
+          edgePixels,
+          distances,
+        };
+      };
+      const allRows = (annotator.chips || []).map(inspectChip).filter(Boolean);
+      const rows = expectedBins.map((bin) => inspectChip((annotator.chips || []).find((candidate) =>
+        annotator._normalizeBottomValue(candidate?.b) === bin
+      ))).filter(Boolean);
+      return {
+        border: v.borderNormalize,
+        normal,
+        rows,
+        allSampledChipCount: allRows.length,
+        allFailures: allRows.filter((row) => row.distances.some((distance) => distance > 2))
+          .slice(0, 20)
+          .map((row) => ({ bin: row.bin, chip: row.chip, distances: row.distances })),
+        failures: rows.filter((row) => row.distances.some((distance) => distance > 2))
+          .map((row) => row.bin),
+      };
+    }, { expectedBins });
+    expect(borderNormalization.rows.length > 0 && borderNormalization.failures.length === 0 &&
+      borderNormalization.allSampledChipCount > 800 && borderNormalization.allFailures.length === 0,
+      `border normalized edge pixels=${JSON.stringify(borderNormalization)}`);
+
+    await page.evaluate(() => {
+      const v = window.viewer;
       v._measureCheckedItems = [];
       v.overlayMode = null;
+      v.borderNormalize = false;
       v._ratioActiveItemKey = null;
       v._gridMeasureMap = null;
       v.chipAnnotator?.setOverlayMode(null);
     });
+    data.borderNormalization = borderNormalization;
     return data;
   });
 
@@ -1744,6 +1828,22 @@ const { createRunner } = require('./e2e_playwright_session');
     }, { targetFile, folder });
     expect(target.ok, JSON.stringify(target));
 
+    await page.waitForFunction(
+      () => window.viewer?._layoutByProcess?.get('P001')?.length === 833,
+      null,
+      { timeout: 30000 }
+    );
+    const layoutPrefetch = await page.evaluate(() => ({
+      rows: window.viewer?._layoutByProcess?.get('P001')?.length || 0,
+      requestCount: performance.getEntriesByType('resource').filter((entry) => {
+        try {
+          const url = new URL(entry.name, location.href);
+          return url.pathname === '/api/layout' && url.searchParams.get('process_id') === 'P001';
+        } catch (_) {
+          return false;
+        }
+      }).length,
+    }));
     await setSelection([target.index]);
     await enterSingle(target.index);
     await page.waitForFunction(
@@ -1755,6 +1855,17 @@ const { createRunner } = require('./e2e_playwright_session');
       null,
       { timeout: 30000 }
     );
+    const layoutAfterSingle = await page.evaluate(() => ({
+      rows: window.viewer?._layoutByProcess?.get('P001')?.length || 0,
+      requestCount: performance.getEntriesByType('resource').filter((entry) => {
+        try {
+          const url = new URL(entry.name, location.href);
+          return url.pathname === '/api/layout' && url.searchParams.get('process_id') === 'P001';
+        } catch (_) {
+          return false;
+        }
+      }).length,
+    }));
 
     const layoutApi = await page.evaluate(async () => {
       const response = await fetch('/api/layout?process_id=P001', { cache: 'no-store' });
@@ -1796,6 +1907,49 @@ const { createRunner } = require('./e2e_playwright_session');
       };
     });
 
+    const shotToggleTiming = await page.evaluate(() => {
+      const annotator = window.viewer?.chipAnnotator;
+      const button = document.getElementById('single-shot-boundary-btn');
+      if (!annotator || !button) return { ok: false, samples: [] };
+      const countBoundaryPixels = () => {
+        const overlay = window.viewer?.dom?.overlayCanvas;
+        const context = overlay?.getContext?.('2d');
+        if (!overlay || !context || !overlay.width || !overlay.height) return 0;
+        const pixels = context.getImageData(0, 0, overlay.width, overlay.height).data;
+        let count = 0;
+        for (let index = 0; index < pixels.length; index += 4) {
+          const red = pixels[index];
+          const green = pixels[index + 1];
+          const blue = pixels[index + 2];
+          if (red > 100 && blue > 120 && red > green * 1.2 && blue > green * 1.2) count += 1;
+        }
+        return count;
+      };
+      annotator.setShotBoundaryVisible(false);
+      annotator._shotBoundaryCache?.clear();
+      const firstStarted = performance.now();
+      button.click();
+      const firstOnMs = performance.now() - firstStarted;
+      const firstOnPixels = countBoundaryPixels();
+      button.click();
+      const samples = [];
+      for (let index = 0; index < 8; index += 1) {
+        const started = performance.now();
+        button.click();
+        samples.push(performance.now() - started);
+        button.click();
+      }
+      annotator.setShotBoundaryVisible(false);
+      return {
+        ok: true,
+        firstOnMs,
+        firstOnPixels,
+        firstMs: samples[0],
+        maxMs: Math.max(...samples),
+        cacheSize: annotator._shotBoundaryCache?.size || 0,
+        groupCount: annotator.shotBoundaryGroups?.size || 0,
+      };
+    });
     const boundaryBefore = await readShotBoundaryPixels();
     await page.locator('#single-shot-boundary-btn').click();
     await page.waitForFunction(
@@ -1812,7 +1966,7 @@ const { createRunner } = require('./e2e_playwright_session');
     );
     const boundaryAfter = await readShotBoundaryPixels();
 
-    const data = await page.evaluate(({ boundaryBefore, boundaryOn, boundaryAfter, layoutSource }) => {
+    const data = await page.evaluate(({ boundaryBefore, boundaryOn, boundaryAfter, shotToggleTiming, layoutSource, layoutPrefetch, layoutAfterSingle }) => {
       const v = window.viewer;
       const chip = (v.chipAnnotator?.chips || []).find((item) =>
         Number(item?.x_abs) === 10 && Number(item?.y_abs) === 0
@@ -1881,6 +2035,7 @@ const { createRunner } = require('./e2e_playwright_session');
         shotBoundaryVisibleBefore: boundaryBefore.visible,
         shotBoundaryVisibleOn: boundaryOn.visible,
         shotBoundaryVisibleAfter: boundaryAfter.visible,
+        shotToggleTiming,
         chip: chip ? { x_abs: chip.x_abs, y_abs: chip.y_abs } : null,
         zoneId: layoutRow?.zone_id || '',
         zoneType: layoutRow?.zone_type || '',
@@ -1894,8 +2049,18 @@ const { createRunner } = require('./e2e_playwright_session');
         oldAbsElement: !!document.getElementById('coord-chip-abs'),
         layoutRequest,
         layoutSource,
+        layoutPrefetch,
+        layoutAfterSingle,
       };
-    }, { boundaryBefore, boundaryOn, boundaryAfter, layoutSource: layoutApi.source });
+    }, {
+      boundaryBefore,
+      boundaryOn,
+      boundaryAfter,
+      shotToggleTiming,
+      layoutSource: layoutApi.source,
+      layoutPrefetch,
+      layoutAfterSingle,
+    });
 
     expect(data.path.endsWith(`${folder}/${targetFile}`), `path=${data.path}`);
     expect(data.processId === 'P001' && data.layoutRows === 833, `layout=${JSON.stringify(data)}`);
@@ -1908,8 +2073,16 @@ const { createRunner } = require('./e2e_playwright_session');
       `edge shot boundary should keep the nominal Shot grid=${JSON.stringify(data)}`);
     expect(!data.shotBoundaryVisibleBefore && data.shotBoundaryVisibleOn && !data.shotBoundaryVisibleAfter,
       `shot toggle=${JSON.stringify(data)}`);
+    expect(data.shotToggleTiming.ok && data.shotToggleTiming.firstOnMs < 10 &&
+      data.shotToggleTiming.firstOnPixels > 50 && data.shotToggleTiming.maxMs < 10 &&
+      data.shotToggleTiming.cacheSize === data.shotBoundaryGroupCount,
+      `shot toggle timing=${JSON.stringify(data)}`);
     expect(data.shotBoundaryPixelsBefore < 10 && data.shotBoundaryPixels > 50 && data.shotBoundaryPixelsAfter < 10,
       `shot boundary pixels=${JSON.stringify(data)}`);
+    expect(data.layoutPrefetch.rows === 833 && data.layoutPrefetch.requestCount >= 1 &&
+      data.layoutAfterSingle.rows === 833 &&
+      data.layoutAfterSingle.requestCount === data.layoutPrefetch.requestCount,
+      `layout cache should serve single view=${JSON.stringify(data)}`);
     expect(data.coordinateLabels.join('|') === 'Chip(Grid)|Chip(Pos)|Radious|Shot(Grid)' &&
       data.grid === '(10, 0)' &&
       data.coord === '-27.5, 77.5' &&
@@ -2180,6 +2353,22 @@ const { createRunner } = require('./e2e_playwright_session');
       `chip hover=${JSON.stringify({ shotSelectionTarget, chipHover })}`);
     expect(chipInteriorBefore?.pixel?.join(',') === chipInteriorAfter?.join(','),
       `chip interior was filled=${JSON.stringify({ chipInteriorBefore, chipInteriorAfter })}`);
+
+    const layoutCacheBeforeClear = await page.evaluate(() => ({
+      rows: window.viewer?._layoutByProcess?.size || 0,
+      pending: window.viewer?._layoutLoadPromises?.size || 0,
+    }));
+    await page.evaluate(() => window.viewer?.clearGridSelection?.());
+    await page.waitForFunction(
+      () => window.viewer?._layoutByProcess?.size === 0 &&
+        window.viewer?._layoutLoadPromises?.size === 0,
+      null,
+      { timeout: 10000 }
+    );
+    const layoutCacheAfterClear = await page.evaluate(() => ({
+      rows: window.viewer?._layoutByProcess?.size || 0,
+      pending: window.viewer?._layoutLoadPromises?.size || 0,
+    }));
     expect(data.chip?.x_abs === 10 && data.chip?.y_abs === 0, `chip=${JSON.stringify(data.chip)}`);
     expect(data.coord === '-27.5, 77.5', `coord=${data.coord}`);
     expect(data.grid === '(10, 0)', `grid=${data.grid}`);
@@ -2202,6 +2391,8 @@ const { createRunner } = require('./e2e_playwright_session');
       chipHover,
       chipInteriorBefore,
       chipInteriorAfter,
+      layoutCacheBeforeClear,
+      layoutCacheAfterClear,
     };
   });
 

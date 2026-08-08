@@ -6528,3 +6528,9 @@ return {
 - `layout.txt` 끝에 `zone_id`, `zone_type`을 유지한다. 현재 circle fixture는 `C20`, `C80`, `E1`, `E20`과 `zone_type=circle`을 사용하며, area/edge family는 각각 `TOP_LEFT/CENTER/RIGHT/BOTTOM`, `INNER/EDGE`로 예약한다.
 - `layout-chip-coordinates`는 API로 로드된 P001 row에서 zone 값을 확인한다.
 - Pivot layout guard: `zone_id`/`zone_type`이 없는 새 Parquet에서 `edge`, `area`, `circle` 중 비어 있지 않은 zone 값을 API의 canonical `zone_type`/`zone_id`로 복원하고, 첫 Shot load가 `FieldRef.Name(zone_id)` 오류 없이 완료되는지 확인한다.
+
+#### BUG-30: Shot geometry, immediate boundary, and Border pixel guard
+- `layout-chip-coordinates` must use the real P001 single-image flow and verify that layout-driven canonical geometry is shared by Shot boundary, Shot hover/selection, Shot(Grid), and Shot picker slots. Partial groups must keep the nominal 4x6 boundary and never disappear.
+- The same phase must clear the boundary cache, call the real `#single-shot-boundary-btn`, and record both the synchronous first-on render time and actual purple boundary pixels. PASS requires `firstOnMs < 10`, `firstOnPixels > 50`, and the cached boundary count to equal the 43 Shot groups. This is a client render-time guard, not a locator-click or network-load time.
+- `systematic-measure-single-lot-wafer` must enable the real Border state and pixel-sample all 833 P001 chips. Every sampled top/left edge must equal the Normal palette RGB within tolerance and `allFailures=[]`; checking only one BIN is insufficient because the client overlay can repaint other BIN/ratio edges.
+- `coordinate-selection-cells` must paste decimal Chip(Pos) values into the Chip X/Y cells and require `selectionMode=chip` with one selected Chip. Integer Shot X/Y remains strict; Chip X/Y accepts both integer grid coordinates and decimal position coordinates.
