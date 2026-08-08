@@ -795,7 +795,6 @@ class WaferMapViewer {
             coordinateSelectClose: document.getElementById('chip-coordinate-select-close'),
             coordinateSelectCancel: document.getElementById('chip-coordinate-select-cancel'),
             coordinateSelectApply: document.getElementById('chip-coordinate-select-apply'),
-            coordinateSelectOperation: document.getElementById('chip-coordinate-select-operation'),
             coordinateSelectHint: document.getElementById('chip-coordinate-select-hint'),
             coordinateSelectSummary: document.getElementById('chip-coordinate-select-summary'),
             coordinateSelectListPanels: document.getElementById('chip-coordinate-select-list-panels'),
@@ -1063,7 +1062,6 @@ class WaferMapViewer {
         this.coordinateSelectionShotPickerDrag = null;
         this.coordinateSelectionShotPickerSuppressClickAt = 0;
         this.coordinateSelectionTarget = 'shot-grid';
-        this.coordinateSelectionOperation = 'replace';
         this.coordinateSelectionEscapeHandler = null;
         this.coordinateSelectionLiveTimer = null;
         this.coordinateSelectionDrag = null;
@@ -8456,13 +8454,6 @@ class WaferMapViewer {
             this._renderCoordinateSelectionTable();
             this._renderCoordinateSelectionRange();
         });
-        dom.coordinateSelectOperation?.addEventListener('change', () => {
-            this.coordinateSelectionOperation = dom.coordinateSelectOperation.value || 'replace';
-            this._setCoordinateSelectionError('');
-            this._updateCoordinateSelectionSummary();
-            this._updateCoordinateSelectionRangeStatus();
-            this._scheduleCoordinateSelectionLiveApply();
-        });
         dom.coordinateSelectAddRow?.addEventListener('click', () => {
             this.coordinateSelectionRows.push(this._newCoordinateSelectionRows(1)[0]);
             this._renderCoordinateSelectionTable({ row: this.coordinateSelectionRows.length - 1, col: 0 });
@@ -8690,14 +8681,9 @@ class WaferMapViewer {
             ? `${xText}${yText ? ` / ${yText}` : ''} · 실시간 범위 선택 중`
             : '범위 선택을 켜면 슬라이더와 숫자 입력이 실시간 선택에 사용됩니다.';
         if (this.dom?.coordinateSelectLiveStatus) {
-            const action = this.coordinateSelectionOperation === 'add'
-                ? '현재 선택에 추가'
-                : this.coordinateSelectionOperation === 'remove'
-                    ? '현재 선택에서 해제'
-                    : '기존 선택 바꾸기';
             this.dom.coordinateSelectLiveStatus.textContent = range.enabled
-                ? `${action} · 슬라이더/범위 입력 사용 중`
-                : `${action} · Shot X/Y/Chip ID 셀 입력 사용 중`;
+                ? '슬라이더/범위 입력 사용 중'
+                : 'Shot X/Y/Chip ID 셀 입력 사용 중';
         }
     }
 
@@ -8819,7 +8805,7 @@ class WaferMapViewer {
     _applyCoordinateSelectionLive({ forceClear = false } = {}) {
         if (!this.isCoordinateSelectionOpen || !this.chipAnnotator?.positionsData) return;
         const target = this.coordinateSelectionTarget;
-        const operation = this.coordinateSelectionOperation;
+        const operation = 'replace';
         let result = null;
         if (this.coordinateSelectionRange.enabled) {
             result = this.chipAnnotator.selectByCoordinateRange(target, this.coordinateSelectionRange, { operation });
@@ -9126,7 +9112,6 @@ class WaferMapViewer {
         const dom = this.dom;
         if (!dom?.coordinateSelectModal) return;
         this.coordinateSelectionTarget = 'shot-grid';
-        this.coordinateSelectionOperation = 'replace';
         this.coordinateSelectionRows = this._newCoordinateSelectionRows();
         this.coordinateSelectionHasLiveInput = false;
         this.coordinateSelectionRange = {
@@ -9137,7 +9122,6 @@ class WaferMapViewer {
             yMax: null,
         };
         if (dom.coordinateSelectTarget) dom.coordinateSelectTarget.value = this.coordinateSelectionTarget;
-        if (dom.coordinateSelectOperation) dom.coordinateSelectOperation.value = this.coordinateSelectionOperation;
         if (dom.coordinateSelectRangeEnabled) dom.coordinateSelectRangeEnabled.checked = false;
         this._setCoordinateSelectionError('');
         dom.coordinateSelectModal.style.display = 'flex';
@@ -9222,7 +9206,7 @@ class WaferMapViewer {
             return;
         }
         const target = this.coordinateSelectionTarget;
-        const operation = this.coordinateSelectionOperation;
+        const operation = 'replace';
         let result;
         if (this.coordinateSelectionRange.enabled) {
             result = annotator.selectByCoordinateRange(target, this.coordinateSelectionRange, { operation });
@@ -9230,8 +9214,7 @@ class WaferMapViewer {
                 this._setCoordinateSelectionError('범위에 일치하는 Shot/Chip이 없습니다. 범위를 확인하세요.');
                 return;
             }
-            const action = operation === 'add' ? '추가' : operation === 'remove' ? '해제' : '변경';
-            this.showToast?.(`${result.selectedCount}개 Chip 범위 선택 ${action}`, 1800);
+            this.showToast?.(`${result.selectedCount}개 Chip 범위 선택 변경`, 1800);
             this.closeCoordinateSelectionModal();
             return;
         }
@@ -9246,9 +9229,8 @@ class WaferMapViewer {
             return;
         }
         const skipped = result.unmatchedRows?.length ? `, ${result.unmatchedRows.length}행 미일치` : '';
-        const action = operation === 'add' ? '추가' : operation === 'remove' ? '해제' : '변경';
         const shotSuffix = result.selectedShotCount ? ` / ${result.selectedShotCount}개 Shot` : '';
-        this.showToast?.(`${result.selectedCount}개 Chip${shotSuffix} ${action} (${result.matchedRows}행${skipped})`, 2200);
+        this.showToast?.(`${result.selectedCount}개 Chip${shotSuffix} 변경 (${result.matchedRows}행${skipped})`, 2200);
         this.closeCoordinateSelectionModal();
     }
 
@@ -9713,11 +9695,6 @@ class WaferMapViewer {
             if (this.dom?.coordinateSelectLiveStatus) this.dom.coordinateSelectLiveStatus.textContent = '현재 이미지의 좌표 정보가 준비되면 실시간 선택을 사용할 수 있습니다.';
             return;
         }
-        const action = this.coordinateSelectionOperation === 'add'
-            ? '현재 선택에 추가'
-            : this.coordinateSelectionOperation === 'remove'
-                ? '현재 선택에서 해제'
-                : '기존 선택 바꾸기';
         const activeFilters = [];
         if (this.coordinateSelectionRange.enabled && chipConfig.available) {
             activeFilters.push(
@@ -9735,14 +9712,14 @@ class WaferMapViewer {
             : 'Chip 범위 선택과 Radius 범위 선택을 함께 켜면 AND 조건으로 적용됩니다.';
         if (this.dom?.coordinateSelectLiveStatus) {
             this.dom.coordinateSelectLiveStatus.textContent = activeFilters.length
-                ? `${action} · 슬라이더/범위 입력 사용 중`
-                : `${action} · ${this._coordinateSelectionListConfig().label} 셀 입력 사용 중`;
+                ? '슬라이더/범위 입력 사용 중'
+                : `${this._coordinateSelectionListConfig().label} 셀 입력 사용 중`;
         }
     }
 
     _applyCoordinateSelectionLive({ forceClear = false } = {}) {
         if (!this.isCoordinateSelectionOpen || !this.chipAnnotator?.positionsData) return;
-        const operation = this.coordinateSelectionOperation;
+        const operation = 'replace';
         let result = null;
         if (this.coordinateSelectionRange.enabled || this.coordinateSelectionRadiusRange?.enabled) {
             result = this.chipAnnotator.selectByCoordinateConstraints(
@@ -10017,13 +9994,6 @@ class WaferMapViewer {
         const dom = this.dom;
         if (!dom?.coordinateSelectModal || dom.coordinateSelectModal.dataset.boundV2 === 'true') return;
         dom.coordinateSelectModal.dataset.boundV2 = 'true';
-        dom.coordinateSelectOperation?.addEventListener('change', () => {
-            this.coordinateSelectionOperation = dom.coordinateSelectOperation.value || 'replace';
-            this._setCoordinateSelectionError('');
-            this._updateCoordinateSelectionSummary();
-            this._updateCoordinateSelectionRangeStatus();
-            this._scheduleCoordinateSelectionLiveApply();
-        });
         dom.coordinateSelectModal?.addEventListener('input', (event) => {
             const search = event.target.closest?.('input[data-coordinate-quick-search]');
             if (!search) return;
@@ -10344,10 +10314,8 @@ class WaferMapViewer {
             })[0];
         this.coordinateSelectionActiveShotId = firstGroup ? String(firstGroup.shotId) : null;
         this.coordinateSelectionTarget = 'shot-grid';
-        this.coordinateSelectionOperation = 'replace';
         this.coordinateSelectionRange = { enabled: false, xMin: null, xMax: null, yMin: null, yMax: null };
         this.coordinateSelectionRadiusRange = { enabled: false, xMin: null, xMax: null };
-        if (dom.coordinateSelectOperation) dom.coordinateSelectOperation.value = this.coordinateSelectionOperation;
         if (dom.coordinateSelectRangeEnabled) dom.coordinateSelectRangeEnabled.checked = false;
         if (dom.coordinateSelectRadiusRangeEnabled) dom.coordinateSelectRadiusRangeEnabled.checked = false;
         dom.coordinateSelectModal.querySelectorAll('[data-coordinate-quick-picker]').forEach((picker) => {
@@ -10378,7 +10346,7 @@ class WaferMapViewer {
             this._setCoordinateSelectionError('현재 이미지의 Chip 위치 정보가 아직 준비되지 않았습니다.');
             return;
         }
-        const operation = this.coordinateSelectionOperation;
+        const operation = 'replace';
         let result;
         if (this.coordinateSelectionRange.enabled || this.coordinateSelectionRadiusRange?.enabled) {
             result = annotator.selectByCoordinateConstraints(
@@ -10406,9 +10374,8 @@ class WaferMapViewer {
             }
         }
         const skipped = result.unmatchedRows?.length ? `, ${result.unmatchedRows.length}행 미일치` : '';
-        const action = operation === 'add' ? '추가' : operation === 'remove' ? '해제' : '변경';
         const shotSuffix = result.selectedShotCount ? ` / ${result.selectedShotCount}개 Shot` : '';
-        this.showToast?.(`${result.selectedCount}개 Chip${shotSuffix} ${action}${skipped}`, 2200);
+        this.showToast?.(`${result.selectedCount}개 Chip${shotSuffix} 변경${skipped}`, 2200);
         this.closeCoordinateSelectionModal();
     }
 
