@@ -2891,9 +2891,9 @@
             top: 88px;
             right: 24px;
             left: auto;
-            width: min(520px, 92vw);
+            width: min(500px, 92vw);
             min-width: 0;
-            max-width: 520px;
+            max-width: 500px;
             max-height: 82vh;
         }
 
@@ -3103,7 +3103,7 @@
 
         .coordinate-select-list-panels {
             display: grid;
-            grid-template-columns: 128px 144px minmax(220px, 1fr);
+            grid-template-columns: 128px 144px minmax(200px, 1fr);
             gap: 8px;
             align-items: start;
         }
