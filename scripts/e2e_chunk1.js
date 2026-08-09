@@ -1911,7 +1911,7 @@ const { createRunner } = require('./e2e_playwright_session');
       const keys = {
         f: [],
         q: [],
-        bin: ['Normal', 'Invalid', 'ETC', ...expectedSystematicBins],
+        bin: ['SYSTEMATIC', 'Normal', 'Invalid', 'ETC', ...expectedSystematicBins],
       };
       const panel = document.createElement('div');
       panel.className = 'failbit-panel';
@@ -2001,7 +2001,7 @@ const { createRunner } = require('./e2e_playwright_session');
     const gridInvalidIndex = legendOrder.gridBottomLabels.indexOf('inv');
     const gridSystematicIndex = legendOrder.gridBottomLabels.indexOf('Systematic');
     expect(
-      gridNormalIndex >= 0 && gridInvalidIndex > gridNormalIndex && gridSystematicIndex > gridInvalidIndex,
+      gridSystematicIndex >= 0 && gridNormalIndex > gridSystematicIndex && gridInvalidIndex > gridNormalIndex,
       `grid bottom legend order=${JSON.stringify(legendOrder.gridBottomLabels)}`
     );
     await page.waitForFunction(
@@ -2020,7 +2020,7 @@ const { createRunner } = require('./e2e_playwright_session');
     const singleInvalidIndex = singleBottomLabels.indexOf('Invalid');
     const singleSystematicIndex = singleBottomLabels.indexOf('Systematic');
     expect(
-      singleNormalIndex >= 0 && singleInvalidIndex > singleNormalIndex && singleSystematicIndex > singleInvalidIndex,
+      singleSystematicIndex >= 0 && singleNormalIndex > singleSystematicIndex && singleInvalidIndex > singleNormalIndex,
       `single bottom legend order=${JSON.stringify(singleBottomLabels)}`
     );
     expect(data.compositeEntry?.mode === 'systematic', `Composite entry=${JSON.stringify(data)}`);

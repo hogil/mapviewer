@@ -61,8 +61,8 @@ and the selected Shot boundary is emphasized instead.
 Ctrl-click/drag, Shift-drag, and Alt-drag are the selection interactions; Shot
 mode expands those interactions to all matched chips with the same `shot_id`.
 The default mode is Chip.
-`Chip(Coord)` and `Radious` are calculated in millimetres and formatted to two
-decimal places, but the UI omits the unit suffix. `Shot` shows the signed
+`Chip(Pos)` and `Radious` use the raw `chip_center_x_pos/y_pos` millimetre
+values from layout and are formatted without a unit suffix. `Shot` shows the signed
 integer shot order `(x, y)` without a physical-distance unit.
 
 ## CSV-format text contract
@@ -80,8 +80,8 @@ process_id,shot_id,chip_id,shot_x_pos,shot_y_pos,full_shot_type,chip_x_pos,chip_
 - `full_shot_type`: `FULL` or `PARTIAL`
 - `chip_x_pos`, `chip_y_pos`: integer chip coordinates matching
   the positions JSON `x_abs`, `y_abs` values used by the viewer
-- `chip_center_x_pos`, `chip_center_y_pos`: real micrometre coordinates,
-  displayed as millimetre values in the UI
+- `chip_center_x_pos`, `chip_center_y_pos`: real millimetre coordinates used
+  directly by the UI; do not divide them by 1000
 - `zone_id`: zone label. The current dummy circle fixture uses `C20`, `C80`,
   `E1`, and `E20`.
 - `zone_type`: zone family. The current fixture uses `circle`; the supported
@@ -97,7 +97,7 @@ The API reads the Parquet file lazily and caches the parsed index until the
 file modification time or size changes. `pyarrow` is required by the API.
 
 The wafer centre is `(0, 0)`. A 300 mm wafer is validated as a radius of
-`150000.0 um`; generated chip centres must remain inside that circle.
+`150.0 mm`; generated chip centres must remain inside that circle.
 The current dummy `circle` labels are deterministic radial bands only and are
 not a production zone-boundary definition.
 The dummy generator groups chips into shots of approximately 4 columns by 6

@@ -342,6 +342,53 @@ export class ChipAnnotator {
         return this._getShotGridGeometry()?.shape || null;
     }
 
+    _inferShotAxisDirection(groups, shotKey, gridKey, fallback = 1) {
+        let score = 0;
+        for (let leftIndex = 0; leftIndex < groups.length; leftIndex += 1) {
+            const left = groups[leftIndex];
+            const leftShot = Number(left?.[shotKey]);
+            const leftGrid = Number(left?.[gridKey]);
+            if (!Number.isFinite(leftShot) || !Number.isFinite(leftGrid)) continue;
+            for (let rightIndex = leftIndex + 1; rightIndex < groups.length; rightIndex += 1) {
+                const right = groups[rightIndex];
+                const rightShot = Number(right?.[shotKey]);
+                const rightGrid = Number(right?.[gridKey]);
+                if (!Number.isFinite(rightShot) || !Number.isFinite(rightGrid)) continue;
+                const shotDelta = rightShot - leftShot;
+                const gridDelta = rightGrid - leftGrid;
+                if (shotDelta === 0 || gridDelta === 0) continue;
+                score += Math.sign(shotDelta * gridDelta);
+            }
+        }
+        if (score > 0) return 1;
+        if (score < 0) return -1;
+        return fallback;
+    }
+
+    _getShotGridOffset(shotValue, minShotValue, maxShotValue, direction) {
+        if (![shotValue, minShotValue, maxShotValue].every(Number.isFinite)) return null;
+        return direction >= 0
+            ? shotValue - minShotValue
+            : maxShotValue - shotValue;
+    }
+
+    _getShotGridBase(layoutRow, geometry) {
+        if (!layoutRow || !geometry) return null;
+        const shotX = Number(layoutRow.shot_x_pos);
+        const shotY = Number(layoutRow.shot_y_pos);
+        const cols = Number(geometry.shape?.cols);
+        const rows = Number(geometry.shape?.rows);
+        const xOffset = this._getShotGridOffset(shotX, geometry.minShotX, geometry.maxShotX, geometry.xDirection);
+        const yOffset = this._getShotGridOffset(shotY, geometry.minShotY, geometry.maxShotY, geometry.yDirection);
+        if (![cols, rows, geometry.originX, geometry.originY, xOffset, yOffset].every(Number.isFinite)) {
+            return null;
+        }
+        return {
+            x: geometry.originX + xOffset * cols,
+            y: geometry.originY + yOffset * rows,
+        };
+    }
+
     _getShotGridGeometry() {
         if (this._shotGridGeometry) return this._shotGridGeometry;
 
@@ -380,7 +427,14 @@ export class ChipAnnotator {
             const shotY = groupEntries.find((entry) => entry.shotY !== null)?.shotY;
             if (shotX !== undefined && shotX !== null) shotXValues.push(shotX);
             if (shotY !== undefined && shotY !== null) shotYValues.push(shotY);
-            groups.push({ group, entries: groupEntries, shotX, shotY });
+            groups.push({
+                group,
+                entries: groupEntries,
+                shotX,
+                shotY,
+                avgX: xs.reduce((sum, value) => sum + value, 0) / xs.length,
+                avgY: ys.reduce((sum, value) => sum + value, 0) / ys.length,
+            });
             entries.push(...groupEntries);
         }
 
@@ -393,15 +447,25 @@ export class ChipAnnotator {
         const maxShotX = shotXValues.length ? Math.max(...shotXValues) : null;
         const minShotY = shotYValues.length ? Math.min(...shotYValues) : null;
         const maxShotY = shotYValues.length ? Math.max(...shotYValues) : null;
+        const xDirection = this._inferShotAxisDirection(groups, 'shotX', 'avgX', 1);
+        const yDirection = this._inferShotAxisDirection(groups, 'shotY', 'avgY', -1);
         let originX = null;
         let originY = null;
-        if (minShotX !== null && maxShotY !== null) {
+        if (minShotX !== null && maxShotX !== null && minShotY !== null && maxShotY !== null) {
             const xOrigins = entries
                 .filter((entry) => entry.shotX !== null)
-                .map((entry) => entry.x - (entry.shotX - minShotX) * cols);
+                .map((entry) => {
+                    const offset = this._getShotGridOffset(entry.shotX, minShotX, maxShotX, xDirection);
+                    return Number.isFinite(offset) ? entry.x - offset * cols : NaN;
+                })
+                .filter(Number.isFinite);
             const yOrigins = entries
                 .filter((entry) => entry.shotY !== null)
-                .map((entry) => entry.y - (maxShotY - entry.shotY) * rows);
+                .map((entry) => {
+                    const offset = this._getShotGridOffset(entry.shotY, minShotY, maxShotY, yDirection);
+                    return Number.isFinite(offset) ? entry.y - offset * rows : NaN;
+                })
+                .filter(Number.isFinite);
             if (xOrigins.length) originX = Math.min(...xOrigins);
             if (yOrigins.length) originY = Math.min(...yOrigins);
         }
@@ -413,6 +477,8 @@ export class ChipAnnotator {
             maxShotX,
             minShotY,
             maxShotY,
+            xDirection,
+            yDirection,
             originX,
             originY,
         };
@@ -487,13 +553,20 @@ export class ChipAnnotator {
                 const hasLayoutShotGrid = geometry &&
                     Number.isInteger(shotX) && Number.isInteger(shotY) &&
                     Number.isInteger(geometry.originX) && Number.isInteger(geometry.originY) &&
-                    Number.isInteger(geometry.minShotX) && Number.isInteger(geometry.maxShotY);
+                    Number.isInteger(geometry.minShotX) && Number.isInteger(geometry.maxShotX) &&
+                    Number.isInteger(geometry.minShotY) && Number.isInteger(geometry.maxShotY);
                 const positiveModulo = (value, size) => ((value % size) + size) % size;
-                const baseGridX = hasLayoutShotGrid
-                    ? geometry.originX + (shotX - geometry.minShotX) * shape.cols
+                const baseCandidate = hasLayoutShotGrid ? this._getShotGridBase(reference.layout, geometry) : null;
+                const baseCoversGroup = baseCandidate && layoutEntries.every((entry) =>
+                    entry.x >= baseCandidate.x && entry.x < baseCandidate.x + shape.cols &&
+                    entry.y >= baseCandidate.y && entry.y < baseCandidate.y + shape.rows
+                );
+                const base = baseCoversGroup ? baseCandidate : null;
+                const baseGridX = base
+                    ? base.x
                     : minGridX - positiveModulo(minGridX, shape.cols);
-                const baseGridY = hasLayoutShotGrid
-                    ? geometry.originY + (geometry.maxShotY - shotY) * shape.rows
+                const baseGridY = base
+                    ? base.y
                     : minGridY - positiveModulo(minGridY, shape.rows);
                 minX = reference.chip.rect.x0 - (reference.x - baseGridX) * chipWidth;
                 minY = reference.chip.rect.y0 - (reference.y - baseGridY) * chipHeight;
@@ -515,8 +588,8 @@ export class ChipAnnotator {
             const layout = this.getLayoutRowForChip(chip);
             const rect = chip?.rect;
             if (!layout || !rect) return null;
-            const xMm = Number(layout.chip_center_x_pos) / 1000;
-            const yMm = Number(layout.chip_center_y_pos) / 1000;
+            const xMm = Number(layout.chip_center_x_pos);
+            const yMm = Number(layout.chip_center_y_pos);
             const xPx = (Number(rect.x0) + Number(rect.x1)) / 2;
             const yPx = (Number(rect.y0) + Number(rect.y1)) / 2;
             return [xMm, yMm, xPx, yPx].every(Number.isFinite) ? { xMm, yMm, xPx, yPx } : null;
@@ -691,13 +764,18 @@ export class ChipAnnotator {
         const layout = this.getLayoutRowForChip(chip);
         const geometry = this._getShotGridGeometry?.();
         if (geometry && Number.isInteger(geometry.originX) && Number.isInteger(geometry.originY) &&
-            Number.isInteger(geometry.minShotX) && Number.isInteger(geometry.maxShotY) &&
+            Number.isInteger(geometry.minShotX) && Number.isInteger(geometry.maxShotX) &&
+            Number.isInteger(geometry.minShotY) && Number.isInteger(geometry.maxShotY) &&
             Number.isInteger(Number(layout?.shot_x_pos)) && Number.isInteger(Number(layout?.shot_y_pos))) {
-            const baseX = geometry.originX +
-                (Number(layout.shot_x_pos) - geometry.minShotX) * cols;
-            const baseY = geometry.originY +
-                (geometry.maxShotY - Number(layout.shot_y_pos)) * rows;
-            return `${x - baseX}:${y - baseY}`;
+            const base = this._getShotGridBase(layout, geometry);
+            if (!base) return null;
+            const baseX = base.x;
+            const baseY = base.y;
+            const slotX = x - baseX;
+            const slotY = y - baseY;
+            if (slotX >= 0 && slotX < cols && slotY >= 0 && slotY < rows) {
+                return `${slotX}:${slotY}`;
+            }
         }
         const positiveModulo = (value, size) => ((value % size) + size) % size;
         return `${positiveModulo(x, cols)}:${positiveModulo(y, rows)}`;
@@ -774,7 +852,7 @@ export class ChipAnnotator {
     }
 
     formatLayoutPair(x, y) {
-        const values = [Number(x) / 1000, Number(y) / 1000];
+        const values = [Number(x), Number(y)];
         if (!values.every(Number.isFinite)) return '-';
         return `${values[0].toFixed(1)}, ${values[1].toFixed(1)}`;
     }
@@ -786,7 +864,7 @@ export class ChipAnnotator {
     }
 
     formatLayoutRadius(x, y) {
-        const values = [Number(x) / 1000, Number(y) / 1000];
+        const values = [Number(x), Number(y)];
         if (!values.every(Number.isFinite)) return '-';
         return Math.hypot(values[0], values[1]).toFixed(1);
     }
@@ -837,8 +915,8 @@ export class ChipAnnotator {
                     coordinateMatched = Number(chip?.x_abs) === Number(row.x) &&
                         Number(chip?.y_abs) === Number(row.y);
                 } else if (target === 'chip-pos') {
-                    const x = Number(layout?.chip_center_x_pos) / 1000;
-                    const y = Number(layout?.chip_center_y_pos) / 1000;
+                    const x = Number(layout?.chip_center_x_pos);
+                    const y = Number(layout?.chip_center_y_pos);
                     // Chip(Pos) is displayed at one decimal; accept both that display value
                     // and more precise pasted mm coordinates without crossing chip pitch.
                     coordinateMatched = near(Number(row.x), x, 0.051) && near(Number(row.y), y, 0.051);
@@ -914,15 +992,15 @@ export class ChipAnnotator {
                 x = Number(chip?.x_abs);
                 y = Number(chip?.y_abs);
             } else if (target === 'chip-pos') {
-                x = Number(layout?.chip_center_x_pos) / 1000;
-                y = Number(layout?.chip_center_y_pos) / 1000;
+                x = Number(layout?.chip_center_x_pos);
+                y = Number(layout?.chip_center_y_pos);
             } else if (target === 'chip-id') {
                 x = Number(layout?.chip_id ?? chip?.chip_id);
             } else if (target === 'shot-position') {
                 x = Number(this.getShotPositionForChip(chip));
             } else if (target === 'radius') {
-                const centerX = Number(layout?.chip_center_x_pos) / 1000;
-                const centerY = Number(layout?.chip_center_y_pos) / 1000;
+                const centerX = Number(layout?.chip_center_x_pos);
+                const centerY = Number(layout?.chip_center_y_pos);
                 x = Number.isFinite(centerX) && Number.isFinite(centerY)
                     ? Math.hypot(centerX, centerY)
                     : NaN;
@@ -979,8 +1057,8 @@ export class ChipAnnotator {
                 let chipX = Number(chip.x_abs);
                 let chipY = Number(chip.y_abs);
                 if (chipRangeTarget === 'chip-pos') {
-                    chipX = Number(layout?.chip_center_x_pos) / 1000;
-                    chipY = Number(layout?.chip_center_y_pos) / 1000;
+                    chipX = Number(layout?.chip_center_x_pos);
+                    chipY = Number(layout?.chip_center_y_pos);
                 }
                 if (!inRange(chipX, chipRange.xMin, chipRange.xMax) ||
                     !inRange(chipY, chipRange.yMin, chipRange.yMax)) {
@@ -988,8 +1066,8 @@ export class ChipAnnotator {
                 }
             }
             if (radiusRange) {
-                const centerX = Number(layout?.chip_center_x_pos) / 1000;
-                const centerY = Number(layout?.chip_center_y_pos) / 1000;
+                const centerX = Number(layout?.chip_center_x_pos);
+                const centerY = Number(layout?.chip_center_y_pos);
                 if (!inRange(Math.hypot(centerX, centerY), radiusRange.xMin, radiusRange.xMax)) return;
             }
             matchedIndices.add(chipIndex);
@@ -1074,7 +1152,8 @@ export class ChipAnnotator {
                 }
                 _positionsCache.set(cacheKey, this.positionsData);
             }
-            this.chips = this.positionsData.chips || [];
+            this.chips = this._dedupeChipsByGrid(this.positionsData.chips || []);
+            if (this.positionsData) this.positionsData.chips = this.chips;
             this._invalidateShotGeometry();
             if (this.layoutByChip.size > 0) this._buildShotBoundaryGroups();
             if (this.shotBoundaryVisible) this._renderShotBoundaries();
@@ -1827,10 +1906,52 @@ export class ChipAnnotator {
     }
 
     _chipKey(x, y) {
-        if (typeof x !== 'number' || typeof y !== 'number') {
+        const nx = Number(x);
+        const ny = Number(y);
+        if (!Number.isFinite(nx) || !Number.isFinite(ny)) {
             return null;
         }
-        return `${x},${y}`;
+        return `${nx},${ny}`;
+    }
+
+    _dedupeChipsByGrid(chips) {
+        if (!Array.isArray(chips) || chips.length <= 1) {
+            return Array.isArray(chips) ? chips : [];
+        }
+
+        const byKey = new Map();
+        const result = [];
+        let duplicateCount = 0;
+        for (const chip of chips) {
+            const key = this._chipKey(chip?.x_abs, chip?.y_abs);
+            if (!key) {
+                result.push(chip);
+                continue;
+            }
+
+            const existing = byKey.get(key);
+            if (!existing) {
+                byKey.set(key, chip);
+                result.push(chip);
+                continue;
+            }
+
+            duplicateCount += 1;
+            for (const [field, value] of Object.entries(chip || {})) {
+                if (existing[field] === undefined || existing[field] === null || existing[field] === '') {
+                    existing[field] = value;
+                }
+            }
+        }
+
+        if (duplicateCount > 0) {
+            console.warn('[POSITIONS] duplicate chip rows collapsed', {
+                duplicateCount,
+                sourceRows: chips.length,
+                uniqueChips: result.length,
+            });
+        }
+        return result;
     }
 
     _getChipIndexFromCoords(x, y) {

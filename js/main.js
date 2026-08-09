@@ -471,6 +471,7 @@ class WaferMapViewer {
         this._layoutLoadPromises = new Map();
         this._layoutCacheScope = new Set();
         this._layoutCacheGeneration = 0;
+        this._layoutPrimeTimer = null;
         this.thumbnailNavigator = null;
         this._deferredUiBootstrapPromise = null;
         this._deferredScriptPromises = new Map();
@@ -975,29 +976,45 @@ class WaferMapViewer {
         return pending;
     }
 
-    _primeLayoutCacheForImages(images) {
+    _primeLayoutCacheForImages(images, options = {}) {
         const processIds = new Set(
             (Array.isArray(images) ? images : [])
                 .map((imagePath) => this._getLayoutProcessId(imagePath))
                 .filter(Boolean)
         );
-        const sameScope = this._layoutCacheScope.size === processIds.size &&
-            [...processIds].every((key) => this._layoutCacheScope.has(key));
+        const maxProcessIds = Math.max(1, Number(options.maxProcessIds) || 4);
+        const primeIds = new Set([...processIds].slice(0, maxProcessIds));
+        const sameScope = this._layoutCacheScope.size === primeIds.size &&
+            [...primeIds].every((key) => this._layoutCacheScope.has(key));
         if (!sameScope) {
             this._layoutCacheGeneration += 1;
             this._layoutByProcess.clear();
             this._layoutLoadPromises.clear();
         }
-        this._layoutCacheScope = processIds;
-        return Promise.all([...processIds].map((key) =>
-            this._getLayoutRowsForProcess(key).catch((error) => {
-                console.warn(`Failed to prime layout for process ${key}:`, error);
-                return [];
-            })
-        ));
+        this._layoutCacheScope = primeIds;
+        if (this._layoutPrimeTimer) {
+            clearTimeout(this._layoutPrimeTimer);
+            this._layoutPrimeTimer = null;
+        }
+        const delayMs = Math.max(0, Number(options.delayMs) || 120);
+        return new Promise((resolve) => {
+            this._layoutPrimeTimer = setTimeout(() => {
+                this._layoutPrimeTimer = null;
+                Promise.all([...primeIds].map((key) =>
+                    this._getLayoutRowsForProcess(key).catch((error) => {
+                        console.warn(`Failed to prime layout for process ${key}:`, error);
+                        return [];
+                    })
+                )).then(resolve);
+            }, delayMs);
+        });
     }
 
     _clearLayoutCache() {
+        if (this._layoutPrimeTimer) {
+            clearTimeout(this._layoutPrimeTimer);
+            this._layoutPrimeTimer = null;
+        }
         this._layoutCacheGeneration += 1;
         this._layoutByProcess.clear();
         this._layoutLoadPromises.clear();
@@ -7094,12 +7111,12 @@ class WaferMapViewer {
         const isPlhImage = normalizedPath.includes('00P');
         const isPlcImage = normalizedPath.includes('00C');
         if (isPlhImage) {
-            return ['Normal', 'Invalid', 'SYSTEMATIC', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291', 'ETC'];
+            return ['SYSTEMATIC', 'Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291', 'ETC'];
         }
         if (isPlcImage) {
-            return ['Normal', 'Invalid', 'SYSTEMATIC', 'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
+            return ['SYSTEMATIC', 'Normal', 'Invalid', 'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
         }
-        return ['Normal', 'Invalid', 'SYSTEMATIC', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
+        return ['SYSTEMATIC', 'Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
             'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
     }
 
@@ -7253,26 +7270,30 @@ class WaferMapViewer {
 
             // 첫 화면 first paint 이후, 비핵심 패널은 파일 탐색기와 병렬로 초기화한다.
             const classificationInitTask = this.initClassification().catch(err => console.error('[INIT] Classification 초기화 실패:', err));
-            const bootstrapNonCriticalPanels = async () => {
-                try {
-                    await this.updateSubfolderList();
-                } catch (err) {
-                    console.error('[INIT] Subfolder 업데이트 실패:', err);
-                }
+            const bootstrapNonCriticalPanels = () => {
+                void (async () => {
+                    try {
+                        await classificationInitTask;
+                        await this.refreshLabelExplorer();
+                        await this.refreshClassList(false);
+                    } catch (err) {
+                        console.error('[INIT] Label Explorer 초기화 실패:', err);
+                    }
+                })();
 
-                try {
-                    await this.loadFolderBrowser('');
-                } catch (error) {
-                    console.error('[INIT] Folder browser 초기화 실패:', error);
-                }
+                void (async () => {
+                    try {
+                        await this.updateSubfolderList();
+                    } catch (err) {
+                        console.error('[INIT] Subfolder 업데이트 실패:', err);
+                    }
 
-                try {
-                    await classificationInitTask;
-                    await this.refreshLabelExplorer();
-                    await this.refreshClassList(false);
-                } catch (err) {
-                    console.error('[INIT] Label Explorer 초기화 실패:', err);
-                }
+                    try {
+                        await this.loadFolderBrowser('');
+                    } catch (error) {
+                        console.error('[INIT] Folder browser 초기화 실패:', error);
+                    }
+                })();
             };
             const scheduleNonCriticalPanelsBootstrap = () => {
                 if (typeof requestIdleCallback === 'function') {
@@ -8684,12 +8705,12 @@ class WaferMapViewer {
         if (target === 'shot-grid') return Number(layout?.[axis === 'x' ? 'shot_x_pos' : 'shot_y_pos']);
         if (target === 'chip-grid') return Number(chip?.[axis === 'x' ? 'x_abs' : 'y_abs']);
         if (target === 'chip-pos') {
-            return Number(layout?.[axis === 'x' ? 'chip_center_x_pos' : 'chip_center_y_pos']) / 1000;
+            return Number(layout?.[axis === 'x' ? 'chip_center_x_pos' : 'chip_center_y_pos']);
         }
         if (target === 'chip-id') return Number(layout?.chip_id ?? chip?.chip_id);
         if (target === 'radius') {
-            const x = Number(layout?.chip_center_x_pos) / 1000;
-            const y = Number(layout?.chip_center_y_pos) / 1000;
+            const x = Number(layout?.chip_center_x_pos);
+            const y = Number(layout?.chip_center_y_pos);
             return Number.isFinite(x) && Number.isFinite(y) ? Math.hypot(x, y) : NaN;
         }
         return NaN;
@@ -9729,8 +9750,8 @@ class WaferMapViewer {
                     });
                 }
             }
-            const posX = Number(layout?.chip_center_x_pos) / 1000;
-            const posY = Number(layout?.chip_center_y_pos) / 1000;
+            const posX = Number(layout?.chip_center_x_pos);
+            const posY = Number(layout?.chip_center_y_pos);
             if (Number.isFinite(posX) && Number.isFinite(posY)) {
                 const formattedX = formatMm(posX);
                 const formattedY = formatMm(posY);
@@ -23015,10 +23036,6 @@ class WaferMapViewer {
             transientGridRestoreState?.forceFlatGrid
         );
 
-        // Prime layout before LOT-mode dispatch; that branch returns before
-        // the flat-grid state is assigned.
-        this._primeLayoutCacheForImages(images);
-
         // 📦 Lot 모드가 활성화되어 있으면 Lot별 그리드로 표시
         // 🔥 Label Explorer/legacy label grids는 flat grid를 강제하여
         //    LOT 헤더/지연 로딩 경로로 인한 썸네일 초기 미표시를 피한다.
@@ -23092,7 +23109,7 @@ class WaferMapViewer {
         // A selected folder normally maps to one process/product. Prime its
         // small layout table while the grid renders so single-image clicks
         // can apply Chip/Shot coordinates without waiting for Parquet I/O.
-        this._primeLayoutCacheForImages(sortedImages);
+        this._primeLayoutCacheForImages(sortedImages, { maxProcessIds: 4, delayMs: 120 });
         if (!this.gridSelectedIdxs) this.gridSelectedIdxs = [];
 
         // 🔥 M.Comp 드롭다운 캐시 소스 검증 → 이미지 변경 시 갱신
@@ -29700,7 +29717,7 @@ class WaferMapViewer {
                 const endIndex = parseInt(targetItem.getAttribute('data-index'));
 
                 if (!isNaN(startIndex) && !isNaN(endIndex)) {
-                    const BOTTOM_VALUES = ['Normal', 'Invalid', 'SYSTEMATIC', '285', '286', '287', '288', '290', '291', '300', '385', '386', '388', '389', '390', 'ETC'];
+                    const BOTTOM_VALUES = ['SYSTEMATIC', 'Normal', 'Invalid', '285', '286', '287', '288', '290', '291', '300', '385', '386', '388', '389', '390', 'ETC'];
                     const start = Math.min(startIndex, endIndex);
                     const end = Math.max(startIndex, endIndex);
                     
@@ -31024,7 +31041,7 @@ class WaferMapViewer {
 
         if (shiftKey && this.lastBottomClickValue !== null) {
             // Shift 클릭: 범위 선택 (이전 클릭과 현재 클릭 사이 모두 선택)
-            const bottomValues = ['Normal', 'Invalid', 'SYSTEMATIC', '285', '286', '287', '288', '290', '291', '300', '385', '386', '388', '389', '390', 'ETC'];
+            const bottomValues = ['SYSTEMATIC', 'Normal', 'Invalid', '285', '286', '287', '288', '290', '291', '300', '385', '386', '388', '389', '390', 'ETC'];
             const lastIndex = bottomValues.indexOf(this.lastBottomClickValue);
             const currentIndex = bottomValues.indexOf(bottomStr);
 
@@ -31597,7 +31614,10 @@ class WaferMapViewer {
             console.log(`[SWAP] Lv${level} gradient filter swap ${Math.round(performance.now() - tStart)}ms`);
         } catch (e) {
             console.warn('[SWAP] _swapCompositeFilterImage failed, fallback to full reload:', e);
-            this._reloadCurrentImageWithFilters();
+            this.loadImage(path, false, null, true, {
+                preserveBottomSelection: true,
+                preserveViewport: true,
+            });
         }
 
         // Navigator 썸네일 갱신 (debounced)
@@ -31611,11 +31631,7 @@ class WaferMapViewer {
             return;
         }
         if (!this.selectedImagePath) return;
-        this.loadImage(this.selectedImagePath, false, null, true, {
-            preserveBottomSelection: true,
-            preserveViewport: true,
-        });
-        this.refreshThumbnailNavigatorWithCurrentParams();
+        this._swapCompositeFilterImage();
     }
 
     _syncBorderCheckboxUI() {
@@ -33420,7 +33436,7 @@ class WaferMapViewer {
         };
         const formatMm = (value) => {
             const number = numberOrNull(value);
-            return number === null ? '-' : (number / 1000).toFixed(3);
+            return number === null ? '-' : number.toFixed(3);
         };
         const safeCell = (value, fallback = '-') => {
             if (value === null || value === undefined || String(value) === '') return fallback;
@@ -33432,7 +33448,7 @@ class WaferMapViewer {
             const coordY = numberOrNull(layout?.chip_center_y_pos);
             const radius = coordX === null || coordY === null
                 ? '-'
-                : Math.hypot(coordX / 1000, coordY / 1000).toFixed(3);
+                : Math.hypot(coordX, coordY).toFixed(3);
             const bin = chip?.b ?? '';
             const binNumber = numberOrNull(bin);
             const chipId = layout?.chip_id ?? chip?.chip_id ?? '';

@@ -2727,16 +2727,16 @@ const { createRunner } = require('./e2e_playwright_session');
         .find((group) => group.chips.length < 24);
       const partialLayout = annotator.getLayoutRowForChip(partialGroup?.chips?.[0]);
       const pos = firstLayout
-        ? { x: (Number(firstLayout.chip_center_x_pos) / 1000).toFixed(3), y: (Number(firstLayout.chip_center_y_pos) / 1000).toFixed(3) }
+        ? { x: Number(firstLayout.chip_center_x_pos).toFixed(3), y: Number(firstLayout.chip_center_y_pos).toFixed(3) }
         : null;
       const grid = firstChip
         ? { x: Number(firstChip.x_abs), y: Number(firstChip.y_abs) }
         : null;
       const radius = firstLayout
-        ? Math.hypot(Number(firstLayout.chip_center_x_pos) / 1000, Number(firstLayout.chip_center_y_pos) / 1000).toFixed(3)
+        ? Math.hypot(Number(firstLayout.chip_center_x_pos), Number(firstLayout.chip_center_y_pos)).toFixed(3)
         : null;
       const radiusExact = firstLayout
-        ? Math.hypot(Number(firstLayout.chip_center_x_pos) / 1000, Number(firstLayout.chip_center_y_pos) / 1000)
+        ? Math.hypot(Number(firstLayout.chip_center_x_pos), Number(firstLayout.chip_center_y_pos))
         : null;
       return {
         shotRows,
@@ -3411,8 +3411,8 @@ const { createRunner } = require('./e2e_playwright_session');
         const selected = [...(annotator?.selectedChips || [])];
         const chip = annotator?.chips?.[selected[0]];
         const layout = annotator?.getLayoutRowForChip?.(chip);
-        const chipX = Number(layout?.chip_center_x_pos) / 1000;
-        const chipY = Number(layout?.chip_center_y_pos) / 1000;
+        const chipX = Number(layout?.chip_center_x_pos);
+        const chipY = Number(layout?.chip_center_y_pos);
         return annotator?.selectionMode === 'chip' && selected.length === 1 &&
           Math.abs(chipX - x) < 0.001 && Math.abs(chipY - y) < 0.001;
       },
@@ -3444,7 +3444,7 @@ const { createRunner } = require('./e2e_playwright_session');
         const selected = [...(annotator?.selectedChips || [])];
         return annotator?.selectionMode === 'chip' && selected.length > 0 && selected.every((index) => {
           const layout = annotator.getLayoutRowForChip(annotator.chips[index]);
-          const radius = Math.hypot(Number(layout?.chip_center_x_pos) / 1000, Number(layout?.chip_center_y_pos) / 1000);
+          const radius = Math.hypot(Number(layout?.chip_center_x_pos), Number(layout?.chip_center_y_pos));
           return radius >= min && radius <= max;
         });
       },
