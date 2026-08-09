@@ -9582,7 +9582,7 @@ class WaferMapViewer {
         if (!state || !Number.isInteger(row) || !Number.isInteger(col)) return;
         const columns = this._coordinateSelectionListConfig(listName).columns;
         if (state.synced && !preserveSynced) {
-            state.rows = this._newCoordinateSelectionListRows(listName);
+            state.rows = this._readCoordinateSelectionList(listName);
         }
         state.synced = false;
         while (state.rows.length <= row) state.rows.push(Array(columns).fill(''));
@@ -10044,7 +10044,7 @@ class WaferMapViewer {
         const state = this.coordinateSelectionLists[listName];
         const columns = this._coordinateSelectionListConfig(listName).columns;
         if (state.synced) {
-            state.rows = this._newCoordinateSelectionListRows(listName);
+            state.rows = this._readCoordinateSelectionList(listName);
             state.synced = false;
         }
         while (state.rows.length < startRow + matrix.length) state.rows.push(Array(columns).fill(''));
