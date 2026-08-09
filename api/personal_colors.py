@@ -749,11 +749,12 @@ def plte_bottom_filter_memory(
 
 
 def plte_normalize_border_memory(png_data: bytearray) -> bytearray:
-    """모든 border 팔레트 인덱스(11~23)를 Normal 색(인덱스 10)으로 통일한다.
+    """모든 border 팔레트 인덱스(11~24)를 Normal 색(인덱스 10)으로 통일한다.
 
     Border 정규화 모드: chip 테두리 색을 구분 없이 Normal 색으로 표시한다.
-    - 인덱스 10 (Normal border) 색을 읽어 인덱스 11~23에 복사한다.
-    - 인덱스 0~9, 24+ 는 건드리지 않는다.
+    - 인덱스 10 (Normal border) 색을 읽어 인덱스 11~24에 복사한다.
+    - 인덱스 24는 ETC(BIN0387 등 unknown BIN) border다.
+    - 인덱스 0~9, 25+ 는 건드리지 않는다.
     """
     pos = 8  # PNG 시그니처 건너뛰기
     while pos < len(png_data):
@@ -776,7 +777,7 @@ def plte_normalize_border_memory(png_data: bytearray) -> bytearray:
             # Normal border color (index 10)
             if num_colors > 10:
                 nr, ng, nb = plte[30], plte[31], plte[32]
-                for idx in range(11, min(24, num_colors)):
+                for idx in range(11, min(25, num_colors)):
                     plte[idx * 3]     = nr
                     plte[idx * 3 + 1] = ng
                     plte[idx * 3 + 2] = nb

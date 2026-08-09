@@ -183,9 +183,22 @@ export class ChipAnnotator {
         this.layoutProcessId = null;
         this.layoutByChip.clear();
         this.shotBoundaryGroups.clear();
+        this.shotBoundaryVisible = false;
         this._invalidateShotGeometry();
         this.hoveredChip = null;
         this._resetChipCoordinateDisplay();
+        this.viewer?._syncShotBoundaryButtonUI?.();
+    }
+
+    _getShotGroupKeyForLayout(layoutRow) {
+        if (!layoutRow) return null;
+        const shotX = Number(layoutRow.shot_x_pos);
+        const shotY = Number(layoutRow.shot_y_pos);
+        if (Number.isFinite(shotX) && Number.isFinite(shotY)) {
+            return `xy:${shotX}:${shotY}`;
+        }
+        const shotId = String(layoutRow.shot_id ?? '').trim();
+        return shotId ? `id:${shotId}` : null;
     }
 
     setShotBoundaryVisible(visible) {
@@ -221,14 +234,21 @@ export class ChipAnnotator {
 
         this.chips.forEach((chip, index) => {
             const layoutRow = this.getLayoutRowForChip(chip);
-            if (!layoutRow || layoutRow.shot_id === undefined || layoutRow.shot_id === null) return;
-            const shotId = String(layoutRow.shot_id).trim();
-            if (!shotId || !chip?.rect) return;
+            const groupKey = this._getShotGroupKeyForLayout(layoutRow);
+            if (!groupKey || !chip?.rect) return;
+            const rawShotId = String(layoutRow?.shot_id ?? '').trim();
+            const shotX = Number(layoutRow?.shot_x_pos);
+            const shotY = Number(layoutRow?.shot_y_pos);
+            const shotId = rawShotId || (
+                Number.isFinite(shotX) && Number.isFinite(shotY)
+                    ? `${shotX},${shotY}`
+                    : groupKey
+            );
 
-            let group = this.shotBoundaryGroups.get(shotId);
+            let group = this.shotBoundaryGroups.get(groupKey);
             if (!group) {
-                group = { shotId, chips: [], indices: [] };
-                this.shotBoundaryGroups.set(shotId, group);
+                group = { shotId, groupKey, shotX, shotY, chips: [], indices: [] };
+                this.shotBoundaryGroups.set(groupKey, group);
             }
             group.chips.push(chip);
             group.indices.push(index);
@@ -237,11 +257,9 @@ export class ChipAnnotator {
 
     _getShotGroupForChip(chip) {
         const layoutRow = this.getLayoutRowForChip(chip);
-        if (!layoutRow || layoutRow.shot_id === undefined || layoutRow.shot_id === null) {
-            return null;
-        }
-        const shotId = String(layoutRow.shot_id).trim();
-        return shotId ? this.shotBoundaryGroups.get(shotId) || null : null;
+        if (!layoutRow) return null;
+        const groupKey = this._getShotGroupKeyForLayout(layoutRow);
+        return groupKey ? this.shotBoundaryGroups.get(groupKey) || null : null;
     }
 
     _getShotChipIndices(chip) {
@@ -367,7 +385,7 @@ export class ChipAnnotator {
 
     _getShotBoundaryRect(group) {
         if (!group?.chips?.length) return null;
-        const cacheKey = String(group.shotId ?? '');
+        const cacheKey = String(group.groupKey ?? group.shotId ?? '');
         if (cacheKey && this._shotBoundaryCache.has(cacheKey)) {
             return this._shotBoundaryCache.get(cacheKey);
         }

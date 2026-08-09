@@ -37,6 +37,7 @@ const SYSTEMATIC_BIN_TYPES = Object.freeze([
     '285', '286', '287', '288', '290', '291',
     '300', '385', '386', '388', '389', '390',
 ]);
+const SYSTEMATIC_LEGEND_COLOR = '#8f8f8f';
 
 // ✅ 미니맵 뷰포트 크기 제한 상수
 const MINIMAP_VIEWPORT_MIN_SIZE = 0.05;  // 최소 5%
@@ -2123,7 +2124,6 @@ class WaferMapViewer {
             selectedBottoms: this.selectedBottoms ? [...this.selectedBottoms] : [],
             selectedGrades: this.selectedGrades ? [...this.selectedGrades] : [],
             selectedGradientRanges: this.selectedGradientRanges ? [...this.selectedGradientRanges] : [],
-            borderNormalize: this.borderNormalize || false,
         };
     }
 
@@ -2714,7 +2714,7 @@ class WaferMapViewer {
             this.selectedBottoms = new Set(state.selectedBottoms || []);
             this.selectedGrades = new Set(state.selectedGrades || []);
             this.selectedGradientRanges = new Set(state.selectedGradientRanges || []);
-            this.borderNormalize = state.borderNormalize || false;
+            this.borderNormalize = false;
             // 🔥 Measure 비활성 상태이면 _gridMeasureMap / _measureBaseImages 초기화
             // (탭 전환 시 이전 탭의 stale 데이터가 남아 measure 썸네일이 표시되는 문제 방지)
             if (!this.overlayMode && this._measureCheckedItems.length === 0) {
@@ -31468,7 +31468,6 @@ class WaferMapViewer {
                 filterLT: this.filterLT,
                 filterTM: this.filterTM,
                 filterSTEP: [...(this.filterSTEP || [])],
-                borderNormalize: this.borderNormalize,
                 lastProductFolder: this.productFolderPath || this._savedLastProductFolder || '',
                 chipLabelOverlayEnabled: this.chipLabelOverlayEnabled,
             }),
@@ -31508,10 +31507,8 @@ class WaferMapViewer {
                 this.filterSTEP = prefs.filterSTEP;
                 this._restoreMultiSelectUI('step');
             }
-            if (typeof prefs.borderNormalize === 'boolean') {
-                this.borderNormalize = prefs.borderNormalize;
-                this._syncBorderCheckboxUI();
-            }
+            this.borderNormalize = false;
+            this._syncBorderCheckboxUI();
             if (typeof prefs.chipLabelOverlayEnabled === 'boolean') {
                 this.chipLabelOverlayEnabled = prefs.chipLabelOverlayEnabled;
             } else {
@@ -32302,19 +32299,11 @@ class WaferMapViewer {
                 // 🔥 "Border" 키가 있는 경우 "Normal"로 매핑 (Ubuntu 서버 호환성)
                 let actualLabel = label;
                 let color = userData.bottom[label];
-                let barBackground = null;
                 let textColor = null;
 
                 if (label === 'SYSTEMATIC') {
-                    const colors = SYSTEMATIC_BIN_TYPES
-                        .map((bin) => userData.bottom[`B${bin}`])
-                        .filter(Boolean);
-                    if (colors.length > 0) {
-                        const step = 100 / colors.length;
-                        barBackground = `linear-gradient(90deg, ${colors.map((entry, idx) => `${entry} ${Math.round(idx * step)}% ${Math.round((idx + 1) * step)}%`).join(', ')})`;
-                    }
-                    color = color || colors[0] || '#8a8a8a';
-                    textColor = '#fff';
+                    color = SYSTEMATIC_LEGEND_COLOR;
+                    textColor = _contrastText(color);
                 }
 
                 // "Normal" 키가 없으면 "Border" 키 확인
@@ -32345,9 +32334,7 @@ class WaferMapViewer {
                         : (binCounts[countKey] || 0);
                     const pct = netd > 0 ? (cnt / netd * 100).toFixed(1) : '0.0';
                     const countText = chips.length > 0 ? `${pct}%(${cnt})` : '';
-                    const bgStyle = barBackground
-                        ? `background:${barBackground};`
-                        : `background-color: ${color};`;
+                    const bgStyle = `background-color: ${color};`;
                     return `
                         <div class="legend-item" data-section="bottom" data-key="${displayLabel}" data-index="${index}" draggable="true" style="cursor: pointer;">
                             <span class="legend-label">${renderLabel}</span>
@@ -32552,16 +32539,8 @@ class WaferMapViewer {
             const bottomHtml = BOTTOM_KEYS.map((label, index) => {
                 let actualLabel = label;
                 let color = userData.bottom[label];
-                let barBackground = null;
                 if (label === 'SYSTEMATIC') {
-                    const colors = SYSTEMATIC_BIN_TYPES
-                        .map((bin) => userData.bottom[`B${bin}`])
-                        .filter(Boolean);
-                    if (colors.length > 0) {
-                        const step = 100 / colors.length;
-                        barBackground = `linear-gradient(90deg, ${colors.map((entry, idx) => `${entry} ${Math.round(idx * step)}% ${Math.round((idx + 1) * step)}%`).join(', ')})`;
-                    }
-                    color = color || colors[0] || '#8a8a8a';
+                    color = SYSTEMATIC_LEGEND_COLOR;
                 }
                 if (label === 'Normal' && !color) {
                     if (userData.bottom['Border']) { actualLabel = 'Border'; color = userData.bottom['Border']; }
@@ -32573,7 +32552,7 @@ class WaferMapViewer {
                 const isSelected = this.selectedBottoms.has(displayLabel);
                 const selBorder = isSelected ? 'outline:2px solid #1976d2;outline-offset:-2px;' : '';
                 const opacity = this.selectedBottoms.size > 0 && !isSelected ? 'opacity:0.35;' : '';
-                const bgStyle = barBackground ? `background:${barBackground};` : `background-color:${color};`;
+                const bgStyle = `background-color:${color};`;
                 return `
                     <div class="legend-item-grid" data-section="bottom" data-key="${displayLabel}" data-index="${index}" style="cursor:pointer;${opacity}">
                         <div class="legend-color-bar-grid" style="${bgStyle}${selBorder}"></div>
@@ -32592,17 +32571,9 @@ class WaferMapViewer {
                 // 🔥 "Border" 키가 있는 경우 "Normal"로 매핑 (Ubuntu 서버 호환성)
                 let actualLabel = label;
                 let color = userData.bottom[label];
-                let barBackground = null;
 
                 if (label === 'SYSTEMATIC') {
-                    const colors = SYSTEMATIC_BIN_TYPES
-                        .map((bin) => userData.bottom[`B${bin}`])
-                        .filter(Boolean);
-                    if (colors.length > 0) {
-                        const step = 100 / colors.length;
-                        barBackground = `linear-gradient(90deg, ${colors.map((entry, idx) => `${entry} ${Math.round(idx * step)}% ${Math.round((idx + 1) * step)}%`).join(', ')})`;
-                    }
-                    color = color || colors[0] || '#8a8a8a';
+                    color = SYSTEMATIC_LEGEND_COLOR;
                 }
 
                 // "Normal" 키가 없으면 "Border" 키 확인
@@ -32623,9 +32594,7 @@ class WaferMapViewer {
                 if (color) {
                     // 🔥 "Border"를 "Normal"로 표시 (shortenLabel에서 "nor"로 변환)
                     const displayLabel = actualLabel === 'Border' ? 'Normal' : label;
-                    const bgStyle = barBackground
-                        ? `background:${barBackground};`
-                        : `background-color: ${color};`;
+                    const bgStyle = `background-color: ${color};`;
                     return `
                         <div class="legend-item-grid" data-section="bottom" data-key="${displayLabel}" data-index="${index}" style="cursor: pointer;">
                             <div class="legend-color-bar-grid" style="${bgStyle}"></div>

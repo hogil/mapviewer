@@ -1790,7 +1790,7 @@ const { createRunner } = require('./e2e_playwright_session');
       }
       const normal = entry(normalized.palette, 10);
       const normalizedBorderIndices = [];
-      for (let index = 11; index < Math.min(24, paletteEntries); index += 1) {
+      for (let index = 11; index < Math.min(25, paletteEntries); index += 1) {
         if (equalBytes(normalized.palette.slice(index * 3, index * 3 + 3),
           normalized.palette.slice(30, 33))) normalizedBorderIndices.push(index);
       }
@@ -1815,7 +1815,7 @@ const { createRunner } = require('./e2e_playwright_session');
         normal,
         changedIndices,
         normalizedBorderIndices,
-        outsideBorderChanges: changedIndices.filter((index) => index < 11 || index >= 24),
+        outsideBorderChanges: changedIndices.filter((index) => index < 11 || index >= 25),
         idatEqual: equalBytes(base.idat, normalized.idat),
         overlayBefore: overlayHashBeforeBorder,
         overlayAfter: { hash: overlayHash >>> 0, width: canvas?.width || 0, height: canvas?.height || 0 },
@@ -1823,8 +1823,8 @@ const { createRunner } = require('./e2e_playwright_session');
       };
     }, { imagePath: target.imagePath, overlayHashBeforeBorder });
     expect(borderNormalization.border && borderNormalization.baseStatus === 200 &&
-      borderNormalization.normalizedStatus === 200 && borderNormalization.paletteEntries >= 24 &&
-      borderNormalization.normalizedBorderIndices.length === 13 &&
+      borderNormalization.normalizedStatus === 200 && borderNormalization.paletteEntries >= 25 &&
+      borderNormalization.normalizedBorderIndices.length === 14 &&
       borderNormalization.outsideBorderChanges.length === 0 && borderNormalization.idatEqual &&
       borderNormalization.overlayBefore.hash === borderNormalization.overlayAfter.hash &&
       borderNormalization.overlayBefore.width === borderNormalization.overlayAfter.width &&

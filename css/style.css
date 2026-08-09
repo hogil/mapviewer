@@ -815,8 +815,8 @@
         /* Grid Mode Color Legend */
         .color-legend-grid {
             display: none;
-            gap: 4px;
-            padding: 8px 12px;
+            gap: 3px;
+            padding: 6px 8px;
             background: rgba(30, 30, 30, 0.96);
             border-radius: 4px;
             backdrop-filter: blur(4px);
@@ -842,17 +842,19 @@
         
         .legend-group-top {
             display: flex;
-            gap: 2px;
+            gap: 1px;
             align-items: center;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
+            min-width: 0;
         }
 
         .legend-group-bottom {
             display: flex;
-            gap: 2px;
+            gap: 1px;
             align-items: center;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
             margin-left: auto;
+            min-width: 0;
         }
         
         .viewer-container.grid-mode ~ #grid-color-legend-bottom,
@@ -863,9 +865,9 @@
         .legend-item-grid {
             display: flex;
             align-items: center;
-            gap: 3px;
-            margin-right: 5px;
-            font-size: 11px;
+            gap: 2px;
+            margin-right: 2px;
+            font-size: 10px;
             flex-shrink: 0;
             user-select: none;
             -webkit-user-select: none;
@@ -882,8 +884,8 @@
         }
         
         .legend-color-bar-grid {
-            width: 18px;
-            height: 14px;
+            width: 14px;
+            height: 12px;
             border: 1px solid #444;
             border-radius: 2px;
             flex-shrink: 0;
