@@ -162,14 +162,71 @@ export class ChipAnnotator {
         document.addEventListener('mousemove', this._onMouseMove);
     }
 
+    _layoutSignatureNumber(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? String(number) : '';
+    }
+
+    _getLayoutGeometrySignature(row) {
+        return [
+            this._layoutSignatureNumber(row?.shot_x_pos),
+            this._layoutSignatureNumber(row?.shot_y_pos),
+            this._layoutSignatureNumber(row?.chip_id),
+            this._layoutSignatureNumber(row?.chip_center_x_pos),
+            this._layoutSignatureNumber(row?.chip_center_y_pos),
+            String(row?.full_shot_type ?? '').trim(),
+        ].join('|');
+    }
+
+    _chooseLayoutRepresentative(rows) {
+        const candidates = Array.isArray(rows) ? rows.filter(Boolean) : [];
+        if (candidates.length <= 1) return candidates[0] || null;
+
+        const signatures = new Map();
+        candidates.forEach((row, index) => {
+            const signature = this._getLayoutGeometrySignature(row);
+            const entry = signatures.get(signature) || { row, count: 0, firstIndex: index };
+            entry.count += 1;
+            signatures.set(signature, entry);
+        });
+
+        return [...signatures.values()].sort((left, right) =>
+            right.count - left.count || left.firstIndex - right.firstIndex
+        )[0]?.row || candidates[0];
+    }
+
     setLayoutData(processId, rows) {
         this.layoutProcessId = processId || null;
         this.layoutByChip.clear();
+        const buckets = new Map();
         for (const row of Array.isArray(rows) ? rows : []) {
             const x = Number(row?.chip_x_pos);
             const y = Number(row?.chip_y_pos);
             if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-            this.layoutByChip.set(`${x}:${y}`, row);
+            const key = `${x}:${y}`;
+            if (!buckets.has(key)) buckets.set(key, []);
+            buckets.get(key).push(row);
+        }
+
+        let duplicateKeys = 0;
+        let conflictingDuplicateKeys = 0;
+        buckets.forEach((bucket, key) => {
+            if (bucket.length > 1) {
+                duplicateKeys += 1;
+                const signatures = new Set(bucket.map((row) => this._getLayoutGeometrySignature(row)));
+                if (signatures.size > 1) conflictingDuplicateKeys += 1;
+            }
+            const representative = this._chooseLayoutRepresentative(bucket);
+            if (representative) this.layoutByChip.set(key, representative);
+        });
+        if (duplicateKeys > 0) {
+            console.warn('[LAYOUT] duplicate chip rows collapsed', {
+                processId: this.layoutProcessId,
+                duplicateKeys,
+                conflictingDuplicateKeys,
+                sourceRows: Array.isArray(rows) ? rows.length : 0,
+                uniqueChips: this.layoutByChip.size,
+            });
         }
         this._invalidateShotGeometry();
         this._buildShotBoundaryGroups();
