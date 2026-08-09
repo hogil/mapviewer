@@ -12,6 +12,10 @@
 // positions 클라이언트 캐시 (화살표 이동 시 재요청 방지)
 const _positionsCache = new Map(); // path → positionsData
 const _POSITIONS_CACHE_MAX = 50;
+const SYSTEMATIC_FILTER_BINS = new Set([
+    '285', '286', '287', '288', '290', '291',
+    '300', '385', '386', '388', '389', '390',
+]);
 
 export class ChipAnnotator {
     constructor(canvas, viewer) {
@@ -46,6 +50,7 @@ export class ChipAnnotator {
         this.legendFilterClasses = null;
         this.chipLabelOverlayAlpha = 0.2;
         this.bottomFilterSet = new Set(); // 🔥 Bottom Filter (Chip b-value based mask)
+        this.gradeFilterSet = new Set(); // Grade legend filter (palette index 0-7)
 
         // Overlay mode: null = normal (white mask), 'bin' = bin color fill+text, 'f'/'q' = ratio gradient
         this.overlayMode = null;
@@ -345,9 +350,10 @@ export class ChipAnnotator {
             ? chip.index
             : this._getChipIndexFromCoords(Number(chip.x_abs), Number(chip.y_abs));
         if (chipIndex < 0) return [];
+        if (!this.isChipSelectable(this.chips[chipIndex])) return [];
         if (this.selectionMode !== 'shot') return [chipIndex];
         const shotIndices = this._getShotChipIndices(chip);
-        return shotIndices.length > 0 ? shotIndices : [chipIndex];
+        return this._filterSelectableIndices(shotIndices.length > 0 ? shotIndices : [chipIndex]);
     }
 
     _expandSelectionToShots(indices) {
@@ -356,7 +362,7 @@ export class ChipAnnotator {
             const chip = this.chips[index];
             this._getSelectionIndicesForChip(chip).forEach((chipIndex) => expanded.add(chipIndex));
         }
-        return Array.from(expanded);
+        return this._filterSelectableIndices(Array.from(expanded));
     }
 
     _getShotBoundaryRect(group) {
@@ -659,6 +665,10 @@ export class ChipAnnotator {
             });
         });
         if (affectedIndices.size === 0) affectedIndices.add(index);
+        const selectableAffected = this._filterSelectableIndices(Array.from(affectedIndices));
+        affectedIndices.clear();
+        selectableAffected.forEach((affectedIndex) => affectedIndices.add(affectedIndex));
+        if (affectedIndices.size === 0) return null;
 
         const currentlySelected = [...affectedIndices].every((affectedIndex) => this.selectedChips.has(affectedIndex));
         const nextSelected = typeof selected === 'boolean' ? selected : !currentlySelected;
@@ -740,6 +750,7 @@ export class ChipAnnotator {
             const rowMatches = [];
             this.chips.forEach((chip, chipIndex) => {
                 if (!chip) return;
+                if (!this.isChipSelectable(chip)) return;
                 const layout = this.getLayoutRowForChip(chip);
                 const hasCoordinate = row?.x !== undefined && row?.y !== undefined;
                 const hasChipId = row?.value !== undefined && String(row.value).trim() !== '';
@@ -817,6 +828,7 @@ export class ChipAnnotator {
         const matchedIndices = new Set();
         this.chips.forEach((chip, chipIndex) => {
             if (!chip) return;
+            if (!this.isChipSelectable(chip)) return;
             const layout = this.getLayoutRowForChip(chip);
             let x = NaN;
             let y = NaN;
@@ -884,6 +896,7 @@ export class ChipAnnotator {
 
         this.chips.forEach((chip, chipIndex) => {
             if (!chip) return;
+            if (!this.isChipSelectable(chip)) return;
             const layout = chipRangeTarget === 'chip-pos' || radiusRange
                 ? this.getLayoutRowForChip(chip)
                 : null;
@@ -966,7 +979,7 @@ export class ChipAnnotator {
             if (_positionsCache.has(cacheKey)) {
                 this.positionsData = _positionsCache.get(cacheKey);
             } else {
-                const response = await fetch(`/api/chip-positions?path=${encodeURIComponent(imagePath)}&include_fq=0`);
+                const response = await fetch(`/api/chip-positions?path=${encodeURIComponent(imagePath)}&include_fq=0&include_grade=1`);
                 if (!response.ok) {
                     console.log('No positions found for:', imagePath);
                     this.positionsData = null;
@@ -1190,6 +1203,56 @@ export class ChipAnnotator {
         return str;
     }
 
+    _matchesBottomFilter(chip) {
+        if (!this.bottomFilterSet || this.bottomFilterSet.size === 0) return true;
+        const normalized = this._normalizeBottomValue(chip?.b);
+        if (this.bottomFilterSet.has(normalized)) return true;
+        return this.bottomFilterSet.has('SYSTEMATIC') && SYSTEMATIC_FILTER_BINS.has(normalized);
+    }
+
+    _getChipGradeIndex(chip) {
+        const candidates = [
+            chip?.palette_index,
+            chip?.paletteIndex,
+            chip?.grade,
+            chip?.grade_index,
+            chip?.gradeIndex,
+        ];
+        for (const value of candidates) {
+            const number = Number(value);
+            if (Number.isInteger(number) && number >= 0 && number <= 7) return number;
+        }
+        return null;
+    }
+
+    _matchesGradeFilter(chip) {
+        if (!this.gradeFilterSet || this.gradeFilterSet.size === 0) return true;
+        const gradeIndex = this._getChipGradeIndex(chip);
+        return gradeIndex !== null && this.gradeFilterSet.has(gradeIndex);
+    }
+
+    isChipSelectable(chip) {
+        return !!chip && this._matchesBottomFilter(chip) && this._matchesGradeFilter(chip);
+    }
+
+    _filterSelectableIndices(indices) {
+        return [...new Set(Array.isArray(indices) ? indices : [])]
+            .map(Number)
+            .filter((index) => Number.isInteger(index) && index >= 0 && index < this.chips.length)
+            .filter((index) => this.isChipSelectable(this.chips[index]));
+    }
+
+    _pruneSelectionToSelectable() {
+        if (!this.selectedChips || this.selectedChips.size === 0) return false;
+        const before = this.selectedChips.size;
+        this.selectedChips = new Set(this._filterSelectableIndices(Array.from(this.selectedChips)));
+        this.selectedChipsOrder = (this.selectedChipsOrder || []).filter((index) => this.selectedChips.has(index));
+        if (this.selectedChipsOrder.length === 0 && this.selectedChips.size > 0) {
+            this.selectedChipsOrder = Array.from(this.selectedChips);
+        }
+        return this.selectedChips.size !== before;
+    }
+
     _getChipYieldNumber(chip) {
         const candidates = [chip?.yld, chip?.yield, chip?.YLD, chip?.YIELD];
         for (const value of candidates) {
@@ -1267,7 +1330,22 @@ export class ChipAnnotator {
         } else {
             this.bottomFilterSet.clear();
         }
+        const selectionChanged = this._pruneSelectionToSelectable();
         this.render();
+        if (selectionChanged) this.updateSelectedChipsList();
+    }
+
+    setGradeFilter(filterSet) {
+        if (filterSet instanceof Set) {
+            this.gradeFilterSet = new Set(Array.from(filterSet).map((value) => Number(value)).filter((value) => Number.isInteger(value) && value >= 0 && value <= 7));
+        } else if (Array.isArray(filterSet)) {
+            this.gradeFilterSet = new Set(filterSet.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value >= 0 && value <= 7));
+        } else {
+            this.gradeFilterSet.clear();
+        }
+        const selectionChanged = this._pruneSelectionToSelectable();
+        this.render();
+        if (selectionChanged) this.updateSelectedChipsList();
     }
 
     /**
@@ -1677,7 +1755,7 @@ export class ChipAnnotator {
                         const rect = chip.rect;
                         if (imgX >= rect.x0 && imgX <= rect.x1 &&
                             imgY >= rect.y0 && imgY <= rect.y1) {
-                            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) {
+                            if (!this.isChipSelectable(chip)) {
                                 return null;
                             }
                             return { ...chip, index: i };
@@ -1694,7 +1772,7 @@ export class ChipAnnotator {
             const rect = chip.rect;
             if (imgX >= rect.x0 && imgX <= rect.x1 &&
                 imgY >= rect.y0 && imgY <= rect.y1) {
-                if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) {
+                if (!this.isChipSelectable(chip)) {
                     return null;
                 }
                 return { ...chip, index: i };
@@ -1718,8 +1796,7 @@ export class ChipAnnotator {
             const chip = this.chips[i];
             if (chip.x_abs >= minX && chip.x_abs <= maxX &&
                 chip.y_abs >= minY && chip.y_abs <= maxY) {
-                // 🔥 Bottom Filter가 활성화된 경우, 가려진 칩은 선택 불가
-                if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) {
+                if (!this.isChipSelectable(chip)) {
                     continue;
                 }
                 selected.push(i);
@@ -2405,7 +2482,7 @@ export class ChipAnnotator {
             // BIN MAP: 색상은 normalized 카테고리, 텍스트는 raw b 값
             this.chips.forEach(chip => {
                 if (!chip) return;
-                if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) return;
+                if (!this.isChipSelectable(chip)) return;
                 const systematicBin = this._normalizeSystematicBinValue(chip.b);
                 if (this.binOverlayFilterSet.size > 0 && !this.binOverlayFilterSet.has(systematicBin)) return;
                 const norm = this._normalizeBottomValue(chip.b);
@@ -2420,7 +2497,7 @@ export class ChipAnnotator {
             this.ratioOverlayColors.forEach((color, chipIdx) => {
                 const chip = this.chips[chipIdx];
                 if (!chip) return;
-                if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) return;
+                if (!this.isChipSelectable(chip)) return;
                 // Gradient range filter: skip chips outside selected ranges
                 if (hasGradFilter) {
                     const pct = this.ratioPercentiles.get(chipIdx);
@@ -2454,7 +2531,7 @@ export class ChipAnnotator {
             ctx.fillStyle = '#ffffff';
             ctx.beginPath();
             this.chips.forEach(chip => {
-                if (chip && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) {
+                if (chip && !this._matchesBottomFilter(chip)) {
                     const rect = chip.rect;
                     const x = rect.x0 * transform.scale + transform.dx;
                     const y = rect.y0 * transform.scale + transform.dy + Y_OFFSET;
@@ -2481,7 +2558,7 @@ export class ChipAnnotator {
                 const chip = this.chips[chipIdx];
                 if (!chip) return;
                 // bottom filter로 이미 마스킹된 chip은 중복 마스킹 불필요
-                if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) return;
+                if (!this.isChipSelectable(chip)) return;
                 const rect = chip.rect;
                 const x = rect.x0 * transform.scale + transform.dx;
                 const y = rect.y0 * transform.scale + transform.dy + Y_OFFSET;
@@ -2505,8 +2582,7 @@ export class ChipAnnotator {
                 c => c.x_abs === markedChip.x_abs && c.y_abs === markedChip.y_abs
             );
             if (!chip) return;
-            // Bottom 필터 활성 시 허용된 b 값만 렌더링
-            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) {
+            if (!this.isChipSelectable(chip)) {
                 return;
             }
             const isVisible = !activeSet || activeSet.has(chipClass);
@@ -2527,7 +2603,7 @@ export class ChipAnnotator {
         if (this.selectionMode !== 'shot' && this.selectedChips.size > 0) {
             this.selectedChips.forEach(chipIdx => {
                 const chip = this.chips[chipIdx];
-                if (chip && (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(this._normalizeBottomValue(chip.b)))) {
+                if (this.isChipSelectable(chip)) {
                     this._drawSelectionHighlight(chip, this.selectedColor);
                 }
             });
@@ -2540,7 +2616,7 @@ export class ChipAnnotator {
                 if (
                     chip &&
                     !this.selectedChips.has(chipIdx) &&
-                    (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(this._normalizeBottomValue(chip.b)))
+                    this.isChipSelectable(chip)
                 ) {
                     // 이미 선택된 chip은 제외 (중복 표시 방지)
                     this._drawSelectionHighlight(chip, this.selectionPreviewColor);
@@ -2552,7 +2628,7 @@ export class ChipAnnotator {
         if (this.hoveredChip) {
             if (this.selectionMode === 'shot') {
                 this._renderHoveredShotBoundary();
-            } else if (this.bottomFilterSet.size === 0 || this.bottomFilterSet.has(this._normalizeBottomValue(this.hoveredChip.b))) {
+            } else if (this.isChipSelectable(this.hoveredChip)) {
                 this._drawChipOutline(this.hoveredChip, this.hoverColor);
             }
         }
@@ -3331,8 +3407,7 @@ export class ChipAnnotator {
             const chip = this.chips[i];
             const rect = chip.rect;
 
-            // 🔥 Bottom Filter가 활성화된 경우, 가려진 칩은 선택 불가
-            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) {
+            if (!this.isChipSelectable(chip)) {
                 continue;
             }
 
@@ -3366,8 +3441,7 @@ export class ChipAnnotator {
             const chip = this.chips[i];
             const rect = chip.rect;
 
-            // 🔥 Bottom Filter가 활성화된 경우, 가려진 칩은 선택 불가
-            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) {
+            if (!this.isChipSelectable(chip)) {
                 continue;
             }
 
@@ -3464,8 +3538,7 @@ export class ChipAnnotator {
         const newSelections = [];
 
         this.chips.forEach((chip, index) => {
-            // Skip chips filtered out by Bottom Legend
-            if (this.bottomFilterSet.size > 0 && !this.bottomFilterSet.has(this._normalizeBottomValue(chip.b))) {
+            if (!this.isChipSelectable(chip)) {
                 return;
             }
             newSelections.push(index);

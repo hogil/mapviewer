@@ -7037,7 +7037,7 @@ class WaferMapViewer {
             }
         }
         if (!isMeasureCompositeView && hasBottomFilter && !systematicBins?.length) {
-            const bottomList = Array.from(this.selectedBottoms).sort().join(',');
+            const bottomList = this._expandBottomFilterValues().sort().join(',');
             parts.push(`bottom_filter=${encodeURIComponent(bottomList)}`);
         }
         if (!isMeasureCompositeView && (this.isMeasureGradientMode())) {
@@ -7072,6 +7072,35 @@ class WaferMapViewer {
     _getActiveSystematicBinFilter() {
         const active = this._measureCheckedItems?.some((item) => item.type === 'systematic');
         return active ? [...SYSTEMATIC_BIN_TYPES] : null;
+    }
+
+    _expandBottomFilterValues(values = this.selectedBottoms) {
+        const expanded = new Set();
+        const source = values instanceof Set ? Array.from(values) : (Array.isArray(values) ? values : []);
+        source.forEach((value) => {
+            const key = String(value || '').trim();
+            if (!key) return;
+            if (key.toUpperCase() === 'SYSTEMATIC') {
+                SYSTEMATIC_BIN_TYPES.forEach((bin) => expanded.add(bin));
+                return;
+            }
+            expanded.add(key.startsWith('B') && /^\d/.test(key[1]) ? key.slice(1) : key);
+        });
+        return Array.from(expanded);
+    }
+
+    _getBottomLegendKeysForPath(imagePath = '') {
+        const normalizedPath = String(imagePath || '');
+        const isPlhImage = normalizedPath.includes('00P');
+        const isPlcImage = normalizedPath.includes('00C');
+        if (isPlhImage) {
+            return ['Normal', 'Invalid', 'SYSTEMATIC', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291', 'ETC'];
+        }
+        if (isPlcImage) {
+            return ['Normal', 'Invalid', 'SYSTEMATIC', 'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
+        }
+        return ['Normal', 'Invalid', 'SYSTEMATIC', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
+            'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
     }
 
     getPyramidCacheKey(level, params = null) {
@@ -8895,60 +8924,23 @@ class WaferMapViewer {
         if (this.dom?.coordinateSelectError) this.dom.coordinateSelectError.textContent = message;
     }
 
-    _getCoordinateSelectionYieldValue(chip, layout) {
-        const candidates = [
-            chip?.yld, chip?.yield, chip?.YLD, chip?.YIELD,
-            layout?.yld, layout?.yield, layout?.YLD, layout?.YIELD,
-        ];
-        const value = candidates.find((candidate) => candidate !== null && candidate !== undefined && String(candidate).trim() !== '');
-        if (value === undefined) return null;
-        const number = Number(value);
-        return Number.isFinite(number) ? number : String(value).trim();
-    }
-
     _updateCoordinateSelectionSummary() {
         const summary = this.dom?.coordinateSelectSummary;
         const annotator = this.chipAnnotator;
         if (!summary || !annotator) return;
         const selectedIndices = Array.from(annotator.selectedChips || []).filter((index) => annotator.chips?.[index]);
         const shotGroups = [...(annotator._getSelectedShotGroups?.() || [])];
-        const chipIds = selectedIndices
-            .map((index) => annotator.getLayoutRowForChip?.(annotator.chips[index])?.chip_id)
-            .filter((value) => value !== null && value !== undefined && String(value).trim() !== '')
-            .map(String);
-        const perItemValues = selectedIndices.map((index) => {
-            const chip = annotator.chips[index];
-            return this._getCoordinateSelectionYieldValue(chip, annotator.getLayoutRowForChip?.(chip));
-        }).filter((value) => value !== null);
-        const formatValues = (values) => values.slice(0, 6).map((value) => (
-            typeof value === 'number' ? value.toFixed(2) : String(value)
-        )).join(', ') + (values.length > 6 ? ', ...' : '');
-        const shotYieldValues = shotGroups.map((group) => {
-            const values = (group.indices || []).map((index) => {
-                const chip = annotator.chips[index];
-                return this._getCoordinateSelectionYieldValue(chip, annotator.getLayoutRowForChip?.(chip));
-            }).filter((value) => typeof value === 'number');
-            if (!values.length) return null;
-            return `${group.shotId}: ${(values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2)}`;
-        }).filter(Boolean);
-        const waferYield = annotator.yield !== null && annotator.yield !== undefined && String(annotator.yield).trim() !== ''
-            ? String(annotator.yield)
-            : '-';
         if (!selectedIndices.length) {
-            summary.textContent = '현재 선택 없음';
+            summary.textContent = 'Yld - · G 0/B 0';
+            summary.title = 'No selected chips';
             return;
         }
-        const parts = [
-            `현재 선택: ${shotGroups.length}개 Shot / ${selectedIndices.length}개 Chip`,
-            shotGroups.length ? `Shot ID: ${shotGroups.map((group) => group.shotId).join(', ')}` : '',
-            chipIds.length ? `Chip ID: ${chipIds.slice(0, 8).join(', ')}${chipIds.length > 8 ? ', ...' : ''}` : '',
-            shotGroups.length
-                ? `Shot별 YIELD: ${shotYieldValues.length ? shotYieldValues.join(' / ') : '개별 YIELD 데이터 없음'}`
-                : '',
-            `Chip ID별 YIELD: ${perItemValues.length ? formatValues(perItemValues) : '개별 YIELD 데이터 없음'}`,
-            `Wafer YIELD: ${waferYield}`,
-        ].filter(Boolean);
-        summary.textContent = parts.join('  |  ');
+        const selectedChips = selectedIndices.map((index) => annotator.chips[index]).filter(Boolean);
+        const yieldSummary = annotator.getSelectionYieldSummary?.(selectedChips);
+        const yieldText = annotator.formatSelectionYieldSummary?.(yieldSummary) || 'Yld - · G 0/B 0';
+        const shotText = shotGroups.length ? ` · Shot ${shotGroups.length}` : '';
+        summary.textContent = `${yieldText} · Chip ${selectedIndices.length}${shotText}`;
+        summary.title = `Selected chips: ${selectedIndices.length}, selected shots: ${shotGroups.length}`;
     }
 
     _renderCoordinateSelectionShotPicker() {
@@ -13470,7 +13462,7 @@ class WaferMapViewer {
         const gradientFilter = this.selectedGradientRanges.size > 0
             ? Array.from(this.selectedGradientRanges) : null;
         const binFilter = this.selectedBottoms.size > 0
-            ? Array.from(this.selectedBottoms) : null;
+            ? this._expandBottomFilterValues() : null;
 
         const results = cs.measureResults || [];
         if (!results.length) return;
@@ -14878,11 +14870,11 @@ class WaferMapViewer {
         }
 
         const TOP_KEYS = ['Grade0', 'Grade1', 'Grade2', 'Grade3', 'Grade4', 'Grade5', 'Grade6', 'Grade7'];
-        const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
-                             'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
+        const BOTTOM_KEYS = this._getBottomLegendKeysForPath('');
         const bottomLabelMap = {
             Normal: 'nor',
             Invalid: 'inv',
+            SYSTEMATIC: 'Systematic',
             B285: '285',
             B286: '286',
             B287: '287',
@@ -14917,6 +14909,12 @@ class WaferMapViewer {
             BOTTOM_KEYS.forEach((key) => {
                 let color = schemeData.bottom[key];
                 let displayKey = key;
+
+                if (key === 'SYSTEMATIC' && !color) {
+                    color = SYSTEMATIC_BIN_TYPES
+                        .map((bin) => schemeData.bottom[`B${bin}`])
+                        .find(Boolean) || '#8a8a8a';
+                }
 
                 if (key === 'Normal' && !color && schemeData.bottom.Border) {
                     color = schemeData.bottom.Border;
@@ -17706,6 +17704,12 @@ class WaferMapViewer {
                     }
                     if (loaded) {
                         console.log('✅ Chip positions & annotations loaded successfully');
+                        if (this.selectedBottoms.size > 0) {
+                            this.chipAnnotator.setBottomFilter(this.selectedBottoms);
+                        }
+                        if (this.selectedGrades.size > 0) {
+                            this.chipAnnotator.setGradeFilter(this.selectedGrades);
+                        }
                         // 오버레이 모드 활성 상태면 새 positions에 대해 재적용
                         await this._reapplyOverlayAfterPositionsLoad();
                         // 🔥 오버레이 적용 후 Navigator 썸네일 URL 갱신 (measure_overlay 반영)
@@ -25715,6 +25719,41 @@ class WaferMapViewer {
     /**
      * 그리드 모드에서 선택된 웨이퍼 목록 업데이트
      */
+    _extractYieldFromImagePath(imagePath) {
+        const fileName = String(imagePath || '').split('/').pop() || '';
+        const parts = fileName.replace(/\.[^.]+$/, '').split('_');
+        const yieldValue = Number(parts[5]);
+        return Number.isFinite(yieldValue) ? yieldValue : null;
+    }
+
+    _getGridSelectionYieldSummary(selectedList) {
+        const yields = (Array.isArray(selectedList) ? selectedList : [])
+            .map((item) => this._extractYieldFromImagePath(item.imagePath))
+            .filter((value) => value !== null);
+        if (!yields.length) {
+            return {
+                count: Array.isArray(selectedList) ? selectedList.length : 0,
+                yieldCount: 0,
+                avg: null,
+                min: null,
+                max: null,
+            };
+        }
+        const sum = yields.reduce((acc, value) => acc + value, 0);
+        return {
+            count: Array.isArray(selectedList) ? selectedList.length : 0,
+            yieldCount: yields.length,
+            avg: sum / yields.length,
+            min: Math.min(...yields),
+            max: Math.max(...yields),
+        };
+    }
+
+    _formatGridSelectionYieldSummary(summary) {
+        if (!summary || summary.yieldCount <= 0) return `Yld - · ${summary?.count || 0} img`;
+        return `Yld ${summary.avg.toFixed(3)}% · ${summary.min.toFixed(3)}~${summary.max.toFixed(3)} · ${summary.yieldCount}/${summary.count}`;
+    }
+
     updateSelectedGridImagesList() {
         const selectedList = [];
 
@@ -25750,6 +25789,7 @@ class WaferMapViewer {
         const panel = document.getElementById('selected-grid-images-panel');
         const listDiv = document.getElementById('selected-grid-list');
         const countBadge = document.getElementById('selected-count-badge');
+        const yieldSummary = document.getElementById('selected-grid-yield-summary');
         
         if (!panel || !listDiv) {
             return;
@@ -25760,6 +25800,10 @@ class WaferMapViewer {
             panel.style.display = 'none';
             listDiv.innerHTML = '';
             if (countBadge) countBadge.textContent = '0';
+            if (yieldSummary) {
+                yieldSummary.style.display = 'none';
+                yieldSummary.textContent = 'Yld -';
+            }
             this.selectedWafersForCopy = [];
             return;
         }
@@ -25768,6 +25812,10 @@ class WaferMapViewer {
             panel.style.display = 'none';
             listDiv.innerHTML = '';
             if (countBadge) countBadge.textContent = '0';
+            if (yieldSummary) {
+                yieldSummary.style.display = 'none';
+                yieldSummary.textContent = 'Yld -';
+            }
             this.selectedWafersForCopy = [];
             return;
         }
@@ -25780,6 +25828,12 @@ class WaferMapViewer {
         // ✅ 개수 표시
         if (countBadge) {
             countBadge.textContent = `${unique.length}`;
+        }
+        if (yieldSummary) {
+            const summary = this._getGridSelectionYieldSummary(unique);
+            yieldSummary.textContent = this._formatGridSelectionYieldSummary(summary);
+            yieldSummary.title = `Selected images: ${summary.count}, yield values: ${summary.yieldCount}`;
+            yieldSummary.style.display = 'block';
         }
         
         // ✅ 전체 목록을 표시하고 스크롤로 탐색
@@ -29617,7 +29671,7 @@ class WaferMapViewer {
                 const endIndex = parseInt(targetItem.getAttribute('data-index'));
 
                 if (!isNaN(startIndex) && !isNaN(endIndex)) {
-                    const BOTTOM_VALUES = ['Normal', 'Invalid', '285', '286', '287', '288', '290', '291', '300', '385', '386', '388', '389', '390', 'ETC'];
+                    const BOTTOM_VALUES = ['Normal', 'Invalid', 'SYSTEMATIC', '285', '286', '287', '288', '290', '291', '300', '385', '386', '388', '389', '390', 'ETC'];
                     const start = Math.min(startIndex, endIndex);
                     const end = Math.max(startIndex, endIndex);
                     
@@ -30794,6 +30848,9 @@ class WaferMapViewer {
         if (this.selectedGrades.size === 0) return;
 
         this.selectedGrades.clear();
+        if (this.chipAnnotator) {
+            this.chipAnnotator.setGradeFilter(null);
+        }
         await this.applyGradeFilter();
         this.updateGradeButtonUI();
     }
@@ -30802,6 +30859,11 @@ class WaferMapViewer {
      * Grade 필터 적용 (이미지 다시 로드)
      */
     async applyGradeFilter() {
+        if (this.chipAnnotator) {
+            this.chipAnnotator.setGradeFilter(
+                this.selectedGrades.size > 0 ? this.selectedGrades : null
+            );
+        }
         if (this.gridMode) {
             this.refreshGridThumbnailsWithCurrentParams();
             this.refreshThumbnailNavigatorWithCurrentParams();
@@ -30933,7 +30995,7 @@ class WaferMapViewer {
 
         if (shiftKey && this.lastBottomClickValue !== null) {
             // Shift 클릭: 범위 선택 (이전 클릭과 현재 클릭 사이 모두 선택)
-            const bottomValues = ['Normal', 'Invalid', '285', '286', '287', '288', '290', '291', '300', '385', '386', '388', '389', '390', 'ETC'];
+            const bottomValues = ['Normal', 'Invalid', 'SYSTEMATIC', '285', '286', '287', '288', '290', '291', '300', '385', '386', '388', '389', '390', 'ETC'];
             const lastIndex = bottomValues.indexOf(this.lastBottomClickValue);
             const currentIndex = bottomValues.indexOf(bottomStr);
 
@@ -32164,14 +32226,7 @@ class WaferMapViewer {
         // 🔥 BOTTOM_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
         if (userData.bottom && typeof userData.bottom === 'object') {
             const currentLegendPath = String(this.selectedImagePath || this.currentImagePath || '');
-            const isPlhImage = currentLegendPath.includes('00P');
-            const isPlcImage = currentLegendPath.includes('00C');
-            const BOTTOM_KEYS = isPlhImage
-                ? ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291', 'ETC']
-                : isPlcImage
-                    ? ['Normal', 'Invalid', 'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC']
-                    : ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
-                       'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
+            const BOTTOM_KEYS = this._getBottomLegendKeysForPath(currentLegendPath);
 
             // 🔥 Position 데이터에서 BIN별 chip 갯수 계산
             const binCounts = {};
@@ -32218,6 +32273,20 @@ class WaferMapViewer {
                 // 🔥 "Border" 키가 있는 경우 "Normal"로 매핑 (Ubuntu 서버 호환성)
                 let actualLabel = label;
                 let color = userData.bottom[label];
+                let barBackground = null;
+                let textColor = null;
+
+                if (label === 'SYSTEMATIC') {
+                    const colors = SYSTEMATIC_BIN_TYPES
+                        .map((bin) => userData.bottom[`B${bin}`])
+                        .filter(Boolean);
+                    if (colors.length > 0) {
+                        const step = 100 / colors.length;
+                        barBackground = `linear-gradient(90deg, ${colors.map((entry, idx) => `${entry} ${Math.round(idx * step)}% ${Math.round((idx + 1) * step)}%`).join(', ')})`;
+                    }
+                    color = color || colors[0] || '#8a8a8a';
+                    textColor = '#fff';
+                }
 
                 // "Normal" 키가 없으면 "Border" 키 확인
                 if (label === 'Normal' && !color) {
@@ -32237,17 +32306,24 @@ class WaferMapViewer {
                 if (color) {
                     // 🔥 "Border"를 "Normal"로 표시 및 data-key도 "Normal"로 설정
                     const displayLabel = actualLabel === 'Border' ? 'Normal' : label;
-                    const renderLabel = displayLabel.startsWith('B') ? displayLabel.slice(1) : displayLabel;
+                    const renderLabel = displayLabel === 'SYSTEMATIC'
+                        ? 'Systematic'
+                        : (displayLabel.startsWith('B') ? displayLabel.slice(1) : displayLabel);
                     // 🔥 BIN count / percent 계산
                     const countKey = displayLabel.startsWith('B') ? displayLabel.slice(1) : displayLabel;
-                    const cnt = binCounts[countKey] || 0;
+                    const cnt = displayLabel === 'SYSTEMATIC'
+                        ? SYSTEMATIC_BIN_TYPES.reduce((sum, bin) => sum + (binCounts[bin] || 0), 0)
+                        : (binCounts[countKey] || 0);
                     const pct = netd > 0 ? (cnt / netd * 100).toFixed(1) : '0.0';
                     const countText = chips.length > 0 ? `${pct}%(${cnt})` : '';
+                    const bgStyle = barBackground
+                        ? `background:${barBackground};`
+                        : `background-color: ${color};`;
                     return `
                         <div class="legend-item" data-section="bottom" data-key="${displayLabel}" data-index="${index}" draggable="true" style="cursor: pointer;">
                             <span class="legend-label">${renderLabel}</span>
-                            <div class="legend-color-bar" data-section="bottom" data-key="${displayLabel}" style="background-color: ${color}; cursor: pointer; position: relative; overflow: hidden;">
-                                <span style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:${_contrastText(color)};line-height:1;pointer-events:none;font-weight:600;">${countText}</span>
+                            <div class="legend-color-bar" data-section="bottom" data-key="${displayLabel}" style="${bgStyle} cursor: pointer; position: relative; overflow: hidden;">
+                                <span style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:${textColor || _contrastText(color)};line-height:1;pointer-events:none;font-weight:600;">${countText}</span>
                             </div>
                         </div>
                     `;
@@ -32350,6 +32426,7 @@ class WaferMapViewer {
             }
             // ETC는 그대로
             if (label === 'ETC') return 'ETC';
+            if (label === 'SYSTEMATIC') return 'Systematic';
             // B285, B286 등 → 285, 286
             if (label.startsWith('B') && label.length > 1 && /^\d/.test(label[1])) {
                 return label.slice(1);
@@ -32442,11 +32519,21 @@ class WaferMapViewer {
         html += '<div class="legend-group-bottom">';
         if (isMeasureComposite && userData.bottom && typeof userData.bottom === 'object') {
             // Measure Composite: BIN chip 범례 (gradient + BIN chip 2개 범례, 둘 다 필터)
-            const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
-                                 'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
+            const BOTTOM_KEYS = this._getBottomLegendKeysForPath('');
             const bottomHtml = BOTTOM_KEYS.map((label, index) => {
                 let actualLabel = label;
                 let color = userData.bottom[label];
+                let barBackground = null;
+                if (label === 'SYSTEMATIC') {
+                    const colors = SYSTEMATIC_BIN_TYPES
+                        .map((bin) => userData.bottom[`B${bin}`])
+                        .filter(Boolean);
+                    if (colors.length > 0) {
+                        const step = 100 / colors.length;
+                        barBackground = `linear-gradient(90deg, ${colors.map((entry, idx) => `${entry} ${Math.round(idx * step)}% ${Math.round((idx + 1) * step)}%`).join(', ')})`;
+                    }
+                    color = color || colors[0] || '#8a8a8a';
+                }
                 if (label === 'Normal' && !color) {
                     if (userData.bottom['Border']) { actualLabel = 'Border'; color = userData.bottom['Border']; }
                     else { color = '#BEBEBE'; }
@@ -32457,9 +32544,10 @@ class WaferMapViewer {
                 const isSelected = this.selectedBottoms.has(displayLabel);
                 const selBorder = isSelected ? 'outline:2px solid #1976d2;outline-offset:-2px;' : '';
                 const opacity = this.selectedBottoms.size > 0 && !isSelected ? 'opacity:0.35;' : '';
+                const bgStyle = barBackground ? `background:${barBackground};` : `background-color:${color};`;
                 return `
                     <div class="legend-item-grid" data-section="bottom" data-key="${displayLabel}" data-index="${index}" style="cursor:pointer;${opacity}">
-                        <div class="legend-color-bar-grid" style="background-color:${color};${selBorder}"></div>
+                        <div class="legend-color-bar-grid" style="${bgStyle}${selBorder}"></div>
                         <span class="legend-label-grid">${shortenLabel(displayLabel)}</span>
                     </div>
                 `;
@@ -32467,8 +32555,7 @@ class WaferMapViewer {
             html += bottomHtml;
         } else if (userData.bottom && typeof userData.bottom === 'object') {
             // 🔥 BOTTOM_KEYS 순서 보장하여 렌더링 (키 순서가 환경에 따라 달라질 수 있음)
-            const BOTTOM_KEYS = ['Normal', 'Invalid', 'B285', 'B286', 'B287', 'B288', 'B290', 'B291',
-                                 'B300', 'B385', 'B386', 'B388', 'B389', 'B390', 'ETC'];
+            const BOTTOM_KEYS = this._getBottomLegendKeysForPath('');
             // Border button (left of Normal, same style as legend-item-grid)
             const borderActive = this.borderNormalize;
             html += `<button id="grid-border-normalize-btn" class="grid-btn${borderActive ? ' is-active' : ''}" style="cursor:pointer;padding:2px 6px;border-radius:3px;font-size:11px;background:${borderActive ? '#2f6fed' : '#222'};border:1px solid ${borderActive ? '#1c50b5' : '#444'};color:${borderActive ? '#fff' : '#ccc'};flex-shrink:0;user-select:none;margin-right:4px;">Border</button>`;
@@ -32476,6 +32563,18 @@ class WaferMapViewer {
                 // 🔥 "Border" 키가 있는 경우 "Normal"로 매핑 (Ubuntu 서버 호환성)
                 let actualLabel = label;
                 let color = userData.bottom[label];
+                let barBackground = null;
+
+                if (label === 'SYSTEMATIC') {
+                    const colors = SYSTEMATIC_BIN_TYPES
+                        .map((bin) => userData.bottom[`B${bin}`])
+                        .filter(Boolean);
+                    if (colors.length > 0) {
+                        const step = 100 / colors.length;
+                        barBackground = `linear-gradient(90deg, ${colors.map((entry, idx) => `${entry} ${Math.round(idx * step)}% ${Math.round((idx + 1) * step)}%`).join(', ')})`;
+                    }
+                    color = color || colors[0] || '#8a8a8a';
+                }
 
                 // "Normal" 키가 없으면 "Border" 키 확인
                 if (label === 'Normal' && !color) {
@@ -32495,9 +32594,12 @@ class WaferMapViewer {
                 if (color) {
                     // 🔥 "Border"를 "Normal"로 표시 (shortenLabel에서 "nor"로 변환)
                     const displayLabel = actualLabel === 'Border' ? 'Normal' : label;
+                    const bgStyle = barBackground
+                        ? `background:${barBackground};`
+                        : `background-color: ${color};`;
                     return `
                         <div class="legend-item-grid" data-section="bottom" data-key="${displayLabel}" data-index="${index}" style="cursor: pointer;">
-                            <div class="legend-color-bar-grid" style="background-color: ${color};"></div>
+                            <div class="legend-color-bar-grid" style="${bgStyle}"></div>
                             <span class="legend-label-grid">${shortenLabel(displayLabel)}</span>
                         </div>
                     `;

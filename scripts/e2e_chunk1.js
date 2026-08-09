@@ -181,6 +181,7 @@ const { createRunner } = require('./e2e_playwright_session');
       const v = window.viewer;
       v.gridSelectedIdxs = [...idxs];
       v.gridSelectedSet = new Set(idxs);
+      v.selectedImages = idxs.map((idx) => v.currentGridImages?.[idx]).filter(Boolean);
       v.updateGridSelection?.();
       v.flushGridSelectionUpdates?.();
     }, indices);
@@ -1982,6 +1983,46 @@ const { createRunner } = require('./e2e_playwright_session');
         panel.remove();
       }
     });
+    const legendOrder = await page.evaluate((source) => {
+      const readGridBottomLabels = () => [...document.querySelectorAll(
+        '#grid-color-legend-bottom .legend-item-grid[data-section="bottom"] .legend-label-grid'
+      )].map((element) => element.textContent.trim()).filter(Boolean);
+      const index = (window.viewer.currentGridImages || []).findIndex((imagePath) =>
+        String(imagePath || '').replace(/\\/g, '/') === String(source || '').replace(/\\/g, '/')
+      );
+      const gridBottomLabels = readGridBottomLabels();
+      if (index >= 0) {
+        window.viewer.enterSingleImageMode(index);
+      }
+      return { gridBottomLabels, index };
+    }, data.source);
+    expect(legendOrder.index >= 0, `systematic source not in grid=${JSON.stringify(legendOrder)}`);
+    const gridNormalIndex = legendOrder.gridBottomLabels.indexOf('nor');
+    const gridInvalidIndex = legendOrder.gridBottomLabels.indexOf('inv');
+    const gridSystematicIndex = legendOrder.gridBottomLabels.indexOf('Systematic');
+    expect(
+      gridNormalIndex >= 0 && gridInvalidIndex > gridNormalIndex && gridSystematicIndex > gridInvalidIndex,
+      `grid bottom legend order=${JSON.stringify(legendOrder.gridBottomLabels)}`
+    );
+    await page.waitForFunction(
+      (source) => {
+        const current = String(window.viewer?.selectedImagePath || '').replace(/\\/g, '/');
+        return !!window.viewer && !window.viewer.gridMode && current === String(source || '').replace(/\\/g, '/');
+      },
+      data.source,
+      { timeout: 30000 }
+    );
+    await sleep(800);
+    const singleBottomLabels = await page.evaluate(() => [...document.querySelectorAll(
+      '#color-legend-bottom .legend-item[data-section="bottom"] .legend-label'
+    )].map((element) => element.textContent.trim()).filter(Boolean));
+    const singleNormalIndex = singleBottomLabels.indexOf('Normal');
+    const singleInvalidIndex = singleBottomLabels.indexOf('Invalid');
+    const singleSystematicIndex = singleBottomLabels.indexOf('Systematic');
+    expect(
+      singleNormalIndex >= 0 && singleInvalidIndex > singleNormalIndex && singleSystematicIndex > singleInvalidIndex,
+      `single bottom legend order=${JSON.stringify(singleBottomLabels)}`
+    );
     expect(data.compositeEntry?.mode === 'systematic', `Composite entry=${JSON.stringify(data)}`);
     expect(data.compositeEntry?.label === 'SYSTEMATIC', `Composite label=${JSON.stringify(data.compositeEntry)}`);
     const compositeSystematicIndex = data.compositeBinLabels?.findIndex((label) => label.startsWith('SYSTEMATIC')) ?? -1;
@@ -3093,6 +3134,25 @@ const { createRunner } = require('./e2e_playwright_session');
     append(`[CM] fresh mc ${JSON.stringify(freshMcState)}\n`);
     await page.evaluate(() => window.viewer.hideContextMenu?.());
     await setSelection([0, 1, 2]);
+    const selectedGridYield = await page.evaluate(() => {
+      const panel = document.getElementById('selected-grid-images-panel');
+      const summary = document.getElementById('selected-grid-yield-summary');
+      return {
+        panelDisplay: panel ? getComputedStyle(panel).display : '',
+        summaryDisplay: summary ? getComputedStyle(summary).display : '',
+        text: summary?.textContent?.trim() || '',
+        selectedIdxs: [...(window.viewer.gridSelectedIdxs || [])],
+        selectedImages: window.viewer.selectedImages?.length || 0,
+      };
+    });
+    expect(
+      selectedGridYield.panelDisplay !== 'none' &&
+        selectedGridYield.summaryDisplay !== 'none' &&
+        /^Yld\s+[-0-9.]+%/.test(selectedGridYield.text) &&
+        selectedGridYield.selectedIdxs.length === 3 &&
+        selectedGridYield.selectedImages === 3,
+      `selected grid yield=${JSON.stringify(selectedGridYield)}`
+    );
     const path = await page.evaluate(() => window.viewer.currentGridImages[0]);
     expect(String(path || '').replace(/\\/g, '/').startsWith('unknown/'), `ref path=${path}`);
     await page.evaluate((p) => window.viewer.setRefMap(p), path);
@@ -3199,6 +3259,7 @@ const { createRunner } = require('./e2e_playwright_session');
       lowMcSubmenu,
       lowMeaSubmenu,
       selectedUnknownPaths,
+      selectedGridYield,
       freshMcState,
       mcBeforeGenerate,
       refVisible,

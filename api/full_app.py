@@ -10527,8 +10527,91 @@ def _count_position_chips(positions_data: Dict[str, Any]) -> int:
     return 0
 
 
+def _attach_chip_palette_indices(image_path: Path, positions_data: Dict[str, Any]) -> None:
+    """Attach source palette index per chip for client-side grade-filter selection."""
+    chips = positions_data.get("chips")
+    if not isinstance(chips, list) or not chips:
+        return
+    if not image_path.exists() or image_path.suffix.lower() != ".png":
+        return
+
+    try:
+        import numpy as np
+
+        with Image.open(image_path) as img:
+            if img.mode != "P":
+                return
+            arr = np.array(img, dtype=np.uint8)
+            width, height = img.size
+    except Exception:
+        logger.debug("palette index attach skipped: %s", image_path, exc_info=True)
+        return
+
+    coord = positions_data.get("coord", {})
+    canvas = coord.get("canvas", {}) if isinstance(coord, dict) else {}
+    try:
+        canvas_w = int(canvas.get("width", width)) if isinstance(canvas, dict) else width
+        canvas_h = int(canvas.get("height", height)) if isinstance(canvas, dict) else height
+    except (TypeError, ValueError):
+        canvas_w, canvas_h = width, height
+    if canvas_w <= 0:
+        canvas_w = width
+    if canvas_h <= 0:
+        canvas_h = height
+    scale_x = width / float(canvas_w)
+    scale_y = height / float(canvas_h)
+
+    for chip in chips:
+        if not isinstance(chip, dict):
+            continue
+        rect = chip.get("rect")
+        if not isinstance(rect, dict):
+            continue
+        try:
+            x0 = float(rect.get("x0"))
+            y0 = float(rect.get("y0"))
+            x1 = float(rect.get("x1"))
+            y1 = float(rect.get("y1"))
+        except (TypeError, ValueError):
+            continue
+        if x1 < x0:
+            x0, x1 = x1, x0
+        if y1 < y0:
+            y0, y1 = y1, y0
+
+        px0 = max(0, min(width - 1, int(math.floor(x0 * scale_x))))
+        py0 = max(0, min(height - 1, int(math.floor(y0 * scale_y))))
+        px1 = max(px0 + 1, min(width, int(math.ceil(x1 * scale_x))))
+        py1 = max(py0 + 1, min(height, int(math.ceil(y1 * scale_y))))
+
+        inner_w = max(1, px1 - px0)
+        inner_h = max(1, py1 - py0)
+        ix0 = px0 + max(0, int(inner_w * 0.2))
+        ix1 = px1 - max(0, int(inner_w * 0.2))
+        iy0 = py0 + max(0, int(inner_h * 0.2))
+        iy1 = py1 - max(0, int(inner_h * 0.2))
+        if ix1 <= ix0:
+            ix0, ix1 = px0, px1
+        if iy1 <= iy0:
+            iy0, iy1 = py0, py1
+
+        step_x = max(1, (ix1 - ix0) // 8)
+        step_y = max(1, (iy1 - iy0) // 8)
+        sample = arr[iy0:iy1:step_y, ix0:ix1:step_x].reshape(-1)
+        grade_values = sample[(sample >= 0) & (sample <= 7)]
+        if grade_values.size > 0:
+            palette_index = int(np.bincount(grade_values, minlength=8).argmax())
+        else:
+            cx = max(0, min(width - 1, int(round(((x0 + x1) / 2.0) * scale_x))))
+            cy = max(0, min(height - 1, int(round(((y0 + y1) / 2.0) * scale_y))))
+            palette_index = int(arr[cy, cx])
+        chip["palette_index"] = palette_index
+        if 0 <= palette_index <= 7:
+            chip["grade"] = palette_index
+
+
 @app.get("/api/chip-positions")
-async def get_chip_positions(path: str, include_fq: int = 0, count_only: int = 0):
+async def get_chip_positions(path: str, include_fq: int = 0, count_only: int = 0, include_grade: int = 0):
     """주어진 이미지 경로에 대응하는 positions.json 반환 (include_fq=1이면 f/q 값 포함)"""
     try:
         norm_path = path.replace("\\", "/")
@@ -10554,6 +10637,9 @@ async def get_chip_positions(path: str, include_fq: int = 0, count_only: int = 0
         positions_data = await _load_positions_json_file(positions_file, bool(include_fq))
 
         _normalize_positions_to_chips(positions_data)
+        if include_grade:
+            img_path = ROOT_DIR / rel_path_obj
+            await anyio.to_thread.run_sync(_attach_chip_palette_indices, img_path, positions_data)
         chips = positions_data.get('chips', [])
         chip_count = len(chips)
         _log(f"[CHIP_POS] loaded {chip_count} chips from {positions_file.name}")

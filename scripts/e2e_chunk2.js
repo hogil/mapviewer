@@ -2754,6 +2754,114 @@ const { createRunner } = require('./e2e_playwright_session');
       Number.isFinite(selectionTarget.radiusExact) && selectionTarget.partialShot,
       `selection target=${JSON.stringify(selectionTarget)}`);
 
+    const filterSelectionGuard = await page.evaluate(async () => {
+      const v = window.viewer;
+      const annotator = v?.chipAnnotator;
+      const systematicBins = new Set([
+        '285', '286', '287', '288', '290', '291',
+        '300', '385', '386', '388', '389', '390',
+      ]);
+      const waitFrame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
+      if (!annotator || !Array.isArray(annotator.chips) || annotator.chips.length === 0) {
+        return { grade: { usable: false, reason: 'no chips' }, bottom: { usable: false, reason: 'no chips' } };
+      }
+      const rows = annotator.chips
+        .map((chip, index) => ({
+          index,
+          x: Number(chip?.x_abs),
+          y: Number(chip?.y_abs),
+          grade: annotator._getChipGradeIndex?.(chip),
+          bin: annotator._normalizeBottomValue?.(chip?.b),
+        }))
+        .filter((row) => Number.isFinite(row.x) && Number.isFinite(row.y));
+
+      const selectByGrid = (row) => {
+        annotator.clearSelection(false);
+        const result = annotator.selectByCoordinateRows('chip-grid', [{ x: row.x, y: row.y }], { operation: 'replace' }) || {};
+        return {
+          requested: { x: row.x, y: row.y, grade: row.grade, bin: row.bin },
+          matchedRows: result.matchedRows ?? null,
+          matchedCount: result.matchedCount ?? null,
+          selected: annotator.selectedChips?.size || 0,
+        };
+      };
+
+      const originalGrades = new Set(v.selectedGrades || []);
+      const originalBottoms = new Set(v.selectedBottoms || []);
+      let gradeGuard = { usable: false, reason: 'not evaluated' };
+      let bottomGuard = { usable: false, reason: 'not evaluated' };
+      try {
+        const gradeCounts = new Map();
+        rows.forEach((row) => {
+          if (row.grade === null || row.grade === undefined) return;
+          gradeCounts.set(row.grade, (gradeCounts.get(row.grade) || 0) + 1);
+        });
+        const grade = [...gradeCounts.entries()]
+          .sort((left, right) => right[1] - left[1])[0]?.[0];
+        const visibleGrade = rows.find((row) => row.grade === grade);
+        const alternateHiddenGrade = Number.isInteger(grade) && grade >= 0 && grade <= 7
+          ? (grade === 0 ? 1 : 0)
+          : null;
+        const hiddenGrade = rows.find((row) => row.grade !== grade) || visibleGrade;
+        const hiddenFilterGrade = hiddenGrade === visibleGrade ? alternateHiddenGrade : grade;
+        if (visibleGrade && hiddenGrade && hiddenFilterGrade !== null) {
+          v.selectedGrades = new Set([hiddenFilterGrade]);
+          annotator.setGradeFilter(v.selectedGrades);
+          v.updateGradeButtonUI?.();
+          await waitFrame();
+          const hidden = selectByGrid(hiddenGrade);
+          v.selectedGrades = new Set([grade]);
+          annotator.setGradeFilter(v.selectedGrades);
+          v.updateGradeButtonUI?.();
+          await waitFrame();
+          const visible = selectByGrid(visibleGrade);
+          gradeGuard = { usable: true, grade, hiddenFilterGrade, hidden, visible };
+        } else {
+          gradeGuard = { usable: false, reason: 'grade diversity missing', gradeCounts: [...gradeCounts.entries()] };
+        }
+
+        const visibleSystematic = rows.find((row) => systematicBins.has(row.bin));
+        const hiddenSystematic = rows.find((row) => !systematicBins.has(row.bin));
+        if (visibleSystematic && hiddenSystematic) {
+          v.selectedBottoms = new Set(['SYSTEMATIC']);
+          annotator.setBottomFilter(v.selectedBottoms);
+          v.updateBottomButtonUI?.();
+          await waitFrame();
+          const hidden = selectByGrid(hiddenSystematic);
+          const visible = selectByGrid(visibleSystematic);
+          bottomGuard = { usable: true, hidden, visible };
+        } else {
+          bottomGuard = {
+            usable: false,
+            reason: 'systematic/non-systematic diversity missing',
+            bins: [...new Set(rows.map((row) => row.bin))],
+          };
+        }
+      } finally {
+        v.selectedGrades = originalGrades;
+        v.selectedBottoms = originalBottoms;
+        annotator.setGradeFilter(v.selectedGrades);
+        annotator.setBottomFilter(v.selectedBottoms);
+        annotator.clearSelection(false);
+        v.updateGradeButtonUI?.();
+        v.updateBottomButtonUI?.();
+        v._updateCoordinateSelectionSummary?.();
+      }
+      return { grade: gradeGuard, bottom: bottomGuard };
+    });
+    expect(
+      filterSelectionGuard.grade.usable &&
+        filterSelectionGuard.grade.hidden.selected === 0 &&
+        filterSelectionGuard.grade.visible.selected === 1,
+      `Grade-filtered chip selection guard=${JSON.stringify(filterSelectionGuard.grade)}`
+    );
+    expect(
+      filterSelectionGuard.bottom.usable &&
+        filterSelectionGuard.bottom.hidden.selected === 0 &&
+        filterSelectionGuard.bottom.visible.selected === 1,
+      `SYSTEMATIC-filtered chip selection guard=${JSON.stringify(filterSelectionGuard.bottom)}`
+    );
+
     const overlay = page.locator('#overlay-canvas');
     const overlayBox = await overlay.boundingBox();
     expect(overlayBox && overlayBox.width > 0 && overlayBox.height > 0, 'overlay canvas is not visible');
@@ -3043,6 +3151,7 @@ const { createRunner } = require('./e2e_playwright_session');
         `[data-coordinate-list-panel="${name}"] .coordinate-select-list-table-wrap`
       )).overflowY),
       hasSummary: !!document.getElementById('chip-coordinate-select-summary'),
+      summaryText: document.getElementById('chip-coordinate-select-summary')?.textContent?.trim() || '',
       hasHint: !!document.getElementById('chip-coordinate-select-hint'),
       modeless: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).pointerEvents === 'none',
       position: getComputedStyle(document.querySelector('.coordinate-select-modal-content')).position,
@@ -3051,7 +3160,7 @@ const { createRunner } = require('./e2e_playwright_session');
     expect(initialModal.listPanels === 3 && initialModal.listColumnCounts.join(',') === '2,2,1' &&
       initialModal.coordinateListViewportMaxHeights.every((height) => height === '320px') &&
       initialModal.coordinateListViewportOverflow.every((overflow) => overflow === 'auto') &&
-      !initialModal.hasSummary && !initialModal.hasHint && initialModal.modeless &&
+      initialModal.hasSummary && /^Yld/.test(initialModal.summaryText) && !initialModal.hasHint && initialModal.modeless &&
       initialModal.position === 'fixed' && initialModal.ariaModal === 'false', `initial modal=${JSON.stringify(initialModal)}`);
     await pasteIntoList('shot',
       `${selectionTarget.shotRows[0].x}\t${selectionTarget.shotRows[0].y}\n${selectionTarget.shotRows[1].x},${selectionTarget.shotRows[1].y}`
@@ -3077,7 +3186,10 @@ const { createRunner } = require('./e2e_playwright_session');
       mode: window.viewer.chipAnnotator.selectionMode,
       chips: window.viewer.chipAnnotator.selectedChips.size,
       shots: window.viewer.chipAnnotator._getSelectedShotGroups().size,
+      summaryText: document.getElementById('chip-coordinate-select-summary')?.textContent?.trim() || '',
     }));
+    expect(/^Yld/.test(afterShot.summaryText) && afterShot.summaryText.includes('Chip 48'),
+      `coordinate selected yield summary=${JSON.stringify(afterShot)}`);
     const shotPicker = await page.evaluate(() => {
       const annotator = window.viewer.chipAnnotator;
       const groups = [...document.querySelectorAll('#chip-coordinate-select-shot-picker .coordinate-select-shot-group')];
@@ -3257,10 +3369,12 @@ const { createRunner } = require('./e2e_playwright_session');
       pickerChecked: document.querySelectorAll('#chip-coordinate-select-shot-picker button[aria-checked="true"]').length,
       hasHint: !!document.getElementById('chip-coordinate-select-hint'),
       hasSummary: !!document.getElementById('chip-coordinate-select-summary'),
+      summaryText: document.getElementById('chip-coordinate-select-summary')?.textContent?.trim() || '',
     }));
     expect(
       reopenedModal.selectedChips === 0 && reopenedModal.pickerGroups === 1 &&
-        reopenedModal.pickerChecked === 0 && !reopenedModal.hasHint && !reopenedModal.hasSummary,
+        reopenedModal.pickerChecked === 0 && !reopenedModal.hasHint &&
+        reopenedModal.hasSummary && /^Yld/.test(reopenedModal.summaryText),
       `reopened coordinate modal=${JSON.stringify(reopenedModal)}`
     );
     await pasteIntoList('shot',
@@ -3375,7 +3489,7 @@ const { createRunner } = require('./e2e_playwright_session');
       chips: window.viewer.chipAnnotator.selectedChips.size,
       chipId: [...window.viewer.chipAnnotator.selectedChips][0],
     }));
-    return { initialModal, selectionTarget, quickPickerInitial, paletteLinked, dragPreview, wildcardShotState, quickShotMultiState, quickShotMultiRows, quickShotClearState, shotCells, posCells, afterShot, shotPicker, pickerAfterRemove, partialShotPicker, combinedRow, operationRemoved, rangeControls, rangeSelection, radiusRangeControls, radiusRangeSelection, afterPos };
+    return { initialModal, selectionTarget, filterSelectionGuard, quickPickerInitial, paletteLinked, dragPreview, wildcardShotState, quickShotMultiState, quickShotMultiRows, quickShotClearState, shotCells, posCells, afterShot, shotPicker, pickerAfterRemove, partialShotPicker, combinedRow, operationRemoved, rangeControls, rangeSelection, radiusRangeControls, radiusRangeSelection, afterPos };
   });
 
   await record('selected-region-composite', '선택 Chip/Shot Composite Map 및 결과 positions 정합성', async () => {
