@@ -3151,7 +3151,7 @@ const { createRunner } = require('./e2e_playwright_session');
         `[data-coordinate-list-panel="${name}"] .coordinate-select-list-table-wrap`
       )).overflowY),
       hasSummary: !!document.getElementById('chip-coordinate-select-summary'),
-      summaryText: document.getElementById('chip-coordinate-select-summary')?.textContent?.trim() || '',
+      summaryText: document.getElementById('chip-coordinate-select-summary')?.innerText?.trim() || '',
       hasHint: !!document.getElementById('chip-coordinate-select-hint'),
       modeless: getComputedStyle(document.getElementById('chip-coordinate-select-modal')).pointerEvents === 'none',
       position: getComputedStyle(document.querySelector('.coordinate-select-modal-content')).position,
@@ -3186,9 +3186,10 @@ const { createRunner } = require('./e2e_playwright_session');
       mode: window.viewer.chipAnnotator.selectionMode,
       chips: window.viewer.chipAnnotator.selectedChips.size,
       shots: window.viewer.chipAnnotator._getSelectedShotGroups().size,
-      summaryText: document.getElementById('chip-coordinate-select-summary')?.textContent?.trim() || '',
+      summaryText: document.getElementById('chip-coordinate-select-summary')?.innerText?.trim() || '',
     }));
-    expect(/^Yld/.test(afterShot.summaryText) && afterShot.summaryText.includes('Chip 48'),
+    expect(/^Yld/.test(afterShot.summaryText) && afterShot.summaryText.includes('Chip 48') &&
+      afterShot.summaryText.includes('Shot Yld') && afterShot.summaryText.includes('Shot Pos Yld'),
       `coordinate selected yield summary=${JSON.stringify(afterShot)}`);
     const shotPicker = await page.evaluate(() => {
       const annotator = window.viewer.chipAnnotator;
@@ -3369,7 +3370,7 @@ const { createRunner } = require('./e2e_playwright_session');
       pickerChecked: document.querySelectorAll('#chip-coordinate-select-shot-picker button[aria-checked="true"]').length,
       hasHint: !!document.getElementById('chip-coordinate-select-hint'),
       hasSummary: !!document.getElementById('chip-coordinate-select-summary'),
-      summaryText: document.getElementById('chip-coordinate-select-summary')?.textContent?.trim() || '',
+      summaryText: document.getElementById('chip-coordinate-select-summary')?.innerText?.trim() || '',
     }));
     expect(
       reopenedModal.selectedChips === 0 && reopenedModal.pickerGroups === 1 &&

@@ -2999,6 +2999,24 @@
             border: 1px solid #3d3d3d;
             border-radius: 3px;
             overflow-wrap: anywhere;
+            max-height: 84px;
+            overflow-y: auto;
+        }
+
+        .coordinate-select-summary-total {
+            color: #e8e8e8;
+            font-weight: 600;
+            line-height: 1.35;
+        }
+
+        .coordinate-select-summary-group {
+            margin-top: 3px;
+            color: #bdbdbd;
+            font-size: 11px;
+            line-height: 1.3;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .coordinate-select-range-panel {

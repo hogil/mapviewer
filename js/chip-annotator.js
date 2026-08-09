@@ -1316,6 +1316,88 @@ export class ChipAnnotator {
         return `Yld ${yieldText} · G ${good}/B ${bad} · ${source}`;
     }
 
+    _getSelectionChipObjects(chips = null) {
+        return Array.isArray(chips)
+            ? chips.filter(Boolean)
+            : Array.from(this.selectedChips || [])
+                .map((index) => this.chips?.[index])
+                .filter(Boolean);
+    }
+
+    _formatYieldSummaryShort(summary) {
+        const yieldText = Number.isFinite(Number(summary?.avgYield))
+            ? `${Number(summary.avgYield).toFixed(3)}%`
+            : '-';
+        const good = Number.isFinite(Number(summary?.goodCount)) ? Number(summary.goodCount) : 0;
+        const bad = Number.isFinite(Number(summary?.badCount)) ? Number(summary.badCount) : 0;
+        return `${yieldText} G${good}/B${bad}`;
+    }
+
+    getSelectionYieldBreakdowns(chips = null) {
+        const selectedChips = this._getSelectionChipObjects(chips);
+        const shotMap = new Map();
+        const positionMap = new Map();
+
+        selectedChips.forEach((chip) => {
+            const layout = this.getLayoutRowForChip?.(chip);
+            const shotX = Number(layout?.shot_x_pos);
+            const shotY = Number(layout?.shot_y_pos);
+            if (Number.isFinite(shotX) && Number.isFinite(shotY)) {
+                const key = `${shotX}:${shotY}`;
+                if (!shotMap.has(key)) {
+                    shotMap.set(key, {
+                        label: `(${shotX}, ${shotY})`,
+                        sortX: shotX,
+                        sortY: shotY,
+                        chips: [],
+                    });
+                }
+                shotMap.get(key).chips.push(chip);
+            }
+
+            const shotPosition = this.getShotPositionForChip?.(chip);
+            if (Number.isInteger(shotPosition)) {
+                const key = String(shotPosition);
+                if (!positionMap.has(key)) {
+                    positionMap.set(key, {
+                        label: `P${shotPosition}`,
+                        sortPosition: shotPosition,
+                        chips: [],
+                    });
+                }
+                positionMap.get(key).chips.push(chip);
+            }
+        });
+
+        const withSummary = (group) => ({
+            ...group,
+            summary: this.getSelectionYieldSummary(group.chips),
+        });
+        const shotGroups = Array.from(shotMap.values())
+            .sort((left, right) => left.sortY - right.sortY || left.sortX - right.sortX)
+            .map(withSummary);
+        const shotPositionGroups = Array.from(positionMap.values())
+            .sort((left, right) => left.sortPosition - right.sortPosition)
+            .map(withSummary);
+        return { shotGroups, shotPositionGroups };
+    }
+
+    formatSelectionYieldBreakdownLine(groups, { label = 'Group', maxItems = 6 } = {}) {
+        if (!Array.isArray(groups) || groups.length === 0) return `${label}: -`;
+        const visible = groups.slice(0, maxItems).map((group) =>
+            `${group.label} ${this._formatYieldSummaryShort(group.summary)}`
+        );
+        const more = groups.length > maxItems ? ` +${groups.length - maxItems}` : '';
+        return `${label}: ${visible.join(' | ')}${more}`;
+    }
+
+    formatSelectionYieldBreakdownTitle(groups, label = 'Group') {
+        if (!Array.isArray(groups) || groups.length === 0) return `${label}: -`;
+        return `${label}:\n${groups.map((group) =>
+            `${group.label} ${this._formatYieldSummaryShort(group.summary)} (${group.summary?.chipCount || 0} chips)`
+        ).join('\n')}`;
+    }
+
     /**
      * Set Bottom Filter (Chip b-value based mask)
      * @param {Set|Array} filterSet - Set of b-values to keep visible (others masked white)
@@ -2226,6 +2308,37 @@ export class ChipAnnotator {
                 text-overflow: ellipsis;
             `;
             listItems.appendChild(summaryItem);
+
+            const breakdown = this.getSelectionYieldBreakdowns(selectedChipObjects);
+            const shotLine = this.formatSelectionYieldBreakdownLine(breakdown.shotGroups, {
+                label: 'Shot Yld',
+                maxItems: 2,
+            });
+            const positionLine = this.formatSelectionYieldBreakdownLine(breakdown.shotPositionGroups, {
+                label: 'Shot Pos Yld',
+                maxItems: 3,
+            });
+            const breakdownItem = document.createElement('div');
+            breakdownItem.className = 'selected-chips-yield-breakdown';
+            breakdownItem.textContent = `${shotLine} · ${positionLine}`;
+            breakdownItem.title = [
+                this.formatSelectionYieldBreakdownTitle(breakdown.shotGroups, 'Shot Yld'),
+                this.formatSelectionYieldBreakdownTitle(breakdown.shotPositionGroups, 'Shot Pos Yld'),
+            ].join('\n\n');
+            breakdownItem.style.cssText = `
+                padding: 3px 4px;
+                margin-bottom: 4px;
+                background: rgba(20, 20, 20, 0.76);
+                border: 1px solid rgba(90, 90, 90, 0.5);
+                border-radius: 3px;
+                color: #cfcfcf;
+                font-size: 9px;
+                line-height: 1.25;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            `;
+            listItems.appendChild(breakdownItem);
 
             sortedChips.forEach((chipData, listIndex) => {
                 const { idx, x, y } = chipData;

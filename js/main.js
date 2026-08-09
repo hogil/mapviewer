@@ -8924,6 +8924,16 @@ class WaferMapViewer {
         if (this.dom?.coordinateSelectError) this.dom.coordinateSelectError.textContent = message;
     }
 
+    _escapeCoordinateSummaryText(value) {
+        return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;',
+        }[char]));
+    }
+
     _updateCoordinateSelectionSummary() {
         const summary = this.dom?.coordinateSelectSummary;
         const annotator = this.chipAnnotator;
@@ -8939,8 +8949,27 @@ class WaferMapViewer {
         const yieldSummary = annotator.getSelectionYieldSummary?.(selectedChips);
         const yieldText = annotator.formatSelectionYieldSummary?.(yieldSummary) || 'Yld - · G 0/B 0';
         const shotText = shotGroups.length ? ` · Shot ${shotGroups.length}` : '';
-        summary.textContent = `${yieldText} · Chip ${selectedIndices.length}${shotText}`;
-        summary.title = `Selected chips: ${selectedIndices.length}, selected shots: ${shotGroups.length}`;
+        const breakdown = annotator.getSelectionYieldBreakdowns?.(selectedChips) || {};
+        const shotYieldLine = annotator.formatSelectionYieldBreakdownLine?.(
+            breakdown.shotGroups,
+            { label: 'Shot Yld', maxItems: 4 }
+        ) || 'Shot Yld: -';
+        const positionYieldLine = annotator.formatSelectionYieldBreakdownLine?.(
+            breakdown.shotPositionGroups,
+            { label: 'Shot Pos Yld', maxItems: 8 }
+        ) || 'Shot Pos Yld: -';
+        const totalLine = `${yieldText} · Chip ${selectedIndices.length}${shotText}`;
+        const escape = (value) => this._escapeCoordinateSummaryText(value);
+        summary.innerHTML = `
+            <div class="coordinate-select-summary-total">${escape(totalLine)}</div>
+            <div class="coordinate-select-summary-group">${escape(shotYieldLine)}</div>
+            <div class="coordinate-select-summary-group">${escape(positionYieldLine)}</div>
+        `;
+        summary.title = [
+            `Selected chips: ${selectedIndices.length}, selected shots: ${shotGroups.length}`,
+            annotator.formatSelectionYieldBreakdownTitle?.(breakdown.shotGroups, 'Shot Yld') || shotYieldLine,
+            annotator.formatSelectionYieldBreakdownTitle?.(breakdown.shotPositionGroups, 'Shot Pos Yld') || positionYieldLine,
+        ].join('\n');
     }
 
     _renderCoordinateSelectionShotPicker() {
