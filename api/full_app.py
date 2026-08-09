@@ -206,6 +206,7 @@ def _read_layout_index() -> Dict[str, List[Dict[str, Any]]]:
     """Read the shared layout.parquet once per file version."""
     global _LAYOUT_CACHE_SIGNATURE, _LAYOUT_CACHE_BY_PROCESS, _LAYOUT_CACHE_SOURCE_NAME
 
+    started_at = time.perf_counter()
     layout_file = config.LAYOUT_FILE
     try:
         stat_result = layout_file.stat()
@@ -258,6 +259,13 @@ def _read_layout_index() -> Dict[str, List[Dict[str, Any]]]:
         _LAYOUT_CACHE_SIGNATURE = signature
         _LAYOUT_CACHE_BY_PROCESS = index
         _LAYOUT_CACHE_SOURCE_NAME = layout_file.name
+        logger.info(
+            "[LAYOUT] index loaded file=%s processes=%s rows=%s ms=%.1f",
+            layout_file.name,
+            len(index),
+            sum(len(rows) for rows in index.values()),
+            (time.perf_counter() - started_at) * 1000,
+        )
         return index
 
 
@@ -10672,7 +10680,15 @@ async def get_layout(process_id: str):
     if not _LAYOUT_PROCESS_ID_RE.fullmatch(normalized_process_id):
         raise HTTPException(status_code=400, detail="process_id must be exactly four alphanumeric characters")
 
+    started_at = time.perf_counter()
     rows = await anyio.to_thread.run_sync(_get_layout_rows, normalized_process_id)
+    logger.info(
+        "[LAYOUT] api process_id=%s source=%s rows=%s ms=%.1f",
+        normalized_process_id,
+        _get_layout_source_name(),
+        len(rows),
+        (time.perf_counter() - started_at) * 1000,
+    )
     return {
         "process_id": normalized_process_id,
         "source": _get_layout_source_name(),

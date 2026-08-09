@@ -949,12 +949,18 @@ class WaferMapViewer {
         const key = String(processId || '').trim();
         if (!key) return Promise.resolve([]);
         if (this._layoutByProcess.has(key)) {
-            return Promise.resolve(this._layoutByProcess.get(key));
+            const rows = this._layoutByProcess.get(key);
+            console.info('[SHOT] layout cache hit', {
+                processId: key,
+                rows: Array.isArray(rows) ? rows.length : 0,
+            });
+            return Promise.resolve(rows);
         }
         let pending = this._layoutLoadPromises.get(key);
         if (pending) return pending;
 
         const generation = this._layoutCacheGeneration;
+        const startedAt = performance.now();
         pending = fetch(`/api/layout?process_id=${encodeURIComponent(key)}`)
             .then((response) => {
                 if (!response.ok) throw new Error(`layout load failed: ${response.status}`);
@@ -965,6 +971,11 @@ class WaferMapViewer {
                 if (generation === this._layoutCacheGeneration) {
                     this._layoutByProcess.set(key, rows);
                 }
+                console.info('[SHOT] layout fetch done', {
+                    processId: key,
+                    rows: rows.length,
+                    elapsedMs: Math.round(performance.now() - startedAt),
+                });
                 return rows;
             })
             .finally(() => {
@@ -1025,16 +1036,26 @@ class WaferMapViewer {
         const annotator = this.chipAnnotator;
         if (!annotator) return;
 
+        const processId = this._getLayoutProcessId(imagePath);
+        const startedAt = performance.now();
         // Clear the previous process immediately so an image switch cannot
         // show the prior wafer's center/shot coordinates during the fetch.
-        annotator.clearLayoutData();
-        const processId = this._getLayoutProcessId(imagePath);
+        // Keep an already-clicked Shot button active; setLayoutData will draw
+        // the current image's groups as soon as the rows arrive.
+        annotator.clearLayoutData({ resetVisibility: false });
         if (!processId) return;
 
         try {
             const rows = await (layoutRowsPromise || this._getLayoutRowsForProcess(processId));
             if (signal?.aborted || isStaleLoad()) return;
             annotator.setLayoutData(processId, rows);
+            console.info('[SHOT] layout apply done', {
+                processId,
+                rows: Array.isArray(rows) ? rows.length : 0,
+                groups: annotator.shotBoundaryGroups?.size || 0,
+                visible: annotator.shotBoundaryVisible === true,
+                elapsedMs: Math.round(performance.now() - startedAt),
+            });
         } catch (error) {
             if (!signal?.aborted && !isStaleLoad()) {
                 console.warn(`Failed to load layout for process ${processId}:`, error);

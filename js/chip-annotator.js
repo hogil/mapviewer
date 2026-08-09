@@ -196,6 +196,7 @@ export class ChipAnnotator {
     }
 
     setLayoutData(processId, rows) {
+        const startedAt = performance.now();
         this.layoutProcessId = processId || null;
         this.layoutByChip.clear();
         const buckets = new Map();
@@ -230,17 +231,29 @@ export class ChipAnnotator {
         }
         this._invalidateShotGeometry();
         this._buildShotBoundaryGroups();
+        this._logShotBoundary('layout ready', {
+            processId: this.layoutProcessId,
+            sourceRows: Array.isArray(rows) ? rows.length : 0,
+            uniqueChips: this.layoutByChip.size,
+            groups: this.shotBoundaryGroups.size,
+            duplicateKeys,
+            conflictingDuplicateKeys,
+            elapsedMs: Math.round(performance.now() - startedAt),
+        });
         if (this.hoveredChip) {
             this._updateCoordinateBox(0, 0, this.hoveredChip);
         }
         if (this.shotBoundaryVisible) this._renderShotBoundaries();
     }
 
-    clearLayoutData() {
+    clearLayoutData(options = {}) {
+        const resetVisibility = options.resetVisibility !== false;
         this.layoutProcessId = null;
         this.layoutByChip.clear();
         this.shotBoundaryGroups.clear();
-        this.shotBoundaryVisible = false;
+        if (resetVisibility) {
+            this.shotBoundaryVisible = false;
+        }
         this._invalidateShotGeometry();
         this.hoveredChip = null;
         this._resetChipCoordinateDisplay();
@@ -260,6 +273,14 @@ export class ChipAnnotator {
 
     setShotBoundaryVisible(visible) {
         this.shotBoundaryVisible = Boolean(visible);
+        this._shotBoundaryLogNextRender = this.shotBoundaryVisible;
+        this._logShotBoundary('toggle', {
+            visible: this.shotBoundaryVisible,
+            processId: this.layoutProcessId,
+            chips: Array.isArray(this.chips) ? this.chips.length : 0,
+            groups: this.shotBoundaryGroups.size,
+            gridMode: this.viewer?.gridMode === true,
+        });
         if (this.shotBoundaryVisible) {
             // The existing overlay is already on the canvas; adding boundaries
             // must not redraw every chip and label.
@@ -267,6 +288,13 @@ export class ChipAnnotator {
         } else {
             this.render();
         }
+        this.viewer?._syncShotBoundaryButtonUI?.();
+    }
+
+    _logShotBoundary(event, data = {}) {
+        try {
+            console.info(`[SHOT] ${event}`, data);
+        } catch (_) {}
     }
 
     _invalidateShotGeometry() {
@@ -526,55 +554,6 @@ export class ChipAnnotator {
             maxY = Math.max(maxY, Number(rect.y1));
         });
         if (![minX, minY, maxX, maxY].every(Number.isFinite)) return null;
-
-        const geometry = this._getShotGridGeometry?.();
-        const shape = geometry?.shape;
-        const layoutEntries = (group.indices || [])
-            .map((index) => {
-                const chip = this.chips[index];
-                const layout = this.getLayoutRowForChip(chip);
-                if (!chip?.rect || !layout) return null;
-                const x = Number(chip.x_abs);
-                const y = Number(chip.y_abs);
-                return Number.isInteger(x) && Number.isInteger(y)
-                    ? { chip, layout, x, y }
-                    : null;
-            })
-            .filter(Boolean);
-        if (shape?.cols > 0 && shape?.rows > 0 && layoutEntries.length > 0) {
-            const minGridX = Math.min(...layoutEntries.map((entry) => entry.x));
-            const minGridY = Math.min(...layoutEntries.map((entry) => entry.y));
-            const reference = layoutEntries[0];
-            const chipWidth = Number(reference.chip.rect.x1) - Number(reference.chip.rect.x0);
-            const chipHeight = Number(reference.chip.rect.y1) - Number(reference.chip.rect.y0);
-            if (chipWidth > 0 && chipHeight > 0) {
-                const shotX = Number(reference.layout.shot_x_pos);
-                const shotY = Number(reference.layout.shot_y_pos);
-                const hasLayoutShotGrid = geometry &&
-                    Number.isInteger(shotX) && Number.isInteger(shotY) &&
-                    Number.isInteger(geometry.originX) && Number.isInteger(geometry.originY) &&
-                    Number.isInteger(geometry.minShotX) && Number.isInteger(geometry.maxShotX) &&
-                    Number.isInteger(geometry.minShotY) && Number.isInteger(geometry.maxShotY);
-                const positiveModulo = (value, size) => ((value % size) + size) % size;
-                const baseCandidate = hasLayoutShotGrid ? this._getShotGridBase(reference.layout, geometry) : null;
-                const baseCoversGroup = baseCandidate && layoutEntries.every((entry) =>
-                    entry.x >= baseCandidate.x && entry.x < baseCandidate.x + shape.cols &&
-                    entry.y >= baseCandidate.y && entry.y < baseCandidate.y + shape.rows
-                );
-                const base = baseCoversGroup ? baseCandidate : null;
-                const baseGridX = base
-                    ? base.x
-                    : minGridX - positiveModulo(minGridX, shape.cols);
-                const baseGridY = base
-                    ? base.y
-                    : minGridY - positiveModulo(minGridY, shape.rows);
-                minX = reference.chip.rect.x0 - (reference.x - baseGridX) * chipWidth;
-                minY = reference.chip.rect.y0 - (reference.y - baseGridY) * chipHeight;
-                maxX = minX + shape.cols * chipWidth;
-                maxY = minY + shape.rows * chipHeight;
-            }
-        }
-
         const width = maxX - minX;
         const height = maxY - minY;
         if (width <= 0 || height <= 0) return null;
@@ -616,7 +595,19 @@ export class ChipAnnotator {
     }
 
     _renderShotBoundaries() {
-        if (!this.shotBoundaryVisible || this.viewer?.gridMode === true || this.shotBoundaryGroups.size === 0) return;
+        if (!this.shotBoundaryVisible || this.viewer?.gridMode === true) return;
+        const startedAt = performance.now();
+        if (this.shotBoundaryGroups.size === 0) {
+            if (this._shotBoundaryLogNextRender) {
+                this._logShotBoundary('render deferred', {
+                    processId: this.layoutProcessId,
+                    chips: Array.isArray(this.chips) ? this.chips.length : 0,
+                    groups: 0,
+                });
+                this._shotBoundaryLogNextRender = false;
+            }
+            return;
+        }
 
         const transform = this.viewer.transform;
         const Y_OFFSET = this.Y_OFFSET || 0;
@@ -627,8 +618,8 @@ export class ChipAnnotator {
         ctx.lineWidth = 0.75;
         ctx.setLineDash([3, 3]);
 
+        let drawn = 0;
         this.shotBoundaryGroups.forEach((group) => {
-            // Keep the canonical Shot extent. Missing edge chips stay empty and the canvas clips the visible part.
             const boundary = this._getShotBoundaryRect(group);
             if (!boundary) return;
 
@@ -637,9 +628,21 @@ export class ChipAnnotator {
             const width = boundary.width * transform.scale;
             const height = boundary.height * transform.scale;
             ctx.strokeRect(x, y, width, height);
+            drawn += 1;
         });
 
         ctx.restore();
+        const elapsedMs = performance.now() - startedAt;
+        if (this._shotBoundaryLogNextRender || elapsedMs > 50) {
+            this._logShotBoundary('render boundaries', {
+                processId: this.layoutProcessId,
+                groups: this.shotBoundaryGroups.size,
+                drawn,
+                cacheSize: this._shotBoundaryCache.size,
+                elapsedMs: Math.round(elapsedMs * 10) / 10,
+            });
+            this._shotBoundaryLogNextRender = false;
+        }
     }
 
     _renderHoveredShotBoundary() {

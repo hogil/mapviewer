@@ -2204,36 +2204,21 @@ const { createRunner } = require('./e2e_playwright_session');
           chipCount: group.chips.length,
           rect: v.chipAnnotator?._getShotBoundaryRect(group),
           firstChipRect: group.chips[0]?.rect || null,
+          chipRects: group.chips.map((chip) => chip?.rect).filter(Boolean),
         }));
       const singleChipBoundary = shotBoundaryGroups.find((group) => group.chipCount === 1);
-      const shotShape = v.chipAnnotator?.getShotGridShape?.() || { cols: 4, rows: 6 };
-      const edgeLayout = v.chipAnnotator?.getLayoutRowForChip?.(singleChipBoundary?.firstChipRect ?
-        v.chipAnnotator.chips.find((chip) => chip?.rect === singleChipBoundary.firstChipRect) : null);
-      const edgeChipWidth = singleChipBoundary?.firstChipRect
-        ? singleChipBoundary.firstChipRect.x1 - singleChipBoundary.firstChipRect.x0
-        : 0;
-      const edgeChipHeight = singleChipBoundary?.firstChipRect
-        ? singleChipBoundary.firstChipRect.y1 - singleChipBoundary.firstChipRect.y0
-        : 0;
-      const positiveModulo = (value, size) => ((value % size) + size) % size;
-      const edgeBaseX = edgeLayout ? Number(edgeLayout.chip_x_pos) - positiveModulo(Number(edgeLayout.chip_x_pos), shotShape.cols) : NaN;
-      const edgeBaseY = edgeLayout ? Number(edgeLayout.chip_y_pos) - positiveModulo(Number(edgeLayout.chip_y_pos), shotShape.rows) : NaN;
-      const edgeExpectedMinX = edgeLayout && singleChipBoundary?.firstChipRect
-        ? singleChipBoundary.firstChipRect.x0 - (Number(edgeLayout.chip_x_pos) - edgeBaseX) * edgeChipWidth
-        : NaN;
-      const edgeExpectedMinY = edgeLayout && singleChipBoundary?.firstChipRect
-        ? singleChipBoundary.firstChipRect.y0 - (Number(edgeLayout.chip_y_pos) - edgeBaseY) * edgeChipHeight
-        : NaN;
-      const edgeBoundaryMatchesNominal = Boolean(
-        singleChipBoundary?.rect && edgeLayout &&
-        Math.abs(singleChipBoundary.rect.minX - edgeExpectedMinX) < 1e-6 &&
-        Math.abs(singleChipBoundary.rect.minY - edgeExpectedMinY) < 1e-6 &&
-        Math.abs(singleChipBoundary.rect.width - edgeChipWidth * shotShape.cols) < 1e-6 &&
-        Math.abs(singleChipBoundary.rect.height - edgeChipHeight * shotShape.rows) < 1e-6
-      );
-      const expectedBoundaryWidth = edgeChipWidth * Number(shotShape.cols || 0);
-      const expectedBoundaryHeight = edgeChipHeight * Number(shotShape.rows || 0);
       const partialGroups = shotBoundaryGroups.filter((group) => group.chipCount < 24);
+      const boundaryMatchesChipUnion = shotBoundaryGroups.every((group) => {
+        if (!group.rect || !group.chipRects.length) return false;
+        const minX = Math.min(...group.chipRects.map((rect) => Number(rect.x0)));
+        const minY = Math.min(...group.chipRects.map((rect) => Number(rect.y0)));
+        const maxX = Math.max(...group.chipRects.map((rect) => Number(rect.x1)));
+        const maxY = Math.max(...group.chipRects.map((rect) => Number(rect.y1)));
+        return Math.abs(group.rect.minX - minX) < 1e-6 &&
+          Math.abs(group.rect.minY - minY) < 1e-6 &&
+          Math.abs(group.rect.maxX - maxX) < 1e-6 &&
+          Math.abs(group.rect.maxY - maxY) < 1e-6;
+      });
       const layoutRequest = performance.getEntriesByType('resource').some((entry) => {
         try {
           const url = new URL(entry.name, location.href);
@@ -2250,10 +2235,7 @@ const { createRunner } = require('./e2e_playwright_session');
         shotBoundaryChipCount: shotBoundaryGroups.reduce((sum, group) => sum + group.chipCount, 0),
         partialShotCount: partialGroups.length,
         partialBoundaryMissingCount: partialGroups.filter((group) => !group.rect || group.rect.width <= 0 || group.rect.height <= 0).length,
-        partialBoundaryNonCanonicalCount: partialGroups.filter((group) => !group.rect ||
-          Math.abs(group.rect.width - expectedBoundaryWidth) > 1e-6 ||
-          Math.abs(group.rect.height - expectedBoundaryHeight) > 1e-6).length,
-        edgeBoundaryMatchesNominal,
+        boundaryMatchesChipUnion,
         shotBoundaryPixelsBefore: boundaryBefore.shotBoundaryPixels,
         shotBoundaryPixels: boundaryOn.shotBoundaryPixels,
         shotBoundaryPixelsAfter: boundaryAfter.shotBoundaryPixels,
@@ -2293,9 +2275,9 @@ const { createRunner } = require('./e2e_playwright_session');
       `circle zone columns=${JSON.stringify(data)}`);
     expect(data.shotBoundaryGroupCount === 43 && data.shotBoundaryChipCount === 833,
       `shot boundaries=${JSON.stringify(data)}`);
-    expect(data.partialShotCount > 0 && data.edgeBoundaryMatchesNominal &&
-      data.partialBoundaryMissingCount === 0 && data.partialBoundaryNonCanonicalCount === 0,
-      `edge shot boundary should keep the nominal Shot grid=${JSON.stringify(data)}`);
+    expect(data.partialShotCount > 0 && data.boundaryMatchesChipUnion &&
+      data.partialBoundaryMissingCount === 0,
+      `shot boundary should match the loaded chip rect union=${JSON.stringify(data)}`);
     expect(!data.shotBoundaryVisibleBefore && data.shotBoundaryVisibleOn && !data.shotBoundaryVisibleAfter,
       `shot toggle=${JSON.stringify(data)}`);
     expect(data.shotToggleTiming.ok && data.shotToggleTiming.firstOnMs < 10 &&
@@ -2341,12 +2323,24 @@ const { createRunner } = require('./e2e_playwright_session');
           if (!occupied) emptyPoint = point;
         }
       }
-      if (!emptyPoint) return null;
 
       const chipPoint = {
         x: (firstChip.rect.x0 + firstChip.rect.x1) / 2,
         y: (firstChip.rect.y0 + firstChip.rect.y1) / 2,
       };
+      if (!emptyPoint) {
+        const outsideCandidates = [
+          { x: boundary.maxX + chipWidth * 0.5, y: chipPoint.y },
+          { x: boundary.minX - chipWidth * 0.5, y: chipPoint.y },
+          { x: chipPoint.x, y: boundary.maxY + chipHeight * 0.5 },
+          { x: chipPoint.x, y: boundary.minY - chipHeight * 0.5 },
+        ];
+        emptyPoint = outsideCandidates.find((point) => {
+          const x = Math.round(point.x * transform.scale + transform.dx);
+          const y = Math.round(point.y * transform.scale + transform.dy + (annotator.Y_OFFSET || 0));
+          return x >= 0 && y >= 0 && x < canvas.width && y < canvas.height;
+        }) || outsideCandidates[0];
+      }
       const sample = (point) => {
         const x = Math.round(point.x * transform.scale + transform.dx);
         const y = Math.round(point.y * transform.scale + transform.dy + (annotator.Y_OFFSET || 0));
