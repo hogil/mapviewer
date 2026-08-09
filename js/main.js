@@ -9518,6 +9518,9 @@ class WaferMapViewer {
 
     _selectCoordinateSelectionCell(input, event = {}) {
         if (!input) return;
+        if (input.dataset.coordinateList && this.coordinateSelectionActiveList !== input.dataset.coordinateList) {
+            this._activateCoordinateSelectionList(input.dataset.coordinateList);
+        }
         const key = input.dataset.coordinateCellKey || this._coordinateSelectionCellKey(
             input.dataset.coordinateList,
             Number(input.dataset.coordinateRow),
@@ -10305,7 +10308,12 @@ class WaferMapViewer {
         groupPanel.dataset.coordinateShotId = 'full';
         const selectedGroups = [...(annotator._getSelectedShotGroups?.() || [])];
         const isSlotSelected = (entry) => {
-            if (!selectedGroups.length) return annotator.selectedChips?.has(entry.index);
+            if (!selectedGroups.length) {
+                return [...(annotator.selectedChips || [])].some((index) => {
+                    const chip = annotator.chips?.[index];
+                    return annotator._getShotGridSlot?.(chip, { cols, rows }) === `${entry.slotX}:${entry.slotY}`;
+                });
+            }
             const matchingIndices = selectedGroups.flatMap((group) => (group.indices || []).filter((index) => {
                 const chip = annotator.chips?.[index];
                 return annotator._getShotGridSlot?.(chip, { cols, rows }) === `${entry.slotX}:${entry.slotY}`;
@@ -10497,6 +10505,11 @@ class WaferMapViewer {
         dom.coordinateSelectListPanels?.addEventListener('pointerdown', (event) => {
             const input = this._getCoordinateSelectionCellInputFromEvent(event);
             if (!input || event.button !== 0 || input.dataset.coordinateEditing === 'true') return;
+            if (event.detail >= 2) {
+                this._enterCoordinateSelectionCellEdit(input);
+                event.preventDefault();
+                return;
+            }
             this._selectCoordinateSelectionCell(input, event);
             const key = input.dataset.coordinateCellKey;
             const cellState = this._ensureCoordinateSelectionCellState();
@@ -10524,7 +10537,11 @@ class WaferMapViewer {
         dom.coordinateSelectListPanels?.addEventListener('pointerup', stopCoordinateCellDrag);
         dom.coordinateSelectListPanels?.addEventListener('pointercancel', stopCoordinateCellDrag);
         dom.coordinateSelectListPanels?.addEventListener('dblclick', (event) => {
-            const input = this._getCoordinateSelectionCellInputFromEvent(event);
+            let input = this._getCoordinateSelectionCellInputFromEvent(event);
+            if (!input && event.target === dom.coordinateSelectListPanels) {
+                const cellState = this._ensureCoordinateSelectionCellState();
+                input = this._getCoordinateSelectionCellInput(cellState.activeKey);
+            }
             if (!input) return;
             this._enterCoordinateSelectionCellEdit(input);
             event.preventDefault();
@@ -10704,6 +10721,8 @@ class WaferMapViewer {
             this.coordinateSelectionShotPickerDrag = {
                 pointerId: event.pointerId,
                 grid,
+                startIndex: index,
+                shiftKey: event.shiftKey,
                 startX: event.clientX,
                 startY: event.clientY,
                 indices: [],
@@ -10726,10 +10745,15 @@ class WaferMapViewer {
             clearShotPickerDragPreview(drag);
             shotPicker.releasePointerCapture?.(event.pointerId);
             this.coordinateSelectionShotPickerDrag = null;
-            if (!didDrag) return;
             this.coordinateSelectionShotPickerSuppressClickAt = performance.now();
-            const result = this._applyCoordinateSelectionShotPickerSelection(indices, true);
-            if (result) this.coordinateSelectionShotPickerAnchorIndex = indices[0] ?? null;
+            const result = didDrag
+                ? this._applyCoordinateSelectionShotPickerSelection(indices, true)
+                : (drag.shiftKey && Number.isInteger(this.coordinateSelectionShotPickerAnchorIndex)
+                    ? applyShotPickerRange(this.coordinateSelectionShotPickerAnchorIndex, drag.startIndex)
+                    : this._applyCoordinateSelectionShotPickerSelection([drag.startIndex]));
+            if (result) this.coordinateSelectionShotPickerAnchorIndex = didDrag
+                ? (indices[0] ?? null)
+                : drag.startIndex;
         };
         shotPicker?.addEventListener('pointerup', (event) => stopShotPickerDrag(event, true));
         shotPicker?.addEventListener('pointercancel', (event) => stopShotPickerDrag(event, false));
@@ -19949,6 +19973,10 @@ class WaferMapViewer {
     }
 
     getSelectedImagesForModal() {
+        if (Array.isArray(this._pendingLabelImagePaths) && this._pendingLabelImagePaths.length > 0) {
+            return [...this._pendingLabelImagePaths];
+        }
+
         // 그리드 모드에서 선택된 이미지들 반환
         if (this.gridMode) {
             if (this.gridSelectedIdxs && this.gridSelectedIdxs.length > 0) {
@@ -20104,7 +20132,10 @@ class WaferMapViewer {
         const selectedImages = this.getSelectedImagesForModal();
 
         // 🔥 Chip 선택 확인
-        const chipCount = this.chipAnnotator && this.chipAnnotator.selectedChips ? this.chipAnnotator.selectedChips.size : 0;
+        const hasPendingLabelImages = Array.isArray(this._pendingLabelImagePaths) && this._pendingLabelImagePaths.length > 0;
+        const chipCount = !hasPendingLabelImages && this.chipAnnotator && this.chipAnnotator.selectedChips
+            ? this.chipAnnotator.selectedChips.size
+            : 0;
 
         if (chipCount > 0) {
             // Chip이 선택된 경우
@@ -20271,6 +20302,7 @@ class WaferMapViewer {
         // 모달 상태 초기화
 
         modal.style.display = 'none';
+        this._pendingLabelImagePaths = null;
 
         // 라디오 버튼 초기화 (첫 번째 옵션 선택)
 
@@ -20320,8 +20352,9 @@ class WaferMapViewer {
         }
 
         // 🔥 Chip 선택 확인 - Chip이 선택된 경우 별도 처리
-        const chipCount = this.getSelectedChipCount();
-        if (this.classMode === 'chip') {
+        const hasPendingLabelImages = Array.isArray(this._pendingLabelImagePaths) && this._pendingLabelImagePaths.length > 0;
+        const chipCount = hasPendingLabelImages ? 0 : this.getSelectedChipCount();
+        if (this.classMode === 'chip' && !hasPendingLabelImages) {
             if (chipCount === 0) {
                 alert('Chip 모드에서는 칩을 선택한 후 라벨을 추가할 수 있습니다.');
                 return;
@@ -20330,7 +20363,7 @@ class WaferMapViewer {
             return;
         }
 
-        if (chipCount > 0) {
+        if (chipCount > 0 && !hasPendingLabelImages) {
             // Chip 라벨링 처리 (Wafer 모드에서도 칩 선택 시)
             await this.addChipLabels(finalClassName, newClassName);
             return;
@@ -32174,6 +32207,13 @@ class WaferMapViewer {
                            outline:none;flex-shrink:0;"
                     title="Border: 모든 칩 테두리를 Normal 색으로 표시">Border</button>
             `;
+            const coordBtnHtml = `
+                <button id="single-coordinate-select-open-btn" class="grid-btn"
+                    style="display:block;width:100%;margin-bottom:4px;padding:6px 12px;font-size:12px;
+                           border:1px solid #444;border-radius:4px;cursor:pointer;text-align:center;
+                           background:#222;color:#ccc;outline:none;flex-shrink:0;"
+                    title="Coord: Shot/Chip 좌표 선택 패널 열기">Coord</button>
+            `;
             const bottomHtml = BOTTOM_KEYS.map((label, index) => {
                 // 🔥 "Border" 키가 있는 경우 "Normal"로 매핑 (Ubuntu 서버 호환성)
                 let actualLabel = label;
@@ -32214,7 +32254,15 @@ class WaferMapViewer {
                 }
                 return '';
             }).filter(html => html).join('');
-            this.dom.colorLegendBottom.innerHTML = shotBtnHtml + borderBtnHtml + bottomHtml;
+            this.dom.colorLegendBottom.innerHTML = coordBtnHtml + shotBtnHtml + borderBtnHtml + bottomHtml;
+            const coordBtn = document.getElementById('single-coordinate-select-open-btn');
+            if (coordBtn) {
+                coordBtn.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    this.openCoordinateSelectionModal();
+                });
+            }
             const shotBtn = document.getElementById('single-shot-boundary-btn');
             if (shotBtn) {
                 shotBtn.addEventListener('click', () => {
@@ -32715,6 +32763,32 @@ class WaferMapViewer {
                     saveShotImagesItem.onmouseleave = () => { saveShotImagesItem.style.background = ''; };
                     menu.appendChild(saveShotImagesItem);
                 }
+
+                const myLotRegionItem = document.createElement('div');
+                myLotRegionItem.className = 'context-menu-item';
+                myLotRegionItem.style.cssText = 'padding: 8px 16px; cursor: pointer; color: #fff; font-size: 14px;';
+                myLotRegionItem.textContent = `📁 선택 ${selectedUnit} 이미지 MY LOT 추가`;
+                myLotRegionItem.onclick = async () => {
+                    menu.remove();
+                    await this.addSelectedRegionCropsToMyLot(selectedChips, selectedUnit);
+                };
+                myLotRegionItem.onmouseenter = () => { myLotRegionItem.style.background = '#3a3a3a'; };
+                myLotRegionItem.onmouseleave = () => { myLotRegionItem.style.background = ''; };
+                menu.appendChild(myLotRegionItem);
+
+                const labelRegionItem = document.createElement('div');
+                labelRegionItem.className = 'context-menu-item';
+                labelRegionItem.style.cssText = 'padding: 8px 16px; cursor: pointer; color: #fff; font-size: 14px;';
+                labelRegionItem.textContent = selectedUnit === 'Shot'
+                    ? '🏷 선택 Shot 이미지 Label 추가'
+                    : '🏷 선택 Chip Label 추가';
+                labelRegionItem.onclick = async () => {
+                    menu.remove();
+                    await this.addSelectedRegionCropsToLabel(selectedChips, selectedUnit);
+                };
+                labelRegionItem.onmouseenter = () => { labelRegionItem.style.background = '#3a3a3a'; };
+                labelRegionItem.onmouseleave = () => { labelRegionItem.style.background = ''; };
+                menu.appendChild(labelRegionItem);
             }
 
             // 2) Wafer 전체 정보복사
@@ -33225,8 +33299,16 @@ class WaferMapViewer {
 
     _buildChipExportTable(chips) {
         const m = this._getWaferMetaInfo();
+        const summary = this.chipAnnotator?.getSelectionYieldSummary?.(Array.isArray(chips) ? chips : []) || {};
+        const groupYield = Number.isFinite(Number(summary.avgYield))
+            ? Number(summary.avgYield).toFixed(3)
+            : '';
+        const groupYieldSource = summary.avgYieldSource && summary.avgYieldSource !== 'none'
+            ? summary.avgYieldSource
+            : '';
         const headers = [
             'LOT', 'WAFER', 'STEP', 'Device', 'PartID', 'PGM', 'TM', 'LT', 'NET', 'GOOD', 'YIELD', 'SYS',
+            'GROUP_CHIP_COUNT', 'GROUP_GOOD', 'GROUP_BAD', 'GROUP_YIELD(%)', 'GROUP_YIELD_SOURCE',
             'PROCESS_ID', 'CHIP_ID', 'X_ABS', 'Y_ABS', 'BIN', 'G/B',
             'CHIP_COORD_X(mm)', 'CHIP_COORD_Y(mm)', 'RADIUS(mm)',
             'SHOT_ID', 'SHOT_X', 'SHOT_Y', 'FULL_SHOT_TYPE',
@@ -33258,6 +33340,7 @@ class WaferMapViewer {
             const shotY = layout?.shot_y_pos ?? '';
             return [
                 m.lot, m.wafer, m.step, m.device, m.partId, m.pgm, m.tm, m.lt, m.net, m.good, m.yield, m.sys,
+                summary.chipCount ?? '', summary.goodCount ?? '', summary.badCount ?? '', groupYield, groupYieldSource,
                 this.chipAnnotator?.layoutProcessId || '', chipId, chip?.x_abs ?? '', chip?.y_abs ?? '', bin,
                 binNumber === null ? '' : (binNumber < 200 ? 'G' : 'B'),
                 formatMm(coordX), formatMm(coordY), radius,
@@ -33295,7 +33378,10 @@ class WaferMapViewer {
             const count = unit === 'Shot'
                 ? (this.chipAnnotator?._getSelectedShotGroups?.().size || 0)
                 : selectedChips.length;
-            this.showToast?.(`${count}개 ${unit} 정보가 클립보드에 복사되었습니다.`, 2000);
+            const summaryText = this.chipAnnotator?.formatSelectionYieldSummary?.(
+                this.chipAnnotator?.getSelectionYieldSummary?.(selectedChips)
+            );
+            this.showToast?.(`${count}개 ${unit} 정보가 클립보드에 복사되었습니다.${summaryText ? ` (${summaryText})` : ''}`, 2200);
         } catch (error) {
             console.error('클립보드 복사 실패:', error);
             alert('클립보드 복사에 실패했습니다.');
@@ -33357,6 +33443,100 @@ class WaferMapViewer {
         } catch (error) {
             console.error('Shot 이미지 저장 실패:', error);
             alert('Shot 이미지 저장에 실패했습니다.');
+        }
+    }
+
+    _buildSelectedRegionCropPayload(selectedChips, unitLabel = 'Chip') {
+        const sourcePath = this.chipAnnotator?.currentImagePath || this.selectedImagePath;
+        const mode = String(unitLabel).toLowerCase() === 'shot' ? 'shot' : 'chip';
+        if (!sourcePath) return null;
+
+        const crops = [];
+        if (mode === 'shot') {
+            const groups = [...(this.chipAnnotator?._getSelectedShotGroups?.() || [])];
+            groups.forEach((group, index) => {
+                const boundary = this.chipAnnotator?._getShotBoundaryRect?.(group);
+                if (!boundary) return;
+                crops.push({
+                    id: `shot_${String(group.shotId ?? index + 1).replace(/[^a-zA-Z0-9._-]+/g, '_')}`,
+                    x: Math.floor(boundary.minX),
+                    y: Math.floor(boundary.minY),
+                    width: Math.ceil(boundary.width),
+                    height: Math.ceil(boundary.height),
+                });
+            });
+        } else {
+            (selectedChips || []).forEach((chip, index) => {
+                const rect = chip?.rect;
+                if (!rect) return;
+                crops.push({
+                    id: `chip_${Number(chip.x_abs)}_${Number(chip.y_abs)}_${index + 1}`,
+                    x: Math.floor(rect.x0),
+                    y: Math.floor(rect.y0),
+                    width: Math.ceil(rect.x1 - rect.x0),
+                    height: Math.ceil(rect.y1 - rect.y0),
+                });
+            });
+        }
+
+        return crops.length ? { image_path: sourcePath, mode, crops } : null;
+    }
+
+    async createSelectedRegionCropFiles(selectedChips, unitLabel = 'Chip') {
+        const payload = this._buildSelectedRegionCropPayload(selectedChips, unitLabel);
+        if (!payload) {
+            throw new Error(`저장할 ${unitLabel} 이미지 영역이 없습니다.`);
+        }
+        const response = await fetch(this._withCurrentLoginId('/api/selection-crops'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            cache: 'no-store',
+        });
+        if (!response.ok) {
+            throw new Error(await response.text());
+        }
+        const result = await response.json();
+        const paths = Array.isArray(result.paths) ? result.paths.filter(Boolean) : [];
+        if (!paths.length) {
+            throw new Error('저장된 이미지 경로가 없습니다.');
+        }
+        return paths;
+    }
+
+    async addSelectedRegionCropsToMyLot(selectedChips, unitLabel = 'Chip') {
+        try {
+            const paths = await this.createSelectedRegionCropFiles(selectedChips, unitLabel);
+            const modal = await this._getMyLotModal();
+            await modal.open(paths, { directPaths: true });
+            this.showToast?.(`${paths.length}개 ${unitLabel} 이미지를 MY LOT 저장 대기 항목으로 추가했습니다.`, 2200);
+        } catch (error) {
+            console.error(`${unitLabel} MY LOT 추가 실패:`, error);
+            alert(`${unitLabel} 이미지를 MY LOT에 추가하지 못했습니다.`);
+        }
+    }
+
+    async openAddLabelModalForImagePaths(paths) {
+        const cleanPaths = Array.isArray(paths) ? paths.filter(Boolean) : [];
+        if (!cleanPaths.length) {
+            this.showToast?.('Label에 추가할 이미지가 없습니다.', 1800);
+            return;
+        }
+        this._pendingLabelImagePaths = [...cleanPaths];
+        await this.openAddLabelModal();
+    }
+
+    async addSelectedRegionCropsToLabel(selectedChips, unitLabel = 'Chip') {
+        try {
+            if (String(unitLabel).toLowerCase() === 'chip') {
+                await this.openAddLabelModal();
+                return;
+            }
+            const paths = await this.createSelectedRegionCropFiles(selectedChips, unitLabel);
+            await this.openAddLabelModalForImagePaths(paths);
+        } catch (error) {
+            console.error(`${unitLabel} Label 추가 준비 실패:`, error);
+            alert(`${unitLabel} 이미지를 Label에 추가할 준비를 하지 못했습니다.`);
         }
     }
 

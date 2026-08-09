@@ -23,7 +23,7 @@ argument-hint: [Phase 번호 또는 범위]
 | P1 | 시간 정렬, `H%(PA,TD)` root LOT wildcard, 그리드/단일 네비게이션 순서 | `scripts/e2e_chunk1.js` `sort-lot-filter` |
 | P1 | Composite/Measure fixed 12-BIN SYSTEMATIC grouping and filtered render | `scripts/e2e_chunk1.js` `systematic-bin-group` |
 | P1 | Layout `layout.txt` chip 매칭, Chip Coord/Radious/Shot 순서, Shot 토글/선택 및 shot_id 경계 표시 | `scripts/e2e_chunk2.js` `layout-chip-coordinates` |
-| P1 | 선택 Chip/Shot 영역 Composite Map 및 결과 positions 정합성, Shot chip 수/선택영역 crop | `scripts/e2e_chunk2.js` `selected-region-composite` |
+| P1 | 선택 Chip/Shot 영역 Composite Map 및 결과 positions 정합성, Shot chip 수/선택영역 crop, 선택 Good/Bad/Yield summary/export, 선택 crop MY LOT/Label 연결 메뉴 | `scripts/e2e_chunk2.js` `selected-region-composite`, `selected-region-export` |
 | P1 | 기존 Measure 다중선택/탭 복귀/썸네일 무결성 | `30,33,34,35,39`, `41,42,45,47,48,56` |
 | P2 | 전체 63개 Phase와 성능/프로세스 정리 | `run-e2e-playwright.ps1 -Chunk all` |
 
@@ -6513,6 +6513,8 @@ return {
 - 두 Shot 결과는 단일 Shot 결과와 `width`, `height`, canonical chip 격자 `4×6`이 같아야 한다. positions chip 수는 canonical 첫 Shot의 24개, `selected_source_chip_count`는 두 Shot 합계 48개, `composite_sample_count`는 source image 수×Shot 수여야 한다.
 - `selected_shot_groups`가 없는 기존 Chip 요청도 유지해야 하며, positions가 결과 output canvas로 비동기 복사된 뒤 `/api/chip-positions`에서 chip rect/canvas를 다시 확인한다.
 - `selected-region-export`는 Chip/Shot context menu를 실제로 열고, Shot 이미지 PNG 다운로드, Shot TSV 다운로드, clipboard TSV header의 `CHIP_COORD_X(mm)`, `CHIP_COORD_Y(mm)`, `RADIUS(mm)`, `SHOT_ID`, `SHOT_X`, `SHOT_Y`를 확인한다. `SHOT` 튜플 컬럼은 없어야 하며, 세 mm 값은 소수 셋째 자리까지 기록되어야 한다. Chip export도 같은 schema와 선택 행 수를 확인한다.
+- 선택 Chip/Shot export에는 선택 집합 기준 `GROUP_CHIP_COUNT`, `GROUP_GOOD`, `GROUP_BAD`, `GROUP_YIELD(%)`, `GROUP_YIELD_SOURCE`가 있어야 한다. Per-chip `yld`가 없으면 BIN 기준 Good/Bad 수율을 사용하고, Wafer-level `yield`만 있는 fixture 값을 chip별 yld로 복제하면 FAIL이다. 단일보기 선택 리스트에도 같은 선택 summary가 보여야 한다.
+- 선택 Chip/Shot context menu에는 선택 crop을 MY LOT pendingPaths와 Label modal로 넘기는 항목이 있어야 한다. Shot crop은 브라우저 다운로드만 검증하면 부족하며, 서버 저장 경로(`/api/selection-crops`)를 기존 MY LOT/Label 흐름에 연결해야 한다.
 - UI 상태 플래그만으로 PASS 처리하지 않는다. API request body의 `selected_shot_groups`, output image dimensions, positions count, 다운로드 suggested filename을 모두 기록한다.
 - Chip Composite는 선택 Chip 3개를 한 Chip 크기의 canonical canvas에 누적해야 한다. 선택 Chip을 원래 Shot 위치에 여러 개 배치한 결과가 나오면 FAIL이다. output image와 positions canvas는 첫 Chip 크기, positions chip 수는 1, `selected_chip_count=3`, `composite_sample_count=3`이어야 한다.
 

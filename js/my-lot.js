@@ -87,6 +87,7 @@ export class MyLotModal {
         this.lastSelectedIndex = null;
         this.dragSelectActive = false;
         this.pendingPaths = []; // Context Menu에서 추가할 경로들
+        this.pendingPathsDirect = false; // 선택 crop처럼 pending 경로 자체를 저장해야 하는 경우
         this.updatedGroups = new Set(); // 🔥 세션 당 그룹별 업데이트 여부 추적
         this.pendingSearchRows = new Set(); // 🔥 배치 검색 대상 행
         this.batchSearchTimer = null;
@@ -1624,12 +1625,13 @@ export class MyLotModal {
         this.windowEl.style.transform = 'none';
     }
 
-    async open(pendingPaths = null) {
+    async open(pendingPaths = null, options = {}) {
         if (!this.windowEl) return;
         try {
             // 대기 중인 경로 설정
             if (pendingPaths && pendingPaths.length > 0) {
                 this.pendingPaths = [...pendingPaths];
+                this.pendingPathsDirect = !!options.directPaths;
             }
 
             // 🔥 모달 열 때마다 업데이트 상태 초기화 (매번 접속 시 새로 업데이트하도록)
@@ -1681,6 +1683,7 @@ export class MyLotModal {
         this.stopDragSelection();
         // 대기 중인 경로 초기화
         this.pendingPaths = [];
+        this.pendingPathsDirect = false;
         this.updatePendingButtonVisibility();
         // 닫을 때 임시 입력 초기화
         this.manualRows = [];
@@ -3836,7 +3839,12 @@ export class MyLotModal {
         try {
             let finalPaths = [];
 
-            if (this.activeMode === 'lot') {
+            if (this.pendingPathsDirect) {
+                finalPaths = paths.filter(path => {
+                    const tokens = this.viewer?.extractLotTokensFromPath?.(path);
+                    return tokens != null;
+                });
+            } else if (this.activeMode === 'lot') {
                 // LOT Tab: 검색을 통해 각 LOT의 모든 이미지 찾기
                 const lotSet = new Set();
 
@@ -3938,6 +3946,7 @@ export class MyLotModal {
         } finally {
             // 대기 중인 경로 초기화
             this.pendingPaths = [];
+            this.pendingPathsDirect = false;
             this.updatePendingButtonVisibility();
         }
     }

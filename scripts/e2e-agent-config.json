@@ -5,30 +5,65 @@
   "roles": {
     "scout": {
       "tier": "cheap",
-      "provider": "claude",
+      "provider": "codex",
       "model_env": "E2E_SCOUT_MODELS",
-      "default_models": ["sonnet"],
+      "default_models": ["gpt-5.6-luna"],
+      "count": 1
+    },
+    "code_reader": {
+      "tier": "cheap",
+      "provider": "codex",
+      "model_env": "E2E_CODE_READER_MODELS",
+      "default_models": ["gpt-5.6-luna"],
+      "count": 1
+    },
+    "browser_capture": {
+      "tier": "cheap",
+      "provider": "codex",
+      "model_env": "E2E_BROWSER_CAPTURE_MODELS",
+      "default_models": ["gpt-5.6-luna"],
       "count": 1
     },
     "planner": {
       "tier": "top",
-      "provider": "claude",
+      "provider": "codex",
       "model_env": "E2E_PLANNER_MODELS",
-      "default_models": ["opus", "opus", "opus"],
+      "default_models": ["gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol"],
+      "count": 3
+    },
+    "design_judge": {
+      "tier": "top",
+      "provider": "codex",
+      "model_env": "E2E_DESIGN_JUDGE_MODELS",
+      "default_models": ["gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol"],
+      "count": 3
+    },
+    "functionality_judge": {
+      "tier": "top",
+      "provider": "codex",
+      "model_env": "E2E_FUNCTIONALITY_JUDGE_MODELS",
+      "default_models": ["gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol"],
+      "count": 3
+    },
+    "performance_judge": {
+      "tier": "top",
+      "provider": "codex",
+      "model_env": "E2E_PERFORMANCE_JUDGE_MODELS",
+      "default_models": ["gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol"],
       "count": 3
     },
     "reviewer": {
       "tier": "top",
-      "provider": "claude",
+      "provider": "codex",
       "model_env": "E2E_REVIEWER_MODELS",
-      "default_models": ["opus", "opus", "opus"],
+      "default_models": ["gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol"],
       "count": 3
     },
     "master": {
       "tier": "top",
-      "provider": "claude",
+      "provider": "codex",
       "model_env": "E2E_MASTER_MODELS",
-      "default_models": ["opus", "opus", "opus"],
+      "default_models": ["gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol"],
       "count": 3,
       "rotation": "one-per-cycle"
     }

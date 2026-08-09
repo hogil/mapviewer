@@ -1190,6 +1190,69 @@ export class ChipAnnotator {
         return str;
     }
 
+    _getChipYieldNumber(chip) {
+        const candidates = [chip?.yld, chip?.yield, chip?.YLD, chip?.YIELD];
+        for (const value of candidates) {
+            if (value === null || value === undefined || String(value).trim() === '') continue;
+            const number = Number(value);
+            if (Number.isFinite(number)) return number;
+        }
+        return null;
+    }
+
+    _isGoodChipByBin(chip) {
+        const normalized = this._normalizeSystematicBinValue(chip?.b);
+        if (normalized === 'Normal') return true;
+        if (normalized === 'Invalid') return false;
+        const number = Number(normalized);
+        if (Number.isFinite(number)) return number < 200;
+        return null;
+    }
+
+    getSelectionYieldSummary(chips = null) {
+        const selectedChips = Array.isArray(chips)
+            ? chips.filter(Boolean)
+            : Array.from(this.selectedChips || [])
+                .map((index) => this.chips?.[index])
+                .filter(Boolean);
+        const explicitYieldValues = selectedChips
+            .map((chip) => this._getChipYieldNumber(chip))
+            .filter((value) => value !== null);
+        let tested = 0;
+        let good = 0;
+        selectedChips.forEach((chip) => {
+            const isGood = this._isGoodChipByBin(chip);
+            if (isGood === null) return;
+            tested += 1;
+            if (isGood) good += 1;
+        });
+        const binYield = tested > 0 ? (good / tested) * 100 : null;
+        const explicitAvgYield = explicitYieldValues.length > 0
+            ? explicitYieldValues.reduce((sum, value) => sum + value, 0) / explicitYieldValues.length
+            : null;
+        return {
+            chipCount: selectedChips.length,
+            testedCount: tested,
+            goodCount: good,
+            badCount: tested > 0 ? tested - good : 0,
+            avgYield: explicitAvgYield !== null ? explicitAvgYield : binYield,
+            avgYieldSource: explicitAvgYield !== null ? 'chip_yld' : (binYield !== null ? 'bin' : 'none'),
+            explicitYieldCount: explicitYieldValues.length,
+        };
+    }
+
+    formatSelectionYieldSummary(summary = this.getSelectionYieldSummary()) {
+        const count = Number(summary?.chipCount) || 0;
+        if (count <= 0) return 'Yld - · G 0/B 0';
+        const yieldText = Number.isFinite(Number(summary?.avgYield))
+            ? `${Number(summary.avgYield).toFixed(3)}%`
+            : '-';
+        const good = Number.isFinite(Number(summary?.goodCount)) ? Number(summary.goodCount) : 0;
+        const bad = Number.isFinite(Number(summary?.badCount)) ? Number(summary.badCount) : 0;
+        const source = summary?.avgYieldSource === 'chip_yld' ? 'avg' : 'bin';
+        return `Yld ${yieldText} · G ${good}/B ${bad} · ${source}`;
+    }
+
     /**
      * Set Bottom Filter (Chip b-value based mask)
      * @param {Set|Array} filterSet - Set of b-values to keep visible (others masked white)
@@ -1698,6 +1761,10 @@ export class ChipAnnotator {
                     x_abs: chip.x_abs,
                     y_abs: chip.y_abs,
                     b: chip.b,  // b 값 추가
+                    yld: chip.yld,
+                    yield: chip.yield,
+                    YLD: chip.YLD,
+                    YIELD: chip.YIELD,
                     rect: chip.rect
                 });
             }
@@ -2059,6 +2126,29 @@ export class ChipAnnotator {
                 // 백업으로부터 순서 배열도 재구성
                 this.selectedChipsOrder = sortedChips.map(c => c.idx);
             }
+
+            const selectedChipObjects = sortedChips
+                .map((chipData) => this.chips[chipData.idx])
+                .filter(Boolean);
+            const yieldSummary = this.getSelectionYieldSummary(selectedChipObjects);
+            const summaryItem = document.createElement('div');
+            summaryItem.className = 'selected-chips-yield-summary';
+            summaryItem.textContent = this.formatSelectionYieldSummary(yieldSummary);
+            summaryItem.title = `Selected chips: ${yieldSummary.chipCount}, Good: ${yieldSummary.goodCount}, Bad: ${yieldSummary.badCount}, Yield source: ${yieldSummary.avgYieldSource}`;
+            summaryItem.style.cssText = `
+                padding: 3px 4px;
+                margin-bottom: 2px;
+                background: rgba(20, 20, 20, 0.88);
+                border: 1px solid rgba(120, 120, 120, 0.55);
+                border-radius: 3px;
+                color: #e0e0e0;
+                font-size: 10px;
+                line-height: 1.25;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            `;
+            listItems.appendChild(summaryItem);
 
             sortedChips.forEach((chipData, listIndex) => {
                 const { idx, x, y } = chipData;

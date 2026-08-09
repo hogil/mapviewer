@@ -767,6 +767,7 @@ search_service = SearchService(
         "obj_id_maps",
         "thumbnails",
         "composite_map",
+        "selection_exports",
         "yolo_datasets",
     ],
     supported_exts=config.SUPPORTED_EXTS,
@@ -9004,6 +9005,116 @@ class ChipClassifyRequest(BaseModel):
     image_path: str
     chip_coords: List[ChipCoord]
     folder_prefix: Optional[str] = None
+
+class SelectionCropRect(BaseModel):
+    id: Optional[str] = None
+    x: int
+    y: int
+    width: int = Field(..., ge=1)
+    height: int = Field(..., ge=1)
+
+class SelectionCropRequest(BaseModel):
+    image_path: str
+    mode: Literal["chip", "shot"] = "chip"
+    crops: List[SelectionCropRect]
+
+def _selection_export_token(value: Any, default: str) -> str:
+    token = re.sub(r"[^0-9A-Za-z_.-]+", "_", str(value or "").strip()).strip("._-")
+    return (token or default)[:96]
+
+def _save_selection_crops_sync(
+    *,
+    source_rel_path: str,
+    mode: str,
+    login_id: str,
+    crops: List[SelectionCropRect],
+) -> List[Dict[str, Any]]:
+    source_path = ROOT_DIR / source_rel_path
+    safe_login = _selection_export_token(login_id, ANONYMOUS_LOGIN_ID)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+    source_stem = _selection_export_token(source_path.stem, "wafer")
+    output_dir = (ROOT_DIR / "selection_exports" / safe_login / timestamp).resolve()
+    output_dir.relative_to(ROOT_DIR.resolve())
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    saved: List[Dict[str, Any]] = []
+    with Image.open(source_path) as img:
+        image_w, image_h = img.size
+        for index, crop in enumerate(crops):
+            x0 = max(0, min(int(crop.x), image_w))
+            y0 = max(0, min(int(crop.y), image_h))
+            x1 = max(0, min(int(crop.x) + int(crop.width), image_w))
+            y1 = max(0, min(int(crop.y) + int(crop.height), image_h))
+            if x1 <= x0 or y1 <= y0:
+                continue
+
+            crop_id = _selection_export_token(crop.id, str(index + 1))
+            filename = f"{source_stem}_{mode}_{crop_id}.png"
+            out_path = output_dir / filename
+            img.crop((x0, y0, x1, y1)).save(out_path, format="PNG")
+            rel_path = str(out_path.relative_to(ROOT_DIR)).replace("\\", "/")
+            saved.append({
+                "id": crop_id,
+                "path": rel_path,
+                "filename": filename,
+                "x": x0,
+                "y": y0,
+                "width": x1 - x0,
+                "height": y1 - y0,
+            })
+
+    _dircache_invalidate(output_dir)
+    _dircache_invalidate(output_dir.parent)
+    return saved
+
+@app.post("/api/selection-crops")
+async def create_selection_crops(payload: SelectionCropRequest, req: Request):
+    """Persist selected Chip/Shot crops as regular image paths for MY LOT/Label reuse."""
+    try:
+        if not payload.crops:
+            raise HTTPException(status_code=400, detail="crops가 비어 있습니다.")
+        if len(payload.crops) > 512:
+            raise HTTPException(status_code=400, detail="한 번에 저장할 수 있는 crop은 최대 512개입니다.")
+
+        source_rel_path = relkey_from_any_path(payload.image_path)
+        source_path = ROOT_DIR / source_rel_path
+        if not source_path.exists() or not source_path.is_file():
+            raise HTTPException(status_code=404, detail="Image not found")
+        if not is_supported_image(source_path):
+            raise HTTPException(status_code=400, detail="Unsupported image format")
+
+        login_id = _current_login_id(req) or ANONYMOUS_LOGIN_ID
+        loop = asyncio.get_running_loop()
+        saved = await loop.run_in_executor(
+            IO_POOL,
+            functools.partial(
+                _save_selection_crops_sync,
+                source_rel_path=source_rel_path,
+                mode=payload.mode,
+                login_id=login_id,
+                crops=payload.crops,
+            ),
+        )
+        if not saved:
+            raise HTTPException(status_code=400, detail="저장 가능한 crop 영역이 없습니다.")
+
+        log_access_row(
+            tag="ACTION",
+            note=f"선택 {payload.mode} crop 저장: {len(saved)}개 ({source_rel_path})",
+        )
+        return {
+            "success": True,
+            "mode": payload.mode,
+            "source": source_rel_path,
+            "saved_count": len(saved),
+            "saved": saved,
+            "paths": [item["path"] for item in saved],
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"선택 crop 저장 실패: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 @app.post("/api/classify/batch")
 async def classify_images_batch(request: BatchClassifyRequest,

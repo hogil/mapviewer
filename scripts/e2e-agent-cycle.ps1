@@ -122,6 +122,7 @@ function Write-DeterministicEvidence {
     $checkSpecs = @(
         @{ name = "py_compile"; executable = "python"; args = @("-m", "py_compile", "api/composite_map.py", "api/full_app.py"); command = "python -m py_compile api/composite_map.py api/full_app.py" },
         @{ name = "node_main"; executable = "node"; args = @("--check", "js/main.js"); command = "node --check js/main.js" },
+        @{ name = "node_chip_annotator"; executable = "node"; args = @("--check", "js/chip-annotator.js"); command = "node --check js/chip-annotator.js" },
         @{ name = "node_chunk1"; executable = "node"; args = @("--check", "scripts/e2e_chunk1.js"); command = "node --check scripts/e2e_chunk1.js" },
         @{ name = "node_chunk2"; executable = "node"; args = @("--check", "scripts/e2e_chunk2.js"); command = "node --check scripts/e2e_chunk2.js" }
     )
@@ -199,9 +200,53 @@ Return a compact report with sections: facts, failures, risks, next_check.
             return @"
 You are one of three independent high-quality planning agents reviewing an L3 Tracker change.
 Read-only task. Do not edit files. Inspect the evidence at $EvidencePath and related files: $related.
-Plan the smallest verification or correction needed for the requested multi-Shot/multi-Chip Composite and export behavior.
-Check canonical Shot shape, chip counts, positions canvas, UI request payload, Shot/Chip TSV fields, and regression scope.
+Plan the smallest verification or correction needed for the requested multi-Shot/multi-Chip Composite, selected-yield,
+Shot image save, Composite result save, MY LOT/Label handoff, coordinate selection, and cold-start grid speed behavior.
+Check canonical Shot shape, chip counts, positions canvas, UI request payload, Shot/Chip TSV fields, selected Good/Bad/Yield,
+Label/MY LOT compatibility for generated result images, and regression scope.
 Return a concrete plan with acceptance checks and stop conditions. Do not mark PASS from state flags alone.
+"@
+        }
+        "code_reader" {
+            return @"
+You are the low-cost code-reading agent for the L3 Tracker repository.
+Read-only task. Do not edit files. Inspect the evidence at $EvidencePath and related files: $related.
+Map the touched code paths for selected Chip/Shot coordinate selection, selected-yield summary, Composite request payload,
+Shot image save, export TSV, Label, MY LOT, and cold-start grid loading. Return exact files/functions and risky dependencies.
+"@
+        }
+        "browser_capture" {
+            return @"
+You are the low-cost browser-evidence reader for the L3 Tracker repository.
+Read-only task. Do not edit files or run browsers. Inspect the evidence at $EvidencePath and related files: $related.
+Summarize available screenshots, Playwright DOM/bitmap/download/request evidence, missing visual proof, and the next capture
+needed for coordinate panel, selected-yield summary, Shot boundary, selected Composite output, MY LOT, Label, and cold-start grid.
+"@
+        }
+        "design_judge" {
+            return @"
+You are one of three high-quality UX/design judge agents for L3 Tracker.
+Read-only task. Inspect the evidence at $EvidencePath and related files: $related.
+Score whether the coordinate panel, visible Coord button, selected-yield summary, Shot/Chip selection feedback, and result actions
+are understandable, compact, non-overlapping, and consistent with the existing operational UI. Return verdict, score, evidence,
+design regressions, and required visual recheck.
+"@
+        }
+        "functionality_judge" {
+            return @"
+You are one of three high-quality functionality judge agents for L3 Tracker.
+Read-only task. Inspect the evidence at $EvidencePath and related files: $related.
+Verify selected Chip avg/bin yield, Good/Bad counts, selected Chip Composite canonical one-chip output, selected Shot Composite
+canonical Shot output, Shot image save, TSV fields, MY LOT/Label handoff for result images, and exact coordinate selection behavior.
+Return verdict, score, blocking findings, and exact recheck steps.
+"@
+        }
+        "performance_judge" {
+            return @"
+You are one of three high-quality performance judge agents for L3 Tracker.
+Read-only task. Inspect the evidence at $EvidencePath and related files: $related.
+Evaluate server-start-to-grid timing, immediate Shot boundary render, folder selection to 5000 grid wraps, visible thumbnail readiness,
+and whether any new selected-yield or layout work blocks first render. Return verdict, score, timing evidence, and bottlenecks.
 "@
         }
         "reviewer" {
@@ -209,7 +254,8 @@ Return a concrete plan with acceptance checks and stop conditions. Do not mark P
 You are one of three independent high-quality judge agents for an L3 Tracker E2E result.
 Read-only task. Inspect the evidence at $EvidencePath and related plan/review files: $related.
 Score the implementation from 0 to 100. Verify actual Playwright/API evidence for multi-Shot canonical output, multi-Chip output,
-Shot/Chip context-menu export, requested columns, and regression tests. Identify any unsupported claim or missing test.
+Shot/Chip context-menu export, selected-yield columns, MY LOT/Label compatibility, requested columns, and regression tests.
+Identify any unsupported claim or missing test.
 Return JSON-like fields: verdict (PASS/FAIL/RECHECK), score, evidence, blocking_findings, required_recheck.
 "@
         }
@@ -218,7 +264,7 @@ Return JSON-like fields: verdict (PASS/FAIL/RECHECK), score, evidence, blocking_
 You are the rotating master agent for the L3 Tracker E2E cycle.
 Read-only task. Inspect the evidence at $EvidencePath and all related planner/reviewer files: $related.
 Resolve disagreements by requiring concrete test evidence. The change is clean only when deterministic E2E exit is 0,
-the required UI/API/export contracts are covered, and no reviewer has a blocking finding.
+the required UI/API/export/performance/design contracts are covered, and no judge has a blocking finding.
 Return a final JSON-like decision with status (PASS/FAIL), score, reasons, and whether the hourly cycle should stop.
 Do not suggest ignoring failures or relaxing timeouts.
 "@
@@ -268,7 +314,10 @@ function Invoke-Cycle {
     $outputs = @()
 
     if (-not $PlanOnly) {
-        foreach ($roleName in @("scout", "planner")) {
+        foreach ($roleName in @("scout", "code_reader", "browser_capture", "planner")) {
+            if (-not $config.roles.PSObject.Properties.Name.Contains($roleName)) {
+                continue
+            }
             $role = $config.roles.$roleName
             $models = @(Get-RoleModels -Role $role)
             for ($i = 0; $i -lt $models.Count; $i++) {
@@ -280,15 +329,21 @@ function Invoke-Cycle {
         }
 
         $plannerPaths = @($outputs | Where-Object { $_.role -eq "planner" } | ForEach-Object { $_.output })
-        $reviewerRole = $config.roles.reviewer
-        foreach ($model in @(Get-RoleModels -Role $reviewerRole)) {
-            $outputPath = Join-Path $cycleDir ("reviewer-{0}.txt" -f ($outputs.Count + 1))
-            $related = @($evidencePath) + $plannerPaths
-            $result = Invoke-ReadOnlyAgent -RoleName "reviewer" -Provider ([string]$reviewerRole.provider) -Model $model -Prompt (Get-AgentPrompt -RoleName "reviewer" -EvidencePath $evidencePath -RelatedPaths $related) -OutputPath $outputPath
-            $outputs += $result
+        foreach ($roleName in @("design_judge", "functionality_judge", "performance_judge", "reviewer")) {
+            if (-not $config.roles.PSObject.Properties.Name.Contains($roleName)) {
+                continue
+            }
+            $judgeRole = $config.roles.$roleName
+            $judgeModels = @(Get-RoleModels -Role $judgeRole)
+            for ($i = 0; $i -lt $judgeModels.Count; $i++) {
+                $outputPath = Join-Path $cycleDir ("{0}-{1}.txt" -f $roleName, ($i + 1))
+                $related = @($evidencePath) + $plannerPaths
+                $result = Invoke-ReadOnlyAgent -RoleName $roleName -Provider ([string]$judgeRole.provider) -Model $judgeModels[$i] -Prompt (Get-AgentPrompt -RoleName $roleName -EvidencePath $evidencePath -RelatedPaths $related) -OutputPath $outputPath
+                $outputs += $result
+            }
         }
 
-        $reviewPaths = @($outputs | Where-Object { $_.role -eq "reviewer" } | ForEach-Object { $_.output })
+        $reviewPaths = @($outputs | Where-Object { $_.role -in @("design_judge", "functionality_judge", "performance_judge", "reviewer") } | ForEach-Object { $_.output })
         $masterRole = $config.roles.master
         $masterModels = @(Get-RoleModels -Role $masterRole)
         $masterModel = $masterModels[$CycleIndex % $masterModels.Count]
@@ -298,7 +353,7 @@ function Invoke-Cycle {
         $outputs += $masterResult
     } else {
         Set-Content -LiteralPath (Join-Path $cycleDir "PLAN_ONLY.txt") -Value @"
-Roles configured: scout 1 cheap, planner 3 top, reviewer 3 top, master 3 top rotating one per cycle.
+Roles configured: scout/code_reader/browser_capture cheap, planner/design/functionality/performance/reviewer top, master 3 top rotating one per cycle.
 Browser lane: run-e2e-playwright.ps1 -Chunk all -Headless.
 Stop condition: E2E exit 0 and master PASS; hourly mode stops immediately when clean.
 "@ -Encoding UTF8

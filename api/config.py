@@ -39,12 +39,12 @@ SUPPORTED_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp', '.g
 # 검색/인덱싱에서 건너뛸 폴더 (모두 IMAGES_ROOT 하위, 원본 이미지가 아닌 파생 데이터)
 SKIP_DIRS = set(os.getenv(
     "SKIP_DIRS",
-    "classification,classification_chips,thumbnails,chip_annotations,chip_images,yolo_datasets,composite_map,my-lot"
+    "classification,classification_chips,thumbnails,chip_annotations,chip_images,yolo_datasets,composite_map,my-lot,selection_exports"
 ).split(","))
 # 인덱스 빌드 시 스캔할 폴더: classification/my-lot은 인덱스에 포함 (Label Explorer, MY LOT 즉시 조회용)
 INDEX_SKIP_DIRS = set(os.getenv(
     "INDEX_SKIP_DIRS",
-    "thumbnails,chip_annotations,chip_images,yolo_datasets,composite_map"
+    "thumbnails,chip_annotations,chip_images,yolo_datasets,composite_map,selection_exports"
 ).split(","))
 
 # ===== 동시성 / 성능 =====
