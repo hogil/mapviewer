@@ -1806,7 +1806,7 @@ export class ChipAnnotator {
         const notifyViewer = options?.notifyViewer !== false;
 
         const viewer = this.viewer;
-        if (viewer.isCoordinateSelectionOpen) {
+        if (viewer.isCoordinateSelectionOpen && !viewer.coordinateSelectionSuppressSelectionSync) {
             viewer._syncCoordinateSelectionListsFromSelectedChips?.();
         }
 

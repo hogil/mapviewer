@@ -10111,14 +10111,19 @@ class WaferMapViewer {
         const operation = 'replace';
         let result = null;
         if (this.coordinateSelectionRange.enabled || this.coordinateSelectionRadiusRange?.enabled) {
-            result = this.chipAnnotator.selectByCoordinateConstraints(
-                {
-                    chipRange: this.coordinateSelectionRange,
-                    chipRangeTarget: 'chip-pos',
-                    radiusRange: this.coordinateSelectionRadiusRange,
-                },
-                { operation }
-            );
+            this.coordinateSelectionSuppressSelectionSync = true;
+            try {
+                result = this.chipAnnotator.selectByCoordinateConstraints(
+                    {
+                        chipRange: this.coordinateSelectionRange,
+                        chipRangeTarget: 'chip-pos',
+                        radiusRange: this.coordinateSelectionRadiusRange,
+                    },
+                    { operation }
+                );
+            } finally {
+                this.coordinateSelectionSuppressSelectionSync = false;
+            }
         } else {
             const listName = this.coordinateSelectionActiveList;
             const parsed = this._getLiveCoordinateSelectionList(listName);
@@ -10137,7 +10142,12 @@ class WaferMapViewer {
                 });
                 if (matchingGroup) this.coordinateSelectionActiveShotId = String(matchingGroup.shotId);
             }
-            result = this.chipAnnotator.selectByCoordinateRows(parsed.target, parsed.rows, { operation });
+            this.coordinateSelectionSuppressSelectionSync = true;
+            try {
+                result = this.chipAnnotator.selectByCoordinateRows(parsed.target, parsed.rows, { operation });
+            } finally {
+                this.coordinateSelectionSuppressSelectionSync = false;
+            }
         }
         const groups = [...(this.chipAnnotator._getSelectedShotGroups?.() || [])];
         if (groups.length && (!this.coordinateSelectionActiveShotId || !groups.some((group) => String(group.shotId) === String(this.coordinateSelectionActiveShotId)))) {
@@ -10814,14 +10824,19 @@ class WaferMapViewer {
         const operation = 'replace';
         let result;
         if (this.coordinateSelectionRange.enabled || this.coordinateSelectionRadiusRange?.enabled) {
-            result = annotator.selectByCoordinateConstraints(
-                {
-                    chipRange: this.coordinateSelectionRange,
-                    chipRangeTarget: 'chip-pos',
-                    radiusRange: this.coordinateSelectionRadiusRange,
-                },
-                { operation }
-            );
+            this.coordinateSelectionSuppressSelectionSync = true;
+            try {
+                result = annotator.selectByCoordinateConstraints(
+                    {
+                        chipRange: this.coordinateSelectionRange,
+                        chipRangeTarget: 'chip-pos',
+                        radiusRange: this.coordinateSelectionRadiusRange,
+                    },
+                    { operation }
+                );
+            } finally {
+                this.coordinateSelectionSuppressSelectionSync = false;
+            }
             if (!result || result.matchedCount === 0) {
                 this._setCoordinateSelectionError('범위에 일치하는 Shot/Chip이 없습니다. 범위를 확인하세요.');
                 return;
@@ -10833,7 +10848,12 @@ class WaferMapViewer {
                 return;
             }
             this.coordinateSelectionTarget = parsed.target;
-            result = annotator.selectByCoordinateRows(parsed.target, parsed.rows, { operation });
+            this.coordinateSelectionSuppressSelectionSync = true;
+            try {
+                result = annotator.selectByCoordinateRows(parsed.target, parsed.rows, { operation });
+            } finally {
+                this.coordinateSelectionSuppressSelectionSync = false;
+            }
             if (!result || result.matchedRows === 0) {
                 this._setCoordinateSelectionError('일치하는 Shot/Chip이 없습니다. 입력값과 현재 이미지의 layout을 확인하세요.');
                 return;
