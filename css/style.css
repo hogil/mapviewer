@@ -3103,7 +3103,7 @@
 
         .coordinate-select-list-panels {
             display: grid;
-            grid-template-columns: 128px 144px minmax(200px, 1fr);
+            grid-template-columns: 128px 144px minmax(160px, 1fr);
             gap: 8px;
             align-items: start;
         }
