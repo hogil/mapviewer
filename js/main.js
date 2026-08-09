@@ -9916,12 +9916,39 @@ class WaferMapViewer {
                 .filter(Boolean)
                 .map((value) => [value]);
         }
+        const parseDelimitedLine = (line) => {
+            if (!/[\t,]/.test(line)) {
+                return line.trim().split(/\s+/).map((value) => value.trim());
+            }
+            const values = [];
+            let current = '';
+            let inQuotes = false;
+            for (let index = 0; index < line.length; index += 1) {
+                const char = line[index];
+                if (char === '"') {
+                    if (inQuotes && line[index + 1] === '"') {
+                        current += '"';
+                        index += 1;
+                    } else {
+                        inQuotes = !inQuotes;
+                    }
+                    continue;
+                }
+                if (!inQuotes && (char === '\t' || char === ',')) {
+                    values.push(current.trim());
+                    current = '';
+                    continue;
+                }
+                current += char;
+            }
+            values.push(current.trim());
+            return values;
+        };
         return raw.split('\n').filter((line) => line.trim()).map((line) => {
             const normalized = line.trim().replace(/^[([{]\s*/, '').replace(/\s*[)\]}]$/, '');
-            let parts = normalized.split(/[\t,]+/).map((value) => value.trim()).filter(Boolean);
-            if (parts.length < 2) parts = normalized.split(/\s+/).map((value) => value.trim()).filter(Boolean);
+            const parts = parseDelimitedLine(normalized);
             return parts.slice(0, 2);
-        }).filter((parts) => parts.length > 0);
+        }).filter((parts) => parts.some((value) => String(value || '').trim()));
     }
 
     _readCoordinateSelectionList(listName) {
@@ -10280,7 +10307,20 @@ class WaferMapViewer {
             state.hasInput = false;
             state.synced = false;
         });
+        this._clearCoordinateSelectionQuickSearches();
         this._renderCoordinateSelectionLists();
+    }
+
+    _clearCoordinateSelectionQuickSearches(listName = null) {
+        const selector = listName
+            ? `input[data-coordinate-quick-search="${listName}"]`
+            : 'input[data-coordinate-quick-search]';
+        this.dom?.coordinateSelectModal?.querySelectorAll(selector).forEach((input) => {
+            input.value = '';
+            input.setAttribute('aria-expanded', 'false');
+            const picker = input.closest('[data-coordinate-quick-picker]');
+            if (picker) picker.dataset.coordinateQuickOpen = 'false';
+        });
     }
 
     _clearCoordinateSelectionList(listName) {
@@ -10290,6 +10330,7 @@ class WaferMapViewer {
         state.rows = this._newCoordinateSelectionListRows(listName);
         state.hasInput = true;
         state.synced = false;
+        this._clearCoordinateSelectionQuickSearches(listName);
         this._renderCoordinateSelectionLists();
         this._scheduleCoordinateSelectionLiveApply({ forceClear: true });
     }
