@@ -8314,7 +8314,7 @@ class WaferMapViewer {
         if (!searchBtn) {
             return;
         }
-        const waitingReady = !!this._searchWaitingForReady || !this.searchBackendReady;
+        const waitingReady = !!this._searchWaitingForReady;
         const busy = !!this._searchBusy;
         searchBtn.textContent = busy ? '검색 중...' : (waitingReady ? '검색 준비 중...' : '검색');
         searchBtn.disabled = busy || !!this._searchWaitingForReady;
