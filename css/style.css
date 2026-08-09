@@ -3286,13 +3286,13 @@
         }
 
         .coordinate-select-id-list-panel {
-            background: #151a1e;
-            border-color: #596a76;
-            box-shadow: inset 0 0 0 1px rgba(166, 190, 207, 0.06);
+            background: #1a1a1a;
+            border-color: #5a5a5a;
+            box-shadow: inset 0 0 0 1px rgba(190, 190, 190, 0.06);
         }
 
         .coordinate-select-id-list-panel .coordinate-select-list-heading span:first-child {
-            color: #edf5fa;
+            color: #f0f0f0;
         }
 
         .coordinate-select-id-list-panel .coordinate-select-list-heading span:last-child {
@@ -3300,7 +3300,18 @@
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
-            color: #a7bbc8;
+            color: #b8b8b8;
+        }
+
+        .coordinate-select-id-list-panel .coordinate-select-cell:focus {
+            outline-color: #bdbdbd;
+            border-color: #e0e0e0;
+        }
+
+        .coordinate-select-id-list-panel .coordinate-select-cell.is-cell-selected {
+            background: #303030;
+            border-color: #d0d0d0;
+            box-shadow: inset 0 0 0 1px #8a8a8a;
         }
 
         .coordinate-select-list-table-wrap {
@@ -3517,7 +3528,7 @@
 
         .coordinate-select-shot-picker-empty {
             padding: 8px 2px;
-            color: #9aabb5;
+            color: #aaa;
             font-size: 11px;
             line-height: 1.4;
         }
@@ -3545,8 +3556,8 @@
             padding: 2px;
             box-sizing: border-box;
             user-select: none;
-            background: #0d1113;
-            border: 1px solid #536975;
+            background: #111;
+            border: 1px solid #5e5e5e;
             border-radius: 3px;
         }
 
@@ -3555,8 +3566,8 @@
             z-index: 3;
             box-sizing: border-box;
             pointer-events: none;
-            border: 2px dashed #4ba3d8;
-            background: rgba(75, 163, 216, 0.16);
+            border: 2px dashed #d0d0d0;
+            background: rgba(200, 200, 200, 0.16);
         }
 
         .coordinate-select-shot-chip,
@@ -3570,9 +3581,9 @@
         .coordinate-select-shot-chip {
             padding: 0 2px;
             overflow: hidden;
-            background: #2b343a;
-            color: #d8e3e9;
-            border: 1px solid #61727c;
+            background: #333;
+            color: #e0e0e0;
+            border: 1px solid #707070;
             cursor: pointer;
             font: 600 11px Consolas, "Courier New", monospace;
             text-overflow: ellipsis;
@@ -3582,27 +3593,27 @@
 
         .coordinate-select-shot-chip:hover,
         .coordinate-select-shot-chip:focus-visible {
-            background: #52636e;
-            border-color: #e4f1f7;
+            background: #606060;
+            border-color: #f0f0f0;
             color: #fff;
             outline: none;
         }
 
         .coordinate-select-shot-chip[aria-checked="true"] {
-            background: #7d929f;
+            background: #8a8a8a;
             color: #fff;
-            border-color: #e7f4fb;
-            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3), 0 0 0 1px rgba(164, 207, 229, 0.16);
+            border-color: #f2f2f2;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3), 0 0 0 1px rgba(210, 210, 210, 0.16);
         }
 
         .coordinate-select-shot-chip.is-drag-preview {
-            border-color: #b6e4ff;
-            box-shadow: inset 0 0 0 2px rgba(182, 228, 255, 0.75);
+            border-color: #f0f0f0;
+            box-shadow: inset 0 0 0 2px rgba(240, 240, 240, 0.75);
         }
 
         .coordinate-select-shot-empty-cell {
-            background: #12181b;
-            border: 1px dashed #35434a;
+            background: #181818;
+            border: 1px dashed #444;
         }
 
         .coordinate-select-buttons {

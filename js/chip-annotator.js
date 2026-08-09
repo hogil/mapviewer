@@ -875,6 +875,7 @@ export class ChipAnnotator {
     selectByCoordinateConstraints(filters = {}, options = {}) {
         const operation = ['add', 'remove'].includes(options.operation) ? options.operation : 'replace';
         const chipRange = filters?.chipRange?.enabled ? filters.chipRange : null;
+        const chipRangeTarget = filters?.chipRangeTarget || chipRange?.target || 'chip-grid';
         const radiusRange = filters?.radiusRange?.enabled ? filters.radiusRange : null;
         const finite = (value) => Number.isFinite(Number(value));
         const inRange = (value, min, max) => finite(value) && finite(min) && finite(max) &&
@@ -883,12 +884,22 @@ export class ChipAnnotator {
 
         this.chips.forEach((chip, chipIndex) => {
             if (!chip) return;
-            if (chipRange && (!inRange(chip.x_abs, chipRange.xMin, chipRange.xMax) ||
-                !inRange(chip.y_abs, chipRange.yMin, chipRange.yMax))) {
-                return;
+            const layout = chipRangeTarget === 'chip-pos' || radiusRange
+                ? this.getLayoutRowForChip(chip)
+                : null;
+            if (chipRange) {
+                let chipX = Number(chip.x_abs);
+                let chipY = Number(chip.y_abs);
+                if (chipRangeTarget === 'chip-pos') {
+                    chipX = Number(layout?.chip_center_x_pos) / 1000;
+                    chipY = Number(layout?.chip_center_y_pos) / 1000;
+                }
+                if (!inRange(chipX, chipRange.xMin, chipRange.xMax) ||
+                    !inRange(chipY, chipRange.yMin, chipRange.yMax)) {
+                    return;
+                }
             }
             if (radiusRange) {
-                const layout = this.getLayoutRowForChip(chip);
                 const centerX = Number(layout?.chip_center_x_pos) / 1000;
                 const centerY = Number(layout?.chip_center_y_pos) / 1000;
                 if (!inRange(Math.hypot(centerX, centerY), radiusRange.xMin, radiusRange.xMax)) return;

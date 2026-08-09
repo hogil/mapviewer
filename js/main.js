@@ -8666,7 +8666,7 @@ class WaferMapViewer {
         return NaN;
     }
 
-    _getCoordinateSelectionRangeConfig(target = 'chip-grid') {
+    _getCoordinateSelectionRangeConfig(target = 'chip-pos') {
         const isChipId = target === 'chip-id';
         const isRadius = target === 'radius';
         const axes = isChipId || isRadius ? ['x'] : ['x', 'y'];
@@ -8698,8 +8698,9 @@ class WaferMapViewer {
     }
 
     _resetCoordinateSelectionRange() {
-        const config = this._getCoordinateSelectionRangeConfig('chip-grid');
+        const config = this._getCoordinateSelectionRangeConfig('chip-pos');
         if (!config.available) return;
+        this.coordinateSelectionRange.target = 'chip-pos';
         this.coordinateSelectionRange.xMin = config.x?.min ?? null;
         this.coordinateSelectionRange.xMax = config.x?.max ?? null;
         this.coordinateSelectionRange.yMin = config.y?.min ?? null;
@@ -8748,7 +8749,7 @@ class WaferMapViewer {
         const fields = this.dom?.coordinateSelectRangeFields;
         if (!fields) return;
         fields.replaceChildren();
-        const chipConfig = this._getCoordinateSelectionRangeConfig('chip-grid');
+        const chipConfig = this._getCoordinateSelectionRangeConfig('chip-pos');
         const radiusConfig = this._getCoordinateSelectionRangeConfig('radius');
         if (chipConfig.available && (!Number.isFinite(this.coordinateSelectionRange.xMin) ||
             !Number.isFinite(this.coordinateSelectionRange.xMax))) {
@@ -8786,9 +8787,9 @@ class WaferMapViewer {
             row.appendChild(makeControl('max', 'number'));
             fields.appendChild(row);
         };
-        addAxis('chip', 'x', 'Chip X', chipConfig.x, this.coordinateSelectionRange,
+        addAxis('chip', 'x', 'Chip X(mm)', chipConfig.x, this.coordinateSelectionRange,
             this.coordinateSelectionRange.enabled, chipConfig);
-        addAxis('chip', 'y', 'Chip Y', chipConfig.y, this.coordinateSelectionRange,
+        addAxis('chip', 'y', 'Chip Y(mm)', chipConfig.y, this.coordinateSelectionRange,
             this.coordinateSelectionRange.enabled, chipConfig);
         addAxis('radius', 'x', 'Radius(mm)', radiusConfig.x, this.coordinateSelectionRadiusRange,
             this.coordinateSelectionRadiusRange.enabled, radiusConfig);
@@ -8799,7 +8800,7 @@ class WaferMapViewer {
         const kind = input.dataset.coordinateRangeKind === 'radius' ? 'radius' : 'chip';
         const axis = input.dataset.coordinateRangeAxis;
         const bound = input.dataset.coordinateRangeBound;
-        const config = this._getCoordinateSelectionRangeConfig(kind === 'radius' ? 'radius' : 'chip-grid');
+        const config = this._getCoordinateSelectionRangeConfig(kind === 'radius' ? 'radius' : 'chip-pos');
         const range = kind === 'radius' ? this.coordinateSelectionRadiusRange : this.coordinateSelectionRange;
         const meta = config[axis];
         if (!meta || !['x', 'y'].includes(axis) || !['min', 'max'].includes(bound)) return;
@@ -9692,18 +9693,15 @@ class WaferMapViewer {
         const search = root.querySelector('[data-coordinate-quick-search]');
         const dropdown = root.querySelector('[data-coordinate-quick-dropdown]');
         if (!dropdown) return;
-        const query = String(search?.value || '').trim().toLowerCase();
+        const query = String(search?.value || '').trim();
+        const queryLower = query.toLowerCase();
         const coordinateFilter = this._parseCoordinateQuickFilter(query);
         const options = this._getCoordinateSelectionQuickOptions(listName)
             .filter((option) => {
                 if (coordinateFilter) {
-                    const x = Number(option.values?.[0]);
-                    const y = Number(option.values?.[1]);
-                    const matches = (actual, expected) => expected === undefined || expected === null ||
-                        (Number.isFinite(actual) && Math.abs(actual - expected) <= 0.0001);
-                    return matches(x, coordinateFilter.x) && matches(y, coordinateFilter.y);
+                    return this._coordinateQuickOptionMatchesFilter(option, coordinateFilter);
                 }
-                return !query || `${option.label} ${option.searchText}`.toLowerCase().includes(query);
+                return !queryLower || `${option.label} ${option.searchText}`.toLowerCase().includes(queryLower);
             });
         const selectedKeys = new Set(this._readCoordinateSelectionList(listName)
             .filter((row) => row.some((value) => String(value || '').trim()))
@@ -9755,21 +9753,106 @@ class WaferMapViewer {
     _parseCoordinateQuickFilter(rawQuery) {
         const query = String(rawQuery || '').trim();
         if (!query) return null;
-        const valuePattern = '(?:\\*|[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+))';
-        const parseValue = (value) => value === '*' ? null : Number(value);
-        const named = [...query.matchAll(new RegExp(`\\b([xy])\\s*[:=]\\s*(${valuePattern})`, 'gi'))];
-        if (named.length) {
-            const filter = { x: undefined, y: undefined };
-            named.forEach((match) => { filter[match[1].toLowerCase()] = parseValue(match[2]); });
-            if (Object.values(filter).some((value) => value !== undefined && value !== null && !Number.isFinite(value))) return null;
-            return filter;
+        const numberPattern = '[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)';
+        const parseAxis = (rawAxis) => {
+            const axisText = String(rawAxis || '').trim();
+            if (!axisText || axisText === '%' || axisText === '*') return { any: true, tests: [] };
+            const tests = [];
+            for (const rawPart of axisText.split('&')) {
+                const part = rawPart.trim();
+                if (!part) return null;
+                if (part === '%' || part === '*') {
+                    tests.push({ any: true });
+                    continue;
+                }
+                const range = part.match(new RegExp(`^\\s*(${numberPattern})\\s*:\\s*(${numberPattern})\\s*$`));
+                if (range) {
+                    const left = Number(range[1]);
+                    const right = Number(range[2]);
+                    if (!Number.isFinite(left) || !Number.isFinite(right)) return null;
+                    tests.push({ min: Math.min(left, right), max: Math.max(left, right) });
+                    continue;
+                }
+                const value = Number(part);
+                if (!Number.isFinite(value)) return null;
+                tests.push({ value });
+            }
+            return { any: false, tests };
+        };
+        const commaParts = query.split(',');
+        if (commaParts.length === 2) {
+            const x = parseAxis(commaParts[0]);
+            const y = parseAxis(commaParts[1]);
+            return x && y ? { x, y } : null;
         }
-        const pair = query.match(new RegExp(`^\\s*(${valuePattern})\\s*,\\s*(${valuePattern})\\s*$`, 'i'));
-        if (!pair) return null;
-        const x = parseValue(pair[1]);
-        const y = parseValue(pair[2]);
-        if ((x !== null && !Number.isFinite(x)) || (y !== null && !Number.isFinite(y))) return null;
-        return { x, y };
+        const named = { x: null, y: null };
+        [...query.matchAll(new RegExp(`\\b([xy])\\s*=\\s*([^,\\s]+)`, 'gi'))]
+            .forEach((match) => { named[match[1].toLowerCase()] = parseAxis(match[2]); });
+        return named.x || named.y
+            ? { x: named.x || { any: true, tests: [] }, y: named.y || { any: true, tests: [] } }
+            : null;
+    }
+
+    _coordinateQuickAxisMatches(value, filter) {
+        if (!filter || filter.any) return true;
+        const actual = Number(value);
+        if (!Number.isFinite(actual)) return false;
+        return filter.tests.some((test) => {
+            if (test.any) return true;
+            if (Number.isFinite(test.value)) return Math.abs(actual - test.value) <= 0.0001;
+            return Number.isFinite(test.min) && Number.isFinite(test.max) &&
+                actual >= test.min && actual <= test.max;
+        });
+    }
+
+    _coordinateQuickOptionMatchesFilter(option, filter) {
+        return this._coordinateQuickAxisMatches(option?.values?.[0], filter?.x) &&
+            this._coordinateQuickAxisMatches(option?.values?.[1], filter?.y);
+    }
+
+    _getCoordinateQuickFilteredOptions(listName, query) {
+        const normalized = String(query || '').trim();
+        const coordinateFilter = this._parseCoordinateQuickFilter(normalized);
+        const queryLower = normalized.toLowerCase();
+        return this._getCoordinateSelectionQuickOptions(listName)
+            .filter((option) => coordinateFilter
+                ? this._coordinateQuickOptionMatchesFilter(option, coordinateFilter)
+                : !queryLower || `${option.label} ${option.searchText}`.toLowerCase().includes(queryLower));
+    }
+
+    _setCoordinateSelectionQuickValues(listName, valuesList) {
+        const columns = this._coordinateSelectionListConfig(listName).columns;
+        const rows = valuesList
+            .filter((values) => Array.isArray(values) && values.length === columns)
+            .map((values) => values.map((value) => String(value)));
+        if (!rows.length) return false;
+        const state = this.coordinateSelectionLists?.[listName];
+        if (!state) return false;
+        state.rows = rows;
+        state.hasInput = true;
+        state.synced = false;
+        this._activateCoordinateSelectionList(listName);
+        this._renderCoordinateSelectionLists();
+        this._setCoordinateSelectionError('');
+        this._scheduleCoordinateSelectionLiveApply({ forceClear: true });
+        return true;
+    }
+
+    _applyCoordinateQuickSearchSelection(search) {
+        const listName = search?.dataset?.coordinateQuickSearch;
+        if (!this.coordinateSelectionLists?.[listName]) return false;
+        const query = String(search.value || '').trim();
+        if (!query) return false;
+        const options = this._getCoordinateQuickFilteredOptions(listName, query);
+        const valuesList = options.map((option) => option.values);
+        if (!this._setCoordinateSelectionQuickValues(listName, valuesList)) {
+            this._setCoordinateSelectionError('검색식과 일치하는 Shot/Chip 좌표가 없습니다.');
+            return false;
+        }
+        this.dom?.coordinateSelectModal
+            ?.querySelector(`[data-coordinate-quick-search="${listName}"]`)
+            ?.focus({ preventScroll: true });
+        return true;
     }
 
     _applyCoordinateSelectionQuickPick(listName, rawValue) {
@@ -9967,7 +10050,7 @@ class WaferMapViewer {
     _updateCoordinateSelectionRangeStatus() {
         const status = this.dom?.coordinateSelectRangeStatus;
         if (!status) return;
-        const chipConfig = this._getCoordinateSelectionRangeConfig('chip-grid');
+        const chipConfig = this._getCoordinateSelectionRangeConfig('chip-pos');
         const radiusConfig = this._getCoordinateSelectionRangeConfig('radius');
         if (!chipConfig.available && !radiusConfig.available) {
             status.textContent = '현재 이미지에서 범위 좌표를 계산할 수 없습니다.';
@@ -9977,8 +10060,8 @@ class WaferMapViewer {
         const activeFilters = [];
         if (this.coordinateSelectionRange.enabled && chipConfig.available) {
             activeFilters.push(
-                `Chip X ${this._formatCoordinateRangeValue(this.coordinateSelectionRange.xMin, chipConfig.decimals)} ~ ${this._formatCoordinateRangeValue(this.coordinateSelectionRange.xMax, chipConfig.decimals)} / ` +
-                `Y ${this._formatCoordinateRangeValue(this.coordinateSelectionRange.yMin, chipConfig.decimals)} ~ ${this._formatCoordinateRangeValue(this.coordinateSelectionRange.yMax, chipConfig.decimals)}`
+                `Chip X(mm) ${this._formatCoordinateRangeValue(this.coordinateSelectionRange.xMin, chipConfig.decimals)} ~ ${this._formatCoordinateRangeValue(this.coordinateSelectionRange.xMax, chipConfig.decimals)} / ` +
+                `Y(mm) ${this._formatCoordinateRangeValue(this.coordinateSelectionRange.yMin, chipConfig.decimals)} ~ ${this._formatCoordinateRangeValue(this.coordinateSelectionRange.yMax, chipConfig.decimals)}`
             );
         }
         if (this.coordinateSelectionRadiusRange?.enabled && radiusConfig.available) {
@@ -10004,6 +10087,7 @@ class WaferMapViewer {
             result = this.chipAnnotator.selectByCoordinateConstraints(
                 {
                     chipRange: this.coordinateSelectionRange,
+                    chipRangeTarget: 'chip-pos',
                     radiusRange: this.coordinateSelectionRadiusRange,
                 },
                 { operation }
@@ -10287,6 +10371,15 @@ class WaferMapViewer {
             if (picker) picker.dataset.coordinateQuickOpen = 'true';
             this._renderCoordinateSelectionQuickPicker(search.dataset.coordinateQuickSearch);
         });
+        dom.coordinateSelectModal?.addEventListener('keydown', (event) => {
+            const search = event.target.closest?.('input[data-coordinate-quick-search]');
+            if (!search || event.key !== 'Enter' || event.isComposing) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const picker = search.closest('[data-coordinate-quick-picker]');
+            if (picker) picker.dataset.coordinateQuickOpen = 'true';
+            this._applyCoordinateQuickSearchSelection(search);
+        });
         dom.coordinateSelectModal?.addEventListener('focusout', (event) => {
             const search = event.target.closest?.('input[data-coordinate-quick-search]');
             if (!search) return;
@@ -10510,7 +10603,7 @@ class WaferMapViewer {
         };
         shotPicker?.addEventListener('pointerdown', (event) => {
             const button = event.target.closest?.('button[data-coordinate-shot-chip-index]');
-            if (event.button !== 0 || !event.shiftKey || !button) return;
+            if (event.button !== 0 || !button) return;
             const index = Number(button.dataset.coordinateShotChipIndex);
             if (!Number.isInteger(index)) return;
             const grid = button.closest('.coordinate-select-shot-grid');
@@ -10528,7 +10621,6 @@ class WaferMapViewer {
                 box: null,
             };
             shotPicker.setPointerCapture?.(event.pointerId);
-            event.preventDefault();
         });
         shotPicker?.addEventListener('pointermove', (event) => {
             const drag = this.coordinateSelectionShotPickerDrag;
@@ -10684,6 +10776,7 @@ class WaferMapViewer {
             result = annotator.selectByCoordinateConstraints(
                 {
                     chipRange: this.coordinateSelectionRange,
+                    chipRangeTarget: 'chip-pos',
                     radiusRange: this.coordinateSelectionRadiusRange,
                 },
                 { operation }
