@@ -2891,9 +2891,9 @@
             top: 88px;
             right: 24px;
             left: auto;
-            width: min(560px, 92vw);
+            width: min(592px, 96vw);
             min-width: 0;
-            max-width: 560px;
+            max-width: 592px;
             max-height: 82vh;
             overflow-x: hidden;
         }
@@ -3125,7 +3125,7 @@
 
         .coordinate-select-list-panels {
             display: grid;
-            grid-template-columns: 144px 164px minmax(160px, 1fr);
+            grid-template-columns: 144px 184px minmax(160px, 1fr);
             gap: 8px;
             align-items: start;
         }
@@ -3448,7 +3448,7 @@
             color: #ddd;
             font-size: 11px;
             font-weight: 600;
-            text-align: left;
+            text-align: center;
         }
 
         .coordinate-select-table td {
@@ -3465,6 +3465,7 @@
             border: 1px solid #4a4a4a;
             border-radius: 0;
             font: 11px Consolas, "Courier New", monospace;
+            text-align: center;
             cursor: cell;
             user-select: none;
         }

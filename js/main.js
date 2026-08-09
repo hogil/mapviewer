@@ -9460,6 +9460,44 @@ class WaferMapViewer {
         return this.dom?.coordinateSelectListPanels?.contains(input) ? input : null;
     }
 
+    _getCoordinateSelectionCellInputFromDragPoint(event, listName) {
+        if (!listName) return null;
+        const panel = this.dom?.coordinateSelectListPanels?.querySelector(`[data-coordinate-list-panel="${listName}"]`);
+        if (!panel) return null;
+        const directTarget = document.elementFromPoint(event.clientX, event.clientY);
+        const directInput = directTarget?.closest?.(`input[data-coordinate-list="${listName}"][data-coordinate-row][data-coordinate-col]`);
+        if (directInput && panel.contains(directInput)) return directInput;
+
+        const wrap = panel.querySelector('.coordinate-select-list-table-wrap');
+        const wrapRect = wrap?.getBoundingClientRect?.();
+        if (!wrapRect || wrapRect.width <= 0 || wrapRect.height <= 0) return null;
+
+        const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+        const x = clamp(event.clientX, wrapRect.left + 1, wrapRect.right - 1);
+        const y = clamp(event.clientY, wrapRect.top + 1, wrapRect.bottom - 1);
+        const clampedTarget = document.elementFromPoint(x, y);
+        const clampedInput = clampedTarget?.closest?.(`input[data-coordinate-list="${listName}"][data-coordinate-row][data-coordinate-col]`);
+        if (clampedInput && panel.contains(clampedInput)) return clampedInput;
+
+        let bestInput = null;
+        let bestScore = Infinity;
+        panel.querySelectorAll(`input[data-coordinate-list="${listName}"][data-coordinate-row][data-coordinate-col]`).forEach((input) => {
+            const rect = input.getBoundingClientRect();
+            if (rect.bottom < wrapRect.top || rect.top > wrapRect.bottom ||
+                rect.right < wrapRect.left || rect.left > wrapRect.right) {
+                return;
+            }
+            const dx = x < rect.left ? rect.left - x : x > rect.right ? x - rect.right : 0;
+            const dy = y < rect.top ? rect.top - y : y > rect.bottom ? y - rect.bottom : 0;
+            const score = dx * dx + dy * dy;
+            if (score < bestScore) {
+                bestScore = score;
+                bestInput = input;
+            }
+        });
+        return bestInput;
+    }
+
     _coordinateSelectionCellRangeKeys(startKey, endKey) {
         const start = this._parseCoordinateSelectionCellKey(startKey);
         const end = this._parseCoordinateSelectionCellKey(endKey);
@@ -10470,10 +10508,11 @@ class WaferMapViewer {
         dom.coordinateSelectListPanels?.addEventListener('pointermove', (event) => {
             const cellState = this._ensureCoordinateSelectionCellState();
             if (cellState.dragPointerId !== event.pointerId || !cellState.dragStartKey) return;
-            const target = document.elementFromPoint(event.clientX, event.clientY);
-            const input = target?.closest?.('input[data-coordinate-list][data-coordinate-row][data-coordinate-col]');
-            if (!input || !dom.coordinateSelectListPanels.contains(input)) return;
+            const start = this._parseCoordinateSelectionCellKey(cellState.dragStartKey);
+            const input = this._getCoordinateSelectionCellInputFromDragPoint(event, start?.listName);
+            if (!input) return;
             this._setCoordinateSelectionCellRange(cellState.dragStartKey, input.dataset.coordinateCellKey);
+            event.preventDefault();
         });
         const stopCoordinateCellDrag = (event) => {
             const cellState = this._ensureCoordinateSelectionCellState();
