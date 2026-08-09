@@ -20,6 +20,10 @@ A skill is a set of local instructions stored in a `SKILL.md` file. This reposit
 - If the requested change appears to require touching adjacent behavior, stop and state the dependency before editing instead of silently expanding scope.
 - Before commit, compare the final diff against the user's exact words and remove any line that cannot be traced directly to the request.
 
+## Chip/Shot Coordinate Modal Absolute Rule
+
+- Absolute rule: the Chip/Shot coordinate selection modal must never show horizontal scrolling. When changing Shot X/Y, Chip X/Y, Shot Position, picker, or modal width/layout, verify the columns fit without horizontal overflow.
+
 ## Project Data Fixtures
 
 - `D:/project/data/wm-811k/benchmark_4m/` is a deliberate 0-byte dummy dataset for file index and search performance testing.

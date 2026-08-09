@@ -2891,10 +2891,11 @@
             top: 88px;
             right: 24px;
             left: auto;
-            width: min(500px, 92vw);
+            width: min(560px, 92vw);
             min-width: 0;
-            max-width: 500px;
+            max-width: 560px;
             max-height: 82vh;
+            overflow-x: hidden;
         }
 
         .coordinate-select-overlay {
@@ -2922,11 +2923,32 @@
             user-select: auto;
         }
 
+        .modal-drag-handle {
+            cursor: move;
+            user-select: none;
+            touch-action: none;
+        }
+
+        .modal-drag-handle button,
+        .modal-drag-handle a {
+            cursor: pointer;
+            user-select: auto;
+        }
+
+        .modal-drag-handle input,
+        .modal-drag-handle select,
+        .modal-drag-handle textarea {
+            cursor: auto;
+            user-select: auto;
+        }
+
         .modal-header.coordinate-select-drag-handle {
             margin-bottom: 10px;
             padding-bottom: 8px;
         }
 
+        .modal-content.is-dragging,
+        .color-editor-dialog.is-dragging,
         .coordinate-select-modal-content.is-dragging {
             opacity: 0.94;
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
@@ -3103,7 +3125,7 @@
 
         .coordinate-select-list-panels {
             display: grid;
-            grid-template-columns: 128px 144px minmax(160px, 1fr);
+            grid-template-columns: 144px 164px minmax(160px, 1fr);
             gap: 8px;
             align-items: start;
         }
@@ -3284,7 +3306,8 @@
         .coordinate-select-list-table-wrap {
             height: 112px;
             max-height: 112px;
-            overflow: auto;
+            overflow-x: hidden;
+            overflow-y: auto;
             border: 1px solid #414141;
             background: #171717;
         }
@@ -3318,14 +3341,14 @@
         .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table td:nth-child(1),
         .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table th:nth-child(2),
         .coordinate-select-list-panel[data-coordinate-list-panel="shot"] .coordinate-select-list-table td:nth-child(2) {
-            width: 52px;
+            width: 56px;
         }
 
         .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table th:nth-child(1),
         .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table td:nth-child(1),
         .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table th:nth-child(2),
         .coordinate-select-list-panel[data-coordinate-list-panel="chip"] .coordinate-select-list-table td:nth-child(2) {
-            width: 60px;
+            width: 68px;
         }
 
         .coordinate-select-table.coordinate-select-list-table th:nth-child(1),
@@ -3478,7 +3501,8 @@
             gap: 0;
             max-height: 300px;
             min-height: 0;
-            overflow: auto;
+            overflow-x: hidden;
+            overflow-y: auto;
             margin-top: 2px;
             padding: 0;
             background: transparent;

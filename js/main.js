@@ -1422,8 +1422,70 @@ class WaferMapViewer {
         this.bindRatioOverlayEvents();
         this.bindGridLegendFilterEvents();
         this.bindCoordinateSelectionEvents();
+        this.setupDraggableModals();
 
         // T 키 토글 제거 - Navigator는 이미지 1개 보기 모드에서만 자동 표시됨
+    }
+
+    setupDraggableModals() {
+        if (this._draggableModalsInitialized) return;
+        this._draggableModalsInitialized = true;
+
+        const bindDialog = (dialog, header) => {
+            if (!dialog || !header || dialog.dataset.draggableModalBound === 'true') return;
+            if (dialog.classList.contains('coordinate-select-modal-content')) return;
+            dialog.dataset.draggableModalBound = 'true';
+            header.classList.add('modal-drag-handle');
+
+            let drag = null;
+            const stopDrag = (event) => {
+                if (!drag || drag.pointerId !== event.pointerId) return;
+                dialog.classList.remove('is-dragging');
+                header.releasePointerCapture?.(event.pointerId);
+                drag = null;
+            };
+
+            header.addEventListener('pointerdown', (event) => {
+                if (event.button !== 0 || event.target.closest('button, input, select, textarea, a, [contenteditable="true"]')) return;
+                const rect = dialog.getBoundingClientRect();
+                drag = {
+                    pointerId: event.pointerId,
+                    offsetX: event.clientX - rect.left,
+                    offsetY: event.clientY - rect.top,
+                };
+                dialog.style.position = 'fixed';
+                dialog.style.left = `${rect.left}px`;
+                dialog.style.top = `${rect.top}px`;
+                dialog.style.right = 'auto';
+                dialog.style.bottom = 'auto';
+                dialog.style.margin = '0';
+                dialog.style.width = `${rect.width}px`;
+                dialog.classList.add('is-dragging');
+                header.setPointerCapture?.(event.pointerId);
+                event.preventDefault();
+            });
+
+            header.addEventListener('pointermove', (event) => {
+                if (!drag || drag.pointerId !== event.pointerId) return;
+                const rect = dialog.getBoundingClientRect();
+                const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+                const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+                const left = Math.min(maxLeft, Math.max(8, event.clientX - drag.offsetX));
+                const top = Math.min(maxTop, Math.max(8, event.clientY - drag.offsetY));
+                dialog.style.left = `${left}px`;
+                dialog.style.top = `${top}px`;
+            });
+
+            header.addEventListener('pointerup', stopDrag);
+            header.addEventListener('pointercancel', stopDrag);
+        };
+
+        document.querySelectorAll('.modal-overlay > .modal-content').forEach((dialog) => {
+            bindDialog(dialog, dialog.querySelector('.modal-header'));
+        });
+        document.querySelectorAll('.color-editor-modal > .color-editor-dialog').forEach((dialog) => {
+            bindDialog(dialog, dialog.querySelector('.color-editor-header'));
+        });
     }
 
     bindViewerEvents() {
