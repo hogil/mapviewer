@@ -2171,7 +2171,6 @@
             contain: layout style paint;
             content-visibility: auto;
             contain-intrinsic-size: 180px 206px;
-            will-change: transform;
         }
         
         .grid-thumb-wrap.selected {
@@ -2191,7 +2190,6 @@
             background: #232323;
             border-radius: 6px;
             contain: layout style paint;
-            will-change: transform;
         }
         
         .grid-thumb-img {
@@ -2204,15 +2202,10 @@
             top: 0;
             left: 0;
             /* transition 제거 — 즉시 표시로 체감 속도 3배 향상 */
-            transform: translateZ(0);
             /* 고화질 이미지 렌더링 최적화 */
             image-rendering: -webkit-optimize-contrast;
             image-rendering: crisp-edges;
             image-rendering: high-quality;
-            /* 브라우저별 고품질 렌더링 */
-            -webkit-backface-visibility: hidden;
-            -webkit-transform: translate3d(0, 0, 0);
-            backface-visibility: hidden;
         }
         
         .grid-thumb-img.lazy,

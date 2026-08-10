@@ -372,6 +372,11 @@ export class ChipAnnotator {
         return this._getShotGridGeometry()?.shape || null;
     }
 
+    getShotCompositeGridShape() {
+        const geometry = this._getShotGridGeometry?.();
+        return geometry?.gridShape || geometry?.shape || null;
+    }
+
     _getChipScreenCenter(chip) {
         const rect = chip?.rect;
         if (!rect) return null;
@@ -713,7 +718,7 @@ export class ChipAnnotator {
         if (width <= 0 || height <= 0) return null;
         let boundary = { minX, minY, maxX, maxY, width, height };
 
-        const shape = this.getShotGridShape?.();
+        const shape = this.getShotCompositeGridShape?.() || this.getShotGridShape?.();
         const cols = Math.max(1, Number(shape?.cols) || 0);
         const rows = Math.max(1, Number(shape?.rows) || 0);
         const fullSlotCount = cols * rows;
@@ -726,7 +731,7 @@ export class ChipAnnotator {
                 group.chips.forEach((chip) => {
                     const rect = chip?.rect;
                     const center = this._getChipScreenCenter(chip);
-                    const slot = this._getShotGridSlotInfo(chip, { cols, rows });
+                    const slot = this._getShotRawGridSlotInfo(chip, this.getShotCompositeGridShape?.() || { cols, rows });
                     if (!rect || !center || !slot) return;
                     originsX.push(center.x - (slot.slotX + 0.5) * cellSize.width);
                     originsY.push(center.y - (slot.slotY + 0.5) * cellSize.height);
@@ -1000,6 +1005,32 @@ export class ChipAnnotator {
             const gridRows = Math.max(1, Number(geometry.gridShape?.rows) || rows);
             if (slotX >= 0 && slotX < gridCols && slotY >= 0 && slotY < gridRows) {
                 return this._toDisplayShotSlot(slotX, slotY, geometry);
+            }
+        }
+        const positiveModulo = (value, size) => ((value % size) + size) % size;
+        return { slotX: positiveModulo(x, cols), slotY: positiveModulo(y, rows), cols, rows };
+    }
+
+    _getShotRawGridSlotInfo(chip, shape = this.getShotCompositeGridShape?.()) {
+        const x = Number(chip?.x_abs);
+        const y = Number(chip?.y_abs);
+        const cols = Math.max(1, Number(shape?.cols) || 4);
+        const rows = Math.max(1, Number(shape?.rows) || 6);
+        if (!Number.isInteger(x) || !Number.isInteger(y)) return null;
+        const layout = this.getLayoutRowForChip(chip);
+        const geometry = this._getShotGridGeometry?.();
+        if (geometry && Number.isInteger(geometry.originX) && Number.isInteger(geometry.originY) &&
+            Number.isInteger(geometry.minShotX) && Number.isInteger(geometry.maxShotX) &&
+            Number.isInteger(geometry.minShotY) && Number.isInteger(geometry.maxShotY) &&
+            Number.isInteger(Number(layout?.shot_x_pos)) && Number.isInteger(Number(layout?.shot_y_pos))) {
+            const base = this._getShotGridBase(layout, geometry);
+            if (!base) return null;
+            const slotX = x - base.x;
+            const slotY = y - base.y;
+            const gridCols = Math.max(1, Number(geometry.gridShape?.cols) || cols);
+            const gridRows = Math.max(1, Number(geometry.gridShape?.rows) || rows);
+            if (slotX >= 0 && slotX < gridCols && slotY >= 0 && slotY < gridRows) {
+                return { slotX, slotY, cols: gridCols, rows: gridRows };
             }
         }
         const positiveModulo = (value, size) => ((value % size) + size) % size;

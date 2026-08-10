@@ -692,7 +692,8 @@ def _build_selected_shot_geometry(
 
     for group in groups:
         observed_cols, observed_rows = group["observed_signature"]
-        if observed_cols > cols or observed_rows > rows:
+        has_slot_positions = any(entry[3] is not None for entry in group["source_rects"])
+        if not has_slot_positions and (observed_cols > cols or observed_rows > rows):
             raise ValueError(
                 "선택한 Shot의 chip 배치가 canonical Shot 크기를 초과합니다."
             )
