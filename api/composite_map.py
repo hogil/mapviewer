@@ -680,8 +680,10 @@ def _build_selected_shot_geometry(
     # a Composite when a complete group is part of the same request.
     signature = explicit_signature or max(observed_signatures, key=lambda value: value[0] * value[1])
     cols, rows = signature
-    cell_width = groups[0]["cell_width"]
-    cell_height = groups[0]["cell_height"]
+    cell_width = int(round(np.median([group["cell_width"] for group in groups])))
+    cell_height = int(round(np.median([group["cell_height"] for group in groups])))
+    if cell_width <= 0 or cell_height <= 0:
+        raise ValueError("선택한 Shot의 chip 크기를 계산할 수 없습니다.")
     target_width = cols * cell_width
     target_height = rows * cell_height
     base_indices = np.full((target_height, target_width), 8, dtype=np.uint8)
@@ -715,16 +717,19 @@ def _build_selected_shot_geometry(
                 "chip": chip,
                 "source_rect": rect,
                 "target_rect": (
-                    local_x * group["cell_width"],
-                    local_y * group["cell_height"],
-                    (local_x + 1) * group["cell_width"],
-                    (local_y + 1) * group["cell_height"],
+                    local_x * cell_width,
+                    local_y * cell_height,
+                    (local_x + 1) * cell_width,
+                    (local_y + 1) * cell_height,
                 ),
             })
         group["placements"] = placements
 
-    # Output positions represent one canonical Shot (the first selected group).
-    for placement in groups[0]["placements"]:
+    # Output positions represent one canonical Shot. If an edge/partial Shot is
+    # selected first, use the densest selected Shot as the visible template and
+    # let partial Shots contribute only their existing chip pixels.
+    reference_group = max(groups, key=lambda group: len(group.get("placements") or []))
+    for placement in reference_group["placements"]:
         coord = placement["coord"]
         tx0, ty0, tx1, ty1 = placement["target_rect"]
         output_coords.add(coord)
@@ -907,6 +912,77 @@ def _remap_selected_chip_accumulators(
         target_all_invalid[ty0:ty1, tx0:tx1] &= all_invalid[sy0:sy1, sx0:sx1]
 
     return target_counts, target_has_0_7, target_has_8_13, target_all_invalid
+
+
+def _iter_selected_geometry_placements(geometry: Dict[str, Any]):
+    if isinstance(geometry.get("groups"), list):
+        for group in geometry["groups"]:
+            for placement in group.get("placements") or []:
+                yield placement
+        return
+    for placement in geometry.get("placements") or []:
+        yield placement
+
+
+def _accumulate_selected_geometry_from_images(
+    image_paths: Sequence[str],
+    geometry: Dict[str, Any],
+    width: int,
+    height: int,
+    loader_mode: str,
+    max_workers: Optional[int],
+    batch_size: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
+    """Accumulate only the selected Chip/Shot rects into the canonical output canvas."""
+    target_height = int(geometry["height"])
+    target_width = int(geometry["width"])
+    grade_counts = np.zeros((8, target_height, target_width), dtype=np.uint32)
+    has_0_7 = np.zeros((target_height, target_width), dtype=np.bool_)
+    has_8_13 = np.zeros((target_height, target_width), dtype=np.bool_)
+    all_invalid = np.ones((target_height, target_width), dtype=np.bool_)
+    placements = list(_iter_selected_geometry_placements(geometry))
+    processed_count = 0
+
+    if not placements:
+        return grade_counts, has_0_7, has_8_13, all_invalid, processed_count
+
+    for batch_paths in _batched_paths(image_paths, batch_size):
+        for _rel_path, raw_indices in _iter_pixel_indices(
+            list(batch_paths),
+            width=width,
+            height=height,
+            loader_mode=loader_mode,
+            max_workers=max_workers,
+        ):
+            if raw_indices is None:
+                continue
+            img = raw_indices.astype(np.uint8, copy=False)
+            for placement in placements:
+                sx0, sy0, sx1, sy1 = placement["source_rect"]
+                tx0, ty0, tx1, ty1 = placement["target_rect"]
+                copy_width = min(sx1 - sx0, tx1 - tx0)
+                copy_height = min(sy1 - sy0, ty1 - ty0)
+                if copy_width <= 0 or copy_height <= 0:
+                    continue
+                sx1c = sx0 + copy_width
+                sy1c = sy0 + copy_height
+                tx1c = tx0 + copy_width
+                ty1c = ty0 + copy_height
+                crop = img[sy0:sy1c, sx0:sx1c]
+                ge14 = crop >= 14
+                ge8 = crop >= 8
+                mid = ge8 & ~ge14
+                target_slice = (slice(ty0, ty1c), slice(tx0, tx1c))
+                has_0_7[target_slice] |= (~ge8) | ge14
+                has_8_13[target_slice] |= mid
+                all_invalid[target_slice] &= ge14
+                if ge14.any():
+                    grade_counts[0, ty0:ty1c, tx0:tx1c] += ge14
+                for grade_idx in range(8):
+                    grade_counts[grade_idx, ty0:ty1c, tx0:tx1c] += (crop == grade_idx)
+            processed_count += 1
+
+    return grade_counts, has_0_7, has_8_13, all_invalid, processed_count
 
 
 def _count_unique_devices(image_paths: List[str], max_sample: int = 64) -> int:
@@ -2740,10 +2816,13 @@ def create_composite_heatmaps(
         }
         selected_coord_set = (selected_coord_set or set()) | grouped_coords
 
+    selected_region_requested = selected_coord_set is not None or bool(normalized_shot_groups)
     t = time.perf_counter()
-    numba_warm_info = warm_numba_kernels() if _HAS_NUMBA else _numba_runtime_info(warmed=False)
-    if _HAS_NUMBA:
+    if _HAS_NUMBA and not selected_region_requested:
+        numba_warm_info = warm_numba_kernels()
         _mark("numba_warmup", t)
+    else:
+        numba_warm_info = _numba_runtime_info(warmed=False)
 
     t = time.perf_counter()
     output_dir, timestamp = _prepare_output_dir(login_id)
@@ -2767,12 +2846,73 @@ def create_composite_heatmaps(
     if indices is None:
         indices = list(range(8))
 
+    positions_source_path = None
+    show_normal_border = True
+    shot_geometry = None
+    chip_geometry = None
+    position_rect_overrides = None
+    position_canvas_size = None
+    position_grid_edges = None
+    selected_chip_count_result = None
+
+    if selected_coord_set is not None or normalized_shot_groups:
+        t = time.perf_counter()
+        positions_source_path = _first_image_with_positions(image_paths)
+        if normalized_shot_groups and not positions_source_path:
+            raise ValueError("여러 Shot Composite에는 positions 파일이 필요합니다.")
+        if positions_source_path:
+            first_pos = _load_source_positions_data(positions_source_path)
+            if selected_coord_set is not None and isinstance(first_pos, dict):
+                available_coords = {
+                    _coord_key_from_chip(chip)
+                    for chip in first_pos.get("chips", [])
+                    if _coord_key_from_chip(chip) is not None
+                }
+                selected_coord_set &= available_coords
+                if not selected_coord_set and not normalized_shot_groups:
+                    raise ValueError("선택한 Chip/Shot이 원본 positions에 없습니다.")
+            first_device = str((first_pos or {}).get("device", "")).strip() if first_pos else ""
+            if first_device and len(image_paths) > 1:
+                for alt_path in image_paths[1:min(4, len(image_paths))]:
+                    alt_pos = _load_source_positions_data(alt_path)
+                    alt_device = str((alt_pos or {}).get("device", "")).strip() if alt_pos else ""
+                    if alt_device and alt_device != first_device:
+                        show_normal_border = False
+                        break
+            if normalized_shot_groups:
+                if not isinstance(first_pos, dict):
+                    raise ValueError("여러 Shot Composite에는 positions 파일이 필요합니다.")
+                shot_geometry = _build_selected_shot_geometry(
+                    first_pos,
+                    normalized_shot_groups,
+                    width=width,
+                    height=height,
+                    show_normal_border=show_normal_border,
+                )
+                selected_coord_set = set(shot_geometry["output_coords"])
+                position_rect_overrides = shot_geometry["position_rect_overrides"]
+                position_canvas_size = shot_geometry["position_canvas_size"]
+                position_grid_edges = shot_geometry["position_grid_edges"]
+                selected_chip_count_result = shot_geometry["output_chip_count"]
+            elif selected_coord_set is not None:
+                if not isinstance(first_pos, dict):
+                    raise ValueError("선택 Chip Composite에는 positions 파일이 필요합니다.")
+                chip_geometry = _build_selected_chip_geometry(
+                    first_pos,
+                    selected_coord_set,
+                    width=width,
+                    height=height,
+                    show_normal_border=show_normal_border,
+                )
+                selected_coord_set = set(chip_geometry["output_coords"])
+                position_rect_overrides = chip_geometry["position_rect_overrides"]
+                position_canvas_size = chip_geometry["position_canvas_size"]
+                position_grid_edges = chip_geometry["position_grid_edges"]
+                selected_chip_count_result = chip_geometry["source_chip_count"]
+        _mark("positions_lookup", t)
+
     # 🔥 스트리밍 누적 방식: 전체 이미지를 메모리에 올리지 않고 1-pass로 처리
     # numba 사용 시 단일 패스로 마스크+grade 카운트 동시 처리 (2~3x 빠름)
-    grade_counts = np.zeros((8, height, width), dtype=np.uint32)
-    has_0_7 = np.zeros((height, width), dtype=np.bool_)
-    has_8_13 = np.zeros((height, width), dtype=np.bool_)
-    all_invalid = np.ones((height, width), dtype=np.bool_)
     processed_count = 0
     _use_numba_batch = _HAS_NUMBA and _numba_accumulate_batch is not None
     _use_numba_accum = _HAS_NUMBA and _numba_accumulate_image is not None
@@ -2790,9 +2930,48 @@ def create_composite_heatmaps(
         memory_capped_batch = max(1, target_batch_bytes // bytes_per_image)
         effective_batch = max(1, min(effective_batch, memory_capped_batch, len(image_paths)))
 
-    for batch_paths in _batched_paths(image_paths, effective_batch):
-        if _use_numba_batch:
-            batch_arrays: List[np.ndarray] = []
+    selected_geometry = shot_geometry or chip_geometry
+    if selected_geometry:
+        accumulator_mode = "selected_region"
+        grade_counts, has_0_7, has_8_13, all_invalid, processed_count = _accumulate_selected_geometry_from_images(
+            image_paths,
+            selected_geometry,
+            width=width,
+            height=height,
+            loader_mode=loader_mode,
+            max_workers=max_workers,
+            batch_size=effective_batch,
+        )
+        width = int(selected_geometry["width"])
+        height = int(selected_geometry["height"])
+    else:
+        grade_counts = np.zeros((8, height, width), dtype=np.uint32)
+        has_0_7 = np.zeros((height, width), dtype=np.bool_)
+        has_8_13 = np.zeros((height, width), dtype=np.bool_)
+        all_invalid = np.ones((height, width), dtype=np.bool_)
+        for batch_paths in _batched_paths(image_paths, effective_batch):
+            if _use_numba_batch:
+                batch_arrays: List[np.ndarray] = []
+                for rel_path, raw_indices in _iter_pixel_indices(
+                    batch_paths,
+                    width=width,
+                    height=height,
+                    loader_mode=loader_mode,
+                    max_workers=max_workers,
+                ):
+                    if raw_indices is None:
+                        continue
+                    img = raw_indices.astype(np.uint8, copy=False)
+                    if not img.flags.c_contiguous:
+                        img = np.ascontiguousarray(img, dtype=np.uint8)
+                    batch_arrays.append(img)
+                if batch_arrays:
+                    stacked = np.stack(batch_arrays, axis=0)
+                    _numba_accumulate_batch(stacked, grade_counts, has_0_7, has_8_13, all_invalid)
+                    processed_count += int(stacked.shape[0])
+                    del stacked, batch_arrays
+                continue
+
             for rel_path, raw_indices in _iter_pixel_indices(
                 batch_paths,
                 width=width,
@@ -2803,46 +2982,26 @@ def create_composite_heatmaps(
                 if raw_indices is None:
                     continue
                 img = raw_indices.astype(np.uint8, copy=False)
-                if not img.flags.c_contiguous:
-                    img = np.ascontiguousarray(img, dtype=np.uint8)
-                batch_arrays.append(img)
-            if batch_arrays:
-                stacked = np.stack(batch_arrays, axis=0)
-                _numba_accumulate_batch(stacked, grade_counts, has_0_7, has_8_13, all_invalid)
-                processed_count += int(stacked.shape[0])
-                del stacked, batch_arrays
-            continue
 
-        for rel_path, raw_indices in _iter_pixel_indices(
-            batch_paths,
-            width=width,
-            height=height,
-            loader_mode=loader_mode,
-            max_workers=max_workers,
-        ):
-            if raw_indices is None:
-                continue
-            img = raw_indices.astype(np.uint8, copy=False)
+                if _use_numba_accum:
+                    # numba 단일 패스: 마스크 + grade 카운트 동시 처리
+                    _numba_accumulate_image(img, grade_counts, has_0_7, has_8_13, all_invalid)
+                else:
+                    # numpy 경로 (numba 미사용) — 벡터화
+                    ge14 = img >= 14
+                    ge8 = img >= 8
+                    mid = ge8 & ~ge14
+                    has_0_7 |= (~ge8) | ge14
+                    has_8_13 |= mid
+                    all_invalid &= ge14
+                    # 0~7은 해당 grade로 누적, invalid(14+)는 grade 0으로 누적.
+                    # 8~13은 bottom/border 계열이라 grade count에는 넣지 않는다.
+                    if ge14.any():
+                        grade_counts[0] += ge14
+                    for grade_idx in range(8):
+                        grade_counts[grade_idx] += (img == grade_idx)
 
-            if _use_numba_accum:
-                # numba 단일 패스: 마스크 + grade 카운트 동시 처리
-                _numba_accumulate_image(img, grade_counts, has_0_7, has_8_13, all_invalid)
-            else:
-                # numpy 경로 (numba 미사용) — 벡터화
-                ge14 = img >= 14
-                ge8 = img >= 8
-                mid = ge8 & ~ge14
-                has_0_7 |= (~ge8) | ge14
-                has_8_13 |= mid
-                all_invalid &= ge14
-                # 0~7은 해당 grade로 누적, invalid(14+)는 grade 0으로 누적.
-                # 8~13은 bottom/border 계열이라 grade count에는 넣지 않는다.
-                if ge14.any():
-                    grade_counts[0] += ge14
-                for grade_idx in range(8):
-                    grade_counts[grade_idx] += (img == grade_idx)
-
-            processed_count += 1
+                processed_count += 1
     _mark("load_and_accumulate", t)
 
     if processed_count == 0:
@@ -2851,73 +3010,28 @@ def create_composite_heatmaps(
     idx_8_13_only = has_8_13 & ~has_0_7
     # uint16 변환은 NPZ persist 시점에서 수행 (여기서는 uint32 유지로 ~400ms 절약)
 
-    # positions 기반 정보 — _count_unique_devices는 JSON 로드가 비싸므로
-    # positions_source_path 탐색과 통합
-    t = time.perf_counter()
-    positions_source_path = _first_image_with_positions(image_paths)
-    if normalized_shot_groups and not positions_source_path:
-        raise ValueError("여러 Shot Composite에는 positions 파일이 필요합니다.")
-    show_normal_border = True
-    shot_geometry = None
-    chip_geometry = None
-    position_rect_overrides = None
-    position_canvas_size = None
-    position_grid_edges = None
     composite_sample_count = processed_count
-    selected_chip_count_result = None
-    if positions_source_path:
-        # device 개수 확인: 첫 번째와 두 번째만 비교 (전체 스캔 대신)
-        first_pos = _load_source_positions_data(positions_source_path)
-        if selected_coord_set is not None and isinstance(first_pos, dict):
-            available_coords = {
-                _coord_key_from_chip(chip)
-                for chip in first_pos.get("chips", [])
-                if _coord_key_from_chip(chip) is not None
-            }
-            selected_coord_set &= available_coords
-            if not selected_coord_set and not normalized_shot_groups:
-                raise ValueError("선택한 Chip/Shot이 원본 positions에 없습니다.")
-        first_device = str((first_pos or {}).get("device", "")).strip() if first_pos else ""
-        if first_device and len(image_paths) > 1:
-            for alt_path in image_paths[1:min(4, len(image_paths))]:
-                alt_pos = _load_source_positions_data(alt_path)
-                alt_device = str((alt_pos or {}).get("device", "")).strip() if alt_pos else ""
-                if alt_device and alt_device != first_device:
-                    show_normal_border = False
-                    break
-        if normalized_shot_groups:
-            if not isinstance(first_pos, dict):
-                raise ValueError("여러 Shot Composite에는 positions 파일이 필요합니다.")
-            shot_geometry = _build_selected_shot_geometry(
-                first_pos,
-                normalized_shot_groups,
-                width=width,
-                height=height,
-                show_normal_border=show_normal_border,
-            )
-            selected_coord_set = set(shot_geometry["output_coords"])
-            position_rect_overrides = shot_geometry["position_rect_overrides"]
-            position_canvas_size = shot_geometry["position_canvas_size"]
-            position_grid_edges = shot_geometry["position_grid_edges"]
-            composite_sample_count = processed_count * shot_geometry["shot_count"]
-            selected_chip_count_result = shot_geometry["output_chip_count"]
-        elif selected_coord_set is not None:
-            if not isinstance(first_pos, dict):
-                raise ValueError("선택 Chip Composite에는 positions 파일이 필요합니다.")
-            chip_geometry = _build_selected_chip_geometry(
-                first_pos,
-                selected_coord_set,
-                width=width,
-                height=height,
-                show_normal_border=show_normal_border,
-            )
-            selected_coord_set = set(chip_geometry["output_coords"])
-            position_rect_overrides = chip_geometry["position_rect_overrides"]
-            position_canvas_size = chip_geometry["position_canvas_size"]
-            position_grid_edges = chip_geometry["position_grid_edges"]
-            composite_sample_count = processed_count * chip_geometry["source_chip_count"]
-            selected_chip_count_result = chip_geometry["source_chip_count"]
-    _mark("positions_lookup", t)
+    if shot_geometry:
+        composite_sample_count = processed_count * shot_geometry["shot_count"]
+    elif chip_geometry:
+        composite_sample_count = processed_count * chip_geometry["source_chip_count"]
+
+    # positions 기반 정보 — _count_unique_devices는 JSON 로드가 비싸므로
+    # positions_source_path 탐색과 통합. 선택 영역 geometry는 누적 전에 이미 준비한다.
+    if "positions_lookup" not in timings:
+        t = time.perf_counter()
+        positions_source_path = _first_image_with_positions(image_paths)
+        if positions_source_path:
+            first_pos = _load_source_positions_data(positions_source_path)
+            first_device = str((first_pos or {}).get("device", "")).strip() if first_pos else ""
+            if first_device and len(image_paths) > 1:
+                for alt_path in image_paths[1:min(4, len(image_paths))]:
+                    alt_pos = _load_source_positions_data(alt_path)
+                    alt_device = str((alt_pos or {}).get("device", "")).strip() if alt_pos else ""
+                    if alt_device and alt_device != first_device:
+                        show_normal_border = False
+                        break
+        _mark("positions_lookup", t)
 
     # (idx_8_13_only를 제외한 포인트 중 0-7이 있는 것)
     t = time.perf_counter()
@@ -2930,24 +3044,10 @@ def create_composite_heatmaps(
 
     base_indices = None
     if shot_geometry:
-        grade_counts, has_0_7, has_8_13, all_invalid = _remap_selected_shot_accumulators(
-            grade_counts,
-            has_0_7,
-            has_8_13,
-            all_invalid,
-            shot_geometry,
-        )
         width = shot_geometry["width"]
         height = shot_geometry["height"]
         base_indices = shot_geometry["base_indices"]
     elif chip_geometry:
-        grade_counts, has_0_7, has_8_13, all_invalid = _remap_selected_chip_accumulators(
-            grade_counts,
-            has_0_7,
-            has_8_13,
-            all_invalid,
-            chip_geometry,
-        )
         width = chip_geometry["width"]
         height = chip_geometry["height"]
         base_indices = chip_geometry["base_indices"]

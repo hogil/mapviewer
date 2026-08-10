@@ -2093,6 +2093,79 @@ class WaferMapViewer {
         return compact;
     }
 
+    captureSingleChipSelectionState() {
+        const annotator = this.chipAnnotator;
+        if (!annotator || this.gridMode || !this.selectedImagePath) return null;
+        if (!(annotator.selectedChips instanceof Set) || annotator.selectedChips.size === 0) return null;
+
+        const ordered = Array.isArray(annotator.selectedChipsOrder)
+            ? annotator.selectedChipsOrder.filter(index => annotator.selectedChips.has(index))
+            : [];
+        const remaining = [...annotator.selectedChips].filter(index => !ordered.includes(index));
+        const coords = [...ordered, ...remaining]
+            .map(index => annotator.chips?.[index])
+            .filter(Boolean)
+            .map(chip => ({
+                x_abs: Number(chip.x_abs),
+                y_abs: Number(chip.y_abs),
+            }))
+            .filter(coord => Number.isFinite(coord.x_abs) && Number.isFinite(coord.y_abs));
+        if (!coords.length) return null;
+
+        return {
+            imagePath: this.selectedImagePath,
+            selectionMode: annotator.selectionMode === 'shot' ? 'shot' : 'chip',
+            shotBoundaryVisible: annotator.shotBoundaryVisible === true,
+            coords,
+        };
+    }
+
+    restoreSingleChipSelectionState(selectionState) {
+        const annotator = this.chipAnnotator;
+        if (!selectionState || !annotator || !this.selectedImagePath) return false;
+        if (!this._sameImagePath(selectionState.imagePath, this.selectedImagePath)) return false;
+        if (!Array.isArray(annotator.chips) || annotator.chips.length === 0) return false;
+
+        const coordToIndex = new Map();
+        annotator.chips.forEach((chip, index) => {
+            const x = Number(chip?.x_abs);
+            const y = Number(chip?.y_abs);
+            if (Number.isFinite(x) && Number.isFinite(y)) {
+                coordToIndex.set(`${x}:${y}`, index);
+            }
+        });
+
+        const nextOrder = [];
+        (selectionState.coords || []).forEach(coord => {
+            const x = Number(coord?.x_abs);
+            const y = Number(coord?.y_abs);
+            const index = coordToIndex.get(`${x}:${y}`);
+            if (Number.isInteger(index) && !nextOrder.includes(index)) {
+                nextOrder.push(index);
+            }
+        });
+        if (!nextOrder.length) return false;
+
+        annotator.selectionMode = selectionState.selectionMode === 'shot' ? 'shot' : 'chip';
+        annotator.shotBoundaryVisible = selectionState.shotBoundaryVisible === true;
+        annotator.selectedChips = new Set(nextOrder);
+        annotator.selectedChipsOrder = [...nextOrder];
+        annotator.render?.();
+        annotator.updateSelectedChipsList?.();
+        this._syncShotBoundaryButtonUI?.();
+        return true;
+    }
+
+    scheduleRestoreSingleChipSelectionState(selectionState) {
+        if (!selectionState) return;
+        const tryRestore = () => this.restoreSingleChipSelectionState(selectionState);
+        if (tryRestore()) return;
+        requestAnimationFrame(() => {
+            if (tryRestore()) return;
+            setTimeout(tryRestore, 120);
+        });
+    }
+
     captureActivePageState(options = {}) {
         const compactGridArrays = options.compactGridArrays === true;
         const savedViewSnapshot = this.deepCloneSimple(this.buildSavedViewSnapshot());
@@ -2166,6 +2239,7 @@ class WaferMapViewer {
             selectedBottoms: this.selectedBottoms ? [...this.selectedBottoms] : [],
             selectedGrades: this.selectedGrades ? [...this.selectedGrades] : [],
             selectedGradientRanges: this.selectedGradientRanges ? [...this.selectedGradientRanges] : [],
+            singleChipSelectionState: this.captureSingleChipSelectionState(),
         };
     }
 
@@ -2849,6 +2923,9 @@ class WaferMapViewer {
         }
         if (this.gridMode && this.viewMode !== 'gridImage') {
             this.enforceGridModeUiState();
+        }
+        if (!this.gridMode && state.singleChipSelectionState) {
+            this.scheduleRestoreSingleChipSelectionState(state.singleChipSelectionState);
         }
         this.updateContextMenuState();
         this.syncCompositeInlineStatus(page?.id);
@@ -10909,7 +10986,6 @@ class WaferMapViewer {
     openCoordinateSelectionModal() {
         const dom = this.dom;
         if (!dom?.coordinateSelectModal) return;
-        this.chipAnnotator?.clearSelection?.();
         this.coordinateSelectionShotPickerAnchorIndex = null;
         this.coordinateSelectionShotPickerDrag = null;
         this.coordinateSelectionShotPickerSuppressClickAt = 0;
@@ -10944,7 +11020,12 @@ class WaferMapViewer {
         dom.coordinateSelectModal.style.display = 'flex';
         this.isCoordinateSelectionOpen = true;
         this._renderCoordinateSelectionLists();
+        if (this.chipAnnotator?.selectedChips?.size > 0) {
+            this._syncCoordinateSelectionListsFromSelectedChips();
+        }
         this._renderCoordinateSelectionRange();
+        this._updateCoordinateSelectionSummary();
+        this._renderCoordinateSelectionShotPicker();
         this.coordinateSelectionEscapeHandler = (event) => {
             if (event.key === 'Escape' && this.isCoordinateSelectionOpen) {
                 event.preventDefault();
@@ -32433,7 +32514,9 @@ class WaferMapViewer {
             }
             const shotBtn = document.getElementById('single-shot-boundary-btn');
             if (shotBtn) {
-                shotBtn.addEventListener('click', () => {
+                shotBtn.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
                     if (!this.chipAnnotator) return;
                     this.chipAnnotator.setShotBoundaryVisible(
                         !this.chipAnnotator.shotBoundaryVisible
@@ -32444,7 +32527,9 @@ class WaferMapViewer {
             // Attach border button click handler
             const borderBtn = document.getElementById('single-border-normalize-btn');
             if (borderBtn) {
-                borderBtn.addEventListener('click', () => {
+                borderBtn.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
                     this.borderNormalize = !this.borderNormalize;
                     this._saveUserPrefs();
                     this.renderColorLegends();
@@ -32768,6 +32853,9 @@ class WaferMapViewer {
             min-width: 200px;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
         `;
+        menu.addEventListener('mousedown', e => e.stopPropagation());
+        menu.addEventListener('mouseup', e => e.stopPropagation());
+        menu.addEventListener('click', e => e.stopPropagation());
 
         const selectionModeSeparator = document.createElement('div');
         selectionModeSeparator.style.cssText = 'height: 1px; background: #555; margin: 4px 0;';
